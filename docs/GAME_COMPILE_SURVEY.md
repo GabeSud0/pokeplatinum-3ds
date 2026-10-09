@@ -57,6 +57,31 @@ Makefile dependencies and are available for the host, host32 and devkitARM
 compiler surveys. Source files that now pass **syntax** may still have
 unresolved linker/runtime dependencies.
 
+### Original Wi-Fi SDK headers (compile survey only)
+
+The upstream game includes `dwc.h` through `wifi_list.h`. It isn't
+part of NitroSDK or NitroSystem: the pinned game build declares separate
+`NitroDWC` and `NitroWiFi` dependencies, recorded as full Git SHA-1s in
+`subprojects/NitroDWC.wrap` and `subprojects/NitroWiFi.wrap`.
+
+`tools/prepare_game_network_headers.py` fetches both exact upstream
+revisions, verifies the SHA and repository origin, and makes their original
+headers available under ignored `build/game-network-sdks/`. Run:
+
+```sh
+python tools/prepare_game_network_headers.py
+make -C 3ds_port/game TARGET=host probe PROBE_LIMIT=80
+```
+
+The Makefile's `probe` target prepares those headers automatically. The
+already-passing 16-file game library and host tests do **not** need to
+fetch the networking SDKs. The original `include`, `include/gs`, and
+`include/base` directories are added to GCC's header search path.
+This is **header and type discovery only**, NOT Nintendo WFC emulation,
+connection support, runtime behavior, or linked NitroDWC/NitroWiFi libraries.
+Compiling sources may now reveal additional authentic missing APIs/types;
+do not fabricate definitions to silence them.
+
 Other missing headers such as `res/sound/pl_sound_data.naix`,
 `res/graphics/poketch/poketch.naix` and individual text-bank headers are
 produced by the original asset generators and must be handled separately.
