@@ -77,7 +77,7 @@ static void test_ascii(void)
     memset(&name, 0xFF, sizeof(name));
     Ascii_SetResourceName(&name, "Hero");
     CHECK(memcmp(name.name, "Hero", 4) == 0);
-    CHECK(name.val[4] == 0);
+    CHECK(name.name[4] == 0);
 }
 
 static void test_charcode(void)
