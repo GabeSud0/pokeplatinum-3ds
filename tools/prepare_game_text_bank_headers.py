@@ -26,9 +26,6 @@ def read_ids(source: Path) -> list[str]:
     if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
         raise ValueError(f"{source}: expected object containing messages array")
     messages = data["messages"]
-    if not messages:
-        raise ValueError(f"{source}: messages list must not be empty")
-
     seen: set[str] = set()
     ids: list[str] = []
     for index, message in enumerate(messages):
