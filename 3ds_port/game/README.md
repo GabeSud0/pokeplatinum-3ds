@@ -1,62 +1,68 @@
-# Game source GCC build — incremental source compilation
+# Game source GCC build
 
-This is the beginning of compiling **the game's original C** for a native
-3DS port. It does **not** reimplement Pokémon Platinum, package game data,
-produce a playable executable, or compile all 1,013 C files yet.
+The game's **original C** (pinned pret/pokeplatinum, `build/upstream/src/`),
+compiled with GCC for the 3DS and, for tests, the PC. It does **not**
+reimplement Pokémon Platinum, package game data or produce a playable
+executable.
 
-The first thirty-three files come directly from the pinned pret/pokeplatinum source
-checkout under `build/upstream/src/`:
+## What gets compiled
 
-- `coins.c` — coin case state and overflow logic
-- `charcode.c` and `charcode_util.c` — string codepoint and formatting helpers
-- `ascii_util.c` — ASCII conversion and G3d resource names
-- `game_version.c` — Platinum/English game-version constants
-- `play_time.c` — in-save play-time rollover and saturation
-- `int_distance.c` — fixed-point 2D game-world distances
-- `math_util.c` and `fx_util.c` — RNG, simple encryption, fixed-point math, transforms
-- `map_tile_behavior.c` — terrain types, collisions, water and encounters
-- `field_script_context.c` — field script bytecode interpreter and call stack
-- `play_time_manager.c` — accumulation of gameplay time from timer ticks
-- `poffin.c` — Poffin flavor attributes and Poffin Case storage
-- `game_options.c` — saved options, button mode, battle settings and text speed
-- `berry_data.c` — Berry attribute lookup and file-backed load interfaces
-- `poffin_types.c` — Poffin names/message lookup interfaces
-- `grid_menu_cursor_position.c` — four-way menu navigation and cursor coordinates
-- `overworld_map_history.c` — map movement and warp history ring buffer
-- `pokedex_language.c` — original six-language Pokédex index translation
-- `persisted_map_features.c` — fixed-size in-save map feature scratch storage
-- `berry_tag_data.c` — Berry Tag selection, scrolling and 64-berry bitset
-- `pokedex_memory.c` — Pokédex species selection and boot-mode state
-- `pokedex_data_index.c` — normal/Giratina Pokédex archive and message-bank selection
-- `ribbon_save_data.c` — Ribbon save-block size and initialization
-- `battle_regulation.c` — battle rule presets, save structure and rule lookups
-- `record_mixed_rng.c` — mixed-record seed advancement, identity and comparison
-- `move_reminder_data.c` — Move Reminder list presence and move-list interfaces
-- `pokedex_heightweight.c` — Pokédex species size, position and scale lookup
-- `daycare_save.c` — Day Care parent steps, egg state and save-data accessors
-- `easy_chat_sentence.c` — Easy Chat sentence initialization, selection and comparison
-- `string_list.c` — terminal-sentinel lists of UI/message entries
-- `battle_factory_save.c` — Battle Factory team, trainer, rental and streak-flag state
-- `battle_arcade_save.c` — Battle Arcade roulette, team and streak-flag state
+**Every** game C file except those listed in
+[`blocked_sources.txt`](blocked_sources.txt), each with the first error
+that stops it:
 
-The pinned original source tree includes `"badges.h"` in trainer-case
-headers, but stores the authoritative badge enum as
-`generated/badges.txt` (Metang produces `generated/badges.h`). The
-port-owned `include/badges.h` forwards to the generated enum rather than
-inventing badge constants or modifying upstream game source. The GCC
-include path is shared by host builds and devkitARM.
+| Target | Compiled | Blocked |
+|---|---|---|
+| 3DS, 32-bit PC | 848 of 1,013 | 165 |
+| 64-bit PC | 827 of 1,013 | 165 + 21 in [`blocked_sources_64bit.txt`](blocked_sources_64bit.txt) |
 
-The Makefile uses the same shared flags, Nintendo headers, and GCC weak
-NitroSystem inline-symbol fix as `libnitro` and `libnitrosystem`.
-The original `pokemon_sprite.h` also defines two non-static inline wrappers
-for hiding/showing Pokémon sprite shadows. Under the shared GCC
-`-fgnu89-inline` mode those become duplicate external definitions once
-multiple new game objects link together. As with NitroSystem, the port
-marks only those original inline symbols weak with `objcopy`, in both game
-objects and the host test object. This keeps the original code untouched
-and does not invent or replace the Pokémon sprite runtime. It also
-forces the original `pch/global_pch.h`, normally provided by Meson. Sources
-remain upstream; **never copy or commit fetched game code or assets**.
+The 21 extra files on a 64-bit PC store overlay IDs (addresses of linker
+symbols) as `u32` in static initializers, which is only constant with
+4-byte pointers.
+
+The blocked files, by cause (see the list for each file):
+
+- **Missing generated headers** (about 100): headers the original Meson
+  build generates (`items.h`, `species.h`, NARC indices for fonts, models,
+  sprites ...) that the port doesn't generate yet. 22 of them are just
+  `ppwlobby/ppw_lobby.h` (an include path).
+- **Metrowerks-only C** (about 25): `static` after a non-static declaration,
+  casts used as assignment targets. Each needs a small patch in
+  `patches/pokeplatinum/`.
+- **GCC 14 errors** (41): calls to functions that don't exist under that name
+  (real slips in the decompilation, e.g. `PokedexSort_NumDisplayed`),
+  integer/pointer mixing, implicit `int`. GCC 14 (devkitARM) rejects these,
+  so every build treats them as errors, PC included: a file that builds on
+  the PC builds for the 3DS.
+
+To unblock files: fix the cause, delete the lines it unblocks, and the files
+join the library. `make probe PROBE_LIMIT=0` compiles every file and reports
+what passes; regenerate the lists from its report (32-bit) when many change.
+
+Compiling a file doesn't mean it runs: most of these files need the heap,
+filesystem, renderer, overlays and so on, which aren't ported yet. The
+library is a static archive, so programs only pull in what they use.
+
+## How it's built
+
+- The same shared flags and Nintendo headers as `libnitro` and
+  `libnitrosystem` (`../common.mk`), plus the original
+  `pch/global_pch.h`, forced as Meson does.
+- `-D_NITRO` on every target: NitroDWC's GameSpy headers, included by about
+  90 game files (`main.c` among them), choose their platform from it, and
+  `_NITRO` is the DS, as the original game was built.
+  [`include/extras.h`](include/extras.h) stands in for the Metrowerks C
+  library header they include. Declarations only; networking isn't ported.
+- **Header functions:** game headers (`inlines.h`, `pokemon_sprite.h`,
+  NitroDWC's `dwc_friend.h` ...) define functions with plain `inline`.
+  Metrowerks kept one copy; GCC exports one from every file that includes
+  them, and those files then can't be linked together. The original game
+  linked as one program, so any symbol defined in more than one object is
+  such a header copy. After compiling, the Makefile lists those symbols
+  (`build/<target>/gen/game_header_defs.syms`) and marks them weak in every
+  object, as `libnitrosystem` does for NitroSystem's headers.
+- Sources stay upstream; **never copy or commit fetched game code or
+  assets**.
 
 The game compilation uses `-ffunction-sections -fdata-sections` and the
 host-test linker uses `--gc-sections`. This permits validating standalone
@@ -187,17 +193,9 @@ sample compiled.** The existing library compilation and host tests remain
 CI gates. For instructions and interpretation, see
 [Game compile survey](../../docs/GAME_COMPILE_SURVEY.md).
 
-### Why only a slice?
+### What isn't done
 
-The original Metrowerks/Meson build uses generated constants, overlay
-metadata, compiled resources, binary structures and a DS-specific linker
-layout. Those cannot be assumed to work under GCC merely because NitroSDK
-and NitroSystem compile. Grow `GAME_SRCS` in reviewable increments, address
-problems through focused `patches/pokeplatinum/*.patch` files wrapped in
-`SDK_PORT_3DS` when changing upstream behavior, and add targeted tests.
-
-Full compilation, overlay linking/reset semantics, ROM data loading,
-graphics, sound and startup are **not** complete. No Azahar or console test
-is implied by these GCC compile checks.
+Overlay linking and reset, ROM data loading, graphics, sound and startup are
+**not** done. No Azahar or console test is implied by these compile checks.
 
 See `docs/ROADMAP.md` and `docs/HARDWARE_LAYER.md`.

@@ -20,12 +20,13 @@ the same engine, so most of the 3DS backend should carry over.
 > **Status:** Phase 1. Toolchain working (stereoscopic test app runs in
 > Azahar); DS hardware layer mapped in
 > [`docs/HARDWARE_LAYER.md`](docs/HARDWARE_LAYER.md). NitroSDK and
-> NitroSystem (Fnd, G2d, G3d, Gfd, Snd) compile for the 3DS using GCC;
-> PC/32-bit resource tests and CI status are tracked in
-> [`3ds_port/nitro`](3ds_port/nitro) and
-> [`3ds_port/nitrosystem`](3ds_port/nitrosystem). The game itself and
-> its 3DS hardware/render/audio backends are not yet running. **Nothing
-> playable yet.**
+> NitroSystem build for the 3DS and pass their tests
+> ([`3ds_port/nitro`](3ds_port/nitro),
+> [`3ds_port/nitrosystem`](3ds_port/nitrosystem)), and 848 of the game's
+> 1,013 C files compile for the 3DS
+> ([`3ds_port/game`](3ds_port/game), with the reason for each one that
+> doesn't). The game doesn't run yet: no renderer, sound, file system or
+> main loop on the 3DS. **Nothing playable yet.**
 
 ## This repository contains no game content
 
