@@ -55,11 +55,26 @@ RESOURCE_MANIFEST := $(GAME)/res/pokemon/sinnoh_pokedex.json
 $(RESOURCE_HEADER): $(RESOURCE_MANIFEST) $(ROOT)/tools/prepare_game_resource_headers.py
 	@python3 $(ROOT)/tools/prepare_game_resource_headers.py --source="$<" --output="$@"
 
+# Network headers are available from the exact upstream pinned NitroDWC
+# and NitroWiFi revisions. Fetch them only for broad compiler diagnostics,
+# not for the already-working 16-file game/SDK compile regression.
+NETWORK_DIR := $(ROOT)/build/game-network-sdks
+NETWORK_STAMP := $(NETWORK_DIR)/.headers-ready
+NETWORK_WRAPS := $(GAME)/subprojects/NitroDWC.wrap $(GAME)/subprojects/NitroWiFi.wrap
+
+$(NETWORK_STAMP): $(NETWORK_WRAPS) $(ROOT)/tools/prepare_game_network_headers.py
+	@python3 $(ROOT)/tools/prepare_game_network_headers.py --upstream="$(GAME)" --output="$(NETWORK_DIR)"
+	@touch $@
+
 # Force the original global precompiled header, as Meson/Metrowerks does.
 # _MSL_RESTRICT is a Metrowerks qualifier and must be empty with GCC.
 GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
                -I$(GAME)/include -I$(GAME)/asm -I$(GAME) -I$(CONSTANTS_DIR) \
                -I$(RESOURCE_DIR) -I$(GAME)/lib/spl/include \
+               -I$(NETWORK_DIR)/NitroDWC/include \
+               -I$(NETWORK_DIR)/NitroDWC/include/gs \
+               -I$(NETWORK_DIR)/NitroDWC/include/base \
+               -I$(NETWORK_DIR)/NitroWiFi/include \
                -DPOKEPLATINUM_REVISION=1 -DPOKEPLATINUM_GENERATED_ENUM \
                -D_MSL_RESTRICT= -DPM_KEEP_ASSERTS \
                -DGAME_VERSION=VERSION_PLATINUM \
@@ -134,7 +149,7 @@ PROBE_LIMIT ?= 64
 PROBE_TIMEOUT ?= 10
 PROBE_REPORT := $(ROOT)/build/game-compile-survey/$(TARGET).json
 
-probe: $(CONSTANTS_STAMP) $(RESOURCE_HEADER) | libnitrosystem
+probe: $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(NETWORK_STAMP) | libnitrosystem
 	@python3 $(ROOT)/tools/probe_game_compile.py \
 	    --source-dir="$(GAME)/src" \
 	    --compiler="$(CC)" \
