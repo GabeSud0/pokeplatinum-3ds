@@ -36,6 +36,8 @@
 #include "generated/text_banks.h"
 #include "res/pokemon/regional_pokedex_size.h"
 #include "res/sound/pl_sound_data.naix"
+#include "res/graphics/poketch/poketch.naix"
+#include "res/graphics/frontier/backgrounds/frontier_backgrounds.naix"
 #include "res/text/bank/box_messages.h"
 #include "res/text/bank/ability_names_uppercase.h"
 #include "res/text/bank/unk_0353.h"
@@ -457,6 +459,13 @@ int main(void)
     CHECK(SEQ_PV001_sseq_1 == 2);
     CHECK(bulbasaur_cry_sbnk == 1);
     CHECK(PLAYER_PV == 0);
+    /* NitroArc's --files-from order defines stable explicit archive indices.
+     * Binary NARCs and graphics assets are deliberately not part of tests. */
+    CHECK(generic_bg_tiles_NCLR == 0);
+    CHECK(generic_bg_tiles_dupe_NCLR == 1);
+    CHECK(digits_NCGR_lz == 2);
+    CHECK(battle_factory_NCGR_lz == 0);
+    CHECK(battle_factory_battle_room_NSCR_lz == 1);
     test_coins();
     test_ascii();
     test_charcode();
