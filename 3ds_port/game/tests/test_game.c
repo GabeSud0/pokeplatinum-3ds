@@ -40,6 +40,10 @@
 #include "res/graphics/frontier/backgrounds/frontier_backgrounds.naix"
 #include "res/text/bank/box_messages.h"
 #include "res/text/bank/ability_names_uppercase.h"
+#include "res/text/bank/move_names.h"
+#include "res/text/bank/move_names_uppercase.h"
+#include "res/text/bank/move_descriptions.h"
+#include "res/text/bank/moves_used_in_battle.h"
 #include "res/text/bank/unk_0353.h"
 
 static int checks;
@@ -453,6 +457,20 @@ int main(void)
     CHECK(pl_msg_00000611_00001 == 1);
     CHECK(TEXT_BANK_ABILITY_NAMES_UPPERCASE_ENTRY_COUNT == 124);
     CHECK(TEXT_BANK_UNK_0353_ENTRY_COUNT == 123);
+    /* Original moveproc visits MOVE_NONE..MOVE_SHADOW_FORCE in enum order.
+     * We validate IDs, not game text or the compiled move-data NARC. */
+    CHECK(MoveNames_Text_none == 0);
+    CHECK(MoveNamesUppercase_Text_pound == 1);
+    CHECK(MoveDescriptions_Text_shadow_force == 467);
+    CHECK(MoveNamesUppercase_Text_u_turn == 369);
+    CHECK(TEXT_BANK_MOVE_NAMES_ENTRY_COUNT == 468);
+    CHECK(TEXT_BANK_MOVE_NAMES_UPPERCASE_ENTRY_COUNT == 468);
+    CHECK(TEXT_BANK_MOVE_DESCRIPTIONS_ENTRY_COUNT == 468);
+    CHECK(MovesUsedInBattle_Text_none_Ally == 0);
+    CHECK(MovesUsedInBattle_Text_pound_Ally == 3);
+    CHECK(MovesUsedInBattle_Text_pound_Foe == 5);
+    CHECK(MovesUsedInBattle_Text_shadow_force_Foe == 1403);
+    CHECK(TEXT_BANK_MOVES_USED_IN_BATTLE_ENTRY_COUNT == 1404);
     /* NitroSFX -naix uses filenames, not SDAT symbol names, and retains
      * zero-sized/reserved array positions as indices. */
     CHECK(SEQ_PV001_sseq == 1);
