@@ -64,6 +64,14 @@ $(TEXT_BANK_STAMP): $(TEXT_BANK_JSON) $(ROOT)/tools/prepare_game_text_bank_heade
 	@python3 $(ROOT)/tools/prepare_game_text_bank_headers.py --upstream="$(GAME)" --output="$(RESOURCE_DIR)"
 	@touch $@
 
+# Reproduce NitroSFX's -naix symbol indices from the upstream SDAT manifest,
+# with no sound/sample generation and no ROM/resource extraction.
+SOUND_MANIFEST := $(GAME)/res/sound/pl_sound_data.json
+SOUND_HEADER := $(RESOURCE_DIR)/res/sound/pl_sound_data.naix
+
+$(SOUND_HEADER): $(SOUND_MANIFEST) $(ROOT)/tools/prepare_game_sound_naix.py
+	@python3 $(ROOT)/tools/prepare_game_sound_naix.py --upstream="$(GAME)" --output="$(RESOURCE_DIR)"
+
 # Network headers are available from the exact upstream pinned NitroDWC
 # and NitroWiFi revisions. Fetch them only for broad compiler diagnostics,
 # not for the already-working 16-file game/SDK compile regression.
@@ -117,7 +125,7 @@ $(NNS_INLINE_SYMS): | libnitrosystem
 
 # The NitroSystem inline functions in included game headers have external
 # definitions under GCC's gnu89 semantics; match the SDK's weak-symbol fix.
-$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) | libnitrosystem
+$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(SOUND_HEADER) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@echo "  GAME CC $(notdir $<)"
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
@@ -132,7 +140,7 @@ $(LIB): $(GAME_OBJS)
 # NitroSystem and NitroSDK, without any ROM or copyrighted game data.
 TEST_BIN := $(OUT)/test_game
 
-$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) | libnitrosystem
+$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(SOUND_HEADER) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
 	@$(WEAKEN_NNS_INLINE)
@@ -169,7 +177,7 @@ GAME_PROBE_PLATFORM_FLAGS := -D_NITRO
 endif
 GAME_PROBE_CFLAGS := $(GAME_CFLAGS) $(GAME_PROBE_PLATFORM_FLAGS)
 
-probe: $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(NETWORK_STAMP) | libnitrosystem
+probe: $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(SOUND_HEADER) $(NETWORK_STAMP) | libnitrosystem
 	@python3 $(ROOT)/tools/probe_game_compile.py \
 	    --source-dir="$(GAME)/src" \
 	    --compiler="$(CC)" \
