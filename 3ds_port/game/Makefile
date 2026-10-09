@@ -29,10 +29,19 @@ GAME_SRCS := coins.c charcode.c charcode_util.c ascii_util.c game_version.c \
              map_tile_behavior.c field_script_context.c
 GAME_OBJS := $(GAME_SRCS:%.c=$(OUT)/src/%.o)
 
+# metang normally creates this header during the DS Meson build. Generate it
+# from the *pinned* manifest so GCC sees real, stable text-bank indices.
+TEXT_BANK_MANIFEST := $(GAME)/generated/text_banks.txt
+TEXT_BANK_HEADER := $(OUT)/gen/generated/text_banks.h
+
+$(TEXT_BANK_HEADER): $(TEXT_BANK_MANIFEST) $(ROOT)/tools/generate_game_text_banks.py
+	@python3 $(ROOT)/tools/generate_game_text_banks.py $< $@
+
+
 # Force the original global precompiled header, as Meson/Metrowerks does.
 # _MSL_RESTRICT is a Metrowerks qualifier and must be empty with GCC.
 GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
-               -I$(GAME)/include -I$(GAME)/asm -I$(GAME) \
+               -I$(GAME)/include -I$(GAME)/asm -I$(GAME) -I$(OUT)/gen \
                -DPOKEPLATINUM_REVISION=1 -DPOKEPLATINUM_GENERATED_ENUM \
                -D_MSL_RESTRICT= -DPM_KEEP_ASSERTS \
                -DGAME_VERSION=VERSION_PLATINUM \
@@ -66,7 +75,7 @@ $(NNS_INLINE_SYMS): | libnitrosystem
 
 # The NitroSystem inline functions in included game headers have external
 # definitions under GCC's gnu89 semantics; match the SDK's weak-symbol fix.
-$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) | libnitrosystem
+$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(TEXT_BANK_HEADER) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@echo "  GAME CC $(notdir $<)"
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
@@ -81,7 +90,7 @@ $(LIB): $(GAME_OBJS)
 # NitroSystem and NitroSDK, without any ROM or copyrighted game data.
 TEST_BIN := $(OUT)/test_game
 
-$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) | libnitrosystem
+$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(TEXT_BANK_HEADER) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
 	@$(WEAKEN_NNS_INLINE)
