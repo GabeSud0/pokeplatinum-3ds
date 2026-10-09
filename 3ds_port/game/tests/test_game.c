@@ -36,6 +36,8 @@
 #include "move_reminder_data.h"
 #include "pokedex_heightweight.h"
 #include "daycare_save.h"
+#include "battle_factory_save.h"
+#include "battle_arcade_save.h"
 #include "constants/items.h"
 #include "constants/field/map.h"
 #include "badges.h" /* Original badge IDs are generated/badges.h. */
@@ -910,6 +912,135 @@ static void test_daycare_state(void)
     CHECK(!Daycare_HasEgg(&state));
 }
 
+
+/* Battle Factory save accessors are unmodified game code. Use only local
+ * storage: loading/saving the real Battle Frontier block is not linked. */
+static void test_battle_factory_save(void)
+{
+    BattleFactorySave state;
+    BattleFactoryStreakFlags flags;
+    u8 openLevel = 1, challenge = 5, battle = 6, iv = 31;
+    u8 opponentIV = 20, enabled = 1, disabled = 0, activeValue = 2;
+    u16 trainerID = 0xDA7A, playerSet = 1234, opponentSet = 4321;
+    u32 playerPersonality = 0xDAD1BEEFu, opponentPersonality = 0xABCD1234u;
+    const u8 *bytes = (const u8 *)&state;
+    int i;
+
+    memset(&state, 0xA5, sizeof(state));
+    BattleFactorySave_Init(&state);
+    for (i = 0; i < sizeof(state); i++) {
+        CHECK(bytes[i] == 0);
+    }
+    CHECK(!BattleFactorySave_HasSaved(&state));
+    BattleFactorySave_RecordSave(&state, TRUE);
+    CHECK(BattleFactorySave_HasSaved(&state));
+    BattleFactorySave_RecordSave(&state, FALSE);
+    CHECK(!BattleFactorySave_HasSaved(&state));
+
+    BattleFactorySave_SetMember(&state, FACTORY_SAVE_OPEN_LEVEL, 0, &openLevel);
+    BattleFactorySave_SetMember(&state, FACTORY_SAVE_CHALLENGE_TYPE, 0, &challenge);
+    BattleFactorySave_SetMember(&state, FACTORY_SAVE_CURRENT_BATTLE, 0, &battle);
+    BattleFactorySave_SetMember(&state, FACTORY_SAVE_TRAINER_IDS, 13, &trainerID);
+    BattleFactorySave_SetMember(&state, FACTORY_SAVE_PLAYER_SETS, 3, &playerSet);
+    BattleFactorySave_SetMember(&state, FACTORY_SAVE_PLAYER_IVS, 3, &iv);
+    BattleFactorySave_SetMember(&state, FACTORY_SAVE_PLAYER_PERSONALITY, 3, &playerPersonality);
+    BattleFactorySave_SetMember(&state, FACTORY_SAVE_OPPONENT_SETS, 3, &opponentSet);
+    BattleFactorySave_SetMember(&state, FACTORY_SAVE_OPPONENT_IVS, 2, &opponentIV);
+    BattleFactorySave_SetMember(&state, FACTORY_SAVE_OPPONENT_PERSONALITY, 3, &opponentPersonality);
+
+    CHECK(BattleFactorySave_GetMember(&state, FACTORY_SAVE_OPEN_LEVEL, 0, NULL) == openLevel);
+    CHECK(BattleFactorySave_GetMember(&state, FACTORY_SAVE_CHALLENGE_TYPE, 0, NULL) == challenge);
+    CHECK(BattleFactorySave_GetMember(&state, FACTORY_SAVE_CURRENT_BATTLE, 0, NULL) == battle);
+    CHECK(BattleFactorySave_GetMember(&state, FACTORY_SAVE_TRAINER_IDS, 13, NULL) == trainerID);
+    CHECK(BattleFactorySave_GetMember(&state, FACTORY_SAVE_PLAYER_SETS, 3, NULL) == playerSet);
+    CHECK(BattleFactorySave_GetMember(&state, FACTORY_SAVE_PLAYER_IVS, 3, NULL) == iv);
+    CHECK(BattleFactorySave_GetMember(&state, FACTORY_SAVE_PLAYER_PERSONALITY, 3, NULL) == playerPersonality);
+    CHECK(BattleFactorySave_GetMember(&state, FACTORY_SAVE_OPPONENT_SETS, 3, NULL) == opponentSet);
+    CHECK(BattleFactorySave_GetMember(&state, FACTORY_SAVE_OPPONENT_IVS, 2, NULL) == opponentIV);
+    CHECK(BattleFactorySave_GetMember(&state, FACTORY_SAVE_OPPONENT_PERSONALITY, 3, NULL) == opponentPersonality);
+    CHECK(BattleFactorySave_GetMember(&state, 255, 0, NULL) == 0);
+    /* Other index slots are not accidentally overwritten. */
+    CHECK(BattleFactorySave_GetMember(&state, FACTORY_SAVE_TRAINER_IDS, 12, NULL) == 0);
+    CHECK(BattleFactorySave_GetMember(&state, FACTORY_SAVE_PLAYER_PERSONALITY, 2, NULL) == 0);
+
+    memset(&flags, 0xA5, sizeof(flags));
+    BattleFactoryStreakFlags_Init(&flags);
+    CHECK(flags.streakActiveFlags == 0);
+    CHECK(BattleFactoryStreakFlags_GetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 0, NULL) == 0);
+    BattleFactoryStreakFlags_SetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 0, &enabled);
+    BattleFactoryStreakFlags_SetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 3, &activeValue);
+    BattleFactoryStreakFlags_SetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 7, &enabled);
+    CHECK(flags.streakActiveFlags == 0x89);
+    CHECK(BattleFactoryStreakFlags_GetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 0, NULL) == 1);
+    CHECK(BattleFactoryStreakFlags_GetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 3, NULL) == 1);
+    CHECK(BattleFactoryStreakFlags_GetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 7, NULL) == 1);
+    BattleFactoryStreakFlags_SetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 3, &disabled);
+    CHECK(flags.streakActiveFlags == 0x81);
+    CHECK(BattleFactoryStreakFlags_GetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 3, NULL) == 0);
+    CHECK(BattleFactoryStreakFlags_GetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 7, NULL) == 1);
+    CHECK(BattleFactoryStreakFlags_GetFlag(&flags, 255, 0, NULL) == 0);
+}
+
+/* Battle Arcade roulette, party and trainer metadata, plus streak flags.
+ * Tests intentionally don't touch SaveData_SaveTable or a real ROM NARC. */
+static void test_battle_arcade_save(void)
+{
+    BattleArcadeSave state;
+    BattleArcadeStreakFlags flags;
+    u8 challenge = 4, randomized = 1, battle = 7, speed = 3, slot = 2;
+    u8 enabled = 1, disabled = 0, activeValue = 2;
+    u16 heldItem = 450, trainerID = 0xBEEFu, monSetID = 1234;
+    const u8 *bytes = (const u8 *)&state;
+    int i;
+
+    memset(&state, 0xA5, sizeof(state));
+    BattleArcadeSave_Init(&state);
+    for (i = 0; i < sizeof(state); i++) {
+        CHECK(bytes[i] == 0);
+    }
+    CHECK(!BattleArcadeSave_HasSaved(&state));
+    BattleArcadeSave_RecordSave(&state, TRUE);
+    CHECK(BattleArcadeSave_HasSaved(&state));
+    BattleArcadeSave_RecordSave(&state, FALSE);
+    CHECK(!BattleArcadeSave_HasSaved(&state));
+
+    BattleArcadeSave_SetMember(&state, ARCADE_SAVE_CHALLENGE_TYPE, 0, 0, &challenge);
+    BattleArcadeSave_SetMember(&state, ARCADE_SAVE_CURSOR_RANDOMIZED, 0, 0, &randomized);
+    BattleArcadeSave_SetMember(&state, ARCADE_SAVE_CURRENT_BATTLE, 0, 0, &battle);
+    BattleArcadeSave_SetMember(&state, ARCADE_SAVE_ROULETTE_SPEED, 0, 0, &speed);
+    BattleArcadeSave_SetMember(&state, ARCADE_SAVE_HELD_ITEMS, 3, 0, &heldItem);
+    BattleArcadeSave_SetMember(&state, ARCADE_SAVE_TRAINER_IDS, 13, 0, &trainerID);
+    BattleArcadeSave_SetMember(&state, ARCADE_SAVE_PARTY_SLOTS, 2, 0, &slot);
+    BattleArcadeSave_SetMember(&state, ARCADE_SAVE_MON_SET_IDS, 13, 0, &monSetID);
+
+    CHECK(BattleArcadeSave_GetMember(&state, ARCADE_SAVE_CHALLENGE_TYPE, 0, 0, NULL) == challenge);
+    CHECK(BattleArcadeSave_GetMember(&state, ARCADE_SAVE_CURSOR_RANDOMIZED, 0, 0, NULL) == randomized);
+    CHECK(BattleArcadeSave_GetMember(&state, ARCADE_SAVE_CURRENT_BATTLE, 0, 0, NULL) == battle);
+    CHECK(BattleArcadeSave_GetMember(&state, ARCADE_SAVE_ROULETTE_SPEED, 0, 0, NULL) == speed);
+    CHECK(BattleArcadeSave_GetMember(&state, ARCADE_SAVE_HELD_ITEMS, 3, 0, NULL) == heldItem);
+    CHECK(BattleArcadeSave_GetMember(&state, ARCADE_SAVE_TRAINER_IDS, 13, 0, NULL) == trainerID);
+    CHECK(BattleArcadeSave_GetMember(&state, ARCADE_SAVE_PARTY_SLOTS, 2, 0, NULL) == slot);
+    CHECK(BattleArcadeSave_GetMember(&state, ARCADE_SAVE_MON_SET_IDS, 13, 0, NULL) == monSetID);
+    CHECK(BattleArcadeSave_GetMember(&state, ARCADE_SAVE_HELD_ITEMS, 0, 0, NULL) == 0);
+    CHECK(BattleArcadeSave_GetMember(&state, ARCADE_SAVE_TRAINER_IDS, 12, 0, NULL) == 0);
+
+    memset(&flags, 0xA5, sizeof(flags));
+    BattleArcadeStreakFlags_Init(&flags);
+    CHECK(flags.streakActiveFlags == 0);
+    CHECK(BattleArcadeStreakFlags_GetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 2, 0, NULL) == 0);
+    BattleArcadeStreakFlags_SetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 2, 0, &enabled);
+    BattleArcadeStreakFlags_SetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 5, 0, &activeValue);
+    BattleArcadeStreakFlags_SetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 7, 0, &enabled);
+    CHECK(flags.streakActiveFlags == 0xA4);
+    CHECK(BattleArcadeStreakFlags_GetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 2, 0, NULL) == 1);
+    CHECK(BattleArcadeStreakFlags_GetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 5, 0, NULL) == 1);
+    CHECK(BattleArcadeStreakFlags_GetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 7, 0, NULL) == 1);
+    BattleArcadeStreakFlags_SetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 5, 0, &disabled);
+    CHECK(flags.streakActiveFlags == 0x84);
+    CHECK(BattleArcadeStreakFlags_GetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 5, 0, NULL) == 0);
+    CHECK(BattleArcadeStreakFlags_GetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 7, 0, NULL) == 1);
+}
+
 int main(void)
 {
     printf("Original Platinum game-code smoke tests (%d-bit)\n",
@@ -977,6 +1108,8 @@ int main(void)
     CHECK(player_female_mugshot_anim_NANR == 154);
     CHECK(subscript_start_encounter == 0);
     CHECK(subscript_giratina_form_change == 296);
+    test_battle_factory_save();
+    test_battle_arcade_save();
     test_move_reminder_data();
     test_pokedex_heightweight_accessors();
     test_daycare_state();
