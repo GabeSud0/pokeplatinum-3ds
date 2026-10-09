@@ -31,7 +31,10 @@ jobs:
           python-version: "3.12"
 
       - name: Check Python tools compile
-        run: python -m py_compile tools/bootstrap.py builder/verify_rom.py
+        run: python -m py_compile tools/*.py builder/*.py
 
       - name: Bootstrap the pinned decompilation
         run: python tools/bootstrap.py
+
+      - name: Survey SDK usage
+        run: python tools/survey_sdk_usage.py
