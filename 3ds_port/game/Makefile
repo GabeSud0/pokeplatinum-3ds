@@ -122,6 +122,7 @@ GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
                -I$(NETWORK_DIR)/NitroDWC/include/gs \
                -I$(NETWORK_DIR)/NitroDWC/include/base \
                -I$(NETWORK_DIR)/NitroWiFi/include \
+               -I$(GAME)/lib/gds/include \
                -DPOKEPLATINUM_REVISION=1 -DPOKEPLATINUM_GENERATED_ENUM \
                -D_MSL_RESTRICT= -DPM_KEEP_ASSERTS \
                -DGAME_VERSION=VERSION_PLATINUM \
