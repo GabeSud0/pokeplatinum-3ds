@@ -11,7 +11,14 @@ jobs:
   build-3ds:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    container: devkitpro/devkitarm:latest
+    # Pull as a logged-in Docker Hub user: anonymous pulls share a small
+    # per-IP limit across GitHub's runners and fail at random when it's used up.
+    # Secrets: DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (read-only public-repo token).
+    container:
+      image: devkitpro/devkitarm:latest
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
