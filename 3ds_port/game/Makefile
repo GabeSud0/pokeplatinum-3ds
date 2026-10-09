@@ -45,10 +45,21 @@ $(CONSTANTS_STAMP): $(GAME)/generated/meson.build $(GAME)/subprojects/metang.wra
 	@python3 $(ROOT)/tools/prepare_game_constants.py --upstream $(GAME) --output $(CONSTANTS_DIR)
 	@touch $@
 
+# Generate only metadata the original build's dexproc would emit.
+# Other resource/NAIX headers require their real native generators and
+# must not be replaced with fake definitions or ROM/game content.
+RESOURCE_DIR := $(ROOT)/build/game-resource-headers
+RESOURCE_HEADER := $(RESOURCE_DIR)/res/pokemon/regional_pokedex_size.h
+RESOURCE_MANIFEST := $(GAME)/res/pokemon/sinnoh_pokedex.json
+
+$(RESOURCE_HEADER): $(RESOURCE_MANIFEST) $(ROOT)/tools/prepare_game_resource_headers.py
+	@python3 $(ROOT)/tools/prepare_game_resource_headers.py --source="$<" --output="$@"
+
 # Force the original global precompiled header, as Meson/Metrowerks does.
 # _MSL_RESTRICT is a Metrowerks qualifier and must be empty with GCC.
 GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
                -I$(GAME)/include -I$(GAME)/asm -I$(GAME) -I$(CONSTANTS_DIR) \
+               -I$(RESOURCE_DIR) -I$(GAME)/lib/spl/include \
                -DPOKEPLATINUM_REVISION=1 -DPOKEPLATINUM_GENERATED_ENUM \
                -D_MSL_RESTRICT= -DPM_KEEP_ASSERTS \
                -DGAME_VERSION=VERSION_PLATINUM \
@@ -82,7 +93,7 @@ $(NNS_INLINE_SYMS): | libnitrosystem
 
 # The NitroSystem inline functions in included game headers have external
 # definitions under GCC's gnu89 semantics; match the SDK's weak-symbol fix.
-$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) | libnitrosystem
+$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@echo "  GAME CC $(notdir $<)"
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
@@ -97,7 +108,7 @@ $(LIB): $(GAME_OBJS)
 # NitroSystem and NitroSDK, without any ROM or copyrighted game data.
 TEST_BIN := $(OUT)/test_game
 
-$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) | libnitrosystem
+$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
 	@$(WEAKEN_NNS_INLINE)
@@ -123,7 +134,7 @@ PROBE_LIMIT ?= 64
 PROBE_TIMEOUT ?= 10
 PROBE_REPORT := $(ROOT)/build/game-compile-survey/$(TARGET).json
 
-probe: $(CONSTANTS_STAMP) | libnitrosystem
+probe: $(CONSTANTS_STAMP) $(RESOURCE_HEADER) | libnitrosystem
 	@python3 $(ROOT)/tools/probe_game_compile.py \
 	    --source-dir="$(GAME)/src" \
 	    --compiler="$(CC)" \
