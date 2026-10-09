@@ -12,6 +12,7 @@
 #include <nitro_port.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 
 static int sChecks, sFailures;
 
@@ -644,6 +645,26 @@ static void test_dma(void)
     MI_StopDma(0);
     MI_WaitDma(0);
     CHECK(!MI_IsDmaBusy(0));
+
+    /* Channel 0 from 0x08000000 and up. On the DS that's the GBA slot and
+     * the SDK refuses it; on the 3DS it's where the application heap
+     * starts, so the port must allow it. (A page mapped there on the PC.) */
+    {
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+        void *page = mmap((void *)0x08000000, 4096, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        if (page == (void *)0x08000000) {
+            memcpy(page, src, 64);
+            memset(dst, 0, sizeof(dst));
+            MI_DmaCopy32(0, page, dst, 64);
+            CHECK(memcmp(dst, src, 64) == 0);
+            munmap(page, 4096);
+        } else {
+            printf("  (skipped DMA from 0x08000000: address not free)\n");
+        }
+    }
 
     /* Asynchronous copy: the completion callback runs through the DMA
      * interrupt, exactly once. */

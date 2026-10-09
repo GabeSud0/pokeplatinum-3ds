@@ -1,13 +1,13 @@
-From 8fba91365d6bae61a2b3f79b061a3cbbae0b81d0 Mon Sep 17 00:00:00 2001
+From 4c34949437ab9da31ed32b492ad81ae7b8858000 Mon Sep 17 00:00:00 2001
 From: pokeplatinum-3ds <noreply@users.noreply.github.com>
-Date: Thu, 8 Oct 2026 22:11:53 -0700
-Subject: [PATCH 2/2] Run DMA transfers in the port's software DMA
+Date: Fri, 9 Oct 2026 02:24:04 -0700
+Subject: [PATCH] Run DMA transfers in the port's software DMA
 
-DMA requests write the channel's registers and then wait for the hardware to clear the busy bit. On the port nothing cleared it, so every DMA (including all of GX_Load*, which use channel 3 by default, and G3X_Init) waited forever. After the registers are written, call the port's NitroPort_DmaStart, which carries out the transfer. Also skip the channel 0 dummy DMA, a workaround for a DS hardware fault that would leave channel 0 marked busy on the port. The Metrowerks build is unchanged.
+DMA requests write the channel's registers and then wait for the hardware to clear the busy bit. On the port nothing cleared it, so every DMA (including all of GX_Load*, which use channel 3 by default, and G3X_Init) waited forever. After the registers are written, call the port's NitroPort_DmaStart, which carries out the transfer. Also skip the channel 0 dummy DMA, a workaround for a DS hardware fault that would leave channel 0 marked busy on the port, and the channel 0 source-address check: it rejects 0x08000000 and up (the DS's GBA slot), where the 3DS application heap starts. The Metrowerks build is unchanged.
 ---
  libraries/mi/include/mi_dma.h |  8 ++++++++
- libraries/mi/src/mi_dma.c     | 19 +++++++++++++++++++
- 2 files changed, 27 insertions(+)
+ libraries/mi/src/mi_dma.c     | 27 +++++++++++++++++++++++++++
+ 2 files changed, 35 insertions(+)
 
 diff --git a/libraries/mi/include/mi_dma.h b/libraries/mi/include/mi_dma.h
 index 50d5b80..44c5ca3 100644
@@ -30,7 +30,7 @@ index 50d5b80..44c5ca3 100644
  #define MIi_DUMMY_DEST     0
  #define MIi_DUMMY_CNT      (MI_DMA_ENABLE | MI_DMA_SRC_FIX | MI_DMA_DEST_FIX | MI_DMA_16BIT_BUS | 1)
 diff --git a/libraries/mi/src/mi_dma.c b/libraries/mi/src/mi_dma.c
-index f331f7a..7852cd0 100644
+index f331f7a..90ec10e 100644
 --- a/libraries/mi/src/mi_dma.c
 +++ b/libraries/mi/src/mi_dma.c
 @@ -2,6 +2,17 @@
@@ -87,6 +87,28 @@ index f331f7a..7852cd0 100644
      }
  
      #include <nitro/itcm_end.h>
+@@ -450,6 +469,13 @@ void MI_StopDma (u32 dmaNo)
+ 
+ void MIi_CheckDma0SourceAddress (u32 dmaNo, u32 src, u32 size, u32 dir)
+ {
++#ifdef SDK_PORT_3DS
++    // On the DS, channel 0 can't read the I/O registers (0x04xxxxxx) or the
++    // GBA slot (0x08000000 and up). Those are DS addresses: on the 3DS the
++    // application heap starts at 0x08000000, and the port's DMA can read
++    // anything, so the check would stop the game for nothing.
++    (void)dmaNo; (void)src; (void)size; (void)dir;
++#else
+     if (dmaNo == 0) {
+         u32 addStart;
+         u32 addEnd;
+@@ -475,6 +501,7 @@ void MIi_CheckDma0SourceAddress (u32 dmaNo, u32 src, u32 size, u32 dir)
+             OS_Panic("illegal DMA0 source address.");
+         }
+     }
++#endif
+ }
+ 
+ #if defined(SDK_ARM9) && defined(SDK_DEBUG)
 -- 
 2.43.0
 
