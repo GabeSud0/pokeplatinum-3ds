@@ -56,6 +56,7 @@ jobs:
           _Static_assert(MOVE_FLAG_MAKES_CONTACT == 1, "wrong move flag");
           _Static_assert(AI_FLAG_NONE == 0, "wrong AI flag");
           _Static_assert(AI_FLAG_BASIC == 1, "wrong AI flag");
+          _Static_assert(AI_FLAG_ALL == 0xFFFFFFFFULL, "wrong full 32-bit AI mask");
           int main(void) { return 0; }
           C
 
