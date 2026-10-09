@@ -4,13 +4,15 @@ This is the beginning of compiling **the game's original C** for a native
 3DS port. It does **not** reimplement Pokémon Platinum, package game data,
 produce a playable executable, or compile all 1,013 C files yet.
 
-The first five files come directly from the pinned pret/pokeplatinum source
+The first seven files come directly from the pinned pret/pokeplatinum source
 checkout under `build/upstream/src/`:
 
 - `coins.c` — coin case state and overflow logic
 - `charcode.c` and `charcode_util.c` — string codepoint and formatting helpers
 - `ascii_util.c` — ASCII conversion and G3d resource names
 - `game_version.c` — Platinum/English game-version constants
+- `play_time.c` — in-save play-time rollover and saturation
+- `int_distance.c` — fixed-point 2D game-world distances
 
 The Makefile uses the same shared flags, Nintendo headers, and GCC weak
 NitroSystem inline-symbol fix as `libnitro` and `libnitrosystem`. It also
