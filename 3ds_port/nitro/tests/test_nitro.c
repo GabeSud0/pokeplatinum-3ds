@@ -12,6 +12,7 @@
 #include <nitro_port.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 
 static int sChecks, sFailures;
 
@@ -541,6 +542,7 @@ static void test_interrupts(void)
     CHECK_EQ(sVBlankCount, 1);
     CHECK(reg_OS_IF & OS_IE_V_BLANK);
     (void)OS_RestoreInterrupts(old);
+    CHECK_EQ(sVBlankCount, 2);   /* taken as soon as they're back on */
     NitroPort_RaiseIrq(0);
     CHECK_EQ(sVBlankCount, 2);
 
@@ -577,6 +579,147 @@ static void test_interrupts(void)
     CHECK_EQ(sVBlankCount, 1);
     OS_WaitInterrupt(TRUE, OS_IE_V_BLANK);
     CHECK_EQ(sFrameCount, 2);
+}
+
+static int sDmaDone;
+
+static void onDmaDone(void *arg)
+{
+    sDmaDone++;
+    *(int *)arg = 1;
+}
+
+static void test_dma(void)
+{
+    /* DMA is done in software (src/port_dma.c). Expected values are the
+     * plain C equivalent of each transfer. */
+    static u32 src[64], dst[66];
+    static u16 src16[8], dst16[10];
+    static u8 pltt[32];
+    static vu32 port;
+    int i, flag;
+    OSIntrMode old;
+
+    for (i = 0; i < 64; i++) {
+        src[i] = 0x01010101u * (u32)i ^ 0xA5000000u;
+    }
+
+    /* Immediate copy and fill, 32-bit: exactly the requested words. */
+    memset(dst, 0, sizeof(dst));
+    MI_DmaCopy32(3, src, dst, 64 * 4);
+    CHECK(memcmp(dst, src, 64 * 4) == 0);
+    CHECK_EQ(dst[64], 0);
+    CHECK(!MI_IsDmaBusy(3));
+    MI_DmaFill32(3, dst + 1, 0xDEADBEEF, 8 * 4);
+    CHECK_EQ(dst[0], src[0]);
+    CHECK_EQ(dst[1], 0xDEADBEEF);
+    CHECK_EQ(dst[8], 0xDEADBEEF);
+    CHECK_EQ(dst[9], src[9]);
+
+    /* 16-bit, an odd number of halfwords. */
+    for (i = 0; i < 8; i++) {
+        src16[i] = (u16)(0x1111 * i + 1);
+    }
+    memset(dst16, 0, sizeof(dst16));
+    MI_DmaCopy16(3, src16, dst16, 5 * 2);
+    CHECK(memcmp(dst16, src16, 5 * 2) == 0);
+    CHECK_EQ(dst16[5], 0);
+    MI_DmaFill16(3, dst16 + 6, 0xBEEF, 3 * 2);
+    CHECK_EQ(dst16[5], 0);
+    CHECK(dst16[6] == 0xBEEF && dst16[7] == 0xBEEF && dst16[8] == 0xBEEF);
+    CHECK_EQ(dst16[9], 0);
+
+    /* Sending to a fixed address (an I/O port): every word goes to the
+     * same place, so the last one remains. */
+    port = 0;
+    MI_DmaSend32(3, src, (volatile void *)&port, 16 * 4);
+    CHECK_EQ(port, src[15]);
+
+    /* Channel 0 after a wait and after a stop. On the DS the SDK leaves a
+     * busy "dummy" transfer there; the port must not, or the next wait on
+     * channel 0 never ends. This is the game's own sequence
+     * (BufferManager_StopDMA). */
+    MI_DmaCopy32(0, src, dst, 16);
+    MI_WaitDma(0);
+    CHECK(!MI_IsDmaBusy(0));
+    MI_StopDma(0);
+    MI_WaitDma(0);
+    CHECK(!MI_IsDmaBusy(0));
+
+    /* Channel 0 from 0x08000000 and up. On the DS that's the GBA slot and
+     * the SDK refuses it; on the 3DS it's where the application heap
+     * starts, so the port must allow it. (A page mapped there on the PC.) */
+    {
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+        void *page = mmap((void *)0x08000000, 4096, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        if (page == (void *)0x08000000) {
+            memcpy(page, src, 64);
+            memset(dst, 0, sizeof(dst));
+            MI_DmaCopy32(0, page, dst, 64);
+            CHECK(memcmp(dst, src, 64) == 0);
+            munmap(page, 4096);
+        } else {
+            printf("  (skipped DMA from 0x08000000: address not free)\n");
+        }
+    }
+
+    /* Asynchronous copy: the completion callback runs through the DMA
+     * interrupt, exactly once. */
+    (void)OS_EnableIrq();
+    memset(dst, 0, sizeof(dst));
+    flag = 0;
+    sDmaDone = 0;
+    MI_DmaCopy32Async(1, src, dst, 32 * 4, onDmaDone, &flag);
+    CHECK_EQ(flag, 1);
+    CHECK_EQ(sDmaDone, 1);
+    CHECK(memcmp(dst, src, 32 * 4) == 0);
+    CHECK_EQ(reg_OS_IF & OS_IE_DMA1, 0);
+
+    /* Started with the CPU's interrupts off: the callback waits, and runs
+     * the moment they're back on, as on the DS. */
+    flag = 0;
+    old = OS_DisableInterrupts();
+    MI_DmaFill32Async(2, dst, 0, 4 * 4, onDmaDone, &flag);
+    CHECK_EQ(flag, 0);
+    (void)OS_RestoreInterrupts(old);
+    CHECK_EQ(flag, 1);
+    CHECK_EQ(sDmaDone, 2);
+
+    /* V-blank timing: nothing moves until V-blank, then the copy is done
+     * and the channel is free. */
+    memset(dst, 0, sizeof(dst));
+    flag = 0;
+    MI_VBlankDmaCopy32Async(1, src, dst, 8 * 4, onDmaDone, &flag);
+    CHECK_EQ(dst[0], 0);
+    CHECK(MI_IsDmaBusy(1));
+    OS_WaitInterrupt(TRUE, OS_IE_V_BLANK);
+    CHECK(memcmp(dst, src, 8 * 4) == 0);
+    CHECK_EQ(flag, 1);
+    CHECK(!MI_IsDmaBusy(1));
+
+    /* H-blank timing needs the renderer: reported, left armed (as if no
+     * H-blank came), and MI_StopDma releases the channel. */
+    MI_HBlankDmaCopy32(0, src, dst, 16);
+    CHECK(NitroPort_WasReported("DMA timing: H-blank"));
+    CHECK(MI_IsDmaBusy(0));
+    MI_StopDma(0);
+    MI_WaitDma(0);
+    CHECK(!MI_IsDmaBusy(0));
+
+    /* The game's graphics loads go through DMA channel 3 by default. */
+    for (i = 0; i < 32; i++) {
+        pltt[i] = (u8)(i * 7 + 3);
+    }
+    GX_LoadBGPltt(pltt, 32, sizeof(pltt));
+    CHECK(memcmp((const void *)(HW_BG_PLTT + 32), pltt, sizeof(pltt)) == 0);
+
+    /* G3X_Init clears the 3D engine's tables by DMA; it used to hang. */
+    G3X_Init();
+    CHECK_EQ(*(vu32 *)REG_FOG_TABLE_0_ADDR, 0);
+    CHECK(!MI_IsDmaBusy(3));
 }
 
 static void test_lock_ids(void)
@@ -850,6 +993,7 @@ int main(void)
     test_memory();
     test_math();
     test_interrupts();
+    test_dma();
     test_lock_ids();
     test_arena();
     test_memory_map();

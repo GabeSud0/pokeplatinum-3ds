@@ -79,10 +79,12 @@ fixups.
 
 ### Limits: compiling is not yet running the game
 
-- **3D draw calls are not tested:** the project has not yet implemented the DS
-  geometry FIFO / renderer backend. Tests initialize G3d model objects but
-  deliberately do not call `NNS_G3dInit` or `NNS_G3dDraw`, which can block
-  waiting for non-existent graphics hardware.
+- **3D draw calls are not tested yet:** the tests call `NNS_G3dInit` and set
+  up a render object for every model, but don't call `NNS_G3dDraw`. Larger
+  display lists are sent with `MI_SendGXCommandAsync`, which waits for the 3D
+  engine's command FIFO to report "under half full"; that status and the FIFO
+  interrupt arrive with the 3D command translator. (`NNS_G3dInit` used to
+  hang too, but that was DMA, which libnitro now does in software.)
 - Virtual DS registers, VRAM and OAM exist in NitroSDK, but hardware rendering,
   VRAM banking and command translation are future milestones.
 - NitroSystem sound code builds, but actual SDAT playback needs the virtual

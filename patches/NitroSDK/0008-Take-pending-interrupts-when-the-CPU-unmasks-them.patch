@@ -1,0 +1,66 @@
+From 7e406170c8f6dc3c12cf4f0417abbb1d2ce0af90 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 22:11:35 -0700
+Subject: [PATCH 1/2] Take pending interrupts when the CPU unmasks them
+
+On the DS, an interrupt raised while the CPU has IRQs masked fires as soon as they are unmasked. The port's C versions of OS_EnableInterrupts, OS_RestoreInterrupts and their IRQ+FIQ forms only changed the status bit, so such an interrupt waited for the next one raised by the hardware, usually the next V-blank. Code that starts a DMA with interrupts off and then waits for its completion callback would hang. Only the C versions change; the Metrowerks build is unchanged.
+---
+ libraries/os/src/os_system.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/libraries/os/src/os_system.c b/libraries/os/src/os_system.c
+index cb5da97..8f405a1 100644
+--- a/libraries/os/src/os_system.c
++++ b/libraries/os/src/os_system.c
+@@ -13,11 +13,24 @@ asm OSIntrMode OS_EnableInterrupts (void)
+ #else
+ /* C version for compilers without Metrowerks inline assembly. */
+ extern u32 OSi_PortCpsr;
++extern void NitroPort_RaiseIrq(u32 mask);
++
++/* On the DS, an interrupt that arrived while the CPU had them masked fires
++ * as soon as the CPU unmasks them. The port's hardware can only raise it
++ * then, so whenever the IRQ-disable bit goes from set to clear, take any
++ * that are pending (NitroPort_RaiseIrq(0) runs them, lowest first). */
++static void PortTakePendingIrqs(u32 oldCpsr)
++{
++    if ((oldCpsr & HW_PSR_IRQ_DISABLE) && !(OSi_PortCpsr & HW_PSR_IRQ_DISABLE)) {
++        NitroPort_RaiseIrq(0);
++    }
++}
+ 
+ OSIntrMode OS_EnableInterrupts (void)
+ {
+     u32 old = OSi_PortCpsr;
+     OSi_PortCpsr = old & ~HW_PSR_IRQ_DISABLE;
++    PortTakePendingIrqs(old);
+     return (OSIntrMode)(old & HW_PSR_IRQ_DISABLE);
+ }
+ #endif
+@@ -57,6 +70,7 @@ OSIntrMode OS_RestoreInterrupts (OSIntrMode state)
+ {
+     u32 old = OSi_PortCpsr;
+     OSi_PortCpsr = (old & ~HW_PSR_IRQ_DISABLE) | (u32)state;
++    PortTakePendingIrqs(old);
+     return (OSIntrMode)(old & HW_PSR_IRQ_DISABLE);
+ }
+ #endif
+@@ -76,6 +90,7 @@ OSIntrMode OS_EnableInterrupts_IrqAndFiq (void)
+ {
+     u32 old = OSi_PortCpsr;
+     OSi_PortCpsr = old & ~HW_PSR_IRQ_FIQ_DISABLE;
++    PortTakePendingIrqs(old);
+     return (OSIntrMode)(old & HW_PSR_IRQ_FIQ_DISABLE);
+ }
+ #endif
+@@ -115,6 +130,7 @@ OSIntrMode OS_RestoreInterrupts_IrqAndFiq (OSIntrMode state)
+ {
+     u32 old = OSi_PortCpsr;
+     OSi_PortCpsr = (old & ~HW_PSR_IRQ_FIQ_DISABLE) | (u32)state;
++    PortTakePendingIrqs(old);
+     return (OSIntrMode)(old & HW_PSR_IRQ_FIQ_DISABLE);
+ }
+ #endif
+-- 
+2.43.0
+
