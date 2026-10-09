@@ -35,6 +35,7 @@
 #include "constants/field/map_tile_behaviors.h"
 #include "generated/text_banks.h"
 #include "res/pokemon/regional_pokedex_size.h"
+#include "res/sound/pl_sound_data.naix"
 #include "res/text/bank/box_messages.h"
 #include "res/text/bank/ability_names_uppercase.h"
 #include "res/text/bank/unk_0353.h"
@@ -450,6 +451,12 @@ int main(void)
     CHECK(pl_msg_00000611_00001 == 1);
     CHECK(TEXT_BANK_ABILITY_NAMES_UPPERCASE_ENTRY_COUNT == 124);
     CHECK(TEXT_BANK_UNK_0353_ENTRY_COUNT == 123);
+    /* NitroSFX -naix uses filenames, not SDAT symbol names, and retains
+     * zero-sized/reserved array positions as indices. */
+    CHECK(SEQ_PV001_sseq == 1);
+    CHECK(SEQ_PV001_sseq_1 == 2);
+    CHECK(bulbasaur_cry_sbnk == 1);
+    CHECK(PLAYER_PV == 0);
     test_coins();
     test_ascii();
     test_charcode();
