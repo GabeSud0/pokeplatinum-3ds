@@ -130,6 +130,24 @@ def pinned_metang(upstream: Path, cache: Path) -> Path:
     return executable
 
 
+def fix_gcc_mask_shifts(content: str) -> str:
+    """Preserve original mask values without signed-int overflow in GCC.
+
+    Metang v0.2.0-python emits expressions such as (1 << 31) and
+    ((1 << 32) - 1) for the original 32-bit AI_FLAG_ALL value. Shifting a
+    signed 32-bit '1' by 31/32 is undefined/invalid. Widen ONLY the shift
+    operand in the generated header; the bit values remain identical.
+    The pinned tool and original source manifests remain unchanged.
+    """
+    def widen(match: re.Match[str]) -> str:
+        bits = int(match.group(1))
+        if bits >= 64:
+            raise ValueError(f"Metang mask shift {bits} exceeds 64-bit intermediate")
+        return "1ULL << " + match.group(1)
+
+    return re.sub(r"\b1\s*<<\s*(\d+)\b", widen, content)
+
+
 def generate(
     upstream: Path,
     output: Path,
@@ -170,6 +188,11 @@ def generate(
         subprocess.run(cmd, check=True, cwd=metang.parent)
         if not dest.is_file():
             raise RuntimeError(f"Metang did not produce {dest}")
+        if spec["type"] == "mask":
+            raw = dest.read_text(encoding="utf-8")
+            corrected = fix_gcc_mask_shifts(raw)
+            if raw != corrected:
+                dest.write_text(corrected, encoding="utf-8")
         result.append(dest)
 
     return result
