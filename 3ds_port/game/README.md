@@ -22,6 +22,13 @@ checkout under `build/upstream/src/`:
 - `berry_data.c` — Berry attribute lookup and file-backed load interfaces
 - `poffin_types.c` — Poffin names/message lookup interfaces
 
+The pinned original source tree includes `"badges.h"` in trainer-case
+headers, but stores the authoritative badge enum as
+`generated/badges.txt` (Metang produces `generated/badges.h`). The
+port-owned `include/badges.h` forwards to the generated enum rather than
+inventing badge constants or modifying upstream game source. The GCC
+include path is shared by host builds and devkitARM.
+
 The Makefile uses the same shared flags, Nintendo headers, and GCC weak
 NitroSystem inline-symbol fix as `libnitro` and `libnitrosystem`. It also
 forces the original `pch/global_pch.h`, normally provided by Meson. Sources
