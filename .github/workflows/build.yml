@@ -98,6 +98,9 @@ jobs:
       - name: Test metadata-only NitroSFX sound index generator
         run: python -m unittest discover -s tools -p 'test_prepare_game_sound_naix.py' -v
 
+      - name: Test metadata-only NitroArc graphics index generator
+        run: python -m unittest discover -s tools -p 'test_prepare_game_graphics_naix.py' -v
+
       - name: Test pinned networking header fetch metadata
         run: python -m unittest discover -s tools -p 'test_prepare_game_network_headers.py' -v
 
