@@ -176,7 +176,9 @@ DEFINES := -DSDK_ARM9 -DSDK_TS -DSDK_4M -DSDK_CODE_ARM -DSDK_FINALROM \
 
 # gnu89 inline rules match how the SDK's .c files use `inline`.
 # No strict aliasing: the SDK reinterprets memory through casts on purpose.
-CFLAGS := -std=gnu99 -fgnu89-inline -fno-strict-aliasing -O2 -g \
+# Enums are always 4 bytes, like Metrowerks ("#pragma enumsalwaysint on" in
+# nitro/types.h); ARM GCC would otherwise shrink them and break struct layouts.
+CFLAGS := -std=gnu99 -fgnu89-inline -fno-strict-aliasing -fno-short-enums -O2 -g \
           -Wall -Wno-unused-function -Wno-unused-variable -Wno-missing-braces \
           -Wno-unknown-pragmas -Wno-unused-but-set-variable -Wno-parentheses -Wno-switch \
           $(DEFINES) -Iinclude -I$(GEN) -I$(SDK)/include \
