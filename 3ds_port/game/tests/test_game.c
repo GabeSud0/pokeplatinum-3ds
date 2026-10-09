@@ -40,6 +40,8 @@
 #include "res/graphics/frontier/backgrounds/frontier_backgrounds.naix"
 #include "res/text/bank/box_messages.h"
 #include "res/text/bank/ability_names_uppercase.h"
+#include "res/text/bank/species_name.h"
+#include "res/text/bank/species_name_with_articles.h"
 #include "res/text/bank/move_names.h"
 #include "res/text/bank/move_names_uppercase.h"
 #include "res/text/bank/move_descriptions.h"
@@ -471,6 +473,19 @@ int main(void)
     CHECK(MovesUsedInBattle_Text_pound_Foe == 5);
     CHECK(MovesUsedInBattle_Text_shadow_force_Foe == 1403);
     CHECK(TEXT_BANK_MOVES_USED_IN_BATTLE_ENTRY_COUNT == 1404);
+    /* Original speciesproc follows SPECIES_NONE..SPECIES_BAD_EGG order.
+     * Names and descriptions are not emitted into our generated headers. */
+    CHECK(species_name_none == 0);
+    CHECK(species_name_bulbasaur == 1);
+    CHECK(species_name_arceus == 493);
+    CHECK(species_name_egg == 494);
+    CHECK(species_name_bad_egg == 495);
+    CHECK(TEXT_BANK_SPECIES_NAME_ENTRY_COUNT == 496);
+    CHECK(species_name_with_articles_none == 0);
+    CHECK(species_name_with_articles_bulbasaur == 1);
+    CHECK(species_name_with_articles_arceus == 493);
+    CHECK(species_name_with_articles_bad_egg == 495);
+    CHECK(TEXT_BANK_SPECIES_NAME_WITH_ARTICLES_ENTRY_COUNT == 496);
     /* NitroSFX -naix uses filenames, not SDAT symbol names, and retains
      * zero-sized/reserved array positions as indices. */
     CHECK(SEQ_PV001_sseq == 1);

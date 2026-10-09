@@ -56,8 +56,12 @@ ignored `build/game-resource-headers/res/text/bank/`. They never contain
 dialogue, game assets, encryption keys, or binary messages. Four dynamic move text-bank headers are now also generated from the
 original `moveproc` ordering in `generated/moves.txt` and
 `res/moves/*/data.json`. The output contains only move-message ID
-macros and counts, not game dialogue. Other dynamic text banks and the
-actual `pl_msg.narc` still require further integration.
+macros and counts, not game dialogue. Two original species-name ID
+banks are now generated from `generated/species.txt` and validated
+`res/pokemon/*/data.json`, producing only 496 indices per bank
+(including reserved None/Egg/Bad Egg slots). The generated headers
+contain no species-name strings or Pokedex descriptions. Other dynamic
+text banks and the actual `pl_msg.narc` still require further integration.
 
 The original NitroSFX `pl_sound_data.naix` header is also generated from
 the pinned `res/sound/pl_sound_data.json` list. This is **symbolic sound
