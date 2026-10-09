@@ -39,6 +39,8 @@
 #include "easy_chat_sentence.h"
 #include "easy_chat_words.h"
 #include "string_list.h"
+#include "battle_factory_save.h"
+#include "battle_arcade_save.h"
 #include "res/text/bank/union_room_sentences.h"
 #include "res/text/bank/general_sentences.h"
 #include "constants/items.h"
@@ -1016,6 +1018,120 @@ static void test_string_list_copy_entry(void)
     CHECK(list[3].index == 7);
 }
 
+
+/* The original Battle Factory record's read/write functions operate on
+ * caller-owned saved state. SaveData_SaveTable is not linked yet. */
+static void test_battle_factory_saved_state(void)
+{
+    BattleFactorySave save;
+    BattleFactoryStreakFlags flags;
+    u8 challenge = 5, round = 6, level = 1, iv = 31;
+    u8 off = 0, on = 1, positive = 2;
+    u16 trainer = 438, rental = 2468, opponentRental = 1357;
+    u32 personality = 0x1248ACE0u, opponentPersonality = 0xCAFEBABEu;
+
+    memset(&save, 0x7B, sizeof(save));
+    BattleFactorySave_Init(&save);
+    CHECK(save.didSave == 0);
+    CHECK(save.trainerIDs[13] == 0);
+    CHECK(save.playerPersonality[3] == 0);
+    CHECK(save.opponentPersonality[3] == 0);
+    BattleFactorySave_RecordSave(&save, TRUE);
+    CHECK(BattleFactorySave_HasSaved(&save));
+    BattleFactorySave_RecordSave(&save, FALSE);
+    CHECK(!BattleFactorySave_HasSaved(&save));
+
+    BattleFactorySave_SetMember(&save, FACTORY_SAVE_OPEN_LEVEL, 0, &level);
+    BattleFactorySave_SetMember(&save, FACTORY_SAVE_CHALLENGE_TYPE, 0, &challenge);
+    BattleFactorySave_SetMember(&save, FACTORY_SAVE_CURRENT_BATTLE, 0, &round);
+    BattleFactorySave_SetMember(&save, FACTORY_SAVE_TRAINER_IDS, 13, &trainer);
+    BattleFactorySave_SetMember(&save, FACTORY_SAVE_PLAYER_SETS, 3, &rental);
+    BattleFactorySave_SetMember(&save, FACTORY_SAVE_PLAYER_IVS, 3, &iv);
+    BattleFactorySave_SetMember(&save, FACTORY_SAVE_PLAYER_PERSONALITY, 3, &personality);
+    BattleFactorySave_SetMember(&save, FACTORY_SAVE_OPPONENT_SETS, 3, &opponentRental);
+    BattleFactorySave_SetMember(&save, FACTORY_SAVE_OPPONENT_IVS, 3, &iv);
+    BattleFactorySave_SetMember(&save, FACTORY_SAVE_OPPONENT_PERSONALITY, 3, &opponentPersonality);
+    CHECK(BattleFactorySave_GetMember(&save, FACTORY_SAVE_OPEN_LEVEL, 0, NULL) == 1);
+    CHECK(BattleFactorySave_GetMember(&save, FACTORY_SAVE_CHALLENGE_TYPE, 0, NULL) == 5);
+    CHECK(BattleFactorySave_GetMember(&save, FACTORY_SAVE_CURRENT_BATTLE, 0, NULL) == 6);
+    CHECK(BattleFactorySave_GetMember(&save, FACTORY_SAVE_TRAINER_IDS, 13, NULL) == trainer);
+    CHECK(BattleFactorySave_GetMember(&save, FACTORY_SAVE_PLAYER_SETS, 3, NULL) == rental);
+    CHECK(BattleFactorySave_GetMember(&save, FACTORY_SAVE_PLAYER_IVS, 3, NULL) == iv);
+    CHECK(BattleFactorySave_GetMember(&save, FACTORY_SAVE_PLAYER_PERSONALITY, 3, NULL) == personality);
+    CHECK(BattleFactorySave_GetMember(&save, FACTORY_SAVE_OPPONENT_SETS, 3, NULL) == opponentRental);
+    CHECK(BattleFactorySave_GetMember(&save, FACTORY_SAVE_OPPONENT_IVS, 3, NULL) == iv);
+    CHECK(BattleFactorySave_GetMember(&save, FACTORY_SAVE_OPPONENT_PERSONALITY, 3, NULL) == opponentPersonality);
+    CHECK(BattleFactorySave_GetMember(&save, FACTORY_SAVE_TRAINER_IDS, 12, NULL) == 0);
+    CHECK(BattleFactorySave_GetMember(&save, FACTORY_SAVE_PLAYER_PERSONALITY, 2, NULL) == 0);
+    CHECK(BattleFactorySave_GetMember(&save, 255, 0, NULL) == 0);
+
+    memset(&flags, 0x7B, sizeof(flags));
+    BattleFactoryStreakFlags_Init(&flags);
+    CHECK(flags.streakActiveFlags == 0);
+    BattleFactoryStreakFlags_SetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 0, &on);
+    BattleFactoryStreakFlags_SetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 3, &positive);
+    BattleFactoryStreakFlags_SetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 7, &on);
+    CHECK(flags.streakActiveFlags == 0x89);
+    CHECK(BattleFactoryStreakFlags_GetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 3, NULL) == 1);
+    BattleFactoryStreakFlags_SetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 3, &off);
+    CHECK(flags.streakActiveFlags == 0x81);
+    CHECK(BattleFactoryStreakFlags_GetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 3, NULL) == 0);
+    CHECK(BattleFactoryStreakFlags_GetFlag(&flags, FACTORY_SAVE_STREAK_FLAGS, 7, NULL) == 1);
+}
+
+/* Original Arcade metadata and bit flags, without the online/save runtime. */
+static void test_battle_arcade_saved_state(void)
+{
+    BattleArcadeSave save;
+    BattleArcadeStreakFlags flags;
+    u8 challenge = 4, roulette = 1, round = 7, speed = 3, partySlot = 2;
+    u8 on = 1, off = 0, positive = 2;
+    u16 heldItem = 450, trainer = 0xBEEFu, monSet = 1234;
+
+    memset(&save, 0x7B, sizeof(save));
+    BattleArcadeSave_Init(&save);
+    CHECK(save.didSave == 0);
+    CHECK(save.trainerIDs[13] == 0);
+    CHECK(save.monSetIDs[13] == 0);
+    BattleArcadeSave_RecordSave(&save, TRUE);
+    CHECK(BattleArcadeSave_HasSaved(&save));
+    BattleArcadeSave_RecordSave(&save, FALSE);
+    CHECK(!BattleArcadeSave_HasSaved(&save));
+
+    BattleArcadeSave_SetMember(&save, ARCADE_SAVE_CHALLENGE_TYPE, 0, 0, &challenge);
+    BattleArcadeSave_SetMember(&save, ARCADE_SAVE_CURSOR_RANDOMIZED, 0, 0, &roulette);
+    BattleArcadeSave_SetMember(&save, ARCADE_SAVE_CURRENT_BATTLE, 0, 0, &round);
+    BattleArcadeSave_SetMember(&save, ARCADE_SAVE_ROULETTE_SPEED, 0, 0, &speed);
+    BattleArcadeSave_SetMember(&save, ARCADE_SAVE_HELD_ITEMS, 3, 0, &heldItem);
+    BattleArcadeSave_SetMember(&save, ARCADE_SAVE_TRAINER_IDS, 13, 0, &trainer);
+    BattleArcadeSave_SetMember(&save, ARCADE_SAVE_PARTY_SLOTS, 2, 0, &partySlot);
+    BattleArcadeSave_SetMember(&save, ARCADE_SAVE_MON_SET_IDS, 13, 0, &monSet);
+
+    CHECK(BattleArcadeSave_GetMember(&save, ARCADE_SAVE_CHALLENGE_TYPE, 0, 0, NULL) == challenge);
+    CHECK(BattleArcadeSave_GetMember(&save, ARCADE_SAVE_CURSOR_RANDOMIZED, 0, 0, NULL) == roulette);
+    CHECK(BattleArcadeSave_GetMember(&save, ARCADE_SAVE_CURRENT_BATTLE, 0, 0, NULL) == round);
+    CHECK(BattleArcadeSave_GetMember(&save, ARCADE_SAVE_ROULETTE_SPEED, 0, 0, NULL) == speed);
+    CHECK(BattleArcadeSave_GetMember(&save, ARCADE_SAVE_HELD_ITEMS, 3, 0, NULL) == heldItem);
+    CHECK(BattleArcadeSave_GetMember(&save, ARCADE_SAVE_TRAINER_IDS, 13, 0, NULL) == trainer);
+    CHECK(BattleArcadeSave_GetMember(&save, ARCADE_SAVE_PARTY_SLOTS, 2, 0, NULL) == partySlot);
+    CHECK(BattleArcadeSave_GetMember(&save, ARCADE_SAVE_MON_SET_IDS, 13, 0, NULL) == monSet);
+    CHECK(BattleArcadeSave_GetMember(&save, ARCADE_SAVE_HELD_ITEMS, 2, 0, NULL) == 0);
+    CHECK(BattleArcadeSave_GetMember(&save, ARCADE_SAVE_TRAINER_IDS, 12, 0, NULL) == 0);
+
+    memset(&flags, 0x7B, sizeof(flags));
+    BattleArcadeStreakFlags_Init(&flags);
+    CHECK(flags.streakActiveFlags == 0);
+    BattleArcadeStreakFlags_SetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 2, 0, &on);
+    BattleArcadeStreakFlags_SetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 5, 0, &positive);
+    BattleArcadeStreakFlags_SetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 7, 0, &on);
+    CHECK(flags.streakActiveFlags == 0xA4);
+    CHECK(BattleArcadeStreakFlags_GetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 5, 0, NULL) == 1);
+    BattleArcadeStreakFlags_SetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 5, 0, &off);
+    CHECK(flags.streakActiveFlags == 0x84);
+    CHECK(BattleArcadeStreakFlags_GetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 5, 0, NULL) == 0);
+    CHECK(BattleArcadeStreakFlags_GetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 7, 0, NULL) == 1);
+}
+
 int main(void)
 {
     printf("Original Platinum game-code smoke tests (%d-bit)\n",
@@ -1083,6 +1199,8 @@ int main(void)
     CHECK(player_female_mugshot_anim_NANR == 154);
     CHECK(subscript_start_encounter == 0);
     CHECK(subscript_giratina_form_change == 296);
+    test_battle_factory_saved_state();
+    test_battle_arcade_saved_state();
     test_easy_chat_sentence();
     test_string_list_copy_entry();
     test_move_reminder_data();
