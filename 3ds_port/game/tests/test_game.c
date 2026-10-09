@@ -18,6 +18,11 @@
 #include "global/pm_version.h"
 #include "int_distance.h"
 #include "play_time.h"
+#include "play_time_manager.h"
+#include "game_options.h"
+#include "poffin.h"
+#include "poffin_types.h"
+#include "constants/flavor.h"
 #include "math_util.h"
 #include "fx_util.h"
 #include "field_script_context.h"
@@ -247,6 +252,119 @@ static void test_field_script(void)
     CHECK(ctx.scriptPtr == NULL);
 }
 
+/* Test-only clock. The real game timer module is intentionally not part of
+ * this archive yet: this verifies the original play-time logic without
+ * touching DS timer registers or relying on wall-clock sleeps. */
+static u64 mockTimestamp;
+
+u64 Timer_GetCurrentTimestamp(void)
+{
+    return mockTimestamp;
+}
+
+u64 Timer_TicksToSeconds(u64 ticks)
+{
+    return ticks;
+}
+
+static void test_play_time_manager(void)
+{
+    PlayTime time;
+    PlayTime_Init(&time);
+
+    mockTimestamp = 100;
+    PlayTime_Start(&time);
+    mockTimestamp = 159;
+    PlayTime_IncrementTimer();
+    CHECK(PlayTime_GetSeconds(&time) == 59);
+
+    mockTimestamp = 161;
+    PlayTime_IncrementTimer();
+    CHECK(PlayTime_GetMinutes(&time) == 1);
+    CHECK(PlayTime_GetSeconds(&time) == 1);
+
+    PlayTime_IncrementTimer();
+    CHECK(PlayTime_GetSeconds(&time) == 1); /* No double-counting. */
+
+    PlayTime_FlagNotStarted();
+    mockTimestamp = 200;
+    PlayTime_IncrementTimer();
+    CHECK(PlayTime_GetSeconds(&time) == 1);
+}
+
+static void test_game_options(void)
+{
+    Options options;
+    Options copy;
+    CHECK(sizeof(Options) == sizeof(u16));
+
+    memset(&options, 0xFF, sizeof(options));
+    Options_Init(&options);
+    CHECK(Options_TextSpeed(&options) == OPTIONS_TEXT_SPEED_NORMAL);
+    CHECK(Options_SoundMode(&options) == OPTIONS_SOUND_MODE_STEREO);
+    CHECK(Options_BattleStyle(&options) == OPTIONS_BATTLE_STYLE_SHIFT);
+    CHECK(Options_BattleScene(&options) == OPTIONS_BATTLE_SCENE_ON);
+    CHECK(Options_ButtonMode(&options) == OPTIONS_BUTTON_MODE_NORMAL);
+    CHECK(Options_Frame(&options) == OPTIONS_FRAME_1);
+    CHECK(Options_TextFrameDelay(&options) == 4);
+
+    Options_SetTextSpeed(&options, OPTIONS_TEXT_SPEED_FAST);
+    Options_SetSoundMode(&options, OPTIONS_SOUND_MODE_MONO);
+    Options_SetBattleStyle(&options, OPTIONS_BATTLE_STYLE_SET);
+    Options_SetBattleScene(&options, OPTIONS_BATTLE_SCENE_OFF);
+    Options_SetButtonMode(&options, OPTIONS_BUTTON_MODE_L_IS_A);
+    Options_SetFrame(&options, OPTIONS_FRAME_12);
+
+    CHECK(Options_TextFrameDelay(&options) == 1);
+    CHECK(Options_SoundMode(&options) == OPTIONS_SOUND_MODE_MONO);
+    CHECK(Options_BattleStyle(&options) == OPTIONS_BATTLE_STYLE_SET);
+    CHECK(Options_BattleScene(&options) == OPTIONS_BATTLE_SCENE_OFF);
+    CHECK(Options_ButtonMode(&options) == OPTIONS_BUTTON_MODE_L_IS_A);
+    CHECK(Options_Frame(&options) == OPTIONS_FRAME_12);
+
+    memset(&copy, 0, sizeof(copy));
+    Options_Copy(&options, &copy);
+    CHECK(memcmp(&options, &copy, sizeof(copy)) == 0);
+}
+
+static void test_poffin_case(void)
+{
+    PoffinCase pc;
+    Poffin p;
+    Poffin saved;
+    u8 flavors[FLAVOR_MAX] = {20, 0, 0, 0, 0};
+    u8 attributes[7] = {0};
+
+    CHECK(sizeof(Poffin) == 8);
+    CHECK(Poffin_SizeOf() == sizeof(Poffin));
+    CHECK(PoffinCase_SaveSize() == sizeof(PoffinCase));
+    Poffin_Clear(&p);
+    CHECK(!Poffin_HasValidFlavor(&p));
+    CHECK(Poffin_MakePoffin(&p, flavors, 12, FALSE) == POFFIN_TYPE_SPICY);
+    CHECK(Poffin_HasValidFlavor(&p));
+    CHECK(Poffin_GetAttribute(&p, POFFIN_ATTRIBUTEID_SPICINESS) == 20);
+    CHECK(Poffin_GetAttribute(&p, POFFIN_ATTRIBUTEID_SMOOTHNESS) == 12);
+    CHECK(Poffin_CalcLevel(&p) == 20);
+    Poffin_StoreAttributesToArray(&p, attributes);
+    CHECK(attributes[0] == POFFIN_TYPE_SPICY);
+    CHECK(attributes[1] == 20);
+    CHECK(attributes[6] == 12);
+
+    PoffinCase_Init(&pc);
+    CHECK(PoffinCase_GetEmptySlot(&pc) == 0);
+    CHECK(PoffinCase_CountFilledSlots(&pc) == 0);
+    CHECK(PoffinCase_CountEmptySlots(&pc) == MAX_POFFINS);
+    CHECK(PoffinCase_AddPoffin(&pc, &p) == 0);
+    CHECK(PoffinCase_CountFilledSlots(&pc) == 1);
+    CHECK(PoffinCase_GetEmptySlot(&pc) == 1);
+    PoffinCase_CopyPoffinFromSlot(&pc, 0, &saved);
+    CHECK(saved.type == POFFIN_TYPE_SPICY);
+    CHECK(saved.spiciness == 20);
+    CHECK(PoffinCase_ClearSlot(&pc, 0));
+    CHECK(PoffinCase_CountFilledSlots(&pc) == 0);
+    CHECK(!PoffinCase_ClearSlot(&pc, MAX_POFFINS));
+}
+
 static void test_sdk_link(void)
 {
     /* Require a real external NitroSystem function at link time. */
@@ -271,6 +389,9 @@ int main(void)
     test_random_and_math();
     test_tile_behavior();
     test_field_script();
+    test_game_options();
+    test_poffin_case();
+    test_play_time_manager();
     test_sdk_link();
     printf("%d checks, %d failed\n", checks, fails);
     return fails == 0 ? 0 : 1;
