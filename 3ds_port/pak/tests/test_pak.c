@@ -1,0 +1,192 @@
+/* Only synthetic data: C fixtures plus a pack from builder/pack.py. */
+#include "pak.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#define CHECK(x) do { if (!(x)) { \
+    fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #x); return 1; \
+} } while (0)
+
+static char path[512];
+static const char *rev1 = "0862ec35b24de5c7e2dcb88c9eea0873110d755c";
+static const char *rev0 = "ce81046eda7d232513069519cb2085349896dec7";
+static const char *build = "test-build";
+
+static void u32(unsigned char *p, uint32_t n)
+{
+    p[0] = (unsigned char)n; p[1] = (unsigned char)(n >> 8);
+    p[2] = (unsigned char)(n >> 16); p[3] = (unsigned char)(n >> 24);
+}
+
+static int nibble(char c) { return c <= '9' ? c - '0' : c - 'a' + 10; }
+
+static void sha(unsigned char *p, const char *hex)
+{
+    size_t i;
+    for (i = 0; i < 20; ++i)
+        p[i] = (unsigned char)((nibble(hex[2*i]) << 4) | nibble(hex[2*i+1]));
+}
+
+static int write_file(const unsigned char *data, size_t n)
+{
+    FILE *f = fopen(path, "wb");
+    int ok;
+    if (!f) return 0;
+    ok = fwrite(data, 1, n, f) == n;
+    return fclose(f) == 0 && ok;
+}
+
+static int fixture(void)
+{
+    unsigned char data[104] = {0};
+    const unsigned char second[5] = {0, 1, 255, 2, 3};
+    memcpy(data, "PLATPAK\0", 8);
+    u32(data + 8, 1);
+    memcpy(data + 12, build, strlen(build));
+    sha(data + 44, rev1);
+    u32(data + 64, 2);
+    u32(data + 68, 2); u32(data + 72, 92); u32(data + 76, 3);
+    u32(data + 80, 99); u32(data + 84, 96); u32(data + 88, 5);
+    memcpy(data + 92, "abc", 3);
+    memcpy(data + 96, second, 5);
+    return write_file(data, sizeof(data));
+}
+
+static int patch(size_t at, const unsigned char *bytes, size_t n)
+{
+    FILE *f = fopen(path, "r+b");
+    int ok;
+    if (!f) return 0;
+    ok = fseek(f, (long)at, SEEK_SET) == 0 && fwrite(bytes, 1, n, f) == n;
+    return fclose(f) == 0 && ok;
+}
+
+static int patch32(size_t at, uint32_t n)
+{
+    unsigned char b[4];
+    u32(b, n);
+    return patch(at, b, 4);
+}
+
+static int open_is(PakResult expected)
+{
+    Pak *pak = (Pak *)1;
+    PakResult actual = pak_open(path, build, &pak);
+    if (actual != expected || (actual == PAK_OK) != (pak != NULL)) {
+        fprintf(stderr, "open result %d, expected %d\n", (int)actual, (int)expected);
+        if (actual == PAK_OK) pak_close(pak);
+        return 0;
+    }
+    pak_close(pak);
+    return 1;
+}
+
+static int test_c_fixtures(void)
+{
+    Pak *pak = NULL;
+    uint32_t size = 123;
+    unsigned char bytes[8] = {0};
+    const unsigned char expected[5] = {0, 1, 255, 2, 3};
+    unsigned char hash[20] = {0};
+    unsigned char truncated[102] = {0};
+    FILE *f;
+    const unsigned char bad = 1;
+    const struct { size_t at; uint32_t value; PakResult error; } corruptions[] = {
+        {8, 2, PAK_ERR_VERSION}, {64, 4, PAK_ERR_FORMAT},
+        {72, 0xfffffff0u, PAK_ERR_FORMAT}, {76, 0xffffffffu, PAK_ERR_FORMAT},
+        {80, 1, PAK_ERR_FORMAT}, {80, 2, PAK_ERR_FORMAT},
+        {84, 92, PAK_ERR_FORMAT}, {72, 93, PAK_ERR_FORMAT}
+    };
+    size_t i;
+
+    CHECK(fixture());
+    CHECK(pak_open(path, build, &pak) == PAK_OK);
+    CHECK(pak_find(pak, 2, &size) == PAK_OK && size == 3);
+    CHECK(pak_read(pak, 2, 0, bytes, 3) == PAK_OK && memcmp(bytes, "abc", 3) == 0);
+    CHECK(pak_read(pak, 2, 1, bytes, 2) == PAK_OK && memcmp(bytes, "bc", 2) == 0);
+    CHECK(pak_find(pak, 99, &size) == PAK_OK && size == 5);
+    CHECK(pak_read(pak, 99, 0, bytes, 5) == PAK_OK && memcmp(bytes, expected, 5) == 0);
+    CHECK(pak_read(pak, 99, 2, bytes, 3) == PAK_OK && memcmp(bytes, expected + 2, 3) == 0);
+    CHECK(pak_read(pak, 99, 5, NULL, 0) == PAK_OK);
+    CHECK(pak_read(pak, 99, 5, bytes, 1) == PAK_ERR_RANGE);
+    CHECK(pak_read(pak, 99, 6, bytes, 0) == PAK_ERR_RANGE);
+    CHECK(pak_read(pak, 99, UINT32_MAX, bytes, 1) == PAK_ERR_RANGE);
+    CHECK(pak_read(pak, 99, 0, NULL, 1) == PAK_ERR_ARGUMENT);
+    CHECK(pak_find(pak, 3, &size) == PAK_ERR_NOT_FOUND && size == 5);
+    CHECK(pak_read(pak, 3, 0, bytes, 1) == PAK_ERR_NOT_FOUND);
+    CHECK(pak_find(pak, 2, NULL) == PAK_ERR_ARGUMENT);
+    pak_close(pak);
+
+    CHECK(fixture());
+    CHECK(pak_open(path, "wrong-build", &pak) == PAK_ERR_BUILD_ID && pak == NULL);
+    CHECK(pak_open(path, "", &pak) == PAK_ERR_ARGUMENT);
+    CHECK(pak_open(path, "012345678901234567890123456789012", &pak) == PAK_ERR_ARGUMENT);
+    CHECK(patch(44, hash, 20) && open_is(PAK_ERR_ROM_SHA1));
+    sha(hash, rev0);
+    CHECK(patch(44, hash, 20) && open_is(PAK_OK));
+
+    CHECK(fixture());
+    f = fopen(path, "rb");
+    CHECK(f != NULL && fread(truncated, 1, sizeof(truncated), f) == sizeof(truncated));
+    CHECK(fclose(f) == 0);
+    CHECK(write_file(truncated, 16) && open_is(PAK_ERR_FORMAT));
+    CHECK(write_file(truncated, sizeof(truncated)) && open_is(PAK_ERR_FORMAT));
+
+    for (i = 0; i < sizeof(corruptions) / sizeof(corruptions[0]); ++i) {
+        CHECK(fixture());
+        CHECK(patch32(corruptions[i].at, corruptions[i].value));
+        CHECK(open_is(corruptions[i].error));
+    }
+    CHECK(fixture() && patch(0, &bad, 1) && open_is(PAK_ERR_FORMAT));
+    CHECK(fixture() && patch(95, &bad, 1) && open_is(PAK_ERR_FORMAT));
+
+    {
+        unsigned char header[68] = {0};
+        memcpy(header, "PLATPAK\0", 8);
+        u32(header + 8, 1);
+        memcpy(header + 12, build, strlen(build));
+        sha(header + 44, rev1);
+        CHECK(write_file(header, sizeof(header)) && open_is(PAK_OK));
+    }
+    return 0;
+}
+
+static int test_python_writer(const char *python_pak)
+{
+    Pak *pak = NULL;
+    uint32_t size;
+    unsigned char bytes[32];
+    unsigned char expected[17];
+    size_t i;
+    CHECK(pak_open(python_pak, "c-python-v1", &pak) == PAK_OK);
+    CHECK(pak_find(pak, 3, &size) == PAK_OK && size == 15);
+    CHECK(pak_read(pak, 3, 0, bytes, 15) == PAK_OK);
+    CHECK(memcmp(bytes, "python-writer\0\xff", 15) == 0);
+    CHECK(pak_find(pak, 4096, &size) == PAK_OK && size == 0);
+    CHECK(pak_read(pak, 4096, 0, NULL, 0) == PAK_OK);
+    CHECK(pak_find(pak, 70000, &size) == PAK_OK && size == 17);
+    for (i = 0; i < sizeof(expected); ++i) expected[i] = (unsigned char)i;
+    CHECK(pak_read(pak, 70000, 0, bytes, 17) == PAK_OK);
+    CHECK(memcmp(bytes, expected, 17) == 0);
+    CHECK(pak_read(pak, 70000, 8, bytes, 4) == PAK_OK);
+    CHECK(memcmp(bytes, expected + 8, 4) == 0);
+    CHECK(pak_find(pak, 4, &size) == PAK_ERR_NOT_FOUND);
+    pak_close(pak);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc != 3 || snprintf(path, sizeof(path), "%s/test-c.pak", argv[1]) >=
+        (int)sizeof(path)) {
+        fprintf(stderr, "Usage: test_pak <work-dir> <python-generated-pak>\n");
+        return 2;
+    }
+    CHECK(test_c_fixtures() == 0);
+    CHECK(test_python_writer(argv[2]) == 0);
+    remove(path);
+    pak_close(NULL);
+    puts("pak: synthetic C cases and Python-writer cross-check passed");
+    return 0;
+}
