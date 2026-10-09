@@ -6,11 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from prepare_game_network_headers import EXPECTED, pinned_source, prepare
+from prepare_game_network_headers import EXPECTED, PUBLIC_HEADER, pinned_source, prepare
 
 HASHES = {
     "NitroDWC": "ba548986500a6628ec37c0603bdb94245ff12a63",
     "NitroWiFi": "e6048fc294480831e154b3d53205d6cbda1775cd",
+    "libvct": "dfcd1b2609c1711aa2b33590a2088687f9db2286",
 }
 
 
@@ -51,22 +52,21 @@ class GameNetworkHeaderTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "pinned full SHA-1"):
                     pinned_source(path, "NitroDWC")
 
-    def test_prepares_both_original_header_directories(self):
+    def test_prepares_all_original_header_directories(self):
         for name in HASHES:
             self.write_wrap(name)
 
         def fake_fetch(url, revision, destination):
-            expected = "NitroDWC" if "NitroDWC" in url else "NitroWiFi"
+            expected = next(n for n, u in EXPECTED.items() if u == url)
             self.assertEqual(revision, HASHES[expected])
             p = destination / "include"
             p.mkdir(parents=True)
-            (p / ("dwc.h" if expected == "NitroDWC" else "nitroWiFi.h")).write_text(
-                "/* test header */\n", encoding="utf-8"
-            )
+            (p / PUBLIC_HEADER[expected]).write_text("/* test header */\n", encoding="utf-8")
 
         with patch("prepare_game_network_headers.prepare_checkout", side_effect=fake_fetch):
             results = prepare(self.upstream, self.root / "out")
-        self.assertEqual(set(results), {"NitroDWC", "NitroWiFi"})
+        self.assertEqual(set(results), {"NitroDWC", "NitroWiFi", "libvct"})
+        self.assertTrue((results["libvct"] / "vct.h").is_file())
         self.assertTrue((results["NitroDWC"] / "dwc.h").is_file())
 
     def test_missing_header_is_fatal(self):

@@ -1,0 +1,1093 @@
+From 70683edd6c63898149a9beffd5ae795d4a693211 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 09:27:13 -0700
+Subject: [PATCH 2/3] Drop static where a header declares the symbol
+ (SDK_PORT_3DS)
+
+Headers declare these tables and functions with external linkage, and the
+.c files then define them static. Metrowerks accepted that; GCC rejects a
+static definition after a non-static declaration. Under SDK_PORT_3DS define
+them without static, as the headers say. The original build is unchanged.
+---
+ src/battle/healthbox.c         |  10 ++
+ src/overlay005/fishing.c       |  10 ++
+ src/overlay005/ov5_021EB1A0.c  |  20 +++
+ src/overlay005/ov5_021F134C.c  |  10 ++
+ src/overlay005/ov5_021F2D20.c  |  20 +++
+ src/overlay005/ov5_021F3284.c  |   5 +
+ src/overlay005/ov5_021F348C.c  |   5 +
+ src/overlay005/ov5_021F37A8.c  |   5 +
+ src/overlay005/ov5_021F3A50.c  |   5 +
+ src/overlay005/ov5_021F3E74.c  |   5 +
+ src/overlay005/ov5_021F5A10.c  |   5 +
+ src/overlay005/ov5_021F600C.c  |   5 +
+ src/overlay006/hm_cut_in.c     |   5 +
+ src/overlay062/ov62_02234A10.c |  20 +++
+ src/player_move.c              |   5 +
+ src/trainer_encounter.c        |   5 +
+ src/unk_0203D1B8.c             |   5 +
+ src/unk_0206450C.c             | 225 +++++++++++++++++++++++++++++++++
+ src/unk_020673B8.c             |  15 +++
+ src/unk_02069BE0.c             |  15 +++
+ 20 files changed, 400 insertions(+)
+
+diff --git a/src/battle/healthbox.c b/src/battle/healthbox.c
+index f9fb0fb2..67dc63fd 100644
+--- a/src/battle/healthbox.c
++++ b/src/battle/healthbox.c
+@@ -182,8 +182,18 @@ static const SpriteTemplate *HealthBox_MainSpriteTemplate(u8 type);
+ static const SpriteTemplate *HealthBox_ArrowSpriteTemplate(u8 type);
+ static void Healthbox_Task_Scroll(SysTask *task, void *data);
+ static void Healthbox_Task_LevelUpFlashAnimation(SysTask *task, void *param1);
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++void Healthbox_StartBobAnimation(HealthBox *healthbox);
++#else
+ static void Healthbox_StartBobAnimation(HealthBox *healthbox);
++#endif
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++void Healthbox_StopBobAnimation(HealthBox *healthbox);
++#else
+ static void Healthbox_StopBobAnimation(HealthBox *healthbox);
++#endif
+ static void Healthbox_Task_Bob(SysTask *task, void *data);
+ static void HealthBox_EnableArrow(HealthBox *healthbox, BOOL enable);
+ 
+diff --git a/src/overlay005/fishing.c b/src/overlay005/fishing.c
+index b74e6977..930293e5 100644
+--- a/src/overlay005/fishing.c
++++ b/src/overlay005/fishing.c
+@@ -461,7 +461,12 @@ static BOOL FishingTask_FinishFishing(FishingTask *fishingTask, PlayerAvatar *pl
+     return FALSE;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++BOOL (*const sFishingActions[])(FishingTask *, PlayerAvatar *, MapObject *) = {
++#else
+ static BOOL (*const sFishingActions[])(FishingTask *, PlayerAvatar *, MapObject *) = {
++#endif
+     [FUNC_FishingTask_Start] = FishingTask_Start,
+     [FUNC_FishingTask_PreparePlayerAvatar] = FishingTask_PreparePlayerAvatar,
+     [FUNC_FishingTask_CastRod] = FishingTask_CastRod,
+@@ -571,7 +576,12 @@ static u16 ConvertRodTypeToRodItem(enum EncounterFishingRodType rodType)
+     }
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int sRodTypeHookTimingWindow[] = {
++#else
+ static const int sRodTypeHookTimingWindow[] = {
++#endif
+     [FISHING_TYPE_OLD_ROD] = 45,
+     [FISHING_TYPE_GOOD_ROD] = 30,
+     [FISHING_TYPE_SUPER_ROD] = 15
+diff --git a/src/overlay005/ov5_021EB1A0.c b/src/overlay005/ov5_021EB1A0.c
+index 514973eb..be51f09f 100644
+--- a/src/overlay005/ov5_021EB1A0.c
++++ b/src/overlay005/ov5_021EB1A0.c
+@@ -480,7 +480,12 @@ static void ov5_021EB69C(MapObject *mapObj, Billboard *param1, UnkStruct_ov5_021
+     }
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++void (*const Unk_ov5_021FF3D4[])(
++#else
+ static void (*const Unk_ov5_021FF3D4[])(
++#endif
+     MapObject *, Billboard *, UnkStruct_ov5_021EB2EC *, int)
+     = {
+           ov5_021EB478,
+@@ -548,7 +553,12 @@ static void ov5_021EB7D0(MapObject *mapObj, Billboard *param1, UnkStruct_ov5_021
+     Billboard_AdvanceAnim(param1, (FX32_ONE));
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++void (*const Unk_ov5_021FF420[])(MapObject *, Billboard *, UnkStruct_ov5_021EB2EC *, int) = {
++#else
+ static void (*const Unk_ov5_021FF420[])(MapObject *, Billboard *, UnkStruct_ov5_021EB2EC *, int) = {
++#endif
+     ov5_021EB794,
+     ov5_021EB4AC,
+     ov5_021EB4AC,
+@@ -1011,7 +1021,12 @@ static void ov5_021EBEFC(MapObject *mapObj, Billboard *param1, UnkStruct_ov5_021
+     }
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++void (*const Unk_ov5_021FF3F8[])(
++#else
+ static void (*const Unk_ov5_021FF3F8[])(
++#endif
+     MapObject *, Billboard *, UnkStruct_ov5_021EBA0C *, int)
+     = {
+           ov5_021EBB44,
+@@ -1296,7 +1311,12 @@ static void ov5_021EC374(MapObject *mapObj, Billboard *param1, int param2)
+     MapObject_SetSpriteJumpOffset(mapObj, &v0);
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++void (*const Unk_ov5_021FF31C[])(MapObject *, Billboard *, UnkStruct_ov5_021EBA0C *, int) = {
++#else
+ static void (*const Unk_ov5_021FF31C[])(MapObject *, Billboard *, UnkStruct_ov5_021EBA0C *, int) = {
++#endif
+     ov5_021EC1D8,
+     ov5_021EC228,
+     ov5_021EC260,
+diff --git a/src/overlay005/ov5_021F134C.c b/src/overlay005/ov5_021F134C.c
+index 50ee204d..35396194 100644
+--- a/src/overlay005/ov5_021F134C.c
++++ b/src/overlay005/ov5_021F134C.c
+@@ -369,7 +369,12 @@ static const OverworldAnimManagerFuncs Unk_ov5_02200298 = {
+     ov5_021F176C
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const VecFx32 Unk_ov5_022002E4[] = {
++#else
+ static const VecFx32 Unk_ov5_022002E4[] = {
++#endif
+     { FX32_ONE, FX32_ONE, FX32_ONE },
+     { FX32_ONE + (FX32_ONE / 4), FX32_ONE, FX32_ONE + (FX32_ONE / 4) },
+     { FX32_ONE + (FX32_ONE / 4), FX32_ONE, FX32_ONE },
+@@ -377,7 +382,12 @@ static const VecFx32 Unk_ov5_022002E4[] = {
+     { FX32_ONE - (FX32_ONE / 8), FX32_ONE, FX32_ONE - (FX32_ONE / 8) }
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const fx32 Unk_ov5_02200284[] = {
++#else
+ static const fx32 Unk_ov5_02200284[] = {
++#endif
+     FX32_ONE * 14,
+     FX32_ONE * 18,
+     FX32_ONE * 18,
+diff --git a/src/overlay005/ov5_021F2D20.c b/src/overlay005/ov5_021F2D20.c
+index 2c159433..acb6ef3e 100644
+--- a/src/overlay005/ov5_021F2D20.c
++++ b/src/overlay005/ov5_021F2D20.c
+@@ -289,7 +289,12 @@ static const OverworldAnimManagerFuncs Unk_ov5_022004EC = {
+     ov5_021F308C
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const BillboardAnim Unk_ov5_02200540[] = {
++#else
+ static const BillboardAnim Unk_ov5_02200540[] = {
++#endif
+     { 0x0, 0xC, 0x0 },
+     { 0x0, 0x0, 0x2 }
+ };
+@@ -361,17 +366,32 @@ static const OverworldAnimManagerFuncs Unk_ov5_02200500 = {
+ 
+ static const OverworldAnimManagerFuncs Unk_ov5_02200514;
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const BillboardAnim Unk_ov5_02200558[] = {
++#else
+ static const BillboardAnim Unk_ov5_02200558[] = {
++#endif
+     { 0x0, 0x28, 0x1 },
+     { 0x0, 0x0, 0x2 }
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const BillboardAnim Unk_ov5_02200528[] = {
++#else
+ static const BillboardAnim Unk_ov5_02200528[] = {
++#endif
+     { 0x0, 0x18, 0x1 },
+     { 0x0, 0x0, 0x2 }
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const BillboardAnim Unk_ov5_02200570[] = {
++#else
+ static const BillboardAnim Unk_ov5_02200570[] = {
++#endif
+     { 0x0, 0x28, 0x1 },
+     { 0x0, 0x0, 0x2 }
+ };
+diff --git a/src/overlay005/ov5_021F3284.c b/src/overlay005/ov5_021F3284.c
+index 8fb520ab..f0c82948 100644
+--- a/src/overlay005/ov5_021F3284.c
++++ b/src/overlay005/ov5_021F3284.c
+@@ -181,7 +181,12 @@ static const OverworldAnimManagerFuncs Unk_ov5_02200588 = {
+     ov5_021F3448
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const BillboardAnim Unk_ov5_0220059C[] = {
++#else
+ static const BillboardAnim Unk_ov5_0220059C[] = {
++#endif
+     { 0x0, 0xC, 0x1 },
+     { 0x0, 0x0, 0x2 }
+ };
+diff --git a/src/overlay005/ov5_021F348C.c b/src/overlay005/ov5_021F348C.c
+index c7a656e3..39cab198 100644
+--- a/src/overlay005/ov5_021F348C.c
++++ b/src/overlay005/ov5_021F348C.c
+@@ -242,7 +242,12 @@ static const OverworldAnimManagerFuncs Unk_ov5_022005C4 = {
+     ov5_021F3790
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const BillboardAnim Unk_ov5_022005D8[] = {
++#else
+ static const BillboardAnim Unk_ov5_022005D8[] = {
++#endif
+     { 0x0, 0x9, 0x1 },
+     { 0x0, 0x0, 0x2 }
+ };
+diff --git a/src/overlay005/ov5_021F37A8.c b/src/overlay005/ov5_021F37A8.c
+index 70e0f349..1a2ad6cd 100644
+--- a/src/overlay005/ov5_021F37A8.c
++++ b/src/overlay005/ov5_021F37A8.c
+@@ -217,7 +217,12 @@ static const OverworldAnimManagerFuncs Unk_ov5_02200620 = {
+     ov5_021F3A18
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const BillboardAnim Unk_ov5_02200634[] = {
++#else
+ static const BillboardAnim Unk_ov5_02200634[] = {
++#endif
+     { 0x0, 0xC, 0x0 },
+     { 0x0, 0x0, 0x2 }
+ };
+diff --git a/src/overlay005/ov5_021F3A50.c b/src/overlay005/ov5_021F3A50.c
+index ef3a3814..f06a5273 100644
+--- a/src/overlay005/ov5_021F3A50.c
++++ b/src/overlay005/ov5_021F3A50.c
+@@ -218,7 +218,12 @@ static const OverworldAnimManagerFuncs Unk_ov5_0220064C = {
+     ov5_021F3CCC
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const BillboardAnim Unk_ov5_02200660[] = {
++#else
+ static const BillboardAnim Unk_ov5_02200660[] = {
++#endif
+     { 0x0, 0x2, 0x0 },
+     { 0x0, 0x0, 0x2 }
+ };
+diff --git a/src/overlay005/ov5_021F3E74.c b/src/overlay005/ov5_021F3E74.c
+index 3f861cc2..cb9f755e 100644
+--- a/src/overlay005/ov5_021F3E74.c
++++ b/src/overlay005/ov5_021F3E74.c
+@@ -159,7 +159,12 @@ static const OverworldAnimManagerFuncs Unk_ov5_0220069C = {
+     ov5_021F3FF4
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const BillboardAnim Unk_ov5_022006B0[] = {
++#else
+ static const BillboardAnim Unk_ov5_022006B0[] = {
++#endif
+     { 0x0, 0x7, 0x1 },
+     { 0x0, 0x0, 0x2 }
+ };
+diff --git a/src/overlay005/ov5_021F5A10.c b/src/overlay005/ov5_021F5A10.c
+index ec5190a2..a611329f 100644
+--- a/src/overlay005/ov5_021F5A10.c
++++ b/src/overlay005/ov5_021F5A10.c
+@@ -544,7 +544,12 @@ static const OverworldAnimManagerFuncs Unk_ov5_02200BAC = {
+     ov5_021F5D54
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const BillboardAnim Unk_ov5_02200BC0[] = {
++#else
+ static const BillboardAnim Unk_ov5_02200BC0[] = {
++#endif
+     { 0x0, 0x1, 0x0 },
+     { 0x0, 0x0, 0x2 }
+ };
+diff --git a/src/overlay005/ov5_021F600C.c b/src/overlay005/ov5_021F600C.c
+index 9e7281c6..fc3d192f 100644
+--- a/src/overlay005/ov5_021F600C.c
++++ b/src/overlay005/ov5_021F600C.c
+@@ -158,7 +158,12 @@ static const OverworldAnimManagerFuncs Unk_ov5_02200BD8 = {
+     ov5_021F615C
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const BillboardAnim Unk_ov5_02200BEC[] = {
++#else
+ static const BillboardAnim Unk_ov5_02200BEC[] = {
++#endif
+     { 0x0, 0x1, 0x1 },
+     { 0x0, 0x0, 0x2 }
+ };
+diff --git a/src/overlay006/hm_cut_in.c b/src/overlay006/hm_cut_in.c
+index a6211763..ef28d99d 100644
+--- a/src/overlay006/hm_cut_in.c
++++ b/src/overlay006/hm_cut_in.c
+@@ -1009,7 +1009,12 @@ static int (*const FlyLandingAnimFuncCollection[])(FlyLandingEnvExtended *) = {
+     FlyLandingAnim_DoNothing
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++int (*const *const FlyLandingAnimFuncCollections[])(FlyLandingEnvExtended *) = {
++#else
+ static int (*const *const FlyLandingAnimFuncCollections[])(FlyLandingEnvExtended *) = {
++#endif
+     HideBirdSpriteFuncCollection,
+     FlyLandingAnimFuncCollection
+ };
+diff --git a/src/overlay062/ov62_02234A10.c b/src/overlay062/ov62_02234A10.c
+index 1c9eaa65..016ea7fa 100644
+--- a/src/overlay062/ov62_02234A10.c
++++ b/src/overlay062/ov62_02234A10.c
+@@ -30,8 +30,18 @@
+ static void ov62_02234A10(UnkStruct_0208C06C *param0);
+ static void ov62_02234A90(UnkStruct_0208C06C *param0);
+ static BOOL ov62_02234AB4(UnkStruct_0208C06C *param0);
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++BOOL ov62_02234CDC(UnkStruct_0208C06C *param0);
++#else
+ static BOOL ov62_02234CDC(UnkStruct_0208C06C *param0);
++#endif
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++BOOL ov62_02234EF8(UnkStruct_0208C06C *param0);
++#else
+ static BOOL ov62_02234EF8(UnkStruct_0208C06C *param0);
++#endif
+ static BOOL ov62_02234FCC(UnkStruct_0208C06C *param0);
+ BOOL ov62_02235008(UnkStruct_0208C06C *param0);
+ 
+@@ -147,7 +157,12 @@ static BOOL ov62_02234AB4(UnkStruct_0208C06C *param0)
+     return 0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++BOOL ov62_02234CDC(UnkStruct_0208C06C *param0)
++#else
+ static BOOL ov62_02234CDC(UnkStruct_0208C06C *param0)
++#endif
+ {
+     switch (param0->unk_08) {
+     case 0:
+@@ -221,7 +236,12 @@ static BOOL ov62_02234CDC(UnkStruct_0208C06C *param0)
+     return 0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++BOOL ov62_02234EF8(UnkStruct_0208C06C *param0)
++#else
+ static BOOL ov62_02234EF8(UnkStruct_0208C06C *param0)
++#endif
+ {
+     switch (param0->unk_08) {
+     case 0:
+diff --git a/src/player_move.c b/src/player_move.c
+index 93d032e7..2c8b2f50 100644
+--- a/src/player_move.c
++++ b/src/player_move.c
+@@ -505,7 +505,12 @@ static u32 PlayerAvatar_GetTileMovement(PlayerAvatar *playerAvatar, int dir)
+     return TILE_MOVE_NONE;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const TileBehaviorCheck sTileBehaviorCheckTable[] = {
++#else
+ static const TileBehaviorCheck sTileBehaviorCheckTable[] = {
++#endif
+     { TileBehavior_IsIce, TILE_MOVE_ICE },
+     { TileBehavior_IsBikeSlope, TILE_MOVE_BIKE_SLOPE },
+     { TileBehavior_IsBikeRampEastward, TILE_MOVE_BIKE_RAMP_EAST },
+diff --git a/src/trainer_encounter.c b/src/trainer_encounter.c
+index 916fca57..1cba0660 100644
+--- a/src/trainer_encounter.c
++++ b/src/trainer_encounter.c
+@@ -695,7 +695,12 @@ static int ApproachingTrainerTask_Done(ApproachingTrainerData *data)
+     return 0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++int (*const sApproachingTrainerTask[])(ApproachingTrainerData *) = {
++#else
+ static int (*const sApproachingTrainerTask[])(ApproachingTrainerData *) = {
++#endif
+     [STATE_UNPAUSE_MOVEMENT] = ApproachingTrainerTask_UnpauseMovement,
+     [STATE_TRY_FACE_DIRECTION] = ApproachingTrainerTask_TryFaceDirection,
+     [STATE_CHECK_REVEAL_OR_FACE_DIRECTION] = ApproachingTrainerTask_CheckRevealOrFaceDirection,
+diff --git a/src/unk_0203D1B8.c b/src/unk_0203D1B8.c
+index ae891f93..4c88b698 100644
+--- a/src/unk_0203D1B8.c
++++ b/src/unk_0203D1B8.c
+@@ -1361,7 +1361,12 @@ void *sub_0203E1AC(FieldSystem *fieldSystem, int param1, int param2)
+     return (void *)v0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const ApplicationManagerTemplate Unk_020EA328 = {
++#else
+ static const ApplicationManagerTemplate Unk_020EA328 = {
++#endif
+     ov92_021D0D80,
+     ov92_021D0EB8,
+     ov92_021D1478,
+diff --git a/src/unk_0206450C.c b/src/unk_0206450C.c
+index 086448e6..6b18f40d 100644
+--- a/src/unk_0206450C.c
++++ b/src/unk_0206450C.c
+@@ -596,7 +596,12 @@ static int sub_02064A58(MapObject *mapObj, UnkStruct_0206496C *param1)
+     return 1;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++int (*const Unk_020EE900[])(MapObject *, UnkStruct_0206496C *) = {
++#else
+ static int (*const Unk_020EE900[])(MapObject *, UnkStruct_0206496C *) = {
++#endif
+     sub_020649CC,
+     sub_02064A00,
+     sub_02064A1C,
+@@ -697,7 +702,12 @@ static int sub_02064B74(MapObject *mapObj, UnkStruct_0206496C *param1)
+     return 1;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++int (*const Unk_020EE870[])(MapObject *, UnkStruct_0206496C *) = {
++#else
+ static int (*const Unk_020EE870[])(MapObject *, UnkStruct_0206496C *) = {
++#endif
+     sub_02064B20,
+     sub_02064B40,
+     sub_02064B5C,
+@@ -811,7 +821,12 @@ static int sub_02064D68(MapObject *mapObj, UnkStruct_02064C28 *param1)
+     return 0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++int (*const Unk_020EE814[])(MapObject *, UnkStruct_02064C28 *) = {
++#else
+ static int (*const Unk_020EE814[])(MapObject *, UnkStruct_02064C28 *) = {
++#endif
+     sub_02064C6C,
+     sub_02064CA8,
+     sub_02064D68
+@@ -1013,7 +1028,12 @@ static int sub_02064FFC(MapObject *mapObj, UnkStruct_02064D98 *param1)
+     return 0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++int (*const Unk_020EE7AC[])(MapObject *, UnkStruct_02064D98 *) = {
++#else
+ static int (*const Unk_020EE7AC[])(MapObject *, UnkStruct_02064D98 *) = {
++#endif
+     sub_02064EEC,
+     sub_02064FFC
+ };
+@@ -1222,7 +1242,12 @@ static int sub_020652BC(MapObject *mapObj, UnkStruct_0206502C *param1)
+     return 0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++int (*const Unk_020EE820[])(MapObject *, UnkStruct_0206502C *) = {
++#else
+ static int (*const Unk_020EE820[])(MapObject *, UnkStruct_0206502C *) = {
++#endif
+     sub_02065124,
+     sub_02065188,
+     sub_020651A4,
+@@ -1479,7 +1504,12 @@ static void sub_020655E4(MapObject *mapObj, UnkStruct_02065550 *param1)
+     }
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EEA88[] = {
++#else
+ static const int Unk_020EEA88[] = {
++#endif
+     0x10,
+     0x20,
+     0x30,
+@@ -1487,7 +1517,12 @@ static const int Unk_020EEA88[] = {
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EEA9C[] = {
++#else
+ static const int Unk_020EEA9C[] = {
++#endif
+     0x0,
+     0x1,
+     0x2,
+@@ -1495,71 +1530,126 @@ static const int Unk_020EEA9C[] = {
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE7B4[] = {
++#else
+ static const int Unk_020EE7B4[] = {
++#endif
+     0x0,
+     0x2,
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE7D8[] = {
++#else
+ static const int Unk_020EE7D8[] = {
++#endif
+     0x0,
+     0x3,
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE7C0[] = {
++#else
+ static const int Unk_020EE7C0[] = {
++#endif
+     0x1,
+     0x2,
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE7E4[] = {
++#else
+ static const int Unk_020EE7E4[] = {
++#endif
+     0x1,
+     0x3,
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE9A0[] = {
++#else
+ static const int Unk_020EE9A0[] = {
++#endif
+     0x0,
+     0x1,
+     0x2,
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE960[] = {
++#else
+ static const int Unk_020EE960[] = {
++#endif
+     0x0,
+     0x1,
+     0x3,
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE970[] = {
++#else
+ static const int Unk_020EE970[] = {
++#endif
+     0x0,
+     0x2,
+     0x3,
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE990[] = {
++#else
+ static const int Unk_020EE990[] = {
++#endif
+     0x1,
+     0x2,
+     0x3,
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE808[] = {
++#else
+ static const int Unk_020EE808[] = {
++#endif
+     0x0,
+     0x1,
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE7FC[] = {
++#else
+ static const int Unk_020EE7FC[] = {
++#endif
+     0x2,
+     0x3,
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EEA10[] = {
++#else
+ static const int Unk_020EEA10[] = {
++#endif
+     0x0,
+     0x1,
+     0x2,
+@@ -1567,180 +1657,310 @@ static const int Unk_020EEA10[] = {
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE7F0[] = {
++#else
+ static const int Unk_020EE7F0[] = {
++#endif
+     0x0,
+     0x1,
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE7CC[] = {
++#else
+ static const int Unk_020EE7CC[] = {
++#endif
+     0x2,
+     0x3,
+     -1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE910[] = {
++#else
+ static const int Unk_020EE910[] = {
++#endif
+     0x0,
+     0x3,
+     0x2,
+     0x1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE8A0[] = {
++#else
+ static const int Unk_020EE8A0[] = {
++#endif
+     0x3,
+     0x2,
+     0x1,
+     0x0
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE8E0[] = {
++#else
+ static const int Unk_020EE8E0[] = {
++#endif
+     0x1,
+     0x0,
+     0x3,
+     0x2
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE8F0[] = {
++#else
+ static const int Unk_020EE8F0[] = {
++#endif
+     0x2,
+     0x1,
+     0x0,
+     0x3
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE8D0[] = {
++#else
+ static const int Unk_020EE8D0[] = {
++#endif
+     0x2,
+     0x3,
+     0x1,
+     0x0
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE8C0[] = {
++#else
+ static const int Unk_020EE8C0[] = {
++#endif
+     0x2,
+     0x3,
+     0x1,
+     0x0
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE880[] = {
++#else
+ static const int Unk_020EE880[] = {
++#endif
+     0x1,
+     0x0,
+     0x2,
+     0x3
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE9F0[] = {
++#else
+ static const int Unk_020EE9F0[] = {
++#endif
+     0x3,
+     0x1,
+     0x0,
+     0x2
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE920[] = {
++#else
+ static const int Unk_020EE920[] = {
++#endif
+     0x2,
+     0x0,
+     0x1,
+     0x3
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE930[] = {
++#else
+ static const int Unk_020EE930[] = {
++#endif
+     0x0,
+     0x1,
+     0x3,
+     0x2
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE980[] = {
++#else
+ static const int Unk_020EE980[] = {
++#endif
+     0x3,
+     0x2,
+     0x0,
+     0x1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE9B0[] = {
++#else
+ static const int Unk_020EE9B0[] = {
++#endif
+     0x1,
+     0x3,
+     0x2,
+     0x0
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE940[] = {
++#else
+ static const int Unk_020EE940[] = {
++#endif
+     0x3,
+     0x0,
+     0x1,
+     0x2
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE840[] = {
++#else
+ static const int Unk_020EE840[] = {
++#endif
+     0x0,
+     0x1,
+     0x2,
+     0x3
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE830[] = {
++#else
+ static const int Unk_020EE830[] = {
++#endif
+     0x2,
+     0x3,
+     0x0,
+     0x1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE9E0[] = {
++#else
+ static const int Unk_020EE9E0[] = {
++#endif
+     0x1,
+     0x2,
+     0x3,
+     0x0
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE890[] = {
++#else
+ static const int Unk_020EE890[] = {
++#endif
+     0x0,
+     0x2,
+     0x1,
+     0x3
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EEA00[] = {
++#else
+ static const int Unk_020EEA00[] = {
++#endif
+     0x1,
+     0x3,
+     0x0,
+     0x2
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE950[] = {
++#else
+ static const int Unk_020EE950[] = {
++#endif
+     0x2,
+     0x1,
+     0x3,
+     0x0
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE9C0[] = {
++#else
+ static const int Unk_020EE9C0[] = {
++#endif
+     0x3,
+     0x0,
+     0x2,
+     0x1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE850[] = {
++#else
+ static const int Unk_020EE850[] = {
++#endif
+     0x0,
+     0x3,
+     0x1,
+     0x2
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE860[] = {
++#else
+ static const int Unk_020EE860[] = {
++#endif
+     0x1,
+     0x2,
+     0x0,
+     0x3
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE8B0[] = {
++#else
+ static const int Unk_020EE8B0[] = {
++#endif
+     0x2,
+     0x0,
+     0x3,
+     0x1
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EE9D0[] = {
++#else
+ static const int Unk_020EE9D0[] = {
++#endif
+     0x3,
+     0x1,
+     0x2,
+@@ -1798,7 +2018,12 @@ static const UnkStruct_020EEB08 Unk_020EEB08[40] = {
+     { 0x27, NULL }
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++const int Unk_020EEAD0[] = {
++#else
+ static const int Unk_020EEAD0[] = {
++#endif
+     0x2,
+     0x6,
+     0x7,
+diff --git a/src/unk_020673B8.c b/src/unk_020673B8.c
+index 70b8a186..969959e5 100644
+--- a/src/unk_020673B8.c
++++ b/src/unk_020673B8.c
+@@ -366,7 +366,12 @@ static int sub_020676D4(MapObject *param0)
+     return 0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++void (*const Unk_020EF630[])(MapObject *) = {
++#else
+ static void (*const Unk_020EF630[])(MapObject *) = {
++#endif
+     sub_020674A0,
+     sub_020674A0,
+     sub_020674A0,
+@@ -381,7 +386,12 @@ static void (*const Unk_020EF630[])(MapObject *) = {
+     sub_020674A0
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++int (*const Unk_020EF660[])(MapObject *) = {
++#else
+ static int (*const Unk_020EF660[])(MapObject *) = {
++#endif
+     sub_020674A4,
+     sub_020674A4,
+     sub_020674A4,
+@@ -396,7 +406,12 @@ static int (*const Unk_020EF660[])(MapObject *) = {
+     sub_020674A4
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++int (*const Unk_020EF690[])(MapObject *) = {
++#else
+ static int (*const Unk_020EF690[])(MapObject *) = {
++#endif
+     sub_020674A8,
+     sub_020674A8,
+     sub_020674A8,
+diff --git a/src/unk_02069BE0.c b/src/unk_02069BE0.c
+index d6f75473..437a7e17 100644
+--- a/src/unk_02069BE0.c
++++ b/src/unk_02069BE0.c
+@@ -133,7 +133,12 @@ static int sub_02069C8C(MapObject *mapObj, UnkStruct_02069CA8 *param1)
+     return 0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++int (*const Unk_020EF8D4[])(MapObject *, UnkStruct_02069CA8 *) = {
++#else
+ static int (*const Unk_020EF8D4[])(MapObject *, UnkStruct_02069CA8 *) = {
++#endif
+     sub_02069C48,
+     sub_02069C8C
+ };
+@@ -302,7 +307,12 @@ static int sub_02069E98(MapObject *mapObj, UnkStruct_02069F48 *param1)
+     return 0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++int (*const Unk_020EF8EC[])(MapObject *, UnkStruct_02069F48 *) = {
++#else
+ static int (*const Unk_020EF8EC[])(MapObject *, UnkStruct_02069F48 *) = {
++#endif
+     sub_02069E5C,
+     sub_02069E98
+ };
+@@ -517,7 +527,12 @@ static int sub_0206A1DC(MapObject *mapObj, UnkStruct_0206A0BC *param1)
+     return 0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++int (*const Unk_020EF8DC[])(MapObject *, UnkStruct_0206A0BC *) = {
++#else
+ static int (*const Unk_020EF8DC[])(MapObject *, UnkStruct_0206A0BC *) = {
++#endif
+     sub_0206A1AC,
+     sub_0206A1DC
+ };
+-- 
+2.43.0
+

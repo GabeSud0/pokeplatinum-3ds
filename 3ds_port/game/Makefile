@@ -37,6 +37,13 @@ GAME_ALL_SRCS := $(sort $(patsubst $(GAME)/src/%,%,$(shell find $(GAME)/src -nam
 GAME_SRCS := $(filter-out $(GAME_BLOCKED),$(GAME_ALL_SRCS))
 GAME_OBJS := $(GAME_SRCS:%.c=$(OUT)/src/%.o)
 
+# The game's own libraries that the original links into the same program
+# (meson.build: libcrypto, libgds, libspl). libdwcppwlobby/libdwcenc are
+# left out with the rest of online play.
+GAME_LIBS := crypto gds spl
+GAME_LIB_SRCS := $(sort $(foreach l,$(GAME_LIBS),$(wildcard $(GAME)/lib/$(l)/src/*.c)))
+GAME_OBJS += $(GAME_LIB_SRCS:$(GAME)/%.c=$(OUT)/%.o)
+
 # Game headers (inlines.h, pokemon_sprite.h, NitroDWC's dwc_friend.h ...)
 # define functions with plain `inline`. Metrowerks kept one copy; GCC
 # exports one from every file that includes the header, and those files then
@@ -108,13 +115,12 @@ SOUND_HEADER := $(RESOURCE_DIR)/res/sound/pl_sound_data.naix
 $(SOUND_HEADER): $(SOUND_MANIFEST) $(ROOT)/tools/prepare_game_sound_naix.py
 	@python3 $(ROOT)/tools/prepare_game_sound_naix.py --upstream="$(GAME)" --output="$(RESOURCE_DIR)"
 
-# NitroArc --files-from uses pinned .order manifests for graphics and
-# two additional archives (encounter effects and battle subscripts). The
+# NitroArc --files-from uses pinned .order manifests: all graphics archives,
+# and every archive whose res/**/meson.build rule names its .order list and
+# .naix output literally (fonts, field props and scripts ...). The
 # Pokédex output is zukan.naix even though its input is pokedex.order.
 # Reproduce only explicit indices, never assets or implicit members.
-ARCHIVE_ORDERS := $(shell find $(GAME)/res/graphics -type f -name '*.order') \
-                  $(GAME)/res/trainers/classes/field_encounteffect.order \
-                  $(GAME)/res/battle/scripts/subscripts/sub_seq.order
+ARCHIVE_ORDERS := $(shell find $(GAME)/res -type f \( -name '*.order' -o -name meson.build \))
 ARCHIVE_STAMP := $(RESOURCE_DIR)/.archive-naix-ready
 
 $(ARCHIVE_STAMP): $(ARCHIVE_ORDERS) $(ROOT)/tools/prepare_game_graphics_naix.py
@@ -127,20 +133,34 @@ $(ARCHIVE_STAMP): $(ARCHIVE_ORDERS) $(ROOT)/tools/prepare_game_graphics_naix.py
 # This does NOT enable GameSpy networking or link an online-play runtime.
 NETWORK_DIR := $(ROOT)/build/game-network-sdks
 NETWORK_STAMP := $(NETWORK_DIR)/.headers-ready
-NETWORK_WRAPS := $(GAME)/subprojects/NitroDWC.wrap $(GAME)/subprojects/NitroWiFi.wrap
+NETWORK_WRAPS := $(GAME)/subprojects/NitroDWC.wrap $(GAME)/subprojects/NitroWiFi.wrap \
+                 $(GAME)/subprojects/libvct.wrap
 
 $(NETWORK_STAMP): $(NETWORK_WRAPS) $(ROOT)/tools/prepare_game_network_headers.py
 	@python3 $(ROOT)/tools/prepare_game_network_headers.py --upstream="$(GAME)" --output="$(NETWORK_DIR)"
 	@touch $@
 
-# GCC 14 (devkitARM) turns these old-C warnings into errors. Treat them as
-# errors on every compiler, so a file that builds on the PC builds for the
-# 3DS too. Several of them catch real mistakes in the decompilation, such as
-# calls to functions that don't exist under that name.
-GCC14_ERRORS := -Werror=implicit-function-declaration -Werror=implicit-int \
-                -Werror=int-conversion -Werror=incompatible-pointer-types
+# GCC 14 (devkitARM) turned some old-C warnings into errors; GCC 13 (a
+# typical PC) didn't. Set them the same way on every compiler, so a file
+# that builds on the PC builds for the 3DS:
+#  - errors: implicit function declarations (calls with no declaration in
+#    scope). A call through an implicit declaration can silently pass or
+#    return the wrong types; patches/pokeplatinum/0003 declares the ones the
+#    game makes.
+#  - warnings: integer/pointer conversions (mostly NULL used as 0) and
+#    implicit int. Metrowerks accepted these, and on the 3DS pointers and int
+#    are both 32 bits, so the result is the same as on the DS.
+GCC14_ERRORS := -Werror=implicit-function-declaration \
+                -Wno-error=implicit-int -Wno-error=int-conversion \
+                -Wno-error=incompatible-pointer-types
 
-# -D_NITRO: NitroDWC's GameSpy headers (included by about 90 game files,
+# Include paths as in the original meson.build: the game's own libraries
+# (lib/*/include) and libvct, plus the folder of the generated constant
+# headers, which Meson adds by itself for generated headers (a few files
+# include "items.h" rather than "generated/items.h").
+# -D_NITRO -DLINK_PPWLOBBY: what NitroDWC's build passes on to the game in
+# the original (its dependency's compile_args). NitroDWC's GameSpy headers
+# (included by about 90 game files,
 # main.c among them) pick their platform from this; _NITRO is the DS, as the
 # original game was built. Same on every target, so PC and 3DS compile the
 # same code. include/extras.h stands in for the Metrowerks header it pulls in.
@@ -156,17 +176,20 @@ GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
                -I$(NETWORK_DIR)/NitroDWC/include/base \
                -I$(NETWORK_DIR)/NitroWiFi/include \
                -I$(GAME)/lib/gds/include \
+               -I$(GAME)/lib/ppwlobby/include -I$(GAME)/lib/crypto/include \
+               -I$(NETWORK_DIR)/libvct/include \
+               -I$(CONSTANTS_DIR)/generated \
                -DPOKEPLATINUM_REVISION=1 -DPOKEPLATINUM_GENERATED_ENUM \
                -D_MSL_RESTRICT= -DPM_KEEP_ASSERTS \
                -DGAME_VERSION=VERSION_PLATINUM \
                -DGAME_LANGUAGE=LANGUAGE_ENGLISH \
-               -D_NITRO \
+               -D_NITRO -DLINK_PPWLOBBY \
                -include $(GAME)/include/pch/global_pch.h \
                -ffunction-sections -fdata-sections \
                $(GCC14_ERRORS)
 
 
-.PHONY: all lib test probe clean libnitro libnitrosystem
+.PHONY: all lib test probe link-check clean libnitro libnitrosystem
 
 ifeq ($(IS_HOST),yes)
 all: test
@@ -202,15 +225,25 @@ $(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE
 
 $(GAME_HEADER_DEFS): $(CENSUS_OBJS)
 	@mkdir -p $(dir $@)
-	@$(NM) -g --defined-only $^ | awk 'NF == 3 && $$2 ~ /^[TDBR]$$/ { print $$3 }' | sort | uniq -d > $@
+	@# Objects already made weak by an earlier run no longer show up as
+	@# duplicates, so keep the names found before.
+	@{ cat $@ 2>/dev/null; $(NM) -g --defined-only $^ | awk 'NF == 3 && $$2 ~ /^[TDBR]$$/ { print $$3 }' | sort | uniq -d; } | sort -u > $@.new
+	@mv $@.new $@
 	@for o in $^; do $(OBJCOPY) --weaken-symbols=$@ $$o; done
 	@touch $@
 	@echo "  $$(wc -l < $@) game header functions defined in several objects, made weak"
 
+# The game's libraries: same flags, plus their own private headers (src/).
+$(OUT)/lib/%.o: $(GAME)/lib/%.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(NETWORK_STAMP) | libnitrosystem
+	@mkdir -p $(dir $@)
+	@echo "  GAME CC lib/$*.c"
+	@$(CC) $(GAME_CFLAGS) -I$(dir $<) -c $< -o $@
+	@$(WEAKEN_NNS_INLINE)
+
 $(LIB): $(GAME_HEADER_DEFS)
 	@rm -f $@
 	@$(AR) rcs $@ $(GAME_OBJS)
-	@echo "built $@ ($(words $(GAME_SRCS)) of $(words $(GAME_ALL_SRCS)) game C files)"
+	@echo "built $@ ($(words $(GAME_SRCS)) of $(words $(GAME_ALL_SRCS)) game C files, and lib/$(subst $(eval) ,+,$(GAME_LIBS)))"
 
 # Independent host tests exercise the ORIGINAL game functions linked against
 # NitroSystem and NitroSDK, without any ROM or copyrighted game data.
@@ -222,7 +255,7 @@ $(TEST_OBJ): tests/test_game.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_
 	@$(WEAKEN_NNS_INLINE)
 
 $(TEST_BIN): $(TEST_OBJ) $(LIB) $(LIBNNS) $(LIBNITRO)
-	@$(CC) $(LDFLAGS) -Wl,--gc-sections $(OUT)/tests/test_game.o \
+	@$(CC) $(LDFLAGS) -Wl,--gc-sections -Wl,--wrap=ErrorHandling_AssertFail $(OUT)/tests/test_game.o \
 	    -Wl,--start-group $(LIB) $(LIBNNS) $(LIBNITRO) -Wl,--end-group -lm -o $@
 
 ifeq ($(IS_HOST),yes)
@@ -233,6 +266,28 @@ test:
 	@echo "Host-only tests; run make TARGET=host or TARGET=host32"
 	@exit 1
 endif
+
+# Link the whole game from NitroMain and report every symbol still missing
+# (tools/game_link_report.py). A to-do list, not a gate: always succeeds.
+LINK_CHECK_OBJ := $(OUT)/link/link_check.o
+LINK_REPORT := $(ROOT)/build/game-link-report/$(TARGET).md
+DEVKITPRO ?= /opt/devkitpro
+ifeq ($(TARGET),3ds)
+LINK_CHECK_LDFLAGS := -specs=3dsx.specs -L$(DEVKITPRO)/libctru/lib
+LINK_CHECK_LIBS := -lctru
+endif
+
+$(LINK_CHECK_OBJ): link/link_check.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(PORT_CFLAGS) -c $< -o $@
+
+link-check: $(LINK_CHECK_OBJ) $(LIB) $(LIBNNS) $(LIBNITRO)
+	@mkdir -p $(dir $(LINK_REPORT))
+	@$(CC) $(LDFLAGS) $(LINK_CHECK_LDFLAGS) -Wl,--gc-sections $(LINK_CHECK_OBJ) \
+	    -Wl,--start-group $(LIB) $(LIBNNS) $(LIBNITRO) -Wl,--end-group $(LINK_CHECK_LIBS) -lm \
+	    -o $(OUT)/link/platinum.elf > $(OUT)/link/linker.txt 2>&1 || true
+	@python3 $(ROOT)/tools/game_link_report.py $(OUT)/link/linker.txt --target $(TARGET) --output $(LINK_REPORT)
+	@echo "Report: $(LINK_REPORT)"
 
 # The diagnostic survey exercises original game C files *without linking*.
 # This intentionally does not force every game source into libplatinum_game:

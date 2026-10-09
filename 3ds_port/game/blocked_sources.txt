@@ -1,172 +1,37 @@
 # Original game sources that the port does not compile yet, and why.
 # Every other C file under build/upstream/src goes into libplatinum_game.
-# Made from tools/probe_game_compile.py reports (32-bit, with GCC 14's
-# default errors: what devkitARM rejects). When a cause is fixed, delete the
-# lines it unblocks; `make probe PROBE_LIMIT=0` shows what compiles.
+# Made by tools/update_game_blocklist.py from full compile surveys (32-bit,
+# with the game's flags, which treat implicit function declarations as
+# errors as devkitARM's GCC does). To unblock files, fix the cause, then
+# rerun the surveys and the tool (see 3ds_port/game/README.md).
 #
 # Format: path relative to src/   # reason (first error)
-applications/bag/sprites.c                                 # missing header genders.h
-applications/capsule_menu/graphics.c                       # implicit declaration of function ‘SealManger_CapsuleMenuField’ [-Werror=implicit-function-declaration]
-applications/capsule_menu/manager.c                        # implicit declaration of function ‘CapsuleGraphics_LoadBgLayer2Tilemap’; did you mean ‘CapsuleGraphics_LoadBgLa
-applications/frontier/battle_castle/self_app.c             # missing header items.h
-applications/frontier/records/main.c                       # missing header battle_tower_modes.h
-applications/frontier/tower_records.c                      # missing header battle_tower_modes.h
-applications/mail_viewer.c                                 # missing header res/fonts/pl_font.naix
-applications/naming_screen.c                               # missing header genders.h
-applications/options_menu.c                                # initialization of ‘unsigned char’ from ‘void *’ makes integer from pointer without a cast [-Werror=int-convers
-applications/party_menu/callbacks.c                        # missing header species.h
+applications/frontier/tower_records.c                      # missing header res/graphics/sprite_templates/tower_records.h
+applications/mail_viewer.c                                 # missing header res/pokemon/pl_poke_icon.naix
 applications/party_menu/sprites.c                          # missing header res/graphics/sprite_templates/party_menu.h
-applications/party_menu/windows.c                          # missing header pokemon_stats.h
-applications/pc_boxes/box_app_manager.c                    # lvalue required as left operand of assignment
-applications/poffin_case/manager.c                         # missing header res/graphics/poffin_case/poru_gra.naix
+applications/poffin_case/manager.c                         # missing header res/graphics/sprite_templates/poffin_case.h
 applications/pokedex/footprint.c                           # missing header res/pokemon/pokefoot.naix
-applications/pokedex/ov21_021D5AEC.c                       # implicit declaration of function ‘PokedexSort_NumDisplayed’; did you mean ‘PokedexSort_NumSpeciesDisplayed’? [
-applications/pokedex/pokedex_main.c                        # missing header genders.h
-applications/pokedex/pokedex_panel.c                       # implicit declaration of function ‘Heap_Alloc’; did you mean ‘OS_Alloc’? [-Werror=implicit-function-declaration
-applications/pokemon_summary_screen/main.c                 # missing header res/graphics/pokemon_summary_screen/pl_pst_gra.naix
-applications/pokemon_summary_screen/sprites.c              # missing header res/graphics/pokemon_summary_screen/pl_pst_gra.naix
-applications/poketch/poketch_graphics.c                    # initialization of ‘unsigned int’ from ‘void *’ makes integer from pointer without a cast [-Werror=int-conversi
-applications/rowan_intro/rowan_intro_app.c                 # missing header text_banks.h
+applications/pokemon_summary_screen/sprites.c              # missing header res/graphics/sprite_templates/pokemon_summary_screen.h
 applications/town_map/fly_locations.c                      # missing header res/graphics/sprite_templates/town_map.h
 applications/town_map/graphics.c                           # missing header res/graphics/sprite_templates/town_map.h
-battle/battle_controller.c                                 # passing argument 5 of ‘BattleController_SetMoveAnimation’ makes integer from pointer without a cast [-Werror=i
-battle/battle_controller_player.c                          # initialization of ‘u32 *’ {aka ‘unsigned int *’} from incompatible pointer type ‘u8 *’ {aka ‘unsigned char *’}
-battle/battle_display.c                                    # passing argument 4 of ‘BattleMessage_Print’ makes integer from pointer without a cast [-Werror=int-conversion]
-battle/battle_lib.c                                        # initialization of ‘int’ from ‘void *’ makes integer from pointer without a cast [-Werror=int-conversion]
-battle/battle_main.c                                       # passing argument 2 of ‘G2_SetWnd0InsidePlane’ makes integer from pointer without a cast [-Werror=int-conversio
-battle/battle_script.c                                     # passing argument 3 of ‘BattleController_EmitShowPokemon’ makes integer from pointer without a cast [-Werror=in
-battle/battle_system.c                                     # passing argument 4 of ‘BattleContext_Get’ makes integer from pointer without a cast [-Werror=int-conversion]
-battle/healthbox.c                                         # static declaration of ‘Healthbox_StartBobAnimation’ follows non-static declaration
-battle_anim/battle_anim_helpers.c                          # missing header battle_script_battlers.h
-battle_anim/emitter_callbacks.c                            # missing header battle_script_battlers.h
-battle_anim/generic_emitter_callback.c                     # missing header battle_script_battlers.h
-battle_anim/script_funcs_0.c                               # missing header battle_script_battlers.h
-battle_anim/script_funcs_1.c                               # missing header battle_script_battlers.h
-battle_anim/script_funcs_2.c                               # missing header battle_script_battlers.h
-battle_anim/script_funcs_3.c                               # missing header battle_script_battlers.h
-battle_anim/script_funcs_4.c                               # missing header battle_script_battlers.h
-battle_frontier_stats.c                                    # missing header battle_tower_modes.h
-choose_starter/choose_starter_app.c                        # passing argument 6 of ‘BuildPokemonSpriteTemplate’ makes integer from pointer without a cast [-Werror=int-conv
-comm_manager.c                                             # missing header ppwlobby/ppw_lobby.h
-comm_player_manager.c                                      # implicit declaration of function ‘PlayerAvatar_GetMoveState’; did you mean ‘PlayerAvatar_SetMoveState’? [-Werr
-contest.c                                                  # implicit declaration of function ‘LinkContestRecords_IncrementSavaData’ [-Werror=implicit-function-declaration
-cutscenes/boat_cutscene/boat_cutscene.c                    # missing header res/field/props/models/prop_models.naix
-cutscenes/egg_hatch/graphics.c                             # missing header res/fonts/pl_font.naix
+battle/healthbox.c                                         # missing header res/graphics/battle/healthbox/healthbox_parts.4bpp.h
 cutscenes/end_credits/common.c                             # missing header ending.naix
 cutscenes/end_credits/main.c                               # missing header ending.naix
 cutscenes/end_credits/scenes.c                             # missing header ending.naix
-evolution.c                                                # passing argument 2 of ‘PokemonSprite_InitAnim’ makes integer from pointer without a cast [-Werror=int-conversi
-field_battle_data_transfer.c                               # implicit declaration of function ‘SaveData_WiFiHistory’ [-Werror=implicit-function-declaration]
-font.c                                                     # missing header res/fonts/pl_font.naix
-font_special_chars.c                                       # missing header res/fonts/pl_font.naix
-game_opening/ov77_021D6C70.c                               # passing argument 6 of ‘BuildPokemonSpriteTemplate’ makes integer from pointer without a cast [-Werror=int-conv
-gts_application/screens/deposit.c                          # type defaults to ‘int’ in declaration of ‘sGenderSelectionOptions’ [-Werror=implicit-int]
 item.c                                                     # missing header res/items/item_berry_list.h
-item_use_functions.c                                       # missing header items.h
 mail.c                                                     # missing header res/pokemon/pl_poke_icon.naix
-main_menu/distribution_cartridge.c                         # missing header crypto.h
-main_menu/gba_migrator.c                                   # initialization of ‘int’ from ‘void *’ makes integer from pointer without a cast [-Werror=int-conversion]
-main_menu/main_menu.c                                      # initialization of ‘int’ from ‘void *’ makes integer from pointer without a cast [-Werror=int-conversion]
-main_menu/main_menu_util.c                                 # missing header crypto.h
-main_menu/ov97_02232DC8.c                                  # lvalue required as left operand of assignment
-main_menu/ov97_02238534.c                                  # missing header crypto.h
-main_menu/ov97_02238D74.c                                  # type defaults to ‘int’ in declaration of ‘Unk_ov97_02240408’ [-Werror=implicit-int]
-main_menu/ranger_link.c                                    # missing header text_banks.h
-main_menu/wonder_cards_app.c                               # initialization of ‘unsigned int’ from ‘void *’ makes integer from pointer without a cast [-Werror=int-conversi
-map_header.c                                               # missing header res/field/area_data/area_data.naix
-menu.c                                                     # returning ‘void *’ from a function with return type ‘u32’ {aka ‘unsigned int’} makes integer from pointer with
-nintendo_wfc/main.c                                        # missing header ppwlobby/ppw_lobby.h
-nintendo_wfc/voice_chat.c                                  # missing header vct.h
+menu.c                                                     # missing header res/fonts/arrow_cursor.4bpp.h
 overlay005/daycare.c                                       # missing header res/pokemon/species_egg_moves.h
-overlay005/field_control.c                                 # implicit declaration of function ‘PlayerAvatar_GetMoveState’; did you mean ‘PlayerAvatar_SetMoveState’? [-Werr
-overlay005/fishing.c                                       # static declaration of ‘sFishingActions’ follows non-static declaration
 overlay005/footprint_type.c                                # missing header res/pokemon/species_footprint_types.h
-overlay005/honey_tree.c                                    # missing header res/field/props/models/prop_models.naix
-overlay005/ov5_021D431C.c                                  # missing header res/field/props/models/prop_models.naix
-overlay005/ov5_021EB1A0.c                                  # static declaration of ‘Unk_ov5_021FF3D4’ follows non-static declaration
-overlay005/ov5_021ECE40.c                                  # lvalue required as left operand of assignment
-overlay005/ov5_021F134C.c                                  # static declaration of ‘Unk_ov5_022002E4’ follows non-static declaration
-overlay005/ov5_021F2D20.c                                  # static declaration of ‘Unk_ov5_02200540’ follows non-static declaration
-overlay005/ov5_021F3284.c                                  # static declaration of ‘Unk_ov5_0220059C’ follows non-static declaration
-overlay005/ov5_021F348C.c                                  # static declaration of ‘Unk_ov5_022005D8’ follows non-static declaration
-overlay005/ov5_021F37A8.c                                  # static declaration of ‘Unk_ov5_02200634’ follows non-static declaration
-overlay005/ov5_021F3A50.c                                  # static declaration of ‘Unk_ov5_02200660’ follows non-static declaration
-overlay005/ov5_021F3E74.c                                  # static declaration of ‘Unk_ov5_022006B0’ follows non-static declaration
-overlay005/ov5_021F5A10.c                                  # static declaration of ‘Unk_ov5_02200BC0’ follows non-static declaration
-overlay005/ov5_021F600C.c                                  # static declaration of ‘Unk_ov5_02200BEC’ follows non-static declaration
 overlay005/scrcmd_move_tutor.c                             # missing header res/pokemon/tutorable_moves.h
-overlay005/villa_furniture.c                               # missing header res/field/props/models/prop_models.naix
-overlay006/elevator_animation.c                            # missing header res/field/props/models/prop_models.naix
-overlay006/great_marsh_lookout_sprite.c                    # passing argument 6 of ‘BuildPokemonSpriteTemplate’ makes integer from pointer without a cast [-Werror=int-conv
-overlay006/great_marsh_tram.c                              # missing header res/field/props/models/prop_models.naix
-overlay006/healing_machine_animation/hall_of_fame.c        # missing header res/field/props/models/prop_models.naix
-overlay006/healing_machine_animation/pokecenter.c          # missing header res/field/props/models/prop_models.naix
-overlay006/hm_cut_in.c                                     # static declaration of ‘FlyLandingAnimFuncCollections’ follows non-static declaration
-overlay006/lake_guardian_containment_units.c               # missing header res/field/props/models/prop_models.naix
-overlay006/ov6_022465FC.c                                  # returning ‘void *’ from a function with return type ‘int’ makes integer from pointer without a cast [-Werror=i
-overlay006/pc_animation.c                                  # missing header res/field/props/models/prop_models.naix
-overlay007/battle_regulation_menu.c                        # implicit declaration of function ‘abs’ [-Werror=implicit-function-declaration]
-overlay007/shop_menu.c                                     # missing header items.h
-overlay008/gym_features.c                                  # missing header trainer_types.h
-overlay017/ov17_02247A48.c                                 # passing argument 7 of ‘PlayCryWithParams’ makes integer from pointer without a cast [-Werror=int-conversion]
+overlay007/shop_menu.c                                     # missing header res/graphics/sprite_templates/shop_menu.h
 overlay017/ov17_0224A0FC.c                                 # missing header cstdlib
-overlay017/ov17_02251D6C.c                                 # passing argument 7 of ‘PlayCryWithParams’ makes integer from pointer without a cast [-Werror=int-conversion]
-overlay062/ov62_02234A10.c                                 # static declaration of ‘ov62_02234CDC’ follows non-static declaration
-overlay062/ov62_02246B00.c                                 # type defaults to ‘int’ in declaration of ‘v2’ [-Werror=implicit-int]
-overlay066/ov66_0222DCE0.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay066/ov66_0222DDF0.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay066/ov66_02230C44.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay066/ov66_0223177C.c                                 # type defaults to ‘int’ in declaration of ‘sc_NEWS_DSET_MINIGAME_PRI’ [-Werror=implicit-int]
-overlay066/ov66_022324F0.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay067/ov67_0225C700.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay068/ov68_0225C700.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay069/ov69_0225C700.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay070/ov70_0225D9A4.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay070/ov70_022630A4.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay070/ov70_02265F38.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay070/ov70_02266E9C.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay070/ov70_0226C60C.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay070/ov70_0226C8B4.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay070/ov70_0226CC74.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay070/ov70_0226CE54.c                                 # missing header ppwlobby/ppw_lobby.h
-overlay100/ov100_021D46C8.c                                # type defaults to ‘int’ in declaration of ‘v2’ [-Werror=implicit-int]
-overlay104/battle_hall.c                                   # missing header frontier_trainers.h
 overlay104/battle_hall_helpers.c                           # missing header res/trainers/frontier/frontier_trainer_classes.h
 overlay104/frontier_brain_encounter_effect.c               # missing header res/text/bank/npc_trainer_names.h
-overlay104/frontier_graphics.c                             # missing header res/fonts/pl_font.naix
-overlay104/frontier_scenes.c                               # missing header res/field/frontier_scripts/fr_script.naix
-overlay112/ov112_0225C700.c                                # missing header ppwlobby/ppw_lobby.h
-overlay113/ov113_0225C700.c                                # missing header ppwlobby/ppw_lobby.h
-overlay113/ov113_02260620.c                                # missing header ppwlobby/ppw_lobby.h
-overlay113/ov113_022607D8.c                                # missing header ppwlobby/ppw_lobby.h
-overlay114/ov114_0225C700.c                                # missing header ppwlobby/ppw_lobby.h
-overlay_manager.c                                          # assignment of read-only member ‘template’
-palette.c                                                  # implicit declaration of function ‘abs’ [-Werror=implicit-function-declaration]
+overlay113/ov113_02260620.c                                # missing header res/pokemon/species_footprint_sizes.h
 password_word_bank.c                                       # missing header res/words/word_bank.naix
-platform_lift.c                                            # missing header res/field/props/models/prop_models.naix
-player_move.c                                              # implicit declaration of function ‘PlayerAvatar_GetMoveState’; did you mean ‘PlayerAvatar_SetMoveState’? [-Werr
 pokemon.c                                                  # missing header res/trainers/classes/trbgra.naix
 pokemon_icon.c                                             # missing header res/pokemon/pl_poke_icon.naix
 pokemon_sprite.c                                           # missing header res/pokemon/pl_otherpoke.naix
-rankings_machine.c                                         # initialization of ‘int’ from ‘void *’ makes integer from pointer without a cast [-Werror=int-conversion]
-render_window.c                                            # initialization of ‘int’ from ‘void *’ makes integer from pointer without a cast [-Werror=int-conversion]
-resource_collection.c                                      # assignment to ‘u16’ {aka ‘short unsigned int’} from ‘void *’ makes integer from pointer without a cast [-Werro
-ribbon.c                                                   # missing header res/graphics/pokemon_summary_screen/pl_pst_gra.naix
-savedata.c                                                 # passing argument 2 of ‘SaveData_CalculateFooterChecksum’ makes pointer from integer without a cast [-Werror=in
-scrcmd.c                                                   # missing header items.h
-scrcmd_contests.c                                          # implicit declaration of function ‘SaveData_GetChatotCry’; did you mean ‘SaveData_GetParty’? [-Werror=implicit-
-script_manager.c                                           # missing header res/field/scripts/scr_seq.naix
-start_menu.c                                               # passing argument 11 of ‘Evolution_Begin’ makes integer from pointer without a cast [-Werror=int-conversion]
-text.c                                                     # missing header res/fonts/pl_font.naix
-trainer_encounter.c                                        # missing header trainer_types.h
-underground/comm_manager.c                                 # \u0090 is not a valid universal character
-underground/mining.c                                       # variable-sized object may not be initialized except with an empty initializer
-underground/secret_bases.c                                 # missing header res/field/props/models/prop_models.naix
-underground/text_printer.c                                 # implicit declaration of function ‘UndergroundMan_RemovePrinters’; did you mean ‘UndergroundTextPrinter_RemoveP
 underground_map_transition.c                               # missing header res/graphics/sprite_templates/underground_map_transition.h
-unk_02030A80.c                                             # missing header species.h
-unk_0203D1B8.c                                             # static declaration of ‘Unk_020EA328’ follows non-static declaration
-unk_0206450C.c                                             # static declaration of ‘Unk_020EE900’ follows non-static declaration
-unk_020673B8.c                                             # static declaration of ‘Unk_020EF630’ follows non-static declaration
-unk_02069BE0.c                                             # static declaration of ‘Unk_020EF8D4’ follows non-static declaration
 unk_02095CD4.c                                             # missing header unk_02095CD4.h

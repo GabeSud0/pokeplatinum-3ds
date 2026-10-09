@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch the exact NitroDWC/NitroWiFi header revisions pinned by Platinum.
+"""Fetch the exact NitroDWC/NitroWiFi/libvct header revisions pinned by Platinum.
 
 This is a *header preparation step* for original-game GCC compilation only:
 it does not build the DS networking libraries, emulate WFC, or enable online
@@ -20,7 +20,10 @@ ROOT = Path(__file__).resolve().parent.parent
 EXPECTED = {
     "NitroDWC": "https://github.com/ntrtwl/NitroDWC.git",
     "NitroWiFi": "https://github.com/ntrtwl/NitroWiFi.git",
+    "libvct": "https://github.com/ntrtwl/libvct.git",
 }
+# The public header each checkout must contain (proves the pin is right).
+PUBLIC_HEADER = {"NitroDWC": "dwc.h", "NitroWiFi": "nitroWiFi.h", "libvct": "vct.h"}
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
@@ -79,12 +82,12 @@ def prepare_checkout(url: str, revision: str, destination: Path) -> None:
 
 def prepare(upstream: Path, output: Path) -> dict[str, Path]:
     result: dict[str, Path] = {}
-    for name in ("NitroDWC", "NitroWiFi"):
+    for name in EXPECTED:
         url, revision = pinned_source(upstream / "subprojects" / f"{name}.wrap", name)
         checkout = output / name
         prepare_checkout(url, revision, checkout)
         inc = checkout / "include"
-        expected_header = "dwc.h" if name == "NitroDWC" else "nitroWiFi.h"
+        expected_header = PUBLIC_HEADER[name]
         if not (inc / expected_header).is_file():
             raise FileNotFoundError(f"{inc / expected_header}: pinned SDK header missing")
         result[name] = inc

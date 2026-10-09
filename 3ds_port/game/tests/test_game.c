@@ -86,9 +86,12 @@ static int fails;
     } \
 } while (0)
 
-/* Keep the original game's GF_ASSERT enabled, but fail loudly in tests
- * instead of calling the game's not-yet-compiled error handling subsystem. */
-void ErrorHandling_AssertFail(void)
+/* Keep the original game's GF_ASSERT enabled, but fail loudly in tests.
+ * The game's own ErrorHandling_AssertFail only acts while link play is
+ * running and otherwise returns, so a failed assert would pass silently.
+ * The test link redirects the game's calls here (-Wl,--wrap, see the
+ * Makefile), rather than defining a second ErrorHandling_AssertFail. */
+void __wrap_ErrorHandling_AssertFail(void)
 {
     fputs("Game GF_ASSERT failed in host test\n", stderr);
     abort();

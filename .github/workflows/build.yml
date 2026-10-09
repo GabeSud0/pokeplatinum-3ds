@@ -60,6 +60,17 @@ jobs:
             exit 1
           }
 
+      - name: Link the whole game for 3DS (report of missing symbols)
+        run: make -C 3ds_port/game TARGET=3ds link-check
+
+      - name: Upload 3DS full-game link report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: game-link-report-3ds
+          path: build/game-link-report/3ds.md
+          if-no-files-found: ignore
+
       - name: Link native original-Platinum smoke application
         run: make -C 3ds_port/platinum_smoke
 
@@ -169,6 +180,17 @@ jobs:
 
       - name: Compile and smoke-test original game code on 32-bit PC
         run: timeout 1800 make -j"$(nproc)" -C 3ds_port/game TARGET=host32 test
+
+      - name: Link the whole game on 32-bit PC (report of missing symbols)
+        run: make -C 3ds_port/game TARGET=host32 link-check
+
+      - name: Upload 32-bit full-game link report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: game-link-report-host32
+          path: build/game-link-report/host32.md
+          if-no-files-found: ignore
 
       - name: Survey original game C compilation blockers (32-bit PC)
         run: timeout 300 make -C 3ds_port/game TARGET=host32 probe PROBE_LIMIT=40 PROBE_TIMEOUT=7
