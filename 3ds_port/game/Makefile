@@ -44,6 +44,12 @@ GAME_LIBS := crypto gds spl
 GAME_LIB_SRCS := $(sort $(foreach l,$(GAME_LIBS),$(wildcard $(GAME)/lib/$(l)/src/*.c)))
 GAME_OBJS += $(GAME_LIB_SRCS:$(GAME)/%.c=$(OUT)/%.o)
 
+# The trainer AI script: data written with assembler macros, which the
+# original assembles with GNU as (meson.build: trainer_ai_o). It is only
+# data, so any target's assembler builds it the same way.
+TRAINER_AI_O := $(OUT)/src/battle/trainer_ai/script.o
+GAME_OBJS += $(TRAINER_AI_O)
+
 # Game headers (inlines.h, pokemon_sprite.h, NitroDWC's dwc_friend.h ...)
 # define functions with plain `inline`. Metrowerks kept one copy; GCC
 # exports one from every file that includes the header, and those files then
@@ -248,6 +254,12 @@ $(GAME_HEADER_DEFS): $(CENSUS_OBJS)
 	@touch $@
 	@echo "  $$(wc -l < $@) game header functions defined in several objects, made weak"
 
+$(TRAINER_AI_O): $(GAME)/src/battle/trainer_ai/script.s $(GAME_GENERATED)
+	@mkdir -p $(dir $@)
+	@echo "  GAME AS battle/trainer_ai/script.s"
+	@$(CC) $(filter -m%,$(PORT_CFLAGS)) -I$(GAME)/include -I$(GAME)/asm -I$(CONSTANTS_DIR) \
+	    -x assembler-with-cpp -c $< -o $@
+
 # The game's libraries: same flags, plus their own private headers (src/).
 $(OUT)/lib/%.o: $(GAME)/lib/%.c $(NNS_INLINE_SYMS) $(GAME_GENERATED) | libnitrosystem
 	@mkdir -p $(dir $@)
@@ -265,7 +277,8 @@ WIFI_STUBS_O := $(OUT)/gen/wifi_stubs.o
 # the objects themselves would redo this on every make).
 $(WIFI_STUBS_C): $(GAME_HEADER_DEFS) $(ROOT)/tools/make_game_wifi_stubs.py
 	@python3 $(ROOT)/tools/make_game_wifi_stubs.py --nm $(NM) --output $@ \
-	    --headers $(NETWORK_DIR) $(GAME)/lib/ppwlobby $(SDK)/include/nitro -- $(GAME_OBJS)
+	    --headers $(NETWORK_DIR) $(GAME)/lib/ppwlobby $(SDK)/include/nitro \
+	    --sources $(NETWORK_DIR)/NitroDWC $(NETWORK_DIR)/NitroWiFi $(GAME)/lib/ppwlobby -- $(GAME_OBJS)
 	@touch $@
 
 $(WIFI_STUBS_O): $(WIFI_STUBS_C)

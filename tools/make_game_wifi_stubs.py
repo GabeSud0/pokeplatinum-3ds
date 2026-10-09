@@ -9,7 +9,8 @@ The original game links Nintendo's Wi-Fi libraries: NitroDWC (DWC_), the
 Pokemon Wi-Fi lobby (PPW_), voice chat (VCT_), NitroWiFi (SOC_, WCM_ ...) and
 wireless voice (WVR_). Online play isn't part of the port, so it doesn't
 link them. This lists every such symbol the given game objects use and none
-of them defines (from `nm`), and writes a C file with one stand-in each. A
+of them defines (from `nm`), by prefix or because the SDKs' own sources
+define it, and writes a C file with one stand-in each. A
 stand-in logs "not implemented: <name>" once (NitroPort_Unimplemented) and
 returns 0: FALSE, NULL or the first enum value, so the game's online menus
 see a failure.
@@ -42,6 +43,18 @@ def symbols(nm: str, objects: list[str]) -> tuple[set[str], set[str]]:
         elif len(parts) == 3:
             defined.add(parts[2])
     return defined, undefined
+
+
+def wifi_source_names(source_dirs: list[Path]) -> set[str]:
+    """Functions defined in the Wi-Fi SDKs' own sources (NitroDWC's GameSpy
+    code, the ppwlobby library ...), whose names don't all carry a prefix:
+    B64Encode, ov66_02237134."""
+    names: set[str] = set()
+    definition = re.compile(r"^[A-Za-z_][\w \t\*]*?\b([A-Za-z_]\w*)\s*\([^;{]*\)\s*(?://[^\n]*)?\s*\{", re.M)
+    for folder in source_dirs:
+        for path in list(folder.rglob("*.c")) + list(folder.rglob("*.cpp")):
+            names.update(definition.findall(path.read_text(encoding="utf-8", errors="replace")))
+    return names
 
 
 def wide_returns(header_dirs: list[Path], names: set[str]) -> set[str]:
@@ -83,12 +96,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--nm", default="nm")
     parser.add_argument("--headers", type=Path, nargs="+", default=[])
+    parser.add_argument("--sources", type=Path, nargs="*", default=[],
+                        help="Wi-Fi SDK source folders: anything they define counts as Wi-Fi")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("objects", nargs="+")
     args = parser.parse_args()
 
     defined, undefined = symbols(args.nm, args.objects)
-    names = sorted(s for s in undefined - defined if WIFI.match(s))
+    from_sources = wifi_source_names(args.sources)
+    names = sorted(s for s in undefined - defined if WIFI.match(s) or s in from_sources)
     text = render(names, wide_returns(args.headers, set(names)))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if not args.output.is_file() or args.output.read_text(encoding="utf-8") != text:

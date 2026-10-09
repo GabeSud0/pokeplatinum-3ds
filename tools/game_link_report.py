@@ -32,7 +32,7 @@ GAME = ROOT / "build" / "upstream"
 PORT = ROOT / "3ds_port" / "game"
 
 UNDEFINED = re.compile(r"undefined reference to [`'‘]([^'’`]+)['’]")
-DEFINITION = re.compile(r"^[A-Za-z_][\w \*]*?\b([A-Za-z_]\w*)\s*\([^;{]*\)\s*\{", re.M)
+DEFINITION = re.compile(r"^[A-Za-z_][\w \*]*?\b([A-Za-z_]\w*)\s*\([^;{]*\)\s*(?://[^\n]*)?\s*\{", re.M)
 DATA = re.compile(r"^(?:const\s+)?[A-Za-z_][\w \*]*?\b([A-Za-z_]\w*)(?:\[[^\]]*\])*\s*=", re.M)
 WIFI = re.compile(r"(DWC|DWCi|PPW|VCT|WVR|SOC|SOCL|WCM|CPS|NHTTP)_")
 
