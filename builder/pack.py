@@ -212,15 +212,15 @@ def main() -> int:
     rom.add_argument("--rom-sha1", help="40-character SHA-1 of the verified source ROM")
     args = parser.parse_args()
     try:
-        sha1 = args.rom_sha1
+        try:
+            from . import verify_rom
+        except ImportError:
+            import verify_rom
+        sha1 = args.rom_sha1.lower() if args.rom_sha1 else None
         if args.rom is not None:
-            try:
-                from . import verify_rom
-            except ImportError:
-                import verify_rom
             sha1 = verify_rom.sha1_of(args.rom)
-            if sha1 not in verify_rom.SUPPORTED:
-                raise ValueError("Unsupported ROM: run builder/verify_rom.py first")
+        if sha1 is not None and sha1 not in verify_rom.SUPPORTED:
+            raise ValueError("Unsupported ROM: run builder/verify_rom.py first")
         pack(args.data_pack, args.output, build_id=args.build_id, rom_sha1=sha1)
     except (OSError, ValueError, UnicodeError) as exc:
         parser.exit(1, f"Packing failed: {exc}\n")
