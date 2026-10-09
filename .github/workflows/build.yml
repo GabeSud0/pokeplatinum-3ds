@@ -51,6 +51,9 @@ jobs:
             exit 1
           }
 
+      - name: Compile the first game-source slice for 3DS
+        run: make -C 3ds_port/game TARGET=3ds
+
       - name: Check NitroSDK and NitroSystem coverage (3DS build)
         run: >
           python3 tools/check_sdk_coverage.py
@@ -83,6 +86,9 @@ jobs:
 
       - name: libnitrosystem host unit tests
         run: timeout 180 make -C 3ds_port/nitrosystem
+
+      - name: Compile and smoke-test original game code on PC
+        run: timeout 180 make -C 3ds_port/game TARGET=host
 
       - name: Check NitroSDK and NitroSystem coverage (PC build)
         run: python tools/check_sdk_coverage.py --strict
@@ -119,6 +125,9 @@ jobs:
           gdb -q -batch -ex 'set pagination off' \
             -ex 'run build/upstream/res' -ex 'thread apply all bt 18' \
             --args 3ds_port/nitrosystem/build/host32/test_nitrosystem || true
+
+      - name: Compile and smoke-test original game code on 32-bit PC
+        run: timeout 180 make -C 3ds_port/game TARGET=host32
 
       - name: Check NitroSDK and NitroSystem coverage (32-bit PC build)
         run: >
