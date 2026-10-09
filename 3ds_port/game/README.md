@@ -4,7 +4,7 @@ This is the beginning of compiling **the game's original C** for a native
 3DS port. It does **not** reimplement Pokémon Platinum, package game data,
 produce a playable executable, or compile all 1,013 C files yet.
 
-The first fourteen files come directly from the pinned pret/pokeplatinum source
+The first twelve files come directly from the pinned pret/pokeplatinum source
 checkout under `build/upstream/src/`:
 
 - `coins.c` — coin case state and overflow logic
@@ -17,8 +17,6 @@ checkout under `build/upstream/src/`:
 - `map_tile_behavior.c` — terrain types, collisions, water and encounters
 - `field_script_context.c` — field script bytecode interpreter and call stack
 - `game_options.c` — save-file settings, including battle, audio, UI and controls
-- `poffin.c` — original Poffin creation and Poffin Case save inventory
-- `play_time_manager.c` — tick-to-game-time tracking, tested with a fake clock
 
 The Makefile uses the same shared flags, Nintendo headers, and GCC weak
 NitroSystem inline-symbol fix as `libnitro` and `libnitrosystem`. It also
@@ -50,8 +48,7 @@ make -C 3ds_port/game TARGET=3ds    # 3DS ARM11 object library (devkitARM)
 
 Outputs are ignored under `3ds_port/game/build/<target>/`:
 `libplatinum_game.a` (an incomplete, relocatable static archive) and host
-test binaries. The smoke tests cover save play-time, play-time manager rollover,
-settings and Poffin inventory, math/RNG, tiles and field-script
+test binaries. The smoke tests cover save play-time, settings, math/RNG, tiles and field-script
 execution, and call real game code and at least one externally
 linked NitroSystem function, so they test the compatibility between code and
 both SDK libraries.
