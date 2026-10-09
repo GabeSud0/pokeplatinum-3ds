@@ -25,6 +25,5 @@ extern uint32_t LCRNG_GetSeed(void);
 extern uint16_t LCRNG_Next(void);
 
 extern int PokedexLanguage_LanguageToIndex(int language);
-extern int PokedexLanguage_IndexToLanguage(int languageIndex);
 
 #endif
