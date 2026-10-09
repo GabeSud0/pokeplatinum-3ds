@@ -392,7 +392,11 @@ static void check_2d_file(const char *path, int kind)
     sCurrentFile = path;
     s2dFiles[kind]++;
     CHECK_FILE(size > 16 && size < sizeof(sFile) && rd32(sRawFile + 8) == size);
-    if (size <= 16 || size >= sizeof(sFile) || rd32(sRawFile + 8) != size) return;
+    if (size <= 16 || size >= sizeof(sFile) || rd32(sRawFile + 8) != size) {
+        printf("  resource size mismatch: %s (bytes read: %u; header length: %u; buffer capacity: %u)\n",
+               path, size, rd32(sRawFile + 8), (u32)sizeof(sFile));
+        return;
+    }
 
     switch (kind) {
     case 0: {   /* NCGR: tiles. CHAR block: u16 height, u16 width, u32 format,
