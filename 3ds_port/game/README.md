@@ -53,8 +53,11 @@ The build also produces **identifier-only** message bank headers from pinned
 `res/text/*.json` using `tools/prepare_game_text_bank_headers.py`. These
 match the original `msgenc` ordering and entry-count macros and live under
 ignored `build/game-resource-headers/res/text/bank/`. They never contain
-dialogue, game assets, encryption keys, or binary messages. Generated/dynamic
-text banks and the actual `pl_msg.narc` require later integration.
+dialogue, game assets, encryption keys, or binary messages. Four dynamic move text-bank headers are now also generated from the
+original `moveproc` ordering in `generated/moves.txt` and
+`res/moves/*/data.json`. The output contains only move-message ID
+macros and counts, not game dialogue. Other dynamic text banks and the
+actual `pl_msg.narc` still require further integration.
 
 The original NitroSFX `pl_sound_data.naix` header is also generated from
 the pinned `res/sound/pl_sound_data.json` list. This is **symbolic sound
