@@ -114,10 +114,15 @@ builder/         turns the player's own ROM into the data pack (Python)
 docs/            roadmap and design notes
 patches/         changes applied on top of the pinned decompilation
 tools/           bootstrap and helper scripts (Python)
+LICENSE          GPL-3.0, for this project's own code
 upstream.lock    the exact pret/pokeplatinum commit we build against
 ```
 
 ## Credits and legal
+
+The original code in this repository is licensed under the
+[GNU General Public License v3.0](LICENSE). That covers only this project's own
+code, not the game or the decompilation.
 
 Built on the work of the [pret](https://pret.github.io/) decompilation teams,
 and inspired by

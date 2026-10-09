@@ -3,7 +3,8 @@
 ## What this project licenses
 
 Only the original code, tools and documentation written for this project are
-covered by this project's license (to be chosen; see "License" below).
+covered by this project's license, the GNU General Public License v3.0 (see
+[`LICENSE`](LICENSE)).
 
 ## What it does not
 
@@ -26,6 +27,10 @@ covered by this project's license (to be chosen; see "License" below).
 
 ## License
 
-Not chosen yet. Until a `LICENSE` file is added, all rights to the original
-code in this repository are reserved by its authors. Common choices for
-projects like this are MIT (permissive) or GPL-3.0 (changes must stay open).
+The original code in this repository is licensed under the GNU General Public
+License v3.0. Anyone may use, modify and share it, but distributed modified
+versions must also be released as source code under GPL-3.0. By contributing,
+you agree that your contributions are licensed the same way.
+
+libctru and citro3d, which the 3DS code links against, are under the zlib
+license, which is compatible with GPL-3.0.

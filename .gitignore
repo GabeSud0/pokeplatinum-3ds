@@ -1,0 +1,37 @@
+# ---- Game files: never commit these ----
+*.nds
+*.srl
+*.dsi
+*.3ds
+*.cia
+*.cci
+*.cxi
+*.sav
+*.dsv
+*.pak
+roms/
+extracted/
+data_pack/
+
+# ---- Build output ----
+build/
+*.3dsx
+*.smdh
+*.elf
+*.map
+*.shbin
+*_shbin.h
+*.o
+*.d
+
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
