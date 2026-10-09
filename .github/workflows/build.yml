@@ -66,7 +66,10 @@ jobs:
         run: |
           set -o pipefail
           make -j"$(nproc)" -C 3ds_port/game TARGET=3ds lib 2>&1 | tee build-3ds-game.log || {
-            grep -E "error" build-3ds-game.log | head -20 | sed 's/^/::error::/' || true
+            # Compiler errors, Python tracebacks and make's own failure lines.
+            grep -iE "error|traceback|\*\*\*|not found|no such file" build-3ds-game.log \
+              | head -20 | sed 's/^/::error::/' || true
+            tail -15 build-3ds-game.log | sed 's/^/::error title=Last lines::/' || true
             exit 1
           }
 
