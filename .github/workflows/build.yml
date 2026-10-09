@@ -82,7 +82,7 @@ jobs:
         run: timeout 600 make -C 3ds_port/nitro
 
       - name: libnitrosystem host unit tests
-        run: timeout 600 make -C 3ds_port/nitrosystem
+        run: timeout 180 make -C 3ds_port/nitrosystem
 
       - name: Check NitroSDK and NitroSystem coverage (PC build)
         run: python tools/check_sdk_coverage.py --strict
@@ -111,7 +111,7 @@ jobs:
         run: timeout 600 make -C 3ds_port/nitro TARGET=host32
 
       - name: libnitrosystem 32-bit resource tests
-        run: timeout 600 make -C 3ds_port/nitrosystem TARGET=host32
+        run: timeout 180 make -C 3ds_port/nitrosystem TARGET=host32
 
       - name: Check NitroSDK and NitroSystem coverage (32-bit PC build)
         run: >
