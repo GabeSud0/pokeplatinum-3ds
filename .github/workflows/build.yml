@@ -24,6 +24,9 @@ jobs:
       - name: Build hello3d
         run: make -C 3ds_port/hello3d
 
+      - name: Build portable pak reader for 3DS
+        run: make -C 3ds_port/pak TARGET=3ds lib
+
       - name: Upload hello3d .3dsx
         uses: actions/upload-artifact@v4
         with:
@@ -164,6 +167,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc-multilib gdb
+
+      - name: Test pak reader on 32-bit PC (includes Python writer cross-check)
+        run: make -C 3ds_port/pak TARGET=host32 test
 
       - name: Fetch decompilation and both SDKs (fresh; check patches)
         run: python tools/bootstrap.py --clean
