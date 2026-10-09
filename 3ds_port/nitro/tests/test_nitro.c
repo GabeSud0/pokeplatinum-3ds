@@ -9,6 +9,7 @@
  */
 
 #include <nitro.h>
+#include <nitro_port.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -483,6 +484,332 @@ static void test_math(void)
     CHECK_EQ(MATH_Rand32(&rand, 100), 28);
 }
 
+
+/* ------------------------------------------------------------------------ */
+/* OS: interrupts, the frame hook, lock IDs, arenas                         */
+
+static int sVBlankCount, sTimerCount, sFrameCount;
+static int sOrder[4], sOrderLen;
+
+static void onVBlank(void)
+{
+    sVBlankCount++;
+    sOrder[sOrderLen++ & 3] = 0;
+    OS_SetIrqCheckFlag(OS_IE_V_BLANK);
+}
+
+static void onTimer0(void)
+{
+    sTimerCount++;
+    sOrder[sOrderLen++ & 3] = 3;
+    OS_SetIrqCheckFlag(OS_IE_TIMER0);
+}
+
+/* The tests own the frame hook (the port's default is empty and weak). */
+void NitroPort_OnFrame(void)
+{
+    sFrameCount++;
+}
+
+static void test_interrupts(void)
+{
+    OSIntrMode old;
+
+    /* The CPU starts in system mode with interrupts enabled. */
+    CHECK_EQ(OS_GetProcMode(), HW_PSR_SYS_MODE);
+    old = OS_DisableInterrupts();
+    CHECK_EQ(old, 0);
+    CHECK_EQ(OS_GetCpsrIrq(), HW_PSR_IRQ_DISABLE);
+    CHECK_EQ(OS_DisableInterrupts(), HW_PSR_IRQ_DISABLE);
+    (void)OS_RestoreInterrupts(old);
+    CHECK_EQ(OS_GetCpsrIrq(), 0);
+
+    OS_SetIrqFunction(OS_IE_V_BLANK, onVBlank);
+    OS_SetIrqFunction(OS_IE_TIMER0, onTimer0);
+    (void)OS_SetIrqMask(OS_IE_V_BLANK | OS_IE_TIMER0);
+    (void)OS_EnableIrq();
+
+    /* An enabled interrupt runs its handler and is acknowledged. */
+    sVBlankCount = 0;
+    NitroPort_RaiseIrq(OS_IE_V_BLANK);
+    CHECK_EQ(sVBlankCount, 1);
+    CHECK_EQ(reg_OS_IF & OS_IE_V_BLANK, 0);
+
+    /* With the CPU's interrupts off it stays pending until they're back on. */
+    old = OS_DisableInterrupts();
+    NitroPort_RaiseIrq(OS_IE_V_BLANK);
+    CHECK_EQ(sVBlankCount, 1);
+    CHECK(reg_OS_IF & OS_IE_V_BLANK);
+    (void)OS_RestoreInterrupts(old);
+    NitroPort_RaiseIrq(0);
+    CHECK_EQ(sVBlankCount, 2);
+
+    /* IME off: nothing runs. */
+    (void)OS_DisableIrq();
+    NitroPort_RaiseIrq(OS_IE_V_BLANK);
+    CHECK_EQ(sVBlankCount, 2);
+    (void)OS_EnableIrq();
+    NitroPort_RaiseIrq(0);
+    CHECK_EQ(sVBlankCount, 3);
+
+    /* A masked interrupt (not in IE) never runs. */
+    (void)OS_SetIrqMask(OS_IE_V_BLANK);
+    sTimerCount = 0;
+    NitroPort_RaiseIrq(OS_IE_TIMER0);
+    CHECK_EQ(sTimerCount, 0);
+    reg_OS_IF = 0;
+
+    /* Two at once: lowest bit (V-blank) first, like the DS. */
+    (void)OS_SetIrqMask(OS_IE_V_BLANK | OS_IE_TIMER0);
+    sOrderLen = 0;
+    old = OS_DisableInterrupts();
+    NitroPort_RaiseIrq(OS_IE_TIMER0 | OS_IE_V_BLANK);
+    (void)OS_RestoreInterrupts(old);
+    NitroPort_RaiseIrq(0);
+    CHECK_EQ(sOrderLen, 2);
+    CHECK(sOrder[0] == 0 && sOrder[1] == 3);
+
+    /* Waiting for V-blank: OS_Halt advances one frame and raises it. */
+    sFrameCount = 0;
+    sVBlankCount = 0;
+    OS_WaitInterrupt(TRUE, OS_IE_V_BLANK);
+    CHECK_EQ(sFrameCount, 1);
+    CHECK_EQ(sVBlankCount, 1);
+    OS_WaitInterrupt(TRUE, OS_IE_V_BLANK);
+    CHECK_EQ(sFrameCount, 2);
+}
+
+static void test_lock_ids(void)
+{
+    vu32 *flags = (vu32 *)HW_LOCK_ID_FLAG_MAIN;
+    s32 a, b, c;
+
+    flags[0] = 0xFFFFFFFF; /* all IDs free (OS_InitLock does this on the DS) */
+    flags[1] = 0xFFFFFFFF;
+
+    a = OS_GetLockID();
+    b = OS_GetLockID();
+    CHECK_EQ(a, OS_MAINP_LOCK_ID_START);
+    CHECK_EQ(b, OS_MAINP_LOCK_ID_START + 1);
+    OS_ReleaseLockID((u16)a);
+    c = OS_GetLockID();
+    CHECK_EQ(c, a);
+
+    /* Run out of the first word: IDs continue in the second. */
+    flags[0] = 0;
+    flags[1] = 0x80000000;
+    CHECK_EQ(OS_GetLockID(), OS_MAINP_LOCK_ID_START + 32);
+    CHECK_EQ(OS_GetLockID(), OS_LOCK_ID_ERROR);
+    OS_ReleaseLockID(OS_MAINP_LOCK_ID_START + 33);
+    CHECK_EQ(flags[1], 0x40000000);
+}
+
+static void test_arena(void)
+{
+    void *lo, *p;
+
+    OS_InitArena();
+    lo = OS_GetMainArenaLo();
+    CHECK(lo == (void *)HW_MAIN_MEM);
+    CHECK(OS_GetMainArenaHi() == (void *)HW_MAIN_MEM_MAIN_END);
+    p = OS_AllocFromMainArenaLo(100, 32);
+    CHECK(p == lo);
+    CHECK((u8 *)OS_GetMainArenaLo() >= (u8 *)lo + 100);
+}
+
+static void test_memory_map(void)
+{
+    /* The texture loader stores LCDC VRAM addresses as 4 KB page numbers
+     * in 16 bits, so LCDC VRAM must be page aligned and below 256 MB. */
+    CHECK_EQ(HW_LCDC_VRAM & 0xFFF, 0);
+    CHECK(HW_LCDC_VRAM < 0x10000000u);
+    /* The shared area at the top of main memory is inside our block. */
+    CHECK(HW_RESET_PARAMETER_BUF > HW_MAIN_MEM && HW_RESET_PARAMETER_BUF < HW_MAIN_MEM + 0x800000);
+    CHECK_EQ(OS_GetResetParameter(), 0); /* a clean boot */
+}
+
+/* ------------------------------------------------------------------------ */
+/* Decompression, checked against Nintendo's own compressors (mi_compress.c) */
+
+static void test_decompression(void)
+{
+    static u8 src[3000], packed[8000], out[3100], work[MI_HUFFMAN_COMPRESS_WORK_SIZE];
+    static const u8 rl[] = {
+        0x30, 0x09, 0x00, 0x00,     /* RL, 9 bytes */
+        0x82, 0xAA,                 /* run: 5 x 0xAA */
+        0x03, 1, 2, 3, 4,           /* 4 literals */
+    };
+    static const u8 diff8[] = { 0x81, 4, 0, 0, 10, 1, 1, 0xFF };
+    static const u8 bits[] = { 0xA5 }; /* 1010 0101 */
+    u32 n, i;
+    int ok;
+
+    /* Text-like data with repeats, plus a long run (exercises long copies). */
+    for (i = 0; i < sizeof(src); i++) {
+        src[i] = (u8)("the quick brown fox jumps over the lazy dog. "[i % 45] + (i / 900));
+    }
+    memset(src + 1000, 'z', 600);
+
+    n = MI_CompressLZ(src, sizeof(src), packed);
+    CHECK(n > 0 && n < sizeof(src));
+    memset(out, 0, sizeof(out));
+    MI_UncompressLZ8(packed, out);
+    CHECK(memcmp(out, src, sizeof(src)) == 0);
+    CHECK_EQ(MI_GetUncompressedSize(packed), sizeof(src));
+
+    n = MI_CompressLZEx(src, sizeof(src), packed); /* extended format: long copies */
+    CHECK(n > 0);
+    memset(out, 0, sizeof(out));
+    MI_UncompressLZ16(packed, out);
+    CHECK(memcmp(out, src, sizeof(src)) == 0);
+
+    n = MI_CompressRL(src, sizeof(src), packed);
+    CHECK(n > 0);
+    memset(out, 0, sizeof(out));
+    MI_UncompressRL8(packed, out);
+    CHECK(memcmp(out, src, sizeof(src)) == 0);
+
+    for (i = 4; i <= 8; i += 4) {
+        n = MI_CompressHuffman(src, sizeof(src), packed, (u8)i, work);
+        CHECK(n > 0);
+        memset(out, 0, sizeof(out));
+        MI_UncompressHuffman(packed, out);
+        ok = memcmp(out, src, sizeof(src)) == 0;
+        CHECK(ok);
+        if (!ok) {
+            printf("  (Huffman with %u-bit symbols)\n", (unsigned)i);
+        }
+    }
+
+    memset(out, 0, sizeof(out));
+    MI_UncompressRL8(rl, out);
+    CHECK(out[0] == 0xAA && out[4] == 0xAA && out[5] == 1 && out[8] == 4 && out[9] == 0);
+
+    MI_UnfilterDiff8(diff8, out);
+    CHECK(out[0] == 10 && out[1] == 11 && out[2] == 12 && out[3] == 11);
+
+    {
+        /* 1 bit -> 4 bits, +1 on non-zero values: 1,0,1,0,0,1,0,1 (low bit first) */
+        MIUnpackBitsParam param = { 1, 1, 4, 1, 0 };
+        u32 word = 0;
+        MI_UnpackBits(bits, &word, &param);
+        CHECK_EQ(word, 0x20200202u);
+    }
+}
+
+/* ------------------------------------------------------------------------ */
+/* BIOS calls, coprocessor context, HMAC, the virtual ARM7, GBA slot       */
+
+static void test_bios(void)
+{
+    static u16 h[8];
+    static u32 w[16];
+    static const u16 h5 = 0x1234;
+    static const u32 w7 = 0xDEADBEEF;
+    int i;
+
+    CHECK_EQ(SVC_GetCRC16(0xFFFF, "123456789", 9), 0x4B37); /* CRC-16/MODBUS check value */
+    CHECK_EQ(SVC_Sqrt(1000000), 1000);
+    CHECK_EQ(SVC_Sqrt(0xFFFFFFFFu), 0xFFFF);
+    CHECK_EQ(SVC_Div(-7, 2), -3);
+    CHECK_EQ(SVC_DivRem(-7, 2), -1);
+
+    SVC_CpuSet(&h5, h, (1u << 24) | 8);          /* fill 8 halfwords */
+    for (i = 0; i < 8; i++) {
+        CHECK_EQ(h[i], 0x1234);
+    }
+    SVC_CpuSetFast(&w7, w, (1u << 24) | 3);      /* rounds up to 8 words */
+    CHECK(w[0] == w7 && w[7] == w7 && w[8] == 0);
+    SVC_CpuSet(w, w + 8, (1u << 26) | 4);        /* copy 4 words */
+    CHECK(w[8] == w7 && w[11] == w7 && w[12] == 0);
+}
+
+static void test_cp_context(void)
+{
+    CPContext saved;
+
+    CP_SetDiv32_32(100, 7);
+    CP_SetSqrt32(81);
+    CP_SaveContext(&saved);
+
+    CP_SetDiv64_64(1, 1);
+    CP_SetSqrt32(4);
+    CP_RestoreContext(&saved);
+
+    CHECK_EQ(CP_GetDivResult32(), 14);
+    CHECK_EQ(CP_GetDivRemainder32(), 2);
+    CHECK_EQ(CP_GetSqrtResult32(), 9);
+}
+
+static void test_hmac(void)
+{
+    /* RFC 2202, test case 1 */
+    static const u8 sha1[20] = {
+        0xb6, 0x17, 0x31, 0x86, 0x55, 0x05, 0x72, 0x64, 0xe2, 0x8b,
+        0xc0, 0xb6, 0xfb, 0x37, 0x8c, 0x8e, 0xf1, 0x46, 0xbe, 0x00,
+    };
+    static const u8 md5[16] = {
+        0x92, 0x94, 0x72, 0x7a, 0x36, 0x38, 0xbb, 0x1c,
+        0x13, 0xf4, 0x8e, 0xf8, 0x15, 0x8b, 0xfc, 0x9d,
+    };
+    static char data[] = "Hi There";
+    u8 key[20], digest[20];
+
+    memset(key, 0x0b, sizeof(key));
+    DGT_Hash2CalcHmac(digest, data, 8, key, 20);
+    CHECK(memcmp(digest, sha1, 20) == 0);
+    DGT_Hash1CalcHmac(digest, data, 8, key, 16);
+    CHECK(memcmp(digest, md5, 16) == 0);
+}
+
+static u32 sRtcReply;
+static int sRtcReplies, sArm7Received;
+
+static void rtcCallback(PXIFifoTag tag, u32 data, BOOL err)
+{
+    (void)tag;
+    (void)err;
+    sRtcReply = data;
+    sRtcReplies++;
+}
+
+static void fakeArm7Rtc(int tag, u32 data, BOOL err)
+{
+    (void)err;
+    sArm7Received++;
+    NitroPort_Arm7Reply(tag, data + 1, FALSE); /* answer with data + 1 */
+}
+
+static void test_pxi(void)
+{
+    PXI_Init();
+
+    /* The virtual ARM7 reports every service as ready. */
+    CHECK(PXI_IsCallbackReady(PXI_FIFO_TAG_RTC, PXI_PROC_ARM7));
+
+    /* No handler yet: the message is accepted and reported once. */
+    CHECK_EQ(PXI_SendWordByFifo(PXI_FIFO_TAG_MIC, 5, FALSE), PXI_FIFO_SUCCESS);
+    CHECK(NitroPort_WasReported("ARM7 service: microphone"));
+
+    /* With a handler, the reply reaches the game-side callback. */
+    PXI_SetFifoRecvCallback(PXI_FIFO_TAG_RTC, rtcCallback);
+    CHECK(PXI_IsCallbackReady(PXI_FIFO_TAG_RTC, PXI_PROC_ARM9));
+    NitroPort_SetArm7Handler(PXI_FIFO_TAG_RTC, fakeArm7Rtc);
+    CHECK_EQ(PXI_SendWordByFifo(PXI_FIFO_TAG_RTC, 41, FALSE), PXI_FIFO_SUCCESS);
+    CHECK_EQ(sArm7Received, 1);
+    CHECK_EQ(sRtcReplies, 1);
+    CHECK_EQ(sRtcReply, 42);
+    NitroPort_SetArm7Handler(PXI_FIFO_TAG_RTC, NULL);
+}
+
+static void test_gba_slot(void)
+{
+    CTRDG_Init();
+    CHECK(!CTRDG_IsExisting());
+    CHECK(!CTRDG_IsAgbCartridge());
+    CHECK(!CTRDG_IsPulledOut());
+}
+
 int main(void)
 {
     test_types();
@@ -494,6 +821,16 @@ int main(void)
     test_matrix_rotation();
     test_memory();
     test_math();
+    test_interrupts();
+    test_lock_ids();
+    test_arena();
+    test_memory_map();
+    test_decompression();
+    test_bios();
+    test_cp_context();
+    test_hmac();
+    test_pxi();
+    test_gba_slot();
 
     printf("%d checks, %d failed\n", sChecks, sFailures);
     return sFailures == 0 ? 0 : 1;

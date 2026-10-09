@@ -1,0 +1,1004 @@
+From 569d23666610b5a0f7cd53002858abfcc55bc150 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 20:32:34 -0700
+Subject: [PATCH 6/6] C versions of the remaining assembly, and GCC fixes
+
+OS (interrupt state, interrupt dispatch, lock IDs, thread helpers, context setup, halt, alarms, VRAM locks), coprocessor context save/restore, RTC and microphone busy-waits, 3D FIFO sends. Context switching and halting call into the port. Linker-script values (stack sizes, arena starts) are given directly. Declaration fixes GCC requires in pm.c and gxasm.h.
+---
+ libraries/cp/src/cp_context.c        | 29 ++++++++++
+ libraries/gx/include/gxasm.h         |  2 +
+ libraries/gx/src/g3x.c               | 15 ++++-
+ libraries/gx/src/gxasm.c             | 45 ++++++++++++++
+ libraries/os/src/os_alarm.c          |  9 +++
+ libraries/os/src/os_arena.c          | 18 ++++++
+ libraries/os/src/os_context.c        | 48 +++++++++++++++
+ libraries/os/src/os_init.c           | 13 +++++
+ libraries/os/src/os_interrupt.c      |  4 ++
+ libraries/os/src/os_irqHandler.c     | 39 +++++++++++++
+ libraries/os/src/os_profile.c        | 14 +++++
+ libraries/os/src/os_spinLock.c       | 54 +++++++++++++++++
+ libraries/os/src/os_system.c         | 87 ++++++++++++++++++++++++++++
+ libraries/os/src/os_terminate_proc.c | 12 ++++
+ libraries/os/src/os_thread.c         | 38 ++++++++++++
+ libraries/os/src/os_vramExclusive.c  |  8 +++
+ libraries/rtc/src/external.c         | 10 ++++
+ libraries/spi/src/mic.c              |  9 +++
+ libraries/spi/src/pm.c               | 10 ++--
+ 19 files changed, 458 insertions(+), 6 deletions(-)
+
+diff --git a/libraries/cp/src/cp_context.c b/libraries/cp/src/cp_context.c
+index 305f447..975bd86 100644
+--- a/libraries/cp/src/cp_context.c
++++ b/libraries/cp/src/cp_context.c
+@@ -6,6 +6,7 @@
+ 
+ #include <nitro/code32.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void CP_SaveContext (register CPContext *context)
+ {
+     ldr r1, = REG_DIV_NUMER_ADDR
+@@ -24,7 +25,19 @@ asm void CP_SaveContext (register CPContext *context)
+     ldmfd sp !, {r4}
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void CP_SaveContext (CPContext *context)
++{
++    context->div_numer = *(REGType64v *)REG_DIV_NUMER_ADDR;
++    context->div_denom = *(REGType64v *)REG_DIV_DENOM_ADDR;
++    context->sqrt = *(REGType64v *)REG_SQRT_PARAM_ADDR;
++    context->div_mode = (u16)(reg_CP_DIVCNT & REG_CP_DIVCNT_MODE_MASK);
++    context->sqrt_mode = (u16)(reg_CP_SQRTCNT & REG_CP_SQRTCNT_MODE_MASK);
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void CPi_RestoreContext (register const CPContext *context)
+ {
+     stmfd sp !, {r4}
+@@ -42,6 +55,22 @@ asm void CPi_RestoreContext (register const CPContext *context)
+     ldmfd sp !, {r4}
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++#include <nitro/cp/sqrt.h>
++
++void CPi_RestoreContext (const CPContext *context)
++{
++    *(REGType64v *)REG_DIV_NUMER_ADDR = context->div_numer;
++    *(REGType64v *)REG_DIV_DENOM_ADDR = context->div_denom;
++    reg_CP_DIVCNT = context->div_mode;
++    reg_CP_SQRTCNT = context->sqrt_mode;
++    *(REGType64v *)REG_SQRT_PARAM_ADDR = context->sqrt;
++    /* Writing the registers restarts both units with the restored operands. */
++    CPi_PORT_DIV_WRITTEN();
++    CPi_PORT_SQRT_WRITTEN();
++}
++#endif
+ 
+ #include <nitro/codereset.h>
+ 
+diff --git a/libraries/gx/include/gxasm.h b/libraries/gx/include/gxasm.h
+index 0c8a119..28c9215 100644
+--- a/libraries/gx/include/gxasm.h
++++ b/libraries/gx/include/gxasm.h
+@@ -7,7 +7,9 @@
+ extern "C" {
+ #endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ void GX_SendFifo36B(register const void * pSrc, register void * pDest);
++#endif
+ void GX_SendFifo48B(register const void * pSrc, register void * pDest);
+ void GX_SendFifo64B(register const void * pSrc, register void * pDest);
+ void GX_SendFifo128B(register const void * pSrc, register void * pDest);
+diff --git a/libraries/gx/src/g3x.c b/libraries/gx/src/g3x.c
+index 32f4b5a..f4bb5d1 100644
+--- a/libraries/gx/src/g3x.c
++++ b/libraries/gx/src/g3x.c
+@@ -11,7 +11,7 @@
+ 
+ #include "gxasm.h"
+ 
+-static asm void GXi_NopClearFifo128_(register void *pDest);
++static void GXi_NopClearFifo128_(register void *pDest);
+ 
+ void G3X_Init (void)
+ {
+@@ -349,6 +349,7 @@ void G3X_SetHOffset (int hOffset)
+ 
+ #include <nitro/code32.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ static asm void GXi_NopClearFifo128_ (register void *pDest)
+ {
+ 	mov r1, #0
+@@ -389,5 +390,17 @@ static asm void GXi_NopClearFifo128_ (register void *pDest)
+ 	stmia r0, {r1 - r3, r12}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++static void GXi_NopClearFifo128_ (void *pDest)
++{
++    vu32 *d = (vu32 *)pDest;
++    int i;
++
++    for (i = 0; i < 128; i++) {
++        *d = 0;
++    }
++}
++#endif
+ 
+ #include <nitro/codereset.h>
+diff --git a/libraries/gx/src/gxasm.c b/libraries/gx/src/gxasm.c
+index bde8a08..4559790 100644
+--- a/libraries/gx/src/gxasm.c
++++ b/libraries/gx/src/gxasm.c
+@@ -1,6 +1,7 @@
+ #include <nitro/code32.h>
+ #include "../include/gxasm.h"
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void GX_SendFifo48B (register const void *pSrc, register void *pDest)
+ {
+ 	ldmia r0 !, {r2, r3, r12}
+@@ -13,7 +14,22 @@ asm void GX_SendFifo48B (register const void *pSrc, register void *pDest)
+ 	stmia r1, {r2, r3, r12}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void GX_SendFifo48B (const void *pSrc, void *pDest)
++{
++    /* All words go to the same address: the 3D command FIFO. */
++    const u32 *s = (const u32 *)pSrc;
++    vu32 *d = (vu32 *)pDest;
++    int i;
++
++    for (i = 0; i < 12; i++) {
++        *d = s[i];
++    }
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void GX_SendFifo64B (register const void *pSrc, register void *pDest)
+ {
+ #ifdef SDK_TEG
+@@ -40,7 +56,22 @@ asm void GX_SendFifo64B (register const void *pSrc, register void *pDest)
+ 	bx lr
+ #endif
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void GX_SendFifo64B (const void *pSrc, void *pDest)
++{
++    /* All words go to the same address: the 3D command FIFO. */
++    const u32 *s = (const u32 *)pSrc;
++    vu32 *d = (vu32 *)pDest;
++    int i;
+ 
++    for (i = 0; i < 16; i++) {
++        *d = s[i];
++    }
++}
++#endif
++
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void GX_SendFifo128B (register const void *pSrc, register void *pDest)
+ {
+ #ifdef SDK_TEG
+@@ -81,3 +112,17 @@ asm void GX_SendFifo128B (register const void *pSrc, register void *pDest)
+ 	bx lr
+ #endif
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void GX_SendFifo128B (const void *pSrc, void *pDest)
++{
++    /* All words go to the same address: the 3D command FIFO. */
++    const u32 *s = (const u32 *)pSrc;
++    vu32 *d = (vu32 *)pDest;
++    int i;
++
++    for (i = 0; i < 32; i++) {
++        *d = s[i];
++    }
++}
++#endif
+diff --git a/libraries/os/src/os_alarm.c b/libraries/os/src/os_alarm.c
+index 3ece219..22b1db1 100644
+--- a/libraries/os/src/os_alarm.c
++++ b/libraries/os/src/os_alarm.c
+@@ -235,6 +235,7 @@ void OS_CancelAlarm (OSAlarm * alarm)
+ 
+ #include <nitro/code32.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void OSi_AlarmHandler (void * arg)
+ {
+     stmfd sp !, {r0, lr}
+@@ -242,6 +243,14 @@ asm void OSi_AlarmHandler (void * arg)
+     ldmfd sp !, {r0, lr}
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void OSi_AlarmHandler (void * arg)
++{
++    (void)arg;
++    OSi_ArrangeTimer();
++}
++#endif
+ 
+ #include <nitro/codereset.h>
+ 
+diff --git a/libraries/os/src/os_arena.c b/libraries/os/src/os_arena.c
+index f7f1bb0..fdc889f 100644
+--- a/libraries/os/src/os_arena.c
++++ b/libraries/os/src/os_arena.c
+@@ -60,6 +60,24 @@ extern void SDK_SYS_STACKSIZE(void);
+ extern void SDK_IRQ_STACKSIZE(void);
+ #define OSi_IRQ_STACKSIZE               ((int)SDK_IRQ_STACKSIZE)
+ 
++#ifdef SDK_PORT_3DS
++    /* 3DS port: no DS linker script. The game's code doesn't live in DS main
++     * memory here, so the whole of it is available as the main arena; the
++     * other areas start at the beginning of their memory blocks. */
++    #undef  OSi_MAIN_ARENA_LO_DEFAULT
++    #define OSi_MAIN_ARENA_LO_DEFAULT       HW_MAIN_MEM
++    #undef  OSi_MAINEX_ARENA_LO_DEFAULT
++    #define OSi_MAINEX_ARENA_LO_DEFAULT     (HW_MAIN_MEM + 0x400000)
++    #undef  OSi_DTCM_ARENA_LO_DEFAULT
++    #define OSi_DTCM_ARENA_LO_DEFAULT       HW_DTCM
++    #undef  OSi_ITCM_ARENA_LO_DEFAULT
++    #define OSi_ITCM_ARENA_LO_DEFAULT       HW_ITCM
++    #undef  OSi_SYS_STACKSIZE
++    #define OSi_SYS_STACKSIZE               0
++    #undef  OSi_IRQ_STACKSIZE
++    #define OSi_IRQ_STACKSIZE               2048
++#endif
++
+ static BOOL OSi_Initialized = FALSE;
+ 
+ #ifdef SDK_ARM9
+diff --git a/libraries/os/src/os_context.c b/libraries/os/src/os_context.c
+index 430968a..6105c3a 100644
+--- a/libraries/os/src/os_context.c
++++ b/libraries/os/src/os_context.c
+@@ -7,6 +7,7 @@
+ 
+ #include <nitro/code32.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void OS_InitContext (register OSContext * context, register u32 newpc, register u32 newsp)
+ {
+     add newpc, newpc, #4
+@@ -60,11 +61,38 @@ asm void OS_InitContext (register OSContext * context, register u32 newpc, regis
+     str r1, [context, #OS_CONTEXT_LR]
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void OS_InitContext (OSContext * context, u32 newpc, u32 newsp)
++{
++    /* Same fields the DS sets up: entry point, an 8-byte aligned stack, and
++     * system mode (Thumb if the entry address is odd). */
++    context->pc_plus4 = newpc + 4;
++#ifdef SDK_CONTEXT_HAS_SP_SVC
++    context->sp_svc = newsp;
++    newsp -= HW_SVC_STACK_SIZE;
++#endif
++    if (newsp & 4) {
++        newsp -= 4;
++    }
++    context->sp = newsp;
++    context->cpsr = (newpc & 1) ? (HW_PSR_SYS_MODE | HW_PSR_THUMB_STATE)
++                                : (HW_PSR_SYS_MODE | HW_PSR_ARM_STATE);
++    {
++        int i;
++        for (i = 0; i < 13; i++) {
++            context->r[i] = 0;
++        }
++    }
++    context->lr = 0;
++}
++#endif
+ 
+ #if defined(SDK_TCM_APPLY) && defined(SDK_ARM9)
+     #include <nitro/itcm_begin.h>
+ #endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm BOOL OS_SaveContext (register OSContext * context)
+ {
+ #if defined(SDK_ARM9)
+@@ -90,9 +118,20 @@ asm BOOL OS_SaveContext (register OSContext * context)
+     mov r0, #0
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++BOOL NitroPort_SaveContext(OSContext * context);
++
++BOOL OS_SaveContext (OSContext * context)
++{
++    /* Thread switching is done by the 3DS port (3ds_port/nitro/src/port_os.c). */
++    return NitroPort_SaveContext(context);
++}
++#endif
+ 
+ #define OFFSETOF(x, y) (int)(&(((x *)0)->y))
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void OS_LoadContext (register OSContext * context)
+ {
+ #if OS_CONTEXT_CPSR != 0
+@@ -120,6 +159,15 @@ asm void OS_LoadContext (register OSContext * context)
+     nop
+     subs pc, lr, #4
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void NitroPort_LoadContext(OSContext * context);
++
++void OS_LoadContext (OSContext * context)
++{
++    NitroPort_LoadContext(context);
++}
++#endif
+ 
+ #if defined(SDK_TCM_APPLY) && defined(SDK_ARM9)
+ #include <nitro/itcm_end.h>
+diff --git a/libraries/os/src/os_init.c b/libraries/os/src/os_init.c
+index 647eb71..748dac9 100644
+--- a/libraries/os/src/os_init.c
++++ b/libraries/os/src/os_init.c
+@@ -9,6 +9,7 @@
+ 
+ #include <nitro/code32.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ static asm void OSi_WaitVCount0 (void)
+ {
+     mov r12, #HW_REG_BASE
+@@ -21,6 +22,18 @@ static asm void OSi_WaitVCount0 (void)
+     str r1, [r12, #REG_IME_OFFSET]
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++static void OSi_WaitVCount0 (void)
++{
++    u32 ime = *(vu32 *)REG_IME_ADDR;
++
++    *(vu32 *)REG_IME_ADDR = 0;
++    while (reg_GX_VCOUNT != 0) {
++    }
++    *(vu32 *)REG_IME_ADDR = ime;
++}
++#endif
+ 
+ #include <nitro/codereset.h>
+ 
+diff --git a/libraries/os/src/os_interrupt.c b/libraries/os/src/os_interrupt.c
+index 54b5d56..23ca0a6 100644
+--- a/libraries/os/src/os_interrupt.c
++++ b/libraries/os/src/os_interrupt.c
+@@ -144,7 +144,11 @@ OSIrqMask OS_ResetRequestIrqMask (OSIrqMask intr)
+ extern void SDK_IRQ_STACKSIZE(void);
+ 
+ #ifdef SDK_ARM9
++#ifdef SDK_PORT_3DS
++    #define  OSi_IRQ_STACK_TOP                (HW_DTCM_SVC_STACK - 2048)  /* main.lsf IRQ stack */
++#else
+     #define  OSi_IRQ_STACK_TOP                (HW_DTCM_SVC_STACK - ((s32)SDK_IRQ_STACKSIZE))
++#endif
+     #define  OSi_IRQ_STACK_BOTTOM             HW_DTCM_SVC_STACK
+ #else
+     #define  OSi_IRQ_STACK_TOP                (HW_PRV_WRAM_IRQ_STACK_END - ((s32)SDK_IRQ_STACKSIZE))
+diff --git a/libraries/os/src/os_irqHandler.c b/libraries/os/src/os_irqHandler.c
+index 945cb76..4e155cb 100644
+--- a/libraries/os/src/os_irqHandler.c
++++ b/libraries/os/src/os_irqHandler.c
+@@ -27,6 +27,7 @@
+     #include <nitro/itcm_begin.h>
+ #endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void OS_IrqHandler (void)
+ {
+ #ifdef SDK_NO_THREAD
+@@ -123,7 +124,34 @@ asm void OS_IrqHandler (void)
+     bx r0
+ #endif
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void OS_IrqHandler (void)
++{
++    /* The DS calls this when an interrupt fires; on the 3DS port the
++     * emulated hardware calls it (NitroPort_RaiseIrq). Same rules: nothing
++     * happens unless IME is on; the lowest pending enabled interrupt is
++     * acknowledged and its handler from OS_IRQTable runs. */
++    u32 pending;
++    u32 bit;
+ 
++    if (reg_OS_IME == 0) {
++        return;
++    }
++    pending = reg_OS_IE & reg_OS_IF;
++    if (pending == 0) {
++        return;
++    }
++    bit = (u32)__builtin_ctz(pending);
++    reg_OS_IF &= ~(1u << bit); /* hardware: writing 1 clears; here we clear it */
++    OS_IRQTable[bit]();
++#ifndef SDK_NO_THREAD
++    OS_IrqHandler_ThreadSwitch();
++#endif
++}
++#endif
++
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void OS_IrqHandler_ThreadSwitch (void)
+ {
+ #ifdef SDK_NO_THREAD
+@@ -292,6 +320,17 @@ _dont_switched_:
+     ldmfd sp !, { pc }
+ #endif
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void OS_IrqHandler_ThreadSwitch (void)
++{
++    /* Wake every thread waiting in OS_WaitIrq; the scheduler then picks
++     * the highest-priority ready thread. */
++#ifndef SDK_NO_THREAD
++    OS_WakeupThread(&OSi_IrqThreadQueue);
++#endif
++}
++#endif
+ 
+ #ifdef SDK_ARM9
+     #include <nitro/itcm_end.h>
+diff --git a/libraries/os/src/os_profile.c b/libraries/os/src/os_profile.c
+index 78c60c0..26e59e8 100644
+--- a/libraries/os/src/os_profile.c
++++ b/libraries/os/src/os_profile.c
+@@ -1,13 +1,27 @@
+ #include <nitro/os.h>
+ 
+ #ifndef OS_PROFILE_AVAILABLE
++#if defined(SDK_CW) || defined(__MWERKS__)
+     SDK_WEAK_SYMBOL asm void __PROFILE_ENTRY (void)
+     {
+         bx lr
+     }
++#else
++    /* C version for compilers without Metrowerks inline assembly. */
++    SDK_WEAK_SYMBOL void __PROFILE_ENTRY (void)
++    {
++    }
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+     SDK_WEAK_SYMBOL asm void __PROFILE_EXIT (void)
+     {
+         bx lr
+     }
++#else
++    /* C version for compilers without Metrowerks inline assembly. */
++    SDK_WEAK_SYMBOL void __PROFILE_EXIT (void)
++    {
++    }
++#endif
+ #endif
+diff --git a/libraries/os/src/os_spinLock.c b/libraries/os/src/os_spinLock.c
+index f05d803..0ec3d3d 100644
+--- a/libraries/os/src/os_spinLock.c
++++ b/libraries/os/src/os_spinLock.c
+@@ -224,11 +224,19 @@ s32 OS_UnlockCartridge (u16 lockID)
+     return lastLockFlag;
+ }
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm s32 OS_UnLockCartridge (u16 lockID)
+ {
+     ldr r1, = OS_UnlockCartridge
+     bx r1
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++s32 OS_UnLockCartridge (u16 lockID)
++{
++    return OS_UnlockCartridge(lockID);
++}
++#endif
+ 
+ s32 OS_TryLockCartridge (u16 lockID)
+ {
+@@ -313,11 +321,19 @@ s32 OS_UnlockCard (u16 lockID)
+ #endif
+ }
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm s32 OS_UnLockCard (u16 lockID)
+ {
+     ldr r1, = OS_UnlockCard
+     bx r1
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++s32 OS_UnLockCard (u16 lockID)
++{
++    return OS_UnlockCard(lockID);
++}
++#endif
+ 
+ s32 OS_TryLockCard (u16 lockID)
+ {
+@@ -349,6 +365,7 @@ u16 OS_ReadOwnerOfLockWord (OSLockWord * lockp)
+ 
+ #include <nitro/code32.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm s32 OS_GetLockID (void)
+ {
+     ldr r3, = OSi_ANYP_LOCK_ID_FLAG
+@@ -417,7 +434,28 @@ _1:
+     str r2, [r3, #0]
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++s32 OS_GetLockID (void)
++{
++    /* Two words of free-ID bits; the highest set bit is the next free ID. */
++    vu32 *flag = (vu32 *)OSi_ANYP_LOCK_ID_FLAG;
++    u32 base = OSi_ANYP_LOCK_ID_START;
++    int i;
++
++    for (i = 0; i < 2; i++, flag++, base += 32) {
++        u32 bits = *flag;
++        if (bits != 0) {
++            u32 n = (u32)__builtin_clz(bits);
++            *flag = bits & ~(0x80000000u >> n);
++            return (s32)(base + n);
++        }
++    }
++    return OS_LOCK_ID_ERROR;
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void OS_ReleaseLockID (register u16 lockID)
+ {
+ #pragma unused(lockID)
+@@ -451,5 +489,21 @@ asm void OS_ReleaseLockID (register u16 lockID)
+     str r2, [r3, #0]
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void OS_ReleaseLockID (u16 lockID)
++{
++    vu32 *flag = (vu32 *)OSi_ANYP_LOCK_ID_FLAG;
++    u32 n = lockID;
++
++    if (n >= OSi_ANYP_LOCK_ID_START + 32) {
++        flag++;
++        n -= OSi_ANYP_LOCK_ID_START + 32;
++    } else {
++        n -= OSi_ANYP_LOCK_ID_START;
++    }
++    *flag |= 0x80000000u >> n;
++}
++#endif
+ 
+ #include <nitro/codereset.h>
+diff --git a/libraries/os/src/os_system.c b/libraries/os/src/os_system.c
+index 703540d..cb5da97 100644
+--- a/libraries/os/src/os_system.c
++++ b/libraries/os/src/os_system.c
+@@ -1,6 +1,7 @@
+ #include <nitro/os.h>
+ #include <nitro/code32.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm OSIntrMode OS_EnableInterrupts (void)
+ {
+     mrs r0, cpsr
+@@ -9,7 +10,19 @@ asm OSIntrMode OS_EnableInterrupts (void)
+     and r0, r0, #HW_PSR_IRQ_DISABLE
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++extern u32 OSi_PortCpsr;
++
++OSIntrMode OS_EnableInterrupts (void)
++{
++    u32 old = OSi_PortCpsr;
++    OSi_PortCpsr = old & ~HW_PSR_IRQ_DISABLE;
++    return (OSIntrMode)(old & HW_PSR_IRQ_DISABLE);
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm OSIntrMode OS_DisableInterrupts (void)
+ {
+     mrs r0, cpsr
+@@ -18,7 +31,17 @@ asm OSIntrMode OS_DisableInterrupts (void)
+     and r0, r0, #HW_PSR_IRQ_DISABLE
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++OSIntrMode OS_DisableInterrupts (void)
++{
++    u32 old = OSi_PortCpsr;
++    OSi_PortCpsr = old | HW_PSR_IRQ_DISABLE;
++    return (OSIntrMode)(old & HW_PSR_IRQ_DISABLE);
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm OSIntrMode OS_RestoreInterrupts (register OSIntrMode state)
+ {
+     mrs r1, cpsr
+@@ -28,7 +51,17 @@ asm OSIntrMode OS_RestoreInterrupts (register OSIntrMode state)
+     and r0, r1, #HW_PSR_IRQ_DISABLE
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++OSIntrMode OS_RestoreInterrupts (OSIntrMode state)
++{
++    u32 old = OSi_PortCpsr;
++    OSi_PortCpsr = (old & ~HW_PSR_IRQ_DISABLE) | (u32)state;
++    return (OSIntrMode)(old & HW_PSR_IRQ_DISABLE);
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm OSIntrMode OS_EnableInterrupts_IrqAndFiq (void)
+ {
+     mrs r0, cpsr
+@@ -37,7 +70,17 @@ asm OSIntrMode OS_EnableInterrupts_IrqAndFiq (void)
+     and r0, r0, #HW_PSR_IRQ_FIQ_DISABLE
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++OSIntrMode OS_EnableInterrupts_IrqAndFiq (void)
++{
++    u32 old = OSi_PortCpsr;
++    OSi_PortCpsr = old & ~HW_PSR_IRQ_FIQ_DISABLE;
++    return (OSIntrMode)(old & HW_PSR_IRQ_FIQ_DISABLE);
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm OSIntrMode OS_DisableInterrupts_IrqAndFiq (void)
+ {
+     mrs r0, cpsr
+@@ -46,7 +89,17 @@ asm OSIntrMode OS_DisableInterrupts_IrqAndFiq (void)
+     and r0, r0, #HW_PSR_IRQ_FIQ_DISABLE
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++OSIntrMode OS_DisableInterrupts_IrqAndFiq (void)
++{
++    u32 old = OSi_PortCpsr;
++    OSi_PortCpsr = old | HW_PSR_IRQ_FIQ_DISABLE;
++    return (OSIntrMode)(old & HW_PSR_IRQ_FIQ_DISABLE);
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm OSIntrMode OS_RestoreInterrupts_IrqAndFiq (register OSIntrMode state)
+ {
+     mrs r1, cpsr
+@@ -56,31 +109,65 @@ asm OSIntrMode OS_RestoreInterrupts_IrqAndFiq (register OSIntrMode state)
+     and r0, r1, #HW_PSR_IRQ_FIQ_DISABLE
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++OSIntrMode OS_RestoreInterrupts_IrqAndFiq (OSIntrMode state)
++{
++    u32 old = OSi_PortCpsr;
++    OSi_PortCpsr = (old & ~HW_PSR_IRQ_FIQ_DISABLE) | (u32)state;
++    return (OSIntrMode)(old & HW_PSR_IRQ_FIQ_DISABLE);
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm OSIntrMode_Irq OS_GetCpsrIrq (void)
+ {
+     mrs r0, cpsr
+     and r0, r0, #HW_PSR_IRQ_DISABLE
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++OSIntrMode_Irq OS_GetCpsrIrq (void)
++{
++    return (OSIntrMode_Irq)(OSi_PortCpsr & HW_PSR_IRQ_DISABLE);
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm OSProcMode OS_GetProcMode (void)
+ {
+     mrs r0, cpsr
+     and r0, r0, #HW_PSR_CPU_MODE_MASK
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++OSProcMode OS_GetProcMode (void)
++{
++    return (OSProcMode)(OSi_PortCpsr & HW_PSR_CPU_MODE_MASK);
++}
++#endif
+ 
+ #include <nitro/codereset.h>
+ 
+ #ifdef SDK_ARM9
+     #include <nitro/code32.h>
++#if defined(SDK_CW) || defined(__MWERKS__)
+     asm void OS_SpinWait (u32 cycle)
+     {
+     _1: subs r0, r0, #4
+         bcs _1
+         bx lr
+     }
++#else
++    /* C version for compilers without Metrowerks inline assembly. */
++    void OS_SpinWait (u32 cycle)
++    {
++        /* A timing delay for DS hardware; nothing on the 3DS needs it. */
++        (void)cycle;
++    }
++#endif
+     #include <nitro/codereset.h>
+ #else
+     void OS_SpinWait (u32 cycle)
+diff --git a/libraries/os/src/os_terminate_proc.c b/libraries/os/src/os_terminate_proc.c
+index 1a16977..7bb37e3 100644
+--- a/libraries/os/src/os_terminate_proc.c
++++ b/libraries/os/src/os_terminate_proc.c
+@@ -10,12 +10,24 @@ SDK_WEAK_SYMBOL void OS_Terminate(void)
+ 
+ #include <nitro/code32.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ SDK_WEAK_SYMBOL asm void OS_Halt(void)
+ {
+     mov r0, #0
+     mcr p15, 0, r0, c7, c0, 4
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void NitroPort_Halt(void);
++
++SDK_WEAK_SYMBOL void OS_Halt(void)
++{
++    /* The DS sleeps until the next interrupt; the port decides what that
++     * means (3ds_port/nitro/src/port_os.c). */
++    NitroPort_Halt();
++}
++#endif
+ 
+ #include <nitro/codereset.h>
+ 
+diff --git a/libraries/os/src/os_thread.c b/libraries/os/src/os_thread.c
+index 5c22c44..ac58efa 100644
+--- a/libraries/os/src/os_thread.c
++++ b/libraries/os/src/os_thread.c
+@@ -8,6 +8,15 @@ extern void SDK_IRQ_STACKSIZE(void);
+ #define OSi_SYS_STACKSIZE    ((s32)SDK_SYS_STACKSIZE)
+ #define OSi_IRQ_STACKSIZE    ((s32)SDK_IRQ_STACKSIZE)
+ 
++#ifdef SDK_PORT_3DS
++    /* 3DS port: there is no DS linker script to define these symbols, so use
++     * pokeplatinum's values directly (main.lsf: "StackSize 0 2048"). */
++    #undef  OSi_SYS_STACKSIZE
++    #undef  OSi_IRQ_STACKSIZE
++    #define OSi_SYS_STACKSIZE   0
++    #define OSi_IRQ_STACKSIZE   2048
++#endif
++
+ #ifdef SDK_ARM9
+     #define  OSi_STACK_CHECKNUM_BOTTOM     0xfddb597dUL
+     #define  OSi_STACK_CHECKNUM_TOP        0x7bf9dd5bUL
+@@ -22,7 +31,11 @@ extern void SDK_IRQ_STACKSIZE(void);
+ extern void SDK_SECTION_ARENA_DTCM_START(void);
+ void SDK_AUTOLOAD_DTCM_END(void);
+ 
++#ifdef SDK_PORT_3DS
++    #define  OSi_LAUNCHER_STACK_LO_DEFAULT    HW_DTCM  /* no DS linker script */
++#else
+     #define  OSi_LAUNCHER_STACK_LO_DEFAULT    SDK_SECTION_ARENA_DTCM_START
++#endif
+     #define  OSi_LAUNCHER_STACK_HI_MAX        (HW_DTCM_SVC_STACK - OSi_IRQ_STACKSIZE)
+     #define  OSi_LAUNCHER_STACK_BOTTOM        (HW_DTCM_SVC_STACK - OSi_IRQ_STACKSIZE)
+ #else
+@@ -370,12 +383,20 @@ void OS_InitThread (void)
+ #endif
+ }
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm BOOL OS_IsThreadAvailable (void)
+ {
+     ldr r0, = OSi_IsThreadInitialized
+     ldr r0, [r0, #0]
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++BOOL OS_IsThreadAvailable (void)
++{
++    return OSi_IsThreadInitialized;
++}
++#endif
+ 
+ void OS_CreateThread (OSThread * thread, void (*func)(void *), void * arg, void * stack, u32 stackSize, u32 prio)
+ {
+@@ -1036,6 +1057,7 @@ static u32 OSi_SystemStackBuffer;
+ 
+ #include <nitro/code32.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm u32 OSi_GetSystemStackPointer (void)
+ {
+     ldr r0, = OSi_SystemStackBuffer
+@@ -1043,14 +1065,30 @@ asm u32 OSi_GetSystemStackPointer (void)
+     ldr r0, [r0]
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++u32 OSi_GetSystemStackPointer (void)
++{
++    /* There is only one stack mode on the 3DS port; report this one. */
++    return (u32)__builtin_frame_address(0);
++}
++#endif
+ 
+ #include  <nitro/codereset.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm u32 OSi_GetCurrentStackPointer (void)
+ {
+     mov r0, sp
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++u32 OSi_GetCurrentStackPointer (void)
++{
++    return (u32)__builtin_frame_address(0);
++}
++#endif
+ 
+ void OS_SetThreadStackWarningOffset (OSThread * thread, u32 offset)
+ {
+diff --git a/libraries/os/src/os_vramExclusive.c b/libraries/os/src/os_vramExclusive.c
+index 72ce8ce..9c87ae0 100644
+--- a/libraries/os/src/os_vramExclusive.c
++++ b/libraries/os/src/os_vramExclusive.c
+@@ -6,11 +6,19 @@ static u16 OSi_vramLockId[OS_VRAM_BANK_KINDS];
+ 
+ #include <nitro/code32.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ static asm u32 OsCountZeroBits (u32 bitmap)
+ {
+     clz r0, r0
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++static u32 OsCountZeroBits (u32 bitmap)
++{
++    return bitmap ? (u32)__builtin_clz(bitmap) : 32;
++}
++#endif
+ 
+ #include <nitro/codereset.h>
+ 
+diff --git a/libraries/rtc/src/external.c b/libraries/rtc/src/external.c
+index a2d29ac..7916944 100644
+--- a/libraries/rtc/src/external.c
++++ b/libraries/rtc/src/external.c
+@@ -1029,6 +1029,7 @@ static RTCResult RtcTickInit (void)
+ 
+ #include <nitro/code32.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ static asm void RtcWaitBusy (void)
+ {
+     ldr r12, = rtcWork.lock
+@@ -1038,5 +1039,14 @@ loop:
+     beq loop
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++static void RtcWaitBusy (void)
++{
++    /* The lock is released by the reply from the ARM7. */
++    while (*(volatile u32 *)&rtcWork.lock == RTC_LOCK_ON) {
++    }
++}
++#endif
+ 
+ #include <nitro/codereset.h>
+\ No newline at end of file
+diff --git a/libraries/spi/src/mic.c b/libraries/spi/src/mic.c
+index ea84d14..1c1faad 100644
+--- a/libraries/spi/src/mic.c
++++ b/libraries/spi/src/mic.c
+@@ -426,6 +426,7 @@ static void MicGetResultCallback (MICResult result, void * arg)
+ 
+ #include <nitro/code32.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ static asm void MicWaitBusy (void)
+ {
+     ldr r12, = micWork.lock
+@@ -435,5 +436,13 @@ loop:
+     beq loop
+     bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++static void MicWaitBusy (void)
++{
++    while (*(volatile u32 *)&micWork.lock == MIC_LOCK_ON) {
++    }
++}
++#endif
+ 
+ #include <nitro/codereset.h>
+diff --git a/libraries/spi/src/pm.c b/libraries/spi/src/pm.c
+index 3ff27fb..5d75b09 100644
+--- a/libraries/spi/src/pm.c
++++ b/libraries/spi/src/pm.c
+@@ -25,19 +25,19 @@ typedef struct {
+         PMi_Work.callbackArg = (arg);      \
+     } while (0)
+ 
+-inline u32 PMi_MakeData1 (u32 bit, u32 seq, u32 command, u32 data)
++static inline u32 PMi_MakeData1 (u32 bit, u32 seq, u32 command, u32 data)
+ {
+     return (bit) | ((seq) << SPI_PXI_INDEX_SHIFT) | ((command) << 8) | ((data) & 0xff);
+ }
+ 
+-inline u32 PMi_MakeData2 (u32 bit, u32 seq, u32 data)
++static inline u32 PMi_MakeData2 (u32 bit, u32 seq, u32 data)
+ {
+     return (bit) | ((seq) << SPI_PXI_INDEX_SHIFT) | ((data) & 0xffff);
+ }
+ 
+-BOOL PMi_Lock(void);
+-void PMi_WaitBusy(void);
+-void PMi_DummyCallback(u32 result, void * arg);
++static BOOL PMi_Lock(void);
++static void PMi_WaitBusy(void);
++static void PMi_DummyCallback(u32 result, void * arg);
+ void PMi_PrependList(PMSleepCallbackInfo ** listp, PMSleepCallbackInfo * info);
+ void PMi_AppendList(PMSleepCallbackInfo ** listp, PMSleepCallbackInfo * info);
+ void PMi_DeleteList(PMSleepCallbackInfo ** listp, PMSleepCallbackInfo * info);
+-- 
+2.43.0
+

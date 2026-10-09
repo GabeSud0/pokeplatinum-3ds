@@ -19,8 +19,8 @@ the same engine, so most of the 3DS backend should carry over.
 
 > **Status:** Phase 1. Toolchain working (stereoscopic test app runs in
 > Azahar); DS hardware layer mapped in
-> [`docs/HARDWARE_LAYER.md`](docs/HARDWARE_LAYER.md); NitroSDK's math and
-> memory libraries build with GCC and pass their tests
+> [`docs/HARDWARE_LAYER.md`](docs/HARDWARE_LAYER.md); all of NitroSDK that
+> the game uses builds for the 3DS and passes its tests
 > ([`3ds_port/nitro`](3ds_port/nitro)). Nothing playable yet.
 
 ## This repository contains no game content

@@ -3,51 +3,96 @@
 Nintendo's NitroSDK (the DS system library the game is built on), compiled
 with GCC so it runs on the 3DS, plus unit tests that run on a PC.
 
-This is step 1 of the plan in [`docs/HARDWARE_LAYER.md`](../../docs/HARDWARE_LAYER.md):
-prove that Nintendo's decompiled code can be built with devkitARM, and set up
-the pieces every later step uses.
+Every NitroSDK function the game calls (281 of them) now exists in the
+library; `tools/check_sdk_coverage.py` checks this in CI. That makes this the
+foundation for the next step: compiling the game itself.
 
-## What's in it so far
+## How it fits together
 
-| Part | SDK files | How |
+```
+ game code  ─►  NitroSDK (Nintendo's C, patched)  ─►  "DS hardware"
+                                                       │
+                       ┌───────────────────────────────┤
+                       ▼                               ▼
+         memory blocks standing in for       the port's software versions
+         DS registers, RAM, VRAM, OAM        of hardware that does things:
+         (src/port_ioreg.c, port_memory.c)   CPU state, interrupts, divider,
+                                             BIOS, the ARM7 link
+```
+
+Everything is switched on by one define, `SDK_PORT_3DS`. Our patches to the
+SDK (`patches/NitroSDK/`) only change behaviour when it's set, so the patched
+SDK still builds the original game with Metrowerks.
+
+## What's real and what's stubbed
+
+**Real: works like the DS**
+
+| Area | What | Where |
 |---|---|---|
-| Fixed-point math, trig, vectors | `fx/src/*.c` | Nintendo's C, compiled as-is |
-| Matrices | `fx/src/fx_mtx*.c` | 27 assembly functions given C versions (patch 0003) |
-| Divider and square root | `fx/src/fx_cp.c` + `cp/*.h` | hardware replaced by `src/port_cp.c` (patch 0002) |
-| CRC, checksums, FFT, bit tricks | `math/src/*.c` | Nintendo's C; one Metrowerks-only syntax fixed (patch 0004) |
-| MD5, SHA-1 | prebuilt binary in the SDK | our own C in `src/dgt.c` |
-| Memory copy and fill | `mi/src/mi_memory.c`, `mi_swap.c` | assembly only; our own C in `src/` |
+| Math | fixed point, trig, vectors, matrices (27 functions translated from assembly), CRC, MD5, SHA-1, HMAC | SDK + `src/dgt.c` |
+| Divider and square root | the DS maths chip in software, including division by zero | `src/port_cp.c` |
+| Memory | copy, fill, atomic swap | `src/mi_memory.c`, `mi_swap.c` |
+| Decompression | LZ77 (both formats), run-length, Huffman, diff filters, bit unpacking. Checked against Nintendo's own compressors | `src/mi_uncompress.c` |
+| CPU state | interrupt enable/disable, CPU mode | SDK `os_system.c` (patched) |
+| Interrupts | IE/IF/IME rules, dispatch to the game's handlers, lowest first | SDK `os_irqHandler.c` (patched), `src/port_os.c` |
+| Waiting for V-blank | `OS_Halt` advances one frame (calls the port's frame hook) and raises V-blank | `src/port_os.c` |
+| Memory map | DS main RAM (8 MB), ITCM, DTCM, WRAM, palettes, OAM, VRAM as memory blocks | `src/port_memory.c` |
+| Heaps and arenas, lock IDs, alarms, messages, mutexes | Nintendo's C on top of the above | SDK |
+| BIOS calls | CpuSet, CpuFastSet, CRC-16, square root, divide, decompression | `src/svc.c` |
+| GBA slot | reports "no cartridge", which is correct on a 3DS (no Pal Park) | `src/ctrdg.c` |
+| The ARM7 link (PXI) | message routing between the game's libraries and port handlers | `src/pxi.c` |
+
+**Not yet: hooks are in place, the behaviour comes in later steps**
+
+| Area | Today | Comes with |
+|---|---|---|
+| Thread switching | `OS_SaveContext` / `OS_LoadContext` report "not implemented" | the 3DS main program (next step) |
+| ARM7 services: clock, touch screen, power, microphone, sound, save chip, wireless | messages are accepted and reported once per service; nothing answers | one handler per service (`NitroPort_SetArm7Handler`) |
+| Display, 2D and 3D | the registers and VRAM exist; nothing draws them | the 2D renderer and the 3D command translator |
+| VRAM banking | each CPU view of VRAM is its own block | the 2D renderer |
+| `OS_ResetSystem` (soft reset) | stores the reset parameter, then reports and stops | the 3DS main program |
+| Files on the cartridge (`FS_`) | the library is built; nothing backs the ROM yet | the data builder |
+
+**Nothing to do on the 3DS:** caches, tightly-coupled memory and the
+protection unit (`src/port_os.c`) are configuration for the DS's ARM946 CPU;
+they're accepted and ignored. Timing delays (`OS_SpinWait`, `SVC_WaitByLoop`)
+return straight away.
+
+**Not built**, because the game doesn't use them: download play (mb), gesture
+recognition (prc), wireless voice (wvr), the China-edition boot screen,
+streaming decompression, and a few debug libraries. See the `Makefile`.
+
+## "Not implemented" reports
+
+Anything the port can't do yet calls `NitroPort_Unimplemented("...")`, which
+logs one line the first time, for example:
+
+```
+[nitro] not implemented: ARM7 service: microphone
+```
+
+When the game first runs, these lines are the to-do list.
 
 ## Building and testing
 
 ```sh
-python tools/bootstrap.py         # once: fetches pokeplatinum, NitroSDK, NitroSystem
+python tools/bootstrap.py         # fetches pokeplatinum, NitroSDK, NitroSystem
 cd 3ds_port/nitro
 make                              # builds for PC and runs the tests
 make TARGET=3ds                   # builds libnitro.a for the 3DS (devkitARM)
+python ../../tools/check_sdk_coverage.py   # every SDK function the game calls exists?
 ```
 
-The tests compare against values worked out independently (hardware docs,
-Python, standard test vectors) and against parts of the SDK that are still
-Nintendo's original C code. They currently run 544 checks.
-
-## How the port is switched on
-
-Everything is controlled by one define, `SDK_PORT_3DS`. Our patches to the
-SDK (in `patches/NitroSDK/`) only change behaviour when it's set, so the
-patched SDK still builds the original game with Metrowerks.
-
-- **Integer types** use `<stdint.h>`, so `u32` is 32 bits on every compiler.
-- **I/O registers**: `HW_IOREG` points at `NitroPort_IoReg[]` (in
-  `src/port_ioreg.c`) instead of address `0x04000000`. Registers that only
-  store values just work; registers with side effects get a software version.
-  The divider and square root are the first.
-- **Assembly**: Metrowerks inline assembly stays for the original build;
-  GCC gets C versions decoded from it.
+The tests (621 checks) compare against values worked out independently
+(hardware docs, standard test vectors, Python) and against Nintendo's own C
+code: for example, every decompressor must undo Nintendo's compressor, and our
+rotation matrices must equal the SDK's own axis-angle rotation. They were also
+checked against deliberately broken code, to make sure they catch mistakes.
 
 ## Testing on a 64-bit PC
 
 The SDK keeps addresses in 32-bit integers. The PC build is linked as a
 non-PIE executable so its data sits below 4 GB and those addresses fit. On the
 3DS (32-bit) this isn't an issue. Structure-size checks that involve pointers
-are skipped on the PC only.
+are skipped on the PC only; they run in the 3DS build.

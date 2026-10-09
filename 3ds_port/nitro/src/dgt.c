@@ -7,8 +7,8 @@
  * FIPS 180-1) using the SDK's context structures. The game reaches them
  * through MATH_CalcMD5 / MATH_CalcSHA1.
  *
- * HMAC and the download-play signature helpers are not implemented; the game
- * doesn't call them.
+ * Also HMAC (used by the SDK's overlay checks). The download-play signature
+ * helpers (...ForRms) are not implemented; nothing calls them.
  */
 
 #include <nitro/types.h>
@@ -253,4 +253,89 @@ void DGT_Hash2GetDigest(DGTHash2Context *ctx, unsigned char *digest)
         digest[i * 4 + 2] = (u8)(h[i] >> 8);
         digest[i * 4 + 3] = (u8)h[i];
     }
+}
+
+/* ---------------------------------------------------------------- HMAC */
+/* RFC 2104, with 64-byte blocks. Used by the SDK's overlay checks. */
+
+static void hmac(int sha1, void *digest, const void *data, int dataLen, const void *key, int keyLen)
+{
+    u8 keyBlock[64];
+    u8 pad[64];
+    u8 inner[20];
+    u32 digestSize = sha1 ? 20 : 16;
+    int i;
+
+    memset(keyBlock, 0, sizeof(keyBlock));
+    if (keyLen > 64) {
+        if (sha1) {
+            DGTHash2Context c;
+            DGT_Hash2Reset(&c);
+            DGT_Hash2SetSource(&c, key, (unsigned long)keyLen);
+            DGT_Hash2GetDigest(&c, keyBlock);
+        } else {
+            DGTHash1Context c;
+            DGT_Hash1Reset(&c);
+            DGT_Hash1SetSource(&c, key, (unsigned long)keyLen);
+            DGT_Hash1GetDigest_R(keyBlock, &c);
+        }
+    } else {
+        memcpy(keyBlock, key, (size_t)keyLen);
+    }
+
+    for (i = 0; i < 64; i++) {
+        pad[i] = keyBlock[i] ^ 0x36;
+    }
+    if (sha1) {
+        DGTHash2Context c;
+        DGT_Hash2Reset(&c);
+        DGT_Hash2SetSource(&c, pad, 64);
+        DGT_Hash2SetSource(&c, data, (unsigned long)dataLen);
+        DGT_Hash2GetDigest(&c, inner);
+    } else {
+        DGTHash1Context c;
+        DGT_Hash1Reset(&c);
+        DGT_Hash1SetSource(&c, pad, 64);
+        DGT_Hash1SetSource(&c, data, (unsigned long)dataLen);
+        DGT_Hash1GetDigest_R(inner, &c);
+    }
+
+    for (i = 0; i < 64; i++) {
+        pad[i] = keyBlock[i] ^ 0x5c;
+    }
+    if (sha1) {
+        DGTHash2Context c;
+        DGT_Hash2Reset(&c);
+        DGT_Hash2SetSource(&c, pad, 64);
+        DGT_Hash2SetSource(&c, inner, digestSize);
+        DGT_Hash2GetDigest(&c, digest);
+    } else {
+        DGTHash1Context c;
+        DGT_Hash1Reset(&c);
+        DGT_Hash1SetSource(&c, pad, 64);
+        DGT_Hash1SetSource(&c, inner, digestSize);
+        DGT_Hash1GetDigest_R(digest, &c);
+    }
+}
+
+void DGT_Hash1CalcHmac(void *digest, void *bin_ptr, int bin_len, void *key_ptr, int key_len)
+{
+    hmac(0, digest, bin_ptr, bin_len, key_ptr, key_len);
+}
+
+void DGT_Hash2CalcHmac(void *digest, void *bin_ptr, int bin_len, void *key_ptr, int key_len)
+{
+    hmac(1, digest, bin_ptr, bin_len, key_ptr, key_len);
+}
+
+/* The overlay-table mode changes how the original library hashes overlay
+ * tables for download play; the port doesn't verify overlays this way. */
+static int sOverlayTableMode;
+
+int DGT_SetOverlayTableMode(int flag)
+{
+    int old = sOverlayTableMode;
+
+    sOverlayTableMode = flag;
+    return old;
 }
