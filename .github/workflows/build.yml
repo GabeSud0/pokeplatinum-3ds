@@ -36,6 +36,7 @@ jobs:
       - name: Build libnitro for the 3DS
         # Compiler errors are also posted as annotations, so they show up on
         # the pull request without opening the log.
+        shell: bash
         run: |
           set -o pipefail
           make -C 3ds_port/nitro TARGET=3ds 2>&1 | tee build-3ds.log || {
