@@ -10,7 +10,6 @@ applications/frontier/tower_records.c                      # missing header res/
 applications/mail_viewer.c                                 # missing header res/pokemon/pl_poke_icon.naix
 applications/party_menu/sprites.c                          # missing header res/graphics/sprite_templates/party_menu.h
 applications/poffin_case/manager.c                         # missing header res/graphics/sprite_templates/poffin_case.h
-applications/pokedex/footprint.c                           # missing header res/pokemon/pokefoot.naix
 applications/pokemon_summary_screen/sprites.c              # missing header res/graphics/sprite_templates/pokemon_summary_screen.h
 applications/town_map/fly_locations.c                      # missing header res/graphics/sprite_templates/town_map.h
 applications/town_map/graphics.c                           # missing header res/graphics/sprite_templates/town_map.h
@@ -30,7 +29,6 @@ overlay104/battle_hall_helpers.c                           # missing header res/
 overlay104/frontier_brain_encounter_effect.c               # missing header res/text/bank/npc_trainer_names.h
 overlay113/ov113_02260620.c                                # missing header res/pokemon/species_footprint_sizes.h
 password_word_bank.c                                       # missing header res/words/word_bank.naix
-pokemon.c                                                  # missing header res/trainers/classes/trbgra.naix
 pokemon_icon.c                                             # missing header res/pokemon/pl_poke_icon.naix
 pokemon_sprite.c                                           # missing header res/pokemon/pl_otherpoke.naix
 underground_map_transition.c                               # missing header res/graphics/sprite_templates/underground_map_transition.h

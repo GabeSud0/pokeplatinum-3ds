@@ -13,14 +13,14 @@ that stops it:
 
 | Target | Compiled | Blocked |
 |---|---|---|
-| 3DS, 32-bit PC | 984 of 1,013 | 29 |
-| 64-bit PC | 960 of 1,013 | 29 + 24 in [`blocked_sources_64bit.txt`](blocked_sources_64bit.txt) |
+| 3DS, 32-bit PC | 986 of 1,013 | 27 |
+| 64-bit PC | 962 of 1,013 | 27 + 24 in [`blocked_sources_64bit.txt`](blocked_sources_64bit.txt) |
 
 The 24 extra files on a 64-bit PC store overlay IDs (addresses of linker
 symbols) as `u32` in static initializers, which is only constant with
 4-byte pointers.
 
-What still blocks the 29: **headers the original build generates and the
+What still blocks the 27: **headers the original build generates and the
 port doesn't yet**: data tables from the decomp's JSON (tutor moves, egg
 moves, footprints, berry list ...), sprite templates, a few archive indices
 made by special scripts, and two headers that embed graphics. Plus two
@@ -38,6 +38,12 @@ build is unchanged):
 - `0004`: `static` definitions of symbols a header declares non-static.
 - `0005`: assigning a `const` member, casts as assignment targets, `const`
   variables as array sizes, `NULL` for an enum, `\u00XX` byte escapes.
+- `0006`: C versions of the RC4 encrypt functions (see below).
+
+Archive indices whose member list a script in the decomp's `tools/ordergen/`
+writes (trainer sprites, footprints; `pokemon.c` needs one) are made by
+running that script, at its pinned version, with the folder list its
+`meson.build` derives (`tools/prepare_game_ordergen_naix.py`).
 
 ### Updating the lists
 
@@ -59,17 +65,29 @@ make -C 3ds_port/game TARGET=host32 link-check   # or TARGET=3ds
 
 links the game from `NitroMain`, as the original program starts, and writes
 `build/game-link-report/<target>.md`: every symbol the game reaches that
-nothing defines, grouped by why (a blocked source file, the Wi-Fi SDKs,
-overlay IDs from the DS linker script, assembly). CI uploads the 32-bit and
-3DS reports. On a 64-bit PC (with the overlay-ID files blocked too) the
-first run listed 556 missing symbols: about 450 in blocked files (86 in
-`pokemon.c` alone), 80 from the Wi-Fi SDKs, 24 overlay IDs and one function
-still in assembly (`CRYPTO_RC4Encrypt`). Nothing from NitroSDK or
-NitroSystem is missing.
+nothing defines, grouped by why. CI uploads the 32-bit and 3DS reports and
+shows the summary on the run's page. Everything the game links besides its
+own sources is now provided:
 
-Compiling a file doesn't mean it runs: most of these files need the heap,
-filesystem, renderer, overlays and so on, which aren't ported yet. The
-library is a static archive, so programs only pull in what they use.
+- **Overlay IDs.** `FS_OVERLAY_ID(name)` is the address of
+  `SDK_OVERLAY_<name>_ID`, which Nintendo's linker placed at the overlay's
+  number (its position in `platinum.us/main.lsf`).
+  `tools/prepare_game_overlay_ids.py` writes the same symbols as a linker
+  script (`build/game-link/overlay_ids.ld`) that every program linking the
+  game passes to the linker. NitroSDK patch `0010` declares them as bytes,
+  so GCC doesn't assume they're 4-byte aligned (it folded
+  `FS_OVERLAY_ID(overlay5) == 5` to false).
+- **RC4** (Mystery Gift): `lib/crypto` keeps its encrypt functions in
+  assembly; patch `0006` adds C versions, checked against the published
+  test vectors.
+- **Nintendo's Wi-Fi libraries** (DWC, PPW lobby, VCT voice chat, WVR):
+  online play isn't part of the port. After compiling,
+  `tools/make_game_wifi_stubs.py` writes a stand-in for every such function
+  the game objects call (134): each logs "not implemented" once and returns
+  0, so online menus see a failure.
+
+With those, a 64-bit PC link misses 367 symbols, all defined in the
+still-blocked files (and the 24 that only a 64-bit PC blocks).
 
 ## How it's built
 
