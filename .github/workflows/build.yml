@@ -105,6 +105,9 @@ jobs:
       - name: Python tool unit tests (every tools/test_*.py)
         run: python -m unittest discover -s tools -p 'test_*.py' -v
 
+      - name: Builder unit tests (synthetic ROM images only)
+        run: python -m unittest discover -s builder -p 'test_*.py' -v
+
       - name: Fetch decompilation and both SDKs (fresh; check patches)
         run: python tools/bootstrap.py --clean
 
