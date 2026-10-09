@@ -29,22 +29,26 @@ endif
 GAME_SRCS := coins.c charcode.c charcode_util.c ascii_util.c game_version.c \
              play_time.c int_distance.c math_util.c fx_util.c \
              map_tile_behavior.c field_script_context.c \
-             play_time_manager.c poffin.c game_options.c
+             play_time_manager.c poffin.c game_options.c \
+             berry_data.c poffin_types.c
 GAME_OBJS := $(GAME_SRCS:%.c=$(OUT)/src/%.o)
 
-# metang normally creates this header during the DS Meson build. Generate it
-# from the *pinned* manifest so GCC sees real, stable text-bank indices.
-TEXT_BANK_MANIFEST := $(GAME)/generated/text_banks.txt
-TEXT_BANK_HEADER := $(OUT)/gen/generated/text_banks.h
+# Use the actual Meson/Metang rules from the pinned decompilation for ALL
+# 107 generated enum/mask headers, including TextBank. Do not vendor these
+# headers or hand-code game IDs. A stamp prevents rebuilding the entire set
+# per C source, while manifest prerequisites preserve incremental correctness.
+CONSTANTS_DIR := $(ROOT)/build/game-constants
+CONSTANTS_STAMP := $(CONSTANTS_DIR)/.game-headers-ready
+GAME_MANIFESTS := $(wildcard $(GAME)/generated/*.txt)
 
-$(TEXT_BANK_HEADER): $(TEXT_BANK_MANIFEST) $(ROOT)/tools/generate_game_text_banks.py
-	@python3 $(ROOT)/tools/generate_game_text_banks.py $< $@
-
+$(CONSTANTS_STAMP): $(GAME)/generated/meson.build $(GAME)/subprojects/metang.wrap $(GAME_MANIFESTS) $(ROOT)/tools/prepare_game_constants.py
+	@python3 $(ROOT)/tools/prepare_game_constants.py --upstream $(GAME) --output $(CONSTANTS_DIR)
+	@touch $@
 
 # Force the original global precompiled header, as Meson/Metrowerks does.
 # _MSL_RESTRICT is a Metrowerks qualifier and must be empty with GCC.
 GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
-               -I$(GAME)/include -I$(GAME)/asm -I$(GAME) -I$(OUT)/gen \
+               -I$(GAME)/include -I$(GAME)/asm -I$(GAME) -I$(CONSTANTS_DIR) \
                -DPOKEPLATINUM_REVISION=1 -DPOKEPLATINUM_GENERATED_ENUM \
                -D_MSL_RESTRICT= -DPM_KEEP_ASSERTS \
                -DGAME_VERSION=VERSION_PLATINUM \
@@ -78,7 +82,7 @@ $(NNS_INLINE_SYMS): | libnitrosystem
 
 # The NitroSystem inline functions in included game headers have external
 # definitions under GCC's gnu89 semantics; match the SDK's weak-symbol fix.
-$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(TEXT_BANK_HEADER) | libnitrosystem
+$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@echo "  GAME CC $(notdir $<)"
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
@@ -93,7 +97,7 @@ $(LIB): $(GAME_OBJS)
 # NitroSystem and NitroSDK, without any ROM or copyrighted game data.
 TEST_BIN := $(OUT)/test_game
 
-$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(TEXT_BANK_HEADER) | libnitrosystem
+$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
 	@$(WEAKEN_NNS_INLINE)
