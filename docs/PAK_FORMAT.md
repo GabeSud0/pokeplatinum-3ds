@@ -72,29 +72,27 @@ python builder/verify_rom.py /path/to/platinum.nds
 python builder/extract_rom.py /path/to/platinum.nds -o data_pack/
 ```
 
-The current extractor's `manifest.json` contains only `files` (each with
-`id`, `path` and `size`), **not the source ROM SHA-1**. Until the extractor
-includes it, supply the ROM read-only so the packer can verify and hash it:
+The extractor records the source ROM's SHA-1 in `manifest.json` as a
+top-level `"rom_sha1": "<40 lowercase hex>"` field, next to `"files"`.
+Because the manifest already identifies the verified source ROM, the standard
+packing command needs only a build ID:
 
 ```sh
-python builder/pack.py data_pack/ -o platinum3ds.pak --build-id dev-001 --rom /path/to/platinum.nds
+python builder/pack.py data_pack/ -o platinum3ds.pak --build-id <id>
 ```
 
-Alternatively, supply the already verified ROM's 40-digit hexadecimal SHA-1:
+The optional `--rom` and `--rom-sha1` flags remain available to supply
+the verified source digest explicitly:
 
 ```sh
-python builder/pack.py data_pack/ -o platinum3ds.pak --build-id dev-001 --rom-sha1 YOUR_VERIFIED_ROM_SHA1
+python builder/pack.py data_pack/ -o platinum3ds.pak --build-id <id> --rom /path/to/platinum.nds
+python builder/pack.py data_pack/ -o platinum3ds.pak --build-id <id> --rom-sha1 YOUR_VERIFIED_ROM_SHA1
 ```
 
-A future manifest may contain `"rom_sha1": "<40 hex characters>"`; in that
-case the requested short command works without extra flags:
-
-```sh
-python builder/pack.py data_pack/ -o platinum3ds.pak --build-id dev-001
-```
-
-If both a manifest digest and a CLI digest are supplied, they must match.
-Without either, packing fails rather than writing an invented digest. The
+An override **must agree** with the manifest digest. The CLI validates both
+the manifest digest and any override against supported ROM SHA-1 hashes. If no
+source digest is available, packing fails rather than inventing one. The
+The
 packer verifies every listed file's size, rejects duplicate IDs and unsafe
 paths (including symlinks escaping the folder), and writes via a temporary
 file to avoid leaving a partially written output.
