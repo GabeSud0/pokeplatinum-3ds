@@ -1,0 +1,65 @@
+name: Game generated constant headers
+
+on:
+  pull_request:
+    paths:
+      - "tools/prepare_game_constants.py"
+      - "tools/test_prepare_game_constants.py"
+      - ".github/workflows/game-generated-constants.yml"
+      - "docs/GAME_CONSTANTS.md"
+  workflow_dispatch:
+
+jobs:
+  generate-headers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Unit-test safe manifest parsing and Metang invocation
+        run: python -m unittest discover -s tools -p 'test_prepare_game_constants.py' -v
+
+      - name: Fetch pinned game sources and compatibility patches
+        run: python tools/bootstrap.py --clean
+
+      - name: Generate ALL original game constant headers with pinned Metang
+        run: python tools/prepare_game_constants.py
+
+      - name: Verify representative official enum and mask values compile
+        shell: bash
+        run: |
+          test -f build/game-constants/generated/abilities.h
+          test -f build/game-constants/generated/species.h
+          test -f build/game-constants/generated/vars_flags.h
+          test -f build/game-constants/generated/ai_flags.h
+          test -f build/game-constants/generated/move_flags.h
+          test -f build/game-constants/generated/text_banks.h
+          test -f build/game-constants/generated/map_headers.h
+          cc -std=gnu11 -Werror -DPOKEPLATINUM_GENERATED_ENUM \
+            -Ibuild/game-constants -x c -fsyntax-only - <<'C'
+          #include "generated/abilities.h"
+          #include "generated/species.h"
+          #include "generated/ai_flags.h"
+          #include "generated/move_flags.h"
+          #include "generated/vars_flags.h"
+          #include "generated/text_banks.h"
+          #include "generated/map_headers.h"
+          _Static_assert(ABILITY_NONE == 0, "wrong ability index");
+          _Static_assert(ABILITY_STENCH == 1, "wrong ability index");
+          _Static_assert(SPECIES_BULBASAUR == 1, "wrong species index");
+          _Static_assert(TEXT_BANK_MOVES_USED_IN_BATTLE == 0, "wrong bank index");
+          _Static_assert(TEXT_BANK_DIPLOMA == 1, "wrong bank index");
+          _Static_assert(MOVE_FLAG_MAKES_CONTACT == 1, "wrong move flag");
+          _Static_assert(AI_FLAG_NONE == 0, "wrong AI flag");
+          _Static_assert(AI_FLAG_BASIC == 1, "wrong AI flag");
+          _Static_assert(AI_FLAG_ALL == 0xFFFFFFFFULL, "wrong full 32-bit AI mask");
+          int main(void) { return 0; }
+          C
+
+      - name: Verify generated headers never enter tracked source
+        run: |
+          test -z "$(git status --porcelain --untracked-files=normal | grep -E '^\?\? (build/|3ds_port/game/build/)' || true)"
