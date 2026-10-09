@@ -687,15 +687,20 @@ static void test_ribbon_save_state(void)
 }
 
 
+/* This upstream symbol is defined in battle_regulation.c but not declared
+ * in its public header. Referencing the real presets directly lets host
+ * tests avoid BattleRegulation_GetByIndex's unported SaveData_SaveTable path. */
+extern BattleRegulation BattleRegulation_PredefinedRules[];
+
 /* Actual Platinum battle-rule tables and bitfield rule selection. */
 static void test_battle_regulation_rules(void)
 {
     BattleRegulationData saved;
     BattleRegulation custom = { 0 }, copy = { 0 };
     const BattleRegulation *defaults = BattleRegulation_GetDefault();
-    const BattleRegulation *preset0 = BattleRegulation_GetByIndex(NULL, 0);
-    const BattleRegulation *preset1 = BattleRegulation_GetByIndex(NULL, 1);
-    const BattleRegulation *preset2 = BattleRegulation_GetByIndex(NULL, 2);
+    const BattleRegulation *preset0 = &BattleRegulation_PredefinedRules[0];
+    const BattleRegulation *preset1 = &BattleRegulation_PredefinedRules[1];
+    const BattleRegulation *preset2 = &BattleRegulation_PredefinedRules[2];
 
     CHECK(BattleRegulation_Size() == sizeof(BattleRegulation));
     CHECK(BattleRegulation_SaveSize() == sizeof(BattleRegulationData));
@@ -712,7 +717,8 @@ static void test_battle_regulation_rules(void)
     CHECK(BattleRegulation_GetRuleValue(defaults, BATTLE_REGULATION_RULE_SPECIES_UNIQUE) == 1);
     CHECK(BattleRegulation_GetIndex(NULL) == 0xFF);
 
-    /* GetByIndex reads these original presets without a SaveData backend. */
+    /* Exercise original predefined data and its production GetIndex logic;
+     * the GetByIndex API also references SaveData_SaveTable, not linked yet. */
     CHECK(preset0 != NULL && preset1 != NULL && preset2 != NULL);
     CHECK(BattleRegulation_GetIndex(preset0) == 0);
     CHECK(BattleRegulation_GetIndex(preset1) == 1);
