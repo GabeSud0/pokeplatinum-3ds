@@ -1,10 +1,10 @@
-# Game source GCC build — first incremental slice
+# Game source GCC build — incremental source compilation
 
 This is the beginning of compiling **the game's original C** for a native
 3DS port. It does **not** reimplement Pokémon Platinum, package game data,
 produce a playable executable, or compile all 1,013 C files yet.
 
-The first fourteen files come directly from the pinned pret/pokeplatinum source
+The first sixteen files come directly from the pinned pret/pokeplatinum source
 checkout under `build/upstream/src/`:
 
 - `coins.c` — coin case state and overflow logic
@@ -19,6 +19,8 @@ checkout under `build/upstream/src/`:
 - `play_time_manager.c` — accumulation of gameplay time from timer ticks
 - `poffin.c` — Poffin flavor attributes and Poffin Case storage
 - `game_options.c` — saved options, button mode, battle settings and text speed
+- `berry_data.c` — Berry attribute lookup and file-backed load interfaces
+- `poffin_types.c` — Poffin names/message lookup interfaces
 
 The Makefile uses the same shared flags, Nintendo headers, and GCC weak
 NitroSystem inline-symbol fix as `libnitro` and `libnitrosystem`. It also
@@ -31,11 +33,21 @@ functions from an otherwise incomplete game source archive without forcing
 unported systems (heap, renderer, timers, game overlays) into the test binary.
 **It does not imply the full game can link or run.**
 
-The upstream Meson build generates `generated/text_banks.h` from
-`generated/text_banks.txt`. The GCC game Makefile now recreates its ordered
-`enum TextBank` using `tools/generate_game_text_banks.py` in the ignored
-`build/<target>/gen/` directory. No dummy bank IDs or copied resources are
-committed. Other Meson-generated enums and assets remain future work.
+The original Meson build uses `metang` to generate 107 C enum/mask headers
+from the ordered upstream `generated/*.txt` manifests (including
+`text_banks.h`, `abilities.h`, `species.h`, and AI/move flags).
+The GCC game Makefile automatically invokes `tools/prepare_game_constants.py`,
+which reads the pinned `generated/meson.build` rules and runs the **same
+Metang version selected by upstream**. Headers are generated into
+`build/game-constants/generated/` and included via `-Ibuild/game-constants`
+and `-DPOKEPLATINUM_GENERATED_ENUM`.
+
+The generated-header stamp depends on the upstream generator settings,
+manifests, and preparation script so builds regenerate after source changes.
+There are no dummy IDs, hand-copied generated files, or game assets tracked.
+`tools/generate_game_text_banks.py` remains available for standalone
+compatibility/testing, but no longer supplies the game's build headers.
+See [game constants](../../docs/GAME_CONSTANTS.md) for more information.
 
 The default Make target is explicitly `all`. CI requests `test` on
 host and host32 and `lib` for 3DS; this is important because the generated
@@ -55,8 +67,9 @@ make -C 3ds_port/game TARGET=3ds    # 3DS ARM11 object library (devkitARM)
 
 Outputs are ignored under `3ds_port/game/build/<target>/`:
 `libplatinum_game.a` (an incomplete, relocatable static archive) and host
-test binaries. The smoke tests cover save play-time, Poffin Case, game options, math/RNG, tiles and field-script
-execution, and call real game code and at least one externally
+test binaries. The smoke tests cover save play-time, Poffin Case, game
+options, Berry attributes, authentic generated IDs, math/RNG, tiles and
+field-script execution, and call real game code and an externally
 linked NitroSystem function, so they test the compatibility between code and
 both SDK libraries.
 
