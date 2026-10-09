@@ -23,31 +23,143 @@ endif
 
 # --- Sources ---------------------------------------------------------------
 
-# NitroSDK files compiled as they are (with our patches applied).
+# NitroSDK files compiled as they are (with our patches applied): every
+# ARM9 source of the libraries the game uses.
 SDK_SRCS := \
-	fx/src/fx.c \
-	fx/src/fx_asinacosidx.c \
-	fx/src/fx_atan.c \
-	fx/src/fx_atanidx.c \
-	fx/src/fx_cp.c \
+	card/src/card_common.c \
+	card/src/card_spi.c \
+	card/src/card_backup.c \
+	card/src/card_rom.c \
+	card/src/card_request.c \
+	card/src/card_pullOut.c \
+	cp/src/cp_context.c \
+	fs/src/fs_command.c \
+	fs/src/fs_command_default.c \
+	fs/src/fs_archive.c \
+	fs/src/fs_file.c \
+	fs/src/fs_rom.c \
+	fs/src/fs_mem.c \
+	fs/src/fs_overlay.c \
+	fx/src/fx_sincos.c \
 	fx/src/fx_mtx22.c \
 	fx/src/fx_mtx33.c \
 	fx/src/fx_mtx43.c \
 	fx/src/fx_mtx44.c \
-	fx/src/fx_sincos.c \
-	fx/src/fx_trig.c \
+	fx/src/fx_cp.c \
 	fx/src/fx_vec.c \
-	math/src/checksum.c \
-	math/src/crc.c \
+	fx/src/fx_trig.c \
+	fx/src/fx_atan.c \
+	fx/src/fx_atanidx.c \
+	fx/src/fx.c \
+	fx/src/fx_asinacosidx.c \
+	gx/src/gx.c \
+	gx/src/gxstate.c \
+	gx/src/gx_vramcnt.c \
+	gx/src/gx_bgcnt.c \
+	gx/src/g2.c \
+	gx/src/g3b.c \
+	gx/src/g3c.c \
+	gx/src/g3imm.c \
+	gx/src/g3x.c \
+	gx/src/g3_util.c \
+	gx/src/gx_load2d.c \
+	gx/src/gx_load3d.c \
+	gx/src/g3.c \
+	gx/src/gxasm.c \
+	math/src/math.c \
 	math/src/dgt.c \
+	math/src/crc.c \
+	math/src/checksum.c \
 	math/src/fft.c \
-	math/src/math.c
+	mi/src/mi_wram.c \
+	mi/src/mi_dma.c \
+	mi/src/mi_dma_hblank.c \
+	mi/src/mi_dma_vblank.c \
+	mi/src/mi_dma_mainmem.c \
+	mi/src/mi_dma_gxcommand.c \
+	mi/src/mi_byteAccess.c \
+	mi/src/mi_stream.c \
+	mi/src/mi_card.c \
+	mi/src/mi_dma_card.c \
+	mi/src/mi_compress.c \
+	mi/src/mi_exMemory.c \
+	mi/src/mi_init.c \
+	mi/src/mi_cache.c \
+	os/src/os_irqHandler.c \
+	os/src/os_irqTable.c \
+	os/src/os_interrupt.c \
+	os/src/os_spinLock.c \
+	os/src/os_printf.c \
+	os/src/os_thread.c \
+	os/src/os_context.c \
+	os/src/os_emulator.c \
+	os/src/os_message.c \
+	os/src/os_mutex.c \
+	os/src/os_init.c \
+	os/src/os_arena.c \
+	os/src/os_alloc.c \
+	os/src/os_timer.c \
+	os/src/os_tick.c \
+	os/src/os_alarm.c \
+	os/src/os_valarm.c \
+	os/src/os_system.c \
+	os/src/os_profile.c \
+	os/src/os_ownerInfo.c \
+	os/src/os_vramExclusive.c \
+	os/src/os_argument.c \
+	os/src/os_entropy.c \
+	os/src/os_terminate_proc.c \
+	rtc/src/external.c \
+	rtc/src/internal.c \
+	rtc/src/convert.c \
+	snd/src/snd_interface.c \
+	snd/src/snd_main.c \
+	snd/src/snd_command.c \
+	snd/src/snd_alarm.c \
+	snd/src/snd_work.c \
+	snd/src/snd_util.c \
+	snd/src/snd_bank.c \
+	snd/src/snd_data.c \
+	spi/src/tp.c \
+	spi/src/mic.c \
+	spi/src/pm.c \
+	std/src/std_string.c \
+	std/src/std_sprintf.c \
+	std/src/std_unicode.c \
+	wbt/src/wbt_context.c \
+	wbt/src/wbt_api.c \
+	wfs/src/wfs_format.c \
+	wfs/src/wfs_server.c \
+	wfs/src/wfs_client.c \
+	wfs/src/wfs_archive.c \
+	wfs/src/wfs_thread.c \
+	utest/src/utest_assert.c \
+	utest/src/utest_cui.c \
+	utest/src/utest_main.c \
+	wm/src/wm_system.c \
+	wm/src/wm_sync.c \
+	wm/src/wm_standard.c \
+	wm/src/wm_mp.c \
+	wm/src/wm_dcf.c \
+	wm/src/wm_ds.c \
+	wm/src/wm_ks.c \
+	wm/src/wm_etc.c
 
-# Not built: math/src/qsort.c (assembly only, and the game never calls it).
+# Not built, because the game doesn't use them: mb (download play),
+# ctrdg (GBA slot, answered by src/ctrdg.c instead), prc (gesture recognition),
+# wvr, env, ext, os/src/os_china.c (China-edition boot screen) and
+# math/src/qsort.c. pad and exi are ARM7-only. utest is built because the
+# SDK's own self-tests (in os_thread.c) refer to it.
+#
 # Replaced by our own C in src/:
-#   mi/src/mi_memory.c, mi/src/mi_swap.c   (Metrowerks assembly only)
-#   dgt/prebuilt/libdgt.a                  (MD5/SHA-1, shipped as a binary)
-#   the divider and square-root hardware   (src/port_cp.c)
+#   mi/src/mi_memory.c, mi_swap.c, mi_uncompress.c  (Metrowerks assembly only)
+#   os/src/os_cache.c, os_tcm.c, os_protection*.c   (DS CPU setup: nothing to do) -> port_os.c
+#   os/src/os_exception.c, os_reset.c               (mostly assembly)            -> port_os.c
+#   pxi/src/pxi_fifo.c, pxi_init.c                  (the ARM7 link)              -> pxi.c
+#   dgt/prebuilt/libdgt.a                           (MD5/SHA-1, a binary)        -> dgt.c
+#   the divider/square-root hardware                                             -> port_cp.c
+# Not built: mi/src/mi_uncomp_stream.c (streaming decompression; assembly only,
+# and the game doesn't use it).
 
 PORT_SRCS := $(wildcard src/*.c)
 
@@ -64,10 +176,13 @@ DEFINES := -DSDK_ARM9 -DSDK_TS -DSDK_4M -DSDK_CODE_ARM -DSDK_FINALROM \
 
 # gnu89 inline rules match how the SDK's .c files use `inline`.
 # No strict aliasing: the SDK reinterprets memory through casts on purpose.
-CFLAGS := -std=gnu99 -fgnu89-inline -fno-strict-aliasing -O2 -g \
+# Enums are always 4 bytes, like Metrowerks ("#pragma enumsalwaysint on" in
+# nitro/types.h); ARM GCC would otherwise shrink them and break struct layouts.
+CFLAGS := -std=gnu99 -fgnu89-inline -fno-strict-aliasing -fno-short-enums -O2 -g \
           -Wall -Wno-unused-function -Wno-unused-variable -Wno-missing-braces \
-          -Wno-unknown-pragmas -Wno-unused-but-set-variable -Wno-parentheses \
-          $(DEFINES) -Iinclude -I$(GEN) -I$(SDK)/include
+          -Wno-unknown-pragmas -Wno-unused-but-set-variable -Wno-parentheses -Wno-switch \
+          $(DEFINES) -Iinclude -I$(GEN) -I$(SDK)/include \
+          $(foreach d,$(wildcard $(SDK)/libraries/*/include),-I$(d))
 
 ifeq ($(TARGET),3ds)
   ifeq ($(strip $(DEVKITARM)),)
@@ -107,15 +222,17 @@ $(GEN)/nitro/fx/fx_const.h: $(SDK)/gen/nitro/fx/fx_const.csv $(SDK)/gen/nitro/fx
 
 $(OUT)/sdk/%.o: $(SDK)/libraries/%.c $(GEN)/nitro/fx/fx_const.h
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	@echo "  CC  $(notdir $<)"
+	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(OUT)/port/%.o: src/%.c $(GEN)/nitro/fx/fx_const.h
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	@echo "  CC  $(notdir $<)"
+	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(LIB): $(SDK_OBJS) $(PORT_OBJS)
 	@rm -f $@
-	$(AR) rcs $@ $^
+	@$(AR) rcs $@ $^
 	@echo "built $@"
 
 # Unit tests run on the PC only.

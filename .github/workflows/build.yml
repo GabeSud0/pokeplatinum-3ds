@@ -10,6 +10,7 @@ jobs:
   # 3DS builds, with the official devkitPro toolchain.
   build-3ds:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     container: devkitpro/devkitarm:latest
     steps:
       - uses: actions/checkout@v4
@@ -33,11 +34,25 @@ jobs:
         run: python3 tools/bootstrap.py
 
       - name: Build libnitro for the 3DS
-        run: make -C 3ds_port/nitro TARGET=3ds
+        # Compiler errors are also posted as annotations, so they show up on
+        # the pull request without opening the log.
+        shell: bash
+        run: |
+          set -o pipefail
+          make -C 3ds_port/nitro TARGET=3ds 2>&1 | tee build-3ds.log || {
+            grep -E "error|Error" build-3ds.log | head -20 | sed 's/^/::error::/'
+            exit 1
+          }
+
+      - name: Check every SDK function the game calls exists (3DS build)
+        run: >
+          python3 tools/check_sdk_coverage.py 3ds_port/nitro/build/3ds/libnitro.a
+          --nm "$DEVKITARM/bin/arm-none-eabi-nm" --strict
 
   # Python tools and PC unit tests.
   tools-and-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -55,4 +70,8 @@ jobs:
         run: python tools/survey_sdk_usage.py
 
       - name: libnitro unit tests
-        run: make -C 3ds_port/nitro
+        # A broken interrupt or frame hook makes the tests wait forever, so cap them.
+        run: timeout 600 make -C 3ds_port/nitro
+
+      - name: Check every SDK function the game calls exists (PC build)
+        run: python tools/check_sdk_coverage.py --strict
