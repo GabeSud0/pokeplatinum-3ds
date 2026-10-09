@@ -83,7 +83,18 @@ def fetch_yyjson(upstream: Path, work: Path) -> Path:
         raise SystemExit(f"yyjson download has the wrong SHA-256 ({digest})")
     shutil.rmtree(folder, ignore_errors=True)
     with tarfile.open(archive) as tar:
-        tar.extractall(work, filter="data")
+        if hasattr(tarfile, "data_filter"):
+            tar.extractall(work, filter="data")
+        else:
+            # Pythons before the extraction filters (Debian's 3.11.2 in the
+            # devkitPro image): the archive's hash is pinned, but still refuse
+            # anything that would land outside the work folder.
+            for member in tar.getmembers():
+                name = Path(member.name)
+                if (name.is_absolute() or ".." in name.parts
+                        or not (member.isfile() or member.isdir())):
+                    raise SystemExit(f"yyjson archive: unexpected member {member.name}")
+            tar.extractall(work)
     for diff in (d.strip() for d in spec.get("diff_files", "").split(",") if d.strip()):
         patch = upstream / "subprojects" / "packagefiles" / diff
         targets = [line.split()[1].split("/", 1)[1] for line in
