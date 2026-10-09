@@ -5,6 +5,7 @@
  */
 #include <nitro.h>
 #include <nnsys.h>
+#include <nitro_port.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -296,38 +297,56 @@ static void test_field_script(void)
     CHECK(ctx.scriptPtr == NULL);
 }
 
-/* Deterministic host clock for the original play-time manager. */
-static u64 fakeTicks;
+/* The play-time manager reads the game's real timer (timer.c): DS timer 3,
+ * counting at 1/64 of the system clock, with an overflow interrupt that
+ * extends it to 64 bits. In the port the timer's count register is plain
+ * memory, so the test sets the clock by writing the count and raising the
+ * overflow interrupts that would have happened. */
+static u64 sTimerTicks;
 
-u64 Timer_GetCurrentTimestamp(void)
+static void SetClock(u64 ticks)
 {
-    return fakeTicks;
+    while ((sTimerTicks >> 16) < (ticks >> 16)) {
+        sTimerTicks += 0x10000;
+        NitroPort_RaiseIrq(OS_IE_TIMER3);   /* the count wrapped */
+    }
+    sTimerTicks = ticks;
+    *(vu16 *)((u32)REG_TM0CNT_L_ADDR + OS_TIMER_3 * 4) = (u16)ticks;
 }
 
-u64 Timer_TicksToSeconds(u64 ticks)
+/* A time `sec` seconds after the start, plus 0.1 s so whole seconds don't
+ * round down when converted back. */
+static u64 Seconds(u64 start, u32 sec)
 {
-    return ticks;
+    return start + OS_SecondsToTicks(sec) + OS_MilliSecondsToTicks(100);
 }
 
 static void test_play_time_manager(void)
 {
     PlayTime playTime;
+    const u64 start = 1000;
+
+    (void)OS_EnableIrq();
+    Timer_Start();
+    sTimerTicks = 0;
+    SetClock(start);
+    CHECK(Timer_GetCurrentTimestamp() == start);
+
     PlayTime_Init(&playTime);
-    fakeTicks = 100;
     PlayTime_Start(&playTime);
     PlayTime_IncrementTimer();
     CHECK(PlayTime_GetSeconds(&playTime) == 0);
-    fakeTicks += 35;
+    SetClock(Seconds(start, 35));
     PlayTime_IncrementTimer();
     CHECK(PlayTime_GetSeconds(&playTime) == 35);
     PlayTime_IncrementTimer();
     CHECK(PlayTime_GetSeconds(&playTime) == 35);
-    fakeTicks += 40;
+    SetClock(Seconds(start, 75));
     PlayTime_IncrementTimer();
     CHECK(PlayTime_GetMinutes(&playTime) == 1);
     CHECK(PlayTime_GetSeconds(&playTime) == 15);
     PlayTime_FlagNotStarted();
-    fakeTicks += 10;
+    SetClock(Seconds(start, 85));
     PlayTime_IncrementTimer();
     CHECK(PlayTime_GetSeconds(&playTime) == 15);
 }

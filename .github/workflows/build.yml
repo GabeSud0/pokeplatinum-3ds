@@ -51,8 +51,14 @@ jobs:
             exit 1
           }
 
-      - name: Compile the first game-source slice for 3DS
-        run: make -C 3ds_port/game TARGET=3ds lib
+      - name: Compile the original game sources for 3DS
+        shell: bash
+        run: |
+          set -o pipefail
+          make -j"$(nproc)" -C 3ds_port/game TARGET=3ds lib 2>&1 | tee build-3ds-game.log || {
+            grep -E "error" build-3ds-game.log | head -20 | sed 's/^/::error::/' || true
+            exit 1
+          }
 
       - name: Link native original-Platinum smoke application
         run: make -C 3ds_port/platinum_smoke
@@ -96,32 +102,8 @@ jobs:
       - name: Check Python tools compile
         run: python -m py_compile tools/*.py builder/*.py
 
-      - name: Test generated game text bank indices
-        run: python -m unittest discover -s tools -p 'test_generate_game_text_banks.py'
-
-      - name: Test generated resource metadata headers
-        run: python -m unittest discover -s tools -p 'test_prepare_game_resource_headers.py' -v
-
-      - name: Test game text-bank index generator
-        run: python -m unittest discover -s tools -p 'test_prepare_game_text_bank_headers.py' -v
-
-      - name: Test source-derived move text bank indices
-        run: python -m unittest discover -s tools -p 'test_prepare_game_move_text_headers.py' -v
-
-      - name: Test original species name text-bank indices
-        run: python -m unittest discover -s tools -p 'test_prepare_game_species_text_headers.py' -v
-
-      - name: Test metadata-only NitroSFX sound index generator
-        run: python -m unittest discover -s tools -p 'test_prepare_game_sound_naix.py' -v
-
-      - name: Test metadata-only NitroArc graphics index generator
-        run: python -m unittest discover -s tools -p 'test_prepare_game_graphics_naix.py' -v
-
-      - name: Test pinned networking header fetch metadata
-        run: python -m unittest discover -s tools -p 'test_prepare_game_network_headers.py' -v
-
-      - name: Test game compiler diagnostic tool
-        run: python -m unittest discover -s tools -p 'test_probe_game_compile.py' -v
+      - name: Python tool unit tests (every tools/test_*.py)
+        run: python -m unittest discover -s tools -p 'test_*.py' -v
 
       - name: Fetch decompilation and both SDKs (fresh; check patches)
         run: python tools/bootstrap.py --clean
@@ -136,7 +118,7 @@ jobs:
         run: timeout 180 make -C 3ds_port/nitrosystem
 
       - name: Compile and smoke-test original game code on PC
-        run: timeout 180 make -C 3ds_port/game TARGET=host test
+        run: timeout 1800 make -j"$(nproc)" -C 3ds_port/game TARGET=host test
 
       - name: Survey original game C compilation blockers (PC)
         run: timeout 300 make -C 3ds_port/game TARGET=host probe PROBE_LIMIT=80 PROBE_TIMEOUT=7
@@ -186,7 +168,7 @@ jobs:
             --args 3ds_port/nitrosystem/build/host32/test_nitrosystem || true
 
       - name: Compile and smoke-test original game code on 32-bit PC
-        run: timeout 180 make -C 3ds_port/game TARGET=host32 test
+        run: timeout 1800 make -j"$(nproc)" -C 3ds_port/game TARGET=host32 test
 
       - name: Survey original game C compilation blockers (32-bit PC)
         run: timeout 300 make -C 3ds_port/game TARGET=host32 probe PROBE_LIMIT=40 PROBE_TIMEOUT=7

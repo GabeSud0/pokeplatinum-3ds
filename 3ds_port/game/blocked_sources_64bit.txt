@@ -1,0 +1,25 @@
+# Extra sources blocked only on a 64-bit PC (TARGET=host). They store
+# overlay IDs, which are addresses of linker symbols, as u32 in static
+# initializers (FS_OVERLAY_ID in NitroSDK's fs/overlay.h). With 4-byte
+# pointers (3DS, host32) that is a constant; with 8-byte pointers it isn't.
+applications/bag/main.c                                    # initializer element is not constant
+applications/capsule_menu/main.c                           # initializer element is not constant
+applications/mail.c                                        # initializer element is not constant
+applications/poffin_case/main.c                            # initializer element is not constant
+applications/poketch/poketch_system.c                      # initializer element is not constant
+egg_hatch.c                                                # initializer element is not constant
+gts_application/screens/trade.c                            # initializer element is not constant
+npc_trade_task.c                                           # initializer element is not constant
+overlay098/ov98_02246C20.c                                 # initializer element is not constant
+overlay104/frscrcmd_battle_arcade.c                        # initializer element is not constant
+overlay104/frscrcmd_battle_castle.c                        # initializer element is not constant
+overlay104/frscrcmd_battle_factory.c                       # initializer element is not constant
+overlay104/frscrcmd_battle_hall.c                          # initializer element is not constant
+rowan_intro_app_template.c                                 # initializer element is not constant
+underground/menus.c                                        # initializer element is not constant
+underground/player_talk.c                                  # initializer element is not constant
+unk_0205749C.c                                             # initializer element is not constant
+unk_0207DA28.c                                             # initializer element is not constant
+unk_0208BEBC.c                                             # initializer element is not constant
+unk_020985E4.c                                             # initializer element is not constant
+unk_0209C194.c                                             # initializer element is not constant

@@ -6,7 +6,7 @@
 # make TARGET=3ds      Cross-compile the same game code for devkitARM
 #
 # This is a relocatable object library, NOT a playable game executable.
-# Expand GAME_SRCS after each subsystem compiles cleanly and is covered by CI.
+# Builds every game source that compiles; see blocked_sources.txt for the rest.
 
 .DEFAULT_GOAL := all
 
@@ -23,35 +23,31 @@ ifeq ($(wildcard $(GAME)/include/pch/global_pch.h),)
 $(error Game decompilation not found at $(GAME). Run: python tools/bootstrap.py --clean)
 endif
 
-# These are actual unmodified pokeplatinum C files, not port rewrites.
-# Start with code that does not require the generated Meson constants, ROM
-# contents, overlay linker scripts, or unimplemented DS hardware backends.
-GAME_SRCS := coins.c charcode.c charcode_util.c ascii_util.c game_version.c \
-             play_time.c int_distance.c math_util.c fx_util.c \
-             map_tile_behavior.c field_script_context.c \
-             play_time_manager.c poffin.c game_options.c \
-             berry_data.c poffin_types.c \
-             grid_menu_cursor_position.c overworld_map_history.c \
-             pokedex_language.c persisted_map_features.c \
-             berry_tag_data.c pokedex_memory.c \
-             pokedex_data_index.c ribbon_save_data.c \
-             battle_regulation.c record_mixed_rng.c \
-             move_reminder_data.c pokedex_heightweight.c daycare_save.c \
-             easy_chat_sentence.c string_list.c \
-             battle_factory_save.c battle_arcade_save.c
+# Every original pokeplatinum C file, unmodified (apart from the patches in
+# patches/pokeplatinum), except the ones listed in blocked_sources.txt with
+# the reason each doesn't compile yet. On a 64-bit PC a few more are left out
+# (blocked_sources_64bit.txt). Fix a cause, delete its lines, and those files
+# join the library; `make probe PROBE_LIMIT=0` reports what compiles.
+blocklist = $(shell sed -e 's/\#.*//' -e '/^[[:space:]]*$$/d' $(1))
+GAME_BLOCKED := $(call blocklist,blocked_sources.txt)
+ifeq ($(TARGET),host)
+GAME_BLOCKED += $(call blocklist,blocked_sources_64bit.txt)
+endif
+GAME_ALL_SRCS := $(sort $(patsubst $(GAME)/src/%,%,$(shell find $(GAME)/src -name '*.c')))
+GAME_SRCS := $(filter-out $(GAME_BLOCKED),$(GAME_ALL_SRCS))
 GAME_OBJS := $(GAME_SRCS:%.c=$(OUT)/src/%.o)
 
-# pokemon_sprite.h in the pinned original game defines these two plain
-# inline wrappers. With the port's shared -fgnu89-inline flags GCC emits
-# both externally in every including translation unit; Metrowerks did not.
-# Mirror the existing NitroSystem objcopy approach rather than patching
-# the decompilation or relaxing multiple-definition linker diagnostics.
-GAME_INLINE_SYMS := $(OUT)/gen/game_inline.syms
-WEAKEN_GAME_INLINE = $(OBJCOPY) --weaken-symbols=$(GAME_INLINE_SYMS) $@
-
-$(GAME_INLINE_SYMS): $(GAME)/include/pokemon_sprite.h
-	@mkdir -p $(dir $@)
-	@printf '%s\n' PokemonSpriteManager_HideShadows PokemonSpriteManager_ShowShadows > $@
+# Game headers (inlines.h, pokemon_sprite.h, NitroDWC's dwc_friend.h ...)
+# define functions with plain `inline`. Metrowerks kept one copy; GCC
+# exports one from every file that includes the header, and those files then
+# can't be linked together. The original game linked as one program, so a
+# symbol defined in more than one object can only be such a header copy:
+# after compiling, list those and mark them weak in every object (as for
+# NitroSystem's headers). The linker then keeps one copy, as Metrowerks did.
+# The host test object is counted too, since it includes the same headers.
+GAME_HEADER_DEFS := $(OUT)/gen/game_header_defs.syms
+TEST_OBJ := $(OUT)/tests/test_game.o
+CENSUS_OBJS := $(GAME_OBJS) $(if $(IS_HOST),$(TEST_OBJ))
 
 # Use the actual Meson/Metang rules from the pinned decompilation for ALL
 # 107 generated enum/mask headers, including TextBank. Do not vendor these
@@ -137,6 +133,18 @@ $(NETWORK_STAMP): $(NETWORK_WRAPS) $(ROOT)/tools/prepare_game_network_headers.py
 	@python3 $(ROOT)/tools/prepare_game_network_headers.py --upstream="$(GAME)" --output="$(NETWORK_DIR)"
 	@touch $@
 
+# GCC 14 (devkitARM) turns these old-C warnings into errors. Treat them as
+# errors on every compiler, so a file that builds on the PC builds for the
+# 3DS too. Several of them catch real mistakes in the decompilation, such as
+# calls to functions that don't exist under that name.
+GCC14_ERRORS := -Werror=implicit-function-declaration -Werror=implicit-int \
+                -Werror=int-conversion -Werror=incompatible-pointer-types
+
+# -D_NITRO: NitroDWC's GameSpy headers (included by about 90 game files,
+# main.c among them) pick their platform from this; _NITRO is the DS, as the
+# original game was built. Same on every target, so PC and 3DS compile the
+# same code. include/extras.h stands in for the Metrowerks header it pulls in.
+# This compiles the declarations only; networking is not ported.
 # Force the original global precompiled header, as Meson/Metrowerks does.
 # _MSL_RESTRICT is a Metrowerks qualifier and must be empty with GCC.
 GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
@@ -152,8 +160,11 @@ GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
                -D_MSL_RESTRICT= -DPM_KEEP_ASSERTS \
                -DGAME_VERSION=VERSION_PLATINUM \
                -DGAME_LANGUAGE=LANGUAGE_ENGLISH \
+               -D_NITRO \
                -include $(GAME)/include/pch/global_pch.h \
-               -ffunction-sections -fdata-sections
+               -ffunction-sections -fdata-sections \
+               $(GCC14_ERRORS)
+
 
 .PHONY: all lib test probe clean libnitro libnitrosystem
 
@@ -165,7 +176,9 @@ endif
 
 lib: $(LIB)
 
-libnitro:
+# libnitrosystem's own make builds libnitro first. Run that one first, so
+# that with make -j two makes never build libnitro at the same time.
+libnitro: libnitrosystem
 	@$(MAKE) --no-print-directory -C $(NITRO) TARGET=$(TARGET) lib
 
 libnitrosystem:
@@ -181,29 +194,34 @@ $(NNS_INLINE_SYMS): | libnitrosystem
 
 # The NitroSystem inline functions in included game headers have external
 # definitions under GCC's gnu89 semantics; match the SDK's weak-symbol fix.
-$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(GAME_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(NETWORK_STAMP) | libnitrosystem
+$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(NETWORK_STAMP) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@echo "  GAME CC $(notdir $<)"
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
 	@$(WEAKEN_NNS_INLINE)
-	@$(WEAKEN_GAME_INLINE)
 
-$(LIB): $(GAME_OBJS)
+$(GAME_HEADER_DEFS): $(CENSUS_OBJS)
+	@mkdir -p $(dir $@)
+	@$(NM) -g --defined-only $^ | awk 'NF == 3 && $$2 ~ /^[TDBR]$$/ { print $$3 }' | sort | uniq -d > $@
+	@for o in $^; do $(OBJCOPY) --weaken-symbols=$@ $$o; done
+	@touch $@
+	@echo "  $$(wc -l < $@) game header functions defined in several objects, made weak"
+
+$(LIB): $(GAME_HEADER_DEFS)
 	@rm -f $@
-	@$(AR) rcs $@ $^
-	@echo "built $@ (game-source slice: $(words $(GAME_SRCS)) C files)"
+	@$(AR) rcs $@ $(GAME_OBJS)
+	@echo "built $@ ($(words $(GAME_SRCS)) of $(words $(GAME_ALL_SRCS)) game C files)"
 
 # Independent host tests exercise the ORIGINAL game functions linked against
 # NitroSystem and NitroSDK, without any ROM or copyrighted game data.
 TEST_BIN := $(OUT)/test_game
 
-$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(GAME_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(NETWORK_STAMP) | libnitrosystem
+$(TEST_OBJ): tests/test_game.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(NETWORK_STAMP) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
 	@$(WEAKEN_NNS_INLINE)
-	@$(WEAKEN_GAME_INLINE)
 
-$(TEST_BIN): $(OUT)/tests/test_game.o $(LIB) $(LIBNNS) $(LIBNITRO)
+$(TEST_BIN): $(TEST_OBJ) $(LIB) $(LIBNNS) $(LIBNITRO)
 	@$(CC) $(LDFLAGS) -Wl,--gc-sections $(OUT)/tests/test_game.o \
 	    -Wl,--start-group $(LIB) $(LIBNNS) $(LIBNITRO) -Wl,--end-group -lm -o $@
 
@@ -224,16 +242,7 @@ PROBE_LIMIT ?= 64
 PROBE_TIMEOUT ?= 10
 PROBE_REPORT := $(ROOT)/build/game-compile-survey/$(TARGET).json
 
-# GameSpy nonport.h supports _UNIX via _LINUX, and _NITRO for the
-# original DS target. These are DIAGNOSTIC-ONLY platform selectors:
-# building game logic does not imply networking support or link its APIs.
-# Never force _LINUX on devkitARM (POSIX sockets are not the DS interface).
-ifeq ($(IS_HOST),yes)
-GAME_PROBE_PLATFORM_FLAGS := -D_LINUX
-else
-GAME_PROBE_PLATFORM_FLAGS := -D_NITRO
-endif
-GAME_PROBE_CFLAGS := $(GAME_CFLAGS) $(GAME_PROBE_PLATFORM_FLAGS)
+GAME_PROBE_CFLAGS := $(GAME_CFLAGS)
 
 probe: $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(NETWORK_STAMP) | libnitrosystem
 	@python3 $(ROOT)/tools/probe_game_compile.py \
