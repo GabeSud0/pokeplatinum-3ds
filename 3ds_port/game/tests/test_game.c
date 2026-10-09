@@ -23,6 +23,7 @@
 #include "field_script_context.h"
 #include "map_tile_behavior.h"
 #include "constants/field/map_tile_behaviors.h"
+#include "generated/text_banks.h"
 
 static int checks;
 static int fails;
@@ -222,6 +223,9 @@ static void test_field_script(void)
 
     memset(&ctx, 0xcd, sizeof(ctx));
     ScriptContext_Init(&ctx, commands, 2);
+    CHECK(TEXT_BANK_MOVES_USED_IN_BATTLE == 0);
+    CHECK(TEXT_BANK_DIPLOMA == 1);
+    CHECK(TEXT_BANK_SPECIES_CATEGORY_JP == 723);
     CHECK(ctx.scriptPtr == NULL);
     CHECK(ctx.stackPointer == 0);
     CHECK(ctx.data[0] == 0);
