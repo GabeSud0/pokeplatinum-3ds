@@ -17,12 +17,17 @@
 #define INITIAL_SEED 0x12345678u
 #define LANGUAGE_COUNT 6
 
+/* Values from pinned constants/versions.h, ordered exactly as the original
+ * pokedex_language.c table: Japanese, English, French, German, Italian,
+ * Spanish. The actual ID-to-index lookup remains ORIGINAL game code. */
+static const int originalLanguageIDs[LANGUAGE_COUNT] = { 1, 2, 3, 5, 4, 7 };
+
 static void print_top(PrintConsole *screen, uint16_t *coins,
                       uint16_t lastRandom, int languageIndex,
                       unsigned actions)
 {
-    const int originalLanguageID = PokedexLanguage_IndexToLanguage(languageIndex);
-    const int roundTrip = PokedexLanguage_LanguageToIndex(originalLanguageID);
+    const int originalLanguageID = originalLanguageIDs[languageIndex];
+    const int gameIndex = PokedexLanguage_LanguageToIndex(originalLanguageID);
 
     consoleSelect(screen);
     printf("\x1b[2J\x1b[H");
@@ -39,7 +44,7 @@ static void print_top(PrintConsole *screen, uint16_t *coins,
     printf("POKEDEX LANGUAGE LOOKUP\n");
     printf("  Index   : %d / %d\n", languageIndex, LANGUAGE_COUNT - 1);
     printf("  Game ID : %d\n", originalLanguageID);
-    printf("  Reverse : %d\n\n", roundTrip);
+    printf("  Lookup  : %d\n\n", gameIndex);
     printf("Button actions: %u\n\n", actions);
     printf("Original game loop: NOT YET\n");
     printf("Virtual DS hardware: NOT YET\n");
