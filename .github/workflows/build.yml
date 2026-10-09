@@ -75,6 +75,9 @@ jobs:
       - name: Check Python tools compile
         run: python -m py_compile tools/*.py builder/*.py
 
+      - name: Test generated game text bank indices
+        run: python -m unittest discover -s tools -p 'test_generate_game_text_banks.py'
+
       - name: Fetch decompilation and both SDKs (fresh; check patches)
         run: python tools/bootstrap.py --clean
 
