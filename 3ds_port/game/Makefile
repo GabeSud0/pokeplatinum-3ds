@@ -56,7 +56,7 @@ GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
                -include $(GAME)/include/pch/global_pch.h \
                -ffunction-sections -fdata-sections
 
-.PHONY: all lib test clean libnitro libnitrosystem
+.PHONY: all lib test probe clean libnitro libnitrosystem
 
 ifeq ($(IS_HOST),yes)
 all: test
@@ -114,6 +114,24 @@ test:
 	@echo "Host-only tests; run make TARGET=host or TARGET=host32"
 	@exit 1
 endif
+
+# The diagnostic survey exercises original game C files *without linking*.
+# This intentionally does not force every game source into libplatinum_game:
+# errors are reported as blockers, not masked by blanket compiler stubs.
+# Set PROBE_LIMIT=0 to check every file; use a bounded sample in CI.
+PROBE_LIMIT ?= 64
+PROBE_TIMEOUT ?= 10
+PROBE_REPORT := $(ROOT)/build/game-compile-survey/$(TARGET).json
+
+probe: $(CONSTANTS_STAMP) | libnitrosystem
+	@python3 $(ROOT)/tools/probe_game_compile.py \
+	    --source-dir="$(GAME)/src" \
+	    --compiler="$(CC)" \
+	    --flags="$(GAME_CFLAGS)" \
+	    --target="$(TARGET)" \
+	    --limit="$(PROBE_LIMIT)" \
+	    --timeout="$(PROBE_TIMEOUT)" \
+	    --output="$(PROBE_REPORT)"
 
 clean:
 	rm -rf build

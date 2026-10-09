@@ -54,6 +54,17 @@ jobs:
       - name: Compile the first game-source slice for 3DS
         run: make -C 3ds_port/game TARGET=3ds lib
 
+      - name: Survey original game C compilation blockers (3DS)
+        run: make -C 3ds_port/game TARGET=3ds probe PROBE_LIMIT=40 PROBE_TIMEOUT=7
+
+      - name: Upload 3DS game compilation survey
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: game-compile-survey-3ds
+          path: build/game-compile-survey/3ds.json
+          if-no-files-found: warn
+
       - name: Check NitroSDK and NitroSystem coverage (3DS build)
         run: >
           python3 tools/check_sdk_coverage.py
@@ -78,6 +89,9 @@ jobs:
       - name: Test generated game text bank indices
         run: python -m unittest discover -s tools -p 'test_generate_game_text_banks.py'
 
+      - name: Test game compiler diagnostic tool
+        run: python -m unittest discover -s tools -p 'test_probe_game_compile.py' -v
+
       - name: Fetch decompilation and both SDKs (fresh; check patches)
         run: python tools/bootstrap.py --clean
 
@@ -92,6 +106,17 @@ jobs:
 
       - name: Compile and smoke-test original game code on PC
         run: timeout 180 make -C 3ds_port/game TARGET=host test
+
+      - name: Survey original game C compilation blockers (PC)
+        run: timeout 300 make -C 3ds_port/game TARGET=host probe PROBE_LIMIT=80 PROBE_TIMEOUT=7
+
+      - name: Upload host game compilation survey
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: game-compile-survey-host
+          path: build/game-compile-survey/host.json
+          if-no-files-found: warn
 
       - name: Check NitroSDK and NitroSystem coverage (PC build)
         run: python tools/check_sdk_coverage.py --strict
@@ -131,6 +156,17 @@ jobs:
 
       - name: Compile and smoke-test original game code on 32-bit PC
         run: timeout 180 make -C 3ds_port/game TARGET=host32 test
+
+      - name: Survey original game C compilation blockers (32-bit PC)
+        run: timeout 300 make -C 3ds_port/game TARGET=host32 probe PROBE_LIMIT=40 PROBE_TIMEOUT=7
+
+      - name: Upload host32 game compilation survey
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: game-compile-survey-host32
+          path: build/game-compile-survey/host32.json
+          if-no-files-found: warn
 
       - name: Check NitroSDK and NitroSystem coverage (32-bit PC build)
         run: >

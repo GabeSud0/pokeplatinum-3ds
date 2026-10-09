@@ -73,6 +73,26 @@ field-script execution, and call real game code and an externally
 linked NitroSystem function, so they test the compatibility between code and
 both SDK libraries.
 
+### Diagnose the next compilation blockers
+
+You can survey a deterministic sample of the **remaining original** game
+source tree with the same real GCC flags and generated headers:
+
+```sh
+make -C 3ds_port/game TARGET=host probe PROBE_LIMIT=80
+make -C 3ds_port/game TARGET=3ds probe PROBE_LIMIT=40
+```
+
+The survey runs `-fsyntax-only` per file and categorizes failures into
+missing resource/generated headers, type/symbol errors, and other causes.
+It writes a JSON report under ignored `build/game-compile-survey/` and
+never links or runs unported game code. CI uploads those reports.
+
+**A green survey step means diagnostics were collected, not that every
+sample compiled.** The existing library compilation and host tests remain
+CI gates. For instructions and interpretation, see
+[Game compile survey](../../docs/GAME_COMPILE_SURVEY.md).
+
 ### Why only a slice?
 
 The original Metrowerks/Meson build uses generated constants, overlay
