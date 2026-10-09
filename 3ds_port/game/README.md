@@ -4,7 +4,7 @@ This is the beginning of compiling **the game's original C** for a native
 3DS port. It does **not** reimplement Pokémon Platinum, package game data,
 produce a playable executable, or compile all 1,013 C files yet.
 
-The first thirty-one files come directly from the pinned pret/pokeplatinum source
+The first thirty-three files come directly from the pinned pret/pokeplatinum source
 checkout under `build/upstream/src/`:
 
 - `coins.c` — coin case state and overflow logic
@@ -36,6 +36,8 @@ checkout under `build/upstream/src/`:
 - `daycare_save.c` — Day Care parent steps, egg state and save-data accessors
 - `easy_chat_sentence.c` — Easy Chat sentence initialization, selection and comparison
 - `string_list.c` — terminal-sentinel lists of UI/message entries
+- `battle_factory_save.c` — Battle Factory team, trainer, rental and streak-flag state
+- `battle_arcade_save.c` — Battle Arcade roulette, team and streak-flag state
 
 The pinned original source tree includes `"badges.h"` in trainer-case
 headers, but stores the authoritative badge enum as
@@ -71,7 +73,16 @@ text-bank **indices**, not the message content. Expanding sentences or
 counting substitution slots still needs the original message NARC and
 string/template runtime. The string-list test uses caller-owned entries;
 heap allocation, cloning and message loading are not claimed as supported.
-These modules do not require Nintendo Wi-Fi headers to compile. Likewise,
+These modules do not require Nintendo Wi-Fi headers to compile.
+Battle Factory and Battle Arcade, however, include `struct_defs/battle_frontier.h`
+which includes `wifi_list.h` for `DWCUserData` and `DWCFriendData`. For the
+3DS port the source patch `patches/pokeplatinum/0002-*.patch` switches just
+that save header to the **original pinned NitroDWC** `base/dwc_account.h`,
+rather than the entire GameSpy-dependent `dwc.h`. The non-port DS build
+keeps including `dwc.h`. The game Makefile fetches both SDK header trees
+before compiling, not only before compiler surveys. This is limited to
+data-structure compatibility: no NitroDWC objects, GameSpy transport,
+Nintendo WFC, online play or actual save file writing is implemented. Likewise,
 battle-rule and record-mixing tests operate on original tables and
 caller-owned arrays; they do not implement Nintendo Wi-Fi/record exchange.
 **It does not imply the full game can link or run.**
@@ -151,7 +162,8 @@ Pokédex language ordering, persisted map-feature buffers, Berry Tag bits,
 Pokédex selection/data banks, Ribbon initialization, battle rule presets,
 mixed-record RNG initialization/entry matching, move-list sentinel detection,
 Pokédex size/weight accessors, Day Care state transitions, Easy Chat
-sentence operations and string-list entry insertion. They call
+sentence operations, string-list entry insertion, and Battle Factory /
+Arcade saved-state setters/getters and streak-bit updates. They call
 real game code and an externally linked NitroSystem function, so they
 test compatibility between original game code and both SDK libraries.
 

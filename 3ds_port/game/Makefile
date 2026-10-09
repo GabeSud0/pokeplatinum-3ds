@@ -37,7 +37,8 @@ GAME_SRCS := coins.c charcode.c charcode_util.c ascii_util.c game_version.c \
              pokedex_data_index.c ribbon_save_data.c \
              battle_regulation.c record_mixed_rng.c \
              move_reminder_data.c pokedex_heightweight.c daycare_save.c \
-             easy_chat_sentence.c string_list.c
+             easy_chat_sentence.c string_list.c \
+             battle_factory_save.c battle_arcade_save.c
 GAME_OBJS := $(GAME_SRCS:%.c=$(OUT)/src/%.o)
 
 # pokemon_sprite.h in the pinned original game defines these two plain
@@ -124,9 +125,10 @@ $(ARCHIVE_STAMP): $(ARCHIVE_ORDERS) $(ROOT)/tools/prepare_game_graphics_naix.py
 	@python3 $(ROOT)/tools/prepare_game_graphics_naix.py --upstream="$(GAME)" --output="$(RESOURCE_DIR)"
 	@touch $@
 
-# Network headers are available from the exact upstream pinned NitroDWC
-# and NitroWiFi revisions. Fetch them only for broad compiler diagnostics,
-# not for the already-working 16-file game/SDK compile regression.
+# Network headers come from exact pinned NitroDWC and NitroWiFi revisions.
+# The game save structs now need NitroDWC's genuine account declarations,
+# so fetch these headers before compiling original game translation units.
+# This does NOT enable GameSpy networking or link an online-play runtime.
 NETWORK_DIR := $(ROOT)/build/game-network-sdks
 NETWORK_STAMP := $(NETWORK_DIR)/.headers-ready
 NETWORK_WRAPS := $(GAME)/subprojects/NitroDWC.wrap $(GAME)/subprojects/NitroWiFi.wrap
@@ -179,7 +181,7 @@ $(NNS_INLINE_SYMS): | libnitrosystem
 
 # The NitroSystem inline functions in included game headers have external
 # definitions under GCC's gnu89 semantics; match the SDK's weak-symbol fix.
-$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(GAME_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) | libnitrosystem
+$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(GAME_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(NETWORK_STAMP) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@echo "  GAME CC $(notdir $<)"
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
@@ -195,7 +197,7 @@ $(LIB): $(GAME_OBJS)
 # NitroSystem and NitroSDK, without any ROM or copyrighted game data.
 TEST_BIN := $(OUT)/test_game
 
-$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(GAME_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) | libnitrosystem
+$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(GAME_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(NETWORK_STAMP) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
 	@$(WEAKEN_NNS_INLINE)

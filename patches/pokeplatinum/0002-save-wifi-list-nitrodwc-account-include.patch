@@ -1,0 +1,28 @@
+From: game port contributors <noreply@users.noreply.github.com>
+Subject: [PATCH] Limit game save header to pinned NitroDWC account types on 3DS
+
+The Battle Frontier save-state structure includes wifi_list.h solely for
+DWCUserData/DWCFriendData declarations. Including all of dwc.h also
+pulls in the GameSpy transport headers, which are not yet portable
+(and whose Nintendo extras.h is absent from the pinned NitroDWC tree).
+
+Use the authentic account-data type header under SDK_PORT_3DS, without
+creating replacement types, network stubs or changing the DS build.
+
+diff --git a/include/wifi_list.h b/include/wifi_list.h
+--- a/include/wifi_list.h
++++ b/include/wifi_list.h
+@@ -1,7 +1,13 @@
+ #ifndef POKEPLATINUM_WIFI_LIST_H
+ #define POKEPLATINUM_WIFI_LIST_H
+ 
++#ifdef SDK_PORT_3DS
++// Save interfaces only need NitroDWC's real persistent account types.
++// GameSpy transport/runtime integration is deliberately separate.
++#include <base/dwc_account.h>
++#else
+ #include <dwc.h>
++#endif
+ 
+ #include "struct_decls/wi_fi_list.h"
+ 
