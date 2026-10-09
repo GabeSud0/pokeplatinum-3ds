@@ -221,6 +221,11 @@ def main() -> int:
             sha1 = verify_rom.sha1_of(args.rom)
         if sha1 is not None and sha1 not in verify_rom.SUPPORTED:
             raise ValueError("Unsupported ROM: run builder/verify_rom.py first")
+        manifest = json.loads((args.data_pack / "manifest.json").read_text(encoding="utf-8"))
+        if isinstance(manifest, dict):
+            manifest_sha1 = manifest.get("rom_sha1", manifest.get("source_rom_sha1"))
+            if manifest_sha1 is not None and _sha1_bytes(manifest_sha1).hex() not in verify_rom.SUPPORTED:
+                raise ValueError("Unsupported ROM: run builder/verify_rom.py first")
         pack(args.data_pack, args.output, build_id=args.build_id, rom_sha1=sha1)
     except (OSError, ValueError, UnicodeError) as exc:
         parser.exit(1, f"Packing failed: {exc}\n")
