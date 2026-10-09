@@ -56,6 +56,11 @@ ignored `build/game-resource-headers/res/text/bank/`. They never contain
 dialogue, game assets, encryption keys, or binary messages. Generated/dynamic
 text banks and the actual `pl_msg.narc` require later integration.
 
+The original NitroSFX `pl_sound_data.naix` header is also generated from
+the pinned `res/sound/pl_sound_data.json` list. This is **symbolic sound
+index metadata only**, not SDAT music/sound samples or a working sound
+runtime. The output stays in `build/game-resource-headers/res/sound/`.
+
 The default Make target is explicitly `all`. CI requests `test` on
 host and host32 and `lib` for 3DS; this is important because the generated
 `text_banks.h` Make rule formerly became the first/default target and a

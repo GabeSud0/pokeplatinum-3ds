@@ -118,11 +118,27 @@ produced by the original underlying generators later. Even when a C header
 is available, the actual message NARC and associated rendering/loading
 system are **not** built.
 
-Other missing headers such as `res/sound/pl_sound_data.naix` and
-`res/graphics/poketch/poketch.naix` are produced by their actual sound
-and graphics/archive generators, not the JSON ID header generator.
-Do not create placeholder resource indices or commit generated game content
-to make the survey appear green.
+### Original NitroSFX sound index metadata
+
+The original `tools/nitrosfx/sdat.c::WriteNaix` generates
+`res/sound/pl_sound_data.naix` from the ordered `pl_sound_data.json`
+metadata using the `-naix` option. Each nonempty record has an index
+**within its own SDAT info array**. NitroSFX uses the resource `fileName`
+for sequences, banks and wave archives; player and group categories use
+`name`. Duplicate filenames in a category acquire numeric suffixes;
+empty names leave reserved index slots.
+
+`tools/prepare_game_sound_naix.py` reproduces just those macro
+definitions from the pinned manifest, generating an ignored
+`build/game-resource-headers/res/sound/pl_sound_data.naix` before
+game compilation and compiler surveys. It does not create `.sdat`,
+`.sseq`, `.sbnk`, `.swar` or audio content and does not imply
+a working sound engine. The game library remains a partial archive.
+
+Remaining graphics headers, such as `res/graphics/poketch/poketch.naix`,
+are produced by the original NitroArc generator from ordered archive
+manifests. Those are a separate build dependency, not something to
+replace with placeholder resource indices.
 
 Reports are written to:
 
