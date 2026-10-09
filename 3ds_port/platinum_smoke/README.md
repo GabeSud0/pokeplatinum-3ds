@@ -7,7 +7,14 @@ it invokes original (unchanged) **Pokémon Platinum C functions** linked from
 - `coins.c`: `Coins_Init`, `Coins_GetValue`, `Coins_CanAdd`,
   `Coins_Add`, `Coins_Subtract`
 - `math_util.c`: `LCRNG_SetSeed`, `LCRNG_GetSeed`, `LCRNG_Next`
-- `pokedex_language.c`: both original language conversion functions
+- `pokedex_language.c`: the original language-ID-to-index conversion
+
+The pinned original `PokedexLanguage_IndexToLanguage` is intentionally not
+linked yet: it calls `ErrorHandling_AssertFail`, which requires the
+still-unported full game assertion runtime. Language IDs are taken from the
+original `include/constants/versions.h` in the exact order of the game's
+language table; `PokedexLanguage_LanguageToIndex` remains the **original
+compiled lookup function**. No assertion handler is faked.
 
 The game functions were compiled with the same Nintendo SDK headers and
 3DS GCC settings as the growing original-game static library. The app
@@ -33,7 +40,7 @@ libctru and the original DS SDK headers in separate translation units.
 | SELECT | `Coins_Init` |
 | X | `LCRNG_Next` |
 | Y | `LCRNG_SetSeed` |
-| L/R | `PokedexLanguage_IndexToLanguage` and reverse lookup |
+| L/R | original `PokedexLanguage_LanguageToIndex` |
 | START | Exit |
 
 The upper screen shows current coin value, random seed, and language
