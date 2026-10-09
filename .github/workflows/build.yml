@@ -74,15 +74,10 @@ jobs:
           path: build/game-link-report/3ds.md
           if-no-files-found: ignore
 
+      # Built to check that it links, but never uploaded: it contains compiled
+      # game code. Build it yourself to run it (see README.md).
       - name: Link native original-Platinum smoke application
         run: make -C 3ds_port/platinum_smoke
-
-      - name: Upload native Platinum smoke .3dsx
-        uses: actions/upload-artifact@v4
-        with:
-          name: platinum-smoke
-          path: 3ds_port/platinum_smoke/platinum-smoke.3dsx
-          if-no-files-found: error
 
       - name: Survey original game C compilation blockers (3DS)
         run: make -C 3ds_port/game TARGET=3ds probe PROBE_LIMIT=40 PROBE_TIMEOUT=7
@@ -112,6 +107,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: CI uploads no game builds (only hello3d and text reports)
+        run: python tools/check_ci_artifacts.py
 
       - name: Check Python tools compile
         run: python -m py_compile tools/*.py builder/*.py

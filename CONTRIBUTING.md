@@ -8,6 +8,12 @@ from ports that bundle the game's assets. The `.gitignore` blocks the common
 file types, but check the list of changed files before every commit. If a
 `.nds`, `.sav`, `.narc` or an image from the game shows up there, stop.
 
+The same goes for **builds**: anything compiled from the game's code (the
+smoke app, the game itself) contains Nintendo's code, so it's never committed,
+attached to an issue or release, or uploaded by CI. CI's uploads are limited
+to an allow-list (`tools/check_ci_artifacts.py`); add to it only things with
+no game code or data in them.
+
 ## How changes get in
 
 `main` always holds a version that has been tested in Azahar.
@@ -18,10 +24,10 @@ file types, but check the list of changed files before every commit. If a
    and how to test it.
 3. **CI.** GitHub Actions builds the 3DS code and runs the Python tools on
    every push. A pull request with a red build doesn't get merged.
-4. **Test.** Download the `.3dsx` from the pull request's Actions run (the
-   **Artifacts** section at the bottom of the run) and try it in Azahar. Changes
-   that affect performance or stereo also get checked on a New 3DS when
-   possible.
+4. **Test.** Check out the branch, build it with `make` (see README.md) and
+   try it in Azahar. Changes that affect performance or stereo also get
+   checked on a New 3DS when possible. CI doesn't publish builds that contain
+   game code (only `hello3d` and reports), so test from your own build.
 5. **Merge.** The repository owner merges after testing.
 
 ## Changing the decompilation or the SDK

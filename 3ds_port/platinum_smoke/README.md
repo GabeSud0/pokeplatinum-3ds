@@ -26,11 +26,12 @@ libctru and the original DS SDK headers in separate translation units.
 
 ## Try it in Azahar / on homebrew-enabled 3DS
 
-1. Open a successful CI run from the GitHub Actions **Build** workflow.
-2. Download the **platinum-smoke** artifact, extract
-   `platinum-smoke.3dsx` and load it in Azahar, or put it under
-   `/3ds/platinum-smoke/` on your 3DS SD card and launch via Homebrew
-   Launcher.
+1. Build it: `python tools/bootstrap.py`, then `make` at the top of the
+   repository (needs devkitPro with `3ds-dev`). CI builds it too but doesn't
+   publish it, since it contains compiled game code; don't share your build.
+2. Load `3ds_port/platinum_smoke/platinum-smoke.3dsx` in Azahar, or put it
+   under `/3ds/platinum-smoke/` on your 3DS SD card and launch it from the
+   Homebrew Launcher (or send it with `3dslink`).
 3. Test original functions with the controls:
 
 | Button | Original game function |

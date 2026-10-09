@@ -89,11 +89,22 @@ tab), and the `.3dsx` can be downloaded from the run.
 ## First original-game code on 3DS
 
 The [Platinum smoke app](3ds_port/platinum_smoke/README.md) is a second,
-separate native `.3dsx` built by GitHub Actions. It **links and executes
-actual original Platinum game functions** for Coin Case, RNG, and Pokédex
-language selection, using the 3DS buttons to change their state. Download
-the **platinum-smoke** artifact from a successful Actions run and launch
-`platinum-smoke.3dsx` in Azahar or on a 3DS with Homebrew Launcher.
+separate native `.3dsx`. It **links and executes actual original Platinum
+game functions** for Coin Case, RNG, and Pokédex language selection, using
+the 3DS buttons to change their state. Build it yourself and launch
+`platinum-smoke.3dsx` in Azahar or on a 3DS with the Homebrew Launcher:
+
+```sh
+python tools/bootstrap.py
+make            # hello3d.3dsx and platinum-smoke.3dsx (needs devkitPro)
+make test       # every test suite, on the PC
+```
+
+**Builds that contain game code are never published.** CI builds and tests
+them on every push but uploads only `hello3d` and text reports
+(`tools/check_ci_artifacts.py` fails the build otherwise). Like the
+decompilation projects, this repository shares source code, not builds of
+the game; don't share your own builds either.
 
 This proves the code-linking and native execution path, **not the full
 Platinum game boot**. The original `NitroMain`, Nintendo DS hardware
@@ -147,6 +158,7 @@ builder/         turns the player's own ROM into the data pack (Python)
 docs/            roadmap and design notes
 patches/         changes applied on top of the decompilation and SDKs
 tools/           bootstrap and helper scripts (Python)
+Makefile         `make` builds the 3DS programs, `make test` runs every test
 LICENSE          GPL-3.0, for this project's own code
 upstream.lock    the exact pret/pokeplatinum commit we build against
 ```
