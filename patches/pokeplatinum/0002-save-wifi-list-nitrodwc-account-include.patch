@@ -12,7 +12,7 @@ creating replacement types, network stubs or changing the DS build.
 diff --git a/include/wifi_list.h b/include/wifi_list.h
 --- a/include/wifi_list.h
 +++ b/include/wifi_list.h
-@@ -1,7 +1,14 @@
+@@ -1,7 +1,13 @@
  #ifndef POKEPLATINUM_WIFI_LIST_H
  #define POKEPLATINUM_WIFI_LIST_H
  
