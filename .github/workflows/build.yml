@@ -14,11 +14,11 @@ jobs:
     # Pull as a logged-in Docker Hub user: anonymous pulls share a small
     # per-IP limit across GitHub's runners and fail at random when it's used up.
     # Secrets: DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (read-only public-repo token).
+    # When they aren't available (not configured yet, or a PR from a fork), fall
+    # back to an anonymous pull: an empty username/password is a template error.
     container:
       image: devkitpro/devkitarm:latest
-      credentials:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
+      credentials: ${{ (secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '') && fromJSON(format('{{"username":{0},"password":{1}}}', toJSON(secrets.DOCKERHUB_USERNAME), toJSON(secrets.DOCKERHUB_TOKEN))) || null }}
     steps:
       - uses: actions/checkout@v4
 
