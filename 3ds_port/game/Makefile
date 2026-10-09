@@ -37,7 +37,7 @@ GAME_SRCS := coins.c charcode.c charcode_util.c ascii_util.c game_version.c \
              pokedex_data_index.c ribbon_save_data.c \
              battle_regulation.c record_mixed_rng.c \
              move_reminder_data.c pokedex_heightweight.c daycare_save.c \
-             battle_factory_save.c battle_arcade_save.c
+             easy_chat_sentence.c string_list.c
 GAME_OBJS := $(GAME_SRCS:%.c=$(OUT)/src/%.o)
 
 # pokemon_sprite.h in the pinned original game defines these two plain
