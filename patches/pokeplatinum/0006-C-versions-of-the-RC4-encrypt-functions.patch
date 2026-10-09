@@ -1,0 +1,83 @@
+From 81bb528e005caed5e2cbc419f6a16c8ba1ee93dd Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 11:40:52 -0700
+Subject: [PATCH] C versions of the RC4 encrypt functions (SDK_PORT_3DS)
+
+lib/crypto keeps CRYPTO_RC4Encrypt and CRYPTO_RC4FastEncrypt in ARM
+assembly (asm/rc4.s, asm/rc4_fast.s). Add C versions with the same
+algorithm and context layout, in a new file only the port compiles (the
+original build lists its sources explicitly). Mystery Gift uses RC4.
+---
+ lib/crypto/src/rc4_port.c | 60 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 60 insertions(+)
+ create mode 100644 lib/crypto/src/rc4_port.c
+
+diff --git a/lib/crypto/src/rc4_port.c b/lib/crypto/src/rc4_port.c
+new file mode 100644
+index 00000000..8f400c6f
+--- /dev/null
++++ b/lib/crypto/src/rc4_port.c
+@@ -0,0 +1,60 @@
++#ifdef SDK_PORT_3DS
++// C versions of CRYPTO_RC4Encrypt (asm/rc4.s) and CRYPTO_RC4FastEncrypt
++// (asm/rc4_fast.s), which the decompilation keeps in ARM assembly. Same
++// algorithm and the same context layout, so they continue from contexts the
++// Init functions (rc4_init.c) set up, and leave them as the assembly did.
++
++#include <nitro/types.h>
++
++#include "crypto/rc4.h"
++
++void CRYPTO_RC4Encrypt(CRYPTORC4Context *ctx, const void *src, u32 len, void *dst)
++{
++    const u8 *in = src;
++    u8 *out = dst;
++    u8 *s = ctx->s;
++    u8 i = ctx->i;
++    u8 j = ctx->j;
++
++    while (len-- > 0) {
++        u8 a, b;
++
++        i++;
++        a = s[i];
++        j += a;
++        b = s[j];
++        s[i] = b;
++        s[j] = a;
++        *out++ = (u8)(*in++ ^ s[(u8)(a + b)]);
++    }
++
++    ctx->i = i;
++    ctx->j = j;
++}
++
++// The fast context keeps i, j and every table entry in the top byte of a
++// 32-bit word (CRYPTO_RC4FastInit shifts the table left by 24).
++void CRYPTO_RC4FastEncrypt(CRYPTORC4FastContext *ctx, const void *src, u32 len, void *dst)
++{
++    const u8 *in = src;
++    u8 *out = dst;
++    u32 *s = ctx->s;
++    u8 i = (u8)(ctx->i >> 24);
++    u8 j = (u8)(ctx->j >> 24);
++
++    while (len-- > 0) {
++        u8 a, b;
++
++        i++;
++        a = (u8)(s[i] >> 24);
++        j += a;
++        b = (u8)(s[j] >> 24);
++        s[i] = (u32)b << 24;
++        s[j] = (u32)a << 24;
++        *out++ = (u8)(*in++ ^ (s[(u8)(a + b)] >> 24));
++    }
++
++    ctx->i = (u32)i << 24;
++    ctx->j = (u32)j << 24;
++}
++#endif
+-- 
+2.43.0
+

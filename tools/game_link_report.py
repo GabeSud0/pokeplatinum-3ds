@@ -32,7 +32,7 @@ GAME = ROOT / "build" / "upstream"
 PORT = ROOT / "3ds_port" / "game"
 
 UNDEFINED = re.compile(r"undefined reference to [`'‘]([^'’`]+)['’]")
-DEFINITION = re.compile(r"^[A-Za-z_][\w \*]*?\b([A-Za-z_]\w*)\s*\([^;{]*\)\s*\{", re.M)
+DEFINITION = re.compile(r"^[A-Za-z_][\w \*]*?\b([A-Za-z_]\w*)\s*\([^;{]*\)\s*(?://[^\n]*)?\s*\{", re.M)
 DATA = re.compile(r"^(?:const\s+)?[A-Za-z_][\w \*]*?\b([A-Za-z_]\w*)(?:\[[^\]]*\])*\s*=", re.M)
 WIFI = re.compile(r"(DWC|DWCi|PPW|VCT|WVR|SOC|SOCL|WCM|CPS|NHTTP)_")
 
@@ -122,7 +122,9 @@ def main() -> int:
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(report, encoding="utf-8")
-    summary = ", ".join(f"{len(v)} {k.split(' (')[0].lower()}" for k, v in groups.items())
+    # Small groups are named in full, so the summary alone says what they are.
+    summary = ", ".join(f"{len(v)} {k.split(' (')[0].lower()}" + (f" ({', '.join(v)})" if len(v) <= 5 else "")
+                        for k, v in groups.items())
     line = f"Full game link ({args.target}): {len(symbols)} missing symbols" + (f" — {summary}" if summary else "")
     if other_errors:
         line += f"; the link also failed for other reasons, first: {other_errors[0].strip()[:200]}"

@@ -1,0 +1,36 @@
+From 4a61cb90a775c35b010ef1e23cf551ffc000564b Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 11:53:22 -0700
+Subject: [PATCH] Declare overlay ID symbols as bytes (SDK_PORT_3DS)
+
+FS_OVERLAY_ID(name) is the address of SDK_OVERLAY_<name>_ID, which the
+linker places at the overlay's number. Declared as u32, GCC assumes the
+address is 4-byte aligned and folds comparisons with numbers that aren't
+multiples of 4 (overlay5 == 5 became false). Declare it as u8 in the port.
+The Metrowerks build is unchanged.
+---
+ include/nitro/fs/overlay.h | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/include/nitro/fs/overlay.h b/include/nitro/fs/overlay.h
+index 9c1ec59..8821560 100644
+--- a/include/nitro/fs/overlay.h
++++ b/include/nitro/fs/overlay.h
+@@ -11,7 +11,14 @@ extern "C" {
+ 
+ typedef u32 FSOverlayID;
+ 
++#ifdef SDK_PORT_3DS
++// The linker places this symbol at the overlay's number. Declared as u32,
++// GCC would assume its address is a multiple of 4 and fold comparisons such
++// as FS_OVERLAY_ID(overlay5) == 5 to false; as bytes it assumes nothing.
++#define FS_EXTERN_OVERLAY(name) extern u8 SDK_OVERLAY_ ## name ## _ID[1]
++#else
+ #define FS_EXTERN_OVERLAY(name) extern u32 SDK_OVERLAY_ ## name ## _ID[1]
++#endif
+ #define FS_OVERLAY_ID(name) ((u32) & (SDK_OVERLAY_ ## name ## _ID))
+ 
+ typedef void (*FSOverlayInitFunc) (void);
+-- 
+2.43.0
+

@@ -52,6 +52,7 @@
 #include "generated/move_flags.h"
 #include "generated/ai_flags.h"
 #include "timer.h"
+#include "crypto/rc4.h"
 #include "math_util.h"
 #include "fx_util.h"
 #include "field_script_context.h"
@@ -1154,8 +1155,83 @@ static void test_battle_arcade_saved_state(void)
     CHECK(BattleArcadeStreakFlags_GetFlag(&flags, ARCADE_SAVE_STREAK_FLAGS, 7, 0, NULL) == 1);
 }
 
+/* RC4 from the game's crypto library (the encrypt functions are the port's
+ * C versions of its assembly). Expected bytes are from a reference RC4 in
+ * Python; "Key"/"Plaintext" and the 0x0102030405 key stream are the
+ * published test vectors (RFC 6229 for the latter). */
+static void test_rc4(void)
+{
+    static const u8 keyStream5[16] = {
+        0xb2, 0x39, 0x63, 0x05, 0xf0, 0x3d, 0xc0, 0x27,
+        0xcc, 0xc3, 0x52, 0x4a, 0x0a, 0x11, 0x18, 0xa8
+    };
+    static const u8 plainCipher[9] = { 0xbb, 0xf3, 0x16, 0xe8, 0xd9, 0x40, 0xaf, 0x0a, 0xd3 };
+    static const u8 longFirst[4] = { 0x39, 0x12, 0x02, 0xfe };
+    static const u8 longLast[8] = { 0x99, 0x2b, 0x89, 0xfa, 0xe3, 0x17, 0x21, 0x41 };
+    static const u8 key5[5] = { 1, 2, 3, 4, 5 };
+    CRYPTORC4Context ctx;
+    CRYPTORC4FastContext fast;
+    u8 buf[300], zero[16] = { 0 };
+    int k, pass;
+
+    CRYPTO_RC4Init(&ctx, "Key", 3);
+    CRYPTO_RC4Encrypt(&ctx, "Plaintext", 9, buf);
+    CHECK(memcmp(buf, plainCipher, 9) == 0);
+    CRYPTO_RC4FastInit(&fast, "Key", 3);
+    CRYPTO_RC4FastEncrypt(&fast, "Plaintext", 9, buf);
+    CHECK(memcmp(buf, plainCipher, 9) == 0);
+
+    CRYPTO_RC4Init(&ctx, key5, 5);
+    CRYPTO_RC4Encrypt(&ctx, zero, 16, buf);
+    CHECK(memcmp(buf, keyStream5, 16) == 0);
+
+    /* 300 bytes in place, in two calls (the context carries on), with both
+     * versions; then decrypting gives the input back. */
+    for (pass = 0; pass < 2; pass++) {
+        for (k = 0; k < 300; k++) {
+            buf[k] = (u8)(k * 7 + 3);
+        }
+        if (pass == 0) {
+            CRYPTO_RC4Init(&ctx, "pokeplatinum3ds!", 16);
+            CRYPTO_RC4Encrypt(&ctx, buf, 100, buf);
+            CRYPTO_RC4Encrypt(&ctx, buf + 100, 200, buf + 100);
+        } else {
+            CRYPTO_RC4FastInit(&fast, "pokeplatinum3ds!", 16);
+            CRYPTO_RC4FastEncrypt(&fast, buf, 100, buf);
+            CRYPTO_RC4FastEncrypt(&fast, buf + 100, 200, buf + 100);
+        }
+        CHECK(memcmp(buf, longFirst, 4) == 0);
+        CHECK(memcmp(buf + 292, longLast, 8) == 0);
+    }
+    CRYPTO_RC4Init(&ctx, "pokeplatinum3ds!", 16);
+    CRYPTO_RC4Decrypt(&ctx, buf, 300, buf);
+    for (k = 0; k < 300 && buf[k] == (u8)(k * 7 + 3); k++) {
+    }
+    CHECK(k == 300);
+}
+
+/* Overlay IDs come from the generated linker script (overlay_ids.ld): the
+ * overlay's position in the linker spec, as Nintendo's linker numbered it. */
+FS_EXTERN_OVERLAY(overlay5);
+FS_EXTERN_OVERLAY(overlay6);
+FS_EXTERN_OVERLAY(overlay7);
+FS_EXTERN_OVERLAY(overlay104);
+
+static void test_overlay_ids(void)
+{
+    /* Includes numbers that aren't multiples of 4: GCC must not assume the
+     * symbols are aligned (patches/NitroSDK/0010). Overlay 0 (dummy1) isn't
+     * used by the game and isn't tested: GCC assumes no object is at 0. */
+    CHECK(FS_OVERLAY_ID(overlay5) == 5);
+    CHECK(FS_OVERLAY_ID(overlay6) == 6);
+    CHECK(FS_OVERLAY_ID(overlay7) == 7);
+    CHECK(FS_OVERLAY_ID(overlay104) == 104);
+}
+
 int main(void)
 {
+    test_rc4();
+    test_overlay_ids();
     printf("Original Platinum game-code smoke tests (%d-bit)\n",
            (int)(sizeof(void *) * 8));
     CHECK(gGameVersion == VERSION_PLATINUM);

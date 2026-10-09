@@ -44,6 +44,12 @@ GAME_LIBS := crypto gds spl
 GAME_LIB_SRCS := $(sort $(foreach l,$(GAME_LIBS),$(wildcard $(GAME)/lib/$(l)/src/*.c)))
 GAME_OBJS += $(GAME_LIB_SRCS:$(GAME)/%.c=$(OUT)/%.o)
 
+# The trainer AI script: data written with assembler macros, which the
+# original assembles with GNU as (meson.build: trainer_ai_o). It is only
+# data, so any target's assembler builds it the same way.
+TRAINER_AI_O := $(OUT)/src/battle/trainer_ai/script.o
+GAME_OBJS += $(TRAINER_AI_O)
+
 # Game headers (inlines.h, pokemon_sprite.h, NitroDWC's dwc_friend.h ...)
 # define functions with plain `inline`. Metrowerks kept one copy; GCC
 # exports one from every file that includes the header, and those files then
@@ -127,6 +133,17 @@ $(ARCHIVE_STAMP): $(ARCHIVE_ORDERS) $(ROOT)/tools/prepare_game_graphics_naix.py
 	@python3 $(ROOT)/tools/prepare_game_graphics_naix.py --upstream="$(GAME)" --output="$(RESOURCE_DIR)"
 	@touch $@
 
+# Archives whose member list a tools/ordergen/ script writes (trainer
+# sprites, footprints): run the decompilation's own script with the folder
+# list its meson.build derives, then index the result.
+ORDERGEN_STAMP := $(RESOURCE_DIR)/.ordergen-naix-ready
+
+$(ORDERGEN_STAMP): $(wildcard $(GAME)/tools/ordergen/*.py) $(GAME)/generated/trainer_classes.txt \
+                   $(GAME)/generated/species.txt $(ROOT)/tools/prepare_game_ordergen_naix.py \
+                   $(ROOT)/tools/prepare_game_graphics_naix.py
+	@python3 $(ROOT)/tools/prepare_game_ordergen_naix.py --upstream="$(GAME)" --output="$(RESOURCE_DIR)"
+	@touch $@
+
 # Network headers come from exact pinned NitroDWC and NitroWiFi revisions.
 # The game save structs now need NitroDWC's genuine account declarations,
 # so fetch these headers before compiling original game translation units.
@@ -165,6 +182,10 @@ GCC14_ERRORS := -Werror=implicit-function-declaration \
 # original game was built. Same on every target, so PC and 3DS compile the
 # same code. include/extras.h stands in for the Metrowerks header it pulls in.
 # This compiles the declarations only; networking is not ported.
+# Every generated header the game's sources may include.
+GAME_GENERATED := $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) \
+                  $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(ORDERGEN_STAMP) $(NETWORK_STAMP)
+
 # Force the original global precompiled header, as Meson/Metrowerks does.
 # _MSL_RESTRICT is a Metrowerks qualifier and must be empty with GCC.
 GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
@@ -217,7 +238,7 @@ $(NNS_INLINE_SYMS): | libnitrosystem
 
 # The NitroSystem inline functions in included game headers have external
 # definitions under GCC's gnu89 semantics; match the SDK's weak-symbol fix.
-$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(NETWORK_STAMP) | libnitrosystem
+$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(GAME_GENERATED) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@echo "  GAME CC $(notdir $<)"
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
@@ -233,30 +254,61 @@ $(GAME_HEADER_DEFS): $(CENSUS_OBJS)
 	@touch $@
 	@echo "  $$(wc -l < $@) game header functions defined in several objects, made weak"
 
+$(TRAINER_AI_O): $(GAME)/src/battle/trainer_ai/script.s $(GAME_GENERATED)
+	@mkdir -p $(dir $@)
+	@echo "  GAME AS battle/trainer_ai/script.s"
+	@$(CC) $(filter -m%,$(PORT_CFLAGS)) -I$(GAME)/include -I$(GAME)/asm -I$(CONSTANTS_DIR) \
+	    -x assembler-with-cpp -c $< -o $@
+
 # The game's libraries: same flags, plus their own private headers (src/).
-$(OUT)/lib/%.o: $(GAME)/lib/%.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(NETWORK_STAMP) | libnitrosystem
+$(OUT)/lib/%.o: $(GAME)/lib/%.c $(NNS_INLINE_SYMS) $(GAME_GENERATED) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@echo "  GAME CC lib/$*.c"
 	@$(CC) $(GAME_CFLAGS) -I$(dir $<) -c $< -o $@
 	@$(WEAKEN_NNS_INLINE)
 
-$(LIB): $(GAME_HEADER_DEFS)
+# Stand-ins for the Wi-Fi SDK functions the game calls (online play isn't
+# ported): every DWC_, PPW_, VCT_, WVR_ ... symbol the game objects use and
+# none defines, made from `nm` after compiling (tools/make_game_wifi_stubs.py).
+WIFI_STUBS_C := $(OUT)/gen/wifi_stubs.c
+WIFI_STUBS_O := $(OUT)/gen/wifi_stubs.o
+
+# After the weak-symbol step, which touches every object (so depending on
+# the objects themselves would redo this on every make).
+$(WIFI_STUBS_C): $(GAME_HEADER_DEFS) $(ROOT)/tools/make_game_wifi_stubs.py
+	@python3 $(ROOT)/tools/make_game_wifi_stubs.py --nm $(NM) --output $@ \
+	    --headers $(NETWORK_DIR) $(GAME)/lib/ppwlobby $(SDK)/include/nitro \
+	    --sources $(NETWORK_DIR)/NitroDWC $(NETWORK_DIR)/NitroWiFi $(GAME)/lib/ppwlobby -- $(GAME_OBJS)
+	@touch $@
+
+$(WIFI_STUBS_O): $(WIFI_STUBS_C)
+	@$(CC) $(PORT_CFLAGS) $(SDK_INCLUDES) -c $< -o $@
+
+$(LIB): $(GAME_HEADER_DEFS) $(WIFI_STUBS_O)
 	@rm -f $@
-	@$(AR) rcs $@ $(GAME_OBJS)
+	@$(AR) rcs $@ $(GAME_OBJS) $(WIFI_STUBS_O)
 	@echo "built $@ ($(words $(GAME_SRCS)) of $(words $(GAME_ALL_SRCS)) game C files, and lib/$(subst $(eval) ,+,$(GAME_LIBS)))"
+
+# The overlay ID symbols Nintendo's linker made from the linker spec
+# (SDK_OVERLAY_<name>_ID at the overlay's number). Every program that links
+# the game passes this file to the linker.
+OVERLAY_IDS := $(ROOT)/build/game-link/overlay_ids.ld
+
+$(OVERLAY_IDS): $(GAME)/platinum.us/main.lsf $(ROOT)/tools/prepare_game_overlay_ids.py
+	@python3 $(ROOT)/tools/prepare_game_overlay_ids.py --lsf $< --output $@
 
 # Independent host tests exercise the ORIGINAL game functions linked against
 # NitroSystem and NitroSDK, without any ROM or copyrighted game data.
 TEST_BIN := $(OUT)/test_game
 
-$(TEST_OBJ): tests/test_game.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(NETWORK_STAMP) | libnitrosystem
+$(TEST_OBJ): tests/test_game.c $(NNS_INLINE_SYMS) $(GAME_GENERATED) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
 	@$(WEAKEN_NNS_INLINE)
 
-$(TEST_BIN): $(TEST_OBJ) $(LIB) $(LIBNNS) $(LIBNITRO)
+$(TEST_BIN): $(TEST_OBJ) $(LIB) $(LIBNNS) $(LIBNITRO) $(OVERLAY_IDS)
 	@$(CC) $(LDFLAGS) -Wl,--gc-sections -Wl,--wrap=ErrorHandling_AssertFail $(OUT)/tests/test_game.o \
-	    -Wl,--start-group $(LIB) $(LIBNNS) $(LIBNITRO) -Wl,--end-group -lm -o $@
+	    -Wl,--start-group $(LIB) $(LIBNNS) $(LIBNITRO) -Wl,--end-group -lm $(OVERLAY_IDS) -o $@
 
 ifeq ($(IS_HOST),yes)
 test: $(TEST_BIN)
@@ -270,6 +322,7 @@ endif
 # Link the whole game from NitroMain and report every symbol still missing
 # (tools/game_link_report.py). A to-do list, not a gate: always succeeds.
 LINK_CHECK_OBJ := $(OUT)/link/link_check.o
+
 LINK_REPORT := $(ROOT)/build/game-link-report/$(TARGET).md
 DEVKITPRO ?= /opt/devkitpro
 ifeq ($(TARGET),3ds)
@@ -284,11 +337,11 @@ $(LINK_CHECK_OBJ): link/link_check.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(PORT_CFLAGS) -c $< -o $@
 
-link-check: $(LINK_CHECK_OBJ) $(LIB) $(LIBNNS) $(LIBNITRO)
+link-check: $(LINK_CHECK_OBJ) $(LIB) $(LIBNNS) $(LIBNITRO) $(OVERLAY_IDS)
 	@mkdir -p $(dir $(LINK_REPORT))
 	@$(CC) $(LDFLAGS) $(LINK_CHECK_LDFLAGS) -Wl,--gc-sections $(LINK_CHECK_OBJ) \
 	    -Wl,--start-group $(LIB) $(LIBNNS) $(LIBNITRO) -Wl,--end-group $(LINK_CHECK_LIBS) -lm \
-	    -o $(OUT)/link/platinum.elf > $(OUT)/link/linker.txt 2>&1 || true
+	    $(OVERLAY_IDS) -o $(OUT)/link/platinum.elf > $(OUT)/link/linker.txt 2>&1 || true
 	@python3 $(ROOT)/tools/game_link_report.py $(OUT)/link/linker.txt --target $(TARGET) --output $(LINK_REPORT)
 	@echo "Report: $(LINK_REPORT)"
 
@@ -302,7 +355,7 @@ PROBE_REPORT := $(ROOT)/build/game-compile-survey/$(TARGET).json
 
 GAME_PROBE_CFLAGS := $(GAME_CFLAGS)
 
-probe: $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(NETWORK_STAMP) | libnitrosystem
+probe: $(GAME_GENERATED) | libnitrosystem
 	@python3 $(ROOT)/tools/probe_game_compile.py \
 	    --source-dir="$(GAME)/src" \
 	    --compiler="$(CC)" \
