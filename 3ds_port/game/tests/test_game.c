@@ -23,6 +23,7 @@
 #include "game_options.h"
 #include "berry_data.h"
 #include "poffin_types.h"
+#include "badges.h" /* Original badge IDs are generated/badges.h. */
 #include "generated/abilities.h"
 #include "generated/species.h"
 #include "generated/move_flags.h"
@@ -473,6 +474,10 @@ int main(void)
     CHECK(MovesUsedInBattle_Text_pound_Foe == 5);
     CHECK(MovesUsedInBattle_Text_shadow_force_Foe == 1403);
     CHECK(TEXT_BANK_MOVES_USED_IN_BATTLE_ENTRY_COUNT == 1404);
+    /* The legacy badges.h include must expose Metang's original enum IDs. */
+    CHECK(BADGE_ID_COAL == 0);
+    CHECK(BADGE_ID_BEACON == 7);
+    CHECK(MAX_BADGES == 8);
     /* Original speciesproc follows SPECIES_NONE..SPECIES_BAD_EGG order.
      * Names and descriptions are not emitted into our generated headers. */
     CHECK(species_name_none == 0);
