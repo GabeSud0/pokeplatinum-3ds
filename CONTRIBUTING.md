@@ -24,19 +24,24 @@ file types, but check the list of changed files before every commit. If a
    possible.
 5. **Merge.** The repository owner merges after testing.
 
-## Changing the decompilation
+## Changing the decompilation or the SDK
 
-The pret/pokeplatinum code is never committed directly. To change it:
+pret/pokeplatinum, NitroSDK and NitroSystem are never committed here directly.
+`tools/bootstrap.py` downloads them into `build/upstream`, `build/NitroSDK` and
+`build/NitroSystem`, and applies our patches from `patches/pokeplatinum/`,
+`patches/NitroSDK/` and `patches/NitroSystem/`. To change one of them:
 
 ```sh
-python tools/bootstrap.py --clean       # fresh copy with existing patches
-cd build/upstream
-# ... edit, then commit inside build/upstream ...
-git format-patch -1 -o ../../patches/pokeplatinum/
+python tools/bootstrap.py --clean       # fresh copies with existing patches
+cd build/NitroSDK                       # or build/upstream, build/NitroSystem
+git add -A && git commit -m "Existing patches"   # so your change stands alone
+# ... edit, then commit ...
+git format-patch -1 -o ../../patches/NitroSDK/
 ```
 
-Then rename the new file to the next number (`0003-…patch`) and commit it in
-this repository. Keep each patch focused on one change.
+Rename the new file to the next number (`0005-…patch`) and commit it in this
+repository. Keep each patch focused on one change, and wrap changes to SDK
+behaviour in `#ifdef SDK_PORT_3DS` so the original build still works.
 
 ## Code style
 

@@ -19,7 +19,9 @@ the same engine, so most of the 3DS backend should carry over.
 
 > **Status:** Phase 1. Toolchain working (stereoscopic test app runs in
 > Azahar); DS hardware layer mapped in
-> [`docs/HARDWARE_LAYER.md`](docs/HARDWARE_LAYER.md). Nothing playable yet.
+> [`docs/HARDWARE_LAYER.md`](docs/HARDWARE_LAYER.md); NitroSDK's math and
+> memory libraries build with GCC and pass their tests
+> ([`3ds_port/nitro`](3ds_port/nitro)). Nothing playable yet.
 
 ## This repository contains no game content
 
@@ -85,8 +87,10 @@ tab), and the `.3dsx` can be downloaded from the run.
 python tools/bootstrap.py
 ```
 
-This downloads pret/pokeplatinum at the pinned commit into `build/upstream/`
-and applies every patch in `patches/pokeplatinum/`. To build the original DS
+This downloads pret/pokeplatinum at the pinned commit into `build/upstream/`,
+plus the NitroSDK and NitroSystem decompilations it uses into
+`build/NitroSDK/` and `build/NitroSystem/`, and applies our patches from
+`patches/`. To build the original DS
 ROM from it (a good sanity check), follow pret's
 [INSTALL.md](https://github.com/pret/pokeplatinum/blob/main/INSTALL.md) inside
 `build/upstream/`.
@@ -116,10 +120,12 @@ and [`AI_DISCLOSURE.md`](AI_DISCLOSURE.md) for how AI assistance is used.
 ## Repository layout
 
 ```
-3ds_port/        3DS-side code (hello3d test app now, the real backend later)
+3ds_port/        3DS-side code
+  hello3d/       toolchain test app (stereoscopic cube)
+  nitro/         NitroSDK built with GCC, plus PC unit tests
 builder/         turns the player's own ROM into the data pack (Python)
 docs/            roadmap and design notes
-patches/         changes applied on top of the pinned decompilation
+patches/         changes applied on top of the decompilation and SDKs
 tools/           bootstrap and helper scripts (Python)
 LICENSE          GPL-3.0, for this project's own code
 upstream.lock    the exact pret/pokeplatinum commit we build against

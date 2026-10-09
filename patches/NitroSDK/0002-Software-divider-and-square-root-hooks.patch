@@ -1,0 +1,114 @@
+From 3fcfeb2cc3edbf7315effef8b2932622a0814a5a Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 19:54:51 -0700
+Subject: [PATCH 2/4] Software divider and square root hooks
+
+With SDK_PORT_3DS, every write to the divider or square-root registers calls into the port, which computes the result immediately.
+---
+ include/nitro/cp/divider.h | 13 +++++++++++++
+ include/nitro/cp/sqrt.h    | 14 ++++++++++++++
+ 2 files changed, 27 insertions(+)
+
+diff --git a/include/nitro/cp/divider.h b/include/nitro/cp/divider.h
+index 1407a4e..8cbfc4f 100644
+--- a/include/nitro/cp/divider.h
++++ b/include/nitro/cp/divider.h
+@@ -7,6 +7,15 @@ extern "C" {
+ 
+ #include <nitro/ioreg.h>
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: there is no hardware divider chip, so the result registers are
++ * recalculated in software after every write (3ds_port/nitro/src/port_cp.c). */
++void CPi_PortUpdateDiv(void);
++#define CPi_PORT_DIV_WRITTEN() CPi_PortUpdateDiv()
++#else
++#define CPi_PORT_DIV_WRITTEN() ((void)0)
++#endif
++
+ #define CP_DIV_32_32BIT_MODE    (0UL << REG_CP_DIVCNT_MODE_SHIFT)
+ #define CP_DIV_64_32BIT_MODE    (1UL << REG_CP_DIVCNT_MODE_SHIFT)
+ #define CP_DIV_64_64BIT_MODE    (2UL << REG_CP_DIVCNT_MODE_SHIFT)
+@@ -14,24 +23,28 @@ extern "C" {
+ static inline void CP_SetDivControl (u16 parameter)
+ {
+ 	reg_CP_DIVCNT = parameter;
++	CPi_PORT_DIV_WRITTEN();
+ }
+ 
+ static inline void CP_SetDivImm32_32_NS_ (u32 numer, u32 denom)
+ {
+ 	*(REGType32 *)REG_DIV_NUMER_ADDR = numer;
+ 	*(REGType64 *)REG_DIV_DENOM_ADDR = denom;
++	CPi_PORT_DIV_WRITTEN();
+ }
+ 
+ static inline void CP_SetDivImm64_32_NS_ (u64 numer, u32 denom)
+ {
+ 	*(REGType64 *)REG_DIV_NUMER_ADDR = numer;
+ 	*(REGType64 *)REG_DIV_DENOM_ADDR = denom;
++	CPi_PORT_DIV_WRITTEN();
+ }
+ 
+ static inline void CP_SetDivImm64_64_NS_ (u64 numer, u64 denom)
+ {
+ 	*(REGType64 *)REG_DIV_NUMER_ADDR = numer;
+ 	*(REGType64 *)REG_DIV_DENOM_ADDR = denom;
++	CPi_PORT_DIV_WRITTEN();
+ }
+ 
+ static inline void CP_SetDivImm32_32 (u32 numer, u32 denom)
+diff --git a/include/nitro/cp/sqrt.h b/include/nitro/cp/sqrt.h
+index 40ea648..e700498 100644
+--- a/include/nitro/cp/sqrt.h
++++ b/include/nitro/cp/sqrt.h
+@@ -7,32 +7,46 @@ extern "C" {
+ 
+ #include <nitro/cp/context.h>
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: there is no hardware square-root chip, so the result registers are
++ * recalculated in software after every write (3ds_port/nitro/src/port_cp.c). */
++void CPi_PortUpdateSqrt(void);
++#define CPi_PORT_SQRT_WRITTEN() CPi_PortUpdateSqrt()
++#else
++#define CPi_PORT_SQRT_WRITTEN() ((void)0)
++#endif
++
+ #define CP_SQRT_32BIT_MODE    (0UL << REG_CP_SQRTCNT_MODE_SHIFT)
+ #define CP_SQRT_64BIT_MODE    (1UL << REG_CP_SQRTCNT_MODE_SHIFT)
+ 
+ static inline void CP_SetSqrtControl (u16 param)
+ {
+ 	reg_CP_SQRTCNT = param;
++	CPi_PORT_SQRT_WRITTEN();
+ }
+ 
+ static inline void CP_SetSqrtImm64_NS_ (u64 param)
+ {
+ 	*((REGType64 *)REG_SQRT_PARAM_ADDR) = param;
++	CPi_PORT_SQRT_WRITTEN();
+ }
+ 
+ static inline void CP_SetSqrtImm32_NS_ (u32 param)
+ {
+ 	*((REGType32 *)REG_SQRT_PARAM_ADDR) = param;
++	CPi_PORT_SQRT_WRITTEN();
+ }
+ 
+ static inline void CP_SetSqrtImm64 (u64 param)
+ {
+ 	*((REGType64 *)REG_SQRT_PARAM_ADDR) = param;
++	CPi_PORT_SQRT_WRITTEN();
+ }
+ 
+ static inline void CP_SetSqrtImm32 (u32 param)
+ {
+ 	*((REGType32 *)REG_SQRT_PARAM_ADDR) = param;
++	CPi_PORT_SQRT_WRITTEN();
+ }
+ 
+ static inline void CP_SetSqrt64 (u64 param)
+-- 
+2.43.0
+

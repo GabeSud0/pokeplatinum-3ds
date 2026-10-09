@@ -307,6 +307,9 @@ This refines Phases 2 and 3 of the [roadmap](ROADMAP.md):
 1. **Get the game, NitroSDK and NitroSystem compiling for the 3DS**, with
    hardware functions as loud stubs ("not implemented: G2_SetBlendAlpha"). No
    graphics yet; the success test is reaching the main loop.
+   *In progress:* NitroSDK's math and memory libraries are done, with the
+   virtual register block and the software divider
+   ([`3ds_port/nitro`](../3ds_port/nitro)).
 2. **Files:** builder extracts the filesystem; `FS_*` reads from the SD card.
 3. **Overlays:** link everything, reset overlay data on load.
 4. **Virtual registers, VRAM and OAM.**

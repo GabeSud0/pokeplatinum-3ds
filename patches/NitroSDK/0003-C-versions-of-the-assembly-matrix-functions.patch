@@ -1,0 +1,663 @@
+From fa67525075364967ab2627873923d86def266660 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 19:54:51 -0700
+Subject: [PATCH 3/4] C versions of the assembly matrix functions
+
+Metrowerks inline assembly is kept for the original build; GCC gets equivalent C decoded from the assembly.
+---
+ libraries/fx/src/fx_mtx22.c |  40 ++++++++++++++-
+ libraries/fx/src/fx_mtx33.c |  96 +++++++++++++++++++++++++++++++++-
+ libraries/fx/src/fx_mtx43.c |  87 +++++++++++++++++++++++++++++++
+ libraries/fx/src/fx_mtx44.c | 100 +++++++++++++++++++++++++++++++++++-
+ 4 files changed, 320 insertions(+), 3 deletions(-)
+
+diff --git a/libraries/fx/src/fx_mtx22.c b/libraries/fx/src/fx_mtx22.c
+index ce669bf..9b2e48d 100644
+--- a/libraries/fx/src/fx_mtx22.c
++++ b/libraries/fx/src/fx_mtx22.c
+@@ -2,13 +2,14 @@
+ #include <nitro/fx/fx_const.h>
+ #include <nitro/fx/fx_cp.h>
+ 
+-inline fx32 mul64 (fx64 x, fx32 y)
++static inline fx32 mul64 (fx64 x, fx32 y)
+ {
+ 	return (fx32)((x * y) >> FX32_SHIFT);
+ }
+ 
+ #include <nitro/code32.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Identity22_ (register MtxFx22 *pDst)
+ {
+ 	mov r1, #0
+@@ -18,7 +19,16 @@ asm void MTX_Identity22_ (register MtxFx22 *pDst)
+ 	stmia r0 !, {r1, r2}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Identity22_ (MtxFx22 *pDst)
++{
++	pDst->_00 = FX32_ONE; pDst->_01 = 0;
++	pDst->_10 = 0;        pDst->_11 = FX32_ONE;
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Transpose22_ (const register MtxFx22 *pSrc, register MtxFx22 *pDst)
+ {
+ 	stmfd sp !, {r4}
+@@ -28,9 +38,20 @@ asm void MTX_Transpose22_ (const register MtxFx22 *pSrc, register MtxFx22 *pDst)
+ 	ldmfd sp !, {r4}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Transpose22_ (const MtxFx22 *pSrc, MtxFx22 *pDst)
++{
++	MtxFx22 s = *pSrc;
++
++	pDst->_00 = s._00; pDst->_01 = s._10;
++	pDst->_10 = s._01; pDst->_11 = s._11;
++}
++#endif
+ 
+ #include <nitro/code16.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Scale22_ (register MtxFx22 *pDst, register fx32 x, register fx32 y)
+ {
+ 	stmia r0 !, {r1}
+@@ -40,7 +61,16 @@ asm void MTX_Scale22_ (register MtxFx22 *pDst, register fx32 x, register fx32 y)
+ 	stmia r0 !, {r1, r2}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Scale22_ (MtxFx22 *pDst, fx32 x, fx32 y)
++{
++	pDst->_00 = x; pDst->_01 = 0;
++	pDst->_10 = 0; pDst->_11 = y;
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Rot22_ (register MtxFx22 *pDst, register fx32 sinVal, register fx32 cosVal)
+ {
+ 	str r2, [r0, #0]
+@@ -50,6 +80,14 @@ asm void MTX_Rot22_ (register MtxFx22 *pDst, register fx32 sinVal, register fx32
+ 	str r2, [r0, #12]
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Rot22_ (MtxFx22 *pDst, fx32 sinVal, fx32 cosVal)
++{
++	pDst->_00 = cosVal;  pDst->_01 = sinVal;
++	pDst->_10 = -sinVal; pDst->_11 = cosVal;
++}
++#endif
+ 
+ #include <nitro/codereset.h>
+ 
+diff --git a/libraries/fx/src/fx_mtx33.c b/libraries/fx/src/fx_mtx33.c
+index 0b7cffb..a14b621 100644
+--- a/libraries/fx/src/fx_mtx33.c
++++ b/libraries/fx/src/fx_mtx33.c
+@@ -4,11 +4,12 @@
+ #include <nitro/fx/fx_const.h>
+ #include <nitro/fx/fx_cp.h>
+ 
+-inline fx32 mul64 (fx64 x, fx32 y)
++static inline fx32 mul64 (fx64 x, fx32 y)
+ {
+ 	return (fx32)((x * y) >> FX32_SHIFT);
+ }
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Identity33_ (register MtxFx33 *pDst)
+ {
+ 	mov r2, #4096
+@@ -21,7 +22,17 @@ asm void MTX_Identity33_ (register MtxFx33 *pDst)
+ 	stmia r0 !, {r1, r3}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Identity33_ (MtxFx33 *pDst)
++{
++	pDst->_00 = FX32_ONE; pDst->_01 = 0;        pDst->_02 = 0;
++	pDst->_10 = 0;        pDst->_11 = FX32_ONE; pDst->_12 = 0;
++	pDst->_20 = 0;        pDst->_21 = 0;        pDst->_22 = FX32_ONE;
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Copy33To43_ (const register MtxFx33 *pSrc, register MtxFx43 *pDst)
+ {
+ 	ldmia r0 !, {r2 - r3, r12}
+@@ -36,7 +47,20 @@ asm void MTX_Copy33To43_ (const register MtxFx33 *pSrc, register MtxFx43 *pDst)
+ 	str r2, [r1, #8]
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Copy33To43_ (const MtxFx33 *pSrc, MtxFx43 *pDst)
++{
++	int i;
++
++	for (i = 0; i < 9; i++) {
++		pDst->a[i] = pSrc->a[i];
++	}
++	pDst->_30 = 0; pDst->_31 = 0; pDst->_32 = 0;
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Copy33To44_ (const register MtxFx33 *pSrc, register MtxFx44 *pDst)
+ {
+ 	stmfd sp !, {r4}
+@@ -55,7 +79,23 @@ asm void MTX_Copy33To44_ (const register MtxFx33 *pSrc, register MtxFx44 *pDst)
+ 	ldmfd sp !, {r4}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Copy33To44_ (const MtxFx33 *pSrc, MtxFx44 *pDst)
++{
++	int r, c;
+ 
++	for (r = 0; r < 3; r++) {
++		for (c = 0; c < 3; c++) {
++			pDst->m[r][c] = pSrc->m[r][c];
++		}
++		pDst->m[r][3] = 0;
++	}
++	pDst->_30 = 0; pDst->_31 = 0; pDst->_32 = 0; pDst->_33 = FX32_ONE;
++}
++#endif
++
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Transpose33_ (const register MtxFx33 *pSrc, register MtxFx33 *pDst)
+ {
+ 	stmfd sp !, {r4 - r9}
+@@ -66,9 +106,24 @@ asm void MTX_Transpose33_ (const register MtxFx33 *pSrc, register MtxFx33 *pDst)
+ 	ldmfd sp !, {r4 - r9}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Transpose33_ (const MtxFx33 *pSrc, MtxFx33 *pDst)
++{
++	MtxFx33 s = *pSrc;
++	int r, c;
++
++	for (r = 0; r < 3; r++) {
++		for (c = 0; c < 3; c++) {
++			pDst->m[r][c] = s.m[c][r];
++		}
++	}
++}
++#endif
+ 
+ #include <nitro/code16.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Scale33_ (register MtxFx33 *pDst, register fx32 x, register fx32 y, register fx32 z)
+ {
+ 	stmia r0 !, {r1}
+@@ -81,6 +136,15 @@ asm void MTX_Scale33_ (register MtxFx33 *pDst, register fx32 x, register fx32 y,
+ 	stmia r0 !, {r1, r3}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Scale33_ (MtxFx33 *pDst, fx32 x, fx32 y, fx32 z)
++{
++	pDst->_00 = x; pDst->_01 = 0; pDst->_02 = 0;
++	pDst->_10 = 0; pDst->_11 = y; pDst->_12 = 0;
++	pDst->_20 = 0; pDst->_21 = 0; pDst->_22 = z;
++}
++#endif
+ 
+ #include <nitro/code32.h>
+ 
+@@ -109,6 +173,7 @@ void MTX_ScaleApply33 (const MtxFx33 *pSrc, MtxFx33 *pDst, fx32 x, fx32 y, fx32
+ 
+ #include <nitro/code16.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_RotX33_ (register MtxFx33 *pDst, register fx32 sinVal, register fx32 cosVal)
+ {
+ 	mov r3, #1
+@@ -126,10 +191,20 @@ asm void MTX_RotX33_ (register MtxFx33 *pDst, register fx32 sinVal, register fx3
+ 	str r2, [r0, #32]
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_RotX33_ (MtxFx33 *pDst, fx32 sinVal, fx32 cosVal)
++{
++	pDst->_00 = FX32_ONE; pDst->_01 = 0;       pDst->_02 = 0;
++	pDst->_10 = 0;        pDst->_11 = cosVal;  pDst->_12 = sinVal;
++	pDst->_20 = 0;        pDst->_21 = -sinVal; pDst->_22 = cosVal;
++}
++#endif
+ 
+ #include <nitro/code32.h>
+ #include <nitro/code16.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_RotY33_ (register MtxFx33 *pDst, register fx32 sinVal, register fx32 cosVal)
+ {
+ 	str r2, [r0, #0]
+@@ -147,10 +222,20 @@ asm void MTX_RotY33_ (register MtxFx33 *pDst, register fx32 sinVal, register fx3
+ 	str r3, [r0, #16]
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_RotY33_ (MtxFx33 *pDst, fx32 sinVal, fx32 cosVal)
++{
++	pDst->_00 = cosVal; pDst->_01 = 0;        pDst->_02 = -sinVal;
++	pDst->_10 = 0;      pDst->_11 = FX32_ONE; pDst->_12 = 0;
++	pDst->_20 = sinVal; pDst->_21 = 0;        pDst->_22 = cosVal;
++}
++#endif
+ 
+ #include <nitro/code32.h>
+ #include <nitro/code16.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_RotZ33_ (register MtxFx33 *pDst, register fx32 sinVal, register fx32 cosVal)
+ {
+ 	stmia r0 !, {r2}
+@@ -166,6 +251,15 @@ asm void MTX_RotZ33_ (register MtxFx33 *pDst, register fx32 sinVal, register fx3
+ 	str r1, [r0, #12]
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_RotZ33_ (MtxFx33 *pDst, fx32 sinVal, fx32 cosVal)
++{
++	pDst->_00 = cosVal;  pDst->_01 = sinVal; pDst->_02 = 0;
++	pDst->_10 = -sinVal; pDst->_11 = cosVal; pDst->_12 = 0;
++	pDst->_20 = 0;       pDst->_21 = 0;      pDst->_22 = FX32_ONE;
++}
++#endif
+ 
+ #include <nitro/code32.h>
+ 
+diff --git a/libraries/fx/src/fx_mtx43.c b/libraries/fx/src/fx_mtx43.c
+index fa4df5c..49a0d00 100644
+--- a/libraries/fx/src/fx_mtx43.c
++++ b/libraries/fx/src/fx_mtx43.c
+@@ -6,6 +6,7 @@
+ #include <nitro/fx/fx_cp.h>
+ #include <nitro/mi/memory.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Identity43_ (register MtxFx43 *pDst)
+ {
+ 	mov r2, #4096
+@@ -19,7 +20,18 @@ asm void MTX_Identity43_ (register MtxFx43 *pDst)
+ 	stmia r0 !, {r1, r3}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Identity43_ (MtxFx43 *pDst)
++{
++	pDst->_00 = FX32_ONE; pDst->_01 = 0;        pDst->_02 = 0;
++	pDst->_10 = 0;        pDst->_11 = FX32_ONE; pDst->_12 = 0;
++	pDst->_20 = 0;        pDst->_21 = 0;        pDst->_22 = FX32_ONE;
++	pDst->_30 = 0;        pDst->_31 = 0;        pDst->_32 = 0;
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Copy43To44_ (register const MtxFx43 *pSrc, register MtxFx44 *pDst)
+ {
+ 	stmfd sp !, {r4}
+@@ -36,7 +48,22 @@ asm void MTX_Copy43To44_ (register const MtxFx43 *pSrc, register MtxFx44 *pDst)
+ 	ldmfd sp !, {r4}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Copy43To44_ (const MtxFx43 *pSrc, MtxFx44 *pDst)
++{
++	int r, c;
+ 
++	for (r = 0; r < 4; r++) {
++		for (c = 0; c < 3; c++) {
++			pDst->m[r][c] = pSrc->m[r][c];
++		}
++		pDst->m[r][3] = (r == 3) ? FX32_ONE : 0;
++	}
++}
++#endif
++
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Transpose43_ (register const MtxFx43 *pSrc, register MtxFx43 *pDst)
+ {
+ 	stmfd sp !, {r4 - r9}
+@@ -51,6 +78,22 @@ asm void MTX_Transpose43_ (register const MtxFx43 *pSrc, register MtxFx43 *pDst)
+ 	ldmfd sp !, {r4 - r9}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Transpose43_ (const MtxFx43 *pSrc, MtxFx43 *pDst)
++{
++	MtxFx43 s = *pSrc;
++	int r, c;
++
++	/* Transposes the 3x3 part; the translation row becomes zero. */
++	for (r = 0; r < 3; r++) {
++		for (c = 0; c < 3; c++) {
++			pDst->m[r][c] = s.m[c][r];
++		}
++	}
++	pDst->_30 = 0; pDst->_31 = 0; pDst->_32 = 0;
++}
++#endif
+ 
+ void MTX_TransApply43 (const MtxFx43 *pSrc, MtxFx43 *pDst, fx32 x, fx32 y, fx32 z)
+ {
+@@ -74,6 +117,7 @@ void MTX_TransApply43 (const MtxFx43 *pSrc, MtxFx43 *pDst, fx32 x, fx32 y, fx32
+ 
+ #include <nitro/code16.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Scale43_ (register MtxFx43 *pDst, register fx32 x, register fx32 y, register fx32 z)
+ {
+ 	stmia r0 !, {r1}
+@@ -88,6 +132,16 @@ asm void MTX_Scale43_ (register MtxFx43 *pDst, register fx32 x, register fx32 y,
+ 	stmia r0 !, {r1, r2, r3}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Scale43_ (MtxFx43 *pDst, fx32 x, fx32 y, fx32 z)
++{
++	pDst->_00 = x; pDst->_01 = 0; pDst->_02 = 0;
++	pDst->_10 = 0; pDst->_11 = y; pDst->_12 = 0;
++	pDst->_20 = 0; pDst->_21 = 0; pDst->_22 = z;
++	pDst->_30 = 0; pDst->_31 = 0; pDst->_32 = 0;
++}
++#endif
+ 
+ #include <nitro/code32.h>
+ 
+@@ -102,6 +156,7 @@ void MTX_ScaleApply43 (const MtxFx43 *pSrc, MtxFx43 *pDst, fx32 x, fx32 y, fx32
+ 
+ #include <nitro/code16.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_RotX43_ (register MtxFx43 *pDst, register fx32 sinVal, register fx32 cosVal)
+ {
+ 	str r1, [r0, #20]
+@@ -120,10 +175,21 @@ asm void MTX_RotX43_ (register MtxFx43 *pDst, register fx32 sinVal, register fx3
+ 	stmia r0 !, {r1, r3}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_RotX43_ (MtxFx43 *pDst, fx32 sinVal, fx32 cosVal)
++{
++	pDst->_00 = FX32_ONE; pDst->_01 = 0;       pDst->_02 = 0;
++	pDst->_10 = 0;        pDst->_11 = cosVal;  pDst->_12 = sinVal;
++	pDst->_20 = 0;        pDst->_21 = -sinVal; pDst->_22 = cosVal;
++	pDst->_30 = 0;        pDst->_31 = 0;       pDst->_32 = 0;
++}
++#endif
+ 
+ #include <nitro/code32.h>
+ #include <nitro/code16.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_RotY43_ (register MtxFx43 *pDst, register fx32 sinVal, register fx32 cosVal)
+ {
+ 	str r1, [r0, #24]
+@@ -140,10 +206,21 @@ asm void MTX_RotY43_ (register MtxFx43 *pDst, register fx32 sinVal, register fx3
+ 	stmia r0 !, {r1, r3}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_RotY43_ (MtxFx43 *pDst, fx32 sinVal, fx32 cosVal)
++{
++	pDst->_00 = cosVal; pDst->_01 = 0;        pDst->_02 = -sinVal;
++	pDst->_10 = 0;      pDst->_11 = FX32_ONE; pDst->_12 = 0;
++	pDst->_20 = sinVal; pDst->_21 = 0;        pDst->_22 = cosVal;
++	pDst->_30 = 0;      pDst->_31 = 0;        pDst->_32 = 0;
++}
++#endif
+ 
+ #include <nitro/code32.h>
+ #include <nitro/code16.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_RotZ43_ (register MtxFx43 *pDst, register fx32 sinVal, register fx32 cosVal)
+ {
+ 	stmia r0 !, {r2}
+@@ -160,6 +237,16 @@ asm void MTX_RotZ43_ (register MtxFx43 *pDst, register fx32 sinVal, register fx3
+ 	stmia r0 !, {r1, r2, r3}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_RotZ43_ (MtxFx43 *pDst, fx32 sinVal, fx32 cosVal)
++{
++	pDst->_00 = cosVal;  pDst->_01 = sinVal; pDst->_02 = 0;
++	pDst->_10 = -sinVal; pDst->_11 = cosVal; pDst->_12 = 0;
++	pDst->_20 = 0;       pDst->_21 = 0;      pDst->_22 = FX32_ONE;
++	pDst->_30 = 0;       pDst->_31 = 0;      pDst->_32 = 0;
++}
++#endif
+ 
+ #include <nitro/code32.h>
+ 
+diff --git a/libraries/fx/src/fx_mtx44.c b/libraries/fx/src/fx_mtx44.c
+index c0dd6aa..71ffbd9 100644
+--- a/libraries/fx/src/fx_mtx44.c
++++ b/libraries/fx/src/fx_mtx44.c
+@@ -5,11 +5,12 @@
+ #include <nitro/fx/fx_cp.h>
+ #include <nitro/mi/memory.h>
+ 
+-inline fx32 mul64 (fx64 x, fx32 y)
++static inline fx32 mul64 (fx64 x, fx32 y)
+ {
+ 	return (fx32)((x * y) >> FX32_SHIFT);
+ }
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Identity44_ (register MtxFx44 *pDst)
+ {
+ 	mov r2, #4096
+@@ -24,7 +25,21 @@ asm void MTX_Identity44_ (register MtxFx44 *pDst)
+ 	stmia r0 !, {r1, r2}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Identity44_ (MtxFx44 *pDst)
++{
++	int r, c;
+ 
++	for (r = 0; r < 4; r++) {
++		for (c = 0; c < 4; c++) {
++			pDst->m[r][c] = (r == c) ? FX32_ONE : 0;
++		}
++	}
++}
++#endif
++
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Copy44To33_ (register const MtxFx44 *pSrc, register MtxFx33 *pDst)
+ {
+ 	ldmia r0 !, {r2 - r3, r12}
+@@ -38,7 +53,21 @@ asm void MTX_Copy44To33_ (register const MtxFx44 *pSrc, register MtxFx33 *pDst)
+ 	stmia r1 !, {r2 - r3, r12}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Copy44To33_ (const MtxFx44 *pSrc, MtxFx33 *pDst)
++{
++	int r, c;
++
++	for (r = 0; r < 3; r++) {
++		for (c = 0; c < 3; c++) {
++			pDst->m[r][c] = pSrc->m[r][c];
++		}
++	}
++}
++#endif
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Copy44To43_ (register const MtxFx44 *pSrc, register MtxFx43 *pDst)
+ {
+ 	ldmia r0 !, {r2 - r3, r12}
+@@ -55,6 +84,19 @@ asm void MTX_Copy44To43_ (register const MtxFx44 *pSrc, register MtxFx43 *pDst)
+ 	stmia r1 !, {r2 - r3, r12}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Copy44To43_ (const MtxFx44 *pSrc, MtxFx43 *pDst)
++{
++	int r, c;
++
++	for (r = 0; r < 4; r++) {
++		for (c = 0; c < 3; c++) {
++			pDst->m[r][c] = pSrc->m[r][c];
++		}
++	}
++}
++#endif
+ 
+ void MTX_TransApply44 (const MtxFx44 *pSrc, MtxFx44 *pDst, fx32 x, fx32 y, fx32 z)
+ {
+@@ -77,6 +119,7 @@ void MTX_TransApply44 (const MtxFx44 *pSrc, MtxFx44 *pDst, fx32 x, fx32 y, fx32
+ 	}
+ }
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Transpose44_ (register const MtxFx44 *pSrc, register MtxFx44 *pDst)
+ {
+ 	stmfd sp !, {r4 - r11}
+@@ -93,9 +136,24 @@ asm void MTX_Transpose44_ (register const MtxFx44 *pSrc, register MtxFx44 *pDst)
+ 	ldmfd sp !, {r4 - r11}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Transpose44_ (const MtxFx44 *pSrc, MtxFx44 *pDst)
++{
++	MtxFx44 s = *pSrc;
++	int r, c;
++
++	for (r = 0; r < 4; r++) {
++		for (c = 0; c < 4; c++) {
++			pDst->m[r][c] = s.m[c][r];
++		}
++	}
++}
++#endif
+ 
+ #include <nitro/code16.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_Scale44_ (register MtxFx44 *pDst, register fx32 x, register fx32 y, register fx32 z)
+ {
+ 	stmia r0 !, {r1}
+@@ -114,6 +172,16 @@ asm void MTX_Scale44_ (register MtxFx44 *pDst, register fx32 x, register fx32 y,
+ 	str r3, [r0, #0]
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_Scale44_ (MtxFx44 *pDst, fx32 x, fx32 y, fx32 z)
++{
++	MTX_Identity44_(pDst);
++	pDst->_00 = x;
++	pDst->_11 = y;
++	pDst->_22 = z;
++}
++#endif
+ 
+ #include <nitro/code32.h>
+ 
+@@ -161,6 +229,7 @@ void MTX_ScaleApply44 (const MtxFx44 *pSrc, MtxFx44 *pDst, fx32 x, fx32 y, fx32
+ 
+ #include <nitro/code16.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_RotX44_ (register MtxFx44 *pDst, register fx32 sinVal, register fx32 cosVal)
+ {
+ 	str r2, [r0, #20]
+@@ -182,10 +251,20 @@ asm void MTX_RotX44_ (register MtxFx44 *pDst, register fx32 sinVal, register fx3
+ 	str r1, [r0, #0]
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_RotX44_ (MtxFx44 *pDst, fx32 sinVal, fx32 cosVal)
++{
++	MTX_Identity44_(pDst);
++	pDst->_11 = cosVal;  pDst->_12 = sinVal;
++	pDst->_21 = -sinVal; pDst->_22 = cosVal;
++}
++#endif
+ 
+ #include <nitro/code32.h>
+ #include <nitro/code16.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_RotY44_ (register MtxFx44 *pDst, register fx32 sinVal, register fx32 cosVal)
+ {
+ 	str r2, [r0, #0]
+@@ -207,10 +286,20 @@ asm void MTX_RotY44_ (register MtxFx44 *pDst, register fx32 sinVal, register fx3
+ 	stmia r0 !, {r1, r2, r3}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_RotY44_ (MtxFx44 *pDst, fx32 sinVal, fx32 cosVal)
++{
++	MTX_Identity44_(pDst);
++	pDst->_00 = cosVal; pDst->_02 = -sinVal;
++	pDst->_20 = sinVal; pDst->_22 = cosVal;
++}
++#endif
+ 
+ #include <nitro/code32.h>
+ #include <nitro/code16.h>
+ 
++#if defined(SDK_CW) || defined(__MWERKS__)
+ asm void MTX_RotZ44_ (register MtxFx44 *pDst, register fx32 sinVal, register fx32 cosVal)
+ {
+ 	str r2, [r0, #0]
+@@ -231,6 +320,15 @@ asm void MTX_RotZ44_ (register MtxFx44 *pDst, register fx32 sinVal, register fx3
+ 	stmia r0 !, {r1, r2, r3}
+ 	bx lr
+ }
++#else
++/* C version for compilers without Metrowerks inline assembly. */
++void MTX_RotZ44_ (MtxFx44 *pDst, fx32 sinVal, fx32 cosVal)
++{
++	MTX_Identity44_(pDst);
++	pDst->_00 = cosVal;  pDst->_01 = sinVal;
++	pDst->_10 = -sinVal; pDst->_11 = cosVal;
++}
++#endif
+ 
+ #include <nitro/code32.h>
+ 
+-- 
+2.43.0
+
