@@ -11,6 +11,7 @@ import os
 import re
 import struct
 import tempfile
+from collections.abc import Collection
 from pathlib import Path
 
 MAGIC = b"PLATPAK\0"
@@ -93,12 +94,17 @@ def _load_manifest(root: Path) -> tuple[list[tuple[int, Path, int]], dict]:
 
 
 def pack(data_pack: Path, output: Path, *, build_id: str,
-         rom_sha1: str | None = None) -> None:
-    """Write a canonical v1 pack; use a temporary file to avoid partial output."""
+         rom_sha1: str | None = None,
+         supported: Collection[str] | None = None) -> None:
+    """Write a canonical v1 pack; use a temporary file to avoid partial output.
+
+    If `supported` is given, the ROM SHA-1 that would be written (from the
+    manifest or `rom_sha1`) must be one of those lowercase hex digests.
+    """
     root = Path(data_pack).resolve()
     entries, manifest = _load_manifest(root)
     header_build_id = _build_id_bytes(build_id)
-    manifest_sha1 = manifest.get("rom_sha1", manifest.get("source_rom_sha1"))
+    manifest_sha1 = manifest.get("rom_sha1")
     if manifest_sha1 is not None:
         manifest_digest = _sha1_bytes(manifest_sha1)
         if rom_sha1 is not None and _sha1_bytes(rom_sha1) != manifest_digest:
@@ -108,6 +114,8 @@ def pack(data_pack: Path, output: Path, *, build_id: str,
         digest = _sha1_bytes(rom_sha1)
     else:
         raise ValueError("manifest.json has no ROM SHA-1; provide --rom or --rom-sha1")
+    if supported is not None and digest.hex() not in supported:
+        raise ValueError("Unsupported ROM: run builder/verify_rom.py first")
 
     count = len(entries)
     if count > (MAX_U32 - HEADER.size) // ENTRY.size:
@@ -216,12 +224,9 @@ def main() -> int:
             from . import verify_rom
         except ImportError:
             import verify_rom
-        sha1 = args.rom_sha1.lower() if args.rom_sha1 else None
-        if args.rom is not None:
-            sha1 = verify_rom.sha1_of(args.rom)
-        if sha1 is not None and sha1 not in verify_rom.SUPPORTED:
-            raise ValueError("Unsupported ROM: run builder/verify_rom.py first")
-        pack(args.data_pack, args.output, build_id=args.build_id, rom_sha1=sha1)
+        sha1 = verify_rom.sha1_of(args.rom) if args.rom is not None else args.rom_sha1
+        pack(args.data_pack, args.output, build_id=args.build_id, rom_sha1=sha1,
+             supported=verify_rom.SUPPORTED)
     except (OSError, ValueError, UnicodeError) as exc:
         parser.exit(1, f"Packing failed: {exc}\n")
     print(f"Wrote {args.output}")
