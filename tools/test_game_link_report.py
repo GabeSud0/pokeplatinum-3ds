@@ -59,6 +59,14 @@ class GameLinkReportTests(unittest.TestCase):
         self.assertIn("## Other: 1", text)
         self.assertEqual(text.count("Blocked_Function"), 1)
 
+    def test_other_link_failures_are_reported(self):
+        self.linker.write_text("ld: cannot find -lctru: No such file or directory\n"
+                               "collect2: error: ld returned 1 exit status\n", encoding="utf-8")
+        text = self.run_report()
+        self.assertIn("failed for other reasons", text)
+        self.assertIn("cannot find -lctru", text)
+        self.assertNotIn("The whole game links.", text)
+
     def test_clean_link(self):
         self.linker.write_text("", encoding="utf-8")
         self.assertIn("The whole game links.", self.run_report())

@@ -76,7 +76,13 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
-    symbols = sorted(set(UNDEFINED.findall(args.linker_output.read_text(encoding="utf-8", errors="replace"))))
+    output = args.linker_output.read_text(encoding="utf-8", errors="replace")
+    symbols = sorted(set(UNDEFINED.findall(output)))
+    # Anything else the linker complained about (a missing library, a
+    # memory region overflow ...): the link failed for another reason.
+    other_errors = [line for line in output.splitlines()
+                    if re.search(r"\berror\b|cannot find|multiple definition|overflow", line, re.I)
+                    and not UNDEFINED.search(line) and "ld returned" not in line]
     in_blocked = definitions(blocked("blocked_sources.txt"))
     in_blocked_64 = definitions(blocked("blocked_sources_64bit.txt"))
     in_assembly = assembly_labels()
@@ -98,7 +104,10 @@ def main() -> int:
             groups["Other"].append(symbol)
 
     lines = [f"# Full game link: {len(symbols)} missing symbols ({args.target})", ""]
-    if not symbols:
+    if other_errors:
+        lines += [f"## The link failed for other reasons: {len(other_errors)} lines", "", "```"]
+        lines += other_errors[:40] + ["```", ""]
+    elif not symbols:
         lines.append("The whole game links.")
     for title, names in sorted(groups.items(), key=lambda kv: -len(kv[1])):
         lines += [f"## {title}: {len(names)}", ""]
@@ -115,6 +124,8 @@ def main() -> int:
         args.output.write_text(report, encoding="utf-8")
     summary = ", ".join(f"{len(v)} {k.split(' (')[0].lower()}" for k, v in groups.items())
     line = f"Full game link ({args.target}): {len(symbols)} missing symbols" + (f" — {summary}" if summary else "")
+    if other_errors:
+        line += f"; the link also failed for other reasons, first: {other_errors[0].strip()[:200]}"
     print(line)
     if os.environ.get("GITHUB_ACTIONS") == "true":
         # Shown on the run's summary page, next to the uploaded report.
