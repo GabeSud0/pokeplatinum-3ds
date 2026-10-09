@@ -75,11 +75,19 @@ the pinned `res/sound/pl_sound_data.json` list. This is **symbolic sound
 index metadata only**, not SDAT music/sound samples or a working sound
 runtime. The output stays in `build/game-resource-headers/res/sound/`.
 
-The NitroArc `res/graphics/**/*.order` manifests now produce
+The NitroArc `res/graphics/**/*.order` manifests produce
 **explicit graphics member indices** as `.naix` headers in the same
-ignored resource-header output directory. This does not generate graphics
-resources or archive contents. Implicit (unlisted) member indices and the
-full archive count cannot be inferred from the source-only manifests;
+ignored resource-header output directory. The generator also follows the
+three *exact pinned Meson* archive mappings that do not fit the default
+graphics-name layout:
+
+- `res/graphics/pokedex/pokedex.order` → `res/graphics/pokedex/zukan.naix`
+- `res/trainers/classes/field_encounteffect.order` → its same-stem `.naix`
+- `res/battle/scripts/subscripts/sub_seq.order` → `res/battle/scripts/sub_seq.naix`
+
+The index generator reads only these explicit member names and ordering;
+it does not generate graphics, battle scripts, or NARC archives. The
+implicit (unlisted) member indices and full archive count are not inferred;
 see [the compiler survey](../../docs/GAME_COMPILE_SURVEY.md).
 
 The default Make target is explicitly `all`. CI requests `test` on
