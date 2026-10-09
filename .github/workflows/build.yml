@@ -34,7 +34,14 @@ jobs:
         run: python3 tools/bootstrap.py
 
       - name: Build libnitro for the 3DS
-        run: make -C 3ds_port/nitro TARGET=3ds
+        # Compiler errors are also posted as annotations, so they show up on
+        # the pull request without opening the log.
+        run: |
+          set -o pipefail
+          make -C 3ds_port/nitro TARGET=3ds 2>&1 | tee build-3ds.log || {
+            grep -E "error|Error" build-3ds.log | head -20 | sed 's/^/::error::/'
+            exit 1
+          }
 
       - name: Check every SDK function the game calls exists (3DS build)
         run: >
