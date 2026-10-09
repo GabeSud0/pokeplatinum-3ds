@@ -25,7 +25,8 @@ endif
 # Start with code that does not require the generated Meson constants, ROM
 # contents, overlay linker scripts, or unimplemented DS hardware backends.
 GAME_SRCS := coins.c charcode.c charcode_util.c ascii_util.c game_version.c \
-             play_time.c int_distance.c
+             play_time.c int_distance.c math_util.c fx_util.c \
+             map_tile_behavior.c field_script_context.c
 GAME_OBJS := $(GAME_SRCS:%.c=$(OUT)/src/%.o)
 
 # Force the original global precompiled header, as Meson/Metrowerks does.
@@ -36,7 +37,8 @@ GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
                -D_MSL_RESTRICT= -DPM_KEEP_ASSERTS \
                -DGAME_VERSION=VERSION_PLATINUM \
                -DGAME_LANGUAGE=LANGUAGE_ENGLISH \
-               -include $(GAME)/include/pch/global_pch.h
+               -include $(GAME)/include/pch/global_pch.h \
+               -ffunction-sections -fdata-sections
 
 .PHONY: all lib test clean libnitro libnitrosystem
 
@@ -85,7 +87,7 @@ $(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) | libnitrosystem
 	@$(WEAKEN_NNS_INLINE)
 
 $(TEST_BIN): $(OUT)/tests/test_game.o $(LIB) $(LIBNNS) $(LIBNITRO)
-	@$(CC) $(LDFLAGS) $(OUT)/tests/test_game.o \
+	@$(CC) $(LDFLAGS) -Wl,--gc-sections $(OUT)/tests/test_game.o \
 	    -Wl,--start-group $(LIB) $(LIBNNS) $(LIBNITRO) -Wl,--end-group -lm -o $@
 
 ifeq ($(IS_HOST),yes)
