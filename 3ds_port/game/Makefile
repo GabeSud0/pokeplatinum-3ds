@@ -273,7 +273,10 @@ LINK_CHECK_OBJ := $(OUT)/link/link_check.o
 LINK_REPORT := $(ROOT)/build/game-link-report/$(TARGET).md
 DEVKITPRO ?= /opt/devkitpro
 ifeq ($(TARGET),3ds)
-LINK_CHECK_LDFLAGS := -specs=3dsx.specs -L$(DEVKITPRO)/libctru/lib
+# The architecture flags pick devkitARM's hard-float libraries and the 3DS
+# startup code (3dsx_crt0.o), as the smoke app's link does.
+LINK_CHECK_LDFLAGS := $(filter -march=% -mtune=% -mfloat-abi=% -mfpu=% -mtp=%,$(PORT_CFLAGS)) \
+                      -specs=3dsx.specs -L$(DEVKITPRO)/libctru/lib
 LINK_CHECK_LIBS := -lctru
 endif
 
