@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from prepare_game_constants import generate, generator_specs, pinned_metang
+from prepare_game_constants import fix_gcc_mask_shifts, generate, generator_specs, pinned_metang
 
 
 MOCK_MESON = """
@@ -104,6 +104,15 @@ class GameConstantGenerationTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "non-literal"):
                 generator_specs(path)
+
+    def test_fixes_signed_shift_overflow_without_changing_enum_values(self):
+        text = "AI_FLAG_BASIC = (1 << 0),\\nAI_FLAG_TOP = (1 << 31),\\nAI_FLAG_ALL = ((1 << 32) - 1),"
+        fixed = fix_gcc_mask_shifts(text)
+        self.assertIn("(1ULL << 0)", fixed)
+        self.assertIn("(1ULL << 31)", fixed)
+        self.assertIn("((1ULL << 32) - 1)", fixed)
+        with self.assertRaisesRegex(ValueError, "exceeds 64-bit"):
+            fix_gcc_mask_shifts("X = (1 << 64)")
 
     def test_refuses_unknown_metang_source(self):
         with tempfile.TemporaryDirectory() as tmp:
