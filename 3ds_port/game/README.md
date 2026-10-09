@@ -4,7 +4,7 @@ This is the beginning of compiling **the game's original C** for a native
 3DS port. It does **not** reimplement Pokémon Platinum, package game data,
 produce a playable executable, or compile all 1,013 C files yet.
 
-The first eleven files come directly from the pinned pret/pokeplatinum source
+The first thirteen files come directly from the pinned pret/pokeplatinum source
 checkout under `build/upstream/src/`:
 
 - `coins.c` — coin case state and overflow logic
@@ -16,6 +16,8 @@ checkout under `build/upstream/src/`:
 - `math_util.c` and `fx_util.c` — RNG, simple encryption, fixed-point math, transforms
 - `map_tile_behavior.c` — terrain types, collisions, water and encounters
 - `field_script_context.c` — field script bytecode interpreter and call stack
+- `play_time_manager.c` — accumulation of gameplay time from timer ticks
+- `poffin.c` — Poffin flavor attributes and Poffin Case storage
 
 The Makefile uses the same shared flags, Nintendo headers, and GCC weak
 NitroSystem inline-symbol fix as `libnitro` and `libnitrosystem`. It also
