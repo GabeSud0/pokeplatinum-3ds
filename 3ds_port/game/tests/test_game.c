@@ -35,6 +35,9 @@
 #include "constants/field/map_tile_behaviors.h"
 #include "generated/text_banks.h"
 #include "res/pokemon/regional_pokedex_size.h"
+#include "res/text/bank/box_messages.h"
+#include "res/text/bank/ability_names_uppercase.h"
+#include "res/text/bank/unk_0353.h"
 
 static int checks;
 static int fails;
@@ -438,6 +441,15 @@ int main(void)
     CHECK(gGameVersion == VERSION_PLATINUM);
     CHECK(gGameLanguage == LANGUAGE_ENGLISH);
     CHECK(REGIONAL_DEX_COUNT == 210); /* 211 upstream entries minus reserved slot */
+    /* Original msgenc assigns message IDs sequentially from their JSON
+     * arrays; these headers contain identifiers only, no message text. */
+    CHECK(BoxText_MonSelected == 0);
+    CHECK(BoxText_MarkMon == 1);
+    CHECK(TEXT_BANK_BOX_MESSAGES_ENTRY_COUNT == 46);
+    CHECK(pl_msg_00000611_00000 == 0);
+    CHECK(pl_msg_00000611_00001 == 1);
+    CHECK(TEXT_BANK_ABILITY_NAMES_UPPERCASE_ENTRY_COUNT == 124);
+    CHECK(TEXT_BANK_UNK_0353_ENTRY_COUNT == 123);
     test_coins();
     test_ascii();
     test_charcode();
