@@ -24,7 +24,8 @@ endif
 # These are actual unmodified pokeplatinum C files, not port rewrites.
 # Start with code that does not require the generated Meson constants, ROM
 # contents, overlay linker scripts, or unimplemented DS hardware backends.
-GAME_SRCS := coins.c charcode.c charcode_util.c ascii_util.c game_version.c
+GAME_SRCS := coins.c charcode.c charcode_util.c ascii_util.c game_version.c \
+             play_time.c int_distance.c
 GAME_OBJS := $(GAME_SRCS:%.c=$(OUT)/src/%.o)
 
 # Force the original global precompiled header, as Meson/Metrowerks does.
