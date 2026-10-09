@@ -40,6 +40,7 @@
 #include "easy_chat_words.h"
 #include "string_list.h"
 #include "res/text/bank/union_room_sentences.h"
+#include "res/text/bank/general_sentences.h"
 #include "constants/items.h"
 #include "constants/field/map.h"
 #include "badges.h" /* Original badge IDs are generated/badges.h. */
