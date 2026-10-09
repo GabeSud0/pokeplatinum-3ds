@@ -59,6 +59,9 @@ static const char *sCurrentFile;
 /* Static memory: on a 64-bit PC it sits below 4 GB (non-PIE build), where
  * the SDK's 32-bit address arithmetic works. */
 static u8 sFile[256 * 1024] __attribute__((aligned(32)));
+/* NitroSystem patches offset fields into live pointers in place. Compare
+ * against these untouched bytes, never against already-unpacked fields. */
+static u8 sRawFile[sizeof(sFile)] __attribute__((aligned(32)));
 static u8 sHeapMem[64 * 1024] __attribute__((aligned(32)));
 
 static u16 rd16(const u8 *p) { return (u16)(p[0] | (p[1] << 8)); }
@@ -71,6 +74,7 @@ static u32 load_file(const char *path)
     if (!f) return 0;
     n = fread(sFile, 1, sizeof(sFile), f);
     fclose(f);
+    memcpy(sRawFile, sFile, n);
     return (u32)n;
 }
 
@@ -380,11 +384,12 @@ static int s2dFiles[5];
 static void check_2d_file(const char *path, int kind)
 {
     u32 size = load_file(path);
-    const u8 *blk;
+    const u8 *blk, *rawBlk;
 
     sCurrentFile = path;
     s2dFiles[kind]++;
-    CHECK_FILE(size > 16 && size < sizeof(sFile) && rd32(sFile + 8) == size);
+    CHECK_FILE(size > 16 && size < sizeof(sFile) && rd32(sRawFile + 8) == size);
+    if (size <= 16 || size >= sizeof(sFile) || rd32(sRawFile + 8) != size) return;
 
     switch (kind) {
     case 0: {   /* NCGR: tiles. CHAR block: u16 height, u16 width, u32 format,
@@ -392,12 +397,14 @@ static void check_2d_file(const char *path, int kind)
         NNSG2dCharacterData *cd;
         blk = find_block(sFile, size, "RAHC");
         CHECK_FILE(blk != NULL);
+        if (blk == NULL) return;
+        rawBlk = sRawFile + (blk - sFile);
         CHECK_FILE(NNS_G2dGetUnpackedCharacterData(sFile, &cd));
         if (!blk || !cd) return;
         CHECK_FILE((const u8 *)cd == blk + 8);
-        CHECK_FILE(cd->H == rd16(blk + 8) && cd->W == rd16(blk + 10));
-        CHECK_FILE((u32)cd->pixelFmt == rd32(blk + 12) && cd->szByte == rd32(blk + 24));
-        CHECK_FILE((const u8 *)cd->pRawData == blk + 8 + rd32(blk + 28));
+        CHECK_FILE(cd->H == rd16(rawBlk + 8) && cd->W == rd16(rawBlk + 10));
+        CHECK_FILE((u32)cd->pixelFmt == rd32(rawBlk + 12) && cd->szByte == rd32(rawBlk + 24));
+        CHECK_FILE((const u8 *)cd->pRawData == blk + 8 + rd32(rawBlk + 28));
         CHECK_FILE((const u8 *)cd->pRawData + cd->szByte <= sFile + size);
         break;
     }
@@ -406,10 +413,12 @@ static void check_2d_file(const char *path, int kind)
         NNSG2dPaletteData *pd;
         blk = find_block(sFile, size, "TTLP");
         CHECK_FILE(blk != NULL);
+        if (blk == NULL) return;
+        rawBlk = sRawFile + (blk - sFile);
         CHECK_FILE(NNS_G2dGetUnpackedPaletteData(sFile, &pd));
         if (!blk || !pd) return;
-        CHECK_FILE((u32)pd->fmt == rd32(blk + 8) && pd->szByte == rd32(blk + 16));
-        CHECK_FILE((const u8 *)pd->pRawData == blk + 8 + rd32(blk + 20));
+        CHECK_FILE((u32)pd->fmt == rd32(rawBlk + 8) && pd->szByte == rd32(rawBlk + 16));
+        CHECK_FILE((const u8 *)pd->pRawData == blk + 8 + rd32(rawBlk + 20));
         CHECK_FILE((const u8 *)pd->pRawData + pd->szByte <= sFile + size);
         break;
     }
@@ -421,15 +430,17 @@ static void check_2d_file(const char *path, int kind)
         int i, entry;
         blk = find_block(sFile, size, "KBEC");
         CHECK_FILE(blk != NULL);
+        if (blk == NULL) return;
+        rawBlk = sRawFile + (blk - sFile);
         CHECK_FILE(NNS_G2dGetUnpackedCellBank(sFile, &bank));
         if (!blk || !bank) return;
-        CHECK_FILE(bank->numCells == rd16(blk + 8));
-        entry = (rd16(blk + 10) & 1) ? 16 : 8;
-        cells = blk + 8 + rd32(blk + 12);
+        CHECK_FILE(bank->numCells == rd16(rawBlk + 8));
+        entry = (rd16(rawBlk + 10) & 1) ? 16 : 8;
+        cells = blk + 8 + rd32(rawBlk + 12);
         oamBase = cells + entry * bank->numCells;
         for (i = 0; i < bank->numCells; i++) {
             const NNSG2dCellData *c = NNS_G2dGetCellDataByIdx(bank, (u16)i);
-            const u8 *raw = cells + entry * i;
+            const u8 *raw = rawBlk + 8 + rd32(rawBlk + 12) + entry * i;
             CHECK_FILE(c->numOAMAttrs == rd16(raw));
             CHECK_FILE((const u8 *)c->pOamAttrArray == oamBase + rd32(raw + 4));
         }
@@ -440,12 +451,14 @@ static void check_2d_file(const char *path, int kind)
         NNSG2dAnimBankData *ab;
         blk = find_block(sFile, size, "KNBA");
         CHECK_FILE(blk != NULL);
+        if (blk == NULL) return;
+        rawBlk = sRawFile + (blk - sFile);
         CHECK_FILE(NNS_G2dGetUnpackedAnimBank(sFile, &ab));
         if (!blk || !ab) return;
-        CHECK_FILE(ab->numSequences == rd16(blk + 8) && ab->numTotalFrames == rd16(blk + 10));
-        CHECK_FILE((const u8 *)ab->pSequenceArrayHead == blk + 8 + rd32(blk + 12));
-        CHECK_FILE((const u8 *)ab->pFrameArrayHead == blk + 8 + rd32(blk + 16));
-        CHECK_FILE((const u8 *)ab->pAnimContents == blk + 8 + rd32(blk + 20));
+        CHECK_FILE(ab->numSequences == rd16(rawBlk + 8) && ab->numTotalFrames == rd16(rawBlk + 10));
+        CHECK_FILE((const u8 *)ab->pSequenceArrayHead == blk + 8 + rd32(rawBlk + 12));
+        CHECK_FILE((const u8 *)ab->pFrameArrayHead == blk + 8 + rd32(rawBlk + 16));
+        CHECK_FILE((const u8 *)ab->pAnimContents == blk + 8 + rd32(rawBlk + 20));
         break;
     }
     case 4: {   /* NSCR: background maps. SCRN block: u16 width, u16 height
@@ -453,10 +466,12 @@ static void check_2d_file(const char *path, int kind)
         NNSG2dScreenData *sd;
         blk = find_block(sFile, size, "NRCS");
         CHECK_FILE(blk != NULL);
+        if (blk == NULL) return;
+        rawBlk = sRawFile + (blk - sFile);
         CHECK_FILE(NNS_G2dGetUnpackedScreenData(sFile, &sd));
         if (!blk || !sd) return;
-        CHECK_FILE(sd->screenWidth == rd16(blk + 8) && sd->screenHeight == rd16(blk + 10));
-        CHECK_FILE(sd->szByte == rd32(blk + 16));
+        CHECK_FILE(sd->screenWidth == rd16(rawBlk + 8) && sd->screenHeight == rd16(rawBlk + 10));
+        CHECK_FILE(sd->szByte == rd32(rawBlk + 16));
         /* one 2-byte entry per 8x8 tile in the usual text format */
         if (sd->colorMode == 0 && sd->screenFormat == 0)
             CHECK_FILE(sd->szByte == (u32)(sd->screenWidth / 8) * (sd->screenHeight / 8) * 2);
