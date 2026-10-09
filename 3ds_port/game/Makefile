@@ -149,11 +149,22 @@ PROBE_LIMIT ?= 64
 PROBE_TIMEOUT ?= 10
 PROBE_REPORT := $(ROOT)/build/game-compile-survey/$(TARGET).json
 
+# GameSpy nonport.h supports _UNIX via _LINUX, and _NITRO for the
+# original DS target. These are DIAGNOSTIC-ONLY platform selectors:
+# building game logic does not imply networking support or link its APIs.
+# Never force _LINUX on devkitARM (POSIX sockets are not the DS interface).
+ifeq ($(IS_HOST),yes)
+GAME_PROBE_PLATFORM_FLAGS := -D_LINUX
+else
+GAME_PROBE_PLATFORM_FLAGS := -D_NITRO
+endif
+GAME_PROBE_CFLAGS := $(GAME_CFLAGS) $(GAME_PROBE_PLATFORM_FLAGS)
+
 probe: $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(NETWORK_STAMP) | libnitrosystem
 	@python3 $(ROOT)/tools/probe_game_compile.py \
 	    --source-dir="$(GAME)/src" \
 	    --compiler="$(CC)" \
-	    --flags="$(GAME_CFLAGS)" \
+	    --flags="$(GAME_PROBE_CFLAGS)" \
 	    --target="$(TARGET)" \
 	    --limit="$(PROBE_LIMIT)" \
 	    --timeout="$(PROBE_TIMEOUT)" \
