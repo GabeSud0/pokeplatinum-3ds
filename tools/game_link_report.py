@@ -22,6 +22,7 @@ It's a to-do list, not a pass/fail check: the script exits 0 either way.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -113,8 +114,11 @@ def main() -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(report, encoding="utf-8")
     summary = ", ".join(f"{len(v)} {k.split(' (')[0].lower()}" for k, v in groups.items())
-    print(f"Full game link ({args.target}): {len(symbols)} missing symbols"
-          + (f" — {summary}" if summary else ""))
+    line = f"Full game link ({args.target}): {len(symbols)} missing symbols" + (f" — {summary}" if summary else "")
+    print(line)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        # Shown on the run's summary page, next to the uploaded report.
+        print(f"::notice title=Full game link ({args.target})::{line}")
     return 0
 
 
