@@ -58,13 +58,16 @@ class GameTextBankHeaderTests(unittest.TestCase):
             [{"id": "TEXT_BANK_BOX_MESSAGES_ENTRY_COUNT"}],
             [{"en_US": "missing id"}],
             [42],
-            [],
         ]
         for msgs in bad_cases:
             with self.subTest(msgs=msgs):
                 p = self.write(messages=msgs)
                 with self.assertRaises(ValueError):
                     render(p)
+
+    def test_allows_empty_bank_as_msgenc_does(self):
+        path = self.write(messages=[])
+        self.assertIn("#define TEXT_BANK_BOX_MESSAGES_ENTRY_COUNT 0", render(path))
 
     def test_rejects_malformed_json_and_no_inputs(self):
         with self.assertRaises(ValueError):
