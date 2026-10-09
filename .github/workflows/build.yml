@@ -54,6 +54,16 @@ jobs:
       - name: Compile the first game-source slice for 3DS
         run: make -C 3ds_port/game TARGET=3ds lib
 
+      - name: Link native original-Platinum smoke application
+        run: make -C 3ds_port/platinum_smoke
+
+      - name: Upload native Platinum smoke .3dsx
+        uses: actions/upload-artifact@v4
+        with:
+          name: platinum-smoke
+          path: 3ds_port/platinum_smoke/platinum-smoke.3dsx
+          if-no-files-found: error
+
       - name: Survey original game C compilation blockers (3DS)
         run: make -C 3ds_port/game TARGET=3ds probe PROBE_LIMIT=40 PROBE_TIMEOUT=7
 
