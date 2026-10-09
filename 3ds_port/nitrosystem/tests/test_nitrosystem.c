@@ -509,13 +509,24 @@ int main(int argc, char **argv)
     printf("libnitrosystem tests (%d-bit build), game files from %s\n",
            (int)sizeof(void *) * 8, res);
 
+    /* Emit unbuffered progress so CI identifies a hanging subsystem even
+     * if a test stops inside Nintendo's original draw/load code. */
+    setvbuf(stdout, NULL, _IONBF, 0);
+    puts("  test: struct sizes");
     test_struct_sizes();
+    puts("  test: Fnd expansion heap");
     test_exp_heap();
+    puts("  test: Fnd frame heap");
     test_frame_heap();
+    puts("  test: Fnd unit heap");
     test_unit_heap();
+    puts("  test: Gfd VRAM managers");
     test_vram_managers();
+    puts("  test: G2d OAM");
     test_oam_manager();
+    puts("  test: G3d models");
     test_models(res);
+    puts("  test: G2d resource files");
     test_2d_files(res);
 
     printf("%d checks, %d failed\n", sChecks, sFailures);
