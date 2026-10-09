@@ -117,6 +117,7 @@ $(NETWORK_STAMP): $(NETWORK_WRAPS) $(ROOT)/tools/prepare_game_network_headers.py
 # _MSL_RESTRICT is a Metrowerks qualifier and must be empty with GCC.
 GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
                -I$(GAME)/include -I$(GAME)/asm -I$(GAME) -I$(CONSTANTS_DIR) \
+               -I$(ROOT)/3ds_port/game/include \
                -I$(RESOURCE_DIR) -I$(GAME)/lib/spl/include \
                -I$(NETWORK_DIR)/NitroDWC/include \
                -I$(NETWORK_DIR)/NitroDWC/include/gs \
