@@ -99,6 +99,8 @@ def extract(rom: Path, output: Path, *, verify: bool = True) -> list[dict]:
     output = output.resolve()
     if output == rom.resolve() or output in rom.resolve().parents:
         raise ValueError("Output must not overwrite the ROM")
+    if any(e["path"] == "manifest.json" for e in entries):
+        raise ValueError("ROM file would collide with manifest.json")
     for entry in entries:
         target = (output / entry["path"]).resolve()
         if not target.is_relative_to(output):

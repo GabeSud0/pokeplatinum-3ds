@@ -9,7 +9,8 @@ from builder.extract_rom import extract, parse_nitrofs
 
 def synthetic_nds():
     rom = bytearray(0x400)
-    struct.pack_into("<IIII", rom, 0x40, 0x200, 0x20, 0x240, 0x10)
+    # FNT spans 0x200-0x221 (directory table + both subtables), FAT 0x240-0x24f.
+    struct.pack_into("<IIII", rom, 0x40, 0x200, 0x22, 0x240, 0x10)
     # Root contains one file and one directory; child contains another file.
     struct.pack_into("<IHH", rom, 0x200, 0x10, 0, 2)
     struct.pack_into("<IHH", rom, 0x208, 0x1b, 1, 0xf000)
@@ -47,6 +48,25 @@ class NitroFSTests(unittest.TestCase):
         struct.pack_into("<II", rom, 0x240, 0x300, 0x500)
         with self.assertRaisesRegex(ValueError, "FAT"):
             parse_nitrofs(bytes(rom))
+
+    def test_unsafe_name_rejected(self):
+        rom = bytearray(synthetic_nds())
+        rom[0x21c:0x221] = b"..\\xx"  # child file name with a path separator
+        with self.assertRaisesRegex(ValueError, "Unsafe FNT path"):
+            parse_nitrofs(bytes(rom))
+
+    def test_cyclic_directory_rejected(self):
+        rom = bytearray(synthetic_nds())
+        struct.pack_into("<H", rom, 0x218, 0xf000)  # "d" points back at root
+        with self.assertRaisesRegex(ValueError, "cyclic"):
+            parse_nitrofs(bytes(rom))
+
+    def test_output_cannot_contain_rom(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rom = Path(tmp) / "test.nds"
+            rom.write_bytes(synthetic_nds())
+            with self.assertRaisesRegex(ValueError, "overwrite the ROM"):
+                extract(rom, Path(tmp), verify=False)
 
 
 if __name__ == "__main__":

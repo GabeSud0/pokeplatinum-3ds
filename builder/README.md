@@ -40,7 +40,7 @@ The ROM is opened read-only and never modified. Keep the output private:
 ## Tests
 
 ```sh
-python -m unittest discover -s builder -p 'test*.py'
+python -m unittest discover -s builder -p 'test_*.py'
 ```
 
 Tests construct synthetic miniature NDS images; no real game files are used.
