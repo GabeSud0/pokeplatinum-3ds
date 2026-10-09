@@ -28,6 +28,12 @@ functions from an otherwise incomplete game source archive without forcing
 unported systems (heap, renderer, timers, game overlays) into the test binary.
 **It does not imply the full game can link or run.**
 
+The upstream Meson build generates `generated/text_banks.h` from
+`generated/text_banks.txt`. The GCC game Makefile now recreates its ordered
+`enum TextBank` using `tools/generate_game_text_banks.py` in the ignored
+`build/<target>/gen/` directory. No dummy bank IDs or copied resources are
+committed. Other Meson-generated enums and assets remain future work.
+
 ## Building
 
 From the repository root:
