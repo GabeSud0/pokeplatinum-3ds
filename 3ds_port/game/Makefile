@@ -56,6 +56,11 @@ libnitrosystem:
 $(LIBNITRO): libnitro
 $(LIBNNS): libnitrosystem
 
+# nitrosystem's make generates the weak-inline symbol list together with
+# libnitrosystem, but Make must know how to satisfy this prerequisite here.
+$(NNS_INLINE_SYMS): | libnitrosystem
+	@test -f $@
+
 # The NitroSystem inline functions in included game headers have external
 # definitions under GCC's gnu89 semantics; match the SDK's weak-symbol fix.
 $(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) | libnitrosystem
