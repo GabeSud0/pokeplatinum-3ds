@@ -85,6 +85,19 @@ CPU and GPU time per frame. **START** exits.
 Every push to GitHub also builds `hello3d` automatically (see the **Actions**
 tab), and the `.3dsx` can be downloaded from the run.
 
+## First original-game code on 3DS
+
+The [Platinum smoke app](3ds_port/platinum_smoke/README.md) is a second,
+separate native `.3dsx` built by GitHub Actions. It **links and executes
+actual original Platinum game functions** for Coin Case, RNG, and Pokédex
+language selection, using the 3DS buttons to change their state. Download
+the **platinum-smoke** artifact from a successful Actions run and launch
+`platinum-smoke.3dsx` in Azahar or on a 3DS with Homebrew Launcher.
+
+This proves the code-linking and native execution path, **not the full
+Platinum game boot**. The original `NitroMain`, Nintendo DS hardware
+emulation, game assets, audio and save system remain to be integrated.
+
 ## Fetching the decompilation
 
 ```sh
