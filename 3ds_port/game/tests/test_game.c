@@ -21,6 +21,12 @@
 #include "play_time_manager.h"
 #include "poffin.h"
 #include "game_options.h"
+#include "berry_data.h"
+#include "poffin_types.h"
+#include "generated/abilities.h"
+#include "generated/species.h"
+#include "generated/move_flags.h"
+#include "generated/ai_flags.h"
 #include "timer.h"
 #include "math_util.h"
 #include "fx_util.h"
@@ -358,6 +364,62 @@ static void test_game_options(void)
     CHECK(memcmp(&options, &copy, sizeof(copy)) == 0);
 }
 
+/* Verify the official Metang generated C enums are visible to the real
+ * game source build. The expected values come from upstream manifests. */
+static void test_generated_constants(void)
+{
+    CHECK(ABILITY_NONE == 0);
+    CHECK(ABILITY_STENCH == 1);
+    CHECK(SPECIES_BULBASAUR == 1);
+    CHECK(TEXT_BANK_MOVES_USED_IN_BATTLE == 0);
+    CHECK(TEXT_BANK_DIPLOMA == 1);
+    CHECK(TEXT_BANK_SPECIES_CATEGORY_JP == 723);
+    CHECK(MOVE_FLAG_MAKES_CONTACT == 1);
+    CHECK(AI_FLAG_BASIC == 1);
+    CHECK((u64)AI_FLAG_ALL == 0xFFFFFFFFULL);
+}
+
+static void test_berry_data(void)
+{
+    /* This is a synthetic record, not an extracted ROM or NARC asset.
+     * The real original BerryData_GetAttribute() accesses its fields. */
+    BerryData data = {
+        .size = 90,
+        .firmness = 1,
+        .baseYield = 2,
+        .stageDuration = 3,
+        .moistureDrainRate = 4,
+        .spiciness = 5,
+        .dryness = 6,
+        .sweetness = 7,
+        .bitterness = 8,
+        .sourness = 9,
+        .smoothness = 10,
+    };
+    CHECK(BerryData_GetAttribute(&data, BERRYATTR_SIZE) == 90);
+    CHECK(BerryData_GetAttribute(&data, BERRYATTR_FIRMNESS) == 1);
+    CHECK(BerryData_GetAttribute(&data, BERRYATTR_BASE_YIELD) == 2);
+    CHECK(BerryData_GetAttribute(&data, BERRYATTR_STAGE_DURATION) == 3);
+    CHECK(BerryData_GetAttribute(&data, BERRYATTR_MOISTURE_DRAIN_RATE) == 4);
+    CHECK(BerryData_GetAttribute(&data, BERRYATTR_SPICINESS) == 5);
+    CHECK(BerryData_GetAttribute(&data, BERRYATTR_DRYNESS) == 6);
+    CHECK(BerryData_GetAttribute(&data, BERRYATTR_SWEETNESS) == 7);
+    CHECK(BerryData_GetAttribute(&data, BERRYATTR_BITTERNESS) == 8);
+    CHECK(BerryData_GetAttribute(&data, BERRYATTR_SOURNESS) == 9);
+    CHECK(BerryData_GetAttribute(&data, BERRYATTR_SMOOTHNESS) == 10);
+    CHECK(BerryData_GetAttribute(&data, (u32)BERRYATTR_SMOOTHNESS + 1) == 0);
+}
+
+static void test_poffin_type_lookup(void)
+{
+    PoffinTypeList types;
+    memset(&types, 0, sizeof(types));
+    /* The getter must read from the requested index without attempting to
+     * access message files, allocators or game hardware. */
+    CHECK(PoffinTypeList_GetString(&types, POFFIN_TYPE_SPICY) == NULL);
+    CHECK(PoffinTypeList_GetString(&types, POFFIN_TYPE_DRY) == NULL);
+}
+
 static void test_sdk_link(void)
 {
     /* Require a real external NitroSystem function at link time. */
@@ -385,6 +447,9 @@ int main(void)
     test_play_time_manager();
     test_poffin();
     test_game_options();
+    test_generated_constants();
+    test_berry_data();
+    test_poffin_type_lookup();
     test_sdk_link();
     printf("%d checks, %d failed\n", checks, fails);
     return fails == 0 ? 0 : 1;
