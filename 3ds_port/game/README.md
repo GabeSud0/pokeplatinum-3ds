@@ -4,7 +4,7 @@ This is the beginning of compiling **the game's original C** for a native
 3DS port. It does **not** reimplement Pokémon Platinum, package game data,
 produce a playable executable, or compile all 1,013 C files yet.
 
-The first sixteen files come directly from the pinned pret/pokeplatinum source
+The first twenty files come directly from the pinned pret/pokeplatinum source
 checkout under `build/upstream/src/`:
 
 - `coins.c` — coin case state and overflow logic
@@ -21,6 +21,10 @@ checkout under `build/upstream/src/`:
 - `game_options.c` — saved options, button mode, battle settings and text speed
 - `berry_data.c` — Berry attribute lookup and file-backed load interfaces
 - `poffin_types.c` — Poffin names/message lookup interfaces
+- `grid_menu_cursor_position.c` — four-way menu navigation and cursor coordinates
+- `overworld_map_history.c` — map movement and warp history ring buffer
+- `pokedex_language.c` — original six-language Pokédex index translation
+- `persisted_map_features.c` — fixed-size in-save map feature scratch storage
 
 The pinned original source tree includes `"badges.h"` in trainer-case
 headers, but stores the authoritative badge enum as
@@ -109,10 +113,11 @@ make -C 3ds_port/game TARGET=3ds    # 3DS ARM11 object library (devkitARM)
 Outputs are ignored under `3ds_port/game/build/<target>/`:
 `libplatinum_game.a` (an incomplete, relocatable static archive) and host
 test binaries. The smoke tests cover save play-time, Poffin Case, game
-options, Berry attributes, authentic generated IDs, math/RNG, tiles and
-field-script execution, and call real game code and an externally
-linked NitroSystem function, so they test the compatibility between code and
-both SDK libraries.
+options, Berry attributes, authentic generated IDs, math/RNG, tiles,
+field-script execution, menu cursor navigation, map history rollover,
+Pokédex language ordering, and persisted map-feature buffers. They call
+real game code and an externally linked NitroSystem function, so they
+test compatibility between original game code and both SDK libraries.
 
 ### Diagnose the next compilation blockers
 
