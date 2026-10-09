@@ -6,7 +6,6 @@ diff --git a/libraries/fs/src/fs_rom.c b/libraries/fs/src/fs_rom.c
 --- a/libraries/fs/src/fs_rom.c
 +++ b/libraries/fs/src/fs_rom.c
 @@ -1,4 +1,8 @@
-
 -#include <nitro.h>
 +#include <nitro.h>
 +
