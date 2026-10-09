@@ -49,6 +49,13 @@ There are no dummy IDs, hand-copied generated files, or game assets tracked.
 compatibility/testing, but no longer supplies the game's build headers.
 See [game constants](../../docs/GAME_CONSTANTS.md) for more information.
 
+The build also produces **identifier-only** message bank headers from pinned
+`res/text/*.json` using `tools/prepare_game_text_bank_headers.py`. These
+match the original `msgenc` ordering and entry-count macros and live under
+ignored `build/game-resource-headers/res/text/bank/`. They never contain
+dialogue, game assets, encryption keys, or binary messages. Generated/dynamic
+text banks and the actual `pl_msg.narc` require later integration.
+
 The default Make target is explicitly `all`. CI requests `test` on
 host and host32 and `lib` for 3DS; this is important because the generated
 `text_banks.h` Make rule formerly became the first/default target and a
