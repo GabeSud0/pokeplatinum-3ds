@@ -18,6 +18,11 @@
 #include "global/pm_version.h"
 #include "int_distance.h"
 #include "play_time.h"
+#include "math_util.h"
+#include "fx_util.h"
+#include "field_script_context.h"
+#include "map_tile_behavior.h"
+#include "constants/field/map_tile_behaviors.h"
 
 static int checks;
 static int fails;
@@ -142,6 +147,102 @@ static void test_distance(void)
     CHECK(CalcDistance2D(1, 2, 1, 2) == 0);
 }
 
+static void test_random_and_math(void)
+{
+    const u8 bytes[] = {1, 3, 5, 7, 9};
+    u16 encoded[] = {0x0123, 0x4567, 0x89ab, 0xcdef};
+    const u16 original[] = {0x0123, 0x4567, 0x89ab, 0xcdef};
+    u32 seed = 0x12345678U;
+
+    CHECK(SumBytes(bytes, sizeof(bytes)) == 25);
+    CHECK(FX_Min(3 * FX32_ONE, -2 * FX32_ONE) == -2 * FX32_ONE);
+    CHECK(FX_Max(3 * FX32_ONE, -2 * FX32_ONE) == 3 * FX32_ONE);
+
+    LCRNG_SetSeed(seed);
+    seed = seed * (u32)LCRNG_MULTIPLIER + (u32)LCRNG_INCREMENT;
+    CHECK(LCRNG_Next() == (u16)(seed >> 16));
+    CHECK(LCRNG_GetSeed() == seed);
+    seed = seed * (u32)LCRNG_MULTIPLIER + (u32)LCRNG_INCREMENT;
+    CHECK(LCRNG_Next() == (u16)(seed >> 16));
+    CHECK(LCRNG_GetSeed() == seed);
+
+    /* Reference MT19937 outputs for the published seed 5489. */
+    MTRNG_SetSeed(5489U);
+    CHECK(MTRNG_Next() == 3499211612U);
+    CHECK(MTRNG_Next() == 581869302U);
+    CHECK(MTRNG_Next() == 3890346734U);
+
+    EncodeData(encoded, sizeof(encoded), 12345U);
+    CHECK(memcmp(encoded, original, sizeof(encoded)) != 0);
+    DecodeData(encoded, sizeof(encoded), 12345U);
+    CHECK(memcmp(encoded, original, sizeof(encoded)) == 0);
+}
+
+static void test_tile_behavior(void)
+{
+    CHECK(TileBehavior_IsTallGrass(TILE_BEHAVIOR_TALL_GRASS));
+    CHECK(!TileBehavior_IsTallGrass(TILE_BEHAVIOR_NONE));
+    CHECK(TileBehavior_HasEncounters(TILE_BEHAVIOR_TALL_GRASS));
+    CHECK(!TileBehavior_HasEncounters(TILE_BEHAVIOR_NONE));
+    CHECK(TileBehavior_IsDoor(TILE_BEHAVIOR_DOOR));
+    CHECK(TileBehavior_IsSurfable(TILE_BEHAVIOR_WATER_RIVER));
+    CHECK(!TileBehavior_IsSurfable(TILE_BEHAVIOR_SAND));
+    CHECK(TileBehavior_IsJumpNorth(TILE_BEHAVIOR_JUMP_NORTH));
+    CHECK(TileBehavior_BlocksMovementNorthward(TILE_BEHAVIOR_BLOCK_NORTH_AND_WEST));
+    CHECK(!TileBehavior_BlocksMovementSouthward(TILE_BEHAVIOR_BLOCK_NORTH_AND_WEST));
+    CHECK(TileBehavior_HasReflectiveSurface(TILE_BEHAVIOR_PUDDLE));
+    CHECK(!TileBehavior_HasReflectiveSurface(TILE_BEHAVIOR_NONE));
+    CHECK(TileBehavior_IsIce(TILE_BEHAVIOR_ICE));
+}
+
+static BOOL test_script_capture(ScriptContext *ctx)
+{
+    ctx->data[0] = ScriptContext_ReadWord(ctx);
+    return TRUE;
+}
+
+static BOOL test_script_stop(ScriptContext *ctx)
+{
+    ScriptContext_Stop(ctx);
+    return TRUE;
+}
+
+static BOOL test_script_resume(ScriptContext *ctx)
+{
+    (void)ctx;
+    return TRUE;
+}
+
+static void test_field_script(void)
+{
+    const ScrCmdFunc commands[] = {test_script_capture, test_script_stop};
+    const u8 bytecode[] = {0, 0, 0x78, 0x56, 0x34, 0x12, 1, 0};
+    const u8 raw[] = {0x34, 0x12, 0xef, 0xcd, 0xab, 0x90};
+    ScriptContext ctx;
+
+    memset(&ctx, 0xcd, sizeof(ctx));
+    ScriptContext_Init(&ctx, commands, 2);
+    CHECK(ctx.scriptPtr == NULL);
+    CHECK(ctx.stackPointer == 0);
+    CHECK(ctx.data[0] == 0);
+    CHECK(ScriptContext_Start(&ctx, bytecode));
+
+    /* A waiting script resumes on one frame, executes on the next. */
+    ScriptContext_Pause(&ctx, test_script_resume);
+    CHECK(ScriptContext_Run(&ctx));
+    CHECK(ctx.data[0] == 0);
+    CHECK(ScriptContext_Run(&ctx));
+    CHECK(ctx.data[0] == 0x12345678U);
+    CHECK(ScriptContext_Run(&ctx));
+    CHECK(!ScriptContext_Run(&ctx));
+
+    ScriptContext_Start(&ctx, raw);
+    CHECK(ScriptContext_ReadHalfWord(&ctx) == 0x1234);
+    CHECK(ScriptContext_ReadWord(&ctx) == 0x90abcdefU);
+    ScriptContext_Stop(&ctx);
+    CHECK(ctx.scriptPtr == NULL);
+}
+
 static void test_sdk_link(void)
 {
     /* Require a real external NitroSystem function at link time. */
@@ -163,6 +264,9 @@ int main(void)
     test_charcode();
     test_play_time();
     test_distance();
+    test_random_and_math();
+    test_tile_behavior();
+    test_field_script();
     test_sdk_link();
     printf("%d checks, %d failed\n", checks, fails);
     return fails == 0 ? 0 : 1;
