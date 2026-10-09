@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* The port builds with -fno-short-enums; fail the build if libpak doesn't. */
+typedef char pak_result_is_int_sized[sizeof(PakResult) == sizeof(int) ? 1 : -1];
+
 #define PAK_HEADER_BYTES 68u
 #define PAK_ENTRY_BYTES 12u
 

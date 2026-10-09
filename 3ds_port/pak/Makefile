@@ -15,7 +15,10 @@ ifeq ($(TARGET),3ds)
   endif
   CC := $(DEVKITARM)/bin/arm-none-eabi-gcc
   AR := $(DEVKITARM)/bin/arm-none-eabi-ar
-  CFLAGS += -march=armv6k -mtune=mpcore -mfpu=vfp -mfloat-abi=hard -mtp=soft
+  # Match 3ds_port/common.mk: 4-byte enums (ARM GCC shrinks them otherwise,
+  # so PakResult would disagree with the game's code) and the same ABI flags.
+  CFLAGS += -march=armv6k -mtune=mpcore -mfpu=vfp -mfloat-abi=hard -mtp=soft \
+            -fno-short-enums -mword-relocations -ffunction-sections
   DEFAULT_TARGET := lib
 else ifeq ($(TARGET),host32)
   CC := gcc
