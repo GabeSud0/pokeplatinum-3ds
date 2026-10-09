@@ -98,6 +98,9 @@ jobs:
       - name: Test source-derived move text bank indices
         run: python -m unittest discover -s tools -p 'test_prepare_game_move_text_headers.py' -v
 
+      - name: Test original species name text-bank indices
+        run: python -m unittest discover -s tools -p 'test_prepare_game_species_text_headers.py' -v
+
       - name: Test metadata-only NitroSFX sound index generator
         run: python -m unittest discover -s tools -p 'test_prepare_game_sound_naix.py' -v
 
