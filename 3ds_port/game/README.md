@@ -155,6 +155,19 @@ sentence operations and string-list entry insertion. They call
 real game code and an externally linked NitroSystem function, so they
 test compatibility between original game code and both SDK libraries.
 
+### Pinned networking source for the next port stage
+
+`tools/bootstrap.py` now also fetches the original `NitroDWC` checkout
+at the exact revision from `subprojects/NitroDWC.wrap` into ignored
+`build/NitroDWC/`. This is **source availability, not 3DS networking**.
+In particular, the game Battle Frontier save headers transitively use
+`wifi_list.h` and `<dwc.h>`, and NitroDWC's GameSpy components also
+depend on NitroWiFi and platform-specific `ninet.h`/`extras.h`.
+The game Makefile does not add `-Ibuild/NitroDWC/include` or link
+NitroDWC yet; a separate PR must establish a genuine, compilable
+dependency chain before those sources join the runtime build. Do not
+substitute fake headers, struct layouts or exported networking APIs.
+
 ### Diagnose the next compilation blockers
 
 You can survey a deterministic sample of the **remaining original** game
