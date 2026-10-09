@@ -12,10 +12,10 @@ def synthetic_nds():
     struct.pack_into("<IIII", rom, 0x40, 0x200, 0x20, 0x240, 0x10)
     # Root contains one file and one directory; child contains another file.
     struct.pack_into("<IHH", rom, 0x200, 0x10, 0, 2)
-    struct.pack_into("<IHH", rom, 0x208, 0x1a, 1, 0xf000)
+    struct.pack_into("<IHH", rom, 0x208, 0x1b, 1, 0xf000)
     rom[0x210:0x219] = b"\x05a.bin\x81d\x01"
-    rom[0x219] = 0
-    rom[0x21a:0x221] = b"\x05b.bin\x00"
+    rom[0x21a] = 0
+    rom[0x21b:0x222] = b"\x05b.bin\x00"
     struct.pack_into("<IIII", rom, 0x240, 0x300, 0x303, 0x310, 0x314)
     rom[0x300:0x303] = b"abc"
     rom[0x310:0x314] = b"defg"
