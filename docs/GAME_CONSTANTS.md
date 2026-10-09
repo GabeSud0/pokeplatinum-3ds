@@ -44,6 +44,13 @@ To use a Metang checkout you've already fetched:
 python tools/prepare_game_constants.py --metang /path/to/metang.py
 ```
 
+GCC-specific output correction: the wrapped Metang release formats bitmasks
+with signed integer shifts. In particular its `AI_FLAG_ALL` expression
+`(1 << 32) - 1` is undefined for the original 32-bit mask. The port
+automatically changes generated mask operands to `1ULL << n`, retaining
+exactly the same bit values (including `0xFFFFFFFF`) without modifying
+Metang, the upstream manifest, or generated headers committed to Git.
+
 Once needed in the game build, the include and preprocessor settings are:
 
 ```sh
