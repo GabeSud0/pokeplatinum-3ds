@@ -89,6 +89,9 @@ jobs:
       - name: Test generated game text bank indices
         run: python -m unittest discover -s tools -p 'test_generate_game_text_banks.py'
 
+      - name: Test generated resource metadata headers
+        run: python -m unittest discover -s tools -p 'test_prepare_game_resource_headers.py' -v
+
       - name: Test game compiler diagnostic tool
         run: python -m unittest discover -s tools -p 'test_probe_game_compile.py' -v
 

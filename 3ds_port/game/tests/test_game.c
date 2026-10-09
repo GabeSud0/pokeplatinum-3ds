@@ -34,6 +34,7 @@
 #include "map_tile_behavior.h"
 #include "constants/field/map_tile_behaviors.h"
 #include "generated/text_banks.h"
+#include "res/pokemon/regional_pokedex_size.h"
 
 static int checks;
 static int fails;
@@ -436,6 +437,7 @@ int main(void)
            (int)(sizeof(void *) * 8));
     CHECK(gGameVersion == VERSION_PLATINUM);
     CHECK(gGameLanguage == LANGUAGE_ENGLISH);
+    CHECK(REGIONAL_DEX_COUNT == 210); /* 211 upstream entries minus reserved slot */
     test_coins();
     test_ascii();
     test_charcode();
