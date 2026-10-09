@@ -80,6 +80,7 @@ static int parse_string(const char **p, char **out)
     while (*s && *s != '"') {
         unsigned int c = (unsigned char)*s++;
         if (c == '\\') {
+            if (!*s) goto invalid;
             c = (unsigned char)*s++;
             if (c == '"' || c == '\\' || c == '/') {
                 /* literal escaped character */
@@ -87,7 +88,9 @@ static int parse_string(const char **p, char **out)
                 int n;
                 c = 0;
                 for (n = 0; n < 4; ++n) {
-                    unsigned int digit = (unsigned char)*s++;
+                    unsigned int digit;
+                    if (!*s) goto invalid;
+                    digit = (unsigned char)*s++;
                     if (digit >= '0' && digit <= '9') digit -= '0';
                     else if (digit >= 'a' && digit <= 'f') digit = digit - 'a' + 10;
                     else if (digit >= 'A' && digit <= 'F') digit = digit - 'A' + 10;
