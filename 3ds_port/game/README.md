@@ -4,7 +4,7 @@ This is the beginning of compiling **the game's original C** for a native
 3DS port. It does **not** reimplement Pokémon Platinum, package game data,
 produce a playable executable, or compile all 1,013 C files yet.
 
-The first thirteen files come directly from the pinned pret/pokeplatinum source
+The first fourteen files come directly from the pinned pret/pokeplatinum source
 checkout under `build/upstream/src/`:
 
 - `coins.c` — coin case state and overflow logic
@@ -18,6 +18,7 @@ checkout under `build/upstream/src/`:
 - `field_script_context.c` — field script bytecode interpreter and call stack
 - `play_time_manager.c` — accumulation of gameplay time from timer ticks
 - `poffin.c` — Poffin flavor attributes and Poffin Case storage
+- `game_options.c` — saved options, button mode, battle settings and text speed
 
 The Makefile uses the same shared flags, Nintendo headers, and GCC weak
 NitroSystem inline-symbol fix as `libnitro` and `libnitrosystem`. It also
@@ -36,6 +37,11 @@ The upstream Meson build generates `generated/text_banks.h` from
 `build/<target>/gen/` directory. No dummy bank IDs or copied resources are
 committed. Other Meson-generated enums and assets remain future work.
 
+The default Make target is explicitly `all`. CI requests `test` on
+host and host32 and `lib` for 3DS; this is important because the generated
+`text_banks.h` Make rule formerly became the first/default target and a
+successful workflow could skip game compilation entirely.
+
 ## Building
 
 From the repository root:
@@ -49,7 +55,7 @@ make -C 3ds_port/game TARGET=3ds    # 3DS ARM11 object library (devkitARM)
 
 Outputs are ignored under `3ds_port/game/build/<target>/`:
 `libplatinum_game.a` (an incomplete, relocatable static archive) and host
-test binaries. The smoke tests cover save play-time, math/RNG, tiles and field-script
+test binaries. The smoke tests cover save play-time, Poffin Case, game options, math/RNG, tiles and field-script
 execution, and call real game code and at least one externally
 linked NitroSystem function, so they test the compatibility between code and
 both SDK libraries.
