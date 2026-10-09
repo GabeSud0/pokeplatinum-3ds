@@ -4,7 +4,7 @@ This is the beginning of compiling **the game's original C** for a native
 3DS port. It does **not** reimplement Pokémon Platinum, package game data,
 produce a playable executable, or compile all 1,013 C files yet.
 
-The first twenty-nine files come directly from the pinned pret/pokeplatinum source
+The first thirty-one files come directly from the pinned pret/pokeplatinum source
 checkout under `build/upstream/src/`:
 
 - `coins.c` — coin case state and overflow logic
@@ -34,6 +34,8 @@ checkout under `build/upstream/src/`:
 - `move_reminder_data.c` — Move Reminder list presence and move-list interfaces
 - `pokedex_heightweight.c` — Pokédex species size, position and scale lookup
 - `daycare_save.c` — Day Care parent steps, egg state and save-data accessors
+- `battle_factory_save.c` — Battle Factory team, trainer, rental and streak-flag state
+- `battle_arcade_save.c` — Battle Arcade roulette, team selection and streak-flag state
 
 The pinned original source tree includes `"badges.h"` in trainer-case
 headers, but stores the authoritative badge enum as
@@ -63,7 +65,12 @@ caller-owned structs or static metadata; their real heap/save-table/NARC
 interfaces are **not** claimed to be runtime-functional. The Move Reminder,
 Pokédex measurement and Day Care smoke checks similarly use the original
 standalone functions with caller-owned input. Their full Pokémon, NARC,
-BoxPokemon initialization and heap backends are not implemented yet. Likewise,
+BoxPokemon initialization and heap backends are not implemented yet.
+The Battle Frontier tests use **caller-owned save structs**, not an emulated
+save system: `BattleFactorySave_Get`, `BattleArcadeSave_Get` and their
+streak-block accessors still need `SaveData_SaveTable` before they can
+participate in full game execution. Member indices and bit flags are
+exercised on the original C implementations, without placeholder APIs. Likewise,
 battle-rule and record-mixing tests operate on original tables and
 caller-owned arrays; they do not implement Nintendo Wi-Fi/record exchange.
 **It does not imply the full game can link or run.**
@@ -142,7 +149,8 @@ field-script execution, menu cursor navigation, map history rollover,
 Pokédex language ordering, persisted map-feature buffers, Berry Tag bits,
 Pokédex selection/data banks, Ribbon initialization, battle rule presets,
 mixed-record RNG initialization/entry matching, move-list sentinel detection,
-Pokédex size/weight accessors and Day Care state transitions. They call
+Pokédex size/weight accessors, Day Care state transitions, and Battle
+Factory/Arcade state setters, getters and streak flag manipulation. They call
 real game code and an externally linked NitroSystem function, so they
 test compatibility between original game code and both SDK libraries.
 
