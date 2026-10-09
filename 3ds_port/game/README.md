@@ -61,6 +61,13 @@ the pinned `res/sound/pl_sound_data.json` list. This is **symbolic sound
 index metadata only**, not SDAT music/sound samples or a working sound
 runtime. The output stays in `build/game-resource-headers/res/sound/`.
 
+The NitroArc `res/graphics/**/*.order` manifests now produce
+**explicit graphics member indices** as `.naix` headers in the same
+ignored resource-header output directory. This does not generate graphics
+resources or archive contents. Implicit (unlisted) member indices and the
+full archive count cannot be inferred from the source-only manifests;
+see [the compiler survey](../../docs/GAME_COMPILE_SURVEY.md).
+
 The default Make target is explicitly `all`. CI requests `test` on
 host and host32 and `lib` for 3DS; this is important because the generated
 `text_banks.h` Make rule formerly became the first/default target and a
