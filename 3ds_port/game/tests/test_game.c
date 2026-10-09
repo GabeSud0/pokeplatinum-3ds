@@ -27,6 +27,11 @@
 #include "overworld_map_history.h"
 #include "pokedex_language.h"
 #include "persisted_map_features.h"
+#include "berry_tag_data.h"
+#include "pokedex_memory.h"
+#include "pokedex_data_index.h"
+#include "ribbon_save_data.h"
+#include "constants/items.h"
 #include "constants/field/map.h"
 #include "badges.h" /* Original badge IDs are generated/badges.h. */
 #include "generated/abilities.h"
@@ -587,6 +592,98 @@ static void test_persisted_map_features(void)
     CHECK(buffer[0] == 0 && buffer[PERSISTED_MAP_FEATURES_BUFFER_SIZE - 1] == 0);
 }
 
+
+/* Test the original 64-berry tag bitset without allocating game heap data. */
+static void test_berry_tag_data(void)
+{
+    BerryTagData data;
+    u8 scroll = 0, index = 0;
+
+    memset(&data, 0, sizeof(data));
+    CHECK(NUM_BERRIES == 64);
+    CHECK(!BerryTagData_Contains(data.entries, 0));
+    CHECK(!BerryTagData_Contains(data.entries, 32));
+
+    BerryTagData_Add(&data, FIRST_BERRY_IDX, FALSE);
+    CHECK(BerryTagData_Contains(data.entries, 0));
+    CHECK(!BerryTagData_Contains(data.entries, 1));
+    CHECK(data.entries[0] == 1u);
+    CHECK(data.currentBerryID == 0);
+
+    /* Index 32 lives in the second u32 and initial selects that berry. */
+    BerryTagData_Add(&data, FIRST_BERRY_IDX + 32, TRUE);
+    CHECK(BerryTagData_Contains(data.entries, 32));
+    CHECK(!BerryTagData_Contains(data.entries, 33));
+    CHECK(data.entries[1] == 1u);
+    CHECK(data.currentBerryID == 32);
+
+    /* Adding the same berry again does not clear or toggle its bit. */
+    BerryTagData_Add(&data, FIRST_BERRY_IDX + 32, FALSE);
+    CHECK(data.entries[1] == 1u);
+    CHECK(data.currentBerryID == 32);
+
+    BerryTagData_SetScroll(&data, 6, 3, 12);
+    BerryTagData_GetScroll(&data, &scroll, &index);
+    CHECK(scroll == 6 && index == 3);
+    CHECK(data.count == 12);
+}
+
+static void test_pokedex_memory_state(void)
+{
+    PokedexMemory memory = { 0 };
+
+    memory.bootMode = POKEDEX_BOOT_DEFAULT;
+    CHECK(PokedexMemory_GetCurrentSpecies(&memory) == 0);
+    CHECK(PokedexMemory_GetBootMode(&memory) == POKEDEX_BOOT_DEFAULT);
+    PokedexMemory_SetCurrentSpecies(&memory, 493);
+    CHECK(PokedexMemory_GetCurrentSpecies(&memory) == 493);
+    PokedexMemory_SetBootMode(&memory, POKEDEX_BOOT_NATIONAL);
+    CHECK(PokedexMemory_GetBootMode(&memory) == POKEDEX_BOOT_NATIONAL);
+    PokedexMemory_SetCurrentSpecies(&memory, 1);
+    PokedexMemory_SetBootMode(&memory, POKEDEX_BOOT_REGIONAL);
+    CHECK(PokedexMemory_GetCurrentSpecies(&memory) == 1);
+    CHECK(PokedexMemory_GetBootMode(&memory) == POKEDEX_BOOT_REGIONAL);
+}
+
+static void test_pokedex_data_bank_switch(void)
+{
+    /* Pin the original normal/Giratina NARC and message-bank selections. */
+    Pokedex_SetupGiratina(1);
+    CHECK(Pokedex_Data_NARC_Index() ==
+          NARC_INDEX_APPLICATION__ZUKANLIST__ZKN_DATA__ZUKAN_DATA);
+    CHECK(Weight_Message_Bank_Index() == TEXT_BANK_SPECIES_WEIGHT);
+    CHECK(Height_Message_Bank_Index() == TEXT_BANK_SPECIES_HEIGHT);
+
+    Pokedex_SetupGiratina(0);
+    CHECK(Pokedex_Data_NARC_Index() ==
+          NARC_INDEX_APPLICATION__ZUKANLIST__ZKN_DATA__ZUKAN_DATA_GIRA);
+    CHECK(Weight_Message_Bank_Index() == TEXT_BANK_SPECIES_WEIGHT_GIRA);
+    CHECK(Height_Message_Bank_Index() == TEXT_BANK_SPECIES_HEIGHT_GIRA);
+
+    /* All non-zero arguments restore the original regular data banks. */
+    Pokedex_SetupGiratina(2);
+    CHECK(Pokedex_Data_NARC_Index() ==
+          NARC_INDEX_APPLICATION__ZUKANLIST__ZKN_DATA__ZUKAN_DATA);
+    CHECK(Weight_Message_Bank_Index() == TEXT_BANK_SPECIES_WEIGHT);
+    CHECK(Height_Message_Bank_Index() == TEXT_BANK_SPECIES_HEIGHT);
+}
+
+static void test_ribbon_save_state(void)
+{
+    u8 guarded[RIBBONS_SAVE_SIZE + 2];
+    int i;
+
+    CHECK(Ribbons_SaveSize() == RIBBONS_SAVE_SIZE);
+    CHECK(RIBBONS_SAVE_SIZE == 14);
+    memset(guarded, 0xA5, sizeof(guarded));
+    Ribbons_Init(&guarded[1]);
+    CHECK(guarded[0] == 0xA5);
+    CHECK(guarded[RIBBONS_SAVE_SIZE + 1] == 0xA5);
+    for (i = 1; i <= RIBBONS_SAVE_SIZE; i++) {
+        CHECK(guarded[i] == 0);
+    }
+}
+
 int main(void)
 {
     printf("Original Platinum game-code smoke tests (%d-bit)\n",
@@ -654,6 +751,10 @@ int main(void)
     CHECK(player_female_mugshot_anim_NANR == 154);
     CHECK(subscript_start_encounter == 0);
     CHECK(subscript_giratina_form_change == 296);
+    test_berry_tag_data();
+    test_pokedex_memory_state();
+    test_pokedex_data_bank_switch();
+    test_ribbon_save_state();
     test_grid_menu_cursor();
     test_overworld_map_history();
     test_pokedex_language();
