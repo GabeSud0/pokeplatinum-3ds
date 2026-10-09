@@ -8,6 +8,8 @@
 # This is a relocatable object library, NOT a playable game executable.
 # Expand GAME_SRCS after each subsystem compiles cleanly and is covered by CI.
 
+.DEFAULT_GOAL := all
+
 include ../common.mk
 
 GAME := $(ROOT)/build/upstream
