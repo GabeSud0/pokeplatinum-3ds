@@ -363,7 +363,9 @@ static int visit_model(const char *path, const struct stat *st, int type, struct
 
 static void test_models(const char *res)
 {
-    NNS_G3dInit();
+    /* NNS_G3dInit configures/awaits the original DS geometry engine.
+     * The platform port has only virtual registers, not a responding GPU,
+     * so data-only tests intentionally avoid hardware initialization. */
     nftw(res, visit_model, 16, FTW_PHYS);
     printf("  3D models: %d files, %d render objects initialized, %d files with failures (GPU draw deferred)\n",
            sModels, sModelsInitialized, sModelChecksFailed);
