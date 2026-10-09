@@ -4,7 +4,7 @@ This is the beginning of compiling **the game's original C** for a native
 3DS port. It does **not** reimplement Pokémon Platinum, package game data,
 produce a playable executable, or compile all 1,013 C files yet.
 
-The first twenty files come directly from the pinned pret/pokeplatinum source
+The first twenty-four files come directly from the pinned pret/pokeplatinum source
 checkout under `build/upstream/src/`:
 
 - `coins.c` — coin case state and overflow logic
@@ -25,6 +25,10 @@ checkout under `build/upstream/src/`:
 - `overworld_map_history.c` — map movement and warp history ring buffer
 - `pokedex_language.c` — original six-language Pokédex index translation
 - `persisted_map_features.c` — fixed-size in-save map feature scratch storage
+- `berry_tag_data.c` — Berry Tag selection, scrolling and 64-berry bitset
+- `pokedex_memory.c` — Pokédex species selection and boot-mode state
+- `pokedex_data_index.c` — normal/Giratina Pokédex archive and message-bank selection
+- `ribbon_save_data.c` — Ribbon save-block size and initialization
 
 The pinned original source tree includes `"badges.h"` in trainer-case
 headers, but stores the authoritative badge enum as
@@ -42,6 +46,9 @@ The game compilation uses `-ffunction-sections -fdata-sections` and the
 host-test linker uses `--gc-sections`. This permits validating standalone
 functions from an otherwise incomplete game source archive without forcing
 unported systems (heap, renderer, timers, game overlays) into the test binary.
+For example, the Berry Tag, Ribbon and Pokédex state smoke tests operate on
+caller-owned structs or static metadata; their real heap/save-table/NARC
+interfaces are **not** claimed to be runtime-functional.
 **It does not imply the full game can link or run.**
 
 The original Meson build uses `metang` to generate 107 C enum/mask headers
@@ -115,7 +122,8 @@ Outputs are ignored under `3ds_port/game/build/<target>/`:
 test binaries. The smoke tests cover save play-time, Poffin Case, game
 options, Berry attributes, authentic generated IDs, math/RNG, tiles,
 field-script execution, menu cursor navigation, map history rollover,
-Pokédex language ordering, and persisted map-feature buffers. They call
+Pokédex language ordering, persisted map-feature buffers, Berry Tag bits,
+Pokédex selection/data banks, and Ribbon save initialization. They call
 real game code and an externally linked NitroSystem function, so they
 test compatibility between original game code and both SDK libraries.
 
