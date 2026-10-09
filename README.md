@@ -92,9 +92,13 @@ python tools/bootstrap.py
 ```
 
 This downloads pret/pokeplatinum at the pinned commit into `build/upstream/`,
-plus the NitroSDK and NitroSystem decompilations it uses into
-`build/NitroSDK/` and `build/NitroSystem/`, and applies our patches from
-`patches/`. To build the original DS
+plus the exact NitroSDK, NitroSystem and NitroDWC revisions referenced by
+the pinned decompilation's `subprojects/*.wrap` files into
+`build/NitroSDK/`, `build/NitroSystem/` and `build/NitroDWC/`, and
+applies any corresponding port patches from `patches/`. NitroDWC is
+**fetched as a source dependency only**: Nintendo WFC, GameSpy and
+NitroWiFi networking are not yet ported, compiled or functional.
+To build the original DS
 ROM from it (a good sanity check), follow pret's
 [INSTALL.md](https://github.com/pret/pokeplatinum/blob/main/INSTALL.md) inside
 `build/upstream/`.
