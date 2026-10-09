@@ -91,7 +91,7 @@ class MoveTextBankHeaderTests(unittest.TestCase):
     def test_rejects_duplicate_invalid_and_wrong_sentinel_entries(self):
         for tokens in (
             ("MOVE_NONE", "MOVE_NONE", "MAX_MOVES"),
-            ("MOVE_NONE", "MOVE_OTHER", "MOVE_WITH_SPACE", "MAX_MOVES"),
+            ("MOVE_NONE", "MOVE_OTHER", "MOVE-BROKEN", "MAX_MOVES"),
             ("MOVE_POUND", "MAX_MOVES"),
             ("MOVE_NONE", "MOVE_POUND"),
         ):
