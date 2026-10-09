@@ -2,7 +2,7 @@
 """Diagnose GCC compilation blockers across a sample of original game sources.
 
 Does not change, copy, or package upstream game code and does not link
-executables. Every probe uses the same compile flags as libplatinum_game.a.
+executables. Every probe uses the game library compile flags plus documented, target-specific\nGameSpy header-only platform selectors (not game/runtime build flags).
 A failing probe is a data point, not an overall CI failure unless --strict
 is selected.
 
@@ -54,6 +54,8 @@ def categorize(stderr: str, timeout: bool = False) -> tuple[str, str]:
         return "missing_header", first_error
     if MISSING_FILE.search(first_error):
         return "missing_file", first_error
+    if "The GameSpy SDKs do not support this operating system" in first_error:
+        return "unsupported_gamespy_platform", first_error
     if TYPE_ERROR.search(stderr):
         return "type_or_symbol", first_error
     if "error:" in stderr or "fatal error:" in stderr:

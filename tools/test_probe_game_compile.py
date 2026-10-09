@@ -35,6 +35,7 @@ class GameCompileSurveyTests(unittest.TestCase):
              "missing_resource_header"),
             ("fatal error: ungenerated.h: No such file or directory",
              "missing_header"),
+            ("gs/nonport.h:108:6: error: #error The GameSpy SDKs do not support this operating system", "unsupported_gamespy_platform"),
             ("error: unknown type name 'FakeType'", "type_or_symbol"),
             ("error: expected ';' before '}'", "compiler_error"),
             ("unrelated failure", "other_failure"),
