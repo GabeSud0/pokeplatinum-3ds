@@ -9,6 +9,9 @@ and appends _1, _2, ... for repeated *identical* filenames.
 
 The pinned Meson rules also map pokedex.order to zukan.naix and use
 explicit .order lists for trainer encounter effects and battle subscripts.
+Other archives are found in the pinned res/**/meson.build files: any
+custom_target that outputs exactly one .naix and names its member list
+literally (--files-from files('x.order')).
 Those exact --files-from inputs produce index headers only, not .narc
 archives, graphics, scripts, or any generated implicit archive members.
 Because implicit members cannot be inventoried without generating assets,
@@ -99,6 +102,57 @@ def render(order: Path, relative: Path) -> str:
     return "\n".join(lines)
 
 
+NAIX_OUTPUT = re.compile(r"'([A-Za-z0-9_]+\.naix)'")
+FILES_FROM = re.compile(r"'--files-from',\s*files\(\s*'([A-Za-z0-9_./-]+\.order)'\s*\)")
+
+
+def custom_targets(text: str) -> list[str]:
+    """The text of each custom_target(...) call in a meson.build file,
+    found by matching parentheses (outside quoted strings)."""
+    blocks = []
+    for start in (m.end() for m in re.finditer(r"\bcustom_target\(", text)):
+        depth, i, quote = 1, start, None
+        while i < len(text) and depth:
+            ch = text[i]
+            if quote:
+                if ch == "\\":
+                    i += 1
+                elif ch == quote:
+                    quote = None
+            elif ch == "'":
+                quote = ch
+            elif ch == "#":
+                i = text.find("\n", i)
+                if i < 0:
+                    break
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            i += 1
+        blocks.append(text[start:i])
+    return blocks
+
+
+def meson_order_archives(source_root: Path) -> dict[Path, Path]:
+    """Archives whose pinned meson.build rule outputs exactly one .naix and
+    names its member list literally (--files-from files('x.order')).
+    Returns {.order file: .naix path}, both relative to the source root;
+    the .naix goes where Meson writes it (the meson.build's folder)."""
+    found: dict[Path, Path] = {}
+    for build in sorted((source_root / "res").rglob("meson.build")):
+        folder = build.parent.relative_to(source_root)
+        for block in custom_targets(build.read_text(encoding="utf-8")):
+            naix = NAIX_OUTPUT.findall(block)
+            orders = FILES_FROM.findall(block)
+            if len(naix) == 1 and len(orders) == 1:
+                order = folder / orders[0]
+                if not (source_root / order).is_file():
+                    raise FileNotFoundError(source_root / order)
+                found[order] = folder / naix[0]
+    return found
+
+
 def generate(source_root: Path, output_root: Path) -> tuple[int, int, int]:
     graphics = source_root / "res" / "graphics"
     if not graphics.is_dir():
@@ -113,6 +167,12 @@ def generate(source_root: Path, output_root: Path) -> tuple[int, int, int]:
         if not order.is_file():
             raise FileNotFoundError(order)
         files.append(order)
+    # Every other archive whose meson.build rule names its .order list and
+    # its .naix output literally (fonts, field props and scripts ...). Where
+    # both rules apply, the meson.build output path wins.
+    from_meson = meson_order_archives(source_root)
+    files.extend(source_root / order for order in from_meson
+                 if source_root / order not in files)
     files.sort(key=lambda p: p.relative_to(source_root).as_posix())
     made = 0
     members = 0
@@ -120,7 +180,8 @@ def generate(source_root: Path, output_root: Path) -> tuple[int, int, int]:
         relative = order.relative_to(source_root)
         # Meson sets zukan and battle script archive names explicitly.
         # Other graphics archives use their .order filename stems.
-        dest = output_root / ARCHIVE_OUTPUT_OVERRIDES.get(relative, relative.with_suffix(".naix"))
+        dest = output_root / from_meson.get(
+            relative, ARCHIVE_OUTPUT_OVERRIDES.get(relative, relative.with_suffix(".naix")))
         payload = render(order, relative)
         members += len(indices(order))
         if not dest.is_file() or dest.read_text(encoding="utf-8") != payload:

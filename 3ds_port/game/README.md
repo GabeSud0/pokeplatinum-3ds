@@ -13,31 +13,59 @@ that stops it:
 
 | Target | Compiled | Blocked |
 |---|---|---|
-| 3DS, 32-bit PC | 848 of 1,013 | 165 |
-| 64-bit PC | 827 of 1,013 | 165 + 21 in [`blocked_sources_64bit.txt`](blocked_sources_64bit.txt) |
+| 3DS, 32-bit PC | 984 of 1,013 | 29 |
+| 64-bit PC | 960 of 1,013 | 29 + 24 in [`blocked_sources_64bit.txt`](blocked_sources_64bit.txt) |
 
-The 21 extra files on a 64-bit PC store overlay IDs (addresses of linker
+The 24 extra files on a 64-bit PC store overlay IDs (addresses of linker
 symbols) as `u32` in static initializers, which is only constant with
 4-byte pointers.
 
-The blocked files, by cause (see the list for each file):
+What still blocks the 29: **headers the original build generates and the
+port doesn't yet**: data tables from the decomp's JSON (tutor moves, egg
+moves, footprints, berry list ...), sprite templates, a few archive indices
+made by special scripts, and two headers that embed graphics. Plus two
+decompilation slips: `<cstdlib>` (a C++ header) and a missing
+`unk_02095CD4.h`.
 
-- **Missing generated headers** (about 100): headers the original Meson
-  build generates (`items.h`, `species.h`, NARC indices for fonts, models,
-  sprites ...) that the port doesn't generate yet. 22 of them are just
-  `ppwlobby/ppw_lobby.h` (an include path).
-- **Metrowerks-only C** (about 25): `static` after a non-static declaration,
-  casts used as assignment targets. Each needs a small patch in
-  `patches/pokeplatinum/`.
-- **GCC 14 errors** (41): calls to functions that don't exist under that name
-  (real slips in the decompilation, e.g. `PokedexSort_NumDisplayed`),
-  integer/pointer mixing, implicit `int`. GCC 14 (devkitARM) rejects these,
-  so every build treats them as errors, PC included: a file that builds on
-  the PC builds for the 3DS.
+Code that only Metrowerks accepted is fixed by patches in
+`patches/pokeplatinum/` (each change under `SDK_PORT_3DS`, so the original
+build is unchanged):
 
-To unblock files: fix the cause, delete the lines it unblocks, and the files
-join the library. `make probe PROBE_LIMIT=0` compiles every file and reports
-what passes; regenerate the lists from its report (32-bit) when many change.
+- `0003`: functions called without a declaration in scope. All of them
+  exist in the game; the decompilation just doesn't declare them where
+  they're called. Includes an include-guard clash
+  (`link_contest_records.h` uses `contest.h`'s guard).
+- `0004`: `static` definitions of symbols a header declares non-static.
+- `0005`: assigning a `const` member, casts as assignment targets, `const`
+  variables as array sizes, `NULL` for an enum, `\u00XX` byte escapes.
+
+### Updating the lists
+
+Fix a cause, then compile every file on both kinds of target and rewrite the
+lists from the reports:
+
+```sh
+make -C 3ds_port/game TARGET=host32 probe PROBE_LIMIT=0   # needs gcc-multilib
+make -C 3ds_port/game TARGET=host   probe PROBE_LIMIT=0
+python tools/update_game_blocklist.py build/game-compile-survey/host32.json \
+                                      build/game-compile-survey/host.json
+```
+
+### Linking the whole game
+
+```sh
+make -C 3ds_port/game TARGET=host32 link-check   # or TARGET=3ds
+```
+
+links the game from `NitroMain`, as the original program starts, and writes
+`build/game-link-report/<target>.md`: every symbol the game reaches that
+nothing defines, grouped by why (a blocked source file, the Wi-Fi SDKs,
+overlay IDs from the DS linker script, assembly). CI uploads the 32-bit and
+3DS reports. On a 64-bit PC (with the overlay-ID files blocked too) the
+first run listed 556 missing symbols: about 450 in blocked files (86 in
+`pokemon.c` alone), 80 from the Wi-Fi SDKs, 24 overlay IDs and one function
+still in assembly (`CRYPTO_RC4Encrypt`). Nothing from NitroSDK or
+NitroSystem is missing.
 
 Compiling a file doesn't mean it runs: most of these files need the heap,
 filesystem, renderer, overlays and so on, which aren't ported yet. The
@@ -48,11 +76,22 @@ library is a static archive, so programs only pull in what they use.
 - The same shared flags and Nintendo headers as `libnitro` and
   `libnitrosystem` (`../common.mk`), plus the original
   `pch/global_pch.h`, forced as Meson does.
-- `-D_NITRO` on every target: NitroDWC's GameSpy headers, included by about
-  90 game files (`main.c` among them), choose their platform from it, and
-  `_NITRO` is the DS, as the original game was built.
+- `-D_NITRO -DLINK_PPWLOBBY` on every target, as NitroDWC's build passes
+  them to the game in the original. NitroDWC's GameSpy headers, included by
+  about 90 game files (`main.c` among them), choose their platform from
+  `_NITRO`.
   [`include/extras.h`](include/extras.h) stands in for the Metrowerks C
-  library header they include. Declarations only; networking isn't ported.
+  library header they include, and [`include/null.h`](include/null.h) for
+  another one. Declarations only; networking isn't ported.
+- **Compiler rules as Metrowerks had them, the same on every compiler:**
+  calls without a declaration are errors (GCC 14's default; a wrong
+  implicit declaration can silently break a call). Integer/pointer
+  conversions and implicit `int` are warnings: Metrowerks accepted them, and
+  with 32-bit pointers the result is the same.
+- Include paths as in the original `meson.build`: the game's own libraries
+  (`lib/*/include`), libvct, and the generated headers' folder.
+- **The game's own libraries** `lib/crypto`, `lib/gds` and `lib/spl` are
+  compiled into the same archive, as the original links them.
 - **Header functions:** game headers (`inlines.h`, `pokemon_sprite.h`,
   NitroDWC's `dwc_friend.h` ...) define functions with plain `inline`.
   Metrowerks kept one copy; GCC exports one from every file that includes

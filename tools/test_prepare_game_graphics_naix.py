@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from prepare_game_graphics_naix import generate, indices, render
+from prepare_game_graphics_naix import generate, indices, meson_order_archives, render
 
 
 class GameGraphicsIndexTests(unittest.TestCase):
@@ -83,6 +83,31 @@ class GameGraphicsIndexTests(unittest.TestCase):
         for generated in (zukan, encounter, scripts):
             self.assertNotIn("#define ARCHIVE_COUNT", generated.read_text())
             self.assertNotIn("NARC binary", generated.read_text())
+
+    def test_archives_named_by_meson_build_rules(self):
+        # A rule with one .naix output and a literal --files-from list is
+        # generated where Meson writes it; others are left alone.
+        fonts = self.source / "res/fonts"
+        fonts.mkdir(parents=True)
+        (fonts / "pl_font.order").write_text("font_system.NFGR\nfont.NCLR\n", encoding="utf-8")
+        (fonts / "meson.build").write_text(
+            "x = custom_target('pl_font.narc',  # comment with ( paren\n"
+            "    output: [ 'pl_font.narc', 'pl_font.naix' ],\n"
+            "    input: [ f('a', ')') ],\n"
+            "    command: [ arc, '--files-from', files('pl_font.order'), '@OUTPUT0@' ],\n"
+            ")\n"
+            "y = custom_target('other.narc', output: [ 'other.narc', 'other.naix' ],\n"
+            "    command: [ arc, '--files-from', some_variable ])\n",
+            encoding="utf-8",
+        )
+        self.write("tiles.NCGR\n")
+        found = meson_order_archives(self.source)
+        self.assertEqual(found, {Path("res/fonts/pl_font.order"): Path("res/fonts/pl_font.naix")})
+        generate(self.source, self.output)
+        text = (self.output / "res/fonts/pl_font.naix").read_text(encoding="utf-8")
+        self.assertIn("#define font_system_NFGR 0", text)
+        self.assertIn("#define font_NCLR 1", text)
+        self.assertFalse((self.output / "res/fonts/other.naix").exists())
 
     def test_missing_original_non_graphics_manifest_is_error(self):
         self.write("digits.NCGR.lz\n")

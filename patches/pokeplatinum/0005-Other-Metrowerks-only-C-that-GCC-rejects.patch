@@ -1,0 +1,258 @@
+From cc397f25517db7d09c7379a12787fe6a68ec61f3 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 09:27:14 -0700
+Subject: [PATCH 3/3] Other Metrowerks-only C that GCC rejects (SDK_PORT_3DS)
+
+- overlay_manager.c: copy into a const struct member with memcpy instead of
+  assigning it.
+- Casts used as assignment targets ((u8 *)p += n) step the pointer through
+  a u8 ** instead (box_app_manager.c, ov97_02232DC8.c, ov5_021ECE40.c).
+- mining.c: array sizes from static const variables, which are not constant
+  expressions in C, become enum constants.
+- nintendo_wfc/main.c: NULL passed for an enum parameter becomes 0.
+- underground/comm_manager.c: Shift-JIS debug strings written as \u00XX,
+  which Metrowerks read as single bytes, use \xXX.
+The original build is unchanged.
+---
+ src/applications/pc_boxes/box_app_manager.c |  5 +++
+ src/main_menu/ov97_02232DC8.c               | 35 +++++++++++++++++++++
+ src/nintendo_wfc/main.c                     | 10 ++++++
+ src/overlay005/ov5_021ECE40.c               |  5 +++
+ src/overlay_manager.c                       |  5 +++
+ src/underground/comm_manager.c              | 20 ++++++++++++
+ src/underground/mining.c                    | 10 ++++++
+ 7 files changed, 90 insertions(+)
+
+diff --git a/src/applications/pc_boxes/box_app_manager.c b/src/applications/pc_boxes/box_app_manager.c
+index 6622e478..b34f074d 100644
+--- a/src/applications/pc_boxes/box_app_manager.c
++++ b/src/applications/pc_boxes/box_app_manager.c
+@@ -3993,7 +3993,12 @@ static void BoxAppMan_PutDownSelectedMons(BoxApplicationManager *boxAppMan, BoxA
+     for (int i = 0; i < selection->selectedMonCount; i++) {
+         posInBox = selectionTopLeftPos + (selection->selectedMonsOrigBoxPos[i] - origSelectionTopLeftPos);
+         PCBoxes_TryStoreBoxMonAt(boxAppMan->pcBoxes, USE_CURRENT_BOX, posInBox, boxMon);
++#ifdef SDK_PORT_3DS
++        // GCC has no casts as assignment targets; step the pointer by bytes.
++        *(u8 **)&boxMon += boxMonStructSize;
++#else
+         (u8 *)boxMon += boxMonStructSize;
++#endif
+     }
+ 
+     BoxApp_SetPreviewedBoxMon(boxApp, PCBoxes_GetBoxMonAt(boxAppMan->pcBoxes, USE_CURRENT_BOX, BoxApp_GetCursorBoxPosition(boxApp)));
+diff --git a/src/main_menu/ov97_02232DC8.c b/src/main_menu/ov97_02232DC8.c
+index 4037d3c0..bf213cb8 100644
+--- a/src/main_menu/ov97_02232DC8.c
++++ b/src/main_menu/ov97_02232DC8.c
+@@ -101,19 +101,44 @@ void ov97_02232E38(UnkStruct_ov97_02232E38 *param0, void *param1)
+     v1->unk_0C = 0;
+ 
+     v1->unk_34 = param1;
++#ifdef SDK_PORT_3DS
++    // GCC has no casts as assignment targets; step the pointer by bytes.
++    *(u8 **)&param1 += WM_SYSTEM_BUF_SIZE;
++#else
+     (u8 *)param1 += WM_SYSTEM_BUF_SIZE;
++#endif
+ 
+     v1->unk_38 = param1;
++#ifdef SDK_PORT_3DS
++    // GCC has no casts as assignment targets; step the pointer by bytes.
++    *(u8 **)&param1 += v1->unk_2C = ov97_02232E28();
++#else
+     (u8 *)param1 += v1->unk_2C = ov97_02232E28();
++#endif
+ 
+     v1->unk_3C = param1;
++#ifdef SDK_PORT_3DS
++    // GCC has no casts as assignment targets; step the pointer by bytes.
++    *(u8 **)&param1 += v1->unk_30 = ov97_02232E30();
++#else
+     (u8 *)param1 += v1->unk_30 = ov97_02232E30();
++#endif
+ 
+     v1->unk_28 = param1;
++#ifdef SDK_PORT_3DS
++    // GCC has no casts as assignment targets; step the pointer by bytes.
++    *(u8 **)&param1 += sizeof(WMBssDesc);
++#else
+     (u8 *)param1 += sizeof(WMBssDesc);
++#endif
+ 
+     v1->unk_24 = param1;
++#ifdef SDK_PORT_3DS
++    // GCC has no casts as assignment targets; step the pointer by bytes.
++    *(u8 **)&param1 += sizeof(WMScanParam);
++#else
+     (u8 *)param1 += sizeof(WMScanParam);
++#endif
+ 
+     (void)WM_Init(v1->unk_34, 2);
+ 
+@@ -149,10 +174,20 @@ void ov97_02232E38(UnkStruct_ov97_02232E38 *param0, void *param1)
+     ov97_02233548();
+ 
+     ov97_02233538()->unk_08 = param1;
++#ifdef SDK_PORT_3DS
++    // GCC has no casts as assignment targets; step the pointer by bytes.
++    *(u8 **)&param1 += v1->unk_2C;
++#else
+     (u8 *)param1 += v1->unk_2C;
++#endif
+ 
+     ov97_02233538()->unk_0C = param1;
++#ifdef SDK_PORT_3DS
++    // GCC has no casts as assignment targets; step the pointer by bytes.
++    *(u8 **)&param1 += v1->unk_30;
++#else
+     (u8 *)param1 += v1->unk_30;
++#endif
+ 
+     (void)WM_GetNextTgid();
+ }
+diff --git a/src/nintendo_wfc/main.c b/src/nintendo_wfc/main.c
+index f9d23b3c..430fa810 100644
+--- a/src/nintendo_wfc/main.c
++++ b/src/nintendo_wfc/main.c
+@@ -671,7 +671,12 @@ static void ReceiveCallback(u8 aid, u8 *data, int size)
+         return;
+     }
+ 
++#ifdef SDK_PORT_3DS
++    // The first parameter is an enum; Metrowerks accepted NULL for it.
++    void *buffer = NintendoWFCAlloc((DWCAllocType)0, size - 4, 4);
++#else
+     void *buffer = NintendoWFCAlloc(NULL, size - 4, 4);
++#endif
+     if (buffer == NULL) {
+         return;
+     }
+@@ -688,7 +693,12 @@ static void ReceiveCallback(u8 aid, u8 *data, int size)
+         }
+     }
+ 
++#ifdef SDK_PORT_3DS
++    // The first parameter is an enum; Metrowerks accepted NULL for it.
++    NintendoWFCFree((DWCAllocType)0, buffer, size - 4);
++#else
+     NintendoWFCFree(NULL, buffer, size - 4);
++#endif
+ }
+ 
+ static void ConnectionClosedCallback(DWCError error, BOOL selfClosed, BOOL hostClosed, u8 aid, int closingFriendIdx, void *userParam)
+diff --git a/src/overlay005/ov5_021ECE40.c b/src/overlay005/ov5_021ECE40.c
+index 32436f2e..48a3e35a 100644
+--- a/src/overlay005/ov5_021ECE40.c
++++ b/src/overlay005/ov5_021ECE40.c
+@@ -335,7 +335,12 @@ static void ov5_021ED0A4(UnkStruct_ov5_021ED0A4 *param0, int param1)
+         v3->unk_00 = 0xffff;
+         v3->unk_04 = v2;
+         v3++;
++#ifdef SDK_PORT_3DS
++        // GCC has no casts as assignment targets; step the pointer by bytes.
++        *(u8 **)&v2 += v1;
++#else
+         (u8 *)v2 += v1;
++#endif
+         param1--;
+     } while (param1);
+ }
+diff --git a/src/overlay_manager.c b/src/overlay_manager.c
+index 3d63ed55..c9ec66f1 100644
+--- a/src/overlay_manager.c
++++ b/src/overlay_manager.c
+@@ -10,7 +10,12 @@ ApplicationManager *ApplicationManager_New(const ApplicationManagerTemplate *tem
+ {
+     ApplicationManager *appMan = Heap_Alloc(heapID, sizeof(ApplicationManager));
+ 
++#ifdef SDK_PORT_3DS
++    // The member is const; Metrowerks allowed assigning it, GCC needs a copy.
++    memcpy((void *)&appMan->template, template, sizeof(appMan->template));
++#else
+     appMan->template = *template;
++#endif
+     appMan->execState = 0;
+     appMan->procState = 0;
+     appMan->args = args;
+diff --git a/src/underground/comm_manager.c b/src/underground/comm_manager.c
+index 39a32dd5..2825fbcf 100644
+--- a/src/underground/comm_manager.c
++++ b/src/underground/comm_manager.c
+@@ -353,7 +353,12 @@ static void CommManUnderground_ConnectTaskServer(void)
+             CommPlayerMan_ResumeFieldSystem();
+         }
+ 
++#ifdef SDK_PORT_3DS
++        // Shift-JIS bytes: Metrowerks read \u00XX as one byte; GCC needs \xXX.
++        CommManUnderground_DebugPrintDummy("\x90\x65\x8B\x40\x90\xDA\x91\xB1"); // 親機接続
++#else
+         CommManUnderground_DebugPrintDummy("\u0090\u0065\u008B\u0040\u0090\u00DA\u0091\u00B1"); // 親機接続
++#endif
+ 
+         CommPlayer_SendPos(FALSE);
+ 
+@@ -431,7 +436,12 @@ static void CommManUnderground_WaitForDataReadTaskClient(void)
+     }
+ 
+     if (CommInfo_IsDataFinishedReading()) {
++#ifdef SDK_PORT_3DS
++        // Shift-JIS bytes: Metrowerks read \u00XX as one byte; GCC needs \xXX.
++        CommManUnderground_DebugPrintDummy("info\x83\x66\x81\x5B\x83\x5E\x8E\xF3\x90\x4D\x8A\xAE\x97\xB9"); // データ受信完了
++#else
+         CommManUnderground_DebugPrintDummy("info\u0083\u0066\u0081\u005B\u0083\u005E\u008E\u00F3\u0090\u004D\u008A\u00AE\u0097\u00B9"); // データ受信完了
++#endif
+         UndergroundPlayer_SendHeldFlagOwnerInfo();
+         CommManUnderground_SetFieldCommManTask(CommManUnderground_WaitForFlagDataReceiptTaskClient, 200);
+         return;
+@@ -461,7 +471,12 @@ static void CommManUnderground_WaitForFlagDataReceiptTaskClient(void)
+ static void CommManUnderground_WaitForTrapDataReceiptTaskClient(void)
+ {
+     if (Traps_HaveLinksReceivedPlacedTraps()) {
++#ifdef SDK_PORT_3DS
++        // Shift-JIS bytes: Metrowerks read \u00XX as one byte; GCC needs \xXX.
++        CommManUnderground_DebugPrintDummy("\x90\x65\x8B\x40\xE3\xA9\x83\x66\x81\x5B\x83\x5E\x93\xCD\x82\xA2\x82\xBD\x82\xE7\x82\xB5\x82\xA2"); // 親機罠データ届いたらしい
++#else
+         CommManUnderground_DebugPrintDummy("\u0090\u0065\u008B\u0040\u00E3\u00A9\u0083\u0066\u0081\u005B\u0083\u005E\u0093\u00CD\u0082\u00A2\u0082\u00BD\u0082\u00E7\u0082\u00B5\u0082\u00A2"); // 親機罠データ届いたらしい
++#endif
+         Traps_ClearLinksReceivedPlacedTraps();
+         SecretBases_SendBaseInfo();
+         CommManUnderground_SetFieldCommManTask(CommManUnderground_WaitForBaseDataReceiptTaskClient, 0);
+@@ -474,7 +489,12 @@ static void CommManUnderground_WaitForTrapDataReceiptTaskClient(void)
+ static void CommManUnderground_WaitForBaseDataReceiptTaskClient(void)
+ {
+     if (SecretBases_HaveLinksReceivedBaseData()) {
++#ifdef SDK_PORT_3DS
++        // Shift-JIS bytes: Metrowerks read \u00XX as one byte; GCC needs \xXX.
++        CommManUnderground_DebugPrintDummy("\x94\xE9\x96\xA7\x8A\xEE\x92\x6E\x82\xCC\x88\xCA\x92\x75\x82\xAA\x82\xAB\x82\xBD"); // 秘密基地の位置がきた
++#else
+         CommManUnderground_DebugPrintDummy("\u0094\u00E9\u0096\u00A7\u008A\u00EE\u0092\u006E\u0082\u00CC\u0088\u00CA\u0092\u0075\u0082\u00AA\u0082\u00AB\u0082\u00BD"); // 秘密基地の位置がきた
++#endif
+         SecretBases_ClearLinksReceivedBaseData();
+         CommPlayer_SendPos(TRUE);
+         CommSys_SendMessage(31);
+diff --git a/src/underground/mining.c b/src/underground/mining.c
+index ae23e17e..5348830f 100644
+--- a/src/underground/mining.c
++++ b/src/underground/mining.c
+@@ -2095,8 +2095,18 @@ static void Mining_DrawBuriedObjects(int buriedObjectCount, BgConfig *bgConfig,
+ 
+ static void Mining_RandomizeDirtLayers(BgConfig *bgConfig)
+ {
++#ifdef SDK_PORT_3DS
++    // A const variable is not a constant expression in C; GCC rejects it as an array size.
++    enum { dirtLayer4MapLength = 8 };
++#else
+     static const u8 dirtLayer4MapLength = 8;
++#endif
++#ifdef SDK_PORT_3DS
++    // A const variable is not a constant expression in C; GCC rejects it as an array size.
++    enum { dirtLayer6MapLength = 5 };
++#else
+     static const u8 dirtLayer6MapLength = 5;
++#endif
+     static u8 dirtLayer4Map[dirtLayer4MapLength][dirtLayer4MapLength] = {
+         { 0, 0, 4, 4, 4, 4, 0, 0 },
+         { 0, 4, 4, 4, 4, 4, 4, 0 },
+-- 
+2.43.0
+
