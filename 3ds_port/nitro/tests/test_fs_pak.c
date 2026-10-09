@@ -5,12 +5,18 @@
 #include <nitro.h>
 #include <nitro_port_fs.h>
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 static int sChecks, sFailures;
 static FSOverlayInfoHeader sSyntheticOvt[1];
 static unsigned char sOverlayRam[16];
+
+/* Test-only injection of the ROM OVT region. Attaching through the public
+ * FS_AttachOverlayTable would require Nintendo's real HMAC digest: these
+ * are intentionally synthetic bytes, and only the file read is in scope. */
+extern CARDRomRegion fsi_ovt9;
 
 #define CHECK(test) do { \
     ++sChecks; \
@@ -135,10 +141,12 @@ int main(int argc, char **argv)
     sSyntheticOvt[0].file_id = 23;
     sSyntheticOvt[0].ram_address = sOverlayRam;
     sSyntheticOvt[0].ram_size = sizeof("FAKE-OVERLAY") - 1;
-    FS_AttachOverlayTable(MI_PROCESSOR_ARM9, sSyntheticOvt, sizeof(sSyntheticOvt));
+    fsi_ovt9.offset = (u32)(uintptr_t)sSyntheticOvt;
+    fsi_ovt9.length = sizeof(sSyntheticOvt);
     CHECK(FS_LoadOverlay(MI_PROCESSOR_ARM9, 0));
     CHECK(memcmp(sOverlayRam, "FAKE-OVERLAY", sizeof("FAKE-OVERLAY") - 1) == 0);
-    FS_AttachOverlayTable(MI_PROCESSOR_ARM9, NULL, 0);
+    fsi_ovt9.offset = 0;
+    fsi_ovt9.length = 0;
 
     NitroPort_ClosePak();
     CHECK(!NitroPort_IsPakOpen());
