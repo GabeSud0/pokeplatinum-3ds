@@ -33,6 +33,9 @@
 #include "ribbon_save_data.h"
 #include "battle_regulation.h"
 #include "record_mixed_rng.h"
+#include "move_reminder_data.h"
+#include "pokedex_heightweight.h"
+#include "daycare_save.h"
 #include "constants/items.h"
 #include "constants/field/map.h"
 #include "badges.h" /* Original badge IDs are generated/badges.h. */
@@ -816,6 +819,97 @@ static void test_record_mixed_rng(void)
     CHECK(RecordMixedRNG_IsEntryEmpty(&entries[RECORD_MIXED_RNG_QUEUE_1]));
 }
 
+
+/* Test only original move-list sentinel detection. Generating moves from a
+ * Pokémon still requires the save/game heap and full Pokémon data backends. */
+static void test_move_reminder_data(void)
+{
+    u16 noMoves[] = { LEVEL_UP_MOVESET_TERMINATOR, 0 };
+    u16 oneMove[] = { 1, LEVEL_UP_MOVESET_TERMINATOR };
+    u16 zeroFirstMove[] = { 0, LEVEL_UP_MOVESET_TERMINATOR };
+
+    CHECK(!MoveReminderData_HasMoves(noMoves));
+    CHECK(MoveReminderData_HasMoves(oneMove));
+    /* Original function checks the first value against the terminator only. */
+    CHECK(MoveReminderData_HasMoves(zeroFirstMove));
+}
+
+/* Test genuine accessor functions with synthetic local measurements.
+ * No NARC content or copyrighted Pokédex data is loaded. */
+static void test_pokedex_heightweight_accessors(void)
+{
+    int heights[] = { 10, 45, 80 };
+    int weights[] = { 100, 230, 900 };
+    short trainerPositions[] = { -2, 3, 7 };
+    short pokemonPositions[] = { 8, -5, 4 };
+    short trainerScales[] = { 12, 16, 24 };
+    short pokemonScales[] = { 27, 29, 33 };
+    HeightWeightData data = {
+        .height = heights,
+        .weight = weights,
+        .trainerPos = trainerPositions,
+        .pokemonPos = pokemonPositions,
+        .trainerScale = trainerScales,
+        .pokemonScale = pokemonScales,
+    };
+
+    CHECK(Pokedex_HeightWeightData_Height(&data, 0) == 10);
+    CHECK(Pokedex_HeightWeightData_Height(&data, 2) == 80);
+    CHECK(Pokedex_HeightWeightData_Weight(&data, 1) == 230);
+    CHECK(Pokedex_HeightWeightData_Weight(&data, 2) == 900);
+    CHECK(Pokedex_HeightWeightData_TrainerPos(&data, 0) == -2);
+    CHECK(Pokedex_HeightWeightData_TrainerPos(&data, 2) == 7);
+    CHECK(Pokedex_HeightWeightData_PokemonPos(&data, 0) == 8);
+    CHECK(Pokedex_HeightWeightData_PokemonPos(&data, 1) == -5);
+    CHECK(Pokedex_HeightWeightData_TrainerScale(&data, 0) == 12);
+    CHECK(Pokedex_HeightWeightData_TrainerScale(&data, 2) == 24);
+    CHECK(Pokedex_HeightWeightData_PokemonScale(&data, 1) == 29);
+    CHECK(Pokedex_HeightWeightData_PokemonScale(&data, 2) == 33);
+}
+
+/* Exercise original Day Care state helpers without BoxPokemon_Init(),
+ * which will require the full Pokémon implementation later. */
+static void test_daycare_state(void)
+{
+    Daycare state, copy;
+    DaycareMon *first, *second;
+    DaycareMail *mail;
+
+    memset(&state, 0, sizeof(state));
+    memset(&copy, 0, sizeof(copy));
+    CHECK(Daycare_SaveSize() == sizeof(Daycare));
+    CHECK(!Daycare_HasEgg(&state));
+    CHECK(Daycare_GetOffspringPersonality(&state) == 0);
+    CHECK(Daycare_GetStepCounter(&state) == 0);
+
+    first = Daycare_GetDaycareMon(&state, 0);
+    second = Daycare_GetDaycareMon(&state, 1);
+    CHECK(first == &state.mons[0]);
+    CHECK(second == &state.mons[1]);
+    CHECK(DaycareMon_GetBoxMon(first) == &state.mons[0].boxMon);
+    mail = DaycareMon_GetDaycareMail(first);
+    CHECK(mail == &state.mons[0].daycareMail);
+    CHECK(DaycareMail_GetMail(mail) == &mail->mail);
+
+    DaycareMon_SetSteps(first, 100);
+    DaycareMon_AddSteps(first, 25);
+    CHECK(DaycareMon_GetSteps(first) == 125);
+    CHECK(DaycareMon_GetSteps(second) == 0);
+    DaycareMon_SetSteps(second, 7);
+    CHECK(DaycareMon_GetSteps(second) == 7);
+    DaycareMon_CopyToDaycareMon(&copy.mons[0], first);
+    CHECK(DaycareMon_GetSteps(&copy.mons[0]) == 125);
+    CHECK(memcmp(&copy.mons[0], first, sizeof(DaycareMon)) == 0);
+
+    Daycare_SetOffspringPersonality(&state, 0x12345678);
+    CHECK(Daycare_HasEgg(&state));
+    CHECK(Daycare_GetOffspringPersonality(&state) == 0x12345678);
+    Daycare_SetStepCounter(&state, 250);
+    CHECK(Daycare_GetStepCounter(&state) == 250);
+    Daycare_SetOffspringPersonality(&state, 0);
+    CHECK(!Daycare_HasEgg(&state));
+}
+
 int main(void)
 {
     printf("Original Platinum game-code smoke tests (%d-bit)\n",
@@ -883,6 +977,9 @@ int main(void)
     CHECK(player_female_mugshot_anim_NANR == 154);
     CHECK(subscript_start_encounter == 0);
     CHECK(subscript_giratina_form_change == 296);
+    test_move_reminder_data();
+    test_pokedex_heightweight_accessors();
+    test_daycare_state();
     test_battle_regulation_rules();
     test_record_mixed_rng();
     test_berry_tag_data();
