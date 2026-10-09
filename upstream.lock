@@ -1,0 +1,4 @@
+# The exact decompilation commit this port builds against.
+# Update it deliberately (and fix the patches) rather than tracking main.
+url=https://github.com/pret/pokeplatinum.git
+commit=c248fb3f8cc9934ded800e489567c5c0eeee92eb
