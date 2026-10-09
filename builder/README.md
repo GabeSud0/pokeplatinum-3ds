@@ -1,13 +1,47 @@
 # Builder
 
-The builder turns the player's **own** ROM dump into the data the 3DS port
-needs, on the player's own computer. The ROM is only read; nothing from it is
-uploaded or committed.
+The builder extracts NitroFS files from **your own legally dumped Pokémon
+Platinum cartridge**, entirely on your computer. No ROM or extracted data
+is uploaded, committed or included in the project's releases.
 
-Today it contains one tool:
+## Verify your ROM first
 
-- `verify_rom.py`: checks a dump against the supported versions by SHA-1.
+```sh
+python builder/verify_rom.py /path/to/platinum.nds
+```
 
-Planned (roadmap item 3.1): extract the game's files from the ROM, convert them
-into formats the 3DS backend can load quickly, and write a data pack to the SD
-card.
+Only the supported, clean USA revisions pass the SHA-1 check. Modified,
+trimmed or other-region dumps are rejected.
+
+## Extract the NitroFS data pack
+
+From the repository root:
+
+```sh
+python builder/extract_rom.py /path/to/platinum.nds
+```
+
+By default, the output goes to `data_pack/` (gitignored). To choose
+another directory:
+
+```sh
+python builder/extract_rom.py /path/to/platinum.nds --output data_pack/
+```
+
+The extractor verifies the ROM itself before extracting. It reads the NDS
+header, NitroFS file-name table (FNT), and file-allocation table (FAT);
+recreates the directory tree and writes `manifest.json`. Each manifest
+entry has `id` (NitroSDK file ID), `path` (relative to the data pack),
+and `size` (bytes). File IDs are preserved for the 3DS filesystem port.
+
+The ROM is opened read-only and never modified. Keep the output private:
+**never add ROMs, extracted files, data packs or game assets to Git**.
+
+## Tests
+
+```sh
+python -m unittest discover -s builder -p 'test*.py'
+```
+
+Tests construct synthetic miniature NDS images; no real game files are used.
+Future work will convert game data into faster-to-load formats.
