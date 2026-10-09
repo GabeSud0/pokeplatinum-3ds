@@ -207,22 +207,23 @@ static void test_vram_managers(void)
     NNSGfdTexKey k1, k2, k3, k4;
     NNSGfdPlttKey p1, p2;
 
-    /* Texture VRAM, frame manager (what most of the game uses): one 128 KB
-     * slot; allocations from the low end go up from address 0. */
+    /* Texture VRAM frame manager: one 128 KB slot. NitroSystem's
+     * DoAllocNrm_ allocates from the end of this slot; opt is ignored.
+     * Two allocations therefore occupy [0x1F000, 0x20000) and then
+     * [0x1D000, 0x1F000), without overlapping. */
     NNS_GfdInitFrmTexVramManager(1, TRUE);
     k1 = NNS_GfdAllocTexVram(0x1000, FALSE, NNS_GFD_ALLOC_FROM_LOW);
     k2 = NNS_GfdAllocTexVram(0x2000, FALSE, NNS_GFD_ALLOC_FROM_LOW);
-    CHECK_EQ(NNS_GfdGetTexKeyAddr(k1), 0);
+    CHECK_EQ(NNS_GfdGetTexKeyAddr(k1), 0x1F000);
     CHECK_EQ(NNS_GfdGetTexKeySize(k1), 0x1000);
-    CHECK_EQ(NNS_GfdGetTexKeyAddr(k2), 0x1000);
+    CHECK_EQ(NNS_GfdGetTexKeyAddr(k2), 0x1D000);
     CHECK(NNS_GfdAllocTexVram(0x20000, FALSE, NNS_GFD_ALLOC_FROM_LOW) == NNS_GFD_ALLOC_ERROR_TEXKEY);
 
-    /* Linked-list manager (also used by the game): 128 KB, no area for
-     * 4x4-compressed textures. Explicit low-address allocation: the
-     * default (0) asks for allocation from the high end instead. */
+    /* Linked-list manager: 128 KB, no compressed-texture region.
+     * Its first-fit allocator starts at address 0; opt is ignored. */
     NNS_GfdInitLnkTexVramManager(0x20000, 0, work, sizeof(work), TRUE);
-    k1 = NNS_GfdAllocTexVram(0x1000, FALSE, NNS_GFD_ALLOC_FROM_LOW);
-    k2 = NNS_GfdAllocTexVram(0x2000, FALSE, NNS_GFD_ALLOC_FROM_LOW);
+    k1 = NNS_GfdAllocTexVram(0x1000, FALSE, 0);
+    k2 = NNS_GfdAllocTexVram(0x2000, FALSE, 0);
     CHECK(k1 != NNS_GFD_ALLOC_ERROR_TEXKEY && k2 != NNS_GFD_ALLOC_ERROR_TEXKEY);
     CHECK_EQ(NNS_GfdGetTexKeyAddr(k1), 0);
     CHECK_EQ(NNS_GfdGetTexKeySize(k1), 0x1000);
@@ -230,17 +231,17 @@ static void test_vram_managers(void)
     CHECK_EQ(NNS_GfdGetTexKeySize(k2), 0x2000);
 
     /* Sizes round up to the 16-byte texture granularity. */
-    k3 = NNS_GfdAllocTexVram(0x7F1, FALSE, NNS_GFD_ALLOC_FROM_LOW);
+    k3 = NNS_GfdAllocTexVram(0x7F1, FALSE, 0);
     CHECK_EQ(NNS_GfdGetTexKeyAddr(k3), 0x3000);
     CHECK_EQ(NNS_GfdGetTexKeySize(k3), 0x800);
 
     /* Freed space is reused. */
     CHECK_EQ(NNS_GfdFreeTexVram(k1), 0);
-    k4 = NNS_GfdAllocTexVram(0x800, FALSE, NNS_GFD_ALLOC_FROM_LOW);
+    k4 = NNS_GfdAllocTexVram(0x800, FALSE, 0);
     CHECK_EQ(NNS_GfdGetTexKeyAddr(k4), 0);
 
     /* More than is left fails. */
-    CHECK(NNS_GfdAllocTexVram(0x20000, FALSE, NNS_GFD_ALLOC_FROM_LOW) == NNS_GFD_ALLOC_ERROR_TEXKEY);
+    CHECK(NNS_GfdAllocTexVram(0x20000, FALSE, 0) == NNS_GFD_ALLOC_ERROR_TEXKEY);
 
     /* Palette VRAM, frame manager: 4-color palettes (8 bytes) and the rest
      * (16-byte aligned). */
