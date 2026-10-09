@@ -83,6 +83,17 @@ class PakTests(unittest.TestCase):
         self.assertIn("Unsupported ROM", errors.getvalue())
         self.assertFalse(self.out.exists())
 
+    def test_supported_check_covers_manifest_and_argument(self):
+        other = "f" * 40
+        with self.assertRaisesRegex(ValueError, "Unsupported ROM"):
+            pack(self.root, self.out, build_id="v1", rom_sha1=SHA1, supported={other})
+        self.write_manifest(self.files, rom_sha1=SHA1)
+        with self.assertRaisesRegex(ValueError, "Unsupported ROM"):
+            pack(self.root, self.out, build_id="v1", supported={other})
+        self.assertFalse(self.out.exists())
+        pack(self.root, self.out, build_id="v1", supported={SHA1})
+        self.assertEqual(read_pak(self.out)["rom_sha1"], SHA1)
+
     def test_missing_rom_sha1_is_not_guessed(self):
         with self.assertRaisesRegex(ValueError, "--rom"):
             pack(self.root, self.out, build_id="v1")
