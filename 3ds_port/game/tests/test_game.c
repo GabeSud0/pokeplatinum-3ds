@@ -18,6 +18,9 @@
 #include "global/pm_version.h"
 #include "int_distance.h"
 #include "play_time.h"
+#include "play_time_manager.h"
+#include "poffin.h"
+#include "timer.h"
 #include "math_util.h"
 #include "fx_util.h"
 #include "field_script_context.h"
@@ -247,6 +250,78 @@ static void test_field_script(void)
     CHECK(ctx.scriptPtr == NULL);
 }
 
+/* Deterministic host clock for the original play-time manager. */
+static u64 fakeTicks;
+
+u64 Timer_GetCurrentTimestamp(void)
+{
+    return fakeTicks;
+}
+
+u64 Timer_TicksToSeconds(u64 ticks)
+{
+    return ticks;
+}
+
+static void test_play_time_manager(void)
+{
+    PlayTime playTime;
+    PlayTime_Init(&playTime);
+    fakeTicks = 100;
+    PlayTime_Start(&playTime);
+    PlayTime_IncrementTimer();
+    CHECK(PlayTime_GetSeconds(&playTime) == 0);
+    fakeTicks += 35;
+    PlayTime_IncrementTimer();
+    CHECK(PlayTime_GetSeconds(&playTime) == 35);
+    PlayTime_IncrementTimer();
+    CHECK(PlayTime_GetSeconds(&playTime) == 35);
+    fakeTicks += 40;
+    PlayTime_IncrementTimer();
+    CHECK(PlayTime_GetMinutes(&playTime) == 1);
+    CHECK(PlayTime_GetSeconds(&playTime) == 15);
+    PlayTime_FlagNotStarted();
+    fakeTicks += 10;
+    PlayTime_IncrementTimer();
+    CHECK(PlayTime_GetSeconds(&playTime) == 15);
+}
+
+static void test_poffin(void)
+{
+    Poffin poffin;
+    Poffin copy;
+    PoffinCase c;
+    u8 attrs[8];
+
+    Poffin_Clear(&poffin);
+    CHECK(Poffin_SizeOf() == 8);
+    CHECK(!Poffin_HasValidFlavor(&poffin));
+    CHECK(poffin.spiciness == 0);
+    CHECK(poffin.smoothness == 0);
+    poffin.type = 1;
+    poffin.spiciness = 15;
+    poffin.sweetness = 25;
+    poffin.smoothness = 30;
+    CHECK(Poffin_HasValidFlavor(&poffin));
+    CHECK(Poffin_GetAttribute(&poffin, POFFIN_ATTRIBUTEID_SPICINESS) == 15);
+    Poffin_Copy(&poffin, &copy);
+    CHECK(copy.type == poffin.type);
+    CHECK(copy.spiciness == 15);
+    CHECK(copy.sweetness == 25);
+    CHECK(copy.smoothness == 30);
+
+    PoffinCase_Init(&c);
+    CHECK(PoffinCase_GetEmptySlot(&c) == 0);
+    CHECK(PoffinCase_CountFilledSlots(&c) == 0);
+    CHECK(PoffinCase_CountEmptySlots(&c) == MAX_POFFINS);
+    CHECK(PoffinCase_AddPoffin(&c, &poffin) == 0);
+    CHECK(PoffinCase_CountFilledSlots(&c) == 1);
+    CHECK(PoffinCase_CountEmptySlots(&c) == MAX_POFFINS - 1);
+    CHECK(PoffinCase_ClearSlot(&c, 0));
+    CHECK(PoffinCase_CountFilledSlots(&c) == 0);
+    (void)attrs;
+}
+
 static void test_sdk_link(void)
 {
     /* Require a real external NitroSystem function at link time. */
@@ -271,6 +346,8 @@ int main(void)
     test_random_and_math();
     test_tile_behavior();
     test_field_script();
+    test_play_time_manager();
+    test_poffin();
     test_sdk_link();
     printf("%d checks, %d failed\n", checks, fails);
     return fails == 0 ? 0 : 1;
