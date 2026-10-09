@@ -58,7 +58,10 @@ static const char *sCurrentFile;
 
 /* Static memory: on a 64-bit PC it sits below 4 GB (non-PIE build), where
  * the SDK's 32-bit address arithmetic works. */
-static u8 sFile[256 * 1024] __attribute__((aligned(32)));
+/* The larger prebuilt NCGR/NCLR resources exceed 256 KiB. Keep these
+ * buffers in static storage (not the test process stack), and reject
+ * truncated files rather than testing incomplete resource data. */
+static u8 sFile[4 * 1024 * 1024] __attribute__((aligned(32)));
 /* NitroSystem patches offset fields into live pointers in place. Compare
  * against these untouched bytes, never against already-unpacked fields. */
 static u8 sRawFile[sizeof(sFile)] __attribute__((aligned(32)));
