@@ -10,6 +10,8 @@ Result:
                         with patches/pokeplatinum/*.patch applied
     build/NitroSDK/     the NitroSDK decompilation, at the revision the pinned
     build/NitroSystem/  pokeplatinum uses (its subprojects/*.wrap files),
+    build/NitroDWC/     pinned original Nintendo WFC/GameSpy SDK sources,
+                        fetched for future header/build integration only
                         with patches/<name>/*.patch applied
 """
 
@@ -28,8 +30,9 @@ BUILD_DIR = ROOT / "build"
 UPSTREAM_DIR = BUILD_DIR / "upstream"
 PATCH_ROOT = ROOT / "patches"
 
-# Libraries pokeplatinum pulls in that the 3DS port compiles too.
-SUBPROJECTS = ("NitroSDK", "NitroSystem")
+# Pinned upstream dependencies. Only NitroSDK and NitroSystem are currently
+# compiled for the 3DS; NitroDWC is fetched as source for staged porting.
+SUBPROJECTS = ("NitroSDK", "NitroSystem", "NitroDWC")
 
 
 def read_lock(path: Path) -> dict[str, str]:
