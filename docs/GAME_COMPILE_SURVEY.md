@@ -122,11 +122,22 @@ have 468 entries each and `moves_used_in_battle` has 1,404 entries.
 No actual names, descriptions or battle dialogue are emitted. The
 headers are located in the same ignored resource metadata directory.
 
-Other dynamic/generated banks—such as `species_*`, trainer names and
-items—still require their original underlying data processing before
-their corresponding source-backed headers can be emitted. Even when a
-C header is available, the actual message NARC and associated
-rendering/loading system are **not** built.
+The original `tools/dataproc/src/speciesproc.c::emit_textbanks` also
+creates `species_name` and `species_name_with_articles` in the
+`generated/species.txt` enum order, from `SPECIES_NONE` through
+`SPECIES_BAD_EGG`. `tools/prepare_game_species_text_headers.py`
+reproduces only those two banks' message IDs after validating the
+corresponding `res/pokemon/<species>/data.json` records. The pinned
+revision contains **496 original species slots**, including the reserved
+None/Egg/Bad Egg slots. Alternate-form data processed after BAD_EGG does
+not add names to these banks. The generated headers include **only macros
+and entry counts**, not Pokémon names, Pokedex text or assets.
+
+Other dynamic/generated banks—such as species Pokédex descriptions,
+trainer names and item descriptions—still require their original
+underlying data processing. Even when an ID header is available,
+the actual message NARC and associated rendering/loading system are
+**not** built.
 
 ### Original NitroSFX sound index metadata
 
