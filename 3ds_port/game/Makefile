@@ -33,7 +33,8 @@ GAME_BLOCKED := $(call blocklist,blocked_sources.txt)
 ifeq ($(TARGET),host)
 GAME_BLOCKED += $(call blocklist,blocked_sources_64bit.txt)
 endif
-GAME_ALL_SRCS := $(sort $(patsubst $(GAME)/src/%,%,$(shell find $(GAME)/src -name '*.c')))
+# The sources the original build compiles (src/meson.build's lists).
+GAME_ALL_SRCS := $(shell python3 $(ROOT)/tools/game_sources.py $(GAME))
 GAME_SRCS := $(filter-out $(GAME_BLOCKED),$(GAME_ALL_SRCS))
 GAME_OBJS := $(GAME_SRCS:%.c=$(OUT)/src/%.o)
 
@@ -144,6 +145,24 @@ $(ORDERGEN_STAMP): $(wildcard $(GAME)/tools/ordergen/*.py) $(GAME)/generated/tra
 	@python3 $(ROOT)/tools/prepare_game_ordergen_naix.py --upstream="$(GAME)" --output="$(RESOURCE_DIR)"
 	@touch $@
 
+# Headers the decompilation's own data tools write (tools/dataproc:
+# speciesproc, itemproc, frontierproc, trainerproc, resdatproc; and
+# tools/nitrogfx for the two images the game embeds). The tools are built
+# with the PC's C compiler, as their meson.build files say; needs libpng.
+DATAPROC_DIR := $(ROOT)/build/game-tools
+DATAPROC_STAMP := $(RESOURCE_DIR)/.dataproc-ready
+DATAPROC_INPUTS := $(shell find $(GAME)/tools/dataproc $(GAME)/tools/nitrogfx $(GAME)/tools/enumproc \
+        $(GAME)/tools/nitroarc/lib -type f) \
+    $(shell find $(GAME)/res/pokemon $(GAME)/res/items $(GAME)/res/trainers \
+        $(GAME)/res/graphics/sprite_templates -name '*.json') \
+    $(GAME)/res/fonts/arrow_cursor.png $(GAME)/res/graphics/battle/healthbox/healthbox_parts.png
+
+$(DATAPROC_STAMP): $(DATAPROC_INPUTS) $(CONSTANTS_STAMP) $(ARCHIVE_STAMP) $(ORDERGEN_STAMP) \
+                   $(ROOT)/tools/prepare_game_dataproc.py
+	@python3 $(ROOT)/tools/prepare_game_dataproc.py --upstream "$(GAME)" --constants "$(CONSTANTS_DIR)" \
+	    --resources "$(RESOURCE_DIR)" --work "$(DATAPROC_DIR)"
+	@touch $@
+
 # Network headers come from exact pinned NitroDWC and NitroWiFi revisions.
 # The game save structs now need NitroDWC's genuine account declarations,
 # so fetch these headers before compiling original game translation units.
@@ -171,6 +190,12 @@ GCC14_ERRORS := -Werror=implicit-function-declaration \
                 -Wno-error=implicit-int -Wno-error=int-conversion \
                 -Wno-error=incompatible-pointer-types
 
+# Meson adds the folder of every generated header it compiles with to the
+# include path, so the game can include some by bare name ("ending.naix").
+# Same here: every res/ folder whose meson.build generates a .naix or .h.
+GENERATED_HEADER_DIRS := $(addprefix -I$(RESOURCE_DIR)/,$(sort $(patsubst $(GAME)/%/,%,$(dir \
+    $(shell grep -rlE "\.(naix|h)'" --include=meson.build $(GAME)/res)))))
+
 # Include paths as in the original meson.build: the game's own libraries
 # (lib/*/include) and libvct, plus the folder of the generated constant
 # headers, which Meson adds by itself for generated headers (a few files
@@ -184,7 +209,8 @@ GCC14_ERRORS := -Werror=implicit-function-declaration \
 # This compiles the declarations only; networking is not ported.
 # Every generated header the game's sources may include.
 GAME_GENERATED := $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) \
-                  $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(ORDERGEN_STAMP) $(NETWORK_STAMP)
+                  $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(ORDERGEN_STAMP) \
+                  $(DATAPROC_STAMP) $(NETWORK_STAMP)
 
 # Force the original global precompiled header, as Meson/Metrowerks does.
 # _MSL_RESTRICT is a Metrowerks qualifier and must be empty with GCC.
@@ -199,7 +225,7 @@ GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
                -I$(GAME)/lib/gds/include \
                -I$(GAME)/lib/ppwlobby/include -I$(GAME)/lib/crypto/include \
                -I$(NETWORK_DIR)/libvct/include \
-               -I$(CONSTANTS_DIR)/generated \
+               -I$(CONSTANTS_DIR)/generated $(GENERATED_HEADER_DIRS) \
                -DPOKEPLATINUM_REVISION=1 -DPOKEPLATINUM_GENERATED_ENUM \
                -D_MSL_RESTRICT= -DPM_KEEP_ASSERTS \
                -DGAME_VERSION=VERSION_PLATINUM \

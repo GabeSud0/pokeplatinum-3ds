@@ -67,7 +67,14 @@ def sample_sources(source_dir: Path, limit: int) -> tuple[list[Path], int]:
     """Deterministic spread across all src/ subdirectories, not only A–C."""
     if limit < 0:
         raise ValueError("limit cannot be negative")
-    all_sources = sorted(source_dir.rglob("*.c"))
+    # The files the original build compiles (src/meson.build), where there
+    # is one; otherwise every .c file.
+    if (source_dir / "meson.build").is_file():
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from game_sources import listed_sources
+        all_sources = [source_dir / name for name in listed_sources(source_dir.parent)]
+    else:
+        all_sources = sorted(source_dir.rglob("*.c"))
     if not all_sources:
         raise ValueError(f"{source_dir}: no original C files were found")
     # Hash each RELATIVE path, making the sample independent of temp paths,

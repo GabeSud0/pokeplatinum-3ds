@@ -22,8 +22,8 @@ the same engine, so most of the 3DS backend should carry over.
 > [`docs/HARDWARE_LAYER.md`](docs/HARDWARE_LAYER.md). NitroSDK and
 > NitroSystem build for the 3DS and pass their tests
 > ([`3ds_port/nitro`](3ds_port/nitro),
-> [`3ds_port/nitrosystem`](3ds_port/nitrosystem)), and 986 of the game's
-> 1,013 C files compile for the 3DS
+> [`3ds_port/nitrosystem`](3ds_port/nitrosystem)), and all 1,012 of the
+> game's C files compile and link for the 3DS
 > ([`3ds_port/game`](3ds_port/game), with the reason for each one that
 > doesn't). The game doesn't run yet: no renderer, sound, file system or
 > main loop on the 3DS. **Nothing playable yet.**

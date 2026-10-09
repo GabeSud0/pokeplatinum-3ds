@@ -134,6 +134,23 @@ def custom_targets(text: str) -> list[str]:
     return blocks
 
 
+SINGLE_FILE = re.compile(r"'--single-file',\s*'([A-Za-z0-9_.-]+)'")
+
+
+def meson_single_file_archives(source_root: Path) -> dict[Path, str]:
+    """Archives packed from one file (nitroarc --single-file NAME): the .naix
+    path, and NAME, its only member (res/words: word_bank.o -> word_bank_o)."""
+    found: dict[Path, str] = {}
+    for build in sorted((source_root / "res").rglob("meson.build")):
+        folder = build.parent.relative_to(source_root)
+        for block in custom_targets(build.read_text(encoding="utf-8")):
+            naix = NAIX_OUTPUT.findall(block)
+            single = SINGLE_FILE.findall(block)
+            if len(naix) == 1 and len(single) == 1:
+                found[folder / naix[0]] = single[0]
+    return found
+
+
 def meson_order_archives(source_root: Path) -> dict[Path, Path]:
     """Archives whose pinned meson.build rule outputs exactly one .naix and
     names its member list literally (--files-from files('x.order')).
@@ -184,6 +201,17 @@ def generate(source_root: Path, output_root: Path) -> tuple[int, int, int]:
             relative, ARCHIVE_OUTPUT_OVERRIDES.get(relative, relative.with_suffix(".naix")))
         payload = render(order, relative)
         members += len(indices(order))
+        if not dest.is_file() or dest.read_text(encoding="utf-8") != payload:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(payload, encoding="utf-8")
+            made += 1
+    for relative, member in meson_single_file_archives(source_root).items():
+        order = output_root / ".single-file" / (relative.stem + ".order")
+        order.parent.mkdir(parents=True, exist_ok=True)
+        order.write_text(member + "\n", encoding="utf-8")
+        payload = render(order, relative)
+        dest = output_root / relative
+        members += 1
         if not dest.is_file() or dest.read_text(encoding="utf-8") != payload:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(payload, encoding="utf-8")

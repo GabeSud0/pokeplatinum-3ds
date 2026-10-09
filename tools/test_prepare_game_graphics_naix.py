@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from prepare_game_graphics_naix import generate, indices, meson_order_archives, render
+from prepare_game_graphics_naix import (generate, indices, meson_order_archives,
+                                        meson_single_file_archives, render)
 
 
 class GameGraphicsIndexTests(unittest.TestCase):
@@ -108,6 +109,20 @@ class GameGraphicsIndexTests(unittest.TestCase):
         self.assertIn("#define font_system_NFGR 0", text)
         self.assertIn("#define font_NCLR 1", text)
         self.assertFalse((self.output / "res/fonts/other.naix").exists())
+
+    def test_single_file_archive(self):
+        words = self.source / "res/words"
+        words.mkdir(parents=True)
+        (words / "meson.build").write_text(
+            "w = custom_target('word_bank.narc', output: [ 'word_bank.narc', 'word_bank.naix' ],\n"
+            "    command: [ arc, '--create', '--index', '--single-file', 'word_bank.o', '@PRIVATE_DIR@' ])\n",
+            encoding="utf-8")
+        self.write("tiles.NCGR\n")
+        self.assertEqual(meson_single_file_archives(self.source),
+                         {Path("res/words/word_bank.naix"): "word_bank.o"})
+        generate(self.source, self.output)
+        self.assertIn("#define word_bank_o 0",
+                      (self.output / "res/words/word_bank.naix").read_text(encoding="utf-8"))
 
     def test_missing_original_non_graphics_manifest_is_error(self):
         self.write("digits.NCGR.lz\n")
