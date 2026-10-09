@@ -22,7 +22,7 @@ extern CARDRomRegion fsi_ovt9;
     ++sChecks; \
     if (!(test)) { \
         ++sFailures; \
-        fprintf(stderr, "FAIL %s:%d: %s\\n", __FILE__, __LINE__, #test); \
+        fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #test); \
     } \
 } while (0)
 
@@ -83,7 +83,7 @@ int main(int argc, char **argv)
     char path[512], manifest[512];
 
     if (argc != 2) {
-        fprintf(stderr, "usage: test_fs_pak <synthetic fixture folder>\\n");
+        fprintf(stderr, "usage: test_fs_pak <synthetic fixture folder>\n");
         return 2;
     }
     if (snprintf(path, sizeof(path), "%s/synthetic.pak", argv[1]) >= (int)sizeof(path) ||
@@ -154,6 +154,6 @@ int main(int argc, char **argv)
     CHECK(!FS_OpenFile(&file, "rom:/hello.bin"));
     FS_End();
 
-    printf("pak-backed NitroFS: %d checks, %d failed\\n", sChecks, sFailures);
+    printf("pak-backed NitroFS: %d checks, %d failed\n", sChecks, sFailures);
     return sFailures ? 1 : 0;
 }

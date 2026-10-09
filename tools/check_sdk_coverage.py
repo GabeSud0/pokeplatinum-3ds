@@ -85,7 +85,11 @@ def library_symbols(libs: list[Path], nm: str) -> set[str]:
 # Things the C library provides on every platform we build for.
 LIBC = {"memcpy", "memset", "memmove", "memcmp", "strcmp", "strlen", "strncpy",
         "abort", "fputc", "stderr", "vfprintf", "vsnprintf", "printf", "sqrt",
-        "_impure_ptr", "alloca"}  # newlib's stderr, and alloca's fallback
+        "_impure_ptr", "alloca",  # newlib's stderr, and alloca's fallback
+        # libpak (3ds_port/pak), built into libnitro.a, reads the data pack
+        # with stdio and allocates its index on the heap.
+        "fopen", "fclose", "fread", "fseek", "ftell", "ferror",
+        "malloc", "calloc", "realloc", "free", "strstr"}
 
 
 def library_unresolved(libs: list[Path], nm: str, have: set[str]) -> set[str]:
