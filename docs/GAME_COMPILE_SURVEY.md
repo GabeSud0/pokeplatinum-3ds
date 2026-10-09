@@ -7,9 +7,10 @@ remaining original sources are to building. The diagnostic survey measures
 sample of the pinned `pret/pokeplatinum/src/` checkout.
 
 It does not compile game assets, produce ROM content, link executables, modify
-Nintendo sources, or assume a playable game. It uses exactly the same compiler,
-SDK include paths, 107 Metang headers, original game PCH, and C compiler
-flags as the real game build.
+Nintendo sources, or assume a playable game. It uses the same compiler,
+SDK include paths, 107 Metang headers, original game PCH, and baseline C
+compiler flags as the real game build, plus explicitly documented diagnostic-
+only platform selectors for the original GameSpy headers.
 
 ## Run
 
@@ -77,6 +78,18 @@ The Makefile's `probe` target prepares those headers automatically. The
 already-passing 16-file game library and host tests do **not** need to
 fetch the networking SDKs. The original `include`, `include/gs`, and
 `include/base` directories are added to GCC's header search path.
+
+The next diagnostic blocker was GameSpy's `include/gs/nonport.h`, whose
+platform selection requires an original platform macro. The **survey alone**
+now uses its documented upstream branches: `-D_LINUX` on host/host32
+(Unix/POSIX socket declarations) and `-D_NITRO` for devkitARM (Nintendo DS
+declarations). Those macros are deliberately **not** added to normal game
+compilation. An error after selecting the Nintendo branch—for example a
+separate unavailable `extras.h` or a platform-dependent DS function—is
+a genuine subsequent dependency, not license to create fake networking APIs.
+Also, the Unix branch can pass frontend syntax without working under a 3DS
+runtime. Compare the **same** sample sizes before and after.
+
 This is **header and type discovery only**, NOT Nintendo WFC emulation,
 connection support, runtime behavior, or linked NitroDWC/NitroWiFi libraries.
 Compiling sources may now reveal additional authentic missing APIs/types;
