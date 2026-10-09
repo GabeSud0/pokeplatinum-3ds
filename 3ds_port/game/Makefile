@@ -30,7 +30,9 @@ GAME_SRCS := coins.c charcode.c charcode_util.c ascii_util.c game_version.c \
              play_time.c int_distance.c math_util.c fx_util.c \
              map_tile_behavior.c field_script_context.c \
              play_time_manager.c poffin.c game_options.c \
-             berry_data.c poffin_types.c
+             berry_data.c poffin_types.c \
+             grid_menu_cursor_position.c overworld_map_history.c \
+             pokedex_language.c persisted_map_features.c
 GAME_OBJS := $(GAME_SRCS:%.c=$(OUT)/src/%.o)
 
 # Use the actual Meson/Metang rules from the pinned decompilation for ALL

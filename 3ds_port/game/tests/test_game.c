@@ -23,6 +23,11 @@
 #include "game_options.h"
 #include "berry_data.h"
 #include "poffin_types.h"
+#include "grid_menu_cursor_position.h"
+#include "overworld_map_history.h"
+#include "pokedex_language.h"
+#include "persisted_map_features.h"
+#include "constants/field/map.h"
 #include "badges.h" /* Original badge IDs are generated/badges.h. */
 #include "generated/abilities.h"
 #include "generated/species.h"
@@ -447,6 +452,141 @@ static void test_sdk_link(void)
     CHECK(NNS_GfdGetTexKeySize(texture) == 0x1000);
 }
 
+
+/* Original menu navigation table: coordinates and direction-to-index map. */
+static void test_grid_menu_cursor(void)
+{
+    const GridMenuCursorPosition positions[] = {
+        { 10, 20, 11, 21, 1, 2, 3, 4 },
+        { 12, 22, 13, 23, 1, 0, 3, 4 },
+        { 14, 24, 15, 25, 0, 2, 3, 4 },
+        { 16, 26, 17, 27, 1, 2, 3, 0 },
+        { 18, 28, 19, 29, 1, 2, 0, 4 },
+    };
+    u8 x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    u8 index;
+
+    GridMenuCursor_GetFirstCoords(&positions[0], &x1, &y1);
+    CHECK(x1 == 10 && y1 == 20);
+    GridMenuCursor_GetSecondCoords(&positions[0], &x2, &y2);
+    CHECK(x2 == 11 && y2 == 21);
+
+    index = GridMenuCursor_CheckNavigation(positions, &x1, &y1, &x2, &y2,
+                                           0, GRID_MENU_CURSOR_POSITION_DIRECTION_UP);
+    CHECK(index == 1);
+    CHECK(x1 == 12 && y1 == 22);
+    CHECK(x2 == 13 && y2 == 23);
+    index = GridMenuCursor_CheckNavigation(positions, &x1, &y1, &x2, &y2,
+                                           0, GRID_MENU_CURSOR_POSITION_DIRECTION_DOWN);
+    CHECK(index == 2);
+    CHECK(x1 == 14 && y1 == 24);
+    CHECK(x2 == 15 && y2 == 25);
+    index = GridMenuCursor_CheckNavigation(positions, &x1, &y1, &x2, &y2,
+                                           0, GRID_MENU_CURSOR_POSITION_DIRECTION_LEFT);
+    CHECK(index == 3);
+    CHECK(x1 == 16 && y1 == 26);
+    index = GridMenuCursor_CheckNavigation(positions, &x1, &y1, &x2, &y2,
+                                           0, GRID_MENU_CURSOR_POSITION_DIRECTION_RIGHT);
+    CHECK(index == 4);
+    CHECK(x2 == 19 && y2 == 29);
+
+    /* NONE uses the current position; null outputs are permitted. */
+    CHECK(GridMenuCursor_CheckNavigation(positions, NULL, NULL, NULL, NULL,
+                                        0, GRID_MENU_CURSOR_POSITION_DIRECTION_NONE) == 0);
+    CHECK(GridMenuCursor_CheckNavigation(positions, NULL, NULL, NULL, NULL,
+                                        0, GRID_MENU_CURSOR_POSITION_DIRECTION_LEFT) == 3);
+}
+
+static void test_overworld_map_history(void)
+{
+    OverworldMapHistory history;
+    int i;
+
+    memset(&history, 0xAB, sizeof(history));
+    OverworldMapHistory_Clear(&history);
+    CHECK(history.historyPointer == 0);
+    CHECK(history.currentMapX == 0 && history.currentMapZ == 0);
+    for (i = 0; i < OVERWORLD_MAP_HISTORY_LENGTH; i++) {
+        CHECK(history.items[i].mapX == 0);
+        CHECK(history.items[i].mapZ == 0);
+        CHECK(history.items[i].faceDirection == 0);
+        CHECK(history.items[i].isSet == FALSE);
+    }
+
+    OverworldMapHistory_Push(&history, 1, 2, 3);
+    CHECK(history.historyPointer == 1);
+    CHECK(history.currentMapX == 1 && history.currentMapZ == 2);
+    CHECK(history.items[0].mapX == 1 && history.items[0].mapZ == 2);
+    CHECK(history.items[0].faceDirection == 3 && history.items[0].isSet == TRUE);
+
+    /* Repeating the current map must not advance the ring buffer. */
+    OverworldMapHistory_Push(&history, 1, 2, 4);
+    CHECK(history.historyPointer == 1);
+    CHECK(history.items[0].faceDirection == 3);
+
+    OverworldMapHistory_PushViaWarp(&history, MAP_TILES_COUNT_X * 5 + 10,
+                                   MAP_TILES_COUNT_Z * 6 + 1);
+    CHECK(history.historyPointer == 2);
+    CHECK(history.items[1].mapX == 5 && history.items[1].mapZ == 6);
+    CHECK(history.items[1].faceDirection == (u8)-1);
+    CHECK(history.items[1].isSet == TRUE);
+    /* The original warp variant does not update currentMapX/currentMapZ. */
+    CHECK(history.currentMapX == 1 && history.currentMapZ == 2);
+
+    for (i = 0; i < OVERWORLD_MAP_HISTORY_LENGTH + 2; i++) {
+        OverworldMapHistory_Push(&history, 20 + i, 40 + i, 2);
+    }
+    CHECK(history.historyPointer == 4);
+    CHECK(history.currentMapX == 27 && history.currentMapZ == 47);
+    CHECK(history.items[2].mapX == 26 && history.items[2].mapZ == 46);
+    CHECK(history.items[3].mapX == 27 && history.items[3].mapZ == 47);
+}
+
+static void test_pokedex_language(void)
+{
+    const int order[NUM_LANGUAGES] = {
+        LANGUAGE_JAPANESE, LANGUAGE_ENGLISH, LANGUAGE_FRENCH,
+        LANGUAGE_GERMAN, LANGUAGE_ITALIAN, LANGUAGE_SPANISH,
+    };
+    int i;
+
+    for (i = 0; i < NUM_LANGUAGES; i++) {
+        CHECK(PokedexLanguage_LanguageToIndex(order[i]) == i);
+        CHECK(PokedexLanguage_IndexToLanguage(i) == order[i]);
+    }
+    CHECK(PokedexLanguage_LanguageToIndex(LANGUAGE_NONE) == NUM_LANGUAGES);
+    CHECK(PokedexLanguage_LanguageToIndex(LANGUAGE_KOREAN) == NUM_LANGUAGES);
+    CHECK(PokedexLanguage_LanguageToIndex(-1) == NUM_LANGUAGES);
+}
+
+static void test_persisted_map_features(void)
+{
+    PersistedMapFeatures features;
+    u8 *buffer;
+    int i;
+
+    memset(&features, 0xA5, sizeof(features));
+    PersistedMapFeatures_Init(&features);
+    CHECK(PersistedMapFeatures_GetID(&features) == 0);
+    for (i = 0; i < PERSISTED_MAP_FEATURES_BUFFER_SIZE; i++) {
+        CHECK(features.buffer[i] == 0);
+    }
+
+    buffer = PersistedMapFeatures_InitWithID(&features, 42);
+    CHECK(buffer == features.buffer);
+    CHECK(PersistedMapFeatures_GetID(&features) == 42);
+    CHECK(PersistedMapFeatures_GetBuffer(&features, 42) == features.buffer);
+    buffer[0] = 0x12;
+    buffer[PERSISTED_MAP_FEATURES_BUFFER_SIZE - 1] = 0x34;
+    CHECK(features.buffer[0] == 0x12);
+    CHECK(features.buffer[PERSISTED_MAP_FEATURES_BUFFER_SIZE - 1] == 0x34);
+
+    buffer = PersistedMapFeatures_InitWithID(&features, 7);
+    CHECK(buffer == features.buffer);
+    CHECK(PersistedMapFeatures_GetID(&features) == 7);
+    CHECK(buffer[0] == 0 && buffer[PERSISTED_MAP_FEATURES_BUFFER_SIZE - 1] == 0);
+}
+
 int main(void)
 {
     printf("Original Platinum game-code smoke tests (%d-bit)\n",
@@ -514,6 +654,10 @@ int main(void)
     CHECK(player_female_mugshot_anim_NANR == 154);
     CHECK(subscript_start_encounter == 0);
     CHECK(subscript_giratina_form_change == 296);
+    test_grid_menu_cursor();
+    test_overworld_map_history();
+    test_pokedex_language();
+    test_persisted_map_features();
     test_coins();
     test_ascii();
     test_charcode();
