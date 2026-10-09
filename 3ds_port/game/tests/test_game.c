@@ -31,6 +31,8 @@
 #include "pokedex_memory.h"
 #include "pokedex_data_index.h"
 #include "ribbon_save_data.h"
+#include "battle_regulation.h"
+#include "record_mixed_rng.h"
 #include "constants/items.h"
 #include "constants/field/map.h"
 #include "badges.h" /* Original badge IDs are generated/badges.h. */
@@ -684,6 +686,136 @@ static void test_ribbon_save_state(void)
     }
 }
 
+
+/* This upstream symbol is defined in battle_regulation.c but not declared
+ * in its public header. Referencing the real presets directly lets host
+ * tests avoid BattleRegulation_GetByIndex's unported SaveData_SaveTable path. */
+extern BattleRegulation BattleRegulation_PredefinedRules[];
+
+/* Actual Platinum battle-rule tables and bitfield rule selection. */
+static void test_battle_regulation_rules(void)
+{
+    BattleRegulationData saved;
+    BattleRegulation custom = { 0 }, copy = { 0 };
+    const BattleRegulation *defaults = BattleRegulation_GetDefault();
+    const BattleRegulation *preset0 = &BattleRegulation_PredefinedRules[0];
+    const BattleRegulation *preset1 = &BattleRegulation_PredefinedRules[1];
+    const BattleRegulation *preset2 = &BattleRegulation_PredefinedRules[2];
+
+    CHECK(BattleRegulation_Size() == sizeof(BattleRegulation));
+    CHECK(BattleRegulation_SaveSize() == sizeof(BattleRegulationData));
+    memset(&saved, 0xAA, sizeof(saved));
+    RegulationBattles_Init(&saved);
+    CHECK(saved.regulations[0].teamSize == 0);
+    CHECK(saved.regulations[0].maxLevel == 0);
+
+    CHECK(defaults != NULL);
+    CHECK(BattleRegulation_GetRuleValue(defaults, BATTLE_REGULATION_RULE_TEAM_SIZE) == 6);
+    CHECK(BattleRegulation_GetRuleValue(defaults, BATTLE_REGULATION_RULE_MAX_LEVEL) == 100);
+    CHECK(BattleRegulation_GetRuleValue(defaults, BATTLE_REGULATION_RULE_EVOLUTION_RESTRICT) == 1);
+    CHECK(BattleRegulation_GetRuleValue(defaults, BATTLE_REGULATION_RULE_ITEM_UNIQUE) == 1);
+    CHECK(BattleRegulation_GetRuleValue(defaults, BATTLE_REGULATION_RULE_SPECIES_UNIQUE) == 1);
+    CHECK(BattleRegulation_GetIndex(NULL) == 0xFF);
+
+    /* Exercise original predefined data and its production GetIndex logic;
+     * the GetByIndex API also references SaveData_SaveTable, not linked yet. */
+    CHECK(preset0 != NULL && preset1 != NULL && preset2 != NULL);
+    CHECK(BattleRegulation_GetIndex(preset0) == 0);
+    CHECK(BattleRegulation_GetIndex(preset1) == 1);
+    CHECK(BattleRegulation_GetIndex(preset2) == 2);
+    CHECK(BattleRegulation_GetRuleValue(preset0, BATTLE_REGULATION_RULE_TEAM_SIZE) == 3);
+    CHECK(BattleRegulation_GetRuleValue(preset1, BATTLE_REGULATION_RULE_HEIGHT_RESTRICT) == -20);
+    CHECK(BattleRegulation_GetRuleValue(preset2, BATTLE_REGULATION_RULE_MAX_LEVEL) == 5);
+
+    custom.teamSize = 4;
+    custom.maxLevel = 50;
+    custom.maxTotalLevel = 120;
+    custom.heightRestriction = -15;
+    custom.weightRestriction = 22;
+    custom.evolutionRestriction = 1;
+    custom.specialSpeciesRestriction = 1;
+    custom.itemUniqueness = 1;
+    custom.speciesUniqueness = 0;
+    custom.moveRestrictions = 1;
+    BattleRegulation_Copy(&custom, &copy);
+    CHECK(memcmp(&custom, &copy, sizeof(custom)) == 0);
+    CHECK(BattleRegulation_GetRuleValue(&copy, BATTLE_REGULATION_RULE_TEAM_SIZE) == 4);
+    CHECK(BattleRegulation_GetRuleValue(&copy, BATTLE_REGULATION_RULE_MAX_LEVEL) == 50);
+    CHECK(BattleRegulation_GetRuleValue(&copy, BATTLE_REGULATION_RULE_MAX_TOTAL_LEVEL) == 120);
+    CHECK(BattleRegulation_GetRuleValue(&copy, BATTLE_REGULATION_RULE_HEIGHT_RESTRICT) == -15);
+    CHECK(BattleRegulation_GetRuleValue(&copy, BATTLE_REGULATION_RULE_HEIGHT_TYPE) == -1);
+    CHECK(BattleRegulation_GetRuleValue(&copy, BATTLE_REGULATION_RULE_WEIGHT_RESTRICT) == 22);
+    CHECK(BattleRegulation_GetRuleValue(&copy, BATTLE_REGULATION_RULE_WEIGHT_TYPE) == 1);
+    CHECK(BattleRegulation_GetRuleValue(&copy, BATTLE_REGULATION_RULE_SPECIAL_SPECIES_RESTRICT) == 1);
+    CHECK(BattleRegulation_GetRuleValue(&copy, BATTLE_REGULATION_RULE_MOVE_RESTRICTIONS) == 1);
+    CHECK(BattleRegulation_GetRuleValue(&copy, BATTLE_REGULATION_RULE_SPECIES_UNIQUE) == 0);
+    CHECK(BattleRegulation_GetIndex(&copy) == 5);
+    copy.heightRestriction = 0;
+    copy.weightRestriction = 0;
+    CHECK(BattleRegulation_GetRuleValue(&copy, BATTLE_REGULATION_RULE_HEIGHT_TYPE) == 0);
+    CHECK(BattleRegulation_GetRuleValue(&copy, BATTLE_REGULATION_RULE_WEIGHT_TYPE) == 0);
+}
+
+static void test_record_mixed_rng(void)
+{
+    RecordMixedRNG entries[RECORD_MIXED_RNG_MAX];
+    const charcode_t nameA[] = { CHAR_WIDE_A, CHAR_EOS };
+    const charcode_t emptyName[] = { CHAR_EOS };
+    u32 firstRand, secondRand;
+    int i;
+
+    memset(entries, 0xA5, sizeof(entries));
+    RecordMixedRNG_Init(entries);
+    CHECK(RECORD_MIXED_RNG_MAX == 6);
+    CHECK(RecordMixedRNG_SaveSize() == sizeof(entries));
+    for (i = 0; i < RECORD_MIXED_RNG_MAX; i++) {
+        CHECK(entries[i].groupName[0] == CHAR_EOS);
+        CHECK(entries[i].playerName[0] == CHAR_EOS);
+        CHECK(entries[i].seed == 0);
+        CHECK(entries[i].rand == 0);
+        CHECK(!RecordMixedRNG_IsEntryValid(entries, i));
+    }
+
+    RecordMixedRNG_SetEntrySeed(entries, RECORD_MIXED_RNG_PLAYER_OVERRIDE, 1234u);
+    firstRand = ARNG_Next(1234u);
+    secondRand = ARNG_Next(firstRand);
+    CHECK(RecordMixedRNG_GetEntrySeed(entries, RECORD_MIXED_RNG_PLAYER_OVERRIDE) == 1234u);
+    CHECK(RecordMixedRNG_GetRand(entries) == firstRand);
+    RecordMixedRNG_AdvanceEntries(entries, 0);
+    CHECK(RecordMixedRNG_GetRand(entries) == firstRand);
+    RecordMixedRNG_AdvanceEntries(entries, 1);
+    CHECK(RecordMixedRNG_GetRand(entries) == secondRand);
+    RecordMixedRNG_AdvanceEntries(entries, 2);
+    CHECK(RecordMixedRNG_GetRand(entries) == ARNG_Next(ARNG_Next(secondRand)));
+
+    entries[RECORD_MIXED_RNG_PLAYER_OVERRIDE].groupName[0] = CHAR_WIDE_A;
+    entries[RECORD_MIXED_RNG_PLAYER_OVERRIDE].groupName[1] = CHAR_EOS;
+    entries[RECORD_MIXED_RNG_PLAYER_OVERRIDE].playerName[0] = CHAR_WIDE_B;
+    entries[RECORD_MIXED_RNG_PLAYER_OVERRIDE].playerName[1] = CHAR_EOS;
+    RecordMixedRNG_SetEntryGender(entries, RECORD_MIXED_RNG_PLAYER_OVERRIDE, 1);
+    RecordMixedRNG_SetEntryLanguage(entries, RECORD_MIXED_RNG_PLAYER_OVERRIDE, LANGUAGE_ENGLISH);
+    CHECK(RecordMixedRNG_IsEntryValid(entries, RECORD_MIXED_RNG_PLAYER_OVERRIDE));
+    CHECK(RecordMixedRNG_GetEntryGender(entries, RECORD_MIXED_RNG_PLAYER_OVERRIDE) == 1);
+    CHECK(RecordMixedRNG_GetEntryLanguage(entries, RECORD_MIXED_RNG_PLAYER_OVERRIDE) == LANGUAGE_ENGLISH);
+    CHECK(RecordMixedRNG_GetEntryName(entries, RECORD_MIXED_RNG_PLAYER_OVERRIDE,
+                                     RECORD_MIXED_RNG_GROUP_NAME) ==
+          entries[RECORD_MIXED_RNG_PLAYER_OVERRIDE].groupName);
+    CHECK(RecordMixedRNG_GetEntryName(entries, RECORD_MIXED_RNG_PLAYER_OVERRIDE,
+                                     RECORD_MIXED_RNG_PLAYER_NAME) ==
+          entries[RECORD_MIXED_RNG_PLAYER_OVERRIDE].playerName);
+
+    CHECK(!RecordMixedRNG_DoesCollectionContainGroup(entries, emptyName));
+    CHECK(RecordMixedRNG_DoesCollectionContainGroup(entries, nameA));
+    RecordMixedRNG_CopyEntry(entries, RECORD_MIXED_RNG_PLAYER_OVERRIDE, RECORD_MIXED_RNG_QUEUE_0);
+    CHECK(RecordMixedRNG_IsEntryEqualToOverride(entries, RECORD_MIXED_RNG_QUEUE_0));
+    entries[RECORD_MIXED_RNG_QUEUE_0].rand = 7;
+    CHECK(RecordMixedRNG_AreEntriesEqual(
+        &entries[RECORD_MIXED_RNG_PLAYER_OVERRIDE], &entries[RECORD_MIXED_RNG_QUEUE_0]));
+    RecordMixedRNG_SetEntryLanguage(entries, RECORD_MIXED_RNG_QUEUE_0, LANGUAGE_SPANISH);
+    CHECK(!RecordMixedRNG_IsEntryEqualToOverride(entries, RECORD_MIXED_RNG_QUEUE_0));
+    CHECK(RecordMixedRNG_IsEntryEmpty(&entries[RECORD_MIXED_RNG_QUEUE_1]));
+}
+
 int main(void)
 {
     printf("Original Platinum game-code smoke tests (%d-bit)\n",
@@ -751,6 +883,8 @@ int main(void)
     CHECK(player_female_mugshot_anim_NANR == 154);
     CHECK(subscript_start_encounter == 0);
     CHECK(subscript_giratina_form_change == 296);
+    test_battle_regulation_rules();
+    test_record_mixed_rng();
     test_berry_tag_data();
     test_pokedex_memory_state();
     test_pokedex_data_bank_switch();
