@@ -16,6 +16,8 @@
 #include "constants/charcode.h"
 #include "constants/versions.h"
 #include "global/pm_version.h"
+#include "int_distance.h"
+#include "play_time.h"
 
 static int checks;
 static int fails;
@@ -104,6 +106,42 @@ static void test_charcode(void)
     CHECK(encoded[3] == CHAR_EOS);
 }
 
+static void test_play_time(void)
+{
+    PlayTime time;
+
+    PlayTime_Init(&time);
+    CHECK(PlayTime_GetHours(&time) == 0);
+    CHECK(PlayTime_GetMinutes(&time) == 0);
+    CHECK(PlayTime_GetSeconds(&time) == 0);
+
+    PlayTime_Increment(&time, 59);
+    CHECK(PlayTime_GetSeconds(&time) == 59);
+    PlayTime_Increment(&time, 1);
+    CHECK(PlayTime_GetMinutes(&time) == 1);
+    CHECK(PlayTime_GetSeconds(&time) == 0);
+
+    PlayTime_Increment(&time, 59 * 60);
+    CHECK(PlayTime_GetHours(&time) == 1);
+    CHECK(PlayTime_GetMinutes(&time) == 0);
+
+    /* Platinum caps save-file play time at 999:59:59. */
+    PlayTime_Increment(&time, 1000 * 60 * 60);
+    CHECK(PlayTime_GetHours(&time) == PLAYTIME_MAX_HOURS);
+    CHECK(PlayTime_GetMinutes(&time) == PLAYTIME_MAX_MINUTES);
+    CHECK(PlayTime_GetSeconds(&time) == PLAYTIME_MAX_SECONDS);
+    PlayTime_Increment(&time, 60);
+    CHECK(PlayTime_GetHours(&time) == PLAYTIME_MAX_HOURS);
+}
+
+static void test_distance(void)
+{
+    CHECK(CalcDistance2D(0, 0, 0, 0) == 0);
+    CHECK(CalcDistance2D(0, 0, 3, 4) == 5);
+    CHECK(CalcDistance2D(3, 4, 0, 0) == 5);
+    CHECK(CalcDistance2D(1, 2, 1, 2) == 0);
+}
+
 static void test_sdk_link(void)
 {
     /* Require a real external NitroSystem function at link time. */
@@ -123,6 +161,8 @@ int main(void)
     test_coins();
     test_ascii();
     test_charcode();
+    test_play_time();
+    test_distance();
     test_sdk_link();
     printf("%d checks, %d failed\n", checks, fails);
     return fails == 0 ? 0 : 1;
