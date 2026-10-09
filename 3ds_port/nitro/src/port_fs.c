@@ -152,8 +152,8 @@ static int safe_path(const char *path)
 static int parse_entry(const char **p, RomPath *out)
 {
     unsigned int fields = 0;
-    if (!expect(p, '{')) return 0;
     memset(out, 0, sizeof(*out));
+    if (!expect(p, '{')) return 0;
     do {
         char *key = NULL;
         if (!parse_string(p, &key) || !expect(p, ':')) {
