@@ -1,11 +1,18 @@
 """Synthetic pack-format tests. No ROMs or game assets are used."""
+import contextlib
+import hashlib
+import io
 import json
 import struct
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from builder.pack import ENTRY, HEADER, pack, read_pak
+from builder.extract_rom import extract
+from builder.pack import ENTRY, HEADER, main, pack, read_pak
+from builder.test_extract_rom import synthetic_nds
 
 
 SHA1 = "0123456789abcdef0123456789abcdef01234567"
@@ -50,6 +57,31 @@ class PakTests(unittest.TestCase):
         self.assertEqual(read_pak(self.out)["rom_sha1"], SHA1)
         with self.assertRaisesRegex(ValueError, "disagrees"):
             pack(self.root, self.out, build_id="v1", rom_sha1="f" * 40)
+
+    def test_extract_then_pack_uses_manifest_sha1(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rom_bytes = synthetic_nds()
+            rom = Path(tmp) / "synthetic.nds"
+            rom.write_bytes(rom_bytes)
+            extracted = Path(tmp) / "extracted"
+            extract(rom, extracted, verify=False)
+            packed = Path(tmp) / "synthetic.pak"
+            pack(extracted, packed, build_id="synthetic-e2e")
+            decoded = read_pak(packed)
+            self.assertEqual(decoded["build_id"], "synthetic-e2e")
+            self.assertEqual(decoded["rom_sha1"], hashlib.sha1(rom_bytes).hexdigest())
+            self.assertEqual(decoded["files"], {0: b"abc", 1: b"defg"})
+
+    def test_cli_rejects_unsupported_manifest_sha1(self):
+        self.write_manifest(self.files, rom_sha1=SHA1)
+        with patch.object(sys, "argv", ["pack.py", str(self.root), "-o", str(self.out),
+                                       "--build-id", "dev-001"]):
+            with contextlib.redirect_stderr(io.StringIO()) as errors:
+                with self.assertRaises(SystemExit) as result:
+                    main()
+        self.assertEqual(result.exception.code, 1)
+        self.assertIn("Unsupported ROM", errors.getvalue())
+        self.assertFalse(self.out.exists())
 
     def test_missing_rom_sha1_is_not_guessed(self):
         with self.assertRaisesRegex(ValueError, "--rom"):
