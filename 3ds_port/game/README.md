@@ -43,7 +43,14 @@ inventing badge constants or modifying upstream game source. The GCC
 include path is shared by host builds and devkitARM.
 
 The Makefile uses the same shared flags, Nintendo headers, and GCC weak
-NitroSystem inline-symbol fix as `libnitro` and `libnitrosystem`. It also
+NitroSystem inline-symbol fix as `libnitro` and `libnitrosystem`.
+The original `pokemon_sprite.h` also defines two non-static inline wrappers
+for hiding/showing Pokémon sprite shadows. Under the shared GCC
+`-fgnu89-inline` mode those become duplicate external definitions once
+multiple new game objects link together. As with NitroSystem, the port
+marks only those original inline symbols weak with `objcopy`, in both game
+objects and the host test object. This keeps the original code untouched
+and does not invent or replace the Pokémon sprite runtime. It also
 forces the original `pch/global_pch.h`, normally provided by Meson. Sources
 remain upstream; **never copy or commit fetched game code or assets**.
 
