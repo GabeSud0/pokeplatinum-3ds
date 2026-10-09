@@ -54,7 +54,7 @@ SDK still builds the original game with Metrowerks.
 | H-blank DMA (the game's wavy-screen effects), synchronous `MI_VBlankDmaCopy*` | reported as not implemented; the transfer stays pending | the 2D renderer (per-line timing) and the 3DS main loop |
 | VRAM banking | each CPU view of VRAM is its own block | the 2D renderer |
 | `OS_ResetSystem` (soft reset) | stores the reset parameter, then reports and stops | the 3DS main program |
-| Files on the cartridge (`FS_`) | the library is built; nothing backs the ROM yet | the data builder |
+| Cartridge ROM filesystem (`FS_`) | read-only `rom:` archive backed by the user's libpak data pack, with file-ID and manifest-based path access | overlay-table metadata and other archives remain future work |
 
 **Nothing to do on the 3DS:** caches, tightly-coupled memory and the
 protection unit (`src/port_os.c`) are configuration for the DS's ARM946 CPU;
@@ -64,6 +64,54 @@ return straight away.
 **Not built**, because the game doesn't use them: download play (mb), gesture
 recognition (prc), wireless voice (wvr), the China-edition boot screen,
 streaming decompression, and a few debug libraries. See the `Makefile`.
+
+## Read the player's ROM data pack through NitroSDK
+
+The SDK `rom:` archive now uses the portable C libpak reader instead of DS
+cartridge hardware. It preserves the original `FSFile` API: open by path or
+original NitroFS file ID, read a slice, seek, get file length, and close.
+`FS_LoadOverlayImage` uses the same file-ID path; `FS_LoadOverlay` additionally
+requires valid overlay-table metadata, and executable overlays are **not**
+yet a functioning 3DS runtime.
+
+**Why a manifest sidecar?** The v1 pack intentionally stores only file IDs,
+not paths. For path-based `FS_OpenFile` the port reads the *small* original
+`data_pack/manifest.json` alongside `platinum3ds.pak`. Neither the full ROM
+nor the full pack is loaded into RAM. Copy both files privately to the SD card
+(or point at both files on a PC), and use a matching build ID:
+
+```c
+#include <nitro/fs.h>
+#include <nitro_port_fs.h>
+
+FS_Init(FS_DMA_NOT_USE);
+if (NitroPort_OpenPak("sdmc:/3ds/platinum/platinum3ds.pak",
+                      "sdmc:/3ds/platinum/manifest.json",
+                      "YOUR_BUILD_ID") != PAK_OK) {
+    /* Stop initialization: wrong pack, unsupported ROM, or missing sidecar. */
+}
+
+/* After all open FSFile handles have been closed: */
+NitroPort_ClosePak();
+FS_End();
+```
+
+Mount/initialize the SD filesystem first on the 3DS, so its `sdmc:`
+stdio device is available. Host tests use standard paths. File IDs remain
+sparse and are not renumbered. Writes and direct cartridge offsets are
+intentionally unsupported; the archive never pretends to have the DS's ROM
+header, overlay table, FAT or FNT in the pack. The caller must close any
+FS handles before replacing or closing a mounted pack.
+
+For standalone synthetic integration checks:
+
+```sh
+make -C 3ds_port/nitro test
+```
+
+Those tests generate a pack with `builder/pack.py` in ignored `build/`,
+and exercise the real SDK `FS_*` path and file-ID commands, read, seek,
+length and overlay-image payload loading. No copyrighted content is used.
 
 ## "Not implemented" reports
 
