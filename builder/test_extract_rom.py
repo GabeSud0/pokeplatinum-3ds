@@ -1,4 +1,6 @@
 """Synthetic NitroFS tests: never use actual game data."""
+import hashlib
+import json
 import struct
 import tempfile
 import unittest
@@ -27,14 +29,19 @@ class NitroFSTests(unittest.TestCase):
     def test_extract(self):
         with tempfile.TemporaryDirectory() as tmp:
             rom = Path(tmp) / "test.nds"
-            rom.write_bytes(synthetic_nds())
+            synthetic = synthetic_nds()
+            rom.write_bytes(synthetic)
             output = Path(tmp) / "data_pack"
             entries = extract(rom, output, verify=False)
             self.assertEqual([(e["id"], e["path"], e["size"]) for e in entries],
                              [(0, "a.bin", 3), (1, "d/b.bin", 4)])
             self.assertEqual((output / "a.bin").read_bytes(), b"abc")
             self.assertEqual((output / "d/b.bin").read_bytes(), b"defg")
-            self.assertTrue((output / "manifest.json").exists())
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["rom_sha1"], hashlib.sha1(synthetic).hexdigest())
+            self.assertEqual(manifest["files"], [
+                {"id": entry["id"], "path": entry["path"], "size": entry["size"]}
+                for entry in entries])
 
     def test_verification_required(self):
         with tempfile.TemporaryDirectory() as tmp:
