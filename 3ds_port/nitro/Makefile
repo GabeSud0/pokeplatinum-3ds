@@ -161,12 +161,17 @@ PORT_SRCS := $(wildcard src/*.c)
 
 SDK_OBJS  := $(SDK_SRCS:%.c=$(OUT)/sdk/%.o)
 PORT_OBJS := $(PORT_SRCS:src/%.c=$(OUT)/port/%.o)
+# Embed the *same* portable libpak implementation in libnitro.a. NitroSDK
+# callers already link libnitro, so we don't force a new linker dependency on
+# every native game/smoke-test target while still using the C libpak API.
+PAK_READER_OBJ := $(OUT)/port/pak_reader.o
+PORT_OBJS += $(PAK_READER_OBJ)
 LIB       := $(OUT)/libnitro.a
 
 # --- Flags -----------------------------------------------------------------
 
 # Compiler, target and SDK configuration: see ../common.mk.
-CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES)
+CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) -I../pak/include
 
 # --- Rules -----------------------------------------------------------------
 
@@ -194,6 +199,11 @@ $(OUT)/port/%.o: src/%.c $(GEN)/nitro/fx/fx_const.h
 	@echo "  CC  $(notdir $<)"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+$(PAK_READER_OBJ): ../pak/src/pak.c ../pak/include/pak.h
+	@mkdir -p $(dir $@)
+	@echo "  CC  libpak reader"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
 $(LIB): $(SDK_OBJS) $(PORT_OBJS)
 	@rm -f $@
 	@$(AR) rcs $@ $^
@@ -205,8 +215,23 @@ TEST_BIN := $(OUT)/test_nitro
 $(TEST_BIN): tests/test_nitro.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
 
-test: $(TEST_BIN)
+# An independent FS_* integration test uses only synthetic bytes produced by
+# the project's real Python pack writer (no ROM contents are checked in).
+FS_TEST_BIN := $(OUT)/test_fs_pak
+FS_FIXTURE_DIR := $(OUT)/fs_fixture
+FS_FIXTURE_STAMP := $(FS_FIXTURE_DIR)/.generated
+
+$(FS_TEST_BIN): tests/test_fs_pak.c $(LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
+
+$(FS_FIXTURE_STAMP): tests/make_fs_fixture.py ../../builder/pack.py
+	@mkdir -p $(FS_FIXTURE_DIR)
+	python3 tests/make_fs_fixture.py $(FS_FIXTURE_DIR)
+	@touch $@
+
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP)
 	./$(TEST_BIN)
+	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
 
 clean:
 	rm -rf build

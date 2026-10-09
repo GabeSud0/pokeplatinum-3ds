@@ -1,0 +1,36 @@
+From: Platinum 3DS port contributors
+Subject: [PATCH] Route NitroSDK ROM archive to libpak in 3DS port
+
+---
+diff --git a/libraries/fs/src/fs_rom.c b/libraries/fs/src/fs_rom.c
+--- a/libraries/fs/src/fs_rom.c
++++ b/libraries/fs/src/fs_rom.c
+@@ -1,4 +1,8 @@
+-#include <nitro.h>
++#include <nitro.h>
++
++#if defined(SDK_PORT_3DS)
++#include <nitro_port_fs.h>
++#endif
+ 
+ #include "../include/util.h"
+ #include "../include/rom.h"
+@@ -80,7 +84,17 @@
+ 	fsi_ovt7.offset = 0;
+ 	fsi_ovt7.length = 0;
+ 
+-	CARD_Init();
++#if defined(SDK_PORT_3DS)
++	/* The port has no cartridge ROM. All file names and file IDs are
++	 * translated by the read-only libpak command processor. */
++	FS_InitArchive(&fsi_arc_rom);
++	(void)FS_RegisterArchiveName(&fsi_arc_rom, "rom", 3);
++	FS_SetArchiveProc(&fsi_arc_rom, NitroPort_PakArchiveProc, (u32)FS_ARCHIVE_PROC_ALL);
++	(void)FS_LoadArchive(&fsi_arc_rom, 0, 0, 0, 0, 0, NULL, NULL);
++	return;
++#endif
++
++	CARD_Init();
+ 
+ 	FS_InitArchive(&fsi_arc_rom);
+ 	(void)FS_RegisterArchiveName(&fsi_arc_rom, "rom", 3);
