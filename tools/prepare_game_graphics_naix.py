@@ -7,8 +7,10 @@ assigns each explicitly ordered filename its zero-based archive position;
 it replaces non-alphanumeric/non-underscore characters with underscores
 and appends _1, _2, ... for repeated *identical* filenames.
 
-This produces only those known, explicit index definitions, not .narc
-archives, graphics, or any generated implicit (unlisted) archive members.
+The pinned Meson rules also map pokedex.order to zukan.naix and use
+explicit .order lists for trainer encounter effects and battle subscripts.
+Those exact --files-from inputs produce index headers only, not .narc
+archives, graphics, scripts, or any generated implicit archive members.
 Because implicit members cannot be inventoried without generating assets,
 the original archive COUNT macro is deliberately not synthesized.
 """
@@ -20,6 +22,20 @@ from pathlib import Path
 
 VALID_PATH = re.compile(r"[A-Za-z0-9_./-]+\Z")
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+# Exact pinned res/*/meson.build --files-from mappings whose .naix output
+# does not follow the generic graphics <order-stem>.naix rule.
+# The two non-graphics archives are included by this generator as well.
+ARCHIVE_OUTPUT_OVERRIDES = {
+    Path("res/graphics/pokedex/pokedex.order"): Path("res/graphics/pokedex/zukan.naix"),
+    Path("res/trainers/classes/field_encounteffect.order"): Path("res/trainers/classes/field_encounteffect.naix"),
+    Path("res/battle/scripts/subscripts/sub_seq.order"): Path("res/battle/scripts/sub_seq.naix"),
+}
+NON_GRAPHICS_ORDERS = (
+    Path("res/trainers/classes/field_encounteffect.order"),
+    Path("res/battle/scripts/subscripts/sub_seq.order"),
+)
 
 
 def read_order(path: Path) -> list[str]:
@@ -90,12 +106,21 @@ def generate(source_root: Path, output_root: Path) -> tuple[int, int, int]:
     files = sorted(graphics.rglob("*.order"))
     if not files:
         raise ValueError(f"{graphics}: no source archive manifests")
+    # These are generated using --index and pinned .order manifests just
+    # like graphics archives. Never infer indices from compiled files.
+    for relative in NON_GRAPHICS_ORDERS:
+        order = source_root / relative
+        if not order.is_file():
+            raise FileNotFoundError(order)
+        files.append(order)
+    files.sort(key=lambda p: p.relative_to(source_root).as_posix())
     made = 0
     members = 0
     for order in files:
         relative = order.relative_to(source_root)
-        # Match NitroArc's --file <stem>.narc output and .naix suffix.
-        dest = output_root / relative.with_suffix(".naix")
+        # Meson sets zukan and battle script archive names explicitly.
+        # Other graphics archives use their .order filename stems.
+        dest = output_root / ARCHIVE_OUTPUT_OVERRIDES.get(relative, relative.with_suffix(".naix"))
         payload = render(order, relative)
         members += len(indices(order))
         if not dest.is_file() or dest.read_text(encoding="utf-8") != payload:
@@ -111,8 +136,8 @@ def main() -> None:
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
     count, indices_count, updated = generate(args.upstream.resolve(), args.output.resolve())
-    print(f"Prepared {count} graphics index headers with {indices_count} explicit member indices ({updated} updated)")
-    print("Index metadata only — NO image content, NARC archives or implied members")
+    print(f"Prepared {count} archive index headers with {indices_count} explicit member indices ({updated} updated)")
+    print("Index metadata only — NO graphics, scripts, NARC archives or implied members")
 
 
 if __name__ == "__main__":

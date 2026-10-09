@@ -39,6 +39,9 @@
 #include "res/sound/pl_sound_data.naix"
 #include "res/graphics/poketch/poketch.naix"
 #include "res/graphics/frontier/backgrounds/frontier_backgrounds.naix"
+#include "res/graphics/pokedex/zukan.naix"
+#include "res/trainers/classes/field_encounteffect.naix"
+#include "res/battle/scripts/sub_seq.naix"
 #include "res/text/bank/box_messages.h"
 #include "res/text/bank/ability_names_uppercase.h"
 #include "res/text/bank/species_name.h"
@@ -504,6 +507,13 @@ int main(void)
     CHECK(digits_NCGR_lz == 2);
     CHECK(battle_factory_NCGR_lz == 0);
     CHECK(battle_factory_battle_room_NSCR_lz == 1);
+    /* Exact original Meson --files-from mappings; indices, not NARCs. */
+    CHECK(background_scroll_default_NCLR == 0);
+    CHECK(search_button_forms_cell_NCER_lz == 129);
+    CHECK(_shared_enc_trainer_NCLR == 0);
+    CHECK(player_female_mugshot_anim_NANR == 154);
+    CHECK(subscript_start_encounter == 0);
+    CHECK(subscript_giratina_form_change == 296);
     test_coins();
     test_ascii();
     test_charcode();

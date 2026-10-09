@@ -92,13 +92,16 @@ SOUND_HEADER := $(RESOURCE_DIR)/res/sound/pl_sound_data.naix
 $(SOUND_HEADER): $(SOUND_MANIFEST) $(ROOT)/tools/prepare_game_sound_naix.py
 	@python3 $(ROOT)/tools/prepare_game_sound_naix.py --upstream="$(GAME)" --output="$(RESOURCE_DIR)"
 
-# NitroArc --files-from uses explicit .order files to fix graphics member
-# indices. Reproduce ONLY indices from those manifests, not binary images,
-# archive contents, or unlisted implicit member counts.
-GRAPHICS_ORDERS := $(shell find $(GAME)/res/graphics -type f -name '*.order')
-GRAPHICS_STAMP := $(RESOURCE_DIR)/.graphics-naix-ready
+# NitroArc --files-from uses pinned .order manifests for graphics and
+# two additional archives (encounter effects and battle subscripts). The
+# Pokédex output is zukan.naix even though its input is pokedex.order.
+# Reproduce only explicit indices, never assets or implicit members.
+ARCHIVE_ORDERS := $(shell find $(GAME)/res/graphics -type f -name '*.order') \
+                  $(GAME)/res/trainers/classes/field_encounteffect.order \
+                  $(GAME)/res/battle/scripts/subscripts/sub_seq.order
+ARCHIVE_STAMP := $(RESOURCE_DIR)/.archive-naix-ready
 
-$(GRAPHICS_STAMP): $(GRAPHICS_ORDERS) $(ROOT)/tools/prepare_game_graphics_naix.py
+$(ARCHIVE_STAMP): $(ARCHIVE_ORDERS) $(ROOT)/tools/prepare_game_graphics_naix.py
 	@python3 $(ROOT)/tools/prepare_game_graphics_naix.py --upstream="$(GAME)" --output="$(RESOURCE_DIR)"
 	@touch $@
 
@@ -157,7 +160,7 @@ $(NNS_INLINE_SYMS): | libnitrosystem
 
 # The NitroSystem inline functions in included game headers have external
 # definitions under GCC's gnu89 semantics; match the SDK's weak-symbol fix.
-$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(GRAPHICS_STAMP) | libnitrosystem
+$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@echo "  GAME CC $(notdir $<)"
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
@@ -172,7 +175,7 @@ $(LIB): $(GAME_OBJS)
 # NitroSystem and NitroSDK, without any ROM or copyrighted game data.
 TEST_BIN := $(OUT)/test_game
 
-$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(GRAPHICS_STAMP) | libnitrosystem
+$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
 	@$(WEAKEN_NNS_INLINE)
@@ -209,7 +212,7 @@ GAME_PROBE_PLATFORM_FLAGS := -D_NITRO
 endif
 GAME_PROBE_CFLAGS := $(GAME_CFLAGS) $(GAME_PROBE_PLATFORM_FLAGS)
 
-probe: $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(GRAPHICS_STAMP) $(NETWORK_STAMP) | libnitrosystem
+probe: $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(NETWORK_STAMP) | libnitrosystem
 	@python3 $(ROOT)/tools/probe_game_compile.py \
 	    --source-dir="$(GAME)/src" \
 	    --compiler="$(CC)" \
