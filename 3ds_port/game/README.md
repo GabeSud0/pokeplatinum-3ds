@@ -4,7 +4,7 @@ This is the beginning of compiling **the game's original C** for a native
 3DS port. It does **not** reimplement Pokémon Platinum, package game data,
 produce a playable executable, or compile all 1,013 C files yet.
 
-The first twenty-six files come directly from the pinned pret/pokeplatinum source
+The first twenty-nine files come directly from the pinned pret/pokeplatinum source
 checkout under `build/upstream/src/`:
 
 - `coins.c` — coin case state and overflow logic
@@ -31,6 +31,9 @@ checkout under `build/upstream/src/`:
 - `ribbon_save_data.c` — Ribbon save-block size and initialization
 - `battle_regulation.c` — battle rule presets, save structure and rule lookups
 - `record_mixed_rng.c` — mixed-record seed advancement, identity and comparison
+- `move_reminder_data.c` — Move Reminder list presence and move-list interfaces
+- `pokedex_heightweight.c` — Pokédex species size, position and scale lookup
+- `daycare_save.c` — Day Care parent steps, egg state and save-data accessors
 
 The pinned original source tree includes `"badges.h"` in trainer-case
 headers, but stores the authoritative badge enum as
@@ -50,7 +53,10 @@ functions from an otherwise incomplete game source archive without forcing
 unported systems (heap, renderer, timers, game overlays) into the test binary.
 For example, the Berry Tag, Ribbon and Pokédex state smoke tests operate on
 caller-owned structs or static metadata; their real heap/save-table/NARC
-interfaces are **not** claimed to be runtime-functional. Likewise,
+interfaces are **not** claimed to be runtime-functional. The Move Reminder,
+Pokédex measurement and Day Care smoke checks similarly use the original
+standalone functions with caller-owned input. Their full Pokémon, NARC,
+BoxPokemon initialization and heap backends are not implemented yet. Likewise,
 battle-rule and record-mixing tests operate on original tables and
 caller-owned arrays; they do not implement Nintendo Wi-Fi/record exchange.
 **It does not imply the full game can link or run.**
@@ -128,7 +134,8 @@ options, Berry attributes, authentic generated IDs, math/RNG, tiles,
 field-script execution, menu cursor navigation, map history rollover,
 Pokédex language ordering, persisted map-feature buffers, Berry Tag bits,
 Pokédex selection/data banks, Ribbon initialization, battle rule presets,
-and mixed-record RNG initialization, advancement and entry matching. They call
+mixed-record RNG initialization/entry matching, move-list sentinel detection,
+Pokédex size/weight accessors and Day Care state transitions. They call
 real game code and an externally linked NitroSystem function, so they
 test compatibility between original game code and both SDK libraries.
 
