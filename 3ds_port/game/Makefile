@@ -176,7 +176,9 @@ endif
 
 lib: $(LIB)
 
-libnitro:
+# libnitrosystem's own make builds libnitro first. Run that one first, so
+# that with make -j two makes never build libnitro at the same time.
+libnitro: libnitrosystem
 	@$(MAKE) --no-print-directory -C $(NITRO) TARGET=$(TARGET) lib
 
 libnitrosystem:
