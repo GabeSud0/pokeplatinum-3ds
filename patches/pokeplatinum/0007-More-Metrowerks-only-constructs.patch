@@ -1,0 +1,102 @@
+From 11fcce87f5c024d72cc03aff9a3d9c57c3957f96 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 14:01:42 -0700
+Subject: [PATCH] More Metrowerks-only constructs (SDK_PORT_3DS)
+
+- ov17_0224A0FC.c includes <cstdlib>, a C++ header; include <stdlib.h>.
+- underground_map_transition.c and cutscenes/end_credits/main.c define
+  functions static after a non-static declaration; define them non-static.
+- password_word_bank.c calls Heap_Alloc and LoadMemberFromNARC_OutFileSize
+  without including heap.h and graphics.h.
+The original build is unchanged.
+---
+ src/cutscenes/end_credits/main.c | 10 ++++++++++
+ src/overlay017/ov17_0224A0FC.c   |  5 +++++
+ src/password_word_bank.c         |  7 +++++++
+ src/underground_map_transition.c |  5 +++++
+ 4 files changed, 27 insertions(+)
+
+diff --git a/src/cutscenes/end_credits/main.c b/src/cutscenes/end_credits/main.c
+index c241073a..945609de 100644
+--- a/src/cutscenes/end_credits/main.c
++++ b/src/cutscenes/end_credits/main.c
+@@ -87,7 +87,12 @@ static G3DPipelineBuffers *EndCredits_InitG3DPipeline(enum HeapID heapID);
+ static void EndCredits_G3DPipelineCallback(void);
+ static void EndCredits_FreeG3DPipeline(G3DPipelineBuffers *g3dPipeline);
+ static void EndCredits_InitPalettes(EndCreditsApp *endCreditsApp);
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++void EndCredits_FreeAppResources(EndCreditsApp *endCreditsApp);
++#else
+ static void EndCredits_FreeAppResources(EndCreditsApp *endCreditsApp);
++#endif
+ static void EndCredits_FreeTilemapBuffers(EndCreditsApp *endCreditsApp);
+ static void EndCredits_InitBackgrounds2(BgConfig *bgConfig);
+ 
+@@ -301,7 +306,12 @@ static void EndCredits_DrawSprites(SysTask *sysTask, void *pEndCreditsApp)
+     SpriteSystem_UpdateTransfer();
+ }
+ 
++#ifdef SDK_PORT_3DS
++// A header declares this non-static; GCC rejects static after that.
++void EndCredits_FreeAppResources(EndCreditsApp *endCreditsApp)
++#else
+ static void EndCredits_FreeAppResources(EndCreditsApp *endCreditsApp)
++#endif
+ {
+     GF_ASSERT(endCreditsApp->subScreenStringsManager != NULL);
+ 
+diff --git a/src/overlay017/ov17_0224A0FC.c b/src/overlay017/ov17_0224A0FC.c
+index 75adab09..6097ddaa 100644
+--- a/src/overlay017/ov17_0224A0FC.c
++++ b/src/overlay017/ov17_0224A0FC.c
+@@ -1,6 +1,11 @@
+ #include "overlay017/ov17_0224A0FC.h"
+ 
++#ifdef SDK_PORT_3DS
++// <cstdlib> is C++; Metrowerks found its own copy, GCC's C compiler has none.
++#include <stdlib.h>
++#else
+ #include <cstdlib>
++#endif
+ #include <nitro.h>
+ #include <string.h>
+ 
+diff --git a/src/password_word_bank.c b/src/password_word_bank.c
+index fd3322ff..4237c83e 100644
+--- a/src/password_word_bank.c
++++ b/src/password_word_bank.c
+@@ -11,6 +11,13 @@
+ 
+ #include "res/words/word_bank.naix"
+ 
++#ifdef SDK_PORT_3DS
++// Declare Heap_Alloc and LoadMemberFromNARC_OutFileSize, which this file
++// calls; Metrowerks allowed calls without a declaration.
++#include "graphics.h"
++#include "heap.h"
++#endif
++
+ PasswordWordBank *PasswordWordBank_New(enum HeapID heapID)
+ {
+     PasswordWordBank *wordBank = Heap_Alloc(heapID, sizeof(PasswordWordBank));
+diff --git a/src/underground_map_transition.c b/src/underground_map_transition.c
+index 9c926798..bb548705 100644
+--- a/src/underground_map_transition.c
++++ b/src/underground_map_transition.c
+@@ -465,7 +465,12 @@ static void UndergroundMapTransition_EndTransitionTask(SysTask *sysTask, Undergr
+     SysTask_FinishAndFreeParam(sysTask);
+ }
+ 
++#ifdef SDK_PORT_3DS
++// Declared non-static earlier in this file; GCC rejects static after that.
++void UndergroundMapTransition_InitSprites(UGMapTransitionSpriteData *spriteData, enum Gender playerGender, NNS_G2D_VRAM_TYPE vramType)
++#else
+ static void UndergroundMapTransition_InitSprites(UGMapTransitionSpriteData *spriteData, enum Gender playerGender, NNS_G2D_VRAM_TYPE vramType)
++#endif
+ {
+     UGMapTransitionSpriteData_Init(spriteData);
+     UndergroundMapTransition_LoadSpriteResources(spriteData, playerGender, vramType);
+-- 
+2.43.0
+

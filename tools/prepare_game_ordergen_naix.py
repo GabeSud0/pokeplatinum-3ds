@@ -8,7 +8,10 @@ Usage:
 Some archives in pinned pret/pokeplatinum get their --files-from list from
 a script in tools/ordergen/ rather than a checked-in .order file: the
 trainer front/back sprite archives (trfgra, trbgra) and the footprints
-(pokefoot). Their meson.build rules run the script with an environment
+(pokefoot). The Pokemon icons (pl_poke_icon) and alternate-form sprites
+(pl_otherpoke) are packed by scripts in tools/scripts/ that name the
+members themselves; their member lists are worked out from those scripts
+and the arguments the build gives them (poke_icon_order, otherpoke_order). Their meson.build rules run the script with an environment
 variable listing the folders to visit, which they derive from a generated
 constants list (generated/trainer_classes.txt, generated/species.txt): each
 line, without its prefix, in lower case.
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -50,6 +54,45 @@ ORDERGEN = [
         "naix": {"pokefoot.order": "res/pokemon/pokefoot.naix"},
     },
 ]
+
+
+def poke_icon_order(upstream: Path) -> list[str]:
+    """Members of pl_poke_icon.narc, as tools/scripts/make_pl_poke_icon.py
+    packs them: the names in species_icons.order, then one icon_NNNNN.NCGR
+    per icon file it is given, which nitroarc adds after the listed members
+    in name order. The icons are each species folder's own
+    (res/pokemon/<species>/meson.build adds them), in species order, then the
+    extra forms res/pokemon/meson.build appends."""
+    pokemon = upstream / "res" / "pokemon"
+    listed = [line.strip() for line in (pokemon / "species_icons.order")
+              .read_text(encoding="utf-8").splitlines() if line.strip()]
+    count = 0
+    for name in folder_names(upstream, "generated/species.txt", "SPECIES_"):
+        text = (pokemon / name / "meson.build").read_text(encoding="utf-8")
+        for files in re.findall(r"poke_icon_files\s*\+=\s*files\(([^)]*)\)", text):
+            count += len(re.findall(r"'[^']+'", files))
+    text = (pokemon / "meson.build").read_text(encoding="utf-8")
+    start = text.index("poke_icon_files += [", text.index("# The last icon added"))
+    extras = text[start + len("poke_icon_files += ["):text.index("]", start)]
+    count += len([item for item in extras.split(",") if item.strip()])
+    return listed + [f"icon_{i:05}.NCGR" for i in range(count)]
+
+
+def otherpoke_order(upstream: Path) -> list[str]:
+    """Members of pl_otherpoke.narc, as tools/scripts/make_pl_otherpoke.py
+    names them: pl_otherpoke_NNNN.NCGR for the --sprite-entries sprites,
+    .NCLR for the --palette-entries palettes, then the Substitute's two
+    sprites and palette, and pokemon_shadows(.NCGR/_pal.NCLR). nitroarc packs
+    the folder without a list, so all of them are in name order."""
+    rule = (upstream / "res" / "pokemon" / "meson.build").read_text(encoding="utf-8")
+    sprites = int(re.search(r"'--sprite-entries',\s*'(\d+)'", rule).group(1))
+    palettes = int(re.search(r"'--palette-entries',\s*'(\d+)'", rule).group(1))
+    names = [f"pl_otherpoke_{i:04}.NCGR" for i in range(sprites)]
+    names += [f"pl_otherpoke_{i:04}.NCLR" for i in range(sprites, sprites + palettes)]
+    last = sprites + palettes
+    names += [f"pl_otherpoke_{last:04}.NCGR", f"pl_otherpoke_{last + 1:04}.NCGR",
+              f"pl_otherpoke_{last + 2:04}.NCLR", "pokemon_shadows.NCGR", "pokemon_shadows_pal.NCLR"]
+    return sorted(names)   # nitroarc sorts unlisted files with strcmp
 
 
 def folder_names(upstream: Path, listing: str, prefix: str) -> list[str]:
@@ -101,6 +144,21 @@ def generate(upstream: Path, output: Path) -> tuple[int, int]:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(payload, encoding="utf-8")
                 updated += 1
+    # pl_poke_icon and pl_otherpoke: packing scripts name the members.
+    if not (upstream / "res" / "pokemon" / "species_icons.order").is_file():
+        return made, updated
+    for name, members in (("pl_poke_icon", poke_icon_order(upstream)),
+                          ("pl_otherpoke", otherpoke_order(upstream))):
+        order = work / f"{name}.order"
+        order.write_text("\n".join(members) + "\n", encoding="utf-8")
+        relative = Path(f"res/pokemon/{name}.naix")
+        payload = render(order, relative)
+        dest = output / relative
+        made += 1
+        if not dest.is_file() or dest.read_text(encoding="utf-8") != payload:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(payload, encoding="utf-8")
+            updated += 1
     return made, updated
 
 

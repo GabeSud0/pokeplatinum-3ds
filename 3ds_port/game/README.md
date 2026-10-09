@@ -13,19 +13,17 @@ that stops it:
 
 | Target | Compiled | Blocked |
 |---|---|---|
-| 3DS, 32-bit PC | 986 of 1,013 | 27 |
-| 64-bit PC | 962 of 1,013 | 27 + 24 in [`blocked_sources_64bit.txt`](blocked_sources_64bit.txt) |
+| 3DS, 32-bit PC | **all 1,012** | none |
+| 64-bit PC | 988 of 1,012 | 24 in [`blocked_sources_64bit.txt`](blocked_sources_64bit.txt) |
 
-The 24 extra files on a 64-bit PC store overlay IDs (addresses of linker
+1,012 is the original build's own list (`src/meson.build`;
+`tools/game_sources.py`). `src/unk_02095CD4.c` isn't on it: it includes a
+header that doesn't exist and isn't part of the game.
+
+The 24 files a 64-bit PC skips store overlay IDs (addresses of linker
 symbols) as `u32` in static initializers, which is only constant with
-4-byte pointers.
-
-What still blocks the 27: **headers the original build generates and the
-port doesn't yet**: data tables from the decomp's JSON (tutor moves, egg
-moves, footprints, berry list ...), sprite templates, a few archive indices
-made by special scripts, and two headers that embed graphics. Plus two
-decompilation slips: `<cstdlib>` (a C++ header) and a missing
-`unk_02095CD4.h`.
+4-byte pointers. [`blocked_sources.txt`](blocked_sources.txt) is empty now
+but stays, for whatever the next pinned decompilation brings.
 
 Code that only Metrowerks accepted is fixed by patches in
 `patches/pokeplatinum/` (each change under `SDK_PORT_3DS`, so the original
@@ -39,11 +37,30 @@ build is unchanged):
 - `0005`: assigning a `const` member, casts as assignment targets, `const`
   variables as array sizes, `NULL` for an enum, `\u00XX` byte escapes.
 - `0006`: C versions of the RC4 encrypt functions (see below).
+- `0007`: `<cstdlib>` (a C++ header), two more static-after-extern
+  definitions, a missing include.
 
-Archive indices whose member list a script in the decomp's `tools/ordergen/`
-writes (trainer sprites, footprints; `pokemon.c` needs one) are made by
-running that script, at its pinned version, with the folder list its
-`meson.build` derives (`tools/prepare_game_ordergen_naix.py`).
+### Generated headers
+
+Everything the original build generates and the game's code includes is
+generated the same way, into `build/` (never committed):
+
+- Metang's constants (`tools/prepare_game_constants.py`), text-bank,
+  move, species and sound indices, and archive indices (`.naix`) from the
+  `.order` lists and `meson.build` rules (`prepare_game_*`).
+- Archives whose member list a script makes: `tools/ordergen/` (trainer
+  sprites, footprints) and `tools/scripts/` (Pokémon icons, alternate-form
+  sprites) (`tools/prepare_game_ordergen_naix.py`).
+- **The decompilation's own data tools** (`tools/prepare_game_dataproc.py`):
+  it builds `tools/dataproc` (speciesproc, itemproc, frontierproc,
+  trainerproc, resdatproc) and `tools/nitrogfx` with the PC's C compiler, as
+  their `meson.build` files say, and runs them as the original rules do:
+  egg/tutor moves, footprints, the berry list, frontier trainer classes,
+  sprite templates, and the two images the game embeds in its code. Needs a
+  PC C compiler and libpng. The data archives these tools also write are
+  deleted; the game reads its data from the player's own data pack.
+- Like Meson, the folders of generated headers are on the include path
+  (some files include `"ending.naix"` by bare name).
 
 ### Updating the lists
 
@@ -86,8 +103,9 @@ own sources is now provided:
   the game objects call (134): each logs "not implemented" once and returns
   0, so online menus see a failure.
 
-With those, a 64-bit PC link misses 367 symbols, all defined in the
-still-blocked files (and the 24 that only a 64-bit PC blocks).
+With those and every source compiling, **the 3DS link of the whole game
+misses nothing**. A 64-bit PC link misses the symbols defined in the 24
+files it skips.
 
 ## How it's built
 

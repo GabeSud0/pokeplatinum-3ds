@@ -6,30 +6,3 @@
 # rerun the surveys and the tool (see 3ds_port/game/README.md).
 #
 # Format: path relative to src/   # reason (first error)
-applications/frontier/tower_records.c                      # missing header res/graphics/sprite_templates/tower_records.h
-applications/mail_viewer.c                                 # missing header res/pokemon/pl_poke_icon.naix
-applications/party_menu/sprites.c                          # missing header res/graphics/sprite_templates/party_menu.h
-applications/poffin_case/manager.c                         # missing header res/graphics/sprite_templates/poffin_case.h
-applications/pokemon_summary_screen/sprites.c              # missing header res/graphics/sprite_templates/pokemon_summary_screen.h
-applications/town_map/fly_locations.c                      # missing header res/graphics/sprite_templates/town_map.h
-applications/town_map/graphics.c                           # missing header res/graphics/sprite_templates/town_map.h
-battle/healthbox.c                                         # missing header res/graphics/battle/healthbox/healthbox_parts.4bpp.h
-cutscenes/end_credits/common.c                             # missing header ending.naix
-cutscenes/end_credits/main.c                               # missing header ending.naix
-cutscenes/end_credits/scenes.c                             # missing header ending.naix
-item.c                                                     # missing header res/items/item_berry_list.h
-mail.c                                                     # missing header res/pokemon/pl_poke_icon.naix
-menu.c                                                     # missing header res/fonts/arrow_cursor.4bpp.h
-overlay005/daycare.c                                       # missing header res/pokemon/species_egg_moves.h
-overlay005/footprint_type.c                                # missing header res/pokemon/species_footprint_types.h
-overlay005/scrcmd_move_tutor.c                             # missing header res/pokemon/tutorable_moves.h
-overlay007/shop_menu.c                                     # missing header res/graphics/sprite_templates/shop_menu.h
-overlay017/ov17_0224A0FC.c                                 # missing header cstdlib
-overlay104/battle_hall_helpers.c                           # missing header res/trainers/frontier/frontier_trainer_classes.h
-overlay104/frontier_brain_encounter_effect.c               # missing header res/text/bank/npc_trainer_names.h
-overlay113/ov113_02260620.c                                # missing header res/pokemon/species_footprint_sizes.h
-password_word_bank.c                                       # missing header res/words/word_bank.naix
-pokemon_icon.c                                             # missing header res/pokemon/pl_poke_icon.naix
-pokemon_sprite.c                                           # missing header res/pokemon/pl_otherpoke.naix
-underground_map_transition.c                               # missing header res/graphics/sprite_templates/underground_map_transition.h
-unk_02095CD4.c                                             # missing header unk_02095CD4.h
