@@ -3,6 +3,7 @@
 # so it can be unit tested).
 #
 #   make                 build for PC and run the tests     (TARGET=host)
+#   make TARGET=host32   same, as a 32-bit program (needs gcc-multilib)
 #   make TARGET=3ds      build the library for the 3DS's ARM11 (needs devkitARM)
 #   make clean
 #
@@ -11,15 +12,10 @@
 # the SDK entirely is in src/ here.
 # ---------------------------------------------------------------------------
 
-TARGET   ?= host
-ROOT     := $(abspath ../..)
-SDK      := $(ROOT)/build/NitroSDK
+include ../common.mk
+
 OUT      := build/$(TARGET)
 GEN      := $(OUT)/gen
-
-ifeq ($(wildcard $(SDK)/include/nitro.h),)
-$(error NitroSDK not found at $(SDK). Run: python tools/bootstrap.py)
-endif
 
 # --- Sources ---------------------------------------------------------------
 
@@ -169,46 +165,14 @@ LIB       := $(OUT)/libnitro.a
 
 # --- Flags -----------------------------------------------------------------
 
-# The same SDK configuration pokeplatinum builds with, minus the Metrowerks
-# compiler (SDK_CW), plus SDK_PORT_3DS which turns on our patches.
-DEFINES := -DSDK_ARM9 -DSDK_TS -DSDK_4M -DSDK_CODE_ARM -DSDK_FINALROM \
-           -DNNS_FINALROM -DSDK_PORT_3DS
-
-# gnu89 inline rules match how the SDK's .c files use `inline`.
-# No strict aliasing: the SDK reinterprets memory through casts on purpose.
-# Enums are always 4 bytes, like Metrowerks ("#pragma enumsalwaysint on" in
-# nitro/types.h); ARM GCC would otherwise shrink them and break struct layouts.
-CFLAGS := -std=gnu99 -fgnu89-inline -fno-strict-aliasing -fno-short-enums -O2 -g \
-          -Wall -Wno-unused-function -Wno-unused-variable -Wno-missing-braces \
-          -Wno-unknown-pragmas -Wno-unused-but-set-variable -Wno-parentheses -Wno-switch \
-          $(DEFINES) -Iinclude -I$(GEN) -I$(SDK)/include \
-          $(foreach d,$(wildcard $(SDK)/libraries/*/include),-I$(d))
-
-ifeq ($(TARGET),3ds)
-  ifeq ($(strip $(DEVKITARM)),)
-    $(error Set DEVKITARM (install devkitPro with 3ds-dev))
-  endif
-  PREFIX := $(DEVKITARM)/bin/arm-none-eabi-
-  CC     := $(PREFIX)gcc
-  AR     := $(PREFIX)gcc-ar
-  CFLAGS += -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft \
-            -mword-relocations -ffunction-sections -D__3DS__
-else ifeq ($(TARGET),host)
-  CC     ?= cc
-  AR     ?= ar
-  # The SDK stores addresses in 32-bit integers. On a 64-bit PC that only
-  # works if our data sits below 4 GB, which a non-PIE executable guarantees.
-  CFLAGS += -fno-pie -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
-  LDFLAGS += -no-pie
-else
-  $(error TARGET must be host or 3ds)
-endif
+# Compiler, target and SDK configuration: see ../common.mk.
+CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES)
 
 # --- Rules -----------------------------------------------------------------
 
 .PHONY: all lib test clean
 
-ifeq ($(TARGET),host)
+ifeq ($(IS_HOST),yes)
 all: test
 else
 all: lib

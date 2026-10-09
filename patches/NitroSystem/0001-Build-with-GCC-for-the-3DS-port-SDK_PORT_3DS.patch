@@ -1,0 +1,186 @@
+From e75909ad84c4f49609ef6600ff48e2f68bff464c Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 21:03:33 -0700
+Subject: [PATCH] Build with GCC for the 3DS port (SDK_PORT_3DS)
+
+UTF-16 text reads 2-byte units (GCC's wchar_t is 4 bytes). Replace casts used as lvalues, Metrowerks' __alloca and an implicit int (errors in GCC 14). The BG control register table takes addresses inside the port's I/O register block, so it stays a constant initializer. Remove two expressions C leaves undefined: the offset-unpacking macro assigned its argument twice, and the 256-color BG mapping read and incremented one pointer in a single expression. The original Metrowerks build is unchanged.
+---
+ include/nnsys/g2d/g2d_Data.h                    |  7 +++++++
+ include/nnsys/g2d/g2di_Char.h                   |  5 +++++
+ libraries/g2d/src/g2d_CharCanvas.c              | 17 +++++++++++++++++
+ libraries/g2d/src/internal/g2di_BGManipulator.c | 11 +++++++++++
+ libraries/g2d/src/internal/g2di_SplitChar.c     | 11 +++++++++++
+ .../gfd/src/VramManager/gfd_FrameTexVramMan.c   |  5 +++++
+ libraries/snd/src/sndarc_stream.c               |  5 +++++
+ 7 files changed, 61 insertions(+)
+
+diff --git a/include/nnsys/g2d/g2d_Data.h b/include/nnsys/g2d/g2d_Data.h
+index cb606aa..a0817c6 100644
+--- a/include/nnsys/g2d/g2d_Data.h
++++ b/include/nnsys/g2d/g2d_Data.h
+@@ -18,7 +18,14 @@ extern "C" {
+ #include <nnsys/g2d/fmt/g2d_Font_data.h>
+ #include <nnsys/g2d/g2d_config.h>
+ 
++#ifdef SDK_PORT_3DS
++// Every caller writes `p = NNS_G2D_UNPACK_OFFSET_PTR(p, base)`; assigning
++// inside the macro as well would modify p twice in one expression, which C
++// leaves undefined. The value is the same either way.
++#define NNS_G2D_UNPACK_OFFSET_PTR(ptr, baseOffs)  ((void *)((u32)(ptr) + (u32)(baseOffs)))
++#else
+ #define NNS_G2D_UNPACK_OFFSET_PTR(ptr, baseOffs)  (ptr) = (void *)((u32)(ptr) + (u32)baseOffs)
++#endif
+ 
+ #ifdef SDK_FINALROM
+     #ifdef __SNC__
+diff --git a/include/nnsys/g2d/g2di_Char.h b/include/nnsys/g2d/g2di_Char.h
+index fc2d151..fe0a216 100644
+--- a/include/nnsys/g2d/g2di_Char.h
++++ b/include/nnsys/g2d/g2di_Char.h
+@@ -7,7 +7,12 @@ extern "C" {
+ 
+ #ifdef NNS_G2D_UNICODE
+     #define NNS_G2D_TRANSCODE(str)  L ## str
++    #ifdef SDK_PORT_3DS
++    // UTF-16, as with Metrowerks' 2-byte wchar_t (GCC's is 4 bytes).
++    typedef u16 NNSG2dChar;
++    #else
+     typedef wchar_t NNSG2dChar;
++    #endif
+ #else
+     #define NNS_G2D_TRANSCODE(str)  str
+     typedef char NNSG2dChar;
+diff --git a/libraries/g2d/src/g2d_CharCanvas.c b/libraries/g2d/src/g2d_CharCanvas.c
+index e8f9b1a..e8ae1ef 100644
+--- a/libraries/g2d/src/g2d_CharCanvas.c
++++ b/libraries/g2d/src/g2d_CharCanvas.c
+@@ -6,6 +6,11 @@
+ 
+ #include "g2di_BitReader.h"
+ 
++#ifdef SDK_PORT_3DS
++// Metrowerks' stack allocation builtin, by its GCC name.
++#define __alloca __builtin_alloca
++#endif
++
+ #define CHARACTER_WIDTH     8
+ #define CHARACTER_HEIGHT    8
+ 
+@@ -1028,14 +1033,26 @@ void NNS_G2dMapScrToCharAffine (void * areaBase, int areaWidth, int areaHeight,
+             u16 * pScr = pScrBase;
+ 
+             if ( bOddBase ) {
++#ifdef SDK_PORT_3DS
++                // Read the word, then advance: in the original one expression
++                // both reads and increments pScr, which C leaves undefined.
++                *pScr = (u16)((charNo++ << 8) | (*pScr & 0xFF));
++                pScr++;
++#else
+                 *pScr++ = (u16)((charNo++ << 8) | (*pScr & 0xFF));
++#endif
+             }
+             for ( ; x < wordWidth; ++x) {
+                 *pScr++ = (u16)(((charNo + 1) << 8) | charNo);
+                 charNo += 2;
+             }
+             if ( bOddLast ) {
++#ifdef SDK_PORT_3DS
++                *pScr = (u16)((*pScr & 0xFF00) | charNo++);
++                pScr++;
++#else
+                 *pScr++ = (u16)((*pScr & 0xFF00) | charNo++);
++#endif
+             }
+             pScrBase += scnWidth;
+         }
+diff --git a/libraries/g2d/src/internal/g2di_BGManipulator.c b/libraries/g2d/src/internal/g2di_BGManipulator.c
+index e4f922e..d300659 100644
+--- a/libraries/g2d/src/internal/g2di_BGManipulator.c
++++ b/libraries/g2d/src/internal/g2di_BGManipulator.c
+@@ -1,9 +1,20 @@
+ #include "g2di_BGManipulator.h"
+ 
++#ifdef SDK_PORT_3DS
++#define PORT_BGCNT(offset) ((REGType16v *)&NitroPort_IoReg[offset])
++REGType16v * const NNSiG2dBGCNTTable[] = {
++    PORT_BGCNT(REG_BG0CNT_OFFSET), PORT_BGCNT(REG_BG1CNT_OFFSET),
++    PORT_BGCNT(REG_BG2CNT_OFFSET), PORT_BGCNT(REG_BG3CNT_OFFSET),
++    PORT_BGCNT(REG_DB_BG0CNT_OFFSET), PORT_BGCNT(REG_DB_BG1CNT_OFFSET),
++    PORT_BGCNT(REG_DB_BG2CNT_OFFSET), PORT_BGCNT(REG_DB_BG3CNT_OFFSET)
++};
++#undef PORT_BGCNT
++#else
+ REGType16v * const NNSiG2dBGCNTTable[] = {
+     &reg_G2_BG0CNT, &reg_G2_BG1CNT, &reg_G2_BG2CNT, &reg_G2_BG3CNT,
+     &reg_G2S_DB_BG0CNT, &reg_G2S_DB_BG1CNT, &reg_G2S_DB_BG2CNT, &reg_G2S_DB_BG3CNT
+ };
++#endif
+ 
+ void NNSi_G2dBGGetCharSize (int * pWidth, int * pHeight, NNSG2dBGSelect n)
+ {
+diff --git a/libraries/g2d/src/internal/g2di_SplitChar.c b/libraries/g2d/src/internal/g2di_SplitChar.c
+index 1638466..6968715 100644
+--- a/libraries/g2d/src/internal/g2di_SplitChar.c
++++ b/libraries/g2d/src/internal/g2di_SplitChar.c
+@@ -1,4 +1,8 @@
++#ifdef SDK_PORT_3DS
++#include <stddef.h>
++#else
+ #include <wchar_t.h>
++#endif
+ 
+ #include <nnsys/g2d/g2di_SplitChar.h>
+ #include <nnsys/g2d/g2d_config.h>
+@@ -34,8 +38,15 @@ u16 NNSi_G2dSplitCharUTF16 (const void ** ppChar)
+     NNS_G2D_POINTER_ASSERT(*ppChar);
+     NNS_G2D_ALIGN_ASSERT(*ppChar, 2);
+ 
++#ifdef SDK_PORT_3DS
++    // UTF-16 code units are 2 bytes; GCC's wchar_t is 4. GCC also has no
++    // casts as lvalues, so step the pointer explicitly.
++    c = *(const u16 *)*ppChar;
++    *ppChar = (const u16 *)*ppChar + 1;
++#else
+     c = *(const wchar_t *)*ppChar;
+     ((const wchar_t *)*ppChar)++;
++#endif
+ 
+     return c;
+ }
+diff --git a/libraries/gfd/src/VramManager/gfd_FrameTexVramMan.c b/libraries/gfd/src/VramManager/gfd_FrameTexVramMan.c
+index 5b051d6..039f90b 100644
+--- a/libraries/gfd/src/VramManager/gfd_FrameTexVramMan.c
++++ b/libraries/gfd/src/VramManager/gfd_FrameTexVramMan.c
+@@ -315,7 +315,12 @@ void NNS_GfdResetFrmTexVramState (void)
+     int i;
+     u16 numSlot = frmExVramMan_.numSlot;
+ 
++#ifdef SDK_PORT_3DS
++    // Implicit int is an error since GCC 14.
++    const int numRegion = (numSlot > 1) ? numSlot + 1 : numSlot + 0;
++#else
+     const numRegion = (numSlot > 1) ? numSlot + 1 : numSlot + 0;
++#endif
+ 
+     NNS_GFD_ASSERT(IsSlotNumValid_(numSlot));
+ 
+diff --git a/libraries/snd/src/sndarc_stream.c b/libraries/snd/src/sndarc_stream.c
+index 709934c..2f6bd4c 100644
+--- a/libraries/snd/src/sndarc_stream.c
++++ b/libraries/snd/src/sndarc_stream.c
+@@ -1278,7 +1278,12 @@ static void MakeWaveData (LoadCommand * command)
+                     u32 end;
+ 
+                     if (blockOffsetSample == 0) {
++#ifdef SDK_PORT_3DS
++                        *state = *(AdpcmState *)srcp;
++                        srcp += sizeof(AdpcmState);
++#else
+                         *state = *((AdpcmState *)srcp)++;
++#endif
+                     }
+ 
+                     end = blockOffsetSample + samples;
+-- 
+2.43.0
+

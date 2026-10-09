@@ -19,9 +19,13 @@ the same engine, so most of the 3DS backend should carry over.
 
 > **Status:** Phase 1. Toolchain working (stereoscopic test app runs in
 > Azahar); DS hardware layer mapped in
-> [`docs/HARDWARE_LAYER.md`](docs/HARDWARE_LAYER.md); all of NitroSDK that
-> the game uses builds for the 3DS and passes its tests
-> ([`3ds_port/nitro`](3ds_port/nitro)). Nothing playable yet.
+> [`docs/HARDWARE_LAYER.md`](docs/HARDWARE_LAYER.md). NitroSDK and
+> NitroSystem (Fnd, G2d, G3d, Gfd, Snd) compile for the 3DS using GCC;
+> PC/32-bit resource tests and CI status are tracked in
+> [`3ds_port/nitro`](3ds_port/nitro) and
+> [`3ds_port/nitrosystem`](3ds_port/nitrosystem). The game itself and
+> its 3DS hardware/render/audio backends are not yet running. **Nothing
+> playable yet.**
 
 ## This repository contains no game content
 
@@ -29,7 +33,7 @@ No ROM, graphics, music, text or any other data from the game is stored here
 or in releases. The repository holds only:
 
 - the port's own code (`3ds_port/`),
-- patches applied on top of the decompilation (`patches/pokeplatinum/`),
+- patches applied on top of the decompilation and SDKs (`patches/`),
 - tools that fetch the decompilation and build the port (`tools/`),
 - the builder that turns **your own legally dumped cartridge** into the game's
   data, on your own computer (`builder/`).
@@ -123,6 +127,8 @@ and [`AI_DISCLOSURE.md`](AI_DISCLOSURE.md) for how AI assistance is used.
 3ds_port/        3DS-side code
   hello3d/       toolchain test app (stereoscopic cube)
   nitro/         NitroSDK built with GCC, plus PC unit tests
+  nitrosystem/   NitroSystem's Fnd/G2d/G3d/Gfd/Snd libraries and host tests
+  common.mk      shared host, host32 and devkitARM toolchain flags
 builder/         turns the player's own ROM into the data pack (Python)
 docs/            roadmap and design notes
 patches/         changes applied on top of the decompilation and SDKs

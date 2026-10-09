@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""Check that every NitroSDK function the game calls exists in libnitro.
+"""Check that every NitroSDK and NitroSystem function the game calls exists.
 
 Usage:
-    python tools/check_sdk_coverage.py [path/to/libnitro.a] [--nm NM] [--strict]
+    python tools/check_sdk_coverage.py [LIB ...] [--nm NM] [--strict]
 
-Defaults to the PC build (3ds_port/nitro/build/host/libnitro.a) and `nm`.
+LIB defaults to the PC builds of libnitro and libnitrosystem
+(3ds_port/*/build/host/*.a); pass the 3DS builds and --nm arm-none-eabi-nm
+to check those.
 
 How it works: scans the game's C files (build/upstream/src) for calls to
-NitroSDK names (GX_..., OS_..., FS_... and so on), drops names the game
-defines itself and names that are macros or inline functions (in the SDK
-headers or the game's own), and looks for the rest among the library's defined symbols.
+NitroSDK names (GX_..., OS_..., FS_... and so on) and NitroSystem names
+(NNS_..., NNSi_...), drops names the game defines itself and names that are
+macros or inline functions (in the SDK headers or the game's own), and looks
+for the rest among the libraries' defined symbols.
 
-Not covered here: NitroSystem (NNS_...), Nintendo Wi-Fi (DWC_...), and
-NitroWiFi (WCM_..., SOC_...); they are separate libraries.
-Also lists symbols the library itself uses that nothing defines.
+Not covered here: Nintendo Wi-Fi (DWC_...) and NitroWiFi (WCM_..., SOC_...);
+they are separate libraries the port leaves out.
+Also lists symbols the libraries use that none of them defines.
 With --strict, exits with status 1 if anything is missing.
 """
 
@@ -29,17 +32,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 GAME_SRC = ROOT / "build" / "upstream" / "src"
 SDK_INCLUDE = ROOT / "build" / "NitroSDK" / "include"
-DEFAULT_LIB = ROOT / "3ds_port" / "nitro" / "build" / "host" / "libnitro.a"
+NNS_ROOT = ROOT / "build" / "NitroSystem"
+DEFAULT_LIBS = [ROOT / "3ds_port" / "nitro" / "build" / "host" / "libnitro.a",
+                ROOT / "3ds_port" / "nitrosystem" / "build" / "host" / "libnitrosystem.a"]
 
 PREFIXES = ("GX", "GXS", "G2", "G2S", "G3", "G3X", "G3B", "OS", "FS", "MI", "MIi",
             "DC", "IC", "CP", "FX", "VEC", "MTX", "MATH", "SVC", "PAD", "TP", "CARD",
-            "RTC", "PM", "MIC", "SND", "WM", "SPI", "CTRDG", "MB", "PXI", "STD", "WBT", "WFS")
+            "RTC", "PM", "MIC", "SND", "WM", "SPI", "CTRDG", "MB", "PXI", "STD", "WBT", "WFS",
+            "NNS", "NNSi")
 
 CALL_RE = re.compile(r"\b((?:" + "|".join(PREFIXES) + r")_\w+)\s*\(")
 COMMENT_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
 DEF_RE = re.compile(r"^[A-Za-z_][\w \*]*?\b([A-Za-z_]\w*)\s*\([^;{]*\)\s*\{", re.M)
 MACRO_RE = re.compile(r"^\s*#\s*define\s+(\w+)", re.M)
-INLINE_RE = re.compile(r"(?:static\s+inline|SDK_INLINE|inline\s+static)\s+[\w \*]*?\b(\w+)\s*\(", re.S)
+# SDK_INLINE, NNS_INLINE, NNS_G2D_INLINE, NNS_G3D_INLINE ... are all "static inline".
+INLINE_RE = re.compile(r"(?:static\s+inline|\b[A-Z0-9_]*_INLINE\b|inline\s+static)\s+[\w \*]*?\b(\w+)\s*\(", re.S)
 
 
 def game_calls() -> dict[str, set[str]]:
@@ -56,7 +63,7 @@ def game_calls() -> dict[str, set[str]]:
 def header_only_names() -> set[str]:
     """Macros and inline functions: in the SDK headers, or defined by the game itself."""
     names: set[str] = set()
-    paths = list(SDK_INCLUDE.rglob("*.h"))
+    paths = list(SDK_INCLUDE.rglob("*.h")) + list(NNS_ROOT.rglob("*.h"))
     paths += list((GAME_SRC.parent / "include").rglob("*.h")) + list(GAME_SRC.rglob("*.[ch]"))
     paths += list((GAME_SRC.parent / "lib").rglob("*.h"))  # the game's own libraries
     for path in paths:
@@ -66,57 +73,71 @@ def header_only_names() -> set[str]:
     return names
 
 
-def library_symbols(lib: Path, nm: str) -> set[str]:
-    out = subprocess.run([nm, "-g", "--defined-only", str(lib)], check=True,
-                         capture_output=True, text=True).stdout
-    return {line.split()[-1] for line in out.splitlines() if len(line.split()) == 3}
+def library_symbols(libs: list[Path], nm: str) -> set[str]:
+    have: set[str] = set()
+    for lib in libs:
+        out = subprocess.run([nm, "-g", "--defined-only", str(lib)], check=True,
+                             capture_output=True, text=True).stdout
+        have |= {line.split()[-1] for line in out.splitlines() if len(line.split()) == 3}
+    return have
 
 
 # Things the C library provides on every platform we build for.
 LIBC = {"memcpy", "memset", "memmove", "memcmp", "strcmp", "strlen", "strncpy",
-        "abort", "fputc", "stderr", "vfprintf", "vsnprintf", "printf", "sqrt"}
+        "abort", "fputc", "stderr", "vfprintf", "vsnprintf", "printf", "sqrt",
+        "_impure_ptr", "alloca"}  # newlib's stderr, and alloca's fallback
 
 
-def library_unresolved(lib: Path, nm: str, have: set[str]) -> set[str]:
-    """Symbols the library uses but neither defines nor gets from libc."""
-    out = subprocess.run([nm, "-u", str(lib)], check=True, capture_output=True, text=True).stdout
-    used = {line.split()[-1] for line in out.splitlines() if line.strip() and not line.endswith(":")}
+def library_unresolved(libs: list[Path], nm: str, have: set[str]) -> set[str]:
+    """Symbols the libraries use but none defines, and libc doesn't provide."""
+    used: set[str] = set()
+    for lib in libs:
+        out = subprocess.run([nm, "-u", str(lib)], check=True, capture_output=True, text=True).stdout
+        used |= {line.split()[-1] for line in out.splitlines()
+                 if line.strip() and not line.endswith(":")}
     return {s for s in used - have if s not in LIBC and not s.startswith("__")}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("lib", nargs="?", default=str(DEFAULT_LIB))
+    parser.add_argument("libs", nargs="*", default=[str(p) for p in DEFAULT_LIBS],
+                        metavar="LIB", help="static libraries to look in")
     parser.add_argument("--nm", default="nm", help="nm program (arm-none-eabi-nm for 3DS builds)")
     parser.add_argument("--strict", action="store_true", help="fail if anything is missing")
     args = parser.parse_args()
 
-    lib = Path(args.lib)
+    libs = [Path(p) for p in args.libs]
     if not GAME_SRC.is_dir():
         print("build/upstream not found. Run: python tools/bootstrap.py")
         return 1
-    if not lib.is_file():
-        print(f"{lib} not found. Build it first: make -C 3ds_port/nitro")
-        return 1
+    for lib in libs:
+        if not lib.is_file():
+            print(f"{lib} not found. Build it first: make -C 3ds_port/nitrosystem lib")
+            return 1
+    names = ", ".join(lib.name for lib in libs)
 
     calls = game_calls()
     inline = header_only_names()
     needed = {n: f for n, f in calls.items() if n not in inline}
-    have = library_symbols(lib, args.nm)
+    have = library_symbols(libs, args.nm)
     missing = {n: f for n, f in needed.items() if n not in have}
 
+    def count(prefixes: tuple[str, ...], names) -> int:
+        return sum(1 for n in names if n.startswith(prefixes))
+    nns = ("NNS_", "NNSi_")
     print(f"SDK names the game calls:        {len(calls)}")
     print(f"  macros / inline functions:      {len(calls) - len(needed)}")
-    print(f"  need a library function:        {len(needed)}")
-    print(f"  found in {lib.name}:            {len(needed) - len(missing)}")
+    print(f"  need a library function:        {len(needed)}"
+          f" (NitroSystem: {count(nns, needed)})")
+    print(f"  found in {names}: {len(needed) - len(missing)}")
     print(f"  missing:                        {len(missing)}")
     for name in sorted(missing):
         files = sorted(missing[name])
         more = f" (+{len(files) - 2} more)" if len(files) > 2 else ""
         print(f"    {name:40} {', '.join(files[:2])}{more}")
 
-    unresolved = library_unresolved(lib, args.nm, have)
-    print(f"Symbols {lib.name} uses but nothing provides: {len(unresolved)}")
+    unresolved = library_unresolved(libs, args.nm, have)
+    print(f"Symbols the libraries use but nothing provides: {len(unresolved)}")
     for name in sorted(unresolved):
         print(f"    {name}")
 

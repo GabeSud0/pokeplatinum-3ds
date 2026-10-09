@@ -1,0 +1,100 @@
+From 2937550c14ceb2c1d70b7b533d224f69d620c975 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 21:03:32 -0700
+Subject: [PATCH] printf: read narrow variadic arguments as int
+
+%hd, %hhd and their unsigned forms read va_arg(ap, short) or va_arg(ap, char). Such arguments are always passed as int, and GCC compiles va_arg with a narrower type into a trap. Read an int and convert it, which is what Metrowerks did.
+---
+ libraries/os/src/os_printf.c    | 17 +++++++++++++----
+ libraries/std/src/std_sprintf.c | 17 +++++++++++++----
+ 2 files changed, 26 insertions(+), 8 deletions(-)
+
+diff --git a/libraries/os/src/os_printf.c b/libraries/os/src/os_printf.c
+index 126bf04..a503541 100644
+--- a/libraries/os/src/os_printf.c
++++ b/libraries/os/src/os_printf.c
+@@ -1,5 +1,14 @@
+ #include <nitro.h>
+ 
++#ifdef SDK_PORT_3DS
++// Arguments narrower than int reach a variadic function as int (C's default
++// argument promotions); GCC turns va_arg(ap, char) into a crash.
++#define PORT_VA_ARG_NARROW(ap, type) ((type)va_arg(ap, int))
++#else
++#define PORT_VA_ARG_NARROW(ap, type) va_arg(ap, type)
++#endif
++
++
+ #ifdef SDK_LINK_ISD
+     #pragma warn_extracomma off
+     #include <isdbglib.h>
+@@ -748,9 +757,9 @@ put_integer:
+ 
+                     if (flag & flag_unsigned) {
+                         if (flag & flag_h2)
+-                            val = va_arg(vlist, unsigned char);
++                            val = PORT_VA_ARG_NARROW(vlist, unsigned char);
+                         else if (flag & flag_h1)
+-                            val = va_arg(vlist, unsigned short);
++                            val = PORT_VA_ARG_NARROW(vlist, unsigned short);
+                         else if (flag & flag_l2)
+                             val = va_arg(vlist, u64);
+                         else
+@@ -770,9 +779,9 @@ put_integer:
+                         }
+                     } else {
+                         if (flag & flag_h2)
+-                            val = va_arg(vlist, char);
++                            val = PORT_VA_ARG_NARROW(vlist, char);
+                         else if (flag & flag_h1)
+-                            val = va_arg(vlist, short);
++                            val = PORT_VA_ARG_NARROW(vlist, short);
+                         else if (flag & flag_l2)
+                             val = va_arg(vlist, u64);
+                         else
+diff --git a/libraries/std/src/std_sprintf.c b/libraries/std/src/std_sprintf.c
+index 3a82a6c..66fc02e 100644
+--- a/libraries/std/src/std_sprintf.c
++++ b/libraries/std/src/std_sprintf.c
+@@ -1,5 +1,14 @@
+ #include <nitro.h>
+ 
++#ifdef SDK_PORT_3DS
++// Arguments narrower than int reach a variadic function as int (C's default
++// argument promotions); GCC turns va_arg(ap, char) into a crash.
++#define PORT_VA_ARG_NARROW(ap, type) ((type)va_arg(ap, int))
++#else
++#define PORT_VA_ARG_NARROW(ap, type) va_arg(ap, type)
++#endif
++
++
+ typedef struct dst_string_tag {
+     size_t len;
+     char * cur;
+@@ -267,9 +276,9 @@ put_integer:
+ 
+                     if (flag & flag_unsigned) {
+                         if (flag & flag_h2)
+-                            val = va_arg(vlist, unsigned char);
++                            val = PORT_VA_ARG_NARROW(vlist, unsigned char);
+                         else if (flag & flag_h1)
+-                            val = va_arg(vlist, unsigned short);
++                            val = PORT_VA_ARG_NARROW(vlist, unsigned short);
+                         else if (flag & flag_l2)
+                             val = va_arg(vlist, u64);
+                         else
+@@ -289,9 +298,9 @@ put_integer:
+                         }
+                     } else {
+                         if (flag & flag_h2)
+-                            val = va_arg(vlist, char);
++                            val = PORT_VA_ARG_NARROW(vlist, char);
+                         else if (flag & flag_h1)
+-                            val = va_arg(vlist, short);
++                            val = PORT_VA_ARG_NARROW(vlist, short);
+                         else if (flag & flag_l2)
+                             val = va_arg(vlist, u64);
+                         else
+-- 
+2.43.0
+

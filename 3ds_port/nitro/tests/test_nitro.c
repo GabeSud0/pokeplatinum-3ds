@@ -810,6 +810,34 @@ static void test_gba_slot(void)
     CHECK(!CTRDG_IsPulledOut());
 }
 
+static void test_printf(void)
+{
+    /* The SDK's two printf implementations. %hh and %h arguments arrive as
+     * int and are cut down to char/short, like C's own printf; reading them
+     * with va_arg(ap, char) would crash with GCC. Expected strings are what
+     * the C standard's printf produces for the same arguments. */
+    typedef int (*SPrintf)(char *, size_t, const char *, ...);
+    static const SPrintf impls[] = { STD_TSNPrintf, OS_SNPrintf };
+    char buf[64];
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        SPrintf f = impls[i];
+        f(buf, sizeof(buf), "%d %s %x", 42, "ab", 255);
+        CHECK(strcmp(buf, "42 ab ff") == 0);
+        f(buf, sizeof(buf), "%hhd %hhd", -5, 0x1FF);
+        CHECK(strcmp(buf, "-5 -1") == 0);
+        f(buf, sizeof(buf), "%hhu %hhx", 0x1FF, 0x1AB);
+        CHECK(strcmp(buf, "255 ab") == 0);
+        f(buf, sizeof(buf), "%hd %hu", -1234, 0x12345);
+        CHECK(strcmp(buf, "-1234 9029") == 0);
+    }
+
+    /* char is signed, as with Nintendo's compiler (GCC on ARM defaults to
+     * unsigned; common.mk passes -fsigned-char). */
+    CHECK((char)0x80 < 0);
+}
+
 int main(void)
 {
     test_types();
@@ -831,6 +859,7 @@ int main(void)
     test_hmac();
     test_pxi();
     test_gba_slot();
+    test_printf();
 
     printf("%d checks, %d failed\n", sChecks, sFailures);
     return sFailures == 0 ? 0 : 1;

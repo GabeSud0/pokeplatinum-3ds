@@ -7,10 +7,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  # 3DS builds, with the official devkitPro toolchain.
+  # 3DS builds use the official devkitPro toolchain.
   build-3ds:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     container: devkitpro/devkitarm:latest
     steps:
       - uses: actions/checkout@v4
@@ -30,29 +30,38 @@ jobs:
           name: hello3d
           path: 3ds_port/hello3d/hello3d.3dsx
 
-      - name: Fetch decompilation and SDK
-        run: python3 tools/bootstrap.py
+      - name: Fetch decompilation and both SDKs (fresh; check patches)
+        run: python3 tools/bootstrap.py --clean
 
       - name: Build libnitro for the 3DS
-        # Compiler errors are also posted as annotations, so they show up on
-        # the pull request without opening the log.
         shell: bash
         run: |
           set -o pipefail
-          make -C 3ds_port/nitro TARGET=3ds 2>&1 | tee build-3ds.log || {
-            grep -E "error|Error" build-3ds.log | head -20 | sed 's/^/::error::/'
+          make -C 3ds_port/nitro TARGET=3ds 2>&1 | tee build-3ds-nitro.log || {
+            grep -E "error|Error" build-3ds-nitro.log | head -20 | sed 's/^/::error::/' || true
             exit 1
           }
 
-      - name: Check every SDK function the game calls exists (3DS build)
+      - name: Build libnitrosystem for the 3DS
+        shell: bash
+        run: |
+          set -o pipefail
+          make -C 3ds_port/nitrosystem TARGET=3ds 2>&1 | tee build-3ds-nitrosystem.log || {
+            grep -E "error|Error" build-3ds-nitrosystem.log | head -20 | sed 's/^/::error::/' || true
+            exit 1
+          }
+
+      - name: Check NitroSDK and NitroSystem coverage (3DS build)
         run: >
-          python3 tools/check_sdk_coverage.py 3ds_port/nitro/build/3ds/libnitro.a
+          python3 tools/check_sdk_coverage.py
+          3ds_port/nitro/build/3ds/libnitro.a
+          3ds_port/nitrosystem/build/3ds/libnitrosystem.a
           --nm "$DEVKITARM/bin/arm-none-eabi-nm" --strict
 
-  # Python tools and PC unit tests.
+  # Native host tests of the platform libraries and Python tooling.
   tools-and-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -63,15 +72,56 @@ jobs:
       - name: Check Python tools compile
         run: python -m py_compile tools/*.py builder/*.py
 
-      - name: Fetch decompilation and SDK
-        run: python tools/bootstrap.py
+      - name: Fetch decompilation and both SDKs (fresh; check patches)
+        run: python tools/bootstrap.py --clean
 
       - name: Survey SDK usage
         run: python tools/survey_sdk_usage.py
 
-      - name: libnitro unit tests
-        # A broken interrupt or frame hook makes the tests wait forever, so cap them.
+      - name: libnitro host unit tests
         run: timeout 600 make -C 3ds_port/nitro
 
-      - name: Check every SDK function the game calls exists (PC build)
+      - name: libnitrosystem host unit tests
+        run: timeout 180 make -C 3ds_port/nitrosystem
+
+      - name: Check NitroSDK and NitroSystem coverage (PC build)
         run: python tools/check_sdk_coverage.py --strict
+
+  # Resource pointers in original Nintendo file formats are 32-bit.
+  # Separate job so 64-bit host tests cannot hide a host32 regression.
+  test-host32:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install 32-bit compiler and C runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-multilib gdb
+
+      - name: Fetch decompilation and both SDKs (fresh; check patches)
+        run: python tools/bootstrap.py --clean
+
+      - name: libnitro 32-bit unit tests
+        run: timeout 600 make -C 3ds_port/nitro TARGET=host32
+
+      - name: libnitrosystem 32-bit resource tests
+        run: timeout 180 make -C 3ds_port/nitrosystem TARGET=host32
+
+      - name: Diagnose a NitroSystem 32-bit test crash
+        if: failure()
+        run: |
+          gdb -q -batch -ex 'set pagination off' \
+            -ex 'run build/upstream/res' -ex 'thread apply all bt 18' \
+            --args 3ds_port/nitrosystem/build/host32/test_nitrosystem || true
+
+      - name: Check NitroSDK and NitroSystem coverage (32-bit PC build)
+        run: >
+          python tools/check_sdk_coverage.py
+          3ds_port/nitro/build/host32/libnitro.a
+          3ds_port/nitrosystem/build/host32/libnitrosystem.a --strict
