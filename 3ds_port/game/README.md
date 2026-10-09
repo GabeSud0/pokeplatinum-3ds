@@ -4,7 +4,7 @@ This is the beginning of compiling **the game's original C** for a native
 3DS port. It does **not** reimplement Pokémon Platinum, package game data,
 produce a playable executable, or compile all 1,013 C files yet.
 
-The first seven files come directly from the pinned pret/pokeplatinum source
+The first eleven files come directly from the pinned pret/pokeplatinum source
 checkout under `build/upstream/src/`:
 
 - `coins.c` — coin case state and overflow logic
@@ -13,11 +13,20 @@ checkout under `build/upstream/src/`:
 - `game_version.c` — Platinum/English game-version constants
 - `play_time.c` — in-save play-time rollover and saturation
 - `int_distance.c` — fixed-point 2D game-world distances
+- `math_util.c` and `fx_util.c` — RNG, simple encryption, fixed-point math, transforms
+- `map_tile_behavior.c` — terrain types, collisions, water and encounters
+- `field_script_context.c` — field script bytecode interpreter and call stack
 
 The Makefile uses the same shared flags, Nintendo headers, and GCC weak
 NitroSystem inline-symbol fix as `libnitro` and `libnitrosystem`. It also
 forces the original `pch/global_pch.h`, normally provided by Meson. Sources
 remain upstream; **never copy or commit fetched game code or assets**.
+
+The game compilation uses `-ffunction-sections -fdata-sections` and the
+host-test linker uses `--gc-sections`. This permits validating standalone
+functions from an otherwise incomplete game source archive without forcing
+unported systems (heap, renderer, timers, game overlays) into the test binary.
+**It does not imply the full game can link or run.**
 
 ## Building
 
@@ -32,7 +41,8 @@ make -C 3ds_port/game TARGET=3ds    # 3DS ARM11 object library (devkitARM)
 
 Outputs are ignored under `3ds_port/game/build/<target>/`:
 `libplatinum_game.a` (an incomplete, relocatable static archive) and host
-test binaries. The smoke tests call real game code and at least one externally
+test binaries. The smoke tests cover save play-time, math/RNG, tiles and field-script
+execution, and call real game code and at least one externally
 linked NitroSystem function, so they test the compatibility between code and
 both SDK libraries.
 
