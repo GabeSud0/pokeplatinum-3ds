@@ -1,0 +1,92 @@
+From 8fba91365d6bae61a2b3f79b061a3cbbae0b81d0 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 22:11:53 -0700
+Subject: [PATCH 2/2] Run DMA transfers in the port's software DMA
+
+DMA requests write the channel's registers and then wait for the hardware to clear the busy bit. On the port nothing cleared it, so every DMA (including all of GX_Load*, which use channel 3 by default, and G3X_Init) waited forever. After the registers are written, call the port's NitroPort_DmaStart, which carries out the transfer. Also skip the channel 0 dummy DMA, a workaround for a DS hardware fault that would leave channel 0 marked busy on the port. The Metrowerks build is unchanged.
+---
+ libraries/mi/include/mi_dma.h |  8 ++++++++
+ libraries/mi/src/mi_dma.c     | 19 +++++++++++++++++++
+ 2 files changed, 27 insertions(+)
+
+diff --git a/libraries/mi/include/mi_dma.h b/libraries/mi/include/mi_dma.h
+index 50d5b80..44c5ca3 100644
+--- a/libraries/mi/include/mi_dma.h
++++ b/libraries/mi/include/mi_dma.h
+@@ -178,7 +178,15 @@ static inline void MIi_CallCallback (MIDmaCallback callback, void * arg)
+ 
+ void MIi_CheckDma0SourceAddress(u32 dmaNo, u32 src, u32 size, u32 dir);
+ 
++#ifdef SDK_PORT_3DS
++// The dummy DMA works around a DS hardware fault on channel 0. The port's
++// DMA (3ds_port/nitro/src/port_dma.c) has no such fault, and the dummy
++// transfer (address 0 to address 0, left marked busy) would only hang the
++// next wait on channel 0, so no channel number matches.
++#define MIi_DUMMY_DMA_NO   0xFFFFFFFFUL
++#else
+ #define MIi_DUMMY_DMA_NO   0
++#endif
+ #define MIi_DUMMY_SRC      0
+ #define MIi_DUMMY_DEST     0
+ #define MIi_DUMMY_CNT      (MI_DMA_ENABLE | MI_DMA_SRC_FIX | MI_DMA_DEST_FIX | MI_DMA_16BIT_BUS | 1)
+diff --git a/libraries/mi/src/mi_dma.c b/libraries/mi/src/mi_dma.c
+index f331f7a..7852cd0 100644
+--- a/libraries/mi/src/mi_dma.c
++++ b/libraries/mi/src/mi_dma.c
+@@ -2,6 +2,17 @@
+ 
+ #include "../include/mi_dma.h"
+ 
++#ifdef SDK_PORT_3DS
++// There is no DMA controller on the 3DS side: once the registers are
++// written, the port carries out the transfer in software (or, for V-blank
++// timing, at the next V-blank) and clears the busy bit.
++// See 3ds_port/nitro/src/port_dma.c.
++#include <nitro_port.h>
++#define PORT_DMA_START(dmaNo) NitroPort_DmaStart(dmaNo)
++#else
++#define PORT_DMA_START(dmaNo) ((void)0)
++#endif
++
+ #ifdef SDK_ARM9
+     #include <nitro/itcm_begin.h>
+ 
+@@ -13,6 +24,8 @@
+         *(p + 1) = (vu32)dest;
+         *(p + 2) = (vu32)ctrl;
+         (void)OS_RestoreInterrupts(enabled);
++
++        PORT_DMA_START(dmaNo);
+     }
+ 
+     void MIi_DmaSetParams_wait (u32 dmaNo, u32 src, u32 dest, u32 ctrl)
+@@ -37,6 +50,8 @@
+         }
+ 
+         (void)OS_RestoreInterrupts(enabled);
++
++        PORT_DMA_START(dmaNo);
+     }
+ 
+     void MIi_DmaSetParams_noInt (u32 dmaNo, u32 src, u32 dest, u32 ctrl)
+@@ -45,6 +60,8 @@
+         *p = (vu32)src;
+         *(p + 1) = (vu32)dest;
+         *(p + 2) = (vu32)ctrl;
++
++        PORT_DMA_START(dmaNo);
+     }
+ 
+     void MIi_DmaSetParams_wait_noInt (u32 dmaNo, u32 src, u32 dest, u32 ctrl)
+@@ -73,6 +90,8 @@
+         {
+             u32 dummy = reg_MI_DMA0SAD;
+         }
++
++        PORT_DMA_START(dmaNo);
+     }
+ 
+     #include <nitro/itcm_end.h>
+-- 
+2.43.0
+

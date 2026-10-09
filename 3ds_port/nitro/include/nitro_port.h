@@ -53,6 +53,18 @@ void NitroPort_Halt(void);
  * Weak, empty by default. Called from the default NitroPort_Halt. */
 void NitroPort_OnFrame(void);
 
+/* -------------------------------------------------------------------- DMA */
+
+/* Called by NitroSDK after it writes a DMA channel's registers. Runs
+ * immediate and 3D-FIFO transfers now; V-blank transfers wait for
+ * NitroPort_DmaVBlank. Clears the busy bit and raises the channel's
+ * interrupt when done, as the DS does. (src/port_dma.c) */
+void NitroPort_DmaStart(u32 dmaNo);
+
+/* Runs the transfers waiting for V-blank. The default NitroPort_Halt calls
+ * it as V-blank starts; a replacement Halt must call it too. */
+void NitroPort_DmaVBlank(void);
+
 /* ---------------------------------------------------------------- threads */
 
 /* OS_SaveContext / OS_LoadContext. Weak; real thread switching comes with

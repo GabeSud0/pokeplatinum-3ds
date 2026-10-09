@@ -38,7 +38,12 @@ void NitroPort_RaiseIrq(u32 mask)
         if (reg_OS_IME == 0 || (reg_OS_IE & reg_OS_IF) == 0) {
             return;
         }
+        /* Taking an interrupt masks further ones until the handler
+         * returns, as the ARM CPU does. Anything raised meanwhile stays
+         * pending and runs on the next pass of this loop. */
+        OSi_PortCpsr |= HW_PSR_IRQ_DISABLE;
         OS_IrqHandler();
+        OSi_PortCpsr &= ~HW_PSR_IRQ_DISABLE;
     }
 }
 
@@ -56,6 +61,11 @@ __attribute__((weak)) void NitroPort_Halt(void)
 
     NitroPort_OnFrame();
     reg_GX_VCOUNT = 192; /* the line where V-blank starts */
+    /* V-blank starts: its interrupt is requested and V-blank DMAs run
+     * (masked meanwhile, so the interrupts are then taken lowest first). */
+    OSi_PortCpsr |= HW_PSR_IRQ_DISABLE;
+    reg_OS_IF |= OS_IE_V_BLANK;
+    NitroPort_DmaVBlank();
     OSi_PortCpsr &= ~HW_PSR_IRQ_DISABLE;
     NitroPort_RaiseIrq(OS_IE_V_BLANK);
     OSi_PortCpsr = saved;

@@ -35,7 +35,8 @@ SDK still builds the original game with Metrowerks.
 | Memory | copy, fill, atomic swap | `src/mi_memory.c`, `mi_swap.c` |
 | Decompression | LZ77 (both formats), run-length, Huffman, diff filters, bit unpacking. Checked against Nintendo's own compressors | `src/mi_uncompress.c` |
 | CPU state | interrupt enable/disable, CPU mode | SDK `os_system.c` (patched) |
-| Interrupts | IE/IF/IME rules, dispatch to the game's handlers, lowest first | SDK `os_irqHandler.c` (patched), `src/port_os.c` |
+| Interrupts | IE/IF/IME rules, dispatch to the game's handlers, lowest first; masked while a handler runs; pending ones taken as soon as the CPU unmasks them | SDK `os_irqHandler.c` (patched), `src/port_os.c` |
+| DMA | immediate and 3D-FIFO transfers run at once, V-blank transfers at V-blank; completion interrupts and callbacks. H-blank, display, card and cartridge timings are reported as not implemented | `src/port_dma.c`, SDK `mi_dma.c` (patched) |
 | Waiting for V-blank | `OS_Halt` advances one frame (calls the port's frame hook) and raises V-blank | `src/port_os.c` |
 | Memory map | DS main RAM (8 MB), ITCM, DTCM, WRAM, palettes, OAM, VRAM as memory blocks | `src/port_memory.c` |
 | Heaps and arenas, lock IDs, alarms, messages, mutexes | Nintendo's C on top of the above | SDK |
@@ -50,6 +51,7 @@ SDK still builds the original game with Metrowerks.
 | Thread switching | `OS_SaveContext` / `OS_LoadContext` report "not implemented" | the 3DS main program (next step) |
 | ARM7 services: clock, touch screen, power, microphone, sound, save chip, wireless | messages are accepted and reported once per service; nothing answers | one handler per service (`NitroPort_SetArm7Handler`) |
 | Display, 2D and 3D | the registers and VRAM exist; nothing draws them | the 2D renderer and the 3D command translator |
+| H-blank DMA (the game's wavy-screen effects), synchronous `MI_VBlankDmaCopy*` | reported as not implemented; the transfer stays pending | the 2D renderer (per-line timing) and the 3DS main loop |
 | VRAM banking | each CPU view of VRAM is its own block | the 2D renderer |
 | `OS_ResetSystem` (soft reset) | stores the reset parameter, then reports and stops | the 3DS main program |
 | Files on the cartridge (`FS_`) | the library is built; nothing backs the ROM yet | the data builder |
@@ -84,7 +86,7 @@ make TARGET=3ds                   # builds libnitro.a for the 3DS (devkitARM)
 python ../../tools/check_sdk_coverage.py   # every SDK function the game calls exists?
 ```
 
-The tests (621 checks) compare against values worked out independently
+The tests (664 checks) compare against values worked out independently
 (hardware docs, standard test vectors, Python) and against Nintendo's own C
 code: for example, every decompressor must undo Nintendo's compressor, and our
 rotation matrices must equal the SDK's own axis-angle rotation. They were also

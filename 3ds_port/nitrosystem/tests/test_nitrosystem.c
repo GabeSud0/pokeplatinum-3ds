@@ -348,10 +348,11 @@ static void check_model_file(const char *path)
         CHECK_FILE(byIdx->size > 0 && mdlOfs + byIdx->size <= size - (u32)(mdl0 - sFile));
 
         /* Validate the resource and the CPU-side render-object setup.
-         * Do not execute NNS_G3dGlbFlushP/NNS_G3dDraw here: NitroSDK's
-         * virtual registers currently have no geometry FIFO interpreter,
-         * so GPU synchronization/draw paths may wait forever. A separate
-         * renderer integration test will cover SBC drawing once implemented. */
+         * Not drawn yet (NNS_G3dGlbFlushP/NNS_G3dDraw): larger display
+         * lists go out with MI_SendGXCommandAsync, which waits for the 3D
+         * engine's command FIFO to report "under half full". That status,
+         * and the FIFO interrupt behind it, come with the 3D command
+         * translator; until then the first such model waits forever. */
         NNS_G3dRenderObjInit(&obj, byIdx);
         CHECK_FILE(obj.resMdl == byIdx);
         sModelsInitialized++;
@@ -369,9 +370,8 @@ static int visit_model(const char *path, const struct stat *st, int type, struct
 
 static void test_models(const char *res)
 {
-    /* NNS_G3dInit configures/awaits the original DS geometry engine.
-     * The platform port has only virtual registers, not a responding GPU,
-     * so data-only tests intentionally avoid hardware initialization. */
+    /* Sets up the 3D engine's registers and tables (cleared by DMA). */
+    NNS_G3dInit();
     nftw(res, visit_model, 16, FTW_PHYS);
     printf("  3D models: %d files, %d render objects initialized, %d files with failures (GPU draw deferred)\n",
            sModels, sModelsInitialized, sModelChecksFailed);
