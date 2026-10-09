@@ -36,6 +36,11 @@
 #include "move_reminder_data.h"
 #include "pokedex_heightweight.h"
 #include "daycare_save.h"
+#include "easy_chat_sentence.h"
+#include "easy_chat_words.h"
+#include "string_list.h"
+#include "res/text/bank/union_room_sentences.h"
+#include "res/text/bank/general_sentences.h"
 #include "constants/items.h"
 #include "constants/field/map.h"
 #include "badges.h" /* Original badge IDs are generated/badges.h. */
@@ -910,6 +915,107 @@ static void test_daycare_state(void)
     CHECK(!Daycare_HasEgg(&state));
 }
 
+
+
+/* Real source-derived Easy Chat sentence state and comparison logic.
+ * String expansion/slot count from the message NARC is not yet available. */
+static void test_easy_chat_sentence(void)
+{
+    EasyChatSentence sentence, saved, other;
+    u32 count;
+    int type;
+
+    memset(&sentence, 0xA5, sizeof(sentence));
+    sentence.id = 77;
+    EasyChatSentence_Init(&sentence);
+    CHECK(!EasyChatSentence_IsValid(&sentence));
+    CHECK(EasyChatSentence_GetType(&sentence) == EASY_CHAT_SENTENCE_TYPE_NONE);
+    CHECK(EasyChatSentence_GetWord(&sentence, 0) == WORD_NONE);
+    CHECK(EasyChatSentence_GetWord(&sentence, 1) == WORD_NONE);
+    /* Original Init deliberately preserves the ID field. */
+    CHECK(EasyChatSentence_GetID(&sentence) == 77);
+
+    EasyChatSentence_InitWithType(&sentence, EASY_CHAT_SENTENCE_TYPE_PRE_BATTLE);
+    CHECK(EasyChatSentence_IsValid(&sentence));
+    CHECK(EasyChatSentence_GetType(&sentence) == EASY_CHAT_SENTENCE_TYPE_PRE_BATTLE);
+    CHECK(EasyChatSentence_GetID(&sentence) == 0);
+    CHECK(EasyChatSentence_GetWord(&sentence, 0) == WORD_NONE);
+    CHECK(EasyChatSentence_GetWord(&sentence, 1) == WORD_NONE);
+
+    EasyChatSentence_SetTypeAndID(&sentence, EASY_CHAT_SENTENCE_TYPE_WIN, 2);
+    EasyChatSentence_SetWord(&sentence, 0, 123);
+    EasyChatSentence_SetWord(&sentence, 1, 456);
+    CHECK(EasyChatSentence_GetType(&sentence) == EASY_CHAT_SENTENCE_TYPE_WIN);
+    CHECK(EasyChatSentence_GetID(&sentence) == 2);
+    CHECK(EasyChatSentence_GetWord(&sentence, 0) == 123);
+    CHECK(EasyChatSentence_GetWord(&sentence, 1) == 456);
+
+    EasyChatSentence_Copy(&saved, &sentence);
+    CHECK(EasyChatSentence_Compare(&sentence, &saved));
+    CHECK(memcmp(&sentence, &saved, sizeof(sentence)) == 0);
+    EasyChatSentence_SetWord(&saved, 1, 457);
+    CHECK(!EasyChatSentence_Compare(&sentence, &saved));
+    EasyChatSentence_Copy(&saved, &sentence);
+    EasyChatSentence_SetTypeAndID(&saved, EASY_CHAT_SENTENCE_TYPE_LOSS, 2);
+    CHECK(!EasyChatSentence_Compare(&sentence, &saved));
+    EasyChatSentence_Copy(&saved, &sentence);
+    EasyChatSentence_SetTypeAndID(&saved, EASY_CHAT_SENTENCE_TYPE_WIN, 3);
+    CHECK(!EasyChatSentence_Compare(&sentence, &saved));
+
+    EasyChatSentence_InitWithEnteredUnionRoom(&other);
+    CHECK(EasyChatSentence_IsValid(&other));
+    CHECK(EasyChatSentence_GetType(&other) == EASY_CHAT_SENTENCE_TYPE_UNION_ROOM);
+    CHECK(EasyChatSentence_GetID(&other) == UnionRoomSentences_Text_IveEnteredUnionRoom);
+    CHECK(EasyChatSentence_GetWord(&other, 0) == WORD_NONE);
+    CHECK(EasyChatSentence_GetWord(&other, 1) == WORD_NONE);
+
+    count = EasyChatSentence_GetBankEntryCountForType(EASY_CHAT_SENTENCE_TYPE_PRE_BATTLE);
+    CHECK(count == TEXT_BANK_GENERAL_SENTENCES_ENTRY_COUNT);
+    CHECK(count > 0);
+    for (type = EASY_CHAT_SENTENCE_TYPE_WIN; type < EASY_CHAT_SENTENCE_TYPE_COUNT; type++) {
+        CHECK(EasyChatSentence_GetBankEntryCountForType(type) == count);
+    }
+    CHECK(EasyChatSentence_GetBankEntryCountForType(EASY_CHAT_SENTENCE_TYPE_COUNT) == 0);
+}
+
+/* No heap or message archive needed: add pre-existing entries to a
+ * caller-owned list, honoring its original terminal sentinel. */
+static void test_string_list_copy_entry(void)
+{
+    StringList list[4];
+    StringList source;
+    int firstValue = 101, secondValue = 202, thirdValue = 303;
+
+    memset(list, 0, sizeof(list));
+    list[3].entry = STRING_LIST_TERMINATOR;
+    list[3].index = 7;
+
+    source.entry = &firstValue;
+    source.index = 42;
+    StringList_AddFromEntry(list, &source);
+    CHECK(list[0].entry == &firstValue);
+    CHECK(list[0].index == 42);
+    CHECK(list[1].entry == NULL);
+    CHECK(list[3].entry == STRING_LIST_TERMINATOR);
+    CHECK(list[3].index == 7);
+
+    source.entry = &secondValue;
+    source.index = 0xABC;
+    StringList_AddFromEntry(list, &source);
+    CHECK(list[1].entry == &secondValue);
+    CHECK(list[1].index == 0xABC);
+    CHECK(list[0].entry == &firstValue);
+    CHECK(list[0].index == 42);
+
+    source.entry = &thirdValue;
+    source.index = 0;
+    StringList_AddFromEntry(list, &source);
+    CHECK(list[2].entry == &thirdValue);
+    CHECK(list[2].index == 0);
+    CHECK(list[3].entry == STRING_LIST_TERMINATOR);
+    CHECK(list[3].index == 7);
+}
+
 int main(void)
 {
     printf("Original Platinum game-code smoke tests (%d-bit)\n",
@@ -977,6 +1083,8 @@ int main(void)
     CHECK(player_female_mugshot_anim_NANR == 154);
     CHECK(subscript_start_encounter == 0);
     CHECK(subscript_giratina_form_change == 296);
+    test_easy_chat_sentence();
+    test_string_list_copy_entry();
     test_move_reminder_data();
     test_pokedex_heightweight_accessors();
     test_daycare_state();

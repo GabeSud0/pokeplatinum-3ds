@@ -4,7 +4,7 @@ This is the beginning of compiling **the game's original C** for a native
 3DS port. It does **not** reimplement Pokémon Platinum, package game data,
 produce a playable executable, or compile all 1,013 C files yet.
 
-The first twenty-nine files come directly from the pinned pret/pokeplatinum source
+The first thirty-one files come directly from the pinned pret/pokeplatinum source
 checkout under `build/upstream/src/`:
 
 - `coins.c` — coin case state and overflow logic
@@ -34,6 +34,8 @@ checkout under `build/upstream/src/`:
 - `move_reminder_data.c` — Move Reminder list presence and move-list interfaces
 - `pokedex_heightweight.c` — Pokédex species size, position and scale lookup
 - `daycare_save.c` — Day Care parent steps, egg state and save-data accessors
+- `easy_chat_sentence.c` — Easy Chat sentence initialization, selection and comparison
+- `string_list.c` — terminal-sentinel lists of UI/message entries
 
 The pinned original source tree includes `"badges.h"` in trainer-case
 headers, but stores the authoritative badge enum as
@@ -63,7 +65,13 @@ caller-owned structs or static metadata; their real heap/save-table/NARC
 interfaces are **not** claimed to be runtime-functional. The Move Reminder,
 Pokédex measurement and Day Care smoke checks similarly use the original
 standalone functions with caller-owned input. Their full Pokémon, NARC,
-BoxPokemon initialization and heap backends are not implemented yet. Likewise,
+BoxPokemon initialization and heap backends are not implemented yet.
+The Easy Chat tests use the original sentence structures and source-derived
+text-bank **indices**, not the message content. Expanding sentences or
+counting substitution slots still needs the original message NARC and
+string/template runtime. The string-list test uses caller-owned entries;
+heap allocation, cloning and message loading are not claimed as supported.
+These modules do not require Nintendo Wi-Fi headers to compile. Likewise,
 battle-rule and record-mixing tests operate on original tables and
 caller-owned arrays; they do not implement Nintendo Wi-Fi/record exchange.
 **It does not imply the full game can link or run.**
@@ -142,7 +150,8 @@ field-script execution, menu cursor navigation, map history rollover,
 Pokédex language ordering, persisted map-feature buffers, Berry Tag bits,
 Pokédex selection/data banks, Ribbon initialization, battle rule presets,
 mixed-record RNG initialization/entry matching, move-list sentinel detection,
-Pokédex size/weight accessors and Day Care state transitions. They call
+Pokédex size/weight accessors, Day Care state transitions, Easy Chat
+sentence operations and string-list entry insertion. They call
 real game code and an externally linked NitroSystem function, so they
 test compatibility between original game code and both SDK libraries.
 
