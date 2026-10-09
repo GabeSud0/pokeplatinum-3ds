@@ -1,0 +1,36 @@
+From: game port contributors <noreply@users.noreply.github.com>
+Subject: [PATCH] Permit GCC anonymous Poffin fields under SDK_PORT_3DS
+
+Metrowerks exposes the fields of an anonymous tagged struct, while GCC
+requires an untagged struct member. Keep the native eight-byte save layout
+and leave the original DS build unchanged.
+
+diff --git a/include/poffin.h b/include/poffin.h
+--- a/include/poffin.h
++++ b/include/poffin.h
+@@ -11,15 +11,25 @@
+ typedef struct {
+     union {
++#ifdef SDK_PORT_3DS
++        // GCC needs an untagged anonymous struct to promote its fields.
++        struct {
++#else
+         struct PoffinInner {
++#endif
+             u8 type;
+             u8 spiciness;
+             u8 dryness;
+             u8 sweetness;
+             u8 bitterness;
+             u8 sourness;
+             u8 smoothness;
+             u8 dummy;
+         };
++#ifdef SDK_PORT_3DS
++        // All eight members above are u8; keep the exact save layout.
++        u8 attributes[8];
++#else
+         u8 attributes[sizeof(struct PoffinInner)];
++#endif
+     };
+ } Poffin;

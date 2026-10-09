@@ -20,6 +20,7 @@
 #include "play_time.h"
 #include "play_time_manager.h"
 #include "poffin.h"
+#include "game_options.h"
 #include "timer.h"
 #include "math_util.h"
 #include "fx_util.h"
@@ -322,6 +323,41 @@ static void test_poffin(void)
     (void)attrs;
 }
 
+static void test_game_options(void)
+{
+    Options options;
+    Options copy;
+    CHECK(sizeof(Options) == sizeof(u16));
+
+    memset(&options, 0xFF, sizeof(options));
+    Options_Init(&options);
+    CHECK(Options_TextSpeed(&options) == OPTIONS_TEXT_SPEED_NORMAL);
+    CHECK(Options_SoundMode(&options) == OPTIONS_SOUND_MODE_STEREO);
+    CHECK(Options_BattleStyle(&options) == OPTIONS_BATTLE_STYLE_SHIFT);
+    CHECK(Options_BattleScene(&options) == OPTIONS_BATTLE_SCENE_ON);
+    CHECK(Options_ButtonMode(&options) == OPTIONS_BUTTON_MODE_NORMAL);
+    CHECK(Options_Frame(&options) == OPTIONS_FRAME_1);
+    CHECK(Options_TextFrameDelay(&options) == 4);
+
+    Options_SetTextSpeed(&options, OPTIONS_TEXT_SPEED_FAST);
+    Options_SetSoundMode(&options, OPTIONS_SOUND_MODE_MONO);
+    Options_SetBattleStyle(&options, OPTIONS_BATTLE_STYLE_SET);
+    Options_SetBattleScene(&options, OPTIONS_BATTLE_SCENE_OFF);
+    Options_SetButtonMode(&options, OPTIONS_BUTTON_MODE_L_IS_A);
+    Options_SetFrame(&options, OPTIONS_FRAME_12);
+
+    CHECK(Options_TextFrameDelay(&options) == 1);
+    CHECK(Options_SoundMode(&options) == OPTIONS_SOUND_MODE_MONO);
+    CHECK(Options_BattleStyle(&options) == OPTIONS_BATTLE_STYLE_SET);
+    CHECK(Options_BattleScene(&options) == OPTIONS_BATTLE_SCENE_OFF);
+    CHECK(Options_ButtonMode(&options) == OPTIONS_BUTTON_MODE_L_IS_A);
+    CHECK(Options_Frame(&options) == OPTIONS_FRAME_12);
+
+    memset(&copy, 0, sizeof(copy));
+    Options_Copy(&options, &copy);
+    CHECK(memcmp(&options, &copy, sizeof(copy)) == 0);
+}
+
 static void test_sdk_link(void)
 {
     /* Require a real external NitroSystem function at link time. */
@@ -348,6 +384,7 @@ int main(void)
     test_field_script();
     test_play_time_manager();
     test_poffin();
+    test_game_options();
     test_sdk_link();
     printf("%d checks, %d failed\n", checks, fails);
     return fails == 0 ? 0 : 1;
