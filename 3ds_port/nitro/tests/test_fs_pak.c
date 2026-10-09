@@ -9,6 +9,8 @@
 #include <string.h>
 
 static int sChecks, sFailures;
+static FSOverlayInfoHeader sSyntheticOvt[1];
+static unsigned char sOverlayRam[16];
 
 #define CHECK(test) do { \
     ++sChecks; \
@@ -123,6 +125,20 @@ int main(int argc, char **argv)
     overlay.header.flag = 0;
     CHECK(FS_LoadOverlayImage(&overlay));
     CHECK(memcmp(overlay_data, "FAKE-OVERLAY", sizeof("FAKE-OVERLAY") - 1) == 0);
+
+    /* Exercise the actual FS_LoadOverlay() read path, with a synthetic
+     * attached OVT. The payload contains dummy bytes, not executable code;
+     * there are no static initializers and no relocation work here. */
+    memset(sSyntheticOvt, 0, sizeof(sSyntheticOvt));
+    memset(sOverlayRam, 0, sizeof(sOverlayRam));
+    sSyntheticOvt[0].id = 0;
+    sSyntheticOvt[0].file_id = 23;
+    sSyntheticOvt[0].ram_address = sOverlayRam;
+    sSyntheticOvt[0].ram_size = sizeof("FAKE-OVERLAY") - 1;
+    FS_AttachOverlayTable(MI_PROCESSOR_ARM9, sSyntheticOvt, sizeof(sSyntheticOvt));
+    CHECK(FS_LoadOverlay(MI_PROCESSOR_ARM9, 0));
+    CHECK(memcmp(sOverlayRam, "FAKE-OVERLAY", sizeof("FAKE-OVERLAY") - 1) == 0);
+    FS_AttachOverlayTable(MI_PROCESSOR_ARM9, NULL, 0);
 
     NitroPort_ClosePak();
     CHECK(!NitroPort_IsPakOpen());
