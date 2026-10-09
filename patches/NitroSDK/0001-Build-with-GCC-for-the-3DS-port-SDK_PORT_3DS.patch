@@ -1,0 +1,206 @@
+From 5203da41f9830e02679c704e3b57151e043ecd0b Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 19:54:51 -0700
+Subject: [PATCH 1/4] Build with GCC for the 3DS port (SDK_PORT_3DS)
+
+Fixed-width integer types, GCC branches for platform and CLZ macros, static header inlines, and I/O registers in a memory block instead of 0x04000000.
+---
+ include/nitro/hw/ARM9/mmap_global.h | 11 +++++++++++
+ include/nitro/math/math.h           |  6 ++++++
+ include/nitro/mi/compress.h         |  8 ++++----
+ include/nitro/os/common/reset.h     |  2 +-
+ include/nitro/platform.h            | 16 ++++++++++++++++
+ include/nitro/spi/ARM9/pm.h         |  4 ++--
+ include/nitro/types.h               | 18 +++++++++++++++++-
+ 7 files changed, 57 insertions(+), 8 deletions(-)
+
+diff --git a/include/nitro/hw/ARM9/mmap_global.h b/include/nitro/hw/ARM9/mmap_global.h
+index 55064ec..6e663a1 100644
+--- a/include/nitro/hw/ARM9/mmap_global.h
++++ b/include/nitro/hw/ARM9/mmap_global.h
+@@ -37,8 +37,19 @@ extern u32 SDK_AUTOLOAD_DTCM_START[];
+ #define HW_WRAM_END             0x03800000
+ #define HW_WRAM_SIZE            (HW_WRAM_END-HW_WRAM)
+ //----------------------------- IOs
++#ifdef SDK_PORT_3DS
++    /* No DS hardware here: I/O registers live in an ordinary memory block
++     * (3ds_port/nitro/src/port_ioreg.c) that the port's hardware code reads. */
++    #ifndef SDK_ASM
++extern unsigned char NitroPort_IoReg[];
++    #endif
++    #define HW_IOREG            ((u32)NitroPort_IoReg)
++    #define HW_IOREG_SIZE       0x00110000
++    #define HW_IOREG_END        (HW_IOREG + HW_IOREG_SIZE)
++#else
+ #define HW_IOREG                0x04000000
+ #define HW_IOREG_END            0x05000000
++#endif
+ #define HW_REG_BASE             HW_IOREG        // alias
+ //----------------------------- VRAMs
+ #define HW_BG_PLTT              0x05000000
+diff --git a/include/nitro/math/math.h b/include/nitro/math/math.h
+index 80dd361..dc545cf 100644
+--- a/include/nitro/math/math.h
++++ b/include/nitro/math/math.h
+@@ -60,6 +60,12 @@ u32 MATH_CountLeadingZerosFunc(u32 x);
+             TO BE DEFINED
+         #elif defined(SDK_GCC)
+             TO BE DEFINED
++        #elif defined(__GNUC__)
++            /* ARM's CLZ returns 32 for 0; GCC's builtin is undefined there. */
++            SDK_INLINE u32 MATH_CountLeadingZerosInline (u32 x)
++            {
++                return x ? (u32)__builtin_clz(x) : 32;
++            }
+         #endif
+     #endif
+ #endif
+diff --git a/include/nitro/mi/compress.h b/include/nitro/mi/compress.h
+index fa84c41..57c8fa3 100644
+--- a/include/nitro/mi/compress.h
++++ b/include/nitro/mi/compress.h
+@@ -11,22 +11,22 @@ extern "C" {
+ u32 MI_CompressLZImpl(const u8 * srcp, u32 size, u8 * dstp, BOOL exFormat);
+ u32 MI_CompressLZFastImpl(const u8 * srcp, u32 size, u8 * dstp, u8 * work, BOOL exFormat);
+ 
+-inline u32 MI_CompressLZ (const u8 * srcp, u32 size, u8 * dstp)
++static inline u32 MI_CompressLZ (const u8 * srcp, u32 size, u8 * dstp)
+ {
+ 	return MI_CompressLZImpl(srcp, size, dstp, FALSE);
+ }
+ 
+-inline u32 MI_CompressLZEx (const u8 * srcp, u32 size, u8 * dstp)
++static inline u32 MI_CompressLZEx (const u8 * srcp, u32 size, u8 * dstp)
+ {
+ 	return MI_CompressLZImpl(srcp, size, dstp, TRUE);
+ }
+ 
+-inline u32 MI_CompressLZFast (const u8 * srcp, u32 size, u8 * dstp, u8 * work)
++static inline u32 MI_CompressLZFast (const u8 * srcp, u32 size, u8 * dstp, u8 * work)
+ {
+ 	return MI_CompressLZFastImpl(srcp, size, dstp, work, FALSE);
+ }
+ 
+-inline u32 MI_CompressLZExFast (const u8 * srcp, u32 size, u8 * dstp, u8 * work)
++static inline u32 MI_CompressLZExFast (const u8 * srcp, u32 size, u8 * dstp, u8 * work)
+ {
+ 	return MI_CompressLZFastImpl(srcp, size, dstp, work, TRUE);
+ }
+diff --git a/include/nitro/os/common/reset.h b/include/nitro/os/common/reset.h
+index 327da0b..7d07ba0 100644
+--- a/include/nitro/os/common/reset.h
++++ b/include/nitro/os/common/reset.h
+@@ -18,7 +18,7 @@ void OS_InitReset(void);
+ 
+ BOOL OS_IsResetOccurred(void);
+ 
+-inline u32 OS_GetResetParameter (void)
++static inline u32 OS_GetResetParameter (void)
+ {
+ 	return (u32) * (u32 *)HW_RESET_PARAMETER_BUF;
+ }
+diff --git a/include/nitro/platform.h b/include/nitro/platform.h
+index 69a26be..a688f9a 100644
+--- a/include/nitro/platform.h
++++ b/include/nitro/platform.h
+@@ -25,6 +25,22 @@
+     #define PLATFORM_STRUCT_PADDING_FOOTER
+     #define PLATFORM_ATTRIBUTE_INLINE       SDK_INLINE
+ 
++#elif defined(__GNUC__)
++    #define PLATFORM_BITFIELDS_ENDIAN    PLATFORM_ENDIAN_LITTLE
++
++    #if __SIZEOF_POINTER__ == 4
++        #define PLATFORM_COMPILER_ASSERT(expr) \
++            _Static_assert((expr), #expr)
++    #else
++        /* 64-bit PC test builds: structs holding pointers are bigger than on
++         * the DS or 3DS, so size checks would fail. They still run on 3DS. */
++        #define PLATFORM_COMPILER_ASSERT(expr) \
++            extern int platform_compiler_assert_skipped_
++    #endif
++
++    #define PLATFORM_STRUCT_PADDING_FOOTER
++    #define PLATFORM_ATTRIBUTE_INLINE       SDK_INLINE
++
+ #else
+     # TO BE DEFINED
+ #endif
+diff --git a/include/nitro/spi/ARM9/pm.h b/include/nitro/spi/ARM9/pm.h
+index fb0a136..444279c 100644
+--- a/include/nitro/spi/ARM9/pm.h
++++ b/include/nitro/spi/ARM9/pm.h
+@@ -110,12 +110,12 @@ PMLCDPower PM_GetLCDPower(void);
+ u32 PMi_SendLEDPatternCommandAsync(PMLEDPattern pattern, PMCallback callback, void * arg);
+ u32 PMi_SendLEDPatternCommand(PMLEDPattern pattern);
+ 
+-inline u32 PM_SetLEDPatternAsync (PMLEDPattern pattern, PMCallback callback, void * arg)
++static inline u32 PM_SetLEDPatternAsync (PMLEDPattern pattern, PMCallback callback, void * arg)
+ {
+ 	return PMi_SendLEDPatternCommandAsync(pattern, callback, arg);
+ }
+ 
+-inline u32 PM_SetLEDPattern (PMLEDPattern pattern)
++static inline u32 PM_SetLEDPattern (PMLEDPattern pattern)
+ {
+ 	return PMi_SendLEDPatternCommand(pattern);
+ }
+diff --git a/include/nitro/types.h b/include/nitro/types.h
+index 60157b8..89d48c3 100644
+--- a/include/nitro/types.h
++++ b/include/nitro/types.h
+@@ -16,9 +16,17 @@
+ extern "C" {
+ #endif
+ 
++#ifdef SDK_PORT_3DS
++    /* Exactly 32 bits on every compiler (on ARM this is still unsigned long). */
++    #include <stdint.h>
++typedef uint8_t u8;
++typedef uint16_t u16;
++typedef uint32_t u32;
++#else
+ typedef unsigned char u8;
+ typedef unsigned short int u16;
+ typedef unsigned long u32;
++#endif
+ 
+ #ifdef SDK_HAS_NO_LONG_LONG_INT_
+     typedef unsigned __int64 u64;
+@@ -26,9 +34,15 @@ typedef unsigned long u32;
+     typedef unsigned long long int u64;
+ #endif
+ 
++#ifdef SDK_PORT_3DS
++typedef int8_t s8;
++typedef int16_t s16;
++typedef int32_t s32;
++#else
+ typedef signed char s8;
+ typedef signed short int s16;
+ typedef signed long s32;
++#endif
+ 
+ #ifdef SDK_HAS_NO_LONG_LONG_INT_
+     typedef signed __int64 s64;
+@@ -81,7 +95,7 @@ typedef vu64 REGType64v;
+     #endif
+ #endif
+ 
+-#if defined(SDK_CW) || defined(__MWERKS__)
++#if defined(SDK_CW) || defined(__MWERKS__) || defined(__GNUC__)
+     #ifndef ATTRIBUTE_ALIGN
+         #define ATTRIBUTE_ALIGN(num) __attribute__ ((aligned(num)))
+     #endif
+@@ -91,6 +105,8 @@ typedef vu64 REGType64v;
+     #define SDK_WEAK_SYMBOL __declspec(weak)
+ #elif defined(SDK_PRODG)
+     #define SDK_WEAK_SYMBOL
++#elif defined(__GNUC__)
++    #define SDK_WEAK_SYMBOL __attribute__((weak))
+ #endif
+ 
+ #ifdef SDK_CW_FORCE_EXPORT_SUPPORT
+-- 
+2.43.0
+

@@ -1,0 +1,94 @@
+From 4bae67aade89eb5e88a67da9ebc5a9e240530fbd Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 19:54:51 -0700
+Subject: [PATCH 4/4] Checksum: avoid incrementing a cast pointer
+
+That is a Metrowerks extension; use a byte pointer instead.
+---
+ libraries/math/src/checksum.c | 22 ++++++++++++++--------
+ 1 file changed, 14 insertions(+), 8 deletions(-)
+
+diff --git a/libraries/math/src/checksum.c b/libraries/math/src/checksum.c
+index 6792005..5dcdd9d 100644
+--- a/libraries/math/src/checksum.c
++++ b/libraries/math/src/checksum.c
+@@ -5,11 +5,12 @@ static inline u32 MATHi_Checksum16Update (const void *input, u32 length)
+ 	u32 sum;
+ 	u32 n;
+ 	BOOL fSwap = FALSE;
++	const u8 *p = (const u8 *)input;
+ 
+ 	sum = 0;
+ 
+ 	if (((u32)input) & 1) {
+-		sum += (*((u8 *)input)++ << 8);
++		sum += (*p++ << 8);
+ 		length--;
+ 		fSwap = TRUE;
+ 	}
+@@ -17,7 +18,8 @@ static inline u32 MATHi_Checksum16Update (const void *input, u32 length)
+ 	while ((length >> 17) > 0) {
+ 		length -= (1 << 17);
+ 		for (n = (1 << 16); n > 0; n--) {
+-			sum += *((u16 *)input)++;
++			sum += *(const u16 *)p;
++			p += 2;
+ 		}
+ 
+ 		sum = (sum >> 16) + (sum & 0xffff);
+@@ -25,11 +27,12 @@ static inline u32 MATHi_Checksum16Update (const void *input, u32 length)
+ 	}
+ 
+ 	for (n = (length >> 1); n > 0; n--) {
+-		sum += *((u16 *)input)++;
++		sum += *(const u16 *)p;
++		p += 2;
+ 	}
+ 
+ 	if (length & 1) {
+-		sum += *((u8 *)input);
++		sum += *p;
+ 	}
+ 
+ 	sum = (sum >> 16) + (sum & 0xffff);
+@@ -66,18 +69,20 @@ static inline u32 MATHi_Checksum8Update (const void *input, u32 length)
+ {
+ 	u32 sum;
+ 	u32 n;
++	const u8 *p = (const u8 *)input;
+ 
+ 	sum = 0;
+ 
+ 	if (((u32)input) & 1) {
+-		sum += *((u8 *)input)++;
++		sum += *p++;
+ 		length--;
+ 	}
+ 
+ 	while ((length >> 17) > 0) {
+ 		length -= (1 << 17);
+ 		for (n = (1 << 16); n > 0; n--) {
+-			sum += *((u16 *)input)++;
++			sum += *(const u16 *)p;
++			p += 2;
+ 		}
+ 
+ 		sum = (sum >> 16) + (sum & 0xffff);
+@@ -85,11 +90,12 @@ static inline u32 MATHi_Checksum8Update (const void *input, u32 length)
+ 	}
+ 
+ 	for (n = (length >> 1); n > 0; n--) {
+-		sum += *((u16 *)input)++;
++		sum += *(const u16 *)p;
++		p += 2;
+ 	}
+ 
+ 	if (length & 1) {
+-		sum += *((u8 *)input);
++		sum += *p;
+ 	}
+ 
+ 	sum = (sum >> 16) + (sum & 0xffff);
+-- 
+2.43.0
+
