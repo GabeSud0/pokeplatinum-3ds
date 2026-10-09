@@ -17,7 +17,9 @@ HeartGold**, once the [pret/pokeheartgold](https://github.com/pret/pokeheartgold
 decompilation is far enough along. Both are Generation 4 games sharing much of
 the same engine, so most of the 3DS backend should carry over.
 
-> **Status:** Phase 0, toolchain setup. Nothing playable yet.
+> **Status:** Phase 1. Toolchain working (stereoscopic test app runs in
+> Azahar); DS hardware layer mapped in
+> [`docs/HARDWARE_LAYER.md`](docs/HARDWARE_LAYER.md). Nothing playable yet.
 
 ## This repository contains no game content
 
@@ -105,6 +107,11 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md). In short:
 3. 3DS backend: 2D, 3D, audio, input, save data on the 3DS.
 4. The upgrade: 400×240 widescreen 3D, stereoscopic depth, touch UI.
 5. SoulSilver: move the backend onto pokeheartgold.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how changes are made and tested,
+and [`AI_DISCLOSURE.md`](AI_DISCLOSURE.md) for how AI assistance is used.
 
 ## Repository layout
 
