@@ -24,7 +24,7 @@ static int fails;
     checks++; \
     if (!(expr)) { \
         fails++; \
-        fprintf(stderr, "FAIL %s:%d: %s\\n", __FILE__, __LINE__, #expr); \
+        fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
     } \
 } while (0)
 
@@ -32,7 +32,7 @@ static int fails;
  * instead of calling the game's not-yet-compiled error handling subsystem. */
 void ErrorHandling_AssertFail(void)
 {
-    fputs("Game GF_ASSERT failed in host test\\n", stderr);
+    fputs("Game GF_ASSERT failed in host test\n", stderr);
     abort();
 }
 
@@ -61,9 +61,9 @@ static void test_coins(void)
 
 static void test_ascii(void)
 {
-    char src[] = "alpha\\r\\nbeta";
+    char src[] = "alpha\r\nbeta";
     char dst[32] = {0};
-    char *next = Ascii_CopyToTerminator(src, dst, '\\r');
+    char *next = Ascii_CopyToTerminator(src, dst, '\r');
     NNSG3dResName name;
 
     CHECK(Ascii_Length("Hello") == 5);
@@ -116,7 +116,7 @@ static void test_sdk_link(void)
 
 int main(void)
 {
-    printf("Original Platinum game-code smoke tests (%d-bit)\\n",
+    printf("Original Platinum game-code smoke tests (%d-bit)\n",
            (int)(sizeof(void *) * 8));
     CHECK(gGameVersion == VERSION_PLATINUM);
     CHECK(gGameLanguage == LANGUAGE_ENGLISH);
@@ -124,6 +124,6 @@ int main(void)
     test_ascii();
     test_charcode();
     test_sdk_link();
-    printf("%d checks, %d failed\\n", checks, fails);
+    printf("%d checks, %d failed\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }
