@@ -35,8 +35,21 @@ GAME_SRCS := coins.c charcode.c charcode_util.c ascii_util.c game_version.c \
              pokedex_language.c persisted_map_features.c \
              berry_tag_data.c pokedex_memory.c \
              pokedex_data_index.c ribbon_save_data.c \
-             battle_regulation.c record_mixed_rng.c
+             battle_regulation.c record_mixed_rng.c \
+             move_reminder_data.c pokedex_heightweight.c daycare_save.c
 GAME_OBJS := $(GAME_SRCS:%.c=$(OUT)/src/%.o)
+
+# pokemon_sprite.h in the pinned original game defines these two plain
+# inline wrappers. With the port's shared -fgnu89-inline flags GCC emits
+# both externally in every including translation unit; Metrowerks did not.
+# Mirror the existing NitroSystem objcopy approach rather than patching
+# the decompilation or relaxing multiple-definition linker diagnostics.
+GAME_INLINE_SYMS := $(OUT)/gen/game_inline.syms
+WEAKEN_GAME_INLINE = $(OBJCOPY) --weaken-symbols=$(GAME_INLINE_SYMS) $@
+
+$(GAME_INLINE_SYMS): $(GAME)/include/pokemon_sprite.h
+	@mkdir -p $(dir $@)
+	@printf '%s\n' PokemonSpriteManager_HideShadows PokemonSpriteManager_ShowShadows > $@
 
 # Use the actual Meson/Metang rules from the pinned decompilation for ALL
 # 107 generated enum/mask headers, including TextBank. Do not vendor these
@@ -165,11 +178,12 @@ $(NNS_INLINE_SYMS): | libnitrosystem
 
 # The NitroSystem inline functions in included game headers have external
 # definitions under GCC's gnu89 semantics; match the SDK's weak-symbol fix.
-$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) | libnitrosystem
+$(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(GAME_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@echo "  GAME CC $(notdir $<)"
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
 	@$(WEAKEN_NNS_INLINE)
+	@$(WEAKEN_GAME_INLINE)
 
 $(LIB): $(GAME_OBJS)
 	@rm -f $@
@@ -180,10 +194,11 @@ $(LIB): $(GAME_OBJS)
 # NitroSystem and NitroSDK, without any ROM or copyrighted game data.
 TEST_BIN := $(OUT)/test_game
 
-$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) | libnitrosystem
+$(OUT)/tests/test_game.o: tests/test_game.c $(NNS_INLINE_SYMS) $(GAME_INLINE_SYMS) $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
 	@$(WEAKEN_NNS_INLINE)
+	@$(WEAKEN_GAME_INLINE)
 
 $(TEST_BIN): $(OUT)/tests/test_game.o $(LIB) $(LIBNNS) $(LIBNITRO)
 	@$(CC) $(LDFLAGS) -Wl,--gc-sections $(OUT)/tests/test_game.o \
