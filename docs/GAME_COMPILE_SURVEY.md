@@ -135,10 +135,34 @@ game compilation and compiler surveys. It does not create `.sdat`,
 `.sseq`, `.sbnk`, `.swar` or audio content and does not imply
 a working sound engine. The game library remains a partial archive.
 
-Remaining graphics headers, such as `res/graphics/poketch/poketch.naix`,
-are produced by the original NitroArc generator from ordered archive
-manifests. Those are a separate build dependency, not something to
-replace with placeholder resource indices.
+### Source-derived NitroArc graphics member indices
+
+The upstream graphics builds invoke `nitroarc --create --index --files-from
+<archive>.order`. The original NitroArc `write_index` emits a macro for
+each explicitly listed archive member at its original **zero-based position**,
+substituting underscores for path separators, periods and punctuation.
+Repeated identical names gain suffixes `_1`, `_2` and so on.
+
+`tools/prepare_game_graphics_naix.py` reproduces **only these explicit
+member-index definitions** from the pinned `res/graphics/**/*.order`
+manifests, under ignored `build/game-resource-headers/res/graphics/`.
+It works without loading source artwork, generating texture resources, or
+building `.narc` files. It runs before the real game compilation and
+all compiler surveys. We test known first indices from Pokétch and
+Battle Frontier source manifests.
+
+NitroArc can append implicit files found in its *generated input directory*.
+Those files are not available from the ordered manifest alone; therefore
+the metadata-only generator **does not emit any full-archive COUNT macro**
+or claim to provide indices for such implicit members. Their actual
+archive indices, resource bytes, and on-hardware behavior require the
+original NitroArc asset-processing pipeline. This is only a compiler
+dependency improvement, not graphics implementation.
+
+For graphics metadata generation:
+```sh
+python tools/prepare_game_graphics_naix.py --upstream build/upstream --output build/game-resource-headers
+```
 
 Reports are written to:
 
