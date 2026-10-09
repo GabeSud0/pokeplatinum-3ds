@@ -6,6 +6,7 @@ No ROM data is uploaded or changed. Output is private and must not be committed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import struct
 from pathlib import Path
@@ -92,9 +93,10 @@ def parse_nitrofs(data: bytes) -> list[dict]:
 
 
 def extract(rom: Path, output: Path, *, verify: bool = True) -> list[dict]:
-    if verify and verify_rom.sha1_of(rom) not in verify_rom.SUPPORTED:
-        raise ValueError("Unsupported ROM: run builder/verify_rom.py first")
     data = rom.read_bytes()
+    rom_sha1 = hashlib.sha1(data).hexdigest()
+    if verify and rom_sha1 not in verify_rom.SUPPORTED:
+        raise ValueError("Unsupported ROM: run builder/verify_rom.py first")
     entries = parse_nitrofs(data)  # Validate all metadata before writing.
     output = output.resolve()
     if output == rom.resolve() or output in rom.resolve().parents:
@@ -112,7 +114,7 @@ def extract(rom: Path, output: Path, *, verify: bool = True) -> list[dict]:
                 for e in entries]
     output.mkdir(parents=True, exist_ok=True)
     (output / "manifest.json").write_text(
-        json.dumps({"files": manifest}, indent=2) + "\n", encoding="utf-8")
+        json.dumps({"rom_sha1": rom_sha1, "files": manifest}, indent=2) + "\n", encoding="utf-8")
     return manifest
 
 
