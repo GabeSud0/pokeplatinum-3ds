@@ -307,10 +307,16 @@ This refines Phases 2 and 3 of the [roadmap](ROADMAP.md):
 1. **Get the game, NitroSDK and NitroSystem compiling for the 3DS**, with
    hardware functions as loud stubs ("not implemented: G2_SetBlendAlpha"). No
    graphics yet; the success test is reaching the main loop.
-   *NitroSDK done:* every SDK function the game calls exists and builds for
-   the 3DS, with the memory map, CPU state, interrupts, BIOS, decompression
+   *NitroSDK done:* the game-used SDK function definitions build for the
+   3DS, with the memory map, CPU state, interrupts, BIOS, decompression
    and the ARM7 link in software ([`3ds_port/nitro`](../3ds_port/nitro)).
-   Still to do in this step: NitroSystem, then the game.
+   *NitroSystem port under validation:* GCC builds of its Fnd, G2d, G3d,
+   Gfd and Snd libraries have been added, with independent host and 32-bit
+   resource tests and 3DS symbol coverage
+   ([`3ds_port/nitrosystem`](../3ds_port/nitrosystem)).
+   Still to do: get the game itself compiling and running its main loop;
+   hardware drawing, sound, cartridge filesystem and OS service backends
+   remain separate implementation milestones.
 2. **Files:** builder extracts the filesystem; `FS_*` reads from the SD card.
 3. **Overlays:** link everything, reset overlay data on load.
 4. **Virtual registers, VRAM and OAM.**
