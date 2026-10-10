@@ -175,11 +175,12 @@ generated the same way, into `build/` (never committed):
   sprites) (`tools/prepare_game_ordergen_naix.py`).
 - **The decompilation's own data tools** (`tools/prepare_game_dataproc.py`):
   it builds `tools/dataproc` (speciesproc, itemproc, frontierproc,
-  trainerproc, resdatproc) and `tools/nitrogfx` with the PC's C compiler, as
-  their `meson.build` files say, and runs them as the original rules do:
-  egg/tutor moves, footprints, the berry list, frontier trainer classes,
-  sprite templates, and the two images the game embeds in its code. Needs a
-  PC C compiler and libpng. The data archives these tools also write are
+  trainerproc, resdatproc) with the PC's C compiler, as their `meson.build`
+  files say, and runs them as the original rules do: egg/tutor moves,
+  footprints, the berry list, frontier trainer classes, sprite templates.
+  The two images the game embeds in its code are converted by
+  `tools/png_embed.py` (what `nitrogfx -embed` does, in Python, so no image
+  library is needed). Needs a PC C compiler. The data archives these tools also write are
   deleted; the game reads its data from the player's own data pack.
 - **Overlay IDs** (`FS_OVERLAY_ID(name)`): each overlay's position in
   `platinum.us/main.lsf`, as constants in `build/game-link/overlay_ids.h`,

@@ -22,11 +22,11 @@ jobs:
           }
 
       # The decompilation's data tools (tools/prepare_game_dataproc.py) are
-      # built for the machine running the build: a C compiler and libpng.
-      - name: Install a PC C compiler and libpng (for the data tools)
+      # built for the machine running the build: a C compiler.
+      - name: Install a PC C compiler (for the data tools)
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends gcc libc6-dev libpng-dev zlib1g-dev patch
+          apt-get install -y --no-install-recommends gcc libc6-dev patch
 
       - name: Build hello3d
         run: make -C 3ds_port/hello3d
@@ -138,11 +138,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install libpng (for the data tools)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libpng-dev
-
       - name: CI uploads no game builds (only hello3d and text reports)
         run: python tools/check_ci_artifacts.py
 
@@ -211,7 +206,7 @@ jobs:
       - name: Install 32-bit compiler and C runtime
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-multilib gdb libpng-dev
+          sudo apt-get install -y --no-install-recommends gcc-multilib gdb
 
       - name: Test pak reader on 32-bit PC (includes Python writer cross-check)
         run: make -C 3ds_port/pak TARGET=host32 test

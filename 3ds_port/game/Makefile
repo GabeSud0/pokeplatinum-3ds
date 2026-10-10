@@ -151,19 +151,19 @@ $(ORDERGEN_STAMP): $(wildcard $(GAME)/tools/ordergen/*.py) $(GAME)/generated/tra
 	@touch $@
 
 # Headers the decompilation's own data tools write (tools/dataproc:
-# speciesproc, itemproc, frontierproc, trainerproc, resdatproc; and
-# tools/nitrogfx for the two images the game embeds). The tools are built
-# with the PC's C compiler, as their meson.build files say; needs libpng.
+# speciesproc, itemproc, frontierproc, trainerproc, resdatproc), built with
+# the PC's C compiler as their meson.build files say, and the two images the
+# game embeds (tools/png_embed.py, nitrogfx -embed's conversion in Python).
 DATAPROC_DIR := $(ROOT)/build/game-tools
 DATAPROC_STAMP := $(RESOURCE_DIR)/.dataproc-ready
-DATAPROC_INPUTS := $(shell find $(GAME)/tools/dataproc $(GAME)/tools/nitrogfx $(GAME)/tools/enumproc \
+DATAPROC_INPUTS := $(shell find $(GAME)/tools/dataproc $(GAME)/tools/enumproc \
         $(GAME)/tools/nitroarc/lib -type f) \
     $(shell find $(GAME)/res/pokemon $(GAME)/res/items $(GAME)/res/trainers \
         $(GAME)/res/graphics/sprite_templates -name '*.json') \
     $(GAME)/res/fonts/arrow_cursor.png $(GAME)/res/graphics/battle/healthbox/healthbox_parts.png
 
 $(DATAPROC_STAMP): $(DATAPROC_INPUTS) $(CONSTANTS_STAMP) $(ARCHIVE_STAMP) $(ORDERGEN_STAMP) \
-                   $(ROOT)/tools/prepare_game_dataproc.py
+                   $(ROOT)/tools/prepare_game_dataproc.py $(ROOT)/tools/png_embed.py
 	@python3 $(ROOT)/tools/prepare_game_dataproc.py --upstream "$(GAME)" --constants "$(CONSTANTS_DIR)" \
 	    --resources "$(RESOURCE_DIR)" --work "$(DATAPROC_DIR)"
 	@touch $@
