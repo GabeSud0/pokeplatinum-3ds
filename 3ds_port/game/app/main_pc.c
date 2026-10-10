@@ -18,7 +18,8 @@
  * It needs no data pack.
  *
  * Build: make -C 3ds_port/game TARGET=host32 program (32-bit, as on the
- * 3DS; TARGET=host leaves out the few sources that need 32-bit pointers).
+ * 3DS). TARGET=host (64-bit) builds too, but Nintendo's graphics formats
+ * hold 4-byte pointers, so there the game can't get far once it loads them.
  */
 
 #define _GNU_SOURCE
