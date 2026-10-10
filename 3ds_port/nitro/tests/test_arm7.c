@@ -134,7 +134,9 @@ static void test_touch(void)
 static void test_backup(void)
 {
     char save_path[] = "/tmp/platinum-arm7-XXXXXX";
-    unsigned char source[320], read_back[320], erased[32];
+    /* NitroSDK stores CARD source/destination pointers in u32. On a
+     * 64-bit host the stack lives above 4 GiB; static data stays below. */
+    static unsigned char source[320], read_back[320], erased[32];
     FILE *image;
     u16 lock_id;
     int descriptor, i;
