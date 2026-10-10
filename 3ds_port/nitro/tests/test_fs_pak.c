@@ -3,6 +3,7 @@
  * Run with a tiny pack created by tests/make_fs_fixture.py / builder/pack.py.
  */
 #include <nitro.h>
+#include <nitro_port.h>
 #include <nitro_port_fs.h>
 
 #include <stdint.h>
@@ -10,13 +11,6 @@
 #include <string.h>
 
 static int sChecks, sFailures;
-static FSOverlayInfoHeader sSyntheticOvt[1];
-static unsigned char sOverlayRam[16];
-
-/* Test-only injection of the ROM OVT region. Attaching through the public
- * FS_AttachOverlayTable would require Nintendo's real HMAC digest: these
- * are intentionally synthetic bytes, and only the file read is in scope. */
-extern CARDRomRegion fsi_ovt9;
 
 #define CHECK(test) do { \
     ++sChecks; \
@@ -25,6 +19,68 @@ extern CARDRomRegion fsi_ovt9;
         fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #test); \
     } \
 } while (0)
+
+/* Two synthetic overlays: one with initialised and zero-initialised data,
+ * one (loaded into ITCM on the DS) with none. */
+static u8 sOvlData[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+static u8 sOvlBss[4];
+static const NitroPortOverlay sOverlays[] = {
+    { "test_main", NITRO_PORT_OVERLAY_MAIN, sOvlData, sOvlData + sizeof(sOvlData),
+      sOvlBss, sOvlBss + sizeof(sOvlBss) },
+    { "test_itcm", NITRO_PORT_OVERLAY_ITCM, NULL, NULL, NULL, NULL },
+};
+
+static void check_overlays(void)
+{
+    FSOverlayInfo info;
+    FSFile file;
+    u32 address;
+
+    NitroPort_SetOverlays(sOverlays, 2);
+    CHECK(NitroPort_OverlayCount() == 2);
+    CHECK(sOvlData[0] == 1);
+
+    CHECK(FS_LoadOverlayInfo(&info, MI_PROCESSOR_ARM9, 0));
+    CHECK(info.header.id == 0);
+    CHECK(info.header.flag == 0 && info.header.sinit_init == NULL);
+    address = (u32)(uintptr_t)FS_GetOverlayAddress(&info);
+    CHECK(!(address >= HW_ITCM_IMAGE && address <= HW_ITCM_END));
+    CHECK(!FS_LoadOverlayInfo(&info, MI_PROCESSOR_ARM9, 2));
+    CHECK(!FS_LoadOverlayInfo(&info, MI_PROCESSOR_ARM7, 0));
+
+    /* The ITCM overlay's label lies in ITCM (the game's overlay manager
+     * keeps a separate list for those); each overlay has its own range. */
+    CHECK(FS_LoadOverlayInfo(&info, MI_PROCESSOR_ARM9, 1));
+    address = (u32)(uintptr_t)FS_GetOverlayAddress(&info);
+    CHECK(address >= HW_ITCM_IMAGE && address <= HW_ITCM_END);
+
+    /* Changed while loaded ... */
+    CHECK(FS_LoadOverlay(MI_PROCESSOR_ARM9, 0));
+    CHECK(NitroPort_IsOverlayLoaded(0));
+    sOvlData[0] = 99;
+    sOvlBss[3] = 42;
+    CHECK(FS_UnloadOverlay(MI_PROCESSOR_ARM9, 0));
+    CHECK(!NitroPort_IsOverlayLoaded(0));
+    /* ... and back to the start when loaded again. */
+    CHECK(FS_LoadOverlay(MI_PROCESSOR_ARM9, 0));
+    CHECK(sOvlData[0] == 1 && sOvlData[7] == 8);
+    CHECK(sOvlBss[3] == 0);
+
+    /* The asynchronous form, as the game loads the field overlay: the
+     * caller waits on and closes the file it gets. */
+    sOvlData[1] = 77;
+    CHECK(FS_LoadOverlayInfo(&info, MI_PROCESSOR_ARM9, 0));
+    FS_InitFile(&file);
+    CHECK(FS_LoadOverlayImageAsync(&info, &file));
+    CHECK(FS_WaitAsync(&file));
+    CHECK(FS_CloseFile(&file));
+    FS_StartOverlay(&info);
+    CHECK(sOvlData[1] == 2);
+
+    /* An overlay with no data loads too. */
+    CHECK(FS_LoadOverlay(MI_PROCESSOR_ARM9, 1));
+    CHECK(FS_UnloadOverlay(MI_PROCESSOR_ARM9, 1));
+}
 
 static void check_file(const char *path, u32 id, const char *expected,
                        u32 expected_size)
@@ -78,8 +134,6 @@ int main(int argc, char **argv)
 {
     FSFile file;
     FSFileID missing;
-    FSOverlayInfo overlay;
-    unsigned char overlay_data[16];
     char path[512], manifest[512];
 
     if (argc != 2) {
@@ -120,33 +174,10 @@ int main(int argc, char **argv)
     FS_InitFile(&file);
     CHECK(!FS_OpenFileFast(&file, missing));
 
-    /* Overlay payload loading uses precisely the same file-ID path. The
-     * rest of FS_LoadOverlay needs overlay metadata/relocation integration. */
-    memset(&overlay, 0, sizeof(overlay));
-    memset(overlay_data, 0, sizeof(overlay_data));
-    overlay.header.file_id = 23;
-    overlay.header.ram_address = overlay_data;
-    overlay.header.ram_size = sizeof("FAKE-OVERLAY") - 1;
-    overlay.header.bss_size = 0;
-    overlay.header.flag = 0;
-    CHECK(FS_LoadOverlayImage(&overlay));
-    CHECK(memcmp(overlay_data, "FAKE-OVERLAY", sizeof("FAKE-OVERLAY") - 1) == 0);
-
-    /* Exercise the actual FS_LoadOverlay() read path, with a synthetic
-     * attached OVT. The payload contains dummy bytes, not executable code;
-     * there are no static initializers and no relocation work here. */
-    memset(sSyntheticOvt, 0, sizeof(sSyntheticOvt));
-    memset(sOverlayRam, 0, sizeof(sOverlayRam));
-    sSyntheticOvt[0].id = 0;
-    sSyntheticOvt[0].file_id = 23;
-    sSyntheticOvt[0].ram_address = sOverlayRam;
-    sSyntheticOvt[0].ram_size = sizeof("FAKE-OVERLAY") - 1;
-    fsi_ovt9.offset = (u32)(uintptr_t)sSyntheticOvt;
-    fsi_ovt9.length = sizeof(sSyntheticOvt);
-    CHECK(FS_LoadOverlay(MI_PROCESSOR_ARM9, 0));
-    CHECK(memcmp(sOverlayRam, "FAKE-OVERLAY", sizeof("FAKE-OVERLAY") - 1) == 0);
-    fsi_ovt9.offset = 0;
-    fsi_ovt9.length = 0;
+    /* Overlays are linked into the program (src/port_overlay.c): loading
+     * one restores its initial data and clears its zero-initialised data,
+     * as reading a fresh copy from the cartridge did. */
+    check_overlays();
 
     NitroPort_ClosePak();
     CHECK(!NitroPort_IsPakOpen());

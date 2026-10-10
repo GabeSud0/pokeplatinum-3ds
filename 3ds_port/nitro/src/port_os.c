@@ -3,10 +3,11 @@
  *
  * - The status register (interrupt enable bits, CPU mode) is a variable.
  * - Interrupts are raised by the port's emulated hardware, which runs
- *   OS_IrqHandler just like the real interrupt vector would.
+ *   OS_IrqHandler just like the real interrupt vector would, in the CPU's
+ *   interrupt mode.
  * - OS_Halt ("sleep until the next interrupt") advances one frame.
- * - Thread switching, reset and exceptions have hooks for the 3DS main
- *   program; until it provides them, they report "not implemented".
+ * - Thread switching is in port_thread.c. Reset and OS_Terminate have hooks
+ *   for the main program.
  * - Replacements for SDK files that only configure the DS's ARM946 CPU
  *   (caches, tightly-coupled memory, the protection unit): there is nothing
  *   to configure on the 3DS, so they do nothing.
@@ -26,6 +27,7 @@ u32 OSi_PortCpsr = HW_PSR_SYS_MODE;
 void NitroPort_RaiseIrq(u32 mask)
 {
     int guard;
+    u32 saved;
 
     reg_OS_IF |= mask;
 
@@ -38,12 +40,17 @@ void NitroPort_RaiseIrq(u32 mask)
         if (reg_OS_IME == 0 || (reg_OS_IE & reg_OS_IF) == 0) {
             return;
         }
-        /* Taking an interrupt masks further ones until the handler
-         * returns, as the ARM CPU does. Anything raised meanwhile stays
-         * pending and runs on the next pass of this loop. */
-        OSi_PortCpsr |= HW_PSR_IRQ_DISABLE;
+        /* Taking an interrupt puts the CPU in interrupt mode with further
+         * interrupts masked until the handler returns, as the ARM CPU does.
+         * Anything raised meanwhile stays pending and runs on the next pass
+         * of this loop. In interrupt mode the SDK's scheduler only notes
+         * that a switch is wanted; OS_IrqHandler switches at its end
+         * (port_thread.c), and this thread carries on from there when it's
+         * switched back to. */
+        saved = OSi_PortCpsr;
+        OSi_PortCpsr = (saved & ~HW_PSR_CPU_MODE_MASK) | HW_PSR_IRQ_MODE | HW_PSR_IRQ_DISABLE;
         OS_IrqHandler();
-        OSi_PortCpsr &= ~HW_PSR_IRQ_DISABLE;
+        OSi_PortCpsr = saved;
     }
 }
 
@@ -54,37 +61,36 @@ __attribute__((weak)) void NitroPort_OnFrame(void)
 __attribute__((weak)) void NitroPort_Halt(void)
 {
     /* The DS sleeps until an interrupt arrives. In a game the next one is
-     * (almost always) V-blank, so: finish this frame, then raise it. While
-     * the CPU sleeps, interrupts are taken even if the CPSR masks them,
-     * because OS_WaitInterrupt re-enables them right after. */
+     * (almost always) V-blank, so: finish this frame, then raise it. If the
+     * CPU has interrupts masked (OS_WaitInterrupt, OS_Terminate), it wakes
+     * up but doesn't take them: they stay pending until it unmasks them. */
     u32 saved = OSi_PortCpsr;
 
     NitroPort_OnFrame();
-    reg_GX_VCOUNT = 192; /* the line where V-blank starts */
     /* V-blank starts: its interrupt is requested and V-blank DMAs run
      * (masked meanwhile, so the interrupts are then taken lowest first). */
     OSi_PortCpsr |= HW_PSR_IRQ_DISABLE;
+    NitroPort_VBlankStarts();
     reg_OS_IF |= OS_IE_V_BLANK;
     NitroPort_DmaVBlank();
-    OSi_PortCpsr &= ~HW_PSR_IRQ_DISABLE;
-    NitroPort_RaiseIrq(OS_IE_V_BLANK);
     OSi_PortCpsr = saved;
-    reg_GX_VCOUNT = 0;
+    NitroPort_RaiseIrq(0);
 }
 
-/* ---------------------------------------------------------------- threads */
+/* ----------------------------------------------------------- OS_Terminate */
 
-__attribute__((weak)) BOOL NitroPort_SaveContext(void *context)
+__attribute__((weak, noreturn)) void NitroPort_Terminate(void)
 {
-    (void)context;
-    NitroPort_Unimplemented("OS_SaveContext (thread switching)");
-    return FALSE;
+    NitroPort_Log("[nitro] OS_Terminate: the game stopped itself");
+    abort();
 }
 
-__attribute__((weak)) void NitroPort_LoadContext(void *context)
+void OS_Terminate(void)
 {
-    (void)context;
-    NitroPort_Unimplemented("OS_LoadContext (thread switching)");
+    /* The DS stops here for good (interrupts off, halted). The port tells
+     * the main program, which reports it. */
+    (void)OS_DisableInterrupts();
+    NitroPort_Terminate();
 }
 
 /* ----------------------------------------------------- reset (os_reset.c) */

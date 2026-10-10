@@ -1,0 +1,100 @@
+From d2065afc6ddde43884cbf2ff07c791c6c960f793 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 22:07:08 -0700
+Subject: [PATCH 13/15] Count the hardware timers in software (SDK_PORT_3DS)
+
+The DS's timers count by themselves; the port counts them from a real clock
+(3ds_port/nitro/src/port_timer.c), so it needs to see every write to a
+timer and to bring the counters up to date before the tick is read:
+OS_SetTimerCount and OS_SetTimerControl call the port, and OS_GetTick,
+OSi_GetTick_noProfile and OS_GetTickLo sync the timers first. The
+Metrowerks build is unchanged.
+---
+ include/nitro/os/common/timer.h | 19 +++++++++++++++++++
+ libraries/os/src/os_tick.c      | 12 ++++++++++++
+ 2 files changed, 31 insertions(+)
+
+diff --git a/include/nitro/os/common/timer.h b/include/nitro/os/common/timer.h
+index 96cea4b..f6b239f 100644
+--- a/include/nitro/os/common/timer.h
++++ b/include/nitro/os/common/timer.h
+@@ -34,6 +34,24 @@ typedef enum {
+ 	OS_TIMER48_123 = 1
+ } OSTimer48;
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: the timers are counted in software from a real clock
++ * (3ds_port/nitro/src/port_timer.c), which needs to see every write. */
++void NitroPort_TimerSetReload(int id, u16 count);
++void NitroPort_TimerSetControl(int id, u16 control);
++
++static inline void OS_SetTimerCount (OSTimer id, u16 count)
++{
++	SDK_ASSERT(OS_TIMER_0 <= id && id <= OS_TIMER_3);
++	NitroPort_TimerSetReload((int)id, count);
++}
++
++static inline void OS_SetTimerControl (OSTimer id, u16 control)
++{
++	SDK_ASSERT(OS_TIMER_0 <= id && id <= OS_TIMER_3);
++	NitroPort_TimerSetControl((int)id, control);
++}
++#else
+ static inline void OS_SetTimerCount (OSTimer id, u16 count)
+ {
+ 	SDK_ASSERT(OS_TIMER_0 <= id && id <= OS_TIMER_3);
+@@ -45,6 +63,7 @@ static inline void OS_SetTimerControl (OSTimer id, u16 control)
+ 	SDK_ASSERT(OS_TIMER_0 <= id && id <= OS_TIMER_3);
+ 	*((REGType16 *)((u32)REG_TM0CNT_H_ADDR + id * 4)) = control;
+ }
++#endif
+ 
+ void OS_StartTimer(OSTimer id, u16 count, OSTimerPrescaler preScale);
+ void OS_StartTimer32(OSTimer32 id, u32 count, OSTimerPrescaler preScale);
+diff --git a/libraries/os/src/os_tick.c b/libraries/os/src/os_tick.c
+index a366698..e537d79 100644
+--- a/libraries/os/src/os_tick.c
++++ b/libraries/os/src/os_tick.c
+@@ -13,6 +13,15 @@ extern void OSi_SetTimerReserved(int timerNum);
+ static void OSi_CountUpTick(void);
+ u32 OSi_GetTick_noProfile(void);
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: bring the software timers up to date before reading one
++ * (3ds_port/nitro/src/port_timer.c). */
++void NitroPort_SyncTimers(void);
++    #define OSi_PORT_SYNC_TIMERS() NitroPort_SyncTimers()
++#else
++    #define OSi_PORT_SYNC_TIMERS() ((void)0)
++#endif
++
+ void OS_InitTick (void)
+ {
+     if (!OSi_UseTick) {
+@@ -62,6 +71,7 @@ OSTick OS_GetTick (void)
+     OSIntrMode prev = OS_DisableInterrupts();
+     SDK_ASSERT(OSi_UseTick);
+ 
++    OSi_PORT_SYNC_TIMERS();
+     countL = *(REGType16 *)((u32)REG_TM0CNT_L_ADDR + OSi_TICK_TIMER * 4);
+     countH = OSi_TickCounter & 0xffffffffffffULL;
+ 
+@@ -84,6 +94,7 @@ u32 OSi_GetTick_noProfile (void)
+     OSIntrMode prev = OS_DisableInterrupts();
+     SDK_ASSERT(OSi_UseTick);
+ 
++    OSi_PORT_SYNC_TIMERS();
+     countL = *(REGType16 *)((u32)REG_TM0CNT_L_ADDR + OSi_TICK_TIMER * 4);
+     countH = (u16)OSi_TickCounter;
+ 
+@@ -101,6 +112,7 @@ u32 OSi_GetTick_noProfile (void)
+ u16 OS_GetTickLo (void)
+ {
+     SDK_ASSERT(OSi_UseTick);
++    OSi_PORT_SYNC_TIMERS();
+     return *(REGType16 *)((u32)REG_TM0CNT_L_ADDR + OSi_TICK_TIMER * 4);
+ }
+ 
+-- 
+2.43.0
+

@@ -18,7 +18,6 @@ ROM_SHA1 = "0862ec35b24de5c7e2dcb88c9eea0873110d755c"
 FILES = [
     (0, "hello.bin", b"abcdefghij"),
     (8, "data/nested.bin", b"0123456789ABCDEF"),
-    (23, "overlay/synthetic.bin", b"FAKE-OVERLAY"),
     (31, "empty.dat", b""),
 ]
 

@@ -1,14 +1,19 @@
-# Incremental GCC build of the original Pokémon Platinum game sources.
-# Always fetch the pinned decompilation first: python tools/bootstrap.py --clean
+# GCC build of the original Pokémon Platinum game sources, and the programs
+# that run them. Fetch the pinned decompilation first: python tools/bootstrap.py
 #
-# make                 Compile and smoke-test the first game-code slice on PC
-# make TARGET=host32   Repeat with 32-bit pointers, as on the 3DS
-# make TARGET=3ds      Cross-compile the same game code for devkitARM
+# make                         compile the game for the PC and run its tests
+# make TARGET=host32           the same with 32-bit pointers, as on the 3DS
+# make TARGET=3ds              compile the game for the 3DS (devkitARM)
+# make TARGET=3ds program      build/3ds/pokeplatinum.3dsx: the game on a 3DS
+# make TARGET=host32 program   build/host32/pokeplatinum-pc: the game on a PC,
+#                              without a screen (for finding where it stops)
+# make TARGET=... link-check   link the program, reporting what's missing
 #
-# This is a relocatable object library, NOT a playable game executable.
-# Builds every game source that compiles; see blocked_sources.txt for the rest.
+# The programs need the player's data pack to run (README.md). Builds that
+# contain game code are for your own use: never share them.
 
 .DEFAULT_GOAL := all
+comma := ,
 
 include ../common.mk
 
@@ -196,6 +201,21 @@ GCC14_ERRORS := -Werror=implicit-function-declaration \
 GENERATED_HEADER_DIRS := $(addprefix -I$(RESOURCE_DIR)/,$(sort $(patsubst $(GAME)/%/,%,$(dir \
     $(shell grep -rlE "\.(naix|h)'" --include=meson.build $(GAME)/res)))))
 
+# Overlay IDs (FS_OVERLAY_ID): each overlay's position in the linker spec,
+# as constants in a header every game file is compiled with, and as the
+# symbols Nintendo's linker made (an ld script). See the tool.
+OVERLAY_IDS   := $(ROOT)/build/game-link/overlay_ids.ld
+OVERLAY_IDS_H := $(ROOT)/build/game-link/overlay_ids.h
+
+$(OVERLAY_IDS) $(OVERLAY_IDS_H) &: $(GAME)/platinum.us/main.lsf $(ROOT)/tools/prepare_game_overlay_ids.py
+	@python3 $(ROOT)/tools/prepare_game_overlay_ids.py --lsf $< --output $(OVERLAY_IDS) --header $(OVERLAY_IDS_H)
+	@touch $(OVERLAY_IDS) $(OVERLAY_IDS_H)
+
+# Every generated header the game's sources may include.
+GAME_GENERATED := $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) \
+                  $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(ORDERGEN_STAMP) \
+                  $(DATAPROC_STAMP) $(NETWORK_STAMP) $(OVERLAY_IDS_H)
+
 # Include paths as in the original meson.build: the game's own libraries
 # (lib/*/include) and libvct, plus the folder of the generated constant
 # headers, which Meson adds by itself for generated headers (a few files
@@ -207,11 +227,6 @@ GENERATED_HEADER_DIRS := $(addprefix -I$(RESOURCE_DIR)/,$(sort $(patsubst $(GAME
 # original game was built. Same on every target, so PC and 3DS compile the
 # same code. include/extras.h stands in for the Metrowerks header it pulls in.
 # This compiles the declarations only; networking is not ported.
-# Every generated header the game's sources may include.
-GAME_GENERATED := $(CONSTANTS_STAMP) $(RESOURCE_HEADER) $(TEXT_BANK_STAMP) $(MOVE_TEXT_STAMP) \
-                  $(SPECIES_TEXT_STAMP) $(SOUND_HEADER) $(ARCHIVE_STAMP) $(ORDERGEN_STAMP) \
-                  $(DATAPROC_STAMP) $(NETWORK_STAMP)
-
 # Force the original global precompiled header, as Meson/Metrowerks does.
 # _MSL_RESTRICT is a Metrowerks qualifier and must be empty with GCC.
 GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
@@ -231,12 +246,12 @@ GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
                -DGAME_VERSION=VERSION_PLATINUM \
                -DGAME_LANGUAGE=LANGUAGE_ENGLISH \
                -D_NITRO -DLINK_PPWLOBBY \
-               -include $(GAME)/include/pch/global_pch.h \
+               -include $(GAME)/include/pch/global_pch.h -include $(OVERLAY_IDS_H) \
                -ffunction-sections -fdata-sections \
                $(GCC14_ERRORS)
 
 
-.PHONY: all lib test probe link-check clean libnitro libnitrosystem
+.PHONY: all lib test probe program link-check clean libnitro libnitrosystem
 
 ifeq ($(IS_HOST),yes)
 all: test
@@ -270,21 +285,32 @@ $(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(GAME_GENERATED) | libnitros
 	@$(CC) $(GAME_CFLAGS) -c $< -o $@
 	@$(WEAKEN_NNS_INLINE)
 
-$(GAME_HEADER_DEFS): $(CENSUS_OBJS)
+# The same pass gives each overlay's objects their own data sections, for
+# resetting an overlay's data when it's loaded (tools/game_overlays.py,
+# nitro/src/port_overlay.c), and writes the overlay table programs link.
+# Both change the objects in place, so they share this one step.
+OVERLAY_TABLE_C := $(OUT)/gen/overlay_table.c
+
+$(GAME_HEADER_DEFS): $(CENSUS_OBJS) $(GAME)/platinum.us/main.lsf $(ROOT)/tools/game_overlays.py
 	@mkdir -p $(dir $@)
 	@# Objects already made weak by an earlier run no longer show up as
 	@# duplicates, so keep the names found before.
-	@{ cat $@ 2>/dev/null; $(NM) -g --defined-only $^ | awk 'NF == 3 && $$2 ~ /^[TDBR]$$/ { print $$3 }' | sort | uniq -d; } | sort -u > $@.new
+	@{ cat $@ 2>/dev/null; $(NM) -g --defined-only $(CENSUS_OBJS) | awk 'NF == 3 && $$2 ~ /^[TDBR]$$/ { print $$3 }' | sort | uniq -d; } | sort -u > $@.new
 	@mv $@.new $@
-	@for o in $^; do $(OBJCOPY) --weaken-symbols=$@ $$o; done
-	@touch $@
+	@for o in $(CENSUS_OBJS); do $(OBJCOPY) --weaken-symbols=$@ $$o; done
 	@echo "  $$(wc -l < $@) game header functions defined in several objects, made weak"
+	@python3 $(ROOT)/tools/game_overlays.py --lsf $(GAME)/platinum.us/main.lsf --upstream $(GAME) \
+	    --objdir $(OUT) --objcopy $(OBJCOPY) --output $(OVERLAY_TABLE_C)
+	@touch $@
+
+$(OVERLAY_TABLE_C): $(GAME_HEADER_DEFS)
+	@test -f $@
 
 $(TRAINER_AI_O): $(GAME)/src/battle/trainer_ai/script.s $(GAME_GENERATED)
 	@mkdir -p $(dir $@)
 	@echo "  GAME AS battle/trainer_ai/script.s"
-	@$(CC) $(filter -m%,$(PORT_CFLAGS)) -I$(GAME)/include -I$(GAME)/asm -I$(CONSTANTS_DIR) \
-	    -x assembler-with-cpp -c $< -o $@
+	@$(CC) $(filter -m%,$(PORT_CFLAGS)) $(if $(IS_HOST),-Wa$(comma)--noexecstack) \
+	    -I$(GAME)/include -I$(GAME)/asm -I$(CONSTANTS_DIR) -x assembler-with-cpp -c $< -o $@
 
 # The game's libraries: same flags, plus their own private headers (src/).
 $(OUT)/lib/%.o: $(GAME)/lib/%.c $(NNS_INLINE_SYMS) $(GAME_GENERATED) | libnitrosystem
@@ -315,14 +341,6 @@ $(LIB): $(GAME_HEADER_DEFS) $(WIFI_STUBS_O)
 	@$(AR) rcs $@ $(GAME_OBJS) $(WIFI_STUBS_O)
 	@echo "built $@ ($(words $(GAME_SRCS)) of $(words $(GAME_ALL_SRCS)) game C files, and lib/$(subst $(eval) ,+,$(GAME_LIBS)))"
 
-# The overlay ID symbols Nintendo's linker made from the linker spec
-# (SDK_OVERLAY_<name>_ID at the overlay's number). Every program that links
-# the game passes this file to the linker.
-OVERLAY_IDS := $(ROOT)/build/game-link/overlay_ids.ld
-
-$(OVERLAY_IDS): $(GAME)/platinum.us/main.lsf $(ROOT)/tools/prepare_game_overlay_ids.py
-	@python3 $(ROOT)/tools/prepare_game_overlay_ids.py --lsf $< --output $@
-
 # Independent host tests exercise the ORIGINAL game functions linked against
 # NitroSystem and NitroSDK, without any ROM or copyrighted game data.
 TEST_BIN := $(OUT)/test_game
@@ -345,29 +363,84 @@ test:
 	@exit 1
 endif
 
-# Link the whole game from NitroMain and report every symbol still missing
-# (tools/game_link_report.py). A to-do list, not a gate: always succeeds.
-LINK_CHECK_OBJ := $(OUT)/link/link_check.o
-
-LINK_REPORT := $(ROOT)/build/game-link-report/$(TARGET).md
+# --- The programs -----------------------------------------------------------
+# The game itself: the original NitroMain with every game file, the overlay
+# table, the port's start (app/platinum.c) and a main for the target:
+#   TARGET=3ds          app/main_3ds.c -> build/3ds/pokeplatinum.3dsx (.elf)
+#   TARGET=host/host32  app/main_pc.c  -> build/<target>/pokeplatinum-pc,
+#                       which runs the game on a PC without a screen
+# The game objects go in themselves (not through the library), so every
+# overlay's data sections are there for the overlay table. Programs built
+# from the game are for your own use: never share them (CONTRIBUTING.md).
 DEVKITPRO ?= /opt/devkitpro
+APP_OBJS := $(OUT)/app/platinum.o
+# Linked after the game's objects: see tools/game_overlays.py (render_table).
+OVERLAY_TABLE_O := $(OUT)/gen/overlay_table.o
+
 ifeq ($(TARGET),3ds)
+APP_OBJS += $(OUT)/app/main_3ds.o
+PROGRAM_ELF := $(OUT)/pokeplatinum.elf
+PROGRAM := $(OUT)/pokeplatinum.3dsx
 # The architecture flags pick devkitARM's hard-float libraries and the 3DS
-# startup code (3dsx_crt0.o), as the smoke app's link does.
-LINK_CHECK_LDFLAGS := $(filter -march=% -mtune=% -mfloat-abi=% -mfpu=% -mtp=%,$(PORT_CFLAGS)) \
-                      -specs=3dsx.specs -L$(DEVKITPRO)/libctru/lib
-LINK_CHECK_LIBS := -lctru
+# startup code (3dsx_crt0.o).
+PROGRAM_LDFLAGS := $(filter -march=% -mtune=% -mfloat-abi=% -mfpu=% -mtp=%,$(PORT_CFLAGS)) \
+                   -specs=3dsx.specs -L$(DEVKITPRO)/libctru/lib -Wl,-Map,$(OUT)/pokeplatinum.map
+PROGRAM_LIBS := -lctru -lm
+else
+APP_OBJS += $(OUT)/app/main_pc.o
+PROGRAM_ELF := $(OUT)/pokeplatinum-pc
+PROGRAM := $(PROGRAM_ELF)
+# -rdynamic: function names in the crash backtrace.
+PROGRAM_LDFLAGS := $(LDFLAGS) -rdynamic
+PROGRAM_LIBS := -lm
 endif
 
-$(LINK_CHECK_OBJ): link/link_check.c
-	@mkdir -p $(dir $@)
-	@$(CC) $(PORT_CFLAGS) -c $< -o $@
+PROGRAM_LINK = $(CC) $(PROGRAM_LDFLAGS) -Wl,--gc-sections -Wl,--wrap=ErrorHandling_AssertFail \
+    $(APP_OBJS) $(GAME_OBJS) $(WIFI_STUBS_O) $(OVERLAY_TABLE_O) \
+    -Wl,--start-group $(LIBNNS) $(LIBNITRO) -Wl,--end-group $(PROGRAM_LIBS) $(OVERLAY_IDS) -o $(PROGRAM_ELF)
 
-link-check: $(LINK_CHECK_OBJ) $(LIB) $(LIBNNS) $(LIBNITRO) $(OVERLAY_IDS)
-	@mkdir -p $(dir $(LINK_REPORT))
-	@$(CC) $(LDFLAGS) $(LINK_CHECK_LDFLAGS) -Wl,--gc-sections $(LINK_CHECK_OBJ) \
-	    -Wl,--start-group $(LIB) $(LIBNNS) $(LIBNITRO) -Wl,--end-group $(LINK_CHECK_LIBS) -lm \
-	    $(OVERLAY_IDS) -o $(OUT)/link/platinum.elf > $(OUT)/link/linker.txt 2>&1 || true
+$(OUT)/app/platinum.o: app/platinum.c app/platinum.h | libnitrosystem
+	@mkdir -p $(dir $@)
+	@echo "  APP CC platinum.c"
+	@$(CC) $(PORT_CFLAGS) $(SDK_INCLUDES) -I$(ROOT)/3ds_port/pak/include -I$(GAME)/include -c $< -o $@
+
+$(OUT)/app/main_pc.o: app/main_pc.c app/platinum.h | libnitrosystem
+	@mkdir -p $(dir $@)
+	@echo "  APP CC main_pc.c"
+	@$(CC) $(PORT_CFLAGS) $(SDK_INCLUDES) -c $< -o $@
+
+# main_3ds.c uses libctru, and none of the SDK's headers.
+$(OUT)/app/main_3ds.o: app/main_3ds.c app/platinum.h
+	@mkdir -p $(dir $@)
+	@echo "  APP CC main_3ds.c"
+	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -c $< -o $@
+
+$(OVERLAY_TABLE_O): $(OVERLAY_TABLE_C) | libnitrosystem
+	@$(CC) $(PORT_CFLAGS) $(SDK_INCLUDES) -c $< -o $@
+
+$(PROGRAM_ELF): $(APP_OBJS) $(OVERLAY_TABLE_O) $(GAME_HEADER_DEFS) $(WIFI_STUBS_O) $(LIBNNS) $(LIBNITRO) $(OVERLAY_IDS)
+	@echo "  LINK $(notdir $@)"
+	@$(PROGRAM_LINK)
+
+ifeq ($(TARGET),3ds)
+$(OUT)/pokeplatinum.smdh:
+	@$(DEVKITPRO)/tools/bin/smdhtool --create "Pokemon Platinum" "3DS port (needs your data pack)" \
+	    "pokeplatinum-3ds" "$(DEVKITPRO)/libctru/default_icon.png" $@
+
+$(PROGRAM): $(PROGRAM_ELF) $(OUT)/pokeplatinum.smdh
+	@$(DEVKITPRO)/tools/bin/3dsxtool $< $@ --smdh=$(OUT)/pokeplatinum.smdh
+	@echo "built $@ (contains game code: for your own use, never share it)"
+endif
+
+program: $(PROGRAM)
+
+# The same link, reporting every symbol still missing instead of failing
+# (tools/game_link_report.py): a to-do list while the port is incomplete.
+LINK_REPORT := $(ROOT)/build/game-link-report/$(TARGET).md
+
+link-check: $(APP_OBJS) $(OVERLAY_TABLE_O) $(GAME_HEADER_DEFS) $(WIFI_STUBS_O) $(LIBNNS) $(LIBNITRO) $(OVERLAY_IDS)
+	@mkdir -p $(dir $(LINK_REPORT)) $(OUT)/link
+	@$(PROGRAM_LINK) > $(OUT)/link/linker.txt 2>&1 || true
 	@python3 $(ROOT)/tools/game_link_report.py $(OUT)/link/linker.txt --target $(TARGET) --output $(LINK_REPORT)
 	@echo "Report: $(LINK_REPORT)"
 

@@ -1,0 +1,49 @@
+From c95b0d3454856192749f4261a16aa1f1f03c15c5 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 22:07:08 -0700
+Subject: [PATCH 12/15] Switch threads at the end of an interrupt, as the DS
+ does (SDK_PORT_3DS)
+
+The C version of OS_IrqHandler_ThreadSwitch only woke the threads waiting
+in OS_WaitIrq, through OS_WakeupThread, so a thread switch an interrupt
+asked for happened in the middle of the interrupt, or never. The port's
+version (3ds_port/nitro/src/port_thread.c) does what the assembly does:
+wake those threads without rescheduling, then, if anything asked for a
+switch during the interrupt, switch to the highest-priority ready thread.
+The Metrowerks build is unchanged.
+---
+ libraries/os/src/os_irqHandler.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/libraries/os/src/os_irqHandler.c b/libraries/os/src/os_irqHandler.c
+index 4e155cb..64e2391 100644
+--- a/libraries/os/src/os_irqHandler.c
++++ b/libraries/os/src/os_irqHandler.c
+@@ -322,13 +322,22 @@ _dont_switched_:
+ }
+ #else
+ /* C version for compilers without Metrowerks inline assembly. */
++#ifdef SDK_PORT_3DS
++void NitroPort_IrqThreadSwitch(void);
++#endif
++
+ void OS_IrqHandler_ThreadSwitch (void)
+ {
+-    /* Wake every thread waiting in OS_WaitIrq; the scheduler then picks
+-     * the highest-priority ready thread. */
+ #ifndef SDK_NO_THREAD
++#ifdef SDK_PORT_3DS
++    /* As the assembly above: wake the threads waiting in OS_WaitIrq, then,
++     * if anything asked for rescheduling during the interrupt, switch to the
++     * highest-priority ready thread (3ds_port/nitro/src/port_thread.c). */
++    NitroPort_IrqThreadSwitch();
++#else
+     OS_WakeupThread(&OSi_IrqThreadQueue);
+ #endif
++#endif
+ }
+ #endif
+ 
+-- 
+2.43.0
+

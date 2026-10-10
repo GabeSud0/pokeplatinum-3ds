@@ -12,8 +12,14 @@
 
 #define ALIGNED __attribute__((aligned(32)))
 
-/* 8 MB: the SDK's shared/system area lives at offset 0x7FF000-0x7FFFFF. */
+/* 8 MB: the SDK's shared/system area lives at offset 0x7FF000-0x7FFFFF.
+ * On a 64-bit PC the system-work structure at its very end (OSSystemWork)
+ * holds 8-byte pointers and runs a few bytes past it, so leave room there. */
+#if defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ != 4
+unsigned char NitroPort_MainMem[0x800000 + 0x100] ALIGNED;
+#else
 unsigned char NitroPort_MainMem[0x800000] ALIGNED;
+#endif
 
 unsigned char NitroPort_Itcm[0x8000] ALIGNED;
 unsigned char NitroPort_Wram[0x8000] ALIGNED;

@@ -1,0 +1,60 @@
+From c7436d6bd5409a8a2857306ef1d483990a75d8de Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 22:07:08 -0700
+Subject: [PATCH 15/15] Arena table on 64-bit PCs; out-of-range lock IDs
+ (SDK_PORT_3DS)
+
+- os_arena.c: with 8-byte pointers the arena table at HW_ARENA_INFO_BUF
+  runs over the cartridge header after it; on 64-bit PC test builds it
+  lives in a variable instead.
+- os_spinLock.c: the C OS_ReleaseLockID shifted by 32 or more for an ID
+  outside the range (OS_LOCK_ID_ERROR), which C leaves undefined; the
+  ARM instruction gives 0, so nothing is freed. Same now.
+The Metrowerks build is unchanged.
+---
+ libraries/os/src/os_arena.c    | 10 +++++++++-
+ libraries/os/src/os_spinLock.c |  7 ++++++-
+ 2 files changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/libraries/os/src/os_arena.c b/libraries/os/src/os_arena.c
+index fdc889f..05a718b 100644
+--- a/libraries/os/src/os_arena.c
++++ b/libraries/os/src/os_arena.c
+@@ -10,7 +10,15 @@
+ 
+ #define SDK_ARENAID_ASSERT(id)        SDK_ASSERT((u32)id < OS_ARENA_MAX)
+ 
+-#define OSi_GetArenaInfo()           (*(OSArenaInfo *)HW_ARENA_INFO_BUF)
++#if defined(SDK_PORT_3DS) && defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ != 4
++/* 64-bit PC builds: with 8-byte pointers the arena table is twice as big
++ * and would run over the cartridge header that follows it in main memory,
++ * so it lives in a variable. (Nothing else reads it at its DS address.) */
++static OSArenaInfo OSi_ArenaInfo;
++    #define OSi_GetArenaInfo()           (OSi_ArenaInfo)
++#else
++    #define OSi_GetArenaInfo()           (*(OSArenaInfo *)HW_ARENA_INFO_BUF)
++#endif
+ 
+ extern void SDK_MAIN_ARENA_LO(void);
+ 
+diff --git a/libraries/os/src/os_spinLock.c b/libraries/os/src/os_spinLock.c
+index 0ec3d3d..6a65fb2 100644
+--- a/libraries/os/src/os_spinLock.c
++++ b/libraries/os/src/os_spinLock.c
+@@ -502,7 +502,12 @@ void OS_ReleaseLockID (u16 lockID)
+     } else {
+         n -= OSi_ANYP_LOCK_ID_START;
+     }
+-    *flag |= 0x80000000u >> n;
++    /* The ARM shift gives 0 for 32 or more (an ID that isn't one of these,
++     * such as OS_LOCK_ID_ERROR): nothing is freed. In C that shift would be
++     * undefined. */
++    if (n < 32) {
++        *flag |= 0x80000000u >> n;
++    }
+ }
+ #endif
+ 
+-- 
+2.43.0
+

@@ -159,6 +159,13 @@ SDK_SRCS := \
 
 PORT_SRCS := $(wildcard src/*.c)
 
+# Threads, signals and the clock come from the machine (src/port_platform.h).
+ifeq ($(TARGET),3ds)
+PORT_SRCS += src/platform/3ds.c
+else
+PORT_SRCS += src/platform/host.c
+endif
+
 SDK_OBJS  := $(SDK_SRCS:%.c=$(OUT)/sdk/%.o)
 PORT_OBJS := $(PORT_SRCS:src/%.c=$(OUT)/port/%.o)
 # Embed the *same* portable libpak implementation in libnitro.a. NitroSDK
@@ -199,6 +206,13 @@ $(OUT)/port/%.o: src/%.c $(GEN)/nitro/fx/fx_const.h
 	@echo "  CC  $(notdir $<)"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+# The 3DS platform layer uses libctru (and none of the SDK's headers).
+DEVKITPRO ?= /opt/devkitpro
+$(OUT)/port/platform/3ds.o: src/platform/3ds.c src/port_platform.h
+	@mkdir -p $(dir $@)
+	@echo "  CC  platform/3ds.c"
+	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -c $< -o $@
+
 $(PAK_READER_OBJ): ../pak/src/pak.c ../pak/include/pak.h
 	@mkdir -p $(dir $@)
 	@echo "  CC  libpak reader"
@@ -229,6 +243,13 @@ $(FS_FIXTURE_STAMP): tests/make_fs_fixture.py ../../builder/pack.py
 	python3 tests/make_fs_fixture.py $(FS_FIXTURE_DIR)
 	@touch $@
 
+# Threads, interrupts with threads, timers: a program of their own, since
+# once the SDK's threads start the program's thread is theirs for good.
+THREAD_TEST_BIN := $(OUT)/test_threads
+
+$(THREAD_TEST_BIN): tests/test_threads.c $(LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
+
 # Call the actual ARM9 CARD/RTC/PM/TP APIs against virtual ARM7 handlers.
 # The integration executable creates its own temporary .sav and removes it.
 ARM7_TEST_BIN := $(OUT)/test_arm7
@@ -236,9 +257,10 @@ ARM7_TEST_BIN := $(OUT)/test_arm7
 $(ARM7_TEST_BIN): tests/test_arm7.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
 
-test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(ARM7_TEST_BIN)
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN)
 	./$(TEST_BIN)
 	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
+	./$(THREAD_TEST_BIN)
 	./$(ARM7_TEST_BIN)
 
 clean:

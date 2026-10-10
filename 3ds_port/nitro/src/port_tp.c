@@ -2,9 +2,11 @@
  * Virtual ARM7 touch panel. ARM9 NitroSDK reads four shared bytes from
  * OSSystemWork after receiving sampling-complete PXI packets.
  *
- * X/Y are already calibrated to the 256x192 DS bottom screen. In the
- * absence of console calibration the SDK's TP_SetCalibrateParam(NULL)
- * keeps them in those units.
+ * The program gives screen positions (256x192, the DS bottom screen). The
+ * panel reports raw readings, which the game turns back into screen
+ * positions with the calibration in the firmware settings (TP_GetUserInfo).
+ * The calibration NitroPort_BootFirmware stores maps a screen position to
+ * raw = position * NITRO_PORT_TP_RAW_SCALE, so that's what is reported.
  */
 #include <nitro.h>
 #include <nitro_port.h>
@@ -20,8 +22,8 @@ static void publish_touch(BOOL down, u16 x, u16 y)
     SPITpData sample;
     memset(&sample, 0, sizeof(sample));
     sample.e.touch = down ? SPI_TP_TOUCH_ON : SPI_TP_TOUCH_OFF;
-    sample.e.x = down ? (x > 255 ? 255 : x) : 0;
-    sample.e.y = down ? (y > 191 ? 191 : y) : 0;
+    sample.e.x = down ? (u16)((x > 255 ? 255 : x) * NITRO_PORT_TP_RAW_SCALE) : 0;
+    sample.e.y = down ? (u16)((y > 191 ? 191 : y) * NITRO_PORT_TP_RAW_SCALE) : 0;
     sample.e.validity = SPI_TP_VALIDITY_VALID;
     memcpy((void *)OS_GetSystemWork()->touch_panel, sample.bytes, sizeof(sample.bytes));
 }

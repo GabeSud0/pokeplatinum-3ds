@@ -123,8 +123,11 @@ module, each menu …). `Overlay_LoadByID` reads one from the cartridge.
 program** and `Overlay_LoadByID` stops loading code. One trap: on the DS, an
 overlay's global variables start fresh every time it is loaded. Linked
 permanently, they would keep old values. So each overlay's data and BSS
-sections need to be reset on "load". That needs a linker script that keeps each
-overlay's sections separate, plus a small table of start/end addresses.
+sections need to be reset on "load". That needs each overlay's sections kept
+separate, plus a small table of start/end addresses. *Done:* the build renames
+each overlay's data sections after it (`tools/game_overlays.py`), the linker
+gathers them, and loading an overlay restores its data
+(`3ds_port/nitro/src/port_overlay.c`).
 
 Heaps can stay as they are, allocated from a larger block.
 
@@ -314,11 +317,14 @@ This refines Phases 2 and 3 of the [roadmap](ROADMAP.md):
    Gfd and Snd libraries have been added, with independent host and 32-bit
    resource tests and 3DS symbol coverage
    ([`3ds_port/nitrosystem`](../3ds_port/nitrosystem)).
-   Still to do: get the game itself compiling and running its main loop;
-   hardware drawing, sound, cartridge filesystem and OS service backends
-   remain separate implementation milestones.
+   *Game done:* all 1,012 game files compile and link into a 3DS program
+   whose `NitroMain` runs, with the SDK's threads, interrupts, timers and
+   frame loop working ([`3ds_port/game`](../3ds_port/game)), and the
+   ARM7's services (power, clock, save chip, touch screen) answering it.
 2. **Files:** builder extracts the filesystem; `FS_*` reads from the SD card.
-3. **Overlays:** link everything, reset overlay data on load.
+   *Done* (the data pack, `3ds_port/nitro/src/port_fs.c`).
+3. **Overlays:** link everything, reset overlay data on load. *Done*
+   (`tools/game_overlays.py`, `3ds_port/nitro/src/port_overlay.c`).
 4. **Virtual registers, VRAM and OAM.**
 5. **2D renderer**, enough for the title screen, then menus and text boxes.
 6. **Input and touch.** At this point menus work.

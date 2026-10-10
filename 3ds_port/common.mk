@@ -41,8 +41,14 @@ PORT_DEFINES := -DSDK_ARM9 -DSDK_TS -DSDK_4M -DSDK_CODE_ARM -DSDK_FINALROM \
 #   them and break structure layouts.
 #   char is signed ("-char signed"); on ARM, GCC's char is unsigned by
 #   default, which silently changes comparisons like `c < 0`.
+#   Overflow, out-of-range indexes and null pointers do what the DS's code
+#   did: signed arithmetic wraps, and GCC doesn't drop loop iterations or
+#   null checks on the grounds that the code can't rely on them. Metrowerks
+#   made no such assumptions, and the game has places that would be
+#   affected (GCC warns about a few loops in battle_lib.c).
 PORT_CFLAGS := -std=gnu99 -fgnu89-inline -fno-strict-aliasing -fno-short-enums \
-               -fsigned-char -O2 -g \
+               -fsigned-char -fwrapv -fno-aggressive-loop-optimizations \
+               -fno-delete-null-pointer-checks -O2 -g \
                -Wall -Wno-unused-function -Wno-unused-variable -Wno-missing-braces \
                -Wno-unknown-pragmas -Wno-unused-but-set-variable -Wno-parentheses \
                -Wno-switch -Wno-multichar \
@@ -74,7 +80,8 @@ else ifneq ($(filter host host32,$(TARGET)),)
   # The SDK stores addresses in 32-bit integers. On a 64-bit PC that only
   # works if our data sits below 4 GB, which a non-PIE executable guarantees.
   PORT_CFLAGS += -fno-pie -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
-  LDFLAGS += -no-pie
+  # -pthread: the port's threads are POSIX threads on a PC (nitro/src/platform/host.c).
+  LDFLAGS += -no-pie -pthread
   ifeq ($(TARGET),host32)
     # Nintendo's file formats hold 4-byte pointers that the libraries fix up
     # in place, so those parts only work with 32-bit pointers, as on the 3DS.

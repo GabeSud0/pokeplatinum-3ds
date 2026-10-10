@@ -35,27 +35,30 @@ SDK still builds the original game with Metrowerks.
 | Memory | copy, fill, atomic swap | `src/mi_memory.c`, `mi_swap.c` |
 | Decompression | LZ77 (both formats), run-length, Huffman, diff filters, bit unpacking. Checked against Nintendo's own compressors | `src/mi_uncompress.c` |
 | CPU state | interrupt enable/disable, CPU mode | SDK `os_system.c` (patched) |
-| Interrupts | IE/IF/IME rules, dispatch to the game's handlers, lowest first; masked while a handler runs; pending ones taken as soon as the CPU unmasks them | SDK `os_irqHandler.c` (patched), `src/port_os.c` |
+| Interrupts | IE/IF/IME rules, dispatch to the game's handlers, lowest first, in the CPU's interrupt mode; masked while a handler runs; pending ones taken as soon as the CPU unmasks them | SDK `os_irqHandler.c` (patched), `src/port_os.c` |
+| Threads | NitroSDK's own scheduler, unchanged. Each SDK thread is played by a thread of the machine (3DS or POSIX), one running at a time, handed over where the SDK saves and loads contexts; a switch an interrupt asks for happens at its end, as on the DS. Each thread keeps its interrupt state and divider operands | `src/port_thread.c`, `src/platform/` |
+| Timers | the four hardware timers counted from a real clock: reload, prescaler, cascade, overflow interrupts (none lost). The SDK's tick and alarms (`OS_Sleep`) and the game's own timer work. V-count follows the clock | `src/port_timer.c`, SDK `timer.h`, `os_tick.c` (patched) |
+| Overlays | all linked into the program; `FS_LoadOverlay` and co. describe each overlay and reset its data on loading, as reading it from the cartridge did. The program gives the port the overlays' data sections (`NitroPort_SetOverlays`) | `src/port_overlay.c`, SDK `fs_overlay.c` (patched) |
+| Firmware state | the cartridge header, the user's settings (name, birthday, language, touch calibration), MAC address, buttons and lid, in DS memory where the game reads them | `src/port_boot.c` |
 | DMA | immediate and 3D-FIFO transfers run at once, V-blank transfers at V-blank; completion interrupts and callbacks. H-blank, display, card and cartridge timings are reported as not implemented | `src/port_dma.c`, SDK `mi_dma.c` (patched) |
-| Waiting for V-blank | `OS_Halt` advances one frame (calls the port's frame hook) and raises V-blank | `src/port_os.c` |
+| Waiting for V-blank | `OS_Halt` advances one frame: calls the port's frame hook, starts V-blank (V-blank DMAs) and requests its interrupt, taken if the CPU has interrupts on | `src/port_os.c` |
 | Memory map | DS main RAM (8 MB), ITCM, DTCM, WRAM, palettes, OAM, VRAM as memory blocks | `src/port_memory.c` |
 | Heaps and arenas, lock IDs, alarms, messages, mutexes | Nintendo's C on top of the above | SDK |
 | BIOS calls | CpuSet, CpuFastSet, CRC-16, square root, divide, decompression | `src/svc.c` |
 | GBA slot | reports "no cartridge", which is correct on a 3DS (no Pal Park) | `src/ctrdg.c` |
-| The ARM7 link (PXI) | message routing between the game's libraries and port handlers | `src/pxi.c` |
+| The ARM7 link (PXI) | message routing between the game's libraries and port handlers; answers arrive through the receive FIFO's interrupt, as on the DS | `src/pxi.c` |
 | Virtual ARM7: card backup, RTC, PM and touch | save-card SPI requests, BCD local clock, PMIC replies, shared touch samples and autosampling | `src/port_arm7.c`, `port_card.c`, `port_rtc.c`, `port_pm.c`, `port_tp.c` |
 
 **Not yet: hooks are in place, the behaviour comes in later steps**
 
 | Area | Today | Comes with |
 |---|---|---|
-| Thread switching | `OS_SaveContext` / `OS_LoadContext` report "not implemented" | the 3DS main program (next step) |
 | ARM7 services: microphone, sound, wireless | not yet emulated | one service per PXI tag |
 | Display, 2D and 3D | the registers and VRAM exist; nothing draws them | the 2D renderer and the 3D command translator |
 | H-blank DMA (the game's wavy-screen effects), synchronous `MI_VBlankDmaCopy*` | reported as not implemented; the transfer stays pending | the 2D renderer (per-line timing) and the 3DS main loop |
 | VRAM banking | each CPU view of VRAM is its own block | the 2D renderer |
-| `OS_ResetSystem` (soft reset) | stores the reset parameter, then reports and stops | the 3DS main program |
-| Cartridge ROM filesystem (`FS_`) | read-only `rom:` archive backed by the user's libpak data pack, with file-ID and manifest-based path access | overlay-table metadata and other archives remain future work |
+| `OS_ResetSystem` (soft reset) | stores the reset parameter, then the program reports it and stops | restarting the game in place |
+| Cartridge ROM filesystem (`FS_`) | read-only `rom:` archive backed by the user's libpak data pack, with file-ID and manifest-based path access | directory listing and other archives, if the game needs them |
 
 **Nothing to do on the 3DS:** caches, tightly-coupled memory and the
 protection unit (`src/port_os.c`) are configuration for the DS's ARM946 CPU;
@@ -97,26 +100,25 @@ original ARM9 SDK uses to update its ring buffer. The RTC uses the platform
 C library's `localtime()`, so the 3DS clock/time zone must be configured
 by the hosting application.
 
-The port's async CARD operations currently complete their tasks inline,
-including callbacks, until DS context switching is implemented; applications
-must not rely on deferred callback timing. The PMIC returns battery OK and
+The services answer the way the ARM7 does: through the receive FIFO's
+interrupt, so a reply is taken as soon as the game has interrupts enabled
+(at once if it has, otherwise when it re-enables them). The card library runs
+its tasks on its own thread, as on the DS. The PMIC returns battery OK and
 tracks backlight/sound state but does **not** physically power off the console.
 Other ARM7 tags (including real sound output and wireless) remain unimplemented.
 
 Host and host32 `make test` execute `tests/test_arm7.c` using the original
 `CARD_*`, `RTC_*`, `PM_*` and `TP_*` SDK entry points and a removable
-temporary save, never ROM or actual user data. SDK adaptations are recorded in
-`patches/NitroSDK/0020-*.patch` and `0021-*.patch`, under
-`SDK_PORT_3DS` only.
+temporary save, never ROM or actual user data. The SDK's ARM9 side of these
+libraries is unchanged.
 
 ## Read the player's ROM data pack through NitroSDK
 
 The SDK `rom:` archive now uses the portable C libpak reader instead of DS
 cartridge hardware. It preserves the original `FSFile` API: open by path or
 original NitroFS file ID, read a slice, seek, get file length, and close.
-`FS_LoadOverlayImage` uses the same file-ID path; `FS_LoadOverlay` additionally
-requires valid overlay-table metadata, and executable overlays are **not**
-yet a functioning 3DS runtime.
+Overlays don't come from the pack: their code is linked into the program
+(see the table above).
 
 **Why a manifest sidecar?** The v1 pack intentionally stores only file IDs,
 not paths. For path-based `FS_OpenFile` the port reads the *small* original
@@ -129,9 +131,9 @@ nor the full pack is loaded into RAM. Copy both files privately to the SD card
 #include <nitro_port_fs.h>
 
 FS_Init(FS_DMA_NOT_USE);
-if (NitroPort_OpenPak("sdmc:/3ds/platinum/platinum3ds.pak",
-                      "sdmc:/3ds/platinum/manifest.json",
-                      "YOUR_BUILD_ID") != PAK_OK) {
+if (NitroPort_OpenPak("sdmc:/3ds/pokeplatinum/platinum3ds.pak",
+                      "sdmc:/3ds/pokeplatinum/manifest.json",
+                      "platinum-nitrofs-1") != PAK_OK) {
     /* Stop initialization: wrong pack, unsupported ROM, or missing sidecar. */
 }
 
@@ -154,8 +156,11 @@ make -C 3ds_port/nitro test
 ```
 
 Those tests generate a pack with `builder/pack.py` in ignored `build/`,
-and exercise the real SDK `FS_*` path and file-ID commands, read, seek,
-length and overlay-image payload loading. No copyrighted content is used.
+and exercise the real SDK `FS_*` path and file-ID commands, read, seek and
+length, and overlay loading resetting an overlay's data. No copyrighted
+content is used. `tests/test_threads.c` covers threads, interrupts with
+threads, timers, alarms and the PXI FIFO through the SDK's own API, with a
+clock the test drives.
 
 ## "Not implemented" reports
 

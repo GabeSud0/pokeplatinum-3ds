@@ -15,6 +15,11 @@
  * Tags without a handler: the message is accepted (so the SDK doesn't retry
  * forever) and reported once as not implemented. Anything waiting for an
  * answer on that tag will keep waiting, which the report makes easy to spot.
+ *
+ * Answers arrive as on the DS: queued in the receive FIFO, which raises the
+ * FIFO-receive interrupt; its handler (PXIi_HandlerRecvFifoNotEmpty) passes
+ * each message to the callback for its tag. So callbacks run in interrupt
+ * mode, and only when the CPU takes interrupts.
  */
 
 #include <nitro.h>
@@ -23,6 +28,14 @@
 static BOOL sInitialized;
 static PXIFifoCallback sRecvCallbacks[PXI_MAX_FIFO_TAG];
 static NitroPortArm7Handler sArm7Handlers[PXI_MAX_FIFO_TAG];
+
+/* The ARM7-to-ARM9 FIFO. The DS's holds 16 words; a bigger one means a
+ * burst of answers is never dropped. */
+#define RECV_FIFO_SIZE 256
+
+static PXIFifoMessage sRecvFifo[RECV_FIFO_SIZE];
+static u32 sRecvHead;
+static u32 sRecvCount;
 
 static const char *const sTagNames[PXI_MAX_FIFO_TAG] = {
     [PXI_FIFO_TAG_EX] = "PXI tag EX",
@@ -66,6 +79,12 @@ void PXI_InitFifo(void)
         /* The virtual ARM7 is always "up": SDK libraries check this before
          * talking to it, and would otherwise wait forever. */
         p->pxiHandleChecker[PXI_PROC_ARM7] = 0xFFFFFFFF;
+        sRecvHead = 0;
+        sRecvCount = 0;
+        /* As the SDK's PXI_InitFifo: answers come in by interrupt. */
+        (void)OS_ResetRequestIrqMask(OS_IE_FIFO_RECV);
+        (void)OS_SetIrqFunction(OS_IE_FIFO_RECV, PXIi_HandlerRecvFifoNotEmpty);
+        (void)OS_EnableIrqMask(OS_IE_FIFO_RECV);
     }
     (void)OS_RestoreInterrupts(enabled);
 }
@@ -112,7 +131,27 @@ int PXI_SendWordByFifo(int fifotag, u32 data, BOOL err)
 
 void PXIi_HandlerRecvFifoNotEmpty(void)
 {
-    /* Replies are delivered directly by NitroPort_Arm7Reply. */
+    /* The FIFO-receive interrupt: hand every waiting message to its tag's
+     * callback, in arrival order. */
+    for (;;) {
+        PXIFifoMessage msg;
+        OSIntrMode enabled = OS_DisableInterrupts();
+        int tag;
+
+        if (sRecvCount == 0) {
+            (void)OS_RestoreInterrupts(enabled);
+            break;
+        }
+        msg = sRecvFifo[sRecvHead];
+        sRecvHead = (sRecvHead + 1) % RECV_FIFO_SIZE;
+        sRecvCount--;
+        (void)OS_RestoreInterrupts(enabled);
+
+        tag = (int)msg.e.tag;
+        if (tag > 0 && tag < PXI_MAX_FIFO_TAG && sRecvCallbacks[tag]) {
+            sRecvCallbacks[tag]((PXIFifoTag)tag, msg.e.data, (BOOL)msg.e.err);
+        }
+    }
 }
 
 /* ------------------------------------------------------- port side */
@@ -126,9 +165,28 @@ void NitroPort_SetArm7Handler(int tag, NitroPortArm7Handler handler)
 
 void NitroPort_Arm7Reply(int tag, u32 data, BOOL err)
 {
-    /* Delivered straight away, as if the FIFO interrupt fired now. The SDK's
-     * waits poll a flag that this callback clears, so they finish. */
-    if (tag >= 0 && tag < PXI_MAX_FIFO_TAG && sRecvCallbacks[tag]) {
-        sRecvCallbacks[tag]((PXIFifoTag)tag, data, err);
+    PXIFifoMessage msg;
+    OSIntrMode enabled;
+
+    if (tag <= 0 || tag >= PXI_MAX_FIFO_TAG) {
+        return;
     }
+    msg.raw = 0;
+    msg.e.tag = (PXIFifoTag)tag;
+    msg.e.err = (u32)(err ? 1 : 0);
+    msg.e.data = data;
+
+    enabled = OS_DisableInterrupts();
+    if (sRecvCount == RECV_FIFO_SIZE) {
+        (void)OS_RestoreInterrupts(enabled);
+        NitroPort_Log("[nitro] PXI: receive FIFO full, answer on tag %d dropped", tag);
+        return;
+    }
+    sRecvFifo[(sRecvHead + sRecvCount) % RECV_FIFO_SIZE] = msg;
+    sRecvCount++;
+    (void)OS_RestoreInterrupts(enabled);
+
+    /* The FIFO is no longer empty: request its interrupt. It is taken now
+     * if the CPU takes interrupts, otherwise as soon as it does. */
+    NitroPort_RaiseIrq(OS_IE_FIFO_RECV);
 }

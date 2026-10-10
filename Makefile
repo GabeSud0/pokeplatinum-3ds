@@ -3,6 +3,8 @@
 #
 #   make              build the 3DS programs (needs devkitPro with 3ds-dev):
 #                     hello3d.3dsx and platinum-smoke.3dsx
+#   make game         the game for the 3DS: 3ds_port/game/build/3ds/pokeplatinum.3dsx
+#                     (runs with your own data pack: 3ds_port/game/README.md)
 #   make test         build for the PC and run every test suite
 #   make link-check   link the whole game for the 3DS and report what's missing
 #   make clean
@@ -16,7 +18,7 @@
 
 PORT := 3ds_port
 
-.PHONY: all 3ds hello3d smoke test link-check clean check-bootstrap
+.PHONY: all 3ds hello3d smoke game test link-check clean check-bootstrap
 
 all: 3ds
 
@@ -39,11 +41,20 @@ hello3d:
 smoke: check-bootstrap
 	@$(MAKE) --no-print-directory -C $(PORT)/platinum_smoke
 
+game: check-bootstrap
+	@$(MAKE) --no-print-directory -C $(PORT)/game TARGET=3ds program
+	@echo "Built $(PORT)/game/build/3ds/pokeplatinum.3dsx (contains game code: don't share it)"
+	@echo "It needs platinum3ds.pak and manifest.json in sdmc:/3ds/pokeplatinum/ (see $(PORT)/game/README.md)"
+
 test: check-bootstrap
 	@$(MAKE) --no-print-directory -C $(PORT)/nitro
 	@$(MAKE) --no-print-directory -C $(PORT)/nitrosystem
 	@$(MAKE) --no-print-directory -C $(PORT)/pak
-	@$(MAKE) --no-print-directory -C $(PORT)/game TARGET=host test
+	@$(MAKE) --no-print-directory -C $(PORT)/game TARGET=host test program
+	@$(PORT)/game/build/host/pokeplatinum-pc --check-overlays 2> build/overlay-check.log || \
+	    { cat build/overlay-check.log; exit 1; }
+	@tail -1 build/overlay-check.log
+	python3 tools/boot_smoke.py $(PORT)/game/build/host/pokeplatinum-pc
 	python3 -m unittest discover -s tools -p 'test_*.py'
 	python3 -m unittest discover -s builder -p 'test_*.py'
 	python3 tools/check_ci_artifacts.py

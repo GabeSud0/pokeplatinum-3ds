@@ -10,6 +10,7 @@
  * FS_LoadOverlayImage uses the same FS_OpenFileFast + FS_ReadFile path.
  */
 #include <nitro_port_fs.h>
+#include <nitro_port.h>
 
 #include <ctype.h>
 #include <limits.h>
@@ -279,6 +280,14 @@ done:
     return result;
 }
 
+/* A file the game asked for isn't in the pack: with a pack made from the
+ * game's own cartridge that shouldn't happen, so say which. Weak: a
+ * program can stop there instead. */
+__attribute__((weak)) void NitroPort_FileMissing(const char *path)
+{
+    NitroPort_Log("[nitro] the game asked for a file that isn't in the data pack: %s", path);
+}
+
 PakResult NitroPort_OpenPak(const char *pak_path, const char *manifest_path,
                             const char *expected_build_id)
 {
@@ -322,6 +331,7 @@ FSResult NitroPort_PakArchiveProc(FSFile *file, FSCommandType command)
                 return FS_RESULT_SUCCESS;
             }
         }
+        NitroPort_FileMissing(file->arg.findpath.path);
         return FS_RESULT_FAILURE;
     case FS_COMMAND_OPENFILEFAST:
         if (pak_find(sPak, file->arg.openfilefast.id.file_id, &size) != PAK_OK)

@@ -23,10 +23,11 @@ the same engine, so most of the 3DS backend should carry over.
 > NitroSystem build for the 3DS and pass their tests
 > ([`3ds_port/nitro`](3ds_port/nitro),
 > [`3ds_port/nitrosystem`](3ds_port/nitrosystem)), and all 1,012 of the
-> game's C files compile and link for the 3DS
-> ([`3ds_port/game`](3ds_port/game), with the reason for each one that
-> doesn't). The game doesn't run yet: no renderer, sound, file system or
-> main loop on the 3DS. **Nothing playable yet.**
+> game's C files compile and link into a 3DS program that starts the game
+> ([`3ds_port/game`](3ds_port/game)): `NitroMain` runs with the SDK's threads, interrupts, timers and
+> overlays working, reading files from your data pack, and the DS's second
+> CPU's services (power, clock, save chip, touch screen) answering. Next: the
+> renderer and sound. **Nothing playable yet.**
 
 ## This repository contains no game content
 

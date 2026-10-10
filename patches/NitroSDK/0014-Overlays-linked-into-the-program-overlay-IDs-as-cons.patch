@@ -1,0 +1,147 @@
+From d9156c70156a6ed26b04a114bfdf1a3752ee447b Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 22:07:08 -0700
+Subject: [PATCH 14/15] Overlays linked into the program; overlay IDs as
+ constants (SDK_PORT_3DS)
+
+The port links every overlay's code into the program, so there is no
+overlay table or image to read from a cartridge. FS_LoadOverlayInfo,
+FS_LoadOverlayImage(Async) and FS_ClearOverlayImage call the port instead
+(3ds_port/nitro/src/port_overlay.c), which describes each overlay and
+resets its data on loading, as reading a fresh copy did; FS_LoadOverlay,
+FS_StartOverlay and FS_UnloadOverlay work on top of them unchanged.
+
+FS_OVERLAY_ID(name) is the constant SDK_PORT_OVERLAY_ID_<name> from a
+header generated from the linker spec (tools/prepare_game_overlay_ids.py)
+rather than a linker symbol's address, which doesn't fit a 32-bit overlay
+ID on a 64-bit PC. The Metrowerks build is unchanged.
+---
+ include/nitro/fs/overlay.h    |  6 +++++-
+ libraries/fs/src/fs_overlay.c | 38 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 43 insertions(+), 1 deletion(-)
+
+diff --git a/include/nitro/fs/overlay.h b/include/nitro/fs/overlay.h
+index 8821560..847f2b3 100644
+--- a/include/nitro/fs/overlay.h
++++ b/include/nitro/fs/overlay.h
+@@ -16,10 +16,14 @@ typedef u32 FSOverlayID;
+ // GCC would assume its address is a multiple of 4 and fold comparisons such
+ // as FS_OVERLAY_ID(overlay5) == 5 to false; as bytes it assumes nothing.
+ #define FS_EXTERN_OVERLAY(name) extern u8 SDK_OVERLAY_ ## name ## _ID[1]
++// The port uses the number itself, a constant from a header generated from
++// the linker spec (tools/prepare_game_overlay_ids.py): an address doesn't
++// fit a 32-bit overlay ID on a 64-bit PC.
++#define FS_OVERLAY_ID(name) ((u32)SDK_PORT_OVERLAY_ID_ ## name)
+ #else
+ #define FS_EXTERN_OVERLAY(name) extern u32 SDK_OVERLAY_ ## name ## _ID[1]
+-#endif
+ #define FS_OVERLAY_ID(name) ((u32) & (SDK_OVERLAY_ ## name ## _ID))
++#endif
+ 
+ typedef void (*FSOverlayInitFunc) (void);
+ 
+diff --git a/libraries/fs/src/fs_overlay.c b/libraries/fs/src/fs_overlay.c
+index e8cbaa8..e9a0db4 100644
+--- a/libraries/fs/src/fs_overlay.c
++++ b/libraries/fs/src/fs_overlay.c
+@@ -56,6 +56,17 @@ static int fsi_digest_key_len = sizeof(fsi_def_digest_key);
+     #define FS_NEED_CARD    1
+ #endif
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: the overlays' code is linked into the program, so there is no
++ * overlay table or image to read from a cartridge. "Loading" an overlay
++ * resets its data, as reading a fresh copy from the cartridge did
++ * (3ds_port/nitro/src/port_overlay.c). */
++BOOL NitroPort_OverlayInfo(FSOverlayInfo * p_ovi, MIProcessor target, FSOverlayID id);
++BOOL NitroPort_OverlayLoadImage(const FSOverlayInfo * p_ovi);
++void NitroPort_OverlayClearBss(const FSOverlayInfo * p_ovi);
++void NitroPort_OverlayUnloaded(const FSOverlayInfo * p_ovi);
++#endif
++
+ static u32 FSi_GetOverlayBinarySize (const FSOverlayInfo *p_ovi)
+ {
+ 	u32 size = (((p_ovi->header.flag & FS_OVERLAY_FLAG_COMP) != 0)
+@@ -65,6 +76,10 @@ static u32 FSi_GetOverlayBinarySize (const FSOverlayInfo *p_ovi)
+ 
+ void FS_ClearOverlayImage (FSOverlayInfo *p_ovi)
+ {
++#ifdef SDK_PORT_3DS
++	NitroPort_OverlayClearBss(p_ovi);
++}
++#else
+ 	u8 *const addr = FS_GetOverlayAddress(p_ovi);
+ 	const u32 image_size = FS_GetOverlayImageSize(p_ovi);
+ 	const u32 total_size = FS_GetOverlayTotalSize(p_ovi);
+@@ -74,6 +89,7 @@ void FS_ClearOverlayImage (FSOverlayInfo *p_ovi)
+ #endif
+ 	MI_CpuFill8(addr + image_size, 0, total_size - image_size);
+ }
++#endif
+ 
+ #if defined(FS_IMPLEMENT)
+     FSFileID FS_GetOverlayFileID (const FSOverlayInfo *p_ovi)
+@@ -136,6 +152,9 @@ void FS_ClearOverlayImage (FSOverlayInfo *p_ovi)
+ 
+     BOOL FS_LoadOverlayInfo (FSOverlayInfo *p_ovi, MIProcessor target, FSOverlayID id)
+     {
++#ifdef SDK_PORT_3DS
++        return NitroPort_OverlayInfo(p_ovi, target, id);
++#else
+         CARDRomRegion *const pr = (target == MI_PROCESSOR_ARM9) ? &fsi_ovt9 : &fsi_ovt7;
+ 
+         if (pr->offset) {
+@@ -169,10 +188,22 @@ void FS_ClearOverlayImage (FSOverlayInfo *p_ovi)
+                                         p_ovt9->offset, p_ovt9->length,
+                                         p_ovt7->offset, p_ovt7->length);
+         }
++#endif
+     }
+ 
+     BOOL FS_LoadOverlayImageAsync (FSOverlayInfo *p_ovi, FSFile *p_file)
+     {
++#ifdef SDK_PORT_3DS
++        static u8 nothing;
++
++        /* Done at once. The caller then waits on and closes p_file, so
++         * hand back a finished (empty) file. */
++        FS_InitFile(p_file);
++        if (!NitroPort_OverlayLoadImage(p_ovi)) {
++            return FALSE;
++        }
++        return FS_CreateFileFromMemory(p_file, &nothing, 0);
++#endif
+         FS_InitFile(p_file);
+ 
+         if (!FS_OpenFileFast(p_file, FS_GetOverlayFileID(p_ovi))) {
+@@ -192,6 +223,9 @@ void FS_ClearOverlayImage (FSOverlayInfo *p_ovi)
+ 
+     BOOL FS_LoadOverlayImage (FSOverlayInfo *p_ovi)
+     {
++#ifdef SDK_PORT_3DS
++        return NitroPort_OverlayLoadImage(p_ovi);
++#else
+         FSFile p_file[1];
+         FS_InitFile(p_file);
+ 
+@@ -208,6 +242,7 @@ void FS_ClearOverlayImage (FSOverlayInfo *p_ovi)
+ 
+         (void)FS_CloseFile(p_file);
+         return TRUE;
++#endif
+     }
+ #endif
+ 
+@@ -348,6 +383,9 @@ void FS_EndOverlay (FSOverlayInfo *p_ovi)
+ BOOL FS_UnloadOverlayImage (FSOverlayInfo *p_ovi)
+ {
+ 	FS_EndOverlay(p_ovi);
++#ifdef SDK_PORT_3DS
++	NitroPort_OverlayUnloaded(p_ovi);
++#endif
+ 	return TRUE;
+ }
+ 
+-- 
+2.43.0
+

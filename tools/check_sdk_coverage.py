@@ -93,6 +93,12 @@ LIBC = {"memcpy", "memset", "memmove", "memcmp", "strcmp", "strlen", "strncpy",
         # Virtual ARM7 save persistence and local RTC use hosted C/newlib.
         "fflush", "fwrite", "localtime", "time"}
 
+# The port's platform layer (3ds_port/nitro/src/platform/): threads, their
+# signals and the clock come from POSIX on a PC and from libctru on the 3DS,
+# which the programs link.
+PLATFORM_PREFIXES = ("pthread_", "clock_gettime", "threadCreate", "threadExit",
+                     "LightSemaphore_", "svcGetThreadPriority", "svcGetSystemTick", "svcBreak")
+
 
 def library_unresolved(libs: list[Path], nm: str, have: set[str]) -> set[str]:
     """Symbols the libraries use but none defines, and libc doesn't provide."""
@@ -101,7 +107,8 @@ def library_unresolved(libs: list[Path], nm: str, have: set[str]) -> set[str]:
         out = subprocess.run([nm, "-u", str(lib)], check=True, capture_output=True, text=True).stdout
         used |= {line.split()[-1] for line in out.splitlines()
                  if line.strip() and not line.endswith(":")}
-    return {s for s in used - have if s not in LIBC and not s.startswith("__")}
+    return {s for s in used - have
+            if s not in LIBC and not s.startswith("__") and not s.startswith(PLATFORM_PREFIXES)}
 
 
 def main() -> int:

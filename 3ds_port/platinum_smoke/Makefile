@@ -18,6 +18,9 @@ CC := $(DEVKITARM)/bin/arm-none-eabi-gcc
 SMOKE := platinum-smoke
 BUILD := build
 GAME_LIB := ../game/build/3ds/libplatinum_game.a
+# Linked after the game library: it ends each overlay's data sections on a
+# 4-byte boundary, which 3dsxtool needs (tools/game_overlays.py).
+OVERLAY_TABLE := ../game/build/3ds/gen/overlay_table.o
 NNS_LIB := ../nitrosystem/build/3ds/libnitrosystem.a
 NITRO_LIB := ../nitro/build/3ds/libnitro.a
 
@@ -34,7 +37,7 @@ all: $(SMOKE).3dsx
 # Do not fork/stub original game functions. Build the SAME 33+ original
 # objects that the game library host/3DS CI already compiles and tests.
 original-game-libs:
-	@$(MAKE) --no-print-directory -C ../game TARGET=3ds lib
+	@$(MAKE) --no-print-directory -C ../game TARGET=3ds lib build/3ds/gen/overlay_table.o
 
 $(BUILD)/main.o: source/main.c source/platinum_api.h
 	@mkdir -p $(BUILD)
@@ -44,7 +47,7 @@ $(BUILD)/main.o: source/main.c source/platinum_api.h
 # changes are always seen by the native linker.
 $(SMOKE).elf: $(BUILD)/main.o original-game-libs
 	$(CC) $(LDFLAGS) $(BUILD)/main.o \
-	    -Wl,--start-group $(GAME_LIB) $(NNS_LIB) $(NITRO_LIB) -Wl,--end-group \
+	    -Wl,--start-group $(GAME_LIB) $(NNS_LIB) $(NITRO_LIB) -Wl,--end-group $(OVERLAY_TABLE) \
 	    -L$(CTRULIB)/lib -lctru -lm -o $@
 
 $(SMOKE).smdh:

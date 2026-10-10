@@ -1,6 +1,10 @@
 /*
  * The tests exercise original NitroSDK ARM9 APIs, not ARM7 handler internals.
  * A temporary 512 KiB image is created outside Git and deleted on exit.
+ *
+ * The SDK is started as the game starts it (firmware state, OS_Init, which
+ * starts the card library's thread, interrupts on), because the services'
+ * answers arrive through the PXI receive interrupt, as on the DS.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <nitro.h>
@@ -105,13 +109,19 @@ static void test_power(void)
 static void test_touch(void)
 {
     TPData sample, ring[4], display;
+    TPCalibrateParam calibration;
     TP_Init();
-    TP_SetCalibrateParam(NULL);
+    /* As the game does (system.c): the calibration from the firmware. */
+    CHECK(TP_GetUserInfo(&calibration) == TRUE);
+    TP_SetCalibrateParam(&calibration);
     NitroPort_SetTouch(TRUE, 123, 78);
+    CHECK(TP_RequestRawSampling(&sample) == 0);
+    CHECK(sample.x == 123 * NITRO_PORT_TP_RAW_SCALE && sample.y == 78 * NITRO_PORT_TP_RAW_SCALE);
     CHECK(TP_RequestCalibratedSampling(&sample) == 0);
     CHECK(sample.touch == TP_TOUCH_ON);
     CHECK(sample.validity == TP_VALIDITY_VALID);
     CHECK(sample.x == 123 && sample.y == 78);
+    CHECK(TP_RequestRawSampling(&sample) == 0);
     TP_GetCalibratedPoint(&display, &sample);
     CHECK(display.x == 123 && display.y == 78);
 
@@ -203,7 +213,14 @@ static void test_backup(void)
 
 int main(void)
 {
+    NitroPortFirmware firmware;
+
+    memset(&firmware, 0, sizeof(firmware));
+    NitroPort_BootFirmware(&firmware);
     NitroPort_InitArm7Services();
+    OS_Init();
+    (void)OS_EnableIrq();
+    (void)OS_EnableInterrupts();
     test_backup();
     test_rtc();
     test_power();
