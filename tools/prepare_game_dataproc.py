@@ -51,6 +51,11 @@ from prepare_game_ordergen_naix import folder_names  # noqa: E402
 from prepare_game_text_bank_headers import render as render_text_bank  # noqa: E402
 
 CC = os.environ.get("HOST_CC", "cc")
+# nitrogfx needs libpng. On Windows (MSYS2) libpng only comes as a MinGW
+# package, which MSYS2's own gcc can't link against: there, nitrogfx is built
+# with the MinGW gcc (NITROGFX_CC=/mingw64/bin/gcc) and the other tools with
+# MSYS2's gcc. Everywhere else both are the same compiler.
+NITROGFX_CC = os.environ.get("NITROGFX_CC", CC)
 CFLAGS = ["-std=gnu17", "-O2", "-w"]
 
 
@@ -158,7 +163,8 @@ def build_nitrogfx(upstream: Path, work: Path) -> Path:
                                                      (folder / "meson.build").read_text(encoding="utf-8"))]
     exe = work / "nitrogfx"
     if not exe.is_file() or exe.stat().st_mtime < max(p.stat().st_mtime for p in sources):
-        run([CC, *CFLAGS, "-D_GNU_SOURCE=1", *map(str, sources), "-lpng", "-lz", "-lm", "-o", str(exe)])
+        run([NITROGFX_CC, *CFLAGS, "-D_GNU_SOURCE=1", *map(str, sources), "-lpng", "-lz", "-lm",
+             "-o", str(exe)])
     return exe
 
 
