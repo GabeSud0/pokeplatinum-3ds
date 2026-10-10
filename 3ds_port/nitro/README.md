@@ -43,13 +43,14 @@ SDK still builds the original game with Metrowerks.
 | BIOS calls | CpuSet, CpuFastSet, CRC-16, square root, divide, decompression | `src/svc.c` |
 | GBA slot | reports "no cartridge", which is correct on a 3DS (no Pal Park) | `src/ctrdg.c` |
 | The ARM7 link (PXI) | message routing between the game's libraries and port handlers | `src/pxi.c` |
+| Virtual ARM7: card backup, RTC, PM and touch | save-card SPI requests, BCD local clock, PMIC replies, shared touch samples and autosampling | `src/port_arm7.c`, `port_card.c`, `port_rtc.c`, `port_pm.c`, `port_tp.c` |
 
 **Not yet: hooks are in place, the behaviour comes in later steps**
 
 | Area | Today | Comes with |
 |---|---|---|
 | Thread switching | `OS_SaveContext` / `OS_LoadContext` report "not implemented" | the 3DS main program (next step) |
-| ARM7 services: clock, touch screen, power, microphone, sound, save chip, wireless | messages are accepted and reported once per service; nothing answers | one handler per service (`NitroPort_SetArm7Handler`) |
+| ARM7 services: microphone, sound, wireless | not yet emulated | one service per PXI tag |
 | Display, 2D and 3D | the registers and VRAM exist; nothing draws them | the 2D renderer and the 3D command translator |
 | H-blank DMA (the game's wavy-screen effects), synchronous `MI_VBlankDmaCopy*` | reported as not implemented; the transfer stays pending | the 2D renderer (per-line timing) and the 3DS main loop |
 | VRAM banking | each CPU view of VRAM is its own block | the 2D renderer |
@@ -64,6 +65,49 @@ return straight away.
 **Not built**, because the game doesn't use them: download play (mb), gesture
 recognition (prc), wireless voice (wvr), the China-edition boot screen,
 streaming decompression, and a few debug libraries. See the `Makefile`.
+
+## Virtual ARM7 services (card, RTC, power, touch)
+
+Call this once **before** the original NitroSDK initializes CARD, RTC, PM
+or TP (typically just after bringing up the portable platform):
+
+```c
+#include <nitro_port.h>
+
+NitroPort_SetSavePath("sdmc:/3ds/platinum/platinum.sav");
+NitroPort_InitArm7Services();
+```
+
+The save file is **private, raw 512 KiB FLASH data** (the same bytes as
+an emulator `.sav`), created as 0xFF if it does not exist. Every successful
+write or erase calls `fflush()` before the original CARD API reports
+completion. Existing saves must be exactly 512 KiB; an invalid or unreadable
+image causes `CARD_IdentifyBackup` to fail rather than truncating it.
+The 3DS main program must mount the SD stdio filesystem before using an
+`sdmc:` path. The host uses an ordinary filesystem path.
+
+Each 3DS frame, forward touch-screen input in **DS bottom-screen coordinates**:
+
+```c
+NitroPort_SetTouch(touch_down, x_0_to_255, y_0_to_191);
+```
+
+With TP autosampling enabled this also emits the sampling notification the
+original ARM9 SDK uses to update its ring buffer. The RTC uses the platform
+C library's `localtime()`, so the 3DS clock/time zone must be configured
+by the hosting application.
+
+The port's async CARD operations currently complete their tasks inline,
+including callbacks, until DS context switching is implemented; applications
+must not rely on deferred callback timing. The PMIC returns battery OK and
+tracks backlight/sound state but does **not** physically power off the console.
+Other ARM7 tags (including real sound output and wireless) remain unimplemented.
+
+Host and host32 `make test` execute `tests/test_arm7.c` using the original
+`CARD_*`, `RTC_*`, `PM_*` and `TP_*` SDK entry points and a removable
+temporary save, never ROM or actual user data. SDK adaptations are recorded in
+`patches/NitroSDK/0020-*.patch` and `0021-*.patch`, under
+`SDK_PORT_3DS` only.
 
 ## Read the player's ROM data pack through NitroSDK
 

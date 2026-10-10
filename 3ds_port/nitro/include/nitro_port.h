@@ -90,6 +90,21 @@ void NitroPort_SetArm7Handler(int tag, NitroPortArm7Handler handler);
 /* Send a message from the "ARM7" back to the game's callback for `tag`. */
 void NitroPort_Arm7Reply(int tag, u32 data, BOOL err);
 
+/* Register the emulated save-card, RTC, power and touch services.
+ * Call before CARD/RTC/PM/TP initialization; registration is idempotent.
+ * No DS ARM7 thread or libctru is required. */
+void NitroPort_InitArm7Services(void);
+
+/* Save-card backing store: raw 512 KiB FLASH image, emulator .sav layout.
+ * Set before CARD_IdentifyBackup. A missing file is created filled with 0xFF.
+ * Changing the path while a card request is active is not supported. */
+void NitroPort_SetSavePath(const char *path);
+
+/* The 3DS main loop supplies DS bottom-screen coordinates once per frame.
+ * x is clamped to 0..255, y to 0..191; release ignores coordinates.
+ * When TP auto-sampling is enabled, each call publishes one sample. */
+void NitroPort_SetTouch(BOOL down, u16 x, u16 y);
+
 #ifdef __cplusplus
 }
 #endif
