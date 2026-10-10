@@ -19,7 +19,7 @@ static int sFailed;
     ++sChecks;                                                               \
     if (!(cond)) {                                                           \
         ++sFailed;                                                           \
-        fprintf(stderr, "FAIL %s:%d: %s\\n", __FILE__, __LINE__, #cond);      \
+        fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);      \
     }                                                                        \
 } while (0)
 
@@ -147,16 +147,11 @@ static void test_backup(void)
     close(descriptor);
     remove(save_path);
 
-    fprintf(stderr, "arm7 test: set save path\\n");
     NitroPort_SetSavePath(save_path);
-    fprintf(stderr, "arm7 test: CARD_Init\\n");
     CARD_Init();
-    fprintf(stderr, "arm7 test: lock backup\\n");
     lock_id = OS_GetLockID();
     CARD_LockBackup(lock_id);
-    fprintf(stderr, "arm7 test: identify backup\\n");
     CHECK(CARD_IdentifyBackup(CARD_BACKUP_TYPE_FLASH_4MBITS));
-    fprintf(stderr, "arm7 test: identify finished\\n");
     CHECK(CARD_GetBackupTotalSize() == 512u * 1024u);
     CHECK(CARD_GetBackupPageSize() == 256u);
     CHECK(CARD_GetBackupSectorSize() == 65536u);
@@ -208,16 +203,11 @@ static void test_backup(void)
 
 int main(void)
 {
-    fprintf(stderr, "arm7 test: initialize services\\n");
     NitroPort_InitArm7Services();
-    fprintf(stderr, "arm7 test: card\\n");
     test_backup();
-    fprintf(stderr, "arm7 test: rtc\\n");
     test_rtc();
-    fprintf(stderr, "arm7 test: pm\\n");
     test_power();
-    fprintf(stderr, "arm7 test: tp\\n");
     test_touch();
-    printf("virtual ARM7 services: %d checks, %d failures\\n", sChecks, sFailed);
+    printf("virtual ARM7 services: %d checks, %d failures\n", sChecks, sFailed);
     return sFailed ? 1 : 0;
 }
