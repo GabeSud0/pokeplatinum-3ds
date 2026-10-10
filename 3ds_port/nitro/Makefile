@@ -229,9 +229,17 @@ $(FS_FIXTURE_STAMP): tests/make_fs_fixture.py ../../builder/pack.py
 	python3 tests/make_fs_fixture.py $(FS_FIXTURE_DIR)
 	@touch $@
 
-test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP)
+# Call the actual ARM9 CARD/RTC/PM/TP APIs against virtual ARM7 handlers.
+# The integration executable creates its own temporary .sav and removes it.
+ARM7_TEST_BIN := $(OUT)/test_arm7
+
+$(ARM7_TEST_BIN): tests/test_arm7.c $(LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
+
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(ARM7_TEST_BIN)
 	./$(TEST_BIN)
 	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
+	./$(ARM7_TEST_BIN)
 
 clean:
 	rm -rf build
