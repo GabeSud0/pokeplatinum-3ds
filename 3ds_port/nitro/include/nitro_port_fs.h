@@ -26,6 +26,10 @@ PakResult NitroPort_OpenPak(const char *pak_path, const char *manifest_path,
 void NitroPort_ClosePak(void);
 BOOL NitroPort_IsPakOpen(void);
 
+/* Called when the game asks for a path the pack doesn't have. Weak; the
+ * default logs it. */
+void NitroPort_FileMissing(const char *path);
+
 /* NitroSDK ROM archive command processor (SDK_PORT_3DS only). */
 FSResult NitroPort_PakArchiveProc(FSFile *file, FSCommandType command);
 

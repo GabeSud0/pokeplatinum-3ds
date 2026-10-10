@@ -1,0 +1,124 @@
+From 3c38f9b741855fd913af028b95cba6a8e8fffdad Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 22:07:16 -0700
+Subject: [PATCH] Function-address tables as uintptr_t (SDK_PORT_3DS)
+
+bag/main.c, underground/menus.c and underground/player_talk.c keep
+function addresses in u32 tables (cast back when called). On the DS and
+3DS u32 is the size of a pointer; on a 64-bit PC a function's address cast
+to u32 isn't a constant, so the files didn't compile there. The port
+declares those tables uintptr_t, the same size on the DS and 3DS. The
+original build is unchanged.
+---
+ src/applications/bag/main.c   | 19 +++++++++++++++++++
+ src/underground/menus.c       | 17 +++++++++++++++++
+ src/underground/player_talk.c | 14 ++++++++++++++
+ 3 files changed, 50 insertions(+)
+
+diff --git a/src/applications/bag/main.c b/src/applications/bag/main.c
+index 5b57d66e..5636b977 100644
+--- a/src/applications/bag/main.c
++++ b/src/applications/bag/main.c
+@@ -319,6 +319,24 @@ static const u8 sPocketSizes[POCKET_MAX] = {
+     [POCKET_KEY_ITEMS] = KEY_ITEM_POCKET_SIZE
+ };
+ 
++#ifdef SDK_PORT_3DS
++// uintptr_t (the size of u32 on the DS and 3DS): a function's address
++// cast to u32 isn't a constant on a 64-bit PC.
++static const uintptr_t sItemActionFuncs[] = {
++    [ITEM_ACTION_USE] = (uintptr_t)ItemActionFunc_Use,
++    [ITEM_ACTION_WALK] = (uintptr_t)ItemActionFunc_Use,
++    [ITEM_ACTION_CHECK] = (uintptr_t)ItemActionFunc_Use,
++    [ITEM_ACTION_PLANT] = (uintptr_t)ItemActionFunc_Use,
++    [ITEM_ACTION_OPEN] = (uintptr_t)ItemActionFunc_Use,
++    [ITEM_ACTION_TRASH] = (uintptr_t)ItemActionFunc_Trash,
++    [ITEM_ACTION_REGISTER] = (uintptr_t)ItemActionFunc_Register,
++    [ITEM_ACTION_DESELECT] = (uintptr_t)ItemActionFunc_Deselect,
++    [ITEM_ACTION_GIVE] = (uintptr_t)ItemActionFunc_Give,
++    [ITEM_ACTION_CHECK_TAG] = (uintptr_t)ItemActionFunc_CheckTag,
++    [ITEM_ACTION_CONFIRM] = (uintptr_t)ItemActionFunc_Confirm,
++    [ITEM_ACTION_CANCEL] = MENU_CANCEL
++};
++#else
+ static const u32 sItemActionFuncs[] = {
+     [ITEM_ACTION_USE] = (u32)ItemActionFunc_Use,
+     [ITEM_ACTION_WALK] = (u32)ItemActionFunc_Use,
+@@ -333,6 +351,7 @@ static const u32 sItemActionFuncs[] = {
+     [ITEM_ACTION_CONFIRM] = (u32)ItemActionFunc_Confirm,
+     [ITEM_ACTION_CANCEL] = MENU_CANCEL
+ };
++#endif
+ 
+ // clang-format off
+ static const u16 sItemSpriteBoxTiles[] = {
+diff --git a/src/underground/menus.c b/src/underground/menus.c
+index 1fd5fe83..1742028b 100644
+--- a/src/underground/menus.c
++++ b/src/underground/menus.c
+@@ -155,6 +155,22 @@ static const WindowTemplate sYesNoWindowTemplate = {
+ };
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++// uintptr_t (the size of u32 on the DS and 3DS): a function's address
++// cast to u32 isn't a constant on a 64-bit PC.
++static const struct {
++    u32 bankEntry;
++    uintptr_t callback;
++} sUndergroundMenuOptions[] = {
++    [UNDERGROUND_START_MENU_OPTION_TRAPS]     = { .bankEntry = UndergroundCommon_Text_Traps,          .callback = (uintptr_t)UndergroundMenu_OpenTrapsMenu      },
++    [UNDERGROUND_START_MENU_OPTION_SPHERES]   = { .bankEntry = UndergroundCommon_Text_Spheres,        .callback = (uintptr_t)UndergroundMenu_OpenSpheresMenu    },
++    [UNDERGROUND_START_MENU_OPTION_GOODS]     = { .bankEntry = UndergroundCommon_Text_Goods,          .callback = (uintptr_t)UndergroundMenu_OpenGoodsMenu      },
++    [UNDERGROUND_START_MENU_OPTION_TREASURES] = { .bankEntry = UndergroundCommon_Text_Treasures,      .callback = (uintptr_t)UndergroundMenu_OpenTreasuresMenu  },
++    [UNDERGROUND_START_MENU_OPTION_TRAINER]   = { .bankEntry = UndergroundCommon_Text_PlayerTemplate, .callback = (uintptr_t)UndergroundMenu_OpenTrainerRecords },
++    [UNDERGROUND_START_MENU_OPTION_GO_UP]     = { .bankEntry = UndergroundCommon_Text_GoUp,           .callback = (uintptr_t)UndergroundMenu_GoUpCallback       },
++    [UNDERGROUND_START_MENU_OPTION_CLOSE]     = { .bankEntry = UndergroundCommon_Text_Close,          .callback = (uintptr_t)UndergroundMenu_CloseCallback      }
++};
++#else
+ static const struct {
+     u32 bankEntry;
+     u32 callback;
+@@ -167,6 +183,7 @@ static const struct {
+     [UNDERGROUND_START_MENU_OPTION_GO_UP]     = { .bankEntry = UndergroundCommon_Text_GoUp,           .callback = (u32)UndergroundMenu_GoUpCallback       },
+     [UNDERGROUND_START_MENU_OPTION_CLOSE]     = { .bankEntry = UndergroundCommon_Text_Close,          .callback = (u32)UndergroundMenu_CloseCallback      }
+ };
++#endif
+ // clang-format on
+ 
+ static const ListMenuTemplate sListMenuTemplate = {
+diff --git a/src/underground/player_talk.c b/src/underground/player_talk.c
+index 910938cf..ad51336d 100644
+--- a/src/underground/player_talk.c
++++ b/src/underground/player_talk.c
+@@ -212,6 +212,19 @@ static void UndergroundTalk_UpdateCursorPos(TalkMenu *menu);
+ static TalkMenu *sCurrentTalkMenu = NULL;
+ static ResponseMenu *sCurrentResponseMenu = NULL;
+ 
++#ifdef SDK_PORT_3DS
++// uintptr_t (the size of u32 on the DS and 3DS): a function's address
++// cast to u32 isn't a constant on a 64-bit PC.
++static const struct {
++    u32 bankEntry;
++    uintptr_t callback;
++} sTalkOptions[] = {
++    { UndergroundCommon_Text_Greet, (uintptr_t)UndergroundTalk_OfferExchangeTrainerCases },
++    { UndergroundCommon_Text_Question, (uintptr_t)UndergroundTalk_StartAskingQuestions },
++    { UndergroundCommon_Text_GiveGoods, (uintptr_t)UndergroundTalk_OpenGiveGiftMenu },
++    { UndergroundCommon_Text_Exit, (uintptr_t)UndergroundTalk_CancelTalk }
++};
++#else
+ static const struct {
+     u32 bankEntry;
+     u32 callback;
+@@ -221,6 +234,7 @@ static const struct {
+     { UndergroundCommon_Text_GiveGoods, (u32)UndergroundTalk_OpenGiveGiftMenu },
+     { UndergroundCommon_Text_Exit, (u32)UndergroundTalk_CancelTalk }
+ };
++#endif
+ 
+ static const ListMenuTemplate sListMenuTemplate = {
+     .choices = NULL,
+-- 
+2.43.0
+

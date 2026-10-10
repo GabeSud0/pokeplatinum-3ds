@@ -43,6 +43,13 @@ class OverlayIdTests(unittest.TestCase):
         self.assertIn("SDK_OVERLAY_overlay5_ID = 1;", text)
         self.assertIn("SDK_OVERLAY_battle_ID = 2;", text)
 
+    def test_header_has_the_same_numbers(self):
+        header = overlays.render_header(overlays.overlay_names(LSF))
+        self.assertIn("SDK_PORT_OVERLAY_ID_dummy1 = 0,", header)
+        self.assertIn("SDK_PORT_OVERLAY_ID_overlay5 = 1,", header)
+        self.assertIn("SDK_PORT_OVERLAY_ID_battle = 2,", header)
+        self.assertTrue(header.startswith("/* Generated"))
+
     def test_rejects_empty_or_duplicate(self):
         with self.assertRaises(ValueError):
             overlays.overlay_names("Static main\n{\n}\n")

@@ -84,6 +84,26 @@ jobs:
           path: build/game-link-report/3ds.md
           if-no-files-found: ignore
 
+      # Built to check that it links and converts to a .3dsx, but never
+      # uploaded: it contains compiled game code. Build it yourself to run
+      # it with your own data pack (3ds_port/game/README.md).
+      - name: Build the game program for the 3DS
+        shell: bash
+        run: |
+          set -o pipefail
+          make -C 3ds_port/game TARGET=3ds program 2>&1 | tee build-3ds-program.log || {
+            grep -iE "error|undefined reference|\*\*\*" build-3ds-program.log \
+              | head -20 | sed 's/^/::error::/' || true
+            tail -15 build-3ds-program.log | sed 's/^/::error title=Last lines::/' || true
+            exit 1
+          }
+
+      - name: Check where the overlays' data landed in the 3DS program
+        run: >
+          python3 tools/check_program_elf.py
+          --readelf "$DEVKITARM/bin/arm-none-eabi-readelf"
+          3ds_port/game/build/3ds/pokeplatinum.elf
+
       # Built to check that it links, but never uploaded: it contains compiled
       # game code. Build it yourself to run it (see README.md).
       - name: Link native original-Platinum smoke application
@@ -150,6 +170,18 @@ jobs:
       - name: Compile and smoke-test original game code on PC
         run: timeout 1800 make -j"$(nproc)" -C 3ds_port/game TARGET=host test
 
+      - name: Build the game's PC runner
+        run: timeout 900 make -C 3ds_port/game TARGET=host program
+
+      - name: Every overlay resets its data when the game's overlay manager loads it
+        run: |
+          3ds_port/game/build/host/pokeplatinum-pc --check-overlays 2> overlay-check.log \
+            || { cat overlay-check.log; exit 1; }
+          tail -1 overlay-check.log
+
+      - name: Start the game on the PC (made-up data pack; says how far it gets)
+        run: python tools/boot_smoke.py 3ds_port/game/build/host/pokeplatinum-pc
+
       - name: Survey original game C compilation blockers (PC)
         run: timeout 300 make -C 3ds_port/game TARGET=host probe PROBE_LIMIT=80 PROBE_TIMEOUT=7
 
@@ -205,6 +237,18 @@ jobs:
 
       - name: Link the whole game on 32-bit PC (report of missing symbols)
         run: make -C 3ds_port/game TARGET=host32 link-check
+
+      - name: Build the game's 32-bit PC runner
+        run: timeout 900 make -C 3ds_port/game TARGET=host32 program
+
+      - name: Every overlay resets its data when loaded (32-bit)
+        run: |
+          3ds_port/game/build/host32/pokeplatinum-pc --check-overlays 2> overlay-check.log \
+            || { cat overlay-check.log; exit 1; }
+          tail -1 overlay-check.log
+
+      - name: Start the game on a 32-bit PC (made-up data pack)
+        run: python tools/boot_smoke.py 3ds_port/game/build/host32/pokeplatinum-pc
 
       - name: Upload 32-bit full-game link report
         uses: actions/upload-artifact@v4

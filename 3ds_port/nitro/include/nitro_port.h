@@ -41,17 +41,39 @@ extern u32 OSi_PortCpsr;
 /* ------------------------------------------------------------- interrupts */
 
 /* Hardware raising an interrupt: sets the bits in IF and, if the CPU has
- * interrupts enabled, runs OS_IrqHandler for each pending one. */
+ * interrupts enabled, runs OS_IrqHandler for each pending one (in the CPU's
+ * interrupt mode; a thread switch the interrupt asks for happens at its
+ * end). NitroPort_RaiseIrq(0) takes interrupts that are already pending. */
 void NitroPort_RaiseIrq(u32 mask);
 
 /* Called by OS_Halt: the DS CPU sleeps until the next interrupt. Weak.
- * The default advances one frame: it calls NitroPort_OnFrame() and raises
- * the V-blank interrupt. */
+ * The default advances one frame: it calls NitroPort_OnFrame(), starts
+ * V-blank (NitroPort_VBlankStarts, V-blank DMAs) and requests its
+ * interrupt, which is taken if the CPU has interrupts enabled. */
 void NitroPort_Halt(void);
 
 /* The port's per-frame hook (present the image, read input, run sound ...).
  * Weak, empty by default. Called from the default NitroPort_Halt. */
 void NitroPort_OnFrame(void);
+
+/* ------------------------------------------------------------ timers, clock */
+
+/* The DS's four timers and the V-count run in software from a real clock
+ * (src/port_timer.c). */
+
+/* The clock, in DS bus cycles (33,513,982 a second) since it started. */
+u64 NitroPort_Cycles(void);
+
+/* Tests: drive the clock yourself (NULL: back to the real clock). */
+void NitroPort_SetClockSource(u64 (*source)(void));
+
+/* Bring the timers (and V-count) up to date with the clock, requesting
+ * their overflow interrupts. The port does this every frame and whenever
+ * the SDK reads the tick. */
+void NitroPort_SyncTimers(void);
+
+/* V-blank starts now (V-count 192). Called by NitroPort_Halt. */
+void NitroPort_VBlankStarts(void);
 
 /* -------------------------------------------------------------------- DMA */
 
@@ -67,15 +89,83 @@ void NitroPort_DmaVBlank(void);
 
 /* ---------------------------------------------------------------- threads */
 
-/* OS_SaveContext / OS_LoadContext. Weak; real thread switching comes with
- * the 3DS main program. The defaults only report that they were called. */
+/* OS_SaveContext / OS_LoadContext: every SDK thread is played by a thread
+ * of the machine, one running at a time (src/port_thread.c). */
 BOOL NitroPort_SaveContext(void *context);
 void NitroPort_LoadContext(void *context);
+
+/* The end of an interrupt: wake the threads in OS_WaitIrq and switch if a
+ * switch was asked for (OS_IrqHandler_ThreadSwitch calls it). */
+void NitroPort_IrqThreadSwitch(void);
+
+/* Tests: how many machine threads currently play SDK threads. */
+int NitroPort_ThreadsInUse(void);
 
 /* ----------------------------------------------------------------- reset */
 
 /* OS_ResetSystem: restart the game. Weak; the default reports and stops. */
 void NitroPort_ResetSystem(u32 parameter) __attribute__((noreturn));
+
+/* OS_Terminate: the game stopped itself for good. Weak; the default
+ * reports and aborts. The main program shows it instead. */
+void NitroPort_Terminate(void) __attribute__((noreturn));
+
+/* ----------------------------------------------- firmware state, buttons */
+
+/* What the DS firmware hands a game: its cartridge header and the user's
+ * settings (src/port_boot.c). */
+typedef struct NitroPortFirmware {
+    const void *romHeader;     /* copied to HW_ROM_HEADER_BUF */
+    u32 romHeaderSize;
+    const u16 *nickname;       /* UTF-16, up to 10 characters, 0-terminated */
+    u8 language;               /* NVRAM_CONFIG_LANG_* */
+    u8 birthMonth;
+    u8 birthDay;
+    u8 favoriteColor;          /* 0-15 */
+    u8 macAddress[6];
+    s64 rtcOffset;             /* the "clock was changed" offset games save */
+} NitroPortFirmware;
+
+/* Write the firmware's state into the port's main memory. Call before the
+ * game's main (and OS_Init). */
+void NitroPort_BootFirmware(const NitroPortFirmware *firmware);
+
+/* The touch screen calibration NitroPort_BootFirmware stores maps a screen
+ * position (x, y) to raw readings (x, y) * NITRO_PORT_TP_RAW_SCALE, so a
+ * touch-screen ARM7 service reports raw values in that scale. */
+#define NITRO_PORT_TP_RAW_SCALE 16
+
+/* The buttons held now (PAD_BUTTON_* / PAD_KEY_* bits) and the lid: written
+ * to the key register and the ARM7's X/Y/lid word, as the DS has them. */
+void NitroPort_SetButtons(u16 held, BOOL lidClosed);
+
+/* --------------------------------------------------------------- overlays */
+
+/* Where the DS loaded an overlay (which of the game's overlay slots it uses). */
+enum {
+    NITRO_PORT_OVERLAY_MAIN = 0,
+    NITRO_PORT_OVERLAY_ITCM = 1,
+    NITRO_PORT_OVERLAY_DTCM = 2
+};
+
+/* One overlay of the program, in overlay-ID order: the bounds of its
+ * initialised data and of its zero-initialised data (NULL if none). */
+typedef struct NitroPortOverlay {
+    const char *name;
+    u32 region;
+    u8 *dataStart;
+    u8 *dataEnd;
+    u8 *bssStart;
+    u8 *bssEnd;
+} NitroPortOverlay;
+
+/* Give the port the program's overlays, before any game code runs. A copy
+ * of each one's initial data is taken; FS_LoadOverlay then restores it and
+ * clears the zero-initialised part, as reading the overlay from the
+ * cartridge did (src/port_overlay.c). */
+void NitroPort_SetOverlays(const NitroPortOverlay *overlays, u32 count);
+u32 NitroPort_OverlayCount(void);
+BOOL NitroPort_IsOverlayLoaded(u32 id);
 
 /* ------------------------------------------------------- the virtual ARM7 */
 

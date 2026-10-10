@@ -1,9 +1,114 @@
-# Game source GCC build
+# The game
 
 The game's **original C** (pinned pret/pokeplatinum, `build/upstream/src/`),
-compiled with GCC for the 3DS and, for tests, the PC. It does **not**
-reimplement Pokémon Platinum, package game data or produce a playable
-executable.
+compiled with GCC, and the programs that run it:
+
+- **`pokeplatinum.3dsx`**: the game on a 3DS (or in Azahar).
+- **`pokeplatinum-pc`**: the same game code on a PC, without a screen, for
+  finding out quickly how far it gets and where it stops.
+
+Both read the game's files from **your own data pack**, made from your own
+cartridge by the builder. Nothing from the game is in this repository, and
+programs built from it are for your own use: never share them.
+
+**Where it stands:** the game starts. `NitroMain` runs with the SDK's
+threads, interrupts, timers and overlays working, and reads its files from
+the data pack. It stops at the first thing the port doesn't do yet: today
+that's the ARM7's services (power, clock, save chip, touch screen), which
+are being written; after them, the renderer and sound. There is no picture
+yet; the 3DS program shows its log instead.
+
+## Running it on a 3DS
+
+1. **Build the program** (devkitPro with `3ds-dev`, Python 3, Git):
+
+   ```sh
+   python tools/bootstrap.py
+   make game        # -> 3ds_port/game/build/3ds/pokeplatinum.3dsx
+   ```
+
+2. **Make your data pack** from your own Pokémon Platinum (USA) dump, on
+   your computer ([`builder/`](../../builder)):
+
+   ```sh
+   python builder/extract_rom.py /path/to/platinum.nds      # -> data_pack/
+   python builder/pack.py data_pack/ -o platinum3ds.pak
+   ```
+
+3. **Copy to the SD card** (Azahar: its emulated SD card folder):
+
+   ```
+   sdmc:/3ds/pokeplatinum/platinum3ds.pak
+   sdmc:/3ds/pokeplatinum/manifest.json        (from data_pack/)
+   sdmc:/3ds/pokeplatinum.3dsx                 (anywhere the Homebrew Launcher looks)
+   ```
+
+4. **Run it** from the Homebrew Launcher, or open the `.3dsx` in Azahar.
+
+What you'll see: the top screen shows the program's status, the bottom
+screen the log, which is also written to `sdmc:/3ds/pokeplatinum/log.txt`.
+When the game stops at something the port doesn't do yet, the log says
+what; after 5 seconds without a frame the program says the game is stuck,
+and HOME → Close quits. If anything crashes, the log has the crash address:
+look it up in `build/3ds/pokeplatinum.elf` with
+`arm-none-eabi-addr2line -e pokeplatinum.elf <address>`. Failed `GF_ASSERT`s
+in the game are logged with the caller's address the same way.
+
+The program uses the console's profile for the DS user settings the game
+reads (name, birthday, language).
+
+## Running it on a PC
+
+```sh
+make -C 3ds_port/game TARGET=host32 program       # 32-bit, as on the 3DS (gcc-multilib)
+3ds_port/game/build/host32/pokeplatinum-pc platinum3ds.pak data_pack/manifest.json
+```
+
+Linux (or WSL) with GCC. Everything the port logs goes to stderr with the
+frame number; a crash prints a backtrace. `--frames N` stops after N
+frames; `--stop-at-missing-file` stops at the first file the pack doesn't
+have. `TARGET=host` (64-bit) works too, but Nintendo's graphics formats
+hold 4-byte pointers, so the game can't get far that way once it loads
+graphics.
+
+Without a data pack, two checks run in CI:
+
+- `pokeplatinum-pc --check-overlays` loads every overlay with the game's own
+  overlay manager and checks that each load resets the overlay's data.
+- `python tools/boot_smoke.py <pokeplatinum-pc>` starts the game with a
+  made-up pack and reports where it stops.
+
+## How the program runs the game
+
+`app/platinum.c` does what the DS's firmware and cartridge loader did before
+`NitroMain`, then calls it; `app/main_3ds.c` and `app/main_pc.c` are the
+machine-specific parts. The rest is in libnitro ([`../nitro`](../nitro)):
+
+- **Firmware state.** The cartridge header (the game checks its maker code
+  at boot), the user's settings, a MAC address (fixed, so a save stays "from
+  this DS" on every console) and the button/lid state go into the port's
+  DS memory, where the game and the SDK read them.
+- **Threads.** NitroSDK schedules its threads itself (the game's main
+  thread, the card library's, the idle thread ...). Each one is played by a
+  3DS thread, and only one runs at a time, handed over exactly where the
+  SDK switches: so the SDK's scheduling is unchanged, priorities and all.
+- **Frames.** When every thread waits, the SDK's idle thread halts; the
+  port shows the frame, waits for the 3DS's V-blank, reads the buttons and
+  touch screen, and raises the DS's V-blank interrupt, which wakes the
+  game's main loop.
+- **Timers.** The DS's four hardware timers run from the 3DS's clock: the
+  SDK's tick, its alarms and the game's play-time clock work.
+- **Overlays.** On the DS, much of the game is in overlays, loaded from the
+  cartridge when needed, each load starting the overlay's data afresh. Here
+  all of them are linked into the program, and loading one resets its data
+  in the same way: the build gathers each overlay's data into sections of
+  its own (`tools/game_overlays.py`), and loading copies back the initial
+  values and clears the rest. The game's own overlay manager does the rest.
+- **Files** come from the data pack (`NitroPort_OpenPak`); a file the game
+  asks for that the pack doesn't have is logged.
+- **The ARM7.** The DS's second CPU answered the game's requests for the
+  save chip, clock, touch screen and power. Its answers arrive as on the DS
+  (the FIFO-receive interrupt); the services themselves are the next step.
 
 ## What gets compiled
 
@@ -13,17 +118,14 @@ that stops it:
 
 | Target | Compiled | Blocked |
 |---|---|---|
-| 3DS, 32-bit PC | **all 1,012** | none |
-| 64-bit PC | 988 of 1,012 | 24 in [`blocked_sources_64bit.txt`](blocked_sources_64bit.txt) |
+| 3DS, 32-bit PC, 64-bit PC | **all 1,012** | none |
 
 1,012 is the original build's own list (`src/meson.build`;
 `tools/game_sources.py`). `src/unk_02095CD4.c` isn't on it: it includes a
-header that doesn't exist and isn't part of the game.
-
-The 24 files a 64-bit PC skips store overlay IDs (addresses of linker
-symbols) as `u32` in static initializers, which is only constant with
-4-byte pointers. [`blocked_sources.txt`](blocked_sources.txt) is empty now
-but stays, for whatever the next pinned decompilation brings.
+header that doesn't exist and isn't part of the game. The blocklists
+([`blocked_sources.txt`](blocked_sources.txt), and
+[`blocked_sources_64bit.txt`](blocked_sources_64bit.txt) for 64-bit PCs)
+are empty but stay, for whatever the next pinned decompilation brings.
 
 Code that only Metrowerks accepted is fixed by patches in
 `patches/pokeplatinum/` (each change under `SDK_PORT_3DS`, so the original
@@ -39,6 +141,17 @@ build is unchanged):
 - `0006`: C versions of the RC4 encrypt functions (see below).
 - `0007`: `<cstdlib>` (a C++ header), two more static-after-extern
   definitions, a missing include.
+- `0008`: three tables of function addresses as `uintptr_t` (the size of
+  `u32` on the DS and 3DS), so they're constant on a 64-bit PC too.
+
+**Compiler rules as Metrowerks had them, the same on every compiler:**
+calls without a declaration are errors (GCC 14's default; a wrong implicit
+declaration can silently break a call); integer/pointer conversions and
+implicit `int` are warnings. Signed overflow wraps and GCC doesn't drop
+loop iterations or null checks it could prove "can't matter"
+(`-fwrapv -fno-aggressive-loop-optimizations -fno-delete-null-pointer-checks`,
+in `../common.mk`): Metrowerks made no such assumptions, and the game has
+places that would be affected.
 
 ### Generated headers
 
@@ -59,6 +172,13 @@ generated the same way, into `build/` (never committed):
   sprite templates, and the two images the game embeds in its code. Needs a
   PC C compiler and libpng. The data archives these tools also write are
   deleted; the game reads its data from the player's own data pack.
+- **Overlay IDs** (`FS_OVERLAY_ID(name)`): each overlay's position in
+  `platinum.us/main.lsf`, as constants in `build/game-link/overlay_ids.h`,
+  which every game file is compiled with (`tools/prepare_game_overlay_ids.py`;
+  NitroSDK patch `0014`). In NitroSDK an overlay ID is the address of a
+  symbol Nintendo's linker placed at that number, which doesn't fit the
+  game's 32-bit overlay-ID fields on a 64-bit PC (and 3dsxtool refuses
+  addresses that low).
 - Like Meson, the folders of generated headers are on the include path
   (some files include `"ending.naix"` by bare name).
 
@@ -74,40 +194,16 @@ python tools/update_game_blocklist.py build/game-compile-survey/host32.json \
                                       build/game-compile-survey/host.json
 ```
 
-### Linking the whole game
+## How it's built
 
 ```sh
-make -C 3ds_port/game TARGET=host32 link-check   # or TARGET=3ds
+make -C 3ds_port/game                       # compile for the PC, run the tests
+make -C 3ds_port/game TARGET=host32         # the same, 32-bit (gcc-multilib)
+make -C 3ds_port/game TARGET=3ds            # compile for the 3DS (devkitARM)
+make -C 3ds_port/game TARGET=3ds program    # pokeplatinum.3dsx
+make -C 3ds_port/game TARGET=host program   # pokeplatinum-pc
+make -C 3ds_port/game TARGET=3ds link-check # link, reporting what's missing
 ```
-
-links the game from `NitroMain`, as the original program starts, and writes
-`build/game-link-report/<target>.md`: every symbol the game reaches that
-nothing defines, grouped by why. CI uploads the 32-bit and 3DS reports and
-shows the summary on the run's page. Everything the game links besides its
-own sources is now provided:
-
-- **Overlay IDs.** `FS_OVERLAY_ID(name)` is the address of
-  `SDK_OVERLAY_<name>_ID`, which Nintendo's linker placed at the overlay's
-  number (its position in `platinum.us/main.lsf`).
-  `tools/prepare_game_overlay_ids.py` writes the same symbols as a linker
-  script (`build/game-link/overlay_ids.ld`) that every program linking the
-  game passes to the linker. NitroSDK patch `0010` declares them as bytes,
-  so GCC doesn't assume they're 4-byte aligned (it folded
-  `FS_OVERLAY_ID(overlay5) == 5` to false).
-- **RC4** (Mystery Gift): `lib/crypto` keeps its encrypt functions in
-  assembly; patch `0006` adds C versions, checked against the published
-  test vectors.
-- **Nintendo's Wi-Fi libraries** (DWC, PPW lobby, VCT voice chat, WVR):
-  online play isn't part of the port. After compiling,
-  `tools/make_game_wifi_stubs.py` writes a stand-in for every such function
-  the game objects call (134): each logs "not implemented" once and returns
-  0, so online menus see a failure.
-
-With those and every source compiling, **the 3DS link of the whole game
-misses nothing**. A 64-bit PC link misses the symbols defined in the 24
-files it skips.
-
-## How it's built
 
 - The same shared flags and Nintendo headers as `libnitro` and
   `libnitrosystem` (`../common.mk`), plus the original
@@ -115,19 +211,14 @@ files it skips.
 - `-D_NITRO -DLINK_PPWLOBBY` on every target, as NitroDWC's build passes
   them to the game in the original. NitroDWC's GameSpy headers, included by
   about 90 game files (`main.c` among them), choose their platform from
-  `_NITRO`.
-  [`include/extras.h`](include/extras.h) stands in for the Metrowerks C
-  library header they include, and [`include/null.h`](include/null.h) for
-  another one. Declarations only; networking isn't ported.
-- **Compiler rules as Metrowerks had them, the same on every compiler:**
-  calls without a declaration are errors (GCC 14's default; a wrong
-  implicit declaration can silently break a call). Integer/pointer
-  conversions and implicit `int` are warnings: Metrowerks accepted them, and
-  with 32-bit pointers the result is the same.
+  `_NITRO`. [`include/extras.h`](include/extras.h) stands in for the
+  Metrowerks C library header they include, and
+  [`include/null.h`](include/null.h) for another one. Declarations only;
+  networking isn't ported.
 - Include paths as in the original `meson.build`: the game's own libraries
   (`lib/*/include`), libvct, and the generated headers' folder.
 - **The game's own libraries** `lib/crypto`, `lib/gds` and `lib/spl` are
-  compiled into the same archive, as the original links them.
+  compiled with the game, as the original links them.
 - **Header functions:** game headers (`inlines.h`, `pokemon_sprite.h`,
   NitroDWC's `dwc_friend.h` ...) define functions with plain `inline`.
   Metrowerks kept one copy; GCC exports one from every file that includes
@@ -136,141 +227,57 @@ files it skips.
   such a header copy. After compiling, the Makefile lists those symbols
   (`build/<target>/gen/game_header_defs.syms`) and marks them weak in every
   object, as `libnitrosystem` does for NitroSystem's headers.
+- **Overlays' data:** the same step renames each overlay's objects' data
+  sections to `ovl_data_<overlay>` / `ovl_bss_<overlay>` and writes the
+  overlay table (`build/<target>/gen/overlay_table.c`), which the programs
+  link after the game's objects (`tools/game_overlays.py`; CI checks where
+  the sections land in the 3DS program with `tools/check_program_elf.py`).
+- **RC4** (Mystery Gift): `lib/crypto` keeps its encrypt functions in
+  assembly; patch `0006` adds C versions, checked against the published
+  test vectors.
+- **Nintendo's Wi-Fi libraries** (DWC, PPW lobby, VCT voice chat, WVR):
+  online play isn't part of the port. After compiling,
+  `tools/make_game_wifi_stubs.py` writes a stand-in for every such function
+  the game objects call: each logs "not implemented" once and returns 0, so
+  online menus see a failure.
 - Sources stay upstream; **never copy or commit fetched game code or
   assets**.
 
-The game compilation uses `-ffunction-sections -fdata-sections` and the
-host-test linker uses `--gc-sections`. This permits validating standalone
-functions from an otherwise incomplete game source archive without forcing
-unported systems (heap, renderer, timers, game overlays) into the test binary.
-For example, the Berry Tag, Ribbon and Pokédex state smoke tests operate on
-caller-owned structs or static metadata; their real heap/save-table/NARC
-interfaces are **not** claimed to be runtime-functional. The Move Reminder,
-Pokédex measurement and Day Care smoke checks similarly use the original
-standalone functions with caller-owned input. Their full Pokémon, NARC,
-BoxPokemon initialization and heap backends are not implemented yet.
-The Easy Chat tests use the original sentence structures and source-derived
-text-bank **indices**, not the message content. Expanding sentences or
-counting substitution slots still needs the original message NARC and
-string/template runtime. The string-list test uses caller-owned entries;
-heap allocation, cloning and message loading are not claimed as supported.
-These modules do not require Nintendo Wi-Fi headers to compile.
-Battle Factory and Battle Arcade, however, include `struct_defs/battle_frontier.h`
-which includes `wifi_list.h` for `DWCUserData` and `DWCFriendData`. For the
-3DS port the source patch `patches/pokeplatinum/0002-*.patch` switches just
-that save header to the **original pinned NitroDWC** `base/dwc_account.h`,
-rather than the entire GameSpy-dependent `dwc.h`. The non-port DS build
-keeps including `dwc.h`. The game Makefile fetches both SDK header trees
-before compiling, not only before compiler surveys. This is limited to
-data-structure compatibility: no NitroDWC objects, GameSpy transport,
-Nintendo WFC, online play or actual save file writing is implemented. Likewise,
-battle-rule and record-mixing tests operate on original tables and
-caller-owned arrays; they do not implement Nintendo Wi-Fi/record exchange.
-**It does not imply the full game can link or run.**
+The programs link every game object; the library
+(`build/<target>/libplatinum_game.a`) is for the tests and the smoke app.
 
-The original Meson build uses `metang` to generate 107 C enum/mask headers
-from the ordered upstream `generated/*.txt` manifests (including
-`text_banks.h`, `abilities.h`, `species.h`, and AI/move flags).
-The GCC game Makefile automatically invokes `tools/prepare_game_constants.py`,
-which reads the pinned `generated/meson.build` rules and runs the **same
-Metang version selected by upstream**. Headers are generated into
-`build/game-constants/generated/` and included via `-Ibuild/game-constants`
-and `-DPOKEPLATINUM_GENERATED_ENUM`.
+### The tests
 
-The generated-header stamp depends on the upstream generator settings,
-manifests, and preparation script so builds regenerate after source changes.
-There are no dummy IDs, hand-copied generated files, or game assets tracked.
-`tools/generate_game_text_banks.py` remains available for standalone
-compatibility/testing, but no longer supplies the game's build headers.
-See [game constants](../../docs/GAME_CONSTANTS.md) for more information.
+`make` runs `tests/test_game.c` (585 checks): original game functions
+linked against NitroSDK and NitroSystem, without any game data: save
+play-time, Poffin Case, game options, Berry attributes, generated IDs,
+math/RNG, tiles, field-script execution, menu cursor navigation, map
+history, Pokédex ordering, map-feature buffers, Berry Tag bits, Ribbon
+initialization, battle rule presets, record mixing, move lists, Day Care
+transitions, Easy Chat sentences, string lists, Battle Factory / Arcade
+saved state, RC4, overlay IDs. They test that the game's code and both
+SDK libraries work together; tests that need a module's data (NARCs,
+messages) or heap aren't claimed by them.
 
-The build also produces **identifier-only** message bank headers from pinned
-`res/text/*.json` using `tools/prepare_game_text_bank_headers.py`. These
-match the original `msgenc` ordering and entry-count macros and live under
-ignored `build/game-resource-headers/res/text/bank/`. They never contain
-dialogue, game assets, encryption keys, or binary messages. Four dynamic move text-bank headers are now also generated from the
-original `moveproc` ordering in `generated/moves.txt` and
-`res/moves/*/data.json`. The output contains only move-message ID
-macros and counts, not game dialogue. Two original species-name ID
-banks are now generated from `generated/species.txt` and validated
-`res/pokemon/*/data.json`, producing only 496 indices per bank
-(including reserved None/Egg/Bad Egg slots). The generated headers
-contain no species-name strings or Pokedex descriptions. Other dynamic
-text banks and the actual `pl_msg.narc` still require further integration.
-
-The original NitroSFX `pl_sound_data.naix` header is also generated from
-the pinned `res/sound/pl_sound_data.json` list. This is **symbolic sound
-index metadata only**, not SDAT music/sound samples or a working sound
-runtime. The output stays in `build/game-resource-headers/res/sound/`.
-
-The NitroArc `res/graphics/**/*.order` manifests produce
-**explicit graphics member indices** as `.naix` headers in the same
-ignored resource-header output directory. The generator also follows the
-three *exact pinned Meson* archive mappings that do not fit the default
-graphics-name layout:
-
-- `res/graphics/pokedex/pokedex.order` → `res/graphics/pokedex/zukan.naix`
-- `res/trainers/classes/field_encounteffect.order` → its same-stem `.naix`
-- `res/battle/scripts/subscripts/sub_seq.order` → `res/battle/scripts/sub_seq.naix`
-
-The index generator reads only these explicit member names and ordering;
-it does not generate graphics, battle scripts, or NARC archives. The
-implicit (unlisted) member indices and full archive count are not inferred;
-see [the compiler survey](../../docs/GAME_COMPILE_SURVEY.md).
-
-The default Make target is explicitly `all`. CI requests `test` on
-host and host32 and `lib` for 3DS; this is important because the generated
-`text_banks.h` Make rule formerly became the first/default target and a
-successful workflow could skip game compilation entirely.
-
-## Building
-
-From the repository root:
-
-```sh
-python tools/bootstrap.py --clean
-make -C 3ds_port/game               # host compile, link, run smoke tests
-make -C 3ds_port/game TARGET=host32 # 32-bit host smoke tests (gcc-multilib)
-make -C 3ds_port/game TARGET=3ds    # 3DS ARM11 object library (devkitARM)
-```
-
-Outputs are ignored under `3ds_port/game/build/<target>/`:
-`libplatinum_game.a` (an incomplete, relocatable static archive) and host
-test binaries. The smoke tests cover save play-time, Poffin Case, game
-options, Berry attributes, authentic generated IDs, math/RNG, tiles,
-field-script execution, menu cursor navigation, map history rollover,
-Pokédex language ordering, persisted map-feature buffers, Berry Tag bits,
-Pokédex selection/data banks, Ribbon initialization, battle rule presets,
-mixed-record RNG initialization/entry matching, move-list sentinel detection,
-Pokédex size/weight accessors, Day Care state transitions, Easy Chat
-sentence operations, string-list entry insertion, and Battle Factory /
-Arcade saved-state setters/getters and streak-bit updates. They call
-real game code and an externally linked NitroSystem function, so they
-test compatibility between original game code and both SDK libraries.
-
-### Diagnose the next compilation blockers
-
-You can survey a deterministic sample of the **remaining original** game
-source tree with the same real GCC flags and generated headers:
+### Diagnose compilation blockers
 
 ```sh
 make -C 3ds_port/game TARGET=host probe PROBE_LIMIT=80
 make -C 3ds_port/game TARGET=3ds probe PROBE_LIMIT=40
 ```
 
-The survey runs `-fsyntax-only` per file and categorizes failures into
-missing resource/generated headers, type/symbol errors, and other causes.
-It writes a JSON report under ignored `build/game-compile-survey/` and
-never links or runs unported game code. CI uploads those reports.
+runs `-fsyntax-only` per file and writes a JSON report under ignored
+`build/game-compile-survey/` ([Game compile survey](../../docs/GAME_COMPILE_SURVEY.md)).
 
-**A green survey step means diagnostics were collected, not that every
-sample compiled.** The existing library compilation and host tests remain
-CI gates. For instructions and interpretation, see
-[Game compile survey](../../docs/GAME_COMPILE_SURVEY.md).
+## What isn't done
 
-### What isn't done
-
-Overlay linking and reset, ROM data loading, graphics, sound and startup are
-**not** done. No Azahar or console test is implied by these compile checks.
+- **The ARM7's services** (power, clock, save chip, touch screen): next,
+  in progress. Until then the game waits at its first request (power
+  management, before the title screen).
+- **Graphics**: the DS's 2D engines and 3D, drawn on the 3DS's screens.
+- **Sound.**
+- **Restarting** (`OS_ResetSystem`, the soft reset): the program says so and
+  stops. **Sleep mode** (closing the lid) and **H-blank effects** too.
+- **Online play** (Nintendo Wi-Fi Connection): not part of the port.
 
 See `docs/ROADMAP.md` and `docs/HARDWARE_LAYER.md`.

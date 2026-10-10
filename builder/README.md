@@ -45,8 +45,13 @@ After extraction, the source ROM's SHA-1 is already in `data_pack/manifest.json`
 You do **not** need to supply the ROM again:
 
 ```sh
-python builder/pack.py data_pack/ -o platinum3ds.pak --build-id <id>
+python builder/pack.py data_pack/ -o platinum3ds.pak
 ```
+
+The pack carries a build ID that the game program checks (default
+`platinum-nitrofs-1`, what the program expects; `--build-id` sets another).
+Copy `platinum3ds.pak` and `data_pack/manifest.json` to
+`sdmc:/3ds/pokeplatinum/` on the SD card (see `3ds_port/game/README.md`).
 
 `--rom /path/to/platinum.nds` or `--rom-sha1 <verified-40-hex-sha1>`
 may optionally supply the verified source digest. If an override is supplied,

@@ -15,6 +15,9 @@ from collections.abc import Collection
 from pathlib import Path
 
 MAGIC = b"PLATPAK\0"
+# The build ID the game program expects (PLATINUM_PAK_BUILD_ID in
+# 3ds_port/game/app/platinum.h): packs of the ROM's files, unchanged.
+DEFAULT_BUILD_ID = "platinum-nitrofs-1"
 VERSION = 1
 BUILD_ID_BYTES = 32
 HEADER = struct.Struct("<8sI32s20sI")
@@ -214,7 +217,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("data_pack", type=Path, help="Directory containing manifest.json")
     parser.add_argument("-o", "--output", type=Path, default=Path("platinum3ds.pak"))
-    parser.add_argument("--build-id", required=True, help="Release/build ID (1–32 UTF-8 bytes)")
+    parser.add_argument("--build-id", default=DEFAULT_BUILD_ID,
+                        help=f"Release/build ID (1–32 UTF-8 bytes; default {DEFAULT_BUILD_ID}, "
+                             "what the game program expects)")
     rom = parser.add_mutually_exclusive_group()
     rom.add_argument("--rom", type=Path, help="Read-only verified source ROM to obtain SHA-1")
     rom.add_argument("--rom-sha1", help="40-character SHA-1 of the verified source ROM")
