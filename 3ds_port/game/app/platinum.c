@@ -15,11 +15,6 @@ extern const u32 gPlatinumOverlayCount;
 
 void NitroMain(void);
 
-/* The ARM7's services (save chip, clock, touch screen, power), when the
- * port has them: weak, so the program links without them. */
-void NitroPort_InitArm7Services(void) __attribute__((weak));
-void NitroPort_SetTouch(BOOL down, u16 x, u16 y) __attribute__((weak));
-
 /* The MAC address the game sees. The game stores it in the save and
  * compares it on loading (a different DS): one fixed address keeps a save
  * "from this DS" on every console. 00:09:BF is one of Nintendo's prefixes. */
@@ -70,9 +65,6 @@ void Platinum_SetButtons(uint16_t held)
 
 void Platinum_SetTouch(int down, int x, int y)
 {
-    if (NitroPort_SetTouch == NULL) {
-        return;
-    }
     if (x < 0) {
         x = 0;
     } else if (x > 255) {
@@ -116,12 +108,12 @@ void Platinum_Run(const PlatinumSettings *settings)
 
     NitroPort_SetOverlays(gPlatinumOverlays, gPlatinumOverlayCount);
 
-    if (NitroPort_InitArm7Services != NULL) {
-        NitroPort_InitArm7Services();
-    } else {
-        NitroPort_Log("[platinum] this build has no ARM7 services yet: saving, the clock, "
-                      "touch and power requests will go unanswered");
-    }
+    /* The ARM7's services: the save chip, the clock, the touch screen and
+     * power management (sound, microphone and wireless aren't done yet). */
+    NitroPort_SetSavePath(settings->savePath);
+    NitroPort_InitArm7Services();
+    NitroPort_Log("[platinum] save file: %s",
+                  settings->savePath != NULL ? settings->savePath : "(none)");
 
     NitroPort_Log("[platinum] starting the game");
     NitroMain();

@@ -2,12 +2,14 @@
  * The game on a PC, without a screen: for finding out how far it gets, and
  * where it stops, faster than on a 3DS.
  *
- *   pokeplatinum-pc <platinum3ds.pak> <manifest.json> [--frames N]
- *                   [--stop-at-missing-file]
+ *   pokeplatinum-pc <platinum3ds.pak> <manifest.json> [--save FILE]
+ *                   [--frames N] [--stop-at-missing-file]
  *   pokeplatinum-pc --check-overlays
  *
  * Runs the same game code as the 3DS program, with the same data pack, as
- * fast as the PC goes. Everything the port logs goes to stderr, each line
+ * fast as the PC goes. The save is a raw 512 KB file, as emulators keep
+ * them: --save FILE, or platinum.sav next to the data pack; it's made if
+ * missing. Everything the port logs goes to stderr, each line
  * with the frame number. With --frames N it stops after N frames (exit
  * status 0); with --stop-at-missing-file, at the first file the game asks
  * for that the pack doesn't have (exit status 5). If the game crashes, the
@@ -100,18 +102,22 @@ int main(int argc, char **argv)
 {
     PlatinumSettings settings;
     const char *error;
+    const char *savePath = NULL;
+    char *defaultSave = NULL;
     int i;
 
     if (argc == 2 && strcmp(argv[1], "--check-overlays") == 0) {
         return Platinum_CheckOverlays() == 0 ? 0 : 1;
     }
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <platinum3ds.pak> <manifest.json> [--frames N] "
-                "[--stop-at-missing-file]\n       %s --check-overlays\n", argv[0], argv[0]);
+        fprintf(stderr, "usage: %s <platinum3ds.pak> <manifest.json> [--save FILE] "
+                "[--frames N] [--stop-at-missing-file]\n       %s --check-overlays\n", argv[0], argv[0]);
         return 2;
     }
     for (i = 3; i < argc; i++) {
-        if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "--save") == 0 && i + 1 < argc) {
+            savePath = argv[++i];
+        } else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
             sFrameLimit = strtol(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "--stop-at-missing-file") == 0) {
             sStopAtMissingFile = 1;
@@ -133,6 +139,21 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    if (savePath == NULL) {
+        /* platinum.sav in the data pack's folder */
+        const char *slash = strrchr(argv[1], '/');
+        size_t dir = slash != NULL ? (size_t)(slash - argv[1] + 1) : 0;
+
+        defaultSave = malloc(dir + sizeof("platinum.sav"));
+        if (defaultSave == NULL) {
+            return 2;
+        }
+        memcpy(defaultSave, argv[1], dir);
+        strcpy(defaultSave + dir, "platinum.sav");
+        savePath = defaultSave;
+    }
+
     Platinum_DefaultSettings(&settings);
+    settings.savePath = savePath;
     Platinum_Run(&settings);
 }

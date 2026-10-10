@@ -89,7 +89,9 @@ LIBC = {"memcpy", "memset", "memmove", "memcmp", "strcmp", "strlen", "strncpy",
         # libpak (3ds_port/pak), built into libnitro.a, reads the data pack
         # with stdio and allocates its index on the heap.
         "fopen", "fclose", "fread", "fseek", "ftell", "ferror",
-        "malloc", "calloc", "realloc", "free", "strstr", "fwrite"}
+        "malloc", "calloc", "realloc", "free", "strstr",
+        # Virtual ARM7 save persistence and local RTC use hosted C/newlib.
+        "fflush", "fwrite", "localtime", "time"}
 
 # The port's platform layer (3ds_port/nitro/src/platform/): threads, their
 # signals and the clock come from POSIX on a PC and from libctru on the 3DS,

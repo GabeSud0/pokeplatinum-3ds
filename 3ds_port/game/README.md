@@ -12,11 +12,12 @@ cartridge by the builder. Nothing from the game is in this repository, and
 programs built from it are for your own use: never share them.
 
 **Where it stands:** the game starts. `NitroMain` runs with the SDK's
-threads, interrupts, timers and overlays working, and reads its files from
-the data pack. It stops at the first thing the port doesn't do yet: today
-that's the ARM7's services (power, clock, save chip, touch screen), which
-are being written; after them, the renderer and sound. There is no picture
-yet; the 3DS program shows its log instead.
+threads, interrupts, timers and overlays working, reads its files from the
+data pack, and gets answers from the ARM7's services (power, clock, save
+chip, touch screen). Nothing is drawn yet: the renderer and sound are next.
+The 3DS program shows its log instead of the game's screens. How far the
+game gets with a real data pack hasn't been tried yet; without one it goes
+as far as its first file (the font).
 
 ## Running it on a 3DS
 
@@ -43,6 +44,10 @@ yet; the 3DS program shows its log instead.
    sdmc:/3ds/pokeplatinum.3dsx                 (anywhere the Homebrew Launcher looks)
    ```
 
+   The game saves to `sdmc:/3ds/pokeplatinum/platinum.sav`, made on the
+   first run. It's a raw 512 KB save, the same as emulators keep: you can
+   copy your cartridge's save there (or take it out to an emulator).
+
 4. **Run it** from the Homebrew Launcher, or open the `.3dsx` in Azahar.
 
 What you'll see: the top screen shows the program's status, the bottom
@@ -65,7 +70,8 @@ make -C 3ds_port/game TARGET=host32 program       # 32-bit, as on the 3DS (gcc-m
 ```
 
 Linux (or WSL) with GCC. Everything the port logs goes to stderr with the
-frame number; a crash prints a backtrace. `--frames N` stops after N
+frame number; a crash prints a backtrace. The save is `platinum.sav` next
+to the data pack, or `--save FILE`. `--frames N` stops after N
 frames; `--stop-at-missing-file` stops at the first file the pack doesn't
 have. `TARGET=host` (64-bit) works too, but Nintendo's graphics formats
 hold 4-byte pointers, so the game can't get far that way once it loads
@@ -107,8 +113,11 @@ machine-specific parts. The rest is in libnitro ([`../nitro`](../nitro)):
 - **Files** come from the data pack (`NitroPort_OpenPak`); a file the game
   asks for that the pack doesn't have is logged.
 - **The ARM7.** The DS's second CPU answered the game's requests for the
-  save chip, clock, touch screen and power. Its answers arrive as on the DS
-  (the FIFO-receive interrupt); the services themselves are the next step.
+  save chip, clock, touch screen and power. The port answers them
+  ([`nitro/src/port_arm7.c`](../nitro/src/port_arm7.c) and its neighbours),
+  through the FIFO-receive interrupt as on the DS: the save chip is the save
+  file, the clock is the console's, touch comes from the 3DS's bottom
+  screen, and power management keeps track of the backlights.
 
 ## What gets compiled
 
@@ -271,11 +280,8 @@ runs `-fsyntax-only` per file and writes a JSON report under ignored
 
 ## What isn't done
 
-- **The ARM7's services** (power, clock, save chip, touch screen): next,
-  in progress. Until then the game waits at its first request (power
-  management, before the title screen).
 - **Graphics**: the DS's 2D engines and 3D, drawn on the 3DS's screens.
-- **Sound.**
+- **Sound**, and the ARM7's other services (microphone, wireless).
 - **Restarting** (`OS_ResetSystem`, the soft reset): the program says so and
   stops. **Sleep mode** (closing the lid) and **H-blank effects** too.
 - **Online play** (Nintendo Wi-Fi Connection): not part of the port.

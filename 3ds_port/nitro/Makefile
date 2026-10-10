@@ -250,10 +250,18 @@ THREAD_TEST_BIN := $(OUT)/test_threads
 $(THREAD_TEST_BIN): tests/test_threads.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
 
-test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN)
+# Call the actual ARM9 CARD/RTC/PM/TP APIs against virtual ARM7 handlers.
+# The integration executable creates its own temporary .sav and removes it.
+ARM7_TEST_BIN := $(OUT)/test_arm7
+
+$(ARM7_TEST_BIN): tests/test_arm7.c $(LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
+
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN)
 	./$(TEST_BIN)
 	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
 	./$(THREAD_TEST_BIN)
+	./$(ARM7_TEST_BIN)
 
 clean:
 	rm -rf build

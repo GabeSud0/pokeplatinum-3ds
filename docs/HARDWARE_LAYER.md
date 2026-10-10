@@ -319,9 +319,8 @@ This refines Phases 2 and 3 of the [roadmap](ROADMAP.md):
    ([`3ds_port/nitrosystem`](../3ds_port/nitrosystem)).
    *Game done:* all 1,012 game files compile and link into a 3DS program
    whose `NitroMain` runs, with the SDK's threads, interrupts, timers and
-   frame loop working ([`3ds_port/game`](../3ds_port/game)). Next for this
-   step: the ARM7's services (power, clock, save chip, touch screen), where
-   the game stops now.
+   frame loop working ([`3ds_port/game`](../3ds_port/game)), and the
+   ARM7's services (power, clock, save chip, touch screen) answering it.
 2. **Files:** builder extracts the filesystem; `FS_*` reads from the SD card.
    *Done* (the data pack, `3ds_port/nitro/src/port_fs.c`).
 3. **Overlays:** link everything, reset overlay data on load. *Done*

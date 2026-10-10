@@ -4,7 +4,9 @@
  * Needs the player's data pack on the SD card (see the game README):
  *   sdmc:/3ds/pokeplatinum/platinum3ds.pak
  *   sdmc:/3ds/pokeplatinum/manifest.json
- * and writes everything the port logs to sdmc:/3ds/pokeplatinum/log.txt.
+ * keeps the game's save in sdmc:/3ds/pokeplatinum/platinum.sav (a raw 512 KB
+ * save, as emulators keep them: one can be copied in or out), and writes
+ * everything the port logs to sdmc:/3ds/pokeplatinum/log.txt.
  *
  * Screens, for now (the DS's graphics come with the renderer): the top
  * screen shows the program's status, the bottom one the log.
@@ -33,6 +35,7 @@
 #define PAK_PATH      DATA_DIR "/platinum3ds.pak"
 #define MANIFEST_PATH DATA_DIR "/manifest.json"
 #define LOG_PATH      DATA_DIR "/log.txt"
+#define SAVE_PATH     DATA_DIR "/platinum.sav"
 
 /* The game's main thread: the DS gave it 16 KB; GCC's code and the port's
  * own want more. */
@@ -327,6 +330,7 @@ int main(int argc, char **argv)
         }
     } else {
         ReadProfile(&sSettings);
+        sSettings.savePath = SAVE_PATH;
         svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
         if (threadCreate(GameThread, NULL, GAME_STACK_SIZE, priority, -2, true) == NULL) {
             NitroPort_Log("Can't start the game's thread.");

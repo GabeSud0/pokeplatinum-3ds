@@ -36,6 +36,8 @@ typedef struct PlatinumSettings {
     uint8_t birthMonth;
     uint8_t birthDay;
     uint8_t favoriteColor;   /* 0-15 */
+    const char *savePath;    /* the save chip's contents: a raw 512 KB file,
+                                as emulators keep them (made if missing) */
 } PlatinumSettings;
 
 void Platinum_DefaultSettings(PlatinumSettings *settings);
@@ -71,8 +73,7 @@ int Platinum_CheckOverlays(void);
 /* The buttons held now; call once a frame (from NitroPort_OnFrame). */
 void Platinum_SetButtons(uint16_t held);
 
-/* The stylus on the DS's touch screen (0-255, 0-191), if this build has the
- * touch-screen ARM7 service; otherwise ignored. */
+/* The stylus on the DS's touch screen (0-255, 0-191); call once a frame. */
 void Platinum_SetTouch(int down, int x, int y);
 
 #endif
