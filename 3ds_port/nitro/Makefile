@@ -245,7 +245,7 @@ $(PAK_READER_OBJ): ../pak/src/pak.c ../pak/include/pak.h
 $(OUT)/arm7_raw/%.o: $(SDK)/libraries/%.c $(GEN)/nitro/fx/fx_const.h
 	@mkdir -p $(dir $@)
 	@echo "  ARM7 CC $(notdir $<)"
-	@$(CC) $(CFLAGS) -USDK_ARM9 -DSDK_ARM7 -c $< -o $@
+	@$(CC) $(CFLAGS) -USDK_ARM9 -DSDK_ARM7 -include nitro/misc.h -include stdint.h -c $< -o $@
 
 # Produce one shared mapping from every ARM7 definition, not a naïve
 # --prefix-symbols (which would rename libc/OS references too).
