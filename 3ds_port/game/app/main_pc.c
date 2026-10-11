@@ -49,6 +49,88 @@
 
 #include "platinum.h"
 
+void NitroPort_SoundRender(int16_t *stereo, size_t frames);
+void NitroPort_SoundPumpReplies(void);
+
+#define WAV_SAMPLES 512u
+static const char *sWavPath;
+static FILE *sWav;
+static pthread_t sSoundThread;
+static volatile int sSoundRunning;
+static int sSoundThreadCreated;
+static uint32_t sWavBytes;
+
+static void wav_u16(FILE *f, uint16_t n)
+{
+    fputc(n & 255u, f);
+    fputc((n >> 8) & 255u, f);
+}
+static void wav_u32(FILE *f, uint32_t n)
+{
+    wav_u16(f, (uint16_t)n);
+    wav_u16(f, (uint16_t)(n >> 16));
+}
+static void wav_header(FILE *f, uint32_t bytes)
+{
+    fseek(f, 0, SEEK_SET);
+    fwrite("RIFF", 1, 4, f);
+    wav_u32(f, bytes + 36u);
+    fwrite("WAVEfmt ", 1, 8, f);
+    wav_u32(f, 16);
+    wav_u16(f, 1);      /* PCM */
+    wav_u16(f, 2);      /* stereo */
+    wav_u32(f, 32768);
+    wav_u32(f, 32768u * 4u);
+    wav_u16(f, 4);
+    wav_u16(f, 16);
+    fwrite("data", 1, 4, f);
+    wav_u32(f, bytes);
+}
+static void *SoundThread(void *unused)
+{
+    int16_t samples[WAV_SAMPLES * 2u];
+    struct timespec period = {0, 15625000}; /* 512 / 32768 s */
+    (void)unused;
+    while (__atomic_load_n(&sSoundRunning, __ATOMIC_ACQUIRE)) {
+        NitroPort_SoundRender(samples, WAV_SAMPLES);
+        if (sWav && sWavBytes <= UINT32_MAX - WAV_SAMPLES * 4u) {
+            if (fwrite(samples, sizeof(samples), 1, sWav) == 1)
+                sWavBytes += sizeof(samples);
+        }
+        nanosleep(&period, NULL);
+    }
+    return NULL;
+}
+static void StartSound(void)
+{
+    if (sWavPath) {
+        sWav = fopen(sWavPath, "wb");
+        if (sWav) wav_header(sWav, 0);
+        else fprintf(stderr, "[audio] can't create WAV file: %s\n", sWavPath);
+    }
+    __atomic_store_n(&sSoundRunning, 1, __ATOMIC_RELEASE);
+    if (pthread_create(&sSoundThread, NULL, SoundThread, NULL) == 0)
+        sSoundThreadCreated = 1;
+    else {
+        sSoundRunning = 0;
+        fprintf(stderr, "[audio] can't start ARM7 audio clock\n");
+    }
+}
+static void StopSound(void)
+{
+    __atomic_store_n(&sSoundRunning, 0, __ATOMIC_RELEASE);
+    if (sSoundThreadCreated) {
+        pthread_join(sSoundThread, NULL);
+        sSoundThreadCreated = 0;
+    }
+    if (sWav) {
+        wav_header(sWav, sWavBytes);
+        fflush(sWav);
+        fclose(sWav);
+        sWav = NULL;
+    }
+}
+
 static volatile long sFrame;
 static long sFrameLimit = -1;
 static int sStopAtMissingFile;
@@ -67,9 +149,11 @@ void NitroPort_Log(const char *fmt, ...)
 
 void NitroPort_OnFrame(void)
 {
+    NitroPort_SoundPumpReplies(); /* deliver ARM7 alarms on ARM9's thread */
     sFrame++;
     if (sFrameLimit >= 0 && sFrame >= sFrameLimit) {
         NitroPort_Log("[pc] stopping after %ld frames, as asked", sFrame);
+        StopSound();            /* closes and finalizes optional WAV file */
         fflush(stderr);
         _exit(0);
     }
@@ -313,12 +397,15 @@ int main(int argc, char **argv)
     }
     if (argc < 3) {
         fprintf(stderr, "usage: %s <platinum3ds.pak> <manifest.json> [--save FILE] "
-                "[--frames N] [--stop-at-missing-file] [--stall-seconds N]\n       %s --check-overlays\n", argv[0], argv[0]);
+                "[--frames N] [--wav FILE] [--stop-at-missing-file] "
+                "[--stall-seconds N]\n       %s --check-overlays\n", argv[0], argv[0]);
         return 2;
     }
     for (i = 3; i < argc; i++) {
         if (strcmp(argv[i], "--save") == 0 && i + 1 < argc) {
             savePath = argv[++i];
+        } else if (strcmp(argv[i], "--wav") == 0 && i + 1 < argc) {
+            sWavPath = argv[++i];
         } else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
             sFrameLimit = strtol(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "--stop-at-missing-file") == 0) {
@@ -377,5 +464,7 @@ int main(int argc, char **argv)
             pthread_create(&watcher, NULL, Watch, NULL);
         }
     }
+    StartSound(); /* sound progresses on its own clock, never game frames */
     Platinum_Run(&settings);
+    StopSound();
 }
