@@ -2,7 +2,10 @@
 # Run the game on the PC runner, in WSL (Ubuntu) on Windows, with your data
 # pack: the quickest way to find where the game stops, with function names.
 #
-#   bash run_pc_wsl.sh 'C:\path\to\platinum3ds.pak' 'C:\path\to\manifest.json'
+#   bash run_pc_wsl.sh 'C:\path\to\platinum3ds.pak' 'C:\path\to\manifest.json' [options]
+#
+# Options after the two paths go to the runner, e.g. --frames 20000 to stop
+# by itself after that many frames.
 #
 # Installs what the 32-bit PC build needs (Ubuntu packages; no devkitPro),
 # clones the port into ~/pokeplatinum-3ds in Ubuntu (or updates it), builds
@@ -63,7 +66,9 @@ make -j"$(nproc)" -C 3ds_port/game TARGET=host32 program
 step "Running the game (log: $(wslpath -w "$LOG"))"
 status=0
 3ds_port/game/build/host32/pokeplatinum-pc "$PAK" "$MANIFEST" --save "$HOME/pokeplatinum-pc.sav" \
-    2>&1 | tee "$LOG" || status=$?
+    "${@:3}" 2>&1 | (trap '' INT; tee "$LOG") || status=$?
+# (tee ignores Ctrl+C, so the log keeps everything up to the runner's last
+# line: Ctrl+C only stops the runner, which says at which frame.)
 echo
 echo "Done. Send the log: $(wslpath -w "$LOG")"
 exit $status

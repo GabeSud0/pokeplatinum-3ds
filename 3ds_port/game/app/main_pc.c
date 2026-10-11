@@ -121,6 +121,13 @@ static void PrintFrames(void *const *frames, int count)
     }
 }
 
+static void OnInterrupt(int sig)
+{
+    (void)sig;
+    fprintf(stderr, "[%6ld] [pc] stopped with Ctrl+C\n", sFrame);
+    _exit(130);
+}
+
 static void OnCrash(int sig)
 {
     void *frames[64];
@@ -324,6 +331,7 @@ int main(int argc, char **argv)
         }
     }
 
+    signal(SIGINT, OnInterrupt);
     signal(SIGSEGV, OnCrash);
     signal(SIGBUS, OnCrash);
     {
