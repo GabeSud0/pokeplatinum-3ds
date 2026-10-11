@@ -40,7 +40,7 @@ void NitroPort_SoundPumpReplies(void);
 #define AUDIO_FRAMES 512
 #define AUDIO_BUFFERS 3
 static Thread sSoundThread;
-static volatile bool sSoundThreadRunning;
+static bool sSoundThreadRunning;
 static bool sNdspAvailable;
 static int16_t *sSoundSamples;
 static ndspWaveBuf sSoundBuf[AUDIO_BUFFERS];
@@ -50,7 +50,7 @@ static void SoundMain(void *unused)
     int16_t silent[AUDIO_FRAMES * 2];
     int i;
     (void)unused;
-    while (sSoundThreadRunning) {
+    while (__atomic_load_n(&sSoundThreadRunning, __ATOMIC_ACQUIRE)) {
         if (sNdspAvailable) {
             for (i = 0; i < AUDIO_BUFFERS; ++i) {
                 ndspWaveBuf *buf = &sSoundBuf[i];
@@ -99,10 +99,10 @@ static void StartSound(s32 priority)
         NitroPort_Log("[audio] DSP firmware unavailable (check sdmc:/3ds/dspfirm.cdc); "
                       "running sound driver without speaker output");
     }
-    sSoundThreadRunning = true;
+    __atomic_store_n(&sSoundThreadRunning, true, __ATOMIC_RELEASE);
     sSoundThread = threadCreate(SoundMain, NULL, 64 * 1024, priority - 2, -2, false);
     if (!sSoundThread) {
-        sSoundThreadRunning = false;
+        __atomic_store_n(&sSoundThreadRunning, false, __ATOMIC_RELEASE);
         NitroPort_Log("[audio] couldn't start independent audio thread");
     }
 }
@@ -110,7 +110,7 @@ static void StartSound(s32 priority)
 static void StopSound(void)
 {
     if (sSoundThread) {
-        sSoundThreadRunning = false;
+        __atomic_store_n(&sSoundThreadRunning, false, __ATOMIC_RELEASE);
         threadJoin(sSoundThread, UINT64_MAX);
         threadFree(sSoundThread);
         sSoundThread = NULL;
