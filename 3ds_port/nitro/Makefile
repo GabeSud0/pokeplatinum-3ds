@@ -257,11 +257,19 @@ ARM7_TEST_BIN := $(OUT)/test_arm7
 $(ARM7_TEST_BIN): tests/test_arm7.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
 
-test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN)
+# Synthetic-only PC test for the portable sound-chip engine.
+# This is independent from the ARM9/ARM7 command-protocol integration.
+SOUND_TEST_BIN := $(OUT)/test_sound_chip
+
+$(SOUND_TEST_BIN): tests/test_sound_chip.c src/sound_chip.h $(LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
+
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_TEST_BIN)
 	./$(TEST_BIN)
 	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
 	./$(THREAD_TEST_BIN)
 	./$(ARM7_TEST_BIN)
+	./$(SOUND_TEST_BIN)
 
 clean:
 	rm -rf build
