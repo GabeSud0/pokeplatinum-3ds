@@ -28,6 +28,15 @@
  * the game wrote them. Extended palettes are loaded through the LCDC view;
  * the VRAM bank registers say which bank holds them, and they're read from
  * that bank's LCDC area.
+ *
+ * Speed: this runs on the 3DS's CPU for both screens every frame, so it
+ * works a line at a time and a tile at a time: a text BG reads each map
+ * entry and each tile row once for the pixels it covers, each line only
+ * looks at the OBJs on it (sorted out once a frame), the windows are worked
+ * out once a line, and a pixel's two front-most layers are found walking the
+ * BGs in priority order. A layer's pixel is its colour with bit 15 set, or 0
+ * where it's transparent. tests/render2d_reference.c is the plain version
+ * this was made from; test_render checks that both draw the same.
  */
 
 #include <nitro.h>
@@ -36,23 +45,28 @@
 
 #define W 256
 #define H 192
+#define OPAQUE 0x8000
 
 /* ---------------------------------------------------------------- memory */
 
 extern unsigned char NitroPort_IoReg[];
 
-static u16 Rd16(const u8 *p, u32 off)
+/* The blocks the renderer reads are aligned, and everything it reads as 16
+ * or 32 bits is at an aligned offset in them (the masks keep it so). */
+typedef u16 __attribute__((may_alias)) u16a;
+typedef u32 __attribute__((may_alias)) u32a;
+
+static inline u16 Rd16(const u8 *p, u32 off)
 {
-    return (u16)(p[off] | (p[off + 1] << 8));
+    return *(const u16a *)(p + off);
 }
 
-static u32 Rd32(const u8 *p, u32 off)
+static inline u32 Rd32(const u8 *p, u32 off)
 {
-    return (u32)p[off] | ((u32)p[off + 1] << 8) | ((u32)p[off + 2] << 16) | ((u32)p[off + 3] << 24);
+    return *(const u32a *)(p + off);
 }
 
 #define IO16(off) Rd16(NitroPort_IoReg, (off))
-#define IO32(off) Rd32(NitroPort_IoReg, (off))
 
 /* LCDC addresses of the VRAM banks, relative to the LCDC view. */
 static const u32 sBankLcdc[9] = {
@@ -79,21 +93,23 @@ typedef struct Engine {
     const u8 *bgExt[4];    /* BG extended palette slots (8 KB each) or NULL */
     const u8 *objExt;      /* OBJ extended palette (8 KB) or NULL */
     BOOL isA;
+    /* The palettes as pixels (colour | OPAQUE), 0 for the transparent
+     * colour: index 0 of each 16 colours (4 bits per pixel), or of all 256
+     * (8 bits per pixel). */
+    u16 bgPal4[256];
+    u16 bgPal8[256];
+    u16 objPal4[256];
+    u16 objPal8[256];
 } Engine;
-
-/* One layer's pixels on the current line. */
-typedef struct Line {
-    u16 color[W];
-    u8 opaque[W];
-} Line;
 
 /* The OBJ layer's pixels on the current line. */
 typedef struct ObjLine {
-    u16 color[W];
-    u8 opaque[W];
+    u8 prios;              /* bit p: some pixel has priority p */
+    short x0, x1;          /* where the line's OBJs are */
+    u16 color[W];          /* colour | OPAQUE, or 0 */
     u8 prio[W];
-    u8 semi[W];            /* semi-transparent: blends with what's below */
     u8 alpha[W];           /* bitmap OBJ alpha 1-16 (16 = opaque) */
+    u8 semi[W];            /* semi-transparent: blends with what's below */
     u8 window[W];          /* inside the OBJ window */
 } ObjLine;
 
@@ -140,9 +156,24 @@ static void FindExtPalettes(Engine *e)
     }
 }
 
-static u16 PlttColor(const u8 *pltt, int index)
+static inline u16 PlttColor(const u8 *pltt, u32 index)
 {
-    return Rd16(pltt, (u32)index * 2) & 0x7FFF;
+    return Rd16(pltt, index * 2) & 0x7FFF;
+}
+
+static void MakePalettes(Engine *e)
+{
+    u32 i;
+
+    for (i = 0; i < 256; i++) {
+        u16 bg = PlttColor(e->bgPltt, i) | OPAQUE;
+        u16 obj = PlttColor(e->objPltt, i) | OPAQUE;
+
+        e->bgPal4[i] = (i & 15) ? bg : 0;
+        e->bgPal8[i] = i ? bg : 0;
+        e->objPal4[i] = (i & 15) ? obj : 0;
+        e->objPal8[i] = i ? obj : 0;
+    }
 }
 
 /* ----------------------------------------------------------------- BGs */
@@ -208,65 +239,205 @@ static const u8 *BgExtSlot(const Engine *e, int bg, u16 bgcnt)
     return e->bgExt[slot];
 }
 
-static void DrawTextBg(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y, Line *out)
+/* ---------------------------------------------------------- the line */
+
+/*
+ * Where a layer's pixels go. Two ways:
+ *   - T_PLAIN: every pixel is written (colour | OPAQUE, or 0), to a line of
+ *     the layer's own;
+ *   - otherwise into the screen's line, front layer first: a pixel only
+ *     goes where no layer in front has put one (and with T_WINDOW only where
+ *     the windows show the layer; with T_LAYER, which layer it was is noted
+ *     for the colour effects).
+ */
+enum { T_PLAIN = 1, T_WINDOW = 2, T_LAYER = 4 };
+
+typedef struct Target {
+    u16 *row;
+    u8 *layerOf;           /* T_LAYER */
+    const u8 *enable;      /* T_WINDOW: the layers each pixel shows */
+    u8 layer;
+    u8 bit;                /* 1 << layer */
+    int filled;            /* pixels of the line that have their layer */
+} Target;
+
+/* One pixel into the line. A macro over the drawing function's own copies
+ * of the target (row, enable, layerOf, layer, bit, filled), which the
+ * compiler can keep in registers: through the Target it would have to
+ * reload them after every pixel written. */
+#define PUT(x_, c_, flags_)                                                  \
+    do {                                                                     \
+        int px_ = (x_);                                                      \
+        u16 pc_ = (c_);                                                      \
+                                                                             \
+        if ((flags_) & T_PLAIN) {                                            \
+            row[px_] = pc_;                                                  \
+        } else if (pc_ && !(row[px_] & OPAQUE) &&                            \
+                   (!((flags_) & T_WINDOW) || (enable[px_] & bit))) {        \
+            row[px_] = pc_;                                                  \
+            if ((flags_) & T_LAYER) {                                        \
+                layerOf[px_] = layer;                                        \
+            }                                                                \
+            filled++;                                                        \
+        }                                                                    \
+    } while (0)
+
+#define TARGET_LOCALS(t)                                                     \
+    u16 *row = (t)->row;                                                     \
+    u8 *layerOf = (t)->layerOf;                                              \
+    const u8 *enable = (t)->enable;                                          \
+    u8 layer = (t)->layer;                                                   \
+    u8 bit = (t)->bit;                                                       \
+    int filled = (t)->filled
+
+/* A text BG's line, a tile (or the part of one on screen) at a time. */
+static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, int bg, u16 bgcnt, u32 dispcnt,
+                                                              int y, Target *t, int flags)
 {
     static const int sizes[4][2] = { { 256, 256 }, { 512, 256 }, { 256, 512 }, { 512, 512 } };
     int mapW = sizes[bgcnt >> 14][0];
     int mapH = sizes[bgcnt >> 14][1];
-    int hofs;
     const u8 *io = e->io;
+    const u8 *vram = e->bgVram;
+    u32 mask = e->bgMask;
     u32 charBase = CharBase(e, bgcnt, dispcnt);
     u32 screenBase = ScreenBase(e, bgcnt, dispcnt);
     BOOL bpp8 = (bgcnt & 0x80) != 0;
     const u8 *ext = (bpp8 && (dispcnt & 0x40000000)) ? BgExtSlot(e, bg, bgcnt) : NULL;
-    int ty, x;
+    int hofs = Rd16(io, 0x10 + bg * 4) & 0x1FF;
+    int ty = (y + (Rd16(io, 0x12 + bg * 4) & 0x1FF)) & (mapH - 1);
+    /* The map row this line is in: its address for the left and the right
+     * 256-pixel half of the map. */
+    u32 rowAddr = screenBase + (u32)((ty >> 8) * (mapW >> 8)) * 0x800 + (u32)((ty & 255) >> 3) * 64;
+    int x = 0;
+    TARGET_LOCALS(t);
 
-    hofs = Rd16(io, 0x10 + bg * 4) & 0x1FF;
-    ty = (y + (Rd16(io, 0x12 + bg * 4) & 0x1FF)) & (mapH - 1);
-
-    for (x = 0; x < W; x++) {
+    while (x < W) {
         int tx = (x + hofs) & (mapW - 1);
-        u32 block = (u32)((tx >> 8) + ((ty >> 8) * (mapW >> 8)));
-        u32 entryAddr = screenBase + block * 0x800 + (u32)(((ty & 255) >> 3) * 32 + ((tx & 255) >> 3)) * 2;
-        u16 entry = Rd16(e->bgVram, entryAddr & e->bgMask);
-        int tile = entry & 0x3FF;
-        int px = tx & 7;
-        int py = ty & 7;
-        int index;
+        int px0 = tx & 7;
+        int n = 8 - px0;
+        u32 entryAddr = rowAddr + (u32)(tx >> 8) * 0x800 + (u32)((tx & 255) >> 3) * 2;
+        u32 entry = Rd16(vram, entryAddr & mask);
+        u32 tile = entry & 0x3FF;
+        int py = (entry & 0x800) ? 7 - (ty & 7) : (ty & 7);
+        int flip = (entry & 0x400) ? 7 : 0;   /* pixel px of the tile is at px ^ flip */
+        int i;
 
-        if (entry & 0x400) {
-            px = 7 - px;
-        }
-        if (entry & 0x800) {
-            py = 7 - py;
+        if (n > W - x) {
+            n = W - x;
         }
         if (bpp8) {
-            index = e->bgVram[(charBase + (u32)tile * 64 + (u32)py * 8 + (u32)px) & e->bgMask];
-            if (index == 0) {
-                out->opaque[x] = 0;
-                continue;
-            }
-            out->color[x] = ext != NULL ? PlttColor(ext, ((entry >> 12) << 8) | index)
-                                        : PlttColor(e->bgPltt, index);
-        } else {
-            u8 pair = e->bgVram[(charBase + (u32)tile * 32 + (u32)py * 4 + (u32)(px >> 1)) & e->bgMask];
+            const u8 *chars = vram + ((charBase + tile * 64 + (u32)py * 8) & mask);
 
-            index = (px & 1) ? (pair >> 4) : (pair & 0xF);
-            if (index == 0) {
-                out->opaque[x] = 0;
-                continue;
+            if (ext != NULL) {
+                const u8 *pltt = ext + ((entry >> 12) << 9);
+
+                for (i = 0; i < n; i++) {
+                    u32 index = chars[(px0 + i) ^ flip];
+
+                    PUT(x + i, index ? (u16)(PlttColor(pltt, index) | OPAQUE) : 0, flags);
+                }
+            } else {
+                for (i = 0; i < n; i++) {
+                    PUT(x + i, e->bgPal8[chars[(px0 + i) ^ flip]], flags);
+                }
             }
-            out->color[x] = PlttColor(e->bgPltt, ((entry >> 12) << 4) | index);
+        } else {
+            u32 bits = Rd32(vram, (charBase + tile * 32 + (u32)py * 4) & mask);
+            const u16 *pal = e->bgPal4 + ((entry >> 12) << 4);
+
+            if (bits == 0) {
+                /* all transparent */
+                if (flags & T_PLAIN) {
+                    memset(row + x, 0, (size_t)n * 2);
+                }
+            } else if (n == 8) {
+                if (flip) {
+                    /* the pixels right to left: the nibbles high to low */
+                    bits = ((bits >> 4) & 0x0F0F0F0Fu) | ((bits & 0x0F0F0F0Fu) << 4);
+                    bits = (bits >> 24) | ((bits >> 8) & 0xFF00u) | ((bits << 8) & 0xFF0000u) | (bits << 24);
+                }
+                PUT(x + 0, pal[bits & 15], flags);
+                PUT(x + 1, pal[(bits >> 4) & 15], flags);
+                PUT(x + 2, pal[(bits >> 8) & 15], flags);
+                PUT(x + 3, pal[(bits >> 12) & 15], flags);
+                PUT(x + 4, pal[(bits >> 16) & 15], flags);
+                PUT(x + 5, pal[(bits >> 20) & 15], flags);
+                PUT(x + 6, pal[(bits >> 24) & 15], flags);
+                PUT(x + 7, pal[bits >> 28], flags);
+            } else {
+                for (i = 0; i < n; i++) {
+                    PUT(x + i, pal[(bits >> (((px0 + i) ^ flip) * 4)) & 0xF], flags);
+                }
+            }
         }
-        out->opaque[x] = 1;
+        x += n;
+    }
+    t->filled = filled;
+}
+
+static void DrawTextBg(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y, Target *t, int flags)
+{
+    switch (flags) {
+    case T_PLAIN:
+        DrawTextBgT(e, bg, bgcnt, dispcnt, y, t, T_PLAIN);
+        break;
+    case 0:
+        DrawTextBgT(e, bg, bgcnt, dispcnt, y, t, 0);
+        break;
+    case T_WINDOW:
+        DrawTextBgT(e, bg, bgcnt, dispcnt, y, t, T_WINDOW);
+        break;
+    case T_LAYER:
+        DrawTextBgT(e, bg, bgcnt, dispcnt, y, t, T_LAYER);
+        break;
+    default:
+        DrawTextBgT(e, bg, bgcnt, dispcnt, y, t, T_WINDOW | T_LAYER);
+        break;
+    }
+}
+
+/* A layer's own line (T_PLAIN) into the screen's line, from x0 to x1; for
+ * the OBJ line, only the pixels of priority prio. */
+static inline __attribute__((always_inline)) void MergeT(Target *t, const u16 *line, const u8 *prioOf,
+                                                         int prio, int x0, int x1, int flags)
+{
+    int x;
+    TARGET_LOCALS(t);
+
+    for (x = x0; x < x1; x++) {
+        if (prioOf == NULL || prioOf[x] == prio) {
+            PUT(x, line[x], flags);
+        }
+    }
+    t->filled = filled;
+}
+
+static void Merge(Target *t, const u16 *line, const u8 *prioOf, int prio, int x0, int x1, int flags)
+{
+    switch (flags) {
+    case 0:
+        MergeT(t, line, prioOf, prio, x0, x1, 0);
+        break;
+    case T_WINDOW:
+        MergeT(t, line, prioOf, prio, x0, x1, T_WINDOW);
+        break;
+    case T_LAYER:
+        MergeT(t, line, prioOf, prio, x0, x1, T_LAYER);
+        break;
+    default:
+        MergeT(t, line, prioOf, prio, x0, x1, T_WINDOW | T_LAYER);
+        break;
     }
 }
 
 /* Affine and extended BGs: the texture coordinate of each pixel comes from
  * the reference point and the 2x2 matrix (8 fractional bits). */
-static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt, int y, Line *out)
+static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt, int y, u16 *out)
 {
     const u8 *io = e->io;
+    const u8 *vram = e->bgVram;
+    u32 mask = e->bgMask;
     u32 base = bg == 2 ? 0x20 : 0x30;
     s32 pa = (s16)Rd16(io, base + 0);
     s32 pb = (s16)Rd16(io, base + 2);
@@ -305,9 +476,9 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
     for (x = 0; x < W; x++, fx += pa, fy += pc) {
         s32 tx = fx >> 8;
         s32 ty = fy >> 8;
-        int index;
+        u32 index;
 
-        out->opaque[x] = 0;
+        out[x] = 0;
         if (wrap) {
             tx &= mapW - 1;
             ty &= mapH - 1;
@@ -315,35 +486,26 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
             continue;
         }
 
-        if (mode == 3) {
-            u16 c = Rd16(e->bgVram, (screenBase + ((u32)ty * (u32)mapW + (u32)tx) * 2) & e->bgMask);
+        switch (mode) {
+        case 3: {
+            u16 c = Rd16(vram, (screenBase + ((u32)ty * (u32)mapW + (u32)tx) * 2) & mask);
 
             if (c & 0x8000) {
-                out->color[x] = c & 0x7FFF;
-                out->opaque[x] = 1;
+                out[x] = c;   /* colour | OPAQUE */
             }
-            continue;
+            break;
         }
-        if (mode == 2) {
-            index = e->bgVram[(screenBase + (u32)ty * (u32)mapW + (u32)tx) & e->bgMask];
-            if (index != 0) {
-                out->color[x] = PlttColor(e->bgPltt, index);
-                out->opaque[x] = 1;
-            }
-            continue;
-        }
-        if (mode == 0) {
-            int tile = e->bgVram[(screenBase + (u32)(ty >> 3) * (u32)(mapW >> 3) + (u32)(tx >> 3)) & e->bgMask];
+        case 2:
+            out[x] = e->bgPal8[vram[(screenBase + (u32)ty * (u32)mapW + (u32)tx) & mask]];
+            break;
+        case 0: {
+            u32 tile = vram[(screenBase + (u32)(ty >> 3) * (u32)(mapW >> 3) + (u32)(tx >> 3)) & mask];
 
-            index = e->bgVram[(charBase + (u32)tile * 64 + (u32)(ty & 7) * 8 + (u32)(tx & 7)) & e->bgMask];
-            if (index != 0) {
-                out->color[x] = PlttColor(e->bgPltt, index);
-                out->opaque[x] = 1;
-            }
-            continue;
+            out[x] = e->bgPal8[vram[(charBase + tile * 64 + (u32)(ty & 7) * 8 + (u32)(tx & 7)) & mask]];
+            break;
         }
-        {
-            u16 entry = Rd16(e->bgVram, (screenBase + ((u32)(ty >> 3) * (u32)(mapW >> 3) + (u32)(tx >> 3)) * 2) & e->bgMask);
+        default: {
+            u32 entry = Rd16(vram, (screenBase + ((u32)(ty >> 3) * (u32)(mapW >> 3) + (u32)(tx >> 3)) * 2) & mask);
             int px = tx & 7;
             int py = ty & 7;
 
@@ -353,12 +515,13 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
             if (entry & 0x800) {
                 py = 7 - py;
             }
-            index = e->bgVram[(charBase + (u32)(entry & 0x3FF) * 64 + (u32)py * 8 + (u32)px) & e->bgMask];
+            index = vram[(charBase + (entry & 0x3FF) * 64 + (u32)py * 8 + (u32)px) & mask];
             if (index != 0) {
-                out->color[x] = ext != NULL ? PlttColor(ext, ((entry >> 12) << 8) | index)
-                                            : PlttColor(e->bgPltt, index);
-                out->opaque[x] = 1;
+                out[x] = (ext != NULL ? PlttColor(ext, ((entry >> 12) << 8) | index)
+                                      : PlttColor(e->bgPltt, index)) | OPAQUE;
             }
+            break;
+        }
         }
     }
 }
@@ -371,160 +534,303 @@ static const u8 sObjSize[3][4][2] = {
     { { 8, 16 }, { 8, 32 }, { 16, 32 }, { 32, 64 } },     /* tall */
 };
 
-static void DrawObjs(const Engine *e, u32 dispcnt, int y, ObjLine *out)
+/* An OBJ that shows, as OAM describes it, worked out once a frame. */
+typedef struct Obj {
+    s16 ox;                /* left edge, -256..255 */
+    u8 oy;
+    u8 w, h;
+    u16 boxW, boxH;        /* doubled for double-size affine OBJs */
+    u8 affine, hflip, vflip, bpp8;
+    u8 mode;               /* 0 normal, 1 semi-transparent, 2 window, 3 bitmap */
+    u8 prio;
+    u8 pal;
+    u16 tile;
+    s32 pa, pb, pc, pd;
+} Obj;
+
+/* This frame's OBJs, and which of them are on each line (in OAM order). */
+typedef struct ObjFrame {
+    Obj obj[128];
+    u8 count;
+    u8 blends;             /* some are semi-transparent or bitmap OBJs */
+    u8 onLine[H][128];
+    u8 lineCount[H];
+} ObjFrame;
+
+static void SortObjs(const Engine *e, ObjFrame *f)
 {
-    int i;
+    int i, y;
 
-    memset(out->opaque, 0, sizeof(out->opaque));
-    memset(out->window, 0, sizeof(out->window));
-    if (!(dispcnt & 0x1000)) {
-        return;
-    }
-
+    f->count = 0;
+    f->blends = 0;
+    memset(f->lineCount, 0, sizeof(f->lineCount));
     for (i = 0; i < 128; i++) {
         const u8 *o = e->oam + i * 8;
         u16 a0 = Rd16(o, 0), a1 = Rd16(o, 2), a2 = Rd16(o, 4);
-        BOOL affine = (a0 & 0x100) != 0;
         int shape = (a0 >> 14) & 3;
-        int mode = (a0 >> 10) & 3;
-        int w, h, boxW, boxH, oy, ox, ly, sx;
-        s32 pa = 256, pb = 0, pc = 0, pd = 256;
-        BOOL bpp8 = (a0 & 0x2000) != 0;
-        int tile = a2 & 0x3FF;
-        int prio = (a2 >> 10) & 3;
-        int pal = a2 >> 12;
+        Obj *obj = &f->obj[f->count];
 
-        if (!affine && (a0 & 0x200)) {
+        if (!(a0 & 0x100) && (a0 & 0x200)) {
             continue;                       /* hidden */
         }
         if (shape == 3) {
             continue;
         }
-        w = sObjSize[shape][(a1 >> 14) & 3][0];
-        h = sObjSize[shape][(a1 >> 14) & 3][1];
-        boxW = w;
-        boxH = h;
-        if (affine) {
+        obj->affine = (a0 & 0x100) != 0;
+        obj->w = sObjSize[shape][(a1 >> 14) & 3][0];
+        obj->h = sObjSize[shape][(a1 >> 14) & 3][1];
+        obj->boxW = obj->w;
+        obj->boxH = obj->h;
+        obj->pa = 256;
+        obj->pb = 0;
+        obj->pc = 0;
+        obj->pd = 256;
+        if (obj->affine) {
             int p = (a1 >> 9) & 0x1F;
 
-            pa = (s16)Rd16(e->oam, (u32)p * 32 + 6);
-            pb = (s16)Rd16(e->oam, (u32)p * 32 + 14);
-            pc = (s16)Rd16(e->oam, (u32)p * 32 + 22);
-            pd = (s16)Rd16(e->oam, (u32)p * 32 + 30);
+            obj->pa = (s16)Rd16(e->oam, (u32)p * 32 + 6);
+            obj->pb = (s16)Rd16(e->oam, (u32)p * 32 + 14);
+            obj->pc = (s16)Rd16(e->oam, (u32)p * 32 + 22);
+            obj->pd = (s16)Rd16(e->oam, (u32)p * 32 + 30);
             if (a0 & 0x200) {               /* double size */
-                boxW *= 2;
-                boxH *= 2;
+                obj->boxW *= 2;
+                obj->boxH *= 2;
             }
         }
-        oy = a0 & 0xFF;
-        ly = (y - oy) & 0xFF;
-        if (ly >= boxH) {
-            continue;
+        obj->oy = (u8)(a0 & 0xFF);
+        obj->ox = (s16)(a1 & 0x1FF);
+        if (obj->ox >= 256) {
+            obj->ox -= 512;
         }
-        ox = a1 & 0x1FF;
-        if (ox >= 256) {
-            ox -= 512;
+        obj->hflip = !obj->affine && (a1 & 0x1000) != 0;
+        obj->vflip = !obj->affine && (a1 & 0x2000) != 0;
+        obj->bpp8 = (a0 & 0x2000) != 0;
+        obj->mode = (a0 >> 10) & 3;
+        obj->tile = a2 & 0x3FF;
+        obj->prio = (a2 >> 10) & 3;
+        obj->pal = a2 >> 12;
+        if (obj->ox >= W || obj->ox + obj->boxW <= 0) {
+            continue;                       /* off the sides */
         }
 
-        for (sx = 0; sx < boxW; sx++) {
-            int x = ox + sx;
-            int tx, tyy, color = -1;
-            u16 rgb = 0;
-            int alpha = 16;
-
-            if (x < 0 || x >= W) {
-                continue;
+        /* The lines it's on: (y - oy) & 255 < boxH. */
+        for (y = 0; y < H; y++) {
+            if (((y - obj->oy) & 0xFF) < obj->boxH) {
+                f->onLine[y][f->lineCount[y]++] = f->count;
             }
-            if (out->opaque[x] && mode != 2) {
-                continue;                   /* a lower-numbered OBJ is in front */
-            }
-            if (affine) {
-                s32 dx = sx - boxW / 2;
-                s32 dy = ly - boxH / 2;
+        }
+        if (obj->mode == 1 || obj->mode == 3) {
+            f->blends = 1;
+        }
+        f->count++;
+    }
+}
 
-                tx = ((pa * dx + pb * dy) >> 8) + w / 2;
-                tyy = ((pc * dx + pd * dy) >> 8) + h / 2;
-                if (tx < 0 || tyy < 0 || tx >= w || tyy >= h) {
+/* The address of an OBJ's pixel row in its graphics: a tile's row of 8
+ * pixels (tx a multiple of 8), or for bitmap OBJs the pixel itself. */
+static u32 ObjCharAddr(const Obj *obj, u32 dispcnt, int tx, int ty)
+{
+    if (obj->mode == 3) {
+        if (dispcnt & 0x40) {       /* 1D */
+            return (u32)obj->tile * ((dispcnt & 0x400000) ? 256u : 128u) + ((u32)ty * obj->w + (u32)tx) * 2;
+        } else if (dispcnt & 0x20) {    /* 2D, 256 dots wide */
+            return (u32)(obj->tile & 0x1F) * 0x10 + (u32)(obj->tile & ~0x1F) * 0x80 + ((u32)ty * 256 + (u32)tx) * 2;
+        } else {                    /* 2D, 128 dots wide */
+            return (u32)(obj->tile & 0x0F) * 0x10 + (u32)(obj->tile & ~0x0F) * 0x80 + ((u32)ty * 128 + (u32)tx) * 2;
+        }
+    } else {
+        u32 addr;
+        int tileX = tx >> 3, tileY = ty >> 3;
+
+        if (dispcnt & 0x10) {       /* 1D character mapping */
+            u32 unit = 32u << ((dispcnt >> 20) & 3);
+            u32 n = (u32)(tileY * (obj->w >> 3) + tileX);
+
+            addr = (u32)obj->tile * unit + n * (obj->bpp8 ? 64u : 32u);
+        } else {                    /* 2D: 32 characters per row */
+            addr = (u32)obj->tile * 32 + (u32)tileY * 1024 + (u32)tileX * (obj->bpp8 ? 64u : 32u);
+        }
+        return addr + (u32)(ty & 7) * (obj->bpp8 ? 8u : 4u);
+    }
+}
+
+/* One pixel of an OBJ's graphics, at (tx, ty) in it: its colour | OPAQUE
+ * and *alpha, or 0 where it's transparent. */
+static u16 ObjPixel(const Engine *e, const Obj *obj, u32 dispcnt, int tx, int ty, int *alpha)
+{
+    u32 addr;
+
+    *alpha = 16;
+    if (obj->mode == 3) {                /* bitmap OBJ: 15-bit colour */
+        u16 rgb = Rd16(e->objVram, ObjCharAddr(obj, dispcnt, tx, ty) & e->objMask);
+
+        if (!(rgb & 0x8000) || obj->pal == 0) {
+            return 0;
+        }
+        *alpha = obj->pal + 1;
+        return rgb;
+    }
+    addr = ObjCharAddr(obj, dispcnt, tx & ~7, ty);
+    if (obj->bpp8) {
+        u32 index = e->objVram[(addr + (u32)(tx & 7)) & e->objMask];
+
+        if (index == 0) {
+            return 0;
+        }
+        return ((e->objExt != NULL && (dispcnt & 0x80000000))
+                    ? PlttColor(e->objExt, ((u32)obj->pal << 8) | index)
+                    : PlttColor(e->objPltt, index)) | OPAQUE;
+    } else {
+        u8 pair = e->objVram[(addr + (u32)((tx & 7) >> 1)) & e->objMask];
+        u32 index = (tx & 1) ? (pair >> 4) : (pair & 0xF);
+
+        if (index == 0) {
+            return 0;
+        }
+        return PlttColor(e->objPltt, ((u32)obj->pal << 4) | index) | OPAQUE;
+    }
+}
+
+/* Put one OBJ pixel on the line (lower-numbered OBJs, drawn first, stay in
+ * front; the window OBJs only mark the OBJ window). */
+static inline void PutObjPixel(const Obj *obj, ObjLine *out, int x, u16 rgb, int alpha)
+{
+    if (obj->mode == 2) {
+        out->window[x] = 1;
+        return;
+    }
+    out->color[x] = rgb | OPAQUE;
+    out->prio[x] = obj->prio;
+    out->prios |= (u8)(1 << obj->prio);
+    out->semi[x] = obj->mode == 1;
+    out->alpha[x] = (u8)alpha;
+}
+
+/* The OBJ layer's line; returns whether any OBJ is on it. */
+static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, ObjLine *out)
+{
+    int k;
+
+    if (!(dispcnt & 0x1000) || f->lineCount[y] == 0) {
+        return FALSE;
+    }
+    memset(out->color, 0, sizeof(out->color));
+    memset(out->window, 0, sizeof(out->window));
+    out->prios = 0;
+    out->x0 = W;
+    out->x1 = 0;
+
+    for (k = 0; k < f->lineCount[y]; k++) {
+        const Obj *obj = &f->obj[f->onLine[y][k]];
+        int ly = (y - obj->oy) & 0xFF;
+        int sx = obj->ox < 0 ? -obj->ox : 0;
+        int end = obj->ox + obj->boxW > W ? W - obj->ox : obj->boxW;
+
+        if (obj->ox + sx < out->x0) {
+            out->x0 = (short)(obj->ox + sx);
+        }
+        if (obj->ox + end > out->x1) {
+            out->x1 = (short)(obj->ox + end);
+        }
+
+        if (obj->affine) {
+            s32 dy = ly - obj->boxH / 2;
+            s32 dx = sx - obj->boxW / 2;
+            s32 fx = obj->pa * dx + obj->pb * dy;
+            s32 fy = obj->pc * dx + obj->pd * dy;
+
+            for (; sx < end; sx++, fx += obj->pa, fy += obj->pc) {
+                int x = obj->ox + sx;
+                int tx = (fx >> 8) + obj->w / 2;
+                int ty = (fy >> 8) + obj->h / 2;
+                int alpha;
+                u16 rgb;
+
+                if ((out->color[x] & OPAQUE) && obj->mode != 2) {
                     continue;
                 }
-            } else {
-                tx = (a1 & 0x1000) ? w - 1 - sx : sx;
-                tyy = (a1 & 0x2000) ? h - 1 - ly : ly;
-            }
-
-            if (mode == 3) {                /* bitmap OBJ: 15-bit colour */
-                u32 addr;
-
-                if (dispcnt & 0x40) {       /* 1D */
-                    addr = (u32)tile * ((dispcnt & 0x400000) ? 256u : 128u) + ((u32)tyy * (u32)w + (u32)tx) * 2;
-                } else if (dispcnt & 0x20) {    /* 2D, 256 dots wide */
-                    addr = (u32)(tile & 0x1F) * 0x10 + (u32)(tile & ~0x1F) * 0x80 + ((u32)tyy * 256 + (u32)tx) * 2;
-                } else {                    /* 2D, 128 dots wide */
-                    addr = (u32)(tile & 0x0F) * 0x10 + (u32)(tile & ~0x0F) * 0x80 + ((u32)tyy * 128 + (u32)tx) * 2;
-                }
-                rgb = Rd16(e->objVram, addr & e->objMask);
-                if (!(rgb & 0x8000) || pal == 0) {
+                if (tx < 0 || ty < 0 || tx >= obj->w || ty >= obj->h) {
                     continue;
                 }
-                rgb &= 0x7FFF;
-                alpha = pal + 1;
-                color = 1;
-            } else {
-                u32 addr;
-                int index;
-                int tileX = tx >> 3, tileY = tyy >> 3;
-
-                if (dispcnt & 0x10) {       /* 1D character mapping */
-                    u32 unit = 32u << ((dispcnt >> 20) & 3);
-                    u32 n = (u32)(tileY * (w >> 3) + tileX);
-
-                    addr = (u32)tile * unit + n * (bpp8 ? 64u : 32u);
-                } else {                    /* 2D: 32 characters per row */
-                    addr = (u32)tile * 32 + (u32)tileY * 1024 + (u32)tileX * (bpp8 ? 64u : 32u);
+                rgb = ObjPixel(e, obj, dispcnt, tx, ty, &alpha);
+                if (rgb) {
+                    PutObjPixel(obj, out, x, rgb, alpha);
                 }
-                if (bpp8) {
-                    index = e->objVram[(addr + (u32)(tyy & 7) * 8 + (u32)(tx & 7)) & e->objMask];
-                    if (index == 0) {
+            }
+        } else if (obj->mode == 3) {
+            int ty = obj->vflip ? obj->h - 1 - ly : ly;
+
+            for (; sx < end; sx++) {
+                int x = obj->ox + sx;
+                int tx = obj->hflip ? obj->w - 1 - sx : sx;
+                int alpha;
+                u16 rgb;
+
+                if (out->color[x] & OPAQUE) {
+                    continue;
+                }
+                rgb = ObjPixel(e, obj, dispcnt, tx, ty, &alpha);
+                if (rgb) {
+                    PutObjPixel(obj, out, x, rgb, alpha);
+                }
+            }
+        } else {
+            /* A row of tiles: each tile's row of 8 pixels read once. */
+            int ty = obj->vflip ? obj->h - 1 - ly : ly;
+            const u8 *vram = e->objVram;
+            u32 mask = e->objMask;
+            const u8 *ext = obj->bpp8 && e->objExt != NULL && (dispcnt & 0x80000000)
+                                ? e->objExt + ((u32)obj->pal << 9) : NULL;
+            const u16 *pal = obj->bpp8 ? e->objPal8 : e->objPal4 + ((u32)obj->pal << 4);
+            while (sx < end) {
+                int tx = obj->hflip ? obj->w - 1 - sx : sx;
+                u32 addr = ObjCharAddr(obj, dispcnt, tx & ~7, ty);
+                /* the pixels of this tile on the line, left to right */
+                int n = obj->hflip ? (tx & 7) + 1 : 8 - (tx & 7);
+                int step = obj->hflip ? -1 : 1;
+                int i;
+
+                if (n > end - sx) {
+                    n = end - sx;
+                }
+                for (i = 0; i < n; i++, tx += step) {
+                    int x = obj->ox + sx + i;
+                    u32 index;
+
+                    if ((out->color[x] & OPAQUE) && obj->mode != 2) {
                         continue;
                     }
-                    rgb = (e->objExt != NULL && (dispcnt & 0x80000000))
-                              ? PlttColor(e->objExt, (pal << 8) | index)
-                              : PlttColor(e->objPltt, index);
-                } else {
-                    u8 pair = e->objVram[(addr + (u32)(tyy & 7) * 4 + (u32)((tx & 7) >> 1)) & e->objMask];
+                    if (obj->bpp8) {
+                        index = vram[(addr + (u32)(tx & 7)) & mask];
+                    } else {
+                        u8 pair = vram[(addr + (u32)((tx & 7) >> 1)) & mask];
 
-                    index = (tx & 1) ? (pair >> 4) : (pair & 0xF);
-                    if (index == 0) {
-                        continue;
+                        index = (tx & 1) ? (pair >> 4) : (pair & 0xF);
                     }
-                    rgb = PlttColor(e->objPltt, (pal << 4) | index);
+                    if (index != 0) {
+                        PutObjPixel(obj, out, x, ext != NULL ? PlttColor(ext, index) : pal[index], 16);
+                    }
                 }
-                color = 1;
+                sx += n;
             }
-
-            if (color < 0) {
-                continue;
-            }
-            if (mode == 2) {
-                out->window[x] = 1;
-                continue;
-            }
-            out->color[x] = rgb;
-            out->opaque[x] = 1;
-            out->prio[x] = (u8)prio;
-            out->semi[x] = mode == 1;
-            out->alpha[x] = (u8)alpha;
         }
     }
+    return TRUE;
 }
 
 /* ------------------------------------------------------------ the frame */
 
 static u16 Blend(u16 a, u16 b, int eva, int evb)
 {
-    int r = ((a & 31) * eva + (b & 31) * evb) >> 4;
-    int g = (((a >> 5) & 31) * eva + ((b >> 5) & 31) * evb) >> 4;
-    int bl = (((a >> 10) & 31) * eva + ((b >> 10) & 31) * evb) >> 4;
+    /* The three parts side by side in one word (red at bit 0, blue at 10,
+     * green at 21), so two multiplications do all six; each sum is under
+     * 1024 and can't run into the next part. */
+    u32 pa = (a & 0x7C1Fu) | ((u32)(a & 0x03E0u) << 16);
+    u32 pb = (b & 0x7C1Fu) | ((u32)(b & 0x03E0u) << 16);
+    u32 sum = pa * (u32)eva + pb * (u32)evb;
+    int r = (sum & 0x3FF) >> 4;
+    int bl = ((sum >> 10) & 0x3FF) >> 4;
+    int g = ((sum >> 21) & 0x3FF) >> 4;
 
     if (r > 31) {
         r = 31;
@@ -564,10 +870,33 @@ static BOOL InRange(int v, int lo, int hi)
     return lo <= hi ? (v >= lo && v < hi) : (v >= lo || v < hi);
 }
 
+/* Set enable[x] = value for the x in a window's horizontal range. */
+static void FillRange(u8 *enable, int lo, int hi, u8 value)
+{
+    if (lo <= hi) {
+        if (hi > lo) {
+            memset(enable + lo, value, (size_t)(hi - lo));
+        }
+    } else {
+        memset(enable + lo, value, (size_t)(W - lo));   /* lo <= 255 */
+        memset(enable, value, (size_t)hi);
+    }
+}
+
+/* The layers of a line, front to back: the OBJs of priority 0, the BGs of
+ * priority 0 (by number), the OBJs of priority 1, and so on. */
+#define SLOT_OBJ 4
+
 static void DrawEngine(Engine *e, u16 *out)
 {
-    static Line bgLine[4];
+    static u16 bgLine[W];
     static ObjLine objLine;
+    static ObjFrame objFrame;
+    static u8 enableLine[W];
+    /* Per pixel of the line, when blending needs two layers: the two
+     * front-most layers (0-3 BG, 4 OBJ), their colours, how many found. */
+    static u16 color1[W], color2[W];
+    static u8 layer1[W], layer2[W], found[W];
     const u8 *io = e->io;
     u32 dispcnt = Rd32(io, 0);
     u16 bgcnt[4];
@@ -582,7 +911,9 @@ static void DrawEngine(Engine *e, u16 *out)
     u16 winin = Rd16(io, 0x48), winout = Rd16(io, 0x4A);
     BOOL anyWindow = (dispcnt & 0xE000) != 0;
     u16 backdrop = PlttColor(e->bgPltt, 0);
-    int y, x, bg;
+    BOOL blend2;   /* some pixels may blend two layers */
+    int flags;     /* how layers go into the line, when only the front one matters */
+    int y, x, bg, p;
 
     if (eva > 16) {
         eva = 16;
@@ -594,6 +925,7 @@ static void DrawEngine(Engine *e, u16 *out)
         evy = 16;
     }
     FindExtPalettes(e);
+    MakePalettes(e);
     for (bg = 0; bg < 4; bg++) {
         bgcnt[bg] = Rd16(io, 8 + bg * 2);
         kind[bg] = (dispcnt & (0x100u << bg)) ? BgKind(e, bg, dispcnt) : BG_NONE;
@@ -601,77 +933,157 @@ static void DrawEngine(Engine *e, u16 *out)
             kind[bg] = BG_NONE;   /* not drawn yet (see the top of this file) */
         }
     }
+    objFrame.blends = 0;
+    if (dispcnt & 0x1000) {
+        SortObjs(e, &objFrame);
+    }
+    if (!anyWindow) {
+        memset(enableLine, 0x3F, sizeof(enableLine));
+    }
+    /* Blending two layers needs second targets, and alpha blending or OBJs
+     * that blend by themselves; otherwise each pixel shows its front-most
+     * layer, perhaps brightened or darkened. */
+    blend2 = (bldcnt & 0x3F00) && (effect == 1 || objFrame.blends);
+    flags = (anyWindow ? T_WINDOW : 0) | (effect >= 2 ? T_LAYER : 0);
 
     for (y = 0; y < H; y++) {
         u16 *row = out + y * W;
-        BOOL inWin0V = (dispcnt & 0x2000) && InRange(y, win0v >> 8, win0v & 0xFF);
-        BOOL inWin1V = (dispcnt & 0x4000) && InRange(y, win1v >> 8, win1v & 0xFF);
+        BOOL objs = DrawObjs(e, &objFrame, dispcnt, y, &objLine);
+        Target t;
+        int done = 0;   /* (blend2) pixels that have both their layers */
 
-        for (bg = 0; bg < 4; bg++) {
-            if (kind[bg] == BG_TEXT) {
-                DrawTextBg(e, bg, bgcnt[bg], dispcnt, y, &bgLine[bg]);
-            } else if (kind[bg] == BG_AFFINE || kind[bg] == BG_EXTENDED) {
-                DrawAffineBg(e, bg, kind[bg], bgcnt[bg], dispcnt, y, &bgLine[bg]);
+        /* Which layers and effects each pixel shows (the windows): window
+         * 0 over window 1 over the OBJ window over the outside. */
+        if (anyWindow) {
+            memset(enableLine, winout & 0x3F, sizeof(enableLine));
+            if ((dispcnt & 0x8000) && objs) {
+                for (x = objLine.x0; x < objLine.x1; x++) {
+                    if (objLine.window[x]) {
+                        enableLine[x] = (winout >> 8) & 0x3F;
+                    }
+                }
+            }
+            if ((dispcnt & 0x4000) && InRange(y, win1v >> 8, win1v & 0xFF)) {
+                FillRange(enableLine, win1h >> 8, win1h & 0xFF, (winin >> 8) & 0x3F);
+            }
+            if ((dispcnt & 0x2000) && InRange(y, win0v >> 8, win0v & 0xFF)) {
+                FillRange(enableLine, win0h >> 8, win0h & 0xFF, winin & 0x3F);
             }
         }
-        DrawObjs(e, dispcnt, y, &objLine);
 
-        for (x = 0; x < W; x++) {
-            /* Which layers and effects this pixel shows (the windows). */
-            u8 enable = 0x3F;
-            int top = 5, second = 5;          /* 0-3 BG, 4 OBJ, 5 backdrop */
-            u16 topColor = backdrop, secondColor = backdrop;
-            int topPrio = 4, secondPrio = 4;
-            int p;
-            u16 c;
+        t.row = blend2 ? bgLine : row;
+        t.layerOf = layer1;
+        t.enable = enableLine;
+        t.filled = 0;
+        if (blend2) {
+            memset(found, 0, sizeof(found));
+        } else {
+            memset(row, 0, W * sizeof(u16));
+        }
 
-            if (anyWindow) {
-                if (inWin0V && InRange(x, win0h >> 8, win0h & 0xFF)) {
-                    enable = winin & 0x3F;
-                } else if (inWin1V && InRange(x, win1h >> 8, win1h & 0xFF)) {
-                    enable = (winin >> 8) & 0x3F;
-                } else if ((dispcnt & 0x8000) && objLine.window[x]) {
-                    enable = (winout >> 8) & 0x3F;
-                } else {
-                    enable = winout & 0x3F;
+        /* The layers front to back (the OBJs of priority 0, the BGs of
+         * priority 0 by number, the OBJs of priority 1, ...), until every
+         * pixel has what it needs: the layers behind aren't even drawn. */
+        for (p = 0; p < 4; p++) {
+            int slot;
+
+            for (slot = -1; slot < 4; slot++) {
+                const u16 *px;
+                const u8 *prioOf = NULL;
+                int layer, x0 = 0, x1 = W;
+
+                if (blend2 ? done >= W : t.filled >= W) {
+                    break;
                 }
-            }
-
-            /* The two front-most visible layers: by priority, OBJ before
-             * a BG of the same priority, then BG0 before BG1 ... */
-            for (p = 0; p < 4; p++) {
-                if ((enable & 0x10) && objLine.opaque[x] && objLine.prio[x] == p) {
-                    if (top == 5) {
-                        top = 4;
-                        topColor = objLine.color[x];
-                        topPrio = p;
-                    } else if (second == 5) {
-                        second = 4;
-                        secondColor = objLine.color[x];
-                        secondPrio = p;
-                    }
-                }
-                for (bg = 0; bg < 4; bg++) {
-                    if (kind[bg] == BG_NONE || !(enable & (1 << bg)) ||
-                        (bgcnt[bg] & 3) != p || !bgLine[bg].opaque[x]) {
+                if (slot < 0) {
+                    if (!objs || !(objLine.prios & (1 << p))) {
                         continue;
                     }
-                    if (top == 5) {
-                        top = bg;
-                        topColor = bgLine[bg].color[x];
-                        topPrio = p;
-                    } else if (second == 5) {
-                        second = bg;
-                        secondColor = bgLine[bg].color[x];
-                        secondPrio = p;
+                    layer = SLOT_OBJ;
+                    px = objLine.color;
+                    prioOf = objLine.prio;
+                    x0 = objLine.x0;
+                    x1 = objLine.x1;
+                } else {
+                    bg = slot;
+                    if (kind[bg] == BG_NONE || (bgcnt[bg] & 3) != p) {
+                        continue;
+                    }
+                    layer = bg;
+                    px = bgLine;
+                    t.layer = (u8)layer;
+                    t.bit = (u8)(1 << layer);
+                    if (kind[bg] == BG_TEXT && !blend2) {
+                        /* straight into the line */
+                        DrawTextBg(e, bg, bgcnt[bg], dispcnt, y, &t, flags);
+                        continue;
+                    }
+                    if (kind[bg] == BG_TEXT) {
+                        DrawTextBg(e, bg, bgcnt[bg], dispcnt, y, &t, T_PLAIN);
+                    } else {
+                        DrawAffineBg(e, bg, kind[bg], bgcnt[bg], dispcnt, y, bgLine);
                     }
                 }
-            }
-            (void)topPrio;
-            (void)secondPrio;
+                t.layer = (u8)layer;
+                t.bit = (u8)(1 << layer);
 
-            c = topColor;
-            if (top == 4 && (objLine.semi[x] || objLine.alpha[x] < 16) &&
+                if (!blend2) {
+                    Merge(&t, px, prioOf, p, x0, x1, flags);
+                    continue;
+                }
+                for (x = x0; x < x1; x++) {
+                    u16 c = px[x];
+                    int n = found[x];
+
+                    if (!(c & OPAQUE) || n >= 2 || !(enableLine[x] & t.bit) ||
+                        (prioOf != NULL && prioOf[x] != p)) {
+                        continue;
+                    }
+                    if (n == 0) {
+                        color1[x] = c & 0x7FFF;
+                        layer1[x] = (u8)layer;
+                    } else {
+                        color2[x] = c & 0x7FFF;
+                        layer2[x] = (u8)layer;
+                        done++;
+                    }
+                    found[x] = (u8)(n + 1);
+                }
+            }
+        }
+
+        if (!blend2) {
+            if (!(flags & T_LAYER)) {
+                for (x = 0; x < W; x++) {
+                    u16 c = row[x];
+
+                    row[x] = (c & OPAQUE) ? (u16)(c & 0x7FFF) : backdrop;
+                }
+            } else {
+                /* brighten or darken the layers chosen */
+                for (x = 0; x < W; x++) {
+                    u16 c = row[x];
+                    int top = (c & OPAQUE) ? layer1[x] : 5;
+
+                    c = (c & OPAQUE) ? (u16)(c & 0x7FFF) : backdrop;
+                    if ((enableLine[x] & 0x20) && (bldcnt & (1 << top))) {
+                        c = effect == 2 ? Brighten(c, evy) : Darken(c, evy);
+                    }
+                    row[x] = c;
+                }
+            }
+            continue;
+        }
+        for (x = 0; x < W; x++) {
+            u8 enable = enableLine[x];
+            int n = found[x];
+            int top = n > 0 ? layer1[x] : 5;          /* 5: the backdrop */
+            int second = n > 1 ? layer2[x] : 5;
+            u16 topColor = n > 0 ? color1[x] : backdrop;
+            u16 secondColor = n > 1 ? color2[x] : backdrop;
+            u16 c = topColor;
+
+            if (top == SLOT_OBJ && (objLine.semi[x] || objLine.alpha[x] < 16) &&
                 (bldcnt & (0x100 << second))) {
                 /* Semi-transparent and bitmap OBJs blend with what's below,
                  * whatever the effect setting. */
@@ -704,6 +1116,13 @@ static void MasterBrightness(u16 *out, u16 reg)
         factor = 16;
     }
     if (factor == 0 || (mode != 1 && mode != 2)) {
+        return;
+    }
+    if (factor == 16) {
+        /* all the way: white or black */
+        for (i = 0; i < W * H; i++) {
+            out[i] = mode == 1 ? 0x7FFF : 0;
+        }
         return;
     }
     for (i = 0; i < W * H; i++) {
