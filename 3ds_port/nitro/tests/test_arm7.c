@@ -214,29 +214,39 @@ static void test_backup(void)
 /* The sound service is silent, but must take every request: the library
  * reuses its 256 commands only once the "ARM7" has counted them finished.
  * 3,000 frames' worth of requests would run out without that. */
+/* Pull the actual 16-bit mixer while testing ARM9 sound APIs. */
+extern void NitroPort_SoundRender(int16_t *stereo, size_t frames);
+
 static void test_sound(void)
 {
     static SNDDriverInfo info;
+    int16_t samples[2 * 96];
     u32 tag;
     int frame;
 
     SND_Init();
+    /* More lists than ARM9's pool: every command must come back even
+     * though the virtual ARM7 now executes real sequencer code. NULL
+     * sequence pointers are invalid; STOP_SEQ requires no sample data. */
     for (frame = 0; frame < 3000; ++frame) {
         SND_SetMasterVolume(frame & 127);
-        SND_StartSeq(0, NULL, 0, NULL);
-        (void)SND_FlushCommand(SND_COMMAND_NOBLOCK);   /* as SND_Main does */
+        SND_StopSeq(0);
+        (void)SND_FlushCommand(SND_COMMAND_NOBLOCK);
+        NitroPort_SoundRender(samples, 96);
     }
     CHECK(SND_CountFreeCommand() > 200);
     tag = SND_GetCurrentCommandTag();
     CHECK(SND_FlushCommand(SND_COMMAND_BLOCK));
+    NitroPort_SoundRender(samples, 96);
     SND_WaitForCommandProc(tag);
     CHECK(SND_IsFinishedCommandTag(tag));
-    CHECK(SND_GetPlayerStatus() == 0);              /* nothing plays */
+    CHECK(SND_GetPlayerStatus() == 0);
 
     memset(&info, 0x55, sizeof(info));
     SND_ReadDriverInfo(&info);
     tag = SND_GetCurrentCommandTag();
     (void)SND_FlushCommand(SND_COMMAND_BLOCK);
+    NitroPort_SoundRender(samples, 96);
     SND_WaitForCommandProc(tag);
     CHECK(info.workAddress != NULL);
     CHECK(info.lockedChannels == 0 && info.chCtrl[0] == 0);
