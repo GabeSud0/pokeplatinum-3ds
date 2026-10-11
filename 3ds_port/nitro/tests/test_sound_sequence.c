@@ -21,6 +21,13 @@ static int sChecks, sFailures;
 
 static union { uint64_t align; uint8_t bytes[512]; } sBankStorage;
 static union { uint64_t align; uint8_t bytes[512]; } sArcStorage;
+static int sAlarmCount;
+static void synthetic_alarm(void *arg)
+{
+    ++*(int *)arg;
+}
+extern void NitroPort_SoundPumpReplies(void);
+
 static const uint8_t sSequence[] = {
     SND_MML_PRG, 0,
     60, 120, 0x7f,                   /* MIDI note: middle C, velocity, length */
@@ -105,6 +112,20 @@ int main(void)
     NitroPort_SoundRender(stereo, 128);
     SND_WaitForCommandProc(tag);
     CHECK((SND_GetPlayerStatus() & 1u) == 0);
+
+    /* NitroSystem's stream player needs a real ARM7 alarm -> PXI reply.
+     * Alarm callback must run on the ARM9/game thread, not audio thread. */
+    SND_SetupAlarm(0, 1, 0, synthetic_alarm, &sAlarmCount);
+    SND_StartAlarm(0);
+    tag = SND_GetCurrentCommandTag();
+    CHECK(SND_FlushCommand(SND_COMMAND_BLOCK));
+    NitroPort_SoundRender(stereo, 256);
+    SND_WaitForCommandProc(tag);
+    NitroPort_SoundPumpReplies();
+    CHECK(sAlarmCount == 1);
+    NitroPort_SoundRender(stereo, 256);
+    NitroPort_SoundPumpReplies();
+    CHECK(sAlarmCount == 1);  /* one-shot, not periodic */
 
     printf("synthetic ARM9->ARM7 sequence: %d checks, %d failures\n",
            sChecks, sFailures);
