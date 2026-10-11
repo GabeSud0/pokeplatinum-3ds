@@ -1,0 +1,37 @@
+From 1c80151419ec4bce501a916e457381ad6d0d5cdc Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 00:13:57 -0700
+Subject: [PATCH] Sound capture: no division by zero without a callback
+ (SDK_PORT_3DS)
+
+NNSi_SndCaptureStart computes blockSize = bufLen / interval, and
+interval is 0 when no callback is given, as for reverb
+(NNS_SndCaptureStartReverb). The DS's software division returned
+without trapping and blockSize is then never used; on a PC it's a
+SIGFPE (Pokemon Platinum starts reverb in its opening). blockSize is 0
+there now.
+---
+ libraries/snd/src/capture.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/libraries/snd/src/capture.c b/libraries/snd/src/capture.c
+index eed98c3..cb2f13d 100644
+--- a/libraries/snd/src/capture.c
++++ b/libraries/snd/src/capture.c
+@@ -446,7 +446,13 @@ BOOL NNSi_SndCaptureStart (NNSSndCaptureType type, void * buffer0, void * buffer
+     cap->bufferL = buffer0;
+     cap->bufferR = buffer1;
+     cap->bufLen = bufLen;
++#ifdef SDK_PORT_3DS
++    /* interval is 0 without a callback (reverb, effect): the DS's software
++     * division gave 0 there, which isn't used; a PC traps on it. */
++    cap->blockSize = interval != 0 ? bufLen / interval : 0;
++#else
+     cap->blockSize = bufLen / interval;
++#endif
+ 
+     cap->curBuffer = 0;
+ 
+-- 
+2.43.0
+

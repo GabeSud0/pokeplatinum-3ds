@@ -1,0 +1,49 @@
+From 83b954595196c377a1f8f42d93dae8b9cb2ddbb4 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 23:20:20 -0700
+Subject: [PATCH] 64-bit integers 4-byte aligned, as on the DS (SDK_PORT_3DS)
+
+The DS's compiler used the old ARM ABI, where u64/s64 inside a struct
+are 4-byte aligned. GCC's ARM EABI aligns them to 8, which pads every
+struct holding one differently. For Pokemon Platinum that grows the
+save data's normal block past 13 sectors (it has 212 bytes to spare),
+so the save no longer fits its 32 sectors (SaveBlockInfo_Init asserts)
+and wouldn't match a cartridge's save.
+
+u64 and s64 are declared aligned(4) under SDK_PORT_3DS (GCC allows a
+typedef to lower alignment). With it the save blocks come out at
+0xCF2C and 0x121E4 bytes, the real game's sizes.
+---
+ include/nitro/types.h | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/include/nitro/types.h b/include/nitro/types.h
+index 89d48c3..6228406 100644
+--- a/include/nitro/types.h
++++ b/include/nitro/types.h
+@@ -30,6 +30,13 @@ typedef unsigned long u32;
+ 
+ #ifdef SDK_HAS_NO_LONG_LONG_INT_
+     typedef unsigned __int64 u64;
++#elif defined(SDK_PORT_3DS)
++    /* 4-byte aligned, as the DS's compiler laid them out (the old ARM ABI).
++     * GCC's ARM EABI aligns 64-bit integers to 8, which moves the fields
++     * after one and pads the structs that hold one: the game's save data
++     * then no longer fits its 32 sectors, and wouldn't match a cartridge's
++     * save. A smaller alignment on a typedef is what GCC allows for this. */
++    typedef unsigned long long int u64 __attribute__((aligned(4)));
+ #else
+     typedef unsigned long long int u64;
+ #endif
+@@ -46,6 +53,8 @@ typedef signed long s32;
+ 
+ #ifdef SDK_HAS_NO_LONG_LONG_INT_
+     typedef signed __int64 s64;
++#elif defined(SDK_PORT_3DS)
++    typedef signed long long int s64 __attribute__((aligned(4)));   /* see u64 */
+ #else
+     typedef signed long long int s64;
+ #endif
+-- 
+2.43.0
+

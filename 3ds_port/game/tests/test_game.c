@@ -32,6 +32,8 @@
 #include "pokedex_memory.h"
 #include "pokedex_data_index.h"
 #include "ribbon_save_data.h"
+#include "savedata.h"
+#include "savedata/save_table.h"
 #include "battle_regulation.h"
 #include "record_mixed_rng.h"
 #include "move_reminder_data.h"
@@ -96,6 +98,34 @@ void __wrap_ErrorHandling_AssertFail(void)
 {
     fputs("Game GF_ASSERT failed in host test\n", stderr);
     abort();
+}
+
+/* The save's two blocks, laid out as SavePageInfo_Init does, must come out
+ * at the real game's sizes (as save editors know them): then a cartridge's
+ * save loads, and the data fits the 32 sectors (13 + 19) the game has. This
+ * depends on the struct layout matching the DS's compiler, notably 64-bit
+ * integers aligned to 4 (NitroSDK patch 0016). */
+static void test_save_block_sizes(void)
+{
+    int normal = 0, boxes = 0, i;
+
+    for (i = 0; i < gSaveTableSize; i++) {
+        if (gSaveTable[i].blockID == SAVE_BLOCK_ID_NORMAL) {
+            normal += SaveTableEntry_BodySize(i);
+        } else {
+            boxes += SaveTableEntry_BodySize(i);
+        }
+    }
+    normal += sizeof(SaveBlockFooter);
+    boxes += sizeof(SaveBlockFooter);
+    if (normal != 0xCF2C || boxes != 0x121E4) {
+        fprintf(stderr, "save blocks: normal %#x (want 0xcf2c), boxes %#x (want 0x121e4)\n",
+                normal, boxes);
+    }
+    CHECK(normal == 0xCF2C);
+    CHECK(boxes == 0x121E4);
+    CHECK((normal + SAVE_SECTOR_SIZE - 1) / SAVE_SECTOR_SIZE
+          + (boxes + SAVE_SECTOR_SIZE - 1) / SAVE_SECTOR_SIZE <= SAVE_PAGE_MAX);
 }
 
 static void test_coins(void)
@@ -1307,6 +1337,7 @@ int main(void)
     test_battle_regulation_rules();
     test_record_mixed_rng();
     test_berry_tag_data();
+    test_save_block_sizes();
     test_pokedex_memory_state();
     test_pokedex_data_bank_switch();
     test_ribbon_save_state();

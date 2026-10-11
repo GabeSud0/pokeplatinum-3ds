@@ -75,6 +75,11 @@ void NitroPort_SyncTimers(void);
 /* V-blank starts now (V-count 192). Called by NitroPort_Halt. */
 void NitroPort_VBlankStarts(void);
 
+/* The 3D engine's status register (GXSTAT): idle, FIFO empty; and the
+ * GXFIFO interrupt requested while its condition holds (port_gx.c). The
+ * port calls it each frame, before taking interrupts and after DMA. */
+void NitroPort_GxRefresh(void);
+
 /* -------------------------------------------------------------------- DMA */
 
 /* Called by NitroSDK after it writes a DMA channel's registers. Runs

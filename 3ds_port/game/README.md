@@ -81,11 +81,19 @@ make -C 3ds_port/game TARGET=host32 program       # 32-bit, as on the 3DS (gcc-m
 3ds_port/game/build/host32/pokeplatinum-pc platinum3ds.pak data_pack/manifest.json
 ```
 
-Linux (or WSL) with GCC. Everything the port logs goes to stderr with the
+Linux (or WSL) with GCC. On Windows,
+[`tools/run_pc_wsl.sh`](../../tools/run_pc_wsl.sh), run in WSL's Ubuntu,
+installs what's needed, builds the runner and runs it with your data pack:
+`bash run_pc_wsl.sh 'C:\path\to\platinum3ds.pak' 'C:\path\to\manifest.json'`.
+Everything the port logs goes to stderr with the
 frame number; a crash prints a backtrace. The save is `platinum.sav` next
 to the data pack, or `--save FILE`. `--frames N` stops after N
 frames; `--stop-at-missing-file` stops at the first file the pack doesn't
-have. `TARGET=host` (64-bit) works too, but Nintendo's graphics formats
+have. If no frame comes for 5 seconds (`--stall-seconds N`), the game is
+stuck in a loop: the runner prints where each thread is, as function names
+and file:line, and stops. An integer division by zero continues with 0, as
+on the 3DS (which has no divide instruction and doesn't trap), and is
+logged once per place. `TARGET=host` (64-bit) works too, but Nintendo's graphics formats
 hold 4-byte pointers, so the game can't get far that way once it loads
 graphics.
 

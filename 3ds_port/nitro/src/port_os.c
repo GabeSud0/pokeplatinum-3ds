@@ -32,8 +32,12 @@ void NitroPort_RaiseIrq(u32 mask)
     reg_OS_IF |= mask;
 
     /* Run handlers while interrupts are enabled and something is pending,
-     * one interrupt per call, lowest number first, as on the DS. */
-    for (guard = 0; guard < 32; guard++) {
+     * one interrupt per call, lowest number first, as on the DS. The guard
+     * only stops a handler that never clears its interrupt from hanging the
+     * program; level-triggered ones (the 3D FIFO's) legitimately come back
+     * many times in a row. */
+    for (guard = 0; guard < 65536; guard++) {
+        NitroPort_GxRefresh();   /* GXSTAT, and the GXFIFO level interrupt */
         if (OSi_PortCpsr & HW_PSR_IRQ_DISABLE) {
             return;
         }
@@ -71,6 +75,7 @@ __attribute__((weak)) void NitroPort_Halt(void)
      * (masked meanwhile, so the interrupts are then taken lowest first). */
     OSi_PortCpsr |= HW_PSR_IRQ_DISABLE;
     NitroPort_VBlankStarts();
+    NitroPort_GxRefresh();
     reg_OS_IF |= OS_IE_V_BLANK;
     NitroPort_DmaVBlank();
     OSi_PortCpsr = saved;
