@@ -235,7 +235,7 @@ $(OUT)/port/%.o: src/%.c $(GEN)/nitro/fx/fx_const.h
 $(OUT)/arm7/sdk/%.o: $(SDK)/libraries/%.c $(GEN)/nitro/fx/fx_const.h
 	@mkdir -p $(dir $@)
 	@echo "  CC  ARM7 $(notdir $<)"
-	@$(CC) $(CFLAGS) -USDK_ARM9 -DSDK_ARM7 -include $(SDK)/include/nitro/misc.h -c $< -o $@
+	@$(CC) $(CFLAGS) -USDK_ARM9 -DSDK_ARM7 -include $(SDK)/include/nitro.h -c $< -o $@
 
 $(ARM7_SND_RAW): $(ARM7_SND_OBJS)
 	@mkdir -p $(dir $@)
