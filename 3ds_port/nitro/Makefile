@@ -257,11 +257,18 @@ ARM7_TEST_BIN := $(OUT)/test_arm7
 $(ARM7_TEST_BIN): tests/test_arm7.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
 
-test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN)
+# The software 2D renderer, set up through the SDK's own display functions.
+RENDER_TEST_BIN := $(OUT)/test_render
+
+$(RENDER_TEST_BIN): tests/test_render.c $(LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
+
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(RENDER_TEST_BIN)
 	./$(TEST_BIN)
 	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
 	./$(THREAD_TEST_BIN)
 	./$(ARM7_TEST_BIN)
+	./$(RENDER_TEST_BIN)
 
 clean:
 	rm -rf build
