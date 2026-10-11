@@ -59,6 +59,31 @@ static pthread_t sSoundThread;
 static volatile int sSoundRunning;
 static int sSoundThreadCreated;
 static uint32_t sWavBytes;
+static uint64_t sWavNextFrameNs;
+
+/* When recording WAV, the original game must not race through its 60 Hz
+ * scenes faster than the audio clock. This only paces the game; the sound
+ * driver still runs from the audio thread, never OnFrame. */
+static void pace_game_for_wav(void)
+{
+    struct timespec now;
+    uint64_t current, remaining;
+    struct timespec sleepFor;
+
+    if (!sWav) return;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    current = (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
+    if (!sWavNextFrameNs || current > sWavNextFrameNs + 100000000ull) {
+        sWavNextFrameNs = current;
+    } else {
+        sWavNextFrameNs += 16666667ull;
+    }
+    if (current >= sWavNextFrameNs) return;
+    remaining = sWavNextFrameNs - current;
+    sleepFor.tv_sec = (time_t)(remaining / 1000000000ull);
+    sleepFor.tv_nsec = (long)(remaining % 1000000000ull);
+    nanosleep(&sleepFor, NULL);
+}
 
 static void wav_u16(FILE *f, uint16_t n)
 {
@@ -150,6 +175,7 @@ void NitroPort_Log(const char *fmt, ...)
 void NitroPort_OnFrame(void)
 {
     NitroPort_SoundPumpReplies(); /* deliver ARM7 alarms on ARM9's thread */
+    pace_game_for_wav();
     sFrame++;
     if (sFrameLimit >= 0 && sFrame >= sFrameLimit) {
         NitroPort_Log("[pc] stopping after %ld frames, as asked", sFrame);
