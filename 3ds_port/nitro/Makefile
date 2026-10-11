@@ -251,7 +251,7 @@ $(OUT)/arm7_raw/%.o: $(SDK)/libraries/%.c $(GEN)/nitro/fx/fx_const.h
 # --prefix-symbols (which would rename libc/OS references too).
 $(ARM7_MAP): $(ARM7_RAW)
 	@mkdir -p $(dir $@)
-	@$(NM) -g --defined-only $(ARM7_RAW) | awk 'NF == 3 && $2 ~ /^[TDBRCSG]$/ { print $3 " N7_" $3 }' | sort -u > $@
+	@$(NM) -g --defined-only $(ARM7_RAW) | awk 'NF == 3 && $$2 ~ /^[TDBRCSG]$$/ { print $$3 " N7_" $$3 }' | sort -u > $@
 
 $(OUT)/arm7_renamed/%.o: $(OUT)/arm7_raw/%.o $(ARM7_MAP)
 	@mkdir -p $(dir $@)
