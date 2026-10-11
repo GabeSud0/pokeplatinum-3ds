@@ -14,7 +14,9 @@ programs built from it are for your own use: never share them.
 **Where it stands:** the game starts. `NitroMain` runs with the SDK's
 threads, interrupts, timers and overlays working, reads its files from the
 data pack, and gets answers from the ARM7's services (power, clock, save
-chip, touch screen). Nothing is drawn yet: the renderer and sound are next.
+chip, touch screen). The original ARM7 sequencer now feeds a software
+DS sound chip, played through NDSP (or optional PC WAV). **The graphics
+renderer is still pending.**
 The 3DS program shows its log instead of the game's screens. How far the
 game gets with a real data pack hasn't been tried yet; without one it goes
 as far as its first file (the font).
@@ -73,6 +75,26 @@ in the game are logged with the caller's address the same way.
 
 The program uses the console's profile for the DS user settings the game
 reads (name, birthday, language).
+
+### Audio output
+
+NDSP plays signed 16-bit stereo at **32,768 Hz**, driven by a
+separate audio thread and three wave buffers, not by the game's frame
+rate. On real hardware/Azahar, the DSP firmware
+(`sdmc:/3ds/dspfirm.cdc`) must be available. If NDSP can't initialize,
+the port logs the error and keeps the game running without audio.
+
+For debug runs on PC/WSL, record the actual mixed samples (without
+opening an audio device):
+
+```sh
+3ds_port/game/build/host32/pokeplatinum-pc platinum3ds.pak \
+    data_pack/manifest.json --frames 10000 --wav platinum-test.wav
+```
+
+The WAV is **a private user-generated output containing audio from your
+own dump**: never commit it or upload it. Use `--frames` to stop
+normally and finalize the WAV header.
 
 ## Running it on a PC
 
@@ -302,8 +324,10 @@ runs `-fsyntax-only` per file and writes a JSON report under ignored
 ## What isn't done
 
 - **Graphics**: the DS's 2D engines and 3D, drawn on the 3DS's screens.
-- **Sound**: the sound library's requests are taken, so the game runs, but
-  nothing plays yet. Also the ARM7's other services (microphone, wireless).
+- **Sound**: the game now runs the original ARM7 sequencer against a
+  software DS sound chip and has an NDSP output path. Azahar/hardware
+  music playback and mixer accuracy still need hands-on verification;
+  ARM7 microphone and wireless remain unavailable.
 - **Restarting** (`OS_ResetSystem`, the soft reset): the program says so and
   stops. **Sleep mode** (closing the lid) and **H-blank effects** too.
 - **Online play** (Nintendo Wi-Fi Connection): not part of the port.
