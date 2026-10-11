@@ -180,8 +180,12 @@ def meson_build_root(constants: Path, resources: Path, work: Path) -> Path:
     root = work / "buildroot"
     root.mkdir(parents=True, exist_ok=True)
     res = root / "res"
-    if res.is_symlink() or res.exists():
+    if res.is_symlink() or res.is_file():
         res.unlink()
+    elif res.is_dir():
+        # MSYS2 on Windows makes a copy where asked for a symbolic link
+        # (unless set up otherwise): remove the old copy to make a fresh one.
+        shutil.rmtree(res)
     res.symlink_to((resources / "res").resolve(), target_is_directory=True)
     generated = root / "generated"
     if generated.is_symlink():
