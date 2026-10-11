@@ -235,14 +235,14 @@ $(OUT)/port/%.o: src/%.c $(GEN)/nitro/fx/fx_const.h
 $(OUT)/arm7/sdk/%.o: $(SDK)/libraries/%.c $(GEN)/nitro/fx/fx_const.h
 	@mkdir -p $(dir $@)
 	@echo "  CC  ARM7 $(notdir $<)"
-	@$(CC) $(CFLAGS) -USDK_ARM9 -DSDK_ARM7 -c $< -o $@
+	@$(CC) $(CFLAGS) -USDK_ARM9 -DSDK_ARM7 -include $(SDK)/include/nitro/misc.h -c $< -o $@
 
 $(ARM7_SND_RAW): $(ARM7_SND_OBJS)
 	@mkdir -p $(dir $@)
 	@$(CC) $(PORT_CFLAGS) -r -nostdlib $^ -o $@
 
 $(ARM7_SND_MAP): $(ARM7_SND_RAW)
-	@$(NM) -g --defined-only $< | awk 'NF == 3 && $2 ~ /^[A-Za-z]$/ {print $3 " Arm7_" $3}' > $@
+	@$(NM) -g --defined-only $< | python3 -c 'import sys; [print(v[-1], "Arm7_" + v[-1]) for line in sys.stdin for v in [line.split()] if len(v) == 3]' > $@
 
 $(ARM7_SND_PREFIXED): $(ARM7_SND_RAW) $(ARM7_SND_MAP)
 	@cp $(ARM7_SND_RAW) $@
