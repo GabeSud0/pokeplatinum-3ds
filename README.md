@@ -26,8 +26,9 @@ the same engine, so most of the 3DS backend should carry over.
 > game's C files compile and link into a 3DS program that starts the game
 > ([`3ds_port/game`](3ds_port/game)): `NitroMain` runs with the SDK's threads, interrupts, timers and
 > overlays working, reading files from your data pack, and the DS's second
-> CPU's services (power, clock, save chip, touch screen) answering. Next: the
-> renderer and sound. **Nothing playable yet.**
+> CPU's services (power, clock, save chip, touch screen) answering. It plays
+> its opening and title screen and starts a new game; 2D graphics are drawn.
+> Next: 3D and sound. **Nothing playable yet.**
 
 ## This repository contains no game content
 

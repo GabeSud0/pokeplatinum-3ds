@@ -80,6 +80,21 @@ void NitroPort_VBlankStarts(void);
  * port calls it each frame, before taking interrupts and after DMA. */
 void NitroPort_GxRefresh(void);
 
+/* --------------------------------------------------------------- display */
+
+/* Draw what a 2D engine (0: A, 1: B) shows, from the registers, palettes,
+ * OAM and VRAM as they are now: 256x192 pixels, the DS's 15-bit colour
+ * (bits 0-4 red, 5-9 green, 10-14 blue). See port_render2d.c. */
+#define NITRO_PORT_SCREEN_W 256
+#define NITRO_PORT_SCREEN_H 192
+void NitroPort_Render2D(int engine, u16 *out);
+
+/* Whether engine A's picture is on the upper screen (POWCNT1 bit 15). */
+BOOL NitroPort_EngineAOnTop(void);
+
+/* Both screens, each 256x192: what the DS's upper and lower screens show. */
+void NitroPort_RenderScreens(u16 *top, u16 *bottom);
+
 /* -------------------------------------------------------------------- DMA */
 
 /* Called by NitroSDK after it writes a DMA channel's registers. Runs
