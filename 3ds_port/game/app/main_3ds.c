@@ -8,8 +8,11 @@
  * save, as emulators keep them: one can be copied in or out), and writes
  * everything the port logs to sdmc:/3ds/pokeplatinum/log.txt.
  *
- * Screens, for now (the DS's graphics come with the renderer): the top
- * screen shows the program's status, the bottom one the log.
+ * Screens: the DS's two screens, drawn by the port's 2D renderer
+ * (nitro/src/port_render2d.c), in the middle of the 3DS's (the upper one
+ * 400x240, the lower one 320x240). L + R + SELECT switches to the log and
+ * back: the program's status above, the log below. The log also comes up by
+ * itself when something goes wrong (the game stuck, a crash, OS_Terminate).
  *
  * Threads: the game runs on a 3DS thread of its own (it becomes NitroSDK's
  * launcher thread, and the SDK's other threads get 3DS threads of their
@@ -30,6 +33,9 @@
 #include <sys/stat.h>
 
 #include "platinum.h"
+
+/* The 2D renderer (nitro_port.h, which can't be included next to 3ds.h). */
+void NitroPort_RenderScreens(uint16_t *top, uint16_t *bottom);
 
 /* Audio uses the port's plain-C mixer; it deliberately does not include
  * NitroSDK headers alongside libctru. */
@@ -141,8 +147,16 @@ static volatile unsigned long sFrame;
 static LightEvent sQuit;
 static PlatinumSettings sSettings;
 static volatile bool sWatchdogHasHome;   /* the main thread handles HOME */
+static volatile bool sShowLog = true;     /* the log instead of the game */
+static volatile bool sScreensDirty = true;/* redraw the borders / consoles */
 
 /* ---------------------------------------------------------------- logging */
+
+/* The last lines, to show again when switching to the log. */
+#define KEEP_LINES 24
+static char sLines[KEEP_LINES][128];
+static int sLineCount;
+static char sStatus[64] = "Starting";
 
 void NitroPort_Log(const char *fmt, ...)
 {
@@ -153,11 +167,49 @@ void NitroPort_Log(const char *fmt, ...)
     vsnprintf(line, sizeof(line), fmt, args);
     va_end(args);
 
-    consoleSelect(&sBottom);
-    printf("%s\n", line);
+    snprintf(sLines[sLineCount % KEEP_LINES], sizeof(sLines[0]), "%s", line);
+    sLineCount++;
+    if (sShowLog && !sScreensDirty) {
+        consoleSelect(&sBottom);
+        printf("%s\n", line);
+    }
     if (sLog != NULL) {
         fprintf(sLog, "[%6lu] %s\n", sFrame, line);
         fflush(sLog);
+    }
+}
+
+static void DrawStatus(void)
+{
+    consoleSelect(&sTop);
+    printf("\x1b[8;0H\x1b[2K%s", sStatus);
+}
+
+/* Put the consoles back on both screens: the title and status above, the
+ * kept log lines below. */
+static void DrawLogScreens(void)
+{
+    int i, first = sLineCount > KEEP_LINES ? sLineCount - KEEP_LINES : 0;
+
+    consoleInit(GFX_TOP, &sTop);
+    consoleInit(GFX_BOTTOM, &sBottom);
+    consoleSelect(&sTop);
+    printf("\n  Pokemon Platinum - 3DS port\n");
+    printf("  The game's own code, running natively.\n\n");
+    printf("  L + R + SELECT: back to the game.\n");
+    printf("  Log: " LOG_PATH "\n");
+    DrawStatus();
+    consoleSelect(&sBottom);
+    for (i = first; i < sLineCount; i++) {
+        printf("%s\n", sLines[i % KEEP_LINES]);
+    }
+}
+
+static void ShowLog(bool on)
+{
+    if (sShowLog != on) {
+        sShowLog = on;
+        sScreensDirty = true;
     }
 }
 
@@ -165,11 +217,12 @@ static void Status(const char *fmt, ...)
 {
     va_list args;
 
-    consoleSelect(&sTop);
-    printf("\x1b[8;0H\x1b[2K");
     va_start(args, fmt);
-    vprintf(fmt, args);
+    vsnprintf(sStatus, sizeof(sStatus), fmt, args);
     va_end(args);
+    if (sShowLog && !sScreensDirty) {
+        DrawStatus();
+    }
 }
 
 /* ------------------------------------------------------------- quitting */
@@ -190,6 +243,11 @@ static void StopWithMessage(void) __attribute__((noreturn));
 
 static void StopWithMessage(void)
 {
+    ShowLog(true);
+    if (sScreensDirty) {
+        sScreensDirty = false;
+        DrawLogScreens();
+    }
     NitroPort_Log("Press START to quit.");
     while (aptMainLoop()) {
         hidScanInput();
@@ -269,11 +327,72 @@ static uint16_t DsButtons(u32 held)
     return ds;
 }
 
+/* ------------------------------------------------------------- the screens */
+
+/* DS colour (bits 0-4 red, 5-9 green, 10-14 blue) to the 3DS's RGB565. */
+static u16 sToRgb565[32768];
+
+static void MakeColorTable(void)
+{
+    int c;
+
+    for (c = 0; c < 32768; c++) {
+        int r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
+
+        sToRgb565[c] = (u16)((r << 11) | (g << 6) | (g >> 4) | b);
+    }
+}
+
+/* The 3DS's framebuffers are stored rotated: each column of the screen,
+ * bottom to top, is a run of 240 pixels. */
+static void Blit(gfxScreen_t screen, const u16 *ds, int left)
+{
+    u16 width, height;
+    u16 *fb = (u16 *)gfxGetFramebuffer(screen, GFX_LEFT, &width, &height);
+    int x, y;
+
+    for (x = 0; x < 256; x++) {
+        u16 *column = fb + (size_t)(left + x) * 240 + (239 - 24);
+        const u16 *src = ds + x;
+
+        for (y = 0; y < 192; y++) {
+            column[-y] = sToRgb565[src[y * 256] & 0x7FFF];
+        }
+    }
+}
+
+static void ClearScreens(void)
+{
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        u16 width, height;
+        u8 *top = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height);
+
+        memset(top, 0, (size_t)width * height * 2);
+        u8 *bottom = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &width, &height);
+
+        memset(bottom, 0, (size_t)width * height * 2);
+        gfxFlushBuffers();
+        gfxSwapBuffers();
+    }
+}
+
+static void ShowGame(void)
+{
+    static u16 top[256 * 192];
+    static u16 bottom[256 * 192];
+
+    NitroPort_RenderScreens(top, bottom);
+    Blit(GFX_TOP, top, (400 - 256) / 2);
+    Blit(GFX_BOTTOM, bottom, (320 - 256) / 2);
+}
+
 /* Once a frame, from the game's idle thread (NitroPort_Halt): show the
  * frame, wait for the 3DS's V-blank, read the buttons. */
 void NitroPort_OnFrame(void)
 {
-    u32 held;
+    u32 held, down;
 
     NitroPort_SoundPumpReplies(); /* never raise ARM9 FIFO IRQ from DSP thread */
     sFrame++;
@@ -283,6 +402,10 @@ void NitroPort_OnFrame(void)
 
     hidScanInput();
     held = hidKeysHeld();
+    down = hidKeysDown();
+    if ((held & (KEY_L | KEY_R)) == (KEY_L | KEY_R) && (down & KEY_SELECT)) {
+        ShowLog(!sShowLog);
+    }
     Platinum_SetButtons(DsButtons(held));
     if (held & KEY_TOUCH) {
         touchPosition touch;
@@ -296,6 +419,23 @@ void NitroPort_OnFrame(void)
 
     if (sFrame % 60 == 0) {
         Status("Running: frame %lu", sFrame);
+    }
+
+    if (sScreensDirty) {
+        sScreensDirty = false;
+        if (sShowLog) {
+            DrawLogScreens();
+        } else {
+            /* (the consoles turned double buffering off) */
+            gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
+            gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
+            gfxSetDoubleBuffering(GFX_TOP, true);
+            gfxSetDoubleBuffering(GFX_BOTTOM, true);
+            ClearScreens();
+        }
+    }
+    if (!sShowLog) {
+        ShowGame();
     }
 
     gfxFlushBuffers();
@@ -359,6 +499,11 @@ static void Watch(void)
         }
         if (++quietTicks == 20 && !sWatchdogHasHome) {
             sWatchdogHasHome = true;
+            ShowLog(true);
+            if (sScreensDirty) {
+                sScreensDirty = false;
+                DrawLogScreens();
+            }
             NitroPort_Log("The game hasn't shown a frame for 5 seconds (stuck at frame %lu). "
                           "It's probably waiting for a part of the port that isn't done yet: "
                           "see the lines above. Close it from the HOME menu.", lastFrame);
@@ -370,20 +515,6 @@ static void Watch(void)
     }
 }
 
-static void ClearTopScreen(void)
-{
-    int i;
-
-    for (i = 0; i < 2; i++) {
-        u16 width, height;
-        u8 *fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height);
-
-        memset(fb, 0, (size_t)width * height * 3);
-        gfxFlushBuffers();
-        gfxSwapBuffers();
-    }
-}
-
 int main(int argc, char **argv)
 {
     const char *error;
@@ -392,18 +523,14 @@ int main(int argc, char **argv)
     (void)argc;
     (void)argv;
     gfxInitDefault();
-    ClearTopScreen();
-    consoleInit(GFX_TOP, &sTop);
-    consoleInit(GFX_BOTTOM, &sBottom);
+    gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
+    gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
+    ClearScreens();
+    MakeColorTable();
     LightEvent_Init(&sQuit, RESET_ONESHOT);
     CatchCrashes();
-
-    consoleSelect(&sTop);
-    printf("\n  Pokemon Platinum - 3DS port\n");
-    printf("  The game's own code, running natively.\n\n");
-    printf("  No graphics yet: the DS screens come\n");
-    printf("  with the renderer. Log: below and in\n");
-    printf("  " LOG_PATH "\n");
+    sScreensDirty = false;
+    DrawLogScreens();
 
     mkdir("sdmc:/3ds", 0777);
     mkdir(DATA_DIR, 0777);
@@ -431,6 +558,7 @@ int main(int argc, char **argv)
             NitroPort_Log("Can't start the game's thread.");
         } else {
             Status("Running");
+            ShowLog(false);   /* the game's screens from the first frame */
             /* A step above the game's threads, so the watch below runs even
              * if the game never stops to wait. */
             svcSetThreadPriority(CUR_THREAD_HANDLE, priority - 1);

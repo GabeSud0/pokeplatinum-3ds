@@ -14,12 +14,12 @@ programs built from it are for your own use: never share them.
 **Where it stands:** the game starts. `NitroMain` runs with the SDK's
 threads, interrupts, timers and overlays working, reads its files from the
 data pack, and gets answers from the ARM7's services (power, clock, save
-chip, touch screen). The original ARM7 sequencer now feeds a software
-DS sound chip, played through NDSP (or optional PC WAV). **The graphics
-renderer is still pending.**
-The 3DS program shows its log instead of the game's screens. How far the
-game gets with a real data pack hasn't been tried yet; without one it goes
-as far as its first file (the font).
+chip, touch screen). With a real data pack it plays its opening and title
+screen, and the buttons take it into a new game (Professor Rowan's
+introduction). The 2D graphics are drawn by the port's software renderer,
+and the original ARM7 sequencer feeds a software DS sound chip, played
+through NDSP (or written to a WAV file on PC). Next: 3D (the opening's
+Giratina, the overworld, battles).
 
 ## Running it on a 3DS
 
@@ -64,8 +64,11 @@ as far as its first file (the font).
 
 4. **Run it** from the Homebrew Launcher, or open the `.3dsx` in Azahar.
 
-What you'll see: the top screen shows the program's status, the bottom
-screen the log, which is also written to `sdmc:/3ds/pokeplatinum/log.txt`.
+What you'll see: the DS's two screens, in the middle of the 3DS's
+(2D only for now: anything 3D is missing). **L + R + SELECT** switches to
+the log and back: the program's status above, the log below; it's also
+written to `sdmc:/3ds/pokeplatinum/log.txt`, and comes up by itself when
+something goes wrong.
 When the game stops at something the port doesn't do yet, the log says
 what; after 5 seconds without a frame the program says the game is stuck,
 and HOME → Close quits. If anything crashes, the log has the crash address:
@@ -111,7 +114,10 @@ Everything the port logs goes to stderr with the
 frame number; a crash prints a backtrace. The save is `platinum.sav` next
 to the data pack, or `--save FILE`. `--frames N` stops after N
 frames; `--stop-at-missing-file` stops at the first file the pack doesn't
-have. If no frame comes for 5 seconds (`--stall-seconds N`), the game is
+have. `--screenshots DIR` saves both screens as PNG files every 60 frames
+(`--screenshot-every N`) and when it stops; `--press 8700:A,9000:START`
+presses buttons at those frames (the runner has none of its own). If no
+frame comes for 5 seconds (`--stall-seconds N`), the game is
 stuck in a loop: the runner prints where each thread is, as function names
 and file:line, and stops. An integer division by zero continues with 0, as
 on the 3DS (which has no divide instruction and doesn't trap), and is
@@ -323,11 +329,13 @@ runs `-fsyntax-only` per file and writes a JSON report under ignored
 
 ## What isn't done
 
-- **Graphics**: the DS's 2D engines and 3D, drawn on the 3DS's screens.
-- **Sound**: the game now runs the original ARM7 sequencer against a
-  software DS sound chip and has an NDSP output path. Azahar/hardware
-  music playback and mixer accuracy still need hands-on verification;
-  ARM7 microphone and wireless remain unavailable.
+- **Graphics**: 3D (nothing 3D is drawn yet), mosaic, H-blank effects,
+  display capture; the 2D renderer is in software on the game's thread
+  (speed not measured on hardware yet).
+- **Sound**: the game runs the original ARM7 sequencer against a software
+  DS sound chip with an NDSP output path. Azahar/hardware playback and mixer
+  accuracy still need hands-on verification; ARM7 microphone and wireless
+  remain unavailable.
 - **Restarting** (`OS_ResetSystem`, the soft reset): the program says so and
   stops. **Sleep mode** (closing the lid) and **H-blank effects** too.
 - **Online play** (Nintendo Wi-Fi Connection): not part of the port.

@@ -57,9 +57,13 @@ def main() -> int:
     lines += [f'#include "{Path(os.path.relpath(p, base)).as_posix()}"' for p in headers()]
     text = "\n".join(lines) + "\n"
     out.parent.mkdir(parents=True, exist_ok=True)
-    # Only rewrite when it changes, so nothing is rebuilt for no reason.
+    # Only rewrite when it changes, so nothing is rebuilt for no reason; but
+    # mark it up to date, or make would run this again on every build (the
+    # headers it lists are newer after each bootstrap).
     if not out.is_file() or out.read_text() != text:
         out.write_text(text)
+    else:
+        os.utime(out)
     return 0
 
 

@@ -38,6 +38,7 @@ SDK still builds the original game with Metrowerks.
 | Interrupts | IE/IF/IME rules, dispatch to the game's handlers, lowest first, in the CPU's interrupt mode; masked while a handler runs; pending ones taken as soon as the CPU unmasks them | SDK `os_irqHandler.c` (patched), `src/port_os.c` |
 | Threads | NitroSDK's own scheduler, unchanged. Each SDK thread is played by a thread of the machine (3DS or POSIX), one running at a time, handed over where the SDK saves and loads contexts; a switch an interrupt asks for happens at its end, as on the DS. Each thread keeps its interrupt state and divider operands | `src/port_thread.c`, `src/platform/` |
 | Timers | the four hardware timers counted from a real clock: reload, prescaler, cascade, overflow interrupts (none lost). The SDK's tick and alarms (`OS_Sleep`) and the game's own timer work. V-count follows the clock | `src/port_timer.c`, SDK `timer.h`, `os_tick.c` (patched) |
+| 2D graphics | both engines drawn in software: text, affine and extended BGs (bitmaps too), OBJs (affine, 8-bit, extended palettes, bitmap, semi-transparent, OBJ window), windows, blending, master brightness, VRAM display mode. `NitroPort_RenderScreens` gives the two screens as 15-bit pixels | `src/port_render2d.c` |
 | Overlays | all linked into the program; `FS_LoadOverlay` and co. describe each overlay and reset its data on loading, as reading it from the cartridge did. The program gives the port the overlays' data sections (`NitroPort_SetOverlays`) | `src/port_overlay.c`, SDK `fs_overlay.c` (patched) |
 | Firmware state | the cartridge header, the user's settings (name, birthday, language, touch calibration), MAC address, buttons and lid, in DS memory where the game reads them | `src/port_boot.c` |
 | DMA | immediate and 3D-FIFO transfers run at once, V-blank transfers at V-blank; completion interrupts and callbacks. H-blank, display, card and cartridge timings are reported as not implemented | `src/port_dma.c`, SDK `mi_dma.c` (patched) |
@@ -55,9 +56,10 @@ SDK still builds the original game with Metrowerks.
 |---|---|---|
 | ARM7 services: sound | second, prefixed build of the original ARM7 sound sequencer; plain-C 16-channel PCM/ADPCM/PSG/noise and capture mixer; audio-clock timers, PXI commands and alarms (`src/port_snd.c`, `port_sound_chip.c`) | live NDSP test and remaining chip accuracy |
 | ARM7 services: microphone, wireless | not yet emulated | one service per PXI tag |
-| Display, 2D and 3D | the registers and VRAM exist; nothing draws them. The 3D engine reads as idle with an empty command FIFO, and the GXFIFO interrupt fires while its condition holds, so display lists sent by DMA complete (`src/port_gx.c`) | the 2D renderer and the 3D command translator |
+| 3D | the 3D engine reads as idle with an empty command FIFO, and the GXFIFO interrupt fires while its condition holds, so display lists sent by DMA complete (`src/port_gx.c`); nothing is drawn | the 3D command translator |
 | H-blank DMA (the game's wavy-screen effects), synchronous `MI_VBlankDmaCopy*` | reported as not implemented; the transfer stays pending | the 2D renderer (per-line timing) and the 3DS main loop |
-| VRAM banking | each CPU view of VRAM is its own block | the 2D renderer |
+| VRAM banking | each CPU view of VRAM is its own block; the renderer reads BG/OBJ data from the views and extended palettes from the bank the VRAM registers name. A bank moved from one view to another doesn't take its contents along | if a game needs it |
+| 2D: mosaic, large-bitmap BG (mode 6), main-memory display, display capture, mid-frame (H-blank) changes | not drawn; each frame is drawn from its end state | as the game needs them |
 | `OS_ResetSystem` (soft reset) | stores the reset parameter, then the program reports it and stops | restarting the game in place |
 | Cartridge ROM filesystem (`FS_`) | read-only `rom:` archive backed by the user's libpak data pack, with file-ID and manifest-based path access | directory listing and other archives, if the game needs them |
 

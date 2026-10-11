@@ -3,7 +3,10 @@
  * where it stops, faster than on a 3DS.
  *
  *   pokeplatinum-pc <platinum3ds.pak> <manifest.json> [--save FILE]
- *                   [--frames N] [--stop-at-missing-file] [--stall-seconds N]
+ *                   [--frames N] [--wav FILE] [--stop-at-missing-file]
+ *                   [--stall-seconds N]
+ *                   [--screenshots DIR] [--screenshot-every N]
+ *                   [--press FRAME:BUTTONS,...]
  *   pokeplatinum-pc --check-overlays
  *
  * Runs the same game code as the 3DS program, with the same data pack, as
@@ -14,6 +17,13 @@
  * status 0); with --stop-at-missing-file, at the first file the game asks
  * for that the pack doesn't have (exit status 5). If the game crashes, the
  * crash is reported with a backtrace.
+ *
+ * --screenshots DIR saves what the two screens show (port_render2d.c) as
+ * PNG files, the upper screen above the lower one, every 60 frames (one
+ * second of game time; --screenshot-every N to change it), and once more
+ * when the runner stops. --press presses buttons at given frames, since the
+ * PC runner has none: "--press 8700:A,9000:START,9100:UP+B" holds each for
+ * 6 frames (A B X Y L R START SELECT UP DOWN LEFT RIGHT).
  *
  * If no frame comes for 5 seconds (--stall-seconds N to change it), the game
  * is stuck: waiting in a loop for something the port doesn't do yet. The
@@ -160,6 +170,220 @@ static volatile long sFrame;
 static long sFrameLimit = -1;
 static int sStopAtMissingFile;
 static int sStallSeconds = 5;
+static const char *sScreenshotDir;
+static long sScreenshotEvery = 60;
+
+#define MAX_PRESSES 256
+static struct {
+    long frame;
+    uint16_t buttons;
+} sPresses[MAX_PRESSES];
+static int sPressCount;
+
+/* ------------------------------------------------------------ screenshots */
+
+static uint32_t sCrcTable[256];
+
+static uint32_t Crc(uint32_t crc, const unsigned char *p, size_t n)
+{
+    size_t i;
+
+    if (sCrcTable[1] == 0) {
+        uint32_t c, k;
+
+        for (k = 0; k < 256; k++) {
+            c = k;
+            for (i = 0; i < 8; i++) {
+                c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            }
+            sCrcTable[k] = c;
+        }
+    }
+    crc = ~crc;
+    for (i = 0; i < n; i++) {
+        crc = sCrcTable[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
+    }
+    return ~crc;
+}
+
+static void Put32(unsigned char *p, uint32_t v)
+{
+    p[0] = (unsigned char)(v >> 24);
+    p[1] = (unsigned char)(v >> 16);
+    p[2] = (unsigned char)(v >> 8);
+    p[3] = (unsigned char)v;
+}
+
+static void Chunk(FILE *f, const char *type, const unsigned char *data, uint32_t len)
+{
+    unsigned char head[8], tail[4];
+    uint32_t crc;
+
+    Put32(head, len);
+    memcpy(head + 4, type, 4);
+    crc = Crc(0, head + 4, 4);
+    crc = Crc(crc, data, len);
+    Put32(tail, crc);
+    fwrite(head, 1, 8, f);
+    fwrite(data, 1, len, f);
+    fwrite(tail, 1, 4, f);
+}
+
+/* A PNG of DS colours (15-bit), uncompressed (deflate's stored blocks), so
+ * no image library is needed. */
+static int WritePng(const char *path, const uint16_t *pixels, int w, int h)
+{
+    size_t raw = (size_t)h * (size_t)(1 + w * 3);
+    size_t blocks = (raw + 65534) / 65535;
+    size_t zlen = 2 + raw + blocks * 5 + 4;
+    unsigned char *rows = malloc(raw);
+    unsigned char *z = malloc(zlen);
+    unsigned char ihdr[13];
+    uint32_t a = 1, b = 0;
+    size_t i, pos = 0, done = 0;
+    FILE *f;
+    int x, y;
+
+    if (rows == NULL || z == NULL) {
+        free(rows);
+        free(z);
+        return -1;
+    }
+    for (y = 0; y < h; y++) {
+        unsigned char *r = rows + (size_t)y * (size_t)(1 + w * 3);
+
+        *r++ = 0;   /* filter: none */
+        for (x = 0; x < w; x++) {
+            uint16_t c = pixels[y * w + x];
+
+            *r++ = (unsigned char)(((c & 31) << 3) | ((c & 31) >> 2));
+            *r++ = (unsigned char)((((c >> 5) & 31) << 3) | (((c >> 5) & 31) >> 2));
+            *r++ = (unsigned char)((((c >> 10) & 31) << 3) | (((c >> 10) & 31) >> 2));
+        }
+    }
+    z[pos++] = 0x78;
+    z[pos++] = 0x01;
+    while (done < raw) {
+        size_t n = raw - done < 65535 ? raw - done : 65535;
+
+        z[pos++] = done + n == raw ? 1 : 0;
+        z[pos++] = (unsigned char)n;
+        z[pos++] = (unsigned char)(n >> 8);
+        z[pos++] = (unsigned char)~n;
+        z[pos++] = (unsigned char)(~n >> 8);
+        memcpy(z + pos, rows + done, n);
+        pos += n;
+        done += n;
+    }
+    for (i = 0; i < raw; i++) {
+        a = (a + rows[i]) % 65521;
+        b = (b + a) % 65521;
+    }
+    Put32(z + pos, (b << 16) | a);
+    pos += 4;
+
+    f = fopen(path, "wb");
+    if (f == NULL) {
+        free(rows);
+        free(z);
+        return -1;
+    }
+    fwrite("\x89PNG\r\n\x1a\n", 1, 8, f);
+    Put32(ihdr, (uint32_t)w);
+    Put32(ihdr + 4, (uint32_t)h);
+    ihdr[8] = 8;    /* bits per channel */
+    ihdr[9] = 2;    /* RGB */
+    ihdr[10] = ihdr[11] = ihdr[12] = 0;
+    Chunk(f, "IHDR", ihdr, 13);
+    Chunk(f, "IDAT", z, (uint32_t)pos);
+    Chunk(f, "IEND", NULL, 0);
+    fclose(f);
+    free(rows);
+    free(z);
+    return 0;
+}
+
+/* Both screens, the upper one above the lower one. */
+static void Screenshot(void)
+{
+    static uint16_t both[256 * 384];
+    char path[1024];
+
+    if (sScreenshotDir == NULL) {
+        return;
+    }
+    NitroPort_RenderScreens(both, both + 256 * 192);
+    snprintf(path, sizeof(path), "%s/frame_%07ld.png", sScreenshotDir, sFrame);
+    if (WritePng(path, both, 256, 384) != 0) {
+        NitroPort_Log("[pc] can't write %s", path);
+    }
+}
+
+/* ---------------------------------------------------------------- buttons */
+
+static int ParsePresses(const char *spec)
+{
+    static const struct { const char *name; uint16_t bit; } names[] = {
+        { "A", PLATINUM_BUTTON_A }, { "B", PLATINUM_BUTTON_B },
+        { "X", PLATINUM_BUTTON_X }, { "Y", PLATINUM_BUTTON_Y },
+        { "L", PLATINUM_BUTTON_L }, { "R", PLATINUM_BUTTON_R },
+        { "START", PLATINUM_BUTTON_START }, { "SELECT", PLATINUM_BUTTON_SELECT },
+        { "UP", PLATINUM_KEY_UP }, { "DOWN", PLATINUM_KEY_DOWN },
+        { "LEFT", PLATINUM_KEY_LEFT }, { "RIGHT", PLATINUM_KEY_RIGHT },
+    };
+    const char *p = spec;
+
+    while (*p != '\0') {
+        char *end;
+        long frame = strtol(p, &end, 10);
+        uint16_t buttons = 0;
+
+        if (end == p || *end != ':' || sPressCount >= MAX_PRESSES) {
+            return -1;
+        }
+        p = end + 1;
+        for (;;) {
+            size_t len = strcspn(p, "+,");
+            size_t k;
+            int found = 0;
+
+            for (k = 0; k < sizeof(names) / sizeof(names[0]); k++) {
+                if (strlen(names[k].name) == len && strncmp(p, names[k].name, len) == 0) {
+                    buttons |= names[k].bit;
+                    found = 1;
+                }
+            }
+            if (!found) {
+                return -1;
+            }
+            p += len;
+            if (*p != '+') {
+                break;
+            }
+            p++;
+        }
+        sPresses[sPressCount].frame = frame;
+        sPresses[sPressCount].buttons = buttons;
+        sPressCount++;
+        if (*p == ',') {
+            p++;
+        }
+    }
+    return 0;
+}
+
+static uint16_t HeldButtons(long frame)
+{
+    uint16_t held = 0;
+    int i;
+
+    for (i = 0; i < sPressCount; i++) {
+        if (frame >= sPresses[i].frame && frame < sPresses[i].frame + 6) {
+            held |= sPresses[i].buttons;
+        }
+    }
+    return held;
+}
 
 void NitroPort_Log(const char *fmt, ...)
 {
@@ -177,12 +401,17 @@ void NitroPort_OnFrame(void)
     NitroPort_SoundPumpReplies(); /* deliver ARM7 alarms on ARM9's thread */
     pace_game_for_wav();
     sFrame++;
+    if (sScreenshotDir != NULL && sScreenshotEvery > 0 && sFrame % sScreenshotEvery == 0) {
+        Screenshot();
+    }
     if (sFrameLimit >= 0 && sFrame >= sFrameLimit) {
+        Screenshot();
         NitroPort_Log("[pc] stopping after %ld frames, as asked", sFrame);
         StopSound();            /* closes and finalizes optional WAV file */
         fflush(stderr);
         _exit(0);
     }
+    Platinum_SetButtons(HeldButtons(sFrame));
 }
 
 void NitroPort_Terminate(void)
@@ -234,6 +463,7 @@ static void PrintFrames(void *const *frames, int count)
 static void OnInterrupt(int sig)
 {
     (void)sig;
+    Screenshot();
     fprintf(stderr, "[%6ld] [pc] stopped with Ctrl+C\n", sFrame);
     _exit(130);
 }
@@ -402,6 +632,7 @@ static void *Watch(void *arg)
                           "is (the one not waiting in port_thread.c is the stuck one):",
                           sStallSeconds);
             DumpThreads();
+            Screenshot();
             NitroPort_Log("[pc] stopping (stuck)");
             fflush(stderr);
             _exit(6);
@@ -423,8 +654,8 @@ int main(int argc, char **argv)
     }
     if (argc < 3) {
         fprintf(stderr, "usage: %s <platinum3ds.pak> <manifest.json> [--save FILE] "
-                "[--frames N] [--wav FILE] [--stop-at-missing-file] "
-                "[--stall-seconds N]\n       %s --check-overlays\n", argv[0], argv[0]);
+                "[--frames N] [--wav FILE] [--stop-at-missing-file] [--stall-seconds N]\n"
+                "       [--screenshots DIR] [--screenshot-every N] [--press FRAME:BUTTONS,...]\n       %s --check-overlays\n", argv[0], argv[0]);
         return 2;
     }
     for (i = 3; i < argc; i++) {
@@ -436,6 +667,15 @@ int main(int argc, char **argv)
             sFrameLimit = strtol(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "--stop-at-missing-file") == 0) {
             sStopAtMissingFile = 1;
+        } else if (strcmp(argv[i], "--screenshots") == 0 && i + 1 < argc) {
+            sScreenshotDir = argv[++i];
+        } else if (strcmp(argv[i], "--screenshot-every") == 0 && i + 1 < argc) {
+            sScreenshotEvery = strtol(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--press") == 0 && i + 1 < argc) {
+            if (ParsePresses(argv[++i]) != 0) {
+                fprintf(stderr, "--press: expected FRAME:BUTTON[+BUTTON],... e.g. 8700:A,9000:START\n");
+                return 2;
+            }
         } else if (strcmp(argv[i], "--stall-seconds") == 0 && i + 1 < argc) {
             sStallSeconds = atoi(argv[++i]);
         } else {
