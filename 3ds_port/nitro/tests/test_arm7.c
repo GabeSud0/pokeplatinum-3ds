@@ -211,6 +211,37 @@ static void test_backup(void)
     CHECK(remove(save_path) == 0);
 }
 
+/* The sound service is silent, but must take every request: the library
+ * reuses its 256 commands only once the "ARM7" has counted them finished.
+ * 3,000 frames' worth of requests would run out without that. */
+static void test_sound(void)
+{
+    static SNDDriverInfo info;
+    u32 tag;
+    int frame;
+
+    SND_Init();
+    for (frame = 0; frame < 3000; ++frame) {
+        SND_SetMasterVolume(frame & 127);
+        SND_StartSeq(0, NULL, 0, NULL);
+        (void)SND_FlushCommand(SND_COMMAND_NOBLOCK);   /* as SND_Main does */
+    }
+    CHECK(SND_CountFreeCommand() > 200);
+    tag = SND_GetCurrentCommandTag();
+    CHECK(SND_FlushCommand(SND_COMMAND_BLOCK));
+    SND_WaitForCommandProc(tag);
+    CHECK(SND_IsFinishedCommandTag(tag));
+    CHECK(SND_GetPlayerStatus() == 0);              /* nothing plays */
+
+    memset(&info, 0x55, sizeof(info));
+    SND_ReadDriverInfo(&info);
+    tag = SND_GetCurrentCommandTag();
+    (void)SND_FlushCommand(SND_COMMAND_BLOCK);
+    SND_WaitForCommandProc(tag);
+    CHECK(info.workAddress != NULL);
+    CHECK(info.lockedChannels == 0 && info.chCtrl[0] == 0);
+}
+
 int main(void)
 {
     NitroPortFirmware firmware;
@@ -225,6 +256,7 @@ int main(void)
     test_rtc();
     test_power();
     test_touch();
+    test_sound();
     printf("virtual ARM7 services: %d checks, %d failures\n", sChecks, sFailed);
     return sFailed ? 1 : 0;
 }
