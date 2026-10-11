@@ -9,9 +9,10 @@ Usage:
 pret/pokeplatinum generates several C headers with small C programs in
 tools/dataproc (speciesproc, itemproc, frontierproc, trainerproc,
 resdatproc): tables of egg moves, tutor moves, footprints, the berry list,
-frontier trainer classes, sprite templates ... It also builds tools/nitrogfx
-for the two images the game embeds in its code (nitrogfx -embed). Each reads the decompilation's JSON data and fills a template
-from tools/dataproc/data. The original builds them with Meson; Meson isn't
+frontier trainer classes, sprite templates ... Each reads the decompilation's JSON data and fills a template
+from tools/dataproc/data. The two images the game embeds in its code
+(nitrogfx -embed in the original) are converted by tools/png_embed.py, the
+same conversion in Python, so no image library is needed. The original builds them with Meson; Meson isn't
 part of the port's toolchain, so this script builds them the same way
 their meson.build files do, with the PC's C compiler:
 
@@ -46,6 +47,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import re  # noqa: E402
 
+import png_embed  # noqa: E402
 from prepare_game_graphics_naix import custom_targets  # noqa: E402
 from prepare_game_ordergen_naix import folder_names  # noqa: E402
 from prepare_game_text_bank_headers import render as render_text_bank  # noqa: E402
@@ -151,17 +153,6 @@ def build_tools(upstream: Path, buildroot: Path, work: Path, tools: list[str]) -
     return built
 
 
-def build_nitrogfx(upstream: Path, work: Path) -> Path:
-    """tools/nitrogfx, as its meson.build builds it (needs libpng)."""
-    folder = upstream / "tools" / "nitrogfx"
-    sources = [folder / name for name in re.findall(r"'(\w+\.c)'",
-                                                     (folder / "meson.build").read_text(encoding="utf-8"))]
-    exe = work / "nitrogfx"
-    if not exe.is_file() or exe.stat().st_mtime < max(p.stat().st_mtime for p in sources):
-        run([CC, *CFLAGS, "-D_GNU_SOURCE=1", *map(str, sources), "-lpng", "-lz", "-lm", "-o", str(exe)])
-    return exe
-
-
 def embed_jobs(upstream: Path) -> list[tuple[Path, Path, str]]:
     """Every res/**/meson.build rule that turns a PNG into a C header with
     nitrogfx -embed NAME: (the PNG, the header's path, NAME)."""
@@ -189,8 +180,12 @@ def meson_build_root(constants: Path, resources: Path, work: Path) -> Path:
     root = work / "buildroot"
     root.mkdir(parents=True, exist_ok=True)
     res = root / "res"
-    if res.is_symlink() or res.exists():
+    if res.is_symlink() or res.is_file():
         res.unlink()
+    elif res.is_dir():
+        # MSYS2 on Windows makes a copy where asked for a symbolic link
+        # (unless set up otherwise): remove the old copy to make a fresh one.
+        shutil.rmtree(res)
     res.symlink_to((resources / "res").resolve(), target_is_directory=True)
     generated = root / "generated"
     if generated.is_symlink():
@@ -287,14 +282,12 @@ def generate(upstream: Path, constants: Path, resources: Path, work: Path) -> li
                 path.unlink()        # game data: the game reads it from the data pack
             elif path.suffix == ".h" and path.stat().st_mtime >= depfile.stat().st_mtime - 5:
                 headers.append(path)
-    # Graphics the game embeds in its code as C arrays (nitrogfx -embed).
-    nitrogfx = build_nitrogfx(upstream, work)
+    # Graphics the game embeds in its code as C arrays (nitrogfx -embed in
+    # the original; tools/png_embed.py here).
     for png, relative, name in embed_jobs(upstream):
         header = resources / relative
         header.parent.mkdir(parents=True, exist_ok=True)
-        raw = header.with_suffix("")          # x.4bpp.h -> x.4bpp, nitrogfx's first output
-        run([str(nitrogfx), str(png), str(raw), "-embed", name])
-        raw.unlink(missing_ok=True)
+        png_embed.embed(png, header, name)
         headers.append(header)
     # trainerproc writes the trainer-name text bank; make its index header
     # as msgenc would (only the message IDs).

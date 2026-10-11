@@ -54,8 +54,11 @@ PORT_CFLAGS := -std=gnu99 -fgnu89-inline -fno-strict-aliasing -fno-short-enums \
                -Wno-switch -Wno-multichar \
                $(PORT_DEFINES)
 
+# Not wl_arm7's headers: that's the ARM7's wireless library, which no ARM9
+# code uses, and its System.h and Font.h would stand in for the game's
+# system.h and font.h on Windows, where file names ignore case.
 SDK_INCLUDES := -I$(NITRO)/include -I$(NITRO)/build/$(TARGET)/gen -I$(SDK)/include \
-                $(foreach d,$(wildcard $(SDK)/libraries/*/include),-I$(d))
+                $(foreach d,$(filter-out %/wl_arm7/include,$(wildcard $(SDK)/libraries/*/include)),-I$(d))
 NNS_INCLUDES := -I$(NNS)/include \
                 $(foreach d,$(wildcard $(NNS)/libraries/*/include),-I$(d))
 

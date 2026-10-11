@@ -33,7 +33,11 @@ WIDE_RETURN = re.compile(r"\b(u64|s64|OSTick|unsigned\s+long\s+long|long\s+long)
 
 
 def symbols(nm: str, objects: list[str]) -> tuple[set[str], set[str]]:
-    out = subprocess.run([nm, *objects], check=True, capture_output=True, text=True).stdout
+    # In batches: all ~1,100 objects on one command line would pass Windows'
+    # 32 KB command-line limit (building in MSYS2).
+    out = "".join(subprocess.run([nm, *objects[i:i + 200]], check=True, capture_output=True,
+                                 text=True).stdout
+                  for i in range(0, len(objects), 200))
     defined: set[str] = set()
     undefined: set[str] = set()
     for line in out.splitlines():

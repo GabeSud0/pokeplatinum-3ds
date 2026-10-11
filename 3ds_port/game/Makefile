@@ -151,19 +151,19 @@ $(ORDERGEN_STAMP): $(wildcard $(GAME)/tools/ordergen/*.py) $(GAME)/generated/tra
 	@touch $@
 
 # Headers the decompilation's own data tools write (tools/dataproc:
-# speciesproc, itemproc, frontierproc, trainerproc, resdatproc; and
-# tools/nitrogfx for the two images the game embeds). The tools are built
-# with the PC's C compiler, as their meson.build files say; needs libpng.
+# speciesproc, itemproc, frontierproc, trainerproc, resdatproc), built with
+# the PC's C compiler as their meson.build files say, and the two images the
+# game embeds (tools/png_embed.py, nitrogfx -embed's conversion in Python).
 DATAPROC_DIR := $(ROOT)/build/game-tools
 DATAPROC_STAMP := $(RESOURCE_DIR)/.dataproc-ready
-DATAPROC_INPUTS := $(shell find $(GAME)/tools/dataproc $(GAME)/tools/nitrogfx $(GAME)/tools/enumproc \
+DATAPROC_INPUTS := $(shell find $(GAME)/tools/dataproc $(GAME)/tools/enumproc \
         $(GAME)/tools/nitroarc/lib -type f) \
     $(shell find $(GAME)/res/pokemon $(GAME)/res/items $(GAME)/res/trainers \
         $(GAME)/res/graphics/sprite_templates -name '*.json') \
     $(GAME)/res/fonts/arrow_cursor.png $(GAME)/res/graphics/battle/healthbox/healthbox_parts.png
 
 $(DATAPROC_STAMP): $(DATAPROC_INPUTS) $(CONSTANTS_STAMP) $(ARCHIVE_STAMP) $(ORDERGEN_STAMP) \
-                   $(ROOT)/tools/prepare_game_dataproc.py
+                   $(ROOT)/tools/prepare_game_dataproc.py $(ROOT)/tools/png_embed.py
 	@python3 $(ROOT)/tools/prepare_game_dataproc.py --upstream "$(GAME)" --constants "$(CONSTANTS_DIR)" \
 	    --resources "$(RESOURCE_DIR)" --work "$(DATAPROC_DIR)"
 	@touch $@
@@ -295,7 +295,7 @@ $(GAME_HEADER_DEFS): $(CENSUS_OBJS) $(GAME)/platinum.us/main.lsf $(ROOT)/tools/g
 	@mkdir -p $(dir $@)
 	@# Objects already made weak by an earlier run no longer show up as
 	@# duplicates, so keep the names found before.
-	@{ cat $@ 2>/dev/null; $(NM) -g --defined-only $(CENSUS_OBJS) | awk 'NF == 3 && $$2 ~ /^[TDBR]$$/ { print $$3 }' | sort | uniq -d; } | sort -u > $@.new
+	$(file >$(OUT)/census_objs.rsp,$(CENSUS_OBJS))@{ cat $@ 2>/dev/null; $(NM) -g --defined-only @$(OUT)/census_objs.rsp | awk 'NF == 3 && $$2 ~ /^[TDBR]$$/ { print $$3 }' | sort | uniq -d; } | sort -u > $@.new
 	@mv $@.new $@
 	@for o in $(CENSUS_OBJS); do $(OBJCOPY) --weaken-symbols=$@ $$o; done
 	@echo "  $$(wc -l < $@) game header functions defined in several objects, made weak"
@@ -336,9 +336,16 @@ $(WIFI_STUBS_C): $(GAME_HEADER_DEFS) $(ROOT)/tools/make_game_wifi_stubs.py
 $(WIFI_STUBS_O): $(WIFI_STUBS_C)
 	@$(CC) $(PORT_CFLAGS) $(SDK_INCLUDES) -c $< -o $@
 
+# The ~1,100 object files are passed to ar and the linker in a response file
+# (@file): listed on the command line they'd pass Windows' 32 KB limit on a
+# command line (building in MSYS2). Relative paths, which every native
+# Windows tool reads as they are.
+GAME_OBJS_RSP := $(OUT)/game_objs.rsp
+write_game_objs_rsp = $(file >$(GAME_OBJS_RSP),$(GAME_OBJS) $(WIFI_STUBS_O))
+
 $(LIB): $(GAME_HEADER_DEFS) $(WIFI_STUBS_O)
 	@rm -f $@
-	@$(AR) rcs $@ $(GAME_OBJS) $(WIFI_STUBS_O)
+	$(write_game_objs_rsp)@$(AR) rcs $@ @$(GAME_OBJS_RSP)
 	@echo "built $@ ($(words $(GAME_SRCS)) of $(words $(GAME_ALL_SRCS)) game C files, and lib/$(subst $(eval) ,+,$(GAME_LIBS)))"
 
 # Independent host tests exercise the ORIGINAL game functions linked against
@@ -395,8 +402,8 @@ PROGRAM_LDFLAGS := $(LDFLAGS) -rdynamic
 PROGRAM_LIBS := -lm
 endif
 
-PROGRAM_LINK = $(CC) $(PROGRAM_LDFLAGS) -Wl,--gc-sections -Wl,--wrap=ErrorHandling_AssertFail \
-    $(APP_OBJS) $(GAME_OBJS) $(WIFI_STUBS_O) $(OVERLAY_TABLE_O) \
+PROGRAM_LINK = $(write_game_objs_rsp)$(CC) $(PROGRAM_LDFLAGS) -Wl,--gc-sections -Wl,--wrap=ErrorHandling_AssertFail \
+    $(APP_OBJS) @$(GAME_OBJS_RSP) $(OVERLAY_TABLE_O) \
     -Wl,--start-group $(LIBNNS) $(LIBNITRO) -Wl,--end-group $(PROGRAM_LIBS) $(OVERLAY_IDS) -o $(PROGRAM_ELF)
 
 $(OUT)/app/platinum.o: app/platinum.c app/platinum.h | libnitrosystem

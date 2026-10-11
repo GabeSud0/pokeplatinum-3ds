@@ -28,6 +28,18 @@ as far as its first file (the font).
    make game        # -> 3ds_port/game/build/3ds/pokeplatinum.3dsx
    ```
 
+   **On Windows**, use devkitPro's MSYS2 terminal (Start menu → devkitPro →
+   MSYS2). [`tools/build_windows_msys2.sh`](../../tools/build_windows_msys2.sh)
+   does steps 1 to 3 in one go: it installs what the build needs besides
+   devkitPro (git, Python, gcc, patch), clones the port into its own folder,
+   builds the program, makes your data pack and puts the SD card files in
+   `%USERPROFILE%\pokeplatinum-sd` (and in Azahar's SD folder, if it finds
+   it):
+
+   ```sh
+   bash build_windows_msys2.sh 'C:\path\to\your\platinum.nds'
+   ```
+
 2. **Make your data pack** from your own Pokémon Platinum (USA) dump, on
    your computer ([`builder/`](../../builder)):
 
@@ -175,11 +187,12 @@ generated the same way, into `build/` (never committed):
   sprites) (`tools/prepare_game_ordergen_naix.py`).
 - **The decompilation's own data tools** (`tools/prepare_game_dataproc.py`):
   it builds `tools/dataproc` (speciesproc, itemproc, frontierproc,
-  trainerproc, resdatproc) and `tools/nitrogfx` with the PC's C compiler, as
-  their `meson.build` files say, and runs them as the original rules do:
-  egg/tutor moves, footprints, the berry list, frontier trainer classes,
-  sprite templates, and the two images the game embeds in its code. Needs a
-  PC C compiler and libpng. The data archives these tools also write are
+  trainerproc, resdatproc) with the PC's C compiler, as their `meson.build`
+  files say, and runs them as the original rules do: egg/tutor moves,
+  footprints, the berry list, frontier trainer classes, sprite templates.
+  The two images the game embeds in its code are converted by
+  `tools/png_embed.py` (what `nitrogfx -embed` does, in Python, so no image
+  library is needed). Needs a PC C compiler. The data archives these tools also write are
   deleted; the game reads its data from the player's own data pack.
 - **Overlay IDs** (`FS_OVERLAY_ID(name)`): each overlay's position in
   `platinum.us/main.lsf`, as constants in `build/game-link/overlay_ids.h`,
