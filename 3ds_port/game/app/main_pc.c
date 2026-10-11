@@ -36,10 +36,12 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/syscall.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 #include <nitro.h>
@@ -98,14 +100,118 @@ void NitroPort_FileMissing(const char *path)
     }
 }
 
+/* Print return addresses as function, file:line (addr2line, which also
+ * names static functions and inlined calls); raw symbols if that fails. */
+static void PrintFrames(void *const *frames, int count)
+{
+    char command[64 * 24 + 128];
+    size_t used = (size_t)snprintf(command, sizeof(command),
+                                   "addr2line -f -i -p -e /proc/%d/exe", (int)getpid());
+    int f;
+
+    for (f = 0; f < count && used < sizeof(command) - 24; f++) {
+        /* A return address points after the call: look up the call. */
+        used += (size_t)snprintf(command + used, sizeof(command) - used, " %#lx",
+                                 (unsigned long)((const char *)frames[f] - 1));
+    }
+    snprintf(command + used, sizeof(command) - used, " 1>&2");
+    fflush(stderr);
+    if (system(command) != 0) {
+        backtrace_symbols_fd(frames, count, 2);
+    }
+}
+
 static void OnCrash(int sig)
 {
     void *frames[64];
     int n = backtrace(frames, 64);
 
     fprintf(stderr, "[%6ld] [pc] crashed (signal %d). Backtrace:\n", sFrame, sig);
-    backtrace_symbols_fd(frames, n, 2);
+    /* Frames 0 and 1: this handler and the signal trampoline. */
+    PrintFrames(frames + 2, n - 2);
     _exit(128 + sig);
+}
+
+/* Integer division by zero. The 3DS has no divide instruction: GCC calls a
+ * library routine, which gives 0 for x / 0 and doesn't stop the program
+ * (nor did the DS's). x86 traps instead. Some of Nintendo's code divides by
+ * zero harmlessly (a value it then never uses), so here a division by zero
+ * does what it does on the 3DS: quotient 0, remainder the dividend. Each
+ * place is logged once. Any other arithmetic fault is a crash. */
+static void OnArithmeticFault(int sig, siginfo_t *info, void *context)
+{
+#if defined(__i386__) || defined(__x86_64__)
+    ucontext_t *uc = context;
+#if defined(__x86_64__)
+    greg_t *ip = &uc->uc_mcontext.gregs[REG_RIP];
+    greg_t *ax = &uc->uc_mcontext.gregs[REG_RAX];
+    greg_t *dx = &uc->uc_mcontext.gregs[REG_RDX];
+#else
+    greg_t *ip = &uc->uc_mcontext.gregs[REG_EIP];
+    greg_t *ax = &uc->uc_mcontext.gregs[REG_EAX];
+    greg_t *dx = &uc->uc_mcontext.gregs[REG_EDX];
+#endif
+    const unsigned char *code = (const unsigned char *)*ip;
+    const unsigned char *p = code;
+    static const unsigned char *logged[32];
+    static int loggedCount;
+    int wide = 0, rex = 0, mod, rm, i, seen = 0;
+
+    if (info->si_code != FPE_INTDIV) {
+        OnCrash(sig);
+    }
+    /* DIV/IDIV r/m: [66] [REX] F6|F7 ModRM [SIB] [disp] */
+    if (*p == 0x66) {
+        p++;
+    }
+#if defined(__x86_64__)
+    if ((*p & 0xF0) == 0x40) {
+        rex = *p++;
+    }
+#endif
+    if ((*p != 0xF6 && *p != 0xF7) || ((p[1] >> 3) & 7) < 6) {
+        OnCrash(sig);
+    }
+    wide = *p == 0xF7;
+    p++;
+    mod = *p >> 6;
+    rm = *p & 7;
+    p++;
+    if (mod != 3 && rm == 4) {               /* SIB byte */
+        int base = *p & 7;
+
+        p++;
+        if (mod == 0 && base == 5) {
+            p += 4;
+        }
+    } else if (mod == 0 && rm == 5) {        /* [disp32] / [rip+disp32] */
+        p += 4;
+    }
+    p += mod == 1 ? 1 : mod == 2 ? 4 : 0;
+
+    for (i = 0; i < loggedCount; i++) {
+        seen |= logged[i] == code;
+    }
+    if (!seen && loggedCount < 32) {
+        void *where[1] = { (void *)(code + 1) };
+
+        logged[loggedCount++] = code;
+        NitroPort_Log("[pc] integer division by zero; continuing with 0, as on the 3DS, at:");
+        PrintFrames(where, 1);
+    }
+    if (wide) {
+        *dx = *ax;                           /* remainder: the dividend */
+        *ax = 0;                             /* quotient: 0 */
+    } else {
+        *ax = (*ax & ~(greg_t)0xFFFF) | ((*ax & 0xFF) << 8);   /* AH = AL % 0, AL = 0 */
+    }
+    (void)rex;
+    *ip = (greg_t)(uintptr_t)p;
+#else
+    (void)info;
+    (void)context;
+    OnCrash(sig);
+#endif
 }
 
 /* ------------------------------------------------- where a stuck game is */
@@ -154,24 +260,9 @@ static void DumpThreads(void)
 
     n = sDumpCount < MAX_DUMPED_THREADS ? sDumpCount : MAX_DUMPED_THREADS;
     for (i = 0; i < n; i++) {
-        char command[MAX_FRAMES * 24 + 128];
-        size_t used;
-        int f;
-
         fprintf(stderr, "---- thread %d:\n", (int)sDumps[i].tid);
-        fflush(stderr);
-        /* Frame 0 and 1 are this signal handler and the signal trampoline. */
-        used = (size_t)snprintf(command, sizeof(command),
-                                "addr2line -f -i -p -e /proc/%d/exe", (int)getpid());
-        for (f = 2; f < sDumps[i].count && used < sizeof(command) - 24; f++) {
-            /* A return address points after the call: look up the call. */
-            used += (size_t)snprintf(command + used, sizeof(command) - used, " %#lx",
-                                     (unsigned long)((char *)sDumps[i].frames[f] - 1));
-        }
-        snprintf(command + used, sizeof(command) - used, " 1>&2");
-        if (system(command) != 0) {
-            backtrace_symbols_fd(sDumps[i].frames + 2, sDumps[i].count - 2, 2);
-        }
+        /* Frames 0 and 1: the signal handler and the signal trampoline. */
+        PrintFrames(sDumps[i].frames + 2, sDumps[i].count - 2);
     }
 }
 
@@ -235,7 +326,14 @@ int main(int argc, char **argv)
 
     signal(SIGSEGV, OnCrash);
     signal(SIGBUS, OnCrash);
-    signal(SIGFPE, OnCrash);
+    {
+        struct sigaction fault;
+
+        memset(&fault, 0, sizeof(fault));
+        fault.sa_sigaction = OnArithmeticFault;
+        fault.sa_flags = SA_SIGINFO;
+        sigaction(SIGFPE, &fault, NULL);
+    }
     signal(SIGILL, OnCrash);
     signal(SIGABRT, OnCrash);
 

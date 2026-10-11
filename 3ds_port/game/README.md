@@ -91,7 +91,9 @@ to the data pack, or `--save FILE`. `--frames N` stops after N
 frames; `--stop-at-missing-file` stops at the first file the pack doesn't
 have. If no frame comes for 5 seconds (`--stall-seconds N`), the game is
 stuck in a loop: the runner prints where each thread is, as function names
-and file:line, and stops. `TARGET=host` (64-bit) works too, but Nintendo's graphics formats
+and file:line, and stops. An integer division by zero continues with 0, as
+on the 3DS (which has no divide instruction and doesn't trap), and is
+logged once per place. `TARGET=host` (64-bit) works too, but Nintendo's graphics formats
 hold 4-byte pointers, so the game can't get far that way once it loads
 graphics.
 
