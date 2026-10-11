@@ -79,7 +79,7 @@ int main(void)
 {
     NitroPortFirmware firmware;
     SNDBankData *bank = synthetic_bank();
-    int16_t stereo[128 * 2];
+    int16_t stereo[256 * 2];   /* the largest render below: 256 frames */
     uint32_t tag;
     unsigned i, audible = 0;
 
