@@ -269,6 +269,12 @@ $(SOUND_CHIP_TEST_BIN): tests/test_sound_chip.c src/port_sound_chip.c include/ni
 	@mkdir -p $(dir $@)
 	$(CC) $(PORT_CFLAGS) $(LDFLAGS) -Iinclude tests/test_sound_chip.c src/port_sound_chip.c -o $@
 
+# Original ARM9 API to the renamed ARM7 driver through the virtual PXI
+# protocol, with a synthetic SSEQ/SBNK/SWAR fixture (no game content).
+SOUND_SEQ_TEST_BIN := $(OUT)/test_sound_sequence
+$(SOUND_SEQ_TEST_BIN): tests/test_sound_sequence.c $(LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
+
 # Unit tests run on the PC only.
 TEST_BIN := $(OUT)/test_nitro
 
@@ -303,12 +309,13 @@ ARM7_TEST_BIN := $(OUT)/test_arm7
 $(ARM7_TEST_BIN): tests/test_arm7.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
 
-test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN)
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN)
 	./$(TEST_BIN)
 	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
 	./$(THREAD_TEST_BIN)
 	./$(ARM7_TEST_BIN)
 	./$(SOUND_CHIP_TEST_BIN)
+	./$(SOUND_SEQ_TEST_BIN)
 
 clean:
 	rm -rf build
