@@ -64,6 +64,18 @@ static void sound_unlock(void)
     __sync_lock_release(&sLock);
 }
 
+/* ARM9 SDK status getters share this lock with the real ARM7 driver.
+ * The same mutex covers every non-atomic SNDSharedWork status/variable
+ * read and all audio-side writes, without entering the ARM9 scheduler. */
+void NitroPort_SoundSharedLock(void)
+{
+    sound_lock();
+}
+void NitroPort_SoundSharedUnlock(void)
+{
+    sound_unlock();
+}
+
 void NitroPort_ResetSoundState(void)
 {
     sound_lock();
