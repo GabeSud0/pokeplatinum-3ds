@@ -1,0 +1,55 @@
+From 6a5ca1b77c941c525e8b84929049f086844dbdcc Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 00:32:59 -0700
+Subject: [PATCH] Clear interrupt requests by clearing bits, not storing the
+ mask (SDK_PORT_3DS)
+
+On the DS, writing to IF clears the interrupt requests whose bits are
+1 (write-1-to-clear). In the port IF is plain memory, so the plain
+writes in OS_ResetRequestIrqMask and OS_SetTick replaced every pending
+request with the mask itself: the requested bits set, all the others
+lost. MI_SendGXCommandAsync acknowledges the GXFIFO interrupt this way
+right after starting the last DMA piece, which wiped that DMA's
+completion interrupt, so its callback never ran and the next send
+waited forever. Both now clear the bits (os_irqHandler.c already does).
+---
+ libraries/os/src/os_interrupt.c | 5 +++++
+ libraries/os/src/os_tick.c      | 4 ++++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/libraries/os/src/os_interrupt.c b/libraries/os/src/os_interrupt.c
+index 23ca0a6..791fdb7 100644
+--- a/libraries/os/src/os_interrupt.c
++++ b/libraries/os/src/os_interrupt.c
+@@ -132,7 +132,12 @@ OSIrqMask OS_ResetRequestIrqMask (OSIrqMask intr)
+ {
+     BOOL ime = OS_DisableIrq();
+     OSIrqMask prep = reg_OS_IF;
++#ifdef SDK_PORT_3DS
++    /* IF is write-1-to-clear on the DS; in the port it's plain memory. */
++    reg_OS_IF &= ~intr;
++#else
+     reg_OS_IF = intr;
++#endif
+     (void)OS_RestoreIrq(ime);
+     return prep;
+ }
+diff --git a/libraries/os/src/os_tick.c b/libraries/os/src/os_tick.c
+index e537d79..0241dd2 100644
+--- a/libraries/os/src/os_tick.c
++++ b/libraries/os/src/os_tick.c
+@@ -123,7 +123,11 @@ void OS_SetTick (OSTick count)
+     SDK_ASSERT(OSi_UseTick);
+     prev = OS_DisableInterrupts();
+ 
++#ifdef SDK_PORT_3DS
++    reg_OS_IF &= ~OSi_TICK_IE_TIMER;   /* write-1-to-clear on the DS */
++#else
+     reg_OS_IF = OSi_TICK_IE_TIMER;
++#endif
+ 
+     OSi_NeedResetTimer = TRUE;
+     OSi_TickCounter = (u64)(count >> 16);
+-- 
+2.43.0
+

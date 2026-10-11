@@ -122,6 +122,7 @@ void NitroPort_DmaStart(u32 dmaNo)
         /* The FIFO DMA really feeds the 3D engine in bursts as it drains;
          * the port's FIFO never fills, so it all goes at once. */
         Transfer(dmaNo, cnt);
+        NitroPort_GxRefresh();   /* the FIFO is empty again (port_gx.c) */
         Finish(dmaNo, cnt, FALSE);
         break;
     case MI_DMA_TIMING_V_BLANK:

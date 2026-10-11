@@ -55,7 +55,7 @@ SDK still builds the original game with Metrowerks.
 |---|---|---|
 | ARM7 services: sound | requests are taken and counted finished (so the game never waits for them), nothing plays; alarms never fire (`src/port_snd.c`) | the sound step (the ARM7 sequencer, mixed to the 3DS) |
 | ARM7 services: microphone, wireless | not yet emulated | one service per PXI tag |
-| Display, 2D and 3D | the registers and VRAM exist; nothing draws them | the 2D renderer and the 3D command translator |
+| Display, 2D and 3D | the registers and VRAM exist; nothing draws them. The 3D engine reads as idle with an empty command FIFO, and the GXFIFO interrupt fires while its condition holds, so display lists sent by DMA complete (`src/port_gx.c`) | the 2D renderer and the 3D command translator |
 | H-blank DMA (the game's wavy-screen effects), synchronous `MI_VBlankDmaCopy*` | reported as not implemented; the transfer stays pending | the 2D renderer (per-line timing) and the 3DS main loop |
 | VRAM banking | each CPU view of VRAM is its own block | the 2D renderer |
 | `OS_ResetSystem` (soft reset) | stores the reset parameter, then the program reports it and stops | restarting the game in place |

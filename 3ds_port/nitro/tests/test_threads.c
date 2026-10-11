@@ -552,6 +552,43 @@ static void test_halt_masked(void)
     (void)OS_RestoreInterrupts(old);
 }
 
+/* ------------------------------------------------- 3D FIFO, sent by DMA */
+
+static int sGxDone;
+
+static void GxDone(void *arg)
+{
+    (void)arg;
+    sGxDone++;
+}
+
+/* NitroSystem sends a model's display list with MI_SendGXCommandAsync: it
+ * waits for the FIFO to be less than half full, then sends 118 words per
+ * GXFIFO interrupt. The port's FIFO is always empty, so GXSTAT must say so
+ * and the (level-triggered) interrupt must keep coming until it's done. */
+static void test_gx_fifo(void)
+{
+    static u32 list[1000];   /* 9 pieces: 8 x 118 words + the rest */
+    int i;
+
+    G3X_Init();
+    OS_WaitVBlankIntr();   /* the port puts GXSTAT's status back every frame */
+    CHECK(G3X_GetCommandFifoStatus() & GX_FIFOSTAT_UNDERHALF);
+    CHECK(G3X_GetCommandFifoStatus() & GX_FIFOSTAT_EMPTY);
+    CHECK(!G3X_IsGeometryBusy());
+    CHECK_EQ(G3X_GetCommandFifoCount(), 0);
+
+    for (i = 0; i < 1000; i++) {
+        list[i] = 0;   /* NOPs */
+    }
+    sGxDone = 0;
+    MI_SendGXCommandAsync(1, list, sizeof(list), GxDone, NULL);
+    CHECK_EQ(sGxDone, 1);
+    MI_SendGXCommandAsync(1, list, sizeof(list), GxDone, NULL);   /* not left busy */
+    CHECK_EQ(sGxDone, 2);
+    CHECK_EQ(reg_OS_IE & OS_IE_GXFIFO, 0);   /* put back as it was */
+}
+
 int main(void)
 {
     NitroPort_SetClockSource(FakeClock);
@@ -569,6 +606,7 @@ int main(void)
     test_alarm();
     test_pxi_interrupt();
     test_halt_masked();
+    test_gx_fifo();
 
     printf("threads and timers: %d checks, %d failed\n", sChecks, sFailures);
     return sFailures == 0 ? 0 : 1;
