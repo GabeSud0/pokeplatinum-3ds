@@ -265,9 +265,9 @@ $(LIB): $(SDK_OBJS) $(PORT_OBJS) $(ARM7_OBJS)
 
 # Pure-C chip tests link no NitroSDK or platform code.
 SOUND_CHIP_TEST_BIN := $(OUT)/test_sound_chip
-$(SOUND_CHIP_TEST_BIN): tests/test_sound_chip.c src/port_sound_chip.c include/nitro_port_sound_chip.h
+$(SOUND_CHIP_TEST_BIN): tests/test_sound_chip.c tests/sound_chip_reference.c src/port_sound_chip.c include/nitro_port_sound_chip.h
 	@mkdir -p $(dir $@)
-	$(CC) $(PORT_CFLAGS) $(LDFLAGS) -Iinclude tests/test_sound_chip.c src/port_sound_chip.c -o $@
+	$(CC) $(PORT_CFLAGS) $(LDFLAGS) -Iinclude tests/test_sound_chip.c tests/sound_chip_reference.c src/port_sound_chip.c -o $@
 
 # Original ARM9 API to the renamed ARM7 driver through the virtual PXI
 # protocol, with a synthetic SSEQ/SBNK/SWAR fixture (no game content).

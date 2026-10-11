@@ -100,3 +100,9 @@ uint64_t NitroPortPlatform_Nanoseconds(void)
     return (ticks / SYSCLOCK_ARM11) * 1000000000ULL +
            (ticks % SYSCLOCK_ARM11) * 1000000000ULL / SYSCLOCK_ARM11;
 }
+
+void NitroPortPlatform_Sleep(uint32_t microseconds)
+{
+    /* (svcSleepThread(0) would only let threads of the same priority run) */
+    svcSleepThread((s64)(microseconds ? microseconds : 1) * 1000);
+}

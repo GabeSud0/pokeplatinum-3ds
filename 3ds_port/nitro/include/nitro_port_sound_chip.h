@@ -22,6 +22,18 @@ typedef struct NitroSoundVoice {
     uint8_t adpcmByte;
     uint8_t adpcmNibble;
     uint8_t running;
+    /* Kept by the mixer so it doesn't redo work every sample: the step for
+     * the last timer value, and the ADPCM decoder's state at the loop
+     * start (as the DS keeps it), for the loop start and data it was
+     * saved for. */
+    uint8_t loopSaved;
+    uint32_t stepPeriod;
+    uint32_t stepRate;
+    uint64_t step;
+    uint32_t loopSource;
+    uint32_t loopAt;
+    int32_t loopPredictor;
+    int32_t loopStepIndex;
 } NitroSoundVoice;
 
 typedef struct NitroSoundCapture {

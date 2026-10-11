@@ -103,3 +103,12 @@ uint64_t NitroPortPlatform_Nanoseconds(void)
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
+
+void NitroPortPlatform_Sleep(uint32_t microseconds)
+{
+    struct timespec t;
+
+    t.tv_sec = microseconds / 1000000u;
+    t.tv_nsec = (long)(microseconds % 1000000u) * 1000L;
+    nanosleep(&t, NULL);
+}

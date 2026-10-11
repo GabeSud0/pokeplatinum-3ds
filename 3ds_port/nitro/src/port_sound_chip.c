@@ -143,79 +143,113 @@ static void restart_channel(NitroSoundVoice *voice, uint32_t ctrl,
     voice->predictor = 0;
     voice->stepIndex = 0;
     voice->lastSample = 0;
+    voice->loopSaved = 0;
     if (format == 2u && source) adpcm_init(voice, source);
 }
 
-static int32_t wave_sample(NitroSoundVoice *v, unsigned channel,
-                           unsigned base, uint32_t ctrl)
+/*
+ * One channel during one NitroSound_Mix call. Only the mixer itself changes
+ * a channel's registers while it mixes (it switches a channel off at the end
+ * of its sound), so they're read once per call, not once per sample, and the
+ * sound's length, loop point and step are worked out once too. What comes
+ * out is exactly what reading them every sample gave.
+ */
+typedef struct Channel {
+    NitroSoundVoice *v;
+    unsigned channel;
+    unsigned base;
+    unsigned format;
+    unsigned repeat;
+    uint32_t ctrl;
+    uint32_t sourceAddr;
+    const uint8_t *source;
+    uint32_t nSamples;
+    uint32_t loopAt;
+    uint64_t step;
+    int32_t volume;
+    int32_t pan;
+    unsigned shift;
+} Channel;
+
+static int32_t wave_sample(const Channel *c)
 {
-    const uint8_t *source = (const uint8_t *)(uintptr_t)reg32(base + REG_SAD);
-    unsigned format = (ctrl >> 29) & 3u;
-    if (format == 3u) {
-        if (channel >= 14) return (v->noise & 1u) ? -32767 : 32767;
-        if (channel < 8) return 0;
-        return (v->sampleIndex & 7u) <= ((ctrl >> 24) & 7u) ? 32767 : -32767;
+    const NitroSoundVoice *v = c->v;
+
+    switch (c->format) {
+    case 0:
+        return c->source ? (int32_t)pcm8(c->source, v->sampleIndex) * 256 : 0;
+    case 1:
+        return c->source ? pcm16(c->source, v->sampleIndex * 2u) : 0;
+    case 2:
+        return c->source ? v->predictor : 0;
+    default:
+        if (c->channel >= 14) return (v->noise & 1u) ? -32767 : 32767;
+        if (c->channel < 8) return 0;
+        return (v->sampleIndex & 7u) <= ((c->ctrl >> 24) & 7u) ? 32767 : -32767;
     }
-    if (!source) return 0;
-    if (format == 0u) return (int32_t)pcm8(source, v->sampleIndex) * 256;
-    if (format == 1u) return pcm16(source, v->sampleIndex * 2u);
-    return v->predictor;
 }
 
-static void advance_voice(NitroSoundVoice *v, unsigned channel,
-                          unsigned base, uint32_t ctrl)
+/* The ADPCM decoder's state at the loop start, as it was when the sound
+ * first got there; without one saved (or for other data), decoded again
+ * from the start. */
+static void adpcm_to_loop(NitroSoundVoice *v, const Channel *c)
 {
-    const unsigned format = (ctrl >> 29) & 3u;
-    const unsigned repeat = (ctrl >> 27) & 3u;
-    const uint8_t *source = (const uint8_t *)(uintptr_t)reg32(base + REG_SAD);
-    uint32_t startByte = (uint32_t)reg16(base + REG_LOOP) * 4u;
-    uint32_t endByte = startByte + (reg32(base + REG_LENGTH) & 0x3fffffu) * 4u;
-    uint32_t nSamples = total_samples(format, endByte);
-    uint32_t loopAt = loop_sample(format, startByte);
+    uint32_t i;
 
-    if (format == 3u) {
+    if (c->loopAt != 0 && v->loopSaved && v->loopSource == c->sourceAddr &&
+        v->loopAt == c->loopAt) {
+        v->predictor = v->loopPredictor;
+        v->stepIndex = v->loopStepIndex;
+        return;
+    }
+    adpcm_init(v, c->source);
+    for (i = 1u; i <= c->loopAt; ++i) (void)adpcm_at(v, c->source, i);
+}
+
+static void advance_voice(const Channel *c)
+{
+    NitroSoundVoice *v = c->v;
+
+    if (c->format == 3u) {
         v->sampleIndex = (v->sampleIndex + 1u) & 7u;
-        if (channel >= 14u) {
+        if (c->channel >= 14u) {
             unsigned carry = (v->noise ^ (v->noise >> 1u)) & 1u;
             v->noise = (uint16_t)((v->noise >> 1u) | (carry << 14u));
         }
         return;
     }
-    if (!source || !nSamples) {
-        disable_channel(base, v);
+    if (!c->source || !c->nSamples) {
+        disable_channel(c->base, v);
         return;
     }
 
     v->sampleIndex++;
-    if (v->sampleIndex >= nSamples) {
-        if (repeat != 1u || loopAt >= nSamples) {
-            disable_channel(base, v);
+    if (v->sampleIndex >= c->nSamples) {
+        if (c->repeat != 1u || c->loopAt >= c->nSamples) {
+            disable_channel(c->base, v);
             return;
         }
-        v->sampleIndex = loopAt;
-        if (format == 2u) {
-            uint32_t i;
-            adpcm_init(v, source);
-            for (i = 1u; i <= loopAt; ++i) (void)adpcm_at(v, source, i);
+        v->sampleIndex = c->loopAt;
+        if (c->format == 2u) adpcm_to_loop(v, c);
+    } else if (c->format == 2u) {
+        (void)adpcm_at(v, c->source, v->sampleIndex);
+        if (v->sampleIndex == c->loopAt) {
+            v->loopSaved = 1;
+            v->loopSource = c->sourceAddr;
+            v->loopAt = c->loopAt;
+            v->loopPredictor = v->predictor;
+            v->loopStepIndex = v->stepIndex;
         }
-    } else if (format == 2u) {
-        (void)adpcm_at(v, source, v->sampleIndex);
     }
 }
 
-static int32_t voice_mix(NitroSoundChip *chip, unsigned channel,
-                         int32_t *left, int32_t *right)
+/* Read a channel's registers at the start of a mix; 0 if it's off. */
+static int start_channel(NitroSoundChip *chip, unsigned channel, Channel *c)
 {
     NitroSoundVoice *v = &chip->voice[channel];
     unsigned base = CHANNEL_BASE(channel);
     uint32_t ctrl = reg32(base);
-    uint32_t period = 0x10000u - reg16(base + REG_TIMER);
-    uint32_t shift = (ctrl >> 8) & 3u;
-    uint32_t volume = ctrl & 127u;
-    uint32_t pan = (ctrl >> 16) & 127u;
-    int32_t sample, scaled;
-    uint64_t step;
-    unsigned guard = 0;
+    uint32_t period, startByte, endByte, shift;
 
     if (!(ctrl & 0x80000000u)) {
         v->running = 0;
@@ -226,18 +260,50 @@ static int32_t voice_mix(NitroSoundChip *chip, unsigned channel,
         restart_channel(v, ctrl, base);
     v->previousCtrl = ctrl;
 
-    sample = wave_sample(v, channel, base, ctrl);
-    /* 00=none, 01=1 bit, 10=2 bits, 11=4 bits */
-    scaled = (sample * (int32_t)volume) / 127;
-    scaled >>= shift == 3u ? 4u : shift;
-    *left += (scaled * (int32_t)(127u - pan)) / 127;
-    *right += (scaled * (int32_t)pan) / 127;
+    c->v = v;
+    c->channel = channel;
+    c->base = base;
+    c->ctrl = ctrl;
+    c->format = (ctrl >> 29) & 3u;
+    c->repeat = (ctrl >> 27) & 3u;
+    c->sourceAddr = reg32(base + REG_SAD);
+    c->source = (const uint8_t *)(uintptr_t)c->sourceAddr;
+    startByte = (uint32_t)reg16(base + REG_LOOP) * 4u;
+    endByte = startByte + (reg32(base + REG_LENGTH) & 0x3fffffu) * 4u;
+    c->nSamples = total_samples(c->format, endByte);
+    c->loopAt = loop_sample(c->format, startByte);
+    c->volume = (int32_t)(ctrl & 127u);
+    c->pan = (int32_t)((ctrl >> 16) & 127u);
+    shift = (ctrl >> 8) & 3u;
+    c->shift = shift == 3u ? 4u : shift;
 
-    step = (SOUND_CLOCK << 32) / ((uint64_t)period * chip->outputRate);
-    v->phase += step;
+    /* The step only changes with the timer: no 64-bit division (slow on
+     * the 3DS's CPU, which has no divide instruction) for every sample. */
+    period = 0x10000u - reg16(base + REG_TIMER);
+    if (v->stepPeriod != period || v->stepRate != chip->outputRate) {
+        v->stepPeriod = period;
+        v->stepRate = chip->outputRate;
+        v->step = (SOUND_CLOCK << 32) / ((uint64_t)period * chip->outputRate);
+    }
+    c->step = v->step;
+    return 1;
+}
+
+/* One sample of a running channel: adds it to the mix, returns it. */
+static int32_t voice_mix(Channel *c, int32_t *left, int32_t *right)
+{
+    NitroSoundVoice *v = c->v;
+    int32_t scaled = (wave_sample(c) * c->volume) / 127;
+    unsigned guard = 0;
+
+    scaled >>= c->shift;
+    *left += (scaled * (127 - c->pan)) / 127;
+    *right += (scaled * c->pan) / 127;
+
+    v->phase += c->step;
     while (v->phase >= PHASE_ONE && v->running && guard++ < 2048u) {
         v->phase -= PHASE_ONE;
-        advance_voice(v, channel, base, ctrl);
+        advance_voice(c);
     }
     return scaled;
 }
@@ -296,28 +362,56 @@ void NitroSound_Reset(NitroSoundChip *chip, uint32_t outputRate)
 
 void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
 {
+    Channel channels[NITRO_SOUND_CHANNEL_COUNT];
+    unsigned count = 0, channel, k;
+    unsigned outputSelector;
+    int32_t masterVolume;
+    int capturing;
     size_t i;
-    if (!chip || !stereo || !chip->outputRate) return;
+
+    if (!chip || !stereo || !chip->outputRate || frames == 0) return;
+    for (channel = 0; channel < NITRO_SOUND_CHANNEL_COUNT; ++channel) {
+        if (start_channel(chip, channel, &channels[count])) ++count;
+    }
+    outputSelector = reg8(0x501u);
+    masterVolume = (int32_t)(reg8(0x500u) & 127u);
+    capturing = ((reg8(0x508u) | reg8(0x509u)) & 128u) ||
+                chip->capture[0].running || chip->capture[1].running;
+
     for (i = 0; i < frames; ++i) {
         int32_t mixL = 0, mixR = 0;
         int32_t special0 = 0, special2 = 0;
         int32_t outputL, outputR;
-        unsigned channel, outputSelector = reg8(0x501u);
-        for (channel = 0; channel < NITRO_SOUND_CHANNEL_COUNT; ++channel) {
-            int32_t value = voice_mix(chip, channel, &mixL, &mixR);
-            if (channel == 0) special0 = value;
-            if (channel == 2) special2 = value;
+
+        for (k = 0; k < count; ++k) {
+            Channel *c = &channels[k];
+            int32_t value;
+
+            if (!c->v->running) {
+                /* It ended earlier in this mix: silent from then on. */
+                continue;
+            }
+            value = voice_mix(c, &mixL, &mixR);
+            if (c->channel == 0) special0 = value;
+            if (c->channel == 2) special2 = value;
         }
-        do_capture(chip, 0, mixL, mixR, special0, special2);
-        do_capture(chip, 1, mixL, mixR, special0, special2);
+        if (capturing) {
+            do_capture(chip, 0, mixL, mixR, special0, special2);
+            do_capture(chip, 1, mixL, mixR, special0, special2);
+        }
         if (outputSelector & 128u) {
-            uint32_t volume = reg8(0x500u) & 127u;
-            outputL = (mixL * (int32_t)volume) / 127;
-            outputR = (mixR * (int32_t)volume) / 127;
+            outputL = (mixL * masterVolume) / 127;
+            outputR = (mixR * masterVolume) / 127;
         } else {
             outputL = outputR = 0;
         }
         stereo[2u * i] = saturate(outputL);
         stereo[2u * i + 1u] = saturate(outputR);
+    }
+    /* Channels that ended: as reading their (now off) registers left them. */
+    for (k = 0; k < count; ++k) {
+        if (!channels[k].v->running) {
+            channels[k].v->previousCtrl = reg32(channels[k].base);
+        }
     }
 }

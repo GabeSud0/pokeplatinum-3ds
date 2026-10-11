@@ -13,6 +13,7 @@
 #include <nitro.h>
 #include <nitro_port.h>
 #include <nitro_port_sound_chip.h>
+#include "port_platform.h"
 #include <nitro/snd/common/command.h>
 #include <nitro/snd/common/work.h>
 #include <nitro/snd/common/main.h>
@@ -53,9 +54,18 @@ static PortSoundAlarm sAlarms[16];
 
 static void sound_lock(void)
 {
+    unsigned spins = 0;
+
     while (__sync_lock_test_and_set(&sLock, 1u)) {
         while (__atomic_load_n(&sLock, __ATOMIC_RELAXED)) {
-            /* Short critical sections; never call the ARM9 OS scheduler. */
+            /* Short critical sections, so spin a little; then sleep, never
+             * the ARM9 OS scheduler. The sleep matters: the sound thread
+             * outranks the game's, so on the same CPU core a lock the game
+             * holds is only let go if the sound thread stops spinning. */
+            if (++spins >= 64u) {
+                NitroPortPlatform_Sleep(50);
+                spins = 0;
+            }
         }
     }
 }
@@ -162,30 +172,42 @@ static void sound_tick(void)
 
 /* Audio-side clock, completely independent of game frames and OS_Halt.
  * Exactly 32768 output samples correspond to one second; an original
- * sequencer tick fires every 2728 us, including fractional sample timing. */
+ * sequencer tick fires every 2728 us, including fractional sample timing.
+ *
+ * Mixed a stretch at a time: up to the next tick (about 89 samples), with
+ * the lock held for one stretch only, so the game never waits for long.
+ * Commands the game sends are taken at the start of the next stretch, at
+ * most 2.7 ms later (the DS's ARM7 took them on its next tick, too). */
 void NitroPort_SoundRender(int16_t *stereo, size_t frames)
 {
-    size_t i;
+    size_t done = 0;
     if (!stereo) return;
     if (!__atomic_load_n(&sReady, __ATOMIC_ACQUIRE)) {
         memset(stereo, 0, frames * 4u);
         return;
     }
-    sound_lock();
-    for (i = 0; i < frames; ++i) {
-        /* Process commands immediately on the first sample after the send. */
+    while (done < frames) {
+        uint64_t toTick;
+        size_t n;
+
+        sound_lock();
         if (sCount) {
             N7_SND_CommandProc();
             N7_SND_UpdateSharedWork();
         }
-        NitroSound_Mix(&sChip, stereo + 2u * i, 1u);
-        sTickPhase += 1000000u;
+        /* Samples until the one that reaches the next tick, included. */
+        toTick = (SOUND_TICK_SAMPLES - sTickPhase + 999999u) / 1000000u;
+        n = frames - done;
+        if (toTick < n) n = (size_t)toTick;
+        NitroSound_Mix(&sChip, stereo + 2u * done, n);
+        sTickPhase += 1000000u * (uint64_t)n;
         if (sTickPhase >= SOUND_TICK_SAMPLES) {
             sTickPhase -= SOUND_TICK_SAMPLES;
             sound_tick();
         }
+        sound_unlock();
+        done += n;
     }
-    sound_unlock();
 }
 
 /* Called by the game thread (e.g. its OnFrame hook), NOT the audio thread.
