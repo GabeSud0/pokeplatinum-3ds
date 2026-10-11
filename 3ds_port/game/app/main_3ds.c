@@ -33,6 +33,7 @@
 
 /* Audio uses the port's plain-C mixer; it deliberately does not include
  * NitroSDK headers alongside libctru. */
+void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void NitroPort_SoundRender(int16_t *stereo, size_t frames);
 void NitroPort_SoundPumpReplies(void);
 
