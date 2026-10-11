@@ -157,6 +157,30 @@ SDK_SRCS := \
 # Not built: mi/src/mi_uncomp_stream.c (streaming decompression; assembly only,
 # and the game doesn't use it).
 
+# Compile Nintendo's original ARM7 sequencer as a second, isolated SDK
+# instance. Both CPUs expose the same SND_* names, so link the ARM7 objects
+# together and rename ONLY symbols they define, not their external OS/libc
+# dependencies. The resulting driver is not started until the audio bridge
+# implements independent scheduling and register emulation.
+ARM7_SND_SRCS := \
+    snd/src/ARM7/snd_capture.c \
+    snd/src/ARM7/snd_channel.c \
+    snd/src/ARM7/snd_exchannel.c \
+    snd/src/ARM7/snd_global.c \
+    snd/src/ARM7/snd_midiplayer.c \
+    snd/src/ARM7/snd_seq.c \
+    snd/src/snd_alarm.c \
+    snd/src/snd_bank.c \
+    snd/src/snd_command.c \
+    snd/src/snd_data.c \
+    snd/src/snd_main.c \
+    snd/src/snd_util.c \
+    snd/src/snd_work.c
+ARM7_SND_OBJS := $(ARM7_SND_SRCS:%.c=$(OUT)/arm7/sdk/%.o)
+ARM7_SND_RAW := $(OUT)/arm7/sound_driver.raw.o
+ARM7_SND_MAP := $(OUT)/arm7/sound_driver.map
+ARM7_SND_PREFIXED := $(OUT)/arm7/sound_driver.prefixed.o
+
 PORT_SRCS := $(wildcard src/*.c)
 
 # Threads, signals and the clock come from the machine (src/port_platform.h).
@@ -206,6 +230,24 @@ $(OUT)/port/%.o: src/%.c $(GEN)/nitro/fx/fx_const.h
 	@echo "  CC  $(notdir $<)"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+# Build exactly the ARM7 branches of NitroSDK's sound driver. CFLAGS
+# contains -DSDK_ARM9 by default; explicitly undefine it after those flags.
+$(OUT)/arm7/sdk/%.o: $(SDK)/libraries/%.c $(GEN)/nitro/fx/fx_const.h
+	@mkdir -p $(dir $@)
+	@echo "  CC  ARM7 $(notdir $<)"
+	@$(CC) $(CFLAGS) -USDK_ARM9 -DSDK_ARM7 -c $< -o $@
+
+$(ARM7_SND_RAW): $(ARM7_SND_OBJS)
+	@mkdir -p $(dir $@)
+	@$(CC) $(PORT_CFLAGS) -r -nostdlib $^ -o $@
+
+$(ARM7_SND_MAP): $(ARM7_SND_RAW)
+	@$(NM) -g --defined-only $< | awk 'NF == 3 && $2 ~ /^[A-Za-z]$/ {print $3 " Arm7_" $3}' > $@
+
+$(ARM7_SND_PREFIXED): $(ARM7_SND_RAW) $(ARM7_SND_MAP)
+	@cp $(ARM7_SND_RAW) $@
+	@$(OBJCOPY) --redefine-syms=$(ARM7_SND_MAP) $@
+
 # The 3DS platform layer uses libctru (and none of the SDK's headers).
 DEVKITPRO ?= /opt/devkitpro
 $(OUT)/port/platform/3ds.o: src/platform/3ds.c src/port_platform.h
@@ -218,7 +260,7 @@ $(PAK_READER_OBJ): ../pak/src/pak.c ../pak/include/pak.h
 	@echo "  CC  libpak reader"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-$(LIB): $(SDK_OBJS) $(PORT_OBJS)
+$(LIB): $(SDK_OBJS) $(PORT_OBJS) $(ARM7_SND_PREFIXED)
 	@rm -f $@
 	@$(AR) rcs $@ $^
 	@echo "built $@"
