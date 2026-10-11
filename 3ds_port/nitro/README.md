@@ -53,7 +53,7 @@ SDK still builds the original game with Metrowerks.
 
 | Area | Today | Comes with |
 |---|---|---|
-| ARM7 services: sound | requests are taken and counted finished (so the game never waits for them), nothing plays; alarms never fire (`src/port_snd.c`) | the sound step (the ARM7 sequencer, mixed to the 3DS) |
+| ARM7 services: sound | second, prefixed build of the original ARM7 sound sequencer; plain-C 16-channel PCM/ADPCM/PSG/noise and capture mixer; audio-clock timers, PXI commands and alarms (`src/port_snd.c`, `port_sound_chip.c`) | live NDSP test and remaining chip accuracy |
 | ARM7 services: microphone, wireless | not yet emulated | one service per PXI tag |
 | Display, 2D and 3D | the registers and VRAM exist; nothing draws them. The 3D engine reads as idle with an empty command FIFO, and the GXFIFO interrupt fires while its condition holds, so display lists sent by DMA complete (`src/port_gx.c`) | the 2D renderer and the 3D command translator |
 | H-blank DMA (the game's wavy-screen effects), synchronous `MI_VBlankDmaCopy*` | reported as not implemented; the transfer stays pending | the 2D renderer (per-line timing) and the 3DS main loop |
@@ -69,6 +69,41 @@ return straight away.
 **Not built**, because the game doesn't use them: download play (mb), gesture
 recognition (prc), wireless voice (wvr), the China-edition boot screen,
 streaming decompression, and a few debug libraries. See the `Makefile`.
+
+## Virtual ARM7 sound driver and software sound chip
+
+The port builds a **separate SDK_ARM7 copy** of Nintendo's pinned sound
+driver (`libraries/snd/src/ARM7/` and its shared sources), then uses a
+symbol-remapping table to prefix its exported functions/variables with
+`N7_`. The game keeps its original ARM9 `SND_*` APIs unchanged.
+
+`src/port_snd.c` accepts the original PXI SOUND command lists, executes
+them in the genuine ARM7 sequencer/voice allocator, advances it at an
+audio-rate-based 2,728 microsecond interval, and updates
+`SNDSharedWork`. Alarms are dispatched back to the ARM9 from
+`NitroPort_SoundPumpReplies()`, never by using the original game-thread
+scheduler from the audio side.
+
+`src/port_sound_chip.c` is separate, portable C: 16 channels of PCM8,
+PCM16, IMA-ADPCM, square waves and noise, playback timer, volume, shift,
+pan, master volume and two capture buffers. It produces interleaved
+signed 16-bit stereo at 32,768 Hz. No DSP/libctru headers are needed
+for PC unit tests. Source wave buffers are private game/runtime memory;
+neither ROM files nor actual sound assets are in this repository.
+
+In the 3DS application, an independent audio thread refills triple
+NDSP buffers. If `sdmc:/3ds/dspfirm.cdc` is missing, the application
+logs that sound output is unavailable and still runs the audio clock.
+On the PC, an audio thread is silent by default but can optionally
+write stereo to a `--wav FILE` output for inspection.
+
+Unit tests exercise invented waveforms for all five channel modes,
+channel volume/pan, looping and capture, and a synthetic
+sequence/bank/wave archive passed to the **original** ARM9 SND API.
+`test_arm7` also verifies that over 3,000 sound command batches return.
+
+This isn't a promise of exact hardware-level audio fidelity. Mix/capture
+timing and long-run game playback still need Azahar/console comparison.
 
 ## Virtual ARM7 services (card, RTC, power, touch)
 
@@ -106,7 +141,7 @@ interrupt, so a reply is taken as soon as the game has interrupts enabled
 (at once if it has, otherwise when it re-enables them). The card library runs
 its tasks on its own thread, as on the DS. The PMIC returns battery OK and
 tracks backlight/sound state but does **not** physically power off the console.
-Other ARM7 tags (including real sound output and wireless) remain unimplemented.
+Other ARM7 tags (including wireless) remain unimplemented.
 
 Host and host32 `make test` execute `tests/test_arm7.c` using the original
 `CARD_*`, `RTC_*`, `PM_*` and `TP_*` SDK entry points and a removable
