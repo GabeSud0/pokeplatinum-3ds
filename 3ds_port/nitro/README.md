@@ -83,10 +83,16 @@ The portable mixer intentionally has no libctru or Nintendo SDK dependencies.
 `make test` on both host and host32.
 
 **This is an incomplete foundation, not an operational audio port.**
-The existing `port_snd.c` remains the silent service. In particular, the
-second ARM7 driver instance, sound register emulation, 2,728 µs tick scheduling,
-thread-safe PXI/shared-work transfer, alarm callbacks, capture/reverb timing,
-ndsp playback, PC WAV export, and actual game sound tests are **not connected**.
+The existing `port_snd.c` remains the silent service. The original NitroSDK
+ARM7 sound sources now compile as a separately prefixed object
+(`build/<target>/arm7/sound_driver.prefixed.o`), avoiding name collisions with
+ARM9. Patches `0018` and `0019` map its sound registers to port-owned memory
+and bypass physical DS power-chip operations.
+
+The ARM7 driver is **not yet invoked**. Actual register-to-mixer synchronization,
+2,728 µs tick scheduling, thread-safe PXI/shared-work transfer, alarm callbacks,
+capture/reverb timing, ndsp playback, PC WAV export and end-to-end game sound
+tests are **not connected**.
 Until those steps are implemented, the Platinum title screen remains silent.
 The mixer tests are preliminary DSP checks, not hardware-accuracy tests.
 
