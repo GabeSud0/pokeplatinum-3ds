@@ -37,7 +37,7 @@ diff --git a/libraries/snd/src/snd_alarm.c b/libraries/snd/src/snd_alarm.c
 +        alarm->setting.tick = tick;
          alarm->setting.period = period;
          alarm->id = (u8)id;
-@@ -77,20 +85,28 @@
+@@ -77,22 +85,30 @@
          alarm = &SNDi_Work.alarm[alarmNo];
  
          if (alarm->enable) {
