@@ -327,6 +327,9 @@ This refines Phases 2 and 3 of the [roadmap](ROADMAP.md):
    (`tools/game_overlays.py`, `3ds_port/nitro/src/port_overlay.c`).
 4. **Virtual registers, VRAM and OAM.**
 5. **2D renderer**, enough for the title screen, then menus and text boxes.
+   *First version done:* both engines in software
+   (`3ds_port/nitro/src/port_render2d.c`), on the 3DS screens and as PNG
+   screenshots from the PC runner.
 6. **Input and touch.** At this point menus work.
 7. **Saves**, then the **clock**.
 8. **3D command interpreter** at the original 256×192, until it matches the DS.

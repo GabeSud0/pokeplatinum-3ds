@@ -13,7 +13,10 @@
 # The PC runner has no screen: it prints the log. If the game gets stuck it
 # prints where, as function names and file:line, and stops.
 #
-# The log also goes to pokeplatinum-pc-log.txt in your Windows user folder.
+# The log also goes to pokeplatinum-pc-log.txt in your Windows user folder,
+# and what the two screens show to pokeplatinum-pc-shots/ there, every 300
+# frames (5 seconds of game time) and when it stops (PNG files, the upper
+# screen above the lower one). --press 8700:A,9000:START presses buttons.
 # The save is ~/pokeplatinum-pc.sav in Ubuntu, apart from the 3DS one.
 # BRANCH=<name> builds another branch (default: main). Nothing is uploaded.
 set -euo pipefail
@@ -41,6 +44,7 @@ for f in "$PAK" "$MANIFEST"; do
 done
 WIN_HOME="$(wslpath -u "$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r')")"
 LOG="$WIN_HOME/pokeplatinum-pc-log.txt"
+SHOTS="$WIN_HOME/pokeplatinum-pc-shots"
 
 step "Installing git, python, make, gcc with 32-bit support, patch"
 sudo apt-get update -qq
@@ -63,12 +67,15 @@ python3 tools/bootstrap.py --clean
 step "Building the PC runner (32-bit, as on the 3DS; ~1,000 game files)"
 make -j"$(nproc)" -C 3ds_port/game TARGET=host32 program
 
-step "Running the game (log: $(wslpath -w "$LOG"))"
+step "Running the game (log: $(wslpath -w "$LOG"), screens: $(wslpath -w "$SHOTS"))"
+rm -f "$SHOTS"/frame_*.png 2>/dev/null || true   # the last run's
+mkdir -p "$SHOTS"
 status=0
 3ds_port/game/build/host32/pokeplatinum-pc "$PAK" "$MANIFEST" --save "$HOME/pokeplatinum-pc.sav" \
-    "${@:3}" 2>&1 | (trap '' INT; tee "$LOG") || status=$?
+    --screenshots "$SHOTS" --screenshot-every 300 "${@:3}" 2>&1 | (trap '' INT; tee "$LOG") || status=$?
 # (tee ignores Ctrl+C, so the log keeps everything up to the runner's last
 # line: Ctrl+C only stops the runner, which says at which frame.)
 echo
 echo "Done. Send the log: $(wslpath -w "$LOG")"
+echo "Screens: $(wslpath -w "$SHOTS")"
 exit $status
