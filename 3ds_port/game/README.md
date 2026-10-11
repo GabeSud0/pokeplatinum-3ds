@@ -294,7 +294,8 @@ runs `-fsyntax-only` per file and writes a JSON report under ignored
 ## What isn't done
 
 - **Graphics**: the DS's 2D engines and 3D, drawn on the 3DS's screens.
-- **Sound**, and the ARM7's other services (microphone, wireless).
+- **Sound**: the sound library's requests are taken, so the game runs, but
+  nothing plays yet. Also the ARM7's other services (microphone, wireless).
 - **Restarting** (`OS_ResetSystem`, the soft reset): the program says so and
   stops. **Sleep mode** (closing the lid) and **H-blank effects** too.
 - **Online play** (Nintendo Wi-Fi Connection): not part of the port.
