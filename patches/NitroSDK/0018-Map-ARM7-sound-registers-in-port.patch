@@ -1,0 +1,24 @@
+From: Platinum 3DS port contributors
+Subject: [PATCH] Map ARM7 sound registers into portable I/O block
+
+---
+diff --git a/include/nitro/hw/ARM7/mmap_global.h b/include/nitro/hw/ARM7/mmap_global.h
+--- a/include/nitro/hw/ARM7/mmap_global.h
++++ b/include/nitro/hw/ARM7/mmap_global.h
+@@ -39,7 +39,16 @@
+ //----------------------------- IOs
+ #define HW_IOREG                0x04000000
+ #define HW_IOREG_END            0x05000000
+ #define HW_REG_BASE             HW_IOREG        // alias
++#if defined(SDK_PORT_3DS) && !defined(SDK_ASM)
++/* ARM7 sound hardware registers live in the port's ordinary I/O block.
++ * The PC and ARM11 must never touch original DS physical 0x04000400. */
++extern unsigned char NitroPort_IoReg[];
++#undef HW_IOREG
++#define HW_IOREG ((u32)NitroPort_IoReg)
++#undef HW_REG_BASE
++#define HW_REG_BASE HW_IOREG
++#endif
+ 
+ //----------------------------- VRAMs
+ #define HW_BG_PLTT              0x05000000
