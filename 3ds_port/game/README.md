@@ -28,6 +28,18 @@ as far as its first file (the font).
    make game        # -> 3ds_port/game/build/3ds/pokeplatinum.3dsx
    ```
 
+   **On Windows**, use devkitPro's MSYS2 terminal (Start menu → devkitPro →
+   MSYS2). [`tools/build_windows_msys2.sh`](../../tools/build_windows_msys2.sh)
+   does steps 1 to 3 in one go: it installs what the build needs besides
+   devkitPro (git, Python, gcc, patch), clones the port into its own folder,
+   builds the program, makes your data pack and puts the SD card files in
+   `%USERPROFILE%\pokeplatinum-sd` (and in Azahar's SD folder, if it finds
+   it):
+
+   ```sh
+   bash build_windows_msys2.sh 'C:\path\to\your\platinum.nds'
+   ```
+
 2. **Make your data pack** from your own Pokémon Platinum (USA) dump, on
    your computer ([`builder/`](../../builder)):
 
