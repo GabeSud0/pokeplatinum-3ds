@@ -1,0 +1,51 @@
+From: Platinum 3DS port contributors
+Subject: [PATCH] Skip ARM7 power-chip calls in virtual sound driver
+
+---
+diff --git a/libraries/snd/src/ARM7/snd_global.c b/libraries/snd/src/ARM7/snd_global.c
+--- a/libraries/snd/src/ARM7/snd_global.c
++++ b/libraries/snd/src/ARM7/snd_global.c
+@@ -36,12 +36,14 @@
+ {
+     SND_Disable();
+ 
+-    SVC_ResetSoundBias(SOUND_BIAS_WAIT_COUNT);
+-    OS_SpinWait(SOUND_BIAS_CYCLE_PER_LOOP * SOUND_BIAS_WAIT_COUNT * SOUND_BIAS_LEVEL);
+-
+-    PMi_ResetControl(PMIC_CTL_SND_PWR);
+-
+-    reg_SND_POWCNT &= ~REG_SND_POWCNT_SPE_MASK;
++#if !defined(SDK_PORT_3DS)
++    SVC_ResetSoundBias(SOUND_BIAS_WAIT_COUNT);
++    OS_SpinWait(SOUND_BIAS_CYCLE_PER_LOOP * SOUND_BIAS_WAIT_COUNT * SOUND_BIAS_LEVEL);
++
++    PMi_ResetControl(PMIC_CTL_SND_PWR);
++
++    reg_SND_POWCNT &= ~REG_SND_POWCNT_SPE_MASK;
++#endif
+ }
+ 
+ void SND_EndSleep(void)
+@@ -46,13 +48,15 @@
+ 
+ void SND_EndSleep(void)
+ {
+-    reg_SND_POWCNT |= REG_SND_POWCNT_SPE_MASK;
+-
+-    PMi_SetControl(PMIC_CTL_SND_PWR);
+-
+-    SVC_SetSoundBias(SOUND_BIAS_WAIT_COUNT * 2);
+-
+-    OS_SpinWait(OS_MilliSecondsToTicks(15) * 64);
++#if !defined(SDK_PORT_3DS)
++    reg_SND_POWCNT |= REG_SND_POWCNT_SPE_MASK;
++
++    PMi_SetControl(PMIC_CTL_SND_PWR);
++
++    SVC_SetSoundBias(SOUND_BIAS_WAIT_COUNT * 2);
++
++    OS_SpinWait(OS_MilliSecondsToTicks(15) * 64);
++#endif
+ 
+     SND_Enable();
+ }
