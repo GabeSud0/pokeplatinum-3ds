@@ -16,7 +16,7 @@ diff --git a/libraries/snd/src/snd_command.c b/libraries/snd/src/snd_command.c
 +#endif
  
  #define SND_COMMAND_NUM 256
-@@ -67,5 +71,7 @@
+@@ -67,10 +71,14 @@
  
  #ifdef SDK_ARM7
 -    OS_InitMessageQueue(&sCommandMesgQueue, sCommandMesgBuffer, SND_PXI_FIFO_MESSAGE_BUFSIZE);
@@ -25,17 +25,12 @@ diff --git a/libraries/snd/src/snd_command.c b/libraries/snd/src/snd_command.c
 +#endif
  #endif
  
-@@ -70,7 +76,9 @@
- #endif
- 
 -    InitPXI();
--
--#ifdef SDK_ARM9
 +#if !defined(SDK_PORT_3DS) || defined(SDK_ARM9)
 +    InitPXI();
 +#endif
-+
-+#ifdef SDK_ARM9
+ 
+ #ifdef SDK_ARM9
  
      sFreeList = &sCommandArray[0];
 @@ -405,10 +413,16 @@
