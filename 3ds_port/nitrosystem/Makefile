@@ -108,8 +108,11 @@ $(GEN)/nns_all_headers.c: $(NNS_HEADERS) $(ROOT)/tools/nns_inline_symbols.py
 $(GEN)/nns_all_headers.o: $(GEN)/nns_all_headers.c | libnitro
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+# Replaced only when the list changes: every object of NitroSystem and the
+# game depends on it, so a rewrite with the same names would rebuild them all.
 $(NNS_INLINE_SYMS): $(GEN)/nns_all_headers.o
-	@$(NM) -g --defined-only $< | awk '$$2 == "T" { print $$3 }' > $@
+	@$(NM) -g --defined-only $< | awk '$$2 == "T" { print $$3 }' > $@.new
+	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
 	@echo "  $$(wc -l < $@) NitroSystem header inline functions"
 
 $(OUT)/nns/%.o: $(NNS)/libraries/%.c $(NNS_INLINE_SYMS) | libnitro
