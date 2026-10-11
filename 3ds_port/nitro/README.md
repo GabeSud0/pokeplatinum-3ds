@@ -70,6 +70,26 @@ return straight away.
 recognition (prc), wireless voice (wvr), the China-edition boot screen,
 streaming decompression, and a few debug libraries. See the `Makefile`.
 
+## Portable sound-chip foundation (not yet game audio)
+
+`src/sound_chip.c` / `sound_chip.h` contain a **standalone software
+mixer** for 16 DS-style sound channels. The implementation currently models
+PCM8, PCM16 and IMA-ADPCM sources, PSG duty cycles on channels 8–13, noise
+on 14–15, sample timers, channel volume/data shift/pan, master volume,
+loops and two stereo-side sample-capture buffers.
+
+The portable mixer intentionally has no libctru or Nintendo SDK dependencies.
+`tests/test_sound_chip.c` uses only synthetic audio patterns and is run by
+`make test` on both host and host32.
+
+**This is an incomplete foundation, not an operational audio port.**
+The existing `port_snd.c` remains the silent service. In particular, the
+second ARM7 driver instance, sound register emulation, 2,728 µs tick scheduling,
+thread-safe PXI/shared-work transfer, alarm callbacks, capture/reverb timing,
+ndsp playback, PC WAV export, and actual game sound tests are **not connected**.
+Until those steps are implemented, the Platinum title screen remains silent.
+The mixer tests are preliminary DSP checks, not hardware-accuracy tests.
+
 ## Virtual ARM7 services (card, RTC, power, touch)
 
 Call this once **before** the original NitroSDK initializes CARD, RTC, PM
