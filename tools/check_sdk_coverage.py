@@ -94,10 +94,11 @@ LIBC = {"memcpy", "memset", "memmove", "memcmp", "strcmp", "strlen", "strncpy",
         "fflush", "fwrite", "localtime", "time"}
 
 # The port's platform layer (3ds_port/nitro/src/platform/): threads, their
-# signals and the clock come from POSIX on a PC and from libctru on the 3DS,
+# signals, sleeping and the clock come from POSIX on a PC and from libctru on the 3DS,
 # which the programs link.
 PLATFORM_PREFIXES = ("pthread_", "clock_gettime", "threadCreate", "threadExit",
-                     "LightSemaphore_", "svcGetThreadPriority", "svcGetSystemTick", "svcBreak")
+                     "LightSemaphore_", "svcGetThreadPriority", "svcGetSystemTick", "svcBreak",
+                     "nanosleep", "svcSleepThread")
 
 
 def library_unresolved(libs: list[Path], nm: str, have: set[str]) -> set[str]:
