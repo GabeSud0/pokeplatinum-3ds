@@ -27,6 +27,7 @@ static void synthetic_alarm(void *arg)
     ++*(int *)arg;
 }
 extern void NitroPort_SoundPumpReplies(void);
+extern void NitroPort_SoundRender(int16_t *stereo, size_t frames);
 
 static const uint8_t sSequence[] = {
     SND_MML_PRG, 0,
@@ -116,7 +117,7 @@ int main(void)
     /* NitroSystem's stream player needs a real ARM7 alarm -> PXI reply.
      * Alarm callback must run on the ARM9/game thread, not audio thread. */
     SND_SetupAlarm(0, 1, 0, synthetic_alarm, &sAlarmCount);
-    SND_StartAlarm(0);
+    SND_StartTimer(0, 0, 1u << 0, 0);
     tag = SND_GetCurrentCommandTag();
     CHECK(SND_FlushCommand(SND_COMMAND_BLOCK));
     NitroPort_SoundRender(stereo, 256);
