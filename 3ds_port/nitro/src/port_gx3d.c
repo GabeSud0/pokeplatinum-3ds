@@ -29,9 +29,11 @@ typedef struct GeoState {
     Matrix posStack[31], vecStack[31];
     int mode, pvLevel, pjLevel, texLevel, stackError;
     int32_t coord[3];
-    int32_t texcoord[2];
+    int32_t texcoord[2], normal[3];
     uint16_t rgb, diffuse, ambient, specular, emission;
-    uint32_t attr, texparam, plttbase, shininess[32];
+    uint32_t attr, pendingAttr, texparam, plttbase, shininess[32];
+    int useShininess;
+    unsigned frameVertices, framePolygons;
     int32_t lightDir[4][3];
     uint16_t lightColor[4];
     int viewport[4], primitive, nverts;
@@ -44,6 +46,8 @@ typedef struct GeoState {
 } GeoState;
 
 static GeoState s;
+/* Two ~0.6 MiB triangle buffers, owned by this engine. A published frame
+ * remains stable until the next SWAP, for the PC renderer and future GPU. */
 static NitroGx3dScene sScenes[2];
 static unsigned sBuilding, sDisplayed;
 static uint32_t sSerial;
@@ -128,11 +132,11 @@ static void matrix_stack(unsigned opcode,int32_t param)
         else if(opcode==0x14)s.tex=s.texStack;
     }else{
         if(opcode==0x11){
-            if(s.pvLevel>=30) s.stackError=1;
+            if(s.pvLevel>=31) s.stackError=1;
             else{ s.posStack[s.pvLevel]=s.pos;s.vecStack[s.pvLevel]=s.vec; ++s.pvLevel; }
         }else if(opcode==0x12){
             index=s.pvLevel-signbits((uint32_t)param,6);
-            if(index<0||index>30){s.stackError=1;return;}
+            if(index<0||index>31){s.stackError=1;return;}
             s.pvLevel=index;
             s.pos=s.posStack[index];s.vec=s.vecStack[index];
         }else if(opcode==0x13 || opcode==0x14){
@@ -240,8 +244,9 @@ static NitroGx3dVertex to_screen(const GeoVertex *v)
     int i;
     memset(&out,0,sizeof(out));
     for(i=0;i<4;i++)out.clip[i]=v->clip[i];
-    out.x=(int32_t)((s.viewport[0]+(nx+1)*(s.viewport[2]-s.viewport[0])/2)*256);
-    out.y=(int32_t)((191-(s.viewport[1]+(ny+1)*(s.viewport[3]-s.viewport[1])/2))*256);
+    /* DS viewport edges are inclusive: width/height contain a +1. */
+    out.x=(int32_t)((s.viewport[0]+(nx+1)*(s.viewport[2]-s.viewport[0]+1)/2)*256);
+    out.y=(int32_t)((191-(s.viewport[1]+(ny+1)*(s.viewport[3]-s.viewport[1]+1)/2))*256);
     if(nz<-1.0)nz=-1.0;
     if(nz>1.0)nz=1.0;
     out.depth=(uint32_t)((nz+1)*8388607.5);
@@ -283,7 +288,7 @@ static void append_triangle(const GeoVertex *a,const GeoVertex *b,const GeoVerte
         tri->polygon_attr=s.attr;
         tri->texture_param=s.texparam;
         tri->palette_base=s.plttbase;
-        tri->depth_mode=(sScenes[sBuilding].swap_param>>1)&1;
+        
     }
 }
 static void submit_vertex(void)
@@ -356,7 +361,7 @@ static void execute(unsigned op,const uint32_t *p)
     case 0x22:s.texcoord[0]=signbits(p[0],16);s.texcoord[1]=signbits(p[0]>>16,16);break;
     case 0x23:case 0x24:case 0x25:case 0x26:case 0x27:case 0x28:
         set_geo_position(op,p);submit_vertex();break;
-    case 0x29:s.attr=p[0];break;
+    case 0x29:s.pendingAttr=p[0];break;
     case 0x2a:s.texparam=p[0];break;
     case 0x2b:s.plttbase=p[0];break;
     case 0x30:s.diffuse=p[0]&0x7FFF;s.ambient=(p[0]>>16)&0x7FFF;
@@ -369,19 +374,19 @@ static void execute(unsigned op,const uint32_t *p)
     }
     case 0x33:s.lightColor[(p[0]>>30)&3]=p[0]&0x7FFF;break;
     case 0x34:memcpy(s.shininess,p,sizeof(s.shininess));break;
-    case 0x40:s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;break;
+    case 0x40:s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;s.attr=s.pendingAttr;break;
     case 0x41:s.inBegin=0;s.nverts=0;break;
     case 0x50:{
         unsigned tmp=sBuilding;
         NitroGx3dScene *scene=&sScenes[tmp];
-        for(i=0;i<(int)scene->count;i++)
-            scene->triangles[i].depth_mode=(uint8_t)((p[0]>>1)&1);
         scene->serial=++sSerial;
         scene->swap_param=p[0];
         sBuilding=sDisplayed;
         sDisplayed=tmp;
         sScenes[sBuilding].count=0;
         sScenes[sBuilding].dropped=0;
+        s.frameVertices=0;
+        s.framePolygons=0;
         break;
     }
     case 0x60:
@@ -431,7 +436,8 @@ static void execute(unsigned op,const uint32_t *p)
         for(i=0;i<3;i++)src[i]=signbits(p[0]>>(i*10),10)*8;
         src[3]=0;transform(src,&s.vec,res);
         for(i=0;i<3;i++){
-            uint16_t val=(uint16_t)(res[i]>>3);
+            /* Both the vector input/output are 4.12; no extra >>3. */
+            uint16_t val=(uint16_t)res[i];
             memcpy(NitroPort_IoReg+0x630+i*2,&val,sizeof(val));
         }
         break;
@@ -453,6 +459,7 @@ void NitroPort_Gx3dReset(void)
     identity(&s.proj);identity(&s.pos);identity(&s.vec);identity(&s.tex);
     s.viewport[0]=0;s.viewport[1]=0;s.viewport[2]=255;s.viewport[3]=191;
     s.rgb=0x7fff;s.diffuse=0x7fff;s.attr=(3u<<6)|(31u<<16);
+    s.pendingAttr=s.attr;
     s.boxVisible=1;s.ready=1;
     NitroPort_Gx3dRefreshStatus();
 }
