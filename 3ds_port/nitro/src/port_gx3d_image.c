@@ -58,7 +58,9 @@ int NitroPort_Gx3dPublishRGBA8(const uint32_t *src,size_t pixels)
 static uint16_t sScratch[PIXELS];
 static void render_host(void)
 {
-    static uint32_t lastSerial;
+    /* Render on every BG0 draw as Stage 1 did. The game's VRAM texture
+     * banks can change without SWAP, and tests reset scene serials. */
+    uint32_t lastSerial=0;
     const NitroGx3dScene *scene=NitroPort_Gx3dAcquireScene(&lastSerial);
     int index;
     if(!scene)return;
