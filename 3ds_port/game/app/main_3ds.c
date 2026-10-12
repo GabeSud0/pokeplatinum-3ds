@@ -14,6 +14,17 @@
  * back: the program's status above, the log below. The log also comes up by
  * itself when something goes wrong (the game stuck, a crash, OS_Terminate).
  *
+ * Speed: the New 3DS's faster clock is switched on. The game's own code
+ * takes little of a frame; drawing the two screens costs much more. So
+ * drawing has threads of its own that work while the game goes on with its
+ * next frame (as the DS draws while the game runs): on a New 3DS the upper
+ * screen on core 2 and the lower one on core 0, otherwise both on core 0.
+ * On core 0 they run below the game: the game always comes first and
+ * keeps its speed, and a screen that isn't done when the next frame is
+ * ready leaves that frame out. Sound has a thread of its own on core 0,
+ * above the game, as it must keep up with the speaker. Every two seconds
+ * a [perf] line in the log says where the time went.
+ *
  * Threads: the game runs on a 3DS thread of its own (it becomes NitroSDK's
  * launcher thread, and the SDK's other threads get 3DS threads of their
  * own; nitro/src/port_thread.c). The program's main thread waits until
@@ -35,7 +46,8 @@
 #include "platinum.h"
 
 /* The 2D renderer (nitro_port.h, which can't be included next to 3ds.h). */
-void NitroPort_RenderScreens(uint16_t *top, uint16_t *bottom);
+void NitroPort_Render2D(int engine, uint16_t *out);
+int NitroPort_EngineAOnTop(void);
 
 /* Audio uses the port's plain-C mixer; it deliberately does not include
  * NitroSDK headers alongside libctru. */
@@ -44,12 +56,27 @@ void NitroPort_SoundRender(int16_t *stereo, size_t frames);
 void NitroPort_SoundPumpReplies(void);
 
 #define AUDIO_FRAMES 512
-#define AUDIO_BUFFERS 3
+#define AUDIO_BUFFERS 4
 static Thread sSoundThread;
 static bool sSoundThreadRunning;
 static bool sNdspAvailable;
 static int16_t *sSoundSamples;
 static ndspWaveBuf sSoundBuf[AUDIO_BUFFERS];
+/* Time spent mixing, and sound mixed (in samples), for the [perf] line. */
+static volatile u64 sSoundMixTicks;
+static volatile u64 sSoundMixSamples;
+/* Times the speaker ran out of sound: every buffer had been played by the
+ * time the sound thread looked (a click or gap). */
+static volatile unsigned sSoundUnderruns;
+
+static void TimedSoundRender(int16_t *stereo, size_t frames)
+{
+    u64 start = svcGetSystemTick();
+
+    NitroPort_SoundRender(stereo, frames);
+    sSoundMixTicks += svcGetSystemTick() - start;
+    sSoundMixSamples += frames;
+}
 
 static void SoundMain(void *unused)
 {
@@ -58,11 +85,21 @@ static void SoundMain(void *unused)
     (void)unused;
     while (__atomic_load_n(&sSoundThreadRunning, __ATOMIC_ACQUIRE)) {
         if (sNdspAvailable) {
+            static bool started;
+            int done = 0;
+
+            for (i = 0; i < AUDIO_BUFFERS; ++i) {
+                done += sSoundBuf[i].status == NDSP_WBUF_DONE;
+            }
+            if (started && done == AUDIO_BUFFERS) {
+                sSoundUnderruns++;
+            }
+            started = true;
             for (i = 0; i < AUDIO_BUFFERS; ++i) {
                 ndspWaveBuf *buf = &sSoundBuf[i];
                 if (buf->status == NDSP_WBUF_FREE ||
                     buf->status == NDSP_WBUF_DONE) {
-                    NitroPort_SoundRender((int16_t *)buf->data_vaddr, AUDIO_FRAMES);
+                    TimedSoundRender((int16_t *)buf->data_vaddr, AUDIO_FRAMES);
                     DSP_FlushDataCache(buf->data_vaddr, AUDIO_FRAMES * 4);
                     ndspChnWaveBufAdd(0, buf);
                 }
@@ -71,7 +108,7 @@ static void SoundMain(void *unused)
         } else {
             /* Even without dspfirm.cdc, continue driving Nintendo's ARM7
              * sequencer and releasing its commands from real audio time. */
-            NitroPort_SoundRender(silent, AUDIO_FRAMES);
+            TimedSoundRender(silent, AUDIO_FRAMES);
             svcSleepThread(15625000LL);
         }
     }
@@ -106,7 +143,10 @@ static void StartSound(s32 priority)
                       "running sound driver without speaker output");
     }
     __atomic_store_n(&sSoundThreadRunning, true, __ATOMIC_RELEASE);
-    sSoundThread = threadCreate(SoundMain, NULL, 64 * 1024, priority - 2, -2, false);
+    /* On the game's core (0), ahead of the game's threads, as it must keep
+     * up with the speaker. (Core 1, the system's, gives a program only a
+     * share of its time, and too little: in Azahar sound fell behind.) */
+    sSoundThread = threadCreate(SoundMain, NULL, 64 * 1024, priority - 2, 0, false);
     if (!sSoundThread) {
         __atomic_store_n(&sSoundThreadRunning, false, __ATOMIC_RELEASE);
         NitroPort_Log("[audio] couldn't start independent audio thread");
@@ -238,11 +278,14 @@ static void Quit(void)
     }
 }
 
+static void WaitForDrawing(void);
+
 /* Leave a message on screen until the player presses START, then quit. */
 static void StopWithMessage(void) __attribute__((noreturn));
 
 static void StopWithMessage(void)
 {
+    WaitForDrawing();
     ShowLog(true);
     if (sScreensDirty) {
         sScreensDirty = false;
@@ -378,21 +421,248 @@ static void ClearScreens(void)
     }
 }
 
-static void ShowGame(void)
-{
-    static u16 top[256 * 192];
-    static u16 bottom[256 * 192];
+/* -------------------------------------------------------- drawing threads */
 
-    NitroPort_RenderScreens(top, bottom);
-    Blit(GFX_TOP, top, (400 - 256) / 2);
-    Blit(GFX_BOTTOM, bottom, (320 - 256) / 2);
+/*
+ * Each drawing thread draws one or both screens when the game hands it a
+ * frame, then shows them (each screen is double buffered: the one drawn is
+ * shown from the next V-blank). It reads the game's display state while the
+ * game changes it, as the DS's display does; the game does most of that in
+ * V-blank, as it must on the DS.
+ */
+typedef struct Drawer {
+    Thread thread;
+    LightEvent go;
+    int screens;             /* bit 0: the upper screen, bit 1: the lower */
+    int core;
+    volatile bool busy;      /* drawing a frame */
+    volatile bool quit;
+    volatile u64 ticks;      /* time spent drawing, for [perf] */
+    volatile unsigned count; /* frames drawn */
+} Drawer;
+
+#define SCREEN_TOP 1
+#define SCREEN_BOTTOM 2
+
+static Drawer sDrawers[2];
+static int sDrawerCount;
+static volatile bool sAOnTop;    /* engine A on the upper screen, this frame */
+
+static void DrawScreen(gfxScreen_t screen)
+{
+    static u16 pixels[2][256 * 192];
+    bool top = screen == GFX_TOP;
+    u16 *ds = pixels[top ? 0 : 1];
+    u16 width, height;
+    u8 *fb;
+
+    /* Engine A shows on the upper screen when POWCNT1 says so. */
+    NitroPort_Render2D(top == sAOnTop ? 0 : 1, ds);
+    Blit(screen, ds, top ? (400 - 256) / 2 : (320 - 256) / 2);
+    fb = gfxGetFramebuffer(screen, GFX_LEFT, &width, &height);
+    GSPGPU_FlushDataCache(fb, (u32)width * height * 2);
+    gfxScreenSwapBuffers(screen, false);
 }
 
-/* Once a frame, from the game's idle thread (NitroPort_Halt): show the
- * frame, wait for the 3DS's V-blank, read the buttons. */
+static void DrawerMain(void *arg)
+{
+    Drawer *d = arg;
+
+    CatchCrashes();
+    for (;;) {
+        u64 start;
+
+        LightEvent_Wait(&d->go);
+        if (d->quit) {
+            break;
+        }
+        start = svcGetSystemTick();
+        if (d->screens & SCREEN_TOP) {
+            DrawScreen(GFX_TOP);
+        }
+        if (d->screens & SCREEN_BOTTOM) {
+            DrawScreen(GFX_BOTTOM);
+        }
+        d->ticks += svcGetSystemTick() - start;
+        d->count++;
+        __atomic_store_n(&d->busy, false, __ATOMIC_RELEASE);
+    }
+    threadExit(0);
+}
+
+static bool StartDrawer(int screens, s32 priority, int core)
+{
+    Drawer *d = &sDrawers[sDrawerCount];
+
+    memset(d, 0, sizeof(*d));
+    LightEvent_Init(&d->go, RESET_ONESHOT);
+    d->screens = screens;
+    d->core = core;
+    d->thread = threadCreate(DrawerMain, d, 64 * 1024, priority, core, false);
+    if (d->thread == NULL) {
+        return false;
+    }
+    sDrawerCount++;
+    return true;
+}
+
+/* New 3DS: the upper screen on core 2, the lower on core 0; otherwise both
+ * on core 0. Below the game on core 0, so the game comes first. */
+static void StartDrawers(s32 priority, bool isNew3ds)
+{
+    if (isNew3ds && StartDrawer(SCREEN_TOP, priority, 2)) {
+        StartDrawer(SCREEN_BOTTOM, priority + 1, 0);
+    } else {
+        StartDrawer(SCREEN_TOP | SCREEN_BOTTOM, priority + 1, 0);
+    }
+}
+
+static void StopDrawers(void)
+{
+    int i;
+
+    for (i = 0; i < sDrawerCount; i++) {
+        Drawer *d = &sDrawers[i];
+
+        d->quit = true;
+        LightEvent_Signal(&d->go);
+        threadJoin(d->thread, UINT64_MAX);
+        threadFree(d->thread);
+    }
+    sDrawerCount = 0;
+}
+
+static bool DrawersBusy(void)
+{
+    int i;
+
+    for (i = 0; i < sDrawerCount; i++) {
+        if (__atomic_load_n(&sDrawers[i].busy, __ATOMIC_ACQUIRE)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Before the program draws on the screens itself (the log): wait until the
+ * drawing threads are done with them. */
+static void WaitForDrawing(void)
+{
+    int i;
+
+    for (i = 0; i < sDrawerCount; i++) {
+        if (threadGetCurrent() == sDrawers[i].thread) {
+            return;   /* (a drawing thread itself crashed) */
+        }
+    }
+    while (DrawersBusy()) {
+        svcSleepThread(500000LL);
+    }
+}
+
+/* Hand this frame to every drawing thread that's free; the others leave
+ * it out. */
+static void DrawFrame(void)
+{
+    int i;
+    bool any = false;
+
+    for (i = 0; i < sDrawerCount; i++) {
+        any |= !__atomic_load_n(&sDrawers[i].busy, __ATOMIC_ACQUIRE);
+    }
+    if (!any) {
+        return;
+    }
+    sAOnTop = NitroPort_EngineAOnTop() != 0;
+    for (i = 0; i < sDrawerCount; i++) {
+        Drawer *d = &sDrawers[i];
+
+        if (!__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE)) {
+            __atomic_store_n(&d->busy, true, __ATOMIC_RELEASE);
+            LightEvent_Signal(&d->go);
+        }
+    }
+}
+
+/* ---------------------------------------------------------------- pacing */
+
+/* The DS's (and the 3DS's) frame: 59.83 a second. */
+#define FRAME_TICKS ((u64)(SYSCLOCK_ARM11 / 59.8261))
+
+static u64 sDeadline;        /* when the current frame should be done */
+static u64 sFrameExit;       /* when the last NitroPort_OnFrame returned */
+
+/* For the [perf] line. */
+static u64 sPerfStart;            /* the first frame counted */
+static u64 sPerfGameTicks;        /* in the game's own code */
+static unsigned sPerfFrames;
+static u64 sPerfSoundTicks, sPerfSoundSamples;
+
+static void PerfFrame(u64 enter)
+{
+    u64 now = svcGetSystemTick();
+    double seconds, perFrame;
+    u64 soundTicks, soundSamples;
+    char drawing[128];
+    int i, used = 0;
+
+    if (sPerfStart == 0) {
+        sPerfStart = now;
+        sPerfSoundTicks = sSoundMixTicks;
+        sPerfSoundSamples = sSoundMixSamples;
+        for (i = 0; i < sDrawerCount; i++) {
+            sDrawers[i].ticks = 0;
+            sDrawers[i].count = 0;
+        }
+        return;
+    }
+    if (sFrameExit != 0) {
+        sPerfGameTicks += enter - sFrameExit;
+    }
+    sPerfFrames++;
+    if (sPerfFrames < 120) {
+        return;
+    }
+
+    seconds = (double)(now - sPerfStart) / SYSCLOCK_ARM11;
+    perFrame = 1000.0 / SYSCLOCK_ARM11 / sPerfFrames;
+    drawing[0] = 0;
+    for (i = 0; i < sDrawerCount; i++) {
+        Drawer *d = &sDrawers[i];
+        unsigned count = d->count;
+
+        used += snprintf(drawing + used, sizeof(drawing) - (size_t)used, "%s%s %.1f/s, %.1f ms (core %d)",
+                         i ? "; " : "",
+                         d->screens == (SCREEN_TOP | SCREEN_BOTTOM) ? "both screens"
+                         : d->screens == SCREEN_TOP ? "upper" : "lower",
+                         count / seconds,
+                         count ? (double)d->ticks * 1000.0 / SYSCLOCK_ARM11 / count : 0.0, d->core);
+        if (used >= (int)sizeof(drawing)) {
+            break;
+        }
+        d->ticks = 0;
+        d->count = 0;
+    }
+    soundTicks = sSoundMixTicks - sPerfSoundTicks;
+    soundSamples = sSoundMixSamples - sPerfSoundSamples;
+    NitroPort_Log("[perf] game %.1f frames/s, %.1f ms/frame; drawn: %s; sound %.0f%% of core 0, %u underruns",
+                  sPerfFrames / seconds, (double)sPerfGameTicks * perFrame, drawing,
+                  soundSamples ? 100.0 * ((double)soundTicks / SYSCLOCK_ARM11) / ((double)soundSamples / 32768.0) : 0.0,
+                  sSoundUnderruns);
+    sPerfStart = now;
+    sPerfGameTicks = 0;
+    sPerfFrames = 0;
+    sPerfSoundTicks = sSoundMixTicks;
+    sPerfSoundSamples = sSoundMixSamples;
+}
+
+/* Once a frame, from the game's idle thread (NitroPort_Halt): hand the
+ * frame to the drawing threads, wait for the 3DS's V-blank, read the
+ * buttons. */
 void NitroPort_OnFrame(void)
 {
     u32 held, down;
+    u64 enter = svcGetSystemTick();
 
     NitroPort_SoundPumpReplies(); /* never raise ARM9 FIFO IRQ from DSP thread */
     sFrame++;
@@ -422,6 +692,7 @@ void NitroPort_OnFrame(void)
     }
 
     if (sScreensDirty) {
+        WaitForDrawing();
         sScreensDirty = false;
         if (sShowLog) {
             DrawLogScreens();
@@ -434,13 +705,33 @@ void NitroPort_OnFrame(void)
             ClearScreens();
         }
     }
-    if (!sShowLog) {
-        ShowGame();
+
+    if (sShowLog) {
+        if (!DrawersBusy()) {
+            gfxFlushBuffers();
+            gfxSwapBuffers();
+        }
+    } else {
+        DrawFrame();
     }
 
-    gfxFlushBuffers();
-    gfxSwapBuffers();
-    gspWaitForVBlank();
+    /* Wait for the V-blank only when ahead: a frame that took too long
+     * isn't made to wait for another one as well. When far behind, stop
+     * trying to catch up. */
+    {
+        u64 now = svcGetSystemTick();
+
+        if (sDeadline == 0 || now < sDeadline) {
+            gspWaitForVBlank();
+            sDeadline = svcGetSystemTick() + FRAME_TICKS;
+        } else if (now - sDeadline > 3 * FRAME_TICKS) {
+            sDeadline = now + FRAME_TICKS;
+        } else {
+            sDeadline += FRAME_TICKS;
+        }
+    }
+    PerfFrame(enter);
+    sFrameExit = svcGetSystemTick();
 }
 
 /* ------------------------------------------------------------- starting */
@@ -499,6 +790,7 @@ static void Watch(void)
         }
         if (++quietTicks == 20 && !sWatchdogHasHome) {
             sWatchdogHasHome = true;
+            WaitForDrawing();
             ShowLog(true);
             if (sScreensDirty) {
                 sScreensDirty = false;
@@ -522,6 +814,7 @@ int main(int argc, char **argv)
 
     (void)argc;
     (void)argv;
+    osSetSpeedupEnable(true);   /* New 3DS: 804 MHz and the L2 cache */
     gfxInitDefault();
     gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
     gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
@@ -553,6 +846,15 @@ int main(int argc, char **argv)
         ReadProfile(&sSettings);
         sSettings.savePath = SAVE_PATH;
         svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
+        {
+            bool isNew3ds = false;
+
+            APT_CheckNew3DS(&isNew3ds);
+            StartDrawers(priority, isNew3ds);
+            NitroPort_Log("[perf] %s 3DS; drawing: %s", isNew3ds ? "New" : "Old",
+                          sDrawerCount == 2 ? "upper screen on core 2, lower on core 0"
+                          : sDrawerCount == 1 ? "both screens on core 0" : "no thread!");
+        }
         StartSound(priority);
         if (threadCreate(GameThread, NULL, GAME_STACK_SIZE, priority, -2, true) == NULL) {
             NitroPort_Log("Can't start the game's thread.");
@@ -566,6 +868,7 @@ int main(int argc, char **argv)
         }
     }
 
+    StopDrawers();
     StopSound();
     if (sLog != NULL) {
         fclose(sLog);

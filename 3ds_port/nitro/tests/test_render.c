@@ -10,8 +10,16 @@
 
 #include <nitro.h>
 #include <nitro_port.h>
+#include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+/* tests/render2d_reference.c: the renderer before it was made faster. */
+void Ref_RenderScreens(u16 *top, u16 *bottom);
+
+extern unsigned char NitroPort_IoReg[];
 
 static int sChecks;
 static int sFailures;
@@ -413,9 +421,309 @@ static void test_obj_8bpp_ext(void)
     CHECK_PX(sTop, 108, 103, 0);
 }
 
-int main(void)
+/* ------------------------------------------------------------------------
+ * The faster renderer against the old one: random displays (every BG mode,
+ * BG kind, OBJ kind, window and effect, random graphics), both must draw
+ * exactly the same pixels.
+ */
+static u32 sSeed = 2024;
+
+static u32 Rnd(void)
+{
+    sSeed = sSeed * 1103515245u + 12345u;
+    return sSeed >> 8;
+}
+
+/* Graphics with plenty of transparent (0) pixels and some blank tiles. */
+static void RandomGraphics(u8 *p, u32 size)
+{
+    u32 i;
+    int sparse = Rnd() % 3;
+
+    for (i = 0; i < size; i += 4) {
+        u32 v = (Rnd() << 8) ^ Rnd();
+
+        if (sparse == 1) {
+            v &= (Rnd() | Rnd() << 16) & 0x0F0F0F0F ? 0xFFFFFFFF : 0x0F0F0F0F;
+        } else if (sparse == 2 && Rnd() % 4 == 0) {
+            v = 0;
+        }
+        memcpy(p + i, &v, 4);
+    }
+}
+
+static void Put16(u32 off, u16 v)
+{
+    NitroPort_IoReg[off] = (u8)v;
+    NitroPort_IoReg[off + 1] = (u8)(v >> 8);
+}
+
+static void Put32(u32 off, u32 v)
+{
+    Put16(off, (u16)v);
+    Put16(off + 2, (u16)(v >> 16));
+}
+
+static void RandomEngine(u32 io)
+{
+    u32 dispcnt = (Rnd() << 16) ^ Rnd();
+    int i;
+
+    dispcnt &= ~0x80u;                     /* forced blank: rarely */
+    if (Rnd() % 16 == 0) {
+        dispcnt |= 0x80;
+    }
+    dispcnt = (dispcnt & ~0x30000u) | ((Rnd() % 10 == 0 ? Rnd() % 4 : 1) << 16);
+    if (Rnd() % 2) {
+        dispcnt &= ~0xE000u;               /* half without windows */
+    }
+    Put32(io, dispcnt);
+    for (i = 0; i < 4; i++) {
+        Put16(io + 8 + i * 2, (u16)Rnd());
+        Put16(io + 0x10 + i * 4, (u16)Rnd());
+        Put16(io + 0x12 + i * 4, (u16)Rnd());
+    }
+    for (i = 0; i < 2; i++) {               /* BG2/BG3 affine */
+        u32 b = 0x20 + i * 0x10;
+        BOOL plain = Rnd() % 2;
+
+        Put16(io + b + 0, plain ? 256 : (u16)Rnd());
+        Put16(io + b + 2, plain ? 0 : (u16)Rnd());
+        Put16(io + b + 4, plain ? 0 : (u16)Rnd());
+        Put16(io + b + 6, plain ? 256 : (u16)Rnd());
+        Put32(io + b + 8, (Rnd() << 8) ^ Rnd());
+        Put32(io + b + 12, (Rnd() << 8) ^ Rnd());
+    }
+    for (i = 0x40; i < 0x4C; i += 2) {      /* windows */
+        Put16(io + i, (u16)Rnd());
+    }
+    Put16(io + 0x50, Rnd() % 3 == 0 ? 0 : (u16)Rnd());   /* effects */
+    Put16(io + 0x52, (u16)Rnd());
+    Put16(io + 0x54, (u16)Rnd());
+    Put16(io + 0x6C, Rnd() % 3 == 0 ? (u16)Rnd() : 0);   /* master brightness */
+}
+
+static void RandomOam(u8 *oam)
+{
+    int i;
+
+    for (i = 0; i < 128; i++) {
+        u16 a0 = (u16)Rnd(), a1 = (u16)Rnd(), a2 = (u16)Rnd();
+
+        if (Rnd() % 3 == 0) {
+            a0 = (u16)((a0 & ~0x300) | 0x200);   /* hidden */
+        }
+        if (Rnd() % 2) {
+            a0 &= ~0x100;                         /* mostly not affine */
+        }
+        oam[i * 8 + 0] = (u8)a0;
+        oam[i * 8 + 1] = (u8)(a0 >> 8);
+        oam[i * 8 + 2] = (u8)a1;
+        oam[i * 8 + 3] = (u8)(a1 >> 8);
+        oam[i * 8 + 4] = (u8)a2;
+        oam[i * 8 + 5] = (u8)(a2 >> 8);
+        oam[i * 8 + 6] = (u8)Rnd();               /* affine parameters */
+        oam[i * 8 + 7] = (u8)Rnd();
+    }
+}
+
+static void RandomDisplay(void)
+{
+    int i;
+
+    Put16(0x304, (u16)(0x0203 | (Rnd() % 2 ? 0x8000 : 0) | (Rnd() % 16 == 0 ? 0 : 0)));
+    for (i = 0; i < 10; i++) {              /* VRAMCNT A-I (0x247 is WRAM) */
+        if (i != 7) {
+            NitroPort_IoReg[0x240 + i] = (u8)(Rnd() % 3 == 0 ? Rnd() : 0);
+        }
+    }
+    RandomEngine(0);
+    RandomEngine(0x1000);
+    RandomGraphics(NitroPort_Pltt, 0x800);
+    RandomOam(NitroPort_Oam);
+    RandomOam(NitroPort_Oam + 0x400);
+    RandomGraphics(NitroPort_BgVram, 0x80000);
+    RandomGraphics(NitroPort_ObjVram, 0x40000);
+    RandomGraphics(NitroPort_DbBgVram, 0x20000);
+    RandomGraphics(NitroPort_DbObjVram, 0x20000);
+    RandomGraphics(NitroPort_LcdcVram, 0xA4000);
+}
+
+static void test_matches_reference(void)
+{
+    static u16 refTop[256 * 192], refBottom[256 * 192];
+    int n, differ = 0;
+
+    for (n = 0; n < 400 && differ < 5; n++) {
+        RandomDisplay();
+        if (n % 4 == 0) {
+            /* Often: the usual case, mode 0 with all BGs and OBJs. */
+            Put32(0, 0x10011F10u | (Rnd() % 2 ? 0x40000000u : 0));
+        }
+        NitroPort_RenderScreens(sTop, sBottom);
+        Ref_RenderScreens(refTop, refBottom);
+        if (memcmp(sTop, refTop, sizeof(sTop)) != 0 ||
+            memcmp(sBottom, refBottom, sizeof(sBottom)) != 0) {
+            int i;
+
+            for (i = 0; i < 256 * 192; i++) {
+                if (sTop[i] != refTop[i] || sBottom[i] != refBottom[i]) {
+                    printf("display %d: first difference at (%d,%d): %#06x/%#06x, "
+                           "expected %#06x/%#06x\n", n, i % 256, i / 256,
+                           sTop[i], sBottom[i], refTop[i], refBottom[i]);
+                    break;
+                }
+            }
+            differ++;
+        }
+    }
+    CHECK(differ == 0);
+}
+
+/* The two engines drawn at the same time on two threads (as the 3DS
+ * program does on two CPU cores), many times over: the same pixels. */
+static u16 sThreadOut[2][256 * 192];
+
+static void *DrawEngineThread(void *arg)
+{
+    int engine = (int)(intptr_t)arg;
+    int i;
+
+    for (i = 0; i < 20; i++) {
+        NitroPort_Render2D(engine, sThreadOut[engine]);
+    }
+    return NULL;
+}
+
+static void test_engines_on_two_threads(void)
+{
+    static u16 refA[256 * 192], refB[256 * 192];
+    int n, differ = 0;
+
+    for (n = 0; n < 20; n++) {
+        pthread_t a, b;
+
+        RandomDisplay();
+        Put32(0, 0x10011F10u);
+        Put32(0x1000, 0x10011F10u);
+        Put16(0x304, 0x0203);   /* engine A on the lower screen: B is the top */
+        Ref_RenderScreens(refB, refA);
+        pthread_create(&a, NULL, DrawEngineThread, (void *)(intptr_t)0);
+        pthread_create(&b, NULL, DrawEngineThread, (void *)(intptr_t)1);
+        pthread_join(a, NULL);
+        pthread_join(b, NULL);
+        if (memcmp(sThreadOut[0], refA, sizeof(refA)) != 0 ||
+            memcmp(sThreadOut[1], refB, sizeof(refB)) != 0) {
+            differ++;
+        }
+    }
+    CHECK(differ == 0);
+}
+
+/* test_render --bench: how long a busy frame (both screens, four BGs, many
+ * OBJs, blending) takes, with the old renderer and the new one. */
+static double Now(void)
+{
+    struct timespec t;
+
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
+}
+
+static void BenchScene(int busy)
+{
+    int i, k;
+
+    sSeed = 7;
+    RandomDisplay();
+    Put16(0x304, 0x8203);
+    NitroPort_IoReg[0x244] = 0;            /* no extended palettes */
+    for (i = 0; i < 2; i++) {
+        u32 io = i * 0x1000;
+        u8 *oam = NitroPort_Oam + i * 0x400;
+
+        Put16(io + 8, 0x0000);
+        Put16(io + 10, 0x0101);
+        Put16(io + 12, 0x0202);
+        Put16(io + 14, 0x0303);
+        Put16(io + 0x6C, 0);
+        if (busy) {
+            /* mode 0, BG0-3 of random graphics, OBJ 1D, everything blended */
+            Put32(io, 0x10011F10u);
+            Put16(io + 0x50, 0x3F41);
+            continue;
+        }
+        /* As the game's screens mostly are: an opaque background (BG3),
+         * a half-empty layer over it (BG2), a mostly empty text window (BG1),
+         * twenty 32x32 OBJs, no effects. */
+        Put32(io, 0x00011E10u);
+        Put16(io + 0x50, 0);
+        Put16(io + 14, 0x1C03);            /* BG3: map at 0xE000, chars at 0 */
+        Put16(io + 12, 0x1A06);            /* BG2: map at 0xD000, chars at 0x4000 */
+        Put16(io + 10, 0x1809);            /* BG1: map at 0xC000, chars at 0x8000 */
+        {
+            u8 *vram = i == 0 ? NitroPort_BgVram : NitroPort_DbBgVram;
+
+            for (k = 0; k < 0x4000; k++) {
+                vram[k] |= 0x11;                       /* BG3's chars: no 0s */
+                if ((k / 32) % 2) {
+                    vram[0x4000 + k] = 0;              /* BG2: every other tile empty */
+                }
+                vram[0x8000 + k] = (k / 32) % 8 ? 0 : vram[0x8000 + k];  /* BG1: 1 in 8 */
+            }
+            for (k = 0; k < 0x800; k += 2) {           /* maps: tiles 0-511, no flips */
+                u16 t = (u16)((k / 2) & 0x1FF);
+
+                memcpy(vram + 0xE000 + k, &t, 2);
+                memcpy(vram + 0xD000 + k, &t, 2);
+                memcpy(vram + 0xC000 + k, &t, 2);
+            }
+        }
+        for (k = 0; k < 128; k++) {
+            u16 a0 = k < 20 ? (u16)(0x0000 | ((k * 9) % 180)) : 0x0200;  /* square, 4 bpp */
+            u16 a1 = (u16)(0x8000 | ((k * 37) % 240));                   /* 32x32 */
+            u16 a2 = (u16)(k * 16);
+
+            memcpy(oam + k * 8, &a0, 2);
+            memcpy(oam + k * 8 + 2, &a1, 2);
+            memcpy(oam + k * 8 + 4, &a2, 2);
+        }
+    }
+}
+
+static void Bench(int only)
+{
+    static u16 top[256 * 192], bottom[256 * 192];
+    int scene, which, i;
+
+    for (scene = 0; scene < 2; scene++) {
+        if (only >= 0 && scene != only) {
+            continue;
+        }
+        BenchScene(scene);
+        for (which = 0; which < 2; which++) {
+            double start = Now();
+
+            for (i = 0; i < 120; i++) {
+                if (which == 0) {
+                    Ref_RenderScreens(top, bottom);
+                } else {
+                    NitroPort_RenderScreens(top, bottom);
+                }
+            }
+            printf("%s scene, %s renderer: %.2f ms a frame\n", scene ? "busy" : "typical",
+                   which == 0 ? "old" : "new", (Now() - start) * 1000.0 / 120);
+        }
+    }
+}
+
+int main(int argc, char **argv)
 {
     OS_Init();
+    if (argc > 1 && strcmp(argv[1], "--bench") == 0) {
+        Bench(argc > 2 ? atoi(argv[2]) : -1);
+        return 0;
+    }
 
     test_backdrop_and_power();
     test_text_bg();
@@ -425,6 +733,8 @@ int main(void)
     test_bitmap_bg();
     test_affine_bg();
     test_obj_8bpp_ext();
+    test_matches_reference();
+    test_engines_on_two_threads();
 
     printf("2D renderer: %d checks, %d failed\n", sChecks, sFailures);
     return sFailures == 0 ? 0 : 1;

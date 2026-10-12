@@ -36,4 +36,8 @@ void NitroPortPlatform_ExitThread(void) __attribute__((noreturn));
 /* A clock that only goes forward, in nanoseconds since some fixed point. */
 uint64_t NitroPortPlatform_Nanoseconds(void);
 
+/* Let other threads run for a while (at least the given microseconds),
+ * including ones of lower priority on the same CPU core. */
+void NitroPortPlatform_Sleep(uint32_t microseconds);
+
 #endif

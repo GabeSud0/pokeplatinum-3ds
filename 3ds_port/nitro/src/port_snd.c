@@ -13,6 +13,7 @@
 #include <nitro.h>
 #include <nitro_port.h>
 #include <nitro_port_sound_chip.h>
+#include "port_platform.h"
 #include <nitro/snd/common/command.h>
 #include <nitro/snd/common/work.h>
 #include <nitro/snd/common/main.h>
@@ -22,8 +23,13 @@
 
 #define SOUND_QUEUE_CAPACITY 32u
 #define SOUND_ALARM_CAPACITY 128u
-#define SOUND_TICK_US 2728ull
-#define SOUND_TICK_SAMPLES (SOUND_TICK_US * NITRO_SOUND_RATE)
+/* The ARM7 driver's tick: every SND_PROC_INTERVAL (2728) OS ticks, an OS
+ * tick being 64 cycles of the 33.513982 MHz bus clock: 5.2095 ms, about 192
+ * a second. In samples: 2728 * 64 * 32768 / 33513982 = 170.7. The phase
+ * below counts in 1/33513982ths of a sample. (It was taken for 2728
+ * microseconds once, and music played 1.9 times too fast.) */
+#define SOUND_BUS_CLOCK 33513982ull
+#define SOUND_TICK_SAMPLES ((uint64_t)SND_PROC_INTERVAL * 64u * NITRO_SOUND_RATE)
 
 /* The ARM7 copy of the SDK's own functions and shared globals. */
 extern void N7_SND_Init(u32 priority);
@@ -53,9 +59,18 @@ static PortSoundAlarm sAlarms[16];
 
 static void sound_lock(void)
 {
+    unsigned spins = 0;
+
     while (__sync_lock_test_and_set(&sLock, 1u)) {
         while (__atomic_load_n(&sLock, __ATOMIC_RELAXED)) {
-            /* Short critical sections; never call the ARM9 OS scheduler. */
+            /* Short critical sections, so spin a little; then sleep, never
+             * the ARM9 OS scheduler. The sleep matters: the sound thread
+             * outranks the game's, so on the same CPU core a lock the game
+             * holds is only let go if the sound thread stops spinning. */
+            if (++spins >= 64u) {
+                NitroPortPlatform_Sleep(50);
+                spins = 0;
+            }
         }
     }
 }
@@ -120,6 +135,13 @@ void NitroPort_HandleSound(int tag, u32 data, BOOL err)
     sound_unlock();
 }
 
+/* Called by the ARM7 driver's SND_StartChannel (NitroSDK patch 0023), under
+ * the audio lock, before it sets the channel's enable bit. */
+void NitroPort_SoundChannelStart(int channel)
+{
+    NitroSound_KeyOn(&sChip, (unsigned)channel);
+}
+
 /* Called by patched ARM7 snd_alarm.c under the audio lock. Values are
  * in OS ticks (1/64 of the original DS CPU clock), as in the SDK. */
 void NitroPort_SoundAlarmStart(int no, u64 tick, u64 period, u32 message)
@@ -162,30 +184,43 @@ static void sound_tick(void)
 
 /* Audio-side clock, completely independent of game frames and OS_Halt.
  * Exactly 32768 output samples correspond to one second; an original
- * sequencer tick fires every 2728 us, including fractional sample timing. */
+ * sequencer tick fires every 5.2095 ms (SOUND_TICK_SAMPLES), including
+ * fractional sample timing.
+ *
+ * Mixed a stretch at a time: up to the next tick (about 171 samples), with
+ * the lock held for one stretch only, so the game never waits for long.
+ * Commands the game sends are taken at the start of the next stretch, at
+ * most 5.2 ms later (the DS's ARM7 took them on its next tick, too). */
 void NitroPort_SoundRender(int16_t *stereo, size_t frames)
 {
-    size_t i;
+    size_t done = 0;
     if (!stereo) return;
     if (!__atomic_load_n(&sReady, __ATOMIC_ACQUIRE)) {
         memset(stereo, 0, frames * 4u);
         return;
     }
-    sound_lock();
-    for (i = 0; i < frames; ++i) {
-        /* Process commands immediately on the first sample after the send. */
+    while (done < frames) {
+        uint64_t toTick;
+        size_t n;
+
+        sound_lock();
         if (sCount) {
             N7_SND_CommandProc();
             N7_SND_UpdateSharedWork();
         }
-        NitroSound_Mix(&sChip, stereo + 2u * i, 1u);
-        sTickPhase += 1000000u;
+        /* Samples until the one that reaches the next tick, included. */
+        toTick = (SOUND_TICK_SAMPLES - sTickPhase + SOUND_BUS_CLOCK - 1u) / SOUND_BUS_CLOCK;
+        n = frames - done;
+        if (toTick < n) n = (size_t)toTick;
+        NitroSound_Mix(&sChip, stereo + 2u * done, n);
+        sTickPhase += SOUND_BUS_CLOCK * (uint64_t)n;
         if (sTickPhase >= SOUND_TICK_SAMPLES) {
             sTickPhase -= SOUND_TICK_SAMPLES;
             sound_tick();
         }
+        sound_unlock();
+        done += n;
     }
-    sound_unlock();
 }
 
 /* Called by the game thread (e.g. its OnFrame hook), NOT the audio thread.
