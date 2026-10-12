@@ -15,6 +15,21 @@ float NitroPort_Gx3dDepthValue(const NitroGx3dVertex *vertex,
         : ((float)vertex->depth / 16777215.0f);
     return d < 0.0f ? 0.0f : d > 1.0f ? 1.0f : d;
 }
+/* The GPU's clip-space z for a vertex. Z-buffer scenes: depth * W, so the
+ * PICA's z / W gives the DS depth (C3D_DepthMap(true, -1, 0)). W-buffer
+ * scenes (SWAP_BUFFERS bit 1): the PICA is put in its own W-buffer mode
+ * (C3D_DepthMap(false, -1, 0)), where the stored depth is z / W
+ * interpolated across the screen times the perspective-correct W. Giving
+ * z the depth itself makes that the perspective-correct DS W, as the DS
+ * stores it. Interpolating W linearly instead (the Z-buffer mode with
+ * z = depth * W) puts the middle of a big polygon too far away, and the
+ * intro's tunnel and Giratina came out with holes and slivers. */
+float NitroPort_Gx3dClipZ(const NitroGx3dVertex *vertex,uint32_t swap_param)
+{
+    float d=NitroPort_Gx3dDepthValue(vertex,swap_param);
+    if(swap_param&2u)return -d;
+    return -d*((float)vertex->clip[3]/4096.0f);
+}
 size_t NitroPort_Gx3dCountDroppedTriangles(const NitroGx3dScene *scene,
                                             size_t capacity)
 {
@@ -60,10 +75,9 @@ size_t NitroPort_Gx3dBuildOpaqueVertices(const NitroGx3dScene *scene,
             /* W scenes still approximate DS W depth. PICA's stored depth
              * increases with distance; GPU_LESS and a maximum clear ensure
              * a nearer triangle occludes one farther away. */
-            float z=-NitroPort_Gx3dDepthValue(v,scene->swap_param);
             dst->position[0]=ndc_x*w;
             dst->position[1]=ndc_y*w;
-            dst->position[2]=z*w;
+            dst->position[2]=NitroPort_Gx3dClipZ(v,scene->swap_param);
             dst->position[3]=w;
             dst->color[0]=color8(v->color&31u);
             dst->color[1]=color8((v->color>>5)&31u);
@@ -92,10 +106,9 @@ static void put_vertex(NitroGx3dGpuVertex *dst,const NitroGx3dVertex *v,
     float w=v->clip[3]/4096.0f;
     float ndc_x=(v->x/256.0f)/128.0f-1.0f;
     float ndc_y=1.0f-(v->y/256.0f)/96.0f;
-    float z=-NitroPort_Gx3dDepthValue(v,swap_param);
     dst->position[0]=ndc_x*w;
     dst->position[1]=ndc_y*w;
-    dst->position[2]=z*w;
+    dst->position[2]=NitroPort_Gx3dClipZ(v,swap_param);
     dst->position[3]=w;
     dst->color[0]=color8(v->color&31u);
     dst->color[1]=color8((v->color>>5)&31u);

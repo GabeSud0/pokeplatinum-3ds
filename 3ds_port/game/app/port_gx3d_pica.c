@@ -293,6 +293,9 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     BufInfo_Add(buffers,sVertices[slot],sizeof(NitroGx3dGpuVertex),
                 3,0x210u);
     C3D_CullFace(GPU_CULL_NONE);
+    /* W-buffered scenes use the PICA's W-buffer, Z-buffered ones its
+     * Z-buffer; NitroPort_Gx3dClipZ gives z to match. */
+    C3D_DepthMap(!(scene->swap_param&2u),-1.0f,0.0f);
     /* Texels and polygons with alpha 0 are never drawn on the DS. */
     C3D_AlphaTest(true,GPU_GREATER,0);
     if(count){

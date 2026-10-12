@@ -95,7 +95,7 @@ static void raster_triangle(const NitroGx3dTriangle *tri,uint16_t *out)
         uint32_t depth;
         unsigned index=(unsigned)yp*W+(unsigned)xp;
         uint16_t rgb;
-        int pixelAlpha = alpha;
+        int pixelAlpha = alpha, storedAlpha;
         if(u<-1e-6||v<-1e-6||w<-1e-6)continue;
         if(sWBuffer){
             /* W-buffer: depth is W (20.12) itself, perspective-correct. */
@@ -126,15 +126,19 @@ static void raster_triangle(const NitroGx3dTriangle *tri,uint16_t *out)
         /* DISP3DCNT bit3 enables alpha blending with the 3D colour buffer.
          * When disabled, fractional alpha still controls coverage but the
          * source colour replaces the destination on a visible fragment. */
+        storedAlpha=pixelAlpha;
         if(pixelAlpha<31 && (NitroPort_IoReg[0x60]&8u) &&
            (out[index]&0x8000)){
             uint16_t previous=out[index]&0x7fff;
             rgb=color_mix(rgb,previous,pixelAlpha,31-pixelAlpha,31);
             /* The DS keeps the larger of the two alphas. */
-            if(sAlpha[index]>pixelAlpha)pixelAlpha=sAlpha[index];
+            if(sAlpha[index]>storedAlpha)storedAlpha=sAlpha[index];
         }
         out[index]=(uint16_t)(rgb|0x8000);
-        sAlpha[index]=(uint8_t)pixelAlpha;
+        sAlpha[index]=(uint8_t)storedAlpha;
+        /* Depth: opaque pixels, and translucent ones only with attribute
+         * bit 11. The pixel's own alpha decides, not the alpha kept above
+         * (a translucent pixel over an opaque one isn't opaque). */
         if(pixelAlpha==31 || (tri->polygon_attr&(1u<<11)))sDepth[index]=depth;
     }
 }

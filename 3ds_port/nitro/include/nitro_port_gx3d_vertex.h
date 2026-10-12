@@ -21,6 +21,8 @@ typedef struct NitroGx3dGpuVertex {
  * W-buffer uses the same documented monotonic approximation as PR1. */
 float NitroPort_Gx3dDepthValue(const NitroGx3dVertex *vertex,
                               uint32_t swap_param);
+/* The clip-space z to give the GPU for a vertex (see port_gx3d_vertex.c). */
+float NitroPort_Gx3dClipZ(const NitroGx3dVertex *vertex, uint32_t swap_param);
 size_t NitroPort_Gx3dCountDroppedTriangles(const NitroGx3dScene *scene,
                                             size_t capacity);
 size_t NitroPort_Gx3dBuildOpaqueVertices(const NitroGx3dScene *scene,

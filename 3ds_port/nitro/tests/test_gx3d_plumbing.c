@@ -126,10 +126,18 @@ static void test_vertices(void) {
     scene.swap_param=2u; /* DS W-buffer flag */
     CHECK(NitroPort_Gx3dBuildOpaqueVertices(&scene,verts,12)==6);
     /* W-buffer depth is W in 20.12 over the 24-bit range (W 1.0 and 2.0
-     * here), times W for the GPU's clip-space z. Was W / 16.0, which put
-     * everything beyond 16 units at the far plane. */
-    CHECK(verts[0].position[2]==-(4096.0f/16777215.0f)*1.0f);
-    CHECK(verts[1].position[2]==-(8192.0f/16777215.0f)*2.0f);
+     * here). Was W / 16.0, which put everything beyond 16 units at the far
+     * plane. W scenes draw with the PICA's W-buffer mode, whose stored
+     * depth is z / W interpolated times the perspective-correct W, so z is
+     * the depth itself. (This expected depth * W before: the Z-buffer
+     * mode's z, which interpolates W linearly across the screen and broke
+     * the intro's tunnel and Giratina on the 3DS.) */
+    CHECK(verts[0].position[2]==-(4096.0f/16777215.0f));
+    CHECK(verts[1].position[2]==-(8192.0f/16777215.0f));
+    /* Z-buffer scenes keep depth * W: z / W is the DS depth. */
+    scene.swap_param=0u;
+    CHECK(NitroPort_Gx3dBuildOpaqueVertices(&scene,verts,12)==6);
+    CHECK(verts[1].position[2]==-2.0f);
 }
 static uint32_t imagePixels[NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT];
 static void test_image_handoff(void)
