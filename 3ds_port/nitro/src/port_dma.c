@@ -22,6 +22,7 @@
 
 #include <nitro.h>
 #include <nitro_port.h>
+#include <nitro_port_gx3d.h>
 
 #define PORT_DMA_CHANNELS 4
 
@@ -72,7 +73,16 @@ static void Transfer(u32 dmaNo, u32 cnt)
      * copies behave as on the DS. */
     if (unit == 4) {
         for (i = 0; i < count; i++) {
-            *(vu32 *)dest = *(vu32 *)src;
+            u32 word = *(const vu32 *)src;
+            /* GXFIFO is a write-only stream, not a memory location. Every
+             * DMA word must be consumed in order (including packed commands
+             * whose parameters span multiple interrupt-sized bursts). */
+            if (dest >= (u32)REG_GXFIFO_ADDR &&
+                dest < (u32)REG_GXFIFO_ADDR + 0x40) {
+                NitroPort_GxFifoWord(word);
+            } else {
+                *(vu32 *)dest = word;
+            }
             src += (u32)srcStep;
             dest += (u32)destStep;
         }
