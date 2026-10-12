@@ -115,6 +115,32 @@ static void test_backdrop_and_power(void)
     GX_SetMasterBrightness(0);
 }
 
+/* A screen whose registers, palettes, OAM and VRAM didn't change isn't
+ * drawn again; any change to them draws it. */
+static void test_unchanged_screen(void)
+{
+    static u16 backdrop = GREY, other = WHITE;
+    static u16 tile[16] = { 0x1111 };
+
+    Reset();
+    GX_LoadBGPltt(&backdrop, 0, 2);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);    /* first: drawn */
+    CHECK_PX(sTop, 0, 0, GREY);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);    /* nothing changed */
+    GX_LoadBGPltt(&other, 0, 2);                          /* a palette */
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);
+    CHECK_PX(sTop, 0, 0, WHITE);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    GX_LoadBG0Char(tile, 0x400, sizeof(tile));            /* VRAM */
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);
+    G2_SetBG0Offset(3, 0);                                /* a register */
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    CHECK(NitroPort_Render2DIfChanged(1, sBottom) == 1); /* engine B: its own */
+    CHECK(NitroPort_Render2DIfChanged(1, sBottom) == 0);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+}
+
 static void test_text_bg(void)
 {
     static u8 tiles[3 * 32];
@@ -726,6 +752,7 @@ int main(int argc, char **argv)
     }
 
     test_backdrop_and_power();
+    test_unchanged_screen();
     test_text_bg();
     test_8bpp_ext_palette();
     test_objs();

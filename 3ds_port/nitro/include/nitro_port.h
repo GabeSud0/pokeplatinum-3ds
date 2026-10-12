@@ -98,6 +98,9 @@ void NitroPort_GxRefresh(void);
 #define NITRO_PORT_SCREEN_W 256
 #define NITRO_PORT_SCREEN_H 192
 void NitroPort_Render2D(int engine, u16 *out);
+/* The same, unless nothing it's drawn from changed since the last call for
+ * that engine: then out isn't touched, and it returns 0 (1 when drawn). */
+int NitroPort_Render2DIfChanged(int engine, u16 *out);
 
 /* Whether engine A's picture is on the upper screen (POWCNT1 bit 15). */
 BOOL NitroPort_EngineAOnTop(void);

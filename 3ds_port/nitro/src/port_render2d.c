@@ -1275,3 +1275,79 @@ void NitroPort_RenderScreens(u16 *top, u16 *bottom)
     NitroPort_Render2D(0, aOnTop ? top : bottom);
     NitroPort_Render2D(1, aOnTop ? bottom : top);
 }
+
+/* ------------------------------------------------- unchanged screens */
+
+/* A 32-bit FNV-1a hash of words, two lanes at a time. */
+static u32 HashWords(const u8 *p, u32 bytes, u32 h)
+{
+    const u32a *w = (const u32a *)p;
+    u32 n = bytes / 8, h2 = h ^ 0x9E3779B9u, i;
+
+    for (i = 0; i < n; i++) {
+        h = (h ^ w[2 * i]) * 16777619u;
+        h2 = (h2 ^ w[2 * i + 1]) * 16777619u;
+    }
+    return (h ^ (h2 * 31u)) * 16777619u;
+}
+
+/* Everything an engine's picture comes from: its registers, palettes, OAM,
+ * VRAM (as the CPU sees it, and the LCDC banks it may use as extended
+ * palettes or for VRAM display), the VRAM bank settings and POWCNT1. */
+static u32 EngineSignature(int engine)
+{
+    BOOL isA = engine == 0;
+    const u8 *io = NitroPort_IoReg + (isA ? 0 : 0x1000);
+    u32 h = 2166136261u;
+
+    h = HashWords(io, 0x70, h);
+    h = HashWords(NitroPort_IoReg + 0x240, 0x10, h);   /* VRAMCNT */
+    h = (h ^ IO16(0x304)) * 16777619u;                  /* POWCNT1 */
+    h = HashWords(NitroPort_Pltt + (isA ? 0 : 0x400), 0x400, h);
+    h = HashWords(NitroPort_Oam + (isA ? 0 : 0x400), 0x400, h);
+    if (isA) {
+        h = HashWords(NitroPort_BgVram, 0x80000, h);
+        h = HashWords(NitroPort_ObjVram, 0x40000, h);
+        h = HashWords(NitroPort_LcdcVram + 0x80000, 0x18000, h);   /* E, F, G */
+        if (((Rd32(io, 0) >> 16) & 3) == 2) {                       /* VRAM display */
+            h = HashWords(NitroPort_LcdcVram + ((Rd32(io, 0) >> 18) & 3) * 0x20000, 0x20000, h);
+        }
+    } else {
+        h = HashWords(NitroPort_DbBgVram, 0x20000, h);
+        h = HashWords(NitroPort_DbObjVram, 0x20000, h);
+        h = HashWords(NitroPort_LcdcVram + 0x98000, 0xC000, h);    /* H, I */
+    }
+    return h;
+}
+
+/* NitroPort_Render2D, unless nothing it draws from changed since the last
+ * time for this engine (then out is left as it is, and 0 returned). Working
+ * that out reads the engine's VRAM once: far less than drawing it. A 3D
+ * layer counts as changed whenever a new 3D image is out; while the 3D
+ * keeps changing, nothing is hashed. */
+int NitroPort_Render2DIfChanged(int engine, u16 *out)
+{
+    static struct { u32 signature; u32 images; int valid; } last[2];
+    int e = engine ? 1 : 0;
+    u32 images = NitroPort_Gx3dImageCount();
+    u32 dispcnt = Rd32(NitroPort_IoReg, 0);
+    BOOL uses3D = e == 0 && (dispcnt & 0x0108) == 0x0108;   /* BG0 on, as 3D */
+    u32 signature;
+
+    if (uses3D && images != last[e].images) {
+        /* New 3D: draw, and check the rest again next time. */
+        last[e].images = images;
+        last[e].valid = 0;
+        NitroPort_Render2D(engine, out);
+        return 1;
+    }
+    signature = EngineSignature(e);
+    if (last[e].valid && signature == last[e].signature) {
+        return 0;
+    }
+    last[e].signature = signature;
+    last[e].images = images;
+    last[e].valid = 1;
+    NitroPort_Render2D(engine, out);
+    return 1;
+}

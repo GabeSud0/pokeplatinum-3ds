@@ -15,6 +15,7 @@ static uint8_t sAlphas[2][PIXELS];   /* 3D alpha 0-31 per pixel */
 static uint8_t sTranslucent[2];      /* the image has pixels of alpha 1-30 */
 static unsigned char sGate;
 static int sPublished=-1,sReserved=-1,sReaders[2];
+static uint32_t sPublishCount;   /* images published so far */
 /* A lower-priority GPU or same-priority drawer can own this gate.
  * Never busy-loop indefinitely on core 0: yield after a short spin. */
 static void lock(void) {
@@ -43,6 +44,7 @@ static void finish(int index) {
     if(sReserved==index){
         sPublished=index;
         sReserved=-1;
+        sPublishCount++;
     }
     unlock();
 }
@@ -127,6 +129,11 @@ void NitroPort_Gx3dReleaseImage(const uint16_t *ptr)
         break;
     }
     unlock();
+}
+
+uint32_t NitroPort_Gx3dImageCount(void)
+{
+    return __atomic_load_n(&sPublishCount,__ATOMIC_ACQUIRE);
 }
 
 int NitroPort_Gx3dImageTranslucent(const uint16_t *image)

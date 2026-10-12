@@ -80,6 +80,9 @@ const uint8_t *NitroPort_Gx3dImageAlpha(const uint16_t *image);
 /* Whether an acquired image has pixels of alpha 1-30 (worked out once,
  * when it's published). */
 int NitroPort_Gx3dImageTranslucent(const uint16_t *image);
+/* How many 3D images have been published: a new one when it changes. (On
+ * the PC, images are drawn when acquired, so it changes with the scene.) */
+uint32_t NitroPort_Gx3dImageCount(void);
 
 /* Debug-only PNG output for the newest finished RGB555|coverage image.
  * Pixel order is always DS screen order (top-to-bottom, left-to-right).
