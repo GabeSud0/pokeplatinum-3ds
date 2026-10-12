@@ -11,10 +11,13 @@ size_t NitroPort_Gx3dBuildOpaqueVertices(const NitroGx3dScene *scene,
     for(i=0;i<scene->count && count+3<=capacity;i++){
         const NitroGx3dTriangle *tri=&scene->triangles[i];
         unsigned alpha=(tri->polygon_attr>>16)&31u;
-        unsigned format=(tri->texture_param>>26)&7u;
         float tw=(float)(8u<<((tri->texture_param>>20)&7u));
         float th=(float)(8u<<((tri->texture_param>>23)&7u));
-        if(alpha!=31u || format!=0u)continue;
+        /* PR1 renders every opaque polygon as untextured vertex colour,
+         * INCLUDING polygons whose original material is textured. Dropping
+         * them would hide almost all overworld model geometry. Texture
+         * mapping and per-texel transparency follow in PR2/PR3. */
+        if(alpha!=31u)continue;
         for(k=0;k<3;k++){
             const NitroGx3dVertex *v=&tri->v[k];
             NitroGx3dGpuVertex *dst=&out[count++];
