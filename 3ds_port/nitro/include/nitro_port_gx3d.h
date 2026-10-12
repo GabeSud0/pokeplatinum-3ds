@@ -58,6 +58,10 @@ const NitroGx3dScene *NitroPort_Gx3dScene(void);
  * synchronously for now, so the FIFO-empty/under-half IRQ stays level-based. */
 void NitroPort_Gx3dRefreshStatus(void);
 
+/* GXSTAT's bit 15 is write-one-to-clear on the DS, and resetting it
+ * also clears the single-entry projection stack pointer. */
+void NitroPort_Gx3dClearStackError(void);
+
 /* PC reference output. Samples from virtual DS texture/palette VRAM banks.
  * Each pixel is RGB555|0x8000 when a 3D polygon covers it, otherwise zero.
  * The 2D BG0 compositor decides whether/how to display it. */
