@@ -323,7 +323,12 @@ GX3D_TEST_BIN := $(OUT)/test_gx3d
 $(GX3D_TEST_BIN): tests/test_gx3d.c $(NNS)/libraries/g3d/src/gecom.c $(LIB)
 	$(CC) $(CFLAGS) $(NNS_INCLUDES) $(LDFLAGS) tests/test_gx3d.c $(NNS)/libraries/g3d/src/gecom.c $(LIB) -lm -o $@
 
-test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN) $(GX3D_TEST_BIN)
+# Race-test the three-slot scene handoff and the pure-C vertex builder.
+GX3D_PLUMBING_TEST_BIN := $(OUT)/test_gx3d_plumbing
+$(GX3D_PLUMBING_TEST_BIN): tests/test_gx3d_plumbing.c $(LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
+
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN) $(GX3D_TEST_BIN) $(GX3D_PLUMBING_TEST_BIN)
 	./$(TEST_BIN)
 	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
 	./$(THREAD_TEST_BIN)
@@ -332,6 +337,7 @@ test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_T
 	./$(SOUND_SEQ_TEST_BIN)
 	./$(RENDER_TEST_BIN)
 	./$(GX3D_TEST_BIN)
+	./$(GX3D_PLUMBING_TEST_BIN)
 
 clean:
 	rm -rf build
