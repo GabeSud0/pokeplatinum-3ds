@@ -6,14 +6,25 @@
  * Stage 2 PR3 will extend this path to preserve 5-bit pixel alpha.
  */
 #include <nitro_port_gx3d.h>
+#include "port_platform.h"
 #include <stdint.h>
 #include <stddef.h>
 #define PIXELS (NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT)
 static uint16_t sImages[2][PIXELS];
 static unsigned char sGate;
 static int sPublished=-1,sReserved=-1,sReaders[2];
+/* A lower-priority GPU or same-priority drawer can own this gate.
+ * Never busy-loop indefinitely on core 0: yield after a short spin. */
 static void lock(void) {
-    while(__atomic_test_and_set(&sGate,__ATOMIC_ACQUIRE)){}
+    unsigned spins = 0;
+    while (__atomic_test_and_set(&sGate, __ATOMIC_ACQUIRE)) {
+        while (__atomic_load_n(&sGate, __ATOMIC_RELAXED)) {
+            if (++spins >= 64u) {
+                NitroPortPlatform_Sleep(50);
+                spins = 0;
+            }
+        }
+    }
 }
 static void unlock(void){__atomic_clear(&sGate,__ATOMIC_RELEASE);}
 static int reserve(void) {
