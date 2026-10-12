@@ -106,17 +106,20 @@ void NitroPort_PicaExit(void)
 }
 /* Returns number of GPU vertices on success, -1 if frame submission or
  * transfer failed. 3DS image publication is after GPU/PPF completion only. */
-int NitroPort_PicaRender(const NitroGx3dScene *scene)
+int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
 {
     size_t count;
     C3D_BufInfo *buffers;
     int slot;
     Result result;
+    if(dropped)*dropped=scene ? scene->dropped : 0;
     if(!sTarget||!scene)return -1;
     slot=sBuffer;
     sBuffer^=1;
     count=NitroPort_Gx3dBuildOpaqueVertices(scene,sVertices[slot],
                                              NITRO_GX3D_PICA_MAX_VERTICES);
+    if(dropped)*dropped+=(unsigned)NitroPort_Gx3dCountDroppedTriangles(
+        scene,NITRO_GX3D_PICA_MAX_VERTICES);
     /* Previous GPU frame must have finished using this buffer. This worker
      * may wait; neither the game nor the 2D drawer ever waits on it. */
     if(!C3D_FrameBegin(C3D_FRAME_SYNCDRAW))return -1;
