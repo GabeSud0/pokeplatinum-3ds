@@ -578,6 +578,31 @@ static void test_translucency_and_scene_limits(void)
     CHECK(((pixels[96*256+128]>>10)&31u)==31u);
     CHECK(((pixels[96*256+128]>>5)&31u)==0u);
 
+    /* A translucent pixel doesn't write depth (attribute bit 11 clear),
+     * even over an opaque one: the DS keeps the larger alpha for the
+     * pixel, but that doesn't make the translucent pixel opaque. A second
+     * translucent polygon behind the first but in front of the opaque one
+     * still shows. (The intro's tunnel walls depend on this.) */
+    reset_geometry();
+    {
+        static const uint32_t proj[16]={ONE,0,0,0, 0,ONE,0,0, 0,0,ONE,ONE, 0,0,0,2*ONE};
+        unsigned k;
+        NitroPort_GxDirectWrite(0x10,0);
+        for(k=0;k<16;k++)NitroPort_GxDirectWrite(0x16,proj[k]);
+        NitroPort_GxDirectWrite(0x10,2);
+    }
+    NitroPort_IoReg[0x60]|=8u;
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(31u<<16));
+    triangle(1200,RGB(0,31,0));                      /* opaque, far */
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(16u<<16)|(1u<<24));
+    triangle(-1200,RGB(0,0,31));                     /* translucent, near */
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(16u<<16)|(2u<<24));
+    triangle(0,RGB(31,0,0));                         /* translucent, between */
+    NitroPort_GxDirectWrite(0x50,2);
+    NitroPort_Gx3dRasterize(pixels,NULL);
+    CHECK((pixels[96*256+128]&31u)>0u);              /* the red one shows */
+    NitroPort_IoReg[0x60]&=(uint8_t)~8u;
+
     reset_geometry();
     for(i=0;i<2049u;i++)triangle(0,RGB(31,0,0));
     swap();

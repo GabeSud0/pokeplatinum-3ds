@@ -75,6 +75,7 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
     uint32_t clear = (uint32_t)NitroPort_IoReg[0x350] | ((uint32_t)NitroPort_IoReg[0x351] << 8) |
                      ((uint32_t)NitroPort_IoReg[0x352] << 16) | ((uint32_t)NitroPort_IoReg[0x353] << 24);
     int blend = (NitroPort_IoReg[0x60] & 8u) != 0;
+    int wbuffer = (scene->swap_param & 2u) != 0;
     Color cc;
 
     cc.r = (float)(((clear & 31u) << 3) | ((clear & 31u) >> 2)) / 255.0f;
@@ -147,8 +148,13 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
                     unsigned idx = (unsigned)y * W + (unsigned)x;
                     if (l0 < -1e-6f || l1 < -1e-6f || l2 < -1e-6f) continue;
                     z = l0 * sz[0] + l1 * sz[1] + l2 * sz[2];
-                    if (equal ? !(z <= depth[idx]) : !(z < depth[idx])) continue;
                     pw = l0 * iw[0] + l1 * iw[1] + l2 * iw[2];
+                    /* The PICA's W-buffer mode, which W-buffered scenes
+                     * use: z / W as interpolated times the
+                     * perspective-correct W. */
+                    if (wbuffer)
+                        z = pw != 0.0f ? z / pw : 1.0f;
+                    if (equal ? !(z <= depth[idx]) : !(z < depth[idx])) continue;
                     if (pw == 0.0f) continue;
                     /* Perspective-correct, as the PICA interpolates. */
                     prim.r = (l0 * iw[0] * v[0].color[0] + l1 * iw[1] * v[1].color[0] + l2 * iw[2] * v[2].color[0]) / pw / 255.0f;
