@@ -137,7 +137,8 @@ static void matrix_stack(unsigned opcode,int32_t param)
             else{ s.posStack[s.pvLevel]=s.pos;s.vecStack[s.pvLevel]=s.vec; ++s.pvLevel; }
         }else if(opcode==0x12){
             index=s.pvLevel-signbits((uint32_t)param,6);
-            if(index<0||index>31){s.stackError=1;return;}
+            /* Level 31 is the next free slot, not a valid saved entry. */
+            if(index<0||index>30){s.stackError=1;return;}
             s.pvLevel=index;
             s.pos=s.posStack[index];s.vec=s.vecStack[index];
         }else if(opcode==0x13 || opcode==0x14){
