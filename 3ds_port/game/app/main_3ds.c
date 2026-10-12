@@ -279,7 +279,7 @@ static char sStatus[64] = "Starting";
 
 void NitroPort_Log(const char *fmt, ...)
 {
-    char line[256];
+    char line[640];
     va_list args;
 
     va_start(args, fmt);

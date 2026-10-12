@@ -326,22 +326,31 @@ static NitroGx3dVertex to_screen(const GeoVertex *v)
 static struct {
     unsigned scenes, vertices, polygons, triangles;
     unsigned clipped, cullBoth, cullFacing, degenerate, overLimit, behind;
+    unsigned projLoads, projMults, projStackOps, stackErrors, swaps;
+    unsigned alphaOpaque, alphaTranslucent, alphaWire;
     uint32_t lastAttr;
     int32_t lastClip[4];
 } sDiag;
 
 static void diag_log(void)
 {
-    NitroPort_Log("[gx3d] %u scenes: %u vertices, %u polygons -> %u triangles; "
-                  "lost: %u clipped away, %u attr culls both faces, %u back/front culled, "
-                  "%u degenerate, %u over DS limits, %u vertices with w<=0; "
-                  "last attr %08lx, last clip (%ld,%ld,%ld,%ld), proj diag (%ld,%ld,%ld,%ld)",
+    NitroPort_Log("[gx3d] %u scenes: %u vtx, %u polys -> %u tris (%u opaque, %u translucent, %u alpha0); "
+                  "lost: %u clipped, %u cull-both, %u culled, %u degenerate, %u over-limit, %u w<=0",
                   sDiag.scenes, sDiag.vertices, sDiag.polygons, sDiag.triangles,
+                  sDiag.alphaOpaque, sDiag.alphaTranslucent, sDiag.alphaWire,
                   sDiag.clipped, sDiag.cullBoth, sDiag.cullFacing, sDiag.degenerate,
-                  sDiag.overLimit, sDiag.behind, (unsigned long)sDiag.lastAttr,
+                  sDiag.overLimit, sDiag.behind);
+    NitroPort_Log("[gx3d] projection: %u loads, %u mults, %u push/pop/store/restore, %u stack errors; "
+                  "now %ld %ld %ld %ld / %ld %ld %ld %ld / %ld %ld %ld %ld / %ld %ld %ld %ld; "
+                  "last attr %08lx, last clip (%ld,%ld,%ld,%ld)",
+                  sDiag.projLoads, sDiag.projMults, sDiag.projStackOps, sDiag.stackErrors,
+                  (long)s.proj.a[0], (long)s.proj.a[1], (long)s.proj.a[2], (long)s.proj.a[3],
+                  (long)s.proj.a[4], (long)s.proj.a[5], (long)s.proj.a[6], (long)s.proj.a[7],
+                  (long)s.proj.a[8], (long)s.proj.a[9], (long)s.proj.a[10], (long)s.proj.a[11],
+                  (long)s.proj.a[12], (long)s.proj.a[13], (long)s.proj.a[14], (long)s.proj.a[15],
+                  (unsigned long)sDiag.lastAttr,
                   (long)sDiag.lastClip[0], (long)sDiag.lastClip[1],
-                  (long)sDiag.lastClip[2], (long)sDiag.lastClip[3],
-                  (long)s.proj.a[0], (long)s.proj.a[5], (long)s.proj.a[10], (long)s.proj.a[15]);
+                  (long)sDiag.lastClip[2], (long)sDiag.lastClip[3]);
     memset(&sDiag, 0, sizeof(sDiag));
 }
 
@@ -376,6 +385,12 @@ static void append_triangle(const GeoVertex *a,const GeoVertex *b,const GeoVerte
         if(!mask){sDiag.cullBoth++;continue;}
         if(!(mask & (front?2:1))){sDiag.cullFacing++;continue;}
         sDiag.triangles++;
+        {
+            unsigned a=(s.attr>>16)&31u;
+            if(a==31u)sDiag.alphaOpaque++;
+            else if(a==0u)sDiag.alphaWire++;
+            else sDiag.alphaTranslucent++;
+        }
         if(scene->count>=NITRO_GX3D_MAX_TRIANGLES){scene->dropped++;continue;}
         tri=&scene->triangles[scene->count++];
         tri->v[0]=aa;tri->v[1]=bb;tri->v[2]=cc;
@@ -471,10 +486,13 @@ static void execute(unsigned op,const uint32_t *p)
     int i;
     switch(op){
     case 0x10:s.mode=p[0]&3;break;
-    case 0x11:case 0x12:case 0x13:case 0x14:matrix_stack(op,op==0x11?0:(int32_t)p[0]);break;
-    case 0x15:identity(&m);set_matrix(&m,0);break;
-    case 0x16:case 0x17:m=read_matrix(op,p);set_matrix(&m,0);break;
-    case 0x18:case 0x19:case 0x1a:m=read_matrix(op,p);mul_matrix(&m,0);break;
+    case 0x11:case 0x12:case 0x13:case 0x14:
+        if(s.mode==0)sDiag.projStackOps++;
+        {int before=s.stackError;matrix_stack(op,op==0x11?0:(int32_t)p[0]);if(s.stackError&&!before)sDiag.stackErrors++;}
+        break;
+    case 0x15:identity(&m);set_matrix(&m,0);if(s.mode==0)sDiag.projLoads++;break;
+    case 0x16:case 0x17:m=read_matrix(op,p);set_matrix(&m,0);if(s.mode==0)sDiag.projLoads++;break;
+    case 0x18:case 0x19:case 0x1a:m=read_matrix(op,p);mul_matrix(&m,0);if(s.mode==0)sDiag.projMults++;break;
     case 0x1b:identity(&m);m.a[0]=(int32_t)p[0];m.a[5]=(int32_t)p[1];m.a[10]=(int32_t)p[2];
         mul_matrix(&m,1);break;
     case 0x1c:identity(&m);m.a[12]=(int32_t)p[0];m.a[13]=(int32_t)p[1];m.a[14]=(int32_t)p[2];
