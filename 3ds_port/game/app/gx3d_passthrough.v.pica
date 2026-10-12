@@ -1,6 +1,9 @@
 ; Stage 2 PR1: PICA200 clip-space passthrough, assembled by picasso.
 ; The CPU has already applied DS transforms, clipping, and viewport.
+; PICA fetches byte colours as 0..255 floats, not normalized 0..1.
 ; Preserve W for perspective-correct interpolation in later texture PRs.
+.constf byteScale(0.003921568393707275390625, 0.0, 0.0, 0.0)
+.alias clrdiv byteScale.xxxx
 .out outpos position
 .out outclr color
 .out outtc0 texcoord0
@@ -10,7 +13,7 @@
 
 .proc main
     mov outpos, inpos
-    mov outclr, inclr
+    mul outclr, inclr, clrdiv
     mov outtc0, intex
     end
 .end
