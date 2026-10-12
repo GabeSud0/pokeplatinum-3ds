@@ -49,10 +49,15 @@ typedef struct GeoState {
 
 static GeoState s;
 
-/* An optional notification symbol: only the 3DS application's main
- * thread provides it to wake its PICA worker. An undefined weak reference
- * also avoids accidental compiler inlining of a no-op body. */
-extern void NitroPort_Gx3dScenePublished(void) __attribute__((weak));
+/* A harmless host/library default. The 3DS application's main overrides
+ * this weak function with LightEvent_Signal. noinline ensures a call
+ * relocation remains so the linked strong override is actually invoked.
+ * Unlike an undefined weak reference, a definition also satisfies the
+ * port's strict SDK/host link coverage checker. */
+__attribute__((weak,noinline)) void NitroPort_Gx3dScenePublished(void)
+{
+    __asm__ __volatile__("" ::: "memory");
+}
 /* Three ~0.6 MiB scenes: game builds one, GPU owns one, and a pending
  * completed scene occupies the third. Never copy or overwrite GPU-owned data.
  * A short atomic lock protects only the mailbox indices, never geometry. */
@@ -491,8 +496,7 @@ static void execute(unsigned op,const uint32_t *p)
             sSerial=serial;
             sScenes[sBuilding].count=0;
             sScenes[sBuilding].dropped=0;
-            if(NitroPort_Gx3dScenePublished)
-                NitroPort_Gx3dScenePublished();
+            NitroPort_Gx3dScenePublished();
         }else{
             /* Keep the newest image and reuse this building slot on the
              * exceptionally slow consumer path; never stall the game. */
