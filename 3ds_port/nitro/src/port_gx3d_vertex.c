@@ -1,5 +1,31 @@
 #include <nitro_port_gx3d_vertex.h>
 static uint8_t color8(unsigned v) { return (uint8_t)((v<<3)|(v>>2)); }
+/* PICA depth is mapped to 0 (near) ... 1 (far) by citro3d's
+ * viewport mapping. With GPU_LESS and a maximum-depth clear, near wins. */
+float NitroPort_Gx3dDepthValue(const NitroGx3dVertex *vertex,
+                              uint32_t swap_param)
+{
+    float d;
+    if (!vertex) return 1.0f;
+    d = (swap_param & 2u)
+        ? ((float)vertex->clip[3] / (4096.0f * 16.0f))
+        : ((float)vertex->depth / 16777215.0f);
+    return d < 0.0f ? 0.0f : d > 1.0f ? 1.0f : d;
+}
+size_t NitroPort_Gx3dCountDroppedTriangles(const NitroGx3dScene *scene,
+                                            size_t capacity)
+{
+    size_t i, eligible = 0, fits;
+    if (!scene) return 0;
+    if (capacity > NITRO_GX3D_PICA_MAX_VERTICES)
+        capacity = NITRO_GX3D_PICA_MAX_VERTICES;
+    for (i = 0; i < scene->count; i++) {
+        if (((scene->triangles[i].polygon_attr >> 16) & 31u) == 31u)
+            ++eligible;
+    }
+    fits = capacity / 3u;
+    return eligible > fits ? eligible - fits : 0u;
+}
 size_t NitroPort_Gx3dBuildOpaqueVertices(const NitroGx3dScene *scene,
                                          NitroGx3dGpuVertex *out,
                                          size_t capacity)
@@ -28,14 +54,10 @@ size_t NitroPort_Gx3dBuildOpaqueVertices(const NitroGx3dScene *scene,
              * twice. PICA uses 0 for near and -1 for far (reverse depth). */
             float ndc_x=x/128.0f-1.0f;
             float ndc_y=1.0f-y/96.0f;
-            /* W-buffer scenes use the homogeneous W rather than Stage 1's
-             * Z depth. DS W normalization is performed per original polygon
-             * with extra exponent precision not retained in our triangle
-             * scene, so this is a monotonic 20.12-to-depth approximation
-             * for PR1, not a bit-accurate DS W depth implementation. */
-            float d=(scene->swap_param&2u) ? (w/16.0f)
-                                         : ((float)v->depth/16777215.0f);
-            float z=-(d<0.0f?0.0f:d>1.0f?1.0f:d);
+            /* W scenes still approximate DS W depth. PICA's stored depth
+             * increases with distance; GPU_LESS and a maximum clear ensure
+             * a nearer triangle occludes one farther away. */
+            float z=-NitroPort_Gx3dDepthValue(v,scene->swap_param);
             dst->position[0]=ndc_x*w;
             dst->position[1]=ndc_y*w;
             dst->position[2]=z*w;
