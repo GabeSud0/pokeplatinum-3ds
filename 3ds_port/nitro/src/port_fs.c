@@ -19,6 +19,8 @@
 #include <string.h>
 
 #define MANIFEST_MAX_BYTES (2u * 1024u * 1024u)
+#define PORT_CARD_READ_START_CYCLES 3351u   /* ~100 us */
+#define PORT_CARD_CYCLES_PER_BYTE   16u     /* ~2 MB/s */
 #define PATH_MAX_BYTES 1024u
 
 typedef struct {
@@ -348,6 +350,11 @@ FSResult NitroPort_PakArchiveProc(FSFile *file, FSCommandType command)
                      file->arg.readfile.dst, length) != PAK_OK)
             return FS_RESULT_FAILURE;
         file->prop.file.pos = position + length;
+        /* The DS card takes its time: about 2 MB/s (16 bus cycles a byte)
+         * after ~100 us to start a read. An estimate; what matters is that
+         * a load of hundreds of KB spans several frames, as on the DS. */
+        NitroPort_SpendDsTime(PORT_CARD_READ_START_CYCLES +
+                              (u64)length * PORT_CARD_CYCLES_PER_BYTE);
         return FS_RESULT_SUCCESS;
     }
     case FS_COMMAND_CLOSEFILE:

@@ -41,7 +41,7 @@ typedef struct GeoState {
     uint16_t lightColor[4];
     int viewport[4], primitive, nverts;
     GeoVertex vertices[4];
-    int inBegin, boxVisible;
+    int inBegin, boxVisible, stripStarted;
     int packedIndex, packedCount, need, used, directOpcode, directNeed;
     uint8_t packed[4];
     uint32_t params[32];
@@ -124,11 +124,14 @@ static void set_matrix(const Matrix *m, int scale)
     *selected()=*m;
     if(s.mode==2 && !scale) s.vec=*m;
 }
+/* MTX_MULT/SCALE/TRANS: Current = Parameter x Current (GBATEK). With
+ * row vectors (v' = v x M), the new matrix applies to a vertex first:
+ * a model's own transform goes before the camera loaded earlier. */
 static void mul_matrix(const Matrix *m, int scale)
 {
     Matrix newpos, newvec;
-    multiply(&newpos,selected(),m);
-    if(s.mode==2 && !scale) multiply(&newvec,&s.vec,m);
+    multiply(&newpos,m,selected());
+    if(s.mode==2 && !scale) multiply(&newvec,m,&s.vec);
     *selected()=newpos;
     if(s.mode==2 && !scale) s.vec=newvec;
 }
@@ -354,11 +357,16 @@ static void diag_log(void)
     memset(&sDiag, 0, sizeof(sDiag));
 }
 
-static void append_triangle(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
+/* One polygon's triangles, held until the polygon is known to be stored. */
+static NitroGx3dTriangle sStaged[16];
+static unsigned sStagedCount, sStagedVertices, sStagedClipped;
+
+/* Clip a triangle of the polygon being built to the view volume, cull it,
+ * and stage what's left. */
+static void stage_triangle(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
 {
-    NitroGx3dScene *scene=&sScenes[sBuilding];
     GeoVertex v[12],tmp[12];
-    unsigned i,p,n=3;
+    unsigned i,p,n=3,clipped=0;
     v[0]=*a;v[1]=*b;v[2]=*c;
     for(p=0;p<6;p++){
         unsigned m=0;
@@ -369,7 +377,9 @@ static void append_triangle(const GeoVertex *a,const GeoVertex *b,const GeoVerte
             if((da<0)!=(db<0)&&m<12){
                 double t=(double)da/(double)(da-db);
                 tmp[m++]=interpolate(left,right,t);
+                clipped=1;
             }
+            if(da<0)clipped=1;
         }
         if(m<3){sDiag.clipped++;return;}
         memcpy(v,tmp,m*sizeof(GeoVertex));n=m;
@@ -384,48 +394,59 @@ static void append_triangle(const GeoVertex *a,const GeoVertex *b,const GeoVerte
         if(!cross){sDiag.degenerate++;continue;}
         if(!mask){sDiag.cullBoth++;continue;}
         if(!(mask & (front?2:1))){sDiag.cullFacing++;continue;}
-        sDiag.triangles++;
-        {
-            unsigned a=(s.attr>>16)&31u;
-            if(a==31u)sDiag.alphaOpaque++;
-            else if(a==0u)sDiag.alphaWire++;
-            else sDiag.alphaTranslucent++;
-        }
-        if(scene->count>=NITRO_GX3D_MAX_TRIANGLES){scene->dropped++;continue;}
-        tri=&scene->triangles[scene->count++];
+        if(sStagedCount>=sizeof(sStaged)/sizeof(sStaged[0]))continue;
+        tri=&sStaged[sStagedCount++];
         tri->v[0]=aa;tri->v[1]=bb;tri->v[2]=cc;
         tri->polygon_attr=s.attr;
         tri->texture_param=s.texparam;
         tri->palette_base=s.plttbase;
-        
     }
+    if(clipped){sStagedClipped=1;sStagedVertices+=n;}
 }
-/* DS display-list RAM holds at most 2048 polygons and 6144 original
- * vertices, regardless of how many triangles clipping or quads produce. */
-static int reserve_polygon(void)
+
+static void begin_polygon(void)
+{
+    sStagedCount=0;sStagedVertices=0;sStagedClipped=0;
+    sDiag.polygons++;
+}
+
+/* The DS stores each polygon that survives culling and clipping in its
+ * polygon RAM (2048 polygons) and its vertices in vertex RAM (6144); what
+ * doesn't fit is dropped. Polygons that are culled or entirely outside the
+ * view take no room, which matters for big maps that are mostly off-screen.
+ * newVertices: the vertices this polygon adds when it isn't clipped (strips
+ * share the previous polygon's). A clipped polygon stores its clipped
+ * outline instead. */
+static void end_polygon(unsigned newVertices)
 {
     NitroGx3dScene *scene=&sScenes[sBuilding];
-    if(s.framePolygons >= 2048u) {
+    unsigned i, vertices;
+    if(!sStagedCount)return;
+    vertices=sStagedClipped?sStagedVertices:newVertices;
+    if(s.framePolygons>=2048u || s.frameVertices+vertices>6144u){
         scene->dropped++;
         sDiag.overLimit++;
-        return 0;
+        return;
     }
     s.framePolygons++;
-    sDiag.polygons++;
-    return 1;
+    s.frameVertices+=vertices;
+    for(i=0;i<sStagedCount;i++){
+        unsigned a=(sStaged[i].polygon_attr>>16)&31u;
+        sDiag.triangles++;
+        if(a==31u)sDiag.alphaOpaque++;
+        else if(a==0u)sDiag.alphaWire++;
+        else sDiag.alphaTranslucent++;
+        if(scene->count>=NITRO_GX3D_MAX_TRIANGLES){scene->dropped++;continue;}
+        scene->triangles[scene->count++]=sStaged[i];
+    }
 }
+
 static void submit_vertex(void)
 {
     GeoVertex v;
     int32_t src[4],eye[4];
     int n=s.nverts;
     if(!s.inBegin)return;
-    if(s.frameVertices >= 6144u){
-        sScenes[sBuilding].dropped++;
-        sDiag.overLimit++;
-        return;
-    }
-    s.frameVertices++;
     src[0]=s.coord[0];src[1]=s.coord[1];src[2]=s.coord[2];src[3]=4096;
     transform(src,&s.pos,eye);
     transform(eye,&s.proj,v.clip);
@@ -436,27 +457,39 @@ static void submit_vertex(void)
     v.s=s.resolvedTexcoord[0];v.t=s.resolvedTexcoord[1];v.color=s.rgb;
     if(s.primitive==0){
         s.vertices[n++]=v;
-        if(n==3){if(reserve_polygon())append_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);n=0;}
+        if(n==3){
+            begin_polygon();
+            stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
+            end_polygon(3);
+            n=0;
+        }
     }else if(s.primitive==1){
         s.vertices[n++]=v;
-        if(n==4){if(reserve_polygon()){
-                     append_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
-                     append_triangle(&s.vertices[0],&s.vertices[2],&s.vertices[3]);
-                 }n=0;}
+        if(n==4){
+            begin_polygon();
+            stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
+            stage_triangle(&s.vertices[0],&s.vertices[2],&s.vertices[3]);
+            end_polygon(4);
+            n=0;
+        }
     }else if(s.primitive==2){
         if(n<2)s.vertices[n++]=v;
         else{
-            if(reserve_polygon())append_triangle(&s.vertices[0],&s.vertices[1],&v);
+            begin_polygon();
+            stage_triangle(&s.vertices[0],&s.vertices[1],&v);
+            end_polygon(n==2?3:1);
             s.vertices[0]=s.vertices[1];s.vertices[1]=v;n++;
             if(n&1){GeoVertex tmp=s.vertices[0];s.vertices[0]=s.vertices[1];s.vertices[1]=tmp;}
         }
     }else{
         s.vertices[n++]=v;
         if(n==4){
-            if(reserve_polygon()){
-                append_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[3]);
-                append_triangle(&s.vertices[0],&s.vertices[3],&s.vertices[2]);
-            }
+            begin_polygon();
+            stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[3]);
+            stage_triangle(&s.vertices[0],&s.vertices[3],&s.vertices[2]);
+            /* The first quad of a strip brings 4 vertices, later ones 2. */
+            end_polygon(s.stripStarted?2:4);
+            s.stripStarted=1;
             s.vertices[0]=s.vertices[2];s.vertices[1]=s.vertices[3];n=2;
         }
     }
@@ -534,7 +567,7 @@ static void execute(unsigned op,const uint32_t *p)
     }
     case 0x33:s.lightColor[(p[0]>>30)&3]=p[0]&0x7FFF;break;
     case 0x34:memcpy(s.shininess,p,sizeof(s.shininess));break;
-    case 0x40:s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;s.attr=s.pendingAttr;break;
+    case 0x40:s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;s.stripStarted=0;s.attr=s.pendingAttr;break;
     case 0x41:s.inBegin=0;s.nverts=0;break;
     case 0x50:{
         int next=-1;

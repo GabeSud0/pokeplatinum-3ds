@@ -579,6 +579,29 @@ static void test_interrupts(void)
     CHECK_EQ(sVBlankCount, 1);
     OS_WaitInterrupt(TRUE, OS_IE_V_BLANK);
     CHECK_EQ(sFrameCount, 2);
+
+    /* Long work (card reads) within one frame: a V-blank for every frame's
+     * worth of DS time, without a new frame; the count restarts each frame. */
+    sFrameCount = 0;
+    sVBlankCount = 0;
+    NitroPort_SpendDsTime(NITRO_PORT_CYCLES_PER_FRAME - 1);
+    CHECK_EQ(sVBlankCount, 0);
+    NitroPort_SpendDsTime(1);
+    CHECK_EQ(sVBlankCount, 1);
+    NitroPort_SpendDsTime(2 * NITRO_PORT_CYCLES_PER_FRAME + 5);
+    CHECK_EQ(sVBlankCount, 3);
+    CHECK_EQ(sFrameCount, 0);
+    OS_WaitInterrupt(TRUE, OS_IE_V_BLANK);   /* a new frame: count restarts */
+    CHECK_EQ(sFrameCount, 1);
+    CHECK_EQ(sVBlankCount, 4);
+    NitroPort_SpendDsTime(NITRO_PORT_CYCLES_PER_FRAME - 1);
+    CHECK_EQ(sVBlankCount, 4);
+    /* With interrupts off it waits, like any interrupt. */
+    old = OS_DisableInterrupts();
+    NitroPort_SpendDsTime(NITRO_PORT_CYCLES_PER_FRAME);
+    CHECK_EQ(sVBlankCount, 4);
+    (void)OS_RestoreInterrupts(old);
+    CHECK_EQ(sVBlankCount, 5);
 }
 
 static int sDmaDone;

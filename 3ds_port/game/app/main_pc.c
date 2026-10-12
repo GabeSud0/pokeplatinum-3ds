@@ -7,7 +7,8 @@
  *                   [--stall-seconds N]
  *                   [--screenshots DIR] [--screenshot-every N]
  *                   [--dump-3d FRAME]
- *                   [--press FRAME:BUTTONS,...]
+ *                   [--press FRAME:BUTTONS,...] [--touch FRAME:X:Y,...]
+ *                   [--control DIR]
  *   pokeplatinum-pc --check-overlays
  *
  * Runs the same game code as the 3DS program, with the same data pack, as
@@ -26,7 +27,8 @@
  * image as 3d_frame_<FRAME>.png in the current directory, preserving alpha.
  * --press presses buttons at given frames, since the
  * PC runner has none: "--press 8700:A,9000:START,9100:UP+B" holds each for
- * 6 frames (A B X Y L R START SELECT UP DOWN LEFT RIGHT).
+ * 6 frames (A B X Y L R START SELECT UP DOWN LEFT RIGHT). --touch touches
+ * the lower screen the same way: "--touch 7000:120:80" (X 0-255, Y 0-191).
  *
  * If no frame comes for 5 seconds (--stall-seconds N to change it), the game
  * is stuck: waiting in a loop for something the port doesn't do yet. The
@@ -179,12 +181,27 @@ static const char *sScreenshotDir;
 static long sScreenshotEvery = 60;
 static long sDump3DFrame = -1;
 
-#define MAX_PRESSES 256
+#define MAX_PRESSES 4096
 static struct {
     long frame;
     uint16_t buttons;
 } sPresses[MAX_PRESSES];
 static int sPressCount;
+
+/* --control DIR: the runner pauses and takes commands from DIR/cmd. */
+static const char *sControlDir;
+static long sRunUntil;
+static uint16_t sLiveButtons;
+static long sLiveButtonsUntil = -1;
+static int sLiveTouchX, sLiveTouchY;
+static long sLiveTouchUntil = -1;
+
+#define MAX_TOUCHES 4096
+static struct {
+    long frame;
+    int x, y;
+} sTouches[MAX_TOUCHES];
+static int sTouchCount;
 
 /* ------------------------------------------------------------ screenshots */
 
@@ -327,6 +344,42 @@ static void Screenshot(void)
 
 /* ---------------------------------------------------------------- buttons */
 
+static const struct { const char *name; uint16_t bit; } sButtonNames[] = {
+    { "A", PLATINUM_BUTTON_A }, { "B", PLATINUM_BUTTON_B },
+    { "X", PLATINUM_BUTTON_X }, { "Y", PLATINUM_BUTTON_Y },
+    { "L", PLATINUM_BUTTON_L }, { "R", PLATINUM_BUTTON_R },
+    { "START", PLATINUM_BUTTON_START }, { "SELECT", PLATINUM_BUTTON_SELECT },
+    { "UP", PLATINUM_KEY_UP }, { "DOWN", PLATINUM_KEY_DOWN },
+    { "LEFT", PLATINUM_KEY_LEFT }, { "RIGHT", PLATINUM_KEY_RIGHT },
+};
+
+/* "A+UP" -> button bits; 0 if a name isn't known. */
+static uint16_t ParseButtonList(const char *p)
+{
+    uint16_t buttons = 0;
+
+    for (;;) {
+        size_t len = strcspn(p, "+ \t\r\n");
+        size_t k;
+        int found = 0;
+
+        for (k = 0; k < sizeof(sButtonNames) / sizeof(sButtonNames[0]); k++) {
+            if (strlen(sButtonNames[k].name) == len && strncmp(p, sButtonNames[k].name, len) == 0) {
+                buttons |= sButtonNames[k].bit;
+                found = 1;
+            }
+        }
+        if (!found) {
+            return 0;
+        }
+        p += len;
+        if (*p != '+') {
+            return buttons;
+        }
+        p++;
+    }
+}
+
 static int ParsePresses(const char *spec)
 {
     static const struct { const char *name; uint16_t bit; } names[] = {
@@ -391,6 +444,56 @@ static uint16_t HeldButtons(long frame)
     return held;
 }
 
+/* --touch FRAME:X:Y,...: touch the lower screen at (X, Y) for 6 frames. */
+static int ParseTouches(const char *spec)
+{
+    const char *p = spec;
+
+    while (*p != '\0') {
+        char *end;
+        long frame = strtol(p, &end, 10);
+        long x, y;
+
+        if (end == p || *end != ':' || sTouchCount >= MAX_TOUCHES) {
+            return -1;
+        }
+        p = end + 1;
+        x = strtol(p, &end, 10);
+        if (end == p || *end != ':' || x < 0 || x > 255) {
+            return -1;
+        }
+        p = end + 1;
+        y = strtol(p, &end, 10);
+        if (end == p || y < 0 || y > 191) {
+            return -1;
+        }
+        p = end;
+        sTouches[sTouchCount].frame = frame;
+        sTouches[sTouchCount].x = (int)x;
+        sTouches[sTouchCount].y = (int)y;
+        sTouchCount++;
+        if (*p == ',') {
+            p++;
+        } else if (*p != '\0') {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void ApplyTouch(long frame)
+{
+    int i;
+
+    for (i = 0; i < sTouchCount; i++) {
+        if (frame >= sTouches[i].frame && frame < sTouches[i].frame + 6) {
+            Platinum_SetTouch(1, sTouches[i].x, sTouches[i].y);
+            return;
+        }
+    }
+    Platinum_SetTouch(0, 0, 0);
+}
+
 void NitroPort_Log(const char *fmt, ...)
 {
     va_list args;
@@ -400,6 +503,84 @@ void NitroPort_Log(const char *fmt, ...)
     vfprintf(stderr, fmt, args);
     va_end(args);
     fputc('\n', stderr);
+}
+
+/* --control DIR: when the runner reaches the frame it was told to run to,
+ * writes the current frame number to DIR/frame and waits for a file
+ * DIR/cmd; it runs its lines and deletes it. Commands:
+ *   run N            run N more frames, then wait again
+ *   press A+UP [N]   hold buttons for N frames (default 6) from now
+ *   touch X Y [N]    touch the lower screen for N frames (default 6)
+ *   shot PATH        save both screens (PNG, upper above lower)
+ *   dump3d PATH      save the newest finished 3D image (PNG)
+ *   quit             stop the runner
+ * For driving the game by hand (scripts, or an assistant) while debugging. */
+static void ControlWait(void)
+{
+    char path[1024], line[1100];
+
+    int announced = 0;
+
+    while (sFrame >= sRunUntil) {
+        FILE *f;
+
+        if (!announced) {
+            /* Waiting: tell the controller which frame we're on. */
+            snprintf(path, sizeof(path), "%s/frame", sControlDir);
+            f = fopen(path, "w");
+            if (f != NULL) {
+                fprintf(f, "%ld\n", sFrame);
+                fclose(f);
+            }
+            fflush(stderr);
+            announced = 1;
+        }
+        snprintf(path, sizeof(path), "%s/cmd", sControlDir);
+        f = fopen(path, "r");
+        if (f == NULL) {
+            usleep(20000);
+            continue;
+        }
+        while (fgets(line, sizeof(line), f) != NULL) {
+            char arg[1024];
+            long a = 0, b = 0, c = 0;
+
+            if (sscanf(line, "run %ld", &a) == 1) {
+                sRunUntil = sFrame + (a > 0 ? a : 1);
+            } else if (sscanf(line, "press %1023s %ld", arg, &a) >= 1) {
+                sLiveButtons = ParseButtonList(arg);
+                sLiveButtonsUntil = sFrame + (a > 0 ? a : 6);
+                if (sLiveButtons == 0) {
+                    NitroPort_Log("[pc] control: unknown buttons %s", arg);
+                }
+            } else if (sscanf(line, "touch %ld %ld %ld", &a, &b, &c) >= 2) {
+                sLiveTouchX = (int)a;
+                sLiveTouchY = (int)b;
+                sLiveTouchUntil = sFrame + (c > 0 ? c : 6);
+            } else if (sscanf(line, "shot %1023s", arg) == 1) {
+                static uint16_t both[256 * 384];
+
+                NitroPort_RenderScreens(both, both + 256 * 192);
+                if (WritePng(arg, both, 256, 384) != 0) {
+                    NitroPort_Log("[pc] control: can't write %s", arg);
+                }
+            } else if (sscanf(line, "dump3d %1023s", arg) == 1) {
+                if (!NitroPort_Gx3dDumpLatest(arg)) {
+                    NitroPort_Log("[pc] control: no 3D image for %s", arg);
+                }
+            } else if (strncmp(line, "quit", 4) == 0) {
+                fclose(f);
+                remove(path);
+                NitroPort_Log("[pc] control: quit");
+                StopSound();
+                fflush(stderr);
+                _exit(0);
+            }
+        }
+        fclose(f);
+        remove(path);
+        announced = 0;
+    }
 }
 
 void NitroPort_OnFrame(void)
@@ -425,7 +606,16 @@ void NitroPort_OnFrame(void)
         fflush(stderr);
         _exit(0);
     }
-    Platinum_SetButtons(HeldButtons(sFrame));
+    if (sControlDir != NULL) {
+        ControlWait();
+    }
+    Platinum_SetButtons((uint16_t)(HeldButtons(sFrame) |
+                                   (sFrame < sLiveButtonsUntil ? sLiveButtons : 0)));
+    if (sFrame < sLiveTouchUntil) {
+        Platinum_SetTouch(1, sLiveTouchX, sLiveTouchY);
+    } else if (sTouchCount > 0 || sLiveTouchUntil >= 0) {
+        ApplyTouch(sFrame);
+    }
 }
 
 void NitroPort_Terminate(void)
@@ -670,7 +860,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: %s <platinum3ds.pak> <manifest.json> [--save FILE] "
                 "[--frames N] [--wav FILE] [--stop-at-missing-file] [--stall-seconds N]\n"
                 "       [--screenshots DIR] [--screenshot-every N] [--dump-3d FRAME]\n"
-                "       [--press FRAME:BUTTONS,...]\n       %s --check-overlays\n", argv[0], argv[0]);
+                "       [--press FRAME:BUTTONS,...] [--touch FRAME:X:Y,...]\n       [--control DIR]\n       %s --check-overlays\n", argv[0], argv[0]);
         return 2;
     }
     for (i = 3; i < argc; i++) {
@@ -699,6 +889,14 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "--press") == 0 && i + 1 < argc) {
             if (ParsePresses(argv[++i]) != 0) {
                 fprintf(stderr, "--press: expected FRAME:BUTTON[+BUTTON],... e.g. 8700:A,9000:START\n");
+                return 2;
+            }
+        } else if (strcmp(argv[i], "--control") == 0 && i + 1 < argc) {
+            sControlDir = argv[++i];
+            sStallSeconds = 0;   /* waiting for commands isn't a stall */
+        } else if (strcmp(argv[i], "--touch") == 0 && i + 1 < argc) {
+            if (ParseTouches(argv[++i]) != 0) {
+                fprintf(stderr, "--touch: expected FRAME:X:Y,... (lower screen, X 0-255, Y 0-191)\n");
                 return 2;
             }
         } else if (strcmp(argv[i], "--stall-seconds") == 0 && i + 1 < argc) {
