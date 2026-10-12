@@ -1,0 +1,33 @@
+From: Platinum 3DS port contributors
+Subject: [PATCH] Tell the port when the ARM7 driver starts a sound channel
+
+The DS restarts a channel whenever its enable bit goes from 0 to 1. The
+driver stops, sets up and starts a channel within one tick when a new note
+reuses it, which the port's mixer, looking at the registers between ticks,
+can't see. SND_StartChannel tells it (NitroPort_SoundChannelStart).
+
+---
+diff --git a/include/nitro/snd/common/channel.h b/include/nitro/snd/common/channel.h
+index 752c61a..701114c 100644
+--- a/include/nitro/snd/common/channel.h
++++ b/include/nitro/snd/common/channel.h
+@@ -144,10 +144,19 @@ typedef enum {
+ 
+ #ifdef SDK_ARM7
+     #if !(defined(SDK_WIN32) || defined(SDK_FROM_TOOL))
++#if defined(SDK_PORT_3DS)
++        /* The port's sound chip restarts a channel when its enable bit goes
++         * from 0 to 1, as the DS's does; the driver may stop and start a
++         * channel between two of its mixes, so it's told here. */
++        extern void NitroPort_SoundChannelStart(int chNo);
++#endif
+         static inline void SND_StartChannel (int chNo)
+         {
+             SDK_MINMAX_ASSERT(chNo, SND_CHANNEL_MIN, SND_CHANNEL_MAX);
+ 
++#if defined(SDK_PORT_3DS)
++            NitroPort_SoundChannelStart(chNo);
++#endif
+             *((REGType8v *)(REG_SOUND0CNT_8_ADDR + SND_CHANNEL_REG_OFFSET(chNo)))
+                 |= REG_SND_SOUND0CNT_8_E_MASK;
+         }

@@ -135,6 +135,13 @@ void NitroPort_HandleSound(int tag, u32 data, BOOL err)
     sound_unlock();
 }
 
+/* Called by the ARM7 driver's SND_StartChannel (NitroSDK patch 0023), under
+ * the audio lock, before it sets the channel's enable bit. */
+void NitroPort_SoundChannelStart(int channel)
+{
+    NitroSound_KeyOn(&sChip, (unsigned)channel);
+}
+
 /* Called by patched ARM7 snd_alarm.c under the audio lock. Values are
  * in OS ticks (1/64 of the original DS CPU clock), as in the SDK. */
 void NitroPort_SoundAlarmStart(int no, u64 tick, u64 period, u32 message)

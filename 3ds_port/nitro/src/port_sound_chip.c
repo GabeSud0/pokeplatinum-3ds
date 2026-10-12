@@ -360,6 +360,15 @@ void NitroSound_Reset(NitroSoundChip *chip, uint32_t outputRate)
     put8(0x501u, 128u);
 }
 
+void NitroSound_KeyOn(NitroSoundChip *chip, unsigned channel)
+{
+    if (!chip || channel >= NITRO_SOUND_CHANNEL_COUNT) return;
+    if (!(reg8(CHANNEL_BASE(channel) + 3u) & 0x80u)) {
+        /* The next mix starts it again (start_channel). */
+        chip->voice[channel].running = 0;
+    }
+}
+
 void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
 {
     Channel channels[NITRO_SOUND_CHANNEL_COUNT];

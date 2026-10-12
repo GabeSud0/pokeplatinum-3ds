@@ -163,6 +163,39 @@ static void test_capture(void)
     CHECK(chip.capture[0].running == 0);
 }
 
+/* A new note on a channel that's still playing: the driver stops it, sets it
+ * up and starts it between two mixes. The DS starts it over (the enable bit
+ * went 0 -> 1): the new sound from its first sample. */
+static void test_restart_between_mixes(void)
+{
+    static int16_t first[64], second[64];
+    int16_t out[2 * 8];
+    NitroSoundChip chip;
+    unsigned i;
+
+    for (i = 0; i < 64; ++i) {
+        first[i] = 1000;
+        second[i] = (int16_t)(i == 0 ? 20000 : 3000);
+    }
+    NitroSound_Reset(&chip, NITRO_SOUND_RATE);
+    setup_pcm(1, first, 0, 32, 1, 0, 127, 0);           /* looping */
+    NitroSound_Mix(&chip, out, 8);
+    CHECK(frame(out, 7, 0) == 1000);
+    /* stop, set up the new sound (enable bit 0), then start it */
+    reg8(0x403, NitroPort_SoundRegisters[0x403] & 0x7F);
+    setup_pcm(1, second, 0, 32, 1, 0, 127, 0);
+    reg8(0x403, NitroPort_SoundRegisters[0x403] & 0x7F);
+    NitroSound_KeyOn(&chip, 0);
+    reg8(0x403, NitroPort_SoundRegisters[0x403] | 0x80);
+    NitroSound_Mix(&chip, out, 2);
+    CHECK(frame(out, 0, 0) == 20000);                    /* from its start */
+    CHECK(frame(out, 1, 0) == 3000 || frame(out, 1, 0) == 20000);
+    /* starting a channel that's already on doesn't restart it */
+    NitroSound_KeyOn(&chip, 0);
+    NitroSound_Mix(&chip, out, 1);
+    CHECK(frame(out, 0, 0) == 3000);
+}
+
 /* ------------------------------------------------------------------------
  * The faster mixer against the old one: random channels (all formats,
  * pitches, loops, volumes, captures), random register changes between mixes
@@ -390,6 +423,7 @@ int main(int argc, char **argv)
     test_psg();
     test_noise();
     test_capture();
+    test_restart_between_mixes();
     test_matches_reference();
     printf("software DS sound chip: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

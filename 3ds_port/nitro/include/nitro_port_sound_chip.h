@@ -49,4 +49,8 @@ typedef struct NitroSoundChip {
 
 void NitroSound_Reset(NitroSoundChip *chip, uint32_t outputRate);
 void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames);
+/* The driver is about to set channel ch's enable bit: if it's 0 now (the
+ * channel stopped, perhaps just before, and set up again), the channel
+ * starts over from its beginning, as on the DS. */
+void NitroSound_KeyOn(NitroSoundChip *chip, unsigned channel);
 #endif
