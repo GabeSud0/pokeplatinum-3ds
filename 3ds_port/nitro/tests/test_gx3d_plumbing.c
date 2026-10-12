@@ -125,9 +125,45 @@ static void test_vertices(void) {
     CHECK(verts[0].position[2]==-0.0625f);
     CHECK(verts[1].position[2]==-0.25f);
 }
+static uint32_t imagePixels[NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT];
+static void test_image_handoff(void)
+{
+    const uint16_t *red,*green,*blue;
+    size_t i;
+    for(i=0;i<sizeof(imagePixels)/sizeof(imagePixels[0]);i++)
+        imagePixels[i]=0xff0000ffu; /* RGBA red with full alpha */
+    CHECK(NitroPort_Gx3dPublishRGBA8(imagePixels,
+           NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT)==1);
+    red=NitroPort_Gx3dAcquireImage();
+    CHECK(red!=NULL);
+    if(red)CHECK(red[0]==0x801fu);
+    for(i=0;i<sizeof(imagePixels)/sizeof(imagePixels[0]);i++)
+        imagePixels[i]=0x00ff00ffu; /* green */
+    CHECK(NitroPort_Gx3dPublishRGBA8(imagePixels,
+           NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT)==1);
+    green=NitroPort_Gx3dAcquireImage();
+    CHECK(green!=NULL && green!=red);
+    if(green)CHECK(green[0]==0x83e0u);
+    if(red)CHECK(red[0]==0x801fu); /* old acquired image is still stable */
+    for(i=0;i<sizeof(imagePixels)/sizeof(imagePixels[0]);i++)
+        imagePixels[i]=0x0000ffffu; /* blue */
+    /* Both outputs are being read: the GPU must drop rather than overwrite. */
+    CHECK(NitroPort_Gx3dPublishRGBA8(imagePixels,
+           NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT)==0);
+    NitroPort_Gx3dReleaseImage(red);
+    NitroPort_Gx3dReleaseImage(green);
+    CHECK(NitroPort_Gx3dPublishRGBA8(imagePixels,
+           NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT)==1);
+    blue=NitroPort_Gx3dAcquireImage();
+    CHECK(blue!=NULL);
+    if(blue)CHECK(blue[0]==0xfc00u);
+    NitroPort_Gx3dReleaseImage(blue);
+}
+
 int main(void) {
     test_mailbox();
     test_vertices();
+    test_image_handoff();
     printf("GX3D plumbing: %d checks, %d failures\n",nchecks,nfail);
     return nfail?1:0;
 }
