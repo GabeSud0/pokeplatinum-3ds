@@ -32,6 +32,10 @@ static int32_t read32(unsigned offset)
 static void reset_geometry(void)
 {
     NitroPort_Gx3dReset();
+    /* G3X_Init configures the real DS rear-plane depth as 0x7FFF.
+     * Do the same here; reset_geometry tests geometry, not G3X_Init. */
+    NitroPort_IoReg[0x354]=0xff;
+    NitroPort_IoReg[0x355]=0x7f;
     NitroPort_GxDirectWrite(0x10,0); /* projection */
     NitroPort_GxDirectWrite(0x15,0);
     NitroPort_GxDirectWrite(0x10,2); /* position + vector */
