@@ -1,0 +1,16 @@
+; Stage 2 PR1: PICA200 clip-space passthrough, assembled by picasso.
+; The CPU has already applied DS transforms, clipping, and viewport.
+; Preserve W for perspective-correct interpolation in later texture PRs.
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.alias inpos v0
+.alias inclr v1
+.alias intex v2
+
+.proc main
+    mov outpos, inpos
+    mov outclr, inclr
+    mov outtc0, intex
+    end
+.end
