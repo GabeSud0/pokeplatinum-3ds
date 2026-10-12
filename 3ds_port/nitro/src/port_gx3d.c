@@ -24,9 +24,14 @@ typedef struct GeoVertex {
     int32_t clip[4];
     int32_t s,t;
     uint16_t color;
+    uint8_t outside;   /* bit p: outside clip plane p (see plane_distance) */
+    uint8_t hasScreen; /* screen is filled in (strips share vertices) */
+    NitroGx3dVertex screen;
 } GeoVertex;
 typedef struct GeoState {
     Matrix proj, pos, vec, tex;
+    Matrix clip;        /* pos x proj, as the DS keeps it; see ensure_clip */
+    int clipDirty;
     Matrix pjStack, texStack;
     Matrix posStack[31], vecStack[31];
     int mode, pvLevel, pjLevel, texLevel, stackError;
@@ -110,6 +115,16 @@ static void transform(const int32_t in[4],const Matrix *m,int32_t out[4])
     for(j=0;j<4;j++){
         int64_t v=0;
         for(k=0;k<4;k++) v+=(int64_t)in[k]*m->a[k*4+j];
+        out[j]=saturation(v>>12);
+    }
+}
+/* transform() for a point (w = 1.0): what every vertex goes through. */
+static void transform_point(const int32_t in[4],const Matrix *m,int32_t out[4])
+{
+    int64_t x=in[0],y=in[1],z=in[2];
+    int j;
+    for(j=0;j<4;j++){
+        int64_t v=x*m->a[j]+y*m->a[4+j]+z*m->a[8+j]+((int64_t)m->a[12+j]<<12);
         out[j]=saturation(v>>12);
     }
 }
@@ -287,10 +302,37 @@ static int64_t plane_distance(const GeoVertex *v,int plane)
 {
     return (int64_t)v->clip[3]+(plane&1?-(int64_t)v->clip[plane>>1]:v->clip[plane>>1]);
 }
+/* Which clip planes a vertex is outside of, one bit per plane. */
+static inline unsigned outcode(const int32_t clip[4])
+{
+    unsigned bits=0;
+    int64_t w=clip[3];
+    if(w+clip[0]<0)bits|=1u;
+    if(w-clip[0]<0)bits|=2u;
+    if(w+clip[1]<0)bits|=4u;
+    if(w-clip[1]<0)bits|=8u;
+    if(w+clip[2]<0)bits|=16u;
+    if(w-clip[2]<0)bits|=32u;
+    return bits;
+}
+/* The clip matrix (position x projection), recomputed only when a matrix
+ * changed since: geometry lists hold thousands of vertices per matrix
+ * change. Vertices go through it in one step, as on the DS. Also writes
+ * the clip/vector matrix result registers the SDK reads back. */
+static void ensure_clip(void)
+{
+    unsigned j;
+    if(!s.clipDirty)return;
+    s.clipDirty=0;
+    multiply(&s.clip,&s.pos,&s.proj);
+    for(j=0;j<16;j++)put32(0x640+j*4,(uint32_t)s.clip.a[j]);
+    for(j=0;j<9;j++)put32(0x680+j*4,(uint32_t)s.vec.a[(j/3)*4+(j%3)]);
+}
 static GeoVertex interpolate(const GeoVertex *a,const GeoVertex *b,double t)
 {
     GeoVertex v;
     int i;
+    memset(&v,0,sizeof(v));   /* no outcode or screen position yet */
     for(i=0;i<4;i++)v.clip[i]=(int32_t)((double)a->clip[i]+
                                               ((double)b->clip[i]-a->clip[i])*t);
     v.s=(int32_t)((double)a->s+((double)b->s-a->s)*t);
@@ -363,10 +405,43 @@ static unsigned sStagedCount, sStagedVertices, sStagedClipped;
 
 /* Clip a triangle of the polygon being built to the view volume, cull it,
  * and stage what's left. */
-static void stage_triangle(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
+/* The vertex's screen position, worked out once: strips and quads share
+ * vertices between their triangles. */
+static const NitroGx3dVertex *screen_of(GeoVertex *v)
+{
+    if(!v->hasScreen){v->screen=to_screen(v);v->hasScreen=1;}
+    return &v->screen;
+}
+/* Cull a screen-space triangle and stage what's left. */
+static void add_screen_triangle(const NitroGx3dVertex *aa,const NitroGx3dVertex *bb,
+                                const NitroGx3dVertex *cc)
+{
+    NitroGx3dTriangle *tri;
+    int64_t cross=(int64_t)(bb->x-aa->x)*(cc->y-aa->y)-
+                  (int64_t)(bb->y-aa->y)*(cc->x-aa->x);
+    int front=cross<0, mask=(s.attr>>6)&3;
+    sDiag.lastAttr=s.attr;
+    if(!cross){sDiag.degenerate++;return;}
+    if(!mask){sDiag.cullBoth++;return;}
+    if(!(mask & (front?2:1))){sDiag.cullFacing++;return;}
+    if(sStagedCount>=sizeof(sStaged)/sizeof(sStaged[0]))return;
+    tri=&sStaged[sStagedCount++];
+    tri->v[0]=*aa;tri->v[1]=*bb;tri->v[2]=*cc;
+    tri->polygon_attr=s.attr;
+    tri->texture_param=s.texparam;
+    tri->palette_base=s.plttbase;
+}
+static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
 {
     GeoVertex v[12],tmp[12];
     unsigned i,p,n=3,clipped=0;
+    /* All three outside one plane: nothing is left. None outside any: no
+     * clipping needed. Most of a map is one or the other. */
+    if(a->outside & b->outside & c->outside){sDiag.clipped++;return;}
+    if(!(a->outside | b->outside | c->outside)){
+        add_screen_triangle(screen_of(a),screen_of(b),screen_of(c));
+        return;
+    }
     v[0]=*a;v[1]=*b;v[2]=*c;
     for(p=0;p<6;p++){
         unsigned m=0;
@@ -384,23 +459,8 @@ static void stage_triangle(const GeoVertex *a,const GeoVertex *b,const GeoVertex
         if(m<3){sDiag.clipped++;return;}
         memcpy(v,tmp,m*sizeof(GeoVertex));n=m;
     }
-    for(i=1;i+1<n;i++){
-        NitroGx3dTriangle *tri;
-        NitroGx3dVertex aa=to_screen(&v[0]),bb=to_screen(&v[i]),cc=to_screen(&v[i+1]);
-        int64_t cross=(int64_t)(bb.x-aa.x)*(cc.y-aa.y)-
-                      (int64_t)(bb.y-aa.y)*(cc.x-aa.x);
-        int front=cross<0, mask=(s.attr>>6)&3;
-        sDiag.lastAttr=s.attr;
-        if(!cross){sDiag.degenerate++;continue;}
-        if(!mask){sDiag.cullBoth++;continue;}
-        if(!(mask & (front?2:1))){sDiag.cullFacing++;continue;}
-        if(sStagedCount>=sizeof(sStaged)/sizeof(sStaged[0]))continue;
-        tri=&sStaged[sStagedCount++];
-        tri->v[0]=aa;tri->v[1]=bb;tri->v[2]=cc;
-        tri->polygon_attr=s.attr;
-        tri->texture_param=s.texparam;
-        tri->palette_base=s.plttbase;
-    }
+    for(i=1;i+1<n;i++)
+        add_screen_triangle(screen_of(&v[0]),screen_of(&v[i]),screen_of(&v[i+1]));
     if(clipped){sStagedClipped=1;sStagedVertices+=n;}
 }
 
@@ -448,8 +508,10 @@ static void submit_vertex(void)
     int n=s.nverts;
     if(!s.inBegin)return;
     src[0]=s.coord[0];src[1]=s.coord[1];src[2]=s.coord[2];src[3]=4096;
-    transform(src,&s.pos,eye);
-    transform(eye,&s.proj,v.clip);
+    ensure_clip();
+    transform_point(src,&s.clip,v.clip);
+    v.outside=(uint8_t)outcode(v.clip);
+    v.hasScreen=0;
     sDiag.vertices++;
     if(v.clip[3]<=0)sDiag.behind++;
     memcpy(sDiag.lastClip,v.clip,sizeof(sDiag.lastClip));
@@ -495,7 +557,6 @@ static void submit_vertex(void)
     }
     s.nverts=n;
 }
-static void refresh_matrix_results(void);
 static int param_count(unsigned op)
 {
     switch(op){
@@ -602,36 +663,30 @@ static void execute(unsigned op,const uint32_t *p)
         /* 6 packed 4.12 coordinates: XYZ and size XYZ. A box is invisible
          * only when all eight corners are outside the same clip plane.
          * This is conservative for frustum edges, as the DS box test is. */
-        int32_t origin[3], size[3], corner[4], eye[4], clip[4];
-        int plane,mask;
-        int64_t maxDistance;
+        int32_t origin[3], size[3], corner[4], clip[4];
+        unsigned mask, all=0x3fu;
         origin[0]=signbits(p[0],16);
         origin[1]=signbits(p[0]>>16,16);
         origin[2]=signbits(p[1],16);
         size[0]=signbits(p[1]>>16,16);
         size[1]=signbits(p[2],16);
         size[2]=signbits(p[2]>>16,16);
-        s.boxVisible=1;
-        for(plane=0;plane<6;plane++){
-            maxDistance=INT64_MIN;
-            for(mask=0;mask<8;mask++){
-                int64_t d;
-                for(i=0;i<3;i++)corner[i]=origin[i]+((mask>>i)&1 ? size[i]:0);
-                corner[3]=4096;
-                transform(corner,&s.pos,eye);
-                transform(eye,&s.proj,clip);
-                d=(int64_t)clip[3]+(plane&1?-(int64_t)clip[plane>>1]:clip[plane>>1]);
-                if(d>maxDistance)maxDistance=d;
-            }
-            if(maxDistance<0){s.boxVisible=0;break;}
+        ensure_clip();
+        for(mask=0;mask<8;mask++){
+            for(i=0;i<3;i++)corner[i]=origin[i]+((mask>>i)&1 ? size[i]:0);
+            corner[3]=4096;
+            transform(corner,&s.clip,clip);
+            all&=outcode(clip);
         }
+        s.boxVisible=all?0:1;
         break;
     }
     case 0x71:{
         int32_t src[4],eye[4],result[4];
         src[0]=signbits(p[0],16);src[1]=signbits(p[0]>>16,16);
         src[2]=signbits(p[1],16);src[3]=4096;
-        transform(src,&s.pos,eye);transform(eye,&s.proj,result);
+        ensure_clip();
+        transform(src,&s.clip,result);
         for(i=0;i<4;i++)put32(0x620+i*4,(uint32_t)result[i]);break;
     }
     case 0x72:{
@@ -647,8 +702,12 @@ static void execute(unsigned op,const uint32_t *p)
     }
     default:break;
     }
-    if(op>=0x10u && op<=0x1cu)refresh_matrix_results();
-    NitroPort_Gx3dRefreshStatus();
+    /* Matrix commands (0x11-0x1c) change the clip matrix; stack commands
+     * and the box test change GXSTAT. Everything else changes neither. */
+    /* The result registers are read straight after matrix commands, so
+     * bring them up to date at once (a few per model, not per vertex). */
+    if(op>=0x11u && op<=0x1cu){s.clipDirty=1;ensure_clip();}
+    if((op>=0x11u && op<=0x14u)||op==0x70u)NitroPort_Gx3dRefreshStatus();
 }
 void NitroPort_Gx3dClearStackError(void)
 {
@@ -667,7 +726,7 @@ void NitroPort_Gx3dReset(void)
     s.rgb=0x7fff;s.diffuse=0x7fff;s.attr=(3u<<6)|(31u<<16);
     s.pendingAttr=s.attr;
     s.boxVisible=1;s.ready=1;
-    refresh_matrix_results();
+    s.clipDirty=1;
     NitroPort_Gx3dRefreshStatus();
 }
 static void initialize(void){if(!s.ready)NitroPort_Gx3dReset();}
@@ -710,7 +769,6 @@ void NitroPort_GxFifoWord(uint32_t word)
         s.need=param_count(s.packed[s.packedIndex]);
         if(s.need==0){execute(s.packed[s.packedIndex],s.params);s.packedIndex++;}
     }
-    NitroPort_Gx3dRefreshStatus();
 }
 const NitroGx3dScene *NitroPort_Gx3dScene(void)
 {
@@ -733,20 +791,17 @@ void NitroPort_Gx3dReleaseScene(const NitroGx3dScene *scene)
         break;
     }
 }
-/* Hardware matrix readback is regenerated only when matrix state changes.
- * A geometry display list contains thousands of non-matrix words; polling
- * GXSTAT or writing a vertex must not multiply the entire clip matrix. */
-static void refresh_matrix_results(void)
-{
-    Matrix clip;
-    unsigned j;
-    multiply(&clip,&s.pos,&s.proj);
-    for(j=0;j<16;j++)put32(0x640+j*4,(uint32_t)clip.a[j]);
-    for(j=0;j<9;j++)put32(0x680+j*4,(uint32_t)s.vec.a[(j/3)*4+(j%3)]);
-}
+static void initialize(void);
+/* GXSTAT and the matrix result registers, for the SDK to read. The port
+ * can't see register reads, so GXSTAT is brought up to date after stack
+ * commands and box tests and at every interrupt check, and the matrix
+ * results after every matrix command. */
 void NitroPort_Gx3dRefreshStatus(void)
 {
-    uint32_t status=io32(0x600);
+    uint32_t status;
+    initialize();
+    ensure_clip();
+    status=io32(0x600);
     status &= ~((3u<<0)|(31u<<8)|(1u<<13)|(1u<<14)|(1u<<15)|
                 (511u<<16)|(1u<<25)|(1u<<26)|(1u<<27));
     status |= ((uint32_t)s.boxVisible<<1) |
