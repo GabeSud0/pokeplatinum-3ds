@@ -26,4 +26,34 @@ size_t NitroPort_Gx3dCountDroppedTriangles(const NitroGx3dScene *scene,
 size_t NitroPort_Gx3dBuildOpaqueVertices(const NitroGx3dScene *scene,
                                          NitroGx3dGpuVertex *out,
                                          size_t capacity);
+
+/* Stage 2 PR2: every visible triangle, grouped into draw batches that share
+ * GPU state. As in the PC reference rasterizer, opaque triangles come first
+ * and translucent ones (polygon alpha 1-30, or a texture format that can
+ * have see-through texels) after them, each pass in submission order;
+ * consecutive triangles with the same state share a batch. Alpha 0
+ * (wireframe) polygons are skipped, as the reference does for now.
+ * Vertex alpha carries the polygon alpha. */
+typedef struct NitroGx3dBatch {
+    uint32_t first, count;        /* vertices */
+    uint32_t texture_param;       /* 0 when untextured */
+    uint32_t palette_base;        /* 0 when untextured or direct colour */
+    uint32_t polygon_attr;        /* mode (bits 4-5), depth bits 11/14, alpha */
+    uint8_t translucent;
+} NitroGx3dBatch;
+
+/* A triangle needs the translucent pass. */
+int NitroPort_Gx3dTriangleTranslucent(const NitroGx3dTriangle *tri);
+
+/* Returns the number of vertices written; *batch_count gets the batches.
+ * Triangles that don't fit in either array are counted in *dropped. */
+size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
+                                  NitroGx3dGpuVertex *out, size_t capacity,
+                                  NitroGx3dBatch *batches, size_t max_batches,
+                                  size_t *batch_count, unsigned *dropped);
+
+/* PC only, for checking the GPU path without a 3DS: draws the scene in
+ * software the way port_gx3d_pica.c asks the PICA to (port_gx3d_gpusim.c),
+ * into RGB555|coverage pixels like the reference rasterizer's. */
+void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555);
 #endif

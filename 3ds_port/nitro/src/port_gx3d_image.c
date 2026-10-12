@@ -56,6 +56,16 @@ int NitroPort_Gx3dPublishRGBA8(const uint32_t *src,size_t pixels)
          * linear memory therefore holds bytes A,B,G,R. */
         uint32_t c=src[i];
         unsigned r=(c>>24)&255u,g=(c>>16)&255u,b=(c>>8)&255u,a=c&255u;
+        /* The GPU path blends translucent polygons into a cleared alpha-0
+         * background as premultiplied colour (port_gx3d_pica.c); where
+         * the result is partly transparent, undo it. On the DS such a
+         * pixel just takes the polygon's colour. */
+        if(a && a<255u){
+            r=r*255u/a;g=g*255u/a;b=b*255u/a;
+            if(r>255u)r=255u;
+            if(g>255u)g=255u;
+            if(b>255u)b=255u;
+        }
         sImages[index][i]=(uint16_t)((r>>3)|((g>>3)<<5)|((b>>3)<<10)|
                                         (a?0x8000u:0u));
     }

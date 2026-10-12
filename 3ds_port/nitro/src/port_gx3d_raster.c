@@ -11,19 +11,18 @@
  * and the scene data format are independent of all rasterizer choices.
  */
 #include <nitro_port_gx3d.h>
+#include <nitro_port_gx3d_texture.h>
 #include <nitro.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 extern unsigned char NitroPort_IoReg[];
-extern unsigned char NitroPort_LcdcVram[];
 #define W NITRO_GX3D_WIDTH
 #define H NITRO_GX3D_HEIGHT
 
-typedef struct Texel { uint16_t rgb; uint8_t alpha; } Texel;
-static unsigned char *sTexture[4];
-static unsigned char *sPalette[6];
+typedef NitroGx3dTexel Texel;
+static NitroGx3dTexBanks sBanks;
 static uint32_t sDepth[W*H];
 
 static uint16_t rd16(const unsigned char *p)
@@ -38,56 +37,6 @@ static int restrict_int(int x,int lo,int hi)
 {
     return x<lo?lo:x>hi?hi:x;
 }
-static void map_banks(void)
-{
-    unsigned i;
-    memset(sTexture,0,sizeof(sTexture));
-    memset(sPalette,0,sizeof(sPalette));
-    /* A..D texture slots: 128 KiB each, controlled by VRAMCNT A-D. */
-    for(i=0;i<4;i++){
-        unsigned v=NitroPort_IoReg[0x240+i];
-        if((v&0x87)==0x83)sTexture[(v>>3)&3]=NitroPort_LcdcVram+i*0x20000;
-    }
-    /* E is 64 KiB; F/G are 16 KiB each. Standard texture palette banks. */
-    if((NitroPort_IoReg[0x244]&0x87)==0x83){
-        for(i=0;i<4;i++)sPalette[i]=NitroPort_LcdcVram+0x80000+i*0x4000;
-    }
-    if((NitroPort_IoReg[0x245]&0x87)==0x83)
-        sPalette[0]=NitroPort_LcdcVram+0x90000;
-    if((NitroPort_IoReg[0x246]&0x87)==0x83)
-        sPalette[1]=NitroPort_LcdcVram+0x94000;
-}
-static unsigned char texture_u8(uint32_t offset)
-{
-    unsigned char *bank=sTexture[(offset>>17)&3];
-    return bank ? bank[offset & 0x1ffff] : 0;
-}
-static uint16_t texture_u16(uint32_t offset)
-{
-    return (uint16_t)(texture_u8(offset)|((uint16_t)texture_u8(offset+1)<<8));
-}
-static uint32_t texture_u32(uint32_t offset)
-{
-    return (uint32_t)texture_u16(offset)|((uint32_t)texture_u16(offset+2)<<16);
-}
-static uint16_t palette_u16(uint32_t byte_offset)
-{
-    unsigned slot=byte_offset>>14;
-    if(slot>=6||!sPalette[slot])return 0;
-    return rd16(sPalette[slot]+(byte_offset & 0x3ffe))&0x7fff;
-}
-static int wrap_axis(int pos,int size,int repeat,int flip)
-{
-    if(pos>=0 && pos<size)return pos;
-    if(!repeat)return restrict_int(pos,0,size-1);
-    if(flip){
-        int range=size*2;
-        int p=pos%range;if(p<0)p+=range;
-        return p>=size?range-1-p:p;
-    }
-    pos%=size;
-    return pos<0?pos+size:pos;
-}
 static uint16_t color_mix(uint16_t a,uint16_t b,int aw,int bw,int denom)
 {
     int r=((a&31)*aw+(b&31)*bw)/denom;
@@ -95,74 +44,10 @@ static uint16_t color_mix(uint16_t a,uint16_t b,int aw,int bw,int denom)
     int bl=(((a>>10)&31)*aw+((b>>10)&31)*bw)/denom;
     return (uint16_t)(r|(g<<5)|(bl<<10));
 }
+/* The texel decoder is shared with the 3DS GPU path (port_gx3d_texture.c). */
 static Texel sample_texture(uint32_t param,uint32_t base,int s,int t)
 {
-    Texel result={0x7fff,31};
-    unsigned fmt=(param>>26)&7;
-    unsigned width=8u<<((param>>20)&7);
-    unsigned height=8u<<((param>>23)&7);
-    uint32_t address=(param&0xffffu)*8u;
-    uint32_t paletteAddr=base*(fmt==2?8u:16u);
-    unsigned i=0;
-    if(fmt==0)return result;
-    s=wrap_axis(s,(int)width,(param>>16)&1,(param>>18)&1);
-    t=wrap_axis(t,(int)height,(param>>17)&1,(param>>19)&1);
-    i=(unsigned)t*width+(unsigned)s;
-    if(fmt==1){
-        uint8_t value=texture_u8(address+i);
-        unsigned a=value>>5;
-        result.alpha=(uint8_t)(a*4+a/2);
-        result.rgb=palette_u16(paletteAddr+(value&31)*2);
-    }else if(fmt==2){
-        i=(texture_u8(address+i/4)>>((i%4)*2))&3;
-        result.rgb=palette_u16(paletteAddr+i*2);
-        if(i==0 && (param&(1u<<29)))result.alpha=0;
-    }else if(fmt==3){
-        i=(texture_u8(address+i/2)>>((i%2)*4))&15;
-        result.rgb=palette_u16(paletteAddr+i*2);
-        if(i==0 && (param&(1u<<29)))result.alpha=0;
-    }else if(fmt==4){
-        i=texture_u8(address+i);
-        result.rgb=palette_u16(paletteAddr+i*2);
-        if(i==0 && (param&(1u<<29)))result.alpha=0;
-    }else if(fmt==5){
-        unsigned blocksPerRow=width/4;
-        uint32_t block=(uint32_t)(t/4)*blocksPerRow+(uint32_t)(s/4);
-        uint32_t texelAddr=address+block*4;
-        uint32_t slot1Addr;
-        uint16_t descriptor;
-        unsigned mode,selector;
-        uint16_t cols[4];
-        uint32_t bits=texture_u32(texelAddr);
-        selector=(bits>>(((t&3)*4+(s&3))*2))&3;
-        /* Slot 1: low 64 KiB for compressed tiles in slot 0;
-         * upper 64 KiB for slot 2. */
-        slot1Addr=0x20000u+(texelAddr&0x1ffffu)/2u;
-        if(texelAddr>=0x40000u)slot1Addr+=0x10000u;
-        descriptor=texture_u16(slot1Addr);
-        mode=descriptor>>14;
-        paletteAddr=base*16u+(descriptor&0x3fffu)*4u;
-        cols[0]=palette_u16(paletteAddr);
-        cols[1]=palette_u16(paletteAddr+2);
-        cols[2]=palette_u16(paletteAddr+4);
-        cols[3]=palette_u16(paletteAddr+6);
-        if(mode==1)cols[2]=color_mix(cols[0],cols[1],1,1,2);
-        if(mode==3){
-            cols[2]=color_mix(cols[0],cols[1],5,3,8);
-            cols[3]=color_mix(cols[0],cols[1],3,5,8);
-        }
-        if(selector==3 && mode<=1)result.alpha=0;
-        result.rgb=cols[selector];
-    }else if(fmt==6){
-        uint8_t value=texture_u8(address+i);
-        result.alpha=value>>3;
-        result.rgb=palette_u16(paletteAddr+(value&7)*2);
-    }else if(fmt==7){
-        uint16_t value=texture_u16(address+i*2);
-        result.rgb=value&0x7fff;
-        result.alpha=(value&0x8000)?31:0;
-    }
-    return result;
+    return NitroPort_Gx3dSampleTexel(&sBanks,param,base,s,t);
 }
 static double edge(double ax,double ay,double bx,double by,double px,double py)
 {
@@ -257,7 +142,7 @@ void NitroPort_Gx3dRasterizeScene(const NitroGx3dScene *scene,
     }
     if(scene->count){
         unsigned pass;
-        map_banks();
+        NitroPort_Gx3dMapTextureBanks(&sBanks);
         /* DS polygon RAM draws the opaque pass before translucent faces
          * regardless of submission order. Alpha-bearing texel formats may
          * contain fractional alpha even with POLYGON_ATTR alpha=31. */

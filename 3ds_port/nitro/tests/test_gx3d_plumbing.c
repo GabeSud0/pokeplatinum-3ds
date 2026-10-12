@@ -3,6 +3,7 @@
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_mailbox.h>
 #include <nitro_port_gx3d_vertex.h>
+#include <nitro_port_gx3d_texture.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdint.h>
@@ -307,6 +308,155 @@ static void test_concurrent_image_handoff(void)
     CHECK(imageRaceFailures==0);
 }
 
+/* ---- Stage 2 PR2: textures and batches ---------------------------------- */
+
+static unsigned char texSlots[4][0x20000];
+static unsigned char palSlots[6][0x4000];
+static uint32_t rng=12345u;
+static uint32_t next_random(void){rng=rng*1103515245u+12345u;return rng>>8;}
+static NitroGx3dTexBanks test_banks(void)
+{
+    NitroGx3dTexBanks b;
+    int i;
+    for(i=0;i<4;i++)b.texture[i]=texSlots[i];
+    for(i=0;i<6;i++)b.palette[i]=palSlots[i];
+    return b;
+}
+static uint32_t tex_param(unsigned fmt,unsigned w,unsigned h,uint32_t addr,unsigned flags)
+{
+    unsigned sw=0,sh=0;
+    while((8u<<sw)<w)sw++;
+    while((8u<<sh)<h)sh++;
+    return (addr/8u)|(sw<<20)|(sh<<23)|(fmt<<26)|flags;
+}
+/* Where the PICA reads texel (u, v) of a w x h tiled texture: the address
+ * order of an 8x8 tile is x and y bits interleaved (x lowest), tiles in
+ * rows, and stored row (h - 1 - t) for coordinate t. Written from the
+ * hardware description, independently of port_gx3d_texture.c. */
+static unsigned pica_index(unsigned w,unsigned h,float u,float v)
+{
+    unsigned x=(unsigned)(u*(float)w), t=(unsigned)(v*(float)h);
+    unsigned y=h-1-t, bit, morton=0;
+    for(bit=0;bit<3;bit++){
+        morton|=((x>>bit)&1u)<<(2*bit);
+        morton|=((y>>bit)&1u)<<(2*bit+1);
+    }
+    return (y/8u)*(w/8u)*64u+(x/8u)*64u+morton;
+}
+static void test_texture_decode(void)
+{
+    static uint32_t linear[64*32],tiled[64*32],direct[64*32];
+    NitroGx3dTexBanks banks=test_banks();
+    unsigned fmt,i;
+    for(i=0;i<sizeof(texSlots);i++)((unsigned char*)texSlots)[i]=(unsigned char)next_random();
+    for(i=0;i<sizeof(palSlots);i++)((unsigned char*)palSlots)[i]=(unsigned char)next_random();
+    for(fmt=1;fmt<=7;fmt++){
+        uint32_t param=tex_param(fmt,64,32,0x400,(fmt>=2&&fmt<=4)?(1u<<29):0);
+        uint32_t pal=3;
+        unsigned s,t,mismatch=0,tileMismatch=0;
+        NitroPort_Gx3dDecodeTexture(&banks,param,pal,linear);
+        NitroPort_Gx3dTileRGBA8(linear,64,32,tiled);
+        NitroPort_Gx3dDecodeTextureTiled(&banks,param,pal,direct);
+        for(t=0;t<32;t++)for(s=0;s<64;s++){
+            NitroGx3dTexel texel=NitroPort_Gx3dSampleTexel(&banks,param,pal,(int)s,(int)t);
+            uint32_t word=linear[t*64+s];
+            unsigned r=word>>24,a=word&255u;
+            if(r!=(unsigned)(((texel.rgb&31)<<3)|((texel.rgb&31)>>2)) ||
+               a!=(unsigned)((texel.alpha<<3)|(texel.alpha>>2)))mismatch++;
+            /* The GPU samples the middle of texel (s, t) from here. */
+            if(tiled[pica_index(64,32,(s+0.5f)/64.0f,(t+0.5f)/32.0f)]!=word)tileMismatch++;
+        }
+        CHECK(mismatch==0);
+        CHECK(tileMismatch==0);
+        CHECK(memcmp(tiled,direct,sizeof(tiled))==0);
+    }
+    /* Colour 0 is transparent only with bit 29 (paletted formats 2-4). */
+    {
+        uint32_t param=tex_param(4,8,8,0x800,0);
+        texSlots[0][0x800]=0;
+        CHECK(NitroPort_Gx3dSampleTexel(&banks,param,0,0,0).alpha==31);
+        CHECK(NitroPort_Gx3dSampleTexel(&banks,param|(1u<<29),0,0,0).alpha==0);
+    }
+    /* Format 0: opaque white, as the reference draws untextured polygons. */
+    CHECK(NitroPort_Gx3dSampleTexel(&banks,0,0,3,3).rgb==0x7fff);
+}
+static void test_texture_hash(void)
+{
+    NitroGx3dTexBanks banks=test_banks();
+    uint32_t param=tex_param(3,16,16,0x1000,0); /* 16 colours: 128 bytes */
+    uint32_t pal=2;                            /* palette at 0x20 */
+    uint32_t h0=NitroPort_Gx3dTextureHash(&banks,param,pal);
+    CHECK(NitroPort_Gx3dTextureHash(&banks,param,pal)==h0);
+    texSlots[0][0x1000+127]^=0x10;            /* last texel byte */
+    CHECK(NitroPort_Gx3dTextureHash(&banks,param,pal)!=h0);
+    texSlots[0][0x1000+127]^=0x10;
+    CHECK(NitroPort_Gx3dTextureHash(&banks,param,pal)==h0);
+    texSlots[0][0x1000+128]^=0x10;            /* just past it: not used */
+    CHECK(NitroPort_Gx3dTextureHash(&banks,param,pal)==h0);
+    palSlots[0][0x20+31]^=0x01;               /* the 16th colour */
+    CHECK(NitroPort_Gx3dTextureHash(&banks,param,pal)!=h0);
+    palSlots[0][0x20+31]^=0x01;
+    palSlots[0][0x20+32]^=0x01;               /* a 17th: not used */
+    CHECK(NitroPort_Gx3dTextureHash(&banks,param,pal)==h0);
+    CHECK(NitroPort_Gx3dTextureHash(&banks,param,pal+1)!=h0);
+    banks.texture[0]=NULL;                    /* the bank is unmapped */
+    CHECK(NitroPort_Gx3dTextureHash(&banks,param,pal)!=h0);
+}
+static void set_triangle(NitroGx3dTriangle *tri,unsigned alpha,uint32_t texparam,uint32_t pal,unsigned mode)
+{
+    int k;
+    memset(tri,0,sizeof(*tri));
+    for(k=0;k<3;k++){
+        tri->v[k].clip[3]=4096;
+        tri->v[k].x=(k*50)<<8;tri->v[k].y=(k*30)<<8;
+        tri->v[k].s=(float)(k*4);tri->v[k].t=(float)(k*2);
+        tri->v[k].color=0x7fff;
+    }
+    tri->polygon_attr=(alpha<<16)|(mode<<4)|(3u<<6);
+    tri->texture_param=texparam;
+    tri->palette_base=pal;
+}
+static void test_batches(void)
+{
+    static NitroGx3dScene scene;
+    static NitroGx3dGpuVertex verts[NITRO_GX3D_PICA_MAX_VERTICES];
+    static NitroGx3dBatch batches[16];
+    uint32_t texA=tex_param(4,32,16,0x2000,0);
+    uint32_t texT=tex_param(1,8,8,0x3000,0);   /* A3I5: translucent pass */
+    size_t n,nb=0;
+    unsigned dropped=9;
+    memset(&scene,0,sizeof(scene));
+    set_triangle(&scene.triangles[0],31,texA,1,0);
+    set_triangle(&scene.triangles[1],16,0,0,0);   /* translucent polygon */
+    set_triangle(&scene.triangles[2],31,texA,1,0); /* joins batch 0 */
+    set_triangle(&scene.triangles[3],0,texA,1,0);  /* wireframe: skipped */
+    set_triangle(&scene.triangles[4],31,texT,2,0);
+    set_triangle(&scene.triangles[5],31,texA,1,1); /* decal: new batch */
+    set_triangle(&scene.triangles[6],31,0,5,0);    /* untextured: no palette */
+    scene.count=7;
+    n=NitroPort_Gx3dBuildBatches(&scene,verts,NITRO_GX3D_PICA_MAX_VERTICES,batches,16,&nb,&dropped);
+    CHECK(n==18);
+    CHECK(dropped==0);
+    CHECK(nb==5);
+    /* Opaque pass: tri 0+2 (texture A), 5 (decal), 6 (untextured). */
+    CHECK(batches[0].first==0 && batches[0].count==6 && batches[0].texture_param==texA &&
+          batches[0].palette_base==1 && !batches[0].translucent);
+    CHECK(batches[1].count==3 && ((batches[1].polygon_attr>>4)&3u)==1u);
+    CHECK(batches[2].count==3 && batches[2].texture_param==0 && batches[2].palette_base==0);
+    /* Translucent pass, in submission order: tri 1, then 4. */
+    CHECK(batches[3].first==12 && batches[3].translucent && batches[3].texture_param==0);
+    CHECK(batches[4].first==15 && batches[4].translucent && batches[4].texture_param==texT);
+    /* Polygon alpha in vertex alpha; texture coordinates in [0, 1] per texel. */
+    CHECK(verts[12].color[3]==(16u<<3|16u>>2));
+    CHECK(verts[0].color[3]==255);
+    CHECK(verts[2].uv[0]==8.0f/32.0f && verts[2].uv[1]==4.0f/16.0f);
+    /* Not enough room: what doesn't fit is counted. */
+    n=NitroPort_Gx3dBuildBatches(&scene,verts,7,batches,16,&nb,&dropped);
+    CHECK(n==6 && dropped==4 && nb==1);
+    n=NitroPort_Gx3dBuildBatches(&scene,verts,NITRO_GX3D_PICA_MAX_VERTICES,batches,2,&nb,&dropped);
+    CHECK(nb==2 && dropped==3 && n==9);  /* tri 0, 2, 5 fit */
+}
+
 int main(void) {
     test_mailbox();
     test_lock_contention();
@@ -316,6 +466,9 @@ int main(void) {
     test_image_handoff();
     test_png_dump();
     test_concurrent_image_handoff();
+    test_texture_decode();
+    test_texture_hash();
+    test_batches();
     printf("GX3D plumbing: %d checks, %d failures\n",nchecks,nfail);
     return nfail?1:0;
 }

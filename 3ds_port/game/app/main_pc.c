@@ -63,6 +63,7 @@
 #include <nitro.h>
 #include <nitro_port.h>
 #include <nitro_port_gx3d.h>
+#include <nitro_port_gx3d_vertex.h>
 
 #include "platinum.h"
 
@@ -513,6 +514,9 @@ void NitroPort_Log(const char *fmt, ...)
  *   touch X Y [N]    touch the lower screen for N frames (default 6)
  *   shot PATH        save both screens (PNG, upper above lower)
  *   dump3d PATH      save the newest finished 3D image (PNG)
+ *   ref3d PATH       draw the newest scene with the reference rasterizer
+ *   gpusim PATH      draw it as the 3DS GPU path would (port_gx3d_gpusim.c)
+ *   tri3d X Y        log the newest scene's triangles covering pixel (X, Y)
  *   quit             stop the runner
  * For driving the game by hand (scripts, or an assistant) while debugging. */
 static void ControlWait(void)
@@ -567,6 +571,43 @@ static void ControlWait(void)
             } else if (sscanf(line, "dump3d %1023s", arg) == 1) {
                 if (!NitroPort_Gx3dDumpLatest(arg)) {
                     NitroPort_Log("[pc] control: no 3D image for %s", arg);
+                }
+            } else if (sscanf(line, "ref3d %1023s", arg) == 1) {
+                /* The newest scene through the PC reference rasterizer. */
+                static uint16_t image[NITRO_GX3D_WIDTH * NITRO_GX3D_HEIGHT];
+                NitroPort_Gx3dRasterizeScene(NitroPort_Gx3dScene(), image, NULL);
+                if (!NitroPort_Gx3dWritePng(arg, image)) {
+                    NitroPort_Log("[pc] control: can't write %s", arg);
+                }
+            } else if (sscanf(line, "gpusim %1023s", arg) == 1) {
+                /* The same scene the way the 3DS GPU path draws it. */
+                static uint16_t image[NITRO_GX3D_WIDTH * NITRO_GX3D_HEIGHT];
+                NitroPort_Gx3dSimulateGpu(NitroPort_Gx3dScene(), image);
+                if (!NitroPort_Gx3dWritePng(arg, image)) {
+                    NitroPort_Log("[pc] control: can't write %s", arg);
+                }
+            } else if (sscanf(line, "tri3d %ld %ld", &a, &b) == 2) {
+                /* The newest scene's triangles that cover pixel (a, b). */
+                const NitroGx3dScene *scene = NitroPort_Gx3dScene();
+                uint32_t i;
+                for (i = 0; scene && i < scene->count; i++) {
+                    const NitroGx3dTriangle *t = &scene->triangles[i];
+                    double px = a + 0.5, py = b + 0.5, e[3];
+                    int k, pos = 0, neg = 0;
+                    for (k = 0; k < 3; k++) {
+                        const NitroGx3dVertex *p0 = &t->v[k], *p1 = &t->v[(k + 1) % 3];
+                        e[k] = (px - p0->x / 256.0) * (p1->y / 256.0 - p0->y / 256.0) -
+                               (py - p0->y / 256.0) * (p1->x / 256.0 - p0->x / 256.0);
+                        pos += e[k] >= 0;
+                        neg += e[k] <= 0;
+                    }
+                    if (pos == 3 || neg == 3) {
+                        NitroPort_Log("[pc] tri %u: attr %08lx tex %08lx pal %lx depth %lu/%lu/%lu",
+                                      (unsigned)i, (unsigned long)t->polygon_attr,
+                                      (unsigned long)t->texture_param, (unsigned long)t->palette_base,
+                                      (unsigned long)t->v[0].depth, (unsigned long)t->v[1].depth,
+                                      (unsigned long)t->v[2].depth);
+                    }
                 }
             } else if (strncmp(line, "quit", 4) == 0) {
                 fclose(f);
