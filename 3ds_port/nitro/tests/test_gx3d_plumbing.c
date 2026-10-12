@@ -6,6 +6,8 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdint.h>
+#include <time.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <string.h>
 #define CHECK(x) do { nchecks++; if(!(x)){ nfail++; \
@@ -160,10 +162,160 @@ static void test_image_handoff(void)
     NitroPort_Gx3dReleaseImage(blue);
 }
 
+
+/* Emulate a lower-priority gate owner that cannot release the gate until
+ * another runnable thread gets CPU time. On 3DS the same-core sleep in
+ * the lock is essential; this test deterministically takes that path. */
+static void *unlock_mailbox_later(void *unused)
+{
+    struct timespec interval = {0, 20000000L};
+    (void)unused;
+    nanosleep(&interval, NULL);
+    __atomic_clear(&mailbox.gate,__ATOMIC_RELEASE);
+    return NULL;
+}
+static void test_lock_contention(void)
+{
+    pthread_t owner;
+    NitroPort_MailboxInit(&mailbox);
+    __atomic_test_and_set(&mailbox.gate,__ATOMIC_ACQUIRE);
+    CHECK(pthread_create(&owner,NULL,unlock_mailbox_later,NULL)==0);
+    CHECK(NitroPort_MailboxLatest(&mailbox)==-1);
+    pthread_join(owner,NULL);
+    CHECK(__atomic_load_n(&mailbox.gate,__ATOMIC_ACQUIRE)==0);
+}
+
+/* The backend's depth state is GPU_LESS with a depth clear of 1.0.
+ * A smaller (nearer) mapped depth must win regardless of triangle order. */
+static void test_depth_direction(void)
+{
+    NitroGx3dVertex nearVertex={0},farVertex={0};
+    float nearDepth,farDepth;
+    nearVertex.depth=0x100000u;
+    farVertex.depth=0xf00000u;
+    nearVertex.clip[3]=4096;
+    farVertex.clip[3]=4096*12;
+    nearDepth=NitroPort_Gx3dDepthValue(&nearVertex,0);
+    farDepth=NitroPort_Gx3dDepthValue(&farVertex,0);
+    CHECK(nearDepth<farDepth);
+    CHECK(nearDepth<1.0f); /* passes clear */
+    CHECK(!(farDepth<nearDepth)); /* farther fragment fails */
+    CHECK(NitroPort_Gx3dDepthValue(&nearVertex,2)<
+          NitroPort_Gx3dDepthValue(&farVertex,2));
+    nearVertex.clip[3]=-4096;
+    CHECK(NitroPort_Gx3dDepthValue(&nearVertex,2)==0.0f);
+    farVertex.clip[3]=4096*128;
+    CHECK(NitroPort_Gx3dDepthValue(&farVertex,2)==1.0f);
+}
+static NitroGx3dScene maxScene;
+static NitroGx3dGpuVertex maxVertices[NITRO_GX3D_PICA_MAX_VERTICES];
+static void test_full_vertex_capacity(void)
+{
+    size_t i;
+    CHECK(NITRO_GX3D_PICA_MAX_VERTICES==12288u);
+    memset(&maxScene,0,sizeof(maxScene));
+    maxScene.count=NITRO_GX3D_MAX_TRIANGLES;
+    for(i=0;i<maxScene.count;i++){
+        maxScene.triangles[i].polygon_attr=(3u<<6)|(31u<<16);
+        maxScene.triangles[i].v[0].clip[3]=4096;
+        maxScene.triangles[i].v[1].clip[3]=4096;
+        maxScene.triangles[i].v[2].clip[3]=4096;
+    }
+    CHECK(NitroPort_Gx3dBuildOpaqueVertices(
+          &maxScene,maxVertices,NITRO_GX3D_PICA_MAX_VERTICES)==12288u);
+    CHECK(NitroPort_Gx3dCountDroppedTriangles(
+          &maxScene,NITRO_GX3D_PICA_MAX_VERTICES)==0u);
+    CHECK(NitroPort_Gx3dBuildOpaqueVertices(
+          &maxScene,maxVertices,12285u)==12285u);
+    CHECK(NitroPort_Gx3dCountDroppedTriangles(&maxScene,12285u)==1u);
+    CHECK(NitroPort_Gx3dCountDroppedTriangles(&maxScene,6144u)==2048u);
+    maxScene.triangles[1].polygon_attr=(3u<<6)|(16u<<16);
+    CHECK(NitroPort_Gx3dCountDroppedTriangles(&maxScene,6144u)==2047u);
+}
+static uint16_t testPixels[NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT];
+static void test_png_dump(void)
+{
+    char name[128];
+    unsigned char png[64];
+    FILE *f;
+    snprintf(name,sizeof(name),"/tmp/gx3d-plumbing-%ld.png",(long)getpid());
+    memset(testPixels,0,sizeof(testPixels));
+    testPixels[0]=0x801fu; /* red opaque */
+    testPixels[1]=0x03e0u; /* green transparent */
+    CHECK(NitroPort_Gx3dWritePng(NULL,testPixels)==0);
+    CHECK(NitroPort_Gx3dWritePng(name,testPixels)==1);
+    f=fopen(name,"rb");
+    CHECK(f!=NULL);
+    if(f){
+        CHECK(fread(png,1,sizeof(png),f)==sizeof(png));
+        fclose(f);
+        CHECK(memcmp(png,"\x89PNG\r\n\x1a\n",8)==0);
+        CHECK(png[16]==0 && png[17]==0 && png[18]==1 && png[19]==0);
+        CHECK(png[20]==0 && png[21]==0 && png[22]==0 && png[23]==192);
+        CHECK(png[25]==6); /* RGBA, not RGB; coverage is preserved */
+        CHECK(png[48]==0); /* top row filter */
+        CHECK(png[49]==255 && png[50]==0 && png[51]==0 && png[52]==255);
+        CHECK(png[53]==0 && png[54]==255 && png[55]==0 && png[56]==0);
+    }
+    remove(name);
+}
+
+/* Concurrent image publish/acquire must leave acquired pixels immutable. */
+static volatile int imageWriterDone;
+static volatile unsigned imageRaceFailures;
+static void *image_writer(void *ignored)
+{
+    int i;
+    (void)ignored;
+    for(i=0;i<600;i++){
+        int j;
+        uint32_t value=(i&1)?0x00ff00ffu:0xff0000ffu;
+        for(j=0;j<NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT;j++)
+            imagePixels[j]=value;
+        (void)NitroPort_Gx3dPublishRGBA8(
+             imagePixels,NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT);
+        if((i&15)==0)sched_yield();
+    }
+    __atomic_store_n(&imageWriterDone,1,__ATOMIC_RELEASE);
+    return NULL;
+}
+static void *image_reader(void *ignored)
+{
+    int i;
+    (void)ignored;
+    for(i=0;i<1000;i++){
+        const uint16_t *img=NitroPort_Gx3dAcquireImage();
+        if(img){
+            uint16_t value=img[0];
+            int k;
+            for(k=0;k<4;k++)sched_yield();
+            if(img[0]!=value)imageRaceFailures++;
+            NitroPort_Gx3dReleaseImage(img);
+        }
+        if(__atomic_load_n(&imageWriterDone,__ATOMIC_ACQUIRE))break;
+    }
+    return NULL;
+}
+static void test_concurrent_image_handoff(void)
+{
+    pthread_t writer,reader;
+    imageWriterDone=0;imageRaceFailures=0;
+    CHECK(pthread_create(&writer,NULL,image_writer,NULL)==0);
+    CHECK(pthread_create(&reader,NULL,image_reader,NULL)==0);
+    pthread_join(writer,NULL);
+    pthread_join(reader,NULL);
+    CHECK(imageRaceFailures==0);
+}
+
 int main(void) {
     test_mailbox();
+    test_lock_contention();
     test_vertices();
+    test_depth_direction();
+    test_full_vertex_capacity();
     test_image_handoff();
+    test_png_dump();
+    test_concurrent_image_handoff();
     printf("GX3D plumbing: %d checks, %d failures\n",nchecks,nfail);
     return nfail?1:0;
 }
