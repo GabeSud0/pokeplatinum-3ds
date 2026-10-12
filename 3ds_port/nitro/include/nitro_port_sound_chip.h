@@ -27,6 +27,8 @@ typedef struct NitroSoundVoice {
      * start (as the DS keeps it), for the loop start and data it was
      * saved for. */
     uint8_t loopSaved;
+    uint8_t adpcmClean;    /* the ADPCM state is adpcmSource's, decoded from its start */
+    uint32_t adpcmSource;
     uint32_t stepPeriod;
     uint32_t stepRate;
     uint64_t step;
@@ -39,6 +41,12 @@ typedef struct NitroSoundVoice {
 typedef struct NitroSoundCapture {
     uint32_t index;
     uint8_t running;
+    /* A capture takes samples at the rate of channel 1's (capture 0) or
+     * channel 3's (capture 1) timer, as the DS's does. */
+    uint64_t phase;
+    uint32_t stepPeriod;
+    uint32_t stepRate;
+    uint64_t step;
 } NitroSoundCapture;
 
 typedef struct NitroSoundChip {

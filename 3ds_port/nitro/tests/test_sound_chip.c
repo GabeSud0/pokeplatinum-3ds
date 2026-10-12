@@ -141,26 +141,92 @@ static void test_noise(void)
     CHECK(negative > 0);
 }
 
+/* Channel ch: PCM16 `bytes`, looping, at volume 127 and the given pan and
+ * timer (sample rate 16756991 / timer). */
+static void setup_pcm16_on(unsigned ch, const void *bytes, unsigned words,
+                           unsigned pan, unsigned timer)
+{
+    unsigned base = 0x400u + ch * 16u;
+
+    reg32(base, (1u << 31) | (1u << 29) | (1u << 27) | (pan << 16) | 127u);
+    reg32(base + 4u, (uint32_t)(uintptr_t)bytes);
+    reg16(base + 8u, (uint16_t)(65536u - timer));
+    reg16(base + 10u, 0);
+    reg32(base + 12u, words);
+}
+
+/* Capture as NitroSystem's reverb uses it: the left mixer into a looping
+ * buffer, at the rate of channel 1's timer (16000 a second here), on and on
+ * (bit 2 clear: SND_CAPTURE_REPEAT_YES). */
 static void test_capture(void)
 {
-    static int16_t source[64], capture[8];
-    int16_t out[64];
+    static int16_t source[64], capture[2048];
+    int16_t out[2 * 512];
     NitroSoundChip chip;
-    unsigned i;
+    unsigned i, n;
+
     for (i = 0; i < 64; ++i) source[i] = 7000;
     memset(capture, 0, sizeof(capture));
     NitroSound_Reset(&chip, NITRO_SOUND_RATE);
-    setup_pcm(1, source, 0, 16, 1, 0, 127, 0);
+    setup_pcm16_on(0, source, 16, 0, 512);            /* left */
+    reg16(0x418, (uint16_t)(65536u - 1047u));          /* channel 1's timer: 16 kHz */
     reg32(0x510, (uint32_t)(uintptr_t)capture);
     reg16(0x514, sizeof(capture) / 4);
-    reg8(0x508, 0x80u | 0x04u); /* enabled, PCM16, repeating */
-    NitroSound_Mix(&chip, out, 25);
-    CHECK(capture[0] != 0);
-    CHECK(capture[2] != 0);
-    CHECK(capture[0] == frame(out, 16, 0));
+    reg8(0x508, 0x80u);                                /* on, PCM16, looping, mixer */
+    for (n = 0; n < 8; ++n) NitroSound_Mix(&chip, out, 512);   /* 4096 samples */
+    /* 4096 * 16000 / 32768 = 2000 recorded */
+    CHECK(chip.capture[0].index >= 2 * 1998 && chip.capture[0].index <= 2 * 2002);
+    CHECK(capture[0] == 7000 && capture[1000] == 7000);
+    CHECK(capture[2047] == 0);                         /* not there yet */
+    for (n = 0; n < 8; ++n) NitroSound_Mix(&chip, out, 512);   /* past the end */
+    CHECK(NitroPort_SoundRegisters[0x508] & 0x80);     /* still recording */
+    CHECK(chip.capture[0].running);
+    CHECK(capture[2047] == 7000);
+    CHECK(chip.capture[0].index >= 2 * (4000 - 2048 - 2) &&
+          chip.capture[0].index <= 2 * (4000 - 2048 + 2));   /* went round */
     reg8(0x508, 0);
     NitroSound_Mix(&chip, out, 1);
     CHECK(chip.capture[0].running == 0);
+
+    /* one-shot (bit 2): stops at the end of its buffer */
+    memset(capture, 0, sizeof(capture));
+    NitroSound_Reset(&chip, NITRO_SOUND_RATE);
+    setup_pcm16_on(0, source, 16, 0, 512);
+    reg16(0x418, (uint16_t)(65536u - 512u));           /* ~32 kHz */
+    reg32(0x510, (uint32_t)(uintptr_t)capture);
+    reg16(0x514, 4);                                   /* 8 samples */
+    reg8(0x508, 0x80u | 0x04u);
+    NitroSound_Mix(&chip, out, 64);
+    CHECK(!(NitroPort_SoundRegisters[0x508] & 0x80));
+    CHECK(chip.capture[0].running == 0);
+    CHECK(capture[7] == 7000 && capture[8] == 0);
+}
+
+/* SOUNDCNT: channel 1 kept out of the mixer (bit 12) and played on the left
+ * output by itself (bits 8-9 = 1), the right output from the mixer: as
+ * NitroSystem's capture "effect" sets it. */
+static void test_output_selector(void)
+{
+    static int16_t three[64], five[64];
+    int16_t out[2 * 4];
+    NitroSoundChip chip;
+    unsigned i;
+
+    for (i = 0; i < 64; ++i) {
+        three[i] = 3000;
+        five[i] = 5000;
+    }
+    NitroSound_Reset(&chip, NITRO_SOUND_RATE);
+    setup_pcm16_on(0, three, 16, 127, 512);            /* right */
+    setup_pcm16_on(1, five, 16, 64, 512);              /* middle */
+    reg8(0x501, 0x80u | 0x10u | 0x01u);
+    NitroSound_Mix(&chip, out, 2);
+    CHECK(frame(out, 1, 0) == 5000 * 63 / 127);        /* channel 1's left half */
+    CHECK(frame(out, 1, 1) == 3000);                   /* the mixer: no channel 1 */
+    reg8(0x501, 0x80u);                                /* back to normal */
+    NitroSound_Mix(&chip, out, 2);
+    CHECK(frame(out, 1, 0) == 5000 * 63 / 127);
+    CHECK(frame(out, 1, 1) == 3000 + 5000 * 64 / 127);
 }
 
 /* A new note on a channel that's still playing: the driver stops it, sets it
@@ -198,15 +264,19 @@ static void test_restart_between_mixes(void)
 
 /* ------------------------------------------------------------------------
  * The faster mixer against the old one: random channels (all formats,
- * pitches, loops, volumes, captures), random register changes between mixes
- * of random lengths, as the ARM7 driver makes them. Samples, registers,
- * channel states and captured data must all be the same. Each mixer has its
- * own copy of the sound data, since captures write into it.
+ * pitches, loops, volumes), random register changes between mixes of random
+ * lengths, as the ARM7 driver makes them. Samples, registers and channel
+ * states must all be the same. (Captures aren't compared: the old mixer
+ * had them wrong - looping and one-shot swapped, recording at the output
+ * rate - and test_capture checks them instead.)
  */
 #define ARENA_SIZE 0x10000u
 #define CAPTURE_AT 0xC000u   /* captures write here; ADPCM never reads it */
-static uint8_t sArenaNew[ARENA_SIZE] __attribute__((aligned(4)));
-static uint8_t sArenaRef[ARENA_SIZE] __attribute__((aligned(4)));
+/* (with the same bytes past the end: a channel whose format changes while
+ * it plays may read on past its data) */
+#define ARENA_PAD 0x8000u
+static uint8_t sArenaNew[ARENA_SIZE + ARENA_PAD] __attribute__((aligned(4)));
+static uint8_t sArenaRef[ARENA_SIZE + ARENA_PAD] __attribute__((aligned(4)));
 static uint32_t sSeed = 12345;
 
 static uint32_t rnd(void)
@@ -300,7 +370,7 @@ static void test_matches_reference(void)
     int mismatches = 0;
 
     CHECK(((uintptr_t)sArenaNew >> 31) == 0 && ((uintptr_t)sArenaRef >> 31) == 0);
-    for (i = 0; i < ARENA_SIZE; i++) {
+    for (i = 0; i < ARENA_SIZE + ARENA_PAD; i++) {
         sArenaNew[i] = sArenaRef[i] = (uint8_t)rnd();
     }
     for (scenario = 0; scenario < 300 && mismatches < 5; scenario++) {
@@ -311,8 +381,6 @@ static void test_matches_reference(void)
         for (ch = 0; ch < 16; ch++) {
             if (rnd() % 3u) random_channel(ch);
         }
-        if (rnd() % 3u == 0) random_capture(0);
-        if (rnd() % 3u == 0) random_capture(1);
 
         for (step = 0; step < 40 && mismatches < 5; step++) {
             size_t frames = rnd() % 4u == 0 ? 1 : 1 + rnd() % 600u;
@@ -327,21 +395,33 @@ static void test_matches_reference(void)
             case 3: ch = rnd() % 16u;                                          /* stop */
                     both8(0x403u + ch * 16u, (uint8_t)(NitroPort_SoundRegisters[0x403u + ch * 16u] & 0x7F));
                     break;
-            case 4: random_capture(rnd() % 2u); break;
             default: break;
             }
             NitroSound_Mix(&chipNew, outNew, frames);
             RefSound_Mix(&chipRef, outRef, frames);
 
             if (memcmp(outNew, outRef, frames * 4u) != 0) {
-                fprintf(stderr, "scenario %u step %u: samples differ\n", scenario, step);
+                {
+                    size_t f;
+                    for (f = 0; f < frames * 2u && outNew[f] == outRef[f]; f++) {
+                    }
+                    fprintf(stderr, "scenario %u step %u: samples differ at %u of %u: %d/%d\n", scenario, step,
+                            (unsigned)f, (unsigned)frames * 2u, outNew[f], outRef[f]);
+                    for (ch = 0; ch < 16; ch++)
+                        fprintf(stderr, "  ch%u ctrl %08x idx %u run %u pred %d/%d step %d/%d\n", ch,
+                                (unsigned)chipNew.voice[ch].previousCtrl, chipNew.voice[ch].sampleIndex,
+                                chipNew.voice[ch].running, chipNew.voice[ch].predictor, chipRef.voice[ch].predictor,
+                                chipNew.voice[ch].stepIndex, chipRef.voice[ch].stepIndex);
+                }
                 mismatches++;
             }
             for (ch = 0; ch < 16; ch++) {
                 if (!same_voice(&chipNew.voice[ch], &chipRef.voice[ch]) ||
                     memcmp((const void *)&NitroPort_SoundRegisters[0x400u + ch * 16u],
                            (const void *)&RefSoundRegisters[0x400u + ch * 16u], 4) != 0) {
-                    fprintf(stderr, "scenario %u step %u: channel %u differs\n", scenario, step, ch);
+                    fprintf(stderr, "scenario %u step %u: channel %u differs (idx %u/%u run %u/%u ctrl %08x/%08x)\n", scenario, step, ch,
+                            chipNew.voice[ch].sampleIndex, chipRef.voice[ch].sampleIndex, chipNew.voice[ch].running, chipRef.voice[ch].running,
+                            chipNew.voice[ch].previousCtrl, chipRef.voice[ch].previousCtrl);
                     mismatches++;
                     break;
                 }
@@ -423,6 +503,7 @@ int main(int argc, char **argv)
     test_psg();
     test_noise();
     test_capture();
+    test_output_selector();
     test_restart_between_mixes();
     test_matches_reference();
     printf("software DS sound chip: %d checks, %d failures\n", checks, failures);
