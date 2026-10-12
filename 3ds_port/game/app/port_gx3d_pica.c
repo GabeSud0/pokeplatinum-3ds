@@ -8,7 +8,8 @@
  * PR2: textures. Each DS texture is decoded with the PC reference's own
  * decoder (port_gx3d_texture.c), tiled for the PICA and kept in a cache.
  * Triangles are drawn in batches that share a texture and polygon mode,
- * opaque ones first and translucent ones after, as the reference does.
+ * opaque ones first and translucent ones after, in the DS's order
+ * (NitroPort_Gx3dDrawOrder), as the reference does.
  * Toon/highlight, shadow polygons, fog and edge marking are later PRs.
  */
 #ifdef __3DS__
@@ -320,6 +321,12 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
             }
         }
         set_combiner(attr,textured);
+        /* The stencil buffer keeps the polygon ID of each pixel's last
+         * translucent draw, 0xFF after an opaque one (and cleared to it):
+         * the DS doesn't draw a translucent pixel over a translucent one
+         * of the same polygon ID. Opaque pixels set it to 0xFF. */
+        C3D_StencilTest(true,GPU_ALWAYS,0xFF,0xFF,0xFF);
+        C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
         if(!batch->translucent){
             C3D_AlphaTest(true,GPU_GREATER,0);
             C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,
@@ -338,14 +345,11 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
                            GPU_ONE,GPU_ZERO);
             C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
             C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
-            /* With blending, alpha-0 texels leave the pixel as it was;
-             * without it they'd replace it, so keep them out instead
-             * (redrawing an opaque texel then fails the depth test). */
-            if(blend)C3D_AlphaTest(true,GPU_LESS,255);
-            else C3D_AlphaTest(true,GPU_GREATER,0);
-        }else{
-            C3D_AlphaTest(true,GPU_GREATER,0);
         }
+        /* Alpha-0 texels aren't drawn at all (nor change the stencil). The
+         * opaque texels drawn above fail the depth test this time. */
+        C3D_AlphaTest(true,GPU_GREATER,0);
+        C3D_StencilTest(true,GPU_NOTEQUAL,(int)((attr>>24)&63u),0xFF,0xFF);
         /* ... then the partly transparent ones. They blend when DISP3DCNT
          * says so, otherwise replace what's there, and write depth only
          * with polygon attribute bit 11. (Alpha-0 texels also reach this

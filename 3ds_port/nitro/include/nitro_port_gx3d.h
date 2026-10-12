@@ -35,6 +35,10 @@ typedef struct NitroGx3dTriangle {
     uint32_t polygon_attr;
     uint32_t texture_param;
     uint32_t palette_base;
+    /* The DS's drawing order key of the polygon it belongs to: bit 16 set
+     * for a translucent polygon, then its bottom and top screen lines
+     * ((bottom << 8) | top). See NitroPort_Gx3dDrawOrder. */
+    uint32_t sort_key;
 } NitroGx3dTriangle;
 
 typedef struct NitroGx3dScene {

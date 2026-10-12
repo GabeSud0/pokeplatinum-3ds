@@ -64,6 +64,7 @@
 #include <nitro_port.h>
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_vertex.h>
+#include <nitro_port_gx3d_texture.h>
 
 #include "platinum.h"
 
@@ -518,6 +519,10 @@ void NitroPort_Log(const char *fmt, ...)
  *   gpusim PATH      draw it as the 3DS GPU path would (port_gx3d_gpusim.c)
  *   tri3d X Y        log the newest scene's triangles covering pixel (X, Y)
  *   bench2d N        draw each screen N times and log the time per draw
+ *   scene3d PATH     write the newest scene's triangles as text (one per line)
+ *   regs PATH        write the I/O registers (0x4000000-0x4001FFF) as binary
+ *   tex3d PARAM PAL PATH  write a texture (hex TEXIMAGE_PARAM, palette base)
+ *                    as it is now: width, height (u32 each), then RGBA8 words
  *   quit             stop the runner
  * For driving the game by hand (scripts, or an assistant) while debugging. */
 static void ControlWait(void)
@@ -614,6 +619,46 @@ static void ControlWait(void)
                                           (long)t->v[k].clip[3], t->v[k].s, t->v[k].t);
                         }
                     }
+                }
+            } else if (sscanf(line, "scene3d %1023s", arg) == 1) {
+                /* attr tex pal swap, then per vertex: x y (1/256 px) w depth s t color */
+                const NitroGx3dScene *scene = NitroPort_Gx3dScene();
+                FILE *out = fopen(arg, "w");
+                uint32_t i;
+                for (i = 0; out && scene && i < scene->count; i++) {
+                    const NitroGx3dTriangle *t = &scene->triangles[i];
+                    int k;
+                    fprintf(out, "%08lx %08lx %lx %lx", (unsigned long)t->polygon_attr,
+                            (unsigned long)t->texture_param, (unsigned long)t->palette_base,
+                            (unsigned long)scene->swap_param);
+                    for (k = 0; k < 3; k++) {
+                        const NitroGx3dVertex *v = &t->v[k];
+                        fprintf(out, " %ld %ld %ld %lu %.3f %.3f %04x", (long)v->x, (long)v->y,
+                                (long)v->clip[3], (unsigned long)v->depth, v->s, v->t, v->color);
+                    }
+                    fputc('\n', out);
+                }
+                if (out) fclose(out);
+            } else if (sscanf(line, "tex3d %lx %lx %1023s", &a, &b, arg) == 3) {
+                static uint32_t texels[1024 * 1024];
+                NitroGx3dTexBanks banks;
+                FILE *out = fopen(arg, "wb");
+                uint32_t size[2];
+                NitroPort_Gx3dMapTextureBanks(&banks);
+                size[0] = NitroPort_Gx3dTexWidth((uint32_t)a);
+                size[1] = NitroPort_Gx3dTexHeight((uint32_t)a);
+                NitroPort_Gx3dDecodeTexture(&banks, (uint32_t)a, (uint32_t)b, texels);
+                if (out) {
+                    fwrite(size, 4, 2, out);
+                    fwrite(texels, 4, (size_t)size[0] * size[1], out);
+                    fclose(out);
+                }
+            } else if (sscanf(line, "regs %1023s", arg) == 1) {
+                FILE *out = fopen(arg, "wb");
+                if (out) {
+                    extern unsigned char NitroPort_IoReg[];
+                    fwrite(NitroPort_IoReg, 1, 0x2000, out);
+                    fclose(out);
                 }
             } else if (sscanf(line, "bench2d %ld", &a) == 1) {
                 /* What drawing each screen costs right now. */

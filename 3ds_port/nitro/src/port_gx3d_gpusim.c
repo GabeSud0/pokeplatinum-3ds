@@ -69,6 +69,7 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
     static uint32_t tiled[1024 * 1024];
     static Color color[W * H];
     static float depth[W * H];
+    static uint8_t stencil[W * H];   /* translucent polygon ID, 0xFF: none */
     NitroGx3dTexBanks banks;
     size_t nb = 0, b, i;
     unsigned dropped;
@@ -86,6 +87,7 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
     for (i = 0; i < W * H; i++) {
         color[i] = cc;
         depth[i] = 1.0f;
+        stencil[i] = 0xFF;
     }
     NitroPort_Gx3dMapTextureBanks(&banks);
     NitroPort_Gx3dBuildBatches(scene, verts, NITRO_GX3D_PICA_MAX_VERTICES, batches,
@@ -99,18 +101,25 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
         /* The draws port_gx3d_pica.c makes for this batch: alpha test
          * (0: alpha > 0, 1: alpha > 254, 2: alpha < 255), blending, depth
          * writes. */
-        struct { int test, blend, writeDepth; } passes[2];
+        struct { int test, blend, writeDepth, translucent; } passes[2];
+        unsigned id = (batch->polygon_attr >> 24) & 63u;
         int np = 0, p;
         uint32_t k;
+        /* The stencil buffer keeps the polygon ID of each pixel's last
+         * translucent draw (0xFF after an opaque one), as port_gx3d_pica.c
+         * sets it up. */
         if (!batch->translucent) {
-            passes[np].test = 0; passes[np].blend = 0; passes[np++].writeDepth = 1;
+            passes[np].test = 0; passes[np].blend = 0; passes[np].translucent = 0;
+            passes[np++].writeDepth = 1;
         } else {
             if (((batch->polygon_attr >> 16) & 31u) == 31u) {
-                passes[np].test = 1; passes[np].blend = 0; passes[np++].writeDepth = 1;
-                passes[np].test = blend ? 2 : 0;
+                passes[np].test = 1; passes[np].blend = 0; passes[np].translucent = 0;
+                passes[np++].writeDepth = 1;
+                passes[np].test = 0;
             } else {
                 passes[np].test = 0;
             }
+            passes[np].translucent = 1;
             passes[np].blend = blend; passes[np++].writeDepth = bit11;
         }
         if (textured)
@@ -147,6 +156,7 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
                     Color prim, tex, out;
                     unsigned idx = (unsigned)y * W + (unsigned)x;
                     if (l0 < -1e-6f || l1 < -1e-6f || l2 < -1e-6f) continue;
+                    if (passes[p].translucent && stencil[idx] == id) continue;
                     z = l0 * sz[0] + l1 * sz[1] + l2 * sz[2];
                     pw = l0 * iw[0] + l1 * iw[1] + l2 * iw[2];
                     /* The PICA's W-buffer mode, which W-buffered scenes
@@ -194,6 +204,7 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
                     }
                     color[idx] = out;
                     if (passes[p].writeDepth) depth[idx] = z;
+                    stencil[idx] = passes[p].translucent ? (uint8_t)id : 0xFF;
                 }
             }
         }

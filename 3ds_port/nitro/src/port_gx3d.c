@@ -14,6 +14,7 @@
 #include <nitro_port.h>
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_mailbox.h>
+#include <nitro_port_gx3d_vertex.h>
 #include <limits.h>
 #include <string.h>
 #include <math.h>
@@ -386,14 +387,25 @@ static NitroGx3dVertex to_screen(const GeoVertex *v)
 {
     NitroGx3dVertex out;
     double inv=(v->clip[3]>0)?1.0/v->clip[3]:0.0;
-    double nx=(double)v->clip[0]*inv,ny=(double)v->clip[1]*inv;
     double nz=(double)v->clip[2]*inv;
     int i;
     memset(&out,0,sizeof(out));
     for(i=0;i<4;i++)out.clip[i]=v->clip[i];
-    /* DS viewport edges are inclusive: width/height contain a +1. */
-    out.x=(int32_t)((s.viewport[0]+(nx+1)*(s.viewport[2]-s.viewport[0]+1)/2)*256);
-    out.y=(int32_t)((191-(s.viewport[1]+(ny+1)*(s.viewport[3]-s.viewport[1]+1)/2))*256);
+    /* The DS's viewport transform: x = (X + W) * width / 2W + x0, and
+     * y = (W - Y) * height / 2W + top, top = 191 - the viewport's top line
+     * (y counts down; viewport edges are inclusive). Kept to 1/256 pixel
+     * rather than cut to whole pixels as the DS does: the 3DS's GPU draws
+     * smoother edges from it, and neighbouring models still meet. */
+    {
+        double x0=s.viewport[0]&255,top=(191-(s.viewport[3]&255))&255;
+        double width=(s.viewport[2]-s.viewport[0]+1)&0x1FF;
+        double height=(s.viewport[3]-s.viewport[1]+1)&0xFF;
+        double w=(double)v->clip[3];
+        if(w>0){
+            out.x=(int32_t)floor(((double)v->clip[0]+w)*width/(2*w)*256+x0*256+0.5);
+            out.y=(int32_t)floor((w-(double)v->clip[1])*height/(2*w)*256+top*256+0.5);
+        }
+    }
     if(nz<-1.0)nz=-1.0;
     if(nz>1.0)nz=1.0;
     out.depth=(uint32_t)((nz+1)*8388607.5);
@@ -548,6 +560,22 @@ static void end_polygon(unsigned newVertices)
     }
     s.framePolygons++;
     s.frameVertices+=vertices;
+    {
+        /* The polygon's top and bottom screen lines, for the DS's drawing
+         * order (NitroPort_Gx3dDrawOrder). */
+        int top=192,bottom=0,k;
+        uint32_t key;
+        for(i=0;i<sStagedCount;i++)for(k=0;k<3;k++){
+            int y=sStaged[i].v[k].y>>8;
+            if(y<top)top=y;
+            if(y>bottom)bottom=y;
+        }
+        if(top<0)top=0;
+        if(bottom>255)bottom=255;
+        key=((uint32_t)bottom<<8)|(uint32_t)top;
+        if(NitroPort_Gx3dTriangleTranslucent(&sStaged[0]))key|=1u<<16;
+        for(i=0;i<sStagedCount;i++)sStaged[i].sort_key=key;
+    }
     for(i=0;i<sStagedCount;i++){
         unsigned a=(sStaged[i].polygon_attr>>16)&31u;
         sDiag.triangles++;
@@ -602,16 +630,20 @@ static void submit_vertex(void)
             n=0;
         }
     }else if(s.primitive==2){
+        /* Triangle strip: vertices[0] the older of the last two, [1] the
+         * newer. GBATEK: v0 v1 v2, v2 v1 v3, v2 v3 v4, v4 v3 v5, ...: every
+         * other triangle has its first two vertices the other way round. */
         if(n<2)n++;
         else{
+            GeoVertex *first=(n&1)?&s.vertices[1]:&s.vertices[0];
+            GeoVertex *second=(n&1)?&s.vertices[0]:&s.vertices[1];
             begin_polygon();
-            if(!far_hidden(s.vertices[0].outside|s.vertices[1].outside|vp->outside)){
-                sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],vp);
-                stage_triangle(&s.vertices[0],&s.vertices[1],vp);
+            if(!far_hidden(first->outside|second->outside|vp->outside)){
+                sPolygonFront=polygon_front(first,second,vp);
+                stage_triangle(first,second,vp);
                 end_polygon(n==2?3:1);
             }
             s.vertices[0]=s.vertices[1];s.vertices[1]=*vp;n++;
-            if(n&1){GeoVertex tmp=s.vertices[0];s.vertices[0]=s.vertices[1];s.vertices[1]=tmp;}
         }
     }else{
         n++;
