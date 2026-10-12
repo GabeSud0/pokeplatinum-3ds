@@ -128,6 +128,26 @@ int main(void)
     NitroPort_SoundPumpReplies();
     CHECK(sAlarmCount == 1);  /* one-shot, not periodic */
 
+    /* Sound time runs at the DS's speed: the driver ticks every 2728 OS
+     * ticks (5.2 ms), and a periodic alarm of 4 such ticks (20.8 ms) fires
+     * 48 times in a second of sound (32768 samples), not 91 (which is what
+     * taking the tick for 2728 microseconds gave). */
+    sAlarmCount = 0;
+    SND_SetupAlarm(1, 2728u * 4u, 2728u * 4u, synthetic_alarm, &sAlarmCount);
+    SND_StartTimer(0, 0, 1u << 1, 0);
+    tag = SND_GetCurrentCommandTag();
+    CHECK(SND_FlushCommand(SND_COMMAND_BLOCK));
+    for (i = 0; i < 32768u / 256u; ++i) {
+        NitroPort_SoundRender(stereo, 256);
+        NitroPort_SoundPumpReplies();
+    }
+    SND_WaitForCommandProc(tag);
+    SND_StopTimer(0, 0, 1u << 1, 0);
+    CHECK(SND_FlushCommand(SND_COMMAND_BLOCK));
+    NitroPort_SoundRender(stereo, 256);
+    printf("periodic alarm: %d times in a second of sound\n", sAlarmCount);
+    CHECK(sAlarmCount >= 46 && sAlarmCount <= 49);
+
     printf("synthetic ARM9->ARM7 sequence: %d checks, %d failures\n",
            sChecks, sFailures);
     return sFailures != 0;

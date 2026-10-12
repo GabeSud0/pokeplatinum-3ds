@@ -23,8 +23,13 @@
 
 #define SOUND_QUEUE_CAPACITY 32u
 #define SOUND_ALARM_CAPACITY 128u
-#define SOUND_TICK_US 2728ull
-#define SOUND_TICK_SAMPLES (SOUND_TICK_US * NITRO_SOUND_RATE)
+/* The ARM7 driver's tick: every SND_PROC_INTERVAL (2728) OS ticks, an OS
+ * tick being 64 cycles of the 33.513982 MHz bus clock: 5.2095 ms, about 192
+ * a second. In samples: 2728 * 64 * 32768 / 33513982 = 170.7. The phase
+ * below counts in 1/33513982ths of a sample. (It was taken for 2728
+ * microseconds once, and music played 1.9 times too fast.) */
+#define SOUND_BUS_CLOCK 33513982ull
+#define SOUND_TICK_SAMPLES ((uint64_t)SND_PROC_INTERVAL * 64u * NITRO_SOUND_RATE)
 
 /* The ARM7 copy of the SDK's own functions and shared globals. */
 extern void N7_SND_Init(u32 priority);
@@ -172,12 +177,13 @@ static void sound_tick(void)
 
 /* Audio-side clock, completely independent of game frames and OS_Halt.
  * Exactly 32768 output samples correspond to one second; an original
- * sequencer tick fires every 2728 us, including fractional sample timing.
+ * sequencer tick fires every 5.2095 ms (SOUND_TICK_SAMPLES), including
+ * fractional sample timing.
  *
- * Mixed a stretch at a time: up to the next tick (about 89 samples), with
+ * Mixed a stretch at a time: up to the next tick (about 171 samples), with
  * the lock held for one stretch only, so the game never waits for long.
  * Commands the game sends are taken at the start of the next stretch, at
- * most 2.7 ms later (the DS's ARM7 took them on its next tick, too). */
+ * most 5.2 ms later (the DS's ARM7 took them on its next tick, too). */
 void NitroPort_SoundRender(int16_t *stereo, size_t frames)
 {
     size_t done = 0;
@@ -196,11 +202,11 @@ void NitroPort_SoundRender(int16_t *stereo, size_t frames)
             N7_SND_UpdateSharedWork();
         }
         /* Samples until the one that reaches the next tick, included. */
-        toTick = (SOUND_TICK_SAMPLES - sTickPhase + 999999u) / 1000000u;
+        toTick = (SOUND_TICK_SAMPLES - sTickPhase + SOUND_BUS_CLOCK - 1u) / SOUND_BUS_CLOCK;
         n = frames - done;
         if (toTick < n) n = (size_t)toTick;
         NitroSound_Mix(&sChip, stereo + 2u * done, n);
-        sTickPhase += 1000000u * (uint64_t)n;
+        sTickPhase += SOUND_BUS_CLOCK * (uint64_t)n;
         if (sTickPhase >= SOUND_TICK_SAMPLES) {
             sTickPhase -= SOUND_TICK_SAMPLES;
             sound_tick();
