@@ -242,13 +242,12 @@ static void raster_triangle(const NitroGx3dTriangle *tri,uint16_t *out)
         if(pixelAlpha==31 || (tri->polygon_attr&(1u<<11)))sDepth[index]=depth;
     }
 }
-void NitroPort_Gx3dRasterize(uint16_t *rgba555,uint32_t *depth_out)
+void NitroPort_Gx3dRasterizeScene(const NitroGx3dScene *scene,
+                                  uint16_t *rgba555,uint32_t *depth_out)
 {
-    const NitroGx3dScene *scene;
     uint32_t clear,depth;
     size_t i;
-    if(!rgba555)return;
-    scene=NitroPort_Gx3dScene();
+    if(!rgba555 || !scene)return;
     clear=rd32(NitroPort_IoReg+0x350);
     depth=rd16(NitroPort_IoReg+0x354)&0x7fff;
     /* CLEAR_DEPTH 15-bit maps to 24-bit Z; clear alpha 0 keeps BG0 transparent. */
@@ -274,4 +273,19 @@ void NitroPort_Gx3dRasterize(uint16_t *rgba555,uint32_t *depth_out)
         }
     }
     if(depth_out)memcpy(depth_out,sDepth,sizeof(sDepth));
+}
+
+/* Compatibility wrapper for original Stage 1 callers; GPU worker should
+ * always use AcquireScene/ReleaseScene directly, never this shortcut. */
+void NitroPort_Gx3dRasterize(uint16_t *rgba555,uint32_t *depth_out)
+{
+    uint32_t serial=0;
+    const NitroGx3dScene *scene=NitroPort_Gx3dAcquireScene(&serial);
+    if(scene){
+        NitroPort_Gx3dRasterizeScene(scene,rgba555,depth_out);
+        NitroPort_Gx3dReleaseScene(scene);
+    }else{
+        /* No SWAP yet; preserve the original clear-only result. */
+        NitroPort_Gx3dRasterizeScene(NitroPort_Gx3dScene(),rgba555,depth_out);
+    }
 }
