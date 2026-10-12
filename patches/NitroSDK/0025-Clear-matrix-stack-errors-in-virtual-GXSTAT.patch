@@ -1,0 +1,29 @@
+From: Platinum 3DS port contributors
+Subject: [PATCH] Clear GXSTAT matrix overflow in the virtual engine
+
+---
+diff --git a/include/nitro/gx/g3x.h b/include/nitro/gx/g3x.h
+--- a/include/nitro/gx/g3x.h
++++ b/include/nitro/gx/g3x.h
+@@ -227,10 +227,17 @@
+ 	return (s32)(reg_G3X_GXSTAT & REG_G3X_GXSTAT_B_MASK);
+ }
+ 
+-static inline void G3X_ResetMtxStackOverflow (void)
+-{
+-	reg_G3X_GXSTAT |= REG_G3X_GXSTAT_SE_MASK;
+-}
++#if defined(SDK_PORT_3DS)
++extern void NitroPort_Gx3dClearStackError(void);
++#endif
++static inline void G3X_ResetMtxStackOverflow (void)
++{
++#if defined(SDK_PORT_3DS)
++    NitroPort_Gx3dClearStackError();
++#else
++	reg_G3X_GXSTAT |= REG_G3X_GXSTAT_SE_MASK;
++#endif
++}
+ 
+ #define G3X_ResetLineBufferOverflow    G3X_ResetLineBufferUnderflow
+ 
