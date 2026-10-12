@@ -72,6 +72,49 @@ return straight away.
 recognition (prc), wireless voice (wvr), the China-edition boot screen,
 streaming decompression, and a few debug libraries. See the `Makefile`.
 
+## Stage 1: DS 3D geometry capture and PC reference renderer
+
+`src/port_gx3d.c` decodes the original DS geometry commands from NitroSDK's
+inline `G3_*` write ports and from the `GXFIFO` DMA stream. The interception
+of the original SDK inline writes is patch `0024` (`SDK_PORT_3DS` only);
+`src/port_dma.c` forwards every FIFO-bound word in order. Command decoding
+handles both direct opcodes and packed words spanning DMA bursts.
+
+The engine retains the signed 20.12 matrices and stacks, material/lighting
+state, vertex formats, primitive assembly, clip-space coordinates, clipping,
+texture state and test results. `SWAP_BUFFERS` publishes a renderer-independent
+array of screen-space triangles (including attributes, perspective W,
+z-depth, colour and UV) through `NitroPort_Gx3dScene()`. FIFO commands execute
+immediately, so GXSTAT still reports an empty FIFO and the level-based IRQs
+used by `MI_SendGXCommandAsync` keep working; the matrix stack levels,
+overflow flag and position/vector test results are no longer invented.
+
+On the **PC only**, `src/port_gx3d_raster.c` renders that scene to 256×192
+RGB555 with a z-buffer, perspective-correct nearest-neighbour sampling,
+palette texture formats, A3I5/A5I3, direct colour and 4×4 compressed texture
+selectors. The existing 2D renderer composites this into engine A's BG0
+with BG priority, window visibility and scroll, before colour effects.
+The 3DS GPU is **not** used: geometry capture builds for devkitARM but BG0
+3D rendering remains intentionally disabled there until Stage 2.
+
+```sh
+python3 tools/bootstrap.py
+make -C 3ds_port/nitro test
+# Use your own locally generated data pack; nothing is checked into Git:
+tools/run_pc_wsl.sh  # supports --screenshots and --screenshot-every
+```
+
+`tests/test_gx3d.c` builds only synthetic triangles/texture bytes, verifies
+matrix operations, packed command parsing, culling, z-order and texels. The
+existing DMA/IRQ regression test remains in `tests/test_threads.c`.
+
+**Reference limitations:** this is a staging renderer, not cycle-exact DS 3D.
+The virtual FIFO is consumed synchronously, and some DS details (polygon ID
+effects, shadow/toon/edge marking, depth/W precision, texture-coordinate
+generation modes, exact per-vertex specular lighting and translucent sorting)
+still need hardware-reference tests. The 3DS output does not display these
+triangles yet.
+
 ## Virtual ARM7 sound driver and software sound chip
 
 The port builds a **separate SDK_ARM7 copy** of Nintendo's pinned sound
