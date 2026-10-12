@@ -478,7 +478,11 @@ static void test_stack_vec_and_result_refresh(void)
     for(i=0;i<31;i++)NitroPort_GxDirectWrite(0x11,0);
     CHECK(((uint32_t)read32(0x600)&0x8000u)==0);
     CHECK((((uint32_t)read32(0x600)>>8)&31u)==31u);
-    NitroPort_GxDirectWrite(0x11,0);
+    NitroPort_GxDirectWrite(0x12,1u); /* pop 31 -> 30, stored slot 30 */
+    CHECK((((uint32_t)read32(0x600)>>8)&31u)==30u);
+    CHECK(((uint32_t)read32(0x600)&0x8000u)==0u);
+    NitroPort_GxDirectWrite(0x11,0); /* allowed push to 31 again */
+    NitroPort_GxDirectWrite(0x11,0); /* overflow at 31 */
     CHECK(((uint32_t)read32(0x600)&0x8000u)!=0);
 
     reset_geometry();
