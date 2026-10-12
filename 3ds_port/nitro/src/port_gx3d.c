@@ -372,12 +372,16 @@ static void execute(unsigned op,const uint32_t *p)
     case 0x40:s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;break;
     case 0x41:s.inBegin=0;s.nverts=0;break;
     case 0x50:{
-        unsigned tmp=sBuilding;sBuilding=sDisplayed;sDisplayed=tmp;
-        sScenes[sDisplayed].serial=++sSerial;
-        sScenes[sDisplayed].swap_param=p[0];
+        unsigned tmp=sBuilding;
+        NitroGx3dScene *scene=&sScenes[tmp];
+        for(i=0;i<(int)scene->count;i++)
+            scene->triangles[i].depth_mode=(uint8_t)((p[0]>>1)&1);
+        scene->serial=++sSerial;
+        scene->swap_param=p[0];
+        sBuilding=sDisplayed;
+        sDisplayed=tmp;
         sScenes[sBuilding].count=0;
         sScenes[sBuilding].dropped=0;
-        sScenes[sBuilding].swap_param=p[0];
         break;
     }
     case 0x60:
