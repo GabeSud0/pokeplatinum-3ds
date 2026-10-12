@@ -120,6 +120,10 @@ static void test_vertices(void) {
     /* Until PR2 adds textures, textured geometry MUST remain visible in
      * vertex colour. Only translucency excludes a polygon in PR1. */
     CHECK(NitroPort_Gx3dBuildOpaqueVertices(&scene,verts,12)==6);
+    scene.swap_param=2u; /* DS W-buffer flag */
+    CHECK(NitroPort_Gx3dBuildOpaqueVertices(&scene,verts,12)==6);
+    CHECK(verts[0].position[2]==-0.0625f);
+    CHECK(verts[1].position[2]==-0.25f);
 }
 int main(void) {
     test_mailbox();
