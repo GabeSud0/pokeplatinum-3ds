@@ -171,6 +171,7 @@ static void StopSound(void)
 }
 
 /* -------------------------------------------------------------- 3D worker */
+static void CatchCrashes(void); /* crash handler is defined below */
 /* The PICA backend and all citro3d commands run on one dedicated thread.
  * Neither the game nor the 2D screen drawers wait for GPU completion. */
 typedef struct NitroGx3dScene NitroGx3dScene;
