@@ -13,7 +13,7 @@
 
 .proc main
     mov outpos, inpos
-    mul outclr, inclr, clrdiv
+    mul outclr, clrdiv, inclr
     mov outtc0, intex
     end
 .end
