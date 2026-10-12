@@ -385,14 +385,15 @@ APP_OBJS := $(OUT)/app/platinum.o
 OVERLAY_TABLE_O := $(OUT)/gen/overlay_table.o
 
 ifeq ($(TARGET),3ds)
-APP_OBJS += $(OUT)/app/main_3ds.o
+APP_OBJS += $(OUT)/app/main_3ds.o $(OUT)/app/port_gx3d_pica.o \
+            $(OUT)/app/gx3d_passthrough_shbin.o
 PROGRAM_ELF := $(OUT)/pokeplatinum.elf
 PROGRAM := $(OUT)/pokeplatinum.3dsx
 # The architecture flags pick devkitARM's hard-float libraries and the 3DS
 # startup code (3dsx_crt0.o).
 PROGRAM_LDFLAGS := $(filter -march=% -mtune=% -mfloat-abi=% -mfpu=% -mtp=%,$(PORT_CFLAGS)) \
                    -specs=3dsx.specs -L$(DEVKITPRO)/libctru/lib -Wl,-Map,$(OUT)/pokeplatinum.map
-PROGRAM_LIBS := -lctru -lm
+PROGRAM_LIBS := -lcitro3d -lctru -lm
 else
 APP_OBJS += $(OUT)/app/main_pc.o
 PROGRAM_ELF := $(OUT)/pokeplatinum-pc
@@ -421,6 +422,21 @@ $(OUT)/app/main_3ds.o: app/main_3ds.c app/platinum.h
 	@mkdir -p $(dir $@)
 	@echo "  APP CC main_3ds.c"
 	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -c $< -o $@
+
+# Thin 3DS-only PICA backend; includes only portable GX3D headers + libctru.
+$(OUT)/app/port_gx3d_pica.o: app/port_gx3d_pica.c $(NITRO)/include/nitro_port_gx3d_vertex.h
+	@mkdir -p $(dir $@)
+	@echo "  APP CC port_gx3d_pica.c"
+	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -c $< -o $@
+
+# Assemble a PICA200 passthrough shader exactly like hello3d. The generated
+# blob symbol is gx3d_passthrough_shbin, consumed by port_gx3d_pica.c.
+$(OUT)/app/gx3d_passthrough.shbin: app/gx3d_passthrough.v.pica
+	@mkdir -p $(dir $@)
+	picasso -o $@ $<
+
+$(OUT)/app/gx3d_passthrough_shbin.o: $(OUT)/app/gx3d_passthrough.shbin
+	@cd $(OUT)/app && bin2s gx3d_passthrough.shbin | $(DEVKITARM)/bin/arm-none-eabi-as -o gx3d_passthrough_shbin.o
 
 $(OVERLAY_TABLE_O): $(OVERLAY_TABLE_C) | libnitrosystem
 	@$(CC) $(PORT_CFLAGS) $(SDK_INCLUDES) -c $< -o $@

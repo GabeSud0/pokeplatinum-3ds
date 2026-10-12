@@ -6,6 +6,7 @@
  *                   [--frames N] [--wav FILE] [--stop-at-missing-file]
  *                   [--stall-seconds N]
  *                   [--screenshots DIR] [--screenshot-every N]
+ *                   [--dump-3d FRAME]
  *                   [--press FRAME:BUTTONS,...]
  *   pokeplatinum-pc --check-overlays
  *
@@ -21,7 +22,9 @@
  * --screenshots DIR saves what the two screens show (port_render2d.c) as
  * PNG files, the upper screen above the lower one, every 60 frames (one
  * second of game time; --screenshot-every N to change it), and once more
- * when the runner stops. --press presses buttons at given frames, since the
+ * when the runner stops. --dump-3d FRAME captures the newest finished 3D
+ * image as 3d_frame_<FRAME>.png in the current directory, preserving alpha.
+ * --press presses buttons at given frames, since the
  * PC runner has none: "--press 8700:A,9000:START,9100:UP+B" holds each for
  * 6 frames (A B X Y L R START SELECT UP DOWN LEFT RIGHT).
  *
@@ -42,6 +45,7 @@
 
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <errno.h>
 #include <execinfo.h>
 #include <pthread.h>
 #include <signal.h>
@@ -56,6 +60,7 @@
 
 #include <nitro.h>
 #include <nitro_port.h>
+#include <nitro_port_gx3d.h>
 
 #include "platinum.h"
 
@@ -172,6 +177,7 @@ static int sStopAtMissingFile;
 static int sStallSeconds = 5;
 static const char *sScreenshotDir;
 static long sScreenshotEvery = 60;
+static long sDump3DFrame = -1;
 
 #define MAX_PRESSES 256
 static struct {
@@ -401,6 +407,14 @@ void NitroPort_OnFrame(void)
     NitroPort_SoundPumpReplies(); /* deliver ARM7 alarms on ARM9's thread */
     pace_game_for_wav();
     sFrame++;
+    if (sDump3DFrame == sFrame) {
+        char path[128];
+        snprintf(path,sizeof(path),"3d_frame_%07ld.png",sFrame);
+        if (NitroPort_Gx3dDumpLatest(path))
+            NitroPort_Log("[gx3d] wrote reference frame %ld to %s",sFrame,path);
+        else
+            NitroPort_Log("[gx3d] cannot dump frame %ld (no image or file error)",sFrame);
+    }
     if (sScreenshotDir != NULL && sScreenshotEvery > 0 && sFrame % sScreenshotEvery == 0) {
         Screenshot();
     }
@@ -655,7 +669,8 @@ int main(int argc, char **argv)
     if (argc < 3) {
         fprintf(stderr, "usage: %s <platinum3ds.pak> <manifest.json> [--save FILE] "
                 "[--frames N] [--wav FILE] [--stop-at-missing-file] [--stall-seconds N]\n"
-                "       [--screenshots DIR] [--screenshot-every N] [--press FRAME:BUTTONS,...]\n       %s --check-overlays\n", argv[0], argv[0]);
+                "       [--screenshots DIR] [--screenshot-every N] [--dump-3d FRAME]\n"
+                "       [--press FRAME:BUTTONS,...]\n       %s --check-overlays\n", argv[0], argv[0]);
         return 2;
     }
     for (i = 3; i < argc; i++) {
@@ -671,6 +686,16 @@ int main(int argc, char **argv)
             sScreenshotDir = argv[++i];
         } else if (strcmp(argv[i], "--screenshot-every") == 0 && i + 1 < argc) {
             sScreenshotEvery = strtol(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--dump-3d") == 0 && i + 1 < argc) {
+            char *end;
+            long requested;
+            errno = 0;
+            requested = strtol(argv[++i], &end, 10);
+            if (errno == ERANGE || *end != '\0' || requested < 1) {
+                fprintf(stderr, "--dump-3d: expected a positive frame number\n");
+                return 2;
+            }
+            sDump3DFrame = requested;
         } else if (strcmp(argv[i], "--press") == 0 && i + 1 < argc) {
             if (ParsePresses(argv[++i]) != 0) {
                 fprintf(stderr, "--press: expected FRAME:BUTTON[+BUTTON],... e.g. 8700:A,9000:START\n");

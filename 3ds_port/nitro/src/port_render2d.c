@@ -906,12 +906,9 @@ typedef struct EngineWork {
 
 static EngineWork sWork[2];
 
-/* Stage 1 renders the latest swapped 3D scene on the PC only. The 3DS
- * PICA200 backend will consume NitroPort_Gx3dScene separately in stage 2.
- * Engine B never has 3D BG0; only engine A accesses this image. */
-#if !defined(__arm__)
-static u16 sGx3dPixels[W * H];
-#endif
+/* BG0 acquires the newest finished image on both platforms. PC fills it
+ * with the Stage 1 software rasterizer, 3DS with the PICA off-screen worker.
+ * A held image is never overwritten by its producer during DrawEngine. */
 
 static void DrawEngine(Engine *e, u16 *out)
 {
@@ -960,16 +957,10 @@ static void DrawEngine(Engine *e, u16 *out)
         if (kind[bg] == BG_LARGE) {
             kind[bg] = BG_NONE;   /* large-bitmap mode still unsupported */
         }
-#if defined(__arm__)
-        if (kind[bg] == BG_3D) kind[bg] = BG_NONE; /* stage 2: PICA200 */
-#endif
     }
-#if !defined(__arm__)
     if (e->isA && kind[0] == BG_3D) {
-        NitroPort_Gx3dRasterize(sGx3dPixels, NULL);
-        gx3dPixels = sGx3dPixels;
+        gx3dPixels = NitroPort_Gx3dAcquireImage();
     }
-#endif
     objFrame->blends = 0;
     if (dispcnt & 0x1000) {
         SortObjs(e, objFrame);
@@ -1148,6 +1139,8 @@ static void DrawEngine(Engine *e, u16 *out)
             row[x] = c;
         }
     }
+    /* Release only after every scanline has been composited. */
+    if(gx3dPixels)NitroPort_Gx3dReleaseImage(gx3dPixels);
 }
 
 static void MasterBrightness(u16 *out, u16 reg)

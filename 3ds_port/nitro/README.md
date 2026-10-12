@@ -102,8 +102,8 @@ RGB555 with a z-buffer, perspective-correct nearest-neighbour sampling,
 palette texture formats, A3I5/A5I3, direct colour and 4×4 compressed texture
 selectors. The existing 2D renderer composites this into engine A's BG0
 with BG priority, window visibility and scroll, before colour effects.
-The 3DS GPU is **not** used: geometry capture builds for devkitARM but BG0
-3D rendering remains intentionally disabled there until Stage 2.
+The 3DS GPU is used by the later Stage 2 plumbing described below;
+the PC keeps the full Stage 1 reference rasterizer.
 
 ```sh
 python3 tools/bootstrap.py
@@ -129,8 +129,57 @@ effects, shadow/toon/edge marking, depth/W precision, bit-exact lighting
 rounding and depth sorting within the translucent pass) still need
 hardware-reference tests. The PC renderer draws translucent faces after
 opaque ones and obeys DISP3DCNT's alpha-blend enable bit, but does not yet
-model every DS polygon-ID or per-texel translucent sorting rule. The 3DS output does not display these
-triangles yet.
+model every DS polygon-ID or per-texel translucent sorting rule.
+The new 3DS pipeline initially renders **opaque untextured** triangles only.
+
+## Stage 2 PR 1: PICA plumbing and shared 3D BG0 image
+
+The 3D scene now uses three statically allocated scene slots (building,
+newest-finished and a scene acquired by the renderer), coordinated through
+`port_gx3d_mailbox.c`. The producer never copies an entire scene, never
+overwrites an acquired scene and never waits for the GPU. Acquire by
+`NitroPort_Gx3dAcquireScene(&serial)` and **always release** with
+`NitroPort_Gx3dReleaseScene(scene)`.
+
+Both the PC and 3DS 2D compositors use
+`NitroPort_Gx3dAcquireImage()` / `NitroPort_Gx3dReleaseImage()`: two
+RGB555+coverage images are protected from overwrite while a 2D drawer
+reads them. On PC the existing Stage 1 software rasterizer renders into
+the image interface without changing the BG0 compositor; on 3DS the
+separate GPU worker produces a transferred RGBA8 image and publishes its
+converted RGB555 pixels when the GPU is finished. The 2D drawer never
+waits for GPU completion and uses the most recently completed image.
+
+On 3DS only, the game starts one PICA worker on core 2 (New 3DS) or
+core 0 below the game (Old 3DS). It owns all citro3d commands and
+off-screen target with 256x192 RGBA8 + depth/stencil, both double-buffered
+vertex arrays and linear transfer output buffers. The shader is assembled
+with `picasso` from `game/app/gx3d_passthrough.v.pica`.
+`port_gx3d_vertex.c` builds clip-space float4 (preserving W and DS
+screen-space mapping), colour bytes and normalized UV, but PR1 **draws only
+untextured opaque triangles** with PICA depth testing. Its host-testable
+depth function maps near to 0, far to 1; the PICA uses `GPU_LESS` with
+maximum-depth clear so nearer geometry wins. Both scene and image gates
+spin briefly then use the port's 50-us sleep (important for lower-priority
+thread owners on Old 3DS). The [perf] line includes 3D milliseconds/scene,
+triangles drawn, and dropped triangles per scene.
+
+`tests/test_gx3d_plumbing.c` covers two-thread scene/image handoff, contended
+spin-then-sleep locks, independent vertex/depth mapping (near wins under
+`GPU_LESS`), full 12,288 triangle-list vertex capacity, truncation
+counts for smaller buffers, and RGBA PNG colour/alpha/orientation with only
+synthetic data. The GPU allocates two linear buffers of **12,288 vertices**,
+enough for Stage 1's maximum 4,096 post-clipping triangles. Any scene
+overflow or capacity drop is counted in `[perf]`.
+
+**Comparing orientation on real hardware/Azahar:** press **L+R+Y** to write
+`sdmc:/3ds/pokeplatinum/3d_frame_<frame>.png`. On PC, run
+`pokeplatinum-pc ... --dump-3d FRAME` to write
+`3d_frame_<frame>.png` in the working directory. Both use the exact same
+RGBA8 PNG writer, with alpha 0 for transparent BG0 and row 0 at the top.
+These are private outputs from your own pack; never commit them. Textures,
+complex alpha, exact W-depth, toon and effects are for later PRs in
+`docs/3D_STAGE2.md`.
 
 ## Virtual ARM7 sound driver and software sound chip
 

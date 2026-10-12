@@ -12,6 +12,7 @@
  */
 #include <nitro.h>
 #include <nitro_port_gx3d.h>
+#include <nitro_port_gx3d_mailbox.h>
 #include <limits.h>
 #include <string.h>
 #include <math.h>
@@ -47,9 +48,21 @@ typedef struct GeoState {
 } GeoState;
 
 static GeoState s;
-/* Two ~0.6 MiB triangle buffers, owned by this engine. A published frame
- * remains stable until the next SWAP, for the PC renderer and future GPU. */
-static NitroGx3dScene sScenes[2];
+
+/* A harmless host/library default. The 3DS application's main overrides
+ * this weak function with LightEvent_Signal. noinline ensures a call
+ * relocation remains so the linked strong override is actually invoked.
+ * Unlike an undefined weak reference, a definition also satisfies the
+ * port's strict SDK/host link coverage checker. */
+__attribute__((weak,noinline)) void NitroPort_Gx3dScenePublished(void)
+{
+    __asm__ __volatile__("" ::: "memory");
+}
+/* Three ~0.6 MiB scenes: game builds one, GPU owns one, and a pending
+ * completed scene occupies the third. Never copy or overwrite GPU-owned data.
+ * A short atomic lock protects only the mailbox indices, never geometry. */
+static NitroGx3dScene sScenes[3];
+static NitroGx3dMailbox sMailbox;
 static unsigned sBuilding, sDisplayed;
 static uint32_t sSerial;
 
@@ -471,16 +484,25 @@ static void execute(unsigned op,const uint32_t *p)
     case 0x40:s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;s.attr=s.pendingAttr;break;
     case 0x41:s.inBegin=0;s.nverts=0;break;
     case 0x50:{
-        unsigned tmp=sBuilding;
-        NitroGx3dScene *scene=&sScenes[tmp];
-        scene->serial=++sSerial;
+        int next=-1;
+        uint32_t serial=0;
+        NitroGx3dScene *scene=&sScenes[sBuilding];
+        /* All vertex and attribute writes precede the release publication. */
         scene->swap_param=p[0];
-        sBuilding=sDisplayed;
-        sDisplayed=tmp;
-        sScenes[sBuilding].count=0;
-        sScenes[sBuilding].dropped=0;
-        s.frameVertices=0;
-        s.framePolygons=0;
+        scene->serial=sSerial+1;
+        if(NitroPort_MailboxPublish(&sMailbox,&next,&serial)){
+            sDisplayed=sBuilding;
+            sBuilding=(unsigned)next;
+            sSerial=serial;
+            sScenes[sBuilding].count=0;
+            sScenes[sBuilding].dropped=0;
+            NitroPort_Gx3dScenePublished();
+        }else{
+            /* Keep the newest image and reuse this building slot on the
+             * exceptionally slow consumer path; never stall the game. */
+            scene->count=0;scene->dropped++;
+        }
+        s.frameVertices=0;s.framePolygons=0;
         break;
     }
     case 0x60:
@@ -551,6 +573,7 @@ void NitroPort_Gx3dClearStackError(void)
 void NitroPort_Gx3dReset(void)
 {
     memset(&s,0,sizeof(s));memset(sScenes,0,sizeof(sScenes));
+    NitroPort_MailboxInit(&sMailbox);
     sBuilding=0;sDisplayed=1;sSerial=0;
     identity(&s.proj);identity(&s.pos);identity(&s.vec);identity(&s.tex);
     s.viewport[0]=0;s.viewport[1]=0;s.viewport[2]=255;s.viewport[3]=191;
@@ -606,6 +629,22 @@ const NitroGx3dScene *NitroPort_Gx3dScene(void)
 {
     initialize();
     return &sScenes[sDisplayed];
+}
+const NitroGx3dScene *NitroPort_Gx3dAcquireScene(uint32_t *serial)
+{
+    int slot;
+    initialize();
+    slot=NitroPort_MailboxAcquire(&sMailbox,serial);
+    return slot<0?NULL:&sScenes[slot];
+}
+void NitroPort_Gx3dReleaseScene(const NitroGx3dScene *scene)
+{
+    int i;
+    if(!scene)return;
+    for(i=0;i<3;i++)if(scene==&sScenes[i]){
+        NitroPort_MailboxRelease(&sMailbox,i);
+        break;
+    }
 }
 /* Hardware matrix readback is regenerated only when matrix state changes.
  * A geometry display list contains thousands of non-matrix words; polling

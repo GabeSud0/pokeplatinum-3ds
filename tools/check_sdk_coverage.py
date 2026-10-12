@@ -88,7 +88,7 @@ LIBC = {"memcpy", "memset", "memmove", "memcmp", "strcmp", "strlen", "strncpy",
         "_impure_ptr", "alloca",  # newlib's stderr, and alloca's fallback
         # libpak (3ds_port/pak), built into libnitro.a, reads the data pack
         # with stdio and allocates its index on the heap.
-        "fopen", "fclose", "fread", "fseek", "ftell", "ferror",
+        "fopen", "fclose", "fread", "fseek", "ftell", "ferror", "remove",
         "malloc", "calloc", "realloc", "free", "strstr",
         # Virtual ARM7 save persistence and local RTC use hosted C/newlib.
         "fflush", "fwrite", "localtime", "time",
