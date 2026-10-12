@@ -4,7 +4,10 @@
  * and palettes from VRAM bank slots, including 4x4 compressed textures.
  *
  * Unimplemented DS-specific postprocessing: toon/highlight, fog, edge
- * marking, antialiasing, polygon IDs and shadow stencil. Geometry capture
+ * marking, antialiasing, polygon IDs and shadow stencil. Translucent faces
+ * are drawn after opaque faces, but full DS alpha-sort modes, per-pixel
+ * translucent polygon IDs, and translucency sorting by depth remain TODO.
+ * Geometry capture
  * and the scene data format are independent of all rasterizer choices.
  */
 #include <nitro_port_gx3d.h>
@@ -227,7 +230,11 @@ static void raster_triangle(const NitroGx3dTriangle *tri,uint16_t *out)
             if(pixelAlpha==0)continue;
             rgb=modulate(tex.rgb,rgb);
         }
-        if(pixelAlpha<31 && (out[index]&0x8000)){
+        /* DISP3DCNT bit3 enables alpha blending with the 3D colour buffer.
+         * When disabled, fractional alpha still controls coverage but the
+         * source colour replaces the destination on a visible fragment. */
+        if(pixelAlpha<31 && (NitroPort_IoReg[0x60]&8u) &&
+           (out[index]&0x8000)){
             uint16_t previous=out[index]&0x7fff;
             rgb=color_mix(rgb,previous,pixelAlpha,31-pixelAlpha,31);
         }
@@ -250,8 +257,21 @@ void NitroPort_Gx3dRasterize(uint16_t *rgba555,uint32_t *depth_out)
         rgba555[i]=(uint16_t)((clear&0x7fff)|(((clear>>16)&31)?0x8000:0));
     }
     if(scene->count){
+        unsigned pass;
         map_banks();
-        for(i=0;i<scene->count;i++)raster_triangle(&scene->triangles[i],rgba555);
+        /* DS polygon RAM draws the opaque pass before translucent faces
+         * regardless of submission order. Alpha-bearing texel formats may
+         * contain fractional alpha even with POLYGON_ATTR alpha=31. */
+        for(pass=0;pass<2;pass++)for(i=0;i<scene->count;i++){
+            const NitroGx3dTriangle *tri=&scene->triangles[i];
+            unsigned fmt=(tri->texture_param>>26)&7u;
+            unsigned alpha=(tri->polygon_attr>>16)&31u;
+            int translucent=alpha<31u || fmt==1u || fmt==6u ||
+                             (fmt>=2u && fmt<=4u &&
+                              (tri->texture_param&(1u<<29))) ||
+                             fmt==5u || fmt==7u;
+            if((int)pass==translucent)raster_triangle(tri,rgba555);
+        }
     }
     if(depth_out)memcpy(depth_out,sDepth,sizeof(sDepth));
 }
