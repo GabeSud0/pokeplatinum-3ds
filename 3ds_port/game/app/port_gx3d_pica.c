@@ -120,6 +120,8 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene)
     /* Previous GPU frame must have finished using this buffer. This worker
      * may wait; neither the game nor the 2D drawer ever waits on it. */
     if(!C3D_FrameBegin(C3D_FRAME_SYNCDRAW))return -1;
+    /* As in hello3d, schedule framebuffer clear BEFORE drawing on it. */
+    C3D_RenderTargetClear(sTarget,C3D_CLEAR_ALL,0,0);
     if(!C3D_FrameDrawOn(sTarget)){
         C3D_FrameEnd(0);
         return -1;
@@ -133,7 +135,6 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene)
     C3D_DepthTest(true,GPU_GREATER,GPU_WRITE_ALL);
     /* The first plumbing PR clears transparent black. Mapping DS
      * CLEAR_COLOR/DEPTH and alpha are PR3, not part of this pipeline. */
-    C3D_RenderTargetClear(sTarget,C3D_CLEAR_ALL,0,0);
     if(count){
         GSPGPU_FlushDataCache(sVertices[slot],
                         (u32)(count*sizeof(NitroGx3dGpuVertex)));
