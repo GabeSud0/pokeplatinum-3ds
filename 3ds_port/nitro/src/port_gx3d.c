@@ -437,6 +437,7 @@ static void execute(unsigned op,const uint32_t *p)
 }
 void NitroPort_Gx3dClearStackError(void)
 {
+    if(!s.ready) NitroPort_Gx3dReset();
     s.stackError=0;
     s.pjLevel=0;
     NitroPort_Gx3dRefreshStatus();
