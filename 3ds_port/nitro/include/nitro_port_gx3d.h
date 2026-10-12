@@ -85,6 +85,9 @@ void NitroPort_Gx3dClearStackError(void);
  * Each pixel is RGB555|0x8000 when a 3D polygon covers it, otherwise zero.
  * The 2D BG0 compositor decides whether/how to display it. */
 void NitroPort_Gx3dRasterize(uint16_t *rgba555, uint32_t *depth_out);
+/* Internal PC handoff: rasterize the scene while the consumer owns its slot. */
+void NitroPort_Gx3dRasterizeScene(const NitroGx3dScene *scene,
+                                  uint16_t *rgba555, uint32_t *depth_out);
 
 #ifdef __cplusplus
 }
