@@ -182,6 +182,7 @@ int NitroPort_PicaInit(void);
 int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped);
 int NitroPort_Gx3dDumpLatest(const char *path);
 void NitroPort_PicaExit(void);
+void NitroPort_PicaTimes(u64 *build, u64 *wait, u64 *publish);
 static Thread sGpuThread;
 static LightEvent sGpuWake;
 static volatile bool sGpuRunning, sGpuWakeReady;
@@ -522,7 +523,8 @@ typedef struct Drawer {
     volatile bool busy;      /* drawing a frame */
     volatile bool quit;
     volatile u64 ticks;      /* time spent drawing, for [perf] */
-    volatile unsigned count; /* frames drawn */
+    volatile unsigned count; /* frames handled */
+    volatile unsigned drawn; /* screens drawn (not unchanged) */
 } Drawer;
 
 #define SCREEN_TOP 1
@@ -535,7 +537,7 @@ static volatile bool sAOnTop;    /* engine A on the upper screen, this frame */
  * game's picture didn't change. 0: upper, 1: lower. */
 static volatile bool sMustDraw[2];
 
-static void DrawScreen(gfxScreen_t screen)
+static bool DrawScreen(gfxScreen_t screen)
 {
     static u16 pixels[2][256 * 192];
     bool top = screen == GFX_TOP;
@@ -550,12 +552,13 @@ static void DrawScreen(gfxScreen_t screen)
         sMustDraw[top ? 0 : 1] = false;
         NitroPort_Render2D(top == sAOnTop ? 0 : 1, ds);
     } else if (!NitroPort_Render2DIfChanged(top == sAOnTop ? 0 : 1, ds)) {
-        return;
+        return false;
     }
     Blit(screen, ds, top ? (400 - 256) / 2 : (320 - 256) / 2);
     fb = gfxGetFramebuffer(screen, GFX_LEFT, &width, &height);
     GSPGPU_FlushDataCache(fb, (u32)width * height * 2);
     gfxScreenSwapBuffers(screen, false);
+    return true;
 }
 
 static void DrawerMain(void *arg)
@@ -572,10 +575,10 @@ static void DrawerMain(void *arg)
         }
         start = svcGetSystemTick();
         if (d->screens & SCREEN_TOP) {
-            DrawScreen(GFX_TOP);
+            d->drawn += DrawScreen(GFX_TOP);
         }
         if (d->screens & SCREEN_BOTTOM) {
-            DrawScreen(GFX_BOTTOM);
+            d->drawn += DrawScreen(GFX_BOTTOM);
         }
         d->ticks += svcGetSystemTick() - start;
         d->count++;
@@ -700,7 +703,7 @@ static void PerfFrame(u64 enter)
     double seconds, perFrame;
     u64 soundTicks, soundSamples, gpuTicks;
     unsigned gpuScenes, gpuTriangles, gpuDroppedTriangles;
-    char drawing[128];
+    char drawing[192];
     int i, used = 0;
 
     if (sPerfStart == 0) {
@@ -732,17 +735,18 @@ static void PerfFrame(u64 enter)
         Drawer *d = &sDrawers[i];
         unsigned count = d->count;
 
-        used += snprintf(drawing + used, sizeof(drawing) - (size_t)used, "%s%s %.1f/s, %.1f ms (core %d)",
+        used += snprintf(drawing + used, sizeof(drawing) - (size_t)used, "%s%s %.1f/s (%.1f/s new), %.1f ms (core %d)",
                          i ? "; " : "",
                          d->screens == (SCREEN_TOP | SCREEN_BOTTOM) ? "both screens"
                          : d->screens == SCREEN_TOP ? "upper" : "lower",
-                         count / seconds,
+                         count / seconds, d->drawn / seconds,
                          count ? (double)d->ticks * 1000.0 / SYSCLOCK_ARM11 / count : 0.0, d->core);
         if (used >= (int)sizeof(drawing)) {
             break;
         }
         d->ticks = 0;
         d->count = 0;
+        d->drawn = 0;
     }
     soundTicks = sSoundMixTicks - sPerfSoundTicks;
     soundSamples = sSoundMixSamples - sPerfSoundSamples;
@@ -750,6 +754,22 @@ static void PerfFrame(u64 enter)
     gpuScenes = __atomic_load_n(&sGpuScenes,__ATOMIC_RELAXED);
     gpuTriangles = __atomic_load_n(&sGpuTriangles,__ATOMIC_RELAXED);
     gpuDroppedTriangles = __atomic_load_n(&sGpuDroppedTriangles,__ATOMIC_RELAXED);
+    {
+        static u64 lastBuild, lastWait, lastPublish;
+        u64 build, wait, publish;
+        unsigned scenes = gpuScenes - sPerfGpuScenes;
+        NitroPort_PicaTimes(&build, &wait, &publish);
+        if (scenes) {
+            NitroPort_Log("[perf] 3D: %.1f scenes/s; per scene %.1f ms building, %.1f ms GPU and copy, %.1f ms converting",
+                          scenes / seconds,
+                          (double)(build - lastBuild) * 1000.0 / SYSCLOCK_ARM11 / scenes,
+                          (double)(wait - lastWait) * 1000.0 / SYSCLOCK_ARM11 / scenes,
+                          (double)(publish - lastPublish) * 1000.0 / SYSCLOCK_ARM11 / scenes);
+        }
+        lastBuild = build;
+        lastWait = wait;
+        lastPublish = publish;
+    }
     NitroPort_Log("[perf] game %.1f frames/s, %.1f ms/frame; drawn: %s; 3D %.1f ms/scene, %u triangles/scene, %u dropped/scene (core %d); sound %.0f%% of core 0, %u underruns",
                   sPerfFrames / seconds, (double)sPerfGameTicks * perFrame, drawing,
                   gpuScenes>sPerfGpuScenes

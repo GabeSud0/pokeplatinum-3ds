@@ -245,8 +245,16 @@ static u32 widen5(u32 v)
 
 /* Returns number of GPU vertices on success, -1 if frame submission or
  * transfer failed. 3DS image publication is after GPU/PPF completion only. */
+/* Where the 3D thread's time goes, for the [perf] line: building the
+ * draws (CPU), waiting for the GPU and the copy, converting the image. */
+static volatile u64 sBuildTicks,sWaitTicks,sPublishTicks;
+void NitroPort_PicaTimes(u64 *build,u64 *wait,u64 *publish)
+{
+    *build=sBuildTicks;*wait=sWaitTicks;*publish=sPublishTicks;
+}
 int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
 {
+    u64 t0=svcGetSystemTick(),t1,t2;
     size_t count,nbatches=0,b;
     unsigned lost=0;
     C3D_BufInfo *buffers;
@@ -371,6 +379,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
      * the GPU reads here is flushed already (vertices above, textures in
      * get_texture). No C3D_FrameSync either: it waits for a V-blank. */
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    t1=svcGetSystemTick();
     /* Off-screen target isn't bound to a 3DS LCD. Copy its tiles to
      * ordinary linear memory: this waits for the drawing to finish, then
      * for the copy (PPF), then the CPU cache is invalidated. */
@@ -379,7 +388,11 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
                  GX_BUFFER_DIM(GX3D_W,GX3D_H),sImages[slot],
                  GX_BUFFER_DIM(GX3D_W,GX3D_H),GX3D_TRANSFER_FLAGS);
     GSPGPU_InvalidateDataCache(sImages[slot],(u32)IMAGE_BYTES);
+    t2=svcGetSystemTick();
     NitroPort_Gx3dPublishRGBA8(sImages[slot],GX3D_W*GX3D_H);
+    sBuildTicks+=t1-t0;
+    sWaitTicks+=t2-t1;
+    sPublishTicks+=svcGetSystemTick()-t2;
     return (int)(count/3);
 }
 #endif
