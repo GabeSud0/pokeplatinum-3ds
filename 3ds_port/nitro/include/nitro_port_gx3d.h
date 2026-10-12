@@ -16,6 +16,8 @@ extern "C" {
 #define NITRO_GX3D_WIDTH 256
 #define NITRO_GX3D_HEIGHT 192
 #define NITRO_GX3D_MAX_TRIANGLES 4096u
+#define NITRO_GX3D_MAX_POLYGONS 2048u
+#define NITRO_GX3D_MAX_VERTICES 6144u
 
 typedef struct NitroGx3dVertex {
     /* Projection-space homogeneous coordinates, signed 20.12 fixed point. */
@@ -33,11 +35,12 @@ typedef struct NitroGx3dTriangle {
     uint32_t polygon_attr;
     uint32_t texture_param;
     uint32_t palette_base;
-    uint8_t depth_mode;           /* SWAP_BUFFERS W-buffer setting */
 } NitroGx3dTriangle;
 
 typedef struct NitroGx3dScene {
     uint32_t count, dropped, serial;
+    /* W-buffer/Z-buffer mode belongs to the completed frame (SWAP_BUFFERS),
+     * not to polygons submitted before the swap command. */
     uint32_t swap_param;
     NitroGx3dTriangle triangles[NITRO_GX3D_MAX_TRIANGLES];
 } NitroGx3dScene;
