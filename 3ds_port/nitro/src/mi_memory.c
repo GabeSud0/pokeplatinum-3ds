@@ -14,7 +14,7 @@
 
 #include <nitro/types.h>
 #include <nitro/mi/memory.h>
-#include <nitro/hw/ARM9/ioreg_G3.h>
+#include <nitro.h>
 #include <nitro_port_gx3d.h>
 #include <stdint.h>
 
