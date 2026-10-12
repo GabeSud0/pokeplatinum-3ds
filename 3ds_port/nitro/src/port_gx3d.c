@@ -342,41 +342,63 @@ static void append_triangle(const GeoVertex *a,const GeoVertex *b,const GeoVerte
         
     }
 }
+/* DS display-list RAM holds at most 2048 polygons and 6144 original
+ * vertices, regardless of how many triangles clipping or quads produce. */
+static int reserve_polygon(void)
+{
+    NitroGx3dScene *scene=&sScenes[sBuilding];
+    if(s.framePolygons >= 2048u) {
+        scene->dropped++;
+        return 0;
+    }
+    s.framePolygons++;
+    return 1;
+}
 static void submit_vertex(void)
 {
     GeoVertex v;
     int32_t src[4],eye[4];
     int n=s.nverts;
+    if(!s.inBegin)return;
+    if(s.frameVertices >= 6144u){
+        sScenes[sBuilding].dropped++;
+        return;
+    }
+    s.frameVertices++;
     src[0]=s.coord[0];src[1]=s.coord[1];src[2]=s.coord[2];src[3]=4096;
     transform(src,&s.pos,eye);
     transform(eye,&s.proj,v.clip);
     if(((s.texparam>>30)&3u)==3u)transform_texcoords(src,3,s.resolvedTexcoord);
     v.s=s.resolvedTexcoord[0];v.t=s.resolvedTexcoord[1];v.color=s.rgb;
-    if(!s.inBegin)return;
     if(s.primitive==0){
         s.vertices[n++]=v;
-        if(n==3){append_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);n=0;}
+        if(n==3){if(reserve_polygon())append_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);n=0;}
     }else if(s.primitive==1){
         s.vertices[n++]=v;
-        if(n==4){append_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
-                 append_triangle(&s.vertices[0],&s.vertices[2],&s.vertices[3]);n=0;}
+        if(n==4){if(reserve_polygon()){
+                     append_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
+                     append_triangle(&s.vertices[0],&s.vertices[2],&s.vertices[3]);
+                 }n=0;}
     }else if(s.primitive==2){
         if(n<2)s.vertices[n++]=v;
         else{
-            append_triangle(&s.vertices[0],&s.vertices[1],&v);
+            if(reserve_polygon())append_triangle(&s.vertices[0],&s.vertices[1],&v);
             s.vertices[0]=s.vertices[1];s.vertices[1]=v;n++;
             if(n&1){GeoVertex tmp=s.vertices[0];s.vertices[0]=s.vertices[1];s.vertices[1]=tmp;}
         }
     }else{
         s.vertices[n++]=v;
         if(n==4){
-            append_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[3]);
-            append_triangle(&s.vertices[0],&s.vertices[3],&s.vertices[2]);
+            if(reserve_polygon()){
+                append_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[3]);
+                append_triangle(&s.vertices[0],&s.vertices[3],&s.vertices[2]);
+            }
             s.vertices[0]=s.vertices[2];s.vertices[1]=s.vertices[3];n=2;
         }
     }
     s.nverts=n;
 }
+static void refresh_matrix_results(void);
 static int param_count(unsigned op)
 {
     switch(op){
@@ -515,6 +537,8 @@ static void execute(unsigned op,const uint32_t *p)
     }
     default:break;
     }
+    if(op>=0x10u && op<=0x1cu)refresh_matrix_results();
+    NitroPort_Gx3dRefreshStatus();
 }
 void NitroPort_Gx3dClearStackError(void)
 {
@@ -532,6 +556,7 @@ void NitroPort_Gx3dReset(void)
     s.rgb=0x7fff;s.diffuse=0x7fff;s.attr=(3u<<6)|(31u<<16);
     s.pendingAttr=s.attr;
     s.boxVisible=1;s.ready=1;
+    refresh_matrix_results();
     NitroPort_Gx3dRefreshStatus();
 }
 static void initialize(void){if(!s.ready)NitroPort_Gx3dReset();}
@@ -581,10 +606,20 @@ const NitroGx3dScene *NitroPort_Gx3dScene(void)
     initialize();
     return &sScenes[sDisplayed];
 }
+/* Hardware matrix readback is regenerated only when matrix state changes.
+ * A geometry display list contains thousands of non-matrix words; polling
+ * GXSTAT or writing a vertex must not multiply the entire clip matrix. */
+static void refresh_matrix_results(void)
+{
+    Matrix clip;
+    unsigned j;
+    multiply(&clip,&s.pos,&s.proj);
+    for(j=0;j<16;j++)put32(0x640+j*4,(uint32_t)clip.a[j]);
+    for(j=0;j<9;j++)put32(0x680+j*4,(uint32_t)s.vec.a[(j/3)*4+(j%3)]);
+}
 void NitroPort_Gx3dRefreshStatus(void)
 {
     uint32_t status=io32(0x600);
-    unsigned j;
     status &= ~((3u<<0)|(31u<<8)|(1u<<13)|(1u<<14)|(1u<<15)|
                 (511u<<16)|(1u<<25)|(1u<<26)|(1u<<27));
     status |= ((uint32_t)s.boxVisible<<1) |
@@ -593,10 +628,4 @@ void NitroPort_Gx3dRefreshStatus(void)
               ((uint32_t)(s.stackError!=0)<<15)|
               (1u<<25)|(1u<<26);
     put32(0x600,status);
-    {
-        Matrix clip;
-        multiply(&clip,&s.pos,&s.proj);
-        for(j=0;j<16;j++)put32(0x640+j*4,(uint32_t)clip.a[j]);
-    }
-    for(j=0;j<9;j++)put32(0x680+j*4,(uint32_t)s.vec.a[(j/3)*4+(j%3)]);
 }
