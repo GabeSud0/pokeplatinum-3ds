@@ -443,6 +443,33 @@ static void test_latched_polygon_attributes(void)
     }
 }
 
+static void test_viewport_and_immediate_texture_state(void)
+{
+    const NitroGx3dScene *scene;
+    reset_geometry();
+    triangle(0,RGB(31,31,31));
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    /* Viewport X=0..255 has width 256 (inclusive endpoint). */
+    if(scene->count)CHECK(scene->triangles[0].v[2].x==128*256);
+
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x40,0);
+    /* Unlike POLYGON_ATTR, texture parameters apply during BEGIN. */
+    NitroPort_GxDirectWrite(0x2a,(4u<<26));
+    NitroPort_GxDirectWrite(0x2b,42u);
+    vertex(-3000,-3000,0);vertex(3000,-3000,0);vertex(0,3000,0);
+    NitroPort_GxDirectWrite(0x41,0);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count){
+        CHECK(scene->triangles[0].texture_param==(4u<<26));
+        CHECK(scene->triangles[0].palette_base==42u);
+    }
+}
+
 static void test_stack_vec_and_result_refresh(void)
 {
     unsigned i;
@@ -485,6 +512,9 @@ static void test_translucency_and_scene_limits(void)
         CHECK(((col>>5)&31u)>0u);  /* opaque green behind it */
     }
     NitroPort_IoReg[0x60]&=(uint8_t)~8u;
+    NitroPort_Gx3dRasterize(pixels,NULL);
+    CHECK(((pixels[96*256+128]>>10)&31u)==31u);
+    CHECK(((pixels[96*256+128]>>5)&31u)==0u);
 
     reset_geometry();
     for(i=0;i<2049u;i++)triangle(0,RGB(31,0,0));
@@ -508,6 +538,7 @@ int main(void)
     test_light_material_and_vectors();
     test_texture_matrix_modes();
     test_latched_polygon_attributes();
+    test_viewport_and_immediate_texture_state();
     test_stack_vec_and_result_refresh();
     test_translucency_and_scene_limits();
     printf("GX3D synthetic scene and raster: %d checks, %d failures\n",checks,failures);
