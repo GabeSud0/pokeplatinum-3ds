@@ -10,6 +10,7 @@
 
 #include <nitro.h>
 #include <nitro_port.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -579,6 +580,46 @@ static void test_matches_reference(void)
     CHECK(differ == 0);
 }
 
+/* The two engines drawn at the same time on two threads (as the 3DS
+ * program does on two CPU cores), many times over: the same pixels. */
+static u16 sThreadOut[2][256 * 192];
+
+static void *DrawEngineThread(void *arg)
+{
+    int engine = (int)(intptr_t)arg;
+    int i;
+
+    for (i = 0; i < 20; i++) {
+        NitroPort_Render2D(engine, sThreadOut[engine]);
+    }
+    return NULL;
+}
+
+static void test_engines_on_two_threads(void)
+{
+    static u16 refA[256 * 192], refB[256 * 192];
+    int n, differ = 0;
+
+    for (n = 0; n < 20; n++) {
+        pthread_t a, b;
+
+        RandomDisplay();
+        Put32(0, 0x10011F10u);
+        Put32(0x1000, 0x10011F10u);
+        Put16(0x304, 0x0203);   /* engine A on the lower screen: B is the top */
+        Ref_RenderScreens(refB, refA);
+        pthread_create(&a, NULL, DrawEngineThread, (void *)(intptr_t)0);
+        pthread_create(&b, NULL, DrawEngineThread, (void *)(intptr_t)1);
+        pthread_join(a, NULL);
+        pthread_join(b, NULL);
+        if (memcmp(sThreadOut[0], refA, sizeof(refA)) != 0 ||
+            memcmp(sThreadOut[1], refB, sizeof(refB)) != 0) {
+            differ++;
+        }
+    }
+    CHECK(differ == 0);
+}
+
 /* test_render --bench: how long a busy frame (both screens, four BGs, many
  * OBJs, blending) takes, with the old renderer and the new one. */
 static double Now(void)
@@ -693,6 +734,7 @@ int main(int argc, char **argv)
     test_affine_bg();
     test_obj_8bpp_ext();
     test_matches_reference();
+    test_engines_on_two_threads();
 
     printf("2D renderer: %d checks, %d failed\n", sChecks, sFailures);
     return sFailures == 0 ? 0 : 1;

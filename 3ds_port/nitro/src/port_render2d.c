@@ -37,6 +37,10 @@
  * BGs in priority order. A layer's pixel is its colour with bit 15 set, or 0
  * where it's transparent. tests/render2d_reference.c is the plain version
  * this was made from; test_render checks that both draw the same.
+ *
+ * The two engines can be drawn at the same time (from two threads): each
+ * has its own working memory. One engine must not be drawn by two threads
+ * at once.
  */
 
 #include <nitro.h>
@@ -887,16 +891,31 @@ static void FillRange(u8 *enable, int lo, int hi, u8 value)
  * priority 0 (by number), the OBJs of priority 1, and so on. */
 #define SLOT_OBJ 4
 
-static void DrawEngine(Engine *e, u16 *out)
-{
-    static u16 bgLine[W];
-    static ObjLine objLine;
-    static ObjFrame objFrame;
-    static u8 enableLine[W];
+/* What drawing one engine works with, line by line. */
+typedef struct EngineWork {
+    u16 bgLine[W];
+    ObjLine objLine;
+    ObjFrame objFrame;
+    u8 enableLine[W];
     /* Per pixel of the line, when blending needs two layers: the two
      * front-most layers (0-3 BG, 4 OBJ), their colours, how many found. */
-    static u16 color1[W], color2[W];
-    static u8 layer1[W], layer2[W], found[W];
+    u16 color1[W], color2[W];
+    u8 layer1[W], layer2[W], found[W];
+} EngineWork;
+
+static EngineWork sWork[2];
+
+static void DrawEngine(Engine *e, u16 *out)
+{
+    /* Each engine has its own (they may be drawn at the same time, on two
+     * CPU cores). */
+    EngineWork *work = &sWork[e->isA ? 0 : 1];
+    u16 *bgLine = work->bgLine;
+    ObjLine *objLine = &work->objLine;
+    ObjFrame *objFrame = &work->objFrame;
+    u8 *enableLine = work->enableLine;
+    u16 *color1 = work->color1, *color2 = work->color2;
+    u8 *layer1 = work->layer1, *layer2 = work->layer2, *found = work->found;
     const u8 *io = e->io;
     u32 dispcnt = Rd32(io, 0);
     u16 bgcnt[4];
@@ -933,32 +952,32 @@ static void DrawEngine(Engine *e, u16 *out)
             kind[bg] = BG_NONE;   /* not drawn yet (see the top of this file) */
         }
     }
-    objFrame.blends = 0;
+    objFrame->blends = 0;
     if (dispcnt & 0x1000) {
-        SortObjs(e, &objFrame);
+        SortObjs(e, objFrame);
     }
     if (!anyWindow) {
-        memset(enableLine, 0x3F, sizeof(enableLine));
+        memset(enableLine, 0x3F, W);
     }
     /* Blending two layers needs second targets, and alpha blending or OBJs
      * that blend by themselves; otherwise each pixel shows its front-most
      * layer, perhaps brightened or darkened. */
-    blend2 = (bldcnt & 0x3F00) && (effect == 1 || objFrame.blends);
+    blend2 = (bldcnt & 0x3F00) && (effect == 1 || objFrame->blends);
     flags = (anyWindow ? T_WINDOW : 0) | (effect >= 2 ? T_LAYER : 0);
 
     for (y = 0; y < H; y++) {
         u16 *row = out + y * W;
-        BOOL objs = DrawObjs(e, &objFrame, dispcnt, y, &objLine);
+        BOOL objs = DrawObjs(e, objFrame, dispcnt, y, objLine);
         Target t;
         int done = 0;   /* (blend2) pixels that have both their layers */
 
         /* Which layers and effects each pixel shows (the windows): window
          * 0 over window 1 over the OBJ window over the outside. */
         if (anyWindow) {
-            memset(enableLine, winout & 0x3F, sizeof(enableLine));
+            memset(enableLine, winout & 0x3F, W);
             if ((dispcnt & 0x8000) && objs) {
-                for (x = objLine.x0; x < objLine.x1; x++) {
-                    if (objLine.window[x]) {
+                for (x = objLine->x0; x < objLine->x1; x++) {
+                    if (objLine->window[x]) {
                         enableLine[x] = (winout >> 8) & 0x3F;
                     }
                 }
@@ -976,7 +995,7 @@ static void DrawEngine(Engine *e, u16 *out)
         t.enable = enableLine;
         t.filled = 0;
         if (blend2) {
-            memset(found, 0, sizeof(found));
+            memset(found, 0, W);
         } else {
             memset(row, 0, W * sizeof(u16));
         }
@@ -996,14 +1015,14 @@ static void DrawEngine(Engine *e, u16 *out)
                     break;
                 }
                 if (slot < 0) {
-                    if (!objs || !(objLine.prios & (1 << p))) {
+                    if (!objs || !(objLine->prios & (1 << p))) {
                         continue;
                     }
                     layer = SLOT_OBJ;
-                    px = objLine.color;
-                    prioOf = objLine.prio;
-                    x0 = objLine.x0;
-                    x1 = objLine.x1;
+                    px = objLine->color;
+                    prioOf = objLine->prio;
+                    x0 = objLine->x0;
+                    x1 = objLine->x1;
                 } else {
                     bg = slot;
                     if (kind[bg] == BG_NONE || (bgcnt[bg] & 3) != p) {
@@ -1083,12 +1102,12 @@ static void DrawEngine(Engine *e, u16 *out)
             u16 secondColor = n > 1 ? color2[x] : backdrop;
             u16 c = topColor;
 
-            if (top == SLOT_OBJ && (objLine.semi[x] || objLine.alpha[x] < 16) &&
+            if (top == SLOT_OBJ && (objLine->semi[x] || objLine->alpha[x] < 16) &&
                 (bldcnt & (0x100 << second))) {
                 /* Semi-transparent and bitmap OBJs blend with what's below,
                  * whatever the effect setting. */
-                if (objLine.alpha[x] < 16) {
-                    c = Blend(topColor, secondColor, objLine.alpha[x], 16 - objLine.alpha[x]);
+                if (objLine->alpha[x] < 16) {
+                    c = Blend(topColor, secondColor, objLine->alpha[x], 16 - objLine->alpha[x]);
                 } else {
                     c = Blend(topColor, secondColor, eva, evb);
                 }
