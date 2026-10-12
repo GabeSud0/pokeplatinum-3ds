@@ -135,6 +135,29 @@ static void test_matrices(void)
     CHECK(read32(0x640+12*4)==0);
     CHECK(read32(0x640+13*4)==3*ONE);
 }
+static void test_vtx_diff(void)
+{
+    /* VTX_DIFF adds 10-bit signed differences in 1/4096 units (as the SDK's
+     * GX_VTXDIFF_MAX = 0x1ff fx32 says): after VTX_16 (100, 200, 300) a
+     * diff of (+511, -512, -1) gives (611, -312, 299). */
+    const NitroGx3dScene *scene;
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x40,0);
+    vertex(100,200,300);
+    NitroPort_GxDirectWrite(0x28,(511u&0x3ffu)|((uint32_t)(-512&0x3ff)<<10)|((uint32_t)(-1&0x3ff)<<20));
+    vertex(0,3000,0);
+    NitroPort_GxDirectWrite(0x41,0);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count){
+        const NitroGx3dTriangle *t=&scene->triangles[0];
+        int k,found=0;
+        for(k=0;k<3;k++)
+            if(t->v[k].clip[0]==611 && t->v[k].clip[1]==-312 && t->v[k].clip[2]==299)found=1;
+        CHECK(found);
+    }
+}
 static void test_packed_fifo(void)
 {
     const NitroGx3dScene *scene;
@@ -573,6 +596,7 @@ int main(void)
 {
     test_matrices();
     test_packed_fifo();
+    test_vtx_diff();
     test_triangles_and_depth();
     test_culling();
     test_textures();

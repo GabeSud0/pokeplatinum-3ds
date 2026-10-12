@@ -293,7 +293,9 @@ static void set_geo_position(uint32_t cmd,const uint32_t *p)
     else if(cmd==0x25){s.coord[0]=signbits(p[0],16);s.coord[1]=signbits(p[0]>>16,16);}
     else if(cmd==0x26){s.coord[0]=signbits(p[0],16);s.coord[2]=signbits(p[0]>>16,16);}
     else if(cmd==0x27){s.coord[1]=signbits(p[0],16);s.coord[2]=signbits(p[0]>>16,16);}
-    else if(cmd==0x28){int i;for(i=0;i<3;i++)s.coord[i]+=signbits(p[0]>>(i*10),10)*8;}
+    /* VTX_DIFF: 10-bit signed differences in the coordinates' own units
+     * (1/4096; GX_VTXDIFF_MAX is 0x1ff as an fx32), not scaled. */
+    else if(cmd==0x28){int i;for(i=0;i<3;i++)s.coord[i]+=signbits(p[0]>>(i*10),10);}
 }
 
 /* Sutherland-Hodgman clipping in clip space, preserving interpolation
@@ -405,6 +407,20 @@ static unsigned sStagedCount, sStagedVertices, sStagedClipped;
 
 /* Clip a triangle of the polygon being built to the view volume, cull it,
  * and stage what's left. */
+/* Which side of the polygon faces the camera, decided once per polygon
+ * from its first three vertices, as the DS does: a quad split into two
+ * triangles (or a clipped polygon) is culled as a whole, not per triangle.
+ * In clip space (x, y, w), front means det > 0 (the screen's y points
+ * down); this works for vertices behind the camera too. */
+static int sPolygonFront;
+static int polygon_front(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
+{
+    double x0=a->clip[0],y0=a->clip[1],w0=a->clip[3];
+    double x1=b->clip[0],y1=b->clip[1],w1=b->clip[3];
+    double x2=c->clip[0],y2=c->clip[1],w2=c->clip[3];
+    double det=x0*(y1*w2-w1*y2)-y0*(x1*w2-w1*x2)+w0*(x1*y2-y1*x2);
+    return det>0;
+}
 /* The vertex's screen position, worked out once: strips and quads share
  * vertices between their triangles. */
 static const NitroGx3dVertex *screen_of(GeoVertex *v)
@@ -419,7 +435,7 @@ static void add_screen_triangle(const NitroGx3dVertex *aa,const NitroGx3dVertex 
     NitroGx3dTriangle *tri;
     int64_t cross=(int64_t)(bb->x-aa->x)*(cc->y-aa->y)-
                   (int64_t)(bb->y-aa->y)*(cc->x-aa->x);
-    int front=cross<0, mask=(s.attr>>6)&3;
+    int front=sPolygonFront, mask=(s.attr>>6)&3;
     sDiag.lastAttr=s.attr;
     if(!cross){sDiag.degenerate++;return;}
     if(!mask){sDiag.cullBoth++;return;}
@@ -468,6 +484,14 @@ static void begin_polygon(void)
 {
     sStagedCount=0;sStagedVertices=0;sStagedClipped=0;
     sDiag.polygons++;
+}
+/* POLYGON_ATTR bit 12 clear: a polygon that crosses the far plane isn't
+ * drawn at all (rather than clipped there). Outcode bit 5 is the far
+ * plane (w - z < 0). */
+static int far_hidden(unsigned outside)
+{
+    if((outside & 0x20u) && !(s.attr & (1u<<12))){sDiag.clipped++;return 1;}
+    return 0;
 }
 
 /* The DS stores each polygon that survives culling and clipping in its
@@ -521,25 +545,35 @@ static void submit_vertex(void)
         s.vertices[n++]=v;
         if(n==3){
             begin_polygon();
-            stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
-            end_polygon(3);
+            if(!far_hidden(s.vertices[0].outside|s.vertices[1].outside|s.vertices[2].outside)){
+                sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
+                stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
+                end_polygon(3);
+            }
             n=0;
         }
     }else if(s.primitive==1){
         s.vertices[n++]=v;
         if(n==4){
             begin_polygon();
-            stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
-            stage_triangle(&s.vertices[0],&s.vertices[2],&s.vertices[3]);
-            end_polygon(4);
+            if(!far_hidden(s.vertices[0].outside|s.vertices[1].outside|
+                           s.vertices[2].outside|s.vertices[3].outside)){
+                sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
+                stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
+                stage_triangle(&s.vertices[0],&s.vertices[2],&s.vertices[3]);
+                end_polygon(4);
+            }
             n=0;
         }
     }else if(s.primitive==2){
         if(n<2)s.vertices[n++]=v;
         else{
             begin_polygon();
-            stage_triangle(&s.vertices[0],&s.vertices[1],&v);
-            end_polygon(n==2?3:1);
+            if(!far_hidden(s.vertices[0].outside|s.vertices[1].outside|v.outside)){
+                sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],&v);
+                stage_triangle(&s.vertices[0],&s.vertices[1],&v);
+                end_polygon(n==2?3:1);
+            }
             s.vertices[0]=s.vertices[1];s.vertices[1]=v;n++;
             if(n&1){GeoVertex tmp=s.vertices[0];s.vertices[0]=s.vertices[1];s.vertices[1]=tmp;}
         }
@@ -547,10 +581,14 @@ static void submit_vertex(void)
         s.vertices[n++]=v;
         if(n==4){
             begin_polygon();
-            stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[3]);
-            stage_triangle(&s.vertices[0],&s.vertices[3],&s.vertices[2]);
-            /* The first quad of a strip brings 4 vertices, later ones 2. */
-            end_polygon(s.stripStarted?2:4);
+            if(!far_hidden(s.vertices[0].outside|s.vertices[1].outside|
+                           s.vertices[2].outside|s.vertices[3].outside)){
+                sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],&s.vertices[3]);
+                stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[3]);
+                stage_triangle(&s.vertices[0],&s.vertices[3],&s.vertices[2]);
+                /* The first quad of a strip brings 4 vertices, later ones 2. */
+                end_polygon(s.stripStarted?2:4);
+            }
             s.stripStarted=1;
             s.vertices[0]=s.vertices[2];s.vertices[1]=s.vertices[3];n=2;
         }
