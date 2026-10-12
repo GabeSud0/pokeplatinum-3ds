@@ -46,6 +46,12 @@ typedef struct NitroGx3dBatch {
 
 /* A triangle needs the translucent pass. */
 int NitroPort_Gx3dTriangleTranslucent(const NitroGx3dTriangle *tri);
+/* The scene's triangles in the DS's drawing order (indices into
+ * scene->triangles); scratch: as many entries, for sorting. */
+size_t NitroPort_Gx3dDrawOrder(const NitroGx3dScene *scene, uint16_t *order, uint16_t *scratch);
+/* How far to move a screen-space triangle's corners (pixels) so its edges
+ * sit a tenth of a pixel further out (see port_gx3d_vertex.c). */
+void NitroPort_Gx3dExpandTriangle(const float sx[3], const float sy[3], float dx[3], float dy[3]);
 
 /* Returns the number of vertices written; *batch_count gets the batches.
  * Triangles that don't fit in either array are counted in *dropped. */

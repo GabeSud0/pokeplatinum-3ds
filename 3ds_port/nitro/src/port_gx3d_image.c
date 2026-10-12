@@ -58,23 +58,25 @@ int NitroPort_Gx3dPublishRGBA8(const uint32_t *src,size_t pixels)
     if(index<0)return 0;
     for(i=0;i<PIXELS;i++){
         /* PICA RGBA8 is a 32-bit 0xRRGGBBAA pixel. Little-endian
-         * linear memory therefore holds bytes A,B,G,R. */
+         * linear memory therefore holds bytes A,B,G,R. Each colour's top
+         * 5 bits, straight into place. */
         uint32_t c=src[i];
-        unsigned r=(c>>24)&255u,g=(c>>16)&255u,b=(c>>8)&255u,a=c&255u;
-        /* The GPU path blends translucent polygons into a cleared alpha-0
-         * background as premultiplied colour (port_gx3d_pica.c); where
-         * the result is partly transparent, undo it. On the DS such a
-         * pixel just takes the polygon's colour. */
-        if(a && a<255u){
-            r=r*255u/a;g=g*255u/a;b=b*255u/a;
+        unsigned a=c&255u;
+        uint32_t rgb=(c>>27)|((c>>14)&0x3E0u)|((c>>1)&0x7C00u);
+        if(a-1u<254u){
+            /* Partly transparent (rare): the GPU path blends translucent
+             * polygons into a cleared alpha-0 background as premultiplied
+             * colour (port_gx3d_pica.c); undo it. On the DS such a pixel
+             * just takes the polygon's colour. */
+            unsigned r=(c>>24)*255u/a,g=((c>>16)&255u)*255u/a,b=((c>>8)&255u)*255u/a;
             if(r>255u)r=255u;
             if(g>255u)g=255u;
             if(b>255u)b=255u;
+            rgb=(r>>3)|((g>>3)<<5)|((b>>3)<<10);
+            partly|=(a>>3)<31u;
         }
-        sImages[index][i]=(uint16_t)((r>>3)|((g>>3)<<5)|((b>>3)<<10)|
-                                        (a?0x8000u:0u));
+        sImages[index][i]=(uint16_t)(rgb|(a?0x8000u:0u));
         sAlphas[index][i]=(uint8_t)(a>>3);
-        partly|=(a!=0u)&((a>>3)<31u);   /* drawn, not opaque */
     }
     sTranslucent[index]=(uint8_t)(partly!=0);
     finish(index);

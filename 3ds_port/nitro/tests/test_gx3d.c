@@ -263,6 +263,40 @@ static void test_textures(void)
     NitroPort_Gx3dRasterize(pixels,NULL);
     CHECK((pixels[96*256+128]&0x7fff)==RGB(31,0,0));
 }
+/* Triangle strips: v0 v1 v2, then v2 v1 v3, v2 v3 v4 (GBATEK): each
+ * triangle after the first uses the strip's last two vertices. */
+static int strip_vertex_index(const NitroGx3dVertex *v, const int32_t *xs)
+{
+    int i;
+    for(i=0;i<5;i++)if(v->x==xs[i])return i;
+    return -1;
+}
+static void test_triangle_strip(void)
+{
+    static const int px[5]={-3000,-1500,0,1500,3000};
+    static const int py[5]={-2000,2000,-2000,2000,-2000};
+    int32_t xs[5];
+    const NitroGx3dScene *scene;
+    unsigned i;
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(31u<<16));    /* both sides */
+    NitroPort_GxDirectWrite(0x40,2);                     /* triangle strip */
+    for(i=0;i<5;i++)vertex(px[i],py[i],0);
+    NitroPort_GxDirectWrite(0x41,0);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==3);
+    /* Screen x of each strip vertex (1/256 pixels, as the scene has them). */
+    for(i=0;i<5;i++)xs[i]=(int32_t)((((double)px[i]+4096)*256/(2*4096))*256+0.5);
+    if(scene->count==3){
+        static const int want[3][3]={{0,1,2},{2,1,3},{2,3,4}};
+        for(i=0;i<3;i++){
+            int k;
+            for(k=0;k<3;k++)CHECK(strip_vertex_index(&scene->triangles[i].v[k],xs)==want[i][k]);
+        }
+    }
+}
+
 static void test_box_test(void)
 {
     reset_geometry();
@@ -617,6 +651,28 @@ static void test_translucency_and_scene_limits(void)
     CHECK((pixels[96*256+128]&31u)>0u);              /* the red one shows */
     NitroPort_IoReg[0x60]&=(uint8_t)~8u;
 
+    /* A translucent pixel isn't drawn over a translucent pixel of the same
+     * polygon ID: overlapping parts of one model don't add up. */
+    reset_geometry();
+    NitroPort_IoReg[0x60]|=8u;
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(16u<<16)|(5u<<24));
+    triangle(0,RGB(31,0,0));                         /* translucent red, ID 5 */
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(16u<<16)|(5u<<24));
+    triangle(0,RGB(0,0,31));                         /* blue, same ID: not drawn */
+    swap();
+    NitroPort_Gx3dRasterize(pixels,NULL);
+    CHECK((pixels[96*256+128]&31u)>0u);
+    CHECK(((pixels[96*256+128]>>10)&31u)==0u);
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(16u<<16)|(5u<<24));
+    triangle(0,RGB(31,0,0));
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(16u<<16)|(6u<<24));
+    triangle(0,RGB(0,0,31));                         /* another ID: blends */
+    swap();
+    NitroPort_Gx3dRasterize(pixels,NULL);
+    CHECK(((pixels[96*256+128]>>10)&31u)>0u);
+    NitroPort_IoReg[0x60]&=(uint8_t)~8u;
+
     reset_geometry();
     for(i=0;i<2049u;i++)triangle(0,RGB(31,0,0));
     swap();
@@ -647,6 +703,7 @@ int main(void)
     test_vtx_diff();
     test_triangles_and_depth();
     test_culling();
+    test_triangle_strip();
     test_textures();
     test_box_test();
     test_clear_and_status();

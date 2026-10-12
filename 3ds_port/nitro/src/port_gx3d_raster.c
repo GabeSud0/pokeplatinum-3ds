@@ -12,6 +12,7 @@
  */
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_texture.h>
+#include <nitro_port_gx3d_vertex.h>
 #include <nitro.h>
 #include <math.h>
 #include <stdlib.h>
@@ -25,6 +26,12 @@ typedef NitroGx3dTexel Texel;
 static NitroGx3dTexBanks sBanks;
 static uint32_t sDepth[W*H];
 static uint8_t sAlpha[W*H];   /* each pixel's 3D alpha, 0-31 */
+/* The polygon ID of the translucent pixel drawn last at each pixel, or
+ * NO_TRANSLUCENT after an opaque one (or none). The DS doesn't draw a
+ * translucent pixel over a translucent one of the same polygon ID: a
+ * model's overlapping translucent parts don't add up. */
+#define NO_TRANSLUCENT 0xFFu
+static uint8_t sTranslucentId[W*H];
 static int sWBuffer;   /* the scene uses W-buffering (SWAP_BUFFERS bit 1) */
 
 static uint16_t rd16(const unsigned char *p)
@@ -77,7 +84,13 @@ static void raster_triangle(const NitroGx3dTriangle *tri,uint16_t *out)
     double area;
     int x0,y0,x1,y1,xp,yp,i,alpha;
     unsigned fmt=(tri->texture_param>>26)&7;
-    for(i=0;i<3;i++){x[i]=tri->v[i].x/256.0;y[i]=tri->v[i].y/256.0;}
+    {
+        /* Edges a tenth of a pixel further out, as the GPU path draws them. */
+        float fx[3],fy[3],dx[3],dy[3];
+        for(i=0;i<3;i++){fx[i]=tri->v[i].x/256.0f;fy[i]=tri->v[i].y/256.0f;}
+        NitroPort_Gx3dExpandTriangle(fx,fy,dx,dy);
+        for(i=0;i<3;i++){x[i]=fx[i]+dx[i];y[i]=fy[i]+dy[i];}
+    }
     area=edge(x[0],y[0],x[1],y[1],x[2],y[2]);
     if(fabs(area)<1e-8)return;
     invarea=1.0/area;
@@ -126,6 +139,13 @@ static void raster_triangle(const NitroGx3dTriangle *tri,uint16_t *out)
         /* DISP3DCNT bit3 enables alpha blending with the 3D colour buffer.
          * When disabled, fractional alpha still controls coverage but the
          * source colour replaces the destination on a visible fragment. */
+        if(pixelAlpha<31){
+            unsigned id=(tri->polygon_attr>>24)&63u;
+            if(sTranslucentId[index]==id)continue;
+            sTranslucentId[index]=(uint8_t)id;
+        }else{
+            sTranslucentId[index]=NO_TRANSLUCENT;
+        }
         storedAlpha=pixelAlpha;
         if(pixelAlpha<31 && (NitroPort_IoReg[0x60]&8u) &&
            (out[index]&0x8000)){
@@ -160,24 +180,16 @@ void NitroPort_Gx3dRasterizeSceneAlpha(const NitroGx3dScene *scene,uint16_t *rgb
         sDepth[i]=depth*0x200u;
         rgba555[i]=(uint16_t)((clear&0x7fff)|(((clear>>16)&31)?0x8000:0));
         sAlpha[i]=(uint8_t)((clear>>16)&31);
+        sTranslucentId[i]=NO_TRANSLUCENT;
     }
     sWBuffer=(scene->swap_param&2u)!=0;
     if(scene->count){
-        unsigned pass;
+        /* The DS's order: opaque polygons, then translucent ones (sorted
+         * by screen line unless the game sorts them itself). */
+        static uint16_t order[NITRO_GX3D_MAX_TRIANGLES],scratch[NITRO_GX3D_MAX_TRIANGLES];
+        size_t n=NitroPort_Gx3dDrawOrder(scene,order,scratch);
         NitroPort_Gx3dMapTextureBanks(&sBanks);
-        /* DS polygon RAM draws the opaque pass before translucent faces
-         * regardless of submission order. Alpha-bearing texel formats may
-         * contain fractional alpha even with POLYGON_ATTR alpha=31. */
-        for(pass=0;pass<2;pass++)for(i=0;i<scene->count;i++){
-            const NitroGx3dTriangle *tri=&scene->triangles[i];
-            unsigned fmt=(tri->texture_param>>26)&7u;
-            unsigned alpha=(tri->polygon_attr>>16)&31u;
-            int translucent=alpha<31u || fmt==1u || fmt==6u ||
-                             (fmt>=2u && fmt<=4u &&
-                              (tri->texture_param&(1u<<29))) ||
-                             fmt==5u || fmt==7u;
-            if((int)pass==translucent)raster_triangle(tri,rgba555);
-        }
+        for(i=0;i<n;i++)raster_triangle(&scene->triangles[order[i]],rgba555);
     }
     if(depth_out)memcpy(depth_out,sDepth,sizeof(sDepth));
     if(alpha_out)memcpy(alpha_out,sAlpha,sizeof(sAlpha));

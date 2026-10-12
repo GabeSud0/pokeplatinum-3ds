@@ -1,4 +1,6 @@
 #include <nitro_port_gx3d_vertex.h>
+#include <string.h>
+#include <math.h>
 static uint8_t color8(unsigned v) { return (uint8_t)((v<<3)|(v>>2)); }
 /* PICA depth is mapped to 0 (near) ... 1 (far) by citro3d's
  * viewport mapping. With GPU_LESS and a maximum-depth clear, near wins. */
@@ -90,22 +92,97 @@ size_t NitroPort_Gx3dBuildOpaqueVertices(const NitroGx3dScene *scene,
     return count;
 }
 
+/* A translucent polygon, as the DS sorts them: alpha 1-30, or a texture
+ * with alpha (A3I5, A5I3). Other textures' transparent texels (colour 0,
+ * direct colour, compressed) are simply not drawn: those polygons draw
+ * with the opaque ones. */
 int NitroPort_Gx3dTriangleTranslucent(const NitroGx3dTriangle *tri)
 {
     unsigned fmt=(tri->texture_param>>26)&7u;
     unsigned alpha=(tri->polygon_attr>>16)&31u;
-    /* The same rule as the PC reference (port_gx3d_raster.c). */
-    return alpha<31u || fmt==1u || fmt==6u ||
-           (fmt>=2u && fmt<=4u && (tri->texture_param&(1u<<29))) ||
-           fmt==5u || fmt==7u;
+    return (alpha>0u && alpha<31u) || fmt==1u || fmt==6u;
+}
+
+/* The order the DS draws a scene's triangles in: opaque polygons first,
+ * then translucent ones, as submitted, except that with SWAP_BUFFERS
+ * bit 0 clear (automatic sorting) translucent polygons go by their bottom
+ * screen line, then their top line (a stable sort: ties keep their order).
+ * Opaque polygons keep their order here: the depth test decides between
+ * them. (melonDS sorts them by line too; only ties of equal depth could
+ * tell the difference.) */
+size_t NitroPort_Gx3dDrawOrder(const NitroGx3dScene *scene,uint16_t *order,uint16_t *scratch)
+{
+    size_t i,n=0,first,count,width;
+    if(!scene)return 0;
+    for(i=0;i<scene->count;i++)
+        if(!NitroPort_Gx3dTriangleTranslucent(&scene->triangles[i]))order[n++]=(uint16_t)i;
+    first=n;
+    for(i=0;i<scene->count;i++)
+        if(NitroPort_Gx3dTriangleTranslucent(&scene->triangles[i]))order[n++]=(uint16_t)i;
+    count=n-first;
+    if(scene->swap_param&1u || count<2)return n;
+    /* Bottom-up merge sort of order[first..n): stable. */
+    for(width=1;width<count;width*=2){
+        uint16_t *src=order+first;
+        size_t lo;
+        for(lo=0;lo<count;lo+=2*width){
+            size_t mid=lo+width<count?lo+width:count;
+            size_t hi=lo+2*width<count?lo+2*width:count;
+            size_t a=lo,b=mid,k=lo;
+            while(a<mid && b<hi){
+                if(scene->triangles[src[b]].sort_key<scene->triangles[src[a]].sort_key)
+                    scratch[k++]=src[b++];
+                else scratch[k++]=src[a++];
+            }
+            while(a<mid)scratch[k++]=src[a++];
+            while(b<hi)scratch[k++]=src[b++];
+        }
+        memcpy(src,scratch,count*sizeof(*src));
+    }
+    return n;
+}
+
+/* Each edge of a screen-space triangle moved out by a tenth of a pixel
+ * (corners by at most three times that). The DS's rasterizer covers the
+ * pixels on a shared edge from both sides, so where two models' vertices
+ * don't quite meet nothing shows through; the 3DS's GPU, which covers a
+ * pixel only when its centre is inside, showed dots of background there. */
+#define EXPAND_PX 0.1f
+void NitroPort_Gx3dExpandTriangle(const float sx[3],const float sy[3],float dx[3],float dy[3])
+{
+    float nx[3],ny[3],area;
+    int i;
+    for(i=0;i<3;i++)dx[i]=dy[i]=0.0f;
+    area=(sx[1]-sx[0])*(sy[2]-sy[0])-(sy[1]-sy[0])*(sx[2]-sx[0]);
+    if(area>-1e-6f && area<1e-6f)return;
+    for(i=0;i<3;i++){
+        int j=(i+1)%3;
+        float ex=sx[j]-sx[i],ey=sy[j]-sy[i],len=sqrtf(ex*ex+ey*ey);
+        if(len<1e-6f)return;
+        /* Outward normal: right of the edge for one winding, left for the other. */
+        nx[i]=(area>0? ey:-ey)/len;
+        ny[i]=(area>0?-ex: ex)/len;
+    }
+    for(i=0;i<3;i++){
+        int p=(i+2)%3;   /* the edge ending at vertex i */
+        float denom=1.0f+nx[p]*nx[i]+ny[p]*ny[i];
+        float mx,my,m2,limit=3.0f*EXPAND_PX;
+        if(denom<1e-3f)denom=1e-3f;
+        mx=EXPAND_PX*(nx[p]+nx[i])/denom;
+        my=EXPAND_PX*(ny[p]+ny[i])/denom;
+        m2=mx*mx+my*my;
+        if(m2>limit*limit){float k=limit/sqrtf(m2);mx*=k;my*=k;}
+        dx[i]=mx;dy[i]=my;
+    }
 }
 
 static void put_vertex(NitroGx3dGpuVertex *dst,const NitroGx3dVertex *v,
-                       uint32_t swap_param,unsigned alpha,float tw,float th)
+                       uint32_t swap_param,unsigned alpha,float tw,float th,
+                       float dx,float dy)
 {
     float w=v->clip[3]/4096.0f;
-    float ndc_x=(v->x/256.0f)/128.0f-1.0f;
-    float ndc_y=1.0f-(v->y/256.0f)/96.0f;
+    float ndc_x=(v->x/256.0f+dx)/128.0f-1.0f;
+    float ndc_y=1.0f-(v->y/256.0f+dy)/96.0f;
     dst->position[0]=ndc_x*w;
     dst->position[1]=ndc_y*w;
     dst->position[2]=NitroPort_Gx3dClipZ(v,swap_param);
@@ -136,22 +213,27 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
                                   size_t *batch_count, unsigned *dropped)
 {
     size_t i,count=0,nb=0;
-    unsigned pass,lost=0;
+    unsigned lost=0;
     if(batch_count)*batch_count=0;
     if(dropped)*dropped=0;
     if(!scene||!out||!batches)return 0;
     if(capacity>NITRO_GX3D_PICA_MAX_VERTICES)
         capacity=NITRO_GX3D_PICA_MAX_VERTICES;
-    for(pass=0;pass<2;pass++)for(i=0;i<scene->count;i++){
-        const NitroGx3dTriangle *tri=&scene->triangles[i];
+    static uint16_t order[NITRO_GX3D_MAX_TRIANGLES],scratch[NITRO_GX3D_MAX_TRIANGLES];
+    size_t n=NitroPort_Gx3dDrawOrder(scene,order,scratch),j;
+    for(j=0;j<n;j++){
+        const NitroGx3dTriangle *tri=&scene->triangles[order[j]];
         unsigned alpha=(tri->polygon_attr>>16)&31u;
+        unsigned pass=(unsigned)NitroPort_Gx3dTriangleTranslucent(tri);
         uint32_t param,palette,attr;
         float tw,th;
         NitroGx3dBatch *batch;
         unsigned k;
         if(!alpha)continue;
-        if((unsigned)NitroPort_Gx3dTriangleTranslucent(tri)!=pass)continue;
         batch_state(tri,&param,&palette,&attr);
+        /* Translucent polygons don't draw over translucent pixels of their
+         * own polygon ID: it's part of their state. */
+        if(pass)attr|=tri->polygon_attr&(63u<<24);
         batch=nb?&batches[nb-1]:NULL;
         if(!batch || batch->texture_param!=param || batch->palette_base!=palette ||
            batch->polygon_attr!=attr || batch->translucent!=pass){
@@ -167,8 +249,13 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
         if(count+3>capacity){lost++;continue;}
         tw=(float)(8u<<((tri->texture_param>>20)&7u));
         th=(float)(8u<<((tri->texture_param>>23)&7u));
-        for(k=0;k<3;k++)
-            put_vertex(&out[count++],&tri->v[k],scene->swap_param,alpha,tw,th);
+        {
+            float sx[3],sy[3],dx[3],dy[3];
+            for(k=0;k<3;k++){sx[k]=tri->v[k].x/256.0f;sy[k]=tri->v[k].y/256.0f;}
+            NitroPort_Gx3dExpandTriangle(sx,sy,dx,dy);
+            for(k=0;k<3;k++)
+                put_vertex(&out[count++],&tri->v[k],scene->swap_param,alpha,tw,th,dx[k],dy[k]);
+        }
         batch->count+=3;
     }
     /* A batch opened for a triangle that then didn't fit stays empty. */
