@@ -157,15 +157,29 @@ vertex arrays and linear transfer output buffers. The shader is assembled
 with `picasso` from `game/app/gx3d_passthrough.v.pica`.
 `port_gx3d_vertex.c` builds clip-space float4 (preserving W and DS
 screen-space mapping), colour bytes and normalized UV, but PR1 **draws only
-untextured opaque triangles** with PICA depth testing. The [perf] line
-includes 3D milliseconds/scene and triangles/scene.
+untextured opaque triangles** with PICA depth testing. Its host-testable
+depth function maps near to 0, far to 1; the PICA uses `GPU_LESS` with
+maximum-depth clear so nearer geometry wins. Both scene and image gates
+spin briefly then use the port's 50-us sleep (important for lower-priority
+thread owners on Old 3DS). The [perf] line includes 3D milliseconds/scene,
+triangles drawn, and dropped triangles per scene.
 
-`tests/test_gx3d_plumbing.c` runs a real two-thread scene-mailbox stress
-test and exact synthetic vertex mapping tests on host and host32. Textures,
-complex alpha, W depth, toon and effects are for later PRs defined in
-`docs/3D_STAGE2.md`. The 6144-vertex GPU cap requested by the document
-can truncate Stage 1's maximum 4096 clipped triangles (12,288 triangle
-vertices); this mismatch is documented in the PR, not silently altered.
+`tests/test_gx3d_plumbing.c` covers two-thread scene/image handoff, contended
+spin-then-sleep locks, independent vertex/depth mapping (near wins under
+`GPU_LESS`), full 12,288 triangle-list vertex capacity, truncation
+counts for smaller buffers, and RGBA PNG colour/alpha/orientation with only
+synthetic data. The GPU allocates two linear buffers of **12,288 vertices**,
+enough for Stage 1's maximum 4,096 post-clipping triangles. Any scene
+overflow or capacity drop is counted in `[perf]`.
+
+**Comparing orientation on real hardware/Azahar:** press **L+R+Y** to write
+`sdmc:/3ds/pokeplatinum/3d_frame_<frame>.png`. On PC, run
+`pokeplatinum-pc ... --dump-3d FRAME` to write
+`3d_frame_<frame>.png` in the working directory. Both use the exact same
+RGBA8 PNG writer, with alpha 0 for transparent BG0 and row 0 at the top.
+These are private outputs from your own pack; never commit them. Textures,
+complex alpha, exact W-depth, toon and effects are for later PRs in
+`docs/3D_STAGE2.md`.
 
 ## Virtual ARM7 sound driver and software sound chip
 
