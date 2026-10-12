@@ -1,0 +1,93 @@
+From: Platinum 3DS port contributors
+Subject: [PATCH] Drive ARM7 stream alarms from the port audio clock
+
+---
+diff --git a/libraries/snd/src/snd_alarm.c b/libraries/snd/src/snd_alarm.c
+--- a/libraries/snd/src/snd_alarm.c
++++ b/libraries/snd/src/snd_alarm.c
+@@ -1,5 +1,9 @@
+ #include <nitro/snd/common/alarm.h>
+ #include <nitro/pxi.h>
+-#include <nitro/snd/common/work.h>
++#include <nitro/snd/common/work.h>
++#if defined(SDK_PORT_3DS) && defined(SDK_ARM7)
++extern void NitroPort_SoundAlarmStart(int alarmNo, u64 tick, u64 period, u32 id);
++extern void NitroPort_SoundAlarmStop(int alarmNo);
++#endif
+ 
+ #ifdef SDK_ARM9
+@@ -56,10 +60,14 @@
+         alarm = &SNDi_Work.alarm[alarmNo];
+ 
+-        if (alarm->enable) {
+-            OS_CancelAlarm(&alarm->alarm);
+-            alarm->enable = FALSE;
+-        }
+-
+-        alarm->setting.tick = tick;
++        if (alarm->enable) {
++#if defined(SDK_PORT_3DS)
++            NitroPort_SoundAlarmStop(alarmNo);
++#else
++            OS_CancelAlarm(&alarm->alarm);
++#endif
++            alarm->enable = FALSE;
++        }
++
++        alarm->setting.tick = tick;
+         alarm->setting.period = period;
+         alarm->id = (u8)id;
+@@ -77,22 +85,30 @@
+         alarm = &SNDi_Work.alarm[alarmNo];
+ 
+         if (alarm->enable) {
+-            OS_CancelAlarm(&alarm->alarm);
++#if defined(SDK_PORT_3DS)
++            NitroPort_SoundAlarmStop(alarmNo);
++#else
++            OS_CancelAlarm(&alarm->alarm);
++#endif
+             alarm->enable = FALSE;
+         }
+ 
+         tick = alarm->setting.tick;
+         period = alarm->setting.period;
+         arg = (void *)((alarm->id << 8) | alarmNo);
+ 
+-        OS_CreateAlarm(&alarm->alarm);
+-
+-        if (period == 0) {
+-            OS_SetAlarm(&alarm->alarm, tick, AlarmHandler, arg);
+-        } else {
+-            OS_SetPeriodicAlarm(&alarm->alarm, OS_GetTick() + tick, period, AlarmHandler, arg);
+-        }
++#if defined(SDK_PORT_3DS)
++        NitroPort_SoundAlarmStart(alarmNo, tick, period, (u32)(uintptr_t)arg);
++#else
++        OS_CreateAlarm(&alarm->alarm);
++
++        if (period == 0) {
++            OS_SetAlarm(&alarm->alarm, tick, AlarmHandler, arg);
++        } else {
++            OS_SetPeriodicAlarm(&alarm->alarm, OS_GetTick() + tick, period, AlarmHandler, arg);
++        }
++#endif
+ 
+         alarm->enable = TRUE;
+     }
+ 
+@@ -108,7 +124,11 @@
+             return;
+ 
+-        OS_CancelAlarm(&alarm->alarm);
+-
+-        alarm->id++;
++#if defined(SDK_PORT_3DS)
++        NitroPort_SoundAlarmStop(alarmNo);
++#else
++        OS_CancelAlarm(&alarm->alarm);
++#endif
++
++        alarm->id++;
+         alarm->enable = FALSE;
+     }

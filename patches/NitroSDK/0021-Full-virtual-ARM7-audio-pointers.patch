@@ -1,0 +1,42 @@
+From: Platinum 3DS port contributors
+Subject: [PATCH] Preserve full host and 3DS audio buffer pointers
+
+---
+diff --git a/libraries/snd/src/snd_command.c b/libraries/snd/src/snd_command.c
+--- a/libraries/snd/src/snd_command.c
++++ b/libraries/snd/src/snd_command.c
+@@ -492,5 +492,9 @@
+             case SND_COMMAND_SETUP_CHANNEL_PCM:
+                 SND_SetupChannelPcm((int)UNPACK_COMMAND(command.arg[0], 0, 16),
+-                                    (const void *)UNPACK_COMMAND(command.arg[1], 0, 27),
++#if defined(SDK_PORT_3DS)
++                                    (const void *)command.arg[1],
++#else
++                                    (const void *)UNPACK_COMMAND(command.arg[1], 0, 27),
++#endif
+                                     (SNDWaveFormat)UNPACK_COMMAND(command.arg[3], 24, 2),
+                                     (SNDChannelLoop)UNPACK_COMMAND(command.arg[3], 26, 2),
+diff --git a/libraries/snd/src/ARM7/snd_channel.c b/libraries/snd/src/ARM7/snd_channel.c
+--- a/libraries/snd/src/ARM7/snd_channel.c
++++ b/libraries/snd/src/ARM7/snd_channel.c
+@@ -18,5 +18,7 @@
+     SDK_MINMAX_ASSERT(chNo, SND_CHANNEL_MIN, SND_CHANNEL_MAX);
+     SDK_MINMAX_ASSERT(loopLen, 0, SND_CHANNEL_LOOP_LEN_MAX);
+-    SDK_ASSERT(((u32)dataaddr & ~SND_CHANNEL_SAD_MASK) == 0);
++#if !defined(SDK_PORT_3DS)
++    SDK_ASSERT(((u32)dataaddr & ~SND_CHANNEL_SAD_MASK) == 0);
++#endif
+     SDK_MINMAX_ASSERT(loopStart, 0, SND_CHANNEL_LOOP_START_MAX);
+     SDK_MINMAX_ASSERT(loopLen, 0, SND_CHANNEL_LOOP_LEN_MAX);
+diff --git a/libraries/snd/src/ARM7/snd_capture.c b/libraries/snd/src/ARM7/snd_capture.c
+--- a/libraries/snd/src/ARM7/snd_capture.c
++++ b/libraries/snd/src/ARM7/snd_capture.c
+@@ -6,5 +6,7 @@
+     const int offset = SND_CAPTURE_REG_OFFSET * capture;
+ 
+-    SDK_ASSERT(((u32)buffer_addr & ~SND_CAPTURE_DAD_MASK) == 0);
++#if !defined(SDK_PORT_3DS)
++    SDK_ASSERT(((u32)buffer_addr & ~SND_CAPTURE_DAD_MASK) == 0);
++#endif
+     SDK_MINMAX_ASSERT(length, 0, SND_CAPTURE_LEN_MAX);
+ 

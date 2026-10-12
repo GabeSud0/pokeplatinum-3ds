@@ -1,0 +1,80 @@
+From: Platinum 3DS port contributors
+Subject: [PATCH] Use virtual audio registers and deterministic ARM7 initialization
+
+---
+diff --git a/include/nitro/hw/ARM7/ioreg_SND.h b/include/nitro/hw/ARM7/ioreg_SND.h
+--- a/include/nitro/hw/ARM7/ioreg_SND.h
++++ b/include/nitro/hw/ARM7/ioreg_SND.h
+@@ -7,5 +7,11 @@
+ #ifndef SDK_ASM
+ #include <nitro/types.h>
+-#include <nitro/hw/ARM7/mmap_global.h>
++#include <nitro/hw/ARM7/mmap_global.h>
++#if defined(SDK_PORT_3DS) && defined(SDK_ARM7)
++#include <stdint.h>
++extern volatile u8 NitroPort_SoundRegisters[0x600];
++#undef HW_REG_BASE
++#define HW_REG_BASE ((uintptr_t)NitroPort_SoundRegisters)
++#endif
+ #endif
+ 
+diff --git a/libraries/snd/src/snd_util.c b/libraries/snd/src/snd_util.c
+--- a/libraries/snd/src/snd_util.c
++++ b/libraries/snd/src/snd_util.c
+@@ -10,7 +10,7 @@
+ #define SND_VOLUME_SHIFT_0_MIN -60
+ 
+-#if defined(SDK_TS) && defined(SDK_ARM7)
+-    #define SND_USE_SYSTEM_ROM_TABLE
+-#endif
++#if defined(SDK_TS) && defined(SDK_ARM7) && !defined(SDK_PORT_3DS)
++    #define SND_USE_SYSTEM_ROM_TABLE
++#endif
+ 
+ #ifndef SND_USE_SYSTEM_ROM_TABLE
+diff --git a/libraries/snd/src/snd_main.c b/libraries/snd/src/snd_main.c
+--- a/libraries/snd/src/snd_main.c
++++ b/libraries/snd/src/snd_main.c
+@@ -55,6 +55,18 @@
+         }
+ 
+-        SND_CommandInit();
+-        SND_CreateThread(threadPrio);
++        SND_CommandInit();
++#if defined(SDK_PORT_3DS)
++        /* Audio buffers drive the ARM7 ticks; no ARM9 thread scheduling. */
++        (void)threadPrio;
++        SND_ExChannelInit();
++        SND_SeqInit();
++        SND_AlarmInit();
++        SND_Enable();
++        SND_SetOutputSelector(SND_OUTPUT_MIXER, SND_OUTPUT_MIXER,
++                              SND_CHANNEL_OUT_MIXER, SND_CHANNEL_OUT_MIXER);
++        SND_SetMasterVolume(SND_MASTER_VOLUME_MAX);
++#else
++        SND_CreateThread(threadPrio);
++#endif
+     }
+ 
+@@ -83,7 +95,9 @@
+     void SND_StartIntervalTimer (void)
+     {
+-        OS_SetPeriodicAlarm(&sndAlarm,
+-                            OS_GetTick() + SND_ALARM_COUNT_P1,
+-                            SND_PROC_INTERVAL, &SndAlarmCallback, NULL);
++#if !defined(SDK_PORT_3DS)
++        OS_SetPeriodicAlarm(&sndAlarm,
++                            OS_GetTick() + SND_ALARM_COUNT_P1,
++                            SND_PROC_INTERVAL, &SndAlarmCallback, NULL);
++#endif
+     }
+ 
+@@ -90,5 +104,7 @@
+     void SND_StopIntervalTimer (void)
+     {
+-        OS_CancelAlarm(&sndAlarm);
++#if !defined(SDK_PORT_3DS)
++        OS_CancelAlarm(&sndAlarm);
++#endif
+     }
+ 

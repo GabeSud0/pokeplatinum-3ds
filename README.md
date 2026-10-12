@@ -27,8 +27,9 @@ the same engine, so most of the 3DS backend should carry over.
 > ([`3ds_port/game`](3ds_port/game)): `NitroMain` runs with the SDK's threads, interrupts, timers and
 > overlays working, reading files from your data pack, and the DS's second
 > CPU's services (power, clock, save chip, touch screen) answering. It plays
-> its opening and title screen and starts a new game; 2D graphics are drawn.
-> Next: 3D and sound. **Nothing playable yet.**
+> its opening and title screen and starts a new game; 2D graphics are drawn,
+> and the original sound driver plays through a software DS sound chip
+> (being checked by ear). Next: 3D. **Nothing playable yet.**
 
 ## This repository contains no game content
 

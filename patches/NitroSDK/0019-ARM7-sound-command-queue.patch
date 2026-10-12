@@ -1,0 +1,114 @@
+From: Platinum 3DS port contributors
+Subject: [PATCH] Run ARM7 sound command lists without the game scheduler
+
+---
+diff --git a/libraries/snd/src/snd_command.c b/libraries/snd/src/snd_command.c
+--- a/libraries/snd/src/snd_command.c
++++ b/libraries/snd/src/snd_command.c
+@@ -12,5 +12,9 @@
+ #include <nitro/snd/common/util.h>
+ #include <nitro/snd/common/alarm.h>
+-#include <nitro/snd/common/main.h>
++#include <nitro/snd/common/main.h>
++#if defined(SDK_PORT_3DS) && defined(SDK_ARM7)
++/* The audio service owns the command queue, never the ARM9 OS. */
++extern const SNDCommand *NitroPort_SoundPopCommand(void);
++#endif
+ 
+ #define SND_COMMAND_NUM 256
+@@ -67,10 +71,14 @@
+ 
+ #ifdef SDK_ARM7
+-    OS_InitMessageQueue(&sCommandMesgQueue, sCommandMesgBuffer, SND_PXI_FIFO_MESSAGE_BUFSIZE);
++#if !defined(SDK_PORT_3DS)
++    OS_InitMessageQueue(&sCommandMesgQueue, sCommandMesgBuffer, SND_PXI_FIFO_MESSAGE_BUFSIZE);
++#endif
+ #endif
+ 
+-    InitPXI();
++#if !defined(SDK_PORT_3DS) || defined(SDK_ARM9)
++    InitPXI();
++#endif
+ 
+ #ifdef SDK_ARM9
+ 
+     sFreeList = &sCommandArray[0];
+@@ -405,10 +413,16 @@
+ void SND_CommandProc (void)
+ {
+-    OSMessage message;
+-    const SNDCommand * command_p;
+-    SNDCommand command;
+-
+-    while (OS_ReceiveMessage(&sCommandMesgQueue, &message, OS_MESSAGE_NOBLOCK)) {
+-        command_p = (const SNDCommand *)message;
++#if !defined(SDK_PORT_3DS)
++    OSMessage message;
++#endif
++    const SNDCommand * command_p;
++    SNDCommand command;
++
++#if defined(SDK_PORT_3DS)
++    while ((command_p = NitroPort_SoundPopCommand()) != NULL) {
++#else
++    while (OS_ReceiveMessage(&sCommandMesgQueue, &message, OS_MESSAGE_NOBLOCK)) {
++        command_p = (const SNDCommand *)message;
++#endif
+ 
+         while (command_p != NULL) {
+@@ -565,8 +579,12 @@
+ 
+         SDK_NULL_ASSERT(SNDi_SharedWork);
+-        SNDi_SharedWork->finishCommandTag++;
+-    }
+-}
+-#endif
++#if defined(SDK_PORT_3DS)
++        (void)__atomic_add_fetch(&SNDi_SharedWork->finishCommandTag, 1, __ATOMIC_RELEASE);
++#else
++        SNDi_SharedWork->finishCommandTag++;
++#endif
++    }
++}
++#endif
+ 
+ static void PxiFifoCallback (PXIFifoTag tag, u32 data, BOOL)
+diff --git a/libraries/snd/src/ARM7/snd_global.c b/libraries/snd/src/ARM7/snd_global.c
+--- a/libraries/snd/src/ARM7/snd_global.c
++++ b/libraries/snd/src/ARM7/snd_global.c
+@@ -37,10 +37,12 @@
+     SND_Disable();
+ 
+-    SVC_ResetSoundBias(SOUND_BIAS_WAIT_COUNT);
+-    OS_SpinWait(SOUND_BIAS_CYCLE_PER_LOOP * SOUND_BIAS_WAIT_COUNT * SOUND_BIAS_LEVEL);
+-
+-    PMi_ResetControl(PMIC_CTL_SND_PWR);
+-
+-    reg_SND_POWCNT &= ~REG_SND_POWCNT_SPE_MASK;
++#if !defined(SDK_PORT_3DS)
++    SVC_ResetSoundBias(SOUND_BIAS_WAIT_COUNT);
++    OS_SpinWait(SOUND_BIAS_CYCLE_PER_LOOP * SOUND_BIAS_WAIT_COUNT * SOUND_BIAS_LEVEL);
++
++    PMi_ResetControl(PMIC_CTL_SND_PWR);
++#endif
++
++    reg_SND_POWCNT &= ~REG_SND_POWCNT_SPE_MASK;
+ }
+ 
+@@ -49,9 +51,11 @@
+     reg_SND_POWCNT |= REG_SND_POWCNT_SPE_MASK;
+ 
+-    PMi_SetControl(PMIC_CTL_SND_PWR);
+-
+-    SVC_SetSoundBias(SOUND_BIAS_WAIT_COUNT * 2);
+-
+-    OS_SpinWait(OS_MilliSecondsToTicks(15) * 64);
++#if !defined(SDK_PORT_3DS)
++    PMi_SetControl(PMIC_CTL_SND_PWR);
++
++    SVC_SetSoundBias(SOUND_BIAS_WAIT_COUNT * 2);
++
++    OS_SpinWait(OS_MilliSecondsToTicks(15) * 64);
++#endif
+ 
+     SND_Enable();

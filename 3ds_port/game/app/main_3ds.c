@@ -37,6 +37,99 @@
 /* The 2D renderer (nitro_port.h, which can't be included next to 3ds.h). */
 void NitroPort_RenderScreens(uint16_t *top, uint16_t *bottom);
 
+/* Audio uses the port's plain-C mixer; it deliberately does not include
+ * NitroSDK headers alongside libctru. */
+void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void NitroPort_SoundRender(int16_t *stereo, size_t frames);
+void NitroPort_SoundPumpReplies(void);
+
+#define AUDIO_FRAMES 512
+#define AUDIO_BUFFERS 3
+static Thread sSoundThread;
+static bool sSoundThreadRunning;
+static bool sNdspAvailable;
+static int16_t *sSoundSamples;
+static ndspWaveBuf sSoundBuf[AUDIO_BUFFERS];
+
+static void SoundMain(void *unused)
+{
+    int16_t silent[AUDIO_FRAMES * 2];
+    int i;
+    (void)unused;
+    while (__atomic_load_n(&sSoundThreadRunning, __ATOMIC_ACQUIRE)) {
+        if (sNdspAvailable) {
+            for (i = 0; i < AUDIO_BUFFERS; ++i) {
+                ndspWaveBuf *buf = &sSoundBuf[i];
+                if (buf->status == NDSP_WBUF_FREE ||
+                    buf->status == NDSP_WBUF_DONE) {
+                    NitroPort_SoundRender((int16_t *)buf->data_vaddr, AUDIO_FRAMES);
+                    DSP_FlushDataCache(buf->data_vaddr, AUDIO_FRAMES * 4);
+                    ndspChnWaveBufAdd(0, buf);
+                }
+            }
+            svcSleepThread(1000000LL);
+        } else {
+            /* Even without dspfirm.cdc, continue driving Nintendo's ARM7
+             * sequencer and releasing its commands from real audio time. */
+            NitroPort_SoundRender(silent, AUDIO_FRAMES);
+            svcSleepThread(15625000LL);
+        }
+    }
+    threadExit(0);
+}
+
+static void StartSound(s32 priority)
+{
+    Result result = ndspInit();
+    int i;
+    if (R_SUCCEEDED(result)) {
+        sSoundSamples = linearAlloc(AUDIO_BUFFERS * AUDIO_FRAMES * 4);
+        if (!sSoundSamples) {
+            NitroPort_Log("[audio] not enough linear memory for DSP buffers; no output");
+            ndspExit();
+        } else {
+            sNdspAvailable = true;
+            ndspSetOutputMode(NDSP_OUTPUT_STEREO);
+            ndspChnReset(0);
+            ndspChnSetInterp(0, NDSP_INTERP_LINEAR);
+            ndspChnSetRate(0, 32768.0f);
+            ndspChnSetFormat(0, NDSP_FORMAT_STEREO_PCM16);
+            for (i = 0; i < AUDIO_BUFFERS; ++i) {
+                memset(&sSoundBuf[i], 0, sizeof(sSoundBuf[i]));
+                sSoundBuf[i].data_vaddr = &sSoundSamples[i * AUDIO_FRAMES * 2];
+                sSoundBuf[i].nsamples = AUDIO_FRAMES;
+            }
+            NitroPort_Log("[audio] NDSP stereo initialized at 32768 Hz");
+        }
+    } else {
+        NitroPort_Log("[audio] DSP firmware unavailable (check sdmc:/3ds/dspfirm.cdc); "
+                      "running sound driver without speaker output");
+    }
+    __atomic_store_n(&sSoundThreadRunning, true, __ATOMIC_RELEASE);
+    sSoundThread = threadCreate(SoundMain, NULL, 64 * 1024, priority - 2, -2, false);
+    if (!sSoundThread) {
+        __atomic_store_n(&sSoundThreadRunning, false, __ATOMIC_RELEASE);
+        NitroPort_Log("[audio] couldn't start independent audio thread");
+    }
+}
+
+static void StopSound(void)
+{
+    if (sSoundThread) {
+        __atomic_store_n(&sSoundThreadRunning, false, __ATOMIC_RELEASE);
+        threadJoin(sSoundThread, UINT64_MAX);
+        threadFree(sSoundThread);
+        sSoundThread = NULL;
+    }
+    if (sNdspAvailable) {
+        ndspChnWaveBufClear(0);
+        ndspExit();
+        linearFree(sSoundSamples);
+        sNdspAvailable = false;
+        sSoundSamples = NULL;
+    }
+}
+
 #define DATA_DIR      "sdmc:/3ds/pokeplatinum"
 #define PAK_PATH      DATA_DIR "/platinum3ds.pak"
 #define MANIFEST_PATH DATA_DIR "/manifest.json"
@@ -301,6 +394,7 @@ void NitroPort_OnFrame(void)
 {
     u32 held, down;
 
+    NitroPort_SoundPumpReplies(); /* never raise ARM9 FIFO IRQ from DSP thread */
     sFrame++;
     if (!sWatchdogHasHome && !aptMainLoop()) {
         Quit();   /* closed from the HOME menu */
@@ -459,6 +553,7 @@ int main(int argc, char **argv)
         ReadProfile(&sSettings);
         sSettings.savePath = SAVE_PATH;
         svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
+        StartSound(priority);
         if (threadCreate(GameThread, NULL, GAME_STACK_SIZE, priority, -2, true) == NULL) {
             NitroPort_Log("Can't start the game's thread.");
         } else {
@@ -471,6 +566,7 @@ int main(int argc, char **argv)
         }
     }
 
+    StopSound();
     if (sLog != NULL) {
         fclose(sLog);
         sLog = NULL;

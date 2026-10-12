@@ -157,6 +157,28 @@ SDK_SRCS := \
 # Not built: mi/src/mi_uncomp_stream.c (streaming decompression; assembly only,
 # and the game doesn't use it).
 
+# A second, genuine ARM7 build of the pinned SDK sound driver. These objects
+# are compiled with SDK_ARM7, not SDK_ARM9, then ALL their global definitions
+# and cross-object references are renamed with objcopy --redefine-syms. This
+# avoids duplicate SND_Init/SNDi_Work/etc and retains the exact ARM7 engine.
+ARM7_SOUND_SRCS := \
+ snd/src/ARM7/snd_global.c \
+ snd/src/ARM7/snd_channel.c \
+ snd/src/snd_util.c \
+ snd/src/snd_main.c \
+ snd/src/ARM7/snd_capture.c \
+ snd/src/ARM7/snd_exchannel.c \
+ snd/src/ARM7/snd_seq.c \
+ snd/src/ARM7/snd_midiplayer.c \
+ snd/src/snd_bank.c \
+ snd/src/snd_work.c \
+ snd/src/snd_alarm.c \
+ snd/src/snd_command.c \
+ snd/src/snd_data.c
+ARM7_RAW := $(ARM7_SOUND_SRCS:%.c=$(OUT)/arm7_raw/%.o)
+ARM7_OBJS := $(ARM7_SOUND_SRCS:%.c=$(OUT)/arm7_renamed/%.o)
+ARM7_MAP := $(GEN)/arm7_sound_redefine.syms
+
 PORT_SRCS := $(wildcard src/*.c)
 
 # Threads, signals and the clock come from the machine (src/port_platform.h).
@@ -218,10 +240,40 @@ $(PAK_READER_OBJ): ../pak/src/pak.c ../pak/include/pak.h
 	@echo "  CC  libpak reader"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-$(LIB): $(SDK_OBJS) $(PORT_OBJS)
+# Compile the ARM7 driver *without* the ARM9 flags used everywhere else.
+# The port patches redirect its sound registers and avoid the ARM9 scheduler.
+$(OUT)/arm7_raw/%.o: $(SDK)/libraries/%.c $(GEN)/nitro/fx/fx_const.h
+	@mkdir -p $(dir $@)
+	@echo "  ARM7 CC $(notdir $<)"
+	@$(CC) $(CFLAGS) -USDK_ARM9 -DSDK_ARM7 -include nitro/misc.h -include stdint.h -c $< -o $@
+
+# Produce one shared mapping from every ARM7 definition, not a naïve
+# --prefix-symbols (which would rename libc/OS references too).
+$(ARM7_MAP): $(ARM7_RAW)
+	@mkdir -p $(dir $@)
+	@$(NM) -g --defined-only $(ARM7_RAW) | awk 'NF == 3 && $$2 ~ /^[TDBRCSG]$$/ { print $$3 " N7_" $$3 }' | sort -u > $@
+
+$(OUT)/arm7_renamed/%.o: $(OUT)/arm7_raw/%.o $(ARM7_MAP)
+	@mkdir -p $(dir $@)
+	@cp $< $@
+	@$(OBJCOPY) --redefine-syms=$(ARM7_MAP) $@
+
+$(LIB): $(SDK_OBJS) $(PORT_OBJS) $(ARM7_OBJS)
 	@rm -f $@
 	@$(AR) rcs $@ $^
 	@echo "built $@"
+
+# Pure-C chip tests link no NitroSDK or platform code.
+SOUND_CHIP_TEST_BIN := $(OUT)/test_sound_chip
+$(SOUND_CHIP_TEST_BIN): tests/test_sound_chip.c src/port_sound_chip.c include/nitro_port_sound_chip.h
+	@mkdir -p $(dir $@)
+	$(CC) $(PORT_CFLAGS) $(LDFLAGS) -Iinclude tests/test_sound_chip.c src/port_sound_chip.c -o $@
+
+# Original ARM9 API to the renamed ARM7 driver through the virtual PXI
+# protocol, with a synthetic SSEQ/SBNK/SWAR fixture (no game content).
+SOUND_SEQ_TEST_BIN := $(OUT)/test_sound_sequence
+$(SOUND_SEQ_TEST_BIN): tests/test_sound_sequence.c $(LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
 
 # Unit tests run on the PC only.
 TEST_BIN := $(OUT)/test_nitro
@@ -263,11 +315,13 @@ RENDER_TEST_BIN := $(OUT)/test_render
 $(RENDER_TEST_BIN): tests/test_render.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
 
-test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(RENDER_TEST_BIN)
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN)
 	./$(TEST_BIN)
 	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
 	./$(THREAD_TEST_BIN)
 	./$(ARM7_TEST_BIN)
+	./$(SOUND_CHIP_TEST_BIN)
+	./$(SOUND_SEQ_TEST_BIN)
 	./$(RENDER_TEST_BIN)
 
 clean:
