@@ -56,6 +56,16 @@ void NitroPort_Halt(void);
  * Weak, empty by default. Called from the default NitroPort_Halt. */
 void NitroPort_OnFrame(void);
 
+/* DS bus cycles in one frame: 263 lines of 2130 cycles (59.83 frames/s). */
+#define NITRO_PORT_CYCLES_PER_FRAME (263ULL * 2130ULL)
+
+/* Work the port does instantly but the DS takes time for (reading the game
+ * card) reports that time here, in DS bus cycles. When this frame's work
+ * adds up to a whole frame, V-blank starts and its interrupt is taken (if
+ * the CPU has interrupts enabled), as it would during a long load on the
+ * DS; without a new frame being shown. The count restarts each frame. */
+void NitroPort_SpendDsTime(u64 cycles);
+
 /* ------------------------------------------------------------ timers, clock */
 
 /* The DS's four timers and the V-count run in software from a real clock

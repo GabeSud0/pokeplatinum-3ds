@@ -62,17 +62,12 @@ __attribute__((weak)) void NitroPort_OnFrame(void)
 {
 }
 
-__attribute__((weak)) void NitroPort_Halt(void)
+/* V-blank starts: its interrupt is requested and V-blank DMAs run (masked
+ * meanwhile, so the interrupts are then taken lowest first). */
+static void StartVBlank(void)
 {
-    /* The DS sleeps until an interrupt arrives. In a game the next one is
-     * (almost always) V-blank, so: finish this frame, then raise it. If the
-     * CPU has interrupts masked (OS_WaitInterrupt, OS_Terminate), it wakes
-     * up but doesn't take them: they stay pending until it unmasks them. */
     u32 saved = OSi_PortCpsr;
 
-    NitroPort_OnFrame();
-    /* V-blank starts: its interrupt is requested and V-blank DMAs run
-     * (masked meanwhile, so the interrupts are then taken lowest first). */
     OSi_PortCpsr |= HW_PSR_IRQ_DISABLE;
     NitroPort_VBlankStarts();
     NitroPort_GxRefresh();
@@ -80,6 +75,37 @@ __attribute__((weak)) void NitroPort_Halt(void)
     NitroPort_DmaVBlank();
     OSi_PortCpsr = saved;
     NitroPort_RaiseIrq(0);
+}
+
+/* DS time spent this frame on work the port does instantly (game card
+ * reads); see NitroPort_SpendDsTime. */
+static u64 sWorkCycles;
+
+__attribute__((weak)) void NitroPort_Halt(void)
+{
+    /* The DS sleeps until an interrupt arrives. In a game the next one is
+     * (almost always) V-blank, so: finish this frame, then raise it. If the
+     * CPU has interrupts masked (OS_WaitInterrupt, OS_Terminate), it wakes
+     * up but doesn't take them: they stay pending until it unmasks them. */
+    NitroPort_OnFrame();
+    sWorkCycles = 0;
+    StartVBlank();
+}
+
+void NitroPort_SpendDsTime(u64 cycles)
+{
+    /* A long load takes the DS several frames, and V-blank interrupts keep
+     * coming meanwhile: the game relies on them, e.g. its V-blank task
+     * list (32 entries) is emptied by the V-blank handler while a field
+     * loads dozens of models that each queue a texture upload there. The
+     * port reads instantly, so it raises those V-blanks itself: one for
+     * every frame's worth of DS time the work in this frame adds up to.
+     * The frame isn't shown; the next OS_Halt still ends it. */
+    sWorkCycles += cycles;
+    while (sWorkCycles >= NITRO_PORT_CYCLES_PER_FRAME) {
+        sWorkCycles -= NITRO_PORT_CYCLES_PER_FRAME;
+        StartVBlank();
+    }
 }
 
 /* ----------------------------------------------------------- OS_Terminate */

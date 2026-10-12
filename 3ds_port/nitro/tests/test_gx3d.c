@@ -108,6 +108,32 @@ static void test_matrices(void)
     CHECK(read32(0x640+5*4)==3*ONE);
     /* Matrix mode 2 excludes scale from the directional matrix. */
     CHECK(read32(0x680)==ONE);
+
+    /* Multiplies go on the left: Current = Parameter x Current (GBATEK).
+     * A model's scale after a camera that moves things by 5 doesn't scale
+     * the camera's move (NNS draws camera, then each model's transform). */
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x10,2);
+    G3_Translate(5*ONE,0,0);
+    G3_Scale(2*ONE,ONE,ONE);
+    NitroPort_Gx3dRefreshStatus();
+    CHECK(read32(0x640+12*4)==5*ONE);
+    CHECK(read32(0x640)==2*ONE);
+    /* ... and a model's move after a camera rotation is rotated: a 90
+     * degree turn about Z (x -> y) then a move of 3 along x moves along x
+     * first, then turns: the result moves along y. */
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x10,2);
+    {
+        MtxFx43 turn;
+        MTX_Identity43(&turn);
+        turn._00=0; turn._01=ONE; turn._10=-ONE; turn._11=0;
+        G3_MultMtx43(&turn);
+    }
+    G3_Translate(3*ONE,0,0);
+    NitroPort_Gx3dRefreshStatus();
+    CHECK(read32(0x640+12*4)==0);
+    CHECK(read32(0x640+13*4)==3*ONE);
 }
 static void test_packed_fifo(void)
 {
@@ -526,6 +552,21 @@ static void test_translucency_and_scene_limits(void)
     scene=NitroPort_Gx3dScene();
     CHECK(scene->count==NITRO_GX3D_MAX_POLYGONS);
     CHECK(scene->dropped>0);
+
+    /* Polygons outside the view take no polygon RAM on the DS: a big map
+     * that's mostly off-screen doesn't push out what's drawn after it. */
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x10,2);
+    NitroPort_GxDirectWrite(0x1c,20*ONE); /* far off to the right */
+    NitroPort_GxDirectWrite(0x1c,0);
+    NitroPort_GxDirectWrite(0x1c,0);
+    for(i=0;i<2100u;i++)triangle(0,RGB(31,0,0));
+    NitroPort_GxDirectWrite(0x15,0);
+    triangle(0,RGB(0,31,0));
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    CHECK(scene->dropped==0);
 }
 
 int main(void)
