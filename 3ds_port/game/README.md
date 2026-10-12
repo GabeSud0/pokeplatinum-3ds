@@ -79,6 +79,29 @@ in the game are logged with the caller's address the same way.
 The program uses the console's profile for the DS user settings the game
 reads (name, birthday, language).
 
+### Debugging Stage 2 3D image orientation
+
+While running on a 3DS or in Azahar, press **L + R + Y** to save the
+**newest finished 3D BG0 image** as
+`sdmc:/3ds/pokeplatinum/3d_frame_<frame>.png`. It captures the off-screen
+GPU result, not the combined 2D screen. The PNG includes transparency, so
+missing polygons and flipped axes can be distinguished from 2D background
+issues. If no 3D image is ready or writing fails, the log reports it.
+
+For the same requested game frame in the PC runner:
+
+```sh
+3ds_port/game/build/host32/pokeplatinum-pc platinum3ds.pak \
+  data_pack/manifest.json --frames 1200 --dump-3d 1150
+```
+
+This writes `3d_frame_0001150.png` to the current working directory.
+Both paths use the same RGBA PNG encoder (256 × 192 pixels, rows in DS
+top-to-bottom order). The 3DS produces the newest completed frame, so
+compare matching scene content rather than expecting the two processing
+threads to finish at precisely the same instant. These images may contain
+private game assets and must never be committed or uploaded to CI.
+
 ### Audio output
 
 NDSP plays signed 16-bit stereo at **32,768 Hz**, driven by a
