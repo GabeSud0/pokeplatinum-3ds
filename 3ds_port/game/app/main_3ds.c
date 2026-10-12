@@ -178,14 +178,15 @@ typedef struct NitroGx3dScene NitroGx3dScene;
 const NitroGx3dScene *NitroPort_Gx3dAcquireScene(uint32_t *serial);
 void NitroPort_Gx3dReleaseScene(const NitroGx3dScene *scene);
 int NitroPort_PicaInit(void);
-int NitroPort_PicaRender(const NitroGx3dScene *scene);
+int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped);
+int NitroPort_Gx3dDumpLatest(const char *path);
 void NitroPort_PicaExit(void);
 static Thread sGpuThread;
 static LightEvent sGpuWake;
 static volatile bool sGpuRunning, sGpuWakeReady;
 static int sGpuCore;
 static volatile u64 sGpuTicks;
-static volatile unsigned sGpuScenes, sGpuTriangles;
+static volatile unsigned sGpuScenes, sGpuTriangles, sGpuDroppedTriangles;
 
 /* Override the port's weak callback to notify, not copy, each SWAP scene. */
 void NitroPort_Gx3dScenePublished(void)
@@ -208,12 +209,14 @@ static void GpuMain(void *unused)
         if(!__atomic_load_n(&sGpuRunning,__ATOMIC_ACQUIRE))break;
         while((scene=NitroPort_Gx3dAcquireScene(&seen))!=NULL){
             u64 start=svcGetSystemTick();
-            int drawn=NitroPort_PicaRender(scene);
+            unsigned dropped=0;
+            int drawn=NitroPort_PicaRender(scene,&dropped);
             NitroPort_Gx3dReleaseScene(scene);
             sGpuTicks += svcGetSystemTick()-start; /* sole writer, as with audio */
             __atomic_fetch_add(&sGpuScenes,1u,__ATOMIC_RELAXED);
             if(drawn>=0)__atomic_fetch_add(&sGpuTriangles,
                                           (unsigned)drawn,__ATOMIC_RELAXED);
+            __atomic_fetch_add(&sGpuDroppedTriangles,dropped,__ATOMIC_RELAXED);
             if(!__atomic_load_n(&sGpuRunning,__ATOMIC_ACQUIRE))break;
         }
     }
@@ -674,14 +677,14 @@ static u64 sPerfGameTicks;        /* in the game's own code */
 static unsigned sPerfFrames;
 static u64 sPerfSoundTicks, sPerfSoundSamples;
 static u64 sPerfGpuTicks;
-static unsigned sPerfGpuScenes, sPerfGpuTriangles;
+static unsigned sPerfGpuScenes, sPerfGpuTriangles, sPerfGpuDroppedTriangles;
 
 static void PerfFrame(u64 enter)
 {
     u64 now = svcGetSystemTick();
     double seconds, perFrame;
     u64 soundTicks, soundSamples, gpuTicks;
-    unsigned gpuScenes, gpuTriangles;
+    unsigned gpuScenes, gpuTriangles, gpuDroppedTriangles;
     char drawing[128];
     int i, used = 0;
 
@@ -692,6 +695,7 @@ static void PerfFrame(u64 enter)
         sPerfGpuTicks = sGpuTicks;
         sPerfGpuScenes = __atomic_load_n(&sGpuScenes,__ATOMIC_RELAXED);
         sPerfGpuTriangles = __atomic_load_n(&sGpuTriangles,__ATOMIC_RELAXED);
+        sPerfGpuDroppedTriangles = __atomic_load_n(&sGpuDroppedTriangles,__ATOMIC_RELAXED);
         for (i = 0; i < sDrawerCount; i++) {
             sDrawers[i].ticks = 0;
             sDrawers[i].count = 0;
@@ -730,13 +734,17 @@ static void PerfFrame(u64 enter)
     gpuTicks = sGpuTicks;
     gpuScenes = __atomic_load_n(&sGpuScenes,__ATOMIC_RELAXED);
     gpuTriangles = __atomic_load_n(&sGpuTriangles,__ATOMIC_RELAXED);
-    NitroPort_Log("[perf] game %.1f frames/s, %.1f ms/frame; drawn: %s; 3D %.1f ms/scene, %u triangles/scene (core %d); sound %.0f%% of core 0, %u underruns",
+    gpuDroppedTriangles = __atomic_load_n(&sGpuDroppedTriangles,__ATOMIC_RELAXED);
+    NitroPort_Log("[perf] game %.1f frames/s, %.1f ms/frame; drawn: %s; 3D %.1f ms/scene, %u triangles/scene, %u dropped/scene (core %d); sound %.0f%% of core 0, %u underruns",
                   sPerfFrames / seconds, (double)sPerfGameTicks * perFrame, drawing,
                   gpuScenes>sPerfGpuScenes
                     ? (double)(gpuTicks-sPerfGpuTicks)*1000.0/SYSCLOCK_ARM11/
                       (gpuScenes-sPerfGpuScenes):0.0,
                   gpuScenes>sPerfGpuScenes
                     ? (gpuTriangles-sPerfGpuTriangles)/(gpuScenes-sPerfGpuScenes):0u,
+                  gpuScenes>sPerfGpuScenes
+                    ? (gpuDroppedTriangles-sPerfGpuDroppedTriangles)/
+                      (gpuScenes-sPerfGpuScenes):0u,
                   sGpuCore,
                   soundSamples ? 100.0 * ((double)soundTicks / SYSCLOCK_ARM11) / ((double)soundSamples / 32768.0) : 0.0,
                   sSoundUnderruns);
@@ -748,6 +756,7 @@ static void PerfFrame(u64 enter)
     sPerfGpuTicks = gpuTicks;
     sPerfGpuScenes = gpuScenes;
     sPerfGpuTriangles = gpuTriangles;
+    sPerfGpuDroppedTriangles = gpuDroppedTriangles;
 }
 
 /* Once a frame, from the game's idle thread (NitroPort_Halt): hand the
@@ -769,6 +778,16 @@ void NitroPort_OnFrame(void)
     down = hidKeysDown();
     if ((held & (KEY_L | KEY_R)) == (KEY_L | KEY_R) && (down & KEY_SELECT)) {
         ShowLog(!sShowLog);
+    }
+    /* Compare against PC's --dump-3d reference. Read only the newest
+     * finished image, never the PICA's tiled framebuffer. */
+    if ((held & (KEY_L | KEY_R)) == (KEY_L | KEY_R) && (down & KEY_Y)) {
+        char path[128];
+        snprintf(path,sizeof(path),DATA_DIR "/3d_frame_%07lu.png",sFrame);
+        if (NitroPort_Gx3dDumpLatest(path))
+            NitroPort_Log("[gx3d] dumped 3D frame %lu to %s",sFrame,path);
+        else
+            NitroPort_Log("[gx3d] cannot dump frame %lu (no image or file error)",sFrame);
     }
     Platinum_SetButtons(DsButtons(held));
     if (held & KEY_TOUCH) {
