@@ -73,6 +73,13 @@ const uint16_t *NitroPort_Gx3dAcquireImage(void);
 void NitroPort_Gx3dReleaseImage(const uint16_t *image);
 int NitroPort_Gx3dPublishRGBA8(const uint32_t *image, size_t pixels);
 
+/* Debug-only PNG output for the newest finished RGB555|coverage image.
+ * Pixel order is always DS screen order (top-to-bottom, left-to-right).
+ * DumpLatest acquires/releases the shared image, so it is concurrency-safe.
+ * Returns 1 for success, 0 for missing image or an I/O failure. */
+int NitroPort_Gx3dWritePng(const char *path, const uint16_t *image);
+int NitroPort_Gx3dDumpLatest(const char *path);
+
 /* Update read-only GXSTAT, matrix and test registers. The FIFO executes
  * synchronously for now, so the FIFO-empty/under-half IRQ stays level-based. */
 void NitroPort_Gx3dRefreshStatus(void);
