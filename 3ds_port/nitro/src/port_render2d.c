@@ -18,7 +18,7 @@
  *   - windows 0, 1 and OBJ, colour effects (alpha blending, brightness up
  *     and down) and the master brightness the game fades the screen with;
  *   - engine A's display modes: off, normal, and VRAM display.
- * Not yet: the 3D layer (BG0 when 3D is on draws nothing), mosaic, the large
+ * Not yet: DS 3D on the 3DS GPU (PC shows captured triangles), mosaic, the large
  * bitmap BG of mode 6, the main-memory display mode, display capture, and
  * anything changed during the frame (H-blank effects): each frame is drawn
  * from the state at its end.
@@ -45,6 +45,7 @@
 
 #include <nitro.h>
 #include <nitro_port.h>
+#include <nitro_port_gx3d.h>
 #include <string.h>
 
 #define W 256
@@ -905,6 +906,13 @@ typedef struct EngineWork {
 
 static EngineWork sWork[2];
 
+/* Stage 1 renders the latest swapped 3D scene on the PC only. The 3DS
+ * PICA200 backend will consume NitroPort_Gx3dScene separately in stage 2.
+ * Engine B never has 3D BG0; only engine A accesses this image. */
+#if !defined(__arm__)
+static u16 sGx3dPixels[W * H];
+#endif
+
 static void DrawEngine(Engine *e, u16 *out)
 {
     /* Each engine has its own (they may be drawn at the same time, on two
@@ -920,6 +928,7 @@ static void DrawEngine(Engine *e, u16 *out)
     u32 dispcnt = Rd32(io, 0);
     u16 bgcnt[4];
     int kind[4];
+    const u16 *gx3dPixels = NULL;
     u16 bldcnt = Rd16(io, 0x50);
     u16 bldalpha = Rd16(io, 0x52);
     int eva = bldalpha & 31, evb = (bldalpha >> 8) & 31;
@@ -948,10 +957,19 @@ static void DrawEngine(Engine *e, u16 *out)
     for (bg = 0; bg < 4; bg++) {
         bgcnt[bg] = Rd16(io, 8 + bg * 2);
         kind[bg] = (dispcnt & (0x100u << bg)) ? BgKind(e, bg, dispcnt) : BG_NONE;
-        if (kind[bg] == BG_3D || kind[bg] == BG_LARGE) {
-            kind[bg] = BG_NONE;   /* not drawn yet (see the top of this file) */
+        if (kind[bg] == BG_LARGE) {
+            kind[bg] = BG_NONE;   /* large-bitmap mode still unsupported */
         }
+#if defined(__arm__)
+        if (kind[bg] == BG_3D) kind[bg] = BG_NONE; /* stage 2: PICA200 */
+#endif
     }
+#if !defined(__arm__)
+    if (e->isA && kind[0] == BG_3D) {
+        NitroPort_Gx3dRasterize(sGx3dPixels, NULL);
+        gx3dPixels = sGx3dPixels;
+    }
+#endif
     objFrame->blends = 0;
     if (dispcnt & 0x1000) {
         SortObjs(e, objFrame);
@@ -1039,6 +1057,13 @@ static void DrawEngine(Engine *e, u16 *out)
                     }
                     if (kind[bg] == BG_TEXT) {
                         DrawTextBg(e, bg, bgcnt[bg], dispcnt, y, &t, T_PLAIN);
+                    } else if (kind[bg] == BG_3D) {
+                        int scroll = Rd16(io, 0x10) & 0x1FF;
+                        for (x = 0; x < W; ++x) {
+                            int sx = (x + scroll) & 0x1FF;
+                            bgLine[x] = (sx < W && gx3dPixels != NULL)
+                                            ? gx3dPixels[y * W + sx] : 0;
+                        }
                     } else {
                         DrawAffineBg(e, bg, kind[bg], bgcnt[bg], dispcnt, y, bgLine);
                     }
