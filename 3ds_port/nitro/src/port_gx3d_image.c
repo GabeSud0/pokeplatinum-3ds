@@ -11,6 +11,7 @@
 #include <stddef.h>
 #define PIXELS (NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT)
 static uint16_t sImages[2][PIXELS];
+static uint8_t sAlphas[2][PIXELS];   /* 3D alpha 0-31 per pixel */
 static unsigned char sGate;
 static int sPublished=-1,sReserved=-1,sReaders[2];
 /* A lower-priority GPU or same-priority drawer can own this gate.
@@ -68,6 +69,7 @@ int NitroPort_Gx3dPublishRGBA8(const uint32_t *src,size_t pixels)
         }
         sImages[index][i]=(uint16_t)((r>>3)|((g>>3)<<5)|((b>>3)<<10)|
                                         (a?0x8000u:0u));
+        sAlphas[index][i]=(uint8_t)(a>>3);
     }
     finish(index);
     return 1;
@@ -87,7 +89,7 @@ static void render_host(void)
     if(!scene)return;
     index=reserve();
     if(index>=0){
-        NitroPort_Gx3dRasterizeScene(scene,sScratch,NULL);
+        NitroPort_Gx3dRasterizeSceneAlpha(scene,sScratch,sAlphas[index],NULL);
         for(size_t i=0;i<PIXELS;i++)sImages[index][i]=sScratch[i];
         finish(index);
     }
@@ -116,4 +118,11 @@ void NitroPort_Gx3dReleaseImage(const uint16_t *ptr)
         break;
     }
     unlock();
+}
+
+const uint8_t *NitroPort_Gx3dImageAlpha(const uint16_t *image)
+{
+    int i;
+    for(i=0;i<2;i++)if(image==sImages[i])return sAlphas[i];
+    return NULL;
 }

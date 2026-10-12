@@ -549,6 +549,15 @@ static void test_translucency_and_scene_limits(void)
     const NitroGx3dScene *scene;
     unsigned i;
     reset_geometry();
+    /* The scene below is W-buffered: depth is W, so give W the distance
+     * (W = z + 2.0) for "near" and "far" to mean something. */
+    {
+        static const uint32_t proj[16]={ONE,0,0,0, 0,ONE,0,0, 0,0,ONE,ONE, 0,0,0,2*ONE};
+        unsigned k;
+        NitroPort_GxDirectWrite(0x10,0);
+        for(k=0;k<16;k++)NitroPort_GxDirectWrite(0x16,proj[k]);
+        NitroPort_GxDirectWrite(0x10,2);
+    }
     NitroPort_IoReg[0x60]|=8u; /* DISP3DCNT alpha blend */
     NitroPort_GxDirectWrite(0x29,(3u<<6)|(16u<<16));
     triangle(-1200,RGB(0,0,31)); /* translucent near object, submitted first */

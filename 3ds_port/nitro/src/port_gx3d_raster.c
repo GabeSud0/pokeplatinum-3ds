@@ -24,6 +24,8 @@ extern unsigned char NitroPort_IoReg[];
 typedef NitroGx3dTexel Texel;
 static NitroGx3dTexBanks sBanks;
 static uint32_t sDepth[W*H];
+static uint8_t sAlpha[W*H];   /* each pixel's 3D alpha, 0-31 */
+static int sWBuffer;   /* the scene uses W-buffering (SWAP_BUFFERS bit 1) */
 
 static uint16_t rd16(const unsigned char *p)
 {
@@ -95,6 +97,12 @@ static void raster_triangle(const NitroGx3dTriangle *tri,uint16_t *out)
         uint16_t rgb;
         int pixelAlpha = alpha;
         if(u<-1e-6||v<-1e-6||w<-1e-6)continue;
+        if(sWBuffer){
+            /* W-buffer: depth is W (20.12) itself, perspective-correct. */
+            double iw=u*tri->v[0].inv_w+v*tri->v[1].inv_w+w*tri->v[2].inv_w;
+            double wv=iw>0?1.0/iw:16777215.0;
+            depth=wv>16777215.0?16777215u:(uint32_t)wv;
+        }else
         depth=(uint32_t)(tri->v[0].depth*u+tri->v[1].depth*v+tri->v[2].depth*w);
         if(depth>=sDepth[index] && !(tri->polygon_attr&(1u<<14)))continue;
         if((tri->polygon_attr&(1u<<14)) &&
@@ -122,13 +130,21 @@ static void raster_triangle(const NitroGx3dTriangle *tri,uint16_t *out)
            (out[index]&0x8000)){
             uint16_t previous=out[index]&0x7fff;
             rgb=color_mix(rgb,previous,pixelAlpha,31-pixelAlpha,31);
+            /* The DS keeps the larger of the two alphas. */
+            if(sAlpha[index]>pixelAlpha)pixelAlpha=sAlpha[index];
         }
         out[index]=(uint16_t)(rgb|0x8000);
+        sAlpha[index]=(uint8_t)pixelAlpha;
         if(pixelAlpha==31 || (tri->polygon_attr&(1u<<11)))sDepth[index]=depth;
     }
 }
 void NitroPort_Gx3dRasterizeScene(const NitroGx3dScene *scene,
                                   uint16_t *rgba555,uint32_t *depth_out)
+{
+    NitroPort_Gx3dRasterizeSceneAlpha(scene,rgba555,NULL,depth_out);
+}
+void NitroPort_Gx3dRasterizeSceneAlpha(const NitroGx3dScene *scene,uint16_t *rgba555,
+                                       uint8_t *alpha_out,uint32_t *depth_out)
 {
     uint32_t clear,depth;
     size_t i;
@@ -139,7 +155,9 @@ void NitroPort_Gx3dRasterizeScene(const NitroGx3dScene *scene,
     for(i=0;i<W*H;i++){
         sDepth[i]=depth*0x200u;
         rgba555[i]=(uint16_t)((clear&0x7fff)|(((clear>>16)&31)?0x8000:0));
+        sAlpha[i]=(uint8_t)((clear>>16)&31);
     }
+    sWBuffer=(scene->swap_param&2u)!=0;
     if(scene->count){
         unsigned pass;
         NitroPort_Gx3dMapTextureBanks(&sBanks);
@@ -158,6 +176,7 @@ void NitroPort_Gx3dRasterizeScene(const NitroGx3dScene *scene,
         }
     }
     if(depth_out)memcpy(depth_out,sDepth,sizeof(sDepth));
+    if(alpha_out)memcpy(alpha_out,sAlpha,sizeof(sAlpha));
 }
 
 /* Compatibility wrapper for original Stage 1 callers; GPU worker should
