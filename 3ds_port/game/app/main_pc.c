@@ -607,6 +607,11 @@ static void ControlWait(void)
                                       (unsigned long)t->texture_param, (unsigned long)t->palette_base,
                                       (unsigned long)t->v[0].depth, (unsigned long)t->v[1].depth,
                                       (unsigned long)t->v[2].depth);
+                        for (k = 0; k < 3; k++) {
+                            NitroPort_Log("[pc]   v%d: xy %.1f,%.1f w %ld st %.2f,%.2f",
+                                          k, t->v[k].x / 256.0, t->v[k].y / 256.0,
+                                          (long)t->v[k].clip[3], t->v[k].s, t->v[k].t);
+                        }
                     }
                 }
             } else if (strncmp(line, "quit", 4) == 0) {

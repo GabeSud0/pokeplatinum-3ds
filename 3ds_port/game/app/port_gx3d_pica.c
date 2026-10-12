@@ -250,7 +250,6 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     unsigned lost=0;
     C3D_BufInfo *buffers;
     int slot,blend;
-    Result result;
     u32 clear,clearColor;
     if(dropped)*dropped=scene ? scene->dropped : 0;
     if(!sTarget||!scene)return -1;
@@ -275,9 +274,11 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     if(!((clear>>16)&31u))clearColor=0;
     /* DISP3DCNT bit 3: alpha blending. */
     blend=(NitroPort_IoReg[0x60]&8u)!=0;
-    /* Previous GPU frame must have finished using this buffer. This worker
-     * may wait; neither the game nor the 2D drawer ever waits on it. */
-    if(!C3D_FrameBegin(C3D_FRAME_SYNCDRAW))return -1;
+    /* Waits for the GPU to finish the previous frame (it has: this thread
+     * waited for its transfer). No SYNCDRAW: that waits for a V-blank of
+     * both screens, and this image isn't shown by itself; the 2D drawer
+     * shows it at its own pace. */
+    if(!C3D_FrameBegin(0))return -1;
     /* As in hello3d, schedule framebuffer clear BEFORE drawing on it. */
     /* Depth24/stencil8 memory layout varies by byte packing; fill all
      * bits so the 24-bit depth is unambiguously the maximum (1.0). */
@@ -358,16 +359,18 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
                       (attr&(1u<<11))?GPU_WRITE_ALL:GPU_WRITE_COLOR);
         C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
     }
-    C3D_FrameEnd(0);
-    C3D_FrameSync();
-    /* Off-screen target isn't bound to a 3DS LCD. Copy tiles to ordinary
-     * linear memory, wait for the PPF event, then invalidate the CPU cache. */
+    /* GX_CMDLIST_FLUSH: flush only the command list. Without it citro3d
+     * flushes the CPU cache over all of linear memory every frame; what
+     * the GPU reads here is flushed already (vertices above, textures in
+     * get_texture). No C3D_FrameSync either: it waits for a V-blank. */
+    C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    /* Off-screen target isn't bound to a 3DS LCD. Copy its tiles to
+     * ordinary linear memory: this waits for the drawing to finish, then
+     * for the copy (PPF), then the CPU cache is invalidated. */
     GSPGPU_FlushDataCache(sImages[slot],(u32)IMAGE_BYTES);
-    result=GX_DisplayTransfer((u32*)sTarget->frameBuf.colorBuf,
+    C3D_SyncDisplayTransfer((u32*)sTarget->frameBuf.colorBuf,
                  GX_BUFFER_DIM(GX3D_W,GX3D_H),sImages[slot],
                  GX_BUFFER_DIM(GX3D_W,GX3D_H),GX3D_TRANSFER_FLAGS);
-    if(R_FAILED(result))return -1;
-    gspWaitForPPF();
     GSPGPU_InvalidateDataCache(sImages[slot],(u32)IMAGE_BYTES);
     NitroPort_Gx3dPublishRGBA8(sImages[slot],GX3D_W*GX3D_H);
     return (int)(count/3);
