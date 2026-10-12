@@ -72,6 +72,9 @@ void NitroPort_Gx3dReleaseScene(const NitroGx3dScene *scene);
 const uint16_t *NitroPort_Gx3dAcquireImage(void);
 void NitroPort_Gx3dReleaseImage(const uint16_t *image);
 int NitroPort_Gx3dPublishRGBA8(const uint32_t *image, size_t pixels);
+/* The 3D alpha (0-31) of each pixel of an acquired image, or NULL. On the
+ * DS a 3D pixel with alpha 1-30 blends with the 2D layer under BG0. */
+const uint8_t *NitroPort_Gx3dImageAlpha(const uint16_t *image);
 
 /* Debug-only PNG output for the newest finished RGB555|coverage image.
  * Pixel order is always DS screen order (top-to-bottom, left-to-right).
@@ -95,6 +98,9 @@ void NitroPort_Gx3dRasterize(uint16_t *rgba555, uint32_t *depth_out);
 /* Internal PC handoff: rasterize the scene while the consumer owns its slot. */
 void NitroPort_Gx3dRasterizeScene(const NitroGx3dScene *scene,
                                   uint16_t *rgba555, uint32_t *depth_out);
+/* The same, also giving each pixel's 3D alpha (0-31) when alpha_out isn't NULL. */
+void NitroPort_Gx3dRasterizeSceneAlpha(const NitroGx3dScene *scene, uint16_t *rgba555,
+                                       uint8_t *alpha_out, uint32_t *depth_out);
 
 #ifdef __cplusplus
 }

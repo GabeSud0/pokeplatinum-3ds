@@ -7,8 +7,11 @@ float NitroPort_Gx3dDepthValue(const NitroGx3dVertex *vertex,
 {
     float d;
     if (!vertex) return 1.0f;
+    /* W-buffer (SWAP_BUFFERS bit 1): the DS stores W itself, 20.12 fixed
+     * point in its 24-bit depth buffer (as melonDS does), so depth runs
+     * to W = 4096.0. The title screen's Giratina is 300 units away. */
     d = (swap_param & 2u)
-        ? ((float)vertex->clip[3] / (4096.0f * 16.0f))
+        ? ((float)vertex->clip[3] / 16777215.0f)
         : ((float)vertex->depth / 16777215.0f);
     return d < 0.0f ? 0.0f : d > 1.0f ? 1.0f : d;
 }

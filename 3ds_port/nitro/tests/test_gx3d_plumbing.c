@@ -125,8 +125,11 @@ static void test_vertices(void) {
     CHECK(NitroPort_Gx3dBuildOpaqueVertices(&scene,verts,12)==6);
     scene.swap_param=2u; /* DS W-buffer flag */
     CHECK(NitroPort_Gx3dBuildOpaqueVertices(&scene,verts,12)==6);
-    CHECK(verts[0].position[2]==-0.0625f);
-    CHECK(verts[1].position[2]==-0.25f);
+    /* W-buffer depth is W in 20.12 over the 24-bit range (W 1.0 and 2.0
+     * here), times W for the GPU's clip-space z. Was W / 16.0, which put
+     * everything beyond 16 units at the far plane. */
+    CHECK(verts[0].position[2]==-(4096.0f/16777215.0f)*1.0f);
+    CHECK(verts[1].position[2]==-(8192.0f/16777215.0f)*2.0f);
 }
 static uint32_t imagePixels[NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT];
 static void test_image_handoff(void)
@@ -205,8 +208,13 @@ static void test_depth_direction(void)
           NitroPort_Gx3dDepthValue(&farVertex,2));
     nearVertex.clip[3]=-4096;
     CHECK(NitroPort_Gx3dDepthValue(&nearVertex,2)==0.0f);
-    farVertex.clip[3]=4096*128;
+    /* W-buffer depth is W in 20.12 (as the DS stores it), so it reaches
+     * the far end at W = 4096.0, not at 16.0 as before: the title screen
+     * draws Giratina about 300 units away. */
+    farVertex.clip[3]=4096*4096;
     CHECK(NitroPort_Gx3dDepthValue(&farVertex,2)==1.0f);
+    farVertex.clip[3]=4096*300;
+    CHECK(NitroPort_Gx3dDepthValue(&farVertex,2)<1.0f);
 }
 static NitroGx3dScene maxScene;
 static NitroGx3dGpuVertex maxVertices[NITRO_GX3D_PICA_MAX_VERTICES];
@@ -380,6 +388,26 @@ static void test_texture_decode(void)
     /* Format 0: opaque white, as the reference draws untextured polygons. */
     CHECK(NitroPort_Gx3dSampleTexel(&banks,0,0,3,3).rgb==0x7fff);
 }
+extern unsigned char NitroPort_IoReg[];
+extern unsigned char NitroPort_LcdcVram[];
+static void test_palette_banks(void)
+{
+    /* VRAMCNT F/G: the offset field picks texture palette slot 0, 1, 4 or 5. */
+    NitroGx3dTexBanks b;
+    unsigned char saved[7];
+    memcpy(saved,NitroPort_IoReg+0x240,7);
+    memset(NitroPort_IoReg+0x240,0,7);
+    NitroPort_IoReg[0x246]=0x83;            /* G, offset 0 */
+    NitroPort_Gx3dMapTextureBanks(&b);
+    CHECK(b.palette[0]==NitroPort_LcdcVram+0x94000);
+    NitroPort_IoReg[0x245]=0x83|(3u<<3);    /* F, offset 3: slot 5 */
+    NitroPort_IoReg[0x246]=0x83|(1u<<3);    /* G, offset 1: slot 1 */
+    NitroPort_Gx3dMapTextureBanks(&b);
+    CHECK(b.palette[5]==NitroPort_LcdcVram+0x90000);
+    CHECK(b.palette[1]==NitroPort_LcdcVram+0x94000);
+    CHECK(b.palette[0]==NULL);
+    memcpy(NitroPort_IoReg+0x240,saved,7);
+}
 static void test_texture_hash(void)
 {
     NitroGx3dTexBanks banks=test_banks();
@@ -468,6 +496,7 @@ int main(void) {
     test_concurrent_image_handoff();
     test_texture_decode();
     test_texture_hash();
+    test_palette_banks();
     test_batches();
     printf("GX3D plumbing: %d checks, %d failures\n",nchecks,nfail);
     return nfail?1:0;

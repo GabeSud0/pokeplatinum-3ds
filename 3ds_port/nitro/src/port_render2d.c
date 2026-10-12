@@ -902,6 +902,7 @@ typedef struct EngineWork {
      * front-most layers (0-3 BG, 4 OBJ), their colours, how many found. */
     u16 color1[W], color2[W];
     u8 layer1[W], layer2[W], found[W];
+    u8 alpha3d[W];   /* BG0's 3D alpha (0-31) on this line */
 } EngineWork;
 
 static EngineWork sWork[2];
@@ -926,6 +927,9 @@ static void DrawEngine(Engine *e, u16 *out)
     u16 bgcnt[4];
     int kind[4];
     const u16 *gx3dPixels = NULL;
+    const u8 *gx3dAlpha = NULL;
+    u8 *alpha3d = work->alpha3d;
+    int gx3dTranslucent = 0;   /* the 3D image has pixels of alpha 1-30 */
     u16 bldcnt = Rd16(io, 0x50);
     u16 bldalpha = Rd16(io, 0x52);
     int eva = bldalpha & 31, evb = (bldalpha >> 8) & 31;
@@ -960,6 +964,13 @@ static void DrawEngine(Engine *e, u16 *out)
     }
     if (e->isA && kind[0] == BG_3D) {
         gx3dPixels = NitroPort_Gx3dAcquireImage();
+        gx3dAlpha = gx3dPixels != NULL ? NitroPort_Gx3dImageAlpha(gx3dPixels) : NULL;
+        if (gx3dAlpha != NULL) {
+            int i;
+            for (i = 0; i < W * H && !gx3dTranslucent; i++) {
+                gx3dTranslucent = (gx3dPixels[i] & OPAQUE) && gx3dAlpha[i] < 31;
+            }
+        }
     }
     objFrame->blends = 0;
     if (dispcnt & 0x1000) {
@@ -971,7 +982,7 @@ static void DrawEngine(Engine *e, u16 *out)
     /* Blending two layers needs second targets, and alpha blending or OBJs
      * that blend by themselves; otherwise each pixel shows its front-most
      * layer, perhaps brightened or darkened. */
-    blend2 = (bldcnt & 0x3F00) && (effect == 1 || objFrame->blends);
+    blend2 = (bldcnt & 0x3F00) && (effect == 1 || objFrame->blends || gx3dTranslucent);
     flags = (anyWindow ? T_WINDOW : 0) | (effect >= 2 ? T_LAYER : 0);
 
     for (y = 0; y < H; y++) {
@@ -1054,6 +1065,8 @@ static void DrawEngine(Engine *e, u16 *out)
                             int sx = (x + scroll) & 0x1FF;
                             bgLine[x] = (sx < W && gx3dPixels != NULL)
                                             ? gx3dPixels[y * W + sx] : 0;
+                            alpha3d[x] = (sx < W && gx3dAlpha != NULL)
+                                            ? gx3dAlpha[y * W + sx] : 31;
                         }
                     } else {
                         DrawAffineBg(e, bg, kind[bg], bgcnt[bg], dispcnt, y, bgLine);
@@ -1118,7 +1131,13 @@ static void DrawEngine(Engine *e, u16 *out)
             u16 secondColor = n > 1 ? color2[x] : backdrop;
             u16 c = topColor;
 
-            if (top == SLOT_OBJ && (objLine->semi[x] || objLine->alpha[x] < 16) &&
+            if (top == 0 && kind[0] == BG_3D && alpha3d[x] < 31 &&
+                (bldcnt & (0x100 << second))) {
+                /* A partly transparent 3D pixel blends with what's below
+                 * by its own alpha, whatever the effect setting. */
+                int a = (alpha3d[x] * 16 + 15) / 31;
+                c = Blend(topColor, secondColor, a, 16 - a);
+            } else if (top == SLOT_OBJ && (objLine->semi[x] || objLine->alpha[x] < 16) &&
                 (bldcnt & (0x100 << second))) {
                 /* Semi-transparent and bitmap OBJs blend with what's below,
                  * whatever the effect setting. */

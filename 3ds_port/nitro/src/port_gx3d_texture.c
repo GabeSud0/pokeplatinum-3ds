@@ -25,8 +25,15 @@ void NitroPort_Gx3dMapTextureBanks(NitroGx3dTexBanks *banks)
     if ((NitroPort_IoReg[0x244] & 0x87) == 0x83) {
         for (i = 0; i < 4; i++) banks->palette[i] = NitroPort_LcdcVram + 0x80000 + i * 0x4000;
     }
-    if ((NitroPort_IoReg[0x245] & 0x87) == 0x83) banks->palette[0] = NitroPort_LcdcVram + 0x90000;
-    if ((NitroPort_IoReg[0x246] & 0x87) == 0x83) banks->palette[1] = NitroPort_LcdcVram + 0x94000;
+    /* F and G are 16 KiB: the offset field picks the palette slot, 0, 1,
+     * 4 or 5 (GBATEK). The title screen maps G at slot 0. */
+    for (i = 0; i < 2; i++) {
+        unsigned v = NitroPort_IoReg[0x245 + i];
+        if ((v & 0x87) == 0x83) {
+            unsigned ofs = (v >> 3) & 3;
+            banks->palette[(ofs & 1) + ((ofs >> 1) & 1) * 4] = NitroPort_LcdcVram + 0x90000 + i * 0x4000;
+        }
+    }
 }
 
 static int restrict_int(int x, int lo, int hi)
