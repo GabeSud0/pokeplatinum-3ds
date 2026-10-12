@@ -1,7 +1,19 @@
 #include <nitro_port_gx3d_mailbox.h>
+#include "port_platform.h"
 #include <stddef.h>
+/* Core-0 producer outranks the GPU worker on Old 3DS. An endless spin
+ * could starve the owner of this gate forever. Mirror the audio lock:
+ * spin briefly, then yield CPU time even to a lower-priority owner. */
 static void lock(NitroGx3dMailbox *b) {
-    while (__atomic_test_and_set(&b->gate, __ATOMIC_ACQUIRE)) {}
+    unsigned spins = 0;
+    while (__atomic_test_and_set(&b->gate, __ATOMIC_ACQUIRE)) {
+        while (__atomic_load_n(&b->gate, __ATOMIC_RELAXED)) {
+            if (++spins >= 64u) {
+                NitroPortPlatform_Sleep(50);
+                spins = 0;
+            }
+        }
+    }
 }
 static void unlock(NitroGx3dMailbox *b) {
     __atomic_clear(&b->gate, __ATOMIC_RELEASE);
