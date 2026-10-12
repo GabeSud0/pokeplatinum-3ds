@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 11:30:00 -0700
+Subject: [PATCH] Main menu: skip the wireless search (SDK_PORT_3DS)
+
+With a save, the main menu starts the DS wireless driver to look for a
+Pokemon Ranger game, a Wii or a Mystery Gift distribution nearby.
+WirelessDriver_Init stops the game (OS_Terminate) when the driver doesn't
+start, and the port has no DS wireless, so Continue was never reached.
+Skip the search, as if it found nobody.
+---
+ src/main_menu/main_menu.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/main_menu/main_menu.c b/src/main_menu/main_menu.c
+--- a/src/main_menu/main_menu.c
++++ b/src/main_menu/main_menu.c
+@@ -409,7 +409,14 @@
+     case MAIN_MENU_WIRELESS_CHECK_IDLE:
+         break;
+     case MAIN_MENU_WIRELESS_CHECK_START:
++#ifdef SDK_PORT_3DS
++        // The port has no DS wireless (WVR_StartUpAsync isn't implemented,
++        // and WirelessDriver_Init stops the game if it fails), so there is
++        // nothing to find: skip the search, as if it found nobody.
++        appData->wirelessCheckState = MAIN_MENU_WIRELESS_CHECK_IDLE;
++#else
+         appData->wirelessCheckState = MAIN_MENU_WIRELESS_CHECK_INIT_WIRELESS;
++#endif
+         break;
+     case MAIN_MENU_WIRELESS_CHECK_INIT_WIRELESS:
+         CommManager_InitializeSearchParty(appData->saveData);
+-- 
+2.43.0
+

@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 11:00:00 -0700
+Subject: [PATCH] Script GoTo/Call: read the offset before the script pointer
+ (SDK_PORT_3DS)
+
+ScrCmd_GoTo and ScrCmd_Call compute
+ctx->scriptPtr + ScriptContext_ReadWord(ctx). C leaves the order of the
+two unspecified: Metrowerks read scriptPtr after ReadWord had moved it
+past the offset, GCC reads it before, so every GoTo and Call landed 4
+bytes early. Saving from the start menu, for one, ended at once (its
+first Call ran into the End just before its target). Read the offset into
+a variable first, as ScrCmd_GoToIf and ScrCmd_CallIf do.
+---
+ src/scrcmd.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -1003,7 +1003,16 @@
+ 
+ static BOOL ScrCmd_GoTo(ScriptContext *ctx)
+ {
++#ifdef SDK_PORT_3DS
++    // The offset is relative to the end of the command. C doesn't say
++    // whether ctx->scriptPtr is read before or after ScriptContext_ReadWord
++    // moves it; Metrowerks read it after, GCC reads it before (4 bytes
++    // short). Read the offset first, as ScrCmd_GoToIf does.
++    s32 offset = ScriptContext_ReadWord(ctx);
++    ScriptContext_Jump(ctx, ctx->scriptPtr + offset);
++#else
+     ScriptContext_Jump(ctx, ctx->scriptPtr + ScriptContext_ReadWord(ctx));
++#endif
+     return FALSE;
+ }
+ 
+@@ -1052,7 +1061,13 @@
+ 
+ static BOOL ScrCmd_Call(ScriptContext *ctx)
+ {
++#ifdef SDK_PORT_3DS
++    // As in ScrCmd_GoTo: read the offset before ctx->scriptPtr.
++    s32 offset = ScriptContext_ReadWord(ctx);
++    ScriptContext_Call(ctx, ctx->scriptPtr + offset);
++#else
+     ScriptContext_Call(ctx, ctx->scriptPtr + ScriptContext_ReadWord(ctx));
++#endif
+     return FALSE;
+ }
+ 
+-- 
+2.43.0
+
