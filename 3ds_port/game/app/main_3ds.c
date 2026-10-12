@@ -56,7 +56,7 @@ void NitroPort_SoundRender(int16_t *stereo, size_t frames);
 void NitroPort_SoundPumpReplies(void);
 
 #define AUDIO_FRAMES 512
-#define AUDIO_BUFFERS 3
+#define AUDIO_BUFFERS 4
 static Thread sSoundThread;
 static bool sSoundThreadRunning;
 static bool sNdspAvailable;
@@ -65,6 +65,9 @@ static ndspWaveBuf sSoundBuf[AUDIO_BUFFERS];
 /* Time spent mixing, and sound mixed (in samples), for the [perf] line. */
 static volatile u64 sSoundMixTicks;
 static volatile u64 sSoundMixSamples;
+/* Times the speaker ran out of sound: every buffer had been played by the
+ * time the sound thread looked (a click or gap). */
+static volatile unsigned sSoundUnderruns;
 
 static void TimedSoundRender(int16_t *stereo, size_t frames)
 {
@@ -82,6 +85,16 @@ static void SoundMain(void *unused)
     (void)unused;
     while (__atomic_load_n(&sSoundThreadRunning, __ATOMIC_ACQUIRE)) {
         if (sNdspAvailable) {
+            static bool started;
+            int done = 0;
+
+            for (i = 0; i < AUDIO_BUFFERS; ++i) {
+                done += sSoundBuf[i].status == NDSP_WBUF_DONE;
+            }
+            if (started && done == AUDIO_BUFFERS) {
+                sSoundUnderruns++;
+            }
+            started = true;
             for (i = 0; i < AUDIO_BUFFERS; ++i) {
                 ndspWaveBuf *buf = &sSoundBuf[i];
                 if (buf->status == NDSP_WBUF_FREE ||
@@ -632,9 +645,10 @@ static void PerfFrame(u64 enter)
     }
     soundTicks = sSoundMixTicks - sPerfSoundTicks;
     soundSamples = sSoundMixSamples - sPerfSoundSamples;
-    NitroPort_Log("[perf] game %.1f frames/s, %.1f ms/frame; drawn: %s; sound %.0f%% of core 0",
+    NitroPort_Log("[perf] game %.1f frames/s, %.1f ms/frame; drawn: %s; sound %.0f%% of core 0, %u underruns",
                   sPerfFrames / seconds, (double)sPerfGameTicks * perFrame, drawing,
-                  soundSamples ? 100.0 * ((double)soundTicks / SYSCLOCK_ARM11) / ((double)soundSamples / 32768.0) : 0.0);
+                  soundSamples ? 100.0 * ((double)soundTicks / SYSCLOCK_ARM11) / ((double)soundSamples / 32768.0) : 0.0,
+                  sSoundUnderruns);
     sPerfStart = now;
     sPerfGameTicks = 0;
     sPerfFrames = 0;
