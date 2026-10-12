@@ -47,6 +47,7 @@
 
 /* The 2D renderer (nitro_port.h, which can't be included next to 3ds.h). */
 void NitroPort_Render2D(int engine, uint16_t *out);
+int NitroPort_Render2DIfChanged(int engine, uint16_t *out);
 int NitroPort_EngineAOnTop(void);
 
 /* Audio uses the port's plain-C mixer; it deliberately does not include
@@ -471,14 +472,18 @@ static void Blit(gfxScreen_t screen, const u16 *ds, int left)
 {
     u16 width, height;
     u16 *fb = (u16 *)gfxGetFramebuffer(screen, GFX_LEFT, &width, &height);
-    int x, y;
+    int x, y, y0;
 
-    for (x = 0; x < 256; x++) {
-        u16 *column = fb + (size_t)(left + x) * 240 + (239 - 24);
-        const u16 *src = ds + x;
+    /* The framebuffer is in columns. Eight lines at a time: the eight
+     * source lines stay in the cache while their columns are written. */
+    for (y0 = 0; y0 < 192; y0 += 8) {
+        for (x = 0; x < 256; x++) {
+            u16 *column = fb + (size_t)(left + x) * 240 + (239 - 24) - y0;
+            const u16 *src = ds + y0 * 256 + x;
 
-        for (y = 0; y < 192; y++) {
-            column[-y] = sToRgb565[src[y * 256] & 0x7FFF];
+            for (y = 0; y < 8; y++) {
+                column[-y] = sToRgb565[src[y * 256] & 0x7FFF];
+            }
         }
     }
 }
@@ -526,6 +531,9 @@ typedef struct Drawer {
 static Drawer sDrawers[2];
 static int sDrawerCount;
 static volatile bool sAOnTop;    /* engine A on the upper screen, this frame */
+/* The screens were cleared (back from the log): draw them even if the
+ * game's picture didn't change. 0: upper, 1: lower. */
+static volatile bool sMustDraw[2];
 
 static void DrawScreen(gfxScreen_t screen)
 {
@@ -535,8 +543,15 @@ static void DrawScreen(gfxScreen_t screen)
     u16 width, height;
     u8 *fb;
 
-    /* Engine A shows on the upper screen when POWCNT1 says so. */
-    NitroPort_Render2D(top == sAOnTop ? 0 : 1, ds);
+    /* Engine A shows on the upper screen when POWCNT1 says so. A screen
+     * whose picture didn't change keeps showing it: not drawn, not swapped
+     * (the framebuffer drawn last is the one on show). */
+    if (sMustDraw[top ? 0 : 1]) {
+        sMustDraw[top ? 0 : 1] = false;
+        NitroPort_Render2D(top == sAOnTop ? 0 : 1, ds);
+    } else if (!NitroPort_Render2DIfChanged(top == sAOnTop ? 0 : 1, ds)) {
+        return;
+    }
     Blit(screen, ds, top ? (400 - 256) / 2 : (320 - 256) / 2);
     fb = gfxGetFramebuffer(screen, GFX_LEFT, &width, &height);
     GSPGPU_FlushDataCache(fb, (u32)width * height * 2);
@@ -816,6 +831,7 @@ void NitroPort_OnFrame(void)
             gfxSetDoubleBuffering(GFX_TOP, true);
             gfxSetDoubleBuffering(GFX_BOTTOM, true);
             ClearScreens();
+            sMustDraw[0] = sMustDraw[1] = true;
         }
     }
 

@@ -517,6 +517,7 @@ void NitroPort_Log(const char *fmt, ...)
  *   ref3d PATH       draw the newest scene with the reference rasterizer
  *   gpusim PATH      draw it as the 3DS GPU path would (port_gx3d_gpusim.c)
  *   tri3d X Y        log the newest scene's triangles covering pixel (X, Y)
+ *   bench2d N        draw each screen N times and log the time per draw
  *   quit             stop the runner
  * For driving the game by hand (scripts, or an assistant) while debugging. */
 static void ControlWait(void)
@@ -613,6 +614,19 @@ static void ControlWait(void)
                                           (long)t->v[k].clip[3], t->v[k].s, t->v[k].t);
                         }
                     }
+                }
+            } else if (sscanf(line, "bench2d %ld", &a) == 1) {
+                /* What drawing each screen costs right now. */
+                static uint16_t screen[256 * 192];
+                int engine;
+                for (engine = 0; engine < 2; engine++) {
+                    struct timespec t0, t1;
+                    long k;
+                    clock_gettime(CLOCK_MONOTONIC, &t0);
+                    for (k = 0; k < a; k++) NitroPort_Render2D(engine, screen);
+                    clock_gettime(CLOCK_MONOTONIC, &t1);
+                    NitroPort_Log("[pc] bench2d engine %c: %.3f ms/draw", engine ? 'B' : 'A',
+                                  ((t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6) / (a > 0 ? a : 1));
                 }
             } else if (strncmp(line, "quit", 4) == 0) {
                 fclose(f);

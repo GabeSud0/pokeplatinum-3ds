@@ -71,27 +71,41 @@ static void quad(int z,uint16_t color)
     NitroPort_GxDirectWrite(0x41,0);
 }
 static void swap(void){NitroPort_GxDirectWrite(0x50,0);}
+/* The clip / vector matrix results, read as the SDK reads them (the port
+ * brings the registers up to date then, not after every matrix command). */
+static int32_t clip_result(int i)
+{
+    MtxFx44 m;
+    CHECK(G3X_GetClipMtx(&m)==0);
+    return ((const fx32 *)&m)[i];
+}
+static int32_t vec_result(int i)
+{
+    MtxFx33 m;
+    CHECK(G3X_GetVectorMtx(&m)==0);
+    return ((const fx32 *)&m)[i];
+}
 static void test_matrices(void)
 {
     reset_geometry();
     NitroPort_GxDirectWrite(0x10,2);
     G3_Translate(ONE,0,0);
     NitroPort_Gx3dRefreshStatus();
-    CHECK(read32(0x640+12*4)==ONE); /* clip matrix's translation */
+    CHECK(clip_result(12)==ONE); /* clip matrix's translation */
     G3_PushMtx();
     G3_Translate(2*ONE,0,0);
     NitroPort_Gx3dRefreshStatus();
-    CHECK(read32(0x640+12*4)==3*ONE);
+    CHECK(clip_result(12)==3*ONE);
     CHECK(((uint32_t)read32(0x600)>>8&31)==1);
     G3_PopMtx(1);
     NitroPort_Gx3dRefreshStatus();
-    CHECK(read32(0x640+12*4)==ONE);
+    CHECK(clip_result(12)==ONE);
     CHECK(((uint32_t)read32(0x600)>>8&31)==0);
     G3_StoreMtx(2);
     G3_Translate(2*ONE,0,0);
     G3_RestoreMtx(2);
     NitroPort_Gx3dRefreshStatus();
-    CHECK(read32(0x640+12*4)==ONE);
+    CHECK(clip_result(12)==ONE);
     /* Projection stack has only one entry; overflowing sets GXSTAT bit15. */
     G3_MtxMode(GX_MTXMODE_PROJECTION);
     G3_PushMtx();G3_PushMtx();
@@ -104,10 +118,10 @@ static void test_matrices(void)
     reset_geometry();
     G3_Scale(2*ONE,3*ONE,ONE);
     NitroPort_Gx3dRefreshStatus();
-    CHECK(read32(0x640)==2*ONE);
-    CHECK(read32(0x640+5*4)==3*ONE);
+    CHECK(clip_result(0)==2*ONE);
+    CHECK(clip_result(5)==3*ONE);
     /* Matrix mode 2 excludes scale from the directional matrix. */
-    CHECK(read32(0x680)==ONE);
+    CHECK(vec_result(0)==ONE);
 
     /* Multiplies go on the left: Current = Parameter x Current (GBATEK).
      * A model's scale after a camera that moves things by 5 doesn't scale
@@ -117,8 +131,8 @@ static void test_matrices(void)
     G3_Translate(5*ONE,0,0);
     G3_Scale(2*ONE,ONE,ONE);
     NitroPort_Gx3dRefreshStatus();
-    CHECK(read32(0x640+12*4)==5*ONE);
-    CHECK(read32(0x640)==2*ONE);
+    CHECK(clip_result(12)==5*ONE);
+    CHECK(clip_result(0)==2*ONE);
     /* ... and a model's move after a camera rotation is rotated: a 90
      * degree turn about Z (x -> y) then a move of 3 along x moves along x
      * first, then turns: the result moves along y. */
@@ -132,8 +146,8 @@ static void test_matrices(void)
     }
     G3_Translate(3*ONE,0,0);
     NitroPort_Gx3dRefreshStatus();
-    CHECK(read32(0x640+12*4)==0);
-    CHECK(read32(0x640+13*4)==3*ONE);
+    CHECK(clip_result(12)==0);
+    CHECK(clip_result(13)==3*ONE);
 }
 static void test_vtx_diff(void)
 {
@@ -344,7 +358,7 @@ static void test_cpu_fifo_writes(void)
     {
         u32 delta[3]={ONE,0,0};
         MI_CpuSend32(delta,(volatile void *)&reg_G3_MTX_TRANS,sizeof(delta));
-        CHECK(read32(0x640+12*4)==ONE);
+        CHECK(clip_result(12)==ONE);
     }
 }
 
@@ -540,8 +554,8 @@ static void test_stack_vec_and_result_refresh(void)
     memcpy(NitroPort_IoReg+0x640,&marker,sizeof(marker));
     for(i=0;i<100;i++)NitroPort_GxFifoWord(0); /* NOP, no matrix changes */
     CHECK((uint32_t)read32(0x640)==marker);
-    NitroPort_GxDirectWrite(0x15,0); /* matrix changes regenerate registers */
-    CHECK(read32(0x640)==ONE);
+    NitroPort_GxDirectWrite(0x15,0); /* a matrix change: the SDK reads the new one */
+    CHECK(clip_result(0)==ONE);
 }
 
 static void test_translucency_and_scene_limits(void)

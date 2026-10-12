@@ -71,7 +71,12 @@ static void Transfer(u32 dmaNo, u32 cnt)
     /* One unit at a time, in order, like the hardware: a fixed destination
      * (an I/O port such as the 3D FIFO) sees every value, and overlapping
      * copies behave as on the DS. */
-    if (unit == 4) {
+    if (unit == 4 && destStep == 0 && srcStep == 4 &&
+        dest >= (u32)REG_GXFIFO_ADDR && dest < (u32)REG_GXFIFO_ADDR + 0x40) {
+        /* Geometry into the 3D FIFO: in one go. */
+        NitroPort_GxFifoWords((const u32 *)src, count);
+        src += count * 4u;
+    } else if (unit == 4) {
         for (i = 0; i < count; i++) {
             u32 word = *(const vu32 *)src;
             /* GXFIFO is a write-only stream, not a memory location. Every

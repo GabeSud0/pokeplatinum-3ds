@@ -928,7 +928,7 @@ static void DrawEngine(Engine *e, u16 *out)
     int kind[4];
     const u16 *gx3dPixels = NULL;
     const u8 *gx3dAlpha = NULL;
-    u8 *alpha3d = work->alpha3d;
+    u8 *alpha3d = work->alpha3d;   /* BG0's 3D alpha on the line being drawn */
     int gx3dTranslucent = 0;   /* the 3D image has pixels of alpha 1-30 */
     u16 bldcnt = Rd16(io, 0x50);
     u16 bldalpha = Rd16(io, 0x52);
@@ -965,12 +965,7 @@ static void DrawEngine(Engine *e, u16 *out)
     if (e->isA && kind[0] == BG_3D) {
         gx3dPixels = NitroPort_Gx3dAcquireImage();
         gx3dAlpha = gx3dPixels != NULL ? NitroPort_Gx3dImageAlpha(gx3dPixels) : NULL;
-        if (gx3dAlpha != NULL) {
-            int i;
-            for (i = 0; i < W * H && !gx3dTranslucent; i++) {
-                gx3dTranslucent = (gx3dPixels[i] & OPAQUE) && gx3dAlpha[i] < 31;
-            }
-        }
+        gx3dTranslucent = gx3dAlpha != NULL && NitroPort_Gx3dImageTranslucent(gx3dPixels);
     }
     objFrame->blends = 0;
     if (dispcnt & 0x1000) {
@@ -1061,12 +1056,19 @@ static void DrawEngine(Engine *e, u16 *out)
                         DrawTextBg(e, bg, bgcnt[bg], dispcnt, y, &t, T_PLAIN);
                     } else if (kind[bg] == BG_3D) {
                         int scroll = Rd16(io, 0x10) & 0x1FF;
-                        for (x = 0; x < W; ++x) {
-                            int sx = (x + scroll) & 0x1FF;
-                            bgLine[x] = (sx < W && gx3dPixels != NULL)
-                                            ? gx3dPixels[y * W + sx] : 0;
-                            alpha3d[x] = (sx < W && gx3dAlpha != NULL)
-                                            ? gx3dAlpha[y * W + sx] : 31;
+                        if (scroll == 0 && gx3dPixels != NULL && gx3dAlpha != NULL) {
+                            /* The image's own line, no copy. */
+                            px = gx3dPixels + y * W;
+                            alpha3d = (u8 *)(gx3dAlpha + y * W);
+                        } else {
+                            alpha3d = work->alpha3d;
+                            for (x = 0; x < W; ++x) {
+                                int sx = (x + scroll) & 0x1FF;
+                                bgLine[x] = (sx < W && gx3dPixels != NULL)
+                                                ? gx3dPixels[y * W + sx] : 0;
+                                alpha3d[x] = (sx < W && gx3dAlpha != NULL)
+                                                ? gx3dAlpha[y * W + sx] : 31;
+                            }
                         }
                     } else {
                         DrawAffineBg(e, bg, kind[bg], bgcnt[bg], dispcnt, y, bgLine);
@@ -1102,10 +1104,24 @@ static void DrawEngine(Engine *e, u16 *out)
 
         if (!blend2) {
             if (!(flags & T_LAYER)) {
-                for (x = 0; x < W; x++) {
-                    u16 c = row[x];
+                if (((uintptr_t)row & 3) == 0) {
+                    /* Two pixels at a time: a pixel keeps its colour if
+                     * drawn, else takes the backdrop. */
+                    u32a *pair = (u32a *)row;
+                    u32 back2 = (u32)backdrop * 0x10001u;
 
-                    row[x] = (c & OPAQUE) ? (u16)(c & 0x7FFF) : backdrop;
+                    for (x = 0; x < W / 2; x++) {
+                        u32 c = pair[x];
+                        u32 drawn = (c >> 15) & 0x10001u;
+
+                        pair[x] = (c & (drawn * 0x7FFFu)) | (back2 & ((drawn ^ 0x10001u) * 0xFFFFu));
+                    }
+                } else {
+                    for (x = 0; x < W; x++) {
+                        u16 c = row[x];
+
+                        row[x] = (c & OPAQUE) ? (u16)(c & 0x7FFF) : backdrop;
+                    }
                 }
             } else {
                 /* brighten or darken the layers chosen */
@@ -1258,4 +1274,80 @@ void NitroPort_RenderScreens(u16 *top, u16 *bottom)
 
     NitroPort_Render2D(0, aOnTop ? top : bottom);
     NitroPort_Render2D(1, aOnTop ? bottom : top);
+}
+
+/* ------------------------------------------------- unchanged screens */
+
+/* A 32-bit FNV-1a hash of words, two lanes at a time. */
+static u32 HashWords(const u8 *p, u32 bytes, u32 h)
+{
+    const u32a *w = (const u32a *)p;
+    u32 n = bytes / 8, h2 = h ^ 0x9E3779B9u, i;
+
+    for (i = 0; i < n; i++) {
+        h = (h ^ w[2 * i]) * 16777619u;
+        h2 = (h2 ^ w[2 * i + 1]) * 16777619u;
+    }
+    return (h ^ (h2 * 31u)) * 16777619u;
+}
+
+/* Everything an engine's picture comes from: its registers, palettes, OAM,
+ * VRAM (as the CPU sees it, and the LCDC banks it may use as extended
+ * palettes or for VRAM display), the VRAM bank settings and POWCNT1. */
+static u32 EngineSignature(int engine)
+{
+    BOOL isA = engine == 0;
+    const u8 *io = NitroPort_IoReg + (isA ? 0 : 0x1000);
+    u32 h = 2166136261u;
+
+    h = HashWords(io, 0x70, h);
+    h = HashWords(NitroPort_IoReg + 0x240, 0x10, h);   /* VRAMCNT */
+    h = (h ^ IO16(0x304)) * 16777619u;                  /* POWCNT1 */
+    h = HashWords(NitroPort_Pltt + (isA ? 0 : 0x400), 0x400, h);
+    h = HashWords(NitroPort_Oam + (isA ? 0 : 0x400), 0x400, h);
+    if (isA) {
+        h = HashWords(NitroPort_BgVram, 0x80000, h);
+        h = HashWords(NitroPort_ObjVram, 0x40000, h);
+        h = HashWords(NitroPort_LcdcVram + 0x80000, 0x18000, h);   /* E, F, G */
+        if (((Rd32(io, 0) >> 16) & 3) == 2) {                       /* VRAM display */
+            h = HashWords(NitroPort_LcdcVram + ((Rd32(io, 0) >> 18) & 3) * 0x20000, 0x20000, h);
+        }
+    } else {
+        h = HashWords(NitroPort_DbBgVram, 0x20000, h);
+        h = HashWords(NitroPort_DbObjVram, 0x20000, h);
+        h = HashWords(NitroPort_LcdcVram + 0x98000, 0xC000, h);    /* H, I */
+    }
+    return h;
+}
+
+/* NitroPort_Render2D, unless nothing it draws from changed since the last
+ * time for this engine (then out is left as it is, and 0 returned). Working
+ * that out reads the engine's VRAM once: far less than drawing it. A 3D
+ * layer counts as changed whenever a new 3D image is out; while the 3D
+ * keeps changing, nothing is hashed. */
+int NitroPort_Render2DIfChanged(int engine, u16 *out)
+{
+    static struct { u32 signature; u32 images; int valid; } last[2];
+    int e = engine ? 1 : 0;
+    u32 images = NitroPort_Gx3dImageCount();
+    u32 dispcnt = Rd32(NitroPort_IoReg, 0);
+    BOOL uses3D = e == 0 && (dispcnt & 0x0108) == 0x0108;   /* BG0 on, as 3D */
+    u32 signature;
+
+    if (uses3D && images != last[e].images) {
+        /* New 3D: draw, and check the rest again next time. */
+        last[e].images = images;
+        last[e].valid = 0;
+        NitroPort_Render2D(engine, out);
+        return 1;
+    }
+    signature = EngineSignature(e);
+    if (last[e].valid && signature == last[e].signature) {
+        return 0;
+    }
+    last[e].signature = signature;
+    last[e].images = images;
+    last[e].valid = 1;
+    NitroPort_Render2D(engine, out);
+    return 1;
 }

@@ -1,0 +1,36 @@
+From: Platinum 3DS port contributors
+Subject: [PATCH] Matrix result registers brought up to date when read
+
+---
+diff --git a/libraries/gx/src/g3x.c b/libraries/gx/src/g3x.c
+--- a/libraries/gx/src/g3x.c
++++ b/libraries/gx/src/g3x.c
+@@ -189,9 +189,18 @@
+ 	}
+ }
+ 
++#if defined(SDK_PORT_3DS)
++/* The port's geometry engine works out the clip and vector matrix result
++ * registers when they're read, not after every matrix command. */
++extern void NitroPort_Gx3dSyncResults(void);
++#endif
++
+ int G3X_GetClipMtx (MtxFx44 *m)
+ {
+ 	SDK_NULL_ASSERT(m);
++#if defined(SDK_PORT_3DS)
++	NitroPort_Gx3dSyncResults();
++#endif
+ 
+ 	if (G3X_IsGeometryBusy()) {
+ 		return -1;
+@@ -204,6 +213,9 @@
+ int G3X_GetVectorMtx (MtxFx33 *m)
+ {
+ 	SDK_NULL_ASSERT(m);
++#if defined(SDK_PORT_3DS)
++	NitroPort_Gx3dSyncResults();
++#endif
+ 
+ 	if (G3X_IsGeometryBusy()) {
+ 		return -1;
