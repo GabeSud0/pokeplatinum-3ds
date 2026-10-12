@@ -11,6 +11,7 @@
  * triangle scene for the rasterizer (and, later, PICA200).
  */
 #include <nitro.h>
+#include <nitro_port.h>
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_mailbox.h>
 #include <limits.h>
@@ -320,6 +321,30 @@ static NitroGx3dVertex to_screen(const GeoVertex *v)
     out.color=v->color;
     return out;
 }
+/* Where the geometry went, logged every 120 scenes as a [gx3d] line: why a
+ * scene can end up without triangles (all clipped, all culled, ...). */
+static struct {
+    unsigned scenes, vertices, polygons, triangles;
+    unsigned clipped, cullBoth, cullFacing, degenerate, overLimit, behind;
+    uint32_t lastAttr;
+    int32_t lastClip[4];
+} sDiag;
+
+static void diag_log(void)
+{
+    NitroPort_Log("[gx3d] %u scenes: %u vertices, %u polygons -> %u triangles; "
+                  "lost: %u clipped away, %u attr culls both faces, %u back/front culled, "
+                  "%u degenerate, %u over DS limits, %u vertices with w<=0; "
+                  "last attr %08lx, last clip (%ld,%ld,%ld,%ld), proj diag (%ld,%ld,%ld,%ld)",
+                  sDiag.scenes, sDiag.vertices, sDiag.polygons, sDiag.triangles,
+                  sDiag.clipped, sDiag.cullBoth, sDiag.cullFacing, sDiag.degenerate,
+                  sDiag.overLimit, sDiag.behind, (unsigned long)sDiag.lastAttr,
+                  (long)sDiag.lastClip[0], (long)sDiag.lastClip[1],
+                  (long)sDiag.lastClip[2], (long)sDiag.lastClip[3],
+                  (long)s.proj.a[0], (long)s.proj.a[5], (long)s.proj.a[10], (long)s.proj.a[15]);
+    memset(&sDiag, 0, sizeof(sDiag));
+}
+
 static void append_triangle(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
 {
     NitroGx3dScene *scene=&sScenes[sBuilding];
@@ -337,7 +362,7 @@ static void append_triangle(const GeoVertex *a,const GeoVertex *b,const GeoVerte
                 tmp[m++]=interpolate(left,right,t);
             }
         }
-        if(m<3)return;
+        if(m<3){sDiag.clipped++;return;}
         memcpy(v,tmp,m*sizeof(GeoVertex));n=m;
     }
     for(i=1;i+1<n;i++){
@@ -346,7 +371,11 @@ static void append_triangle(const GeoVertex *a,const GeoVertex *b,const GeoVerte
         int64_t cross=(int64_t)(bb.x-aa.x)*(cc.y-aa.y)-
                       (int64_t)(bb.y-aa.y)*(cc.x-aa.x);
         int front=cross<0, mask=(s.attr>>6)&3;
-        if(!cross||!(mask & (front?2:1)))continue;
+        sDiag.lastAttr=s.attr;
+        if(!cross){sDiag.degenerate++;continue;}
+        if(!mask){sDiag.cullBoth++;continue;}
+        if(!(mask & (front?2:1))){sDiag.cullFacing++;continue;}
+        sDiag.triangles++;
         if(scene->count>=NITRO_GX3D_MAX_TRIANGLES){scene->dropped++;continue;}
         tri=&scene->triangles[scene->count++];
         tri->v[0]=aa;tri->v[1]=bb;tri->v[2]=cc;
@@ -363,9 +392,11 @@ static int reserve_polygon(void)
     NitroGx3dScene *scene=&sScenes[sBuilding];
     if(s.framePolygons >= 2048u) {
         scene->dropped++;
+        sDiag.overLimit++;
         return 0;
     }
     s.framePolygons++;
+    sDiag.polygons++;
     return 1;
 }
 static void submit_vertex(void)
@@ -376,12 +407,16 @@ static void submit_vertex(void)
     if(!s.inBegin)return;
     if(s.frameVertices >= 6144u){
         sScenes[sBuilding].dropped++;
+        sDiag.overLimit++;
         return;
     }
     s.frameVertices++;
     src[0]=s.coord[0];src[1]=s.coord[1];src[2]=s.coord[2];src[3]=4096;
     transform(src,&s.pos,eye);
     transform(eye,&s.proj,v.clip);
+    sDiag.vertices++;
+    if(v.clip[3]<=0)sDiag.behind++;
+    memcpy(sDiag.lastClip,v.clip,sizeof(sDiag.lastClip));
     if(((s.texparam>>30)&3u)==3u)transform_texcoords(src,3,s.resolvedTexcoord);
     v.s=s.resolvedTexcoord[0];v.t=s.resolvedTexcoord[1];v.color=s.rgb;
     if(s.primitive==0){
@@ -503,6 +538,7 @@ static void execute(unsigned op,const uint32_t *p)
             scene->count=0;scene->dropped++;
         }
         s.frameVertices=0;s.framePolygons=0;
+        if(++sDiag.scenes>=120)diag_log();
         break;
     }
     case 0x60:
