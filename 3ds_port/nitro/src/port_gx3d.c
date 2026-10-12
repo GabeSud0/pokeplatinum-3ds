@@ -31,6 +31,7 @@ typedef struct GeoState {
     int32_t coord[3];
     int32_t texcoord[2], normal[3];
     uint16_t rgb, diffuse, ambient, specular, emission;
+    int32_t resolvedTexcoord[2];
     uint32_t attr, pendingAttr, texparam, plttbase, shininess[32];
     int useShininess;
     unsigned frameVertices, framePolygons;
@@ -176,31 +177,81 @@ static uint16_t rgb_mul(uint16_t c,int intensity)
     b=(((c>>10)&31)*(unsigned)intensity+2048)>>12;
     return (uint16_t)(r|(g<<5)|(b<<10));
 }
+/* Multiply two RGB555 colours per component. Material reflectance and
+ * the selected light colour are independent on the DS. */
+static uint16_t rgb_product(uint16_t a,uint16_t b)
+{
+    unsigned r=((a&31)*(b&31)+15)/31;
+    unsigned g=((((a>>5)&31)*((b>>5)&31))+15)/31;
+    unsigned bl=((((a>>10)&31)*((b>>10)&31))+15)/31;
+    return (uint16_t)(r|(g<<5)|(bl<<10));
+}
+
+/* GBATEK: NORMAL applies the material per enabled light, then emission
+ * exactly once. The half vector uses a fixed (0,0,-1) view direction.
+ * Shininess entries are 128 unsigned 0.8 values, not 32 32-bit values. */
 static void shade_normal(uint32_t value)
 {
-    int32_t normal[4],transformed[4];
+    int32_t normal[4], transformed[4];
     uint16_t rgb=s.emission;
-    int i;
-    normal[0]=signbits(value,10)*8;
-    normal[1]=signbits(value>>10,10)*8;
-    normal[2]=signbits(value>>20,10)*8;
+    int i,j;
+    for(j=0;j<3;j++){
+        s.normal[j]=signbits(value>>(j*10),10)*8;
+        normal[j]=s.normal[j];
+    }
     normal[3]=0;
     transform(normal,&s.vec,transformed);
-    rgb=rgb_add(rgb,s.ambient);
     for(i=0;i<4;i++)if(s.attr&(1u<<i)){
-        int64_t dot=(int64_t)transformed[0]*s.lightDir[i][0]+
-                    (int64_t)transformed[1]*s.lightDir[i][1]+
-                    (int64_t)transformed[2]*s.lightDir[i][2];
-        int diffuse=(int)(-dot>>12);
-        if(diffuse>0){
-            uint16_t light=rgb_mul(s.lightColor[i],diffuse);
-            unsigned r=(light&31)*(s.diffuse&31)/31;
-            unsigned g=((light>>5)&31)*((s.diffuse>>5)&31)/31;
-            unsigned b=((light>>10)&31)*((s.diffuse>>10)&31)/31;
-            rgb=rgb_add(rgb,(uint16_t)(r|(g<<5)|(b<<10)));
+        int64_t dot=0,halfDot=0;
+        int diffuse,specIntensity;
+        uint16_t light=s.lightColor[i];
+        for(j=0;j<3;j++){
+            int32_t half=(s.lightDir[i][j]+(j==2?-4096:0))/2;
+            dot+=(int64_t)transformed[j]*s.lightDir[i][j];
+            halfDot+=(int64_t)transformed[j]*half;
         }
+        diffuse=(int)(-dot>>12);
+        if(diffuse<0)diffuse=0;
+        if(diffuse>4096)diffuse=4096;
+        specIntensity=(int)(-halfDot>>12);
+        if(specIntensity<0)specIntensity=0;
+        if(specIntensity>4096)specIntensity=4096;
+        specIntensity=(int)(((int64_t)specIntensity*specIntensity)>>12);
+        if(s.useShininess){
+            unsigned index=(unsigned)(((uint64_t)specIntensity*128u)>>12);
+            unsigned entry;
+            if(index>127u)index=127u;
+            entry=(s.shininess[index>>2]>>((index&3u)*8u))&255u;
+            specIntensity=(int)(entry*4096u/255u);
+        }
+        rgb=rgb_add(rgb,rgb_product(s.ambient,light));
+        rgb=rgb_add(rgb,rgb_mul(rgb_product(s.diffuse,light),diffuse));
+        rgb=rgb_add(rgb,rgb_mul(rgb_product(s.specular,light),specIntensity));
     }
     s.rgb=rgb;
+}
+
+/* Texture coordinates are stored in signed 1/16-texel units. All texture
+ * matrix elements and NORMAL/VTX inputs use signed 20.12 fixed point.
+ * Source mode 1 includes two constant 1/16 inputs; modes 2 and 3 replace
+ * the bottom matrix row with the most recent raw TEXCOORD (GBATEK). */
+static void transform_texcoords(const int32_t *source,int mode,int32_t out[2])
+{
+    int j;
+    for(j=0;j<2;j++){
+        int64_t value;
+        if(mode==1){
+            value=(int64_t)source[0]*s.tex.a[j]+
+                  (int64_t)source[1]*s.tex.a[4+j]+
+                  (int64_t)s.tex.a[8+j]+s.tex.a[12+j];
+            out[j]=saturation(value>>12);
+        }else{
+            value=(int64_t)source[0]*s.tex.a[j]+
+                  (int64_t)source[1]*s.tex.a[4+j]+
+                  (int64_t)source[2]*s.tex.a[8+j];
+            out[j]=saturation((value>>20)+s.texcoord[j]);
+        }
+    }
 }
 static void set_geo_position(uint32_t cmd,const uint32_t *p)
 {
@@ -299,7 +350,8 @@ static void submit_vertex(void)
     src[0]=s.coord[0];src[1]=s.coord[1];src[2]=s.coord[2];src[3]=4096;
     transform(src,&s.pos,eye);
     transform(eye,&s.proj,v.clip);
-    v.s=s.texcoord[0];v.t=s.texcoord[1];v.color=s.rgb;
+    if(((s.texparam>>30)&3u)==3u)transform_texcoords(src,3,s.resolvedTexcoord);
+    v.s=s.resolvedTexcoord[0];v.t=s.resolvedTexcoord[1];v.color=s.rgb;
     if(!s.inBegin)return;
     if(s.primitive==0){
         s.vertices[n++]=v;
@@ -357,8 +409,21 @@ static void execute(unsigned op,const uint32_t *p)
     case 0x1c:identity(&m);m.a[12]=(int32_t)p[0];m.a[13]=(int32_t)p[1];m.a[14]=(int32_t)p[2];
         mul_matrix(&m,0);break;
     case 0x20:s.rgb=p[0]&0x7FFF;break;
-    case 0x21:shade_normal(p[0]);break;
-    case 0x22:s.texcoord[0]=signbits(p[0],16);s.texcoord[1]=signbits(p[0]>>16,16);break;
+    case 0x21:
+        shade_normal(p[0]);
+        if(((s.texparam>>30)&3u)==2u)transform_texcoords(s.normal,2,s.resolvedTexcoord);
+        break;
+    case 0x22:{
+        int mode=(int)((s.texparam>>30)&3u);
+        s.texcoord[0]=signbits(p[0],16);
+        s.texcoord[1]=signbits(p[0]>>16,16);
+        if(mode==1)transform_texcoords(s.texcoord,1,s.resolvedTexcoord);
+        else if(mode==0){
+            s.resolvedTexcoord[0]=s.texcoord[0];
+            s.resolvedTexcoord[1]=s.texcoord[1];
+        }
+        break;
+    }
     case 0x23:case 0x24:case 0x25:case 0x26:case 0x27:case 0x28:
         set_geo_position(op,p);submit_vertex();break;
     case 0x29:s.pendingAttr=p[0];break;
@@ -366,10 +431,16 @@ static void execute(unsigned op,const uint32_t *p)
     case 0x2b:s.plttbase=p[0];break;
     case 0x30:s.diffuse=p[0]&0x7FFF;s.ambient=(p[0]>>16)&0x7FFF;
         if(p[0]&(1u<<15))s.rgb=s.diffuse;break;
-    case 0x31:s.specular=p[0]&0x7FFF;s.emission=(p[0]>>16)&0x7FFF;break;
+    case 0x31:s.specular=p[0]&0x7FFF;s.emission=(p[0]>>16)&0x7FFF;
+        s.useShininess=(p[0]&(1u<<15))!=0;break;
     case 0x32:{
         int id=(p[0]>>30)&3;
-        for(i=0;i<3;i++)s.lightDir[id][i]=signbits(p[0]>>(i*10),10)*8;
+        int32_t incoming[4],transformed[4];
+        for(i=0;i<3;i++)incoming[i]=signbits(p[0]>>(i*10),10)*8;
+        incoming[3]=0;
+        /* LIGHT_VECTOR samples the directional matrix at command time. */
+        transform(incoming,&s.vec,transformed);
+        for(i=0;i<3;i++)s.lightDir[id][i]=transformed[i];
         break;
     }
     case 0x33:s.lightColor[(p[0]>>30)&3]=p[0]&0x7FFF;break;
