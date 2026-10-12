@@ -201,11 +201,11 @@ static void shade_normal(uint32_t value)
 static void set_geo_position(uint32_t cmd,const uint32_t *p)
 {
     if(cmd==0x23){s.coord[0]=signbits(p[0],16);s.coord[1]=signbits(p[0]>>16,16);s.coord[2]=signbits(p[1],16);}
-    else if(cmd==0x24){int i;for(i=0;i<3;i++)s.coord[i]=signbits(p[0]>>(i*10),10)<<6;}
+    else if(cmd==0x24){int i;for(i=0;i<3;i++)s.coord[i]=signbits(p[0]>>(i*10),10)*64;}
     else if(cmd==0x25){s.coord[0]=signbits(p[0],16);s.coord[1]=signbits(p[0]>>16,16);}
     else if(cmd==0x26){s.coord[0]=signbits(p[0],16);s.coord[2]=signbits(p[0]>>16,16);}
     else if(cmd==0x27){s.coord[1]=signbits(p[0],16);s.coord[2]=signbits(p[0]>>16,16);}
-    else if(cmd==0x28){int i;for(i=0;i<3;i++)s.coord[i]+=signbits(p[0]>>(i*10),10)<<3;}
+    else if(cmd==0x28){int i;for(i=0;i<3;i++)s.coord[i]+=signbits(p[0]>>(i*10),10)*8;}
 }
 
 /* Sutherland-Hodgman clipping in clip space, preserving interpolation
@@ -242,7 +242,8 @@ static NitroGx3dVertex to_screen(const GeoVertex *v)
     for(i=0;i<4;i++)out.clip[i]=v->clip[i];
     out.x=(int32_t)((s.viewport[0]+(nx+1)*(s.viewport[2]-s.viewport[0])/2)*256);
     out.y=(int32_t)((191-(s.viewport[1]+(ny+1)*(s.viewport[3]-s.viewport[1])/2))*256);
-    if(nz<-1.0)nz=-1.0;if(nz>1.0)nz=1.0;
+    if(nz<-1.0)nz=-1.0;
+    if(nz>1.0)nz=1.0;
     out.depth=(uint32_t)((nz+1)*8388607.5);
     out.inv_w=(float)inv;
     out.s=v->s/16.0f;out.t=v->t/16.0f;
@@ -385,7 +386,35 @@ static void execute(unsigned op,const uint32_t *p)
         s.viewport[2]=(int)((p[0]>>16)&255);
         s.viewport[3]=(int)((p[0]>>24)&255);
         break;
-    case 0x70:s.boxVisible=1;break; /* conservative: intersecting view */
+    case 0x70: {
+        /* 6 packed 4.12 coordinates: XYZ and size XYZ. A box is invisible
+         * only when all eight corners are outside the same clip plane.
+         * This is conservative for frustum edges, as the DS box test is. */
+        int32_t origin[3], size[3], corner[4], eye[4], clip[4];
+        int plane,mask;
+        int64_t maxDistance;
+        origin[0]=signbits(p[0],16);
+        origin[1]=signbits(p[0]>>16,16);
+        origin[2]=signbits(p[1],16);
+        size[0]=signbits(p[1]>>16,16);
+        size[1]=signbits(p[2],16);
+        size[2]=signbits(p[2]>>16,16);
+        s.boxVisible=1;
+        for(plane=0;plane<6;plane++){
+            maxDistance=INT64_MIN;
+            for(mask=0;mask<8;mask++){
+                int64_t d;
+                for(i=0;i<3;i++)corner[i]=origin[i]+((mask>>i)&1 ? size[i]:0);
+                corner[3]=4096;
+                transform(corner,&s.pos,eye);
+                transform(eye,&s.proj,clip);
+                d=(int64_t)clip[3]+(plane&1?-(int64_t)clip[plane>>1]:clip[plane>>1]);
+                if(d>maxDistance)maxDistance=d;
+            }
+            if(maxDistance<0){s.boxVisible=0;break;}
+        }
+        break;
+    }
     case 0x71:{
         int32_t src[4],eye[4],result[4];
         src[0]=signbits(p[0],16);src[1]=signbits(p[0]>>16,16);
@@ -398,13 +427,19 @@ static void execute(unsigned op,const uint32_t *p)
         for(i=0;i<3;i++)src[i]=signbits(p[0]>>(i*10),10)*8;
         src[3]=0;transform(src,&s.vec,res);
         for(i=0;i<3;i++){
-            int32_t val=res[i]>>3;
-            put32(0x630+i*2,(uint16_t)val);
+            uint16_t val=(uint16_t)(res[i]>>3);
+            memcpy(NitroPort_IoReg+0x630+i*2,&val,sizeof(val));
         }
         break;
     }
     default:break;
     }
+}
+void NitroPort_Gx3dClearStackError(void)
+{
+    s.stackError=0;
+    s.pjLevel=0;
+    NitroPort_Gx3dRefreshStatus();
 }
 void NitroPort_Gx3dReset(void)
 {
@@ -475,10 +510,10 @@ void NitroPort_Gx3dRefreshStatus(void)
               ((uint32_t)(s.stackError!=0)<<15)|
               (1u<<25)|(1u<<26);
     put32(0x600,status);
-    for(j=0;j<16;j++){
+    {
         Matrix clip;
         multiply(&clip,&s.pos,&s.proj);
-        put32(0x640+j*4,(uint32_t)clip.a[j]);
+        for(j=0;j<16;j++)put32(0x640+j*4,(uint32_t)clip.a[j]);
     }
     for(j=0;j<9;j++)put32(0x680+j*4,(uint32_t)s.vec.a[(j/3)*4+(j%3)]);
 }
