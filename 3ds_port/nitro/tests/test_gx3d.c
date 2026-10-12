@@ -215,6 +215,22 @@ static void test_box_test(void)
     NitroPort_Gx3dRefreshStatus();
     CHECK((read32(0x600)&2)!=0);
 }
+static void test_bg0_composition(void)
+{
+    /* The original GX display setup chooses the 3D engine for BG0.
+     * The existing 2D compositor, not a bespoke 3D overlay, must show it. */
+    GX_Init();
+    GX_SetPower(GX_POWER_ALL);
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS,GX_BGMODE_0,GX_BG0_AS_3D);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0);
+    GX_DispOn();
+    reset_geometry();
+    triangle(0,RGB(0,0,31));
+    swap();
+    NitroPort_Render2D(0,pixels);
+    CHECK((pixels[96*256+128]&0x7fff)==RGB(0,0,31));
+    CHECK((pixels[96*256+128]&0x8000)==0); /* final 2D RGB555 */
+}
 static void test_clear_and_status(void)
 {
     reset_geometry();
@@ -237,6 +253,7 @@ int main(void)
     test_textures();
     test_box_test();
     test_clear_and_status();
+    test_bg0_composition();
     printf("GX3D synthetic scene and raster: %d checks, %d failures\n",checks,failures);
     return failures?1:0;
 }
