@@ -60,6 +60,16 @@ static void triangle(int z,uint16_t color)
     vertex(0,3000,z);
     NitroPort_GxDirectWrite(0x41,0);
 }
+static void quad(int z,uint16_t color)
+{
+    NitroPort_GxDirectWrite(0x20,color);
+    NitroPort_GxDirectWrite(0x40,1); /* quads */
+    vertex(-3000,-3000,z);
+    vertex(3000,-3000,z);
+    vertex(3000,3000,z);
+    vertex(-3000,3000,z);
+    NitroPort_GxDirectWrite(0x41,0);
+}
 static void swap(void){NitroPort_GxDirectWrite(0x50,0);}
 static void test_matrices(void)
 {
@@ -87,6 +97,17 @@ static void test_matrices(void)
     G3_PushMtx();G3_PushMtx();
     NitroPort_Gx3dRefreshStatus();
     CHECK((read32(0x600)&0x8000)!=0);
+    G3X_ResetMtxStackOverflow();
+    NitroPort_Gx3dRefreshStatus();
+    CHECK((read32(0x600)&0x8000)==0);
+
+    reset_geometry();
+    G3_Scale(2*ONE,3*ONE,ONE);
+    NitroPort_Gx3dRefreshStatus();
+    CHECK(read32(0x640)==2*ONE);
+    CHECK(read32(0x640+5*4)==3*ONE);
+    /* Matrix mode 2 excludes scale from the directional matrix. */
+    CHECK(read32(0x680)==ONE);
 }
 static void test_packed_fifo(void)
 {
@@ -150,8 +171,9 @@ static void test_textures(void)
     NitroPort_LcdcVram[0x80000+2]=31;
     NitroPort_LcdcVram[0x80000+3]=0;
     NitroPort_GxDirectWrite(0x2a,fmt4);
-    triangle(0,RGB(31,31,31));
+    quad(0,RGB(31,31,31));
     swap();
+    CHECK(NitroPort_Gx3dScene()->count==2);
     NitroPort_Gx3dRasterize(pixels,NULL);
     CHECK((pixels[96*256+128]&0x7fff)==RGB(31,0,0));
     /* Direct-colour texture, nonzero texel with bit15 opaque. */
@@ -161,6 +183,37 @@ static void test_textures(void)
     triangle(0,RGB(31,31,31));swap();
     NitroPort_Gx3dRasterize(pixels,NULL);
     CHECK((pixels[96*256+128]&0x7fff)==(0x83e0u&0x7fff));
+
+    /* A 4x4-compressed 8x8 texture: all four-texel rows use colour #1.
+     * Attribute descriptor in slot 1 picks direct palette mode 2. */
+    reset_geometry();
+    NitroPort_IoReg[0x241]=0x8b; /* bank B -> texture slot 1 */
+    NitroPort_LcdcVram[0]=0x55;
+    NitroPort_LcdcVram[1]=0x55;
+    NitroPort_LcdcVram[2]=0x55;
+    NitroPort_LcdcVram[3]=0x55;
+    NitroPort_LcdcVram[0x20000]=0;
+    NitroPort_LcdcVram[0x20001]=0x80; /* mode 2, base palette 0 */
+    NitroPort_GxDirectWrite(0x2a,5u<<26);
+    quad(0,RGB(31,31,31));
+    swap();
+    NitroPort_Gx3dRasterize(pixels,NULL);
+    CHECK((pixels[96*256+128]&0x7fff)==RGB(31,0,0));
+}
+static void test_box_test(void)
+{
+    reset_geometry();
+    /* Origin far outside the right clip plane, tiny 4.12 box. */
+    NitroPort_GxDirectWrite(0x70,word2(5*ONE,0));
+    NitroPort_GxDirectWrite(0x70,word2(0,ONE));
+    NitroPort_GxDirectWrite(0x70,word2(ONE,ONE));
+    NitroPort_Gx3dRefreshStatus();
+    CHECK((read32(0x600)&2)==0);
+    NitroPort_GxDirectWrite(0x70,word2(0,0));
+    NitroPort_GxDirectWrite(0x70,word2(0,ONE));
+    NitroPort_GxDirectWrite(0x70,word2(ONE,ONE));
+    NitroPort_Gx3dRefreshStatus();
+    CHECK((read32(0x600)&2)!=0);
 }
 static void test_clear_and_status(void)
 {
@@ -182,6 +235,7 @@ int main(void)
     test_triangles_and_depth();
     test_culling();
     test_textures();
+    test_box_test();
     test_clear_and_status();
     printf("GX3D synthetic scene and raster: %d checks, %d failures\n",checks,failures);
     return failures?1:0;
