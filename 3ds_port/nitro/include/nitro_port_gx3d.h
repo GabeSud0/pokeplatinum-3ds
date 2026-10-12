@@ -52,6 +52,8 @@ void NitroPort_Gx3dReset(void);
  * The SDK direct-call interception and the port's DMA driver use these. */
 void NitroPort_GxDirectWrite(int opcode, uint32_t value);
 void NitroPort_GxFifoWord(uint32_t value);
+/* Several GXFIFO words in a row (a DMA or CPU send to the FIFO). */
+void NitroPort_GxFifoWords(const uint32_t *words, size_t count);
 
 /* The completed display scene (published on SWAP_BUFFERS).
  * Legacy single-threaded inspection, for synthetic tests ONLY: never retain
@@ -75,6 +77,9 @@ int NitroPort_Gx3dPublishRGBA8(const uint32_t *image, size_t pixels);
 /* The 3D alpha (0-31) of each pixel of an acquired image, or NULL. On the
  * DS a 3D pixel with alpha 1-30 blends with the 2D layer under BG0. */
 const uint8_t *NitroPort_Gx3dImageAlpha(const uint16_t *image);
+/* Whether an acquired image has pixels of alpha 1-30 (worked out once,
+ * when it's published). */
+int NitroPort_Gx3dImageTranslucent(const uint16_t *image);
 
 /* Debug-only PNG output for the newest finished RGB555|coverage image.
  * Pixel order is always DS screen order (top-to-bottom, left-to-right).
@@ -85,6 +90,9 @@ int NitroPort_Gx3dDumpLatest(const char *path);
 
 /* Update read-only GXSTAT, matrix and test registers. The FIFO executes
  * synchronously for now, so the FIFO-empty/under-half IRQ stays level-based. */
+/* Brings the clip and vector matrix result registers (0x640, 0x680) up to
+ * date; the SDK's G3X_GetClipMtx/G3X_GetVectorMtx call it first. */
+void NitroPort_Gx3dSyncResults(void);
 void NitroPort_Gx3dRefreshStatus(void);
 
 /* GXSTAT's bit 15 is write-one-to-clear on the DS, and resetting it

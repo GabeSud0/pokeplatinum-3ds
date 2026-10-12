@@ -87,8 +87,7 @@ void MIi_CpuSend32(const void *srcp, volatile void *destp, u32 size)
      * so dispatch each word in order just like GXFIFO hardware.
      */
     if (dest >= fifo && dest < fifo + 0x40u) {
-        for (i = 0; i < size; i += 4)
-            NitroPort_GxFifoWord(*s++);
+        NitroPort_GxFifoWords(s, size / 4);
     } else if (dest >= command && dest < command + 0x1c0u &&
                ((dest - command) & 3u) == 0) {
         int opcode = 0x10 + (int)((dest - command) / 4u);

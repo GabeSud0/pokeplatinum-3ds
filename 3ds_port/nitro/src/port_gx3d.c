@@ -72,9 +72,12 @@ static NitroGx3dMailbox sMailbox;
 static unsigned sBuilding, sDisplayed;
 static uint32_t sSerial;
 
-static int32_t saturation(int64_t n)
+static inline int32_t saturation(int64_t n)
 {
-    return n > INT32_MAX ? INT32_MAX : n < INT32_MIN ? INT32_MIN : (int32_t)n;
+    /* Nearly always in range: one comparison for that. */
+    int32_t low=(int32_t)n;
+    if(__builtin_expect((int64_t)low==n,1))return low;
+    return n>0?INT32_MAX:INT32_MIN;
 }
 static int32_t signbits(uint32_t v, int bits)
 {
@@ -98,13 +101,23 @@ static void identity(Matrix *m)
     memset(m, 0, sizeof(*m));
     for (i=0; i<4; i++) m->a[i*4+i] = 4096;
 }
+/* Matrices the game multiplies are mostly zeros (scales, translations,
+ * 4x3 and 3x3 matrices, the projection): only the products of non-zero
+ * elements are worked out. Leaving out a zero term doesn't change a sum. */
 static void multiply(Matrix *out, const Matrix *lhs, const Matrix *rhs)
 {
     Matrix result;
+    unsigned rows[4]={0,0,0,0},cols[4]={0,0,0,0};
     int i,j,k;
-    for (i=0; i<4; ++i) for(j=0; j<4; ++j) {
+    for(i=0;i<4;i++)for(k=0;k<4;k++){
+        if(lhs->a[i*4+k])rows[i]|=1u<<k;   /* row i's non-zero columns */
+        if(rhs->a[i*4+k])cols[k]|=1u<<i;   /* column k's non-zero rows */
+    }
+    for(i=0;i<4;++i)for(j=0;j<4;++j){
+        unsigned terms=rows[i]&cols[j];
         int64_t acc=0;
-        for(k=0;k<4;k++) acc+=(int64_t)lhs->a[i*4+k]*rhs->a[k*4+j];
+        for(k=0;terms;k++,terms>>=1)
+            if(terms&1u)acc+=(int64_t)lhs->a[i*4+k]*rhs->a[k*4+j];
         result.a[i*4+j]=saturation(acc >> 12);
     }
     *out=result;
@@ -117,6 +130,14 @@ static void transform(const int32_t in[4],const Matrix *m,int32_t out[4])
         for(k=0;k<4;k++) v+=(int64_t)in[k]*m->a[k*4+j];
         out[j]=saturation(v>>12);
     }
+}
+/* transform() for a direction (w = 0): normals and light vectors. */
+static void transform_vector(const int32_t in[3],const Matrix *m,int32_t out[3])
+{
+    int64_t x=in[0],y=in[1],z=in[2];
+    int j;
+    for(j=0;j<3;j++)
+        out[j]=saturation((x*m->a[j]+y*m->a[4+j]+z*m->a[8+j])>>12);
 }
 /* transform() for a point (w = 1.0): what every vertex goes through. */
 static void transform_point(const int32_t in[4],const Matrix *m,int32_t out[4])
@@ -195,21 +216,6 @@ static Matrix read_matrix(unsigned opcode,const uint32_t *p)
     }
     return m;
 }
-static uint16_t rgb_add(uint16_t a,uint16_t b)
-{
-    unsigned r=(a&31)+(b&31),g=((a>>5)&31)+((b>>5)&31),bl=((a>>10)&31)+((b>>10)&31);
-    return (uint16_t)((r>31?31:r)|((g>31?31:g)<<5)|((bl>31?31:bl)<<10));
-}
-static uint16_t rgb_mul(uint16_t c,int intensity)
-{
-    unsigned r,g,b;
-    if(intensity<0)intensity=0;
-    if(intensity>4096)intensity=4096;
-    r=((c&31)*(unsigned)intensity+2048)>>12;
-    g=(((c>>5)&31)*(unsigned)intensity+2048)>>12;
-    b=(((c>>10)&31)*(unsigned)intensity+2048)>>12;
-    return (uint16_t)(r|(g<<5)|(b<<10));
-}
 /* Multiply two RGB555 colours per component. Material reflectance and
  * the selected light colour are independent on the DS. */
 static uint16_t rgb_product(uint16_t a,uint16_t b)
@@ -220,48 +226,74 @@ static uint16_t rgb_product(uint16_t a,uint16_t b)
     return (uint16_t)(r|(g<<5)|(bl<<10));
 }
 
+/* Each light's colour times the material's ambient, diffuse and specular
+ * colours (rgb_product), per component: they only change with LIGHT_COLOR,
+ * DIF_AMB and SPE_EMI, not with every normal. */
+static struct {
+    int dirty;
+    uint8_t ambient[4][3], diffuse[4][3], specular[4][3];
+} sLightCache = { 1 };
+static void split_product(uint8_t out[3],uint16_t a,uint16_t b)
+{
+    uint16_t c=rgb_product(a,b);
+    out[0]=(uint8_t)(c&31);out[1]=(uint8_t)((c>>5)&31);out[2]=(uint8_t)((c>>10)&31);
+}
+static void update_light_cache(void)
+{
+    int i;
+    for(i=0;i<4;i++){
+        split_product(sLightCache.ambient[i],s.ambient,s.lightColor[i]);
+        split_product(sLightCache.diffuse[i],s.diffuse,s.lightColor[i]);
+        split_product(sLightCache.specular[i],s.specular,s.lightColor[i]);
+    }
+    sLightCache.dirty=0;
+}
+
 /* GBATEK: NORMAL applies the material per enabled light, then emission
  * exactly once. The half vector uses a fixed (0,0,-1) view direction.
- * Shininess entries are 128 unsigned 0.8 values, not 32 32-bit values. */
+ * Shininess entries are 128 unsigned 0.8 values, not 32 32-bit values.
+ * The sum is worked out per component and clamped once at the end: every
+ * term is positive, so that's the same as clamping after each addition. */
 static void shade_normal(uint32_t value)
 {
-    int32_t normal[4], transformed[4];
-    uint16_t rgb=s.emission;
+    int32_t normal[3], transformed[3];
+    unsigned r=s.emission&31u,g=(s.emission>>5)&31u,b=(s.emission>>10)&31u;
     int i,j;
     for(j=0;j<3;j++){
         s.normal[j]=signbits(value>>(j*10),10)*8;
         normal[j]=s.normal[j];
     }
-    normal[3]=0;
-    transform(normal,&s.vec,transformed);
+    transform_vector(normal,&s.vec,transformed);
+    if(sLightCache.dirty)update_light_cache();
     for(i=0;i<4;i++)if(s.attr&(1u<<i)){
         int64_t dot=0,halfDot=0;
-        int diffuse,specIntensity;
-        uint16_t light=s.lightColor[i];
+        unsigned diffuse,specIntensity;
+        int d,h;
         for(j=0;j<3;j++){
             int32_t half=(s.lightDir[i][j]+(j==2?-4096:0))/2;
             dot+=(int64_t)transformed[j]*s.lightDir[i][j];
             halfDot+=(int64_t)transformed[j]*half;
         }
-        diffuse=(int)(-dot>>12);
-        if(diffuse<0)diffuse=0;
-        if(diffuse>4096)diffuse=4096;
-        specIntensity=(int)(-halfDot>>12);
-        if(specIntensity<0)specIntensity=0;
-        if(specIntensity>4096)specIntensity=4096;
-        specIntensity=(int)(((int64_t)specIntensity*specIntensity)>>12);
+        d=(int)(-dot>>12);
+        diffuse=d<0?0u:d>4096?4096u:(unsigned)d;
+        h=(int)(-halfDot>>12);
+        specIntensity=h<0?0u:h>4096?4096u:(unsigned)h;
+        specIntensity=(specIntensity*specIntensity)>>12;
         if(s.useShininess){
-            unsigned index=(unsigned)(((uint64_t)specIntensity*128u)>>12);
+            unsigned index=(specIntensity*128u)>>12;
             unsigned entry;
             if(index>127u)index=127u;
             entry=(s.shininess[index>>2]>>((index&3u)*8u))&255u;
-            specIntensity=(int)(entry*4096u/255u);
+            specIntensity=entry*4096u/255u;
         }
-        rgb=rgb_add(rgb,rgb_product(s.ambient,light));
-        rgb=rgb_add(rgb,rgb_mul(rgb_product(s.diffuse,light),diffuse));
-        rgb=rgb_add(rgb,rgb_mul(rgb_product(s.specular,light),specIntensity));
+        r+=sLightCache.ambient[i][0]+((sLightCache.diffuse[i][0]*diffuse+2048u)>>12)+
+           ((sLightCache.specular[i][0]*specIntensity+2048u)>>12);
+        g+=sLightCache.ambient[i][1]+((sLightCache.diffuse[i][1]*diffuse+2048u)>>12)+
+           ((sLightCache.specular[i][1]*specIntensity+2048u)>>12);
+        b+=sLightCache.ambient[i][2]+((sLightCache.diffuse[i][2]*diffuse+2048u)>>12)+
+           ((sLightCache.specular[i][2]*specIntensity+2048u)>>12);
     }
-    s.rgb=rgb;
+    s.rgb=(uint16_t)((r>31u?31u:r)|((g>31u?31u:g)<<5)|((b>31u?31u:b)<<10));
 }
 
 /* Texture coordinates are stored in signed 1/16-texel units. All texture
@@ -320,7 +352,9 @@ static inline unsigned outcode(const int32_t clip[4])
 /* The clip matrix (position x projection), recomputed only when a matrix
  * changed since: geometry lists hold thousands of vertices per matrix
  * change. Vertices go through it in one step, as on the DS. Also writes
- * the clip/vector matrix result registers the SDK reads back. */
+ * the clip/vector matrix result registers the SDK reads back (through
+ * G3X_GetClipMtx/G3X_GetVectorMtx, which call NitroPort_Gx3dSyncResults
+ * first; patches/NitroSDK/0026). */
 static void ensure_clip(void)
 {
     unsigned j;
@@ -527,22 +561,24 @@ static void end_polygon(unsigned newVertices)
 
 static void submit_vertex(void)
 {
-    GeoVertex v;
-    int32_t src[4],eye[4];
+    GeoVertex strip, *vp;
+    int32_t src[4];
     int n=s.nverts;
     if(!s.inBegin)return;
+    /* Built where it's kept (no copying), except for a triangle strip's
+     * third and later vertices, which shift the two before. */
+    vp=(s.primitive==2 && n>=2)?&strip:&s.vertices[n];
     src[0]=s.coord[0];src[1]=s.coord[1];src[2]=s.coord[2];src[3]=4096;
     ensure_clip();
-    transform_point(src,&s.clip,v.clip);
-    v.outside=(uint8_t)outcode(v.clip);
-    v.hasScreen=0;
+    transform_point(src,&s.clip,vp->clip);
+    vp->outside=(uint8_t)outcode(vp->clip);
+    vp->hasScreen=0;
     sDiag.vertices++;
-    if(v.clip[3]<=0)sDiag.behind++;
-    memcpy(sDiag.lastClip,v.clip,sizeof(sDiag.lastClip));
+    if(vp->clip[3]<=0)sDiag.behind++;
     if(((s.texparam>>30)&3u)==3u)transform_texcoords(src,3,s.resolvedTexcoord);
-    v.s=s.resolvedTexcoord[0];v.t=s.resolvedTexcoord[1];v.color=s.rgb;
+    vp->s=s.resolvedTexcoord[0];vp->t=s.resolvedTexcoord[1];vp->color=s.rgb;
     if(s.primitive==0){
-        s.vertices[n++]=v;
+        n++;
         if(n==3){
             begin_polygon();
             if(!far_hidden(s.vertices[0].outside|s.vertices[1].outside|s.vertices[2].outside)){
@@ -553,7 +589,7 @@ static void submit_vertex(void)
             n=0;
         }
     }else if(s.primitive==1){
-        s.vertices[n++]=v;
+        n++;
         if(n==4){
             begin_polygon();
             if(!far_hidden(s.vertices[0].outside|s.vertices[1].outside|
@@ -566,19 +602,19 @@ static void submit_vertex(void)
             n=0;
         }
     }else if(s.primitive==2){
-        if(n<2)s.vertices[n++]=v;
+        if(n<2)n++;
         else{
             begin_polygon();
-            if(!far_hidden(s.vertices[0].outside|s.vertices[1].outside|v.outside)){
-                sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],&v);
-                stage_triangle(&s.vertices[0],&s.vertices[1],&v);
+            if(!far_hidden(s.vertices[0].outside|s.vertices[1].outside|vp->outside)){
+                sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],vp);
+                stage_triangle(&s.vertices[0],&s.vertices[1],vp);
                 end_polygon(n==2?3:1);
             }
-            s.vertices[0]=s.vertices[1];s.vertices[1]=v;n++;
+            s.vertices[0]=s.vertices[1];s.vertices[1]=*vp;n++;
             if(n&1){GeoVertex tmp=s.vertices[0];s.vertices[0]=s.vertices[1];s.vertices[1]=tmp;}
         }
     }else{
-        s.vertices[n++]=v;
+        n++;
         if(n==4){
             begin_polygon();
             if(!far_hidden(s.vertices[0].outside|s.vertices[1].outside|
@@ -593,24 +629,22 @@ static void submit_vertex(void)
             s.vertices[0]=s.vertices[2];s.vertices[1]=s.vertices[3];n=2;
         }
     }
+    sDiag.lastClip[0]=vp->clip[0];sDiag.lastClip[1]=vp->clip[1];
+    sDiag.lastClip[2]=vp->clip[2];sDiag.lastClip[3]=vp->clip[3];
     s.nverts=n;
 }
+/* How many parameter words each command takes. */
+static const uint8_t sParamCount[256]={
+    [0x10]=1,[0x12]=1,[0x13]=1,[0x14]=1,
+    [0x16]=16,[0x17]=12,[0x18]=16,[0x19]=12,[0x1a]=9,[0x1b]=3,[0x1c]=3,
+    [0x20]=1,[0x21]=1,[0x22]=1,[0x23]=2,[0x24]=1,[0x25]=1,[0x26]=1,
+    [0x27]=1,[0x28]=1,[0x29]=1,[0x2a]=1,[0x2b]=1,
+    [0x30]=1,[0x31]=1,[0x32]=1,[0x33]=1,[0x34]=32,
+    [0x40]=1,[0x50]=1,[0x60]=1,[0x70]=3,[0x71]=2,[0x72]=1,
+};
 static int param_count(unsigned op)
 {
-    switch(op){
-    case 0x10:case 0x12:case 0x13:case 0x14:
-    case 0x20:case 0x21:case 0x22:case 0x24:case 0x25:case 0x26:
-    case 0x27:case 0x28:case 0x29:case 0x2a:case 0x2b:case 0x30:
-    case 0x31:case 0x32:case 0x33:case 0x40:case 0x50:case 0x60:
-    case 0x72:return 1;
-    case 0x23:case 0x71:return 2;
-    case 0x1b:case 0x1c:case 0x70:return 3;
-    case 0x1a:return 9;
-    case 0x17:case 0x19:return 12;
-    case 0x16:case 0x18:return 16;
-    case 0x34:return 32;
-    default:return 0;
-    }
+    return sParamCount[op&255u];
 }
 static void execute(unsigned op,const uint32_t *p)
 {
@@ -650,9 +684,9 @@ static void execute(unsigned op,const uint32_t *p)
     case 0x29:s.pendingAttr=p[0];break;
     case 0x2a:s.texparam=p[0];break;
     case 0x2b:s.plttbase=p[0];break;
-    case 0x30:s.diffuse=p[0]&0x7FFF;s.ambient=(p[0]>>16)&0x7FFF;
+    case 0x30:s.diffuse=p[0]&0x7FFF;s.ambient=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;
         if(p[0]&(1u<<15))s.rgb=s.diffuse;break;
-    case 0x31:s.specular=p[0]&0x7FFF;s.emission=(p[0]>>16)&0x7FFF;
+    case 0x31:s.specular=p[0]&0x7FFF;s.emission=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;
         s.useShininess=(p[0]&(1u<<15))!=0;break;
     case 0x32:{
         int id=(p[0]>>30)&3;
@@ -664,7 +698,7 @@ static void execute(unsigned op,const uint32_t *p)
         for(i=0;i<3;i++)s.lightDir[id][i]=transformed[i];
         break;
     }
-    case 0x33:s.lightColor[(p[0]>>30)&3]=p[0]&0x7FFF;break;
+    case 0x33:s.lightColor[(p[0]>>30)&3]=p[0]&0x7FFF;sLightCache.dirty=1;break;
     case 0x34:memcpy(s.shininess,p,sizeof(s.shininess));break;
     case 0x40:s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;s.stripStarted=0;s.attr=s.pendingAttr;break;
     case 0x41:s.inBegin=0;s.nverts=0;break;
@@ -701,7 +735,7 @@ static void execute(unsigned op,const uint32_t *p)
         /* 6 packed 4.12 coordinates: XYZ and size XYZ. A box is invisible
          * only when all eight corners are outside the same clip plane.
          * This is conservative for frustum edges, as the DS box test is. */
-        int32_t origin[3], size[3], corner[4], clip[4];
+        int32_t origin[3], size[3], clip[4];
         unsigned mask, all=0x3fu;
         origin[0]=signbits(p[0],16);
         origin[1]=signbits(p[0]>>16,16);
@@ -710,11 +744,25 @@ static void execute(unsigned op,const uint32_t *p)
         size[1]=signbits(p[2],16);
         size[2]=signbits(p[2]>>16,16);
         ensure_clip();
-        for(mask=0;mask<8;mask++){
-            for(i=0;i<3;i++)corner[i]=origin[i]+((mask>>i)&1 ? size[i]:0);
-            corner[3]=4096;
-            transform(corner,&s.clip,clip);
-            all&=outcode(clip);
+        {
+            /* A corner's sum before the shift is the origin's plus the
+             * edges' it adds (exact, in 64 bits): 8 corners for the cost
+             * of 4 transforms. */
+            int64_t base[4],edge[3][4];
+            int j;
+            for(j=0;j<4;j++){
+                base[j]=(int64_t)origin[0]*s.clip.a[j]+(int64_t)origin[1]*s.clip.a[4+j]+
+                        (int64_t)origin[2]*s.clip.a[8+j]+((int64_t)s.clip.a[12+j]<<12);
+                for(i=0;i<3;i++)edge[i][j]=(int64_t)size[i]*s.clip.a[i*4+j];
+            }
+            for(mask=0;mask<8;mask++){
+                for(j=0;j<4;j++){
+                    int64_t v=base[j];
+                    for(i=0;i<3;i++)if((mask>>i)&1)v+=edge[i][j];
+                    clip[j]=saturation(v>>12);
+                }
+                all&=outcode(clip);
+            }
         }
         s.boxVisible=all?0:1;
         break;
@@ -740,11 +788,11 @@ static void execute(unsigned op,const uint32_t *p)
     }
     default:break;
     }
-    /* Matrix commands (0x11-0x1c) change the clip matrix; stack commands
-     * and the box test change GXSTAT. Everything else changes neither. */
-    /* The result registers are read straight after matrix commands, so
-     * bring them up to date at once (a few per model, not per vertex). */
-    if(op>=0x11u && op<=0x1cu){s.clipDirty=1;ensure_clip();}
+    /* Matrix commands (0x11-0x1c) change the clip matrix, worked out again
+     * when a vertex, a test or the SDK (NitroPort_Gx3dSyncResults) next
+     * needs it: models change matrices several times between vertices.
+     * Stack commands and the box test change GXSTAT. */
+    if(op>=0x11u && op<=0x1cu)s.clipDirty=1;
     if((op>=0x11u && op<=0x14u)||op==0x70u)NitroPort_Gx3dRefreshStatus();
 }
 void NitroPort_Gx3dClearStackError(void)
@@ -757,6 +805,7 @@ void NitroPort_Gx3dClearStackError(void)
 void NitroPort_Gx3dReset(void)
 {
     memset(&s,0,sizeof(s));memset(sScenes,0,sizeof(sScenes));
+    sLightCache.dirty=1;
     NitroPort_MailboxInit(&sMailbox);
     sBuilding=0;sDisplayed=1;sSerial=0;
     identity(&s.proj);identity(&s.pos);identity(&s.vec);identity(&s.tex);
@@ -784,29 +833,62 @@ void NitroPort_GxDirectWrite(int opcode,uint32_t value)
     s.params[s.used++]=value;
     if(s.used>=needed){execute((unsigned)opcode,s.params);s.directNeed=0;s.used=0;}
 }
-void NitroPort_GxFifoWord(uint32_t word)
+/* After a command: the next command of the packed word that needs
+ * parameters (running those that don't), or none left. */
+static void next_packed(void)
+{
+    while(s.packedIndex<4){
+        unsigned op=s.packed[s.packedIndex];
+        int need=param_count(op);
+        if(need){s.need=need;s.used=0;return;}
+        execute(op,s.params);
+        s.packedIndex++;
+    }
+    s.packedIndex=0;s.packedCount=0;s.need=0;s.used=0;
+}
+/* Words written to GXFIFO: packed command words (up to four commands),
+ * each followed by its commands' parameters. A command's parameters may
+ * arrive in several calls (DMA bursts). */
+void NitroPort_GxFifoWords(const uint32_t *words,size_t count)
 {
     initialize();
-    if(!s.packedCount){
-        int j;
-        for(j=0;j<4;j++)s.packed[j]=(uint8_t)(word>>(8*j));
-        s.packedCount=4;s.packedIndex=0;s.need=0;s.used=0;
-    }else{
+    while(count){
         if(s.need>0){
-            s.params[s.used++]=word;
-            if(s.used==s.need){
-                execute(s.packed[s.packedIndex],s.params);
-                s.packedIndex++;s.need=0;s.used=0;
+            unsigned op=s.packed[s.packedIndex];
+            size_t take=(size_t)(s.need-s.used);
+            if(s.used==0 && count>=take){
+                /* All of them here: straight from the stream. */
+                execute(op,words);
+            }else{
+                if(take>count)take=count;
+                memcpy(&s.params[s.used],words,take*sizeof(*words));
+                s.used+=(int)take;
+                words+=take;count-=take;
+                if(s.used<s.need)return;
+                execute(op,s.params);
+                take=0;
             }
+            words+=take;count-=take;
+            s.packedIndex++;s.need=0;s.used=0;
+            next_packed();
+        }else{
+            uint32_t word=*words++;
+            count--;
+            s.packed[0]=(uint8_t)word;s.packed[1]=(uint8_t)(word>>8);
+            s.packed[2]=(uint8_t)(word>>16);s.packed[3]=(uint8_t)(word>>24);
+            s.packedCount=4;s.packedIndex=0;
+            next_packed();
         }
     }
-    while(s.packedCount && s.need==0){
-        if(s.packedIndex>=4){
-            s.packedIndex=0;s.packedCount=0;break;
-        }
-        s.need=param_count(s.packed[s.packedIndex]);
-        if(s.need==0){execute(s.packed[s.packedIndex],s.params);s.packedIndex++;}
+}
+void NitroPort_GxFifoWord(uint32_t word)
+{
+    /* Most words are a command's parameters: just keep them. */
+    if(s.need>0 && s.used+1<s.need){
+        s.params[s.used++]=word;
+        return;
     }
+    NitroPort_GxFifoWords(&word,1);
 }
 const NitroGx3dScene *NitroPort_Gx3dScene(void)
 {
@@ -833,12 +915,16 @@ static void initialize(void);
 /* GXSTAT and the matrix result registers, for the SDK to read. The port
  * can't see register reads, so GXSTAT is brought up to date after stack
  * commands and box tests and at every interrupt check, and the matrix
- * results after every matrix command. */
+ * results when the SDK reads them (NitroPort_Gx3dSyncResults). */
+void NitroPort_Gx3dSyncResults(void)
+{
+    initialize();
+    ensure_clip();
+}
 void NitroPort_Gx3dRefreshStatus(void)
 {
     uint32_t status;
     initialize();
-    ensure_clip();
     status=io32(0x600);
     status &= ~((3u<<0)|(31u<<8)|(1u<<13)|(1u<<14)|(1u<<15)|
                 (511u<<16)|(1u<<25)|(1u<<26)|(1u<<27));

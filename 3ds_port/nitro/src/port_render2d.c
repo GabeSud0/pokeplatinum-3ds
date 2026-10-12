@@ -928,7 +928,7 @@ static void DrawEngine(Engine *e, u16 *out)
     int kind[4];
     const u16 *gx3dPixels = NULL;
     const u8 *gx3dAlpha = NULL;
-    u8 *alpha3d = work->alpha3d;
+    u8 *alpha3d = work->alpha3d;   /* BG0's 3D alpha on the line being drawn */
     int gx3dTranslucent = 0;   /* the 3D image has pixels of alpha 1-30 */
     u16 bldcnt = Rd16(io, 0x50);
     u16 bldalpha = Rd16(io, 0x52);
@@ -965,12 +965,7 @@ static void DrawEngine(Engine *e, u16 *out)
     if (e->isA && kind[0] == BG_3D) {
         gx3dPixels = NitroPort_Gx3dAcquireImage();
         gx3dAlpha = gx3dPixels != NULL ? NitroPort_Gx3dImageAlpha(gx3dPixels) : NULL;
-        if (gx3dAlpha != NULL) {
-            int i;
-            for (i = 0; i < W * H && !gx3dTranslucent; i++) {
-                gx3dTranslucent = (gx3dPixels[i] & OPAQUE) && gx3dAlpha[i] < 31;
-            }
-        }
+        gx3dTranslucent = gx3dAlpha != NULL && NitroPort_Gx3dImageTranslucent(gx3dPixels);
     }
     objFrame->blends = 0;
     if (dispcnt & 0x1000) {
@@ -1061,12 +1056,19 @@ static void DrawEngine(Engine *e, u16 *out)
                         DrawTextBg(e, bg, bgcnt[bg], dispcnt, y, &t, T_PLAIN);
                     } else if (kind[bg] == BG_3D) {
                         int scroll = Rd16(io, 0x10) & 0x1FF;
-                        for (x = 0; x < W; ++x) {
-                            int sx = (x + scroll) & 0x1FF;
-                            bgLine[x] = (sx < W && gx3dPixels != NULL)
-                                            ? gx3dPixels[y * W + sx] : 0;
-                            alpha3d[x] = (sx < W && gx3dAlpha != NULL)
-                                            ? gx3dAlpha[y * W + sx] : 31;
+                        if (scroll == 0 && gx3dPixels != NULL && gx3dAlpha != NULL) {
+                            /* The image's own line, no copy. */
+                            px = gx3dPixels + y * W;
+                            alpha3d = (u8 *)(gx3dAlpha + y * W);
+                        } else {
+                            alpha3d = work->alpha3d;
+                            for (x = 0; x < W; ++x) {
+                                int sx = (x + scroll) & 0x1FF;
+                                bgLine[x] = (sx < W && gx3dPixels != NULL)
+                                                ? gx3dPixels[y * W + sx] : 0;
+                                alpha3d[x] = (sx < W && gx3dAlpha != NULL)
+                                                ? gx3dAlpha[y * W + sx] : 31;
+                            }
                         }
                     } else {
                         DrawAffineBg(e, bg, kind[bg], bgcnt[bg], dispcnt, y, bgLine);
@@ -1102,10 +1104,24 @@ static void DrawEngine(Engine *e, u16 *out)
 
         if (!blend2) {
             if (!(flags & T_LAYER)) {
-                for (x = 0; x < W; x++) {
-                    u16 c = row[x];
+                if (((uintptr_t)row & 3) == 0) {
+                    /* Two pixels at a time: a pixel keeps its colour if
+                     * drawn, else takes the backdrop. */
+                    u32a *pair = (u32a *)row;
+                    u32 back2 = (u32)backdrop * 0x10001u;
 
-                    row[x] = (c & OPAQUE) ? (u16)(c & 0x7FFF) : backdrop;
+                    for (x = 0; x < W / 2; x++) {
+                        u32 c = pair[x];
+                        u32 drawn = (c >> 15) & 0x10001u;
+
+                        pair[x] = (c & (drawn * 0x7FFFu)) | (back2 & ((drawn ^ 0x10001u) * 0xFFFFu));
+                    }
+                } else {
+                    for (x = 0; x < W; x++) {
+                        u16 c = row[x];
+
+                        row[x] = (c & OPAQUE) ? (u16)(c & 0x7FFF) : backdrop;
+                    }
                 }
             } else {
                 /* brighten or darken the layers chosen */
