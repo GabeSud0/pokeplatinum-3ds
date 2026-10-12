@@ -205,6 +205,7 @@ static void raster_triangle(const NitroGx3dTriangle *tri,uint16_t *out)
         uint32_t depth;
         unsigned index=(unsigned)yp*W+(unsigned)xp;
         uint16_t rgb;
+        int pixelAlpha = alpha;
         if(u<-1e-6||v<-1e-6||w<-1e-6)continue;
         depth=(uint32_t)(tri->v[0].depth*u+tri->v[1].depth*v+tri->v[2].depth*w);
         if(depth>=sDepth[index] && !(tri->polygon_attr&(1u<<14)))continue;
@@ -222,16 +223,16 @@ static void raster_triangle(const NitroGx3dTriangle *tri,uint16_t *out)
                 v*tri->v[1].t*tri->v[1].inv_w+
                 w*tri->v[2].t*tri->v[2].inv_w)/iz;
             tex=sample_texture(tri->texture_param,tri->palette_base,(int)floor(uu),(int)floor(vv));
-            alpha=(((tri->polygon_attr>>16)&31)*tex.alpha+15)/31;
-            if(alpha==0)continue;
+            pixelAlpha=(alpha*tex.alpha+15)/31;
+            if(pixelAlpha==0)continue;
             rgb=modulate(tex.rgb,rgb);
         }
-        if(alpha<31 && (out[index]&0x8000)){
+        if(pixelAlpha<31 && (out[index]&0x8000)){
             uint16_t previous=out[index]&0x7fff;
-            rgb=color_mix(rgb,previous,alpha,31-alpha,31);
+            rgb=color_mix(rgb,previous,pixelAlpha,31-pixelAlpha,31);
         }
         out[index]=(uint16_t)(rgb|0x8000);
-        if(alpha==31 || (tri->polygon_attr&(1u<<11)))sDepth[index]=depth;
+        if(pixelAlpha==31 || (tri->polygon_attr&(1u<<11)))sDepth[index]=depth;
     }
 }
 void NitroPort_Gx3dRasterize(uint16_t *rgba555,uint32_t *depth_out)
