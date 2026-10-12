@@ -124,7 +124,9 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
      * may wait; neither the game nor the 2D drawer ever waits on it. */
     if(!C3D_FrameBegin(C3D_FRAME_SYNCDRAW))return -1;
     /* As in hello3d, schedule framebuffer clear BEFORE drawing on it. */
-    C3D_RenderTargetClear(sTarget,C3D_CLEAR_ALL,0,0x00FFFFFFu);
+    /* Depth24/stencil8 memory layout varies by byte packing; fill all
+     * bits so the 24-bit depth is unambiguously the maximum (1.0). */
+    C3D_RenderTargetClear(sTarget,C3D_CLEAR_ALL,0,0xFFFFFFFFu);
     if(!C3D_FrameDrawOn(sTarget)){
         C3D_FrameEnd(0);
         return -1;
