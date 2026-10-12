@@ -14,6 +14,7 @@
 
 #include <nitro.h>
 #include <nitro_port.h>
+#include <nitro_port_gx3d.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -587,6 +588,26 @@ static void test_gx_fifo(void)
     MI_SendGXCommandAsync(1, list, sizeof(list), GxDone, NULL);   /* not left busy */
     CHECK_EQ(sGxDone, 2);
     CHECK_EQ(reg_OS_IE & OS_IE_GXFIFO, 0);   /* put back as it was */
+
+    /* A real packed display list sent by MI_SendGXCommandAsync, not direct
+     * calls to the virtual handler: the DMA must deliver every parameter
+     * in order, then report completion through the original callback. */
+    {
+        static u32 commands[] = {
+            0x00401510u, 1, 0,
+            0x00232323u,
+            0xf448f448u, 0, /* (-3000, -3000, 0) */
+            0xf4480bb8u, 0, /* (3000, -3000, 0) */
+            0x0bb80000u, 0, /* (0, 3000, 0) */
+            0x00000050u, 0  /* SWAP_BUFFERS */
+        };
+        NitroPort_Gx3dReset();
+        NitroPort_GxDirectWrite(0x29, (3u << 6) | (31u << 16));
+        MI_SendGXCommandAsync(1, commands, sizeof(commands), GxDone, NULL);
+        CHECK_EQ(sGxDone, 3);
+        CHECK_EQ(NitroPort_Gx3dScene()->count, 1);
+        CHECK_EQ(reg_OS_IE & OS_IE_GXFIFO, 0);
+    }
 }
 
 int main(void)

@@ -1,0 +1,581 @@
+From: Platinum 3DS port contributors
+Subject: [PATCH] Send original ARM9 G3 commands to the virtual geometry engine
+
+---
+diff --git a/include/nitro/gx/g3imm.h b/include/nitro/gx/g3imm.h
+--- a/include/nitro/gx/g3imm.h
++++ b/include/nitro/gx/g3imm.h
+@@ -5,6 +5,11 @@
+ #include <nitro/gx/g3.h>
+ #include <nitro/fx/fx_const.h>
+ 
++#if defined(SDK_PORT_3DS)
++/* The 3DS has no DS geometry command ports. Model their write side effects. */
++void NitroPort_GxDirectWrite(int opcode, u32 parameter);
++#endif
++
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+@@ -62,79 +67,159 @@
+ 
+ static inline void G3_Direct0 (int op)
+ {
++	#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(op, 0);
++#else
+ 	*(REGType32v *)(REG_MTX_MODE_ADDR + ((op - G3OP_MTX_MODE) * 4)) = 0;
++#endif
+ }
+ 
+ static inline void G3_Direct1 (int op, u32 param0)
+ {
++	#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(op, param0);
++#else
+ 	*(REGType32v *)(REG_MTX_MODE_ADDR + ((op - G3OP_MTX_MODE) * 4)) = param0;
++#endif
+ }
+ 
+ static inline void G3_Direct2 (int op, u32 param0, u32 param1)
+ {
++	#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(op, param0);
++#else
+ 	*(REGType32v *)(REG_MTX_MODE_ADDR + ((op - G3OP_MTX_MODE) * 4)) = param0;
++#endif
++	#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(op, param1);
++#else
+ 	*(REGType32v *)(REG_MTX_MODE_ADDR + ((op - G3OP_MTX_MODE) * 4)) = param1;
++#endif
+ }
+ 
+ static inline void G3_Direct3 (int op, u32 param0, u32 param1, u32 param2)
+ {
++	#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(op, param0);
++#else
+ 	*(REGType32v *)(REG_MTX_MODE_ADDR + ((op - G3OP_MTX_MODE) * 4)) = param0;
++#endif
++	#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(op, param1);
++#else
+ 	*(REGType32v *)(REG_MTX_MODE_ADDR + ((op - G3OP_MTX_MODE) * 4)) = param1;
++#endif
++	#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(op, param2);
++#else
+ 	*(REGType32v *)(REG_MTX_MODE_ADDR + ((op - G3OP_MTX_MODE) * 4)) = param2;
++#endif
+ }
+ 
+ static inline void G3_MtxMode (GXMtxMode mode)
+ {
+ 	GX_MTXMODE_ASSERT(mode);
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_MODE, GX_PACK_MTXMODE_PARAM(mode));
++#else
+ 	reg_G3_MTX_MODE = GX_PACK_MTXMODE_PARAM(mode);
++#endif
+ }
+ 
+ static inline void G3_PushMtx ()
+ {
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_PUSH, 0);
++#else
+ 	reg_G3_MTX_PUSH = 0;
++#endif
+ }
+ 
+ static inline void G3_PopMtx (int num)
+ {
+ 	GX_MTX_POP_NUM_ASSERT(num);
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_POP, GX_PACK_POPMTX_PARAM(num));
++#else
+ 	reg_G3_MTX_POP = GX_PACK_POPMTX_PARAM(num);
++#endif
+ }
+ 
+ static inline void G3_StoreMtx (int num)
+ {
+ 	GX_MTX_STORE_NUM_ASSERT(num);
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_STORE, GX_PACK_STOREMTX_PARAM(num));
++#else
+ 	reg_G3_MTX_STORE = GX_PACK_STOREMTX_PARAM(num);
++#endif
+ }
+ 
+ static inline void G3_RestoreMtx (int num)
+ {
+ 	GX_MTX_RESTORE_NUM_ASSERT(num);
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_RESTORE, GX_PACK_RESTOREMTX_PARAM(num));
++#else
+ 	reg_G3_MTX_RESTORE = GX_PACK_RESTOREMTX_PARAM(num);
++#endif
+ }
+ 
+ static inline void G3_Identity ()
+ {
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_IDENTITY, 0);
++#else
+ 	reg_G3_MTX_IDENTITY = 0;
++#endif
+ }
+ 
+ static inline void G3_Scale (fx32 x, fx32 y, fx32 z)
+ {
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_SCALE, (u32)x);
++#else
+ 	reg_G3_MTX_SCALE = (u32)x;
++#endif
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_SCALE, (u32)y);
++#else
+ 	reg_G3_MTX_SCALE = (u32)y;
++#endif
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_SCALE, (u32)z);
++#else
+ 	reg_G3_MTX_SCALE = (u32)z;
++#endif
+ }
+ 
+ static inline void G3_Translate (fx32 x, fx32 y, fx32 z)
+ {
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_TRANS, (u32)x);
++#else
+ 	reg_G3_MTX_TRANS = (u32)x;
++#endif
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_TRANS, (u32)y);
++#else
+ 	reg_G3_MTX_TRANS = (u32)y;
++#endif
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_TRANS, (u32)z);
++#else
+ 	reg_G3_MTX_TRANS = (u32)z;
++#endif
+ }
+ 
+ static inline void G3_Color (GXRgb rgb)
+ {
+ 	GXRGB_ASSERT(rgb);
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_COLOR, GX_PACK_COLOR_PARAM(rgb));
++#else
+ 	reg_G3_COLOR = GX_PACK_COLOR_PARAM(rgb);
++#endif
+ }
+ 
+ static inline void G3_Normal (fx16 x, fx16 y, fx16 z)
+@@ -143,7 +228,11 @@
+ 	SDK_MINMAX_ASSERT(y, -FX16_ONE, FX16_ONE - 1);
+ 	SDK_MINMAX_ASSERT(z, -FX16_ONE, FX16_ONE - 1);
+ 
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_NORMAL, GX_PACK_NORMAL_PARAM(x, y, z));
++#else
+ 	reg_G3_NORMAL = GX_PACK_NORMAL_PARAM(x, y, z);
++#endif
+ }
+ 
+ static inline void G3_TexCoord (fx32 s, fx32 t)
+@@ -151,33 +240,61 @@
+ 	SDK_MINMAX_ASSERT(s, -2048 * FX32_ONE, 2048 * FX32_ONE - 1);
+ 	SDK_MINMAX_ASSERT(t, -2048 * FX32_ONE, 2048 * FX32_ONE - 1);
+ 
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_TEXCOORD, GX_PACK_TEXCOORD_PARAM(s, t));
++#else
+ 	reg_G3_TEXCOORD = GX_PACK_TEXCOORD_PARAM(s, t);
++#endif
+ }
+ 
+ static inline void G3_Vtx (fx16 x, fx16 y, fx16 z)
+ {
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_VTX_16, GX_FX16PAIR(x, y));
++#else
+ 	reg_G3_VTX_16 = GX_FX16PAIR(x, y);
++#endif
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_VTX_16, (u32)(u16)z);
++#else
+ 	reg_G3_VTX_16 = (u32)(u16)z;
++#endif
+ }
+ 
+ static inline void G3_Vtx10 (fx16 x, fx16 y, fx16 z)
+ {
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_VTX_10, GX_PACK_VTX10_PARAM(x, y, z));
++#else
+ 	reg_G3_VTX_10 = GX_PACK_VTX10_PARAM(x, y, z);
++#endif
+ }
+ 
+ static inline void G3_VtxXY (fx16 x, fx16 y)
+ {
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_VTX_XY, GX_PACK_VTXXY_PARAM(x, y));
++#else
+ 	reg_G3_VTX_XY = GX_PACK_VTXXY_PARAM(x, y);
++#endif
+ }
+ 
+ static inline void G3_VtxXZ (fx16 x, fx16 z)
+ {
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_VTX_XZ, GX_PACK_VTXXZ_PARAM(x, z));
++#else
+ 	reg_G3_VTX_XZ = GX_PACK_VTXXZ_PARAM(x, z);
++#endif
+ }
+ 
+ static inline void G3_VtxYZ (fx16 y, fx16 z)
+ {
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_VTX_YZ, GX_PACK_VTXYZ_PARAM(y, z));
++#else
+ 	reg_G3_VTX_YZ = GX_PACK_VTXYZ_PARAM(y, z);
++#endif
+ }
+ 
+ static inline void G3_VtxDiff (fx16 x, fx16 y, fx16 z)
+@@ -186,7 +303,11 @@
+ 	SDK_MINMAX_ASSERT(y, (fx16)0xfe00, (fx16)0x1ff);
+ 	SDK_MINMAX_ASSERT(z, (fx16)0xfe00, (fx16)0x1ff);
+ 
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_VTX_DIFF, GX_PACK_VTXDIFF_PARAM(x, y, z));
++#else
+ 	reg_G3_VTX_DIFF = GX_PACK_VTXDIFF_PARAM(x, y, z);
++#endif
+ }
+ 
+ static inline void G3_PolygonAttr (int light, GXPolygonMode polyMode, GXCull cullMode, int polygonID, int alpha, int misc
+@@ -198,8 +319,13 @@
+ 	GX_POLYGON_ATTR_POLYGONID_ASSERT(polygonID);
+ 	GX_POLYGON_ATTR_ALPHA_ASSERT(alpha);
+ 
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_POLYGON_ATTR, GX_PACK_POLYGONATTR_PARAM(light,
++	                                                polyMode, cullMode, polygonID, alpha, misc));
++#else
+ 	reg_G3_POLYGON_ATTR = GX_PACK_POLYGONATTR_PARAM(light,
+ 	                                                polyMode, cullMode, polygonID, alpha, misc);
++#endif
+ }
+ 
+ static inline void G3_TexImageParam (GXTexFmt texFmt,
+@@ -218,7 +344,11 @@
+ 	GX_TEXGEN_ASSERT(texGen);
+ 	GX_TEXIMAGE_PARAM_ADDR_ASSERT(addr);
+ 
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_TEXIMAGE_PARAM, GX_PACK_TEXIMAGE_PARAM(texFmt, texGen, s, t, repeat, flip, pltt0, addr));
++#else
+ 	reg_G3_TEXIMAGE_PARAM = GX_PACK_TEXIMAGE_PARAM(texFmt, texGen, s, t, repeat, flip, pltt0, addr);
++#endif
+ }
+ 
+ static inline void G3_TexPlttBase (u32 addr, GXTexFmt texfmt)
+@@ -226,7 +356,11 @@
+ 	u32 param = GX_PACK_TEXPLTTBASE_PARAM(addr, texfmt);
+ 	GX_TEXPLTTBASEPARAM_ASSERT(param);
+ 
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_TEXPLTT_BASE, param);
++#else
+ 	reg_G3_TEXPLTT_BASE = param;
++#endif
+ }
+ 
+ static inline void G3_MaterialColorDiffAmb (GXRgb diffuse, GXRgb ambient, BOOL IsSetVtxColor)
+@@ -234,7 +368,11 @@
+ 	GXRGB_ASSERT(diffuse);
+ 	GXRGB_ASSERT(ambient);
+ 
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_DIF_AMB, GX_PACK_DIFFAMB_PARAM(diffuse, ambient, IsSetVtxColor));
++#else
+ 	reg_G3_DIF_AMB = GX_PACK_DIFFAMB_PARAM(diffuse, ambient, IsSetVtxColor);
++#endif
+ }
+ 
+ static inline void G3_MaterialColorSpecEmi (GXRgb specular, GXRgb emission, BOOL IsShininess)
+@@ -242,7 +380,11 @@
+ 	GXRGB_ASSERT(specular);
+ 	GXRGB_ASSERT(emission);
+ 
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_SPE_EMI, GX_PACK_SPECEMI_PARAM(specular, emission, IsShininess));
++#else
+ 	reg_G3_SPE_EMI = GX_PACK_SPECEMI_PARAM(specular, emission, IsShininess);
++#endif
+ }
+ 
+ static inline void G3_LightVector (GXLightId lightID, fx16 x, fx16 y, fx16 z)
+@@ -252,7 +394,11 @@
+ 	SDK_MINMAX_ASSERT(y, -FX16_ONE, FX16_ONE - 1);
+ 	SDK_MINMAX_ASSERT(z, -FX16_ONE, FX16_ONE - 1);
+ 
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_LIGHT_VECTOR, GX_PACK_LIGHTVECTOR_PARAM(lightID, x, y, z));
++#else
+ 	reg_G3_LIGHT_VECTOR = GX_PACK_LIGHTVECTOR_PARAM(lightID, x, y, z);
++#endif
+ }
+ 
+ static inline void G3_LightColor (GXLightId lightID, GXRgb rgb)
+@@ -260,18 +406,30 @@
+ 	GX_LIGHTID_ASSERT(lightID);
+ 	GXRGB_ASSERT(rgb);
+ 
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_LIGHT_COLOR, GX_PACK_LIGHTCOLOR_PARAM(lightID, rgb));
++#else
+ 	reg_G3_LIGHT_COLOR = GX_PACK_LIGHTCOLOR_PARAM(lightID, rgb);
++#endif
+ }
+ 
+ static inline void G3_Begin (GXBegin primitive)
+ {
+ 	GX_BEGIN_ASSERT(primitive);
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_BEGIN, GX_PACK_BEGIN_PARAM(primitive));
++#else
+ 	reg_G3_BEGIN_VTXS = GX_PACK_BEGIN_PARAM(primitive);
++#endif
+ }
+ 
+ static inline void G3_End (void)
+ {
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_END, 0);
++#else
+ 	reg_G3_END_VTXS = 0;
++#endif
+ }
+ 
+ static inline void G3_SwapBuffers (GXSortMode am, GXBufferMode zw)
+@@ -279,26 +437,54 @@
+ 	GX_SORTMODE_ASSERT(am);
+ 	GX_BUFFERMODE_ASSERT(zw);
+ 
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_SWAP_BUFFERS, GX_PACK_SWAPBUFFERS_PARAM(am, zw));
++#else
+ 	reg_G3_SWAP_BUFFERS = GX_PACK_SWAPBUFFERS_PARAM(am, zw);
++#endif
+ }
+ 
+ static inline void G3_ViewPort (int x1, int y1, int x2, int y2)
+ {
+ 	GX_VIEWPORT_ASSERT(x1, y1, x2, y2);
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_VIEWPORT, GX_PACK_VIEWPORT_PARAM(x1, y1, x2, y2));
++#else
+ 	reg_G3_VIEWPORT = GX_PACK_VIEWPORT_PARAM(x1, y1, x2, y2);
++#endif
+ }
+ 
+ static inline void G3_BoxTest (const GXBoxTestParam * box)
+ {
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_BOX_TEST, box->val[0]);
++#else
+ 	reg_G3_BOX_TEST = box->val[0];
++#endif
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_BOX_TEST, box->val[1]);
++#else
+ 	reg_G3_BOX_TEST = box->val[1];
++#endif
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_BOX_TEST, box->val[2]);
++#else
+ 	reg_G3_BOX_TEST = box->val[2];
++#endif
+ }
+ 
+ static inline void G3_PositionTest (fx16 x, fx16 y, fx16 z)
+ {
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_POS_TEST, GX_FX16PAIR(x, y));
++#else
+ 	reg_G3_POS_TEST = GX_FX16PAIR(x, y);
++#endif
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_POS_TEST, (u32)(u16)z);
++#else
+ 	reg_G3_POS_TEST = (u32)(u16)z;
++#endif
+ }
+ 
+ static inline void G3_VectorTest (fx16 x, fx16 y, fx16 z)
+@@ -307,7 +493,11 @@
+ 	SDK_MINMAX_ASSERT(y, -FX16_ONE, FX16_ONE - 1);
+ 	SDK_MINMAX_ASSERT(z, -FX16_ONE, FX16_ONE - 1);
+ 
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_VEC_TEST, GX_PACK_VECTORTEST_PARAM(x, y, z));
++#else
+ 	reg_G3_VEC_TEST = GX_PACK_VECTORTEST_PARAM(x, y, z);
++#endif
+ }
+ 
+ #ifdef __cplusplus
+diff --git a/libraries/gx/src/g3imm.c b/libraries/gx/src/g3imm.c
+--- a/libraries/gx/src/g3imm.c
++++ b/libraries/gx/src/g3imm.c
+@@ -1,13 +1,24 @@
+ #include <nitro/gx/g3imm.h>
+ #include <nitro/mi/dma.h>
+ #include "../include/gxasm.h"
++#if defined(SDK_PORT_3DS)
++void NitroPort_GxDirectWrite(int opcode, u32 parameter);
++#endif
+ 
+ void G3_LoadMtx44 (const MtxFx44 *m)
+ {
+ 	SDK_NULL_ASSERT(m);
+ 
++#if defined(SDK_PORT_3DS)
++	{
++		const u32 *words = (const u32 *)(&m->_00);
++		int i;
++		for (i = 0; i < 16; ++i) NitroPort_GxDirectWrite(G3OP_MTX_LOAD_4x4, words[i]);
++	}
++#else
+ 	reg_G3X_GXFIFO = G3OP_MTX_LOAD_4x4;
+ 	GX_SendFifo64B(&m->_00, (void *)&reg_G3X_GXFIFO);
++#endif
+ }
+ 
+ void G3_LoadMtx43 (const MtxFx43 *m)
+@@ -14,8 +25,16 @@
+ {
+ 	SDK_NULL_ASSERT(m);
+ 
++#if defined(SDK_PORT_3DS)
++	{
++		const u32 *words = (const u32 *)(&m->_00);
++		int i;
++		for (i = 0; i < 12; ++i) NitroPort_GxDirectWrite(G3OP_MTX_LOAD_4x3, words[i]);
++	}
++#else
+ 	reg_G3X_GXFIFO = G3OP_MTX_LOAD_4x3;
+ 	GX_SendFifo48B(&m->_00, (void *)&reg_G3X_GXFIFO);
++#endif
+ }
+ 
+ void G3_MultMtx44 (const MtxFx44 *m)
+@@ -22,8 +41,16 @@
+ {
+ 	SDK_NULL_ASSERT(m);
+ 
++#if defined(SDK_PORT_3DS)
++	{
++		const u32 *words = (const u32 *)(&m->_00);
++		int i;
++		for (i = 0; i < 16; ++i) NitroPort_GxDirectWrite(G3OP_MTX_MULT_4x4, words[i]);
++	}
++#else
+ 	reg_G3X_GXFIFO = G3OP_MTX_MULT_4x4;
+ 	GX_SendFifo64B(&m->_00, (void *)&reg_G3X_GXFIFO);
++#endif
+ }
+ 
+ void G3_MultMtx43 (const MtxFx43 *m)
+@@ -30,8 +57,16 @@
+ {
+ 	SDK_NULL_ASSERT(m);
+ 
++#if defined(SDK_PORT_3DS)
++	{
++		const u32 *words = (const u32 *)(&m->_00);
++		int i;
++		for (i = 0; i < 12; ++i) NitroPort_GxDirectWrite(G3OP_MTX_MULT_4x3, words[i]);
++	}
++#else
+ 	reg_G3X_GXFIFO = G3OP_MTX_MULT_4x3;
+ 	GX_SendFifo48B(&m->_00, (void *)&reg_G3X_GXFIFO);
++#endif
+ }
+ 
+ void G3_MultMtx33 (const MtxFx33 *m)
+@@ -38,8 +73,16 @@
+ {
+ 	SDK_NULL_ASSERT(m);
+ 
++#if defined(SDK_PORT_3DS)
++	{
++		const u32 *words = (const u32 *)(&m->_00);
++		int i;
++		for (i = 0; i < 9; ++i) NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, words[i]);
++	}
++#else
+ 	reg_G3X_GXFIFO = G3OP_MTX_MULT_3x3;
+ 	GX_SendFifo36B(&m->_00, (void *)&reg_G3X_GXFIFO);
++#endif
+ }
+ 
+ void G3_Shininess (const u32 *table)
+@@ -46,8 +89,16 @@
+ {
+ 	SDK_NULL_ASSERT(table);
+ 
++#if defined(SDK_PORT_3DS)
++	{
++		const u32 *words = (const u32 *)(&table[0]);
++		int i;
++		for (i = 0; i < 32; ++i) NitroPort_GxDirectWrite(G3OP_SHININESS, words[i]);
++	}
++#else
+ 	reg_G3X_GXFIFO = G3OP_SHININESS;
+ 	GX_SendFifo128B(&table[0], (void *)&reg_G3X_GXFIFO);
++#endif
+ }
+ 
+ void G3_MultTransMtx33 (const MtxFx33 *mtx, const VecFx32 *trans)
+@@ -55,10 +106,30 @@
+ 	SDK_NULL_ASSERT(mtx);
+ 	SDK_NULL_ASSERT(trans);
+ 
++#if defined(SDK_PORT_3DS)
++	{
++		const u32 *words = (const u32 *)(&mtx->_00);
++		int i;
++		for (i = 0; i < 9; ++i) NitroPort_GxDirectWrite(G3OP_MTX_MULT_4x3, words[i]);
++	}
++#else
+ 	reg_G3X_GXFIFO = G3OP_MTX_MULT_4x3;
+ 	GX_SendFifo36B(&mtx->_00, (void *)&reg_G3X_GXFIFO);
++#endif
+ 
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_MULT_4x3, (u32)trans->x);
++#else
+ 	reg_G3X_GXFIFO = (u32)trans->x;
++#endif
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_MULT_4x3, (u32)trans->y);
++#else
+ 	reg_G3X_GXFIFO = (u32)trans->y;
++#endif
++#if defined(SDK_PORT_3DS)
++	NitroPort_GxDirectWrite(G3OP_MTX_MULT_4x3, (u32)trans->z);
++#else
+ 	reg_G3X_GXFIFO = (u32)trans->z;
++#endif
+ }

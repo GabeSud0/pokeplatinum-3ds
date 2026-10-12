@@ -91,7 +91,9 @@ LIBC = {"memcpy", "memset", "memmove", "memcmp", "strcmp", "strlen", "strncpy",
         "fopen", "fclose", "fread", "fseek", "ftell", "ferror",
         "malloc", "calloc", "realloc", "free", "strstr",
         # Virtual ARM7 save persistence and local RTC use hosted C/newlib.
-        "fflush", "fwrite", "localtime", "time"}
+        "fflush", "fwrite", "localtime", "time",
+        # PC reference 3D rasterizer uses standard C99 libm, linked with -lm.
+        "floor", "ceil", "fmin", "fmax", "fabs"}
 
 # The port's platform layer (3ds_port/nitro/src/platform/): threads, their
 # signals, sleeping and the clock come from POSIX on a PC and from libctru on the 3DS,

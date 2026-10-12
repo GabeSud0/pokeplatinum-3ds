@@ -1,0 +1,191 @@
+From: Platinum 3DS port contributors
+Subject: [PATCH] Forward NitroSystem raw GXFIFO stores to virtual GX3D
+
+The ARM9 port's GXFIFO is ordinary memory: preserve the side effects of
+single-register writes used in gecom.c and sbc.c. Only SDK_PORT_3DS differs.
+
+---
+diff --git a/libraries/g3d/src/gecom.c b/libraries/g3d/src/gecom.c
+--- a/libraries/g3d/src/gecom.c
++++ b/libraries/g3d/src/gecom.c
+@@ -1,4 +1,7 @@
+-#include <nnsys/g3d/gecom.h>
++#include <nnsys/g3d/gecom.h>
++#if defined(SDK_PORT_3DS)
++extern void NitroPort_GxFifoWord(u32 value);
++#endif
+ 
+ static volatile int NNS_G3dFlagGXDmaAsync = 0;
+ 
+@@ -145,6 +148,10 @@
+         }
+     }
+ 
+-    reg_G3X_GXFIFO = op;
++    #if defined(SDK_PORT_3DS)
++    NitroPort_GxFifoWord(op);
++    #else
++    reg_G3X_GXFIFO = op;
++    #endif
+     sendNB(args, (void *)&reg_G3X_GXFIFO, num << 2);
+ }
+diff --git a/libraries/g3d/src/sbc.c b/libraries/g3d/src/sbc.c
+--- a/libraries/g3d/src/sbc.c
++++ b/libraries/g3d/src/sbc.c
+@@ -1,4 +1,7 @@
+-#include <nnsys/g3d/sbc.h>
++#include <nnsys/g3d/sbc.h>
++#if defined(SDK_PORT_3DS)
++extern void NitroPort_GxFifoWord(u32 value);
++#endif
+ #include <nnsys/g3d/kernel.h>
+ #include <nnsys/g3d/binres/res_struct.h>
+ #include <nnsys/g3d/glbstate.h>
+@@ -726,9 +729,21 @@
+ 
+         NNS_G3dGeFlushBuffer();
+ 
+-        reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_MODE, G3OP_MTX_PUSH, G3OP_MTX_IDENTITY, G3OP_NOP);
++        #if defined(SDK_PORT_3DS)
++        NitroPort_GxFifoWord(GX_PACK_OP(G3OP_MTX_MODE, G3OP_MTX_PUSH, G3OP_MTX_IDENTITY, G3OP_NOP));
++        #else
++        reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_MODE, G3OP_MTX_PUSH, G3OP_MTX_IDENTITY, G3OP_NOP);
++        #endif
+-        reg_G3X_GXFIFO = (u32)GX_MTXMODE_PROJECTION;
++        #if defined(SDK_PORT_3DS)
++        NitroPort_GxFifoWord((u32)GX_MTXMODE_PROJECTION);
++        #else
++        reg_G3X_GXFIFO = (u32)GX_MTXMODE_PROJECTION;
++        #endif
+-        reg_G3X_GXFIFO = 0;
++        #if defined(SDK_PORT_3DS)
++        NitroPort_GxFifoWord(0);
++        #else
++        reg_G3X_GXFIFO = 0;
++        #endif
+ 
+         while (G3X_GetClipMtx(&m))
+             ;
+@@ -757,7 +772,11 @@
+ 
+         if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_WVP) {
+ 
+-            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_POP, G3OP_MTX_MODE, G3OP_MTX_LOAD_4x3, G3OP_NOP);
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord(GX_PACK_OP(G3OP_MTX_POP, G3OP_MTX_MODE, G3OP_MTX_LOAD_4x3, G3OP_NOP));
++            #else
++            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_POP, G3OP_MTX_MODE, G3OP_MTX_LOAD_4x3, G3OP_NOP);
++            #endif
+             MI_CpuSend32(&bbcmd1[1],
+                          &reg_G3X_GXFIFO,
+                          2 * sizeof(u32));
+@@ -765,12 +784,20 @@
+                          &reg_G3X_GXFIFO,
+                          G3OP_MTX_LOAD_4x3_NPARAMS * sizeof(u32));
+ 
+-            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_MULT_4x3, G3OP_MTX_SCALE, G3OP_NOP, G3OP_NOP);
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord(GX_PACK_OP(G3OP_MTX_MULT_4x3, G3OP_MTX_SCALE, G3OP_NOP, G3OP_NOP));
++            #else
++            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_MULT_4x3, G3OP_MTX_SCALE, G3OP_NOP, G3OP_NOP);
++            #endif
+             MI_CpuSend32(&bbcmd1[3],
+                          &reg_G3X_GXFIFO,
+                          sizeof(MtxFx43) + sizeof(VecFx32));
+         } else if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_VP)   {
+-            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_POP, G3OP_MTX_MODE, G3OP_MTX_LOAD_4x3, G3OP_NOP);
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord(GX_PACK_OP(G3OP_MTX_POP, G3OP_MTX_MODE, G3OP_MTX_LOAD_4x3, G3OP_NOP));
++            #else
++            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_POP, G3OP_MTX_MODE, G3OP_MTX_LOAD_4x3, G3OP_NOP);
++            #endif
+             MI_CpuSend32(&bbcmd1[1],
+                          &reg_G3X_GXFIFO,
+                          2 * sizeof(u32));
+@@ -778,7 +805,11 @@
+                          &reg_G3X_GXFIFO,
+                          G3OP_MTX_LOAD_4x3_NPARAMS * sizeof(u32));
+ 
+-            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_MULT_4x3, G3OP_MTX_SCALE, G3OP_NOP, G3OP_NOP);
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord(GX_PACK_OP(G3OP_MTX_MULT_4x3, G3OP_MTX_SCALE, G3OP_NOP, G3OP_NOP));
++            #else
++            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_MULT_4x3, G3OP_MTX_SCALE, G3OP_NOP, G3OP_NOP);
++            #endif
+             MI_CpuSend32(&bbcmd1[3],
+                          &reg_G3X_GXFIFO,
+                          sizeof(MtxFx43) + sizeof(VecFx32));
+@@ -874,9 +905,21 @@
+ 
+         NNS_G3dGeFlushBuffer();
+ 
+-        reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_MODE, G3OP_MTX_PUSH, G3OP_MTX_IDENTITY, G3OP_NOP);
++        #if defined(SDK_PORT_3DS)
++        NitroPort_GxFifoWord(GX_PACK_OP(G3OP_MTX_MODE, G3OP_MTX_PUSH, G3OP_MTX_IDENTITY, G3OP_NOP));
++        #else
++        reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_MODE, G3OP_MTX_PUSH, G3OP_MTX_IDENTITY, G3OP_NOP);
++        #endif
+-        reg_G3X_GXFIFO = (u32)GX_MTXMODE_PROJECTION;
++        #if defined(SDK_PORT_3DS)
++        NitroPort_GxFifoWord((u32)GX_MTXMODE_PROJECTION);
++        #else
++        reg_G3X_GXFIFO = (u32)GX_MTXMODE_PROJECTION;
++        #endif
+-        reg_G3X_GXFIFO = 0;
++        #if defined(SDK_PORT_3DS)
++        NitroPort_GxFifoWord(0);
++        #else
++        reg_G3X_GXFIFO = 0;
++        #endif
+ 
+         while (G3X_GetClipMtx(&m))
+             ;
+@@ -918,7 +961,11 @@
+         }
+ 
+         if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_WVP) {
+-            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_POP, G3OP_MTX_MODE, G3OP_MTX_LOAD_4x3, G3OP_NOP);
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord(GX_PACK_OP(G3OP_MTX_POP, G3OP_MTX_MODE, G3OP_MTX_LOAD_4x3, G3OP_NOP));
++            #else
++            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_POP, G3OP_MTX_MODE, G3OP_MTX_LOAD_4x3, G3OP_NOP);
++            #endif
+             MI_CpuSend32(&bbcmd1[1],
+                          &reg_G3X_GXFIFO,
+                          2 * sizeof(u32));
+@@ -926,12 +973,20 @@
+                          &reg_G3X_GXFIFO,
+                          G3OP_MTX_LOAD_4x3_NPARAMS * sizeof(u32));
+ 
+-            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_MULT_4x3, G3OP_MTX_SCALE, G3OP_NOP, G3OP_NOP);
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord(GX_PACK_OP(G3OP_MTX_MULT_4x3, G3OP_MTX_SCALE, G3OP_NOP, G3OP_NOP));
++            #else
++            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_MULT_4x3, G3OP_MTX_SCALE, G3OP_NOP, G3OP_NOP);
++            #endif
+             MI_CpuSend32(&bbcmd1[3],
+                          &reg_G3X_GXFIFO,
+                          sizeof(MtxFx43) + sizeof(VecFx32));
+         } else if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_VP)   {
+-            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_POP, G3OP_MTX_MODE, G3OP_MTX_LOAD_4x3, G3OP_NOP);
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord(GX_PACK_OP(G3OP_MTX_POP, G3OP_MTX_MODE, G3OP_MTX_LOAD_4x3, G3OP_NOP));
++            #else
++            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_POP, G3OP_MTX_MODE, G3OP_MTX_LOAD_4x3, G3OP_NOP);
++            #endif
+             MI_CpuSend32(&bbcmd1[1],
+                          &reg_G3X_GXFIFO,
+                          2 * sizeof(u32));
+@@ -939,7 +994,11 @@
+                          &reg_G3X_GXFIFO,
+                          G3OP_MTX_LOAD_4x3_NPARAMS * sizeof(u32));
+ 
+-            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_MULT_4x3, G3OP_MTX_SCALE, G3OP_NOP, G3OP_NOP);
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord(GX_PACK_OP(G3OP_MTX_MULT_4x3, G3OP_MTX_SCALE, G3OP_NOP, G3OP_NOP));
++            #else
++            reg_G3X_GXFIFO = GX_PACK_OP(G3OP_MTX_MULT_4x3, G3OP_MTX_SCALE, G3OP_NOP, G3OP_NOP);
++            #endif
+             MI_CpuSend32(&bbcmd1[3],
+                          &reg_G3X_GXFIFO,
+                          sizeof(MtxFx43) + sizeof(VecFx32));
