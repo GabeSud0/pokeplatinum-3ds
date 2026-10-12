@@ -28,7 +28,14 @@ size_t NitroPort_Gx3dBuildOpaqueVertices(const NitroGx3dScene *scene,
              * twice. PICA uses 0 for near and -1 for far (reverse depth). */
             float ndc_x=x/128.0f-1.0f;
             float ndc_y=1.0f-y/96.0f;
-            float z=-(float)v->depth/16777215.0f;
+            /* W-buffer scenes use the homogeneous W rather than Stage 1's
+             * Z depth. DS W normalization is performed per original polygon
+             * with extra exponent precision not retained in our triangle
+             * scene, so this is a monotonic 20.12-to-depth approximation
+             * for PR1, not a bit-accurate DS W depth implementation. */
+            float d=(scene->swap_param&2u) ? (w/16.0f)
+                                         : ((float)v->depth/16777215.0f);
+            float z=-(d<0.0f?0.0f:d>1.0f?1.0f:d);
             dst->position[0]=ndc_x*w;
             dst->position[1]=ndc_y*w;
             dst->position[2]=z*w;
