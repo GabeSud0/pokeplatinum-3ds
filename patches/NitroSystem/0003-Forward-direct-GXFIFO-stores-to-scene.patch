@@ -1,26 +1,23 @@
 From: Platinum 3DS port contributors
-Subject: [PATCH] Forward NitroSystem direct FIFO stores to portable GX3D
+Subject: [PATCH] Forward NitroSystem raw GXFIFO stores to virtual GX3D
 
-On the DS, each GXFIFO assignment is a hardware command word. In the 3DS
-port that address points at a RAM array, so replace the writes with the
-same stream entrypoint used by DMA and MI_CpuSend32.
-Only enabled under SDK_PORT_3DS.
+The ARM9 port's GXFIFO is ordinary memory: preserve the side effects of
+single-register writes used in gecom.c and sbc.c. Only SDK_PORT_3DS differs.
 
 ---
 diff --git a/libraries/g3d/src/gecom.c b/libraries/g3d/src/gecom.c
 --- a/libraries/g3d/src/gecom.c
 +++ b/libraries/g3d/src/gecom.c
-@@ -1,4 +1,8 @@
+@@ -1,4 +1,7 @@
 -#include <nnsys/g3d/gecom.h>
++#include <nnsys/g3d/gecom.h>
 +#if defined(SDK_PORT_3DS)
-+/* FIFO register stores have side effects, unlike ordinary port memory. */
 +extern void NitroPort_GxFifoWord(u32 value);
 +#endif
-+#include <nnsys/g3d/gecom.h>
  
  static volatile int NNS_G3dFlagGXDmaAsync = 0;
  
-@@ -145,7 +149,11 @@
+@@ -145,6 +148,10 @@
          }
      }
  
@@ -32,21 +29,19 @@ diff --git a/libraries/g3d/src/gecom.c b/libraries/g3d/src/gecom.c
 +    #endif
      sendNB(args, (void *)&reg_G3X_GXFIFO, num << 2);
  }
- 
 diff --git a/libraries/g3d/src/sbc.c b/libraries/g3d/src/sbc.c
 --- a/libraries/g3d/src/sbc.c
 +++ b/libraries/g3d/src/sbc.c
-@@ -1,4 +1,8 @@
+@@ -1,4 +1,7 @@
 -#include <nnsys/g3d/sbc.h>
++#include <nnsys/g3d/sbc.h>
 +#if defined(SDK_PORT_3DS)
-+/* FIFO register stores have side effects, unlike ordinary port memory. */
 +extern void NitroPort_GxFifoWord(u32 value);
 +#endif
-+#include <nnsys/g3d/sbc.h>
  #include <nnsys/g3d/kernel.h>
  #include <nnsys/g3d/binres/res_struct.h>
  #include <nnsys/g3d/glbstate.h>
-@@ -726,9 +730,21 @@
+@@ -726,9 +729,21 @@
  
          NNS_G3dGeFlushBuffer();
  
@@ -71,7 +66,7 @@ diff --git a/libraries/g3d/src/sbc.c b/libraries/g3d/src/sbc.c
  
          while (G3X_GetClipMtx(&m))
              ;
-@@ -757,7 +773,11 @@
+@@ -757,7 +772,11 @@
  
          if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_WVP) {
  
@@ -84,7 +79,7 @@ diff --git a/libraries/g3d/src/sbc.c b/libraries/g3d/src/sbc.c
              MI_CpuSend32(&bbcmd1[1],
                           &reg_G3X_GXFIFO,
                           2 * sizeof(u32));
-@@ -765,12 +785,20 @@
+@@ -765,12 +784,20 @@
                           &reg_G3X_GXFIFO,
                           G3OP_MTX_LOAD_4x3_NPARAMS * sizeof(u32));
  
@@ -107,7 +102,7 @@ diff --git a/libraries/g3d/src/sbc.c b/libraries/g3d/src/sbc.c
              MI_CpuSend32(&bbcmd1[1],
                           &reg_G3X_GXFIFO,
                           2 * sizeof(u32));
-@@ -778,7 +806,11 @@
+@@ -778,7 +805,11 @@
                           &reg_G3X_GXFIFO,
                           G3OP_MTX_LOAD_4x3_NPARAMS * sizeof(u32));
  
@@ -120,7 +115,7 @@ diff --git a/libraries/g3d/src/sbc.c b/libraries/g3d/src/sbc.c
              MI_CpuSend32(&bbcmd1[3],
                           &reg_G3X_GXFIFO,
                           sizeof(MtxFx43) + sizeof(VecFx32));
-@@ -874,9 +906,21 @@
+@@ -874,9 +905,21 @@
  
          NNS_G3dGeFlushBuffer();
  
@@ -145,7 +140,7 @@ diff --git a/libraries/g3d/src/sbc.c b/libraries/g3d/src/sbc.c
  
          while (G3X_GetClipMtx(&m))
              ;
-@@ -918,7 +962,11 @@
+@@ -918,7 +961,11 @@
          }
  
          if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_WVP) {
@@ -158,7 +153,7 @@ diff --git a/libraries/g3d/src/sbc.c b/libraries/g3d/src/sbc.c
              MI_CpuSend32(&bbcmd1[1],
                           &reg_G3X_GXFIFO,
                           2 * sizeof(u32));
-@@ -926,12 +974,20 @@
+@@ -926,12 +973,20 @@
                           &reg_G3X_GXFIFO,
                           G3OP_MTX_LOAD_4x3_NPARAMS * sizeof(u32));
  
@@ -181,7 +176,7 @@ diff --git a/libraries/g3d/src/sbc.c b/libraries/g3d/src/sbc.c
              MI_CpuSend32(&bbcmd1[1],
                           &reg_G3X_GXFIFO,
                           2 * sizeof(u32));
-@@ -939,7 +995,11 @@
+@@ -939,7 +994,11 @@
                           &reg_G3X_GXFIFO,
                           G3OP_MTX_LOAD_4x3_NPARAMS * sizeof(u32));
  
