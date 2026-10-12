@@ -219,11 +219,16 @@ static void test_bg0_composition(void)
 {
     /* The original GX display setup chooses the 3D engine for BG0.
      * The existing 2D compositor, not a bespoke 3D overlay, must show it. */
-    GX_Init();
-    GX_SetPower(GX_POWER_ALL);
-    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS,GX_BGMODE_0,GX_BG0_AS_3D);
-    GX_SetVisiblePlane(GX_PLANEMASK_BG0);
-    GX_DispOn();
+    /* The compositor operates on virtual DS registers. Set a minimal
+     * known-good synthetic display state (engine A on, graphics display,
+     * BG0 visible, and its source set to 3D). Dedicated 2D tests exercise
+     * GX_Init / GX_SetGraphicsMode separately. */
+    {
+        const uint32_t disp = (1u << 16) | (1u << 8) | (1u << 3);
+        memset(NitroPort_IoReg, 0, 0x80);
+        memcpy(NitroPort_IoReg, &disp, sizeof(disp));
+        NitroPort_IoReg[0x304] |= 2u;
+    }
     reset_geometry();
     triangle(0,RGB(0,0,31));
     swap();
