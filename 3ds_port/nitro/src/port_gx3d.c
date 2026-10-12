@@ -49,9 +49,10 @@ typedef struct GeoState {
 
 static GeoState s;
 
-/* The 3DS main program overrides this to wake the GPU worker with a
- * LightEvent. All NitroSDK/PC tests can link with the harmless default. */
-__attribute__((weak)) void NitroPort_Gx3dScenePublished(void) {}
+/* An optional notification symbol: only the 3DS application's main
+ * thread provides it to wake its PICA worker. An undefined weak reference
+ * also avoids accidental compiler inlining of a no-op body. */
+extern void NitroPort_Gx3dScenePublished(void) __attribute__((weak));
 /* Three ~0.6 MiB scenes: game builds one, GPU owns one, and a pending
  * completed scene occupies the third. Never copy or overwrite GPU-owned data.
  * A short atomic lock protects only the mailbox indices, never geometry. */
@@ -490,7 +491,8 @@ static void execute(unsigned op,const uint32_t *p)
             sSerial=serial;
             sScenes[sBuilding].count=0;
             sScenes[sBuilding].dropped=0;
-            NitroPort_Gx3dScenePublished();
+            if(NitroPort_Gx3dScenePublished)
+                NitroPort_Gx3dScenePublished();
         }else{
             /* Keep the newest image and reuse this building slot on the
              * exceptionally slow consumer path; never stall the game. */
