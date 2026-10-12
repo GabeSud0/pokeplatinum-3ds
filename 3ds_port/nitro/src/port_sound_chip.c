@@ -328,6 +328,129 @@ static int32_t voice_mix(Channel *c, int32_t *left, int32_t *right)
 }
 
 /*
+ * A channel's samples for a run of frames, added to L and R: what
+ * voice_mix gives frame by frame, with the channel's settings and its
+ * decoder in local variables. Used when nothing is captured, so a channel
+ * doesn't depend on the others within a mix.
+ */
+static void mix_block(Channel *c, int32_t *L, int32_t *R, size_t frames)
+{
+    NitroSoundVoice *v = c->v;
+    const int32_t volume = c->volume, panL = 127 - c->pan, panR = c->pan;
+    const unsigned shift = c->shift;
+    const uint64_t step = c->step;
+    uint64_t phase = v->phase;
+    size_t i;
+
+    if (c->format == 2u && c->source && c->nSamples) {
+        /* ADPCM: the decoder's state kept in registers between samples. */
+        const uint8_t *source = c->source;
+        const uint32_t nSamples = c->nSamples, loopAt = c->loopAt;
+        uint32_t index = v->sampleIndex;
+        int32_t predictor = v->predictor, stepIndex = v->stepIndex;
+
+        for (i = 0; i < frames; ++i) {
+            int32_t scaled = (predictor * volume) / 127;
+            uint32_t advances;
+
+            scaled >>= shift;
+            L[i] += (scaled * panL) / 127;
+            R[i] += (scaled * panR) / 127;
+            phase += step;
+            /* As voice_mix's loop: one source sample per whole step, at
+             * most 2048 per frame. */
+            advances = (uint32_t)(phase >> 32);
+            if (advances > 2048u) advances = 2048u;
+            while (advances--) {
+                phase -= PHASE_ONE;
+                index++;
+                if (index >= nSamples) {
+                    /* The end: what advance_voice does, with the state
+                     * written back first. */
+                    v->sampleIndex = index - 1u;
+                    v->predictor = predictor;
+                    v->stepIndex = stepIndex;
+                    v->phase = phase;
+                    advance_voice(c);
+                    if (!v->running) return;
+                    index = v->sampleIndex;
+                    predictor = v->predictor;
+                    stepIndex = v->stepIndex;
+                    continue;
+                } else {
+                    uint32_t nibble = index - 1u;
+                    uint8_t byte = source[4u + nibble / 2u];
+                    unsigned code = (nibble & 1u) ? byte >> 4 : byte & 15u;
+                    int32_t st = sStep[stepIndex];
+                    int32_t change = st >> 3;
+
+                    if (code & 1u) change += st >> 2;
+                    if (code & 2u) change += st >> 1;
+                    if (code & 4u) change += st;
+                    predictor += (code & 8u) ? -change : change;
+                    predictor = saturate(predictor);
+                    stepIndex += sIndexDelta[code & 7u];
+                    if (stepIndex < 0) stepIndex = 0;
+                    if (stepIndex > 88) stepIndex = 88;
+                    if (index == loopAt && v->adpcmClean) {
+                        v->loopSaved = 1;
+                        v->loopSource = c->sourceAddr;
+                        v->loopAt = loopAt;
+                        v->loopPredictor = predictor;
+                        v->loopStepIndex = stepIndex;
+                    }
+                }
+            }
+        }
+        v->sampleIndex = index;
+        v->predictor = predictor;
+        v->stepIndex = stepIndex;
+        v->phase = phase;
+        return;
+    }
+    if (c->format <= 1u && c->source && c->nSamples) {
+        /* PCM8 / PCM16 */
+        const uint8_t *source = c->source;
+        const uint32_t nSamples = c->nSamples;
+        const int pcm16bit = c->format == 1u;
+        uint32_t index = v->sampleIndex;
+
+        for (i = 0; i < frames; ++i) {
+            int32_t sample = pcm16bit ? pcm16(source, index * 2u)
+                                      : (int32_t)pcm8(source, index) * 256;
+            int32_t scaled = (sample * volume) / 127;
+            uint32_t advances;
+
+            scaled >>= shift;
+            L[i] += (scaled * panL) / 127;
+            R[i] += (scaled * panR) / 127;
+            phase += step;
+            advances = (uint32_t)(phase >> 32);
+            if (advances > 2048u) advances = 2048u;
+            while (advances--) {
+                phase -= PHASE_ONE;
+                if (index + 1u < nSamples) {
+                    index++;
+                    continue;
+                }
+                v->sampleIndex = index;
+                v->phase = phase;
+                advance_voice(c);
+                if (!v->running) return;
+                index = v->sampleIndex;
+            }
+        }
+        v->sampleIndex = index;
+        v->phase = phase;
+        return;
+    }
+    /* Anything else (PSG, noise, no data): frame by frame. */
+    for (i = 0; i < frames && v->running; ++i) {
+        (void)voice_mix(c, &L[i], &R[i]);
+    }
+}
+
+/*
  * Sound capture (SNDCAP0CNT/SNDCAP1CNT, 0x508/0x509): bit 7 on, bit 3 PCM8
  * (else PCM16), bit 2 one-shot (else it loops over its buffer: the SDK's
  * SND_CAPTURE_REPEAT_YES is 0), bit 1 records channel 0/2 (else the left /
@@ -432,6 +555,55 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
     capturing = ((reg8(0x508u) | reg8(0x509u)) & 128u) ||
                 chip->capture[0].running || chip->capture[1].running;
 
+    if (!capturing) {
+        /* Channel by channel, a block of frames at a time. */
+        enum { BLOCK = 128 };
+        size_t at;
+
+        for (at = 0; at < frames; at += BLOCK) {
+            int32_t mixL[BLOCK], mixR[BLOCK], ch1L[BLOCK], ch1R[BLOCK], ch3L[BLOCK], ch3R[BLOCK];
+            size_t n = frames - at < BLOCK ? frames - at : BLOCK;
+
+            memset(mixL, 0, n * sizeof(int32_t));
+            memset(mixR, 0, n * sizeof(int32_t));
+            memset(ch1L, 0, n * sizeof(int32_t));
+            memset(ch1R, 0, n * sizeof(int32_t));
+            memset(ch3L, 0, n * sizeof(int32_t));
+            memset(ch3R, 0, n * sizeof(int32_t));
+            for (k = 0; k < count; ++k) {
+                Channel *c = &channels[k];
+
+                if (!c->v->running) continue;
+                if (c->channel == 1) mix_block(c, ch1L, ch1R, n);
+                else if (c->channel == 3) mix_block(c, ch3L, ch3R, n);
+                else mix_block(c, mixL, mixR, n);
+            }
+            for (i = 0; i < n; ++i) {
+                int32_t outputL = 0, outputR = 0;
+
+                if (!bypass1) {
+                    mixL[i] += ch1L[i];
+                    mixR[i] += ch1R[i];
+                }
+                if (!bypass3) {
+                    mixL[i] += ch3L[i];
+                    mixR[i] += ch3R[i];
+                }
+                if (control & 128u) {
+                    int32_t left = leftFrom == 0 ? mixL[i] : leftFrom == 1 ? ch1L[i]
+                                 : leftFrom == 2 ? ch3L[i] : ch1L[i] + ch3L[i];
+                    int32_t right = rightFrom == 0 ? mixR[i] : rightFrom == 1 ? ch1R[i]
+                                  : rightFrom == 2 ? ch3R[i] : ch1R[i] + ch3R[i];
+
+                    outputL = (left * masterVolume) / 127;
+                    outputR = (right * masterVolume) / 127;
+                }
+                stereo[2u * (at + i)] = saturate(outputL);
+                stereo[2u * (at + i) + 1u] = saturate(outputR);
+            }
+        }
+        frames = 0;   /* done: skip the frame-by-frame mix below */
+    }
     for (i = 0; i < frames; ++i) {
         int32_t mixL = 0, mixR = 0;
         int32_t ch1L = 0, ch1R = 0, ch3L = 0, ch3R = 0;
