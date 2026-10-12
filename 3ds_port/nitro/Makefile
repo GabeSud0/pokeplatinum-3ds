@@ -315,7 +315,13 @@ RENDER_TEST_BIN := $(OUT)/test_render
 $(RENDER_TEST_BIN): tests/test_render.c tests/render2d_reference.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< tests/render2d_reference.c $(LIB) -lm -o $@
 
-test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN)
+# DS geometry command decoder + software PC triangle raster reference.
+# Tests use invented geometry and texture bytes, never the ROM or data pack.
+GX3D_TEST_BIN := $(OUT)/test_gx3d
+$(GX3D_TEST_BIN): tests/test_gx3d.c $(LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
+
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN) $(GX3D_TEST_BIN)
 	./$(TEST_BIN)
 	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
 	./$(THREAD_TEST_BIN)
@@ -323,6 +329,7 @@ test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_T
 	./$(SOUND_CHIP_TEST_BIN)
 	./$(SOUND_SEQ_TEST_BIN)
 	./$(RENDER_TEST_BIN)
+	./$(GX3D_TEST_BIN)
 
 clean:
 	rm -rf build
