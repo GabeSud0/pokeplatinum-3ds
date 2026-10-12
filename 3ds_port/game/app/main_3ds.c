@@ -209,7 +209,7 @@ static void GpuMain(void *unused)
             u64 start=svcGetSystemTick();
             int drawn=NitroPort_PicaRender(scene);
             NitroPort_Gx3dReleaseScene(scene);
-            __atomic_fetch_add(&sGpuTicks,svcGetSystemTick()-start,__ATOMIC_RELAXED);
+            sGpuTicks += svcGetSystemTick()-start; /* sole writer, as with audio */
             __atomic_fetch_add(&sGpuScenes,1u,__ATOMIC_RELAXED);
             if(drawn>=0)__atomic_fetch_add(&sGpuTriangles,
                                           (unsigned)drawn,__ATOMIC_RELAXED);
@@ -688,7 +688,7 @@ static void PerfFrame(u64 enter)
         sPerfStart = now;
         sPerfSoundTicks = sSoundMixTicks;
         sPerfSoundSamples = sSoundMixSamples;
-        sPerfGpuTicks = __atomic_load_n(&sGpuTicks,__ATOMIC_RELAXED);
+        sPerfGpuTicks = sGpuTicks;
         sPerfGpuScenes = __atomic_load_n(&sGpuScenes,__ATOMIC_RELAXED);
         sPerfGpuTriangles = __atomic_load_n(&sGpuTriangles,__ATOMIC_RELAXED);
         for (i = 0; i < sDrawerCount; i++) {
@@ -726,7 +726,7 @@ static void PerfFrame(u64 enter)
     }
     soundTicks = sSoundMixTicks - sPerfSoundTicks;
     soundSamples = sSoundMixSamples - sPerfSoundSamples;
-    gpuTicks = __atomic_load_n(&sGpuTicks,__ATOMIC_RELAXED);
+    gpuTicks = sGpuTicks;
     gpuScenes = __atomic_load_n(&sGpuScenes,__ATOMIC_RELAXED);
     gpuTriangles = __atomic_load_n(&sGpuTriangles,__ATOMIC_RELAXED);
     NitroPort_Log("[perf] game %.1f frames/s, %.1f ms/frame; drawn: %s; 3D %.1f ms/scene, %u triangles/scene (core %d); sound %.0f%% of core 0, %u underruns",
