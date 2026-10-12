@@ -14,6 +14,9 @@
 
 #include <nitro/types.h>
 #include <nitro/mi/memory.h>
+#include <nitro/hw/ARM9/ioreg_G3.h>
+#include <nitro_port_gx3d.h>
+#include <stdint.h>
 
 void MIi_CpuClear16(u16 data, void *destp, u32 size)
 {
@@ -72,10 +75,28 @@ void MIi_CpuSend32(const void *srcp, volatile void *destp, u32 size)
 {
     const u32 *s = srcp;
     volatile u32 *d = destp;
+    uintptr_t dest = (uintptr_t)destp;
+    uintptr_t fifo = (uintptr_t)REG_GXFIFO_ADDR;
+    uintptr_t command = (uintptr_t)REG_MTX_MODE_ADDR;
     u32 i;
 
-    for (i = 0; i < size; i += 4) {
-        *d = *s++;
+    /*
+     * MI_CpuSend32 is a repeated write to a *single* port, not memcpy.
+     * NitroSystem's gecom.c and sbc.c stream most geometry this way.
+     * An ordinary host/3DS memory location would retain only the last word,
+     * so dispatch each word in order just like GXFIFO hardware.
+     */
+    if (dest >= fifo && dest < fifo + 0x40u) {
+        for (i = 0; i < size; i += 4)
+            NitroPort_GxFifoWord(*s++);
+    } else if (dest >= command && dest < command + 0x1c0u &&
+               ((dest - command) & 3u) == 0) {
+        int opcode = 0x10 + (int)((dest - command) / 4u);
+        for (i = 0; i < size; i += 4)
+            NitroPort_GxDirectWrite(opcode, *s++);
+    } else {
+        for (i = 0; i < size; i += 4)
+            *d = *s++;
     }
 }
 
