@@ -83,9 +83,9 @@ int NitroPort_PicaInit(void)
     C3D_TexEnvSrc(env,C3D_Both,GPU_PRIMARY_COLOR,0,0);
     C3D_TexEnvFunc(env,C3D_Both,GPU_REPLACE);
     C3D_CullFace(GPU_CULL_NONE); /* Stage 1 geometry already culled. */
-    /* PICA depth is reversed: 0 near, -1 far. GREATER passes the closer
-     * sample when the depth buffer is cleared to zero. */
-    C3D_DepthTest(true,GPU_GREATER,GPU_WRITE_ALL);
+    /* The vertex builder outputs z=-d*w (d: near 0 ... far 1).
+     * citro3d maps this to stored depth d, so use LESS + max clear. */
+    C3D_DepthTest(true,GPU_LESS,GPU_WRITE_ALL);
 
     for(i=0;i<2;i++){
         sVertices[i]=linearAlloc(NITRO_GX3D_PICA_MAX_VERTICES*
@@ -121,7 +121,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene)
      * may wait; neither the game nor the 2D drawer ever waits on it. */
     if(!C3D_FrameBegin(C3D_FRAME_SYNCDRAW))return -1;
     /* As in hello3d, schedule framebuffer clear BEFORE drawing on it. */
-    C3D_RenderTargetClear(sTarget,C3D_CLEAR_ALL,0,0);
+    C3D_RenderTargetClear(sTarget,C3D_CLEAR_ALL,0,0x00FFFFFFu);
     if(!C3D_FrameDrawOn(sTarget)){
         C3D_FrameEnd(0);
         return -1;
@@ -132,7 +132,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene)
     BufInfo_Add(buffers,sVertices[slot],sizeof(NitroGx3dGpuVertex),
                 3,0x210u);
     C3D_CullFace(GPU_CULL_NONE);
-    C3D_DepthTest(true,GPU_GREATER,GPU_WRITE_ALL);
+    C3D_DepthTest(true,GPU_LESS,GPU_WRITE_ALL);
     /* The first plumbing PR clears transparent black. Mapping DS
      * CLEAR_COLOR/DEPTH and alpha are PR3, not part of this pipeline. */
     if(count){
