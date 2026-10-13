@@ -9,6 +9,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
+#include <semaphore.h>
 
 extern unsigned char NitroPort_IoReg[];
 extern unsigned char NitroPort_LcdcVram[];
@@ -696,7 +698,87 @@ static void test_translucency_and_scene_limits(void)
     CHECK(scene->dropped==0);
 }
 
+/* The same tests with the geometry engine on a thread of its own. */
+static sem_t sWorkerSem, sProducerSem, sGate;
+static volatile int sRunning = 1, sHold;
+/* With sHold set, the thread stops when next woken (until sGate). */
+static void wait_worker(void *c){(void)c;sem_wait(&sWorkerSem);while(sHold)sem_wait(&sGate);}
+static void wake_worker(void *c){(void)c;sem_post(&sWorkerSem);}
+static void wait_producer(void *c){(void)c;sem_wait(&sProducerSem);}
+static void wake_producer(void *c){(void)c;sem_post(&sProducerSem);}
+static void *geometry_thread(void *unused)
+{
+    (void)unused;
+    NitroPort_Gx3dThreadMain(&sRunning);
+    return NULL;
+}
+static void run_all(void);
+/* A thread that falls behind: the game doesn't wait, the scene after the
+ * one it's on is left out (nothing drawn, the last scene stays), and what
+ * a left-out scene sets (here the vertex Z) still holds after it. */
+static void test_thread_behind(void)
+{
+    const NitroGx3dScene *scene;
+    uint32_t skippedBefore, skipped;
+    reset_geometry();
+    NitroPort_Gx3dScene();                 /* the thread has caught up */
+    NitroPort_Gx3dThreadStats(NULL,NULL,&skippedBefore);
+    sHold=1;                               /* and now stops */
+    triangle(0,RGB(31,0,0));swap();        /* A */
+    triangle(0,RGB(0,31,0));swap();        /* B: two behind, so... */
+    triangle(0,RGB(0,0,31));swap();        /* C: left out */
+    swap();                                /* D: left out */
+    sHold=0;sem_post(&sGate);
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(0,31,0));
+    /* E, decided at D's SWAP: left out too. Its vertices' Z stays. */
+    NitroPort_GxDirectWrite(0x40,0);
+    vertex(-3000,-3000,2000);vertex(3000,-3000,2000);vertex(0,3000,2000);
+    NitroPort_GxDirectWrite(0x41,0);
+    swap();
+    /* F: caught up, drawn, with E's Z under its X/Y-only vertices. */
+    NitroPort_GxDirectWrite(0x20,RGB(31,31,0));
+    NitroPort_GxDirectWrite(0x40,0);
+    NitroPort_GxDirectWrite(0x25,word2(-3000,-3000));
+    NitroPort_GxDirectWrite(0x25,word2(3000,-3000));
+    NitroPort_GxDirectWrite(0x25,word2(0,3000));
+    NitroPort_GxDirectWrite(0x41,0);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1){
+        CHECK(scene->triangles[0].v[0].color==RGB(31,31,0));
+        CHECK(scene->triangles[0].v[0].clip[2]==2000);
+    }
+    NitroPort_Gx3dThreadStats(NULL,NULL,&skipped);
+    CHECK(skipped-skippedBefore==3);
+}
 int main(void)
+{
+    static const NitroGx3dThreadOps ops = {
+        NULL, wait_worker, wake_worker, wait_producer, wake_producer, NULL
+    };
+    pthread_t thread;
+    int synchronous;
+
+    run_all();
+    synchronous = checks;
+    printf("GX3D synthetic scene and raster: %d checks, %d failures\n",checks,failures);
+    sem_init(&sWorkerSem, 0, 0);
+    sem_init(&sProducerSem, 0, 0);
+    sem_init(&sGate, 0, 0);
+    NitroPort_Gx3dStartThread(&ops);
+    pthread_create(&thread, NULL, geometry_thread, NULL);
+    run_all();
+    test_thread_behind();
+    sRunning = 0;
+    wake_worker(NULL);
+    pthread_join(thread, NULL);
+    printf("GX3D on its own thread: %d checks, %d failures\n",checks-synchronous,failures);
+    return failures?1:0;
+}
+static void run_all(void)
 {
     test_matrices();
     test_packed_fifo();
@@ -715,6 +797,4 @@ int main(void)
     test_viewport_and_immediate_texture_state();
     test_stack_vec_and_result_refresh();
     test_translucency_and_scene_limits();
-    printf("GX3D synthetic scene and raster: %d checks, %d failures\n",checks,failures);
-    return failures?1:0;
 }

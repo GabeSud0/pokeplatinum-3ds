@@ -204,7 +204,7 @@ CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) -I../pak/include
 
 # --- Rules -----------------------------------------------------------------
 
-.PHONY: all lib test clean
+.PHONY: all lib test clean replay
 
 ifeq ($(IS_HOST),yes)
 all: test
@@ -321,12 +321,20 @@ GX3D_TEST_BIN := $(OUT)/test_gx3d
 # Compile the *patched original* NitroSystem gecom.c into this synthetic
 # test, so a real reg_G3X_GXFIFO store (not our decoder API) is exercised.
 $(GX3D_TEST_BIN): tests/test_gx3d.c $(NNS)/libraries/g3d/src/gecom.c $(LIB)
-	$(CC) $(CFLAGS) $(NNS_INCLUDES) $(LDFLAGS) tests/test_gx3d.c $(NNS)/libraries/g3d/src/gecom.c $(LIB) -lm -o $@
+	$(CC) $(CFLAGS) $(NNS_INCLUDES) $(LDFLAGS) tests/test_gx3d.c $(NNS)/libraries/g3d/src/gecom.c $(LIB) -lm -pthread -o $@
 
 # Race-test the three-slot scene handoff and the pure-C vertex builder.
 GX3D_PLUMBING_TEST_BIN := $(OUT)/test_gx3d_plumbing
 $(GX3D_PLUMBING_TEST_BIN): tests/test_gx3d_plumbing.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
+
+# Same scenes with and without the geometry thread, for a recording of the
+# game (the PC runner's --gx-record FILE): make replay, then
+# build/host/gx3d_replay FILE. Not run by `make test`.
+GX3D_REPLAY_BIN := $(OUT)/gx3d_replay
+$(GX3D_REPLAY_BIN): tests/gx3d_replay.c $(LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -pthread -o $@
+replay: $(GX3D_REPLAY_BIN)
 
 test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN) $(GX3D_TEST_BIN) $(GX3D_PLUMBING_TEST_BIN)
 	./$(TEST_BIN)
