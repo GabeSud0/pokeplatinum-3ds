@@ -129,6 +129,12 @@ void NitroPort_Gx3dFlush(void);
 /* The thread's busy time (in ticks), scenes finished, and scenes left out
  * because it was behind (the game never waits for it). */
 void NitroPort_Gx3dThreadStats(uint64_t *busy, uint32_t *scenes, uint32_t *skipped);
+/* Whether a scene the game ended before its newest SWAP_BUFFERS may still
+ * be read (the 3DS's GPU thread reads the texture VRAM as it draws one):
+ * the geometry thread hasn't finished it, or the consumer is reading it or
+ * hasn't taken it yet. Texture VRAM changed now would show in it. Never
+ * without the geometry thread. */
+int NitroPort_Gx3dEarlierSceneUnread(void);
 
 /* Debugging (the PC runner's --gx-record): every call into the engine,
  * to replay it (tests/gx3d_replay.c). Types: 1 GXFIFO words, 3 a direct

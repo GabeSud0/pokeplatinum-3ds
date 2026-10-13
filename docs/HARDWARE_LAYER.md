@@ -114,6 +114,20 @@ then what the DS shows that frame, and the screens are drawn from it on other
 cores. Before the next V-blank's work the game waits for any of them still
 reading it, so a screen never shows that work half done.
 
+One thing is done earlier than on the DS. The DS's 3D engine draws the scene
+the game has just ended after the V-blank work, which does the VRAM transfers
+the game queued for it (NitroSystem's VRAM transfer manager,
+`NNS_GfdDoVramTransfer`). The port draws the scene as soon as the frame ends
+(`OS_WaitIrq`), before that work. So when the frame ends the queued 3D
+transfers (textures, texture palettes) are done there
+(`NNSi_GfdDoVramTransfer3D`, `patches/NitroSystem/0004`, called from
+`NitroPort_Halt`), and the V-blank work does only the 2D ones; otherwise a
+texture a scene uses for the first time would be drawn with whatever was in
+its place before (the player's sprite the first time the nurse heals). The
+exception: if a scene from before may still be drawn (the 3DS's 3D thread is
+behind), the V-blank work does them as on the DS, since that scene would
+otherwise get them as well.
+
 ### 2. Memory, heaps and overlays
 
 **Where:** `src/heap.c` (NitroSystem expanded heaps), `src/game_overlay.c`,

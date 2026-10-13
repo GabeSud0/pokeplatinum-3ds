@@ -323,6 +323,12 @@ GX3D_TEST_BIN := $(OUT)/test_gx3d
 $(GX3D_TEST_BIN): tests/test_gx3d.c $(NNS)/libraries/g3d/src/gecom.c $(LIB)
 	$(CC) $(CFLAGS) $(NNS_INCLUDES) $(LDFLAGS) tests/test_gx3d.c $(NNS)/libraries/g3d/src/gecom.c $(LIB) -lm -pthread -o $@
 
+# NitroSystem's VRAM transfer manager (the *patched original*) with the
+# port's OS_Halt: the 3D transfers done when the frame ends.
+VRAM_TRANSFER_TEST_BIN := $(OUT)/test_vram_transfer
+$(VRAM_TRANSFER_TEST_BIN): tests/test_vram_transfer.c $(NNS)/libraries/gfd/src/VramTransferMan/gfd_VramTransferManager.c $(LIB)
+	$(CC) $(CFLAGS) $(NNS_INCLUDES) $(LDFLAGS) tests/test_vram_transfer.c $(NNS)/libraries/gfd/src/VramTransferMan/gfd_VramTransferManager.c $(LIB) -lm -o $@
+
 # Race-test the three-slot scene handoff and the pure-C vertex builder.
 GX3D_PLUMBING_TEST_BIN := $(OUT)/test_gx3d_plumbing
 $(GX3D_PLUMBING_TEST_BIN): tests/test_gx3d_plumbing.c $(LIB)
@@ -336,7 +342,7 @@ $(GX3D_REPLAY_BIN): tests/gx3d_replay.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -pthread -o $@
 replay: $(GX3D_REPLAY_BIN)
 
-test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN) $(GX3D_TEST_BIN) $(GX3D_PLUMBING_TEST_BIN)
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN) $(GX3D_TEST_BIN) $(GX3D_PLUMBING_TEST_BIN) $(VRAM_TRANSFER_TEST_BIN)
 	./$(TEST_BIN)
 	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
 	./$(THREAD_TEST_BIN)
@@ -346,6 +352,7 @@ test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_T
 	./$(RENDER_TEST_BIN)
 	./$(GX3D_TEST_BIN)
 	./$(GX3D_PLUMBING_TEST_BIN)
+	./$(VRAM_TRANSFER_TEST_BIN)
 
 clean:
 	rm -rf build

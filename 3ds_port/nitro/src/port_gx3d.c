@@ -95,6 +95,7 @@ static NitroGx3dScene sScenes[3];
 static NitroGx3dMailbox sMailbox;
 static unsigned sBuilding, sDisplayed;
 static uint32_t sSerial;
+static uint32_t sSwapsDone;   /* (the geometry thread's; see below) */
 
 static inline int32_t saturation(int64_t n)
 {
@@ -940,6 +941,9 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         /* All vertex and attribute writes precede the release publication. */
         scene->swap_param=p[0];
         scene->serial=sSerial+1;
+        /* Which SWAP_BUFFERS it is (with the geometry thread, counting
+         * them as the game's thread does: NitroPort_Gx3dEarlierSceneUnread). */
+        NitroPort_MailboxTag(&sMailbox,sSwapsDone+1u);
         if(NitroPort_MailboxPublish(&sMailbox,&next,&serial)){
             sDisplayed=sBuilding;
             sBuilding=(unsigned)next;
@@ -1250,6 +1254,17 @@ void NitroPort_Gx3dFlush(void)
 {
     if(sThreaded && sWriteLocal!=sWritePublished)publish();
 }
+int NitroPort_Gx3dEarlierSceneUnread(void)
+{
+    uint32_t last,unread;
+    if(!sThreaded)return 0;      /* scenes are read before the game goes on */
+    last=sSwapsQueued;           /* the game's newest SWAP_BUFFERS */
+    if(last==0)return 0;
+    /* The thread hasn't got to the one before it yet. */
+    if(__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE)+1u<last)return 1;
+    unread=NitroPort_MailboxUnread(&sMailbox);
+    return unread!=0 && unread<last;
+}
 void NitroPort_Gx3dThreadStats(uint64_t *busy,uint32_t *scenes,uint32_t *skipped)
 {
     if(busy)*busy=__atomic_load_n(&sWorkerBusy,__ATOMIC_RELAXED);
@@ -1392,6 +1407,7 @@ const NitroGx3dScene *NitroPort_Gx3dScene(void)
 {
     initialize();
     drain();
+    NitroPort_MailboxMarkTaken(&sMailbox);
     return &sScenes[sDisplayed];
 }
 const NitroGx3dScene *NitroPort_Gx3dAcquireScene(uint32_t *serial)

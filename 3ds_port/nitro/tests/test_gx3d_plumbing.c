@@ -78,6 +78,36 @@ static void test_mailbox(void) {
     NitroPort_MailboxRelease(&mailbox,inUse);
     CHECK(mailbox.reading==-1);
 }
+/* The lowest number (tag) of a scene still to be read: one being read, or
+ * the latest until a consumer takes it. */
+static void test_mailbox_unread(void) {
+    NitroGx3dMailbox b;
+    int next,slot;
+    uint32_t seen=0;
+    NitroPort_MailboxInit(&b);
+    CHECK(NitroPort_MailboxUnread(&b)==0);
+    NitroPort_MailboxTag(&b,5);
+    CHECK(NitroPort_MailboxPublish(&b,&next,NULL)==1);
+    CHECK(NitroPort_MailboxUnread(&b)==5);  /* published, not taken */
+    slot=NitroPort_MailboxAcquire(&b,&seen);
+    CHECK(slot>=0);
+    CHECK(NitroPort_MailboxUnread(&b)==5);  /* being read */
+    NitroPort_MailboxTag(&b,6);
+    CHECK(NitroPort_MailboxPublish(&b,&next,NULL)==1);
+    CHECK(NitroPort_MailboxUnread(&b)==5);  /* 5 still being read */
+    NitroPort_MailboxRelease(&b,slot);
+    CHECK(NitroPort_MailboxUnread(&b)==6);
+    NitroPort_MailboxTag(&b,7);
+    CHECK(NitroPort_MailboxPublish(&b,&next,NULL)==1);
+    CHECK(NitroPort_MailboxUnread(&b)==7);  /* 6 replaced, never to be read */
+    NitroPort_MailboxMarkTaken(&b);         /* read without acquiring */
+    CHECK(NitroPort_MailboxUnread(&b)==0);
+    slot=NitroPort_MailboxAcquire(&b,&seen);
+    CHECK(slot>=0);
+    CHECK(NitroPort_MailboxUnread(&b)==7);
+    NitroPort_MailboxRelease(&b,slot);
+    CHECK(NitroPort_MailboxUnread(&b)==0);
+}
 static NitroGx3dScene scene;
 static NitroGx3dGpuVertex verts[12];
 static void test_vertices(void) {
@@ -495,6 +525,7 @@ static void test_batches(void)
 
 int main(void) {
     test_mailbox();
+    test_mailbox_unread();
     test_lock_contention();
     test_vertices();
     test_depth_direction();

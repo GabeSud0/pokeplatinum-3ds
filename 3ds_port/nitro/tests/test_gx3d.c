@@ -754,6 +754,36 @@ static void test_thread_behind(void)
     NitroPort_Gx3dThreadStats(NULL,NULL,&skipped);
     CHECK(skipped-skippedBefore==3);
 }
+/* Whether a scene from before the game's newest SWAP_BUFFERS may still be
+ * read (OS_Halt does the texture transfers queued for the V-blank early
+ * only when none may): the thread hasn't got to it, or a consumer is
+ * reading it or hasn't taken it. */
+static void test_earlier_scene_unread(void)
+{
+    const NitroGx3dScene *scene;
+    uint32_t seen=0;
+    reset_geometry();
+    NitroPort_Gx3dScene();                 /* done, and read */
+    CHECK(!NitroPort_Gx3dEarlierSceneUnread());
+    sHold=1;                               /* the thread stops */
+    triangle(0,RGB(31,0,0));swap();        /* A: nothing before it */
+    CHECK(!NitroPort_Gx3dEarlierSceneUnread());
+    triangle(0,RGB(0,31,0));swap();        /* B: A not done yet */
+    CHECK(NitroPort_Gx3dEarlierSceneUnread());
+    sHold=0;sem_post(&sGate);
+    NitroPort_Gx3dScene();
+    CHECK(!NitroPort_Gx3dEarlierSceneUnread());
+    swap();                                /* C (left out: B was behind) */
+    triangle(0,RGB(0,0,31));swap();        /* D */
+    NitroPort_Gx3dScene();
+    scene=NitroPort_Gx3dAcquireScene(&seen); /* a consumer reading D... */
+    CHECK(scene!=NULL);
+    triangle(0,RGB(31,31,0));swap();       /* ...when E is ended */
+    CHECK(NitroPort_Gx3dEarlierSceneUnread());
+    NitroPort_Gx3dReleaseScene(scene);
+    CHECK(!NitroPort_Gx3dEarlierSceneUnread());
+    NitroPort_Gx3dScene();
+}
 int main(void)
 {
     static const NitroGx3dThreadOps ops = {
@@ -763,6 +793,8 @@ int main(void)
     int synchronous;
 
     run_all();
+    swap();
+    CHECK(!NitroPort_Gx3dEarlierSceneUnread()); /* without the thread: never */
     synchronous = checks;
     printf("GX3D synthetic scene and raster: %d checks, %d failures\n",checks,failures);
     sem_init(&sWorkerSem, 0, 0);
@@ -772,6 +804,7 @@ int main(void)
     pthread_create(&thread, NULL, geometry_thread, NULL);
     run_all();
     test_thread_behind();
+    test_earlier_scene_unread();
     sRunning = 0;
     wake_worker(NULL);
     pthread_join(thread, NULL);
