@@ -67,6 +67,10 @@ static TexEntry sTextures[TEX_CACHE_ENTRIES];
 static size_t sTextureBytes;
 static uint32_t sFrame;
 static NitroGx3dTexBanks sBanks;
+/* Textures converted (new, or their bytes changed), their texels, and the
+ * time it took, for the [perf] line. */
+static volatile u32 sTexConverted;
+static volatile u64 sTexTexels,sTexTicks;
 
 static void free_texture(TexEntry *e)
 {
@@ -204,8 +208,14 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
         e->bytes=bytes;
         sTextureBytes+=bytes;
     }
-    NitroPort_Gx3dDecodeTextureTiled(&sBanks,param,palette,(uint32_t*)e->tex.data);
-    C3D_TexFlush(&e->tex);
+    {
+        u64 start=svcGetSystemTick();
+        NitroPort_Gx3dDecodeTextureTiled(&sBanks,param,palette,(uint32_t*)e->tex.data);
+        C3D_TexFlush(&e->tex);
+        sTexTicks+=svcGetSystemTick()-start;
+        sTexTexels+=(u64)width*height;
+        sTexConverted++;
+    }
     e->hash=hash;
     e->checkedFrame=e->lastFrame=sFrame;
     return &e->tex;
@@ -251,6 +261,10 @@ static volatile u64 sBuildTicks,sWaitTicks,sPublishTicks;
 void NitroPort_PicaTimes(u64 *build,u64 *wait,u64 *publish)
 {
     *build=sBuildTicks;*wait=sWaitTicks;*publish=sPublishTicks;
+}
+void NitroPort_PicaTextureStats(u32 *converted,u64 *texels,u64 *ticks)
+{
+    *converted=sTexConverted;*texels=sTexTexels;*ticks=sTexTicks;
 }
 int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
 {

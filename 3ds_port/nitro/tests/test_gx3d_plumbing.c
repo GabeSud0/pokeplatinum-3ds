@@ -426,6 +426,69 @@ static void test_texture_decode(void)
     /* Format 0: opaque white, as the reference draws untextured polygons. */
     CHECK(NitroPort_Gx3dSampleTexel(&banks,0,0,3,3).rgb==0x7fff);
 }
+/* The row-at-a-time decoder against the sampler, texel by texel: every
+ * format and size, palettes anywhere, textures that run from one slot into
+ * the next or into one without a bank, and parts of textures. */
+static uint32_t decodeWant[1024*64],decodeGot[1024*64];
+static void test_texture_decode_fast(void)
+{
+    NitroGx3dTexBanks banks=test_banks();
+    unsigned n,i,bad=0,badRect=0,badKept=0;
+    for(i=0;i<sizeof(texSlots);i++)((unsigned char*)texSlots)[i]=(unsigned char)next_random();
+    for(i=0;i<sizeof(palSlots);i++)((unsigned char*)palSlots)[i]=(unsigned char)next_random();
+    for(n=0;n<400;n++){
+        unsigned fmt=n%8,w=8u<<(next_random()%8),h=8u<<(next_random()%8);
+        uint32_t addr,pal=next_random()%0x600,param;
+        unsigned s,t,s0,t0,s1,t1;
+        while(w*h>1024*64)h/=2;
+        /* Near the end of a slot every few textures, else anywhere. */
+        addr=(n%5==0)?((next_random()%4)*0x20000u+0x20000u-8u*(1u+next_random()%64)):
+                      (next_random()%0x80000u)&~7u;
+        param=tex_param(fmt,w,h,addr,(next_random()&1)?(1u<<29):0);
+        banks=test_banks();
+        if(n%7==0)banks.texture[next_random()%4]=NULL;
+        if(n%11==0)banks.palette[next_random()%6]=NULL;
+        NitroPort_Gx3dDecodeTexture(&banks,param,pal,decodeGot);
+        NitroPort_Gx3dTileRGBA8(decodeGot,w,h,decodeWant);
+        memset(decodeGot,0x5a,w*h*4);
+        NitroPort_Gx3dDecodeTextureTiled(&banks,param,pal,decodeGot);
+        if(memcmp(decodeGot,decodeWant,w*h*4)!=0)bad++;
+        /* A part: those texels the same, the rest left as they were. */
+        s0=next_random()%w;s1=s0+1+next_random()%(w-s0);
+        t0=next_random()%h;t1=t0+1+next_random()%(h-t0);
+        memset(decodeGot,0x5a,w*h*4);
+        NitroPort_Gx3dDecodeTextureTiledRect(&banks,param,pal,decodeGot,s0,t0,s1+(n&8),t1+(n&16));
+        for(t=0;t<h;t++)for(s=0;s<w;s++){
+            unsigned at=pica_index(w,h,(s+0.5f)/(float)w,(t+0.5f)/(float)h);
+            if(s>=s0&&s<s1+(n&8)&&t>=t0&&t<t1+(n&16)){
+                if(decodeGot[at]!=decodeWant[at])badRect++;
+            }else if(decodeGot[at]!=0x5a5a5a5au)badKept++;
+        }
+    }
+    CHECK(bad==0);
+    CHECK(badRect==0);
+    CHECK(badKept==0);
+    /* An empty part changes nothing. */
+    memset(decodeGot,0x5a,64*4);
+    NitroPort_Gx3dDecodeTextureTiledRect(&banks,tex_param(3,8,8,0,0),0,decodeGot,4,0,4,8);
+    CHECK(decodeGot[0]==0x5a5a5a5au && decodeGot[63]==0x5a5a5a5au);
+}
+/* Any one byte of the texel data changes the hash (it's read a word at a
+ * time), at every place in a word. */
+static void test_texture_hash_bytes(void)
+{
+    NitroGx3dTexBanks banks=test_banks();
+    uint32_t param=tex_param(4,16,8,0x2000,0);    /* 128 bytes */
+    uint32_t h0=NitroPort_Gx3dTextureHash(&banks,param,0);
+    unsigned i,changed=0;
+    for(i=0;i<128;i++){
+        texSlots[0][0x2000+i]^=0x80;
+        changed+=NitroPort_Gx3dTextureHash(&banks,param,0)!=h0;
+        texSlots[0][0x2000+i]^=0x80;
+    }
+    CHECK(changed==128);
+    CHECK(NitroPort_Gx3dTextureHash(&banks,param,0)==h0);
+}
 extern unsigned char NitroPort_IoReg[];
 extern unsigned char NitroPort_LcdcVram[];
 static void test_palette_banks(void)
@@ -534,7 +597,9 @@ int main(void) {
     test_png_dump();
     test_concurrent_image_handoff();
     test_texture_decode();
+    test_texture_decode_fast();
     test_texture_hash();
+    test_texture_hash_bytes();
     test_palette_banks();
     test_batches();
     printf("GX3D plumbing: %d checks, %d failures\n",nchecks,nfail);

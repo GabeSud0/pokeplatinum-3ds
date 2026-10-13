@@ -187,6 +187,7 @@ int NitroPort_PicaInit(void);
 int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped);
 void NitroPort_PicaExit(void);
 void NitroPort_PicaTimes(u64 *build, u64 *wait, u64 *publish);
+void NitroPort_PicaTextureStats(u32 *converted, u64 *texels, u64 *ticks);
 static Thread sGpuThread;
 static LightEvent sGpuWake;
 static volatile bool sGpuRunning, sGpuWakeReady;
@@ -999,13 +1000,16 @@ static void PerfFrame(u64 enter)
     gpuTriangles = __atomic_load_n(&sGpuTriangles,__ATOMIC_RELAXED);
     gpuDroppedTriangles = __atomic_load_n(&sGpuDroppedTriangles,__ATOMIC_RELAXED);
     {
-        static u64 lastBuild, lastWait, lastPublish, lastGeoBusy;
+        static u64 lastBuild, lastWait, lastPublish, lastGeoBusy, lastTexTexels, lastTexTicks;
         static uint32_t lastGeoScenes, lastGeoSkipped;
-        u64 build, wait, publish;
+        static u32 lastTexConverted;
+        u64 build, wait, publish, texTexels, texTicks;
+        u32 texConverted;
         uint64_t geoBusy;
         uint32_t geoScenes, geoSkipped;
         unsigned scenes = gpuScenes - sPerfGpuScenes;
         NitroPort_PicaTimes(&build, &wait, &publish);
+        NitroPort_PicaTextureStats(&texConverted, &texTexels, &texTicks);
         NitroPort_Gx3dThreadStats(&geoBusy, &geoScenes, &geoSkipped);
         if (sGeoThread && geoScenes != lastGeoScenes) {
             double busy = (double)(geoBusy - lastGeoBusy) / SYSCLOCK_ARM11;
@@ -1018,15 +1022,21 @@ static void PerfFrame(u64 enter)
         lastGeoScenes = geoScenes;
         lastGeoSkipped = geoSkipped;
         if (scenes) {
-            NitroPort_Log("[perf] 3D: %.1f scenes/s; per scene %.1f ms building, %.1f ms GPU and copy, %.1f ms converting",
+            NitroPort_Log("[perf] 3D: %.1f scenes/s; per scene %.1f ms building (textures: %.2f decoded, %.0f texels, %.1f ms), %.1f ms GPU and copy, %.1f ms converting",
                           scenes / seconds,
                           (double)(build - lastBuild) * 1000.0 / SYSCLOCK_ARM11 / scenes,
+                          (double)(texConverted - lastTexConverted) / scenes,
+                          (double)(texTexels - lastTexTexels) / scenes,
+                          (double)(texTicks - lastTexTicks) * 1000.0 / SYSCLOCK_ARM11 / scenes,
                           (double)(wait - lastWait) * 1000.0 / SYSCLOCK_ARM11 / scenes,
                           (double)(publish - lastPublish) * 1000.0 / SYSCLOCK_ARM11 / scenes);
         }
         lastBuild = build;
         lastWait = wait;
         lastPublish = publish;
+        lastTexConverted = texConverted;
+        lastTexTexels = texTexels;
+        lastTexTicks = texTicks;
     }
     NitroPort_Log("[perf] game %.1f frames/s, %.1f ms/frame (%.1f waiting for drawing); drawn: %s; 3D %.1f ms/scene, %u triangles/scene, %u dropped/scene (core %d); sound %.0f%% of core 0, %u underruns",
                   sPerfFrames / seconds, (double)sPerfGameTicks * perFrame,
