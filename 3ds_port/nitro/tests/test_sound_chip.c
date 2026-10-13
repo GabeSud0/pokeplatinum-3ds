@@ -441,6 +441,79 @@ static void test_matches_reference(void)
     CHECK(mismatches == 0);
 }
 
+/* The mixer works a block of frames at a time, channel by channel, and
+ * frame by frame only for channels reading a capture's buffer. With
+ * captures running (reverb), mixing many frames at once must give exactly
+ * what mixing them one at a time does (where nothing can go out of order). */
+static void test_blocks_match_single_frames(void)
+{
+    static NitroSoundChip chipA, chipB;
+    static int16_t outA[2 * 600], outB[2 * 600];
+    static uint8_t arenaB[ARENA_SIZE + ARENA_PAD];
+    unsigned scenario, step, ch;
+    int mismatches = 0;
+
+    for (scenario = 0; scenario < 200 && mismatches < 5; scenario++) {
+        unsigned i;
+        for (i = 0; i < ARENA_SIZE + ARENA_PAD; i++) sArenaNew[i] = (uint8_t)rnd();
+        NitroSound_Reset(&chipA, NITRO_SOUND_RATE);
+        both8(0x500u, (uint8_t)(rnd() % 128u));
+        both8(0x501u, (uint8_t)(0x80u | (rnd() % 64u)));
+        for (ch = 0; ch < 16; ch++) {
+            if (rnd() % 3u) random_channel(ch);
+        }
+        random_capture(0);
+        random_capture(1);
+        if (rnd() % 2u) {
+            /* Reverb as NitroSystem sets it up: channels 1 and 3 play the
+             * capture buffers back. */
+            for (ch = 1; ch < 4; ch += 2) {
+                unsigned base = 0x400u + ch * 16u;
+                unsigned slot = ch == 1 ? 0u : 1u;
+                both32(base + 4u, (uint32_t)(uintptr_t)(sArenaNew + CAPTURE_AT + slot * 0x1000u));
+                both16(base + 10u, 0);
+                both32(base + 12u, NitroPort_SoundRegisters[0x514u + slot * 8u] |
+                                   ((uint32_t)NitroPort_SoundRegisters[0x515u + slot * 8u] << 8));
+                both32(base, (1u << 31) | (1u << 29) | (1u << 27) | (64u << 16) | 90u);
+            }
+        }
+        /* The same start for the frame-by-frame copy. */
+        chipB = chipA;
+        memcpy(arenaB, sArenaNew, sizeof(arenaB));
+        {
+            static uint8_t regs[NITRO_SOUND_REG_SIZE];
+            memcpy(regs, (const void *)NitroPort_SoundRegisters, sizeof(regs));
+            for (step = 0; step < 20 && mismatches < 5; step++) {
+                size_t frames = 1 + rnd() % 600u, f;
+                static uint8_t regsA[NITRO_SOUND_REG_SIZE];
+                static uint8_t arenaA[ARENA_SIZE + ARENA_PAD];
+
+                /* A: all at once. */
+                NitroSound_Mix(&chipA, outA, frames);
+                memcpy(regsA, (const void *)NitroPort_SoundRegisters, sizeof(regsA));
+                memcpy(arenaA, sArenaNew, sizeof(arenaA));
+                /* B: one frame at a time, from B's own state. */
+                memcpy((void *)NitroPort_SoundRegisters, regs, sizeof(regs));
+                memcpy(sArenaNew, arenaB, sizeof(arenaB));
+                for (f = 0; f < frames; f++) NitroSound_Mix(&chipB, outB + 2 * f, 1);
+                memcpy(regs, (const void *)NitroPort_SoundRegisters, sizeof(regs));
+                memcpy(arenaB, sArenaNew, sizeof(arenaB));
+                if (memcmp(outA, outB, frames * 4u) != 0 || memcmp(regsA, regs, sizeof(regs)) != 0 ||
+                    memcmp(arenaA, arenaB, ARENA_SIZE) != 0 ||
+                    chipA.capture[0].index != chipB.capture[0].index ||
+                    chipA.capture[1].index != chipB.capture[1].index) {
+                    fprintf(stderr, "blocks: scenario %u step %u differs\n", scenario, step);
+                    mismatches++;
+                }
+                /* Back to A's state for its next step. */
+                memcpy((void *)NitroPort_SoundRegisters, regsA, sizeof(regsA));
+                memcpy(sArenaNew, arenaA, sizeof(arenaA));
+            }
+        }
+    }
+    CHECK(mismatches == 0);
+}
+
 /* test_sound_chip --bench: how long one second of 16 busy channels takes
  * to mix, with the old mixer and the new one. */
 static double seconds_now(void)
@@ -506,6 +579,7 @@ int main(int argc, char **argv)
     test_output_selector();
     test_restart_between_mixes();
     test_matches_reference();
+    test_blocks_match_single_frames();
     printf("software DS sound chip: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -17,8 +17,9 @@
  * Speed: the New 3DS's faster clock is switched on. The game's own code
  * takes little of a frame; drawing the two screens costs much more. So
  * drawing has threads of its own that work while the game goes on with its
- * next frame (as the DS draws while the game runs): on a New 3DS the upper
- * screen on core 2 and the lower one on core 0, otherwise both on core 0.
+ * next frame (as the DS draws while the game runs): on a New 3DS the screen
+ * of engine A (the one with the 3D, whichever screen that is) on core 2 and
+ * the other on core 0, otherwise both on core 0.
  * On core 0 they run below the game: the game always comes first and
  * keeps its speed, and a screen that isn't done when the next frame is
  * ready leaves that frame out. Sound has a thread of its own on core 0,
@@ -518,17 +519,20 @@ static void ClearScreens(void)
 typedef struct Drawer {
     Thread thread;
     LightEvent go;
-    int screens;             /* bit 0: the upper screen, bit 1: the lower */
+    int screens;             /* bit 0: engine A's screen (3D), bit 1: engine B's */
     int core;
     volatile bool busy;      /* drawing a frame */
+    volatile bool aOnTop;    /* engine A on the upper screen, for this frame */
     volatile bool quit;
     volatile u64 ticks;      /* time spent drawing, for [perf] */
     volatile unsigned count; /* frames handled */
     volatile unsigned drawn; /* screens drawn (not unchanged) */
 } Drawer;
 
-#define SCREEN_TOP 1
-#define SCREEN_BOTTOM 2
+/* Drawers go by engine, not by screen: engine A (with the 3D, the costly
+ * one) gets the New 3DS's second core whichever screen it's on. */
+#define ENGINE_A 1
+#define ENGINE_B 2
 
 static Drawer sDrawers[2];
 static int sDrawerCount;
@@ -537,21 +541,22 @@ static volatile bool sAOnTop;    /* engine A on the upper screen, this frame */
  * game's picture didn't change. 0: upper, 1: lower. */
 static volatile bool sMustDraw[2];
 
-static bool DrawScreen(gfxScreen_t screen)
+static bool DrawScreen(int engine, bool aOnTop)
 {
     static u16 pixels[2][256 * 192];
-    bool top = screen == GFX_TOP;
+    /* Engine A shows on the upper screen when POWCNT1 says so. */
+    bool top = (engine == 0) == aOnTop;
+    gfxScreen_t screen = top ? GFX_TOP : GFX_BOTTOM;
     u16 *ds = pixels[top ? 0 : 1];
     u16 width, height;
     u8 *fb;
 
-    /* Engine A shows on the upper screen when POWCNT1 says so. A screen
-     * whose picture didn't change keeps showing it: not drawn, not swapped
-     * (the framebuffer drawn last is the one on show). */
+    /* A screen whose picture didn't change keeps showing it: not drawn,
+     * not swapped (the framebuffer drawn last is the one on show). */
     if (sMustDraw[top ? 0 : 1]) {
         sMustDraw[top ? 0 : 1] = false;
-        NitroPort_Render2D(top == sAOnTop ? 0 : 1, ds);
-    } else if (!NitroPort_Render2DIfChanged(top == sAOnTop ? 0 : 1, ds)) {
+        NitroPort_Render2D(engine, ds);
+    } else if (!NitroPort_Render2DIfChanged(engine, ds)) {
         return false;
     }
     Blit(screen, ds, top ? (400 - 256) / 2 : (320 - 256) / 2);
@@ -574,11 +579,11 @@ static void DrawerMain(void *arg)
             break;
         }
         start = svcGetSystemTick();
-        if (d->screens & SCREEN_TOP) {
-            d->drawn += DrawScreen(GFX_TOP);
+        if (d->screens & ENGINE_A) {
+            d->drawn += DrawScreen(0, d->aOnTop);
         }
-        if (d->screens & SCREEN_BOTTOM) {
-            d->drawn += DrawScreen(GFX_BOTTOM);
+        if (d->screens & ENGINE_B) {
+            d->drawn += DrawScreen(1, d->aOnTop);
         }
         d->ticks += svcGetSystemTick() - start;
         d->count++;
@@ -603,14 +608,14 @@ static bool StartDrawer(int screens, s32 priority, int core)
     return true;
 }
 
-/* New 3DS: the upper screen on core 2, the lower on core 0; otherwise both
+/* New 3DS: engine A's screen (the 3D one) on core 2, engine B's on core 0; otherwise both
  * on core 0. Below the game on core 0, so the game comes first. */
 static void StartDrawers(s32 priority, bool isNew3ds)
 {
-    if (isNew3ds && StartDrawer(SCREEN_TOP, priority, 2)) {
-        StartDrawer(SCREEN_BOTTOM, priority + 1, 0);
+    if (isNew3ds && StartDrawer(ENGINE_A, priority, 2)) {
+        StartDrawer(ENGINE_B, priority + 1, 0);
     } else {
-        StartDrawer(SCREEN_TOP | SCREEN_BOTTOM, priority + 1, 0);
+        StartDrawer(ENGINE_A | ENGINE_B, priority + 1, 0);
     }
 }
 
@@ -675,6 +680,7 @@ static void DrawFrame(void)
         Drawer *d = &sDrawers[i];
 
         if (!__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE)) {
+            d->aOnTop = sAOnTop;
             __atomic_store_n(&d->busy, true, __ATOMIC_RELEASE);
             LightEvent_Signal(&d->go);
         }
@@ -737,8 +743,8 @@ static void PerfFrame(u64 enter)
 
         used += snprintf(drawing + used, sizeof(drawing) - (size_t)used, "%s%s %.1f/s (%.1f/s new), %.1f ms (core %d)",
                          i ? "; " : "",
-                         d->screens == (SCREEN_TOP | SCREEN_BOTTOM) ? "both screens"
-                         : d->screens == SCREEN_TOP ? "upper" : "lower",
+                         d->screens == (ENGINE_A | ENGINE_B) ? "both screens"
+                         : (d->screens == ENGINE_A) == sAOnTop ? "upper" : "lower",
                          count / seconds, d->drawn / seconds,
                          count ? (double)d->ticks * 1000.0 / SYSCLOCK_ARM11 / count : 0.0, d->core);
         if (used >= (int)sizeof(drawing)) {
@@ -1002,7 +1008,7 @@ int main(int argc, char **argv)
             StartDrawers(priority, isNew3ds);
             StartGpu(priority, isNew3ds);
             NitroPort_Log("[perf] %s 3DS; drawing: %s", isNew3ds ? "New" : "Old",
-                          sDrawerCount == 2 ? "upper screen on core 2, lower on core 0"
+                          sDrawerCount == 2 ? "the 3D engine's screen on core 2, the other on core 0"
                           : sDrawerCount == 1 ? "both screens on core 0" : "no thread!");
         }
         StartSound(priority);

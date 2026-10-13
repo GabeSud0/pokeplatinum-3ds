@@ -174,6 +174,8 @@ typedef struct Channel {
     int32_t volume;
     int32_t pan;
     unsigned shift;
+    uint32_t endByte;      /* the channel reads [sourceAddr, sourceAddr + endByte) */
+    int dependent;         /* reads memory a capture writes: mixed frame by frame */
 } Channel;
 
 static int32_t wave_sample(const Channel *c)
@@ -289,6 +291,8 @@ static int start_channel(NitroSoundChip *chip, unsigned channel, Channel *c)
     }
     startByte = (uint32_t)reg16(base + REG_LOOP) * 4u;
     endByte = startByte + (reg32(base + REG_LENGTH) & 0x3fffffu) * 4u;
+    c->endByte = endByte;
+    c->dependent = 0;
     c->nSamples = total_samples(c->format, endByte);
     c->loopAt = loop_sample(c->format, startByte);
     c->volume = (int32_t)(ctrl & 127u);
@@ -330,10 +334,11 @@ static int32_t voice_mix(Channel *c, int32_t *left, int32_t *right)
 /*
  * A channel's samples for a run of frames, added to L and R: what
  * voice_mix gives frame by frame, with the channel's settings and its
- * decoder in local variables. Used when nothing is captured, so a channel
- * doesn't depend on the others within a mix.
+ * decoder in local variables; values (if not NULL) gets each frame's
+ * sample. For channels that don't read what a capture writes: they don't
+ * depend on the other channels within a mix.
  */
-static void mix_block(Channel *c, int32_t *L, int32_t *R, size_t frames)
+static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_t frames)
 {
     NitroSoundVoice *v = c->v;
     const int32_t volume = c->volume, panL = 127 - c->pan, panR = c->pan;
@@ -354,6 +359,7 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, size_t frames)
             uint32_t advances;
 
             scaled >>= shift;
+            if (values) values[i] = scaled;
             L[i] += (scaled * panL) / 127;
             R[i] += (scaled * panR) / 127;
             phase += step;
@@ -422,6 +428,7 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, size_t frames)
             uint32_t advances;
 
             scaled >>= shift;
+            if (values) values[i] = scaled;
             L[i] += (scaled * panL) / 127;
             R[i] += (scaled * panR) / 127;
             phase += step;
@@ -446,7 +453,8 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, size_t frames)
     }
     /* Anything else (PSG, noise, no data): frame by frame. */
     for (i = 0; i < frames && v->running; ++i) {
-        (void)voice_mix(c, &L[i], &R[i]);
+        int32_t scaled = voice_mix(c, &L[i], &R[i]);
+        if (values) values[i] = scaled;
     }
 }
 
@@ -555,13 +563,33 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
     capturing = ((reg8(0x508u) | reg8(0x509u)) & 128u) ||
                 chip->capture[0].running || chip->capture[1].running;
 
-    if (!capturing) {
+    if (capturing) {
+        /* A channel that reads a capture's buffer (reverb plays the
+         * recorded mix back on channels 1 and 3) depends on what the
+         * capture writes frame by frame: those are mixed frame by frame,
+         * in their place before the capture. The others don't depend on
+         * anything in the mix and go a block at a time like the rest. */
+        unsigned slot;
+        for (slot = 0; slot < 2; ++slot) {
+            uint32_t dst = reg32(0x510u + slot * 8u);
+            uint32_t size = (uint32_t)reg16(0x514u + slot * 8u) * 4u;
+            if (!dst || !size) continue;
+            for (k = 0; k < count; ++k) {
+                Channel *c = &channels[k];
+                if (c->format == 3u || !c->source) continue;
+                if (c->sourceAddr < dst + size && dst < c->sourceAddr + c->endByte)
+                    c->dependent = 1;
+            }
+        }
+    }
+    {
         /* Channel by channel, a block of frames at a time. */
         enum { BLOCK = 128 };
         size_t at;
 
         for (at = 0; at < frames; at += BLOCK) {
             int32_t mixL[BLOCK], mixR[BLOCK], ch1L[BLOCK], ch1R[BLOCK], ch3L[BLOCK], ch3R[BLOCK];
+            int32_t value0[BLOCK], value2[BLOCK];   /* channels 0 and 2, for captures */
             size_t n = frames - at < BLOCK ? frames - at : BLOCK;
 
             memset(mixL, 0, n * sizeof(int32_t));
@@ -570,17 +598,40 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
             memset(ch1R, 0, n * sizeof(int32_t));
             memset(ch3L, 0, n * sizeof(int32_t));
             memset(ch3R, 0, n * sizeof(int32_t));
+            if (capturing) {
+                memset(value0, 0, n * sizeof(int32_t));
+                memset(value2, 0, n * sizeof(int32_t));
+            }
             for (k = 0; k < count; ++k) {
                 Channel *c = &channels[k];
 
-                if (!c->v->running) continue;
-                if (c->channel == 1) mix_block(c, ch1L, ch1R, n);
-                else if (c->channel == 3) mix_block(c, ch3L, ch3R, n);
-                else mix_block(c, mixL, mixR, n);
+                if (!c->v->running || c->dependent) continue;
+                if (c->channel == 1) mix_block(c, ch1L, ch1R, NULL, n);
+                else if (c->channel == 3) mix_block(c, ch3L, ch3R, NULL, n);
+                else mix_block(c, mixL, mixR,
+                               !capturing ? NULL : c->channel == 0 ? value0
+                               : c->channel == 2 ? value2 : NULL, n);
             }
             for (i = 0; i < n; ++i) {
                 int32_t outputL = 0, outputR = 0;
 
+                if (capturing) {
+                    for (k = 0; k < count; ++k) {
+                        Channel *c = &channels[k];
+                        int32_t value;
+
+                        if (!c->dependent || !c->v->running) continue;
+                        if (c->channel == 1) {
+                            (void)voice_mix(c, &ch1L[i], &ch1R[i]);
+                        } else if (c->channel == 3) {
+                            (void)voice_mix(c, &ch3L[i], &ch3R[i]);
+                        } else {
+                            value = voice_mix(c, &mixL[i], &mixR[i]);
+                            if (c->channel == 0) value0[i] = value;
+                            if (c->channel == 2) value2[i] = value;
+                        }
+                    }
+                }
                 if (!bypass1) {
                     mixL[i] += ch1L[i];
                     mixR[i] += ch1R[i];
@@ -588,6 +639,10 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
                 if (!bypass3) {
                     mixL[i] += ch3L[i];
                     mixR[i] += ch3R[i];
+                }
+                if (capturing) {
+                    do_capture(chip, 0, (reg8(0x508u) & 2u) ? value0[i] : mixL[i]);
+                    do_capture(chip, 1, (reg8(0x509u) & 2u) ? value2[i] : mixR[i]);
                 }
                 if (control & 128u) {
                     int32_t left = leftFrom == 0 ? mixL[i] : leftFrom == 1 ? ch1L[i]
@@ -602,59 +657,6 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
                 stereo[2u * (at + i) + 1u] = saturate(outputR);
             }
         }
-        frames = 0;   /* done: skip the frame-by-frame mix below */
-    }
-    for (i = 0; i < frames; ++i) {
-        int32_t mixL = 0, mixR = 0;
-        int32_t ch1L = 0, ch1R = 0, ch3L = 0, ch3R = 0;
-        int32_t special0 = 0, special2 = 0;
-        int32_t outputL, outputR;
-
-        for (k = 0; k < count; ++k) {
-            Channel *c = &channels[k];
-            int32_t value;
-
-            if (!c->v->running) {
-                /* It ended earlier in this mix: silent from then on. */
-                continue;
-            }
-            if (c->channel == 1) {
-                (void)voice_mix(c, &ch1L, &ch1R);
-                if (!bypass1) {
-                    mixL += ch1L;
-                    mixR += ch1R;
-                }
-                continue;
-            }
-            if (c->channel == 3) {
-                (void)voice_mix(c, &ch3L, &ch3R);
-                if (!bypass3) {
-                    mixL += ch3L;
-                    mixR += ch3R;
-                }
-                continue;
-            }
-            value = voice_mix(c, &mixL, &mixR);
-            if (c->channel == 0) special0 = value;
-            if (c->channel == 2) special2 = value;
-        }
-        if (capturing) {
-            do_capture(chip, 0, (reg8(0x508u) & 2u) ? special0 : mixL);
-            do_capture(chip, 1, (reg8(0x509u) & 2u) ? special2 : mixR);
-        }
-        if (control & 128u) {
-            int32_t left = leftFrom == 0 ? mixL : leftFrom == 1 ? ch1L
-                         : leftFrom == 2 ? ch3L : ch1L + ch3L;
-            int32_t right = rightFrom == 0 ? mixR : rightFrom == 1 ? ch1R
-                          : rightFrom == 2 ? ch3R : ch1R + ch3R;
-
-            outputL = (left * masterVolume) / 127;
-            outputR = (right * masterVolume) / 127;
-        } else {
-            outputL = outputR = 0;
-        }
-        stereo[2u * i] = saturate(outputL);
-        stereo[2u * i + 1u] = saturate(outputR);
     }
     /* Channels that ended: as reading their (now off) registers left them. */
     for (k = 0; k < count; ++k) {

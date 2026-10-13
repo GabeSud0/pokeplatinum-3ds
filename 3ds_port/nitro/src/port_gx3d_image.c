@@ -48,12 +48,27 @@ static void finish(int index) {
     }
     unlock();
 }
+/* min(255, v * 255 / a) for every alpha a and colour value v: the 3DS's
+ * CPU has no divide instruction, and a screen of translucent sparkles
+ * took tens of milliseconds to convert with three divisions a pixel. */
+static uint8_t sUnpremultiply[256][256];
+static int sUnpremultiplyReady;
+static void make_unpremultiply(void)
+{
+    unsigned a,v;
+    for(a=1;a<256;a++)for(v=0;v<256;v++){
+        unsigned x=v*255u/a;
+        sUnpremultiply[a][v]=(uint8_t)(x>255u?255u:x);
+    }
+    sUnpremultiplyReady=1;
+}
 int NitroPort_Gx3dPublishRGBA8(const uint32_t *src,size_t pixels)
 {
     int index;
     size_t i;
     unsigned partly=0;
     if(!src || pixels<PIXELS)return 0;
+    if(!sUnpremultiplyReady)make_unpremultiply();
     index=reserve();
     if(index<0)return 0;
     for(i=0;i<PIXELS;i++){
@@ -68,10 +83,8 @@ int NitroPort_Gx3dPublishRGBA8(const uint32_t *src,size_t pixels)
              * polygons into a cleared alpha-0 background as premultiplied
              * colour (port_gx3d_pica.c); undo it. On the DS such a pixel
              * just takes the polygon's colour. */
-            unsigned r=(c>>24)*255u/a,g=((c>>16)&255u)*255u/a,b=((c>>8)&255u)*255u/a;
-            if(r>255u)r=255u;
-            if(g>255u)g=255u;
-            if(b>255u)b=255u;
+            const uint8_t *undo=sUnpremultiply[a];
+            unsigned r=undo[c>>24],g=undo[(c>>16)&255u],b=undo[(c>>8)&255u];
             rgb=(r>>3)|((g>>3)<<5)|((b>>3)<<10);
             partly|=(a>>3)<31u;
         }
