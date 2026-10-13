@@ -204,6 +204,50 @@ static void test_image_handoff(void)
     NitroPort_Gx3dReleaseImage(blue);
 }
 
+/* The conversion of the GPU's RGBA8 image, two pixels at a time, against
+ * the rule it follows pixel by pixel: colour's top 5 bits; coverage bit
+ * when alpha isn't 0; alpha's top 5 bits; partly transparent pixels
+ * (alpha 1-254) un-premultiplied, min(255, v * 255 / a). Pairs of every
+ * kind: nothing, opaque, mixed, partly transparent, alpha 0 with colour. */
+static uint32_t next_random(void);
+static void test_image_conversion(void)
+{
+    static uint32_t img[NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT];
+    const uint16_t *got;
+    const uint8_t *gotAlpha;
+    size_t i;
+    unsigned bad=0,badAlpha=0,round;
+    for(round=0;round<3;round++){
+        int partly=0;
+        for(i=0;i<NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT;i++){
+            uint32_t r=next_random(), kind=(r>>4)%8;
+            uint32_t rgb=next_random()<<8;
+            if(round==2 && kind>=5)kind=1;        /* a round with none partly transparent */
+            img[i]=kind<=1?0:kind<=4?(rgb|255u):kind==5?rgb:(rgb|(1u+next_random()%254u));
+        }
+        CHECK(NitroPort_Gx3dPublishRGBA8(img,NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT)==1);
+        got=NitroPort_Gx3dAcquireImage();
+        gotAlpha=got?NitroPort_Gx3dImageAlpha(got):NULL;
+        CHECK(got!=NULL && gotAlpha!=NULL);
+        if(!got || !gotAlpha)return;
+        for(i=0;i<NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT;i++){
+            uint32_t c=img[i];
+            unsigned a=c&255u,r=c>>24,g=(c>>16)&255u,b=(c>>8)&255u,want;
+            if(a>0 && a<255){
+                r=r*255u/a;g=g*255u/a;b=b*255u/a;
+                r=r>255?255:r;g=g>255?255:g;b=b>255?255:b;
+                partly|=(a>>3)<31u;
+            }
+            want=(r>>3)|((g>>3)<<5)|((b>>3)<<10)|(a?0x8000u:0u);
+            if(got[i]!=want)bad++;
+            if(gotAlpha[i]!=(a>>3))badAlpha++;
+        }
+        CHECK(NitroPort_Gx3dImageTranslucent(got)==(partly!=0));
+        NitroPort_Gx3dReleaseImage(got);
+    }
+    CHECK(bad==0);
+    CHECK(badAlpha==0);
+}
 
 /* Emulate a lower-priority gate owner that cannot release the gate until
  * another runnable thread gets CPU time. On 3DS the same-core sleep in
@@ -594,6 +638,7 @@ int main(void) {
     test_depth_direction();
     test_full_vertex_capacity();
     test_image_handoff();
+    test_image_conversion();
     test_png_dump();
     test_concurrent_image_handoff();
     test_texture_decode();
