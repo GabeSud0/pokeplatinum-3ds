@@ -62,6 +62,10 @@ __attribute__((weak)) void NitroPort_OnFrame(void)
 {
 }
 
+__attribute__((weak)) void NitroPort_VBlankWorkDone(void)
+{
+}
+
 /* V-blank starts: its interrupt is requested and V-blank DMAs run (masked
  * meanwhile, so the interrupts are then taken lowest first). */
 static void StartVBlank(void)

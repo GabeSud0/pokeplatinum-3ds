@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 12:38:06 -0700
+Subject: [PATCH] Tell the port when the V-blank work is done (SDK_PORT_3DS)
+
+After V-blank the game updates the display for the next picture: screen
+fades, the V-blank callback (OAM, palettes, VRAM transfers, BG updates)
+and the post-V-blank tasks. On the DS all of that happens before the
+screen starts drawing the picture. The port draws the screens on other
+threads, so it needs to know when the game is done: NitroPort_VBlankWorkDone
+after the main loop's V-blank work, and after WaitFrame's.
+---
+ src/main.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/src/main.c b/src/main.c
+--- a/src/main.c
++++ b/src/main.c
+@@ -35,6 +35,16 @@
+ 
+ #define RESET_COMBO (PAD_BUTTON_START | PAD_BUTTON_SELECT | PAD_BUTTON_L | PAD_BUTTON_R)
+ 
++#ifdef SDK_PORT_3DS
++// The port draws the screens on other threads (other CPU cores on a 3DS),
++// from the registers, palettes, OAM and VRAM as they are. After V-blank the
++// game changes them all for the next picture (the V-blank callback, screen
++// fades, the post-V-blank tasks); on the DS that happens before the screen
++// starts drawing it. This tells the port when it's done, so a screen isn't
++// drawn halfway through (3ds_port/nitro/include/nitro_port.h).
++extern void NitroPort_VBlankWorkDone(void);
++#endif
++
+ FS_EXTERN_OVERLAY(game_start);
+ FS_EXTERN_OVERLAY(game_opening);
+ 
+@@ -158,6 +168,9 @@ void NitroMain(void)
+ 
+         SoundSystem_Tick();
+         SysTaskManager_ExecuteTasks(gSystem.postVBlankTaskMgr);
++#ifdef SDK_PORT_3DS
++        NitroPort_VBlankWorkDone();
++#endif
+     }
+ }
+ 
+@@ -216,6 +229,9 @@ static void WaitFrame(void)
+     if (gSystem.vblankCallback != NULL) {
+         gSystem.vblankCallback(gSystem.vblankCallbackData);
+     }
++#ifdef SDK_PORT_3DS
++    NitroPort_VBlankWorkDone();
++#endif
+ }
+ 
+ static void TrySystemReset(enum OSResetParameter resetParam)
+-- 
+2.43.0
+

@@ -649,9 +649,18 @@ static void ClearScreens(void)
 /*
  * Each drawing thread draws one or both screens when the game hands it a
  * frame, then shows them (each screen is double buffered: the one drawn is
- * shown from the next V-blank). It reads the game's display state while the
- * game changes it, as the DS's display does; the game does most of that in
- * V-blank, as it must on the DS.
+ * shown from the next V-blank). It reads the game's display state (the
+ * registers, palettes, OAM and VRAM) as it is, as the DS's display does.
+ *
+ * Right after V-blank the game changes that state for its next picture
+ * (screen fades, OAM, palettes, VRAM transfers). On the DS that happens
+ * before the screen starts drawing. Here a screen must not be drawn in the
+ * middle of it: at the start of each move a battle puts a copy of the
+ * Pokemon on screen as a sprite, and gives it the Pokemon's colours in the
+ * same V-blank; drawn in between, the Pokemon showed up grey for a frame.
+ * So the game hands the drawers a frame once that work is done
+ * (NitroPort_VBlankWorkDone), and before the next V-blank's work it waits
+ * for a drawer on another core that's still reading (NitroPort_OnFrame).
  */
 typedef struct Drawer {
     Thread thread;
@@ -659,8 +668,10 @@ typedef struct Drawer {
     int screens;             /* bit 0: engine A's screen (3D), bit 1: engine B's */
     int core;
     volatile bool busy;      /* drawing a frame */
+    volatile bool reading;   /* reading the game's display state for it */
     volatile bool aOnTop;    /* engine A on the upper screen, for this frame */
     volatile bool quit;
+    u32 images;              /* 3D images out when it was handed its last frame */
     volatile u64 ticks;      /* time spent drawing, for [perf] */
     volatile unsigned count; /* frames handled */
     volatile unsigned drawn; /* screens drawn (not unchanged) */
@@ -678,29 +689,43 @@ static volatile bool sAOnTop;    /* engine A on the upper screen, this frame */
  * game's picture didn't change. 0: upper, 1: lower. */
 static volatile bool sMustDraw[2];
 
-static bool DrawScreen(int engine, bool aOnTop)
-{
-    static u16 pixels[2][256 * 192];
-    /* Engine A shows on the upper screen when POWCNT1 says so. */
-    bool top = (engine == 0) == aOnTop;
-    gfxScreen_t screen = top ? GFX_TOP : GFX_BOTTOM;
-    u16 *ds = pixels[top ? 0 : 1];
-    u16 width, height;
-    u8 *fb;
+/* Each screen's picture, in the DS's colours. */
+static u16 sPixels[2][256 * 192];   /* 0: upper, 1: lower */
 
-    /* A screen whose picture didn't change keeps showing it: not drawn,
-     * not swapped (the framebuffer drawn last is the one on show). */
+/* Engine A shows on the upper screen when POWCNT1 says so. */
+static bool OnTop(int engine, bool aOnTop)
+{
+    return (engine == 0) == aOnTop;
+}
+
+/* What an engine shows, from the game's display state, into its screen's
+ * picture. False if it didn't change: that screen keeps showing what it
+ * does (not drawn, not swapped). */
+static bool RenderScreen(int engine, bool aOnTop)
+{
+    bool top = OnTop(engine, aOnTop);
+    u16 *ds = sPixels[top ? 0 : 1];
+
     if (sMustDraw[top ? 0 : 1]) {
         sMustDraw[top ? 0 : 1] = false;
         NitroPort_Render2D(engine, ds);
-    } else if (!NitroPort_Render2DIfChanged(engine, ds)) {
-        return false;
+        return true;
     }
-    Blit(screen, ds, top ? (400 - 256) / 2 : (320 - 256) / 2);
+    return NitroPort_Render2DIfChanged(engine, ds) != 0;
+}
+
+/* The picture onto its screen, shown from the next V-blank. */
+static void ShowScreen(int engine, bool aOnTop)
+{
+    bool top = OnTop(engine, aOnTop);
+    gfxScreen_t screen = top ? GFX_TOP : GFX_BOTTOM;
+    u16 width, height;
+    u8 *fb;
+
+    Blit(screen, sPixels[top ? 0 : 1], top ? (400 - 256) / 2 : (320 - 256) / 2);
     fb = gfxGetFramebuffer(screen, GFX_LEFT, &width, &height);
     GSPGPU_FlushDataCache(fb, (u32)width * height * 2);
     gfxScreenSwapBuffers(screen, false);
-    return true;
 }
 
 static void DrawerMain(void *arg)
@@ -710,18 +735,29 @@ static void DrawerMain(void *arg)
     CatchCrashes();
     for (;;) {
         u64 start;
+        bool drawA = false, drawB = false;
 
         LightEvent_Wait(&d->go);
         if (d->quit) {
             break;
         }
         start = svcGetSystemTick();
+        /* First everything that reads the game's display state, then the
+         * rest: the game waits for the reading only (NitroPort_OnFrame). */
         if (d->screens & ENGINE_A) {
-            d->drawn += DrawScreen(0, d->aOnTop);
+            drawA = RenderScreen(0, d->aOnTop);
         }
         if (d->screens & ENGINE_B) {
-            d->drawn += DrawScreen(1, d->aOnTop);
+            drawB = RenderScreen(1, d->aOnTop);
         }
+        __atomic_store_n(&d->reading, false, __ATOMIC_RELEASE);
+        if (drawA) {
+            ShowScreen(0, d->aOnTop);
+        }
+        if (drawB) {
+            ShowScreen(1, d->aOnTop);
+        }
+        d->drawn += (unsigned)drawA + (unsigned)drawB;
         d->ticks += svcGetSystemTick() - start;
         d->count++;
         __atomic_store_n(&d->busy, false, __ATOMIC_RELEASE);
@@ -808,14 +844,21 @@ static void WaitForDrawing(void)
 }
 
 /* Hand this frame to every drawing thread that's free; the others leave
- * it out. */
-static void DrawFrame(void)
+ * it out. new3dOnly: only to the one with engine A's screen, and only if
+ * a 3D image came out since it was last handed one. */
+static void DrawFrame(bool new3dOnly)
 {
+    u32 images = NitroPort_Gx3dImageCount();
     int i;
     bool any = false;
 
     for (i = 0; i < sDrawerCount; i++) {
-        any |= !__atomic_load_n(&sDrawers[i].busy, __ATOMIC_ACQUIRE);
+        Drawer *d = &sDrawers[i];
+
+        if (new3dOnly && (!(d->screens & ENGINE_A) || d->images == images)) {
+            continue;
+        }
+        any |= !__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE);
     }
     if (!any) {
         return;
@@ -824,11 +867,59 @@ static void DrawFrame(void)
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
 
+        if (new3dOnly && (!(d->screens & ENGINE_A) || d->images == images)) {
+            continue;
+        }
         if (!__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE)) {
             d->aOnTop = sAOnTop;
+            d->images = images;
+            __atomic_store_n(&d->reading, true, __ATOMIC_RELEASE);
             __atomic_store_n(&d->busy, true, __ATOMIC_RELEASE);
             LightEvent_Signal(&d->go);
         }
+    }
+}
+
+/* A drawing thread on a core of its own still reading the game's display
+ * state. (One on core 0, the game's, only runs while the game waits: the
+ * game waiting for it as well would make it as slow as both together.) */
+static bool DrawersReading(void)
+{
+    int i;
+
+    for (i = 0; i < sDrawerCount; i++) {
+        if (sDrawers[i].core != 0 && __atomic_load_n(&sDrawers[i].reading, __ATOMIC_ACQUIRE)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Until no drawing thread is reading the game's display state any more,
+ * for at most max ticks (a drawer far behind doesn't hold the game up
+ * for longer than that). */
+static void WaitForReading(u64 max)
+{
+    u64 start = svcGetSystemTick();
+
+    while (DrawersReading() && svcGetSystemTick() - start < max) {
+        svcSleepThread(100000LL);
+    }
+}
+
+/* Halts (NitroPort_OnFrame) since the game last said its V-blank work was
+ * done: 0 or 1 in its main loop (one halt a frame, or two at 30 frames a
+ * second), more where it waits for V-blank in a loop of its own. */
+static unsigned sHaltsSinceVBlankWork = 2;
+
+/* The game is done with what it changes after V-blank (patches/
+ * pokeplatinum/0011): the display is as the DS shows it this frame, and
+ * the game won't change much of it until the next V-blank. Draw it. */
+void NitroPort_VBlankWorkDone(void)
+{
+    sHaltsSinceVBlankWork = 0;
+    if (!sShowLog && !sScreensDirty) {
+        DrawFrame(false);
     }
 }
 
@@ -843,6 +934,7 @@ static u64 sFrameExit;       /* when the last NitroPort_OnFrame returned */
 /* For the [perf] line. */
 static u64 sPerfStart;            /* the first frame counted */
 static u64 sPerfGameTicks;        /* in the game's own code */
+static u64 sPerfReadWaitTicks;    /* waiting for drawers to finish reading */
 static unsigned sPerfFrames;
 static u64 sPerfSoundTicks, sPerfSoundSamples;
 static u64 sPerfGpuTicks;
@@ -859,6 +951,7 @@ static void PerfFrame(u64 enter)
 
     if (sPerfStart == 0) {
         sPerfStart = now;
+        sPerfReadWaitTicks = 0;
         sPerfSoundTicks = sSoundMixTicks;
         sPerfSoundSamples = sSoundMixSamples;
         sPerfGpuTicks = sGpuTicks;
@@ -935,8 +1028,9 @@ static void PerfFrame(u64 enter)
         lastWait = wait;
         lastPublish = publish;
     }
-    NitroPort_Log("[perf] game %.1f frames/s, %.1f ms/frame; drawn: %s; 3D %.1f ms/scene, %u triangles/scene, %u dropped/scene (core %d); sound %.0f%% of core 0, %u underruns",
-                  sPerfFrames / seconds, (double)sPerfGameTicks * perFrame, drawing,
+    NitroPort_Log("[perf] game %.1f frames/s, %.1f ms/frame (%.1f waiting for drawing); drawn: %s; 3D %.1f ms/scene, %u triangles/scene, %u dropped/scene (core %d); sound %.0f%% of core 0, %u underruns",
+                  sPerfFrames / seconds, (double)sPerfGameTicks * perFrame,
+                  (double)sPerfReadWaitTicks * perFrame, drawing,
                   gpuScenes>sPerfGpuScenes
                     ? (double)(gpuTicks-sPerfGpuTicks)*1000.0/SYSCLOCK_ARM11/
                       (gpuScenes-sPerfGpuScenes):0.0,
@@ -950,6 +1044,7 @@ static void PerfFrame(u64 enter)
                   sSoundUnderruns);
     sPerfStart = now;
     sPerfGameTicks = 0;
+    sPerfReadWaitTicks = 0;
     sPerfFrames = 0;
     sPerfSoundTicks = sSoundMixTicks;
     sPerfSoundSamples = sSoundMixSamples;
@@ -1021,22 +1116,37 @@ void NitroPort_OnFrame(void)
         }
     }
 
-    if (sShowLog) {
-        if (!DrawersBusy()) {
-            gfxFlushBuffers();
-            gfxSwapBuffers();
-        }
-    } else {
-        DrawFrame();
-    }
-
-    /* Wait for the V-blank only when ahead: a frame that took too long
-     * isn't made to wait for another one as well. When far behind, stop
-     * trying to catch up. */
     {
         u64 now = svcGetSystemTick();
+        bool ahead = sDeadline == 0 || now < sDeadline;
+        /* Half a frame or more to go until the V-blank. */
+        bool early = sDeadline == 0 || (ahead && sDeadline - now >= FRAME_TICKS / 2);
 
-        if (sDeadline == 0 || now < sDeadline) {
+        if (sShowLog) {
+            if (!DrawersBusy()) {
+                gfxFlushBuffers();
+                gfxSwapBuffers();
+            }
+        } else if (sHaltsSinceVBlankWork >= 2) {
+            /* The game doesn't say when its V-blank work is done (a loop
+             * of its own): drawn here, before the V-blank. */
+            DrawFrame(false);
+        } else if (early) {
+            /* Drawn after the V-blank work (NitroPort_VBlankWorkDone); and
+             * a 3D image that came out since is shown a frame sooner when
+             * there's time for it before the V-blank. With little time
+             * left (or none, behind) the drawer would make the game wait
+             * for it below, and the next V-blank work draws soon anyway. */
+            DrawFrame(true);
+        }
+        if (sHaltsSinceVBlankWork < 2) {
+            sHaltsSinceVBlankWork++;
+        }
+
+        /* Wait for the V-blank only when ahead: a frame that took too long
+         * isn't made to wait for another one as well. When far behind, stop
+         * trying to catch up. */
+        if (ahead) {
             gspWaitForVBlank();
             sDeadline = svcGetSystemTick() + FRAME_TICKS;
         } else if (now - sDeadline > 3 * FRAME_TICKS) {
@@ -1044,6 +1154,16 @@ void NitroPort_OnFrame(void)
         } else {
             sDeadline += FRAME_TICKS;
         }
+    }
+
+    /* The game changes the display as soon as this returns (its V-blank
+     * work): a drawer still reading it would show some of that. Let it
+     * finish (usually it has). */
+    {
+        u64 start = svcGetSystemTick();
+
+        WaitForReading(FRAME_TICKS);
+        sPerfReadWaitTicks += svcGetSystemTick() - start;
     }
     PerfFrame(enter);
     sFrameExit = svcGetSystemTick();
