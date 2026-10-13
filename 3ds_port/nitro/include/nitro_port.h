@@ -56,6 +56,14 @@ void NitroPort_Halt(void);
  * Weak, empty by default. Called from the default NitroPort_Halt. */
 void NitroPort_OnFrame(void);
 
+/* The game has done what it does after V-blank for the next picture
+ * (screen fades, its V-blank callback's OAM, palette and VRAM updates, its
+ * post-V-blank tasks): the display is now as the DS shows it this frame.
+ * The game calls it (patches/pokeplatinum/0011); a port that draws the
+ * screens on other threads starts drawing here, not halfway through those
+ * changes. Weak, empty by default. */
+void NitroPort_VBlankWorkDone(void);
+
 /* DS bus cycles in one frame: 263 lines of 2130 cycles (59.83 frames/s). */
 #define NITRO_PORT_CYCLES_PER_FRAME (263ULL * 2130ULL)
 

@@ -106,9 +106,13 @@ V-blank interrupt in `system.c`, lets a frame that ran long skip the extra wait.
 
 **On 3DS:** keep the loop as it is. `OS_WaitIrq` for V-blank becomes "finish the
 frame and wait for the 3DS's V-blank" (`gspWaitForVBlank`), the V-blank
-interrupt's counter is updated from there, and the V-blank
-callback is where we take a snapshot of the virtual DS display state for the
-renderer. `aptMainLoop()` gets checked here so the HOME button works.
+interrupt's counter is updated from there, and `aptMainLoop()` gets checked
+there so the HOME button works. After the V-blank work (screen fades, the
+V-blank callback, the post-V-blank tasks) the loop calls
+`NitroPort_VBlankWorkDone` (`patches/pokeplatinum/0011`): the display state is
+then what the DS shows that frame, and the screens are drawn from it on other
+cores. Before the next V-blank's work the game waits for any of them still
+reading it, so a screen never shows that work half done.
 
 ### 2. Memory, heaps and overlays
 
