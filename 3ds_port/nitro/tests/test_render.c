@@ -10,6 +10,7 @@
 
 #include <nitro.h>
 #include <nitro_port.h>
+#include <nitro_port_gx3d.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -139,6 +140,35 @@ static void test_unchanged_screen(void)
     CHECK(NitroPort_Render2DIfChanged(1, sBottom) == 1); /* engine B: its own */
     CHECK(NitroPort_Render2DIfChanged(1, sBottom) == 0);
     CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+}
+
+/* While the 3D keeps changing, the 3D screen is drawn for each new 3D
+ * image only; a few calls after the last one, changes are looked for as
+ * before (and the screen drawn once, to be sure it's up to date). */
+static void test_screen_follows_3d(void)
+{
+    static uint32_t rgba[256 * 192];
+    static u16 backdrop = GREY, other = WHITE;
+    int i;
+
+    Reset();
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0);
+    GX_LoadBGPltt(&backdrop, 0, 2);
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);    /* a new 3D image */
+    GX_LoadBGPltt(&other, 0, 2);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);    /* 2D only: waits */
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);    /* with the next 3D */
+    CHECK_PX(sTop, 0, 0, WHITE);
+    for (i = 0; i < 4; i++) {
+        CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    }
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);    /* the 3D stopped */
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    GX_LoadBGPltt(&backdrop, 0, 2);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);    /* changes seen again */
 }
 
 static void test_text_bg(void)
@@ -753,6 +783,7 @@ int main(int argc, char **argv)
 
     test_backdrop_and_power();
     test_unchanged_screen();
+    test_screen_follows_3d();
     test_text_bg();
     test_8bpp_ext_palette();
     test_objs();

@@ -99,6 +99,9 @@ void NitroPort_ResetSoundState(void)
     sClock = sTickPhase = 0;
     memset(sAlarms, 0, sizeof(sAlarms));
     NitroSound_Reset(&sChip, NITRO_SOUND_RATE);
+    /* Smooth sampled sounds, as the DS's own output (and emulators) give
+     * them: held samples sound harsh, with a hiss above the music. */
+    sChip.interpolate = 1;
     /* Executes Nintendo's ARM7 init, but not its OS/CreateThread path. */
     N7_SND_Init(0);
     __atomic_store_n(&sReady, 1, __ATOMIC_RELEASE);

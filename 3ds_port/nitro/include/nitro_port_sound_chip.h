@@ -53,6 +53,11 @@ typedef struct NitroSoundChip {
     NitroSoundVoice voice[NITRO_SOUND_CHANNEL_COUNT];
     NitroSoundCapture capture[2];
     uint32_t outputRate;
+    /* Sampled sounds (PCM8, PCM16, ADPCM) go from one sample to the next
+     * in a straight line, a sample later, instead of holding each sample
+     * (the DS's own way, NitroSound_Reset's default): no harsh images of
+     * the sound above it, as on the DS's own output and in emulators. */
+    uint8_t interpolate;
 } NitroSoundChip;
 
 void NitroSound_Reset(NitroSoundChip *chip, uint32_t outputRate);

@@ -176,7 +176,15 @@ typedef struct Channel {
     unsigned shift;
     uint32_t endByte;      /* the channel reads [sourceAddr, sourceAddr + endByte) */
     int dependent;         /* reads memory a capture writes: mixed frame by frame */
+    int interpolate;       /* NitroSoundChip.interpolate, for a sampled sound */
 } Channel;
+
+/* Between the sample before (a) and the sample now (b), as far along as
+ * the playback cursor is (phase's fraction). */
+static inline int32_t lerp(int32_t a, int32_t b, uint64_t phase)
+{
+    return a + (int32_t)(((int64_t)(b - a) * (int64_t)(uint32_t)phase) >> 32);
+}
 
 static int32_t wave_sample(const Channel *c)
 {
@@ -239,6 +247,7 @@ static void advance_voice(const Channel *c)
         return;
     }
 
+    if (c->interpolate) v->lastSample = wave_sample(c);
     v->sampleIndex++;
     if (v->sampleIndex >= c->nSamples) {
         if (c->repeat != 1u || c->loopAt >= c->nSamples) {
@@ -299,6 +308,7 @@ static int start_channel(NitroSoundChip *chip, unsigned channel, Channel *c)
     c->pan = (int32_t)((ctrl >> 16) & 127u);
     shift = (ctrl >> 8) & 3u;
     c->shift = shift == 3u ? 4u : shift;
+    c->interpolate = chip->interpolate && c->format != 3u;
 
     /* The step only changes with the timer: no 64-bit division (slow on
      * the 3DS's CPU, which has no divide instruction) for every sample. */
@@ -316,8 +326,12 @@ static int start_channel(NitroSoundChip *chip, unsigned channel, Channel *c)
 static int32_t voice_mix(Channel *c, int32_t *left, int32_t *right)
 {
     NitroSoundVoice *v = c->v;
-    int32_t scaled = (wave_sample(c) * c->volume) / 127;
+    int32_t sample = wave_sample(c);
+    int32_t scaled;
     unsigned guard = 0;
+
+    if (c->interpolate) sample = lerp(v->lastSample, sample, v->phase);
+    scaled = (sample * c->volume) / 127;
 
     scaled >>= c->shift;
     *left += (scaled * (127 - c->pan)) / 127;
@@ -351,11 +365,13 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_
         /* ADPCM: the decoder's state kept in registers between samples. */
         const uint8_t *source = c->source;
         const uint32_t nSamples = c->nSamples, loopAt = c->loopAt;
+        const int interpolate = c->interpolate;
         uint32_t index = v->sampleIndex;
         int32_t predictor = v->predictor, stepIndex = v->stepIndex;
+        int32_t last = v->lastSample;
 
         for (i = 0; i < frames; ++i) {
-            int32_t scaled = (predictor * volume) / 127;
+            int32_t scaled = ((interpolate ? lerp(last, predictor, phase) : predictor) * volume) / 127;
             uint32_t advances;
 
             scaled >>= shift;
@@ -377,11 +393,13 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_
                     v->predictor = predictor;
                     v->stepIndex = stepIndex;
                     v->phase = phase;
+                    v->lastSample = last;
                     advance_voice(c);
                     if (!v->running) return;
                     index = v->sampleIndex;
                     predictor = v->predictor;
                     stepIndex = v->stepIndex;
+                    last = v->lastSample;
                     continue;
                 } else {
                     uint32_t nibble = index - 1u;
@@ -389,6 +407,8 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_
                     unsigned code = (nibble & 1u) ? byte >> 4 : byte & 15u;
                     int32_t st = sStep[stepIndex];
                     int32_t change = st >> 3;
+
+                    last = predictor;
 
                     if (code & 1u) change += st >> 2;
                     if (code & 2u) change += st >> 1;
@@ -412,6 +432,7 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_
         v->predictor = predictor;
         v->stepIndex = stepIndex;
         v->phase = phase;
+        v->lastSample = last;
         return;
     }
     if (c->format <= 1u && c->source && c->nSamples) {
@@ -419,13 +440,18 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_
         const uint8_t *source = c->source;
         const uint32_t nSamples = c->nSamples;
         const int pcm16bit = c->format == 1u;
+        const int interpolate = c->interpolate;
         uint32_t index = v->sampleIndex;
+        int32_t last = v->lastSample;
 
         for (i = 0; i < frames; ++i) {
             int32_t sample = pcm16bit ? pcm16(source, index * 2u)
                                       : (int32_t)pcm8(source, index) * 256;
-            int32_t scaled = (sample * volume) / 127;
+            int32_t scaled;
             uint32_t advances;
+
+            if (interpolate) sample = lerp(last, sample, phase);
+            scaled = (sample * volume) / 127;
 
             scaled >>= shift;
             if (values) values[i] = scaled;
@@ -437,6 +463,9 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_
             while (advances--) {
                 phase -= PHASE_ONE;
                 if (index + 1u < nSamples) {
+                    if (interpolate)
+                        last = pcm16bit ? pcm16(source, index * 2u)
+                                        : (int32_t)pcm8(source, index) * 256;
                     index++;
                     continue;
                 }
@@ -445,10 +474,12 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_
                 advance_voice(c);
                 if (!v->running) return;
                 index = v->sampleIndex;
+                last = v->lastSample;
             }
         }
         v->sampleIndex = index;
         v->phase = phase;
+        v->lastSample = last;
         return;
     }
     /* Anything else (PSG, noise, no data): frame by frame. */

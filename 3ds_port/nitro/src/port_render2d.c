@@ -1323,11 +1323,14 @@ static u32 EngineSignature(int engine)
 /* NitroPort_Render2D, unless nothing it draws from changed since the last
  * time for this engine (then out is left as it is, and 0 returned). Working
  * that out reads the engine's VRAM once: far less than drawing it. A 3D
- * layer counts as changed whenever a new 3D image is out; while the 3D
- * keeps changing, nothing is hashed. */
+ * layer counts as changed whenever a new 3D image is out. While the 3D
+ * keeps changing, the screen is drawn for each new 3D image only, nothing
+ * hashed: in step with the 3D (a moving camera moves evenly), and no
+ * drawing in between that would hold the next 3D image up. */
+#define QUIET_3D_CALLS 4   /* calls without a new 3D image: the 3D has stopped */
 int NitroPort_Render2DIfChanged(int engine, u16 *out)
 {
-    static struct { u32 signature; u32 images; int valid; } last[2];
+    static struct { u32 signature; u32 images; int valid; int following; } last[2];
     int e = engine ? 1 : 0;
     u32 images = NitroPort_Gx3dImageCount();
     u32 dispcnt = Rd32(NitroPort_IoReg, 0);
@@ -1335,11 +1338,16 @@ int NitroPort_Render2DIfChanged(int engine, u16 *out)
     u32 signature;
 
     if (uses3D && images != last[e].images) {
-        /* New 3D: draw, and check the rest again next time. */
+        /* New 3D: draw, and check the rest again once the 3D stops. */
         last[e].images = images;
         last[e].valid = 0;
+        last[e].following = QUIET_3D_CALLS;
         NitroPort_Render2D(engine, out);
         return 1;
+    }
+    if (uses3D && last[e].following > 0) {
+        last[e].following--;
+        return 0;
     }
     signature = EngineSignature(e);
     if (last[e].valid && signature == last[e].signature) {
