@@ -30,6 +30,8 @@ typedef struct GeoVertex {
     uint16_t color;
     uint8_t outside;   /* bit p: outside clip plane p (see plane_distance) */
     uint8_t hasScreen; /* screen is filled in (strips share vertices) */
+    uint8_t lit;       /* color is worked out; else it's normal's (light_vertex) */
+    uint32_t normal;   /* the NORMAL command's value, while not lit */
     NitroGx3dVertex screen;
 } GeoVertex;
 typedef struct GeoState {
@@ -52,6 +54,10 @@ typedef struct GeoState {
     int viewport[4], primitive, nverts;
     GeoVertex vertices[4];
     int inBegin, boxVisible, stripStarted;
+    /* The last NORMAL's colour isn't worked out yet (normalValue's): it is
+     * when a polygon with it is drawn, or before the lighting changes. */
+    int rgbPending;
+    uint32_t normalValue;
     int stripOld, stripNew;   /* a triangle strip's last two (vertices[]) */
     int ready;
 } GeoState;
@@ -276,19 +282,14 @@ static void update_light_cache(void)
  * after vertex. Forgotten when anything it depends on changes (matrices,
  * lights, materials, the polygon's lights at BEGIN_VTXS). */
 static struct { int valid; uint32_t value; uint16_t rgb; } sNormalCache;
-static void shade_normal(uint32_t value)
+static uint16_t shade(uint32_t value)
 {
     int32_t normal[3], transformed[3];
     unsigned r=s.emission&31u,g=(s.emission>>5)&31u,b=(s.emission>>10)&31u;
     int i,j;
-    for(j=0;j<3;j++){
-        s.normal[j]=signbits(value>>(j*10),10)*8;
-        normal[j]=s.normal[j];
-    }
-    if(sNormalCache.valid && sNormalCache.value==value){
-        s.rgb=sNormalCache.rgb;
-        return;
-    }
+    uint16_t rgb;
+    if(sNormalCache.valid && sNormalCache.value==value)return sNormalCache.rgb;
+    for(j=0;j<3;j++)normal[j]=signbits(value>>(j*10),10)*8;
     transform_vector(normal,&s.vec,transformed);
     if(sLightCache.dirty)update_light_cache();
     for(i=0;i<4;i++)if(s.attr&(1u<<i)){
@@ -318,10 +319,30 @@ static void shade_normal(uint32_t value)
         b+=sLightCache.ambient[i][2]+((sLightCache.diffuse[i][2]*diffuse+2048u)>>12)+
            ((sLightCache.specular[i][2]*specIntensity+2048u)>>12);
     }
-    s.rgb=(uint16_t)((r>31u?31u:r)|((g>31u?31u:g)<<5)|((b>31u?31u:b)<<10));
+    rgb=(uint16_t)((r>31u?31u:r)|((g>31u?31u:g)<<5)|((b>31u?31u:b)<<10));
     sNormalCache.valid=1;
     sNormalCache.value=value;
-    sNormalCache.rgb=s.rgb;
+    sNormalCache.rgb=rgb;
+    return rgb;
+}
+/* A vertex's colour from its normal, worked out when its polygon is drawn:
+ * most of a big map's polygons are off the screen, and their vertices
+ * never need one. The lighting is as it was at the vertex: anything that
+ * changes it first works out the colours still owed (settle_lighting). */
+static void light_vertex(GeoVertex *v)
+{
+    if(!v->lit){v->color=shade(v->normal);v->lit=1;}
+}
+static void settle_lighting(void)
+{
+    int i,n=s.nverts;
+    if(s.primitive==2 && n>=2){
+        light_vertex(&s.vertices[s.stripOld]);
+        light_vertex(&s.vertices[s.stripNew]);
+    }else{
+        for(i=0;i<n && i<4;i++)light_vertex(&s.vertices[i]);
+    }
+    if(s.rgbPending){s.rgb=shade(s.normalValue);s.rgbPending=0;}
 }
 
 /* Texture coordinates are stored in signed 1/16-texel units. All texture
@@ -536,6 +557,7 @@ static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
     /* All three outside one plane: nothing is left. None outside any: no
      * clipping needed. Most of a map is one or the other. */
     if(a->outside & b->outside & c->outside){sDiag.clipped++;return;}
+    light_vertex(a);light_vertex(b);light_vertex(c);
     if(!(a->outside | b->outside | c->outside)){
         add_screen_triangle(screen_of(a),screen_of(b),screen_of(c));
         return;
@@ -652,6 +674,7 @@ static void submit_vertex(void)
     if(vp->clip[3]<=0)sDiag.behind++;
     if(((s.texparam>>30)&3u)==3u)transform_texcoords(src,3,s.resolvedTexcoord);
     vp->s=s.resolvedTexcoord[0];vp->t=s.resolvedTexcoord[1];vp->color=s.rgb;
+    vp->lit=(uint8_t)!s.rgbPending;vp->normal=s.normalValue;
     if(s.primitive==0){
         n++;
         if(n==3){
@@ -852,6 +875,8 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
             else if(op==0x15u||op==0x16u||op==0x17u)sDiag.projLoads++;
             else if(op>=0x18u && op<=0x1au)sDiag.projMults++;
         }
+        /* The vector matrix (lighting's) changes: colours owed first. */
+        if((s.mode==1||s.mode==2) && op!=0x10u && op!=0x11u && op!=0x13u)settle_lighting();
         matrix_command(&s,op,p);
         sNormalCache.valid=0;
         if(s.stackError&&!before)sDiag.stackErrors++;
@@ -860,9 +885,10 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         return;
     }
     switch(op){
-    case 0x20:s.rgb=p[0]&0x7FFF;break;
+    case 0x20:s.rgb=p[0]&0x7FFF;s.rgbPending=0;break;
     case 0x21:
-        shade_normal(p[0]);
+        for(i=0;i<3;i++)s.normal[i]=signbits(p[0]>>(i*10),10)*8;
+        s.normalValue=p[0];s.rgbPending=1;
         if(((s.texparam>>30)&3u)==2u)transform_texcoords(s.normal,2,s.resolvedTexcoord);
         break;
     case 0x22:{
@@ -881,13 +907,16 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
     case 0x29:s.pendingAttr=p[0];break;
     case 0x2a:s.texparam=p[0];break;
     case 0x2b:s.plttbase=p[0];break;
-    case 0x30:s.diffuse=p[0]&0x7FFF;s.ambient=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;
+    case 0x30:settle_lighting();
+        s.diffuse=p[0]&0x7FFF;s.ambient=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;
         if(p[0]&(1u<<15))s.rgb=s.diffuse;break;
-    case 0x31:s.specular=p[0]&0x7FFF;s.emission=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;
+    case 0x31:settle_lighting();
+        s.specular=p[0]&0x7FFF;s.emission=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;
         s.useShininess=(p[0]&(1u<<15))!=0;break;
     case 0x32:{
         int id=(p[0]>>30)&3;
         int32_t incoming[4],transformed[4];
+        settle_lighting();
         for(i=0;i<3;i++)incoming[i]=signbits(p[0]>>(i*10),10)*8;
         incoming[3]=0;
         /* LIGHT_VECTOR samples the directional matrix at command time. */
@@ -899,9 +928,9 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         sNormalCache.valid=0;
         break;
     }
-    case 0x33:s.lightColor[(p[0]>>30)&3]=p[0]&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;break;
-    case 0x34:memcpy(s.shininess,p,sizeof(s.shininess));sNormalCache.valid=0;break;
-    case 0x40:s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;s.stripStarted=0;s.attr=s.pendingAttr;
+    case 0x33:settle_lighting();s.lightColor[(p[0]>>30)&3]=p[0]&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;break;
+    case 0x34:settle_lighting();memcpy(s.shininess,p,sizeof(s.shininess));sNormalCache.valid=0;break;
+    case 0x40:settle_lighting();s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;s.stripStarted=0;s.attr=s.pendingAttr;
         sNormalCache.valid=0;break;
     case 0x41:s.inBegin=0;s.nverts=0;break;
     case 0x50:{
