@@ -15,6 +15,7 @@
 
 #include <nitro.h>
 #include <nitro_port.h>
+#include <nitro_port_gx3d.h>
 #include <stdlib.h>
 
 /* ---------------------------------------------------------------- the CPU */
@@ -85,12 +86,25 @@ static void StartVBlank(void)
  * reads); see NitroPort_SpendDsTime. */
 static u64 sWorkCycles;
 
+/* NitroSystem's VRAM transfer manager, when the program has it
+ * (patches/NitroSystem/0004): the 3D transfers queued for the V-blank. */
+extern void NNSi_GfdDoVramTransfer3D(void) __attribute__((weak));
+
 __attribute__((weak)) void NitroPort_Halt(void)
 {
     /* The DS sleeps until an interrupt arrives. In a game the next one is
      * (almost always) V-blank, so: finish this frame, then raise it. If the
      * CPU has interrupts masked (OS_WaitInterrupt, OS_Terminate), it wakes
      * up but doesn't take them: they stay pending until it unmasks them. */
+
+    /* The DS draws the 3D scene the game has just ended after the V-blank
+     * work, which does the texture transfers the game queued for it; the
+     * port draws it now. So those are done now. Unless the 3D drawing is
+     * behind and a scene from before may still be drawn: that one would
+     * get them too, so the V-blank work does them then, as on the DS. */
+    if (NNSi_GfdDoVramTransfer3D != NULL && !NitroPort_Gx3dEarlierSceneUnread()) {
+        NNSi_GfdDoVramTransfer3D();
+    }
     NitroPort_OnFrame();
     sWorkCycles = 0;
     StartVBlank();

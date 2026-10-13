@@ -1,0 +1,80 @@
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Subject: [PATCH] VRAM transfer manager: queued 3D transfers done when the
+ frame ends (SDK_PORT_3DS)
+
+The 3DS port draws a 3D scene when the game ends its frame (OS_Halt),
+before the V-blank work that does the transfers queued in that frame;
+the DS's 3D engine draws it after. A texture a scene used for the first
+time (the player's sprite the first time Nurse Joy heals) was drawn with
+whatever was in its place before.
+
+NNSi_GfdDoVramTransfer3D does the queued texture, texture palette and
+clear image transfers early; the port calls it from OS_Halt. They're
+marked done (pSrc NULL) and NNS_GfdDoVramTransfer skips them, still
+taking them off the queue and their size off the total at the V-blank.
+
+---
+diff --git a/include/nnsys/gfd/VramTransferMan/gfd_VramTransferManager.h b/include/nnsys/gfd/VramTransferMan/gfd_VramTransferManager.h
+index fc958a2..b62ccb2 100644
+--- a/include/nnsys/gfd/VramTransferMan/gfd_VramTransferManager.h
++++ b/include/nnsys/gfd/VramTransferMan/gfd_VramTransferManager.h
+@@ -77,6 +77,10 @@ BOOL NNSi_GfdPopVramTransferTaskQueue(NNSGfdVramTransferTaskQueue * pQueue);
+ void NNS_GfdInitVramTransferManager(NNSGfdVramTransferTask * pTaskArray, u32 lengthOfArray);
+ void NNS_GfdClearVramTransferManagerTask(void);
+ void NNS_GfdDoVramTransfer(void);
++#if defined(SDK_PORT_3DS)
++/* The queued 3D transfers, done now (see gfd_VramTransferManager.c). */
++void NNSi_GfdDoVramTransfer3D(void);
++#endif
+ BOOL NNS_GfdRegisterNewVramTransferTask(NNS_GFD_DST_TYPE type, u32 dstAddr, void * pSrc, u32 szByte);
+ u32 NNS_GfdGetVramTransferTaskTotalSize(void);
+ 
+diff --git a/libraries/gfd/src/VramTransferMan/gfd_VramTransferManager.c b/libraries/gfd/src/VramTransferMan/gfd_VramTransferManager.c
+index 49a9fb7..d99cbc8 100644
+--- a/libraries/gfd/src/VramTransferMan/gfd_VramTransferManager.c
++++ b/libraries/gfd/src/VramTransferMan/gfd_VramTransferManager.c
+@@ -342,6 +342,10 @@ void NNS_GfdDoVramTransfer (void)
+ 
+     while ( NNSi_GfdPopVramTransferTaskQueue(&pMan->taskQueue))
+     {
++#if defined(SDK_PORT_3DS)
++        /* Done already (NNSi_GfdDoVramTransfer3D). */
++        if (pTask->pSrc != NULL)
++#endif
+         DoTransfer_(pTask);
+ 
+         pMan->taskQueue.totalSize -= pTask->szByte;
+@@ -349,6 +353,33 @@ void NNS_GfdDoVramTransfer (void)
+     }
+ }
+ 
++#if defined(SDK_PORT_3DS)
++/* The 3DS port draws a 3D scene when the game ends its frame (OS_Halt),
++ * before the V-blank work that does the transfers queued in that frame;
++ * the DS's 3D engine draws it after. The queued texture, texture palette
++ * and clear image transfers are done then instead, from OS_Halt, so a
++ * texture the scene uses for the first time is there when it's drawn.
++ * Each is marked done (pSrc NULL) and skipped by NNS_GfdDoVramTransfer,
++ * which still takes it off the queue and its size off the total, at the
++ * V-blank as on the DS. The 2D transfers wait for the V-blank. */
++void NNSi_GfdDoVramTransfer3D (void)
++{
++    NNSGfdVramTransferTaskQueue * pQueue = &s_VramTransferManager.taskQueue;
++    u16 idx = pQueue->idxFront;
++    u16 n;
++
++    for (n = 0; n < pQueue->numTasks; n++) {
++        NNSGfdVramTransferTask * pTask = &pQueue->pTaskArray[idx];
++
++        if (pTask->pSrc != NULL && pTask->type < NNS_GFD_DST_2D_BG0_CHAR_MAIN) {
++            DoTransfer_(pTask);
++            pTask->pSrc = NULL;
++        }
++        idx = GetNextIndex_(pQueue, idx);
++    }
++}
++
++#endif
+ BOOL NNS_GfdRegisterNewVramTransferTask (NNS_GFD_DST_TYPE type, u32 dstAddr, void * pSrc, u32 szByte)
+ {
+     NNSGfdVramTransferManager * pMan = &s_VramTransferManager;

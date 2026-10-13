@@ -21,7 +21,8 @@ static void unlock(NitroGx3dMailbox *b) {
 void NitroPort_MailboxInit(NitroGx3dMailbox *b) {
     if(!b)return;
     b->gate=0; b->building=0; b->latest=-1; b->reading=-1;
-    b->serial=0; b->skipped=0;
+    b->serial=0; b->skipped=0; b->taken=0;
+    b->tag[0]=b->tag[1]=b->tag[2]=0;
 }
 int NitroPort_MailboxPublish(NitroGx3dMailbox *b, int *next, uint32_t *serial) {
     int i,freeSlot=-1;
@@ -52,6 +53,7 @@ int NitroPort_MailboxAcquire(NitroGx3dMailbox *b,uint32_t *lastSerial) {
     if(b->reading<0 && b->latest>=0 && b->serial!=*lastSerial){
         b->reading=slot=b->latest;
         *lastSerial=b->serial;
+        b->taken=b->serial;
     }
     unlock(b);
     return slot;
@@ -69,4 +71,26 @@ int NitroPort_MailboxLatest(NitroGx3dMailbox *b) {
     slot=b->latest;
     unlock(b);
     return slot;
+}
+void NitroPort_MailboxTag(NitroGx3dMailbox *b, uint32_t tag) {
+    if(!b)return;
+    lock(b);
+    b->tag[b->building]=tag;
+    unlock(b);
+}
+uint32_t NitroPort_MailboxUnread(NitroGx3dMailbox *b) {
+    uint32_t tag=0;
+    if(!b)return 0;
+    lock(b);
+    if(b->reading>=0)tag=b->tag[b->reading];
+    if(b->latest>=0 && b->serial!=b->taken && (tag==0 || b->tag[b->latest]<tag))
+        tag=b->tag[b->latest];
+    unlock(b);
+    return tag;
+}
+void NitroPort_MailboxMarkTaken(NitroGx3dMailbox *b) {
+    if(!b)return;
+    lock(b);
+    b->taken=b->serial;
+    unlock(b);
 }

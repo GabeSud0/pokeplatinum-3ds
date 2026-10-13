@@ -172,6 +172,11 @@ synthetic data. The GPU allocates two linear buffers of **12,288 vertices**,
 enough for Stage 1's maximum 4,096 post-clipping triangles. Any scene
 overflow or capacity drop is counted in `[perf]`.
 
+`tests/test_vram_transfer.c` runs NitroSystem's VRAM transfer manager (the
+patched original) with the port's `OS_Halt`: the 3D transfers the game
+queued for the V-blank are done when the frame ends, before the scene is
+drawn, and the 2D ones at the V-blank (`patches/NitroSystem/0004`).
+
 **Comparing orientation on real hardware/Azahar:** press **L+R+Y** to write
 `sdmc:/3ds/pokeplatinum/3d_frame_<frame>.png`. On PC, run
 `pokeplatinum-pc ... --dump-3d FRAME` to write
