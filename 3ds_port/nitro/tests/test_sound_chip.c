@@ -62,6 +62,41 @@ static void test_pcm16(void)
     CHECK(!(NitroPort_SoundRegisters[0x403] & 0x80));
 }
 
+/* With interpolation, a sound at half the output rate comes out as a
+ * straight line from each sample to the next, a sample late: 0 (nothing
+ * before the first sample), then halfway, then the first sample, ... */
+static void test_interpolation(void)
+{
+    static int16_t source[8] = {8000, 16000, 24000, 32000, 24000, 16000, 8000, 0};
+    int16_t out[2 * 12];
+    NitroSoundChip chip;
+    int k;
+
+    NitroSound_Reset(&chip, NITRO_SOUND_RATE);
+    chip.interpolate = 1;
+    setup_pcm(1, source, 0, 4, 2, 0, 127, 0);
+    /* Timer for half the output rate: 2 output frames per sample. */
+    reg16(0x408, (uint16_t)(65536u - (unsigned)((16756991ull + NITRO_SOUND_RATE / 4) /
+                                                (NITRO_SOUND_RATE / 2))));
+    NitroSound_Mix(&chip, out, 12);
+    CHECK(frame(out, 0, 0) == 0);
+    for (k = 0; k < 5; k++) {
+        /* An even frame is a sample, the odd one after it halfway on. */
+        int even = frame(out, 2 * k, 0), odd = frame(out, 2 * k + 1, 0);
+        int next = frame(out, 2 * k + 2, 0);
+        CHECK(abs(odd - (even + next) / 2) <= 300);
+    }
+    CHECK(abs(frame(out, 2, 0) - 8000) <= 300);
+    CHECK(abs(frame(out, 4, 0) - 16000) <= 300);
+    /* Without it: each sample held. */
+    NitroSound_Reset(&chip, NITRO_SOUND_RATE);
+    setup_pcm(1, source, 0, 4, 2, 0, 127, 0);
+    reg16(0x408, (uint16_t)(65536u - (unsigned)((16756991ull + NITRO_SOUND_RATE / 4) /
+                                                (NITRO_SOUND_RATE / 2))));
+    NitroSound_Mix(&chip, out, 4);
+    CHECK(frame(out, 0, 0) == 8000 && frame(out, 1, 0) == 8000);
+}
+
 static void test_pcm8_loop(void)
 {
     static int8_t source[12] = {25, -25, 50, -50, 90, 90};
@@ -457,6 +492,7 @@ static void test_blocks_match_single_frames(void)
         unsigned i;
         for (i = 0; i < ARENA_SIZE + ARENA_PAD; i++) sArenaNew[i] = (uint8_t)rnd();
         NitroSound_Reset(&chipA, NITRO_SOUND_RATE);
+        chipA.interpolate = (uint8_t)(scenario & 1u);
         both8(0x500u, (uint8_t)(rnd() % 128u));
         both8(0x501u, (uint8_t)(0x80u | (rnd() % 64u)));
         for (ch = 0; ch < 16; ch++) {
@@ -530,12 +566,13 @@ static void bench(void)
     static int16_t out[2 * 512];
     int which;
 
-    for (which = 0; which < 2; which++) {
+    for (which = 0; which < 3; which++) {
         double start;
         unsigned ch, n;
 
         if (which == 0) RefSound_Reset(&chip, NITRO_SOUND_RATE);
         else NitroSound_Reset(&chip, NITRO_SOUND_RATE);
+        chip.interpolate = which == 2;   /* as port_snd.c has it */
         sSeed = 99;
         both8(0x500u, 127);
         both8(0x501u, 0x80u);
@@ -558,7 +595,8 @@ static void bench(void)
                 for (k = 0; k < 512; k += 128) NitroSound_Mix(&chip, out + 2 * k, 128);
             }
         }
-        printf("%s mixer: %.1f ms per second of sound\n", which == 0 ? "old" : "new",
+        printf("%s mixer: %.1f ms per second of sound\n",
+               which == 0 ? "old" : which == 1 ? "new" : "new, interpolating",
                (seconds_now() - start) * 1000.0);
     }
 }
@@ -570,6 +608,7 @@ int main(int argc, char **argv)
         return 0;
     }
     test_pcm16();
+    test_interpolation();
     test_pcm8_loop();
     test_shift_and_master();
     test_adpcm();

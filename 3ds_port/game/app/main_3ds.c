@@ -22,7 +22,10 @@
  * the other on core 0, otherwise both on core 0.
  * On core 0 they run below the game: the game always comes first and
  * keeps its speed, and a screen that isn't done when the next frame is
- * ready leaves that frame out. Sound has a thread of its own on core 0,
+ * ready leaves that frame out. The 3D's GPU thread (drawing each 3D frame
+ * with the 3DS's GPU) is on core 0 too, below the game, so engine A's
+ * drawer has core 2 to itself; while the 3D keeps changing, that screen is
+ * drawn once for each new 3D frame. Sound has a thread of its own on core 0,
  * above the game, as it must keep up with the speaker. The DS's geometry
  * engine (vertices, lighting, clipping: most of a 3D frame's work) has a
  * thread on core 1 (of which a program gets a share), so the game keeps
@@ -228,12 +231,16 @@ static void GpuMain(void *unused)
 }
 static void StartGpu(s32 priority,bool new3ds)
 {
-    sGpuCore=new3ds?2:0;
+    (void)new3ds;
+    sGpuCore=0;
     LightEvent_Init(&sGpuWake,RESET_ONESHOT);
     __atomic_store_n(&sGpuRunning,true,__ATOMIC_RELEASE);
     __atomic_store_n(&sGpuWakeReady,true,__ATOMIC_RELEASE);
-    /* New 3DS: application core 2; Old 3DS: core 0, same priority as the
-     * core-0 drawer (below the game). */
+    /* Core 0, below the game (which needs little of it now the geometry
+     * has a thread of its own) and, on a New 3DS, above engine B's drawer
+     * there. Not core 2: engine A's drawer, whose screen shows the 3D,
+     * needs all of it, and shared with this it fell behind the 3D (fewer,
+     * uneven 3D frames: a camera pan jittered). */
     sGpuThread=threadCreate(GpuMain,NULL,128*1024,priority+1,sGpuCore,false);
     if(!sGpuThread){
         __atomic_store_n(&sGpuWakeReady,false,__ATOMIC_RELEASE);
@@ -739,11 +746,12 @@ static bool StartDrawer(int screens, s32 priority, int core)
 }
 
 /* New 3DS: engine A's screen (the 3D one) on core 2, engine B's on core 0; otherwise both
- * on core 0. Below the game on core 0, so the game comes first. */
+ * on core 0. Below the game on core 0, so the game comes first, and on a New 3DS below
+ * the 3D's GPU thread there too. */
 static void StartDrawers(s32 priority, bool isNew3ds)
 {
     if (isNew3ds && StartDrawer(ENGINE_A, priority, 2)) {
-        StartDrawer(ENGINE_B, priority + 1, 0);
+        StartDrawer(ENGINE_B, priority + 2, 0);
     } else {
         StartDrawer(ENGINE_A | ENGINE_B, priority + 1, 0);
     }
