@@ -554,6 +554,10 @@ static void RandomEngine(u32 io)
         Put16(io + i, (u16)Rnd());
     }
     Put16(io + 0x50, Rnd() % 3 == 0 ? 0 : (u16)Rnd());   /* effects */
+    if (Rnd() % 4 == 0) {
+        /* Alpha blending with no first target, as battles set it. */
+        Put16(io + 0x50, (u16)(((Rnd() & 0x3F) << 8) | 0x40));
+    }
     Put16(io + 0x52, (u16)Rnd());
     Put16(io + 0x54, (u16)Rnd());
     Put16(io + 0x6C, Rnd() % 3 == 0 ? (u16)Rnd() : 0);   /* master brightness */

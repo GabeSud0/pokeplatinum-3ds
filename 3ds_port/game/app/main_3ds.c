@@ -19,7 +19,7 @@
  * drawing has threads of its own that work while the game goes on with its
  * next frame (as the DS draws while the game runs): on a New 3DS the screen
  * of engine A (the one with the 3D, whichever screen that is) on core 2 and
- * the other on core 0, otherwise both on core 0.
+ * the other on core 1 (or core 0), otherwise both on core 0.
  * On core 0 they run below the game: the game always comes first and
  * keeps its speed, and a screen that isn't done when the next frame is
  * ready leaves that frame out. The 3D's GPU thread (drawing each 3D frame
@@ -751,7 +751,14 @@ static bool StartDrawer(int screens, s32 priority, int core)
 static void StartDrawers(s32 priority, bool isNew3ds)
 {
     if (isNew3ds && StartDrawer(ENGINE_A, priority, 2)) {
-        StartDrawer(ENGINE_B, priority + 2, 0);
+        /* Engine B on core 1, below the geometry thread, when the program
+         * has a share of it: in battles (where engine B's touch screen is
+         * the costliest of all, and the geometry thread has little to do)
+         * it has most of that core; on core 0 it came after the GPU
+         * thread and fell to 10-20 frames a second. */
+        if (sGeoCpuLimit == 0 || !StartDrawer(ENGINE_B, priority + 1, 1)) {
+            StartDrawer(ENGINE_B, priority + 2, 0);
+        }
     } else {
         StartDrawer(ENGINE_A | ENGINE_B, priority + 1, 0);
     }
@@ -1159,12 +1166,16 @@ int main(int argc, char **argv)
             bool isNew3ds = false;
 
             APT_CheckNew3DS(&isNew3ds);
-            StartDrawers(priority, isNew3ds);
             StartGpu(priority, isNew3ds);
-            StartGeometry(priority, isNew3ds);
-            NitroPort_Log("[perf] %s 3DS; drawing: %s", isNew3ds ? "New" : "Old",
-                          sDrawerCount == 2 ? "the 3D engine's screen on core 2, the other on core 0"
-                          : sDrawerCount == 1 ? "both screens on core 0" : "no thread!");
+            StartGeometry(priority, isNew3ds);   /* first: core 1's share */
+            StartDrawers(priority, isNew3ds);
+            if (sDrawerCount == 2) {
+                NitroPort_Log("[perf] %s 3DS; drawing: the 3D engine's screen on core %d, the other on core %d",
+                              isNew3ds ? "New" : "Old", sDrawers[0].core, sDrawers[1].core);
+            } else {
+                NitroPort_Log("[perf] %s 3DS; drawing: %s", isNew3ds ? "New" : "Old",
+                              sDrawerCount == 1 ? "both screens on core 0" : "no thread!");
+            }
         }
         StartSound(priority);
         if (threadCreate(GameThread, NULL, GAME_STACK_SIZE, priority, -2, true) == NULL) {
