@@ -23,8 +23,11 @@
  * On core 0 they run below the game: the game always comes first and
  * keeps its speed, and a screen that isn't done when the next frame is
  * ready leaves that frame out. Sound has a thread of its own on core 0,
- * above the game, as it must keep up with the speaker. Every two seconds
- * a [perf] line in the log says where the time went.
+ * above the game, as it must keep up with the speaker. The DS's geometry
+ * engine (vertices, lighting, clipping: most of a 3D frame's work) has a
+ * thread on core 1 (of which a program gets a share), so the game keeps
+ * its speed, and the music its sync, whatever the 3D costs. Every two
+ * seconds a [perf] line in the log says where the time went.
  *
  * Threads: the game runs on a 3DS thread of its own (it becomes NitroSDK's
  * launcher thread, and the SDK's other threads get 3DS threads of their
@@ -45,6 +48,7 @@
 #include <sys/stat.h>
 
 #include "platinum.h"
+#include <nitro_port_gx3d.h>
 
 /* The 2D renderer (nitro_port.h, which can't be included next to 3ds.h). */
 void NitroPort_Render2D(int engine, uint16_t *out);
@@ -176,12 +180,8 @@ static void StopSound(void)
 static void CatchCrashes(void); /* crash handler is defined below */
 /* The PICA backend and all citro3d commands run on one dedicated thread.
  * Neither the game nor the 2D screen drawers wait for GPU completion. */
-typedef struct NitroGx3dScene NitroGx3dScene;
-const NitroGx3dScene *NitroPort_Gx3dAcquireScene(uint32_t *serial);
-void NitroPort_Gx3dReleaseScene(const NitroGx3dScene *scene);
 int NitroPort_PicaInit(void);
 int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped);
-int NitroPort_Gx3dDumpLatest(const char *path);
 void NitroPort_PicaExit(void);
 void NitroPort_PicaTimes(u64 *build, u64 *wait, u64 *publish);
 static Thread sGpuThread;
@@ -257,6 +257,132 @@ static void StopGpu(void)
 #define MANIFEST_PATH DATA_DIR "/manifest.json"
 #define LOG_PATH      DATA_DIR "/log.txt"
 #define SAVE_PATH     DATA_DIR "/platinum.sav"
+/* Optional, for trying where the geometry goes: "core 1" (the default),
+ * "core 2", or "off" (the game's own thread, as before). */
+#define GEOMETRY_PATH DATA_DIR "/geometry.txt"
+
+/* ------------------------------------------------------ geometry thread */
+/* The DS geometry engine (vertices, lighting, clipping: most of a 3D
+ * frame's work) on a core of its own, so the game's thread, and with it
+ * the game's speed against the music, doesn't carry it. Core 1, the
+ * system's, of which a program may take a share (APT_SetAppCpuTimeLimit);
+ * otherwise the New 3DS's core 2. When it falls behind, scenes are left
+ * out rather than the game slowed (port_gx3d.c). */
+static Thread sGeoThread;
+static LightEvent sGeoWorkerEvent, sGeoProducerEvent;
+static volatile int sGeoRunning;
+static int sGeoCore = -1;
+static u32 sGeoCpuLimit;
+
+static void GeoWaitWorker(void *unused) { (void)unused; LightEvent_Wait(&sGeoWorkerEvent); }
+static void GeoWakeWorker(void *unused) { (void)unused; LightEvent_Signal(&sGeoWorkerEvent); }
+static void GeoWaitProducer(void *unused) { (void)unused; LightEvent_Wait(&sGeoProducerEvent); }
+static void GeoWakeProducer(void *unused) { (void)unused; LightEvent_Signal(&sGeoProducerEvent); }
+static uint64_t GeoTicks(void *unused) { (void)unused; return svcGetSystemTick(); }
+
+static void GeoMain(void *unused)
+{
+    (void)unused;
+    CatchCrashes();
+    NitroPort_Gx3dThreadMain(&sGeoRunning);
+    threadExit(0);
+}
+
+static void GeometryOps(void)
+{
+    NitroGx3dThreadOps ops;
+
+    memset(&ops, 0, sizeof(ops));
+    ops.wait_worker = GeoWaitWorker;
+    ops.wake_worker = GeoWakeWorker;
+    ops.wait_producer = GeoWaitProducer;
+    ops.wake_producer = GeoWakeProducer;
+    ops.ticks = GeoTicks;
+    LightEvent_Init(&sGeoWorkerEvent, RESET_ONESHOT);
+    LightEvent_Init(&sGeoProducerEvent, RESET_ONESHOT);
+    sGeoRunning = 1;
+    /* Before the thread runs: it needs the ops. Nothing has been drawn yet,
+     * so if it can't start, the engine goes back to the game's thread. */
+    NitroPort_Gx3dStartThread(&ops);
+}
+
+/* Core 2 (New 3DS), below its drawer: its screen shows the 3D. */
+static void StartGeometryOn(s32 priority, int core)
+{
+    GeometryOps();
+    sGeoThread = threadCreate(GeoMain, NULL, 64 * 1024, priority + 1, core, false);
+    sGeoCore = sGeoThread ? core : -1;
+    if (!sGeoThread) {
+        NitroPort_Gx3dStopThread();
+        NitroPort_Log("[perf] geometry on the game's thread (no core %d)", core);
+        return;
+    }
+    NitroPort_Log("[perf] geometry on core %d", core);
+}
+
+static void StartGeometry(s32 priority, bool new3ds)
+{
+    static const u32 limits[] = { 80, 60, 40, 30 };
+    char choice[16] = "";
+    FILE *f = fopen(GEOMETRY_PATH, "r");
+    size_t i;
+
+    if (f != NULL) {
+        if (fgets(choice, sizeof(choice), f) == NULL) {
+            choice[0] = 0;
+        }
+        fclose(f);
+    }
+    if (strncmp(choice, "off", 3) == 0) {
+        NitroPort_Log("[perf] geometry on the game's thread (" GEOMETRY_PATH ")");
+        return;
+    }
+    if (strncmp(choice, "core 2", 6) == 0 && new3ds) {
+        StartGeometryOn(priority, 2);
+        return;
+    }
+    for (i = 0; i < sizeof(limits) / sizeof(limits[0]); i++) {
+        if (R_SUCCEEDED(APT_SetAppCpuTimeLimit(limits[i]))) {
+            sGeoCpuLimit = limits[i];
+            break;
+        }
+    }
+    if (sGeoCpuLimit == 0) {
+        if (new3ds) {
+            StartGeometryOn(priority, 2);
+        } else {
+            NitroPort_Log("[perf] geometry on the game's thread (no share of core 1)");
+        }
+        return;
+    }
+    GeometryOps();
+    sGeoThread = threadCreate(GeoMain, NULL, 64 * 1024, priority - 1, 1, false);
+    if (!sGeoThread) {
+        NitroPort_Gx3dStopThread();
+        if (new3ds) {
+            StartGeometryOn(priority, 2);
+        } else {
+            NitroPort_Log("[perf] geometry on the game's thread (no thread on core 1)");
+        }
+        return;
+    }
+    sGeoCore = 1;
+    NitroPort_Log("[perf] geometry on core 1 (%lu%% of it)", (unsigned long)sGeoCpuLimit);
+}
+
+static void StopGeometry(void)
+{
+    if (!sGeoThread) {
+        return;
+    }
+    sGeoRunning = 0;
+    LightEvent_Signal(&sGeoWorkerEvent);
+    /* The game's thread may still be sending it work: don't wait long. */
+    if (R_SUCCEEDED(threadJoin(sGeoThread, 200000000ULL))) {
+        threadFree(sGeoThread);
+    }
+    sGeoThread = NULL;
+}
 
 /* The game's main thread: the DS gave it 16 KB; GCC's code and the port's
  * own want more. */
@@ -279,6 +405,8 @@ static volatile bool sScreensDirty = true;/* redraw the borders / consoles */
 static char sLines[KEEP_LINES][128];
 static int sLineCount;
 static char sStatus[64] = "Starting";
+/* Lines come from several threads (the game's, the geometry thread's). */
+static LightLock sLogLock;
 
 void NitroPort_Log(const char *fmt, ...)
 {
@@ -289,6 +417,7 @@ void NitroPort_Log(const char *fmt, ...)
     vsnprintf(line, sizeof(line), fmt, args);
     va_end(args);
 
+    LightLock_Lock(&sLogLock);
     snprintf(sLines[sLineCount % KEEP_LINES], sizeof(sLines[0]), "%s", line);
     sLineCount++;
     if (sShowLog && !sScreensDirty) {
@@ -299,6 +428,7 @@ void NitroPort_Log(const char *fmt, ...)
         fprintf(sLog, "[%6lu] %s\n", sFrame, line);
         fflush(sLog);
     }
+    LightLock_Unlock(&sLogLock);
 }
 
 static void DrawStatus(void)
@@ -761,10 +891,24 @@ static void PerfFrame(u64 enter)
     gpuTriangles = __atomic_load_n(&sGpuTriangles,__ATOMIC_RELAXED);
     gpuDroppedTriangles = __atomic_load_n(&sGpuDroppedTriangles,__ATOMIC_RELAXED);
     {
-        static u64 lastBuild, lastWait, lastPublish;
+        static u64 lastBuild, lastWait, lastPublish, lastGeoBusy;
+        static uint32_t lastGeoScenes, lastGeoSkipped;
         u64 build, wait, publish;
+        uint64_t geoBusy;
+        uint32_t geoScenes, geoSkipped;
         unsigned scenes = gpuScenes - sPerfGpuScenes;
         NitroPort_PicaTimes(&build, &wait, &publish);
+        NitroPort_Gx3dThreadStats(&geoBusy, &geoScenes, &geoSkipped);
+        if (sGeoThread && geoScenes != lastGeoScenes) {
+            double busy = (double)(geoBusy - lastGeoBusy) / SYSCLOCK_ARM11;
+            NitroPort_Log("[perf] geometry (core %d): %.1f scenes/s, %.1f left out/s; %.1f ms/scene, busy %.0f%% of the time",
+                          sGeoCore, (geoScenes - lastGeoScenes) / seconds,
+                          (geoSkipped - lastGeoSkipped) / seconds,
+                          busy * 1000.0 / (geoScenes - lastGeoScenes), 100.0 * busy / seconds);
+        }
+        lastGeoBusy = geoBusy;
+        lastGeoScenes = geoScenes;
+        lastGeoSkipped = geoSkipped;
         if (scenes) {
             NitroPort_Log("[perf] 3D: %.1f scenes/s; per scene %.1f ms building, %.1f ms GPU and copy, %.1f ms converting",
                           scenes / seconds,
@@ -809,6 +953,7 @@ void NitroPort_OnFrame(void)
     u64 enter = svcGetSystemTick();
 
     NitroPort_SoundPumpReplies(); /* never raise ARM9 FIFO IRQ from DSP thread */
+    NitroPort_Gx3dFlush();        /* the geometry thread has the frame's commands */
     sFrame++;
     if (!sWatchdogHasHome && !aptMainLoop()) {
         Quit();   /* closed from the HOME menu */
@@ -969,6 +1114,7 @@ int main(int argc, char **argv)
 
     (void)argc;
     (void)argv;
+    LightLock_Init(&sLogLock);
     osSetSpeedupEnable(true);   /* New 3DS: 804 MHz and the L2 cache */
     gfxInitDefault();
     gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
@@ -1007,6 +1153,7 @@ int main(int argc, char **argv)
             APT_CheckNew3DS(&isNew3ds);
             StartDrawers(priority, isNew3ds);
             StartGpu(priority, isNew3ds);
+            StartGeometry(priority, isNew3ds);
             NitroPort_Log("[perf] %s 3DS; drawing: %s", isNew3ds ? "New" : "Old",
                           sDrawerCount == 2 ? "the 3D engine's screen on core 2, the other on core 0"
                           : sDrawerCount == 1 ? "both screens on core 0" : "no thread!");
@@ -1025,6 +1172,7 @@ int main(int argc, char **argv)
     }
 
     StopDrawers();
+    StopGeometry();
     StopGpu();
     StopSound();
     if (sLog != NULL) {

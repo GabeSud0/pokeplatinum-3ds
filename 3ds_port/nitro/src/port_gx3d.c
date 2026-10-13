@@ -1,9 +1,12 @@
 /*
  * Nintendo DS 3D geometry engine (ARM9), reference implementation.
  *
- * GXFIFO is drained synchronously. This is intentional: the game's
+ * GXFIFO is drained at once as far as the game can tell: the game's
  * MI_SendGXCommandAsync expects a less-than-half-full FIFO interrupt, and
- * rendering is not yet paced to DS geometry-engine clock cycles.
+ * rendering is not paced to DS geometry-engine clock cycles. The work can
+ * be on a thread of its own (NitroPort_Gx3dStartThread): the game's thread
+ * then decodes the commands and keeps a shadow of the matrices, which is
+ * all the game reads back, and hands the commands on through a ring.
  *
  * Matrices use row vectors and signed 20.12 fixed point. The command decoder
  * accepts packed command words with interleaved parameters and direct register
@@ -44,17 +47,31 @@ typedef struct GeoState {
     int useShininess;
     unsigned frameVertices, framePolygons;
     int32_t lightDir[4][3];
+    int32_t lightHalf[4][3]; /* half vectors: (light + (0,0,-1)) / 2 */
     uint16_t lightColor[4];
     int viewport[4], primitive, nverts;
     GeoVertex vertices[4];
     int inBegin, boxVisible, stripStarted;
-    int packedIndex, packedCount, need, used, directOpcode, directNeed;
-    uint8_t packed[4];
-    uint32_t params[32];
+    int stripOld, stripNew;   /* a triangle strip's last two (vertices[]) */
     int ready;
 } GeoState;
 
-static GeoState s;
+/* The engine. With a geometry thread (NitroPort_Gx3dStartThread) that
+ * thread owns it, and the game's thread keeps a shadow of its matrices
+ * (sShadow): what the game reads back (matrix results, the stack level,
+ * box/position/vector tests) depends on nothing else, so the game never
+ * waits for the vertices. sResults is the one the registers come from. */
+static GeoState s, sShadow;
+static GeoState *sResults = &s;
+static int sThreaded;
+
+/* The command decoder (the game's thread): packed command words and their
+ * parameters, or a direct register command's parameters. */
+static struct {
+    int packedIndex, packedCount, need, used, directOpcode, directNeed;
+    uint8_t packed[4];
+    uint32_t params[32];
+} sDec;
 
 /* A harmless host/library default. The 3DS application's main overrides
  * this weak function with LightEvent_Signal. noinline ensures a call
@@ -150,56 +167,56 @@ static void transform_point(const int32_t in[4],const Matrix *m,int32_t out[4])
         out[j]=saturation(v>>12);
     }
 }
-static Matrix *selected(void)
+static Matrix *selected(GeoState *g)
 {
-    if (s.mode==0) return &s.proj;
-    if (s.mode==3) return &s.tex;
-    return &s.pos;
+    if (g->mode==0) return &g->proj;
+    if (g->mode==3) return &g->tex;
+    return &g->pos;
 }
-static void set_matrix(const Matrix *m, int scale)
+static void set_matrix(GeoState *g,const Matrix *m, int scale)
 {
-    *selected()=*m;
-    if(s.mode==2 && !scale) s.vec=*m;
+    *selected(g)=*m;
+    if(g->mode==2 && !scale) g->vec=*m;
 }
 /* MTX_MULT/SCALE/TRANS: Current = Parameter x Current (GBATEK). With
  * row vectors (v' = v x M), the new matrix applies to a vertex first:
  * a model's own transform goes before the camera loaded earlier. */
-static void mul_matrix(const Matrix *m, int scale)
+static void mul_matrix(GeoState *g,const Matrix *m, int scale)
 {
     Matrix newpos, newvec;
-    multiply(&newpos,m,selected());
-    if(s.mode==2 && !scale) multiply(&newvec,m,&s.vec);
-    *selected()=newpos;
-    if(s.mode==2 && !scale) s.vec=newvec;
+    multiply(&newpos,m,selected(g));
+    if(g->mode==2 && !scale) multiply(&newvec,m,&g->vec);
+    *selected(g)=newpos;
+    if(g->mode==2 && !scale) g->vec=newvec;
 }
-static void matrix_stack(unsigned opcode,int32_t param)
+static void matrix_stack(GeoState *g,unsigned opcode,int32_t param)
 {
     int index;
-    if(s.mode==0){
-        if(opcode==0x11){if(s.pjLevel>=1) s.stackError=1;else {s.pjStack=s.proj;s.pjLevel++;}}
-        else if(opcode==0x12){if(!s.pjLevel)s.stackError=1;else{s.proj=s.pjStack;s.pjLevel=0;}}
-        else if(opcode==0x13){if(param!=0)s.stackError=1;else s.pjStack=s.proj;}
-        else if(opcode==0x14){if(param!=0)s.stackError=1;else s.proj=s.pjStack;}
-    }else if(s.mode==3){
-        if(opcode==0x11){if(s.texLevel)s.stackError=1;else{s.texStack=s.tex;s.texLevel=1;}}
-        else if(opcode==0x12){if(!s.texLevel)s.stackError=1;else{s.tex=s.texStack;s.texLevel=0;}}
-        else if(opcode==0x13)s.texStack=s.tex;
-        else if(opcode==0x14)s.tex=s.texStack;
+    if(g->mode==0){
+        if(opcode==0x11){if(g->pjLevel>=1) g->stackError=1;else {g->pjStack=g->proj;g->pjLevel++;}}
+        else if(opcode==0x12){if(!g->pjLevel)g->stackError=1;else{g->proj=g->pjStack;g->pjLevel=0;}}
+        else if(opcode==0x13){if(param!=0)g->stackError=1;else g->pjStack=g->proj;}
+        else if(opcode==0x14){if(param!=0)g->stackError=1;else g->proj=g->pjStack;}
+    }else if(g->mode==3){
+        if(opcode==0x11){if(g->texLevel)g->stackError=1;else{g->texStack=g->tex;g->texLevel=1;}}
+        else if(opcode==0x12){if(!g->texLevel)g->stackError=1;else{g->tex=g->texStack;g->texLevel=0;}}
+        else if(opcode==0x13)g->texStack=g->tex;
+        else if(opcode==0x14)g->tex=g->texStack;
     }else{
         if(opcode==0x11){
-            if(s.pvLevel>=31) s.stackError=1;
-            else{ s.posStack[s.pvLevel]=s.pos;s.vecStack[s.pvLevel]=s.vec; ++s.pvLevel; }
+            if(g->pvLevel>=31) g->stackError=1;
+            else{ g->posStack[g->pvLevel]=g->pos;g->vecStack[g->pvLevel]=g->vec; ++g->pvLevel; }
         }else if(opcode==0x12){
-            index=s.pvLevel-signbits((uint32_t)param,6);
+            index=g->pvLevel-signbits((uint32_t)param,6);
             /* Level 31 is the next free slot, not a valid saved entry. */
-            if(index<0||index>30){s.stackError=1;return;}
-            s.pvLevel=index;
-            s.pos=s.posStack[index];s.vec=s.vecStack[index];
+            if(index<0||index>30){g->stackError=1;return;}
+            g->pvLevel=index;
+            g->pos=g->posStack[index];g->vec=g->vecStack[index];
         }else if(opcode==0x13 || opcode==0x14){
             index=param & 31;
-            if(index>30){s.stackError=1;return;}
-            if(opcode==0x13){s.posStack[index]=s.pos;s.vecStack[index]=s.vec;}
-            else{s.pos=s.posStack[index];s.vec=s.vecStack[index];}
+            if(index>30){g->stackError=1;return;}
+            if(opcode==0x13){g->posStack[index]=g->pos;g->vecStack[index]=g->vec;}
+            else{g->pos=g->posStack[index];g->vec=g->vecStack[index];}
         }
     }
 }
@@ -255,6 +272,10 @@ static void update_light_cache(void)
  * Shininess entries are 128 unsigned 0.8 values, not 32 32-bit values.
  * The sum is worked out per component and clamped once at the end: every
  * term is positive, so that's the same as clamping after each addition. */
+/* The last normal's colour: flat surfaces repeat the same normal, vertex
+ * after vertex. Forgotten when anything it depends on changes (matrices,
+ * lights, materials, the polygon's lights at BEGIN_VTXS). */
+static struct { int valid; uint32_t value; uint16_t rgb; } sNormalCache;
 static void shade_normal(uint32_t value)
 {
     int32_t normal[3], transformed[3];
@@ -264,6 +285,10 @@ static void shade_normal(uint32_t value)
         s.normal[j]=signbits(value>>(j*10),10)*8;
         normal[j]=s.normal[j];
     }
+    if(sNormalCache.valid && sNormalCache.value==value){
+        s.rgb=sNormalCache.rgb;
+        return;
+    }
     transform_vector(normal,&s.vec,transformed);
     if(sLightCache.dirty)update_light_cache();
     for(i=0;i<4;i++)if(s.attr&(1u<<i)){
@@ -271,9 +296,8 @@ static void shade_normal(uint32_t value)
         unsigned diffuse,specIntensity;
         int d,h;
         for(j=0;j<3;j++){
-            int32_t half=(s.lightDir[i][j]+(j==2?-4096:0))/2;
             dot+=(int64_t)transformed[j]*s.lightDir[i][j];
-            halfDot+=(int64_t)transformed[j]*half;
+            halfDot+=(int64_t)transformed[j]*s.lightHalf[i][j];
         }
         d=(int)(-dot>>12);
         diffuse=d<0?0u:d>4096?4096u:(unsigned)d;
@@ -295,6 +319,9 @@ static void shade_normal(uint32_t value)
            ((sLightCache.specular[i][2]*specIntensity+2048u)>>12);
     }
     s.rgb=(uint16_t)((r>31u?31u:r)|((g>31u?31u:g)<<5)|((b>31u?31u:b)<<10));
+    sNormalCache.valid=1;
+    sNormalCache.value=value;
+    sNormalCache.rgb=s.rgb;
 }
 
 /* Texture coordinates are stored in signed 1/16-texel units. All texture
@@ -356,14 +383,15 @@ static inline unsigned outcode(const int32_t clip[4])
  * the clip/vector matrix result registers the SDK reads back (through
  * G3X_GetClipMtx/G3X_GetVectorMtx, which call NitroPort_Gx3dSyncResults
  * first; patches/NitroSDK/0026). */
-static void ensure_clip(void)
+static void ensure_clip(GeoState *g)
 {
     unsigned j;
-    if(!s.clipDirty)return;
-    s.clipDirty=0;
-    multiply(&s.clip,&s.pos,&s.proj);
-    for(j=0;j<16;j++)put32(0x640+j*4,(uint32_t)s.clip.a[j]);
-    for(j=0;j<9;j++)put32(0x680+j*4,(uint32_t)s.vec.a[(j/3)*4+(j%3)]);
+    if(!g->clipDirty)return;
+    g->clipDirty=0;
+    multiply(&g->clip,&g->pos,&g->proj);
+    if(g!=sResults)return;
+    for(j=0;j<16;j++)put32(0x640+j*4,(uint32_t)g->clip.a[j]);
+    for(j=0;j<9;j++)put32(0x680+j*4,(uint32_t)g->vec.a[(j/3)*4+(j%3)]);
 }
 static GeoVertex interpolate(const GeoVertex *a,const GeoVertex *b,double t)
 {
@@ -382,6 +410,15 @@ static GeoVertex interpolate(const GeoVertex *a,const GeoVertex *b,double t)
         v.color |= (uint16_t)((int)(av+(bv-av)*t+0.5)<<shift);
     }
     return v;
+}
+/* floor(), to an int32 (saturated), without a library call. */
+static inline int32_t floor_int(double v)
+{
+    int32_t n;
+    if(v>=2147483647.0)return INT32_MAX;
+    if(v<=-2147483648.0)return INT32_MIN;
+    n=(int32_t)v;
+    return n-(v<(double)n);
 }
 static NitroGx3dVertex to_screen(const GeoVertex *v)
 {
@@ -402,8 +439,8 @@ static NitroGx3dVertex to_screen(const GeoVertex *v)
         double height=(s.viewport[3]-s.viewport[1]+1)&0xFF;
         double w=(double)v->clip[3];
         if(w>0){
-            out.x=(int32_t)floor(((double)v->clip[0]+w)*width/(2*w)*256+x0*256+0.5);
-            out.y=(int32_t)floor((w-(double)v->clip[1])*height/(2*w)*256+top*256+0.5);
+            out.x=floor_int(((double)v->clip[0]+w)*width/(2*w)*256+x0*256+0.5);
+            out.y=floor_int((w-(double)v->clip[1])*height/(2*w)*256+top*256+0.5);
         }
     }
     if(nz<-1.0)nz=-1.0;
@@ -422,7 +459,6 @@ static struct {
     unsigned projLoads, projMults, projStackOps, stackErrors, swaps;
     unsigned alphaOpaque, alphaTranslucent, alphaWire;
     uint32_t lastAttr;
-    int32_t lastClip[4];
 } sDiag;
 
 static void diag_log(void)
@@ -435,15 +471,15 @@ static void diag_log(void)
                   sDiag.overLimit, sDiag.behind);
     NitroPort_Log("[gx3d] projection: %u loads, %u mults, %u push/pop/store/restore, %u stack errors; "
                   "now %ld %ld %ld %ld / %ld %ld %ld %ld / %ld %ld %ld %ld / %ld %ld %ld %ld; "
-                  "last attr %08lx, last clip (%ld,%ld,%ld,%ld)",
+                  "last attr %08lx, a recent vertex (%ld,%ld,%ld,%ld)",
                   sDiag.projLoads, sDiag.projMults, sDiag.projStackOps, sDiag.stackErrors,
                   (long)s.proj.a[0], (long)s.proj.a[1], (long)s.proj.a[2], (long)s.proj.a[3],
                   (long)s.proj.a[4], (long)s.proj.a[5], (long)s.proj.a[6], (long)s.proj.a[7],
                   (long)s.proj.a[8], (long)s.proj.a[9], (long)s.proj.a[10], (long)s.proj.a[11],
                   (long)s.proj.a[12], (long)s.proj.a[13], (long)s.proj.a[14], (long)s.proj.a[15],
                   (unsigned long)sDiag.lastAttr,
-                  (long)sDiag.lastClip[0], (long)sDiag.lastClip[1],
-                  (long)sDiag.lastClip[2], (long)sDiag.lastClip[3]);
+                  (long)s.vertices[0].clip[0], (long)s.vertices[0].clip[1],
+                  (long)s.vertices[0].clip[2], (long)s.vertices[0].clip[3]);
     memset(&sDiag, 0, sizeof(sDiag));
 }
 
@@ -507,6 +543,9 @@ static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
     v[0]=*a;v[1]=*b;v[2]=*c;
     for(p=0;p<6;p++){
         unsigned m=0;
+        /* A plane none of the three is outside of doesn't cut the triangle
+         * (nor what's left of it). */
+        if(!((a->outside|b->outside|c->outside)&(1u<<p)))continue;
         for(i=0;i<n;i++){
             GeoVertex *left=&v[i],*right=&v[(i+1)%n];
             int64_t da=plane_distance(left,(int)p),db=plane_distance(right,(int)p);
@@ -538,6 +577,14 @@ static int far_hidden(unsigned outside)
 {
     if((outside & 0x20u) && !(s.attr & (1u<<12))){sDiag.clipped++;return 1;}
     return 0;
+}
+/* Nothing of the polygon is drawn: all its vertices outside the same clip
+ * plane (most of a big map), or crossing the far plane (far_hidden).
+ * any/all: its vertices' outcodes OR'd/AND'ed. */
+static int polygon_hidden(unsigned any,unsigned all)
+{
+    if(all){sDiag.clipped++;return 1;}
+    return far_hidden(any);
 }
 
 /* The DS stores each polygon that survives culling and clipping in its
@@ -589,15 +636,15 @@ static void end_polygon(unsigned newVertices)
 
 static void submit_vertex(void)
 {
-    GeoVertex strip, *vp;
+    GeoVertex *vp;
     int32_t src[4];
     int n=s.nverts;
     if(!s.inBegin)return;
-    /* Built where it's kept (no copying), except for a triangle strip's
-     * third and later vertices, which shift the two before. */
-    vp=(s.primitive==2 && n>=2)?&strip:&s.vertices[n];
+    /* Built where it's kept (no copying): a triangle strip's third and
+     * later vertices go where the one before the last two was. */
+    vp=(s.primitive==2 && n>=2)?&s.vertices[3-s.stripOld-s.stripNew]:&s.vertices[n];
     src[0]=s.coord[0];src[1]=s.coord[1];src[2]=s.coord[2];src[3]=4096;
-    ensure_clip();
+    ensure_clip(&s);
     transform_point(src,&s.clip,vp->clip);
     vp->outside=(uint8_t)outcode(vp->clip);
     vp->hasScreen=0;
@@ -609,7 +656,8 @@ static void submit_vertex(void)
         n++;
         if(n==3){
             begin_polygon();
-            if(!far_hidden(s.vertices[0].outside|s.vertices[1].outside|s.vertices[2].outside)){
+            if(!polygon_hidden(s.vertices[0].outside|s.vertices[1].outside|s.vertices[2].outside,
+                               s.vertices[0].outside&s.vertices[1].outside&s.vertices[2].outside)){
                 sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
                 stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
                 end_polygon(3);
@@ -620,8 +668,10 @@ static void submit_vertex(void)
         n++;
         if(n==4){
             begin_polygon();
-            if(!far_hidden(s.vertices[0].outside|s.vertices[1].outside|
-                           s.vertices[2].outside|s.vertices[3].outside)){
+            if(!polygon_hidden(s.vertices[0].outside|s.vertices[1].outside|
+                               s.vertices[2].outside|s.vertices[3].outside,
+                               s.vertices[0].outside&s.vertices[1].outside&
+                               s.vertices[2].outside&s.vertices[3].outside)){
                 sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
                 stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
                 stage_triangle(&s.vertices[0],&s.vertices[2],&s.vertices[3]);
@@ -630,27 +680,36 @@ static void submit_vertex(void)
             n=0;
         }
     }else if(s.primitive==2){
-        /* Triangle strip: vertices[0] the older of the last two, [1] the
-         * newer. GBATEK: v0 v1 v2, v2 v1 v3, v2 v3 v4, v4 v3 v5, ...: every
-         * other triangle has its first two vertices the other way round. */
-        if(n<2)n++;
-        else{
-            GeoVertex *first=(n&1)?&s.vertices[1]:&s.vertices[0];
-            GeoVertex *second=(n&1)?&s.vertices[0]:&s.vertices[1];
+        /* Triangle strip: vertices[stripOld] the older of the last two,
+         * [stripNew] the newer. GBATEK: v0 v1 v2, v2 v1 v3, v2 v3 v4,
+         * v4 v3 v5, ...: every other triangle has its first two vertices
+         * the other way round. */
+        if(n<2){
+            n++;
+            s.stripOld=0;s.stripNew=1;
+        }else{
+            /* The two before stay where they are; the new one goes in the
+             * third place (no copying), and becomes the newer. */
+            GeoVertex *older=&s.vertices[s.stripOld],*newer=&s.vertices[s.stripNew];
+            GeoVertex *first=(n&1)?newer:older;
+            GeoVertex *second=(n&1)?older:newer;
             begin_polygon();
-            if(!far_hidden(first->outside|second->outside|vp->outside)){
+            if(!polygon_hidden(first->outside|second->outside|vp->outside,
+                               first->outside&second->outside&vp->outside)){
                 sPolygonFront=polygon_front(first,second,vp);
                 stage_triangle(first,second,vp);
                 end_polygon(n==2?3:1);
             }
-            s.vertices[0]=s.vertices[1];s.vertices[1]=*vp;n++;
+            s.stripOld=s.stripNew;s.stripNew=(int)(vp-s.vertices);n++;
         }
     }else{
         n++;
         if(n==4){
             begin_polygon();
-            if(!far_hidden(s.vertices[0].outside|s.vertices[1].outside|
-                           s.vertices[2].outside|s.vertices[3].outside)){
+            if(!polygon_hidden(s.vertices[0].outside|s.vertices[1].outside|
+                               s.vertices[2].outside|s.vertices[3].outside,
+                               s.vertices[0].outside&s.vertices[1].outside&
+                               s.vertices[2].outside&s.vertices[3].outside)){
                 sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],&s.vertices[3]);
                 stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[3]);
                 stage_triangle(&s.vertices[0],&s.vertices[3],&s.vertices[2]);
@@ -661,8 +720,6 @@ static void submit_vertex(void)
             s.vertices[0]=s.vertices[2];s.vertices[1]=s.vertices[3];n=2;
         }
     }
-    sDiag.lastClip[0]=vp->clip[0];sDiag.lastClip[1]=vp->clip[1];
-    sDiag.lastClip[2]=vp->clip[2];sDiag.lastClip[3]=vp->clip[3];
     s.nverts=n;
 }
 /* How many parameter words each command takes. */
@@ -678,23 +735,131 @@ static int param_count(unsigned op)
 {
     return sParamCount[op&255u];
 }
-static void execute(unsigned op,const uint32_t *p)
+/* Matrix commands (0x10-0x1c) on an engine's matrices: the engine's own
+ * (s) or the game thread's shadow of them (sShadow). */
+static void matrix_command(GeoState *g,unsigned op,const uint32_t *p)
 {
     Matrix m;
+    switch(op){
+    case 0x10:g->mode=p[0]&3;return;
+    case 0x11:case 0x12:case 0x13:case 0x14:
+        matrix_stack(g,op,op==0x11?0:(int32_t)p[0]);break;
+    case 0x15:identity(&m);set_matrix(g,&m,0);break;
+    case 0x16:case 0x17:m=read_matrix(op,p);set_matrix(g,&m,0);break;
+    case 0x18:case 0x19:case 0x1a:m=read_matrix(op,p);mul_matrix(g,&m,0);break;
+    case 0x1b:identity(&m);m.a[0]=(int32_t)p[0];m.a[5]=(int32_t)p[1];m.a[10]=(int32_t)p[2];
+        mul_matrix(g,&m,1);break;
+    case 0x1c:identity(&m);m.a[12]=(int32_t)p[0];m.a[13]=(int32_t)p[1];m.a[14]=(int32_t)p[2];
+        mul_matrix(g,&m,0);break;
+    default:return;
+    }
+    /* The clip matrix is worked out again when a vertex, a test or the SDK
+     * (NitroPort_Gx3dSyncResults) next needs it: models change matrices
+     * several times between vertices. */
+    g->clipDirty=1;
+}
+/* GXSTAT from an engine's state: the box test result, the stack levels
+ * and overflow. */
+static void refresh_status(const GeoState *g)
+{
+    uint32_t status=io32(0x600);
+    status &= ~((3u<<0)|(31u<<8)|(1u<<13)|(1u<<14)|(1u<<15)|
+                (511u<<16)|(1u<<25)|(1u<<26)|(1u<<27));
+    status |= ((uint32_t)g->boxVisible<<1) |
+              ((uint32_t)(g->pvLevel&31)<<8) |
+              ((uint32_t)(g->pjLevel&1)<<13)|
+              ((uint32_t)(g->stackError!=0)<<15)|
+              (1u<<25)|(1u<<26);
+    put32(0x600,status);
+}
+/* BOX_TEST, POS_TEST and VEC_TEST (0x70-0x72): results in the registers. */
+static void test_command(GeoState *g,unsigned op,const uint32_t *p)
+{
     int i;
     switch(op){
-    case 0x10:s.mode=p[0]&3;break;
-    case 0x11:case 0x12:case 0x13:case 0x14:
-        if(s.mode==0)sDiag.projStackOps++;
-        {int before=s.stackError;matrix_stack(op,op==0x11?0:(int32_t)p[0]);if(s.stackError&&!before)sDiag.stackErrors++;}
+    case 0x70: {
+        /* 6 packed 4.12 coordinates: XYZ and size XYZ. A box is invisible
+         * only when all eight corners are outside the same clip plane.
+         * This is conservative for frustum edges, as the DS box test is. */
+        int32_t origin[3], size[3], clip[4];
+        unsigned mask, all=0x3fu;
+        origin[0]=signbits(p[0],16);
+        origin[1]=signbits(p[0]>>16,16);
+        origin[2]=signbits(p[1],16);
+        size[0]=signbits(p[1]>>16,16);
+        size[1]=signbits(p[2],16);
+        size[2]=signbits(p[2]>>16,16);
+        ensure_clip(g);
+        {
+            /* A corner's sum before the shift is the origin's plus the
+             * edges' it adds (exact, in 64 bits): 8 corners for the cost
+             * of 4 transforms. */
+            int64_t base[4],edge[3][4];
+            int j;
+            for(j=0;j<4;j++){
+                base[j]=(int64_t)origin[0]*g->clip.a[j]+(int64_t)origin[1]*g->clip.a[4+j]+
+                        (int64_t)origin[2]*g->clip.a[8+j]+((int64_t)g->clip.a[12+j]<<12);
+                for(i=0;i<3;i++)edge[i][j]=(int64_t)size[i]*g->clip.a[i*4+j];
+            }
+            for(mask=0;mask<8;mask++){
+                for(j=0;j<4;j++){
+                    int64_t v=base[j];
+                    for(i=0;i<3;i++)if((mask>>i)&1)v+=edge[i][j];
+                    clip[j]=saturation(v>>12);
+                }
+                all&=outcode(clip);
+            }
+        }
+        g->boxVisible=all?0:1;
+        refresh_status(g);
         break;
-    case 0x15:identity(&m);set_matrix(&m,0);if(s.mode==0)sDiag.projLoads++;break;
-    case 0x16:case 0x17:m=read_matrix(op,p);set_matrix(&m,0);if(s.mode==0)sDiag.projLoads++;break;
-    case 0x18:case 0x19:case 0x1a:m=read_matrix(op,p);mul_matrix(&m,0);if(s.mode==0)sDiag.projMults++;break;
-    case 0x1b:identity(&m);m.a[0]=(int32_t)p[0];m.a[5]=(int32_t)p[1];m.a[10]=(int32_t)p[2];
-        mul_matrix(&m,1);break;
-    case 0x1c:identity(&m);m.a[12]=(int32_t)p[0];m.a[13]=(int32_t)p[1];m.a[14]=(int32_t)p[2];
-        mul_matrix(&m,0);break;
+    }
+    case 0x71:{
+        int32_t src[4],result[4];
+        src[0]=signbits(p[0],16);src[1]=signbits(p[0]>>16,16);
+        src[2]=signbits(p[1],16);src[3]=4096;
+        ensure_clip(g);
+        transform(src,&g->clip,result);
+        for(i=0;i<4;i++)put32(0x620+i*4,(uint32_t)result[i]);
+        break;
+    }
+    case 0x72:{
+        int32_t src[4],res[4];
+        for(i=0;i<3;i++)src[i]=signbits(p[0]>>(i*10),10)*8;
+        src[3]=0;transform(src,&g->vec,res);
+        for(i=0;i<3;i++){
+            /* Both the vector input/output are 4.12; no extra >>3. */
+            uint16_t val=(uint16_t)res[i];
+            memcpy(NitroPort_IoReg+0x630+i*2,&val,sizeof(val));
+        }
+        break;
+    }
+    default:break;
+    }
+}
+/* Not a DS command: GXSTAT's stack overflow cleared
+ * (NitroPort_Gx3dClearStackError), in the command stream's order. */
+#define OP_CLEAR_STACK_ERROR 0xF0u
+
+/* The whole engine (s): one command and its parameters. */
+static inline __attribute__((always_inline)) void execute(unsigned op,const uint32_t *p)
+{
+    int i;
+    if(op>=0x10u && op<=0x1cu){
+        int before=s.stackError;
+        if(s.mode==0){
+            if(op>=0x11u && op<=0x14u)sDiag.projStackOps++;
+            else if(op==0x15u||op==0x16u||op==0x17u)sDiag.projLoads++;
+            else if(op>=0x18u && op<=0x1au)sDiag.projMults++;
+        }
+        matrix_command(&s,op,p);
+        sNormalCache.valid=0;
+        if(s.stackError&&!before)sDiag.stackErrors++;
+        /* Stack commands change GXSTAT (the shadow's, with a thread). */
+        if(op>=0x11u && op<=0x14u && sResults==&s)refresh_status(&s);
+        return;
+    }
+    switch(op){
     case 0x20:s.rgb=p[0]&0x7FFF;break;
     case 0x21:
         shade_normal(p[0]);
@@ -716,9 +881,9 @@ static void execute(unsigned op,const uint32_t *p)
     case 0x29:s.pendingAttr=p[0];break;
     case 0x2a:s.texparam=p[0];break;
     case 0x2b:s.plttbase=p[0];break;
-    case 0x30:s.diffuse=p[0]&0x7FFF;s.ambient=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;
+    case 0x30:s.diffuse=p[0]&0x7FFF;s.ambient=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;
         if(p[0]&(1u<<15))s.rgb=s.diffuse;break;
-    case 0x31:s.specular=p[0]&0x7FFF;s.emission=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;
+    case 0x31:s.specular=p[0]&0x7FFF;s.emission=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;
         s.useShininess=(p[0]&(1u<<15))!=0;break;
     case 0x32:{
         int id=(p[0]>>30)&3;
@@ -727,12 +892,17 @@ static void execute(unsigned op,const uint32_t *p)
         incoming[3]=0;
         /* LIGHT_VECTOR samples the directional matrix at command time. */
         transform(incoming,&s.vec,transformed);
-        for(i=0;i<3;i++)s.lightDir[id][i]=transformed[i];
+        for(i=0;i<3;i++){
+            s.lightDir[id][i]=transformed[i];
+            s.lightHalf[id][i]=(transformed[i]+(i==2?-4096:0))/2;
+        }
+        sNormalCache.valid=0;
         break;
     }
-    case 0x33:s.lightColor[(p[0]>>30)&3]=p[0]&0x7FFF;sLightCache.dirty=1;break;
-    case 0x34:memcpy(s.shininess,p,sizeof(s.shininess));break;
-    case 0x40:s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;s.stripStarted=0;s.attr=s.pendingAttr;break;
+    case 0x33:s.lightColor[(p[0]>>30)&3]=p[0]&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;break;
+    case 0x34:memcpy(s.shininess,p,sizeof(s.shininess));sNormalCache.valid=0;break;
+    case 0x40:s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;s.stripStarted=0;s.attr=s.pendingAttr;
+        sNormalCache.valid=0;break;
     case 0x41:s.inBegin=0;s.nverts=0;break;
     case 0x50:{
         int next=-1;
@@ -763,81 +933,328 @@ static void execute(unsigned op,const uint32_t *p)
         s.viewport[2]=(int)((p[0]>>16)&255);
         s.viewport[3]=(int)((p[0]>>24)&255);
         break;
-    case 0x70: {
-        /* 6 packed 4.12 coordinates: XYZ and size XYZ. A box is invisible
-         * only when all eight corners are outside the same clip plane.
-         * This is conservative for frustum edges, as the DS box test is. */
-        int32_t origin[3], size[3], clip[4];
-        unsigned mask, all=0x3fu;
-        origin[0]=signbits(p[0],16);
-        origin[1]=signbits(p[0]>>16,16);
-        origin[2]=signbits(p[1],16);
-        size[0]=signbits(p[1]>>16,16);
-        size[1]=signbits(p[2],16);
-        size[2]=signbits(p[2]>>16,16);
-        ensure_clip();
-        {
-            /* A corner's sum before the shift is the origin's plus the
-             * edges' it adds (exact, in 64 bits): 8 corners for the cost
-             * of 4 transforms. */
-            int64_t base[4],edge[3][4];
-            int j;
-            for(j=0;j<4;j++){
-                base[j]=(int64_t)origin[0]*s.clip.a[j]+(int64_t)origin[1]*s.clip.a[4+j]+
-                        (int64_t)origin[2]*s.clip.a[8+j]+((int64_t)s.clip.a[12+j]<<12);
-                for(i=0;i<3;i++)edge[i][j]=(int64_t)size[i]*s.clip.a[i*4+j];
-            }
-            for(mask=0;mask<8;mask++){
-                for(j=0;j<4;j++){
-                    int64_t v=base[j];
-                    for(i=0;i<3;i++)if((mask>>i)&1)v+=edge[i][j];
-                    clip[j]=saturation(v>>12);
-                }
-                all&=outcode(clip);
-            }
-        }
-        s.boxVisible=all?0:1;
-        break;
-    }
-    case 0x71:{
-        int32_t src[4],eye[4],result[4];
-        src[0]=signbits(p[0],16);src[1]=signbits(p[0]>>16,16);
-        src[2]=signbits(p[1],16);src[3]=4096;
-        ensure_clip();
-        transform(src,&s.clip,result);
-        for(i=0;i<4;i++)put32(0x620+i*4,(uint32_t)result[i]);break;
-    }
-    case 0x72:{
-        int32_t src[4],res[4];
-        for(i=0;i<3;i++)src[i]=signbits(p[0]>>(i*10),10)*8;
-        src[3]=0;transform(src,&s.vec,res);
-        for(i=0;i<3;i++){
-            /* Both the vector input/output are 4.12; no extra >>3. */
-            uint16_t val=(uint16_t)res[i];
-            memcpy(NitroPort_IoReg+0x630+i*2,&val,sizeof(val));
-        }
-        break;
-    }
+    case 0x70:case 0x71:case 0x72:test_command(&s,op,p);break;
+    case OP_CLEAR_STACK_ERROR:s.stackError=0;s.pjLevel=0;break;
     default:break;
     }
-    /* Matrix commands (0x11-0x1c) change the clip matrix, worked out again
-     * when a vertex, a test or the SDK (NitroPort_Gx3dSyncResults) next
-     * needs it: models change matrices several times between vertices.
-     * Stack commands and the box test change GXSTAT. */
-    if(op>=0x11u && op<=0x1cu)s.clipDirty=1;
-    if((op>=0x11u && op<=0x14u)||op==0x70u)NitroPort_Gx3dRefreshStatus();
+    (void)i;
+}
+
+/* ---------------------------------------------------- geometry thread */
+/* With a geometry thread, the game's thread decodes the commands, keeps
+ * the shadow matrices, and hands each command on through this ring of
+ * words: a header (command, parameter count, flags) and the parameters,
+ * never split by the ring's end (a PAD header skips to the start). The
+ * game waits only when the ring is full, or for NitroPort_Gx3dReset. */
+#define RING_WORDS (1u<<18)
+#define RING_MASK  (RING_WORDS-1u)
+#define RING_PAD   0xFFFFFFFFu
+/* Flag: the command belongs to a scene left out (see produce): only the
+ * state it leaves behind is kept, no vertices are made. */
+#define RING_SKIP  (1u<<16)
+/* Words written before the thread is told: fewer, larger hand-overs. */
+#define RING_PUBLISH_WORDS 256u
+static uint32_t sRing[RING_WORDS];
+static uint32_t sRingWrite, sRingRead;     /* shared: words written / done */
+static uint32_t sWriteLocal, sWritePublished; /* the game's thread's */
+static uint32_t sReadSeen;                    /* sRingRead, as last looked at */
+static int sWorkerSleeping, sProducerWaiting;
+static NitroGx3dThreadOps sOps;
+/* Scenes (SWAP_BUFFERS) handed on / finished, and left out. */
+static uint32_t sSwapsQueued, sSwapsDone, sSwapsSkipped;
+static int sSkipScene;
+static uint64_t sWorkerBusy;
+
+static void publish(void)
+{
+    sWritePublished=sWriteLocal;
+    __atomic_store_n(&sRingWrite,sWriteLocal,__ATOMIC_SEQ_CST);
+    if(__atomic_load_n(&sWorkerSleeping,__ATOMIC_SEQ_CST) &&
+       __atomic_exchange_n(&sWorkerSleeping,0,__ATOMIC_SEQ_CST))
+        sOps.wake_worker(sOps.context);
+}
+/* Wait until the ring has room for `words` more (or, with RING_WORDS, is
+ * empty: everything handed on has been done). */
+static void wait_for_room(uint32_t words)
+{
+    /* Usually there's room as far as the game's thread already knows. */
+    if(RING_WORDS-(sWriteLocal-sReadSeen)>=words)return;
+    for(;;){
+        uint32_t used=sWriteLocal-(sReadSeen=__atomic_load_n(&sRingRead,__ATOMIC_SEQ_CST));
+        if(RING_WORDS-used>=words)return;
+        publish();
+        __atomic_store_n(&sProducerWaiting,1,__ATOMIC_SEQ_CST);
+        used=sWriteLocal-(sReadSeen=__atomic_load_n(&sRingRead,__ATOMIC_SEQ_CST));
+        if(RING_WORDS-used>=words){
+            __atomic_store_n(&sProducerWaiting,0,__ATOMIC_SEQ_CST);
+            return;
+        }
+        sOps.wait_producer(sOps.context);
+    }
+}
+static void drain(void)
+{
+    if(sThreaded)wait_for_room(RING_WORDS);
+}
+static void enqueue(unsigned op,const uint32_t *p,unsigned n,uint32_t flags)
+{
+    uint32_t need=1u+n, pos=sWriteLocal&RING_MASK;
+    if(pos+need>RING_WORDS){
+        wait_for_room(RING_WORDS-pos);
+        sRing[pos]=RING_PAD;
+        sWriteLocal+=RING_WORDS-pos;
+        pos=0;
+    }
+    wait_for_room(need);
+    sRing[pos]=op|(n<<8)|flags;
+    {
+        uint32_t *out=&sRing[pos+1];
+        unsigned i;
+        for(i=0;i<n;i++)out[i]=p[i];
+    }
+    sWriteLocal+=need;
+    if(sWriteLocal-sWritePublished>=RING_PUBLISH_WORDS)publish();
+}
+/* Not a DS command: a block of whole GXFIFO packets (command words and
+ * their parameters) as the game sent them; the next word is its length. */
+#define OP_PACKETS 0xF1u
+#define RING_PACKETS_MAX 8192u
+static void enqueue_packets(const uint32_t *words,uint32_t count,uint32_t flags)
+{
+    uint32_t need=2u+count, pos=sWriteLocal&RING_MASK;
+    if(pos+need>RING_WORDS){
+        wait_for_room(RING_WORDS-pos);
+        sRing[pos]=RING_PAD;
+        sWriteLocal+=RING_WORDS-pos;
+        pos=0;
+    }
+    wait_for_room(need);
+    sRing[pos]=OP_PACKETS|flags;
+    sRing[pos+1]=count;
+    memcpy(&sRing[pos+2],words,count*sizeof(*words));
+    sWriteLocal+=need;
+    if(sWriteLocal-sWritePublished>=RING_PUBLISH_WORDS)publish();
+}
+/* After a SWAP_BUFFERS is handed on: hand it over now, and whether the
+ * next scene is to be left out. */
+static void swap_queued(void)
+{
+    uint32_t behind;
+    sSwapsQueued++;
+    publish();
+    behind=sSwapsQueued-__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE);
+    /* Still working on the scene before this one: leave out the next. */
+    sSkipScene=behind>=2u && !sOps.keep_every_scene;
+}
+/* What the game's thread does with a command (the rest is the thread's):
+ * bit 0 matrices, 1 tests, 2 SWAP_BUFFERS. */
+static uint8_t sShadowOps[256];
+/* Whole packets at the start of `words` (up to a SWAP_BUFFERS, which ends
+ * a block): the shadow's commands done, the length returned. */
+static size_t scan_packets(const uint32_t *words,size_t count,int *swapped)
+{
+    size_t i=0;
+    if(count>RING_PACKETS_MAX)count=RING_PACKETS_MAX;
+    *swapped=0;
+    while(i<count){
+        uint32_t word=words[i];
+        unsigned o0=word&255u,o1=(word>>8)&255u,o2=(word>>16)&255u,o3=word>>24;
+        size_t total=1u+sParamCount[o0]+sParamCount[o1]+sParamCount[o2]+sParamCount[o3];
+        if(i+total>count)break;
+        if(sShadowOps[o0]|sShadowOps[o1]|sShadowOps[o2]|sShadowOps[o3]){
+            const uint32_t *p=&words[i+1];
+            int k;
+            for(k=0;k<4;k++){
+                unsigned op=(word>>(k*8))&255u, what=sShadowOps[op];
+                if(what&1u){
+                    matrix_command(&sShadow,op,p);
+                    if(op>=0x11u && op<=0x14u)refresh_status(&sShadow);
+                }else if(what&2u){
+                    test_command(&sShadow,op,p);
+                }else if(what&4u){
+                    *swapped=1;
+                }
+                p+=sParamCount[op];
+            }
+        }
+        i+=total;
+        if(*swapped)break;
+    }
+    return i;
+}
+/* A decoded command, on the game's thread with a geometry thread. */
+static void produce(unsigned op,const uint32_t *p)
+{
+    unsigned n=(unsigned)param_count(op);
+    uint32_t flags=0;
+    if(op>=0x70u && op<=0x72u){
+        /* Tests only give results to the game: the shadow's matrices. */
+        test_command(&sShadow,op,p);
+        return;
+    }
+    if(op>=0x10u && op<=0x1cu){
+        matrix_command(&sShadow,op,p);
+        if(op>=0x11u && op<=0x14u)refresh_status(&sShadow);
+    }else if(!n && op!=0x41u){
+        return; /* NOP, or not a command */
+    }
+    /* A scene the thread can't keep up with is left out (its vertices and
+     * normals aren't worked out, and it isn't shown): the game keeps its
+     * speed, and the sound its time, whatever the 3D costs. */
+    if(sSkipScene && ((op>=0x21u && op<=0x28u && op!=0x22u) || op==0x50u))
+        flags=RING_SKIP;
+    enqueue(op,p,n,flags);
+    if(op==0x50u)swap_queued();
+}
+/* A command on the thread; skip: its scene is left out. */
+static inline __attribute__((always_inline)) void work_op(unsigned op,const uint32_t *p,int skip)
+{
+    if(skip){
+        if(op==0x21u){
+            int j;
+            for(j=0;j<3;j++)s.normal[j]=signbits(p[0]>>(j*10),10)*8;
+            return;
+        }
+        if(op>=0x23u && op<=0x28u){
+            set_geo_position(op,p);
+            return;
+        }
+        if(op==0x50u){
+            /* Nothing published: the scene being built starts again. */
+            sScenes[sBuilding].count=0;
+            sScenes[sBuilding].dropped=0;
+            s.frameVertices=0;s.framePolygons=0;
+            __atomic_store_n(&sSwapsSkipped,sSwapsSkipped+1u,__ATOMIC_RELAXED);
+            __atomic_store_n(&sSwapsDone,sSwapsDone+1u,__ATOMIC_RELEASE);
+            return;
+        }
+    }
+    execute(op,p);
+    if(op==0x50u)__atomic_store_n(&sSwapsDone,sSwapsDone+1u,__ATOMIC_RELEASE);
+}
+/* A ring entry; returns its length in words. */
+static uint32_t work(const uint32_t *entry)
+{
+    uint32_t header=entry[0];
+    unsigned op=header&255u;
+    int skip=(header&RING_SKIP)!=0;
+    if(op==OP_PACKETS){
+        uint32_t count=entry[1], i=0;
+        const uint32_t *w=entry+2;
+        while(i<count){
+            uint32_t word=w[i++];
+            int k;
+            for(k=0;k<4;k++){
+                unsigned o=(word>>(k*8))&255u;
+                /* Tests are the game's (the shadow's) only. */
+                if(o && (o<0x70u || o>0x72u))work_op(o,&w[i],skip);
+                i+=sParamCount[o];
+            }
+        }
+        return 2u+count;
+    }
+    work_op(op,entry+1,skip);
+    return 1u+((header>>8)&255u);
+}
+void NitroPort_Gx3dThreadMain(const volatile int *running)
+{
+    uint32_t r=__atomic_load_n(&sRingRead,__ATOMIC_SEQ_CST);
+    for(;;){
+        uint32_t w=__atomic_load_n(&sRingWrite,__ATOMIC_SEQ_CST), stored=r;
+        uint64_t start;
+        if(r==w){
+            if(!*running)break;
+            __atomic_store_n(&sWorkerSleeping,1,__ATOMIC_SEQ_CST);
+            if(__atomic_load_n(&sRingWrite,__ATOMIC_SEQ_CST)==r && *running)
+                sOps.wait_worker(sOps.context);
+            __atomic_store_n(&sWorkerSleeping,0,__ATOMIC_SEQ_CST);
+            continue;
+        }
+        start=sOps.ticks?sOps.ticks(sOps.context):0;
+        while(r!=w){
+            uint32_t header=sRing[r&RING_MASK];
+            if(header==RING_PAD){r=(r|RING_MASK)+1u;continue;}
+            r+=work(&sRing[r&RING_MASK]);
+            if(r-stored>=4096u){
+                /* Room for the game as soon as there is some. */
+                stored=r;
+                __atomic_store_n(&sRingRead,r,__ATOMIC_SEQ_CST);
+                if(__atomic_load_n(&sProducerWaiting,__ATOMIC_SEQ_CST) &&
+                   __atomic_exchange_n(&sProducerWaiting,0,__ATOMIC_SEQ_CST))
+                    sOps.wake_producer(sOps.context);
+            }
+        }
+        __atomic_store_n(&sRingRead,r,__ATOMIC_SEQ_CST);
+        if(sOps.ticks)__atomic_store_n(&sWorkerBusy,sWorkerBusy+(sOps.ticks(sOps.context)-start),
+                                       __ATOMIC_RELAXED);
+        if(__atomic_load_n(&sProducerWaiting,__ATOMIC_SEQ_CST) &&
+           __atomic_exchange_n(&sProducerWaiting,0,__ATOMIC_SEQ_CST))
+            sOps.wake_producer(sOps.context);
+    }
+}
+static void initialize(void);
+void NitroPort_Gx3dStartThread(const NitroGx3dThreadOps *ops)
+{
+    initialize();
+    if(sThreaded)return;
+    sOps=*ops;
+    {
+        unsigned op;
+        for(op=0x10u;op<=0x1cu;op++)sShadowOps[op]=1u;
+        for(op=0x70u;op<=0x72u;op++)sShadowOps[op]=2u;
+        sShadowOps[0x50]=4u;
+    }
+    sShadow=s;
+    sResults=&sShadow;
+    sThreaded=1;
+}
+void NitroPort_Gx3dStopThread(void)
+{
+    if(!sThreaded)return;
+    drain();
+    sThreaded=0;
+    sResults=&s;    /* the same matrices as the shadow's */
+    sSkipScene=0;
+    refresh_status(&s);
+}
+void NitroPort_Gx3dFlush(void)
+{
+    if(sThreaded && sWriteLocal!=sWritePublished)publish();
+}
+void NitroPort_Gx3dThreadStats(uint64_t *busy,uint32_t *scenes,uint32_t *skipped)
+{
+    if(busy)*busy=__atomic_load_n(&sWorkerBusy,__ATOMIC_RELAXED);
+    if(scenes)*scenes=__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE);
+    if(skipped)*skipped=__atomic_load_n(&sSwapsSkipped,__ATOMIC_RELAXED);
+}
+
+/* ------------------------------------------------- the game's side */
+static NitroGx3dRecorder sRecorder;
+void NitroPort_Gx3dSetRecorder(NitroGx3dRecorder recorder){sRecorder=recorder;}
+#define RECORD(type,words,count) do{if(sRecorder)sRecorder((type),(words),(count));}while(0)
+/* A decoded command: done here, or handed to the geometry thread. */
+static void run(unsigned op,const uint32_t *p)
+{
+    if(sThreaded)produce(op,p);
+    else execute(op,p);
 }
 void NitroPort_Gx3dClearStackError(void)
 {
-    if(!s.ready) NitroPort_Gx3dReset();
-    s.stackError=0;
-    s.pjLevel=0;
-    NitroPort_Gx3dRefreshStatus();
+    RECORD(4,NULL,0);
+    initialize();
+    sResults->stackError=0;
+    sResults->pjLevel=0;
+    if(sThreaded)enqueue(OP_CLEAR_STACK_ERROR,NULL,0,0);
+    refresh_status(sResults);
 }
 void NitroPort_Gx3dReset(void)
 {
+    RECORD(7,NULL,0);
+    drain();
     memset(&s,0,sizeof(s));memset(sScenes,0,sizeof(sScenes));
+    memset(&sDec,0,sizeof(sDec));
     sLightCache.dirty=1;
+    sNormalCache.valid=0;
     NitroPort_MailboxInit(&sMailbox);
     sBuilding=0;sDisplayed=1;sSerial=0;
     identity(&s.proj);identity(&s.pos);identity(&s.vec);identity(&s.tex);
@@ -846,69 +1263,89 @@ void NitroPort_Gx3dReset(void)
     s.pendingAttr=s.attr;
     s.boxVisible=1;s.ready=1;
     s.clipDirty=1;
-    NitroPort_Gx3dRefreshStatus();
+    {
+        int i;
+        for(i=0;i<4;i++)s.lightHalf[i][2]=-4096/2; /* light vectors (0,0,0) */
+    }
+    sShadow=s;
+    sSkipScene=0;
+    refresh_status(sResults);
 }
 static void initialize(void){if(!s.ready)NitroPort_Gx3dReset();}
 void NitroPort_GxDirectWrite(int opcode,uint32_t value)
 {
     int needed;
+    if(sRecorder){uint32_t rec[2]={(uint32_t)opcode,value};sRecorder(3,rec,2);}
     initialize();
-    if(s.directNeed && s.directOpcode==opcode){
-        s.params[s.used++]=value;
-        if(s.used>=s.directNeed){execute((unsigned)opcode,s.params);s.directNeed=0;s.used=0;}
+    if(sDec.directNeed && sDec.directOpcode==opcode){
+        sDec.params[sDec.used++]=value;
+        if(sDec.used>=sDec.directNeed){run((unsigned)opcode,sDec.params);sDec.directNeed=0;sDec.used=0;}
         return;
     }
-    if(s.directNeed){s.directNeed=0;s.used=0;} /* incorrect partial stream */
+    if(sDec.directNeed){sDec.directNeed=0;sDec.used=0;} /* incorrect partial stream */
     needed=param_count((unsigned)opcode);
-    if(!needed){execute((unsigned)opcode,s.params);return;}
-    s.directOpcode=opcode;s.directNeed=needed;s.used=0;
-    s.params[s.used++]=value;
-    if(s.used>=needed){execute((unsigned)opcode,s.params);s.directNeed=0;s.used=0;}
+    if(!needed){run((unsigned)opcode,sDec.params);return;}
+    sDec.directOpcode=opcode;sDec.directNeed=needed;sDec.used=0;
+    sDec.params[sDec.used++]=value;
+    if(sDec.used>=needed){run((unsigned)opcode,sDec.params);sDec.directNeed=0;sDec.used=0;}
 }
 /* After a command: the next command of the packed word that needs
  * parameters (running those that don't), or none left. */
 static void next_packed(void)
 {
-    while(s.packedIndex<4){
-        unsigned op=s.packed[s.packedIndex];
+    while(sDec.packedIndex<4){
+        unsigned op=sDec.packed[sDec.packedIndex];
         int need=param_count(op);
-        if(need){s.need=need;s.used=0;return;}
-        execute(op,s.params);
-        s.packedIndex++;
+        if(need){sDec.need=need;sDec.used=0;return;}
+        run(op,sDec.params);
+        sDec.packedIndex++;
     }
-    s.packedIndex=0;s.packedCount=0;s.need=0;s.used=0;
+    sDec.packedIndex=0;sDec.packedCount=0;sDec.need=0;sDec.used=0;
 }
 /* Words written to GXFIFO: packed command words (up to four commands),
  * each followed by its commands' parameters. A command's parameters may
  * arrive in several calls (DMA bursts). */
 void NitroPort_GxFifoWords(const uint32_t *words,size_t count)
 {
+    RECORD(1,words,count);
     initialize();
     while(count){
-        if(s.need>0){
-            unsigned op=s.packed[s.packedIndex];
-            size_t take=(size_t)(s.need-s.used);
-            if(s.used==0 && count>=take){
+        if(sDec.need>0){
+            unsigned op=sDec.packed[sDec.packedIndex];
+            size_t take=(size_t)(sDec.need-sDec.used);
+            if(sDec.used==0 && count>=take){
                 /* All of them here: straight from the stream. */
-                execute(op,words);
+                run(op,words);
             }else{
                 if(take>count)take=count;
-                memcpy(&s.params[s.used],words,take*sizeof(*words));
-                s.used+=(int)take;
+                memcpy(&sDec.params[sDec.used],words,take*sizeof(*words));
+                sDec.used+=(int)take;
                 words+=take;count-=take;
-                if(s.used<s.need)return;
-                execute(op,s.params);
+                if(sDec.used<sDec.need)return;
+                run(op,sDec.params);
                 take=0;
             }
             words+=take;count-=take;
-            s.packedIndex++;s.need=0;s.used=0;
+            sDec.packedIndex++;sDec.need=0;sDec.used=0;
             next_packed();
         }else{
-            uint32_t word=*words++;
+            uint32_t word;
+            if(sThreaded){
+                /* Whole packets go to the thread as they are. */
+                int swapped;
+                size_t n=scan_packets(words,count,&swapped);
+                if(n){
+                    enqueue_packets(words,(uint32_t)n,sSkipScene?RING_SKIP:0u);
+                    words+=n;count-=n;
+                    if(swapped)swap_queued();
+                    continue;
+                }
+            }
+            word=*words++;
             count--;
-            s.packed[0]=(uint8_t)word;s.packed[1]=(uint8_t)(word>>8);
-            s.packed[2]=(uint8_t)(word>>16);s.packed[3]=(uint8_t)(word>>24);
-            s.packedCount=4;s.packedIndex=0;
+            sDec.packed[0]=(uint8_t)word;sDec.packed[1]=(uint8_t)(word>>8);
+            sDec.packed[2]=(uint8_t)(word>>16);sDec.packed[3]=(uint8_t)(word>>24);
+            sDec.packedCount=4;sDec.packedIndex=0;
             next_packed();
         }
     }
@@ -916,8 +1353,8 @@ void NitroPort_GxFifoWords(const uint32_t *words,size_t count)
 void NitroPort_GxFifoWord(uint32_t word)
 {
     /* Most words are a command's parameters: just keep them. */
-    if(s.need>0 && s.used+1<s.need){
-        s.params[s.used++]=word;
+    if(sDec.need>0 && sDec.used+1<sDec.need && !sRecorder){
+        sDec.params[sDec.used++]=word;
         return;
     }
     NitroPort_GxFifoWords(&word,1);
@@ -925,6 +1362,7 @@ void NitroPort_GxFifoWord(uint32_t word)
 const NitroGx3dScene *NitroPort_Gx3dScene(void)
 {
     initialize();
+    drain();
     return &sScenes[sDisplayed];
 }
 const NitroGx3dScene *NitroPort_Gx3dAcquireScene(uint32_t *serial)
@@ -943,27 +1381,21 @@ void NitroPort_Gx3dReleaseScene(const NitroGx3dScene *scene)
         break;
     }
 }
-static void initialize(void);
 /* GXSTAT and the matrix result registers, for the SDK to read. The port
  * can't see register reads, so GXSTAT is brought up to date after stack
  * commands and box tests and at every interrupt check, and the matrix
- * results when the SDK reads them (NitroPort_Gx3dSyncResults). */
+ * results when the SDK reads them (NitroPort_Gx3dSyncResults). With a
+ * geometry thread they come from the shadow matrices, so they're up to
+ * date without waiting for the thread. */
 void NitroPort_Gx3dSyncResults(void)
 {
+    RECORD(5,NULL,0);
     initialize();
-    ensure_clip();
+    ensure_clip(sResults);
 }
 void NitroPort_Gx3dRefreshStatus(void)
 {
-    uint32_t status;
+    RECORD(6,NULL,0);
     initialize();
-    status=io32(0x600);
-    status &= ~((3u<<0)|(31u<<8)|(1u<<13)|(1u<<14)|(1u<<15)|
-                (511u<<16)|(1u<<25)|(1u<<26)|(1u<<27));
-    status |= ((uint32_t)s.boxVisible<<1) |
-              ((uint32_t)(s.pvLevel&31)<<8) |
-              ((uint32_t)(s.pjLevel&1)<<13)|
-              ((uint32_t)(s.stackError!=0)<<15)|
-              (1u<<25)|(1u<<26);
-    put32(0x600,status);
+    refresh_status(sResults);
 }

@@ -417,11 +417,12 @@ $(OUT)/app/main_pc.o: app/main_pc.c app/platinum.h | libnitrosystem
 	@echo "  APP CC main_pc.c"
 	@$(CC) $(PORT_CFLAGS) $(SDK_INCLUDES) -c $< -o $@
 
-# main_3ds.c uses libctru, and none of the SDK's headers.
-$(OUT)/app/main_3ds.o: app/main_3ds.c app/platinum.h
+# main_3ds.c uses libctru, and none of the SDK's headers (the port's
+# portable geometry header only).
+$(OUT)/app/main_3ds.o: app/main_3ds.c app/platinum.h $(NITRO)/include/nitro_port_gx3d.h
 	@mkdir -p $(dir $@)
 	@echo "  APP CC main_3ds.c"
-	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -c $< -o $@
+	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -c $< -o $@
 
 # Thin 3DS-only PICA backend; includes only portable GX3D headers + libctru.
 $(OUT)/app/port_gx3d_pica.o: app/port_gx3d_pica.c $(NITRO)/include/nitro_port_gx3d_vertex.h

@@ -102,6 +102,41 @@ int NitroPort_Gx3dDumpLatest(const char *path);
 void NitroPort_Gx3dSyncResults(void);
 void NitroPort_Gx3dRefreshStatus(void);
 
+/* A thread of its own for the geometry engine. The game's thread then
+ * only decodes the commands and keeps a copy of the matrices (all the
+ * game reads back); the thread does the vertices, lighting, clipping and
+ * scenes. The platform starts the thread, which runs
+ * NitroPort_Gx3dThreadMain until *running is 0 (then wake it), after
+ * NitroPort_Gx3dStartThread and before any geometry command. */
+typedef struct NitroGx3dThreadOps {
+    void *context;
+    void (*wait_worker)(void *context);   /* the thread sleeps until woken */
+    void (*wake_worker)(void *context);
+    void (*wait_producer)(void *context); /* the game's thread, the same */
+    void (*wake_producer)(void *context);
+    uint64_t (*ticks)(void *context);     /* a clock (optional): busy time */
+    /* Never leave out a scene the thread is behind on: the game waits
+     * instead (the same scenes as without the thread, for comparing). */
+    int keep_every_scene;
+} NitroGx3dThreadOps;
+void NitroPort_Gx3dStartThread(const NitroGx3dThreadOps *ops);
+void NitroPort_Gx3dThreadMain(const volatile int *running);
+/* Back to the caller's thread, once the thread has done what it was given
+ * (then stop the thread). For a thread that couldn't be started, too. */
+void NitroPort_Gx3dStopThread(void);
+/* Hand the thread what has been written so far (once a frame). */
+void NitroPort_Gx3dFlush(void);
+/* The thread's busy time (in ticks), scenes finished, and scenes left out
+ * because it was behind (the game never waits for it). */
+void NitroPort_Gx3dThreadStats(uint64_t *busy, uint32_t *scenes, uint32_t *skipped);
+
+/* Debugging (the PC runner's --gx-record): every call into the engine,
+ * to replay it (tests/gx3d_replay.c). Types: 1 GXFIFO words, 3 a direct
+ * command (opcode, value), 4 ClearStackError,
+ * 5 SyncResults, 6 RefreshStatus, 7 Reset. */
+typedef void (*NitroGx3dRecorder)(int type, const uint32_t *words, size_t count);
+void NitroPort_Gx3dSetRecorder(NitroGx3dRecorder recorder);
+
 /* GXSTAT's bit 15 is write-one-to-clear on the DS, and resetting it
  * also clears the single-entry projection stack pointer. */
 void NitroPort_Gx3dClearStackError(void);

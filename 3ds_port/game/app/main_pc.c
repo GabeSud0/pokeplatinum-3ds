@@ -8,7 +8,8 @@
  *                   [--screenshots DIR] [--screenshot-every N]
  *                   [--dump-3d FRAME]
  *                   [--press FRAME:BUTTONS,...] [--touch FRAME:X:Y,...]
- *                   [--control DIR]
+ *                   [--control DIR] [--gx-thread | --gx-thread-skip]
+ *                   [--gx-record FILE]
  *   pokeplatinum-pc --check-overlays
  *
  * Runs the same game code as the 3DS program, with the same data pack, as
@@ -50,6 +51,7 @@
 #include <errno.h>
 #include <execinfo.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -678,7 +680,7 @@ static void ControlWait(void)
                 remove(path);
                 NitroPort_Log("[pc] control: quit");
                 StopSound();
-                fflush(stderr);
+                fflush(NULL);   /* stderr, and a --gx-record file */
                 _exit(0);
             }
         }
@@ -688,8 +690,61 @@ static void ControlWait(void)
     }
 }
 
+/* --gx-record FILE: every call into the geometry engine, for
+ * nitro/tests/gx3d_replay.c (records: type, word count, words). */
+static FILE *sGxRecord;
+static void GxRecord(int type, const uint32_t *words, size_t count)
+{
+    uint32_t head[2];
+
+    head[0] = (uint32_t)type;
+    head[1] = (uint32_t)count;
+    fwrite(head, sizeof(head), 1, sGxRecord);
+    if (count) {
+        fwrite(words, sizeof(*words), count, sGxRecord);
+    }
+}
+
+/* --gx-thread: the geometry engine on a thread of its own, as on the 3DS
+ * (--gx-thread-skip: leaving out scenes when it's behind, as there). */
+static int sGxThread;
+static sem_t sGxWorkerSem, sGxProducerSem;
+static volatile int sGxRunning = 1;
+static void GxWaitWorker(void *c) { (void)c; while (sem_wait(&sGxWorkerSem) != 0) {} }
+static void GxWakeWorker(void *c) { (void)c; sem_post(&sGxWorkerSem); }
+static void GxWaitProducer(void *c) { (void)c; while (sem_wait(&sGxProducerSem) != 0) {} }
+static void GxWakeProducer(void *c) { (void)c; sem_post(&sGxProducerSem); }
+static void *GeometryThread(void *unused)
+{
+    (void)unused;
+    NitroPort_Gx3dThreadMain(&sGxRunning);
+    return NULL;
+}
+static void StartGeometryThread(int keepEveryScene)
+{
+    NitroGx3dThreadOps ops;
+    pthread_t thread;
+
+    memset(&ops, 0, sizeof(ops));
+    ops.wait_worker = GxWaitWorker;
+    ops.wake_worker = GxWakeWorker;
+    ops.wait_producer = GxWaitProducer;
+    ops.wake_producer = GxWakeProducer;
+    ops.keep_every_scene = keepEveryScene;
+    sem_init(&sGxWorkerSem, 0, 0);
+    sem_init(&sGxProducerSem, 0, 0);
+    NitroPort_Gx3dStartThread(&ops);
+    if (pthread_create(&thread, NULL, GeometryThread, NULL) != 0) {
+        fprintf(stderr, "can't start the geometry thread\n");
+        exit(2);
+    }
+    NitroPort_Log("[pc] geometry engine on its own thread%s",
+                  keepEveryScene ? "" : " (scenes left out when it's behind)");
+}
+
 void NitroPort_OnFrame(void)
 {
+    NitroPort_Gx3dFlush();
     NitroPort_SoundPumpReplies(); /* deliver ARM7 alarms on ARM9's thread */
     pace_game_for_wav();
     sFrame++;
@@ -708,7 +763,7 @@ void NitroPort_OnFrame(void)
         Screenshot();
         NitroPort_Log("[pc] stopping after %ld frames, as asked", sFrame);
         StopSound();            /* closes and finalizes optional WAV file */
-        fflush(stderr);
+        fflush(NULL);           /* stderr, and a --gx-record file */
         _exit(0);
     }
     if (sControlDir != NULL) {
@@ -965,7 +1020,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: %s <platinum3ds.pak> <manifest.json> [--save FILE] "
                 "[--frames N] [--wav FILE] [--stop-at-missing-file] [--stall-seconds N]\n"
                 "       [--screenshots DIR] [--screenshot-every N] [--dump-3d FRAME]\n"
-                "       [--press FRAME:BUTTONS,...] [--touch FRAME:X:Y,...]\n       [--control DIR]\n       %s --check-overlays\n", argv[0], argv[0]);
+                "       [--press FRAME:BUTTONS,...] [--touch FRAME:X:Y,...]\n       [--control DIR] [--gx-thread | --gx-thread-skip] [--gx-record FILE]\n       %s --check-overlays\n", argv[0], argv[0]);
         return 2;
     }
     for (i = 3; i < argc; i++) {
@@ -1004,6 +1059,17 @@ int main(int argc, char **argv)
                 fprintf(stderr, "--touch: expected FRAME:X:Y,... (lower screen, X 0-255, Y 0-191)\n");
                 return 2;
             }
+        } else if (strcmp(argv[i], "--gx-record") == 0 && i + 1 < argc) {
+            sGxRecord = fopen(argv[++i], "wb");
+            if (sGxRecord == NULL) {
+                fprintf(stderr, "--gx-record: can't write %s\n", argv[i]);
+                return 2;
+            }
+            NitroPort_Gx3dSetRecorder(GxRecord);
+        } else if (strcmp(argv[i], "--gx-thread") == 0) {
+            sGxThread = 1;
+        } else if (strcmp(argv[i], "--gx-thread-skip") == 0) {
+            sGxThread = 2;
         } else if (strcmp(argv[i], "--stall-seconds") == 0 && i + 1 < argc) {
             sStallSeconds = atoi(argv[++i]);
         } else {
@@ -1057,6 +1123,9 @@ int main(int argc, char **argv)
         if (sStallSeconds > 0) {
             pthread_create(&watcher, NULL, Watch, NULL);
         }
+    }
+    if (sGxThread) {
+        StartGeometryThread(sGxThread == 1);
     }
     StartSound(); /* sound progresses on its own clock, never game frames */
     Platinum_Run(&settings);
