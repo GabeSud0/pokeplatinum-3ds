@@ -411,7 +411,8 @@ static inline __attribute__((always_inline)) void MergeT(Target *t, const u16 *l
     TARGET_LOCALS(t);
 
     for (x = x0; x < x1; x++) {
-        if (prioOf == NULL || prioOf[x] == prio) {
+        /* (a 3D pixel of alpha 0 can have a colour, but no OPAQUE) */
+        if ((line[x] & OPAQUE) && (prioOf == NULL || prioOf[x] == prio)) {
             PUT(x, line[x], flags);
         }
     }
@@ -894,19 +895,65 @@ static void FillRange(u8 *enable, int lo, int hi, u8 value)
 
 /* What drawing one engine works with, line by line. */
 typedef struct EngineWork {
-    u16 bgLine[W];
+    u16 lineOf[4][W];  /* each BG's own line, when it isn't drawn into the screen's */
     ObjLine objLine;
     ObjFrame objFrame;
     u8 enableLine[W];
-    /* Per pixel of the line, when blending needs two layers: the two
-     * front-most layers (0-3 BG, 4 OBJ), their colours, how many found
-     * (3: the front one, which doesn't blend with the one behind). */
-    u16 color1[W], color2[W];
-    u8 layer1[W], layer2[W], found[W];
-    u8 alpha3d[W];   /* BG0's 3D alpha (0-31) on this line */
+    u8 layer1[W];      /* each pixel's front layer (0-3 BG, 4 OBJ), for the effects */
+    u8 alpha3d[W];     /* BG0's 3D alpha (0-31) on this line, when scrolled */
 } EngineWork;
 
 static EngineWork sWork[2];
+
+/* A layer of the line being drawn, in the order the layers are in front of
+ * each other: its own line (NULL: not drawn yet) and, for the OBJ layer,
+ * the priority its pixels must have to be in this place. */
+typedef struct LineLayer {
+    const u16 *px;
+    const u8 *prioOf;
+    short x0, x1;
+    u8 layer, p;
+} LineLayer;
+
+/* A BG's line in its own buffer (the 3D: the image's own line, unless
+ * scrolled), and for the 3D its alpha. */
+static const u16 *LayerLine(const Engine *e, EngineWork *work, int bg, int kind, u16 bgcnt,
+                            u32 dispcnt, int y, const u16 *gx3dPixels, const u8 *gx3dAlpha,
+                            const u8 **alpha3d)
+{
+    u16 *line = work->lineOf[bg];
+    int x;
+
+    if (kind == BG_TEXT) {
+        Target t;
+
+        t.row = line;
+        t.layerOf = NULL;
+        t.enable = NULL;
+        t.layer = (u8)bg;
+        t.bit = (u8)(1 << bg);
+        t.filled = 0;
+        DrawTextBg(e, bg, bgcnt, dispcnt, y, &t, T_PLAIN);
+    } else if (kind == BG_3D) {
+        int scroll = Rd16(e->io, 0x10) & 0x1FF;
+
+        if (scroll == 0 && gx3dPixels != NULL && gx3dAlpha != NULL) {
+            /* The image's own line, no copy. */
+            *alpha3d = gx3dAlpha + y * W;
+            return gx3dPixels + y * W;
+        }
+        for (x = 0; x < W; ++x) {
+            int sx = (x + scroll) & 0x1FF;
+
+            line[x] = (sx < W && gx3dPixels != NULL) ? gx3dPixels[y * W + sx] : 0;
+            work->alpha3d[x] = (sx < W && gx3dAlpha != NULL) ? gx3dAlpha[y * W + sx] : 31;
+        }
+        *alpha3d = work->alpha3d;
+    } else {
+        DrawAffineBg(e, bg, kind, bgcnt, dispcnt, y, line);
+    }
+    return line;
+}
 
 /* BG0 acquires the newest finished image on both platforms. PC fills it
  * with the Stage 1 software rasterizer, 3DS with the PICA off-screen worker.
@@ -917,19 +964,20 @@ static void DrawEngine(Engine *e, u16 *out)
     /* Each engine has its own (they may be drawn at the same time, on two
      * CPU cores). */
     EngineWork *work = &sWork[e->isA ? 0 : 1];
-    u16 *bgLine = work->bgLine;
     ObjLine *objLine = &work->objLine;
     ObjFrame *objFrame = &work->objFrame;
     u8 *enableLine = work->enableLine;
-    u16 *color1 = work->color1, *color2 = work->color2;
-    u8 *layer1 = work->layer1, *layer2 = work->layer2, *found = work->found;
+    u8 *layer1 = work->layer1;
+    LineLayer list[8];   /* the line's layers, front to back */
+    int nlist;
+    s8 entryOf[5 + 3];   /* (blend2) each BG's place in the list; the OBJs' at 4 + priority */
     const u8 *io = e->io;
     u32 dispcnt = Rd32(io, 0);
     u16 bgcnt[4];
     int kind[4];
     const u16 *gx3dPixels = NULL;
     const u8 *gx3dAlpha = NULL;
-    u8 *alpha3d = work->alpha3d;   /* BG0's 3D alpha on the line being drawn */
+    const u8 *alpha3d = work->alpha3d;   /* BG0's 3D alpha on the line being drawn */
     int gx3dTranslucent = 0;   /* the 3D image has pixels of alpha 1-30 */
     u16 bldcnt = Rd16(io, 0x50);
     u16 bldalpha = Rd16(io, 0x52);
@@ -942,6 +990,7 @@ static void DrawEngine(Engine *e, u16 *out)
     BOOL anyWindow = (dispcnt & 0xE000) != 0;
     u16 backdrop = PlttColor(e->bgPltt, 0);
     BOOL blend2;   /* some pixels may blend two layers */
+    u32 special;   /* (blend2) the layers whose pixels may not just show as they are */
     int flags;     /* how layers go into the line, when only the front one matters */
     int y, x, bg, p;
 
@@ -976,19 +1025,33 @@ static void DrawEngine(Engine *e, u16 *out)
         memset(enableLine, 0x3F, W);
     }
     /* Blending two layers needs second targets, and alpha blending of some
-     * first target, or OBJs or 3D pixels that blend by themselves;
-     * otherwise each pixel shows its front-most layer, perhaps brightened
-     * or darkened. (Battles set alpha blending with no first target: no
-     * pixel blends.) */
-    blend2 = (bldcnt & 0x3F00) &&
-             ((effect == 1 && (bldcnt & 0x3F)) || objFrame->blends || gx3dTranslucent);
+     * first target that's on screen, or OBJs or 3D pixels that blend by
+     * themselves; otherwise each pixel shows its front-most layer, perhaps
+     * brightened or darkened. (Battles set alpha blending with no first
+     * target on the upper screen, and with BG1 on the touch screen while
+     * BG1 is off: no pixel blends.) */
+    {
+        u32 shown = 0x20;   /* the backdrop */
+
+        for (bg = 0; bg < 4; bg++) {
+            if (kind[bg] != BG_NONE) {
+                shown |= 1u << bg;
+            }
+        }
+        if (dispcnt & 0x1000) {
+            shown |= 0x10;
+        }
+        blend2 = (bldcnt & 0x3F00) &&
+                 ((effect == 1 && (bldcnt & shown)) || objFrame->blends || gx3dTranslucent);
+    }
+    special = (effect != 0 ? (bldcnt & 0x1Fu) : 0) | (gx3dTranslucent ? 0x01u : 0) |
+              (objFrame->blends ? 0x10u : 0);
     flags = (anyWindow ? T_WINDOW : 0) | (effect >= 2 ? T_LAYER : 0);
 
     for (y = 0; y < H; y++) {
         u16 *row = out + y * W;
         BOOL objs = DrawObjs(e, objFrame, dispcnt, y, objLine);
         Target t;
-        int done = 0;   /* (blend2) pixels that have both their layers */
 
         /* Which layers and effects each pixel shows (the windows): window
          * 0 over window 1 over the OBJ window over the outside. */
@@ -1009,36 +1072,30 @@ static void DrawEngine(Engine *e, u16 *out)
             }
         }
 
-        t.row = blend2 ? bgLine : row;
+        t.row = row;
         t.layerOf = layer1;
         t.enable = enableLine;
         t.filled = 0;
-        if (blend2) {
-            memset(found, 0, W);
-        } else {
-            memset(row, 0, W * sizeof(u16));
-        }
+        memset(row, 0, W * sizeof(u16));
+        nlist = 0;
 
         /* The layers front to back (the OBJs of priority 0, the BGs of
          * priority 0 by number, the OBJs of priority 1, ...), until every
-         * pixel has what it needs: the layers behind aren't even drawn. */
+         * pixel has its front layer: the layers behind aren't even drawn
+         * (when two layers blend, only if a pixel needs the one behind). */
         for (p = 0; p < 4; p++) {
             int slot;
 
             for (slot = -1; slot < 4; slot++) {
-                const u16 *px;
+                const u16 *px = NULL;
                 const u8 *prioOf = NULL;
                 int layer, x0 = 0, x1 = W;
 
-                if (blend2 ? done >= W : t.filled >= W) {
-                    break;
-                }
                 if (slot < 0) {
                     if (!objs || !(objLine->prios & (1 << p))) {
                         continue;
                     }
                     layer = SLOT_OBJ;
-                    px = objLine->color;
                     prioOf = objLine->prio;
                     x0 = objLine->x0;
                     x1 = objLine->x1;
@@ -1048,71 +1105,41 @@ static void DrawEngine(Engine *e, u16 *out)
                         continue;
                     }
                     layer = bg;
-                    px = bgLine;
-                    t.layer = (u8)layer;
-                    t.bit = (u8)(1 << layer);
-                    if (kind[bg] == BG_TEXT && !blend2) {
-                        /* straight into the line */
-                        DrawTextBg(e, bg, bgcnt[bg], dispcnt, y, &t, flags);
-                        continue;
+                }
+                if (blend2) {
+                    /* Noted, for the pixels that need the layer behind
+                     * their front one: its own line (px) is drawn then. */
+                    entryOf[layer == SLOT_OBJ ? 4 + p : layer] = (s8)nlist;
+                    list[nlist].layer = (u8)layer;
+                    list[nlist].p = (u8)p;
+                    list[nlist].px = layer == SLOT_OBJ ? objLine->color : NULL;
+                    list[nlist].prioOf = prioOf;
+                    list[nlist].x0 = (short)x0;
+                    list[nlist].x1 = (short)x1;
+                    nlist++;
+                }
+                if (t.filled >= W) {
+                    if (!blend2) {
+                        break;
                     }
-                    if (kind[bg] == BG_TEXT) {
-                        DrawTextBg(e, bg, bgcnt[bg], dispcnt, y, &t, T_PLAIN);
-                    } else if (kind[bg] == BG_3D) {
-                        int scroll = Rd16(io, 0x10) & 0x1FF;
-                        if (scroll == 0 && gx3dPixels != NULL && gx3dAlpha != NULL) {
-                            /* The image's own line, no copy. */
-                            px = gx3dPixels + y * W;
-                            alpha3d = (u8 *)(gx3dAlpha + y * W);
-                        } else {
-                            alpha3d = work->alpha3d;
-                            for (x = 0; x < W; ++x) {
-                                int sx = (x + scroll) & 0x1FF;
-                                bgLine[x] = (sx < W && gx3dPixels != NULL)
-                                                ? gx3dPixels[y * W + sx] : 0;
-                                alpha3d[x] = (sx < W && gx3dAlpha != NULL)
-                                                ? gx3dAlpha[y * W + sx] : 31;
-                            }
-                        }
-                    } else {
-                        DrawAffineBg(e, bg, kind[bg], bgcnt[bg], dispcnt, y, bgLine);
-                    }
+                    continue;
                 }
                 t.layer = (u8)layer;
                 t.bit = (u8)(1 << layer);
-
-                if (!blend2) {
-                    Merge(&t, px, prioOf, p, x0, x1, flags);
+                if (layer == SLOT_OBJ) {
+                    px = objLine->color;
+                } else if (kind[bg] == BG_TEXT) {
+                    /* straight into the line */
+                    DrawTextBg(e, bg, bgcnt[bg], dispcnt, y, &t, blend2 ? flags | T_LAYER : flags);
                     continue;
-                }
-                for (x = x0; x < x1; x++) {
-                    u16 c = px[x];
-                    int n = found[x];
-
-                    if (!(c & OPAQUE) || n >= 2 || !(enableLine[x] & t.bit) ||
-                        (prioOf != NULL && prioOf[x] != p)) {
-                        continue;
+                } else {
+                    px = LayerLine(e, work, bg, kind[bg], bgcnt[bg], dispcnt, y,
+                                   gx3dPixels, gx3dAlpha, &alpha3d);
+                    if (blend2) {
+                        list[nlist - 1].px = px;
                     }
-                    if (n == 0) {
-                        color1[x] = c & 0x7FFF;
-                        layer1[x] = (u8)layer;
-                        /* Nothing to blend this pixel with what's behind
-                         * (as the line's last loop has it): the front
-                         * layer is all it needs (3: no second layer). */
-                        if (!(layer == 0 && kind[0] == BG_3D && alpha3d[x] < 31) &&
-                            !(layer == SLOT_OBJ && (objLine->semi[x] || objLine->alpha[x] < 16)) &&
-                            !(effect == 1 && (enableLine[x] & 0x20) && (bldcnt & (1 << layer)))) {
-                            found[x] = 3;
-                            done++;
-                            continue;
-                        }
-                    } else {
-                        color2[x] = c & 0x7FFF;
-                        layer2[x] = (u8)layer;
-                        done++;
-                    }
-                    found[x] = (u8)(n + 1);
                 }
+                Merge(&t, px, prioOf, p, x0, x1, blend2 ? flags | T_LAYER : flags);
             }
         }
 
@@ -1152,15 +1179,53 @@ static void DrawEngine(Engine *e, u16 *out)
             }
             continue;
         }
-        for (x = 0; x < W; x++) {
-            u8 enable = enableLine[x];
-            int n = found[x];
-            int top = n > 0 ? layer1[x] : 5;          /* 5: the backdrop */
-            int second = n == 2 ? layer2[x] : 5;
-            u16 topColor = n > 0 ? color1[x] : backdrop;
-            u16 secondColor = n == 2 ? color2[x] : backdrop;
-            u16 c = topColor;
 
+        /* Each pixel has its front layer. One that blends with what's
+         * behind it (a first target of alpha blending, a partly
+         * transparent 3D pixel, a semi-transparent OBJ) takes the next
+         * layer that covers it, or the backdrop. */
+        for (x = 0; x < W; x++) {
+            u16 c = row[x];
+            u8 enable = enableLine[x];
+            int top = 5, second = 5;          /* 5: the backdrop */
+            u16 topColor = backdrop, secondColor = backdrop;
+
+            if (c & OPAQUE) {
+                top = layer1[x];
+                topColor = c & 0x7FFF;
+                if (!((special >> top) & 1)) {
+                    /* (most pixels) shown as they are */
+                    row[x] = topColor;
+                    continue;
+                }
+                if ((top == 0 && kind[0] == BG_3D && alpha3d[x] < 31) ||
+                    (top == SLOT_OBJ && (objLine->semi[x] || objLine->alpha[x] < 16)) ||
+                    (effect == 1 && (enable & 0x20) && (bldcnt & (1 << top)))) {
+                    /* The layers behind the front one, in order. */
+                    int k = entryOf[top == SLOT_OBJ ? 4 + objLine->prio[x] : top];
+
+                    for (k++; k < nlist; k++) {
+                        LineLayer *l = &list[k];
+                        u16 lc;
+
+                        if (x < l->x0 || x >= l->x1 || !(enable & (1 << l->layer))) {
+                            continue;
+                        }
+                        if (l->px == NULL) {
+                            l->px = LayerLine(e, work, l->layer, kind[l->layer], bgcnt[l->layer],
+                                              dispcnt, y, gx3dPixels, gx3dAlpha, &alpha3d);
+                        }
+                        lc = l->px[x];
+                        if (!(lc & OPAQUE) || (l->prioOf != NULL && l->prioOf[x] != l->p)) {
+                            continue;
+                        }
+                        second = l->layer;
+                        secondColor = lc & 0x7FFF;
+                        break;
+                    }
+                }
+            }
+            c = topColor;
             if (top == 0 && kind[0] == BG_3D && alpha3d[x] < 31 &&
                 (bldcnt & (0x100 << second))) {
                 /* A partly transparent 3D pixel blends with what's below

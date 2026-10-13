@@ -374,6 +374,64 @@ static void test_blend_and_window(void)
     GX_SetVisibleWnd(GX_WNDMASK_NONE);
 }
 
+/* Two layers blending, the ways the reference comparison can't check: a
+ * partly transparent 3D pixel over a BG, where the 3D covers the whole line
+ * (the BG behind is only drawn for that pixel), and a first target with
+ * nothing but the backdrop behind it. */
+static void test_3d_blends_with_layer_behind(void)
+{
+    static uint32_t rgba[256 * 192];
+    static u8 tiles[64];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, BLUE, BLUE };
+    int i;
+
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = 1;
+    }
+    for (i = 0; i < 256 * 192; i++) {
+        rgba[i] = 0xF80000FFu;          /* opaque red (0xRRGGBBAA) */
+    }
+    rgba[5 * 256 + 10] = 0x00800080u;   /* green at alpha 128, premultiplied */
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    G2_SetBG0Priority(0);
+    G2_SetBG1Priority(1);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1);
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+
+    /* Alpha blending with no first target, BG1 as the second: only the
+     * partly transparent 3D pixel blends, by its own alpha (16 of 31:
+     * half and half). */
+    G2_SetBlendAlpha(GX_BLEND_PLANEMASK_NONE, GX_BLEND_PLANEMASK_BG1, 16, 0);
+    NitroPort_Render2D(0, sTop);
+    CHECK_PX(sTop, 10, 5, RGB(0, 15, 15));
+    CHECK_PX(sTop, 11, 5, RED);
+    CHECK_PX(sTop, 10, 6, RED);
+
+    /* BG1 not a second target: the 3D pixel as it is. */
+    G2_SetBlendAlpha(GX_BLEND_PLANEMASK_NONE, GX_BLEND_PLANEMASK_BG2, 16, 0);
+    NitroPort_Render2D(0, sTop);
+    CHECK_PX(sTop, 10, 5, GREEN);
+
+    /* BG1 alone, a first target with only the backdrop as the second. */
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    G2_SetBlendAlpha(GX_BLEND_PLANEMASK_BG1, GX_BLEND_PLANEMASK_BD, 8, 8);
+    NitroPort_Render2D(0, sTop);
+    CHECK_PX(sTop, 20, 20, RGB(5, 5, 20));   /* (blue + grey) / 2 */
+    G2_BlendNone();
+
+    /* An empty 3D image again, for the tests after this one. */
+    memset(rgba, 0, sizeof(rgba));
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+}
+
 static void test_bitmap_bg(void)
 {
     static u16 bitmap[256 * 256];
@@ -792,6 +850,7 @@ int main(int argc, char **argv)
     test_8bpp_ext_palette();
     test_objs();
     test_blend_and_window();
+    test_3d_blends_with_layer_behind();
     test_bitmap_bg();
     test_affine_bg();
     test_obj_8bpp_ext();
