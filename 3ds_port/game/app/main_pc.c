@@ -520,7 +520,8 @@ void NitroPort_Log(const char *fmt, ...)
  *   ref3d PATH       draw the newest scene with the reference rasterizer
  *   gpusim PATH      draw it as the 3DS GPU path would (port_gx3d_gpusim.c)
  *   tri3d X Y        log the newest scene's triangles covering pixel (X, Y)
- *   bench2d N        draw each screen N times and log the time per draw
+ *   bench2d N [E]    draw each screen (or engine E only: 0 A, 1 B) N times
+ *                    and log the time per draw
  *   scene3d PATH     write the newest scene's triangles as text (one per line)
  *   regs PATH        write the I/O registers (0x4000000-0x4001FFF) as binary
  *   tex3d PARAM PAL PATH  write a texture (hex TEXIMAGE_PARAM, palette base)
@@ -663,10 +664,13 @@ static void ControlWait(void)
                     fclose(out);
                 }
             } else if (sscanf(line, "bench2d %ld", &a) == 1) {
-                /* What drawing each screen costs right now. */
+                /* What drawing each screen costs right now ("bench2d N E":
+                 * engine E only, 0 A or 1 B). */
                 static uint16_t screen[256 * 192];
-                int engine;
+                int engine, only = -1;
+                sscanf(line, "bench2d %ld %d", &a, &only);
                 for (engine = 0; engine < 2; engine++) {
+                    if (only >= 0 && engine != only) continue;
                     struct timespec t0, t1;
                     long k;
                     clock_gettime(CLOCK_MONOTONIC, &t0);

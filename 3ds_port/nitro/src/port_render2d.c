@@ -899,7 +899,8 @@ typedef struct EngineWork {
     ObjFrame objFrame;
     u8 enableLine[W];
     /* Per pixel of the line, when blending needs two layers: the two
-     * front-most layers (0-3 BG, 4 OBJ), their colours, how many found. */
+     * front-most layers (0-3 BG, 4 OBJ), their colours, how many found
+     * (3: the front one, which doesn't blend with the one behind). */
     u16 color1[W], color2[W];
     u8 layer1[W], layer2[W], found[W];
     u8 alpha3d[W];   /* BG0's 3D alpha (0-31) on this line */
@@ -974,10 +975,13 @@ static void DrawEngine(Engine *e, u16 *out)
     if (!anyWindow) {
         memset(enableLine, 0x3F, W);
     }
-    /* Blending two layers needs second targets, and alpha blending or OBJs
-     * that blend by themselves; otherwise each pixel shows its front-most
-     * layer, perhaps brightened or darkened. */
-    blend2 = (bldcnt & 0x3F00) && (effect == 1 || objFrame->blends || gx3dTranslucent);
+    /* Blending two layers needs second targets, and alpha blending of some
+     * first target, or OBJs or 3D pixels that blend by themselves;
+     * otherwise each pixel shows its front-most layer, perhaps brightened
+     * or darkened. (Battles set alpha blending with no first target: no
+     * pixel blends.) */
+    blend2 = (bldcnt & 0x3F00) &&
+             ((effect == 1 && (bldcnt & 0x3F)) || objFrame->blends || gx3dTranslucent);
     flags = (anyWindow ? T_WINDOW : 0) | (effect >= 2 ? T_LAYER : 0);
 
     for (y = 0; y < H; y++) {
@@ -1092,6 +1096,16 @@ static void DrawEngine(Engine *e, u16 *out)
                     if (n == 0) {
                         color1[x] = c & 0x7FFF;
                         layer1[x] = (u8)layer;
+                        /* Nothing to blend this pixel with what's behind
+                         * (as the line's last loop has it): the front
+                         * layer is all it needs (3: no second layer). */
+                        if (!(layer == 0 && kind[0] == BG_3D && alpha3d[x] < 31) &&
+                            !(layer == SLOT_OBJ && (objLine->semi[x] || objLine->alpha[x] < 16)) &&
+                            !(effect == 1 && (enableLine[x] & 0x20) && (bldcnt & (1 << layer)))) {
+                            found[x] = 3;
+                            done++;
+                            continue;
+                        }
                     } else {
                         color2[x] = c & 0x7FFF;
                         layer2[x] = (u8)layer;
@@ -1142,9 +1156,9 @@ static void DrawEngine(Engine *e, u16 *out)
             u8 enable = enableLine[x];
             int n = found[x];
             int top = n > 0 ? layer1[x] : 5;          /* 5: the backdrop */
-            int second = n > 1 ? layer2[x] : 5;
+            int second = n == 2 ? layer2[x] : 5;
             u16 topColor = n > 0 ? color1[x] : backdrop;
-            u16 secondColor = n > 1 ? color2[x] : backdrop;
+            u16 secondColor = n == 2 ? color2[x] : backdrop;
             u16 c = topColor;
 
             if (top == 0 && kind[0] == BG_3D && alpha3d[x] < 31 &&
