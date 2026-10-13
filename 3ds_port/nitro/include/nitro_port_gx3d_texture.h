@@ -1,8 +1,9 @@
 /*
  * DS 3D textures, decoded the same way for both renderers: the PC reference
  * rasterizer samples texels with NitroPort_Gx3dSampleTexel, and the 3DS GPU
- * path converts whole textures with NitroPort_Gx3dDecodeTexture (which uses
- * the same sampler), so the two can't drift apart.
+ * path converts whole textures with NitroPort_Gx3dDecodeTextureTiled, which
+ * gives the same texels a row at a time (much faster); the tests check the
+ * two against each other, so they can't drift apart.
  *
  * Textures and palettes are read from the DS VRAM banks the game has mapped
  * as texture image / texture palette slots (VRAMCNT A-G). No libctru here:
@@ -55,9 +56,15 @@ void NitroPort_Gx3dDecodeTexture(const NitroGx3dTexBanks *banks, uint32_t param,
 void NitroPort_Gx3dTileRGBA8(const uint32_t *linear, unsigned width, unsigned height,
                              uint32_t *tiled);
 
-/* Both at once, without the linear copy: what the 3DS GPU path uses. */
+/* Both at once, without the linear copy: what the 3DS GPU path uses. The
+ * same texels as the sampler gives, worked out a row at a time. */
 void NitroPort_Gx3dDecodeTextureTiled(const NitroGx3dTexBanks *banks, uint32_t param,
                                       uint32_t palette_base, uint32_t *tiled);
+/* Only texels s0 <= s < s1, t0 <= t < t1 (clamped to the texture), into
+ * their places in the whole tiled texture; the rest is left as it is. */
+void NitroPort_Gx3dDecodeTextureTiledRect(const NitroGx3dTexBanks *banks, uint32_t param,
+                                          uint32_t palette_base, uint32_t *tiled,
+                                          unsigned s0, unsigned t0, unsigned s1, unsigned t1);
 
 /* A hash of everything the texture's texels come from: the texel data, the
  * 4x4 block descriptors (format 5), the palette entries it can use, and the

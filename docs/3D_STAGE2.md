@@ -109,7 +109,13 @@ filtering (the DS doesn't filter).
 
 **Decode exactly as the PC rasterizer samples.** Move its decoder into
 shared code (e.g. `port_gx3d_texture.c`), used by both the PC rasterizer and
-the converter, so the two can't drift apart.
+the converter, so the two can't drift apart. *Done:* the converter
+(`NitroPort_Gx3dDecodeTextureTiled`) works a row at a time, with the palette
+looked up once and eight texels per step; the tests check it texel by texel
+against the sampler for every format. (Calling the sampler for each texel
+took the 3DS tens of milliseconds for a battle's 256×256 Pokémon sprite
+texture, converted again for every frame of a palette fade, such as a
+Pokémon coming out of its ball.)
 
 **Cache.** Key: (TEXIMAGE_PARAM address, format and size bits; palette base
 for paletted formats). Store a hash of the source bytes: the texture data,
