@@ -668,6 +668,8 @@ typedef struct Drawer {
     LightEvent go;
     int screens;             /* bit 0: engine A's screen (3D), bit 1: engine B's */
     int core;
+    s32 priority;            /* while it shows what it drew */
+    s32 readPriority;        /* while it reads the game's display state */
     volatile bool busy;      /* drawing a frame */
     volatile bool reading;   /* reading the game's display state for it */
     volatile bool aOnTop;    /* engine A on the upper screen, for this frame */
@@ -752,6 +754,9 @@ static void DrawerMain(void *arg)
             drawB = RenderScreen(1, d->aOnTop);
         }
         __atomic_store_n(&d->reading, false, __ATOMIC_RELEASE);
+        if (d->readPriority != d->priority) {
+            svcSetThreadPriority(CUR_THREAD_HANDLE, d->priority);
+        }
         if (drawA) {
             ShowScreen(0, d->aOnTop);
         }
@@ -761,12 +766,17 @@ static void DrawerMain(void *arg)
         d->drawn += (unsigned)drawA + (unsigned)drawB;
         d->ticks += svcGetSystemTick() - start;
         d->count++;
+        /* Back up before it can be handed the next frame: it wakes up
+         * reading. */
+        if (d->readPriority != d->priority) {
+            svcSetThreadPriority(CUR_THREAD_HANDLE, d->readPriority);
+        }
         __atomic_store_n(&d->busy, false, __ATOMIC_RELEASE);
     }
     threadExit(0);
 }
 
-static bool StartDrawer(int screens, s32 priority, int core)
+static bool StartDrawer(int screens, s32 priority, s32 readPriority, int core)
 {
     Drawer *d = &sDrawers[sDrawerCount];
 
@@ -774,7 +784,9 @@ static bool StartDrawer(int screens, s32 priority, int core)
     LightEvent_Init(&d->go, RESET_ONESHOT);
     d->screens = screens;
     d->core = core;
-    d->thread = threadCreate(DrawerMain, d, 64 * 1024, priority, core, false);
+    d->priority = priority;
+    d->readPriority = readPriority;
+    d->thread = threadCreate(DrawerMain, d, 64 * 1024, readPriority, core, false);
     if (d->thread == NULL) {
         return false;
     }
@@ -787,17 +799,22 @@ static bool StartDrawer(int screens, s32 priority, int core)
  * the 3D's GPU thread there too. */
 static void StartDrawers(s32 priority, bool isNew3ds)
 {
-    if (isNew3ds && StartDrawer(ENGINE_A, priority, 2)) {
+    if (isNew3ds && StartDrawer(ENGINE_A, priority, priority, 2)) {
         /* Engine B on core 1, below the geometry thread, when the program
          * has a share of it: in battles (where engine B's touch screen is
          * the costliest of all, and the geometry thread has little to do)
          * it has most of that core; on core 0 it came after the GPU
-         * thread and fell to 10-20 frames a second. */
-        if (sGeoCpuLimit == 0 || !StartDrawer(ENGINE_B, priority + 1, 1)) {
-            StartDrawer(ENGINE_B, priority + 2, 0);
+         * thread and fell to 10-20 frames a second.
+         * While it reads the game's display state, above the geometry
+         * thread (priority - 1): the game waits for that reading before
+         * its next V-blank work, and in the field, where the screen hardly
+         * changes, the reading (working out that it didn't) is short but
+         * waited behind the geometry thread's whole scene, 18 ms. */
+        if (sGeoCpuLimit == 0 || !StartDrawer(ENGINE_B, priority + 1, priority - 2, 1)) {
+            StartDrawer(ENGINE_B, priority + 2, priority + 2, 0);
         }
     } else {
-        StartDrawer(ENGINE_A | ENGINE_B, priority + 1, 0);
+        StartDrawer(ENGINE_A | ENGINE_B, priority + 1, priority + 1, 0);
     }
 }
 
