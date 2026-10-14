@@ -145,6 +145,40 @@ jobs:
           3ds_port/nitrosystem/build/3ds/libnitrosystem.a
           --nm "$DEVKITARM/bin/arm-none-eabi-nm" --strict
 
+  # The WideArt editor (tools/wideart: drawing the wide screen's bands by
+  # hand) as a Windows program. It contains no game code or data: the
+  # captures and pictures it works on stay on the person's SD card.
+  wideart-editor:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pillow and PyInstaller
+        run: python -m pip install pillow==11.1.0 pyinstaller==6.11.1
+
+      - name: The editor's tests
+        run: python -m unittest discover -s tools -p "test_wideart.py" -v
+
+      - name: Build WideArt.exe
+        run: pyinstaller --noconfirm --onefile --windowed --name WideArt --paths tools/wideart tools/wideart/wideart.py
+
+      - name: WideArt.exe starts, opens a capture and saves a picture (self-test)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/WideArt.exe -ArgumentList "--selftest" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "WideArt self-test failed (exit $($p.ExitCode))" }
+
+      - name: Upload WideArt.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: WideArt-windows
+          path: dist/WideArt.exe
+
   # Native host tests of the platform libraries and Python tooling.
   tools-and-tests:
     runs-on: ubuntu-latest
@@ -160,7 +194,10 @@ jobs:
         run: python tools/check_ci_artifacts.py
 
       - name: Check Python tools compile
-        run: python -m py_compile tools/*.py builder/*.py
+        run: python -m py_compile tools/*.py tools/wideart/*.py builder/*.py
+
+      - name: Pillow (for the WideArt editor's tests)
+        run: python -m pip install pillow==11.1.0
 
       - name: Python tool unit tests (every tools/test_*.py)
         run: python -m unittest discover -s tools -p 'test_*.py' -v

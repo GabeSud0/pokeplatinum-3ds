@@ -7,7 +7,8 @@
 # makerom (3DSGuy/Project_CTR, makerom-v0.18.4): the .cia itself.
 # bannertool (diasurgical/bannertool, 1.2.0): the HOME Menu's banner.
 # Both into DEST/bin; done once (DEST/versions says which), then reused.
-# Needs git, gcc, g++ and make (the build script installs them on Windows).
+# Needs git, gcc, g++ and make, and on MSYS2 libiconv-devel (the build
+# script installs them on Windows).
 set -euo pipefail
 
 DEST="${1:?usage: build_cia_tools.sh DEST}"
@@ -39,7 +40,11 @@ mkdir -p "$SRC"
 echo "Building makerom ($MAKEROM_TAG)"
 fetch "$MAKEROM_REPO" "$MAKEROM_TAG" "$SRC/Project_CTR"
 # PROJECT_PLATFORM=GNU: the plain gcc (its WIN32 setting wants MinGW's
-# cross-compilers, which MSYS2's own gcc isn't).
+# cross-compilers, which MSYS2's own gcc isn't). On MSYS2, iconv is a
+# library of its own (libiconv-devel): linked in.
+if [ "$(uname -o 2>/dev/null)" = "Msys" ]; then
+    sed -i 's/^\tLIB +=$/\tLIB += -liconv/' "$SRC/Project_CTR/makerom/makefile"
+fi
 make -C "$SRC/Project_CTR/makerom" PROJECT_PLATFORM=GNU deps >/dev/null
 make -C "$SRC/Project_CTR/makerom" PROJECT_PLATFORM=GNU -j"$(nproc)" >/dev/null
 cp "$SRC/Project_CTR/makerom/bin/"makerom* "$DEST/bin/"

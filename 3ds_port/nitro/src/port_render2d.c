@@ -47,6 +47,7 @@
 #include <nitro_port.h>
 #include <nitro_port_gx3d.h>
 #include <nitro_port_wide.h>
+#include <nitro_port_wideart.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -115,6 +116,13 @@ typedef struct Engine {
     u8 clip[4];
     u8 anchorWindows;
     u8 mirror[4];
+    /* (wider canvas, worked out each frame) a BG's hand-drawn picture
+     * (nitro_port_wideart.h): its pixels, how far the BG has scrolled
+     * since it was made, and whether it's the whole picture (else the
+     * bands beside the DS's only). */
+    const u16 *art[4];
+    short artDx[4], artDy[4];
+    u8 artFull[4];
     /* (worked out each frame, DecideSplits) a text BG that's a picture with
      * a plain middle and decorated sides: its halves go to the screen's
      * edges, the middle widened with its plain colour. */
@@ -325,6 +333,7 @@ typedef struct Segment {
     short axis;
 } Segment;
 #define SEG_MIRROR (-2)
+#define SEG_ART (-3)       /* the BG's hand-drawn picture (Engine.art) */
 #define MAX_SEGMENTS 24
 
 static const int sTextSizes[4][2] = { { 256, 256 }, { 512, 256 }, { 256, 512 }, { 512, 512 } };
@@ -426,6 +435,40 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int t
     struct { int x0, x1, shift, off; } moved[NITRO_WIDE_MAX_WINDOWS];
     int nmoved = 0;
 
+    if (e->art[bg] != NULL) {
+        /* A hand-drawn picture: the bands (or all of it) from that. */
+        if (e->artFull[bg]) {
+            segs[0].x0 = 0;
+            segs[0].x1 = (short)width;
+            segs[0].off = 0;
+            segs[0].fixed = SEG_ART;
+            segs[0].axis = 0;
+            return 1;
+        }
+        if (origin > 0) {
+            segs[n].x0 = 0;
+            segs[n].x1 = (short)origin;
+            segs[n].off = 0;
+            segs[n].fixed = SEG_ART;
+            segs[n].axis = 0;
+            n++;
+        }
+        segs[n].x0 = (short)origin;
+        segs[n].x1 = (short)(origin + 256);
+        segs[n].off = (short)(hofs - origin);
+        segs[n].fixed = -1;
+        segs[n].axis = 0;
+        n++;
+        if (origin + 256 < width) {
+            segs[n].x0 = (short)(origin + 256);
+            segs[n].x1 = (short)width;
+            segs[n].off = 0;
+            segs[n].fixed = SEG_ART;
+            segs[n].axis = 0;
+            n++;
+        }
+        return n;
+    }
     if (e->split[bg]) {
         /* The halves to the edges, the plain middle widened. */
         segs[0].x0 = 0;
@@ -609,6 +652,19 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
 
         for (; x < xe; x++) {
             PUT(x, c, flags);
+        }
+        continue;
+    }
+    if (segs[seg].fixed == SEG_ART) {
+        /* the hand-drawn picture, moved by the scroll since it was made */
+        const u16 *art = e->art[bg];
+        int ay = y + e->artDy[bg];
+
+        for (; x < xe; x++) {
+            int ax = x + e->artDx[bg];
+
+            PUT(x, (ay >= 0 && ay < H && ax >= 0 && ax < NITRO_WIDE_ART_W) ? art[ay * NITRO_WIDE_ART_W + ax] : 0,
+                flags);
         }
         continue;
     }
@@ -877,6 +933,150 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
         } else if (e->mirror[bg] && (out[xe - 1] & OPAQUE)) {
             for (i = xe; i < e->width; i++) {
                 out[i] = out[2 * xe - 1 - i];
+            }
+        }
+    }
+    /* a hand-drawn picture: the bands (or all of it) from that */
+    if (e->art[bg] != NULL) {
+        const u16 *art = e->art[bg] + y * NITRO_WIDE_ART_W;
+        int i;
+
+        for (i = 0; i < e->width && i < NITRO_WIDE_ART_W; i++) {
+            if (e->artFull[bg] || i < e->origin || i >= e->origin + W) {
+                out[i] = art[i];
+            }
+        }
+    }
+}
+
+/* ------------------------------------------------------- hand-drawn art */
+
+/* FNV-1a, 64 bits. */
+#define KEY_START 0xcbf29ce484222325ull
+static inline u64 KeyAdd(u64 h, u32 v)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        h = (h ^ (v & 0xFF)) * 0x100000001b3ull;
+        v >>= 8;
+    }
+    return h;
+}
+
+/* A BG's key (nitro_port_wideart.h): its kind and size, its whole map, the
+ * tiles the map uses (each once, by number) and the palettes they're in.
+ * Not where its map and tiles are in VRAM, nor its scroll: the same art is
+ * the same key wherever the game put it. 0 for a BG with none (a bitmap). */
+static u64 BgKey(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt)
+{
+    const u8 *vram = e->bgVram;
+    u32 mask = e->bgMask, charBase = CharBase(e, bgcnt, dispcnt), screenBase = ScreenBase(e, bgcnt, dispcnt);
+    u32 used[1024 / 32];
+    u32 banks = 0, entries, i;
+    int bpp8, wide16;   /* 8-bit tiles; 16-bit map entries */
+    u64 h = KEY_START;
+
+    if (kind == BG_TEXT) {
+        bpp8 = (bgcnt & 0x80) != 0;
+        wide16 = 1;
+        entries = (u32)(sTextSizes[bgcnt >> 14][0] / 8) * (u32)(sTextSizes[bgcnt >> 14][1] / 8);
+    } else if (kind == BG_AFFINE || (kind == BG_EXTENDED && !(bgcnt & 0x80))) {
+        bpp8 = 1;
+        wide16 = kind == BG_EXTENDED;
+        entries = (u32)((128 << (bgcnt >> 14)) / 8) * (u32)((128 << (bgcnt >> 14)) / 8);
+    } else {
+        return 0;   /* a bitmap, the 3D */
+    }
+    h = KeyAdd(h, (u32)kind | ((u32)(bgcnt & 0xC080) << 8));
+    memset(used, 0, sizeof(used));
+    /* the map (a text BG's in its 2 KB blocks, in order: the same bytes) */
+    for (i = 0; i < entries; i++) {
+        u32 entry = wide16 ? Rd16(vram, (screenBase + i * 2) & mask) : vram[(screenBase + i) & mask];
+        u32 tile = wide16 ? entry & 0x3FF : entry;
+
+        h = KeyAdd(h, entry);
+        used[tile >> 5] |= 1u << (tile & 31);
+        if (wide16) {
+            banks |= 1u << (entry >> 12);
+        }
+    }
+    /* the tiles used */
+    for (i = 0; i < 1024; i++) {
+        u32 size = bpp8 ? 64 : 32, k;
+
+        if (!(used[i >> 5] & (1u << (i & 31)))) {
+            continue;
+        }
+        for (k = 0; k < size; k += 4) {
+            h = KeyAdd(h, Rd32(vram, (charBase + i * size + k) & mask));
+        }
+    }
+    /* their palettes */
+    if (!bpp8) {
+        for (i = 0; i < 16; i++) {
+            if (banks & (1u << i)) {
+                u32 k;
+
+                for (k = 0; k < 16; k++) {
+                    h = KeyAdd(h, PlttColor(e->bgPltt, i * 16 + k));
+                }
+            }
+        }
+    } else {
+        const u8 *ext = (dispcnt & 0x40000000) && wide16 ? BgExtSlot(e, bg, bgcnt) : NULL;
+
+        if (ext != NULL) {
+            for (i = 0; i < 16; i++) {
+                if (banks & (1u << i)) {
+                    u32 k;
+
+                    for (k = 0; k < 256; k++) {
+                        h = KeyAdd(h, PlttColor(ext + (i << 9), k));
+                    }
+                }
+            }
+        } else {
+            for (i = 0; i < 256; i++) {
+                h = KeyAdd(h, PlttColor(e->bgPltt, i));
+            }
+        }
+    }
+    return h ? h : 1;
+}
+
+/* (wider canvas) each BG's hand-drawn picture, if there's one. */
+static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
+{
+    int bg;
+
+    if (e->width != NITRO_WIDE_ART_W || NitroPort_WideArtCount() == 0) {
+        return;
+    }
+    for (bg = 0; bg < 4; bg++) {
+        u64 key;
+        int hofs, vofs, full;
+        const u16 *art;
+
+        if (kind[bg] == BG_NONE || kind[bg] == BG_3D || !e->clip[bg]) {
+            continue;
+        }
+        key = BgKey(e, bg, kind[bg], bgcnt[bg], dispcnt);
+        art = key ? NitroPort_WideArtFind(key, &hofs, &vofs, &full) : NULL;
+        if (art == NULL) {
+            continue;
+        }
+        e->art[bg] = art;
+        e->artFull[bg] = (u8)full;
+        if (kind[bg] == BG_TEXT) {
+            e->artDx[bg] = (short)(((Rd16(e->io, 0x10 + bg * 4) & 0x1FF) - hofs + 512) % 512);
+            e->artDy[bg] = (short)(((Rd16(e->io, 0x12 + bg * 4) & 0x1FF) - vofs + 512) % 512);
+            /* (scrolled back past the capture: a negative distance) */
+            if (e->artDx[bg] >= 256) {
+                e->artDx[bg] -= 512;
+            }
+            if (e->artDy[bg] >= 256) {
+                e->artDy[bg] -= 512;
             }
         }
     }
@@ -1639,6 +1839,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     }
     if (fixedWidth == 0) {
         DecideSplits(e, kind, bgcnt, dispcnt);
+        LookUpArt(e, kind, bgcnt, dispcnt);
     }
     if (split != NULL) {
         split->has3d = e->isA && kind[0] == BG_3D;
@@ -1935,6 +2136,38 @@ static void Fill(u16 *out, u16 color, int n)
     }
 }
 
+/* An engine's registers and memory, and the canvas (split's: width,
+ * origin, clip; NULL: the DS's). */
+static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
+{
+    memset(e, 0, sizeof(*e));
+    e->isA = engine == 0;
+    e->io = NitroPort_IoReg + (e->isA ? 0 : 0x1000);
+    e->bgPltt = NitroPort_Pltt + (e->isA ? 0 : 0x400);
+    e->objPltt = e->bgPltt + 0x200;
+    e->oam = NitroPort_Oam + (e->isA ? 0 : 0x400);
+    e->bgVram = e->isA ? NitroPort_BgVram : NitroPort_DbBgVram;
+    e->bgMask = e->isA ? 0x7FFFF : 0x1FFFF;
+    e->objVram = e->isA ? NitroPort_ObjVram : NitroPort_DbObjVram;
+    e->objMask = e->isA ? 0x3FFFF : 0x1FFFF;
+    e->width = W;
+    if (split != NULL && split->width > W && split->width <= WMAX) {
+        int bg;
+
+        e->width = split->width;
+        e->origin = split->origin;
+        for (bg = 0; bg < 4; bg++) {
+            e->clip[bg] = split->clip[bg];
+        }
+        e->anchorWindows = (u8)split->anchorWindows;
+        if (NitroPort_WidePictures()) {
+            for (bg = 0; bg < 4; bg++) {
+                e->mirror[bg] = e->clip[bg];
+            }
+        }
+    }
+}
+
 static void Render(int engine, u16 *out, NitroRender2DSplit *split)
 {
     Engine e;
@@ -1945,32 +2178,7 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
         memset(split, 0, offsetof(NitroRender2DSplit, over));
         split->masterBright = IO16((engine == 0 ? 0 : 0x1000) + 0x6C);
     }
-    memset(&e, 0, sizeof(e));
-    e.isA = engine == 0;
-    e.io = NitroPort_IoReg + (e.isA ? 0 : 0x1000);
-    e.bgPltt = NitroPort_Pltt + (e.isA ? 0 : 0x400);
-    e.objPltt = e.bgPltt + 0x200;
-    e.oam = NitroPort_Oam + (e.isA ? 0 : 0x400);
-    e.bgVram = e.isA ? NitroPort_BgVram : NitroPort_DbBgVram;
-    e.bgMask = e.isA ? 0x7FFFF : 0x1FFFF;
-    e.objVram = e.isA ? NitroPort_ObjVram : NitroPort_DbObjVram;
-    e.objMask = e.isA ? 0x3FFFF : 0x1FFFF;
-    e.width = W;
-    if (split != NULL && split->width > W && split->width <= WMAX) {
-        int bg;
-
-        e.width = split->width;
-        e.origin = split->origin;
-        for (bg = 0; bg < 4; bg++) {
-            e.clip[bg] = split->clip[bg];
-        }
-        e.anchorWindows = (u8)split->anchorWindows;
-        if (NitroPort_WidePictures()) {
-            for (bg = 0; bg < 4; bg++) {
-                e.mirror[bg] = e.clip[bg];
-            }
-        }
-    }
+    SetUpEngine(&e, engine, split);
     dispcnt = Rd32(e.io, 0);
 
     /* The engine powered off: nothing on that screen. */
@@ -2007,6 +2215,58 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
     if (split == NULL) {
         MasterBrightness(out, Rd16(e.io, 0x6C), e.width * H);
     }
+}
+
+int NitroPort_Render2DLayer(int engine, int bg, const NitroRender2DSplit *layout, u16 *out, uint64_t *key, int *hofs,
+                            int *vofs, int *prio)
+{
+    Engine e;
+    u32 dispcnt;
+    u16 bgcnt[4], line[WMAX];
+    int kind[4], b, y;
+
+    SetUpEngine(&e, engine, layout);
+    dispcnt = Rd32(e.io, 0);
+    if (((dispcnt >> 16) & 3) != 1 || (dispcnt & 0x80) || bg < 0 || bg > 3) {
+        return 0;
+    }
+    FindExtPalettes(&e);
+    MakePalettes(&e);
+    for (b = 0; b < 4; b++) {
+        bgcnt[b] = Rd16(e.io, 8 + b * 2);
+        kind[b] = (dispcnt & (0x100u << b)) ? BgKind(&e, b, dispcnt) : BG_NONE;
+        if (kind[b] == BG_LARGE) {
+            kind[b] = BG_NONE;
+        }
+    }
+    if (kind[bg] == BG_NONE || kind[bg] == BG_3D) {
+        return 0;
+    }
+    if (e.width > W) {
+        DecideSplits(&e, kind, bgcnt, dispcnt);
+        LookUpArt(&e, kind, bgcnt, dispcnt);
+    }
+    *key = BgKey(&e, bg, kind[bg], bgcnt[bg], dispcnt);
+    *hofs = kind[bg] == BG_TEXT ? Rd16(e.io, 0x10 + bg * 4) & 0x1FF : 0;
+    *vofs = kind[bg] == BG_TEXT ? Rd16(e.io, 0x12 + bg * 4) & 0x1FF : 0;
+    *prio = bgcnt[bg] & 3;
+    for (y = 0; y < H; y++) {
+        if (kind[bg] == BG_TEXT) {
+            Target t;
+
+            t.row = line;
+            t.layerOf = NULL;
+            t.enable = NULL;
+            t.layer = (u8)bg;
+            t.bit = (u8)(1 << bg);
+            t.filled = 0;
+            DrawTextBg(&e, bg, bgcnt[bg], dispcnt, y, &t, T_PLAIN);
+        } else {
+            DrawAffineBg(&e, bg, kind[bg], bgcnt[bg], dispcnt, y, line);
+        }
+        memcpy(out + y * e.width, line, (size_t)e.width * sizeof(u16));
+    }
+    return 1;
 }
 
 void NitroPort_Render2D(int engine, u16 *out)
@@ -2098,8 +2358,10 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
                  ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
                  ((u32)split->clip[3] << 23)) * 16777619u;
     if (split->width > W) {
-        /* (the windows decide the edges' look, and where the anchored ones are) */
+        /* (the windows decide the edges' look, and where the anchored ones
+         * are; hand-drawn pictures loaded again) */
         signature = (signature ^ NitroPort_WideWindowsSerial()) * 16777619u;
+        signature = (signature ^ NitroPort_WideArtSerial()) * 16777619u;
     }
     if (last[e].valid && signature == last[e].signature) {
         return 0;

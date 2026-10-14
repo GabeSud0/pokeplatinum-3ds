@@ -33,8 +33,8 @@ SD_DIR="$WIN_HOME/pokeplatinum-sd"
 export DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}"
 export DEVKITARM="${DEVKITARM:-$DEVKITPRO/devkitARM}"
 
-step "Installing git, python, a C compiler and patch"
-pacman -S --needed --noconfirm git python gcc make patch
+step "Installing git, python, a C compiler, patch and iconv"
+pacman -S --needed --noconfirm git python gcc make patch libiconv-devel
 
 step "Making sure the 3DS tools are installed"
 pacman -S --needed --noconfirm 3ds-dev
@@ -55,7 +55,15 @@ step "Fetching the decompilation and the SDKs (a few minutes the first time)"
 python3 tools/bootstrap.py --clean
 
 step "Building pokeplatinum.3dsx (this takes a while: ~1,000 game files)"
-make -j"$(nproc)" game
+# (the output kept: with several files compiling at once, an error scrolls
+# away behind the warnings of the others; it's shown again at the end)
+if ! make -j"$(nproc)" game 2>&1 | tee build.log; then
+    echo
+    echo "==> The build failed. The error lines:"
+    grep -nE "error:|Error [0-9]|undefined reference|No such file" build.log | grep -v "Wmaybe-uninitialized" | head -30
+    echo "(the whole output is in $(cygpath -w "$PWD/build.log"))"
+    exit 1
+fi
 
 # The HOME Menu version (.cia). The tools are built once, in a folder kept
 # between builds. If this part fails, the .3dsx above is still fine.

@@ -6,7 +6,8 @@ Usage:
 
 Anything built from the game's code (the smoke app, the linked game) is a
 build of the game, and the repository never publishes one: CI builds and
-tests it, but only the toolchain test app and text reports leave the run.
+tests it, but only the toolchain test app, text reports and the WideArt
+editor (a drawing tool) leave the run.
 This reads every actions/upload-artifact step in .github/workflows and
 checks each uploaded path against the list below. Add to the list only
 things that contain no game code or data.
@@ -25,6 +26,7 @@ ALLOWED = [
     "3ds_port/hello3d/hello3d.3dsx",          # toolchain test app, no game code
     "build/game-link-report/*.md",            # lists of symbol names
     "build/game-compile-survey/*.json",       # compiler messages per file
+    "dist/WideArt.exe",                       # the wide art editor (tools/wideart), no game code
 ]
 
 

@@ -68,6 +68,7 @@
 #include <nitro_port_gx3d_vertex.h>
 #include <nitro_port_gx3d_texture.h>
 #include <nitro_port_wide.h>
+#include <nitro_port_wideart.h>
 
 #include "platinum.h"
 
@@ -728,6 +729,16 @@ static void ControlWait(void)
                 if (WritePng(arg, sheet, 1280, 384) != 0) {
                     NitroPort_Log("[pc] control: can't write %s", arg);
                 }
+            } else if (sscanf(line, "capture %1023s", arg) == 1) {
+                /* the upper screen for the wide art editor, into a new
+                 * folder in arg/captures (docs/WIDE_ART.md) */
+                char made[1100];
+
+                if (NitroPort_WideArtCapture(arg, made, sizeof(made)) == 0) {
+                    fprintf(stderr, "[pc] captured %s\n", made);
+                }
+            } else if (sscanf(line, "wideart %1023s", arg) == 1) {
+                NitroPort_WideArtLoad(arg);
             } else if (sscanf(line, "rshot %1023s", arg) == 1) {
                 if (RemasterShot(arg) != 0) {
                     NitroPort_Log("[pc] control: can't write %s", arg);
@@ -1235,6 +1246,9 @@ int main(int argc, char **argv)
              * showing what the 3DS's 400 pixels would. */
             NitroPort_Gx3dSetWideView(320);
             NitroPort_SetWideScreen(32);
+        } else if (strcmp(argv[i], "--wide-art") == 0 && i + 1 < argc) {
+            /* hand-drawn pictures for the wide screen (docs/WIDE_ART.md) */
+            NitroPort_WideArtLoad(argv[++i]);
         } else if (strcmp(argv[i], "--gx-thread") == 0) {
             sGxThread = 1;
         } else if (strcmp(argv[i], "--gx-thread-skip") == 0) {

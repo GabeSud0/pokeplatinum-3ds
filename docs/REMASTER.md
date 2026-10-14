@@ -104,6 +104,8 @@ x = 0 at 32 (`NitroRender2DSplit.width`/`origin`, laid out by
 `NitroPort_WideLayout` in `port_wide.c`). The rules, so that nothing is
 stretched:
 
+- **Hand-drawn bands win.** A layer with a picture drawn for it shows that
+  picture in its bands (or all over): see [WIDE_ART.md](WIDE_ART.md).
 - **The DS's layout stays.** The game's windows, menus and sprites keep
   their places (moved apart, they came apart: a menu's icons are sprites
   placed to match its window). Nothing is stretched.
@@ -151,7 +153,7 @@ Showing is apart from drawing. The display thread draws a frame, has the
 GPU put it into one of three LCD framebuffers of the screen's own, and
 queues it with the V-blank it's for; a V-blank thread (`main_3ds.c`)
 counts the V-blanks and puts each frame on the LCD at its one
-(`gspPresentBuffer`). The display thread never waits for a V-blank: it
+(`GSPGPU_SetBufferSwap`). The display thread never waits for a V-blank: it
 goes on to the next scene. (The first version waited inside the frame, and
 the scenes made during the wait were never drawn: 10 to 14 frames a second
 of a game making 30, and the waiting grew the lag.) A screen with two

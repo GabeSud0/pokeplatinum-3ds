@@ -95,7 +95,11 @@ LIBC = {"memcpy", "memset", "memmove", "memcmp", "strcmp", "strlen", "strncpy",
         # PC reference 3D rasterizer uses standard C99 libm, linked with -lm.
         "floor", "ceil", "fmin", "fmax", "fabs",
         # ... and the GPU-path simulator (port_gx3d_gpusim.c) its float versions.
-        "floorf", "ceilf", "fminf", "fmaxf", "fabsf"}
+        "floorf", "ceilf", "fminf", "fmaxf", "fabsf",
+        # Wide art (port_wideart.c): the art folder's files and captures,
+        # hosted C/newlib (devkitARM's has the directory functions).
+        "opendir", "readdir", "closedir", "mkdir", "stat", "qsort", "snprintf",
+        "strncmp", "fprintf"}
 
 # The port's platform layer (3ds_port/nitro/src/platform/): threads, their
 # signals, sleeping and the clock come from POSIX on a PC and from libctru on the 3DS,
