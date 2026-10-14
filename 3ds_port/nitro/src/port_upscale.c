@@ -95,20 +95,26 @@ DEFINE_SCALE2X(NitroPort_Scale2xTiled32, uint32_t)
 
 /* Nearest 2x: source pixel (x, y) is the 2x2 block at (2x, 2y), which in a
  * tile's Morton order is four texels in a row (the lowest bits are x's and
- * y's first). */
+ * y's first): a 4x4 block of source pixels fills one 8x8 tile, the pixel
+ * (i, j) of the block at texels 4 m .. 4 m + 3, m its index in sMorton4. */
 #define DEFINE_DOUBLE(NAME, T)                                                 \
     void NAME(const T *src, int w, int h, T *dst, int dstWidth)                \
     {                                                                          \
-        int x, y;                                                              \
-        for (y = 0; y < h; y++) {                                              \
-            const T *row = src + y * w;                                        \
-            for (x = 0; x < w; x++) {                                          \
-                T c = row[x];                                                  \
-                T *out = dst + NitroPort_TiledIndex((unsigned)(2 * x), (unsigned)(2 * y), (unsigned)dstWidth); \
-                out[0] = c;                                                    \
-                out[1] = c;                                                    \
-                out[2] = c;                                                    \
-                out[3] = c;                                                    \
+        int tilesPerRow = dstWidth / 8, bx, by, x, y;                          \
+        for (by = 0; by < h / 4; by++) {                                       \
+            const T *s = src + (by * 4) * w;                                   \
+            T *tiles = dst + (by * tilesPerRow) * 64;                          \
+            for (bx = 0; bx < w / 4; bx++, s += 4, tiles += 64) {              \
+                int j;                                                         \
+                for (j = 0; j < 4; j++) {                                      \
+                    const T *row = s + j * w;                                  \
+                    const uint8_t *m = sMorton4[j];                            \
+                    T *o;                                                      \
+                    o = tiles + m[0] * 4; o[0] = o[1] = o[2] = o[3] = row[0];  \
+                    o = tiles + m[1] * 4; o[0] = o[1] = o[2] = o[3] = row[1];  \
+                    o = tiles + m[2] * 4; o[0] = o[1] = o[2] = o[3] = row[2];  \
+                    o = tiles + m[3] * 4; o[0] = o[1] = o[2] = o[3] = row[3];  \
+                }                                                              \
             }                                                                  \
         }                                                                      \
         /* the edges repeated: the column right of the picture, the row     \

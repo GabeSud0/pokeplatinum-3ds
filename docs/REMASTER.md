@@ -54,10 +54,13 @@ its last frame was shown (its other framebuffer is on the LCD until then).
 Edge marking on the GPU (the DS outlines a pixel of an opaque polygon when
 a neighbouring pixel belongs to another polygon and is further away): for
 each of the four directions the opaque polygons are drawn again, moved a
-pixel and untextured, into a depth/stencil buffer of their own (so it holds
-what's visible at each pixel's neighbour), then in place with that buffer
-as the depth test: where they're nearer than the neighbour and the
-neighbour's ID differs, they get their edge colour.
+pixel, into a depth/stencil buffer of that direction's own (cleared by a
+memory fill ahead of the frame; so it holds what's visible at each pixel's
+neighbour), then in place with that buffer as the depth test: where
+they're nearer than the neighbour and the neighbour's ID differs, they get
+their edge colour. Textured polygons keep their texture in those passes:
+a tree's cut-out texels are no part of its shape (drawn plain, the trees
+had their rectangles outlined).
 
 Fog: the DS fogs a pixel by its depth, through a 32-entry density table
 starting at FOG_OFFSET, each entry 0x400 >> FOG_SHIFT depth units on
@@ -77,6 +80,12 @@ The GPU's command list is 1 MB; a draw that wouldn't fit is left out
 rather than overflow it (an overflow stopped the GPU thread on the real
 3DS). The `[perf] display` line says how full it got.
 
+Publishing a 2D picture (the drawing threads): the 15-bit pixels to
+RGB565, each doubled into the tiled texture (a 4x4 block of pixels is one
+8x8 tile), and the layers in front to RGBA8 with the alpha multiplied in,
+only when there's anything in front (often there isn't); the texture's
+used rows flushed, not all of it.
+
 What's approximate, compared with the DS's compositing: a 2D layer in
 front of the 3D blends with the 3D by its alpha (eva / 16) where the DS
 blends by eva and evb separately; a 3D first target of alpha blending
@@ -95,21 +104,30 @@ x = 0 at 32 (`NitroRender2DSplit.width`/`origin`, laid out by
 `NitroPort_WideLayout` in `port_wide.c`). The rules, so that nothing is
 stretched:
 
-- **BGs stop at the DS's edges** and the backdrop (the scene's own
-  background colour) shows beyond, except where a BG's line is one colour
-  at its edge (a picture's plain border, the black of a fade): that colour
-  goes on to the screen's edge.
+- **The DS's layout stays.** The game's windows, menus and sprites keep
+  their places (moved apart, they came apart: a menu's icons are sprites
+  placed to match its window). Nothing is stretched.
+- **A plain edge goes on.** Where a BG's line is one colour at its edge (a
+  picture's plain border, the black of a fade, a window's frame) that
+  colour goes on to the screen's edge.
+- **Pictures fold over.** On the screens made of pictures (the opening
+  movie, the title, the opening cutscene, the credits:
+  `NitroPort_WidePictures`) a BG whose picture reaches the edge is
+  mirrored at it: the intro's scenery, the title's torn border. A picture
+  that stops short of the edge (the title's logo) isn't.
+- **The UI shows nothing beside the DS's screen** (the backdrop, or the
+  3D): a menu's background stays a menu's background.
 - **Pictures with plain middles and decorated sides** (the intro's red
   bars) are split: each half goes to its screen edge and the plain middle
   widens.
+- **The DS's windows** (its hardware windows, WIN0/1) at the DS's edges go
+  on to the screen's: the intro's letterbox covers the bands too.
 - **The battle background** is a picture wider than the DS's screen (a
   512-pixel map: the trainer's slide-in scrolls across it), so beyond the
   DS's edges it shows its own art.
-- **The game's windows** (text boxes, menus, the place name sign) on the
-  left of the screen move to its left edge, those on the right to its
-  right edge; one across the middle (a text box) stays where it is. The
-  game tells the port where its windows are
-  (`patches/pokeplatinum/0012`).
+- **The place name sign** goes to the screen's left edge while it shows:
+  the game tells the port (`patches/pokeplatinum/0014`,
+  `NitroPort_WindowAnchor`; patch 0012 tells it where the windows are).
 - **The battle's health boxes** go to the screen's edges, the player's
   right and the opponent's left (`patches/pokeplatinum/0013`, by
   `NitroPort_WideScreenExtra`).
@@ -126,8 +144,18 @@ game's display state. A frame pairs the 3D with the newest 2D no newer
 than the scene + 1 (the DS shows a scene the frame after its 2D was set),
 and is shown `lag` V-blanks after the scene was made: the 3D comes at the
 game's own even pace (every second V-blank in the field), not whenever a
-scene happens to be done. `lag` starts at 3 and adapts: up when a frame
-would be late, back down after ten seconds with room to spare.
+scene happens to be done. `lag` starts at 2 and adapts (1 to 4): up when a
+frame would be late, back down after ten seconds with room to spare.
+
+Showing is apart from drawing. The display thread draws a frame, has the
+GPU put it into one of three LCD framebuffers of the screen's own, and
+queues it with the V-blank it's for; a V-blank thread (`main_3ds.c`)
+counts the V-blanks and puts each frame on the LCD at its one
+(`gspPresentBuffer`). The display thread never waits for a V-blank: it
+goes on to the next scene. (The first version waited inside the frame, and
+the scenes made during the wait were never drawn: 10 to 14 frames a second
+of a game making 30, and the waiting grew the lag.) A screen with two
+frames waiting isn't drawn again until one has shown.
 
 ## Settings
 
@@ -147,10 +175,12 @@ would be late, back down after ten seconds with room to spare.
 | `flip on` | the 2D layers upside down (if a GPU's texture rows come out the other way round) |
 
 The log says what's on (`[compose] screens drawn by the GPU: ...`) and,
-every two seconds, `[perf] display: N frames/s composed by the GPU, X ms of
-GPU each; 2D layers published N/s, upscaled in X ms each; 3D shown N
-V-blanks after the game made it, N frames late; GPU command list N% full
-at most, N draws cut`.
+every two seconds, `[perf] display: N frames/s drawn (N with a new 3D
+scene, of N scenes/s), each X ms building + X ms GPU; 2D published N/s, X
+ms each; 3D shown N V-blanks after the game made it, N late; GPU command
+list N% full at most, N draws cut`. In the field the frames with a new 3D
+scene should match the scenes made (30 a second); building + GPU is what
+a frame costs the display thread, and must stay under 33 ms for that.
 
 ## 60 frames a second in the 3D
 
