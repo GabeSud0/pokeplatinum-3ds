@@ -3,7 +3,11 @@
  * images are published by the GPU worker (3DS) or the reference renderer
  * (PC). A short atomic lock manages readers and index publication; drawing
  * never waits for the GPU, and no published image is overwritten in use.
- * Stage 2 PR3 will extend this path to preserve 5-bit pixel alpha.
+ *
+ * On the 3DS the GPU thread hands its finished RGBA8 image over as it is
+ * (NitroPort_Gx3dSubmitRGBA8), and whoever draws the 3D next converts it,
+ * when it acquires the image: the 3D's screen drawer, on a core of its
+ * own, rather than the GPU thread on the game's busy core.
  */
 #include <nitro_port_gx3d.h>
 #include "port_platform.h"
@@ -21,7 +25,12 @@ static uint8_t sAlphas[2][PIXELS] __attribute__((aligned(4)));   /* 3D alpha 0-3
 static uint8_t sTranslucent[2];      /* the image has pixels of alpha 1-30 */
 static unsigned char sGate;
 static int sPublished=-1,sReserved=-1,sReaders[2];
-static uint32_t sPublishCount;   /* images published so far */
+static uint32_t sPublishCount;   /* images published or handed over so far */
+/* A GPU image handed over, still to be converted, and the one being
+ * converted (its buffers mustn't be drawn into meanwhile). */
+static const uint32_t *sPending,*sPendingDepth,*sConverting;
+static NitroGx3dEdgeSetup sPendingEdges;
+static int sPendingHasEdges;
 /* A lower-priority GPU or same-priority drawer can own this gate.
  * Never busy-loop indefinitely on core 0: yield after a short spin. */
 static void lock(void) {
@@ -45,12 +54,13 @@ static int reserve(void) {
     unlock();
     return result;
 }
-static void finish(int index) {
+/* count: a new image (not one handed over before and counted then). */
+static void finish(int index,int count) {
     lock();
     if(sReserved==index){
         sPublished=index;
         sReserved=-1;
-        sPublishCount++;
+        if(count)sPublishCount++;
     }
     unlock();
 }
@@ -71,12 +81,63 @@ static void make_unpremultiply(void)
 /* PICA RGBA8 is a 32-bit 0xRRGGBBAA pixel (little-endian memory holds
  * bytes A,B,G,R): each colour's top 5 bits, straight into DS RGB555. */
 #define RGB555(c) (((c)>>27)|(((c)>>14)&0x3E0u)|(((c)>>1)&0x7C00u))
+static int publish(const uint32_t *src,size_t pixels,const uint32_t *depthId,
+                   const NitroGx3dEdgeSetup *edges,int count);
 int NitroPort_Gx3dPublishRGBA8(const uint32_t *src,size_t pixels)
 {
-    return NitroPort_Gx3dPublishRGBA8Edges(src,pixels,NULL,NULL);
+    return publish(src,pixels,NULL,NULL,1);
 }
 int NitroPort_Gx3dPublishRGBA8Edges(const uint32_t *src,size_t pixels,
                                     const uint32_t *depthId,const NitroGx3dEdgeSetup *edges)
+{
+    return publish(src,pixels,depthId,edges,1);
+}
+int NitroPort_Gx3dSubmitRGBA8(const uint32_t *image,const uint32_t *depthId,
+                              const NitroGx3dEdgeSetup *edges)
+{
+    if(!image)return 0;
+    lock();
+    /* A newer one replaces one still waiting: only the newest is shown. */
+    sPending=image;
+    sPendingDepth=depthId;
+    sPendingHasEdges=depthId && edges && edges->enabled;
+    if(sPendingHasEdges)sPendingEdges=*edges;
+    sPublishCount++;
+    unlock();
+    return 1;
+}
+int NitroPort_Gx3dRawInUse(const uint32_t *image)
+{
+    int used;
+    lock();
+    used=image==sPending || image==sConverting;
+    unlock();
+    return used;
+}
+/* The image handed over, converted (by one caller at a time). */
+static void convert_pending(void)
+{
+    const uint32_t *image,*depthId;
+    NitroGx3dEdgeSetup edges;
+    int hasEdges;
+    lock();
+    if(!sPending || sConverting){
+        unlock();
+        return;
+    }
+    image=sConverting=sPending;
+    depthId=sPendingDepth;
+    hasEdges=sPendingHasEdges;
+    if(hasEdges)edges=sPendingEdges;
+    sPending=NULL;
+    unlock();
+    (void)publish(image,PIXELS,hasEdges?depthId:NULL,hasEdges?&edges:NULL,0);
+    lock();
+    sConverting=NULL;
+    unlock();
+}
+static int publish(const uint32_t *src,size_t pixels,const uint32_t *depthId,
+                   const NitroGx3dEdgeSetup *edges,int count)
 {
     int index;
     size_t i;
@@ -134,7 +195,7 @@ int NitroPort_Gx3dPublishRGBA8Edges(const uint32_t *src,size_t pixels,
         partly|=(unsigned)outlinesPartly;
     }
     sTranslucent[index]=(uint8_t)(partly!=0);
-    finish(index);
+    finish(index,count);
     return 1;
 }
 #ifndef __3DS__
@@ -159,7 +220,7 @@ static void render_host(void)
             partly|=(sScratch[i]&0x8000u) && sAlphas[index][i]<31u;
         }
         sTranslucent[index]=(uint8_t)(partly!=0);
-        finish(index);
+        finish(index,1);
     }
     NitroPort_Gx3dReleaseScene(scene);
 }
@@ -167,6 +228,7 @@ static void render_host(void)
 const uint16_t *NitroPort_Gx3dAcquireImage(void)
 {
     int index;
+    convert_pending();
 #ifndef __3DS__
     render_host();
 #endif

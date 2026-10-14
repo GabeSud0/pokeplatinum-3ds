@@ -475,6 +475,114 @@ static void test_concurrent_image_handoff(void)
     CHECK(imageRaceFailures==0);
 }
 
+/* The GPU thread hands images over unconverted; whoever acquires the
+ * image converts it. */
+#define HANDOFF_PIXELS (NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT)
+static uint32_t handoff[3][HANDOFF_PIXELS];
+static uint32_t handoffIds[HANDOFF_PIXELS];
+static void fill_handoff(uint32_t *image,uint32_t rgba)
+{
+    size_t i;
+    for(i=0;i<HANDOFF_PIXELS;i++)image[i]=rgba;
+}
+static void test_image_submit(void)
+{
+    const uint16_t *got;
+    uint32_t count;
+    NitroGx3dEdgeSetup e;
+    size_t i;
+    /* One image: counted when handed over, converted when acquired, not
+     * counted again; its buffer in use until then. */
+    fill_handoff(handoff[0],0xff0000ffu);           /* red, opaque */
+    count=NitroPort_Gx3dImageCount();
+    CHECK(NitroPort_Gx3dSubmitRGBA8(handoff[0],NULL,NULL)==1);
+    CHECK(NitroPort_Gx3dImageCount()==count+1);
+    CHECK(NitroPort_Gx3dRawInUse(handoff[0]));
+    CHECK(!NitroPort_Gx3dRawInUse(handoff[1]));
+    got=NitroPort_Gx3dAcquireImage();
+    CHECK(got!=NULL && got[0]==0x801fu && got[HANDOFF_PIXELS-1]==0x801fu);
+    CHECK(!NitroPort_Gx3dRawInUse(handoff[0]));
+    CHECK(NitroPort_Gx3dImageCount()==count+1);
+    NitroPort_Gx3dReleaseImage(got);
+    /* A newer one replaces one still waiting. */
+    fill_handoff(handoff[1],0x00ff00ffu);           /* green */
+    fill_handoff(handoff[2],0x0000ffffu);           /* blue */
+    NitroPort_Gx3dSubmitRGBA8(handoff[1],NULL,NULL);
+    NitroPort_Gx3dSubmitRGBA8(handoff[2],NULL,NULL);
+    CHECK(!NitroPort_Gx3dRawInUse(handoff[1]));
+    CHECK(NitroPort_Gx3dRawInUse(handoff[2]));
+    got=NitroPort_Gx3dAcquireImage();
+    CHECK(got!=NULL && got[0]==0xfc00u);
+    NitroPort_Gx3dReleaseImage(got);
+    /* Outlined as it's converted: an opaque image of polygon ID 8 on a
+     * rear plane of ID 63, outlined round the screen's border. */
+    memset(&e,0,sizeof(e));
+    e.enabled=1;e.colors[1]=0x0421;e.clearId=63;e.clearDepth=0xffffffu;
+    for(i=0;i<HANDOFF_PIXELS;i++)handoffIds[i]=(8u<<24)|100u;
+    fill_handoff(handoff[0],0xff0000ffu);
+    NitroPort_Gx3dSubmitRGBA8(handoff[0],handoffIds,&e);
+    got=NitroPort_Gx3dAcquireImage();
+    CHECK(got!=NULL && got[0]==0x8421u && got[NITRO_GX3D_WIDTH+1]==0x801fu);
+    NitroPort_Gx3dReleaseImage(got);
+}
+/* A GPU thread handing over images in three buffers, never drawing into
+ * one in use; a drawer acquiring them meanwhile: every image it sees is
+ * whole (one colour), and they come in order. */
+static volatile int handoffDone;
+static volatile unsigned handoffFailures;
+static void *handoff_gpu(void *unused)
+{
+    unsigned frame,k;
+    (void)unused;
+    for(frame=1;frame<=400;frame++){
+        for(k=0;k<2;k++)if(!NitroPort_Gx3dRawInUse(handoff[k]))break;
+        if(NitroPort_Gx3dRawInUse(handoff[k])){handoffFailures++;continue;}
+        /* The frame number in red and green, opaque. */
+        fill_handoff(handoff[k],((frame&31u)<<27)|(((frame>>5)&31u)<<19)|255u);
+        NitroPort_Gx3dSubmitRGBA8(handoff[k],NULL,NULL);
+        if((frame&7)==0)sched_yield();
+    }
+    __atomic_store_n(&handoffDone,1,__ATOMIC_RELEASE);
+    return NULL;
+}
+static void *handoff_drawer(void *unused)
+{
+    unsigned last=0;
+    (void)unused;
+    while(!__atomic_load_n(&handoffDone,__ATOMIC_ACQUIRE)){
+        const uint16_t *got=NitroPort_Gx3dAcquireImage();
+        if(got){
+            uint16_t first=got[0];
+            unsigned frame=(first&31u)|(((first>>5)&31u)<<5);
+            size_t i;
+            for(i=0;i<HANDOFF_PIXELS;i+=97)if(got[i]!=first){handoffFailures++;break;}
+            if(got[HANDOFF_PIXELS-1]!=first)handoffFailures++;
+            if(frame<last)handoffFailures++;
+            last=frame;
+            NitroPort_Gx3dReleaseImage(got);
+        }
+        sched_yield();
+    }
+    return NULL;
+}
+static void test_concurrent_submit(void)
+{
+    pthread_t gpu,drawer;
+    const uint16_t *got;
+    handoffDone=0;handoffFailures=0;
+    /* Frame 0 first, so the drawer never sees an earlier test's image. */
+    fill_handoff(handoff[2],255u);
+    NitroPort_Gx3dSubmitRGBA8(handoff[2],NULL,NULL);
+    got=NitroPort_Gx3dAcquireImage();
+    CHECK(got!=NULL && got[0]==0x8000u);
+    NitroPort_Gx3dReleaseImage(got);
+    CHECK(pthread_create(&gpu,NULL,handoff_gpu,NULL)==0);
+    CHECK(pthread_create(&drawer,NULL,handoff_drawer,NULL)==0);
+    pthread_join(gpu,NULL);
+    pthread_join(drawer,NULL);
+    CHECK(handoffFailures==0);
+}
+
 /* ---- Stage 2 PR2: textures and batches ---------------------------------- */
 
 static unsigned char texSlots[4][0x20000];
@@ -719,6 +827,8 @@ int main(void) {
     test_edge_marking();
     test_png_dump();
     test_concurrent_image_handoff();
+    test_image_submit();
+    test_concurrent_submit();
     test_texture_decode();
     test_texture_decode_fast();
     test_texture_hash();
