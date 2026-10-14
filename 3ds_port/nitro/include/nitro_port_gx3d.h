@@ -110,9 +110,19 @@ const uint8_t *NitroPort_Gx3dImageAlpha(const uint16_t *image);
 /* Whether an acquired image has pixels of alpha 1-30 (worked out once,
  * when it's published). */
 int NitroPort_Gx3dImageTranslucent(const uint16_t *image);
-/* How many 3D images have been published: a new one when it changes. (On
- * the PC, images are drawn when acquired, so it changes with the scene.) */
+/* How many 3D images have been published or handed over: a new one when
+ * it changes. (On the PC, images are drawn when acquired, so it changes
+ * with the scene.) */
 uint32_t NitroPort_Gx3dImageCount(void);
+/* Hand a finished RGBA8 image (and its depth/IDs for edge marking, or
+ * NULL) over without converting it: the next NitroPort_Gx3dAcquireImage
+ * does (on the caller's core), as NitroPort_Gx3dPublishRGBA8Edges would.
+ * The buffers are the caller's: not to be drawn into again while
+ * NitroPort_Gx3dRawInUse says so (waiting, or being converted). A newer
+ * image replaces one still waiting. */
+int NitroPort_Gx3dSubmitRGBA8(const uint32_t *image, const uint32_t *depthId,
+                              const NitroGx3dEdgeSetup *edges);
+int NitroPort_Gx3dRawInUse(const uint32_t *image);
 
 /* Debug-only PNG output for the newest finished RGB555|coverage image.
  * Pixel order is always DS screen order (top-to-bottom, left-to-right).

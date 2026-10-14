@@ -1039,7 +1039,7 @@ static void PerfFrame(u64 enter)
         lastGeoScenes = geoScenes;
         lastGeoSkipped = geoSkipped;
         if (scenes) {
-            NitroPort_Log("[perf] 3D: %.1f scenes/s; per scene %.1f ms building (textures: %.2f decoded, %.0f texels, %.1f ms), %.1f ms GPU and copy, %.1f ms converting",
+            NitroPort_Log("[perf] 3D: %.1f scenes/s; per scene %.1f ms building (textures: %.2f decoded, %.0f texels, %.1f ms), %.1f ms GPU and copy, %.1f ms handing over (converted by the 3D screen's drawer)",
                           scenes / seconds,
                           (double)(build - lastBuild) * 1000.0 / SYSCLOCK_ARM11 / scenes,
                           (double)(texConverted - lastTexConverted) / scenes,

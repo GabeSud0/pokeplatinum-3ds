@@ -2,8 +2,9 @@
  * Stage 2: the PICA200 backend. Only the dedicated 3D thread calls
  * functions in this file: no GPU commands run in the game or 2D threads.
  * Renders a 256x192 off-screen RGBA8 target with a 24-bit depth buffer.
- * GX_DisplayTransfer untile-copies into two linear RGBA8 buffers; after
- * completion, the shared image API publishes a CPU-readable RGB555 image.
+ * GX_DisplayTransfer untile-copies into one of three linear RGBA8 buffers;
+ * after completion it's handed over to the shared image API as it is, and
+ * the 3D screen's drawer converts it to RGB555 when it draws.
  *
  * PR2: textures. Each DS texture is decoded with the PC reference's own
  * decoder (port_gx3d_texture.c), tiled for the PICA and kept in a cache.
@@ -64,10 +65,14 @@ static DVLB_s *sDvlb;
 static shaderProgram_s sProgram;
 static int sProgramReady;
 static NitroGx3dGpuVertex *sVertices[2];
-static u32 *sImages[2];
+/* The finished images, read back: three, as one may be waiting to be
+ * converted and another being converted (NitroPort_Gx3dSubmitRGBA8) while
+ * the next is drawn into the third. */
+#define IMAGE_SLOTS 3
+static u32 *sImages[IMAGE_SLOTS];
 /* The depth/stencil buffer, read back for edge marking: 24-bit depth and
  * the stencil (an opaque polygon ID, or 64-127/255 for none) << 24. */
-static u32 *sDepthIds[2];
+static u32 *sDepthIds[IMAGE_SLOTS];
 /* Edge marking works (off for good if the buffer read back ever isn't as
  * expected), and how many scenes' buffers are still to be checked. */
 static int sEdgeMarking=1;
@@ -97,9 +102,12 @@ static void clean_up(void)
     for(i=0;i<TEX_CACHE_ENTRIES;i++)free_texture(&sTextures[i]);
     for(i=0;i<2;i++){
         if(sVertices[i])linearFree(sVertices[i]);
+        sVertices[i]=NULL;
+    }
+    for(i=0;i<IMAGE_SLOTS;i++){
         if(sImages[i])linearFree(sImages[i]);
         if(sDepthIds[i])linearFree(sDepthIds[i]);
-        sVertices[i]=NULL;sImages[i]=NULL;sDepthIds[i]=NULL;
+        sImages[i]=NULL;sDepthIds[i]=NULL;
     }
     free(sBatches);sBatches=NULL;
     if(sProgramReady){
@@ -138,9 +146,12 @@ int NitroPort_PicaInit(void)
     for(i=0;i<2;i++){
         sVertices[i]=linearAlloc(NITRO_GX3D_PICA_MAX_VERTICES*
                                  sizeof(NitroGx3dGpuVertex));
+        if(!sVertices[i])goto fail;
+    }
+    for(i=0;i<IMAGE_SLOTS;i++){
         sImages[i]=linearAlloc(IMAGE_BYTES);
         sDepthIds[i]=linearAlloc(IMAGE_BYTES);
-        if(!sVertices[i]||!sImages[i]||!sDepthIds[i])goto fail;
+        if(!sImages[i]||!sDepthIds[i])goto fail;
         memset(sImages[i],0,IMAGE_BYTES);
     }
     sBatches=malloc(MAX_BATCHES*sizeof(*sBatches));
@@ -285,7 +296,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     size_t count,nbatches=0,b;
     unsigned lost=0;
     C3D_BufInfo *buffers;
-    int slot,blend,edging;
+    int slot,image,blend,edging;
     u32 clear,clearColor;
     NitroGx3dEdgeSetup edges;
     if(dropped)*dropped=scene ? scene->dropped : 0;
@@ -440,45 +451,51 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
      * get_texture). No C3D_FrameSync either: it waits for a V-blank. */
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
     t1=svcGetSystemTick();
+    /* An image buffer not waiting to be converted nor being converted:
+     * with three, there always is one. */
+    for(image=0;image<IMAGE_SLOTS-1;image++)
+        if(!NitroPort_Gx3dRawInUse(sImages[image]))break;
     /* Off-screen target isn't bound to a 3DS LCD. Copy its tiles to
      * ordinary linear memory: this waits for the drawing to finish, then
      * for the copy (PPF), then the CPU cache is invalidated. */
-    GSPGPU_FlushDataCache(sImages[slot],(u32)IMAGE_BYTES);
+    GSPGPU_FlushDataCache(sImages[image],(u32)IMAGE_BYTES);
     C3D_SyncDisplayTransfer((u32*)sTarget->frameBuf.colorBuf,
-                 GX_BUFFER_DIM(GX3D_W,GX3D_H),sImages[slot],
+                 GX_BUFFER_DIM(GX3D_W,GX3D_H),sImages[image],
                  GX_BUFFER_DIM(GX3D_W,GX3D_H),GX3D_TRANSFER_FLAGS);
-    GSPGPU_InvalidateDataCache(sImages[slot],(u32)IMAGE_BYTES);
+    GSPGPU_InvalidateDataCache(sImages[image],(u32)IMAGE_BYTES);
     if(edging){
         /* The depth/stencil buffer the same way: D24S8, a 32-bit word a
          * pixel, the depth in its low 24 bits and the stencil above. */
-        GSPGPU_FlushDataCache(sDepthIds[slot],(u32)IMAGE_BYTES);
+        GSPGPU_FlushDataCache(sDepthIds[image],(u32)IMAGE_BYTES);
         C3D_SyncDisplayTransfer((u32*)sTarget->frameBuf.depthBuf,
-                     GX_BUFFER_DIM(GX3D_W,GX3D_H),sDepthIds[slot],
+                     GX_BUFFER_DIM(GX3D_W,GX3D_H),sDepthIds[image],
                      GX_BUFFER_DIM(GX3D_W,GX3D_H),GX3D_TRANSFER_FLAGS);
-        GSPGPU_InvalidateDataCache(sDepthIds[slot],(u32)IMAGE_BYTES);
+        GSPGPU_InvalidateDataCache(sDepthIds[image],(u32)IMAGE_BYTES);
         /* Every stencil value must be an ID, an ID + 64 or 255; anything
          * else means the buffer isn't laid out as above. Checked on the
          * first scenes: then edge marking stays off rather than draw
          * outlines in the wrong places. */
         if(sEdgeChecks>0){
-            unsigned odd=NitroPort_Gx3dEdgeIdsUnexpected(sDepthIds[slot]);
+            unsigned odd=NitroPort_Gx3dEdgeIdsUnexpected(sDepthIds[image]);
             sEdgeChecks--;
             if(odd){
                 sEdgeMarking=0;
                 edging=0;
                 NitroPort_Log("[gx3d] edge marking off: %u pixels of the depth/stencil buffer read back unexpected (first word %08lx)",
-                              odd,(unsigned long)sDepthIds[slot][0]);
+                              odd,(unsigned long)sDepthIds[image][0]);
             }else if(sEdgeChecks==0){
                 unsigned i,ids=0;
-                for(i=0;i<GX3D_W*GX3D_H;i++)ids+=(sDepthIds[slot][i]>>24)<=63u;
+                for(i=0;i<GX3D_W*GX3D_H;i++)ids+=(sDepthIds[image][i]>>24)<=63u;
                 NitroPort_Log("[gx3d] edge marking on: depth/stencil buffer as expected (%u of %u pixels with an opaque polygon ID)",
                               ids,(unsigned)(GX3D_W*GX3D_H));
             }
         }
     }
     t2=svcGetSystemTick();
-    if(edging)NitroPort_Gx3dPublishRGBA8Edges(sImages[slot],GX3D_W*GX3D_H,sDepthIds[slot],&edges);
-    else NitroPort_Gx3dPublishRGBA8(sImages[slot],GX3D_W*GX3D_H);
+    /* Handed over as it is: the 3D screen's drawer converts it (and
+     * outlines it) when it draws, on its own core, not this thread on the
+     * game's (port_gx3d_image.c). */
+    NitroPort_Gx3dSubmitRGBA8(sImages[image],edging?sDepthIds[image]:NULL,edging?&edges:NULL);
     sBuildTicks+=t1-t0;
     sWaitTicks+=t2-t1;
     sPublishTicks+=svcGetSystemTick()-t2;
