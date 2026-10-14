@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 02:30:00 -0700
+Subject: [PATCH] Battle health boxes at the wider screen's edges (SDK_PORT_3DS)
+
+The 3DS remaster draws the upper screen wider than the DS's. The health
+boxes' sprite templates move by the width it adds each side
+(NitroPort_WideScreenExtra, 0 on the DS's screen): the player's to the
+right edge, the opponent's to the left.
+---
+ src/battle/healthbox.c | 39 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 39 insertions(+)
+
+diff --git a/src/battle/healthbox.c b/src/battle/healthbox.c
+--- a/src/battle/healthbox.c
++++ b/src/battle/healthbox.c
+@@ -1684,8 +1684,47 @@
+  * @return      Address of the SpriteTemplate struct which applies to this
+  *              healthbox type.
+  */
++#ifdef SDK_PORT_3DS
++// The 3DS remaster's wider upper screen (3ds_port/nitro/include/
++// nitro_port_wide.h): the player's health boxes go to its right edge and
++// the opponent's to its left, by as many pixels as it adds each side.
++extern int NitroPort_WideScreenExtra(void);
++static const SpriteTemplate *HealthBox_MainSpriteTemplateDS(u8 type);
++
+ static const SpriteTemplate *HealthBox_MainSpriteTemplate(u8 type)
+ {
++    static SpriteTemplate wide[16];
++    const SpriteTemplate *template = HealthBox_MainSpriteTemplateDS(type);
++    int extra = NitroPort_WideScreenExtra();
++
++    if (template == NULL || extra == 0 || type >= NELEMS(wide)) {
++        return template;
++    }
++    wide[type] = *template;
++    switch (type) {
++    case HEALTHBOX_TYPE_PLAYER_SOLO:
++    case HEALTHBOX_TYPE_PLAYER_SLOT_1:
++    case HEALTHBOX_TYPE_PLAYER_SLOT_2:
++    case HEALTHBOX_TYPE_SAFARI_ZONE:
++    case HEALTHBOX_TYPE_PAL_PARK:
++        wide[type].x += extra;
++        break;
++    case HEALTHBOX_TYPE_ENEMY_SOLO:
++    case HEALTHBOX_TYPE_ENEMY_SLOT_1:
++    case HEALTHBOX_TYPE_ENEMY_SLOT_2:
++        wide[type].x -= extra;
++        break;
++    default:
++        return template;
++    }
++    return &wide[type];
++}
++
++static const SpriteTemplate *HealthBox_MainSpriteTemplateDS(u8 type)
++#else
++static const SpriteTemplate *HealthBox_MainSpriteTemplate(u8 type)
++#endif
++{
+     switch (type) {
+     case HEALTHBOX_TYPE_PLAYER_SOLO:
+         return &sHealthBoxTemplate_SoloPlayer;
+-- 
+2.43.0
+

@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 02:00:00 -0700
+Subject: [PATCH] Tell the port where the game's windows are (SDK_PORT_3DS)
+
+The 3DS remaster draws the upper screen wider than the DS's and moves the
+game's windows (text boxes, menus, the place name sign) to the nearer edge
+of it. Window_Add, Window_Remove and Windows_Delete tell the port
+(NitroPort_WindowAdded/NitroPort_WindowRemoved) which BG a window is on and
+where.
+---
+ src/bg_window.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/src/bg_window.c b/src/bg_window.c
+index bd3dd8ff..dc6e78d7 100644
+--- a/src/bg_window.c
++++ b/src/bg_window.c
+@@ -5,6 +5,15 @@
+ 
+ #include "constants/graphics.h"
+ 
++#ifdef SDK_PORT_3DS
++// The 3DS remaster draws the upper screen wider than the DS's, and moves the
++// game's windows (text boxes, menus, the place name sign) to the nearer
++// edge of it: it needs to know where they are on their BG
++// (3ds_port/nitro/include/nitro_port_wide.h).
++extern void NitroPort_WindowAdded(const void *window, int bgLayer, int left, int top, int width, int height);
++extern void NitroPort_WindowRemoved(const void *window);
++#endif
++
+ #include "gx_layers.h"
+ #include "heap.h"
+ #include "math_util.h"
+@@ -1639,6 +1648,9 @@ void Window_Add(BgConfig *bgConfig, Window *window, u8 bgLayer, u8 tilemapLeft,
+     window->baseTile = baseTile;
+     window->pixels = pixels;
+     window->colorMode = (bgConfig->bgs[bgLayer].colorMode == GX_BG_COLORMODE_16) ? BG_COLOR_MODE_4BPP : BG_COLOR_MODE_8BPP;
++#ifdef SDK_PORT_3DS
++    NitroPort_WindowAdded(window, bgLayer, tilemapLeft, tilemapTop, width, height);
++#endif
+ }
+ 
+ void Window_AddToTopLeftCorner(BgConfig *bgConfig, Window *window, u8 width, u8 height, u16 baseTile, u8 fillVal)
+@@ -1676,6 +1688,9 @@ void Window_AddFromTemplate(BgConfig *bgConfig, Window *window, const WindowTemp
+ 
+ void Window_Remove(Window *window)
+ {
++#ifdef SDK_PORT_3DS
++    NitroPort_WindowRemoved(window);
++#endif
+     Heap_Free(window->pixels);
+ 
+     window->bgConfig = NULL;
+@@ -1692,6 +1707,9 @@ void Window_Remove(Window *window)
+ void Windows_Delete(Window *window, u8 winCount)
+ {
+     for (u16 i = 0; i < winCount; i++) {
++#ifdef SDK_PORT_3DS
++        NitroPort_WindowRemoved(&window[i]);
++#endif
+         if (window[i].pixels != NULL) {
+             Heap_Free(window[i].pixels);
+         }
+-- 
+2.43.0
+

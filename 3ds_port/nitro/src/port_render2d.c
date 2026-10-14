@@ -46,11 +46,15 @@
 #include <nitro.h>
 #include <nitro_port.h>
 #include <nitro_port_gx3d.h>
+#include <nitro_port_wide.h>
 #include <stddef.h>
 #include <string.h>
 
 #define W 256
 #define H 192
+/* The widest picture drawn (the 3DS remaster's upper screen: the DS's 256
+ * pixels and 32 more each side; NitroRender2DSplit's canvas). */
+#define WMAX 320
 #define OPAQUE 0x8000
 
 /* ---------------------------------------------------------------- memory */
@@ -99,6 +103,18 @@ typedef struct Engine {
     const u8 *bgExt[4];    /* BG extended palette slots (8 KB each) or NULL */
     const u8 *objExt;      /* OBJ extended palette (8 KB) or NULL */
     BOOL isA;
+    /* The picture: width pixels, the DS's x = 0 at canvas x origin (256 and
+     * 0 but for the remaster's wider canvas; see NitroRender2DSplit). */
+    int width, origin;
+    /* Wider canvas: each BG's pixels only within the DS's 256 (clip), or
+     * wrapping round its map; and the game's windows moved to the screen's
+     * edges (anchorWindows). */
+    u8 clip[4];
+    u8 anchorWindows;
+    /* (worked out each frame, DecideSplits) a text BG that's a picture with
+     * a plain middle and decorated sides: its halves go to the screen's
+     * edges, the middle widened with its plain colour. */
+    u8 split[4];
     /* The palettes as pixels (colour | OPAQUE), 0 for the transparent
      * colour: index 0 of each 16 colours (4 bits per pixel), or of all 256
      * (8 bits per pixel). */
@@ -112,11 +128,11 @@ typedef struct Engine {
 typedef struct ObjLine {
     u8 prios;              /* bit p: some pixel has priority p */
     short x0, x1;          /* where the line's OBJs are */
-    u16 color[W];          /* colour | OPAQUE, or 0 */
-    u8 prio[W];
-    u8 alpha[W];           /* bitmap OBJ alpha 1-16 (16 = opaque) */
-    u8 semi[W];            /* semi-transparent: blends with what's below */
-    u8 window[W];          /* inside the OBJ window */
+    u16 color[WMAX];       /* colour | OPAQUE, or 0 */
+    u8 prio[WMAX];
+    u8 alpha[WMAX];        /* bitmap OBJ alpha 1-16 (16 = opaque) */
+    u8 semi[WMAX];         /* semi-transparent: blends with what's below */
+    u8 window[WMAX];       /* inside the OBJ window */
 } ObjLine;
 
 static void FindExtPalettes(Engine *e)
@@ -296,6 +312,239 @@ typedef struct Target {
     u8 bit = (t)->bit;                                                       \
     int filled = (t)->filled
 
+/* A run of a BG's line on the canvas: x0..x1, showing map x = x + off
+ * (wrapping round the map). */
+typedef struct Segment {
+    short x0, x1, off;
+    short fixed;   /* >= 0: every pixel of the run is the map's pixel at x = fixed */
+} Segment;
+#define MAX_SEGMENTS 24
+
+static const int sTextSizes[4][2] = { { 256, 256 }, { 512, 256 }, { 256, 512 }, { 512, 512 } };
+
+/* One pixel of a text BG's map (map x, map row ty): colour | OPAQUE, or 0. */
+static u16 TextBgPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int mapx, int ty)
+{
+    int mapW = sTextSizes[bgcnt >> 14][0];
+    const u8 *vram = e->bgVram;
+    u32 mask = e->bgMask;
+    u32 screenBase = ScreenBase(e, bgcnt, dispcnt);
+    u32 charBase = CharBase(e, bgcnt, dispcnt);
+    int tx = mapx & (mapW - 1);
+    u32 rowAddr = screenBase + (u32)((ty >> 8) * (mapW >> 8)) * 0x800 + (u32)((ty & 255) >> 3) * 64;
+    u32 entry = Rd16(vram, (rowAddr + (u32)(tx >> 8) * 0x800 + (u32)((tx & 255) >> 3) * 2) & mask);
+    u32 tile = entry & 0x3FF;
+    int py = (entry & 0x800) ? 7 - (ty & 7) : (ty & 7);
+    int px = (entry & 0x400) ? 7 - (tx & 7) : (tx & 7);
+
+    if (bgcnt & 0x80) {
+        u32 index = vram[(charBase + tile * 64 + (u32)py * 8 + (u32)px) & mask];
+        const u8 *ext = (dispcnt & 0x40000000) ? BgExtSlot(e, bg, bgcnt) : NULL;
+
+        if (ext != NULL) {
+            return index ? (u16)(PlttColor(ext + ((entry >> 12) << 9), index) | OPAQUE) : 0;
+        }
+        return e->bgPal8[index];
+    } else {
+        u8 pair = vram[(charBase + tile * 32 + (u32)py * 4 + (u32)(px >> 1)) & mask];
+
+        return e->bgPal4[((entry >> 12) << 4) | ((px & 1) ? (pair >> 4) : (pair & 15))];
+    }
+}
+
+/* Whether the DS's pixels x0..x0+n-1 of a text BG's line (map row ty, its
+ * scroll hofs) are all one opaque colour. */
+static BOOL TextBgPlain(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int hofs, int ty, int x0, int n)
+{
+    u16 first = TextBgPixel(e, bg, bgcnt, dispcnt, x0 + hofs, ty);
+    int i;
+
+    if (!(first & OPAQUE)) {
+        return FALSE;
+    }
+    for (i = 1; i < n; i++) {
+        if (TextBgPixel(e, bg, bgcnt, dispcnt, x0 + i + hofs, ty) != first) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/* (wider canvas) Which text BGs are pictures to split (Engine.split): a
+ * plain middle (the DS's x 96-159) on every line, and sides that aren't
+ * plain on a quarter of them or more, the intro's bars, say. */
+static void DecideSplits(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
+{
+    int bg;
+
+    for (bg = 0; bg < 4; bg++) {
+        int y, lines = 0, decorated = 0, mapH, hofs, vofs;
+
+        e->split[bg] = 0;
+        if (kind[bg] != BG_TEXT || !e->clip[bg]) {
+            continue;
+        }
+        mapH = sTextSizes[bgcnt[bg] >> 14][1];
+        hofs = Rd16(e->io, 0x10 + bg * 4) & 0x1FF;
+        vofs = Rd16(e->io, 0x12 + bg * 4) & 0x1FF;
+        for (y = 4; y < H; y += 8) {
+            int ty = (y + vofs) & (mapH - 1);
+
+            if (!TextBgPlain(e, bg, bgcnt[bg], dispcnt, hofs, ty, 96, 64)) {
+                break;
+            }
+            lines++;
+            if (!TextBgPlain(e, bg, bgcnt[bg], dispcnt, hofs, ty, 0, 8) ||
+                !TextBgPlain(e, bg, bgcnt[bg], dispcnt, hofs, ty, 248, 8)) {
+                decorated++;
+            }
+        }
+        e->split[bg] = lines == H / 8 && decorated * 4 >= lines;
+    }
+}
+
+/* The runs of a text BG's line (y, its map row ty) on a wider canvas: the
+ * DS's 256 pixels (or the whole canvas, wrapping round the map, without
+ * clip), with the game's windows on the BG moved to the nearer edge of the
+ * screen (NitroPort_WideWindows): a window in the left part of the screen
+ * to its left edge, one in the right part to its right edge; one across
+ * the middle (a text box) stays. Returns how many. */
+static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int ty, int hofs, int mapW,
+                          Segment *segs)
+{
+    int origin = e->origin, width = e->width, n = 0, i, k;
+    NitroWideWindow wins[NITRO_WIDE_MAX_WINDOWS];
+    int nwins = 0;
+    struct { int x0, x1, shift, off; } moved[NITRO_WIDE_MAX_WINDOWS];
+    int nmoved = 0;
+
+    if (e->split[bg]) {
+        /* The halves to the edges, the plain middle widened. */
+        segs[0].x0 = 0;
+        segs[0].x1 = 128;
+        segs[0].off = (short)hofs;
+        segs[0].fixed = -1;
+        segs[1].x0 = (short)(width - 128);
+        segs[1].x1 = (short)width;
+        segs[1].off = (short)(hofs - (width - 256));
+        segs[1].fixed = -1;
+        segs[2].x0 = 128;
+        segs[2].x1 = (short)(width - 128);
+        segs[2].off = 0;
+        segs[2].fixed = (short)((128 + hofs) & (mapW - 1));
+        return 3;
+    }
+    if (e->anchorWindows) {
+        nwins = NitroPort_WideWindows(e->isA ? 0 : 1, bg, wins, NITRO_WIDE_MAX_WINDOWS);
+    }
+    for (i = 0; i < nwins; i++) {
+        int top = wins[i].top * 8, bottom = (wins[i].top + wins[i].height) * 8;
+        int a, b, shift;
+
+        if (ty < top || ty >= bottom) {
+            continue;
+        }
+        /* Where it is on the DS's screen (left of its first column). */
+        a = ((wins[i].left * 8 - hofs) % mapW + mapW) % mapW;
+        if (a >= 256) {
+            a -= mapW;   /* (partly left of the screen) */
+        }
+        b = a + wins[i].width * 8;
+        if (b <= 0 || a >= 256) {
+            continue;
+        }
+        if (a < 128 - 8 && b <= 128 + 8 && b - a < 160) {
+            shift = -origin;                 /* to the left edge */
+        } else if (a >= 128 - 8 && b > 128 + 8 && b - a < 160) {
+            shift = width - 256 - origin;    /* to the right edge */
+        } else {
+            continue;                        /* across the middle: stays */
+        }
+        moved[nmoved].x0 = a + origin;
+        moved[nmoved].x1 = b + origin;
+        moved[nmoved].shift = shift;
+        moved[nmoved].off = hofs - origin - shift;
+        nmoved++;
+    }
+    /* The BG's own pixels, less where the windows were and where they went;
+     * beside them, its edge's colour when its edge is plain on this line
+     * (a picture's border, say: widened without anything stretched). */
+    {
+        int bx0 = e->clip[bg] ? origin : 0, bx1 = e->clip[bg] ? origin + 256 : width;
+        int cuts[2 * NITRO_WIDE_MAX_WINDOWS][2], ncuts = 0, x;
+        int fillLeft = e->clip[bg] && origin > 0 && TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 0, 8);
+        int fillRight = e->clip[bg] && origin + 256 < width &&
+                        TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 248, 8);
+
+        if (fillLeft) {
+            bx0 = 0;
+        }
+        if (fillRight) {
+            bx1 = width;
+        }
+
+        for (i = 0; i < nmoved; i++) {
+            cuts[ncuts][0] = moved[i].x0;
+            cuts[ncuts][1] = moved[i].x1;
+            ncuts++;
+            cuts[ncuts][0] = moved[i].x0 + moved[i].shift;
+            cuts[ncuts][1] = moved[i].x1 + moved[i].shift;
+            ncuts++;
+        }
+        x = bx0;
+        while (x < bx1 && n < MAX_SEGMENTS - nmoved) {
+            int next = bx1, skip = -1;
+
+            /* the nearest cut at or after x */
+            for (k = 0; k < ncuts; k++) {
+                if (cuts[k][1] <= x) {
+                    continue;
+                }
+                if (cuts[k][0] <= x) {
+                    skip = skip < 0 || cuts[k][1] > skip ? cuts[k][1] : skip;
+                } else if (cuts[k][0] < next) {
+                    next = cuts[k][0];
+                }
+            }
+            if (skip >= 0) {
+                x = skip;
+                continue;
+            }
+            /* (split at the DS's edges: the bands repeat its edge pixel) */
+            if (x < origin && next > origin) {
+                next = origin;
+            } else if (x < origin + 256 && next > origin + 256) {
+                next = origin + 256;
+            }
+            segs[n].x0 = (short)x;
+            segs[n].x1 = (short)next;
+            segs[n].off = (short)(hofs - origin);
+            segs[n].fixed = x < origin ? (short)(hofs & (mapW - 1))
+                          : x >= origin + 256 ? (short)((255 + hofs) & (mapW - 1)) : (short)-1;
+            n++;
+            x = next;
+        }
+    }
+    for (i = 0; i < nmoved; i++) {
+        int x0 = moved[i].x0 + moved[i].shift, x1 = moved[i].x1 + moved[i].shift;
+
+        if (x0 < 0) {
+            x0 = 0;
+        }
+        if (x1 > width) {
+            x1 = width;
+        }
+        if (x0 < x1) {
+            segs[n].x0 = (short)x0;
+            segs[n].x1 = (short)x1;
+            segs[n].off = (short)moved[i].off;
+            segs[n].fixed = -1;
+            n++;
+        }
+    }
+    return n;
+}
+
 /* A text BG's line, a tile (or the part of one on screen) at a time. */
 static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, int bg, u16 bgcnt, u32 dispcnt,
                                                               int y, Target *t, int flags)
@@ -315,11 +564,37 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
     /* The map row this line is in: its address for the left and the right
      * 256-pixel half of the map. */
     u32 rowAddr = screenBase + (u32)((ty >> 8) * (mapW >> 8)) * 0x800 + (u32)((ty & 255) >> 3) * 64;
-    int x = 0;
+    Segment segs[MAX_SEGMENTS];
+    int nsegs, seg;
     TARGET_LOCALS(t);
 
-    while (x < W) {
-        int tx = (x + hofs) & (mapW - 1);
+    if (e->width == W && e->origin == 0 && !e->anchorWindows) {
+        /* the DS's own screen: one run */
+        segs[0].x0 = 0;
+        segs[0].x1 = W;
+        segs[0].off = (short)hofs;
+        segs[0].fixed = -1;
+        nsegs = 1;
+    } else {
+        nsegs = TextBgSegments(e, bg, bgcnt, dispcnt, ty, hofs, mapW, segs);
+        if (flags & T_PLAIN) {
+            memset(row, 0, (size_t)e->width * 2);
+        }
+    }
+    for (seg = 0; seg < nsegs; seg++) {
+    int x = segs[seg].x0, xe = segs[seg].x1, off = segs[seg].off;
+
+    if (segs[seg].fixed >= 0) {
+        /* one pixel of the map, repeated */
+        u16 c = TextBgPixel(e, bg, bgcnt, dispcnt, segs[seg].fixed, ty);
+
+        for (; x < xe; x++) {
+            PUT(x, c, flags);
+        }
+        continue;
+    }
+    while (x < xe) {
+        int tx = (x + off) & (mapW - 1);
         int px0 = tx & 7;
         int n = 8 - px0;
         u32 entryAddr = rowAddr + (u32)(tx >> 8) * 0x800 + (u32)((tx & 255) >> 3) * 2;
@@ -329,8 +604,8 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
         int flip = (entry & 0x400) ? 7 : 0;   /* pixel px of the tile is at px ^ flip */
         int i;
 
-        if (n > W - x) {
-            n = W - x;
+        if (n > xe - x) {
+            n = xe - x;
         }
         if (bpp8) {
             const u8 *chars = vram + ((charBase + tile * 64 + (u32)py * 8) & mask);
@@ -378,6 +653,7 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
             }
         }
         x += n;
+    }
     }
     t->filled = filled;
 }
@@ -452,8 +728,11 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
     s32 pd = (s16)Rd16(io, base + 6);
     s32 refX = (s32)(Rd32(io, base + 8) << 4) >> 4;    /* 28-bit signed */
     s32 refY = (s32)(Rd32(io, base + 12) << 4) >> 4;
-    s32 fx = refX + pb * y;
-    s32 fy = refY + pd * y;
+    /* (a wider canvas: the DS's x = 0 at e->origin; without clip, the BG
+     * goes on past the DS's edges as its matrix takes it) */
+    int xs = e->clip[bg] ? e->origin : 0, xe = e->clip[bg] ? e->origin + W : e->width;
+    s32 fx = refX + pb * y + pa * (xs - e->origin);
+    s32 fy = refY + pd * y + pc * (xs - e->origin);
     BOOL wrap = (bgcnt & 0x2000) != 0;
     int size = bgcnt >> 14;
     u32 charBase = CharBase(e, bgcnt, dispcnt);
@@ -480,7 +759,10 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
         screenBase = ((bgcnt >> 8) & 0x1F) * 0x4000;   /* bitmaps: 16 KB units */
     }
 
-    for (x = 0; x < W; x++, fx += pa, fy += pc) {
+    if (xs > 0 || xe < e->width) {
+        memset(out, 0, (size_t)e->width * 2);
+    }
+    for (x = xs; x < xe; x++, fx += pa, fy += pc) {
         s32 tx = fx >> 8;
         s32 ty = fy >> 8;
         u32 index;
@@ -529,6 +811,34 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
             }
             break;
         }
+        }
+    }
+    /* (wider canvas) beside the DS's screen, the edge's colour when the
+     * edge is plain on this line */
+    if (xs > 0 && xe - xs >= 8) {
+        int i;
+        BOOL plain = (out[xs] & OPAQUE) != 0;
+
+        for (i = 1; i < 8 && plain; i++) {
+            plain = out[xs + i] == out[xs];
+        }
+        if (plain) {
+            for (i = 0; i < xs; i++) {
+                out[i] = out[xs];
+            }
+        }
+    }
+    if (xe < e->width && xe - xs >= 8) {
+        int i;
+        BOOL plain = (out[xe - 1] & OPAQUE) != 0;
+
+        for (i = 2; i <= 8 && plain; i++) {
+            plain = out[xe - i] == out[xe - 1];
+        }
+        if (plain) {
+            for (i = xe; i < e->width; i++) {
+                out[i] = out[xe - 1];
+            }
         }
     }
 }
@@ -606,9 +916,12 @@ static void SortObjs(const Engine *e, ObjFrame *f)
         }
         obj->oy = (u8)(a0 & 0xFF);
         obj->ox = (s16)(a1 & 0x1FF);
-        if (obj->ox >= 256) {
+        /* (x 256-511 is left of the screen; on a wider canvas the first of
+         * those are right of the DS's screen, where the canvas goes on) */
+        if (obj->ox >= 256 + (e->width - W - e->origin)) {
             obj->ox -= 512;
         }
+        obj->ox += e->origin;
         obj->hflip = !obj->affine && (a1 & 0x1000) != 0;
         obj->vflip = !obj->affine && (a1 & 0x2000) != 0;
         obj->bpp8 = (a0 & 0x2000) != 0;
@@ -616,7 +929,7 @@ static void SortObjs(const Engine *e, ObjFrame *f)
         obj->tile = a2 & 0x3FF;
         obj->prio = (a2 >> 10) & 3;
         obj->pal = a2 >> 12;
-        if (obj->ox >= W || obj->ox + obj->boxW <= 0) {
+        if (obj->ox >= e->width || obj->ox + obj->boxW <= 0) {
             continue;                       /* off the sides */
         }
 
@@ -721,17 +1034,17 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
     if (!(dispcnt & 0x1000) || f->lineCount[y] == 0) {
         return FALSE;
     }
-    memset(out->color, 0, sizeof(out->color));
-    memset(out->window, 0, sizeof(out->window));
+    memset(out->color, 0, (size_t)e->width * sizeof(out->color[0]));
+    memset(out->window, 0, (size_t)e->width);
     out->prios = 0;
-    out->x0 = W;
+    out->x0 = (short)e->width;
     out->x1 = 0;
 
     for (k = 0; k < f->lineCount[y]; k++) {
         const Obj *obj = &f->obj[f->onLine[y][k]];
         int ly = (y - obj->oy) & 0xFF;
         int sx = obj->ox < 0 ? -obj->ox : 0;
-        int end = obj->ox + obj->boxW > W ? W - obj->ox : obj->boxW;
+        int end = obj->ox + obj->boxW > e->width ? e->width - obj->ox : obj->boxW;
 
         if (obj->ox + sx < out->x0) {
             out->x0 = (short)(obj->ox + sx);
@@ -889,16 +1202,17 @@ static BOOL InRange(int v, int lo, int hi)
     return lo <= hi ? (v >= lo && v < hi) : (v >= lo || v < hi);
 }
 
-/* Set enable[x] = value for the x in a window's horizontal range. */
-static void FillRange(u8 *enable, int lo, int hi, u8 value)
+/* Set enable[x] = value for the x in a window's horizontal range (the DS's
+ * x, at origin on the canvas; beyond the DS's screen is outside). */
+static void FillRange(u8 *enable, int lo, int hi, u8 value, int origin)
 {
     if (lo <= hi) {
         if (hi > lo) {
-            memset(enable + lo, value, (size_t)(hi - lo));
+            memset(enable + origin + lo, value, (size_t)(hi - lo));
         }
     } else {
-        memset(enable + lo, value, (size_t)(W - lo));   /* lo <= 255 */
-        memset(enable, value, (size_t)hi);
+        memset(enable + origin + lo, value, (size_t)(W - lo));   /* lo <= 255 */
+        memset(enable + origin, value, (size_t)hi);
     }
 }
 
@@ -908,12 +1222,12 @@ static void FillRange(u8 *enable, int lo, int hi, u8 value)
 
 /* What drawing one engine works with, line by line. */
 typedef struct EngineWork {
-    u16 lineOf[4][W];  /* each BG's own line, when it isn't drawn into the screen's */
+    u16 lineOf[4][WMAX];  /* each BG's own line, when it isn't drawn into the screen's */
     ObjLine objLine;
     ObjFrame objFrame;
-    u8 enableLine[W];
-    u8 layer1[W];      /* each pixel's front layer (0-3 BG, 4 OBJ), for the effects */
-    u8 alpha3d[W];     /* BG0's 3D alpha (0-31) on this line, when scrolled */
+    u8 enableLine[WMAX];
+    u8 layer1[WMAX];      /* each pixel's front layer (0-3 BG, 4 OBJ), for the effects */
+    u8 alpha3d[WMAX];     /* BG0's 3D alpha (0-31) on this line, when scrolled */
 } EngineWork;
 
 static EngineWork sWork[2];
@@ -990,6 +1304,7 @@ typedef struct BlendLineState {
     int effect, eva, evb, evy;
     /* (split) each pixel's alpha over the 3D, 0-16: see DrawEngine. */
     u8 *alphaOut;
+    int width;
 } BlendLineState;
 
 /* Each pixel of a line whose front layers are drawn (row, layer1): one that
@@ -1033,7 +1348,7 @@ static inline __attribute__((always_inline)) void BlendLineT(const BlendLineStat
         prio[k] = b->list[k].p;
     }
     memcpy(entryOf, b->entryOf, sizeof(entryOf));
-    for (x = 0; x < W; x++) {
+    for (x = 0; x < b->width; x++) {
         u32 c = row[x];
         u32 enable = windows ? enableLine[x] : 0x3F;
         int top = 5, second = 5;          /* 5: the backdrop */
@@ -1178,11 +1493,12 @@ static void SnapshotOver(NitroRender2DSplit *split, BlendLineState *blendState, 
                          int y, int nlist, BOOL blend2, int flags, int effect, int evy,
                          u16 bldcnt, const u8 *enableLine, const u8 *layer1)
 {
-    u16 *over = split->over + y * W;
-    u8 *alpha = split->overAlpha + y * W;
+    int w = blendState->width;
+    u16 *over = split->over + y * w;
+    u8 *alpha = split->overAlpha + y * w;
     int x;
 
-    memcpy(over, row, W * sizeof(u16));
+    memcpy(over, row, (size_t)w * sizeof(u16));
     if (blend2) {
         blendState->y = y;
         blendState->nlist = nlist;
@@ -1190,7 +1506,7 @@ static void SnapshotOver(NitroRender2DSplit *split, BlendLineState *blendState, 
         BlendLineOver(blendState, over, enableLine, layer1, (flags & T_WINDOW) != 0);
         return;
     }
-    for (x = 0; x < W; x++) {
+    for (x = 0; x < w; x++) {
         u16 c = over[x];
 
         alpha[x] = 16;
@@ -1207,7 +1523,8 @@ static void SnapshotOver(NitroRender2DSplit *split, BlendLineState *blendState, 
  * a window hides the 3D, over shows what's behind it. Brightness effects
  * on the 3D itself and the master brightness are left to the compositor
  * (split->tint3d, split->masterBright). */
-static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
+static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *out, NitroRender2DSplit *split,
+                                                              int fixedWidth)
 {
     /* Each engine has its own (they may be drawn at the same time, on two
      * CPU cores). */
@@ -1241,6 +1558,8 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
     u32 special;   /* (blend2) the layers whose pixels may not just show as they are */
     int flags;     /* how layers go into the line, when only the front one matters */
     BlendLineState blendState;
+    /* (the DS's own width known to the compiler: its loops as before) */
+    const int width = fixedWidth ? fixedWidth : e->width;
     BOOL snapped;  /* (split) this line's layers in front of the 3D are noted */
     int y, x, bg, p;
 
@@ -1262,6 +1581,9 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
             kind[bg] = BG_NONE;   /* large-bitmap mode still unsupported */
         }
     }
+    if (fixedWidth == 0) {
+        DecideSplits(e, kind, bgcnt, dispcnt);
+    }
     if (split != NULL) {
         split->has3d = e->isA && kind[0] == BG_3D;
         split->prio3d = bgcnt[0] & 3;
@@ -1271,6 +1593,7 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
         split->eva = eva;
         split->evb = evb;
         split->blend3d = (bldcnt >> 8) & 0x3F;
+        split->backdrop = backdrop;
         if (split->has3d) {
             /* Drawn without BG0: the layers in front of it are noted as
              * the line reaches it. */
@@ -1286,7 +1609,7 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
         SortObjs(e, objFrame);
     }
     if (!anyWindow) {
-        memset(enableLine, 0x3F, W);
+        memset(enableLine, 0x3F, (size_t)width);
     }
     /* Blending two layers needs second targets, and alpha blending of some
      * first target that's on screen, or OBJs or 3D pixels that blend by
@@ -1314,7 +1637,8 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
     if (split != NULL && split->has3d) {
         flags |= T_LAYER;   /* (the layers in front of the 3D: which is which) */
     }
-    blendState.alphaOut = NULL;   /* (split: each line's, in SnapshotOver) */
+    blendState.alphaOut = NULL;
+    blendState.width = width;   /* (split: each line's, in SnapshotOver) */
     blendState.e = e;
     blendState.work = work;
     blendState.kind = kind;
@@ -1335,14 +1659,14 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
     blendState.evy = evy;
 
     for (y = 0; y < H; y++) {
-        u16 *row = out + y * W;
+        u16 *row = out + y * width;
         BOOL objs = DrawObjs(e, objFrame, dispcnt, y, objLine);
         Target t;
 
         /* Which layers and effects each pixel shows (the windows): window
          * 0 over window 1 over the OBJ window over the outside. */
         if (anyWindow) {
-            memset(enableLine, winout & 0x3F, W);
+            memset(enableLine, winout & 0x3F, (size_t)width);
             if ((dispcnt & 0x8000) && objs) {
                 for (x = objLine->x0; x < objLine->x1; x++) {
                     if (objLine->window[x]) {
@@ -1351,10 +1675,10 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
                 }
             }
             if ((dispcnt & 0x4000) && InRange(y, win1v >> 8, win1v & 0xFF)) {
-                FillRange(enableLine, win1h >> 8, win1h & 0xFF, (winin >> 8) & 0x3F);
+                FillRange(enableLine, win1h >> 8, win1h & 0xFF, (winin >> 8) & 0x3F, e->origin);
             }
             if ((dispcnt & 0x2000) && InRange(y, win0v >> 8, win0v & 0xFF)) {
-                FillRange(enableLine, win0h >> 8, win0h & 0xFF, winin & 0x3F);
+                FillRange(enableLine, win0h >> 8, win0h & 0xFF, winin & 0x3F, e->origin);
             }
         }
 
@@ -1362,7 +1686,7 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
         t.layerOf = layer1;
         t.enable = enableLine;
         t.filled = 0;
-        memset(row, 0, W * sizeof(u16));
+        memset(row, 0, (size_t)width * sizeof(u16));
         nlist = 0;
         snapped = FALSE;
 
@@ -1376,7 +1700,7 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
             for (slot = -1; slot < 4; slot++) {
                 const u16 *px = NULL;
                 const u8 *prioOf = NULL;
-                int layer, x0 = 0, x1 = W;
+                int layer, x0 = 0, x1 = width;
 
                 if (slot == 0 && split != NULL && split->has3d && p == split->prio3d) {
                     /* The 3D's place among the layers: what's drawn so far
@@ -1385,7 +1709,7 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
                                  evy, bldcnt, enableLine, layer1);
                     snapped = TRUE;
                     /* What's behind the 3D is drawn without them. */
-                    memset(row, 0, W * sizeof(u16));
+                    memset(row, 0, (size_t)width * sizeof(u16));
                     t.filled = 0;
                     nlist = 0;
                 }
@@ -1416,7 +1740,7 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
                     list[nlist].x1 = (short)x1;
                     nlist++;
                 }
-                if (t.filled >= W) {
+                if (t.filled >= width) {
                     if (!blend2) {
                         break;
                     }
@@ -1446,7 +1770,7 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
              * is in front of it, and nothing behind it was drawn) */
             SnapshotOver(split, &blendState, row, y, nlist, blend2, flags, effect, evy, bldcnt,
                          enableLine, layer1);
-            memset(row, 0, W * sizeof(u16));
+            memset(row, 0, (size_t)width * sizeof(u16));
             nlist = 0;
         }
         if (!blend2) {
@@ -1457,14 +1781,14 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
                     u32a *pair = (u32a *)row;
                     u32 back2 = (u32)backdrop * 0x10001u;
 
-                    for (x = 0; x < W / 2; x++) {
+                    for (x = 0; x < width / 2; x++) {
                         u32 c = pair[x];
                         u32 drawn = (c >> 15) & 0x10001u;
 
                         pair[x] = (c & (drawn * 0x7FFFu)) | (back2 & ((drawn ^ 0x10001u) * 0xFFFFu));
                     }
                 } else {
-                    for (x = 0; x < W; x++) {
+                    for (x = 0; x < width; x++) {
                         u16 c = row[x];
 
                         row[x] = (c & OPAQUE) ? (u16)(c & 0x7FFF) : backdrop;
@@ -1472,7 +1796,7 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
                 }
             } else {
                 /* brighten or darken the layers chosen */
-                for (x = 0; x < W; x++) {
+                for (x = 0; x < width; x++) {
                     u16 c = row[x];
                     int top = (c & OPAQUE) ? layer1[x] : 5;
 
@@ -1491,10 +1815,10 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
         }
         if (split != NULL && split->has3d && anyWindow) {
             /* Where a window hides the 3D, what's behind it shows. */
-            u16 *over = split->over + y * W;
-            u8 *alpha = split->overAlpha + y * W;
+            u16 *over = split->over + y * width;
+            u8 *alpha = split->overAlpha + y * width;
 
-            for (x = 0; x < W; x++) {
+            for (x = 0; x < width; x++) {
                 if (enableLine[x] & 1) {
                     continue;
                 }
@@ -1513,7 +1837,16 @@ static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
     if(gx3dPixels)NitroPort_Gx3dReleaseImage(gx3dPixels);
 }
 
-static void MasterBrightness(u16 *out, u16 reg)
+static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
+{
+    if (e->width == W) {
+        DrawEngineT(e, out, split, W);
+    } else {
+        DrawEngineT(e, out, split, 0);
+    }
+}
+
+static void MasterBrightness(u16 *out, u16 reg, int n)
 {
     int mode = reg >> 14;
     int factor = reg & 31;
@@ -1527,21 +1860,21 @@ static void MasterBrightness(u16 *out, u16 reg)
     }
     if (factor == 16) {
         /* all the way: white or black */
-        for (i = 0; i < W * H; i++) {
+        for (i = 0; i < n; i++) {
             out[i] = mode == 1 ? 0x7FFF : 0;
         }
         return;
     }
-    for (i = 0; i < W * H; i++) {
+    for (i = 0; i < n; i++) {
         out[i] = mode == 1 ? Brighten(out[i], factor) : Darken(out[i], factor);
     }
 }
 
-static void Fill(u16 *out, u16 color)
+static void Fill(u16 *out, u16 color, int n)
 {
     int i;
 
-    for (i = 0; i < W * H; i++) {
+    for (i = 0; i < n; i++) {
         out[i] = color;
     }
 }
@@ -1566,20 +1899,31 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
     e.bgMask = e.isA ? 0x7FFFF : 0x1FFFF;
     e.objVram = e.isA ? NitroPort_ObjVram : NitroPort_DbObjVram;
     e.objMask = e.isA ? 0x3FFFF : 0x1FFFF;
+    e.width = W;
+    if (split != NULL && split->width > W && split->width <= WMAX) {
+        int bg;
+
+        e.width = split->width;
+        e.origin = split->origin;
+        for (bg = 0; bg < 4; bg++) {
+            e.clip[bg] = split->clip[bg];
+        }
+        e.anchorWindows = (u8)split->anchorWindows;
+    }
     dispcnt = Rd32(e.io, 0);
 
     /* The engine powered off: nothing on that screen. */
     if (!(powcnt & (e.isA ? 0x0002 : 0x0200))) {
-        Fill(out, 0);
+        Fill(out, 0, e.width * H);
         return;
     }
     if (dispcnt & 0x80) {                  /* forced blank: white */
-        Fill(out, 0x7FFF);
+        Fill(out, 0x7FFF, e.width * H);
         return;
     }
     switch ((dispcnt >> 16) & (e.isA ? 3 : 1)) {
     case 0:                                /* display off: white */
-        Fill(out, 0x7FFF);
+        Fill(out, 0x7FFF, e.width * H);
         return;
     case 1:
         DrawEngine(&e, out, split);
@@ -1588,18 +1932,19 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
         const u8 *bank = NitroPort_LcdcVram + ((dispcnt >> 18) & 3) * 0x20000;
         int i;
 
+        Fill(out, 0, e.width * H);
         for (i = 0; i < W * H; i++) {
-            out[i] = Rd16(bank, (u32)i * 2) & 0x7FFF;
+            out[(i / W) * e.width + e.origin + i % W] = Rd16(bank, (u32)i * 2) & 0x7FFF;
         }
         break;
     }
     default:
         NitroPort_Unimplemented("display mode: main memory display");
-        Fill(out, 0);
+        Fill(out, 0, e.width * H);
         return;
     }
     if (split == NULL) {
-        MasterBrightness(out, Rd16(e.io, 0x6C));
+        MasterBrightness(out, Rd16(e.io, 0x6C), e.width * H);
     }
 }
 
@@ -1686,6 +2031,14 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     int e = engine ? 1 : 0;
     u32 signature = EngineSignature(e);
 
+    /* the canvas, and where the windows are */
+    signature = (signature ^ (u32)split->width ^ ((u32)split->origin << 9) ^
+                 ((u32)split->anchorWindows << 18) ^ ((u32)split->clip[0] << 20) ^
+                 ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
+                 ((u32)split->clip[3] << 23)) * 16777619u;
+    if (split->anchorWindows) {
+        signature = (signature ^ NitroPort_WideWindowsSerial()) * 16777619u;
+    }
     if (last[e].valid && signature == last[e].signature) {
         return 0;
     }

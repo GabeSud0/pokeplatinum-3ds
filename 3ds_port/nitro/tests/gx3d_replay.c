@@ -143,6 +143,14 @@ static uint32_t results_hash(void)
     return h;
 }
 
+static int sPieces;        /* --pieces N: FIFO records fed in pieces of 1..N words */
+static uint32_t sSeed = 1;
+static uint32_t rnd(void)
+{
+    sSeed = sSeed * 1103515245u + 12345u;
+    return sSeed >> 8;
+}
+
 static void replay(const uint32_t *data, size_t words)
 {
     size_t at = 0;
@@ -157,7 +165,27 @@ static void replay(const uint32_t *data, size_t words)
             break;
         }
         switch (type) {
-        case 1: NitroPort_GxFifoWords(p, count); break;
+        case 1:
+            if (sPieces > 1) {
+                /* In pieces of random sizes (--pieces): the 3DS's FIFO
+                 * writes come in pieces that depend on timing, and the
+                 * thread's ring buffer must give the same scenes however
+                 * a vertex list is cut up. */
+                size_t done = 0;
+
+                while (done < count) {
+                    size_t n = 1 + (size_t)(rnd() % (uint32_t)sPieces);
+
+                    if (n > count - done) {
+                        n = count - done;
+                    }
+                    NitroPort_GxFifoWords(p + done, n);
+                    done += n;
+                }
+            } else {
+                NitroPort_GxFifoWords(p, count);
+            }
+            break;
         case 3: NitroPort_GxDirectWrite((int)p[0], p[1]); break;
         case 4: NitroPort_Gx3dClearStackError(); break;
         case 5: NitroPort_Gx3dSyncResults(); add_hash(2, results_hash()); break;
@@ -193,11 +221,27 @@ int main(int argc, char **argv)
     size_t i, scenes = 0;
 
     const char *path = argv[argc - 1];
-    int hashesOnly = argc == 3 && strcmp(argv[1], "--hashes") == 0;
+    int hashesOnly = 0, a;
 
-    if (argc != 2 && !hashesOnly) {
-        fprintf(stderr, "usage: %s [--hashes] RECORDING\n"
-                "  --hashes: each scene's hash, without the thread (to compare versions)\n", argv[0]);
+    for (a = 1; a < argc - 1; a++) {
+        if (strcmp(argv[a], "--hashes") == 0) {
+            hashesOnly = 1;
+        } else if (strcmp(argv[a], "--pieces") == 0 && a + 1 < argc - 1) {
+            sPieces = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--seed") == 0 && a + 1 < argc - 1) {
+            sSeed = (uint32_t)strtoul(argv[++a], NULL, 10);
+        } else if (strcmp(argv[a], "--wide") == 0) {
+            NitroPort_Gx3dSetWideView(320);
+        } else {
+            argc = 0;
+            break;
+        }
+    }
+    if (argc < 2) {
+        fprintf(stderr, "usage: %s [--hashes] [--pieces N] [--seed S] [--wide] RECORDING\n"
+                "  --hashes: each scene's hash, without the thread (to compare versions)\n"
+                "  --pieces N: feed the FIFO in pieces of 1..N words (the thread must not mind)\n"
+                "  --wide: the 3DS remaster's wider view\n", argv[0]);
         return 2;
     }
     f = fopen(path, "rb");

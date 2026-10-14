@@ -423,19 +423,22 @@ $(OUT)/app/main_3ds.o: app/main_3ds.c app/platinum.h app/port_pica.h $(NITRO)/in
                        $(NITRO)/include/nitro_port_render2d.h
 	@mkdir -p $(dir $@)
 	@echo "  APP CC main_3ds.c"
-	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -c $< -o $@
+	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -MMD -MP -c $< -o $@
 
 # Thin 3DS-only PICA backend; includes only portable GX3D headers + libctru.
 $(OUT)/app/port_gx3d_pica.o: app/port_gx3d_pica.c app/port_pica.h $(NITRO)/include/nitro_port_gx3d_vertex.h
 	@mkdir -p $(dir $@)
 	@echo "  APP CC port_gx3d_pica.c"
-	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -c $< -o $@
+	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -MMD -MP -c $< -o $@
+
+# (the 3DS program's own files rebuilt when a header they include changes)
+-include $(wildcard $(OUT)/app/*.d)
 
 # The screens put together on the GPU (the remaster display).
 $(OUT)/app/port_compose_pica.o: app/port_compose_pica.c app/port_pica.h $(NITRO)/include/nitro_port_upscale.h
 	@mkdir -p $(dir $@)
 	@echo "  APP CC port_compose_pica.c"
-	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -c $< -o $@
+	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -MMD -MP -c $< -o $@
 
 # Assemble a PICA200 passthrough shader exactly like hello3d. The generated
 # blob symbol is gx3d_passthrough_shbin, consumed by port_gx3d_pica.c.

@@ -20,6 +20,10 @@ void NitroPort_PicaExit(void);
 int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped);
 void NitroPort_PicaTimes(u64 *build, u64 *wait, u64 *publish);
 void NitroPort_PicaTextureStats(u32 *converted, u64 *texels, u64 *ticks);
+/* The GPU command list's peak use (0-1) and the draws left out for want of
+ * room in it, since last asked; NoteCmdUse after each C3D_FrameEnd. */
+void NitroPort_PicaCmdStats(float *peak, unsigned *cut);
+void NitroPort_PicaNoteCmdUse(void);
 
 /* The compose path: the scene's polygons drawn straight into a screen's
  * render target, between the 2D layers. */
@@ -68,10 +72,18 @@ void NitroPort_PicaRearPlane(uint16_t *color, unsigned *alpha);
 
 /* ------------------------------------------------------- the compositor */
 
+/* How the 2D pictures are scaled up (remaster.txt's filter setting). */
+enum {
+    COMPOSE_FILTER_SHARP,    /* each pixel 2x2 texels, then bilinear: the pixels as they are, edges a texel soft */
+    COMPOSE_FILTER_NEAREST,  /* nearest: the pixels as they are, unevenly sized (1.25 times) */
+    COMPOSE_FILTER_SMOOTH,   /* bilinear from the DS's pixels: blurry */
+    COMPOSE_FILTER_SCALE2X   /* Scale2x (EPX), then bilinear: rounded diagonals */
+};
+
 /* What the screens are made of and how: see port_compose_pica.c. */
 typedef struct ComposeConfig {
-    int wide;                /* the 3D over the upper screen's full width */
-    int filter;              /* 0: as it is (bilinear); 1: Scale2x (pixel-art) */
+    int wide;                /* the upper screen's full width: the 2D's wider canvas and the 3D's wider view */
+    int filter;              /* COMPOSE_FILTER_* */
     int stereo;              /* the 3D slider gives depth */
     float stereoStrength;    /* the shift at full slider, in screen widths */
     float convergence;       /* 0: worked out from each scene */
@@ -87,17 +99,20 @@ void NitroPort_ComposeExit(void);
  * (NitroPort_Render2DSplit), then published: upscaled into a texture the
  * GPU draws from. Publishing is the drawer's work (on its own core). */
 typedef struct ComposeLayers {
-    uint16_t *under;         /* 256x192 */
-    uint16_t *over;          /* 256x192 (when split.has3d) */
-    uint8_t *overAlpha;      /* 256x192 */
+    uint16_t *under;         /* width x 192 */
+    uint16_t *over;          /* width x 192 (when split.has3d) */
+    uint8_t *overAlpha;      /* width x 192 */
+    int width;               /* the picture's width: 256, or up to 320 (the wider upper screen) */
     /* NitroRender2DSplit, as the 2D renderer filled it (declared in
      * nitro_port.h, which can't be included next to 3ds.h): the fields the
      * compositor needs, copied by the caller. */
-    int has3d, scroll3d, tint3d, eva, evb, evy, masterBright;
+    int has3d, scroll3d, tint3d, eva, evb, evy, masterBright, backdrop;
     int displayOff;          /* nothing drawn (the engine is off) */
+    uint32_t stamp;          /* the V-blank count when the game's display state was read */
 } ComposeLayers;
 ComposeLayers *NitroPort_ComposeLayersOf(int engine);
-void NitroPort_ComposePublish(int engine);
+/* Into the textures of the screen (0 upper, 1 lower) the engine is on. */
+void NitroPort_ComposePublish(int engine, int screen);
 /* How many times each engine's layers have been published. */
 uint32_t NitroPort_ComposePublished(int engine);
 
@@ -107,10 +122,14 @@ uint32_t NitroPort_ComposePublished(int engine);
  * here), or NULL. Waits for the GPU. */
 int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, int aOnTop,
                            float slider, int forced);
-/* For the [perf] line: frames composed, the GPU time waited for, and
- * publishing time (upscaling) by the drawers. */
-void NitroPort_ComposeStats(u32 *frames, u64 *gpuTicks, u32 *published, u64 *publishTicks);
-/* A V-blank happened (the compositor paces itself by them). */
+/* For the [perf] line: frames composed, the GPU time waited for,
+ * publishing time (upscaling) by the drawers, the V-blanks from a scene's
+ * making to its showing (lag), and the 3D frames shown late. */
+void NitroPort_ComposeStats(u32 *frames, u64 *gpuTicks, u32 *published, u64 *publishTicks, int *lag,
+                            u32 *late);
+/* A V-blank happened (the compositor paces itself by them), and how many
+ * have (any thread). */
 void NitroPort_ComposeVBlank(void);
+u32 NitroPort_ComposeVBlanks(void);
 #endif
 #endif

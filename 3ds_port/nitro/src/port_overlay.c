@@ -76,6 +76,18 @@ BOOL NitroPort_IsOverlayLoaded(u32 id)
     return id < sCount && sLoaded[id];
 }
 
+int NitroPort_OverlayLoadedNamed(const char *name)
+{
+    u32 i;
+
+    for (i = 0; i < sCount; i++) {
+        if (sLoaded[i] && strcmp(sOverlays[i].name, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static u32 LabelAddress(u32 id)
 {
     switch (sOverlays[id].region) {

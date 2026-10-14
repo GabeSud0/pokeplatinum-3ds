@@ -204,7 +204,8 @@ static void batch_state(const NitroGx3dTriangle *tri,uint32_t *param,
     unsigned fmt=(tri->texture_param>>26)&7u;
     *param=fmt?tri->texture_param:0u;
     *palette=(fmt && fmt!=7u)?tri->palette_base:0u;
-    *attr=tri->polygon_attr&((3u<<4)|(1u<<11)|(1u<<14)|(31u<<16));
+    /* The mode, depth bits, alpha, and bit 15: fog on the polygon. */
+    *attr=tri->polygon_attr&((3u<<4)|(1u<<11)|(1u<<14)|(1u<<15)|(31u<<16));
 }
 
 size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,

@@ -226,7 +226,11 @@ $(OUT)/sdk/%.o: $(SDK)/libraries/%.c $(GEN)/nitro/fx/fx_const.h
 $(OUT)/port/%.o: src/%.c $(GEN)/nitro/fx/fx_const.h
 	@mkdir -p $(dir $@)
 	@echo "  CC  $(notdir $<)"
-	@$(CC) $(CFLAGS) -c $< -o $@
+	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+# The port's sources rebuilt when a header they include changes (a struct
+# that changes size must not leave objects built with the old one).
+-include $(PORT_OBJS:.o=.d)
 
 # The 3DS platform layer uses libctru (and none of the SDK's headers).
 DEVKITPRO ?= /opt/devkitpro

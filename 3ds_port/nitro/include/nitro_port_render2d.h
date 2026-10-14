@@ -23,7 +23,7 @@ extern "C" {
  * on the 3D itself (tint3d). Without a 3D layer (has3d 0: BG0 isn't the
  * 3D, or the display mode isn't the normal one), under is the whole
  * picture and over isn't touched. The caller provides over and overAlpha
- * (256x192 each); the rest is filled in. */
+ * and the canvas (below); the rest is filled in. */
 typedef struct NitroRender2DSplit {
     int has3d;         /* BG0 is the 3D, drawn between under and over */
     int prio3d;        /* its priority, 0-3 */
@@ -35,8 +35,21 @@ typedef struct NitroRender2DSplit {
     int eva, evb, evy;
     int blend3d;       /* BLDCNT's second targets (bits 8-13): what 3D pixels of alpha 1-30 blend with */
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
-    uint16_t *over;    /* 256x192 */
-    uint8_t *overAlpha;/* 256x192 */
+    int backdrop;      /* the backdrop colour (RGB555): what shows where no layer does */
+    uint16_t *over;    /* width x 192 */
+    uint8_t *overAlpha;/* width x 192 */
+    /* The picture's canvas (the caller's choice, kept by the call): 0 or
+     * 256 for the DS's screen; up to 320 for the remaster's wider upper
+     * screen, the DS's x = 0 at origin. under, over and overAlpha are
+     * width pixels a line then. Beyond the DS's 256 pixels: a BG with
+     * clip set shows nothing there (the backdrop does), without it its map
+     * goes on; OBJs placed past the DS's edges show; with anchorWindows,
+     * the game's windows on a BG (text boxes, menus, the place name sign)
+     * move to the nearer edge of the screen unless they're across its
+     * middle (NitroPort_WideWindows). */
+    int width, origin;
+    uint8_t clip[4];
+    int anchorWindows;
 } NitroRender2DSplit;
 void NitroPort_Render2DSplit(int engine, uint16_t *under, NitroRender2DSplit *split);
 /* The same, unless nothing it draws from changed since the last call for

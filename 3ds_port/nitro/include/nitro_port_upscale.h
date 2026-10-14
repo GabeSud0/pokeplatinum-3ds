@@ -45,6 +45,16 @@ void NitroPort_Tile32(const uint32_t *src, int w, int h, uint32_t *dst, int dstW
 void NitroPort_Scale2xTiled16(const uint16_t *src, int w, int h, uint16_t *dst, int dstWidth);
 void NitroPort_Scale2xTiled32(const uint32_t *src, int w, int h, uint32_t *dst, int dstWidth);
 
+/* Each pixel doubled (2x2 texels the same), into a tiled texture: the
+ * pixels as they are, ready for the GPU to scale the rest of the way with
+ * bilinear filtering (sharp: only the pixels' borders blend, a texel
+ * wide). Then the column right of the picture and the row below it repeat
+ * its last ones (so the filtering at the edges doesn't take in what's
+ * beyond; a picture as wide as the texture has none: the GPU clamps there).
+ * w and h multiples of 4; the texture at least 2 h + 8 rows. */
+void NitroPort_Double2xTiled16(const uint16_t *src, int w, int h, uint16_t *dst, int dstWidth);
+void NitroPort_Double2xTiled32(const uint32_t *src, int w, int h, uint32_t *dst, int dstWidth);
+
 #ifdef __cplusplus
 }
 #endif

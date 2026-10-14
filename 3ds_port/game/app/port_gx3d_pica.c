@@ -45,6 +45,34 @@ void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
      GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
      GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
 
+#define CMDBUF_BYTES (1024u*1024u)
+/* Words a batch's draw can take at most (texture, combiner, tests, fog,
+ * the draw): drawing stops before the command list could run out. */
+#define DRAW_WORDS 256u
+extern u32 gpuCmdBufSize,gpuCmdBufOffset;
+static unsigned sDrawsCut;   /* draws left out for want of room ([perf]) */
+static int room_for_draw(void)
+{
+    if(gpuCmdBufSize-gpuCmdBufOffset>DRAW_WORDS*4u)return 1;
+    sDrawsCut++;
+    return 0;
+}
+/* The command list's peak use and the draws left out since last asked. */
+static float sCmdPeak;
+void NitroPort_PicaCmdStats(float *peak,unsigned *cut)
+{
+    float now=C3D_GetCmdBufUsage();
+    if(now>sCmdPeak)sCmdPeak=now;
+    if(peak)*peak=sCmdPeak;
+    if(cut)*cut=sDrawsCut;
+    sCmdPeak=0.0f;sDrawsCut=0;
+}
+void NitroPort_PicaNoteCmdUse(void)
+{
+    float now=C3D_GetCmdBufUsage();
+    if(now>sCmdPeak)sCmdPeak=now;
+}
+
 /* A scene has at most 4096 triangles; a batch per triangle at worst. */
 #define MAX_BATCHES NITRO_GX3D_MAX_TRIANGLES
 
@@ -78,6 +106,19 @@ static size_t sPreparedCount,sPreparedBatches;
 static uint32_t sPreparedSwap;
 static uint16_t sRearColor;
 static unsigned sRearAlpha;
+/* The prepared scene's depths, as the GPU gets them: d' = (d - sDepthA) *
+ * sDepthK, d the DS's depth (0 near .. 1 far, depth / 0xFFFFFF). Linear,
+ * so nothing in front of or behind anything else changes, but the scene's
+ * own depths spread over the whole 0..1: the fog table (128 steps over
+ * 0..1) has its steps where the scene is (normalize_depth). */
+static float sDepthA=0.0f,sDepthK=1.0f;
+/* The DS's fog (DISP3DCNT bit 7) for the prepared scene: the PICA's fog
+ * table worked out from the DS's (sFogLut), its colour, and whether the
+ * rear plane is fogged. */
+static int sFogOn,sFogRear;
+static u32 sFogColor;
+static C3D_FogLut sFogLut;
+static uint8_t sFogDensityRear;
 /* A quad over the whole render target (clip space, the farthest depth),
  * for resetting the edge marking depth/stencil buffer. */
 static NitroGx3dGpuVertex *sFarQuad;
@@ -143,7 +184,11 @@ int NitroPort_PicaInit(void)
 {
     int i;
     C3D_AttrInfo *attrs;
-    if(!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE))return 0;
+    /* The command list: 1 MB (citro3d's default, 256 KB, ran out on the
+     * 3DS with the remaster's passes, a heavy scene and stereo: citro3d
+     * stops the program then, a "Break" on Luma's crash screen). Drawing
+     * also stops short of the end (room_for_draw). */
+    if(!C3D_Init(CMDBUF_BYTES))return 0;
     sTarget=C3D_RenderTargetCreate(GX3D_W,GX3D_H,
                      GPU_RB_RGBA8,GPU_RB_DEPTH24_STENCIL8);
     if(!sTarget)goto fail;
@@ -315,6 +360,118 @@ static u32 widen5(u32 v)
     return (v<<3)|(v>>2);
 }
 
+/* The scene's depths spread over 0..1 (sDepthA, sDepthK). A vertex's d is
+ * -z (W-buffer scenes) or -z / w (Z-buffer ones); the new z keeps that
+ * form. W-buffer scenes keep d' <= w (the GPU clips z at -w): d is w /
+ * 4096 there, so a scale up to 4096 keeps it. */
+static void normalize_depth(NitroGx3dGpuVertex *v,size_t count,uint32_t swap)
+{
+    int wbuffer=(swap&2u)!=0;
+    float lo=1.0f,hi=0.0f,k;
+    size_t i;
+    for(i=0;i<count;i++){
+        float w=v[i].position[3];
+        float d=wbuffer? -v[i].position[2] : (w>0.0f? -v[i].position[2]/w : 0.0f);
+        if(d<lo)lo=d;
+        if(d>hi)hi=d;
+    }
+    if(!count || hi<=lo){sDepthA=0.0f;sDepthK=1.0f;return;}
+    k=1.0f/(hi-lo);
+    if(wbuffer && k>4096.0f)k=4096.0f;
+    /* Not past 1 (rounding): a hair's margin at the far end. */
+    k*=0.999f;
+    sDepthA=lo;sDepthK=k;
+    for(i=0;i<count;i++){
+        float w=v[i].position[3];
+        if(wbuffer){
+            float d=-v[i].position[2];
+            v[i].position[2]=-(d-lo)*k;
+        }else{
+            /* z = -d w  ->  -(d - lo) k w = k z + lo k w */
+            v[i].position[2]=k*v[i].position[2]+lo*k*w;
+        }
+    }
+}
+
+static u32 io32(unsigned offset)
+{
+    return (u32)NitroPort_IoReg[offset]|((u32)NitroPort_IoReg[offset+1]<<8)|
+           ((u32)NitroPort_IoReg[offset+2]<<16)|((u32)NitroPort_IoReg[offset+3]<<24);
+}
+
+/* The DS's fog density (0-128) at a 24-bit depth: FOG_OFFSET, the shift
+ * (DISP3DCNT bits 8-11) and the 32 entries of FOG_TABLE, interpolated
+ * (as melonDS works it out). */
+static unsigned fog_density(u32 depth,u32 offset,unsigned shift,const uint8_t table[34])
+{
+    u32 id,frac,z;
+    unsigned density;
+    if(depth<offset){id=0;frac=0;}
+    else{
+        z=((depth-offset)>>2)<<shift;
+        id=z>>17;
+        if(id>=32){id=32;frac=0;}
+        else frac=z&0x1FFFFu;
+    }
+    density=(unsigned)(((u32)table[id]*(0x20000u-frac)+(u32)table[id+1]*frac)>>17);
+    return density>=127u?128u:density;
+}
+
+/* The fog for the prepared scene, from the registers as they are now. */
+static void setup_fog(void)
+{
+    u32 disp=io32(0x60),color=io32(0x358),clear=io32(0x350);
+    u32 offset=(io32(0x35C)&0x7FFFu)*0x200u;
+    unsigned shift=(disp>>8)&15u,i;
+    uint8_t table[34];
+    float data[256],f[129];
+    /* DISP3DCNT bit 7: fog. Bit 6: alpha only, which the PICA's fog can't
+     * do (it fogs the colour): left out. */
+    sFogOn=(disp&0x80u) && !(disp&0x40u);
+    if(!sFogOn)return;
+    table[0]=NitroPort_IoReg[0x360]&127u;
+    for(i=0;i<32;i++)table[i+1]=NitroPort_IoReg[0x360+i]&127u;
+    table[33]=table[32];
+    for(i=0;i<=128;i++){
+        float d=sDepthA+((float)i/128.0f)/sDepthK;
+        u32 depth=d<=0.0f?0u:d>=1.0f?0xFFFFFFu:(u32)(d*16777215.0f);
+        /* The PICA's table: 1 keeps the colour, 0 is all fog. */
+        f[i]=1.0f-(float)fog_density(depth,offset,shift,table)/128.0f;
+    }
+    for(i=0;i<128;i++){data[i]=f[i];data[128+i]=f[i+1]-f[i];}
+    FogLut_FromArray(&sFogLut,data);
+    sFogColor=widen5(color&31u)|(widen5((color>>5)&31u)<<8)|(widen5((color>>10)&31u)<<16);
+    /* CLEAR_COLOR bit 15: the rear plane is fogged too, at CLEAR_DEPTH. */
+    sFogRear=(clear>>15)&1u;
+    sFogDensityRear=(uint8_t)fog_density((io32(0x354)&0x7FFFu)*0x200u+0x1FFu,offset,shift,table);
+}
+
+/* Fog on for a batch's polygons (attribute bit 15) or off. */
+static void batch_fog(uint32_t attr)
+{
+    if(sFogOn && (attr&(1u<<15))){
+        C3D_FogGasMode(GPU_FOG,GPU_PLAIN_DENSITY,false);
+        C3D_FogColor(sFogColor);
+        C3D_FogLutBind(&sFogLut);
+    }else{
+        C3D_FogGasMode(GPU_NO_FOG,GPU_PLAIN_DENSITY,false);
+    }
+}
+
+/* The rear plane's colour with the fog on it, if it's fogged. */
+static uint16_t fog_rear(uint16_t color)
+{
+    unsigned d=sFogDensityRear,k;
+    uint16_t out=0;
+    if(!sFogOn||!sFogRear||!d)return color;
+    for(k=0;k<3;k++){
+        unsigned c=(color>>(k*5))&31u;
+        unsigned fc=((sFogColor>>(k*8))&255u)>>3;
+        out|=(uint16_t)(((fc*d+c*(128u-d))>>7)<<(k*5));
+    }
+    return out;
+}
+
 /* Returns number of GPU vertices on success, -1 if frame submission or
  * transfer failed. 3DS image publication is after GPU/PPF completion only. */
 /* Where the 3D thread's time goes, for the [perf] line: building the
@@ -347,6 +504,8 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
                                      NITRO_GX3D_PICA_MAX_VERTICES,
                                      sBatches,MAX_BATCHES,&nbatches,&lost);
     if(dropped)*dropped+=lost;
+    normalize_depth(sVertices[slot],count,scene->swap_param);
+    setup_fog();
     NitroPort_Gx3dMapTextureBanks(&sBanks);
     /* CLEAR_COLOR: RGB555, alpha in bits 16-20 (alpha 0 leaves BG0
      * see-through where nothing is drawn). CLEAR_DEPTH is nearly always
@@ -359,6 +518,11 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
      * blended onto it come out premultiplied, which publishing undoes
      * (the DS writes their colour unblended where alpha is 0). */
     if(!((clear>>16)&31u))clearColor=0;
+    else{
+        uint16_t c=fog_rear((uint16_t)(clear&0x7FFFu));
+        clearColor=(widen5(c&31u)<<24)|(widen5((c>>5)&31u)<<16)|
+                   (widen5((c>>10)&31u)<<8)|widen5((clear>>16)&31u);
+    }
     /* DISP3DCNT bit 3: alpha blending. */
     blend=(NitroPort_IoReg[0x60]&8u)!=0;
     /* Bit 5: edge marking. The rear plane is at the depth this target is
@@ -417,6 +581,8 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
             }
         }
         set_combiner(attr,textured);
+        batch_fog(attr);
+        if(!room_for_draw())break;
         /* The stencil buffer keeps the polygon ID of each pixel's last
          * translucent draw, plus 64 (edge marking puts opaque IDs, 0-63,
          * there afterwards), 0xFF after an opaque one (and cleared to
@@ -469,6 +635,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
      * buffer and nothing else. Under a translucent pixel the opaque one's
      * ID goes in too, as on the DS. */
     idBatches=0;
+    C3D_FogGasMode(GPU_NO_FOG,GPU_PLAIN_DENSITY,false);
     if(edging){
         for(b=0;b<nbatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
@@ -477,6 +644,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
             /* Translucent batches have opaque pixels only at alpha 31:
              * their fully opaque texels. */
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
+            if(!room_for_draw())break;
             idBatches++;
             if(textured){
                 C3D_Tex *tex=get_texture(batch->texture_param,batch->palette_base);
@@ -496,6 +664,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
      * the GPU reads here is flushed already (vertices above, textures in
      * get_texture). No C3D_FrameSync either: it waits for a V-blank. */
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    NitroPort_PicaNoteCmdUse();
     t1=svcGetSystemTick();
     /* An image buffer not waiting to be converted nor being converted:
      * with three, there always is one. */
@@ -616,17 +785,19 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
                                               NITRO_GX3D_PICA_MAX_VERTICES,
                                               sBatches,MAX_BATCHES,&sPreparedBatches,&lost);
     if(dropped)*dropped+=lost;
+    normalize_depth(sVertices[slot],sPreparedCount,scene->swap_param);
     if(sPreparedCount){
         GSPGPU_FlushDataCache(sVertices[slot],
                         (u32)(sPreparedCount*sizeof(NitroGx3dGpuVertex)));
     }
     sPrepared=slot;
     sPreparedSwap=scene->swap_param;
+    setup_fog();
     /* CLEAR_COLOR: the rear plane's colour and alpha, as the game has them
-     * at this scene. */
+     * at this scene (fogged, if it is). */
     clear=(u32)NitroPort_IoReg[0x350]|((u32)NitroPort_IoReg[0x351]<<8)|
           ((u32)NitroPort_IoReg[0x352]<<16);
-    sRearColor=(uint16_t)(clear&0x7FFFu);
+    sRearColor=fog_rear((uint16_t)(clear&0x7FFFu));
     sRearAlpha=(clear>>16)&31u;
     sBuildTicks+=svcGetSystemTick()-t0;
     return (int)(sPreparedCount/3);
@@ -720,6 +891,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
         C3D_DepthTest(true,GPU_ALWAYS,GPU_WRITE_DEPTH);
         C3D_StencilTest(true,GPU_ALWAYS,(int)edges->clearId,0xFF,0xFF);
         C3D_StencilOp(GPU_STENCIL_REPLACE,GPU_STENCIL_REPLACE,GPU_STENCIL_REPLACE);
+        C3D_FogGasMode(GPU_NO_FOG,GPU_PLAIN_DENSITY,false);
         C3D_DrawArrays(GPU_TRIANGLES,0,6);
         NitroPort_PicaBindVertices(sVertices[sPrepared]);
         begin_pass(view,&shifted);
@@ -729,8 +901,12 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             const NitroGx3dBatch *batch=&sBatches[b];
             uint32_t attr=batch->polygon_attr;
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
-            bind_batch(batch);
-            C3D_AlphaTest(true,GPU_GREATER,batch->translucent?254:0);
+            if(!room_for_draw())break;
+            /* Opaque batches have no see-through texels (those would make
+             * them translucent): their shape needs no texture. */
+            if(batch->translucent)bind_batch(batch);
+            else set_combiner(0,0);
+            C3D_AlphaTest(batch->translucent,GPU_GREATER,254);
             C3D_DepthTest(true,GPU_LESS,GPU_WRITE_DEPTH);
             C3D_StencilTest(true,GPU_ALWAYS,(int)((attr>>24)&63u),0xFF,0xFF);
             C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
@@ -751,16 +927,19 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             int textured;
             unsigned id;
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
+            if(!room_for_draw())break;
             id=(attr>>24)&63u;
-            textured=bind_batch(batch);
+            textured=batch->translucent && bind_batch(batch);
             set_edge_combiner(textured,edges->colors[id>>3]);
-            C3D_AlphaTest(true,GPU_GREATER,batch->translucent?254:0);
+            batch_fog(attr);
+            C3D_AlphaTest(batch->translucent,GPU_GREATER,254);
             C3D_DepthTest(true,GPU_LESS,GPU_WRITE_COLOR);
             C3D_StencilTest(true,GPU_NOTEQUAL,(int)id,0xFF,0xFF);
             C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
         }
     }
     /* back to the screen's own depth/stencil */
+    C3D_FogGasMode(GPU_NO_FOG,GPU_PLAIN_DENSITY,false);
     C3D_SetFrameBuf(view->fb);
     C3D_SetViewport(0,0,view->fb->width,view->fb->height);
     begin_pass(view,&view->rect);
@@ -792,7 +971,9 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         uint32_t attr=batch->polygon_attr;
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(batch->translucent)continue;
+        if(!room_for_draw())break;
         bind_batch(batch);
+        batch_fog(attr);
         C3D_StencilTest(true,GPU_ALWAYS,0xFF,0xFF,0xFF);
         C3D_AlphaTest(true,GPU_GREATER,0);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
@@ -806,7 +987,9 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         uint32_t attr=batch->polygon_attr;
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(!batch->translucent || ((attr>>16)&31u)!=31u)continue;
+        if(!room_for_draw())break;
         bind_batch(batch);
+        batch_fog(attr);
         C3D_StencilTest(true,GPU_ALWAYS,0xFF,0xFF,0xFF);
         C3D_AlphaTest(true,GPU_GREATER,254);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
@@ -820,7 +1003,9 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         uint32_t attr=batch->polygon_attr;
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(!batch->translucent)continue;
+        if(!room_for_draw())break;
         bind_batch(batch);
+        batch_fog(attr);
         C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
         C3D_AlphaTest(true,GPU_GREATER,0);
         C3D_StencilTest(true,GPU_NOTEQUAL,(int)(64u|((attr>>24)&63u)),0xFF,0xFF);
@@ -837,6 +1022,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
     }
     /* Leave the GPU state plain for the compositor's quads. */
+    C3D_FogGasMode(GPU_NO_FOG,GPU_PLAIN_DENSITY,false);
     C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
     C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
     C3D_AlphaTest(false,GPU_ALWAYS,0);

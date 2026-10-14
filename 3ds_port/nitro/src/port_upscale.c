@@ -92,3 +92,36 @@ DEFINE_TILE(NitroPort_Tile32, uint32_t)
 
 DEFINE_SCALE2X(NitroPort_Scale2xTiled16, uint16_t)
 DEFINE_SCALE2X(NitroPort_Scale2xTiled32, uint32_t)
+
+/* Nearest 2x: source pixel (x, y) is the 2x2 block at (2x, 2y), which in a
+ * tile's Morton order is four texels in a row (the lowest bits are x's and
+ * y's first). */
+#define DEFINE_DOUBLE(NAME, T)                                                 \
+    void NAME(const T *src, int w, int h, T *dst, int dstWidth)                \
+    {                                                                          \
+        int x, y;                                                              \
+        for (y = 0; y < h; y++) {                                              \
+            const T *row = src + y * w;                                        \
+            for (x = 0; x < w; x++) {                                          \
+                T c = row[x];                                                  \
+                T *out = dst + NitroPort_TiledIndex((unsigned)(2 * x), (unsigned)(2 * y), (unsigned)dstWidth); \
+                out[0] = c;                                                    \
+                out[1] = c;                                                    \
+                out[2] = c;                                                    \
+                out[3] = c;                                                    \
+            }                                                                  \
+        }                                                                      \
+        /* the edges repeated: the column right of the picture, the row     \
+         * below it, and their corner */                                     \
+        for (y = 0; y < 2 * h && 2 * w < dstWidth; y++) {                      \
+            dst[NitroPort_TiledIndex((unsigned)(2 * w), (unsigned)y, (unsigned)dstWidth)] = \
+                dst[NitroPort_TiledIndex((unsigned)(2 * w - 1), (unsigned)y, (unsigned)dstWidth)]; \
+        }                                                                      \
+        for (x = 0; x <= 2 * w && x < dstWidth; x++) {                         \
+            dst[NitroPort_TiledIndex((unsigned)x, (unsigned)(2 * h), (unsigned)dstWidth)] = \
+                dst[NitroPort_TiledIndex((unsigned)x, (unsigned)(2 * h - 1), (unsigned)dstWidth)]; \
+        }                                                                      \
+    }
+
+DEFINE_DOUBLE(NitroPort_Double2xTiled16, uint16_t)
+DEFINE_DOUBLE(NitroPort_Double2xTiled32, uint32_t)

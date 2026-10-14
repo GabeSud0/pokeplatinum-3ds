@@ -54,6 +54,7 @@
 #include "port_pica.h"
 #include <nitro_port_gx3d.h>
 #include <nitro_port_render2d.h>
+#include <nitro_port_wide.h>
 
 /* The 2D renderer (nitro_port.h, which can't be included next to 3ds.h). */
 void NitroPort_Render2D(int engine, uint16_t *out);
@@ -201,8 +202,9 @@ static volatile bool sComposeForce;   /* draw everything again (back from the lo
 #define REMASTER_PATH "sdmc:/3ds/pokeplatinum/remaster.txt"
 
 /* remaster.txt: a setting a line, "name value": remaster on/off, wide
- * on/off, filter on/off, stereo on/off/<strength, e.g. 0.02>, convergence
- * <distance> (0: from each scene), edges on/off, flip on/off. */
+ * on/off, filter sharp/nearest/smooth/scale2x (on: sharp, off: nearest),
+ * stereo on/off/<strength, e.g. 0.02>, convergence <distance> (0: from
+ * each scene), edges on/off, flip on/off. */
 static void ReadRemasterConfig(bool new3ds)
 {
     FILE *f = fopen(REMASTER_PATH, "r");
@@ -211,7 +213,7 @@ static void ReadRemasterConfig(bool new3ds)
     sRemaster = new3ds;
     memset(&sCompose, 0, sizeof(sCompose));
     sCompose.wide = 1;
-    sCompose.filter = 1;
+    sCompose.filter = COMPOSE_FILTER_SHARP;
     sCompose.stereo = 1;
     sCompose.stereoStrength = 0.02f;
     sCompose.convergence = 0.0f;
@@ -235,7 +237,15 @@ static void ReadRemasterConfig(bool new3ds)
             } else if (strcmp(name, "wide") == 0) {
                 sCompose.wide = !off;
             } else if (strcmp(name, "filter") == 0) {
-                sCompose.filter = !off;
+                if (strcmp(value, "nearest") == 0 || off) {
+                    sCompose.filter = COMPOSE_FILTER_NEAREST;
+                } else if (strcmp(value, "smooth") == 0 || strcmp(value, "bilinear") == 0) {
+                    sCompose.filter = COMPOSE_FILTER_SMOOTH;
+                } else if (strcmp(value, "scale2x") == 0) {
+                    sCompose.filter = COMPOSE_FILTER_SCALE2X;
+                } else {
+                    sCompose.filter = COMPOSE_FILTER_SHARP;
+                }
             } else if (strcmp(name, "stereo") == 0) {
                 sCompose.stereo = !off;
                 if (!on && !off) {
@@ -275,6 +285,13 @@ void NitroPort_Gx3dScenePublished(void)
 {
     if(__atomic_load_n(&sGpuWakeReady,__ATOMIC_ACQUIRE))
         LightEvent_Signal(&sGpuWake);
+}
+/* The game's time for a 3D scene (at its SWAP) and a 2D picture (when
+ * the drawers read it): the V-blank count. The compositor pairs them and
+ * shows each frame at its time. */
+uint32_t NitroPort_Gx3dStamp(void)
+{
+    return NitroPort_ComposeVBlanks();
 }
 /* (the remaster) Each V-blank: the display thread may have a frame waiting
  * for the framebuffer to be free. */
@@ -957,6 +974,7 @@ typedef struct Drawer {
     volatile bool busy;      /* drawing a frame */
     volatile bool reading;   /* reading the game's display state for it */
     volatile bool aOnTop;    /* engine A on the upper screen, for this frame */
+    volatile u32 stamp;      /* the V-blank count when it was handed this frame */
     volatile bool quit;
     u32 images;              /* 3D images out when it was handed its last frame */
     volatile u64 ticks;      /* time spent drawing, for [perf] */
@@ -990,7 +1008,7 @@ static bool OnTop(int engine, bool aOnTop)
 /* What an engine shows, from the game's display state, into its screen's
  * picture. False if it didn't change: that screen keeps showing what it
  * does (not drawn, not swapped). */
-static bool RenderScreen(int engine, bool aOnTop)
+static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
 {
     bool top = OnTop(engine, aOnTop);
     u16 *ds = sPixels[top ? 0 : 1];
@@ -1002,8 +1020,13 @@ static bool RenderScreen(int engine, bool aOnTop)
         NitroRender2DSplit split;
         int drawn;
 
+        memset(&split, 0, sizeof(split));
         split.over = layers->over;
         split.overAlpha = layers->overAlpha;
+        /* The upper screen: the wider canvas (port_wide.c's layout). */
+        if (top && sCompose.wide) {
+            NitroPort_WideLayout(engine, &split);
+        }
         if (sMustDraw[top ? 0 : 1]) {
             sMustDraw[top ? 0 : 1] = false;
             NitroPort_Render2DSplit(engine, layers->under, &split);
@@ -1021,6 +1044,9 @@ static bool RenderScreen(int engine, bool aOnTop)
         layers->evb = split.evb;
         layers->evy = split.evy;
         layers->masterBright = split.masterBright;
+        layers->backdrop = split.backdrop;
+        layers->width = split.width > 256 ? split.width : 256;
+        layers->stamp = stamp;
         layers->displayOff = 0;
         return true;
     }
@@ -1042,7 +1068,7 @@ static void ShowScreen(int engine, bool aOnTop)
 
     if (sRemaster) {
         /* The layers upscaled into a texture, for the display thread. */
-        NitroPort_ComposePublish(engine);
+        NitroPort_ComposePublish(engine, top ? 0 : 1);
         if (__atomic_load_n(&sGpuWakeReady, __ATOMIC_ACQUIRE)) {
             LightEvent_Signal(&sGpuWake);
         }
@@ -1083,10 +1109,10 @@ static void DrawerMain(void *arg)
         /* First everything that reads the game's display state, then the
          * rest: the game waits for the reading only (NitroPort_OnFrame). */
         if (d->screens & ENGINE_A) {
-            drawA = RenderScreen(0, d->aOnTop);
+            drawA = RenderScreen(0, d->aOnTop, d->stamp);
         }
         if (d->screens & ENGINE_B) {
-            drawB = RenderScreen(1, d->aOnTop);
+            drawB = RenderScreen(1, d->aOnTop, d->stamp);
         }
         __atomic_store_n(&d->reading, false, __ATOMIC_RELEASE);
         /* Below the threads it was above while reading, to show what it
@@ -1254,6 +1280,7 @@ static void DrawFrame(bool new3dOnly)
         }
         if (!__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE)) {
             d->aOnTop = sAOnTop;
+            d->stamp = NitroPort_ComposeVBlanks();
             d->images = images;
             __atomic_store_n(&d->reading, true, __ATOMIC_RELEASE);
             __atomic_store_n(&d->busy, true, __ATOMIC_RELEASE);
@@ -1454,17 +1481,23 @@ static void PerfFrame(u64 enter)
         lastTexTicks = texTicks;
     }
     if (sRemaster) {
-        static u32 lastFrames, lastPublished;
+        static u32 lastFrames, lastPublished, lastLate;
         static u64 lastGpu, lastPublish;
-        u32 frames, published;
+        u32 frames, published, late;
         u64 gpu, publish;
+        int lag;
+        float cmdPeak;
+        unsigned cmdCut;
 
-        NitroPort_ComposeStats(&frames, &gpu, &published, &publish);
-        NitroPort_Log("[perf] display: %.1f frames/s composed by the GPU, %.1f ms of GPU each; 2D layers published %.1f/s, upscaled in %.1f ms each",
+        NitroPort_ComposeStats(&frames, &gpu, &published, &publish, &lag, &late);
+        NitroPort_PicaCmdStats(&cmdPeak, &cmdCut);
+        NitroPort_Log("[perf] display: %.1f frames/s composed by the GPU, %.1f ms of GPU each; 2D layers published %.1f/s, upscaled in %.1f ms each; 3D shown %d V-blanks after the game made it, %u frames late; GPU command list %.0f%% full at most, %u draws cut",
                       (frames - lastFrames) / seconds,
                       frames > lastFrames ? (double)(gpu - lastGpu) * 1000.0 / SYSCLOCK_ARM11 / (frames - lastFrames) : 0.0,
                       (published - lastPublished) / seconds,
-                      published > lastPublished ? (double)(publish - lastPublish) * 1000.0 / SYSCLOCK_ARM11 / (published - lastPublished) : 0.0);
+                      published > lastPublished ? (double)(publish - lastPublish) * 1000.0 / SYSCLOCK_ARM11 / (published - lastPublished) : 0.0,
+                      lag, (unsigned)(late - lastLate), (double)cmdPeak * 100.0, cmdCut);
+        lastLate = late;
         lastFrames = frames;
         lastGpu = gpu;
         lastPublished = published;
@@ -1505,6 +1538,11 @@ void NitroPort_OnFrame(void)
     u64 enter = svcGetSystemTick();
 
     NitroPort_SoundPumpReplies(); /* never raise ARM9 FIFO IRQ from DSP thread */
+    /* The remaster's wider view only while the 3D is on the upper screen
+     * (the intro has it on the lower one): from the next command on. */
+    if (sRemaster && sCompose.wide) {
+        NitroPort_Gx3dSetWideView(NitroPort_EngineAOnTop() ? 320 : 256);
+    }
     NitroPort_Gx3dFlush();        /* the geometry thread has the frame's commands */
     sFrame++;
     if (!sWatchdogHasHome && !aptMainLoop()) {
@@ -1667,11 +1705,21 @@ static void Watch(void)
         svcSleepThread(250 * 1000000LL);
         if (sFrame != lastFrame || (!sWatchdogHasHome && !aptIsActive())) {
             /* Frames are coming, or the HOME menu is up (no frames then). */
+            if (sWatchdogHasHome && sFrame != lastFrame) {
+                /* Frames again after all (a slow start, a long load): back
+                 * to the game, which looks after HOME again. */
+                sWatchdogHasHome = false;
+                NitroPort_Log("Frames are coming again (frame %lu): back to the game.", sFrame);
+                Status("Running");
+                ShowLog(false);
+            }
             lastFrame = sFrame;
             quietTicks = 0;
             continue;
         }
-        if (++quietTicks == 20 && !sWatchdogHasHome) {
+        /* The first frame can take a while (the game loads what it starts
+         * with from the SD card): a minute then, 5 seconds afterwards. */
+        if (++quietTicks == (lastFrame == 0 ? 240 : 20) && !sWatchdogHasHome) {
             sWatchdogHasHome = true;
             WaitForDrawing();
             ShowLog(true);
@@ -1679,9 +1727,9 @@ static void Watch(void)
                 sScreensDirty = false;
                 DrawLogScreens();
             }
-            NitroPort_Log("The game hasn't shown a frame for 5 seconds (stuck at frame %lu). "
+            NitroPort_Log("The game hasn't shown a frame for %d seconds (stuck at frame %lu). "
                           "It's probably waiting for a part of the port that isn't done yet: "
-                          "see the lines above. Close it from the HOME menu.", lastFrame);
+                          "see the lines above. Close it from the HOME menu.", lastFrame == 0 ? 60 : 5, lastFrame);
             Status("Stuck at frame %lu (see the log)", lastFrame);
         }
         if (sWatchdogHasHome && !aptMainLoop()) {
@@ -1737,6 +1785,7 @@ int main(int argc, char **argv)
             ReadRemasterConfig(isNew3ds);
             StartGpu(priority, isNew3ds);
             NitroPort_Gx3dSetWideView(sRemaster && sCompose.wide ? 320 : 256);
+            NitroPort_SetWideScreen(sRemaster && sCompose.wide ? 32 : 0);
             StartGeometry(priority, isNew3ds);   /* first: core 1's share */
             CheckCoreSpeed(priority, isNew3ds);  /* (with that share, nothing drawing yet) */
             StartDrawers(priority, isNew3ds);
