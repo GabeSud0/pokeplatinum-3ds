@@ -37,6 +37,7 @@ typedef struct GeoVertex {
 typedef struct GeoState {
     Matrix proj, pos, vec, tex;
     Matrix clip;        /* pos x proj, as the DS keeps it; see ensure_clip */
+    int64_t clipTrans[4]; /* its row 3, << 12: what (0, 0, 0, 1.0) adds */
     int clipDirty;
     Matrix pjStack, texStack;
     Matrix posStack[31], vecStack[31];
@@ -126,26 +127,42 @@ static void identity(Matrix *m)
     memset(m, 0, sizeof(*m));
     for (i=0; i<4; i++) m->a[i*4+i] = 4096;
 }
-/* Matrices the game multiplies are mostly zeros (scales, translations,
- * 4x3 and 3x3 matrices, the projection): only the products of non-zero
- * elements are worked out. Leaving out a zero term doesn't change a sum. */
+/* All 64 products: picking out the non-zero ones (most matrices are part
+ * zeros) cost more in tests and branches than the products it saved. A
+ * zero term doesn't change a sum, so it's the same either way. The rows
+ * of the right-hand matrix are read once per row of the left. */
 static void multiply(Matrix *out, const Matrix *lhs, const Matrix *rhs)
 {
     Matrix result;
-    unsigned rows[4]={0,0,0,0},cols[4]={0,0,0,0};
-    int i,j,k;
-    for(i=0;i<4;i++)for(k=0;k<4;k++){
-        if(lhs->a[i*4+k])rows[i]|=1u<<k;   /* row i's non-zero columns */
-        if(rhs->a[i*4+k])cols[k]|=1u<<i;   /* column k's non-zero rows */
-    }
-    for(i=0;i<4;++i)for(j=0;j<4;++j){
-        unsigned terms=rows[i]&cols[j];
-        int64_t acc=0;
-        for(k=0;terms;k++,terms>>=1)
-            if(terms&1u)acc+=(int64_t)lhs->a[i*4+k]*rhs->a[k*4+j];
-        result.a[i*4+j]=saturation(acc >> 12);
+    int i,j;
+    for(i=0;i<4;++i){
+        int64_t l0=lhs->a[i*4],l1=lhs->a[i*4+1],l2=lhs->a[i*4+2],l3=lhs->a[i*4+3];
+        for(j=0;j<4;++j){
+            int64_t acc=l0*rhs->a[j]+l1*rhs->a[4+j]+l2*rhs->a[8+j]+l3*rhs->a[12+j];
+            result.a[i*4+j]=saturation(acc >> 12);
+        }
     }
     *out=result;
+}
+/* MTX_SCALE's product (diag(x, y, z, 1) x m): rows 0-2 scaled, row 3 as it
+ * was (1.0 x v >> 12 is v). As multiply() would make it. */
+static void scale_rows(Matrix *m,const uint32_t *p)
+{
+    int i,j;
+    for(i=0;i<3;i++){
+        int64_t f=(int32_t)p[i];
+        for(j=0;j<4;j++)m->a[i*4+j]=saturation((f*m->a[i*4+j])>>12);
+    }
+}
+/* MTX_TRANS's product (the identity with (x, y, z, 1) as row 3, x m):
+ * rows 0-2 as they were, row 3 the translation through m. As multiply()
+ * would make it. */
+static void translate_rows(Matrix *m,const uint32_t *p)
+{
+    int64_t x=(int32_t)p[0],y=(int32_t)p[1],z=(int32_t)p[2];
+    int j;
+    for(j=0;j<4;j++)
+        m->a[12+j]=saturation((x*m->a[j]+y*m->a[4+j]+z*m->a[8+j]+((int64_t)m->a[12+j]<<12))>>12);
 }
 static void transform(const int32_t in[4],const Matrix *m,int32_t out[4])
 {
@@ -163,16 +180,6 @@ static void transform_vector(const int32_t in[3],const Matrix *m,int32_t out[3])
     int j;
     for(j=0;j<3;j++)
         out[j]=saturation((x*m->a[j]+y*m->a[4+j]+z*m->a[8+j])>>12);
-}
-/* transform() for a point (w = 1.0): what every vertex goes through. */
-static void transform_point(const int32_t in[4],const Matrix *m,int32_t out[4])
-{
-    int64_t x=in[0],y=in[1],z=in[2];
-    int j;
-    for(j=0;j<4;j++){
-        int64_t v=x*m->a[j]+y*m->a[4+j]+z*m->a[8+j]+((int64_t)m->a[12+j]<<12);
-        out[j]=saturation(v>>12);
-    }
 }
 static Matrix *selected(GeoState *g)
 {
@@ -258,10 +265,18 @@ static struct {
     int dirty;
     uint8_t ambient[4][3], diffuse[4][3], specular[4][3];
 } sLightCache = { 1 };
+/* rgb_product's per component, (a * b + 15) / 31: made once (the reset). */
+static uint8_t sProduct[32][32];
+static void make_products(void)
+{
+    unsigned a,b;
+    for(a=0;a<32;a++)for(b=0;b<32;b++)sProduct[a][b]=(uint8_t)rgb_product((uint16_t)a,(uint16_t)b);
+}
 static void split_product(uint8_t out[3],uint16_t a,uint16_t b)
 {
-    uint16_t c=rgb_product(a,b);
-    out[0]=(uint8_t)(c&31);out[1]=(uint8_t)((c>>5)&31);out[2]=(uint8_t)((c>>10)&31);
+    out[0]=sProduct[a&31][b&31];
+    out[1]=sProduct[(a>>5)&31][(b>>5)&31];
+    out[2]=sProduct[(a>>10)&31][(b>>10)&31];
 }
 static void update_light_cache(void)
 {
@@ -391,6 +406,15 @@ static inline unsigned outcode(const int32_t clip[4])
 {
     unsigned bits=0;
     int64_t w=clip[3];
+    if(__builtin_expect(clip[3]>0,1)){
+        /* (Nearly every vertex: in front of the camera.) w + v < 0 is
+         * v < -w, and w - v < 0 is v > w; with 0 < w, -w can't overflow. */
+        int32_t w32=clip[3];
+        bits=(unsigned)(clip[0]<-w32)|((unsigned)(clip[0]>w32)<<1)|
+             ((unsigned)(clip[1]<-w32)<<2)|((unsigned)(clip[1]>w32)<<3)|
+             ((unsigned)(clip[2]<-w32)<<4)|((unsigned)(clip[2]>w32)<<5);
+        return bits;
+    }
     if(w+clip[0]<0)bits|=1u;
     if(w-clip[0]<0)bits|=2u;
     if(w+clip[1]<0)bits|=4u;
@@ -411,6 +435,7 @@ static void ensure_clip(GeoState *g)
     if(!g->clipDirty)return;
     g->clipDirty=0;
     multiply(&g->clip,&g->pos,&g->proj);
+    for(j=0;j<4;j++)g->clipTrans[j]=(int64_t)g->clip.a[12+j]<<12;
     if(g!=sResults)return;
     for(j=0;j<16;j++)put32(0x640+j*4,(uint32_t)g->clip.a[j]);
     for(j=0;j<9;j++)put32(0x680+j*4,(uint32_t)g->vec.a[(j/3)*4+(j%3)]);
@@ -668,7 +693,14 @@ static void submit_vertex(void)
     vp=(s.primitive==2 && n>=2)?&s.vertices[3-s.stripOld-s.stripNew]:&s.vertices[n];
     src[0]=s.coord[0];src[1]=s.coord[1];src[2]=s.coord[2];src[3]=4096;
     ensure_clip(&s);
-    transform_point(src,&s.clip,vp->clip);
+    {
+        /* transform() of the point (w = 1.0) through the clip matrix,
+         * its row 3 shifted already (ensure_clip). */
+        int64_t x=src[0],y=src[1],z=src[2];
+        int j;
+        for(j=0;j<4;j++)
+            vp->clip[j]=saturation((x*s.clip.a[j]+y*s.clip.a[4+j]+z*s.clip.a[8+j]+s.clipTrans[j])>>12);
+    }
     vp->outside=(uint8_t)outcode(vp->clip);
     vp->hasScreen=0;
     sDiag.vertices++;
@@ -771,10 +803,12 @@ static void matrix_command(GeoState *g,unsigned op,const uint32_t *p)
     case 0x15:identity(&m);set_matrix(g,&m,0);break;
     case 0x16:case 0x17:m=read_matrix(op,p);set_matrix(g,&m,0);break;
     case 0x18:case 0x19:case 0x1a:m=read_matrix(op,p);mul_matrix(g,&m,0);break;
-    case 0x1b:identity(&m);m.a[0]=(int32_t)p[0];m.a[5]=(int32_t)p[1];m.a[10]=(int32_t)p[2];
-        mul_matrix(g,&m,1);break;
-    case 0x1c:identity(&m);m.a[12]=(int32_t)p[0];m.a[13]=(int32_t)p[1];m.a[14]=(int32_t)p[2];
-        mul_matrix(g,&m,0);break;
+    /* Scale (never the vector matrix) and translation: only the rows they
+     * change worked out. */
+    case 0x1b:scale_rows(selected(g),p);break;
+    case 0x1c:translate_rows(selected(g),p);
+        if(g->mode==2)translate_rows(&g->vec,p);
+        break;
     default:return;
     }
     /* The clip matrix is worked out again when a vertex, a test or the SDK
@@ -910,7 +944,8 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
     case 0x2b:s.plttbase=p[0];break;
     case 0x30:settle_lighting();
         s.diffuse=p[0]&0x7FFF;s.ambient=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;
-        if(p[0]&(1u<<15))s.rgb=s.diffuse;break;
+        if(p[0]&(1u<<15))s.rgb=s.diffuse;
+        break;
     case 0x31:settle_lighting();
         s.specular=p[0]&0x7FFF;s.emission=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;
         s.useShininess=(p[0]&(1u<<15))!=0;break;
@@ -1165,12 +1200,375 @@ static inline __attribute__((always_inline)) void work_op(unsigned op,const uint
     execute(op,p);
     if(op==0x50u)__atomic_store_n(&sSwapsDone,sSwapsDone+1u,__ATOMIC_RELEASE);
 }
-/* A ring entry; returns its length in words. */
-static uint32_t work(const uint32_t *entry)
+/* ------------------------------------------- polygons out of the view
+ *
+ * Most of a big map is off the screen: in the field about three in four
+ * vertices belong to a BEGIN_VTXS whose polygons are all outside the view
+ * volume, worked out only to be thrown away. Such a list of vertices
+ * (from BEGIN_VTXS to the next END_VTXS or BEGIN_VTXS, nothing among them
+ * but vertices and what goes with them: TEXCOORD, NORMAL, COLOR) shows
+ * itself by its coordinates' bounding box: if all eight corners are
+ * outside one clip plane, so is every vertex in it (clip coordinates are
+ * linear in a vertex's), and every polygon of them is one the engine
+ * throws away whole (polygon_hidden). Then only what the list leaves
+ * behind is worked out: the last coordinates, texture coordinates, normal
+ * and colour, and the [gx3d] counts. The same scene as without.
+ *
+ * The game sends its display lists in pieces (NitroSystem's geometry
+ * buffer, ~118 words; commands written one at a time), so a list goes on
+ * over several ring entries: it's followed through them, as far as the
+ * game's thread has written. */
+
+/* Walking a block of packets command by command: the next command word at
+ * w[i], what's left of the current one in `word`. */
+typedef struct OpCursor {
+    const uint32_t *w;
+    uint32_t count, i, word;
+} OpCursor;
+static inline int next_op(OpCursor *c,unsigned *op,const uint32_t **p)
 {
+    for(;;){
+        while(!c->word){
+            if(c->i>=c->count)return 0;
+            c->word=c->w[c->i++];
+        }
+        *op=c->word&255u;
+        c->word>>=8;
+        if(*op)break;
+    }
+    *p=&c->w[c->i];
+    c->i+=sParamCount[*op];
+    return 1;
+}
+/* A ring entry's length in words. */
+static inline uint32_t entry_length(const uint32_t *entry)
+{
+    return (entry[0]&255u)==OP_PACKETS?2u+entry[1]:1u+((entry[0]>>8)&255u);
+}
+/* Walking the ring's commands across entries, up to `end` (what the game's
+ * thread has written): the entry at r, and in it c (a block of packets),
+ * or `single` (a command of its own, not taken yet). */
+typedef struct StreamCursor {
+    uint32_t r, end;
+    OpCursor c;
+    int single;
+} StreamCursor;
+/* The next command; 0 at the end of what's written, or at a left-out
+ * scene's entry (RING_SKIP): nothing is known beyond. */
+static int stream_next(StreamCursor *sc,unsigned *op,const uint32_t **p)
+{
+    for(;;){
+        const uint32_t *entry;
+        uint32_t next,header;
+        if(sc->single){
+            entry=&sRing[sc->r&RING_MASK];
+            sc->single=0;
+            sc->c.count=sc->c.i=sc->c.word=0;   /* taken: the entry is done */
+            *op=entry[0]&255u;
+            *p=entry+1;
+            return 1;
+        }
+        if(next_op(&sc->c,op,p))return 1;
+        next=sc->r+entry_length(&sRing[sc->r&RING_MASK]);
+        if(next==sc->end)return 0;
+        header=sRing[next&RING_MASK];
+        if(header==RING_PAD){
+            next=(next|RING_MASK)+1u;
+            if(next==sc->end)return 0;
+            header=sRing[next&RING_MASK];
+        }
+        if(header&RING_SKIP)return 0;
+        sc->r=next;
+        if((header&255u)==OP_PACKETS){
+            sc->c.w=&sRing[(next+2u)&RING_MASK];
+            sc->c.count=sRing[(next+1u)&RING_MASK];
+            sc->c.i=sc->c.word=0;
+        }else{
+            sc->single=1;
+        }
+    }
+}
+/* A vertex command's coordinates into xyz (as set_geo_position). */
+static inline void vertex_coords(unsigned op,const uint32_t *p,int32_t xyz[3])
+{
+    switch(op){
+    case 0x23:xyz[0]=signbits(p[0],16);xyz[1]=signbits(p[0]>>16,16);xyz[2]=signbits(p[1],16);break;
+    case 0x24:xyz[0]=signbits(p[0],10)*64;xyz[1]=signbits(p[0]>>10,10)*64;xyz[2]=signbits(p[0]>>20,10)*64;break;
+    case 0x25:xyz[0]=signbits(p[0],16);xyz[1]=signbits(p[0]>>16,16);break;
+    case 0x26:xyz[0]=signbits(p[0],16);xyz[2]=signbits(p[0]>>16,16);break;
+    case 0x27:xyz[1]=signbits(p[0],16);xyz[2]=signbits(p[0]>>16,16);break;
+    default:xyz[0]+=signbits(p[0],10);xyz[1]+=signbits(p[0]>>10,10);xyz[2]+=signbits(p[0]>>20,10);break;
+    }
+}
+/* The polygons n vertices of a primitive make (as submit_vertex does). */
+static unsigned polygons_of(int primitive,unsigned n)
+{
+    switch(primitive){
+    case 0:return n/3u;
+    case 1:return n/4u;
+    case 2:return n>=3u?n-2u:0u;
+    default:return n>=4u?1u+(n-4u)/2u:0u;
+    }
+}
+/* Right after a BEGIN_VTXS (done), with *sc where it was: if the vertices
+ * that follow are all outside one clip plane, what they'd leave behind is
+ * done instead of them, *sc is moved to the command that ends them (not
+ * taken), and 1 returned. */
+/* What a list of vertices leaves behind, and their bounding box, as
+ * they're looked through (skip_hidden_vertices). */
+typedef struct VertexScan {
+    int32_t xyz[3],lo[3],hi[3];
+    unsigned n;
+    uint32_t texcoord,normal,color;
+    int haveTexcoord,haveNormal,haveColor,normalLast;
+} VertexScan;
+/* One command of the list: 0 to go on, 1 if it ends the list, -1 if it's
+ * something else (then the list is done as usual). */
+static inline int scan_op(VertexScan *v,unsigned op,const uint32_t *p)
+{
+    if(op>=0x23u && op<=0x28u){
+        vertex_coords(op,p,v->xyz);
+        if(!v->n){
+            v->lo[0]=v->hi[0]=v->xyz[0];v->lo[1]=v->hi[1]=v->xyz[1];v->lo[2]=v->hi[2]=v->xyz[2];
+        }else{
+            if(v->xyz[0]<v->lo[0])v->lo[0]=v->xyz[0];else if(v->xyz[0]>v->hi[0])v->hi[0]=v->xyz[0];
+            if(v->xyz[1]<v->lo[1])v->lo[1]=v->xyz[1];else if(v->xyz[1]>v->hi[1])v->hi[1]=v->xyz[1];
+            if(v->xyz[2]<v->lo[2])v->lo[2]=v->xyz[2];else if(v->xyz[2]>v->hi[2])v->hi[2]=v->xyz[2];
+        }
+        v->n++;
+        return 0;
+    }
+    switch(op){
+    case 0x22u:v->texcoord=p[0];v->haveTexcoord=1;return 0;
+    case 0x21u:v->normal=p[0];v->haveNormal=1;v->normalLast=1;return 0;
+    case 0x20u:v->color=p[0];v->haveColor=1;v->normalLast=0;return 0;
+    case 0x40u:case 0x41u:return 1;
+    default:return -1;
+    }
+}
+static int skip_hidden_vertices(StreamCursor *sc)
+{
+    StreamCursor scan=*sc,end;
+    VertexScan v;
+    unsigned op,n,polys,k,j,outside=0x3fu,behind=0,front=0;
+    unsigned mode=(s.texparam>>30)&3u;
+    const uint32_t *p;
+    int32_t *xyz=v.xyz,*lo=v.lo,*hi=v.hi;
+
+    /* Texture coordinates from normals or vertices: done as usual. */
+    if(mode>=2u)return 0;
+    /* The vertices' bounding box, where they end, and what they leave. */
+    memset(&v,0,sizeof(v));
+    v.xyz[0]=s.coord[0];v.xyz[1]=s.coord[1];v.xyz[2]=s.coord[2];
+    for(;;){
+        /* Through the block of packets it's in (most of the way). */
+        const uint32_t *w=scan.c.w;
+        uint32_t count=scan.c.count,i=scan.c.i,word=scan.c.word;
+        int r;
+        for(;;){
+            if(!word){
+                if(i>=count)break;
+                word=w[i++];
+                continue;
+            }
+            op=word&255u;
+            if(!op){word>>=8;continue;}
+            r=scan_op(&v,op,&w[i]);
+            if(r>0){
+                end=scan;
+                end.c.i=i;end.c.word=word;   /* (that command not taken) */
+                goto found;
+            }
+            if(r<0)return 0;
+            word>>=8;
+            i+=sParamCount[op];
+        }
+        scan.c.i=i;scan.c.word=word;
+        /* On into the next entry (or a command of its own). */
+        end=scan;
+        if(!stream_next(&scan,&op,&p))return 0;   /* the rest isn't known yet */
+        r=scan_op(&v,op,p);
+        if(r>0)goto found;
+        if(r<0)return 0;
+    }
+found:
+    n=v.n;
+    if(!n)return 0;
+    /* Each corner through the clip matrix, before the >> 12 (S): with
+     * a = S >> 12, S_v + S_w < 0 makes v + w < 0, and S_v - S_w >= 4096
+     * makes v > w: outside that plane (outcode). */
+    ensure_clip(&s);
+    {
+        /* The corner at lo, and what each edge of the box adds (exact,
+         * in 64 bits): eight corners for the cost of four transforms. */
+        int64_t base[4],edge[3][4];
+        for(j=0;j<4;j++){
+            base[j]=(int64_t)lo[0]*s.clip.a[j]+(int64_t)lo[1]*s.clip.a[4+j]+
+                    (int64_t)lo[2]*s.clip.a[8+j]+s.clipTrans[j];
+            for(k=0;k<3;k++)edge[k][j]=((int64_t)hi[k]-lo[k])*s.clip.a[k*4+j];
+        }
+        for(k=0;k<8;k++){
+            int64_t c[4];
+            for(j=0;j<4;j++){
+                c[j]=base[j]+((k&1)?edge[0][j]:0)+((k&2)?edge[1][j]:0)+((k&4)?edge[2][j]:0);
+                /* Far from saturation() for every point of the box. */
+                if(c[j]>=((int64_t)1<<42)||c[j]<=-((int64_t)1<<42))return 0;
+            }
+            if(!(c[0]+c[3]<0))outside&=~1u;
+            if(!(c[0]-c[3]>=4096))outside&=~2u;
+            if(!(c[1]+c[3]<0))outside&=~4u;
+            if(!(c[1]-c[3]>=4096))outside&=~8u;
+            if(!(c[2]+c[3]<0))outside&=~16u;
+            if(!(c[2]-c[3]>=4096))outside&=~32u;
+            /* w <= 0 (behind the camera; a [gx3d] count): all or none. */
+            if(c[3]<4096)behind++;else front++;
+            if(!outside)return 0;
+        }
+    }
+    if(behind&&front)return 0;
+    /* Hidden: what the commands leave behind, without the vertices (each
+     * command only sets state; the last one of each kind is what stays). */
+    s.coord[0]=xyz[0];s.coord[1]=xyz[1];s.coord[2]=xyz[2];
+    if(v.haveTexcoord){
+        s.texcoord[0]=signbits(v.texcoord,16);
+        s.texcoord[1]=signbits(v.texcoord>>16,16);
+        if(mode==0){
+            s.resolvedTexcoord[0]=s.texcoord[0];
+            s.resolvedTexcoord[1]=s.texcoord[1];
+        }else{
+            transform_texcoords(s.texcoord,1,s.resolvedTexcoord);
+        }
+    }
+    if(v.haveNormal){
+        for(j=0;j<3;j++)s.normal[j]=signbits(v.normal>>(j*10),10)*8;
+        s.normalValue=v.normal;
+    }
+    if(v.haveColor)s.rgb=v.color&0x7FFF;
+    if(v.haveNormal||v.haveColor)s.rgbPending=v.normalLast;
+    polys=polygons_of(s.primitive,n);
+    sDiag.vertices+=n;
+    if(behind)sDiag.behind+=n;
+    sDiag.polygons+=polys;
+    sDiag.clipped+=polys;
+    /* Its END_VTXS or BEGIN_VTXS is next; no vertex of it is kept. */
+    s.nverts=0;
+    *sc=end;
+    return 1;
+}
+
+/* Where the worker goes on after a skip that ended in a later entry: in
+ * the block of packets there, from (sResumeI, sResumeWord). */
+static int sResume;
+static uint32_t sResumeI,sResumeWord;
+
+/* A block of whole packets of a scene that's kept (the ring entry at r,
+ * up to `end` written), from command word i / the rest of the current one
+ * `word`: as work_op would do each command, with what's in nearly every
+ * vertex (TEXCOORD, NORMAL, COLOR, the VTX commands) done here, one branch
+ * away; a command word's commands after its last non-NOP are NOPs, and
+ * aren't looked at. After a BEGIN_VTXS, vertices all out of the view are
+ * passed over (skip_hidden_vertices), maybe into later entries: returns
+ * the entry to go on with. */
+static uint32_t work_packets(uint32_t r,uint32_t end,uint32_t i,uint32_t word)
+{
+    const uint32_t *w=&sRing[(r+2u)&RING_MASK];
+    uint32_t count=sRing[(r+1u)&RING_MASK];
+    for(;;){
+        if(!word){
+            if(i>=count)break;
+            word=w[i++];
+            continue;
+        }
+        {
+            unsigned o=word&255u;
+            const uint32_t *p=&w[i];
+            word>>=8;
+            switch(o){
+            case 0x00:break;
+            case 0x20:s.rgb=p[0]&0x7FFF;s.rgbPending=0;i++;break;
+            case 0x21:{
+                int j;
+                for(j=0;j<3;j++)s.normal[j]=signbits(p[0]>>(j*10),10)*8;
+                s.normalValue=p[0];s.rgbPending=1;
+                if(((s.texparam>>30)&3u)==2u)transform_texcoords(s.normal,2,s.resolvedTexcoord);
+                i++;
+                break;
+            }
+            case 0x22:{
+                unsigned mode=(s.texparam>>30)&3u;
+                s.texcoord[0]=signbits(p[0],16);
+                s.texcoord[1]=signbits(p[0]>>16,16);
+                if(mode==0){
+                    s.resolvedTexcoord[0]=s.texcoord[0];
+                    s.resolvedTexcoord[1]=s.texcoord[1];
+                }else if(mode==1){
+                    transform_texcoords(s.texcoord,1,s.resolvedTexcoord);
+                }
+                i++;
+                break;
+            }
+            case 0x23:
+                s.coord[0]=signbits(p[0],16);s.coord[1]=signbits(p[0]>>16,16);s.coord[2]=signbits(p[1],16);
+                submit_vertex();i+=2;break;
+            case 0x24:
+                s.coord[0]=signbits(p[0],10)*64;s.coord[1]=signbits(p[0]>>10,10)*64;
+                s.coord[2]=signbits(p[0]>>20,10)*64;
+                submit_vertex();i++;break;
+            case 0x25:s.coord[0]=signbits(p[0],16);s.coord[1]=signbits(p[0]>>16,16);submit_vertex();i++;break;
+            case 0x26:s.coord[0]=signbits(p[0],16);s.coord[2]=signbits(p[0]>>16,16);submit_vertex();i++;break;
+            case 0x27:s.coord[1]=signbits(p[0],16);s.coord[2]=signbits(p[0]>>16,16);submit_vertex();i++;break;
+            case 0x28:
+                s.coord[0]+=signbits(p[0],10);s.coord[1]+=signbits(p[0]>>10,10);s.coord[2]+=signbits(p[0]>>20,10);
+                submit_vertex();i++;break;
+            case 0x40:{
+                StreamCursor sc;
+                work_op(o,p,0);
+                i++;
+                sc.r=r;sc.end=end;sc.single=0;
+                sc.c.w=w;sc.c.count=count;sc.c.i=i;sc.c.word=word;
+                if(skip_hidden_vertices(&sc)){
+                    if(sc.r!=r){
+                        /* Ended in a later entry: go on there; in a block
+                         * of packets where it stopped, a command of its own
+                         * from the start unless it was taken already. */
+                        if(sc.single)return sc.r;
+                        if((sRing[sc.r&RING_MASK]&255u)!=OP_PACKETS)
+                            return sc.r+entry_length(&sRing[sc.r&RING_MASK]);
+                        sResume=1;
+                        sResumeI=sc.c.i;
+                        sResumeWord=sc.c.word;
+                        return sc.r;
+                    }
+                    i=sc.c.i;word=sc.c.word;
+                }
+                break;
+            }
+            case 0x70:case 0x71:case 0x72:
+                /* Tests are the game's (the shadow's) only. */
+                i+=sParamCount[o];break;
+            default:
+                work_op(o,p,0);
+                i+=sParamCount[o];
+                break;
+            }
+        }
+    }
+    return r+2u+count;
+}
+/* The ring entry at r (up to `end` written): returns the entry to go on
+ * with (usually the next). */
+static uint32_t work(uint32_t r,uint32_t end)
+{
+    const uint32_t *entry=&sRing[r&RING_MASK];
     uint32_t header=entry[0];
     unsigned op=header&255u;
     int skip=(header&RING_SKIP)!=0;
+    if(op==OP_PACKETS && !skip){
+        uint32_t i=0,word=0;
+        if(sResume){i=sResumeI;word=sResumeWord;sResume=0;}
+        return work_packets(r,end,i,word);
+    }
+    sResume=0;
     if(op==OP_PACKETS){
         uint32_t count=entry[1], i=0;
         const uint32_t *w=entry+2;
@@ -1184,10 +1582,10 @@ static uint32_t work(const uint32_t *entry)
                 i+=sParamCount[o];
             }
         }
-        return 2u+count;
+        return r+2u+count;
     }
     work_op(op,entry+1,skip);
-    return 1u+((header>>8)&255u);
+    return r+1u+((header>>8)&255u);
 }
 void NitroPort_Gx3dThreadMain(const volatile int *running)
 {
@@ -1207,7 +1605,7 @@ void NitroPort_Gx3dThreadMain(const volatile int *running)
         while(r!=w){
             uint32_t header=sRing[r&RING_MASK];
             if(header==RING_PAD){r=(r|RING_MASK)+1u;continue;}
-            r+=work(&sRing[r&RING_MASK]);
+            r=work(r,w);
             if(r-stored>=4096u){
                 /* Room for the game as soon as there is some. */
                 stored=r;
@@ -1299,6 +1697,7 @@ void NitroPort_Gx3dReset(void)
     memset(&sDec,0,sizeof(sDec));
     sLightCache.dirty=1;
     sNormalCache.valid=0;
+    make_products();
     NitroPort_MailboxInit(&sMailbox);
     sBuilding=0;sDisplayed=1;sSerial=0;
     identity(&s.proj);identity(&s.pos);identity(&s.vec);identity(&s.tex);

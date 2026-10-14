@@ -120,8 +120,14 @@ light-space transforms, emission/ambient/specular, the shininess table,
 all texture-coordinate source modes, polygon latching, 31-level stack
 boundaries, VEC_TEST precision, non-matrix GXSTAT refresh, viewport mapping,
 translucent/opaque draw order and alpha blend-enable, scene depth mode and
-hardware scene limits. The
+hardware scene limits, and vertex lists out of view sent in pieces (which
+the geometry thread passes over without working their vertices out: see
+"polygons out of the view" in `src/port_gx3d.c`). The
 existing DMA/IRQ regression test remains in `tests/test_threads.c`.
+`make replay` builds `gx3d_replay`, which plays a recording of the game's
+geometry commands (the PC runner's `--gx-record FILE`) with and without the
+thread and checks both make the same scenes; use it after changing the
+engine (recordings are the game's data: keep them local).
 
 **Reference limitations:** this is a staging renderer, not cycle-exact DS 3D.
 The virtual FIFO is consumed synchronously, and some DS details (polygon ID

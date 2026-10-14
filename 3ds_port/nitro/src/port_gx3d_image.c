@@ -7,7 +7,10 @@
  * On the 3DS the GPU thread hands its finished RGBA8 image over as it is
  * (NitroPort_Gx3dSubmitRGBA8), and whoever draws the 3D next converts it,
  * when it acquires the image: the 3D's screen drawer, on a core of its
- * own, rather than the GPU thread on the game's busy core.
+ * own, rather than the GPU thread on the game's busy core. That drawer is
+ * woken to convert it as soon as it's handed over, if it's free
+ * (NitroPort_Gx3dConvertPending): not while the game waits for it to read
+ * the display.
  */
 #include <nitro_port_gx3d.h>
 #include "port_platform.h"
@@ -31,6 +34,9 @@ static uint32_t sPublishCount;   /* images published or handed over so far */
 static const uint32_t *sPending,*sPendingDepth,*sConverting;
 static NitroGx3dEdgeSetup sPendingEdges;
 static int sPendingHasEdges;
+/* Images outlined, and pixels outlined (by whoever converts: one at a time). */
+static uint32_t sEdgeImages;
+static uint32_t sEdgePixels;   /* (wraps round: [perf] takes differences) */
 /* A lower-priority GPU or same-priority drawer can own this gate.
  * Never busy-loop indefinitely on core 0: yield after a short spin. */
 static void lock(void) {
@@ -115,7 +121,7 @@ int NitroPort_Gx3dRawInUse(const uint32_t *image)
     return used;
 }
 /* The image handed over, converted (by one caller at a time). */
-static void convert_pending(void)
+static int convert_pending(void)
 {
     const uint32_t *image,*depthId;
     NitroGx3dEdgeSetup edges;
@@ -123,7 +129,7 @@ static void convert_pending(void)
     lock();
     if(!sPending || sConverting){
         unlock();
-        return;
+        return 0;
     }
     image=sConverting=sPending;
     depthId=sPendingDepth;
@@ -135,6 +141,11 @@ static void convert_pending(void)
     lock();
     sConverting=NULL;
     unlock();
+    return 1;
+}
+int NitroPort_Gx3dConvertPending(void)
+{
+    return convert_pending();
 }
 static int publish(const uint32_t *src,size_t pixels,const uint32_t *depthId,
                    const NitroGx3dEdgeSetup *edges,int count)
@@ -191,8 +202,11 @@ static int publish(const uint32_t *src,size_t pixels,const uint32_t *depthId,
     }
     if(depthId && edges && edges->enabled){
         int outlinesPartly=0;
-        NitroPort_Gx3dMarkEdges(sImages[index],sAlphas[index],depthId,edges,&outlinesPartly);
+        unsigned outlined=NitroPort_Gx3dMarkEdges(sImages[index],sAlphas[index],depthId,edges,
+                                                  &outlinesPartly);
         partly|=(unsigned)outlinesPartly;
+        __atomic_store_n(&sEdgeImages,sEdgeImages+1u,__ATOMIC_RELAXED);
+        __atomic_store_n(&sEdgePixels,sEdgePixels+outlined,__ATOMIC_RELAXED);
     }
     sTranslucent[index]=(uint8_t)(partly!=0);
     finish(index,count);
@@ -248,6 +262,12 @@ void NitroPort_Gx3dReleaseImage(const uint16_t *ptr)
         break;
     }
     unlock();
+}
+
+void NitroPort_Gx3dEdgeStats(uint32_t *images,uint32_t *pixels)
+{
+    *images=__atomic_load_n(&sEdgeImages,__ATOMIC_RELAXED);
+    *pixels=__atomic_load_n(&sEdgePixels,__ATOMIC_RELAXED);
 }
 
 uint32_t NitroPort_Gx3dImageCount(void)

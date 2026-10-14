@@ -278,7 +278,9 @@ static void test_edge_marking(void)
      * screen's border in ID 56's colour (the rear plane is further and
      * another ID). Everything else as it was. */
     edge_scene();
-    NitroPort_Gx3dMarkEdges(edgeImage,edgeAlpha,edgeIds,&e,&translucent);
+    /* (It says how many: the box's ring, 2*20 + 2*8, and the border.) */
+    CHECK(NitroPort_Gx3dMarkEdges(edgeImage,edgeAlpha,edgeIds,&e,&translucent)==
+          56u+2u*NITRO_GX3D_WIDTH+2u*(NITRO_GX3D_HEIGHT-2));
     for(y=0;y<NITRO_GX3D_HEIGHT;y++)for(x=0;x<NITRO_GX3D_WIDTH;x++){
         int i=y*NITRO_GX3D_WIDTH+x, box=x>=100&&x<120&&y>=50&&y<60;
         int ring=box&&(x==100||x==119||y==50||y==59);
@@ -524,6 +526,19 @@ static void test_image_submit(void)
     got=NitroPort_Gx3dAcquireImage();
     CHECK(got!=NULL && got[0]==0x8421u && got[NITRO_GX3D_WIDTH+1]==0x801fu);
     NitroPort_Gx3dReleaseImage(got);
+    /* Converted before it's acquired (a drawer between frames): counted
+     * once, its buffer free at once, and nothing left to convert. */
+    CHECK(NitroPort_Gx3dConvertPending()==0);
+    fill_handoff(handoff[1],0x00ff00ffu);           /* green */
+    count=NitroPort_Gx3dImageCount();
+    NitroPort_Gx3dSubmitRGBA8(handoff[1],NULL,NULL);
+    CHECK(NitroPort_Gx3dConvertPending()==1);
+    CHECK(!NitroPort_Gx3dRawInUse(handoff[1]));
+    CHECK(NitroPort_Gx3dConvertPending()==0);
+    CHECK(NitroPort_Gx3dImageCount()==count+1);
+    got=NitroPort_Gx3dAcquireImage();
+    CHECK(got!=NULL && got[0]==0x83e0u);
+    NitroPort_Gx3dReleaseImage(got);
 }
 /* A GPU thread handing over images in three buffers, never drawing into
  * one in use; a drawer acquiring them meanwhile: every image it sees is
@@ -547,10 +562,17 @@ static void *handoff_gpu(void *unused)
 }
 static void *handoff_drawer(void *unused)
 {
-    unsigned last=0;
+    unsigned last=0,turn=0;
     (void)unused;
     while(!__atomic_load_n(&handoffDone,__ATOMIC_ACQUIRE)){
-        const uint16_t *got=NitroPort_Gx3dAcquireImage();
+        const uint16_t *got;
+        /* Every other time, converted between "frames" first (as the 3D
+         * screen's drawer does when it's woken for a new image). */
+        if(++turn&1){
+            NitroPort_Gx3dConvertPending();
+            sched_yield();
+        }
+        got=NitroPort_Gx3dAcquireImage();
         if(got){
             uint16_t first=got[0];
             unsigned frame=(first&31u)|(((first>>5)&31u)<<5);
