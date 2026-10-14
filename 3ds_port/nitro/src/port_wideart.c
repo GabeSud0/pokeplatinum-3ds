@@ -11,7 +11,6 @@
 #include <nitro_port_render2d.h>
 #include <nitro_port_wide.h>
 
-#include <ctype.h>
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,6 +81,13 @@ static void unlock(void)
 
 /* ------------------------------------------------------------- the folder */
 
+/* (not ctype's: those are a table in newlib the libraries' check doesn't
+ * expect, tools/check_sdk_coverage.py) */
+static int is_digit(int c)
+{
+    return c >= '0' && c <= '9';
+}
+
 int NitroPort_WideArtParseName(const char *name, uint64_t *key, int *hofs, int *vofs, int *full)
 {
     const char *p = name;
@@ -89,7 +95,7 @@ int NitroPort_WideArtParseName(const char *name, uint64_t *key, int *hofs, int *
     int i, h = 0, v = 0, f = 0;
 
     for (i = 0; i < 16; i++, p++) {
-        int c = tolower((unsigned char)*p), d;
+        int c = (*p >= 'A' && *p <= 'F') ? *p - 'A' + 'a' : *p, d;
 
         if (c >= '0' && c <= '9') {
             d = c - '0';
@@ -100,16 +106,16 @@ int NitroPort_WideArtParseName(const char *name, uint64_t *key, int *hofs, int *
         }
         k = (k << 4) | (uint64_t)d;
     }
-    if (*p++ != '_' || !isdigit((unsigned char)*p)) {
+    if (*p++ != '_' || !is_digit(*p)) {
         return 0;
     }
-    while (isdigit((unsigned char)*p)) {
+    while (is_digit(*p)) {
         h = h * 10 + (*p++ - '0');
     }
-    if (*p++ != '_' || !isdigit((unsigned char)*p)) {
+    if (*p++ != '_' || !is_digit(*p)) {
         return 0;
     }
-    while (isdigit((unsigned char)*p)) {
+    while (is_digit(*p)) {
         v = v * 10 + (*p++ - '0');
     }
     if (strncmp(p, "_full", 5) == 0) {
