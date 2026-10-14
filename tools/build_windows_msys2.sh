@@ -6,10 +6,11 @@
 #
 # Installs what the build needs besides devkitPro (git, python, gcc, patch),
 # clones the port into ~/pokeplatinum-3ds (its own clone, with Linux line
-# endings) or updates it, builds pokeplatinum.3dsx, makes the data pack, and
-# puts the SD card files in %USERPROFILE%\pokeplatinum-sd (and in Azahar's SD
-# folder, if there is one). Nothing is uploaded. The program and the pack
-# contain game code and data: keep them to yourself.
+# endings) or updates it, builds pokeplatinum.3dsx and pokeplatinum.cia (the
+# same program for the HOME Menu, with your ROM's icon), makes the data
+# pack, and puts the SD card files in %USERPROFILE%\pokeplatinum-sd (and in
+# Azahar's SD folder, if there is one). Nothing is uploaded. The program and
+# the pack contain game code and data: keep them to yourself.
 set -euo pipefail
 
 ROM="${1:-}"
@@ -56,6 +57,19 @@ python3 tools/bootstrap.py --clean
 step "Building pokeplatinum.3dsx (this takes a while: ~1,000 game files)"
 make -j"$(nproc)" game
 
+# The HOME Menu version (.cia). The tools are built once, in a folder kept
+# between builds. If this part fails, the .3dsx above is still fine.
+CIA_TOOLS="$HOME/pokeplatinum-cia-tools"
+CIA=""
+step "Building pokeplatinum.cia (the HOME Menu version)"
+if bash tools/build_cia_tools.sh "$CIA_TOOLS" &&
+   python3 tools/home_menu_art.py "$ROM" build/home-menu-art &&
+   make -C 3ds_port/game TARGET=3ds HOME_ART="$PWD/build/home-menu-art" CIA_TOOLS="$CIA_TOOLS" program cia; then
+    CIA=3ds_port/game/build/3ds/pokeplatinum.cia
+else
+    echo "(Couldn't build the .cia: see the lines above. The .3dsx works as before.)"
+fi
+
 step "Making your data pack from $ROM"
 python3 builder/extract_rom.py "$ROM" -o data_pack
 python3 builder/pack.py data_pack -o platinum3ds.pak
@@ -63,6 +77,11 @@ python3 builder/pack.py data_pack -o platinum3ds.pak
 step "Putting the SD card files in $SD_DIR"
 mkdir -p "$SD_DIR/3ds/pokeplatinum"
 cp 3ds_port/game/build/3ds/pokeplatinum.3dsx "$SD_DIR/3ds/pokeplatinum.3dsx"
+rm -f "$SD_DIR/cia/pokeplatinum.cia"
+if [ -n "$CIA" ]; then
+    mkdir -p "$SD_DIR/cia"
+    cp "$CIA" "$SD_DIR/cia/pokeplatinum.cia"
+fi
 cp platinum3ds.pak data_pack/manifest.json "$SD_DIR/3ds/pokeplatinum/"
 
 AZ="$(cygpath -u "$APPDATA")/Azahar/sdmc"
@@ -82,7 +101,8 @@ cat <<EOF
 
 Done. In Windows, the files are in:
 
-  $WIN_SD\\3ds\\pokeplatinum.3dsx                       (the program)
+  $WIN_SD\\3ds\\pokeplatinum.3dsx                       (the program, for the Homebrew Launcher)
+  $WIN_SD\\cia\\pokeplatinum.cia                        (the same, to install on the HOME Menu with FBI)
   $WIN_SD\\3ds\\pokeplatinum\\platinum3ds.pak            (your data)
   $WIN_SD\\3ds\\pokeplatinum\\manifest.json
 

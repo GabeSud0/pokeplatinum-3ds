@@ -251,7 +251,7 @@ GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
                $(GCC14_ERRORS)
 
 
-.PHONY: all lib test probe program link-check clean libnitro libnitrosystem
+.PHONY: all lib test probe program cia link-check clean libnitro libnitrosystem FORCE
 
 ifeq ($(IS_HOST),yes)
 all: test
@@ -457,16 +457,48 @@ $(PROGRAM_ELF): $(APP_OBJS) $(OVERLAY_TABLE_O) $(GAME_HEADER_DEFS) $(WIFI_STUBS_
 	@$(PROGRAM_LINK)
 
 ifeq ($(TARGET),3ds)
-$(OUT)/pokeplatinum.smdh:
+# The HOME Menu's art (tools/home_menu_art.py, from your own ROM's icon:
+# made at build time, never committed). Without it, libctru's icon.
+HOME_ART ?=
+ifneq ($(wildcard $(HOME_ART)/icon.png),)
+ICON := $(HOME_ART)/icon.png
+else
+ICON := $(DEVKITPRO)/libctru/default_icon.png
+endif
+
+# (made every time: quick, and the icon may have come or gone)
+$(OUT)/pokeplatinum.smdh: FORCE
+	@mkdir -p $(dir $@)
 	@$(DEVKITPRO)/tools/bin/smdhtool --create "Pokemon Platinum" "3DS port (needs your data pack)" \
-	    "pokeplatinum-3ds" "$(DEVKITPRO)/libctru/default_icon.png" $@
+	    "pokeplatinum-3ds" "$(ICON)" $@
 
 $(PROGRAM): $(PROGRAM_ELF) $(OUT)/pokeplatinum.smdh
 	@$(DEVKITPRO)/tools/bin/3dsxtool $< $@ --smdh=$(OUT)/pokeplatinum.smdh
 	@echo "built $@ (contains game code: for your own use, never share it)"
+
+# The HOME Menu version: the same program installed as a title of its own
+# (opens and closes from the HOME Menu). Needs makerom and bannertool
+# (tools/build_cia_tools.sh: CIA_TOOLS is where it put them) and the art.
+CIA_TOOLS ?= $(ROOT)/build/cia-tools
+MAKEROM ?= $(CIA_TOOLS)/bin/makerom
+BANNERTOOL ?= $(CIA_TOOLS)/bin/bannertool
+PROGRAM_CIA := $(OUT)/pokeplatinum.cia
+
+$(OUT)/pokeplatinum.bnr: $(HOME_ART)/banner.png $(HOME_ART)/banner.wav
+	@test -n "$(HOME_ART)" || { echo "Set HOME_ART (tools/home_menu_art.py)"; exit 1; }
+	@$(BANNERTOOL) makebanner -i $(HOME_ART)/banner.png -a $(HOME_ART)/banner.wav -o $@ >/dev/null
+
+$(PROGRAM_CIA): $(PROGRAM_ELF) $(OUT)/pokeplatinum.smdh $(OUT)/pokeplatinum.bnr cia/pokeplatinum.rsf
+	@$(MAKEROM) -f cia -o $@ -target t -exefslogo -rsf cia/pokeplatinum.rsf -elf $(PROGRAM_ELF) \
+	    -icon $(OUT)/pokeplatinum.smdh -banner $(OUT)/pokeplatinum.bnr
+	@echo "built $@ (contains game code: for your own use, never share it)"
+
+cia: $(PROGRAM_CIA)
 endif
 
 program: $(PROGRAM)
+
+FORCE:
 
 # The same link, reporting every symbol still missing instead of failing
 # (tools/game_link_report.py): a to-do list while the port is incomplete.

@@ -5,6 +5,9 @@
 #                     hello3d.3dsx and platinum-smoke.3dsx
 #   make game         the game for the 3DS: 3ds_port/game/build/3ds/pokeplatinum.3dsx
 #                     (runs with your own data pack: 3ds_port/game/README.md)
+#   make game-cia ROM=platinum.nds
+#                     the same, installable on the HOME Menu: .../pokeplatinum.cia
+#                     (its icon from your ROM; builds makerom and bannertool once)
 #   make test         build for the PC and run every test suite
 #   make link-check   link the whole game for the 3DS and report what's missing
 #   make clean
@@ -18,7 +21,7 @@
 
 PORT := 3ds_port
 
-.PHONY: all 3ds hello3d smoke game test link-check clean check-bootstrap
+.PHONY: all 3ds hello3d smoke game game-cia test link-check clean check-bootstrap
 
 all: 3ds
 
@@ -45,6 +48,18 @@ game: check-bootstrap
 	@$(MAKE) --no-print-directory -C $(PORT)/game TARGET=3ds program
 	@echo "Built $(PORT)/game/build/3ds/pokeplatinum.3dsx (contains game code: don't share it)"
 	@echo "It needs platinum3ds.pak and manifest.json in sdmc:/3ds/pokeplatinum/ (see $(PORT)/game/README.md)"
+
+# The HOME Menu version. Its art (from your ROM's icon) and the tools go in
+# build/: never committed.
+CIA_TOOLS := $(CURDIR)/build/cia-tools
+HOME_ART := $(CURDIR)/build/home-menu-art
+
+game-cia: check-bootstrap
+	@test -n "$(ROM)" || { echo "Usage: make game-cia ROM=path/to/your/platinum.nds"; exit 1; }
+	@bash tools/build_cia_tools.sh $(CIA_TOOLS)
+	@python3 tools/home_menu_art.py "$(ROM)" $(HOME_ART)
+	@$(MAKE) --no-print-directory -C $(PORT)/game TARGET=3ds HOME_ART=$(HOME_ART) CIA_TOOLS=$(CIA_TOOLS) program cia
+	@echo "Built $(PORT)/game/build/3ds/pokeplatinum.cia and .3dsx (contain game code: don't share them)"
 
 test: check-bootstrap
 	@$(MAKE) --no-print-directory -C $(PORT)/nitro
