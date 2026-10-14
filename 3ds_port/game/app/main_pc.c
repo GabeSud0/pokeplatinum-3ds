@@ -632,6 +632,12 @@ void NitroPort_Log(const char *fmt, ...)
  *   regs PATH        write the I/O registers (0x4000000-0x4001FFF) as binary
  *   tex3d PARAM PAL PATH  write a texture (hex TEXIMAGE_PARAM, palette base)
  *                    as it is now: width, height (u32 each), then RGBA8 words
+ *   layers PATH      each layer alone (BG0-3, OBJ) of both engines, a sheet
+ *   capture DIR      a wide art capture into DIR/captures (docs/WIDE_ART.md)
+ *   wideart DIR      read the wide art pictures in DIR again
+ *   bgs              log each engine's display control and BGs
+ *   oam              log each engine's shown OBJs (position, size, tile,
+ *                    palette, priority)
  *   quit             stop the runner
  * For driving the game by hand (scripts, or an assistant) while debugging. */
 static void ControlWait(void)
@@ -682,6 +688,27 @@ static void ControlWait(void)
                 NitroPort_RenderScreens(both, both + 256 * 192);
                 if (WritePng(arg, both, 256, 384) != 0) {
                     NitroPort_Log("[pc] control: can't write %s", arg);
+                }
+            } else if (strncmp(line, "oam", 3) == 0) {
+                /* the shown OBJs of each engine: position, size, tile, palette, priority */
+                extern unsigned char NitroPort_Oam[0x800];   /* (port_memory.c) */
+                int engine, i;
+
+                for (engine = 0; engine < 2; engine++) {
+                    const unsigned char *oam = NitroPort_Oam + (engine ? 0x400 : 0);
+
+                    for (i = 0; i < 128; i++) {
+                        unsigned a0 = oam[i * 8] | (oam[i * 8 + 1] << 8), a1 = oam[i * 8 + 2] | (oam[i * 8 + 3] << 8),
+                                 a2 = oam[i * 8 + 4] | (oam[i * 8 + 5] << 8);
+
+                        if ((a0 & 0x300) == 0x200) {
+                            continue;   /* hidden */
+                        }
+                        fprintf(stderr, "[oam] %c%3d: x %3u y %3u shape %u size %u mode %u %s tile %4u pal %2u prio %u%s\n",
+                                engine ? 'B' : 'A', i, a1 & 0x1FF, a0 & 0xFF, a0 >> 14, a1 >> 14, (a0 >> 10) & 3,
+                                (a0 & 0x2000) ? "8bpp" : "4bpp", a2 & 0x3FF, a2 >> 12, (a2 >> 10) & 3,
+                                (a0 & 0x100) ? " affine" : "");
+                    }
                 }
             } else if (strncmp(line, "bgs", 3) == 0) {
                 /* Each engine's display control and BGs (mode, size,

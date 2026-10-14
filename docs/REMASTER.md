@@ -104,8 +104,9 @@ x = 0 at 32 (`NitroRender2DSplit.width`/`origin`, laid out by
 `NitroPort_WideLayout` in `port_wide.c`). The rules, so that nothing is
 stretched:
 
-- **Hand-drawn bands win.** A layer with a picture drawn for it shows that
-  picture in its bands (or all over): see [WIDE_ART.md](WIDE_ART.md).
+- **Hand-drawn bands win.** A layer (a BG, or a group of sprites) with a
+  picture drawn for it shows that picture in its bands (or all over): see
+  [WIDE_ART.md](WIDE_ART.md).
 - **The DS's layout stays.** The game's windows, menus and sprites keep
   their places (moved apart, they came apart: a menu's icons are sprites
   placed to match its window). Nothing is stretched.

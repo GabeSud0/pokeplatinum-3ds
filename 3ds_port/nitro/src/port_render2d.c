@@ -1104,14 +1104,78 @@ typedef struct Obj {
     s32 pa, pb, pc, pd;
 } Obj;
 
+/* (wider canvas) a group of OBJs' hand-drawn picture (see ObjGroups):
+ * drawn into the OBJ layer where no OBJ is, at the group's priority. */
+typedef struct ObjArt {
+    const u16 *art;
+    short dx, dy;          /* how far the group has moved since its capture */
+    u8 prio, full;
+} ObjArt;
+#define OBJ_ART_MAX 4
+
 /* This frame's OBJs, and which of them are on each line (in OAM order). */
 typedef struct ObjFrame {
     Obj obj[128];
     u8 count;
     u8 blends;             /* some are semi-transparent or bitmap OBJs */
+    u8 artCount;
+    ObjArt art[OBJ_ART_MAX];
     u8 onLine[H][128];
     u8 lineCount[H];
 } ObjFrame;
+
+/* OAM entry i as an Obj (its left edge on the canvas): FALSE if it's
+ * hidden (or of the shape that doesn't exist). */
+static BOOL ReadObj(const Engine *e, int i, Obj *obj)
+{
+    const u8 *o = e->oam + i * 8;
+    u16 a0 = Rd16(o, 0), a1 = Rd16(o, 2), a2 = Rd16(o, 4);
+    int shape = (a0 >> 14) & 3;
+
+    if (!(a0 & 0x100) && (a0 & 0x200)) {
+        return FALSE;                       /* hidden */
+    }
+    if (shape == 3) {
+        return FALSE;
+    }
+    obj->affine = (a0 & 0x100) != 0;
+    obj->w = sObjSize[shape][(a1 >> 14) & 3][0];
+    obj->h = sObjSize[shape][(a1 >> 14) & 3][1];
+    obj->boxW = obj->w;
+    obj->boxH = obj->h;
+    obj->pa = 256;
+    obj->pb = 0;
+    obj->pc = 0;
+    obj->pd = 256;
+    if (obj->affine) {
+        int p = (a1 >> 9) & 0x1F;
+
+        obj->pa = (s16)Rd16(e->oam, (u32)p * 32 + 6);
+        obj->pb = (s16)Rd16(e->oam, (u32)p * 32 + 14);
+        obj->pc = (s16)Rd16(e->oam, (u32)p * 32 + 22);
+        obj->pd = (s16)Rd16(e->oam, (u32)p * 32 + 30);
+        if (a0 & 0x200) {               /* double size */
+            obj->boxW *= 2;
+            obj->boxH *= 2;
+        }
+    }
+    obj->oy = (u8)(a0 & 0xFF);
+    obj->ox = (s16)(a1 & 0x1FF);
+    /* (x 256-511 is left of the screen; on a wider canvas the first of
+     * those are right of the DS's screen, where the canvas goes on) */
+    if (obj->ox >= 256 + (e->width - W - e->origin)) {
+        obj->ox -= 512;
+    }
+    obj->ox += e->origin;
+    obj->hflip = !obj->affine && (a1 & 0x1000) != 0;
+    obj->vflip = !obj->affine && (a1 & 0x2000) != 0;
+    obj->bpp8 = (a0 & 0x2000) != 0;
+    obj->mode = (a0 >> 10) & 3;
+    obj->tile = a2 & 0x3FF;
+    obj->prio = (a2 >> 10) & 3;
+    obj->pal = a2 >> 12;
+    return TRUE;
+}
 
 static void SortObjs(const Engine *e, ObjFrame *f)
 {
@@ -1119,55 +1183,14 @@ static void SortObjs(const Engine *e, ObjFrame *f)
 
     f->count = 0;
     f->blends = 0;
+    f->artCount = 0;
     memset(f->lineCount, 0, sizeof(f->lineCount));
     for (i = 0; i < 128; i++) {
-        const u8 *o = e->oam + i * 8;
-        u16 a0 = Rd16(o, 0), a1 = Rd16(o, 2), a2 = Rd16(o, 4);
-        int shape = (a0 >> 14) & 3;
         Obj *obj = &f->obj[f->count];
 
-        if (!(a0 & 0x100) && (a0 & 0x200)) {
-            continue;                       /* hidden */
-        }
-        if (shape == 3) {
+        if (!ReadObj(e, i, obj)) {
             continue;
         }
-        obj->affine = (a0 & 0x100) != 0;
-        obj->w = sObjSize[shape][(a1 >> 14) & 3][0];
-        obj->h = sObjSize[shape][(a1 >> 14) & 3][1];
-        obj->boxW = obj->w;
-        obj->boxH = obj->h;
-        obj->pa = 256;
-        obj->pb = 0;
-        obj->pc = 0;
-        obj->pd = 256;
-        if (obj->affine) {
-            int p = (a1 >> 9) & 0x1F;
-
-            obj->pa = (s16)Rd16(e->oam, (u32)p * 32 + 6);
-            obj->pb = (s16)Rd16(e->oam, (u32)p * 32 + 14);
-            obj->pc = (s16)Rd16(e->oam, (u32)p * 32 + 22);
-            obj->pd = (s16)Rd16(e->oam, (u32)p * 32 + 30);
-            if (a0 & 0x200) {               /* double size */
-                obj->boxW *= 2;
-                obj->boxH *= 2;
-            }
-        }
-        obj->oy = (u8)(a0 & 0xFF);
-        obj->ox = (s16)(a1 & 0x1FF);
-        /* (x 256-511 is left of the screen; on a wider canvas the first of
-         * those are right of the DS's screen, where the canvas goes on) */
-        if (obj->ox >= 256 + (e->width - W - e->origin)) {
-            obj->ox -= 512;
-        }
-        obj->ox += e->origin;
-        obj->hflip = !obj->affine && (a1 & 0x1000) != 0;
-        obj->vflip = !obj->affine && (a1 & 0x2000) != 0;
-        obj->bpp8 = (a0 & 0x2000) != 0;
-        obj->mode = (a0 >> 10) & 3;
-        obj->tile = a2 & 0x3FF;
-        obj->prio = (a2 >> 10) & 3;
-        obj->pal = a2 >> 12;
         if (obj->ox >= e->width || obj->ox + obj->boxW <= 0) {
             continue;                       /* off the sides */
         }
@@ -1250,6 +1273,139 @@ static u16 ObjPixel(const Engine *e, const Obj *obj, u32 dispcnt, int tx, int ty
     }
 }
 
+/* ---------------------------------------------- OBJ groups' hand-drawn art */
+
+/* The OBJs are put in groups for wide art (nitro_port_wideart.h): those of
+ * one priority and one palette (the 8-bit ones of a priority together); a
+ * scene's sprite background (the intro's strip behind the Pokemon) is
+ * usually one, the sprites in front of it others. The window and bitmap
+ * OBJs aren't in any. */
+static inline int ObjGroupOf(const Obj *obj)
+{
+    return (obj->prio << 5) | (obj->bpp8 ? 16 : obj->pal);
+}
+
+/* An OBJ's own fingerprint: its size and flips, its pixels, their colours
+ * (not where it is, nor where its tiles are in VRAM). */
+static u64 ObjHash(const Engine *e, const Obj *obj, u32 dispcnt)
+{
+    u64 h = KeyAdd(KEY_START, (u32)obj->w | ((u32)obj->h << 8) | ((u32)obj->bpp8 << 16) |
+                                  ((u32)obj->affine << 17) | ((u32)obj->hflip << 18) | ((u32)obj->vflip << 19));
+    int tx, ty;
+    u32 i;
+
+    for (ty = 0; ty < obj->h; ty++) {
+        for (tx = 0; tx < obj->w; tx += 8) {
+            u32 addr = ObjCharAddr(obj, dispcnt, tx, ty) & e->objMask & ~3u;
+
+            h = (h ^ Rd32(e->objVram, addr)) * 0x100000001b3ull;
+            if (obj->bpp8) {
+                h = (h ^ Rd32(e->objVram, (addr + 4) & e->objMask)) * 0x100000001b3ull;
+            }
+        }
+    }
+    if (!obj->bpp8) {
+        for (i = 0; i < 16; i++) {
+            h = (h ^ PlttColor(e->objPltt, ((u32)obj->pal << 4) | i)) * 0x100000001b3ull;
+        }
+    } else {
+        const u8 *pltt = (e->objExt != NULL && (dispcnt & 0x80000000)) ? e->objExt + ((u32)obj->pal << 9)
+                                                                       : e->objPltt;
+
+        for (i = 0; i < 256; i++) {
+            h = (h ^ PlttColor(pltt, i)) * 0x100000001b3ull;
+        }
+    }
+    return h;
+}
+
+/* The OBJ groups shown (all of OAM's, on screen or not): each one's key (its
+ * OBJs' fingerprints summed: the same OBJs make the same key in any order,
+ * anywhere) and where it is: the position (OAM's x 0-511, y 0-255) of its
+ * OBJ with the smallest fingerprint, the first of those. */
+static int ObjGroups(const Engine *e, u32 dispcnt, NitroObjGroup *out, int max)
+{
+    struct {
+        u64 sum, anchor;
+        u16 count, x, y;
+    } g[128];
+    int i, n = 0;
+
+    memset(g, 0, sizeof(g));
+    for (i = 0; i < 128; i++) {
+        Obj obj;
+        u64 h;
+        int k;
+
+        if (!ReadObj(e, i, &obj) || obj.mode >= 2) {
+            continue;
+        }
+        h = ObjHash(e, &obj, dispcnt);
+        k = ObjGroupOf(&obj);
+        if (g[k].count == 0 || h < g[k].anchor) {
+            g[k].anchor = h;
+            g[k].x = Rd16(e->oam, (u32)i * 8 + 2) & 0x1FF;
+            g[k].y = Rd16(e->oam, (u32)i * 8) & 0xFF;
+        }
+        g[k].sum += h;
+        g[k].count++;
+    }
+    for (i = 0; i < 128 && n < max; i++) {
+        u64 key;
+
+        if (g[i].count == 0) {
+            continue;
+        }
+        key = KeyAdd(KEY_START, 0x4F420000u | (u32)(i >> 5));   /* "OB", the priority */
+        key = KeyAdd(key, (u32)g[i].sum);
+        key = KeyAdd(key, (u32)(g[i].sum >> 32));
+        key = KeyAdd(key, g[i].count);
+        out[n].key = key ? key : 1;
+        out[n].group = i;
+        out[n].prio = i >> 5;
+        out[n].x = g[i].x;
+        out[n].y = g[i].y;
+        out[n].count = g[i].count;
+        n++;
+    }
+    return n;
+}
+
+/* (wider canvas) the OBJ groups' hand-drawn pictures, if there are any (all
+ * groups', or only's: -1 for all). */
+static void LookUpObjArt(const Engine *e, ObjFrame *f, u32 dispcnt, int only)
+{
+    NitroObjGroup groups[32];
+    int n, i;
+
+    f->artCount = 0;
+    if (e->width != NITRO_WIDE_ART_W || NitroPort_WideArtCount() == 0 || !(dispcnt & 0x1000)) {
+        return;
+    }
+    n = ObjGroups(e, dispcnt, groups, 32);
+    for (i = 0; i < n && f->artCount < OBJ_ART_MAX; i++) {
+        int x, y, full, dx, dy;
+        const u16 *art;
+        ObjArt *a;
+
+        if (only >= 0 && groups[i].group != only) {
+            continue;
+        }
+        art = NitroPort_WideArtFind(groups[i].key, &x, &y, &full);
+        if (art == NULL) {
+            continue;
+        }
+        dx = (groups[i].x - x + 512) & 511;
+        dy = (groups[i].y - y + 256) & 255;
+        a = &f->art[f->artCount++];
+        a->art = art;
+        a->dx = (short)(dx >= 256 ? dx - 512 : dx);
+        a->dy = (short)(dy >= 128 ? dy - 256 : dy);
+        a->prio = (u8)groups[i].prio;
+        a->full = (u8)full;
+    }
+}
+
 /* Put one OBJ pixel on the line (lower-numbered OBJs, drawn first, stay in
  * front; the window OBJs only mark the OBJ window). */
 static inline void PutObjPixel(const Obj *obj, ObjLine *out, int x, u16 rgb, int alpha)
@@ -1270,7 +1426,7 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
 {
     int k;
 
-    if (!(dispcnt & 0x1000) || f->lineCount[y] == 0) {
+    if (!(dispcnt & 0x1000) || (f->lineCount[y] == 0 && f->artCount == 0)) {
         return FALSE;
     }
     memset(out->color, 0, (size_t)e->width * sizeof(out->color[0]));
@@ -1374,7 +1530,43 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
             }
         }
     }
-    return TRUE;
+    for (k = 0; k < f->artCount; k++) {
+        /* a group's picture where no OBJ is (in the bands beside the DS's
+         * screen, or all over) */
+        const ObjArt *a = &f->art[k];
+        int ay = y - a->dy, x;
+        const u16 *row;
+
+        if (ay < 0 || ay >= H) {
+            continue;
+        }
+        row = a->art + ay * NITRO_WIDE_ART_W;
+        for (x = 0; x < e->width; x++) {
+            int ax = x - a->dx;
+            u16 c;
+
+            if (ax < 0 || ax >= NITRO_WIDE_ART_W || (out->color[x] & OPAQUE) ||
+                (!a->full && x >= e->origin && x < e->origin + W)) {
+                continue;
+            }
+            c = row[ax];
+            if (!(c & 0x8000)) {
+                continue;
+            }
+            out->color[x] = c | OPAQUE;
+            out->prio[x] = a->prio;
+            out->prios |= (u8)(1 << a->prio);
+            out->semi[x] = 0;
+            out->alpha[x] = 16;
+            if (x < out->x0) {
+                out->x0 = (short)x;
+            }
+            if (x + 1 > out->x1) {
+                out->x1 = (short)(x + 1);
+            }
+        }
+    }
+    return out->x0 < out->x1 || f->lineCount[y] > 0;
 }
 
 /* ------------------------------------------------------------ the frame */
@@ -1862,8 +2054,12 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         gx3dTranslucent = gx3dAlpha != NULL && NitroPort_Gx3dImageTranslucent(gx3dPixels);
     }
     objFrame->blends = 0;
+    objFrame->artCount = 0;
     if (dispcnt & 0x1000) {
         SortObjs(e, objFrame);
+        if (fixedWidth == 0) {
+            LookUpObjArt(e, objFrame, dispcnt, -1);
+        }
     }
     if (!anyWindow) {
         memset(enableLine, 0x3F, (size_t)width);
@@ -2267,6 +2463,77 @@ int NitroPort_Render2DLayer(int engine, int bg, const NitroRender2DSplit *layout
         memcpy(out + y * e.width, line, (size_t)e.width * sizeof(u16));
     }
     return 1;
+}
+
+/* (capturing: the game's thread, between frames) the OBJ frame and line
+ * of one group alone; the drawing threads have their own. */
+static ObjFrame sCaptureObjFrame;
+static ObjLine sCaptureObjLine;
+
+/* SetUpEngine for one of the capture's single layers: 0 if the engine
+ * shows no normal picture. */
+static BOOL SetUpLayer(Engine *e, int engine, const NitroRender2DSplit *layout, u32 *dispcnt)
+{
+    SetUpEngine(e, engine, layout);
+    *dispcnt = Rd32(e->io, 0);
+    if (((*dispcnt >> 16) & 3) != 1 || (*dispcnt & 0x80)) {
+        return FALSE;
+    }
+    FindExtPalettes(e);
+    MakePalettes(e);
+    return TRUE;
+}
+
+int NitroPort_Render2DObjGroups(int engine, const NitroRender2DSplit *layout, NitroObjGroup *groups, int max)
+{
+    Engine e;
+    u32 dispcnt;
+
+    if (!SetUpLayer(&e, engine, layout, &dispcnt) || !(dispcnt & 0x1000)) {
+        return 0;
+    }
+    return ObjGroups(&e, dispcnt, groups, max);
+}
+
+int NitroPort_Render2DObjLayer(int engine, int group, const NitroRender2DSplit *layout, u16 *out)
+{
+    Engine e;
+    u32 dispcnt;
+    ObjFrame *f = &sCaptureObjFrame;
+    ObjLine *line = &sCaptureObjLine;
+    int y, x, k, any = 0;
+
+    if (!SetUpLayer(&e, engine, layout, &dispcnt) || !(dispcnt & 0x1000)) {
+        return 0;
+    }
+    SortObjs(&e, f);
+    /* only the group's OBJs on each line */
+    for (y = 0; y < H; y++) {
+        int n = 0;
+
+        for (k = 0; k < f->lineCount[y]; k++) {
+            const Obj *obj = &f->obj[f->onLine[y][k]];
+
+            if (obj->mode < 2 && ObjGroupOf(obj) == group) {
+                f->onLine[y][n++] = f->onLine[y][k];
+            }
+        }
+        f->lineCount[y] = (u8)n;
+    }
+    LookUpObjArt(&e, f, dispcnt, group);
+    for (y = 0; y < H; y++) {
+        u16 *row = out + y * e.width;
+
+        if (!DrawObjs(&e, f, dispcnt, y, line)) {
+            memset(row, 0, (size_t)e.width * sizeof(u16));
+            continue;
+        }
+        for (x = 0; x < e.width; x++) {
+            row[x] = (line->color[x] & OPAQUE) ? line->color[x] : 0;
+            any |= row[x] != 0;
+        }
+    }
+    return any;   /* (a group all off the screen: nothing to draw) */
 }
 
 void NitroPort_Render2D(int engine, u16 *out)

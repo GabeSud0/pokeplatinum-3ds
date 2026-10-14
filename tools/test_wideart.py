@@ -122,6 +122,110 @@ class WideArtTest(unittest.TestCase):
         self.assertNotEqual(faint.getpixel((100, 90)), (255, 255, 255, 255))
         self.assertEqual(core.preview_3ds(out, 1).size, (400, 240))
 
+    def test_sprite_layers(self):
+        cap_dir = core.make_sample_capture(self.wide, 2, sprites=True)
+        cap = core.read_capture(cap_dir)
+        obj = cap.layer("obj102")
+        self.assertIsNotNone(obj)
+        self.assertEqual((obj.kind, obj.group, obj.prio, obj.hofs, obj.vofs, obj.count),
+                         ("obj", 102, 3, 368, 64, 72))
+        self.assertEqual(obj.art_name(False), "10d372806e45f5c2_368_64.png")
+        self.assertIn("palette 6", obj.label)
+        self.assertIs(cap.layer(3), cap.layer("bg3"))
+        # sprites of a priority are in front of its BGs
+        self.assertEqual([l.id for l in core.draw_order(cap.layers)], ["bg3", "obj102", "bg1"])
+        images = {l.id: cap.layer_image(l) for l in cap.layers}
+        out = core.composite(cap, images)
+        self.assertEqual(out.getpixel((100, 130))[:3], (0, 200, 0))
+        hidden = core.composite(cap, images, hidden={"obj102"})
+        self.assertNotEqual(hidden.getpixel((100, 130))[:3], (0, 200, 0))
+
+    def test_drawing_layers(self):
+        red = (255, 0, 0, 255)
+        a = core.Paint("a", Image.new("RGBA", (core.W, core.H), (0, 0, 0, 0)))
+        a.plot(5, 5, red)
+        b = a.copy("b")
+        b.x, b.y = 10, 3                       # moved
+        flat = core.flatten([a, b])
+        self.assertEqual(flat.getpixel((5, 5)), red)
+        self.assertEqual(flat.getpixel((15, 8)), red)
+        b.x = -10                              # moved past the edge: nothing lost
+        self.assertEqual(core.flatten([b]).getpixel((5, 5))[3], 0)
+        b.x = 10
+        self.assertEqual(core.flatten([b]).getpixel((15, 8)), red)
+        b.visible = False
+        self.assertEqual(core.flatten([a, b]).getpixel((15, 8))[3], 0)
+        # drawing where the moved layer's image doesn't reach: it grows
+        b.plot(2, 1, red)
+        self.assertEqual((b.x, b.y), (0, 0))
+        self.assertEqual(b.view().getpixel((2, 1)), red)
+        self.assertEqual(b.view().getpixel((15, 8)), red)
+        view = b.view()
+        view.putpixel((15, 8), (0, 0, 0, 0))
+        b.set_view(view)
+        self.assertEqual(b.view().getpixel((15, 8))[3], 0)
+
+    def test_lock_and_band_fill(self):
+        cap = core.list_captures(self.wide)[0]
+        original = cap.layer_image(cap.layer(3))
+        changed = original.copy()
+        changed.putpixel((100, 5), (1, 2, 3, 255))
+        changed.putpixel((5, 5), (1, 2, 3, 255))
+        locked = core.lock_middle(changed, original)
+        self.assertEqual(locked.getpixel((100, 5)), original.getpixel((100, 5)))
+        self.assertEqual(locked.getpixel((5, 5)), (1, 2, 3, 255))
+        blank = Image.new("RGBA", (core.W, core.H), (0, 0, 0, 0))
+        out = core.shift_band_fill(blank, original, "mirror", "left")
+        self.assertEqual(out.getpixel((31, 50))[0], 32)
+        self.assertEqual(out.getpixel((300, 50))[3], 0)     # (the right band not chosen)
+        self.assertEqual(out.getpixel((100, 50))[3], 0)     # (the middle never)
+
+    def test_projects(self):
+        cap = core.list_captures(self.wide)[0]
+        layer = cap.layer(3)
+        original = cap.layer_image(layer)
+        stack = [core.Paint("base", original.copy()),
+                 core.Paint("top", Image.new("RGBA", (10, 10), (255, 0, 0, 255)), 3, 4, False)]
+        core.save_art(self.wide, layer, core.flatten(stack), original)
+        core.save_project(self.wide, layer.key, stack, 1)
+        loaded, active = core.load_project(self.wide, layer.key)
+        self.assertEqual(active, 1)
+        self.assertEqual([(p.name, p.x, p.y, p.visible) for p in loaded],
+                         [("base", 0, 0, True), ("top", 3, 4, False)])
+        self.assertEqual(loaded[1].image.size, (10, 10))
+        # the game's picture changed elsewhere since: the layers aren't used
+        art = core.existing_art(self.wide, layer.key)
+        import os
+        os.utime(art, (1, 1))
+        self.assertIsNone(core.load_project(self.wide, layer.key))
+        core.delete_project(self.wide, layer.key)
+        self.assertFalse(core.project_dir(self.wide, layer.key).exists())
+        # the game doesn't read the editor's folder (its names aren't pictures')
+        self.assertEqual(sorted(p.name for p in self.wide.iterdir() if p.suffix == ".png"), [art.name])
+
+    def test_brush(self):
+        self.assertEqual(core.brush(1), [(0, 0)])
+        self.assertEqual(sorted(core.brush(2)), [(0, 0), (0, 1), (1, 0), (1, 1)])
+        b5 = core.brush(5)
+        self.assertIn((0, 0), b5)
+        self.assertIn((-2, 0), b5)
+        self.assertNotIn((-2, -2), b5)             # round
+        self.assertEqual(len(core.brush(32)), len(set(core.brush(32))))
+
+    def test_colours(self):
+        self.assertEqual(core.hsv_to_rgb(0, 1, 1), (255, 0, 0))
+        self.assertEqual(core.hsv_to_rgb(120, 1, 1), (0, 255, 0))
+        h, s, v = core.rgb_to_hsv((0, 0, 255))
+        self.assertEqual((round(h), s, v), (240, 1.0, 1.0))
+        self.assertEqual(core.parse_hex("#ff8000"), (255, 128, 0))
+        self.assertEqual(core.parse_hex("f80"), (255, 136, 0))
+        self.assertIsNone(core.parse_hex("zz"))
+        sq = core.sv_square(0, 64)
+        self.assertEqual(sq.getpixel((0, 0)), (255, 255, 255))      # white at the top left
+        self.assertEqual(sq.getpixel((63, 0)), (255, 0, 0))         # the hue at the top right
+        self.assertEqual(sq.getpixel((40, 63)), (0, 0, 0))          # black at the bottom
+        self.assertEqual(core.hue_bar(4, 64).size, (4, 64))
+
 
 if __name__ == "__main__":
     unittest.main()

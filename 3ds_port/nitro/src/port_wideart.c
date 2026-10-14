@@ -539,6 +539,29 @@ int NitroPort_WideArtCapture(const char *dir, char *made, size_t madeSize)
         fprintf(info, "bg %d prio %d key %016llx hofs %d vofs %d file bg%d.png\n", bg, prio,
                 (unsigned long long)key, hofs, vofs, bg);
     }
+    {
+        /* the OBJs, group by group (a scene's sprite background is one) */
+        NitroObjGroup groups[32];
+        int count;
+
+        memset(&split, 0, sizeof(split));
+        NitroPort_WideLayout(engine, &split);
+        count = NitroPort_Render2DObjGroups(engine, &split, groups, 32);
+        for (i = 0; i < count; i++) {
+            if (!NitroPort_Render2DObjLayer(engine, groups[i].group, &split, layer)) {
+                continue;
+            }
+            to_rgba(layer, rgba, PIXELS);
+            snprintf(path, sizeof(path), "%s/obj%d.png", folder, groups[i].group);
+            if (NitroPort_WideArtWritePng(path, rgba, NITRO_WIDE_ART_W, NITRO_WIDE_ART_H) != 0) {
+                fclose(info);
+                return -1;
+            }
+            fprintf(info, "obj %d prio %d key %016llx x %d y %d count %d file obj%d.png\n", groups[i].group,
+                    groups[i].prio, (unsigned long long)groups[i].key, groups[i].x, groups[i].y, groups[i].count,
+                    groups[i].group);
+        }
+    }
     fclose(info);
     if (made != NULL && madeSize > 0) {
         snprintf(made, madeSize, "%s", folder);
