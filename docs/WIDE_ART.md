@@ -39,8 +39,9 @@ screen, and the game shows your drawing instead.
 | Brush (B), Eraser (E) | round, 1 to 32 pixels across (the slider, or **[** and **]**); the eraser makes pixels transparent (the layers behind show) |
 | Fill (G) | the area of one colour |
 | Pick colour (I), right-click | the colour under the cursor |
-| Select (M), Ctrl+A | a rectangle; Ctrl+C copies it, Ctrl+V pastes (the copy follows the mouse until you click; H flips it), Delete clears it, H flips it in place |
-| Move (V) | drag the drawing layer (nothing selected), or drag the selection's pixels; the arrow keys move by 1 pixel, Shift+arrows by 8 |
+| Select (M), Ctrl+A, Ctrl+D | drag a rectangle; then **drag inside it to cut and move those pixels** (hold Alt to move a copy, leaving them where they were). They float (an orange outline) until you put them down: Enter, a click outside, or another tool; Esc puts them back where they were. While floating: drag them again, the arrow keys move by 1 pixel (Shift: 8), H flips them, Delete throws them away |
+| Ctrl+X, Ctrl+C, Ctrl+V | cut, copy, paste the selection; the paste floats where the copy came from (or in the selection), ready to drag into place. Ctrl+Shift+V pastes onto a new drawing layer |
+| Move (V) | drag the drawing layer (nothing selected), or the selection's pixels as Select does; the arrow keys move by 1 pixel, Shift+arrows by 8 |
 | Colour picker (click the colour) | a hue bar and a saturation/brightness square, the colour by H S B, R G B or hex; "in the game" is the colour as the DS shows it |
 | Recent, This screen's colours | the colours you used last; the colours the screen uses (drawing with them keeps the game's look) |
 | Ctrl+Z, Ctrl+Y | undo, redo |

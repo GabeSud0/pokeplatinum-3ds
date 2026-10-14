@@ -262,10 +262,11 @@ class Editor(tk.Tk):
         self.side = tk.StringVar(value="both")
         self.layer_var = tk.StringVar(value="")
         self.selection: tuple[int, int, int, int] | None = None
-        self.floating: Image.Image | None = None      # pasted, following the mouse
+        self.float: dict | None = None                # lifted or pasted pixels: image, at (x, y)
         self.clipboard: Image.Image | None = None
         self.drag_start: tuple[int, int] | None = None
-        self.moving: dict | None = None               # a move under way (the Move tool)
+        self.drag: dict | None = None                 # a move under way (a drawing layer, a floating piece)
+        self.clip_at = (0, 0)                         # where the copy was copied from
         self.mouse: tuple[int, int] | None = None
         self.photo = None
         self._build()
@@ -304,13 +305,16 @@ class Editor(tk.Tk):
         editm.add_command(label="Undo", command=self.do_undo, accelerator="Ctrl+Z")
         editm.add_command(label="Redo", command=self.do_redo, accelerator="Ctrl+Y")
         editm.add_separator()
-        editm.add_command(label="Copy selection", command=self.copy, accelerator="Ctrl+C")
+        editm.add_command(label="Cut", command=self.cut, accelerator="Ctrl+X")
+        editm.add_command(label="Copy", command=self.copy, accelerator="Ctrl+C")
         editm.add_command(label="Paste", command=self.paste, accelerator="Ctrl+V")
         editm.add_command(label="Paste as a new layer", command=self.paste_as_layer, accelerator="Ctrl+Shift+V")
-        editm.add_command(label="Flip pasted (horizontal)", command=self.flip_floating, accelerator="H")
-        editm.add_command(label="Clear selection", command=self.clear_selection, accelerator="Delete")
+        editm.add_command(label="Flip selection (horizontal)", command=self.flip_floating, accelerator="H")
+        editm.add_command(label="Delete selection", command=self.clear_selection, accelerator="Delete")
+        editm.add_command(label="Put down (finish moving)", command=self.commit, accelerator="Enter")
+        editm.add_separator()
         editm.add_command(label="Select all", command=self.select_all, accelerator="Ctrl+A")
-        editm.add_command(label="Deselect", command=self.cancel, accelerator="Esc")
+        editm.add_command(label="Deselect", command=self.deselect, accelerator="Ctrl+D")
         menu.add_cascade(label="Edit", menu=editm)
         layerm = tk.Menu(menu, tearoff=False)
         layerm.add_command(label="New drawing layer", command=self.new_layer, accelerator="Ctrl+Shift+N")
@@ -456,6 +460,8 @@ class Editor(tk.Tk):
         for seq, fn in (("<Control-o>", self.choose_folder), ("<F5>", self.refresh), ("<Control-s>", self.save),
                         ("<Control-S>", self.save_all), ("<Control-z>", self.do_undo), ("<Control-y>", self.do_redo),
                         ("<Control-c>", self.copy), ("<Control-v>", self.paste), ("<Control-V>", self.paste_as_layer),
+                        ("<Control-x>", self.cut), ("<Control-d>", self.deselect), ("<Return>", self.commit),
+                        ("<KP_Enter>", self.commit),
                         ("<Delete>", self.clear_selection), ("<Escape>", self.cancel), ("<Control-a>", self.select_all),
                         ("<Control-N>", self.new_layer), ("<Control-j>", self.duplicate_layer),
                         ("<Control-e>", self.merge_down), ("<F2>", self.rename_layer),
@@ -532,6 +538,7 @@ class Editor(tk.Tk):
         cap = self.captures[sel[0]]
         if self.cap is not None and cap.path == self.cap.path and not force:
             return
+        self.commit()
         if not self.confirm_discard():
             return
         previous = self.lid if self.cap is not None and cap.path == self.cap.path else None
@@ -545,8 +552,8 @@ class Editor(tk.Tk):
         self.dirty = set()
         self.undo, self.redo = [], []
         self.selection = None
-        self.floating = None
-        self.moving = None
+        self.float = None
+        self.drag = None
         thumb = cap.screen().resize((160, 96), Image.NEAREST)
         self.thumb_photo = ImageTk.PhotoImage(thumb)
         self.thumb.configure(image=self.thumb_photo)
@@ -563,11 +570,11 @@ class Editor(tk.Tk):
         self.update_swatches()
 
     def select_layer(self):
+        self.commit()
         if self.lid is not None and self.lid in self.stacks:
             self.flat[self.lid] = core.flatten(self.stacks[self.lid])
         self.lid = self.layer_var.get() or None
         self.selection = None
-        self.floating = None
         layer = self.layer()
         if layer is not None:
             saved = core.existing_art(self.art_dir, layer.key) if self.art_dir else None
@@ -606,6 +613,7 @@ class Editor(tk.Tk):
         sel = self.paint_list.curselection()
         stack = self.stack()
         if sel and stack:
+            self.commit()
             self.active[self.lid] = len(stack) - 1 - sel[0]
             self.redraw()
 
@@ -729,6 +737,7 @@ class Editor(tk.Tk):
         stack = self.stack()
         if stack is None:
             return
+        self.commit()   # (a floating piece goes down before anything else changes)
         self.undo.append((self.lid, [p.copy() for p in stack], self.active[self.lid]))
         del self.undo[:-UNDO_LIMIT]
         self.redo.clear()
@@ -748,9 +757,13 @@ class Editor(tk.Tk):
         self.redraw()
 
     def do_undo(self):
+        if self.float is not None:
+            self.cancel_float()
+            return
         self._swap(self.undo, self.redo)
 
     def do_redo(self):
+        self.commit()
         self._swap(self.redo, self.undo)
 
     def to_pixel(self, event) -> tuple[int, int]:
@@ -782,16 +795,58 @@ class Editor(tk.Tk):
                 err += dx
                 y0 += sy
 
+    # The mouse. Select (and Move) with a selection: dragging inside it
+    # lifts its pixels off the drawing layer (cut; with Alt, a copy) into a
+    # floating piece that follows the mouse; it stays floating (drag it
+    # again, arrow keys, H flips it) until it's put down: Enter, a click
+    # outside it, another tool. Esc takes it back. A paste is a floating
+    # piece too.
     def on_press(self, event):
+        alt = bool(event.state & (0x20000 if os.name == "nt" else 0x0008))
+        self.press(*self.to_pixel(event), alt=alt)
+
+    def on_drag(self, event):
+        self.drag_to(*self.to_pixel(event))
+
+    def on_release(self, event):
+        self.release()
+
+    def in_selection(self, x: int, y: int) -> bool:
+        s = self.selection
+        return s is not None and s[0] <= x < s[2] and s[1] <= y < s[3]
+
+    def press(self, x: int, y: int, alt: bool = False):
         p = self.paint()
         if p is None:
             return
-        x, y = self.to_pixel(event)
         tool = self.tool.get()
-        if self.floating is not None:
-            self.stamp_floating(x, y)
+        self.mouse = (x, y)
+        if tool in ("select", "move"):
+            if self.float is not None and (tool == "move" or self.in_selection(x, y)):
+                self.drag = {"what": "float", "start": (x, y), "origin": self.float["at"]}
+                return
+            self.commit()
+            if self.in_selection(x, y) and p.visible:
+                self.lift(copy=alt)
+                self.drag = {"what": "float", "start": (x, y), "origin": self.float["at"]}
+                self.redraw()
+                return
+            if tool == "move":
+                if not p.visible:
+                    self.status("That drawing layer is hidden: show it first (Show/Hide).")
+                    return
+                self.push_undo()
+                self.selection = None
+                self.drag = {"what": "layer", "start": (x, y), "origin": (p.x, p.y)}
+                self.dirty.add(self.lid)
+                return
+            # a new selection
+            self.drag_start = (x, y)
+            self.selection = None
+            self.redraw()
             return
-        if not p.visible and tool in ("pencil", "eraser", "fill", "move"):
+        self.commit()
+        if not p.visible and tool in ("pencil", "eraser", "fill"):
             self.status("That drawing layer is hidden: show it first (Show/Hide).")
             return
         if tool in ("pencil", "eraser"):
@@ -806,19 +861,24 @@ class Editor(tk.Tk):
                 self.dirty.add(self.lid)
         elif tool == "pick":
             self.pick_at(x, y)
-        elif tool == "select":
-            self.drag_start = (x, y)
-            self.selection = None
-        elif tool == "move":
-            self.start_move(x, y)
         self.redraw()
 
-    def on_drag(self, event):
-        x, y = self.to_pixel(event)
+    def drag_to(self, x: int, y: int):
         self.mouse = (x, y)
         tool = self.tool.get()
-        if self.moving is not None:
-            self.drag_move(x, y)
+        if self.drag is not None:
+            d = self.drag
+            dx, dy = x - d["start"][0], y - d["start"][1]
+            if d["what"] == "layer":
+                p = self.paint()
+                p.x, p.y = d["origin"][0] + dx, d["origin"][1] + dy
+            else:
+                self.float["at"] = (d["origin"][0] + dx, d["origin"][1] + dy)
+                self.sync_selection()
+            locked = d["what"] == "float" and self.float.get("locked")
+            self.status(f"Moved {dx:+d}, {dy:+d}" + ("  (the DS's picture is locked: only the bands' pixels move)"
+                                                     if locked else ""))
+            self.redraw()
             return
         if self.drag_start is None:
             return
@@ -829,20 +889,27 @@ class Editor(tk.Tk):
             x0, y0 = self.drag_start
             self.selection = (max(0, min(x0, x)), max(0, min(y0, y)),
                               min(core.W, max(x0, x) + 1), min(core.H, max(y0, y) + 1))
+            w, h = self.selection[2] - self.selection[0], self.selection[3] - self.selection[1]
+            self.status(f"Selection {w} x {h}: drag inside it to move it (Alt: a copy), Ctrl+C copies, "
+                        "Ctrl+X cuts")
         self.redraw()
         self.show_cursor(x, y)
 
-    def on_release(self, event):
+    def release(self):
         self.drag_start = None
-        if self.moving is not None:
-            self.end_move()
+        if self.drag is not None:
+            self.drag = None
+            self.redraw()
 
     def on_motion(self, event):
         x, y = self.to_pixel(event)
         self.mouse = (x, y)
-        if self.floating is not None:
-            self.redraw()
         self.show_cursor(x, y)
+        tool = self.tool.get()
+        inside = (tool == "select" and self.in_selection(x, y)) or (tool == "move")
+        want = "fleur" if inside else "crosshair"
+        if self.canvas.cget("cursor") != want:
+            self.canvas.configure(cursor=want)
         if 0 <= x < core.W and 0 <= y < core.H and self.stack() is not None:
             p = self.current_flat().getpixel((x, y))
             where = "left band" if x < core.DS_X0 else "right band" if x >= core.DS_X1 else f"DS x {x - core.DS_X0}"
@@ -852,7 +919,7 @@ class Editor(tk.Tk):
     def show_cursor(self, x: int, y: int):
         """The brush's outline under the mouse."""
         self.canvas.delete("cursor")
-        if self.tool.get() not in ("pencil", "eraser") or self.floating is not None:
+        if self.tool.get() not in ("pencil", "eraser"):
             return
         z = self.zoom.get()
         n = self.brush_size.get()
@@ -892,6 +959,8 @@ class Editor(tk.Tk):
         self.on_tool()
 
     def on_tool(self):
+        if self.tool.get() not in ("select", "move"):
+            self.commit()
         self.canvas.configure(cursor="fleur" if self.tool.get() == "move" else "crosshair")
         self.redraw()
 
@@ -906,51 +975,70 @@ class Editor(tk.Tk):
             self.tool.set("pencil")
             self.on_tool()
 
-    # -------------------------------------------------------------- move
-    def start_move(self, x: int, y: int):
+    # ---------------------------------------------------- floating pieces
+    def sync_selection(self):
+        """The selection round the floating piece."""
+        ax, ay = self.float["at"]
+        w, h = self.float["image"].size
+        self.selection = (ax, ay, ax + w, ay + h)
+
+    def lift(self, copy: bool = False):
+        """The selection's pixels (those that may change) off the drawing
+        layer into a floating piece: cut, or (copy) copied."""
         p = self.paint()
+        x0, y0, x1, y1 = self.selection
+        x0, y0, x1, y1 = max(0, x0), max(0, y0), min(core.W, x1), min(core.H, y1)
+        if x0 >= x1 or y0 >= y1:
+            return
         self.push_undo()
-        sel = self.selection
-        if sel is not None and sel[0] <= x < sel[2] and sel[1] <= y < sel[3]:
-            # lift the selected pixels (those that may change) off the layer
-            view = p.view()
-            lifted = Image.new("RGBA", (sel[2] - sel[0], sel[3] - sel[1]), (0, 0, 0, 0))
-            src, dst = view.load(), lifted.load()
-            for yy in range(sel[1], sel[3]):
-                for xx in range(sel[0], sel[2]):
-                    if self.allowed(xx, yy):
-                        dst[xx - sel[0], yy - sel[1]] = src[xx, yy]
+        view = p.view()
+        piece = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
+        src, dst = view.load(), piece.load()
+        locked = 0
+        for yy in range(y0, y1):
+            for xx in range(x0, x1):
+                if self.allowed(xx, yy):
+                    dst[xx - x0, yy - y0] = src[xx, yy]
+                    if not copy:
                         src[xx, yy] = (0, 0, 0, 0)
+                else:
+                    locked += 1
+        if not copy:
             p.set_view(view)
-            self.moving = {"what": "selection", "start": (x, y), "image": lifted, "origin": sel[:2],
-                           "at": sel[:2]}
-        else:
-            self.selection = None
-            self.moving = {"what": "layer", "start": (x, y), "origin": (p.x, p.y)}
+        self.locked_lift = bool(locked)
+        if locked:
+            self.status("Only the pixels in the bands move: the DS's picture is locked (untick 'Lock the "
+                        "DS's picture' to move those too).")
+        self.float = {"image": piece, "at": (x0, y0), "from": (x0, y0, x1, y1), "locked": self.locked_lift}
+        self.sync_selection()
         self.dirty.add(self.lid)
 
-    def drag_move(self, x: int, y: int):
-        m = self.moving
-        dx, dy = x - m["start"][0], y - m["start"][1]
-        if m["what"] == "layer":
-            p = self.paint()
-            p.x, p.y = m["origin"][0] + dx, m["origin"][1] + dy
-            self.status(f"Moved {dx:+d}, {dy:+d}")
-        else:
-            m["at"] = (m["origin"][0] + dx, m["origin"][1] + dy)
-            w, h = m["image"].size
-            self.selection = (m["at"][0], m["at"][1], m["at"][0] + w, m["at"][1] + h)
-        self.redraw()
-
-    def end_move(self):
-        m, self.moving = self.moving, None
-        if m["what"] == "selection":
-            self.put_down(m["image"], *m["at"])
-            w, h = m["image"].size
-            ax, ay = m["at"]
-            self.selection = (max(0, ax), max(0, ay), min(core.W, ax + w), min(core.H, ay + h))
+    def commit(self):
+        """The floating piece put down where it is (its solid pixels, where
+        they may go); the selection stays round it."""
+        if self.float is None:
+            return
+        f, self.float = self.float, None
+        self.drag = None
+        if self.paint() is not None:
+            self.put_down(f["image"], *f["at"])
+            self.dirty.add(self.lid)
+        if self.selection is not None:
+            x0, y0, x1, y1 = self.selection
+            self.selection = (max(0, x0), max(0, y0), min(core.W, x1), min(core.H, y1))
             if self.selection[0] >= self.selection[2] or self.selection[1] >= self.selection[3]:
                 self.selection = None
+        self.redraw()
+
+    def cancel_float(self):
+        """The floating piece taken back: the drawing layer as it was before
+        it was lifted (or pasted); the selection where it was lifted from."""
+        self.selection = self.float.get("from") if self.float is not None else None
+        self.float = None
+        self.drag = None
+        if self.undo:
+            self._swap(self.undo, self.redo)
+            self.redo.pop()
         self.redraw()
 
     def put_down(self, img: Image.Image, x: int, y: int):
@@ -964,17 +1052,21 @@ class Editor(tk.Tk):
                     p.plot(x + fx, y + fy, c)
 
     def nudge(self, dx: int, dy: int):
-        """The arrow keys, with the Move tool: the selection, or the drawing layer."""
+        """The arrow keys, with Select or Move: the selection's pixels (or
+        the floating piece), or with Move and nothing selected the drawing
+        layer."""
         p = self.paint()
-        if self.tool.get() != "move" or p is None or self.moving is not None:
+        tool = self.tool.get()
+        if tool not in ("select", "move") or p is None or self.drag is not None:
             return
-        sel = self.selection
-        if sel is not None:
-            cx, cy = sel[0], sel[1]
-            self.start_move(cx, cy)
-            self.drag_move(cx + dx, cy + dy)
-            self.end_move()
-        else:
+        if self.float is None and self.selection is not None:
+            self.lift()
+        if self.float is not None:
+            ax, ay = self.float["at"]
+            self.float["at"] = (ax + dx, ay + dy)
+            self.sync_selection()
+            self.redraw()
+        elif tool == "move":
             self.push_undo()
             p.x += dx
             p.y += dy
@@ -983,58 +1075,93 @@ class Editor(tk.Tk):
 
     # --------------------------------------------------------- selection
     def select_all(self):
+        self.commit()
         self.selection = (0, 0, core.W, core.H)
+        self.redraw()
+
+    def deselect(self):
+        self.commit()
+        self.selection = None
         self.redraw()
 
     def copy(self):
         p = self.paint()
-        if p is None or self.selection is None:
+        if p is None:
             return
-        self.clipboard = p.view().crop(self.selection)
-        self.status(f"Copied {self.clipboard.width} x {self.clipboard.height} pixels.")
+        if self.float is not None:
+            self.clipboard = self.float["image"].copy()
+            self.clip_at = self.float["at"]
+        elif self.selection is not None:
+            sel = self.selection
+            self.clipboard = p.view().crop(sel)
+            self.clip_at = sel[:2]
+        else:
+            self.status("Select something first (Select tool, M).")
+            return
+        self.status(f"Copied {self.clipboard.width} x {self.clipboard.height} pixels: Ctrl+V pastes them.")
+
+    def cut(self):
+        p = self.paint()
+        if p is None:
+            return
+        if self.float is None:
+            if self.selection is None:
+                self.status("Select something first (Select tool, M).")
+                return
+            self.lift()
+        self.clipboard = self.float["image"].copy()
+        self.clip_at = self.float["at"]
+        self.float = None
+        self.selection = None
+        self.status(f"Cut {self.clipboard.width} x {self.clipboard.height} pixels: Ctrl+V pastes them.")
+        self.redraw()
 
     def paste(self):
         if self.clipboard is None or self.paint() is None:
             return
-        self.floating = self.clipboard.copy()
-        self.status("Pasted: move it and click to put it down (H flips it, Esc cancels).")
+        self.commit()
+        self.push_undo()
+        at = self.selection[:2] if self.selection else getattr(self, "clip_at", (0, 0))
+        self.float = {"image": self.clipboard.copy(), "at": at}
+        self.sync_selection()
+        if self.tool.get() not in ("select", "move"):
+            self.tool.set("select")
+            self.on_tool()
+        self.dirty.add(self.lid)
+        self.status("Pasted: drag it into place (arrow keys nudge, H flips it); Enter or a click outside puts "
+                    "it down, Esc takes it back.")
         self.redraw()
 
     def paste_as_layer(self):
         if self.clipboard is None or self.stack() is None:
             return
-        x, y = self.selection[:2] if self.selection else (0, 0)
+        self.commit()
+        x, y = self.selection[:2] if self.selection else getattr(self, "clip_at", (0, 0))
         self.add_paint(core.Paint(self.new_name("Pasted"), self.clipboard.copy(), x, y))
+        self.selection = None
         self.set_tool("move")
         self.status("Pasted as a new drawing layer: drag it into place with the Move tool.")
 
     def flip_floating(self):
-        if self.floating is not None:
-            self.floating = self.floating.transpose(Image.FLIP_LEFT_RIGHT)
+        """H: the floating piece (or the selection's pixels) flipped."""
+        if self.float is None and self.selection is not None and self.paint() is not None:
+            self.lift()
+        if self.float is not None:
+            self.float["image"] = self.float["image"].transpose(Image.FLIP_LEFT_RIGHT)
             self.redraw()
-        elif self.moving is None and self.selection is not None and self.paint() is not None:
-            # flip the selected pixels where they are
-            self.push_undo()
-            p = self.paint()
-            region = p.view().crop(self.selection).transpose(Image.FLIP_LEFT_RIGHT)
-            view = p.view()
-            for yy in range(self.selection[1], self.selection[3]):
-                for xx in range(self.selection[0], self.selection[2]):
-                    if self.allowed(xx, yy):
-                        view.putpixel((xx, yy), region.getpixel((xx - self.selection[0], yy - self.selection[1])))
-            p.set_view(view)
-            self.dirty.add(self.lid)
-            self.redraw()
-
-    def stamp_floating(self, x: int, y: int):
-        self.push_undo()
-        self.put_down(self.floating, x, y)
-        self.dirty.add(self.lid)
-        self.redraw()
 
     def clear_selection(self):
+        """Delete: the selection's pixels (or the floating piece) gone."""
         p = self.paint()
-        if self.selection is None or p is None:
+        if p is None:
+            return
+        if self.float is not None:
+            self.float = None
+            self.selection = None
+            self.dirty.add(self.lid)
+            self.redraw()
+            return
+        if self.selection is None:
             return
         self.push_undo()
         view = p.view()
@@ -1048,7 +1175,10 @@ class Editor(tk.Tk):
         self.redraw()
 
     def cancel(self):
-        self.floating = None
+        """Esc: a floating piece taken back, else the selection dropped."""
+        if self.float is not None:
+            self.cancel_float()
+            return
         self.selection = None
         self.redraw()
 
@@ -1128,6 +1258,7 @@ class Editor(tk.Tk):
     def save(self):
         if self.stack() is None or self.art_dir is None:
             return
+        self.commit()
         path = self.save_layer(self.lid)
         self.status(f"Saved {path.name}" + ("  (the whole layer)" if path.stem.endswith("_full") else
                                             "  (the side bands)") + ". In the game: L + R + A takes it in.")
@@ -1136,6 +1267,7 @@ class Editor(tk.Tk):
     def save_all(self):
         if self.cap is None or self.art_dir is None:
             return
+        self.commit()
         n = len(self.dirty)
         for lid in sorted(self.dirty):
             self.save_layer(lid)
@@ -1198,6 +1330,7 @@ class Editor(tk.Tk):
     def export_png(self):
         if self.stack() is None:
             return
+        self.commit()
         path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")],
                                             initialfile=f"{self.lid}.png")
         if path:
@@ -1238,6 +1371,7 @@ class Editor(tk.Tk):
             self.changed()
 
     def confirm_discard(self) -> bool:
+        self.commit()
         if not self.dirty:
             return True
         answer = messagebox.askyesnocancel(APP, "Save the layers you changed first?")
@@ -1255,15 +1389,13 @@ class Editor(tk.Tk):
 
     # ---------------------------------------------------------- showing
     def current_flat(self) -> Image.Image:
-        """The layer being drawn as it shows now (a selection being moved
+        """The layer being drawn as it shows now (a floating piece
         included)."""
         img = self.picture(self.lid)
-        if self.moving is not None and self.moving["what"] == "selection":
-            lifted = self.moving["image"]
-            ax, ay = self.moving["at"]
+        if self.float is not None:
             img = img.copy()
             layer = Image.new("RGBA", (core.W, core.H), (0, 0, 0, 0))
-            layer.paste(lifted, (ax, ay))
+            layer.paste(self.float["image"], self.float["at"])
             img.alpha_composite(layer)
         return img
 
@@ -1290,11 +1422,6 @@ class Editor(tk.Tk):
             return
         z = self.zoom.get()
         img = self.composite()
-        if self.floating is not None and self.mouse is not None:
-            img = img.copy()
-            layer = Image.new("RGBA", (core.W, core.H), (0, 0, 0, 0))
-            layer.paste(self.floating, self.mouse)
-            img.alpha_composite(layer)
         big = img.resize((core.W * z, core.H * z), Image.NEAREST)
         draw = ImageDraw.Draw(big)
         if self.lock_middle.get():
@@ -1312,8 +1439,11 @@ class Editor(tk.Tk):
         for x in (core.DS_X0, core.DS_X1):
             self.canvas.create_line(x * z, 0, x * z, core.H * z, fill="#ffcc00", dash=(4, 3))
         if self.selection:
+            # (a floating piece: orange, not put down yet)
             x0, y0, x1, y1 = self.selection
-            self.canvas.create_rectangle(x0 * z, y0 * z, x1 * z, y1 * z, outline="#00ffff", dash=(3, 2))
+            color = "#ff9900" if self.float is not None else "#00ffff"
+            self.canvas.create_rectangle(x0 * z - 1, y0 * z - 1, x1 * z, y1 * z, outline="#000000")
+            self.canvas.create_rectangle(x0 * z - 1, y0 * z - 1, x1 * z, y1 * z, outline=color, dash=(4, 3))
         p = self.paint()
         if self.tool.get() == "move" and p is not None and self.selection is None:
             # the drawing layer's extent
@@ -1341,7 +1471,11 @@ class Editor(tk.Tk):
             "hand. Unlock the middle to change the DS's picture too.\n\n"
             "Drawing layers: add, duplicate, hide and reorder layers of your own (Layer menu); saving "
             "puts them together into the one picture the game reads, and keeps them to open again.\n\n"
-            "Move (V): drag the drawing layer, or drag a selection's pixels; arrow keys nudge.\n"
+            "Select (M): drag a rectangle, then drag inside it to cut and move those pixels (hold Alt "
+            "to move a copy). They float until you press Enter or click outside; Esc puts them back. "
+            "Ctrl+X / Ctrl+C / Ctrl+V cut, copy and paste; the paste floats too, ready to drag. Arrow "
+            "keys nudge, H flips.\n"
+            "Move (V): drag the drawing layer (nothing selected), or the selection.\n"
             "[ and ]: brush size. Right-click: pick a colour.\n\n"
             "4. Save. In the game, L + R + A takes the new pictures in (or restart it)."))
 
@@ -1385,14 +1519,33 @@ def self_test() -> int:
             # the Move tool: the red dot's pixels dragged 10 down
             app.layer_var.set("bg3")
             app.select_layer()
-            app.set_tool("move")
-            app.selection = (11, 9, 14, 12)
-            app.start_move(12, 10)
-            app.drag_move(12, 20)
-            app.end_move()
+            app.set_tool("select")
+            app.press(11, 9)                 # a selection round it
+            app.drag_to(13, 11)
+            app.release()
+            ok = ok and app.selection == (11, 9, 14, 12)
+            app.press(12, 10)                # dragged from inside it: cut and moved
+            app.drag_to(12, 20)
+            app.release()
+            app.commit()
             app.save()
             pic = core.load_rgba(core.existing_art(art, "6d5a3d55615351bf"))
             ok = ok and pic.getpixel((12, 20))[:3] == (255, 0, 0) and pic.getpixel((12, 10))[:3] != (255, 0, 0)
+            # Alt: a copy moved; copy and paste
+            app.press(12, 20, alt=True)
+            app.drag_to(12, 40)
+            app.release()
+            app.commit()
+            app.selection = (11, 39, 14, 42)
+            app.copy()
+            app.paste()
+            app.press(12, 40)
+            app.drag_to(12, 60)
+            app.release()
+            app.commit()
+            app.save()
+            pic = core.load_rgba(core.existing_art(art, "6d5a3d55615351bf"))
+            ok = ok and all(pic.getpixel((12, y))[:3] == (255, 0, 0) for y in (20, 40, 60))
         app.destroy()
     return 0 if ok else 1
 
