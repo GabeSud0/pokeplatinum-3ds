@@ -56,6 +56,15 @@ void NitroPort_Render2DSplit(int engine, uint16_t *under, NitroRender2DSplit *sp
  * that engine (returns 0 then, 1 when drawn). */
 int NitroPort_Render2DSplitIfChanged(int engine, uint16_t *under, NitroRender2DSplit *split);
 
+/* One BG of an engine alone (for capturing it: nitro_port_wideart.h), on
+ * the canvas layout gives (width, origin, clip, anchorWindows; NULL: the
+ * DS's), its bands drawn as the picture's are: out is width x 192 pixels
+ * (colour | 0x8000, or 0). Its key (NitroPort_WideArtFind), scroll and
+ * priority go to the others. 0 if the BG isn't shown or is the 3D (nothing
+ * drawn then). */
+int NitroPort_Render2DLayer(int engine, int bg, const NitroRender2DSplit *layout, uint16_t *out,
+                            uint64_t *key, int *hofs, int *vofs, int *prio);
+
 #ifdef __cplusplus
 }
 #endif

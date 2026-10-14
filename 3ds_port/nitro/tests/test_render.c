@@ -12,6 +12,8 @@
 #include <nitro_port.h>
 #include <nitro_port_gx3d.h>
 #include <nitro_port_wide.h>
+#include <nitro_port_wideart.h>
+#include <unistd.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1041,6 +1043,157 @@ static void test_wide_canvas(void)
     }
 }
 
+/* Hand-drawn pictures (nitro_port_wideart.h): a BG's key, a picture made
+ * for it, loaded and drawn in the bands (or all of it), moved with the
+ * scroll; another BG's art isn't this one's. */
+static void WriteArt(const char *dir, uint64_t key, int hofs, int vofs, int full, const u16 *pixels)
+{
+    static uint8_t rgba[320 * 192 * 4];
+    char path[512];
+    int i;
+
+    for (i = 0; i < 320 * 192; i++) {
+        u16 c = pixels[i];
+
+        rgba[i * 4 + 0] = (uint8_t)((c & 31) << 3);
+        rgba[i * 4 + 1] = (uint8_t)(((c >> 5) & 31) << 3);
+        rgba[i * 4 + 2] = (uint8_t)(((c >> 10) & 31) << 3);
+        rgba[i * 4 + 3] = (c & 0x8000) ? 255 : 0;
+    }
+    snprintf(path, sizeof(path), "%s/%016llx_%d_%d%s.png", dir, (unsigned long long)key, hofs, vofs,
+             full ? "_full" : "");
+    CHECK(NitroPort_WideArtWritePng(path, rgba, 320, 192) == 0);
+}
+
+static void test_wide_art(void)
+{
+    static u16 wide[320 * 192], over[320 * 192], art[320 * 192], layerPx[320 * 192];
+    static u8 overAlpha[320 * 192];
+    static u8 tiles[96];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED, BLUE };
+    char dir[] = "/tmp/wideartXXXXXX";
+    NitroRender2DSplit split;
+    uint64_t key, key2;
+    int hofs, vofs, prio, full, i, x;
+
+    /* file names */
+    CHECK(NitroPort_WideArtParseName("0123456789abcdef_12_3.png", &key, &hofs, &vofs, &full) &&
+          key == 0x0123456789abcdefull && hofs == 12 && vofs == 3 && !full);
+    CHECK(NitroPort_WideArtParseName("0123456789ABCDEF_0_0_full.png", &key, &hofs, &vofs, &full) && full);
+    CHECK(!NitroPort_WideArtParseName("0123456789abcdef_0_0.bmp", &key, &hofs, &vofs, &full));
+    CHECK(!NitroPort_WideArtParseName("0123456789abcde_0_0.png", &key, &hofs, &vofs, &full));
+    CHECK(!NitroPort_WideArtParseName("screen.png", &key, &hofs, &vofs, &full));
+
+    /* BG1: tile 1 (red) over the map's left half, empty on the right */
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = (i % 32) < 16 ? 1 : 0;
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    memset(&split, 0, sizeof(split));
+    split.width = 320;
+    split.origin = 32;
+    memset(split.clip, 1, sizeof(split.clip));
+    CHECK(NitroPort_Render2DLayer(0, 1, &split, layerPx, &key, &hofs, &vofs, &prio));
+    CHECK(key != 0 && hofs == 0 && vofs == 0);
+    CHECK(layerPx[5 * 320 + 40] == (RED | 0x8000));
+    CHECK(!NitroPort_Render2DLayer(0, 2, &split, layerPx, &key2, &hofs, &vofs, &prio));   /* BG2 off */
+    /* the same art elsewhere in VRAM: the same key */
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0800,
+                     GX_BG_CHARBASE_0x08000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    CHECK(NitroPort_Render2DLayer(0, 1, &split, layerPx, &key2, &hofs, &vofs, &prio) && key2 == key);
+    /* different art: a different key */
+    map[0] = 2;
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    CHECK(NitroPort_Render2DLayer(0, 1, &split, layerPx, &key2, &hofs, &vofs, &prio) && key2 != key);
+    map[0] = 1;
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+
+    /* a picture for it: blue bands, a green middle (shows only as _full) */
+    CHECK(mkdtemp(dir) != NULL);
+    for (i = 0; i < 320 * 192; i++) {
+        x = i % 320;
+        art[i] = (x < 32 || x >= 288) ? (BLUE | 0x8000) : (RGB(0, 31, 0) | 0x8000);
+    }
+    art[10 * 320 + 3] = 0;   /* a transparent pixel */
+    WriteArt(dir, key, 0, 0, 0, art);
+    CHECK(NitroPort_WideArtLoad(dir) == 1);
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 0] == BLUE);            /* the bands: the picture */
+    CHECK(wide[5 * 320 + 319] == BLUE);
+    CHECK(wide[10 * 320 + 3] == GREY);           /* (transparent: the backdrop) */
+    CHECK(wide[5 * 320 + 40] == RED);            /* the middle: the game's own */
+    CHECK(wide[5 * 320 + 200] == GREY);
+    /* scrolled 8 pixels right since: the picture moves 8 left with it */
+    art[5 * 320 + 12] = RED | 0x8000;
+    WriteArt(dir, key, 0, 0, 0, art);
+    NitroPort_WideArtLoad(dir);
+    G2_SetBG1Offset(8, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 4] == RED);
+    CHECK(wide[5 * 320 + 12] == BLUE);
+    CHECK(wide[5 * 320 + 315] == GREY);          /* past the picture's right: nothing */
+    G2_SetBG1Offset(0, 0);
+    /* the whole picture: the middle too */
+    WriteArt(dir, key, 0, 0, 1, art);
+    NitroPort_WideArtLoad(dir);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 40] == RGB(0, 31, 0));
+    CHECK(wide[5 * 320 + 0] == BLUE);
+    /* the DS's own screen (no wider canvas): no art */
+    NitroPort_Render2D(0, sTop);
+    CHECK(sTop[5 * 256 + 8] == RED);
+    /* a capture of the screen: the folder and its files */
+    {
+        char made[512], path[600];
+        FILE *f;
+        char line[256];
+        int found = 0;
+
+        NitroPort_SetWideScreen(32);
+        CHECK(NitroPort_WideArtCapture(dir, made, sizeof(made)) == 0);
+        snprintf(path, sizeof(path), "%s/info.txt", made);
+        f = fopen(path, "r");
+        CHECK(f != NULL);
+        while (f != NULL && fgets(line, sizeof(line), f) != NULL) {
+            unsigned long long k;
+            int b;
+
+            if (sscanf(line, "bg %d prio %*d key %llx", &b, &k) == 2 && b == 1 && k == key) {
+                found = 1;
+            }
+        }
+        if (f != NULL) {
+            fclose(f);
+        }
+        CHECK(found);
+        snprintf(path, sizeof(path), "%s/bg1.png", made);
+        CHECK(access(path, F_OK) == 0);
+        snprintf(path, sizeof(path), "%s/screen.png", made);
+        CHECK(access(path, F_OK) == 0);
+        NitroPort_SetWideScreen(0);
+    }
+    NitroPort_WideArtLoad("/nonexistent");
+    CHECK(NitroPort_WideArtCount() == 0);
+    {
+        char cmd[600];
+
+        snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+        CHECK(system(cmd) == 0);
+    }
+}
+
 /* The two engines drawn at the same time on two threads (as the 3DS
  * program does on two CPU cores), many times over: the same pixels. */
 static u16 sThreadOut[2][256 * 192];
@@ -1200,6 +1353,7 @@ int main(int argc, char **argv)
     test_matches_reference();
     test_split_layers();
     test_wide_canvas();
+    test_wide_art();
     test_engines_on_two_threads();
 
     printf("2D renderer: %d checks, %d failed\n", sChecks, sFailures);

@@ -55,6 +55,7 @@
 #include <nitro_port_gx3d.h>
 #include <nitro_port_render2d.h>
 #include <nitro_port_wide.h>
+#include <nitro_port_wideart.h>
 
 /* The 2D renderer (nitro_port.h, which can't be included next to 3ds.h). */
 void NitroPort_Render2D(int engine, uint16_t *out);
@@ -481,6 +482,9 @@ static void StopGpu(void)
 #define MANIFEST_PATH DATA_DIR "/manifest.json"
 #define LOG_PATH      DATA_DIR "/log.txt"
 #define SAVE_PATH     DATA_DIR "/platinum.sav"
+/* Hand-drawn pictures for the wide upper screen, and captures for drawing
+ * them (docs/WIDE_ART.md). */
+#define WIDE_ART_DIR  DATA_DIR "/wide"
 /* Optional, for trying where the geometry goes: "core 1" (the default),
  * "core 2", or "off" (the game's own thread, as before). */
 #define GEOMETRY_PATH DATA_DIR "/geometry.txt"
@@ -1652,6 +1656,24 @@ void NitroPort_OnFrame(void)
         else
             NitroPort_Log("[gx3d] cannot dump frame %lu (no image or file error)",sFrame);
     }
+    /* Wide art (docs/WIDE_ART.md): L + R + X captures the upper screen for
+     * the editor, L + R + A takes in the pictures in the art folder again. */
+    if (sRemaster && sCompose.wide && (held & (KEY_L | KEY_R)) == (KEY_L | KEY_R)) {
+        if (down & KEY_X) {
+            char made[300];
+
+            if (NitroPort_WideArtCapture(WIDE_ART_DIR, made, sizeof(made)) == 0) {
+                NitroPort_Log("[wide art] captured: %s (open it with the WideArt editor)", made);
+            }
+        }
+        if (down & KEY_A) {
+            NitroPort_Log("[wide art] %d pictures taken in again", NitroPort_WideArtLoad(WIDE_ART_DIR));
+        }
+    }
+    /* (with L and R held, A, X, Y and SELECT are the port's, not the game's) */
+    if ((held & (KEY_L | KEY_R)) == (KEY_L | KEY_R)) {
+        held &= ~(u32)(KEY_A | KEY_X | KEY_Y | KEY_SELECT);
+    }
     Platinum_SetButtons(DsButtons(held));
     if (held & KEY_TOUCH) {
         touchPosition touch;
@@ -1873,6 +1895,9 @@ int main(int argc, char **argv)
             StartGpu(priority, isNew3ds);
             NitroPort_Gx3dSetWideView(sRemaster && sCompose.wide ? 320 : 256);
             NitroPort_SetWideScreen(sRemaster && sCompose.wide ? 32 : 0);
+            if (sRemaster && sCompose.wide) {
+                NitroPort_WideArtLoad(WIDE_ART_DIR);
+            }
             StartGeometry(priority, isNew3ds);   /* first: core 1's share */
             CheckCoreSpeed(priority, isNew3ds);  /* (with that share, nothing drawing yet) */
             StartDrawers(priority, isNew3ds);

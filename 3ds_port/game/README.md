@@ -101,6 +101,10 @@ look it up in `build/3ds/pokeplatinum.elf` with
 `arm-none-eabi-addr2line -e pokeplatinum.elf <address>`. Failed `GF_ASSERT`s
 in the game are logged with the caller's address the same way.
 
+**L + R + X** captures the upper screen and **L + R + A** takes in new
+hand-drawn pictures for its wide bands: drawing them with the WideArt
+editor is in [docs/WIDE_ART.md](../../docs/WIDE_ART.md).
+
 The program uses the console's profile for the DS user settings the game
 reads (name, birthday, language).
 
