@@ -139,7 +139,10 @@ class ColorPicker(tk.Toplevel):
         self.bind("<Escape>", lambda e: self.destroy())
         self.square_hue = None
         self.show()
-        self.grab_set()
+        try:
+            self.grab_set()
+        except tk.TclError:   # (not shown yet on some systems: fine without)
+            pass
         self.focus_set()
 
     # the colour as it would show in the game
@@ -222,6 +225,137 @@ class ColorPicker(tk.Toplevel):
 
     def ok(self):
         self.result = self.rgb()
+        self.destroy()
+
+
+# --------------------------------------------------------- scale / rotate
+
+class TransformDialog(tk.Toplevel):
+    """Scale and rotate the floating piece, shown on the canvas as the
+    numbers change. OK keeps it (still floating, to drag into place);
+    Cancel puts it back as it was."""
+
+    def __init__(self, editor: "Editor"):
+        super().__init__(editor)
+        self.title("Scale / rotate")
+        self.resizable(False, False)
+        self.transient(editor)
+        self.editor = editor
+        f = editor.float
+        self.base = f["image"].copy()       # (flipped by Flip H / V; scaled and turned from)
+        self.original = f["image"]
+        self.base_at = f["at"]
+        self.center = (f["at"][0] + self.base.width / 2, f["at"][1] + self.base.height / 2)
+        self.width_pct = tk.DoubleVar(value=100)
+        self.height_pct = tk.DoubleVar(value=100)
+        self.angle = tk.DoubleVar(value=0)
+        self.keep_ratio = tk.BooleanVar(value=True)
+        self.smooth = tk.BooleanVar(value=False)
+        self.busy = False
+
+        body = ttk.Frame(self, padding=10)
+        body.pack()
+        ttk.Label(body, text=f"The piece: {self.base.width} x {self.base.height} pixels").grid(
+            row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
+        ttk.Label(body, text="Width %").grid(row=1, column=0, sticky="e")
+        ttk.Spinbox(body, from_=5, to=800, increment=5, textvariable=self.width_pct, width=7,
+                    command=lambda: self.changed("w")).grid(row=1, column=1, sticky="w", padx=4)
+        ttk.Label(body, text="Height %").grid(row=2, column=0, sticky="e")
+        ttk.Spinbox(body, from_=5, to=800, increment=5, textvariable=self.height_pct, width=7,
+                    command=lambda: self.changed("h")).grid(row=2, column=1, sticky="w", padx=4)
+        ttk.Checkbutton(body, text="Keep the proportions", variable=self.keep_ratio).grid(
+            row=1, column=2, columnspan=2, sticky="w")
+        sizes = ttk.Frame(body)
+        sizes.grid(row=2, column=2, columnspan=2, sticky="w")
+        for pct in (50, 100, 200):
+            ttk.Button(sizes, text=f"{pct}%", width=5, command=lambda v=pct: self.set_scale(v)).pack(side="left")
+        ttk.Label(body, text="Rotate").grid(row=3, column=0, sticky="e", pady=(8, 0))
+        ttk.Scale(body, from_=-180, to=180, variable=self.angle, orient="horizontal", length=220,
+                  command=lambda v: self.changed("a")).grid(row=3, column=1, columnspan=2, sticky="ew",
+                                                            pady=(8, 0))
+        ttk.Spinbox(body, from_=-180, to=180, increment=1, textvariable=self.angle, width=6,
+                    command=lambda: self.changed("a")).grid(row=3, column=3, sticky="w", pady=(8, 0))
+        turns = ttk.Frame(body)
+        turns.grid(row=4, column=0, columnspan=4, pady=6)
+        for label, fn in (("90\N{DEGREE SIGN} left", lambda: self.turn(90)),
+                          ("90\N{DEGREE SIGN} right", lambda: self.turn(-90)),
+                          ("180\N{DEGREE SIGN}", lambda: self.turn(180)),
+                          ("Flip H", lambda: self.flip(Image.FLIP_LEFT_RIGHT)),
+                          ("Flip V", lambda: self.flip(Image.FLIP_TOP_BOTTOM))):
+            ttk.Button(turns, text=label, command=fn).pack(side="left", padx=2)
+        ttk.Checkbutton(body, text="Smooth (blends colours; off keeps the pixels sharp)", variable=self.smooth,
+                        command=self.apply).grid(row=5, column=0, columnspan=4, sticky="w")
+        buttons = ttk.Frame(body)
+        buttons.grid(row=6, column=0, columnspan=4, sticky="e", pady=(10, 0))
+        ttk.Button(buttons, text="OK", command=self.ok).pack(side="left", padx=4)
+        ttk.Button(buttons, text="Cancel", command=self.cancel).pack(side="left")
+        for var, which in ((self.width_pct, "w"), (self.height_pct, "h")):
+            var.trace_add("write", lambda *a, k=which: self.changed(k))
+        self.bind("<Return>", lambda e: self.ok())
+        self.bind("<Escape>", lambda e: self.cancel())
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        try:
+            self.grab_set()
+        except tk.TclError:   # (not shown yet on some systems: fine without)
+            pass
+
+    def number(self, var: tk.DoubleVar, default: float) -> float:
+        try:
+            return float(var.get())
+        except (tk.TclError, ValueError):
+            return default
+
+    def set_scale(self, pct: float):
+        self.busy = True
+        self.width_pct.set(pct)
+        self.height_pct.set(pct)
+        self.busy = False
+        self.apply()
+
+    def changed(self, which: str):
+        if self.busy:
+            return
+        if self.keep_ratio.get() and which in ("w", "h"):
+            self.busy = True
+            if which == "w":
+                self.height_pct.set(self.number(self.width_pct, 100))
+            else:
+                self.width_pct.set(self.number(self.height_pct, 100))
+            self.busy = False
+        self.apply()
+
+    def turn(self, degrees: float):
+        a = (self.number(self.angle, 0) + degrees + 180) % 360 - 180
+        self.angle.set(round(a, 1))
+        self.apply()
+
+    def flip(self, how):
+        self.base = self.base.transpose(how)
+        self.apply()
+
+    def apply(self):
+        sx = max(1.0, self.number(self.width_pct, 100)) / 100
+        sy = max(1.0, self.number(self.height_pct, 100)) / 100
+        img = core.transform(self.base, sx, sy, self.number(self.angle, 0), self.smooth.get())
+        if self.smooth.get():
+            # (pixels are solid or transparent in the game)
+            img.putalpha(img.getchannel("A").point(lambda a: 255 if a >= 128 else 0))
+        cx, cy = self.center
+        self.editor.float["image"] = img
+        self.editor.float["at"] = (round(cx - img.width / 2), round(cy - img.height / 2))
+        self.editor.sync_selection()
+        self.editor.redraw()
+
+    def ok(self):
+        self.apply()
+        self.destroy()
+        self.editor.status("Scaled / rotated: drag it into place, Enter puts it down.")
+
+    def cancel(self):
+        self.editor.float["image"] = self.original
+        self.editor.float["at"] = self.base_at
+        self.editor.sync_selection()
+        self.editor.redraw()
         self.destroy()
 
 
@@ -309,7 +443,12 @@ class Editor(tk.Tk):
         editm.add_command(label="Copy", command=self.copy, accelerator="Ctrl+C")
         editm.add_command(label="Paste", command=self.paste, accelerator="Ctrl+V")
         editm.add_command(label="Paste as a new layer", command=self.paste_as_layer, accelerator="Ctrl+Shift+V")
+        editm.add_command(label="Scale / rotate selection...", command=self.transform_dialog, accelerator="Ctrl+T")
+        editm.add_command(label="Rotate selection 90\N{DEGREE SIGN} right", command=self.rotate_right, accelerator="R")
+        editm.add_command(label="Rotate selection 90\N{DEGREE SIGN} left", command=self.rotate_left,
+                          accelerator="Shift+R")
         editm.add_command(label="Flip selection (horizontal)", command=self.flip_floating, accelerator="H")
+        editm.add_command(label="Flip selection (vertical)", command=self.flip_vertical, accelerator="Shift+H")
         editm.add_command(label="Delete selection", command=self.clear_selection, accelerator="Delete")
         editm.add_command(label="Put down (finish moving)", command=self.commit, accelerator="Enter")
         editm.add_separator()
@@ -472,6 +611,10 @@ class Editor(tk.Tk):
                            ("v", "move")):
             self.bind(key, lambda e, v=value: self.set_tool(v))
         self.bind("h", lambda e: self.flip_floating())
+        self.bind("H", lambda e: self.flip_vertical())
+        self.bind("r", lambda e: self.rotate_right())
+        self.bind("R", lambda e: self.rotate_left())
+        self.bind("<Control-t>", lambda e: self.transform_dialog())
         self.bind("p", lambda e: self.preview())
         self.bind("<bracketleft>", lambda e: self.set_size(self.brush_size.get() - 1))
         self.bind("<bracketright>", lambda e: self.set_size(self.brush_size.get() + 1))
@@ -1150,6 +1293,48 @@ class Editor(tk.Tk):
             self.float["image"] = self.float["image"].transpose(Image.FLIP_LEFT_RIGHT)
             self.redraw()
 
+    def ensure_float(self) -> bool:
+        """A floating piece to change: the selection's pixels lifted, if
+        they aren't yet."""
+        if self.float is None and self.selection is not None and self.paint() is not None:
+            self.lift()
+        if self.float is None:
+            self.status("Select something first (Select tool, M).")
+            return False
+        return True
+
+    def transform_dialog(self):
+        """Ctrl+T: scale and rotate the selection."""
+        if not self.ensure_float():
+            return
+        if self.tool.get() not in ("select", "move"):
+            self.tool.set("select")
+            self.on_tool()
+        self.wait_window(TransformDialog(self))
+
+    def rotate_right(self):
+        if self.ensure_float():
+            self.turn_float(Image.ROTATE_270)
+
+    def rotate_left(self):
+        if self.ensure_float():
+            self.turn_float(Image.ROTATE_90)
+
+    def flip_vertical(self):
+        if self.ensure_float():
+            self.turn_float(Image.FLIP_TOP_BOTTOM)
+
+    def turn_float(self, how):
+        """The floating piece turned or flipped about its middle."""
+        img = self.float["image"]
+        ax, ay = self.float["at"]
+        cx, cy = ax + img.width / 2, ay + img.height / 2
+        img = img.transpose(how)
+        self.float["image"] = img
+        self.float["at"] = (round(cx - img.width / 2), round(cy - img.height / 2))
+        self.sync_selection()
+        self.redraw()
+
     def clear_selection(self):
         """Delete: the selection's pixels (or the floating piece) gone."""
         p = self.paint()
@@ -1474,7 +1659,7 @@ class Editor(tk.Tk):
             "Select (M): drag a rectangle, then drag inside it to cut and move those pixels (hold Alt "
             "to move a copy). They float until you press Enter or click outside; Esc puts them back. "
             "Ctrl+X / Ctrl+C / Ctrl+V cut, copy and paste; the paste floats too, ready to drag. Arrow "
-            "keys nudge, H flips.\n"
+            "keys nudge, H / Shift+H flip, R / Shift+R turn by 90 degrees, Ctrl+T scales and rotates.\n"
             "Move (V): drag the drawing layer (nothing selected), or the selection.\n"
             "[ and ]: brush size. Right-click: pick a colour.\n\n"
             "4. Save. In the game, L + R + A takes the new pictures in (or restart it)."))

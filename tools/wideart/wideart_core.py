@@ -537,3 +537,20 @@ def hue_bar(width: int = 24, height: int = 256) -> Image.Image:
     col = Image.new("RGB", (1, height))
     col.putdata([hsv_to_rgb(360 * y / (height - 1), 1, 1) for y in range(height)])
     return col.resize((width, height), Image.NEAREST)
+
+
+def transform(img: Image.Image, sx: float = 1.0, sy: float = 1.0, angle: float = 0.0,
+              smooth: bool = False) -> Image.Image:
+    """A piece scaled (sx, sy: 1 is its size) and turned (angle degrees,
+    anticlockwise), grown to fit; nearest pixels (sharp, as pixel art
+    wants) unless smooth. Right angles are exact."""
+    w = max(1, round(img.width * sx))
+    h = max(1, round(img.height * sy))
+    resample = Image.BILINEAR if smooth else Image.NEAREST
+    out = img.resize((w, h), resample) if (w, h) != img.size else img.copy()
+    turn = angle % 360
+    if turn in (90, 180, 270):
+        return out.transpose({90: Image.ROTATE_90, 180: Image.ROTATE_180, 270: Image.ROTATE_270}[int(turn)])
+    if turn:
+        out = out.rotate(turn, resample=resample, expand=True)
+    return out
