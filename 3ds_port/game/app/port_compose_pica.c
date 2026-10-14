@@ -160,7 +160,20 @@ static void present(int s, int buf, int stereo)
         }
     }
     scr->presentSlot ^= 1u;
-    gspPresentBuffer(s == 0 ? GSP_SCREEN_TOP : GSP_SCREEN_BOTTOM, scr->presentSlot, left, right, LCD_STRIDE, mode);
+    {
+        /* (GSPGPU_SetBufferSwap rather than gspPresentBuffer: every libctru
+         * has it) */
+        GSPGPU_FramebufferInfo info;
+
+        info.active_framebuf = scr->presentSlot;
+        info.framebuf0_vaddr = (u32 *)left;
+        info.framebuf1_vaddr = (u32 *)right;
+        info.framebuf_widthbytesize = LCD_STRIDE;
+        info.format = mode;
+        info.framebuf_dispselect = scr->presentSlot;
+        info.unk = 0;
+        GSPGPU_SetBufferSwap(s == 0 ? GSP_SCREEN_TOP : GSP_SCREEN_BOTTOM, &info);
+    }
     scr->onLcd = buf;
 }
 
