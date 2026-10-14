@@ -850,6 +850,18 @@ static u16 Blend(u16 a, u16 b, int eva, int evb)
     return (u16)(r | (g << 5) | (bl << 10));
 }
 
+/* Blend() when eva + evb <= 16 (always for a 3D or bitmap OBJ pixel's own
+ * alpha, a and 16 - a): no part can go over 31, so nothing to clamp, and
+ * the parts come out of the sum with a shift and two masks. */
+static inline u16 BlendIn16(u16 a, u16 b, u32 eva, u32 evb)
+{
+    u32 pa = (a & 0x7C1Fu) | ((u32)(a & 0x03E0u) << 16);
+    u32 pb = (b & 0x7C1Fu) | ((u32)(b & 0x03E0u) << 16);
+    u32 sum = (pa * eva + pb * evb) >> 4;
+
+    return (u16)((sum & 0x7C1Fu) | ((sum >> 16) & 0x03E0u));
+}
+
 static u16 Brighten(u16 c, int evy)
 {
     int r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
@@ -955,6 +967,154 @@ static const u16 *LayerLine(const Engine *e, EngineWork *work, int bg, int kind,
     return line;
 }
 
+/* What a line that may blend two layers needs (DrawEngine's, for
+ * BlendLine). */
+typedef struct BlendLineState {
+    const Engine *e;
+    EngineWork *work;
+    const int *kind;
+    const u16 *bgcnt;
+    u32 dispcnt;
+    int y;
+    const u16 *gx3dPixels;
+    const u8 *gx3dAlpha;
+    const u8 **alpha3d;
+    LineLayer *list;
+    int nlist;
+    const s8 *entryOf;
+    const ObjLine *objLine;
+    u32 special;
+    u32 bldcnt;
+    u16 backdrop;
+    int effect, eva, evb, evy;
+} BlendLineState;
+
+/* Each pixel of a line whose front layers are drawn (row, layer1): one that
+ * blends with what's behind it (a first target of alpha blending, a partly
+ * transparent 3D pixel, a semi-transparent OBJ) takes the next layer that
+ * covers it, or the backdrop. windows: some window is on (enableLine says
+ * which layers and effects each pixel shows); without, all of them. */
+static inline __attribute__((always_inline)) void BlendLineT(const BlendLineState *b, u16 *row,
+                                                             const u8 *enableLine, const u8 *layer1,
+                                                             int windows)
+{
+    const ObjLine *objLine = b->objLine;
+    const int nlist = b->nlist;
+    const u32 special = b->special;
+    const u32 bldcnt = b->bldcnt;
+    const u32 seconds = (bldcnt >> 8) & 0x3F;   /* the second targets, by layer */
+    /* The first targets of alpha blending (when the windows let them). */
+    const u32 firsts = b->effect == 1 ? bldcnt & 0x3F : 0;
+    const u16 backdrop = b->backdrop;
+    const int effect = b->effect;
+    const u32 eva = (u32)b->eva, evb = (u32)b->evb;
+    const int evy = b->evy;
+    const BOOL in16 = eva + evb <= 16;   /* alpha blending can't go over 31 */
+    const BOOL has3d = b->kind[0] == BG_3D;
+    const u8 *alpha3dLine = *b->alpha3d;
+    /* The line's layers, copied where the compiler can keep them: the
+     * pixels written don't change them (as far as it can tell). */
+    const u16 *px[8];
+    const u8 *prioOf[8];
+    int x0[8], x1[8];
+    u8 layerOf[8], prio[8], entryOf[8];
+    int x, k;
+
+    for (k = 0; k < nlist; k++) {
+        px[k] = b->list[k].px;
+        prioOf[k] = b->list[k].prioOf;
+        x0[k] = b->list[k].x0;
+        x1[k] = b->list[k].x1;
+        layerOf[k] = b->list[k].layer;
+        prio[k] = b->list[k].p;
+    }
+    memcpy(entryOf, b->entryOf, sizeof(entryOf));
+    for (x = 0; x < W; x++) {
+        u32 c = row[x];
+        u32 enable = windows ? enableLine[x] : 0x3F;
+        int top = 5, second = 5;          /* 5: the backdrop */
+        u16 topColor = backdrop, secondColor = backdrop;
+        BOOL alpha3d = FALSE, objAlpha = FALSE;
+
+        if (c & OPAQUE) {
+            top = layer1[x];
+            topColor = (u16)(c & 0x7FFF);
+            if (!((special >> top) & 1)) {
+                /* (most pixels) shown as they are */
+                row[x] = topColor;
+                continue;
+            }
+            alpha3d = top == 0 && has3d && alpha3dLine[x] < 31;
+            objAlpha = top == SLOT_OBJ && (objLine->semi[x] || objLine->alpha[x] < 16);
+            if (alpha3d || objAlpha || (((firsts >> top) & 1) && (enable & 0x20))) {
+                /* The layers behind the front one, in order. */
+                for (k = entryOf[top == SLOT_OBJ ? 4 + objLine->prio[x] : top] + 1; k < nlist; k++) {
+                    u16 lc;
+
+                    if (x < x0[k] || x >= x1[k] || (windows && !((enable >> layerOf[k]) & 1))) {
+                        continue;
+                    }
+                    if (px[k] == NULL) {
+                        px[k] = b->list[k].px =
+                            LayerLine(b->e, b->work, layerOf[k], b->kind[layerOf[k]],
+                                      b->bgcnt[layerOf[k]], b->dispcnt, b->y, b->gx3dPixels,
+                                      b->gx3dAlpha, b->alpha3d);
+                    }
+                    lc = px[k][x];
+                    if (!(lc & OPAQUE) || (prioOf[k] != NULL && prioOf[k][x] != prio[k])) {
+                        continue;
+                    }
+                    second = layerOf[k];
+                    secondColor = lc & 0x7FFF;
+                    break;
+                }
+            }
+        }
+        if (alpha3d && ((seconds >> second) & 1)) {
+            /* A partly transparent 3D pixel blends with what's below by
+             * its own alpha, whatever the effect setting. */
+            u32 a = ((u32)alpha3dLine[x] * 16 + 15) / 31;
+
+            c = BlendIn16(topColor, secondColor, a, 16 - a);
+        } else if (objAlpha && ((seconds >> second) & 1)) {
+            /* Semi-transparent and bitmap OBJs blend with what's below,
+             * whatever the effect setting. */
+            u32 a = objLine->alpha[x];
+
+            if (a < 16) {
+                c = BlendIn16(topColor, secondColor, a, 16 - a);
+            } else {
+                c = in16 ? BlendIn16(topColor, secondColor, eva, evb)
+                         : Blend(topColor, secondColor, (int)eva, (int)evb);
+            }
+        } else if ((enable & 0x20) && (bldcnt & (1u << top))) {
+            if (effect == 1 && ((seconds >> second) & 1)) {
+                c = in16 ? BlendIn16(topColor, secondColor, eva, evb)
+                         : Blend(topColor, secondColor, (int)eva, (int)evb);
+            } else if (effect == 2) {
+                c = Brighten(topColor, evy);
+            } else if (effect == 3) {
+                c = Darken(topColor, evy);
+            } else {
+                c = topColor;
+            }
+        } else {
+            c = topColor;
+        }
+        row[x] = (u16)c;
+    }
+}
+
+static void BlendLine(const BlendLineState *b, u16 *row, const u8 *enableLine, const u8 *layer1,
+                      BOOL windows)
+{
+    if (windows) {
+        BlendLineT(b, row, enableLine, layer1, 1);
+    } else {
+        BlendLineT(b, row, enableLine, layer1, 0);
+    }
+}
+
 /* BG0 acquires the newest finished image on both platforms. PC fills it
  * with the Stage 1 software rasterizer, 3DS with the PICA off-screen worker.
  * A held image is never overwritten by its producer during DrawEngine. */
@@ -992,6 +1152,7 @@ static void DrawEngine(Engine *e, u16 *out)
     BOOL blend2;   /* some pixels may blend two layers */
     u32 special;   /* (blend2) the layers whose pixels may not just show as they are */
     int flags;     /* how layers go into the line, when only the front one matters */
+    BlendLineState blendState;
     int y, x, bg, p;
 
     if (eva > 16) {
@@ -1047,6 +1208,24 @@ static void DrawEngine(Engine *e, u16 *out)
     special = (effect != 0 ? (bldcnt & 0x1Fu) : 0) | (gx3dTranslucent ? 0x01u : 0) |
               (objFrame->blends ? 0x10u : 0);
     flags = (anyWindow ? T_WINDOW : 0) | (effect >= 2 ? T_LAYER : 0);
+    blendState.e = e;
+    blendState.work = work;
+    blendState.kind = kind;
+    blendState.bgcnt = bgcnt;
+    blendState.dispcnt = dispcnt;
+    blendState.gx3dPixels = gx3dPixels;
+    blendState.gx3dAlpha = gx3dAlpha;
+    blendState.alpha3d = &alpha3d;
+    blendState.list = list;
+    blendState.entryOf = entryOf;
+    blendState.objLine = objLine;
+    blendState.special = special;
+    blendState.bldcnt = bldcnt;
+    blendState.backdrop = backdrop;
+    blendState.effect = effect;
+    blendState.eva = eva;
+    blendState.evb = evb;
+    blendState.evy = evy;
 
     for (y = 0; y < H; y++) {
         u16 *row = out + y * W;
@@ -1180,78 +1359,10 @@ static void DrawEngine(Engine *e, u16 *out)
             continue;
         }
 
-        /* Each pixel has its front layer. One that blends with what's
-         * behind it (a first target of alpha blending, a partly
-         * transparent 3D pixel, a semi-transparent OBJ) takes the next
-         * layer that covers it, or the backdrop. */
-        for (x = 0; x < W; x++) {
-            u16 c = row[x];
-            u8 enable = enableLine[x];
-            int top = 5, second = 5;          /* 5: the backdrop */
-            u16 topColor = backdrop, secondColor = backdrop;
-
-            if (c & OPAQUE) {
-                top = layer1[x];
-                topColor = c & 0x7FFF;
-                if (!((special >> top) & 1)) {
-                    /* (most pixels) shown as they are */
-                    row[x] = topColor;
-                    continue;
-                }
-                if ((top == 0 && kind[0] == BG_3D && alpha3d[x] < 31) ||
-                    (top == SLOT_OBJ && (objLine->semi[x] || objLine->alpha[x] < 16)) ||
-                    (effect == 1 && (enable & 0x20) && (bldcnt & (1 << top)))) {
-                    /* The layers behind the front one, in order. */
-                    int k = entryOf[top == SLOT_OBJ ? 4 + objLine->prio[x] : top];
-
-                    for (k++; k < nlist; k++) {
-                        LineLayer *l = &list[k];
-                        u16 lc;
-
-                        if (x < l->x0 || x >= l->x1 || !(enable & (1 << l->layer))) {
-                            continue;
-                        }
-                        if (l->px == NULL) {
-                            l->px = LayerLine(e, work, l->layer, kind[l->layer], bgcnt[l->layer],
-                                              dispcnt, y, gx3dPixels, gx3dAlpha, &alpha3d);
-                        }
-                        lc = l->px[x];
-                        if (!(lc & OPAQUE) || (l->prioOf != NULL && l->prioOf[x] != l->p)) {
-                            continue;
-                        }
-                        second = l->layer;
-                        secondColor = lc & 0x7FFF;
-                        break;
-                    }
-                }
-            }
-            c = topColor;
-            if (top == 0 && kind[0] == BG_3D && alpha3d[x] < 31 &&
-                (bldcnt & (0x100 << second))) {
-                /* A partly transparent 3D pixel blends with what's below
-                 * by its own alpha, whatever the effect setting. */
-                int a = (alpha3d[x] * 16 + 15) / 31;
-                c = Blend(topColor, secondColor, a, 16 - a);
-            } else if (top == SLOT_OBJ && (objLine->semi[x] || objLine->alpha[x] < 16) &&
-                (bldcnt & (0x100 << second))) {
-                /* Semi-transparent and bitmap OBJs blend with what's below,
-                 * whatever the effect setting. */
-                if (objLine->alpha[x] < 16) {
-                    c = Blend(topColor, secondColor, objLine->alpha[x], 16 - objLine->alpha[x]);
-                } else {
-                    c = Blend(topColor, secondColor, eva, evb);
-                }
-            } else if ((enable & 0x20) && (bldcnt & (1 << top))) {
-                if (effect == 1 && (bldcnt & (0x100 << second))) {
-                    c = Blend(topColor, secondColor, eva, evb);
-                } else if (effect == 2) {
-                    c = Brighten(topColor, evy);
-                } else if (effect == 3) {
-                    c = Darken(topColor, evy);
-                }
-            }
-            row[x] = c;
-        }
+        /* Each pixel has its front layer; some blend with the one behind. */
+        blendState.y = y;
+        blendState.nlist = nlist;
+        BlendLine(&blendState, row, enableLine, layer1, anyWindow);
     }
     /* Release only after every scanline has been composited. */
     if(gx3dPixels)NitroPort_Gx3dReleaseImage(gx3dPixels);
