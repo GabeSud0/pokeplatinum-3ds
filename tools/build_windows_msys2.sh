@@ -33,8 +33,8 @@ SD_DIR="$WIN_HOME/pokeplatinum-sd"
 export DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}"
 export DEVKITARM="${DEVKITARM:-$DEVKITPRO/devkitARM}"
 
-step "Installing git, python, a C compiler and patch"
-pacman -S --needed --noconfirm git python gcc make patch
+step "Installing git, python, a C compiler, patch and iconv"
+pacman -S --needed --noconfirm git python gcc make patch libiconv-devel
 
 step "Making sure the 3DS tools are installed"
 pacman -S --needed --noconfirm 3ds-dev
