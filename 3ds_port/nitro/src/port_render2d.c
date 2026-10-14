@@ -607,6 +607,21 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int t
     return n;
 }
 
+/* A place in a hand-drawn picture (size pixels across) where the BG's map
+ * wraps every period pixels: a place past the picture's edge is the same
+ * place of the map a period on, if that's in the picture. -1 if none. */
+static inline int ArtWrap(int a, int size, int period)
+{
+    if (a >= 0 && a < size) {
+        return a;
+    }
+    a %= period;
+    if (a < 0) {
+        a += period;
+    }
+    return a < size ? a : -1;
+}
+
 /* A text BG's line, a tile (or the part of one on screen) at a time. */
 static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, int bg, u16 bgcnt, u32 dispcnt,
                                                               int y, Target *t, int flags)
@@ -656,15 +671,16 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
         continue;
     }
     if (segs[seg].fixed == SEG_ART) {
-        /* the hand-drawn picture, moved by the scroll since it was made */
+        /* the hand-drawn picture, moved by the scroll since it was made;
+         * past its edge, round the map as the BG itself goes (a scrolling
+         * strip goes on) */
         const u16 *art = e->art[bg];
-        int ay = y + e->artDy[bg];
+        int ay = ArtWrap(y + e->artDy[bg], H, mapH);
 
         for (; x < xe; x++) {
-            int ax = x + e->artDx[bg];
+            int ax = ArtWrap(x + e->artDx[bg], NITRO_WIDE_ART_W, mapW);
 
-            PUT(x, (ay >= 0 && ay < H && ax >= 0 && ax < NITRO_WIDE_ART_W) ? art[ay * NITRO_WIDE_ART_W + ax] : 0,
-                flags);
+            PUT(x, (ay >= 0 && ax >= 0) ? art[ay * NITRO_WIDE_ART_W + ax] : 0, flags);
         }
         continue;
     }
@@ -1285,87 +1301,110 @@ static inline int ObjGroupOf(const Obj *obj)
     return (obj->prio << 5) | (obj->bpp8 ? 16 : obj->pal);
 }
 
-/* An OBJ's own fingerprint: its size and flips, its pixels, their colours
- * (not where it is, nor where its tiles are in VRAM). */
-static u64 ObjHash(const Engine *e, const Obj *obj, u32 dispcnt)
+/* A fingerprint of an OBJ's first tile (its pixels): which of a group's
+ * OBJs its position is taken from. */
+static u64 ObjFirstTile(const Engine *e, const Obj *obj, u32 dispcnt)
 {
-    u64 h = KeyAdd(KEY_START, (u32)obj->w | ((u32)obj->h << 8) | ((u32)obj->bpp8 << 16) |
-                                  ((u32)obj->affine << 17) | ((u32)obj->hflip << 18) | ((u32)obj->vflip << 19));
-    int tx, ty;
-    u32 i;
+    u32 addr = ObjCharAddr(obj, dispcnt, 0, 0) & e->objMask & ~3u, k;
+    u64 h = KEY_START;
 
-    for (ty = 0; ty < obj->h; ty++) {
-        for (tx = 0; tx < obj->w; tx += 8) {
-            u32 addr = ObjCharAddr(obj, dispcnt, tx, ty) & e->objMask & ~3u;
-
-            h = (h ^ Rd32(e->objVram, addr)) * 0x100000001b3ull;
-            if (obj->bpp8) {
-                h = (h ^ Rd32(e->objVram, (addr + 4) & e->objMask)) * 0x100000001b3ull;
-            }
-        }
-    }
-    if (!obj->bpp8) {
-        for (i = 0; i < 16; i++) {
-            h = (h ^ PlttColor(e->objPltt, ((u32)obj->pal << 4) | i)) * 0x100000001b3ull;
-        }
-    } else {
-        const u8 *pltt = (e->objExt != NULL && (dispcnt & 0x80000000)) ? e->objExt + ((u32)obj->pal << 9)
-                                                                       : e->objPltt;
-
-        for (i = 0; i < 256; i++) {
-            h = (h ^ PlttColor(pltt, i)) * 0x100000001b3ull;
-        }
+    for (k = 0; k < (obj->bpp8 ? 64u : 32u); k += 4) {
+        h = (h ^ Rd32(e->objVram, (addr + k) & e->objMask)) * 0x100000001b3ull;
     }
     return h;
 }
 
-/* The OBJ groups shown (all of OAM's, on screen or not): each one's key (its
- * OBJs' fingerprints summed: the same OBJs make the same key in any order,
- * anywhere) and where it is: the position (OAM's x 0-511, y 0-255) of its
- * OBJ with the smallest fingerprint, the first of those. */
+/* The OBJ groups shown (all of OAM's, on screen or not): each one's key and
+ * where it is. The key is a fingerprint of the tiles its OBJs use (each
+ * once, in VRAM's order: their pixels, not where they are) and its
+ * palette: so not of how many OBJs show them, nor their shapes or places
+ * (a strip of sprites scrolling round, its sprites cut differently as they
+ * go, keeps its key). Where it is: the position (OAM's x 0-511, y 0-255)
+ * of the OBJ whose first tile has the smallest fingerprint, the first of
+ * those. */
 static int ObjGroups(const Engine *e, u32 dispcnt, NitroObjGroup *out, int max)
 {
     struct {
-        u64 sum, anchor;
+        u64 anchor;
         u16 count, x, y;
     } g[128];
-    int i, n = 0;
+    s8 groupOf[128];
+    u32 used[0x40000 / 32 / 32];   /* the 32-byte tile units used, of OBJ VRAM */
+    int i, k, n = 0;
 
     memset(g, 0, sizeof(g));
     for (i = 0; i < 128; i++) {
         Obj obj;
         u64 h;
-        int k;
 
+        groupOf[i] = -1;
         if (!ReadObj(e, i, &obj) || obj.mode >= 2) {
             continue;
         }
-        h = ObjHash(e, &obj, dispcnt);
         k = ObjGroupOf(&obj);
+        groupOf[i] = (s8)k;
+        h = ObjFirstTile(e, &obj, dispcnt);
         if (g[k].count == 0 || h < g[k].anchor) {
             g[k].anchor = h;
             g[k].x = Rd16(e->oam, (u32)i * 8 + 2) & 0x1FF;
             g[k].y = Rd16(e->oam, (u32)i * 8) & 0xFF;
         }
-        g[k].sum += h;
         g[k].count++;
     }
-    for (i = 0; i < 128 && n < max; i++) {
+    for (k = 0; k < 128 && n < max; k++) {
         u64 key;
+        u32 units = (e->objMask + 1) / 32, u, c;
 
-        if (g[i].count == 0) {
+        if (g[k].count == 0) {
             continue;
         }
-        key = KeyAdd(KEY_START, 0x4F420000u | (u32)(i >> 5));   /* "OB", the priority */
-        key = KeyAdd(key, (u32)g[i].sum);
-        key = KeyAdd(key, (u32)(g[i].sum >> 32));
-        key = KeyAdd(key, g[i].count);
+        /* the tiles its OBJs use */
+        memset(used, 0, sizeof(used));
+        for (i = 0; i < 128; i++) {
+            Obj obj;
+            int tx, ty;
+
+            if (groupOf[i] != k || !ReadObj(e, i, &obj)) {
+                continue;
+            }
+            for (ty = 0; ty < obj.h; ty += 8) {
+                for (tx = 0; tx < obj.w; tx += 8) {
+                    u = (ObjCharAddr(&obj, dispcnt, tx, ty) & e->objMask) >> 5;
+                    used[u >> 5] |= 1u << (u & 31);
+                    if (obj.bpp8 && u + 1 < units) {
+                        used[(u + 1) >> 5] |= 1u << ((u + 1) & 31);
+                    }
+                }
+            }
+        }
+        key = KeyAdd(KEY_START, 0x4F420000u | (u32)(k >> 5));   /* "OB", the priority */
+        for (u = 0; u < units; u++) {
+            if (used[u >> 5] == 0) {
+                u += 31;
+                continue;
+            }
+            if (used[u >> 5] & (1u << (u & 31))) {
+                for (c = 0; c < 32; c += 4) {
+                    key = (key ^ Rd32(e->objVram, u * 32 + c)) * 0x100000001b3ull;
+                }
+            }
+        }
+        /* its colours */
+        if (!(k & 16)) {
+            for (c = 0; c < 16; c++) {
+                key = (key ^ PlttColor(e->objPltt, ((u32)(k & 15) << 4) | c)) * 0x100000001b3ull;
+            }
+        } else {
+            for (c = 0; c < 256; c++) {
+                key = (key ^ PlttColor(e->objPltt, c)) * 0x100000001b3ull;
+            }
+        }
         out[n].key = key ? key : 1;
-        out[n].group = i;
-        out[n].prio = i >> 5;
-        out[n].x = g[i].x;
-        out[n].y = g[i].y;
-        out[n].count = g[i].count;
+        out[n].group = k;
+        out[n].prio = k >> 5;
+        out[n].x = g[k].x;
+        out[n].y = g[k].y;
+        out[n].count = g[k].count;
         n++;
     }
     return n;
@@ -1534,18 +1573,20 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
         /* a group's picture where no OBJ is (in the bands beside the DS's
          * screen, or all over) */
         const ObjArt *a = &f->art[k];
-        int ay = y - a->dy, x;
+        int ay = ArtWrap(y - a->dy, H, 256), x;
         const u16 *row;
 
-        if (ay < 0 || ay >= H) {
+        if (ay < 0) {
             continue;
         }
         row = a->art + ay * NITRO_WIDE_ART_W;
         for (x = 0; x < e->width; x++) {
-            int ax = x - a->dx;
+            /* (past the picture's edge: a screen's width on, as a strip of
+             * sprites that scrolls round goes on) */
+            int ax = ArtWrap(x - a->dx, NITRO_WIDE_ART_W, 256);
             u16 c;
 
-            if (ax < 0 || ax >= NITRO_WIDE_ART_W || (out->color[x] & OPAQUE) ||
+            if (ax < 0 || (out->color[x] & OPAQUE) ||
                 (!a->full && x >= e->origin && x < e->origin + W)) {
                 continue;
             }
