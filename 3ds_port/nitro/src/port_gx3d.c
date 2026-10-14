@@ -43,6 +43,7 @@ typedef struct GeoState {
     Matrix xf;
     int64_t xfTrans[4];   /* its row 3, << 12: what (0, 0, 0, 1.0) adds */
     int clipDirty;
+    int32_t wideNum, wideDen;   /* the view's width scale (NitroPort_Gx3dSetWideView) */
     Matrix pjStack, texStack;
     Matrix posStack[31], vecStack[31];
     int mode, pvLevel, pjLevel, texLevel, stackError;
@@ -441,14 +442,28 @@ static inline unsigned outcode(const int32_t clip[4])
  * changed; its box tests are (they then pass what the wider view shows).
  * Only with the DS's full-width viewport: in a narrower one, the view
  * is the game's. */
-static int32_t sWideNum=1,sWideDen=1;
 static void set_viewport(GeoState *g,uint32_t p0)
 {
     g->viewport[0]=(int)(p0&255);
     g->viewport[1]=(int)((p0>>8)&255);
     g->viewport[2]=(int)((p0>>16)&255);
     g->viewport[3]=(int)((p0>>24)&255);
-    if(sWideNum!=sWideDen)g->clipDirty=1;   /* (ensure_clip: the view's width) */
+    if(g->wideNum!=g->wideDen)g->clipDirty=1;   /* (ensure_clip: the view's width) */
+}
+static int sWideWidth=256;
+/* Each SWAP_BUFFERS's time (NitroPort_Gx3dStamp), by its number, from the
+ * game's thread to the geometry thread. */
+static uint32_t sSwapStamps[16];
+/* The platform's clock for scenes (the 3DS: V-blanks); none by default. */
+__attribute__((weak,noinline)) uint32_t NitroPort_Gx3dStamp(void)
+{
+    return 0;
+}
+static void set_wide_view(GeoState *g,int screenWidth)
+{
+    g->wideNum=256;g->wideDen=screenWidth;
+    if(screenWidth==256){g->wideNum=1;g->wideDen=1;}
+    g->clipDirty=1;
 }
 static void ensure_clip(GeoState *g)
 {
@@ -457,11 +472,11 @@ static void ensure_clip(GeoState *g)
     g->clipDirty=0;
     multiply(&g->clip,&g->pos,&g->proj);
     g->xf=g->clip;
-    if(sWideNum!=sWideDen && ((g->viewport[2]-g->viewport[0]+1)&0x1FF)==256){
+    if(g->wideNum!=g->wideDen && ((g->viewport[2]-g->viewport[0]+1)&0x1FF)==256){
         for(j=0;j<4;j++){
-            int64_t v=(int64_t)g->clip.a[j*4]*sWideNum;
+            int64_t v=(int64_t)g->clip.a[j*4]*g->wideNum;
             /* rounded to nearest, towards zero at a half */
-            v=(v>=0?v+sWideDen/2:v-sWideDen/2)/sWideDen;
+            v=(v>=0?v+g->wideDen/2:v-g->wideDen/2)/g->wideDen;
             g->xf.a[j*4]=saturation(v);
         }
     }
@@ -928,6 +943,7 @@ static void test_command(GeoState *g,unsigned op,const uint32_t *p)
 /* Not a DS command: GXSTAT's stack overflow cleared
  * (NitroPort_Gx3dClearStackError), in the command stream's order. */
 #define OP_CLEAR_STACK_ERROR 0xF0u
+#define OP_WIDE_VIEW 0xF2u   /* one parameter: the screen width (NitroPort_Gx3dSetWideView) */
 
 /* The whole engine (s): one command and its parameters. */
 static inline __attribute__((always_inline)) void execute(unsigned op,const uint32_t *p)
@@ -1006,6 +1022,10 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         /* All vertex and attribute writes precede the release publication. */
         scene->swap_param=p[0];
         scene->serial=sSerial+1;
+        scene->screen_width=(uint32_t)(s.wideNum==s.wideDen?256:s.wideDen);
+        /* When the game ended it (with the thread: noted on the game's
+         * thread as the SWAP went in; swap_queued). */
+        scene->stamp=sThreaded?sSwapStamps[(sSwapsDone+1u)&15u]:NitroPort_Gx3dStamp();
         /* Which SWAP_BUFFERS it is (with the geometry thread, counting
          * them as the game's thread does: NitroPort_Gx3dEarlierSceneUnread). */
         NitroPort_MailboxTag(&sMailbox,sSwapsDone+1u);
@@ -1030,6 +1050,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         break;
     case 0x70:case 0x71:case 0x72:test_command(&s,op,p);break;
     case OP_CLEAR_STACK_ERROR:s.stackError=0;s.pjLevel=0;break;
+    case OP_WIDE_VIEW:set_wide_view(&s,(int)p[0]);break;
     default:break;
     }
     (void)i;
@@ -1137,6 +1158,7 @@ static void enqueue_packets(const uint32_t *words,uint32_t count,uint32_t flags)
 static void swap_queued(void)
 {
     uint32_t behind;
+    sSwapStamps[(sSwapsQueued+1u)&15u]=NitroPort_Gx3dStamp();
     sSwapsQueued++;
     publish();
     behind=sSwapsQueued-__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE);
@@ -1717,12 +1739,18 @@ static NitroGx3dRecorder sRecorder;
 void NitroPort_Gx3dSetRecorder(NitroGx3dRecorder recorder){sRecorder=recorder;}
 void NitroPort_Gx3dSetWideView(int screenWidth)
 {
+    uint32_t p=(uint32_t)screenWidth;
+    initialize();
     if(screenWidth<=0||screenWidth>1024)screenWidth=256;
-    sWideNum=256;sWideDen=screenWidth;
-    if(screenWidth==256)sWideNum=sWideDen=1;
-    s.clipDirty=1;
-    if(sResults)sResults->clipDirty=1;
-    sShadow.clipDirty=1;
+    p=(uint32_t)screenWidth;
+    sWideWidth=screenWidth;
+    if(sResults->wideDen==(screenWidth==256?1:screenWidth) && sResults->wideNum==(screenWidth==256?1:256))
+        return;   /* (as it is) */
+    /* The shadow now (the game's box tests); the thread at this point of
+     * its stream. */
+    set_wide_view(sResults,screenWidth);
+    if(sThreaded)enqueue(OP_WIDE_VIEW,&p,1,0);
+    else if(sResults!=&s)set_wide_view(&s,screenWidth);
 }
 #define RECORD(type,words,count) do{if(sRecorder)sRecorder((type),(words),(count));}while(0)
 /* A decoded command: done here, or handed to the geometry thread. */
@@ -1752,6 +1780,7 @@ void NitroPort_Gx3dReset(void)
     NitroPort_MailboxInit(&sMailbox);
     sBuilding=0;sDisplayed=1;sSerial=0;
     identity(&s.proj);identity(&s.pos);identity(&s.vec);identity(&s.tex);
+    set_wide_view(&s,sWideWidth);   /* (kept across resets) */
     s.viewport[0]=0;s.viewport[1]=0;s.viewport[2]=255;s.viewport[3]=191;
     s.rgb=0x7fff;s.diffuse=0x7fff;s.attr=(3u<<6)|(31u<<16);
     s.pendingAttr=s.attr;

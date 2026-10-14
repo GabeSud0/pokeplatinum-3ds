@@ -65,9 +65,9 @@ Giratina, the overworld, battles).
 4. **Run it** from the Homebrew Launcher, or open the `.3dsx` in Azahar.
 
 What you'll see: on a New 3DS, the game at the 3DS's size: both screens
-filled, the 3D over the whole upper screen at the screen's resolution, with
-depth from the 3D slider, and the 2D upscaled with a pixel-art filter (the
-remaster display, [docs/REMASTER.md](../../docs/REMASTER.md), with its
+filled, the upper screen's 2D and 3D laid out for its full width, the 3D at
+the screen's resolution with fog, outlines and depth from the 3D slider,
+and the 2D's pixels as they are, evenly sized (the remaster display, [docs/REMASTER.md](../../docs/REMASTER.md), with its
 settings in `sdmc:/3ds/pokeplatinum/remaster.txt`); on an Old 3DS, the
 DS's two screens in the middle of the 3DS's. **L + R + SELECT** switches to
 the log and back: the program's status above, the log below; it's also

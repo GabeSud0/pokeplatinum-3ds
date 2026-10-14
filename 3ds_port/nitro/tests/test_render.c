@@ -11,6 +11,7 @@
 #include <nitro.h>
 #include <nitro_port.h>
 #include <nitro_port_gx3d.h>
+#include <nitro_port_wide.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -566,6 +567,14 @@ static void RandomGraphics(u8 *p, u32 size)
     }
 }
 
+static u32 Rd32Test(u32 off)
+{
+    u32 v;
+
+    memcpy(&v, NitroPort_IoReg + off, 4);
+    return v;
+}
+
 static void Put16(u32 off, u16 v)
 {
     NitroPort_IoReg[off] = (u8)v;
@@ -895,6 +904,96 @@ static void test_split_layers(void)
     NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
 }
 
+/* The wider canvas (NitroRender2DSplit's width and origin): the DS's
+ * picture in the middle, the same as drawn at the DS's width, with only the
+ * backdrop or OBJs beyond it; and a window of the game's moved to the edge
+ * nearer it. */
+static void test_wide_canvas(void)
+{
+    static u16 wide[320 * 192], over[320 * 192];
+    static u8 overAlpha[320 * 192];
+    NitroRender2DSplit split;
+    int n, differ = 0;
+
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.width = 320;
+    split.origin = 32;
+    memset(split.clip, 1, sizeof(split.clip));
+    for (n = 0; n < 200 && differ < 5; n++) {
+        int y, x;
+
+        RandomDisplay();
+        /* engine A, BG0 2D (not the 3D) */
+        Put32(0, (Rd32Test(0) & ~0x8u));
+        Put16(0x6C, 0);
+        NitroPort_Render2D(0, sTop);
+        NitroPort_Render2DSplit(0, wide, &split);
+        for (y = 0; y < 192; y++) {
+            for (x = 0; x < 256; x++) {
+                if (wide[y * 320 + 32 + x] != sTop[y * 256 + x]) {
+                    if (differ < 5) {
+                        printf("wide canvas %d: (%d,%d) %#06x, at the DS's width %#06x\n", n, x, y,
+                               wide[y * 320 + 32 + x], sTop[y * 256 + x]);
+                    }
+                    differ++;
+                    y = 192;
+                    break;
+                }
+            }
+        }
+    }
+    CHECK(differ == 0);
+
+    /* A window of the game's on BG1, at the left of the screen: tiles 0-7 of
+     * rows 0-3 (the DS's x 0-63, y 0-31). On the wider canvas it goes to
+     * the left edge (x 0-63), and where it was (32-95) shows what's behind
+     * BG1 (the backdrop). */
+    {
+        static u8 tiles[64];
+        static u16 map[32 * 32];
+        static u16 pltt[16] = { GREY, RED };
+        static struct { void *config; u8 layer, left, top, width, height; } window = { NULL, 1, 0, 0, 8, 4 };
+        int i;
+
+        Reset();
+        MakeTile4(tiles + 32, 1);
+        for (i = 0; i < 32 * 32; i++) {
+            map[i] = ((i % 32) < 8 && (i / 32) < 4) ? 1 : 0;   /* the window's tiles red */
+        }
+        G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                         GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+        GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+        GX_LoadBG1Scr(map, 0, sizeof(map));
+        GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+        GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+        NitroPort_WindowAdded(&window, 1, 0, 0, 8, 4);
+        split.anchorWindows = 1;
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[5 * 320 + 5] == RED);          /* moved to the left edge */
+        CHECK(wide[5 * 320 + 63] == RED);
+        CHECK(wide[5 * 320 + 64] == GREY);        /* where it was: the backdrop */
+        CHECK(wide[5 * 320 + 95] == GREY);
+        CHECK(wide[40 * 320 + 5] == GREY);        /* below the window: the band */
+        /* A window across the middle stays. */
+        window.left = 2;
+        window.width = 28;
+        NitroPort_WindowRemoved(&window);
+        NitroPort_WindowAdded(&window, 1, 2, 0, 28, 4);
+        for (i = 0; i < 32 * 32; i++) {
+            map[i] = ((i % 32) >= 2 && (i / 32) < 4) ? 1 : 0;
+        }
+        GX_LoadBG1Scr(map, 0, sizeof(map));
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[5 * 320 + 32 + 20] == RED);
+        CHECK(wide[5 * 320 + 32 + 250] == RED);
+        CHECK(wide[5 * 320 + 32 + 12] == GREY);
+        NitroPort_WindowRemoved(&window);
+        split.anchorWindows = 0;
+    }
+}
+
 /* The two engines drawn at the same time on two threads (as the 3DS
  * program does on two CPU cores), many times over: the same pixels. */
 static u16 sThreadOut[2][256 * 192];
@@ -1053,6 +1152,7 @@ int main(int argc, char **argv)
     test_obj_8bpp_ext();
     test_matches_reference();
     test_split_layers();
+    test_wide_canvas();
     test_engines_on_two_threads();
 
     printf("2D renderer: %d checks, %d failed\n", sChecks, sFailures);

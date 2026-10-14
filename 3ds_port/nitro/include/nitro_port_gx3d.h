@@ -46,6 +46,12 @@ typedef struct NitroGx3dScene {
     /* W-buffer/Z-buffer mode belongs to the completed frame (SWAP_BUFFERS),
      * not to polygons submitted before the swap command. */
     uint32_t swap_param;
+    /* The view's width this scene was made for (NitroPort_Gx3dSetWideView):
+     * 256, or the screen's width when the view is wider. */
+    uint32_t screen_width;
+    /* When the game ended it: NitroPort_Gx3dStamp() at its SWAP_BUFFERS
+     * (the platform's clock; the 3DS's counts V-blanks). */
+    uint32_t stamp;
     NitroGx3dTriangle triangles[NITRO_GX3D_MAX_TRIANGLES];
 } NitroGx3dScene;
 
@@ -74,6 +80,9 @@ void NitroPort_Gx3dReleaseScene(const NitroGx3dScene *scene);
  * consumer that keeps the acquired scene (to draw it again) can tell when
  * to release it and acquire the next. */
 int NitroPort_Gx3dNewerScene(uint32_t serial);
+/* The clock scenes are stamped with (NitroGx3dScene.stamp): weak, 0 unless
+ * the platform has one. Called on the game's thread. */
+uint32_t NitroPort_Gx3dStamp(void);
 
 /* Every 2D BG0 drawer uses this RGB555|coverage interface. The PC fills it
  * via the software rasterizer; the 3DS GPU worker publishes its latest
@@ -202,7 +211,9 @@ void NitroPort_Gx3dSetRecorder(NitroGx3dRecorder recorder);
  * picture shows more of the world at the sides, and the game's own box
  * tests pass what that shows. What was on screen stays where it was: the
  * display stretches the picture back by the same amount. 256 (the DS's
- * width) turns it off. Not in a viewport narrower than the screen. */
+ * width) turns it off. Not in a viewport narrower than the screen. Takes
+ * effect from the next command (with the geometry thread, at that point of
+ * its stream); each scene says what it was made for (screen_width). */
 void NitroPort_Gx3dSetWideView(int screenWidth);
 
 /* GXSTAT's bit 15 is write-one-to-clear on the DS, and resetting it

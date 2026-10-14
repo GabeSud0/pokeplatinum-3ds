@@ -67,6 +67,7 @@
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_vertex.h>
 #include <nitro_port_gx3d_texture.h>
+#include <nitro_port_wide.h>
 
 #include "platinum.h"
 
@@ -330,6 +331,109 @@ static int WritePng(const char *path, const uint16_t *pixels, int w, int h)
     return 0;
 }
 
+/* The 3DS remaster's picture of the screens, put together on the CPU the
+ * way the 3DS's GPU does it (port_compose_pica.c), at the DS's scale: the
+ * upper screen 320 pixels wide with --wide (the 3DS's 400 at 1.25), the
+ * lower one 256, centred under it. For checking layouts on the PC: the 3D
+ * comes from the reference rasterizer (with --wide, its 256 pixels show
+ * the wider view and are stretched to the 320), its translucency is only
+ * approximate, and there's no stereo or upscaling. */
+static int RemasterShot(const char *path)
+{
+    static uint16_t under[320 * 192], over[320 * 192], out[320 * 384];
+    static uint8_t overAlpha[320 * 192], alpha3d[256 * 192];
+    static uint16_t image3d[256 * 192];
+    int aOnTop = NitroPort_EngineAOnTop() ? 1 : 0;
+    int screen;
+
+    memset(out, 0, sizeof(out));
+    for (screen = 0; screen < 2; screen++) {
+        int engine = (screen == 0) == aOnTop ? 0 : 1;
+        NitroRender2DSplit split;
+        int width, x, y, left;
+
+        memset(&split, 0, sizeof(split));
+        split.over = over;
+        split.overAlpha = overAlpha;
+        if (screen == 0) {
+            NitroPort_WideLayout(engine, &split);
+        }
+        NitroPort_Render2DSplit(engine, under, &split);
+        width = split.width > 256 ? split.width : 256;
+        left = (320 - width) / 2;
+        if (split.has3d) {
+            /* the newest 3D image, as the 2D renderer would take it */
+            const uint16_t *img = NitroPort_Gx3dAcquireImage();
+            const uint8_t *alpha = img != NULL ? NitroPort_Gx3dImageAlpha(img) : NULL;
+
+            memset(image3d, 0, sizeof(image3d));
+            if (img != NULL) {
+                memcpy(image3d, img, sizeof(image3d));
+                if (alpha != NULL) {
+                    memcpy(alpha3d, alpha, sizeof(alpha3d));
+                } else {
+                    memset(alpha3d, 31, sizeof(alpha3d));
+                }
+                NitroPort_Gx3dReleaseImage(img);
+            }
+        }
+        for (y = 0; y < 192; y++) {
+            for (x = 0; x < width; x++) {
+                uint16_t c = under[y * width + x];
+
+                if (split.has3d) {
+                    /* where the 3D's x is: the DS's 256 at origin, or (wide)
+                     * the whole canvas */
+                    int ix = NitroPort_WideScreenExtra() && screen == 0 && width > 256
+                                 ? x * 256 / width
+                                 : x - split.origin - (split.scroll3d >= 256 ? split.scroll3d - 512 : split.scroll3d);
+
+                    if (ix >= 0 && ix < 256 && (image3d[y * 256 + ix] & 0x8000)) {
+                        uint16_t p = image3d[y * 256 + ix] & 0x7FFF;
+                        int a = alpha3d[y * 256 + ix], k;
+                        uint16_t m = 0;
+
+                        for (k = 0; k < 15; k += 5) {
+                            int pc = (p >> k) & 31, uc = (c >> k) & 31;
+
+                            m |= (uint16_t)(((pc * a + uc * (31 - a)) / 31) << k);
+                        }
+                        c = m;
+                    }
+                }
+                if (split.has3d && (over[y * width + x] & 0x8000)) {
+                    int a = overAlpha[y * width + x], k;
+                    uint16_t o = over[y * width + x] & 0x7FFF, m = 0;
+
+                    for (k = 0; k < 15; k += 5) {
+                        m |= (uint16_t)(((((o >> k) & 31) * a + ((c >> k) & 31) * (16 - a)) / 16) << k);
+                    }
+                    c = m;
+                }
+                {
+                    int mode = (split.masterBright >> 14) & 3, f = split.masterBright & 31, k;
+                    uint16_t m = 0;
+
+                    if (f > 16) {
+                        f = 16;
+                    }
+                    if (f && (mode == 1 || mode == 2)) {
+                        for (k = 0; k < 15; k += 5) {
+                            int v = (c >> k) & 31;
+
+                            v = mode == 1 ? v + (31 - v) * f / 16 : v - v * f / 16;
+                            m |= (uint16_t)(v << k);
+                        }
+                        c = m;
+                    }
+                }
+                out[(screen * 192 + y) * 320 + left + x] = c;
+            }
+        }
+    }
+    return WritePng(path, out, 320, 384);
+}
+
 /* Both screens, the upper one above the lower one. */
 static void Screenshot(void)
 {
@@ -516,6 +620,7 @@ void NitroPort_Log(const char *fmt, ...)
  *   press A+UP [N]   hold buttons for N frames (default 6) from now
  *   touch X Y [N]    touch the lower screen for N frames (default 6)
  *   shot PATH        save both screens (PNG, upper above lower)
+ *   rshot PATH       the same as the 3DS remaster lays them out (--wide)
  *   dump3d PATH      save the newest finished 3D image (PNG)
  *   ref3d PATH       draw the newest scene with the reference rasterizer
  *   gpusim PATH      draw it as the 3DS GPU path would (port_gx3d_gpusim.c)
@@ -575,6 +680,33 @@ static void ControlWait(void)
 
                 NitroPort_RenderScreens(both, both + 256 * 192);
                 if (WritePng(arg, both, 256, 384) != 0) {
+                    NitroPort_Log("[pc] control: can't write %s", arg);
+                }
+            } else if (sscanf(line, "layers %1023s", arg) == 1) {
+                /* Each layer alone (BG0-3, OBJ), both screens side by
+                 * side: 5 panels a row, engine A's row above engine B's. */
+                static uint16_t both[256 * 384], sheet[256 * 5 * 384];
+                extern unsigned char NitroPort_IoReg[];
+                int engine, layer, y;
+
+                for (engine = 0; engine < 2; engine++) {
+                    unsigned char *reg = NitroPort_IoReg + (engine ? 0x1000 : 0) + 1;
+                    unsigned char saved = *reg;
+
+                    for (layer = 0; layer < 5; layer++) {
+                        *reg = (unsigned char)((saved & ~0x1F) | (saved & (1 << layer)));
+                        NitroPort_Render2D(engine, both);
+                        for (y = 0; y < 192; y++) {
+                            memcpy(&sheet[((size_t)engine * 192 + y) * 1280 + layer * 256], &both[y * 256], 512);
+                        }
+                    }
+                    *reg = saved;
+                }
+                if (WritePng(arg, sheet, 1280, 384) != 0) {
+                    NitroPort_Log("[pc] control: can't write %s", arg);
+                }
+            } else if (sscanf(line, "rshot %1023s", arg) == 1) {
+                if (RemasterShot(arg) != 0) {
                     NitroPort_Log("[pc] control: can't write %s", arg);
                 }
             } else if (sscanf(line, "dump3d %1023s", arg) == 1) {
@@ -748,6 +880,10 @@ static void StartGeometryThread(int keepEveryScene)
 
 void NitroPort_OnFrame(void)
 {
+    /* (--wide) the wider view only while the 3D is on the upper screen */
+    if (NitroPort_WideScreenExtra()) {
+        NitroPort_Gx3dSetWideView(NitroPort_EngineAOnTop() ? 320 : 256);
+    }
     NitroPort_Gx3dFlush();
     NitroPort_SoundPumpReplies(); /* deliver ARM7 alarms on ARM9's thread */
     pace_game_for_wav();
@@ -1075,6 +1211,7 @@ int main(int argc, char **argv)
              * on the PC's 256-pixel picture the 3D comes out squeezed,
              * showing what the 3DS's 400 pixels would. */
             NitroPort_Gx3dSetWideView(320);
+            NitroPort_SetWideScreen(32);
         } else if (strcmp(argv[i], "--gx-thread") == 0) {
             sGxThread = 1;
         } else if (strcmp(argv[i], "--gx-thread-skip") == 0) {

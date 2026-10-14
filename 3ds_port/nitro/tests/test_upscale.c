@@ -134,11 +134,38 @@ static void test_scale2x(void)
     CHECK(dst32[Index(40, 1, TW)] == 1);
 }
 
+static void test_double(void)
+{
+    enum { W = 20, H = 12, TW = 64 };
+    static uint16_t src[W * H], dst[TW * 32];
+    static uint32_t src32[W * H], dst32[TW * 32];
+    int x, y, ok = 1;
+
+    for (y = 0; y < H; y++) {
+        for (x = 0; x < W; x++) {
+            src[y * W + x] = (uint16_t)Rnd();
+            src32[y * W + x] = Rnd() * 7u;
+        }
+    }
+    NitroPort_Double2xTiled16(src, W, H, dst, TW);
+    NitroPort_Double2xTiled32(src32, W, H, dst32, TW);
+    for (y = 0; y <= 2 * H; y++) {
+        for (x = 0; x <= 2 * W; x++) {
+            int sx = x / 2 < W ? x / 2 : W - 1, sy = y / 2 < H ? y / 2 : H - 1;
+
+            ok &= dst[Index(x, y, TW)] == src[sy * W + sx];
+            ok &= dst32[Index(x, y, TW)] == src32[sy * W + sx];
+        }
+    }
+    CHECK(ok);
+}
+
 int main(void)
 {
     test_tiled_index();
     test_tile();
     test_scale2x();
+    test_double();
     printf("upscaler and tiler: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;
 }

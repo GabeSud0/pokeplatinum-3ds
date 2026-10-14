@@ -2,34 +2,39 @@
  * The screens put together on the GPU (the "remaster" display path; see
  * docs/REMASTER.md). On the GPU thread, except where said.
  *
- * The DS's 256x192 screens are drawn bigger on the 3DS's (320x240 on both,
- * the upper screen's 400 pixels for the 3D in the wide view), the 3D at the
- * screen's own resolution rather than the DS's, with depth from the 3D
- * slider, and the 2D layers upscaled with a pixel-art filter (Scale2x)
- * before the GPU scales them the rest of the way.
+ * The DS's 256x192 screens are drawn 1.25 times bigger on the 3DS's: the
+ * lower screen's 320x240 exactly; the upper one's 400x240 from a picture
+ * 320 DS pixels wide (port_render2d.c's wider canvas, laid out by
+ * port_wide.c), the 3D drawn straight into the screen at its resolution,
+ * over its whole width (the geometry engine's wider view), with depth
+ * from the 3D slider.
  *
  * Each screen is a render target (240 x 400 or 240 x 320: the 3DS keeps
  * its framebuffers turned a quarter turn), drawn in this order:
- *   1. the 2D layers behind the 3D, a textured quad (the texture spans the
- *      whole screen: beyond the DS's picture, its edge colour continues);
+ *   1. the 2D layers behind the 3D (the whole picture, without 3D);
  *   2. the 3D's rear plane: the clear colour, with its alpha;
- *   3. the 3D's polygons (port_gx3d_pica.c), with edge marking;
+ *   3. the 3D's polygons (port_gx3d_pica.c), with edge marking and fog;
  *   4. a brightness effect on the 3D, when the game has one;
- *   5. the 2D layers in front of the 3D, a quad with per-pixel alpha;
+ *   5. the 2D layers in front of the 3D, with per-pixel alpha;
  *   6. the master brightness (a white or black quad).
- * A screen without a 3D layer is just 1 (the whole picture) and 6. For
- * stereoscopic 3D the upper screen is drawn twice, the 3D shifted the
+ * For stereoscopic 3D the upper screen is drawn twice, the 3D shifted the
  * opposite way for each eye; the 2D is at the screen's depth.
  *
- * The 2D layers come from the drawing threads (NitroPort_Render2DSplit on
- * the game's display state), who also upscale them into textures here
- * (NitroPort_ComposePublish; three texture buffers per engine, so one can
- * be drawn from, one be the newest, and one be written). A frame is
- * composed when something changed: new layers, a new 3D scene, the slider
- * moved, or the engines swapped screens. The frame's targets are transferred
- * to the LCD framebuffers and shown at the next V-blank; a screen isn't
- * drawn again until that V-blank has passed (the framebuffer it would draw
- * into is still on the LCD until then).
+ * The 2D: the drawing threads draw an engine's picture in two layers
+ * (behind and in front of the 3D) and publish them into textures of the
+ * screen they're on (NitroPort_ComposePublish: three sets a screen, so one
+ * can be drawn from, one be the newest and one be written). By default
+ * each pixel becomes 2x2 texels and the GPU's bilinear filter does the
+ * rest: the DS's pixels as they are, evenly sized, their borders a texel
+ * soft (remaster.txt's filter setting: sharp, nearest, smooth, scale2x).
+ *
+ * Timing. Each 3D scene and each published 2D picture carries the game's
+ * time (in V-blanks) of the display state it shows. A frame pairs the 3D
+ * with the 2D the DS would have shown it with (the DS's 3D is a frame
+ * behind its 2D), and is shown a fixed number of V-blanks after the game
+ * made it (sLag, worked out from how long the scenes take): the 3D comes
+ * at the game's own even pace (every second V-blank in the field), not
+ * whenever a scene happens to be done, and the 2D in step with it.
  */
 #ifdef __3DS__
 #include "port_pica.h"
@@ -42,97 +47,112 @@ void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 #define DS_W 256
 #define DS_H 192
+#define CANVAS_MAX 320
 #define TOP_W 400
 #define BOTTOM_W 320
 #define SCREEN_H 240
-/* The DS's picture on a 3DS screen: 1.25 times the size (320 x 240). */
+/* The DS's picture on a 3DS screen: 1.25 times the size. */
 #define SCALE 1.25f
 
-#define LAYER_BUFS 3
+#define SETS 3
 
 /* RGBA8 render targets to RGB565 framebuffers. */
 #define SCREEN_TRANSFER_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | \
      GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
      GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
 
+/* A published picture: its textures and what it is. */
+typedef struct LayerSet {
+    void *under;          /* RGB565 texels, tiled */
+    void *over;           /* RGBA8 texels, tiled (alpha multiplied in) */
+    ComposeLayers info;   /* has3d etc., as published (no picture pointers) */
+    uint32_t seq;         /* publish order (0: none, or being written) */
+    int writing, held;
+} LayerSet;
+
 typedef struct Screen {
     C3D_RenderTarget *target[2];   /* left (and right) eye */
     C3D_FrameBuf edgeFb[2];        /* their colour with the edge marking depth/stencil */
     int width;                     /* 400 or 320 */
+    LayerSet set[SETS];
+    int texW, texH;                /* the layer textures (power-of-two) */
+    int texScale;                  /* texels a DS pixel: 2 (sharp, scale2x) or 1 */
     /* What's shown: to see whether anything changed. */
-    uint32_t shownPublished, shownScene;
+    uint32_t shownSeq, shownScene;
     float shownSlider;
-    int shownEngine, shownStereo;
+    int shownStereo;
     u32 swapVBlank;                /* the V-blank count when it was last swapped */
-    int swapped;                   /* swapped at least once */
+    int swapped;
 } Screen;
-
-/* An engine's 2D layers: the pictures the drawer fills, and the textures
- * they're published into. */
-typedef struct LayerSet {
-    void *under;          /* RGBA5551 texels, tiled (or NULL: display off) */
-    void *over;           /* RGBA8 texels, tiled (engine A only) */
-    ComposeLayers info;   /* has3d etc., as published */
-} LayerSet;
-
-typedef struct Layers {
-    ComposeLayers cpu;    /* the drawer's working pictures */
-    LayerSet set[LAYER_BUFS];
-    volatile int newest;  /* -1: nothing published yet */
-    volatile int inUse;   /* being drawn from by the GPU, or -1 */
-    volatile uint32_t published;
-    LightLock lock;
-} Layers;
 
 static ComposeConfig sConfig;
 static Screen sScreens[2];        /* 0: upper, 1: lower */
 static void *sEdgeDepth;          /* 240 x 400 D24S8, shared by the screens */
-static Layers sLayers[2];         /* by engine */
-static int sTexW, sTexH, sPicW, sPicH;   /* the layer textures and the picture in them */
-static u16 sToRgba5551[32768];
+static LightLock sSetLock;
+static uint32_t sSeq;
+static ComposeLayers sWork[2];    /* the drawers' pictures, by engine */
+static uint16_t sWorkUnder[2][CANVAS_MAX * DS_H], sWorkOver[2][CANVAS_MAX * DS_H];
+static uint8_t sWorkAlpha[2][CANVAS_MAX * DS_H];
+static uint16_t sToRgb565[32768];
+static uint32_t sConverted[2][CANVAS_MAX * DS_H];
+static uint16_t sConverted16[2][CANVAS_MAX * DS_H];
 static NitroGx3dGpuVertex *sQuads;   /* this frame's quads */
 static int sQuadVertices;
 #define MAX_QUAD_VERTICES (6 * 32)
 static int sInFrame;
 static int sReady;
 static volatile u32 sVBlanks;
-static u32 sFrames;
+static u32 sFrames, sLate;
 static u64 sGpuTicks;
 static volatile u32 sPublished;
 static volatile u64 sPublishTicks;
 static uint32_t sPreparedScene;
 static int sScenePrepared;
 static float sSceneConvergence = 1.0f;
-
-/* Scratch for the drawers: the picture in texels before tiling. */
-static uint32_t sConverted[2][DS_W * DS_H];
-static uint16_t sConverted16[2][DS_W * DS_H];
-static uint16_t sUnder[2][DS_W * DS_H], sOver[DS_W * DS_H];
-static uint8_t sOverAlpha[DS_W * DS_H];
+/* V-blanks from the game making a scene to its frame showing (adapts:
+ * up when a frame is late, back down after a long while of slack). */
+static int sLag = 3, sOnTime;
 
 void NitroPort_ComposeVBlank(void)
 {
     __atomic_fetch_add(&sVBlanks, 1u, __ATOMIC_RELAXED);
 }
 
-static void make_layer_texture(C3D_Tex *tex, void *data, GPU_TEXCOLOR fmt, GPU_TEXTURE_WRAP_PARAM wrap)
+u32 NitroPort_ComposeVBlanks(void)
+{
+    return __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
+}
+
+static void make_texture(C3D_Tex *tex, void *data, GPU_TEXCOLOR fmt, int w, int h, int linear,
+                         GPU_TEXTURE_WRAP_PARAM wrap)
 {
     memset(tex, 0, sizeof(*tex));
     tex->data = data;
     tex->fmt = fmt;
-    tex->size = (u32)sTexW * sTexH * (fmt == GPU_RGBA8 ? 4u : 2u);
-    tex->width = (u16)sTexW;
-    tex->height = (u16)sTexH;
-    tex->param = GPU_TEXTURE_MODE(GPU_TEX_2D) | GPU_TEXTURE_MAG_FILTER(GPU_LINEAR) |
-                 GPU_TEXTURE_MIN_FILTER(GPU_LINEAR) | GPU_TEXTURE_WRAP_S(wrap) |
-                 GPU_TEXTURE_WRAP_T(wrap);
-    tex->border = 0;
-    tex->lodParam = 0;
+    tex->size = (u32)w * h * (fmt == GPU_RGBA8 ? 4u : 2u);
+    tex->width = (u16)w;
+    tex->height = (u16)h;
+    tex->param = GPU_TEXTURE_MODE(GPU_TEX_2D) |
+                 GPU_TEXTURE_MAG_FILTER(linear ? GPU_LINEAR : GPU_NEAREST) |
+                 GPU_TEXTURE_MIN_FILTER(linear ? GPU_LINEAR : GPU_NEAREST) |
+                 GPU_TEXTURE_WRAP_S(wrap) | GPU_TEXTURE_WRAP_T(wrap);
+}
+
+static void free_sets(Screen *scr)
+{
+    int i;
+
+    for (i = 0; i < SETS; i++) {
+        if (scr->set[i].under) linearFree(scr->set[i].under);
+        if (scr->set[i].over) linearFree(scr->set[i].over);
+        scr->set[i].under = NULL;
+        scr->set[i].over = NULL;
+    }
 }
 
 static void free_all(void)
 {
-    int s, e, i;
+    int s, i;
 
     for (s = 0; s < 2; s++) {
         for (i = 0; i < 2; i++) {
@@ -141,18 +161,11 @@ static void free_all(void)
                 sScreens[s].target[i] = NULL;
             }
         }
+        free_sets(&sScreens[s]);
     }
     if (sEdgeDepth) {
         vramFree(sEdgeDepth);
         sEdgeDepth = NULL;
-    }
-    for (e = 0; e < 2; e++) {
-        for (i = 0; i < LAYER_BUFS; i++) {
-            if (sLayers[e].set[i].under) linearFree(sLayers[e].set[i].under);
-            if (sLayers[e].set[i].over) linearFree(sLayers[e].set[i].over);
-            sLayers[e].set[i].under = NULL;
-            sLayers[e].set[i].over = NULL;
-        }
     }
     if (sQuads) {
         linearFree(sQuads);
@@ -161,22 +174,57 @@ static void free_all(void)
     sReady = 0;
 }
 
+/* The layer textures of a screen: big enough for its widest picture at
+ * scale texels a pixel. */
+static int alloc_sets(Screen *scr, int canvasW, int scale)
+{
+    int i;
+
+    scr->texScale = scale;
+    scr->texW = 256;
+    while (scr->texW < canvasW * scale) {
+        scr->texW *= 2;
+    }
+    scr->texH = 256;
+    while (scr->texH < DS_H * scale + 8) {
+        scr->texH *= 2;
+    }
+    for (i = 0; i < SETS; i++) {
+        scr->set[i].under = linearAlloc((size_t)scr->texW * scr->texH * 2u);
+        scr->set[i].over = linearAlloc((size_t)scr->texW * scr->texH * 4u);
+        if (!scr->set[i].under || !scr->set[i].over) {
+            return 0;
+        }
+        memset(scr->set[i].under, 0, (size_t)scr->texW * scr->texH * 2u);
+        memset(scr->set[i].over, 0, (size_t)scr->texW * scr->texH * 4u);
+    }
+    return 1;
+}
+
 int NitroPort_ComposeInit(const ComposeConfig *config)
 {
-    int s, e, i, c;
+    static const char *const filters[] = { "sharp (the pixels as they are, 2x then bilinear)", "nearest",
+                                           "smooth (bilinear)", "Scale2x" };
+    int s, i, c, e;
 
     sConfig = *config;
     memset(sScreens, 0, sizeof(sScreens));
-    memset(sLayers, 0, sizeof(sLayers));
-    sPicW = config->filter ? 2 * DS_W : DS_W;
-    sPicH = config->filter ? 2 * DS_H : DS_H;
-    sTexW = sPicW;                                   /* 512 or 256 */
-    sTexH = config->filter ? 512 : 256;
+    LightLock_Init(&sSetLock);
     for (c = 0; c < 32768; c++) {
-        sToRgba5551[c] = (u16)(((c & 31) << 11) | (((c >> 5) & 31) << 6) | (((c >> 10) & 31) << 1) | 1);
+        int r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
+
+        sToRgb565[c] = (u16)((r << 11) | (g << 6) | (g >> 4) | b);
+    }
+    for (e = 0; e < 2; e++) {
+        memset(&sWork[e], 0, sizeof(sWork[e]));
+        sWork[e].under = sWorkUnder[e];
+        sWork[e].over = sWorkOver[e];
+        sWork[e].overAlpha = sWorkAlpha[e];
     }
     for (s = 0; s < 2; s++) {
         Screen *scr = &sScreens[s];
+        int canvasW = s == 0 && config->wide ? CANVAS_MAX : DS_W;
+        int scale = config->filter == COMPOSE_FILTER_SHARP || config->filter == COMPOSE_FILTER_SCALE2X ? 2 : 1;
 
         scr->width = s == 0 ? TOP_W : BOTTOM_W;
         for (i = 0; i < (s == 0 && config->stereo ? 2 : 1); i++) {
@@ -187,7 +235,16 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
                 goto fail;
             }
         }
-        scr->shownEngine = -1;
+        if (!alloc_sets(scr, canvasW, scale)) {
+            /* Not enough memory at 2 texels a pixel: 1 (bilinear). */
+            free_sets(scr);
+            if (scale == 1 || !alloc_sets(scr, canvasW, 1)) {
+                NitroPort_Log("[compose] not enough memory for the 2D layer textures");
+                goto fail;
+            }
+            NitroPort_Log("[compose] not enough memory for the sharp 2D on the %s screen: smooth instead",
+                          s ? "lower" : "upper");
+        }
     }
     if (config->edges) {
         sEdgeDepth = vramAlloc(C3D_CalcDepthBufSize(SCREEN_H, TOP_W, GPU_RB_DEPTH24_STENCIL8));
@@ -204,39 +261,19 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
             C3D_FrameBufDepth(fb, sEdgeDepth, GPU_RB_DEPTH24_STENCIL8);
         }
     }
-    for (e = 0; e < 2; e++) {
-        Layers *l = &sLayers[e];
-
-        LightLock_Init(&l->lock);
-        l->newest = -1;
-        l->inUse = -1;
-        l->cpu.under = sUnder[e];
-        l->cpu.over = e == 0 ? sOver : NULL;
-        l->cpu.overAlpha = e == 0 ? sOverAlpha : NULL;
-        for (i = 0; i < LAYER_BUFS; i++) {
-            l->set[i].under = linearAlloc((size_t)sTexW * sTexH * 2u);
-            if (!l->set[i].under) goto nomem;
-            memset(l->set[i].under, 0, (size_t)sTexW * sTexH * 2u);
-            if (e == 0) {
-                l->set[i].over = linearAlloc((size_t)sTexW * sTexH * 4u);
-                if (!l->set[i].over) goto nomem;
-                memset(l->set[i].over, 0, (size_t)sTexW * sTexH * 4u);
-            }
-        }
-    }
     sQuads = linearAlloc(MAX_QUAD_VERTICES * sizeof(NitroGx3dGpuVertex));
-    if (!sQuads) goto nomem;
+    if (!sQuads) {
+        goto fail;
+    }
     sInFrame = 0;
     sReady = 1;
     NitroPort_Log("[compose] screens drawn by the GPU: %s, 2D %s, 3D %s%s%s",
-                  config->wide ? "wide view" : "the DS's view",
-                  config->filter ? "upscaled with Scale2x" : "as it is",
+                  config->wide ? "wide upper screen" : "the DS's width",
+                  filters[config->filter & 3],
                   config->stereo ? "with depth from the slider" : "flat",
                   sConfig.edges ? ", outlines on the GPU" : ", no outlines",
                   config->flipV ? ", 2D flipped" : "");
     return 1;
-nomem:
-    NitroPort_Log("[compose] not enough memory for the 2D layer textures");
 fail:
     free_all();
     return 0;
@@ -252,35 +289,13 @@ void NitroPort_ComposeExit(void)
 
 ComposeLayers *NitroPort_ComposeLayersOf(int engine)
 {
-    return &sLayers[engine ? 1 : 0].cpu;
+    return &sWork[engine ? 1 : 0];
 }
 
 uint32_t NitroPort_ComposePublished(int engine)
 {
-    return __atomic_load_n(&sLayers[engine ? 1 : 0].published, __ATOMIC_ACQUIRE);
-}
-
-/* Copy picture row `from` of a tiled texture to row `to` (so sampling at
- * the picture's bottom edge, half a texel into the row below, finds the
- * same colour). */
-static void copy_tiled_row16(uint16_t *tiled, int from, int to)
-{
-    int x;
-
-    for (x = 0; x < sPicW; x++) {
-        tiled[NitroPort_TiledIndex((unsigned)x, (unsigned)to, (unsigned)sTexW)] =
-            tiled[NitroPort_TiledIndex((unsigned)x, (unsigned)from, (unsigned)sTexW)];
-    }
-}
-
-static void copy_tiled_row32(uint32_t *tiled, int from, int to)
-{
-    int x;
-
-    for (x = 0; x < sPicW; x++) {
-        tiled[NitroPort_TiledIndex((unsigned)x, (unsigned)to, (unsigned)sTexW)] =
-            tiled[NitroPort_TiledIndex((unsigned)x, (unsigned)from, (unsigned)sTexW)];
-    }
+    (void)engine;
+    return __atomic_load_n(&sSeq, __ATOMIC_ACQUIRE);
 }
 
 static u32 widen5(u32 v)
@@ -288,79 +303,101 @@ static u32 widen5(u32 v)
     return (v << 3) | (v >> 2);
 }
 
-void NitroPort_ComposePublish(int engine)
+void NitroPort_ComposePublish(int engine, int screen)
 {
-    int e = engine ? 1 : 0;
-    Layers *l = &sLayers[e];
+    int e = engine ? 1 : 0, i, buf = -1;
+    Screen *scr = &sScreens[screen ? 1 : 0];
+    ComposeLayers *l = &sWork[e];
     LayerSet *set;
-    int i, buf = -1;
     u64 start = svcGetSystemTick();
+    int w = l->width > 0 ? l->width : DS_W, n = w * DS_H;
 
-    if (!sReady) {
+    if (!sReady || w > CANVAS_MAX || w * scr->texScale > scr->texW) {
         return;
     }
-    /* A buffer that isn't the newest nor being drawn from. */
-    LightLock_Lock(&l->lock);
-    for (i = 0; i < LAYER_BUFS; i++) {
-        if (i != l->newest && i != l->inUse) {
-            buf = i;
-            break;
+    /* The oldest set not held by the compositor, not the newest, and not
+     * being written. */
+    LightLock_Lock(&sSetLock);
+    {
+        uint32_t newest = 0;
+
+        for (i = 0; i < SETS; i++) {
+            if (scr->set[i].seq > newest) {
+                newest = scr->set[i].seq;
+            }
+        }
+        for (i = 0; i < SETS; i++) {
+            LayerSet *c = &scr->set[i];
+
+            if (c->writing || c->held || (c->seq == newest && newest != 0)) {
+                continue;
+            }
+            if (buf < 0 || c->seq < scr->set[buf].seq) {
+                buf = i;
+            }
+        }
+        if (buf >= 0) {
+            scr->set[buf].writing = 1;
+            scr->set[buf].seq = 0;   /* (not a candidate while written) */
         }
     }
-    LightLock_Unlock(&l->lock);
+    LightLock_Unlock(&sSetLock);
     if (buf < 0) {
-        return;   /* (can't happen with three) */
+        return;   /* (both engines publishing to one screen as they swap) */
     }
-    set = &l->set[buf];
-    set->info = l->cpu;
-    if (!l->cpu.displayOff) {
-        /* The picture behind the 3D (or the whole picture): RGB555 to the
-         * PICA's RGBA5551, opaque. */
+    set = &scr->set[buf];
+    set->info = *l;
+    set->info.under = NULL;
+    set->info.over = NULL;
+    set->info.overAlpha = NULL;
+    if (!l->displayOff) {
         uint16_t *c16 = sConverted16[e];
 
-        for (i = 0; i < DS_W * DS_H; i++) {
-            c16[i] = sToRgba5551[l->cpu.under[i] & 0x7FFF];
+        for (i = 0; i < n; i++) {
+            c16[i] = sToRgb565[l->under[i] & 0x7FFF];
         }
-        if (sConfig.filter) {
-            NitroPort_Scale2xTiled16(c16, DS_W, DS_H, set->under, sTexW);
+        if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+            NitroPort_Scale2xTiled16(c16, w, DS_H, set->under, scr->texW);
+        } else if (scr->texScale == 2) {
+            NitroPort_Double2xTiled16(c16, w, DS_H, set->under, scr->texW);
         } else {
-            NitroPort_Tile16(c16, DS_W, DS_H, set->under, sTexW);
+            NitroPort_Tile16(c16, w, DS_H, set->under, scr->texW);
         }
-        copy_tiled_row16(set->under, sPicH - 1, sPicH);
-        GSPGPU_FlushDataCache(set->under, (u32)sTexW * sTexH * 2u);
-        if (l->cpu.has3d && set->over) {
+        GSPGPU_FlushDataCache(set->under, (u32)scr->texW * scr->texH * 2u);
+        if (l->has3d) {
             /* The layers in front: RGBA8 with the alpha multiplied in (so
-             * the GPU's bilinear filtering and blending come out right). */
+             * the GPU's filtering and blending come out right). */
             uint32_t *c32 = sConverted[e];
 
-            for (i = 0; i < DS_W * DS_H; i++) {
-                uint16_t c = l->cpu.over[i];
+            for (i = 0; i < n; i++) {
+                uint16_t c = l->over[i];
                 u32 a, r, g, b;
 
                 if (!(c & 0x8000)) {
                     c32[i] = 0;
                     continue;
                 }
-                a = l->cpu.overAlpha[i];
+                a = l->overAlpha[i];
                 a = a >= 16 ? 255u : a * 255u / 16u;
                 r = widen5(c & 31) * a / 255u;
                 g = widen5((c >> 5) & 31) * a / 255u;
                 b = widen5((c >> 10) & 31) * a / 255u;
                 c32[i] = (r << 24) | (g << 16) | (b << 8) | a;
             }
-            if (sConfig.filter) {
-                NitroPort_Scale2xTiled32(c32, DS_W, DS_H, set->over, sTexW);
+            if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+                NitroPort_Scale2xTiled32(c32, w, DS_H, set->over, scr->texW);
+            } else if (scr->texScale == 2) {
+                NitroPort_Double2xTiled32(c32, w, DS_H, set->over, scr->texW);
             } else {
-                NitroPort_Tile32(c32, DS_W, DS_H, set->over, sTexW);
+                NitroPort_Tile32(c32, w, DS_H, set->over, scr->texW);
             }
-            copy_tiled_row32(set->over, sPicH - 1, sPicH);
-            GSPGPU_FlushDataCache(set->over, (u32)sTexW * sTexH * 4u);
+            GSPGPU_FlushDataCache(set->over, (u32)scr->texW * scr->texH * 4u);
         }
     }
-    LightLock_Lock(&l->lock);
-    l->newest = buf;
-    l->published++;
-    LightLock_Unlock(&l->lock);
+    LightLock_Lock(&sSetLock);
+    set->writing = 0;
+    set->seq = ++sSeq;
+    LightLock_Unlock(&sSetLock);
     __atomic_fetch_add(&sPublished, 1u, __ATOMIC_RELAXED);
     __atomic_fetch_add(&sPublishTicks, svcGetSystemTick() - start, __ATOMIC_RELAXED);
 }
@@ -398,64 +435,43 @@ static void quad(float x0, float y0, float x1, float y1, float z, float u0, floa
     sQuadVertices += 6;
 }
 
-/* The combiner for a quad: the texture (modulated by nothing), or the
- * vertex colour. */
+/* The combiner for a quad: the texture, or the vertex colour. */
 static void quad_combiner(int textured)
 {
     C3D_TexEnv *env = C3D_GetTexEnv(0);
 
     C3D_TexEnvInit(env);
-    if (textured) {
-        C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, 0, 0);
-    } else {
-        C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, 0, 0);
-    }
+    C3D_TexEnvSrc(env, C3D_Both, textured ? GPU_TEXTURE0 : GPU_PRIMARY_COLOR, 0, 0);
     C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
 }
 
-/* Where the DS's picture goes on a screen: 320 x 240, in the middle. */
-static PicaRect picture_rect(const Screen *scr)
+static u32 rgba_of(uint16_t c, u32 alpha)
 {
-    PicaRect r;
-
-    r.x0 = (float)(scr->width - DS_W * SCALE) * 0.5f;
-    r.x1 = r.x0 + DS_W * SCALE;
-    r.y0 = 0.0f;
-    r.y1 = SCREEN_H;
-    return r;
+    return (widen5(c & 31) << 24) | (widen5((c >> 5) & 31) << 16) | (widen5((c >> 10) & 31) << 8) | alpha;
 }
 
-/* The texture coordinates of the picture's corners in a layer texture
- * (its top row is at v = 1: the PICA reads row height - 1 - t for t). */
-static void picture_uv(float *u1, float *vTop, float *vBottom)
-{
-    *u1 = (float)sPicW / (float)sTexW;
-    *vTop = 1.0f;
-    *vBottom = 1.0f - (float)sPicH / (float)sTexH;
-    if (sConfig.flipV) {
-        float t = *vTop;
-
-        *vTop = *vBottom;
-        *vBottom = t;
-    }
-}
-
-/* The 2D layer textures, described for the GPU. */
+/* The layer textures, described for the GPU. */
 static C3D_Tex sUnderTex, sOverTex;
 
 /* One screen (one eye of it), into its render target. */
-static void draw_screen(Screen *scr, int eye, int engine, const LayerSet *set, const NitroGx3dScene *scene,
-                        float stereo)
+static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx3dScene *scene, float stereo)
 {
     C3D_RenderTarget *target = scr->target[eye];
     C3D_FrameBuf *fb = &target->frameBuf;
     C3D_Mtx pixels;
-    PicaRect pic = picture_rect(scr), rect3d = pic;
-    float u1, vTop, vBottom;
-    int has3d = set != NULL && !set->info.displayOff && set->info.has3d && scene != NULL;
     const ComposeLayers *info = set ? &set->info : NULL;
+    int canvasW = info && info->width > 0 ? info->width : DS_W;
+    PicaRect pic, rect3d;
+    float u1, vTop, vBottom;
+    int linear = sConfig.filter != COMPOSE_FILTER_NEAREST;
+    int has3d = info != NULL && !info->displayOff && info->has3d && scene != NULL;
 
-    (void)engine;
+    /* The picture, 1.25 times the DS's size, in the middle (it fills the
+     * screen: 320 DS pixels on the upper one, 256 on the lower). */
+    pic.x0 = ((float)scr->width - canvasW * SCALE) * 0.5f;
+    pic.x1 = pic.x0 + canvasW * SCALE;
+    pic.y0 = 0.0f;
+    pic.y1 = SCREEN_H;
     C3D_SetFrameBuf(fb);
     C3D_SetViewport(0, 0, fb->width, fb->height);
     NitroPort_PicaPixelMatrix(&pixels, scr->width, SCREEN_H);
@@ -465,56 +481,68 @@ static void draw_screen(Screen *scr, int eye, int engine, const LayerSet *set, c
     C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
     C3D_AlphaTest(false, GPU_ALWAYS, 0);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
-    picture_uv(&u1, &vTop, &vBottom);
-    if (set == NULL || set->info.displayOff) {
+    C3D_FogGasMode(GPU_NO_FOG, GPU_PLAIN_DENSITY, false);
+    if (info == NULL || info->displayOff) {
         /* Nothing published yet, or the engine is off: black. */
         quad_combiner(0);
         quad(0, 0, (float)scr->width, SCREEN_H, 0.0f, 0, 0, 0, 0, 0x000000FFu);
         return;
     }
-    /* 1. The picture behind the 3D, over the whole screen: beyond the
-     * picture, its edge columns (the texture clamps). */
-    make_layer_texture(&sUnderTex, set->under, GPU_RGBA5551, GPU_CLAMP_TO_EDGE);
+    /* The texture coordinates of the picture's corners: its top row is
+     * texture row 0, at v = 1 (the PICA reads row height - 1 - t). */
+    u1 = (float)(canvasW * scr->texScale) / (float)scr->texW;
+    vTop = 1.0f;
+    vBottom = 1.0f - (float)(DS_H * scr->texScale) / (float)scr->texH;
+    if (sConfig.flipV) {
+        float t = vTop;
+
+        vTop = vBottom;
+        vBottom = t;
+    }
+    /* Beside a picture narrower than the screen (the DS's width on the
+     * upper screen without the wide setting): its backdrop colour. */
+    if (pic.x0 > 0.5f) {
+        quad_combiner(0);
+        quad(0, 0, (float)scr->width, SCREEN_H, 0.0f, 0, 0, 0, 0, rgba_of((uint16_t)info->backdrop, 255));
+    }
+    /* 1. The picture behind the 3D. */
+    make_texture(&sUnderTex, set->under, GPU_RGB565, scr->texW, scr->texH, linear, GPU_CLAMP_TO_EDGE);
     C3D_TexBind(0, &sUnderTex);
     quad_combiner(1);
-    {
-        float side = pic.x0 / (pic.x1 - pic.x0);   /* the band each side, in picture widths */
-
-        quad(0, 0, (float)scr->width, SCREEN_H, 0.0f, -side * u1, vTop, (1.0f + side) * u1, vBottom,
-             0xFFFFFFFFu);
-    }
+    quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, 0, vTop, u1, vBottom, 0xFFFFFFFFu);
     if (has3d) {
         uint16_t rearColor;
         unsigned rearAlpha;
         PicaView view;
 
-        if (sConfig.wide && scr->width == TOP_W) {
-            rect3d.x0 = 0.0f;
-            rect3d.x1 = (float)scr->width;
+        /* Where the 3D goes: the DS's screen in the picture, or (a scene
+         * made for the wider view) the whole width; moved left by BG0HOFS
+         * (the game's screen shakes). */
+        if (scene->screen_width > DS_W) {
+            rect3d.x0 = ((float)scr->width - (float)scene->screen_width * SCALE) * 0.5f;
+            rect3d.x1 = rect3d.x0 + (float)scene->screen_width * SCALE;
+        } else {
+            rect3d.x0 = pic.x0 + (canvasW - DS_W) * 0.5f * SCALE;
+            rect3d.x1 = rect3d.x0 + DS_W * SCALE;
         }
-        /* BG0HOFS: the 3D moved left by that many DS pixels (the game's
-         * screen shakes). */
+        rect3d.y0 = 0.0f;
+        rect3d.y1 = SCREEN_H;
         if (info->scroll3d) {
             int scroll = info->scroll3d >= 256 ? info->scroll3d - 512 : info->scroll3d;
-            float shift = (float)scroll * (rect3d.x1 - rect3d.x0) / DS_W;
 
-            rect3d.x0 -= shift;
-            rect3d.x1 -= shift;
+            rect3d.x0 -= (float)scroll * SCALE;
+            rect3d.x1 -= (float)scroll * SCALE;
         }
         /* 2. The rear plane: the clear colour, blended by its alpha. */
         NitroPort_PicaRearPlane(&rearColor, &rearAlpha);
         if (rearAlpha) {
-            u32 a = rearAlpha * 255u / 31u;
-
             quad_combiner(0);
             C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA,
                            GPU_ONE, GPU_ZERO);
             quad(rect3d.x0, rect3d.y0, rect3d.x1, rect3d.y1, -1.0f, 0, 0, 0, 0,
-                 (widen5(rearColor & 31) << 24) | (widen5((rearColor >> 5) & 31) << 16) |
-                 (widen5((rearColor >> 10) & 31) << 8) | a);
+                 rgba_of(rearColor, rearAlpha * 255u / 31u));
         }
-        /* 3. The polygons. Where the picture doesn't reach (the wide view's
-         * bands, a scrolled 3D) the scissor keeps them in the screen. */
+        /* 3. The polygons. */
         view.fb = fb;
         view.edgeFb = sEdgeDepth ? &scr->edgeFb[eye] : NULL;
         view.screenWidth = scr->width;
@@ -540,7 +568,7 @@ static void draw_screen(Screen *scr, int eye, int engine, const LayerSet *set, c
                  (info->tint3d == 2 ? 0xFFFFFF00u : 0x00000000u) | a);
         }
         /* 5. The layers in front, with their alpha (multiplied in). */
-        make_layer_texture(&sOverTex, set->over, GPU_RGBA8, GPU_CLAMP_TO_BORDER);
+        make_texture(&sOverTex, set->over, GPU_RGBA8, scr->texW, scr->texH, linear, GPU_CLAMP_TO_EDGE);
         C3D_TexBind(0, &sOverTex);
         quad_combiner(1);
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
@@ -592,45 +620,65 @@ static float scene_convergence(const NitroGx3dScene *scene)
     return sqrtf(lo * hi);
 }
 
+/* Which of a screen's sets to show: the newest, or with a 3D scene the
+ * newest no newer than the 2D the DS showed that scene with (the DS's 3D
+ * is a frame behind its 2D): stamp <= the scene's + 1. Held for the frame
+ * (the drawers won't write it). Under sSetLock. */
+static LayerSet *pick_set(Screen *scr, const NitroGx3dScene *scene, int syncTo3d)
+{
+    LayerSet *best = NULL, *oldest = NULL;
+    int i;
+
+    for (i = 0; i < SETS; i++) {
+        LayerSet *c = &scr->set[i];
+
+        if (c->writing || c->seq == 0) {
+            continue;
+        }
+        if (oldest == NULL || c->seq < oldest->seq) {
+            oldest = c;
+        }
+        if (syncTo3d && scene != NULL && c->info.has3d &&
+            (int32_t)(c->info.stamp - (scene->stamp + 1u)) > 0) {
+            continue;   /* newer 2D than this scene goes with */
+        }
+        if (best == NULL || c->seq > best->seq) {
+            best = c;
+        }
+    }
+    if (best == NULL) {
+        best = oldest;
+    }
+    if (best != NULL) {
+        best->held = 1;
+    }
+    return best;
+}
+
 int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, int aOnTop, float slider,
                            int forced)
 {
-    int s, drawn = 0, stereoNow;
+    int s, drawn = 0, stereoNow, need[2] = { 0, 0 }, timed = 0;
     u32 vblanks = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
     LayerSet *sets[2] = { NULL, NULL };
-    uint32_t heldPublished[2] = { 0, 0 };
-    int engineOf[2], need[2] = { 0, 0 };
     u64 start;
 
     if (!sReady) {
         return 0;
     }
-    engineOf[0] = aOnTop ? 0 : 1;
-    engineOf[1] = aOnTop ? 1 : 0;
-    stereoNow = sConfig.stereo && slider > 0.0f && sScreens[0].target[1] != NULL;
+    stereoNow = sConfig.stereo && slider > 0.0f && sScreens[0].target[1] != NULL && aOnTop;
+    LightLock_Lock(&sSetLock);
     for (s = 0; s < 2; s++) {
         Screen *scr = &sScreens[s];
-        Layers *l = &sLayers[engineOf[s]];
-        uint32_t published;
+        int screen3d = (s == 0) == (aOnTop != 0);   /* engine A's screen: the 3D's */
+        LayerSet *set = pick_set(scr, scene, screen3d);
         int has3d;
 
-        /* The newest layers, held (the drawer won't write them) while this
-         * frame may draw from them. */
-        LightLock_Lock(&l->lock);
-        l->inUse = l->newest;
-        published = l->published;
-        LightLock_Unlock(&l->lock);
-        if (l->inUse < 0) {
+        if (set == NULL) {
             continue;   /* nothing to show yet */
         }
-        sets[s] = &l->set[l->inUse];
-        heldPublished[s] = published;
-        has3d = sets[s]->info.has3d && !sets[s]->info.displayOff && scene != NULL;
-        if (s == 0 && !has3d) {
-            stereoNow = 0;   /* (nothing on the upper screen has depth) */
-        }
-        need[s] = forced || scr->shownEngine != engineOf[s] || published != scr->shownPublished ||
-                  (has3d && sceneSerial != scr->shownScene) ||
+        has3d = screen3d && set->info.has3d && !set->info.displayOff && scene != NULL;
+        need[s] = forced || set->seq != scr->shownSeq || (has3d && sceneSerial != scr->shownScene) ||
                   (s == 0 && has3d && (stereoNow != scr->shownStereo ||
                                         (stereoNow && slider != scr->shownSlider)));
         /* Not until the framebuffer it would draw into is off the LCD. */
@@ -638,12 +686,18 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             need[s] = 0;
         }
         if (!need[s]) {
-            LightLock_Lock(&l->lock);
-            l->inUse = -1;
-            LightLock_Unlock(&l->lock);
-            sets[s] = NULL;
+            set->held = 0;
+            continue;
+        }
+        sets[s] = set;
+        if (has3d && sceneSerial != scr->shownScene) {
+            timed = 1;   /* a new 3D frame: shown at its time */
+        }
+        if (s == 0 && !has3d) {
+            stereoNow = 0;
         }
     }
+    LightLock_Unlock(&sSetLock);
     if (!need[0] && !need[1]) {
         return 0;
     }
@@ -675,6 +729,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     }
     for (s = 0; s < 2; s++) {
         Screen *scr = &sScreens[s];
+        int screen3d = (s == 0) == (aOnTop != 0);
+        const NitroGx3dScene *sc = screen3d ? scene : NULL;
 
         if (!need[s]) {
             continue;
@@ -682,20 +738,22 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         if (s == 0 && stereoNow) {
             float shift = sConfig.stereoStrength * slider * 0.5f;
 
-            draw_screen(scr, 0, engineOf[s], sets[s], scene, -shift);
-            draw_screen(scr, 1, engineOf[s], sets[s], scene, shift);
+            draw_screen(scr, 0, sets[s], sc, -shift);
+            draw_screen(scr, 1, sets[s], sc, shift);
         } else {
-            draw_screen(scr, 0, engineOf[s], sets[s], scene, 0.0f);
+            draw_screen(scr, 0, sets[s], sc, 0.0f);
         }
-        scr->shownEngine = engineOf[s];
-        scr->shownPublished = heldPublished[s];
-        scr->shownScene = sceneSerial;
+        scr->shownSeq = sets[s]->seq;
+        if (screen3d) {
+            scr->shownScene = sceneSerial;
+        }
         scr->shownSlider = slider;
         scr->shownStereo = stereoNow;
         drawn |= 1 << s;
     }
     GSPGPU_FlushDataCache(sQuads, (u32)(sQuadVertices * sizeof(NitroGx3dGpuVertex)));
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    NitroPort_PicaNoteCmdUse();
     sInFrame = 0;
     /* The targets to the LCD framebuffers, after the drawing (queued
      * behind it), then wait for all of it. */
@@ -715,30 +773,61 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     sInFrame = 1;
     sGpuTicks += svcGetSystemTick() - start;
     sFrames++;
-    /* Shown from the next V-blank. */
+    /* A new 3D frame shows sLag V-blanks after the game made its scene
+     * (+1: the DS shows a scene the frame after): wait for that. */
     vblanks = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
+    if (timed && scene != NULL) {
+        u32 target = scene->stamp + 1u + (u32)sLag;   /* the V-blank it should show from */
+        int32_t slack = (int32_t)(target - (vblanks + 1u));
+
+        if (slack < 0) {
+            /* late: more lag from now on */
+            sLate++;
+            sLag += -slack > 2 ? 2 : -slack;
+            if (sLag > 6) {
+                sLag = 6;
+            }
+            sOnTime = 0;
+        } else {
+            if (slack >= 1 && ++sOnTime >= 600 && sLag > 1) {
+                sLag--;          /* ten seconds with room to spare */
+                sOnTime = 0;
+            }
+            if (slack > 6) {
+                target = vblanks + 1u + 6u;   /* (a stamp from before a pause) */
+            }
+            while ((int32_t)(target - (__atomic_load_n(&sVBlanks, __ATOMIC_RELAXED) + 1u)) > 0) {
+                gspWaitForVBlank();
+            }
+        }
+    }
+    vblanks = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
+    LightLock_Lock(&sSetLock);
     for (s = 0; s < 2; s++) {
         Screen *scr = &sScreens[s];
-        Layers *l = &sLayers[engineOf[s]];
 
+        if (sets[s] != NULL) {
+            sets[s]->held = 0;
+        }
         if (!(drawn & (1 << s))) {
             continue;
         }
         gfxScreenSwapBuffers(s == 0 ? GFX_TOP : GFX_BOTTOM, s == 0 && stereoNow);
         scr->swapVBlank = vblanks;
         scr->swapped = 1;
-        LightLock_Lock(&l->lock);
-        l->inUse = -1;
-        LightLock_Unlock(&l->lock);
     }
+    LightLock_Unlock(&sSetLock);
     return drawn;
 }
 
-void NitroPort_ComposeStats(u32 *frames, u64 *gpuTicks, u32 *published, u64 *publishTicks)
+void NitroPort_ComposeStats(u32 *frames, u64 *gpuTicks, u32 *published, u64 *publishTicks, int *lag,
+                            u32 *late)
 {
     *frames = sFrames;
     *gpuTicks = sGpuTicks;
     *published = __atomic_load_n(&sPublished, __ATOMIC_RELAXED);
     *publishTicks = __atomic_load_n(&sPublishTicks, __ATOMIC_RELAXED);
+    *lag = sLag;
+    *late = sLate;
 }
 #endif
