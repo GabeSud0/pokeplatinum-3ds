@@ -74,9 +74,11 @@ static u32 *sImages[IMAGE_SLOTS];
  * the stencil (an opaque polygon ID, or 64-127/255 for none) << 24. */
 static u32 *sDepthIds[IMAGE_SLOTS];
 /* Edge marking works (off for good if the buffer read back ever isn't as
- * expected), and how many scenes' buffers are still to be checked. */
+ * expected), how many scenes' buffers are still to be checked (scenes with
+ * opaque polygons: an empty one can't show the IDs aren't written), and how
+ * many of those checked had IDs in it. */
 static int sEdgeMarking=1;
-static unsigned sEdgeChecks=60;
+static unsigned sEdgeChecks=60,sEdgeScenesWithIds;
 static int sBuffer;
 static NitroGx3dBatch *sBatches;
 static TexEntry sTextures[TEX_CACHE_ENTRIES];
@@ -297,6 +299,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     unsigned lost=0;
     C3D_BufInfo *buffers;
     int slot,image,blend,edging;
+    unsigned idBatches;   /* opaque batches drawn again for their IDs */
     u32 clear,clearColor;
     NitroGx3dEdgeSetup edges;
     if(dropped)*dropped=scene ? scene->dropped : 0;
@@ -424,6 +427,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
      * is in front (depth equal), writing their polygon ID to the stencil
      * buffer and nothing else. Under a translucent pixel the opaque one's
      * ID goes in too, as on the DS. */
+    idBatches=0;
     if(edging){
         for(b=0;b<nbatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
@@ -432,6 +436,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
             /* Translucent batches have opaque pixels only at alpha 31:
              * their fully opaque texels. */
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
+            idBatches++;
             if(textured){
                 C3D_Tex *tex=get_texture(batch->texture_param,batch->palette_base);
                 if(!tex)textured=0;
@@ -472,22 +477,30 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
                      GX_BUFFER_DIM(GX3D_W,GX3D_H),GX3D_TRANSFER_FLAGS);
         GSPGPU_InvalidateDataCache(sDepthIds[image],(u32)IMAGE_BYTES);
         /* Every stencil value must be an ID, an ID + 64 or 255; anything
-         * else means the buffer isn't laid out as above. Checked on the
-         * first scenes: then edge marking stays off rather than draw
-         * outlines in the wrong places. */
-        if(sEdgeChecks>0){
-            unsigned odd=NitroPort_Gx3dEdgeIdsUnexpected(sDepthIds[image]);
+         * else means the buffer isn't laid out as above. And where opaque
+         * polygons were drawn, their IDs must be there: otherwise the ID
+         * pass doesn't reach the stencil buffer. Checked on the first
+         * scenes with opaque polygons: if either fails, edge marking stays
+         * off rather than draw outlines in the wrong places (or spend the
+         * time drawing none). */
+        if(sEdgeChecks>0 && idBatches>0){
+            unsigned odd=NitroPort_Gx3dEdgeIdsUnexpected(sDepthIds[image]),i,ids=0;
+            for(i=0;i<GX3D_W*GX3D_H;i++)ids+=(sDepthIds[image][i]>>24)<=63u;
             sEdgeChecks--;
+            if(ids)sEdgeScenesWithIds++;
             if(odd){
                 sEdgeMarking=0;
                 edging=0;
                 NitroPort_Log("[gx3d] edge marking off: %u pixels of the depth/stencil buffer read back unexpected (first word %08lx)",
                               odd,(unsigned long)sDepthIds[image][0]);
+            }else if(sEdgeChecks==0 && !sEdgeScenesWithIds){
+                sEdgeMarking=0;
+                edging=0;
+                NitroPort_Log("[gx3d] edge marking off: no opaque polygon's ID in the depth/stencil buffer read back, in 60 scenes with opaque polygons (first word %08lx)",
+                              (unsigned long)sDepthIds[image][0]);
             }else if(sEdgeChecks==0){
-                unsigned i,ids=0;
-                for(i=0;i<GX3D_W*GX3D_H;i++)ids+=(sDepthIds[image][i]>>24)<=63u;
-                NitroPort_Log("[gx3d] edge marking on: depth/stencil buffer as expected (%u of %u pixels with an opaque polygon ID)",
-                              ids,(unsigned)(GX3D_W*GX3D_H));
+                NitroPort_Log("[gx3d] edge marking on: depth/stencil buffer as expected (%u of 60 scenes with opaque polygons had their IDs in it; the last, %u of %u pixels)",
+                              sEdgeScenesWithIds,ids,(unsigned)(GX3D_W*GX3D_H));
             }
         }
     }

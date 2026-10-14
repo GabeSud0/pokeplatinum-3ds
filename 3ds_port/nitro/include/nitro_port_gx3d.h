@@ -94,9 +94,13 @@ void NitroPort_Gx3dEdgeSetup(NitroGx3dEdgeSetup *setup);
  * per pixel; depthId per pixel: depth (24 bits, smaller is nearer) | the
  * opaque polygon ID there << 24, or 64-127 or 255 for none (64-127: the
  * GPU path's last translucent ID). *translucent (if not NULL) is set if
- * an outline made a pixel partly transparent. */
-void NitroPort_Gx3dMarkEdges(uint16_t *image, uint8_t *alpha, const uint32_t *depthId,
-                             const NitroGx3dEdgeSetup *setup, int *translucent);
+ * an outline made a pixel partly transparent. Returns how many pixels it
+ * outlined. */
+unsigned NitroPort_Gx3dMarkEdges(uint16_t *image, uint8_t *alpha, const uint32_t *depthId,
+                                 const NitroGx3dEdgeSetup *setup, int *translucent);
+/* Images outlined (converted with edge marking on) and the pixels outlined
+ * in them, so far (the [perf] line; both wrap round). */
+void NitroPort_Gx3dEdgeStats(uint32_t *images, uint32_t *pixels);
 /* How many pixels of depthId have an ID byte 128-254: none should (the
  * GPU path's depth/stencil buffer isn't read back as expected otherwise). */
 unsigned NitroPort_Gx3dEdgeIdsUnexpected(const uint32_t *depthId);

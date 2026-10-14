@@ -69,51 +69,62 @@ typedef struct EdgeRows {
 
 /* Pixel (x, y): outlined if it has an opaque polygon and a neighbour of
  * another ID further away. */
-static void mark_pixel(uint16_t *image, uint8_t *alpha, const uint32_t *depthId,
-                       const NitroGx3dEdgeSetup *setup, const EdgeRows *rows,
-                       int x, int y, int *translucent)
+static unsigned mark_pixel(uint16_t *image, uint8_t *alpha, const uint32_t *depthId,
+                           const NitroGx3dEdgeSetup *setup, const EdgeRows *rows,
+                           int x, int y, int *translucent)
 {
     const uint16_t *above = rows->color[rows->odd], *here = rows->color[rows->odd ^ 1];
     const uint8_t *aboveAlpha = rows->alpha[rows->odd], *hereAlpha = rows->alpha[rows->odd ^ 1];
-    uint32_t word = depthId[y * W + x];
+    const uint32_t *p = depthId + y * W + x;
+    uint32_t word = *p;
     unsigned id = word >> 24, k;
     uint32_t z = word & 0xffffffu;
     uint16_t behind = 0;
     unsigned behindAlpha = 0;
+    /* Left, right, above, below: the first of another ID further away
+     * decides. Off the screen it's the rear plane; in it, a pixel without
+     * an opaque polygon has the rear plane's ID but its own depth. */
+    int inside[4];
+    uint32_t n[4];
 
-    if (id > 63) return;   /* no opaque polygon here */
+    if (id > 63) return 0;   /* no opaque polygon here */
+    inside[0] = x > 0;
+    inside[1] = x < W - 1;
+    inside[2] = y > 0;
+    inside[3] = y < H - 1;
+    n[0] = inside[0] ? p[-1] : 0;
+    n[1] = inside[1] ? p[1] : 0;
+    n[2] = inside[2] ? p[-W] : 0;
+    n[3] = inside[3] ? p[W] : 0;
     for (k = 0; k < 4; k++) {
-        int nx = x + (k == 0 ? -1 : k == 1 ? 1 : 0);
-        int ny = y + (k == 2 ? -1 : k == 3 ? 1 : 0);
-        int inside = nx >= 0 && nx < W && ny >= 0 && ny < H;
         unsigned nid = setup->clearId;
         uint32_t nz = setup->clearDepth;
 
-        if (inside) {
-            uint32_t n = depthId[ny * W + nx];
-            if ((n >> 24) <= 63) nid = n >> 24;
-            nz = n & 0xffffffu;
+        if (inside[k]) {
+            if ((n[k] >> 24) <= 63) nid = n[k] >> 24;
+            nz = n[k] & 0xffffffu;
         }
         if (nid == id || z >= nz) continue;
-        if (!inside) {
+        if (!inside[k]) {
             behind = (uint16_t)(setup->clearColor | (setup->clearAlpha ? 0x8000u : 0u));
             behindAlpha = setup->clearAlpha;
         } else if (k == 0) {
-            behind = here[nx];
-            behindAlpha = hereAlpha[nx];
+            behind = here[x - 1];
+            behindAlpha = hereAlpha[x - 1];
         } else if (k == 2) {
-            behind = above[nx];
-            behindAlpha = aboveAlpha[nx];
+            behind = above[x];
+            behindAlpha = aboveAlpha[x];
         } else {
             /* Right and below aren't changed yet. */
-            behind = image[ny * W + nx];
-            behindAlpha = alpha[ny * W + nx];
+            unsigned j = (unsigned)(y * W + x) + (k == 1 ? 1u : (unsigned)W);
+            behind = image[j];
+            behindAlpha = alpha[j];
         }
         /* Nothing drawn there: the rear plane, see-through. */
         if (!(behind & 0x8000)) behindAlpha = 0;
         break;
     }
-    if (k == 4) return;
+    if (k == 4) return 0;
     {
         uint16_t edge = setup->colors[id >> 3];
         unsigned i = (unsigned)(y * W + x), a = alpha[i];
@@ -126,38 +137,70 @@ static void mark_pixel(uint16_t *image, uint8_t *alpha, const uint32_t *depthId,
         image[i] = (uint16_t)(edge | (a ? 0x8000u : 0u));
         alpha[i] = (uint8_t)a;
     }
+    return 1;
 }
 
-void NitroPort_Gx3dMarkEdges(uint16_t *image, uint8_t *alpha, const uint32_t *depthId,
-                             const NitroGx3dEdgeSetup *setup, int *translucent)
+/* Each pixel's ID byte, four to a word: most pixels have the same ID as
+ * all four neighbours (inside a polygon, or nothing at all), and four at a
+ * time can be passed over with three comparisons. */
+typedef uint32_t IdWord __attribute__((may_alias, aligned(4)));
+static uint8_t sIds[H][W] __attribute__((aligned(4)));
+
+unsigned NitroPort_Gx3dMarkEdges(uint16_t *image, uint8_t *alpha, const uint32_t *depthId,
+                                 const NitroGx3dEdgeSetup *setup, int *translucent)
 {
     static EdgeRows rows;
-    int x, y;
+    unsigned outlined = 0;
+    int x, y, i;
 
     if (translucent) *translucent = 0;
+    {
+        IdWord *ids = (IdWord *)sIds;
+        const uint32_t *d = depthId;
+
+        for (i = 0; i < W * H / 4; i++, d += 4) {
+            ids[i] = (d[0] >> 24) | ((d[1] >> 16) & 0xFF00u) | ((d[2] >> 8) & 0xFF0000u) | (d[3] & 0xFF000000u);
+        }
+    }
     rows.odd = 0;
     for (y = 0; y < H; y++) {
-        const uint32_t *row = depthId + y * W;
-
         memcpy(rows.color[rows.odd ^ 1], image + y * W, sizeof(rows.color[0]));
         memcpy(rows.alpha[rows.odd ^ 1], alpha + y * W, sizeof(rows.alpha[0]));
         if (y == 0 || y == H - 1) {
-            for (x = 0; x < W; x++) mark_pixel(image, alpha, depthId, setup, &rows, x, y, translucent);
+            for (x = 0; x < W; x++) outlined += mark_pixel(image, alpha, depthId, setup, &rows, x, y, translucent);
         } else {
-            mark_pixel(image, alpha, depthId, setup, &rows, 0, y, translucent);
-            for (x = 1; x < W - 1; x++) {
-                /* Most pixels: the same ID byte all around. */
-                uint32_t word = row[x];
-                if (((row[x - 1] ^ word) | (row[x + 1] ^ word) |
-                     (row[x - W] ^ word) | (row[x + W] ^ word)) < 0x1000000u) {
+            const IdWord *up = (const IdWord *)sIds[y - 1], *here = (const IdWord *)sIds[y];
+            const IdWord *down = (const IdWord *)sIds[y + 1];
+            const uint8_t *ids = sIds[y];
+
+            for (i = 0; i < W / 4; i++) {
+                uint32_t word = here[i];
+                int x0 = i * 4, x1 = x0 + 4;
+
+                /* All four, the ones above and below, and those either
+                 * side of the four, the same ID: none is on an edge (the
+                 * screen's left and right columns always are looked at). */
+                if (word == up[i] && word == down[i] && word == (word & 0xFFu) * 0x01010101u &&
+                    (i == 0 || ids[x0 - 1] == (uint8_t)word) &&
+                    (i == W / 4 - 1 || ids[x1] == (uint8_t)word)) {
+                    if (i == 0) outlined += mark_pixel(image, alpha, depthId, setup, &rows, 0, y, translucent);
+                    if (i == W / 4 - 1) outlined += mark_pixel(image, alpha, depthId, setup, &rows, W - 1, y, translucent);
                     continue;
                 }
-                mark_pixel(image, alpha, depthId, setup, &rows, x, y, translucent);
+                for (x = x0; x < x1; x++) {
+                    unsigned id = ids[x];
+
+                    if (x > 0 && x < W - 1 && ids[x - 1] == id && ids[x + 1] == id &&
+                        sIds[y - 1][x] == id && sIds[y + 1][x] == id) {
+                        continue;
+                    }
+                    outlined += mark_pixel(image, alpha, depthId, setup, &rows, x, y, translucent);
+                }
             }
-            mark_pixel(image, alpha, depthId, setup, &rows, W - 1, y, translucent);
         }
         rows.odd ^= 1;
     }
+    return outlined;
 }
 
 unsigned NitroPort_Gx3dEdgeIdsUnexpected(const uint32_t *depthId)

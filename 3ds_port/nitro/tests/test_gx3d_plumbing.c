@@ -278,7 +278,9 @@ static void test_edge_marking(void)
      * screen's border in ID 56's colour (the rear plane is further and
      * another ID). Everything else as it was. */
     edge_scene();
-    NitroPort_Gx3dMarkEdges(edgeImage,edgeAlpha,edgeIds,&e,&translucent);
+    /* (It says how many: the box's ring, 2*20 + 2*8, and the border.) */
+    CHECK(NitroPort_Gx3dMarkEdges(edgeImage,edgeAlpha,edgeIds,&e,&translucent)==
+          56u+2u*NITRO_GX3D_WIDTH+2u*(NITRO_GX3D_HEIGHT-2));
     for(y=0;y<NITRO_GX3D_HEIGHT;y++)for(x=0;x<NITRO_GX3D_WIDTH;x++){
         int i=y*NITRO_GX3D_WIDTH+x, box=x>=100&&x<120&&y>=50&&y<60;
         int ring=box&&(x==100||x==119||y==50||y==59);

@@ -1097,7 +1097,19 @@ static void PerfFrame(u64 enter)
                     d->convertTicks = 0;
                 }
             }
-            NitroPort_Log("[perf] 3D: %.1f scenes/s; per scene %.1f ms building (textures: %.2f decoded, %.0f texels, %.1f ms), %.1f ms GPU and copy, %.1f ms handing over; converted by the 3D screen's drawer, %.1f/s between frames (%.1f ms each)",
+            /* Edge marking: images outlined, and the pixels outlined. */
+            static uint32_t lastEdgeImages, lastEdgePixels;
+            uint32_t edgeImages, edgePixels;
+            char outlines[64] = "";
+
+            NitroPort_Gx3dEdgeStats(&edgeImages, &edgePixels);
+            if (edgeImages != lastEdgeImages) {
+                snprintf(outlines, sizeof(outlines), "; outlines %.0f pixels/image",
+                         (double)(edgePixels - lastEdgePixels) / (edgeImages - lastEdgeImages));
+            }
+            lastEdgeImages = edgeImages;
+            lastEdgePixels = edgePixels;
+            NitroPort_Log("[perf] 3D: %.1f scenes/s; per scene %.1f ms building (textures: %.2f decoded, %.0f texels, %.1f ms), %.1f ms GPU and copy, %.1f ms handing over; converted by the 3D screen's drawer, %.1f/s between frames (%.1f ms each)%s",
                           scenes / seconds,
                           (double)(build - lastBuild) * 1000.0 / SYSCLOCK_ARM11 / scenes,
                           (double)(texConverted - lastTexConverted) / scenes,
@@ -1105,7 +1117,7 @@ static void PerfFrame(u64 enter)
                           (double)(texTicks - lastTexTicks) * 1000.0 / SYSCLOCK_ARM11 / scenes,
                           (double)(wait - lastWait) * 1000.0 / SYSCLOCK_ARM11 / scenes,
                           (double)(publish - lastPublish) * 1000.0 / SYSCLOCK_ARM11 / scenes,
-                          converted / seconds, convertMs);
+                          converted / seconds, convertMs, outlines);
         }
         lastBuild = build;
         lastWait = wait;

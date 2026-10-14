@@ -34,6 +34,9 @@ static uint32_t sPublishCount;   /* images published or handed over so far */
 static const uint32_t *sPending,*sPendingDepth,*sConverting;
 static NitroGx3dEdgeSetup sPendingEdges;
 static int sPendingHasEdges;
+/* Images outlined, and pixels outlined (by whoever converts: one at a time). */
+static uint32_t sEdgeImages;
+static uint32_t sEdgePixels;   /* (wraps round: [perf] takes differences) */
 /* A lower-priority GPU or same-priority drawer can own this gate.
  * Never busy-loop indefinitely on core 0: yield after a short spin. */
 static void lock(void) {
@@ -199,8 +202,11 @@ static int publish(const uint32_t *src,size_t pixels,const uint32_t *depthId,
     }
     if(depthId && edges && edges->enabled){
         int outlinesPartly=0;
-        NitroPort_Gx3dMarkEdges(sImages[index],sAlphas[index],depthId,edges,&outlinesPartly);
+        unsigned outlined=NitroPort_Gx3dMarkEdges(sImages[index],sAlphas[index],depthId,edges,
+                                                  &outlinesPartly);
         partly|=(unsigned)outlinesPartly;
+        __atomic_store_n(&sEdgeImages,sEdgeImages+1u,__ATOMIC_RELAXED);
+        __atomic_store_n(&sEdgePixels,sEdgePixels+outlined,__ATOMIC_RELAXED);
     }
     sTranslucent[index]=(uint8_t)(partly!=0);
     finish(index,count);
@@ -256,6 +262,12 @@ void NitroPort_Gx3dReleaseImage(const uint16_t *ptr)
         break;
     }
     unlock();
+}
+
+void NitroPort_Gx3dEdgeStats(uint32_t *images,uint32_t *pixels)
+{
+    *images=__atomic_load_n(&sEdgeImages,__ATOMIC_RELAXED);
+    *pixels=__atomic_load_n(&sEdgePixels,__ATOMIC_RELAXED);
 }
 
 uint32_t NitroPort_Gx3dImageCount(void)
