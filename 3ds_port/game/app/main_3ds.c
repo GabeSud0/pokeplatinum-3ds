@@ -297,14 +297,40 @@ uint32_t NitroPort_Gx3dStamp(void)
 {
     return NitroPort_ComposeVBlanks();
 }
-/* (the remaster) Each V-blank: the display thread may have a frame waiting
- * for the framebuffer to be free. */
-static void OnVBlank(void *unused)
+/* (the remaster) The V-blank thread: each V-blank, the frames due go onto
+ * the LCD (NitroPort_ComposeVBlank), and the display thread is woken (it
+ * may have a frame to draw now that a framebuffer is free). A thread of
+ * its own rather than libctru's V-blank callback: citro3d takes that
+ * callback back whenever the program comes back from the HOME menu. */
+static Thread sVBlankThread;
+static volatile bool sVBlankRunning;
+static void VBlankMain(void *unused)
 {
     (void)unused;
-    NitroPort_ComposeVBlank();
-    if(__atomic_load_n(&sGpuWakeReady,__ATOMIC_ACQUIRE))
-        LightEvent_Signal(&sGpuWake);
+    while(__atomic_load_n(&sVBlankRunning,__ATOMIC_ACQUIRE)){
+        gspWaitForVBlank();
+        NitroPort_ComposeVBlank();
+        if(__atomic_load_n(&sGpuWakeReady,__ATOMIC_ACQUIRE))
+            LightEvent_Signal(&sGpuWake);
+    }
+    threadExit(0);
+}
+static void StartVBlankThread(s32 priority)
+{
+    __atomic_store_n(&sVBlankRunning,true,__ATOMIC_RELEASE);
+    /* Core 0, above everything else there: it does almost nothing, at once. */
+    sVBlankThread=threadCreate(VBlankMain,NULL,16*1024,priority-3,0,false);
+    if(!sVBlankThread){
+        __atomic_store_n(&sVBlankRunning,false,__ATOMIC_RELEASE);
+        NitroPort_Log("[compose] couldn't start the V-blank thread");
+    }
+}
+static void StopVBlankThread(void)
+{
+    if(!sVBlankThread)return;
+    __atomic_store_n(&sVBlankRunning,false,__ATOMIC_RELEASE);
+    if(R_SUCCEEDED(threadJoin(sVBlankThread,1000000000ULL)))threadFree(sVBlankThread);
+    sVBlankThread=NULL;
 }
 /* The classic path: each scene drawn to an image as it comes. */
 static void GpuClassicLoop(void)
@@ -394,14 +420,16 @@ static void GpuMain(void *unused)
             NitroPort_Log("[compose] couldn't set the GPU display up: the classic display instead");
             sRemaster=false;
         }else{
-            gspSetEventCallback(GSPGPU_EVENT_VBlank0,OnVBlank,NULL,false);
+            s32 priority=0x30;
+            svcGetThreadPriority(&priority,CUR_THREAD_HANDLE);
+            StartVBlankThread(priority-1);   /* (this thread is the game's priority + 1) */
         }
     }
     LightEvent_Signal(&sGpuStarted);
     if(sRemaster)GpuComposeLoop();
     else GpuClassicLoop();
     if(sRemaster){
-        gspSetEventCallback(GSPGPU_EVENT_VBlank0,NULL,NULL,false);
+        StopVBlankThread();
         NitroPort_ComposeExit();
     }
     NitroPort_PicaExit();
@@ -1538,27 +1566,29 @@ static void PerfFrame(u64 enter)
         lastTexTicks = texTicks;
     }
     if (sRemaster) {
-        static u32 lastFrames, lastPublished, lastLate;
-        static u64 lastGpu, lastPublish;
-        u32 frames, published, late;
-        u64 gpu, publish;
-        int lag;
+        static ComposeStats last;
+        static u32 lastMade;
+        ComposeStats now;
+        u32 frames, published, timed, made, madeScenes;
         float cmdPeak;
         unsigned cmdCut;
 
-        NitroPort_ComposeStats(&frames, &gpu, &published, &publish, &lag, &late);
+        NitroPort_ComposeStats(&now);
+        NitroPort_Gx3dThreadStats(NULL, &made, NULL);
+        madeScenes = made - lastMade;
+        lastMade = made;
         NitroPort_PicaCmdStats(&cmdPeak, &cmdCut);
-        NitroPort_Log("[perf] display: %.1f frames/s composed by the GPU, %.1f ms of GPU each; 2D layers published %.1f/s, upscaled in %.1f ms each; 3D shown %d V-blanks after the game made it, %u frames late; GPU command list %.0f%% full at most, %u draws cut",
-                      (frames - lastFrames) / seconds,
-                      frames > lastFrames ? (double)(gpu - lastGpu) * 1000.0 / SYSCLOCK_ARM11 / (frames - lastFrames) : 0.0,
-                      (published - lastPublished) / seconds,
-                      published > lastPublished ? (double)(publish - lastPublish) * 1000.0 / SYSCLOCK_ARM11 / (published - lastPublished) : 0.0,
-                      lag, (unsigned)(late - lastLate), (double)cmdPeak * 100.0, cmdCut);
-        lastLate = late;
-        lastFrames = frames;
-        lastGpu = gpu;
-        lastPublished = published;
-        lastPublish = publish;
+        frames = now.frames - last.frames;
+        published = now.published - last.published;
+        timed = now.timed - last.timed;
+        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, of %.1f scenes/s), each %.1f ms building + %.1f ms GPU; 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut",
+                      frames / seconds, timed / seconds, madeScenes / seconds,
+                      frames ? (double)(now.cpuTicks - last.cpuTicks) * 1000.0 / SYSCLOCK_ARM11 / frames : 0.0,
+                      frames ? (double)(now.gpuTicks - last.gpuTicks) * 1000.0 / SYSCLOCK_ARM11 / frames : 0.0,
+                      published / seconds,
+                      published ? (double)(now.publishTicks - last.publishTicks) * 1000.0 / SYSCLOCK_ARM11 / published : 0.0,
+                      now.lag, (unsigned)(now.late - last.late), (double)cmdPeak * 100.0, cmdCut);
+        last = now;
     }
     NitroPort_Log("[perf] game %.1f frames/s, %.1f ms/frame (%.1f waiting for drawing); drawn: %s; 3D %.1f ms/scene, %u triangles/scene, %u dropped/scene (core %d); sound %.0f%% of core 0, %u underruns",
                   sPerfFrames / seconds, (double)sPerfGameTicks * perFrame,

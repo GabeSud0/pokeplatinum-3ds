@@ -682,6 +682,29 @@ static void ControlWait(void)
                 if (WritePng(arg, both, 256, 384) != 0) {
                     NitroPort_Log("[pc] control: can't write %s", arg);
                 }
+            } else if (strncmp(line, "bgs", 3) == 0) {
+                /* Each engine's display control and BGs (mode, size,
+                 * scroll), to see what a screen is made of. */
+                extern unsigned char NitroPort_IoReg[];
+                int engine, bg;
+
+                for (engine = 0; engine < 2; engine++) {
+                    const unsigned char *io = NitroPort_IoReg + (engine ? 0x1000 : 0);
+                    uint32_t dispcnt = (uint32_t)io[0] | ((uint32_t)io[1] << 8) | ((uint32_t)io[2] << 16) |
+                                       ((uint32_t)io[3] << 24);
+
+                    fprintf(stderr, "[bgs] engine %c: DISPCNT %08x (mode %u, bg mode %u, layers %02x)\n",
+                            engine ? 'B' : 'A', dispcnt, dispcnt >> 16 & 3, dispcnt & 7, dispcnt >> 8 & 0x1F);
+                    for (bg = 0; bg < 4; bg++) {
+                        uint16_t bgcnt = (uint16_t)(io[8 + bg * 2] | (io[9 + bg * 2] << 8));
+                        uint16_t hofs = (uint16_t)((io[0x10 + bg * 4] | (io[0x11 + bg * 4] << 8)) & 0x1FF);
+                        uint16_t vofs = (uint16_t)((io[0x12 + bg * 4] | (io[0x13 + bg * 4] << 8)) & 0x1FF);
+
+                        fprintf(stderr, "[bgs]   BG%d: BGCNT %04x (size %u, prio %u, %s), scroll %u,%u%s\n", bg,
+                                bgcnt, bgcnt >> 14, bgcnt & 3, bgcnt & 0x80 ? "256 colours" : "16 colours",
+                                hofs, vofs, (dispcnt >> (8 + bg)) & 1 ? "" : " (off)");
+                    }
+                }
             } else if (sscanf(line, "layers %1023s", arg) == 1) {
                 /* Each layer alone (BG0-3, OBJ), both screens side by
                  * side: 5 panels a row, engine A's row above engine B's. */

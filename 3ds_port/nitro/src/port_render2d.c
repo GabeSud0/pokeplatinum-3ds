@@ -107,10 +107,14 @@ typedef struct Engine {
      * 0 but for the remaster's wider canvas; see NitroRender2DSplit). */
     int width, origin;
     /* Wider canvas: each BG's pixels only within the DS's 256 (clip), or
-     * wrapping round its map; and the game's windows moved to the screen's
-     * edges (anchorWindows). */
+     * wrapping round its map; the windows the game anchors moved to the
+     * screen's edges (anchorWindows); and (worked out each frame) whether a
+     * BG is mirrored at the DS's edges where its edge isn't plain and its
+     * picture reaches the edge: on the picture screens
+     * (NitroPort_WidePictures). */
     u8 clip[4];
     u8 anchorWindows;
+    u8 mirror[4];
     /* (worked out each frame, DecideSplits) a text BG that's a picture with
      * a plain middle and decorated sides: its halves go to the screen's
      * edges, the middle widened with its plain colour. */
@@ -316,8 +320,11 @@ typedef struct Target {
  * (wrapping round the map). */
 typedef struct Segment {
     short x0, x1, off;
-    short fixed;   /* >= 0: every pixel of the run is the map's pixel at x = fixed */
+    short fixed;   /* >= 0: every pixel of the run is the map's pixel at x = fixed;
+                    * SEG_MIRROR: the DS's picture mirrored at the edge (axis) */
+    short axis;
 } Segment;
+#define SEG_MIRROR (-2)
 #define MAX_SEGMENTS 24
 
 static const int sTextSizes[4][2] = { { 256, 256 }, { 512, 256 }, { 256, 512 }, { 512, 512 } };
@@ -405,10 +412,11 @@ static void DecideSplits(Engine *e, const int *kind, const u16 *bgcnt, u32 dispc
 
 /* The runs of a text BG's line (y, its map row ty) on a wider canvas: the
  * DS's 256 pixels (or the whole canvas, wrapping round the map, without
- * clip), with the game's windows on the BG moved to the nearer edge of the
- * screen (NitroPort_WideWindows): a window in the left part of the screen
- * to its left edge, one in the right part to its right edge; one across
- * the middle (a text box) stays. Returns how many. */
+ * clip), with the windows the game anchors (NitroPort_WideWindows: the
+ * place name sign) moved to the screen's edge. Beside the DS's picture (with
+ * clip): its edge colour when the edge is plain on this line; else, on a
+ * BG without any of the game's windows (a picture), the picture mirrored
+ * at the edge; on one with windows (the UI), nothing. Returns how many. */
 static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int ty, int hofs, int mapW,
                           Segment *segs)
 {
@@ -453,12 +461,10 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int t
         if (b <= 0 || a >= 256) {
             continue;
         }
-        if (a < 128 - 8 && b <= 128 + 8 && b - a < 160) {
+        if (wins[i].anchor < 0) {
             shift = -origin;                 /* to the left edge */
-        } else if (a >= 128 - 8 && b > 128 + 8 && b - a < 160) {
-            shift = width - 256 - origin;    /* to the right edge */
         } else {
-            continue;                        /* across the middle: stays */
+            shift = width - 256 - origin;    /* to the right edge */
         }
         moved[nmoved].x0 = a + origin;
         moved[nmoved].x1 = b + origin;
@@ -475,11 +481,16 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int t
         int fillLeft = e->clip[bg] && origin > 0 && TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 0, 8);
         int fillRight = e->clip[bg] && origin + 256 < width &&
                         TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 248, 8);
+        /* (a picture reaching the edge: its outermost pixel is opaque) */
+        int mirrorLeft = e->clip[bg] && e->mirror[bg] && origin > 0 && !fillLeft &&
+                         (TextBgPixel(e, bg, bgcnt, dispcnt, hofs, ty) & OPAQUE);
+        int mirrorRight = e->clip[bg] && e->mirror[bg] && origin + 256 < width && !fillRight &&
+                          (TextBgPixel(e, bg, bgcnt, dispcnt, 255 + hofs, ty) & OPAQUE);
 
-        if (fillLeft) {
+        if (fillLeft || mirrorLeft) {
             bx0 = 0;
         }
-        if (fillRight) {
+        if (fillRight || mirrorRight) {
             bx1 = width;
         }
 
@@ -519,8 +530,16 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int t
             segs[n].x0 = (short)x;
             segs[n].x1 = (short)next;
             segs[n].off = (short)(hofs - origin);
-            segs[n].fixed = x < origin ? (short)(hofs & (mapW - 1))
-                          : x >= origin + 256 ? (short)((255 + hofs) & (mapW - 1)) : (short)-1;
+            segs[n].axis = 0;
+            if (x < origin) {
+                segs[n].fixed = fillLeft ? (short)(hofs & (mapW - 1)) : (short)SEG_MIRROR;
+                segs[n].axis = (short)origin;
+            } else if (x >= origin + 256) {
+                segs[n].fixed = fillRight ? (short)((255 + hofs) & (mapW - 1)) : (short)SEG_MIRROR;
+                segs[n].axis = (short)(origin + 256);
+            } else {
+                segs[n].fixed = -1;
+            }
             n++;
             x = next;
         }
@@ -590,6 +609,18 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
 
         for (; x < xe; x++) {
             PUT(x, c, flags);
+        }
+        continue;
+    }
+    if (segs[seg].fixed == SEG_MIRROR) {
+        /* the DS's picture mirrored at its edge (axis): canvas x shows
+         * the DS's pixel at 2 axis - 1 - x */
+        int axis = segs[seg].axis;
+
+        for (; x < xe; x++) {
+            int mx = (2 * axis - 1 - x + off) & (mapW - 1);
+
+            PUT(x, TextBgPixel(e, bg, bgcnt, dispcnt, mx, ty), flags);
         }
         continue;
     }
@@ -826,6 +857,10 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
             for (i = 0; i < xs; i++) {
                 out[i] = out[xs];
             }
+        } else if (e->mirror[bg] && (out[xs] & OPAQUE)) {
+            for (i = 0; i < xs; i++) {
+                out[i] = out[2 * xs - 1 - i];
+            }
         }
     }
     if (xe < e->width && xe - xs >= 8) {
@@ -838,6 +873,10 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
         if (plain) {
             for (i = xe; i < e->width; i++) {
                 out[i] = out[xe - 1];
+            }
+        } else if (e->mirror[bg] && (out[xe - 1] & OPAQUE)) {
+            for (i = xe; i < e->width; i++) {
+                out[i] = out[2 * xe - 1 - i];
             }
         }
     }
@@ -1204,15 +1243,32 @@ static BOOL InRange(int v, int lo, int hi)
 
 /* Set enable[x] = value for the x in a window's horizontal range (the DS's
  * x, at origin on the canvas; beyond the DS's screen is outside). */
-static void FillRange(u8 *enable, int lo, int hi, u8 value, int origin)
+/* The DS's windows are rectangles of its screen, x lo to hi (hi = 0: its
+ * right edge). On a wider canvas (origin > 0, width > 256) a window at
+ * the DS's left or right edge goes on to the canvas's (the intro's
+ * letterbox, a window over the whole screen: the bands beside the DS's
+ * picture are in it too). */
+static void FillRange(u8 *enable, int lo, int hi, u8 value, int origin, int width)
 {
     if (lo <= hi) {
         if (hi > lo) {
             memset(enable + origin + lo, value, (size_t)(hi - lo));
         }
+        if (lo == 0 && origin > 0) {
+            memset(enable, value, (size_t)origin);
+        }
+        if (hi == 0 && origin + W < width) {
+            memset(enable + origin + W, value, (size_t)(width - origin - W));
+        }
     } else {
         memset(enable + origin + lo, value, (size_t)(W - lo));   /* lo <= 255 */
         memset(enable + origin, value, (size_t)hi);
+        if (origin + W < width) {
+            memset(enable + origin + W, value, (size_t)(width - origin - W));
+        }
+        if (hi == 0 && origin > 0) {
+            memset(enable, value, (size_t)origin);
+        }
     }
 }
 
@@ -1675,10 +1731,10 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 }
             }
             if ((dispcnt & 0x4000) && InRange(y, win1v >> 8, win1v & 0xFF)) {
-                FillRange(enableLine, win1h >> 8, win1h & 0xFF, (winin >> 8) & 0x3F, e->origin);
+                FillRange(enableLine, win1h >> 8, win1h & 0xFF, (winin >> 8) & 0x3F, e->origin, width);
             }
             if ((dispcnt & 0x2000) && InRange(y, win0v >> 8, win0v & 0xFF)) {
-                FillRange(enableLine, win0h >> 8, win0h & 0xFF, winin & 0x3F, e->origin);
+                FillRange(enableLine, win0h >> 8, win0h & 0xFF, winin & 0x3F, e->origin, width);
             }
         }
 
@@ -1909,6 +1965,11 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
             e.clip[bg] = split->clip[bg];
         }
         e.anchorWindows = (u8)split->anchorWindows;
+        if (NitroPort_WidePictures()) {
+            for (bg = 0; bg < 4; bg++) {
+                e.mirror[bg] = e.clip[bg];
+            }
+        }
     }
     dispcnt = Rd32(e.io, 0);
 
@@ -2036,7 +2097,8 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
                  ((u32)split->anchorWindows << 18) ^ ((u32)split->clip[0] << 20) ^
                  ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
                  ((u32)split->clip[3] << 23)) * 16777619u;
-    if (split->anchorWindows) {
+    if (split->width > W) {
+        /* (the windows decide the edges' look, and where the anchored ones are) */
         signature = (signature ^ NitroPort_WideWindowsSerial()) * 16777619u;
     }
     if (last[e].valid && signature == last[e].signature) {

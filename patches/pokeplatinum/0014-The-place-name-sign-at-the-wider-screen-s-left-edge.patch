@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 10:00:00 -0700
+Subject: [PATCH] The place name sign at the wider screen's left edge
+ (SDK_PORT_3DS)
+
+The 3DS remaster draws the upper screen wider than the DS's. The place
+name sign (the map name pop-up: a window the width of the screen, the sign
+drawn in its left 17 tiles) tells the port it goes to the screen's left
+edge while it shows (NitroPort_WindowAnchor, when its frame is drawn; off
+again when it's hidden, as the field's menu shares its BG); the port's 2D
+renderer moves those tiles there.
+---
+ src/overlay005/map_name_popup.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/src/overlay005/map_name_popup.c b/src/overlay005/map_name_popup.c
+index 079404c2..c940dcf5 100644
+--- a/src/overlay005/map_name_popup.c
++++ b/src/overlay005/map_name_popup.c
+@@ -19,6 +19,13 @@
+ #include "sys_task_manager.h"
+ #include "text.h"
+ 
++#ifdef SDK_PORT_3DS
++// The 3DS remaster draws the upper screen wider than the DS's: the place
++// name sign goes to its left edge while it shows
++// (3ds_port/nitro/include/nitro_port_wide.h).
++extern void NitroPort_WindowAnchor(const void *window, int side, int widthTiles);
++#endif
++
+ #define POPUP_WIDTH_TILES  17
+ #define POPUP_HEIGHT_TILES 5
+ #define POPUP_SIZE_TILES   (POPUP_WIDTH_TILES * POPUP_HEIGHT_TILES)
+@@ -97,6 +104,9 @@ static void MapNamePopUp_DrawWindowFrame(MapNamePopUp *mapPopUp, s32 strWidth)
+ 
+     Window_CopyToVRAM(&mapPopUp->window);
+     Heap_Free(mapPopUp->tiles);
++#ifdef SDK_PORT_3DS
++    NitroPort_WindowAnchor(&mapPopUp->window, -1, POPUP_WIDTH_TILES);
++#endif
+ }
+ 
+ static void MapNamePopUp_Reset(MapNamePopUp *mapPopUp)
+@@ -259,6 +269,9 @@ void MapNamePopUp_Hide(MapNamePopUp *mapPopUp)
+     }
+ 
+     Window_ClearAndCopyToVRAM(&mapPopUp->window);
++#ifdef SDK_PORT_3DS
++    NitroPort_WindowAnchor(&mapPopUp->window, 0, 0);
++#endif
+     Bg_SetOffset(mapPopUp->bgConfig, BG_LAYER_MAIN_3, BG_OFFSET_UPDATE_SET_Y, 0);
+ 
+     BgConfig *bgConfig = mapPopUp->bgConfig;
+-- 
+2.43.0

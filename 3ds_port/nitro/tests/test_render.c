@@ -947,18 +947,20 @@ static void test_wide_canvas(void)
     CHECK(differ == 0);
 
     /* A window of the game's on BG1, at the left of the screen: tiles 0-7 of
-     * rows 0-3 (the DS's x 0-63, y 0-31). On the wider canvas it goes to
-     * the left edge (x 0-63), and where it was (32-95) shows what's behind
-     * BG1 (the backdrop). */
+     * rows 0-3 (the DS's x 0-63, y 0-31). Anchored to the left, on the wider
+     * canvas it goes to the left edge (x 0-63), and where it was (32-95)
+     * shows what's behind BG1 (the backdrop). Not anchored, it stays where
+     * the DS has it. */
     {
-        static u8 tiles[64];
+        static u8 tiles[96];
         static u16 map[32 * 32];
-        static u16 pltt[16] = { GREY, RED };
+        static u16 pltt[16] = { GREY, RED, BLUE };
         static struct { void *config; u8 layer, left, top, width, height; } window = { NULL, 1, 0, 0, 8, 4 };
         int i;
 
         Reset();
         MakeTile4(tiles + 32, 1);
+        MakeTile4(tiles + 64, 2);
         for (i = 0; i < 32 * 32; i++) {
             map[i] = ((i % 32) < 8 && (i / 32) < 4) ? 1 : 0;   /* the window's tiles red */
         }
@@ -971,25 +973,70 @@ static void test_wide_canvas(void)
         NitroPort_WindowAdded(&window, 1, 0, 0, 8, 4);
         split.anchorWindows = 1;
         NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[5 * 320 + 5] == RED);          /* not anchored: where the DS has it... */
+        CHECK(wide[5 * 320 + 32] == RED);
+        CHECK(wide[5 * 320 + 95] == RED);
+        CHECK(wide[5 * 320 + 96] == GREY);
+        /* (...and its plain red edge goes on into the band) */
+        NitroPort_WindowAnchor(&window, -1, 0);
+        NitroPort_Render2DSplit(0, wide, &split);
         CHECK(wide[5 * 320 + 5] == RED);          /* moved to the left edge */
         CHECK(wide[5 * 320 + 63] == RED);
         CHECK(wide[5 * 320 + 64] == GREY);        /* where it was: the backdrop */
         CHECK(wide[5 * 320 + 95] == GREY);
         CHECK(wide[40 * 320 + 5] == GREY);        /* below the window: the band */
-        /* A window across the middle stays. */
-        window.left = 2;
-        window.width = 28;
+        /* Only its first 4 tiles anchored: they go to the edge; the rest
+         * (tiles 4-7, red too) stay where the DS has them. */
+        NitroPort_WindowAnchor(&window, -1, 4);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[5 * 320 + 5] == RED);          /* tiles 0-3 at the edge: x 0-31 */
+        CHECK(wide[5 * 320 + 31] == RED);
+        CHECK(wide[5 * 320 + 32] == GREY);        /* where tiles 0-3 were */
+        CHECK(wide[5 * 320 + 63] == GREY);
+        CHECK(wide[5 * 320 + 64] == RED);         /* tiles 4-7, where they were */
+        CHECK(wide[5 * 320 + 95] == RED);
+        CHECK(wide[5 * 320 + 96] == GREY);
         NitroPort_WindowRemoved(&window);
-        NitroPort_WindowAdded(&window, 1, 2, 0, 28, 4);
+        /* On the picture screens (the opening, the title), a BG with none of
+         * the game's windows is a picture: where its edge isn't plain, it's
+         * mirrored at the DS's edge. Tiles 0 and 1 of row
+         * 0: red, blue (each tile's top left pixel blue: MakeTile4); the
+         * rest empty. Line 0's edge isn't plain (that pixel), line 5's is. */
         for (i = 0; i < 32 * 32; i++) {
-            map[i] = ((i % 32) >= 2 && (i / 32) < 4) ? 1 : 0;
+            map[i] = (i == 0) ? 1 : (i == 1) ? 2 : 0;
+        }
+        GX_LoadBG1Scr(map, 0, sizeof(map));
+        NitroPort_WideForcePictures(0);          /* the UI: nothing beside the picture */
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[0 * 320 + 32] == BLUE);
+        CHECK(wide[0 * 320 + 31] == GREY);
+        CHECK(wide[5 * 320 + 31] == RED);        /* (a plain edge still goes on) */
+        NitroPort_WideForcePictures(1);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[0 * 320 + 32] == BLUE);
+        CHECK(wide[0 * 320 + 33] == RED);
+        CHECK(wide[0 * 320 + 40] == BLUE);
+        CHECK(wide[0 * 320 + 31] == BLUE);        /* mirrored: x -1 is the DS's 0 */
+        CHECK(wide[0 * 320 + 30] == RED);
+        CHECK(wide[0 * 320 + 24] == RED);         /* x -8 is the DS's 7 */
+        CHECK(wide[0 * 320 + 23] == BLUE);        /* x -9 is the DS's 8 */
+        CHECK(wide[0 * 320 + 16] == BLUE);
+        CHECK(wide[0 * 320 + 15] == GREY);        /* x -17 is the DS's 16: empty */
+        CHECK(wide[0 * 320 + 0] == GREY);
+        CHECK(wide[5 * 320 + 31] == RED);         /* line 5: a plain edge goes on */
+        CHECK(wide[5 * 320 + 0] == RED);
+        /* A picture that stops short of the edge (the title's logo) isn't
+         * mirrored: tile 0 empty, tile 1 red. */
+        for (i = 0; i < 32 * 32; i++) {
+            map[i] = (i == 1) ? 1 : 0;
         }
         GX_LoadBG1Scr(map, 0, sizeof(map));
         NitroPort_Render2DSplit(0, wide, &split);
-        CHECK(wide[5 * 320 + 32 + 20] == RED);
-        CHECK(wide[5 * 320 + 32 + 250] == RED);
-        CHECK(wide[5 * 320 + 32 + 12] == GREY);
-        NitroPort_WindowRemoved(&window);
+        CHECK(wide[0 * 320 + 40] == BLUE);
+        CHECK(wide[0 * 320 + 41] == RED);
+        CHECK(wide[0 * 320 + 31] == GREY);
+        CHECK(wide[0 * 320 + 23] == GREY);
+        NitroPort_WideForcePictures(-1);
         split.anchorWindows = 0;
     }
 }

@@ -54,7 +54,11 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene, unsigned *dropped);
 
 typedef struct PicaView {
     C3D_FrameBuf *fb;        /* the screen's render target (colour, depth/stencil) */
-    C3D_FrameBuf *edgeFb;    /* the same colour buffer with the edge marking depth/stencil buffer, or NULL */
+    /* The same colour buffer with an edge marking depth/stencil buffer of
+     * its own for each direction (left, right, up, down), each filled by
+     * the caller with NitroPort_PicaEdgeClearValue before the scene is
+     * drawn; NULL: no edge marking. */
+    C3D_FrameBuf *edgeFb[4];
     int screenWidth, screenHeight;
     PicaRect rect;           /* where the DS's screen goes */
     float stereo;            /* the eye's shift, in screen widths (0: none) */
@@ -66,6 +70,10 @@ typedef struct PicaView {
  * game has it on and view->edgeFb is given), the translucent ones. The
  * rear plane (the clear colour) is the caller's. */
 void NitroPort_PicaDrawScene(const PicaView *view);
+/* Whether the game has edge marking on, and what the edge marking
+ * depth/stencil buffers are to be filled with first (D24S8: the farthest
+ * depth, the rear plane's polygon ID). */
+int NitroPort_PicaEdgeClearValue(u32 *value);
 /* The prepared scene's rear plane: colour (RGB555), alpha 0-31, and
  * whether its pixels of alpha 1-30 blend (DISP3DCNT). */
 void NitroPort_PicaRearPlane(uint16_t *color, unsigned *alpha);
@@ -122,13 +130,19 @@ uint32_t NitroPort_ComposePublished(int engine);
  * here), or NULL. Waits for the GPU. */
 int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, int aOnTop,
                            float slider, int forced);
-/* For the [perf] line: frames composed, the GPU time waited for,
- * publishing time (upscaling) by the drawers, the V-blanks from a scene's
- * making to its showing (lag), and the 3D frames shown late. */
-void NitroPort_ComposeStats(u32 *frames, u64 *gpuTicks, u32 *published, u64 *publishTicks, int *lag,
-                            u32 *late);
-/* A V-blank happened (the compositor paces itself by them), and how many
- * have (any thread). */
+/* For the [perf] line: frames drawn, the time building them (CPU) and the
+ * GPU time waited for, publishing (upscaling) by the drawers, the V-blanks
+ * from a scene's making to its showing (lag), and of the 3D frames (timed)
+ * how many were late. Counts since the start. */
+typedef struct ComposeStats {
+    u32 frames, published, timed, late;
+    u64 gpuTicks, cpuTicks, publishTicks;
+    int lag;
+} ComposeStats;
+void NitroPort_ComposeStats(ComposeStats *stats);
+/* A V-blank happened: the frames due go onto the LCD (the V-blank thread
+ * calls this, each V-blank); and how many V-blanks there have been (any
+ * thread). */
 void NitroPort_ComposeVBlank(void);
 u32 NitroPort_ComposeVBlanks(void);
 #endif
