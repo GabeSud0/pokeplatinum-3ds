@@ -7,7 +7,10 @@
  * On the 3DS the GPU thread hands its finished RGBA8 image over as it is
  * (NitroPort_Gx3dSubmitRGBA8), and whoever draws the 3D next converts it,
  * when it acquires the image: the 3D's screen drawer, on a core of its
- * own, rather than the GPU thread on the game's busy core.
+ * own, rather than the GPU thread on the game's busy core. That drawer is
+ * woken to convert it as soon as it's handed over, if it's free
+ * (NitroPort_Gx3dConvertPending): not while the game waits for it to read
+ * the display.
  */
 #include <nitro_port_gx3d.h>
 #include "port_platform.h"
@@ -115,7 +118,7 @@ int NitroPort_Gx3dRawInUse(const uint32_t *image)
     return used;
 }
 /* The image handed over, converted (by one caller at a time). */
-static void convert_pending(void)
+static int convert_pending(void)
 {
     const uint32_t *image,*depthId;
     NitroGx3dEdgeSetup edges;
@@ -123,7 +126,7 @@ static void convert_pending(void)
     lock();
     if(!sPending || sConverting){
         unlock();
-        return;
+        return 0;
     }
     image=sConverting=sPending;
     depthId=sPendingDepth;
@@ -135,6 +138,11 @@ static void convert_pending(void)
     lock();
     sConverting=NULL;
     unlock();
+    return 1;
+}
+int NitroPort_Gx3dConvertPending(void)
+{
+    return convert_pending();
 }
 static int publish(const uint32_t *src,size_t pixels,const uint32_t *depthId,
                    const NitroGx3dEdgeSetup *edges,int count)

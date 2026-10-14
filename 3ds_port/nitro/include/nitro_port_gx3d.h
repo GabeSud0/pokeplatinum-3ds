@@ -123,6 +123,11 @@ uint32_t NitroPort_Gx3dImageCount(void);
 int NitroPort_Gx3dSubmitRGBA8(const uint32_t *image, const uint32_t *depthId,
                               const NitroGx3dEdgeSetup *edges);
 int NitroPort_Gx3dRawInUse(const uint32_t *image);
+/* Convert the image handed over, if there's one, now rather than when the
+ * 3D is next drawn: for a drawer with a core of its own, between frames.
+ * Returns 1 if it converted one. (By one thread at a time, as
+ * NitroPort_Gx3dAcquireImage: the 3D screen's drawer.) */
+int NitroPort_Gx3dConvertPending(void);
 
 /* Debug-only PNG output for the newest finished RGB555|coverage image.
  * Pixel order is always DS screen order (top-to-bottom, left-to-right).

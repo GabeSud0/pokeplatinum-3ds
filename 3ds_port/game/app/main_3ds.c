@@ -188,6 +188,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped);
 void NitroPort_PicaExit(void);
 void NitroPort_PicaTimes(u64 *build, u64 *wait, u64 *publish);
 void NitroPort_PicaTextureStats(u32 *converted, u64 *texels, u64 *ticks);
+static void DrawersImageHandedOver(void); /* (the drawing threads are below) */
 static Thread sGpuThread;
 static LightEvent sGpuWake;
 static volatile bool sGpuRunning, sGpuWakeReady;
@@ -219,6 +220,7 @@ static void GpuMain(void *unused)
             unsigned dropped=0;
             int drawn=NitroPort_PicaRender(scene,&dropped);
             NitroPort_Gx3dReleaseScene(scene);
+            if(drawn>=0)DrawersImageHandedOver();
             sGpuTicks += svcGetSystemTick()-start; /* sole writer, as with audio */
             __atomic_fetch_add(&sGpuScenes,1u,__ATOMIC_RELAXED);
             if(drawn>=0)__atomic_fetch_add(&sGpuTriangles,
@@ -678,6 +680,8 @@ typedef struct Drawer {
     volatile u64 ticks;      /* time spent drawing, for [perf] */
     volatile unsigned count; /* frames handled */
     volatile unsigned drawn; /* screens drawn (not unchanged) */
+    volatile u64 convertTicks;   /* converting 3D images between frames */
+    volatile unsigned converted; /* 3D images converted between frames */
 } Drawer;
 
 /* Drawers go by engine, not by screen: engine A (with the 3D, the costly
@@ -687,6 +691,7 @@ typedef struct Drawer {
 
 static Drawer sDrawers[2];
 static int sDrawerCount;
+static volatile bool sDrawersStarted;   /* (for the GPU thread) */
 static volatile bool sAOnTop;    /* engine A on the upper screen, this frame */
 /* The screens were cleared (back from the log): draw them even if the
  * game's picture didn't change. 0: upper, 1: lower. */
@@ -744,6 +749,18 @@ static void DrawerMain(void *arg)
         if (d->quit) {
             break;
         }
+        if (!__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE)) {
+            /* No frame: woken because a 3D image was handed over
+             * (DrawersImageHandedOver). Converted now, it's ready when the
+             * next frame comes, and the game doesn't wait for that. */
+            u64 convertStart = svcGetSystemTick();
+
+            if (NitroPort_Gx3dConvertPending()) {
+                d->convertTicks += svcGetSystemTick() - convertStart;
+                d->converted++;
+            }
+            continue;
+        }
         start = svcGetSystemTick();
         /* First everything that reads the game's display state, then the
          * rest: the game waits for the reading only (NitroPort_OnFrame). */
@@ -754,7 +771,10 @@ static void DrawerMain(void *arg)
             drawB = RenderScreen(1, d->aOnTop);
         }
         __atomic_store_n(&d->reading, false, __ATOMIC_RELEASE);
-        if (d->readPriority != d->priority) {
+        /* Below the threads it was above while reading, to show what it
+         * drew; nothing to show (an unchanged screen): no need, and it
+         * would only wait behind them to come back up. */
+        if (d->readPriority != d->priority && (drawA || drawB)) {
             svcSetThreadPriority(CUR_THREAD_HANDLE, d->priority);
         }
         if (drawA) {
@@ -768,12 +788,33 @@ static void DrawerMain(void *arg)
         d->count++;
         /* Back up before it can be handed the next frame: it wakes up
          * reading. */
-        if (d->readPriority != d->priority) {
+        if (d->readPriority != d->priority && (drawA || drawB)) {
             svcSetThreadPriority(CUR_THREAD_HANDLE, d->readPriority);
         }
         __atomic_store_n(&d->busy, false, __ATOMIC_RELEASE);
     }
     threadExit(0);
+}
+
+/* (The 3D's GPU thread) a 3D image was handed over: the drawer of engine
+ * A's screen converts it right away if it has a core of its own (and if
+ * it's drawing a frame, once that's done). On core 0 it would take the
+ * game's time, for images that may never be shown: it converts when it
+ * draws, as before. */
+static void DrawersImageHandedOver(void)
+{
+    int i;
+
+    if (!__atomic_load_n(&sDrawersStarted, __ATOMIC_ACQUIRE)) {
+        return;
+    }
+    for (i = 0; i < sDrawerCount; i++) {
+        Drawer *d = &sDrawers[i];
+
+        if ((d->screens & ENGINE_A) && d->core != 0) {
+            LightEvent_Signal(&d->go);
+        }
+    }
 }
 
 static bool StartDrawer(int screens, s32 priority, s32 readPriority, int core)
@@ -816,12 +857,14 @@ static void StartDrawers(s32 priority, bool isNew3ds)
     } else {
         StartDrawer(ENGINE_A | ENGINE_B, priority + 1, priority + 1, 0);
     }
+    __atomic_store_n(&sDrawersStarted, true, __ATOMIC_RELEASE);
 }
 
 static void StopDrawers(void)
 {
     int i;
 
+    __atomic_store_n(&sDrawersStarted, false, __ATOMIC_RELEASE);
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
 
@@ -1039,14 +1082,30 @@ static void PerfFrame(u64 enter)
         lastGeoScenes = geoScenes;
         lastGeoSkipped = geoSkipped;
         if (scenes) {
-            NitroPort_Log("[perf] 3D: %.1f scenes/s; per scene %.1f ms building (textures: %.2f decoded, %.0f texels, %.1f ms), %.1f ms GPU and copy, %.1f ms handing over (converted by the 3D screen's drawer)",
+            /* Images the 3D screen's drawer converted between frames (the
+             * rest it converts when it draws them). */
+            unsigned converted = 0;
+            double convertMs = 0.0;
+
+            for (i = 0; i < sDrawerCount; i++) {
+                Drawer *d = &sDrawers[i];
+
+                if (d->screens & ENGINE_A) {
+                    converted = d->converted;
+                    convertMs = converted ? (double)d->convertTicks * 1000.0 / SYSCLOCK_ARM11 / converted : 0.0;
+                    d->converted = 0;
+                    d->convertTicks = 0;
+                }
+            }
+            NitroPort_Log("[perf] 3D: %.1f scenes/s; per scene %.1f ms building (textures: %.2f decoded, %.0f texels, %.1f ms), %.1f ms GPU and copy, %.1f ms handing over; converted by the 3D screen's drawer, %.1f/s between frames (%.1f ms each)",
                           scenes / seconds,
                           (double)(build - lastBuild) * 1000.0 / SYSCLOCK_ARM11 / scenes,
                           (double)(texConverted - lastTexConverted) / scenes,
                           (double)(texTexels - lastTexTexels) / scenes,
                           (double)(texTicks - lastTexTicks) * 1000.0 / SYSCLOCK_ARM11 / scenes,
                           (double)(wait - lastWait) * 1000.0 / SYSCLOCK_ARM11 / scenes,
-                          (double)(publish - lastPublish) * 1000.0 / SYSCLOCK_ARM11 / scenes);
+                          (double)(publish - lastPublish) * 1000.0 / SYSCLOCK_ARM11 / scenes,
+                          converted / seconds, convertMs);
         }
         lastBuild = build;
         lastWait = wait;
