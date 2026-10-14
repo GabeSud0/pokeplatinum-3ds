@@ -1143,7 +1143,17 @@ static void test_wide_art(void)
     NitroPort_Render2DSplit(0, wide, &split);
     CHECK(wide[5 * 320 + 4] == RED);
     CHECK(wide[5 * 320 + 12] == BLUE);
-    CHECK(wide[5 * 320 + 315] == GREY);          /* past the picture's right: nothing */
+    /* Past the picture's right: the map goes round (256 pixels: a text
+     * BG wraps), and so does the picture: canvas x 315 is the picture's
+     * x 323, the map's place of its x 67, green. (Was: nothing, the
+     * backdrop; that cut off the intro's scrolling strips.) */
+    CHECK(wide[5 * 320 + 315] == RGB(0, 31, 0));
+    /* ... and scrolled back 8: the left band's x 0 is the picture's -8,
+     * the same place of the map as its 248, green */
+    G2_SetBG1Offset(512 - 8, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 0] == RGB(0, 31, 0));
+    CHECK(wide[5 * 320 + 20] == RED);            /* (the picture's 12, 8 on) */
     G2_SetBG1Offset(0, 0);
     /* the whole picture: the middle too */
     WriteArt(dir, key, 0, 0, 1, art);
@@ -1288,16 +1298,21 @@ static void test_wide_art_objs(void)
     for (i = 0; i < 320 * 192; i++) {
         art[i] = RGB(31, 31, 0) | 0x8000;
     }
+    art[5 * 320 + 0] = RGB(31, 0, 31) | 0x8000;          /* (a mark, to see it move) */
     WriteArt(dir, groups[g3].key, groups[g3].x, groups[g3].y, 0, art);
     CHECK(NitroPort_WideArtLoad(dir) == 1);
     split.over = over;
     split.overAlpha = overAlpha;
     NitroPort_Render2DSplit(0, wide, &split);
-    CHECK(wide[5 * 320 + 3] == RGB(31, 31, 0));          /* the bands */
+    CHECK(wide[5 * 320 + 0] == RGB(31, 0, 31));          /* the bands */
+    CHECK(wide[5 * 320 + 3] == RGB(31, 31, 0));
     CHECK(wide[5 * 320 + 300] == RGB(31, 31, 0));
     CHECK(wide[5 * 320 + 100] != RGB(31, 31, 0));        /* not the middle */
     CHECK(wide[102 * 320 + 32 + 12] == RED);             /* the other group's OBJ */
-    /* the group moved 8 right: so did the picture (its left 8 columns empty) */
+    /* the group moved 8 right: so did the picture; its left 8 columns are
+     * its x -8 to -1, a screen's width on (248-255): a strip of sprites
+     * that scrolls round goes on. (Was: empty, which cut the intro's
+     * strips short of the screen's edge.) */
     G2_SetOBJAttr(&oam[0], 108, 40, 3, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
                   GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 3, 0, 0);
     G2_SetOBJAttr(&oam[1], 68, 40, 3, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
@@ -1305,7 +1320,8 @@ static void test_wide_art_objs(void)
     DC_FlushRange(oam, sizeof(oam));
     GX_LoadOAM(oam, 0, sizeof(oam));
     NitroPort_Render2DSplit(0, wide, &split);
-    CHECK(wide[5 * 320 + 3] != RGB(31, 31, 0));
+    CHECK(wide[5 * 320 + 8] == RGB(31, 0, 31));
+    CHECK(wide[5 * 320 + 3] == RGB(31, 31, 0));
     CHECK(wide[5 * 320 + 10] == RGB(31, 31, 0));
     /* the capture: an obj line for each group, and its picture */
     {

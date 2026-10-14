@@ -226,6 +226,22 @@ class WideArtTest(unittest.TestCase):
         self.assertEqual(sq.getpixel((40, 63)), (0, 0, 0))          # black at the bottom
         self.assertEqual(core.hue_bar(4, 64).size, (4, 64))
 
+    def test_transform(self):
+        img = Image.new("RGBA", (4, 2), (0, 0, 0, 0))
+        img.putpixel((0, 0), (255, 0, 0, 255))
+        self.assertEqual(core.transform(img, 2, 2).size, (8, 4))
+        big = core.transform(img, 2, 2)
+        self.assertEqual(big.getpixel((1, 1)), (255, 0, 0, 255))      # sharp: whole pixels
+        self.assertEqual(big.getpixel((2, 0))[3], 0)
+        r = core.transform(img, angle=90)                              # anticlockwise
+        self.assertEqual(r.size, (2, 4))
+        self.assertEqual(r.getpixel((0, 3)), (255, 0, 0, 255))
+        self.assertEqual(core.transform(img, angle=-90).getpixel((1, 0)), (255, 0, 0, 255))
+        t = core.transform(img, angle=30)
+        self.assertGreater(t.width, 4)
+        self.assertTrue({p[3] for p in t.getdata()} <= {0, 255})      # no half-transparent pixels
+        self.assertEqual(core.transform(img, 0.1, 0.1).size, (1, 1))
+
 
 if __name__ == "__main__":
     unittest.main()

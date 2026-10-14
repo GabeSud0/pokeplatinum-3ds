@@ -39,8 +39,10 @@ screen, and the game shows your drawing instead.
 | Brush (B), Eraser (E) | round, 1 to 32 pixels across (the slider, or **[** and **]**); the eraser makes pixels transparent (the layers behind show) |
 | Fill (G) | the area of one colour |
 | Pick colour (I), right-click | the colour under the cursor |
-| Select (M), Ctrl+A | a rectangle; Ctrl+C copies it, Ctrl+V pastes (the copy follows the mouse until you click; H flips it), Delete clears it, H flips it in place |
-| Move (V) | drag the drawing layer (nothing selected), or drag the selection's pixels; the arrow keys move by 1 pixel, Shift+arrows by 8 |
+| Select (M), Ctrl+A, Ctrl+D | drag a rectangle; then **drag inside it to cut and move those pixels** (hold Alt to move a copy, leaving them where they were). They float (an orange outline) until you put them down: Enter, a click outside, or another tool; Esc puts them back where they were. While floating: drag them again, the arrow keys move by 1 pixel (Shift: 8), H flips them, Delete throws them away |
+| Ctrl+T, R, Shift+R, H, Shift+H | scale and rotate the selection (by % and degrees, as you watch; 90° turns, flips; sharp pixels unless "Smooth"); turn it 90° right / left; flip it left-right / upside down. It stays floating, to drag into place |
+| Ctrl+X, Ctrl+C, Ctrl+V | cut, copy, paste the selection; the paste floats where the copy came from (or in the selection), ready to drag into place. Ctrl+Shift+V pastes onto a new drawing layer |
+| Move (V) | drag the drawing layer (nothing selected), or the selection's pixels as Select does; the arrow keys move by 1 pixel, Shift+arrows by 8 |
 | Colour picker (click the colour) | a hue bar and a saturation/brightness square, the colour by H S B, R G B or hex; "in the game" is the colour as the DS shows it |
 | Recent, This screen's colours | the colours you used last; the colours the screen uses (drawing with them keeps the game's look) |
 | Ctrl+Z, Ctrl+Y | undo, redo |
@@ -74,14 +76,17 @@ thing.
 
 A picture belongs to a layer by its **key**: a fingerprint of that layer's
 art (a BG's map, the tiles it uses, their colours; a sprite group's
-sprites' pixels and colours), not of where the game put it in memory or how
+tiles and colours, not how many sprites show them or how they're cut), not of where the game put it in memory or how
 it's scrolled. So:
 
 - it shows whenever that layer shows, on any visit to that screen, whatever
   the other layers do (text printing, a cursor moving);
 - if the layer scrolls (a BG) or moves (a sprite group), the picture moves
-  with it (by the distance since the capture); past the picture's edge,
-  the bands are empty;
+  with it (by the distance since the capture), so what you drew stays
+  exactly where you put it on the layer; past the picture's edge it goes
+  round as the layer does (a BG's map wraps every 256 or 512 pixels, a
+  sprite strip every screen's width), so a scrolling strip, like the
+  opening's, reaches both edges all the time;
 - if the layer's own art changes (text printed into it, a palette fading,
   a sprite animating), the key changes and the port's own rules come back
   until it's the same art again. Text boxes and menus are usually on layers
@@ -89,9 +94,14 @@ it's scrolled. So:
 
 A sprite group's picture goes where the group has no sprite, at the
 group's priority (so the layers in front of the sprites stay in front).
-A group that moves all the time (the opening's strip scrolls by 8 pixels a
-frame, and its sprites already reach the screen's edges) is better left as
-it is; a still one (a menu's sprite frame) is what drawing it is for.
+
+**Placing a picture.** The port's own rules can only mirror or extend what
+reaches the DS's edge. Where that looks wrong (a Pokemon cut by the DS's
+edge mirrored into the band), draw the layer as it should be: move it
+(Move tool) so that what the DS cut at its edge is cut at the wide
+screen's edge, erase what the rules made, and draw the strips on to the
+edges. Saved with the middle changed, the whole layer is yours, at the
+place you put it.
 
 Files, in `3ds/pokeplatinum/wide`:
 
@@ -118,7 +128,7 @@ shared or committed.
 - `3ds_port/nitro/src/port_render2d.c`: a BG's key (`BgKey`), the picture
   in its bands (`LookUpArt`, `SEG_ART`), one layer alone
   (`NitroPort_Render2DLayer`); the sprite groups (`ObjGroups`, keyed by
-  `ObjHash`), their pictures in the OBJ line (`LookUpObjArt`, `DrawObjs`),
+  the tiles they use), their pictures in the OBJ line (`LookUpObjArt`, `DrawObjs`),
   one group alone (`NitroPort_Render2DObjLayer`).
 - `3ds_port/game/app/main_3ds.c`: L + R + X, L + R + A; the PC runner:
   `--wide-art DIR`, control commands `capture DIR`, `wideart DIR`, `oam`.
