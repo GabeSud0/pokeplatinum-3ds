@@ -1032,6 +1032,8 @@ static NitroGx3dThreadOps sOps;
 static uint32_t sSwapsQueued, sSwapsDone, sSwapsSkipped;
 static int sSkipScene;
 static uint64_t sWorkerBusy;
+static uint32_t sWorkerWakeups;      /* stretches of work (each after a sleep) */
+static uint64_t sWorkerLongest;      /* the longest of them since last read */
 
 static void publish(void)
 {
@@ -1616,8 +1618,13 @@ void NitroPort_Gx3dThreadMain(const volatile int *running)
             }
         }
         __atomic_store_n(&sRingRead,r,__ATOMIC_SEQ_CST);
-        if(sOps.ticks)__atomic_store_n(&sWorkerBusy,sWorkerBusy+(sOps.ticks(sOps.context)-start),
-                                       __ATOMIC_RELAXED);
+        if(sOps.ticks){
+            uint64_t took=sOps.ticks(sOps.context)-start;
+            __atomic_store_n(&sWorkerBusy,sWorkerBusy+took,__ATOMIC_RELAXED);
+            if(took>__atomic_load_n(&sWorkerLongest,__ATOMIC_RELAXED))
+                __atomic_store_n(&sWorkerLongest,took,__ATOMIC_RELAXED);
+        }
+        __atomic_store_n(&sWorkerWakeups,sWorkerWakeups+1u,__ATOMIC_RELAXED);
         if(__atomic_load_n(&sProducerWaiting,__ATOMIC_SEQ_CST) &&
            __atomic_exchange_n(&sProducerWaiting,0,__ATOMIC_SEQ_CST))
             sOps.wake_producer(sOps.context);
@@ -1662,6 +1669,11 @@ int NitroPort_Gx3dEarlierSceneUnread(void)
     if(__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE)+1u<last)return 1;
     unread=NitroPort_MailboxUnread(&sMailbox);
     return unread!=0 && unread<last;
+}
+void NitroPort_Gx3dThreadWakeups(uint32_t *wakeups,uint64_t *longest)
+{
+    if(wakeups)*wakeups=__atomic_load_n(&sWorkerWakeups,__ATOMIC_RELAXED);
+    if(longest)*longest=__atomic_exchange_n(&sWorkerLongest,0,__ATOMIC_RELAXED);
 }
 void NitroPort_Gx3dThreadStats(uint64_t *busy,uint32_t *scenes,uint32_t *skipped)
 {

@@ -174,6 +174,10 @@ void NitroPort_Gx3dFlush(void);
 /* The thread's busy time (in ticks), scenes finished, and scenes left out
  * because it was behind (the game never waits for it). */
 void NitroPort_Gx3dThreadStats(uint64_t *busy, uint32_t *scenes, uint32_t *skipped);
+/* How many times the thread has woken up to work (it sleeps whenever it has
+ * done all it was handed), and its longest stretch of work, in ticks (both
+ * for the [perf] line; the longest is reset when read). */
+void NitroPort_Gx3dThreadWakeups(uint32_t *wakeups, uint64_t *longest);
 /* Whether a scene the game ended before its newest SWAP_BUFFERS may still
  * be read (the 3DS's GPU thread reads the texture VRAM as it draws one):
  * the geometry thread hasn't finished it, or the consumer is reading it or
