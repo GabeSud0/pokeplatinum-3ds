@@ -231,9 +231,10 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
         unsigned k;
         if(!alpha)continue;
         batch_state(tri,&param,&palette,&attr);
-        /* Translucent polygons don't draw over translucent pixels of their
-         * own polygon ID: it's part of their state. */
-        if(pass)attr|=tri->polygon_attr&(63u<<24);
+        /* The polygon ID is part of the state: translucent polygons don't
+         * draw over translucent pixels of their own polygon ID, and edge
+         * marking outlines opaque ones by ID. */
+        attr|=tri->polygon_attr&(63u<<24);
         batch=nb?&batches[nb-1]:NULL;
         if(!batch || batch->texture_param!=param || batch->palette_base!=palette ||
            batch->polygon_attr!=attr || batch->translucent!=pass){

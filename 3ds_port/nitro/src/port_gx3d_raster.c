@@ -3,8 +3,9 @@
  * Perspective-correct texture coordinates, z-buffer, the DS texture formats,
  * and palettes from VRAM bank slots, including 4x4 compressed textures.
  *
- * Unimplemented DS-specific postprocessing: toon/highlight, fog, edge
- * marking, antialiasing, polygon IDs and shadow stencil. Translucent faces
+ * Edge marking: port_gx3d_edge.c, after the scene is drawn.
+ * Unimplemented DS-specific postprocessing: toon/highlight, fog,
+ * antialiasing and shadow stencil. Translucent faces
  * are drawn after opaque faces, but full DS alpha-sort modes, per-pixel
  * translucent polygon IDs, and translucency sorting by depth remain TODO.
  * Geometry capture
@@ -32,6 +33,10 @@ static uint8_t sAlpha[W*H];   /* each pixel's 3D alpha, 0-31 */
  * model's overlapping translucent parts don't add up. */
 #define NO_TRANSLUCENT 0xFFu
 static uint8_t sTranslucentId[W*H];
+/* The polygon ID of the opaque pixel drawn last at each pixel, 0xFF for
+ * none (translucent pixels leave it): edge marking's. */
+static uint8_t sOpaqueId[W*H];
+static uint32_t sDepthId[W*H];
 static int sWBuffer;   /* the scene uses W-buffering (SWAP_BUFFERS bit 1) */
 
 static uint16_t rd16(const unsigned char *p)
@@ -145,6 +150,7 @@ static void raster_triangle(const NitroGx3dTriangle *tri,uint16_t *out)
             sTranslucentId[index]=(uint8_t)id;
         }else{
             sTranslucentId[index]=NO_TRANSLUCENT;
+            sOpaqueId[index]=(uint8_t)((tri->polygon_attr>>24)&63u);
         }
         storedAlpha=pixelAlpha;
         if(pixelAlpha<31 && (NitroPort_IoReg[0x60]&8u) &&
@@ -181,6 +187,7 @@ void NitroPort_Gx3dRasterizeSceneAlpha(const NitroGx3dScene *scene,uint16_t *rgb
         rgba555[i]=(uint16_t)((clear&0x7fff)|(((clear>>16)&31)?0x8000:0));
         sAlpha[i]=(uint8_t)((clear>>16)&31);
         sTranslucentId[i]=NO_TRANSLUCENT;
+        sOpaqueId[i]=0xFF;
     }
     sWBuffer=(scene->swap_param&2u)!=0;
     if(scene->count){
@@ -190,6 +197,15 @@ void NitroPort_Gx3dRasterizeSceneAlpha(const NitroGx3dScene *scene,uint16_t *rgb
         size_t n=NitroPort_Gx3dDrawOrder(scene,order,scratch);
         NitroPort_Gx3dMapTextureBanks(&sBanks);
         for(i=0;i<n;i++)raster_triangle(&scene->triangles[order[i]],rgba555);
+    }
+    {
+        NitroGx3dEdgeSetup edges;
+        NitroPort_Gx3dEdgeSetup(&edges);
+        if(edges.enabled){
+            for(i=0;i<W*H;i++)
+                sDepthId[i]=(sDepth[i]&0xFFFFFFu)|((uint32_t)sOpaqueId[i]<<24);
+            NitroPort_Gx3dMarkEdges(rgba555,sAlpha,sDepthId,&edges,NULL);
+        }
     }
     if(depth_out)memcpy(depth_out,sDepth,sizeof(sDepth));
     if(alpha_out)memcpy(alpha_out,sAlpha,sizeof(sAlpha));

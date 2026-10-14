@@ -69,8 +69,14 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
     static uint32_t tiled[1024 * 1024];
     static Color color[W * H];
     static float depth[W * H];
-    static uint8_t stencil[W * H];   /* translucent polygon ID, 0xFF: none */
+    /* As port_gx3d_pica.c keeps it: translucent polygon ID + 64, 0xFF:
+     * none; then the opaque polygon IDs for edge marking. */
+    static uint8_t stencil[W * H];
+    static uint32_t depthId[W * H];
+    static uint8_t alpha[W * H];
     NitroGx3dTexBanks banks;
+    NitroGx3dEdgeSetup edges;
+    int idPass;
     size_t nb = 0, b, i;
     unsigned dropped;
     uint32_t clear = (uint32_t)NitroPort_IoReg[0x350] | ((uint32_t)NitroPort_IoReg[0x351] << 8) |
@@ -92,6 +98,11 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
     NitroPort_Gx3dMapTextureBanks(&banks);
     NitroPort_Gx3dBuildBatches(scene, verts, NITRO_GX3D_PICA_MAX_VERTICES, batches,
                                NITRO_GX3D_MAX_TRIANGLES, &nb, &dropped);
+    NitroPort_Gx3dEdgeSetup(&edges);
+    edges.clearDepth = 0xFFFFFFu;   /* the target is cleared to the farthest */
+    /* Pass 1 draws; with edge marking, pass 2 writes the opaque pixels'
+     * polygon IDs to the stencil where they're in front (port_gx3d_pica.c). */
+    for (idPass = 0; idPass < (edges.enabled ? 2 : 1); idPass++)
     for (b = 0; b < nb; b++) {
         const NitroGx3dBatch *batch = &batches[b];
         unsigned mode = (batch->polygon_attr >> 4) & 3u;
@@ -121,6 +132,14 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
             }
             passes[np].translucent = 1;
             passes[np].blend = blend; passes[np++].writeDepth = bit11;
+        }
+        if (idPass) {
+            if (batch->translucent && ((batch->polygon_attr >> 16) & 31u) != 31u) continue;
+            passes[0].test = batch->translucent ? 1 : 0;
+            passes[0].blend = 0;
+            passes[0].writeDepth = 0;
+            passes[0].translucent = 0;
+            np = 1;
         }
         if (textured)
             NitroPort_Gx3dDecodeTextureTiled(&banks, batch->texture_param, batch->palette_base, tiled);
@@ -156,7 +175,7 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
                     Color prim, tex, out;
                     unsigned idx = (unsigned)y * W + (unsigned)x;
                     if (l0 < -1e-6f || l1 < -1e-6f || l2 < -1e-6f) continue;
-                    if (passes[p].translucent && stencil[idx] == id) continue;
+                    if (passes[p].translucent && stencil[idx] == (64u | id)) continue;
                     z = l0 * sz[0] + l1 * sz[1] + l2 * sz[2];
                     pw = l0 * iw[0] + l1 * iw[1] + l2 * iw[2];
                     /* The PICA's W-buffer mode, which W-buffered scenes
@@ -164,7 +183,7 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
                      * perspective-correct W. */
                     if (wbuffer)
                         z = pw != 0.0f ? z / pw : 1.0f;
-                    if (equal ? !(z <= depth[idx]) : !(z < depth[idx])) continue;
+                    if (idPass ? z != depth[idx] : equal ? !(z <= depth[idx]) : !(z < depth[idx])) continue;
                     if (pw == 0.0f) continue;
                     /* Perspective-correct, as the PICA interpolates. */
                     prim.r = (l0 * iw[0] * v[0].color[0] + l1 * iw[1] * v[1].color[0] + l2 * iw[2] * v[2].color[0]) / pw / 255.0f;
@@ -195,6 +214,10 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
                         if (passes[p].test == 0 ? !(a8 > 0) : passes[p].test == 1 ? !(a8 > 254) : !(a8 < 255))
                             continue;
                     }
+                    if (idPass) {
+                        stencil[idx] = (uint8_t)id;
+                        continue;
+                    }
                     if (passes[p].blend) {
                         Color d = color[idx];
                         out.r = out.r * out.a + d.r * (1.0f - out.a);
@@ -204,7 +227,7 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
                     }
                     color[idx] = out;
                     if (passes[p].writeDepth) depth[idx] = z;
-                    stencil[idx] = passes[p].translucent ? (uint8_t)id : 0xFF;
+                    stencil[idx] = passes[p].translucent ? (uint8_t)(64u | id) : 0xFF;
                 }
             }
         }
@@ -222,5 +245,13 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
         unsigned g = (unsigned)(color[i].g * 255.0f + 0.5f) >> 3;
         unsigned bl = (unsigned)(color[i].b * 255.0f + 0.5f) >> 3;
         out555[i] = (uint16_t)(r | (g << 5) | (bl << 10) | (color[i].a > 0.0f ? 0x8000u : 0u));
+    }
+    if (edges.enabled) {
+        for (i = 0; i < W * H; i++) {
+            float z = depth[i] < 0.0f ? 0.0f : depth[i] > 1.0f ? 1.0f : depth[i];
+            depthId[i] = (uint32_t)(z * 16777215.0f) | ((uint32_t)stencil[i] << 24);
+            alpha[i] = (uint8_t)((unsigned)(color[i].a * 255.0f + 0.5f) >> 3);
+        }
+        NitroPort_Gx3dMarkEdges(out555, alpha, depthId, &edges, NULL);
     }
 }

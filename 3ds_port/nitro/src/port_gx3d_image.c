@@ -73,6 +73,11 @@ static void make_unpremultiply(void)
 #define RGB555(c) (((c)>>27)|(((c)>>14)&0x3E0u)|(((c)>>1)&0x7C00u))
 int NitroPort_Gx3dPublishRGBA8(const uint32_t *src,size_t pixels)
 {
+    return NitroPort_Gx3dPublishRGBA8Edges(src,pixels,NULL,NULL);
+}
+int NitroPort_Gx3dPublishRGBA8Edges(const uint32_t *src,size_t pixels,
+                                    const uint32_t *depthId,const NitroGx3dEdgeSetup *edges)
+{
     int index;
     size_t i;
     unsigned partly=0;
@@ -122,6 +127,11 @@ int NitroPort_Gx3dPublishRGBA8(const uint32_t *src,size_t pixels)
             out[i]=pair[0]|((uint32_t)pair[1]<<16);
             alphas[i]=(uint16_t)(pairAlpha[0]|(pairAlpha[1]<<8));
         }
+    }
+    if(depthId && edges && edges->enabled){
+        int outlinesPartly=0;
+        NitroPort_Gx3dMarkEdges(sImages[index],sAlphas[index],depthId,edges,&outlinesPartly);
+        partly|=(unsigned)outlinesPartly;
     }
     sTranslucent[index]=(uint8_t)(partly!=0);
     finish(index);

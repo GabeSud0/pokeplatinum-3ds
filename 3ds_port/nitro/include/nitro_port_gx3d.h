@@ -78,6 +78,32 @@ void NitroPort_Gx3dReleaseScene(const NitroGx3dScene *scene);
 const uint16_t *NitroPort_Gx3dAcquireImage(void);
 void NitroPort_Gx3dReleaseImage(const uint16_t *image);
 int NitroPort_Gx3dPublishRGBA8(const uint32_t *image, size_t pixels);
+
+/* Edge marking (DISP3DCNT bit 5; see port_gx3d_edge.c): its registers. */
+typedef struct NitroGx3dEdgeSetup {
+    int enabled;             /* DISP3DCNT bit 5 */
+    int antialias;           /* DISP3DCNT bit 4: outlines half blended */
+    uint16_t colors[8];      /* EDGE_COLOR, by polygon ID / 8 (RGB555) */
+    uint8_t clearId;         /* the rear plane's polygon ID (CLEAR_COLOR) */
+    uint16_t clearColor;     /* its colour (RGB555) */
+    uint8_t clearAlpha;      /* and alpha, 0-31 */
+    uint32_t clearDepth;     /* its depth, 24 bits (CLEAR_DEPTH) */
+} NitroGx3dEdgeSetup;
+void NitroPort_Gx3dEdgeSetup(NitroGx3dEdgeSetup *setup);
+/* Outline a finished image: image is RGB555 | 0x8000 (drawn), alpha 0-31
+ * per pixel; depthId per pixel: depth (24 bits, smaller is nearer) | the
+ * opaque polygon ID there << 24, or 64-127 or 255 for none (64-127: the
+ * GPU path's last translucent ID). *translucent (if not NULL) is set if
+ * an outline made a pixel partly transparent. */
+void NitroPort_Gx3dMarkEdges(uint16_t *image, uint8_t *alpha, const uint32_t *depthId,
+                             const NitroGx3dEdgeSetup *setup, int *translucent);
+/* How many pixels of depthId have an ID byte 128-254: none should (the
+ * GPU path's depth/stencil buffer isn't read back as expected otherwise). */
+unsigned NitroPort_Gx3dEdgeIdsUnexpected(const uint32_t *depthId);
+/* Publish with edge marking: depthId as for NitroPort_Gx3dMarkEdges, in
+ * the image's pixel order. */
+int NitroPort_Gx3dPublishRGBA8Edges(const uint32_t *image, size_t pixels,
+                                    const uint32_t *depthId, const NitroGx3dEdgeSetup *setup);
 /* The 3D alpha (0-31) of each pixel of an acquired image, or NULL. On the
  * DS a 3D pixel with alpha 1-30 blends with the 2D layer under BG0. */
 const uint8_t *NitroPort_Gx3dImageAlpha(const uint16_t *image);

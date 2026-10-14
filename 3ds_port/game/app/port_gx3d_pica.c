@@ -10,7 +10,10 @@
  * Triangles are drawn in batches that share a texture and polygon mode,
  * opaque ones first and translucent ones after, in the DS's order
  * (NitroPort_Gx3dDrawOrder), as the reference does.
- * Toon/highlight, shadow polygons, fog and edge marking are later PRs.
+ * Edge marking: the opaque pixels' polygon IDs go to the stencil buffer
+ * in a second pass, and the depth/stencil buffer is read back with the
+ * image; port_gx3d_edge.c outlines it as it's published.
+ * Toon/highlight, shadow polygons and fog are later PRs.
  */
 #ifdef __3DS__
 #include <3ds.h>
@@ -22,6 +25,7 @@
 #include <string.h>
 
 extern unsigned char NitroPort_IoReg[];
+void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 #define GX3D_W NITRO_GX3D_WIDTH
 #define GX3D_H NITRO_GX3D_HEIGHT
@@ -61,6 +65,13 @@ static shaderProgram_s sProgram;
 static int sProgramReady;
 static NitroGx3dGpuVertex *sVertices[2];
 static u32 *sImages[2];
+/* The depth/stencil buffer, read back for edge marking: 24-bit depth and
+ * the stencil (an opaque polygon ID, or 64-127/255 for none) << 24. */
+static u32 *sDepthIds[2];
+/* Edge marking works (off for good if the buffer read back ever isn't as
+ * expected), and how many scenes' buffers are still to be checked. */
+static int sEdgeMarking=1;
+static unsigned sEdgeChecks=60;
 static int sBuffer;
 static NitroGx3dBatch *sBatches;
 static TexEntry sTextures[TEX_CACHE_ENTRIES];
@@ -87,7 +98,8 @@ static void clean_up(void)
     for(i=0;i<2;i++){
         if(sVertices[i])linearFree(sVertices[i]);
         if(sImages[i])linearFree(sImages[i]);
-        sVertices[i]=NULL;sImages[i]=NULL;
+        if(sDepthIds[i])linearFree(sDepthIds[i]);
+        sVertices[i]=NULL;sImages[i]=NULL;sDepthIds[i]=NULL;
     }
     free(sBatches);sBatches=NULL;
     if(sProgramReady){
@@ -127,7 +139,8 @@ int NitroPort_PicaInit(void)
         sVertices[i]=linearAlloc(NITRO_GX3D_PICA_MAX_VERTICES*
                                  sizeof(NitroGx3dGpuVertex));
         sImages[i]=linearAlloc(IMAGE_BYTES);
-        if(!sVertices[i]||!sImages[i])goto fail;
+        sDepthIds[i]=linearAlloc(IMAGE_BYTES);
+        if(!sVertices[i]||!sImages[i]||!sDepthIds[i])goto fail;
         memset(sImages[i],0,IMAGE_BYTES);
     }
     sBatches=malloc(MAX_BATCHES*sizeof(*sBatches));
@@ -272,8 +285,9 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     size_t count,nbatches=0,b;
     unsigned lost=0;
     C3D_BufInfo *buffers;
-    int slot,blend;
+    int slot,blend,edging;
     u32 clear,clearColor;
+    NitroGx3dEdgeSetup edges;
     if(dropped)*dropped=scene ? scene->dropped : 0;
     if(!sTarget||!scene)return -1;
     slot=sBuffer;
@@ -297,6 +311,11 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     if(!((clear>>16)&31u))clearColor=0;
     /* DISP3DCNT bit 3: alpha blending. */
     blend=(NitroPort_IoReg[0x60]&8u)!=0;
+    /* Bit 5: edge marking. The rear plane is at the depth this target is
+     * cleared to, the farthest. */
+    NitroPort_Gx3dEdgeSetup(&edges);
+    edges.clearDepth=0xFFFFFFu;
+    edging=edges.enabled && sEdgeMarking;
     /* Waits for the GPU to finish the previous frame (it has: this thread
      * waited for its transfer). No SYNCDRAW: that waits for a V-blank of
      * both screens, and this image isn't shown by itself; the 2D drawer
@@ -344,9 +363,10 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
         }
         set_combiner(attr,textured);
         /* The stencil buffer keeps the polygon ID of each pixel's last
-         * translucent draw, 0xFF after an opaque one (and cleared to it):
-         * the DS doesn't draw a translucent pixel over a translucent one
-         * of the same polygon ID. Opaque pixels set it to 0xFF. */
+         * translucent draw, plus 64 (edge marking puts opaque IDs, 0-63,
+         * there afterwards), 0xFF after an opaque one (and cleared to
+         * it): the DS doesn't draw a translucent pixel over a translucent
+         * one of the same polygon ID. Opaque pixels set it to 0xFF. */
         C3D_StencilTest(true,GPU_ALWAYS,0xFF,0xFF,0xFF);
         C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
         if(!batch->translucent){
@@ -371,7 +391,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
         /* Alpha-0 texels aren't drawn at all (nor change the stencil). The
          * opaque texels drawn above fail the depth test this time. */
         C3D_AlphaTest(true,GPU_GREATER,0);
-        C3D_StencilTest(true,GPU_NOTEQUAL,(int)((attr>>24)&63u),0xFF,0xFF);
+        C3D_StencilTest(true,GPU_NOTEQUAL,(int)(64u|((attr>>24)&63u)),0xFF,0xFF);
         /* ... then the partly transparent ones. They blend when DISP3DCNT
          * says so, otherwise replace what's there, and write depth only
          * with polygon attribute bit 11. (Alpha-0 texels also reach this
@@ -388,6 +408,32 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
                       (attr&(1u<<11))?GPU_WRITE_ALL:GPU_WRITE_COLOR);
         C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
     }
+    /* Edge marking needs each pixel's opaque polygon ID: the opaque
+     * pixels drawn again (the same alpha tests), only where they're what
+     * is in front (depth equal), writing their polygon ID to the stencil
+     * buffer and nothing else. Under a translucent pixel the opaque one's
+     * ID goes in too, as on the DS. */
+    if(edging){
+        for(b=0;b<nbatches;b++){
+            const NitroGx3dBatch *batch=&sBatches[b];
+            int textured=batch->texture_param!=0;
+            uint32_t attr=batch->polygon_attr;
+            /* Translucent batches have opaque pixels only at alpha 31:
+             * their fully opaque texels. */
+            if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
+            if(textured){
+                C3D_Tex *tex=get_texture(batch->texture_param,batch->palette_base);
+                if(!tex)textured=0;
+                else C3D_TexBind(0,tex);
+            }
+            set_combiner(attr,textured);
+            C3D_AlphaTest(true,GPU_GREATER,batch->translucent?254:0);
+            C3D_DepthTest(true,GPU_EQUAL,0);
+            C3D_StencilTest(true,GPU_ALWAYS,(int)((attr>>24)&63u),0xFF,0xFF);
+            C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
+            C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+        }
+    }
     /* GX_CMDLIST_FLUSH: flush only the command list. Without it citro3d
      * flushes the CPU cache over all of linear memory every frame; what
      * the GPU reads here is flushed already (vertices above, textures in
@@ -402,8 +448,37 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
                  GX_BUFFER_DIM(GX3D_W,GX3D_H),sImages[slot],
                  GX_BUFFER_DIM(GX3D_W,GX3D_H),GX3D_TRANSFER_FLAGS);
     GSPGPU_InvalidateDataCache(sImages[slot],(u32)IMAGE_BYTES);
+    if(edging){
+        /* The depth/stencil buffer the same way: D24S8, a 32-bit word a
+         * pixel, the depth in its low 24 bits and the stencil above. */
+        GSPGPU_FlushDataCache(sDepthIds[slot],(u32)IMAGE_BYTES);
+        C3D_SyncDisplayTransfer((u32*)sTarget->frameBuf.depthBuf,
+                     GX_BUFFER_DIM(GX3D_W,GX3D_H),sDepthIds[slot],
+                     GX_BUFFER_DIM(GX3D_W,GX3D_H),GX3D_TRANSFER_FLAGS);
+        GSPGPU_InvalidateDataCache(sDepthIds[slot],(u32)IMAGE_BYTES);
+        /* Every stencil value must be an ID, an ID + 64 or 255; anything
+         * else means the buffer isn't laid out as above. Checked on the
+         * first scenes: then edge marking stays off rather than draw
+         * outlines in the wrong places. */
+        if(sEdgeChecks>0){
+            unsigned odd=NitroPort_Gx3dEdgeIdsUnexpected(sDepthIds[slot]);
+            sEdgeChecks--;
+            if(odd){
+                sEdgeMarking=0;
+                edging=0;
+                NitroPort_Log("[gx3d] edge marking off: %u pixels of the depth/stencil buffer read back unexpected (first word %08lx)",
+                              odd,(unsigned long)sDepthIds[slot][0]);
+            }else if(sEdgeChecks==0){
+                unsigned i,ids=0;
+                for(i=0;i<GX3D_W*GX3D_H;i++)ids+=(sDepthIds[slot][i]>>24)<=63u;
+                NitroPort_Log("[gx3d] edge marking on: depth/stencil buffer as expected (%u of %u pixels with an opaque polygon ID)",
+                              ids,(unsigned)(GX3D_W*GX3D_H));
+            }
+        }
+    }
     t2=svcGetSystemTick();
-    NitroPort_Gx3dPublishRGBA8(sImages[slot],GX3D_W*GX3D_H);
+    if(edging)NitroPort_Gx3dPublishRGBA8Edges(sImages[slot],GX3D_W*GX3D_H,sDepthIds[slot],&edges);
+    else NitroPort_Gx3dPublishRGBA8(sImages[slot],GX3D_W*GX3D_H);
     sBuildTicks+=t1-t0;
     sWaitTicks+=t2-t1;
     sPublishTicks+=svcGetSystemTick()-t2;

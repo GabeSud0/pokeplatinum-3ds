@@ -125,9 +125,10 @@ existing DMA/IRQ regression test remains in `tests/test_threads.c`.
 
 **Reference limitations:** this is a staging renderer, not cycle-exact DS 3D.
 The virtual FIFO is consumed synchronously, and some DS details (polygon ID
-effects, shadow/toon/edge marking, depth/W precision, bit-exact lighting
-rounding and depth sorting within the translucent pass) still need
-hardware-reference tests. The PC renderer draws translucent faces after
+effects, shadow/toon, depth/W precision, bit-exact lighting rounding and
+depth sorting within the translucent pass) still need hardware-reference
+tests. Edge marking is done (`src/port_gx3d_edge.c`, shared with the 3DS
+GPU path; `tests/test_gx3d.c` and `tests/test_gx3d_plumbing.c`). The PC renderer draws translucent faces after
 opaque ones and obeys DISP3DCNT's alpha-blend enable bit, but does not yet
 model every DS polygon-ID or per-texel translucent sorting rule.
 The new 3DS pipeline initially renders **opaque untextured** triangles only.
