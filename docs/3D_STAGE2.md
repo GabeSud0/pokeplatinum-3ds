@@ -197,8 +197,12 @@ overworld, a battle and the Pokédex. Then implement only what appears:
   the opaque pixels a second time, depth equal, writing only their polygon
   ID to the stencil buffer (translucent passes leave ID + 64 there), and
   reads the depth/stencil buffer back with the image; if what comes back
-  isn't IDs and 64-127/255, edge marking turns itself off and says so in
-  the log.
+  isn't IDs and 64-127/255, or no opaque polygon's ID shows up in it in the
+  first 60 scenes that have opaque polygons, edge marking turns itself off
+  and says so in the log. The 3D screen's drawer converts and outlines each
+  image as soon as the GPU thread hands it over (between frames, not while
+  the game waits for it to read the display), and the `[perf] 3D` line
+  gives the outlined pixels per image.
 - **Anti-aliasing:** skip.
 - **Shadow polygons:** see 5.
 
