@@ -169,8 +169,9 @@ static void StopSound(void)
 {
     if (sSoundThread) {
         __atomic_store_n(&sSoundThreadRunning, false, __ATOMIC_RELEASE);
-        threadJoin(sSoundThread, UINT64_MAX);
-        threadFree(sSoundThread);
+        if (R_SUCCEEDED(threadJoin(sSoundThread, 1000000000ULL))) {
+            threadFree(sSoundThread);
+        }
         sSoundThread = NULL;
     }
     if (sNdspAvailable) {
@@ -198,6 +199,9 @@ static bool sRemaster;
 static ComposeConfig sCompose;
 static volatile bool sComposing;      /* the display thread is inside a frame */
 static volatile bool sComposeForce;   /* draw everything again (back from the log) */
+/* The HOME menu (or another applet) has the screens and the GPU: nothing
+ * may draw (OnAptEvent). Shared by both display paths. */
+static volatile bool sSuspended;
 
 #define REMASTER_PATH "sdmc:/3ds/pokeplatinum/remaster.txt"
 
@@ -310,11 +314,22 @@ static void GpuClassicLoop(void)
         const NitroGx3dScene *scene;
         LightEvent_Wait(&sGpuWake);
         if(!__atomic_load_n(&sGpuRunning,__ATOMIC_ACQUIRE))break;
-        while((scene=NitroPort_Gx3dAcquireScene(&seen))!=NULL){
-            u64 start=svcGetSystemTick();
+        for(;;){
+            u64 start;
             unsigned dropped=0;
-            int drawn=NitroPort_PicaRender(scene,&dropped);
+            int drawn;
+            /* Busy first, then the check (OnAptEvent: suspended first,
+             * then waits for not busy): never drawing while suspended. */
+            __atomic_store_n(&sComposing,true,__ATOMIC_SEQ_CST);
+            if(__atomic_load_n(&sSuspended,__ATOMIC_SEQ_CST)||
+               (scene=NitroPort_Gx3dAcquireScene(&seen))==NULL){
+                __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
+                break;
+            }
+            start=svcGetSystemTick();
+            drawn=NitroPort_PicaRender(scene,&dropped);
             NitroPort_Gx3dReleaseScene(scene);
+            __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
             if(drawn>=0)DrawersImageHandedOver();
             sGpuTicks += svcGetSystemTick()-start; /* sole writer, as with audio */
             __atomic_fetch_add(&sGpuScenes,1u,__ATOMIC_RELAXED);
@@ -350,7 +365,7 @@ static void GpuComposeLoop(void)
         /* Not while the log has the screens (WaitForDrawing, which the
          * switch to the log waits on, sees sComposing first). */
         __atomic_store_n(&sComposing,true,__ATOMIC_SEQ_CST);
-        if(sShowLog||sScreensDirty){
+        if(sShowLog||sScreensDirty||__atomic_load_n(&sSuspended,__ATOMIC_SEQ_CST)){
             __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
             continue;
         }
@@ -422,8 +437,13 @@ static void StopGpu(void)
     if(!sGpuThread)return;
     __atomic_store_n(&sGpuRunning,false,__ATOMIC_RELEASE);
     LightEvent_Signal(&sGpuWake);
-    threadJoin(sGpuThread,UINT64_MAX);
-    threadFree(sGpuThread);
+    /* (At most 2 seconds: a thread stuck on the GPU mustn't keep the
+     * program from closing. Left running then; quitting ends it.) */
+    if(R_SUCCEEDED(threadJoin(sGpuThread,2000000000ULL))){
+        threadFree(sGpuThread);
+    }else{
+        NitroPort_Log("[gx3d] the 3D thread didn't stop: quitting without it");
+    }
     sGpuThread=NULL;
     __atomic_store_n(&sGpuWakeReady,false,__ATOMIC_RELEASE);
 }
@@ -1214,8 +1234,11 @@ static void StopDrawers(void)
 
         d->quit = true;
         LightEvent_Signal(&d->go);
-        threadJoin(d->thread, UINT64_MAX);
-        threadFree(d->thread);
+        if (R_SUCCEEDED(threadJoin(d->thread, 1000000000ULL))) {
+            threadFree(d->thread);
+        } else {
+            NitroPort_Log("A drawing thread didn't stop: quitting without it");
+        }
     }
     sDrawerCount = 0;
 }
@@ -1248,6 +1271,37 @@ static void WaitForDrawing(void)
     }
 }
 
+/* The HOME menu (or a system applet) is about to take the screens and
+ * the GPU (libctru calls this from aptMainLoop, on whichever thread called
+ * it, before it hands them over), or has given them back. Nothing of ours
+ * may use the GPU in between: a frame sent then never finishes, and the
+ * thread waiting for it would wait for ever (and closing the program from
+ * the HOME menu with it). So: stop the drawing first, and wait (at most a
+ * second) for what's being drawn; then, back, draw everything again. */
+static aptHookCookie sAptHook;
+
+static void OnAptEvent(APT_HookType type, void *param)
+{
+    (void)param;
+    if (type == APTHOOK_ONSUSPEND) {
+        u64 start = svcGetSystemTick();
+
+        __atomic_store_n(&sSuspended, true, __ATOMIC_SEQ_CST);
+        while ((__atomic_load_n(&sComposing, __ATOMIC_SEQ_CST) || DrawersBusy()) &&
+               svcGetSystemTick() - start < SYSCLOCK_ARM11) {
+            svcSleepThread(1000000LL);
+        }
+    } else if (type == APTHOOK_ONRESTORE) {
+        sMustDraw[0] = true;
+        sMustDraw[1] = true;
+        __atomic_store_n(&sComposeForce, true, __ATOMIC_RELEASE);
+        __atomic_store_n(&sSuspended, false, __ATOMIC_SEQ_CST);
+        if (__atomic_load_n(&sGpuWakeReady, __ATOMIC_ACQUIRE)) {
+            LightEvent_Signal(&sGpuWake);
+        }
+    }
+}
+
 /* Hand this frame to every drawing thread that's free; the others leave
  * it out. new3dOnly: only to the one with engine A's screen, and only if
  * a 3D image came out since it was last handed one. */
@@ -1259,6 +1313,9 @@ static void DrawFrame(bool new3dOnly)
 
     if (new3dOnly && sRemaster) {
         return;   /* (the display thread draws each new 3D scene itself) */
+    }
+    if (__atomic_load_n(&sSuspended, __ATOMIC_SEQ_CST)) {
+        return;   /* (the HOME menu has the screens) */
     }
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
@@ -1798,6 +1855,7 @@ int main(int argc, char **argv)
             }
         }
         StartSound(priority);
+        aptHook(&sAptHook, OnAptEvent, NULL);   /* (after citro3d's: called before it) */
         if (threadCreate(GameThread, NULL, GAME_STACK_SIZE, priority, -2, true) == NULL) {
             NitroPort_Log("Can't start the game's thread.");
         } else {
@@ -1810,6 +1868,7 @@ int main(int argc, char **argv)
         }
     }
 
+    aptUnhook(&sAptHook);
     StopDrawers();
     StopGeometry();
     StopGpu();

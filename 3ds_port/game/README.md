@@ -3,7 +3,11 @@
 The game's **original C** (pinned pret/pokeplatinum, `build/upstream/src/`),
 compiled with GCC, and the programs that run it:
 
-- **`pokeplatinum.3dsx`**: the game on a 3DS (or in Azahar).
+- **`pokeplatinum.3dsx`**: the game on a 3DS (or in Azahar), from the
+  Homebrew Launcher.
+- **`pokeplatinum.cia`**: the same program, installed on the HOME Menu (it
+  opens and closes from there like any other title), with your
+  cartridge's icon.
 - **`pokeplatinum-pc`**: the same game code on a PC, without a screen, for
   finding out quickly how far it gets and where it stops.
 
@@ -28,13 +32,21 @@ Giratina, the overworld, battles).
    ```sh
    python tools/bootstrap.py
    make game        # -> 3ds_port/game/build/3ds/pokeplatinum.3dsx
+   make game-cia ROM=/path/to/platinum.nds   # -> .../pokeplatinum.cia too
    ```
+
+   `game-cia` builds two tools once ([`tools/build_cia_tools.sh`](../../tools/build_cia_tools.sh):
+   makerom and bannertool, from source, at fixed versions; they need gcc,
+   g++ and make) and makes the HOME Menu's icon and banner from your ROM's
+   icon ([`tools/home_menu_art.py`](../../tools/home_menu_art.py)), in
+   `build/`.
 
    **On Windows**, use devkitPro's MSYS2 terminal (Start menu → devkitPro →
    MSYS2). [`tools/build_windows_msys2.sh`](../../tools/build_windows_msys2.sh)
    does steps 1 to 3 in one go: it installs what the build needs besides
    devkitPro (git, Python, gcc, patch), clones the port into its own folder,
-   builds the program, makes your data pack and puts the SD card files in
+   builds the program (both versions), makes your data pack and puts the SD
+   card files in
    `%USERPROFILE%\pokeplatinum-sd` (and in Azahar's SD folder, if it finds
    it):
 
@@ -63,6 +75,15 @@ Giratina, the overworld, battles).
    copy your cartridge's save there (or take it out to an emulator).
 
 4. **Run it** from the Homebrew Launcher, or open the `.3dsx` in Azahar.
+
+   **Or install it on the HOME Menu** (needs custom firmware, Luma3DS): copy
+   `pokeplatinum.cia` anywhere on the SD card (`sdmc:/cia/`, say), open
+   **FBI**, go to **SD → cia → pokeplatinum.cia → Install CIA**, then go
+   back to the HOME Menu: the game is there with its icon. It opens and
+   closes like any other title (HOME → Close). It reads the same files in
+   `sdmc:/3ds/pokeplatinum/`. To update it, install the new `.cia` the same
+   way (it replaces the old one; the save stays: it's on the SD card).
+   Azahar installs a `.cia` too (File → Install CIA...).
 
 What you'll see: on a New 3DS, the game at the 3DS's size: both screens
 filled, the upper screen's 2D and 3D laid out for its full width, the 3D at

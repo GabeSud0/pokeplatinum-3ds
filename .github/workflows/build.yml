@@ -34,6 +34,24 @@ jobs:
       - name: Build portable pak reader for 3DS
         run: make -C 3ds_port/pak TARGET=3ds lib
 
+      # The HOME Menu version's tools and settings, checked on hello3d (no
+      # game code): makerom, bannertool and the game's RSF make a .cia.
+      # Nothing is uploaded.
+      - name: Make a HOME Menu .cia of hello3d (the game's RSF)
+        shell: bash
+        run: |
+          apt-get install -y --no-install-recommends g++ make
+          bash tools/build_cia_tools.sh build/cia-tools
+          python3 tools/home_menu_art.py --blank build/home-menu-art
+          $DEVKITPRO/tools/bin/smdhtool --create "hello3d" "CIA check" "pokeplatinum-3ds" \
+              build/home-menu-art/icon.png build/hello3d.smdh
+          build/cia-tools/bin/bannertool makebanner -i build/home-menu-art/banner.png \
+              -a build/home-menu-art/banner.wav -o build/hello3d.bnr
+          build/cia-tools/bin/makerom -f cia -o build/hello3d.cia -target t -exefslogo \
+              -rsf 3ds_port/game/cia/pokeplatinum.rsf -elf 3ds_port/hello3d/hello3d.elf \
+              -icon build/hello3d.smdh -banner build/hello3d.bnr
+          ls -l build/hello3d.cia
+
       - name: Upload hello3d .3dsx
         uses: actions/upload-artifact@v4
         with:
