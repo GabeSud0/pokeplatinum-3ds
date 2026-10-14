@@ -266,6 +266,71 @@ static void test_textures(void)
     NitroPort_Gx3dRasterize(pixels,NULL);
     CHECK((pixels[96*256+128]&0x7fff)==RGB(31,0,0));
 }
+/* Vertices all out of the view, in display lists sent in pieces (as
+ * NitroSystem's geometry buffer does) and a word at a time: no polygon of
+ * theirs is drawn, and what they leave behind (the last coordinates, the
+ * colour) holds for the vertices after them. (With the geometry thread,
+ * such lists are passed over without working their vertices out.) */
+static void test_hidden_vertices(void)
+{
+    const uint32_t part1[]={
+        0x23232040u, 1, RGB(0,0,31),                 /* BEGIN quads, COLOR, VTX_16 x2 */
+        word2(-9000,-3000), 777, word2(-6000,-3000), 777,
+    };
+    const uint32_t part2[]={
+        0x25402323u,                                 /* VTX_16 x2, BEGIN triangles, VTX_XY */
+        word2(-6000,3000), 777, word2(-9000,3000), 1234,
+        0, word2(-3000,-3000),
+    };
+    const uint32_t part3[]={
+        0x00412525u, word2(3000,-3000), word2(0,3000),   /* VTX_XY x2, END */
+    };
+    const NitroGx3dScene *scene;
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(31u<<16));     /* both sides */
+    NitroPort_GxFifoWords(part1,sizeof(part1)/4);
+    NitroPort_GxFifoWords(part2,sizeof(part2)/4);
+    NitroPort_GxFifoWords(part3,sizeof(part3)/4);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    /* Only the triangle: blue (the hidden quad's colour), at the hidden
+     * quad's last Z (its X/Y-only vertices keep it). */
+    CHECK(scene->count==1);
+    if(scene->count==1){
+        CHECK(scene->triangles[0].v[0].color==RGB(0,0,31));
+        CHECK(scene->triangles[0].v[0].clip[2]==1234);
+        CHECK(scene->triangles[0].v[0].clip[0]==-3000);
+    }
+    /* A strip out to the right, its last vertex and END written a word at
+     * a time; then one partly in view, which is drawn. */
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(31u<<16));
+    {
+        const uint32_t strip[]={
+            0x23232040u, 2, RGB(31,0,0), word2(6000,-3000), 5, word2(6000,3000), 6,
+            0x00000023u, word2(9000,0), 7,
+        };
+        const uint32_t partly[]={
+            0x23232340u, 0, word2(2000,-3000), 8, word2(6000,-3000), 8, word2(6000,3000), 8,
+        };
+        NitroPort_GxFifoWords(strip,7);
+        NitroPort_GxFifoWord(strip[7]);
+        NitroPort_GxFifoWord(strip[8]);
+        NitroPort_GxFifoWord(strip[9]);
+        NitroPort_GxFifoWord(0x41u);                     /* END */
+        NitroPort_GxFifoWord(0x20u);                     /* COLOR */
+        NitroPort_GxFifoWord(RGB(0,31,0));
+        NitroPort_GxFifoWords(partly,sizeof(partly)/4);
+        NitroPort_GxFifoWord(0x41u);
+    }
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count>=1);
+    if(scene->count>=1){
+        CHECK(scene->triangles[0].v[0].color==RGB(0,31,0));
+        CHECK(scene->triangles[0].v[0].clip[2]==8);
+    }
+}
 /* Triangle strips: v0 v1 v2, then v2 v1 v3, v2 v3 v4 (GBATEK): each
  * triangle after the first uses the strip's last two vertices. */
 static int strip_vertex_index(const NitroGx3dVertex *v, const int32_t *xs)
@@ -865,6 +930,7 @@ static void run_all(void)
     test_triangles_and_depth();
     test_culling();
     test_triangle_strip();
+    test_hidden_vertices();
     test_textures();
     test_box_test();
     test_clear_and_status();
