@@ -1,10 +1,19 @@
 /*
  * Stage 2: the PICA200 backend. Only the dedicated 3D thread calls
  * functions in this file: no GPU commands run in the game or 2D threads.
- * Renders a 256x192 off-screen RGBA8 target with a 24-bit depth buffer.
- * GX_DisplayTransfer untile-copies into one of three linear RGBA8 buffers;
- * after completion it's handed over to the shared image API as it is, and
- * the 3D screen's drawer converts it to RGB555 when it draws.
+ *
+ * Two ways of drawing a scene:
+ *  - the classic one (NitroPort_PicaRender): a 256x192 off-screen RGBA8
+ *    target with a 24-bit depth buffer. GX_DisplayTransfer untile-copies
+ *    into one of three linear RGBA8 buffers; after completion it's handed
+ *    over to the shared image API as it is, and the 3D screen's drawer
+ *    converts it to RGB555 when it draws.
+ *  - the compose one (NitroPort_PicaPrepareScene, NitroPort_PicaDrawScene;
+ *    port_compose_pica.c): the polygons drawn straight into the screen's
+ *    own render target, at the screen's resolution, between the 2D layers
+ *    the compositor draws; with edge marking done by the GPU (below), and
+ *    the stereoscopic shift and the view (where the DS's screen goes on
+ *    the 3DS's) in the vertex program.
  *
  * PR2: textures. Each DS texture is decoded with the PC reference's own
  * decoder (port_gx3d_texture.c), tiled for the PICA and kept in a cache.
@@ -17,11 +26,8 @@
  * Toon/highlight, shadow polygons and fog are later PRs.
  */
 #ifdef __3DS__
-#include <3ds.h>
-#include <citro3d.h>
-#include <nitro_port_gx3d.h>
+#include "port_pica.h"
 #include <nitro_port_gx3d_texture.h>
-#include <nitro_port_gx3d_vertex.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -64,6 +70,17 @@ static C3D_RenderTarget *sTarget;
 static DVLB_s *sDvlb;
 static shaderProgram_s sProgram;
 static int sProgramReady;
+static s8 sUnifMtx=-1,sUnifStereo=-1;   /* the vertex program's uniforms */
+/* The compose path: the scene prepared for drawing (its vertices in
+ * sVertices[sPrepared], its batches), and its rear plane. */
+static int sPrepared=-1;
+static size_t sPreparedCount,sPreparedBatches;
+static uint32_t sPreparedSwap;
+static uint16_t sRearColor;
+static unsigned sRearAlpha;
+/* A quad over the whole render target (clip space, the farthest depth),
+ * for resetting the edge marking depth/stencil buffer. */
+static NitroGx3dGpuVertex *sFarQuad;
 static NitroGx3dGpuVertex *sVertices[2];
 /* The finished images, read back: three, as one may be waiting to be
  * converted and another being converted (NitroPort_Gx3dSubmitRGBA8) while
@@ -106,6 +123,8 @@ static void clean_up(void)
         if(sVertices[i])linearFree(sVertices[i]);
         sVertices[i]=NULL;
     }
+    if(sFarQuad)linearFree(sFarQuad);
+    sFarQuad=NULL;
     for(i=0;i<IMAGE_SLOTS;i++){
         if(sImages[i])linearFree(sImages[i]);
         if(sDepthIds[i])linearFree(sDepthIds[i]);
@@ -135,6 +154,9 @@ int NitroPort_PicaInit(void)
     sProgramReady=1;
     if(R_FAILED(shaderProgramSetVsh(&sProgram,&sDvlb->DVLE[0])))
         goto fail;
+    sUnifMtx=shaderInstanceGetUniformLocation(sProgram.vertexShader,"mtx");
+    sUnifStereo=shaderInstanceGetUniformLocation(sProgram.vertexShader,"stereo");
+    if(sUnifMtx<0||sUnifStereo<0)goto fail;
     C3D_BindProgram(&sProgram);
 
     attrs=C3D_GetAttrInfo();
@@ -158,6 +180,20 @@ int NitroPort_PicaInit(void)
     }
     sBatches=malloc(MAX_BATCHES*sizeof(*sBatches));
     if(!sBatches)goto fail;
+    sFarQuad=linearAlloc(6*sizeof(NitroGx3dGpuVertex));
+    if(!sFarQuad)goto fail;
+    {
+        static const float corners[6][2]={{-1,-1},{1,-1},{1,1},{-1,-1},{1,1},{-1,1}};
+        memset(sFarQuad,0,6*sizeof(NitroGx3dGpuVertex));
+        for(i=0;i<6;i++){
+            sFarQuad[i].position[0]=corners[i][0];
+            sFarQuad[i].position[1]=corners[i][1];
+            sFarQuad[i].position[2]=-1.0f;   /* the farthest depth */
+            sFarQuad[i].position[3]=1.0f;
+            sFarQuad[i].color[3]=255;
+        }
+        GSPGPU_FlushDataCache(sFarQuad,6*sizeof(NitroGx3dGpuVertex));
+    }
     sBuffer=0;
     return 1;
 fail:
@@ -344,10 +380,15 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
         return -1;
     }
     C3D_BindProgram(&sProgram);
+    {
+        /* The DS's clip space is the whole target. */
+        C3D_Mtx identity;
+        Mtx_Identity(&identity);
+        NitroPort_PicaSetView(&identity,0.0f,1.0f);
+    }
+    NitroPort_PicaBindVertices(sVertices[slot]);
     buffers=C3D_GetBufInfo();
-    BufInfo_Init(buffers);
-    BufInfo_Add(buffers,sVertices[slot],sizeof(NitroGx3dGpuVertex),
-                3,0x210u);
+    (void)buffers;
     C3D_CullFace(GPU_CULL_NONE);
     /* W-buffered scenes use the PICA's W-buffer, Z-buffered ones its
      * Z-buffer; NitroPort_Gx3dClipZ gives z to match. */
@@ -513,5 +554,291 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     sWaitTicks+=t2-t1;
     sPublishTicks+=svcGetSystemTick()-t2;
     return (int)(count/3);
+}
+
+/* ------------------------------------------------------- the compose path */
+
+void NitroPort_PicaViewMatrix(C3D_Mtx *m,int screenWidth,int screenHeight,const PicaRect *rect)
+{
+    /* A 3DS framebuffer is stored in columns (the screen turned a quarter
+     * turn): a render target of 240 x screenWidth, where target x runs
+     * down the screen and target y along it (citro3d's Mtx_OrthoTilt).
+     * Screen pixel (px, py) is at target NDC (1 - 2 py / H, 1 - 2 px / W).
+     * A DS clip-space vertex (x, y, z, w), x and y in -w..w over the DS's
+     * screen with y up, goes to px * w = x (x1 - x0) / 2 + w (x0 + x1) / 2
+     * and py * w = -y (y1 - y0) / 2 + w (y0 + y1) / 2; z is kept (the
+     * depth mapping is C3D_DepthMap's). */
+    float W=(float)screenWidth,H=(float)screenHeight;
+    Mtx_Zeros(m);
+    m->r[0].y=(rect->y1-rect->y0)/H;
+    m->r[0].w=1.0f-(rect->y0+rect->y1)/H;
+    m->r[1].x=-(rect->x1-rect->x0)/W;
+    m->r[1].w=1.0f-(rect->x0+rect->x1)/W;
+    m->r[2].z=1.0f;
+    m->r[3].w=1.0f;
+}
+
+void NitroPort_PicaPixelMatrix(C3D_Mtx *m,int screenWidth,int screenHeight)
+{
+    Mtx_Zeros(m);
+    m->r[0].y=-2.0f/(float)screenHeight;
+    m->r[0].w=1.0f;
+    m->r[1].x=-2.0f/(float)screenWidth;
+    m->r[1].w=1.0f;
+    m->r[2].z=1.0f;
+    m->r[3].w=1.0f;
+}
+
+void NitroPort_PicaSetView(const C3D_Mtx *m,float strength,float convergence)
+{
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,sUnifMtx,m);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifStereo,strength,convergence,0.0f,0.0f);
+}
+
+void NitroPort_PicaBindVertices(const void *vertices)
+{
+    C3D_BufInfo *buffers=C3D_GetBufInfo();
+    BufInfo_Init(buffers);
+    BufInfo_Add(buffers,vertices,sizeof(NitroGx3dGpuVertex),3,0x210u);
+}
+
+int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
+{
+    u64 t0=svcGetSystemTick();
+    unsigned lost=0;
+    u32 clear;
+    int slot;
+    if(dropped)*dropped=scene ? scene->dropped : 0;
+    if(!sProgramReady||!scene)return -1;
+    slot=sBuffer;
+    sBuffer^=1;
+    sPreparedCount=NitroPort_Gx3dBuildBatches(scene,sVertices[slot],
+                                              NITRO_GX3D_PICA_MAX_VERTICES,
+                                              sBatches,MAX_BATCHES,&sPreparedBatches,&lost);
+    if(dropped)*dropped+=lost;
+    if(sPreparedCount){
+        GSPGPU_FlushDataCache(sVertices[slot],
+                        (u32)(sPreparedCount*sizeof(NitroGx3dGpuVertex)));
+    }
+    sPrepared=slot;
+    sPreparedSwap=scene->swap_param;
+    /* CLEAR_COLOR: the rear plane's colour and alpha, as the game has them
+     * at this scene. */
+    clear=(u32)NitroPort_IoReg[0x350]|((u32)NitroPort_IoReg[0x351]<<8)|
+          ((u32)NitroPort_IoReg[0x352]<<16);
+    sRearColor=(uint16_t)(clear&0x7FFFu);
+    sRearAlpha=(clear>>16)&31u;
+    sBuildTicks+=svcGetSystemTick()-t0;
+    return (int)(sPreparedCount/3);
+}
+
+void NitroPort_PicaRearPlane(uint16_t *color,unsigned *alpha)
+{
+    if(color)*color=sRearColor;
+    if(alpha)*alpha=sRearAlpha;
+}
+
+/* The state every pass needs: the shader, its view, the vertices. */
+static void begin_pass(const PicaView *view,const PicaRect *rect)
+{
+    C3D_Mtx m;
+    NitroPort_PicaViewMatrix(&m,view->screenWidth,view->screenHeight,rect);
+    NitroPort_PicaSetView(&m,view->stereo,view->convergence);
+}
+
+/* The texture, combiner and alpha test of a batch, as the colour pass
+ * has them. */
+static int bind_batch(const NitroGx3dBatch *batch)
+{
+    int textured=batch->texture_param!=0;
+    if(textured){
+        C3D_Tex *tex=get_texture(batch->texture_param,batch->palette_base);
+        if(!tex)textured=0;
+        else C3D_TexBind(0,tex);
+    }
+    set_combiner(batch->polygon_attr,textured);
+    return textured;
+}
+
+/* The combiner giving the edge colour, with the batch's alpha (the
+ * texels' or the polygon's) for the alpha test. */
+static void set_edge_combiner(int textured,uint16_t color555)
+{
+    C3D_TexEnv *env=C3D_GetTexEnv(0);
+    u32 rgba=widen5(color555&31u)|(widen5((color555>>5)&31u)<<8)|
+             (widen5((color555>>10)&31u)<<16)|0xFF000000u;
+    C3D_TexEnvInit(env);
+    C3D_TexEnvColor(env,rgba);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,0,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
+    C3D_TexEnvSrc(env,C3D_Alpha,textured?GPU_TEXTURE0:GPU_PRIMARY_COLOR,0,0);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+}
+
+/* Edge marking on the GPU. The DS outlines a pixel of an opaque polygon
+ * when a pixel next to it (left, right, above, below) belongs to another
+ * polygon ID and is further away (the rear plane, with CLEAR_COLOR's ID
+ * and the farthest depth, counts as one; so does the screen's border).
+ * For each of the four directions:
+ *  - pass A: the opaque polygons drawn again, moved one pixel the other
+ *    way, into a depth/stencil buffer of their own (cleared to the rear
+ *    plane: farthest, the clear ID), depth-tested, writing their IDs to
+ *    the stencil and nothing to the colour. Afterwards that buffer holds,
+ *    at each pixel, the depth and ID of what's visible at its neighbour.
+ *  - pass B: the opaque polygons drawn in place with that buffer as the
+ *    depth/stencil: only where they're nearer than it (the neighbour is
+ *    further) and the stencil isn't their ID (another polygon), writing
+ *    their edge colour to the screen. (A polygon hidden behind another
+ *    one at that pixel could pass too, if it were nearer than the
+ *    neighbour: it would then have to lie between the visible surface
+ *    and its neighbour's, a hair's breadth; it doesn't happen in practice.)
+ * With anti-aliasing (DISP3DCNT bit 4) the outline is blended in at about
+ * half strength, as the DS does. */
+static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
+{
+    static const float dx[4]={-1.0f,1.0f,0.0f,0.0f},dy[4]={0.0f,0.0f,-1.0f,1.0f};
+    size_t b;
+    int dir;
+    for(dir=0;dir<4;dir++){
+        PicaRect shifted=view->rect;
+        /* pass A */
+        shifted.x0+=dx[dir];shifted.x1+=dx[dir];
+        shifted.y0+=dy[dir];shifted.y1+=dy[dir];
+        C3D_SetFrameBuf(view->edgeFb);
+        C3D_SetViewport(0,0,view->edgeFb->width,view->edgeFb->height);
+        /* The buffer reset to the rear plane: a quad over everything at
+         * the farthest depth, the clear ID in the stencil (a draw rather
+         * than a memory fill: the GX queue has room for few of those). */
+        {
+            C3D_Mtx identity;
+            Mtx_Identity(&identity);
+            NitroPort_PicaSetView(&identity,0.0f,1.0f);
+        }
+        NitroPort_PicaBindVertices(sFarQuad);
+        set_combiner(0,0);
+        C3D_AlphaTest(false,GPU_ALWAYS,0);
+        C3D_DepthTest(true,GPU_ALWAYS,GPU_WRITE_DEPTH);
+        C3D_StencilTest(true,GPU_ALWAYS,(int)edges->clearId,0xFF,0xFF);
+        C3D_StencilOp(GPU_STENCIL_REPLACE,GPU_STENCIL_REPLACE,GPU_STENCIL_REPLACE);
+        C3D_DrawArrays(GPU_TRIANGLES,0,6);
+        NitroPort_PicaBindVertices(sVertices[sPrepared]);
+        begin_pass(view,&shifted);
+        C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
+        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+        for(b=0;b<sPreparedBatches;b++){
+            const NitroGx3dBatch *batch=&sBatches[b];
+            uint32_t attr=batch->polygon_attr;
+            if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
+            bind_batch(batch);
+            C3D_AlphaTest(true,GPU_GREATER,batch->translucent?254:0);
+            C3D_DepthTest(true,GPU_LESS,GPU_WRITE_DEPTH);
+            C3D_StencilTest(true,GPU_ALWAYS,(int)((attr>>24)&63u),0xFF,0xFF);
+            C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+        }
+        /* pass B */
+        begin_pass(view,&view->rect);
+        C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_KEEP);
+        if(edges->antialias){
+            C3D_BlendingColor(0x88000000u);   /* 17/32 */
+            C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_CONSTANT_ALPHA,GPU_ONE_MINUS_CONSTANT_ALPHA,
+                           GPU_ZERO,GPU_ONE);
+        }else{
+            C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ZERO,GPU_ONE);
+        }
+        for(b=0;b<sPreparedBatches;b++){
+            const NitroGx3dBatch *batch=&sBatches[b];
+            uint32_t attr=batch->polygon_attr;
+            int textured;
+            unsigned id;
+            if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
+            id=(attr>>24)&63u;
+            textured=bind_batch(batch);
+            set_edge_combiner(textured,edges->colors[id>>3]);
+            C3D_AlphaTest(true,GPU_GREATER,batch->translucent?254:0);
+            C3D_DepthTest(true,GPU_LESS,GPU_WRITE_COLOR);
+            C3D_StencilTest(true,GPU_NOTEQUAL,(int)id,0xFF,0xFF);
+            C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+        }
+    }
+    /* back to the screen's own depth/stencil */
+    C3D_SetFrameBuf(view->fb);
+    C3D_SetViewport(0,0,view->fb->width,view->fb->height);
+    begin_pass(view,&view->rect);
+}
+
+void NitroPort_PicaDrawScene(const PicaView *view)
+{
+    size_t b;
+    int blend,edging;
+    NitroGx3dEdgeSetup edges;
+    if(sPrepared<0||!view||!view->fb)return;
+    sFrame++;
+    NitroPort_Gx3dMapTextureBanks(&sBanks);
+    blend=(NitroPort_IoReg[0x60]&8u)!=0;
+    NitroPort_Gx3dEdgeSetup(&edges);
+    edging=edges.enabled && view->edgeFb!=NULL;
+    C3D_BindProgram(&sProgram);
+    NitroPort_PicaBindVertices(sVertices[sPrepared]);
+    C3D_SetFrameBuf(view->fb);
+    C3D_SetViewport(0,0,view->fb->width,view->fb->height);
+    begin_pass(view,&view->rect);
+    C3D_CullFace(GPU_CULL_NONE);
+    C3D_DepthMap(!(sPreparedSwap&2u),-1.0f,0.0f);
+    C3D_AlphaTest(true,GPU_GREATER,0);
+    /* The opaque polygons, as the classic path draws them (see there). */
+    C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
+    for(b=0;b<sPreparedBatches;b++){
+        const NitroGx3dBatch *batch=&sBatches[b];
+        uint32_t attr=batch->polygon_attr;
+        GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
+        if(batch->translucent)continue;
+        bind_batch(batch);
+        C3D_StencilTest(true,GPU_ALWAYS,0xFF,0xFF,0xFF);
+        C3D_AlphaTest(true,GPU_GREATER,0);
+        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+        C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
+        C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+    }
+    /* Their fully opaque texels of translucent polygons of alpha 31 are
+     * opaque too (drawn here so the outlines go over them as well). */
+    for(b=0;b<sPreparedBatches;b++){
+        const NitroGx3dBatch *batch=&sBatches[b];
+        uint32_t attr=batch->polygon_attr;
+        GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
+        if(!batch->translucent || ((attr>>16)&31u)!=31u)continue;
+        bind_batch(batch);
+        C3D_StencilTest(true,GPU_ALWAYS,0xFF,0xFF,0xFF);
+        C3D_AlphaTest(true,GPU_GREATER,254);
+        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+        C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
+        C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+    }
+    if(edging)mark_edges(view,&edges);
+    /* The translucent polygons, over the outlines. */
+    for(b=0;b<sPreparedBatches;b++){
+        const NitroGx3dBatch *batch=&sBatches[b];
+        uint32_t attr=batch->polygon_attr;
+        GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
+        if(!batch->translucent)continue;
+        bind_batch(batch);
+        C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
+        C3D_AlphaTest(true,GPU_GREATER,0);
+        C3D_StencilTest(true,GPU_NOTEQUAL,(int)(64u|((attr>>24)&63u)),0xFF,0xFF);
+        if(blend){
+            C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,
+                           GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,
+                           GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
+        }else{
+            C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,
+                           GPU_ONE,GPU_ZERO);
+        }
+        C3D_DepthTest(true,depthFunc,
+                      (attr&(1u<<11))?GPU_WRITE_ALL:GPU_WRITE_COLOR);
+        C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+    }
+    /* Leave the GPU state plain for the compositor's quads. */
+    C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
+    C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
+    C3D_AlphaTest(false,GPU_ALWAYS,0);
 }
 #endif

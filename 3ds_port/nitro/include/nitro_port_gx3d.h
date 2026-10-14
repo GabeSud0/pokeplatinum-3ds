@@ -70,6 +70,10 @@ const NitroGx3dScene *NitroPort_Gx3dScene(void);
  * never overwrites the acquired scene. No whole-scene copies are made. */
 const NitroGx3dScene *NitroPort_Gx3dAcquireScene(uint32_t *serial);
 void NitroPort_Gx3dReleaseScene(const NitroGx3dScene *scene);
+/* Whether a scene newer than the one last acquired (its serial) is out: a
+ * consumer that keeps the acquired scene (to draw it again) can tell when
+ * to release it and acquire the next. */
+int NitroPort_Gx3dNewerScene(uint32_t serial);
 
 /* Every 2D BG0 drawer uses this RGB555|coverage interface. The PC fills it
  * via the software rasterizer; the 3DS GPU worker publishes its latest
@@ -191,6 +195,15 @@ int NitroPort_Gx3dEarlierSceneUnread(void);
  * 5 SyncResults, 6 RefreshStatus, 7 Reset. */
 typedef void (*NitroGx3dRecorder)(int type, const uint32_t *words, size_t count);
 void NitroPort_Gx3dSetRecorder(NitroGx3dRecorder recorder);
+
+/* A wider view, for a screen screenWidth DS pixels wide (the 3DS's upper
+ * screen: 320, its 400 pixels at the size the 256 take up on it): the clip
+ * x of every vertex is scaled by 256 / screenWidth before clipping, so the
+ * picture shows more of the world at the sides, and the game's own box
+ * tests pass what that shows. What was on screen stays where it was: the
+ * display stretches the picture back by the same amount. 256 (the DS's
+ * width) turns it off. Not in a viewport narrower than the screen. */
+void NitroPort_Gx3dSetWideView(int screenWidth);
 
 /* GXSTAT's bit 15 is write-one-to-clear on the DS, and resetting it
  * also clears the single-entry projection stack pointer. */

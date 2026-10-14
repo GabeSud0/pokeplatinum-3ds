@@ -385,7 +385,7 @@ APP_OBJS := $(OUT)/app/platinum.o
 OVERLAY_TABLE_O := $(OUT)/gen/overlay_table.o
 
 ifeq ($(TARGET),3ds)
-APP_OBJS += $(OUT)/app/main_3ds.o $(OUT)/app/port_gx3d_pica.o \
+APP_OBJS += $(OUT)/app/main_3ds.o $(OUT)/app/port_gx3d_pica.o $(OUT)/app/port_compose_pica.o \
             $(OUT)/app/gx3d_passthrough_shbin.o
 PROGRAM_ELF := $(OUT)/pokeplatinum.elf
 PROGRAM := $(OUT)/pokeplatinum.3dsx
@@ -419,15 +419,22 @@ $(OUT)/app/main_pc.o: app/main_pc.c app/platinum.h | libnitrosystem
 
 # main_3ds.c uses libctru, and none of the SDK's headers (the port's
 # portable geometry header only).
-$(OUT)/app/main_3ds.o: app/main_3ds.c app/platinum.h $(NITRO)/include/nitro_port_gx3d.h
+$(OUT)/app/main_3ds.o: app/main_3ds.c app/platinum.h app/port_pica.h $(NITRO)/include/nitro_port_gx3d.h \
+                       $(NITRO)/include/nitro_port_render2d.h
 	@mkdir -p $(dir $@)
 	@echo "  APP CC main_3ds.c"
 	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -c $< -o $@
 
 # Thin 3DS-only PICA backend; includes only portable GX3D headers + libctru.
-$(OUT)/app/port_gx3d_pica.o: app/port_gx3d_pica.c $(NITRO)/include/nitro_port_gx3d_vertex.h
+$(OUT)/app/port_gx3d_pica.o: app/port_gx3d_pica.c app/port_pica.h $(NITRO)/include/nitro_port_gx3d_vertex.h
 	@mkdir -p $(dir $@)
 	@echo "  APP CC port_gx3d_pica.c"
+	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -c $< -o $@
+
+# The screens put together on the GPU (the remaster display).
+$(OUT)/app/port_compose_pica.o: app/port_compose_pica.c app/port_pica.h $(NITRO)/include/nitro_port_upscale.h
+	@mkdir -p $(dir $@)
+	@echo "  APP CC port_compose_pica.c"
 	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -c $< -o $@
 
 # Assemble a PICA200 passthrough shader exactly like hello3d. The generated

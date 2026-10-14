@@ -9,6 +9,7 @@
 #include <nitro_port_gx3d_vertex.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 #include <semaphore.h>
@@ -379,6 +380,59 @@ static void test_box_test(void)
     NitroPort_GxDirectWrite(0x70,word2(ONE,ONE));
     NitroPort_Gx3dRefreshStatus();
     CHECK((read32(0x600)&2)!=0);
+}
+/* A wider view (NitroPort_Gx3dSetWideView): x scaled by 256/320, so a
+ * vertex at x = 1.2 (out of view) is in view at 0.96, and one at 0.5 is
+ * drawn at 0.4 (the display stretches it back to where it was); the clip
+ * matrix the game reads back isn't scaled; box tests pass what the wider
+ * view shows; a narrower viewport keeps the game's view. */
+static void test_wide_view(void)
+{
+    const NitroGx3dScene *scene;
+    int32_t xs[3];
+    unsigned i,k;
+    reset_geometry();
+    NitroPort_Gx3dSetWideView(320);
+    NitroPort_GxDirectWrite(0x40,0);
+    vertex(2048,-3000,0);vertex(4915,-3000,0);vertex(0,3000,0);  /* x 0.5, 1.2, 0 */
+    NitroPort_GxDirectWrite(0x41,0);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);   /* nothing clipped away */
+    for(i=0;i<3;i++)xs[i]=-1;
+    if(scene->count==1)for(k=0;k<3;k++)xs[k]=scene->triangles[0].v[k].x;
+    /* screen x (1/256 pixel) of x = 0.4, 0.96, 0 */
+    /* (within 1/64 pixel: the scale is 4.12 fixed point) */
+    CHECK(abs(xs[0]-(int32_t)((0.4+1)/2*256*256+0.5))<=4);
+    CHECK(abs(xs[1]-(int32_t)((0.96+1)/2*256*256+0.5))<=4);
+    CHECK(xs[2]==128*256);
+    CHECK(clip_result(0)==ONE);   /* the game's clip matrix: still identity */
+    /* A box just right of the DS's view, within the wider one. */
+    NitroPort_GxDirectWrite(0x70,word2(4300,0));
+    NitroPort_GxDirectWrite(0x70,word2(0,ONE/8));
+    NitroPort_GxDirectWrite(0x70,word2(ONE/8,ONE/8));
+    NitroPort_Gx3dRefreshStatus();
+    CHECK((read32(0x600)&2)!=0);
+    NitroPort_GxDirectWrite(0x70,word2(5200,0));   /* beyond the wider view too */
+    NitroPort_GxDirectWrite(0x70,word2(0,ONE/8));
+    NitroPort_GxDirectWrite(0x70,word2(ONE/8,ONE/8));
+    NitroPort_Gx3dRefreshStatus();
+    CHECK((read32(0x600)&2)==0);
+    /* A viewport of half the width: the game's own view. */
+    NitroPort_GxDirectWrite(0x60,0xbf7f0000u);   /* 0,0 to 127,191 */
+    NitroPort_GxDirectWrite(0x40,0);
+    vertex(2048,-3000,0);vertex(4915,-3000,0);vertex(0,3000,0);
+    NitroPort_GxDirectWrite(0x41,0);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count>=1);
+    if(scene->count>=1){
+        int found=0;
+        for(k=0;k<3;k++)found|=scene->triangles[0].v[k].x==(int32_t)((0.5+1)/2*128*256+0.5);
+        CHECK(found);   /* x = 0.5 drawn at 0.5 of the viewport */
+    }
+    NitroPort_Gx3dSetWideView(256);
+    reset_geometry();
 }
 static void test_bg0_composition(void)
 {
@@ -933,6 +987,7 @@ static void run_all(void)
     test_hidden_vertices();
     test_textures();
     test_box_test();
+    test_wide_view();
     test_clear_and_status();
     test_bg0_composition();
     test_cpu_fifo_writes();

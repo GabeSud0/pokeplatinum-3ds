@@ -37,7 +37,11 @@ typedef struct GeoVertex {
 typedef struct GeoState {
     Matrix proj, pos, vec, tex;
     Matrix clip;        /* pos x proj, as the DS keeps it; see ensure_clip */
-    int64_t clipTrans[4]; /* its row 3, << 12: what (0, 0, 0, 1.0) adds */
+    /* What the vertices (and box tests) go through: the clip matrix, its
+     * x column scaled for a wider view (NitroPort_Gx3dSetWideView), or
+     * the clip matrix itself. */
+    Matrix xf;
+    int64_t xfTrans[4];   /* its row 3, << 12: what (0, 0, 0, 1.0) adds */
     int clipDirty;
     Matrix pjStack, texStack;
     Matrix posStack[31], vecStack[31];
@@ -429,13 +433,39 @@ static inline unsigned outcode(const int32_t clip[4])
  * the clip/vector matrix result registers the SDK reads back (through
  * G3X_GetClipMtx/G3X_GetVectorMtx, which call NitroPort_Gx3dSyncResults
  * first; patches/NitroSDK/0026). */
+/* A wider view (the 3DS's wider screen): clip x scaled by sWideNum /
+ * sWideDen before clipping, so the screen's width shows more of the
+ * world, as a wider camera would; what was on screen stays where it was
+ * (the display stretches the picture back by the same amount). The
+ * game's own view of its matrices (the result registers, POS_TEST) isn't
+ * changed; its box tests are (they then pass what the wider view shows).
+ * Only with the DS's full-width viewport: in a narrower one, the view
+ * is the game's. */
+static int32_t sWideNum=1,sWideDen=1;
+static void set_viewport(GeoState *g,uint32_t p0)
+{
+    g->viewport[0]=(int)(p0&255);
+    g->viewport[1]=(int)((p0>>8)&255);
+    g->viewport[2]=(int)((p0>>16)&255);
+    g->viewport[3]=(int)((p0>>24)&255);
+    if(sWideNum!=sWideDen)g->clipDirty=1;   /* (ensure_clip: the view's width) */
+}
 static void ensure_clip(GeoState *g)
 {
     unsigned j;
     if(!g->clipDirty)return;
     g->clipDirty=0;
     multiply(&g->clip,&g->pos,&g->proj);
-    for(j=0;j<4;j++)g->clipTrans[j]=(int64_t)g->clip.a[12+j]<<12;
+    g->xf=g->clip;
+    if(sWideNum!=sWideDen && ((g->viewport[2]-g->viewport[0]+1)&0x1FF)==256){
+        for(j=0;j<4;j++){
+            int64_t v=(int64_t)g->clip.a[j*4]*sWideNum;
+            /* rounded to nearest, towards zero at a half */
+            v=(v>=0?v+sWideDen/2:v-sWideDen/2)/sWideDen;
+            g->xf.a[j*4]=saturation(v);
+        }
+    }
+    for(j=0;j<4;j++)g->xfTrans[j]=(int64_t)g->xf.a[12+j]<<12;
     if(g!=sResults)return;
     for(j=0;j<16;j++)put32(0x640+j*4,(uint32_t)g->clip.a[j]);
     for(j=0;j<9;j++)put32(0x680+j*4,(uint32_t)g->vec.a[(j/3)*4+(j%3)]);
@@ -699,7 +729,7 @@ static void submit_vertex(void)
         int64_t x=src[0],y=src[1],z=src[2];
         int j;
         for(j=0;j<4;j++)
-            vp->clip[j]=saturation((x*s.clip.a[j]+y*s.clip.a[4+j]+z*s.clip.a[8+j]+s.clipTrans[j])>>12);
+            vp->clip[j]=saturation((x*s.xf.a[j]+y*s.xf.a[4+j]+z*s.xf.a[8+j]+s.xfTrans[j])>>12);
     }
     vp->outside=(uint8_t)outcode(vp->clip);
     vp->hasScreen=0;
@@ -855,9 +885,9 @@ static void test_command(GeoState *g,unsigned op,const uint32_t *p)
             int64_t base[4],edge[3][4];
             int j;
             for(j=0;j<4;j++){
-                base[j]=(int64_t)origin[0]*g->clip.a[j]+(int64_t)origin[1]*g->clip.a[4+j]+
-                        (int64_t)origin[2]*g->clip.a[8+j]+((int64_t)g->clip.a[12+j]<<12);
-                for(i=0;i<3;i++)edge[i][j]=(int64_t)size[i]*g->clip.a[i*4+j];
+                base[j]=(int64_t)origin[0]*g->xf.a[j]+(int64_t)origin[1]*g->xf.a[4+j]+
+                        (int64_t)origin[2]*g->xf.a[8+j]+g->xfTrans[j];
+                for(i=0;i<3;i++)edge[i][j]=(int64_t)size[i]*g->xf.a[i*4+j];
             }
             for(mask=0;mask<8;mask++){
                 for(j=0;j<4;j++){
@@ -996,10 +1026,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         break;
     }
     case 0x60:
-        s.viewport[0]=(int)(p[0]&255);
-        s.viewport[1]=(int)((p[0]>>8)&255);
-        s.viewport[2]=(int)((p[0]>>16)&255);
-        s.viewport[3]=(int)((p[0]>>24)&255);
+        set_viewport(&s,p[0]);
         break;
     case 0x70:case 0x71:case 0x72:test_command(&s,op,p);break;
     case OP_CLEAR_STACK_ERROR:s.stackError=0;s.pjLevel=0;break;
@@ -1141,6 +1168,8 @@ static size_t scan_packets(const uint32_t *words,size_t count,int *swapped)
                     if(op>=0x11u && op<=0x14u)refresh_status(&sShadow);
                 }else if(what&2u){
                     test_command(&sShadow,op,p);
+                }else if(what&8u){
+                    set_viewport(&sShadow,p[0]);
                 }else if(what&4u){
                     *swapped=1;
                 }
@@ -1405,9 +1434,9 @@ found:
          * in 64 bits): eight corners for the cost of four transforms. */
         int64_t base[4],edge[3][4];
         for(j=0;j<4;j++){
-            base[j]=(int64_t)lo[0]*s.clip.a[j]+(int64_t)lo[1]*s.clip.a[4+j]+
-                    (int64_t)lo[2]*s.clip.a[8+j]+s.clipTrans[j];
-            for(k=0;k<3;k++)edge[k][j]=((int64_t)hi[k]-lo[k])*s.clip.a[k*4+j];
+            base[j]=(int64_t)lo[0]*s.xf.a[j]+(int64_t)lo[1]*s.xf.a[4+j]+
+                    (int64_t)lo[2]*s.xf.a[8+j]+s.xfTrans[j];
+            for(k=0;k<3;k++)edge[k][j]=((int64_t)hi[k]-lo[k])*s.xf.a[k*4+j];
         }
         for(k=0;k<8;k++){
             int64_t c[4];
@@ -1640,6 +1669,7 @@ void NitroPort_Gx3dStartThread(const NitroGx3dThreadOps *ops)
         unsigned op;
         for(op=0x10u;op<=0x1cu;op++)sShadowOps[op]=1u;
         for(op=0x70u;op<=0x72u;op++)sShadowOps[op]=2u;
+        sShadowOps[0x60]=8u;   /* the viewport: its width (a wide view) */
         sShadowOps[0x50]=4u;
     }
     sShadow=s;
@@ -1685,6 +1715,15 @@ void NitroPort_Gx3dThreadStats(uint64_t *busy,uint32_t *scenes,uint32_t *skipped
 /* ------------------------------------------------- the game's side */
 static NitroGx3dRecorder sRecorder;
 void NitroPort_Gx3dSetRecorder(NitroGx3dRecorder recorder){sRecorder=recorder;}
+void NitroPort_Gx3dSetWideView(int screenWidth)
+{
+    if(screenWidth<=0||screenWidth>1024)screenWidth=256;
+    sWideNum=256;sWideDen=screenWidth;
+    if(screenWidth==256)sWideNum=sWideDen=1;
+    s.clipDirty=1;
+    if(sResults)sResults->clipDirty=1;
+    sShadow.clipDirty=1;
+}
 #define RECORD(type,words,count) do{if(sRecorder)sRecorder((type),(words),(count));}while(0)
 /* A decoded command: done here, or handed to the geometry thread. */
 static void run(unsigned op,const uint32_t *p)
@@ -1827,6 +1866,11 @@ const NitroGx3dScene *NitroPort_Gx3dAcquireScene(uint32_t *serial)
     initialize();
     slot=NitroPort_MailboxAcquire(&sMailbox,serial);
     return slot<0?NULL:&sScenes[slot];
+}
+int NitroPort_Gx3dNewerScene(uint32_t serial)
+{
+    initialize();
+    return NitroPort_MailboxNewer(&sMailbox,serial);
 }
 void NitroPort_Gx3dReleaseScene(const NitroGx3dScene *scene)
 {

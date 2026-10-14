@@ -21,6 +21,8 @@ int NitroPort_MailboxPublish(NitroGx3dMailbox *box, int *next, uint32_t *serial)
 int NitroPort_MailboxAcquire(NitroGx3dMailbox *box, uint32_t *lastSerial);
 void NitroPort_MailboxRelease(NitroGx3dMailbox *box, int index);
 int NitroPort_MailboxLatest(NitroGx3dMailbox *box);
+/* Whether a scene newer than the one of serial `serial` has been published. */
+int NitroPort_MailboxNewer(NitroGx3dMailbox *box, uint32_t serial);
 /* Number the scene being built (before publishing it). */
 void NitroPort_MailboxTag(NitroGx3dMailbox *box, uint32_t tag);
 /* The lowest number of a scene still to be read: the one acquired, or the
