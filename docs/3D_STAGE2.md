@@ -185,8 +185,20 @@ overworld, a battle and the Pokédex. Then implement only what appears:
   the PICA has fog with a lookup table indexed by depth. Map the DS table
   into it.
 - **Edge marking** (bit 5, EDGE_COLOR by polygon ID): outlines around
-  polygons. Without a cheap GPU equivalent, a post pass in the 2D compositor
-  over the 3D image's depth/ID. Later, maybe.
+  polygons; the field uses it (dark grey outlines round buildings, props and
+  the screen's border). *Done* (`port_gx3d_edge.c`), as a pass over the
+  finished image: an opaque pixel takes its polygon ID's edge colour when a
+  neighbour (left, right, above, below) is of another opaque polygon ID and
+  further away; next to the screen's border or a pixel without an opaque
+  polygon, the rear plane counts (CLEAR_COLOR's polygon ID, CLEAR_DEPTH).
+  With anti-aliasing on (bit 4) an outline is blended 17/32 with the
+  neighbour behind it, as melonDS does with the pixel underneath. The PC
+  reference keeps each pixel's opaque ID while drawing. The GPU path draws
+  the opaque pixels a second time, depth equal, writing only their polygon
+  ID to the stencil buffer (translucent passes leave ID + 64 there), and
+  reads the depth/stencil buffer back with the image; if what comes back
+  isn't IDs and 64-127/255, edge marking turns itself off and says so in
+  the log.
 - **Anti-aliasing:** skip.
 - **Shadow polygons:** see 5.
 

@@ -6,6 +6,7 @@
 #include <nitro.h>
 #include <nitro_port.h>
 #include <nitro_port_gx3d.h>
+#include <nitro_port_gx3d_vertex.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -712,6 +713,51 @@ static void *geometry_thread(void *unused)
     NitroPort_Gx3dThreadMain(&sRunning);
     return NULL;
 }
+/* Edge marking (DISP3DCNT bit 5) in the reference rasterizer and in the
+ * PC's stand-in for the GPU path: an opaque triangle of polygon ID 8 over
+ * an opaque quad of ID 0 that it doesn't cover all of, the rear plane ID
+ * 63 (see-through). The triangle's outline in ID 8's colour where the quad
+ * is behind it; the quad's where the rear plane is (round its outside). */
+static uint16_t gpuPixels[256*192];
+static void test_edge_marking(void)
+{
+    static const uint16_t colors[8]={0x0421,0x0842,0x0c63,0x1084,0x14a5,0x18c6,0x1ce7,0x2108};
+    uint16_t *images[2]={pixels,gpuPixels};
+    int k,which;
+    reset_geometry();
+    for(k=0;k<8;k++){NitroPort_IoReg[0x330+k*2]=(uint8_t)colors[k];NitroPort_IoReg[0x331+k*2]=(uint8_t)(colors[k]>>8);}
+    NitroPort_IoReg[0x350]=0;NitroPort_IoReg[0x351]=0;NitroPort_IoReg[0x352]=0;
+    NitroPort_IoReg[0x353]=63;                                   /* rear plane ID */
+    NitroPort_IoReg[0x60]|=0x20u;                                /* edge marking */
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(31u<<16)|(0u<<24));
+    quad(1200,RGB(0,31,0));
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(31u<<16)|(8u<<24));
+    NitroPort_GxDirectWrite(0x20,RGB(31,0,0));
+    NitroPort_GxDirectWrite(0x40,0);
+    vertex(-1500,-1500,-1200);vertex(1500,-1500,-1200);vertex(0,1500,-1200);
+    NitroPort_GxDirectWrite(0x41,0);
+    swap();
+    NitroPort_Gx3dRasterize(pixels,NULL);
+    NitroPort_Gx3dSimulateGpu(NitroPort_Gx3dScene(),gpuPixels);
+    for(which=0;which<2;which++){
+        const uint16_t *img=images[which];
+        int x,first=-1,quadFirst=-1;
+        /* Row 120, crossing both. */
+        for(x=0;x<256;x++)if((img[120*256+x]&0x8000)&&quadFirst<0)quadFirst=x;
+        for(x=0;x<256;x++)if((img[120*256+x]&0x7fff)==RGB(31,0,0)){first=x;break;}
+        CHECK(quadFirst>0 && first>quadFirst);
+        if(first>quadFirst && quadFirst>0){
+            CHECK((img[120*256+quadFirst]&0x7fff)==colors[0]);   /* quad's outline */
+            CHECK((img[120*256+quadFirst+1]&0x7fff)==RGB(0,31,0));
+            CHECK((img[120*256+first-1]&0x7fff)==colors[1]);     /* triangle's */
+            CHECK((img[120*256+first-2]&0x7fff)==RGB(0,31,0));   /* quad behind: not */
+        }
+        CHECK((img[96*256+128]&0x7fff)==RGB(31,0,0));            /* inside */
+        CHECK((img[0]&0x8000)==0);                               /* rear plane */
+    }
+    NitroPort_IoReg[0x60]&=(uint8_t)~0x20u;
+    NitroPort_IoReg[0x353]=0;
+}
 static void run_all(void);
 /* A thread that falls behind: the game doesn't wait, the scene after the
  * one it's on is left out (nothing drawn, the last scene stays), and what
@@ -830,4 +876,5 @@ static void run_all(void)
     test_viewport_and_immediate_texture_state();
     test_stack_vec_and_result_refresh();
     test_translucency_and_scene_limits();
+    test_edge_marking();
 }

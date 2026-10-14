@@ -249,6 +249,83 @@ static void test_image_conversion(void)
     CHECK(badAlpha==0);
 }
 
+/* Edge marking on a finished image: a 20x10 box of polygon ID 8, nearer,
+ * on a ground of ID 56 that covers the screen; the rear plane is ID 63. */
+static uint16_t edgeImage[NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT];
+static uint8_t edgeAlpha[NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT];
+static uint32_t edgeIds[NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT];
+static void edge_scene(void)
+{
+    int x,y;
+    for(y=0;y<NITRO_GX3D_HEIGHT;y++)for(x=0;x<NITRO_GX3D_WIDTH;x++){
+        int i=y*NITRO_GX3D_WIDTH+x, box=x>=100&&x<120&&y>=50&&y<60;
+        edgeImage[i]=(uint16_t)(0x8000u|(box?0x001fu:0x03e0u));   /* red box, green ground */
+        edgeAlpha[i]=31;
+        edgeIds[i]=box?((8u<<24)|1000u):((56u<<24)|2000u);
+    }
+}
+static void test_edge_marking(void)
+{
+    NitroGx3dEdgeSetup e;
+    int x,y,wrong=0,translucent=0;
+    unsigned k;
+    memset(&e,0,sizeof(e));
+    e.enabled=1;
+    for(k=0;k<8;k++)e.colors[k]=(uint16_t)(k|(k<<5)|(k<<10));   /* grey k */
+    e.clearId=63;e.clearColor=0x7c00u;e.clearAlpha=0;e.clearDepth=0xffffffu;
+    /* Without anti-aliasing: the box's own outer ring in ID 8's colour;
+     * the ground next to it not (it's further); the ground's pixels at the
+     * screen's border in ID 56's colour (the rear plane is further and
+     * another ID). Everything else as it was. */
+    edge_scene();
+    NitroPort_Gx3dMarkEdges(edgeImage,edgeAlpha,edgeIds,&e,&translucent);
+    for(y=0;y<NITRO_GX3D_HEIGHT;y++)for(x=0;x<NITRO_GX3D_WIDTH;x++){
+        int i=y*NITRO_GX3D_WIDTH+x, box=x>=100&&x<120&&y>=50&&y<60;
+        int ring=box&&(x==100||x==119||y==50||y==59);
+        int border=x==0||y==0||x==NITRO_GX3D_WIDTH-1||y==NITRO_GX3D_HEIGHT-1;
+        uint16_t want=ring?(uint16_t)(0x8000u|0x0421u):border?(uint16_t)(0x8000u|(7u|(7u<<5)|(7u<<10))):
+                      (uint16_t)(0x8000u|(box?0x001fu:0x03e0u));
+        if(edgeImage[i]!=want||edgeAlpha[i]!=31)wrong++;
+    }
+    CHECK(wrong==0);
+    CHECK(!translucent);
+    /* The rear plane with the ground's ID: no outline at the border. */
+    edge_scene();
+    e.clearId=56;
+    NitroPort_Gx3dMarkEdges(edgeImage,edgeAlpha,edgeIds,&e,NULL);
+    CHECK(edgeImage[0]==(0x8000u|0x03e0u));
+    CHECK(edgeImage[50*NITRO_GX3D_WIDTH+100]==(0x8000u|0x0421u));
+    /* No opaque polygon where the ground was (the GPU path's 64-127 or
+     * 255): it's the rear plane there, so the box is still outlined, the
+     * border not (the box isn't on it). */
+    edge_scene();
+    for(k=0;k<NITRO_GX3D_WIDTH*NITRO_GX3D_HEIGHT;k++)
+        if((edgeIds[k]>>24)==56u)edgeIds[k]=(edgeIds[k]&0xffffffu)|((k&1)?(70u<<24):(255u<<24));
+    e.clearId=63;
+    NitroPort_Gx3dMarkEdges(edgeImage,edgeAlpha,edgeIds,&e,NULL);
+    CHECK(edgeImage[0]==(0x8000u|0x03e0u));
+    CHECK(edgeImage[55*NITRO_GX3D_WIDTH+100]==(0x8000u|0x0421u));
+    CHECK(edgeImage[55*NITRO_GX3D_WIDTH+99]==(0x8000u|0x03e0u));
+    CHECK(edgeImage[55*NITRO_GX3D_WIDTH+101]==(0x8000u|0x001fu));
+    /* Anti-aliasing: an outline is blended 17/32 with the neighbour behind
+     * it; with the see-through rear plane, the colour stays but the pixel
+     * is half transparent. */
+    edge_scene();
+    e.antialias=1;
+    translucent=0;
+    NitroPort_Gx3dMarkEdges(edgeImage,edgeAlpha,edgeIds,&e,&translucent);
+    /* Box ring pixel next to green ground: (1*17 + 31*15) / 32 = 15 green,
+     * 1*17/32 = 0 red and blue. */
+    CHECK(edgeImage[50*NITRO_GX3D_WIDTH+110]==(0x8000u|(15u<<5)));
+    CHECK(edgeAlpha[50*NITRO_GX3D_WIDTH+110]==31);
+    CHECK(edgeImage[0]==(0x8000u|(7u|(7u<<5)|(7u<<10))));
+    CHECK(edgeAlpha[0]==((31*17)>>5));
+    CHECK(translucent);
+    CHECK(NitroPort_Gx3dEdgeIdsUnexpected(edgeIds)==0);
+    edgeIds[5]=(edgeIds[5]&0xffffffu)|(200u<<24);
+    CHECK(NitroPort_Gx3dEdgeIdsUnexpected(edgeIds)==1);
+}
+
 /* Emulate a lower-priority gate owner that cannot release the gate until
  * another runnable thread gets CPU time. On 3DS the same-core sleep in
  * the lock is essential; this test deterministically takes that path. */
@@ -639,6 +716,7 @@ int main(void) {
     test_full_vertex_capacity();
     test_image_handoff();
     test_image_conversion();
+    test_edge_marking();
     test_png_dump();
     test_concurrent_image_handoff();
     test_texture_decode();

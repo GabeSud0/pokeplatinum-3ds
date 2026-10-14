@@ -40,7 +40,7 @@ typedef struct NitroGx3dBatch {
     uint32_t first, count;        /* vertices */
     uint32_t texture_param;       /* 0 when untextured */
     uint32_t palette_base;        /* 0 when untextured or direct colour */
-    uint32_t polygon_attr;        /* mode (bits 4-5), depth bits 11/14, alpha */
+    uint32_t polygon_attr;        /* mode (bits 4-5), depth bits 11/14, alpha, ID (24-29) */
     uint8_t translucent;
 } NitroGx3dBatch;
 
