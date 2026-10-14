@@ -383,6 +383,41 @@ static void StartGeometry(s32 priority, bool new3ds)
     NitroPort_Log("[perf] geometry on core 1 (%lu%% of it)", (unsigned long)sGeoCpuLimit);
 }
 
+/* ------------------------------------------------------- New 3DS speed-up */
+/* 804 MHz and the L2 cache (otherwise 268 MHz, as an Old 3DS). libctru's
+ * osSetSpeedupEnable does it through the ptm:sysm service, and quietly
+ * nothing if the program can't use that service. The core speed check
+ * (log 4d7b483a) timed jobs at about the speed of 268 MHz, so it's done
+ * here again with each step's result kept for the log. libctru still does
+ * it again when the program comes back from the HOME menu. */
+static Result sSpeedupService = -1, sSpeedupSet = -1;
+
+static void EnableSpeedup(void)
+{
+    osSetSpeedupEnable(true);
+    sSpeedupService = ptmSysmInit();
+    if (R_SUCCEEDED(sSpeedupService)) {
+        sSpeedupSet = PTMSYSM_ConfigureNew3DSCPU(3);
+        ptmSysmExit();
+    }
+}
+
+static void LogSpeedup(bool new3ds)
+{
+    if (!new3ds) {
+        return;
+    }
+    if (R_FAILED(sSpeedupService)) {
+        NitroPort_Log("[perf] New 3DS speed-up (804 MHz, L2 cache): OFF, the ptm:sysm service isn't available to the program (%08lx)",
+                      (unsigned long)sSpeedupService);
+    } else if (R_FAILED(sSpeedupSet)) {
+        NitroPort_Log("[perf] New 3DS speed-up (804 MHz, L2 cache): OFF, ptm:sysm refused it (%08lx)",
+                      (unsigned long)sSpeedupSet);
+    } else {
+        NitroPort_Log("[perf] New 3DS speed-up (804 MHz, L2 cache): asked for, and accepted");
+    }
+}
+
 /* ------------------------------------------------------ core speed check */
 /* The same small jobs timed on each core the program uses, once at start
  * (a [perf] line): plain integer work, 64-bit multiplies (the geometry's
@@ -394,6 +429,7 @@ typedef struct SpeedJob {
     int kind;        /* 0 integer, 1 64-bit multiply, 2 double divide */
     u64 ticks;
     volatile u32 sink;
+    volatile double start;   /* 1.0 */
 } SpeedJob;
 
 static void SpeedJobMain(void *arg)
@@ -421,7 +457,7 @@ static void SpeedJobMain(void *arg)
         }
         job->sink = (u32)acc;
     } else {
-        double d = 1.0;
+        double d = job->start;   /* (read at run time: not worked out by the compiler) */
 
         for (i = 0; i < 300000u; i++) {
             d = (d + 1.5) / (d * 0.5 + 2.0);
@@ -444,6 +480,7 @@ static void TimeCore(int core, s32 priority, double ms[3])
 
         memset(&job, 0, sizeof(job));
         job.kind = kind;
+        job.start = 1.0;
         t = threadCreate(SpeedJobMain, &job, 16 * 1024, priority, core, false);
         if (t == NULL) {
             ms[kind] = -1.0;
@@ -470,7 +507,10 @@ static void CheckCoreSpeed(s32 priority, bool new3ds)
             break;
         }
     }
-    NitroPort_Log("[perf] core speed, ms for the same jobs (integer / 64-bit multiply / double divide): %s", line);
+    LogSpeedup(new3ds);
+    /* The integer job is 4M rounds of about 7 cycles: ~35 ms at 804 MHz,
+     * ~105 ms at 268 MHz (core 1 a quarter more: its share is 80%). */
+    NitroPort_Log("[perf] core speed, ms for the same jobs (integer / 64-bit multiply / double divide; integer ~35 ms at 804 MHz, ~105 at 268): %s", line);
 }
 
 static void StopGeometry(void)
@@ -1447,7 +1487,7 @@ int main(int argc, char **argv)
     (void)argc;
     (void)argv;
     LightLock_Init(&sLogLock);
-    osSetSpeedupEnable(true);   /* New 3DS: 804 MHz and the L2 cache */
+    EnableSpeedup();            /* New 3DS: 804 MHz and the L2 cache */
     gfxInitDefault();
     gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
     gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
