@@ -4,17 +4,21 @@
  * the DS's picture (port_wide.c's rules: an edge colour going on, a
  * picture mirrored, nothing).
  *
- * A picture is for one BG layer of one screen of the game: it's found by
- * that layer's key, a hash of the layer's own art (its map, the tiles the
- * map uses, their palettes; not where it's scrolled to). So it shows
- * whenever that layer does, whatever the other layers do (text printing,
- * a cursor moving), and moves with the layer when it scrolls.
+ * A picture is for one layer of one screen of the game: a BG or a group of
+ * OBJs (those of one priority and palette: NitroPort_Render2DObjGroups).
+ * It's found by that layer's key, a hash of the layer's own art (a BG's
+ * map, the tiles the map uses, their palettes; a group's OBJs' pixels and
+ * colours; not where it's scrolled or moved to). So it shows whenever that
+ * layer does, whatever the other layers do (text printing, a cursor
+ * moving), and moves with the layer. A group's picture is drawn into the
+ * OBJ layer where no OBJ is, at the group's priority.
  *
  * Files: in the art folder (sdmc:/3ds/pokeplatinum/wide on the 3DS),
  *   <key>_<hofs>_<vofs>.png        the side bands only
  *   <key>_<hofs>_<vofs>_full.png   the whole picture, middle as well
  * <key> 16 hex digits; hofs, vofs: the layer's scroll when the picture was
- * captured (it's drawn shifted by the scroll since). 320 x 192 pixels, the
+ * captured, or the group's position (it's drawn shifted by the distance
+ * since). 320 x 192 pixels, the
  * DS's picture at x 32-287; transparent pixels (alpha < 128) show what's
  * behind the layer. Made with the WideArt editor (tools/wideart) from
  * captures: NitroPort_WideArtCapture.
@@ -50,7 +54,8 @@ const uint16_t *NitroPort_WideArtFind(uint64_t key, int *hofs, int *vofs, int *f
 /* Capture the upper screen for the editor: a new folder in dir
  * (captures/0001, ...) with screen.png (the whole picture, without the
  * 3D), bg<N>.png (each BG alone, as the port draws it now, its bands
- * included) and info.txt (each BG's key, scroll and priority). The path
+ * included), obj<G>.png (each OBJ group shown, G its number) and info.txt
+ * (each layer's key, scroll or position, and priority). The path
  * made goes to made. 0 if done. On the game's thread, between frames. */
 int NitroPort_WideArtCapture(const char *dir, char *made, size_t madeSize);
 

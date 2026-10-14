@@ -1194,6 +1194,156 @@ static void test_wide_art(void)
     }
 }
 
+/* Wide art for a group of OBJs (a sprite background): its key doesn't
+ * change with where the OBJs are or where their tiles are, the picture
+ * goes into the OBJ layer where no OBJ is, at the group's priority, and
+ * moves with the group. */
+static void test_wide_art_objs(void)
+{
+    static u16 wide[320 * 192], over[320 * 192], art[320 * 192], layerPx[320 * 192];
+    static u8 overAlpha[320 * 192];
+    static u8 tiles[4 * 32];
+    static u16 objPltt[16 * 16];
+    static GXOamAttr oam[128];
+    char dir[] = "/tmp/wideartobjXXXXXX";
+    NitroRender2DSplit split;
+    NitroObjGroup groups[8], groups2[8];
+    int n, i, x, g3 = -1;
+
+    Reset();
+    GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_1D_32K);
+    MakeTile4(tiles, 1);
+    MakeTile4(tiles + 32, 2);
+    GX_LoadOBJ(tiles, 0, sizeof(tiles));
+    objPltt[1] = BLUE;
+    objPltt[2] = GREEN;
+    objPltt[5 * 16 + 1] = RED;
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));
+    /* the group behind: two 8x8 OBJs of palette 0, priority 3 */
+    G2_SetOBJAttr(&oam[0], 60, 40, 3, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 0, 0);
+    G2_SetOBJAttr(&oam[1], 100, 40, 3, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 1, 0, 0);
+    /* another: palette 5, priority 0 */
+    G2_SetOBJAttr(&oam[2], 10, 100, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 5, 0);
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    GX_SetVisiblePlane(GX_PLANEMASK_OBJ);
+    memset(&split, 0, sizeof(split));
+    split.width = 320;
+    split.origin = 32;
+    memset(split.clip, 1, sizeof(split.clip));
+
+    n = NitroPort_Render2DObjGroups(0, &split, groups, 8);
+    CHECK(n == 2);
+    for (i = 0; i < n; i++) {
+        if (groups[i].group == (3 << 5)) {
+            g3 = i;
+        }
+    }
+    CHECK(g3 >= 0 && groups[g3].prio == 3 && groups[g3].count == 2);
+    CHECK(NitroPort_Render2DObjLayer(0, 3 << 5, &split, layerPx));
+    CHECK(layerPx[42 * 320 + 32 + 62] == (BLUE | 0x8000));      /* OBJ 0 */
+    CHECK(layerPx[102 * 320 + 32 + 12] == 0);                     /* (the other group's) */
+    CHECK(!NitroPort_Render2DObjLayer(0, 3 << 5 | 7, &split, layerPx));
+    /* moved, in the other order, its tiles elsewhere: the same key */
+    GX_LoadOBJ(tiles, 64, sizeof(tiles));
+    G2_SetOBJAttr(&oam[0], 108, 50, 3, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 3, 0, 0);
+    G2_SetOBJAttr(&oam[1], 68, 50, 3, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 2, 0, 0);
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    CHECK(NitroPort_Render2DObjGroups(0, &split, groups2, 8) == 2);
+    for (i = 0; i < 2; i++) {
+        if (groups2[i].group == (3 << 5)) {
+            CHECK(groups2[i].key == groups[g3].key);
+            CHECK(groups2[i].x - groups[g3].x == 8 && groups2[i].y - groups[g3].y == 10);
+        }
+    }
+    /* a different colour: a different key */
+    objPltt[2] = RED;
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    CHECK(NitroPort_Render2DObjGroups(0, &split, groups2, 8) == 2);
+    for (i = 0; i < 2; i++) {
+        if (groups2[i].group == (3 << 5)) {
+            CHECK(groups2[i].key != groups[g3].key);
+        }
+    }
+    objPltt[2] = GREEN;
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    /* back where they were captured */
+    G2_SetOBJAttr(&oam[0], 100, 40, 3, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 3, 0, 0);
+    G2_SetOBJAttr(&oam[1], 60, 40, 3, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 2, 0, 0);
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+
+    /* its picture: yellow all over (bands only), a BG of priority 1 in
+     * front of priority 3 hides it, the backdrop doesn't */
+    CHECK(mkdtemp(dir) != NULL);
+    for (i = 0; i < 320 * 192; i++) {
+        art[i] = RGB(31, 31, 0) | 0x8000;
+    }
+    WriteArt(dir, groups[g3].key, groups[g3].x, groups[g3].y, 0, art);
+    CHECK(NitroPort_WideArtLoad(dir) == 1);
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 3] == RGB(31, 31, 0));          /* the bands */
+    CHECK(wide[5 * 320 + 300] == RGB(31, 31, 0));
+    CHECK(wide[5 * 320 + 100] != RGB(31, 31, 0));        /* not the middle */
+    CHECK(wide[102 * 320 + 32 + 12] == RED);             /* the other group's OBJ */
+    /* the group moved 8 right: so did the picture (its left 8 columns empty) */
+    G2_SetOBJAttr(&oam[0], 108, 40, 3, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 3, 0, 0);
+    G2_SetOBJAttr(&oam[1], 68, 40, 3, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 2, 0, 0);
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 3] != RGB(31, 31, 0));
+    CHECK(wide[5 * 320 + 10] == RGB(31, 31, 0));
+    /* the capture: an obj line for each group, and its picture */
+    {
+        char made[512], path[600], line[256];
+        FILE *f;
+        int found = 0;
+
+        NitroPort_SetWideScreen(32);
+        CHECK(NitroPort_WideArtCapture(dir, made, sizeof(made)) == 0);
+        snprintf(path, sizeof(path), "%s/info.txt", made);
+        f = fopen(path, "r");
+        CHECK(f != NULL);
+        while (f != NULL && fgets(line, sizeof(line), f) != NULL) {
+            unsigned long long k;
+            int g;
+
+            if (sscanf(line, "obj %d prio 3 key %llx", &g, &k) == 2 && g == (3 << 5) && k == groups[g3].key) {
+                found = 1;
+            }
+        }
+        if (f != NULL) {
+            fclose(f);
+        }
+        CHECK(found);
+        snprintf(path, sizeof(path), "%s/obj%d.png", made, 3 << 5);
+        CHECK(access(path, F_OK) == 0);
+        NitroPort_SetWideScreen(0);
+    }
+    NitroPort_WideArtLoad("/nonexistent");
+    {
+        char cmd[600];
+
+        snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+        CHECK(system(cmd) == 0);
+    }
+    (void)x;
+}
+
 /* The two engines drawn at the same time on two threads (as the 3DS
  * program does on two CPU cores), many times over: the same pixels. */
 static u16 sThreadOut[2][256 * 192];
@@ -1354,6 +1504,7 @@ int main(int argc, char **argv)
     test_split_layers();
     test_wide_canvas();
     test_wide_art();
+    test_wide_art_objs();
     test_engines_on_two_threads();
 
     printf("2D renderer: %d checks, %d failed\n", sChecks, sFailures);

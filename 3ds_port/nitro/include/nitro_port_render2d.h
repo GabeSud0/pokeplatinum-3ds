@@ -65,6 +65,23 @@ int NitroPort_Render2DSplitIfChanged(int engine, uint16_t *under, NitroRender2DS
 int NitroPort_Render2DLayer(int engine, int bg, const NitroRender2DSplit *layout, uint16_t *out,
                             uint64_t *key, int *hofs, int *vofs, int *prio);
 
+/* The OBJ groups of an engine's picture (for wide art: the OBJs of one
+ * priority and one palette, the 8-bit ones of a priority together; not
+ * the window or bitmap OBJs): each group's number (priority << 5 |
+ * palette, or 16 for 8-bit), its key (a fingerprint of its OBJs' pixels and
+ * colours, not where they are: NitroPort_WideArtFind), its priority, where
+ * it is (OAM's x 0-511 and y 0-255 of one of its OBJs: its art moves with
+ * it) and how many OBJs. How many groups went to groups (at most max). */
+typedef struct NitroObjGroup {
+    uint64_t key;
+    int group, prio, x, y, count;
+} NitroObjGroup;
+int NitroPort_Render2DObjGroups(int engine, const NitroRender2DSplit *layout, NitroObjGroup *groups, int max);
+/* One OBJ group alone, as NitroPort_Render2DLayer draws a BG (its art in
+ * the bands where it has one). 0 if none of it shows. Not on the drawing
+ * threads (one at a time). */
+int NitroPort_Render2DObjLayer(int engine, int group, const NitroRender2DSplit *layout, uint16_t *out);
+
 #ifdef __cplusplus
 }
 #endif
