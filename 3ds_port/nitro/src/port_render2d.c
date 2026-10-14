@@ -46,6 +46,7 @@
 #include <nitro.h>
 #include <nitro_port.h>
 #include <nitro_port_gx3d.h>
+#include <stddef.h>
 #include <string.h>
 
 #define W 256
@@ -987,6 +988,8 @@ typedef struct BlendLineState {
     u32 bldcnt;
     u16 backdrop;
     int effect, eva, evb, evy;
+    /* (split) each pixel's alpha over the 3D, 0-16: see DrawEngine. */
+    u8 *alphaOut;
 } BlendLineState;
 
 /* Each pixel of a line whose front layers are drawn (row, layer1): one that
@@ -996,8 +999,9 @@ typedef struct BlendLineState {
  * which layers and effects each pixel shows); without, all of them. */
 static inline __attribute__((always_inline)) void BlendLineT(const BlendLineState *b, u16 *row,
                                                              const u8 *enableLine, const u8 *layer1,
-                                                             int windows)
+                                                             int windows, int split)
 {
+    u8 *alphaOut = b->alphaOut;
     const ObjLine *objLine = b->objLine;
     const int nlist = b->nlist;
     const u32 special = b->special;
@@ -1036,12 +1040,18 @@ static inline __attribute__((always_inline)) void BlendLineT(const BlendLineStat
         u16 topColor = backdrop, secondColor = backdrop;
         BOOL alpha3d = FALSE, objAlpha = FALSE;
 
+        if (split) {
+            if (!(c & OPAQUE)) {
+                continue;   /* (the 3D, or what's behind it) */
+            }
+            alphaOut[x] = 16;
+        }
         if (c & OPAQUE) {
             top = layer1[x];
             topColor = (u16)(c & 0x7FFF);
             if (!((special >> top) & 1)) {
                 /* (most pixels) shown as they are */
-                row[x] = topColor;
+                row[x] = split ? (u16)c : topColor;
                 continue;
             }
             alpha3d = top == 0 && has3d && alpha3dLine[x] < 31;
@@ -1069,6 +1079,33 @@ static inline __attribute__((always_inline)) void BlendLineT(const BlendLineStat
                     break;
                 }
             }
+        }
+        if (split && second == 5) {
+            /* (the layers in front of the 3D) nothing in front of the 3D
+             * behind this pixel: the 3D is, and BLDCNT's second-target
+             * bit for BG0 says whether the pixel blends with it. Blended
+             * by the compositor, by the alpha noted here. */
+            if (objAlpha && (seconds & 1)) {
+                u32 a = objLine->alpha[x];
+
+                alphaOut[x] = (u8)(a < 16 ? a : eva);
+                c = topColor;
+            } else if ((enable & 0x20) && (bldcnt & (1u << top))) {
+                if (effect == 1 && (seconds & 1)) {
+                    alphaOut[x] = (u8)eva;
+                    c = topColor;
+                } else if (effect == 2) {
+                    c = Brighten(topColor, evy);
+                } else if (effect == 3) {
+                    c = Darken(topColor, evy);
+                } else {
+                    c = topColor;
+                }
+            } else {
+                c = topColor;
+            }
+            row[x] = (u16)(c | OPAQUE);
+            continue;
         }
         if (alpha3d && ((seconds >> second) & 1)) {
             /* A partly transparent 3D pixel blends with what's below by
@@ -1101,7 +1138,7 @@ static inline __attribute__((always_inline)) void BlendLineT(const BlendLineStat
         } else {
             c = topColor;
         }
-        row[x] = (u16)c;
+        row[x] = (u16)(split ? c | OPAQUE : c);
     }
 }
 
@@ -1109,9 +1146,23 @@ static void BlendLine(const BlendLineState *b, u16 *row, const u8 *enableLine, c
                       BOOL windows)
 {
     if (windows) {
-        BlendLineT(b, row, enableLine, layer1, 1);
+        BlendLineT(b, row, enableLine, layer1, 1, 0);
     } else {
-        BlendLineT(b, row, enableLine, layer1, 0);
+        BlendLineT(b, row, enableLine, layer1, 0, 0);
+    }
+}
+
+/* (split) The layers in front of the 3D: each drawn pixel keeps its OPAQUE
+ * bit, the others stay 0, and b->alphaOut gets each drawn pixel's alpha
+ * over the 3D (16: opaque). The line's layers (b->list) are those in
+ * front of the 3D only. */
+static void BlendLineOver(const BlendLineState *b, u16 *row, const u8 *enableLine, const u8 *layer1,
+                          BOOL windows)
+{
+    if (windows) {
+        BlendLineT(b, row, enableLine, layer1, 1, 1);
+    } else {
+        BlendLineT(b, row, enableLine, layer1, 0, 1);
     }
 }
 
@@ -1119,7 +1170,44 @@ static void BlendLine(const BlendLineState *b, u16 *row, const u8 *enableLine, c
  * with the Stage 1 software rasterizer, 3DS with the PICA off-screen worker.
  * A held image is never overwritten by its producer during DrawEngine. */
 
-static void DrawEngine(Engine *e, u16 *out)
+/* (split) The layers in front of the 3D, from the line as drawn so far
+ * (row, with each pixel's layer in layer1): into split->over and
+ * split->overAlpha, blended among themselves or marked to blend with the
+ * 3D (BlendLineOver), or brightened or darkened. */
+static void SnapshotOver(NitroRender2DSplit *split, BlendLineState *blendState, const u16 *row,
+                         int y, int nlist, BOOL blend2, int flags, int effect, int evy,
+                         u16 bldcnt, const u8 *enableLine, const u8 *layer1)
+{
+    u16 *over = split->over + y * W;
+    u8 *alpha = split->overAlpha + y * W;
+    int x;
+
+    memcpy(over, row, W * sizeof(u16));
+    if (blend2) {
+        blendState->y = y;
+        blendState->nlist = nlist;
+        blendState->alphaOut = alpha;
+        BlendLineOver(blendState, over, enableLine, layer1, (flags & T_WINDOW) != 0);
+        return;
+    }
+    for (x = 0; x < W; x++) {
+        u16 c = over[x];
+
+        alpha[x] = 16;
+        if ((c & OPAQUE) && effect >= 2 && (enableLine[x] & 0x20) && (bldcnt & (1 << layer1[x]))) {
+            over[x] = (u16)((effect == 2 ? Brighten(c & 0x7FFF, evy) : Darken(c & 0x7FFF, evy)) | OPAQUE);
+        }
+    }
+}
+
+/* Drawn in two layers for a compositor that puts the 3D in between
+ * (split != NULL): out gets what's behind the 3D (the picture without BG0),
+ * split->over the layers in front of it (OPAQUE where they cover it, 0
+ * elsewhere) with each pixel's alpha over the 3D in split->overAlpha. Where
+ * a window hides the 3D, over shows what's behind it. Brightness effects
+ * on the 3D itself and the master brightness are left to the compositor
+ * (split->tint3d, split->masterBright). */
+static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
 {
     /* Each engine has its own (they may be drawn at the same time, on two
      * CPU cores). */
@@ -1153,6 +1241,7 @@ static void DrawEngine(Engine *e, u16 *out)
     u32 special;   /* (blend2) the layers whose pixels may not just show as they are */
     int flags;     /* how layers go into the line, when only the front one matters */
     BlendLineState blendState;
+    BOOL snapped;  /* (split) this line's layers in front of the 3D are noted */
     int y, x, bg, p;
 
     if (eva > 16) {
@@ -1173,7 +1262,21 @@ static void DrawEngine(Engine *e, u16 *out)
             kind[bg] = BG_NONE;   /* large-bitmap mode still unsupported */
         }
     }
-    if (e->isA && kind[0] == BG_3D) {
+    if (split != NULL) {
+        split->has3d = e->isA && kind[0] == BG_3D;
+        split->prio3d = bgcnt[0] & 3;
+        split->scroll3d = split->has3d ? Rd16(io, 0x10) & 0x1FF : 0;
+        split->tint3d = (split->has3d && effect >= 1 && (bldcnt & 1)) ? effect : 0;
+        split->evy = evy;
+        split->eva = eva;
+        split->evb = evb;
+        split->blend3d = (bldcnt >> 8) & 0x3F;
+        if (split->has3d) {
+            /* Drawn without BG0: the layers in front of it are noted as
+             * the line reaches it. */
+            kind[0] = BG_NONE;
+        }
+    } else if (e->isA && kind[0] == BG_3D) {
         gx3dPixels = NitroPort_Gx3dAcquireImage();
         gx3dAlpha = gx3dPixels != NULL ? NitroPort_Gx3dImageAlpha(gx3dPixels) : NULL;
         gx3dTranslucent = gx3dAlpha != NULL && NitroPort_Gx3dImageTranslucent(gx3dPixels);
@@ -1208,6 +1311,10 @@ static void DrawEngine(Engine *e, u16 *out)
     special = (effect != 0 ? (bldcnt & 0x1Fu) : 0) | (gx3dTranslucent ? 0x01u : 0) |
               (objFrame->blends ? 0x10u : 0);
     flags = (anyWindow ? T_WINDOW : 0) | (effect >= 2 ? T_LAYER : 0);
+    if (split != NULL && split->has3d) {
+        flags |= T_LAYER;   /* (the layers in front of the 3D: which is which) */
+    }
+    blendState.alphaOut = NULL;   /* (split: each line's, in SnapshotOver) */
     blendState.e = e;
     blendState.work = work;
     blendState.kind = kind;
@@ -1257,6 +1364,7 @@ static void DrawEngine(Engine *e, u16 *out)
         t.filled = 0;
         memset(row, 0, W * sizeof(u16));
         nlist = 0;
+        snapped = FALSE;
 
         /* The layers front to back (the OBJs of priority 0, the BGs of
          * priority 0 by number, the OBJs of priority 1, ...), until every
@@ -1270,6 +1378,17 @@ static void DrawEngine(Engine *e, u16 *out)
                 const u8 *prioOf = NULL;
                 int layer, x0 = 0, x1 = W;
 
+                if (slot == 0 && split != NULL && split->has3d && p == split->prio3d) {
+                    /* The 3D's place among the layers: what's drawn so far
+                     * is in front of it. */
+                    SnapshotOver(split, &blendState, row, y, nlist, blend2, flags, effect,
+                                 evy, bldcnt, enableLine, layer1);
+                    snapped = TRUE;
+                    /* What's behind the 3D is drawn without them. */
+                    memset(row, 0, W * sizeof(u16));
+                    t.filled = 0;
+                    nlist = 0;
+                }
                 if (slot < 0) {
                     if (!objs || !(objLine->prios & (1 << p))) {
                         continue;
@@ -1322,6 +1441,14 @@ static void DrawEngine(Engine *e, u16 *out)
             }
         }
 
+        if (split != NULL && split->has3d && !snapped) {
+            /* (the line was full before the 3D's place: everything drawn
+             * is in front of it, and nothing behind it was drawn) */
+            SnapshotOver(split, &blendState, row, y, nlist, blend2, flags, effect, evy, bldcnt,
+                         enableLine, layer1);
+            memset(row, 0, W * sizeof(u16));
+            nlist = 0;
+        }
         if (!blend2) {
             if (!(flags & T_LAYER)) {
                 if (((uintptr_t)row & 3) == 0) {
@@ -1356,13 +1483,31 @@ static void DrawEngine(Engine *e, u16 *out)
                     row[x] = c;
                 }
             }
-            continue;
+        } else {
+            /* Each pixel has its front layer; some blend with the one behind. */
+            blendState.y = y;
+            blendState.nlist = nlist;
+            BlendLine(&blendState, row, enableLine, layer1, anyWindow);
         }
+        if (split != NULL && split->has3d && anyWindow) {
+            /* Where a window hides the 3D, what's behind it shows. */
+            u16 *over = split->over + y * W;
+            u8 *alpha = split->overAlpha + y * W;
 
-        /* Each pixel has its front layer; some blend with the one behind. */
-        blendState.y = y;
-        blendState.nlist = nlist;
-        BlendLine(&blendState, row, enableLine, layer1, anyWindow);
+            for (x = 0; x < W; x++) {
+                if (enableLine[x] & 1) {
+                    continue;
+                }
+                if (!(over[x] & OPAQUE)) {
+                    over[x] = (u16)(row[x] | OPAQUE);
+                } else if (alpha[x] < 16) {
+                    /* (a pixel that would blend with the 3D blends with
+                     * what's behind it instead) */
+                    over[x] = (u16)(BlendIn16(over[x] & 0x7FFF, row[x], alpha[x], 16 - alpha[x]) | OPAQUE);
+                }
+                alpha[x] = 16;
+            }
+        }
     }
     /* Release only after every scanline has been composited. */
     if(gx3dPixels)NitroPort_Gx3dReleaseImage(gx3dPixels);
@@ -1401,12 +1546,16 @@ static void Fill(u16 *out, u16 color)
     }
 }
 
-void NitroPort_Render2D(int engine, u16 *out)
+static void Render(int engine, u16 *out, NitroRender2DSplit *split)
 {
     Engine e;
     u32 dispcnt;
     u16 powcnt = IO16(0x304);
 
+    if (split != NULL) {
+        memset(split, 0, offsetof(NitroRender2DSplit, over));
+        split->masterBright = IO16((engine == 0 ? 0 : 0x1000) + 0x6C);
+    }
     memset(&e, 0, sizeof(e));
     e.isA = engine == 0;
     e.io = NitroPort_IoReg + (e.isA ? 0 : 0x1000);
@@ -1433,7 +1582,7 @@ void NitroPort_Render2D(int engine, u16 *out)
         Fill(out, 0x7FFF);
         return;
     case 1:
-        DrawEngine(&e, out);
+        DrawEngine(&e, out, split);
         break;
     case 2: {                              /* VRAM display: a bank in LCDC */
         const u8 *bank = NitroPort_LcdcVram + ((dispcnt >> 18) & 3) * 0x20000;
@@ -1449,7 +1598,19 @@ void NitroPort_Render2D(int engine, u16 *out)
         Fill(out, 0);
         return;
     }
-    MasterBrightness(out, Rd16(e.io, 0x6C));
+    if (split == NULL) {
+        MasterBrightness(out, Rd16(e.io, 0x6C));
+    }
+}
+
+void NitroPort_Render2D(int engine, u16 *out)
+{
+    Render(engine, out, NULL);
+}
+
+void NitroPort_Render2DSplit(int engine, u16 *under, NitroRender2DSplit *split)
+{
+    Render(engine, under, split);
 }
 
 BOOL NitroPort_EngineAOnTop(void)
@@ -1518,6 +1679,22 @@ static u32 EngineSignature(int engine)
  * hashed: in step with the 3D (a moving camera moves evenly), and no
  * drawing in between that would hold the next 3D image up. */
 #define QUIET_3D_CALLS 4   /* calls without a new 3D image: the 3D has stopped */
+int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit *split)
+{
+    /* (its own record: the 3D doesn't come into these layers) */
+    static struct { u32 signature; int valid; } last[2];
+    int e = engine ? 1 : 0;
+    u32 signature = EngineSignature(e);
+
+    if (last[e].valid && signature == last[e].signature) {
+        return 0;
+    }
+    last[e].signature = signature;
+    last[e].valid = 1;
+    Render(engine, under, split);
+    return 1;
+}
+
 int NitroPort_Render2DIfChanged(int engine, u16 *out)
 {
     static struct { u32 signature; u32 images; int valid; int following; } last[2];

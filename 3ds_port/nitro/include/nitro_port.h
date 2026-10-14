@@ -11,6 +11,7 @@
 #define NITRO_PORT_H_
 
 #include <nitro/types.h>
+#include <nitro_port_render2d.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -109,6 +110,9 @@ void NitroPort_Render2D(int engine, u16 *out);
 /* The same, unless nothing it's drawn from changed since the last call for
  * that engine: then out isn't touched, and it returns 0 (1 when drawn). */
 int NitroPort_Render2DIfChanged(int engine, u16 *out);
+
+/* The same picture in two layers, for a compositor that draws the 3D
+ * between them itself: see nitro_port_render2d.h (included above). */
 
 /* Whether engine A's picture is on the upper screen (POWCNT1 bit 15). */
 BOOL NitroPort_EngineAOnTop(void);

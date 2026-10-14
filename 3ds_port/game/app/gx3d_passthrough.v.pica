@@ -1,9 +1,25 @@
-; Stage 2 PR1: PICA200 clip-space passthrough, assembled by picasso.
-; The CPU has already applied DS transforms, clipping, and viewport.
+; Stage 2: the PICA200 vertex program for the DS's polygons, assembled by
+; picasso. The CPU has done the DS transforms, clipping and viewport: the
+; position is the DS's clip space, x and y in -w..w over the DS's screen.
+; What's left to the GPU:
+;  - the stereoscopic shift (the 3D slider): x moves by
+;    stereo.x * (w - stereo.y) / w, in screen widths: nothing at the
+;    convergence distance stereo.y, to the right (the right eye; the left
+;    eye gets the opposite sign in stereo.x) further away, to the left
+;    nearer, and never more than stereo.x to the left (max with -w). Only
+;    for perspective vertices (w > 1): a flat (orthographic) polygon stays
+;    at the screen's depth;
+;  - the view matrix (mtx): where on the 3DS's screen the DS's screen
+;    goes (the whole upper screen; its 400 pixels for a wide view), and the
+;    3DS's rotated framebuffers, and, for the edge marking passes, a shift
+;    of a pixel.
 ; PICA fetches byte colours as 0..255 floats, not normalized 0..1.
-; Preserve W for perspective-correct interpolation in later texture PRs.
-.constf byteScale(0.003921568393707275390625, 0.0, 0.0, 0.0)
+; W is kept for perspective-correct interpolation.
+.constf byteScale(0.003921568393707275390625, 1.0001, 0.0, 0.0)
 .alias clrdiv byteScale.xxxx
+.alias flatW byteScale.yyyy
+.fvec mtx[4]
+.fvec stereo
 .out outpos position
 .out outclr color
 .out outtc0 texcoord0
@@ -12,7 +28,18 @@
 .alias intex v2
 
 .proc main
-    mov outpos, inpos
+    mov r0, inpos
+    ; r1.x = max(w - convergence, -w) * strength, for w > 1 only
+    add r1.x, -stereo.yyyy, r0.wwww
+    max r1.x, r1.xxxx, -r0.wwww
+    slt r2.x, flatW, r0.wwww
+    mul r1.x, r1.xxxx, r2.xxxx
+    mul r1.x, stereo.xxxx, r1.xxxx
+    add r0.x, r0.xxxx, r1.xxxx
+    dp4 outpos.x, mtx[0], r0
+    dp4 outpos.y, mtx[1], r0
+    dp4 outpos.z, mtx[2], r0
+    dp4 outpos.w, mtx[3], r0
     mul outclr, clrdiv, inclr
     mov outtc0, intex
     end

@@ -334,6 +334,12 @@ GX3D_PLUMBING_TEST_BIN := $(OUT)/test_gx3d_plumbing
 $(GX3D_PLUMBING_TEST_BIN): tests/test_gx3d_plumbing.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
 
+# The pixel-art upscaler and texture tiler: plain C, no SDK.
+UPSCALE_TEST_BIN := $(OUT)/test_upscale
+$(UPSCALE_TEST_BIN): tests/test_upscale.c src/port_upscale.c include/nitro_port_upscale.h
+	@mkdir -p $(dir $@)
+	$(CC) $(PORT_CFLAGS) $(LDFLAGS) -Iinclude tests/test_upscale.c src/port_upscale.c -o $@
+
 # Same scenes with and without the geometry thread, for a recording of the
 # game (the PC runner's --gx-record FILE): make replay, then
 # build/host/gx3d_replay FILE. Not run by `make test`.
@@ -342,7 +348,7 @@ $(GX3D_REPLAY_BIN): tests/gx3d_replay.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -pthread -o $@
 replay: $(GX3D_REPLAY_BIN)
 
-test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN) $(GX3D_TEST_BIN) $(GX3D_PLUMBING_TEST_BIN) $(VRAM_TRANSFER_TEST_BIN)
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN) $(GX3D_TEST_BIN) $(GX3D_PLUMBING_TEST_BIN) $(VRAM_TRANSFER_TEST_BIN) $(UPSCALE_TEST_BIN)
 	./$(TEST_BIN)
 	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
 	./$(THREAD_TEST_BIN)
@@ -353,6 +359,7 @@ test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_T
 	./$(GX3D_TEST_BIN)
 	./$(GX3D_PLUMBING_TEST_BIN)
 	./$(VRAM_TRANSFER_TEST_BIN)
+	./$(UPSCALE_TEST_BIN)
 
 clean:
 	rm -rf build

@@ -698,6 +698,203 @@ static void test_matches_reference(void)
     CHECK(differ == 0);
 }
 
+/* The picture in two layers (NitroPort_Render2DSplit), with the 3D put
+ * between them here the way the 3DS's compositor does: the same picture as
+ * drawing it in one, where the compositor's blending is the DS's: every
+ * layer a second target of the 3D's alpha, eva + evb = 16, effects
+ * allowed everywhere by the windows, no master brightness (that's the
+ * compositor's too). */
+static u16 Blend16(u16 a, u16 b, int ea, int eb)
+{
+    int r = ((a & 31) * ea + (b & 31) * eb) >> 4;
+    int g = (((a >> 5) & 31) * ea + ((b >> 5) & 31) * eb) >> 4;
+    int bl = (((a >> 10) & 31) * ea + ((b >> 10) & 31) * eb) >> 4;
+
+    return RGB(r > 31 ? 31 : r, g > 31 ? 31 : g, bl > 31 ? 31 : bl);
+}
+
+static u16 Bright(u16 c, int evy, int up)
+{
+    int r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
+
+    if (up) {
+        r += ((31 - r) * evy) >> 4;
+        g += ((31 - g) * evy) >> 4;
+        b += ((31 - b) * evy) >> 4;
+    } else {
+        r -= (r * evy) >> 4;
+        g -= (g * evy) >> 4;
+        b -= (b * evy) >> 4;
+    }
+    return RGB(r, g, b);
+}
+
+static void test_split_layers(void)
+{
+    static uint32_t rgba[256 * 192];
+    static u16 under[256 * 192], over[256 * 192], composed[256 * 192];
+    static u8 overAlpha[256 * 192];
+    NitroRender2DSplit split;
+    int n, i, differ = 0, with3d = 0, blended = 0;
+
+    split.over = over;
+    split.overAlpha = overAlpha;
+    for (n = 0; n < 300 && differ < 5; n++) {
+        u16 bldcnt, win;
+
+        RandomDisplay();
+        /* Engine A: mode 0 with BG0 as the 3D, the display mode normal,
+         * all BGs and OBJs. */
+        Put32(0, 0x10011F18u | (Rnd() % 2 ? 0x40000000u : 0) | (Rnd() % 2 ? 0xE000u : 0));
+        Put16(0x6C, 0);
+        bldcnt = (u16)((Rnd() & 0x3F) | 0x3F00 | ((Rnd() % 4) << 6));
+        if (n % 2) {
+            bldcnt &= ~1u;   /* half the time the 3D isn't a first target */
+        }
+        Put16(0x50, bldcnt);
+        i = (int)(Rnd() % 17);
+        Put16(0x52, (u16)(i | ((16 - i) << 8)));   /* eva + evb = 16 */
+        Put16(0x54, (u16)(Rnd() % 17));
+        for (win = 0x48; win <= 0x4A; win += 2) {
+            Put16(win, (u16)(Rnd() | 0x2121));   /* effects on, and the 3D shown, everywhere */
+        }
+        if (Rnd() % 3 == 0) {
+            Put16(0x10, (u16)(Rnd() % 300));    /* the 3D scrolled */
+        } else {
+            Put16(0x10, 0);
+        }
+        /* A 3D image: opaque, see-through, or (rarely) a whole picture. */
+        for (i = 0; i < 256 * 192; i++) {
+            u32 c = Rnd();
+
+            rgba[i] = (Rnd() % 3 == 0) ? 0 : ((c & 0xF8F8F800u) | 0xFFu);
+        }
+        NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+
+        NitroPort_Render2D(0, sTop);
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.has3d);
+        with3d++;
+        /* Composed: under, the 3D over it (moved left by the scroll, see-
+         * through where its alpha is 0), then the layers in front. Where
+         * the 3D is a first target of the effect and covers the pixel,
+         * the compositor's result is an approximation (the DS blends or
+         * brightens the 3D pixel before anything in front of it blends
+         * with it, and doesn't blend the layer behind it with its own
+         * second target): those pixels aren't compared. */
+        for (i = 0; i < 256 * 192; i++) {
+            int x = i % 256, y = i / 256, sx = (x + split.scroll3d) & 0x1FF;
+            u16 c = under[i];
+            const u16 *image3d = NitroPort_Gx3dAcquireImage();
+
+            if (sx < 256 && (image3d[y * 256 + sx] & 0x8000)) {
+                c = image3d[y * 256 + sx] & 0x7FFF;
+                if (split.tint3d != 0) {
+                    NitroPort_Gx3dReleaseImage(image3d);
+                    composed[i] = sTop[i];   /* (not compared) */
+                    continue;
+                }
+                if (split.tint3d == 1) {
+                    c = Blend16(c, under[i], split.eva, split.evb);
+                } else if (split.tint3d == 2) {
+                    c = Bright(c, split.evy, 1);
+                } else if (split.tint3d == 3) {
+                    c = Bright(c, split.evy, 0);
+                }
+            }
+            NitroPort_Gx3dReleaseImage(image3d);
+            if (over[i] & 0x8000) {
+                if (overAlpha[i] < 16) {
+                    if (((bldcnt >> 6) & 3) != 0 && (bldcnt & 0x3E)) {
+                        /* (a BG behind the 3D may be a first target: the
+                         * compositor blends with it as under shows it,
+                         * already blended or brightened; the DS with the
+                         * BG's own colour) */
+                        composed[i] = sTop[i];
+                        continue;
+                    }
+                    c = Blend16(over[i] & 0x7FFF, c, overAlpha[i], 16 - overAlpha[i]);
+                    blended++;
+                } else {
+                    c = over[i] & 0x7FFF;
+                }
+            }
+            composed[i] = c;
+        }
+        if (memcmp(composed, sTop, sizeof(sTop)) != 0) {
+            for (i = 0; i < 256 * 192; i++) {
+                if (composed[i] != sTop[i]) {
+                    {
+                        const u16 *im = NitroPort_Gx3dAcquireImage();
+                        int sx = ((i % 256) + split.scroll3d) & 0x1FF;
+                        u16 px3 = sx < 256 ? im[(i / 256) * 256 + sx] : 0;
+                        NitroPort_Gx3dReleaseImage(im);
+                        printf("split display %d: first difference at (%d,%d): composed %#06x, drawn %#06x (over %#06x alpha %d, under %#06x, 3D %#06x scroll %d; BLDCNT %#06x BLDALPHA %#06x DISPCNT %#010x)\n",
+                               n, i % 256, i / 256, composed[i], sTop[i], over[i], overAlpha[i], under[i], px3, split.scroll3d, bldcnt, NitroPort_IoReg[0x52] | (NitroPort_IoReg[0x53] << 8), *(u32 *)NitroPort_IoReg);
+                    }
+                    break;
+                }
+            }
+            differ++;
+        }
+    }
+    CHECK(differ == 0);
+    CHECK(with3d == n);
+    CHECK(blended > 0);   /* (the layers in front blended with the 3D somewhere) */
+
+    /* A window that hides the 3D: there, the layers in front show what's
+     * behind the 3D instead (and a pixel that would blend with the 3D
+     * blends with that). */
+    RandomDisplay();
+    Put32(0, 0x10011F18u | 0x2000u);   /* window 0 on */
+    Put16(0x6C, 0);
+    Put16(0x50, 0x3F00);               /* no effect */
+    Put16(0x40, 0x1080);               /* window 0: x 16-128 */
+    Put16(0x44, 0x1080);               /* y 16-128 */
+    Put16(0x48, 0x3E);                 /* inside: everything but BG0 */
+    Put16(0x4A, 0x3F);                 /* outside: everything */
+    Put16(0x10, 0);                    /* the 3D not scrolled */
+    Put16(0x52, 0x0808);               /* eva + evb = 16 */
+    for (i = 0; i < 256 * 192; i++) {
+        rgba[i] = 0xF80000FFu;         /* an opaque red 3D image */
+    }
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+    NitroPort_Render2D(0, sTop);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.has3d);
+    differ = 0;
+    for (i = 0; i < 256 * 192; i++) {
+        int x = i % 256, y = i / 256;
+        u16 c = RED;
+
+        if (over[i] & 0x8000) {
+            c = overAlpha[i] < 16 ? Blend16(over[i] & 0x7FFF, RED, overAlpha[i], 16 - overAlpha[i])
+                                  : (u16)(over[i] & 0x7FFF);
+        }
+        if (x >= 16 && x < 128 && y >= 16 && y < 128) {
+            differ += !(over[i] & 0x8000) || overAlpha[i] != 16;   /* the 3D hidden: covered */
+        }
+        differ += c != sTop[i];
+    }
+    CHECK(differ == 0);
+
+    /* Without a 3D layer the whole picture is under, as drawn in one. */
+    RandomDisplay();
+    Put32(0, 0x10011F10u);
+    Put16(0x6C, 0);
+    NitroPort_Render2D(0, sTop);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(!split.has3d);
+    CHECK(memcmp(under, sTop, sizeof(sTop)) == 0);
+    /* The master brightness is for the compositor. */
+    Put16(0x6C, 0x4008);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.masterBright == 0x4008);
+    CHECK(memcmp(under, sTop, sizeof(sTop)) == 0);
+    memset(rgba, 0, sizeof(rgba));
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+}
+
 /* The two engines drawn at the same time on two threads (as the 3DS
  * program does on two CPU cores), many times over: the same pixels. */
 static u16 sThreadOut[2][256 * 192];
@@ -855,6 +1052,7 @@ int main(int argc, char **argv)
     test_affine_bg();
     test_obj_8bpp_ext();
     test_matches_reference();
+    test_split_layers();
     test_engines_on_two_threads();
 
     printf("2D renderer: %d checks, %d failed\n", sChecks, sFailures);

@@ -9,7 +9,7 @@
  *                   [--dump-3d FRAME]
  *                   [--press FRAME:BUTTONS,...] [--touch FRAME:X:Y,...]
  *                   [--control DIR] [--gx-thread | --gx-thread-skip]
- *                   [--gx-record FILE]
+ *                   [--gx-record FILE] [--wide]
  *   pokeplatinum-pc --check-overlays
  *
  * Runs the same game code as the 3DS program, with the same data pack, as
@@ -1070,6 +1070,11 @@ int main(int argc, char **argv)
                 return 2;
             }
             NitroPort_Gx3dSetRecorder(GxRecord);
+        } else if (strcmp(argv[i], "--wide") == 0) {
+            /* The 3DS remaster's wider view (NitroPort_Gx3dSetWideView):
+             * on the PC's 256-pixel picture the 3D comes out squeezed,
+             * showing what the 3DS's 400 pixels would. */
+            NitroPort_Gx3dSetWideView(320);
         } else if (strcmp(argv[i], "--gx-thread") == 0) {
             sGxThread = 1;
         } else if (strcmp(argv[i], "--gx-thread-skip") == 0) {
