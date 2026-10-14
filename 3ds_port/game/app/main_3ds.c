@@ -347,15 +347,18 @@ static void StartGeometry(s32 priority, bool new3ds)
         NitroPort_Log("[perf] geometry on the game's thread (" GEOMETRY_PATH ")");
         return;
     }
-    if (strncmp(choice, "core 2", 6) == 0 && new3ds) {
-        StartGeometryOn(priority, 2);
-        return;
-    }
+    /* The share of core 1 first, whichever core the geometry goes on:
+     * engine B's drawer goes there with it (StartDrawers). */
     for (i = 0; i < sizeof(limits) / sizeof(limits[0]); i++) {
         if (R_SUCCEEDED(APT_SetAppCpuTimeLimit(limits[i]))) {
             sGeoCpuLimit = limits[i];
             break;
         }
+    }
+    if (strncmp(choice, "core 2", 6) == 0 && new3ds) {
+        NitroPort_Log("[perf] geometry on core 2, as " GEOMETRY_PATH " says");
+        StartGeometryOn(priority, 2);
+        return;
     }
     if (sGeoCpuLimit == 0) {
         if (new3ds) {
@@ -378,6 +381,96 @@ static void StartGeometry(s32 priority, bool new3ds)
     }
     sGeoCore = 1;
     NitroPort_Log("[perf] geometry on core 1 (%lu%% of it)", (unsigned long)sGeoCpuLimit);
+}
+
+/* ------------------------------------------------------ core speed check */
+/* The same small jobs timed on each core the program uses, once at start
+ * (a [perf] line): plain integer work, 64-bit multiplies (the geometry's
+ * fixed point) and double divisions (its screen positions). The geometry
+ * thread's scenes took several times longer on the 3DS than its work
+ * suggests; this says whether a core (core 1 is shared with the system)
+ * or a kind of work is the slow one. */
+typedef struct SpeedJob {
+    int kind;        /* 0 integer, 1 64-bit multiply, 2 double divide */
+    u64 ticks;
+    volatile u32 sink;
+} SpeedJob;
+
+static void SpeedJobMain(void *arg)
+{
+    SpeedJob *job = arg;
+    u64 start = svcGetSystemTick();
+    u32 i;
+
+    if (job->kind == 0) {
+        u32 x = 12345;
+
+        for (i = 0; i < 4000000u; i++) {
+            x = x * 1103515245u + 12345u;
+            x ^= x >> 7;
+        }
+        job->sink = x;
+    } else if (job->kind == 1) {
+        s64 acc = 1;
+        s32 a = 4096, b = -3000;
+
+        for (i = 0; i < 2000000u; i++) {
+            acc += (s64)a * b;
+            a = (s32)(acc >> 12) | 1;
+            b += 7;
+        }
+        job->sink = (u32)acc;
+    } else {
+        double d = 1.0;
+
+        for (i = 0; i < 300000u; i++) {
+            d = (d + 1.5) / (d * 0.5 + 2.0);
+        }
+        job->sink = (u32)(d * 1000.0);
+    }
+    job->ticks = svcGetSystemTick() - start;
+    threadExit(0);
+}
+
+/* The three jobs on one core, at the geometry thread's priority; the
+ * milliseconds each took into ms[], or -1 if no thread could start. */
+static void TimeCore(int core, s32 priority, double ms[3])
+{
+    int kind;
+
+    for (kind = 0; kind < 3; kind++) {
+        static SpeedJob job;
+        Thread t;
+
+        memset(&job, 0, sizeof(job));
+        job.kind = kind;
+        t = threadCreate(SpeedJobMain, &job, 16 * 1024, priority, core, false);
+        if (t == NULL) {
+            ms[kind] = -1.0;
+            continue;
+        }
+        threadJoin(t, UINT64_MAX);
+        threadFree(t);
+        ms[kind] = (double)job.ticks * 1000.0 / SYSCLOCK_ARM11;
+    }
+}
+
+static void CheckCoreSpeed(s32 priority, bool new3ds)
+{
+    double ms[3][3];
+    int core, cores = new3ds ? 3 : 2;
+    char line[256];
+    int used = 0;
+
+    for (core = 0; core < cores; core++) {
+        TimeCore(core, priority - 1, ms[core]);
+        used += snprintf(line + used, sizeof(line) - (size_t)used, "%score %d: %.1f / %.1f / %.1f",
+                         core ? "; " : "", core, ms[core][0], ms[core][1], ms[core][2]);
+        if (used >= (int)sizeof(line)) {
+            break;
+        }
+    }
+    NitroPort_Log("[perf] core speed, ms for the same jobs (integer / 64-bit multiply / double divide): %s", line);
 }
 
 static void StopGeometry(void)
@@ -1061,7 +1154,9 @@ static void PerfFrame(u64 enter)
     gpuDroppedTriangles = __atomic_load_n(&sGpuDroppedTriangles,__ATOMIC_RELAXED);
     {
         static u64 lastBuild, lastWait, lastPublish, lastGeoBusy, lastTexTexels, lastTexTicks;
-        static uint32_t lastGeoScenes, lastGeoSkipped;
+        static uint32_t lastGeoScenes, lastGeoSkipped, lastGeoWakeups;
+        uint32_t geoWakeups;
+        uint64_t geoLongest;
         static u32 lastTexConverted;
         u64 build, wait, publish, texTexels, texTicks;
         u32 texConverted;
@@ -1071,13 +1166,17 @@ static void PerfFrame(u64 enter)
         NitroPort_PicaTimes(&build, &wait, &publish);
         NitroPort_PicaTextureStats(&texConverted, &texTexels, &texTicks);
         NitroPort_Gx3dThreadStats(&geoBusy, &geoScenes, &geoSkipped);
+        NitroPort_Gx3dThreadWakeups(&geoWakeups, &geoLongest);
         if (sGeoThread && geoScenes != lastGeoScenes) {
             double busy = (double)(geoBusy - lastGeoBusy) / SYSCLOCK_ARM11;
-            NitroPort_Log("[perf] geometry (core %d): %.1f scenes/s, %.1f left out/s; %.1f ms/scene, busy %.0f%% of the time",
+            NitroPort_Log("[perf] geometry (core %d): %.1f scenes/s, %.1f left out/s; %.1f ms/scene, busy %.0f%% of the time; woken %.0f times/scene, longest stretch %.1f ms",
                           sGeoCore, (geoScenes - lastGeoScenes) / seconds,
                           (geoSkipped - lastGeoSkipped) / seconds,
-                          busy * 1000.0 / (geoScenes - lastGeoScenes), 100.0 * busy / seconds);
+                          busy * 1000.0 / (geoScenes - lastGeoScenes), 100.0 * busy / seconds,
+                          (double)(geoWakeups - lastGeoWakeups) / (geoScenes - lastGeoScenes),
+                          (double)geoLongest * 1000.0 / SYSCLOCK_ARM11);
         }
+        lastGeoWakeups = geoWakeups;
         lastGeoBusy = geoBusy;
         lastGeoScenes = geoScenes;
         lastGeoSkipped = geoSkipped;
@@ -1386,6 +1485,7 @@ int main(int argc, char **argv)
             APT_CheckNew3DS(&isNew3ds);
             StartGpu(priority, isNew3ds);
             StartGeometry(priority, isNew3ds);   /* first: core 1's share */
+            CheckCoreSpeed(priority, isNew3ds);  /* (with that share, nothing drawing yet) */
             StartDrawers(priority, isNew3ds);
             if (sDrawerCount == 2) {
                 NitroPort_Log("[perf] %s 3DS; drawing: the 3D engine's screen on core %d, the other on core %d",
