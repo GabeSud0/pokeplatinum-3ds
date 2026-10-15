@@ -165,12 +165,26 @@ scene happens to be done. `lag` starts at 2 and adapts (1 to 4): up when a
 frame would be late, back down after ten seconds with room to spare.
 
 A new scene is drawn once engine A's drawer is done with the 2D of the
-frame after it (or it's known there's none: the game hands the drawers a
-frame every other V-blank, or the drawer was busy and left that one out;
-at most a few V-blanks). Drawn as soon as it came, it went out with the
-2D before and was drawn again when that came: the 3D drawn twice, and if
-the 2D was late, a frame of the wrong picture (the title's Giratina showed,
-bright, for a frame before its fade in from black).
+frame after it, or it's known there's none (the game hands the drawers a
+frame every other V-blank, or the drawer was busy and left that one out),
+and no later than the V-blank after that frame's. Drawn as soon as it
+came, it went out with the 2D before and was drawn again when that came:
+the 3D drawn twice, and if the 2D was late, a frame of the wrong picture
+(the title's Giratina showed, bright, for a frame before its fade in from
+black). The first version waited up to a few V-blanks: where engine A's
+drawer takes more than a frame (the opening's Pokemon on green, the
+battles: 16-25 ms), each scene was overtaken by the next before its 2D
+came, and only 2 to 9 of 30 a second were shown; the 3D's screen, its 2D
+held with it, stood still.
+
+Engine A's drawer is the slower one where there are pictures: the 2D at
+320 pixels, and each BG's key worked out every frame to look its picture
+up. The key (FNV-1a, a 64-bit multiply a byte of the BG's map, tiles and
+palettes) is worked out again only when a quicker hash of the same words
+changes; a picture is drawn along a line without a division a pixel (the
+ARM11 has no divide instruction: tens of thousands a frame in the
+opening); the pictures are read at the start (`[wide art] N read ahead in
+X ms`), not as each first shows.
 
 The drawing threads draw from the display state as it was when the game
 handed them the frame: its registers, palettes and OAM are copied then

@@ -52,6 +52,10 @@ extern "C" {
 /* What's in the art folder (its file names; the pictures are read when
  * first needed): how many pictures. Again to take in new files. */
 int NitroPort_WideArtLoad(const char *dir);
+/* Read pictures ahead (the first max of them, as many as are kept: see
+ * port_wideart.c), so a picture's first showing doesn't wait for its file:
+ * how many were read. */
+int NitroPort_WideArtPreload(int max);
 const char *NitroPort_WideArtDir(void);
 int NitroPort_WideArtCount(void);
 /* Changes whenever the pictures may have (loaded again). */

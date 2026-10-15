@@ -268,7 +268,11 @@ void NitroPort_Compose2DDone(u32 stamp)
  * showed, bright, before its fade in from black). So it waits for that
  * frame of 2D: for the drawer to be done with it, or to know there's none
  * (the game offers a frame every other V-blank, or the drawer was busy and
- * left it out), and never longer than a few V-blanks. */
+ * left it out), and no longer than the V-blank after that frame's.
+ * (Waiting a few V-blanks, a scene waiting for a drawer that takes more
+ * than a frame was overtaken by the next scene, which waited in turn: the
+ * opening's Pokemon on green and the battles showed 2 to 9 new frames a
+ * second of 30, and the 3D's screen, its 2D held up with it, stood still.) */
 static int paired_2d_ready(u32 sceneStamp)
 {
     u32 want = sceneStamp + 1u;
@@ -285,8 +289,8 @@ static int paired_2d_ready(u32 sceneStamp)
     if ((int32_t)(done - want) >= 0) {
         return 1;   /* done with that frame (or a later one) */
     }
-    if ((int32_t)(now - (want + (u32)LAG_MAX + 1u)) >= 0) {
-        return 1;   /* (no longer than this) */
+    if ((int32_t)(now - (want + 1u)) >= 0) {
+        return 1;   /* (no longer than this: the next scene comes soon) */
     }
     if (handed != done && (int32_t)(handed - want) <= 0) {
         return 0;   /* drawing a frame up to that one: its 2D is on the way */
@@ -298,8 +302,7 @@ static int paired_2d_ready(u32 sceneStamp)
     if (every >= 2u && every <= 4u && (int32_t)(offered + every - want) > 0) {
         return 1;   /* the game offers a frame every other V-blank: none then */
     }
-    /* None offered for it yet: until the V-blank after its own. */
-    return (int32_t)(now - (want + 1u)) >= 0;
+    return 0;   /* none offered for it yet: until the V-blank after its own */
 }
 
 static void make_texture(C3D_Tex *tex, void *data, GPU_TEXCOLOR fmt, int w, int h, int linear,

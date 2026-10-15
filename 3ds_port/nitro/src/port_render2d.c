@@ -643,6 +643,36 @@ static inline int ArtWrap(int a, int size, int period)
     return a < size ? a : -1;
 }
 
+/* ArtWrap of a, a + 1, a + 2, ... along a line: the first worked out, the
+ * rest stepped. (A division a pixel past a picture's edge: the 3DS's ARM11
+ * has no divide instruction, and the opening's pictures did tens of
+ * thousands a frame.) */
+typedef struct ArtRun {
+    int a, m, size, period;
+} ArtRun;
+
+static inline void ArtRunStart(ArtRun *r, int a, int size, int period)
+{
+    r->a = a;
+    r->m = a % period;
+    if (r->m < 0) {
+        r->m += period;
+    }
+    r->size = size;
+    r->period = period;
+}
+
+static inline int ArtRunNext(ArtRun *r)
+{
+    int v = (unsigned)r->a < (unsigned)r->size ? r->a : r->m < r->size ? r->m : -1;
+
+    r->a++;
+    if (++r->m == r->period) {
+        r->m = 0;
+    }
+    return v;
+}
+
 /* A text BG's line, a tile (or the part of one on screen) at a time. */
 static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, int bg, u16 bgcnt, u32 dispcnt,
                                                               int y, Target *t, int flags)
@@ -697,9 +727,11 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
          * strip goes on) */
         const u16 *art = e->art[bg];
         int ay = ArtWrap(y + e->artDy[bg], H, mapH);
+        ArtRun run;
 
+        ArtRunStart(&run, x + e->artDx[bg], NITRO_WIDE_ART_W, mapW);
         for (; x < xe; x++) {
-            int ax = ArtWrap(x + e->artDx[bg], NITRO_WIDE_ART_W, mapW);
+            int ax = ArtRunNext(&run);
 
             PUT(x, (ay >= 0 && ax >= 0) ? art[ay * NITRO_WIDE_ART_W + ax] : 0, flags);
         }
@@ -719,10 +751,15 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
          * when their layer scrolled away). Elsewhere the BG's own. */
         const u16 *art = e->art[bg];
         int ay = ArtWrap(y + e->artDy[bg], H, mapH);
+        ArtRun run;
 
+        ArtRunStart(&run, x + e->artDx[bg], NITRO_WIDE_ART_W, mapW);
         for (; x < xe; x++) {
-            int ax = ay >= 0 ? ArtWrap(x + e->artDx[bg], NITRO_WIDE_ART_W, mapW) : -1;
+            int ax = ArtRunNext(&run);
 
+            if (ay < 0) {
+                ax = -1;
+            }
             if (ax >= e->origin && ax < e->origin + W) {
                 PUT(x, art[ay * NITRO_WIDE_ART_W + ax], flags);
             } else {
@@ -775,6 +812,35 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
                     u32 index = chars[(px0 + i) ^ flip];
 
                     PUT(x + i, index ? (u16)(PlttColor(pltt, index) | OPAQUE) : 0, flags);
+                }
+            } else if (n == 8) {
+                /* a whole tile's row: its 8 bytes as two words (the
+                 * battles' backgrounds) */
+                u32 lo = Rd32(chars, 0), hi = Rd32(chars, 4);
+                const u16 *pal8 = e->bgPal8;
+
+                if ((lo | hi) == 0) {
+                    if (flags & T_PLAIN) {
+                        memset(row + x, 0, 16);
+                    }
+                } else if (!flip) {
+                    PUT(x + 0, pal8[lo & 255], flags);
+                    PUT(x + 1, pal8[(lo >> 8) & 255], flags);
+                    PUT(x + 2, pal8[(lo >> 16) & 255], flags);
+                    PUT(x + 3, pal8[lo >> 24], flags);
+                    PUT(x + 4, pal8[hi & 255], flags);
+                    PUT(x + 5, pal8[(hi >> 8) & 255], flags);
+                    PUT(x + 6, pal8[(hi >> 16) & 255], flags);
+                    PUT(x + 7, pal8[hi >> 24], flags);
+                } else {
+                    PUT(x + 0, pal8[hi >> 24], flags);
+                    PUT(x + 1, pal8[(hi >> 16) & 255], flags);
+                    PUT(x + 2, pal8[(hi >> 8) & 255], flags);
+                    PUT(x + 3, pal8[hi & 255], flags);
+                    PUT(x + 4, pal8[lo >> 24], flags);
+                    PUT(x + 5, pal8[(lo >> 16) & 255], flags);
+                    PUT(x + 6, pal8[(lo >> 8) & 255], flags);
+                    PUT(x + 7, pal8[lo & 255], flags);
                 }
             } else {
                 for (i = 0; i < n; i++) {
@@ -1027,11 +1093,26 @@ static inline u64 KeyAdd(u64 h, u32 v)
     return h;
 }
 
+/* A quicker hash of the same words (two 32-bit lanes, a word at a time):
+ * BgKeyCached's check that nothing BgKey reads changed. */
+static inline u64 QuickAdd(u64 h, u32 v)
+{
+    u32 a = (u32)h, b = (u32)(h >> 32);
+
+    a = (a ^ v) * 0x9E3779B1u;
+    a = (a << 15) | (a >> 17);
+    b = (b + v) * 0x85EBCA77u;
+    b = ((b << 13) | (b >> 19)) ^ a;
+    return ((u64)b << 32) | a;
+}
+
 /* A BG's key (nitro_port_wideart.h): its kind and size, its whole map, the
  * tiles the map uses (each once, by number) and the palettes they're in.
  * Not where its map and tiles are in VRAM, nor its scroll: the same art is
- * the same key wherever the game put it. 0 for a BG with none (a bitmap). */
-static u64 BgKey(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt)
+ * the same key wherever the game put it. 0 for a BG with none (a bitmap).
+ * quick: QuickAdd's hash of the same words instead (not a key). */
+static inline __attribute__((always_inline)) u64 BgKeyT(const Engine *e, int bg, int kind, u16 bgcnt,
+                                                        u32 dispcnt, int quick)
 {
     const u8 *vram = e->bgVram;
     u32 mask = e->bgMask, charBase = CharBase(e, bgcnt, dispcnt), screenBase = ScreenBase(e, bgcnt, dispcnt);
@@ -1039,6 +1120,7 @@ static u64 BgKey(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt)
     u32 banks = 0, entries, i;
     int bpp8, wide16;   /* 8-bit tiles; 16-bit map entries */
     u64 h = KEY_START;
+#define ADD(h, v) (quick ? QuickAdd(h, v) : KeyAdd(h, v))
 
     if (kind == BG_TEXT) {
         bpp8 = (bgcnt & 0x80) != 0;
@@ -1051,14 +1133,14 @@ static u64 BgKey(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt)
     } else {
         return 0;   /* a bitmap, the 3D */
     }
-    h = KeyAdd(h, (u32)kind | ((u32)(bgcnt & 0xC080) << 8));
+    h = ADD(h, (u32)kind | ((u32)(bgcnt & 0xC080) << 8));
     memset(used, 0, sizeof(used));
     /* the map (a text BG's in its 2 KB blocks, in order: the same bytes) */
     for (i = 0; i < entries; i++) {
         u32 entry = wide16 ? Rd16(vram, (screenBase + i * 2) & mask) : vram[(screenBase + i) & mask];
         u32 tile = wide16 ? entry & 0x3FF : entry;
 
-        h = KeyAdd(h, entry);
+        h = ADD(h, entry);
         used[tile >> 5] |= 1u << (tile & 31);
         if (wide16) {
             banks |= 1u << (entry >> 12);
@@ -1072,7 +1154,7 @@ static u64 BgKey(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt)
             continue;
         }
         for (k = 0; k < size; k += 4) {
-            h = KeyAdd(h, Rd32(vram, (charBase + i * size + k) & mask));
+            h = ADD(h, Rd32(vram, (charBase + i * size + k) & mask));
         }
     }
     /* their palettes */
@@ -1082,7 +1164,7 @@ static u64 BgKey(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt)
                 u32 k;
 
                 for (k = 0; k < 16; k++) {
-                    h = KeyAdd(h, PlttColor(e->bgPltt, i * 16 + k));
+                    h = ADD(h, PlttColor(e->bgPltt, i * 16 + k));
                 }
             }
         }
@@ -1095,17 +1177,62 @@ static u64 BgKey(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt)
                     u32 k;
 
                     for (k = 0; k < 256; k++) {
-                        h = KeyAdd(h, PlttColor(ext + (i << 9), k));
+                        h = ADD(h, PlttColor(ext + (i << 9), k));
                     }
                 }
             }
         } else {
             for (i = 0; i < 256; i++) {
-                h = KeyAdd(h, PlttColor(e->bgPltt, i));
+                h = ADD(h, PlttColor(e->bgPltt, i));
             }
         }
     }
+#undef ADD
     return h ? h : 1;
+}
+
+
+static u64 BgKey(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt)
+{
+    return BgKeyT(e, bg, kind, bgcnt, dispcnt, 0);
+}
+
+/* BgKey for drawing, worked out again only when what it reads changed
+ * (QuickAdd's hash of it differs): FNV-1a's 64-bit multiply a byte took a
+ * sixth of drawing the opening's screens with pictures, every frame. Each
+ * engine's BGs, under a lock (an engine is drawn by one thread at a time,
+ * but the PC's tools may draw one besides). */
+static struct {
+    u64 quick, key;
+    u8 kind, valid;
+    u16 bgcnt;
+} sKeyCache[2][4];
+static volatile int sKeyCacheLock[2];
+
+static u64 BgKeyCached(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt)
+{
+    int eng = e->isA ? 0 : 1;
+    u64 quick = BgKeyT(e, bg, kind, bgcnt, dispcnt, 1), key;
+
+    while (__atomic_test_and_set(&sKeyCacheLock[eng], __ATOMIC_ACQUIRE)) {
+    }
+    if (sKeyCache[eng][bg].valid && sKeyCache[eng][bg].quick == quick && sKeyCache[eng][bg].kind == (u8)kind &&
+        sKeyCache[eng][bg].bgcnt == bgcnt) {
+        key = sKeyCache[eng][bg].key;
+        __atomic_clear(&sKeyCacheLock[eng], __ATOMIC_RELEASE);
+        return key;
+    }
+    __atomic_clear(&sKeyCacheLock[eng], __ATOMIC_RELEASE);
+    key = BgKey(e, bg, kind, bgcnt, dispcnt);
+    while (__atomic_test_and_set(&sKeyCacheLock[eng], __ATOMIC_ACQUIRE)) {
+    }
+    sKeyCache[eng][bg].quick = quick;
+    sKeyCache[eng][bg].key = key;
+    sKeyCache[eng][bg].kind = (u8)kind;
+    sKeyCache[eng][bg].bgcnt = bgcnt;
+    sKeyCache[eng][bg].valid = 1;
+    __atomic_clear(&sKeyCacheLock[eng], __ATOMIC_RELEASE);
+    return key;
 }
 
 /* (wider canvas) each BG's hand-drawn picture, if there's one made where
@@ -1128,7 +1255,7 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
         if (kind[bg] == BG_NONE || kind[bg] == BG_3D || !e->clip[bg]) {
             continue;
         }
-        key = BgKey(e, bg, kind[bg], bgcnt[bg], dispcnt);
+        key = BgKeyCached(e, bg, kind[bg], bgcnt[bg], dispcnt);
         if (key == 0) {
             continue;
         }
@@ -1660,15 +1787,17 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
         const ObjArt *a = &f->art[k];
         int ay = ArtWrap(y - a->dy, H, 256), x;
         const u16 *row;
+        ArtRun run;
 
         if (ay < 0) {
             continue;
         }
         row = a->art + ay * NITRO_WIDE_ART_W;
+        ArtRunStart(&run, -a->dx, NITRO_WIDE_ART_W, 256);
         for (x = 0; x < e->width; x++) {
             /* (past the picture's edge: a screen's width on, as a strip of
              * sprites that scrolls round goes on) */
-            int ax = ArtWrap(x - a->dx, NITRO_WIDE_ART_W, 256);
+            int ax = ArtRunNext(&run);
             u16 c;
 
             if (ax < 0 || (out->color[x] & OPAQUE) ||
