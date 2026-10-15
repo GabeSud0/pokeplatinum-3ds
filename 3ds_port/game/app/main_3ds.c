@@ -67,6 +67,8 @@ int NitroPort_EngineAOnTop(void);
 void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void NitroPort_SoundRender(int16_t *stereo, size_t frames);
 void NitroPort_SoundPumpReplies(void);
+/* (nitro_port_fs.h, which needs the SDK's headers) */
+void NitroPort_FsReadStats(uint32_t *reads, uint64_t *bytes, uint64_t *micros);
 
 #define AUDIO_FRAMES 512
 #define AUDIO_BUFFERS 4
@@ -407,6 +409,18 @@ static void GpuComposeLoop(void)
         if(!__atomic_load_n(&sGpuRunning,__ATOMIC_ACQUIRE))break;
         if(scene==NULL || NitroPort_Gx3dNewerScene(seen)){
             const NitroGx3dScene *next;
+            if(scene && NitroPort_ComposeSceneWaiting(seen)){
+                /* Still waiting for its 2D: drawn now, with the 2D there
+                 * is, before the newer one (not overtaken: every scene
+                 * shows). */
+                __atomic_store_n(&sComposing,true,__ATOMIC_SEQ_CST);
+                if(!sShowLog && !sScreensDirty && !__atomic_load_n(&sSuspended,__ATOMIC_SEQ_CST)){
+                    u64 start=svcGetSystemTick();
+                    NitroPort_ComposeFrame(scene,seen,sAOnTop,osGet3DSliderState(),false,1);
+                    sGpuTicks+=svcGetSystemTick()-start;
+                }
+                __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
+            }
             if(scene){NitroPort_Gx3dReleaseScene(scene);scene=NULL;}
             next=NitroPort_Gx3dAcquireScene(&seen);
             if(next){
@@ -426,7 +440,7 @@ static void GpuComposeLoop(void)
         force=__atomic_exchange_n(&sComposeForce,false,__ATOMIC_ACQ_REL);
         {
             u64 start=svcGetSystemTick();
-            NitroPort_ComposeFrame(scene,seen,sAOnTop,osGet3DSliderState(),force);
+            NitroPort_ComposeFrame(scene,seen,sAOnTop,osGet3DSliderState(),force,0);
             __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
             sGpuTicks+=svcGetSystemTick()-start;
         }
@@ -1715,10 +1729,44 @@ static void PerfFrame(u64 enter)
 /* Once a frame, from the game's idle thread (NitroPort_Halt): hand the
  * frame to the drawing threads, wait for the 3DS's V-blank, read the
  * buttons. */
+/* A frame that took long, in the log with where its time went: the game's
+ * own work (of which its file reads, and its waits for the geometry
+ * thread), or the port's between frames. For the stalls the [perf] lines
+ * only average over two seconds (going between a route and a town). */
+#define STALL_GAME_MS 100.0
+#define STALL_PORT_MS 50.0
+static double TicksMs(u64 ticks)
+{
+    return (double)ticks * 1000.0 / SYSCLOCK_ARM11;
+}
+
+static void NoteGameStall(u64 enter)
+{
+    static uint32_t lastReads;
+    static uint64_t lastBytes, lastFsMicros, lastGeoMicros;
+    uint32_t reads;
+    uint64_t bytes, fsMicros, geoMicros = NitroPort_Gx3dProducerWaitMicros();
+
+    NitroPort_FsReadStats(&reads, &bytes, &fsMicros);
+    if (sFrameExit != 0 && TicksMs(enter - sFrameExit) > STALL_GAME_MS) {
+        NitroPort_Log("[stall] frame %lu: %.0f ms in the game (file reads: %lu, %llu KB, %.0f ms; "
+                      "waiting for the geometry thread: %.0f ms)",
+                      sFrame, TicksMs(enter - sFrameExit), (unsigned long)(reads - lastReads),
+                      (unsigned long long)((bytes - lastBytes) / 1024u),
+                      (double)(fsMicros - lastFsMicros) / 1000.0, (double)(geoMicros - lastGeoMicros) / 1000.0);
+    }
+    lastReads = reads;
+    lastBytes = bytes;
+    lastFsMicros = fsMicros;
+    lastGeoMicros = geoMicros;
+}
+
 void NitroPort_OnFrame(void)
 {
     u32 held, down;
-    u64 enter = svcGetSystemTick();
+    u64 enter = svcGetSystemTick(), vblankWait = 0, readWait = 0;
+
+    NoteGameStall(enter);
 
     NitroPort_SoundPumpReplies(); /* never raise ARM9 FIFO IRQ from DSP thread */
     /* The remaster's wider view only while the 3D is on the upper screen
@@ -1834,8 +1882,11 @@ void NitroPort_OnFrame(void)
          * isn't made to wait for another one as well. When far behind, stop
          * trying to catch up. */
         if (ahead) {
+            u64 waitStart = svcGetSystemTick();
+
             gspWaitForVBlank();
             sDeadline = svcGetSystemTick() + FRAME_TICKS;
+            vblankWait = sDeadline - FRAME_TICKS - waitStart;
         } else if (now - sDeadline > 3 * FRAME_TICKS) {
             sDeadline = now + FRAME_TICKS;
         } else {
@@ -1850,10 +1901,16 @@ void NitroPort_OnFrame(void)
         u64 start = svcGetSystemTick();
 
         WaitForReading(FRAME_TICKS);
-        sPerfReadWaitTicks += svcGetSystemTick() - start;
+        readWait = svcGetSystemTick() - start;
+        sPerfReadWaitTicks += readWait;
     }
     PerfFrame(enter);
     sFrameExit = svcGetSystemTick();
+    if (TicksMs(sFrameExit - enter) > STALL_PORT_MS) {
+        NitroPort_Log("[stall] frame %lu: %.0f ms in the port between frames (V-blank wait %.0f, drawers "
+                      "reading %.0f)", sFrame, TicksMs(sFrameExit - enter), TicksMs(vblankWait), TicksMs(readWait));
+        sFrameExit = svcGetSystemTick();
+    }
 }
 
 /* ------------------------------------------------------------- starting */

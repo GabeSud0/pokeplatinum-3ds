@@ -120,6 +120,11 @@ PakResult pak_open(const char *path, const char *expected_build_id, Pak **out_pa
 
     file = fopen(path, "rb");
     if (file == NULL) return PAK_ERR_IO;
+    /* Unbuffered: each read straight from the file, in one request. The
+     * reader keeps its own blocks (read_cached); through stdio's buffer
+     * (newlib's: 1 KB) a block, or a big read, was a request to the SD card
+     * per kilobyte. */
+    (void)setvbuf(file, NULL, _IONBF, 0);
     if (fseek(file, 0, SEEK_END) != 0 || (length = ftell(file)) < 0 ||
         fseek(file, 0, SEEK_SET) != 0) {
         result = PAK_ERR_IO;

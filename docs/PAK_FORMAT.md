@@ -70,6 +70,8 @@ about 1900 reads, nine in ten under 256 bytes: archive headers, file
 tables, text), and each one a seek and a read of the SD card took about a
 millisecond on the 3DS: going between a route and a town, the game lost
 about a second. A read of two blocks or more goes straight to the file.
+The file is unbuffered: through stdio's buffer (newlib's, 1 KB), a block
+or a big read was a request to the SD card per kilobyte.
 
 ## Creating a pack locally
 

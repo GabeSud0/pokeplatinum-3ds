@@ -30,6 +30,10 @@ BOOL NitroPort_IsPakOpen(void);
  * default logs it. */
 void NitroPort_FileMissing(const char *path);
 
+/* The game's file reads since the start (for the log: a long frame's
+ * reads): how many, their bytes, and the time they took in microseconds. */
+void NitroPort_FsReadStats(uint32_t *reads, uint64_t *bytes, uint64_t *micros);
+
 /* NitroSDK ROM archive command processor (SDK_PORT_3DS only). */
 FSResult NitroPort_PakArchiveProc(FSFile *file, FSCommandType command);
 
