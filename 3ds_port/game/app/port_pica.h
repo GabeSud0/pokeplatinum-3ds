@@ -140,10 +140,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
 int NitroPort_ComposeSceneWaiting(uint32_t sceneSerial);
 /* For the [perf] line: frames drawn, the time building them (CPU) and the
  * GPU time waited for, publishing (upscaling) by the drawers, the V-blanks
- * from a scene's making to its showing (lag), and of the 3D frames (timed)
- * how many were late. Counts since the start. */
+ * from a scene's making to its showing (lag), of the 3D frames (timed)
+ * how many were late, the scenes never shown (overtaken), and the frames
+ * drawn in stereo. Counts since the start. */
 typedef struct ComposeStats {
-    u32 frames, published, timed, late;
+    u32 frames, published, timed, late, dropped, stereo;
     u64 gpuTicks, cpuTicks, publishTicks;
     int lag;
 } ComposeStats;

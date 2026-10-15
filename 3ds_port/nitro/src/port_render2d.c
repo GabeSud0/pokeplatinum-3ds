@@ -2873,9 +2873,20 @@ static u32 EngineSmallSignature(int engine, int snapshot)
     const State2D *st = &sState[isA ? 0 : 1];
     const u8 *ioAll = snapshot ? st->io : NitroPort_IoReg;
     const u8 *io = ioAll + (isA ? 0 : 0x1000);
+    u32 regs[0x70 / 4];
     u32 h = 2166136261u;
 
-    h = HashWords(io, 0x70, h);
+    /* Not DISP3DCNT's two acknowledge bits (12, 13: the 3D's colour
+     * buffer underflow and polygon RAM overflow): the game writes them
+     * every frame, alternating, and they change nothing drawn. Counted,
+     * engine A's picture was drawn and upscaled again every other frame
+     * of the field with nothing on it changed (about 15 times a second, 9
+     * ms each on the 3D's core: 2026-10-15). */
+    memcpy(regs, io, sizeof(regs));
+    if (isA) {
+        regs[0x60 / 4] &= ~0x3000u;
+    }
+    h = HashWords((const u8 *)regs, 0x70, h);
     h = HashWords(ioAll + 0x240, 0x10, h);              /* VRAMCNT */
     h = (h ^ Rd16(ioAll, 0x304)) * 16777619u;           /* POWCNT1 */
     h = HashWords((snapshot ? st->pltt : NitroPort_Pltt) + (isA ? 0 : 0x400), 0x400, h);
