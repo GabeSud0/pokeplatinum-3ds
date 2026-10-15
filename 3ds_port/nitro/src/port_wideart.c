@@ -44,7 +44,11 @@ void NitroPort_Log(const char *fmt, ...);
 int NitroPort_EngineAOnTop(void);
 
 #define MAX_PICTURES 512
-#define CACHE_SLOTS 12
+/* Pictures kept read (120 KB each). The 3DS reads them ahead at the start
+ * (NitroPort_WideArtPreload): one read as it first shows (a file from the
+ * SD card, a PNG to decode) holds that screen's drawing up, and the
+ * opening alone uses 17. */
+#define CACHE_SLOTS 24
 #define PIXELS (NITRO_WIDE_ART_W * NITRO_WIDE_ART_H)
 
 typedef struct Picture {
@@ -201,6 +205,31 @@ int NitroPort_WideArtLoad(const char *dir)
         NitroPort_Log("[wide art] %d hand-drawn pictures in %s", n, dir);
     }
     return n;
+}
+
+static const uint16_t *picture_pixels(int index);
+
+int NitroPort_WideArtPreload(int max)
+{
+    int i, n, read = 0;
+
+    lock();
+    n = sCount;
+    unlock();
+    if (max > CACHE_SLOTS) {
+        max = CACHE_SLOTS;
+    }
+    for (i = 0; i < n && i < max; i++) {
+        lock();
+        if (i >= sCount || sPictures[i].bad) {
+            unlock();
+            continue;
+        }
+        if (picture_pixels(i) != NULL) {   /* (unlocks) */
+            read++;
+        }
+    }
+    return read;
 }
 
 const char *NitroPort_WideArtDir(void)

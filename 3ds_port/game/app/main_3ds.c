@@ -1987,8 +1987,14 @@ int main(int argc, char **argv)
             StartGpu(priority, isNew3ds);
             NitroPort_Gx3dSetWideView(sRemaster && sCompose.wide ? 320 : 256);
             NitroPort_SetWideScreen(sRemaster && sCompose.wide ? 32 : 0);
-            if (sRemaster && sCompose.wide) {
-                NitroPort_WideArtLoad(WIDE_ART_DIR);
+            if (sRemaster && sCompose.wide && NitroPort_WideArtLoad(WIDE_ART_DIR) > 0) {
+                /* read ahead, before the game starts (not while a screen
+                 * waits for its picture) */
+                u64 start = svcGetSystemTick();
+                int read = NitroPort_WideArtPreload(1 << 30);
+
+                NitroPort_Log("[wide art] %d read ahead in %.0f ms", read,
+                              (double)(svcGetSystemTick() - start) * 1000.0 / SYSCLOCK_ARM11);
             }
             StartGeometry(priority, isNew3ds);   /* first: core 1's share */
             CheckCoreSpeed(priority, isNew3ds);  /* (with that share, nothing drawing yet) */
