@@ -88,6 +88,7 @@ typedef struct TexEntry {
     size_t bytes;
     unsigned scale;    /* texels a DS texel: 1, or 2 (sTexMode 2) */
     int filtered;      /* sampled with the bilinear filter */
+    int holes;         /* some texels not fully opaque (its shape needs the alpha test) */
     C3D_Tex tex;
 } TexEntry;
 
@@ -104,6 +105,25 @@ static size_t sTexLinearWords, sTexTiledWords;
 /* The bound texture's cut for opaque pixels: a filtered texture's edges
  * are half see-through; the DS's texel boundary is at alpha one half. */
 static int sBoundCut;
+/* ... and whether it has see-through texels (TexEntry.holes) */
+static int sBoundHoles;
+
+/* The texture on unit 0 as bound here, so it's bound only when it
+ * changes: citro3d clears the GPU's texture cache each time a texture is
+ * bound, the same one or none (it was, for each batch of each of a
+ * frame's nine draws of its polygons). Not known at the start of a
+ * scene's draw (the compositor binds its own), nor after a texture is made
+ * again (its C3D_Tex may describe other memory now). */
+static C3D_Tex *sBoundTex;
+static int sBoundTexKnown;
+
+static void bind_tex(C3D_Tex *tex)
+{
+    if(sBoundTexKnown && tex==sBoundTex)return;
+    C3D_TexBind(0,tex);
+    sBoundTex=tex;
+    sBoundTexKnown=1;
+}
 
 
 /* bin2s emits these from picasso's gx3d_passthrough.shbin. */
@@ -298,6 +318,14 @@ static uint32_t *scratch(uint32_t **buf,size_t *have,size_t n)
     return *buf;
 }
 
+/* Whether any of n RGBA8 texels isn't fully opaque. */
+static int any_holes(const uint32_t *t,size_t n)
+{
+    size_t i;
+    for(i=0;i<n;i++)if((t[i]&0xFFu)!=0xFFu)return 1;
+    return 0;
+}
+
 /* A texture's texels into its PICA texture: as they are (nearest), or
  * through NitroPort_Gx3dFilterTexels for the bilinear filter. 0 if there's
  * no memory for the conversion. */
@@ -306,6 +334,7 @@ static int convert_texture(TexEntry *e,unsigned width,unsigned height)
     uint32_t *lin,*out;
     if(!e->filtered){
         NitroPort_Gx3dDecodeTextureTiled(&sBanks,e->param,e->palette,(uint32_t*)e->tex.data);
+        e->holes=any_holes((const uint32_t*)e->tex.data,(size_t)width*height);
         return 1;
     }
     /* (the fast decoder gives tiles: back to rows, then filtered and
@@ -315,6 +344,7 @@ static int convert_texture(TexEntry *e,unsigned width,unsigned height)
     if(!lin||!out)return 0;
     NitroPort_Gx3dDecodeTextureTiled(&sBanks,e->param,e->palette,out);
     NitroPort_Gx3dUntileRGBA8(out,width,height,lin);
+    e->holes=any_holes(lin,(size_t)width*height);
     NitroPort_Gx3dFilterTexelsTiled(lin,width,height,e->scale,(uint32_t*)e->tex.data);
     return 1;
 }
@@ -333,6 +363,7 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     uint32_t hash;
     int i;
     sBoundCut=0;
+    sBoundHoles=1;
     for(i=0;i<TEX_CACHE_ENTRIES;i++){
         TexEntry *c=&sTextures[i];
         if(c->used && c->param==param && c->palette==palette){e=c;break;}
@@ -341,14 +372,17 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     if(e && e->checkedFrame==sFrame){
         e->lastFrame=sFrame;
         sBoundCut=e->filtered?127:0;
+        sBoundHoles=e->holes;
         return &e->tex;
     }
     hash=NitroPort_Gx3dTextureHash(&sBanks,param,palette);
     if(e && e->hash==hash){
         e->checkedFrame=e->lastFrame=sFrame;
         sBoundCut=e->filtered?127:0;
+        sBoundHoles=e->holes;
         return &e->tex;
     }
+    sBoundTexKnown=0;   /* (a texture made again, maybe the bound one's entry) */
     if(!e){
         /* 2x2 texels a texel when sharp, if it fits (the PICA's 1024 and
          * the cache), else as it is */
@@ -397,6 +431,7 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     e->hash=hash;
     e->checkedFrame=e->lastFrame=sFrame;
     sBoundCut=e->filtered?127:0;
+    sBoundHoles=e->holes;
     return &e->tex;
 }
 
@@ -518,16 +553,37 @@ static void setup_fog(void)
     sFogDensityRear=(uint8_t)fog_density((io32(0x354)&0x7FFFu)*0x200u+0x1FFu,offset,shift,table);
 }
 
+/* The fog mode as last set here; -1 when not known (something else may
+ * have set it since). Each change costs a few words of command list, and
+ * binding the table costs 130 more: citro3d sends the whole table again
+ * on the next fogged draw. Per batch, a fogged scene sent the table for
+ * every batch, in each of the five draws of its polygons with the fog
+ * (2026-10-15, the opening's forest). Now the table and colour go in once
+ * per scene's draw and the mode only when it changes. */
+static int sFogMode=-1;
+
+static void fog_mode(int on)
+{
+    if(on==sFogMode)return;
+    C3D_FogGasMode(on?GPU_FOG:GPU_NO_FOG,GPU_PLAIN_DENSITY,false);
+    sFogMode=on;
+}
+
+/* At the start of a scene's draw: its fog table and colour, fog off. */
+static void fog_begin(void)
+{
+    sFogMode=-1;
+    if(sFogOn){
+        C3D_FogColor(sFogColor);
+        C3D_FogLutBind(&sFogLut);
+    }
+    fog_mode(0);
+}
+
 /* Fog on for a batch's polygons (attribute bit 15) or off. */
 static void batch_fog(uint32_t attr)
 {
-    if(sFogOn && (attr&(1u<<15))){
-        C3D_FogGasMode(GPU_FOG,GPU_PLAIN_DENSITY,false);
-        C3D_FogColor(sFogColor);
-        C3D_FogLutBind(&sFogLut);
-    }else{
-        C3D_FogGasMode(GPU_NO_FOG,GPU_PLAIN_DENSITY,false);
-    }
+    fog_mode(sFogOn && (attr&(1u<<15)));
 }
 
 /* The rear plane's colour with the fog on it, if it's fogged. */
@@ -616,6 +672,8 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
         return -1;
     }
     C3D_BindProgram(&sProgram);
+    fog_begin();
+    sBoundTexKnown=0;
     {
         /* The DS's clip space is the whole target. */
         C3D_Mtx identity;
@@ -649,7 +707,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
                  * with whatever texture was bound last. */
                 textured=0;
             }else{
-                C3D_TexBind(0,tex);
+                bind_tex(tex);
             }
         }
         set_combiner(attr,textured);
@@ -707,7 +765,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
      * buffer and nothing else. Under a translucent pixel the opaque one's
      * ID goes in too, as on the DS. */
     idBatches=0;
-    C3D_FogGasMode(GPU_NO_FOG,GPU_PLAIN_DENSITY,false);
+    fog_mode(0);
     if(edging){
         for(b=0;b<nbatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
@@ -721,7 +779,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
             if(textured){
                 C3D_Tex *tex=get_texture(batch->texture_param,batch->palette_base);
                 if(!tex)textured=0;
-                else C3D_TexBind(0,tex);
+                else bind_tex(tex);
             }
             set_combiner(attr,textured);
             C3D_AlphaTest(true,GPU_GREATER,batch->translucent?254:0);
@@ -906,8 +964,27 @@ static int bind_batch(const NitroGx3dBatch *batch)
     if(textured){
         C3D_Tex *tex=get_texture(batch->texture_param,batch->palette_base);
         if(!tex){textured=0;sBoundCut=0;}
-        else C3D_TexBind(0,tex);
+        else bind_tex(tex);
     }
+    set_combiner(batch->polygon_attr,textured);
+    return textured;
+}
+
+/* For the outline passes, where only a polygon's shape counts: its
+ * texture only if it has see-through texels (a tree's cut-out), else none
+ * (the texture unit off: most of the scene, the GPU's texture reads saved
+ * in 8 of the 9 times a frame's polygons are drawn). Whether textured. */
+static int bind_batch_shape(const NitroGx3dBatch *batch)
+{
+    int textured=batch->texture_param!=0;
+    C3D_Tex *tex=NULL;
+    sBoundCut=0;
+    if(textured){
+        tex=get_texture(batch->texture_param,batch->palette_base);
+        if(!tex || (!sBoundHoles && !batch->translucent))textured=0;
+    }
+    bind_tex(textured?tex:NULL);
+    if(!textured)sBoundCut=0;
     set_combiner(batch->polygon_attr,textured);
     return textured;
 }
@@ -954,7 +1031,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
     static const float dx[4]={-1.0f,1.0f,0.0f,0.0f},dy[4]={0.0f,0.0f,-1.0f,1.0f};
     size_t b;
     int dir;
-    C3D_FogGasMode(GPU_NO_FOG,GPU_PLAIN_DENSITY,false);
+    fog_mode(0);
     for(dir=0;dir<4;dir++){
         PicaRect shifted=view->rect;
         C3D_FrameBuf *fb=view->edgeFb[dir];
@@ -973,7 +1050,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             int textured;
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
             if(!room_for_draw())break;
-            textured=bind_batch(batch);
+            textured=bind_batch_shape(batch);
             C3D_AlphaTest(textured,GPU_GREATER,batch->translucent?254:sBoundCut);
             C3D_DepthTest(true,GPU_LESS,GPU_WRITE_DEPTH);
             C3D_StencilTest(true,GPU_ALWAYS,(int)((attr>>24)&63u),0xFF,0xFF);
@@ -997,7 +1074,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
             if(!room_for_draw())break;
             id=(attr>>24)&63u;
-            textured=bind_batch(batch);
+            textured=bind_batch_shape(batch);
             set_edge_combiner(textured,edges->colors[id>>3]);
             batch_fog(attr);
             C3D_AlphaTest(textured,GPU_GREATER,batch->translucent?254:sBoundCut);
@@ -1007,7 +1084,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
         }
     }
     /* back to the screen's own depth/stencil */
-    C3D_FogGasMode(GPU_NO_FOG,GPU_PLAIN_DENSITY,false);
+    fog_mode(0);
     C3D_SetFrameBuf(view->fb);
     C3D_SetViewport(0,0,view->fb->width,view->fb->height);
     begin_pass(view,&view->rect);
@@ -1025,6 +1102,8 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     NitroPort_Gx3dEdgeSetup(&edges);
     edging=edges.enabled && view->edgeFb[0]!=NULL;
     C3D_BindProgram(&sProgram);
+    fog_begin();
+    sBoundTexKnown=0;
     NitroPort_PicaBindVertices(sVertices[sPrepared]);
     C3D_SetFrameBuf(view->fb);
     C3D_SetViewport(0,0,view->fb->width,view->fb->height);
@@ -1091,7 +1170,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
     }
     /* Leave the GPU state plain for the compositor's quads. */
-    C3D_FogGasMode(GPU_NO_FOG,GPU_PLAIN_DENSITY,false);
+    fog_mode(0);
     C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
     C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
     C3D_AlphaTest(false,GPU_ALWAYS,0);

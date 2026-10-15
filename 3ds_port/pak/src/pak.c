@@ -17,10 +17,31 @@ struct PakEntry {
     uint32_t size;
 };
 
+/* Recently read parts of the pack, in blocks: the game reads many small
+ * pieces (a field's load is ~1900 reads, nine in ten under 256 bytes:
+ * archive headers, file tables, text), each a seek and a read of the SD
+ * card through stdio, ~1 ms apiece on the 3DS: going between a route and
+ * a town, the game lost about a second (2026-10-15: 32 frames a second
+ * over two). Reads from a block already read cost a copy; reads of two
+ * blocks or more go straight to the file. 8 KB: on a recorded run (3220
+ * reads, 2 MB), 242 reads of the card for 3.1 MB; 16 KB blocks made 194
+ * for 4 MB, 4 KB ones 315 for 2.6 MB. */
+#define PAK_BLOCK_BYTES 8192u
+#define PAK_BLOCKS 64u
+struct PakBlock {
+    uint64_t start;        /* (its offset in the file; a multiple of the block size) */
+    uint32_t length;       /* 0: empty */
+    uint32_t used;
+    unsigned char *data;
+};
+
 struct Pak {
     FILE *file;
     struct PakEntry *entries;
     uint32_t count;
+    uint64_t size;
+    struct PakBlock blocks[PAK_BLOCKS];
+    uint32_t clock;
 };
 
 static uint32_t read_u32(const unsigned char *bytes)
@@ -180,6 +201,7 @@ PakResult pak_open(const char *path, const char *expected_build_id, Pak **out_pa
         for (j = 0; j < padding; ++j) if (zeros[j] != 0) goto fail;
     }
     pak->file = file;
+    pak->size = file_size;
     *out_pak = pak;
     return PAK_OK;
 
@@ -202,6 +224,69 @@ PakResult pak_find(const Pak *pak, uint32_t file_id, uint32_t *out_size)
     return PAK_OK;
 }
 
+/* The block of the pack starting at start (a multiple of the block size),
+ * read if it isn't here; NULL if it can't be read. */
+static const struct PakBlock *block_at(Pak *pak, uint64_t start)
+{
+    struct PakBlock *slot, *empty = NULL, *oldest = NULL;
+    uint32_t i, want;
+    for (i = 0; i < PAK_BLOCKS; ++i) {
+        struct PakBlock *b = &pak->blocks[i];
+        if (b->length != 0 && b->start == start) {
+            b->used = ++pak->clock;
+            return b;
+        }
+        if (b->length == 0) {
+            if (empty == NULL) empty = b;
+        } else if (oldest == NULL || b->used < oldest->used) {
+            oldest = b;
+        }
+    }
+    /* an empty one, else the one used longest ago */
+    slot = empty != NULL ? empty : oldest;
+    if (slot->data == NULL) {
+        slot->data = (unsigned char *)malloc(PAK_BLOCK_BYTES);
+        if (slot->data == NULL) return NULL;
+    }
+    slot->length = 0;
+    want = start + PAK_BLOCK_BYTES <= pak->size ? PAK_BLOCK_BYTES : (uint32_t)(pak->size - start);
+    if (start > LONG_MAX || fseek(pak->file, (long)start, SEEK_SET) != 0 ||
+        !read_exact(pak->file, slot->data, want))
+        return NULL;
+    slot->start = start;
+    slot->length = want;
+    slot->used = ++pak->clock;
+    return slot;
+}
+
+static PakResult read_cached(Pak *pak, uint64_t absolute, unsigned char *out, size_t len)
+{
+    PakResult result = PAK_OK;
+    /* (one thread reads the pack: the game's, as with the FILE before) */
+    if (len >= 2u * PAK_BLOCK_BYTES) {
+        /* (a big read: straight from the file) */
+        if (absolute > LONG_MAX || fseek(pak->file, (long)absolute, SEEK_SET) != 0 ||
+            !read_exact(pak->file, out, len))
+            result = PAK_ERR_IO;
+    } else {
+        while (len > 0) {
+            uint64_t start = absolute - absolute % PAK_BLOCK_BYTES;
+            const struct PakBlock *b = block_at(pak, start);
+            size_t at = (size_t)(absolute - start), n;
+            if (b == NULL || at >= b->length) {
+                result = PAK_ERR_IO;
+                break;
+            }
+            n = b->length - at < len ? b->length - at : len;
+            memcpy(out, b->data + at, n);
+            out += n;
+            absolute += n;
+            len -= n;
+        }
+    }
+    return result;
+}
+
 PakResult pak_read(Pak *pak, uint32_t file_id, uint32_t offset,
                    void *buf, size_t len)
 {
@@ -214,15 +299,14 @@ PakResult pak_read(Pak *pak, uint32_t file_id, uint32_t offset,
         return PAK_ERR_RANGE;
     if (len == 0) return PAK_OK;
     absolute = (uint64_t)entry->offset + offset;
-    if (absolute > LONG_MAX || fseek(pak->file, (long)absolute, SEEK_SET) != 0)
-        return PAK_ERR_IO;
-    if (!read_exact(pak->file, buf, len)) return PAK_ERR_IO;
-    return PAK_OK;
+    return read_cached(pak, absolute, (unsigned char *)buf, len);
 }
 
 void pak_close(Pak *pak)
 {
+    uint32_t i;
     if (pak == NULL) return;
+    for (i = 0; i < PAK_BLOCKS; ++i) free(pak->blocks[i].data);
     if (pak->file != NULL) fclose(pak->file);
     free(pak->entries);
     free(pak);
