@@ -84,15 +84,29 @@ static const u32 sBankLcdc[9] = {
     0x00000, 0x20000, 0x40000, 0x60000, 0x80000, 0x90000, 0x94000, 0x98000, 0xA0000
 };
 
-static u8 BankCnt(int bank)
+static u8 BankCnt(const u8 *io, int bank)
 {
     /* VRAMCNT_A-G at 0x240-0x246, H at 0x248, I at 0x249 */
-    return NitroPort_IoReg[bank < 7 ? 0x240 + bank : 0x241 + bank];
+    return io[bank < 7 ? 0x240 + bank : 0x241 + bank];
 }
+
+/* The display state the drawing threads draw from (NitroPort_Render2DTake
+ * State): the registers, palettes and OAM as they were when the game
+ * handed the frame over, so that what the game does meanwhile (its next
+ * frame's sprites, scroll, colours) doesn't get mixed into the picture.
+ * The VRAM is read as it is (too big to copy each frame; the game changes
+ * it in its V-blank work, and the drawers are waited for before that). */
+typedef struct State2D {
+    u8 io[0x2000];
+    u8 pltt[0x800];
+    u8 oam[0x800];
+} State2D;
+static State2D sState[2];
 
 /* ----------------------------------------------------------- one engine */
 
 typedef struct Engine {
+    const u8 *ioAll;       /* all the registers (live, or a State2D's) */
     const u8 *io;          /* the engine's registers (A: +0, B: +0x1000) */
     const u8 *bgPltt;      /* 0x200 bytes */
     const u8 *objPltt;
@@ -123,6 +137,7 @@ typedef struct Engine {
     const u16 *art[4];
     short artDx[4], artDy[4];
     u8 artFull[4];
+    u8 artBands[4];        /* its bands drawn (else nothing there: the layer is elsewhere) */
     /* (worked out each frame, DecideSplits) a text BG that's a picture with
      * a plain middle and decorated sides: its halves go to the screen's
      * edges, the middle widened with its plain colour. */
@@ -157,7 +172,7 @@ static void FindExtPalettes(Engine *e)
     e->objExt = NULL;
 
     for (bank = 0; bank < 9; bank++) {
-        u8 cnt = BankCnt(bank);
+        u8 cnt = BankCnt(e->ioAll, bank);
         int mst = cnt & 7;
         int ofs = (cnt >> 3) & 3;
         const u8 *lcdc = NitroPort_LcdcVram + sBankLcdc[bank];
@@ -333,7 +348,9 @@ typedef struct Segment {
     short axis;
 } Segment;
 #define SEG_MIRROR (-2)
-#define SEG_ART (-3)       /* the BG's hand-drawn picture (Engine.art) */
+#define SEG_ART (-3)       /* the BG's hand-drawn picture (Engine.art), in the bands */
+#define SEG_ART_MID (-4)   /* the same over the DS's part: the picture where it has it, else the BG's own */
+#define SEG_CLEAR (-5)     /* nothing */
 #define MAX_SEGMENTS 24
 
 static const int sTextSizes[4][2] = { { 256, 256 }, { 512, 256 }, { 256, 512 }, { 512, 512 } };
@@ -437,33 +454,25 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int t
 
     if (e->art[bg] != NULL) {
         /* A hand-drawn picture: the bands (or all of it) from that. */
-        if (e->artFull[bg]) {
-            segs[0].x0 = 0;
-            segs[0].x1 = (short)width;
-            segs[0].off = 0;
-            segs[0].fixed = SEG_ART;
-            segs[0].axis = 0;
-            return 1;
-        }
         if (origin > 0) {
             segs[n].x0 = 0;
             segs[n].x1 = (short)origin;
             segs[n].off = 0;
-            segs[n].fixed = SEG_ART;
+            segs[n].fixed = e->artBands[bg] ? SEG_ART : SEG_CLEAR;
             segs[n].axis = 0;
             n++;
         }
         segs[n].x0 = (short)origin;
         segs[n].x1 = (short)(origin + 256);
         segs[n].off = (short)(hofs - origin);
-        segs[n].fixed = -1;
+        segs[n].fixed = e->artFull[bg] ? SEG_ART_MID : -1;
         segs[n].axis = 0;
         n++;
         if (origin + 256 < width) {
             segs[n].x0 = (short)(origin + 256);
             segs[n].x1 = (short)width;
             segs[n].off = 0;
-            segs[n].fixed = SEG_ART;
+            segs[n].fixed = e->artBands[bg] ? SEG_ART : SEG_CLEAR;
             segs[n].axis = 0;
             n++;
         }
@@ -681,6 +690,32 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
             int ax = ArtWrap(x + e->artDx[bg], NITRO_WIDE_ART_W, mapW);
 
             PUT(x, (ay >= 0 && ax >= 0) ? art[ay * NITRO_WIDE_ART_W + ax] : 0, flags);
+        }
+        continue;
+    }
+    if (segs[seg].fixed == SEG_CLEAR) {
+        for (; x < xe; x++) {
+            PUT(x, 0, flags);
+        }
+        continue;
+    }
+    if (segs[seg].fixed == SEG_ART_MID) {
+        /* Over the DS's part, only what the picture has of the DS's part
+         * (its middle when it was made): what was drawn in its bands is
+         * made up, and scrolled in here it would show where the DS shows
+         * the map (the opening's trees, drawn on in the bands, came in
+         * when their layer scrolled away). Elsewhere the BG's own. */
+        const u16 *art = e->art[bg];
+        int ay = ArtWrap(y + e->artDy[bg], H, mapH);
+
+        for (; x < xe; x++) {
+            int ax = ay >= 0 ? ArtWrap(x + e->artDx[bg], NITRO_WIDE_ART_W, mapW) : -1;
+
+            if (ax >= e->origin && ax < e->origin + W) {
+                PUT(x, art[ay * NITRO_WIDE_ART_W + ax], flags);
+            } else {
+                PUT(x, TextBgPixel(e, bg, bgcnt, dispcnt, (x + off) & (mapW - 1), ty), flags);
+            }
         }
         continue;
     }
@@ -1061,7 +1096,11 @@ static u64 BgKey(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt)
     return h ? h : 1;
 }
 
-/* (wider canvas) each BG's hand-drawn picture, if there's one. */
+/* (wider canvas) each BG's hand-drawn picture, if there's one made where
+ * the BG is now: of a text BG's pictures, the one made at the scroll
+ * nearest its scroll now, less than a screen away (a picture of what's on
+ * screen, not of another part of the map). */
+#define ART_REST 8   /* pixels from where a picture was made that are still there */
 static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
 {
     int bg;
@@ -1078,22 +1117,42 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
             continue;
         }
         key = BgKey(e, bg, kind[bg], bgcnt[bg], dispcnt);
-        art = key ? NitroPort_WideArtFind(key, &hofs, &vofs, &full) : NULL;
-        if (art == NULL) {
+        if (key == 0) {
             continue;
         }
-        e->art[bg] = art;
-        e->artFull[bg] = (u8)full;
         if (kind[bg] == BG_TEXT) {
-            e->artDx[bg] = (short)(((Rd16(e->io, 0x10 + bg * 4) & 0x1FF) - hofs + 512) % 512);
-            e->artDy[bg] = (short)(((Rd16(e->io, 0x12 + bg * 4) & 0x1FF) - vofs + 512) % 512);
-            /* (scrolled back past the capture: a negative distance) */
-            if (e->artDx[bg] >= 256) {
-                e->artDx[bg] -= 512;
+            int mapW = sTextSizes[bgcnt[bg] >> 14][0], mapH = sTextSizes[bgcnt[bg] >> 14][1];
+            int curH = Rd16(e->io, 0x10 + bg * 4) & 0x1FF, curV = Rd16(e->io, 0x12 + bg * 4) & 0x1FF;
+            int dx, dy;
+
+            art = NitroPort_WideArtFindNear(key, curH, curV, mapW, mapH, W, H, &hofs, &vofs, &full);
+            if (art == NULL) {
+                continue;
             }
-            if (e->artDy[bg] >= 256) {
-                e->artDy[bg] -= 512;
+            /* how far it has scrolled since, the shorter way round its map */
+            dx = ((curH - hofs) % mapW + mapW) % mapW;
+            dy = ((curV - vofs) % mapH + mapH) % mapH;
+            e->artDx[bg] = (short)(dx >= mapW / 2 ? dx - mapW : dx);
+            e->artDy[bg] = (short)(dy >= mapH / 2 ? dy - mapH : dy);
+            /* Its bands while it's where the picture was made (a few
+             * pixels either way: a layer that bobs), or always for a strip
+             * that scrolls round (_loop). Elsewhere (sliding in, parked
+             * beside the DS's screen) nothing beyond the DS's edges, as on
+             * the DS: the picture showed what the DS hides, Chimchar's
+             * hand before he came in (2026-10-14). */
+            e->artBands[bg] = (u8)((full & NITRO_WIDE_ART_LOOP) ||
+                                   (e->artDx[bg] >= -ART_REST && e->artDx[bg] <= ART_REST &&
+                                    e->artDy[bg] >= -ART_REST && e->artDy[bg] <= ART_REST));
+        } else {
+            art = NitroPort_WideArtFindNear(key, 0, 0, 512, 512, 0, 0, &hofs, &vofs, &full);
+            if (art == NULL) {
+                continue;
             }
+        }
+        e->art[bg] = art;
+        e->artFull[bg] = (u8)(full & NITRO_WIDE_ART_FULL);
+        if (kind[bg] != BG_TEXT) {
+            e->artBands[bg] = 1;
         }
     }
 }
@@ -1430,7 +1489,7 @@ static void LookUpObjArt(const Engine *e, ObjFrame *f, u32 dispcnt, int only)
         if (only >= 0 && groups[i].group != only) {
             continue;
         }
-        art = NitroPort_WideArtFind(groups[i].key, &x, &y, &full);
+        art = NitroPort_WideArtFindNear(groups[i].key, groups[i].x, groups[i].y, 512, 256, 0, 0, &x, &y, &full);
         if (art == NULL) {
             continue;
         }
@@ -1441,7 +1500,7 @@ static void LookUpObjArt(const Engine *e, ObjFrame *f, u32 dispcnt, int only)
         a->dx = (short)(dx >= 256 ? dx - 512 : dx);
         a->dy = (short)(dy >= 128 ? dy - 256 : dy);
         a->prio = (u8)groups[i].prio;
-        a->full = (u8)full;
+        a->full = (u8)(full & NITRO_WIDE_ART_FULL);
     }
 }
 
@@ -1683,6 +1742,27 @@ static BOOL InRange(int v, int lo, int hi)
  * picture are in it too). */
 static void FillRange(u8 *enable, int lo, int hi, u8 value, int origin, int width)
 {
+    if (origin > 0 && lo < hi) {
+        /* A window a pixel short of an edge is at it: games cover the
+         * screen with 0-255 (the right end is exclusive, and 256 doesn't
+         * fit in the register), leaving the DS's last column out. On the
+         * wider screen that column and the band beyond it went black (the
+         * intro's city). */
+        if (hi == 255) {
+            hi = W;
+        }
+        if (lo == 1) {
+            lo = 0;
+        }
+        memset(enable + origin + lo, value, (size_t)(hi - lo));
+        if (lo == 0) {
+            memset(enable, value, (size_t)origin);
+        }
+        if (hi == W && origin + W < width) {
+            memset(enable + origin + W, value, (size_t)(width - origin - W));
+        }
+        return;
+    }
     if (lo <= hi) {
         if (hi > lo) {
             memset(enable + origin + lo, value, (size_t)(hi - lo));
@@ -2377,12 +2457,16 @@ static void Fill(u16 *out, u16 color, int n)
  * origin, clip; NULL: the DS's). */
 static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
 {
+    BOOL taken = split != NULL && split->snapshot;
+    const State2D *st = &sState[engine ? 1 : 0];
+
     memset(e, 0, sizeof(*e));
     e->isA = engine == 0;
-    e->io = NitroPort_IoReg + (e->isA ? 0 : 0x1000);
-    e->bgPltt = NitroPort_Pltt + (e->isA ? 0 : 0x400);
+    e->ioAll = taken ? st->io : NitroPort_IoReg;
+    e->io = e->ioAll + (e->isA ? 0 : 0x1000);
+    e->bgPltt = (taken ? st->pltt : NitroPort_Pltt) + (e->isA ? 0 : 0x400);
     e->objPltt = e->bgPltt + 0x200;
-    e->oam = NitroPort_Oam + (e->isA ? 0 : 0x400);
+    e->oam = (taken ? st->oam : NitroPort_Oam) + (e->isA ? 0 : 0x400);
     e->bgVram = e->isA ? NitroPort_BgVram : NitroPort_DbBgVram;
     e->bgMask = e->isA ? 0x7FFFF : 0x1FFFF;
     e->objVram = e->isA ? NitroPort_ObjVram : NitroPort_DbObjVram;
@@ -2409,13 +2493,14 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
 {
     Engine e;
     u32 dispcnt;
-    u16 powcnt = IO16(0x304);
+    u16 powcnt;
 
+    SetUpEngine(&e, engine, split);
     if (split != NULL) {
         memset(split, 0, offsetof(NitroRender2DSplit, over));
-        split->masterBright = IO16((engine == 0 ? 0 : 0x1000) + 0x6C);
+        split->masterBright = Rd16(e.io, 0x6C);
     }
-    SetUpEngine(&e, engine, split);
+    powcnt = Rd16(e.ioAll, 0x304);
     dispcnt = Rd32(e.io, 0);
 
     /* The engine powered off: nothing on that screen. */
@@ -2619,18 +2704,39 @@ static u32 HashWords(const u8 *p, u32 bytes, u32 h)
 /* Everything an engine's picture comes from: its registers, palettes, OAM,
  * VRAM (as the CPU sees it, and the LCDC banks it may use as extended
  * palettes or for VRAM display), the VRAM bank settings and POWCNT1. */
-static u32 EngineSignature(int engine)
+void NitroPort_Render2DTakeState(int engine)
+{
+    State2D *st = &sState[engine ? 1 : 0];
+
+    memcpy(st->io, NitroPort_IoReg, sizeof(st->io));
+    memcpy(st->pltt, NitroPort_Pltt, sizeof(st->pltt));
+    memcpy(st->oam, NitroPort_Oam, sizeof(st->oam));
+}
+
+/* What an engine's picture is drawn from, in two parts: the small ones
+ * (registers, palettes, OAM) and its VRAM (the most part: 864 KB for
+ * engine A, read in full to work it out). */
+static u32 EngineSmallSignature(int engine, int snapshot)
 {
     BOOL isA = engine == 0;
-    const u8 *io = NitroPort_IoReg + (isA ? 0 : 0x1000);
+    const State2D *st = &sState[isA ? 0 : 1];
+    const u8 *ioAll = snapshot ? st->io : NitroPort_IoReg;
+    const u8 *io = ioAll + (isA ? 0 : 0x1000);
     u32 h = 2166136261u;
 
     h = HashWords(io, 0x70, h);
-    h = HashWords(NitroPort_IoReg + 0x240, 0x10, h);   /* VRAMCNT */
-    h = (h ^ IO16(0x304)) * 16777619u;                  /* POWCNT1 */
-    h = HashWords(NitroPort_Pltt + (isA ? 0 : 0x400), 0x400, h);
-    h = HashWords(NitroPort_Oam + (isA ? 0 : 0x400), 0x400, h);
-    if (isA) {
+    h = HashWords(ioAll + 0x240, 0x10, h);              /* VRAMCNT */
+    h = (h ^ Rd16(ioAll, 0x304)) * 16777619u;           /* POWCNT1 */
+    h = HashWords((snapshot ? st->pltt : NitroPort_Pltt) + (isA ? 0 : 0x400), 0x400, h);
+    h = HashWords((snapshot ? st->oam : NitroPort_Oam) + (isA ? 0 : 0x400), 0x400, h);
+    return h;
+}
+
+static u32 EngineVramSignature(int engine, const u8 *io)
+{
+    u32 h = 2166136261u;
+
+    if (engine == 0) {
         h = HashWords(NitroPort_BgVram, 0x80000, h);
         h = HashWords(NitroPort_ObjVram, 0x40000, h);
         h = HashWords(NitroPort_LcdcVram + 0x80000, 0x18000, h);   /* E, F, G */
@@ -2645,6 +2751,12 @@ static u32 EngineSignature(int engine)
     return h;
 }
 
+static u32 EngineSignature(int engine)
+{
+    return (EngineSmallSignature(engine, 0) * 31u) ^
+           EngineVramSignature(engine, NitroPort_IoReg + (engine ? 0x1000 : 0));
+}
+
 /* NitroPort_Render2D, unless nothing it draws from changed since the last
  * time for this engine (then out is left as it is, and 0 returned). Working
  * that out reads the engine's VRAM once: far less than drawing it. A 3D
@@ -2656,26 +2768,39 @@ static u32 EngineSignature(int engine)
 int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit *split)
 {
     /* (its own record: the 3D doesn't come into these layers) */
-    static struct { u32 signature; int valid; } last[2];
+    static struct { u32 small, vram; int valid, vramValid; } last[2];
     int e = engine ? 1 : 0;
-    u32 signature = EngineSignature(e);
+    u32 small = EngineSmallSignature(e, split->snapshot), vram;
 
     /* the canvas, and where the windows are */
-    signature = (signature ^ (u32)split->width ^ ((u32)split->origin << 9) ^
-                 ((u32)split->anchorWindows << 18) ^ ((u32)split->clip[0] << 20) ^
-                 ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
-                 ((u32)split->clip[3] << 23)) * 16777619u;
+    small = (small ^ (u32)split->width ^ ((u32)split->origin << 9) ^
+             ((u32)split->anchorWindows << 18) ^ ((u32)split->clip[0] << 20) ^
+             ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
+             ((u32)split->clip[3] << 23)) * 16777619u;
     if (split->width > W) {
         /* (the windows decide the edges' look, and where the anchored ones
          * are; hand-drawn pictures loaded again) */
-        signature = (signature ^ NitroPort_WideWindowsSerial()) * 16777619u;
-        signature = (signature ^ NitroPort_WideArtSerial()) * 16777619u;
+        small = (small ^ NitroPort_WideWindowsSerial()) * 16777619u;
+        small = (small ^ NitroPort_WideArtSerial()) * 16777619u;
     }
-    if (last[e].valid && signature == last[e].signature) {
+    /* The small parts changed (a scroll, a sprite, a colour: most frames of
+     * anything moving): drawn, without reading the VRAM through to find
+     * out about that as well. Only when they're the same is the VRAM
+     * compared (once it's known: the first time after a change it's just
+     * noted, and drawn). */
+    if (!last[e].valid || small != last[e].small) {
+        last[e].small = small;
+        last[e].valid = 1;
+        last[e].vramValid = 0;
+        Render(engine, under, split);
+        return 1;
+    }
+    vram = EngineVramSignature(e, (split->snapshot ? sState[e].io : NitroPort_IoReg) + (e ? 0x1000 : 0));
+    if (last[e].vramValid && vram == last[e].vram) {
         return 0;
     }
-    last[e].signature = signature;
-    last[e].valid = 1;
+    last[e].vram = vram;
+    last[e].vramValid = 1;
     Render(engine, under, split);
     return 1;
 }

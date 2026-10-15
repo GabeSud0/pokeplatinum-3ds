@@ -131,3 +131,41 @@ DEFINE_SCALE2X(NitroPort_Scale2xTiled32, uint32_t)
 
 DEFINE_DOUBLE(NitroPort_Double2xTiled16, uint16_t)
 DEFINE_DOUBLE(NitroPort_Double2xTiled32, uint32_t)
+
+void NitroPort_Double2xTiled16Table(const uint16_t *src, int w, int h, uint16_t *dst, int dstWidth,
+                                    const uint16_t *table)
+{
+    typedef uint64_t __attribute__((may_alias, aligned(8))) u64a;
+    int tilesPerRow = dstWidth / 8, bx, by, x, y;
+
+    for (by = 0; by < h / 4; by++) {
+        const uint16_t *s = src + (by * 4) * w;
+        uint16_t *tiles = dst + (by * tilesPerRow) * 64;
+
+        for (bx = 0; bx < w / 4; bx++, s += 4, tiles += 64) {
+            int j;
+
+            for (j = 0; j < 4; j++) {
+                const uint16_t *row = s + j * w;
+                const uint8_t *m = sMorton4[j];
+                int i;
+
+                for (i = 0; i < 4; i++) {
+                    uint64_t t = table[row[i] & 0x7FFF];
+
+                    t |= t << 16;
+                    *(u64a *)(tiles + m[i] * 4) = t | (t << 32);
+                }
+            }
+        }
+    }
+    /* the edges repeated, as NitroPort_Double2xTiled16 */
+    for (y = 0; y < 2 * h && 2 * w < dstWidth; y++) {
+        dst[NitroPort_TiledIndex((unsigned)(2 * w), (unsigned)y, (unsigned)dstWidth)] =
+            dst[NitroPort_TiledIndex((unsigned)(2 * w - 1), (unsigned)y, (unsigned)dstWidth)];
+    }
+    for (x = 0; x <= 2 * w && x < dstWidth; x++) {
+        dst[NitroPort_TiledIndex((unsigned)x, (unsigned)(2 * h), (unsigned)dstWidth)] =
+            dst[NitroPort_TiledIndex((unsigned)x, (unsigned)(2 * h - 1), (unsigned)dstWidth)];
+    }
+}

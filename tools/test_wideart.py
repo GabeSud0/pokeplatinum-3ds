@@ -242,6 +242,46 @@ class WideArtTest(unittest.TestCase):
         self.assertTrue({p[3] for p in t.getdata()} <= {0, 255})      # no half-transparent pixels
         self.assertEqual(core.transform(img, 0.1, 0.1).size, (1, 1))
 
+    def test_pictures_by_place(self):
+        cap = core.list_captures(self.wide)[0]
+        layer = cap.layer(3)                       # scroll 8, 300
+        original = cap.layer_image(layer)
+        img = core.fill_bands(original, "extend")
+        self.assertEqual(core.parse_art_name("6d5a3d55615351bf_8_300_full_loop.png"),
+                         ("6d5a3d55615351bf", 8, 300, True, True))
+        self.assertIsNone(core.parse_art_name("6d5a3d55615351bf_8_300.jpg"))
+        self.assertIsNone(core.find_art(self.wide, layer))
+        p1 = core.save_art(self.wide, layer, img, original, loop=True)
+        self.assertEqual(p1.name, "6d5a3d55615351bf_8_300_loop.png")
+        ref = core.find_art(self.wide, layer)
+        self.assertEqual((ref.path, ref.dx, ref.dy, ref.loop), (p1, 0, 0, True))
+        # the same layer captured scrolled 4 further: that picture, lined up
+        near = core.Layer(3, 3, layer.key, 12, 300, layer.file)
+        ref = core.find_art(self.wide, near)
+        self.assertEqual((ref.path, ref.dx, ref.dy), (p1, -4, 0))
+        # another part of the map (256 down): not that one; saved, both stay
+        far = core.Layer(3, 3, layer.key, 8, 44, layer.file)   # (300 + 256 = 556 = 44 round 512)
+        self.assertIsNone(core.find_art(self.wide, far))
+        p2 = core.save_art(self.wide, far, img, original)
+        self.assertTrue(p1.exists() and p2.exists())
+        self.assertEqual(core.find_art(self.wide, far).path, p2)
+        self.assertEqual(core.find_art(self.wide, layer).path, p1)
+        # saved again from the near capture: it takes the place of the one it was drawn from
+        p3 = core.save_art(self.wide, near, img, original, replace=p1)
+        self.assertFalse(p1.exists())
+        self.assertTrue(p2.exists() and p3.exists())
+        self.assertEqual(p3.name, "6d5a3d55615351bf_12_300.png")
+        # a sprite group's: the nearest, however far (they move round)
+        obj = core.Layer(-1, 3, "10d372806e45f5c2", 368, 64, "obj102.png", "obj", 102)
+        core.save_art(self.wide, obj, img, original)
+        moved = core.Layer(-1, 3, "10d372806e45f5c2", 100, 64, "obj102.png", "obj", 102)
+        self.assertEqual(core.find_art(self.wide, moved).dx, 268 - 512)
+        # drawing layers kept for each place
+        stack = [core.Paint("a", img.copy())]
+        core.save_project(self.wide, far.key, stack, 0, far.hofs, far.vofs, p2)
+        self.assertIsNotNone(core.load_project(self.wide, far.key, far.hofs, far.vofs, p2))
+        self.assertIsNone(core.load_project(self.wide, far.key, 12, 300, p3))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -160,12 +160,36 @@ static void test_double(void)
     CHECK(ok);
 }
 
+/* The one-pass version with a colour table: the same as converting first,
+ * then doubling. */
+static void test_double_table(void)
+{
+    enum { W = 20, H = 12, TW = 64 };
+    static uint16_t src[W * H], conv[W * H], table[32768];
+    static uint16_t dst[TW * 32] __attribute__((aligned(8))), ref[TW * 32] __attribute__((aligned(8)));
+    int i;
+
+    for (i = 0; i < 32768; i++) {
+        table[i] = (uint16_t)(i * 2654435761u >> 7);
+    }
+    for (i = 0; i < W * H; i++) {
+        src[i] = (uint16_t)Rnd();          /* (bit 15 set or not: ignored) */
+        conv[i] = table[src[i] & 0x7FFF];
+    }
+    memset(dst, 0x55, sizeof(dst));
+    memset(ref, 0x55, sizeof(ref));
+    NitroPort_Double2xTiled16(conv, W, H, ref, TW);
+    NitroPort_Double2xTiled16Table(src, W, H, dst, TW, table);
+    CHECK(memcmp(dst, ref, sizeof(dst)) == 0);
+}
+
 int main(void)
 {
     test_tiled_index();
     test_tile();
     test_scale2x();
     test_double();
+    test_double_table();
     printf("upscaler and tiler: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;
 }

@@ -124,7 +124,10 @@ stretched:
   bars) are split: each half goes to its screen edge and the plain middle
   widens.
 - **The DS's windows** (its hardware windows, WIN0/1) at the DS's edges go
-  on to the screen's: the intro's letterbox covers the bands too.
+  on to the screen's: the intro's letterbox covers the bands too. A window
+  from 0 to 255 counts as reaching the right edge (the register can't say
+  256, so it leaves the DS's last column out; the bands went black beside
+  the intro's city).
 - **The battle background** is a picture wider than the DS's screen (a
   512-pixel map: the trainer's slide-in scrolls across it), so beyond the
   DS's edges it shows its own art.
@@ -149,6 +152,22 @@ and is shown `lag` V-blanks after the scene was made: the 3D comes at the
 game's own even pace (every second V-blank in the field), not whenever a
 scene happens to be done. `lag` starts at 2 and adapts (1 to 4): up when a
 frame would be late, back down after ten seconds with room to spare.
+
+The drawing threads draw from the display state as it was when the game
+handed them the frame: its registers, palettes and OAM are copied then
+(`NitroPort_Render2DTakeState`, a few KB), so the game's next frame (its
+sprites, scroll, colours) can't get mixed into a picture that takes long
+to draw (sprites showed in the wrong places for a frame). The VRAM is read
+as it is: before its next V-blank work the game waits for a drawer still
+reading it. Working out whether a screen changed compares the small parts
+first, and the VRAM (864 KB for engine A) only when they're the same.
+
+Where things run on a New 3DS: the game, the display thread and engine B's
+drawer on core 0 (the game first); engine A's drawer and the geometry on
+core 2. Core 1 is the system's; a program gets 30% of it, and there the
+geometry took 18-30 ms a scene and left scenes out (the intro's flyover
+jumped), and engine B's screen drew 14-25 frames a second
+(`geometry.txt`: `core 1` puts both back there).
 
 Showing is apart from drawing. The display thread draws a frame, has the
 GPU put it into one of three LCD framebuffers of the screen's own, and

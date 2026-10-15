@@ -16,6 +16,8 @@
  * Files: in the art folder (sdmc:/3ds/pokeplatinum/wide on the 3DS),
  *   <key>_<hofs>_<vofs>.png        the side bands only
  *   <key>_<hofs>_<vofs>_full.png   the whole picture, middle as well
+ *   ..._loop.png                   (either) its bands go round with the
+ *                                  layer as it scrolls (a strip)
  * <key> 16 hex digits; hofs, vofs: the layer's scroll when the picture was
  * captured, or the group's position (it's drawn shifted by the distance
  * since). 320 x 192 pixels, the
@@ -37,6 +39,15 @@ extern "C" {
 
 #define NITRO_WIDE_ART_W 320
 #define NITRO_WIDE_ART_H 192
+/* A picture's kind (the "full" the functions below give): the whole layer
+ * (<name>_full.png; else the bands only), and whether its bands go round
+ * with the layer as it scrolls (<name>_loop.png: a strip that scrolls all
+ * the time). Without that, its bands show only while the layer is where
+ * the picture was made (give or take a few pixels): a picture sliding in,
+ * or parked beside the DS's screen, shows nothing beyond the DS's edges,
+ * as on the DS. */
+#define NITRO_WIDE_ART_FULL 1
+#define NITRO_WIDE_ART_LOOP 2
 
 /* What's in the art folder (its file names; the pictures are read when
  * first needed): how many pictures. Again to take in new files. */
@@ -50,6 +61,14 @@ uint32_t NitroPort_WideArtSerial(void);
  * it's the whole picture; NULL if there's none (or it can't be read). Any
  * thread. */
 const uint16_t *NitroPort_WideArtFind(uint64_t key, int *hofs, int *vofs, int *full);
+/* A layer may have several pictures, made at different scrolls (one BG
+ * map can hold two scenes: the opening's sky above, its strip below).
+ * Of a key's pictures: the one made nearest the layer's scroll now (curH,
+ * curV; the map going round every periodH, periodV), if it's less than
+ * maxH and maxV away (0: any distance), so that its picture is of what's
+ * on screen. Its scroll then, and whether it's the whole picture. */
+const uint16_t *NitroPort_WideArtFindNear(uint64_t key, int curH, int curV, int periodH, int periodV, int maxH,
+                                          int maxV, int *hofs, int *vofs, int *full);
 
 /* Capture the upper screen for the editor: a new folder in dir
  * (captures/0001, ...) with screen.png (the whole picture, without the

@@ -395,6 +395,9 @@ class Editor(tk.Tk):
         self.show_grid = tk.BooleanVar(value=False)
         self.side = tk.StringVar(value="both")
         self.layer_var = tk.StringVar(value="")
+        self.loop_var = tk.BooleanVar(value=False)
+        self.refs: dict[str, core.ArtRef | None] = {}   # each layer's saved picture
+        self.loops: dict[str, bool] = {}                 # its bands go round with it
         self.selection: tuple[int, int, int, int] | None = None
         self.float: dict | None = None                # lifted or pasted pixels: image, at (x, y)
         self.clipboard: Image.Image | None = None
@@ -510,6 +513,8 @@ class Editor(tk.Tk):
         ttk.Separator(left).pack(fill="x", pady=6)
         ttk.Checkbutton(left, text="Lock the DS's picture (middle)", variable=self.lock_middle,
                         command=self.on_lock).pack(anchor="w")
+        ttk.Checkbutton(left, text="Scrolls round all the time (a strip):\nits bands move with it",
+                        variable=self.loop_var, command=self.on_loop).pack(anchor="w")
         ttk.Checkbutton(left, text="Show the other layers", variable=self.show_others,
                         command=self.redraw).pack(anchor="w")
         ttk.Checkbutton(left, text="Layers in front: see-through", variable=self.see_through,
@@ -652,7 +657,7 @@ class Editor(tk.Tk):
         self.captures = core.list_captures(self.art_dir)
         self.cap_list.delete(0, "end")
         for cap in self.captures:
-            made = sum(1 for l in cap.layers if core.existing_art(self.art_dir, l.key))
+            made = sum(1 for l in cap.layers if core.find_art(self.art_dir, l))
             self.cap_list.insert("end", f"{cap.name}   {len(cap.layers)} layers" + (f", {made} drawn" if made else ""))
         self.title(f"{APP} - {self.art_dir}")
         self.status(f"{len(self.captures)} captures in {self.art_dir}")
@@ -664,14 +669,21 @@ class Editor(tk.Tk):
 
     def load_stack(self, layer: core.Layer) -> tuple[list[core.Paint], int]:
         """A layer's drawing layers: as last saved here, else one layer of
-        the picture saved for it (made elsewhere), else of the capture."""
-        if self.art_dir is not None:
-            project = core.load_project(self.art_dir, layer.key)
+        the picture saved for it (made elsewhere), else of the capture. A
+        picture made with the layer a little elsewhere is moved to line up
+        with this capture (the game moves it the same way)."""
+        ref = core.find_art(self.art_dir, layer) if self.art_dir is not None else None
+        self.refs[layer.id] = ref
+        self.loops[layer.id] = bool(ref and ref.loop)
+        if ref is not None:
+            project = core.load_project(self.art_dir, layer.key, ref.hofs, ref.vofs, ref.path)
             if project is not None:
-                return project
-            saved = core.existing_art(self.art_dir, layer.key)
-            if saved:
-                return [core.Paint("Layer 1", core.load_rgba(saved))], 0
+                stack, active = project
+                for p in stack:
+                    p.x += ref.dx
+                    p.y += ref.dy
+                return stack, active
+            return [core.Paint("Layer 1", core.load_rgba(ref.path), ref.dx, ref.dy)], 0
         return [core.Paint("Layer 1", self.originals[layer.id].copy())], 0
 
     def select_capture(self, force: bool = False):
@@ -688,6 +700,7 @@ class Editor(tk.Tk):
         self.cap = cap
         self.originals = {l.id: cap.layer_image(l) for l in cap.layers}
         self.stacks, self.active, self.middle, self.flat = {}, {}, {}, {}
+        self.refs, self.loops = {}, {}
         for l in cap.layers:
             self.stacks[l.id], self.active[l.id] = self.load_stack(l)
             self.flat[l.id] = core.flatten(self.stacks[l.id])
@@ -703,7 +716,7 @@ class Editor(tk.Tk):
         for w in self.layer_frame.winfo_children():
             w.destroy()
         for l in reversed(core.draw_order(cap.layers)):
-            saved = core.existing_art(self.art_dir, l.key) if self.art_dir else None
+            saved = self.refs.get(l.id)
             ttk.Radiobutton(self.layer_frame, text=l.label + ("  - drawn" if saved else ""),
                             variable=self.layer_var, value=l.id, command=self.select_layer).pack(anchor="w")
         if cap.layers:
@@ -720,14 +733,33 @@ class Editor(tk.Tk):
         self.selection = None
         layer = self.layer()
         if layer is not None:
-            saved = core.existing_art(self.art_dir, layer.key) if self.art_dir else None
-            if saved is not None and saved.stem.endswith("_full"):
+            ref = self.refs.get(self.lid)
+            if ref is not None and ref.full:
                 self.lock_middle.set(False)   # (its middle was drawn: don't put the game's back)
-            what = "position" if layer.kind == "obj" else "scroll"
-            self.layer_info.configure(text=f"{layer.label}\nkey {layer.key}\n{what} {layer.hofs}, {layer.vofs}\n"
-                                           + (f"saved: {saved.name}" if saved else "not drawn yet"))
+            self.loop_var.set(self.loops.get(self.lid, False))
+            self.update_layer_info()
         self.update_paint_list()
         self.redraw()
+
+    def update_layer_info(self):
+        layer = self.layer()
+        if layer is None:
+            return
+        ref = self.refs.get(self.lid)
+        what = "position" if layer.kind == "obj" else "scroll"
+        if ref is None:
+            saved = "not drawn yet"
+        elif ref.dx or ref.dy:
+            saved = f"saved: {ref.path.name}\n(made {abs(ref.dx)}, {abs(ref.dy)} px away: lined up)"
+        else:
+            saved = f"saved: {ref.path.name}"
+        self.layer_info.configure(text=f"{layer.label}\nkey {layer.key}\n{what} {layer.hofs}, {layer.vofs}\n{saved}")
+
+    def on_loop(self):
+        if self.lid is not None:
+            self.loops[self.lid] = self.loop_var.get()
+            self.dirty.add(self.lid)
+            self.redraw()
 
     def layer(self) -> core.Layer | None:
         return self.cap.layer(self.lid) if self.cap is not None and self.lid else None
@@ -1435,8 +1467,12 @@ class Editor(tk.Tk):
 
     def save_layer(self, lid: str) -> Path:
         layer = self.cap.layer(lid)
-        path = core.save_art(self.art_dir, layer, self.picture(lid), self.originals[lid])
-        core.save_project(self.art_dir, layer.key, self.stacks[lid], self.active[lid])
+        old = self.refs.get(lid)
+        path = core.save_art(self.art_dir, layer, self.picture(lid), self.originals[lid],
+                             loop=self.loops.get(lid, False), replace=old.path if old else None)
+        core.save_project(self.art_dir, layer.key, self.stacks[lid], self.active[lid], layer.hofs, layer.vofs, path)
+        parsed = core.parse_art_name(path.name)
+        self.refs[lid] = core.ArtRef(path, layer.hofs, layer.vofs, parsed[3], parsed[4])
         self.dirty.discard(lid)
         return path
 
@@ -1467,22 +1503,17 @@ class Editor(tk.Tk):
         for w in self.layer_frame.winfo_children():
             w.destroy()
         for l in reversed(core.draw_order(self.cap.layers)):
-            saved = core.existing_art(self.art_dir, l.key) if self.art_dir else None
+            saved = self.refs.get(l.id)
             ttk.Radiobutton(self.layer_frame, text=l.label + ("  - drawn" if saved else ""),
                             variable=self.layer_var, value=l.id, command=self.select_layer).pack(anchor="w")
         index = self.cap_list.curselection()
         if index:
-            made = sum(1 for l in self.cap.layers if core.existing_art(self.art_dir, l.key))
+            made = sum(1 for l in self.cap.layers if self.refs.get(l.id))
             self.cap_list.delete(index[0])
             self.cap_list.insert(index[0], f"{self.cap.name}   {len(self.cap.layers)} layers" +
                                  (f", {made} drawn" if made else ""))
             self.cap_list.selection_set(index[0])
-        layer = self.layer()
-        if layer is not None:
-            saved = core.existing_art(self.art_dir, layer.key)
-            what = "position" if layer.kind == "obj" else "scroll"
-            self.layer_info.configure(text=f"{layer.label}\nkey {layer.key}\n{what} {layer.hofs}, {layer.vofs}\n"
-                                           + (f"saved: {saved.name}" if saved else "not drawn yet"))
+        self.update_layer_info()
         self.redraw()
 
     def revert(self):
@@ -1498,13 +1529,15 @@ class Editor(tk.Tk):
         layer = self.layer()
         if layer is None or self.art_dir is None:
             return
-        if not core.existing_art(self.art_dir, layer.key):
+        ref = self.refs.get(self.lid)
+        if ref is None:
             self.status("Nothing saved for this layer.")
             return
         if messagebox.askyesno(APP, f"Delete the saved picture for {layer.label}? The game goes back to "
                                     "filling its bands by itself."):
             core.delete_art(self.art_dir, layer)
-            core.delete_project(self.art_dir, layer.key)
+            core.delete_project(self.art_dir, layer.key, ref.hofs, ref.vofs)
+            self.refs[self.lid] = None
             self.stacks[self.lid] = [core.Paint("Layer 1", self.originals[self.lid].copy())]
             self.active[self.lid] = 0
             self.middle[self.lid] = self.originals[self.lid]
@@ -1537,9 +1570,10 @@ class Editor(tk.Tk):
         layer = self.layer()
         if layer is None or self.art_dir is None:
             return
-        if self.lid in self.dirty or not core.existing_art(self.art_dir, layer.key):
+        if self.lid in self.dirty or self.refs.get(self.lid) is None:
             self.save()
-        saved = core.existing_art(self.art_dir, layer.key)
+        ref = self.refs.get(self.lid)
+        saved = ref.path if ref else None
         if saved:
             open_externally(saved)
             self.status(f"Opened {saved.name}: save it there, then File > Reload saved picture.")
@@ -1548,10 +1582,10 @@ class Editor(tk.Tk):
         layer = self.layer()
         if layer is None or self.art_dir is None:
             return
-        saved = core.existing_art(self.art_dir, layer.key)
-        if saved:
+        ref = self.refs.get(self.lid)
+        if ref is not None and ref.path.exists():
             self.push_undo()
-            self.stacks[self.lid] = [core.Paint("Layer 1", core.load_rgba(saved))]
+            self.stacks[self.lid] = [core.Paint("Layer 1", core.load_rgba(ref.path), ref.dx, ref.dy)]
             self.active[self.lid] = 0
             self.changed()
 
@@ -1693,7 +1727,7 @@ def self_test() -> int:
             ok = ok and pic.getpixel((31, 5))[0] == core.snap((32, 7, 9))[0]
             ok = ok and pic.getpixel((12, 10))[:3] == (255, 0, 0) and pic.getpixel((13, 11))[:3] == (255, 0, 0)
             ok = ok and pic.getpixel((100, 50)) == core.snap(app.originals["bg3"].getpixel((100, 50)))
-            project = core.load_project(art, "6d5a3d55615351bf")
+            project = core.load_project(art, "6d5a3d55615351bf", 8, 300)
             ok = ok and project is not None and len(project[0]) == 2 and project[0][1].x == 2
             # the sprites' layer: its own picture
             app.layer_var.set("obj102")

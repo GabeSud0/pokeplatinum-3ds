@@ -87,8 +87,8 @@ class Layer:
     group: int = 0
     count: int = 0
 
-    def art_name(self, full: bool) -> str:
-        return f"{self.key}_{self.hofs}_{self.vofs}{'_full' if full else ''}.png"
+    def art_name(self, full: bool, loop: bool = False) -> str:
+        return f"{self.key}_{self.hofs}_{self.vofs}{'_full' if full else ''}{'_loop' if loop else ''}.png"
 
     @property
     def id(self) -> str:
@@ -173,11 +173,71 @@ def list_captures(art_dir: str | os.PathLike) -> list[Capture]:
     return caps
 
 
-def existing_art(art_dir: str | os.PathLike, key: str) -> Path | None:
-    """The picture already made for a layer (the whole one if both)."""
-    found = sorted(Path(art_dir).glob(f"{key}_*_*.png"))
-    full = [p for p in found if p.stem.endswith("_full")]
-    return (full or found or [None])[0]
+@dataclass
+class ArtRef:
+    """A picture the game reads (port_wideart.c's names): its file, where
+    the layer was when it was made, whether it's the whole layer and
+    whether its bands go round with the layer; and (found for a capture)
+    how far to move it to line up with the capture: the layer has moved
+    by (-dx, -dy) since."""
+    path: Path
+    hofs: int
+    vofs: int
+    full: bool
+    loop: bool
+    dx: int = 0
+    dy: int = 0
+
+
+def parse_art_name(name: str) -> tuple[str, int, int, bool, bool] | None:
+    """A picture's file name: key, hofs, vofs, full, loop; None if it isn't one."""
+    import re
+    m = re.fullmatch(r"([0-9a-fA-F]{16})_(\d+)_(\d+)(_full)?(_loop)?\.(png|PNG)", name)
+    if not m or int(m.group(2)) > 511 or int(m.group(3)) > 511:
+        return None
+    return m.group(1).lower(), int(m.group(2)), int(m.group(3)), bool(m.group(4)), bool(m.group(5))
+
+
+def art_files(art_dir: str | os.PathLike, key: str) -> list[ArtRef]:
+    out = []
+    for p in sorted(Path(art_dir).glob(f"{key}_*_*.png")):
+        parsed = parse_art_name(p.name)
+        if parsed and parsed[0] == key:
+            out.append(ArtRef(p, parsed[1], parsed[2], parsed[3], parsed[4]))
+    return out
+
+
+def _wrapped(d: int, period: int) -> int:
+    d %= period
+    return d - period if d >= period // 2 else d
+
+
+def find_art(art_dir: str | os.PathLike, layer: Layer) -> ArtRef | None:
+    """The picture for a capture's layer, as the game would choose it: the
+    one made where the layer is (the whole one if there are both), else the
+    nearest less than a screen away (a sprite group's: the nearest)."""
+    best, best_dist = None, None
+    vperiod = 256 if layer.kind == "obj" else 512
+    for ref in art_files(art_dir, layer.key):
+        ref.dx = _wrapped(ref.hofs - layer.hofs, 512)
+        ref.dy = _wrapped(ref.vofs - layer.vofs, vperiod)
+        if layer.kind != "obj" and (abs(ref.dx) >= 256 or abs(ref.dy) >= 192):
+            continue
+        dist = abs(ref.dx) + abs(ref.dy)
+        if best is None or dist < best_dist or (dist == best_dist and ref.full and not best.full):
+            best, best_dist = ref, dist
+    return best
+
+
+def existing_art(art_dir: str | os.PathLike, key: str, layer: Layer | None = None) -> Path | None:
+    """The picture already made for a layer (the whole one if both): for
+    a capture's layer, the one find_art chooses; else any of the key's."""
+    if layer is not None:
+        ref = find_art(art_dir, layer)
+        return ref.path if ref else None
+    found = art_files(art_dir, key)
+    full = [r for r in found if r.full]
+    return (full or found or [None])[0].path if (full or found) else None
 
 
 def draw_order(layers: list[Layer]) -> list[Layer]:
@@ -254,15 +314,20 @@ def middle_changed(img: Image.Image, original: Image.Image) -> bool:
     return img.crop(box).tobytes() != original.crop(box).tobytes()
 
 
-def save_art(art_dir: str | os.PathLike, layer: Layer, img: Image.Image, original: Image.Image) -> Path:
-    """The picture where the game finds it: the bands only, or (the middle
-    changed) the whole layer. The other file for that layer goes."""
+def save_art(art_dir: str | os.PathLike, layer: Layer, img: Image.Image, original: Image.Image,
+             loop: bool = False, replace: Path | None = None) -> Path:
+    """The picture where the game finds it, made where the capture's layer
+    is: the bands only, or (the middle changed) the whole layer; loop: its
+    bands go round with the layer (a strip). The layer's other files made
+    at the same place go, and replace (the picture it was drawn from, made
+    a little elsewhere). Pictures of the layer at other places (another
+    part of its map) stay."""
     full = middle_changed(img, original)
     art_dir = Path(art_dir)
-    path = art_dir / layer.art_name(full)
-    for old in art_dir.glob(f"{layer.key}_*_*.png"):
-        if old != path:
-            old.unlink()
+    path = art_dir / layer.art_name(full, loop)
+    for ref in art_files(art_dir, layer.key):
+        if ref.path != path and ((ref.hofs, ref.vofs) == (layer.hofs, layer.vofs) or ref.path == replace):
+            ref.path.unlink()
     clean = Image.new("RGBA", (W, H))
     clean.putdata([snap(p) for p in img.convert("RGBA").getdata()])
     clean.save(path)
@@ -270,10 +335,13 @@ def save_art(art_dir: str | os.PathLike, layer: Layer, img: Image.Image, origina
 
 
 def delete_art(art_dir: str | os.PathLike, layer: Layer) -> int:
+    """The layer's picture (find_art's) and any others made at the same place."""
     n = 0
-    for old in Path(art_dir).glob(f"{layer.key}_*_*.png"):
-        old.unlink()
-        n += 1
+    found = find_art(art_dir, layer)
+    for ref in art_files(art_dir, layer.key):
+        if (ref.hofs, ref.vofs) == (layer.hofs, layer.vofs) or (found and ref.path == found.path):
+            ref.path.unlink()
+            n += 1
     return n
 
 
@@ -418,13 +486,19 @@ def lock_middle(img: Image.Image, original: Image.Image) -> Image.Image:
     return out
 
 
-def project_dir(art_dir: str | os.PathLike, key: str) -> Path:
-    return Path(art_dir) / "editor" / key
+def project_dir(art_dir: str | os.PathLike, key: str, hofs: int | None = None, vofs: int | None = None) -> Path:
+    """Where a picture's drawing layers are kept: one for each place the
+    layer has a picture (editor/<key>_<hofs>_<vofs>); editor/<key> was
+    the one for all, before that."""
+    name = key if hofs is None else f"{key}_{hofs}_{vofs}"
+    return Path(art_dir) / "editor" / name
 
 
-def save_project(art_dir: str | os.PathLike, key: str, stack: list[Paint], active: int = 0) -> Path:
-    """The drawing layers, to open again as they were."""
-    d = project_dir(art_dir, key)
+def save_project(art_dir: str | os.PathLike, key: str, stack: list[Paint], active: int = 0,
+                 hofs: int | None = None, vofs: int | None = None, art: Path | None = None) -> Path:
+    """The drawing layers, to open again as they were; art: the picture
+    saved from them (by default the key's)."""
+    d = project_dir(art_dir, key, hofs, vofs)
     d.mkdir(parents=True, exist_ok=True)
     for old in d.glob("*.png"):
         old.unlink()
@@ -433,37 +507,43 @@ def save_project(art_dir: str | os.PathLike, key: str, stack: list[Paint], activ
         name = f"{i:02d}.png"
         p.image.save(d / name)
         entries.append({"name": p.name, "file": name, "x": p.x, "y": p.y, "visible": p.visible})
-    art = existing_art(art_dir, key)
+    if art is None:
+        art = existing_art(art_dir, key)
     data = {"version": 1, "layers": entries, "active": active,
             "art": art.name if art else None, "art_mtime": art.stat().st_mtime if art else None}
     (d / "layers.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
     return d
 
 
-def load_project(art_dir: str | os.PathLike, key: str) -> tuple[list[Paint], int] | None:
-    """The drawing layers saved for a layer, unless the picture the game
-    reads was changed since (in another program): None then, or if none."""
-    d = project_dir(art_dir, key)
-    try:
-        data = json.loads((d / "layers.json").read_text(encoding="utf-8"))
+def load_project(art_dir: str | os.PathLike, key: str, hofs: int | None = None, vofs: int | None = None,
+                 art: Path | None = None) -> tuple[list[Paint], int] | None:
+    """The drawing layers saved for a picture (art: that picture; by
+    default the key's), unless the picture was changed since (in another
+    program): None then, or if none."""
+    if art is None:
         art = existing_art(art_dir, key)
-        if art is not None and (data.get("art") != art.name or data.get("art_mtime") != art.stat().st_mtime):
-            return None
-        stack = [Paint(e["name"], load_rgba(d / e["file"]), int(e["x"]), int(e["y"]), bool(e["visible"]))
-                 for e in data["layers"]]
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-    if not stack:
-        return None
-    return stack, max(0, min(int(data.get("active", 0)), len(stack) - 1))
+    dirs = [project_dir(art_dir, key, hofs, vofs)] if hofs is not None else []
+    dirs.append(project_dir(art_dir, key))
+    for d in dirs:
+        try:
+            data = json.loads((d / "layers.json").read_text(encoding="utf-8"))
+            if art is not None and (data.get("art") != art.name or data.get("art_mtime") != art.stat().st_mtime):
+                continue
+            stack = [Paint(e["name"], load_rgba(d / e["file"]), int(e["x"]), int(e["y"]), bool(e["visible"]))
+                     for e in data["layers"]]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if stack:
+            return stack, max(0, min(int(data.get("active", 0)), len(stack) - 1))
+    return None
 
 
-def delete_project(art_dir: str | os.PathLike, key: str) -> None:
-    d = project_dir(art_dir, key)
-    if d.is_dir():
-        for f in d.iterdir():
-            f.unlink()
-        d.rmdir()
+def delete_project(art_dir: str | os.PathLike, key: str, hofs: int | None = None, vofs: int | None = None) -> None:
+    for d in ([project_dir(art_dir, key, hofs, vofs)] if hofs is not None else []) + [project_dir(art_dir, key)]:
+        if d.is_dir():
+            for f in d.iterdir():
+                f.unlink()
+            d.rmdir()
 
 
 def brush(size: int) -> list[tuple[int, int]]:

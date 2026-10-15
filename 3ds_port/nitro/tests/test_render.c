@@ -1046,7 +1046,8 @@ static void test_wide_canvas(void)
 /* Hand-drawn pictures (nitro_port_wideart.h): a BG's key, a picture made
  * for it, loaded and drawn in the bands (or all of it), moved with the
  * scroll; another BG's art isn't this one's. */
-static void WriteArt(const char *dir, uint64_t key, int hofs, int vofs, int full, const u16 *pixels)
+/* kind: NITRO_WIDE_ART_FULL, NITRO_WIDE_ART_LOOP */
+static void WriteArtKind(const char *dir, uint64_t key, int hofs, int vofs, int kind, const u16 *pixels)
 {
     static uint8_t rgba[320 * 192 * 4];
     char path[512];
@@ -1060,9 +1061,14 @@ static void WriteArt(const char *dir, uint64_t key, int hofs, int vofs, int full
         rgba[i * 4 + 2] = (uint8_t)(((c >> 10) & 31) << 3);
         rgba[i * 4 + 3] = (c & 0x8000) ? 255 : 0;
     }
-    snprintf(path, sizeof(path), "%s/%016llx_%d_%d%s.png", dir, (unsigned long long)key, hofs, vofs,
-             full ? "_full" : "");
+    snprintf(path, sizeof(path), "%s/%016llx_%d_%d%s%s.png", dir, (unsigned long long)key, hofs, vofs,
+             (kind & NITRO_WIDE_ART_FULL) ? "_full" : "", (kind & NITRO_WIDE_ART_LOOP) ? "_loop" : "");
     CHECK(NitroPort_WideArtWritePng(path, rgba, 320, 192) == 0);
+}
+
+static void WriteArt(const char *dir, uint64_t key, int hofs, int vofs, int full, const u16 *pixels)
+{
+    WriteArtKind(dir, key, hofs, vofs, full ? NITRO_WIDE_ART_FULL : 0, pixels);
 }
 
 static void test_wide_art(void)
@@ -1081,6 +1087,10 @@ static void test_wide_art(void)
     CHECK(NitroPort_WideArtParseName("0123456789abcdef_12_3.png", &key, &hofs, &vofs, &full) &&
           key == 0x0123456789abcdefull && hofs == 12 && vofs == 3 && !full);
     CHECK(NitroPort_WideArtParseName("0123456789ABCDEF_0_0_full.png", &key, &hofs, &vofs, &full) && full);
+    CHECK(NitroPort_WideArtParseName("0123456789abcdef_0_0_full_loop.png", &key, &hofs, &vofs, &full) &&
+          full == (NITRO_WIDE_ART_FULL | NITRO_WIDE_ART_LOOP));
+    CHECK(NitroPort_WideArtParseName("0123456789abcdef_0_0_loop.png", &key, &hofs, &vofs, &full) &&
+          full == NITRO_WIDE_ART_LOOP);
     CHECK(!NitroPort_WideArtParseName("0123456789abcdef_0_0.bmp", &key, &hofs, &vofs, &full));
     CHECK(!NitroPort_WideArtParseName("0123456789abcde_0_0.png", &key, &hofs, &vofs, &full));
     CHECK(!NitroPort_WideArtParseName("screen.png", &key, &hofs, &vofs, &full));
@@ -1360,6 +1370,183 @@ static void test_wide_art_objs(void)
     (void)x;
 }
 
+/* Where a layer's pictures show: the one made nearest the layer's scroll,
+ * not one of another part of its map; what was drawn in a picture's bands
+ * never over the DS's part. */
+static void test_wide_art_places(void)
+{
+    static u16 wide[320 * 192], over[320 * 192], art[320 * 192];
+    static u8 overAlpha[320 * 192];
+    static u8 tiles[96];
+    static u16 map[32 * 64];
+    static u16 pltt[16] = { GREY, RED, BLUE };
+    char dir[] = "/tmp/wideartplXXXXXX";
+    NitroRender2DSplit split;
+    uint64_t key;
+    int hofs, vofs, prio, i, x, y;
+    const u16 SKY = RGB(0, 0, 31) | 0x8000, STRIP = RGB(0, 31, 0) | 0x8000, MADE = RGB(31, 0, 31) | 0x8000;
+    static u16 layerPx[320 * 192];
+
+    /* BG1, 256x512: red tiles (the sky) in the map's top half, blue (the
+     * strip) in the bottom */
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    MakeTile4(tiles + 64, 2);
+    for (i = 0; i < 32 * 64; i++) {
+        map[i] = i < 32 * 32 ? 1 : 2;
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x512, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    memset(&split, 0, sizeof(split));
+    split.width = 320;
+    split.origin = 32;
+    memset(split.clip, 1, sizeof(split.clip));
+    CHECK(NitroPort_Render2DLayer(0, 1, &split, layerPx, &key, &hofs, &vofs, &prio));
+
+    /* two pictures of it: the sky's (bands only) at vofs 0, the strip's at
+     * 256; (going round with it: _loop, so their bands show wherever) */
+    CHECK(mkdtemp(dir) != NULL);
+    for (i = 0; i < 320 * 192; i++) {
+        art[i] = SKY;
+    }
+    WriteArtKind(dir, key, 0, 0, NITRO_WIDE_ART_LOOP, art);
+    for (i = 0; i < 320 * 192; i++) {
+        art[i] = STRIP;
+    }
+    WriteArtKind(dir, key, 0, 256, NITRO_WIDE_ART_LOOP, art);
+    CHECK(NitroPort_WideArtLoad(dir) == 2);
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 3] == (SKY & 0x7FFF));               /* at 0: the sky's */
+    G2_SetBG1Offset(0, 256);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 3] == (STRIP & 0x7FFF));             /* at 256: the strip's */
+    G2_SetBG1Offset(0, 100);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 3] == (SKY & 0x7FFF));               /* nearer the sky's */
+    G2_SetBG1Offset(0, 200);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[100 * 320 + 3] == (STRIP & 0x7FFF));           /* nearer the strip's (line 100: map line 300) */
+    /* not going round (the usual): its bands only where it was made */
+    {
+        char path[600];
+
+        snprintf(path, sizeof(path), "%s/%016llx_0_256_loop.png", dir, (unsigned long long)key);
+        remove(path);
+        snprintf(path, sizeof(path), "%s/%016llx_0_0_loop.png", dir, (unsigned long long)key);
+        remove(path);
+    }
+    WriteArt(dir, key, 0, 256, 0, art);
+    CHECK(NitroPort_WideArtLoad(dir) == 1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[100 * 320 + 3] == GREY);                       /* 56 away: none */
+    G2_SetBG1Offset(0, 252);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[100 * 320 + 3] == (STRIP & 0x7FFF));           /* 4 away: there */
+
+    /* only one picture, a screen or more away: not used (the port's own
+     * band, here the plain edge going on) */
+    WriteArtKind(dir, key, 0, 0, NITRO_WIDE_ART_LOOP, art);   /* (the strip colour at 0) */
+    {
+        char path[600];
+
+        snprintf(path, sizeof(path), "%s/%016llx_0_256.png", dir, (unsigned long long)key);
+        remove(path);
+    }
+    CHECK(NitroPort_WideArtLoad(dir) == 1);
+    G2_SetBG1Offset(0, 256);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 3] == BLUE);
+    G2_SetBG1Offset(0, 0);
+
+    /* a whole picture: its own middle (purple), green bands; scrolled 20
+     * right, its right band doesn't come over the DS's part: the BG's own
+     * there */
+    for (y = 0; y < 192; y++) {
+        for (x = 0; x < 320; x++) {
+            art[y * 320 + x] = (x >= 32 && x < 288) ? MADE : STRIP;
+        }
+    }
+    WriteArt(dir, key, 0, 0, 1, art);
+    {
+        char path[600];
+
+        snprintf(path, sizeof(path), "%s/%016llx_0_0_loop.png", dir, (unsigned long long)key);
+        remove(path);
+    }
+    CHECK(NitroPort_WideArtLoad(dir) == 1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 100] == (MADE & 0x7FFF));
+    CHECK(wide[5 * 320 + 300] == (STRIP & 0x7FFF));
+    G2_SetBG1Offset(20, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 100] == (MADE & 0x7FFF));            /* the picture's middle, moved */
+    CHECK(wide[5 * 320 + 280] == RED);                        /* (its band would be here: the map's own) */
+    CHECK(wide[5 * 320 + 300] == GREY);                       /* 20 away: no bands */
+    G2_SetBG1Offset(4, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 300] == (STRIP & 0x7FFF));           /* 4 away: the bands */
+    G2_SetBG1Offset(0, 0);
+
+    NitroPort_WideArtLoad("/nonexistent");
+    {
+        char cmd[600];
+
+        snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+        CHECK(system(cmd) == 0);
+    }
+}
+
+/* A window over the screen from 0 to 255 (the DS's register can't say
+ * 256: its last column is left out) covers the wider screen's bands too. */
+static void test_wide_window_edges(void)
+{
+    static u16 wide[320 * 192], over[320 * 192];
+    static u8 overAlpha[320 * 192];
+    static u8 tiles[64];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED };
+    NitroRender2DSplit split;
+    int i;
+
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = 1;
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    G2_SetWnd0Position(0, 32, 255, 160);
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG1, FALSE);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_NONE, FALSE);
+    GX_SetVisibleWnd(GX_WNDMASK_W0);
+    memset(&split, 0, sizeof(split));
+    split.width = 320;
+    split.origin = 32;
+    memset(split.clip, 0, sizeof(split.clip));   /* (the map goes on: a full-screen picture) */
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[100 * 320 + 3] == RED);            /* the left band */
+    CHECK(wide[100 * 320 + 32 + 255] == RED);     /* the DS's last column */
+    CHECK(wide[100 * 320 + 310] == RED);          /* the right band */
+    CHECK(wide[10 * 320 + 310] == GREY);          /* (above the window: outside it) */
+    /* the DS's own screen: its last column outside the window, as on the DS */
+    NitroPort_Render2D(0, sTop);
+    CHECK(sTop[100 * 256 + 255] == GREY);
+    CHECK(sTop[100 * 256 + 254] == RED);
+    GX_SetVisibleWnd(GX_WNDMASK_NONE);
+}
+
 /* The two engines drawn at the same time on two threads (as the 3DS
  * program does on two CPU cores), many times over: the same pixels. */
 static u16 sThreadOut[2][256 * 192];
@@ -1521,6 +1708,8 @@ int main(int argc, char **argv)
     test_wide_canvas();
     test_wide_art();
     test_wide_art_objs();
+    test_wide_art_places();
+    test_wide_window_edges();
     test_engines_on_two_threads();
 
     printf("2D renderer: %d checks, %d failed\n", sChecks, sFailures);
