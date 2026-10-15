@@ -166,12 +166,26 @@ static void StartSound(s32 priority)
     }
 }
 
+/* Closing (from the HOME menu, or the game stopped): nothing more is drawn,
+ * and a crash on the way out ends the program rather than waiting for
+ * START on a screen nobody sees. */
+static volatile bool sQuitting;
+/* A thread that wouldn't stop when the program closed: the program is
+ * ended at once then (svcExitProcess), not torn down around it. */
+static volatile bool sStopFailed;
+
 static void StopSound(void)
 {
     if (sSoundThread) {
         __atomic_store_n(&sSoundThreadRunning, false, __ATOMIC_RELEASE);
         if (R_SUCCEEDED(threadJoin(sSoundThread, 1000000000ULL))) {
             threadFree(sSoundThread);
+        } else {
+            /* (still in the mixer: no ndspExit under it) */
+            sStopFailed = true;
+            sSoundThread = NULL;
+            NitroPort_Log("[quit] the sound thread didn't stop");
+            return;
         }
         sSoundThread = NULL;
     }
@@ -310,6 +324,8 @@ static void VBlankMain(void *unused)
     (void)unused;
     while(__atomic_load_n(&sVBlankRunning,__ATOMIC_ACQUIRE)){
         gspWaitForVBlank();
+        /* (stopped while waiting: the buffers may be going) */
+        if(!__atomic_load_n(&sVBlankRunning,__ATOMIC_ACQUIRE))break;
         NitroPort_ComposeVBlank();
         if(__atomic_load_n(&sGpuWakeReady,__ATOMIC_ACQUIRE))
             LightEvent_Signal(&sGpuWake);
@@ -331,6 +347,7 @@ static void StopVBlankThread(void)
     if(!sVBlankThread)return;
     __atomic_store_n(&sVBlankRunning,false,__ATOMIC_RELEASE);
     if(R_SUCCEEDED(threadJoin(sVBlankThread,1000000000ULL)))threadFree(sVBlankThread);
+    else sStopFailed=true;
     sVBlankThread=NULL;
 }
 /* The classic path: each scene drawn to an image as it comes. */
@@ -471,6 +488,7 @@ static void StopGpu(void)
     if(R_SUCCEEDED(threadJoin(sGpuThread,2000000000ULL))){
         threadFree(sGpuThread);
     }else{
+        sStopFailed=true;
         NitroPort_Log("[gx3d] the 3D thread didn't stop: quitting without it");
     }
     sGpuThread=NULL;
@@ -485,17 +503,22 @@ static void StopGpu(void)
 /* Hand-drawn pictures for the wide upper screen, and captures for drawing
  * them (docs/WIDE_ART.md). */
 #define WIDE_ART_DIR  DATA_DIR "/wide"
-/* Optional, for trying where the geometry goes: "core 1" (the default),
- * "core 2", or "off" (the game's own thread, as before). */
+/* Optional, for trying where the geometry goes: "core 2" (the default on
+ * a New 3DS), "core 1" (with the lower screen's drawing: the layout before
+ * October 2026), or "off" (the game's own thread). */
 #define GEOMETRY_PATH DATA_DIR "/geometry.txt"
 
 /* ------------------------------------------------------ geometry thread */
 /* The DS geometry engine (vertices, lighting, clipping: most of a 3D
  * frame's work) on a core of its own, so the game's thread, and with it
- * the game's speed against the music, doesn't carry it. Core 1, the
- * system's, of which a program may take a share (APT_SetAppCpuTimeLimit);
- * otherwise the New 3DS's core 2. When it falls behind, scenes are left
- * out rather than the game slowed (port_gx3d.c). */
+ * the game's speed against the music, doesn't carry it. On a New 3DS core
+ * 2, below engine A's drawer there (the drawer is idle most of the time;
+ * the geometry takes a fraction of the core). Core 1 is the system's: a
+ * program gets a share of it (APT_SetAppCpuTimeLimit), 30% in practice,
+ * and there the geometry took 18-30 ms a scene, left out 3-10 scenes a
+ * second, and the intro's flyover panned in uneven jumps (log of
+ * 2026-10-14). On an Old 3DS (no core 2) core 1 it is. When it falls
+ * behind, scenes are left out rather than the game slowed (port_gx3d.c). */
 static Thread sGeoThread;
 static LightEvent sGeoWorkerEvent, sGeoProducerEvent;
 static volatile int sGeoRunning;
@@ -565,36 +588,29 @@ static void StartGeometry(s32 priority, bool new3ds)
         NitroPort_Log("[perf] geometry on the game's thread (" GEOMETRY_PATH ")");
         return;
     }
-    /* The share of core 1 first, whichever core the geometry goes on:
-     * engine B's drawer goes there with it (StartDrawers). */
+    if (new3ds && strncmp(choice, "core 1", 6) != 0) {
+        StartGeometryOn(priority, 2);
+        if (sGeoThread) {
+            return;
+        }
+    }
+    /* Core 1: the program's share of it first (engine B's drawer goes there
+     * with it, StartDrawers). */
     for (i = 0; i < sizeof(limits) / sizeof(limits[0]); i++) {
         if (R_SUCCEEDED(APT_SetAppCpuTimeLimit(limits[i]))) {
             sGeoCpuLimit = limits[i];
             break;
         }
     }
-    if (strncmp(choice, "core 2", 6) == 0 && new3ds) {
-        NitroPort_Log("[perf] geometry on core 2, as " GEOMETRY_PATH " says");
-        StartGeometryOn(priority, 2);
-        return;
-    }
     if (sGeoCpuLimit == 0) {
-        if (new3ds) {
-            StartGeometryOn(priority, 2);
-        } else {
-            NitroPort_Log("[perf] geometry on the game's thread (no share of core 1)");
-        }
+        NitroPort_Log("[perf] geometry on the game's thread (no share of core 1)");
         return;
     }
     GeometryOps();
     sGeoThread = threadCreate(GeoMain, NULL, 64 * 1024, priority - 1, 1, false);
     if (!sGeoThread) {
         NitroPort_Gx3dStopThread();
-        if (new3ds) {
-            StartGeometryOn(priority, 2);
-        } else {
-            NitroPort_Log("[perf] geometry on the game's thread (no thread on core 1)");
-        }
+        NitroPort_Log("[perf] geometry on the game's thread (no thread on core 1)");
         return;
     }
     sGeoCore = 1;
@@ -741,6 +757,9 @@ static void StopGeometry(void)
     /* The game's thread may still be sending it work: don't wait long. */
     if (R_SUCCEEDED(threadJoin(sGeoThread, 200000000ULL))) {
         threadFree(sGeoThread);
+    } else {
+        sStopFailed = true;
+        NitroPort_Log("[quit] the geometry thread didn't stop");
     }
     sGeoThread = NULL;
 }
@@ -845,6 +864,8 @@ static void Quit(void) __attribute__((noreturn));
 
 static void Quit(void)
 {
+    __atomic_store_n(&sQuitting, true, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&sSuspended, true, __ATOMIC_SEQ_CST);   /* (no more frames handed out) */
     LightEvent_Signal(&sQuit);
     for (;;) {
         svcSleepThread(1000000000LL);
@@ -907,6 +928,15 @@ static void OnException(ERRF_ExceptionInfo *info, CpuRegisters *regs)
                   (unsigned long)regs->r[1], (unsigned long)regs->r[2],
                   (unsigned long)regs->r[3]);
     NitroPort_Log("Look up pc and lr in pokeplatinum.elf (arm-none-eabi-addr2line).");
+    if (__atomic_load_n(&sQuitting, __ATOMIC_SEQ_CST)) {
+        /* Closing anyway: no message to wait on (nobody sees it, and the
+         * program would never close). */
+        NitroPort_Log("(while closing: the program ends now)");
+        if (sLog != NULL) {
+            fflush(sLog);
+        }
+        svcExitProcess();
+    }
     StopWithMessage();
 }
 
@@ -1075,6 +1105,7 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         memset(&split, 0, sizeof(split));
         split.over = layers->over;
         split.overAlpha = layers->overAlpha;
+        split.snapshot = 1;   /* (the state taken when the frame was handed over: DrawFrame) */
         /* The upper screen: the wider canvas (port_wide.c's layout). */
         if (top && sCompose.wide) {
             NitroPort_WideLayout(engine, &split);
@@ -1231,23 +1262,17 @@ static bool StartDrawer(int screens, s32 priority, s32 readPriority, int core)
     return true;
 }
 
-/* New 3DS: engine A's screen (the 3D one) on core 2, engine B's on core 0; otherwise both
- * on core 0. Below the game on core 0, so the game comes first, and on a New 3DS below
- * the 3D's GPU thread there too. */
+/* New 3DS: engine A's screen (the 3D one) on core 2, engine B's on core 0
+ * (below the game and the display thread: the game comes first, and it
+ * needs little of the core; in the intro's 2D scenes about a tenth). On
+ * core 1, the system's, the program gets 30% of the core: engine B's
+ * screen drew 14-25 frames a second there, the intro's lower screen moved
+ * in uneven steps, and it took time from the geometry (geometry.txt "core
+ * 1" puts both back there). Otherwise both on core 0. */
 static void StartDrawers(s32 priority, bool isNew3ds)
 {
     if (isNew3ds && StartDrawer(ENGINE_A, priority, priority, 2)) {
-        /* Engine B on core 1, below the geometry thread, when the program
-         * has a share of it: in battles (where engine B's touch screen is
-         * the costliest of all, and the geometry thread has little to do)
-         * it has most of that core; on core 0 it came after the GPU
-         * thread and fell to 10-20 frames a second.
-         * While it reads the game's display state, above the geometry
-         * thread (priority - 1): the game waits for that reading before
-         * its next V-blank work, and in the field, where the screen hardly
-         * changes, the reading (working out that it didn't) is short but
-         * waited behind the geometry thread's whole scene, 18 ms. */
-        if (sGeoCpuLimit == 0 || !StartDrawer(ENGINE_B, priority + 1, priority - 2, 1)) {
+        if (sGeoCore != 1 || !StartDrawer(ENGINE_B, priority + 1, priority - 2, 1)) {
             StartDrawer(ENGINE_B, priority + 2, priority + 2, 0);
         }
     } else {
@@ -1269,6 +1294,7 @@ static void StopDrawers(void)
         if (R_SUCCEEDED(threadJoin(d->thread, 1000000000ULL))) {
             threadFree(d->thread);
         } else {
+            sStopFailed = true;
             NitroPort_Log("A drawing thread didn't stop: quitting without it");
         }
     }
@@ -1312,21 +1338,55 @@ static void WaitForDrawing(void)
  * second) for what's being drawn; then, back, draw everything again. */
 static aptHookCookie sAptHook;
 
+static bool sAptHome, sAptAsleep;   /* (the hook's own: one thread calls it) */
+
 static void OnAptEvent(APT_HookType type, void *param)
 {
     (void)param;
-    if (type == APTHOOK_ONSUSPEND) {
+    if (type == APTHOOK_ONSUSPEND || type == APTHOOK_ONSLEEP || type == APTHOOK_ONEXIT) {
         u64 start = svcGetSystemTick();
+        bool settled;
 
+        if (type == APTHOOK_ONEXIT) {
+            __atomic_store_n(&sQuitting, true, __ATOMIC_SEQ_CST);
+        } else if (type == APTHOOK_ONSUSPEND) {
+            sAptHome = true;
+        } else {
+            sAptAsleep = true;
+        }
         __atomic_store_n(&sSuspended, true, __ATOMIC_SEQ_CST);
+        /* Nothing more onto the LCD (the HOME menu's now), and what was
+         * waiting for its V-blank dropped. */
+        if (sRemaster) {
+            NitroPort_ComposeHold(1);
+        }
         while ((__atomic_load_n(&sComposing, __ATOMIC_SEQ_CST) || DrawersBusy()) &&
                svcGetSystemTick() - start < SYSCLOCK_ARM11) {
             svcSleepThread(1000000LL);
         }
-    } else if (type == APTHOOK_ONRESTORE) {
+        settled = !__atomic_load_n(&sComposing, __ATOMIC_SEQ_CST) && !DrawersBusy();
+        NitroPort_Log("[apt] %s: drawing stopped%s (%.0f ms)",
+                      type == APTHOOK_ONEXIT ? "closing" : type == APTHOOK_ONSLEEP ? "going to sleep"
+                                                                                  : "the HOME menu",
+                      settled ? "" : " (still busy after a second)",
+                      (double)(svcGetSystemTick() - start) * 1000.0 / SYSCLOCK_ARM11);
+    } else if (type == APTHOOK_ONRESTORE || type == APTHOOK_ONWAKEUP) {
+        if (type == APTHOOK_ONRESTORE) {
+            sAptHome = false;
+        } else {
+            sAptAsleep = false;
+        }
+        /* (woken up in the HOME menu: still the HOME menu's screens) */
+        if (__atomic_load_n(&sQuitting, __ATOMIC_SEQ_CST) || sAptHome || sAptAsleep) {
+            return;
+        }
+        NitroPort_Log("[apt] back to the game");
         sMustDraw[0] = true;
         sMustDraw[1] = true;
         __atomic_store_n(&sComposeForce, true, __ATOMIC_RELEASE);
+        if (sRemaster) {
+            NitroPort_ComposeHold(0);
+        }
         __atomic_store_n(&sSuspended, false, __ATOMIC_SEQ_CST);
         if (__atomic_load_n(&sGpuWakeReady, __ATOMIC_ACQUIRE)) {
             LightEvent_Signal(&sGpuWake);
@@ -1371,6 +1431,16 @@ static void DrawFrame(bool new3dOnly)
             d->aOnTop = sAOnTop;
             d->stamp = NitroPort_ComposeVBlanks();
             d->images = images;
+            /* What it draws from, as it is now (a few KB): the game's next
+             * frame doesn't get mixed in, however long it takes. */
+            if (sRemaster) {
+                if (d->screens & ENGINE_A) {
+                    NitroPort_Render2DTakeState(0);
+                }
+                if (d->screens & ENGINE_B) {
+                    NitroPort_Render2DTakeState(1);
+                }
+            }
             __atomic_store_n(&d->reading, true, __ATOMIC_RELEASE);
             __atomic_store_n(&d->busy, true, __ATOMIC_RELEASE);
             LightEvent_Signal(&d->go);
@@ -1923,14 +1993,33 @@ int main(int argc, char **argv)
         }
     }
 
-    aptUnhook(&sAptHook);
-    StopDrawers();
-    StopGeometry();
-    StopGpu();
-    StopSound();
+    /* Closing: each step logged (a close that hangs shows where). */
+    __atomic_store_n(&sQuitting, true, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&sSuspended, true, __ATOMIC_SEQ_CST);
+    {
+        u64 start = svcGetSystemTick();
+
+#define QUIT_STEP(what, call) do { u64 t0 = svcGetSystemTick(); call; \
+            NitroPort_Log("[quit] %s (%.0f ms)", what, (double)(svcGetSystemTick() - t0) * 1000.0 / SYSCLOCK_ARM11); } while (0)
+        NitroPort_Log("[quit] closing");
+        QUIT_STEP("drawing threads stopped", StopDrawers());
+        QUIT_STEP("geometry stopped", StopGeometry());
+        QUIT_STEP("display stopped", StopGpu());
+        QUIT_STEP("sound stopped", StopSound());
+        aptUnhook(&sAptHook);
+#undef QUIT_STEP
+        NitroPort_Log("[quit] done in %.0f ms%s", (double)(svcGetSystemTick() - start) * 1000.0 / SYSCLOCK_ARM11,
+                      sStopFailed ? "; a thread didn't stop: ending the program at once" : "");
+    }
     if (sLog != NULL) {
         fclose(sLog);
         sLog = NULL;
+    }
+    if (sStopFailed) {
+        /* Tearing the program down (libctru's services, the heap) around a
+         * thread still running crashed it on the way out; the kernel ends
+         * every thread at once instead. */
+        svcExitProcess();
     }
     gfxExit();
     return 0;

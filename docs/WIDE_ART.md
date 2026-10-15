@@ -61,8 +61,13 @@ Paste as a new layer (Ctrl+Shift+V) puts the copy on a layer of its own.
 Moving a drawing layer loses nothing that goes past the screen's edge: move
 it back and it's there. Saving puts the visible drawing layers together
 into the one picture the game reads, and keeps them as they are
-(`wide/editor/<key>/`) for next time. (If the saved picture was changed in
-another program since, the editor opens that instead.)
+(`wide/editor/<key>_<hofs>_<vofs>/`) for next time. (If the saved picture
+was changed in another program since, the editor opens that instead.)
+
+**Scrolls round all the time (a strip).** Tick it for a layer that keeps
+scrolling (the opening's blue strip): its bands then move with it all the
+time. Otherwise a layer's bands show only while it's where you drew it
+(see below).
 
 Colours are saved as the DS shows them (5 bits a channel), and pixels are
 either solid or transparent (no half-transparent ones).
@@ -81,12 +86,23 @@ it's scrolled. So:
 
 - it shows whenever that layer shows, on any visit to that screen, whatever
   the other layers do (text printing, a cursor moving);
-- if the layer scrolls (a BG) or moves (a sprite group), the picture moves
-  with it (by the distance since the capture), so what you drew stays
-  exactly where you put it on the layer; past the picture's edge it goes
-  round as the layer does (a BG's map wraps every 256 or 512 pixels, a
-  sprite strip every screen's width), so a scrolling strip, like the
-  opening's, reaches both edges all the time;
+- the picture shows **where you put it**. If the layer scrolls (a BG) or
+  moves (a sprite group), the picture moves with it, but its bands show
+  only while the layer is where it was when you captured it (give or take
+  8 pixels). While the layer slides in, or waits beside the DS's screen
+  where the DS hides it, nothing shows beyond the DS's edges, as on the
+  DS: no Pokemon's hand showing before it comes in. For a layer that
+  scrolls round all the time, tick "Scrolls round all the time": its bands
+  then move with it everywhere, and past the picture's edge they go round
+  as the layer's map does;
+- what you drew in the bands never shows over the DS's own part of the
+  screen: there, when the layer has moved, the DS's picture shows;
+- one layer can have **several pictures**, one for each place it was
+  captured at: the opening's sky and its blue strip are the same layer (one
+  tall map, the sky above, the strip below), each with its own picture.
+  The game uses the one made nearest where the layer is, if that's less
+  than a screen away; capturing the layer a few pixels from a picture's
+  place opens that picture, lined up, and saving it replaces it;
 - if the layer's own art changes (text printed into it, a palette fading,
   a sprite animating), the key changes and the port's own rules come back
   until it's the same art again. Text boxes and menus are usually on layers
@@ -111,11 +127,13 @@ Files, in `3ds/pokeplatinum/wide`:
   sprites);
 - `<key>_<hofs>_<vofs>_full.png`: the whole layer (the editor saves this
   one when you change the middle);
+- `..._loop.png` (either kind): its bands go round with the layer;
 - `captures/NNNN/`: `screen.png`, `bg0.png`-`bg3.png`, `obj<G>.png` (each
   sprite group, G = priority x 32 + palette, or + 16 for 8-bit sprites),
   `info.txt` (each layer's key, scroll or position, and priority);
-- `editor/<key>/`: the editor's drawing layers (`layers.json` and a PNG
-  each). The game doesn't read it.
+- `editor/<key>_<hofs>_<vofs>/`: the editor's drawing layers for a picture
+  (`layers.json` and a PNG each; `editor/<key>/` before). The game doesn't
+  read it.
 
 320 x 192 pixels, the DS's picture at x 32-287. The pictures are made from
 the game's art: like the data pack, they stay on your SD card and aren't

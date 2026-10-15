@@ -177,15 +177,41 @@ static void present(int s, int buf, int stereo)
     scr->onLcd = buf;
 }
 
+/* While the HOME menu (or another applet) has the screens, or the program
+ * is closing: nothing put on the LCD, and what was waiting dropped. */
+static volatile int sHeld;
+
+void NitroPort_ComposeHold(int on)
+{
+    int s;
+
+    if (!sReady) {
+        sHeld = on;   /* (not set up, or gone: nothing waiting) */
+        return;
+    }
+    LightLock_Lock(&sPresentLock);
+    sHeld = on;
+    if (on) {
+        for (s = 0; s < 2; s++) {
+            sScreens[s].npending = 0;
+        }
+    }
+    LightLock_Unlock(&sPresentLock);
+}
+
 void NitroPort_ComposeVBlank(void)
 {
     u32 now = __atomic_add_fetch(&sVBlanks, 1u, __ATOMIC_RELAXED);
     int s;
 
-    if (!sReady) {
+    if (!sReady || sHeld) {
         return;
     }
     LightLock_Lock(&sPresentLock);
+    if (!sReady || sHeld) {
+        LightLock_Unlock(&sPresentLock);
+        return;
+    }
     for (s = 0; s < 2; s++) {
         Screen *scr = &sScreens[s];
 
@@ -307,6 +333,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     memset(sScreens, 0, sizeof(sScreens));
     LightLock_Init(&sSetLock);
     LightLock_Init(&sPresentLock);
+    sHeld = 0;
     for (c = 0; c < 32768; c++) {
         int r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
 
@@ -406,6 +433,11 @@ fail:
 
 void NitroPort_ComposeExit(void)
 {
+    /* (nothing put on the LCD from the buffers being freed) */
+    LightLock_Lock(&sPresentLock);
+    sReady = 0;
+    sHeld = 1;
+    LightLock_Unlock(&sPresentLock);
     free_all();
 }
 
@@ -481,15 +513,18 @@ void NitroPort_ComposePublish(int engine, int screen)
         /* (the texture's rows the picture uses: tile rows, whole) */
         u32 rowsUsed = ((u32)DS_H * scr->texScale + 8u + 7u) & ~7u;
 
-        for (i = 0; i < n; i++) {
-            c16[i] = sToRgb565[l->under[i] & 0x7FFF];
-        }
-        if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
-            NitroPort_Scale2xTiled16(c16, w, DS_H, set->under, scr->texW);
-        } else if (scr->texScale == 2) {
-            NitroPort_Double2xTiled16(c16, w, DS_H, set->under, scr->texW);
+        if (sConfig.filter != COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+            /* (the default: converted and doubled in one pass) */
+            NitroPort_Double2xTiled16Table(l->under, w, DS_H, set->under, scr->texW, sToRgb565);
         } else {
-            NitroPort_Tile16(c16, w, DS_H, set->under, scr->texW);
+            for (i = 0; i < n; i++) {
+                c16[i] = sToRgb565[l->under[i] & 0x7FFF];
+            }
+            if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+                NitroPort_Scale2xTiled16(c16, w, DS_H, set->under, scr->texW);
+            } else {
+                NitroPort_Tile16(c16, w, DS_H, set->under, scr->texW);
+            }
         }
         GSPGPU_FlushDataCache(set->under, (u32)scr->texW * rowsUsed * 2u);
         if (l->has3d) {

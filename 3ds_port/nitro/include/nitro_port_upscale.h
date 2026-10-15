@@ -54,6 +54,12 @@ void NitroPort_Scale2xTiled32(const uint32_t *src, int w, int h, uint32_t *dst, 
  * w and h multiples of 4; the texture at least 2 h + 8 rows. */
 void NitroPort_Double2xTiled16(const uint16_t *src, int w, int h, uint16_t *dst, int dstWidth);
 void NitroPort_Double2xTiled32(const uint32_t *src, int w, int h, uint32_t *dst, int dstWidth);
+/* NitroPort_Double2xTiled16 of the DS's colours (bits 0-4 red, 5-9 green,
+ * 10-14 blue; bit 15 ignored) turned into texels by table (32768 of them),
+ * in one pass: no picture in between, the four texels of a pixel written
+ * at once (dst 8-byte aligned). */
+void NitroPort_Double2xTiled16Table(const uint16_t *src, int w, int h, uint16_t *dst, int dstWidth,
+                                    const uint16_t *table);
 
 #ifdef __cplusplus
 }

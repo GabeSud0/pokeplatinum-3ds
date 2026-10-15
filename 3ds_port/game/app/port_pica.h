@@ -144,6 +144,9 @@ void NitroPort_ComposeStats(ComposeStats *stats);
  * calls this, each V-blank); and how many V-blanks there have been (any
  * thread). */
 void NitroPort_ComposeVBlank(void);
+/* Nothing put on the LCD while on (the HOME menu has the screens, or the
+ * program is closing); the frames waiting are dropped. */
+void NitroPort_ComposeHold(int on);
 u32 NitroPort_ComposeVBlanks(void);
 #endif
 #endif

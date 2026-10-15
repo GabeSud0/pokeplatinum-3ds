@@ -56,6 +56,8 @@ typedef struct Picture {
 
 typedef struct Slot {
     uint64_t key;          /* 0: empty */
+    int16_t hofs, vofs;    /* (with key: which of its pictures) */
+    uint8_t full;
     uint32_t lastUse;
     uint16_t *pixels;      /* allocated once */
 } Slot;
@@ -119,7 +121,11 @@ int NitroPort_WideArtParseName(const char *name, uint64_t *key, int *hofs, int *
         v = v * 10 + (*p++ - '0');
     }
     if (strncmp(p, "_full", 5) == 0) {
-        f = 1;
+        f |= NITRO_WIDE_ART_FULL;
+        p += 5;
+    }
+    if (strncmp(p, "_loop", 5) == 0) {
+        f |= NITRO_WIDE_ART_LOOP;
         p += 5;
     }
     if (strcmp(p, ".png") != 0 && strcmp(p, ".PNG") != 0) {
@@ -139,7 +145,16 @@ static int by_key(const void *a, const void *b)
 {
     const Picture *pa = a, *pb = b;
 
-    return pa->key < pb->key ? -1 : pa->key > pb->key ? 1 : (int)pa->full - (int)pb->full;
+    if (pa->key != pb->key) {
+        return pa->key < pb->key ? -1 : 1;
+    }
+    if (pa->vofs != pb->vofs) {
+        return pa->vofs - pb->vofs;
+    }
+    if (pa->hofs != pb->hofs) {
+        return pa->hofs - pb->hofs;
+    }
+    return (int)pa->full - (int)pb->full;
 }
 
 int NitroPort_WideArtLoad(const char *dir)
@@ -196,6 +211,26 @@ int NitroPort_WideArtCount(void)
 uint32_t NitroPort_WideArtSerial(void)
 {
     return sSerial;
+}
+
+/* The first picture of a key: -1 if none. */
+static int first_picture(uint64_t key)
+{
+    int lo = 0, hi = sCount - 1, found = -1;
+
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+
+        if (sPictures[mid].key < key) {
+            lo = mid + 1;
+        } else {
+            if (sPictures[mid].key == key) {
+                found = mid;
+            }
+            hi = mid - 1;
+        }
+    }
+    return found;
 }
 
 /* The last picture of a key (sorted: the whole one if there's both). */
@@ -262,28 +297,18 @@ static int read_picture(const char *path, uint16_t *out)
     return 1;
 }
 
-const uint16_t *NitroPort_WideArtFind(uint64_t key, int *hofs, int *vofs, int *full)
+/* Picture index's pixels (read the first time, kept in a slot); under the
+ * lock on entry, not on return. NULL if it can't be read. */
+static const uint16_t *picture_pixels(int index)
 {
-    int i, index, oldest = 0;
-    Picture pic;
+    int i, oldest = 0;
+    Picture pic = sPictures[index];
     char path[320];
     uint16_t *pixels;
 
-    if (key == 0 || NitroPort_WideArtCount() == 0) {
-        return NULL;
-    }
-    lock();
-    index = find_picture(key);
-    if (index < 0 || sPictures[index].bad) {
-        unlock();
-        return NULL;
-    }
-    pic = sPictures[index];
-    *hofs = pic.hofs;
-    *vofs = pic.vofs;
-    *full = pic.full;
     for (i = 0; i < CACHE_SLOTS; i++) {
-        if (sSlots[i].key == key && sSlots[i].pixels != NULL) {
+        if (sSlots[i].key == pic.key && sSlots[i].hofs == pic.hofs && sSlots[i].vofs == pic.vofs &&
+            sSlots[i].full == pic.full && sSlots[i].pixels != NULL) {
             sSlots[i].lastUse = ++sUse;
             pixels = sSlots[i].pixels;
             unlock();
@@ -302,8 +327,7 @@ const uint16_t *NitroPort_WideArtFind(uint64_t key, int *hofs, int *vofs, int *f
     if (!read_picture(path, pixels)) {
         free(pixels);
         lock();
-        index = find_picture(key);
-        if (index >= 0) {
+        if (index < sCount && strcmp(sPictures[index].name, pic.name) == 0) {
             sPictures[index].bad = 1;
         }
         unlock();
@@ -326,7 +350,10 @@ const uint16_t *NitroPort_WideArtFind(uint64_t key, int *hofs, int *vofs, int *f
     } else {
         memcpy(sSlots[oldest].pixels, pixels, PIXELS * sizeof(uint16_t));
     }
-    sSlots[oldest].key = key;
+    sSlots[oldest].key = pic.key;
+    sSlots[oldest].hofs = pic.hofs;
+    sSlots[oldest].vofs = pic.vofs;
+    sSlots[oldest].full = pic.full;
     sSlots[oldest].lastUse = ++sUse;
     {
         const uint16_t *result = sSlots[oldest].pixels;
@@ -335,6 +362,71 @@ const uint16_t *NitroPort_WideArtFind(uint64_t key, int *hofs, int *vofs, int *f
         free(pixels);
         return result;
     }
+}
+
+const uint16_t *NitroPort_WideArtFind(uint64_t key, int *hofs, int *vofs, int *full)
+{
+    int index;
+
+    if (key == 0 || NitroPort_WideArtCount() == 0) {
+        return NULL;
+    }
+    lock();
+    index = find_picture(key);
+    if (index < 0 || sPictures[index].bad) {
+        unlock();
+        return NULL;
+    }
+    *hofs = sPictures[index].hofs;
+    *vofs = sPictures[index].vofs;
+    *full = sPictures[index].full;
+    return picture_pixels(index);
+}
+
+/* a - b round a circle of period, -period/2 .. period/2 - 1 */
+static int wrapped(int a, int b, int period)
+{
+    int d = ((a - b) % period + period) % period;
+
+    return d >= period / 2 ? d - period : d;
+}
+
+const uint16_t *NitroPort_WideArtFindNear(uint64_t key, int curH, int curV, int periodH, int periodV, int maxH,
+                                          int maxV, int *hofs, int *vofs, int *full)
+{
+    int i, best = -1, bestDist = 0;
+
+    if (key == 0 || NitroPort_WideArtCount() == 0) {
+        return NULL;
+    }
+    lock();
+    i = first_picture(key);
+    for (; i >= 0 && i < sCount && sPictures[i].key == key; i++) {
+        int dx = wrapped(curH, sPictures[i].hofs, periodH), dy = wrapped(curV, sPictures[i].vofs, periodV);
+        int dist = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+
+        if (sPictures[i].bad || (maxH > 0 && (dx >= maxH || dx <= -maxH)) ||
+            (maxV > 0 && (dy >= maxV || dy <= -maxV))) {
+            continue;
+        }
+        /* (of two at the same place, the whole picture: sorted after) */
+        if (best < 0 || dist <= bestDist) {
+            if (best >= 0 && dist == bestDist && (sPictures[i].hofs != sPictures[best].hofs ||
+                                                  sPictures[i].vofs != sPictures[best].vofs)) {
+                continue;
+            }
+            best = i;
+            bestDist = dist;
+        }
+    }
+    if (best < 0) {
+        unlock();
+        return NULL;
+    }
+    *hofs = sPictures[best].hofs;
+    *vofs = sPictures[best].vofs;
+    *full = sPictures[best].full;
+    return picture_pixels(best);
 }
 
 /* ------------------------------------------------------------------- PNG */

@@ -50,7 +50,15 @@ typedef struct NitroRender2DSplit {
     int width, origin;
     uint8_t clip[4];
     int anchorWindows;
+    /* Draw from the display state taken by NitroPort_Render2DTakeState
+     * (registers, palettes, OAM as they were then), not the live one. */
+    int snapshot;
 } NitroRender2DSplit;
+/* (the game's thread, when it hands a frame to a drawing thread) Take the
+ * engine's registers, palettes and OAM as they are now, for the next draw
+ * with split->snapshot set: what the game changes while it's being drawn
+ * doesn't get mixed in. */
+void NitroPort_Render2DTakeState(int engine);
 void NitroPort_Render2DSplit(int engine, uint16_t *under, NitroRender2DSplit *split);
 /* The same, unless nothing it draws from changed since the last call for
  * that engine (returns 0 then, 1 when drawn). */
