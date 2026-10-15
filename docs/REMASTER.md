@@ -237,6 +237,16 @@ frames waiting isn't drawn again until one has shown.
 A frame that took long is in the log with where its time went:
 `[stall] frame N: X ms in the game (file reads: n, KB, ms; waiting for the
 geometry thread: ms)`, or `X ms in the port between frames (...)`.
+The log file is written by a thread of its own, at the lowest priority, a
+moment after the lines come: written on the thread that logged, each line
+cost the SD card's time, and the `[perf]` lines held the game up 35 ms
+every two seconds. A crash, a stop with a message and closing write what's
+waiting at once.
+
+The save is kept in memory (read once when the game first opens it, one
+request to the SD card); each change the game makes is written to the file
+before the game is told it's done, as the DS's flash had it. Loading a save
+at Continue took 1.8 s, the save read 256 bytes at a time.
 
 The log says what's on (`[compose] screens drawn by the GPU: ...`) and,
 every two seconds, `[perf] display: N frames/s drawn (N with a new 3D
