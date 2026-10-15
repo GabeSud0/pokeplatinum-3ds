@@ -187,6 +187,9 @@ void NitroPort_Gx3dFlush(void);
 /* The thread's busy time (in ticks), scenes finished, and scenes left out
  * because it was behind (the game never waits for it). */
 void NitroPort_Gx3dThreadStats(uint64_t *busy, uint32_t *scenes, uint32_t *skipped);
+/* The game's thread's time waiting for the geometry thread (its ring full,
+ * or results it needs), in microseconds since the start. */
+uint64_t NitroPort_Gx3dProducerWaitMicros(void);
 /* How many times the thread has woken up to work (it sleeps whenever it has
  * done all it was handed), and its longest stretch of work, in ticks (both
  * for the [perf] line; the longest is reset when read). */

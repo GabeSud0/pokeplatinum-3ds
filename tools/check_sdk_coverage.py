@@ -90,6 +90,8 @@ LIBC = {"memcpy", "memset", "memmove", "memcmp", "strcmp", "strlen", "strncpy",
         # with stdio and allocates its index on the heap.
         "fopen", "fclose", "fread", "fseek", "ftell", "ferror", "remove",
         "malloc", "calloc", "realloc", "free", "strstr",
+        # ... unbuffered (setvbuf): its own blocks, one request to the card each.
+        "setvbuf",
         # Virtual ARM7 save persistence and local RTC use hosted C/newlib.
         "fflush", "fwrite", "localtime", "time",
         # PC reference 3D rasterizer uses standard C99 libm, linked with -lm.

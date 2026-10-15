@@ -132,9 +132,12 @@ uint32_t NitroPort_ComposePublished(int engine);
 /* Draw and show whatever changed (new layers, a new scene, the slider,
  * the engines swapping screens): returns the screens drawn (bit 0 upper,
  * bit 1 lower), 0 if nothing was. scene: the newest 3D scene (prepared
- * here), or NULL. Waits for the GPU. */
+ * here), or NULL. A new scene waits for the 2D it's shown with; flush:
+ * not any longer (the next scene has come). Waits for the GPU. */
 int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, int aOnTop,
-                           float slider, int forced);
+                           float slider, int forced, int flush);
+/* Whether that scene is waiting for its 2D (not drawn yet). */
+int NitroPort_ComposeSceneWaiting(uint32_t sceneSerial);
 /* For the [perf] line: frames drawn, the time building them (CPU) and the
  * GPU time waited for, publishing (upscaling) by the drawers, the V-blanks
  * from a scene's making to its showing (lag), and of the 3D frames (timed)

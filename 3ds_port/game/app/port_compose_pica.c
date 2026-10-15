@@ -268,11 +268,15 @@ void NitroPort_Compose2DDone(u32 stamp)
  * showed, bright, before its fade in from black). So it waits for that
  * frame of 2D: for the drawer to be done with it, or to know there's none
  * (the game offers a frame every other V-blank, or the drawer was busy and
- * left it out), and no longer than the V-blank after that frame's.
- * (Waiting a few V-blanks, a scene waiting for a drawer that takes more
- * than a frame was overtaken by the next scene, which waited in turn: the
- * opening's Pokemon on green and the battles showed 2 to 9 new frames a
- * second of 30, and the 3D's screen, its 2D held up with it, stood still.) */
+ * left it out). A scene still waiting when the next one comes is drawn
+ * then, with the 2D there is (NitroPort_ComposeFrame's flush; else each
+ * scene was overtaken by the next where engine A's drawer takes more than
+ * a frame, the opening's Pokemon on green and the battles: 2 to 9 frames a
+ * second of 30, the 3D's screen standing still). No time limit short of
+ * that: cut at the V-blank after the 2D's frame, a scene went out with
+ * that 2D or with the one before by turns where the drawer takes about a
+ * frame, and the opening forest's clouds (2D) jumped back and forth over
+ * the trees (3D). (A few V-blanks at most, should no next scene come.) */
 static int paired_2d_ready(u32 sceneStamp)
 {
     u32 want = sceneStamp + 1u;
@@ -289,8 +293,8 @@ static int paired_2d_ready(u32 sceneStamp)
     if ((int32_t)(done - want) >= 0) {
         return 1;   /* done with that frame (or a later one) */
     }
-    if ((int32_t)(now - (want + 1u)) >= 0) {
-        return 1;   /* (no longer than this: the next scene comes soon) */
+    if ((int32_t)(now - (want + (u32)LAG_MAX + 1u)) >= 0) {
+        return 1;   /* (no longer than this) */
     }
     if (handed != done && (int32_t)(handed - want) <= 0) {
         return 0;   /* drawing a frame up to that one: its 2D is on the way */
@@ -302,7 +306,17 @@ static int paired_2d_ready(u32 sceneStamp)
     if (every >= 2u && every <= 4u && (int32_t)(offered + every - want) > 0) {
         return 1;   /* the game offers a frame every other V-blank: none then */
     }
-    return 0;   /* none offered for it yet: until the V-blank after its own */
+    return 0;       /* none offered for it yet */
+}
+
+/* The scene the 3D's screen is waiting to draw (paired_2d_ready), if any
+ * (the display thread's own). */
+static int sSceneWaiting;
+static uint32_t sSceneWaitingSerial;
+
+int NitroPort_ComposeSceneWaiting(uint32_t sceneSerial)
+{
+    return sSceneWaiting && sSceneWaitingSerial == sceneSerial;
 }
 
 static void make_texture(C3D_Tex *tex, void *data, GPU_TEXCOLOR fmt, int w, int h, int linear,
@@ -946,7 +960,7 @@ static void fill_edge_buffers(Screen *scr, int eye, u32 value)
 }
 
 int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, int aOnTop, float slider,
-                           int forced)
+                           int forced, int flush)
 {
     int s, drawn = 0, stereoNow, need[2] = { 0, 0 }, timed = 0, edges = 0, lcdBuf[2] = { -1, -1 };
     u32 vblanks, edgeClear = 0;
@@ -972,10 +986,13 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         need[s] = forced || set->seq != scr->shownSeq || (has3d && sceneSerial != scr->shownScene) ||
                   (s == 0 && has3d && (stereoNow != scr->shownStereo ||
                                         (stereoNow && slider != scr->shownSlider)));
-        /* A new scene: once the 2D it's shown with is here. */
-        if (need[s] && has3d && !forced && sceneSerial != scr->shownScene &&
+        /* A new scene: once the 2D it's shown with is here (or the next
+         * scene has come: flush). */
+        if (need[s] && has3d && !forced && !flush && sceneSerial != scr->shownScene &&
             !paired_2d_ready(scene->stamp)) {
             need[s] = 0;
+            sSceneWaiting = 1;
+            sSceneWaitingSerial = sceneSerial;
         }
         /* Not without a framebuffer to draw into (two frames waiting for
          * their V-blanks already): the next V-blank frees one. */
@@ -1056,6 +1073,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         scr->shownSeq = sets[s]->seq;
         if (screen3d) {
             scr->shownScene = sceneSerial;
+            sSceneWaiting = 0;
         }
         scr->shownSlider = slider;
         scr->shownStereo = stereoNow;

@@ -18,6 +18,7 @@
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_mailbox.h>
 #include <nitro_port_gx3d_vertex.h>
+#include "port_platform.h"
 #include <limits.h>
 #include <string.h>
 #include <math.h>
@@ -1093,22 +1094,31 @@ static void publish(void)
 }
 /* Wait until the ring has room for `words` more (or, with RING_WORDS, is
  * empty: everything handed on has been done). */
+/* (the game's thread's time waiting for the geometry thread, for the log) */
+static uint64_t sProducerWaitNanos;
+uint64_t NitroPort_Gx3dProducerWaitMicros(void)
+{
+    return sProducerWaitNanos/1000u;
+}
 static void wait_for_room(uint32_t words)
 {
+    uint64_t start;
     /* Usually there's room as far as the game's thread already knows. */
     if(RING_WORDS-(sWriteLocal-sReadSeen)>=words)return;
+    start=NitroPortPlatform_Nanoseconds();
     for(;;){
         uint32_t used=sWriteLocal-(sReadSeen=__atomic_load_n(&sRingRead,__ATOMIC_SEQ_CST));
-        if(RING_WORDS-used>=words)return;
+        if(RING_WORDS-used>=words)break;
         publish();
         __atomic_store_n(&sProducerWaiting,1,__ATOMIC_SEQ_CST);
         used=sWriteLocal-(sReadSeen=__atomic_load_n(&sRingRead,__ATOMIC_SEQ_CST));
         if(RING_WORDS-used>=words){
             __atomic_store_n(&sProducerWaiting,0,__ATOMIC_SEQ_CST);
-            return;
+            break;
         }
         sOps.wait_producer(sOps.context);
     }
+    sProducerWaitNanos+=NitroPortPlatform_Nanoseconds()-start;
 }
 static void drain(void)
 {

@@ -11,6 +11,7 @@
  */
 #include <nitro_port_fs.h>
 #include <nitro_port.h>
+#include "port_platform.h"
 
 #include <ctype.h>
 #include <limits.h>
@@ -313,6 +314,17 @@ PakResult NitroPort_OpenPak(const char *pak_path, const char *manifest_path,
     return PAK_OK;
 }
 
+/* (NitroPort_FsReadStats; the game's thread only) */
+static uint32_t sStatReads;
+static uint64_t sStatBytes, sStatNanos;
+
+void NitroPort_FsReadStats(uint32_t *reads, uint64_t *bytes, uint64_t *micros)
+{
+    if (reads) *reads = sStatReads;
+    if (bytes) *bytes = sStatBytes;
+    if (micros) *micros = sStatNanos / 1000u;
+}
+
 FSResult NitroPort_PakArchiveProc(FSFile *file, FSCommandType command)
 {
     size_t i;
@@ -346,8 +358,13 @@ FSResult NitroPort_PakArchiveProc(FSFile *file, FSCommandType command)
     case FS_COMMAND_READFILE: {
         u32 position = file->prop.file.pos;
         u32 length = file->arg.readfile.len;
-        if (pak_read(sPak, file->prop.file.own_id, position,
-                     file->arg.readfile.dst, length) != PAK_OK)
+        u64 start = NitroPortPlatform_Nanoseconds();
+        PakResult read = pak_read(sPak, file->prop.file.own_id, position,
+                                  file->arg.readfile.dst, length);
+        sStatNanos += NitroPortPlatform_Nanoseconds() - start;
+        sStatReads++;
+        sStatBytes += length;
+        if (read != PAK_OK)
             return FS_RESULT_FAILURE;
         file->prop.file.pos = position + length;
         /* The DS card takes its time: about 2 MB/s (16 bus cycles a byte)

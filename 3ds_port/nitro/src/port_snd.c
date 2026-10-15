@@ -135,6 +135,14 @@ void NitroPort_HandleSound(int tag, u32 data, BOOL err)
     sPending[(sHead + sCount) % SOUND_QUEUE_CAPACITY] =
         (const SNDCommand *)(uintptr_t)data;
     ++sCount;
+    /* Taken at once, as the DS's ARM7 takes them within a tick: left for
+     * the sound thread, they waited for its next buffer (15.6 ms on the
+     * 3DS), and the game waits for some (SND_WaitForCommandProc: starting
+     * a field's music, three times, the game standing still meanwhile). */
+    if (__atomic_load_n(&sReady, __ATOMIC_ACQUIRE)) {
+        N7_SND_CommandProc();
+        N7_SND_UpdateSharedWork();
+    }
     sound_unlock();
 }
 

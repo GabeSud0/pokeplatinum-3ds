@@ -166,16 +166,20 @@ frame would be late, back down after ten seconds with room to spare.
 
 A new scene is drawn once engine A's drawer is done with the 2D of the
 frame after it, or it's known there's none (the game hands the drawers a
-frame every other V-blank, or the drawer was busy and left that one out),
-and no later than the V-blank after that frame's. Drawn as soon as it
-came, it went out with the 2D before and was drawn again when that came:
-the 3D drawn twice, and if the 2D was late, a frame of the wrong picture
-(the title's Giratina showed, bright, for a frame before its fade in from
-black). The first version waited up to a few V-blanks: where engine A's
-drawer takes more than a frame (the opening's Pokemon on green, the
-battles: 16-25 ms), each scene was overtaken by the next before its 2D
-came, and only 2 to 9 of 30 a second were shown; the 3D's screen, its 2D
-held with it, stood still.
+frame every other V-blank, or the drawer was busy and left that one out).
+A scene still waiting when the next one comes is drawn then, with the 2D
+there is, so every scene shows. Drawn as soon as it came, it went out with
+the 2D before and was drawn again when that came: the 3D drawn twice, and
+if the 2D was late, a frame of the wrong picture (the title's Giratina
+showed, bright, for a frame before its fade in from black). Two versions
+that went wrong: waiting up to a few V-blanks, where engine A's drawer
+takes more than a frame (the opening's Pokemon on green, the battles:
+16-25 ms) each scene was overtaken by the next before its 2D came, and
+only 2 to 9 of 30 a second were shown, the 3D's screen standing still;
+cut at the V-blank after the 2D's frame, where the drawer takes about a
+frame (the forest, 20 ms) a scene went out with that 2D or the one before
+by turns, and the forest's clouds (2D) jumped back and forth over the
+trees.
 
 Engine A's drawer is the slower one where there are pictures: the 2D at
 320 pixels, and each BG's key worked out every frame to look its picture
@@ -229,6 +233,10 @@ frames waiting isn't drawn again until one has shown.
 | `edges off` | no outlines (edge marking) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
 | `flip on` | the 2D layers upside down (if a GPU's texture rows come out the other way round) |
+
+A frame that took long is in the log with where its time went:
+`[stall] frame N: X ms in the game (file reads: n, KB, ms; waiting for the
+geometry thread: ms)`, or `X ms in the port between frames (...)`.
 
 The log says what's on (`[compose] screens drawn by the GPU: ...`) and,
 every two seconds, `[perf] display: N frames/s drawn (N with a new 3D
