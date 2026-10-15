@@ -42,10 +42,10 @@ extern "C" {
 /* A picture's kind (the "full" the functions below give): the whole layer
  * (<name>_full.png; else the bands only), and whether its bands go round
  * with the layer as it scrolls (<name>_loop.png: a strip that scrolls all
- * the time). Without that, its bands show only while the layer is where
- * the picture was made (give or take a few pixels): a picture sliding in,
- * or parked beside the DS's screen, shows nothing beyond the DS's edges,
- * as on the DS. */
+ * the time). Without that, its bands show only while the layer is across
+ * where the picture was made (give or take a few pixels; up and down
+ * doesn't matter): a picture sliding in, or parked beside the DS's
+ * screen, shows nothing beyond the DS's edges, as on the DS. */
 #define NITRO_WIDE_ART_FULL 1
 #define NITRO_WIDE_ART_LOOP 2
 

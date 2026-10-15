@@ -1134,15 +1134,16 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
             dy = ((curV - vofs) % mapH + mapH) % mapH;
             e->artDx[bg] = (short)(dx >= mapW / 2 ? dx - mapW : dx);
             e->artDy[bg] = (short)(dy >= mapH / 2 ? dy - mapH : dy);
-            /* Its bands while it's where the picture was made (a few
-             * pixels either way: a layer that bobs), or always for a strip
-             * that scrolls round (_loop). Elsewhere (sliding in, parked
-             * beside the DS's screen) nothing beyond the DS's edges, as on
-             * the DS: the picture showed what the DS hides, Chimchar's
-             * hand before he came in (2026-10-14). */
+            /* Its bands while it's across where the picture was made (a
+             * few pixels either way), or always for a strip that scrolls
+             * round (_loop). Elsewhere sideways (sliding in, parked beside
+             * the DS's screen) nothing beyond the DS's edges, as on the DS:
+             * the picture showed what the DS hides, Chimchar's hand before
+             * he came in (2026-10-14). Up and down doesn't matter: nothing
+             * the DS hides comes into the bands that way (the running
+             * scene's city bobs 13-22 pixels from its picture's place). */
             e->artBands[bg] = (u8)((full & NITRO_WIDE_ART_LOOP) ||
-                                   (e->artDx[bg] >= -ART_REST && e->artDx[bg] <= ART_REST &&
-                                    e->artDy[bg] >= -ART_REST && e->artDy[bg] <= ART_REST));
+                                   (e->artDx[bg] >= -ART_REST && e->artDx[bg] <= ART_REST));
         } else {
             art = NitroPort_WideArtFindNear(key, 0, 0, 512, 512, 0, 0, &hofs, &vofs, &full);
             if (art == NULL) {
