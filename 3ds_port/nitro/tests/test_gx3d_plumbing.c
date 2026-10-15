@@ -837,7 +837,45 @@ static void test_batches(void)
     CHECK(nb==2 && dropped==3 && n==9);  /* tri 0, 2, 5 fit */
 }
 
+/* Textures for the GPU's bilinear filter: each texel 2x2, and a
+ * see-through texel coloured as an opaque one beside it (alpha 0 kept). */
+static void test_filter_texels(void)
+{
+    /* 2x2: red opaque, transparent black; transparent black, blue opaque */
+    static const uint32_t in[4]={0xFF0000FFu,0x00000000u,0x00000000u,0x0000FFFFu};
+    uint32_t out[16],one[4];
+    int x,y;
+    NitroPort_Gx3dFilterTexels(in,2,2,2,out);
+    for(y=0;y<4;y++)for(x=0;x<4;x++){
+        static const uint32_t want[4]={0xFF0000FFu,0xFF000000u,0x0000FF00u,0x0000FFFFu};
+        CHECK(out[y*4+x]==want[(y/2)*2+(x/2)]);
+    }
+    {
+        /* tiled in one pass: as filtering, then tiling; untiling undoes tiling */
+        static uint32_t big[16*8],lin[32*16],tiled[32*16],tiled2[32*16],back[16*8];
+        unsigned i;
+        for(i=0;i<16*8;i++)big[i]=(i%5==0)?0u:(0x01020300u*i)|0xFFu;
+        NitroPort_Gx3dFilterTexels(big,16,8,2,lin);
+        NitroPort_Gx3dTileRGBA8(lin,32,16,tiled);
+        NitroPort_Gx3dFilterTexelsTiled(big,16,8,2,tiled2);
+        CHECK(memcmp(tiled,tiled2,sizeof(tiled))==0);
+        NitroPort_Gx3dFilterTexels(big,16,8,1,lin);
+        NitroPort_Gx3dTileRGBA8(lin,16,8,tiled);
+        NitroPort_Gx3dFilterTexelsTiled(big,16,8,1,tiled2);
+        CHECK(memcmp(tiled,tiled2,16*8*4)==0);
+        NitroPort_Gx3dTileRGBA8(big,16,8,tiled);
+        NitroPort_Gx3dUntileRGBA8(tiled,16,8,back);
+        CHECK(memcmp(back,big,sizeof(big))==0);
+    }
+    NitroPort_Gx3dFilterTexels(in,2,2,1,one);
+    CHECK(one[0]==in[0] && one[3]==in[3]);
+    CHECK(one[1]==0xFF000000u);              /* (left: red) */
+    CHECK(one[2]==0x0000FF00u);              /* (right: blue) */
+    CHECK((one[1]&0xFFu)==0 && (one[2]&0xFFu)==0);
+}
+
 int main(void) {
+    test_filter_texels();
     test_mailbox();
     test_mailbox_unread();
     test_lock_contention();

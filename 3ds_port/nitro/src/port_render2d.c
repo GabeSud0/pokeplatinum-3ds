@@ -123,13 +123,15 @@ typedef struct Engine {
     int width, origin;
     /* Wider canvas: each BG's pixels only within the DS's 256 (clip), or
      * wrapping round its map; the windows the game anchors moved to the
-     * screen's edges (anchorWindows); and (worked out each frame) whether a
-     * BG is mirrored at the DS's edges where its edge isn't plain and its
-     * picture reaches the edge: on the picture screens
-     * (NitroPort_WidePictures). */
+     * screen's edges (anchorWindows); and whether this is one of the
+     * screens made of pictures (NitroPort_WidePictures: the opening, the
+     * title...), where a plain edge goes on only where it's plain for a
+     * band's width (PlainRun): nothing of a picture is ever stretched (an
+     * oval of the opening's strip touching the edge was drawn out into a
+     * line, 2026-10-14). Nothing is mirrored anywhere. */
     u8 clip[4];
     u8 anchorWindows;
-    u8 mirror[4];
+    u8 pictures;
     /* (wider canvas, worked out each frame) a BG's hand-drawn picture
      * (nitro_port_wideart.h): its pixels, how far the BG has scrolled
      * since it was made, and whether it's the whole picture (else the
@@ -138,6 +140,13 @@ typedef struct Engine {
     short artDx[4], artDy[4];
     u8 artFull[4];
     u8 artBands[4];        /* its bands drawn (else nothing there: the layer is elsewhere) */
+    /* A whole picture of a layer that has moved away from where it was made
+     * (a Pokemon sliding in): the whole layer from the picture, moved
+     * (artDx, artDy: MovedOffset's, the slide made as wide as the screen);
+     * artExact: moved as far as the layer (else further), so past the
+     * picture's edges the BG's own pixels go on. */
+    u8 artMoved[4];
+    u8 artExact[4];
     /* (worked out each frame, DecideSplits) a text BG that's a picture with
      * a plain middle and decorated sides: its halves go to the screen's
      * edges, the middle widened with its plain colour. */
@@ -343,14 +352,12 @@ typedef struct Target {
  * (wrapping round the map). */
 typedef struct Segment {
     short x0, x1, off;
-    short fixed;   /* >= 0: every pixel of the run is the map's pixel at x = fixed;
-                    * SEG_MIRROR: the DS's picture mirrored at the edge (axis) */
-    short axis;
+    short fixed;   /* >= 0: every pixel of the run is the map's pixel at x = fixed */
 } Segment;
-#define SEG_MIRROR (-2)
 #define SEG_ART (-3)       /* the BG's hand-drawn picture (Engine.art), in the bands */
 #define SEG_ART_MID (-4)   /* the same over the DS's part: the picture where it has it, else the BG's own */
 #define SEG_CLEAR (-5)     /* nothing */
+#define SEG_ART_MOVED (-6) /* the whole layer from its picture, moved (Engine.artMoved) */
 #define MAX_SEGMENTS 24
 
 static const int sTextSizes[4][2] = { { 256, 256 }, { 512, 256 }, { 256, 512 }, { 512, 512 } };
@@ -383,6 +390,16 @@ static u16 TextBgPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int mapx
 
         return e->bgPal4[((entry >> 12) << 4) | ((px & 1) ? (pair >> 4) : (pair & 15))];
     }
+}
+
+/* How much of a line at the DS's edge must be one colour for that colour
+ * to go on beside it: a band's width (32) on the screens made of pictures,
+ * where anything shorter is part of the picture (the opening strip's ovals
+ * and streaks were drawn out into lines), 8 elsewhere (a window's frame, a
+ * fade's black). */
+static inline int PlainRun(const Engine *e)
+{
+    return e->pictures ? 32 : 8;
 }
 
 /* Whether the DS's pixels x0..x0+n-1 of a text BG's line (map row ty, its
@@ -440,9 +457,8 @@ static void DecideSplits(Engine *e, const int *kind, const u16 *bgcnt, u32 dispc
  * DS's 256 pixels (or the whole canvas, wrapping round the map, without
  * clip), with the windows the game anchors (NitroPort_WideWindows: the
  * place name sign) moved to the screen's edge. Beside the DS's picture (with
- * clip): its edge colour when the edge is plain on this line; else, on a
- * BG without any of the game's windows (a picture), the picture mirrored
- * at the edge; on one with windows (the UI), nothing. Returns how many. */
+ * clip): its edge colour when the edge is plain on this line (PlainRun),
+ * else nothing. Returns how many. */
 static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int ty, int hofs, int mapW,
                           Segment *segs)
 {
@@ -454,26 +470,30 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int t
 
     if (e->art[bg] != NULL) {
         /* A hand-drawn picture: the bands (or all of it) from that. */
+        if (e->artMoved[bg]) {
+            segs[0].x0 = 0;
+            segs[0].x1 = (short)width;
+            segs[0].off = (short)(hofs - origin);
+            segs[0].fixed = SEG_ART_MOVED;
+            return 1;
+        }
         if (origin > 0) {
             segs[n].x0 = 0;
             segs[n].x1 = (short)origin;
             segs[n].off = 0;
             segs[n].fixed = e->artBands[bg] ? SEG_ART : SEG_CLEAR;
-            segs[n].axis = 0;
             n++;
         }
         segs[n].x0 = (short)origin;
         segs[n].x1 = (short)(origin + 256);
         segs[n].off = (short)(hofs - origin);
         segs[n].fixed = e->artFull[bg] ? SEG_ART_MID : -1;
-        segs[n].axis = 0;
         n++;
         if (origin + 256 < width) {
             segs[n].x0 = (short)(origin + 256);
             segs[n].x1 = (short)width;
             segs[n].off = 0;
             segs[n].fixed = e->artBands[bg] ? SEG_ART : SEG_CLEAR;
-            segs[n].axis = 0;
             n++;
         }
         return n;
@@ -529,20 +549,15 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int t
      * (a picture's border, say: widened without anything stretched). */
     {
         int bx0 = e->clip[bg] ? origin : 0, bx1 = e->clip[bg] ? origin + 256 : width;
-        int cuts[2 * NITRO_WIDE_MAX_WINDOWS][2], ncuts = 0, x;
-        int fillLeft = e->clip[bg] && origin > 0 && TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 0, 8);
+        int cuts[2 * NITRO_WIDE_MAX_WINDOWS][2], ncuts = 0, x, run = PlainRun(e);
+        int fillLeft = e->clip[bg] && origin > 0 && TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 0, run);
         int fillRight = e->clip[bg] && origin + 256 < width &&
-                        TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 248, 8);
-        /* (a picture reaching the edge: its outermost pixel is opaque) */
-        int mirrorLeft = e->clip[bg] && e->mirror[bg] && origin > 0 && !fillLeft &&
-                         (TextBgPixel(e, bg, bgcnt, dispcnt, hofs, ty) & OPAQUE);
-        int mirrorRight = e->clip[bg] && e->mirror[bg] && origin + 256 < width && !fillRight &&
-                          (TextBgPixel(e, bg, bgcnt, dispcnt, 255 + hofs, ty) & OPAQUE);
+                        TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 256 - run, run);
 
-        if (fillLeft || mirrorLeft) {
+        if (fillLeft) {
             bx0 = 0;
         }
-        if (fillRight || mirrorRight) {
+        if (fillRight) {
             bx1 = width;
         }
 
@@ -582,13 +597,10 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int t
             segs[n].x0 = (short)x;
             segs[n].x1 = (short)next;
             segs[n].off = (short)(hofs - origin);
-            segs[n].axis = 0;
             if (x < origin) {
-                segs[n].fixed = fillLeft ? (short)(hofs & (mapW - 1)) : (short)SEG_MIRROR;
-                segs[n].axis = (short)origin;
+                segs[n].fixed = (short)(hofs & (mapW - 1));
             } else if (x >= origin + 256) {
-                segs[n].fixed = fillRight ? (short)((255 + hofs) & (mapW - 1)) : (short)SEG_MIRROR;
-                segs[n].axis = (short)(origin + 256);
+                segs[n].fixed = (short)((255 + hofs) & (mapW - 1));
             } else {
                 segs[n].fixed = -1;
             }
@@ -719,15 +731,23 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
         }
         continue;
     }
-    if (segs[seg].fixed == SEG_MIRROR) {
-        /* the DS's picture mirrored at its edge (axis): canvas x shows
-         * the DS's pixel at 2 axis - 1 - x */
-        int axis = segs[seg].axis;
+    if (segs[seg].fixed == SEG_ART_MOVED) {
+        /* the whole layer from its picture, moved; past the picture's
+         * edges the BG's own pixels (when moved as far as the BG: the
+         * picture is of the map there), else nothing */
+        const u16 *art = e->art[bg];
+        int ay = ArtWrap(y + e->artDy[bg], H, mapH);
 
         for (; x < xe; x++) {
-            int mx = (2 * axis - 1 - x + off) & (mapW - 1);
+            int ax = x + e->artDx[bg];
 
-            PUT(x, TextBgPixel(e, bg, bgcnt, dispcnt, mx, ty), flags);
+            if (ay >= 0 && ax >= 0 && ax < NITRO_WIDE_ART_W) {
+                PUT(x, art[ay * NITRO_WIDE_ART_W + ax], flags);
+            } else if (e->artExact[bg]) {
+                PUT(x, TextBgPixel(e, bg, bgcnt, dispcnt, (x + off) & (mapW - 1), ty), flags);
+            } else {
+                PUT(x, 0, flags);
+            }
         }
         continue;
     }
@@ -952,38 +972,30 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
         }
     }
     /* (wider canvas) beside the DS's screen, the edge's colour when the
-     * edge is plain on this line */
-    if (xs > 0 && xe - xs >= 8) {
-        int i;
+     * edge is plain on this line (PlainRun) */
+    if (xs > 0 && xe - xs >= PlainRun(e)) {
+        int i, run = PlainRun(e);
         BOOL plain = (out[xs] & OPAQUE) != 0;
 
-        for (i = 1; i < 8 && plain; i++) {
+        for (i = 1; i < run && plain; i++) {
             plain = out[xs + i] == out[xs];
         }
         if (plain) {
             for (i = 0; i < xs; i++) {
                 out[i] = out[xs];
             }
-        } else if (e->mirror[bg] && (out[xs] & OPAQUE)) {
-            for (i = 0; i < xs; i++) {
-                out[i] = out[2 * xs - 1 - i];
-            }
         }
     }
-    if (xe < e->width && xe - xs >= 8) {
-        int i;
+    if (xe < e->width && xe - xs >= PlainRun(e)) {
+        int i, run = PlainRun(e);
         BOOL plain = (out[xe - 1] & OPAQUE) != 0;
 
-        for (i = 2; i <= 8 && plain; i++) {
+        for (i = 2; i <= run && plain; i++) {
             plain = out[xe - i] == out[xe - 1];
         }
         if (plain) {
             for (i = xe; i < e->width; i++) {
                 out[i] = out[xe - 1];
-            }
-        } else if (e->mirror[bg] && (out[xe - 1] & OPAQUE)) {
-            for (i = xe; i < e->width; i++) {
-                out[i] = out[2 * xe - 1 - i];
             }
         }
     }
@@ -1136,14 +1148,27 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
             e->artDy[bg] = (short)(dy >= mapH / 2 ? dy - mapH : dy);
             /* Its bands while it's across where the picture was made (a
              * few pixels either way), or always for a strip that scrolls
-             * round (_loop). Elsewhere sideways (sliding in, parked beside
-             * the DS's screen) nothing beyond the DS's edges, as on the DS:
-             * the picture showed what the DS hides, Chimchar's hand before
-             * he came in (2026-10-14). Up and down doesn't matter: nothing
-             * the DS hides comes into the bands that way (the running
-             * scene's city bobs 13-22 pixels from its picture's place). */
+             * round (_loop). Up and down doesn't matter (the running
+             * scene's city bobs 13-22 pixels from its picture's place).
+             * Elsewhere sideways, a whole picture is the whole layer, moved
+             * with it: a Pokemon sliding in shows whole, not cut at the
+             * DS's edge (2026-10-14), its slide widened so that it comes
+             * in from the wide screen's edge: what the DS hides beyond its
+             * edge, waiting to come in, stays hidden (Chimchar's hand
+             * showed beside the DS's screen before he came in). A picture
+             * of the bands only shows nothing there. */
             e->artBands[bg] = (u8)((full & NITRO_WIDE_ART_LOOP) ||
                                    (e->artDx[bg] >= -ART_REST && e->artDx[bg] <= ART_REST));
+            if (!e->artBands[bg] && (full & NITRO_WIDE_ART_FULL)) {
+                int left, right, moved = -e->artDx[bg], widened = moved;
+
+                if (NitroPort_WideArtExtent(art, &left, &right)) {
+                    widened = NitroPort_WideArtMovedOffset(moved, left, right);
+                }
+                e->artMoved[bg] = 1;
+                e->artExact[bg] = (u8)(widened == moved);
+                e->artDx[bg] = (short)-widened;
+            }
         } else {
             art = NitroPort_WideArtFindNear(key, 0, 0, 512, 512, 0, 0, &hofs, &vofs, &full);
             if (art == NULL) {
@@ -2482,9 +2507,7 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
             e->clip[bg] = split->clip[bg];
         }
         e->anchorWindows = (u8)split->anchorWindows;
-        /* (No picture mirrored at the DS's edges any more: Gabriel doesn't
-         * want anything mirrored or stretched. Where a layer has no
-         * hand-drawn picture its plain edge goes on, or nothing.) */
+        e->pictures = (u8)(NitroPort_WidePictures() != 0);
     }
 }
 

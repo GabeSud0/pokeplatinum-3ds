@@ -436,6 +436,7 @@ static void GpuMain(void *unused)
     if(sRemaster){
         if(!NitroPort_ComposeInit(&sCompose)){
             NitroPort_Log("[compose] couldn't set the GPU display up: the classic display instead");
+            NitroPort_PicaTextureFilter(0);   /* (the classic image: the DS's texels) */
             sRemaster=false;
         }else{
             s32 priority=0x30;

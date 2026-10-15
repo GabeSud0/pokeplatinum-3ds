@@ -70,6 +70,18 @@ const uint16_t *NitroPort_WideArtFind(uint64_t key, int *hofs, int *vofs, int *f
 const uint16_t *NitroPort_WideArtFindNear(uint64_t key, int curH, int curV, int periodH, int periodV, int maxH,
                                           int maxV, int *hofs, int *vofs, int *full);
 
+/* A picture's opaque columns (left .. right - 1), by its pixels as the
+ * functions above gave them: 1 if known. Any thread. */
+int NitroPort_WideArtExtent(const uint16_t *pixels, int *left, int *right);
+/* Where a whole picture goes when its layer has moved `moved` pixels
+ * sideways from where the picture was made (> 0: to the right), the
+ * picture's opaque columns left .. right - 1: as far, while what it shows
+ * is well inside the DS's screen; further as it nears the DS's edge (the
+ * last 32 pixels of the DS's way taking 64 of the wide screen's), so that
+ * what the DS has beyond its edge, coming in or gone out, is beyond the
+ * wide screen's too, and comes in from there; past that, 32 more. */
+int NitroPort_WideArtMovedOffset(int moved, int left, int right);
+
 /* Capture the upper screen for the editor: a new folder in dir
  * (captures/0001, ...) with screen.png (the whole picture, without the
  * 3D), bg<N>.png (each BG alone, as the port draws it now, its bands

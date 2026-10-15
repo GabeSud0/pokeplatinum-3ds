@@ -28,7 +28,11 @@ What it does:
 - **The pixels as they are.** By default each DS pixel becomes 2x2 texels
   and the GPU's bilinear filter scales the rest of the way: every pixel the
   same size, only its borders a texel soft (no blur, no uneven pixels).
-  Scale2x and the others are settings.
+  Scale2x and the others are settings. The 3D's textures the same way
+  (each texel 2x2, then bilinear; `nearest`: as the DS, `smooth`:
+  bilinear): drawn straight at 1.25 times with the nearest texel, a texel
+  was one pixel or two, and which ones changed as the 3D moved, so the
+  opening's flyover shimmered against its fog, which is 2D.
 - **Even pacing.** Each 3D scene is shown a fixed number of V-blanks after
   the game made it, with the 2D the DS would have shown it with (see
   "Timing").
@@ -112,7 +116,10 @@ stretched:
   placed to match its window). Nothing is stretched.
 - **A plain edge goes on.** Where a BG's line is one colour at its edge (a
   picture's plain border, the black of a fade, a window's frame) that
-  colour goes on to the screen's edge.
+  colour goes on to the screen's edge: for 8 pixels at the edge, or on the
+  screens made of pictures (`NitroPort_WidePictures`) for 32, a band's
+  width, so that nothing of a picture is drawn out (the opening strip's
+  ovals were, into lines).
 - **Nothing is mirrored.** A picture that reaches the DS's edge (the
   intro's scenery, the title's torn border) isn't folded over into the
   bands any more: those screens have pictures drawn for them (see
