@@ -628,6 +628,8 @@ void NitroPort_Log(const char *fmt, ...)
  *   tri3d X Y        log the newest scene's triangles covering pixel (X, Y)
  *   bench2d N [E]    draw each screen (or engine E only: 0 A, 1 B) N times
  *                    and log the time per draw
+ *   bench2ds N [E]   the same, drawn as the 3DS remaster does (two layers;
+ *                    the upper screen wide, with its pictures)
  *   scene3d PATH     write the newest scene's triangles as text (one per line)
  *   regs PATH        write the I/O registers (0x4000000-0x4001FFF) as binary
  *   tex3d PARAM PAL PATH  write a texture (hex TEXIMAGE_PARAM, palette base)
@@ -870,6 +872,32 @@ static void ControlWait(void)
                     for (k = 0; k < a; k++) NitroPort_Render2D(engine, screen);
                     clock_gettime(CLOCK_MONOTONIC, &t1);
                     NitroPort_Log("[pc] bench2d engine %c: %.3f ms/draw", engine ? 'B' : 'A',
+                                  ((t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6) / (a > 0 ? a : 1));
+                }
+            } else if (sscanf(line, "bench2ds %ld", &a) == 1) {
+                /* The same, as the 3DS remaster draws them: in two layers,
+                 * the upper screen on the wider canvas with its pictures. */
+                static uint16_t under[320 * 192], over[320 * 192];
+                static uint8_t overAlpha[320 * 192];
+                int engine, only = -1, aOnTop = NitroPort_EngineAOnTop() ? 1 : 0;
+                sscanf(line, "bench2ds %ld %d", &a, &only);
+                for (engine = 0; engine < 2; engine++) {
+                    struct timespec t0, t1;
+                    long k;
+                    int top = (engine == 0) == aOnTop;
+                    if (only >= 0 && engine != only) continue;
+                    clock_gettime(CLOCK_MONOTONIC, &t0);
+                    for (k = 0; k < a; k++) {
+                        NitroRender2DSplit split;
+                        memset(&split, 0, sizeof(split));
+                        split.over = over;
+                        split.overAlpha = overAlpha;
+                        if (top) NitroPort_WideLayout(engine, &split);
+                        NitroPort_Render2DSplit(engine, under, &split);
+                    }
+                    clock_gettime(CLOCK_MONOTONIC, &t1);
+                    NitroPort_Log("[pc] bench2ds engine %c (%s): %.3f ms/draw", engine ? 'B' : 'A',
+                                  top ? "upper" : "lower",
                                   ((t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6) / (a > 0 ? a : 1));
                 }
             } else if (strncmp(line, "quit", 4) == 0) {
