@@ -64,14 +64,20 @@ returns a dictionary containing `version`, `build_id`, `rom_sha1` (hex) and
 reader loads the whole pack; a 3DS implementation should stream payloads.
 
 The C reader (`3ds_port/pak/src/pak.c`) streams them, and keeps the parts
-of the pack it read last in memory: 64 blocks of 8 KB, the one used
-longest ago making way. The game reads many small pieces (a field's load is
-about 1900 reads, nine in ten under 256 bytes: archive headers, file
-tables, text), and each one a seek and a read of the SD card took about a
-millisecond on the 3DS: going between a route and a town, the game lost
-about a second. A read of two blocks or more goes straight to the file.
-The file is unbuffered: through stdio's buffer (newlib's, 1 KB), a block
-or a big read was a request to the SD card per kilobyte.
+of the pack it read last in memory: up to 512 blocks of 8 KB (4 MB), the
+one used longest ago making way. The game reads many small pieces (a
+field's load is about 1900 reads, nine in ten under 256 bytes: archive
+headers, file tables, text), and each one a seek and a read of the SD card
+took about a millisecond on the 3DS: going between a route and a town, the
+game lost about a second. The blocks a read needs that aren't in memory
+are read together, one request for each run of them, and kept whole (a
+read of more than 256 KB goes straight to the caller, only the blocks it
+covers whole kept). 4 MB holds a field's data through a battle: back in
+the field, nothing is read again (with 512 KB, about 750 KB was). The
+memory is taken as blocks are first used; if there isn't any for one, the
+cache stays at the blocks it has. The file is unbuffered: through stdio's
+buffer (newlib's, 1 KB), a block or a big read was a request to the SD card
+per kilobyte.
 
 ## Creating a pack locally
 

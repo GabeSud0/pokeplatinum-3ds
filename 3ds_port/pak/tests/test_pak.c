@@ -2,6 +2,7 @@
 #include "pak.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define CHECK(x) do { if (!(x)) { \
@@ -216,6 +217,63 @@ static int test_cache(void)
     return 0;
 }
 
+/* A pack bigger than the cache (4 MB): blocks pushed out and read again,
+ * big reads kept and small ones served from them, in every order; and
+ * reads bigger than the reading buffer (256 KB). */
+static int test_cache_eviction(void)
+{
+    enum { SIZE = 600 * 8192 + 123, BIG = 80 * 1024 + 5, HUGE = 300 * 1024 + 77 };
+    const size_t total = (92 + SIZE + 3) & ~(size_t)3;
+    unsigned char *data = (unsigned char *)calloc(1, total);
+    unsigned char *got = (unsigned char *)malloc(HUGE);
+    Pak *pak = NULL;
+    uint32_t size = 0, seed = 777;
+    size_t i, k, pass;
+    CHECK(data != NULL && got != NULL);
+    memcpy(data, "PLATPAK\0", 8);
+    u32(data + 8, 1);
+    memcpy(data + 12, build, strlen(build));
+    sha(data + 44, rev1);
+    u32(data + 64, 1);
+    u32(data + 68, 9); u32(data + 72, 80); u32(data + 76, SIZE);
+    for (i = 0; i < SIZE; ++i) data[80 + i] = (unsigned char)(i * 13 + (i >> 11) + (i >> 19));
+    CHECK(write_file(data, (80 + SIZE + 3) & ~(size_t)3));
+    CHECK(pak_open(path, build, &pak) == PAK_OK);
+    CHECK(pak_find(pak, 9, &size) == PAK_OK && size == SIZE);
+    /* Twice through the whole pack in small pieces (each pass pushing the
+     * first one's blocks out), then backwards in big ones. */
+    for (pass = 0; pass < 2; ++pass)
+        for (i = 0; i < SIZE; i += 3000) {
+            size_t len = SIZE - i < 3000 ? SIZE - i : 3000;
+            CHECK(pak_read(pak, 9, (uint32_t)i, got, len) == PAK_OK);
+            CHECK(memcmp(got, data + 80 + i, len) == 0);
+        }
+    for (i = SIZE; i > 0;) {
+        size_t len = i < BIG ? i : BIG;
+        i -= len;
+        CHECK(pak_read(pak, 9, (uint32_t)i, got, len) == PAK_OK);
+        CHECK(memcmp(got, data + 80 + i, len) == 0);
+    }
+    for (k = 0; k < 6000; ++k) {
+        size_t len, at;
+        seed = seed * 1103515245u + 12345u;
+        len = (k % 9 == 0) ? (seed >> 8) % BIG + 1 : (seed >> 8) % 900 + 1;
+        if (k % 97 == 0) len = HUGE - (seed >> 8) % 4096;
+        seed = seed * 1103515245u + 12345u;
+        at = (seed >> 3) % (SIZE - len + 1);
+        if (k % 5 == 0) at = (at / 8192) * 8192 + 8192 - len / 3;   /* across a block's end */
+        if (k % 11 == 0) at = SIZE - len;                            /* the last, short block */
+        if (at + len > SIZE) at = SIZE - len;
+        memset(got, 0x5A, len);
+        CHECK(pak_read(pak, 9, (uint32_t)at, got, len) == PAK_OK);
+        CHECK(memcmp(got, data + 80 + at, len) == 0);
+    }
+    pak_close(pak);
+    free(got);
+    free(data);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 3 || snprintf(path, sizeof(path), "%s/test-c.pak", argv[1]) >=
@@ -226,6 +284,7 @@ int main(int argc, char **argv)
     CHECK(test_c_fixtures() == 0);
     CHECK(test_python_writer(argv[2]) == 0);
     CHECK(test_cache() == 0);
+    CHECK(test_cache_eviction() == 0);
     remove(path);
     pak_close(NULL);
     puts("pak: synthetic C cases and Python-writer cross-check passed");

@@ -813,10 +813,106 @@ static char sStatus[64] = "Starting";
 /* Lines come from several threads (the game's, the geometry thread's). */
 static LightLock sLogLock;
 
+/* The log file is written by a thread of its own, from lines kept in
+ * memory: written and flushed on the thread that logged, a line cost the
+ * SD card's time (~10 ms), and the [perf] lines every two seconds held the
+ * game up 35 ms each time (log of 2026-10-15: a 50-59 ms frame at each, a
+ * stutter every two seconds). A crash, a stop and closing write what's
+ * waiting at once (sLogDirect). */
+#define LOG_BUF_BYTES (64 * 1024)
+static char sLogBuf[LOG_BUF_BYTES];
+static size_t sLogEnd, sLogUsed;        /* the ring: written up to sLogEnd, sLogUsed bytes waiting */
+static unsigned sLogDropped;            /* lines left out (the ring full) */
+static LightLock sLogFileLock;
+static LightEvent sLogWake;
+static Thread sLogThread;
+static volatile bool sLogThreadRunning;
+static volatile bool sLogDirect = true; /* (until the thread runs) */
+
+/* What's waiting, into the file. */
+static void LogWritePending(void)
+{
+    static char chunk[4096];
+    unsigned dropped;
+
+    if (sLog == NULL) {
+        return;
+    }
+    LightLock_Lock(&sLogFileLock);
+    for (;;) {
+        size_t n, start, first;
+
+        LightLock_Lock(&sLogLock);
+        n = sLogUsed < sizeof(chunk) ? sLogUsed : sizeof(chunk);
+        start = (sLogEnd + LOG_BUF_BYTES - sLogUsed) % LOG_BUF_BYTES;
+        first = n < LOG_BUF_BYTES - start ? n : LOG_BUF_BYTES - start;
+        memcpy(chunk, sLogBuf + start, first);
+        memcpy(chunk + first, sLogBuf, n - first);
+        sLogUsed -= n;
+        dropped = sLogDropped;
+        sLogDropped = 0;
+        LightLock_Unlock(&sLogLock);
+        if (n == 0) {
+            break;
+        }
+        fwrite(chunk, 1, n, sLog);
+    }
+    if (dropped) {
+        fprintf(sLog, "[log] %u lines left out (too many at once)\n", dropped);
+    }
+    fflush(sLog);
+    LightLock_Unlock(&sLogFileLock);
+}
+
+static void LogMain(void *unused)
+{
+    (void)unused;
+    while (__atomic_load_n(&sLogThreadRunning, __ATOMIC_ACQUIRE)) {
+        LightEvent_Wait(&sLogWake);
+        /* (lines come in bunches: written together) */
+        svcSleepThread(50000000LL);
+        LogWritePending();
+    }
+    threadExit(0);
+}
+
+/* Lowest priority: on core 1 if the program has a share of it, else on
+ * the game's core, where it runs while the game waits for its V-blank. */
+static void StartLogThread(void)
+{
+    LightLock_Init(&sLogFileLock);
+    LightEvent_Init(&sLogWake, RESET_ONESHOT);
+    __atomic_store_n(&sLogThreadRunning, true, __ATOMIC_RELEASE);
+    sLogThread = threadCreate(LogMain, NULL, 16 * 1024, 0x3F, 1, false);
+    if (sLogThread == NULL) {
+        sLogThread = threadCreate(LogMain, NULL, 16 * 1024, 0x3F, 0, false);
+    }
+    if (sLogThread == NULL) {
+        __atomic_store_n(&sLogThreadRunning, false, __ATOMIC_RELEASE);
+        return;
+    }
+    sLogDirect = false;
+}
+
+static void StopLogThread(void)
+{
+    sLogDirect = true;
+    if (sLogThread != NULL) {
+        __atomic_store_n(&sLogThreadRunning, false, __ATOMIC_RELEASE);
+        LightEvent_Signal(&sLogWake);
+        if (R_SUCCEEDED(threadJoin(sLogThread, 1000000000ULL))) {
+            threadFree(sLogThread);
+        }
+        sLogThread = NULL;
+    }
+    LogWritePending();
+}
+
 void NitroPort_Log(const char *fmt, ...)
 {
-    char line[640];
+    char line[640], entry[660];
     va_list args;
+    int len;
 
     va_start(args, fmt);
     vsnprintf(line, sizeof(line), fmt, args);
@@ -829,11 +925,30 @@ void NitroPort_Log(const char *fmt, ...)
         consoleSelect(&sBottom);
         printf("%s\n", line);
     }
-    if (sLog != NULL) {
-        fprintf(sLog, "[%6lu] %s\n", sFrame, line);
-        fflush(sLog);
+    len = snprintf(entry, sizeof(entry), "[%6lu] %s\n", sFrame, line);
+    if (len > (int)sizeof(entry) - 1) {
+        len = (int)sizeof(entry) - 1;
+    }
+    if (sLog != NULL && len > 0) {
+        if (sLogUsed + (size_t)len > LOG_BUF_BYTES) {
+            sLogDropped++;
+        } else {
+            size_t first = (size_t)len < LOG_BUF_BYTES - sLogEnd ? (size_t)len : LOG_BUF_BYTES - sLogEnd;
+
+            memcpy(sLogBuf + sLogEnd, entry, first);
+            memcpy(sLogBuf, entry + first, (size_t)len - first);
+            sLogEnd = (sLogEnd + (size_t)len) % LOG_BUF_BYTES;
+            sLogUsed += (size_t)len;
+        }
     }
     LightLock_Unlock(&sLogLock);
+    if (sLog != NULL) {
+        if (sLogDirect) {
+            LogWritePending();
+        } else {
+            LightEvent_Signal(&sLogWake);
+        }
+    }
 }
 
 static void DrawStatus(void)
@@ -904,6 +1019,8 @@ static void StopWithMessage(void) __attribute__((noreturn));
 
 static void StopWithMessage(void)
 {
+    sLogDirect = true;
+    LogWritePending();
     WaitForDrawing();
     ShowLog(true);
     if (sScreensDirty) {
@@ -945,6 +1062,7 @@ static void OnException(ERRF_ExceptionInfo *info, CpuRegisters *regs)
     };
     const char *kind = (unsigned)info->type < 4 ? kinds[info->type] : "exception";
 
+    sLogDirect = true;   /* (what's waiting, and these, into the file now) */
     NitroPort_Log("CRASH: %s at pc=%08lx (address %08lx)", kind,
                   (unsigned long)regs->pc, (unsigned long)info->far);
     NitroPort_Log("lr=%08lx sp=%08lx cpsr=%08lx", (unsigned long)regs->lr,
@@ -957,9 +1075,7 @@ static void OnException(ERRF_ExceptionInfo *info, CpuRegisters *regs)
         /* Closing anyway: no message to wait on (nobody sees it, and the
          * program would never close). */
         NitroPort_Log("(while closing: the program ends now)");
-        if (sLog != NULL) {
-            fflush(sLog);
-        }
+        LogWritePending();
         svcExitProcess();
     }
     StopWithMessage();
@@ -2018,6 +2134,7 @@ int main(int argc, char **argv)
     mkdir("sdmc:/3ds", 0777);
     mkdir(DATA_DIR, 0777);
     sLog = fopen(LOG_PATH, "w");
+    StartLogThread();
 
     error = Platinum_OpenPak(PAK_PATH, MANIFEST_PATH);
     if (error != NULL) {
@@ -2079,6 +2196,7 @@ int main(int argc, char **argv)
     }
 
     /* Closing: each step logged (a close that hangs shows where). */
+    StopLogThread();   /* (from here, each line into the file at once) */
     __atomic_store_n(&sQuitting, true, __ATOMIC_SEQ_CST);
     __atomic_store_n(&sSuspended, true, __ATOMIC_SEQ_CST);
     {
@@ -2097,6 +2215,7 @@ int main(int argc, char **argv)
                       sStopFailed ? "; a thread didn't stop: ending the program at once" : "");
     }
     if (sLog != NULL) {
+        LogWritePending();
         fclose(sLog);
         sLog = NULL;
     }

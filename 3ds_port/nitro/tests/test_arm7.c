@@ -211,6 +211,60 @@ static void test_backup(void)
     CHECK(remove(save_path) == 0);
 }
 
+/* The save kept in memory (port_card.c): flash programming ANDs into
+ * what's there, verify compares, and all of it is in the file (read again
+ * when the save is opened again). */
+static void test_backup_program_and_reopen(void)
+{
+    char save_path[] = "/tmp/platinum-arm7-XXXXXX";
+    static unsigned char first[512], mask[512], expect[512], read_back[512];
+    FILE *image;
+    u16 lock_id;
+    int descriptor, i;
+
+    descriptor = mkstemp(save_path);
+    CHECK(descriptor >= 0);
+    if (descriptor < 0) return;
+    close(descriptor);
+    remove(save_path);
+
+    NitroPort_SetSavePath(save_path);
+    lock_id = OS_GetLockID();
+    CARD_LockBackup(lock_id);
+    CHECK(CARD_IdentifyBackup(CARD_BACKUP_TYPE_FLASH_4MBITS));
+    for (i = 0; i < (int)sizeof(first); ++i) {
+        first[i] = (unsigned char)(i * 7 + 3);
+        mask[i] = (unsigned char)(0xF0 | (i & 0x0F));
+        expect[i] = (unsigned char)(first[i] & mask[i]);
+    }
+    CHECK(CARD_WriteBackup(0x7F00u, first, sizeof(first)));
+    CHECK(CARD_ProgramBackup(0x7F00u, mask, sizeof(mask)));
+    CHECK(CARD_ReadBackup(0x7F00u, read_back, sizeof(read_back)));
+    CHECK(memcmp(read_back, expect, sizeof(expect)) == 0);
+    CHECK(CARD_VerifyBackup(0x7F00u, expect, sizeof(expect)));
+    CHECK(!CARD_VerifyBackup(0x7F00u, first, sizeof(first)));
+    image = fopen(save_path, "rb");
+    CHECK(image != NULL);
+    if (image) {
+        CHECK(fseek(image, 0x7F00, SEEK_SET) == 0);
+        CHECK(fread(read_back, 1, sizeof(read_back), image) == sizeof(read_back));
+        CHECK(memcmp(read_back, expect, sizeof(expect)) == 0);
+        fclose(image);
+    }
+    /* opened again: what the file has */
+    NitroPort_SetSavePath(save_path);
+    memset(read_back, 0, sizeof(read_back));
+    CHECK(CARD_ReadBackup(0x7F00u, read_back, sizeof(read_back)));
+    CHECK(memcmp(read_back, expect, sizeof(expect)) == 0);
+    CHECK(CARD_EraseBackupSector(0, 0x10000u));
+    NitroPort_SetSavePath(save_path);
+    CHECK(CARD_ReadBackup(0x7F00u, read_back, sizeof(read_back)));
+    for (i = 0; i < (int)sizeof(read_back); ++i) CHECK(read_back[i] == 0xff);
+    CARD_UnlockBackup(lock_id);
+    NitroPort_SetSavePath(NULL);
+    CHECK(remove(save_path) == 0);
+}
+
 /* The sound service is silent, but must take every request: the library
  * reuses its 256 commands only once the "ARM7" has counted them finished.
  * 3,000 frames' worth of requests would run out without that. */
@@ -263,6 +317,7 @@ int main(void)
     (void)OS_EnableIrq();
     (void)OS_EnableInterrupts();
     test_backup();
+    test_backup_program_and_reopen();
     test_rtc();
     test_power();
     test_touch();
