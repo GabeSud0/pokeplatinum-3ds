@@ -88,8 +88,10 @@ it's scrolled. So:
   the other layers do (text printing, a cursor moving);
 - the picture shows **where you put it**. If the layer scrolls (a BG) or
   moves (a sprite group), the picture moves with it, but its bands show
-  only while the layer is where it was when you captured it (give or take
-  8 pixels). While the layer slides in, or waits beside the DS's screen
+  only while the layer is across from where it was when you captured it
+  (give or take 8 pixels sideways; up and down doesn't matter, so a layer
+  that bobs keeps its bands). While the layer slides in, or waits beside
+  the DS's screen
   where the DS hides it, nothing shows beyond the DS's edges, as on the
   DS: no Pokemon's hand showing before it comes in. For a layer that
   scrolls round all the time, tick "Scrolls round all the time": its bands

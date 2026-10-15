@@ -1444,10 +1444,13 @@ static void test_wide_art_places(void)
     WriteArt(dir, key, 0, 256, 0, art);
     CHECK(NitroPort_WideArtLoad(dir) == 1);
     NitroPort_Render2DSplit(0, wide, &split);
-    CHECK(wide[100 * 320 + 3] == GREY);                       /* 56 away: none */
-    G2_SetBG1Offset(0, 252);
+    CHECK(wide[100 * 320 + 3] == (STRIP & 0x7FFF));           /* 56 down: there (up and down doesn't matter) */
+    G2_SetBG1Offset(40, 256);
     NitroPort_Render2DSplit(0, wide, &split);
-    CHECK(wide[100 * 320 + 3] == (STRIP & 0x7FFF));           /* 4 away: there */
+    CHECK(wide[100 * 320 + 3] == GREY);                       /* 40 sideways: none */
+    G2_SetBG1Offset(4, 252);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[100 * 320 + 3] == (STRIP & 0x7FFF));           /* 4 sideways: there */
 
     /* only one picture, a screen or more away: not used (the port's own
      * band, here the plain edge going on) */
