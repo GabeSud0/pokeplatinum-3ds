@@ -89,6 +89,7 @@ typedef struct TexEntry {
     unsigned scale;    /* texels a DS texel: 1, or 2 (sTexMode 2) */
     int filtered;      /* sampled with the bilinear filter */
     int holes;         /* some texels not fully opaque (its shape needs the alpha test) */
+    int packed;        /* RGBA5551 (NitroPort_Gx3dTexIs5551, not filtered), else RGBA8 */
     C3D_Tex tex;
 } TexEntry;
 
@@ -332,6 +333,16 @@ static int any_holes(const uint32_t *t,size_t n)
 static int convert_texture(TexEntry *e,unsigned width,unsigned height)
 {
     uint32_t *lin,*out;
+    if(e->packed){
+        /* (decoded as RGBA8, then each texel's 16 bits: exact for these
+         * formats; half what the GPU reads in each of a frame's passes) */
+        out=scratch(&sTexTiled,&sTexTiledWords,(size_t)width*height);
+        if(!out)return 0;
+        NitroPort_Gx3dDecodeTextureTiled(&sBanks,e->param,e->palette,out);
+        e->holes=any_holes(out,(size_t)width*height);
+        NitroPort_Gx3dPackRGBA5551(out,(uint16_t*)e->tex.data,(size_t)width*height);
+        return 1;
+    }
     if(!e->filtered){
         NitroPort_Gx3dDecodeTextureTiled(&sBanks,e->param,e->palette,(uint32_t*)e->tex.data);
         e->holes=any_holes((const uint32_t*)e->tex.data,(size_t)width*height);
@@ -385,8 +396,10 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     sBoundTexKnown=0;   /* (a texture made again, maybe the bound one's entry) */
     if(!e){
         /* 2x2 texels a texel when sharp, if it fits (the PICA's 1024 and
-         * the cache), else as it is */
+         * the cache), else as it is; 16 bits a texel where that's exact */
         unsigned scale=(sTexMode==2 && width*2u<=1024u && height*2u<=1024u)?2u:1u;
+        int packed=sTexMode==0 && NitroPort_Gx3dTexIs5551(param);
+        if(packed)bytes/=2u;
         if(scale==2u){
             while(sTextureBytes+bytes*4u>TEX_CACHE_BYTES && evict_one()){}
             if(sTextureBytes+bytes*4u>TEX_CACHE_BYTES)scale=1u;
@@ -402,11 +415,12 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
         }
         e=free_slot;
         memset(e,0,sizeof(*e));
-        if(!C3D_TexInit(&e->tex,(u16)(width*scale),(u16)(height*scale),GPU_RGBA8)){
+        if(!C3D_TexInit(&e->tex,(u16)(width*scale),(u16)(height*scale),packed?GPU_RGBA5551:GPU_RGBA8)){
             if(scale==1u || !C3D_TexInit(&e->tex,(u16)width,(u16)height,GPU_RGBA8))return NULL;
             scale=1u;
         }
         e->scale=scale;
+        e->packed=packed;
         e->filtered=sTexMode!=0;
         if(e->filtered)C3D_TexSetFilter(&e->tex,GPU_LINEAR,GPU_LINEAR);
         else C3D_TexSetFilter(&e->tex,GPU_NEAREST,GPU_NEAREST);

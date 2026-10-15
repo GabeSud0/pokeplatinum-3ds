@@ -82,6 +82,20 @@ void NitroPort_Gx3dDecodeTextureTiledRect(const NitroGx3dTexBanks *banks, uint32
                                           uint32_t palette_base, uint32_t *tiled,
                                           unsigned s0, unsigned t0, unsigned s1, unsigned t1);
 
+/* Whether a format's texels are exactly RGBA5551: the DS's colours are 5
+ * bits a channel, and every format but A3I5 (1) and A5I3 (6) is opaque or
+ * fully see-through, texel by texel. Half the memory of RGBA8, and half
+ * what the GPU reads for each texel it draws. */
+static inline int NitroPort_Gx3dTexIs5551(uint32_t param)
+{
+    unsigned fmt = NitroPort_Gx3dTexFormat(param);
+    return fmt != 0 && fmt != 1 && fmt != 6;
+}
+/* RGBA8 texels (red in the top byte, as decoded) into the PICA's RGBA5551
+ * (red in bits 15-11, alpha bit 0), in the same order: each channel's top
+ * 5 bits, alpha set from 128 up. */
+void NitroPort_Gx3dPackRGBA5551(const uint32_t *rgba8, uint16_t *out, size_t count);
+
 /* A hash of everything the texture's texels come from: the texel data, the
  * 4x4 block descriptors (format 5), the palette entries it can use, and the
  * bank mapping. A converted texture is reused while this stays the same. */

@@ -546,3 +546,13 @@ uint32_t NitroPort_Gx3dTextureHash(const NitroGx3dTexBanks *banks, uint32_t para
     }
     return hash;
 }
+
+void NitroPort_Gx3dPackRGBA5551(const uint32_t *rgba8, uint16_t *out, size_t count)
+{
+    size_t i;
+    for (i = 0; i < count; i++) {
+        uint32_t w = rgba8[i];
+        out[i] = (uint16_t)(((w >> 16) & 0xF800u) | ((w >> 13) & 0x07C0u) | ((w >> 10) & 0x003Eu) |
+                            ((w >> 7) & 1u));
+    }
+}

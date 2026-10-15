@@ -666,7 +666,23 @@ static void test_texture_decode(void)
         CHECK(mismatch==0);
         CHECK(tileMismatch==0);
         CHECK(memcmp(tiled,direct,sizeof(tiled))==0);
+        /* RGBA5551, for the formats it's exact for: the sampler's colour
+         * and alpha (0 or 31 only), texel for texel. */
+        if(NitroPort_Gx3dTexIs5551(param)){
+            static uint16_t packed[64*32];
+            unsigned bad5551=0;
+            NitroPort_Gx3dPackRGBA5551(linear,packed,64*32);
+            for(t=0;t<32;t++)for(s=0;s<64;s++){
+                NitroGx3dTexel texel=NitroPort_Gx3dSampleTexel(&banks,param,pal,(int)s,(int)t);
+                unsigned want=((texel.rgb&31u)<<11)|(((texel.rgb>>5)&31u)<<6)|(((texel.rgb>>10)&31u)<<1)|
+                              (texel.alpha==31?1u:0u);
+                if(packed[t*64+s]!=want || (texel.alpha!=0 && texel.alpha!=31))bad5551++;
+            }
+            CHECK(bad5551==0);
+        }
     }
+    CHECK(NitroPort_Gx3dTexIs5551(tex_param(5,8,8,0,0)) && !NitroPort_Gx3dTexIs5551(tex_param(1,8,8,0,0)) &&
+          !NitroPort_Gx3dTexIs5551(tex_param(6,8,8,0,0)) && !NitroPort_Gx3dTexIs5551(0));
     /* Colour 0 is transparent only with bit 29 (paletted formats 2-4). */
     {
         uint32_t param=tex_param(4,8,8,0x800,0);
