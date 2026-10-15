@@ -28,11 +28,11 @@ What it does:
 - **The pixels as they are.** By default each DS pixel becomes 2x2 texels
   and the GPU's bilinear filter scales the rest of the way: every pixel the
   same size, only its borders a texel soft (no blur, no uneven pixels).
-  Scale2x and the others are settings. The 3D's textures the same way
-  (each texel 2x2, then bilinear; `nearest`: as the DS, `smooth`:
-  bilinear): drawn straight at 1.25 times with the nearest texel, a texel
-  was one pixel or two, and which ones changed as the 3D moved, so the
-  opening's flyover shimmered against its fog, which is 2D.
+  Scale2x and the others are settings. The 3D's textures stay the DS's
+  (nearest texel) unless `filter3d` says otherwise: made like the 2D (each
+  texel 2x2, then bilinear) the GPU took two to three times as long, the
+  overworld lagged, and polygons' edges showed lines on the opening's
+  mountains (October 2026).
 - **Even pacing.** Each 3D scene is shown a fixed number of V-blanks after
   the game made it, with the 2D the DS would have shown it with (see
   "Timing").
@@ -62,9 +62,12 @@ pixel, into a depth/stencil buffer of that direction's own (cleared by a
 memory fill ahead of the frame; so it holds what's visible at each pixel's
 neighbour), then in place with that buffer as the depth test: where
 they're nearer than the neighbour and the neighbour's ID differs, they get
-their edge colour. Textured polygons keep their texture in those passes:
-a tree's cut-out texels are no part of its shape (drawn plain, the trees
-had their rectangles outlined).
+their edge colour. Polygons whose texture has see-through texels keep it
+in those passes: a tree's cut-out texels are no part of its shape (drawn
+plain, the trees had their rectangles outlined). The others are drawn
+there without their texture (only their shape counts), and a texture is
+bound only when it changes: citro3d clears the GPU's texture cache with
+every bind.
 
 Fog: the DS fogs a pixel by its depth, through a 32-entry density table
 starting at FOG_OFFSET, each entry 0x400 >> FOG_SHIFT depth units on
@@ -73,7 +76,9 @@ each scene's depth is put back into the DS's units (the vertex depth is
 the DS's z or w, normalised per scene, linear) and the table is worked out
 from the DS's (`setup_fog`, `fog_density`). Polygons fog where their
 attribute's fog bit is set; the rear plane where the clear colour's is.
-The intro's forest uses it (white fog, a linear table).
+The intro's forest uses it (white fog, a linear table). The table goes
+to the GPU once per scene's draw (citro3d sends all 128 entries whenever
+it's bound; it was bound for each batch).
 
 The vertex program (`gx3d_passthrough.v.pica`) does the view (where the
 DS's screen goes on the 3DS's turned framebuffer) and the stereoscopic
@@ -159,6 +164,14 @@ game's own even pace (every second V-blank in the field), not whenever a
 scene happens to be done. `lag` starts at 2 and adapts (1 to 4): up when a
 frame would be late, back down after ten seconds with room to spare.
 
+A new scene is drawn once engine A's drawer is done with the 2D of the
+frame after it (or it's known there's none: the game hands the drawers a
+frame every other V-blank, or the drawer was busy and left that one out;
+at most a few V-blanks). Drawn as soon as it came, it went out with the
+2D before and was drawn again when that came: the 3D drawn twice, and if
+the 2D was late, a frame of the wrong picture (the title's Giratina showed,
+bright, for a frame before its fade in from black).
+
 The drawing threads draw from the display state as it was when the game
 handed them the frame: its registers, palettes and OAM are copied then
 (`NitroPort_Render2DTakeState`, a few KB), so the game's next frame (its
@@ -200,6 +213,7 @@ frames waiting isn't drawn again until one has shown.
 | `stereo off` / `stereo 0.03` | no depth from the slider / its strength at full slider, in screen widths (default 0.02) |
 | `convergence 400` | the distance (the DS's w) that's at the screen's depth, instead of each scene's middle |
 | `edges off` | no outlines (edge marking) |
+| `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
 | `flip on` | the 2D layers upside down (if a GPU's texture rows come out the other way round) |
 
 The log says what's on (`[compose] screens drawn by the GPU: ...`) and,

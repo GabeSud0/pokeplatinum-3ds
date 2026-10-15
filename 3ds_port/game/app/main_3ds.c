@@ -223,7 +223,7 @@ static volatile bool sSuspended;
 /* remaster.txt: a setting a line, "name value": remaster on/off, wide
  * on/off, filter sharp/nearest/smooth/scale2x (on: sharp, off: nearest),
  * stereo on/off/<strength, e.g. 0.02>, convergence <distance> (0: from
- * each scene), edges on/off, flip on/off. */
+ * each scene), edges on/off, flip on/off, filter3d nearest/smooth/sharp. */
 static void ReadRemasterConfig(bool new3ds)
 {
     FILE *f = fopen(REMASTER_PATH, "r");
@@ -238,6 +238,13 @@ static void ReadRemasterConfig(bool new3ds)
     sCompose.convergence = 0.0f;
     sCompose.edges = 1;
     sCompose.flipV = 0;
+    /* The 3D's textures as the DS's, nearest: made like the 2D (each texel
+     * 2x2, then bilinear) the GPU took two to three times as long (the
+     * overworld 30-70 ms a frame), the cache of converted textures (four
+     * times the memory) kept throwing out the scene's own, and polygons'
+     * edges showed lines where the filter took in texels beside them (the
+     * opening's mountains). 2026-10-15. */
+    sCompose.filter3d = 0;
     if (f == NULL) {
         return;
     }
@@ -277,6 +284,9 @@ static void ReadRemasterConfig(bool new3ds)
                 sCompose.edges = !off;
             } else if (strcmp(name, "flip") == 0) {
                 sCompose.flipV = on;
+            } else if (strcmp(name, "filter3d") == 0) {
+                sCompose.filter3d = strcmp(value, "sharp") == 0 ? 2
+                                    : (strcmp(value, "smooth") == 0 || strcmp(value, "bilinear") == 0) ? 1 : 0;
             }
         }
     }
@@ -1208,6 +1218,13 @@ static void DrawerMain(void *arg)
         if (drawA) {
             ShowScreen(0, d->aOnTop);
         }
+        if (sRemaster && (d->screens & ENGINE_A)) {
+            /* (a new 3D scene may be waiting for this frame's 2D) */
+            NitroPort_Compose2DDone(d->stamp);
+            if (__atomic_load_n(&sGpuWakeReady, __ATOMIC_ACQUIRE)) {
+                LightEvent_Signal(&sGpuWake);
+            }
+        }
         if (drawB) {
             ShowScreen(1, d->aOnTop);
         }
@@ -1410,6 +1427,9 @@ static void DrawFrame(bool new3dOnly)
     if (__atomic_load_n(&sSuspended, __ATOMIC_SEQ_CST)) {
         return;   /* (the HOME menu has the screens) */
     }
+    if (sRemaster) {
+        NitroPort_Compose2DOffered(NitroPort_ComposeVBlanks());
+    }
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
 
@@ -1437,6 +1457,7 @@ static void DrawFrame(bool new3dOnly)
             if (sRemaster) {
                 if (d->screens & ENGINE_A) {
                     NitroPort_Render2DTakeState(0);
+                    NitroPort_Compose2DHanded(d->stamp);
                 }
                 if (d->screens & ENGINE_B) {
                     NitroPort_Render2DTakeState(1);

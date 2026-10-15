@@ -101,6 +101,7 @@ typedef struct ComposeConfig {
     float convergence;       /* 0: worked out from each scene */
     int edges;               /* edge marking (the game's outlines) on the GPU */
     int flipV;               /* (if the 2D comes out upside down) */
+    int filter3d;            /* the 3D's textures: 0 nearest (the DS's), 1 bilinear, 2 sharp (2x2, bilinear) */
 } ComposeConfig;
 
 int NitroPort_ComposeInit(const ComposeConfig *config);
@@ -152,5 +153,11 @@ void NitroPort_ComposeVBlank(void);
  * program is closing); the frames waiting are dropped. */
 void NitroPort_ComposeHold(int on);
 u32 NitroPort_ComposeVBlanks(void);
+/* Engine A's 2D (the 3D's screen), for pairing a new scene with it: the
+ * game offered a frame of it (stamp: the V-blank count), the drawer was
+ * handed one, the drawer is done with one (published, or unchanged). */
+void NitroPort_Compose2DOffered(u32 stamp);
+void NitroPort_Compose2DHanded(u32 stamp);
+void NitroPort_Compose2DDone(u32 stamp);
 #endif
 #endif

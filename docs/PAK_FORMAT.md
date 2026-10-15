@@ -63,6 +63,14 @@ returns a dictionary containing `version`, `build_id`, `rom_sha1` (hex) and
 `files` (a mapping of original NitroFS integer IDs to bytes). This convenience
 reader loads the whole pack; a 3DS implementation should stream payloads.
 
+The C reader (`3ds_port/pak/src/pak.c`) streams them, and keeps the parts
+of the pack it read last in memory: 64 blocks of 8 KB, the one used
+longest ago making way. The game reads many small pieces (a field's load is
+about 1900 reads, nine in ten under 256 bytes: archive headers, file
+tables, text), and each one a seek and a read of the SD card took about a
+millisecond on the 3DS: going between a route and a town, the game lost
+about a second. A read of two blocks or more goes straight to the file.
+
 ## Creating a pack locally
 
 From the repository root, first verify and extract **your own** supported ROM:

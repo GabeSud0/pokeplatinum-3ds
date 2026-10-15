@@ -176,6 +176,46 @@ static int test_python_writer(const char *python_pak)
     return 0;
 }
 
+/* A pack bigger than the read cache (40 blocks of 16 KB in one file):
+ * pieces of every size and place read back the same, again and again,
+ * small ones through the cache, big ones straight from the file. */
+static int test_cache(void)
+{
+    enum { SIZE = 40 * 16384 + 123 };
+    static unsigned char data[92 + SIZE + 3], got[3 * 16384 + 7];
+    Pak *pak = NULL;
+    uint32_t size = 0, seed = 12345;
+    size_t i, k;
+    memcpy(data, "PLATPAK\0", 8);
+    u32(data + 8, 1);
+    memcpy(data + 12, build, strlen(build));
+    sha(data + 44, rev1);
+    u32(data + 64, 2);
+    u32(data + 68, 2); u32(data + 72, 92); u32(data + 76, SIZE);
+    for (i = 0; i < SIZE; ++i) data[92 + i] = (unsigned char)(i * 7 + (i >> 9));
+    /* (the second file, empty, right after the first's padding) */
+    u32(data + 80, 5); u32(data + 84, (uint32_t)((92 + SIZE + 3) & ~3u)); u32(data + 88, 0);
+    CHECK(write_file(data, (92 + SIZE + 3) & ~3u));
+    CHECK(pak_open(path, build, &pak) == PAK_OK);
+    CHECK(pak_find(pak, 2, &size) == PAK_OK && size == SIZE);
+    for (k = 0; k < 3000; ++k) {
+        size_t len, at;
+        seed = seed * 1103515245u + 12345u;
+        len = (k % 50 == 0) ? (seed >> 8) % sizeof(got) : (seed >> 8) % 600 + 1;
+        seed = seed * 1103515245u + 12345u;
+        at = (seed >> 4) % (SIZE - len + 1);
+        if (k % 7 == 0) at = (at / 16384) * 16384 + 16384 - len / 2;   /* across a block's end */
+        if (at + len > SIZE) at = SIZE - len;
+        memset(got, 0xAA, sizeof(got));
+        CHECK(pak_read(pak, 2, (uint32_t)at, got, len) == PAK_OK);
+        CHECK(memcmp(got, data + 92 + at, len) == 0);
+    }
+    CHECK(pak_read(pak, 2, SIZE - 1, got, 1) == PAK_OK && got[0] == data[92 + SIZE - 1]);
+    CHECK(pak_read(pak, 2, SIZE - 1, got, 2) == PAK_ERR_RANGE);
+    pak_close(pak);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 3 || snprintf(path, sizeof(path), "%s/test-c.pak", argv[1]) >=
@@ -185,6 +225,7 @@ int main(int argc, char **argv)
     }
     CHECK(test_c_fixtures() == 0);
     CHECK(test_python_writer(argv[2]) == 0);
+    CHECK(test_cache() == 0);
     remove(path);
     pak_close(NULL);
     puts("pak: synthetic C cases and Python-writer cross-check passed");

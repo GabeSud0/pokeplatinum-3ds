@@ -235,6 +235,73 @@ u32 NitroPort_ComposeVBlanks(void)
     return __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
 }
 
+/* Engine A's 2D frames (V-blank counts): the last two the game offered
+ * its drawer, the last one it was handed (it may have been busy), and the
+ * last one it was done with. */
+static volatile u32 s2DOffered, s2DOfferedBefore, s2DHanded, s2DDone;
+static volatile int s2DKnown;
+
+void NitroPort_Compose2DOffered(u32 stamp)
+{
+    if (__atomic_load_n(&s2DOffered, __ATOMIC_RELAXED) != stamp) {
+        __atomic_store_n(&s2DOfferedBefore, __atomic_load_n(&s2DOffered, __ATOMIC_RELAXED), __ATOMIC_RELAXED);
+    }
+    __atomic_store_n(&s2DOffered, stamp, __ATOMIC_RELEASE);
+}
+
+void NitroPort_Compose2DHanded(u32 stamp)
+{
+    __atomic_store_n(&s2DHanded, stamp, __ATOMIC_RELEASE);
+    __atomic_store_n(&s2DKnown, 1, __ATOMIC_RELEASE);
+}
+
+void NitroPort_Compose2DDone(u32 stamp)
+{
+    __atomic_store_n(&s2DDone, stamp, __ATOMIC_RELEASE);
+}
+
+/* Whether a new scene can be drawn yet: the DS shows it with the 2D of the
+ * frame after it (stamp + 1). Drawn before engine A's drawer has that
+ * frame, it went out with the 2D before and was drawn again when that came:
+ * the 3D drawn twice, and if the 2D was late, a frame with the wrong
+ * picture or brightness on the screen (2026-10-15: the title's Giratina
+ * showed, bright, before its fade in from black). So it waits for that
+ * frame of 2D: for the drawer to be done with it, or to know there's none
+ * (the game offers a frame every other V-blank, or the drawer was busy and
+ * left it out), and never longer than a few V-blanks. */
+static int paired_2d_ready(u32 sceneStamp)
+{
+    u32 want = sceneStamp + 1u;
+    u32 now = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
+    u32 done, handed, offered, before, every;
+
+    if (!__atomic_load_n(&s2DKnown, __ATOMIC_ACQUIRE)) {
+        return 1;
+    }
+    done = __atomic_load_n(&s2DDone, __ATOMIC_ACQUIRE);
+    handed = __atomic_load_n(&s2DHanded, __ATOMIC_ACQUIRE);
+    offered = __atomic_load_n(&s2DOffered, __ATOMIC_ACQUIRE);
+    before = __atomic_load_n(&s2DOfferedBefore, __ATOMIC_ACQUIRE);
+    if ((int32_t)(done - want) >= 0) {
+        return 1;   /* done with that frame (or a later one) */
+    }
+    if ((int32_t)(now - (want + (u32)LAG_MAX + 1u)) >= 0) {
+        return 1;   /* (no longer than this) */
+    }
+    if (handed != done && (int32_t)(handed - want) <= 0) {
+        return 0;   /* drawing a frame up to that one: its 2D is on the way */
+    }
+    if ((int32_t)(offered - want) >= 0) {
+        return 1;   /* that frame was offered, and left out (the drawer was busy) */
+    }
+    every = offered - before;
+    if (every >= 2u && every <= 4u && (int32_t)(offered + every - want) > 0) {
+        return 1;   /* the game offers a frame every other V-blank: none then */
+    }
+    /* None offered for it yet: until the V-blank after its own. */
+    return (int32_t)(now - (want + 1u)) >= 0;
+}
+
 static void make_texture(C3D_Tex *tex, void *data, GPU_TEXCOLOR fmt, int w, int h, int linear,
                          GPU_TEXTURE_WRAP_PARAM wrap)
 {
@@ -330,12 +397,9 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     int s, i, c, e;
 
     sConfig = *config;
-    /* The 3D's textures as the 2D is drawn: drawn 1.25 times the DS's
-     * size with the nearest texel, a texel was one pixel or two, and which
-     * ones changed as the picture moved (the opening's flyover shimmered
-     * against its fog). */
-    NitroPort_PicaTextureFilter(config->filter == COMPOSE_FILTER_NEAREST ? 0
-                                : config->filter == COMPOSE_FILTER_SMOOTH ? 1 : 2);
+    /* The 3D's textures: nearest, as the DS's, unless remaster.txt says
+     * otherwise (filter3d: see main_3ds.c). */
+    NitroPort_PicaTextureFilter(config->filter3d);
     memset(sScreens, 0, sizeof(sScreens));
     LightLock_Init(&sSetLock);
     LightLock_Init(&sPresentLock);
@@ -444,6 +508,15 @@ void NitroPort_ComposeExit(void)
     sReady = 0;
     sHeld = 1;
     LightLock_Unlock(&sPresentLock);
+    /* The frame begun after the last one drawn (to wait for the GPU) ends
+     * first: citro3d stops the program (svcBreak) if a render target is
+     * deleted inside a frame. Closing from HOME crashed the console there
+     * (2026-10-15: a prefetch abort in svcBreak, from
+     * C3D_RenderTargetDelete). */
+    if (sInFrame) {
+        C3D_FrameEnd(0);
+        sInFrame = 0;
+    }
     free_all();
 }
 
@@ -896,6 +969,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         need[s] = forced || set->seq != scr->shownSeq || (has3d && sceneSerial != scr->shownScene) ||
                   (s == 0 && has3d && (stereoNow != scr->shownStereo ||
                                         (stereoNow && slider != scr->shownSlider)));
+        /* A new scene: once the 2D it's shown with is here. */
+        if (need[s] && has3d && !forced && sceneSerial != scr->shownScene &&
+            !paired_2d_ready(scene->stamp)) {
+            need[s] = 0;
+        }
         /* Not without a framebuffer to draw into (two frames waiting for
          * their V-blanks already): the next V-blank frees one. */
         if (need[s]) {
