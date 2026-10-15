@@ -87,19 +87,27 @@ it's scrolled. So:
 
 - it shows whenever that layer shows, on any visit to that screen, whatever
   the other layers do (text printing, a cursor moving);
-- the picture shows **where you put it**. If the layer scrolls (a BG) or
-  moves (a sprite group), the picture moves with it, but its bands show
-  only while the layer is across from where it was when you captured it
-  (give or take 8 pixels sideways; up and down doesn't matter, so a layer
-  that bobs keeps its bands). While the layer slides in, or waits beside
-  the DS's screen
-  where the DS hides it, nothing shows beyond the DS's edges, as on the
-  DS: no Pokemon's hand showing before it comes in. For a layer that
-  scrolls round all the time, tick "Scrolls round all the time": its bands
-  then move with it everywhere, and past the picture's edge they go round
-  as the layer's map does;
-- what you drew in the bands never shows over the DS's own part of the
-  screen: there, when the layer has moved, the DS's picture shows;
+- the picture shows **where you put it**, and moves with the layer when
+  the layer scrolls (a BG) or moves (a sprite group):
+  - **the side bands only** (`<key>_<h>_<v>.png`): they show while the
+    layer is across from where it was when you captured it (give or take
+    8 pixels sideways; up and down doesn't matter, so a layer that bobs
+    keeps its bands), else nothing beyond the DS's edges;
+  - **the whole layer** (`_full`): away from its place the whole layer is
+    the picture, moved with it, so what slides in (the opening's Pokemon)
+    is whole, never cut at the DS's edge. The slide is made as wide as the
+    screen: in the last 32 pixels before something is whole on the DS's
+    screen it moves twice as far, so it comes in from the wide screen's
+    edge, and what waits beyond the DS's edge to come in waits beyond the
+    wide screen's too (no Pokemon's hand showing before it comes in).
+    Past the picture's own edges the layer's map goes on. If the layer
+    has a picture made further along, the one whose own edge wouldn't come
+    into view is used (the opening's Torterra, cut by the wide screen's
+    edge in both of his);
+  - **scrolls round all the time** (`_loop`, the editor's "Scrolls round
+    all the time"): its bands move with it everywhere, and past the
+    picture's edge they go round as the layer's map does (the opening's
+    blue strip);
 - one layer can have **several pictures**, one for each place it was
   captured at: the opening's sky and its blue strip are the same layer (one
   tall map, the sky above, the strip below), each with its own picture.
@@ -115,7 +123,9 @@ A sprite group's picture goes where the group has no sprite, at the
 group's priority (so the layers in front of the sprites stay in front).
 
 **Placing a picture.** The port's own rules only carry a plain edge
-colour on. Where a picture reaches the DS's edge, draw the layer as it
+colour on, and on the screens made of pictures (the opening, the title)
+only where the DS's 32 outermost pixels of a line are one colour: nothing
+of a picture is drawn out. Where a picture reaches the DS's edge, draw the layer as it
 should be: move it (Move tool) so that what the DS cut at its edge is cut
 at the wide screen's edge, and draw the strips on to the edges. Saved with
 the middle changed, the whole layer is yours, at the place you put it.

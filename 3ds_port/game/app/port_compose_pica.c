@@ -330,6 +330,12 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     int s, i, c, e;
 
     sConfig = *config;
+    /* The 3D's textures as the 2D is drawn: drawn 1.25 times the DS's
+     * size with the nearest texel, a texel was one pixel or two, and which
+     * ones changed as the picture moved (the opening's flyover shimmered
+     * against its fog). */
+    NitroPort_PicaTextureFilter(config->filter == COMPOSE_FILTER_NEAREST ? 0
+                                : config->filter == COMPOSE_FILTER_SMOOTH ? 1 : 2);
     memset(sScreens, 0, sizeof(sScreens));
     LightLock_Init(&sSetLock);
     LightLock_Init(&sPresentLock);

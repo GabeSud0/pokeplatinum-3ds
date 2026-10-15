@@ -51,6 +51,9 @@ typedef struct Picture {
     uint64_t key;
     int16_t hofs, vofs;
     uint8_t full, bad;
+    /* (once read) its opaque pixels' columns: left .. right - 1 */
+    uint8_t extentKnown;
+    int16_t left, right;
     char name[48];
 } Picture;
 
@@ -58,6 +61,7 @@ typedef struct Slot {
     uint64_t key;          /* 0: empty */
     int16_t hofs, vofs;    /* (with key: which of its pictures) */
     uint8_t full;
+    int16_t left, right;   /* its opaque pixels' columns: left .. right - 1 */
     uint32_t lastUse;
     uint16_t *pixels;      /* allocated once */
 } Slot;
@@ -179,6 +183,7 @@ int NitroPort_WideArtLoad(const char *dir)
             p->vofs = (int16_t)v;
             p->full = (uint8_t)f;
             p->bad = 0;
+            p->extentKnown = 0;
             snprintf(p->name, sizeof(p->name), "%s", ent->d_name);
             n++;
         }
@@ -311,6 +316,9 @@ static const uint16_t *picture_pixels(int index)
             sSlots[i].full == pic.full && sSlots[i].pixels != NULL) {
             sSlots[i].lastUse = ++sUse;
             pixels = sSlots[i].pixels;
+            sPictures[index].left = sSlots[i].left;
+            sPictures[index].right = sSlots[i].right;
+            sPictures[index].extentKnown = 1;
             unlock();
             return pixels;
         }
@@ -356,6 +364,26 @@ static const uint16_t *picture_pixels(int index)
     sSlots[oldest].full = pic.full;
     sSlots[oldest].lastUse = ++sUse;
     {
+        const uint16_t *px = sSlots[oldest].pixels;
+        int x, y, left = NITRO_WIDE_ART_W, right = 0;
+
+        for (y = 0; y < NITRO_WIDE_ART_H; y++) {
+            for (x = 0; x < NITRO_WIDE_ART_W; x++) {
+                if (px[y * NITRO_WIDE_ART_W + x]) {
+                    if (x < left) left = x;
+                    if (x >= right) right = x + 1;
+                }
+            }
+        }
+        sSlots[oldest].left = (int16_t)left;
+        sSlots[oldest].right = (int16_t)right;
+        if (index < sCount && strcmp(sPictures[index].name, pic.name) == 0) {
+            sPictures[index].left = (int16_t)left;
+            sPictures[index].right = (int16_t)right;
+            sPictures[index].extentKnown = 1;
+        }
+    }
+    {
         const uint16_t *result = sSlots[oldest].pixels;
 
         unlock();
@@ -383,6 +411,62 @@ const uint16_t *NitroPort_WideArtFind(uint64_t key, int *hofs, int *vofs, int *f
     return picture_pixels(index);
 }
 
+int NitroPort_WideArtExtent(const uint16_t *pixels, int *left, int *right)
+{
+    int i, found = 0;
+
+    if (pixels == NULL) {
+        return 0;
+    }
+    lock();
+    for (i = 0; i < CACHE_SLOTS; i++) {
+        if (sSlots[i].key != 0 && sSlots[i].pixels == pixels) {
+            *left = sSlots[i].left;
+            *right = sSlots[i].right;
+            found = 1;
+            break;
+        }
+    }
+    unlock();
+    return found;
+}
+
+/* The last ART_ENTRY pixels of the DS's slide (before what's coming in is
+ * whole on the DS's screen) cover twice that on the wide screen. */
+#define ART_DS0 ((NITRO_WIDE_ART_W - 256) / 2)
+#define ART_DS1 (ART_DS0 + 256)
+#define ART_ENTRY 32
+
+/* d (>= 0: how far the picture's left edge is from where it comes in, the
+ * DS's edge at ds, the wide screen's at wide: ds < wide) widened. */
+static int widen(int d, int ds, int wide)
+{
+    int d0 = ds - ART_ENTRY;
+
+    if (d0 < 0) {
+        d0 = 0;
+    }
+    if (d <= d0) {
+        return d;
+    }
+    if (d >= ds) {
+        return d + (wide - ds);
+    }
+    return d0 + ((d - d0) * (wide - d0) + (ds - d0) / 2) / (ds - d0);
+}
+
+int NitroPort_WideArtMovedOffset(int moved, int left, int right)
+{
+    if (moved > 0 && left < ART_DS1 && left < right) {
+        /* coming in from (or going out to) the right */
+        return widen(moved, ART_DS1 - left, NITRO_WIDE_ART_W - left);
+    }
+    if (moved < 0 && right > ART_DS0 && left < right) {
+        return -widen(-moved, right - ART_DS0, right);
+    }
+    return moved;
+}
+
 /* a - b round a circle of period, -period/2 .. period/2 - 1 */
 static int wrapped(int a, int b, int period)
 {
@@ -391,33 +475,80 @@ static int wrapped(int a, int b, int period)
     return d >= period / 2 ? d - period : d;
 }
 
+/* (a whole picture away from its place, moved with its layer) Whether the
+ * picture's own edge would show: moved left (dx > 0, the layer scrolled
+ * right) its right edge comes in, moved right its left edge; it shows if
+ * the picture has something there (what it shows went on past it: the
+ * opening's Torterra, cut at the wide screen's edge). Another of its
+ * pictures, made further along, has that part. */
+#define REST 8
+static int edge_shows(const Picture *p, int dx)
+{
+    if (!(p->full & NITRO_WIDE_ART_FULL) || (p->full & NITRO_WIDE_ART_LOOP) || !p->extentKnown ||
+        (dx >= -REST && dx <= REST)) {
+        return 0;
+    }
+    return dx > 0 ? p->right >= NITRO_WIDE_ART_W : p->left <= 0;
+}
+
+#define MAX_NEAR 16
 const uint16_t *NitroPort_WideArtFindNear(uint64_t key, int curH, int curV, int periodH, int periodV, int maxH,
                                           int maxV, int *hofs, int *vofs, int *full)
 {
-    int i, best = -1, bestDist = 0;
+    int i, n = 0, k, best = -1, bestDist = 0, bestShows = 0;
+    int cand[MAX_NEAR], candDx[MAX_NEAR], candDist[MAX_NEAR];
 
     if (key == 0 || NitroPort_WideArtCount() == 0) {
         return NULL;
     }
     lock();
     i = first_picture(key);
-    for (; i >= 0 && i < sCount && sPictures[i].key == key; i++) {
+    for (; i >= 0 && i < sCount && sPictures[i].key == key && n < MAX_NEAR; i++) {
         int dx = wrapped(curH, sPictures[i].hofs, periodH), dy = wrapped(curV, sPictures[i].vofs, periodV);
-        int dist = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
 
         if (sPictures[i].bad || (maxH > 0 && (dx >= maxH || dx <= -maxH)) ||
             (maxV > 0 && (dy >= maxV || dy <= -maxV))) {
             continue;
         }
-        /* (of two at the same place, the whole picture: sorted after) */
-        if (best < 0 || dist <= bestDist) {
-            if (best >= 0 && dist == bestDist && (sPictures[i].hofs != sPictures[best].hofs ||
-                                                  sPictures[i].vofs != sPictures[best].vofs)) {
+        cand[n] = i;
+        candDx[n] = dx;
+        candDist[n] = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+        n++;
+    }
+    /* (a BG's, with more than one to choose from: their edges known, each
+     * read once) */
+    if (maxH > 0 && n > 1) {
+        for (k = 0; k < n; k++) {
+            if (!sPictures[cand[k]].extentKnown && (sPictures[cand[k]].full & NITRO_WIDE_ART_FULL)) {
+                picture_pixels(cand[k]);   /* (unlocks) */
+                lock();
+                if (cand[k] >= sCount || sPictures[cand[k]].key != key) {
+                    unlock();
+                    return NULL;           /* (loaded again meanwhile) */
+                }
+            }
+        }
+    }
+    for (k = 0; k < n; k++) {
+        const Picture *p = &sPictures[cand[k]];
+        int shows = maxH > 0 && n > 1 && edge_shows(p, candDx[k]), dist = candDist[k];
+
+        /* the nearest whose own edge doesn't show; of two at the same
+         * place, the whole picture (sorted after) */
+        if (best >= 0) {
+            if (shows != bestShows) {
+                if (shows) {
+                    continue;
+                }
+            } else if (dist > bestDist) {
+                continue;
+            } else if (dist == bestDist && (p->hofs != sPictures[best].hofs || p->vofs != sPictures[best].vofs)) {
                 continue;
             }
-            best = i;
-            bestDist = dist;
         }
+        best = cand[k];
+        bestDist = dist;
+        bestShows = shows;
     }
     if (best < 0) {
         unlock();

@@ -56,6 +56,22 @@ void NitroPort_Gx3dDecodeTexture(const NitroGx3dTexBanks *banks, uint32_t param,
 void NitroPort_Gx3dTileRGBA8(const uint32_t *linear, unsigned width, unsigned height,
                              uint32_t *tiled);
 
+/* A decoded texture (width x height, as NitroPort_Gx3dDecodeTexture gives
+ * it) for the GPU's bilinear filter, into width * scale x height * scale
+ * words: each texel scale x scale texels (scale 2: the DS's texels sharp,
+ * their borders a texel soft, as the remaster's 2D is drawn), and each
+ * transparent texel coloured as an opaque one beside it (alpha still 0),
+ * so the filter doesn't darken a cut-out's edge. */
+void NitroPort_Gx3dFilterTexels(const uint32_t *rgba8, unsigned width, unsigned height, unsigned scale,
+                                uint32_t *out);
+
+/* The same, straight into the PICA's tiled order (NitroPort_Gx3dTileRGBA8
+ * of the above, in one pass). */
+void NitroPort_Gx3dFilterTexelsTiled(const uint32_t *rgba8, unsigned width, unsigned height, unsigned scale,
+                                     uint32_t *tiled);
+/* NitroPort_Gx3dTileRGBA8 undone. */
+void NitroPort_Gx3dUntileRGBA8(const uint32_t *tiled, unsigned width, unsigned height, uint32_t *linear);
+
 /* Both at once, without the linear copy: what the 3DS GPU path uses. The
  * same texels as the sampler gives, worked out a row at a time. */
 void NitroPort_Gx3dDecodeTextureTiled(const NitroGx3dTexBanks *banks, uint32_t param,

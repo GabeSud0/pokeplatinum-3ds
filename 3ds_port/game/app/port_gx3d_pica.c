@@ -86,8 +86,25 @@ typedef struct TexEntry {
     uint32_t param, palette, hash;
     uint32_t checkedFrame, lastFrame;
     size_t bytes;
+    unsigned scale;    /* texels a DS texel: 1, or 2 (sTexMode 2) */
+    int filtered;      /* sampled with the bilinear filter */
     C3D_Tex tex;
 } TexEntry;
+
+/* How the compose path's textures are sampled (NitroPort_PicaTextureFilter,
+ * after remaster.txt's filter): 0 as the DS, nearest; 1 smooth, bilinear;
+ * 2 sharp: each texel 2x2 and bilinear, the DS's texels sharp with their
+ * borders a texel soft, as the 2D is drawn. Drawn 1.25 times the DS's
+ * size, a nearest texel is one pixel or two, and which ones changed as the
+ * picture moved: the opening's flyover shimmered ("jittery") against its
+ * fog, which is 2D (October 2026). The classic path: nearest. */
+static int sTexMode;
+static uint32_t *sTexLinear, *sTexTiled;   /* (for converting: heap, grown as needed) */
+static size_t sTexLinearWords, sTexTiledWords;
+/* The bound texture's cut for opaque pixels: a filtered texture's edges
+ * are half see-through; the DS's texel boundary is at alpha one half. */
+static int sBoundCut;
+
 
 /* bin2s emits these from picasso's gx3d_passthrough.shbin. */
 extern const u8 gx3d_passthrough_shbin[];
@@ -153,10 +170,23 @@ static void free_texture(TexEntry *e)
     memset(e,0,sizeof(*e));
 }
 
+/* (the 3D thread, between frames) */
+void NitroPort_PicaTextureFilter(int mode)
+{
+    int i;
+    if(mode<0)mode=0;
+    if(mode>2)mode=2;
+    if(mode==sTexMode)return;
+    sTexMode=mode;
+    for(i=0;i<TEX_CACHE_ENTRIES;i++)free_texture(&sTextures[i]);   /* made again the new way */
+}
+
 static void clean_up(void)
 {
     int i;
     for(i=0;i<TEX_CACHE_ENTRIES;i++)free_texture(&sTextures[i]);
+    free(sTexLinear);sTexLinear=NULL;sTexLinearWords=0;
+    free(sTexTiled);sTexTiled=NULL;sTexTiledWords=0;
     for(i=0;i<2;i++){
         if(sVertices[i])linearFree(sVertices[i]);
         sVertices[i]=NULL;
@@ -257,6 +287,43 @@ static TexEntry *evict_one(void)
  * read here, on the 3D thread, not at SWAP: the game updates textures in
  * V-blank, as on the DS, so this is close enough. NULL if there's no
  * memory for it. */
+/* Room for n words in a conversion buffer. */
+static uint32_t *scratch(uint32_t **buf,size_t *have,size_t n)
+{
+    if(*have<n){
+        uint32_t *grown=realloc(*buf,n*sizeof(uint32_t));
+        if(!grown)return NULL;
+        *buf=grown;*have=n;
+    }
+    return *buf;
+}
+
+/* A texture's texels into its PICA texture: as they are (nearest), or
+ * through NitroPort_Gx3dFilterTexels for the bilinear filter. 0 if there's
+ * no memory for the conversion. */
+static int convert_texture(TexEntry *e,unsigned width,unsigned height)
+{
+    uint32_t *lin,*out;
+    if(!e->filtered){
+        NitroPort_Gx3dDecodeTextureTiled(&sBanks,e->param,e->palette,(uint32_t*)e->tex.data);
+        return 1;
+    }
+    /* (the fast decoder gives tiles: back to rows, then filtered and
+     * tiled in one pass) */
+    out=scratch(&sTexTiled,&sTexTiledWords,(size_t)width*height);
+    lin=scratch(&sTexLinear,&sTexLinearWords,(size_t)width*height);
+    if(!lin||!out)return 0;
+    NitroPort_Gx3dDecodeTextureTiled(&sBanks,e->param,e->palette,out);
+    NitroPort_Gx3dUntileRGBA8(out,width,height,lin);
+    NitroPort_Gx3dFilterTexelsTiled(lin,width,height,e->scale,(uint32_t*)e->tex.data);
+    return 1;
+}
+
+/* The converted texture for (param, palette), converting it if it's new or
+ * its source bytes changed (hashed at most once a frame). Texture data is
+ * read here, on the 3D thread, not at SWAP: the game updates textures in
+ * V-blank, as on the DS, so this is close enough. NULL if there's no
+ * memory for it. sBoundCut is set for it. */
 static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
 {
     TexEntry *e=NULL,*free_slot=NULL;
@@ -265,6 +332,7 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     size_t bytes=(size_t)width*height*4u;
     uint32_t hash;
     int i;
+    sBoundCut=0;
     for(i=0;i<TEX_CACHE_ENTRIES;i++){
         TexEntry *c=&sTextures[i];
         if(c->used && c->param==param && c->palette==palette){e=c;break;}
@@ -272,33 +340,55 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     }
     if(e && e->checkedFrame==sFrame){
         e->lastFrame=sFrame;
+        sBoundCut=e->filtered?127:0;
         return &e->tex;
     }
     hash=NitroPort_Gx3dTextureHash(&sBanks,param,palette);
     if(e && e->hash==hash){
         e->checkedFrame=e->lastFrame=sFrame;
+        sBoundCut=e->filtered?127:0;
         return &e->tex;
     }
     if(!e){
-        while(sTextureBytes+bytes>TEX_CACHE_BYTES && evict_one()){}
+        /* 2x2 texels a texel when sharp, if it fits (the PICA's 1024 and
+         * the cache), else as it is */
+        unsigned scale=(sTexMode==2 && width*2u<=1024u && height*2u<=1024u)?2u:1u;
+        if(scale==2u){
+            while(sTextureBytes+bytes*4u>TEX_CACHE_BYTES && evict_one()){}
+            if(sTextureBytes+bytes*4u>TEX_CACHE_BYTES)scale=1u;
+        }
+        while(sTextureBytes+bytes*scale*scale>TEX_CACHE_BYTES && evict_one()){}
+        if(!free_slot || free_slot->used){
+            free_slot=NULL;
+            for(i=0;i<TEX_CACHE_ENTRIES;i++)if(!sTextures[i].used){free_slot=&sTextures[i];break;}
+        }
         if(!free_slot){
             free_slot=evict_one();
             if(!free_slot)return NULL;
         }
         e=free_slot;
         memset(e,0,sizeof(*e));
-        if(!C3D_TexInit(&e->tex,(u16)width,(u16)height,GPU_RGBA8))return NULL;
-        C3D_TexSetFilter(&e->tex,GPU_NEAREST,GPU_NEAREST);
+        if(!C3D_TexInit(&e->tex,(u16)(width*scale),(u16)(height*scale),GPU_RGBA8)){
+            if(scale==1u || !C3D_TexInit(&e->tex,(u16)width,(u16)height,GPU_RGBA8))return NULL;
+            scale=1u;
+        }
+        e->scale=scale;
+        e->filtered=sTexMode!=0;
+        if(e->filtered)C3D_TexSetFilter(&e->tex,GPU_LINEAR,GPU_LINEAR);
+        else C3D_TexSetFilter(&e->tex,GPU_NEAREST,GPU_NEAREST);
         C3D_TexSetWrap(&e->tex,wrap_mode(param,16,18),wrap_mode(param,17,19));
         e->used=1;
         e->param=param;
         e->palette=palette;
-        e->bytes=bytes;
-        sTextureBytes+=bytes;
+        e->bytes=bytes*scale*scale;
+        sTextureBytes+=e->bytes;
     }
     {
         u64 start=svcGetSystemTick();
-        NitroPort_Gx3dDecodeTextureTiled(&sBanks,param,palette,(uint32_t*)e->tex.data);
+        if(!convert_texture(e,width,height)){
+            free_texture(e);
+            return NULL;
+        }
         C3D_TexFlush(&e->tex);
         sTexTicks+=svcGetSystemTick()-start;
         sTexTexels+=(u64)width*height;
@@ -306,6 +396,7 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     }
     e->hash=hash;
     e->checkedFrame=e->lastFrame=sFrame;
+    sBoundCut=e->filtered?127:0;
     return &e->tex;
 }
 
@@ -811,9 +902,10 @@ static void begin_pass(const PicaView *view,const PicaRect *rect)
 static int bind_batch(const NitroGx3dBatch *batch)
 {
     int textured=batch->texture_param!=0;
+    sBoundCut=0;
     if(textured){
         C3D_Tex *tex=get_texture(batch->texture_param,batch->palette_base);
-        if(!tex)textured=0;
+        if(!tex){textured=0;sBoundCut=0;}
         else C3D_TexBind(0,tex);
     }
     set_combiner(batch->polygon_attr,textured);
@@ -882,7 +974,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
             if(!room_for_draw())break;
             textured=bind_batch(batch);
-            C3D_AlphaTest(textured,GPU_GREATER,batch->translucent?254:0);
+            C3D_AlphaTest(textured,GPU_GREATER,batch->translucent?254:sBoundCut);
             C3D_DepthTest(true,GPU_LESS,GPU_WRITE_DEPTH);
             C3D_StencilTest(true,GPU_ALWAYS,(int)((attr>>24)&63u),0xFF,0xFF);
             C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
@@ -908,7 +1000,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             textured=bind_batch(batch);
             set_edge_combiner(textured,edges->colors[id>>3]);
             batch_fog(attr);
-            C3D_AlphaTest(textured,GPU_GREATER,batch->translucent?254:0);
+            C3D_AlphaTest(textured,GPU_GREATER,batch->translucent?254:sBoundCut);
             C3D_DepthTest(true,GPU_LESS,GPU_WRITE_COLOR);
             C3D_StencilTest(true,GPU_NOTEQUAL,(int)id,0xFF,0xFF);
             C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
@@ -951,7 +1043,8 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         bind_batch(batch);
         batch_fog(attr);
         C3D_StencilTest(true,GPU_ALWAYS,0xFF,0xFF,0xFF);
-        C3D_AlphaTest(true,GPU_GREATER,0);
+        /* (a filtered texture: its texels' edges at half alpha) */
+        C3D_AlphaTest(true,GPU_GREATER,sBoundCut);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
         C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);

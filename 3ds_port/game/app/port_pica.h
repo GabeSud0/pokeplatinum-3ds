@@ -24,6 +24,10 @@ void NitroPort_PicaTextureStats(u32 *converted, u64 *texels, u64 *ticks);
  * room in it, since last asked; NoteCmdUse after each C3D_FrameEnd. */
 void NitroPort_PicaCmdStats(float *peak, unsigned *cut);
 void NitroPort_PicaNoteCmdUse(void);
+/* How 3D textures are sampled from now on: 0 nearest (as the DS), 1
+ * bilinear, 2 sharp (each texel 2x2, then bilinear: as the remaster draws
+ * the 2D). The compose path sets it from its filter. */
+void NitroPort_PicaTextureFilter(int mode);
 
 /* The compose path: the scene's polygons drawn straight into a screen's
  * render target, between the 2D layers. */

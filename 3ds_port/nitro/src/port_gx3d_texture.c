@@ -202,6 +202,89 @@ void NitroPort_Gx3dTileRGBA8(const uint32_t *linear, unsigned width, unsigned he
     }
 }
 
+/* A decoded texture for the GPU's bilinear filter: each texel scale x
+ * scale (1 or 2) texels; a transparent texel takes the colour of an
+ * opaque one beside it (alpha stays 0), so that filtering doesn't bring a
+ * see-through texel's colour (black, usually) into a cut-out's edge. */
+void NitroPort_Gx3dFilterTexels(const uint32_t *in, unsigned width, unsigned height, unsigned scale,
+                                uint32_t *out)
+{
+    static const int dx[8] = { -1, 1, 0, 0, -1, 1, -1, 1 }, dy[8] = { 0, 0, -1, 1, -1, -1, 1, 1 };
+    unsigned x, y, i, j, w2 = width * scale;
+
+    for (y = 0; y < height; y++) {
+        for (x = 0; x < width; x++) {
+            uint32_t texel = in[y * width + x];
+            if (!(texel & 0xFFu)) {
+                int k;
+                for (k = 0; k < 8; k++) {
+                    int nx = (int)x + dx[k], ny = (int)y + dy[k];
+                    uint32_t n;
+                    if (nx < 0 || ny < 0 || nx >= (int)width || ny >= (int)height) continue;
+                    n = in[(unsigned)ny * width + (unsigned)nx];
+                    if (n & 0xFFu) {
+                        texel = n & 0xFFFFFF00u;
+                        break;
+                    }
+                }
+            }
+            for (j = 0; j < scale; j++) {
+                for (i = 0; i < scale; i++) {
+                    out[(y * scale + j) * w2 + x * scale + i] = texel;
+                }
+            }
+        }
+    }
+}
+
+void NitroPort_Gx3dUntileRGBA8(const uint32_t *tiled, unsigned width, unsigned height, uint32_t *linear)
+{
+    unsigned x, y;
+    for (y = 0; y < height; y++) {
+        unsigned row = height - 1 - y;
+        for (x = 0; x < width; x++) {
+            linear[y * width + x] = tiled[(row & ~7u) * width + (x & ~7u) * 8u + morton8(x & 7, row & 7)];
+        }
+    }
+}
+
+/* NitroPort_Gx3dFilterTexels and NitroPort_Gx3dTileRGBA8 in one pass: a
+ * texel's 2x2 (an even x and y, in the PICA's bottom-up rows still a
+ * pair) are four words in a row in the tiles' order. */
+void NitroPort_Gx3dFilterTexelsTiled(const uint32_t *in, unsigned width, unsigned height, unsigned scale,
+                                     uint32_t *tiled)
+{
+    static const int dx[8] = { -1, 1, 0, 0, -1, 1, -1, 1 }, dy[8] = { 0, 0, -1, 1, -1, -1, 1, 1 };
+    unsigned x, y, w2 = width * scale, h2 = height * scale;
+
+    for (y = 0; y < height; y++) {
+        for (x = 0; x < width; x++) {
+            uint32_t texel = in[y * width + x];
+            if (!(texel & 0xFFu)) {
+                int k;
+                for (k = 0; k < 8; k++) {
+                    int nx = (int)x + dx[k], ny = (int)y + dy[k];
+                    uint32_t n;
+                    if (nx < 0 || ny < 0 || nx >= (int)width || ny >= (int)height) continue;
+                    n = in[(unsigned)ny * width + (unsigned)nx];
+                    if (n & 0xFFu) {
+                        texel = n & 0xFFFFFF00u;
+                        break;
+                    }
+                }
+            }
+            if (scale == 2u) {
+                unsigned sx = x * 2u, row = h2 - 2u - y * 2u;   /* (the pair's lower stored row: even) */
+                uint32_t *block = &tiled[(row & ~7u) * w2 + (sx & ~7u) * 8u + morton8(sx & 7, row & 7)];
+                block[0] = block[1] = block[2] = block[3] = texel;
+            } else {
+                unsigned row = height - 1 - y;
+                tiled[(row & ~7u) * width + (x & ~7u) * 8u + morton8(x & 7, row & 7)] = texel;
+            }
+        }
+    }
+}
+
 /* ------------------------------------------------- decoding for the PICA */
 /* NitroPort_Gx3dSampleTexel gives every texel, but working out each one on
  * its own (wrapping, bank, palette entry) took the 3DS tens of milliseconds

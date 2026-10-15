@@ -1024,7 +1024,20 @@ static void test_wide_canvas(void)
         CHECK(wide[0 * 320 + 24] == GREY);
         CHECK(wide[0 * 320 + 16] == GREY);
         CHECK(wide[0 * 320 + 0] == GREY);
-        CHECK(wide[5 * 320 + 31] == RED);         /* line 5: a plain edge goes on */
+        /* Line 5 is plain for 8 pixels only (tile 0; tile 1's pixel 0 is
+         * blue): on a picture screen that's part of the picture, not a plain
+         * edge, so it doesn't go on either. (Was: it went on, as on the UI's
+         * screens; that drew the opening strip's ovals out into lines,
+         * October 2026.) */
+        CHECK(wide[5 * 320 + 31] == GREY);
+        CHECK(wide[5 * 320 + 0] == GREY);
+        /* plain for a band's width (tiles 0-3 red): it goes on */
+        for (i = 0; i < 32 * 32; i++) {
+            map[i] = (i < 4) ? 1 : (i == 4) ? 2 : 0;
+        }
+        GX_LoadBG1Scr(map, 0, sizeof(map));
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[5 * 320 + 31] == RED);
         CHECK(wide[5 * 320 + 0] == RED);
         /* A picture that stops short of the edge (the title's logo) isn't
          * mirrored: tile 0 empty, tile 1 red. */
@@ -1485,14 +1498,155 @@ static void test_wide_art_places(void)
     NitroPort_Render2DSplit(0, wide, &split);
     CHECK(wide[5 * 320 + 100] == (MADE & 0x7FFF));
     CHECK(wide[5 * 320 + 300] == (STRIP & 0x7FFF));
+    /* Scrolled 20 right (October 2026: a whole picture is the whole
+     * layer, moved with it, so that a Pokemon sliding in isn't cut at the
+     * DS's edge; was: the picture's middle only, the map's own beside it,
+     * nothing in the bands): its right band 20 to the left, over the DS's
+     * part; past its right edge the map's own. */
     G2_SetBG1Offset(20, 0);
     NitroPort_Render2DSplit(0, wide, &split);
     CHECK(wide[5 * 320 + 100] == (MADE & 0x7FFF));            /* the picture's middle, moved */
-    CHECK(wide[5 * 320 + 280] == RED);                        /* (its band would be here: the map's own) */
-    CHECK(wide[5 * 320 + 300] == GREY);                       /* 20 away: no bands */
+    CHECK(wide[5 * 320 + 280] == (STRIP & 0x7FFF));           /* its band */
+    CHECK(wide[5 * 320 + 300] == RED);                        /* past it: the map's own */
+    CHECK(wide[5 * 320 + 12] == (MADE & 0x7FFF));
+    CHECK(wide[5 * 320 + 5] == (STRIP & 0x7FFF));             /* its left band, 20 on */
     G2_SetBG1Offset(4, 0);
     NitroPort_Render2DSplit(0, wide, &split);
     CHECK(wide[5 * 320 + 300] == (STRIP & 0x7FFF));           /* 4 away: the bands */
+    G2_SetBG1Offset(0, 0);
+
+    NitroPort_WideArtLoad("/nonexistent");
+    {
+        char cmd[600];
+
+        snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+        CHECK(system(cmd) == 0);
+    }
+}
+
+/* A whole picture of a layer that slides in (the opening's Pokemon): the
+ * whole layer from the picture, moved with it, never cut at the DS's edge;
+ * its slide widened so that it comes in from the wide screen's edge, and
+ * what's waiting beyond the DS's edge stays hidden. */
+static void test_wide_art_sliding(void)
+{
+    static u16 wide[320 * 192], over[320 * 192], art[320 * 192], layerPx[320 * 192];
+    static u8 overAlpha[320 * 192];
+    static u8 tiles[96];
+    static u16 map[64 * 32];
+    static u16 pltt[16] = { GREY, RED, BLUE };
+    const u16 MON = RGB(31, 20, 0) | 0x8000;
+    char dir[] = "/tmp/wideartslXXXXXX";
+    NitroRender2DSplit split;
+    uint64_t key;
+    int hofs, vofs, prio, i, x, y, left, right;
+
+    /* the widening itself: a picture whose opaque columns are 150-199 */
+    CHECK(NitroPort_WideArtMovedOffset(0, 150, 200) == 0);
+    CHECK(NitroPort_WideArtMovedOffset(50, 150, 200) == 50);      /* well inside: as far */
+    CHECK(NitroPort_WideArtMovedOffset(106, 150, 200) == 106);
+    CHECK(NitroPort_WideArtMovedOffset(122, 150, 200) == 138);    /* the last 32: twice as far */
+    CHECK(NitroPort_WideArtMovedOffset(138, 150, 200) == 170);    /* at the DS's edge: at the wide one's */
+    CHECK(NitroPort_WideArtMovedOffset(152, 150, 200) == 184);    /* beyond: 32 more */
+    CHECK(NitroPort_WideArtMovedOffset(-50, 150, 200) == -50);    /* going left: the same */
+    CHECK(NitroPort_WideArtMovedOffset(-168, 150, 200) == -200);  /* right edge at the DS's: at the screen's */
+    for (i = 0; i <= 260; i++) {                                  /* never back, never cut */
+        int a = NitroPort_WideArtMovedOffset(i, 150, 200), b = NitroPort_WideArtMovedOffset(i + 1, 150, 200);
+
+        CHECK(b >= a);
+        CHECK((150 + i < 288) || (150 + a >= 320));               /* hidden on the DS: hidden */
+        CHECK(-NitroPort_WideArtMovedOffset(-i, 150, 200) >= i);
+    }
+
+    /* BG1, 512x256, a tile far off (map x 400) so it has art */
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    for (i = 0; i < 64 * 32; i++) {
+        map[i] = 0;
+    }
+    map[32 * 32 + 18] = 1;   /* (the right 256x256 screen block, column 18) */
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_512x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    memset(&split, 0, sizeof(split));
+    split.width = 320;
+    split.origin = 32;
+    memset(split.clip, 1, sizeof(split.clip));
+    CHECK(NitroPort_Render2DLayer(0, 1, &split, layerPx, &key, &hofs, &vofs, &prio));
+
+    /* its whole picture at scroll 0: a Pokemon at columns 150-199, its
+     * right edge marked blue */
+    CHECK(mkdtemp(dir) != NULL);
+    for (y = 0; y < 192; y++) {
+        for (x = 0; x < 320; x++) {
+            art[y * 320 + x] = (x >= 150 && x < 200) ? (x == 199 ? (BLUE | 0x8000) : MON) : 0;
+        }
+    }
+    WriteArt(dir, key, 0, 0, 1, art);
+    CHECK(NitroPort_WideArtLoad(dir) == 1);
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 150] == (MON & 0x7FFF));
+    CHECK(NitroPort_WideArtExtent(NitroPort_WideArtFindNear(key, 0, 0, 512, 256, 256, 192, &hofs, &vofs, &i),
+                                  &left, &right) && left == 150 && right == 200);
+    /* waiting beyond the DS's edge (152 to the right: its columns 302-351,
+     * on the DS hidden): hidden on the wide screen too */
+    G2_SetBG1Offset(512 - 152, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    for (x = 0; x < 320; x++) {
+        CHECK(wide[5 * 320 + x] == GREY);
+    }
+    /* coming in, 122 to the right (the DS shows its columns 272-287): 138
+     * on the wide screen, whole up to its edge */
+    G2_SetBG1Offset(512 - 122, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 287] == GREY);
+    CHECK(wide[5 * 320 + 288] == (MON & 0x7FFF));
+    CHECK(wide[5 * 320 + 319] == (MON & 0x7FFF));
+    /* 50 to the right: where the DS has it, whole (its blue right edge at
+     * 249, inside), the BG's own past the picture */
+    G2_SetBG1Offset(512 - 50, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 199] == GREY);
+    CHECK(wide[5 * 320 + 200] == (MON & 0x7FFF));
+    CHECK(wide[5 * 320 + 249] == BLUE);
+    CHECK(wide[5 * 320 + 250] == GREY);
+    /* 100 to the right: its edge in the right band, not cut at the DS's */
+    G2_SetBG1Offset(512 - 100, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 290] == (MON & 0x7FFF));
+    CHECK(wide[5 * 320 + 299] == BLUE);
+    G2_SetBG1Offset(0, 0);
+
+    /* Two pictures of it, each cut by the wide screen's right edge (the
+     * opening's Torterra): at 0, columns 200-319; at 452 (60 to the right),
+     * green, 260-319. At 464 the nearer one, moved 12 left, would show its
+     * cut edge at 308: the one at 0 instead, moved 48 right. */
+    for (y = 0; y < 192; y++) {
+        for (x = 0; x < 320; x++) {
+            art[y * 320 + x] = x >= 200 ? MON : 0;
+        }
+    }
+    WriteArt(dir, key, 0, 0, 1, art);
+    for (y = 0; y < 192; y++) {
+        for (x = 0; x < 320; x++) {
+            art[y * 320 + x] = x >= 260 ? (GREEN | 0x8000) : 0;
+        }
+    }
+    WriteArt(dir, key, 452, 0, 1, art);
+    CHECK(NitroPort_WideArtLoad(dir) == 2);
+    G2_SetBG1Offset(456, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 312] == GREEN);                      /* 4 from 452: that one */
+    G2_SetBG1Offset(464, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 312] == (MON & 0x7FFF));             /* the one at 0, not cut */
+    CHECK(wide[5 * 320 + 247] == GREY);
+    CHECK(wide[5 * 320 + 248] == (MON & 0x7FFF));
     G2_SetBG1Offset(0, 0);
 
     NitroPort_WideArtLoad("/nonexistent");
@@ -1711,6 +1865,7 @@ int main(int argc, char **argv)
     test_wide_art();
     test_wide_art_objs();
     test_wide_art_places();
+    test_wide_art_sliding();
     test_wide_window_edges();
     test_engines_on_two_threads();
 
