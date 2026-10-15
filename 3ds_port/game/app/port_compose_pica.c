@@ -83,6 +83,7 @@ typedef struct LayerSet {
     ComposeLayers info;   /* has3d etc., as published (no picture pointers) */
     uint32_t seq;         /* publish order (0: none, or being written) */
     int writing, held;
+    NitroPublishTarget pub;   /* what its textures hold (publishing only what changed) */
 } LayerSet;
 
 /* A drawn frame in an LCD framebuffer, waiting for its V-blank. */
@@ -125,6 +126,16 @@ static uint16_t sToRgb565[32768];
 static uint8_t sAlpha16[17];      /* the over layer's alpha, 0-16, as 0-255 */
 static uint32_t sConverted[2][CANVAS_MAX * DS_H];
 static uint16_t sConverted16[2][CANVAS_MAX * DS_H];
+
+/* Publishing only what changed (the default, sharp 2D): each engine's
+ * last published picture, and for each band of 4 rows the publish it last
+ * changed in; a set's textures are brought up to date by doing again the
+ * bands changed since it was last written (NitroPort_PublishDoubled). Most
+ * of what changes on a screen is small (a location's name sliding in, a
+ * text box, a cursor): doubled and tiled whole, engine A's picture cost
+ * ~10 ms a frame on the 3D's core, and with the 3D's geometry there too,
+ * frames came late while a name slid in (2026-10-15). */
+static NitroPublishShadow sShadow[2];
 static NitroGx3dGpuVertex *sQuads;   /* this frame's quads */
 static int sQuadVertices;
 #define MAX_QUAD_VERTICES (6 * 32)
@@ -143,6 +154,22 @@ static float sSceneConvergence = 1.0f;
 #define LAG_MIN 1
 #define LAG_MAX 4
 static int sLag = 2, sOnTime;
+/* Lowered only after this many 3D frames in a row with a V-blank to
+ * spare; doubled each time a lowered lag doesn't hold (a frame late soon
+ * after). Counting frames with room since the last late one, it was
+ * lowered every 20-26 seconds in the field, a frame came late, and it went
+ * back up: a hitch every 26 seconds (2026-10-15). */
+#define LAG_LOWER_AFTER 600
+static int sLowerAfter = LAG_LOWER_AFTER, sLoweredRecently;
+static u32 sLoweredAt;
+
+/* For the log, the hitches: the newest scene seen (and the V-blank it
+ * came), the last one shown on the 3D's screen, whether that screen
+ * showed the 3D the last time it was drawn, scenes never shown, frames
+ * drawn in stereo, and the last hitch logged. */
+static u32 sSeenSerial, sSeenAt, sShownSerial, sDropped, sStereoFrames;
+static int sSeenValid, sLast3D;
+static u32 sHitchFrame, sHitchQuiet;
 
 /* A drawn frame onto the LCD (the V-blank thread; under sPresentLock). */
 static void present(int s, int buf, int stereo)
@@ -403,6 +430,7 @@ static int alloc_sets(Screen *scr, int canvasW, int scale)
         }
         memset(scr->set[i].under, 0, (size_t)scr->texW * scr->texH * 2u);
         memset(scr->set[i].over, 0, (size_t)scr->texW * scr->texH * 4u);
+        memset(&scr->set[i].pub, 0, sizeof(scr->set[i].pub));   /* (holding nothing known) */
     }
     return 1;
 }
@@ -556,6 +584,46 @@ static u32 widen5(u32 v)
     return (v << 3) | (v >> 2);
 }
 
+/* The picture into a set's textures whole: the filters other than sharp
+ * (or a texel a pixel). */
+static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *set, int w)
+{
+    uint16_t *c16 = sConverted16[e];
+    int i, n = w * DS_H;
+    /* (the texture's rows the picture uses: tile rows, whole) */
+    u32 rowsUsed = ((u32)DS_H * scr->texScale + 8u + 7u) & ~7u;
+
+    set->pub.heldBy = NULL;   /* (not tracked this way) */
+    for (i = 0; i < n; i++) {
+        c16[i] = sToRgb565[l->under[i] & 0x7FFF];
+    }
+    if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+        NitroPort_Scale2xTiled16(c16, w, DS_H, set->under, scr->texW);
+    } else {
+        NitroPort_Tile16(c16, w, DS_H, set->under, scr->texW);
+    }
+    GSPGPU_FlushDataCache(set->under, (u32)scr->texW * rowsUsed * 2u);
+    if (l->has3d) {
+        /* Often there's nothing in front: then the texture isn't written. */
+        uint32_t *c32 = sConverted[e];
+
+        if (NitroPort_PremultiplyOver(l->over, l->overAlpha, sAlpha16, c32, 0, n)) {
+            if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+                NitroPort_Scale2xTiled32(c32, w, DS_H, set->over, scr->texW);
+            } else {
+                NitroPort_Tile32(c32, w, DS_H, set->over, scr->texW);
+            }
+            GSPGPU_FlushDataCache(set->over, (u32)scr->texW * rowsUsed * 4u);
+            set->overEmpty = 0;
+        }
+    }
+}
+
+static void flush_texture(void *data, uint32_t bytes)
+{
+    GSPGPU_FlushDataCache(data, bytes);
+}
+
 void NitroPort_ComposePublish(int engine, int screen)
 {
     int e = engine ? 1 : 0, i, buf = -1;
@@ -563,7 +631,7 @@ void NitroPort_ComposePublish(int engine, int screen)
     ComposeLayers *l = &sWork[e];
     LayerSet *set;
     u64 start = svcGetSystemTick();
-    int w = l->width > 0 ? l->width : DS_W, n = w * DS_H;
+    int w = l->width > 0 ? l->width : DS_W;
 
     if (!sReady || w > CANVAS_MAX || w * scr->texScale > scr->texW) {
         return;
@@ -604,63 +672,12 @@ void NitroPort_ComposePublish(int engine, int screen)
     set->info.over = NULL;
     set->info.overAlpha = NULL;
     set->overEmpty = 1;
-    if (!l->displayOff) {
-        uint16_t *c16 = sConverted16[e];
-        /* (the texture's rows the picture uses: tile rows, whole) */
-        u32 rowsUsed = ((u32)DS_H * scr->texScale + 8u + 7u) & ~7u;
-
-        if (sConfig.filter != COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
-            /* (the default: converted and doubled in one pass) */
-            NitroPort_Double2xTiled16Table(l->under, w, DS_H, set->under, scr->texW, sToRgb565);
-        } else {
-            for (i = 0; i < n; i++) {
-                c16[i] = sToRgb565[l->under[i] & 0x7FFF];
-            }
-            if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
-                NitroPort_Scale2xTiled16(c16, w, DS_H, set->under, scr->texW);
-            } else {
-                NitroPort_Tile16(c16, w, DS_H, set->under, scr->texW);
-            }
-        }
-        GSPGPU_FlushDataCache(set->under, (u32)scr->texW * rowsUsed * 2u);
-        if (l->has3d) {
-            /* The layers in front: RGBA8 with the alpha multiplied in (so
-             * the GPU's filtering and blending come out right). Often
-             * there's nothing in front: then the texture isn't written. */
-            uint32_t *c32 = sConverted[e];
-            u32 any = 0;
-
-            for (i = 0; i < n; i++) {
-                uint16_t c = l->over[i];
-                u32 a, r, g, b;
-
-                if (!(c & 0x8000)) {
-                    c32[i] = 0;
-                    continue;
-                }
-                a = sAlpha16[l->overAlpha[i] > 16 ? 16 : l->overAlpha[i]];
-                /* (x / 255, rounded: (x + 128 + ((x + 128) >> 8)) >> 8) */
-                r = widen5(c & 31) * a + 128u;
-                g = widen5((c >> 5) & 31) * a + 128u;
-                b = widen5((c >> 10) & 31) * a + 128u;
-                r = (r + (r >> 8)) >> 8;
-                g = (g + (g >> 8)) >> 8;
-                b = (b + (b >> 8)) >> 8;
-                c32[i] = (r << 24) | (g << 16) | (b << 8) | a;
-                any |= a;
-            }
-            if (any) {
-                if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
-                    NitroPort_Scale2xTiled32(c32, w, DS_H, set->over, scr->texW);
-                } else if (scr->texScale == 2) {
-                    NitroPort_Double2xTiled32(c32, w, DS_H, set->over, scr->texW);
-                } else {
-                    NitroPort_Tile32(c32, w, DS_H, set->over, scr->texW);
-                }
-                GSPGPU_FlushDataCache(set->over, (u32)scr->texW * rowsUsed * 4u);
-                set->overEmpty = 0;
-            }
-        }
+    if (!l->displayOff && sConfig.filter != COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+        set->overEmpty = !NitroPort_PublishDoubled(&sShadow[e], &set->pub, l->under, l->over, l->overAlpha,
+                                                   l->has3d, w, set->under, set->over, scr->texW, sToRgb565,
+                                                   sAlpha16, flush_texture);
+    } else if (!l->displayOff) {
+        publish_whole(e, l, scr, set, w);
     }
     LightLock_Lock(&sSetLock);
     set->writing = 0;
@@ -963,12 +980,31 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                            int forced, int flush)
 {
     int s, drawn = 0, stereoNow, need[2] = { 0, 0 }, timed = 0, edges = 0, lcdBuf[2] = { -1, -1 };
-    u32 vblanks, edgeClear = 0;
+    u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
     LayerSet *sets[2] = { NULL, NULL };
-    u64 start = svcGetSystemTick(), gpuStart;
+    u64 start = svcGetSystemTick(), gpuStart, prepareTicks = 0, texTicksBefore, texTicksAfter, texels;
 
     if (!sReady) {
         return 0;
+    }
+    startVBlank = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
+    if (scene != NULL && (!sSeenValid || sceneSerial != sSeenSerial)) {
+        /* A scene not seen before: the one before it, if the 3D was on
+         * its screen and it never showed, and any made in between (the
+         * newest is taken), went unseen. */
+        if (sSeenValid && sLast3D) {
+            u32 gap = sceneSerial - sSeenSerial;
+
+            if (sShownSerial != sSeenSerial) {
+                sDropped++;
+            }
+            if (gap > 1u && gap < 1000u) {
+                sDropped += gap - 1u;
+            }
+        }
+        sSeenSerial = sceneSerial;
+        sSeenAt = startVBlank;
+        sSeenValid = 1;
     }
     stereoNow = sConfig.stereo && slider > 0.0f && sScreens[0].target[1] != NULL && aOnTop;
     LightLock_Lock(&sSetLock);
@@ -1019,8 +1055,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     if (!need[0] && !need[1]) {
         return 0;
     }
+    NitroPort_PicaTextureStats(&texBefore, &texels, &texTicksBefore);
     if (scene != NULL && (!sScenePrepared || sceneSerial != sPreparedScene)) {
+        prepareTicks = svcGetSystemTick();
         NitroPort_PicaPrepareScene(scene, NULL);
+        prepareTicks = svcGetSystemTick() - prepareTicks;
         sPreparedScene = sceneSerial;
         sScenePrepared = 1;
         if (sConfig.stereo && sConfig.convergence <= 0.0f) {
@@ -1074,6 +1113,10 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         if (screen3d) {
             scr->shownScene = sceneSerial;
             sSceneWaiting = 0;
+            sLast3D = sc != NULL && sets[s]->info.has3d && !sets[s]->info.displayOff;
+            if (sc != NULL) {
+                sShownSerial = sceneSerial;
+            }
         }
         scr->shownSlider = slider;
         scr->shownStereo = stereoNow;
@@ -1104,6 +1147,26 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     sInFrame = 1;
     sGpuTicks += svcGetSystemTick() - gpuStart;
     sFrames++;
+    if (stereoNow) {
+        sStereoFrames++;
+    }
+    NitroPort_PicaTextureStats(&texAfter, &texels, &texTicksAfter);
+    {
+        /* A frame that took the display thread more than two V-blanks:
+         * the scenes made meanwhile may never show (a jump). */
+        const double ms = 1000.0 / SYSCLOCK_ARM11;
+        double total = (double)(svcGetSystemTick() - start) * ms;
+
+        if (total > 40.0 && (sFrames - sHitchFrame >= 15u || sHitchFrame == 0u)) {
+            NitroPort_Log("[hitch] a frame took the display thread %.1f ms: %.1f ms preparing the scene, %.1f ms "
+                          "building (%lu textures converted: %.1f ms), %.1f ms GPU%s",
+                          total, (double)prepareTicks * ms, (double)(gpuStart - start) * ms,
+                          (unsigned long)(texAfter - texBefore),
+                          (double)(texTicksAfter - texTicksBefore) * ms,
+                          (double)(svcGetSystemTick() - gpuStart) * ms, stereoNow ? "; stereo" : "");
+            sHitchFrame = sFrames;
+        }
+    }
     /* The frames queued for their V-blanks: a new 3D frame for sLag
      * V-blanks after the game made its scene (+1: the DS shows a scene the
      * frame after); anything else for the next one. */
@@ -1133,10 +1196,45 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                     sLag++;
                 }
                 sOnTime = 0;
+                if (sLoweredRecently && sTimed - sLoweredAt < 1800u && sLowerAfter < LAG_LOWER_AFTER * 64) {
+                    sLowerAfter *= 2;   /* (it didn't hold: twice as long before the next try) */
+                }
+                sLoweredRecently = 0;
+                /* Where the time went, for the log (one line every half
+                 * second at most; the others counted in the next). */
+                if (sFrames - sHitchFrame >= 15u || sHitchFrame == 0u) {
+                    const double ms = 1000.0 / SYSCLOCK_ARM11;
+
+                    NitroPort_Log("[hitch] a 3D frame %d V-blank%s late (lag now %d): made at V-blank %lu, "
+                                  "reached the display thread %lu V-blanks later, drawn from %lu after; %.1f ms "
+                                  "preparing, %.1f ms building (%lu textures converted: %.1f ms), %.1f ms GPU%s%s",
+                                  (int)-slack, slack == -1 ? "" : "s", sLag, (unsigned long)scene->stamp,
+                                  (unsigned long)(sSeenAt - scene->stamp),
+                                  (unsigned long)(startVBlank - scene->stamp),
+                                  (double)prepareTicks * ms, (double)(gpuStart - start) * ms,
+                                  (unsigned long)(texAfter - texBefore),
+                                  (double)(texTicksAfter - texTicksBefore) * ms,
+                                  (double)(svcGetSystemTick() - gpuStart) * ms,
+                                  stereoNow ? "; stereo" : "",
+                                  sHitchQuiet ? "; more since the last line" : "");
+                    sHitchFrame = sFrames;
+                    sHitchQuiet = 0;
+                } else {
+                    sHitchQuiet++;
+                }
             } else {
-                if (slack >= 1 && ++sOnTime >= 600 && sLag > LAG_MIN) {
-                    sLag--;          /* ten seconds with room to spare */
+                /* Lowered after a long while of frames with a V-blank to
+                 * spare, in a row (one without resets the count). */
+                if (slack >= 1) {
+                    sOnTime++;
+                } else {
                     sOnTime = 0;
+                }
+                if (sOnTime >= sLowerAfter && sLag > LAG_MIN) {
+                    sLag--;
+                    sOnTime = 0;
+                    sLoweredRecently = 1;
+                    sLoweredAt = sTimed;
                 }
                 target = slack > 6 ? vblanks + 1u + 6u : wanted;   /* (a stamp from before a pause) */
             }
@@ -1165,5 +1263,7 @@ void NitroPort_ComposeStats(ComposeStats *stats)
     stats->lag = sLag;
     stats->late = sLate;
     stats->timed = sTimed;
+    stats->dropped = sDropped;
+    stats->stereo = sStereoFrames;
 }
 #endif

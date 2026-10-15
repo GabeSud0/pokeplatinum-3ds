@@ -91,9 +91,21 @@ rather than overflow it (an overflow stopped the GPU thread on the real
 
 Publishing a 2D picture (the drawing threads): the 15-bit pixels to
 RGB565, each doubled into the tiled texture (a 4x4 block of pixels is one
-8x8 tile), and the layers in front to RGBA8 with the alpha multiplied in,
-only when there's anything in front (often there isn't); the texture's
-used rows flushed, not all of it.
+8x8 tile), and the layers in front to RGBA8 with the alpha multiplied in.
+With the sharp filter (the default) only what changed is done again
+(`NitroPort_PublishDoubled`): each engine's last picture is kept, and each
+band of 4 rows (a row of the texture's tiles) remembers the publish it
+last changed in; a set of textures gets the bands changed since it was
+last written, and only those are flushed. Most changes are small (a
+location's name sliding in, a text box, a cursor): done whole, engine A's
+picture took ~10 ms a frame on the core the 3D's geometry shares, and
+frames came late while a name slid in. The other filters publish the
+whole picture, the layers in front only when there's anything there.
+
+What counts as a change of the picture (the drawers draw again only
+then) leaves out DISP3DCNT's two acknowledge bits: the game writes them
+every frame, alternating, and the field's upper screen was drawn and
+published again every other frame with nothing on it changed.
 
 What's approximate, compared with the DS's compositing: a 2D layer in
 front of the 3D blends with the 3D by its alpha (eva / 16) where the DS
@@ -162,7 +174,11 @@ than the scene + 1 (the DS shows a scene the frame after its 2D was set),
 and is shown `lag` V-blanks after the scene was made: the 3D comes at the
 game's own even pace (every second V-blank in the field), not whenever a
 scene happens to be done. `lag` starts at 2 and adapts (1 to 4): up when a
-frame would be late, back down after ten seconds with room to spare.
+frame would be late, back down after 600 frames in a row with a V-blank to
+spare, and twice as long before the next try each time a lowered lag
+doesn't hold. (Counting the frames with room since the last late one, it
+went down every 20-26 seconds in the field, a frame came late, and it went
+back up: a hitch every 26 seconds.)
 
 A new scene is drawn once engine A's drawer is done with the 2D of the
 frame after it, or it's known there's none (the game hands the drawers a
@@ -250,11 +266,20 @@ at Continue took 1.8 s, the save read 256 bytes at a time.
 
 The log says what's on (`[compose] screens drawn by the GPU: ...`) and,
 every two seconds, `[perf] display: N frames/s drawn (N with a new 3D
-scene, of N scenes/s), each X ms building + X ms GPU; 2D published N/s, X
-ms each; 3D shown N V-blanks after the game made it, N late; GPU command
-list N% full at most, N draws cut`. In the field the frames with a new 3D
-scene should match the scenes made (30 a second); building + GPU is what
-a frame costs the display thread, and must stay under 33 ms for that.
+scene, of N scenes/s; N scenes not shown), each X ms building + X ms GPU;
+N% in stereo; 3D textures converted N (X ms each); 2D published N/s, X ms
+each; 3D shown N V-blanks after the game made it, N late; GPU command list
+N% full at most, N draws cut`. In the field the frames with a new 3D
+scene should match the scenes made (30 a second), none not shown;
+building + GPU is what a frame costs the display thread, and must stay
+under 33 ms for that.
+
+A hitch is in the log with where its time went: `[hitch] a 3D frame N
+V-blanks late (lag now N): made at V-blank S, reached the display thread
+N V-blanks later, drawn from N after; X ms preparing, X ms building (N
+textures converted: X ms), X ms GPU`, or `[hitch] a frame took the
+display thread X ms: ...` (over two V-blanks: the scenes made meanwhile
+may never show). At most one every 15 frames drawn.
 
 ## 60 frames a second in the 3D
 

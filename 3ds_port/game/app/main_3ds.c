@@ -1793,13 +1793,16 @@ static void PerfFrame(u64 enter)
     }
     if (sRemaster) {
         static ComposeStats last;
-        static u32 lastMade;
+        static u32 lastMade, lastTex;
+        static u64 lastTexTicks;
         ComposeStats now;
-        u32 frames, published, timed, made, madeScenes;
+        u32 frames, published, timed, made, madeScenes, tex;
+        u64 texTexels, texTicks;
         float cmdPeak;
         unsigned cmdCut;
 
         NitroPort_ComposeStats(&now);
+        NitroPort_PicaTextureStats(&tex, &texTexels, &texTicks);
         NitroPort_Gx3dThreadStats(NULL, &made, NULL);
         madeScenes = made - lastMade;
         lastMade = made;
@@ -1807,14 +1810,20 @@ static void PerfFrame(u64 enter)
         frames = now.frames - last.frames;
         published = now.published - last.published;
         timed = now.timed - last.timed;
-        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, of %.1f scenes/s), each %.1f ms building + %.1f ms GPU; 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut",
+        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, of %.1f scenes/s; %u scenes not shown), each %.1f ms building + %.1f ms GPU; %.0f%% in stereo; 3D textures converted %u (%.1f ms each); 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut",
                       frames / seconds, timed / seconds, madeScenes / seconds,
+                      (unsigned)(now.dropped - last.dropped),
                       frames ? (double)(now.cpuTicks - last.cpuTicks) * 1000.0 / SYSCLOCK_ARM11 / frames : 0.0,
                       frames ? (double)(now.gpuTicks - last.gpuTicks) * 1000.0 / SYSCLOCK_ARM11 / frames : 0.0,
+                      frames ? 100.0 * (now.stereo - last.stereo) / frames : 0.0,
+                      (unsigned)(tex - lastTex),
+                      tex != lastTex ? (double)(texTicks - lastTexTicks) * 1000.0 / SYSCLOCK_ARM11 / (tex - lastTex) : 0.0,
                       published / seconds,
                       published ? (double)(now.publishTicks - last.publishTicks) * 1000.0 / SYSCLOCK_ARM11 / published : 0.0,
                       now.lag, (unsigned)(now.late - last.late), (double)cmdPeak * 100.0, cmdCut);
         last = now;
+        lastTex = tex;
+        lastTexTicks = texTicks;
     }
     NitroPort_Log("[perf] game %.1f frames/s, %.1f ms/frame (%.1f waiting for drawing); drawn: %s; 3D %.1f ms/scene, %u triangles/scene, %u dropped/scene (core %d); sound %.0f%% of core 0, %u underruns",
                   sPerfFrames / seconds, (double)sPerfGameTicks * perFrame,

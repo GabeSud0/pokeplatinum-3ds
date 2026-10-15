@@ -60,6 +60,65 @@ void NitroPort_Double2xTiled32(const uint32_t *src, int w, int h, uint32_t *dst,
  * at once (dst 8-byte aligned). */
 void NitroPort_Double2xTiled16Table(const uint16_t *src, int w, int h, uint16_t *dst, int dstWidth,
                                     const uint16_t *table);
+/* The same for rows y0 .. y1 of the picture only (multiples of 4, y1 at
+ * most h): their texels and the column right of them, and the row below
+ * the picture when y1 is h. The rest of the texture is left as it is: a
+ * picture whose other rows didn't change since the texture was made comes
+ * out as the whole of it would. */
+void NitroPort_Double2xTiled16Rows(const uint16_t *src, int w, int h, int y0, int y1, uint16_t *dst,
+                                   int dstWidth);
+void NitroPort_Double2xTiled32Rows(const uint32_t *src, int w, int h, int y0, int y1, uint32_t *dst,
+                                   int dstWidth);
+void NitroPort_Double2xTiled16TableRows(const uint16_t *src, int w, int h, int y0, int y1, uint16_t *dst,
+                                        int dstWidth, const uint16_t *table);
+
+/* ------------------------------------------------- publishing what changed
+ *
+ * A picture of up to NITRO_PUBLISH_MAX_W x NITRO_PUBLISH_H (the DS's 2D
+ * layers: an "under" picture in the DS's colours, and an "over" one with
+ * its alpha 0-16) published again and again into textures, each pixel
+ * doubled (NitroPort_Double2xTiled*), into one of several sets of textures
+ * in turn: only the bands of 4 rows changed since a set was last written
+ * are done again. A shadow per source of pictures keeps its last picture
+ * and, for each band, the publish it last changed in; a target per set of
+ * textures, what they hold. */
+#define NITRO_PUBLISH_MAX_W 320
+#define NITRO_PUBLISH_H 192
+#define NITRO_PUBLISH_BANDS (NITRO_PUBLISH_H / 4)
+
+typedef struct NitroPublishShadow {
+    uint16_t under[NITRO_PUBLISH_MAX_W * NITRO_PUBLISH_H];
+    uint16_t over[NITRO_PUBLISH_MAX_W * NITRO_PUBLISH_H];
+    uint8_t alpha[NITRO_PUBLISH_MAX_W * NITRO_PUBLISH_H];
+    uint32_t premultiplied[NITRO_PUBLISH_MAX_W * NITRO_PUBLISH_H];   /* (working space) */
+    int width, underValid, overValid;
+    uint32_t gen;
+    uint32_t underChanged[NITRO_PUBLISH_BANDS], overChanged[NITRO_PUBLISH_BANDS];
+    uint8_t overAny[NITRO_PUBLISH_BANDS];
+} NitroPublishShadow;
+
+typedef struct NitroPublishTarget {
+    const NitroPublishShadow *heldBy;   /* whose pictures its textures hold (NULL: not known) */
+    int heldWidth;
+    uint32_t underGen, overGen;         /* up to date with that publish (0: not known) */
+} NitroPublishTarget;
+
+/* The over layer's pixels i .. j (colour bit 15: drawn; alpha 0-16) into
+ * RGBA8 (red in the top byte) with the alpha multiplied in, alpha16 giving
+ * 0-16 as 0-255; whether any isn't transparent. */
+uint32_t NitroPort_PremultiplyOver(const uint16_t *over, const uint8_t *alpha, const uint8_t alpha16[17],
+                                   uint32_t *out, int i, int j);
+
+/* A picture w wide (a multiple of 4, at most NITRO_PUBLISH_MAX_W) into a
+ * target's textures (texW texels wide, tiled; underTex RGB565 through
+ * table as NitroPort_Double2xTiled16Table, 8-byte aligned; overTex RGBA8
+ * premultiplied, written only if hasOver), the bands changed since it was
+ * last written. flush(data, bytes) for each part of a texture written.
+ * Returns whether the over layer has anything in it. */
+int NitroPort_PublishDoubled(NitroPublishShadow *shadow, NitroPublishTarget *target, const uint16_t *under,
+                             const uint16_t *over, const uint8_t *overAlpha, int hasOver, int w,
+                             uint16_t *underTex, uint32_t *overTex, int texW, const uint16_t *table,
+                             const uint8_t alpha16[17], void (*flush)(void *data, uint32_t bytes));
 
 #ifdef __cplusplus
 }

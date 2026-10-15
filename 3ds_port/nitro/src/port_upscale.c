@@ -5,6 +5,7 @@
  * (the Morton offsets within a tile are a table).
  */
 #include <nitro_port_upscale.h>
+#include <string.h>
 
 /* The Morton offset of texel (x, y) within an 8x8 tile. */
 static const uint8_t sMorton[8][8] = {
@@ -96,12 +97,15 @@ DEFINE_SCALE2X(NitroPort_Scale2xTiled32, uint32_t)
 /* Nearest 2x: source pixel (x, y) is the 2x2 block at (2x, 2y), which in a
  * tile's Morton order is four texels in a row (the lowest bits are x's and
  * y's first): a 4x4 block of source pixels fills one 8x8 tile, the pixel
- * (i, j) of the block at texels 4 m .. 4 m + 3, m its index in sMorton4. */
+ * (i, j) of the block at texels 4 m .. 4 m + 3, m its index in sMorton4.
+ * Rows y0 .. y1 of the source (a band of whole tile rows), with the
+ * column right of the picture for those rows and, when the band is the
+ * last, the row below it and their corner. */
 #define DEFINE_DOUBLE(NAME, T)                                                 \
-    void NAME(const T *src, int w, int h, T *dst, int dstWidth)                \
+    void NAME##Rows(const T *src, int w, int h, int y0, int y1, T *dst, int dstWidth) \
     {                                                                          \
         int tilesPerRow = dstWidth / 8, bx, by, x, y;                          \
-        for (by = 0; by < h / 4; by++) {                                       \
+        for (by = y0 / 4; by < y1 / 4; by++) {                                 \
             const T *s = src + (by * 4) * w;                                   \
             T *tiles = dst + (by * tilesPerRow) * 64;                          \
             for (bx = 0; bx < w / 4; bx++, s += 4, tiles += 64) {              \
@@ -119,26 +123,30 @@ DEFINE_SCALE2X(NitroPort_Scale2xTiled32, uint32_t)
         }                                                                      \
         /* the edges repeated: the column right of the picture, the row     \
          * below it, and their corner */                                     \
-        for (y = 0; y < 2 * h && 2 * w < dstWidth; y++) {                      \
+        for (y = 2 * y0; y < 2 * y1 && 2 * w < dstWidth; y++) {                \
             dst[NitroPort_TiledIndex((unsigned)(2 * w), (unsigned)y, (unsigned)dstWidth)] = \
                 dst[NitroPort_TiledIndex((unsigned)(2 * w - 1), (unsigned)y, (unsigned)dstWidth)]; \
         }                                                                      \
-        for (x = 0; x <= 2 * w && x < dstWidth; x++) {                         \
+        for (x = 0; y1 == h && x <= 2 * w && x < dstWidth; x++) {              \
             dst[NitroPort_TiledIndex((unsigned)x, (unsigned)(2 * h), (unsigned)dstWidth)] = \
                 dst[NitroPort_TiledIndex((unsigned)x, (unsigned)(2 * h - 1), (unsigned)dstWidth)]; \
         }                                                                      \
+    }                                                                          \
+    void NAME(const T *src, int w, int h, T *dst, int dstWidth)                \
+    {                                                                          \
+        NAME##Rows(src, w, h, 0, h, dst, dstWidth);                            \
     }
 
 DEFINE_DOUBLE(NitroPort_Double2xTiled16, uint16_t)
 DEFINE_DOUBLE(NitroPort_Double2xTiled32, uint32_t)
 
-void NitroPort_Double2xTiled16Table(const uint16_t *src, int w, int h, uint16_t *dst, int dstWidth,
-                                    const uint16_t *table)
+void NitroPort_Double2xTiled16TableRows(const uint16_t *src, int w, int h, int y0, int y1, uint16_t *dst,
+                                        int dstWidth, const uint16_t *table)
 {
     typedef uint64_t __attribute__((may_alias, aligned(8))) u64a;
     int tilesPerRow = dstWidth / 8, bx, by, x, y;
 
-    for (by = 0; by < h / 4; by++) {
+    for (by = y0 / 4; by < y1 / 4; by++) {
         const uint16_t *s = src + (by * 4) * w;
         uint16_t *tiles = dst + (by * tilesPerRow) * 64;
 
@@ -159,13 +167,161 @@ void NitroPort_Double2xTiled16Table(const uint16_t *src, int w, int h, uint16_t 
             }
         }
     }
-    /* the edges repeated, as NitroPort_Double2xTiled16 */
-    for (y = 0; y < 2 * h && 2 * w < dstWidth; y++) {
+    /* the edges repeated, as NitroPort_Double2xTiled16Rows */
+    for (y = 2 * y0; y < 2 * y1 && 2 * w < dstWidth; y++) {
         dst[NitroPort_TiledIndex((unsigned)(2 * w), (unsigned)y, (unsigned)dstWidth)] =
             dst[NitroPort_TiledIndex((unsigned)(2 * w - 1), (unsigned)y, (unsigned)dstWidth)];
     }
-    for (x = 0; x <= 2 * w && x < dstWidth; x++) {
+    for (x = 0; y1 == h && x <= 2 * w && x < dstWidth; x++) {
         dst[NitroPort_TiledIndex((unsigned)x, (unsigned)(2 * h), (unsigned)dstWidth)] =
             dst[NitroPort_TiledIndex((unsigned)x, (unsigned)(2 * h - 1), (unsigned)dstWidth)];
     }
+}
+
+void NitroPort_Double2xTiled16Table(const uint16_t *src, int w, int h, uint16_t *dst, int dstWidth,
+                                    const uint16_t *table)
+{
+    NitroPort_Double2xTiled16TableRows(src, w, h, 0, h, dst, dstWidth, table);
+}
+
+/* ------------------------------------------------- publishing what changed */
+
+static uint32_t Widen5(uint32_t v)
+{
+    return (v << 3) | (v >> 2);
+}
+
+uint32_t NitroPort_PremultiplyOver(const uint16_t *over, const uint8_t *alpha, const uint8_t alpha16[17],
+                                   uint32_t *out, int i, int j)
+{
+    uint32_t any = 0;
+
+    for (; i < j; i++) {
+        uint16_t c = over[i];
+        uint32_t a, r, g, b;
+
+        if (!(c & 0x8000)) {
+            out[i] = 0;
+            continue;
+        }
+        a = alpha16[alpha[i] > 16 ? 16 : alpha[i]];
+        /* (x / 255, rounded: (x + 128 + ((x + 128) >> 8)) >> 8) */
+        r = Widen5(c & 31) * a + 128u;
+        g = Widen5((c >> 5) & 31) * a + 128u;
+        b = Widen5((c >> 10) & 31) * a + 128u;
+        r = (r + (r >> 8)) >> 8;
+        g = (g + (g >> 8)) >> 8;
+        b = (b + (b >> 8)) >> 8;
+        out[i] = (r << 24) | (g << 16) | (b << 8) | a;
+        any |= a;
+    }
+    return any;
+}
+
+int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, const uint16_t *under,
+                             const uint16_t *over, const uint8_t *overAlpha, int hasOver, int w,
+                             uint16_t *underTex, uint32_t *overTex, int texW, const uint16_t *table,
+                             const uint8_t alpha16[17], void (*flush)(void *data, uint32_t bytes))
+{
+    const int h = NITRO_PUBLISH_H, bands = NITRO_PUBLISH_BANDS;
+    const size_t band = (size_t)w * 4u;
+    const uint32_t tileRow = (uint32_t)texW * 8u;   /* texels in a band's row of tiles (doubled) */
+    uint32_t gen = ++sh->gen, any = 0;
+    int b, from, known = t->heldBy == sh && t->heldWidth == w;
+
+    /* What changed since the last picture. */
+    if (!sh->underValid || sh->width != w) {
+        memcpy(sh->under, under, band * bands * 2u);
+        for (b = 0; b < bands; b++) {
+            sh->underChanged[b] = gen;
+        }
+        sh->underValid = 1;
+        sh->overValid = 0;
+        sh->width = w;
+    } else {
+        for (b = 0; b < bands; b++) {
+            if (memcmp(under + band * b, sh->under + band * b, band * 2u) != 0) {
+                memcpy(sh->under + band * b, under + band * b, band * 2u);
+                sh->underChanged[b] = gen;
+            }
+        }
+    }
+    /* The under texture brought up to date: each run of bands changed
+     * since it was written, done again (and the row below the picture
+     * with the last band). */
+    for (b = 0, from = -1; b <= bands; b++) {
+        int redo = b < bands && (!known || t->underGen == 0 || sh->underChanged[b] > t->underGen);
+
+        if (redo && from < 0) {
+            from = b;
+        } else if (!redo && from >= 0) {
+            uint32_t rows = (uint32_t)(b - from) + (b == bands ? 1u : 0u);
+
+            NitroPort_Double2xTiled16TableRows(under, w, h, from * 4, b * 4, underTex, texW, table);
+            if (flush) {
+                flush(underTex + (uint32_t)from * tileRow, rows * tileRow * 2u);
+            }
+            from = -1;
+        }
+    }
+    t->underGen = gen;
+    t->heldBy = sh;
+    t->heldWidth = w;
+    if (!hasOver) {
+        /* (not drawn, nor kept: all of it again when there is one; the
+         * over texture holds what it did, maybe another source's) */
+        sh->overValid = 0;
+        t->overGen = 0;
+        return 0;
+    }
+    if (!sh->overValid) {
+        memcpy(sh->over, over, band * bands * 2u);
+        memcpy(sh->alpha, overAlpha, band * bands);
+        for (b = 0; b < bands; b++) {
+            sh->overChanged[b] = gen;
+        }
+        sh->overValid = 1;
+    } else {
+        for (b = 0; b < bands; b++) {
+            if (memcmp(over + band * b, sh->over + band * b, band * 2u) != 0 ||
+                memcmp(overAlpha + band * b, sh->alpha + band * b, band) != 0) {
+                memcpy(sh->over + band * b, over + band * b, band * 2u);
+                memcpy(sh->alpha + band * b, overAlpha + band * b, band);
+                sh->overChanged[b] = gen;
+            }
+        }
+    }
+    for (b = 0, from = -1; b <= bands; b++) {
+        int redo = b < bands && (!known || t->overGen == 0 || sh->overChanged[b] > t->overGen);
+
+        if (b < bands && sh->overChanged[b] == gen) {
+            /* (converted now, and whether anything's in it) */
+            sh->overAny[b] = NitroPort_PremultiplyOver(over, overAlpha, alpha16, sh->premultiplied,
+                                                       (int)(band * b), (int)(band * (b + 1))) != 0;
+        }
+        if (redo && from < 0) {
+            from = b;
+        } else if (!redo && from >= 0) {
+            uint32_t rows = (uint32_t)(b - from) + (b == bands ? 1u : 0u);
+            int k;
+
+            for (k = from; k < b; k++) {
+                if (sh->overChanged[k] != gen) {
+                    /* (changed before, but not in this target's textures) */
+                    (void)NitroPort_PremultiplyOver(over, overAlpha, alpha16, sh->premultiplied,
+                                                    (int)(band * k), (int)(band * (k + 1)));
+                }
+            }
+            NitroPort_Double2xTiled32Rows(sh->premultiplied, w, h, from * 4, b * 4, overTex, texW);
+            if (flush) {
+                flush(overTex + (uint32_t)from * tileRow, rows * tileRow * 4u);
+            }
+            from = -1;
+        }
+    }
+    for (b = 0; b < bands; b++) {
+        any |= sh->overAny[b];
+    }
+    t->overGen = gen;
+    return any != 0;
 }

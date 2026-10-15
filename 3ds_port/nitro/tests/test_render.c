@@ -145,6 +145,25 @@ static void test_unchanged_screen(void)
     CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
 }
 
+/* DISP3DCNT's acknowledge bits (the game writes them every frame) don't
+ * count as a change; its other bits do. */
+static void test_3d_acknowledge_unchanged(void)
+{
+    static u16 backdrop = GREY;
+
+    Reset();
+    GX_LoadBGPltt(&backdrop, 0, 2);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    reg_G3X_DISP3DCNT = (u16)(reg_G3X_DISP3DCNT | REG_G3X_DISP3DCNT_GO_MASK | REG_G3X_DISP3DCNT_RO_MASK);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    reg_G3X_DISP3DCNT = (u16)(reg_G3X_DISP3DCNT & ~(REG_G3X_DISP3DCNT_GO_MASK | REG_G3X_DISP3DCNT_RO_MASK));
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    reg_G3X_DISP3DCNT = (u16)(reg_G3X_DISP3DCNT ^ 0x0080);   /* fog on or off */
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);
+    reg_G3X_DISP3DCNT = (u16)(reg_G3X_DISP3DCNT ^ 0x0080);
+}
+
 /* While the 3D keeps changing, the 3D screen is drawn for each new 3D
  * image only; a few calls after the last one, changes are looked for as
  * before (and the screen drawn once, to be sure it's up to date). */
@@ -1850,6 +1869,7 @@ int main(int argc, char **argv)
 
     test_backdrop_and_power();
     test_unchanged_screen();
+    test_3d_acknowledge_unchanged();
     test_screen_follows_3d();
     test_text_bg();
     test_8bpp_ext_palette();
