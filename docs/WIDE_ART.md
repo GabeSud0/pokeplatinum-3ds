@@ -2,7 +2,8 @@
 
 The remaster's upper screen is wider than the DS's: 32 DS pixels more on
 each side. By itself the port fills those bands with rules (an edge colour
-going on, a picture mirrored, nothing; see [REMASTER.md](REMASTER.md)).
+going on, nothing; never a picture mirrored or stretched: see
+[REMASTER.md](REMASTER.md)).
 Where a rule doesn't look right, you can draw the bands yourself, screen by
 screen, and the game shows your drawing instead.
 
@@ -113,13 +114,26 @@ it's scrolled. So:
 A sprite group's picture goes where the group has no sprite, at the
 group's priority (so the layers in front of the sprites stay in front).
 
-**Placing a picture.** The port's own rules can only mirror or extend what
-reaches the DS's edge. Where that looks wrong (a Pokemon cut by the DS's
-edge mirrored into the band), draw the layer as it should be: move it
-(Move tool) so that what the DS cut at its edge is cut at the wide
-screen's edge, erase what the rules made, and draw the strips on to the
-edges. Saved with the middle changed, the whole layer is yours, at the
-place you put it.
+**Placing a picture.** The port's own rules only carry a plain edge
+colour on. Where a picture reaches the DS's edge, draw the layer as it
+should be: move it (Move tool) so that what the DS cut at its edge is cut
+at the wide screen's edge, and draw the strips on to the edges. Saved with
+the middle changed, the whole layer is yours, at the place you put it.
+(A capture's `bg<N>_map.png` is the layer with its map going on past the
+DS's edges, where the map has more: a start for the bands.)
+
+**A layer that stops at another place.** A layer that stops somewhere else
+for a while (the opening's Pokemon, 60 pixels further right before the
+lightning) needs a picture there too. Capture it there, then
+
+    python tools/wideart/fill_places.py WIDE_FOLDER CAPTURE --write
+
+makes it from the layer's whole-layer pictures at its other places: moved
+by as much as the layer moved (nothing stretched or mirrored), and only if
+it lines up exactly with what the DS shows there. (Without CAPTURE: all
+the captures; without `--write` it only lists them.) Don't capture where
+a layer waits beside the DS's screen before it comes in: there it should
+show nothing.
 
 Files, in `3ds/pokeplatinum/wide`:
 
@@ -130,7 +144,8 @@ Files, in `3ds/pokeplatinum/wide`:
 - `<key>_<hofs>_<vofs>_full.png`: the whole layer (the editor saves this
   one when you change the middle);
 - `..._loop.png` (either kind): its bands go round with the layer;
-- `captures/NNNN/`: `screen.png`, `bg0.png`-`bg3.png`, `obj<G>.png` (each
+- `captures/NNNN/`: `screen.png`, `bg0.png`-`bg3.png` (and
+  `bg<N>_map.png`, its map past the DS's edges), `obj<G>.png` (each
   sprite group, G = priority x 32 + palette, or + 16 for 8-bit sprites),
   `info.txt` (each layer's key, scroll or position, and priority);
 - `editor/<key>_<hofs>_<vofs>/`: the editor's drawing layers for a picture

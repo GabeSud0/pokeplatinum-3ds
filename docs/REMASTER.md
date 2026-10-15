@@ -113,11 +113,10 @@ stretched:
 - **A plain edge goes on.** Where a BG's line is one colour at its edge (a
   picture's plain border, the black of a fade, a window's frame) that
   colour goes on to the screen's edge.
-- **Pictures fold over.** On the screens made of pictures (the opening
-  movie, the title, the opening cutscene, the credits:
-  `NitroPort_WidePictures`) a BG whose picture reaches the edge is
-  mirrored at it: the intro's scenery, the title's torn border. A picture
-  that stops short of the edge (the title's logo) isn't.
+- **Nothing is mirrored.** A picture that reaches the DS's edge (the
+  intro's scenery, the title's torn border) isn't folded over into the
+  bands any more: those screens have pictures drawn for them (see
+  [WIDE_ART.md](WIDE_ART.md)); without one, its bands stay empty.
 - **The UI shows nothing beside the DS's screen** (the backdrop, or the
   3D): a menu's background stays a menu's background.
 - **Pictures with plain middles and decorated sides** (the intro's red

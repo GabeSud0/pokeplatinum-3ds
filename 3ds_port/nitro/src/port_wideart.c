@@ -628,8 +628,21 @@ int NitroPort_WideArtCapture(const char *dir, char *made, size_t madeSize)
             fclose(info);
             return -1;
         }
-        fprintf(info, "bg %d prio %d key %016llx hofs %d vofs %d file bg%d.png\n", bg, prio,
-                (unsigned long long)key, hofs, vofs, bg);
+        /* and the BG's map going on beyond the DS's edges (the game's own
+         * art there, when it has any: what filling the bands can start from) */
+        memset(&split, 0, sizeof(split));
+        NitroPort_WideLayout(engine, &split);
+        split.clip[bg] = 0;
+        if (NitroPort_Render2DLayer(engine, bg, &split, layer, &key, &hofs, &vofs, &prio)) {
+            to_rgba(layer, rgba, PIXELS);
+            snprintf(path, sizeof(path), "%s/bg%d_map.png", folder, bg);
+            if (NitroPort_WideArtWritePng(path, rgba, NITRO_WIDE_ART_W, NITRO_WIDE_ART_H) != 0) {
+                fclose(info);
+                return -1;
+            }
+        }
+        fprintf(info, "bg %d prio %d key %016llx hofs %d vofs %d file bg%d.png map bg%d_map.png\n", bg, prio,
+                (unsigned long long)key, hofs, vofs, bg, bg);
     }
     {
         /* the OBJs, group by group (a scene's sprite background is one) */

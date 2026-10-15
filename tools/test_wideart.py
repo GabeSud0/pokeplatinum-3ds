@@ -282,6 +282,41 @@ class WideArtTest(unittest.TestCase):
         self.assertIsNotNone(core.load_project(self.wide, far.key, far.hofs, far.vofs, p2))
         self.assertIsNone(core.load_project(self.wide, far.key, 12, 300, p3))
 
+    def test_moved_to_another_place(self):
+        """A layer stopped 60 px to the right (scroll 452 on a 512-wide map):
+        its picture moved by 60, used only if it lines up with the DS's."""
+        cap = core.list_captures(self.wide)[0]
+        layer = cap.layer(1)                              # scroll 0, 0
+        pic = Image.new("RGBA", (core.W, core.H))
+        pic.paste((255, 255, 255, 255), (200, 80, 320, 112))   # a bar cut at the wide edge
+        pic.paste((0, 0, 255, 255), (0, 0, 10, 4))
+        pic.save(self.wide / f"{layer.key}_0_0_full.png")
+        self.assertIsNone(core.moved_art(self.wide, cap, layer))   # it has one there
+        shown = Image.new("RGBA", (core.W, core.H))
+        shown.paste((255, 255, 255, 255), (260, 80, core.DS_X1, 112))   # what the DS shows of it there
+        shown.paste((0, 0, 255, 255), (60, 0, 70, 4))
+        shown.save(cap.path / "bg1.png")
+        there = core.Layer(1, 0, layer.key, 452, 0, "bg1.png")
+        img, ref = core.moved_art(self.wide, cap, there)
+        self.assertEqual((ref.dx, ref.dy), (60, 0))
+        self.assertEqual(img.getpixel((319, 90)), (255, 255, 255, 255))   # on to the edge
+        self.assertEqual(img.getpixel((259, 90))[3], 0)
+        self.assertEqual(img.getpixel((60, 0)), (0, 0, 255, 255))
+        # not lining up with what the DS shows: none
+        shown.paste((255, 0, 0, 255), (100, 100, 101, 101))
+        shown.save(cap.path / "bg1.png")
+        self.assertIsNone(core.moved_art(self.wide, cap, there))
+        # the command
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "wideart"))
+        import fill_places
+        shown.paste((0, 0, 0, 0), (100, 100, 101, 101))
+        shown.save(cap.path / "bg1.png")
+        (cap.path / "info.txt").write_text((cap.path / "info.txt").read_text().replace(
+            "key c348e56dbb30d48a hofs 0 vofs 0", "key c348e56dbb30d48a hofs 452 vofs 0"))
+        made = fill_places.fill(self.wide, core.list_captures(self.wide), write=True)
+        self.assertEqual([p.name for p in made], [f"{layer.key}_452_0_full.png"])
+        self.assertTrue(made[0].exists())
+
 
 if __name__ == "__main__":
     unittest.main()

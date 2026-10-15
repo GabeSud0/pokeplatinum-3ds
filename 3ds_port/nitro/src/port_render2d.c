@@ -2482,11 +2482,9 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
             e->clip[bg] = split->clip[bg];
         }
         e->anchorWindows = (u8)split->anchorWindows;
-        if (NitroPort_WidePictures()) {
-            for (bg = 0; bg < 4; bg++) {
-                e->mirror[bg] = e->clip[bg];
-            }
-        }
+        /* (No picture mirrored at the DS's edges any more: Gabriel doesn't
+         * want anything mirrored or stretched. Where a layer has no
+         * hand-drawn picture its plain edge goes on, or nothing.) */
     }
 }
 

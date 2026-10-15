@@ -229,6 +229,48 @@ def find_art(art_dir: str | os.PathLike, layer: Layer) -> ArtRef | None:
     return best
 
 
+ART_REST = 8   # port_render2d.c: a picture's bands show while the layer is within 8 px sideways of its place
+
+
+def moved_art(art_dir: str | os.PathLike, cap: Capture, layer: Layer) -> tuple[Image.Image, ArtRef] | None:
+    """A whole-layer picture for where a capture's BG is, made from one of
+    its pictures made at another place: that picture moved by as much as
+    the layer has (nothing stretched or mirrored, what goes past the
+    picture's edge left out), used only if it lines up exactly with what the
+    DS shows of the layer there. None if the layer already has a picture
+    there, or none of its pictures lines up (the map may be 256 or 512
+    wide: both are tried)."""
+    if layer.kind != "bg":
+        return None
+    refs = art_files(art_dir, layer.key)
+    for ref in refs:
+        if abs(_wrapped(ref.hofs - layer.hofs, 512)) <= ART_REST and ref.vofs == layer.vofs:
+            return None
+    shown = cap.layer_image(layer).crop((DS_X0, 0, DS_X1, H))
+    shown_px = list(shown.getdata())
+    if not any(p[3] for p in shown_px):
+        return None
+    for ref in sorted(refs, key=lambda r: not r.full):
+        if not ref.full:
+            continue        # (a bands-only picture has no middle to line up)
+        pic = load_rgba(ref.path)
+        tried = set()
+        for hp in (512, 256, 1024):
+            for vp in (512, 256, 1024):
+                dx, dy = _wrapped(ref.hofs - layer.hofs, hp), _wrapped(ref.vofs - layer.vofs, vp)
+                if (dx, dy) in tried:
+                    continue
+                tried.add((dx, dy))
+                moved = Image.new("RGBA", (W, H))
+                moved.paste(pic, (dx, dy))
+                mid = list(moved.crop((DS_X0, 0, DS_X1, H)).getdata())
+                if all((a[3] == 0 and b[3] == 0) or (a[3] and b[3] and a[:3] == b[:3])
+                       for a, b in zip(mid, shown_px)):
+                    ref.dx, ref.dy = dx, dy
+                    return moved, ref
+    return None
+
+
 def existing_art(art_dir: str | os.PathLike, key: str, layer: Layer | None = None) -> Path | None:
     """The picture already made for a layer (the whole one if both): for
     a capture's layer, the one find_art chooses; else any of the key's."""

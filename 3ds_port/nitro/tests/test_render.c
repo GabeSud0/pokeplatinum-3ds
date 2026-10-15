@@ -1000,8 +1000,8 @@ static void test_wide_canvas(void)
         CHECK(wide[5 * 320 + 96] == GREY);
         NitroPort_WindowRemoved(&window);
         /* On the picture screens (the opening, the title), a BG with none of
-         * the game's windows is a picture: where its edge isn't plain, it's
-         * mirrored at the DS's edge. Tiles 0 and 1 of row
+         * the game's windows is a picture: where its edge isn't plain, it
+         * used to be mirrored at the DS's edge; now nothing is. Tiles 0 and 1 of row
          * 0: red, blue (each tile's top left pixel blue: MakeTile4); the
          * rest empty. Line 0's edge isn't plain (that pixel), line 5's is. */
         for (i = 0; i < 32 * 32; i++) {
@@ -1018,12 +1018,11 @@ static void test_wide_canvas(void)
         CHECK(wide[0 * 320 + 32] == BLUE);
         CHECK(wide[0 * 320 + 33] == RED);
         CHECK(wide[0 * 320 + 40] == BLUE);
-        CHECK(wide[0 * 320 + 31] == BLUE);        /* mirrored: x -1 is the DS's 0 */
-        CHECK(wide[0 * 320 + 30] == RED);
-        CHECK(wide[0 * 320 + 24] == RED);         /* x -8 is the DS's 7 */
-        CHECK(wide[0 * 320 + 23] == BLUE);        /* x -9 is the DS's 8 */
-        CHECK(wide[0 * 320 + 16] == BLUE);
-        CHECK(wide[0 * 320 + 15] == GREY);        /* x -17 is the DS's 16: empty */
+        /* Not mirrored any more (October 2026: nothing mirrored or
+         * stretched; was the DS's 0, 7, 8 at x -1, -8, -9): nothing */
+        CHECK(wide[0 * 320 + 31] == GREY);
+        CHECK(wide[0 * 320 + 24] == GREY);
+        CHECK(wide[0 * 320 + 16] == GREY);
         CHECK(wide[0 * 320 + 0] == GREY);
         CHECK(wide[5 * 320 + 31] == RED);         /* line 5: a plain edge goes on */
         CHECK(wide[5 * 320 + 0] == RED);
