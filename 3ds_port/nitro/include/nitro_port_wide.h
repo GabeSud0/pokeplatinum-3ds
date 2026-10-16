@@ -10,8 +10,11 @@
  * (NitroPort_WindowFramed, patch 0015: the menus by the DS's edges go to
  * the screen's, the text boxes widen); the 2D renderer moves those
  * (port_render2d.c, TextBgSegments; the sprites over a moved window go
- * with it) and leaves the rest where the DS has them. Plain C, no SDK
- * headers: the 3DS program includes it next to libctru.
+ * with it) and leaves the rest where the DS has them. A screen redrawn
+ * for the wider screen (a reference made for it: the trainer card) is laid
+ * out by the game in parts that move apart (NitroPort_WideSplitScreen,
+ * patch 0016). Plain C, no SDK headers: the 3DS program includes it next
+ * to libctru.
  */
 #ifndef NITRO_PORT_WIDE_H
 #define NITRO_PORT_WIDE_H
@@ -65,6 +68,33 @@ int NitroPort_WidePictures(void);
 void NitroPort_WideForcePictures(int mode);
 /* Changes whenever a window is added or removed. */
 uint32_t NitroPort_WideWindowsSerial(void);
+
+/* A screen laid out anew for the wider screen, from a reference drawn for
+ * it (the trainer card, 2026-10-15): on lines top..bottom-1 of the BGs in
+ * bgs (bit n: BG n), the pixels left of column x move by left pixels and
+ * those from x on by right pixels (negative: to the left); between them,
+ * when they move apart, column x is drawn on (fill 1: a card's body,
+ * widened) or nothing is (fill 0: the text and pictures over it). Lines
+ * and columns of the BG's own picture: a text BG's map, an affine BG's
+ * picture before its matrix (a card turning over stays laid out as it
+ * turns); only the DS's 256 columns of it move, nothing from beyond them.
+ * A BG with splits shows nothing beside the DS's screen but what they
+ * move there (on lines without one, nothing at all), its hand-drawn
+ * picture (if there's one) where the BG's picture would be. */
+typedef struct NitroWideSplit {
+    uint8_t bgs, fill;
+    uint16_t top, bottom;
+    int16_t x, left, right;
+} NitroWideSplit;
+#define NITRO_WIDE_MAX_SPLITS 16
+/* From the game: an engine's screen laid out with these splits, count rows
+ * of 7 numbers each: bgs, top, bottom, x, left, right, fill (copied; up to
+ * NITRO_WIDE_MAX_SPLITS); count 0: as the DS has it. Only the wider screen
+ * is laid out with them. */
+void NitroPort_WideSplitScreen(int engine, const short *splits, int count);
+/* (the 2D renderer) An engine's splits now (up to NITRO_WIDE_MAX_SPLITS
+ * into out): how many. Any thread. */
+int NitroPort_WideSplits(int engine, NitroWideSplit *out);
 
 /* The wider screen: how many DS pixels it adds each side (32 for the
  * remaster's upper screen: 400 pixels at 1.25 times the DS's size; 0 for

@@ -162,6 +162,12 @@ typedef struct Engine {
      * go with them (a menu's icons). */
     struct { short x0, y0, x1, y1, shift; } objMove[8];
     int nObjMove;
+    /* (wider canvas, the game's: NitroPort_WideSplitScreen) a screen laid
+     * out anew in parts that move apart: its splits, and the BGs they're
+     * of (a bit each). */
+    NitroWideSplit splits[NITRO_WIDE_MAX_SPLITS];
+    int nSplits;
+    u8 splitBgs;
     /* The palettes as pixels (colour | OPAQUE), 0 for the transparent
      * colour: index 0 of each 16 colours (4 bits per pixel), or of all 256
      * (8 bits per pixel). */
@@ -444,7 +450,7 @@ static void DecideSplits(Engine *e, const int *kind, const u16 *bgcnt, u32 dispc
         int y, lines = 0, decorated = 0, mapH, hofs, vofs;
 
         e->split[bg] = 0;
-        if (kind[bg] != BG_TEXT || !e->clip[bg]) {
+        if (kind[bg] != BG_TEXT || !e->clip[bg] || ((e->splitBgs >> bg) & 1)) {
             continue;
         }
         mapH = sTextSizes[bgcnt[bg] >> 14][1];
@@ -485,7 +491,8 @@ static void DecideBandFills(Engine *e, const int *kind, const u16 *bgcnt, u32 di
         u8 edge[2][H];   /* the BG has something at its edge, not plain */
 
         e->bandFills[bg] = 0;
-        if (e->width <= W || kind[bg] != BG_TEXT || !e->clip[bg] || e->art[bg] != NULL || e->split[bg]) {
+        if (e->width <= W || kind[bg] != BG_TEXT || !e->clip[bg] || e->art[bg] != NULL || e->split[bg] ||
+            ((e->splitBgs >> bg) & 1)) {
             continue;
         }
         mapH = sTextSizes[bgcnt[bg] >> 14][1];
@@ -568,12 +575,112 @@ static void DecideBandFills(Engine *e, const int *kind, const u16 *bgcnt, u32 di
     }
 }
 
+/* (wider canvas: a screen laid out anew, NitroPort_WideSplitScreen) The
+ * split of line ty of BG bg (the BG's own lines: its map's, an affine BG's
+ * picture's), or NULL: the line where the DS has it. */
+static const NitroWideSplit *SplitOf(const Engine *e, int bg, int ty)
+{
+    int i;
+
+    for (i = 0; i < e->nSplits; i++) {
+        const NitroWideSplit *s = &e->splits[i];
+
+        if (((s->bgs >> bg) & 1) && ty >= s->top && ty < s->bottom) {
+            return s;
+        }
+    }
+    return NULL;
+}
+
+/* Which of the DS's columns a split line shows at column v (where the
+ * DS's column v would be, as far beyond its edges as the canvas goes):
+ * 0-255, or -1 nothing. */
+static inline int SplitColumn(const NitroWideSplit *s, int v)
+{
+    int src;
+
+    if (s == NULL) {
+        src = v;
+    } else if (v < s->x + s->left) {
+        src = v - s->left;
+    } else if (v >= s->x + s->right) {
+        src = v - s->right;
+    } else {
+        src = s->fill ? s->x : -1;
+    }
+    return src >= 0 && src < W ? src : -1;
+}
+
+/* A split text BG's line: its parts where they moved to (the left part,
+ * map columns hofs.. x - 1; the right part, x.. hofs + 255), between them
+ * column x drawn on or nothing; nothing else (beyond the DS's screen, the
+ * map's other columns stay hidden). */
+static int SplitSegments(const Engine *e, int bg, int ty, int hofs, int mapW, Segment *segs)
+{
+    const NitroWideSplit *s = SplitOf(e, bg, ty);
+    int origin = e->origin, width = e->width, n = 0, k;
+    /* runs on the canvas: from, to, the map's x at canvas 0 (or the column
+     * drawn on: fixed) */
+    int run[3][4], nrun = 0;
+
+    if (s == NULL) {
+        run[nrun][0] = origin;
+        run[nrun][1] = origin + W;
+        run[nrun][2] = hofs - origin;
+        run[nrun][3] = -1;
+        nrun++;
+    } else {
+        int at = s->x - hofs;   /* the split on the DS's screen */
+
+        if (at > W) {
+            at = W;
+        }
+        if (at > 0) {
+            run[nrun][0] = origin + s->left;
+            run[nrun][1] = origin + at + s->left;
+            run[nrun][2] = hofs - origin - s->left;
+            run[nrun][3] = -1;
+            nrun++;
+        }
+        if (at < 0) {
+            at = 0;
+        }
+        if (at < W) {
+            run[nrun][0] = origin + at + s->right;
+            run[nrun][1] = origin + W + s->right;
+            run[nrun][2] = hofs - origin - s->right;
+            run[nrun][3] = -1;
+            nrun++;
+        }
+        if (s->fill && s->left < s->right) {
+            run[nrun][0] = origin + at + s->left;
+            run[nrun][1] = origin + at + s->right;
+            run[nrun][2] = 0;
+            run[nrun][3] = s->x & (mapW - 1);
+            nrun++;
+        }
+    }
+    for (k = 0; k < nrun; k++) {
+        int x0 = run[k][0] < 0 ? 0 : run[k][0], x1 = run[k][1] > width ? width : run[k][1];
+
+        if (x0 < x1) {
+            segs[n].x0 = (short)x0;
+            segs[n].x1 = (short)x1;
+            segs[n].off = (short)run[k][2];
+            segs[n].fixed = (short)run[k][3];
+            n++;
+        }
+    }
+    return n;
+}
+
 /* The runs of a text BG's line (y, its map row ty) on a wider canvas: the
  * DS's 256 pixels (or the whole canvas, wrapping round the map, without
  * clip), with the windows the game anchors (NitroPort_WideWindows: the
  * place name sign) moved to the screen's edge. Beside the DS's picture (with
  * clip): its edge colour when the edge is plain on this line (PlainRun),
- * else nothing. Returns how many. */
+ * else nothing. A split BG's: its parts (SplitSegments). Returns how
+ * many. */
 static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y, int ty, int hofs, int mapW,
                           Segment *segs)
 {
@@ -612,6 +719,9 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
             n++;
         }
         return n;
+    }
+    if ((e->splitBgs >> bg) & 1) {
+        return SplitSegments(e, bg, ty, hofs, mapW, segs);
     }
     if (e->split[bg]) {
         /* The halves to the edges, the plain middle widened. */
@@ -1131,8 +1241,13 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
     s32 refX = (s32)(Rd32(io, base + 8) << 4) >> 4;    /* 28-bit signed */
     s32 refY = (s32)(Rd32(io, base + 12) << 4) >> 4;
     /* (a wider canvas: the DS's x = 0 at e->origin; without clip, the BG
-     * goes on past the DS's edges as its matrix takes it) */
-    int xs = e->clip[bg] ? e->origin : 0, xe = e->clip[bg] ? e->origin + W : e->width;
+     * goes on past the DS's edges as its matrix takes it; split, across
+     * the canvas: its parts, moved, wherever they are) */
+    int splitHere = (e->splitBgs >> bg) & 1;
+    int xs = e->clip[bg] && !splitHere ? e->origin : 0, xe = e->clip[bg] && !splitHere ? e->origin + W : e->width;
+    const NitroWideSplit *split = NULL;
+    s32 splitTy = -1;
+    const u16 *art = splitHere ? e->art[bg] : NULL;
     s32 fx = refX + pb * y + pa * (xs - e->origin);
     s32 fy = refY + pd * y + pc * (xs - e->origin);
     BOOL wrap = (bgcnt & 0x2000) != 0;
@@ -1170,6 +1285,28 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
         u32 index;
 
         out[x] = 0;
+        if (splitHere) {
+            /* Where the matrix takes this pixel is a place on the split
+             * picture (laid out across the canvas: x -origin.. at rest);
+             * from that, the BG's own pixel it shows (or its hand-drawn
+             * picture's, made at rest). */
+            if (art != NULL && (e->artFull[bg] || tx < 0 || tx >= W)) {
+                s32 ax = tx + e->origin;
+
+                if (ax >= 0 && ax < NITRO_WIDE_ART_W && ty >= 0 && ty < H) {
+                    out[x] = art[ty * NITRO_WIDE_ART_W + ax];
+                }
+                continue;
+            }
+            if (ty != splitTy) {
+                split = SplitOf(e, bg, ty);
+                splitTy = ty;
+            }
+            tx = SplitColumn(split, tx);
+            if (tx < 0) {
+                continue;
+            }
+        }
         if (wrap) {
             tx &= mapW - 1;
             ty &= mapH - 1;
@@ -1243,14 +1380,15 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
             }
         }
     }
-    /* a hand-drawn picture: the bands (or all of it) from that */
-    if (e->art[bg] != NULL) {
-        const u16 *art = e->art[bg] + y * NITRO_WIDE_ART_W;
+    /* a hand-drawn picture: the bands (or all of it) from that (a split
+     * BG's, above: where its matrix takes it) */
+    if (e->art[bg] != NULL && !splitHere) {
+        const u16 *line = e->art[bg] + y * NITRO_WIDE_ART_W;
         int i;
 
         for (i = 0; i < e->width && i < NITRO_WIDE_ART_W; i++) {
             if (e->artFull[bg] || i < e->origin || i >= e->origin + W) {
-                out[i] = art[i];
+                out[i] = line[i];
             }
         }
     }
@@ -2828,6 +2966,10 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
         }
         e->anchorWindows = (u8)split->anchorWindows;
         e->pictures = (u8)(NitroPort_WidePictures() != 0);
+        e->nSplits = NitroPort_WideSplits(e->isA ? 0 : 1, e->splits);
+        for (bg = 0; bg < e->nSplits; bg++) {
+            e->splitBgs |= e->splits[bg].bgs;
+        }
         if (e->anchorWindows) {
             /* The windows moved to an edge, on the DS's screen: the
              * sprites over them go with them. */

@@ -1913,6 +1913,187 @@ static void *DrawEngineThread(void *arg)
     return NULL;
 }
 
+/* A screen laid out anew (NitroPort_WideSplitScreen, the trainer card):
+ * its parts moved apart, the body's column drawn on between them, the
+ * text's not; on an affine BG, through its matrix (the card turning over
+ * stays laid out as it turns), its hand-drawn picture as well. */
+static void test_wide_splits(void)
+{
+    static u16 wide[320 * 192], over[320 * 192], art[320 * 192], layerPx[320 * 192];
+    static u8 overAlpha[320 * 192];
+    static u8 tiles8[4 * 64], tiles4[4 * 32];
+    static u8 amap[32 * 32];
+    static u16 map[32 * 32];
+    static u16 pltt[256];
+    /* the body (BG2) split at 152, 31 each way, its column drawn on
+     * between, on lines 0-95; the text (BG1) the same, nothing between */
+    static const short body[][7] = { { 1 << 2, 0, 96, 152, -31, 31, 1 } };
+    static const short text[][7] = { { 1 << 1, 0, 96, 152, -31, 31, 0 }, { 0, 0, 96, 0, 0, 0, 0 } };
+    static const short textFill[][7] = { { 1 << 1, 0, 96, 152, -31, 31, 1 } };
+    NitroWideSplit got[NITRO_WIDE_MAX_SPLITS];
+    char dir[] = "/tmp/widesplitXXXXXX";
+    NitroRender2DSplit split;
+    MtxFx22 m;
+    uint64_t key;
+    int hofs, vofs, prio, i, x, y;
+
+    /* what the game says is what the renderer gets: rows without BGs left out */
+    NitroPort_WideSplitScreen(0, &text[0][0], 2);
+    CHECK(NitroPort_WideSplits(0, got) == 1 && got[0].bgs == 2 && got[0].top == 0 && got[0].bottom == 96 &&
+          got[0].x == 152 && got[0].left == -31 && got[0].right == 31 && got[0].fill == 0);
+    CHECK(NitroPort_WideSplits(1, got) == 0);   /* the other engine's: as the DS has it */
+    NitroPort_WideSplitScreen(0, NULL, 0);
+    CHECK(NitroPort_WideSplits(0, got) == 0);
+
+    Reset();
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_2, GX_BG0_AS_2D);
+    memset(&split, 0, sizeof(split));
+    split.width = 320;
+    split.origin = 32;
+    memset(split.clip, 1, sizeof(split.clip));
+    split.anchorWindows = 1;
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_WideForcePictures(0);
+    memset(pltt, 0, sizeof(pltt));
+    pltt[0] = GREY;
+    pltt[1] = RED;
+    pltt[2] = BLUE;
+    pltt[3] = WHITE;
+    pltt[4] = GREEN;
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    /* BG2, affine 256x256: red columns 0-18 (x 0-151), white 19 (152-159),
+     * blue 20-31 (160-255); a green tile at column 1 */
+    memset(tiles8, 0, sizeof(tiles8));
+    for (i = 0; i < 64; i++) {
+        tiles8[1 * 64 + i] = 1;
+        tiles8[2 * 64 + i] = 2;
+        tiles8[3 * 64 + i] = 3;
+    }
+    for (i = 0; i < 32 * 32; i++) {
+        x = i % 32;
+        amap[i] = (u8)(x < 19 ? 1 : x == 19 ? 3 : 2);
+    }
+    G2_SetBG2ControlAffine(GX_BG_SCRSIZE_AFFINE_256x256, GX_BG_AREAOVER_XLU, GX_BG_SCRBASE_0x0000,
+                           GX_BG_CHARBASE_0x04000);
+    GX_LoadBG2Char(tiles8, 0, sizeof(tiles8));
+    GX_LoadBG2Scr(amap, 0, sizeof(amap));
+    MTX_Identity22(&m);
+    G2_SetBG2Affine(&m, 128, 96, 0, 0);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG2);
+    NitroPort_WideSplitScreen(0, &body[0][0], 1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    y = 40;
+    CHECK(wide[y * 320 + 0] == GREY);     /* DS x -1: nothing (from beyond the DS's screen) */
+    CHECK(wide[y * 320 + 1] == RED);      /* DS x 0, 31 to the left */
+    CHECK(wide[y * 320 + 152] == RED);    /* DS x 151 */
+    CHECK(wide[y * 320 + 153] == WHITE);  /* between: column 152 drawn on */
+    CHECK(wide[y * 320 + 214] == WHITE);
+    CHECK(wide[y * 320 + 222] == WHITE);  /* DS x 159, 31 to the right */
+    CHECK(wide[y * 320 + 223] == BLUE);   /* DS x 160 */
+    CHECK(wide[y * 320 + 318] == BLUE);   /* DS x 255 */
+    CHECK(wide[y * 320 + 319] == GREY);
+    y = 120;                               /* (below the split: where the DS has it, nothing beside) */
+    CHECK(wide[y * 320 + 31] == GREY && wide[y * 320 + 32] == RED);
+    CHECK(wide[y * 320 + 287] == BLUE && wide[y * 320 + 288] == GREY);
+    /* Turning over: half as wide about the DS's middle (x 128), the card
+     * laid out as it was, narrowed: DS x -31..286 of it on 48.5..207 */
+    MTX_Scale22(&m, FX32_ONE * 2, FX32_ONE);
+    G2_SetBG2Affine(&m, 128, 96, 0, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    y = 40;
+    CHECK(wide[y * 320 + 32 + 48] == GREY);
+    CHECK(wide[y * 320 + 32 + 49] == RED);
+    CHECK(wide[y * 320 + 32 + 128] == WHITE);   /* its widened middle */
+    CHECK(wide[y * 320 + 32 + 207] == BLUE);
+    CHECK(wide[y * 320 + 32 + 208] == GREY);
+    /* its hand-drawn picture (made at rest, across the canvas), through the
+     * matrix as well: green, its left column blue */
+    MTX_Identity22(&m);
+    G2_SetBG2Affine(&m, 128, 96, 0, 0);
+    CHECK(NitroPort_Render2DLayer(0, 2, &split, layerPx, &key, &hofs, &vofs, &prio));
+    CHECK(mkdtemp(dir) != NULL);
+    for (i = 0; i < 320 * 192; i++) {
+        art[i] = (u16)((i % 320 == 0 ? BLUE : GREEN) | 0x8000);
+    }
+    WriteArt(dir, key, 0, 0, 1, art);
+    CHECK(NitroPort_WideArtLoad(dir) == 1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[40 * 320 + 0] == BLUE && wide[40 * 320 + 200] == GREEN && wide[40 * 320 + 319] == GREEN);
+    MTX_Scale22(&m, FX32_ONE * 2, FX32_ONE);
+    G2_SetBG2Affine(&m, 128, 96, 0, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[40 * 320 + 32 + 47] == GREY);    /* (the picture's x -2: none) */
+    CHECK(wide[40 * 320 + 32 + 48] == BLUE);    /* its left column, where the card's left edge went */
+    CHECK(wide[40 * 320 + 32 + 128] == GREEN);
+    CHECK(wide[40 * 320 + 32 + 208] == GREY);
+    NitroPort_WideArtLoad("/nonexistent");
+    MTX_Identity22(&m);
+    G2_SetBG2Affine(&m, 128, 96, 0, 0);
+    /* as the DS has it again */
+    NitroPort_WideSplitScreen(0, NULL, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[40 * 320 + 153] == RED && wide[40 * 320 + 184] == WHITE && wide[40 * 320 + 287] == BLUE);
+
+    /* BG1, a text BG: the same columns (4 bits a pixel); green at column 1 */
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_2D);
+    memset(tiles4, 0, sizeof(tiles4));
+    SolidTile4(tiles4 + 1 * 32, 1);
+    SolidTile4(tiles4 + 2 * 32, 2);
+    SolidTile4(tiles4 + 3 * 32, 3);
+    for (i = 0; i < 32 * 32; i++) {
+        x = i % 32;
+        map[i] = (u16)(x < 19 ? 1 : x == 19 ? 3 : 2);
+    }
+    for (y = 0; y < 32; y++) {
+        map[y * 32 + 1] = 0;   /* column 1 (x 8-15): nothing */
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0800,
+                     GX_BG_CHARBASE_0x08000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles4, 0, sizeof(tiles4));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    NitroPort_WideSplitScreen(0, &text[0][0], 2);
+    NitroPort_Render2DSplit(0, wide, &split);
+    y = 40;
+    CHECK(wide[y * 320 + 0] == GREY);     /* not the map's other side (it wraps) */
+    CHECK(wide[y * 320 + 1] == RED);
+    CHECK(wide[y * 320 + 9] == GREY);     /* its column 1 */
+    CHECK(wide[y * 320 + 152] == RED);
+    CHECK(wide[y * 320 + 153] == GREY);   /* between: nothing */
+    CHECK(wide[y * 320 + 214] == GREY);
+    CHECK(wide[y * 320 + 215] == WHITE);
+    CHECK(wide[y * 320 + 223] == BLUE);
+    CHECK(wide[y * 320 + 318] == BLUE);
+    CHECK(wide[y * 320 + 319] == GREY);
+    y = 120;
+    CHECK(wide[y * 320 + 31] == GREY && wide[y * 320 + 32] == RED && wide[y * 320 + 287] == BLUE &&
+          wide[y * 320 + 288] == GREY);
+    /* scrolled 8 to the left: its map's columns go with it (the split is
+     * of the map: column 152 still) */
+    G2_SetBG1Offset(8, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    y = 40;
+    CHECK(wide[y * 320 + 1] == GREY);     /* map x 8: column 1, nothing */
+    CHECK(wide[y * 320 + 9] == RED);      /* map x 16 */
+    CHECK(wide[y * 320 + 144] == RED);    /* map x 151 */
+    CHECK(wide[y * 320 + 145] == GREY);
+    CHECK(wide[y * 320 + 206] == GREY);
+    CHECK(wide[y * 320 + 207] == WHITE);  /* map x 152 */
+    CHECK(wide[y * 320 + 310] == BLUE);   /* map x 255 */
+    CHECK(wide[y * 320 + 311] == RED);    /* map x 256: round to 0, as on the DS's screen (its x 248) */
+    CHECK(wide[y * 320 + 319] == GREY);   /* the DS's x 256: beyond its screen */
+    G2_SetBG1Offset(0, 0);
+    /* its column drawn on between */
+    NitroPort_WideSplitScreen(0, &textFill[0][0], 1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[40 * 320 + 153] == WHITE && wide[40 * 320 + 214] == WHITE);
+    NitroPort_WideSplitScreen(0, NULL, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[40 * 320 + 152] == RED && wide[40 * 320 + 184] == WHITE && wide[40 * 320 + 223] == BLUE);
+    NitroPort_WideForcePictures(-1);
+}
+
 static void test_engines_on_two_threads(void)
 {
     static u16 refA[256 * 192], refB[256 * 192];
@@ -2064,6 +2245,7 @@ int main(int argc, char **argv)
     test_wide_art_sliding();
     test_wide_window_edges();
     test_wide_framed_windows();
+    test_wide_splits();
     test_engines_on_two_threads();
 
     printf("2D renderer: %d checks, %d failed\n", sChecks, sFailures);
