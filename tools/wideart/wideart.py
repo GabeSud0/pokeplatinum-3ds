@@ -787,10 +787,11 @@ class Editor(tk.Tk):
         if layer.kind == "picture":
             turned = f", turned {layer.angle}\N{DEGREE SIGN} when captured" if layer.angle else ""
             saved = f"file: {ref.path.name}" if ref else "no file (it isn't drawn)"
-            self.layer_info.configure(text=f"{layer.label}\nthe game draws it with its top-left at x {layer.hofs}, "
-                                           f"y {layer.vofs}{turned}\n{saved}\nSaving writes the file from that "
-                                           "corner: as big as it is, or bigger if drawn past its right or bottom "
-                                           "edge.")
+            moved = f" (moved {layer.dx:+d}, {layer.dy:+d})" if layer.dx or layer.dy else ""
+            self.layer_info.configure(text=f"{layer.label}\nits place: x {layer.hofs}, y {layer.vofs}; drawn at "
+                                           f"x {layer.hofs + layer.dx}, y {layer.vofs + layer.dy}{moved}{turned}\n"
+                                           f"{saved}\nMove it or draw on it anywhere: saving keeps what's drawn "
+                                           "where it is (the game turns it about its middle).")
             return
         what = "position" if layer.kind == "obj" else "scroll"
         if ref is None:
@@ -1591,15 +1592,11 @@ class Editor(tk.Tk):
     def save_layer(self, lid: str) -> Path:
         layer = self.cap.layer(lid)
         if layer.kind == "picture":
-            path, lost = core.save_picture(self.art_dir, layer, self.stacks[lid])
+            path, _ = core.save_picture(self.art_dir, layer, self.stacks[lid])
             core.save_project(self.art_dir, layer.key, self.stacks[lid], self.active[lid], layer.hofs, layer.vofs,
                               path)
             self.refs[lid] = core.ArtRef(path, layer.hofs, layer.vofs, True, False)
             self.dirty.discard(lid)
-            if lost:
-                self.after(10, lambda: self.status(
-                    f"Saved {path.name}; what's drawn left of or above its top-left corner was left out "
-                    "(the game draws the picture from that corner)."))
             return path
         old = self.refs.get(lid)
         path = core.save_art(self.art_dir, layer, self.picture(lid), self.originals[lid],
@@ -1618,7 +1615,9 @@ class Editor(tk.Tk):
         if self.is_picture():
             with Image.open(path) as im:
                 size = im.size
-            self.status(f"Saved {path.name} ({size[0]} x {size[1]}). In the game: L + R + A takes it in.")
+            dx, dy = core.png_offset(path)
+            moved = f", drawn {dx:+d}, {dy:+d} from its place" if (dx, dy) != (0, 0) else ""
+            self.status(f"Saved {path.name} ({size[0]} x {size[1]}{moved}). In the game: L + R + A takes it in.")
         else:
             self.status(f"Saved {path.name}" + ("  (the whole layer)" if path.stem.endswith("_full") else
                                                 "  (the side bands)") + ". In the game: L + R + A takes it in.")
@@ -1706,10 +1705,8 @@ class Editor(tk.Tk):
                                                 initialfile=f"{layer.key if picture else self.lid}.png")
         if path:
             if picture:
-                box = (layer.hofs, layer.vofs, layer.hofs + layer.w, layer.vofs + layer.h)
-                drawn = core.stack_bbox(self.stack())
-                if drawn:
-                    box = (box[0], box[1], max(box[2], drawn[2]), max(box[3], drawn[3]))
+                # (what's drawn: import it back and it goes where it is)
+                box = core.stack_bbox(self.stack()) or (layer.hofs, layer.vofs, layer.hofs + 1, layer.vofs + 1)
                 img = core.flatten_box(self.stack(), box)
             else:
                 img = self.picture(self.lid)
@@ -1743,9 +1740,9 @@ class Editor(tk.Tk):
     def import_png(self, path: str | None = None):
         """A picture made elsewhere (Photoshop: PSD or PNG...) as a new
         drawing layer of this layer, to put where it goes: a whole-canvas
-        one (320 x 192) where it is; a layout's picture's own size at its
-        place; anything else at the top-left of the view, the Move tool
-        chosen to drag it."""
+        one (320 x 192) where it is; on a layout's picture, where what's
+        drawn of it is (an exported one goes back where it was); anything
+        else at the top-left of the view; the Move tool chosen to drag it."""
         if self.stack() is None:
             return
         if path is None:
@@ -1761,7 +1758,9 @@ class Editor(tk.Tk):
         layer = self.layer()
         x = y = 0
         if layer is not None and layer.kind == "picture" and img.width != core.W:
-            x, y = layer.hofs, layer.vofs
+            # (where what's drawn is: an exported picture goes back where it was)
+            drawn = core.stack_bbox(self.stack())
+            x, y = (drawn[0], drawn[1]) if drawn else (layer.hofs, layer.vofs)
         elif img.size != (core.W, core.H):
             z = self.zoom.get()
             x = max(0, min(core.W - 1, int(self.canvas.canvasx(0) // z)))
@@ -1914,7 +1913,8 @@ class Editor(tk.Tk):
             "picture round. Home: put it back in the middle.\n"
             "Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z): undo / redo.\n\n"
             "Pictures of a screen's own (the party's panel, the boxes' divider...) are layers of the capture "
-            "too ('Picture: ...'): draw on them and save; the game reads them back from their files.\n"
+            "too ('Picture: ...'): draw on them, move them anywhere and save; the game reads them back from "
+            "their files, where you put them.\n"
             "File > Import / Export: a picture to or from another program (PNG; Photoshop's PSD to import).\n\n"
             "4. Save. In the game, L + R + A takes the new pictures in (or restart it)."))
 
@@ -2020,8 +2020,8 @@ def self_test(log_path: str | None = None) -> int:
             check("undo took the line away", not line())
             app.do_redo()
             check("redo put it back", line())
-            # a layout's picture: a layer of the capture, saved back to its file from its corner (what's past
-            # the canvas's edge kept), bigger when drawn past its right edge
+            # a layout's picture: a layer of the capture, saved back to its file (what's past the canvas's
+            # edge kept), bigger when drawn past its edge
             check("the capture has the layout's picture", app.cap.layer("pic_party_ball") is not None)
             app.layer_var.set("pic_party_ball")
             app.select_layer()
@@ -2043,6 +2043,18 @@ def self_test(log_path: str | None = None) -> int:
             app.import_png(str(out))
             check("imported back where the picture is",
                   len(app.stack()) == n + 1 and (app.paint().x, app.paint().y) == (-4, 10))
+            # moved 3 left and 2 down (the Move tool's doing, each drawing layer): saved where it is, the
+            # file saying how far from its place
+            for p in app.stack():
+                p.x -= 3
+                p.y += 2
+            app.changed()
+            app.save()
+            check("moved: saved with how far it went",
+                  core.png_offset(art / "party_ball.png") == (-3, 2) and
+                  core.load_rgba(art / "party_ball.png").size == (13, 6))
+            moved = core.picture_paint(art, app.cap, app.layer())
+            check("moved: opens where it was put", (moved.x, moved.y) == (-7, 12))
             # zooming about the mouse: the pixel under it stays (the view first put where a shown window has
             # it: a hidden one is only laid out later, on Windows)
             app.set_zoom(3)

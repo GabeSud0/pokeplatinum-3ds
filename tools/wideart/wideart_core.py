@@ -11,7 +11,8 @@ wide/<key>_<hofs>_<vofs>.png (the side bands only) or ..._full.png (the
 whole layer). A capture also has the pictures the screen's layout draws
 itself (picture_<name>.png: the party's panel, the boxes' divider...),
 each on the canvas where it's drawn, unturned; their files are
-wide/<name>.png, any size, saved back from the box they're in.
+wide/<name>.png, saved back as the box round what's drawn, with how far
+that is from the layout's place (the PNG's oFFs chunk) when it's moved.
 
 The editor draws a layer as a stack of drawing layers of its own (added,
 duplicated, moved, hidden), kept in wide/editor/<key>/ (layers.json and a
@@ -21,8 +22,11 @@ PNG each); saving flattens them into the one picture the game reads.
 from __future__ import annotations
 
 import colorsys
+import io
 import json
 import os
+import struct
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -80,9 +84,10 @@ class Layer:
     number) or a group of sprites (kind "obj", group: priority << 5 |
     palette, or 16 for 8-bit ones). hofs, vofs: a BG's scroll, a group's
     position (where its picture is anchored). Or a picture the screen's
-    layout draws (kind "picture": key its name, drawn with BG bg, its
-    top-left on the canvas at hofs, vofs, w x h, turned angle degrees;
-    group: its place in the capture's list)."""
+    layout draws (kind "picture": key its name, drawn with BG bg; hofs,
+    vofs: the layout's place for it (its file's top-left, unmoved); what's
+    drawn in it was w x h, dx, dy from there, turned angle degrees; group:
+    its place in the capture's list)."""
     bg: int
     prio: int
     key: str
@@ -95,6 +100,8 @@ class Layer:
     w: int = 0
     h: int = 0
     angle: int = 0
+    dx: int = 0
+    dy: int = 0
 
     def art_name(self, full: bool, loop: bool = False) -> str:
         if self.kind == "picture":
@@ -143,6 +150,12 @@ class Capture:
         return None
 
 
+def pixels(img: Image.Image) -> list:
+    """A picture's pixels, row after row (getdata goes in Pillow 14)."""
+    get = getattr(img, "get_flattened_data", None)
+    return list(get() if get is not None else img.getdata())
+
+
 def rgb555(value: int) -> tuple[int, int, int]:
     r, g, b = value & 31, (value >> 5) & 31, (value >> 10) & 31
     return ((r << 3) | (r >> 2), (g << 3) | (g >> 2), (b << 3) | (b >> 2))
@@ -166,11 +179,13 @@ def read_capture(path: str | os.PathLike) -> Capture:
                                     vofs=int(f["y"]), file=f["file"], kind="obj", group=int(words[1]),
                                     count=int(f.get("count", 0))))
         elif words[0] == "picture" and len(words) >= 18:
+            # (x, y: where what's drawn in it was; dx, dy: how far that is from the layout's place)
             f = dict(zip(words[2::2], words[3::2]))
-            cap.layers.append(Layer(bg=int(f["bg"]), prio=int(f["prio"]), key=words[1], hofs=int(f["x"]),
-                                    vofs=int(f["y"]), file=f["file"], kind="picture",
+            dx, dy = int(f.get("dx", 0)), int(f.get("dy", 0))
+            cap.layers.append(Layer(bg=int(f["bg"]), prio=int(f["prio"]), key=words[1], hofs=int(f["x"]) - dx,
+                                    vofs=int(f["y"]) - dy, file=f["file"], kind="picture",
                                     group=sum(1 for l in cap.layers if l.kind == "picture"),
-                                    w=int(f["w"]), h=int(f["h"]), angle=int(f.get("angle", 0))))
+                                    w=int(f["w"]), h=int(f["h"]), angle=int(f.get("angle", 0)), dx=dx, dy=dy))
         elif words[0] == "backdrop" and len(words) == 2:
             cap.backdrop = rgb555(int(words[1], 16))
         elif words[0] == "engine" and len(words) == 2:
@@ -272,7 +287,7 @@ def moved_art(art_dir: str | os.PathLike, cap: Capture, layer: Layer) -> tuple[I
         if abs(_wrapped(ref.hofs - layer.hofs, 512)) <= ART_REST and ref.vofs == layer.vofs:
             return None
     shown = cap.layer_image(layer).crop((DS_X0, 0, DS_X1, H))
-    shown_px = list(shown.getdata())
+    shown_px = pixels(shown)
     if not any(p[3] for p in shown_px):
         return None
     for ref in sorted(refs, key=lambda r: not r.full):
@@ -288,7 +303,7 @@ def moved_art(art_dir: str | os.PathLike, cap: Capture, layer: Layer) -> tuple[I
                 tried.add((dx, dy))
                 moved = Image.new("RGBA", (W, H))
                 moved.paste(pic, (dx, dy))
-                mid = list(moved.crop((DS_X0, 0, DS_X1, H)).getdata())
+                mid = pixels(moved.crop((DS_X0, 0, DS_X1, H)))
                 if all((a[3] == 0 and b[3] == 0) or (a[3] and b[3] and a[:3] == b[:3])
                        for a, b in zip(mid, shown_px)):
                     ref.dx, ref.dy = dx, dy
@@ -403,17 +418,54 @@ def save_art(art_dir: str | os.PathLike, layer: Layer, img: Image.Image, origina
         if ref.path != path and ((ref.hofs, ref.vofs) == (layer.hofs, layer.vofs) or ref.path == replace):
             ref.path.unlink()
     clean = Image.new("RGBA", (W, H))
-    clean.putdata([snap(p) for p in img.convert("RGBA").getdata()])
+    clean.putdata([snap(p) for p in pixels(img.convert("RGBA"))])
     clean.save(path)
     return path
 
 
+def png_offset(path: str | os.PathLike) -> tuple[int, int]:
+    """A PNG's oFFs chunk (in pixels: where its top-left goes; the editor
+    writes it for a layout's picture moved from its place), else 0, 0. As
+    port_wideart.c reads it: before the pixels."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return 0, 0
+    at = 8
+    while at + 12 <= len(data):
+        n, kind = struct.unpack(">I4s", data[at:at + 8])
+        if kind in (b"IDAT", b"IEND") or at + 12 + n > len(data):
+            break
+        if kind == b"oFFs" and n == 9:
+            x, y, unit = struct.unpack(">iiB", data[at + 8:at + 17])
+            if unit == 0 and -W < x < W and -H < y < H:
+                return x, y
+            break
+        at += 12 + n
+    return 0, 0
+
+
+def save_with_offset(img: Image.Image, path: str | os.PathLike, offset: tuple[int, int]):
+    """A PNG with an oFFs chunk after its header (unless the offset is 0,
+    0; Pillow leaves that chunk out, so it's put in here)."""
+    out = io.BytesIO()
+    img.save(out, "PNG")
+    data = out.getvalue()
+    if offset != (0, 0):
+        body = b"oFFs" + struct.pack(">iiB", offset[0], offset[1], 0)
+        chunk = struct.pack(">I", 9) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+        data = data[:33] + chunk + data[33:]      # (the signature, then IHDR: 8 + 25 bytes)
+    Path(path).write_bytes(data)
+
+
 def picture_paint(art_dir: str | os.PathLike | None, cap: Capture, layer: Layer) -> "Paint":
     """A layout's picture as a drawing layer where it's drawn: its file
-    (all of it, past the canvas too), else what the capture has of it."""
+    (all of it, past the canvas too) at the layout's place, moved by the
+    file's offset; else what the capture has of it."""
     path = Path(art_dir) / layer.art_name(True) if art_dir is not None else None
     if path is not None and path.is_file():
-        return Paint("Layer 1", load_rgba(path), layer.hofs, layer.vofs)
+        dx, dy = png_offset(path)
+        return Paint("Layer 1", load_rgba(path), layer.hofs + dx, layer.vofs + dy)
     return Paint("Layer 1", cap.layer_image(layer))
 
 
@@ -444,25 +496,24 @@ def flatten_box(stack: list["Paint"], box: tuple[int, int, int, int]) -> Image.I
     return out
 
 
-def save_picture(art_dir: str | os.PathLike, layer: Layer, stack: list["Paint"]) -> tuple[Path, bool]:
-    """A layout's picture saved to its file from the box it's in on the
-    canvas: from its top-left (where the game puts it), as big as it was
-    or bigger if drawn past its right or bottom edge. Also whether
-    something drawn left of it or above it was left out (the game can't
-    show that: the picture starts at its top-left)."""
-    x0, y0 = layer.hofs, layer.vofs
-    x1, y1 = x0 + max(1, layer.w), y0 + max(1, layer.h)
-    drawn = stack_bbox(stack)
-    lost = False
-    if drawn is not None:
-        x1, y1 = max(x1, drawn[2]), max(y1, drawn[3])
-        lost = drawn[0] < x0 or drawn[1] < y0
-    img = flatten_box(stack, (x0, y0, x1, y1))
-    clean = Image.new("RGBA", img.size)
-    clean.putdata([snap(p) for p in img.getdata()])
+def save_picture(art_dir: str | os.PathLike, layer: Layer, stack: list["Paint"]) -> tuple[Path, tuple[int, int]]:
+    """A layout's picture saved to its file: the box round what's drawn
+    (wherever it was moved or drawn on: past the canvas's edges too), and
+    how far that box is from the layout's place, in the file (oFFs) when
+    it isn't there: the game draws it there, and turns it about the
+    middle of what's drawn. Nothing drawn: an empty picture (the game
+    draws nothing). Also that offset."""
     path = Path(art_dir) / layer.art_name(True)
-    clean.save(path)
-    return path, lost
+    drawn = stack_bbox(stack)
+    if drawn is None:
+        Image.new("RGBA", (1, 1)).save(path)
+        return path, (0, 0)
+    img = flatten_box(stack, drawn)
+    clean = Image.new("RGBA", img.size)
+    clean.putdata([snap(p) for p in pixels(img)])
+    offset = (drawn[0] - layer.hofs, drawn[1] - layer.vofs)
+    save_with_offset(clean, path, offset)
+    return path, offset
 
 
 def delete_art(art_dir: str | os.PathLike, layer: Layer) -> int:

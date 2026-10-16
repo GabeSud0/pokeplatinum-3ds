@@ -206,9 +206,9 @@ int NitroPort_WideArtLoad(const char *dir)
     }
     /* the layouts' pictures: read now, so none holds a screen up later */
     for (i = 1; i < NITRO_WIDE_PICTURES; i++) {
-        int w, h;
+        int w, h, dx, dy;
 
-        (void)NitroPort_WideArtPicture(i, &w, &h);
+        (void)NitroPort_WideArtPicture(i, &w, &h, &dx, &dy);
     }
     return n;
 }
@@ -345,20 +345,53 @@ static int read_picture(const char *path, uint16_t *out)
  * read goes into them if it fits, else into new ones, the old ones left). */
 static struct {
     uint16_t *pixels;
-    int capacity, w, h;
+    int capacity, w, h, dx, dy;
     uint32_t serial;
     uint8_t state;   /* for serial: 0 not read yet, 1 read, 2 none */
 } sNamed[NITRO_WIDE_PICTURES];
 
+/* A PNG's oFFs chunk (where its top-left goes, in pixels; the editor
+ * writes it for a picture moved from its layout's place): 1 if it has
+ * one. */
+static int png_offset(const unsigned char *bytes, long size, int *x, int *y)
+{
+    long at = 8;
+
+    while (at + 12 <= size) {
+        uint32_t len = ((uint32_t)bytes[at] << 24) | ((uint32_t)bytes[at + 1] << 16) |
+                       ((uint32_t)bytes[at + 2] << 8) | bytes[at + 3];
+        const unsigned char *type = bytes + at + 4, *d = bytes + at + 8;
+
+        if (len > (uint32_t)(size - at - 12)) {
+            return 0;
+        }
+        if (memcmp(type, "IDAT", 4) == 0 || memcmp(type, "IEND", 4) == 0) {
+            return 0;   /* (it comes before the pixels) */
+        }
+        if (memcmp(type, "oFFs", 4) == 0 && len == 9 && d[8] == 0) {
+            *x = (int32_t)(((uint32_t)d[0] << 24) | ((uint32_t)d[1] << 16) | ((uint32_t)d[2] << 8) | d[3]);
+            *y = (int32_t)(((uint32_t)d[4] << 24) | ((uint32_t)d[5] << 16) | ((uint32_t)d[6] << 8) | d[7]);
+            return *x > -NITRO_WIDE_ART_W && *x < NITRO_WIDE_ART_W && *y > -NITRO_WIDE_ART_H &&
+                   *y < NITRO_WIDE_ART_H;
+        }
+        at += 12 + (long)len;
+    }
+    return 0;
+}
+
 /* A PNG of any size up to the canvas, into RGB555 | 0x8000 pixels (0:
- * transparent; malloc'd); NULL if there's none. */
-static uint16_t *read_named(const char *path, int *w, int *h)
+ * transparent; malloc'd), only its drawn part (the box round what isn't
+ * transparent: a picture turns about the middle of what's drawn in it,
+ * 2026-10-16), and where that goes from the layout's place (*dx, *dy: the
+ * file's offset, if it has one, and the margin left out); NULL if there's
+ * none, or nothing in it. */
+static uint16_t *read_named(const char *path, int *w, int *h, int *dx, int *dy)
 {
     FILE *f = fopen(path, "rb");
     unsigned char *bytes, *rgba;
     uint16_t *out;
     long size;
-    int n, i;
+    int n, i, x, y, x0, y0, x1, y1, ox = 0, oy = 0;
 
     if (f == NULL) {
         return NULL;
@@ -378,33 +411,60 @@ static uint16_t *read_named(const char *path, int *w, int *h)
         return NULL;
     }
     fclose(f);
+    if (!png_offset(bytes, size, &ox, &oy)) {
+        ox = oy = 0;
+    }
     rgba = stbi_load_from_memory(bytes, (int)size, w, h, &n, 4);
     free(bytes);
     if (rgba == NULL) {
         return NULL;
     }
-    if (*w <= 0 || *h <= 0 || *w > NITRO_WIDE_ART_W || *h > NITRO_WIDE_ART_H ||
-        (out = malloc((size_t)*w * (size_t)*h * sizeof(uint16_t))) == NULL) {
+    if (*w <= 0 || *h <= 0 || *w > NITRO_WIDE_ART_W || *h > NITRO_WIDE_ART_H) {
         stbi_image_free(rgba);
         return NULL;
     }
-    for (i = 0; i < *w * *h; i++) {
-        const unsigned char *p = rgba + i * 4;
+    /* the drawn part */
+    x0 = *w;
+    y0 = *h;
+    x1 = y1 = 0;
+    for (y = 0; y < *h; y++) {
+        for (x = 0; x < *w; x++) {
+            if (rgba[(y * *w + x) * 4 + 3] >= 128) {
+                x0 = x < x0 ? x : x0;
+                x1 = x + 1 > x1 ? x + 1 : x1;
+                y0 = y < y0 ? y : y0;
+                y1 = y + 1 > y1 ? y + 1 : y1;
+            }
+        }
+    }
+    if (x0 >= x1 || (out = malloc((size_t)(x1 - x0) * (size_t)(y1 - y0) * sizeof(uint16_t))) == NULL) {
+        stbi_image_free(rgba);
+        return NULL;
+    }
+    i = 0;
+    for (y = y0; y < y1; y++) {
+        for (x = x0; x < x1; x++) {
+            const unsigned char *p = rgba + (y * *w + x) * 4;
 
-        out[i] = p[3] < 128 ? 0
-                            : (uint16_t)(0x8000 | (p[0] >> 3) | ((p[1] >> 3) << 5) | ((p[2] >> 3) << 10));
+            out[i++] = p[3] < 128 ? 0
+                                  : (uint16_t)(0x8000 | (p[0] >> 3) | ((p[1] >> 3) << 5) | ((p[2] >> 3) << 10));
+        }
     }
     stbi_image_free(rgba);
+    *w = x1 - x0;
+    *h = y1 - y0;
+    *dx = ox + x0;
+    *dy = oy + y0;
     return out;
 }
 
-const uint16_t *NitroPort_WideArtPicture(int picture, int *w, int *h)
+const uint16_t *NitroPort_WideArtPicture(int picture, int *w, int *h, int *dx, int *dy)
 {
     const char *name = NitroPort_WidePictureName(picture);
     char path[320];
     uint16_t *read;
     uint32_t serial;
-    int rw = 0, rh = 0;
+    int rw = 0, rh = 0, rdx = 0, rdy = 0;
 
     if (name == NULL) {
         return NULL;
@@ -420,6 +480,8 @@ const uint16_t *NitroPort_WideArtPicture(int picture, int *w, int *h)
 
         *w = sNamed[picture].w;
         *h = sNamed[picture].h;
+        *dx = sNamed[picture].dx;
+        *dy = sNamed[picture].dy;
         unlock();
         return pixels;
     }
@@ -427,7 +489,7 @@ const uint16_t *NitroPort_WideArtPicture(int picture, int *w, int *h)
     unlock();
 
     /* (read outside the lock: it takes a while) */
-    read = read_named(path, &rw, &rh);
+    read = read_named(path, &rw, &rh, &rdx, &rdy);
     lock();
     if (sNamed[picture].serial == serial && sNamed[picture].state == 0) {
         if (read == NULL) {
@@ -443,8 +505,10 @@ const uint16_t *NitroPort_WideArtPicture(int picture, int *w, int *h)
             read = NULL;
             sNamed[picture].w = rw;
             sNamed[picture].h = rh;
+            sNamed[picture].dx = rdx;
+            sNamed[picture].dy = rdy;
             sNamed[picture].state = 1;
-            NitroPort_Log("[wide art] picture %s: %dx%d", name, rw, rh);
+            NitroPort_Log("[wide art] picture %s: %dx%d, %+d %+d from its place", name, rw, rh, rdx, rdy);
         }
     }
     free(read);
@@ -453,6 +517,8 @@ const uint16_t *NitroPort_WideArtPicture(int picture, int *w, int *h)
 
         *w = sNamed[picture].w;
         *h = sNamed[picture].h;
+        *dx = sNamed[picture].dx;
+        *dy = sNamed[picture].dy;
         unlock();
         return pixels;
     }
@@ -968,10 +1034,10 @@ int NitroPort_WideArtCapture(const char *dir, char *made, size_t madeSize)
         for (i = 0; i < count; i++) {
             const char *name = NitroPort_WidePictureName(pics[i].picture);
             const uint16_t *px;
-            int w, h, x, y;
+            int w, h, dx, dy, x, y;
 
             if (name == NULL || done[pics[i].picture] ||
-                (px = NitroPort_WideArtPicture(pics[i].picture, &w, &h)) == NULL) {
+                (px = NitroPort_WideArtPicture(pics[i].picture, &w, &h, &dx, &dy)) == NULL) {
                 continue;
             }
             done[pics[i].picture] = 1;
@@ -993,8 +1059,10 @@ int NitroPort_WideArtCapture(const char *dir, char *made, size_t madeSize)
                 fclose(info);
                 return -1;
             }
-            fprintf(info, "picture %s bg %d prio %d x %d y %d w %d h %d angle %d file picture_%s.png\n", name,
-                    pics[i].bg, pics[i].prio, pics[i].x, pics[i].y, w, h, pics[i].angle, name);
+            /* (dx, dy: how far it is from the layout's place, its file's
+             * offset and margin: the editor keeps it at its place) */
+            fprintf(info, "picture %s bg %d prio %d x %d y %d w %d h %d angle %d dx %d dy %d file picture_%s.png\n",
+                    name, pics[i].bg, pics[i].prio, pics[i].x, pics[i].y, w, h, pics[i].angle, dx, dy, name);
         }
     }
     fclose(info);

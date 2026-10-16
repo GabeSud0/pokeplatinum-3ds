@@ -112,8 +112,10 @@ int NitroPort_WideSplits(int engine, NitroWideSplit *out);
  *   PICTURE: the picture col (NITRO_WIDE_PICTURE_*: a file drawn for the
  *     screen, NitroPort_WideArtPicture) drawn with the BG in bgs, in front
  *     of that BG's own pixels (behind what's in front of the BG), its
- *     top-left at the DS's x0, top (anywhere on the canvas), turned dx
- *     degrees clockwise about its middle (x1, bottom: not used).
+ *     file's top-left at the DS's x0, top (anywhere on the canvas; moved
+ *     by the file's offset, if the editor gave it one), turned dx degrees
+ *     clockwise about the middle of what's drawn in it (x1, bottom: not
+ *     used).
  * Lines and columns of the BG's own picture, as with splits (a text BG's
  * map, an affine BG's picture before its matrix); only the DS's 256
  * columns move. On a line of a BG with parts, the DS's picture shows where
@@ -122,8 +124,9 @@ int NitroPort_WideSplits(int engine, NitroWideSplit *out);
  * that part is clear, not the part before); nothing is drawn beside the
  * DS's screen but what the parts put there. A BG with parts on other lines
  * shows those where the DS has them, nothing beside. A BG with MOVE parts
- * shows its own pixels, not a hand-drawn picture of it; sprites moved show
- * themselves, not their picture. */
+ * shows its own pixels, not a hand-drawn picture of it, but for one made
+ * right where it is (a text BG: a capture of the screen laid out, drawn
+ * on); sprites moved show themselves, not their picture. */
 enum {
     NITRO_WIDE_MOVE = 1,
     NITRO_WIDE_FILL = 2,

@@ -76,13 +76,23 @@ time. Otherwise a layer's bands show only while it's where you drew it
 "Pictures a screen's layout draws" below) are in its captures too, as
 layers "Picture: <name>", each just in front of the BG it's drawn with,
 unturned (a ball captured mid-turn shows upright). Draw on them like any
-layer (nothing is locked for them) and save: the editor writes the file
-(`wide/<name>.png`) from the picture's top-left corner, where the game puts
-it: as big as it was, bigger if you drew past its right or bottom edge;
-what's past the screen's edge (the party's ball, half off the screen) is
-kept. What's drawn left of or above its corner can't show (the game draws
-the picture from there), so it's left out. A light's colours are a picture
-each: a capture has the ones that were lit then.
+layer (nothing is locked for them), move them anywhere (the Move tool) and
+save: the editor writes the file (`wide/<name>.png`) as the box round
+what's drawn, wherever it is, what's past the screen's edge too (the
+party's ball, half off the screen). Moved from the layout's place, the
+file also says how far (its PNG `oFFs` chunk): the game draws it there,
+and turns it about the middle of what's drawn. (A picture saved straight
+from another program loses that and goes back to its place: bring it in
+with File > Import instead.) A light's colours are a picture each: a
+capture has the ones that were lit then.
+
+**Screens laid out in parts.** On the screens the port lays out anew (the
+party, the boxes, the bag, the summary...: see "Pictures a screen's
+layout draws" below), the game moves the layers itself. A picture of one
+of those layers made right where it is in a capture (drawn on: the boxes'
+panel's edges cleaned) is used as it is: the whole layer, or its bands
+with the game's layout between. Captured where the layer is somewhere
+else (a box's wallpaper mid-slide), the game's own layout shows.
 
 Colours are saved as the DS shows them (5 bits a channel), and pixels are
 either solid or transparent (no half-transparent ones).
@@ -173,7 +183,8 @@ Files, in `3ds/pokeplatinum/wide`:
   sprite group, G = priority x 32 + palette, or + 16 for 8-bit sprites),
   `picture_<name>.png` (each picture the screen's layout draws, unturned,
   where it's drawn), `info.txt` (each layer's key, scroll or position, and
-  priority; each picture's BG, place, size and turn);
+  priority; each picture's BG, where what's drawn in it is (x, y), its
+  size, turn and how far it is from the layout's place (dx, dy));
 - `<name>.png`: a picture a screen's layout draws (the table below);
 - `editor/<key>_<hofs>_<vofs>/`: the editor's drawing layers for a picture
   (`layers.json` and a PNG each; `editor/<key>/` before; a layout's
@@ -190,19 +201,23 @@ Some screens laid out for the wider screen in code (see
 pictures of their own, by name, from the same folder. Any size up to
 320 x 192; transparent where alpha < 128. Without a file, that part isn't
 drawn and the screen looks as it did. The game places them, turns them
-and swaps them; you can redraw them in any paint program (keep the size,
-or the place they go changes with it):
+and swaps them; only what's drawn in a file counts (a clear margin is left
+out). Redraw them in the editor, or in any paint program and bring them
+in with File > Import (a file's top-left goes at the place below unless
+the editor moved it):
 
 | File | Where | What the game does with it |
 | --- | --- | --- |
-| `pc_boxes_divider.png` (40 x 192) | the boxes: between the Pokémon's panel and the box, behind the panel's edge | |
-| `pc_boxes_ball.png` (23 x 23) | over the divider's round socket | turns once round as the boxes slide |
-| `party_panel.png` (64 x 158) | the party: at the left edge | |
-| `party_ball.png` (70 x 70) | the panel's socket, its middle at the screen's x 15, y 81 | turns a little as the cursor moves |
-| `party_light_off`, `_red`, `_blue`, `_green`, `_amber`, `_white` `.png` (5 x 5) | the panel's two rows of lights | each light changes colour now and then |
+| `pc_boxes_divider.png` (first drawn 40 x 192) | the boxes: between the Pokémon's panel and the box, behind the panel's edge (its place: x 88, y 0) | |
+| `pc_boxes_ball.png` (23 x 23) | over the divider's round socket (x 102, y 75) | turns once round as the boxes slide |
+| `party_panel.png` (64 x 158) | the party: at the left edge (x 0, y 0) | |
+| `party_ball.png` (70 x 70) | the panel's socket (x -20, y 46: its middle at x 15, y 81) | turns a little as the cursor moves |
+| `party_light_off`, `_red`, `_blue`, `_green`, `_amber`, `_white` `.png` (5 x 5) | the panel's two rows of lights (x 49, y 9, 15, 21 and 131, 137, 143) | each light changes colour now and then |
 
-A turned picture turns about its middle: draw a round one with its middle
-in the middle of the file (an odd size has a middle pixel).
+(Places on the 320 x 192 screen, where the file's top-left goes.)
+
+A turned picture turns about the middle of what's drawn in it: draw a
+round one with nothing else in the file (an odd size has a middle pixel).
 
 ## The code
 

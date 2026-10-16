@@ -1102,6 +1102,53 @@ static void WriteArtKind(const char *dir, uint64_t key, int hofs, int vofs, int 
     CHECK(NitroPort_WideArtWritePng(path, rgba, 320, 192) == 0);
 }
 
+/* A PNG's oFFs chunk (x, y pixels: where its top-left goes) put in after
+ * its header, as the editor writes it. */
+static void AddPngOffset(const char *path, int x, int y)
+{
+    static uint8_t bytes[64 * 1024];
+    uint8_t chunk[21];
+    uint32_t crc = 0xFFFFFFFFu;
+    size_t n;
+    int i, k;
+    FILE *f = fopen(path, "rb");
+
+    CHECK(f != NULL);
+    if (f == NULL) {
+        return;
+    }
+    n = fread(bytes, 1, sizeof(bytes), f);
+    fclose(f);
+    CHECK(n > 33 && n < sizeof(bytes));
+    chunk[0] = chunk[1] = chunk[2] = 0;
+    chunk[3] = 9;
+    memcpy(chunk + 4, "oFFs", 4);
+    for (i = 0; i < 4; i++) {
+        chunk[8 + i] = (uint8_t)((uint32_t)x >> (24 - 8 * i));
+        chunk[12 + i] = (uint8_t)((uint32_t)y >> (24 - 8 * i));
+    }
+    chunk[16] = 0;
+    for (i = 4; i < 17; i++) {
+        crc ^= chunk[i];
+        for (k = 0; k < 8; k++) {
+            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1)));
+        }
+    }
+    crc ^= 0xFFFFFFFFu;
+    for (i = 0; i < 4; i++) {
+        chunk[17 + i] = (uint8_t)(crc >> (24 - 8 * i));
+    }
+    f = fopen(path, "wb");
+    CHECK(f != NULL);
+    if (f == NULL) {
+        return;
+    }
+    fwrite(bytes, 1, 33, f);   /* (the signature and IHDR) */
+    fwrite(chunk, 1, sizeof(chunk), f);
+    fwrite(bytes + 33, 1, n - 33, f);
+    fclose(f);
+}
+
 static void WriteArt(const char *dir, uint64_t key, int hofs, int vofs, int full, const u16 *pixels)
 {
     WriteArtKind(dir, key, hofs, vofs, full ? NITRO_WIDE_ART_FULL : 0, pixels);
@@ -2275,20 +2322,49 @@ static void test_wide_parts(void)
     CHECK(wide[y * 320 + 268] == RED && wide[y * 320 + 275] == RED);
     G2_SetBG1Offset(0, 0);
 
-    /* a moved BG shows its own pixels, not its hand-drawn picture */
+    /* a moved BG shows its own pixels, not a hand-drawn picture of it made
+     * elsewhere (8 to the right: the parts' columns are another picture's
+     * there) */
     NitroPort_WideScreenParts(0, NULL, 0);
     CHECK(NitroPort_Render2DLayer(0, 1, &split, layerPx, &key, &hofs, &vofs, &prio));
     CHECK(mkdtemp(dir) != NULL);
     for (i = 0; i < 320 * 192; i++) {
         art[i] = (u16)(GREEN | 0x8000);
     }
-    WriteArt(dir, key, 0, 0, 1, art);
+    WriteArt(dir, key, 8, 0, 1, art);
     CHECK(NitroPort_WideArtLoad(dir) == 1);
     NitroPort_Render2DSplit(0, wide, &split);
     CHECK(wide[40 * 320 + 100] == GREEN);
     NitroPort_WideScreenParts(0, &apart[0][0], 3);
     NitroPort_Render2DSplit(0, wide, &split);
     CHECK(wide[40 * 320 + 0] == RED && wide[40 * 320 + 100] == WHITE && wide[120 * 320 + 100] == RED);
+    /* one made right where it is (a capture of the screen as its parts lay
+     * it out, drawn on) is the layer, all of it; one of its bands only: the
+     * bands, and the parts over the DS's part */
+    {
+        char made[512];
+
+        WriteArt(dir, key, 0, 0, 1, art);
+        CHECK(NitroPort_WideArtLoad(dir) == 2);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[40 * 320 + 0] == GREEN && wide[40 * 320 + 100] == GREEN && wide[120 * 320 + 100] == GREEN);
+        snprintf(made, sizeof(made), "%s/%016llx_0_0_full.png", dir, (unsigned long long)key);
+        CHECK(remove(made) == 0);
+        WriteArt(dir, key, 0, 0, 0, art);
+        CHECK(NitroPort_WideArtLoad(dir) == 2);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[40 * 320 + 0] == GREEN && wide[40 * 320 + 319] == GREEN);   /* (the bands) */
+        CHECK(wide[40 * 320 + 32] == RED && wide[40 * 320 + 63] == RED);       /* (the parts: moved, */
+        CHECK(wide[40 * 320 + 64] == WHITE && wide[40 * 320 + 263] == WHITE);  /* the fill) */
+        CHECK(wide[120 * 320 + 100] == RED);
+        CHECK(wide[120 * 320 + 0] == GREEN);
+        snprintf(made, sizeof(made), "%s/%016llx_0_0.png", dir, (unsigned long long)key);
+        CHECK(remove(made) == 0);
+        snprintf(made, sizeof(made), "%s/%016llx_8_0_full.png", dir, (unsigned long long)key);
+        CHECK(remove(made) == 0);
+        NitroPort_WideArtLoad("/nonexistent");
+        CHECK(rmdir(dir) == 0);
+    }
 
     /* a picture drawn for the layout (NITRO_WIDE_PICTURE, a file in the
      * folder): in front of its BG's pixels, where it's put, turned about
@@ -2306,7 +2382,7 @@ static void test_wide_parts(void)
             { NITRO_WIDE_PICTURE, 2, 40, 41, 100, 101, 90, NITRO_WIDE_PICTURE_PC_BOXES_BALL },
         };
         char path[512], dir2[] = "/tmp/widepicturesXXXXXX";
-        int w, h;
+        int w, h, dx, dy;
 
         NitroPort_WideArtLoad("/nonexistent");
         CHECK(mkdtemp(dir2) != NULL);
@@ -2316,8 +2392,9 @@ static void test_wide_parts(void)
         snprintf(path, sizeof(path), "%s/%s.png", dir2, NitroPort_WidePictureName(NITRO_WIDE_PICTURE_PC_BOXES_BALL));
         CHECK(NitroPort_WideArtWritePng(path, rgba, 4, 2) == 0);
         CHECK(NitroPort_WideArtLoad(dir2) == 0);   /* (no layer's pictures) */
-        CHECK(NitroPort_WideArtPicture(NITRO_WIDE_PICTURE_PC_BOXES_BALL, &w, &h) != NULL && w == 4 && h == 2);
-        CHECK(NitroPort_WideArtPicture(NITRO_WIDE_PICTURE_PARTY_PANEL, &w, &h) == NULL);
+        CHECK(NitroPort_WideArtPicture(NITRO_WIDE_PICTURE_PC_BOXES_BALL, &w, &h, &dx, &dy) != NULL && w == 4 &&
+              h == 2 && dx == 0 && dy == 0);
+        CHECK(NitroPort_WideArtPicture(NITRO_WIDE_PICTURE_PARTY_PANEL, &w, &h, &dx, &dy) == NULL);
         NitroPort_Render2DSplit(0, wide, &split);
         CHECK(wide[40 * 320 + 131] == RED);    /* (BG1) */
         CHECK(wide[40 * 320 + 132] == RED && wide[40 * 320 + 134] == BLUE && wide[40 * 320 + 135] == BLUE);
@@ -2347,6 +2424,46 @@ static void test_wide_parts(void)
             CHECK(NitroPort_WideWindowsSerial() == serial);
             NitroPort_WideScreenParts(0, &picture[0][0], 1);
             CHECK(NitroPort_WideWindowsSerial() != serial);
+        }
+        /* drawn 2 right and 1 down in its file (a clear margin left and
+         * above): drawn there, turned about the middle of what's drawn */
+        {
+            static u8 margin[6 * 3 * 4];
+
+            memset(margin, 0, sizeof(margin));
+            for (y = 0; y < 2; y++) {
+                memcpy(margin + ((y + 1) * 6 + 2) * 4, rgba + y * 4 * 4, 4 * 4);
+            }
+            CHECK(NitroPort_WideArtWritePng(path, margin, 6, 3) == 0);
+            NitroPort_WideArtLoad(dir2);
+            CHECK(NitroPort_WideArtPicture(NITRO_WIDE_PICTURE_PC_BOXES_BALL, &w, &h, &dx, &dy) != NULL && w == 4 &&
+                  h == 2 && dx == 2 && dy == 1);
+            NitroPort_WideScreenParts(0, &picture[0][0], 1);
+            NitroPort_Render2DSplit(0, wide, &split);
+            CHECK(wide[41 * 320 + 136] == BLUE && wide[41 * 320 + 137] == BLUE);
+            CHECK(wide[42 * 320 + 134] == GREEN && wide[42 * 320 + 137] == WHITE);
+            CHECK(wide[40 * 320 + 134] == RED && wide[43 * 320 + 134] == RED);   /* (BG1) */
+            NitroPort_WideScreenParts(0, &turned[0][0], 1);
+            NitroPort_Render2DSplit(0, wide, &split);
+            CHECK(wide[40 * 320 + 135] == GREEN && wide[41 * 320 + 135] == GREEN);
+            CHECK(wide[42 * 320 + 135] == WHITE && wide[43 * 320 + 136] == BLUE);
+        }
+        /* its file's offset (the editor's, for a picture moved there): 3
+         * left, 5 down */
+        {
+            NitroWidePictureShown shown[4];
+
+            CHECK(NitroPort_WideArtWritePng(path, rgba, 4, 2) == 0);
+            AddPngOffset(path, -3, 5);
+            NitroPort_WideArtLoad(dir2);
+            CHECK(NitroPort_WideArtPicture(NITRO_WIDE_PICTURE_PC_BOXES_BALL, &w, &h, &dx, &dy) != NULL && w == 4 &&
+                  h == 2 && dx == -3 && dy == 5);
+            NitroPort_WideScreenParts(0, &picture[0][0], 1);
+            NitroPort_Render2DSplit(0, wide, &split);
+            CHECK(wide[45 * 320 + 131] == BLUE && wide[46 * 320 + 129] == GREEN && wide[46 * 320 + 132] == WHITE);
+            CHECK(wide[40 * 320 + 134] == RED);   /* (BG1 where it was) */
+            CHECK(NitroPort_Render2DPictures(0, &split, shown, 4) == 1);
+            CHECK(shown[0].x == 129 && shown[0].y == 45 && shown[0].w == 4 && shown[0].h == 2);
         }
         NitroPort_WideScreenParts(0, NULL, 0);
         remove(path);

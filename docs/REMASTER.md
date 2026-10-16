@@ -218,6 +218,10 @@ stretched:
   wallpapers sliding past behind a fixed edge). A moved BG shows its own
   pixels, not a hand-drawn picture of it, and moved sprites themselves;
   a screen's static backgrounds keep their pictures (the Pokédex's pages).
+  But a text BG's picture made right where it is (a capture of the screen
+  as its parts lay it out, drawn on in the editor: the boxes' panel's
+  edges, cleaned, 2026-10-16) is that layer: all of it (a whole-layer
+  picture), or its bands with the parts between.
   From references drawn for the wider screen:
   - the summary: the left column (name, picture, item) toward the left
     edge, each page's panel widened to the right edge with its values
@@ -235,8 +239,9 @@ stretched:
     bar right, the counts apart.
   A layout can also draw pictures of its own (PICTURE parts, patches 0023
   and 0024: files in the wide art folder, see [WIDE_ART.md](WIDE_ART.md)),
-  with a BG, in front of its pixels, anywhere on the wider screen, turned
-  about their middle: the boxes' divider and its Poké Ball, which turns
+  with a BG, in front of its pixels, anywhere on the wider screen (moved
+  from there in the editor: the file says how far), turned about the
+  middle of what's drawn in them: the boxes' divider and its Poké Ball, which turns
   once round as the boxes slide; the party's panel at the left edge, its
   Poké Ball turning a little as the cursor moves, its lights changing now
   and then. A layout sent again unchanged (an animation's still frames)
