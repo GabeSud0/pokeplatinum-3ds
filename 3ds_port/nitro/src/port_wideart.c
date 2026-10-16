@@ -954,6 +954,49 @@ int NitroPort_WideArtCapture(const char *dir, char *made, size_t madeSize)
                     groups[i].group);
         }
     }
+    {
+        /* The pictures the screen's layout draws (its own: the party's
+         * panel, the boxes' divider), each once (where it's first drawn),
+         * unturned, on a canvas of its own: the editor saves the box it's
+         * in back to its file. */
+        NitroWidePictureShown pics[32];
+        int count, k, done[NITRO_WIDE_PICTURES] = { 0 };
+
+        memset(&split, 0, sizeof(split));
+        NitroPort_WideLayout(engine, &split);
+        count = NitroPort_Render2DPictures(engine, &split, pics, 32);
+        for (i = 0; i < count; i++) {
+            const char *name = NitroPort_WidePictureName(pics[i].picture);
+            const uint16_t *px;
+            int w, h, x, y;
+
+            if (name == NULL || done[pics[i].picture] ||
+                (px = NitroPort_WideArtPicture(pics[i].picture, &w, &h)) == NULL) {
+                continue;
+            }
+            done[pics[i].picture] = 1;
+            for (k = 0; k < PIXELS; k++) {
+                layer[k] = 0;
+            }
+            for (y = 0; y < h; y++) {
+                for (x = 0; x < w; x++) {
+                    int cx = pics[i].x + x, cy = pics[i].y + y;
+
+                    if (cx >= 0 && cx < NITRO_WIDE_ART_W && cy >= 0 && cy < NITRO_WIDE_ART_H) {
+                        layer[cy * NITRO_WIDE_ART_W + cx] = px[y * w + x];
+                    }
+                }
+            }
+            to_rgba(layer, rgba, PIXELS);
+            snprintf(path, sizeof(path), "%s/picture_%s.png", folder, name);
+            if (NitroPort_WideArtWritePng(path, rgba, NITRO_WIDE_ART_W, NITRO_WIDE_ART_H) != 0) {
+                fclose(info);
+                return -1;
+            }
+            fprintf(info, "picture %s bg %d prio %d x %d y %d w %d h %d angle %d file picture_%s.png\n", name,
+                    pics[i].bg, pics[i].prio, pics[i].x, pics[i].y, w, h, pics[i].angle, name);
+        }
+    }
     fclose(info);
     if (made != NULL && madeSize > 0) {
         snprintf(made, madeSize, "%s", folder);

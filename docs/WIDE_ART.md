@@ -37,7 +37,7 @@ screen, and the game shows your drawing instead.
 
 | | |
 |---|---|
-| Brush (B), Eraser (E) | round, 1 to 32 pixels across (the slider, or **[** and **]**); the eraser makes pixels transparent (the layers behind show) |
+| Brush (B), Eraser (E) | round, 1 to 32 pixels across (the slider, or **[** and **]**); the eraser makes pixels transparent (the layers behind show). **Shift + click**: a straight line from where the last stroke ended |
 | Fill (G) | the area of one colour |
 | Pick colour (I), right-click | the colour under the cursor |
 | Select (M), Ctrl+A, Ctrl+D | drag a rectangle; then **drag inside it to cut and move those pixels** (hold Alt to move a copy, leaving them where they were). They float (an orange outline) until you put them down: Enter, a click outside, or another tool; Esc puts them back where they were. While floating: drag them again, the arrow keys move by 1 pixel (Shift: 8), H flips them, Delete throws them away |
@@ -46,12 +46,13 @@ screen, and the game shows your drawing instead.
 | Move (V) | drag the drawing layer (nothing selected), or the selection's pixels as Select does; the arrow keys move by 1 pixel, Shift+arrows by 8 |
 | Colour picker (click the colour) | a hue bar and a saturation/brightness square, the colour by H S B, R G B or hex; "in the game" is the colour as the DS shows it |
 | Recent, This screen's colours | the colours you used last; the colours the screen uses (drawing with them keeps the game's look) |
-| Ctrl+Z, Ctrl+Y | undo, redo |
-| +, -, Ctrl+wheel | zoom |
+| Ctrl+Z; Ctrl+Y or Ctrl+Shift+Z | undo; redo |
+| Alt + wheel (or Ctrl + wheel), +, - | zoom (1x to 12x), the pixel under the mouse staying under it |
+| Middle button drag (with or without Alt) | drag the whole picture round the window; Home puts it back in the middle |
 | P | the 3DS preview: the screen at the 3DS's size, as its filter shows it |
 | Layers in front: see-through | the layers in front of the one you're drawing, faint, so you can see it |
 | File > Open saved picture in another program | edit it in Aseprite, Photoshop...; then File > Reload saved picture |
-| File > Export / Import | the layer as a 320 x 192 PNG; a PNG (any size) as a new drawing layer, to move into place |
+| File > Import picture (Ctrl+I), Export layer (Ctrl+Shift+E); the buttons under Save | to work on a picture in another program (Photoshop...) and bring it back: Export writes the layer as a PNG (320 x 192; a layout's picture at its own size), or (File) the drawing layer alone or the whole screen; Import puts a PNG or a PSD (Photoshop's, as one picture) in as a new drawing layer: a 320 x 192 one where it is, a layout's picture's own size at its place, anything else at the view's top-left, the Move tool chosen to drag it into place; Merge (Ctrl+E) puts it into the layer under it |
 
 **Drawing layers.** Each of the game's layers can have as many drawing
 layers of your own as you like, as in a paint program (the list under the
@@ -69,6 +70,19 @@ was changed in another program since, the editor opens that instead.)
 scrolling (the opening's blue strip): its bands then move with it all the
 time. Otherwise a layer's bands show only while it's where you drew it
 (see below).
+
+**A screen's own pictures.** The pictures a screen's layout draws itself
+(the party's panel, its Poké Ball and lights, the boxes' divider: see
+"Pictures a screen's layout draws" below) are in its captures too, as
+layers "Picture: <name>", each just in front of the BG it's drawn with,
+unturned (a ball captured mid-turn shows upright). Draw on them like any
+layer (nothing is locked for them) and save: the editor writes the file
+(`wide/<name>.png`) from the picture's top-left corner, where the game puts
+it: as big as it was, bigger if you drew past its right or bottom edge;
+what's past the screen's edge (the party's ball, half off the screen) is
+kept. What's drawn left of or above its corner can't show (the game draws
+the picture from there), so it's left out. A light's colours are a picture
+each: a capture has the ones that were lit then.
 
 Colours are saved as the DS shows them (5 bits a channel), and pixels are
 either solid or transparent (no half-transparent ones).
@@ -157,10 +171,13 @@ Files, in `3ds/pokeplatinum/wide`:
 - `captures/NNNN/`: `screen.png`, `bg0.png`-`bg3.png` (and
   `bg<N>_map.png`, its map past the DS's edges), `obj<G>.png` (each
   sprite group, G = priority x 32 + palette, or + 16 for 8-bit sprites),
-  `info.txt` (each layer's key, scroll or position, and priority);
+  `picture_<name>.png` (each picture the screen's layout draws, unturned,
+  where it's drawn), `info.txt` (each layer's key, scroll or position, and
+  priority; each picture's BG, place, size and turn);
+- `<name>.png`: a picture a screen's layout draws (the table below);
 - `editor/<key>_<hofs>_<vofs>/`: the editor's drawing layers for a picture
-  (`layers.json` and a PNG each; `editor/<key>/` before). The game doesn't
-  read it.
+  (`layers.json` and a PNG each; `editor/<key>/` before; a layout's
+  picture's: `editor/<name>_<x>_<y>/`). The game doesn't read it.
 
 320 x 192 pixels, the DS's picture at x 32-287. The pictures are made from
 the game's art: like the data pack, they stay on your SD card and aren't
