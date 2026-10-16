@@ -69,6 +69,8 @@ void NitroPort_SoundRender(int16_t *stereo, size_t frames);
 void NitroPort_SoundPumpReplies(void);
 /* (nitro_port_fs.h, which needs the SDK's headers) */
 void NitroPort_FsReadStats(uint32_t *reads, uint64_t *bytes, uint64_t *micros);
+/* (nitro_port.h) the save's changes waiting, into its file */
+void NitroPort_CardFlush(void);
 
 #define AUDIO_FRAMES 512
 #define AUDIO_BUFFERS 4
