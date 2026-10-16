@@ -317,6 +317,48 @@ class WideArtTest(unittest.TestCase):
         self.assertEqual([p.name for p in made], [f"{layer.key}_452_0_full.png"])
         self.assertTrue(made[0].exists())
 
+    def test_layout_pictures(self):
+        """A picture the screen's layout draws (the party's panel...): a
+        layer of the capture, just in front of its BG; its file the drawing
+        layer, where the game puts it (past the canvas's edge too); saved
+        back from its top-left corner, bigger if drawn past its right or
+        bottom edge, what's left of or above it left out."""
+        cap_dir = core.make_sample_capture(self.root / "p", 1, sprites=True, picture=True)
+        art = cap_dir.parent.parent
+        cap = core.list_captures(art)[0]
+        pic = cap.layer("pic_party_ball")
+        self.assertEqual((pic.kind, pic.key, pic.bg, pic.prio, pic.hofs, pic.vofs, pic.w, pic.h),
+                         ("picture", "party_ball", 3, 3, -4, 10, 8, 6))
+        self.assertEqual(pic.art_name(True), "party_ball.png")
+        self.assertEqual([l.id for l in core.draw_order(cap.layers)], ["bg3", "pic_party_ball", "obj102", "bg1"])
+        ref = core.find_art(art, pic)
+        self.assertEqual(ref.path, art / "party_ball.png")
+        paint = core.picture_paint(art, cap, pic)
+        self.assertEqual((paint.x, paint.y, paint.image.size), (-4, 10, (8, 6)))
+        self.assertEqual(paint.view().getpixel((0, 10))[:3], (200, 40, 60))   # its x 4
+        # drawn on: its x 5, and past its right edge (x 9) and its top (canvas y 9)
+        paint.plot(1, 11, (0, 0, 255, 255))
+        paint.plot(5, 14, (0, 255, 0, 255))
+        path, lost = core.save_picture(art, pic, [paint])
+        saved = core.load_rgba(path)
+        self.assertEqual(saved.size, (10, 6))
+        self.assertFalse(lost)
+        self.assertEqual(saved.getpixel((0, 0))[:3], core.snap((200, 40, 60))[:3])   # (off the canvas: kept)
+        self.assertEqual(saved.getpixel((5, 1))[:3], (0, 0, 255))
+        self.assertEqual(saved.getpixel((9, 4))[:3], (0, 255, 0))
+        self.assertEqual(saved.getpixel((9, 0))[3], 0)
+        paint.plot(2, 9, (255, 255, 0, 255))
+        path, lost = core.save_picture(art, pic, [paint])
+        self.assertTrue(lost)
+        self.assertEqual(core.load_rgba(path).size, (10, 6))
+        # its file gone: the capture's picture of it (what was on the canvas)
+        path.unlink()
+        self.assertIsNone(core.find_art(art, pic))
+        paint = core.picture_paint(art, cap, pic)
+        self.assertEqual((paint.x, paint.y, paint.image.size), (0, 0, (core.W, core.H)))
+        self.assertEqual(paint.image.getpixel((0, 10))[:3], (200, 40, 60))
+        self.assertEqual(core.delete_art(art, pic), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

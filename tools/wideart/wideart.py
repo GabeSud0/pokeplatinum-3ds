@@ -386,7 +386,8 @@ class Editor(tk.Tk):
             rgb = core.parse_hex(h)
             if rgb:
                 self.recent.append(core.snap(rgb + (255,)))
-        self.zoom = tk.IntVar(value=int(self.settings.get("zoom", 3)))
+        self.zoom = tk.IntVar(value=max(1, min(12, int(self.settings.get("zoom", 3)))))
+        self._zoom_was = self.zoom.get()                 # (the zoom the view is laid out for)
         self.tool = tk.StringVar(value="pencil")
         self.brush_size = tk.IntVar(value=int(self.settings.get("brush", 1)))
         self.lock_middle = tk.BooleanVar(value=True)
@@ -405,6 +406,9 @@ class Editor(tk.Tk):
         self.drag: dict | None = None                 # a move under way (a drawing layer, a floating piece)
         self.clip_at = (0, 0)                         # where the copy was copied from
         self.mouse: tuple[int, int] | None = None
+        self.last_point: tuple[int, int] | None = None   # where the last brush stroke ended (Shift+click: a line from it)
+        self.panning = False
+        self.centred = False                          # the view put on the picture (after a capture opens)
         self.photo = None
         self._build()
         self._bind_keys()
@@ -431,8 +435,11 @@ class Editor(tk.Tk):
         filem.add_command(label="Save layer", command=self.save, accelerator="Ctrl+S")
         filem.add_command(label="Save all layers", command=self.save_all, accelerator="Ctrl+Shift+S")
         filem.add_separator()
-        filem.add_command(label="Export layer as PNG...", command=self.export_png)
-        filem.add_command(label="Import PNG as a new drawing layer...", command=self.import_png)
+        filem.add_command(label="Import a picture (PNG, PSD...) as a new drawing layer...", command=self.import_png,
+                          accelerator="Ctrl+I")
+        filem.add_command(label="Export this layer as PNG...", command=self.export_png, accelerator="Ctrl+Shift+E")
+        filem.add_command(label="Export the drawing layer as PNG...", command=self.export_paint)
+        filem.add_command(label="Export the whole screen as PNG...", command=self.export_screen)
         filem.add_command(label="Open saved picture in another program", command=self.open_outside)
         filem.add_command(label="Reload saved picture", command=self.reload_saved)
         filem.add_separator()
@@ -440,7 +447,7 @@ class Editor(tk.Tk):
         menu.add_cascade(label="File", menu=filem)
         editm = tk.Menu(menu, tearoff=False)
         editm.add_command(label="Undo", command=self.do_undo, accelerator="Ctrl+Z")
-        editm.add_command(label="Redo", command=self.do_redo, accelerator="Ctrl+Y")
+        editm.add_command(label="Redo", command=self.do_redo, accelerator="Ctrl+Y / Ctrl+Shift+Z")
         editm.add_separator()
         editm.add_command(label="Cut", command=self.cut, accelerator="Ctrl+X")
         editm.add_command(label="Copy", command=self.copy, accelerator="Ctrl+C")
@@ -474,8 +481,9 @@ class Editor(tk.Tk):
         viewm.add_command(label="3DS preview", command=self.preview, accelerator="P")
         viewm.add_checkbutton(label="Show the other layers", variable=self.show_others, command=self.redraw)
         viewm.add_checkbutton(label="Pixel grid", variable=self.show_grid, command=self.redraw)
-        for z in (1, 2, 3, 4, 5, 6):
-            viewm.add_radiobutton(label=f"Zoom {z}x", variable=self.zoom, value=z, command=self.redraw)
+        viewm.add_command(label="Put the screen in the middle", command=self.centre_view, accelerator="Home")
+        for z in (1, 2, 3, 4, 5, 6, 8, 10, 12):
+            viewm.add_radiobutton(label=f"Zoom {z}x", variable=self.zoom, value=z, command=lambda: self.set_zoom(self.zoom.get()))
         menu.add_cascade(label="View", menu=viewm)
         helpm = tk.Menu(menu, tearoff=False)
         helpm.add_command(label="How it works", command=self.show_help)
@@ -570,6 +578,12 @@ class Editor(tk.Tk):
         frow.columnconfigure(1, weight=1)
         ttk.Separator(right).pack(fill="x", pady=6)
         ttk.Button(right, text="Save layer (Ctrl+S)", command=self.save).pack(fill="x", pady=2)
+        irow = ttk.Frame(right)
+        irow.pack(fill="x")
+        ttk.Button(irow, text="Import picture...", command=self.import_png).pack(side="left", fill="x", expand=True,
+                                                                              padx=(0, 1), pady=2)
+        ttk.Button(irow, text="Export layer...", command=self.export_png).pack(side="left", fill="x", expand=True,
+                                                                            padx=(1, 0), pady=2)
         ttk.Button(right, text="Revert to the capture", command=self.revert).pack(fill="x", pady=2)
         ttk.Button(right, text="Delete saved picture", command=self.delete_saved).pack(fill="x", pady=2)
         ttk.Button(right, text="3DS preview (P)", command=self.preview).pack(fill="x", pady=2)
@@ -593,7 +607,19 @@ class Editor(tk.Tk):
         self.canvas.bind("<Leave>", lambda e: self.canvas.delete("cursor"))
         self.canvas.bind("<Button-3>", self.on_right_click)
         self.canvas.bind("<MouseWheel>", self.on_wheel)
+        self.canvas.bind("<Shift-MouseWheel>", self.on_hwheel)
         self.canvas.bind("<Control-MouseWheel>", self.on_zoom_wheel)
+        self.canvas.bind("<Alt-MouseWheel>", self.on_zoom_wheel)
+        # (X11's wheel: buttons 4 and 5)
+        for button, delta in (("4", 120), ("5", -120)):
+            self.canvas.bind(f"<Button-{button}>", lambda e, d=delta: self.on_wheel(self._wheel(e, d)))
+            self.canvas.bind(f"<Control-Button-{button}>", lambda e, d=delta: self.on_zoom_wheel(self._wheel(e, d)))
+            self.canvas.bind(f"<Alt-Button-{button}>", lambda e, d=delta: self.on_zoom_wheel(self._wheel(e, d)))
+        # dragging the whole picture round: the middle button (with Alt, or without)
+        self.canvas.bind("<ButtonPress-2>", self.on_pan_start)
+        self.canvas.bind("<B2-Motion>", self.on_pan)
+        self.canvas.bind("<ButtonRelease-2>", self.on_pan_end)
+        self.canvas.bind("<Configure>", lambda e: self.redraw() if not self.centred and self.cap else None)
 
         self.status_var = tk.StringVar()
         ttk.Label(self, textvariable=self.status_var, anchor="w", relief="sunken").pack(fill="x", side="bottom")
@@ -603,6 +629,8 @@ class Editor(tk.Tk):
     def _bind_keys(self):
         for seq, fn in (("<Control-o>", self.choose_folder), ("<F5>", self.refresh), ("<Control-s>", self.save),
                         ("<Control-S>", self.save_all), ("<Control-z>", self.do_undo), ("<Control-y>", self.do_redo),
+                        ("<Control-Z>", self.do_redo), ("<Control-i>", self.import_png),
+                        ("<Control-E>", self.export_png), ("<Home>", self.centre_view),
                         ("<Control-c>", self.copy), ("<Control-v>", self.paste), ("<Control-V>", self.paste_as_layer),
                         ("<Control-x>", self.cut), ("<Control-d>", self.deselect), ("<Return>", self.commit),
                         ("<KP_Enter>", self.commit),
@@ -675,6 +703,13 @@ class Editor(tk.Tk):
         ref = core.find_art(self.art_dir, layer) if self.art_dir is not None else None
         self.refs[layer.id] = ref
         self.loops[layer.id] = bool(ref and ref.loop)
+        if layer.kind == "picture":
+            # a layout's picture: its file, where the game draws it
+            if ref is not None:
+                project = core.load_project(self.art_dir, layer.key, layer.hofs, layer.vofs, ref.path)
+                if project is not None:
+                    return project
+            return [core.picture_paint(self.art_dir, self.cap, layer)], 0
         if ref is not None:
             project = core.load_project(self.art_dir, layer.key, ref.hofs, ref.vofs, ref.path)
             if project is not None:
@@ -710,6 +745,8 @@ class Editor(tk.Tk):
         self.selection = None
         self.float = None
         self.drag = None
+        self.last_point = None
+        self.centred = False
         thumb = cap.screen().resize((160, 96), Image.NEAREST)
         self.thumb_photo = ImageTk.PhotoImage(thumb)
         self.thumb.configure(image=self.thumb_photo)
@@ -717,11 +754,12 @@ class Editor(tk.Tk):
             w.destroy()
         for l in reversed(core.draw_order(cap.layers)):
             saved = self.refs.get(l.id)
-            ttk.Radiobutton(self.layer_frame, text=l.label + ("  - drawn" if saved else ""),
+            ttk.Radiobutton(self.layer_frame, text=l.label + ("  - drawn" if saved and l.kind != "picture" else ""),
                             variable=self.layer_var, value=l.id, command=self.select_layer).pack(anchor="w")
         if cap.layers:
             # the backmost layer: usually the background to draw
-            self.layer_var.set(previous if previous in self.stacks else core.draw_order(cap.layers)[0].id)
+            first = next((l for l in core.draw_order(cap.layers) if l.kind != "picture"), core.draw_order(cap.layers)[0])
+            self.layer_var.set(previous if previous in self.stacks else first.id)
             self.select_layer()
         self.update_swatches()
 
@@ -734,7 +772,7 @@ class Editor(tk.Tk):
         layer = self.layer()
         if layer is not None:
             ref = self.refs.get(self.lid)
-            if ref is not None and ref.full:
+            if ref is not None and ref.full and layer.kind != "picture":
                 self.lock_middle.set(False)   # (its middle was drawn: don't put the game's back)
             self.loop_var.set(self.loops.get(self.lid, False))
             self.update_layer_info()
@@ -746,6 +784,14 @@ class Editor(tk.Tk):
         if layer is None:
             return
         ref = self.refs.get(self.lid)
+        if layer.kind == "picture":
+            turned = f", turned {layer.angle}\N{DEGREE SIGN} when captured" if layer.angle else ""
+            saved = f"file: {ref.path.name}" if ref else "no file (it isn't drawn)"
+            self.layer_info.configure(text=f"{layer.label}\nthe game draws it with its top-left at x {layer.hofs}, "
+                                           f"y {layer.vofs}{turned}\n{saved}\nSaving writes the file from that "
+                                           "corner: as big as it is, or bigger if drawn past its right or bottom "
+                                           "edge.")
+            return
         what = "position" if layer.kind == "obj" else "scroll"
         if ref is None:
             saved = "not drawn yet"
@@ -896,9 +942,17 @@ class Editor(tk.Tk):
         self.changed()
 
     # ---------------------------------------------------------- drawing
+    def is_picture(self, lid: str | None = None) -> bool:
+        """Whether a layer is a layout's picture (drawn anywhere: the DS's
+        picture isn't locked for it)."""
+        layer = self.cap.layer(lid or self.lid) if self.cap is not None and (lid or self.lid) else None
+        return layer is not None and layer.kind == "picture"
+
     def allowed(self, x: int, y: int) -> bool:
         if not (0 <= x < core.W and 0 <= y < core.H):
             return False
+        if self.is_picture():
+            return True
         return not (self.lock_middle.get() and core.DS_X0 <= x < core.DS_X1)
 
     def on_lock(self):
@@ -978,7 +1032,8 @@ class Editor(tk.Tk):
     # piece too.
     def on_press(self, event):
         alt = bool(event.state & (0x20000 if os.name == "nt" else 0x0008))
-        self.press(*self.to_pixel(event), alt=alt)
+        shift = bool(event.state & 0x0001)
+        self.press(*self.to_pixel(event), alt=alt, shift=shift)
 
     def on_drag(self, event):
         self.drag_to(*self.to_pixel(event))
@@ -990,7 +1045,7 @@ class Editor(tk.Tk):
         s = self.selection
         return s is not None and s[0] <= x < s[2] and s[1] <= y < s[3]
 
-    def press(self, x: int, y: int, alt: bool = False):
+    def press(self, x: int, y: int, alt: bool = False, shift: bool = False):
         p = self.paint()
         if p is None:
             return
@@ -1026,8 +1081,14 @@ class Editor(tk.Tk):
             return
         if tool in ("pencil", "eraser"):
             self.push_undo()
-            self.stamp(x, y, (0, 0, 0, 0) if tool == "eraser" else self.color)
+            color = (0, 0, 0, 0) if tool == "eraser" else self.color
+            if shift and self.last_point is not None:
+                # Shift + click: a straight line from where the last stroke ended
+                self.line(*self.last_point, x, y, color)
+            else:
+                self.stamp(x, y, color)
             self.drag_start = (x, y)
+            self.last_point = (x, y)
             self.dirty.add(self.lid)
         elif tool == "fill":
             if self.allowed(x, y):
@@ -1060,6 +1121,7 @@ class Editor(tk.Tk):
         if tool in ("pencil", "eraser"):
             self.line(*self.drag_start, x, y, (0, 0, 0, 0) if tool == "eraser" else self.color)
             self.drag_start = (x, y)
+            self.last_point = (x, y)
         elif tool == "select":
             x0, y0 = self.drag_start
             self.selection = (max(0, min(x0, x)), max(0, min(y0, y)),
@@ -1108,17 +1170,76 @@ class Editor(tk.Tk):
         x, y = self.to_pixel(event)
         self.pick_at(x, y)
 
+    @staticmethod
+    def _wheel(event, delta: int):
+        event.delta = delta
+        return event
+
     def on_wheel(self, event):
         self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
 
-    def on_zoom_wheel(self, event):
-        self.set_zoom(self.zoom.get() + (1 if event.delta > 0 else -1))
+    def on_hwheel(self, event):
+        self.canvas.xview_scroll(-1 if event.delta > 0 else 1, "units")
 
-    def set_zoom(self, z: int):
-        self.zoom.set(max(1, min(8, z)))
-        self.settings["zoom"] = self.zoom.get()
+    def on_zoom_wheel(self, event):
+        """Ctrl or Alt + the wheel: zoom, the pixel under the mouse staying
+        under it."""
+        self.set_zoom(self.zoom.get() + (1 if event.delta > 0 else -1), at=(event.x, event.y))
+
+    # (the picture can be dragged anywhere: the scrolling region goes well
+    # past each of its edges)
+    MARGIN = 2400
+
+    def _region(self) -> tuple[int, int, int, int]:
+        z = self.zoom.get()
+        m = self.MARGIN
+        return (-m, -m, core.W * z + m, core.H * z + m)
+
+    def _view_at(self, left: float, top: float):
+        """The view's top-left at canvas coordinates left, top."""
+        x0, y0, x1, y1 = self._region()
+        self.canvas.xview_moveto((left - x0) / (x1 - x0))
+        self.canvas.yview_moveto((top - y0) / (y1 - y0))
+
+    def centre_view(self):
+        """The screen in the middle of the window."""
+        z = self.zoom.get()
+        self.canvas.configure(scrollregion=self._region())
+        self._view_at((core.W * z - self.canvas.winfo_width()) / 2, (core.H * z - self.canvas.winfo_height()) / 2)
+        self.centred = True
+
+    def set_zoom(self, z: int, at: tuple[int, int] | None = None):
+        """Zoom z (1-12), about the window's point at (the mouse; its middle
+        if none)."""
+        old = self._zoom_was
+        new = max(1, min(12, z))
+        if at is None:
+            at = (self.canvas.winfo_width() / 2, self.canvas.winfo_height() / 2)
+        # the picture's point under at, before
+        px = self.canvas.canvasx(at[0]) / old
+        py = self.canvas.canvasy(at[1]) / old
+        self.zoom.set(new)
+        self._zoom_was = new
+        self.settings["zoom"] = new
         save_settings(self.settings)
+        self.canvas.configure(scrollregion=self._region())
+        self._view_at(px * new - at[0], py * new - at[1])
+        if self.canvas.winfo_width() > 1:
+            self.centred = True           # (the view's where it was put: not centred again)
         self.redraw()
+
+    def on_pan_start(self, event):
+        self.panning = True
+        self.canvas.scan_mark(event.x, event.y)
+        self.canvas.configure(cursor="fleur")
+
+    def on_pan(self, event):
+        if self.panning:
+            self.canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def on_pan_end(self, event):
+        self.panning = False
+        self.on_tool()
 
     def set_size(self, n: int):
         n = max(1, min(32, int(n)))
@@ -1463,10 +1584,23 @@ class Editor(tk.Tk):
         """What the game is to show for a layer: its drawing layers flattened
         (the DS's part as locked, if it is)."""
         flat = core.flatten(self.stacks[lid])
+        if self.is_picture(lid):
+            return flat
         return core.lock_middle(flat, self.middle[lid]) if self.lock_middle.get() else flat
 
     def save_layer(self, lid: str) -> Path:
         layer = self.cap.layer(lid)
+        if layer.kind == "picture":
+            path, lost = core.save_picture(self.art_dir, layer, self.stacks[lid])
+            core.save_project(self.art_dir, layer.key, self.stacks[lid], self.active[lid], layer.hofs, layer.vofs,
+                              path)
+            self.refs[lid] = core.ArtRef(path, layer.hofs, layer.vofs, True, False)
+            self.dirty.discard(lid)
+            if lost:
+                self.after(10, lambda: self.status(
+                    f"Saved {path.name}; what's drawn left of or above its top-left corner was left out "
+                    "(the game draws the picture from that corner)."))
+            return path
         old = self.refs.get(lid)
         path = core.save_art(self.art_dir, layer, self.picture(lid), self.originals[lid],
                              loop=self.loops.get(lid, False), replace=old.path if old else None)
@@ -1481,8 +1615,13 @@ class Editor(tk.Tk):
             return
         self.commit()
         path = self.save_layer(self.lid)
-        self.status(f"Saved {path.name}" + ("  (the whole layer)" if path.stem.endswith("_full") else
-                                            "  (the side bands)") + ". In the game: L + R + A takes it in.")
+        if self.is_picture():
+            with Image.open(path) as im:
+                size = im.size
+            self.status(f"Saved {path.name} ({size[0]} x {size[1]}). In the game: L + R + A takes it in.")
+        else:
+            self.status(f"Saved {path.name}" + ("  (the whole layer)" if path.stem.endswith("_full") else
+                                                "  (the side bands)") + ". In the game: L + R + A takes it in.")
         self.refresh_layer_labels()
 
     def save_all(self):
@@ -1504,7 +1643,7 @@ class Editor(tk.Tk):
             w.destroy()
         for l in reversed(core.draw_order(self.cap.layers)):
             saved = self.refs.get(l.id)
-            ttk.Radiobutton(self.layer_frame, text=l.label + ("  - drawn" if saved else ""),
+            ttk.Radiobutton(self.layer_frame, text=l.label + ("  - drawn" if saved and l.kind != "picture" else ""),
                             variable=self.layer_var, value=l.id, command=self.select_layer).pack(anchor="w")
         index = self.cap_list.curselection()
         if index:
@@ -1520,6 +1659,12 @@ class Editor(tk.Tk):
         if self.stack() is None:
             return
         self.push_undo()
+        if self.is_picture():
+            # (its file as it is: the capture has only what was on the canvas)
+            self.stacks[self.lid] = [core.picture_paint(self.art_dir, self.cap, self.layer())]
+            self.active[self.lid] = 0
+            self.changed()
+            return
         self.stacks[self.lid] = [core.Paint("Layer 1", self.originals[self.lid].copy())]
         self.active[self.lid] = 0
         self.middle[self.lid] = self.originals[self.lid]
@@ -1533,8 +1678,10 @@ class Editor(tk.Tk):
         if ref is None:
             self.status("Nothing saved for this layer.")
             return
-        if messagebox.askyesno(APP, f"Delete the saved picture for {layer.label}? The game goes back to "
-                                    "filling its bands by itself."):
+        question = (f"Delete {ref.path.name}? The game stops drawing that picture." if layer.kind == "picture" else
+                    f"Delete the saved picture for {layer.label}? The game goes back to filling its bands by "
+                    "itself.")
+        if messagebox.askyesno(APP, question):
             core.delete_art(self.art_dir, layer)
             core.delete_project(self.art_dir, layer.key, ref.hofs, ref.vofs)
             self.refs[self.lid] = None
@@ -1545,26 +1692,87 @@ class Editor(tk.Tk):
             self.update_paint_list()
             self.refresh_layer_labels()
 
-    def export_png(self):
+    def export_png(self, path: str | None = None):
+        """This layer as a PNG to work on elsewhere (Photoshop...): the whole
+        canvas (320 x 192, the bands at the sides), or a layout's picture at
+        its own size. Import it back (File > Import) to put it in."""
         if self.stack() is None:
             return
         self.commit()
-        path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")],
-                                            initialfile=f"{self.lid}.png")
+        layer = self.layer()
+        picture = layer is not None and layer.kind == "picture"
+        if path is None:
+            path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")],
+                                                initialfile=f"{layer.key if picture else self.lid}.png")
         if path:
-            self.picture(self.lid).save(path)
-            self.status(f"Exported {path} (320 x 192, all the drawing layers in one)")
+            if picture:
+                box = (layer.hofs, layer.vofs, layer.hofs + layer.w, layer.vofs + layer.h)
+                drawn = core.stack_bbox(self.stack())
+                if drawn:
+                    box = (box[0], box[1], max(box[2], drawn[2]), max(box[3], drawn[3]))
+                img = core.flatten_box(self.stack(), box)
+            else:
+                img = self.picture(self.lid)
+            img.save(path)
+            self.status(f"Exported {path} ({img.width} x {img.height}, all the drawing layers in one). "
+                        "Edit it, then File > Import to bring it back.")
 
-    def import_png(self):
+    def export_paint(self):
+        """The drawing layer being drawn on, as it is (its own size)."""
+        p = self.paint()
+        if p is None:
+            return
+        self.commit()
+        path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")],
+                                            initialfile=f"{p.name}.png")
+        if path:
+            p.image.save(path)
+            self.status(f"Exported {path} ({p.image.width} x {p.image.height}, at x {p.x}, y {p.y} on the canvas)")
+
+    def export_screen(self):
+        """The whole screen as it shows here (every layer)."""
+        if self.cap is None:
+            return
+        self.commit()
+        path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")],
+                                            initialfile=f"screen_{self.cap.name}.png")
+        if path:
+            self.composite(faint=False).save(path)
+            self.status(f"Exported {path} (320 x 192, every layer)")
+
+    def import_png(self, path: str | None = None):
+        """A picture made elsewhere (Photoshop: PSD or PNG...) as a new
+        drawing layer of this layer, to put where it goes: a whole-canvas
+        one (320 x 192) where it is; a layout's picture's own size at its
+        place; anything else at the top-left of the view, the Move tool
+        chosen to drag it."""
         if self.stack() is None:
             return
-        path = filedialog.askopenfilename(filetypes=[("Pictures", "*.png *.gif *.bmp"), ("All", "*.*")])
-        if path:
+        if path is None:
+            path = filedialog.askopenfilename(filetypes=[("Pictures", "*.png *.psd *.gif *.bmp *.jpg *.jpeg *.tga"),
+                                                         ("All", "*.*")])
+        if not path:
+            return
+        try:
             img = core.load_rgba(path)
-            self.add_paint(core.Paint(Path(path).stem, img))
-            if img.size != (core.W, core.H):
-                self.set_tool("move")
-                self.status(f"Imported {img.width} x {img.height}: drag it into place with the Move tool.")
+        except (OSError, ValueError) as e:
+            messagebox.showerror(APP, f"Can't read {path}:\n{e}")
+            return
+        layer = self.layer()
+        x = y = 0
+        if layer is not None and layer.kind == "picture" and img.width != core.W:
+            x, y = layer.hofs, layer.vofs
+        elif img.size != (core.W, core.H):
+            z = self.zoom.get()
+            x = max(0, min(core.W - 1, int(self.canvas.canvasx(0) // z)))
+            y = max(0, min(core.H - 1, int(self.canvas.canvasy(0) // z)))
+        self.add_paint(core.Paint(Path(path).stem, img, x, y))
+        if (x, y) != (0, 0) or img.size != (core.W, core.H):
+            self.set_tool("move")
+            self.status(f"Imported {Path(path).name} ({img.width} x {img.height}) at x {x}, y {y}: drag it into "
+                        "place with the Move tool; Merge (Ctrl+E) puts it into the layer under it.")
+        else:
+            self.status(f"Imported {Path(path).name} as a new drawing layer.")
 
     def open_outside(self):
         layer = self.layer()
@@ -1585,7 +1793,10 @@ class Editor(tk.Tk):
         ref = self.refs.get(self.lid)
         if ref is not None and ref.path.exists():
             self.push_undo()
-            self.stacks[self.lid] = [core.Paint("Layer 1", core.load_rgba(ref.path), ref.dx, ref.dy)]
+            if layer.kind == "picture":
+                self.stacks[self.lid] = [core.picture_paint(self.art_dir, self.cap, layer)]
+            else:
+                self.stacks[self.lid] = [core.Paint("Layer 1", core.load_rgba(ref.path), ref.dx, ref.dy)]
             self.active[self.lid] = 0
             self.changed()
 
@@ -1668,7 +1879,9 @@ class Editor(tk.Tk):
             # the drawing layer's extent
             self.canvas.create_rectangle(p.x * z, p.y * z, (p.x + p.image.width) * z, (p.y + p.image.height) * z,
                                          outline="#ff66ff", dash=(2, 4))
-        self.canvas.configure(scrollregion=(0, 0, core.W * z, core.H * z))
+        self.canvas.configure(scrollregion=self._region())
+        if not self.centred and self.canvas.winfo_width() > 1:
+            self.centre_view()
         if self.mouse is not None:
             self.show_cursor(*self.mouse)
         marks = "*" if self.lid in self.dirty else ""
@@ -1695,26 +1908,50 @@ class Editor(tk.Tk):
             "Ctrl+X / Ctrl+C / Ctrl+V cut, copy and paste; the paste floats too, ready to drag. Arrow "
             "keys nudge, H / Shift+H flip, R / Shift+R turn by 90 degrees, Ctrl+T scales and rotates.\n"
             "Move (V): drag the drawing layer (nothing selected), or the selection.\n"
-            "[ and ]: brush size. Right-click: pick a colour.\n\n"
+            "[ and ]: brush size. Right-click: pick a colour. Shift + click: a straight line from where the last "
+            "stroke ended.\n"
+            "Alt (or Ctrl) + wheel: zoom where the mouse is. Middle button (with or without Alt): drag the "
+            "picture round. Home: put it back in the middle.\n"
+            "Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z): undo / redo.\n\n"
+            "Pictures of a screen's own (the party's panel, the boxes' divider...) are layers of the capture "
+            "too ('Picture: ...'): draw on them and save; the game reads them back from their files.\n"
+            "File > Import / Export: a picture to or from another program (PNG; Photoshop's PSD to import).\n\n"
             "4. Save. In the game, L + R + A takes the new pictures in (or restart it)."))
 
 
-def self_test() -> int:
+def self_test(log_path: str | None = None) -> int:
     """(CI) Open a made-up capture; fill a layer's bands, draw on a new
     drawing layer and move it, save: 0 if the picture is where the game
-    reads it and the drawing layers open again."""
+    reads it and the drawing layers open again. Each check's result goes
+    to wideart_selftest.log (the exe has no console to print to)."""
+    import gc
+    import shutil
     import tempfile
+    import traceback
 
-    with tempfile.TemporaryDirectory() as tmp:
-        art = Path(tmp) / "wide"
-        core.make_sample_capture(art, sprites=True)
+    log = Path(log_path or os.environ.get("WIDEART_SELFTEST_LOG") or "wideart_selftest.log")
+    results: list[str] = []
+    failed: list[str] = []
+
+    def check(name: str, cond) -> bool:
+        good = bool(cond)
+        results.append(("ok    " if good else "FAILED ") + name)
+        if not good:
+            failed.append(name)
+        return good
+
+    tmp = tempfile.mkdtemp(prefix="wideart_selftest_")
+    app = None
+    try:
         global SETTINGS
+        art = Path(tmp) / "wide"
+        core.make_sample_capture(art, sprites=True, picture=True)
         SETTINGS = Path(tmp) / "settings.json"
         app = Editor(str(art))
         app.withdraw()
         app.update()
-        ok = app.cap is not None and app.lid == "bg3" and app.cap.layer("obj102") is not None
-        if ok:
+        if check("the capture opens, on BG3, with the sprites' layer",
+                 app.cap is not None and app.lid == "bg3" and app.cap.layer("obj102") is not None):
             app.fill_bands("mirror")
             app.new_layer()
             app.set_size(3)
@@ -1722,19 +1959,21 @@ def self_test() -> int:
             app.paint().x += 2            # (the Move tool's doing)
             app.save()
             saved = core.existing_art(art, "6d5a3d55615351bf")
-            ok = saved is not None and saved.name == "6d5a3d55615351bf_8_300.png"
+            check("saved where the game reads it", saved is not None and saved.name == "6d5a3d55615351bf_8_300.png")
             pic = core.load_rgba(saved)
-            ok = ok and pic.getpixel((31, 5))[0] == core.snap((32, 7, 9))[0]
-            ok = ok and pic.getpixel((12, 10))[:3] == (255, 0, 0) and pic.getpixel((13, 11))[:3] == (255, 0, 0)
-            ok = ok and pic.getpixel((100, 50)) == core.snap(app.originals["bg3"].getpixel((100, 50)))
+            check("the band mirrored", pic.getpixel((31, 5))[0] == core.snap((32, 7, 9))[0])
+            check("the drawing layer moved 2 right",
+                  pic.getpixel((12, 10))[:3] == (255, 0, 0) and pic.getpixel((13, 11))[:3] == (255, 0, 0))
+            check("the middle kept", pic.getpixel((100, 50)) == core.snap(app.originals["bg3"].getpixel((100, 50))))
             project = core.load_project(art, "6d5a3d55615351bf", 8, 300)
-            ok = ok and project is not None and len(project[0]) == 2 and project[0][1].x == 2
+            check("the drawing layers saved",
+                  project is not None and len(project[0]) == 2 and project[0][1].x == 2)
             # the sprites' layer: its own picture
             app.layer_var.set("obj102")
             app.select_layer()
             app.fill_bands("extend")
             app.save()
-            ok = ok and core.existing_art(art, "10d372806e45f5c2") is not None
+            check("the sprites' layer saved", core.existing_art(art, "10d372806e45f5c2") is not None)
             # the Move tool: the red dot's pixels dragged 10 down
             app.layer_var.set("bg3")
             app.select_layer()
@@ -1742,14 +1981,15 @@ def self_test() -> int:
             app.press(11, 9)                 # a selection round it
             app.drag_to(13, 11)
             app.release()
-            ok = ok and app.selection == (11, 9, 14, 12)
+            check("a selection", app.selection == (11, 9, 14, 12))
             app.press(12, 10)                # dragged from inside it: cut and moved
             app.drag_to(12, 20)
             app.release()
             app.commit()
             app.save()
             pic = core.load_rgba(core.existing_art(art, "6d5a3d55615351bf"))
-            ok = ok and pic.getpixel((12, 20))[:3] == (255, 0, 0) and pic.getpixel((12, 10))[:3] != (255, 0, 0)
+            check("the selection moved",
+                  pic.getpixel((12, 20))[:3] == (255, 0, 0) and pic.getpixel((12, 10))[:3] != (255, 0, 0))
             # Alt: a copy moved; copy and paste
             app.press(12, 20, alt=True)
             app.drag_to(12, 40)
@@ -1764,9 +2004,76 @@ def self_test() -> int:
             app.commit()
             app.save()
             pic = core.load_rgba(core.existing_art(art, "6d5a3d55615351bf"))
-            ok = ok and all(pic.getpixel((12, y))[:3] == (255, 0, 0) for y in (20, 40, 60))
-        app.destroy()
-    return 0 if ok else 1
+            check("Alt + drag and copy / paste copied it",
+                  all(pic.getpixel((12, y))[:3] == (255, 0, 0) for y in (20, 40, 60)))
+            # Shift + click: a straight line from where the last stroke ended; undo, redo
+            app.set_tool("pencil")
+            app.set_size(1)
+            app.color = (255, 0, 0, 255)
+            app.press(2, 100)                # (in the left band: the middle is locked)
+            app.release()
+            app.press(12, 100, shift=True)
+            app.release()
+            line = lambda: all(app.paint().view().getpixel((x, 100))[:3] == (255, 0, 0) for x in range(2, 13))
+            check("Shift + click drew a line", line())
+            app.do_undo()
+            check("undo took the line away", not line())
+            app.do_redo()
+            check("redo put it back", line())
+            # a layout's picture: a layer of the capture, saved back to its file from its corner (what's past
+            # the canvas's edge kept), bigger when drawn past its right edge
+            check("the capture has the layout's picture", app.cap.layer("pic_party_ball") is not None)
+            app.layer_var.set("pic_party_ball")
+            app.select_layer()
+            check("the picture isn't locked", app.allowed(100, 100))
+            app.stamp(5, 12, (0, 0, 255, 255))         # (its x 9)
+            app.stamp(8, 12, (0, 0, 255, 255))         # (past its right edge: x 12)
+            app.save()
+            ball = core.load_rgba(art / "party_ball.png")
+            check("the picture saved, grown to the right", ball.size == (13, 6))
+            check("what's off the canvas kept", ball.getpixel((0, 0))[:3] == core.snap((200, 40, 60))[:3])
+            check("the drawing in it",
+                  ball.getpixel((9, 2))[:3] == (0, 0, 255) and ball.getpixel((12, 2))[:3] == (0, 0, 255))
+            check("the rest of it kept", ball.getpixel((7, 4))[:3] == core.snap((240, 240, 240))[:3])
+            # export it and import it back
+            out = Path(tmp) / "exported.png"
+            app.export_png(str(out))
+            check("exported at its own size", core.load_rgba(out).size == (13, 6))
+            n = len(app.stack())
+            app.import_png(str(out))
+            check("imported back where the picture is",
+                  len(app.stack()) == n + 1 and (app.paint().x, app.paint().y) == (-4, 10))
+            # zooming about the mouse: the pixel under it stays (the view first put where a shown window has
+            # it: a hidden one is only laid out later, on Windows)
+            app.set_zoom(3)
+            app.update()
+            app.centre_view()
+            app.update()
+            before = app.canvas.canvasx(50) / 3
+            app.set_zoom(6, at=(50, 50))
+            after = app.canvas.canvasx(50) / 6
+            check(f"zoomed about the mouse (pixel {before:.2f} -> {after:.2f})", abs(after - before) < 1)
+    except Exception:
+        failed.append("error")
+        results.append("ERROR\n" + traceback.format_exc())
+    finally:
+        if app is not None:
+            try:
+                app.destroy()
+            except Exception:
+                pass
+        app = None
+        gc.collect()
+        try:
+            shutil.rmtree(tmp)
+            check("no file left open", True)
+        except OSError as e:
+            check(f"no file left open ({e})", False)
+        try:
+            log.write_text("\n".join(results) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+    return 0 if not failed else 1
 
 
 def main():

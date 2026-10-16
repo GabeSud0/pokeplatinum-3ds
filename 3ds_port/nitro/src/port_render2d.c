@@ -182,7 +182,8 @@ typedef struct Engine {
         const u16 *px;
         short w, h, x, y, x0, y0, x1, y1;
         s32 c, s;
-        u8 bg;
+        u8 bg, id;
+        short angle;
     } pics[WIDE_PICS_MAX];
     int nPics;
     u8 picBgs;
@@ -637,6 +638,8 @@ static void SetUpPicture(Engine *e, const NitroWidePart *p)
     e->pics[e->nPics].x = (short)(e->origin + p->x0);
     e->pics[e->nPics].y = p->top;
     e->pics[e->nPics].bg = (u8)bg;
+    e->pics[e->nPics].id = (u8)p->col;
+    e->pics[e->nPics].angle = p->dx;
     e->pics[e->nPics].s = SinFx(p->dx);
     e->pics[e->nPics].c = SinFx(p->dx + 90);
     if (p->dx % 360 == 0) {
@@ -3516,6 +3519,29 @@ int NitroPort_Render2DObjGroups(int engine, const NitroRender2DSplit *layout, Ni
         return 0;
     }
     return ObjGroups(&e, dispcnt, groups, max);
+}
+
+int NitroPort_Render2DPictures(int engine, const NitroRender2DSplit *layout, NitroWidePictureShown *out, int max)
+{
+    Engine e;
+    u32 dispcnt;
+    int i, n = 0;
+
+    if (!SetUpLayer(&e, engine, layout, &dispcnt)) {
+        return 0;
+    }
+    for (i = 0; i < e.nPics && n < max; i++) {
+        out[n].picture = e.pics[i].id;
+        out[n].bg = e.pics[i].bg;
+        out[n].prio = Rd16(e.io, 8 + e.pics[i].bg * 2) & 3;
+        out[n].x = e.pics[i].x;
+        out[n].y = e.pics[i].y;
+        out[n].w = e.pics[i].w;
+        out[n].h = e.pics[i].h;
+        out[n].angle = e.pics[i].angle;
+        n++;
+    }
+    return n;
 }
 
 int NitroPort_Render2DObjLayer(int engine, int group, const NitroRender2DSplit *layout, u16 *out)

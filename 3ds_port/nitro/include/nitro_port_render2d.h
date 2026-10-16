@@ -89,6 +89,14 @@ int NitroPort_Render2DObjGroups(int engine, const NitroRender2DSplit *layout, Ni
  * the bands where it has one). 0 if none of it shows. Not on the drawing
  * threads (one at a time). */
 int NitroPort_Render2DObjLayer(int engine, int group, const NitroRender2DSplit *layout, uint16_t *out);
+/* The pictures a screen's layout draws (NITRO_WIDE_PICTURE parts whose
+ * files are there): which (NitroPort_WidePictureName), with which BG and
+ * that BG's priority, the picture's top-left on the canvas and size, how
+ * far it's turned. How many went to out (at most max). */
+typedef struct NitroWidePictureShown {
+    int picture, bg, prio, x, y, w, h, angle;
+} NitroWidePictureShown;
+int NitroPort_Render2DPictures(int engine, const NitroRender2DSplit *layout, NitroWidePictureShown *out, int max);
 
 #ifdef __cplusplus
 }

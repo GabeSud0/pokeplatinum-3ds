@@ -2323,6 +2323,14 @@ static void test_wide_parts(void)
         CHECK(wide[40 * 320 + 132] == RED && wide[40 * 320 + 134] == BLUE && wide[40 * 320 + 135] == BLUE);
         CHECK(wide[41 * 320 + 132] == GREEN && wide[41 * 320 + 135] == WHITE);
         CHECK(wide[40 * 320 + 136] == RED && wide[42 * 320 + 132] == RED);   /* (BG1 again) */
+        /* (what a capture lists of it: which, with which BG, where, how big, how far turned) */
+        {
+            NitroWidePictureShown shown[4];
+
+            CHECK(NitroPort_Render2DPictures(0, &split, shown, 4) == 1);
+            CHECK(shown[0].picture == NITRO_WIDE_PICTURE_PC_BOXES_BALL && shown[0].bg == 1 && shown[0].x == 132 &&
+                  shown[0].y == 40 && shown[0].w == 4 && shown[0].h == 2 && shown[0].angle == 0);
+        }
         /* turned a quarter clockwise: its left column on top */
         NitroPort_WideScreenParts(0, &turned[0][0], 1);
         NitroPort_Render2DSplit(0, wide, &split);

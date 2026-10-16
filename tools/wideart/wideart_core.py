@@ -8,7 +8,10 @@ transparent where it has no pixels), obj<G>.png (each group of sprites:
 the OBJs of one priority and palette) and info.txt (each layer's key,
 scroll or position, and priority). A picture the game reads is
 wide/<key>_<hofs>_<vofs>.png (the side bands only) or ..._full.png (the
-whole layer).
+whole layer). A capture also has the pictures the screen's layout draws
+itself (picture_<name>.png: the party's panel, the boxes' divider...),
+each on the canvas where it's drawn, unturned; their files are
+wide/<name>.png, any size, saved back from the box they're in.
 
 The editor draws a layer as a stack of drawing layers of its own (added,
 duplicated, moved, hidden), kept in wide/editor/<key>/ (layers.json and a
@@ -76,7 +79,10 @@ class Layer:
     """One of the game's layers in a capture: a BG (kind "bg", bg its
     number) or a group of sprites (kind "obj", group: priority << 5 |
     palette, or 16 for 8-bit ones). hofs, vofs: a BG's scroll, a group's
-    position (where its picture is anchored)."""
+    position (where its picture is anchored). Or a picture the screen's
+    layout draws (kind "picture": key its name, drawn with BG bg, its
+    top-left on the canvas at hofs, vofs, w x h, turned angle degrees;
+    group: its place in the capture's list)."""
     bg: int
     prio: int
     key: str
@@ -86,12 +92,19 @@ class Layer:
     kind: str = "bg"
     group: int = 0
     count: int = 0
+    w: int = 0
+    h: int = 0
+    angle: int = 0
 
     def art_name(self, full: bool, loop: bool = False) -> str:
+        if self.kind == "picture":
+            return f"{self.key}.png"
         return f"{self.key}_{self.hofs}_{self.vofs}{'_full' if full else ''}{'_loop' if loop else ''}.png"
 
     @property
     def id(self) -> str:
+        if self.kind == "picture":
+            return f"pic_{self.key}"
         return f"obj{self.group}" if self.kind == "obj" else f"bg{self.bg}"
 
     @property
@@ -99,6 +112,8 @@ class Layer:
         if self.kind == "obj":
             pal = "8-bit" if self.group & 16 else f"palette {self.group & 15}"
             return f"Sprites, {pal}  (priority {self.prio}, {self.count} OBJs)"
+        if self.kind == "picture":
+            return f"Picture: {self.key}  ({self.w} x {self.h}, with BG{self.bg})"
         return f"BG{self.bg}  (priority {self.prio})"
 
 
@@ -150,6 +165,12 @@ def read_capture(path: str | os.PathLike) -> Capture:
             cap.layers.append(Layer(bg=-1, prio=int(f["prio"]), key=f["key"].lower(), hofs=int(f["x"]),
                                     vofs=int(f["y"]), file=f["file"], kind="obj", group=int(words[1]),
                                     count=int(f.get("count", 0))))
+        elif words[0] == "picture" and len(words) >= 18:
+            f = dict(zip(words[2::2], words[3::2]))
+            cap.layers.append(Layer(bg=int(f["bg"]), prio=int(f["prio"]), key=words[1], hofs=int(f["x"]),
+                                    vofs=int(f["y"]), file=f["file"], kind="picture",
+                                    group=sum(1 for l in cap.layers if l.kind == "picture"),
+                                    w=int(f["w"]), h=int(f["h"]), angle=int(f.get("angle", 0))))
         elif words[0] == "backdrop" and len(words) == 2:
             cap.backdrop = rgb555(int(words[1], 16))
         elif words[0] == "engine" and len(words) == 2:
@@ -215,7 +236,11 @@ def _wrapped(d: int, period: int) -> int:
 def find_art(art_dir: str | os.PathLike, layer: Layer) -> ArtRef | None:
     """The picture for a capture's layer, as the game would choose it: the
     one made where the layer is (the whole one if there are both), else the
-    nearest less than a screen away (a sprite group's: the nearest)."""
+    nearest less than a screen away (a sprite group's: the nearest). A
+    layout's picture: its file."""
+    if layer.kind == "picture":
+        path = Path(art_dir) / layer.art_name(True)
+        return ArtRef(path, layer.hofs, layer.vofs, True, False) if path.is_file() else None
     best, best_dist = None, None
     vperiod = 256 if layer.kind == "obj" else 512
     for ref in art_files(art_dir, layer.key):
@@ -284,8 +309,15 @@ def existing_art(art_dir: str | os.PathLike, key: str, layer: Layer | None = Non
 
 def draw_order(layers: list[Layer]) -> list[Layer]:
     """Back to front: priority 3 first; of one priority, the BGs behind the
-    sprites, the higher BG number further back (the DS's order)."""
-    return sorted(layers, key=lambda l: (-l.prio, l.kind == "obj", -l.bg if l.kind == "bg" else -l.group))
+    sprites, the higher BG number further back (the DS's order); a
+    layout's picture just in front of its BG (the later ones in front)."""
+    def key(l: Layer):
+        if l.kind == "obj":
+            return (-l.prio, True, -l.group)
+        if l.kind == "picture":
+            return (-l.prio, False, -l.bg + 0.5 + l.group * 0.001)
+        return (-l.prio, False, -l.bg)
+    return sorted(layers, key=key)
 
 
 # ---------------------------------------------------------------- editing
@@ -376,8 +408,71 @@ def save_art(art_dir: str | os.PathLike, layer: Layer, img: Image.Image, origina
     return path
 
 
+def picture_paint(art_dir: str | os.PathLike | None, cap: Capture, layer: Layer) -> "Paint":
+    """A layout's picture as a drawing layer where it's drawn: its file
+    (all of it, past the canvas too), else what the capture has of it."""
+    path = Path(art_dir) / layer.art_name(True) if art_dir is not None else None
+    if path is not None and path.is_file():
+        return Paint("Layer 1", load_rgba(path), layer.hofs, layer.vofs)
+    return Paint("Layer 1", cap.layer_image(layer))
+
+
+def stack_bbox(stack: list["Paint"]) -> tuple[int, int, int, int] | None:
+    """Where the drawing layers' visible pixels are (canvas coordinates,
+    past its edges too): x0, y0, x1, y1; None if nowhere."""
+    box = None
+    for p in stack:
+        if not p.visible:
+            continue
+        b = p.image.getchannel("A").point(lambda a: 255 if a >= 128 else 0).getbbox()
+        if b is None:
+            continue
+        b = (b[0] + p.x, b[1] + p.y, b[2] + p.x, b[3] + p.y)
+        box = b if box is None else (min(box[0], b[0]), min(box[1], b[1]), max(box[2], b[2]), max(box[3], b[3]))
+    return box
+
+
+def flatten_box(stack: list["Paint"], box: tuple[int, int, int, int]) -> Image.Image:
+    """The drawing layers' visible pixels in a box of the canvas (its
+    coordinates, past its edges too)."""
+    out = Image.new("RGBA", (box[2] - box[0], box[3] - box[1]), (0, 0, 0, 0))
+    for p in stack:
+        if p.visible:
+            layer = Image.new("RGBA", out.size, (0, 0, 0, 0))
+            layer.paste(p.image, (p.x - box[0], p.y - box[1]))
+            out.alpha_composite(layer)
+    return out
+
+
+def save_picture(art_dir: str | os.PathLike, layer: Layer, stack: list["Paint"]) -> tuple[Path, bool]:
+    """A layout's picture saved to its file from the box it's in on the
+    canvas: from its top-left (where the game puts it), as big as it was
+    or bigger if drawn past its right or bottom edge. Also whether
+    something drawn left of it or above it was left out (the game can't
+    show that: the picture starts at its top-left)."""
+    x0, y0 = layer.hofs, layer.vofs
+    x1, y1 = x0 + max(1, layer.w), y0 + max(1, layer.h)
+    drawn = stack_bbox(stack)
+    lost = False
+    if drawn is not None:
+        x1, y1 = max(x1, drawn[2]), max(y1, drawn[3])
+        lost = drawn[0] < x0 or drawn[1] < y0
+    img = flatten_box(stack, (x0, y0, x1, y1))
+    clean = Image.new("RGBA", img.size)
+    clean.putdata([snap(p) for p in img.getdata()])
+    path = Path(art_dir) / layer.art_name(True)
+    clean.save(path)
+    return path, lost
+
+
 def delete_art(art_dir: str | os.PathLike, layer: Layer) -> int:
     """The layer's picture (find_art's) and any others made at the same place."""
+    if layer.kind == "picture":
+        path = Path(art_dir) / layer.art_name(True)
+        if path.is_file():
+            path.unlink()
+            return 1
+        return 0
     n = 0
     found = find_art(art_dir, layer)
     for ref in art_files(art_dir, layer.key):
@@ -426,10 +521,12 @@ def composite(cap: Capture, images: dict, only: str | int | None = None,
     return out
 
 
-def make_sample_capture(art_dir: str | os.PathLike, number: int = 1, sprites: bool = False) -> Path:
+def make_sample_capture(art_dir: str | os.PathLike, number: int = 1, sprites: bool = False,
+                        picture: bool = False) -> Path:
     """A capture like the game's (two layers: a gradient behind, a white
-    bar in front; sprites: and a green bar of sprites), for the self-test
-    and the tests."""
+    bar in front; sprites: and a green bar of sprites; picture: and a
+    layout's picture, party_ball, 8 x 6, half past the canvas's left edge,
+    with BG3, its file in the folder), for the self-test and the tests."""
     cap = Path(art_dir) / "captures" / f"{number:04d}"
     cap.mkdir(parents=True)
     bg3 = Image.new("RGBA", (W, H))
@@ -449,6 +546,16 @@ def make_sample_capture(art_dir: str | os.PathLike, number: int = 1, sprites: bo
         layers.append(Layer(-1, 3, "", 0, 0, "obj102.png", "obj", 102))
         images["obj102"] = obj
         lines += "obj 102 prio 3 key 10d372806e45f5c2 x 368 y 64 count 72 file obj102.png\n"
+    if picture:
+        ball = Image.new("RGBA", (8, 6), (200, 40, 60, 255))
+        ball.paste((240, 240, 240, 255), (0, 3, 8, 6))      # (red over white)
+        ball.save(Path(art_dir) / "party_ball.png")
+        on_canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        on_canvas.paste(ball, (-4, 10))
+        on_canvas.save(cap / "picture_party_ball.png")
+        layers.append(Layer(3, 3, "party_ball", -4, 10, "picture_party_ball.png", "picture", 0, 0, 8, 6))
+        images["pic_party_ball"] = on_canvas
+        lines += "picture party_ball bg 3 prio 3 x -4 y 10 w 8 h 6 angle 0 file picture_party_ball.png\n"
     composite(Capture(cap, layers), images).save(cap / "screen.png")
     (cap / "info.txt").write_text(
         "# pokeplatinum-3ds wide art capture (docs/WIDE_ART.md)\n"
