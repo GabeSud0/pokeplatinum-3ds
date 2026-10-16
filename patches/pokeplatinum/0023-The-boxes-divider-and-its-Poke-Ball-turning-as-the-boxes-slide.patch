@@ -8,7 +8,7 @@ MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
-From another drawing of Gabriel's for the wider screen (2026-10-16):
+From another reference drawing for the wider screen (2026-10-16):
 between the Pokémon's panel and the box, a divider with a Poké Ball set
 in it. Both are pictures in the wide art folder (pc_boxes_divider.png,
 pc_boxes_ball.png), drawn behind the panel's edge; without them the
@@ -70,7 +70,7 @@ index 79a0a7e6..88839c2f 100644
  // an item's description) stay in the middle, their sprites with them.
  static short sBoxWideStripes = -1;
  static enum BoxWidePanel sBoxWidePanel;
-+// (2026-10-16, from another drawing of Gabriel's) Between the panel and the
++// (2026-10-16, from another reference drawing) Between the panel and the
 +// box, a divider with a Poké Ball in it (pictures in the wide art folder);
 +// the ball turns once round as the boxes slide.
 +static short sBoxWideBallAngle;

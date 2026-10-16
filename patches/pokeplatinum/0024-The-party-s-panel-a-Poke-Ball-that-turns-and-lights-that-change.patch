@@ -8,7 +8,7 @@ MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
-From another drawing of Gabriel's for the wider screen (2026-10-16): at
+From another reference drawing for the wider screen (2026-10-16): at
 the screen's left edge, beside the party's panels, a machine's panel
 with a Poké Ball set in it and two rows of lights (pictures in the wide
 art folder: party_panel.png, party_ball.png, party_light_<colour>.png).
@@ -30,7 +30,7 @@ index fbea4368..50726712 100644
 -static const short sPartyMenuWideLayout[][8] = {
 +//
 +// Beside the panels at the left edge, a panel with a Poké Ball and lights
-+// (2026-10-16, after another drawing of Gabriel's: pictures in the wide art
++// (2026-10-16, after another reference drawing: pictures in the wide art
 +// folder, behind the party's BGs): the ball turns a little each time the
 +// cursor moves and settles; the lights change now and then, each on its
 +// own, like a machine's. (Their own random numbers: the game's aren't
