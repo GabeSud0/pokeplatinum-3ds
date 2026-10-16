@@ -105,6 +105,8 @@ static State2D sState[2];
 
 /* ----------------------------------------------------------- one engine */
 
+#define OBJ_MOVES_MAX 32   /* sprite moves: the layout's, then the moved windows' */
+
 typedef struct Engine {
     const u8 *ioAll;       /* all the registers (live, or a State2D's) */
     const u8 *io;          /* the engine's registers (A: +0, B: +0x1000) */
@@ -160,14 +162,18 @@ typedef struct Engine {
     /* (worked out each frame) the windows moved to the screen's edges, on
      * the DS's screen (pixels), and how far: the game's sprites over them
      * go with them (a menu's icons). */
-    struct { short x0, y0, x1, y1, shift; } objMove[8];
+    struct { short x0, y0, x1, y1, shift, stretch; } objMove[OBJ_MOVES_MAX];
     int nObjMove;
-    /* (wider canvas, the game's: NitroPort_WideSplitScreen) a screen laid
-     * out anew in parts that move apart: its splits, and the BGs they're
-     * of (a bit each). */
-    NitroWideSplit splits[NITRO_WIDE_MAX_SPLITS];
-    int nSplits;
-    u8 splitBgs;
+    /* (wider canvas, the game's: NitroPort_WideSplitScreen,
+     * NitroPort_WideScreenParts) a screen laid out anew in parts: the BGs'
+     * MOVE and FILL parts (the splits made into parts first), the BGs they
+     * are of (a bit each), those the game moves (they show their own
+     * pixels, not a hand-drawn picture), whether sprites are moved (they
+     * show themselves, not their pictures), and how far the 3D moves. */
+    NitroWidePart parts[NITRO_WIDE_MAX_PARTS + 3 * NITRO_WIDE_MAX_SPLITS];
+    int nParts;
+    u8 partBgs, movedBgs, objsMoved;
+    short shift3d;
     /* The palettes as pixels (colour | OPAQUE), 0 for the transparent
      * colour: index 0 of each 16 colours (4 bits per pixel), or of all 256
      * (8 bits per pixel). */
@@ -450,7 +456,7 @@ static void DecideSplits(Engine *e, const int *kind, const u16 *bgcnt, u32 dispc
         int y, lines = 0, decorated = 0, mapH, hofs, vofs;
 
         e->split[bg] = 0;
-        if (kind[bg] != BG_TEXT || !e->clip[bg] || ((e->splitBgs >> bg) & 1)) {
+        if (kind[bg] != BG_TEXT || !e->clip[bg] || ((e->partBgs >> bg) & 1)) {
             continue;
         }
         mapH = sTextSizes[bgcnt[bg] >> 14][1];
@@ -492,7 +498,7 @@ static void DecideBandFills(Engine *e, const int *kind, const u16 *bgcnt, u32 di
 
         e->bandFills[bg] = 0;
         if (e->width <= W || kind[bg] != BG_TEXT || !e->clip[bg] || e->art[bg] != NULL || e->split[bg] ||
-            ((e->splitBgs >> bg) & 1)) {
+            ((e->partBgs >> bg) & 1)) {
             continue;
         }
         mapH = sTextSizes[bgcnt[bg] >> 14][1];
@@ -575,103 +581,186 @@ static void DecideBandFills(Engine *e, const int *kind, const u16 *bgcnt, u32 di
     }
 }
 
-/* (wider canvas: a screen laid out anew, NitroPort_WideSplitScreen) The
- * split of line ty of BG bg (the BG's own lines: its map's, an affine BG's
- * picture's), or NULL: the line where the DS has it. */
-static const NitroWideSplit *SplitOf(const Engine *e, int bg, int ty)
+/* (wider canvas: a screen laid out anew, NitroPort_WideSplitScreen and
+ * NitroPort_WideScreenParts) A run of a line of a BG with parts: canvas
+ * x c0..c1-1 showing the BG's column c - origin - shift (+ its scroll), or
+ * its column col (col >= 0). */
+typedef struct PartRun {
+    short c0, c1, shift, col;
+} PartRun;
+#define PART_RUNS_MAX 24
+#define PART_LINE_MAX 48   /* parts on one line of a BG (more: left out) */
+
+/* A part's column x as a column of the BG's picture: the DS screen's
+ * column x (NITRO_WIDE_SCREEN_COLUMNS) is the picture's x + hofs. */
+static int PartX(const NitroWidePart *p, int x, int hofs)
 {
-    int i;
-
-    for (i = 0; i < e->nSplits; i++) {
-        const NitroWideSplit *s = &e->splits[i];
-
-        if (((s->bgs >> bg) & 1) && ty >= s->top && ty < s->bottom) {
-            return s;
-        }
-    }
-    return NULL;
+    return (p->bgs & NITRO_WIDE_SCREEN_COLUMNS) && x > -0x7FFF && x < 0x7FFF ? x + hofs : x;
 }
 
-/* Which of the DS's columns a split line shows at column v (where the
- * DS's column v would be, as far beyond its edges as the canvas goes):
- * 0-255, or -1 nothing. */
-static inline int SplitColumn(const NitroWideSplit *s, int v)
+/* The runs of line ty of BG bg (its own lines and columns; hofs: a text
+ * BG's scroll, 0 for an affine BG's picture), left to right: how many; -1
+ * if no part is on the line (where the DS has it, nothing beside). The
+ * DS's picture where it is, but for the columns the MOVEs take (only the
+ * DS's columns, hofs..hofs + 255); over it each part in turn. */
+static int PartRuns(const Engine *e, int bg, int ty, int hofs, PartRun *runs)
 {
-    int src;
+    struct { short c0, c1, prec, shift, col; } iv[2 * PART_LINE_MAX + 1];
+    short cut[2 * (2 * PART_LINE_MAX + 1)];
+    int niv = 0, ncut = 0, i, k, n = 0, origin = e->origin, width = e->width;
 
-    if (s == NULL) {
-        src = v;
-    } else if (v < s->x + s->left) {
-        src = v - s->left;
-    } else if (v >= s->x + s->right) {
-        src = v - s->right;
-    } else {
-        src = s->fill ? s->x : -1;
+    for (i = 0; i < e->nParts && niv < PART_LINE_MAX; i++) {
+        const NitroWidePart *p = &e->parts[i];
+        int c0, c1, px0 = PartX(p, p->x0, hofs), px1 = PartX(p, p->x1, hofs);
+
+        if (!((p->bgs >> bg) & 1) || ty < p->top || ty >= p->bottom) {
+            continue;
+        }
+        if (p->kind == NITRO_WIDE_MOVE) {
+            int x0 = px0 > hofs ? px0 : hofs, x1 = px1 < hofs + W ? px1 : hofs + W;
+
+            c0 = origin + x0 - hofs + p->dx;
+            c1 = origin + x1 - hofs + p->dx;
+            iv[niv].shift = p->dx;
+            iv[niv].col = -1;
+        } else {
+            c0 = origin + px0 - hofs;
+            c1 = origin + px1 - hofs;
+            iv[niv].shift = 0;
+            iv[niv].col = p->col;
+        }
+        iv[niv].prec = i;
+        if (c0 < 0) {
+            c0 = 0;
+        }
+        if (c1 > width) {
+            c1 = width;
+        }
+        if (c0 >= c1) {
+            iv[niv].c0 = iv[niv].c1 = 0;
+            niv++;   /* (on the line, but off the canvas) */
+            continue;
+        }
+        iv[niv].c0 = c0;
+        iv[niv].c1 = c1;
+        cut[ncut++] = c0;
+        cut[ncut++] = c1;
+        niv++;
     }
-    return src >= 0 && src < W ? src : -1;
-}
+    if (niv == 0) {
+        return -1;
+    }
+    /* Under them, the DS's picture where it is, but for what the MOVEs
+     * took from it (their columns aren't shown twice). */
+    {
+        int src[PART_LINE_MAX][2], nsrc = 0, from = hofs, j;
 
-/* A split text BG's line: its parts where they moved to (the left part,
- * map columns hofs.. x - 1; the right part, x.. hofs + 255), between them
- * column x drawn on or nothing; nothing else (beyond the DS's screen, the
- * map's other columns stay hidden). */
-static int SplitSegments(const Engine *e, int bg, int ty, int hofs, int mapW, Segment *segs)
-{
-    const NitroWideSplit *s = SplitOf(e, bg, ty);
-    int origin = e->origin, width = e->width, n = 0, k;
-    /* runs on the canvas: from, to, the map's x at canvas 0 (or the column
-     * drawn on: fixed) */
-    int run[3][4], nrun = 0;
+        for (i = 0; i < e->nParts && nsrc < PART_LINE_MAX; i++) {
+            const NitroWidePart *p = &e->parts[i];
+            int px0 = PartX(p, p->x0, hofs), px1 = PartX(p, p->x1, hofs);
+            int x0 = px0 > hofs ? px0 : hofs, x1 = px1 < hofs + W ? px1 : hofs + W;
 
-    if (s == NULL) {
-        run[nrun][0] = origin;
-        run[nrun][1] = origin + W;
-        run[nrun][2] = hofs - origin;
-        run[nrun][3] = -1;
-        nrun++;
-    } else {
-        int at = s->x - hofs;   /* the split on the DS's screen */
+            if (p->kind != NITRO_WIDE_MOVE || !((p->bgs >> bg) & 1) || ty < p->top || ty >= p->bottom || x0 >= x1) {
+                continue;
+            }
+            /* (in order of their starts) */
+            for (j = nsrc; j > 0 && src[j - 1][0] > x0; j--) {
+                src[j][0] = src[j - 1][0];
+                src[j][1] = src[j - 1][1];
+            }
+            src[j][0] = x0;
+            src[j][1] = x1;
+            nsrc++;
+        }
+        for (j = 0; j <= nsrc; j++) {
+            int to = j < nsrc ? src[j][0] : hofs + W;
 
-        if (at > W) {
-            at = W;
-        }
-        if (at > 0) {
-            run[nrun][0] = origin + s->left;
-            run[nrun][1] = origin + at + s->left;
-            run[nrun][2] = hofs - origin - s->left;
-            run[nrun][3] = -1;
-            nrun++;
-        }
-        if (at < 0) {
-            at = 0;
-        }
-        if (at < W) {
-            run[nrun][0] = origin + at + s->right;
-            run[nrun][1] = origin + W + s->right;
-            run[nrun][2] = hofs - origin - s->right;
-            run[nrun][3] = -1;
-            nrun++;
-        }
-        if (s->fill && s->left < s->right) {
-            run[nrun][0] = origin + at + s->left;
-            run[nrun][1] = origin + at + s->right;
-            run[nrun][2] = 0;
-            run[nrun][3] = s->x & (mapW - 1);
-            nrun++;
+            if (to > from) {
+                int c0 = origin + from - hofs, c1 = origin + to - hofs;
+
+                if (c0 < 0) {
+                    c0 = 0;
+                }
+                if (c1 > width) {
+                    c1 = width;
+                }
+                if (c0 < c1) {
+                    iv[niv].c0 = c0;
+                    iv[niv].c1 = c1;
+                    iv[niv].prec = -1;
+                    iv[niv].shift = 0;
+                    iv[niv].col = -1;
+                    cut[ncut++] = c0;
+                    cut[ncut++] = c1;
+                    niv++;
+                }
+            }
+            if (j < nsrc && src[j][1] > from) {
+                from = src[j][1];
+            }
         }
     }
-    for (k = 0; k < nrun; k++) {
-        int x0 = run[k][0] < 0 ? 0 : run[k][0], x1 = run[k][1] > width ? width : run[k][1];
+    /* the places where what shows may change, in order */
+    for (i = 1; i < ncut; i++) {
+        int v = cut[i];
 
-        if (x0 < x1) {
-            segs[n].x0 = (short)x0;
-            segs[n].x1 = (short)x1;
-            segs[n].off = (short)run[k][2];
-            segs[n].fixed = (short)run[k][3];
-            n++;
+        for (k = i; k > 0 && cut[k - 1] > v; k--) {
+            cut[k] = cut[k - 1];
         }
+        cut[k] = v;
+    }
+    for (i = 0; i + 1 < ncut; i++) {
+        int c0 = cut[i], c1 = cut[i + 1], best = -1;
+
+        if (c0 == c1) {
+            continue;
+        }
+        for (k = 0; k < niv; k++) {
+            if (iv[k].c0 < iv[k].c1 && iv[k].c0 <= c0 && iv[k].c1 >= c1 && (best < 0 || iv[k].prec > iv[best].prec)) {
+                best = k;
+            }
+        }
+        if (best < 0) {
+            continue;
+        }
+        if (n > 0 && runs[n - 1].c1 == c0 && runs[n - 1].shift == iv[best].shift &&
+            runs[n - 1].col == iv[best].col) {
+            runs[n - 1].c1 = (short)c1;
+            continue;
+        }
+        if (n == PART_RUNS_MAX) {
+            break;
+        }
+        runs[n].c0 = (short)c0;
+        runs[n].c1 = (short)c1;
+        runs[n].shift = (short)iv[best].shift;
+        runs[n].col = (short)iv[best].col;
+        n++;
     }
     return n;
+}
+
+/* A text BG with parts: its line's runs as segments (a line without parts
+ * where the DS has it). */
+static int PartSegments(const Engine *e, int bg, int ty, int hofs, int mapW, Segment *segs)
+{
+    PartRun runs[PART_RUNS_MAX];
+    int n = PartRuns(e, bg, ty, hofs, runs), i;
+
+    if (n < 0) {
+        segs[0].x0 = (short)e->origin;
+        segs[0].x1 = (short)(e->origin + W);
+        segs[0].off = (short)(hofs - e->origin);
+        segs[0].fixed = -1;
+        return 1;
+    }
+    for (i = 0; i < n && i < MAX_SEGMENTS; i++) {
+        segs[i].x0 = runs[i].c0;
+        segs[i].x1 = runs[i].c1;
+        segs[i].off = (short)(hofs - e->origin - runs[i].shift);
+        segs[i].fixed = (short)(runs[i].col >= 0 ? (runs[i].col & (mapW - 1)) : -1);
+    }
+    return i;
 }
 
 /* The runs of a text BG's line (y, its map row ty) on a wider canvas: the
@@ -679,7 +768,7 @@ static int SplitSegments(const Engine *e, int bg, int ty, int hofs, int mapW, Se
  * clip), with the windows the game anchors (NitroPort_WideWindows: the
  * place name sign) moved to the screen's edge. Beside the DS's picture (with
  * clip): its edge colour when the edge is plain on this line (PlainRun),
- * else nothing. A split BG's: its parts (SplitSegments). Returns how
+ * else nothing. A BG with parts: its runs (PartSegments). Returns how
  * many. */
 static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y, int ty, int hofs, int mapW,
                           Segment *segs)
@@ -720,8 +809,8 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
         }
         return n;
     }
-    if ((e->splitBgs >> bg) & 1) {
-        return SplitSegments(e, bg, ty, hofs, mapW, segs);
+    if ((e->partBgs >> bg) & 1) {
+        return PartSegments(e, bg, ty, hofs, mapW, segs);
     }
     if (e->split[bg]) {
         /* The halves to the edges, the plain middle widened. */
@@ -752,16 +841,24 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
         if (wins[i].widen) {
             /* A text box across the DS's screen: its frame's left part at
              * the screen's left edge, its right part at the right edge, the
-             * window (its text) where the DS has it, and between, each line
-             * of the frame's inner columns drawn on (its top and bottom
-             * borders, the box's inside). */
+             * window (its text) a pixel inside the frame's left part (the
+             * room the wider box has is on the right of the text, as drawn
+             * for it, 2026-10-16), and between, each line of the frame's
+             * inner columns drawn on (its top and bottom borders, the box's
+             * inside). */
             int fl = wins[i].frameLeft * 8, fr = wins[i].frameRight * 8;
             int m0 = wins[i].left * 8, m1 = (wins[i].left + wins[i].width) * 8;
-            int in0 = origin + m0 - hofs + fl, in1 = origin + m1 - hofs - fr;
+            int in0 = origin + m0 - hofs + fl, in1 = origin + m1 - hofs - fr, move;
 
             if (in0 < fl || in1 > width - fr || in0 > in1) {
                 continue;   /* (not across the DS's screen as it is scrolled) */
             }
+            move = fl + 1 - in0;
+            if (move > 0) {
+                move = 0;
+            }
+            in0 += move;
+            in1 += move;
             n = 0;
             segs[n].x0 = 0;
             segs[n].x1 = (short)fl;
@@ -777,7 +874,7 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
             }
             segs[n].x0 = (short)in0;
             segs[n].x1 = (short)in1;
-            segs[n].off = (short)(hofs - origin);
+            segs[n].off = (short)(hofs - origin - move);
             segs[n].fixed = -1;
             n++;
             if (in1 < width - fr) {
@@ -1243,10 +1340,11 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
     /* (a wider canvas: the DS's x = 0 at e->origin; without clip, the BG
      * goes on past the DS's edges as its matrix takes it; split, across
      * the canvas: its parts, moved, wherever they are) */
-    int splitHere = (e->splitBgs >> bg) & 1;
+    int splitHere = (e->partBgs >> bg) & 1;
     int xs = e->clip[bg] && !splitHere ? e->origin : 0, xe = e->clip[bg] && !splitHere ? e->origin + W : e->width;
-    const NitroWideSplit *split = NULL;
-    s32 splitTy = -1;
+    PartRun runs[PART_RUNS_MAX];
+    int nruns = -1, run = 0;
+    s32 splitTy = -0x7FFFFFFF;
     const u16 *art = splitHere ? e->art[bg] : NULL;
     s32 fx = refX + pb * y + pa * (xs - e->origin);
     s32 fy = refY + pd * y + pc * (xs - e->origin);
@@ -1299,12 +1397,30 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
                 continue;
             }
             if (ty != splitTy) {
-                split = SplitOf(e, bg, ty);
+                nruns = PartRuns(e, bg, ty, 0, runs);
                 splitTy = ty;
+                run = 0;
             }
-            tx = SplitColumn(split, tx);
-            if (tx < 0) {
-                continue;
+            if (nruns < 0) {
+                if (tx < 0 || tx >= W) {
+                    continue;   /* (a line without parts: the DS's part only) */
+                }
+            } else {
+                /* the run this place is in (the place goes on from the last
+                 * pixel's, mostly: look from that run) */
+                s32 c = tx + e->origin;
+
+                if (run >= nruns || c < runs[run].c0 || c >= runs[run].c1) {
+                    for (run = 0; run < nruns && !(c >= runs[run].c0 && c < runs[run].c1); run++) {
+                    }
+                    if (run == nruns) {
+                        continue;
+                    }
+                }
+                tx = runs[run].col >= 0 ? runs[run].col : tx - runs[run].shift;
+                if (tx < 0 || tx >= W) {
+                    continue;
+                }
             }
         }
         if (wrap) {
@@ -1568,8 +1684,8 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
         int hofs, vofs, full;
         const u16 *art;
 
-        if (kind[bg] == BG_NONE || kind[bg] == BG_3D || !e->clip[bg]) {
-            continue;
+        if (kind[bg] == BG_NONE || kind[bg] == BG_3D || !e->clip[bg] || ((e->movedBgs >> bg) & 1)) {
+            continue;   /* (a BG the screen's parts move: its own pixels) */
         }
         key = BgKeyCached(e, bg, kind[bg], bgcnt[bg], dispcnt);
         if (key == 0) {
@@ -1637,6 +1753,8 @@ static const u8 sObjSize[3][4][2] = {
 /* An OBJ that shows, as OAM describes it, worked out once a frame. */
 typedef struct Obj {
     s16 ox;                /* left edge, -256..255 */
+    s16 stretch;           /* (moved by a screen's part) its edge column drawn on over this many pixels back
+                            * to where it was: its first column left of it (> 0), its last right of it (< 0) */
     u8 oy;
     u8 w, h;
     u16 boxW, boxH;        /* doubled for double-size affine OBJs */
@@ -1683,6 +1801,7 @@ static BOOL ReadObj(const Engine *e, int i, Obj *obj)
         return FALSE;
     }
     obj->affine = (a0 & 0x100) != 0;
+    obj->stretch = 0;
     obj->w = sObjSize[shape][(a1 >> 14) & 3][0];
     obj->h = sObjSize[shape][(a1 >> 14) & 3][1];
     obj->boxW = obj->w;
@@ -1718,6 +1837,9 @@ static BOOL ReadObj(const Engine *e, int i, Obj *obj)
             if (cx >= e->objMove[k].x0 && cx < e->objMove[k].x1 && cy >= e->objMove[k].y0 &&
                 cy < e->objMove[k].y1) {
                 obj->ox += e->objMove[k].shift;
+                if (e->objMove[k].stretch && !obj->affine && obj->mode != 2) {
+                    obj->stretch = e->objMove[k].shift;
+                }
                 break;
             }
         }
@@ -1958,8 +2080,8 @@ static void LookUpObjArt(const Engine *e, ObjFrame *f, u32 dispcnt, int only)
     int n, i;
 
     f->artCount = 0;
-    if (e->width != NITRO_WIDE_ART_W || NitroPort_WideArtCount() == 0 || !(dispcnt & 0x1000)) {
-        return;
+    if (e->width != NITRO_WIDE_ART_W || NitroPort_WideArtCount() == 0 || !(dispcnt & 0x1000) || e->objsMoved) {
+        return;   /* (sprites the screen's parts move: themselves) */
     }
     n = ObjGroups(e, dispcnt, groups, 32);
     for (i = 0; i < n && f->artCount < OBJ_ART_MAX; i++) {
@@ -2106,6 +2228,36 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
                     }
                 }
                 sx += n;
+            }
+        }
+        if (obj->stretch) {
+            /* moved by a screen's part, stretched: its edge column drawn
+             * on back to where it was (a cursor made of two halves,
+             * widened with its row) */
+            int ty = obj->vflip ? obj->h - 1 - ly : ly;
+            int edge = obj->stretch > 0 ? 0 : obj->w - 1;
+            int tx = obj->hflip ? obj->w - 1 - edge : edge;
+            int x0 = obj->stretch > 0 ? obj->ox - obj->stretch : obj->ox + obj->w;
+            int x1 = obj->stretch > 0 ? obj->ox : obj->ox + obj->w - obj->stretch;
+            int alpha, x;
+            u16 rgb = ObjPixel(e, obj, dispcnt, tx, ty, &alpha);
+
+            if (x0 < 0) {
+                x0 = 0;
+            }
+            if (x1 > e->width) {
+                x1 = e->width;
+            }
+            for (x = x0; rgb && x < x1; x++) {
+                if (!(out->color[x] & OPAQUE)) {
+                    PutObjPixel(obj, out, x, rgb, alpha);
+                }
+            }
+            if (x0 < out->x0) {
+                out->x0 = (short)x0;
+            }
+            if (x1 > out->x1) {
+                out->x1 = (short)x1;
             }
         }
     }
@@ -2641,7 +2793,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     if (split != NULL) {
         split->has3d = e->isA && kind[0] == BG_3D;
         split->prio3d = bgcnt[0] & 3;
-        split->scroll3d = split->has3d ? Rd16(io, 0x10) & 0x1FF : 0;
+        split->scroll3d = split->has3d ? (Rd16(io, 0x10) - e->shift3d) & 0x1FF : 0;
         split->tint3d = (split->has3d && effect >= 1 && (bldcnt & 1)) ? effect : 0;
         split->evy = evy;
         split->eva = eva;
@@ -2937,6 +3089,77 @@ static void Fill(u16 *out, u16 color, int n)
     }
 }
 
+/* (wider canvas) The screen's parts (port_wide.c): the splits made into
+ * parts (the part left of the split, the part right of it, the column
+ * drawn on between), then the game's parts; its sprite moves first in
+ * line, and the 3D's. */
+static void SetUpParts(Engine *e)
+{
+    NitroWideSplit splits[NITRO_WIDE_MAX_SPLITS];
+    NitroWidePart game[NITRO_WIDE_MAX_PARTS];
+    int eng = e->isA ? 0 : 1, ns = NitroPort_WideSplits(eng, splits), ng = NitroPort_WideParts(eng, game), i;
+
+    for (i = 0; i < ns; i++) {
+        const NitroWideSplit *sp = &splits[i];
+        NitroWidePart *p = &e->parts[e->nParts];
+
+        /* (the gap's column first: the parts drawn over it, as before
+         * when they overlap) */
+        memset(p, 0, 3 * sizeof(*p));
+        p[0].kind = p[1].kind = NITRO_WIDE_MOVE;
+        p[0].bgs = p[1].bgs = p[2].bgs = sp->bgs;
+        p[0].top = p[1].top = p[2].top = (s16)sp->top;
+        p[0].bottom = p[1].bottom = p[2].bottom = (s16)sp->bottom;
+        p[0].x0 = -0x7FFF;   /* (from the DS's first column, and to its last: PartRuns) */
+        p[0].x1 = p[1].x0 = sp->x;
+        p[1].x1 = 0x7FFF;
+        p[0].dx = sp->left;
+        p[1].dx = sp->right;
+        e->nParts += 2;
+        if (sp->fill && sp->left < sp->right) {
+            /* the gap's column under the two parts */
+            p[2] = p[1];
+            p[1] = p[0];
+            p[0].kind = NITRO_WIDE_FILL;
+            p[0].x0 = (s16)(sp->x + sp->left);
+            p[0].x1 = (s16)(sp->x + sp->right);
+            p[0].dx = 0;
+            p[0].col = sp->x;
+            e->nParts++;
+        }
+        e->partBgs |= sp->bgs;
+    }
+    for (i = 0; i < ng; i++) {
+        const NitroWidePart *p = &game[i];
+
+        switch (p->kind) {
+        case NITRO_WIDE_MOVE:
+        case NITRO_WIDE_FILL:
+            e->parts[e->nParts++] = *p;
+            e->partBgs |= p->bgs & 0x0F;
+            if (p->kind == NITRO_WIDE_MOVE) {
+                e->movedBgs |= p->bgs & 0x0F;
+            }
+            break;
+        case NITRO_WIDE_OBJS:
+            if (e->nObjMove < OBJ_MOVES_MAX) {
+                e->objMove[e->nObjMove].x0 = p->x0;
+                e->objMove[e->nObjMove].x1 = p->x1;
+                e->objMove[e->nObjMove].y0 = p->top;
+                e->objMove[e->nObjMove].y1 = p->bottom;
+                e->objMove[e->nObjMove].shift = p->dx;
+                e->objMove[e->nObjMove].stretch = (short)(p->col != 0);
+                e->nObjMove++;
+                e->objsMoved = 1;
+            }
+            break;
+        case NITRO_WIDE_SHIFT3D:
+            e->shift3d = (short)(e->shift3d + p->dx);
+            break;
+        }
+    }
+}
+
 /* An engine's registers and memory, and the canvas (split's: width,
  * origin, clip; NULL: the DS's). */
 static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
@@ -2966,19 +3189,16 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
         }
         e->anchorWindows = (u8)split->anchorWindows;
         e->pictures = (u8)(NitroPort_WidePictures() != 0);
-        e->nSplits = NitroPort_WideSplits(e->isA ? 0 : 1, e->splits);
-        for (bg = 0; bg < e->nSplits; bg++) {
-            e->splitBgs |= e->splits[bg].bgs;
-        }
+        SetUpParts(e);
         if (e->anchorWindows) {
             /* The windows moved to an edge, on the DS's screen: the
              * sprites over them go with them. */
-            for (bg = 0; bg < 4 && e->nObjMove < 8; bg++) {
+            for (bg = 0; bg < 4 && e->nObjMove < OBJ_MOVES_MAX; bg++) {
                 NitroWideWindow wins[NITRO_WIDE_MAX_WINDOWS];
                 int n = NitroPort_WideWindows(e->isA ? 0 : 1, bg, wins, NITRO_WIDE_MAX_WINDOWS), i;
                 int hofs = Rd16(e->io, 0x10 + bg * 4) & 0x1FF, vofs = Rd16(e->io, 0x12 + bg * 4) & 0x1FF;
 
-                for (i = 0; i < n && e->nObjMove < 8; i++) {
+                for (i = 0; i < n && e->nObjMove < OBJ_MOVES_MAX; i++) {
                     if (wins[i].anchor == 0) {
                         continue;
                     }
@@ -2988,6 +3208,7 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
                     e->objMove[e->nObjMove].y1 = (short)((wins[i].top + wins[i].height) * 8 - vofs);
                     e->objMove[e->nObjMove].shift =
                         (short)(wins[i].anchor < 0 ? -e->origin : e->width - W - e->origin);
+                    e->objMove[e->nObjMove].stretch = 0;
                     e->nObjMove++;
                 }
             }

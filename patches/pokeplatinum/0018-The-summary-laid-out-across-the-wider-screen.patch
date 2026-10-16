@@ -1,0 +1,229 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 01:00:00 -0700
+Subject: [PATCH] The summary laid out across the wider screen (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+From a reference drawn for the wider screen (2026-10-16): the left
+column (the Pokémon's name, its picture in 3D, its item) toward the
+screen's left edge, each page's panel widened to the right edge with its
+values at the edge; the moves' PP, the skills' labels and values, the
+memo and the contest pages alike; the move details (the cursor as wide
+as its row) and the exit page. The layout changes with the page, and
+when a move's details open or close.
+---
+ .../pokemon_summary_screen/main.c             | 154 ++++++++++++++++++
+ 1 file changed, 154 insertions(+)
+
+diff --git a/src/applications/pokemon_summary_screen/main.c b/src/applications/pokemon_summary_screen/main.c
+index 396e4b65..8e059120 100644
+--- a/src/applications/pokemon_summary_screen/main.c
++++ b/src/applications/pokemon_summary_screen/main.c
+@@ -60,6 +60,142 @@
+ #include "res/graphics/pokemon_summary_screen/pl_pst_gra.naix"
+ #include "res/text/bank/pokemon_summary_screen.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++
++// The summary across the 3DS remaster's wider upper screen (a reference
++// drawn for it, 2026-10-16): the left column (the name, the picture, the
++// markings) moved toward the screen's left edge, the item bars to it; the
++// page's panel widened to the right edge, its values (the pills, the bars)
++// at that edge, its labels where they are. BG3 the page's picture, BG1 its
++// text; the Pokemon is the 3D.
++#define SUMMARY_WIDE_BG3 WIDE_BG(3)
++#define SUMMARY_WIDE_BG1 WIDE_BG(1)
++
++// Every page: the left column, the bands beside the DS's screen.
++#define SUMMARY_WIDE_LEFT_COLUMN                                                         \
++    WIDE_FILL(SUMMARY_WIDE_BG3, 0, 192, -32, 0, 0),         /* the left band */           \
++    WIDE_FILL(SUMMARY_WIDE_BG3, 0, 192, 256, 288, 255),     /* the right band */          \
++    WIDE_MOVE(SUMMARY_WIDE_BG3, 0, 192, 0, 256, 0),         /* the page */                \
++    WIDE_FILL(SUMMARY_WIDE_BG3, 16, 148, 0, 104, 2),        /* the left column cleared */ \
++    WIDE_MOVE(SUMMARY_WIDE_BG3, 16, 64, 0, 104, -19),       /* the name box */            \
++    WIDE_MOVE(SUMMARY_WIDE_BG3, 64, 148, 0, 104, -18),      /* the picture's frame */     \
++    WIDE_FILL(SUMMARY_WIDE_BG3, 148, 192, -32, 1, 1),       /* the item bars, to the */   \
++    WIDE_MOVE(SUMMARY_WIDE_BG3, 148, 192, 0, 1, -32),       /* screen's left edge */      \
++    WIDE_MOVE(SUMMARY_WIDE_BG1, 24, 56, 0, 104, -19),       /* the name, the level */     \
++    WIDE_OBJS(16, 40, 0, 104, -19),                         /* the Poke Ball */           \
++    WIDE_SHIFT3D(-18)                                       /* the Pokemon */
++
++// ...with the item's text, and the sprites over the picture (not while the
++// move's details cover them).
++#define SUMMARY_WIDE_LEFT_ITEM                                                           \
++    WIDE_MOVE(SUMMARY_WIDE_BG1, 160, 192, 0, 104, -35),     /* the item */                \
++    WIDE_OBJS(40, 160, 0, 104, -18)                         /* the markings */
++
++// The panel widened: right of column split to the screen's right edge,
++// column col drawn on between (the top border: the column left of split).
++#define SUMMARY_WIDE_PANEL(split, col)                                                   \
++    WIDE_FILL(SUMMARY_WIDE_BG3, 32, 40, (split), (split) + 32, (split) - 1),             \
++    WIDE_FILL(SUMMARY_WIDE_BG3, 40, 192, (split), (split) + 32, (col)),                  \
++    WIDE_MOVE(SUMMARY_WIDE_BG3, 32, 192, (split), 256, 32)
++
++static const short sSummaryWideInfo[][8] = {
++    SUMMARY_WIDE_LEFT_COLUMN,
++    SUMMARY_WIDE_LEFT_ITEM,
++    SUMMARY_WIDE_PANEL(168, 167),
++    WIDE_MOVE(SUMMARY_WIDE_BG1, 32, 192, 176, 256, 32),     // the values
++    WIDE_OBJS(64, 96, 160, 256, 32),                        // the type icons
++};
++
++static const short sSummaryWideMemo[][8] = {
++    SUMMARY_WIDE_LEFT_COLUMN,
++    SUMMARY_WIDE_LEFT_ITEM,
++    SUMMARY_WIDE_PANEL(168, 167),
++};
++
++static const short sSummaryWideSkills[][8] = {
++    SUMMARY_WIDE_LEFT_COLUMN,
++    SUMMARY_WIDE_LEFT_ITEM,
++    SUMMARY_WIDE_PANEL(168, 167),
++    WIDE_MOVE(SUMMARY_WIDE_BG1, 32, 144, 104, 168, -12),    // the stats' names
++    WIDE_MOVE(SUMMARY_WIDE_BG1, 32, 144, 168, 256, 32),     // their values
++};
++
++// The moves' PP rows: the second line of each move's window.
++#define SUMMARY_WIDE_PP_ROWS                                                             \
++    WIDE_MOVE(SUMMARY_WIDE_BG1, 48, 64, 168, 256, 32),                                   \
++    WIDE_MOVE(SUMMARY_WIDE_BG1, 80, 96, 168, 256, 32),                                   \
++    WIDE_MOVE(SUMMARY_WIDE_BG1, 112, 128, 168, 256, 32),                                 \
++    WIDE_MOVE(SUMMARY_WIDE_BG1, 144, 160, 168, 256, 32),                                 \
++    WIDE_MOVE(SUMMARY_WIDE_BG1, 176, 192, 168, 256, 32)
++
++static const short sSummaryWideBattleMoves[][8] = {
++    SUMMARY_WIDE_LEFT_COLUMN,
++    SUMMARY_WIDE_LEFT_ITEM,
++    SUMMARY_WIDE_PANEL(168, 106),
++    SUMMARY_WIDE_PP_ROWS,
++};
++
++// A move's details over the left column (its own place: the DS's), the
++// selected move's cursor as wide as its row.
++static const short sSummaryWideBattleMoveInfo[][8] = {
++    SUMMARY_WIDE_LEFT_COLUMN,
++    SUMMARY_WIDE_PANEL(168, 106),
++    SUMMARY_WIDE_PP_ROWS,
++    WIDE_OBJS_STRETCH(32, 192, 200, 256, 32),               // the cursor's right half
++};
++
++static const short sSummaryWideOther[][8] = {
++    SUMMARY_WIDE_LEFT_COLUMN,
++    SUMMARY_WIDE_LEFT_ITEM,
++};
++
++static const short sSummaryWideContestMoveInfo[][8] = {
++    SUMMARY_WIDE_LEFT_COLUMN,
++};
++
++static const short sSummaryWideExit[][8] = {
++    SUMMARY_WIDE_LEFT_COLUMN,
++    SUMMARY_WIDE_LEFT_ITEM,
++    SUMMARY_WIDE_PANEL(232, 231),
++};
++
++static void SetWideLayout(PokemonSummaryScreen *summaryScreen, BOOL moveInfo)
++{
++    switch (summaryScreen->page) {
++    case SUMMARY_PAGE_INFO:
++        WIDE_LAYOUT(WIDE_ENGINE_MAIN, sSummaryWideInfo);
++        break;
++    case SUMMARY_PAGE_MEMO:
++        WIDE_LAYOUT(WIDE_ENGINE_MAIN, sSummaryWideMemo);
++        break;
++    case SUMMARY_PAGE_SKILLS:
++        WIDE_LAYOUT(WIDE_ENGINE_MAIN, sSummaryWideSkills);
++        break;
++    case SUMMARY_PAGE_BATTLE_MOVES:
++        if (moveInfo) {
++            WIDE_LAYOUT(WIDE_ENGINE_MAIN, sSummaryWideBattleMoveInfo);
++        } else {
++            WIDE_LAYOUT(WIDE_ENGINE_MAIN, sSummaryWideBattleMoves);
++        }
++        break;
++    case SUMMARY_PAGE_CONTEST_MOVES:
++        if (moveInfo) {
++            WIDE_LAYOUT(WIDE_ENGINE_MAIN, sSummaryWideContestMoveInfo);
++        } else {
++            WIDE_LAYOUT(WIDE_ENGINE_MAIN, sSummaryWideOther);
++        }
++        break;
++    case SUMMARY_PAGE_EXIT:
++        WIDE_LAYOUT(WIDE_ENGINE_MAIN, sSummaryWideExit);
++        break;
++    default:
++        WIDE_LAYOUT(WIDE_ENGINE_MAIN, sSummaryWideOther);
++        break;
++    }
++}
++#endif
++
+ enum SummaryState {
+     SUMMARY_STATE_TRANSITION_IN = 0,
+     SUMMARY_STATE_WAIT_TRANSITION,
+@@ -342,6 +478,9 @@ static int PokemonSummaryScreen_Exit(ApplicationManager *appMan, int *state)
+     PokemonSummaryScreen *summaryScreen = ApplicationManager_Data(appMan);
+ 
+     SetVBlankCallback(NULL, NULL);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++#endif
+     PokemonSummaryScreen_FreeCameraAndMonSprite(summaryScreen);
+     PokemonSummaryScreen_FreeSpriteResources(summaryScreen);
+     PokemonSummaryScreen_RemoveWindows(summaryScreen);
+@@ -1383,6 +1522,9 @@ static void LoadCurrentPageTilemap(PokemonSummaryScreen *summaryScreen)
+     Bg_LoadToTilemapRect(summaryScreen->bgConfig, BG_LAYER_MAIN_3, tilemap->rawData, 0, 0, 32, 32);
+     Bg_ScheduleTilemapTransfer(summaryScreen->bgConfig, BG_LAYER_MAIN_3);
+     Heap_Free(memberBuffer);
++#ifdef SDK_PORT_3DS
++    SetWideLayout(summaryScreen, summaryScreen->data->mode == SUMMARY_MODE_SELECT_MOVE);
++#endif
+ 
+     if (summaryScreen->page == SUMMARY_PAGE_INFO) {
+         DrawExperienceProgressBar(summaryScreen);
+@@ -1628,6 +1770,9 @@ static u8 SetupBattleMoveInfo(PokemonSummaryScreen *summaryScreen)
+ {
+     switch (summaryScreen->pageState) {
+     case PAGE_STATE_INITIAL:
++#ifdef SDK_PORT_3DS
++        SetWideLayout(summaryScreen, TRUE);
++#endif
+         Bg_ScheduleScroll(summaryScreen->bgConfig, BG_LAYER_MAIN_2, BG_OFFSET_UPDATE_SET_X, 136);
+         Bg_ScheduleScroll(summaryScreen->bgConfig, BG_LAYER_MAIN_2, BG_OFFSET_UPDATE_SET_Y, 0);
+         PokemonSummaryScreen_UpdatePageArrows(summaryScreen, FALSE);
+@@ -1699,6 +1844,9 @@ static u8 HideBattleMoveInfo(PokemonSummaryScreen *summaryScreen)
+         }
+     } break;
+     case PAGE_STATE_SCROLL_FINISHED:
++#ifdef SDK_PORT_3DS
++        SetWideLayout(summaryScreen, FALSE);
++#endif
+         Window_ScheduleCopyToVRAM(&summaryScreen->staticWindows[SUMMARY_WINDOW_MON_LEVEL]);
+         Window_ScheduleCopyToVRAM(&summaryScreen->staticWindows[SUMMARY_WINDOW_LABEL_ITEM]);
+         Window_ScheduleCopyToVRAM(&summaryScreen->staticWindows[SUMMARY_WINDOW_ITEM_NAME]);
+@@ -1835,6 +1983,9 @@ static u8 SetupContestMoveInfo(PokemonSummaryScreen *summaryScreen)
+ {
+     switch (summaryScreen->pageState) {
+     case PAGE_STATE_INITIAL:
++#ifdef SDK_PORT_3DS
++        SetWideLayout(summaryScreen, TRUE);
++#endif
+         Bg_ScheduleScroll(summaryScreen->bgConfig, BG_LAYER_MAIN_2, BG_OFFSET_UPDATE_SET_X, 136);
+         Bg_ScheduleScroll(summaryScreen->bgConfig, BG_LAYER_MAIN_2, BG_OFFSET_UPDATE_SET_Y, 256);
+         UpdateAppealHearts(summaryScreen, SUMMARY_MOVE_NONE);
+@@ -1901,6 +2052,9 @@ static u8 HideContestMoveInfo(PokemonSummaryScreen *summaryScreen)
+         }
+     } break;
+     case PAGE_STATE_SCROLL_FINISHED:
++#ifdef SDK_PORT_3DS
++        SetWideLayout(summaryScreen, FALSE);
++#endif
+         Window_ScheduleCopyToVRAM(&summaryScreen->staticWindows[SUMMARY_WINDOW_MON_LEVEL]);
+         Window_ScheduleCopyToVRAM(&summaryScreen->staticWindows[SUMMARY_WINDOW_LABEL_ITEM]);
+         Window_ScheduleCopyToVRAM(&summaryScreen->staticWindows[SUMMARY_WINDOW_ITEM_NAME]);
+-- 
+2.43.0
+

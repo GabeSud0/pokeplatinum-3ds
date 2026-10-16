@@ -11,10 +11,11 @@
  * the screen's, the text boxes widen); the 2D renderer moves those
  * (port_render2d.c, TextBgSegments; the sprites over a moved window go
  * with it) and leaves the rest where the DS has them. A screen redrawn
- * for the wider screen (a reference made for it: the trainer card) is laid
- * out by the game in parts that move apart (NitroPort_WideSplitScreen,
- * patch 0016). Plain C, no SDK headers: the 3DS program includes it next
- * to libctru.
+ * for the wider screen (a reference made for it: the trainer card, the
+ * summary, the party, the bag, the boxes, the Pokédex's list) is laid out
+ * by the game in parts that move apart (NitroPort_WideSplitScreen, patch
+ * 0016; NitroPort_WideScreenParts, patches 0017-0022). Plain C, no SDK
+ * headers: the 3DS program includes it next to libctru.
  */
 #ifndef NITRO_PORT_WIDE_H
 #define NITRO_PORT_WIDE_H
@@ -95,6 +96,53 @@ void NitroPort_WideSplitScreen(int engine, const short *splits, int count);
 /* (the 2D renderer) An engine's splits now (up to NITRO_WIDE_MAX_SPLITS
  * into out): how many. Any thread. */
 int NitroPort_WideSplits(int engine, NitroWideSplit *out);
+
+/* A screen laid out anew in parts (the party, the summary, the bag...,
+ * 2026-10-16): what the splits above are made of, and more.
+ *   MOVE: on lines top..bottom-1 of the BGs in bgs, the BG's columns
+ *     x0..x1-1 drawn dx pixels to the right (negative: to the left);
+ *   FILL: on those lines, where the BG's columns x0..x1-1 would be (as far
+ *     beyond the DS's edges as the canvas goes), its column col drawn on;
+ *   OBJS: the sprites whose middle is in x0..x1-1, top..bottom-1 of the
+ *     DS's screen moved dx pixels to the right (the first part that has
+ *     them); col 1: stretched, each one's edge column drawn on back to
+ *     where it was (the right half of a cursor moved with its row's right
+ *     end: the cursor as wide as the row);
+ *   SHIFT3D: the 3D picture moved dx pixels to the right.
+ * Lines and columns of the BG's own picture, as with splits (a text BG's
+ * map, an affine BG's picture before its matrix); only the DS's 256
+ * columns move. On a line of a BG with parts, the DS's picture shows where
+ * it is but for the columns MOVEs take from it, and each part is drawn
+ * over it in turn (a column shows the last part over it: what's clear in
+ * that part is clear, not the part before); nothing is drawn beside the
+ * DS's screen but what the parts put there. A BG with parts on other lines
+ * shows those where the DS has them, nothing beside. A BG with MOVE parts
+ * shows its own pixels, not a hand-drawn picture of it; sprites moved show
+ * themselves, not their picture. */
+enum {
+    NITRO_WIDE_MOVE = 1,
+    NITRO_WIDE_FILL = 2,
+    NITRO_WIDE_OBJS = 3,
+    NITRO_WIDE_SHIFT3D = 4,
+};
+typedef struct NitroWidePart {
+    uint8_t kind, bgs;
+    int16_t top, bottom, x0, x1, dx, col;
+} NitroWidePart;
+/* (in a part's bgs, with the BGs) Its columns x0..x1-1 are the DS screen's
+ * rather than the BG's picture's: they stay where they are as the BG
+ * scrolls (the PC's boxes sliding past behind a frame). A FILL's col is
+ * still the picture's. */
+#define NITRO_WIDE_SCREEN_COLUMNS 0x10
+#define NITRO_WIDE_MAX_PARTS 128
+/* From the game: an engine's screen laid out in these parts, count rows of
+ * 8 numbers each: kind, bgs, top, bottom, x0, x1, dx, col (copied; up to
+ * NITRO_WIDE_MAX_PARTS); count 0: as the DS has it. Apart from the splits
+ * (both apply). Only the wider screen is laid out with them. */
+void NitroPort_WideScreenParts(int engine, const short *rows, int count);
+/* (the 2D renderer) An engine's parts now (up to NITRO_WIDE_MAX_PARTS into
+ * out): how many. Any thread. */
+int NitroPort_WideParts(int engine, NitroWidePart *out);
 
 /* The wider screen: how many DS pixels it adds each side (32 for the
  * remaster's upper screen: 400 pixels at 1.25 times the DS's size; 0 for

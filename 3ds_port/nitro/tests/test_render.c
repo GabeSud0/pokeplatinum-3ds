@@ -1843,8 +1843,9 @@ static void test_wide_framed_windows(void)
     /* A text box (tiles 2-28, rows 19-22; its frame: 2 tiles left, 3
      * right, a row above and below): the frame's left part (blue, white)
      * at the screen's left, its right part (white, blue, blue) at the
-     * right, the inside (white, a red mark at its start) where the DS has
-     * it, and between, the frame's inner columns (white) drawn on. */
+     * right, the inside (white, a red mark at its start) a pixel inside
+     * the frame's left part (the room on the text's right, 2026-10-16),
+     * and between, the frame's inner columns (white) drawn on. */
     memset(map, 0, sizeof(map));
     for (y = 18; y <= 23; y++) {
         for (x = 0; x < 32; x++) {
@@ -1858,8 +1859,11 @@ static void test_wide_framed_windows(void)
     y = 164;
     CHECK(wide[y * 320 + 3] == BLUE);             /* the frame's outer tile at the edge */
     CHECK(wide[y * 320 + 12] == WHITE);
-    CHECK(wide[y * 320 + 30] == WHITE);           /* drawn on */
-    CHECK(wide[y * 320 + 50] == RED);             /* the inside: DS x 16 at 48 */
+    CHECK(wide[y * 320 + 16] == WHITE);           /* drawn on */
+    CHECK(wide[y * 320 + 17] == RED);             /* the inside: DS x 16 at 17 */
+    CHECK(wide[y * 320 + 24] == RED);
+    CHECK(wide[y * 320 + 30] == WHITE);           /* (the inside, white) */
+    CHECK(wide[y * 320 + 50] == WHITE);           /* where it was: DS x 16 at 48 (changed: was red, 2026-10-16) */
     CHECK(wide[y * 320 + 280] == WHITE);          /* drawn on */
     CHECK(wide[y * 320 + 299] == WHITE);          /* the right part: DS 232-255 at 296-319 */
     CHECK(wide[y * 320 + 310] == BLUE);
@@ -2094,6 +2098,249 @@ static void test_wide_splits(void)
     NitroPort_WideForcePictures(-1);
 }
 
+/* A screen laid out in parts (NitroPort_WideScreenParts): the DS's picture
+ * where it is but for the columns MOVEs take, each part drawn over it in
+ * turn (a later one over an earlier), only what the parts put there beside
+ * the DS's screen; columns of the BG's picture, or of the DS's screen
+ * (NITRO_WIDE_SCREEN_COLUMNS) as it scrolls; the sprites moved (and
+ * stretched back to where they were), the 3D moved; a moved BG's
+ * hand-drawn picture left out. */
+static void test_wide_parts(void)
+{
+    static u16 wide[320 * 192], over[320 * 192], art[320 * 192], layerPx[320 * 192];
+    static u8 overAlpha[320 * 192];
+    static u8 tiles4[4 * 32], objTiles[32];
+    static u16 map[32 * 32];
+    static u16 pltt[16], objPltt[16] = { 0, BLUE, GREEN };
+    static GXOamAttr oam[128];
+    /* (kind, bgs, top, bottom, x0, x1, dx, col) */
+    static const short bad[][8] = {
+        { 0, 2, 0, 96, 0, 64, 5, 0 },                                     /* no such kind */
+        { NITRO_WIDE_MOVE, 0, 0, 96, 0, 64, 5, 0 },                       /* no BGs */
+        { NITRO_WIDE_FILL, 2, 96, 96, 0, 64, 0, 3 },                      /* no lines */
+        { NITRO_WIDE_OBJS, 0, 0, 96, 64, 64, 5, 0 },                      /* no columns */
+        { NITRO_WIDE_MOVE, 2 | NITRO_WIDE_SCREEN_COLUMNS, 0, 96, 0, 64, -32, 0 },
+        { NITRO_WIDE_SHIFT3D, 0, 0, 0, 0, 0, -17, 0 },                    /* (no lines or columns: kept) */
+    };
+    /* BG1: columns 0-63 to the left edge, 200-255 to the right edge, the
+     * white column (152) drawn on across first (under them) */
+    static const short apart[][8] = {
+        { NITRO_WIDE_FILL, 2, 0, 96, -32, 288, 0, 152 },
+        { NITRO_WIDE_MOVE, 2, 0, 96, 0, 64, -32, 0 },
+        { NITRO_WIDE_MOVE, 2, 0, 96, 200, 256, 32, 0 },
+    };
+    static const short apartBare[][8] = {
+        { NITRO_WIDE_MOVE, 2, 0, 96, 0, 64, -32, 0 },
+        { NITRO_WIDE_MOVE, 2, 0, 96, 200, 256, 32, 0 },
+    };
+    /* the white column (152-159) over the red moved right of it, and the
+     * other way round */
+    static const short whiteOver[][8] = {
+        { NITRO_WIDE_MOVE, 2, 0, 96, 0, 128, 16, 0 },
+        { NITRO_WIDE_MOVE, 2, 0, 96, 152, 160, -40, 0 },
+    };
+    static const short redOver[][8] = {
+        { NITRO_WIDE_MOVE, 2, 0, 96, 152, 160, -40, 0 },
+        { NITRO_WIDE_MOVE, 2, 0, 96, 0, 128, 16, 0 },
+    };
+    /* the DS's screen's columns 144-151, 100 to the right; beside the left
+     * edge, the picture's white column */
+    static const short onScreen[][8] = {
+        { NITRO_WIDE_FILL, 2 | NITRO_WIDE_SCREEN_COLUMNS, 0, 96, -32, 0, 0, 152 },
+        { NITRO_WIDE_MOVE, 2 | NITRO_WIDE_SCREEN_COLUMNS, 0, 96, 144, 152, 100, 0 },
+    };
+    static const short ofPicture[][8] = {
+        { NITRO_WIDE_MOVE, 2, 0, 96, 144, 152, 100, 0 },
+    };
+    static const short objs[][8] = {
+        { NITRO_WIDE_OBJS, 0, 0, 96, 64, 128, 50, 0 },
+        { NITRO_WIDE_SHIFT3D, 0, 0, 0, 0, 0, -17, 0 },
+    };
+    static const short objsStretch[][8] = {
+        { NITRO_WIDE_OBJS, 0, 0, 96, 64, 128, 50, 1 },
+    };
+    NitroWidePart got[NITRO_WIDE_MAX_PARTS];
+    char dir[] = "/tmp/widepartsXXXXXX";
+    NitroRender2DSplit split;
+    uint64_t key;
+    int hofs, vofs, prio, i, x, y, n;
+
+    /* what the game says is what the renderer gets: rows that say nothing
+     * left out */
+    NitroPort_WideScreenParts(0, &bad[0][0], (int)(sizeof(bad) / sizeof(bad[0])));
+    n = NitroPort_WideParts(0, got);
+    CHECK(n == 2);
+    CHECK(got[0].kind == NITRO_WIDE_MOVE && got[0].bgs == (2 | NITRO_WIDE_SCREEN_COLUMNS) && got[0].top == 0 &&
+          got[0].bottom == 96 && got[0].x0 == 0 && got[0].x1 == 64 && got[0].dx == -32);
+    CHECK(got[1].kind == NITRO_WIDE_SHIFT3D && got[1].dx == -17);
+    CHECK(NitroPort_WideParts(1, got) == 0);   /* the other engine's: as the DS has it */
+    NitroPort_WideScreenParts(0, NULL, 0);
+    CHECK(NitroPort_WideParts(0, got) == 0);
+
+    Reset();
+    memset(&split, 0, sizeof(split));
+    split.width = 320;
+    split.origin = 32;
+    memset(split.clip, 1, sizeof(split.clip));
+    split.anchorWindows = 1;
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_WideForcePictures(0);
+    memset(pltt, 0, sizeof(pltt));
+    pltt[0] = GREY;
+    pltt[1] = RED;
+    pltt[2] = BLUE;
+    pltt[3] = WHITE;
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    /* BG1, a text BG: red columns 0-18 (x 0-151), white 19 (152-159), blue
+     * 20-31 (160-255); column 1 (x 8-15) empty */
+    memset(tiles4, 0, sizeof(tiles4));
+    SolidTile4(tiles4 + 1 * 32, 1);
+    SolidTile4(tiles4 + 2 * 32, 2);
+    SolidTile4(tiles4 + 3 * 32, 3);
+    for (i = 0; i < 32 * 32; i++) {
+        x = i % 32;
+        map[i] = (u16)(x == 1 ? 0 : x < 19 ? 1 : x == 19 ? 3 : 2);
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0800,
+                     GX_BG_CHARBASE_0x08000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles4, 0, sizeof(tiles4));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+
+    NitroPort_WideScreenParts(0, &apart[0][0], 3);
+    NitroPort_Render2DSplit(0, wide, &split);
+    y = 40;
+    CHECK(wide[y * 320 + 0] == RED);      /* DS x 0, 32 to the left */
+    CHECK(wide[y * 320 + 8] == GREY);     /* DS x 8 (nothing there): nothing (not the fill: a
+                                           * part has its columns, what's clear in it clear) */
+    CHECK(wide[y * 320 + 63] == RED);     /* DS x 63 */
+    CHECK(wide[y * 320 + 64] == WHITE);   /* the fill (over the DS's picture where it was) */
+    CHECK(wide[y * 320 + 150] == WHITE);
+    CHECK(wide[y * 320 + 263] == WHITE);
+    CHECK(wide[y * 320 + 264] == BLUE);   /* DS x 200, 32 to the right */
+    CHECK(wide[y * 320 + 319] == BLUE);   /* DS x 255 */
+    y = 120;                               /* (no parts: where the DS has it, nothing beside) */
+    CHECK(wide[y * 320 + 31] == GREY && wide[y * 320 + 32] == RED && wide[y * 320 + 287] == BLUE &&
+          wide[y * 320 + 288] == GREY);
+    /* without the fill: the DS's picture where it was, but for what moved */
+    NitroPort_WideScreenParts(0, &apartBare[0][0], 2);
+    NitroPort_Render2DSplit(0, wide, &split);
+    y = 40;
+    CHECK(wide[y * 320 + 8] == GREY);     /* DS x 8: nothing */
+    CHECK(wide[y * 320 + 63] == RED);
+    CHECK(wide[y * 320 + 64] == GREY);    /* DS x 32-63: gone to the left */
+    CHECK(wide[y * 320 + 95] == GREY);
+    CHECK(wide[y * 320 + 96] == RED);     /* DS x 64, where it is */
+    CHECK(wide[y * 320 + 184] == WHITE);
+    CHECK(wide[y * 320 + 231] == BLUE);   /* DS x 199 */
+    CHECK(wide[y * 320 + 232] == GREY);   /* DS x 200-231: gone to the right */
+    CHECK(wide[y * 320 + 263] == GREY);
+    CHECK(wide[y * 320 + 264] == BLUE);
+
+    /* a later part over an earlier one */
+    NitroPort_WideScreenParts(0, &whiteOver[0][0], 2);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[40 * 320 + 143] == RED);   /* DS x 95, 16 to the right */
+    CHECK(wide[40 * 320 + 144] == WHITE); /* DS x 152, 40 to the left: over the red */
+    CHECK(wide[40 * 320 + 151] == WHITE);
+    CHECK(wide[40 * 320 + 152] == RED);   /* DS x 104 */
+    CHECK(wide[40 * 320 + 175] == RED);   /* DS x 127 */
+    CHECK(wide[40 * 320 + 176] == RED);   /* DS x 144-151, where they are */
+    CHECK(wide[40 * 320 + 184] == GREY);  /* DS x 152-159: moved */
+    CHECK(wide[40 * 320 + 192] == BLUE);  /* DS x 160 */
+    NitroPort_WideScreenParts(0, &redOver[0][0], 2);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[40 * 320 + 144] == RED && wide[40 * 320 + 151] == RED);
+
+    /* columns of the DS's screen, scrolled 8 to the left: what is at its
+     * x 144-151 (the white column) moves; of the picture, its x 144-151
+     * (red, at the DS's x 136-143) */
+    G2_SetBG1Offset(8, 0);
+    NitroPort_WideScreenParts(0, &onScreen[0][0], 2);
+    NitroPort_Render2DSplit(0, wide, &split);
+    y = 40;
+    CHECK(wide[y * 320 + 0] == WHITE && wide[y * 320 + 31] == WHITE);   /* the picture's column 152 */
+    CHECK(wide[y * 320 + 175] == RED);    /* the DS's x 143 */
+    CHECK(wide[y * 320 + 176] == GREY);   /* x 144-151: moved */
+    CHECK(wide[y * 320 + 183] == GREY);
+    CHECK(wide[y * 320 + 184] == BLUE);   /* x 152 (the picture's 160) */
+    CHECK(wide[y * 320 + 276] == WHITE && wide[y * 320 + 283] == WHITE);
+    NitroPort_WideScreenParts(0, &ofPicture[0][0], 1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[y * 320 + 31] == GREY);    /* (nothing beside but the part) */
+    CHECK(wide[y * 320 + 167] == RED);    /* the DS's x 135 */
+    CHECK(wide[y * 320 + 168] == GREY);   /* x 136-143: moved */
+    CHECK(wide[y * 320 + 176] == WHITE);  /* x 144: where it is */
+    CHECK(wide[y * 320 + 268] == RED && wide[y * 320 + 275] == RED);
+    G2_SetBG1Offset(0, 0);
+
+    /* a moved BG shows its own pixels, not its hand-drawn picture */
+    NitroPort_WideScreenParts(0, NULL, 0);
+    CHECK(NitroPort_Render2DLayer(0, 1, &split, layerPx, &key, &hofs, &vofs, &prio));
+    CHECK(mkdtemp(dir) != NULL);
+    for (i = 0; i < 320 * 192; i++) {
+        art[i] = (u16)(GREEN | 0x8000);
+    }
+    WriteArt(dir, key, 0, 0, 1, art);
+    CHECK(NitroPort_WideArtLoad(dir) == 1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[40 * 320 + 100] == GREEN);
+    NitroPort_WideScreenParts(0, &apart[0][0], 3);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[40 * 320 + 0] == RED && wide[40 * 320 + 100] == WHITE && wide[120 * 320 + 100] == RED);
+    NitroPort_WideArtLoad("/nonexistent");
+
+    /* sprites: the one whose middle is in x 64-127, lines 0-95, 50 to the
+     * right; the others where they are */
+    GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_1D_32K);
+    MakeTile4(objTiles, 1);              /* blue, its top-left pixel green */
+    GX_LoadOBJ(objTiles, 0, sizeof(objTiles));
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));
+    G2_SetOBJAttr(&oam[0], 100, 40, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_8x8,
+                  GX_OAM_COLORMODE_16, 0, 0, 0);
+    G2_SetOBJAttr(&oam[1], 20, 40, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_8x8,
+                  GX_OAM_COLORMODE_16, 0, 0, 0);
+    G2_SetOBJAttr(&oam[2], 100, 120, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_8x8,
+                  GX_OAM_COLORMODE_16, 0, 0, 0);
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    GX_SetVisiblePlane(GX_PLANEMASK_OBJ);
+    NitroPort_WideScreenParts(0, &objs[0][0], 2);
+    NitroPort_Render2DSplit(0, wide, &split);
+    y = 43;
+    CHECK(wide[y * 320 + 135] == GREY);   /* where it was */
+    CHECK(wide[y * 320 + 181] == GREY);
+    CHECK(wide[y * 320 + 182] == BLUE);   /* 50 to the right */
+    CHECK(wide[y * 320 + 189] == BLUE);
+    CHECK(wide[y * 320 + 55] == BLUE);    /* (its middle not in the part's columns) */
+    CHECK(wide[123 * 320 + 135] == BLUE); /* (nor in its lines) */
+    /* stretched back to where it was: its first column drawn on */
+    NitroPort_WideScreenParts(0, &objsStretch[0][0], 1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[43 * 320 + 131] == GREY);
+    CHECK(wide[43 * 320 + 132] == BLUE && wide[43 * 320 + 160] == BLUE && wide[43 * 320 + 189] == BLUE);
+    CHECK(wide[40 * 320 + 132] == GREEN && wide[40 * 320 + 181] == GREEN && wide[40 * 320 + 182] == GREEN);
+    CHECK(wide[40 * 320 + 183] == BLUE);
+    CHECK(wide[43 * 320 + 52] == BLUE && wide[43 * 320 + 51] == GREY);   /* (not stretched: not moved) */
+    NitroPort_WideScreenParts(0, NULL, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[43 * 320 + 135] == BLUE && wide[43 * 320 + 185] == GREY);
+    /* the 3D 17 to the left (the compositor moves it left by scroll3d,
+     * with BG0's own scroll) */
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0);
+    G2_SetBG0Offset(3, 0);
+    NitroPort_WideScreenParts(0, &objs[0][0], 2);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.has3d && split.scroll3d == 20);
+    NitroPort_WideScreenParts(0, NULL, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.has3d && split.scroll3d == 3);
+    NitroPort_WideForcePictures(-1);
+}
+
 static void test_engines_on_two_threads(void)
 {
     static u16 refA[256 * 192], refB[256 * 192];
@@ -2246,6 +2493,7 @@ int main(int argc, char **argv)
     test_wide_window_edges();
     test_wide_framed_windows();
     test_wide_splits();
+    test_wide_parts();
     test_engines_on_two_threads();
 
     printf("2D renderer: %d checks, %d failed\n", sChecks, sFailures);

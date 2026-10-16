@@ -1,0 +1,114 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 01:00:00 -0700
+Subject: [PATCH] =?UTF-8?q?The=20Pok=C3=A9dex's=20list=20laid=20out=20acro?=
+ =?UTF-8?q?ss=20the=20wider=20screen=20(SDK=5FPORT=5F3DS)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+From a reference drawn for the wider screen (2026-10-16): the header's
+label and the picture's frame (its Pokémon, in 3D or a sprite) toward
+the left edge, the list's rows and its scroll bar toward the right, the
+counts under them apart (seen at the left, obtained at the right); the
+bars' plain middles and the background widened between them.
+---
+ src/applications/pokedex/ov21_021D5AEC.c | 38 ++++++++++++++++++++++++
+ src/applications/pokedex/pokedex_main.c  |  7 +++++
+ 2 files changed, 45 insertions(+)
+
+diff --git a/src/applications/pokedex/ov21_021D5AEC.c b/src/applications/pokedex/ov21_021D5AEC.c
+index 54ac79a0..9105f04d 100644
+--- a/src/applications/pokedex/ov21_021D5AEC.c
++++ b/src/applications/pokedex/ov21_021D5AEC.c
+@@ -35,6 +35,35 @@
+ #include "res/graphics/pokedex/zukan.naix"
+ #include "res/text/bank/pokedex.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++
++// The Pokédex's list on the wider screen (2026-10-16, from Gabriel's
++// drawing of it): the header's label and the picture's frame (its Pokémon
++// in 3D) toward the left edge, the list's rows and its scroll bar toward
++// the right, the counts under them apart (seen left, obtained right); the
++// bars' plain middles and the background between them widened.
++static const short sPokedexListWideLayout[][8] = {
++    WIDE_FILL(WIDE_BG(2), 0, 192, -32, 288, 200),
++    WIDE_MOVE(WIDE_BG(2), 0, 192, 0, 8, -33),
++    WIDE_MOVE(WIDE_BG(2), 0, 23, 8, 160, -33),
++    WIDE_MOVE(WIDE_BG(2), 144, 192, 8, 160, -33),
++    WIDE_MOVE(WIDE_BG(2), 0, 192, 200, 256, 38),
++    WIDE_FILL(WIDE_BG(3), 0, 192, -32, 288, 150),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 0, 256, 0),
++    WIDE_FILL(WIDE_BG(3), 0, 192, 0, 120, 140),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 0, 120, -17),
++    WIDE_FILL(WIDE_BG(3), 0, 192, 240, 272, 150),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 240, 256, 32),
++    WIDE_MOVE(WIDE_BG(1), 144, 192, 0, 120, -33),
++    WIDE_MOVE(WIDE_BG(1), 144, 192, 120, 256, 39),
++    WIDE_OBJS(-64, 256, -64, 100, -17),
++    WIDE_OBJS(-64, 256, 100, 240, 30),
++    WIDE_OBJS(-64, 256, 240, 320, 32),
++    WIDE_SHIFT3D(-17),
++};
++#endif
++
+ typedef struct {
+     int unk_00;
+     int unk_04;
+@@ -632,10 +661,16 @@ static void ov21_021D6114(UnkStruct_ov21_021D71A8 *param0, PokedexGraphicData *p
+     ov21_021D6BB0(param0, param2);
+     ov21_021D6C44(param0, param1, param2, heapID);
+     ov21_021D6F20(param0, param1, param2);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sPokedexListWideLayout);
++#endif
+ }
+ 
+ static void ov21_021D61D8(UnkStruct_ov21_021D71A8 *param0, PokedexGraphicData *param1)
+ {
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++#endif
+     ov21_021D695C(param0);
+     ov21_021D6580(param0);
+     ov21_021D6940(param0);
+@@ -675,6 +710,9 @@ static void ov21_021D61F4(UnkStruct_ov21_021D71A8 *param0, PokedexGraphicData *p
+     ov21_021D6BB0(param0, param2);
+     ov21_021D6C44(param0, param1, param2, heapID);
+     ov21_021D6F20(param0, param1, param2);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sPokedexListWideLayout);
++#endif
+ }
+ 
+ static void ov21_021D62E4(PokedexGraphicData *param0, enum HeapID heapID)
+diff --git a/src/applications/pokedex/pokedex_main.c b/src/applications/pokedex/pokedex_main.c
+index 31610263..df230f27 100644
+--- a/src/applications/pokedex/pokedex_main.c
++++ b/src/applications/pokedex/pokedex_main.c
+@@ -62,6 +62,10 @@
+ 
+ #include "res/text/bank/pokedex.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++#endif
++
+ enum PokedexState {
+     POKEDEX_STATE_TRANSITION_IN,
+     POKEDEX_STATE_USE,
+@@ -161,6 +165,9 @@ int PokedexMain_Exit(ApplicationManager *appMan, int *state)
+     ApplicationManager_Data(appMan);
+ 
+     SetVBlankCallback(NULL, NULL);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++#endif
+ 
+     GF_ASSERT(DisableTouchPad() == TRUE);
+ 
+-- 
+2.43.0
+
