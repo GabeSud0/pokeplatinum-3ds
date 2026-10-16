@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 16:00:00 -0700
+Subject: [PATCH] Tell the port which windows have a frame (SDK_PORT_3DS)
+
+The 3DS remaster draws the upper screen wider than the DS's. A menu by the
+DS's left or right edge (the field menu, YES/NO, the save's summary, a
+shop's list) goes to the wider screen's edge, its icons with it; a text
+box across the DS's screen has its frame widened to the screen's edges,
+the text where the DS has it. Window_DrawStandardFrame,
+Window_DrawMessageBox and their erasers tell the port
+(NitroPort_WindowFramed) which kind of frame a window has, or that it has
+none any more; the port's 2D renderer does the rest.
+---
+ src/render_window.c | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/src/render_window.c b/src/render_window.c
+index e9d3beaf..cc22e92a 100644
+--- a/src/render_window.c
++++ b/src/render_window.c
+@@ -29,6 +29,14 @@
+ #include "res/graphics/signposts/field_board.naix"
+ #include "res/graphics/windows/pl_winframe.naix"
+ 
++#ifdef SDK_PORT_3DS
++// The 3DS remaster draws the upper screen wider than the DS's: a menu by
++// the DS's edge goes to the wider screen's edge, a text box's frame across
++// its width. The port needs to know which windows have a frame drawn round
++// them, and which kind (3ds_port/nitro/include/nitro_port_wide.h).
++extern void NitroPort_WindowFramed(const void *window, int frame);
++#endif
++
+ #define SIGNPOST_BORDER_LEFT_SIZE  1
+ #define SIGNPOST_BORDER_RIGHT_SIZE 2
+ #define SIGNPOST_BORDER_Y_SIZE     1
+@@ -207,6 +215,9 @@ static void DrawStandardWindowFrame(BgConfig *bgConfig, u8 bgLayer, u8 x, u8 y,
+ 
+ void Window_DrawStandardFrame(Window *window, u8 skipTransfer, u16 tile, u8 palette)
+ {
++#ifdef SDK_PORT_3DS
++    NitroPort_WindowFramed(window, 1);
++#endif
+     DrawStandardWindowFrame(window->bgConfig,
+         Window_GetBgLayer(window),
+         Window_GetXPos(window),
+@@ -223,6 +234,9 @@ void Window_DrawStandardFrame(Window *window, u8 skipTransfer, u16 tile, u8 pale
+ 
+ void Window_EraseStandardFrame(Window *window, u8 skipTransfer)
+ {
++#ifdef SDK_PORT_3DS
++    NitroPort_WindowFramed(window, 0);
++#endif
+     Bg_FillTilemapRect(window->bgConfig,
+         Window_GetBgLayer(window),
+         0,
+@@ -300,6 +314,9 @@ static void DrawMessageBoxFrame(BgConfig *bgConfig, u8 bgLayer, u8 x, u8 y, u8 w
+ 
+ void Window_DrawMessageBox(Window *window, u32 tile, u32 palette)
+ {
++#ifdef SDK_PORT_3DS
++    NitroPort_WindowFramed(window, 2);
++#endif
+     DrawMessageBoxFrame(window->bgConfig,
+         Window_GetBgLayer(window),
+         Window_GetXPos(window),
+@@ -323,6 +340,9 @@ void Window_DrawMessageBoxWithScrollCursor(Window *window, u8 skipTransfer, u16
+ 
+ void Window_EraseMessageBox(Window *window, u8 skipTransfer)
+ {
++#ifdef SDK_PORT_3DS
++    NitroPort_WindowFramed(window, 0);
++#endif
+     Bg_FillTilemapRect(window->bgConfig,
+         Window_GetBgLayer(window),
+         0,
+-- 
+2.43.0

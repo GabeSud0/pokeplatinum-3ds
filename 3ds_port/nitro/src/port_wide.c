@@ -14,6 +14,7 @@ typedef struct Tracked {
     uint8_t bgLayer, left, top, width, height;
     int8_t anchor;
     uint8_t anchorWidth;   /* the tiles that move (0: all of the window's) */
+    uint8_t frame;         /* NitroPort_WindowFramed: 0 none, 1 a menu's, 2 a text box's */
 } Tracked;
 
 static Tracked sTable[MAX_TRACKED];
@@ -80,6 +81,22 @@ void NitroPort_WindowAdded(const void *window, int bgLayer, int left, int top, i
         sTable[slot].height = (uint8_t)height;
         sTable[slot].anchor = 0;
         sTable[slot].anchorWidth = 0;
+        sTable[slot].frame = 0;
+    }
+    sSerial++;
+    unlock();
+}
+
+void NitroPort_WindowFramed(const void *window, int frame)
+{
+    int i;
+
+    lock();
+    for (i = 0; i < sCount; i++) {
+        if (sTable[i].window == window) {
+            sTable[i].frame = (uint8_t)(frame == 1 || frame == 2 ? frame : 0);
+            break;
+        }
     }
     sSerial++;
     unlock();
@@ -124,16 +141,49 @@ int NitroPort_WideWindows(int engine, int bg, NitroWideWindow *out, int max)
     lock();
     for (i = 0; i < sCount && n < max; i++) {
         const Tracked *t = &sTable[i];
+        NitroWideWindow *w = &out[n];
 
-        if (t->bgLayer != layer || t->anchor == 0 || !still_there(t)) {
+        if (t->bgLayer != layer || (t->anchor == 0 && t->frame == 0) || !still_there(t)) {
             continue;
         }
-        out[n].left = t->left;
-        out[n].top = t->top;
-        out[n].width = t->anchorWidth ? t->anchorWidth : t->width;
-        out[n].height = t->height;
-        out[n].anchor = t->anchor;
-        n++;
+        memset(w, 0, sizeof(*w));
+        if (t->anchor != 0) {
+            /* (the game says where it goes: the place name sign) */
+            w->left = t->left;
+            w->top = t->top;
+            w->width = t->anchorWidth ? t->anchorWidth : t->width;
+            w->height = t->height;
+            w->anchor = t->anchor;
+            n++;
+            continue;
+        }
+        {
+            /* With its frame: a menu's a tile all round, a text box's 2
+             * tiles left, 3 right, a tile above and below. */
+            int fl = t->frame == 2 ? 2 : 1, fr = t->frame == 2 ? 3 : 1;
+            int left = t->left - fl, right = t->left + t->width + fr;
+            int byLeft = left <= 2, byRight = right >= 30;
+
+            if (left < 0 || right > 32 || t->top < 1 || t->top + t->height + 1 > 32) {
+                continue;   /* (a frame past the DS's screen: not one of these) */
+            }
+            w->left = (uint8_t)left;
+            w->top = (uint8_t)(t->top - 1);
+            w->width = (uint8_t)(right - left);
+            w->height = (uint8_t)(t->height + 2);
+            if (t->frame == 2 && byLeft && byRight) {
+                w->widen = 1;
+                w->frameLeft = (uint8_t)fl;
+                w->frameRight = (uint8_t)fr;
+            } else if (byRight && !byLeft) {
+                w->anchor = 1;
+            } else if (byLeft && !byRight) {
+                w->anchor = -1;
+            } else {
+                continue;   /* (in the middle, or across the screen: where it is) */
+            }
+            n++;
+        }
     }
     unlock();
     return n;
@@ -186,10 +236,15 @@ int NitroPort_WideScreenExtra(void)
  * movie, the title, the opening cutscene: NitroPort_WidePictures) a BG
  * whose picture reaches the edge is mirrored at it, the picture folding
  * over on itself (one that stops short of the edge, the title's logo, say,
- * isn't); elsewhere (the game's UI: menus) a BG shows nothing beside the
- * DS's screen (the backdrop, or the 3D). The windows the
- * game anchors (the place name sign, patch 0014) move to the screen's
- * edge; the battle's health boxes the game moves itself (patch 0013,
+ * isn't); elsewhere (the game's UI: menus) a BG's lines with something
+ * at the DS's edge that isn't plain carry on the plain lines next to them
+ * (a menu's background goes on behind its panels; port_render2d.c,
+ * DecideBandFills), and a BG with nothing there shows nothing (the
+ * backdrop, or the 3D). The windows the game anchors (the place name
+ * sign, patch 0014) move to the screen's edge, and so do the framed ones
+ * by the DS's edges (menus, patch 0015), their sprites with them; a
+ * text box across the screen has its frame widened to the edges. The
+ * battle's health boxes the game moves itself (patch 0013,
  * NitroPort_WideScreenExtra). The battle's background (engine A's BG3) is
  * a picture wider than the DS's screen (a 512-pixel map: the trainer's
  * slide-in scrolls across it), so beyond the DS's edges it shows its own

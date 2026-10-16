@@ -137,9 +137,10 @@ stretched:
 - **Hand-drawn bands win.** A layer (a BG, or a group of sprites) with a
   picture drawn for it shows that picture in its bands (or all over): see
   [WIDE_ART.md](WIDE_ART.md).
-- **The DS's layout stays.** The game's windows, menus and sprites keep
-  their places (moved apart, they came apart: a menu's icons are sprites
-  placed to match its window). Nothing is stretched.
+- **The DS's layout stays, but for the edges.** The game's windows,
+  menus and sprites keep their places, but for the windows that go to the
+  screen's edges (below), which take their sprites with them (moved apart,
+  a menu's icons and its window came apart). Nothing is stretched.
 - **A plain edge goes on.** Where a BG's line is one colour at its edge (a
   picture's plain border, the black of a fade, a window's frame) that
   colour goes on to the screen's edge: for 8 pixels at the edge, or on the
@@ -150,8 +151,14 @@ stretched:
   intro's scenery, the title's torn border) isn't folded over into the
   bands any more: those screens have pictures drawn for them (see
   [WIDE_ART.md](WIDE_ART.md)); without one, its bands stay empty.
-- **The UI shows nothing beside the DS's screen** (the backdrop, or the
-  3D): a menu's background stays a menu's background.
+- **The UI's backgrounds go on beside the DS's screen.** Where a line of
+  a BG has something at the DS's edge that isn't plain (a menu's panel
+  reaching it), the plain lines next to it are carried on through it, in
+  their pattern (every 1 to 8 lines: the party list's stripes go on
+  behind its panels). Where a BG has nothing at the edge, nothing goes
+  beside it (the backdrop, or the 3D). (Before October 2026, nothing went
+  beside a line that wasn't plain, and the party list, the summary and
+  the bag had black blocks in the bands.)
 - **Pictures with plain middles and decorated sides** (the intro's red
   bars) are split: each half goes to its screen edge and the plain middle
   widens.
@@ -166,6 +173,19 @@ stretched:
 - **The place name sign** goes to the screen's left edge while it shows:
   the game tells the port (`patches/pokeplatinum/0014`,
   `NitroPort_WindowAnchor`; patch 0012 tells it where the windows are).
+- **Menus by the DS's edge go to the screen's edge.** The game tells the
+  port which windows have a frame drawn round them (patch 0015,
+  `NitroPort_WindowFramed`): a menu's (a tile all round) or a text box's
+  (2 tiles left, 3 right). A framed window within 2 tiles of the DS's left
+  or right edge goes to the wider screen's edge, as far from it as it was
+  from the DS's (the field menu, YES/NO, the save's summary, a shop's
+  list, the party's menus); one in the middle, or across the screen,
+  stays. The sprites over a moved window go with it (the field menu's
+  icons).
+- **Text boxes span the screen.** A text box across the DS's screen has
+  its frame's left part at the screen's left edge and its right part at
+  the right edge, each line of the frame's inner columns drawn on between
+  them; the text stays where the DS has it.
 - **The battle's health boxes** go to the screen's edges, the player's
   right and the opponent's left (`patches/pokeplatinum/0013`, by
   `NitroPort_WideScreenExtra`).
