@@ -204,6 +204,12 @@ int NitroPort_WideArtLoad(const char *dir)
     if (n > 0) {
         NitroPort_Log("[wide art] %d hand-drawn pictures in %s", n, dir);
     }
+    /* the layouts' pictures: read now, so none holds a screen up later */
+    for (i = 1; i < NITRO_WIDE_PICTURES; i++) {
+        int w, h;
+
+        (void)NitroPort_WideArtPicture(i, &w, &h);
+    }
     return n;
 }
 
@@ -330,6 +336,126 @@ static int read_picture(const char *path, uint16_t *out)
     }
     stbi_image_free(rgba);
     return 1;
+}
+
+/* ---------------------------------------------- the layouts' pictures */
+
+/* (NitroPort_WideArtPicture) Each picture as read for the folder loaded
+ * (serial): its pixels, kept (a drawing thread may be using them: a new
+ * read goes into them if it fits, else into new ones, the old ones left). */
+static struct {
+    uint16_t *pixels;
+    int capacity, w, h;
+    uint32_t serial;
+    uint8_t state;   /* for serial: 0 not read yet, 1 read, 2 none */
+} sNamed[NITRO_WIDE_PICTURES];
+
+/* A PNG of any size up to the canvas, into RGB555 | 0x8000 pixels (0:
+ * transparent; malloc'd); NULL if there's none. */
+static uint16_t *read_named(const char *path, int *w, int *h)
+{
+    FILE *f = fopen(path, "rb");
+    unsigned char *bytes, *rgba;
+    uint16_t *out;
+    long size;
+    int n, i;
+
+    if (f == NULL) {
+        return NULL;
+    }
+    (void)setvbuf(f, NULL, _IONBF, 0);
+    fseek(f, 0, SEEK_END);
+    size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (size <= 0 || size > 1024 * 1024) {
+        fclose(f);
+        return NULL;
+    }
+    bytes = malloc((size_t)size);
+    if (bytes == NULL || fread(bytes, 1, (size_t)size, f) != (size_t)size) {
+        free(bytes);
+        fclose(f);
+        return NULL;
+    }
+    fclose(f);
+    rgba = stbi_load_from_memory(bytes, (int)size, w, h, &n, 4);
+    free(bytes);
+    if (rgba == NULL) {
+        return NULL;
+    }
+    if (*w <= 0 || *h <= 0 || *w > NITRO_WIDE_ART_W || *h > NITRO_WIDE_ART_H ||
+        (out = malloc((size_t)*w * (size_t)*h * sizeof(uint16_t))) == NULL) {
+        stbi_image_free(rgba);
+        return NULL;
+    }
+    for (i = 0; i < *w * *h; i++) {
+        const unsigned char *p = rgba + i * 4;
+
+        out[i] = p[3] < 128 ? 0
+                            : (uint16_t)(0x8000 | (p[0] >> 3) | ((p[1] >> 3) << 5) | ((p[2] >> 3) << 10));
+    }
+    stbi_image_free(rgba);
+    return out;
+}
+
+const uint16_t *NitroPort_WideArtPicture(int picture, int *w, int *h)
+{
+    const char *name = NitroPort_WidePictureName(picture);
+    char path[320];
+    uint16_t *read;
+    uint32_t serial;
+    int rw = 0, rh = 0;
+
+    if (name == NULL) {
+        return NULL;
+    }
+    lock();
+    serial = sSerial;
+    if (sNamed[picture].serial != serial) {
+        sNamed[picture].serial = serial;
+        sNamed[picture].state = 0;
+    }
+    if (sNamed[picture].state != 0 || sDir[0] == 0) {
+        const uint16_t *pixels = sNamed[picture].state == 1 ? sNamed[picture].pixels : NULL;
+
+        *w = sNamed[picture].w;
+        *h = sNamed[picture].h;
+        unlock();
+        return pixels;
+    }
+    snprintf(path, sizeof(path), "%s/%s.png", sDir, name);
+    unlock();
+
+    /* (read outside the lock: it takes a while) */
+    read = read_named(path, &rw, &rh);
+    lock();
+    if (sNamed[picture].serial == serial && sNamed[picture].state == 0) {
+        if (read == NULL) {
+            sNamed[picture].state = 2;
+        } else {
+            if (sNamed[picture].pixels != NULL && sNamed[picture].capacity >= rw * rh) {
+                memcpy(sNamed[picture].pixels, read, (size_t)rw * (size_t)rh * sizeof(uint16_t));
+                free(read);
+            } else {
+                sNamed[picture].pixels = read;
+                sNamed[picture].capacity = rw * rh;
+            }
+            read = NULL;
+            sNamed[picture].w = rw;
+            sNamed[picture].h = rh;
+            sNamed[picture].state = 1;
+            NitroPort_Log("[wide art] picture %s: %dx%d", name, rw, rh);
+        }
+    }
+    free(read);
+    {
+        const uint16_t *pixels = sNamed[picture].state == 1 ? sNamed[picture].pixels : NULL;
+
+        *w = sNamed[picture].w;
+        *h = sNamed[picture].h;
+        unlock();
+        return pixels;
+    }
 }
 
 /* Picture index's pixels (read the first time, kept in a slot); under the

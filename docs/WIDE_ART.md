@@ -166,10 +166,34 @@ Files, in `3ds/pokeplatinum/wide`:
 the game's art: like the data pack, they stay on your SD card and aren't
 shared or committed.
 
+### Pictures a screen's layout draws
+
+Some screens laid out for the wider screen in code (see
+[REMASTER.md](REMASTER.md), "Screens laid out in parts") also draw
+pictures of their own, by name, from the same folder. Any size up to
+320 x 192; transparent where alpha < 128. Without a file, that part isn't
+drawn and the screen looks as it did. The game places them, turns them
+and swaps them; you can redraw them in any paint program (keep the size,
+or the place they go changes with it):
+
+| File | Where | What the game does with it |
+| --- | --- | --- |
+| `pc_boxes_divider.png` (40 x 192) | the boxes: between the Pokémon's panel and the box, behind the panel's edge | |
+| `pc_boxes_ball.png` (23 x 23) | over the divider's round socket | turns once round as the boxes slide |
+| `party_panel.png` (64 x 158) | the party: at the left edge | |
+| `party_ball.png` (70 x 70) | the panel's socket, its middle at the screen's x 15, y 81 | turns a little as the cursor moves |
+| `party_light_off`, `_red`, `_blue`, `_green`, `_amber`, `_white` `.png` (5 x 5) | the panel's two rows of lights | each light changes colour now and then |
+
+A turned picture turns about its middle: draw a round one with its middle
+in the middle of the file (an odd size has a middle pixel).
+
 ## The code
 
 - `3ds_port/nitro/src/port_wideart.c`: the folder, reading the pictures
-  (stb_image, `3ds_port/nitro/third_party`), captures.
+  (stb_image, `3ds_port/nitro/third_party`), captures; the layouts'
+  pictures (`NitroPort_WideArtPicture`; their names:
+  `NitroPort_WidePictureName`, `port_wide.c`), drawn by `PicturesOnLine`
+  in `port_render2d.c`.
 - `3ds_port/nitro/src/port_render2d.c`: a BG's key (`BgKey`), the picture
   in its bands (`LookUpArt`, `SEG_ART`), one layer alone
   (`NitroPort_Render2DLayer`); the sprite groups (`ObjGroups`, keyed by

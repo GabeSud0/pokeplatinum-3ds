@@ -1,0 +1,141 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 02:00:00 -0700
+Subject: [PATCH] =?UTF-8?q?The=20boxes'=20divider=20and=20its=20Pok=C3=A9?=
+ =?UTF-8?q?=20Ball,=20turning=20as=20the=20boxes=20slide=20(SDK=5FPORT=5F3?=
+ =?UTF-8?q?DS)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+From another drawing of Gabriel's for the wider screen (2026-10-16):
+between the Pokémon's panel and the box, a divider with a Poké Ball set
+in it. Both are pictures in the wide art folder (pc_boxes_divider.png,
+pc_boxes_ball.png), drawn behind the panel's edge; without them the
+boxes look as before. The ball turns once round as the boxes slide, its
+top going the way they go, slowing as they stop.
+
+The layouts' header gets WIDE_PICTURE: a picture drawn for a screen
+(its number: the port's list in nitro_port_wide.h), with a BG, in front
+of its pixels, placed anywhere on the wider screen and turned about its
+middle.
+---
+ include/port_wide_layout.h                | 20 +++++++++++++++++
+ src/applications/pc_boxes/ov19_021D79F8.c | 27 +++++++++++++++++++++++
+ 2 files changed, 47 insertions(+)
+
+diff --git a/include/port_wide_layout.h b/include/port_wide_layout.h
+index 661cfdd6..00b9700f 100644
+--- a/include/port_wide_layout.h
++++ b/include/port_wide_layout.h
+@@ -23,6 +23,10 @@
+ //     WIDE_OBJS_STRETCH: the same, each one's edge column drawn on back to
+ //     where it was (a cursor's right half moved with its row's right end);
+ //   WIDE_SHIFT3D: the 3D picture moved dx to the right.
++//   WIDE_PICTURE: a picture drawn for the screen (WIDE_PICTURE_*: a file in
++//     the wide art folder; nothing if it isn't there) with BG bg, in front
++//     of that BG's pixels: its top-left at the DS's x, y (anywhere on the
++//     wider screen), turned angle degrees clockwise about its middle.
+ // WIDE_SCREEN_COLUMNS with a part's BGs: its x0..x1-1 are columns of the
+ // DS's screen, not of the BG's picture: they stay put as the BG scrolls
+ // (a WIDE_FILL's col is still the picture's).
+@@ -45,6 +49,22 @@ extern void NitroPort_WindowFramed(const void *window, int frame);
+ #define WIDE_OBJS(top, bottom, x0, x1, dx)        { 3, 0, (top), (bottom), (x0), (x1), (dx), 0 }
+ #define WIDE_OBJS_STRETCH(top, bottom, x0, x1, dx) { 3, 0, (top), (bottom), (x0), (x1), (dx), 1 }
+ #define WIDE_SHIFT3D(dx)                          { 4, 0, 0, 0, 0, 0, (dx), 0 }
++#define WIDE_PICTURE(bg, picture, x, y, angle)    { 5, WIDE_BG(bg), (y), (y) + 1, (x), (x) + 1, (angle), (picture) }
++
++// The pictures (their files: <name>.png; the port's numbers, in
++// 3ds_port/nitro/include/nitro_port_wide.h, are the same).
++enum WidePicture {
++    WIDE_PICTURE_PC_BOXES_DIVIDER = 1, // pc_boxes_divider
++    WIDE_PICTURE_PC_BOXES_BALL,        // pc_boxes_ball
++    WIDE_PICTURE_PARTY_PANEL,          // party_panel
++    WIDE_PICTURE_PARTY_BALL,           // party_ball
++    WIDE_PICTURE_PARTY_LIGHT_OFF,      // party_light_off
++    WIDE_PICTURE_PARTY_LIGHT_RED,      // party_light_red
++    WIDE_PICTURE_PARTY_LIGHT_BLUE,     // party_light_blue
++    WIDE_PICTURE_PARTY_LIGHT_GREEN,    // party_light_green
++    WIDE_PICTURE_PARTY_LIGHT_AMBER,    // party_light_amber
++    WIDE_PICTURE_PARTY_LIGHT_WHITE,    // party_light_white
++};
+ 
+ #define WIDE_LAYOUT(engine, table) NitroPort_WideScreenParts((engine), &(table)[0][0], (int)NELEMS(table))
+ #define WIDE_LAYOUT_NONE(engine)   NitroPort_WideScreenParts((engine), NULL, 0)
+diff --git a/src/applications/pc_boxes/ov19_021D79F8.c b/src/applications/pc_boxes/ov19_021D79F8.c
+index 79a0a7e6..88839c2f 100644
+--- a/src/applications/pc_boxes/ov19_021D79F8.c
++++ b/src/applications/pc_boxes/ov19_021D79F8.c
+@@ -117,6 +117,10 @@ static const u16 Unk_ov19_021E0138[] = {
+ // an item's description) stay in the middle, their sprites with them.
+ static short sBoxWideStripes = -1;
+ static enum BoxWidePanel sBoxWidePanel;
++// (2026-10-16, from another drawing of Gabriel's) Between the panel and the
++// box, a divider with a Poké Ball in it (pictures in the wide art folder);
++// the ball turns once round as the boxes slide.
++static short sBoxWideBallAngle;
+ 
+ static void BoxWide_Apply(void)
+ {
+@@ -131,12 +135,16 @@ static void BoxWide_Apply(void)
+         WIDE_OBJS(160, 256, -64, 108, -32),
+         WIDE_OBJS(160, 256, 108, 400, 32),
+         WIDE_SHIFT3D(-32),
++        WIDE_PICTURE(3, WIDE_PICTURE_PC_BOXES_DIVIDER, 56, 0, 0), // (behind the panel's edge)
++        WIDE_PICTURE(3, WIDE_PICTURE_PC_BOXES_BALL, 70, 75, 0),
+     };
+ 
+     if (sBoxWideStripes < 0) {
+         return;
+     }
+ 
++    layout[NELEMS(layout) - 1][6] = sBoxWideBallAngle;
++
+     switch (sBoxWidePanel) {
+     case BOX_WIDE_PANEL_JUMP: // (the boxes to jump to)
+         layout[0][2] = 40;
+@@ -176,6 +184,18 @@ void BoxWide_SetPanel(enum BoxWidePanel panel)
+     sBoxWidePanel = panel;
+     BoxWide_Apply();
+ }
++
++// The ball's turn as the boxes slide (left frames of 30; dir: 1 to the next
++// box, the boxes going left, -1 the other way): once round, its top going
++// the way they go, slowing as they stop.
++static void BoxWide_TurnBall(int left, int dir)
++{
++    int done = 30 - left;
++    int eased = 30 * 30 - (30 - done) * (30 - done); // (1 - (1 - t)^2) * 900
++
++    sBoxWideBallAngle = (short)(left > 0 ? -dir * 360 * eased / (30 * 30) : 0);
++    BoxWide_Apply();
++}
+ #endif
+ 
+ BOOL ov19_021D79F8(UnkStruct_ov19_021D8318 *param0, UnkStruct_ov19_021D61B0 *param1, const BoxApplication *param2, BgConfig *param3, SpriteList *param4)
+@@ -221,6 +241,7 @@ void ov19_021D7A9C(UnkStruct_ov19_021D8318 *param0)
+     Bg_FillTilemapRect(param0->unk_58F4, 3, 0x18, 0, 0, 64, 32, 9);
+ #ifdef SDK_PORT_3DS
+     sBoxWidePanel = BOX_WIDE_PANEL_NONE;
++    sBoxWideBallAngle = 0;
+     BoxWide_SetLayout(param0);
+ #endif
+ }
+@@ -404,8 +425,14 @@ static void ov19_021D7E6C(SysTask *param0, void *param1)
+             v0->unk_08 += v0->unk_10;
+             Bg_SetOffset(v0->unk_58F4, BG_LAYER_MAIN_3, 0, v0->unk_0C);
+             v0->unk_04--;
++#ifdef SDK_PORT_3DS
++            BoxWide_TurnBall(v0->unk_04, v0->unk_10 >= 0 ? 1 : -1);
++#endif
+         }
+     } else {
++#ifdef SDK_PORT_3DS
++        BoxWide_TurnBall(0, 1);
++#endif
+         Bg_SetOffset(v0->unk_58F4, BG_LAYER_MAIN_3, 0, v0->unk_14);
+         ov19_021D870C(v0, v0->unk_A8[v2]);
+         SysTask_Done(param0);
+-- 
+2.43.0
+

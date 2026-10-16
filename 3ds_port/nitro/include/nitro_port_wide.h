@@ -108,7 +108,12 @@ int NitroPort_WideSplits(int engine, NitroWideSplit *out);
  *     them); col 1: stretched, each one's edge column drawn on back to
  *     where it was (the right half of a cursor moved with its row's right
  *     end: the cursor as wide as the row);
- *   SHIFT3D: the 3D picture moved dx pixels to the right.
+ *   SHIFT3D: the 3D picture moved dx pixels to the right;
+ *   PICTURE: the picture col (NITRO_WIDE_PICTURE_*: a file drawn for the
+ *     screen, NitroPort_WideArtPicture) drawn with the BG in bgs, in front
+ *     of that BG's own pixels (behind what's in front of the BG), its
+ *     top-left at the DS's x0, top (anywhere on the canvas), turned dx
+ *     degrees clockwise about its middle (x1, bottom: not used).
  * Lines and columns of the BG's own picture, as with splits (a text BG's
  * map, an affine BG's picture before its matrix); only the DS's 256
  * columns move. On a line of a BG with parts, the DS's picture shows where
@@ -124,7 +129,24 @@ enum {
     NITRO_WIDE_FILL = 2,
     NITRO_WIDE_OBJS = 3,
     NITRO_WIDE_SHIFT3D = 4,
+    NITRO_WIDE_PICTURE = 5,
 };
+/* The pictures a screen's layout can draw (NITRO_WIDE_PICTURE's col): each
+ * a file <name>.png in the wide art folder (NitroPort_WidePictureName). */
+enum {
+    NITRO_WIDE_PICTURE_PC_BOXES_DIVIDER = 1,   /* the boxes: between the panel and the box */
+    NITRO_WIDE_PICTURE_PC_BOXES_BALL,          /* its Poké Ball (it spins as the boxes change) */
+    NITRO_WIDE_PICTURE_PARTY_PANEL,            /* the party: the panel at the left edge */
+    NITRO_WIDE_PICTURE_PARTY_BALL,             /* its Poké Ball (it turns as the cursor moves) */
+    NITRO_WIDE_PICTURE_PARTY_LIGHT_OFF,        /* its lights, each colour a picture */
+    NITRO_WIDE_PICTURE_PARTY_LIGHT_RED,
+    NITRO_WIDE_PICTURE_PARTY_LIGHT_BLUE,
+    NITRO_WIDE_PICTURE_PARTY_LIGHT_GREEN,
+    NITRO_WIDE_PICTURE_PARTY_LIGHT_AMBER,
+    NITRO_WIDE_PICTURE_PARTY_LIGHT_WHITE,
+    NITRO_WIDE_PICTURES
+};
+const char *NitroPort_WidePictureName(int picture);
 typedef struct NitroWidePart {
     uint8_t kind, bgs;
     int16_t top, bottom, x0, x1, dx, col;

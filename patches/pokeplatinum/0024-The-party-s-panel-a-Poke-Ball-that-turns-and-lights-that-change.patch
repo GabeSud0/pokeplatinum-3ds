@@ -1,0 +1,152 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 02:00:00 -0700
+Subject: [PATCH] =?UTF-8?q?The=20party's=20panel:=20a=20Pok=C3=A9=20Ball?=
+ =?UTF-8?q?=20that=20turns=20and=20lights=20that=20change=20(SDK=5FPORT=5F?=
+ =?UTF-8?q?3DS)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+From another drawing of Gabriel's for the wider screen (2026-10-16): at
+the screen's left edge, beside the party's panels, a machine's panel
+with a Poké Ball set in it and two rows of lights (pictures in the wide
+art folder: party_panel.png, party_ball.png, party_light_<colour>.png).
+The ball turns a little each time the cursor moves to another Pokémon
+and swings back; the lights change colour now and then, each on its
+own. The lights use their own random numbers, not the game's.
+---
+ src/applications/party_menu/main.c | 98 +++++++++++++++++++++++++++++-
+ 1 file changed, 96 insertions(+), 2 deletions(-)
+
+diff --git a/src/applications/party_menu/main.c b/src/applications/party_menu/main.c
+index fbea4368..50726712 100644
+--- a/src/applications/party_menu/main.c
++++ b/src/applications/party_menu/main.c
+@@ -75,12 +75,103 @@
+ // for it, 2026-10-16): the panels, their sprites and the CANCEL button 32
+ // pixels right, at the screen's right edge, the background with them (its
+ // plain left column drawn on beside); the message box (BG0) where it is.
+-static const short sPartyMenuWideLayout[][8] = {
++//
++// Beside the panels at the left edge, a panel with a Poké Ball and lights
++// (2026-10-16, after another drawing of Gabriel's: pictures in the wide art
++// folder, behind the party's BGs): the ball turns a little each time the
++// cursor moves and settles; the lights change now and then, each on its
++// own, like a machine's. (Their own random numbers: the game's aren't
++// touched.)
++#define PARTY_WIDE_LIGHTS 6
++#define PARTY_WIDE_PICTURES (2 + PARTY_WIDE_LIGHTS)
++
++static const short sPartyMenuWideLayout[4 + PARTY_WIDE_PICTURES][8] = {
+     WIDE_FILL(WIDE_BG(3), 0, 192, -32, 32, 0),
+     WIDE_MOVE(WIDE_BG(3), 0, 192, 0, 256, 32),
+     WIDE_MOVE(WIDE_BG(1) | WIDE_BG(2), 0, 192, 0, 256, 32),
+     WIDE_OBJS(0, 192, -128, 384, 32),
++    WIDE_PICTURE(3, WIDE_PICTURE_PARTY_PANEL, -32, 0, 0),
++    WIDE_PICTURE(3, WIDE_PICTURE_PARTY_BALL, -52, 46, 0),
++    WIDE_PICTURE(3, WIDE_PICTURE_PARTY_LIGHT_WHITE, 17, 9, 0),
++    WIDE_PICTURE(3, WIDE_PICTURE_PARTY_LIGHT_RED, 17, 15, 0),
++    WIDE_PICTURE(3, WIDE_PICTURE_PARTY_LIGHT_BLUE, 17, 21, 0),
++    WIDE_PICTURE(3, WIDE_PICTURE_PARTY_LIGHT_BLUE, 17, 131, 0),
++    WIDE_PICTURE(3, WIDE_PICTURE_PARTY_LIGHT_RED, 17, 137, 0),
++    WIDE_PICTURE(3, WIDE_PICTURE_PARTY_LIGHT_RED, 17, 143, 0),
+ };
++
++#define PARTY_WIDE_BALL_ROW  5
++#define PARTY_WIDE_LIGHT_ROW 6
++
++// The ball's turn after the cursor moves, a frame at a time (degrees; it
++// swings past and settles).
++static const s8 sPartyWideBallTurn[] = { 15, 24, 28, 28, 24, 18, 12, 5, 0, -4, -7, -8, -8, -7, -5, -3, -2, 0 };
++
++static struct {
++    short layout[4 + PARTY_WIDE_PICTURES][8];
++    u8 slot;
++    s8 turnDir;
++    u8 turnFrame; // (NELEMS(sPartyWideBallTurn): still)
++    u8 lightWait[PARTY_WIDE_LIGHTS];
++    u32 random;
++} sPartyWide;
++
++static u32 PartyWide_Random(void)
++{
++    sPartyWide.random = sPartyWide.random * 1103515245 + 12345;
++    return sPartyWide.random >> 16;
++}
++
++// How long a light keeps its colour (frames): a second to five.
++static u8 PartyWide_LightWait(void)
++{
++    return (u8)(30 + PartyWide_Random() % 120);
++}
++
++static void PartyWide_Start(PartyMenuApplication *application)
++{
++    int i;
++
++    memcpy(sPartyWide.layout, sPartyMenuWideLayout, sizeof(sPartyWide.layout));
++    sPartyWide.slot = application->currPartySlot;
++    sPartyWide.turnDir = 0;
++    sPartyWide.turnFrame = NELEMS(sPartyWideBallTurn);
++    sPartyWide.random += 0x9E3779B9; // (another pattern each time it opens)
++    for (i = 0; i < PARTY_WIDE_LIGHTS; i++) {
++        sPartyWide.lightWait[i] = PartyWide_LightWait();
++    }
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sPartyWide.layout);
++}
++
++// Each frame: the ball's turn, the lights.
++static void PartyWide_Tick(PartyMenuApplication *application)
++{
++    // the colours a light changes to, red and blue most often, off now and then
++    static const u8 lightColours[] = {
++        WIDE_PICTURE_PARTY_LIGHT_RED, WIDE_PICTURE_PARTY_LIGHT_RED, WIDE_PICTURE_PARTY_LIGHT_BLUE,
++        WIDE_PICTURE_PARTY_LIGHT_BLUE, WIDE_PICTURE_PARTY_LIGHT_GREEN, WIDE_PICTURE_PARTY_LIGHT_AMBER,
++        WIDE_PICTURE_PARTY_LIGHT_WHITE, WIDE_PICTURE_PARTY_LIGHT_OFF
++    };
++    int i;
++
++    if (application->currPartySlot != sPartyWide.slot) {
++        sPartyWide.turnDir = application->currPartySlot > sPartyWide.slot ? 1 : -1;
++        sPartyWide.slot = application->currPartySlot;
++        sPartyWide.turnFrame = 0;
++    }
++    if (sPartyWide.turnFrame < NELEMS(sPartyWideBallTurn)) {
++        sPartyWide.layout[PARTY_WIDE_BALL_ROW][6] = (short)(sPartyWide.turnDir * sPartyWideBallTurn[sPartyWide.turnFrame]);
++        sPartyWide.turnFrame++;
++    }
++    for (i = 0; i < PARTY_WIDE_LIGHTS; i++) {
++        if (--sPartyWide.lightWait[i] == 0) {
++            sPartyWide.layout[PARTY_WIDE_LIGHT_ROW + i][7] = lightColours[PartyWide_Random() % NELEMS(lightColours)];
++            sPartyWide.lightWait[i] = PartyWide_LightWait();
++        }
++    }
++    // (the same as last frame: the port draws nothing again for it)
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sPartyWide.layout);
++}
+ #endif
+ 
+ FS_EXTERN_OVERLAY(party_menu_form_change);
+@@ -311,7 +402,7 @@ static BOOL PartyMenu_Init(ApplicationManager *appMan, int *state)
+     PartyMenu_InitSpriteResources(application);
+     PartyMenu_InitSprites(application);
+ #ifdef SDK_PORT_3DS
+-    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sPartyMenuWideLayout);
++    PartyWide_Start(application);
+ #endif
+ 
+     SetupRequestedMode(application);
+@@ -489,6 +580,9 @@ static BOOL PartyMenu_Main(ApplicationManager *appMan, int *state)
+         break;
+     }
+ 
++#ifdef SDK_PORT_3DS
++    PartyWide_Tick(partyMenu);
++#endif
+     PartyMenu_UpdateMemberIcons(partyMenu);
+     PartyMenu_UpdateTouchButtonEffect(partyMenu);
+     sub_0207FE1C(partyMenu);
+-- 
+2.43.0
+

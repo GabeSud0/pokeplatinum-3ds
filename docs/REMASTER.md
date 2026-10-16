@@ -233,6 +233,14 @@ stretched:
     box, the menus at the right edge;
   - the Pokédex's list: its label and picture left, its rows and scroll
     bar right, the counts apart.
+  A layout can also draw pictures of its own (PICTURE parts, patches 0023
+  and 0024: files in the wide art folder, see [WIDE_ART.md](WIDE_ART.md)),
+  with a BG, in front of its pixels, anywhere on the wider screen, turned
+  about their middle: the boxes' divider and its Poké Ball, which turns
+  once round as the boxes slide; the party's panel at the left edge, its
+  Poké Ball turning a little as the cursor moves, its lights changing now
+  and then. A layout sent again unchanged (an animation's still frames)
+  draws nothing again.
 - **The battle's health boxes** go to the screen's edges, the player's
   right and the opponent's left (`patches/pokeplatinum/0013`, by
   `NitroPort_WideScreenExtra`).

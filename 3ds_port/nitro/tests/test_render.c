@@ -2289,6 +2289,61 @@ static void test_wide_parts(void)
     NitroPort_WideScreenParts(0, &apart[0][0], 3);
     NitroPort_Render2DSplit(0, wide, &split);
     CHECK(wide[40 * 320 + 0] == RED && wide[40 * 320 + 100] == WHITE && wide[120 * 320 + 100] == RED);
+
+    /* a picture drawn for the layout (NITRO_WIDE_PICTURE, a file in the
+     * folder): in front of its BG's pixels, where it's put, turned about
+     * its middle; nothing while its file isn't there */
+    {
+        /* 4 x 2: red red blue blue / green green white white */
+        static const u8 rgba[8 * 4] = {
+            255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 255,
+            0, 255, 0, 255, 0, 255, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        };
+        static const short picture[][8] = {
+            { NITRO_WIDE_PICTURE, 2, 40, 41, 100, 101, 0, NITRO_WIDE_PICTURE_PC_BOXES_BALL },
+        };
+        static const short turned[][8] = {
+            { NITRO_WIDE_PICTURE, 2, 40, 41, 100, 101, 90, NITRO_WIDE_PICTURE_PC_BOXES_BALL },
+        };
+        char path[512], dir2[] = "/tmp/widepicturesXXXXXX";
+        int w, h;
+
+        NitroPort_WideArtLoad("/nonexistent");
+        CHECK(mkdtemp(dir2) != NULL);
+        NitroPort_WideScreenParts(0, &picture[0][0], 1);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[40 * 320 + 132] == RED);    /* (no file: BG1, the DS's x 100) */
+        snprintf(path, sizeof(path), "%s/%s.png", dir2, NitroPort_WidePictureName(NITRO_WIDE_PICTURE_PC_BOXES_BALL));
+        CHECK(NitroPort_WideArtWritePng(path, rgba, 4, 2) == 0);
+        CHECK(NitroPort_WideArtLoad(dir2) == 0);   /* (no layer's pictures) */
+        CHECK(NitroPort_WideArtPicture(NITRO_WIDE_PICTURE_PC_BOXES_BALL, &w, &h) != NULL && w == 4 && h == 2);
+        CHECK(NitroPort_WideArtPicture(NITRO_WIDE_PICTURE_PARTY_PANEL, &w, &h) == NULL);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[40 * 320 + 131] == RED);    /* (BG1) */
+        CHECK(wide[40 * 320 + 132] == RED && wide[40 * 320 + 134] == BLUE && wide[40 * 320 + 135] == BLUE);
+        CHECK(wide[41 * 320 + 132] == GREEN && wide[41 * 320 + 135] == WHITE);
+        CHECK(wide[40 * 320 + 136] == RED && wide[42 * 320 + 132] == RED);   /* (BG1 again) */
+        /* turned a quarter clockwise: its left column on top */
+        NitroPort_WideScreenParts(0, &turned[0][0], 1);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[39 * 320 + 133] == GREEN && wide[39 * 320 + 134] == RED);
+        CHECK(wide[40 * 320 + 133] == GREEN && wide[40 * 320 + 134] == RED);
+        CHECK(wide[41 * 320 + 133] == WHITE && wide[41 * 320 + 134] == BLUE);
+        CHECK(wide[42 * 320 + 133] == WHITE && wide[42 * 320 + 134] == BLUE);
+        CHECK(wide[40 * 320 + 132] == RED && wide[40 * 320 + 135] == RED);   /* (BG1 beside it) */
+        /* the same layout again: nothing new to draw */
+        {
+            uint32_t serial = NitroPort_WideWindowsSerial();
+
+            NitroPort_WideScreenParts(0, &turned[0][0], 1);
+            CHECK(NitroPort_WideWindowsSerial() == serial);
+            NitroPort_WideScreenParts(0, &picture[0][0], 1);
+            CHECK(NitroPort_WideWindowsSerial() != serial);
+        }
+        NitroPort_WideScreenParts(0, NULL, 0);
+        remove(path);
+        rmdir(dir2);
+    }
     NitroPort_WideArtLoad("/nonexistent");
 
     /* sprites: the one whose middle is in x 64-127, lines 0-95, 50 to the

@@ -106,6 +106,7 @@ static State2D sState[2];
 /* ----------------------------------------------------------- one engine */
 
 #define OBJ_MOVES_MAX 32   /* sprite moves: the layout's, then the moved windows' */
+#define WIDE_PICS_MAX 16   /* pictures a layout draws (NITRO_WIDE_PICTURE) */
 
 typedef struct Engine {
     const u8 *ioAll;       /* all the registers (live, or a State2D's) */
@@ -174,6 +175,17 @@ typedef struct Engine {
     int nParts;
     u8 partBgs, movedBgs, objsMoved;
     short shift3d;
+    /* (NITRO_WIDE_PICTURE parts) the pictures drawn with the BGs: their
+     * pixels, size, top-left on the canvas, turn (cos, sin: 16.16), the
+     * canvas rectangle they may cover, and the BG; the BGs that have one. */
+    struct {
+        const u16 *px;
+        short w, h, x, y, x0, y0, x1, y1;
+        s32 c, s;
+        u8 bg;
+    } pics[WIDE_PICS_MAX];
+    int nPics;
+    u8 picBgs;
     /* The palettes as pixels (colour | OPAQUE), 0 for the transparent
      * colour: index 0 of each 16 colours (4 bits per pixel), or of all 256
      * (8 bits per pixel). */
@@ -579,6 +591,147 @@ static void DecideBandFills(Engine *e, const int *kind, const u16 *bgcnt, u32 di
             }
         }
     }
+}
+
+/* sin(degrees) in 16.16 (without the maths library: a few terms of its
+ * series, on 0-90 degrees). */
+static s32 SinFx(int degrees)
+{
+    int d = degrees % 360, sign = 1;
+    float x, x2, v;
+
+    if (d < 0) {
+        d += 360;
+    }
+    if (d >= 180) {
+        d -= 180;
+        sign = -1;
+    }
+    if (d > 90) {
+        d = 180 - d;
+    }
+    x = (float)d * 0.017453292f;
+    x2 = x * x;
+    v = x * (1.0f - x2 / 6.0f * (1.0f - x2 / 20.0f * (1.0f - x2 / 42.0f * (1.0f - x2 / 72.0f))));
+    return sign * (s32)(v * 65536.0f + 0.5f);
+}
+
+/* (wider canvas) A picture a layout draws (NITRO_WIDE_PICTURE): where, with
+ * which BG, turned how far; left out if its file isn't there. */
+static void SetUpPicture(Engine *e, const NitroWidePart *p)
+{
+    int w, h, bg, r;
+    const u16 *px;
+
+    if (e->nPics >= WIDE_PICS_MAX || (px = NitroPort_WideArtPicture(p->col, &w, &h)) == NULL) {
+        return;
+    }
+    for (bg = 0; bg < 4 && !((p->bgs >> bg) & 1); bg++) {
+    }
+    if (bg == 4) {
+        return;
+    }
+    e->pics[e->nPics].px = px;
+    e->pics[e->nPics].w = (short)w;
+    e->pics[e->nPics].h = (short)h;
+    e->pics[e->nPics].x = (short)(e->origin + p->x0);
+    e->pics[e->nPics].y = p->top;
+    e->pics[e->nPics].bg = (u8)bg;
+    e->pics[e->nPics].s = SinFx(p->dx);
+    e->pics[e->nPics].c = SinFx(p->dx + 90);
+    if (p->dx % 360 == 0) {
+        e->pics[e->nPics].c = 0x10000;
+        e->pics[e->nPics].s = 0;
+        e->pics[e->nPics].x0 = e->pics[e->nPics].x;
+        e->pics[e->nPics].y0 = e->pics[e->nPics].y;
+        e->pics[e->nPics].x1 = (short)(e->pics[e->nPics].x + w);
+        e->pics[e->nPics].y1 = (short)(e->pics[e->nPics].y + h);
+    } else {
+        /* (turned: within its middle's distance from its corners, at most
+         * 3/4 of its longer side) */
+        r = (w > h ? w : h) * 3 / 4 + 1;
+        e->pics[e->nPics].x0 = (short)(e->pics[e->nPics].x + w / 2 - r);
+        e->pics[e->nPics].y0 = (short)(e->pics[e->nPics].y + h / 2 - r);
+        e->pics[e->nPics].x1 = (short)(e->pics[e->nPics].x + (w + 1) / 2 + r);
+        e->pics[e->nPics].y1 = (short)(e->pics[e->nPics].y + (h + 1) / 2 + r);
+    }
+    e->picBgs |= (u8)(1 << bg);
+    e->nPics++;
+}
+
+/* The pictures drawn with BG bg on line y (NITRO_WIDE_PICTURE): over line,
+ * where they have a pixel (later ones over earlier ones), the columns they
+ * may cover in *x0..*x1 (cleared first when clear). Returns whether any is
+ * on the line. */
+static BOOL PicturesOnLine(const Engine *e, int bg, int y, u16 *line, BOOL clear, int *x0, int *x1)
+{
+    int i, x, a = e->width, b = 0;
+
+    for (i = 0; i < e->nPics; i++) {
+        if (e->pics[i].bg == bg && y >= e->pics[i].y0 && y < e->pics[i].y1) {
+            if (e->pics[i].x0 < a) {
+                a = e->pics[i].x0;
+            }
+            if (e->pics[i].x1 > b) {
+                b = e->pics[i].x1;
+            }
+        }
+    }
+    if (a < 0) {
+        a = 0;
+    }
+    if (b > e->width) {
+        b = e->width;
+    }
+    if (a >= b) {
+        return FALSE;
+    }
+    if (clear) {
+        memset(line + a, 0, (size_t)(b - a) * sizeof(u16));
+    }
+    for (i = 0; i < e->nPics; i++) {
+        const u16 *px = e->pics[i].px;
+        int w = e->pics[i].w, h = e->pics[i].h, px0 = e->pics[i].x0, px1 = e->pics[i].x1;
+
+        if (e->pics[i].bg != bg || y < e->pics[i].y0 || y >= e->pics[i].y1) {
+            continue;
+        }
+        if (px0 < 0) {
+            px0 = 0;
+        }
+        if (px1 > e->width) {
+            px1 = e->width;
+        }
+        if (e->pics[i].s == 0 && e->pics[i].c == 0x10000) {
+            const u16 *row = px + (y - e->pics[i].y) * w - e->pics[i].x;
+
+            for (x = px0; x < px1; x++) {
+                if (row[x]) {
+                    line[x] = row[x];
+                }
+            }
+        } else {
+            /* Turned about its middle: each pixel from the picture's pixel
+             * there turned back (16.16). */
+            s32 c = e->pics[i].c, s = e->pics[i].s;
+            s32 cx = ((s32)e->pics[i].x << 16) + (w << 15), cy = ((s32)e->pics[i].y << 16) + (h << 15);
+            s32 dy = ((s32)y << 16) + 0x8000 - cy;
+
+            for (x = px0; x < px1; x++) {
+                s32 dx = ((s32)x << 16) + 0x8000 - cx;
+                s32 u = (s32)(((s64)c * dx + (s64)s * dy) >> 16) + (w << 15);
+                s32 v = (s32)(((s64)c * dy - (s64)s * dx) >> 16) + (h << 15);
+                int sx = u >> 16, sy = v >> 16;
+
+                if (u >= 0 && v >= 0 && sx < w && sy < h && px[sy * w + sx]) {
+                    line[x] = px[sy * w + sx];
+                }
+            }
+        }
+    }
+    *x0 = a;
+    *x1 = b;
+    return TRUE;
 }
 
 /* (wider canvas: a screen laid out anew, NitroPort_WideSplitScreen and
@@ -2432,6 +2585,7 @@ typedef struct EngineWork {
     u8 enableLine[WMAX];
     u8 layer1[WMAX];      /* each pixel's front layer (0-3 BG, 4 OBJ), for the effects */
     u8 alpha3d[WMAX];     /* BG0's 3D alpha (0-31) on this line, when scrolled */
+    u16 picLine[WMAX];    /* the pictures drawn with a BG on this line (PicturesOnLine) */
 } EngineWork;
 
 static EngineWork sWork[2];
@@ -2482,6 +2636,11 @@ static const u16 *LayerLine(const Engine *e, EngineWork *work, int bg, int kind,
         *alpha3d = work->alpha3d;
     } else {
         DrawAffineBg(e, bg, kind, bgcnt, dispcnt, y, line);
+    }
+    if ((e->picBgs >> bg) & 1) {
+        int x0, x1;
+
+        (void)PicturesOnLine(e, bg, y, line, FALSE, &x0, &x1);
     }
     return line;
 }
@@ -2961,7 +3120,14 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 if (layer == SLOT_OBJ) {
                     px = objLine->color;
                 } else if (kind[bg] == BG_TEXT) {
-                    /* straight into the line */
+                    /* straight into the line (the pictures drawn with it
+                     * first: in front of it) */
+                    int px0, px1;
+
+                    if (((e->picBgs >> bg) & 1) &&
+                        PicturesOnLine(e, bg, y, work->picLine, TRUE, &px0, &px1)) {
+                        Merge(&t, work->picLine, NULL, p, px0, px1, blend2 ? flags | T_LAYER : flags);
+                    }
                     DrawTextBg(e, bg, bgcnt[bg], dispcnt, y, &t, blend2 ? flags | T_LAYER : flags);
                     continue;
                 } else {
@@ -3155,6 +3321,9 @@ static void SetUpParts(Engine *e)
             break;
         case NITRO_WIDE_SHIFT3D:
             e->shift3d = (short)(e->shift3d + p->dx);
+            break;
+        case NITRO_WIDE_PICTURE:
+            SetUpPicture(e, p);
             break;
         }
     }
