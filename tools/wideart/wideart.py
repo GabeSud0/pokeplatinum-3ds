@@ -1224,6 +1224,8 @@ class Editor(tk.Tk):
         save_settings(self.settings)
         self.canvas.configure(scrollregion=self._region())
         self._view_at(px * new - at[0], py * new - at[1])
+        if self.canvas.winfo_width() > 1:
+            self.centred = True           # (the view's where it was put: not centred again)
         self.redraw()
 
     def on_pan_start(self, event):
@@ -2041,8 +2043,11 @@ def self_test(log_path: str | None = None) -> int:
             app.import_png(str(out))
             check("imported back where the picture is",
                   len(app.stack()) == n + 1 and (app.paint().x, app.paint().y) == (-4, 10))
-            # zooming about the mouse: the pixel under it stays
+            # zooming about the mouse: the pixel under it stays (the view first put where a shown window has
+            # it: a hidden one is only laid out later, on Windows)
             app.set_zoom(3)
+            app.update()
+            app.centre_view()
             app.update()
             before = app.canvas.canvasx(50) / 3
             app.set_zoom(6, at=(50, 50))
