@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 18:00:00 -0700
+Subject: [PATCH] The trainer card laid out across the wider screen (SDK_PORT_3DS)
+
+The 3DS remaster draws the upper screen wider than the DS's. The trainer
+card is laid out across it, as drawn in a reference for it: its body 31
+pixels wider each side, the fields and their values at its left edge,
+the photo at its right edge; TIME, ADVENTURE STARTED and the back's rows
+with their labels at the left and their values at the right; the
+signature in the middle of its widened box. The app tells the port how
+the card's BGs split (NitroPort_WideSplitScreen: the front's when it
+starts and turns to the front, the back's when it turns to the back,
+none when it ends); the port's 2D renderer moves the parts apart, through
+the BGs' matrix, so the card turning over stays laid out as it turns.
+---
+ src/applications/trainer_case/main.c | 50 ++++++++++++++++++++++++++++
+ 1 file changed, 50 insertions(+)
+
+diff --git a/src/applications/trainer_case/main.c b/src/applications/trainer_case/main.c
+index d0fd6678..eeba8692 100644
+--- a/src/applications/trainer_case/main.c
++++ b/src/applications/trainer_case/main.c
+@@ -35,6 +35,44 @@
+ #include "res/graphics/trainer_case/trainer_case.naix"
+ #include "res/text/bank/trainer_card.h"
+ 
++#ifdef SDK_PORT_3DS
++// The 3DS remaster draws the upper screen wider than the DS's, and lays the
++// card out across it (a reference drawn for it, 2026-10-15): its body 31
++// pixels wider each side, the fields and their values to its left edge,
++// the photo to its right edge; TIME, ADVENTURE STARTED and the back's rows
++// with their labels at the left and their values at the right; the
++// signature in the middle of its widened box. The port moves the parts of
++// the card's BGs apart (3ds_port/nitro/include/nitro_port_wide.h): each row
++// is the BGs (a bit each), the lines (top, bottom), the column the split is
++// at, how far the parts left and right of it move, and whether the column
++// is drawn on between them (the body) or nothing is (the text). Through the
++// BGs' matrix: the card turning over stays laid out as it turns.
++extern void NitroPort_WideSplitScreen(int engine, const short *splits, int count);
++
++#define WIDE_CARD_ENGINE 1   // the sub engine (the upper screen here)
++#define WIDE_CARD_SPREAD 31
++#define WIDE_CARD_BODY   (1 << 2)   // BG_LAYER_SUB_2
++#define WIDE_CARD_TEXT   (1 << 3)   // BG_LAYER_SUB_3: the text, the photo, the signature
++
++static const short sWideCardFront[][7] = {
++    { WIDE_CARD_BODY, 0, 192, 158, -WIDE_CARD_SPREAD, WIDE_CARD_SPREAD, 1 },
++    // IDNo. to SCORE (values end at 151) left, the photo (its box from 163) right
++    { WIDE_CARD_TEXT, 0, 144, 158, -WIDE_CARD_SPREAD, WIDE_CARD_SPREAD, 0 },
++    // TIME, ADVENTURE STARTED: the labels (to 115) left, the values right
++    { WIDE_CARD_TEXT, 144, 192, 140, -WIDE_CARD_SPREAD, WIDE_CARD_SPREAD, 0 },
++};
++
++static const short sWideCardBack[][7] = {
++    { WIDE_CARD_BODY, 0, 192, 158, -WIDE_CARD_SPREAD, WIDE_CARD_SPREAD, 1 },
++    // HALL OF FAME DEBUT, TIMES LINKED
++    { WIDE_CARD_TEXT, 0, 72, 140, -WIDE_CARD_SPREAD, WIDE_CARD_SPREAD, 0 },
++    // LINK BATTLES: W and the wins (to 175) left, L and the losses (from 192) right
++    { WIDE_CARD_TEXT, 72, 88, 184, -WIDE_CARD_SPREAD, WIDE_CARD_SPREAD, 0 },
++    // LINK TRADES
++    { WIDE_CARD_TEXT, 88, 104, 140, -WIDE_CARD_SPREAD, WIDE_CARD_SPREAD, 0 },
++};
++#endif
++
+ enum TrainerCaseState {
+     TRAINER_CASE_STATE_INITIAL = 0,
+     TRAINER_CASE_STATE_MAIN,
+@@ -292,6 +330,9 @@ BOOL TrainerCaseApp_Init(ApplicationManager *appMan, int *state)
+     }
+ 
+     TrainerCase_ResetAffineTransforms();
++#ifdef SDK_PORT_3DS
++    NitroPort_WideSplitScreen(WIDE_CARD_ENGINE, &sWideCardFront[0][0], NELEMS(sWideCardFront));
++#endif
+ 
+     SetVBlankCallback(TrainerCase_TransferGraphicsOnVBlank, NULL);
+     NetworkIcon_InitIfConnected();
+@@ -426,6 +467,9 @@ BOOL TrainerCaseApp_Exit(ApplicationManager *appMan, int *state)
+     TrainerCaseApp *trainerCaseApp = ApplicationManager_Data(appMan);
+ 
+     TrainerCase_ResetAffineTransforms();
++#ifdef SDK_PORT_3DS
++    NitroPort_WideSplitScreen(WIDE_CARD_ENGINE, NULL, 0);
++#endif
+     TrainerCase_FreeStrings(trainerCaseApp);
+     TrainerCase_FreeSprites(&trainerCaseApp->spriteData);
+ 
+@@ -804,6 +848,9 @@ static BOOL TrainerCase_FlipTrainerCard(TrainerCaseApp *trainerCaseApp)
+             Bg_ClearTilemap(trainerCaseApp->bgConfig, BG_LAYER_SUB_3);
+             TrainerCard_DrawBackText(trainerCaseApp->windows, trainerCaseApp->trainerCase);
+             TrainerCase_DisplaySignature(trainerCaseApp->bgConfig, BG_LAYER_SUB_3, trainerCaseApp->signature);
++#ifdef SDK_PORT_3DS
++            NitroPort_WideSplitScreen(WIDE_CARD_ENGINE, &sWideCardBack[0][0], NELEMS(sWideCardBack));
++#endif
+         } else {
+             trainerCaseApp->viewingBack = FALSE;
+             Graphics_LoadTilemapToBgLayer(NARC_INDEX_GRAPHIC__TRAINER_CASE, trainer_card_front_NSCR, trainerCaseApp->bgConfig, BG_LAYER_SUB_2, 0, 0, FALSE, HEAP_ID_TRAINER_CASE);
+@@ -811,6 +858,9 @@ static BOOL TrainerCase_FlipTrainerCard(TrainerCaseApp *trainerCaseApp)
+             Bg_ClearTilemap(trainerCaseApp->bgConfig, BG_LAYER_SUB_3);
+             TrainerCase_DrawTrainer(trainerCaseApp);
+             TrainerCard_DrawFrontText(trainerCaseApp->windows, trainerCaseApp->trainerCase);
++#ifdef SDK_PORT_3DS
++            NitroPort_WideSplitScreen(WIDE_CARD_ENGINE, &sWideCardFront[0][0], NELEMS(sWideCardFront));
++#endif
+         }
+ 
+         trainerCaseApp->subState++;
+-- 
+2.43.0
+

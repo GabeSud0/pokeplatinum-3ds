@@ -1,7 +1,8 @@
 /*
  * Where the game's windows are, for the 3DS remaster's wider upper screen
- * (include/nitro_port_wide.h). The game's thread adds and removes them;
- * the drawing threads read them: a small table under a spin lock.
+ * (include/nitro_port_wide.h), and the splits of a screen laid out anew.
+ * The game's thread adds and removes them; the drawing threads read them:
+ * small tables under a spin lock.
  */
 #include <nitro_port_wide.h>
 #include <nitro_port_render2d.h>
@@ -213,6 +214,51 @@ uint32_t NitroPort_WideWindowsSerial(void)
     return sSerial;
 }
 
+/* ------------------------------------------- a screen laid out anew */
+
+static NitroWideSplit sSplits[2][NITRO_WIDE_MAX_SPLITS];
+static int sSplitCount[2];
+
+void NitroPort_WideSplitScreen(int engine, const short *splits, int count)
+{
+    int e = engine ? 1 : 0, i, n = 0;
+
+    if (splits == NULL || count < 0) {
+        count = 0;
+    }
+    lock();
+    for (i = 0; i < count && n < NITRO_WIDE_MAX_SPLITS; i++) {
+        const short *row = splits + i * 7;
+        NitroWideSplit *s = &sSplits[e][n];
+
+        if (row[1] < 0 || row[2] <= row[1] || (row[0] & 0x0F) == 0) {
+            continue;   /* (no lines, or no BGs) */
+        }
+        s->bgs = (uint8_t)(row[0] & 0x0F);
+        s->top = (uint16_t)row[1];
+        s->bottom = (uint16_t)row[2];
+        s->x = row[3];
+        s->left = row[4];
+        s->right = row[5];
+        s->fill = (uint8_t)(row[6] != 0);
+        n++;
+    }
+    sSplitCount[e] = n;
+    sSerial++;
+    unlock();
+}
+
+int NitroPort_WideSplits(int engine, NitroWideSplit *out)
+{
+    int e = engine ? 1 : 0, n;
+
+    lock();
+    n = sSplitCount[e];
+    memcpy(out, sSplits[e], (size_t)n * sizeof(*out));
+    unlock();
+    return n;
+}
+
 /* ------------------------------------------------------- the layout */
 
 static int sWideExtra;
@@ -243,7 +289,9 @@ int NitroPort_WideScreenExtra(void)
  * backdrop, or the 3D). The windows the game anchors (the place name
  * sign, patch 0014) move to the screen's edge, and so do the framed ones
  * by the DS's edges (menus, patch 0015), their sprites with them; a
- * text box across the screen has its frame widened to the edges. The
+ * text box across the screen has its frame widened to the edges. A
+ * screen redrawn for the wider screen (the trainer card, patch 0016) the
+ * game lays out in parts that move apart (NitroPort_WideSplitScreen). The
  * battle's health boxes the game moves itself (patch 0013,
  * NitroPort_WideScreenExtra). The battle's background (engine A's BG3) is
  * a picture wider than the DS's screen (a 512-pixel map: the trainer's

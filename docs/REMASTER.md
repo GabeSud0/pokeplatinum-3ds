@@ -186,6 +186,20 @@ stretched:
   its frame's left part at the screen's left edge and its right part at
   the right edge, each line of the frame's inner columns drawn on between
   them; the text stays where the DS has it.
+- **Screens redrawn for the wider screen.** For a screen with a reference
+  drawn for the wider screen, the game lays the screen out in parts that
+  move apart (`NitroPort_WideSplitScreen`): on given lines of given BGs,
+  what's left of a column moves one way and what's right of it the other,
+  with that column drawn on between them (a card's body, widened) or
+  nothing (the text over it). Only the DS's 256 columns move, nothing from
+  beyond them. On an affine BG the parts are laid out on the BG's own
+  picture, before its matrix, so a card that turns over keeps its layout
+  as it turns; its hand-drawn picture, if there is one, goes through the
+  matrix too. The trainer card (patch 0016, 2026-10-15): its body is 31
+  pixels wider each side; the fields and their values sit at its left
+  edge and the photo at its right; TIME, ADVENTURE STARTED and the back's
+  rows have their labels at the left and their values at the right; the
+  signature stays in the middle of its widened box.
 - **The battle's health boxes** go to the screen's edges, the player's
   right and the opponent's left (`patches/pokeplatinum/0013`, by
   `NitroPort_WideScreenExtra`).
