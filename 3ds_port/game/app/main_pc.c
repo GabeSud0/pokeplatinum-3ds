@@ -906,6 +906,7 @@ static void ControlWait(void)
                 remove(path);
                 NitroPort_Log("[pc] control: quit");
                 StopSound();
+                NitroPort_CardFlush();
                 fflush(NULL);   /* stderr, and a --gx-record file */
                 _exit(0);
             }

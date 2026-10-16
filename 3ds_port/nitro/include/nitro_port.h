@@ -234,6 +234,12 @@ void NitroPort_InitArm7Services(void);
  * Set before CARD_IdentifyBackup. A missing file is created filled with 0xFF.
  * Changing the path while a card request is active is not supported. */
 void NitroPort_SetSavePath(const char *path);
+/* The save's changes not in its file yet (the pages of a write until its
+ * last: a write goes into the file whole), into it now: for the HOME menu,
+ * sleep and closing (a write under way finishes it itself). And how many
+ * writes into the file there have been. Any thread. */
+void NitroPort_CardFlush(void);
+uint32_t NitroPort_CardFileWrites(void);
 
 /* The 3DS main loop supplies DS bottom-screen coordinates once per frame.
  * x is clamped to 0..255, y to 0..191; release ignores coordinates. The

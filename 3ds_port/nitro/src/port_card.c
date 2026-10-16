@@ -7,6 +7,7 @@
 #include <nitro.h>
 #include <nitro_port.h>
 #include "card_common.h"
+#include "port_platform.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -23,6 +24,35 @@ static FILE *sSave;
 static CARDiCommandArg *sCommand;
 static BOOL sAwaitInitAddress;
 
+/* The save's lock: a card request, or NitroPort_CardFlush from the HOME
+ * menu's or closing's thread. */
+static volatile char sLock;
+
+static void lock(void)
+{
+    while (__atomic_test_and_set(&sLock, __ATOMIC_ACQUIRE)) {
+        NitroPortPlatform_Sleep(100);
+    }
+}
+
+static BOOL try_lock(uint32_t ms)
+{
+    while (__atomic_test_and_set(&sLock, __ATOMIC_ACQUIRE)) {
+        if (ms-- == 0) {
+            return FALSE;
+        }
+        NitroPortPlatform_Sleep(1000);
+    }
+    return TRUE;
+}
+
+static void unlock(void)
+{
+    __atomic_clear(&sLock, __ATOMIC_RELEASE);
+}
+
+static void flush_locked(void);
+
 void NitroPort_SetSavePath(const char *path)
 {
     char *copy = NULL;
@@ -35,20 +65,35 @@ void NitroPort_SetSavePath(const char *path)
         }
         memcpy(copy, path, len + 1);
     }
+    lock();
+    flush_locked();   /* (the old save's last changes into its file) */
     if (sSave) {
         fclose(sSave);
         sSave = NULL;
     }
     free(sSavePath);
     sSavePath = copy;
+    unlock();
 }
 
 /* The save, as it is in the file, kept in memory: read once (one request
  * to the SD card), reads served from here, and each change written to the
- * file before the request completes. (Read and written in pieces of 256
- * bytes through stdio's 1 KB buffer, loading a save at Continue was some
- * 2000 requests to the card, 1.8 s, and saving 1.7 s; 2026-10-15.) */
+ * file before the request that ends it completes. (Read and written in
+ * pieces of 256 bytes through stdio's 1 KB buffer, loading a save at
+ * Continue was some 2000 requests to the card, 1.8 s, and saving 1.7 s;
+ * 2026-10-15.)
+ *
+ * The SDK writes a save 256 bytes (a page) a request: a full save was 512
+ * writes to the SD card, 3.3 s on the 3DS with the game held up all that
+ * time (2026-10-16). The pages of one write (CARD_WriteAndVerifyFlash...:
+ * the game's block of the save, then each footer) go into the file
+ * together, with its last page: what the game waits for (its callback,
+ * its result) is the whole write in the file, as before; a write cut
+ * short (the 3DS turned off) leaves the file as it was, the save's other
+ * copy whole, as a write cut short on the DS's flash would. */
 static unsigned char sImage[SAVE_BYTES];
+static u32 sPendingLo = SAVE_BYTES, sPendingHi;   /* changed, not in the file yet */
+static u32 sFileWrites;
 
 static void close_save(void)
 {
@@ -102,8 +147,9 @@ static BOOL read_save(u32 offset, void *dst, u32 length)
  * file holds), and the request fails. */
 static BOOL store(u32 offset, u32 length)
 {
-    /* The ARM9 must not observe request completion until data is durable
-     * at the stdio level (including requests from async CARD APIs). */
+    /* The ARM9 must not see a write complete before it's in the file at
+     * the stdio level (async CARD APIs included): this is its last page's
+     * request, the write's earlier pages with it (flush_pending). */
     if (fseek(sSave, (long)offset, SEEK_SET) == 0 &&
         fwrite(sImage + offset, 1, length, sSave) == length && fflush(sSave) == 0)
         return TRUE;
@@ -115,7 +161,51 @@ static BOOL store(u32 offset, u32 length)
     return FALSE;
 }
 
-static BOOL write_save(u32 offset, const void *src, u32 length, BOOL program)
+/* What's changed and not in the file yet, into it (one write): FALSE if
+ * that failed (the image is the file's again there). */
+static BOOL flush_pending(void)
+{
+    u32 lo = sPendingLo, hi = sPendingHi;
+    u64 start;
+    BOOL ok;
+
+    if (lo >= hi) {
+        return TRUE;
+    }
+    sPendingLo = SAVE_BYTES;
+    sPendingHi = 0;
+    if (!open_save()) {
+        return FALSE;
+    }
+    start = NitroPortPlatform_Nanoseconds();
+    ok = store(lo, hi - lo);
+    sFileWrites++;
+    if (hi - lo >= 4096) {
+        NitroPort_Log("[save] %u KB into the file in %.0f ms%s", (unsigned)((hi - lo) / 1024),
+                      (double)(NitroPortPlatform_Nanoseconds() - start) / 1e6, ok ? "" : ": it FAILED");
+    }
+    return ok;
+}
+
+static void flush_locked(void)
+{
+    if (sPendingLo < sPendingHi && sSave != NULL) {
+        (void)flush_pending();
+    }
+}
+
+static void note_pending(u32 offset, u32 length)
+{
+    if (offset < sPendingLo) {
+        sPendingLo = offset;
+    }
+    if (offset + length > sPendingHi) {
+        sPendingHi = offset + length;
+    }
+}
+
+/* later: a page of a longer write, not its last (into the file with that) */
+static BOOL write_save(u32 offset, const void *src, u32 length, BOOL program, BOOL later)
 {
     const unsigned char *data = (const unsigned char *)src;
     u32 i;
@@ -127,7 +217,8 @@ static BOOL write_save(u32 offset, const void *src, u32 length, BOOL program)
     } else {
         memcpy(sImage + offset, data, length);
     }
-    return store(offset, length);
+    note_pending(offset, length);
+    return later ? TRUE : flush_pending();
 }
 
 static BOOL verify_save(u32 offset, const void *source, u32 length)
@@ -140,14 +231,26 @@ static BOOL erase_save(u32 offset, u32 length)
 {
     if (!range_ok(offset, length) || !open_save()) return FALSE;
     memset(sImage + offset, 0xff, length);
-    return store(offset, length);
+    note_pending(offset, length);
+    return flush_pending();
 }
 
 static CARDResult execute_card_command(CARDRequest request)
 {
     CARDiCommandArg *cmd = sCommand;
-    BOOL okay = FALSE;
+    BOOL okay = FALSE, later = FALSE;
     if (!cmd) return CARD_RESULT_NO_RESPONSE;
+    if (request == CARD_REQ_WRITE_BACKUP) {
+        /* A page of a longer write (CARDi_RequestStreamCommandCore, the
+         * only one that asks for WRITE: the ARM9's task, waiting for this
+         * request, has the rest of it still to go, this page included),
+         * not its last: into the file with the last. */
+        later = cardi_common.len > cmd->len && cardi_common.dst == cmd->dst;
+    } else if (request != CARD_REQ_VERIFY_BACKUP && sSave != NULL &&
+               sPendingLo < sPendingHi && !flush_pending()) {
+        /* (anything else: what's changed into the file first) */
+        return CARD_RESULT_FAILURE;
+    }
     if (request == CARD_REQ_IDENTIFY) {
         /* Pokémon Platinum uses the 4 Mbit FLASH cartridge. Reject other
          * sizes so we can never silently corrupt a 512 KiB .sav image. */
@@ -163,11 +266,11 @@ static CARDResult execute_card_command(CARDRequest request)
         break;
     case CARD_REQ_WRITE_BACKUP:
         okay = write_save(cmd->dst, (const void *)(uintptr_t)cmd->src,
-                          cmd->len, FALSE);
+                          cmd->len, FALSE, later);
         break;
     case CARD_REQ_PROGRAM_BACKUP:
         okay = write_save(cmd->dst, (const void *)(uintptr_t)cmd->src,
-                          cmd->len, TRUE);
+                          cmd->len, TRUE, FALSE);
         break;
     case CARD_REQ_VERIFY_BACKUP:
         okay = verify_save(cmd->dst, (const void *)(uintptr_t)cmd->src, cmd->len);
@@ -220,6 +323,24 @@ void NitroPort_HandleCard(int tag, u32 data, BOOL err)
         return; /* ACK after ARM9 sends its shared-memory address. */
     }
     if (!sCommand) sCommand = cardi_common.cmd;
-    if (sCommand) sCommand->result = execute_card_command(req);
+    if (sCommand) {
+        lock();
+        sCommand->result = execute_card_command(req);
+        unlock();
+    }
     NitroPort_Arm7Reply(PXI_FIFO_TAG_FS, CARD_REQ_ACK, TRUE);
+}
+
+void NitroPort_CardFlush(void)
+{
+    /* (a request under way: its last page writes it all, soon) */
+    if (try_lock(200)) {
+        flush_locked();
+        unlock();
+    }
+}
+
+uint32_t NitroPort_CardFileWrites(void)
+{
+    return sFileWrites;
 }

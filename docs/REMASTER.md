@@ -351,7 +351,15 @@ waiting at once.
 The save is kept in memory (read once when the game first opens it, one
 request to the SD card); each change the game makes is written to the file
 before the game is told it's done, as the DS's flash had it. Loading a save
-at Continue took 1.8 s, the save read 256 bytes at a time.
+at Continue took 1.8 s, the save read 256 bytes at a time. The game writes
+the save a page (256 bytes) at a time too: a write's pages go into the file
+together, with its last one (one write to the SD card for each block of the
+save and each footer, not 512), so a save no longer holds the game up 3.3 s
+on the 3DS (2026-10-16). What the game waits for is still the whole write
+in the file; a write cut short leaves the file as it was (the save's other
+copy whole). The HOME menu, sleep and closing write anything waiting. The
+log says `[save] N KB into the file in N ms` for each write of 4 KB or
+more.
 
 The log says what's on (`[compose] screens drawn by the GPU: ...`) and,
 every two seconds, `[perf] display: N frames/s drawn (N with a new 3D

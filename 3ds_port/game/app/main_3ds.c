@@ -69,6 +69,8 @@ void NitroPort_SoundRender(int16_t *stereo, size_t frames);
 void NitroPort_SoundPumpReplies(void);
 /* (nitro_port_fs.h, which needs the SDK's headers) */
 void NitroPort_FsReadStats(uint32_t *reads, uint64_t *bytes, uint64_t *micros);
+/* (nitro_port.h) the save's changes waiting, into its file */
+void NitroPort_CardFlush(void);
 
 #define AUDIO_FRAMES 512
 #define AUDIO_BUFFERS 4
@@ -1513,6 +1515,7 @@ static void OnAptEvent(APT_HookType type, void *param)
             svcSleepThread(1000000LL);
         }
         settled = !__atomic_load_n(&sComposing, __ATOMIC_SEQ_CST) && !DrawersBusy();
+        NitroPort_CardFlush();   /* (the save's file whole, should the 3DS go off from here) */
         NitroPort_Log("[apt] %s: drawing stopped%s (%.0f ms)",
                       type == APTHOOK_ONEXIT ? "closing" : type == APTHOOK_ONSLEEP ? "going to sleep"
                                                                                   : "the HOME menu",
@@ -2218,6 +2221,7 @@ int main(int argc, char **argv)
         QUIT_STEP("geometry stopped", StopGeometry());
         QUIT_STEP("display stopped", StopGpu());
         QUIT_STEP("sound stopped", StopSound());
+        QUIT_STEP("the save's file written", NitroPort_CardFlush());
         aptUnhook(&sAptHook);
 #undef QUIT_STEP
         NitroPort_Log("[quit] done in %.0f ms%s", (double)(svcGetSystemTick() - start) * 1000.0 / SYSCLOCK_ARM11,
