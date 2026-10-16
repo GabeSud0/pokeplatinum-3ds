@@ -185,7 +185,10 @@ stretched:
 - **Text boxes span the screen.** A text box across the DS's screen has
   its frame's left part at the screen's left edge and its right part at
   the right edge, each line of the frame's inner columns drawn on between
-  them; the text stays where the DS has it.
+  them; the text starts a pixel inside the frame's left part (2026-10-16,
+  from a drawing of the PC's text box: the room the wider screen gives is
+  used, the text at the left as on the DS). Its lines stay as the game
+  broke them.
 - **Screens redrawn for the wider screen.** For a screen with a reference
   drawn for the wider screen, the game lays the screen out in parts that
   move apart (`NitroPort_WideSplitScreen`): on given lines of given BGs,
@@ -200,6 +203,36 @@ stretched:
   edge and the photo at its right; TIME, ADVENTURE STARTED and the back's
   rows have their labels at the left and their values at the right; the
   signature stays in the middle of its widened box.
+- **Screens laid out in parts** (`NitroPort_WideScreenParts`, patches
+  0017-0022, 2026-10-16). The splits are a case of these. An app gives
+  the port its screen as a list of parts, when the screen changes, and
+  none when it ends (`include/port_wide_layout.h` in the decompilation):
+  a BG's columns moved (MOVE), a BG's column drawn on where others would
+  be (FILL), the sprites in a rectangle moved (OBJS; stretched: their edge
+  column drawn back to where they were, a cursor as wide as its row), the
+  3D moved (SHIFT3D). On a BG's line with parts, the DS's picture shows
+  where it is but for the columns MOVEs take, and each part is drawn over
+  it in turn (a column shows the last part over it); beside the DS's
+  screen, only what parts put there. Lines and columns are the BG's
+  picture's (they go with its scroll), or the DS's screen's (a box's
+  wallpapers sliding past behind a fixed edge). A moved BG shows its own
+  pixels, not a hand-drawn picture of it, and moved sprites themselves;
+  a screen's static backgrounds keep their pictures (the Pokédex's pages).
+  From references drawn for the wider screen:
+  - the summary: the left column (name, picture, item) toward the left
+    edge, each page's panel widened to the right edge with its values
+    there, the move details, the memo and contest pages, the exit page;
+  - the party: the panels 32 to the right, the background widened left;
+  - the bag: the bag and its pockets left, the list widened to the right
+    edge (counts at the edge, the cursor as wide as its row), the
+    description box widened across, its text by the item's icon;
+  - the boxes: the panel of the Pokémon looked at at the left edge, the
+    box at the right edge (its party tray, icons, hand and buttons with
+    it), the wallpaper's edge between; the boxes to jump to and an item's
+    description across the middle; the message box widened like a text
+    box, the menus at the right edge;
+  - the Pokédex's list: its label and picture left, its rows and scroll
+    bar right, the counts apart.
 - **The battle's health boxes** go to the screen's edges, the player's
   right and the opponent's left (`patches/pokeplatinum/0013`, by
   `NitroPort_WideScreenExtra`).

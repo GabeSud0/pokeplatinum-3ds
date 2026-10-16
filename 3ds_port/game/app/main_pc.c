@@ -385,9 +385,10 @@ static int RemasterShot(const char *path)
                 if (split.has3d) {
                     /* where the 3D's x is: the DS's 256 at origin, or (wide)
                      * the whole canvas */
+                    int scroll = split.scroll3d >= 256 ? split.scroll3d - 512 : split.scroll3d;
                     int ix = NitroPort_WideScreenExtra() && screen == 0 && width > 256
-                                 ? x * 256 / width
-                                 : x - split.origin - (split.scroll3d >= 256 ? split.scroll3d - 512 : split.scroll3d);
+                                 ? (x + scroll) * 256 / width
+                                 : x - split.origin + scroll;
 
                     if (ix >= 0 && ix < 256 && (image3d[y * 256 + ix] & 0x8000)) {
                         uint16_t p = image3d[y * 256 + ix] & 0x7FFF;

@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 01:00:00 -0700
+Subject: [PATCH] The wider screen's layouts: a header for the game's apps
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The 3DS remaster draws the upper screen wider than the DS's: 32 pixels
+more each side. The screens redrawn for it (the summary, the party, the
+bag, the boxes, the Pokédex's list) are laid out in parts that move
+apart: an app tells the port its screen's parts when the screen changes,
+and none when it ends (3ds_port/nitro/include/nitro_port_wide.h,
+NitroPort_WideScreenParts). This header has the calls and a macro for
+each kind of part: a BG's columns moved (WIDE_MOVE), a BG's column drawn
+on across others (WIDE_FILL), the sprites in a rectangle moved
+(WIDE_OBJS, WIDE_OBJS_STRETCH), the 3D moved (WIDE_SHIFT3D); and how
+wide the screen is (NitroPort_WideScreenExtra), and the frames an app
+draws round its windows itself (NitroPort_WindowFramed).
+---
+ include/port_wide_layout.h | 53 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 53 insertions(+)
+ create mode 100644 include/port_wide_layout.h
+
+diff --git a/include/port_wide_layout.h b/include/port_wide_layout.h
+new file mode 100644
+index 00000000..661cfdd6
+--- /dev/null
++++ b/include/port_wide_layout.h
+@@ -0,0 +1,53 @@
++#ifndef POKEPLATINUM_PORT_WIDE_LAYOUT_H
++#define POKEPLATINUM_PORT_WIDE_LAYOUT_H
++
++#ifdef SDK_PORT_3DS
++// The 3DS remaster draws the upper screen wider than the DS's: 32 pixels
++// more each side. A screen redrawn for it is laid out in parts that move
++// apart (3ds_port/nitro/include/nitro_port_wide.h): an app tells the port
++// its screen's parts when the screen changes, and none when it ends.
++//
++// Each part is a row of 8 numbers. Lines and columns are the DS's (of the
++// BG's own picture: as it is with no scroll), from 0; x0..x1-1, top..
++// bottom-1. On a BG's line with parts, the BG shows where the DS has it
++// but for the columns WIDE_MOVEs take, and each part is drawn over that in
++// turn (a column shows the last part over it, clear where that part is
++// clear); beside the DS's screen, only what parts put there. A BG's line
++// with no part shows as the DS has it, nothing beside it.
++//   WIDE_MOVE: the BGs' (WIDE_BG(n), a bit each) columns x0..x1-1 drawn dx
++//     pixels to the right (negative: left);
++//   WIDE_FILL: where the BGs' columns x0..x1-1 would be (as far beyond the
++//     DS's edges as -32..287), their column col drawn on;
++//   WIDE_OBJS: the sprites whose middle is in x0..x1-1, top..bottom-1 of
++//     the DS's screen moved dx to the right (the first part that has them);
++//     WIDE_OBJS_STRETCH: the same, each one's edge column drawn on back to
++//     where it was (a cursor's right half moved with its row's right end);
++//   WIDE_SHIFT3D: the 3D picture moved dx to the right.
++// WIDE_SCREEN_COLUMNS with a part's BGs: its x0..x1-1 are columns of the
++// DS's screen, not of the BG's picture: they stay put as the BG scrolls
++// (a WIDE_FILL's col is still the picture's).
++extern void NitroPort_WideScreenParts(int engine, const short *rows, int count);
++// How many pixels the screen is wider than the DS's each side (0: the DS's).
++extern int NitroPort_WideScreenExtra(void);
++// A frame drawn round a window by an app's own code (1: a menu's, a tile
++// all round; 2: a text box's, 2 tiles left and 3 right) or taken off (0):
++// as with the game's frames (render_window.c), the menus by the DS's edges
++// go to the wider screen's, the text boxes across it widen.
++extern void NitroPort_WindowFramed(const void *window, int frame);
++
++#define WIDE_ENGINE_MAIN 0
++#define WIDE_ENGINE_SUB  1
++#define WIDE_BG(n)       (1 << (n))
++#define WIDE_SCREEN_COLUMNS 0x10
++
++#define WIDE_MOVE(bgs, top, bottom, x0, x1, dx)  { 1, (bgs), (top), (bottom), (x0), (x1), (dx), 0 }
++#define WIDE_FILL(bgs, top, bottom, x0, x1, col) { 2, (bgs), (top), (bottom), (x0), (x1), 0, (col) }
++#define WIDE_OBJS(top, bottom, x0, x1, dx)        { 3, 0, (top), (bottom), (x0), (x1), (dx), 0 }
++#define WIDE_OBJS_STRETCH(top, bottom, x0, x1, dx) { 3, 0, (top), (bottom), (x0), (x1), (dx), 1 }
++#define WIDE_SHIFT3D(dx)                          { 4, 0, 0, 0, 0, 0, (dx), 0 }
++
++#define WIDE_LAYOUT(engine, table) NitroPort_WideScreenParts((engine), &(table)[0][0], (int)NELEMS(table))
++#define WIDE_LAYOUT_NONE(engine)   NitroPort_WideScreenParts((engine), NULL, 0)
++#endif
++
++#endif // POKEPLATINUM_PORT_WIDE_LAYOUT_H
+-- 
+2.43.0
+

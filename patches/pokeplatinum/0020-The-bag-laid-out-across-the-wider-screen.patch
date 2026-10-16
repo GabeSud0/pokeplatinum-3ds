@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 01:00:00 -0700
+Subject: [PATCH] The bag laid out across the wider screen (SDK_PORT_3DS)
+
+From a reference drawn for the wider screen (2026-10-16): the bag, its
+pocket's name and the pockets' icons toward the screen's left edge, the
+item list widened to the right edge (each item's count at the edge, the
+list's cursor as wide as its row), the description box widened across
+the bottom with its text next to the item's icon.
+---
+ src/applications/bag/main.c    | 52 ++++++++++++++++++++++++++++++++++
+ src/applications/bag/windows.c | 10 +++++++
+ 2 files changed, 62 insertions(+)
+
+diff --git a/src/applications/bag/main.c b/src/applications/bag/main.c
+index 5636b977..62ef2225 100644
+--- a/src/applications/bag/main.c
++++ b/src/applications/bag/main.c
+@@ -53,6 +53,52 @@
+ #include "res/graphics/bag/bag_graphics.naix"
+ #include "res/text/bank/bag.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++
++// The bag across the 3DS remaster's wider upper screen (a reference drawn
++// for it, 2026-10-16): the bag, its pockets and the button below 21 pixels
++// toward the screen's left edge, the list as wide as the screen lets it
++// (from 21 to the left to the right edge): the items' names with its left
++// edge, their counts at its right edge, the cursor as wide as a row. BG1
++// the frame, BG3 the list's box, BG2 the list and the pocket's name, BG0
++// the pockets' icons and the item's description.
++#define BAG_WIDE_LEFT  -21
++#define BAG_WIDE_SPLIT 176   // the list's middle: what's left of it goes left, what's right of it right
++
++static const short sBagWideLayout[][8] = {
++    // the frame: the bag's side and the list's left edge to the left, its
++    // right edge to the screen's, its top and bottom borders drawn on
++    WIDE_FILL(WIDE_BG(1), 0, 141, -32, 0, 0),
++    WIDE_MOVE(WIDE_BG(1), 24, 141, 0, BAG_WIDE_SPLIT, BAG_WIDE_LEFT),
++    WIDE_MOVE(WIDE_BG(1), 0, 24, 58, BAG_WIDE_SPLIT, BAG_WIDE_LEFT),
++    WIDE_FILL(WIDE_BG(1), 0, 141, BAG_WIDE_SPLIT + BAG_WIDE_LEFT, BAG_WIDE_SPLIT + 32, BAG_WIDE_SPLIT - 1),
++    WIDE_MOVE(WIDE_BG(1), 0, 141, BAG_WIDE_SPLIT, 256, 32),
++    WIDE_MOVE(WIDE_BG(1), 0, 24, 0, 58, -2),                       // the BAG label (2 to the left)
++    // below: the button's box to the left
++    WIDE_FILL(WIDE_BG(1), 141, 192, -32, 288, 60),
++    WIDE_MOVE(WIDE_BG(1), 141, 192, 0, 48, BAG_WIDE_LEFT),
++    // the list's box the same
++    WIDE_FILL(WIDE_BG(3), 0, 141, -32, 0, 0),
++    WIDE_MOVE(WIDE_BG(3), 0, 141, 0, BAG_WIDE_SPLIT, BAG_WIDE_LEFT),
++    WIDE_FILL(WIDE_BG(3), 0, 141, BAG_WIDE_SPLIT + BAG_WIDE_LEFT, BAG_WIDE_SPLIT + 32, BAG_WIDE_SPLIT - 1),
++    WIDE_MOVE(WIDE_BG(3), 0, 141, BAG_WIDE_SPLIT, 256, 32),
++    WIDE_FILL(WIDE_BG(3), 141, 192, -32, 288, 0),
++    // the list: the names with its left edge, the counts at its right
++    WIDE_MOVE(WIDE_BG(2), 0, 144, 112, 216, BAG_WIDE_LEFT),
++    WIDE_MOVE(WIDE_BG(2), 0, 144, 216, 256, 32),
++    WIDE_MOVE(WIDE_BG(2), 104, 128, 0, 104, BAG_WIDE_LEFT),       // the pocket's name
++    WIDE_MOVE(WIDE_BG(0), 88, 104, 0, 104, BAG_WIDE_LEFT),        // the pockets' icons
++    // the sprites: the cursor's left part to the left, its right end to
++    // the right (both stretched back), the bag, the pockets' arrows and
++    // the button to the left
++    WIDE_OBJS_STRETCH(0, 192, 104, 168, BAG_WIDE_LEFT),
++    WIDE_OBJS(0, 192, 168, 232, 0),
++    WIDE_OBJS_STRETCH(0, 192, 232, 264, 32),
++    WIDE_OBJS(0, 192, -64, 104, BAG_WIDE_LEFT),
++};
++#endif
++
+ #define DIAL_CENTER_X      (HW_LCD_WIDTH / 2)
+ #define DIAL_CENTER_Y      80
+ #define DIAL_RADIUS        80
+@@ -464,6 +510,9 @@ int BagApplication_Init(ApplicationManager *appMan, int *state)
+     SetupBGLayers(controller->bgConfig);
+     LoadGraphics(controller);
+     DrawTouchScreenButtons(controller);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sBagWideLayout);
++#endif
+ 
+     EnableTouchPad();
+     InitializeTouchPad(4);
+@@ -614,6 +663,9 @@ int BagApplication_Exit(ApplicationManager *appMan, int *state)
+ {
+     BagController *controller = ApplicationManager_Data(appMan);
+ 
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++#endif
+     BagUI_FreeSprites(controller);
+     FreeItemListMenu(controller);
+     SaveCursorPosition(controller);
+diff --git a/src/applications/bag/windows.c b/src/applications/bag/windows.c
+index 429a2344..a019d08c 100644
+--- a/src/applications/bag/windows.c
++++ b/src/applications/bag/windows.c
+@@ -31,6 +31,10 @@
+ #include "res/graphics/bag/bag_graphics.naix"
+ #include "res/text/bank/bag.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++#endif
++
+ #define ITEM_LIST_WINDOW_WIDTH         17
+ #define ITEM_LIST_WINDOW_HEIGHT        TEXT_LINES_TILES(BAG_UI_NUM_VISIBLE_ITEMS)
+ #define ITEM_DESCRIPTION_WINDOW_WIDTH  (HW_LCD_WIDTH / TILE_WIDTH_PIXELS)
+@@ -229,7 +233,13 @@ void BagUI_PrintItemDescription(BagController *controller, u16 item)
+         string = MessageLoader_GetNewString(controller->bagStringsLoader, Bag_Text_CloseBagDescription);
+     }
+ 
++#ifdef SDK_PORT_3DS
++    // (the 3DS remaster's wider screen: next to the button's box, moved 21
++    // pixels toward the screen's left edge; main.c's sBagWideLayout)
++    Text_AddPrinterWithParamsAndColor(&controller->windows[BAG_UI_WINDOW_ITEM_DESCRIPTION], FONT_SYSTEM, string, NitroPort_WideScreenExtra() > 0 ? 40 - 21 : 40, 0, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(15, 14, 0), NULL);
++#else
+     Text_AddPrinterWithParamsAndColor(&controller->windows[BAG_UI_WINDOW_ITEM_DESCRIPTION], FONT_SYSTEM, string, 40, 0, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(15, 14, 0), NULL);
++#endif
+     String_Free(string);
+ }
+ 
+-- 
+2.43.0
+

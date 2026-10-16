@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 01:00:00 -0700
+Subject: [PATCH] The party laid out across the wider screen (SDK_PORT_3DS)
+
+From a reference drawn for the wider screen (2026-10-16): the panels,
+their text and sprites 32 pixels to the right, to the screen's right
+edge, the background widened at the left edge.
+---
+ src/applications/party_menu/main.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/src/applications/party_menu/main.c b/src/applications/party_menu/main.c
+index 039bc375..fbea4368 100644
+--- a/src/applications/party_menu/main.c
++++ b/src/applications/party_menu/main.c
+@@ -68,6 +68,21 @@
+ #include "res/graphics/party_menu/party_menu_graphics.naix"
+ #include "res/text/bank/party_menu.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++
++// The party across the 3DS remaster's wider upper screen (a reference drawn
++// for it, 2026-10-16): the panels, their sprites and the CANCEL button 32
++// pixels right, at the screen's right edge, the background with them (its
++// plain left column drawn on beside); the message box (BG0) where it is.
++static const short sPartyMenuWideLayout[][8] = {
++    WIDE_FILL(WIDE_BG(3), 0, 192, -32, 32, 0),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 0, 256, 32),
++    WIDE_MOVE(WIDE_BG(1) | WIDE_BG(2), 0, 192, 0, 256, 32),
++    WIDE_OBJS(0, 192, -128, 384, 32),
++};
++#endif
++
+ FS_EXTERN_OVERLAY(party_menu_form_change);
+ 
+ typedef struct MemberPanelTemplate {
+@@ -295,6 +310,9 @@ static BOOL PartyMenu_Init(ApplicationManager *appMan, int *state)
+     PartyMenu_AddWindows(application);
+     PartyMenu_InitSpriteResources(application);
+     PartyMenu_InitSprites(application);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sPartyMenuWideLayout);
++#endif
+ 
+     SetupRequestedMode(application);
+     SetupRequestedModePanels(application);
+@@ -669,6 +687,9 @@ static BOOL PartyMenu_Exit(ApplicationManager *appMan, int *state)
+     u32 v1;
+ 
+     SetVBlankCallback(NULL, NULL);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++#endif
+     PartyMenu_CleanupSprites(v0);
+     PartyMenu_RemoveWindows(v0);
+     sub_0207EA24(v0->bgConfig);
+-- 
+2.43.0
+

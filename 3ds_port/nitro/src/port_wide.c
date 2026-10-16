@@ -1,6 +1,7 @@
 /*
  * Where the game's windows are, for the 3DS remaster's wider upper screen
- * (include/nitro_port_wide.h), and the splits of a screen laid out anew.
+ * (include/nitro_port_wide.h), and the splits and parts of a screen laid
+ * out anew.
  * The game's thread adds and removes them; the drawing threads read them:
  * small tables under a spin lock.
  */
@@ -259,6 +260,56 @@ int NitroPort_WideSplits(int engine, NitroWideSplit *out)
     return n;
 }
 
+static NitroWidePart sParts[2][NITRO_WIDE_MAX_PARTS];
+static int sPartCount[2];
+
+void NitroPort_WideScreenParts(int engine, const short *rows, int count)
+{
+    int e = engine ? 1 : 0, i, n = 0;
+
+    if (rows == NULL || count < 0) {
+        count = 0;
+    }
+    lock();
+    for (i = 0; i < count && n < NITRO_WIDE_MAX_PARTS; i++) {
+        const short *row = rows + i * 8;
+        NitroWidePart *p = &sParts[e][n];
+
+        if (row[0] < NITRO_WIDE_MOVE || row[0] > NITRO_WIDE_SHIFT3D) {
+            continue;
+        }
+        if (row[0] != NITRO_WIDE_SHIFT3D && (row[3] <= row[2] || row[5] <= row[4])) {
+            continue;   /* (no lines, or no columns) */
+        }
+        if ((row[0] == NITRO_WIDE_MOVE || row[0] == NITRO_WIDE_FILL) && (row[1] & 0x0F) == 0) {
+            continue;   /* (no BGs) */
+        }
+        p->kind = (uint8_t)row[0];
+        p->bgs = (uint8_t)(row[1] & (0x0F | NITRO_WIDE_SCREEN_COLUMNS));
+        p->top = row[2];
+        p->bottom = row[3];
+        p->x0 = row[4];
+        p->x1 = row[5];
+        p->dx = row[6];
+        p->col = row[7];
+        n++;
+    }
+    sPartCount[e] = n;
+    sSerial++;
+    unlock();
+}
+
+int NitroPort_WideParts(int engine, NitroWidePart *out)
+{
+    int e = engine ? 1 : 0, n;
+
+    lock();
+    n = sPartCount[e];
+    memcpy(out, sParts[e], (size_t)n * sizeof(*out));
+    unlock();
+    return n;
+}
+
 /* ------------------------------------------------------- the layout */
 
 static int sWideExtra;
@@ -289,9 +340,11 @@ int NitroPort_WideScreenExtra(void)
  * backdrop, or the 3D). The windows the game anchors (the place name
  * sign, patch 0014) move to the screen's edge, and so do the framed ones
  * by the DS's edges (menus, patch 0015), their sprites with them; a
- * text box across the screen has its frame widened to the edges. A
- * screen redrawn for the wider screen (the trainer card, patch 0016) the
- * game lays out in parts that move apart (NitroPort_WideSplitScreen). The
+ * text box across the screen has its frame widened to the edges, its text
+ * at the left. A screen redrawn for the wider screen the game lays out in
+ * parts that move apart (the trainer card, patch 0016:
+ * NitroPort_WideSplitScreen; the summary, the party, the bag, the boxes,
+ * the Pokédex's list, patches 0017-0022: NitroPort_WideScreenParts). The
  * battle's health boxes the game moves itself (patch 0013,
  * NitroPort_WideScreenExtra). The battle's background (engine A's BG3) is
  * a picture wider than the DS's screen (a 512-pixel map: the trainer's
