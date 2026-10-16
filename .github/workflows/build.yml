@@ -171,6 +171,8 @@ jobs:
         shell: pwsh
         run: |
           $p = Start-Process -FilePath dist/WideArt.exe -ArgumentList "--selftest" -Wait -PassThru
+          # (the exe has no console: each check's result is in its log)
+          if (Test-Path wideart_selftest.log) { Get-Content wideart_selftest.log }
           if ($p.ExitCode -ne 0) { throw "WideArt self-test failed (exit $($p.ExitCode))" }
 
       - name: Upload WideArt.exe

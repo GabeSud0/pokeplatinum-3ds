@@ -1917,22 +1917,39 @@ class Editor(tk.Tk):
             "4. Save. In the game, L + R + A takes the new pictures in (or restart it)."))
 
 
-def self_test() -> int:
+def self_test(log_path: str | None = None) -> int:
     """(CI) Open a made-up capture; fill a layer's bands, draw on a new
     drawing layer and move it, save: 0 if the picture is where the game
-    reads it and the drawing layers open again."""
+    reads it and the drawing layers open again. Each check's result goes
+    to wideart_selftest.log (the exe has no console to print to)."""
+    import gc
+    import shutil
     import tempfile
+    import traceback
 
-    with tempfile.TemporaryDirectory() as tmp:
+    log = Path(log_path or os.environ.get("WIDEART_SELFTEST_LOG") or "wideart_selftest.log")
+    results: list[str] = []
+    failed: list[str] = []
+
+    def check(name: str, cond) -> bool:
+        good = bool(cond)
+        results.append(("ok    " if good else "FAILED ") + name)
+        if not good:
+            failed.append(name)
+        return good
+
+    tmp = tempfile.mkdtemp(prefix="wideart_selftest_")
+    app = None
+    try:
+        global SETTINGS
         art = Path(tmp) / "wide"
         core.make_sample_capture(art, sprites=True, picture=True)
-        global SETTINGS
         SETTINGS = Path(tmp) / "settings.json"
         app = Editor(str(art))
         app.withdraw()
         app.update()
-        ok = app.cap is not None and app.lid == "bg3" and app.cap.layer("obj102") is not None
-        if ok:
+        if check("the capture opens, on BG3, with the sprites' layer",
+                 app.cap is not None and app.lid == "bg3" and app.cap.layer("obj102") is not None):
             app.fill_bands("mirror")
             app.new_layer()
             app.set_size(3)
@@ -1940,19 +1957,21 @@ def self_test() -> int:
             app.paint().x += 2            # (the Move tool's doing)
             app.save()
             saved = core.existing_art(art, "6d5a3d55615351bf")
-            ok = saved is not None and saved.name == "6d5a3d55615351bf_8_300.png"
+            check("saved where the game reads it", saved is not None and saved.name == "6d5a3d55615351bf_8_300.png")
             pic = core.load_rgba(saved)
-            ok = ok and pic.getpixel((31, 5))[0] == core.snap((32, 7, 9))[0]
-            ok = ok and pic.getpixel((12, 10))[:3] == (255, 0, 0) and pic.getpixel((13, 11))[:3] == (255, 0, 0)
-            ok = ok and pic.getpixel((100, 50)) == core.snap(app.originals["bg3"].getpixel((100, 50)))
+            check("the band mirrored", pic.getpixel((31, 5))[0] == core.snap((32, 7, 9))[0])
+            check("the drawing layer moved 2 right",
+                  pic.getpixel((12, 10))[:3] == (255, 0, 0) and pic.getpixel((13, 11))[:3] == (255, 0, 0))
+            check("the middle kept", pic.getpixel((100, 50)) == core.snap(app.originals["bg3"].getpixel((100, 50))))
             project = core.load_project(art, "6d5a3d55615351bf", 8, 300)
-            ok = ok and project is not None and len(project[0]) == 2 and project[0][1].x == 2
+            check("the drawing layers saved",
+                  project is not None and len(project[0]) == 2 and project[0][1].x == 2)
             # the sprites' layer: its own picture
             app.layer_var.set("obj102")
             app.select_layer()
             app.fill_bands("extend")
             app.save()
-            ok = ok and core.existing_art(art, "10d372806e45f5c2") is not None
+            check("the sprites' layer saved", core.existing_art(art, "10d372806e45f5c2") is not None)
             # the Move tool: the red dot's pixels dragged 10 down
             app.layer_var.set("bg3")
             app.select_layer()
@@ -1960,14 +1979,15 @@ def self_test() -> int:
             app.press(11, 9)                 # a selection round it
             app.drag_to(13, 11)
             app.release()
-            ok = ok and app.selection == (11, 9, 14, 12)
+            check("a selection", app.selection == (11, 9, 14, 12))
             app.press(12, 10)                # dragged from inside it: cut and moved
             app.drag_to(12, 20)
             app.release()
             app.commit()
             app.save()
             pic = core.load_rgba(core.existing_art(art, "6d5a3d55615351bf"))
-            ok = ok and pic.getpixel((12, 20))[:3] == (255, 0, 0) and pic.getpixel((12, 10))[:3] != (255, 0, 0)
+            check("the selection moved",
+                  pic.getpixel((12, 20))[:3] == (255, 0, 0) and pic.getpixel((12, 10))[:3] != (255, 0, 0))
             # Alt: a copy moved; copy and paste
             app.press(12, 20, alt=True)
             app.drag_to(12, 40)
@@ -1982,7 +2002,8 @@ def self_test() -> int:
             app.commit()
             app.save()
             pic = core.load_rgba(core.existing_art(art, "6d5a3d55615351bf"))
-            ok = ok and all(pic.getpixel((12, y))[:3] == (255, 0, 0) for y in (20, 40, 60))
+            check("Alt + drag and copy / paste copied it",
+                  all(pic.getpixel((12, y))[:3] == (255, 0, 0) for y in (20, 40, 60)))
             # Shift + click: a straight line from where the last stroke ended; undo, redo
             app.set_tool("pencil")
             app.set_size(1)
@@ -1992,40 +2013,62 @@ def self_test() -> int:
             app.press(12, 100, shift=True)
             app.release()
             line = lambda: all(app.paint().view().getpixel((x, 100))[:3] == (255, 0, 0) for x in range(2, 13))
-            ok = ok and line()
+            check("Shift + click drew a line", line())
             app.do_undo()
-            ok = ok and not line()
+            check("undo took the line away", not line())
             app.do_redo()
-            ok = ok and line()
+            check("redo put it back", line())
             # a layout's picture: a layer of the capture, saved back to its file from its corner (what's past
             # the canvas's edge kept), bigger when drawn past its right edge
-            ok = ok and app.cap.layer("pic_party_ball") is not None
+            check("the capture has the layout's picture", app.cap.layer("pic_party_ball") is not None)
             app.layer_var.set("pic_party_ball")
             app.select_layer()
-            ok = ok and app.allowed(100, 100)          # (not locked)
+            check("the picture isn't locked", app.allowed(100, 100))
             app.stamp(5, 12, (0, 0, 255, 255))         # (its x 9)
             app.stamp(8, 12, (0, 0, 255, 255))         # (past its right edge: x 12)
             app.save()
             ball = core.load_rgba(art / "party_ball.png")
-            ok = ok and ball.size == (13, 6)
-            ok = ok and ball.getpixel((0, 0))[:3] == core.snap((200, 40, 60))[:3]     # (off the canvas: kept)
-            ok = ok and ball.getpixel((9, 2))[:3] == (0, 0, 255) and ball.getpixel((12, 2))[:3] == (0, 0, 255)
-            ok = ok and ball.getpixel((7, 4))[:3] == core.snap((240, 240, 240))[:3]
+            check("the picture saved, grown to the right", ball.size == (13, 6))
+            check("what's off the canvas kept", ball.getpixel((0, 0))[:3] == core.snap((200, 40, 60))[:3])
+            check("the drawing in it",
+                  ball.getpixel((9, 2))[:3] == (0, 0, 255) and ball.getpixel((12, 2))[:3] == (0, 0, 255))
+            check("the rest of it kept", ball.getpixel((7, 4))[:3] == core.snap((240, 240, 240))[:3])
             # export it and import it back
             out = Path(tmp) / "exported.png"
             app.export_png(str(out))
-            ok = ok and core.load_rgba(out).size == (13, 6)
+            check("exported at its own size", core.load_rgba(out).size == (13, 6))
             n = len(app.stack())
             app.import_png(str(out))
-            ok = ok and len(app.stack()) == n + 1 and (app.paint().x, app.paint().y) == (-4, 10)
+            check("imported back where the picture is",
+                  len(app.stack()) == n + 1 and (app.paint().x, app.paint().y) == (-4, 10))
             # zooming about the mouse: the pixel under it stays
             app.set_zoom(3)
             app.update()
             before = app.canvas.canvasx(50) / 3
             app.set_zoom(6, at=(50, 50))
-            ok = ok and abs(app.canvas.canvasx(50) / 6 - before) < 1
-        app.destroy()
-    return 0 if ok else 1
+            after = app.canvas.canvasx(50) / 6
+            check(f"zoomed about the mouse (pixel {before:.2f} -> {after:.2f})", abs(after - before) < 1)
+    except Exception:
+        failed.append("error")
+        results.append("ERROR\n" + traceback.format_exc())
+    finally:
+        if app is not None:
+            try:
+                app.destroy()
+            except Exception:
+                pass
+        app = None
+        gc.collect()
+        try:
+            shutil.rmtree(tmp)
+            check("no file left open", True)
+        except OSError as e:
+            check(f"no file left open ({e})", False)
+        try:
+            log.write_text("\n".join(results) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+    return 0 if not failed else 1
 
 
 def main():
