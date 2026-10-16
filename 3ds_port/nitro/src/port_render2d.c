@@ -151,6 +151,17 @@ typedef struct Engine {
      * a plain middle and decorated sides: its halves go to the screen's
      * edges, the middle widened with its plain colour. */
     u8 split[4];
+    /* (worked out each frame, DecideBandFills: the UI's screens) what goes
+     * beside the DS's picture on each line of a text BG, left and right:
+     * colour | OPAQUE, or 0 nothing. bandFills[bg]: worked out (else the
+     * edges are looked at line by line, as before). */
+    u8 bandFills[4];
+    u16 bandFill[4][2][H];
+    /* (worked out each frame) the windows moved to the screen's edges, on
+     * the DS's screen (pixels), and how far: the game's sprites over them
+     * go with them (a menu's icons). */
+    struct { short x0, y0, x1, y1, shift; } objMove[8];
+    int nObjMove;
     /* The palettes as pixels (colour | OPAQUE), 0 for the transparent
      * colour: index 0 of each 16 colours (4 bits per pixel), or of all 256
      * (8 bits per pixel). */
@@ -353,7 +364,9 @@ typedef struct Target {
 typedef struct Segment {
     short x0, x1, off;
     short fixed;   /* >= 0: every pixel of the run is the map's pixel at x = fixed */
+    u16 color;     /* (SEG_COLOR) */
 } Segment;
+#define SEG_COLOR (-7)     /* every pixel this colour (Segment.color) */
 #define SEG_ART (-3)       /* the BG's hand-drawn picture (Engine.art), in the bands */
 #define SEG_ART_MID (-4)   /* the same over the DS's part: the picture where it has it, else the BG's own */
 #define SEG_CLEAR (-5)     /* nothing */
@@ -453,13 +466,115 @@ static void DecideSplits(Engine *e, const int *kind, const u16 *bgcnt, u32 dispc
     }
 }
 
+/* (wider canvas, each frame) Engine.bandFill: on each line of a text BG,
+ * beside the DS's picture, the colour of its edge where that's plain
+ * (PlainRun); and on the UI's screens, on lines where the BG has something
+ * at its edge that isn't plain (a menu's panel reaching it), the plain
+ * lines next to them carried on through them: the pattern of those just
+ * above (or below), every 1 to 8 lines (a background's stripes go on
+ * behind the panel). Beside a party list's panels and a
+ * summary's boxes, the bands were black (nothing there: the backdrop),
+ * 2026-10-15. */
+static void DecideBandFills(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
+{
+    int bg, side;
+
+    for (bg = 0; bg < 4; bg++) {
+        int mapH, hofs, vofs, y, run = PlainRun(e);
+        u16 own[2][H];
+        u8 edge[2][H];   /* the BG has something at its edge, not plain */
+
+        e->bandFills[bg] = 0;
+        if (e->width <= W || kind[bg] != BG_TEXT || !e->clip[bg] || e->art[bg] != NULL || e->split[bg]) {
+            continue;
+        }
+        mapH = sTextSizes[bgcnt[bg] >> 14][1];
+        hofs = Rd16(e->io, 0x10 + bg * 4) & 0x1FF;
+        vofs = Rd16(e->io, 0x12 + bg * 4) & 0x1FF;
+        e->bandFills[bg] = 1;
+        for (side = 0; side < 2; side++) {
+            int x0 = side ? W - run : 0;
+
+            for (y = 0; y < H; y++) {
+                int ty = (y + vofs) & (mapH - 1);
+
+                own[side][y] = TextBgPlain(e, bg, bgcnt[bg], dispcnt, hofs, ty, x0, run)
+                                   ? TextBgPixel(e, bg, bgcnt[bg], dispcnt, x0 + hofs + (side ? run - 1 : 0), ty)
+                                   : 0;
+                edge[side][y] = !own[side][y] &&
+                                (TextBgPixel(e, bg, bgcnt[bg], dispcnt, (side ? W - 1 : 0) + hofs, ty) & OPAQUE);
+                e->bandFill[bg][side][y] = own[side][y];
+            }
+        }
+        if (e->pictures) {
+            continue;   /* (the pictures' screens: plain edges only) */
+        }
+        for (side = 0; side < 2; side++) {
+            y = 0;
+            while (y < H) {
+                int a, b, k, p, up, down, src, dir, len;
+
+                if (!edge[side][y]) {
+                    y++;
+                    continue;
+                }
+                /* a run of such lines, a .. b - 1 */
+                for (a = y, b = y; b < H && edge[side][b]; b++) {
+                }
+                y = b;
+                /* the plain lines next to it, above and below (as many as
+                 * there are in a row, 16 at most) */
+                for (up = 0; up < 16 && a - 1 - up >= 0 && own[side][a - 1 - up]; up++) {
+                }
+                for (down = 0; down < 16 && b + down < H && own[side][b + down]; down++) {
+                }
+                /* carried on from above (from below if there are fewer
+                 * than two plain lines above): the pattern of the plain
+                 * lines next to the run (every 1 to 8 lines: the shortest
+                 * that repeats over the nearest twice its length, 4 lines
+                 * at least), repeated through the run */
+                if (up == 0 && down == 0) {
+                    continue;
+                }
+                dir = up >= 2 || down == 0 ? -1 : 1;
+                len = dir < 0 ? up : down;
+                src = dir < 0 ? a - 1 : b;   /* the plain line next to the run */
+                for (p = 1; p < 8 && p < len; p++) {
+                    int ok = 1, span = 2 * p > 4 ? 2 * p : 4;
+
+                    if (span > len) {
+                        span = len;
+                    }
+                    for (k = 0; k + p < span && ok; k++) {
+                        ok = own[side][src + dir * k] == own[side][src + dir * (k + p)];
+                    }
+                    if (ok) {
+                        break;
+                    }
+                }
+                if (p > len) {
+                    p = len;
+                }
+                for (k = a; k < b; k++) {
+                    /* line k: as far into the run as it is, a whole number
+                     * of patterns back into the plain lines */
+                    int into = dir < 0 ? k - a : b - 1 - k;   /* 0: next to them */
+                    int back = (into % p);
+
+                    e->bandFill[bg][side][k] = own[side][src + dir * (p - 1 - back)];
+                }
+            }
+        }
+    }
+}
+
 /* The runs of a text BG's line (y, its map row ty) on a wider canvas: the
  * DS's 256 pixels (or the whole canvas, wrapping round the map, without
  * clip), with the windows the game anchors (NitroPort_WideWindows: the
  * place name sign) moved to the screen's edge. Beside the DS's picture (with
  * clip): its edge colour when the edge is plain on this line (PlainRun),
  * else nothing. Returns how many. */
-static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int ty, int hofs, int mapW,
+static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y, int ty, int hofs, int mapW,
                           Segment *segs)
 {
     int origin = e->origin, width = e->width, n = 0, i, k;
@@ -524,6 +639,51 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int t
         if (ty < top || ty >= bottom) {
             continue;
         }
+        if (wins[i].widen) {
+            /* A text box across the DS's screen: its frame's left part at
+             * the screen's left edge, its right part at the right edge, the
+             * window (its text) where the DS has it, and between, each line
+             * of the frame's inner columns drawn on (its top and bottom
+             * borders, the box's inside). */
+            int fl = wins[i].frameLeft * 8, fr = wins[i].frameRight * 8;
+            int m0 = wins[i].left * 8, m1 = (wins[i].left + wins[i].width) * 8;
+            int in0 = origin + m0 - hofs + fl, in1 = origin + m1 - hofs - fr;
+
+            if (in0 < fl || in1 > width - fr || in0 > in1) {
+                continue;   /* (not across the DS's screen as it is scrolled) */
+            }
+            n = 0;
+            segs[n].x0 = 0;
+            segs[n].x1 = (short)fl;
+            segs[n].off = (short)m0;
+            segs[n].fixed = -1;
+            n++;
+            if (fl < in0) {
+                segs[n].x0 = (short)fl;
+                segs[n].x1 = (short)in0;
+                segs[n].off = 0;
+                segs[n].fixed = (short)((m0 + fl - 1) & (mapW - 1));
+                n++;
+            }
+            segs[n].x0 = (short)in0;
+            segs[n].x1 = (short)in1;
+            segs[n].off = (short)(hofs - origin);
+            segs[n].fixed = -1;
+            n++;
+            if (in1 < width - fr) {
+                segs[n].x0 = (short)in1;
+                segs[n].x1 = (short)(width - fr);
+                segs[n].off = 0;
+                segs[n].fixed = (short)((m1 - fr) & (mapW - 1));
+                n++;
+            }
+            segs[n].x0 = (short)(width - fr);
+            segs[n].x1 = (short)width;
+            segs[n].off = (short)(m1 - width);
+            segs[n].fixed = -1;
+            n++;
+            return n;
+        }
         /* Where it is on the DS's screen (left of its first column). */
         a = ((wins[i].left * 8 - hofs) % mapW + mapW) % mapW;
         if (a >= 256) {
@@ -550,9 +710,13 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int t
     {
         int bx0 = e->clip[bg] ? origin : 0, bx1 = e->clip[bg] ? origin + 256 : width;
         int cuts[2 * NITRO_WIDE_MAX_WINDOWS][2], ncuts = 0, x, run = PlainRun(e);
-        int fillLeft = e->clip[bg] && origin > 0 && TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 0, run);
+        /* (the colour beside it: worked out for the frame, DecideBandFills,
+         * or looked at here) */
+        u16 bandL = e->bandFills[bg] ? e->bandFill[bg][0][y] : 0, bandR = e->bandFills[bg] ? e->bandFill[bg][1][y] : 0;
+        int fillLeft = e->clip[bg] && origin > 0 &&
+                       (e->bandFills[bg] ? bandL != 0 : TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 0, run));
         int fillRight = e->clip[bg] && origin + 256 < width &&
-                        TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 256 - run, run);
+                        (e->bandFills[bg] ? bandR != 0 : TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 256 - run, run));
 
         if (fillLeft) {
             bx0 = 0;
@@ -597,7 +761,13 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int t
             segs[n].x0 = (short)x;
             segs[n].x1 = (short)next;
             segs[n].off = (short)(hofs - origin);
-            if (x < origin) {
+            if (x < origin && e->bandFills[bg]) {
+                segs[n].fixed = SEG_COLOR;
+                segs[n].color = bandL;
+            } else if (x >= origin + 256 && e->bandFills[bg]) {
+                segs[n].fixed = SEG_COLOR;
+                segs[n].color = bandR;
+            } else if (x < origin) {
                 segs[n].fixed = (short)(hofs & (mapW - 1));
             } else if (x >= origin + 256) {
                 segs[n].fixed = (short)((255 + hofs) & (mapW - 1));
@@ -704,7 +874,7 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
         segs[0].fixed = -1;
         nsegs = 1;
     } else {
-        nsegs = TextBgSegments(e, bg, bgcnt, dispcnt, ty, hofs, mapW, segs);
+        nsegs = TextBgSegments(e, bg, bgcnt, dispcnt, y, ty, hofs, mapW, segs);
         if (flags & T_PLAIN) {
             memset(row, 0, (size_t)e->width * 2);
         }
@@ -740,6 +910,14 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
     if (segs[seg].fixed == SEG_CLEAR) {
         for (; x < xe; x++) {
             PUT(x, 0, flags);
+        }
+        continue;
+    }
+    if (segs[seg].fixed == SEG_COLOR) {
+        u16 c = segs[seg].color;
+
+        for (; x < xe; x++) {
+            PUT(x, c, flags);
         }
         continue;
     }
@@ -1393,6 +1571,18 @@ static BOOL ReadObj(const Engine *e, int i, Obj *obj)
      * those are right of the DS's screen, where the canvas goes on) */
     if (obj->ox >= 256 + (e->width - W - e->origin)) {
         obj->ox -= 512;
+    }
+    if (e->nObjMove) {
+        /* (over a window moved to an edge: with it) */
+        int cx = obj->ox + obj->boxW / 2, cy = (obj->oy + obj->boxH / 2) & 255, k;
+
+        for (k = 0; k < e->nObjMove; k++) {
+            if (cx >= e->objMove[k].x0 && cx < e->objMove[k].x1 && cy >= e->objMove[k].y0 &&
+                cy < e->objMove[k].y1) {
+                obj->ox += e->objMove[k].shift;
+                break;
+            }
+        }
     }
     obj->ox += e->origin;
     obj->hflip = !obj->affine && (a1 & 0x1000) != 0;
@@ -2308,6 +2498,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     if (fixedWidth == 0) {
         DecideSplits(e, kind, bgcnt, dispcnt);
         LookUpArt(e, kind, bgcnt, dispcnt);
+        DecideBandFills(e, kind, bgcnt, dispcnt);
     }
     if (split != NULL) {
         split->has3d = e->isA && kind[0] == BG_3D;
@@ -2637,6 +2828,28 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
         }
         e->anchorWindows = (u8)split->anchorWindows;
         e->pictures = (u8)(NitroPort_WidePictures() != 0);
+        if (e->anchorWindows) {
+            /* The windows moved to an edge, on the DS's screen: the
+             * sprites over them go with them. */
+            for (bg = 0; bg < 4 && e->nObjMove < 8; bg++) {
+                NitroWideWindow wins[NITRO_WIDE_MAX_WINDOWS];
+                int n = NitroPort_WideWindows(e->isA ? 0 : 1, bg, wins, NITRO_WIDE_MAX_WINDOWS), i;
+                int hofs = Rd16(e->io, 0x10 + bg * 4) & 0x1FF, vofs = Rd16(e->io, 0x12 + bg * 4) & 0x1FF;
+
+                for (i = 0; i < n && e->nObjMove < 8; i++) {
+                    if (wins[i].anchor == 0) {
+                        continue;
+                    }
+                    e->objMove[e->nObjMove].x0 = (short)(wins[i].left * 8 - hofs);
+                    e->objMove[e->nObjMove].x1 = (short)((wins[i].left + wins[i].width) * 8 - hofs);
+                    e->objMove[e->nObjMove].y0 = (short)(wins[i].top * 8 - vofs);
+                    e->objMove[e->nObjMove].y1 = (short)((wins[i].top + wins[i].height) * 8 - vofs);
+                    e->objMove[e->nObjMove].shift =
+                        (short)(wins[i].anchor < 0 ? -e->origin : e->width - W - e->origin);
+                    e->nObjMove++;
+                }
+            }
+        }
     }
 }
 
@@ -2718,6 +2931,7 @@ int NitroPort_Render2DLayer(int engine, int bg, const NitroRender2DSplit *layout
     if (e.width > W) {
         DecideSplits(&e, kind, bgcnt, dispcnt);
         LookUpArt(&e, kind, bgcnt, dispcnt);
+        DecideBandFills(&e, kind, bgcnt, dispcnt);
     }
     *key = BgKey(&e, bg, kind[bg], bgcnt[bg], dispcnt);
     *hofs = kind[bg] == BG_TEXT ? Rd16(e.io, 0x10 + bg * 4) & 0x1FF : 0;

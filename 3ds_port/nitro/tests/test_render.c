@@ -1027,11 +1027,16 @@ static void test_wide_canvas(void)
             map[i] = (i == 0) ? 1 : (i == 1) ? 2 : 0;
         }
         GX_LoadBG1Scr(map, 0, sizeof(map));
-        NitroPort_WideForcePictures(0);          /* the UI: nothing beside the picture */
+        NitroPort_WideForcePictures(0);          /* the UI */
         NitroPort_Render2DSplit(0, wide, &split);
         CHECK(wide[0 * 320 + 32] == BLUE);
-        CHECK(wide[0 * 320 + 31] == GREY);
+        /* Line 0 carries on the plain lines next to it (lines 1-7: red).
+         * Changed October 2026, as asked (a menu's panels reaching the
+         * edge left black blocks beside them); was GREY: nothing beside a
+         * line whose edge isn't plain. */
+        CHECK(wide[0 * 320 + 31] == RED);
         CHECK(wide[5 * 320 + 31] == RED);        /* (a plain edge still goes on) */
+        CHECK(wide[20 * 320 + 31] == GREY);      /* (nothing at the edge: nothing beside it) */
         NitroPort_WideForcePictures(1);
         NitroPort_Render2DSplit(0, wide, &split);
         CHECK(wide[0 * 320 + 32] == BLUE);
@@ -1722,6 +1727,177 @@ static void test_wide_window_edges(void)
     GX_SetVisibleWnd(GX_WNDMASK_NONE);
 }
 
+/* One 4bpp tile all colour index `index`. */
+static void SolidTile4(u8 *tile, int index)
+{
+    memset(tile, index | (index << 4), 32);
+}
+
+/* The game's framed windows on the wider canvas (NitroPort_WindowFramed):
+ * a menu by the DS's right edge goes to the screen's right edge, its
+ * sprites with it; one by the left edge to the left edge; one in the
+ * middle stays; a text box across the DS's screen has its frame widened
+ * to the screen's edges, the inside where the DS has it. And on the UI's
+ * screens, a panel reaching the DS's edge has the background's stripes
+ * carried on beside it. */
+static void test_wide_framed_windows(void)
+{
+    static u16 wide[320 * 192], over[320 * 192];
+    static u8 overAlpha[320 * 192];
+    static u8 tiles[8 * 32], objTile[32];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED, BLUE, WHITE, GREEN };
+    static u16 objPltt[16] = { 0, BLUE };
+    static GXOamAttr oam[128];
+    static struct { void *config; u8 layer, left, top, width, height; } menu = { NULL, 1, 26, 3, 4, 3 },
+        leftMenu = { NULL, 1, 1, 10, 4, 2 }, middle = { NULL, 1, 12, 10, 6, 2 },
+        box = { NULL, 1, 2, 19, 27, 4 };
+    NitroRender2DSplit split;
+    int i, x, y;
+
+    Reset();
+    memset(&split, 0, sizeof(split));
+    split.width = 320;
+    split.origin = 32;
+    memset(split.clip, 1, sizeof(split.clip));
+    split.anchorWindows = 1;
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_WideForcePictures(0);
+    SolidTile4(tiles + 1 * 32, 1);   /* red */
+    SolidTile4(tiles + 2 * 32, 2);   /* blue */
+    SolidTile4(tiles + 3 * 32, 3);   /* white */
+    SolidTile4(tiles + 4 * 32, 4);   /* green */
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    /* the menu with its frame: tiles 25-30, rows 2-6, red */
+    memset(map, 0, sizeof(map));
+    for (y = 2; y <= 6; y++) {
+        for (x = 25; x <= 30; x++) {
+            map[y * 32 + x] = 1;
+        }
+    }
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    /* a sprite over it (DS 208, 24) and one elsewhere (100, 24) */
+    GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_1D_32K);
+    SolidTile4(objTile, 1);
+    GX_LoadOBJ(objTile, 0, sizeof(objTile));
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));
+    G2_SetOBJAttr(&oam[0], 208, 24, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_8x8,
+                  GX_OAM_COLORMODE_16, 0, 0, 0);
+    G2_SetOBJAttr(&oam[1], 100, 24, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_8x8,
+                  GX_OAM_COLORMODE_16, 0, 0, 0);
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1 | GX_PLANEMASK_OBJ);
+    NitroPort_WindowAdded(&menu, 1, 26, 3, 4, 3);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 240] == RED);           /* no frame told: where the DS has it */
+    NitroPort_WindowFramed(&menu, 1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 264] == RED);           /* DS x 200-247 at the screen's right: 264-311 */
+    CHECK(wide[20 * 320 + 311] == RED);
+    CHECK(wide[20 * 320 + 240] == GREY);          /* where it was: the backdrop */
+    CHECK(wide[20 * 320 + 315] == GREY);          /* (as far from the edge as from the DS's) */
+    CHECK(wide[60 * 320 + 270] == GREY);          /* below it: nothing moved */
+    CHECK(wide[26 * 320 + 274] == BLUE);          /* its sprite with it: 208 + 32 + 32 */
+    CHECK(wide[26 * 320 + 242] == GREY);          /* (not where it was) */
+    CHECK(wide[26 * 320 + 134] == BLUE);          /* the other sprite where it was: 100 + 32 */
+    NitroPort_WindowFramed(&menu, 0);             /* the frame taken off: back */
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 240] == RED);
+    CHECK(wide[26 * 320 + 242] == BLUE);
+    NitroPort_WindowRemoved(&menu);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+
+    /* By the left edge (tiles 0-5 with its frame): to the screen's left
+     * edge, as far from it as from the DS's. In the middle: stays. */
+    memset(map, 0, sizeof(map));
+    for (y = 9; y <= 12; y++) {
+        for (x = 0; x <= 5; x++) {
+            map[y * 32 + x] = 1;
+        }
+    }
+    for (y = 9; y <= 12; y++) {
+        for (x = 11; x <= 18; x++) {
+            map[y * 32 + x] = 4;
+        }
+    }
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    NitroPort_WindowAdded(&leftMenu, 1, 1, 10, 4, 2);
+    NitroPort_WindowFramed(&leftMenu, 1);
+    NitroPort_WindowAdded(&middle, 1, 12, 10, 6, 2);
+    NitroPort_WindowFramed(&middle, 1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[80 * 320 + 0] == RED);             /* DS x 0-47 at 0-47 */
+    CHECK(wide[80 * 320 + 47] == RED);
+    CHECK(wide[80 * 320 + 60] == GREY);           /* where it was (32-79), past it */
+    CHECK(wide[80 * 320 + 32 + 88] == GREEN);     /* the middle one where the DS has it */
+    CHECK(wide[80 * 320 + 32 + 151] == GREEN);
+    NitroPort_WindowRemoved(&leftMenu);
+    NitroPort_WindowRemoved(&middle);
+
+    /* A text box (tiles 2-28, rows 19-22; its frame: 2 tiles left, 3
+     * right, a row above and below): the frame's left part (blue, white)
+     * at the screen's left, its right part (white, blue, blue) at the
+     * right, the inside (white, a red mark at its start) where the DS has
+     * it, and between, the frame's inner columns (white) drawn on. */
+    memset(map, 0, sizeof(map));
+    for (y = 18; y <= 23; y++) {
+        for (x = 0; x < 32; x++) {
+            map[y * 32 + x] = (x == 0 || x >= 30) ? 2 : (x == 2 && y == 20) ? 1 : 3;
+        }
+    }
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    NitroPort_WindowAdded(&box, 1, 2, 19, 27, 4);
+    NitroPort_WindowFramed(&box, 2);
+    NitroPort_Render2DSplit(0, wide, &split);
+    y = 164;
+    CHECK(wide[y * 320 + 3] == BLUE);             /* the frame's outer tile at the edge */
+    CHECK(wide[y * 320 + 12] == WHITE);
+    CHECK(wide[y * 320 + 30] == WHITE);           /* drawn on */
+    CHECK(wide[y * 320 + 50] == RED);             /* the inside: DS x 16 at 48 */
+    CHECK(wide[y * 320 + 280] == WHITE);          /* drawn on */
+    CHECK(wide[y * 320 + 299] == WHITE);          /* the right part: DS 232-255 at 296-319 */
+    CHECK(wide[y * 320 + 310] == BLUE);
+    CHECK(wide[y * 320 + 319] == BLUE);
+    CHECK(wide[140 * 320 + 3] == GREY);           /* above the box: nothing */
+    NitroPort_WindowRemoved(&box);
+
+    /* The UI's band beside a panel: a background of stripes (lines red,
+     * blue in turn) with a panel reaching the DS's left edge on lines
+     * 40-79 (its first 4 pixels green, then white: not plain). Beside the
+     * panel's lines the stripes go on. */
+    {
+        static u8 stripe[32], panel[32];
+
+        for (i = 0; i < 32; i++) {
+            stripe[i] = (u8)(((i / 4) & 1) ? 0x22 : 0x11);   /* rows: red, blue, red... */
+            panel[i] = (u8)((i % 4) < 2 ? 0x44 : 0x33);      /* each row: green x4, white x4 */
+        }
+        memcpy(tiles + 5 * 32, stripe, 32);
+        memcpy(tiles + 6 * 32, panel, 32);
+        GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+        for (i = 0; i < 32 * 32; i++) {
+            map[i] = ((i / 32) >= 5 && (i / 32) < 10 && (i % 32) < 4) ? 6 : 5;
+        }
+        GX_LoadBG1Scr(map, 0, sizeof(map));
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[31 * 320 + 10] == BLUE);       /* a plain line (31: odd, blue) goes on */
+        CHECK(wide[32 + 50 * 320] == GREEN);      /* the panel where the DS has it */
+        CHECK(wide[50 * 320 + 10] == RED);        /* beside it, the stripes: line 50 red */
+        CHECK(wide[51 * 320 + 10] == BLUE);       /* line 51 blue */
+        CHECK(wide[79 * 320 + 31] == BLUE);
+        NitroPort_WideForcePictures(1);           /* (the pictures' screens: not) */
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[50 * 320 + 10] == GREY);
+    }
+    NitroPort_WideForcePictures(-1);
+}
+
 /* The two engines drawn at the same time on two threads (as the 3DS
  * program does on two CPU cores), many times over: the same pixels. */
 static u16 sThreadOut[2][256 * 192];
@@ -1887,6 +2063,7 @@ int main(int argc, char **argv)
     test_wide_art_places();
     test_wide_art_sliding();
     test_wide_window_edges();
+    test_wide_framed_windows();
     test_engines_on_two_threads();
 
     printf("2D renderer: %d checks, %d failed\n", sChecks, sFailures);
