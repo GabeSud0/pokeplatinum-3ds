@@ -621,10 +621,10 @@ static s32 SinFx(int degrees)
  * which BG, turned how far; left out if its file isn't there. */
 static void SetUpPicture(Engine *e, const NitroWidePart *p)
 {
-    int w, h, bg, r;
+    int w, h, dx, dy, bg, r;
     const u16 *px;
 
-    if (e->nPics >= WIDE_PICS_MAX || (px = NitroPort_WideArtPicture(p->col, &w, &h)) == NULL) {
+    if (e->nPics >= WIDE_PICS_MAX || (px = NitroPort_WideArtPicture(p->col, &w, &h, &dx, &dy)) == NULL) {
         return;
     }
     for (bg = 0; bg < 4 && !((p->bgs >> bg) & 1); bg++) {
@@ -635,8 +635,8 @@ static void SetUpPicture(Engine *e, const NitroWidePart *p)
     e->pics[e->nPics].px = px;
     e->pics[e->nPics].w = (short)w;
     e->pics[e->nPics].h = (short)h;
-    e->pics[e->nPics].x = (short)(e->origin + p->x0);
-    e->pics[e->nPics].y = p->top;
+    e->pics[e->nPics].x = (short)(e->origin + p->x0 + dx);   /* (moved from its place in the editor) */
+    e->pics[e->nPics].y = (short)(p->top + dy);
     e->pics[e->nPics].bg = (u8)bg;
     e->pics[e->nPics].id = (u8)p->col;
     e->pics[e->nPics].angle = p->dx;
@@ -951,11 +951,30 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
             segs[n].fixed = e->artBands[bg] ? SEG_ART : SEG_CLEAR;
             n++;
         }
-        segs[n].x0 = (short)origin;
-        segs[n].x1 = (short)(origin + 256);
-        segs[n].off = (short)(hofs - origin);
-        segs[n].fixed = e->artFull[bg] ? SEG_ART_MID : -1;
-        n++;
+        if (!e->artFull[bg] && ((e->partBgs >> bg) & 1)) {
+            /* (a BG laid out in parts, its bands drawn: the parts over the
+             * DS's part) */
+            Segment mid[MAX_SEGMENTS];
+            int m = PartSegments(e, bg, ty, hofs, mapW, mid);
+
+            for (i = 0; i < m && n < MAX_SEGMENTS - 1; i++) {
+                int a = mid[i].x0 > origin ? mid[i].x0 : origin;
+                int b = mid[i].x1 < origin + 256 ? mid[i].x1 : origin + 256;
+
+                if (a < b) {
+                    segs[n] = mid[i];
+                    segs[n].x0 = (short)a;
+                    segs[n].x1 = (short)b;
+                    n++;
+                }
+            }
+        } else {
+            segs[n].x0 = (short)origin;
+            segs[n].x1 = (short)(origin + 256);
+            segs[n].off = (short)(hofs - origin);
+            segs[n].fixed = e->artFull[bg] ? SEG_ART_MID : -1;
+            n++;
+        }
         if (origin + 256 < width) {
             segs[n].x0 = (short)(origin + 256);
             segs[n].x1 = (short)width;
@@ -1837,10 +1856,10 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
     }
     for (bg = 0; bg < 4; bg++) {
         u64 key;
-        int hofs, vofs, full;
+        int hofs, vofs, full, moved = (e->movedBgs >> bg) & 1;
         const u16 *art;
 
-        if (kind[bg] == BG_NONE || kind[bg] == BG_3D || !e->clip[bg] || ((e->movedBgs >> bg) & 1)) {
+        if (kind[bg] == BG_NONE || kind[bg] == BG_3D || !e->clip[bg] || (moved && kind[bg] != BG_TEXT)) {
             continue;   /* (a BG the screen's parts move: its own pixels) */
         }
         key = BgKeyCached(e, bg, kind[bg], bgcnt[bg], dispcnt);
@@ -1852,6 +1871,22 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
             int curH = Rd16(e->io, 0x10 + bg * 4) & 0x1FF, curV = Rd16(e->io, 0x12 + bg * 4) & 0x1FF;
             int dx, dy;
 
+            if (moved) {
+                /* A BG the screen's parts move: a picture made right where
+                 * it is (a capture of the screen as the parts lay it out,
+                 * drawn on: the boxes' panel's edges, 2026-10-16), else its
+                 * own pixels as the parts move them (scrolled elsewhere, the
+                 * parts' columns are another picture's). */
+                art = NitroPort_WideArtFindNear(key, curH, curV, mapW, mapH, 1, 1, &hofs, &vofs, &full);
+                if (art == NULL) {
+                    continue;
+                }
+                e->artDx[bg] = e->artDy[bg] = 0;
+                e->artBands[bg] = 1;
+                e->art[bg] = art;
+                e->artFull[bg] = (u8)(full & NITRO_WIDE_ART_FULL);
+                continue;
+            }
             art = NitroPort_WideArtFindNear(key, curH, curV, mapW, mapH, W, H, &hofs, &vofs, &full);
             if (art == NULL) {
                 continue;

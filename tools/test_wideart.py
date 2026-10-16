@@ -239,7 +239,7 @@ class WideArtTest(unittest.TestCase):
         self.assertEqual(core.transform(img, angle=-90).getpixel((1, 0)), (255, 0, 0, 255))
         t = core.transform(img, angle=30)
         self.assertGreater(t.width, 4)
-        self.assertTrue({p[3] for p in t.getdata()} <= {0, 255})      # no half-transparent pixels
+        self.assertTrue({p[3] for p in core.pixels(t)} <= {0, 255})      # no half-transparent pixels
         self.assertEqual(core.transform(img, 0.1, 0.1).size, (1, 1))
 
     def test_pictures_by_place(self):
@@ -321,8 +321,9 @@ class WideArtTest(unittest.TestCase):
         """A picture the screen's layout draws (the party's panel...): a
         layer of the capture, just in front of its BG; its file the drawing
         layer, where the game puts it (past the canvas's edge too); saved
-        back from its top-left corner, bigger if drawn past its right or
-        bottom edge, what's left of or above it left out."""
+        back as the box round what's drawn, wherever that is: drawn on
+        above its place, the file says how far (oFFs), and it opens
+        there."""
         cap_dir = core.make_sample_capture(self.root / "p", 1, sprites=True, picture=True)
         art = cap_dir.parent.parent
         cap = core.list_captures(art)[0]
@@ -339,18 +340,32 @@ class WideArtTest(unittest.TestCase):
         # drawn on: its x 5, and past its right edge (x 9) and its top (canvas y 9)
         paint.plot(1, 11, (0, 0, 255, 255))
         paint.plot(5, 14, (0, 255, 0, 255))
-        path, lost = core.save_picture(art, pic, [paint])
+        path, offset = core.save_picture(art, pic, [paint])
         saved = core.load_rgba(path)
         self.assertEqual(saved.size, (10, 6))
-        self.assertFalse(lost)
+        self.assertEqual(offset, (0, 0))
+        self.assertEqual(core.png_offset(path), (0, 0))
         self.assertEqual(saved.getpixel((0, 0))[:3], core.snap((200, 40, 60))[:3])   # (off the canvas: kept)
         self.assertEqual(saved.getpixel((5, 1))[:3], (0, 0, 255))
         self.assertEqual(saved.getpixel((9, 4))[:3], (0, 255, 0))
         self.assertEqual(saved.getpixel((9, 0))[3], 0)
+        # drawn on above it: kept, the file a line taller and saying it's 1 up from its place
         paint.plot(2, 9, (255, 255, 0, 255))
-        path, lost = core.save_picture(art, pic, [paint])
-        self.assertTrue(lost)
-        self.assertEqual(core.load_rgba(path).size, (10, 6))
+        path, offset = core.save_picture(art, pic, [paint])
+        saved = core.load_rgba(path)
+        self.assertEqual((saved.size, offset, core.png_offset(path)), ((10, 7), (0, -1), (0, -1)))
+        self.assertEqual(saved.getpixel((6, 0))[:3], (255, 255, 0))
+        again = core.picture_paint(art, cap, pic)
+        self.assertEqual((again.x, again.y, again.image.size), (-4, 9, (10, 7)))
+        # a capture of it there: x, y where it's drawn, dx, dy how far that is from its place
+        info = cap_dir / "info.txt"
+        info.write_text(info.read_text().replace("x -4 y 10 w 8 h 6 angle 0", "x -4 y 9 w 10 h 7 angle 0 dx 0 dy -1"))
+        moved = core.read_capture(cap_dir).layer("pic_party_ball")
+        self.assertEqual((moved.hofs, moved.vofs, moved.dx, moved.dy, moved.w, moved.h), (-4, 10, 0, -1, 10, 7))
+        # nothing drawn: an empty picture
+        paint.image = core.Image.new("RGBA", paint.image.size)
+        path, offset = core.save_picture(art, pic, [paint])
+        self.assertEqual((core.load_rgba(path).size, offset), ((1, 1), (0, 0)))
         # its file gone: the capture's picture of it (what was on the canvas)
         path.unlink()
         self.assertIsNone(core.find_art(art, pic))

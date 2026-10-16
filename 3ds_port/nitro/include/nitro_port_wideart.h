@@ -60,10 +60,13 @@ const char *NitroPort_WideArtDir(void);
 int NitroPort_WideArtCount(void);
 /* A picture a screen's layout draws (NITRO_WIDE_PICTURE: the folder's
  * <NitroPort_WidePictureName>.png, any size up to 320 x 192, transparent
- * where alpha < 128): its pixels (RGB555 | 0x8000, 0 transparent) and size;
- * NULL if there's none. Read the first time it's asked for (the folder's
- * load reads them all ahead), kept from then on. Any thread. */
-const uint16_t *NitroPort_WideArtPicture(int picture, int *w, int *h);
+ * where alpha < 128): its pixels (RGB555 | 0x8000, 0 transparent), only
+ * the box round what's drawn in it, that box's size and where it goes from
+ * the layout's place (the file's oFFs chunk, if it has one: the editor's,
+ * for a picture moved there; and the margin left out); NULL if there's
+ * none, or nothing's drawn in it. Read the first time it's asked for (the
+ * folder's load reads them all ahead), kept from then on. Any thread. */
+const uint16_t *NitroPort_WideArtPicture(int picture, int *w, int *h, int *dx, int *dy);
 /* Changes whenever the pictures may have (loaded again). */
 uint32_t NitroPort_WideArtSerial(void);
 /* The picture for a layer's key (NITRO_WIDE_ART_W x H pixels: RGB555 |
