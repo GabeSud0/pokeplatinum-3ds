@@ -28,7 +28,7 @@ index 54ac79a0..9105f04d 100644
 +#ifdef SDK_PORT_3DS
 +#include "port_wide_layout.h"
 +
-+// The Pokédex's list on the wider screen (2026-10-16, from Gabriel's
++// The Pokédex's list on the wider screen (2026-10-16, from a reference
 +// drawing of it): the header's label and the picture's frame (its Pokémon
 +// in 3D) toward the left edge, the list's rows and its scroll bar toward
 +// the right, the counts under them apart (seen left, obtained right); the

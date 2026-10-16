@@ -89,7 +89,7 @@ index 0e6fbaf5..79a0a7e6 100644
  };
  
 +#ifdef SDK_PORT_3DS
-+// The boxes on the wider screen (2026-10-16, from Gabriel's drawing of
++// The boxes on the wider screen (2026-10-16, from a reference drawing of
 +// them): the panel of the Pokémon looked at (BG2's left, its sprite in 3D,
 +// the sprites under it) at the screen's left edge; the box (its wallpaper,
 +// BG3, the boxes sliding past behind the panel's edge as they change; the
