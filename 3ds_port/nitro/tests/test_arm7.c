@@ -265,6 +265,72 @@ static void test_backup_program_and_reopen(void)
     CHECK(remove(save_path) == 0);
 }
 
+/* A write of many pages (the SDK asks for one page at a time) goes into the
+ * file once, with its last page: all of it there when it completes, async
+ * or not (a full save was 512 writes to the SD card, 3.3 s). */
+static int FileHas(const char *path, long at, const unsigned char *what, size_t n)
+{
+    static unsigned char got[8192];
+    FILE *image = fopen(path, "rb");
+    int same;
+
+    if (image == NULL || n > sizeof(got)) {
+        if (image) fclose(image);
+        return 0;
+    }
+    same = fseek(image, at, SEEK_SET) == 0 && fread(got, 1, n, image) == n && memcmp(got, what, n) == 0;
+    fclose(image);
+    return same;
+}
+
+static void test_backup_one_file_write(void)
+{
+    char save_path[] = "/tmp/platinum-arm7-XXXXXX";
+    static unsigned char big[4096 + 100], back[4096 + 100];
+    u32 before;
+    u16 lock_id;
+    int descriptor, i;
+
+    descriptor = mkstemp(save_path);
+    CHECK(descriptor >= 0);
+    if (descriptor < 0) return;
+    close(descriptor);
+    remove(save_path);
+
+    NitroPort_SetSavePath(save_path);
+    lock_id = OS_GetLockID();
+    CARD_LockBackup(lock_id);
+    CHECK(CARD_IdentifyBackup(CARD_BACKUP_TYPE_FLASH_4MBITS));
+    for (i = 0; i < (int)sizeof(big); ++i) big[i] = (unsigned char)(i * 13 + 1);
+
+    before = NitroPort_CardFileWrites();
+    CHECK(CARD_WriteAndVerifyBackup(0x10000u, big, sizeof(big)));   /* (17 pages) */
+    CHECK(NitroPort_CardFileWrites() - before == 1);
+    CHECK(FileHas(save_path, 0x10000, big, sizeof(big)));
+    CHECK(CARD_ReadBackup(0x10000u, back, sizeof(back)) && memcmp(back, big, sizeof(big)) == 0);
+
+    for (i = 0; i < (int)sizeof(big); ++i) big[i] = (unsigned char)(i * 7 + 5);
+    before = NitroPort_CardFileWrites();
+    sAsyncCardDone = 0;
+    CARD_WriteAndVerifyBackupAsync(0x20100u, big, sizeof(big), card_done, &sAsyncCardDone);
+    CHECK(CARD_WaitBackupAsync());
+    CHECK(sAsyncCardDone == 1);
+    CHECK(NitroPort_CardFileWrites() - before == 1);
+    CHECK(FileHas(save_path, 0x20100, big, sizeof(big)));
+
+    /* nothing left to write: nothing written */
+    before = NitroPort_CardFileWrites();
+    NitroPort_CardFlush();
+    CHECK(NitroPort_CardFileWrites() == before);
+    /* opened again: what the file has */
+    NitroPort_SetSavePath(save_path);
+    memset(back, 0, sizeof(back));
+    CHECK(CARD_ReadBackup(0x20100u, back, sizeof(back)) && memcmp(back, big, sizeof(big)) == 0);
+    CARD_UnlockBackup(lock_id);
+    NitroPort_SetSavePath(NULL);
+    CHECK(remove(save_path) == 0);
+}
+
 /* The sound service is silent, but must take every request: the library
  * reuses its 256 commands only once the "ARM7" has counted them finished.
  * 3,000 frames' worth of requests would run out without that. */
@@ -318,6 +384,7 @@ int main(void)
     (void)OS_EnableInterrupts();
     test_backup();
     test_backup_program_and_reopen();
+    test_backup_one_file_write();
     test_rtc();
     test_power();
     test_touch();
