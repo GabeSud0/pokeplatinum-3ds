@@ -265,20 +265,26 @@ static int sPartCount[2];
 
 void NitroPort_WideScreenParts(int engine, const short *rows, int count)
 {
+    NitroWidePart got[NITRO_WIDE_MAX_PARTS];
     int e = engine ? 1 : 0, i, n = 0;
 
     if (rows == NULL || count < 0) {
         count = 0;
     }
+    memset(got, 0, sizeof(got));
     lock();
     for (i = 0; i < count && n < NITRO_WIDE_MAX_PARTS; i++) {
         const short *row = rows + i * 8;
-        NitroWidePart *p = &sParts[e][n];
+        NitroWidePart *p = &got[n];
 
-        if (row[0] < NITRO_WIDE_MOVE || row[0] > NITRO_WIDE_SHIFT3D) {
+        if (row[0] < NITRO_WIDE_MOVE || row[0] > NITRO_WIDE_PICTURE) {
             continue;
         }
-        if (row[0] != NITRO_WIDE_SHIFT3D && (row[3] <= row[2] || row[5] <= row[4])) {
+        if (row[0] == NITRO_WIDE_PICTURE) {
+            if ((row[1] & 0x0F) == 0 || row[7] <= 0 || row[7] >= NITRO_WIDE_PICTURES) {
+                continue;   /* (no BG, or no such picture) */
+            }
+        } else if (row[0] != NITRO_WIDE_SHIFT3D && (row[3] <= row[2] || row[5] <= row[4])) {
             continue;   /* (no lines, or no columns) */
         }
         if ((row[0] == NITRO_WIDE_MOVE || row[0] == NITRO_WIDE_FILL) && (row[1] & 0x0F) == 0) {
@@ -294,9 +300,33 @@ void NitroPort_WideScreenParts(int engine, const short *rows, int count)
         p->col = row[7];
         n++;
     }
-    sPartCount[e] = n;
-    sSerial++;
+    /* (the same layout again, a frame of an animation that hasn't moved:
+     * nothing to draw again for it) */
+    if (n != sPartCount[e] || memcmp(got, sParts[e], (size_t)n * sizeof(got[0])) != 0) {
+        memcpy(sParts[e], got, (size_t)n * sizeof(got[0]));
+        sPartCount[e] = n;
+        sSerial++;
+    }
     unlock();
+}
+
+static const char *const sPictureNames[NITRO_WIDE_PICTURES] = {
+    NULL,
+    "pc_boxes_divider",
+    "pc_boxes_ball",
+    "party_panel",
+    "party_ball",
+    "party_light_off",
+    "party_light_red",
+    "party_light_blue",
+    "party_light_green",
+    "party_light_amber",
+    "party_light_white",
+};
+
+const char *NitroPort_WidePictureName(int picture)
+{
+    return picture > 0 && picture < NITRO_WIDE_PICTURES ? sPictureNames[picture] : NULL;
 }
 
 int NitroPort_WideParts(int engine, NitroWidePart *out)
