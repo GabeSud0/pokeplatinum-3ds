@@ -280,6 +280,16 @@ jobs:
       - name: libnitro 32-bit unit tests
         run: timeout 600 make -C 3ds_port/nitro TARGET=host32
 
+      # (the job's log isn't always at hand: its failing checks go in the
+      # job's annotations, which the checks API gives)
+      - name: Report the failing libnitro 32-bit checks
+        if: failure()
+        run: |
+          timeout 600 make -k -C 3ds_port/nitro TARGET=host32 test > nitro32.log 2>&1 || true
+          grep -E "FAIL|checks|failures|failed|Segmentation|Aborted|core dumped|Error [0-9]|\*\*\*" nitro32.log | head -80 > nitro32-fails.txt || true
+          cat nitro32-fails.txt
+          echo "::error title=libnitro 32-bit tests::$(sed -e 's/%/%25/g' -e 's/\r//g' nitro32-fails.txt | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+
       - name: libnitrosystem 32-bit resource tests
         run: timeout 180 make -C 3ds_port/nitrosystem TARGET=host32
 
