@@ -227,7 +227,8 @@ static volatile bool sSuspended;
 /* remaster.txt: a setting a line, "name value": remaster on/off, wide
  * on/off, filter sharp/nearest/smooth/scale2x (on: sharp, off: nearest),
  * stereo on/off/<strength, e.g. 0.02>, convergence <distance> (0: from
- * each scene), edges on/off, flip on/off, filter3d nearest/smooth/sharp. */
+ * each scene), edges on/off, flip on/off, filter3d
+ * nearest/smooth/sharp/xbrz/xbrz-smooth. */
 static void ReadRemasterConfig(bool new3ds)
 {
     FILE *f = fopen(REMASTER_PATH, "r");
@@ -289,7 +290,9 @@ static void ReadRemasterConfig(bool new3ds)
             } else if (strcmp(name, "flip") == 0) {
                 sCompose.flipV = on;
             } else if (strcmp(name, "filter3d") == 0) {
-                sCompose.filter3d = strcmp(value, "sharp") == 0 ? 2
+                sCompose.filter3d = strcmp(value, "xbrz-smooth") == 0 ? 4
+                                    : strcmp(value, "xbrz") == 0 ? 3
+                                    : strcmp(value, "sharp") == 0 ? 2
                                     : (strcmp(value, "smooth") == 0 || strcmp(value, "bilinear") == 0) ? 1 : 0;
             }
         }

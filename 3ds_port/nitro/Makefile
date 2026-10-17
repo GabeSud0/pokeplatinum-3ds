@@ -344,6 +344,15 @@ $(UPSCALE_TEST_BIN): tests/test_upscale.c src/port_upscale.c include/nitro_port_
 	@mkdir -p $(dir $@)
 	$(CC) $(PORT_CFLAGS) $(LDFLAGS) -Iinclude tests/test_upscale.c src/port_upscale.c -o $@
 
+# xBRZ at 2x (the 3D's textures, filter3d xbrz): plain C, no SDK. SSE for
+# the doubles on a 32-bit PC, as the 3DS's VFP and a 64-bit PC do them (the
+# x87's wider ones could decide an edge's way otherwise, and the hashes of
+# the original xBRZ's output wouldn't match).
+XBRZ_TEST_BIN := $(OUT)/test_xbrz
+$(XBRZ_TEST_BIN): tests/test_xbrz.c src/port_xbrz.c include/nitro_port_xbrz.h
+	@mkdir -p $(dir $@)
+	$(CC) $(PORT_CFLAGS) $(if $(filter host32,$(TARGET)),-msse2 -mfpmath=sse) $(LDFLAGS) -Iinclude tests/test_xbrz.c src/port_xbrz.c -lm -o $@
+
 # Same scenes with and without the geometry thread, for a recording of the
 # game (the PC runner's --gx-record FILE): make replay, then
 # build/host/gx3d_replay FILE. Not run by `make test`.
@@ -352,7 +361,7 @@ $(GX3D_REPLAY_BIN): tests/gx3d_replay.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -pthread -o $@
 replay: $(GX3D_REPLAY_BIN)
 
-test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN) $(GX3D_TEST_BIN) $(GX3D_PLUMBING_TEST_BIN) $(VRAM_TRANSFER_TEST_BIN) $(UPSCALE_TEST_BIN)
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN) $(GX3D_TEST_BIN) $(GX3D_PLUMBING_TEST_BIN) $(VRAM_TRANSFER_TEST_BIN) $(UPSCALE_TEST_BIN) $(XBRZ_TEST_BIN)
 	./$(TEST_BIN)
 	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
 	./$(THREAD_TEST_BIN)
@@ -364,6 +373,7 @@ test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_T
 	./$(GX3D_PLUMBING_TEST_BIN)
 	./$(VRAM_TRANSFER_TEST_BIN)
 	./$(UPSCALE_TEST_BIN)
+	./$(XBRZ_TEST_BIN)
 
 clean:
 	rm -rf build

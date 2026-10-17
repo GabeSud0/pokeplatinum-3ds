@@ -101,7 +101,8 @@ typedef struct ComposeConfig {
     float convergence;       /* 0: worked out from each scene */
     int edges;               /* edge marking (the game's outlines) on the GPU */
     int flipV;               /* (if the 2D comes out upside down) */
-    int filter3d;            /* the 3D's textures: 0 nearest (the DS's), 1 bilinear, 2 sharp (2x2, bilinear) */
+    int filter3d;            /* the 3D's textures: 0 nearest (the DS's), 1 bilinear, 2 sharp (2x2, bilinear),
+                              * 3 xbrz (2x by xBRZ, nearest), 4 xbrz smooth (bilinear) */
 } ComposeConfig;
 
 int NitroPort_ComposeInit(const ComposeConfig *config);
