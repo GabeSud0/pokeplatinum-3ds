@@ -236,8 +236,76 @@ static void test_day(void)
     CHECK(!NitroPort_SunShadows());
 }
 
+/* What casts and receives; triangles that only cast reaching further
+ * towards the sun */
+static void test_roles_reach(void)
+{
+    NitroShadowSun sun = { 55.0f, 30.0f };
+    NitroShadowSetup s, before;
+    typedef struct { float pos[4]; uint8_t color[4]; float uv[2]; } GVtx;
+    static GVtx g[700];
+    float hi[3][4], ground[4], post[4];
+    int i, n, groundCount, found = -1;
+    double roof[3][3] = { { -10, 40, 20 }, { 10, 40, 20 }, { 0, 50, 30 } };   /* tilted 45 degrees */
+    build(1, 0);
+    groundCount = 8 * 6 * 6;
+    CHECK(NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, sProj, WIDTH, &sun, 512, &s));
+    n = sCount;
+    tri(roof[0], roof[1], roof[2]);
+    for (i = 0; i < sCount; i++) {
+        memcpy(g[i].pos, sV[i].pos, sizeof(g[i].pos));
+        g[i].color[3] = 255;
+    }
+    g[sCount] = g[0];                 /* a translucent ground triangle: left as it is */
+    g[sCount + 1] = g[1];
+    g[sCount + 2] = g[2];
+    for (i = 0; i < 3; i++) g[sCount + i].color[3] = 128;
+    NitroPort_ShadowRoles(g[0].pos, &g[0].color[3], sizeof(GVtx), (size_t)sCount + 3, &s);
+    for (i = 0; i < groundCount; i++) {
+        if (g[i].color[3] != NITRO_SHADOW_RECEIVE_ONLY) break;
+    }
+    CHECK(i == groundCount);                                   /* the ground: flat */
+    for (i = groundCount; i < n; i++) {
+        if (g[i].color[3] != NITRO_SHADOW_CAST_ONLY) break;
+    }
+    CHECK(i == n);                                             /* the post's sides: upright */
+    CHECK(g[n].color[3] == NITRO_SHADOW_CAST_RECEIVE && g[n + 2].color[3] == NITRO_SHADOW_CAST_RECEIVE);
+    CHECK(g[sCount].color[3] == 128);
+
+    /* a point high over the post (outside the view: only casting), over the
+     * map but nearer the sun than anything in the scene */
+    for (i = 40; i <= 400 && found < 0; i += 10) {
+        float u, v;
+        project(0.0, (double)i, 0.0, hi[0], NULL);
+        u = apply(s.receiver[0], hi[0]);
+        v = apply(s.receiver[1], hi[0]);
+        if (u > 0.05f && u < 0.95f && v > 0.05f && v < 0.95f && apply(s.receiver[3], hi[0]) < -0.05f) found = i;
+    }
+    CHECK(found > 0);
+    project(-1.0, (double)found, 0.0, hi[1], NULL);
+    project(1.0, (double)found, 1.0, hi[2], NULL);
+    project(10.0, 0.0, 10.0, ground, NULL);
+    project(2.0, 30.0, 2.0, post, NULL);
+    before = s;
+    NitroPort_ShadowReach(hi[0], sizeof(hi[0]), 3, &s);
+    CHECK(apply(s.receiver[3], hi[0]) > -1e-4f);
+    CHECK(apply(s.receiver[3], ground) < 1.0f + 1e-4f);
+    CHECK(apply(s.receiver[3], post) + s.bias < apply(s.receiver[3], ground));
+    CHECK(s.bias < before.bias);   /* (the same in the scene: the distances longer) */
+    CHECK(!memcmp(s.receiver[0], before.receiver[0], sizeof(s.receiver[0])));   /* the map stays where it is */
+    for (i = 0; i < 4; i++) CHECK(s.caster[2][i] == -s.receiver[3][i]);
+    /* far off the map: nothing changes */
+    s = before;
+    project(2000.0, 300.0, 0.0, hi[0], NULL);
+    project(2001.0, 300.0, 0.0, hi[1], NULL);
+    project(2000.0, 301.0, 1.0, hi[2], NULL);
+    NitroPort_ShadowReach(hi[0], sizeof(hi[0]), 3, &s);
+    CHECK(!memcmp(&s, &before, sizeof(s)));
+}
+
 int main(void)
 {
+    test_roles_reach();
     test_day();
     test_post_shadow();
     test_azimuth();

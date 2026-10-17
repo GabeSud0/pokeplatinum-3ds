@@ -60,6 +60,16 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
                                   NitroGx3dBatch *batches, size_t max_batches,
                                   size_t *batch_count, unsigned *dropped);
 
+/* The scene's shadow-only triangles (shadow_triangles) for the sun
+ * shadows' map, as NitroPort_Gx3dBuildBatches has the opaque ones: into
+ * out (capacity vertices) and batches (max_batches), batches' first
+ * counting from first (where out is in the vertex buffer). Their vertices
+ * aren't to be drawn on the screen. Returns the vertices written. */
+size_t NitroPort_Gx3dBuildShadowBatches(const NitroGx3dScene *scene, size_t first,
+                                        NitroGx3dGpuVertex *out, size_t capacity,
+                                        NitroGx3dBatch *batches, size_t max_batches,
+                                        size_t *batch_count);
+
 /* PC only, for checking the GPU path without a 3DS: draws the scene in
  * software the way port_gx3d_pica.c asks the PICA to (port_gx3d_gpusim.c),
  * into RGB555|coverage pixels like the reference rasterizer's. */

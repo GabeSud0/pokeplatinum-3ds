@@ -57,7 +57,15 @@ typedef struct NitroShadowSetup {
      * direction (where it goes), and the map's width in it. */
     float up[3], light[3];
     float extent;
+    /* the camera's space from (x, y, w, 1): rows for x, y, z */
+    float back[3][4];
 } NitroShadowSetup;
+
+/* What a triangle does in the sun (NitroPort_ShadowRoles), kept in its
+ * vertices' alpha (opaque polygons' is 255 otherwise): */
+#define NITRO_SHADOW_CAST_RECEIVE 255u   /* a slope: a roof */
+#define NITRO_SHADOW_CAST_ONLY    254u   /* upright: a wall, a character, a tree */
+#define NITRO_SHADOW_RECEIVE_ONLY 253u   /* flat: the ground, what lies on it */
 
 /* The setup for a scene, from its triangles' vertices (count of them, three
  * a triangle; each x, y, z, w floats, stride bytes apart) and projection
@@ -69,6 +77,25 @@ typedef struct NitroShadowSetup {
 int NitroPort_ShadowSetup(const float *positions, size_t stride, size_t count,
                           const int32_t projection[16], unsigned screenWidth,
                           const NitroShadowSun *sun, unsigned mapSize, NitroShadowSetup *out);
+
+/* A setup's distances reaching further towards the sun, for triangles that
+ * only cast (the scene's shadow_triangles: outside the view, or facing
+ * away from it; as for NitroPort_ShadowSetup, three vertices a triangle):
+ * any over the map nearer the sun than the scene's nearest would be cut
+ * off otherwise. The map's place and size stay as they are (what shadows
+ * the view is over it, whatever casts it). */
+void NitroPort_ShadowReach(const float *positions, size_t stride, size_t count, NitroShadowSetup *setup);
+
+/* Each opaque triangle's part in the sun shadows, into its vertices'
+ * alpha (count vertices, three a triangle, positions and alphas stride
+ * bytes apart; only alphas of 255 are changed). Only what faces up
+ * receives shadows: the models are made for the camera's one view, and on
+ * walls, characters and trees (cards) their own shadows made odd shapes.
+ * What lies flat doesn't cast: a doormat or a path's edge just above the
+ * ground cast a stray shape beside it; a flat roof isn't missed (its
+ * walls' shadows have its outline). */
+void NitroPort_ShadowRoles(const float *positions, uint8_t *alphas, size_t stride, size_t count,
+                           const NitroShadowSetup *setup);
 
 /* The look over the day, after Platinum's own times of day (rtc.c):
  * morning 4:00-9:59, day 10:00-16:59, evening 17:00-19:59, night 20:00-3:59. */

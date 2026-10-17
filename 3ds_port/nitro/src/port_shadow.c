@@ -179,7 +179,69 @@ int NitroPort_ShadowSetup(const float *positions, size_t stride, size_t count,
     out->up[0] = up.x; out->up[1] = up.y; out->up[2] = up.z;
     out->light[0] = d.x; out->light[1] = d.y; out->light[2] = d.z;
     out->extent = extent;
+    memcpy(out->back, b.m, sizeof(out->back));
     return 1;
+}
+
+void NitroPort_ShadowReach(const float *positions, size_t stride, size_t count, NitroShadowSetup *setup)
+{
+    const unsigned char *base = (const unsigned char *)positions;
+    float least = 0.0f, k;
+    size_t i;
+    int j, c;
+    for (i = 0; i + 2 < count; i += 3) {
+        float lo[2] = { 1e30f, 1e30f }, hi[2] = { -1e30f, -1e30f }, d = 1e30f;
+        for (c = 0; c < 3; c++) {
+            const float *q = (const float *)(base + (i + (size_t)c) * stride);
+            float in[4] = { q[0], q[1], q[3], 1.0f }, u[2], dist = 0.0f;
+            u[0] = u[1] = 0.0f;
+            for (j = 0; j < 4; j++) {
+                u[0] += setup->receiver[0][j] * in[j];
+                u[1] += setup->receiver[1][j] * in[j];
+                dist += setup->receiver[3][j] * in[j];
+            }
+            for (j = 0; j < 2; j++) {
+                if (u[j] < lo[j]) lo[j] = u[j];
+                if (u[j] > hi[j]) hi[j] = u[j];
+            }
+            if (dist < d) d = dist;
+        }
+        if (hi[0] < 0.0f || lo[0] > 1.0f || hi[1] < 0.0f || lo[1] > 1.0f) continue;
+        if (d < least) least = d;
+    }
+    if (!(least < 0.0f)) return;
+    /* the distance d becomes (d - least) / (1 - least) */
+    k = 1.0f / (1.0f - least);
+    setup->receiver[3][3] -= least;
+    for (j = 0; j < 4; j++) {
+        setup->receiver[3][j] *= k;
+        setup->caster[2][j] = -setup->receiver[3][j];
+    }
+    setup->bias *= k;
+}
+
+void NitroPort_ShadowRoles(const float *positions, uint8_t *alphas, size_t stride, size_t count,
+                           const NitroShadowSetup *setup)
+{
+    const unsigned char *base = (const unsigned char *)positions;
+    V3 up = v3(setup->up[0], setup->up[1], setup->up[2]);
+    Back b;
+    size_t i;
+    memcpy(b.m, setup->back, sizeof(b.m));
+    for (i = 0; i + 2 < count; i += 3) {
+        V3 a0 = back(&b, (const float *)(base + i * stride));
+        V3 a1 = back(&b, (const float *)(base + (i + 1) * stride));
+        V3 a2 = back(&b, (const float *)(base + (i + 2) * stride));
+        V3 n = normalize(cross(sub(a1, a0), sub(a2, a0)));
+        float facing = fabsf(dot(n, up));
+        uint8_t role = facing > 0.92f ? NITRO_SHADOW_RECEIVE_ONLY
+                       : facing > 0.6f ? NITRO_SHADOW_CAST_RECEIVE : NITRO_SHADOW_CAST_ONLY;
+        int k;
+        for (k = 0; k < 3; k++) {
+            uint8_t *a = alphas + (i + (size_t)k) * stride;
+            if (*a == 255u) *a = role;
+        }
+    }
 }
 
 /* ------------------------------------------------- the look over the day */
@@ -207,15 +269,17 @@ static float ramp(float t, float a, float b)
  * camera: the shadows fall under the characters and trees, which are cards
  * facing the camera, and the cards shade each other in stripes; from the
  * bottom, the shadows hide behind what casts them.) It crosses the top
- * between 9:30 and 12:30, high, its shadows short. */
+ * between 9:30 and 12:30, high, its shadows short. Never lower than 30
+ * degrees: the shadows at most about twice as long as what casts them (a
+ * real low sun's ran across the whole screen). */
 static const float sSunWay[][3] = {
-    { 5.0f, 12.0f, 170.0f },
-    { 8.0f, 35.0f, 158.0f },
-    { 9.5f, 48.0f, 150.0f },
+    { 5.0f, 30.0f, 170.0f },
+    { 8.0f, 42.0f, 158.0f },
+    { 9.5f, 52.0f, 150.0f },
     { 12.5f, 65.0f, 45.0f },
-    { 16.0f, 50.0f, 30.0f },
-    { 19.0f, 25.0f, 14.0f },
-    { 20.0f, 12.0f, 8.0f },
+    { 16.0f, 55.0f, 30.0f },
+    { 19.0f, 40.0f, 14.0f },
+    { 20.0f, 32.0f, 8.0f },
 };
 
 void NitroPort_ShadowSunAt(int hour, int minute, NitroShadowSun *sun, float *strength)

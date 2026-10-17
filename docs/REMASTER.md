@@ -46,10 +46,22 @@ What it does:
   a real shadow from the sun, from its own shape: the scene's opaque
   polygons are drawn once more from the sun into a 512x512 shadow map (the
   PICA's shadow mode: each texel keeps the nearest distance; cut-outs by
-  their alpha), and the scene's opaque polygons are then drawn with it on
-  texture unit 0 (the PICA's shadow texture, its lookups 2x2 filtered: soft
-  edges a texel wide), the DS's texture on unit 1, each pixel times the
-  light there (`gx3d_shadow_cast.v.pica`, `gx3d_shadow_recv.v.pica`). The
+  their alpha; `gx3d_shadow_cast.v.pica`). The light goes on through a
+  mask at half the screen's size: each eye's opaque polygons are drawn into
+  it with the map on texture unit 0 (the PICA's shadow texture; white lit,
+  black in shadow; `gx3d_shadow_recv.v.pica`), it's blurred into a second
+  (four bilinear taps), and that goes over the scene's opaque pixels,
+  multiplying them by the shade where it's dark: edges two or three pixels
+  soft. Only what faces up receives (the ground, roofs): on walls,
+  characters and trees, made for the camera's one view, their own shadows
+  made odd shapes; and what lies flat doesn't cast (a doormat or a path's
+  edge cast a stray shape beside it); each triangle's part is kept in its
+  vertices' alpha (`NitroPort_ShadowRoles`). What the camera doesn't
+  draw still casts: the triangles facing away from it (a building's back)
+  and those outside the view's sides, up to half the view beyond them,
+  are kept for the map only (`NitroGx3dScene.shadow_triangles`), and the
+  game's box tests pass what's that near, so a building's shadow isn't cut
+  where its back or its top is out of view. The
   sun is found for each scene in the camera's own space
   (`nitro/src/port_shadow.c`): the vertices go back through the scene's
   projection (`NitroGx3dScene.projection`), the ground is the plane most of
@@ -59,7 +71,8 @@ What it does:
   rises on the right at 5:00 (long shadows to the left), is high at the top
   left at midday (short ones to the bottom right) and sets on the left at
   20:00 (long ones to the right); at night the moon, high at the top left,
-  shadows a third as strong. It stays at the sides and the top left: from
+  shadows a third as strong. Never lower than 30 degrees: a shadow at most
+  about twice as long as what casts it. It stays at the sides and the top left: from
   the top, the light comes towards the camera and the shadows fall under
   the characters and trees (cards facing the camera), which shade each
   other in stripes; from the bottom, the shadows hide behind what casts

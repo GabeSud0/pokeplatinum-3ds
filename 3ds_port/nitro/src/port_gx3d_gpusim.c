@@ -73,6 +73,7 @@ static float edge(float ax, float ay, float bx, float by, float px, float py)
 static int sShadows, sGrade, sSunFixed;
 static NitroShadowSun sFixedSun = { 55.0f, 32.0f };
 static float sShadowMap[SHADOW_SIZE * SHADOW_SIZE];
+static float sLit[W * H];   /* (the opaque pixels' light, for the mask) */
 static uint32_t sGradeTable[32768];
 
 void NitroPort_Gx3dSimulateLook(int shadows, int grade, int fixedSun, float elevation, float azimuth)
@@ -86,6 +87,20 @@ void NitroPort_Gx3dSimulateLook(int shadows, int grade, int fixedSun, float elev
 }
 
 static float row4(const float r[4], const float *p) { return r[0] * p[0] + r[1] * p[1] + r[2] * p[3] + r[3]; }
+
+/* m (w x h) at (u, v) in texels, bilinear, clamped at the edges */
+static float bilinear(const float *m, int w, int h, float u, float v)
+{
+    float cx = u - 0.5f, cy = v - 0.5f, fx, fy;
+    int x0 = (int)floorf(cx), y0 = (int)floorf(cy), x1, y1;
+    fx = cx - (float)x0;
+    fy = cy - (float)y0;
+    x1 = x0 + 1; y1 = y0 + 1;
+    x0 = x0 < 0 ? 0 : x0 >= w ? w - 1 : x0; x1 = x1 < 0 ? 0 : x1 >= w ? w - 1 : x1;
+    y0 = y0 < 0 ? 0 : y0 >= h ? h - 1 : y0; y1 = y1 < 0 ? 0 : y1 >= h ? h - 1 : y1;
+    return (m[y0 * w + x0] * (1.0f - fx) + m[y0 * w + x1] * fx) * (1.0f - fy) +
+           (m[y1 * w + x0] * (1.0f - fx) + m[y1 * w + x1] * fx) * fy;
+}
 
 static void shadow_map(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batches, size_t nb,
                        const NitroGx3dTexBanks *banks, uint32_t *tiled, const NitroShadowSetup *setup)
@@ -101,6 +116,7 @@ static void shadow_map(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *ba
         for (k = batch->first; k + 2 < batch->first + batch->count; k += 3) {
             const NitroGx3dGpuVertex *v = &verts[k];
             float mx[3], my[3], md[3], area;
+            if (v[0].color[3] == NITRO_SHADOW_RECEIVE_ONLY) continue;   /* (lying flat: doesn't cast) */
             int j, x0, x1, y0, y1, x, y;
             for (j = 0; j < 3; j++) {
                 mx[j] = (row4(setup->caster[0], v[j].position) + 1.0f) * 0.5f * SHADOW_SIZE;
@@ -139,6 +155,37 @@ static void shadow_map(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *ba
     }
 }
 
+/* The light over the opaque pixels, as port_gx3d_pica.c puts it: a mask at
+ * half size (each texel the mean of its 2x2), blurred (four bilinear taps
+ * half a texel to the diagonals), read back bilinear; each pixel times
+ * shade + (1 - shade) * it. */
+static void apply_mask(Color *color, const float shade[3])
+{
+    enum { MW = W / 2, MH = H / 2 };
+    static float mask[MW * MH], blurred[MW * MH];
+    int x, y, k;
+#define TAP(m, u, v) bilinear(m, MW, MH, u, v)
+    for (y = 0; y < MH; y++)
+        for (x = 0; x < MW; x++)
+            mask[y * MW + x] = (sLit[(2 * y) * W + 2 * x] + sLit[(2 * y) * W + 2 * x + 1] +
+                                sLit[(2 * y + 1) * W + 2 * x] + sLit[(2 * y + 1) * W + 2 * x + 1]) * 0.25f;
+    for (y = 0; y < MH; y++)
+        for (x = 0; x < MW; x++) {
+            float s = 0.0f;
+            for (k = 0; k < 4; k++) s += TAP(mask, x + 0.5f + ((k & 1) ? 0.5f : -0.5f), y + 0.5f + ((k & 2) ? 0.5f : -0.5f));
+            blurred[y * MW + x] = s * 0.25f;
+        }
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            float m = TAP(blurred, (x + 0.5f) * 0.5f, (y + 0.5f) * 0.5f);
+            Color *c = &color[y * W + x];
+            c->r *= shade[0] + (1.0f - shade[0]) * m;
+            c->g *= shade[1] + (1.0f - shade[1]) * m;
+            c->b *= shade[2] + (1.0f - shade[2]) * m;
+        }
+#undef TAP
+}
+
 /* 1 lit .. 0 in shadow, for a distance d at map place (u, v) */
 static float shadow_lookup(float u, float v, float d)
 {
@@ -155,8 +202,9 @@ static float shadow_lookup(float u, float v, float d)
 
 void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
 {
-    static NitroGx3dGpuVertex verts[NITRO_GX3D_PICA_MAX_VERTICES];
-    static NitroGx3dBatch batches[NITRO_GX3D_MAX_TRIANGLES];
+    /* (after the scene's, the sun shadows' own, as port_gx3d_pica.c) */
+    static NitroGx3dGpuVertex verts[NITRO_GX3D_PICA_MAX_VERTICES + 3 * NITRO_GX3D_MAX_SHADOW_TRIANGLES];
+    static NitroGx3dBatch batches[NITRO_GX3D_MAX_TRIANGLES + 256];
     static uint32_t tiled[1024 * 1024];
     static Color color[W * H];
     static float depth[W * H];
@@ -170,7 +218,7 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
     NitroShadowSetup shadow;
     NitroShadowSun sun = sFixedSun;
     float strength = 1.0f, shade[3];
-    int idPass, shadowed = 0;
+    int idPass, shadowed = 0, masked = 0;
     size_t nb = 0, b, i, nv;
     unsigned dropped;
     uint32_t clear = (uint32_t)NitroPort_IoReg[0x350] | ((uint32_t)NitroPort_IoReg[0x351] << 8) |
@@ -210,16 +258,29 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
     if (sShadows && nv && strength >= 0.02f &&
         NitroPort_ShadowSetup(verts[0].position, sizeof(verts[0]), nv, scene->projection, scene->screen_width,
                               &sun, SHADOW_SIZE, &shadow)) {
+        size_t ns = 0, n;
         shadowed = 1;
-        shadow_map(verts, batches, nb, &banks, tiled, &shadow);
+        n = NitroPort_Gx3dBuildShadowBatches(scene, nv, verts + nv, 3 * NITRO_GX3D_MAX_SHADOW_TRIANGLES,
+                                             batches + nb, 256, &ns);
+        NitroPort_ShadowReach(verts[nv].position, sizeof(verts[0]), n, &shadow);
+        NitroPort_ShadowRoles(verts[0].position, &verts[0].color[3], sizeof(verts[0]), nv + n, &shadow);
+        shadow_map(verts, batches, nb + ns, &banks, tiled, &shadow);
+        for (i = 0; i < W * H; i++) sLit[i] = 1.0f;
     }
     NitroPort_Gx3dEdgeSetup(&edges);
     edges.clearDepth = 0xFFFFFFu;   /* the target is cleared to the farthest */
     /* Pass 1 draws; with edge marking, pass 2 writes the opaque pixels'
      * polygon IDs to the stencil where they're in front (port_gx3d_pica.c). */
     for (idPass = 0; idPass < (edges.enabled ? 2 : 1); idPass++)
-    for (b = 0; b < nb; b++) {
-        const NitroGx3dBatch *batch = &batches[b];
+    for (b = 0; b <= nb; b++) {
+        const NitroGx3dBatch *batch = &batches[b < nb ? b : 0];
+        /* the sun shadows' light, after the opaque polygons (as the 3DS) */
+        if (!idPass && shadowed && !masked && (b == nb || batch->translucent)) {
+            apply_mask(color, shade);
+            masked = 1;
+        }
+        if (b == nb) break;
+        {
         unsigned mode = (batch->polygon_attr >> 4) & 3u;
         int textured = batch->texture_param != 0;
         int equal = (batch->polygon_attr >> 14) & 1;
@@ -342,10 +403,9 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
                             sv += wgt * row4(shadow.receiver[1], v[j].position);
                             sd += wgt * row4(shadow.receiver[3], v[j].position);
                         }
-                        lit = shadow_lookup(su, sv, sd - shadow.bias * NITRO_SHADOW_BIAS_SCALE);
-                        out.r *= shade[0] + (1.0f - shade[0]) * lit;
-                        out.g *= shade[1] + (1.0f - shade[1]) * lit;
-                        out.b *= shade[2] + (1.0f - shade[2]) * lit;
+                        lit = v[0].color[3] == NITRO_SHADOW_CAST_ONLY ? 1.0f   /* (upright: doesn't receive) */
+                              : shadow_lookup(su, sv, sd - shadow.bias * NITRO_SHADOW_BIAS_SCALE);
+                        sLit[idx] = lit;   /* (put on with the mask, apply_mask) */
                     }
                     if (passes[p].blend) {
                         Color d = color[idx];
@@ -359,6 +419,7 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
                     stencil[idx] = passes[p].translucent ? (uint8_t)(64u | id) : 0xFF;
                 }
             }
+        }
         }
     }
     NitroPort_Gx3dSetGrade(NULL);

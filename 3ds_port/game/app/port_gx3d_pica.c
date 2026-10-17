@@ -78,6 +78,10 @@ void NitroPort_PicaNoteCmdUse(void)
 
 /* A scene has at most 4096 triangles; a batch per triangle at worst. */
 #define MAX_BATCHES NITRO_GX3D_MAX_TRIANGLES
+/* After them, the sun shadows' own (NitroGx3dScene.shadow_triangles): their
+ * vertices after the scene's, their batches after its. */
+#define SHADOW_VERTICES (3u*NITRO_GX3D_MAX_SHADOW_TRIANGLES)
+#define SHADOW_BATCHES 256u
 
 /* The texture cache: converted textures stay while their source bytes hash
  * the same. Least recently used ones go when over budget. */
@@ -195,6 +199,8 @@ static u32 sShadowColor;                     /* (0xAABBGGRR, alpha 0: the shade,
 static int sGradeMode,sGradePeriod=-1,sGradeWanted=-1;
 static uint32_t *sGradeTable;
 static int look_now(void);
+static int make_masks(void);
+static void free_masks(void);
 static NitroShadowSetup sShadow;
 static int sShadowReady,sShadowDrawn;        /* (the prepared scene has a ground; its map is drawn) */
 static C3D_Tex *sRecvTex;                    /* (unit 1's texture, as bound) */
@@ -203,6 +209,7 @@ static int sRecvTexKnown;
  * sVertices[sPrepared], its batches), and its rear plane. */
 static int sPrepared=-1;
 static size_t sPreparedCount,sPreparedBatches;
+static size_t sShadowOnlyBatches;            /* (the shadows' own, at sBatches[MAX_BATCHES]) */
 static uint32_t sPreparedSwap;
 static uint16_t sRearColor;
 static unsigned sRearAlpha;
@@ -306,6 +313,7 @@ static void clean_up(void)
     if(sRecvReady){shaderProgramFree(&sRecvProgram);sRecvReady=0;}
     if(sShadowTarget){C3D_RenderTargetDelete(sShadowTarget);sShadowTarget=NULL;}
     if(sShadowTexReady){C3D_TexDelete(&sShadowTex);sShadowTexReady=0;}
+    free_masks();
     sShadowMode=0;
     NitroPort_SetSunShadows(0);
     NitroPort_Gx3dSetGrade(NULL);
@@ -361,7 +369,7 @@ int NitroPort_PicaInit(void)
     C3D_CullFace(GPU_CULL_NONE); /* Stage 1 geometry already culled. */
 
     for(i=0;i<2;i++){
-        sVertices[i]=linearAlloc(NITRO_GX3D_PICA_MAX_VERTICES*
+        sVertices[i]=linearAlloc((NITRO_GX3D_PICA_MAX_VERTICES+SHADOW_VERTICES)*
                                  sizeof(NitroGx3dGpuVertex));
         if(!sVertices[i])goto fail;
     }
@@ -371,7 +379,7 @@ int NitroPort_PicaInit(void)
         if(!sImages[i]||!sDepthIds[i])goto fail;
         memset(sImages[i],0,IMAGE_BYTES);
     }
-    sBatches=malloc(MAX_BATCHES*sizeof(*sBatches));
+    sBatches=malloc((MAX_BATCHES+SHADOW_BATCHES)*sizeof(*sBatches));
     if(!sBatches)goto fail;
     sBuffer=0;
     return 1;
@@ -1190,6 +1198,19 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
     sShadowReady=look_now() && sShadowMode && sPreparedCount &&
                  NitroPort_ShadowSetup(sVertices[slot][0].position,sizeof(NitroGx3dGpuVertex),sPreparedCount,
                                        scene->projection,scene->screen_width,&sSun,SHADOW_SIZE,&sShadow);
+    sShadowOnlyBatches=0;
+    if(sShadowReady){
+        /* what only casts (outside the view, or facing away), after the
+         * scene's vertices */
+        NitroGx3dGpuVertex *extra=sVertices[slot]+sPreparedCount;
+        size_t n=NitroPort_Gx3dBuildShadowBatches(scene,sPreparedCount,extra,SHADOW_VERTICES,
+                                                  sBatches+MAX_BATCHES,SHADOW_BATCHES,&sShadowOnlyBatches);
+        NitroPort_ShadowReach(extra[0].position,sizeof(NitroGx3dGpuVertex),n,&sShadow);
+        /* what casts and what receives (the vertex programs read it) */
+        NitroPort_ShadowRoles(sVertices[slot][0].position,&sVertices[slot][0].color[3],
+                              sizeof(NitroGx3dGpuVertex),sPreparedCount+n,&sShadow);
+        GSPGPU_FlushDataCache(sVertices[slot],(u32)((sPreparedCount+n)*sizeof(NitroGx3dGpuVertex)));
+    }
     setup_fog();
     /* CLEAR_COLOR: the rear plane's colour and alpha, as the game has them
      * at this scene (fogged, if it is). */
@@ -1392,6 +1413,11 @@ void NitroPort_PicaLook(int shadows,int grade,int fixedSun,float elevation,float
             return;
         }
     }
+    if(!make_masks()){
+        free_masks();
+        NitroPort_Log("[remaster] no VRAM for the sun shadows' masks");
+        return;
+    }
     sShadowMode=1;
     NitroPort_SetSunShadows(1);
 }
@@ -1452,8 +1478,8 @@ static void draw_shadow_map(void)
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
     C3D_FragOpMode(GPU_FRAGOPMODE_SHADOW);
     sBoundTexKnown=0;
-    for(b=0;b<sPreparedBatches;b++){
-        const NitroGx3dBatch *batch=&sBatches[b];
+    for(b=0;b<sPreparedBatches+sShadowOnlyBatches;b++){
+        const NitroGx3dBatch *batch=&sBatches[b<sPreparedBatches?b:MAX_BATCHES+(b-sPreparedBatches)];
         int textured;
         if(batch->translucent)continue;
         if(!room_for_draw())break;
@@ -1466,45 +1492,90 @@ static void draw_shadow_map(void)
     sBoundTexKnown=0;
 }
 
-/* The scene's opaque pass with the shadows: its program (the view as
- * last set, the shadow map's rows), the map on unit 0. */
-static void begin_shadowed(void)
+/* Soft edges: the light isn't put on the scene's pixels straight from the
+ * shadow map (its edges a texel wide, a pixel on the screen: hard), but
+ * through a mask at half the screen's size, blurred: each eye's opaque
+ * polygons into the mask (white lit .. black in shadow; their own depth
+ * buffer), the mask blurred into a second one (four bilinear taps half a
+ * texel apart), and then the second over the scene's opaque pixels,
+ * multiplying them by shade + (1 - shade) * the mask. The edges come out
+ * two or three pixels soft. (A mask's 128x256 holds half of either
+ * screen's 240x400 or 240x320.) */
+#define MASK_W 128u
+#define MASK_H 256u
+static C3D_Tex sMaskTex[2];
+static C3D_RenderTarget *sMaskTarget[2];
+static int sMaskReady;
+/* the quads: four blur taps and one plain, for a mask size (two sizes at
+ * most: the upper screen's and the lower's), six vertices each */
+#define MASK_QUADS 5
+static NitroGx3dGpuVertex *sQuads;
+static unsigned sQuadW[2],sQuadH[2];
+
+static int make_masks(void)
 {
     int i;
-    C3D_BindProgram(&sRecvProgram);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,sUnifRecvMtx,&sViewMtx);
-    C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvStereo,sViewStereo,sViewConvergence,0.0f,0.0f);
-    for(i=0;i<4;i++){
-        C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvShadow+i,sShadow.receiver[i][0],sShadow.receiver[i][1],
-                      sShadow.receiver[i][2],sShadow.receiver[i][3]);
+    if(sMaskReady)return 1;
+    for(i=0;i<2;i++){
+        if(!C3D_TexInitVRAM(&sMaskTex[i],MASK_W,MASK_H,GPU_RGBA8))return 0;
+        C3D_TexSetFilter(&sMaskTex[i],GPU_LINEAR,GPU_LINEAR);
+        C3D_TexSetWrap(&sMaskTex[i],GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);
+        sMaskTarget[i]=C3D_RenderTargetCreateFromTex(&sMaskTex[i],GPU_TEXFACE_2D,0,
+                                                     i==0?GPU_RB_DEPTH24:-1);
+        if(!sMaskTarget[i])return 0;
     }
-    C3D_TexBind(0,&sShadowTex);
-    /* (orthographic: no division by w) */
-    C3D_TexShadowParams(false,sShadow.bias*NITRO_SHADOW_BIAS_SCALE);
-    sBoundTexKnown=0;
-    sRecvTexKnown=0;
+    sQuads=linearAlloc(2*MASK_QUADS*6*sizeof(NitroGx3dGpuVertex));
+    if(!sQuads)return 0;
+    sMaskReady=1;
+    return 1;
 }
 
-/* Back to the plain program and one texture unit. */
-static void end_shadowed(void)
+static void free_masks(void)
 {
-    C3D_TexEnvInit(C3D_GetTexEnv(1));
-    C3D_TexEnvInit(C3D_GetTexEnv(2));
-    C3D_TexEnvBufUpdate(C3D_Both,0);
-    C3D_TexBind(1,NULL);
-    C3D_TexBind(0,NULL);
-    sBoundTexKnown=0;
-    C3D_BindProgram(&sProgram);
-    NitroPort_PicaSetView(&sViewMtx,sViewStereo,sViewConvergence);
+    int i;
+    for(i=0;i<2;i++){
+        if(sMaskTarget[i]){C3D_RenderTargetDelete(sMaskTarget[i]);sMaskTarget[i]=NULL;}
+        if(sMaskTex[i].data){C3D_TexDelete(&sMaskTex[i]);memset(&sMaskTex[i],0,sizeof(sMaskTex[i]));}
+    }
+    if(sQuads){linearFree(sQuads);sQuads=NULL;}
+    sQuadW[0]=sQuadW[1]=0;
+    sMaskReady=0;
 }
 
-/* A batch in the shadowed pass: stage 0 the light (the map's lookup s,
- * 1 lit: 1 * s + shade * (1 - s)), kept in the combiner buffer; stage 1 the
- * polygon's colour as set_combiner, the DS's texture on unit 1; stage 2 the
- * two multiplied. */
-static int bind_batch_shadowed(const NitroGx3dBatch *batch)
+/* The first of the quads for a mask of w x h (filled the first time):
+ * the whole target in clip space, the mask's w x h corner as texels. */
+static int quads_for(unsigned w,unsigned h)
+{
+    int slot,q,k;
+    for(slot=0;slot<2;slot++)if(sQuadW[slot]==w && sQuadH[slot]==h)return slot*MASK_QUADS*6;
+    slot=sQuadW[0]?1:0;
+    for(q=0;q<MASK_QUADS;q++){
+        /* taps half a texel to each diagonal; the last one plain */
+        float du=q<4?((q&1)?0.5f:-0.5f)/(float)MASK_W:0.0f;
+        float dv=q<4?((q&2)?0.5f:-0.5f)/(float)MASK_H:0.0f;
+        static const float cx[6]={-1,1,1,-1,1,-1},cy[6]={-1,-1,1,-1,1,1};
+        for(k=0;k<6;k++){
+            NitroGx3dGpuVertex *v=&sQuads[(slot*MASK_QUADS+q)*6+k];
+            v->position[0]=cx[k];
+            v->position[1]=cy[k];
+            v->position[2]=-0.5f;
+            v->position[3]=1.0f;
+            v->color[0]=v->color[1]=v->color[2]=v->color[3]=255;
+            v->uv[0]=(cx[k]+1.0f)*0.5f*(float)w/(float)MASK_W+du;
+            v->uv[1]=(cy[k]+1.0f)*0.5f*(float)h/(float)MASK_H+dv;
+        }
+    }
+    GSPGPU_FlushDataCache(&sQuads[slot*MASK_QUADS*6],MASK_QUADS*6*sizeof(NitroGx3dGpuVertex));
+    sQuadW[slot]=w;sQuadH[slot]=h;
+    return slot*MASK_QUADS*6;
+}
+
+/* The mask pass's batch: its texture on unit 1 (for its cut-out's alpha),
+ * colour the shadow map's lookup (unit 0). */
+static void bind_batch_mask(const NitroGx3dBatch *batch)
 {
     int textured=batch->texture_param!=0;
+    unsigned mode=(batch->polygon_attr>>4)&3u;
     C3D_Tex *tex=NULL;
     C3D_TexEnv *env;
     sBoundCut=0;
@@ -1519,21 +1590,126 @@ static int bind_batch_shadowed(const NitroGx3dBatch *batch)
     }
     env=C3D_GetTexEnv(0);
     C3D_TexEnvInit(env);
-    C3D_TexEnvColor(env,sShadowColor);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_TEXTURE0,0,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
+    if(textured && mode!=1){
+        C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE1,GPU_PRIMARY_COLOR,0);
+        C3D_TexEnvFunc(env,C3D_Alpha,GPU_MODULATE);
+    }else{
+        C3D_TexEnvSrc(env,C3D_Alpha,GPU_PRIMARY_COLOR,0,0);
+        C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    }
+}
+
+/* The quads' program state: the plain program, clip space as it is. */
+static void quad_pass(int first)
+{
+    C3D_Mtx identity;
+    C3D_BufInfo *buffers=C3D_GetBufInfo();
+    Mtx_Identity(&identity);
+    C3D_BindProgram(&sProgram);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,sUnifMtx,&identity);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifStereo,0.0f,1.0f,0.0f,0.0f);
+    BufInfo_Init(buffers);
+    BufInfo_Add(buffers,sQuads,sizeof(NitroGx3dGpuVertex),3,0x210u);
+    C3D_CullFace(GPU_CULL_NONE);
+    C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
+    C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
+    C3D_AlphaTest(false,GPU_ALWAYS,0);
+    fog_mode(0);
+    (void)first;
+}
+
+/* This eye's mask, blurred into sMaskTex[1]. Before the scene's own draw
+ * (its program and target are set up after). */
+static int sMaskFirst;   /* (the quads for this eye's mask size) */
+static void draw_shadow_mask(const PicaView *view)
+{
+    unsigned w=view->fb->width/2u,h=view->fb->height/2u;
+    size_t b;
+    int q;
+    if(w>MASK_W)w=MASK_W;
+    if(h>MASK_H)h=MASK_H;
+    sMaskFirst=quads_for(w,h);
+    /* the mask: the opaque polygons' light, at half size */
+    C3D_FrameBufClear(&sMaskTarget[0]->frameBuf,C3D_CLEAR_ALL,0xFFFFFFFFu,0xFFFFFFFFu);
+    C3D_SetFrameBuf(&sMaskTarget[0]->frameBuf);
+    C3D_SetViewport(0,0,w,h);
+    C3D_BindProgram(&sProgram);
+    begin_pass(view,&view->rect);   /* (the eye's view, remembered for the next program) */
+    C3D_BindProgram(&sRecvProgram);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,sUnifRecvMtx,&sViewMtx);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvStereo,sViewStereo,sViewConvergence,0.0f,0.0f);
+    for(q=0;q<4;q++){
+        C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvShadow+q,sShadow.receiver[q][0],sShadow.receiver[q][1],
+                      sShadow.receiver[q][2],sShadow.receiver[q][3]);
+    }
+    NitroPort_PicaBindVertices(sVertices[sPrepared]);
+    C3D_TexBind(0,&sShadowTex);
+    C3D_TexShadowParams(false,sShadow.bias*NITRO_SHADOW_BIAS_SCALE);   /* (orthographic: no division by w) */
+    sBoundTexKnown=0;
+    sRecvTexKnown=0;
+    fog_begin();
+    C3D_CullFace(GPU_CULL_NONE);
+    C3D_DepthMap(!(sPreparedSwap&2u),-1.0f,0.0f);
+    C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
+    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+    for(b=0;b<sPreparedBatches;b++){
+        const NitroGx3dBatch *batch=&sBatches[b];
+        uint32_t attr=batch->polygon_attr;
+        if(batch->translucent)continue;
+        if(!room_for_draw())break;
+        bind_batch_mask(batch);
+        C3D_AlphaTest(true,GPU_GREATER,sBoundCut);
+        C3D_DepthTest(true,(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS,GPU_WRITE_ALL);
+        C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+    }
+    C3D_TexBind(1,NULL);
+    /* blurred: four taps, a quarter each, added */
+    C3D_FrameBufClear(&sMaskTarget[1]->frameBuf,C3D_CLEAR_COLOR,0x000000FFu,0);
+    C3D_SetFrameBuf(&sMaskTarget[1]->frameBuf);
+    C3D_SetViewport(0,0,w,h);
+    quad_pass(sMaskFirst);
+    C3D_TexBind(0,&sMaskTex[0]);
+    {
+        C3D_TexEnv *env=C3D_GetTexEnv(0);
+        C3D_TexEnvInit(env);
+        C3D_TexEnvColor(env,0xFF404040u);
+        C3D_TexEnvSrc(env,C3D_RGB,GPU_TEXTURE0,GPU_CONSTANT,0);
+        C3D_TexEnvFunc(env,C3D_RGB,GPU_MODULATE);
+        C3D_TexEnvSrc(env,C3D_Alpha,GPU_CONSTANT,0,0);
+        C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    }
+    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ONE,GPU_ZERO,GPU_ONE);
+    for(q=0;q<4;q++)C3D_DrawArrays(GPU_TRIANGLES,sMaskFirst+q*6,6);
+    C3D_TexBind(0,NULL);
+    sBoundTexKnown=0;
+}
+
+/* The blurred mask over the scene's opaque pixels (just drawn): each times
+ * shade + (1 - shade) * the mask. Then the scene's state again. */
+static void apply_shadow_mask(const PicaView *view)
+{
+    C3D_TexEnv *env;
+    C3D_SetViewport(0,0,view->fb->width,view->fb->height);
+    quad_pass(sMaskFirst);
+    C3D_TexBind(0,&sMaskTex[1]);
+    env=C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvColor(env,sShadowColor);   /* (alpha 0: one minus it is 1) */
     C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,GPU_CONSTANT,GPU_TEXTURE0);
     C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_ALPHA,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
     C3D_TexEnvFunc(env,C3D_RGB,GPU_INTERPOLATE);
     C3D_TexEnvSrc(env,C3D_Alpha,GPU_CONSTANT,0,0);
     C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
-    polygon_combiner(C3D_GetTexEnv(1),batch->polygon_attr,textured,GPU_TEXTURE1);
-    env=C3D_GetTexEnv(2);
-    C3D_TexEnvInit(env);
-    C3D_TexEnvSrc(env,C3D_RGB,GPU_PREVIOUS,GPU_PREVIOUS_BUFFER,0);
-    C3D_TexEnvFunc(env,C3D_RGB,GPU_MODULATE);
-    C3D_TexEnvSrc(env,C3D_Alpha,GPU_PREVIOUS,0,0);
-    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
-    C3D_TexEnvBufUpdate(C3D_RGB,1);   /* (stage 0's output, read by stage 2) */
-    return textured;
+    /* colour = the light times what's there; alpha as it is */
+    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_DST_COLOR,GPU_ZERO,GPU_ZERO,GPU_ONE);
+    C3D_DrawArrays(GPU_TRIANGLES,sMaskFirst+4*6,6);
+    C3D_TexBind(0,NULL);
+    sBoundTexKnown=0;
+    /* the scene's own program, vertices and view again */
+    NitroPort_PicaBindVertices(sVertices[sPrepared]);
+    begin_pass(view,&view->rect);
 }
 
 void NitroPort_PicaDrawScene(const PicaView *view)
@@ -1556,6 +1732,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         sShadowDrawn=1;
         draw_shadow_map();
     }
+    if(sShadowReady)draw_shadow_mask(view);
     C3D_BindProgram(&sProgram);
     fog_begin();
     sBoundTexKnown=0;
@@ -1567,17 +1744,15 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     C3D_DepthMap(!(sPreparedSwap&2u),-1.0f,0.0f);
     C3D_AlphaTest(true,GPU_GREATER,0);
     /* The opaque polygons, as the classic path draws them (see there);
-     * in the sun shadows' program, with the shadow map, if there are. */
+     * then the sun shadows' light over them, if there are. */
     C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
-    if(sShadowReady)begin_shadowed();
     for(b=0;b<sPreparedBatches;b++){
         const NitroGx3dBatch *batch=&sBatches[b];
         uint32_t attr=batch->polygon_attr;
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(batch->translucent)continue;
         if(!room_for_draw())break;
-        if(sShadowReady)bind_batch_shadowed(batch);
-        else bind_batch(batch);
+        bind_batch(batch);
         batch_fog(attr);
         C3D_StencilTest(true,GPU_ALWAYS,0xFF,0xFF,0xFF);
         /* (a filtered texture: its texels' edges at half alpha) */
@@ -1586,7 +1761,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
         C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
     }
-    if(sShadowReady)end_shadowed();
+    if(sShadowReady)apply_shadow_mask(view);
     /* Their fully opaque texels of translucent polygons of alpha 31 are
      * opaque too (drawn here so the outlines go over them as well). */
     for(b=0;b<sPreparedBatches;b++){
