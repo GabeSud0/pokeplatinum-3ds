@@ -7,6 +7,7 @@
 #include <nitro_port.h>
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_vertex.h>
+#include <nitro_port_shadow.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -380,6 +381,79 @@ static void test_box_test(void)
     NitroPort_GxDirectWrite(0x70,word2(ONE,ONE));
     NitroPort_Gx3dRefreshStatus();
     CHECK((read32(0x600)&2)!=0);
+}
+/* With the sun shadows on, what isn't drawn but may cast a shadow into the
+ * view is kept for them (shadow_triangles): a triangle facing away, one
+ * outside the view's sides (within twice the view), one crossing them
+ * (whole); not a translucent one, nor one too far out; box tests pass
+ * what's in reach. The scene after a SWAP_BUFFERS with them on. */
+static void flat_triangle(int x0,int x1,int y0,int y1)
+{
+    NitroPort_GxDirectWrite(0x40,0);
+    vertex(x0,y0,0);
+    vertex(x1,y0,0);
+    vertex((x0+x1)/2,y1,0);
+    NitroPort_GxDirectWrite(0x41,0);
+}
+static void test_shadow_triangles(void)
+{
+    const NitroGx3dScene *scene;
+    int i,whole;
+    NitroPort_SetSunShadows(1);
+    reset_geometry();
+    swap();
+    NitroPort_Gx3dScene();                             /* (done, and read) */
+    NitroPort_GxDirectWrite(0x29,(1u<<6)|(31u<<16));   /* (only the back drawn) */
+    flat_triangle(-3000,3000,-3000,3000);
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(31u<<16));
+    flat_triangle(5000,7000,-1000,1000);               /* x 1.2-1.7: off the right */
+    flat_triangle(10000,12000,-1000,1000);             /* x 2.4-2.9: beyond reach */
+    flat_triangle(2000,6000,-1000,1000);               /* crossing the right side */
+    NitroPort_GxDirectWrite(0x29,(1u<<6)|(15u<<16));   /* translucent, facing away */
+    flat_triangle(-3000,3000,-3000,3000);
+    NitroPort_GxDirectWrite(0x29,(0u<<6)|(31u<<16));   /* drawn on neither side */
+    flat_triangle(-3000,3000,-3000,3000);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count>=1);                            /* the crossing one's piece in view */
+    for(i=0;i<(int)scene->count;i++)CHECK(scene->triangles[i].v[0].clip[0]<=4096 ||
+                                           scene->triangles[i].v[1].clip[0]<=4096);
+    CHECK(scene->shadow_count==3);
+    whole=0;
+    for(i=0;i<(int)scene->shadow_count;i++){
+        const NitroGx3dTriangle *tri=&scene->shadow_triangles[i];
+        if(tri->v[0].clip[0]==2000 && tri->v[1].clip[0]==6000)whole=1;
+        CHECK(((tri->polygon_attr>>16)&31u)==31u);
+        CHECK(tri->v[0].clip[3]==4096);
+    }
+    CHECK(whole);
+    CHECK(scene->shadow_triangles[1].v[0].x==(int)(((5000+4096)*256.0/(2*4096))*256+0.5));
+    /* box tests: just off the right side passes, far off doesn't */
+    NitroPort_GxDirectWrite(0x70,word2(6000,0));
+    NitroPort_GxDirectWrite(0x70,word2(0,ONE/8));
+    NitroPort_GxDirectWrite(0x70,word2(ONE/8,ONE/8));
+    NitroPort_Gx3dRefreshStatus();
+    CHECK((read32(0x600)&2)!=0);
+    NitroPort_GxDirectWrite(0x70,word2(5*ONE,0));
+    NitroPort_GxDirectWrite(0x70,word2(0,ONE/8));
+    NitroPort_GxDirectWrite(0x70,word2(ONE/8,ONE/8));
+    NitroPort_Gx3dRefreshStatus();
+    CHECK((read32(0x600)&2)==0);
+    /* off: none kept, and a box just off the side doesn't pass */
+    NitroPort_SetSunShadows(0);
+    swap();
+    NitroPort_Gx3dScene();                             /* (done, and read) */
+    NitroPort_GxDirectWrite(0x29,(1u<<6)|(31u<<16));
+    flat_triangle(-3000,3000,-3000,3000);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==0);
+    CHECK(scene->shadow_count==0);
+    NitroPort_GxDirectWrite(0x70,word2(6000,0));
+    NitroPort_GxDirectWrite(0x70,word2(0,ONE/8));
+    NitroPort_GxDirectWrite(0x70,word2(ONE/8,ONE/8));
+    NitroPort_Gx3dRefreshStatus();
+    CHECK((read32(0x600)&2)==0);
 }
 /* A wider view (NitroPort_Gx3dSetWideView): x scaled by 256/320, so a
  * vertex at x = 1.2 (out of view) is in view at 0.96, and one at 0.5 is
@@ -983,6 +1057,7 @@ static void run_all(void)
     test_vtx_diff();
     test_triangles_and_depth();
     test_culling();
+    test_shadow_triangles();
     test_triangle_strip();
     test_hidden_vertices();
     test_textures();

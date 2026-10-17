@@ -18,8 +18,10 @@
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_mailbox.h>
 #include <nitro_port_gx3d_vertex.h>
+#include <nitro_port_shadow.h>
 #include "port_platform.h"
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -603,37 +605,90 @@ static const NitroGx3dVertex *screen_of(GeoVertex *v)
     if(!v->hasScreen){v->screen=to_screen(v);v->hasScreen=1;}
     return &v->screen;
 }
-/* Cull a screen-space triangle and stage what's left. */
-static void add_screen_triangle(const NitroGx3dVertex *aa,const NitroGx3dVertex *bb,
-                                const NitroGx3dVertex *cc)
+/* The sun shadows' own triangles (NitroGx3dScene.shadow_triangles), kept
+ * with the shadows on (read at each SWAP_BUFFERS, for the next scene). */
+static int sShadowCapture;
+/* How far beyond the view's sides they're kept: x and y up to 2 w (half
+ * the view's width or height beyond each side; a shadow at the sun's
+ * lowest, 30 degrees, is under twice as long as what casts it), in front
+ * of the camera and inside the near and far planes. The game's box tests
+ * pass what's in that much too (test_command). */
+#define SHADOW_GUARD 2
+static int shadow_reach(const GeoVertex *v)
+{
+    int64_t w=v->clip[3];
+    if(w<=0 || (v->outside & 0x30u))return 0;
+    return llabs((long long)v->clip[0])<=SHADOW_GUARD*w && llabs((long long)v->clip[1])<=SHADOW_GUARD*w;
+}
+/* Keep a whole triangle of the polygon being built for the shadows only:
+ * opaque, drawn on some side (not a shadow volume's, mode 3). Its screen
+ * positions worked out apart from screen_of's (a strip's vertex may yet
+ * be drawn, lit, by a later triangle). */
+static void keep_for_shadow(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
+{
+    NitroGx3dScene *scene=&sScenes[sBuilding];
+    NitroGx3dTriangle *tri;
+    if(!sShadowCapture || !((s.attr>>6)&3u) || ((s.attr>>4)&3u)==3u)return;
+    if(((s.attr>>16)&31u)!=31u)return;
+    if(scene->shadow_count>=NITRO_GX3D_MAX_SHADOW_TRIANGLES)return;
+    if(!shadow_reach(a)||!shadow_reach(b)||!shadow_reach(c))return;
+    tri=&scene->shadow_triangles[scene->shadow_count];
+    tri->polygon_attr=s.attr;
+    tri->texture_param=s.texparam;
+    tri->palette_base=s.plttbase;
+    tri->sort_key=0;
+    if(NitroPort_Gx3dTriangleTranslucent(tri))return;
+    tri->v[0]=to_screen(a);tri->v[1]=to_screen(b);tri->v[2]=to_screen(c);
+    scene->shadow_count++;
+}
+/* Whether the polygon being built is culled: facing the side not drawn. */
+static int polygon_culled(void)
+{
+    unsigned mask=(s.attr>>6)&3u;
+    return mask && !(mask & (sPolygonFront?2u:1u));
+}
+/* Cull a screen-space triangle and stage what's left. 1 if it had no area
+ * on the screen (edge on). */
+static int add_screen_triangle(const NitroGx3dVertex *aa,const NitroGx3dVertex *bb,
+                               const NitroGx3dVertex *cc)
 {
     NitroGx3dTriangle *tri;
     int64_t cross=(int64_t)(bb->x-aa->x)*(cc->y-aa->y)-
                   (int64_t)(bb->y-aa->y)*(cc->x-aa->x);
     int front=sPolygonFront, mask=(s.attr>>6)&3;
     sDiag.lastAttr=s.attr;
-    if(!cross){sDiag.degenerate++;return;}
-    if(!mask){sDiag.cullBoth++;return;}
-    if(!(mask & (front?2:1))){sDiag.cullFacing++;return;}
-    if(sStagedCount>=sizeof(sStaged)/sizeof(sStaged[0]))return;
+    if(!cross){sDiag.degenerate++;return 1;}
+    if(!mask){sDiag.cullBoth++;return 0;}
+    if(!(mask & (front?2:1))){sDiag.cullFacing++;return 0;}
+    if(sStagedCount>=sizeof(sStaged)/sizeof(sStaged[0]))return 0;
     tri=&sStaged[sStagedCount++];
     tri->v[0]=*aa;tri->v[1]=*bb;tri->v[2]=*cc;
     tri->polygon_attr=s.attr;
     tri->texture_param=s.texparam;
     tri->palette_base=s.plttbase;
+    return 0;
 }
 static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
 {
     GeoVertex v[12],tmp[12];
     unsigned i,p,n=3,clipped=0;
-    /* All three outside one plane: nothing is left. None outside any: no
-     * clipping needed. Most of a map is one or the other. */
-    if(a->outside & b->outside & c->outside){sDiag.clipped++;return;}
-    light_vertex(a);light_vertex(b);light_vertex(c);
-    if(!(a->outside | b->outside | c->outside)){
-        add_screen_triangle(screen_of(a),screen_of(b),screen_of(c));
+    /* All three outside one plane: nothing is left (but for the shadows,
+     * if it's only the view's sides). None outside any: no clipping
+     * needed. Most of a map is one or the other. */
+    if(a->outside & b->outside & c->outside){
+        if(sShadowCapture && !((a->outside & b->outside & c->outside)&0x30u))keep_for_shadow(a,b,c);
+        sDiag.clipped++;
         return;
     }
+    light_vertex(a);light_vertex(b);light_vertex(c);
+    if(!(a->outside | b->outside | c->outside)){
+        if(add_screen_triangle(screen_of(a),screen_of(b),screen_of(c)) || polygon_culled())
+            keep_for_shadow(a,b,c);
+        return;
+    }
+    /* Crossing the view's sides, or culled: the whole of it for the shadows. */
+    if(sShadowCapture && (((a->outside|b->outside|c->outside)&0x0Fu) || polygon_culled()))
+        keep_for_shadow(a,b,c);
     v[0]=*a;v[1]=*b;v[2]=*c;
     for(p=0;p<6;p++){
         unsigned m=0;
@@ -677,7 +732,9 @@ static int far_hidden(unsigned outside)
  * any/all: its vertices' outcodes OR'd/AND'ed. */
 static int polygon_hidden(unsigned any,unsigned all)
 {
-    if(all){sDiag.clipped++;return 1;}
+    /* (With the sun shadows on, one outside only the view's sides goes on
+     * to stage_triangle, which keeps it for them.) */
+    if(all && !(sShadowCapture && !(all&0x30u))){sDiag.clipped++;return 1;}
     return far_hidden(any);
 }
 
@@ -914,6 +971,29 @@ static void test_command(GeoState *g,unsigned op,const uint32_t *p)
                 all&=outcode(clip);
             }
         }
+        if(all && !(all&0x30u) && NitroPort_SunShadows()){
+            /* Outside only the view's sides: in reach of the shadows? The
+             * box's corners against x and y of SHADOW_GUARD w instead. */
+            int64_t base[4],edge[3][4];
+            int j;
+            unsigned wide=0x0Fu;
+            for(j=0;j<4;j++){
+                base[j]=(int64_t)origin[0]*g->xf.a[j]+(int64_t)origin[1]*g->xf.a[4+j]+
+                        (int64_t)origin[2]*g->xf.a[8+j]+g->xfTrans[j];
+                for(i=0;i<3;i++)edge[i][j]=(int64_t)size[i]*g->xf.a[i*4+j];
+            }
+            for(mask=0;mask<8;mask++){
+                int64_t c[4];
+                for(j=0;j<4;j++){
+                    int64_t v=base[j];
+                    for(i=0;i<3;i++)if((mask>>i)&1)v+=edge[i][j];
+                    c[j]=v>>12;
+                }
+                wide&=(unsigned)(c[0]<-SHADOW_GUARD*c[3])|((unsigned)(c[0]>SHADOW_GUARD*c[3])<<1)|
+                      ((unsigned)(c[1]<-SHADOW_GUARD*c[3])<<2)|((unsigned)(c[1]>SHADOW_GUARD*c[3])<<3);
+            }
+            if(!wide)all=0;
+        }
         g->boxVisible=all?0:1;
         refresh_status(g);
         break;
@@ -1024,6 +1104,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         scene->swap_param=p[0];
         scene->serial=sSerial+1;
         scene->screen_width=(uint32_t)(s.wideNum==s.wideDen?256:s.wideDen);
+        memcpy(scene->projection,s.proj.a,sizeof(scene->projection));
         /* When the game ended it (with the thread: noted on the game's
          * thread as the SWAP went in; swap_queued). */
         scene->stamp=sThreaded?sSwapStamps[(sSwapsDone+1u)&15u]:NitroPort_Gx3dStamp();
@@ -1035,13 +1116,15 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
             sBuilding=(unsigned)next;
             sSerial=serial;
             sScenes[sBuilding].count=0;
+            sScenes[sBuilding].shadow_count=0;
             sScenes[sBuilding].dropped=0;
             NitroPort_Gx3dScenePublished();
         }else{
             /* Keep the newest image and reuse this building slot on the
              * exceptionally slow consumer path; never stall the game. */
-            scene->count=0;scene->dropped++;
+            scene->count=0;scene->shadow_count=0;scene->dropped++;
         }
+        sShadowCapture=NitroPort_SunShadows();
         s.frameVertices=0;s.framePolygons=0;
         if(++sDiag.scenes>=120)diag_log();
         break;
@@ -1253,6 +1336,7 @@ static inline __attribute__((always_inline)) void work_op(unsigned op,const uint
         if(op==0x50u){
             /* Nothing published: the scene being built starts again. */
             sScenes[sBuilding].count=0;
+            sScenes[sBuilding].shadow_count=0;
             sScenes[sBuilding].dropped=0;
             s.frameVertices=0;s.framePolygons=0;
             __atomic_store_n(&sSwapsSkipped,sSwapsSkipped+1u,__ATOMIC_RELAXED);

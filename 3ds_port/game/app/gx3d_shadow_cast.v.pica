@@ -1,0 +1,38 @@
+; Sun shadows (remaster.txt: shadows on), the shadow map's pass: the DS's
+; clip space (x, y, w; see gx3d_passthrough.v.pica) into the shadow map's,
+; through smtx (port_shadow.c: rows on x, y, w, 1). Colour and texture
+; coordinates as they are, for the cut-outs' alpha test. A vertex whose
+; alpha is 253 (NITRO_SHADOW_RECEIVE_ONLY: lying flat) doesn't cast: put
+; past the far plane (z 2), its triangle clipped away.
+.constf consts(1.0, 0.003921568393707275390625, 253.5, 2.0)
+.alias one consts.xxxx
+.alias clrdiv consts.yyyy
+.alias receiveOnly consts.zzzz
+.alias far consts.wwww
+.fvec smtx[4]
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.alias inpos v0
+.alias inclr v1
+.alias intex v2
+
+.entry castmain
+.proc castmain
+    mov r0.xy, inpos
+    mov r0.z, inpos.wwww
+    mov r0.w, one
+    dp4 outpos.x, smtx[0], r0
+    dp4 outpos.y, smtx[1], r0
+    dp4 r1.z, smtx[2], r0
+    dp4 outpos.w, smtx[3], r0
+    ; r2.x: 1 if it casts (alpha above 253.5)
+    slt r2.x, receiveOnly, inclr.wwww
+    add r2.y, one, -r2.xxxx
+    mul r1.z, r1.zzzz, r2.xxxx
+    mul r2.y, far, r2.yyyy
+    add outpos.z, r1.zzzz, r2.yyyy
+    mul outclr, clrdiv, inclr
+    mov outtc0, intex
+    end
+.end

@@ -266,3 +266,40 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
     if(dropped)*dropped=lost;
     return count;
 }
+
+size_t NitroPort_Gx3dBuildShadowBatches(const NitroGx3dScene *scene, size_t first,
+                                        NitroGx3dGpuVertex *out, size_t capacity,
+                                        NitroGx3dBatch *batches, size_t max_batches,
+                                        size_t *batch_count)
+{
+    size_t i,count=0,nb=0;
+    if(batch_count)*batch_count=0;
+    if(!scene||!out||!batches)return 0;
+    for(i=0;i<scene->shadow_count && i<NITRO_GX3D_MAX_SHADOW_TRIANGLES;i++){
+        const NitroGx3dTriangle *tri=&scene->shadow_triangles[i];
+        uint32_t param,palette,attr;
+        NitroGx3dBatch *batch;
+        float tw,th;
+        unsigned k;
+        if(count+3>capacity)break;
+        batch_state(tri,&param,&palette,&attr);
+        batch=nb?&batches[nb-1]:NULL;
+        if(!batch || batch->texture_param!=param || batch->palette_base!=palette ||
+           batch->polygon_attr!=attr){
+            if(nb>=max_batches)break;
+            batch=&batches[nb++];
+            batch->first=(uint32_t)(first+count);
+            batch->count=0;
+            batch->texture_param=param;
+            batch->palette_base=palette;
+            batch->polygon_attr=attr;
+            batch->translucent=0;
+        }
+        tw=(float)(8u<<((tri->texture_param>>20)&7u));
+        th=(float)(8u<<((tri->texture_param>>23)&7u));
+        for(k=0;k<3;k++)put_vertex(&out[count++],&tri->v[k],scene->swap_param,31u,tw,th,0.0f,0.0f);
+        batch->count+=3;
+    }
+    if(batch_count)*batch_count=nb;
+    return count;
+}

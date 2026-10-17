@@ -98,6 +98,10 @@ LIBC = {"memcpy", "memset", "memmove", "memcmp", "strcmp", "strlen", "strncpy",
         "floor", "ceil", "fmin", "fmax", "fabs",
         # ... and the GPU-path simulator (port_gx3d_gpusim.c) its float versions.
         "floorf", "ceilf", "fminf", "fmaxf", "fabsf",
+        # ... and the sun shadows' setup and the look over the day (port_shadow.c):
+        # libm's float functions (sinf and cosf of one angle become sincosf),
+        # and the local time.
+        "sqrtf", "sinf", "cosf", "sincosf", "tanf", "powf", "exp2f", "log2f", "localtime_r",
         # Wide art (port_wideart.c): the art folder's files and captures,
         # hosted C/newlib (devkitARM's has the directory functions).
         "opendir", "readdir", "closedir", "mkdir", "stat", "qsort", "snprintf",

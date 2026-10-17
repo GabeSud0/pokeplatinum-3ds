@@ -440,11 +440,14 @@ $(OUT)/app/port_compose_pica.o: app/port_compose_pica.c app/port_pica.h $(NITRO)
 	@echo "  APP CC port_compose_pica.c"
 	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -MMD -MP -c $< -o $@
 
-# Assemble a PICA200 passthrough shader exactly like hello3d. The generated
-# blob symbol is gx3d_passthrough_shbin, consumed by port_gx3d_pica.c.
-$(OUT)/app/gx3d_passthrough.shbin: app/gx3d_passthrough.v.pica
+# Assemble the PICA200 vertex programs like hello3d, into one blob (one
+# DVLE each, in this order: the polygons, the sun shadows' map, the sun
+# shadows' scene). The generated blob symbol is gx3d_passthrough_shbin,
+# consumed by port_gx3d_pica.c.
+GX3D_SHADERS := app/gx3d_passthrough.v.pica app/gx3d_shadow_cast.v.pica app/gx3d_shadow_recv.v.pica
+$(OUT)/app/gx3d_passthrough.shbin: $(GX3D_SHADERS)
 	@mkdir -p $(dir $@)
-	picasso -o $@ $<
+	picasso -o $@ $(GX3D_SHADERS)
 
 $(OUT)/app/gx3d_passthrough_shbin.o: $(OUT)/app/gx3d_passthrough.shbin
 	@cd $(OUT)/app && bin2s gx3d_passthrough.shbin | $(DEVKITARM)/bin/arm-none-eabi-as -o gx3d_passthrough_shbin.o

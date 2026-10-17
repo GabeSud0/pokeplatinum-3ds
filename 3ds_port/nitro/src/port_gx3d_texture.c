@@ -297,8 +297,18 @@ void NitroPort_Gx3dFilterTexelsTiled(const uint32_t *in, unsigned width, unsigne
 static const uint8_t sMortonX[8] = { 0, 1, 4, 5, 16, 17, 20, 21 };
 static const uint8_t sMortonY[8] = { 0, 2, 8, 10, 32, 34, 40, 42 };
 
+/* A colour grade for the decoders below (NitroPort_Gx3dSetGrade): the
+ * DS's 32768 colours each into RGBA8, alpha 0. None: the DS's own. */
+static const uint32_t *sGrade;
+
+void NitroPort_Gx3dSetGrade(const uint32_t *table)
+{
+    sGrade = table;
+}
+
 static uint32_t rgba8(uint16_t rgb, unsigned alpha)
 {
+    if (sGrade) return sGrade[rgb & 0x7fff] | widen(alpha);
     return (widen(rgb & 31) << 24) | (widen((rgb >> 5) & 31) << 16) |
            (widen((rgb >> 10) & 31) << 8) | widen(alpha);
 }

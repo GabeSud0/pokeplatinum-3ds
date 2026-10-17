@@ -18,6 +18,8 @@ extern "C" {
 #define NITRO_GX3D_MAX_TRIANGLES 4096u
 #define NITRO_GX3D_MAX_POLYGONS 2048u
 #define NITRO_GX3D_MAX_VERTICES 6144u
+/* Triangles kept for the sun shadows only (NitroGx3dScene.shadow_triangles). */
+#define NITRO_GX3D_MAX_SHADOW_TRIANGLES 1024u
 
 typedef struct NitroGx3dVertex {
     /* Projection-space homogeneous coordinates, signed 20.12 fixed point. */
@@ -49,10 +51,25 @@ typedef struct NitroGx3dScene {
     /* The view's width this scene was made for (NitroPort_Gx3dSetWideView):
      * 256, or the screen's width when the view is wider. */
     uint32_t screen_width;
+    /* The projection matrix at its SWAP_BUFFERS (20.12, rows as the DS's:
+     * clip = position x projection): the camera's, in the field, which
+     * every polygon of the scene went through (sun shadows, port_shadow.c,
+     * take the vertices back to the camera's space with it). */
+    int32_t projection[16];
     /* When the game ended it: NitroPort_Gx3dStamp() at its SWAP_BUFFERS
      * (the platform's clock; the 3DS's counts V-blanks). */
     uint32_t stamp;
     NitroGx3dTriangle triangles[NITRO_GX3D_MAX_TRIANGLES];
+    /* With the sun shadows on (NitroPort_SunShadows), the opaque triangles
+     * that aren't drawn but can still cast a shadow into the view: those
+     * facing away from the camera (culled), and those outside the view's
+     * sides or crossing them (whole, not clipped; a crossing one is also
+     * among triangles, clipped), up to half the view's width or height
+     * beyond them, in front of the camera. Their vertices' screen x and y are as
+     * to_screen gives them (off the screen for most), the rest as in
+     * triangles; sort_key 0. */
+    uint32_t shadow_count;
+    NitroGx3dTriangle shadow_triangles[NITRO_GX3D_MAX_SHADOW_TRIANGLES];
 } NitroGx3dScene;
 
 /* Reset engine and scene state, without clearing the 2D registers. */

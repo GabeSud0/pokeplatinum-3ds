@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 02:30:00 -0700
+Subject: [PATCH] No round shadow under objects with the sun shadows on
+ (SDK_PORT_3DS)
+
+With the 3DS remaster's sun shadows (remaster.txt: shadows on) each object
+casts its own shadow from the sun; the field's round shadow model under it
+is left out (NitroPort_SunShadows), so there aren't two.
+---
+ src/overlay005/ov5_021F134C.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/src/overlay005/ov5_021F134C.c b/src/overlay005/ov5_021F134C.c
+--- a/src/overlay005/ov5_021F134C.c
++++ b/src/overlay005/ov5_021F134C.c
+@@ -15,6 +15,10 @@
+ #include "sys_task.h"
+ #include "sys_task_manager.h"
+ 
++#ifdef SDK_PORT_3DS
++extern int NitroPort_SunShadows(void);
++#endif
++
+ typedef struct {
+     int unk_00;
+     int unk_04;
+@@ -272,6 +276,15 @@
+ {
+     UnkStruct_ov5_021F15B4 *v0 = param1;
+ 
++#ifdef SDK_PORT_3DS
++    // The 3DS remaster's sun shadows (remaster.txt: shadows on): each
++    // object casts its own shadow from the sun, so this round one under it
++    // isn't drawn (two shadows looked strange).
++    if (NitroPort_SunShadows()) {
++        return;
++    }
++#endif
++
+     if (v0->unk_0C == 0) {
+         VecFx32 v1, v2;
+         MtxFx33 v3 = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
+-- 
+2.43.0
+
