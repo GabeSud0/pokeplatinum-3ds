@@ -167,9 +167,19 @@ stretched:
   from 0 to 255 counts as reaching the right edge (the register can't say
   256, so it leaves the DS's last column out; the bands went black beside
   the intro's city).
-- **The battle background** is a picture wider than the DS's screen (a
-  512-pixel map: the trainer's slide-in scrolls across it), so beyond the
-  DS's edges it shows its own art.
+- **The battle background** is a 512-pixel map (the trainer's slide-in
+  scrolls across it): the picture, then the same picture mirrored. After
+  the intro the game draws the platforms (the terrain's sprites) into it
+  (`BattleSystem_BakeSpritesToBackground`), and puts the player's
+  platform's left part just left of the picture, where the map goes on
+  past the DS's left edge. Beside the DS's screen the map's own pixels show
+  where it has a picture of its own (that platform part, the same for
+  every terrain), and where it only has the mirror, the map's pixel next
+  to the DS's edge goes on: the background's own edge, from before the
+  platforms (the DS's edge pixel is a platform's where one reaches the
+  edge: the Elite Four's, on the right). Until 2026-10-16 the bands
+  repeated the DS's edge pixel, and the player's platform was drawn out
+  into lines.
 - **The place name sign** goes to the screen's left edge while it shows:
   the game tells the port (`patches/pokeplatinum/0014`,
   `NitroPort_WindowAnchor`; patch 0012 tells it where the windows are).
