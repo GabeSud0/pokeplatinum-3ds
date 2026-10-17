@@ -1,0 +1,102 @@
+/*
+ * Sun shadows for the 3D (remaster.txt: shadows on): where the sun is for a
+ * scene, and the matrices the GPU needs for a shadow map. Plain C on the
+ * scene's vertices, shared by the 3DS program and the PC tests.
+ *
+ * The scene's vertices are the DS's clip space (as the GPU path has them:
+ * x and y in -w..w, x scaled for a wider view). With the scene's projection
+ * (NitroGx3dScene.projection) they go back to the camera's own space, where
+ * the sun is put: the ground is found as the plane most of the scene lies
+ * in (cards facing the camera, a character or a tree, left out), and the
+ * sun shines down onto it at an elevation, from an azimuth along the
+ * ground (0: from the screen's left; 90: from the screen's top). Fixed to
+ * the camera, so it doesn't move as the camera follows the player.
+ *
+ * The shadow map looks along the sun's direction over everything in the
+ * scene: each vertex's place in it (u, v, 0..1) and its distance along the
+ * sun's direction (0 nearest the sun .. 1), both as matrices of 4 rows
+ * applied to (x, y, w, 1) of a vertex (its clip z isn't used: the
+ * camera's distance is w).
+ */
+#ifndef NITRO_PORT_SHADOW_H
+#define NITRO_PORT_SHADOW_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* What the light is in the shadow (each channel; the sun's 1), slightly
+ * blue as a clear sky's shade: 0x94 0x99 0xB3 of 255. */
+#define NITRO_SHADOW_SHADE_R 0x94u
+#define NITRO_SHADOW_SHADE_G 0x99u
+#define NITRO_SHADOW_SHADE_B 0xB3u
+/* How far the shadow map's lookup takes the setup's bias (of the ground's
+ * own slope): half again, for the tilted walls. */
+#define NITRO_SHADOW_BIAS_SCALE 1.5f
+
+typedef struct NitroShadowSun {
+    float elevation;   /* degrees above the ground */
+    float azimuth;     /* degrees: 0 the sun at the screen's left, 90 at its top */
+} NitroShadowSun;
+
+typedef struct NitroShadowSetup {
+    /* The shadow map pass: rows giving clip x, y (-1..1 over the map), z
+     * (-distance, -1..0) and w (1). */
+    float caster[4][4];
+    /* The scene's pass: rows giving the shadow map's u, v (0..1), 0, and
+     * the distance (0..1): texture coordinate 0's s, t and w. */
+    float receiver[4][4];
+    /* How much nearer the sun a texel must be to shadow (in the distance's
+     * 0..1): the ground's own slope over a texel or two, so it doesn't
+     * shadow itself. */
+    float bias;
+    /* In the camera's space: the ground's normal, the sun's light's
+     * direction (where it goes), and the map's width in it. */
+    float up[3], light[3];
+    float extent;
+} NitroShadowSetup;
+
+/* The setup for a scene, from its triangles' vertices (count of them, three
+ * a triangle; each x, y, z, w floats, stride bytes apart) and projection
+ * (the DS's 4x4, 20.12, rows as the DS keeps them: clip = position x P),
+ * the view's width (NitroGx3dScene.screen_width: 256, or wider: x was
+ * scaled by 256 / it), the sun and the map's size in texels. 0 (no
+ * shadows) if the projection isn't a camera's perspective or no ground
+ * stands out (a battle, a menu). */
+int NitroPort_ShadowSetup(const float *positions, size_t stride, size_t count,
+                          const int32_t projection[16], unsigned screenWidth,
+                          const NitroShadowSun *sun, unsigned mapSize, NitroShadowSetup *out);
+
+/* The look over the day, after Platinum's own times of day (rtc.c):
+ * morning 4:00-9:59, day 10:00-16:59, evening 17:00-19:59, night 20:00-3:59. */
+enum { NITRO_LOOK_MORNING, NITRO_LOOK_DAY, NITRO_LOOK_EVENING, NITRO_LOOK_NIGHT, NITRO_LOOK_PERIODS };
+int NitroPort_LookPeriod(int hour);
+
+/* The sun at a time of day (hour 0-23, minute 0-59), and how strong its
+ * shadows are (0 none .. 1). It rises on the screen's right at 5:00 (long
+ * shadows to the left), is high at the top left at midday (short shadows
+ * to the bottom right) and sets on the left at 20:00 (long shadows to the
+ * right); its shadows fade in after sunrise and out before sunset. At night
+ * the moon, high at the top left, its shadows a third as strong, fading in
+ * after 20:00 and out by 5:00. */
+void NitroPort_ShadowSunAt(int hour, int minute, NitroShadowSun *sun, float *strength);
+
+/* A period's colour grade (white balance, saturation, a gamma), for the
+ * 3D's textures: table[c] for each of the DS's colours (RGB555), RGBA8
+ * with alpha 0 (NitroPort_Gx3dSetGrade). Morning golden, day warm,
+ * evening orange, night cool. */
+void NitroPort_LookGradeTable(int period, uint32_t table[32768]);
+
+/* Whether the sun shadows are on (the GPU path sets it): the game leaves
+ * out its round shadow model under objects then (patch 0027). Any thread. */
+void NitroPort_SetSunShadows(int on);
+int NitroPort_SunShadows(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

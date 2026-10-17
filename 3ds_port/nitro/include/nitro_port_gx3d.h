@@ -49,6 +49,11 @@ typedef struct NitroGx3dScene {
     /* The view's width this scene was made for (NitroPort_Gx3dSetWideView):
      * 256, or the screen's width when the view is wider. */
     uint32_t screen_width;
+    /* The projection matrix at its SWAP_BUFFERS (20.12, rows as the DS's:
+     * clip = position x projection): the camera's, in the field, which
+     * every polygon of the scene went through (sun shadows, port_shadow.c,
+     * take the vertices back to the camera's space with it). */
+    int32_t projection[16];
     /* When the game ended it: NitroPort_Gx3dStamp() at its SWAP_BUFFERS
      * (the platform's clock; the 3DS's counts V-blanks). */
     uint32_t stamp;

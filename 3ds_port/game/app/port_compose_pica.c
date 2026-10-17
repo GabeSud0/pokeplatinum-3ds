@@ -115,6 +115,12 @@ typedef struct Screen {
 } Screen;
 
 static ComposeConfig sConfig;
+static int sLookRequest = -1;   /* (NitroPort_ComposeLook: 0 or 1, for the next frame) */
+
+void NitroPort_ComposeLook(int on)
+{
+    __atomic_store_n(&sLookRequest, on ? 1 : 0, __ATOMIC_RELEASE);
+}
 static Screen sScreens[2];        /* 0: upper, 1: lower */
 static void *sEdgeDepth[4];       /* 240 x 400 D24S8, a direction each, shared by the screens */
 static LightLock sSetLock, sPresentLock;
@@ -445,6 +451,8 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     /* The 3D's textures: nearest, as the DS's, unless remaster.txt says
      * otherwise (filter3d: see main_3ds.c). */
     NitroPort_PicaTextureFilter(config->filter3d);
+    NitroPort_PicaLook(config->shadows, config->grade, config->sunFixed, config->sunElevation,
+                       config->sunAzimuth);
     memset(sScreens, 0, sizeof(sScreens));
     LightLock_Init(&sSetLock);
     LightLock_Init(&sPresentLock);
@@ -986,6 +994,16 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
 
     if (!sReady) {
         return 0;
+    }
+    {
+        int look = __atomic_exchange_n(&sLookRequest, -1, __ATOMIC_ACQ_REL);
+
+        if (look >= 0) {
+            sConfig.shadows = look;
+            sConfig.grade = look;
+            NitroPort_PicaLook(sConfig.shadows, sConfig.grade, sConfig.sunFixed, sConfig.sunElevation,
+                               sConfig.sunAzimuth);
+        }
     }
     startVBlank = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
     if (scene != NULL && (!sSeenValid || sceneSerial != sSeenSerial)) {

@@ -626,6 +626,9 @@ void NitroPort_Log(const char *fmt, ...)
  *   dump3d PATH      save the newest finished 3D image (PNG)
  *   ref3d PATH       draw the newest scene with the reference rasterizer
  *   gpusim PATH      draw it as the 3DS GPU path would (port_gx3d_gpusim.c)
+ *   look S G [E A]   the remaster's look in gpusim: sun shadows (S) and the
+ *                    colour grade (G) 0 or 1; the sun fixed at elevation E,
+ *                    azimuth A (degrees), else by the clock (TZ)
  *   tri3d X Y        log the newest scene's triangles covering pixel (X, Y)
  *   bench2d N [E]    draw each screen (or engine E only: 0 A, 1 B) N times
  *                    and log the time per draw
@@ -808,6 +811,11 @@ static void ControlWait(void)
                 if (!NitroPort_Gx3dWritePng(arg, image)) {
                     NitroPort_Log("[pc] control: can't write %s", arg);
                 }
+            } else if (strncmp(line, "look ", 5) == 0) {
+                int sh = 0, gr = 0, n;
+                float e = 55.0f, az = 32.0f;
+                n = sscanf(line + 5, "%d %d %f %f", &sh, &gr, &e, &az);
+                NitroPort_Gx3dSimulateLook(sh, gr, n == 4, e, az);
             } else if (sscanf(line, "tri3d %ld %ld", &a, &b) == 2) {
                 /* The newest scene's triangles that cover pixel (a, b). */
                 const NitroGx3dScene *scene = NitroPort_Gx3dScene();

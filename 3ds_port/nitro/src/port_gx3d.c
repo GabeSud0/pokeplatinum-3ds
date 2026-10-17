@@ -1024,6 +1024,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         scene->swap_param=p[0];
         scene->serial=sSerial+1;
         scene->screen_width=(uint32_t)(s.wideNum==s.wideDen?256:s.wideDen);
+        memcpy(scene->projection,s.proj.a,sizeof(scene->projection));
         /* When the game ended it (with the thread: noted on the game's
          * thread as the SWAP went in; swap_queued). */
         scene->stamp=sThreaded?sSwapStamps[(sSwapsDone+1u)&15u]:NitroPort_Gx3dStamp();

@@ -41,6 +41,37 @@ What it does:
   tufts a shade off the grass) are left as they are: xBRZ smooths them
   too, into strokes half a texel wide that mostly fall between the 3DS's
   pixels, and the grass came out flat.
+- **The look: sun shadows and a colour grade** (`shadows on`, `grade on`;
+  L + R + B turns both on or off while playing). Every opaque object casts
+  a real shadow from the sun, from its own shape: the scene's opaque
+  polygons are drawn once more from the sun into a 512x512 shadow map (the
+  PICA's shadow mode: each texel keeps the nearest distance; cut-outs by
+  their alpha), and the scene's opaque polygons are then drawn with it on
+  texture unit 0 (the PICA's shadow texture, its lookups 2x2 filtered: soft
+  edges a texel wide), the DS's texture on unit 1, each pixel times the
+  light there (`gx3d_shadow_cast.v.pica`, `gx3d_shadow_recv.v.pica`). The
+  sun is found for each scene in the camera's own space
+  (`nitro/src/port_shadow.c`): the vertices go back through the scene's
+  projection (`NitroGx3dScene.projection`), the ground is the plane most of
+  the scene lies in (cards facing the camera, characters and trees, left
+  out), and the sun shines onto it. A scene without a ground (a battle, a
+  menu) gets none. The sun follows the clock (the game's: the 3DS's): it
+  rises on the right at 5:00 (long shadows to the left), is high at the top
+  left at midday (short ones to the bottom right) and sets on the left at
+  20:00 (long ones to the right); at night the moon, high at the top left,
+  shadows a third as strong. It stays at the sides and the top left: from
+  the top, the light comes towards the camera and the shadows fall under
+  the characters and trees (cards facing the camera), which shade each
+  other in stripes; from the bottom, the shadows hide behind what casts
+  them. The game's own round shadow under objects is left out with them
+  (patch 0027): two shadows looked strange. The grade goes on the 3D's
+  textures as they're decoded (white balance, saturation, a gamma, a table
+  of the DS's 32768 colours): golden in the morning, warm by day, orange in
+  the evening, cool at night, after the game's times of day; the textures
+  are decoded again when the time of day changes. `sun 55,32` fixes the
+  sun (degrees above the ground; from the screen's left, 0, towards its
+  top, 90) instead of the clock. The PC runner's `look` command shows it
+  in `gpusim`.
 - **Even pacing.** Each 3D scene is shown a fixed number of V-blanks after
   the game made it, with the 2D the DS would have shown it with (see
   "Timing").
@@ -361,6 +392,9 @@ frames waiting isn't drawn again until one has shown.
 | `convergence 400` | the distance (the DS's w) that's at the screen's depth, instead of each scene's middle |
 | `edges off` | no outlines (edge marking) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
+| `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off |
+| `grade on` | the colour grade on the 3D's textures, by the time of day |
+| `sun 55,32` | the sun fixed: degrees above the ground, and from the screen's left (0) towards its top (90); `sun clock` (the default) by the time of day |
 | `filter3d xbrz` / `filter3d xbrz-smooth` | the 3D's textures 2x by xBRZ, nearest / bilinear (smooth: no shimmer while the picture moves, but sharp's cost and lines may come back). On trial: the [perf] line's 3D times say what it costs |
 | `flip on` | the 2D layers upside down (if a GPU's texture rows come out the other way round) |
 

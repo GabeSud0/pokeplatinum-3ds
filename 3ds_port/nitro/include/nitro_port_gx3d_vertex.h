@@ -64,4 +64,8 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
  * software the way port_gx3d_pica.c asks the PICA to (port_gx3d_gpusim.c),
  * into RGB555|coverage pixels like the reference rasterizer's. */
 void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555);
+/* The remaster's look in the simulation, as port_gx3d_pica.c draws it
+ * (remaster.txt: shadows, grade, sun; NitroPort_PicaLook): sun shadows,
+ * the colour grade, the sun fixed (degrees) or by the clock. */
+void NitroPort_Gx3dSimulateLook(int shadows, int grade, int fixedSun, float elevation, float azimuth);
 #endif

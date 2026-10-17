@@ -228,7 +228,8 @@ static volatile bool sSuspended;
  * on/off, filter sharp/nearest/smooth/scale2x (on: sharp, off: nearest),
  * stereo on/off/<strength, e.g. 0.02>, convergence <distance> (0: from
  * each scene), edges on/off, flip on/off, filter3d
- * nearest/smooth/sharp/xbrz/xbrz-smooth. */
+ * nearest/smooth/sharp/xbrz/xbrz-smooth, shadows on/off, grade on/off,
+ * sun clock/<elevation>,<azimuth> (degrees). */
 static void ReadRemasterConfig(bool new3ds)
 {
     FILE *f = fopen(REMASTER_PATH, "r");
@@ -250,6 +251,13 @@ static void ReadRemasterConfig(bool new3ds)
      * edges showed lines where the filter took in texels beside them (the
      * opening's mountains). 2026-10-15. */
     sCompose.filter3d = 0;
+    /* The look (sun shadows, the colour grade): off until it's been seen
+     * on a 3DS. The sun by the clock. */
+    sCompose.shadows = 0;
+    sCompose.grade = 0;
+    sCompose.sunFixed = 0;
+    sCompose.sunElevation = 55.0f;
+    sCompose.sunAzimuth = 32.0f;
     if (f == NULL) {
         return;
     }
@@ -289,6 +297,18 @@ static void ReadRemasterConfig(bool new3ds)
                 sCompose.edges = !off;
             } else if (strcmp(name, "flip") == 0) {
                 sCompose.flipV = on;
+            } else if (strcmp(name, "shadows") == 0) {
+                sCompose.shadows = on;
+            } else if (strcmp(name, "grade") == 0) {
+                sCompose.grade = on;
+            } else if (strcmp(name, "sun") == 0) {
+                float e, a;
+                sCompose.sunFixed = 0;
+                if (sscanf(value, "%f,%f", &e, &a) == 2) {
+                    sCompose.sunFixed = 1;
+                    sCompose.sunElevation = e;
+                    sCompose.sunAzimuth = a;
+                }
             } else if (strcmp(name, "filter3d") == 0) {
                 sCompose.filter3d = strcmp(value, "xbrz-smooth") == 0 ? 4
                                     : strcmp(value, "xbrz") == 0 ? 3
@@ -466,6 +486,7 @@ static void GpuMain(void *unused)
         if(!NitroPort_ComposeInit(&sCompose)){
             NitroPort_Log("[compose] couldn't set the GPU display up: the classic display instead");
             NitroPort_PicaTextureFilter(0);   /* (the classic image: the DS's texels) */
+            NitroPort_PicaLook(0, 0, 0, 0.0f, 0.0f);
             sRemaster=false;
         }else{
             s32 priority=0x30;
@@ -1941,9 +1962,21 @@ void NitroPort_OnFrame(void)
             NitroPort_Log("[wide art] %d pictures taken in again", NitroPort_WideArtLoad(WIDE_ART_DIR));
         }
     }
-    /* (with L and R held, A, X, Y and SELECT are the port's, not the game's) */
+    /* The remaster's look (sun shadows and the colour grade, remaster.txt's
+     * shadows and grade) on or off: L + R + B. */
+    if (sRemaster && (held & (KEY_L | KEY_R)) == (KEY_L | KEY_R) && (down & KEY_B)) {
+        static int look = -1;
+
+        if (look < 0) {
+            look = sCompose.shadows || sCompose.grade;
+        }
+        look = !look;
+        NitroPort_ComposeLook(look);
+        NitroPort_Log("[remaster] the look (sun shadows, colour grade) %s", look ? "on" : "off");
+    }
+    /* (with L and R held, A, B, X, Y and SELECT are the port's, not the game's) */
     if ((held & (KEY_L | KEY_R)) == (KEY_L | KEY_R)) {
-        held &= ~(u32)(KEY_A | KEY_X | KEY_Y | KEY_SELECT);
+        held &= ~(u32)(KEY_A | KEY_B | KEY_X | KEY_Y | KEY_SELECT);
     }
     Platinum_SetButtons(DsButtons(held));
     if (held & KEY_TOUCH) {

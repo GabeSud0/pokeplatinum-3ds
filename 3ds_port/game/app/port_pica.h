@@ -28,6 +28,11 @@ void NitroPort_PicaNoteCmdUse(void);
  * bilinear, 2 sharp (each texel 2x2, then bilinear: as the remaster draws
  * the 2D). The compose path sets it from its filter. */
 void NitroPort_PicaTextureFilter(int mode);
+/* The remaster's look on the 3D (port_shadow.c): sun shadows on or off,
+ * the colour grade on or off, and the sun: by the clock (the time of day,
+ * as the game's), or fixed (degrees above the ground, and from the
+ * screen's left, 0, towards its top, 90). */
+void NitroPort_PicaLook(int shadows, int grade, int fixedSun, float elevation, float azimuth);
 
 /* The compose path: the scene's polygons drawn straight into a screen's
  * render target, between the 2D layers. */
@@ -103,6 +108,10 @@ typedef struct ComposeConfig {
     int flipV;               /* (if the 2D comes out upside down) */
     int filter3d;            /* the 3D's textures: 0 nearest (the DS's), 1 bilinear, 2 sharp (2x2, bilinear),
                               * 3 xbrz (2x by xBRZ, nearest), 4 xbrz smooth (bilinear) */
+    int shadows;             /* sun shadows on the 3D */
+    int grade;               /* the colour grade on the 3D's textures */
+    int sunFixed;            /* the sun where sunElevation, sunAzimuth say, not by the clock */
+    float sunElevation, sunAzimuth;   /* (degrees; NitroPort_PicaLook) */
 } ComposeConfig;
 
 int NitroPort_ComposeInit(const ComposeConfig *config);
@@ -137,6 +146,9 @@ uint32_t NitroPort_ComposePublished(int engine);
  * not any longer (the next scene has come). Waits for the GPU. */
 int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, int aOnTop,
                            float slider, int forced, int flush);
+/* The look (sun shadows and the colour grade, NitroPort_PicaLook) on or
+ * off from the next frame drawn. Any thread (L + R + B). */
+void NitroPort_ComposeLook(int on);
 /* Whether that scene is waiting for its 2D (not drawn yet). */
 int NitroPort_ComposeSceneWaiting(uint32_t sceneSerial);
 /* For the [perf] line: frames drawn, the time building them (CPU) and the

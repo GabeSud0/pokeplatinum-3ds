@@ -72,6 +72,13 @@ void NitroPort_Gx3dFilterTexelsTiled(const uint32_t *rgba8, unsigned width, unsi
 /* NitroPort_Gx3dTileRGBA8 undone. */
 void NitroPort_Gx3dUntileRGBA8(const uint32_t *tiled, unsigned width, unsigned height, uint32_t *linear);
 
+/* A colour grade for the decoding into RGBA8 from here on (the GPU
+ * path's NitroPort_Gx3dDecodeTextureTiled and ...Rect): table[c] for each
+ * of the DS's colours c (RGB555), RGBA8 with alpha 0; NULL for the DS's
+ * own colours. Textures already decoded keep the grade they were made
+ * with. (The remaster's look: port_shadow.c's NitroPort_LookGradeTable.) */
+void NitroPort_Gx3dSetGrade(const uint32_t *table);
+
 /* Both at once, without the linear copy: what the 3DS GPU path uses. The
  * same texels as the sampler gives, worked out a row at a time. */
 void NitroPort_Gx3dDecodeTextureTiled(const NitroGx3dTexBanks *banks, uint32_t param,
