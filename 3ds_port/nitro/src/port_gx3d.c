@@ -608,6 +608,31 @@ static const NitroGx3dVertex *screen_of(GeoVertex *v)
 /* The sun shadows' own triangles (NitroGx3dScene.shadow_triangles), kept
  * with the shadows on (read at each SWAP_BUFFERS, for the next scene). */
 static int sShadowCapture;
+/* Their room in the three scenes, made the first time the shadows are on
+ * (never freed: kept for the next time). 0 if there's no memory for it:
+ * no shadow triangles then. The scene being built has none yet (its
+ * SWAP_BUFFERS turned them on), and the others' shadow_count is 0 until
+ * they're built again, so the consumer never reads one half set. */
+static NitroGx3dTriangle *sShadowStore;
+static void shadow_store_attach(void)
+{
+    unsigned i;
+    for(i=0;i<3;i++)
+        sScenes[i].shadow_triangles=sShadowStore?sShadowStore+i*NITRO_GX3D_MAX_SHADOW_TRIANGLES:NULL;
+}
+static int shadow_store(void)
+{
+    if(!sShadowStore){
+        sShadowStore=malloc(3u*NITRO_GX3D_MAX_SHADOW_TRIANGLES*sizeof(*sShadowStore));
+        if(!sShadowStore){
+            static int told;
+            if(!told){told=1;NitroPort_Log("[gx3d] no memory for the sun shadows' triangles");}
+            return 0;
+        }
+        shadow_store_attach();
+    }
+    return 1;
+}
 /* How far beyond the view's sides they're kept: x and y up to 2 w (half
  * the view's width or height beyond each side; a shadow at the sun's
  * lowest, 30 degrees, is under twice as long as what casts it), in front
@@ -630,7 +655,7 @@ static void keep_for_shadow(const GeoVertex *a,const GeoVertex *b,const GeoVerte
     NitroGx3dTriangle *tri;
     if(!sShadowCapture || !((s.attr>>6)&3u) || ((s.attr>>4)&3u)==3u)return;
     if(((s.attr>>16)&31u)!=31u)return;
-    if(scene->shadow_count>=NITRO_GX3D_MAX_SHADOW_TRIANGLES)return;
+    if(!scene->shadow_triangles || scene->shadow_count>=NITRO_GX3D_MAX_SHADOW_TRIANGLES)return;
     if(!shadow_reach(a)||!shadow_reach(b)||!shadow_reach(c))return;
     tri=&scene->shadow_triangles[scene->shadow_count];
     tri->polygon_attr=s.attr;
@@ -1124,7 +1149,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
              * exceptionally slow consumer path; never stall the game. */
             scene->count=0;scene->shadow_count=0;scene->dropped++;
         }
-        sShadowCapture=NitroPort_SunShadows();
+        sShadowCapture=NitroPort_SunShadows() && shadow_store();
         s.frameVertices=0;s.framePolygons=0;
         if(++sDiag.scenes>=120)diag_log();
         break;
@@ -1867,6 +1892,7 @@ void NitroPort_Gx3dReset(void)
     RECORD(7,NULL,0);
     drain();
     memset(&s,0,sizeof(s));memset(sScenes,0,sizeof(sScenes));
+    shadow_store_attach();
     memset(&sDec,0,sizeof(sDec));
     sLightCache.dirty=1;
     sNormalCache.valid=0;

@@ -67,9 +67,12 @@ typedef struct NitroGx3dScene {
      * among triangles, clipped), up to half the view's width or height
      * beyond them, in front of the camera. Their vertices' screen x and y are as
      * to_screen gives them (off the screen for most), the rest as in
-     * triangles; sort_key 0. */
+     * triangles; sort_key 0. Kept apart (NITRO_GX3D_MAX_SHADOW_TRIANGLES
+     * of them), made when the shadows are first turned on: NULL before,
+     * with shadow_count 0 (most players never turn them on, and the 3DS's
+     * memory is tight). */
     uint32_t shadow_count;
-    NitroGx3dTriangle shadow_triangles[NITRO_GX3D_MAX_SHADOW_TRIANGLES];
+    NitroGx3dTriangle *shadow_triangles;
 } NitroGx3dScene;
 
 /* Reset engine and scene state, without clearing the 2D registers. */

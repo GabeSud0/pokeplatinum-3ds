@@ -209,7 +209,8 @@ static int sRecvTexKnown;
  * sVertices[sPrepared], its batches), and its rear plane. */
 static int sPrepared=-1;
 static size_t sPreparedCount,sPreparedBatches;
-static size_t sShadowOnlyBatches;            /* (the shadows' own, at sBatches[MAX_BATCHES]) */
+static size_t sShadowOnlyBatches;
+static size_t sShadowRoom;                   /* (vertices after the scene's for them: SHADOW_VERTICES, or 0) */            /* (the shadows' own, at sBatches[MAX_BATCHES]) */
 static uint32_t sPreparedSwap;
 static uint16_t sRearColor;
 static unsigned sRearAlpha;
@@ -323,34 +324,53 @@ static void clean_up(void)
     if(sTarget){C3D_RenderTargetDelete(sTarget);sTarget=NULL;}
     C3D_Fini();
 }
+/* Why NitroPort_PicaInit failed, in the log: the step, and the memory
+ * left then (both heaps, in KB). */
+static int init_failed(const char *step)
+{
+    NitroPort_Log("[gx3d] 3D setup: %s failed; free: %lu KB linear, %lu KB heap of the region",
+                  step,(unsigned long)(linearSpaceFree()/1024u),
+                  (unsigned long)(osGetMemRegionFree(MEMREGION_APPLICATION)/1024u));
+    clean_up();
+    return 0;
+}
 int NitroPort_PicaInit(void)
 {
     int i;
     C3D_AttrInfo *attrs;
+    NitroPort_Log("[gx3d] 3D setup: free %lu KB linear, %lu KB heap of the region",
+                  (unsigned long)(linearSpaceFree()/1024u),
+                  (unsigned long)(osGetMemRegionFree(MEMREGION_APPLICATION)/1024u));
     /* The command list: 1 MB (citro3d's default, 256 KB, ran out on the
      * 3DS with the remaster's passes, a heavy scene and stereo: citro3d
      * stops the program then, a "Break" on Luma's crash screen). Drawing
      * also stops short of the end (room_for_draw). */
-    if(!C3D_Init(CMDBUF_BYTES))return 0;
+    if(!C3D_Init(CMDBUF_BYTES))return init_failed("citro3d (C3D_Init)");
     sTarget=C3D_RenderTargetCreate(GX3D_W,GX3D_H,
                      GPU_RB_RGBA8,GPU_RB_DEPTH24_STENCIL8);
-    if(!sTarget)goto fail;
+    if(!sTarget)return init_failed("the render target");
     sDvlb=DVLB_ParseFile((u32*)gx3d_passthrough_shbin,
                          gx3d_passthrough_shbin_size);
-    if(!sDvlb)goto fail;
-    if(R_FAILED(shaderProgramInit(&sProgram)))goto fail;
+    if(!sDvlb)return init_failed("the shaders (DVLB_ParseFile)");
+    if(R_FAILED(shaderProgramInit(&sProgram)))return init_failed("the shader program");
     sProgramReady=1;
     if(R_FAILED(shaderProgramSetVsh(&sProgram,&sDvlb->DVLE[0])))
-        goto fail;
+        return init_failed("the vertex shader");
     sUnifMtx=shaderInstanceGetUniformLocation(sProgram.vertexShader,"mtx");
     sUnifStereo=shaderInstanceGetUniformLocation(sProgram.vertexShader,"stereo");
-    if(sUnifMtx<0||sUnifStereo<0)goto fail;
-    /* the sun shadows' programs (DVLE 1 and 2); without them, no shadows */
+    if(sUnifMtx<0||sUnifStereo<0)return init_failed("the vertex shader's uniforms");
+    /* the sun shadows' programs (DVLE 1 and 2); without them, no shadows
+     * (the 3D itself goes on) */
     if(sDvlb->numDVLE>=3){
         sCastReady=R_SUCCEEDED(shaderProgramInit(&sCastProgram));
-        if(sCastReady && R_FAILED(shaderProgramSetVsh(&sCastProgram,&sDvlb->DVLE[1])))goto fail;
+        if(sCastReady && R_FAILED(shaderProgramSetVsh(&sCastProgram,&sDvlb->DVLE[1]))){
+            shaderProgramFree(&sCastProgram);sCastReady=0;
+        }
         sRecvReady=R_SUCCEEDED(shaderProgramInit(&sRecvProgram));
-        if(sRecvReady && R_FAILED(shaderProgramSetVsh(&sRecvProgram,&sDvlb->DVLE[2])))goto fail;
+        if(sRecvReady && R_FAILED(shaderProgramSetVsh(&sRecvProgram,&sDvlb->DVLE[2]))){
+            shaderProgramFree(&sRecvProgram);sRecvReady=0;
+        }
+        if(!sCastReady||!sRecvReady)NitroPort_Log("[gx3d] the sun shadows' shaders didn't set up: no shadows");
         if(sCastReady)sUnifCast=shaderInstanceGetUniformLocation(sCastProgram.vertexShader,"smtx");
         if(sRecvReady){
             sUnifRecvMtx=shaderInstanceGetUniformLocation(sRecvProgram.vertexShader,"mtx");
@@ -368,24 +388,30 @@ int NitroPort_PicaInit(void)
     AttrInfo_AddLoader(attrs,2,GPU_FLOAT,2);
     C3D_CullFace(GPU_CULL_NONE); /* Stage 1 geometry already culled. */
 
-    for(i=0;i<2;i++){
-        sVertices[i]=linearAlloc((NITRO_GX3D_PICA_MAX_VERTICES+SHADOW_VERTICES)*
-                                 sizeof(NitroGx3dGpuVertex));
-        if(!sVertices[i])goto fail;
-    }
     for(i=0;i<IMAGE_SLOTS;i++){
         sImages[i]=linearAlloc(IMAGE_BYTES);
         sDepthIds[i]=linearAlloc(IMAGE_BYTES);
-        if(!sImages[i]||!sDepthIds[i])goto fail;
+        if(!sImages[i]||!sDepthIds[i])return init_failed("the images read back");
         memset(sImages[i],0,IMAGE_BYTES);
     }
+    /* The vertices: room after the scene's for the sun shadows' own
+     * (SHADOW_VERTICES) if there's memory for it; else none (no
+     * shadow-only triangles: sShadowRoom 0). */
+    sShadowRoom=SHADOW_VERTICES;
+    for(i=0;i<2;i++){
+        sVertices[i]=linearAlloc((NITRO_GX3D_PICA_MAX_VERTICES+sShadowRoom)*sizeof(NitroGx3dGpuVertex));
+        if(!sVertices[i] && sShadowRoom){
+            if(i)linearFree(sVertices[0]);
+            sShadowRoom=0;
+            i=-1;
+            continue;
+        }
+        if(!sVertices[i])return init_failed("the vertex buffers");
+    }
     sBatches=malloc((MAX_BATCHES+SHADOW_BATCHES)*sizeof(*sBatches));
-    if(!sBatches)goto fail;
+    if(!sBatches)return init_failed("the batches");
     sBuffer=0;
     return 1;
-fail:
-    clean_up();
-    return 0;
 }
 void NitroPort_PicaExit(void)
 {
@@ -1203,7 +1229,7 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
         /* what only casts (outside the view, or facing away), after the
          * scene's vertices */
         NitroGx3dGpuVertex *extra=sVertices[slot]+sPreparedCount;
-        size_t n=NitroPort_Gx3dBuildShadowBatches(scene,sPreparedCount,extra,SHADOW_VERTICES,
+        size_t n=NitroPort_Gx3dBuildShadowBatches(scene,sPreparedCount,extra,sShadowRoom,
                                                   sBatches+MAX_BATCHES,SHADOW_BATCHES,&sShadowOnlyBatches);
         NitroPort_ShadowReach(extra[0].position,sizeof(NitroGx3dGpuVertex),n,&sShadow);
         /* what casts and what receives (the vertex programs read it) */
