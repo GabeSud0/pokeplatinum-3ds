@@ -191,6 +191,11 @@ typedef struct Engine {
      * colour: index 0 of each 16 colours (4 bits per pixel), or of all 256
      * (8 bits per pixel). */
     u16 bgPal4[256];
+    /* (NITRO_WIDE_CLEAR parts) the BGs (a bit each) with colours shown
+     * clear, which (per palette, a bit each index), and their palettes so */
+    u8 clearBgs;
+    u16 clearMask[16];
+    u16 bgPal4Clear[256];
     u16 bgPal8[256];
     u16 objPal4[256];
     u16 objPal8[256];
@@ -268,6 +273,17 @@ static void MakePalettes(Engine *e)
         e->objPal4[i] = (i & 15) ? obj : 0;
         e->objPal8[i] = i ? obj : 0;
     }
+    if (e->clearBgs) {
+        for (i = 0; i < 256; i++) {
+            e->bgPal4Clear[i] = ((e->clearMask[i >> 4] >> (i & 15)) & 1) ? 0 : e->bgPal4[i];
+        }
+    }
+}
+
+/* A 16-colour BG's palettes (NITRO_WIDE_CLEAR: some colours clear). */
+static inline const u16 *BgPal4(const Engine *e, int bg)
+{
+    return ((e->clearBgs >> bg) & 1) ? e->bgPal4Clear : e->bgPal4;
 }
 
 /* ----------------------------------------------------------------- BGs */
@@ -426,7 +442,7 @@ static u16 TextBgPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int mapx
     } else {
         u8 pair = vram[(charBase + tile * 32 + (u32)py * 4 + (u32)(px >> 1)) & mask];
 
-        return e->bgPal4[((entry >> 12) << 4) | ((px & 1) ? (pair >> 4) : (pair & 15))];
+        return BgPal4(e, bg)[((entry >> 12) << 4) | ((px & 1) ? (pair >> 4) : (pair & 15))];
     }
 }
 
@@ -1409,7 +1425,7 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
             }
         } else {
             u32 bits = Rd32(vram, (charBase + tile * 32 + (u32)py * 4) & mask);
-            const u16 *pal = e->bgPal4 + ((entry >> 12) << 4);
+            const u16 *pal = BgPal4(e, bg) + ((entry >> 12) << 4);
 
             if (bits == 0) {
                 /* all transparent */
@@ -3362,6 +3378,10 @@ static void SetUpParts(Engine *e)
             break;
         case NITRO_WIDE_PICTURE:
             SetUpPicture(e, p);
+            break;
+        case NITRO_WIDE_CLEAR:
+            e->clearBgs |= (u8)(p->bgs & 0x0F);
+            e->clearMask[p->dx & 15] |= (u16)p->col;
             break;
         }
     }

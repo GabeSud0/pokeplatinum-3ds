@@ -2366,6 +2366,27 @@ static void test_wide_parts(void)
         CHECK(rmdir(dir) == 0);
     }
 
+    /* colours shown clear (CLEAR: a panel's background drawn into its
+     * edges): BG1's red (palette 0, index 1), all over it; the white and
+     * the blue as they are; a palette without that bit as it is */
+    {
+        static const short clear[][8] = {
+            { NITRO_WIDE_CLEAR, 2, 0, 0, 0, 0, 0, 1 << 1 },
+        };
+        static const short clearOther[][8] = {
+            { NITRO_WIDE_CLEAR, 2, 0, 0, 0, 0, 1, 1 << 1 },   /* (palette 1: not BG1's) */
+        };
+
+        NitroPort_WideScreenParts(0, &clear[0][0], 1);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[40 * 320 + 72] == GREY && wide[120 * 320 + 32] == GREY);   /* (the backdrop) */
+        CHECK(wide[40 * 320 + 184] == WHITE && wide[40 * 320 + 232] == BLUE);
+        NitroPort_WideScreenParts(0, &clearOther[0][0], 1);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[40 * 320 + 72] == RED);
+        NitroPort_WideScreenParts(0, NULL, 0);
+    }
+
     /* a picture drawn for the layout (NITRO_WIDE_PICTURE, a file in the
      * folder): in front of its BG's pixels, where it's put, turned about
      * its middle; nothing while its file isn't there */

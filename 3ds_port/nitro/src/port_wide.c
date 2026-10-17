@@ -277,10 +277,14 @@ void NitroPort_WideScreenParts(int engine, const short *rows, int count)
         const short *row = rows + i * 8;
         NitroWidePart *p = &got[n];
 
-        if (row[0] < NITRO_WIDE_MOVE || row[0] > NITRO_WIDE_PICTURE) {
+        if (row[0] < NITRO_WIDE_MOVE || row[0] > NITRO_WIDE_CLEAR) {
             continue;
         }
-        if (row[0] == NITRO_WIDE_PICTURE) {
+        if (row[0] == NITRO_WIDE_CLEAR) {
+            if ((row[1] & 0x0F) == 0 || row[6] < 0 || row[6] > 15 || row[7] == 0) {
+                continue;   /* (no BG, no such palette, no colours) */
+            }
+        } else if (row[0] == NITRO_WIDE_PICTURE) {
             if ((row[1] & 0x0F) == 0 || row[7] <= 0 || row[7] >= NITRO_WIDE_PICTURES) {
                 continue;   /* (no BG, or no such picture) */
             }
