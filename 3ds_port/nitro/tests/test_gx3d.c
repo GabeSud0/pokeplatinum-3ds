@@ -384,9 +384,8 @@ static void test_box_test(void)
 }
 /* With the sun shadows on, what isn't drawn but may cast a shadow into the
  * view is kept for them (shadow_triangles): a triangle facing away, one
- * outside the view's sides (within twice the view), one crossing them
- * (whole); not a translucent one, nor one too far out; box tests pass
- * what's in reach. The scene after a SWAP_BUFFERS with them on. */
+ * outside the view's sides (within 4 w), one crossing them (whole); not a
+ * translucent one, nor one too far out; box tests pass what's within 2 w. The scene after a SWAP_BUFFERS with them on. */
 static void flat_triangle(int x0,int x1,int y0,int y1)
 {
     NitroPort_GxDirectWrite(0x40,0);
@@ -407,7 +406,7 @@ static void test_shadow_triangles(void)
     flat_triangle(-3000,3000,-3000,3000);
     NitroPort_GxDirectWrite(0x29,(3u<<6)|(31u<<16));
     flat_triangle(5000,7000,-1000,1000);               /* x 1.2-1.7: off the right */
-    flat_triangle(10000,12000,-1000,1000);             /* x 2.4-2.9: beyond reach */
+    flat_triangle(18500,20500,-1000,1000);             /* x 4.5-5.0: beyond reach */
     flat_triangle(2000,6000,-1000,1000);               /* crossing the right side */
     NitroPort_GxDirectWrite(0x29,(1u<<6)|(15u<<16));   /* translucent, facing away */
     flat_triangle(-3000,3000,-3000,3000);

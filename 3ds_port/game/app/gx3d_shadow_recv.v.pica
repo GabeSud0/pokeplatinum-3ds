@@ -4,10 +4,11 @@
 ; x, y, w, 1): texture coordinate 0 (s, t) and its w (the distance from the
 ; sun) for the shadow map on texture unit 0. The DS's texture goes on
 ; unit 1, its coordinates as texture coordinate 1. A vertex whose alpha is
-; 254 (NITRO_SHADOW_CAST_ONLY: upright, a wall, a character) doesn't
-; receive: its distance 0, nearest the sun, lit.
+; 254 (NITRO_SHADOW_CAST_ONLY: upright, a wall) or 252
+; (NITRO_SHADOW_NEITHER: a character's card, cast by its copy turned to the
+; sun) doesn't receive: its distance 0, nearest the sun, lit.
 .constf byteScale(0.003921568393707275390625, 1.0001, 1.0, 0.0)
-.constf roles(254.5, 253.5, 0.0, 0.0)
+.constf roles(254.5, 253.5, 252.5, 0.0)
 .alias clrdiv byteScale.xxxx
 .alias flatW byteScale.yyyy
 .alias one byteScale.zzzz
@@ -44,9 +45,12 @@
     dp4 outtc0.x, smtx[0], r3
     dp4 outtc0.y, smtx[1], r3
     dp4 r4.z, smtx[3], r3
-    ; r5.x: 1 if it receives (alpha above 254.5, or 253.5 and below)
+    ; r5.x: 1 if it receives (alpha 255, or 253: above 254.5, or above
+    ; 252.5 and 253.5 and below)
     slt r5.x, roles.xxxx, inclr.wwww
     sge r5.y, roles.yyyy, inclr.wwww
+    slt r5.z, roles.zzzz, inclr.wwww
+    mul r5.y, r5.yyyy, r5.zzzz
     add r5.x, r5.xxxx, r5.yyyy
     mul outtc0.z, r4.zzzz, r5.xxxx
     mul outclr, clrdiv, inclr

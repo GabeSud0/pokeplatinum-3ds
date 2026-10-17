@@ -633,12 +633,15 @@ static int shadow_store(void)
     }
     return 1;
 }
-/* How far beyond the view's sides they're kept: x and y up to 2 w (half
- * the view's width or height beyond each side; a shadow at the sun's
- * lowest, 30 degrees, is under twice as long as what casts it), in front
- * of the camera and inside the near and far planes. The game's box tests
- * pass what's in that much too (test_command). */
-#define SHADOW_GUARD 2
+/* How far beyond the view's sides they're kept: x and y up to 4 w (one and
+ * a half views beyond each side), in front of the camera and inside the
+ * near and far planes. The game's box tests pass what's up to 2 w (half a
+ * view beyond each side; test_command): what it draws there is kept
+ * whole, the 4 w only to keep a big building's triangles that reach
+ * further (a building cut off there cast a shadow cut off along a line,
+ * which came and went as the camera moved). */
+#define SHADOW_GUARD 4
+#define BOX_GUARD 2
 static int shadow_reach(const GeoVertex *v)
 {
     int64_t w=v->clip[3];
@@ -998,7 +1001,7 @@ static void test_command(GeoState *g,unsigned op,const uint32_t *p)
         }
         if(all && !(all&0x30u) && NitroPort_SunShadows()){
             /* Outside only the view's sides: in reach of the shadows? The
-             * box's corners against x and y of SHADOW_GUARD w instead. */
+             * box's corners against x and y of BOX_GUARD w instead. */
             int64_t base[4],edge[3][4];
             int j;
             unsigned wide=0x0Fu;
@@ -1014,8 +1017,8 @@ static void test_command(GeoState *g,unsigned op,const uint32_t *p)
                     for(i=0;i<3;i++)if((mask>>i)&1)v+=edge[i][j];
                     c[j]=v>>12;
                 }
-                wide&=(unsigned)(c[0]<-SHADOW_GUARD*c[3])|((unsigned)(c[0]>SHADOW_GUARD*c[3])<<1)|
-                      ((unsigned)(c[1]<-SHADOW_GUARD*c[3])<<2)|((unsigned)(c[1]>SHADOW_GUARD*c[3])<<3);
+                wide&=(unsigned)(c[0]<-BOX_GUARD*c[3])|((unsigned)(c[0]>BOX_GUARD*c[3])<<1)|
+                      ((unsigned)(c[1]<-BOX_GUARD*c[3])<<2)|((unsigned)(c[1]>BOX_GUARD*c[3])<<3);
             }
             if(!wide)all=0;
         }

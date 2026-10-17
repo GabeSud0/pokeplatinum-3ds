@@ -2,8 +2,9 @@
 ; clip space (x, y, w; see gx3d_passthrough.v.pica) into the shadow map's,
 ; through smtx (port_shadow.c: rows on x, y, w, 1). Colour and texture
 ; coordinates as they are, for the cut-outs' alpha test. A vertex whose
-; alpha is 253 (NITRO_SHADOW_RECEIVE_ONLY: lying flat) doesn't cast: put
-; past the far plane (z 2), its triangle clipped away.
+; alpha is 253 (NITRO_SHADOW_RECEIVE_ONLY: lying flat) or 252
+; (NITRO_SHADOW_NEITHER: a card, cast by its copy) doesn't cast: put past
+; the far plane (z 2), its triangle clipped away.
 .constf consts(1.0, 0.003921568393707275390625, 253.5, 2.0)
 .alias one consts.xxxx
 .alias clrdiv consts.yyyy

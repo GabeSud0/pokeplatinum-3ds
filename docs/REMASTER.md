@@ -58,10 +58,18 @@ What it does:
   edge cast a stray shape beside it); each triangle's part is kept in its
   vertices' alpha (`NitroPort_ShadowRoles`). What the camera doesn't
   draw still casts: the triangles facing away from it (a building's back)
-  and those outside the view's sides, up to half the view beyond them,
-  are kept for the map only (`NitroGx3dScene.shadow_triangles`), and the
-  game's box tests pass what's that near, so a building's shadow isn't cut
-  where its back or its top is out of view. The
+  and those outside the view's sides, up to one and a half views beyond
+  them (8192 at most), are kept for the map only
+  (`NitroGx3dScene.shadow_triangles`, made when the shadows are first
+  on), and the game's box tests pass what's up to half a view beyond, so a
+  building's shadow isn't cut where its back or its top is out of view.
+  Characters, signs and the routes' trees are cards facing the camera: the
+  sun saw them edge on, their shadows slivers. Each card gets a copy
+  turned to face the sun and standing upright, its foot where it stands,
+  for the map only (`NitroPort_ShadowCards`; the card itself then neither
+  casts nor receives). The game's own painted shadows (see-through dark
+  patches lying under and beside buildings) are left out with the sun
+  shadows on (`NitroPort_ShadowDecal`): with them there were two shadows. The
   sun is found for each scene in the camera's own space
   (`nitro/src/port_shadow.c`): the vertices go back through the scene's
   projection (`NitroGx3dScene.projection`), the ground is the plane most of
@@ -71,8 +79,8 @@ What it does:
   rises on the right at 5:00 (long shadows to the left), is high at the top
   left at midday (short ones to the bottom right) and sets on the left at
   20:00 (long ones to the right); at night the moon, high at the top left,
-  shadows a third as strong. Never lower than 30 degrees: a shadow at most
-  about twice as long as what casts it. It stays at the sides and the top left: from
+  shadows a third as strong. Never lower than 40 degrees: a shadow at most
+  about 1.2 times as long as what casts it. It stays at the sides and the top left: from
   the top, the light comes towards the camera and the shadows fall under
   the characters and trees (cards facing the camera), which shade each
   other in stripes; from the bottom, the shadows hide behind what casts

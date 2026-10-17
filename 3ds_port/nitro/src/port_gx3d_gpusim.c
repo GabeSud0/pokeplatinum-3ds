@@ -74,6 +74,11 @@ static int sShadows, sGrade, sSunFixed;
 static NitroShadowSun sFixedSun = { 55.0f, 32.0f };
 static float sShadowMap[SHADOW_SIZE * SHADOW_SIZE];
 static float sLit[W * H];   /* (the opaque pixels' light, for the mask) */
+/* (as port_gx3d_pica.c: room for the cards' copies turned to the sun, and
+ * the batches that are the game's painted shadows, left out) */
+#define SHADOW_CARD_TRIANGLES 512u
+#define SHADOW_CARD_BATCHES 256u
+static uint8_t sDecal[NITRO_GX3D_MAX_TRIANGLES];
 static uint32_t sGradeTable[32768];
 
 void NitroPort_Gx3dSimulateLook(int shadows, int grade, int fixedSun, float elevation, float azimuth)
@@ -116,7 +121,8 @@ static void shadow_map(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *ba
         for (k = batch->first; k + 2 < batch->first + batch->count; k += 3) {
             const NitroGx3dGpuVertex *v = &verts[k];
             float mx[3], my[3], md[3], area;
-            if (v[0].color[3] == NITRO_SHADOW_RECEIVE_ONLY) continue;   /* (lying flat: doesn't cast) */
+            /* (lying flat, or a card cast by its copy turned to the sun: doesn't cast) */
+            if (v[0].color[3] == NITRO_SHADOW_RECEIVE_ONLY || v[0].color[3] == NITRO_SHADOW_NEITHER) continue;
             int j, x0, x1, y0, y1, x, y;
             for (j = 0; j < 3; j++) {
                 mx[j] = (row4(setup->caster[0], v[j].position) + 1.0f) * 0.5f * SHADOW_SIZE;
@@ -203,8 +209,10 @@ static float shadow_lookup(float u, float v, float d)
 void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
 {
     /* (after the scene's, the sun shadows' own, as port_gx3d_pica.c) */
-    static NitroGx3dGpuVertex verts[NITRO_GX3D_PICA_MAX_VERTICES + 3 * NITRO_GX3D_MAX_SHADOW_TRIANGLES];
-    static NitroGx3dBatch batches[NITRO_GX3D_MAX_TRIANGLES + 256];
+    static NitroGx3dGpuVertex verts[NITRO_GX3D_PICA_MAX_VERTICES + 3 * NITRO_GX3D_MAX_SHADOW_TRIANGLES +
+                                    3 * SHADOW_CARD_TRIANGLES];
+    static uint32_t decalTexels[4096];
+    static NitroGx3dBatch batches[NITRO_GX3D_MAX_TRIANGLES + 2048 + SHADOW_CARD_BATCHES];
     static uint32_t tiled[1024 * 1024];
     static Color color[W * H];
     static float depth[W * H];
@@ -261,9 +269,32 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
         size_t ns = 0, n;
         shadowed = 1;
         n = NitroPort_Gx3dBuildShadowBatches(scene, nv, verts + nv, 3 * NITRO_GX3D_MAX_SHADOW_TRIANGLES,
-                                             batches + nb, 256, &ns);
-        NitroPort_ShadowReach(verts[nv].position, sizeof(verts[0]), n, &shadow);
+                                             batches + nb, 2048, &ns);
         NitroPort_ShadowRoles(verts[0].position, &verts[0].color[3], sizeof(verts[0]), nv + n, &shadow);
+        {
+            /* the cards' copies turned to the sun, after the shadows' own */
+            size_t nc = 0;
+            n += NitroPort_ShadowCards(verts, batches, nb, nv + n, verts + nv + n,
+                                       3 * NITRO_GX3D_MAX_SHADOW_TRIANGLES + 3 * SHADOW_CARD_TRIANGLES - n,
+                                       batches + nb + ns, SHADOW_CARD_BATCHES, &nc, &shadow);
+            ns += nc;
+        }
+        NitroPort_ShadowReach(verts[nv].position, sizeof(verts[0]), n, &shadow);
+        /* the game's own painted shadows, left out */
+        for (b = 0; b < nb; b++) {
+            const NitroGx3dBatch *batch = &batches[b];
+            unsigned fmt = (batch->texture_param >> 26) & 7u;
+            sDecal[b] = 0;
+            if (!batch->translucent || !batch->count) continue;
+            if (fmt && NitroPort_Gx3dTexWidth(batch->texture_param) * NitroPort_Gx3dTexHeight(batch->texture_param) > 4096u) continue;
+            if (fmt) NitroPort_Gx3dDecodeTexture(&banks, batch->texture_param, batch->palette_base, decalTexels);
+            sDecal[b] = (uint8_t)NitroPort_ShadowDecal(verts[batch->first].position, sizeof(verts[0]),
+                                                       (batch->polygon_attr >> 16) & 31u, fmt == 1u || fmt == 6u,
+                                                       fmt ? decalTexels : NULL,
+                                                       fmt ? NitroPort_Gx3dTexWidth(batch->texture_param) *
+                                                             NitroPort_Gx3dTexHeight(batch->texture_param) : 0,
+                                                       0x7FFF, &shadow);
+        }
         shadow_map(verts, batches, nb + ns, &banks, tiled, &shadow);
         for (i = 0; i < W * H; i++) sLit[i] = 1.0f;
     }
@@ -280,6 +311,7 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
             masked = 1;
         }
         if (b == nb) break;
+        if (shadowed && sDecal[b]) continue;   /* (one of the game's painted shadows) */
         {
         unsigned mode = (batch->polygon_attr >> 4) & 3u;
         int textured = batch->texture_param != 0;
@@ -403,7 +435,8 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
                             sv += wgt * row4(shadow.receiver[1], v[j].position);
                             sd += wgt * row4(shadow.receiver[3], v[j].position);
                         }
-                        lit = v[0].color[3] == NITRO_SHADOW_CAST_ONLY ? 1.0f   /* (upright: doesn't receive) */
+                        lit = (v[0].color[3] == NITRO_SHADOW_CAST_ONLY ||
+                               v[0].color[3] == NITRO_SHADOW_NEITHER) ? 1.0f   /* (upright, a card: doesn't receive) */
                               : shadow_lookup(su, sv, sd - shadow.bias * NITRO_SHADOW_BIAS_SCALE);
                         sLit[idx] = lit;   /* (put on with the mask, apply_mask) */
                     }
