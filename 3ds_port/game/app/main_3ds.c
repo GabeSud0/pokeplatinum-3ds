@@ -1866,6 +1866,13 @@ static void PerfFrame(u64 enter)
                   sGpuCore,
                   soundSamples ? 100.0 * ((double)soundTicks / SYSCLOCK_ARM11) / ((double)soundSamples / 32768.0) : 0.0,
                   sSoundUnderruns);
+    {
+        /* every fifth time: the memory left */
+        static unsigned memoryLines;
+        if (sRemaster && memoryLines++ % 5 == 0) {
+            NitroPort_PicaLogMemory();
+        }
+    }
     sPerfStart = now;
     sPerfGameTicks = 0;
     sPerfReadWaitTicks = 0;

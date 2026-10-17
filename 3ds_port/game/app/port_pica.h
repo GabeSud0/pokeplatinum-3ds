@@ -23,6 +23,8 @@ void NitroPort_PicaTextureStats(u32 *converted, u64 *texels, u64 *ticks);
 /* The GPU command list's peak use (0-1) and the draws left out for want of
  * room in it, since last asked; NoteCmdUse after each C3D_FrameEnd. */
 void NitroPort_PicaCmdStats(float *peak, unsigned *cut);
+/* The memory left (both heaps), as a [perf] memory line. Any thread. */
+void NitroPort_PicaLogMemory(void);
 void NitroPort_PicaNoteCmdUse(void);
 /* How 3D textures are sampled from now on: 0 nearest (as the DS), 1
  * bilinear, 2 sharp (each texel 2x2, then bilinear: as the remaster draws
