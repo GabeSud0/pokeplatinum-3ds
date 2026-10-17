@@ -1612,6 +1612,7 @@ static void draw_shadow_map(void)
 #define MASK_W 128u
 #define MASK_H 256u
 static C3D_Tex sMaskTex[2];
+static C3D_Tex sSpareTex;   /* (8x8, for texture unit 1 when nothing's on it) */
 static C3D_RenderTarget *sMaskTarget[2];
 static int sMaskReady;
 /* the quads: four blur taps and one plain, for a mask size (two sizes at
@@ -1634,6 +1635,9 @@ static int make_masks(void)
     }
     sQuads=linearAlloc(2*MASK_QUADS*6*sizeof(NitroGx3dGpuVertex));
     if(!sQuads)return 0;
+    if(!C3D_TexInit(&sSpareTex,8,8,GPU_RGBA8))return 0;
+    memset(sSpareTex.data,0xFF,8*8*4);
+    GSPGPU_FlushDataCache(sSpareTex.data,8*8*4);
     sMaskReady=1;
     return 1;
 }
@@ -1646,6 +1650,7 @@ static void free_masks(void)
         if(sMaskTex[i].data){C3D_TexDelete(&sMaskTex[i]);memset(&sMaskTex[i],0,sizeof(sMaskTex[i]));}
     }
     if(sQuads){linearFree(sQuads);sQuads=NULL;}
+    if(sSpareTex.data){C3D_TexDelete(&sSpareTex);memset(&sSpareTex,0,sizeof(sSpareTex));}
     sQuadW[0]=sQuadW[1]=0;
     sMaskReady=0;
 }
@@ -1772,7 +1777,13 @@ static void draw_shadow_mask(const PicaView *view)
         C3D_DepthTest(true,(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS,GPU_WRITE_ALL);
         C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
     }
-    C3D_TexBind(1,NULL);
+    /* Unit 1 left bound to the masks' own texture: C3D_TexBind(1, NULL)
+     * reads the texture's type (a data abort at 0: the display thread
+     * died, the screens froze, on a New 3DS 2026-10-17), and a scene's
+     * texture may be freed before the unit is bound again: a spare 8x8
+     * texture of the masks' instead. */
+    C3D_TexBind(1,&sSpareTex);
+    sRecvTexKnown=0;
     /* blurred: four taps, a quarter each, added */
     C3D_FrameBufClear(&sMaskTarget[1]->frameBuf,C3D_CLEAR_COLOR,0x000000FFu,0);
     C3D_SetFrameBuf(&sMaskTarget[1]->frameBuf);
