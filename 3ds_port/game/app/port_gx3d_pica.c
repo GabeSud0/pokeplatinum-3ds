@@ -28,6 +28,7 @@
 #ifdef __3DS__
 #include "port_pica.h"
 #include <nitro_port_gx3d_texture.h>
+#include <nitro_port_xbrz.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -86,12 +87,19 @@ typedef struct TexEntry {
     uint32_t param, palette, hash;
     uint32_t checkedFrame, lastFrame;
     size_t bytes;
-    unsigned scale;    /* texels a DS texel: 1, or 2 (sTexMode 2) */
+    unsigned scale;    /* texels a DS texel: 1, or 2 (sTexMode 2 and 3) */
     int filtered;      /* sampled with the bilinear filter */
     int holes;         /* some texels not fully opaque (its shape needs the alpha test) */
     int packed;        /* RGBA5551 (NitroPort_Gx3dTexIs5551, not filtered), else RGBA8 */
+    /* sTexMode 3: XBRZ_WAITING its texels 2x2 for now, its xBRZ to come
+     * (from xbrzAfter, a system tick: a texture that keeps changing waits
+     * until it stops), XBRZ_DONE */
+    int xbrz;
+    u64 xbrzAfter,convertedAt;
+    u32 conversions;   /* (each conversion's number: an xBRZ begun before is out of date) */
     C3D_Tex tex;
 } TexEntry;
+enum { XBRZ_NONE, XBRZ_WAITING, XBRZ_DONE };
 
 /* How the compose path's textures are sampled (NitroPort_PicaTextureFilter,
  * after remaster.txt's filter): 0 as the DS, nearest; 1 smooth, bilinear;
@@ -99,10 +107,27 @@ typedef struct TexEntry {
  * borders a texel soft, as the 2D is drawn. Drawn 1.25 times the DS's
  * size, a nearest texel is one pixel or two, and which ones changed as the
  * picture moved: the opening's flyover shimmered ("jittery") against its
- * fog, which is 2D (October 2026). The classic path: nearest. */
+ * fog, which is 2D (October 2026). 3 xbrz: 2x by xBRZ (edges and curves
+ * smooth, port_xbrz.c), nearest, RGBA5551 where the DS's format allows:
+ * half sharp's memory and what the GPU reads, and no neighbouring texels
+ * filtered in at polygons' edges (sharp's lines). Worked out a little each
+ * scene (xbrz_work), the texture's texels 2x2 meanwhile. 4 xbrz smooth: the
+ * same, bilinear (no shimmer as the picture moves; sharp's lines may be
+ * back). The classic path: nearest. */
 static int sTexMode;
 static uint32_t *sTexLinear, *sTexTiled;   /* (for converting: heap, grown as needed) */
 static size_t sTexLinearWords, sTexTiledWords;
+/* filter3d xbrz: the texture being worked on (xbrz_work), where it's got
+ * to (pass 0 or 1, row), its texels, the corners' blends, the output. */
+static struct {
+    TexEntry *e;
+    u32 conversions,param,palette;
+    unsigned w,h,phase,row;
+    int wrapS,wrapT;
+    uint32_t *src,*out,*info;   /* (info: a byte a texel) */
+    size_t srcWords,outWords,infoWords;
+} sXbrz;
+static int sXbrzWorked;   /* (once a scene prepared) */
 /* The bound texture's cut for opaque pixels: a filtered texture's edges
  * are half see-through; the DS's texel boundary is at alpha one half. */
 static int sBoundCut;
@@ -196,7 +221,7 @@ void NitroPort_PicaTextureFilter(int mode)
 {
     int i;
     if(mode<0)mode=0;
-    if(mode>2)mode=2;
+    if(mode>4)mode=4;
     if(mode==sTexMode)return;
     sTexMode=mode;
     for(i=0;i<TEX_CACHE_ENTRIES;i++)free_texture(&sTextures[i]);   /* made again the new way */
@@ -208,6 +233,8 @@ static void clean_up(void)
     for(i=0;i<TEX_CACHE_ENTRIES;i++)free_texture(&sTextures[i]);
     free(sTexLinear);sTexLinear=NULL;sTexLinearWords=0;
     free(sTexTiled);sTexTiled=NULL;sTexTiledWords=0;
+    free(sXbrz.src);free(sXbrz.out);free(sXbrz.info);
+    memset(&sXbrz,0,sizeof(sXbrz));
     for(i=0;i<2;i++){
         if(sVertices[i])linearFree(sVertices[i]);
         sVertices[i]=NULL;
@@ -327,12 +354,34 @@ static int any_holes(const uint32_t *t,size_t n)
     return 0;
 }
 
-/* A texture's texels into its PICA texture: as they are (nearest), or
- * through NitroPort_Gx3dFilterTexels for the bilinear filter. 0 if there's
- * no memory for the conversion. */
+/* A texture's texels into its PICA texture: as they are (nearest),
+ * through NitroPort_Gx3dFilterTexels for the bilinear filter, or 2x2 until
+ * its xBRZ is done (xbrz_work). 0 if there's no memory for the conversion. */
+static u32 sConversionSeq;
 static int convert_texture(TexEntry *e,unsigned width,unsigned height)
 {
     uint32_t *lin,*out;
+    if(e->xbrz!=XBRZ_NONE){
+        /* (filter3d xbrz) each texel 2x2 for now; the xBRZ later
+         * (xbrz_work), once the texture has kept still for a second if
+         * it was changed just before (an animation, a fade) */
+        u64 now=svcGetSystemTick();
+        size_t n=(size_t)width*height;
+        out=scratch(&sTexTiled,&sTexTiledWords,n*4u);
+        lin=scratch(&sTexLinear,&sTexLinearWords,n);
+        if(!lin||!out)return 0;
+        NitroPort_Gx3dDecodeTextureTiled(&sBanks,e->param,e->palette,out);
+        NitroPort_Gx3dUntileRGBA8(out,width,height,lin);
+        e->holes=any_holes(lin,n);
+        NitroPort_Gx3dFilterTexelsTiled(lin,width,height,2u,out);
+        if(e->packed)NitroPort_Gx3dPackRGBA5551(out,(uint16_t*)e->tex.data,n*4u);
+        else memcpy(e->tex.data,out,n*16u);
+        e->xbrzAfter=e->conversions && now-e->convertedAt<SYSCLOCK_ARM11 ? now+SYSCLOCK_ARM11 : now;
+        e->convertedAt=now;
+        e->xbrz=XBRZ_WAITING;
+        e->conversions=++sConversionSeq;
+        return 1;
+    }
     if(e->packed){
         /* (decoded as RGBA8, then each texel's 16 bits: exact for these
          * formats; half what the GPU reads in each of a frame's passes) */
@@ -358,6 +407,122 @@ static int convert_texture(TexEntry *e,unsigned width,unsigned height)
     e->holes=any_holes(lin,(size_t)width*height);
     NitroPort_Gx3dFilterTexelsTiled(lin,width,height,e->scale,(uint32_t*)e->tex.data);
     return 1;
+}
+
+/* filter3d xbrz: one texture's xBRZ at a time, a few rows at a time, up
+ * to XBRZ_BUDGET of the 3D thread's time a scene (NitroPort_PicaDrawScene).
+ * A 256x256 texture takes xBRZ a millisecond or two on a PC, so some tens
+ * on the 3DS: too long to wait for in one frame. A new map's textures come
+ * out over a second or so instead, each one as it's finished, the most
+ * recently drawn first. */
+#define XBRZ_BUDGET (SYSCLOCK_ARM11/500u)   /* 2 ms */
+
+static int xbrz_wrap(uint32_t param,int repeatBit,int flipBit)
+{
+    if(!(param&(1u<<repeatBit)))return NITRO_XBRZ_CLAMP;
+    return (param&(1u<<flipBit))?NITRO_XBRZ_MIRROR:NITRO_XBRZ_REPEAT;
+}
+
+/* Whether the texture being worked on is still the one it was begun for
+ * (not thrown out of the cache, converted again, or replaced). */
+static int xbrz_current(void)
+{
+    TexEntry *e=sXbrz.e;
+    return e && e->used && e->xbrz==XBRZ_WAITING && e->conversions==sXbrz.conversions &&
+           e->param==sXbrz.param && e->palette==sXbrz.palette;
+}
+
+/* Begins the next waiting texture's xBRZ, its texels decoded again (the
+ * same as when it was converted, by its hash). 0 if none is waiting. */
+static int xbrz_begin(u64 now)
+{
+    TexEntry *e=NULL;
+    unsigned w,h;
+    size_t n;
+    uint32_t *tiled;
+    int i;
+    sXbrz.e=NULL;
+    for(i=0;i<TEX_CACHE_ENTRIES;i++){
+        TexEntry *c=&sTextures[i];
+        if(!c->used || c->xbrz!=XBRZ_WAITING || c->xbrzAfter>now)continue;
+        if(!e || c->lastFrame>e->lastFrame)e=c;
+    }
+    if(!e)return 0;
+    if(NitroPort_Gx3dTextureHash(&sBanks,e->param,e->palette)!=e->hash){
+        /* (changed since: converted again when next drawn) */
+        e->xbrzAfter=now+SYSCLOCK_ARM11;
+        return 1;
+    }
+    w=NitroPort_Gx3dTexWidth(e->param);
+    h=NitroPort_Gx3dTexHeight(e->param);
+    n=(size_t)w*h;
+    tiled=scratch(&sTexTiled,&sTexTiledWords,n);
+    if(!tiled || !scratch(&sXbrz.src,&sXbrz.srcWords,n) || !scratch(&sXbrz.out,&sXbrz.outWords,n*4u) ||
+       !scratch(&sXbrz.info,&sXbrz.infoWords,(n+3u)/4u)){
+        e->xbrz=XBRZ_NONE;   /* (no memory for it: it stays 2x2) */
+        return 1;
+    }
+    NitroPort_Gx3dDecodeTextureTiled(&sBanks,e->param,e->palette,tiled);
+    NitroPort_Gx3dUntileRGBA8(tiled,w,h,sXbrz.src);
+    memset(sXbrz.info,0,n);
+    sXbrz.e=e;
+    sXbrz.conversions=e->conversions;
+    sXbrz.param=e->param;
+    sXbrz.palette=e->palette;
+    sXbrz.w=w;
+    sXbrz.h=h;
+    sXbrz.phase=0;
+    sXbrz.row=0;
+    sXbrz.wrapS=xbrz_wrap(e->param,16,18);
+    sXbrz.wrapT=xbrz_wrap(e->param,17,19);
+    return 1;
+}
+
+/* The finished xBRZ into the texture, in its format; see-through texels
+ * coloured as an opaque one beside them (for xbrz smooth's filter: no dark
+ * fringes). */
+static void xbrz_finish(void)
+{
+    TexEntry *e=sXbrz.e;
+    size_t n=(size_t)sXbrz.w*sXbrz.h*4u;
+    uint32_t *tiled=scratch(&sTexTiled,&sTexTiledWords,n);
+    sXbrz.e=NULL;
+    if(!tiled)return;
+    NitroPort_Gx3dFilterTexelsTiled(sXbrz.out,sXbrz.w*2u,sXbrz.h*2u,1u,tiled);
+    if(e->packed)NitroPort_Gx3dPackRGBA5551(tiled,(uint16_t*)e->tex.data,n);
+    else memcpy(e->tex.data,tiled,n*4u);
+    C3D_TexFlush(&e->tex);
+    e->xbrz=XBRZ_DONE;
+}
+
+/* Up to XBRZ_BUDGET of xBRZ, 4 rows at a time. Where textures are
+ * converted (the GPU done with the last frame): their memory is free to
+ * write. Its time goes in the [perf] line's texture time. */
+static void xbrz_work(void)
+{
+    u64 start=svcGetSystemTick(),now=start;
+    while(now-start<XBRZ_BUDGET){
+        unsigned y1;
+        if(!xbrz_current()){
+            if(!xbrz_begin(now))break;
+            if(!sXbrz.e){now=svcGetSystemTick();continue;}
+        }
+        y1=sXbrz.row+4u;
+        if(sXbrz.phase==0){
+            NitroPort_Xbrz2xCorners(sXbrz.src,sXbrz.w,sXbrz.h,sXbrz.wrapS,sXbrz.wrapT,1,
+                                    (uint8_t*)sXbrz.info,sXbrz.row,y1);
+        }else{
+            NitroPort_Xbrz2xBlend(sXbrz.src,sXbrz.w,sXbrz.h,sXbrz.wrapS,sXbrz.wrapT,
+                                  (const uint8_t*)sXbrz.info,sXbrz.out,sXbrz.row,y1);
+        }
+        sXbrz.row=y1;
+        if(sXbrz.row>=sXbrz.h){
+            sXbrz.row=0;
+            if(sXbrz.phase++==1)xbrz_finish();
+        }
+        now=svcGetSystemTick();
+    }
+    sTexTicks+=now-start;
 }
 
 /* The converted texture for (param, palette), converting it if it's new or
@@ -397,8 +562,8 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     if(!e){
         /* 2x2 texels a texel when sharp, if it fits (the PICA's 1024 and
          * the cache), else as it is; 16 bits a texel where that's exact */
-        unsigned scale=(sTexMode==2 && width*2u<=1024u && height*2u<=1024u)?2u:1u;
-        int packed=sTexMode==0 && NitroPort_Gx3dTexIs5551(param);
+        unsigned scale=(sTexMode>=2 && width*2u<=1024u && height*2u<=1024u)?2u:1u;
+        int packed=(sTexMode==0 || sTexMode>=3) && NitroPort_Gx3dTexIs5551(param);
         if(packed)bytes/=2u;
         if(scale==2u){
             while(sTextureBytes+bytes*4u>TEX_CACHE_BYTES && evict_one()){}
@@ -421,7 +586,8 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
         }
         e->scale=scale;
         e->packed=packed;
-        e->filtered=sTexMode!=0;
+        e->filtered=sTexMode==1 || sTexMode==2 || sTexMode==4;
+        e->xbrz=sTexMode>=3 && scale==2u ? XBRZ_WAITING : XBRZ_NONE;
         if(e->filtered)C3D_TexSetFilter(&e->tex,GPU_LINEAR,GPU_LINEAR);
         else C3D_TexSetFilter(&e->tex,GPU_NEAREST,GPU_NEAREST);
         C3D_TexSetWrap(&e->tex,wrap_mode(param,16,18),wrap_mode(param,17,19));
@@ -936,6 +1102,7 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
     }
     sPrepared=slot;
     sPreparedSwap=scene->swap_param;
+    sXbrzWorked=0;
     setup_fog();
     /* CLEAR_COLOR: the rear plane's colour and alpha, as the game has them
      * at this scene (fogged, if it is). */
@@ -1112,6 +1279,10 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     if(sPrepared<0||!view||!view->fb)return;
     sFrame++;
     NitroPort_Gx3dMapTextureBanks(&sBanks);
+    if(sTexMode>=3 && !sXbrzWorked){
+        sXbrzWorked=1;
+        xbrz_work();
+    }
     blend=(NitroPort_IoReg[0x60]&8u)!=0;
     NitroPort_Gx3dEdgeSetup(&edges);
     edging=edges.enabled && view->edgeFb[0]!=NULL;

@@ -32,7 +32,15 @@ What it does:
   (nearest texel) unless `filter3d` says otherwise: made like the 2D (each
   texel 2x2, then bilinear) the GPU took two to three times as long, the
   overworld lagged, and polygons' edges showed lines on the opening's
-  mountains (October 2026).
+  mountains (October 2026). `filter3d xbrz` makes them 2x with xBRZ
+  instead: edges and curves smooth, small details kept, at 16 bits a texel
+  where the DS's format allows and nearest (half sharp's memory and GPU
+  reads, no lines), each texture worked out a little each frame (2 ms) and
+  shown 2x2 until it's done; one that keeps changing (an animation, a
+  fade) waits until it's been still for a second. Faint patterns (grass
+  tufts a shade off the grass) are left as they are: xBRZ smooths them
+  too, into strokes half a texel wide that mostly fall between the 3DS's
+  pixels, and the grass came out flat.
 - **Even pacing.** Each 3D scene is shown a fixed number of V-blanks after
   the game made it, with the 2D the DS would have shown it with (see
   "Timing").
@@ -353,6 +361,7 @@ frames waiting isn't drawn again until one has shown.
 | `convergence 400` | the distance (the DS's w) that's at the screen's depth, instead of each scene's middle |
 | `edges off` | no outlines (edge marking) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
+| `filter3d xbrz` / `filter3d xbrz-smooth` | the 3D's textures 2x by xBRZ, nearest / bilinear (smooth: no shimmer while the picture moves, but sharp's cost and lines may come back). On trial: the [perf] line's 3D times say what it costs |
 | `flip on` | the 2D layers upside down (if a GPU's texture rows come out the other way round) |
 
 A frame that took long is in the log with where its time went:

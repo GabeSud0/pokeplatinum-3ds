@@ -34,3 +34,8 @@ you agree that your contributions are licensed the same way.
 
 libctru and citro3d, which the 3DS code links against, are under the zlib
 license, which is compatible with GPL-3.0.
+
+`3ds_port/nitro/src/port_xbrz.c` (the 3D's textures at 2x, `filter3d xbrz`)
+is a C version of the 2x scaler of xBRZ by Zenju, from the HqMAME project
+(the copy in PPSSPP's `ext/xbrz`), which is distributed under the GNU General
+Public License. This version is GPL-3.0 like the rest of the project.
