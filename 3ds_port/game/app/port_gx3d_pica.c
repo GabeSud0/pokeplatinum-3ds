@@ -56,6 +56,30 @@ void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 #define DRAW_WORDS 256u
 extern u32 gpuCmdBufSize,gpuCmdBufOffset;
 static unsigned sDrawsCut;   /* draws left out for want of room ([perf]) */
+/* Where the drawing is, for the log when it hangs (NitroPort_PicaStageNow:
+ * the stage, and the last draw): the GPU doesn't come back from a draw of
+ * no vertices, and may not from other faults. */
+static const char *volatile sStage="idle";
+static volatile u32 sLastDrawFirst,sLastDrawCount,sDraws;
+static void stage(const char *s){sStage=s;}
+static void draw_arrays(int first,int count)
+{
+    static int told;
+    if(count<=0 || count%3){
+        if(!told){told=1;NitroPort_Log("[gx3d] a draw of %d vertices at %d in %s: left out",count,first,sStage);}
+        return;
+    }
+    sLastDrawFirst=(u32)first;sLastDrawCount=(u32)count;sDraws++;
+    C3D_DrawArrays(GPU_TRIANGLES,first,count);
+}
+void NitroPort_PicaStage(const char *s){stage(s);}
+const char *NitroPort_PicaStageNow(unsigned *first,unsigned *count,unsigned *draws)
+{
+    if(first)*first=sLastDrawFirst;
+    if(count)*count=sLastDrawCount;
+    if(draws)*draws=sDraws;
+    return sStage;
+}
 static int room_for_draw(void)
 {
     if(gpuCmdBufSize-gpuCmdBufOffset>DRAW_WORDS*4u)return 1;
@@ -1078,7 +1102,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
             C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,
                            GPU_ONE,GPU_ZERO);
             C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
-            C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+            draw_arrays((int)batch->first,(int)batch->count);
             continue;
         }
         /* Translucent pass. A pixel that ends up with alpha 31 counts as
@@ -1090,7 +1114,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
             C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,
                            GPU_ONE,GPU_ZERO);
             C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
-            C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+            draw_arrays((int)batch->first,(int)batch->count);
         }
         /* Alpha-0 texels aren't drawn at all (nor change the stencil). The
          * opaque texels drawn above fail the depth test this time. */
@@ -1110,7 +1134,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
         }
         C3D_DepthTest(true,depthFunc,
                       (attr&(1u<<11))?GPU_WRITE_ALL:GPU_WRITE_COLOR);
-        C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+        draw_arrays((int)batch->first,(int)batch->count);
     }
     /* Edge marking needs each pixel's opaque polygon ID: the opaque
      * pixels drawn again (the same alpha tests), only where they're what
@@ -1139,7 +1163,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
             C3D_DepthTest(true,GPU_EQUAL,0);
             C3D_StencilTest(true,GPU_ALWAYS,(int)((attr>>24)&63u),0xFF,0xFF);
             C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
-            C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+            draw_arrays((int)batch->first,(int)batch->count);
         }
     }
     /* GX_CMDLIST_FLUSH: flush only the command list. Without it citro3d
@@ -1452,7 +1476,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             C3D_AlphaTest(textured,GPU_GREATER,batch->translucent?254:sBoundCut);
             C3D_DepthTest(true,GPU_LESS,GPU_WRITE_DEPTH);
             C3D_StencilTest(true,GPU_ALWAYS,(int)((attr>>24)&63u),0xFF,0xFF);
-            C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+            draw_arrays((int)batch->first,(int)batch->count);
         }
         /* pass B */
         begin_pass(view,&view->rect);
@@ -1478,7 +1502,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             C3D_AlphaTest(textured,GPU_GREATER,batch->translucent?254:sBoundCut);
             C3D_DepthTest(true,GPU_LESS,GPU_WRITE_COLOR);
             C3D_StencilTest(true,GPU_NOTEQUAL,(int)id,0xFF,0xFF);
-            C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+            draw_arrays((int)batch->first,(int)batch->count);
         }
     }
     /* back to the screen's own depth/stencil */
@@ -1569,6 +1593,7 @@ static void draw_shadow_map(void)
 {
     size_t b;
     int i;
+    stage("the shadow map");
     C3D_FrameBufClear(&sShadowTarget->frameBuf,C3D_CLEAR_COLOR,0xFFFFFFFFu,0);
     C3D_SetFrameBuf(&sShadowTarget->frameBuf);
     C3D_SetViewport(0,0,SHADOW_SIZE,SHADOW_SIZE);
@@ -1594,7 +1619,7 @@ static void draw_shadow_map(void)
         textured=bind_batch_shape(batch);
         set_cast_combiner(textured);
         C3D_AlphaTest(true,GPU_GREATER,textured?sBoundCut:0);
-        C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+        draw_arrays((int)batch->first,(int)batch->count);
     }
     C3D_FragOpMode(GPU_FRAGOPMODE_GL);
     sBoundTexKnown=0;
@@ -1744,6 +1769,7 @@ static void draw_shadow_mask(const PicaView *view)
     if(w>MASK_W)w=MASK_W;
     if(h>MASK_H)h=MASK_H;
     sMaskFirst=quads_for(w,h);
+    stage("the shadow mask");
     /* the mask: the opaque polygons' light, at half size */
     C3D_FrameBufClear(&sMaskTarget[0]->frameBuf,C3D_CLEAR_ALL,0xFFFFFFFFu,0xFFFFFFFFu);
     C3D_SetFrameBuf(&sMaskTarget[0]->frameBuf);
@@ -1775,7 +1801,7 @@ static void draw_shadow_mask(const PicaView *view)
         bind_batch_mask(batch);
         C3D_AlphaTest(true,GPU_GREATER,sBoundCut);
         C3D_DepthTest(true,(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS,GPU_WRITE_ALL);
-        C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+        draw_arrays((int)batch->first,(int)batch->count);
     }
     /* Unit 1 left bound to the masks' own texture: C3D_TexBind(1, NULL)
      * reads the texture's type (a data abort at 0: the display thread
@@ -1785,6 +1811,7 @@ static void draw_shadow_mask(const PicaView *view)
     C3D_TexBind(1,&sSpareTex);
     sRecvTexKnown=0;
     /* blurred: four taps, a quarter each, added */
+    stage("the shadow mask blurred");
     C3D_FrameBufClear(&sMaskTarget[1]->frameBuf,C3D_CLEAR_COLOR,0x000000FFu,0);
     C3D_SetFrameBuf(&sMaskTarget[1]->frameBuf);
     C3D_SetViewport(0,0,w,h);
@@ -1800,7 +1827,7 @@ static void draw_shadow_mask(const PicaView *view)
         C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
     }
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ONE,GPU_ZERO,GPU_ONE);
-    for(q=0;q<4;q++)C3D_DrawArrays(GPU_TRIANGLES,sMaskFirst+q*6,6);
+    for(q=0;q<4;q++)draw_arrays(sMaskFirst+q*6,6);
     C3D_TexBind(0,NULL);
     sBoundTexKnown=0;
 }
@@ -1810,6 +1837,7 @@ static void draw_shadow_mask(const PicaView *view)
 static void apply_shadow_mask(const PicaView *view)
 {
     C3D_TexEnv *env;
+    stage("the shadow mask over the scene");
     C3D_SetViewport(0,0,view->fb->width,view->fb->height);
     quad_pass(sMaskFirst);
     C3D_TexBind(0,&sMaskTex[1]);
@@ -1823,7 +1851,7 @@ static void apply_shadow_mask(const PicaView *view)
     C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
     /* colour = the light times what's there; alpha as it is */
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_DST_COLOR,GPU_ZERO,GPU_ZERO,GPU_ONE);
-    C3D_DrawArrays(GPU_TRIANGLES,sMaskFirst+4*6,6);
+    draw_arrays(sMaskFirst+4*6,6);
     C3D_TexBind(0,NULL);
     sBoundTexKnown=0;
     /* the scene's own program, vertices and view again */
@@ -1853,6 +1881,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     }
     if(sShadowReady)draw_shadow_mask(view);
     C3D_BindProgram(&sProgram);
+    stage("the opaque polygons");
     fog_begin();
     sBoundTexKnown=0;
     NitroPort_PicaBindVertices(sVertices[sPrepared]);
@@ -1878,11 +1907,12 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         C3D_AlphaTest(true,GPU_GREATER,sBoundCut);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
-        C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+        draw_arrays((int)batch->first,(int)batch->count);
     }
     if(sShadowReady)apply_shadow_mask(view);
     /* Their fully opaque texels of translucent polygons of alpha 31 are
      * opaque too (drawn here so the outlines go over them as well). */
+    stage("the opaque texels of translucent polygons");
     for(b=0;b<sPreparedBatches;b++){
         const NitroGx3dBatch *batch=&sBatches[b];
         uint32_t attr=batch->polygon_attr;
@@ -1896,9 +1926,10 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         C3D_AlphaTest(true,GPU_GREATER,254);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
-        C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+        draw_arrays((int)batch->first,(int)batch->count);
     }
     if(edging)mark_edges(view,&edges);
+    stage("the translucent polygons");
     /* The translucent polygons, over the outlines (but the game's own
      * painted shadows, with the sun shadows on). */
     for(b=0;b<sPreparedBatches;b++){
@@ -1923,12 +1954,13 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         }
         C3D_DepthTest(true,depthFunc,
                       (attr&(1u<<11))?GPU_WRITE_ALL:GPU_WRITE_COLOR);
-        C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
+        draw_arrays((int)batch->first,(int)batch->count);
     }
     /* Leave the GPU state plain for the compositor's quads. */
     fog_mode(0);
     C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
     C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
     C3D_AlphaTest(false,GPU_ALWAYS,0);
+    stage("the scene drawn");
 }
 #endif

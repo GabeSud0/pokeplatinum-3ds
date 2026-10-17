@@ -29,6 +29,11 @@ void NitroPort_PicaCmdStats(float *peak, unsigned *cut);
  * size, for the log. */
 void *NitroPort_PicaDvle(void *dvlb, unsigned index);
 unsigned NitroPort_PicaDvleSize(void);
+/* Where the display thread's drawing is (for the log when it hangs): the
+ * stage set last (any thread sets one), and the last draw's first vertex,
+ * count and the draws so far. */
+void NitroPort_PicaStage(const char *stage);
+const char *NitroPort_PicaStageNow(unsigned *first, unsigned *count, unsigned *draws);
 /* The memory left (both heaps), as a [perf] memory line. Any thread. */
 void NitroPort_PicaLogMemory(void);
 void NitroPort_PicaNoteCmdUse(void);

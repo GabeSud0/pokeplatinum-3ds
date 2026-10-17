@@ -2130,8 +2130,23 @@ static void Watch(void)
     unsigned long lastFrame = sFrame;
     int quietTicks = 0;
 
+    int composingTicks = 0;
+
     while (!LightEvent_TryWait(&sQuit)) {
         svcSleepThread(250 * 1000000LL);
+        /* The display thread inside one frame for 2 seconds: stuck (the
+         * GPU hung on a draw, most likely); where, once, for the log. */
+        if (sRemaster && __atomic_load_n(&sComposing, __ATOMIC_SEQ_CST) &&
+            !__atomic_load_n(&sSuspended, __ATOMIC_SEQ_CST)) {
+            if (++composingTicks == 8) {
+                unsigned first, count, draws;
+                const char *stage = NitroPort_PicaStageNow(&first, &count, &draws);
+                NitroPort_Log("[gx3d] the display thread has been in one frame for 2 seconds: stuck in %s "
+                              "(the last draw: %u vertices from %u; %u draws so far)", stage, count, first, draws);
+            }
+        } else {
+            composingTicks = 0;
+        }
         if (sFrame != lastFrame || (!sWatchdogHasHome && !aptIsActive())) {
             /* Frames are coming, or the HOME menu is up (no frames then). */
             if (sWatchdogHasHome && sFrame != lastFrame) {

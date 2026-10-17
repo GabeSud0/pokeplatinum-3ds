@@ -1085,9 +1085,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         }
     }
     if (!sInFrame) {
+        NitroPort_PicaStage("the frame's start (waiting for the GPU)");
         C3D_FrameBegin(0);
         sInFrame = 1;
     }
+    NitroPort_PicaStage("the frame's clears");
     sQuadVertices = 0;
     edges = sEdgeDepth[0] != NULL && scene != NULL && NitroPort_PicaEdgeClearValue(&edgeClear);
     /* The depth/stencil buffers cleared (before any drawing: the fills go
@@ -1141,6 +1143,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         drawn |= 1 << s;
     }
     GSPGPU_FlushDataCache(sQuads, (u32)(sQuadVertices * sizeof(NitroGx3dGpuVertex)));
+    NitroPort_PicaStage("the frame's end");
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
     NitroPort_PicaNoteCmdUse();
     sInFrame = 0;
@@ -1161,7 +1164,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     }
     gpuStart = svcGetSystemTick();
     sCpuTicks += gpuStart - start;
+    NitroPort_PicaStage("the transfers to the screens (waiting for the GPU)");
     C3D_FrameBegin(0);   /* (waits for the GPU and the transfers) */
+    NitroPort_PicaStage("between frames");
     sInFrame = 1;
     sGpuTicks += svcGetSystemTick() - gpuStart;
     sFrames++;
