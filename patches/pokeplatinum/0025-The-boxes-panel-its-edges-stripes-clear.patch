@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 18:00:00 -0700
+Subject: [PATCH] The boxes' panel: its edges' stripes clear (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The panel of the Pokémon looked at has the PC's stripes drawn into its
+edges (its palette's colours 10 and 14), where the stripes are behind
+it on the DS. At the wider screen's left edge, beside the divider, they
+showed as cyan and mint lines over it, whenever something was drawn
+into the panel (a Pokémon's name, the party's tray opened). They are
+shown clear now (WIDE_CLEAR: a new part for the port), so the stripes
+behind show through as on the DS.
+---
+ include/port_wide_layout.h                | 5 +++++
+ src/applications/pc_boxes/ov19_021D79F8.c | 4 ++++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/include/port_wide_layout.h b/include/port_wide_layout.h
+index 00b9700f..111ea269 100644
+--- a/include/port_wide_layout.h
++++ b/include/port_wide_layout.h
+@@ -27,6 +27,10 @@
+ //     the wide art folder; nothing if it isn't there) with BG bg, in front
+ //     of that BG's pixels: its top-left at the DS's x, y (anywhere on the
+ //     wider screen), turned angle degrees clockwise about its middle.
++//   WIDE_CLEAR: the BG's colours of palette pal whose indices are bits of
++//     mask (bit i: index i; a 16-colour BG) shown clear, all over the BG:
++//     a panel's background drawn into its edges (the stripes behind the
++//     boxes' panel), so what's behind the BG shows there, as it did.
+ // WIDE_SCREEN_COLUMNS with a part's BGs: its x0..x1-1 are columns of the
+ // DS's screen, not of the BG's picture: they stay put as the BG scrolls
+ // (a WIDE_FILL's col is still the picture's).
+@@ -50,6 +54,7 @@ extern void NitroPort_WindowFramed(const void *window, int frame);
+ #define WIDE_OBJS_STRETCH(top, bottom, x0, x1, dx) { 3, 0, (top), (bottom), (x0), (x1), (dx), 1 }
+ #define WIDE_SHIFT3D(dx)                          { 4, 0, 0, 0, 0, 0, (dx), 0 }
+ #define WIDE_PICTURE(bg, picture, x, y, angle)    { 5, WIDE_BG(bg), (y), (y) + 1, (x), (x) + 1, (angle), (picture) }
++#define WIDE_CLEAR(bg, pal, mask)                 { 6, WIDE_BG(bg), 0, 1, 0, 1, (pal), (mask) }
+ 
+ // The pictures (their files: <name>.png; the port's numbers, in
+ // 3ds_port/nitro/include/nitro_port_wide.h, are the same).
+diff --git a/src/applications/pc_boxes/ov19_021D79F8.c b/src/applications/pc_boxes/ov19_021D79F8.c
+index 742f4396..511408a7 100644
+--- a/src/applications/pc_boxes/ov19_021D79F8.c
++++ b/src/applications/pc_boxes/ov19_021D79F8.c
+@@ -135,6 +135,10 @@ static void BoxWide_Apply(void)
+         WIDE_OBJS(160, 256, -64, 108, -32),
+         WIDE_OBJS(160, 256, 108, 400, 32),
+         WIDE_SHIFT3D(-32),
++        // The panel's edges have the stripes behind it drawn in (its
++        // palette's 10 and 14): moved to the screen's edge, beside the
++        // divider, they were lines over it; clear, the stripes show through.
++        WIDE_CLEAR(2, 1, (1 << 10) | (1 << 14)),
+         WIDE_PICTURE(3, WIDE_PICTURE_PC_BOXES_DIVIDER, 56, 0, 0), // (behind the panel's edge)
+         WIDE_PICTURE(3, WIDE_PICTURE_PC_BOXES_BALL, 70, 75, 0),
+     };
+-- 
+2.43.0
+
