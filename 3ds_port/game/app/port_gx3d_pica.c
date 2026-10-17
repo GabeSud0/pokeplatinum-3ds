@@ -1807,7 +1807,9 @@ static void draw_shadow_mask(const PicaView *view)
      * reads the texture's type (a data abort at 0: the display thread
      * died, the screens froze, on a New 3DS 2026-10-17), and a scene's
      * texture may be freed before the unit is bound again: a spare 8x8
-     * texture of the masks' instead. */
+     * texture of the masks' instead. The unit stays on through the other
+     * passes, whose programs give it coordinates (texcoord1) so it reads
+     * nothing undefined. */
     C3D_TexBind(1,&sSpareTex);
     sRecvTexKnown=0;
     /* blurred: four taps, a quarter each, added */

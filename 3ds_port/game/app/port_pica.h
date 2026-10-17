@@ -29,6 +29,14 @@ void NitroPort_PicaCmdStats(float *peak, unsigned *cut);
  * size, for the log. */
 void *NitroPort_PicaDvle(void *dvlb, unsigned index);
 unsigned NitroPort_PicaDvleSize(void);
+/* A C3D_FrameBuf in libctru's layout, likewise (16 bytes there, 24 in the
+ * port: C3D_SetFrameBuf read the port's as garbage): a render target's
+ * (a C3D_RenderTarget *) with another D24S8 depth/stencil buffer, into out
+ * (outSize bytes: PICA_FRAMEBUF_BYTES is enough). Point at it as a
+ * C3D_FrameBuf *; never read its fields past width and height. */
+#define PICA_FRAMEBUF_BYTES 32
+unsigned NitroPort_PicaFrameBufSize(void);
+int NitroPort_PicaFrameBufWithDepth(void *out, unsigned outSize, const void *target, void *depth);
 /* Where the display thread's drawing is (for the log when it hangs): the
  * stage set last (any thread sets one), and the last draw's first vertex,
  * count and the draws so far. */

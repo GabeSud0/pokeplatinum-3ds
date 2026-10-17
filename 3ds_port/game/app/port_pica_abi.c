@@ -19,6 +19,8 @@
 /* (declared in port_pica.h, not included here: its headers are the port's) */
 void *NitroPort_PicaDvle(void *dvlb, unsigned index);
 unsigned NitroPort_PicaDvleSize(void);
+unsigned NitroPort_PicaFrameBufSize(void);
+int NitroPort_PicaFrameBufWithDepth(void *out, unsigned outSize, const void *target, void *depth);
 
 void *NitroPort_PicaDvle(void *dvlb, unsigned index)
 {
@@ -29,4 +31,23 @@ void *NitroPort_PicaDvle(void *dvlb, unsigned index)
 unsigned NitroPort_PicaDvleSize(void)
 {
     return (unsigned)sizeof(DVLE_s);
+}
+
+/* C3D_FrameBuf has enum fields too (its colour and depth formats): 16
+ * bytes here, 24 in the port. A copy of a render target's, with another
+ * depth/stencil buffer (D24S8), in libctru's layout: into out (outSize
+ * bytes, NitroPort_PicaFrameBufSize or more). */
+unsigned NitroPort_PicaFrameBufSize(void)
+{
+    return (unsigned)sizeof(C3D_FrameBuf);
+}
+
+int NitroPort_PicaFrameBufWithDepth(void *out, unsigned outSize, const void *target, void *depth)
+{
+    const C3D_RenderTarget *t = target;
+    C3D_FrameBuf *fb = out;
+    if (!out || !t || outSize < sizeof(C3D_FrameBuf)) return 0;
+    *fb = t->frameBuf;
+    C3D_FrameBufDepth(fb, depth, GPU_RB_DEPTH24_STENCIL8);
+    return 1;
 }

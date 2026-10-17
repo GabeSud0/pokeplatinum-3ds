@@ -23,6 +23,9 @@
 .out outpos position
 .out outclr color
 .out outtc0 texcoord0
+; (texture coordinate 1 the same: texture unit 1 is left bound after the
+; sun shadows' mask pass, and the GPU wants coordinates for it)
+.out outtc1 texcoord1
 .alias inpos v0
 .alias inclr v1
 .alias intex v2
@@ -42,5 +45,6 @@
     dp4 outpos.w, mtx[3], r0
     mul outclr, clrdiv, inclr
     mov outtc0, intex
+    mov outtc1, intex
     end
 .end
