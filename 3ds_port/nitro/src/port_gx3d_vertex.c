@@ -274,7 +274,7 @@ size_t NitroPort_Gx3dBuildShadowBatches(const NitroGx3dScene *scene, size_t firs
 {
     size_t i,count=0,nb=0;
     if(batch_count)*batch_count=0;
-    if(!scene||!out||!batches)return 0;
+    if(!scene||!out||!batches||!scene->shadow_triangles)return 0;
     for(i=0;i<scene->shadow_count && i<NITRO_GX3D_MAX_SHADOW_TRIANGLES;i++){
         const NitroGx3dTriangle *tri=&scene->shadow_triangles[i];
         uint32_t param,palette,attr;
