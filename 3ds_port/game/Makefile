@@ -386,7 +386,7 @@ OVERLAY_TABLE_O := $(OUT)/gen/overlay_table.o
 
 ifeq ($(TARGET),3ds)
 APP_OBJS += $(OUT)/app/main_3ds.o $(OUT)/app/port_gx3d_pica.o $(OUT)/app/port_compose_pica.o \
-            $(OUT)/app/gx3d_passthrough_shbin.o
+            $(OUT)/app/port_pica_abi.o $(OUT)/app/gx3d_passthrough_shbin.o
 PROGRAM_ELF := $(OUT)/pokeplatinum.elf
 PROGRAM := $(OUT)/pokeplatinum.3dsx
 # The architecture flags pick devkitARM's hard-float libraries and the 3DS
@@ -430,6 +430,13 @@ $(OUT)/app/port_gx3d_pica.o: app/port_gx3d_pica.c app/port_pica.h $(NITRO)/inclu
 	@mkdir -p $(dir $@)
 	@echo "  APP CC port_gx3d_pica.c"
 	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -MMD -MP -c $< -o $@
+
+# libctru's structs as libctru lays them out: without -fno-short-enums, as
+# devkitARM's libraries are built (port_pica_abi.c).
+$(OUT)/app/port_pica_abi.o: app/port_pica_abi.c
+	@mkdir -p $(dir $@)
+	@echo "  APP CC port_pica_abi.c"
+	@$(CC) $(filter-out -fno-short-enums,$(PORT_CFLAGS)) -I$(DEVKITPRO)/libctru/include -MMD -MP -c $< -o $@
 
 # (the 3DS program's own files rebuilt when a header they include changes)
 -include $(wildcard $(OUT)/app/*.d)
