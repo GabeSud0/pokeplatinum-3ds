@@ -354,10 +354,11 @@ static int init_failed(const char *step)
     return 0;
 }
 /* The sun shadows' two programs (DVLE 1 and 2 of the shaders), set up the
- * first time the shadows are turned on (NitroPort_PicaLook), not at the
- * start: there, with everything else being set up at once, they once
- * didn't (on a New 3DS, 2026-10-17), and most players never turn them on.
- * Tried again each time the shadows are turned on, until they are. */
+ * first time the shadows are turned on (NitroPort_PicaLook): most players
+ * never turn them on. Tried again each time the shadows are turned on,
+ * until they are. (Their DVLEs through NitroPort_PicaDvle: the port's own
+ * DVLE_s isn't libctru's size; &sDvlb->DVLE[1] was wrong, and they never
+ * set up on a 3DS, shaderProgramSetVsh failing with -2.) */
 static int shadow_programs(void)
 {
     Result rc;
@@ -368,7 +369,7 @@ static int shadow_programs(void)
     }
     if(!sCastReady){
         shaderProgramInit(&sCastProgram);
-        rc=shaderProgramSetVsh(&sCastProgram,&sDvlb->DVLE[1]);
+        rc=shaderProgramSetVsh(&sCastProgram,(DVLE_s *)NitroPort_PicaDvle(sDvlb,1));
         if(R_FAILED(rc)){
             char what[96];
             shaderProgramFree(&sCastProgram);
@@ -382,7 +383,7 @@ static int shadow_programs(void)
     }
     if(!sRecvReady){
         shaderProgramInit(&sRecvProgram);
-        rc=shaderProgramSetVsh(&sRecvProgram,&sDvlb->DVLE[2]);
+        rc=shaderProgramSetVsh(&sRecvProgram,(DVLE_s *)NitroPort_PicaDvle(sDvlb,2));
         if(R_FAILED(rc)){
             char what[96];
             shaderProgramFree(&sRecvProgram);
@@ -419,9 +420,12 @@ int NitroPort_PicaInit(void)
     sDvlb=DVLB_ParseFile((u32*)gx3d_passthrough_shbin,
                          gx3d_passthrough_shbin_size);
     if(!sDvlb)return init_failed("the shaders (DVLB_ParseFile)");
+    if(NitroPort_PicaDvleSize()!=sizeof(DVLE_s))
+        NitroPort_Log("[gx3d] libctru's DVLE_s is %u bytes, the port's %u (enum sizes): through NitroPort_PicaDvle",
+                      NitroPort_PicaDvleSize(),(unsigned)sizeof(DVLE_s));
     if(R_FAILED(shaderProgramInit(&sProgram)))return init_failed("the shader program");
     sProgramReady=1;
-    if(R_FAILED(shaderProgramSetVsh(&sProgram,&sDvlb->DVLE[0])))
+    if(R_FAILED(shaderProgramSetVsh(&sProgram,(DVLE_s *)NitroPort_PicaDvle(sDvlb,0))))
         return init_failed("the vertex shader");
     sUnifMtx=shaderInstanceGetUniformLocation(sProgram.vertexShader,"mtx");
     sUnifStereo=shaderInstanceGetUniformLocation(sProgram.vertexShader,"stereo");

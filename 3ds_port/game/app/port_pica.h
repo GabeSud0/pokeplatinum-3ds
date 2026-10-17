@@ -23,6 +23,12 @@ void NitroPort_PicaTextureStats(u32 *converted, u64 *texels, u64 *ticks);
 /* The GPU command list's peak use (0-1) and the draws left out for want of
  * room in it, since last asked; NoteCmdUse after each C3D_FrameEnd. */
 void NitroPort_PicaCmdStats(float *peak, unsigned *cut);
+/* A shader blob's DVLE (its shaders, in the order assembled), as libctru
+ * lays them out (port_pica_abi.c: its enums are a different size from the
+ * port's); NULL past the last. dvlb: a DVLB_s *. And libctru's DVLE_s's
+ * size, for the log. */
+void *NitroPort_PicaDvle(void *dvlb, unsigned index);
+unsigned NitroPort_PicaDvleSize(void);
 /* The memory left (both heaps), as a [perf] memory line. Any thread. */
 void NitroPort_PicaLogMemory(void);
 void NitroPort_PicaNoteCmdUse(void);
