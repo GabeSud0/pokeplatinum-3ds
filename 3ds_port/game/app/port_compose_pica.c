@@ -453,6 +453,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     /* The 3D's textures: nearest, as the DS's, unless remaster.txt says
      * otherwise (filter3d: see main_3ds.c). */
     NitroPort_PicaTextureFilter(config->filter3d);
+    NitroPort_PicaShadowDebug(config->shadowDebug);
     NitroPort_PicaLook(config->shadows, config->grade, config->sunFixed, config->sunElevation,
                        config->sunAzimuth);
     memset(sScreens, 0, sizeof(sScreens));

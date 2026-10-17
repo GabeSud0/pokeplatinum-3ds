@@ -54,6 +54,9 @@ void NitroPort_PicaTextureFilter(int mode);
  * as the game's), or fixed (degrees above the ground, and from the
  * screen's left, 0, towards its top, 90). */
 void NitroPort_PicaLook(int shadows, int grade, int fixedSun, float elevation, float azimuth);
+/* Debug only: submit and wait between shadow passes. Watchdog stages then
+ * identify the outstanding GPU work, rather than the last CPU submission. */
+void NitroPort_PicaShadowDebug(int enabled);
 
 /* The compose path: the scene's polygons drawn straight into a screen's
  * render target, between the 2D layers. */
@@ -130,6 +133,7 @@ typedef struct ComposeConfig {
     int filter3d;            /* the 3D's textures: 0 nearest (the DS's), 1 bilinear, 2 sharp (2x2, bilinear),
                               * 3 xbrz (2x by xBRZ, nearest), 4 xbrz smooth (bilinear) */
     int shadows;             /* sun shadows on the 3D */
+    int shadowDebug;         /* waits between passes to locate a hardware hang */
     int grade;               /* the colour grade on the 3D's textures */
     int sunFixed;            /* the sun where sunElevation, sunAzimuth say, not by the clock */
     float sunElevation, sunAzimuth;   /* (degrees; NitroPort_PicaLook) */
