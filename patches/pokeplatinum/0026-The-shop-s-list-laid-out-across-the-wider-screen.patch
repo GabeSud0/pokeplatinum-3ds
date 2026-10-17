@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 01:00:00 -0700
+Subject: [PATCH] The shop's list laid out across the wider screen
+ (SDK_PORT_3DS)
+
+From a reference drawn for the wider screen (2026-10-17): the list's box
+31 pixels wider, to the right toward the screen's edge, with the prices at
+its right edge, the cursor as wide as a row and the scroll arrows at the
+list's middle; the green panel below across the screen.
+---
+ src/overlay007/shop_menu.c | 40 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 40 insertions(+)
+
+diff --git a/src/overlay007/shop_menu.c b/src/overlay007/shop_menu.c
+index 0063e086..7c255979 100644
+--- a/src/overlay007/shop_menu.c
++++ b/src/overlay007/shop_menu.c
+@@ -67,6 +67,40 @@
+ #include "res/text/bank/underground_goods.h"
+ #include "res/text/bank/unk_0543.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++
++// The shop's list across the 3DS remaster's wider upper screen (a
++// reference drawn for it, 2026-10-17): the list's box 31 pixels wider, to
++// the right toward the screen's edge, the prices at its right edge and the
++// cursor as wide as a row; the green panel below across the screen, the
++// item's icon and description where they were. BG1 the box and the panel,
++// BG2 the list and the description; BG3's windows (the money's, the
++// quantity's, the message box) go by the screen's edges as the game's
++// windows do.
++#define SHOP_WIDE_SPLIT 200   // the list's middle: what's right of it goes right
++#define SHOP_WIDE_RIGHT 31
++#define SHOP_WIDE_PANEL 141   // the panel's top line
++
++static const short sShopWideLayout[][8] = {
++    // the box: its right edge 31 to the right, its middle drawn on between
++    // (first the blue beside it, to the screen's edge)
++    WIDE_FILL(WIDE_BG(1), 0, SHOP_WIDE_PANEL, 256, 288, 255),
++    WIDE_FILL(WIDE_BG(1), 0, SHOP_WIDE_PANEL, SHOP_WIDE_SPLIT, SHOP_WIDE_SPLIT + SHOP_WIDE_RIGHT, SHOP_WIDE_SPLIT - 1),
++    WIDE_MOVE(WIDE_BG(1), 0, SHOP_WIDE_PANEL, SHOP_WIDE_SPLIT, 256, SHOP_WIDE_RIGHT),
++    // the panel across the screen
++    WIDE_FILL(WIDE_BG(1), SHOP_WIDE_PANEL, 192, -32, 0, 0),
++    WIDE_FILL(WIDE_BG(1), SHOP_WIDE_PANEL, 192, 256, 288, 255),
++    // the prices with the box's right edge (the list's lines)
++    WIDE_MOVE(WIDE_BG(2), 16, 128, SHOP_WIDE_SPLIT, 256, SHOP_WIDE_RIGHT),
++    // the sprites: the cursor's right end with them (stretched back), the
++    // list's scroll arrows to its middle (as they are over the list; over
++    // the quantity's window, with it)
++    WIDE_OBJS_STRETCH(0, 128, SHOP_WIDE_SPLIT, 256, SHOP_WIDE_RIGHT),
++    WIDE_OBJS(0, 144, 170, 184, SHOP_WIDE_RIGHT / 2),
++};
++#endif
++
+ #define UNDERGROUND_GOOD_DESCRIPTIONS_START UndergroundGoods_Text_CloseDescription
+ 
+ static u8 Shop_GetCameraPosDest(FieldSystem *fieldSystem);
+@@ -592,6 +626,9 @@ static u8 Shop_MoveCamera(ShopMenu *shopMenu)
+     Shop_DrawSprites(shopMenu);
+     Shop_LoadGraphics(shopMenu);
+     Shop_SetBgPriorities(shopMenu);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sShopWideLayout);
++#endif
+     Shop_InitItemsList(shopMenu);
+     Shop_PrintCurrentMoney(shopMenu, FALSE);
+ 
+@@ -1425,6 +1462,9 @@ static u8 Shop_MoveCameraBack(FieldSystem *fieldSystem, ShopMenu *shopMenu)
+     Camera_SetAsActive(fieldSystem->camera);
+ 
+     Shop_DestroySprites(shopMenu);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++#endif
+ 
+     if (shopMenu->martType == MART_TYPE_FRONTIER) {
+         return SHOP_STATE_SHOW_EXIT_MESSAGE;
+-- 
+2.43.0
+
