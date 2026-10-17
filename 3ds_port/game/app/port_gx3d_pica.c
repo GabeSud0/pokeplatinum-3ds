@@ -82,8 +82,11 @@ void NitroPort_PicaNoteCmdUse(void)
 #define MAX_BATCHES NITRO_GX3D_MAX_TRIANGLES
 /* After them, the sun shadows' own (NitroGx3dScene.shadow_triangles): their
  * vertices after the scene's, their batches after its. */
-#define SHADOW_VERTICES (3u*NITRO_GX3D_MAX_SHADOW_TRIANGLES)
-#define SHADOW_BATCHES 256u
+#define SHADOW_VERTICES (3u*NITRO_GX3D_MAX_SHADOW_TRIANGLES+3u*SHADOW_CARD_TRIANGLES)
+#define SHADOW_BATCHES (2048u+SHADOW_CARD_BATCHES)
+/* and the cards' copies turned to the sun (NitroPort_ShadowCards) */
+#define SHADOW_CARD_TRIANGLES 512u
+#define SHADOW_CARD_BATCHES 256u
 
 /* The texture cache: converted textures stay while their source bytes hash
  * the same. Least recently used ones go when over budget. */
@@ -211,8 +214,12 @@ static int sRecvTexKnown;
  * sVertices[sPrepared], its batches), and its rear plane. */
 static int sPrepared=-1;
 static size_t sPreparedCount,sPreparedBatches;
-static size_t sShadowOnlyBatches;
-static size_t sShadowRoom;                   /* (vertices after the scene's for them: SHADOW_VERTICES, or 0) */            /* (the shadows' own, at sBatches[MAX_BATCHES]) */
+static size_t sShadowOnlyBatches;           /* (the shadows' own, at sBatches[MAX_BATCHES]) */
+static size_t sShadowRoom;                   /* (vertices after the scene's for them: SHADOW_VERTICES, or 0) */
+/* The prepared scene's batches that are the game's own painted shadows
+ * (NitroPort_ShadowDecal): left out with the sun shadows on. */
+static uint8_t sDecal[MAX_BATCHES];
+static uint32_t sDecalTexels[4096];
 static uint32_t sPreparedSwap;
 static uint16_t sRearColor;
 static unsigned sRearAlpha;
@@ -1284,11 +1291,34 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
         NitroGx3dGpuVertex *extra=sVertices[slot]+sPreparedCount;
         size_t n=NitroPort_Gx3dBuildShadowBatches(scene,sPreparedCount,extra,sShadowRoom,
                                                   sBatches+MAX_BATCHES,SHADOW_BATCHES,&sShadowOnlyBatches);
-        NitroPort_ShadowReach(extra[0].position,sizeof(NitroGx3dGpuVertex),n,&sShadow);
+        size_t cards=0,b;
         /* what casts and what receives (the vertex programs read it) */
         NitroPort_ShadowRoles(sVertices[slot][0].position,&sVertices[slot][0].color[3],
                               sizeof(NitroGx3dGpuVertex),sPreparedCount+n,&sShadow);
+        /* characters' and trees' cards: their copies turned to the sun */
+        if(sShadowRoom>n){
+            n+=NitroPort_ShadowCards(sVertices[slot],sBatches,sPreparedBatches,sPreparedCount+n,extra+n,
+                                     sShadowRoom-n,sBatches+MAX_BATCHES+sShadowOnlyBatches,
+                                     SHADOW_BATCHES-sShadowOnlyBatches,&cards,&sShadow);
+            sShadowOnlyBatches+=cards;
+        }
+        NitroPort_ShadowReach(extra[0].position,sizeof(NitroGx3dGpuVertex),n,&sShadow);
         GSPGPU_FlushDataCache(sVertices[slot],(u32)((sPreparedCount+n)*sizeof(NitroGx3dGpuVertex)));
+        /* the game's own painted shadows (left out in the draw) */
+        NitroPort_Gx3dMapTextureBanks(&sBanks);
+        for(b=0;b<sPreparedBatches;b++){
+            const NitroGx3dBatch *batch=&sBatches[b];
+            uint32_t param=batch->texture_param;
+            unsigned fmt=NitroPort_Gx3dTexFormat(param);
+            size_t texels=fmt?(size_t)NitroPort_Gx3dTexWidth(param)*NitroPort_Gx3dTexHeight(param):0;
+            sDecal[b]=0;
+            if(!batch->translucent||!batch->count||texels>4096u)continue;
+            if(fmt)NitroPort_Gx3dDecodeTexture(&sBanks,param,batch->palette_base,sDecalTexels);
+            sDecal[b]=(uint8_t)NitroPort_ShadowDecal(sVertices[slot][batch->first].position,
+                                                     sizeof(NitroGx3dGpuVertex),(batch->polygon_attr>>16)&31u,
+                                                     fmt==1u||fmt==6u,fmt?sDecalTexels:NULL,texels,
+                                                     0x7FFF,&sShadow);
+        }
     }
     setup_fog();
     /* CLEAR_COLOR: the rear plane's colour and alpha, as the game has them
@@ -1847,6 +1877,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         uint32_t attr=batch->polygon_attr;
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(!batch->translucent || ((attr>>16)&31u)!=31u)continue;
+        if(sShadowReady && sDecal[b])continue;
         if(!room_for_draw())break;
         bind_batch(batch);
         batch_fog(attr);
@@ -1857,12 +1888,14 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         C3D_DrawArrays(GPU_TRIANGLES,(int)batch->first,(int)batch->count);
     }
     if(edging)mark_edges(view,&edges);
-    /* The translucent polygons, over the outlines. */
+    /* The translucent polygons, over the outlines (but the game's own
+     * painted shadows, with the sun shadows on). */
     for(b=0;b<sPreparedBatches;b++){
         const NitroGx3dBatch *batch=&sBatches[b];
         uint32_t attr=batch->polygon_attr;
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(!batch->translucent)continue;
+        if(sShadowReady && sDecal[b])continue;
         if(!room_for_draw())break;
         bind_batch(batch);
         batch_fog(attr);

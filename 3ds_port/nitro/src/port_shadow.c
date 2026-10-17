@@ -3,6 +3,7 @@
  * See include/nitro_port_shadow.h.
  */
 #include <nitro_port_shadow.h>
+#include <nitro_port_gx3d_vertex.h>
 #include <math.h>
 #include <string.h>
 
@@ -244,6 +245,201 @@ void NitroPort_ShadowRoles(const float *positions, uint8_t *alphas, size_t strid
     }
 }
 
+/* The clip space's (x, y, w) of a camera-space point: back's inverse. */
+static int unback(const Back *b, V3 c, float out[3])
+{
+    /* c = L (x, y, w) + t: L the 3x3 of back's first three columns */
+    float a[3][3], det, r[3];
+    int i, j;
+    for (i = 0; i < 3; i++)
+        for (j = 0; j < 3; j++) a[i][j] = b->m[i][j];
+    r[0] = c.x - b->m[0][3];
+    r[1] = c.y - b->m[1][3];
+    r[2] = c.z - b->m[2][3];
+    det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) -
+          a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) +
+          a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+    if (fabsf(det) < 1e-12f) return 0;
+    /* Cramer's rule */
+    for (i = 0; i < 3; i++) {
+        float m[3][3];
+        memcpy(m, a, sizeof(m));
+        for (j = 0; j < 3; j++) m[j][i] = r[j];
+        out[i] = (m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+                  m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+                  m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])) / det;
+    }
+    return 1;
+}
+
+/* A triangle faces the camera: a card (as the ground's search leaves out). */
+static int card(V3 a0, V3 a1, V3 a2, V3 up, V3 *normal)
+{
+    V3 n = cross(sub(a1, a0), sub(a2, a0));
+    float l = length(n);
+    if (!(l > 0.0f)) return 0;
+    n = scale(n, 1.0f / l);
+    *normal = n;
+    return fabsf(n.z) > 0.97f && fabsf(dot(n, up)) < 0.95f;
+}
+
+static int same_point(const float *a, const float *b)
+{
+    return a[0] == b[0] && a[1] == b[1] && a[3] == b[3];
+}
+
+size_t NitroPort_ShadowCards(NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batches,
+                             size_t batchCount, size_t first, NitroGx3dGpuVertex *out,
+                             size_t capacity, NitroGx3dBatch *outBatches, size_t maxBatches,
+                             size_t *outBatchCount, const NitroShadowSetup *setup)
+{
+    Back b;
+    V3 up = v3(setup->up[0], setup->up[1], setup->up[2]);
+    V3 light = v3(setup->light[0], setup->light[1], setup->light[2]);
+    V3 lh = sub(light, scale(up, dot(light, up)));
+    size_t written = 0, nb = 0, bi;
+    if (outBatchCount) *outBatchCount = 0;
+    if (!(length(lh) > 1e-4f)) return 0;   /* (the sun straight above: cards cast as they are) */
+    lh = normalize(lh);
+    memcpy(b.m, setup->back, sizeof(b.m));
+    for (bi = 0; bi < batchCount; bi++) {
+        const NitroGx3dBatch *batch = &batches[bi];
+        size_t k = batch->first, end = batch->first + batch->count;
+        if (batch->translucent) continue;
+        while (k + 2 < end) {
+            V3 n, c, across, along, turned;
+            size_t g = k, gEnd, i;
+            int count = 0;
+            if (verts[k].color[3] == NITRO_SHADOW_RECEIVE_ONLY ||
+                !card(back(&b, verts[k].position), back(&b, verts[k + 1].position),
+                      back(&b, verts[k + 2].position), up, &n)) {
+                k += 3;
+                continue;
+            }
+            /* the card: this triangle, and the next if it shares an edge
+             * with it (a quad's two halves) */
+            gEnd = k + 3;
+            while (gEnd + 2 < end && gEnd - g < 6) {   /* (a quad at most: trees side by side share corners) */
+                V3 n2;
+                int shared = 0;
+                size_t p, q;
+                if (!card(back(&b, verts[gEnd].position), back(&b, verts[gEnd + 1].position),
+                          back(&b, verts[gEnd + 2].position), up, &n2))
+                    break;
+                for (p = gEnd; p < gEnd + 3; p++) {
+                    int found = 0;
+                    for (q = g; q < gEnd && !found; q++)
+                        found = same_point(verts[p].position, verts[q].position);
+                    shared += found;
+                }
+                if (shared < 2) break;   /* (a quad's other half shares an edge) */
+                gEnd += 3;
+            }
+            k = gEnd;
+            if (written + (gEnd - g) > capacity) break;
+            /* the middle of its foot (its lowest corners), and the turn
+             * about the upright through it: its facing (along the ground)
+             * onto the sun's way, the nearer way; its foot stays where it
+             * stands */
+            {
+                float hmin = 1e30f, hmax = -1e30f;
+                for (i = g; i < gEnd; i++) {
+                    float h = dot(back(&b, verts[i].position), up);
+                    if (h < hmin) hmin = h;
+                    if (h > hmax) hmax = h;
+                }
+                c = v3(0.0f, 0.0f, 0.0f);
+                for (i = g; i < gEnd; i++) {
+                    size_t j;
+                    int dup = 0;
+                    V3 q = back(&b, verts[i].position);
+                    if (dot(q, up) > hmin + (hmax - hmin) * 0.1f) continue;
+                    for (j = g; j < i && !dup; j++) dup = same_point(verts[j].position, verts[i].position);
+                    if (dup) continue;
+                    c = add(c, q);
+                    count++;
+                }
+                if (!count) continue;
+                c = scale(c, 1.0f / (float)count);
+            }
+            /* its axes: across (along the ground), and up its face
+             * (leaning back, towards the camera's view); the copy stands
+             * upright, as tall as the card is long, across the sun's way */
+            across = cross(n, up);
+            if (!(length(across) > 1e-4f)) continue;
+            across = normalize(across);
+            along = normalize(cross(across, n));
+            if (dot(along, up) < 0.0f) along = scale(along, -1.0f);
+            turned = normalize(cross(up, lh));
+            if (dot(turned, across) < 0.0f) turned = scale(turned, -1.0f);
+            if (nb == 0 || outBatches[nb - 1].texture_param != batch->texture_param ||
+                outBatches[nb - 1].palette_base != batch->palette_base ||
+                outBatches[nb - 1].polygon_attr != batch->polygon_attr ||
+                outBatches[nb - 1].first + outBatches[nb - 1].count != first + written) {
+                if (nb >= maxBatches) break;
+                outBatches[nb] = *batch;
+                outBatches[nb].first = (uint32_t)(first + written);
+                outBatches[nb].count = 0;
+                outBatches[nb].translucent = 0;
+                nb++;
+            }
+            for (i = g; i < gEnd; i++) {
+                NitroGx3dGpuVertex *dst = &out[written++];
+                V3 r = sub(back(&b, verts[i].position), c), rr;
+                float xyw[3];
+                rr = add(scale(turned, dot(r, across)), scale(up, dot(r, along)));
+                *dst = verts[i];
+                if (unback(&b, add(c, rr), xyw)) {
+                    dst->position[0] = xyw[0];
+                    dst->position[1] = xyw[1];
+                    dst->position[3] = xyw[2];
+                }
+                dst->color[3] = NITRO_SHADOW_CAST_ONLY;
+                verts[i].color[3] = NITRO_SHADOW_NEITHER;
+            }
+            outBatches[nb - 1].count += (uint32_t)(gEnd - g);
+        }
+    }
+    if (outBatchCount) *outBatchCount = nb;
+    return written;
+}
+
+int NitroPort_ShadowDecal(const float *tri, size_t stride, unsigned polygonAlpha, int translucentFormat,
+                          const uint32_t *texels, size_t count, uint16_t color,
+                          const NitroShadowSetup *setup)
+{
+    const unsigned char *base = (const unsigned char *)tri;
+    Back b;
+    V3 a0, a1, a2, n, up = v3(setup->up[0], setup->up[1], setup->up[2]);
+    float l, luma = 0.0f, weight = 0.0f;
+    size_t i;
+    /* see-through: the polygon's alpha, or a format with alpha of its own */
+    if (!(polygonAlpha > 0 && polygonAlpha < 31) && !translucentFormat) return 0;
+    memcpy(b.m, setup->back, sizeof(b.m));
+    a0 = back(&b, (const float *)base);
+    a1 = back(&b, (const float *)(base + stride));
+    a2 = back(&b, (const float *)(base + 2 * stride));
+    n = cross(sub(a1, a0), sub(a2, a0));
+    l = length(n);
+    if (!(l > 0.0f) || fabsf(dot(n, up)) / l < 0.9f) return 0;   /* lying flat */
+    if (texels) {
+        for (i = 0; i < count; i++) {
+            uint32_t p = texels[i];
+            float a = (float)(p & 255u) / 255.0f;
+            float y = 0.30f * (float)(p >> 24) + 0.59f * (float)((p >> 16) & 255u) +
+                      0.11f * (float)((p >> 8) & 255u);
+            luma += y * a;
+            weight += a;
+        }
+        if (!(weight > 0.0f)) return 0;
+        luma /= weight;
+    } else {
+        luma = 0.30f * (float)((color & 31u) * 255u / 31u) + 0.59f * (float)(((color >> 5) & 31u) * 255u / 31u) +
+               0.11f * (float)(((color >> 10) & 31u) * 255u / 31u);
+    }
+    return luma < 72.0f;   /* dark: a shadow, not glass or water */
+}
+
 /* ------------------------------------------------- the look over the day */
 int NitroPort_LookPeriod(int hour)
 {
@@ -269,17 +465,19 @@ static float ramp(float t, float a, float b)
  * camera: the shadows fall under the characters and trees, which are cards
  * facing the camera, and the cards shade each other in stripes; from the
  * bottom, the shadows hide behind what casts them.) It crosses the top
- * between 9:30 and 12:30, high, its shadows short. Never lower than 30
- * degrees: the shadows at most about twice as long as what casts them (a
- * real low sun's ran across the whole screen). */
+ * between 9:30 and 12:30, high, its shadows short. Never lower than 40
+ * degrees: the shadows at most about 1.2 times as long as what casts them
+ * (a real low sun's ran across the whole screen; at 30 degrees, with the
+ * characters' and trees' cards standing upright for their shadows,
+ * NitroPort_ShadowCards, a row of trees darkened a whole route). */
 static const float sSunWay[][3] = {
-    { 5.0f, 30.0f, 170.0f },
-    { 8.0f, 42.0f, 158.0f },
+    { 5.0f, 40.0f, 170.0f },
+    { 8.0f, 46.0f, 158.0f },
     { 9.5f, 52.0f, 150.0f },
     { 12.5f, 65.0f, 45.0f },
     { 16.0f, 55.0f, 30.0f },
-    { 19.0f, 40.0f, 14.0f },
-    { 20.0f, 32.0f, 8.0f },
+    { 19.0f, 46.0f, 14.0f },
+    { 20.0f, 40.0f, 8.0f },
 };
 
 void NitroPort_ShadowSunAt(int hour, int minute, NitroShadowSun *sun, float *strength)

@@ -19,7 +19,7 @@ extern "C" {
 #define NITRO_GX3D_MAX_POLYGONS 2048u
 #define NITRO_GX3D_MAX_VERTICES 6144u
 /* Triangles kept for the sun shadows only (NitroGx3dScene.shadow_triangles). */
-#define NITRO_GX3D_MAX_SHADOW_TRIANGLES 1024u
+#define NITRO_GX3D_MAX_SHADOW_TRIANGLES 8192u
 
 typedef struct NitroGx3dVertex {
     /* Projection-space homogeneous coordinates, signed 20.12 fixed point. */
@@ -64,8 +64,8 @@ typedef struct NitroGx3dScene {
      * that aren't drawn but can still cast a shadow into the view: those
      * facing away from the camera (culled), and those outside the view's
      * sides or crossing them (whole, not clipped; a crossing one is also
-     * among triangles, clipped), up to half the view's width or height
-     * beyond them, in front of the camera. Their vertices' screen x and y are as
+     * among triangles, clipped), up to one and a half views beyond them,
+     * in front of the camera. Their vertices' screen x and y are as
      * to_screen gives them (off the screen for most), the rest as in
      * triangles; sort_key 0. Kept apart (NITRO_GX3D_MAX_SHADOW_TRIANGLES
      * of them), made when the shadows are first turned on: NULL before,

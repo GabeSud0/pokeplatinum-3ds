@@ -4,6 +4,7 @@
  * it, through Platinum's field projection, its x for a 320-wide view.
  */
 #include <nitro_port_shadow.h>
+#include <nitro_port_gx3d_vertex.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -303,8 +304,83 @@ static void test_roles_reach(void)
     CHECK(!memcmp(&s, &before, sizeof(s)));
 }
 
+/* Cards facing the camera (a character): a copy turned to the sun, upright,
+ * its foot where it stands; the card itself neither casts nor receives.
+ * And the game's own painted shadows: flat, see-through, dark. */
+static void test_cards_decals(void)
+{
+    static NitroGx3dGpuVertex v[600], out[64];
+    NitroGx3dBatch batch, outBatches[4];
+    NitroShadowSetup s;
+    NitroShadowSun side = { 40.0f, 0.0f }, top = { 40.0f, 90.0f };
+    size_t nb = 0, w, i;
+    int n, ground, k;
+    double c = cos(PITCH), sn = sin(PITCH), corner[4][3];
+    static uint32_t dark[16], light[16];
+    build(1, 0);
+    ground = 8 * 6 * 6;
+    for (i = 0; i < (size_t)ground; i++) {
+        memcpy(v[i].position, sV[i].pos, sizeof(v[i].position));
+        v[i].color[3] = 255;
+    }
+    /* a card 16 wide and 16 long, leaning back to face the camera */
+    for (k = 0; k < 4; k++) {
+        double u = (k == 1 || k == 2) ? 8.0 : -8.0, along = k >= 2 ? 16.0 : 0.0;
+        corner[k][0] = u; corner[k][1] = along * c; corner[k][2] = -along * sn;
+    }
+    {
+        static const int order[6] = { 0, 1, 2, 0, 2, 3 };
+        for (k = 0; k < 6; k++) {
+            project(corner[order[k]][0], corner[order[k]][1], corner[order[k]][2], v[ground + k].position, NULL);
+            v[ground + k].color[3] = 255;
+        }
+    }
+    n = ground + 6;
+    memset(&batch, 0, sizeof(batch));
+    batch.count = (uint32_t)n;
+    CHECK(NitroPort_ShadowSetup(v[0].position, sizeof(v[0]), (size_t)n, sProj, WIDTH, &side, 512, &s));
+    NitroPort_ShadowRoles(v[0].position, &v[0].color[3], sizeof(v[0]), (size_t)n, &s);
+    w = NitroPort_ShadowCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s);
+    CHECK(w == 6 && nb == 1 && outBatches[0].first == (uint32_t)n && outBatches[0].count == 6);
+    for (k = 0; k < 6; k++) {
+        CHECK(v[ground + k].color[3] == NITRO_SHADOW_NEITHER);
+        CHECK(out[k].color[3] == NITRO_SHADOW_CAST_ONLY);
+    }
+    for (i = 0; i < (size_t)ground; i++) CHECK(v[i].color[3] == NITRO_SHADOW_RECEIVE_ONLY);
+    /* from the side: turned a quarter, its foot's corners now one behind
+     * the other (x 0: the middle of its foot), as far either way */
+    CHECK(fabs(out[0].position[0]) < 0.5 && fabs(out[1].position[0]) < 0.5);
+    CHECK(fabs(out[0].position[1] + out[1].position[1]) < 0.5 && fabs(out[0].position[1]) > 10.0);
+    /* from the top (straight towards the camera): facing it already, only
+     * stood upright: its foot as it was, its top lower on the screen */
+    for (k = 0; k < 6; k++) v[ground + k].color[3] = 255;
+    CHECK(NitroPort_ShadowSetup(v[0].position, sizeof(v[0]), (size_t)n, sProj, WIDTH, &top, 512, &s));
+    w = NitroPort_ShadowCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s);
+    CHECK(w == 6);
+    CHECK(NEAR(out[0].position[0], v[ground].position[0], 0.1) && NEAR(out[0].position[1], v[ground].position[1], 0.1));
+    CHECK(out[2].position[1] < v[ground + 2].position[1] - 1.0f);
+    /* no room: nothing */
+    for (k = 0; k < 6; k++) v[ground + k].color[3] = 255;
+    CHECK(NitroPort_ShadowCards(v, &batch, 1, (size_t)n, out, 3, outBatches, 4, &nb, &s) == 0);
+    /* a translucent batch's cards are left alone */
+    batch.translucent = 1;
+    CHECK(NitroPort_ShadowCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s) == 0);
+
+    /* painted shadows */
+    for (k = 0; k < 16; k++) { dark[k] = 0x101010FFu; light[k] = 0xF0F0F0FFu; }
+    dark[3] = 0xFFFFFF00u;   /* (a see-through texel: doesn't count) */
+    CHECK(NitroPort_ShadowDecal(v[0].position, sizeof(v[0]), 9, 0, dark, 16, 0x7FFF, &s));
+    CHECK(!NitroPort_ShadowDecal(v[0].position, sizeof(v[0]), 9, 0, light, 16, 0x7FFF, &s));
+    CHECK(!NitroPort_ShadowDecal(v[0].position, sizeof(v[0]), 31, 0, dark, 16, 0x7FFF, &s));   /* opaque */
+    CHECK(NitroPort_ShadowDecal(v[0].position, sizeof(v[0]), 31, 1, dark, 16, 0x7FFF, &s));    /* A3I5 */
+    CHECK(NitroPort_ShadowDecal(v[0].position, sizeof(v[0]), 12, 0, NULL, 0, 0x0421, &s));     /* untextured, dark */
+    CHECK(!NitroPort_ShadowDecal(v[0].position, sizeof(v[0]), 12, 0, NULL, 0, 0x7FFF, &s));
+    CHECK(!NitroPort_ShadowDecal(v[ground].position, sizeof(v[0]), 9, 0, dark, 16, 0x7FFF, &s)); /* upright */
+}
+
 int main(void)
 {
+    test_cards_decals();
     test_roles_reach();
     test_day();
     test_post_shadow();

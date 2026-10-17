@@ -66,6 +66,7 @@ typedef struct NitroShadowSetup {
 #define NITRO_SHADOW_CAST_RECEIVE 255u   /* a slope: a roof */
 #define NITRO_SHADOW_CAST_ONLY    254u   /* upright: a wall, a character, a tree */
 #define NITRO_SHADOW_RECEIVE_ONLY 253u   /* flat: the ground, what lies on it */
+#define NITRO_SHADOW_NEITHER      252u   /* a card turned to the sun for its shadow (NitroPort_ShadowCards) */
 
 /* The setup for a scene, from its triangles' vertices (count of them, three
  * a triangle; each x, y, z, w floats, stride bytes apart) and projection
@@ -96,6 +97,33 @@ void NitroPort_ShadowReach(const float *positions, size_t stride, size_t count, 
  * walls' shadows have its outline). */
 void NitroPort_ShadowRoles(const float *positions, uint8_t *alphas, size_t stride, size_t count,
                            const NitroShadowSetup *setup);
+
+/* Characters, signs, the trees on routes: cards facing the camera. From the
+ * side, the sun sees them edge on: their shadows were slivers, or nothing.
+ * Each card (its triangles in a row sharing corners) gets a copy turned
+ * about its upright middle to face the sun, for the shadow map only, as
+ * NITRO_SHADOW_CAST_ONLY triangles (out, capacity vertices; outBatches,
+ * maxBatches, each batch's first counting from first, where out is in the
+ * vertex buffer); the card itself becomes NITRO_SHADOW_NEITHER (its alpha
+ * in verts). Only opaque batches' (batches, batchCount: the scene's, over
+ * verts). Returns the vertices written. After NitroPort_ShadowRoles. */
+struct NitroGx3dGpuVertex;
+struct NitroGx3dBatch;
+size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct NitroGx3dBatch *batches,
+                             size_t batchCount, size_t first, struct NitroGx3dGpuVertex *out,
+                             size_t capacity, struct NitroGx3dBatch *outBatches, size_t maxBatches,
+                             size_t *outBatchCount, const NitroShadowSetup *setup);
+
+/* Whether a translucent triangle is one of the game's own painted shadows
+ * (lying flat, see-through, dark: the patches under buildings and on the
+ * ground beside them), left out with the sun shadows on: the two together
+ * were two shadows. tri: its three vertices (x, y, z, w floats, stride
+ * bytes apart); polygonAlpha 0-31; texels: its texture decoded (RGBA8,
+ * red in the top byte, alpha the bottom; NULL: untextured, colour the
+ * vertices' RGB555); count texels. */
+int NitroPort_ShadowDecal(const float *tri, size_t stride, unsigned polygonAlpha, int translucentFormat,
+                          const uint32_t *texels, size_t count, uint16_t color,
+                          const NitroShadowSetup *setup);
 
 /* The look over the day, after Platinum's own times of day (rtc.c):
  * morning 4:00-9:59, day 10:00-16:59, evening 17:00-19:59, night 20:00-3:59. */
