@@ -247,6 +247,12 @@ stretched:
     box, the menus at the right edge;
   - the Pokédex's list: its label and picture left, its rows and scroll
     bar right, the counts apart.
+  - the shop's list (patch 0026, 2026-10-17): its box 31 pixels wider
+    to the right, the prices at its right edge, the cursor as wide as its
+    row, the scroll arrows at its middle; the green panel below across the
+    screen (the money's and the quantity's windows go by the screen's
+    edges, as windows do). The list's text layer changes with every item
+    (its description), so a picture of it can't stand for the layout.
   A layout can also draw pictures of its own (PICTURE parts, patches 0023
   and 0024: files in the wide art folder, see [WIDE_ART.md](WIDE_ART.md)),
   with a BG, in front of its pixels, anywhere on the wider screen (moved

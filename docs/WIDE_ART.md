@@ -145,6 +145,10 @@ it's scrolled. So:
 
 A sprite group's picture goes where the group has no sprite, at the
 group's priority (so the layers in front of the sprites stay in front).
+It adds to the sprites, it can't take any of their pixels away: a sprite
+drawn over or rubbed out in the editor still shows (the shop's cursor's
+right end, in a picture that widened it). The screens the port lays out
+(below) move and stretch their sprites themselves.
 
 **Placing a picture.** The port's own rules only carry a plain edge
 colour on, and on the screens made of pictures (the opening, the title)
