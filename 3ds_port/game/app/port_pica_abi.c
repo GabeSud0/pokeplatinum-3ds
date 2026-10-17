@@ -15,6 +15,7 @@
  * DVLE_s is libctru's.
  */
 #include <3ds.h>
+#include <citro3d.h>
 
 /* (declared in port_pica.h, not included here: its headers are the port's) */
 void *NitroPort_PicaDvle(void *dvlb, unsigned index);
