@@ -377,9 +377,10 @@ int NitroPort_WideScreenExtra(void)
  * the Pokédex's list, patches 0017-0022: NitroPort_WideScreenParts). The
  * battle's health boxes the game moves itself (patch 0013,
  * NitroPort_WideScreenExtra). The battle's background (engine A's BG3) is
- * a picture wider than the DS's screen (a 512-pixel map: the trainer's
- * slide-in scrolls across it), so beyond the DS's edges it shows its own
- * art.
+ * a 512-pixel map (the trainer's slide-in scrolls across it), so beyond
+ * the DS's edges it shows its own art where the map has some (the
+ * player's platform's left part), never the map's mirrored half
+ * (TextBgSegments, port_render2d.c).
  */
 void NitroPort_WideLayout(int engine, struct NitroRender2DSplit *split)
 {

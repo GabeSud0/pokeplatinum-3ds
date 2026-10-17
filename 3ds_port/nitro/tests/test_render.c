@@ -767,6 +767,8 @@ static void test_split_layers(void)
     NitroRender2DSplit split;
     int n, i, differ = 0, with3d = 0, blended = 0;
 
+    /* (all of it: the DS's width, the current registers, not a snapshot) */
+    memset(&split, 0, sizeof(split));
     split.over = over;
     split.overAlpha = overAlpha;
     for (n = 0; n < 300 && differ < 5; n++) {
@@ -1774,6 +1776,73 @@ static void test_wide_window_edges(void)
     GX_SetVisibleWnd(GX_WNDMASK_NONE);
 }
 
+/* A BG whose map goes on past the DS's edges (the battle's background,
+ * clip off): a 512-wide map, its picture then the same picture mirrored
+ * (tiles flipped sideways), but for a few tiles of a picture of its own
+ * just left of the DS's edge (the player's platform's left part, which
+ * the game draws there). Beside the DS: those tiles as they are; where
+ * the map only has the mirror, the map's pixel next to the DS's edge
+ * repeated (the background's own edge), not the DS's edge pixel (the
+ * platform's, drawn out into lines, 2026-10-16), nothing mirrored. */
+static void test_wide_map_past_edges(void)
+{
+    static u16 wide[320 * 192], over[320 * 192];
+    static u8 overAlpha[320 * 192], tiles[4 * 32];
+    static u16 map[64 * 32];
+    static u16 pltt[16] = { GREY, RED, BLUE, GREEN, WHITE };
+    NitroRender2DSplit split;
+    int i, x, y;
+
+    Reset();
+    /* tile 1 red, tile 2 blue, tile 3 green on its left half and white on
+     * its right (so a flip shows) */
+    memset(tiles, 0, sizeof(tiles));
+    memset(tiles + 32, 0x11, 32);
+    memset(tiles + 64, 0x22, 32);
+    for (i = 0; i < 32; i++) {
+        tiles[96 + i] = (u8)((i & 3) < 2 ? 0x33 : 0x44);
+    }
+    for (y = 0; y < 32; y++) {
+        for (x = 0; x < 32; x++) {
+            /* the picture: its first column blue (a platform at the DS's edge) */
+            map[y * 32 + x] = (u16)(x == 0 ? 2 : 1);
+            /* the mirror (the right 256x256 block): red, flipped */
+            map[32 * 32 + y * 32 + x] = (u16)(1 | 0x400);
+        }
+    }
+    for (y = 8; y < 16; y++) {
+        for (x = 28; x < 32; x++) {
+            map[32 * 32 + y * 32 + x] = 3;   /* (the platform's own, map x 480-511) */
+        }
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_512x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    G2_SetBG1Offset(0, 0);
+    memset(&split, 0, sizeof(split));
+    split.width = 320;
+    split.origin = 32;
+    memset(split.clip, 0, sizeof(split.clip));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[10 * 320 + 32] == BLUE && wide[10 * 320 + 40] == RED);   /* (the DS's) */
+    CHECK(wide[10 * 320 + 0] == RED && wide[10 * 320 + 31] == RED);     /* the mirror: the map's next pixel */
+    CHECK(wide[70 * 320 + 0] == GREEN && wide[70 * 320 + 4] == WHITE);  /* its own: as it is */
+    CHECK(wide[70 * 320 + 24] == GREEN && wide[70 * 320 + 31] == WHITE);
+    CHECK(wide[10 * 320 + 288] == RED && wide[10 * 320 + 319] == RED);  /* the right: the mirror */
+    /* scrolled 8 to the right (the slide): the same, moved */
+    G2_SetBG1Offset(8, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[70 * 320 + 0] == GREEN && wide[70 * 320 + 23] == WHITE);  /* (map x 488-511) */
+    CHECK(wide[70 * 320 + 24] == BLUE && wide[70 * 320 + 31] == BLUE);   /* (map x 0-7) */
+    CHECK(wide[70 * 320 + 32] == RED);
+    G2_SetBG1Offset(0, 0);
+}
+
 /* One 4bpp tile all colour index `index`. */
 static void SolidTile4(u8 *tile, int index)
 {
@@ -2671,6 +2740,7 @@ int main(int argc, char **argv)
     test_wide_art_places();
     test_wide_art_sliding();
     test_wide_window_edges();
+    test_wide_map_past_edges();
     test_wide_framed_windows();
     test_wide_splits();
     test_wide_parts();

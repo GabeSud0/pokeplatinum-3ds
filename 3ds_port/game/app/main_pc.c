@@ -639,6 +639,7 @@ void NitroPort_Log(const char *fmt, ...)
  *   capture DIR      a wide art capture into DIR/captures (docs/WIDE_ART.md)
  *   wideart DIR      read the wide art pictures in DIR again
  *   bgs              log each engine's display control and BGs
+ *   vram PATH        write engine A's BG VRAM (512 KB) and the palettes (2 KB)
  *   oam              log each engine's shown OBJs (position, size, tile,
  *                    palette, priority)
  *   quit             stop the runner
@@ -712,6 +713,22 @@ static void ControlWait(void)
                                 (a0 & 0x2000) ? "8bpp" : "4bpp", a2 & 0x3FF, a2 >> 12, (a2 >> 10) & 3,
                                 (a0 & 0x100) ? " affine" : "");
                     }
+                }
+            } else if (strncmp(line, "vram ", 5) == 0) {
+                /* Engine A's BG VRAM (512 KB) then the palettes (2 KB), as
+                 * binary: to look at a BG's map and tiles. */
+                extern unsigned char NitroPort_BgVram[], NitroPort_Pltt[];
+                char *end = line + strlen(line);
+                FILE *out;
+
+                while (end > line + 5 && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ')) {
+                    *--end = 0;
+                }
+                out = fopen(line + 5, "wb");
+                if (out != NULL) {
+                    fwrite(NitroPort_BgVram, 1, 0x80000, out);
+                    fwrite(NitroPort_Pltt, 1, 0x800, out);
+                    fclose(out);
                 }
             } else if (strncmp(line, "bgs", 3) == 0) {
                 /* Each engine's display control and BGs (mode, size,

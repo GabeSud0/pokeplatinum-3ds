@@ -430,6 +430,20 @@ static u16 TextBgPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int mapx
     }
 }
 
+/* Whether a text BG's map has its tile at map x mapx (row ty) flipped
+ * sideways: a mirror of another (the battle background's map is its
+ * picture, then the same picture mirrored, for its slide-in). */
+static BOOL TextBgTileMirrored(const Engine *e, u16 bgcnt, u32 dispcnt, int mapx, int ty)
+{
+    int mapW = sTextSizes[bgcnt >> 14][0];
+    u32 screenBase = ScreenBase(e, bgcnt, dispcnt);
+    int tx = mapx & (mapW - 1);
+    u32 rowAddr = screenBase + (u32)((ty >> 8) * (mapW >> 8)) * 0x800 + (u32)((ty & 255) >> 3) * 64;
+    u32 entry = Rd16(e->bgVram, (rowAddr + (u32)(tx >> 8) * 0x800 + (u32)((tx & 255) >> 3) * 2) & e->bgMask);
+
+    return (entry & 0x400) != 0;
+}
+
 /* How much of a line at the DS's edge must be one colour for that colour
  * to go on beside it: a band's width (32) on the screens made of pictures,
  * where anything shorter is part of the picture (the opening strip's ovals
@@ -1139,6 +1153,40 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
                 next = origin;
             } else if (x < origin + 256 && next > origin + 256) {
                 next = origin + 256;
+            }
+            if (!e->clip[bg] && (x < origin || x >= origin + 256)) {
+                /* A BG whose map goes on past the DS's edges (the battle's
+                 * background): there, tile by tile, the map's own pixels
+                 * where it has a picture of its own (the player's
+                 * platform's left part, which the game puts there; it was
+                 * drawn out from the DS's edge into lines, every terrain's,
+                 * 2026-10-16), and where the map only has the picture
+                 * mirrored, the map's pixel next to the DS's edge
+                 * repeated (nothing mirrored): that's the background's own
+                 * edge, as it was before the game drew the platforms into
+                 * it (the DS's edge pixel is the platform's, where a
+                 * platform reaches the edge: the Elite Four's). */
+                short edge = (short)((x < origin ? hofs - 1 : 256 + hofs) & (mapW - 1));
+
+                while (x < next && n < MAX_SEGMENTS - nmoved) {
+                    int mx = x + hofs - origin, end = x + 8 - (mx & 7);
+                    short fixed = TextBgTileMirrored(e, bgcnt, dispcnt, mx, ty) ? edge : -1;
+
+                    if (end > next) {
+                        end = next;
+                    }
+                    if (n > 0 && segs[n - 1].x1 == x && segs[n - 1].fixed == fixed) {
+                        segs[n - 1].x1 = (short)end;
+                    } else {
+                        segs[n].x0 = (short)x;
+                        segs[n].x1 = (short)end;
+                        segs[n].off = (short)(hofs - origin);
+                        segs[n].fixed = fixed;
+                        n++;
+                    }
+                    x = end;
+                }
+                continue;
             }
             segs[n].x0 = (short)x;
             segs[n].x1 = (short)next;
