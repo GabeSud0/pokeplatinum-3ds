@@ -767,6 +767,8 @@ static void test_split_layers(void)
     NitroRender2DSplit split;
     int n, i, differ = 0, with3d = 0, blended = 0;
 
+    /* (all of it: the DS's width, the current registers, not a snapshot) */
+    memset(&split, 0, sizeof(split));
     split.over = over;
     split.overAlpha = overAlpha;
     for (n = 0; n < 300 && differ < 5; n++) {
