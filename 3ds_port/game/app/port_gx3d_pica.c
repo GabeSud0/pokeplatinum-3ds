@@ -30,6 +30,8 @@
 #include <nitro_port_gx3d_texture.h>
 #include <nitro_port_xbrz.h>
 #include <nitro_port_shadow.h>
+#include <malloc.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -324,23 +326,88 @@ static void clean_up(void)
     if(sTarget){C3D_RenderTargetDelete(sTarget);sTarget=NULL;}
     C3D_Fini();
 }
+/* The memory left, for the log: the linear heap's free space, and the
+ * program's heap (malloc's): what's in use of its size, and what malloc
+ * has free inside what it took. */
+extern u32 __ctru_heap_size,__ctru_linear_heap_size;
+static void log_memory(const char *what)
+{
+    struct mallinfo m=mallinfo();
+    NitroPort_Log("%s: linear heap %lu KB free of %lu KB; heap: %lu KB in use of %lu KB "
+                  "(%lu KB taken, %lu KB of it free)",
+                  what,(unsigned long)(linearSpaceFree()/1024u),(unsigned long)(__ctru_linear_heap_size/1024u),
+                  (unsigned long)(m.uordblks/1024u),(unsigned long)(__ctru_heap_size/1024u),
+                  (unsigned long)(m.arena/1024u),(unsigned long)(m.fordblks/1024u));
+}
+void NitroPort_PicaLogMemory(void)
+{
+    log_memory("[perf] memory");
+}
 /* Why NitroPort_PicaInit failed, in the log: the step, and the memory
- * left then (both heaps, in KB). */
+ * left then. */
 static int init_failed(const char *step)
 {
-    NitroPort_Log("[gx3d] 3D setup: %s failed; free: %lu KB linear, %lu KB heap of the region",
-                  step,(unsigned long)(linearSpaceFree()/1024u),
-                  (unsigned long)(osGetMemRegionFree(MEMREGION_APPLICATION)/1024u));
+    char what[96];
+    snprintf(what,sizeof(what),"[gx3d] 3D setup: %s failed",step);
+    log_memory(what);
     clean_up();
     return 0;
+}
+/* The sun shadows' two programs (DVLE 1 and 2 of the shaders), set up the
+ * first time the shadows are turned on (NitroPort_PicaLook), not at the
+ * start: there, with everything else being set up at once, they once
+ * didn't (on a New 3DS, 2026-10-17), and most players never turn them on.
+ * Tried again each time the shadows are turned on, until they are. */
+static int shadow_programs(void)
+{
+    Result rc;
+    if(sCastReady && sRecvReady)return 1;
+    if(!sDvlb || sDvlb->numDVLE<3){
+        NitroPort_Log("[remaster] the sun shadows' shaders aren't in this build");
+        return 0;
+    }
+    if(!sCastReady){
+        shaderProgramInit(&sCastProgram);
+        rc=shaderProgramSetVsh(&sCastProgram,&sDvlb->DVLE[1]);
+        if(R_FAILED(rc)){
+            char what[96];
+            shaderProgramFree(&sCastProgram);
+            memset(&sCastProgram,0,sizeof(sCastProgram));
+            snprintf(what,sizeof(what),"[remaster] the sun shadows' map shader didn't set up (%ld)",(long)rc);
+            log_memory(what);
+            return 0;
+        }
+        sCastReady=1;
+        sUnifCast=shaderInstanceGetUniformLocation(sCastProgram.vertexShader,"smtx");
+    }
+    if(!sRecvReady){
+        shaderProgramInit(&sRecvProgram);
+        rc=shaderProgramSetVsh(&sRecvProgram,&sDvlb->DVLE[2]);
+        if(R_FAILED(rc)){
+            char what[96];
+            shaderProgramFree(&sRecvProgram);
+            memset(&sRecvProgram,0,sizeof(sRecvProgram));
+            snprintf(what,sizeof(what),"[remaster] the sun shadows' light shader didn't set up (%ld)",(long)rc);
+            log_memory(what);
+            return 0;
+        }
+        sRecvReady=1;
+        sUnifRecvMtx=shaderInstanceGetUniformLocation(sRecvProgram.vertexShader,"mtx");
+        sUnifRecvStereo=shaderInstanceGetUniformLocation(sRecvProgram.vertexShader,"stereo");
+        sUnifRecvShadow=shaderInstanceGetUniformLocation(sRecvProgram.vertexShader,"smtx");
+    }
+    if(sUnifCast<0 || sUnifRecvMtx<0 || sUnifRecvStereo<0 || sUnifRecvShadow<0){
+        NitroPort_Log("[remaster] the sun shadows' shaders lack their uniforms (%d %d %d %d)",
+                      sUnifCast,sUnifRecvMtx,sUnifRecvStereo,sUnifRecvShadow);
+        return 0;
+    }
+    return 1;
 }
 int NitroPort_PicaInit(void)
 {
     int i;
     C3D_AttrInfo *attrs;
-    NitroPort_Log("[gx3d] 3D setup: free %lu KB linear, %lu KB heap of the region",
-                  (unsigned long)(linearSpaceFree()/1024u),
-                  (unsigned long)(osGetMemRegionFree(MEMREGION_APPLICATION)/1024u));
+    log_memory("[gx3d] 3D setup");
     /* The command list: 1 MB (citro3d's default, 256 KB, ran out on the
      * 3DS with the remaster's passes, a heavy scene and stereo: citro3d
      * stops the program then, a "Break" on Luma's crash screen). Drawing
@@ -359,25 +426,7 @@ int NitroPort_PicaInit(void)
     sUnifMtx=shaderInstanceGetUniformLocation(sProgram.vertexShader,"mtx");
     sUnifStereo=shaderInstanceGetUniformLocation(sProgram.vertexShader,"stereo");
     if(sUnifMtx<0||sUnifStereo<0)return init_failed("the vertex shader's uniforms");
-    /* the sun shadows' programs (DVLE 1 and 2); without them, no shadows
-     * (the 3D itself goes on) */
-    if(sDvlb->numDVLE>=3){
-        sCastReady=R_SUCCEEDED(shaderProgramInit(&sCastProgram));
-        if(sCastReady && R_FAILED(shaderProgramSetVsh(&sCastProgram,&sDvlb->DVLE[1]))){
-            shaderProgramFree(&sCastProgram);sCastReady=0;
-        }
-        sRecvReady=R_SUCCEEDED(shaderProgramInit(&sRecvProgram));
-        if(sRecvReady && R_FAILED(shaderProgramSetVsh(&sRecvProgram,&sDvlb->DVLE[2]))){
-            shaderProgramFree(&sRecvProgram);sRecvReady=0;
-        }
-        if(!sCastReady||!sRecvReady)NitroPort_Log("[gx3d] the sun shadows' shaders didn't set up: no shadows");
-        if(sCastReady)sUnifCast=shaderInstanceGetUniformLocation(sCastProgram.vertexShader,"smtx");
-        if(sRecvReady){
-            sUnifRecvMtx=shaderInstanceGetUniformLocation(sRecvProgram.vertexShader,"mtx");
-            sUnifRecvStereo=shaderInstanceGetUniformLocation(sRecvProgram.vertexShader,"stereo");
-            sUnifRecvShadow=shaderInstanceGetUniformLocation(sRecvProgram.vertexShader,"smtx");
-        }
-    }
+    /* (the sun shadows' programs: shadow_programs, when they're first on) */
     C3D_BindProgram(&sProgram);
 
     attrs=C3D_GetAttrInfo();
@@ -1419,8 +1468,7 @@ void NitroPort_PicaLook(int shadows,int grade,int fixedSun,float elevation,float
     sShadowMode=0;
     sShadowReady=0;
     NitroPort_SetSunShadows(0);
-    if(!shadows || !sCastReady || !sRecvReady || sUnifCast<0 || sUnifRecvMtx<0 ||
-       sUnifRecvStereo<0 || sUnifRecvShadow<0)return;
+    if(!shadows || !shadow_programs())return;
     if(!sShadowTexReady){
         if(!C3D_TexInitShadow(&sShadowTex,SHADOW_SIZE,SHADOW_SIZE)){
             NitroPort_Log("[remaster] no VRAM for the sun shadows' map");
