@@ -1,0 +1,58 @@
+; A test program (shadowdebug on, port_gx3d_pica.c draw_shadow_receivers):
+; the receivers' program as it was before the cards (PR #114; it drew the
+; shadows on a 3DS then), a vertex of alpha 252 receiving like one of 253.
+; Sun shadows (remaster.txt: shadows on), the scene's opaque polygons: the
+; same as gx3d_passthrough.v.pica (the position exactly as it gives it),
+; and where each vertex is in the shadow map (smtx, port_shadow.c: rows on
+; x, y, w, 1): texture coordinate 0 (s, t) and its w (the distance from the
+; sun) for the shadow map on texture unit 0. The DS's texture goes on
+; unit 1, its coordinates as texture coordinate 1. A vertex whose alpha is
+; 254 (NITRO_SHADOW_CAST_ONLY: upright, a wall, a character) doesn't
+; receive: its distance 0, nearest the sun, lit.
+.constf byteScale(0.003921568393707275390625, 1.0001, 1.0, 0.0)
+.constf roles(254.5, 253.5, 0.0, 0.0)
+.alias clrdiv byteScale.xxxx
+.alias flatW byteScale.yyyy
+.alias one byteScale.zzzz
+.fvec mtx[4]
+.fvec stereo
+.fvec smtx[4]
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0.xy
+.out - texcoord0w outtc0.p
+.out outtc1 texcoord1
+.alias inpos v0
+.alias inclr v1
+.alias intex v2
+
+.entry recvoldmain
+.proc recvoldmain
+    mov r0, inpos
+    ; r1.x = max(w - convergence, -w) * strength, for w > 1 only
+    add r1.x, -stereo.yyyy, r0.wwww
+    max r1.x, r1.xxxx, -r0.wwww
+    slt r2.x, flatW, r0.wwww
+    mul r1.x, r1.xxxx, r2.xxxx
+    mul r1.x, stereo.xxxx, r1.xxxx
+    add r0.x, r0.xxxx, r1.xxxx
+    dp4 outpos.x, mtx[0], r0
+    dp4 outpos.y, mtx[1], r0
+    dp4 outpos.z, mtx[2], r0
+    dp4 outpos.w, mtx[3], r0
+    ; the shadow map: on (x, y, w, 1) before the stereo shift
+    mov r3.xy, inpos
+    mov r3.z, inpos.wwww
+    mov r3.w, one
+    dp4 outtc0.x, smtx[0], r3
+    dp4 outtc0.y, smtx[1], r3
+    dp4 r4.z, smtx[3], r3
+    ; r5.x: 1 if it receives (alpha above 254.5, or 253.5 and below)
+    slt r5.x, roles.xxxx, inclr.wwww
+    sge r5.y, roles.yyyy, inclr.wwww
+    add r5.x, r5.xxxx, r5.yyyy
+    mul outtc0.z, r4.zzzz, r5.xxxx
+    mul outclr, clrdiv, inclr
+    mov outtc1, intex
+    end
+.end
