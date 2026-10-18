@@ -451,7 +451,8 @@ $(OUT)/app/port_compose_pica.o: app/port_compose_pica.c app/port_pica.h $(NITRO)
 # DVLE each, in this order: the polygons, the sun shadows' map, the sun
 # shadows' scene). The generated blob symbol is gx3d_passthrough_shbin,
 # consumed by port_gx3d_pica.c.
-GX3D_SHADERS := app/gx3d_passthrough.v.pica app/gx3d_shadow_cast.v.pica app/gx3d_shadow_recv.v.pica
+GX3D_SHADERS := app/gx3d_passthrough.v.pica app/gx3d_shadow_cast.v.pica app/gx3d_shadow_recv.v.pica \
+                app/gx3d_shadow_recv_old.v.pica app/gx3d_shadow_recv_nw.v.pica
 $(OUT)/app/gx3d_passthrough.shbin: $(GX3D_SHADERS)
 	@mkdir -p $(dir $@)
 	picasso -o $@ $(GX3D_SHADERS)

@@ -419,7 +419,7 @@ frames waiting isn't drawn again until one has shown.
 | `edges off` | no outlines (edge marking) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
 | `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off |
-| `shadowdebug on` | debug only: wait for GPU completion before/after the sun map, after the opaque scene, and after direct shadow receiving; the receiving pass built up a part at a time over its first frames (30 frames each: A its state alone, B the receivers' program, C the map's lookup, D the cut-outs' textures too, the whole pass), each part's completion in the log. Slower; the watchdog can identify the outstanding pass and part. Default off |
+| `shadowdebug on` | debug only: wait for GPU completion before/after the sun map, after the opaque scene, and after direct shadow receiving; the receiving pass tried in parts over its first frames (30 frames each, E1 to E7: the receivers' program as it was before PR #114 with the map bilinear then nearest, the receivers' program with the map bilinear then nearest, the whole pass with the cut-outs' textures, the program without the distance from the sun with a plain texture, the receivers' program with a plain texture; then the whole pass), each part's completion in the log. Slower; the watchdog can identify the outstanding pass and part. Default off |
 | `grade on` | the colour grade on the 3D's textures, by the time of day |
 | `sun 55,32` | the sun fixed: degrees above the ground, and from the screen's left (0) towards its top (90); `sun clock` (the default) by the time of day |
 | `filter3d xbrz` / `filter3d xbrz-smooth` | the 3D's textures 2x by xBRZ, nearest / bilinear (smooth: no shimmer while the picture moves, but sharp's cost and lines may come back). On trial: the [perf] line's 3D times say what it costs |
@@ -504,8 +504,12 @@ Azahar or the PC simulation.
 If it freezes, restart with `shadowdebug on` and reproduce it. This setting
 submits and waits between passes; the two-second watchdog's stage names
 distinguish the map, opaque scene and receiving pass, and which part of
-the receiving pass (A to D, above; `[gx3d] sun shadow receivers test A: the
-GPU came back from 30 frames of it` for each part that passed). Without it
+the receiving pass (E1 to E7, above; `[gx3d] sun shadow receivers test E1:
+the GPU came back from 30 frames of it` for each part that passed). On a
+3DS the pass's state alone passed (test A of an earlier round) and the
+receivers' program with a plain texture hung (test B): the parts now tell
+the program's instructions, the texcoord0w output and the map's filter
+apart. Without it
 the GPU runs behind the CPU, so the last submitted draw does not locate a
 GPU hang.
 The checkpoint flushes all linear data, including any compositor vertices
