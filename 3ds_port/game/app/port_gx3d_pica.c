@@ -31,6 +31,7 @@
 #include <nitro_port_xbrz.h>
 #include <nitro_port_shadow.h>
 #include <malloc.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1283,6 +1284,18 @@ void NitroPort_PicaBindVertices(const void *vertices)
     BufInfo_Add(buffers,vertices,sizeof(NitroGx3dGpuVertex),3,0x210u);
 }
 
+/* The shadow matrices and bias, all finite (NitroPort_ShadowSetup and
+ * NitroPort_ShadowReach divide by extents and ranges). */
+static int shadow_finite(void)
+{
+    int i,j;
+    for(i=0;i<4;i++){
+        for(j=0;j<4;j++){
+            if(!isfinite(sShadow.receiver[i][j]) || !isfinite(sShadow.caster[i][j]))return 0;
+        }
+    }
+    return isfinite(sShadow.bias)!=0;
+}
 int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
 {
     u64 t0=svcGetSystemTick();
@@ -1330,6 +1343,13 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
         }
         NitroPort_ShadowReach(extra[0].position,sizeof(NitroGx3dGpuVertex),n,&sShadow);
         GSPGPU_FlushDataCache(sVertices[slot],(u32)((sPreparedCount+n)*sizeof(NitroGx3dGpuVertex)));
+        if(!shadow_finite()){
+            /* (a NaN or an infinity in a uniform can hang the GPU: 3dbrew) */
+            static int told;
+            if(!told){told=1;NitroPort_Log("[gx3d] a sun shadow matrix isn't finite: no shadows on this scene");}
+            sShadowReady=0;
+            sShadowOnlyBatches=0;
+        }
         /* the game's own painted shadows (left out in the draw) */
         NitroPort_Gx3dMapTextureBanks(&sBanks);
         for(b=0;b<sPreparedBatches;b++){
@@ -1678,9 +1698,9 @@ static void free_shadow_spare(void)
  * RGB = white * light + shade * (1 - light). Constant alpha is zero,
  * so ONE_MINUS_SRC_ALPHA supplies white without another TEV stage.
  * Alpha retains the cut-out test; destination alpha is never changed. */
-static void bind_batch_shadow(const NitroGx3dBatch *batch)
+static void bind_batch_shadow(const NitroGx3dBatch *batch,int cutouts)
 {
-    int textured=batch->texture_param!=0;
+    int textured=cutouts && batch->texture_param!=0;
     unsigned mode=(batch->polygon_attr>>4)&3u;
     C3D_Tex *tex=NULL;
     C3D_TexEnv *env;
@@ -1718,28 +1738,56 @@ static void bind_batch_shadow(const NitroGx3dBatch *batch)
  * One receiver per visible pixel: the opaque pass left stencil 0xFF.
  * Mark shaded pixels 0xFE, so coplanar overlapping batches cannot multiply
  * the shade twice. The later translucent pass still has its own IDs. */
+/* With shadowdebug on, the pass is built up over its first frames, a part
+ * at a time (RECV_TEST_FRAMES frames each), the watchdog naming the part
+ * if the GPU doesn't come back: the pass's state alone (A: the scene's
+ * program, a plain texture on unit 0), the receivers' program (B: its
+ * texture coordinates and distance; unit 0 still plain), the shadow map's
+ * lookup (C: the map on unit 0), and the cut-outs' textures on unit 1 (D,
+ * the whole pass; what runs with shadowdebug off). */
+#define RECV_TEST_FRAMES 30u
+static unsigned sRecvFrames;
+static const char *const sRecvTestStage[4]={
+    "the direct sun shadow receivers (test A: the pass's state, the scene's program, no map)",
+    "the direct sun shadow receivers (test B: the receivers' program, no map)",
+    "the direct sun shadow receivers (test C: the shadow map's lookup, no cut-outs)",
+    "the direct sun shadow receivers (test D: the whole pass)",
+};
+static const char *const sRecvTestWait[4]={
+    "waiting for the direct sun shadow receivers (test A: the pass's state, the scene's program, no map)",
+    "waiting for the direct sun shadow receivers (test B: the receivers' program, no map)",
+    "waiting for the direct sun shadow receivers (test C: the shadow map's lookup, no cut-outs)",
+    "waiting for the direct sun shadow receivers",
+};
 static void draw_shadow_receivers(const PicaView *view)
 {
     size_t b;
-    int q;
-    stage("the direct sun shadow receivers");
+    int q,test=3;
+    if(sShadowDebug){
+        test=(int)(sRecvFrames/RECV_TEST_FRAMES);
+        if(test>3)test=3;
+        sRecvFrames++;
+    }
+    stage(sRecvTestStage[test]);
     C3D_SetFrameBuf(view->fb);
     C3D_SetViewport(0,0,view->fb->width,view->fb->height);
     C3D_BindProgram(&sProgram);
     begin_pass(view,&view->rect);
-    C3D_BindProgram(&sRecvProgram);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,sUnifRecvMtx,&sViewMtx);
-    C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvStereo,sViewStereo,sViewConvergence,0.0f,0.0f);
-    for(q=0;q<4;q++){
-        C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvShadow+q,sShadow.receiver[q][0],sShadow.receiver[q][1],
-                      sShadow.receiver[q][2],sShadow.receiver[q][3]);
+    if(test>=1){
+        C3D_BindProgram(&sRecvProgram);
+        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,sUnifRecvMtx,&sViewMtx);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvStereo,sViewStereo,sViewConvergence,0.0f,0.0f);
+        for(q=0;q<4;q++){
+            C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvShadow+q,sShadow.receiver[q][0],sShadow.receiver[q][1],
+                          sShadow.receiver[q][2],sShadow.receiver[q][3]);
+        }
     }
     NitroPort_PicaBindVertices(sVertices[sPrepared]);
     /* This is a different target from the map; binding flushes citro3d's
      * texture cache after the map's framebuffer writes. */
-    C3D_TexBind(0,&sShadowTex);
+    C3D_TexBind(0,test>=2?&sShadowTex:&sSpareTex);
     C3D_TexBind(1,&sSpareTex);
-    C3D_TexShadowParams(false,sShadow.bias*NITRO_SHADOW_BIAS_SCALE);
+    if(test>=2)C3D_TexShadowParams(false,sShadow.bias*NITRO_SHADOW_BIAS_SCALE);
     sBoundTexKnown=0;
     sRecvTexKnown=0;
     fog_begin();
@@ -1755,7 +1803,7 @@ static void draw_shadow_receivers(const PicaView *view)
         const NitroGx3dBatch *batch=&sBatches[b];
         if(batch->translucent)continue;
         if(!room_for_draw())break;
-        bind_batch_shadow(batch);
+        bind_batch_shadow(batch,test>=3);
         C3D_AlphaTest(true,GPU_GREATER,sBoundCut);
         draw_arrays((int)batch->first,(int)batch->count);
     }
@@ -1763,7 +1811,11 @@ static void draw_shadow_receivers(const PicaView *view)
     sRecvTexKnown=0;
     C3D_TexBind(0,NULL);
     sBoundTexKnown=0;
-    shadow_checkpoint("waiting for the direct sun shadow receivers");
+    shadow_checkpoint(sRecvTestWait[test]);
+    if(sShadowDebug && sRecvFrames%RECV_TEST_FRAMES==0 && test<3){
+        NitroPort_Log("[gx3d] sun shadow receivers test %c: the GPU came back from %u frames of it",
+                      'A'+test,RECV_TEST_FRAMES);
+    }
     /* The opaque texels, edge marking and translucent passes use the
      * scene's own program and may write stencil again. */
     C3D_BindProgram(&sProgram);
