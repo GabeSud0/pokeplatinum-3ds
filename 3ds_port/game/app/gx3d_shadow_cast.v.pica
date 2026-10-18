@@ -14,6 +14,7 @@
 .out outpos position
 .out outclr color
 .out outtc0 texcoord0
+.out outtc1 texcoord1   ; (the same: texture unit 1 may be bound, see gx3d_passthrough.v.pica)
 .alias inpos v0
 .alias inclr v1
 .alias intex v2
@@ -35,5 +36,6 @@
     add outpos.z, r1.zzzz, r2.yyyy
     mul outclr, clrdiv, inclr
     mov outtc0, intex
+    mov outtc1, intex
     end
 .end

@@ -217,6 +217,7 @@ static void StopSound(void)
 static bool sRemaster;
 static ComposeConfig sCompose;
 static volatile bool sComposing;      /* the display thread is inside a frame */
+static u32 sComposeAttempt;           /* changes on every entry, for the watchdog */
 static volatile bool sComposeForce;   /* draw everything again (back from the log) */
 /* The HOME menu (or another applet) has the screens and the GPU: nothing
  * may draw (OnAptEvent). Shared by both display paths. */
@@ -254,6 +255,7 @@ static void ReadRemasterConfig(bool new3ds)
     /* The look (sun shadows, the colour grade): off until it's been seen
      * on a 3DS. The sun by the clock. */
     sCompose.shadows = 0;
+    sCompose.shadowDebug = 0;
     sCompose.grade = 0;
     sCompose.sunFixed = 0;
     sCompose.sunElevation = 55.0f;
@@ -299,6 +301,8 @@ static void ReadRemasterConfig(bool new3ds)
                 sCompose.flipV = on;
             } else if (strcmp(name, "shadows") == 0) {
                 sCompose.shadows = on;
+            } else if (strcmp(name, "shadowdebug") == 0) {
+                sCompose.shadowDebug = on;
             } else if (strcmp(name, "grade") == 0) {
                 sCompose.grade = on;
             } else if (strcmp(name, "sun") == 0) {
@@ -401,6 +405,7 @@ static void GpuClassicLoop(void)
             int drawn;
             /* Busy first, then the check (OnAptEvent: suspended first,
              * then waits for not busy): never drawing while suspended. */
+            __atomic_fetch_add(&sComposeAttempt,1u,__ATOMIC_RELAXED);
             __atomic_store_n(&sComposing,true,__ATOMIC_SEQ_CST);
             if(__atomic_load_n(&sSuspended,__ATOMIC_SEQ_CST)||
                (scene=NitroPort_Gx3dAcquireScene(&seen))==NULL){
@@ -438,6 +443,7 @@ static void GpuComposeLoop(void)
                 /* Still waiting for its 2D: drawn now, with the 2D there
                  * is, before the newer one (not overtaken: every scene
                  * shows). */
+                __atomic_fetch_add(&sComposeAttempt,1u,__ATOMIC_RELAXED);
                 __atomic_store_n(&sComposing,true,__ATOMIC_SEQ_CST);
                 if(!sShowLog && !sScreensDirty && !__atomic_load_n(&sSuspended,__ATOMIC_SEQ_CST)){
                     u64 start=svcGetSystemTick();
@@ -457,6 +463,7 @@ static void GpuComposeLoop(void)
         }
         /* Not while the log has the screens (WaitForDrawing, which the
          * switch to the log waits on, sees sComposing first). */
+        __atomic_fetch_add(&sComposeAttempt,1u,__ATOMIC_RELAXED);
         __atomic_store_n(&sComposing,true,__ATOMIC_SEQ_CST);
         if(sShowLog||sScreensDirty||__atomic_load_n(&sSuspended,__ATOMIC_SEQ_CST)){
             __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
@@ -2130,8 +2137,31 @@ static void Watch(void)
     unsigned long lastFrame = sFrame;
     int quietTicks = 0;
 
+    int composingTicks = 0;
+    u32 lastComposeAttempt = 0;
+
     while (!LightEvent_TryWait(&sQuit)) {
         svcSleepThread(250 * 1000000LL);
+        /* The display thread inside one frame for 2 seconds: stuck (the
+         * GPU hung on a draw, most likely); where, once, for the log. */
+        if (sRemaster && __atomic_load_n(&sComposing, __ATOMIC_SEQ_CST) &&
+            !__atomic_load_n(&sSuspended, __ATOMIC_SEQ_CST)) {
+            u32 attempt = __atomic_load_n(&sComposeAttempt, __ATOMIC_RELAXED);
+            /* A busy display may finish and enter a different frame
+             * between every poll. Only time the SAME attempt. */
+            if (attempt != lastComposeAttempt) {
+                lastComposeAttempt = attempt;
+                composingTicks = 0;
+            }
+            if (++composingTicks == 8) {
+                unsigned first, count, draws;
+                const char *stage = NitroPort_PicaStageNow(&first, &count, &draws);
+                NitroPort_Log("[gx3d] the display thread has been in one frame for 2 seconds: stuck in %s "
+                              "(the last draw: %u vertices from %u; %u draws so far)", stage, count, first, draws);
+            }
+        } else {
+            composingTicks = 0;
+        }
         if (sFrame != lastFrame || (!sWatchdogHasHome && !aptIsActive())) {
             /* Frames are coming, or the HOME menu is up (no frames then). */
             if (sWatchdogHasHome && sFrame != lastFrame) {

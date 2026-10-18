@@ -29,6 +29,19 @@ void NitroPort_PicaCmdStats(float *peak, unsigned *cut);
  * size, for the log. */
 void *NitroPort_PicaDvle(void *dvlb, unsigned index);
 unsigned NitroPort_PicaDvleSize(void);
+/* A C3D_FrameBuf in libctru's layout, likewise (16 bytes there, 24 in the
+ * port: C3D_SetFrameBuf read the port's as garbage): a render target's
+ * (a C3D_RenderTarget *) with another D24S8 depth/stencil buffer, into out
+ * (outSize bytes: PICA_FRAMEBUF_BYTES is enough). Point at it as a
+ * C3D_FrameBuf *; never read its fields past width and height. */
+#define PICA_FRAMEBUF_BYTES 32
+unsigned NitroPort_PicaFrameBufSize(void);
+int NitroPort_PicaFrameBufWithDepth(void *out, unsigned outSize, const void *target, void *depth);
+/* Where the display thread's drawing is (for the log when it hangs): the
+ * stage set last (any thread sets one), and the last draw's first vertex,
+ * count and the draws so far. */
+void NitroPort_PicaStage(const char *stage);
+const char *NitroPort_PicaStageNow(unsigned *first, unsigned *count, unsigned *draws);
 /* The memory left (both heaps), as a [perf] memory line. Any thread. */
 void NitroPort_PicaLogMemory(void);
 void NitroPort_PicaNoteCmdUse(void);
@@ -41,6 +54,9 @@ void NitroPort_PicaTextureFilter(int mode);
  * as the game's), or fixed (degrees above the ground, and from the
  * screen's left, 0, towards its top, 90). */
 void NitroPort_PicaLook(int shadows, int grade, int fixedSun, float elevation, float azimuth);
+/* Debug only: submit and wait between shadow passes. Watchdog stages then
+ * identify the outstanding GPU work, rather than the last CPU submission. */
+void NitroPort_PicaShadowDebug(int enabled);
 
 /* The compose path: the scene's polygons drawn straight into a screen's
  * render target, between the 2D layers. */
@@ -117,6 +133,7 @@ typedef struct ComposeConfig {
     int filter3d;            /* the 3D's textures: 0 nearest (the DS's), 1 bilinear, 2 sharp (2x2, bilinear),
                               * 3 xbrz (2x by xBRZ, nearest), 4 xbrz smooth (bilinear) */
     int shadows;             /* sun shadows on the 3D */
+    int shadowDebug;         /* waits between passes to locate a hardware hang */
     int grade;               /* the colour grade on the 3D's textures */
     int sunFixed;            /* the sun where sunElevation, sunAzimuth say, not by the clock */
     float sunElevation, sunAzimuth;   /* (degrees; NitroPort_PicaLook) */

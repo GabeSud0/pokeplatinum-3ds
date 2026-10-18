@@ -95,7 +95,9 @@ typedef struct Pending {
 
 typedef struct Screen {
     C3D_RenderTarget *target[2];   /* left (and right) eye */
-    C3D_FrameBuf edgeFb[2][4];     /* their colour with an edge marking depth/stencil a direction */
+    /* their colour with an edge marking depth/stencil a direction (a
+     * C3D_FrameBuf each, in libctru's layout: NitroPort_PicaFrameBufWithDepth) */
+    uint8_t edgeFb[2][4][PICA_FRAMEBUF_BYTES] __attribute__((aligned(8)));
     int width;                     /* 400 or 320 */
     LayerSet set[SETS];
     int texW, texH;                /* the layer textures (power-of-two) */
@@ -451,6 +453,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     /* The 3D's textures: nearest, as the DS's, unless remaster.txt says
      * otherwise (filter3d: see main_3ds.c). */
     NitroPort_PicaTextureFilter(config->filter3d);
+    NitroPort_PicaShadowDebug(config->shadowDebug);
     NitroPort_PicaLook(config->shadows, config->grade, config->sunFixed, config->sunElevation,
                        config->sunAzimuth);
     memset(sScreens, 0, sizeof(sScreens));
@@ -529,10 +532,8 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
             int d;
 
             for (d = 0; d < 4; d++) {
-                C3D_FrameBuf *fb = &sScreens[s].edgeFb[i][d];
-
-                *fb = sScreens[s].target[i]->frameBuf;
-                C3D_FrameBufDepth(fb, sEdgeDepth[d], GPU_RB_DEPTH24_STENCIL8);
+                NitroPort_PicaFrameBufWithDepth(sScreens[s].edgeFb[i][d], PICA_FRAMEBUF_BYTES,
+                                                sScreens[s].target[i], sEdgeDepth[d]);
             }
         }
     }
@@ -840,7 +841,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         /* 3. The polygons. */
         view.fb = fb;
         for (eyeDir = 0; eyeDir < 4; eyeDir++) {
-            view.edgeFb[eyeDir] = edges ? &scr->edgeFb[eye][eyeDir] : NULL;
+            view.edgeFb[eyeDir] = edges ? (C3D_FrameBuf *)scr->edgeFb[eye][eyeDir] : NULL;
         }
         view.screenWidth = scr->width;
         view.screenHeight = SCREEN_H;
@@ -980,7 +981,7 @@ static void fill_edge_buffers(Screen *scr, int eye, u32 value)
     int d;
 
     for (d = 0; d < 4; d++) {
-        C3D_FrameBufClear(&scr->edgeFb[eye][d], C3D_CLEAR_DEPTH, 0, value);
+        C3D_FrameBufClear((C3D_FrameBuf *)scr->edgeFb[eye][d], C3D_CLEAR_DEPTH, 0, value);
     }
 }
 
@@ -1085,9 +1086,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         }
     }
     if (!sInFrame) {
+        NitroPort_PicaStage("the frame's start (waiting for the GPU)");
         C3D_FrameBegin(0);
         sInFrame = 1;
     }
+    NitroPort_PicaStage("the frame's clears");
     sQuadVertices = 0;
     edges = sEdgeDepth[0] != NULL && scene != NULL && NitroPort_PicaEdgeClearValue(&edgeClear);
     /* The depth/stencil buffers cleared (before any drawing: the fills go
@@ -1141,6 +1144,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         drawn |= 1 << s;
     }
     GSPGPU_FlushDataCache(sQuads, (u32)(sQuadVertices * sizeof(NitroGx3dGpuVertex)));
+    NitroPort_PicaStage("the frame's end");
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
     NitroPort_PicaNoteCmdUse();
     sInFrame = 0;
@@ -1161,7 +1165,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     }
     gpuStart = svcGetSystemTick();
     sCpuTicks += gpuStart - start;
+    NitroPort_PicaStage("the transfers to the screens (waiting for the GPU)");
     C3D_FrameBegin(0);   /* (waits for the GPU and the transfers) */
+    NitroPort_PicaStage("between frames");
     sInFrame = 1;
     sGpuTicks += svcGetSystemTick() - gpuStart;
     sFrames++;

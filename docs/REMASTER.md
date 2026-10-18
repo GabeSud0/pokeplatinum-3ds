@@ -46,13 +46,18 @@ What it does:
   a real shadow from the sun, from its own shape: the scene's opaque
   polygons are drawn once more from the sun into a 512x512 shadow map (the
   PICA's shadow mode: each texel keeps the nearest distance; cut-outs by
-  their alpha; `gx3d_shadow_cast.v.pica`). The light goes on through a
-  mask at half the screen's size: each eye's opaque polygons are drawn into
-  it with the map on texture unit 0 (the PICA's shadow texture; white lit,
-  black in shadow; `gx3d_shadow_recv.v.pica`), it's blurred into a second
-  (four bilinear taps), and that goes over the scene's opaque pixels,
-  multiplying them by the shade where it's dark: edges two or three pixels
-  soft. Only what faces up receives (the ground, roofs): on walls,
+  their alpha; `gx3d_shadow_cast.v.pica`). On the 3DS the opaque scene
+  is drawn normally, then drawn again with the shadow lookup on texture
+  unit 0 and each polygon's cut-out on unit 1
+  (`gx3d_shadow_recv.v.pica`). This pass multiplies the existing colour
+  by the light, only where its depth equals the visible surface's; stencil
+  makes sure overlapping coplanar polygons shade a pixel only once.
+  It preserves depth and destination alpha. This is the hardware baseline:
+  a nearest-filtered map, no half-size masks, blur quads or mask depth
+  buffer. Edges are intentionally sharper while hardware stability is
+  tested; the PC `gpusim` still has the earlier mask/blur implementation
+  and does not validate the PICA command stream. Only what faces up receives
+  (the ground, roofs): on walls,
   characters and trees, made for the camera's one view, their own shadows
   made odd shapes; and what lies flat doesn't cast (a doormat or a path's
   edge cast a stray shape beside it); each triangle's part is kept in its
@@ -414,6 +419,7 @@ frames waiting isn't drawn again until one has shown.
 | `edges off` | no outlines (edge marking) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
 | `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off |
+| `shadowdebug on` | debug only: wait for GPU completion before/after the sun map, after the opaque scene, and after direct shadow receiving. Slower; the watchdog can identify the outstanding pass. Default off |
 | `grade on` | the colour grade on the 3D's textures, by the time of day |
 | `sun 55,32` | the sun fixed: degrees above the ground, and from the screen's left (0) towards its top (90); `sun clock` (the default) by the time of day |
 | `filter3d xbrz` / `filter3d xbrz-smooth` | the 3D's textures 2x by xBRZ, nearest / bilinear (smooth: no shimmer while the picture moves, but sharp's cost and lines may come back). On trial: the [perf] line's 3D times say what it costs |
@@ -476,3 +482,30 @@ sends). That's the next step for the display; it costs a frame of delay
 - In the Azahar emulator, the field's 3D sometimes flashes black for a
   frame. Not seen on a real New 3DS, nor in the PC build. If it shows on a
   3DS, `edges off` in remaster.txt says whether it's the edge marking.
+
+### Testing sun shadows on a New 3DS
+
+Build PR #116's current branch locally with your own data pack. For a
+repeatable daytime view, start in an outdoor area with:
+
+```text
+shadows on
+grade off
+sun 55,32
+shadowdebug off
+```
+
+Check with the slider fully down first, then up; walk past buildings,
+characters and trees, and toggle the look with L + R + B repeatedly.
+Depth/edge marking and translucent objects must still draw normally.
+Then try `grade on`. These are hardware checks, not results inferred from
+Azahar or the PC simulation.
+
+If it freezes, restart with `shadowdebug on` and reproduce it. This setting
+submits and waits between passes; the two-second watchdog's stage names
+distinguish the map, opaque scene and receiving pass. Without it the GPU
+runs behind the CPU, so the last submitted draw does not locate a GPU hang.
+The checkpoint flushes all linear data, including any compositor vertices
+already queued before the shadow pass. Turn it off again when measuring
+performance. Keep the resulting log and note slider position and whether
+the freeze happened on startup or after toggling.
