@@ -394,6 +394,81 @@ static void flat_triangle(int x0,int x1,int y0,int y1)
     vertex((x0+x1)/2,y1,0);
     NitroPort_GxDirectWrite(0x41,0);
 }
+/* A quad 2000 wide, its left side at x (attr: POLYGON_ATTR). */
+static void quad_at(int x,uint32_t attr)
+{
+    NitroPort_GxDirectWrite(0x29,attr);
+    NitroPort_GxDirectWrite(0x20,0x7fff);
+    NitroPort_GxDirectWrite(0x40,1);
+    vertex(x,-1000,0);
+    vertex(x+2000,-1000,0);
+    vertex(x+2000,1000,0);
+    vertex(x,1000,0);
+    NitroPort_GxDirectWrite(0x41,0);
+}
+/* A scene's end, and (with the geometry thread) the thread caught up: it
+ * leaves out scenes it's two behind on, and their polygons with them. */
+static void swap_done(void){swap();NitroPort_Gx3dScene();}
+/* The in-between scenes (NitroPort_Gx3dSetInterpolation): a polygon
+ * halfway between its places in the scenes either side; one with no
+ * match, or one that jumped, where the newer scene has it; none after a
+ * cut, nor with them off. */
+static void test_interpolation(void)
+{
+    const NitroGx3dScene *mid;
+    unsigned matched=99,polygons=99;
+    int i;
+    const uint32_t opaque=(3u<<6)|(31u<<16);
+    reset_geometry();
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();                             /* (on from here) */
+    quad_at(-3000,opaque);
+    swap_done();
+    CHECK(NitroPort_Gx3dInterpolation());
+    CHECK(NitroPort_Gx3dMidScene(NULL,NULL)==NULL);   /* (nothing before it) */
+    quad_at(-2800,opaque);
+    swap_done();
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid!=NULL);
+    CHECK(matched==1 && polygons==1);
+    CHECK(mid && mid->count==2);
+    if(mid && mid->count==2){
+        CHECK(mid->triangles[0].v[0].clip[0]==-2900);   /* halfway: (-3000 + -2800) / 2 */
+        CHECK(mid->triangles[0].v[1].clip[0]==-900);
+        CHECK(mid->triangles[0].v[0].clip[3]==ONE);
+    }
+    /* a new one (no match: where it is), and the quad on */
+    quad_at(-2600,opaque);
+    triangle(0,0x001f);
+    swap_done();
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && matched==1 && polygons==2);
+    if(mid && mid->count==3){
+        CHECK(mid->triangles[0].v[0].clip[0]==-2700);
+        CHECK(mid->triangles[2].v[0].clip[0]==-3000);  /* the triangle as drawn */
+    }else CHECK(0);
+    /* a jump (112 DS pixels in a scene): where it is now */
+    quad_at(1000,opaque);
+    swap_done();
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && matched==0 && polygons==1);
+    CHECK(mid && mid->count==2 && mid->triangles[0].v[0].clip[0]==1000);
+    /* a cut: 20 polygons, none of the kind before */
+    for(i=0;i<20;i++)triangle(0,0x7fff);
+    swap_done();
+    for(i=0;i<20;i++)quad_at(-3000,opaque|(1u<<24));   /* (polygon ID 1: another kind) */
+    swap_done();
+    CHECK(NitroPort_Gx3dMidScene(&matched,&polygons)==NULL);
+    CHECK(matched==0 && polygons==20);
+    /* off */
+    NitroPort_Gx3dSetInterpolation(0);
+    quad_at(-3000,opaque);
+    swap_done();
+    quad_at(-2800,opaque);
+    swap_done();
+    CHECK(!NitroPort_Gx3dInterpolation());
+    CHECK(NitroPort_Gx3dMidScene(NULL,NULL)==NULL);
+}
 static void test_shadow_triangles(void)
 {
     const NitroGx3dScene *scene;
@@ -1057,6 +1132,7 @@ static void run_all(void)
     test_triangles_and_depth();
     test_culling();
     test_shadow_triangles();
+    test_interpolation();
     test_triangle_strip();
     test_hidden_vertices();
     test_textures();

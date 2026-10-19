@@ -626,6 +626,10 @@ void NitroPort_Log(const char *fmt, ...)
  *   dump3d PATH      save the newest finished 3D image (PNG)
  *   ref3d PATH       draw the newest scene with the reference rasterizer
  *   gpusim PATH      draw it as the 3DS GPU path would (port_gx3d_gpusim.c)
+ *   interp 0|1       in-between scenes off or on (NitroPort_Gx3dSetInterpolation)
+ *   midsim PATH      draw the newest in-between scene (halfway between the
+ *                    newest scene and the one before) as gpusim does, and
+ *                    log how many of its polygons were matched
  *   look S G [E A]   the remaster's look in gpusim: sun shadows (S) and the
  *                    colour grade (G) 0 or 1; the sun fixed at elevation E,
  *                    azimuth A (degrees), else by the clock (TZ)
@@ -810,6 +814,20 @@ static void ControlWait(void)
                 NitroPort_Gx3dSimulateGpu(NitroPort_Gx3dScene(), image);
                 if (!NitroPort_Gx3dWritePng(arg, image)) {
                     NitroPort_Log("[pc] control: can't write %s", arg);
+                }
+            } else if (sscanf(line, "interp %ld", &a) == 1) {
+                NitroPort_Gx3dSetInterpolation((int)a);
+            } else if (sscanf(line, "midsim %1023s", arg) == 1) {
+                static uint16_t image[NITRO_GX3D_WIDTH * NITRO_GX3D_HEIGHT];
+                unsigned matched = 0, polygons = 0;
+                const NitroGx3dScene *mid = NitroPort_Gx3dMidScene(&matched, &polygons);
+                NitroPort_Log("[pc] in-between scene: %s, %u of %u polygons halfway", mid ? "made" : "none",
+                              matched, polygons);
+                if (mid) {
+                    NitroPort_Gx3dSimulateGpu(mid, image);
+                    if (!NitroPort_Gx3dWritePng(arg, image)) {
+                        NitroPort_Log("[pc] control: can't write %s", arg);
+                    }
                 }
             } else if (strncmp(line, "look ", 5) == 0) {
                 int sh = 0, gr = 0, n;
