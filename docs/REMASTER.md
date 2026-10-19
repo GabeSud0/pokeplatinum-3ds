@@ -170,6 +170,19 @@ and in play the moved passes still drew 85-100% of the polygons (D 20-90%):
 the GPU saved 1-2 ms a frame, the CPU lost more. So it's off (`edges
 pruned` turns it on).
 
+What a moved pass leaves in its buffer is the screen's own depth/stencil
+buffer moved a pixel, once the opaque polygons write their polygon ID as
+the stencil (they do, with the screen's buffer cleared to the rear plane's
+ID). The framebuffer is turned a quarter turn, its lines (240 pixels) run
+down the screen, so the neighbours to the left and right are a line away:
+the GPU's transfer engine untiles the screen's buffer into a linear one
+with a spare line either side (the rear plane: past the screen's edges, as
+on the DS) and tiles it back into those two buffers from a line on and a
+line back (`NitroPort_PicaEdgeCopies`). Three transfers an eye instead of
+the scene drawn twice. Up and down are 4 bytes away, and the engine takes
+8-byte addresses, so those two are still drawn. Not with the sun shadows
+(they use the stencil). `edges drawn` draws all four, as before.
+
 The 3D's textures are RGBA5551 where that's exact (every DS format but
 A3I5 and A5I3, sampled nearest, as `filter3d 0` has it: the DS's colours
 are 5 bits a channel, those formats' texels opaque or not there), RGBA8
@@ -453,6 +466,7 @@ frames waiting isn't drawn again until one has shown.
 | `stereo off` / `stereo 0.03` | no depth from the slider / its strength at full slider, in screen widths (default 0.02) |
 | `convergence 400` | the distance (the DS's w) that's at the screen's depth, instead of each scene's middle |
 | `edges off` | no outlines (edge marking) |
+| `edges drawn` | the outlines' left and right moved passes drawn, as before they were copied (for comparing: the same picture, slower) |
 | `edges pruned` | each outline pass draws only the polygons it needs (worked out on the CPU each scene; the same picture). Slower on a 3DS (see below): off by default |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
 | `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off. **Parked on the 3DS** (they hang its GPU; see below): off there until fixed |
@@ -508,9 +522,10 @@ the 2D behind X ms; the opaque polygons X ms; outlines, the shifted
 passes X ms; outlines, the outlines drawn X ms; the translucent
 polygons X ms; the 2D in front X ms;` (a line an eye, and the lower
 screen's), then `[gpu] the frame: the clears X ms, the rest X ms, the
-transfers to the screens X ms; X ms in all`. Nothing changes on the
-other frames; the cuts are the ones the second eye's outlines already
-use.
+transfers (the outlines' copies, to the screens) X ms; X ms in all`.
+Nothing changes on the other frames; the cuts are the ones the second
+eye's outlines already use. (The shifted passes are the up and down ones
+since the left and right are copied.)
 
 ## 60 frames a second in the 3D
 

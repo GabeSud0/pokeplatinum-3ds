@@ -232,6 +232,7 @@ static int sGradeMode,sGradePeriod=-1,sGradeWanted=-1;
 static uint32_t *sGradeTable;
 static int look_now(void);
 static void free_pruning(void);
+static void free_edge_copies(void);
 static int make_shadow_spare(void);
 static void free_shadow_spare(void);
 static NitroShadowSetup sShadow;
@@ -345,6 +346,7 @@ static void clean_up(void)
     }
     free(sBatches);sBatches=NULL;
     free_pruning();
+    free_edge_copies();
     if(sProgramReady){
         shaderProgramFree(&sProgram);
         sProgramReady=0;
@@ -1629,6 +1631,91 @@ static int pruned_any(size_t b,int whole,int zones,const unsigned scissor[4][4])
     return 0;
 }
 
+/* -------------------------- the left and right moved passes, copied */
+/* What a moved pass leaves in its buffer is, at each pixel, the depth and
+ * polygon ID of the opaque polygons at its neighbour: the screen's own
+ * depth/stencil buffer moved a pixel, once the opaque polygons write their
+ * polygon ID as the stencil (which they do while this is on). Turned a
+ * quarter turn, the framebuffer's lines run down the screen, 240 pixels
+ * each: the neighbours to the left and right are a line away. So the GPU's
+ * transfer engine (as fast as the copies to the screens: a fraction of a
+ * millisecond) makes those two buffers instead of the scene drawn twice:
+ * the screen's buffer untiled into a linear one with a spare line each
+ * side (the rear plane, as the edge buffers are cleared to: past the
+ * screen's edges, as on the DS), then tiled into each buffer from a line on
+ * and a line back. (Which one is left and which right doesn't matter: the
+ * outlines drawn test both.) Up and down are 4 bytes away and the engine
+ * takes 8-byte addresses: those two are still drawn. Not with the sun
+ * shadows on (they use the stencil); `edges drawn` draws all four. */
+#define EDGE_LINE 240u                 /* (pixels a framebuffer line: the screen's height) */
+#define EDGE_LINES_MAX 400u            /* (lines: the upper screen's width) */
+#define EDGE_UNTILE GX3D_TRANSFER_FLAGS
+#define EDGE_TILE (GX3D_TRANSFER_FLAGS|GX_TRANSFER_OUT_TILED(1))
+static int sEdgeCopy=1;
+static int sEdgeCopying;               /* (this frame: NitroPort_PicaEdgeCopies) */
+static u32 *sEdgeLinear;               /* (linear heap: EDGE_LINE x (EDGE_LINES_MAX + 2)) */
+static int sEdgeLinearFailed;
+static u32 sEdgePadValue,sEdgePadLines; /* (what its spare lines hold now: 0, nothing yet) */
+
+void NitroPort_PicaEdgeCopy(int on)
+{
+    sEdgeCopy=on;
+}
+
+unsigned NitroPort_PicaEdgeCopies(int edges)
+{
+    sEdgeCopying=0;
+    if(!edges||!sEdgeCopy||sEdgeLinearFailed||sShadowReady)return 0;
+    if(!sEdgeLinear){
+        size_t bytes=(size_t)EDGE_LINE*(EDGE_LINES_MAX+2u)*sizeof(u32);
+        sEdgeLinear=linearAlloc(bytes);
+        if(!sEdgeLinear){
+            sEdgeLinearFailed=1;
+            NitroPort_Log("[gx3d] no linear memory for the outlines' copies: all their passes drawn");
+            return 0;
+        }
+        /* (nothing of it left in the CPU's cache to be written back over
+         * what the transfer engine writes) */
+        memset(sEdgeLinear,0,bytes);
+        GSPGPU_FlushDataCache(sEdgeLinear,(u32)bytes);
+        sEdgePadValue=sEdgePadLines=0;
+    }
+    sEdgeCopying=1;
+    return 3u;   /* (the directions: 0 and 1) */
+}
+
+static void free_edge_copies(void)
+{
+    if(sEdgeLinear)linearFree(sEdgeLinear);
+    sEdgeLinear=NULL;
+    sEdgeCopying=0;
+}
+
+/* Queued after the opaque polygons (their command list cut off first: the
+ * GPU's framebuffer cache is written back at the cut). 0 if they can't be. */
+static int copy_edge_buffers(const PicaView *view,u32 clear)
+{
+    C3D_FrameBuf *fb=view->fb;
+    u32 lines=fb->height,dim,i;
+    u32 *mid=sEdgeLinear+EDGE_LINE;
+    if(!sEdgeLinear||fb->width!=EDGE_LINE||lines>EDGE_LINES_MAX||!view->edgeFb[0]||!view->edgeFb[1])return 0;
+    if(sEdgePadValue!=clear||sEdgePadLines!=lines){
+        for(i=0;i<EDGE_LINE;i++){
+            sEdgeLinear[i]=clear;
+            mid[lines*EDGE_LINE+i]=clear;
+        }
+        GSPGPU_FlushDataCache(sEdgeLinear,EDGE_LINE*sizeof(u32));
+        GSPGPU_FlushDataCache(mid+lines*EDGE_LINE,EDGE_LINE*sizeof(u32));
+        sEdgePadValue=clear;
+        sEdgePadLines=lines;
+    }
+    dim=GX_BUFFER_DIM(EDGE_LINE,lines);
+    GX_DisplayTransfer((u32*)fb->depthBuf,dim,mid,dim,EDGE_UNTILE);
+    GX_DisplayTransfer(mid+EDGE_LINE,dim,(u32*)view->edgeFb[0]->depthBuf,dim,EDGE_TILE);
+    GX_DisplayTransfer(mid-EDGE_LINE,dim,(u32*)view->edgeFb[1]->depthBuf,dim,EDGE_TILE);
+    return 1;
+}
+
 /* Edge marking on the GPU. The DS outlines a pixel of an opaque polygon
  * when a pixel next to it (left, right, above, below) belongs to another
  * polygon ID and is further away (the rear plane, with CLEAR_COLOR's ID
@@ -1658,7 +1745,20 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
     const NitroGx3dPruneResult *pruned=prune_for(view,edges);
     unsigned scissor[4][4];
     size_t b;
-    int dir,z;
+    int dir,z,copied=0;
+    u32 clear;
+    /* the left and right ones copied (the caller cut the command list) */
+    NitroPort_PicaEdgeClearValue(&clear);
+    if(sEdgeCopying){
+        copied=3;
+        if(!copy_edge_buffers(view,clear)){
+            /* (can't be: the caller left them unfilled, so filled here) */
+            u32 bytes=(u32)view->fb->width*view->fb->height*4u;
+            u8 *a=(u8*)view->edgeFb[0]->depthBuf,*b1=(u8*)view->edgeFb[1]->depthBuf;
+            GX_MemoryFill((u32*)a,clear,(u32*)(a+bytes),BIT(0)|(2u<<8),(u32*)b1,clear,(u32*)(b1+bytes),BIT(0)|(2u<<8));
+            copied=0;
+        }
+    }
     if(pruned)
         for(z=0;z<4;z++)NitroPort_Gx3dPruneScissor(pruned->zone[z],view->screenWidth,view->screenHeight,scissor[z]);
     stage("the outlines");
@@ -1669,7 +1769,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
     for(dir=0;dir<4;dir++){
         PicaRect shifted=view->rect;
         C3D_FrameBuf *fb=view->edgeFb[dir];
-        if(fb==NULL)continue;
+        if(fb==NULL || (copied&(1<<dir)))continue;
         /* pass A */
         shifted.x0+=dx[dir];shifted.x1+=dx[dir];
         shifted.y0+=dy[dir];shifted.y1+=dy[dir];
@@ -2017,7 +2117,7 @@ static void draw_shadow_receivers(const PicaView *view)
 void NitroPort_PicaDrawScene(const PicaView *view)
 {
     size_t b;
-    int blend,edging;
+    int blend,edging,copying;
     NitroGx3dEdgeSetup edges;
     if(sPrepared<0||!view||!view->fb)return;
     sFrame++;
@@ -2030,6 +2130,8 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     blend=(NitroPort_IoReg[0x60]&8u)!=0;
     NitroPort_Gx3dEdgeSetup(&edges);
     edging=edges.enabled && view->edgeFb[0]!=NULL;
+    /* (the opaque polygons' stencil is their polygon ID, for the copies) */
+    copying=edging && sEdgeCopying && !sShadowReady;
     if(sShadowReady && !sShadowDrawn){
         sShadowDrawn=1;
         shadow_checkpoint("waiting before the sun shadow map");
@@ -2058,7 +2160,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         if(!room_for_draw())break;
         bind_batch(batch);
         batch_fog(attr);
-        C3D_StencilTest(true,GPU_ALWAYS,0xFF,0xFF,0xFF);
+        C3D_StencilTest(true,GPU_ALWAYS,copying?(int)((attr>>24)&63u):0xFF,0xFF,0xFF);
         /* (a filtered texture: its texels' edges at half alpha) */
         C3D_AlphaTest(true,GPU_GREATER,sBoundCut);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
@@ -2081,13 +2183,15 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         if(!room_for_draw())break;
         bind_batch(batch);
         batch_fog(attr);
-        C3D_StencilTest(true,GPU_ALWAYS,0xFF,0xFF,0xFF);
+        C3D_StencilTest(true,GPU_ALWAYS,copying?(int)((attr>>24)&63u):0xFF,0xFF,0xFF);
         C3D_AlphaTest(true,GPU_GREATER,254);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
         draw_arrays((int)batch->first,(int)batch->count);
     }
-    NitroPort_PicaProfileMark("the opaque polygons");
+    /* (with the copies: cut here, always, for them to come after) */
+    if(copying)NitroPort_PicaCut("the opaque polygons");
+    else NitroPort_PicaProfileMark("the opaque polygons");
     if(edging)mark_edges(view,&edges);
     stage("the translucent polygons");
     /* The translucent polygons, over the outlines (but the game's own
