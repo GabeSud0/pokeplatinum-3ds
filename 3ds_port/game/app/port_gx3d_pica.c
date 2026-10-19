@@ -231,6 +231,7 @@ static u32 sShadowColor;                     /* (0xAABBGGRR, alpha 0: the shade,
 static int sGradeMode,sGradePeriod=-1,sGradeWanted=-1;
 static uint32_t *sGradeTable;
 static int look_now(void);
+static void free_pruning(void);
 static int make_shadow_spare(void);
 static void free_shadow_spare(void);
 static NitroShadowSetup sShadow;
@@ -240,6 +241,7 @@ static int sRecvTexKnown;
 /* The compose path: the scene prepared for drawing (its vertices in
  * sVertices[sPrepared], its batches), and its rear plane. */
 static int sPrepared=-1;
+static unsigned sPreparedSerial;             /* (a new one each prepared scene) */
 static size_t sPreparedCount,sPreparedBatches;
 static size_t sShadowOnlyBatches;           /* (the shadows' own, at sBatches[MAX_BATCHES]) */
 static size_t sShadowRoom;                   /* (vertices after the scene's for them: SHADOW_VERTICES, or 0) */
@@ -342,6 +344,7 @@ static void clean_up(void)
         sImages[i]=NULL;sDepthIds[i]=NULL;
     }
     free(sBatches);sBatches=NULL;
+    free_pruning();
     if(sProgramReady){
         shaderProgramFree(&sProgram);
         sProgramReady=0;
@@ -1316,6 +1319,7 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
                         (u32)(sPreparedCount*sizeof(NitroGx3dGpuVertex)));
     }
     sPrepared=slot;
+    sPreparedSerial++;   /* (the outline passes' lists are for another) */
     sPreparedSwap=scene->swap_param;
     sXbrzWorked=0;
     /* sun shadows: if the scene has a ground (a camera's perspective) */
@@ -1448,6 +1452,180 @@ static void set_edge_combiner(int textured,uint16_t color555)
     C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
 }
 
+/* ------------------------------------------- the outline passes, made cheaper */
+/* Most of the scene can't get an outline anywhere; NitroPort_Gx3dPruneEdges
+ * works out, once a scene (and 3D slider setting), which triangles each
+ * outline pass needs, as index lists the GPU reads (linear memory: one
+ * buffer a prepared scene's vertex buffer, as they alternate). The same
+ * pixels come out as with every triangle in every pass (tests/test_gx3d.c
+ * checks that). `edges all` in remaster.txt draws them all, for comparing. */
+#define PRUNE_INDICES (4u*NITRO_GX3D_PICA_MAX_VERTICES)
+static int sPruning=1;
+static uint16_t *sPruneIdx[2];
+static int sPruneNoMemory;
+static NitroGx3dPruneList *sPruneLists;
+static uint8_t *sPruneRoles;
+static NitroGx3dPruneResult sPrune;
+static struct {
+    int valid;
+    unsigned serial,clearId;
+    float stereo,convergence;
+    PicaRect rect;
+    int width,height;
+} sPruneKey;
+/* For the [perf] line: the time it took, how often, and the triangles of
+ * the outline passes against those drawn in the moved passes (A) and the
+ * outlines drawn (D). */
+static u64 sPruneTicks;
+static unsigned sPruneRuns,sPruneFails,sPruneTriangles,sPruneA,sPruneD;
+
+void NitroPort_PicaEdgePruning(int on)
+{
+    sPruning=on;
+    sPruneKey.valid=0;
+}
+
+void NitroPort_PicaPruneStats(float *ms,unsigned *runs,unsigned *fails,float *a,float *d)
+{
+    if(ms)*ms=sPruneRuns?(float)((double)sPruneTicks*1000.0/SYSCLOCK_ARM11/sPruneRuns):0.0f;
+    if(runs)*runs=sPruneRuns;
+    if(fails)*fails=sPruneFails;
+    if(a)*a=sPruneTriangles?100.0f*(float)sPruneA/(float)sPruneTriangles:0.0f;
+    if(d)*d=sPruneTriangles?100.0f*(float)sPruneD/(float)sPruneTriangles:0.0f;
+    sPruneTicks=0;
+    sPruneRuns=sPruneFails=sPruneTriangles=sPruneA=sPruneD=0;
+}
+
+static void free_pruning(void)
+{
+    int i;
+    for(i=0;i<2;i++){
+        if(sPruneIdx[i])linearFree(sPruneIdx[i]);
+        sPruneIdx[i]=NULL;
+    }
+    free(sPruneLists);sPruneLists=NULL;
+    free(sPruneRoles);sPruneRoles=NULL;
+    NitroPort_Gx3dPruneFree();
+    sPruneKey.valid=0;
+}
+
+/* The prepared scene's lists for this view: NULL if they can't be had
+ * (every triangle drawn then). After the opaque polygons: their textures
+ * are known (whether they have see-through texels). */
+static const NitroGx3dPruneResult *prune_for(const PicaView *view,const NitroGx3dEdgeSetup *edges)
+{
+    NitroGx3dPruneView pv;
+    float stereo=view->stereo<0.0f?-view->stereo:view->stereo;
+    u64 t0;
+    size_t b;
+    int ok;
+    if(!sPruning||sPrepared<0||sPruneNoMemory)return NULL;
+    if(sPruneKey.valid && sPruneKey.serial==sPreparedSerial && sPruneKey.clearId==edges->clearId &&
+       sPruneKey.stereo==stereo && sPruneKey.convergence==view->convergence &&
+       sPruneKey.width==view->screenWidth && sPruneKey.height==view->screenHeight &&
+       !memcmp(&sPruneKey.rect,&view->rect,sizeof(view->rect)))
+        return sPruneKey.valid>0?&sPrune:NULL;
+    if(!sPruneIdx[0]){
+        sPruneIdx[0]=linearAlloc(PRUNE_INDICES*sizeof(uint16_t));
+        sPruneIdx[1]=linearAlloc(PRUNE_INDICES*sizeof(uint16_t));
+        sPruneLists=malloc(MAX_BATCHES*sizeof(*sPruneLists));
+        sPruneRoles=malloc(MAX_BATCHES);
+        if(!sPruneIdx[0]||!sPruneIdx[1]||!sPruneLists||!sPruneRoles){
+            NitroPort_Log("[gx3d] no memory for the outline passes' lists: every polygon drawn in them");
+            free_pruning();
+            sPruneNoMemory=1;
+            return NULL;
+        }
+    }
+    t0=svcGetSystemTick();
+    /* each batch's part, as bind_batch_shape draws it */
+    for(b=0;b<sPreparedBatches;b++){
+        const NitroGx3dBatch *batch=&sBatches[b];
+        uint32_t attr=batch->polygon_attr;
+        if(batch->translucent){
+            sPruneRoles[b]=((attr>>16)&31u)==31u?NITRO_GX3D_PRUNE_SHAPE:NITRO_GX3D_PRUNE_OUT;
+        }else if(batch->texture_param){
+            C3D_Tex *tex=get_texture(batch->texture_param,batch->palette_base);
+            sPruneRoles[b]=(tex&&sBoundHoles)?NITRO_GX3D_PRUNE_SHAPE:NITRO_GX3D_PRUNE_SOLID;
+        }else{
+            sPruneRoles[b]=NITRO_GX3D_PRUNE_SOLID;
+        }
+    }
+    sBoundTexKnown=0;   /* (get_texture may have made one again) */
+    pv.x0=view->rect.x0;pv.y0=view->rect.y0;pv.x1=view->rect.x1;pv.y1=view->rect.y1;
+    pv.width=view->screenWidth;
+    pv.height=view->screenHeight;
+    pv.eyes=stereo>0.0f?2:1;
+    pv.stereo[0]=-stereo;
+    pv.stereo[1]=stereo;
+    pv.convergence=view->convergence;
+    pv.clear_id=edges->clearId;
+    ok=NitroPort_Gx3dPruneEdges(sVertices[sPrepared],sBatches,sPreparedBatches,sPruneRoles,&pv,
+                                sPruneIdx[sPrepared],PRUNE_INDICES,sPruneLists,&sPrune);
+    if(ok && sPrune.indices)GSPGPU_FlushDataCache(sPruneIdx[sPrepared],(u32)(sPrune.indices*sizeof(uint16_t)));
+    sPruneTicks+=svcGetSystemTick()-t0;
+    sPruneRuns++;
+    if(ok){
+        sPruneTriangles+=sPrune.triangles;
+        sPruneA+=sPrune.a;
+        sPruneD+=sPrune.d;
+    }else{
+        sPruneFails++;
+    }
+    sPruneKey.valid=ok?1:-1;
+    sPruneKey.serial=sPreparedSerial;
+    sPruneKey.clearId=edges->clearId;
+    sPruneKey.stereo=stereo;
+    sPruneKey.convergence=view->convergence;
+    sPruneKey.width=view->screenWidth;
+    sPruneKey.height=view->screenHeight;
+    sPruneKey.rect=view->rect;
+    return ok?&sPrune:NULL;
+}
+
+static void draw_elements(const uint16_t *indices,unsigned count)
+{
+    static int told;
+    if(!count || count%3u){
+        if(!told){told=1;NitroPort_Log("[gx3d] an indexed draw of %u vertices in %s: left out",count,__atomic_load_n(&sStage,__ATOMIC_RELAXED));}
+        return;
+    }
+    __atomic_store_n(&sLastDrawFirst,(u32)indices[0],__ATOMIC_RELAXED);
+    __atomic_store_n(&sLastDrawCount,(u32)count,__ATOMIC_RELAXED);
+    __atomic_fetch_add(&sDraws,1,__ATOMIC_RELAXED);
+    C3D_DrawElements(GPU_TRIANGLES,(int)count,C3D_UNSIGNED_SHORT,indices);
+}
+
+/* A batch's part of an outline pass: its whole list (A or D), then each
+ * zone's (ZONE_A or ZONE_B) with the scissor test on that zone. */
+static void draw_pruned(size_t b,int whole,int zones,const unsigned scissor[4][4])
+{
+    const NitroGx3dPruneList *l=&sPruneLists[b];
+    const uint16_t *idx=sPruneIdx[sPrepared];
+    int z,scissored=0;
+    if(l->count[whole])draw_elements(idx+l->offset[whole],l->count[whole]);
+    for(z=0;z<4;z++){
+        unsigned n=l->count[zones+z];
+        if(!n || scissor[z][0]>=scissor[z][2] || scissor[z][1]>=scissor[z][3])continue;
+        if(!room_for_draw())break;
+        C3D_SetScissor(GPU_SCISSOR_NORMAL,scissor[z][0],scissor[z][1],scissor[z][2],scissor[z][3]);
+        scissored=1;
+        draw_elements(idx+l->offset[zones+z],n);
+    }
+    if(scissored)C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,0,0);
+}
+
+/* Whether a batch has anything in an outline pass's lists. */
+static int pruned_any(size_t b,int whole,int zones,const unsigned scissor[4][4])
+{
+    const NitroGx3dPruneList *l=&sPruneLists[b];
+    int z;
+    if(l->count[whole])return 1;
+    for(z=0;z<4;z++)
+        if(l->count[zones+z] && scissor[z][0]<scissor[z][2] && scissor[z][1]<scissor[z][3])return 1;
+    return 0;
+}
+
 /* Edge marking on the GPU. The DS outlines a pixel of an opaque polygon
  * when a pixel next to it (left, right, above, below) belongs to another
  * polygon ID and is further away (the rear plane, with CLEAR_COLOR's ID
@@ -1469,12 +1647,18 @@ static void set_edge_combiner(int textured,uint16_t color555)
  *    neighbour: it would then have to lie between the visible surface
  *    and its neighbour's, a hair's breadth; it doesn't happen in practice.)
  * With anti-aliasing (DISP3DCNT bit 4) the outline is blended in at about
- * half strength, as the DS does. */
+ * half strength, as the DS does. Each pass draws only the triangles it
+ * needs (prune_for), when they're known. */
 static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
 {
     static const float dx[4]={-1.0f,1.0f,0.0f,0.0f},dy[4]={0.0f,0.0f,-1.0f,1.0f};
+    const NitroGx3dPruneResult *pruned=prune_for(view,edges);
+    unsigned scissor[4][4];
     size_t b;
-    int dir;
+    int dir,z;
+    if(pruned)
+        for(z=0;z<4;z++)NitroPort_Gx3dPruneScissor(pruned->zone[z],view->screenWidth,view->screenHeight,scissor[z]);
+    stage("the outlines");
     fog_mode(0);
     /* (the four A passes first, then the four B passes: each direction has
      * a buffer of its own, and A writes no colour; the same result, and
@@ -1496,12 +1680,14 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             uint32_t attr=batch->polygon_attr;
             int textured;
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
+            if(pruned && !pruned_any(b,NITRO_GX3D_PRUNE_A,NITRO_GX3D_PRUNE_ZONE_A,scissor))continue;
             if(!room_for_draw())break;
             textured=bind_batch_shape(batch);
             C3D_AlphaTest(textured,GPU_GREATER,batch->translucent?254:sBoundCut);
             C3D_DepthTest(true,GPU_LESS,GPU_WRITE_DEPTH);
             C3D_StencilTest(true,GPU_ALWAYS,(int)((attr>>24)&63u),0xFF,0xFF);
-            draw_arrays((int)batch->first,(int)batch->count);
+            if(pruned)draw_pruned(b,NITRO_GX3D_PRUNE_A,NITRO_GX3D_PRUNE_ZONE_A,scissor);
+            else draw_arrays((int)batch->first,(int)batch->count);
         }
     }
     NitroPort_PicaProfileMark("outlines, the shifted passes");
@@ -1526,6 +1712,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             int textured;
             unsigned id;
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
+            if(pruned && !pruned_any(b,NITRO_GX3D_PRUNE_D,NITRO_GX3D_PRUNE_ZONE_B,scissor))continue;
             if(!room_for_draw())break;
             id=(attr>>24)&63u;
             textured=bind_batch_shape(batch);
@@ -1534,7 +1721,8 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             C3D_AlphaTest(textured,GPU_GREATER,batch->translucent?254:sBoundCut);
             C3D_DepthTest(true,GPU_LESS,GPU_WRITE_COLOR);
             C3D_StencilTest(true,GPU_NOTEQUAL,(int)id,0xFF,0xFF);
-            draw_arrays((int)batch->first,(int)batch->count);
+            if(pruned)draw_pruned(b,NITRO_GX3D_PRUNE_D,NITRO_GX3D_PRUNE_ZONE_B,scissor);
+            else draw_arrays((int)batch->first,(int)batch->count);
         }
     }
     NitroPort_PicaProfileMark("outlines, the outlines drawn");

@@ -8,6 +8,7 @@
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_vertex.h>
 #include <nitro_port_shadow.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1025,6 +1026,305 @@ static void test_edge_marking(void)
     NitroPort_IoReg[0x60]&=(uint8_t)~0x20u;
     NitroPort_IoReg[0x353]=0;
 }
+
+/* --- Edge marking with fewer polygons (NitroPort_Gx3dPruneEdges) ---
+ * A model of the GPU's outline passes (port_gx3d_pica.c, mark_edges): the
+ * vertex program's 3D shift, NitroPort_PicaViewMatrix's matrix, the
+ * framebuffer turned a quarter turn, pixel centres, depth and stencil, the
+ * scissor test. Each pixel's outlines (how many draws marked it, and which
+ * triangles) must come out the same with every triangle drawn in every
+ * pass as with the pruned lists. */
+#define PM_MAXV 9000
+#define PM_MAXB 64
+#define PM_W 400
+#define PM_H 240
+static struct {
+    NitroGx3dGpuVertex v[PM_MAXV];
+    NitroGx3dBatch b[PM_MAXB];
+    uint8_t role[PM_MAXB];
+    size_t nv,nb;
+} sPm;
+static uint16_t sPmIdx[3*PM_MAXV];
+static NitroGx3dPruneList sPmLists[PM_MAXB];
+static float sPmDepth[PM_W*PM_H];
+static uint8_t sPmId[PM_W*PM_H];
+static uint16_t sPmCount[2][PM_W*PM_H];
+static uint32_t sPmSum[2][PM_W*PM_H];
+static void pm_batch(unsigned id,int role)
+{
+    NitroGx3dBatch *b=&sPm.b[sPm.nb];
+    memset(b,0,sizeof(*b));
+    b->first=(uint32_t)sPm.nv;
+    b->polygon_attr=(id<<24)|(31u<<16);
+    sPm.role[sPm.nb++]=(uint8_t)role;
+}
+/* A triangle at DS screen pixels (x, y), each corner's w, at depth z
+ * (0..1), its edges moved out as NitroPort_Gx3dBuildBatches does. */
+static void pm_tri(float x0,float y0,float x1,float y1,float x2,float y2,const float w[3],float z)
+{
+    float x[3]={x0,x1,x2},y[3]={y0,y1,y2},dx[3],dy[3];
+    int k;
+    NitroPort_Gx3dExpandTriangle(x,y,dx,dy);
+    for(k=0;k<3;k++){
+        NitroGx3dGpuVertex *v=&sPm.v[sPm.nv++];
+        memset(v,0,sizeof(*v));
+        v->position[0]=((x[k]+dx[k])/128.0f-1.0f)*w[k];
+        v->position[1]=(1.0f-(y[k]+dy[k])/96.0f)*w[k];
+        v->position[2]=z*w[k];
+        v->position[3]=w[k];
+    }
+    sPm.b[sPm.nb-1].count+=3;
+}
+/* The ground's w at a DS row: far at the top. */
+static float pm_w(float y){return 4.0f-2.6f*y/192.0f;}
+static void pm_quad(float x0,float y0,float x1,float y1,float z,float wq)
+{
+    float w[3];
+    w[0]=w[1]=w[2]=wq>0?wq:0;
+    if(wq>0){
+        pm_tri(x0,y0,x1,y0,x1,y1,w,z);
+        pm_tri(x0,y0,x1,y1,x0,y1,w,z);
+    }else{
+        float wa[3]={pm_w(y0),pm_w(y0),pm_w(y1)},wb[3]={pm_w(y0),pm_w(y1),pm_w(y1)};
+        pm_tri(x0,y0,x1,y0,x1,y1,wa,z);
+        pm_tri(x0,y0,x1,y1,x0,y1,wb,z);
+    }
+}
+static uint32_t pm_rand(uint32_t *s){*s=*s*1664525u+1013904223u;return *s>>8;}
+static float pm_frand(uint32_t *s,float lo,float hi){return lo+(hi-lo)*(float)(pm_rand(s)&0xffff)/65535.0f;}
+/* A town (kind 0): the ground (ID 0) in tiles over the whole DS screen, a
+ * tile left out (the rear plane through it), houses (ID 8), a tree with
+ * see-through texels (ID 16), people (ID 2), a sign of opaque texels on a
+ * translucent polygon (ID 32), smoke (translucent: no outlines). A route
+ * (1): the ground, a few trees and people. 2 and 3: the town, and random
+ * triangles of IDs 0 and 8 all over it. */
+static void pm_scene(int kind,uint32_t seed)
+{
+    int tx,ty,i,extra=kind>=2?150:0;
+    sPm.nv=sPm.nb=0;
+    pm_batch(0,NITRO_GX3D_PRUNE_SOLID);
+    for(ty=0;ty<12;ty++)for(tx=0;tx<16;tx++){
+        if(kind!=1&&tx==11&&ty==7)continue;
+        pm_quad(tx*16.0f,ty*16.0f,tx*16.0f+16,ty*16.0f+16,0.8f-ty*0.02f,0);
+    }
+    if(kind==1){
+        pm_batch(16,NITRO_GX3D_PRUNE_SHAPE);
+        pm_quad(40,30,60,60,0.5f,3.2f);
+        pm_quad(180,90,200,120,0.4f,2.2f);
+        pm_batch(2,NITRO_GX3D_PRUNE_SOLID);
+        pm_quad(120,100,130,118,0.3f,2.0f);
+        pm_quad(124,150,134,168,0.3f,1.4f);
+        return;
+    }
+    pm_batch(8,NITRO_GX3D_PRUNE_SOLID);
+    pm_quad(30,40,90,100,0.5f,2.5f);
+    pm_quad(150,20,230,70,0.55f,3.0f);
+    pm_quad(-0.0f,120,40,180,0.45f,1.6f);   /* at the left edge */
+    pm_batch(16,NITRO_GX3D_PRUNE_SHAPE);
+    pm_quad(100,110,130,150,0.4f,1.8f);
+    pm_batch(2,NITRO_GX3D_PRUNE_SOLID);
+    pm_quad(60,130,70,150,0.3f,1.5f);
+    pm_quad(250,60,256,75,0.3f,2.2f);       /* at the right edge */
+    pm_batch(32,NITRO_GX3D_PRUNE_SHAPE);
+    pm_quad(200,150,220,165,0.35f,1.4f);
+    pm_batch(40,NITRO_GX3D_PRUNE_OUT);
+    pm_quad(180,100,200,120,0.2f,1.5f);
+    if(extra){
+        pm_batch(0,NITRO_GX3D_PRUNE_SOLID);
+        for(i=0;i<extra;i++){
+            float x=pm_frand(&seed,0,240),y=pm_frand(&seed,0,176),s=pm_frand(&seed,2,24);
+            float w[3]={pm_frand(&seed,1.2f,4),pm_frand(&seed,1.2f,4),pm_frand(&seed,1.2f,4)};
+            if(i==extra/2)pm_batch(8,NITRO_GX3D_PRUNE_SOLID);
+            pm_tri(x,y,x+s,y+pm_frand(&seed,0,s),x+pm_frand(&seed,0,s),y+s,w,pm_frand(&seed,0.1f,0.9f));
+        }
+    }
+}
+/* Where a vertex lands on the render target (pixels), as the GPU puts it:
+ * the vertex program's shift, then NitroPort_PicaViewMatrix's rows. */
+static int sPmScreenW;
+static unsigned sPmMarked;
+static void pm_target(const NitroGx3dGpuVertex *v,const float rect[4],float stereo,float conv,
+                      float *tx,float *ty,float *depth)
+{
+    float x=v->position[0],y=v->position[1],w=v->position[3],W=(float)sPmScreenW,H=(float)PM_H,ox,oy;
+    if(1.0001f<w){float s=w-conv;if(s<-w)s=-w;x+=stereo*s;}
+    ox=((rect[3]-rect[1])/H)*y+(1.0f-(rect[1]+rect[3])/H)*w;
+    oy=(-(rect[2]-rect[0])/W)*x+(1.0f-(rect[0]+rect[2])/W)*w;
+    *tx=(ox/w+1.0f)*0.5f*H;
+    *ty=(oy/w+1.0f)*0.5f*W;
+    *depth=v->position[2]/w;
+}
+static uint32_t pm_mix(uint32_t t){t=(t+1u)*2654435761u;return t^(t>>15);}
+/* A triangle drawn in a pass: A (into the depth/ID buffer) or B (marking
+ * outlines), its pixels within the scissor (target pixels; NULL: off). */
+static void pm_draw(int pass,size_t first,const float rect[4],int dx,int dy,float stereo,float conv,
+                    const unsigned *scissor,int slot)
+{
+    const NitroGx3dGpuVertex *v=&sPm.v[first];
+    int H=PM_H,W=sPmScreenW,k,i,j,i0,i1,j0,j1;
+    float tx[3],ty[3],dz[3],area;
+    size_t b;
+    unsigned id=0;
+    int role=0;
+    for(b=0;b<sPm.nb;b++)if(first>=sPm.b[b].first&&first<sPm.b[b].first+sPm.b[b].count){
+        id=(sPm.b[b].polygon_attr>>24)&63u;role=sPm.role[b];
+    }
+    for(k=0;k<3;k++){
+        float r[4]={rect[0]+dx,rect[1]+dy,rect[2]+dx,rect[3]+dy};
+        pm_target(&v[k],r,stereo,conv,&tx[k],&ty[k],&dz[k]);
+    }
+    area=(tx[1]-tx[0])*(ty[2]-ty[0])-(tx[2]-tx[0])*(ty[1]-ty[0]);
+    if(area==0)return;
+    i0=(int)floorf(fminf(tx[0],fminf(tx[1],tx[2])));i1=(int)ceilf(fmaxf(tx[0],fmaxf(tx[1],tx[2])));
+    j0=(int)floorf(fminf(ty[0],fminf(ty[1],ty[2])));j1=(int)ceilf(fmaxf(ty[0],fmaxf(ty[1],ty[2])));
+    if(i0<0)i0=0;
+    if(j0<0)j0=0;
+    if(i1>H-1)i1=H-1;
+    if(j1>W-1)j1=W-1;
+    for(j=j0;j<=j1;j++)for(i=i0;i<=i1;i++){
+        float cx=i+0.5f,cy=j+0.5f,l0,l1,l2,z;
+        int px,py,p;
+        if(scissor&&(i<(int)scissor[0]||i>=(int)scissor[2]||j<(int)scissor[1]||j>=(int)scissor[3]))continue;
+        l0=((tx[1]-cx)*(ty[2]-cy)-(tx[2]-cx)*(ty[1]-cy))/area;
+        l1=((tx[2]-cx)*(ty[0]-cy)-(tx[0]-cx)*(ty[2]-cy))/area;
+        l2=1.0f-l0-l1;
+        if(l0<0||l1<0||l2<0)continue;
+        px=W-1-j;py=H-1-i;p=py*W+px;
+        if(role==NITRO_GX3D_PRUNE_SHAPE){
+            /* see-through texels, moving with the polygon */
+            uint32_t h=pm_mix((uint32_t)first*7919u^(uint32_t)(px-dx)*104729u^(uint32_t)(py-dy)*1299709u);
+            if((h&3u)==0)continue;
+        }
+        z=l0*dz[0]+l1*dz[1]+l2*dz[2];
+        if(pass==0){
+            if(z<sPmDepth[p]){sPmDepth[p]=z;sPmId[p]=(uint8_t)id;}
+        }else if(z<sPmDepth[p]&&id!=sPmId[p]){
+            sPmCount[slot][p]++;
+            sPmSum[slot][p]+=pm_mix((uint32_t)first);
+        }
+    }
+}
+/* The four directions' passes for one eye, everything or pruned. */
+static void pm_passes(const float rect[4],float stereo,float conv,unsigned clearId,const NitroGx3dPruneResult *res,
+                      int slot)
+{
+    static const int dx[4]={-1,1,0,0},dy[4]={0,0,-1,1};
+    int dir,z,pass;
+    size_t b,t;
+    for(dir=0;dir<4;dir++){
+        for(t=0;t<(size_t)PM_W*PM_H;t++){sPmDepth[t]=1e30f;sPmId[t]=(uint8_t)clearId;}
+        for(pass=0;pass<2;pass++){
+            int sx=pass?0:dx[dir],sy=pass?0:dy[dir];
+            for(b=0;b<sPm.nb;b++){
+                if(sPm.role[b]==NITRO_GX3D_PRUNE_OUT)continue;
+                if(!res){
+                    for(t=0;t<sPm.b[b].count;t+=3)pm_draw(pass,sPm.b[b].first+t,rect,sx,sy,stereo,conv,NULL,slot);
+                    continue;
+                }
+                {
+                    const NitroGx3dPruneList *l=&sPmLists[b];
+                    int whole=pass?NITRO_GX3D_PRUNE_D:NITRO_GX3D_PRUNE_A;
+                    for(t=0;t<l->count[whole];t+=3)pm_draw(pass,sPmIdx[l->offset[whole]+t],rect,sx,sy,stereo,conv,NULL,slot);
+                    for(z=0;z<4;z++){
+                        int list=(pass?NITRO_GX3D_PRUNE_ZONE_B:NITRO_GX3D_PRUNE_ZONE_A)+z;
+                        unsigned sc[4];
+                        NitroPort_Gx3dPruneScissor(res->zone[z],sPmScreenW,PM_H,sc);
+                        for(t=0;t<l->count[list];t+=3)pm_draw(pass,sPmIdx[l->offset[list]+t],rect,sx,sy,stereo,conv,sc,slot);
+                    }
+                }
+            }
+        }
+    }
+}
+static int pm_compare(const float rect[4],int eyes,float stereo,float conv,unsigned clearId,int screenW,
+                      NitroGx3dPruneResult *out)
+{
+    NitroGx3dPruneView view;
+    NitroGx3dPruneResult res;
+    size_t p,b;
+    int eye,diff=0,ok,indices;
+    float st[2]={eyes==2?-stereo:0.0f,stereo};
+    sPmScreenW=screenW;
+    view.x0=rect[0];view.y0=rect[1];view.x1=rect[2];view.y1=rect[3];
+    view.width=screenW;view.height=PM_H;view.eyes=eyes;
+    view.stereo[0]=st[0];view.stereo[1]=st[1];view.convergence=conv;view.clear_id=clearId;
+    ok=NitroPort_Gx3dPruneEdges(sPm.v,sPm.b,sPm.nb,sPm.role,&view,sPmIdx,sizeof(sPmIdx)/sizeof(sPmIdx[0]),
+                                sPmLists,&res);
+    CHECK(ok);
+    if(!ok)return -1;
+    /* (the lists: whole triangles, in their batch, 8-aligned) */
+    indices=1;
+    for(b=0;b<sPm.nb;b++){
+        int l;
+        for(l=0;l<NITRO_GX3D_PRUNE_LISTS;l++){
+            unsigned t;
+            if(sPmLists[b].offset[l]%8u)indices=0;
+            for(t=0;t<sPmLists[b].count[l];t++){
+                uint16_t ix=sPmIdx[sPmLists[b].offset[l]+t];
+                if(ix<sPm.b[b].first||ix>=sPm.b[b].first+sPm.b[b].count||(t%3u)!=(unsigned)((ix-sPm.b[b].first)%3u))indices=0;
+            }
+        }
+    }
+    CHECK(indices);
+    for(eye=0;eye<eyes;eye++){
+        memset(sPmCount,0,sizeof(sPmCount));
+        memset(sPmSum,0,sizeof(sPmSum));
+        pm_passes(rect,eyes==2?st[eye]:0.0f,conv,clearId,NULL,0);
+        pm_passes(rect,eyes==2?st[eye]:0.0f,conv,clearId,&res,1);
+        for(p=0;p<(size_t)screenW*PM_H;p++){
+            if(sPmCount[0][p]!=sPmCount[1][p]||sPmSum[0][p]!=sPmSum[1][p])diff++;
+            if(sPmCount[0][p])sPmMarked++;
+        }
+    }
+    if(out)*out=res;
+    return diff;
+}
+static void test_edge_pruning(void)
+{
+    static const struct { float rect[4]; int screenW,eyes; float stereo,conv; unsigned clearId; } views[]={
+        {{40,0,360,240},400,1,0.0f,1.0f,63},         /* the upper screen, the slider down */
+        {{40,0,360,240},400,2,0.01f,2.5f,63},        /* the slider up */
+        {{40,0,360,240},400,2,0.04f,2.0f,63},        /* (more than it goes) */
+        {{41.25f,0,361.25f,240},400,2,0.01f,2.5f,63},/* the screen shaking */
+        {{-12.5f,0,307.5f,240},400,2,0.01f,2.5f,63}, /* past the screen's edges */
+        {{92.5f,0,412.5f,240},400,1,0.0f,1.0f,0},
+        {{0,0,400,240},400,2,0.01f,2.5f,63},         /* a wide view */
+        {{0,0,320,240},320,1,0.0f,1.0f,63},          /* the lower screen */
+        {{40,0,360,240},400,1,0.0f,1.0f,0},          /* the rear plane's ID the ground's */
+    };
+    size_t k;
+    unsigned scene;
+    unsigned pruned=0,all=0;
+    for(scene=0;scene<4;scene++){
+        pm_scene((int)scene,0x1234u+scene*977u);
+        for(k=0;k<sizeof(views)/sizeof(views[0]);k++){
+            NitroGx3dPruneResult res;
+            int diff;
+            memset(&res,0,sizeof(res));
+            diff=pm_compare(views[k].rect,views[k].eyes,views[k].stereo,views[k].conv,views[k].clearId,
+                                views[k].screenW,&res);
+            if(diff){printf("edge pruning: scene %u view %u: %d pixels differ\n",scene,(unsigned)k,diff);}
+            if(getenv("PM_DEBUG"))printf("scene %u view %u: %u triangles, A %u D %u zones A %u B %u, %u marked\n",scene,(unsigned)k,res.triangles,res.a,res.d,res.zone_a,res.zone_b,sPmMarked);
+            sPmMarked=0;
+            CHECK(diff==0);
+            pruned+=res.d;all+=res.triangles;
+            if(scene==1&&k<2){
+                /* most of a route's ground can't get an outline */
+                CHECK(res.d*5u<res.triangles);
+                CHECK(res.a*2u<res.triangles);
+            }
+        }
+    }
+    printf("edge pruning: %u of %u triangles drawn in the outlines' passes\n",pruned,all);
+    {
+        /* no room for the lists: 0 (the passes draw every triangle then) */
+        NitroGx3dPruneView view;
+        memset(&view,0,sizeof(view));
+        view.x0=40;view.x1=360;view.y1=240;view.width=400;view.height=240;view.eyes=1;view.convergence=1;view.clear_id=63;
+        CHECK(!NitroPort_Gx3dPruneEdges(sPm.v,sPm.b,sPm.nb,sPm.role,&view,sPmIdx,6,sPmLists,NULL));
+    }
+    NitroPort_Gx3dPruneFree();
+}
 static void run_all(void);
 /* A thread that falls behind: the game doesn't wait, the scene after the
  * one it's on is left out (nothing drawn, the last scene stays), and what
@@ -1106,6 +1406,7 @@ int main(void)
     int synchronous;
 
     run_all();
+    test_edge_pruning();
     swap();
     CHECK(!NitroPort_Gx3dEarlierSceneUnread()); /* without the thread: never */
     synchronous = checks;

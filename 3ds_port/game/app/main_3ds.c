@@ -228,7 +228,8 @@ static volatile bool sSuspended;
 /* remaster.txt: a setting a line, "name value": remaster on/off, wide
  * on/off, filter sharp/nearest/smooth/scale2x (on: sharp, off: nearest),
  * stereo on/off/<strength, e.g. 0.02>, convergence <distance> (0: from
- * each scene), edges on/off, flip on/off, filter3d
+ * each scene), edges on/off/all (all: every polygon in the outline passes,
+ * for comparing), flip on/off, filter3d
  * nearest/smooth/sharp/xbrz/xbrz-smooth, shadows on/off, grade on/off,
  * sun clock/<elevation>,<azimuth> (degrees). */
 static void ReadRemasterConfig(bool new3ds)
@@ -296,7 +297,7 @@ static void ReadRemasterConfig(bool new3ds)
             } else if (strcmp(name, "convergence") == 0) {
                 sCompose.convergence = (float)atof(value);
             } else if (strcmp(name, "edges") == 0) {
-                sCompose.edges = !off;
+                sCompose.edges = off ? 0 : strcmp(value, "all") == 0 ? 2 : 1;
             } else if (strcmp(name, "flip") == 0) {
                 sCompose.flipV = on;
             } else if (strcmp(name, "shadows") == 0) {
@@ -1858,6 +1859,18 @@ static void PerfFrame(u64 enter)
         last = now;
         lastTex = tex;
         lastTexTicks = texTicks;
+        {
+            float pruneMs, a, d;
+            unsigned runs, fails;
+
+            NitroPort_PicaPruneStats(&pruneMs, &runs, &fails, &a, &d);
+            if (runs) {
+                NitroPort_Log("[perf] outlines: %.0f%% of the polygons drawn in the moved passes, %.0f%% in the "
+                              "outlines drawn; worked out %.1f times/s, %.2f ms each%s",
+                              (double)a, (double)d, runs / seconds, (double)pruneMs,
+                              fails ? " (some times not: every polygon drawn then)" : "");
+            }
+        }
     }
     NitroPort_Log("[perf] game %.1f frames/s, %.1f ms/frame (%.1f waiting for drawing); drawn: %s; 3D %.1f ms/scene, %u triangles/scene, %u dropped/scene (core %d); sound %.0f%% of core 0, %u underruns",
                   sPerfFrames / seconds, (double)sPerfGameTicks * perFrame,

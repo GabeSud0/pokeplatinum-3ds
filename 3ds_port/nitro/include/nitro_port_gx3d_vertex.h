@@ -70,6 +70,71 @@ size_t NitroPort_Gx3dBuildShadowBatches(const NitroGx3dScene *scene, size_t firs
                                         NitroGx3dBatch *batches, size_t max_batches,
                                         size_t *batch_count);
 
+/* Edge marking made cheaper (port_gx3d_prune.c). The GPU's outline
+ * passes (port_gx3d_pica.c, mark_edges) draw the scene's opaque polygons 8
+ * times an eye; most of them can't get an outline anywhere: a polygon gets
+ * one only where a neighbouring pixel shows another polygon ID, or the
+ * rear plane (nothing drawn there: also past the edges of the DS's screen,
+ * where the scene stops). These are the triangles each pass needs, as
+ * index lists:
+ *  - D: those that may get an outline anywhere (pass B: the outlines
+ *    drawn);
+ *  - A: D and those next to one (pass A: the scene moved a pixel);
+ *  - four zones along the borders (left, right, top, bottom, a few pixels
+ *    wide; see NitroGx3dPruneResult.zone) for the many triangles that touch
+ *    the DS's screen's edges, where the rear plane shows past them: ZONE_B
+ *    those D leaves out that may get an outline there, ZONE_A those A leaves
+ *    out that touch the zone, both drawn with the scissor test on the zone
+ *    (NitroPort_Gx3dPruneScissor).
+ * The same pixels come out as with every triangle drawn in every pass;
+ * tests/test_gx3d.c checks that against a model of the passes. */
+enum {
+    NITRO_GX3D_PRUNE_A,
+    NITRO_GX3D_PRUNE_D,
+    NITRO_GX3D_PRUNE_ZONE_A,                                  /* + zone */
+    NITRO_GX3D_PRUNE_ZONE_B = NITRO_GX3D_PRUNE_ZONE_A + 4,   /* + zone */
+    NITRO_GX3D_PRUNE_LISTS = NITRO_GX3D_PRUNE_ZONE_B + 4
+};
+/* How a batch takes part in the outline passes. */
+enum {
+    NITRO_GX3D_PRUNE_OUT,     /* not at all (translucent, alpha under 31) */
+    NITRO_GX3D_PRUNE_SHAPE,   /* drawn, but may leave pixels out (the alpha test) */
+    NITRO_GX3D_PRUNE_SOLID    /* drawn, every pixel it covers */
+};
+typedef struct NitroGx3dPruneView {
+    float x0, y0, x1, y1;   /* where the DS's screen goes, in the screen's pixels */
+    int width, height;      /* the screen's size */
+    int eyes;               /* 1, or 2 (the lists serve both eyes) */
+    float stereo[2];        /* each eye's shift, as the vertex program has it */
+    float convergence;
+    unsigned clear_id;      /* the rear plane's polygon ID */
+} NitroGx3dPruneView;
+typedef struct NitroGx3dPruneList {
+    uint32_t offset[NITRO_GX3D_PRUNE_LISTS];   /* into the indices, 8-aligned */
+    uint16_t count[NITRO_GX3D_PRUNE_LISTS];    /* indices (3 a triangle) */
+} NitroGx3dPruneList;
+typedef struct NitroGx3dPruneResult {
+    int zone[4][4];         /* each zone: x0, y0, x1, y1 (screen pixels, x1 and y1 past it); empty
+                             * when x0 >= x1 or y0 >= y1 */
+    size_t indices;         /* used */
+    unsigned triangles, a, d, zone_a, zone_b;   /* (counts, for the log) */
+} NitroGx3dPruneResult;
+/* vertices: the scene's (NitroPort_Gx3dBuildBatches); roles: a
+ * NITRO_GX3D_PRUNE_ role a batch; lists: one a batch, its index lists into
+ * indices (vertex numbers, as the vertex buffer has them; capacity of
+ * them). Returns 1, or 0 when they don't fit or memory runs out (draw
+ * everything then). */
+int NitroPort_Gx3dPruneEdges(const NitroGx3dGpuVertex *vertices, const NitroGx3dBatch *batches,
+                             size_t batch_count, const uint8_t *roles, const NitroGx3dPruneView *view,
+                             uint16_t *indices, size_t capacity, NitroGx3dPruneList *lists,
+                             NitroGx3dPruneResult *result);
+/* The working memory it keeps between scenes, freed. */
+void NitroPort_Gx3dPruneFree(void);
+/* A zone (screen pixels) as C3D_SetScissor's left, top, right, bottom on
+ * the screen's render target (240 x width, turned a quarter turn; see
+ * NitroPort_PicaViewMatrix). */
+void NitroPort_Gx3dPruneScissor(const int zone[4], int width, int height, unsigned out[4]);
+
 /* PC only, for checking the GPU path without a 3DS: draws the scene in
  * software the way port_gx3d_pica.c asks the PICA to (port_gx3d_gpusim.c),
  * into RGB555|coverage pixels like the reference rasterizer's. */
