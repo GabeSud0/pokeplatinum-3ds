@@ -49,6 +49,7 @@
 #include "port_pica.h"
 #include <nitro_port_upscale.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -443,6 +444,10 @@ static int alloc_sets(Screen *scr, int canvasW, int scale)
     return 1;
 }
 
+/* (GPU timings, below: the GSP's events recorded) */
+enum { PROF_LIST, PROF_FILL, PROF_FILL1, PROF_TRANSFER };
+static void prof_event(void *data);
+
 int NitroPort_ComposeInit(const ComposeConfig *config)
 {
     static const char *const filters[] = { "sharp (the pixels as they are, 2x then bilinear)", "nearest",
@@ -450,6 +455,11 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     int s, i, c, e;
 
     sConfig = *config;
+    /* (GPU timings: the GSP's interrupts, recorded on profiled frames only) */
+    gspSetEventCallback(GSPGPU_EVENT_P3D, prof_event, (void *)(uintptr_t)PROF_LIST, false);
+    gspSetEventCallback(GSPGPU_EVENT_PSC0, prof_event, (void *)(uintptr_t)PROF_FILL, false);
+    gspSetEventCallback(GSPGPU_EVENT_PSC1, prof_event, (void *)(uintptr_t)PROF_FILL1, false);
+    gspSetEventCallback(GSPGPU_EVENT_PPF, prof_event, (void *)(uintptr_t)PROF_TRANSFER, false);
     /* The 3D's textures: nearest, as the DS's, unless remaster.txt says
      * otherwise (filter3d: see main_3ds.c). */
     NitroPort_PicaTextureFilter(config->filter3d);
@@ -571,6 +581,10 @@ void NitroPort_ComposeExit(void)
         C3D_FrameEnd(0);
         sInFrame = 0;
     }
+    gspSetEventCallback(GSPGPU_EVENT_P3D, NULL, NULL, false);
+    gspSetEventCallback(GSPGPU_EVENT_PSC0, NULL, NULL, false);
+    gspSetEventCallback(GSPGPU_EVENT_PSC1, NULL, NULL, false);
+    gspSetEventCallback(GSPGPU_EVENT_PPF, NULL, NULL, false);
     free_all();
 }
 
@@ -744,6 +758,136 @@ static u32 rgba_of(uint16_t c, u32 alpha)
     return (widen5(c & 31) << 24) | (widen5((c >> 5) & 31) << 16) | (widen5((c >> 10) & 31) << 8) | alpha;
 }
 
+/* ---------------------------------------------------------- GPU timings
+ * One frame every PROF_EVERY frames with a 3D scene: its command list cut
+ * at each NitroPort_PicaProfileMark (C3D_FrameSplit, as the second eye's
+ * outline buffers already have it), and each part's completion (the
+ * GPU's P3D interrupt; the fills' PSC0 and the transfers' PPF too) timed
+ * on the GSP event thread. GSP runs the frame's queue in order: a part's
+ * GPU time is from the event before it to its own. The queue holds 32
+ * entries a frame: at most PROF_MARKS cuts (the frame's fills and
+ * transfers are 14 at most). */
+#define PROF_EVERY 150u
+#define PROF_MARKS 13
+#define PROF_EVENTS 48
+static int sProfOn;                        /* (this frame is profiled) */
+static unsigned sProfFrames;
+static int sProfMarks, sProfGroup;
+static const char *sProfPart[PROF_MARKS + 1];
+static int sProfPartGroup[PROF_MARKS + 1];
+static int sProfLost;
+static int sProfArmed;
+static u32 sProfEvents;
+static u64 sProfTick[PROF_EVENTS];
+static u8 sProfType[PROF_EVENTS];
+extern u32 gpuCmdBufOffset;
+
+static void prof_event(void *data)
+{
+    u32 i;
+
+    if (!__atomic_load_n(&sProfArmed, __ATOMIC_ACQUIRE)) {
+        return;
+    }
+    i = __atomic_fetch_add(&sProfEvents, 1u, __ATOMIC_ACQ_REL);
+    if (i < PROF_EVENTS) {
+        sProfTick[i] = svcGetSystemTick();
+        sProfType[i] = (u8)(uintptr_t)data;
+    }
+}
+
+/* The command list cut here, if anything was drawn since the last cut:
+ * forced, always (the frame needs it); else only on a profiled frame,
+ * and up to PROF_MARKS cuts. A cut on a profiled frame is a part named
+ * `part'. */
+static void prof_split(const char *part, int forced)
+{
+    if (gpuCmdBufOffset == 0) {
+        return;   /* (nothing drawn since the last cut: no part) */
+    }
+    if (sProfOn && sProfMarks < PROF_MARKS + 1 && (forced || sProfMarks < PROF_MARKS)) {
+        sProfPart[sProfMarks] = part;
+        sProfPartGroup[sProfMarks] = sProfGroup;
+        sProfMarks++;
+    } else if (!forced) {
+        return;
+    } else if (sProfOn) {
+        sProfLost = 1;   /* (a part not named: the report would be off by one) */
+    }
+    C3D_FrameSplit(GX_CMDLIST_FLUSH);
+}
+
+void NitroPort_PicaProfileMark(const char *part)
+{
+    if (sProfOn) {
+        prof_split(part, 0);
+    }
+}
+
+/* The profiled frame's [gpu] lines: a line a screen (an eye), then the
+ * clears, the transfers and the whole. t0: the frame's end (the queue's
+ * start). */
+static void prof_report(int stereo, int edges, u64 t0)
+{
+    static const char *const groups[3] = { "upper screen, left eye", "upper screen, right eye",
+                                           "lower screen" };
+    const double ms = 1000.0 / SYSCLOCK_ARM11;
+    char line[400];
+    size_t len = 0;
+    u32 n = __atomic_load_n(&sProfEvents, __ATOMIC_ACQUIRE), i;
+    u64 prev = t0;
+    double fills = 0.0, transfers = 0.0, rest = 0.0;
+    int mark = 0, group = -1, lists = 0;
+
+    if (n > PROF_EVENTS) {
+        n = PROF_EVENTS;
+    }
+    if (sProfLost) {
+        NitroPort_Log("[gpu] a frame's parts not timed: more cuts than names");
+        return;
+    }
+    line[0] = 0;
+    for (i = 0; i < n; i++) {
+        double d;
+
+        if (sProfType[i] == PROF_FILL1) {
+            continue;   /* (the second buffer of a fill: the queue ignores it too) */
+        }
+        d = (double)(sProfTick[i] - prev) * ms;
+        prev = sProfTick[i];
+        if (sProfType[i] == PROF_FILL) {
+            fills += d;
+        } else if (sProfType[i] == PROF_TRANSFER) {
+            transfers += d;
+        } else if (mark < sProfMarks) {
+            if (sProfPartGroup[mark] != group) {
+                if (len) {
+                    NitroPort_Log("%s", line);
+                }
+                group = sProfPartGroup[mark];
+                len = (size_t)snprintf(line, sizeof(line), "[gpu] %s (%s, outlines %s):",
+                                       groups[group < 0 || group > 2 ? 2 : group], stereo ? "stereo" : "mono",
+                                       edges ? "on" : "off");
+            }
+            if (len < sizeof(line)) {
+                len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f ms;", sProfPart[mark], d);
+            }
+            mark++;
+            lists++;
+        } else {
+            rest += d;
+            lists++;
+        }
+    }
+    if (len) {
+        NitroPort_Log("%s", line);
+    }
+    NitroPort_Log("[gpu] the frame: the clears %.1f ms, the rest %.1f ms, the transfers to the screens %.1f ms; "
+                  "%.1f ms in all (%d parts of %d marked, %lu events)",
+                  fills, rest, transfers, n ? (double)(sProfTick[n - 1] - t0) * ms : 0.0, lists, sProfMarks,
+                  (unsigned long)n);
+}
+
 /* The layer textures, described for the GPU. */
 static C3D_Tex sUnderTex, sOverTex;
 
@@ -761,6 +905,8 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
     float u1, vTop, vBottom;
     int linear = sConfig.filter != COMPOSE_FILTER_NEAREST;
     int has3d = info != NULL && !info->displayOff && info->has3d && scene != NULL;
+
+    sProfGroup = scr == &sScreens[0] ? eye : 2;
 
     /* The picture, 1.25 times the DS's size, in the middle (it fills the
      * screen: 320 DS pixels on the upper one, 256 on the lower). */
@@ -848,6 +994,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         view.rect = rect3d;
         view.stereo = stereo;
         view.convergence = sConfig.convergence > 0.0f ? sConfig.convergence : sSceneConvergence;
+        NitroPort_PicaProfileMark("the 2D behind");
         NitroPort_PicaDrawScene(&view);
         C3D_SetFrameBuf(fb);
         C3D_SetViewport(0, 0, fb->width, fb->height);
@@ -891,6 +1038,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         }
     }
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+    NitroPort_PicaProfileMark(has3d ? "the 2D in front" : "the 2D");
 }
 
 /* The convergence distance for a scene: between the nearest and the
@@ -992,6 +1140,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
     LayerSet *sets[2] = { NULL, NULL };
     u64 start = svcGetSystemTick(), gpuStart, prepareTicks = 0, texTicksBefore, texTicksAfter, texels;
+    u64 profStart = 0;
 
     if (!sReady) {
         return 0;
@@ -1091,6 +1240,13 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sInFrame = 1;
     }
     NitroPort_PicaStage("the frame's clears");
+    sProfOn = 0;
+    if (scene != NULL && ++sProfFrames >= PROF_EVERY) {
+        sProfFrames = 0;
+        sProfOn = 1;
+        sProfMarks = 0;
+        sProfLost = 0;
+    }
     sQuadVertices = 0;
     edges = sEdgeDepth[0] != NULL && scene != NULL && NitroPort_PicaEdgeClearValue(&edgeClear);
     /* The depth/stencil buffers cleared (before any drawing: the fills go
@@ -1123,7 +1279,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             if (sc != NULL && edges) {
                 /* The second eye needs the edge buffers filled again: the
                  * commands so far go ahead, the fills after them. */
-                C3D_FrameSplit(GX_CMDLIST_FLUSH);
+                prof_split("the left eye's end", 1);
                 fill_edge_buffers(scr, 1, edgeClear);
             }
             draw_screen(scr, 1, sets[s], sc, shift, edges);
@@ -1145,6 +1301,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     }
     GSPGPU_FlushDataCache(sQuads, (u32)(sQuadVertices * sizeof(NitroGx3dGpuVertex)));
     NitroPort_PicaStage("the frame's end");
+    if (sProfOn) {
+        profStart = svcGetSystemTick();
+        __atomic_store_n(&sProfEvents, 0u, __ATOMIC_RELEASE);
+        __atomic_store_n(&sProfArmed, 1, __ATOMIC_RELEASE);
+    }
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
     NitroPort_PicaNoteCmdUse();
     sInFrame = 0;
@@ -1167,6 +1328,14 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     sCpuTicks += gpuStart - start;
     NitroPort_PicaStage("the transfers to the screens (waiting for the GPU)");
     C3D_FrameBegin(0);   /* (waits for the GPU and the transfers) */
+    if (sProfOn) {
+        /* (the GSP event thread runs the queue's end before its own
+         * callbacks: a moment for the last event's time) */
+        svcSleepThread(500000);
+        __atomic_store_n(&sProfArmed, 0, __ATOMIC_RELEASE);
+        prof_report(stereoNow, edges, profStart);
+        sProfOn = 0;
+    }
     NitroPort_PicaStage("between frames");
     sInFrame = 1;
     sGpuTicks += svcGetSystemTick() - gpuStart;

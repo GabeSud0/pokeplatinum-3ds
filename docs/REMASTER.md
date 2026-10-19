@@ -466,6 +466,17 @@ textures converted: X ms), X ms GPU`, or `[hitch] a frame took the
 display thread X ms: ...` (over two V-blanks: the scenes made meanwhile
 may never show). At most one every 15 frames drawn.
 
+Where the GPU's time goes: one frame with a 3D scene every 150 (about
+five seconds) is cut into parts, and each part timed by the GPU's own
+"done" interrupt: `[gpu] upper screen, left eye (stereo, outlines on):
+the 2D behind X ms; the opaque polygons X ms; outlines, the shifted
+passes X ms; outlines, the outlines drawn X ms; the translucent
+polygons X ms; the 2D in front X ms;` (a line an eye, and the lower
+screen's), then `[gpu] the frame: the clears X ms, the rest X ms, the
+transfers to the screens X ms; X ms in all`. Nothing changes on the
+other frames; the cuts are the ones the second eye's outlines already
+use.
+
 ## 60 frames a second in the 3D
 
 The game runs its field at 30 frames a second: its main loop waits for two

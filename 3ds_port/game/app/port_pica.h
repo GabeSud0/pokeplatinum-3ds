@@ -42,6 +42,12 @@ int NitroPort_PicaFrameBufWithDepth(void *out, unsigned outSize, const void *tar
  * count and the draws so far. */
 void NitroPort_PicaStage(const char *stage);
 const char *NitroPort_PicaStageNow(unsigned *first, unsigned *count, unsigned *draws);
+/* GPU timings (port_compose_pica.c): on a profiled frame (one every five
+ * seconds or so with a 3D scene), the command list is cut at each mark
+ * and the GPU's completion of each part timed, into [gpu] log lines. A
+ * mark names the part just drawn; nothing happens on other frames. The
+ * display thread's. */
+void NitroPort_PicaProfileMark(const char *part);
 /* The memory left (both heaps), as a [perf] memory line. Any thread. */
 void NitroPort_PicaLogMemory(void);
 void NitroPort_PicaNoteCmdUse(void);

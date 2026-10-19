@@ -1476,6 +1476,9 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
     size_t b;
     int dir;
     fog_mode(0);
+    /* (the four A passes first, then the four B passes: each direction has
+     * a buffer of its own, and A writes no colour; the same result, and
+     * each half of the work timed on its own: NitroPort_PicaProfileMark) */
     for(dir=0;dir<4;dir++){
         PicaRect shifted=view->rect;
         C3D_FrameBuf *fb=view->edgeFb[dir];
@@ -1500,7 +1503,14 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             C3D_StencilTest(true,GPU_ALWAYS,(int)((attr>>24)&63u),0xFF,0xFF);
             draw_arrays((int)batch->first,(int)batch->count);
         }
+    }
+    NitroPort_PicaProfileMark("outlines, the shifted passes");
+    for(dir=0;dir<4;dir++){
+        C3D_FrameBuf *fb=view->edgeFb[dir];
+        if(fb==NULL)continue;
         /* pass B */
+        C3D_SetFrameBuf(fb);
+        C3D_SetViewport(0,0,fb->width,fb->height);
         begin_pass(view,&view->rect);
         C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_KEEP);
         if(edges->antialias){
@@ -1527,6 +1537,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             draw_arrays((int)batch->first,(int)batch->count);
         }
     }
+    NitroPort_PicaProfileMark("outlines, the outlines drawn");
     /* back to the screen's own depth/stencil */
     fog_mode(0);
     C3D_SetFrameBuf(view->fb);
@@ -1885,6 +1896,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
         draw_arrays((int)batch->first,(int)batch->count);
     }
+    NitroPort_PicaProfileMark("the opaque polygons");
     if(edging)mark_edges(view,&edges);
     stage("the translucent polygons");
     /* The translucent polygons, over the outlines (but the game's own
@@ -1918,6 +1930,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
     C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
     C3D_AlphaTest(false,GPU_ALWAYS,0);
+    NitroPort_PicaProfileMark("the translucent polygons");
     stage("the scene drawn");
 }
 #endif
