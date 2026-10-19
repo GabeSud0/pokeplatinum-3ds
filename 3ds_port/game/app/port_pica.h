@@ -32,6 +32,18 @@ void NitroPort_PicaEdgePruning(int on);
  * the outline passes' triangles drawn in the moved passes (A) and the
  * outlines drawn (D), in percent. */
 void NitroPort_PicaPruneStats(float *ms, unsigned *runs, unsigned *fails, float *a, float *d);
+/* Edge marking: the left and right moved passes' buffers copied from the
+ * screen's depth/stencil by the transfer engine (on, the default), or drawn
+ * (off: `edges drawn`). */
+void NitroPort_PicaEdgeCopy(int on);
+/* For a frame, after its scene is prepared (edges: edge marking on this
+ * frame): the directions (bits) whose edge buffers will be copied (the
+ * caller doesn't fill those, and clears the screen's depth/stencil to the
+ * edge buffers' value), or 0. */
+unsigned NitroPort_PicaEdgeCopies(int edges);
+/* The command list cut here, always (on a profiled frame: a part named
+ * `part`, as NitroPort_PicaProfileMark). */
+void NitroPort_PicaCut(const char *part);
 /* A shader blob's DVLE (its shaders, in the order assembled), as libctru
  * lays them out (port_pica_abi.c: its enums are a different size from the
  * port's); NULL past the last. dvlb: a DVLB_s *. And libctru's DVLE_s's
@@ -144,7 +156,8 @@ typedef struct ComposeConfig {
     float stereoStrength;    /* the shift at full slider, in screen widths */
     float convergence;       /* 0: worked out from each scene */
     int edges;               /* edge marking (the game's outlines) on the GPU: 1, or 2 with each pass
-                              * only the polygons it needs (NitroPort_PicaEdgePruning) */
+                              * only the polygons it needs (NitroPort_PicaEdgePruning), or 3 with all
+                              * their moved passes drawn (NitroPort_PicaEdgeCopy off) */
     int flipV;               /* (if the 2D comes out upside down) */
     int filter3d;            /* the 3D's textures: 0 nearest (the DS's), 1 bilinear, 2 sharp (2x2, bilinear),
                               * 3 xbrz (2x by xBRZ, nearest), 4 xbrz smooth (bilinear) */

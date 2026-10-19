@@ -228,8 +228,9 @@ static volatile bool sSuspended;
 /* remaster.txt: a setting a line, "name value": remaster on/off, wide
  * on/off, filter sharp/nearest/smooth/scale2x (on: sharp, off: nearest),
  * stereo on/off/<strength, e.g. 0.02>, convergence <distance> (0: from
- * each scene), edges on/off/pruned (pruned: each outline pass only the
- * polygons it needs, worked out on the CPU: slower on a 3DS, October 2026),
+ * each scene), edges on/off/pruned/drawn (pruned: each outline pass only
+ * the polygons it needs, worked out on the CPU: slower on a 3DS, October
+ * 2026; drawn: the left and right moved passes drawn, not copied),
  * flip on/off, filter3d
  * nearest/smooth/sharp/xbrz/xbrz-smooth, shadows on/off, grade on/off,
  * sun clock/<elevation>,<azimuth> (degrees). */
@@ -298,7 +299,10 @@ static void ReadRemasterConfig(bool new3ds)
             } else if (strcmp(name, "convergence") == 0) {
                 sCompose.convergence = (float)atof(value);
             } else if (strcmp(name, "edges") == 0) {
-                sCompose.edges = off ? 0 : strcmp(value, "pruned") == 0 ? 2 : 1;
+                sCompose.edges = off                             ? 0
+                                 : strcmp(value, "pruned") == 0 ? 2
+                                 : strcmp(value, "drawn") == 0  ? 3
+                                                                : 1;
             } else if (strcmp(name, "flip") == 0) {
                 sCompose.flipV = on;
             } else if (strcmp(name, "shadows") == 0) {
