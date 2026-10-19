@@ -1,0 +1,46 @@
+; A test program (shadowdebug on, port_gx3d_pica.c draw_shadow_receivers):
+; the receivers' program without the distance from the sun (no texcoord0w
+; output) and without the roles, its outputs each written whole and in
+; order (position, colour, texture coordinate 0, texture coordinate 1), as
+; gx3d_passthrough.v.pica writes them: texture coordinate 0 is (s, t, 1, 1).
+.constf byteScale(0.003921568393707275390625, 1.0001, 1.0, 0.0)
+.alias clrdiv byteScale.xxxx
+.alias flatW byteScale.yyyy
+.alias one byteScale.zzzz
+.fvec mtx[4]
+.fvec stereo
+.fvec smtx[4]
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.out outtc1 texcoord1
+.alias inpos v0
+.alias inclr v1
+.alias intex v2
+
+.entry recvordmain
+.proc recvordmain
+    mov r0, inpos
+    ; r1.x = max(w - convergence, -w) * strength, for w > 1 only
+    add r1.x, -stereo.yyyy, r0.wwww
+    max r1.x, r1.xxxx, -r0.wwww
+    slt r2.x, flatW, r0.wwww
+    mul r1.x, r1.xxxx, r2.xxxx
+    mul r1.x, stereo.xxxx, r1.xxxx
+    add r0.x, r0.xxxx, r1.xxxx
+    dp4 outpos.x, mtx[0], r0
+    dp4 outpos.y, mtx[1], r0
+    dp4 outpos.z, mtx[2], r0
+    dp4 outpos.w, mtx[3], r0
+    ; the shadow map: on (x, y, w, 1) before the stereo shift
+    mov r3.xy, inpos
+    mov r3.z, inpos.wwww
+    mov r3.w, one
+    dp4 r4.x, smtx[0], r3
+    dp4 r4.y, smtx[1], r3
+    mov r4.zw, one
+    mul outclr, clrdiv, inclr
+    mov outtc0, r4
+    mov outtc1, intex
+    end
+.end
