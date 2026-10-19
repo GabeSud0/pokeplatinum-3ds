@@ -81,6 +81,7 @@ typedef struct LayerSet {
     void *under;          /* RGB565 texels, tiled */
     void *over;           /* RGBA8 texels, tiled (alpha multiplied in) */
     int overEmpty;        /* nothing in front of the 3D (the over texture not written) */
+    int underColor;       /* the picture behind the 3D all this RGB565 colour, or -1 */
     ComposeLayers info;   /* has3d etc., as published (no picture pointers) */
     uint32_t seq;         /* publish order (0: none, or being written) */
     int writing, held;
@@ -177,6 +178,7 @@ static u32 sLoweredAt;
  * showed the 3D the last time it was drawn, scenes never shown, frames
  * drawn in stereo, and the last hitch logged. */
 static u32 sSeenSerial, sSeenAt, sShownSerial, sDropped, sStereoFrames;
+static u32 sUnderFills;   /* (screens drawn with the picture behind as the clear) */
 static int sSeenValid, sLast3D;
 static u32 sHitchFrame, sHitchQuiet;
 
@@ -647,6 +649,45 @@ static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *
     }
 }
 
+/* A picture all one colour: that colour as RGB565, else -1. (In the field
+ * the picture behind the 3D is often only the backdrop: then the frame's
+ * clear paints it, rather than a quad the size of the screen: 1.3-2 ms of
+ * the GPU's an eye, 2026-10-19.) */
+static int uniform_color(const uint16_t *px, int n)
+{
+    const uint32_t *w = (const uint32_t *)px;
+    uint32_t first;
+    int i;
+
+    if (n <= 0 || ((uintptr_t)px & 3u) || (n & 1)) {
+        return -1;
+    }
+    first = (uint32_t)(px[0] & 0x7FFF) * 0x00010001u;
+    for (i = 0; i < n / 2; i++) {
+        if ((w[i] & 0x7FFF7FFFu) != first) {
+            return -1;
+        }
+    }
+    return sToRgb565[px[0] & 0x7FFF];
+}
+
+/* That colour as the GPU samples it from the RGB565 texture (and writes it
+ * to an RGBA8 framebuffer): 0xRRGGBBAA. */
+static u32 rgba_of_565(int c)
+{
+    u32 r = ((u32)c >> 11) & 31u, g = ((u32)c >> 5) & 63u, b = (u32)c & 31u;
+
+    return (((r << 3) | (r >> 2)) << 24) | (((g << 2) | (g >> 4)) << 16) | (((b << 3) | (b >> 2)) << 8) | 0xFFu;
+}
+
+/* The picture behind fills the screen (its colour can be the clear). */
+static int under_fills_screen(const Screen *scr, const LayerSet *set)
+{
+    int canvasW = set->info.width > 0 ? set->info.width : DS_W;
+
+    return set->underColor >= 0 && !set->info.displayOff && (float)canvasW * SCALE >= (float)scr->width - 0.5f;
+}
+
 static void flush_texture(void *data, uint32_t bytes)
 {
     GSPGPU_FlushDataCache(data, bytes);
@@ -700,6 +741,7 @@ void NitroPort_ComposePublish(int engine, int screen)
     set->info.over = NULL;
     set->info.overAlpha = NULL;
     set->overEmpty = 1;
+    set->underColor = l->displayOff ? -1 : uniform_color(l->under, w * DS_H);
     if (!l->displayOff && sConfig.filter != COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
         set->overEmpty = !NitroPort_PublishDoubled(&sShadow[e], &set->pub, l->under, l->over, l->overAlpha,
                                                    l->has3d, w, set->under, set->over, scr->texW, sToRgb565,
@@ -905,7 +947,7 @@ static C3D_Tex sUnderTex, sOverTex;
 
 /* One screen (one eye of it), into its render target. */
 static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx3dScene *scene, float stereo,
-                        int edges)
+                        int edges, int underCleared)
 {
     C3D_RenderTarget *target = scr->target[eye];
     int eyeDir;
@@ -959,11 +1001,13 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         quad_combiner(0);
         quad(0, 0, (float)scr->width, SCREEN_H, 0.0f, 0, 0, 0, 0, rgba_of((uint16_t)info->backdrop, 255));
     }
-    /* 1. The picture behind the 3D. */
-    make_texture(&sUnderTex, set->under, GPU_RGB565, scr->texW, scr->texH, linear, GPU_CLAMP_TO_EDGE);
-    C3D_TexBind(0, &sUnderTex);
-    quad_combiner(1);
-    quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, 0, vTop, u1, vBottom, 0xFFFFFFFFu);
+    /* 1. The picture behind the 3D (all one colour: the clear did it). */
+    if (!underCleared) {
+        make_texture(&sUnderTex, set->under, GPU_RGB565, scr->texW, scr->texH, linear, GPU_CLAMP_TO_EDGE);
+        C3D_TexBind(0, &sUnderTex);
+        quad_combiner(1);
+        quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, 0, vTop, u1, vBottom, 0xFFFFFFFFu);
+    }
     if (has3d) {
         uint16_t rearColor;
         unsigned rearAlpha;
@@ -1162,6 +1206,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                            int forced, int flush)
 {
     int s, drawn = 0, stereoNow, need[2] = { 0, 0 }, timed = 0, edges = 0, lcdBuf[2] = { -1, -1 };
+    int underCleared[2] = { 0, 0 };
     unsigned copies;
     u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
     LayerSet *sets[2] = { NULL, NULL };
@@ -1287,8 +1332,15 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         if (!need[s]) {
             continue;
         }
+        underCleared[s] = under_fills_screen(&sScreens[s], sets[s]);
+        if (underCleared[s]) {
+            sUnderFills++;
+        }
         for (eye = 0; eye < (s == 0 && stereoNow ? 2 : 1); eye++) {
-            C3D_RenderTargetClear(sScreens[s].target[eye], C3D_CLEAR_DEPTH, 0,
+            /* (one fill: the colour buffer too when the picture behind is
+             * all one colour) */
+            C3D_RenderTargetClear(sScreens[s].target[eye], underCleared[s] ? C3D_CLEAR_ALL : C3D_CLEAR_DEPTH,
+                                  underCleared[s] ? rgba_of_565(sets[s]->underColor) : 0,
                                   screen3d && copies ? edgeClear : 0xFFFFFFFFu);
         }
         if (screen3d && edges) {
@@ -1306,16 +1358,16 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         if (s == 0 && stereoNow) {
             float shift = sConfig.stereoStrength * slider * 0.5f;
 
-            draw_screen(scr, 0, sets[s], sc, -shift, edges);
+            draw_screen(scr, 0, sets[s], sc, -shift, edges, underCleared[s]);
             if (sc != NULL && edges) {
                 /* The second eye needs the edge buffers filled again: the
                  * commands so far go ahead, the fills after them. */
                 prof_split("the left eye's end", 1);
                 fill_edge_buffers(scr, edgeClear, copies);
             }
-            draw_screen(scr, 1, sets[s], sc, shift, edges);
+            draw_screen(scr, 1, sets[s], sc, shift, edges, underCleared[s]);
         } else {
-            draw_screen(scr, 0, sets[s], sc, 0.0f, edges);
+            draw_screen(scr, 0, sets[s], sc, 0.0f, edges, underCleared[s]);
         }
         scr->shownSeq = sets[s]->seq;
         if (screen3d) {
@@ -1489,5 +1541,6 @@ void NitroPort_ComposeStats(ComposeStats *stats)
     stats->timed = sTimed;
     stats->dropped = sDropped;
     stats->stereo = sStereoFrames;
+    stats->underFills = sUnderFills;
 }
 #endif

@@ -212,6 +212,7 @@ int NitroPort_ComposeSceneWaiting(uint32_t sceneSerial);
  * drawn in stereo. Counts since the start. */
 typedef struct ComposeStats {
     u32 frames, published, timed, late, dropped, stereo;
+    u32 underFills;          /* screens drawn whose picture behind the 3D was all one colour (the clear) */
     u64 gpuTicks, cpuTicks, publishTicks;
     int lag;
 } ComposeStats;

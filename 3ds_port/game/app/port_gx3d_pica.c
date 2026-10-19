@@ -1653,7 +1653,8 @@ static int pruned_any(size_t b,int whole,int zones,const unsigned scissor[4][4])
 #define EDGE_TILE (GX3D_TRANSFER_FLAGS|GX_TRANSFER_OUT_TILED(1))
 static int sEdgeCopy=1;
 static int sEdgeCopying;               /* (this frame: NitroPort_PicaEdgeCopies) */
-static u32 *sEdgeLinear;               /* (linear heap: EDGE_LINE x (EDGE_LINES_MAX + 2)) */
+static u32 *sEdgeLinear;               /* (EDGE_LINE x (EDGE_LINES_MAX + 2): VRAM, else the linear heap) */
+static int sEdgeLinearInVram;
 static int sEdgeLinearFailed;
 static u32 sEdgePadValue,sEdgePadLines; /* (what its spare lines hold now: 0, nothing yet) */
 
@@ -1668,16 +1669,23 @@ unsigned NitroPort_PicaEdgeCopies(int edges)
     if(!edges||!sEdgeCopy||sEdgeLinearFailed||sShadowReady)return 0;
     if(!sEdgeLinear){
         size_t bytes=(size_t)EDGE_LINE*(EDGE_LINES_MAX+2u)*sizeof(u32);
-        sEdgeLinear=linearAlloc(bytes);
+        /* In VRAM, the copies stay in it (in the linear heap they took 1.4
+         * ms an eye, 2026-10-19). */
+        sEdgeLinear=vramAlloc(bytes);
+        sEdgeLinearInVram=sEdgeLinear!=NULL;
+        if(!sEdgeLinear)sEdgeLinear=linearAlloc(bytes);
         if(!sEdgeLinear){
             sEdgeLinearFailed=1;
-            NitroPort_Log("[gx3d] no linear memory for the outlines' copies: all their passes drawn");
+            NitroPort_Log("[gx3d] no memory for the outlines' copies: all their passes drawn");
             return 0;
         }
-        /* (nothing of it left in the CPU's cache to be written back over
-         * what the transfer engine writes) */
-        memset(sEdgeLinear,0,bytes);
-        GSPGPU_FlushDataCache(sEdgeLinear,(u32)bytes);
+        NitroPort_Log("[gx3d] the outlines' copies go through %s",sEdgeLinearInVram?"VRAM":"the linear heap");
+        if(!sEdgeLinearInVram){
+            /* (nothing of it left in the CPU's cache to be written back
+             * over what the transfer engine writes) */
+            memset(sEdgeLinear,0,bytes);
+            GSPGPU_FlushDataCache(sEdgeLinear,(u32)bytes);
+        }
         sEdgePadValue=sEdgePadLines=0;
     }
     sEdgeCopying=1;
@@ -1686,7 +1694,10 @@ unsigned NitroPort_PicaEdgeCopies(int edges)
 
 static void free_edge_copies(void)
 {
-    if(sEdgeLinear)linearFree(sEdgeLinear);
+    if(sEdgeLinear){
+        if(sEdgeLinearInVram)vramFree(sEdgeLinear);
+        else linearFree(sEdgeLinear);
+    }
     sEdgeLinear=NULL;
     sEdgeCopying=0;
 }
@@ -1700,12 +1711,20 @@ static int copy_edge_buffers(const PicaView *view,u32 clear)
     u32 *mid=sEdgeLinear+EDGE_LINE;
     if(!sEdgeLinear||fb->width!=EDGE_LINE||lines>EDGE_LINES_MAX||!view->edgeFb[0]||!view->edgeFb[1])return 0;
     if(sEdgePadValue!=clear||sEdgePadLines!=lines){
-        for(i=0;i<EDGE_LINE;i++){
-            sEdgeLinear[i]=clear;
-            mid[lines*EDGE_LINE+i]=clear;
+        /* the spare lines: in VRAM by a fill (queued ahead of the copies;
+         * a frame's GPU queue has room for it), else by the CPU */
+        if(sEdgeLinearInVram){
+            u32 *after=mid+lines*EDGE_LINE;
+            GX_MemoryFill(sEdgeLinear,clear,sEdgeLinear+EDGE_LINE,BIT(0)|(2u<<8),
+                          after,clear,after+EDGE_LINE,BIT(0)|(2u<<8));
+        }else{
+            for(i=0;i<EDGE_LINE;i++){
+                sEdgeLinear[i]=clear;
+                mid[lines*EDGE_LINE+i]=clear;
+            }
+            GSPGPU_FlushDataCache(sEdgeLinear,EDGE_LINE*sizeof(u32));
+            GSPGPU_FlushDataCache(mid+lines*EDGE_LINE,EDGE_LINE*sizeof(u32));
         }
-        GSPGPU_FlushDataCache(sEdgeLinear,EDGE_LINE*sizeof(u32));
-        GSPGPU_FlushDataCache(mid+lines*EDGE_LINE,EDGE_LINE*sizeof(u32));
         sEdgePadValue=clear;
         sEdgePadLines=lines;
     }
