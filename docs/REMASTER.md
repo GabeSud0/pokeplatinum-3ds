@@ -42,7 +42,9 @@ What it does:
   too, into strokes half a texel wide that mostly fall between the 3DS's
   pixels, and the grass came out flat.
 - **The look: sun shadows and a colour grade** (`shadows on`, `grade on`;
-  L + R + B turns both on or off while playing). Every opaque object casts
+  L + R + B turns both on or off while playing). **The sun shadows are
+  parked on the 3DS for now** (see "Sun shadows: parked" below): `shadows
+  on` leaves them off there; the PC runner still draws them. Every opaque object casts
   a real shadow from the sun, from its own shape: the scene's opaque
   polygons are drawn once more from the sun into a 512x512 shadow map (the
   PICA's shadow mode: each texel keeps the nearest distance; cut-outs by
@@ -418,8 +420,8 @@ frames waiting isn't drawn again until one has shown.
 | `convergence 400` | the distance (the DS's w) that's at the screen's depth, instead of each scene's middle |
 | `edges off` | no outlines (edge marking) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
-| `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off |
-| `shadowdebug on` | debug only: wait for GPU completion before/after the sun map, after the opaque scene, and after direct shadow receiving; the receiving pass tried in parts over its first frames (30 frames each, F1 to F8, listed in `port_gx3d_pica.c` above `draw_shadow_receivers`; then the whole pass), each part's completion in the log. Slower; the watchdog can identify the outstanding pass and part. Default off |
+| `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off. **Parked on the 3DS** (they hang its GPU; see below): off there until fixed |
+| `shadowdebug on` | debug only (for the sun shadows' hunt, with them on again): wait for GPU completion before/after the sun map, after the opaque scene, and after direct shadow receiving. Slower; the watchdog can identify the outstanding pass. Default off |
 | `grade on` | the colour grade on the 3D's textures, by the time of day |
 | `sun 55,32` | the sun fixed: degrees above the ground, and from the screen's left (0) towards its top (90); `sun clock` (the default) by the time of day |
 | `filter3d xbrz` / `filter3d xbrz-smooth` | the 3D's textures 2x by xBRZ, nearest / bilinear (smooth: no shimmer while the picture moves, but sharp's cost and lines may come back). On trial: the [perf] line's 3D times say what it costs |
@@ -483,37 +485,26 @@ sends). That's the next step for the display; it costs a frame of delay
   frame. Not seen on a real New 3DS, nor in the PC build. If it shows on a
   3DS, `edges off` in remaster.txt says whether it's the edge marking.
 
-### Testing sun shadows on a New 3DS
+### Sun shadows: parked
 
-Build PR #116's current branch locally with your own data pack. For a
-repeatable daytime view, start in an outdoor area with:
+Since PR #114 the sun shadows hang a 3DS's GPU on their first frame (the
+screens freeze or go black, the sound goes on, and the HOME menu can't
+draw either: only holding POWER gets out). PRs #116 to #119 narrowed it
+down with `shadowdebug on`: the shadow map pass and the opaque scene come
+back; the receiving pass doesn't, with the receivers' vertex program in
+any form, over the scene or into a mask of its own, and even exactly as
+the #113 build drew it (which worked on a 3DS then). So the cause is
+something PR #114 or #115 changed elsewhere, not the pass itself.
 
-```text
-shadows on
-grade off
-sun 55,32
-shadowdebug off
-```
+Until it's found, `shadows on` leaves the sun shadows off on the 3DS (a
+`[remaster] sun shadows are parked` line in the log) and the field's round
+shadows stay; the colour grade works as set. The code stays:
+`SUN_SHADOWS_PARKED 0` in `port_gx3d_pica.c` turns them back on.
 
-Check with the slider fully down first, then up; walk past buildings,
-characters and trees, and toggle the look with L + R + B repeatedly.
-Depth/edge marking and translucent objects must still draw normally.
-Then try `grade on`. These are hardware checks, not results inferred from
-Azahar or the PC simulation.
+The way back: a build of the #113 commit (3e8c953) on the 3DS first, to
+see that it still draws them today; then #114's and #115's changes again
+one at a time, each in a normal build that can be played.
 
-If it freezes, restart with `shadowdebug on` and reproduce it. This setting
-submits and waits between passes; the two-second watchdog's stage names
-distinguish the map, opaque scene and receiving pass, and which part of
-the receiving pass (F1 to F8; `[gx3d] sun shadow receivers test F1: the
-GPU came back from 30 frames of it` for each part that passed). On a 3DS,
-the pass's state with the scene's own program came back; the receivers'
-program hung the GPU with a plain texture, and so did the program from
-before PR #114 (which drew the shadows on a 3DS into a half-size mask of
-its own). The parts now go from that mask, as it was, to the whole pass,
-and tell the texcoord0w output from the program switch. Without it
-the GPU runs behind the CPU, so the last submitted draw does not locate a
-GPU hang.
-The checkpoint flushes all linear data, including any compositor vertices
-already queued before the shadow pass. Turn it off again when measuring
-performance. Keep the resulting log and note slider position and whether
-the freeze happened on startup or after toggling.
+`shadowdebug on` (with the shadows on again) still waits for the GPU
+between the shadow passes, so the two-second watchdog names the pass the
+GPU didn't come back from; it's slower, and only for that hunt.

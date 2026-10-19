@@ -216,15 +216,6 @@ static float sViewStereo,sViewConvergence=1.0f;
 #define SHADOW_SIZE 512u
 static shaderProgram_s sCastProgram,sRecvProgram;
 static int sCastReady,sRecvReady;
-/* Test programs for the receivers (shadowdebug on; DVLE 3 to 5: the
- * receivers' program before the cards, one without the distance writing
- * texture coordinate 0's x and y only, before the colour, and one without
- * the distance writing its outputs whole and in order, as the scene's
- * program does), with the same uniforms (mtx c0-3, stereo c4, smtx c5-8). */
-#define TEST_PROGRAMS 3
-static shaderProgram_s sTestProgram[TEST_PROGRAMS];
-static int sTestReady[TEST_PROGRAMS];
-static int sShadowDebug;                     /* (NitroPort_PicaShadowDebug) */
 static s8 sUnifCast=-1,sUnifRecvMtx=-1,sUnifRecvStereo=-1,sUnifRecvShadow=-1;
 static C3D_Tex sShadowTex;
 static C3D_RenderTarget *sShadowTarget;
@@ -242,7 +233,6 @@ static uint32_t *sGradeTable;
 static int look_now(void);
 static int make_shadow_spare(void);
 static void free_shadow_spare(void);
-static void free_recv_target(void);
 static NitroShadowSetup sShadow;
 static int sShadowReady,sShadowDrawn;        /* (the prepared scene has a ground; its map is drawn) */
 static C3D_Tex *sRecvTex;                    /* (unit 1's texture, as bound) */
@@ -358,10 +348,6 @@ static void clean_up(void)
     }
     if(sCastReady){shaderProgramFree(&sCastProgram);sCastReady=0;}
     if(sRecvReady){shaderProgramFree(&sRecvProgram);sRecvReady=0;}
-    for(i=0;i<TEST_PROGRAMS;i++){
-        if(sTestReady[i]){shaderProgramFree(&sTestProgram[i]);sTestReady[i]=0;}
-    }
-    free_recv_target();
     if(sShadowTarget){C3D_RenderTargetDelete(sShadowTarget);sShadowTarget=NULL;}
     if(sShadowTexReady){C3D_TexDelete(&sShadowTex);sShadowTexReady=0;}
     free_shadow_spare();
@@ -449,26 +435,6 @@ static int shadow_programs(void)
         NitroPort_Log("[remaster] the sun shadows' shaders lack their uniforms (%d %d %d %d)",
                       sUnifCast,sUnifRecvMtx,sUnifRecvStereo,sUnifRecvShadow);
         return 0;
-    }
-    /* (the test programs: optional; their uniforms are at the same
-     * registers, by their declarations in the same order) */
-    if(sShadowDebug){
-        int i;
-        for(i=0;i<TEST_PROGRAMS;i++){
-            if(sTestReady[i] || sDvlb->numDVLE<(unsigned)(4+i))continue;
-            shaderProgramInit(&sTestProgram[i]);
-            rc=shaderProgramSetVsh(&sTestProgram[i],(DVLE_s *)NitroPort_PicaDvle(sDvlb,(unsigned)(3+i)));
-            if(R_FAILED(rc) ||
-               shaderInstanceGetUniformLocation(sTestProgram[i].vertexShader,"mtx")!=sUnifRecvMtx ||
-               shaderInstanceGetUniformLocation(sTestProgram[i].vertexShader,"stereo")!=sUnifRecvStereo ||
-               shaderInstanceGetUniformLocation(sTestProgram[i].vertexShader,"smtx")!=sUnifRecvShadow){
-                shaderProgramFree(&sTestProgram[i]);
-                memset(&sTestProgram[i],0,sizeof(sTestProgram[i]));
-                NitroPort_Log("[remaster] the receivers' test program %d didn't set up (%ld)",i,(long)rc);
-                continue;
-            }
-            sTestReady[i]=1;
-        }
     }
     return 1;
 }
@@ -1569,6 +1535,19 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
 }
 
 /* ------------------------------------------------------------ sun shadows */
+/* Parked: since PR #114 the sun shadows hang a 3DS's GPU (the whole
+ * console: the HOME menu can't draw either) on their first frame, in the
+ * receiving pass. PRs #116 to #119 narrowed it down: even the receiving
+ * pass exactly as the #113 build drew it (which worked on a 3DS then)
+ * hangs in today's build, so the cause is something PR #114 or #115
+ * changed elsewhere, not the pass itself. Until it's found, `shadows on`
+ * leaves them off (the colour grade still works); the code stays, and
+ * SUN_SHADOWS_PARKED 0 turns them back on for that hunt. The PC runner's
+ * simulation (port_gx3d_gpusim.c) still draws them. */
+#ifndef SUN_SHADOWS_PARKED
+#define SUN_SHADOWS_PARKED 1
+#endif
+
 /* (the 3D thread, between frames) The look: sun shadows, the colour
  * grade, the sun by the clock or fixed. The shadow map (512x512, in VRAM)
  * is made the first time the shadows are on. */
@@ -1582,6 +1561,14 @@ void NitroPort_PicaLook(int shadows,int grade,int fixedSun,float elevation,float
     sShadowMode=0;
     sShadowReady=0;
     NitroPort_SetSunShadows(0);
+    if(SUN_SHADOWS_PARKED && shadows){
+        static int told;
+        if(!told){
+            told=1;
+            NitroPort_Log("[remaster] sun shadows are parked in this build (they hang the 3DS's GPU): off; the colour grade as set");
+        }
+        return;
+    }
     if(!shadows || !shadow_programs())return;
     if(!sShadowTexReady){
         if(!C3D_TexInitShadow(&sShadowTex,SHADOW_SIZE,SHADOW_SIZE)){
@@ -1686,6 +1673,7 @@ static void draw_shadow_map(void)
  * while this unit remains enabled, including the compositor's program. */
 static C3D_Tex sSpareTex;
 static int sSpareReady;
+static int sShadowDebug;
 
 void NitroPort_PicaShadowDebug(int enabled)
 {
@@ -1730,12 +1718,10 @@ static void free_shadow_spare(void)
 /* Unit 0 is the sun's depth lookup, unit 1 the polygon's cut-out.
  * RGB = white * light + shade * (1 - light). Constant alpha is zero,
  * so ONE_MINUS_SRC_ALPHA supplies white without another TEV stage.
- * Alpha retains the cut-out test; destination alpha is never changed.
- * (multiply 0: RGB the lookup alone, as the mask before PR #114 had it;
- * a shadowdebug test) */
-static void bind_batch_shadow(const NitroGx3dBatch *batch,int cutouts,int multiply)
+ * Alpha retains the cut-out test; destination alpha is never changed. */
+static void bind_batch_shadow(const NitroGx3dBatch *batch)
 {
-    int textured=cutouts && batch->texture_param!=0;
+    int textured=batch->texture_param!=0;
     unsigned mode=(batch->polygon_attr>>4)&3u;
     C3D_Tex *tex=NULL;
     C3D_TexEnv *env;
@@ -1751,16 +1737,11 @@ static void bind_batch_shadow(const NitroGx3dBatch *batch,int cutouts,int multip
     }
     env=C3D_GetTexEnv(0);
     C3D_TexEnvInit(env);
-    if(multiply){
-        C3D_TexEnvColor(env,sShadowColor);
-        C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,GPU_CONSTANT,GPU_TEXTURE0);
-        C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_ALPHA,
-                        GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
-        C3D_TexEnvFunc(env,C3D_RGB,GPU_INTERPOLATE);
-    }else{
-        C3D_TexEnvSrc(env,C3D_RGB,GPU_TEXTURE0,0,0);
-        C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
-    }
+    C3D_TexEnvColor(env,sShadowColor);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,GPU_CONSTANT,GPU_TEXTURE0);
+    C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_ALPHA,
+                    GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_INTERPOLATE);
     if(textured && mode!=1){
         C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE1,GPU_PRIMARY_COLOR,0);
         C3D_TexEnvFunc(env,C3D_Alpha,GPU_MODULATE);
@@ -1778,104 +1759,16 @@ static void bind_batch_shadow(const NitroGx3dBatch *batch,int cutouts,int multip
  * One receiver per visible pixel: the opaque pass left stencil 0xFF.
  * Mark shaded pixels 0xFE, so coplanar overlapping batches cannot multiply
  * the shade twice. The later translucent pass still has its own IDs. */
-/* With shadowdebug on, the pass is tried in parts over its first frames
- * (RECV_TEST_FRAMES frames each), the watchdog naming the part if the GPU
- * doesn't come back, the log each part it does come back from.
- *
- * What the 3DS said so far: the pass's state with the scene's own program
- * came back (round one, test A); the receivers' program with a plain
- * texture hung the GPU (B), and so did the receivers' program from before
- * PR #114 with the map (round two, E1), though that program drew the
- * shadows on a 3DS then, into a mask of its own (half the screen's size,
- * a depth buffer without stencil, the lookup replacing the colour). So:
- *  F1 that, as it was: the program from before PR #114 into such a mask;
- *  F2 the receivers' program into it (what PR #114 changed);
- *  F3 a program without the distance from the sun writing its outputs
- *     whole and in order, over the scene (the whole pass's state, a plain
- *     texture): the receivers' program less texcoord0w;
- *  F4 the same without the distance, but writing texture coordinate 0's
- *     x and y only, before the colour (as the receivers' program does);
- *  F5 the receivers' program over the scene in the mask's state (no
- *     stencil, depth written, the lookup replacing the colour; the screen
- *     flashes black and white while it runs);
- *  F6 + the stencil test, F7 + depth EQUAL, the colour only, F8 + the
- *     multiply: the whole pass but the cut-outs; then the whole pass. */
-#define RECV_TEST_FRAMES 30u
-#define RECV_TESTS 8
-static unsigned sRecvFrames;
-typedef struct RecvTest {
-    const char *stage,*wait,*name;
-    int program;      /* 0 the receivers', 1 from before PR #114, 2 no distance (x and y, before the colour), 3 no distance (whole, in order) */
-    int offscreen;    /* into a mask of its own (half size; a depth buffer, no stencil) */
-    int state;        /* 0 the mask's (no stencil, depth written), 1 + the stencil, 2 + depth EQUAL, colour only, 3 + the multiply */
-    int map;          /* unit 0: 0 the plain spare texture, 1 the map bilinear, 2 the map nearest */
-    int cutouts;      /* the polygons' textures on unit 1 */
-} RecvTest;
-#define RECV_TEST(n,what,...) {"the direct sun shadow receivers (test " n ": " what ")", \
-                               "waiting for the direct sun shadow receivers (test " n ": " what ")",n,__VA_ARGS__}
-static const RecvTest sRecvTests[RECV_TESTS+1]={
-    RECV_TEST("F1","the program from before PR #114, into a mask of its own",1,1,0,1,0),
-    RECV_TEST("F2","the receivers' program, into a mask of its own",0,1,0,1,0),
-    RECV_TEST("F3","no distance, outputs whole and in order, over the scene, a plain texture",3,0,3,0,0),
-    RECV_TEST("F4","no distance, texture coordinate x and y before the colour, over the scene, a plain texture",2,0,3,0,0),
-    RECV_TEST("F5","the receivers' program over the scene, the mask's state",0,0,0,1,0),
-    RECV_TEST("F6","the receivers' program over the scene, + the stencil test",0,0,1,1,0),
-    RECV_TEST("F7","the receivers' program over the scene, + depth EQUAL",0,0,2,1,0),
-    RECV_TEST("F8","the receivers' program over the scene, + the multiply",0,0,3,2,0),
-    {"the direct sun shadow receivers","waiting for the direct sun shadow receivers","",0,0,3,2,1},
-};
-
-/* The mask of its own (tests F1, F2): 128 x 256, of which the half-size
- * view's 120 x 200 (or 120 x 160), RGBA8 and a 24-bit depth buffer, made
- * the first time. */
-#define RECV_MASK_W 128
-#define RECV_MASK_H 256
-static C3D_RenderTarget *sRecvTarget;
-static int sRecvTargetFailed;
-static void free_recv_target(void)
-{
-    if(sRecvTarget){C3D_RenderTargetDelete(sRecvTarget);sRecvTarget=NULL;}
-    sRecvTargetFailed=0;
-}
-
 static void draw_shadow_receivers(const PicaView *view)
 {
     size_t b;
-    int q,test=RECV_TESTS,offscreen;
-    const RecvTest *t;
-    shaderProgram_s *program;
-    if(sShadowDebug){
-        test=(int)(sRecvFrames/RECV_TEST_FRAMES);
-        if(test>RECV_TESTS)test=RECV_TESTS;
-        sRecvFrames++;
-    }
-    t=&sRecvTests[test];
-    program=&sRecvProgram;
-    if(t->program && sTestReady[t->program-1])program=&sTestProgram[t->program-1];
-    offscreen=t->offscreen;
-    if(offscreen && !sRecvTarget && !sRecvTargetFailed){
-        sRecvTarget=C3D_RenderTargetCreate(RECV_MASK_W,RECV_MASK_H,GPU_RB_RGBA8,GPU_RB_DEPTH24);
-        if(!sRecvTarget){
-            sRecvTargetFailed=1;
-            NitroPort_Log("[gx3d] no VRAM for the receivers' test mask: tests F1 and F2 over the scene instead");
-        }
-    }
-    if(!sRecvTarget)offscreen=0;
-    stage(t->stage);
-    if(offscreen){
-        unsigned w=view->fb->width/2u,h=view->fb->height/2u;
-        if(w>RECV_MASK_W)w=RECV_MASK_W;
-        if(h>RECV_MASK_H)h=RECV_MASK_H;
-        C3D_FrameBufClear(&sRecvTarget->frameBuf,C3D_CLEAR_ALL,0xFFFFFFFFu,0xFFFFFFFFu);
-        C3D_SetFrameBuf(&sRecvTarget->frameBuf);
-        C3D_SetViewport(0,0,w,h);
-    }else{
-        C3D_SetFrameBuf(view->fb);
-        C3D_SetViewport(0,0,view->fb->width,view->fb->height);
-    }
+    int q;
+    stage("the direct sun shadow receivers");
+    C3D_SetFrameBuf(view->fb);
+    C3D_SetViewport(0,0,view->fb->width,view->fb->height);
     C3D_BindProgram(&sProgram);
     begin_pass(view,&view->rect);
-    C3D_BindProgram(program);
+    C3D_BindProgram(&sRecvProgram);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,sUnifRecvMtx,&sViewMtx);
     C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvStereo,sViewStereo,sViewConvergence,0.0f,0.0f);
     for(q=0;q<4;q++){
@@ -1885,56 +1778,35 @@ static void draw_shadow_receivers(const PicaView *view)
     NitroPort_PicaBindVertices(sVertices[sPrepared]);
     /* This is a different target from the map; binding flushes citro3d's
      * texture cache after the map's framebuffer writes. */
-    C3D_TexSetFilter(&sShadowTex,t->map==1?GPU_LINEAR:GPU_NEAREST,t->map==1?GPU_LINEAR:GPU_NEAREST);
-    C3D_TexBind(0,t->map?&sShadowTex:&sSpareTex);
+    C3D_TexBind(0,&sShadowTex);
     C3D_TexBind(1,&sSpareTex);
-    if(t->map)C3D_TexShadowParams(false,sShadow.bias*NITRO_SHADOW_BIAS_SCALE);
+    C3D_TexShadowParams(false,sShadow.bias*NITRO_SHADOW_BIAS_SCALE);
     sBoundTexKnown=0;
     sRecvTexKnown=0;
     fog_begin();
     C3D_CullFace(GPU_CULL_NONE);
     C3D_DepthMap(!(sPreparedSwap&2u),-1.0f,0.0f);
-    if(t->state>=2)C3D_DepthTest(true,GPU_EQUAL,GPU_WRITE_COLOR);
-    if(t->state>=1){
-        /* Compare only bit 0: reference 0xFE compares as 0, whereas the
-         * opaque pass's 0xFF compares as 1. REPLACE writes 0xFE after
-         * shading. */
-        C3D_StencilTest(true,GPU_NOTEQUAL,0xFE,0x01,0xFF);
-        C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
-    }else{
-        C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
-    }
-    if(t->state>=3)C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_DST_COLOR,GPU_ZERO,GPU_ZERO,GPU_ONE);
-    else C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+    C3D_DepthTest(true,GPU_EQUAL,GPU_WRITE_COLOR);
+    /* Compare only bit 0: reference 0xFE compares as 0, whereas the
+     * opaque pass's 0xFF compares as 1. REPLACE writes 0xFE after shading. */
+    C3D_StencilTest(true,GPU_NOTEQUAL,0xFE,0x01,0xFF);
+    C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
+    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_DST_COLOR,GPU_ZERO,GPU_ZERO,GPU_ONE);
     for(b=0;b<sPreparedBatches;b++){
         const NitroGx3dBatch *batch=&sBatches[b];
         if(batch->translucent)continue;
         if(!room_for_draw())break;
-        bind_batch_shadow(batch,t->cutouts,t->state>=3);
+        bind_batch_shadow(batch);
         C3D_AlphaTest(true,GPU_GREATER,sBoundCut);
-        if(t->state<2){
-            /* (into the mask as before PR #114; over the scene, LEQUAL:
-             * the same depths as the opaque pass's) */
-            C3D_DepthTest(true,!offscreen||(batch->polygon_attr&(1u<<14))?GPU_LEQUAL:GPU_LESS,GPU_WRITE_ALL);
-        }
         draw_arrays((int)batch->first,(int)batch->count);
     }
     C3D_TexBind(1,&sSpareTex);
     sRecvTexKnown=0;
     C3D_TexBind(0,NULL);
     sBoundTexKnown=0;
-    C3D_TexSetFilter(&sShadowTex,GPU_NEAREST,GPU_NEAREST);
-    shadow_checkpoint(t->wait);
-    if(sShadowDebug && sRecvFrames%RECV_TEST_FRAMES==0 && test<RECV_TESTS){
-        NitroPort_Log("[gx3d] sun shadow receivers test %s: the GPU came back from %u frames of it%s%s",
-                      t->name,RECV_TEST_FRAMES,
-                      t->program && !sTestReady[t->program-1]?" (its test program missing: the receivers' instead)":"",
-                      t->offscreen && !offscreen?" (over the scene: no mask)":"");
-    }
+    shadow_checkpoint("waiting for the direct sun shadow receivers");
     /* The opaque texels, edge marking and translucent passes use the
-     * scene's own program and target, and may write stencil again. */
-    C3D_SetFrameBuf(view->fb);
-    C3D_SetViewport(0,0,view->fb->width,view->fb->height);
+     * scene's own program and may write stencil again. */
     C3D_BindProgram(&sProgram);
     begin_pass(view,&view->rect);
     C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
