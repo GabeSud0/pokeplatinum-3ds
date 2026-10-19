@@ -23,8 +23,9 @@ void NitroPort_PicaTextureStats(u32 *converted, u64 *texels, u64 *ticks);
 /* The GPU command list's peak use (0-1) and the draws left out for want of
  * room in it, since last asked; NoteCmdUse after each C3D_FrameEnd. */
 void NitroPort_PicaCmdStats(float *peak, unsigned *cut);
-/* Edge marking: each outline pass draws only the triangles it needs (on,
- * the default), or every one (off: `edges all`, for comparing). */
+/* Edge marking: each outline pass draws only the triangles it needs (on:
+ * `edges pruned`), or every one (off, the default: on a 3DS working them out
+ * cost the CPU more than it saved the GPU). */
 void NitroPort_PicaEdgePruning(int on);
 /* Since last asked: the time working out those triangles (ms, each time),
  * how many times (and failed: every triangle drawn then), and the share of
@@ -142,8 +143,8 @@ typedef struct ComposeConfig {
     int stereo;              /* the 3D slider gives depth */
     float stereoStrength;    /* the shift at full slider, in screen widths */
     float convergence;       /* 0: worked out from each scene */
-    int edges;               /* edge marking (the game's outlines) on the GPU: 1, or 2 with every polygon
-                              * in its passes (NitroPort_PicaEdgePruning off) */
+    int edges;               /* edge marking (the game's outlines) on the GPU: 1, or 2 with each pass
+                              * only the polygons it needs (NitroPort_PicaEdgePruning) */
     int flipV;               /* (if the 2D comes out upside down) */
     int filter3d;            /* the 3D's textures: 0 nearest (the DS's), 1 bilinear, 2 sharp (2x2, bilinear),
                               * 3 xbrz (2x by xBRZ, nearest), 4 xbrz smooth (bilinear) */

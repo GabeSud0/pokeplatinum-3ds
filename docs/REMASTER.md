@@ -165,8 +165,10 @@ shaking, the lower screen, and compares every pixel; so did scenes from
 Jubilife and Route 202 run the same way on a PC. There the outlines'
 passes draw about 90% (moved) and 67% (outlines) of what they did in
 Jubilife, and 54% and 14% on Route 202. It costs the CPU about 0.1-0.2 ms
-a scene on a PC; `[perf] outlines:` says what share was drawn and what it
-cost on the 3DS. `edges all` draws them all, the way before.
+a scene on a PC, but on a New 3DS 5-10 ms (`[perf] outlines:`, 2026-10-19),
+and in play the moved passes still drew 85-100% of the polygons (D 20-90%):
+the GPU saved 1-2 ms a frame, the CPU lost more. So it's off (`edges
+pruned` turns it on).
 
 The 3D's textures are RGBA5551 where that's exact (every DS format but
 A3I5 and A5I3, sampled nearest, as `filter3d 0` has it: the DS's colours
@@ -451,7 +453,7 @@ frames waiting isn't drawn again until one has shown.
 | `stereo off` / `stereo 0.03` | no depth from the slider / its strength at full slider, in screen widths (default 0.02) |
 | `convergence 400` | the distance (the DS's w) that's at the screen's depth, instead of each scene's middle |
 | `edges off` | no outlines (edge marking) |
-| `edges all` | outlines drawn with every polygon in each of their passes (the way before the triangles each pass needs were worked out; for comparing: the same picture, slower) |
+| `edges pruned` | each outline pass draws only the polygons it needs (worked out on the CPU each scene; the same picture). Slower on a 3DS (see below): off by default |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
 | `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off. **Parked on the 3DS** (they hang its GPU; see below): off there until fixed |
 | `shadowdebug on` | debug only (for the sun shadows' hunt, with them on again): wait for GPU completion before/after the sun map, after the opaque scene, and after direct shadow receiving. Slower; the watchdog can identify the outstanding pass. Default off |

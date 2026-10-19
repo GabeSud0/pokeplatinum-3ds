@@ -1458,9 +1458,12 @@ static void set_edge_combiner(int textured,uint16_t color555)
  * outline pass needs, as index lists the GPU reads (linear memory: one
  * buffer a prepared scene's vertex buffer, as they alternate). The same
  * pixels come out as with every triangle in every pass (tests/test_gx3d.c
- * checks that). `edges all` in remaster.txt draws them all, for comparing. */
+ * checks that). Off by default (`edges pruned` in remaster.txt): on a New
+ * 3DS it took the CPU 5-10 ms a scene (0.1-0.2 ms on a PC) and the moved
+ * passes still drew 85-100% of the polygons, so it saved the GPU only 1-2
+ * ms (log of 2026-10-19). */
 #define PRUNE_INDICES (4u*NITRO_GX3D_PICA_MAX_VERTICES)
-static int sPruning=1;
+static int sPruning=0;   /* (`edges pruned`: see NitroPort_PicaEdgePruning) */
 static uint16_t *sPruneIdx[2];
 static int sPruneNoMemory;
 static NitroGx3dPruneList *sPruneLists;
