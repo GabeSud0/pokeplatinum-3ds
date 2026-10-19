@@ -103,6 +103,10 @@ __attribute__((weak,noinline)) void NitroPort_Gx3dScenePublished(void)
 static NitroGx3dScene sScenes[3];
 static NitroGx3dMailbox sMailbox;
 static unsigned sBuilding, sDisplayed;
+/* Where a finished polygon's triangles go: the scene being built, or
+ * (making an in-between scene: replay_polygon) that scene. */
+static NitroGx3dScene *sDest;
+static inline NitroGx3dScene *dest_scene(void){return sDest?sDest:&sScenes[sBuilding];}
 static uint32_t sSerial;
 static uint32_t sSwapsDone;   /* (the geometry thread's; see below) */
 
@@ -654,7 +658,7 @@ static int shadow_reach(const GeoVertex *v)
  * be drawn, lit, by a later triangle). */
 static void keep_for_shadow(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
 {
-    NitroGx3dScene *scene=&sScenes[sBuilding];
+    NitroGx3dScene *scene=dest_scene();
     NitroGx3dTriangle *tri;
     if(!sShadowCapture || !((s.attr>>6)&3u) || ((s.attr>>4)&3u)==3u)return;
     if(((s.attr>>16)&31u)!=31u)return;
@@ -775,7 +779,7 @@ static int polygon_hidden(unsigned any,unsigned all)
  * outline instead. */
 static void end_polygon(unsigned newVertices)
 {
-    NitroGx3dScene *scene=&sScenes[sBuilding];
+    NitroGx3dScene *scene=dest_scene();
     unsigned i, vertices;
     if(!sStagedCount)return;
     vertices=sStagedClipped?sStagedVertices:newVertices;
@@ -813,6 +817,291 @@ static void end_polygon(unsigned newVertices)
     }
 }
 
+/* ------------------------------------------------ in-between scenes
+ * 60 frames a second in the field: the game draws a scene every other
+ * V-blank. With the in-between scenes on (NitroPort_Gx3dSetInterpolation),
+ * each polygon that isn't wholly outside the view is kept as the game
+ * drew it (its vertices in clip space, before clipping and culling: a
+ * PolyRecord), and at each SWAP_BUFFERS the new scene's polygons are
+ * matched with the scene before's, in order (the game draws the same
+ * things in the same order from one scene to the next; a polygon's
+ * signature is its kind, not its texture's address or its colour, which
+ * animate), and a scene is made of each polygon halfway between its two
+ * places, clipped and culled as any other (replay_polygon). A polygon
+ * with no match, or one that moved more than a quarter of the screen,
+ * is where the new scene has it. Too few matches (a cut, a new map): no
+ * in-between scene. */
+typedef struct PolyRecord {
+    int32_t clip[4][4];      /* the vertices, in the order stage_triangle takes them */
+    int32_t st[4][2];
+    float px[4], py[4];      /* where they are on the screen, in DS pixels (onScreen) */
+    uint16_t color[4];       /* lit */
+    uint32_t attr, texparam, plttbase, sig;
+    uint8_t count;           /* 3, or 4: triangles (0, 1, 2) and (0, 2, 3) */
+    uint8_t onScreen;        /* all its vertices in front of the camera (w > 0) */
+} PolyRecord;
+#define MAX_RECORDS 4096u
+#define MATCH_LOOKAHEAD 48u
+/* Pairing a polygon (match_records): among the scene before's polygons of
+ * its kind, MATCH_WINDOW either side of where the order says, the one
+ * nearest to where it is now less the scene's motion, if nearer than
+ * MATCH_NEAR DS pixels (a vertex, on average). */
+#define MATCH_WINDOW 64
+#define MATCH_NEAR 16.0f
+static int sInterpWanted, sInterp;
+static PolyRecord *sRec[2];              /* [sRecBuild]: this scene's; the other: the scene before's */
+static unsigned sRecCount[2], sRecBuild;
+static int sRecBeforeValid;
+static int sReplaying;
+static NitroGx3dScene *sMid;
+static int32_t *sMatch;                  /* for each of this scene's polygons, the one before's, or -1 */
+static int sMidValid;
+static unsigned sMidMatched, sMidPolygons;
+
+static uint32_t record_signature(unsigned n)
+{
+    /* Its kind: the attributes but its alpha (fades), the texture's
+     * format, size and repeat/flip but not its address (an animation's
+     * frames), and its vertex count. */
+    uint32_t h=(s.attr&~(31u<<16))*2654435761u;
+    h^=(s.texparam&0xFFFF0000u)+0x9E3779B9u+(h<<6)+(h>>2);
+    h^=n*0x85EBCA6Bu;
+    return h;
+}
+static void record_polygon(GeoVertex *a,GeoVertex *b,GeoVertex *c,GeoVertex *d)
+{
+    GeoVertex *v[4];
+    PolyRecord *r;
+    unsigned k,n=d?4u:3u;
+    if(!sInterp || sReplaying || !sRec[sRecBuild] || sRecCount[sRecBuild]>=MAX_RECORDS)return;
+    v[0]=a;v[1]=b;v[2]=c;v[3]=d;
+    r=&sRec[sRecBuild][sRecCount[sRecBuild]++];
+    for(k=0;k<n;k++){
+        memcpy(r->clip[k],v[k]->clip,sizeof(r->clip[k]));
+        r->st[k][0]=v[k]->s;r->st[k][1]=v[k]->t;
+        r->color[k]=v[k]->lit?v[k]->color:shade(v[k]->normal);
+    }
+    r->count=(uint8_t)n;
+    r->attr=s.attr;r->texparam=s.texparam;r->plttbase=s.plttbase;
+    r->sig=record_signature(n);
+    r->onScreen=1;
+    for(k=0;k<n;k++){
+        if(r->clip[k][3]<=0){r->onScreen=0;break;}
+        r->px[k]=(float)r->clip[k][0]/(float)r->clip[k][3]*128.0f;
+        r->py[k]=(float)r->clip[k][1]/(float)r->clip[k][3]*96.0f;
+    }
+}
+/* A polygon as the game would have drawn it with these vertices (clip),
+ * into dest_scene(): clipped, culled, its triangles staged and stored. */
+static void replay_polygon(const PolyRecord *r,int32_t clip[4][4])
+{
+    GeoVertex v[4];
+    unsigned k,any=0,all=0x3Fu;
+    uint32_t attr=s.attr,texparam=s.texparam,plttbase=s.plttbase;
+    s.attr=r->attr;s.texparam=r->texparam;s.plttbase=r->plttbase;
+    for(k=0;k<r->count;k++){
+        memset(&v[k],0,sizeof(v[k]));
+        memcpy(v[k].clip,clip[k],sizeof(v[k].clip));
+        v[k].s=r->st[k][0];v[k].t=r->st[k][1];
+        v[k].color=r->color[k];v[k].lit=1;
+        v[k].outside=(uint8_t)outcode(v[k].clip);
+        any|=v[k].outside;all&=v[k].outside;
+    }
+    begin_polygon();
+    if(!polygon_hidden(any,all)){
+        sPolygonFront=polygon_front(&v[0],&v[1],&v[2]);
+        stage_triangle(&v[0],&v[1],&v[2]);
+        if(r->count==4)stage_triangle(&v[0],&v[2],&v[3]);
+        end_polygon(1);   /* (the DS's vertex RAM: as the scene's own, roughly) */
+    }
+    s.attr=attr;s.texparam=texparam;s.plttbase=plttbase;
+}
+/* Where a vertex is on the screen, -1..1 (w > 0). */
+static int ndc_of(const int32_t clip[4],double *x,double *y)
+{
+    if(clip[3]<=0)return 0;
+    *x=(double)clip[0]/clip[3];*y=(double)clip[1]/clip[3];
+    return 1;
+}
+/* Pair this scene's polygons (C, n) with the scene before's (P, m).
+ * First in order (the game draws the same things in the same order),
+ * skipping what's in one but not the other (the nearest place the two
+ * agree again, MATCH_LOOKAHEAD ahead at most): the scene's motion is the
+ * middle of those pairs' moves (most of a scene moves with the camera).
+ * Then each polygon again, with the polygon of its kind nearest to where
+ * it is less that motion, MATCH_WINDOW either side of where the order
+ * says: a map's many tiles of one kind are told apart by where they are,
+ * not by their order (which shifts as tiles come into the view and leave
+ * it). out[j]: P's index, or -1. The number paired. */
+static float median_of(float *v,unsigned n)
+{
+    /* (partial selection sort to the middle: n is small) */
+    unsigned i,j,mid=n/2u;
+    for(i=0;i<=mid;i++){
+        unsigned best=i;
+        for(j=i+1;j<n;j++)if(v[j]<v[best])best=j;
+        {float t=v[i];v[i]=v[best];v[best]=t;}
+    }
+    return v[mid];
+}
+static float poly_distance(const PolyRecord *p,const PolyRecord *c,float dx,float dy)
+{
+    float d=0.0f;
+    unsigned k;
+    for(k=0;k<c->count;k++)d+=fabsf(c->px[k]-(p->px[k]+dx))+fabsf(c->py[k]-(p->py[k]+dy));
+    return d/(float)c->count;
+}
+static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C,unsigned n,int32_t *out)
+{
+    unsigned i=0,j=0,matched=0,moves=0;
+    float dx=0.0f,dy=0.0f,near;
+    static float mx[256],my[256];
+    int offset=0;
+    /* in order */
+    while(j<n){
+        unsigned k,skipP=0,skipC=0;
+        if(i<m && P[i].sig==C[j].sig){out[j++]=(int32_t)i++;continue;}
+        for(k=1;k<=MATCH_LOOKAHEAD;k++){
+            if(i+k<m && P[i+k].sig==C[j].sig){skipP=k;break;}
+            if(j+k<n && i<m && C[j+k].sig==P[i].sig){skipC=k;break;}
+        }
+        if(skipP){i+=skipP;continue;}
+        if(skipC){
+            while(skipC--)out[j++]=-1;
+            continue;
+        }
+        out[j++]=-1;
+        if(i<m)i++;
+    }
+    /* the scene's motion: the middle of the pairs' moves (some of them) */
+    for(j=0;j<n && moves<256u;j+=1u+n/256u){
+        if(out[j]<0 || !P[out[j]].onScreen || !C[j].onScreen)continue;
+        mx[moves]=C[j].px[0]-P[out[j]].px[0];
+        my[moves]=C[j].py[0]-P[out[j]].py[0];
+        moves++;
+    }
+    if(moves>=8u){dx=median_of(mx,moves);dy=median_of(my,moves);}
+    /* (a figure that moves on its own, the player against the camera's
+     * motion: as far again as the scene moves) */
+    near=MATCH_NEAR+1.5f*(fabsf(dx)+fabsf(dy));
+    /* each again, by where it is */
+    for(j=0;j<n;j++){
+        int center=out[j]>=0?out[j]:(int)j+offset,lo,hi,q,best=-1;
+        float bestD=near;
+        if(!C[j].onScreen){
+            /* (behind the camera in part: in order, or not at all) */
+            if(out[j]>=0 && P[out[j]].onScreen)out[j]=-1;
+            if(out[j]>=0)matched++;
+            continue;
+        }
+        lo=center-MATCH_WINDOW;hi=center+MATCH_WINDOW;
+        if(lo<0)lo=0;
+        if(hi>(int)m-1)hi=(int)m-1;
+        for(q=lo;q<=hi;q++){
+            float d;
+            if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)continue;
+            d=poly_distance(&P[q],&C[j],dx,dy);
+            if(d<bestD){bestD=d;best=q;}
+        }
+        out[j]=best;
+        if(best>=0){offset=best-(int)j;matched++;}
+    }
+    return matched;
+}
+/* The in-between scene of the scene just finished (`now', its records
+ * sRec[sRecBuild]) and the one before (sRec[sRecBuild ^ 1]): sMid. */
+static void make_mid_scene(const NitroGx3dScene *now)
+{
+    const PolyRecord *P=sRec[sRecBuild^1u],*C=sRec[sRecBuild];
+    unsigned m=sRecCount[sRecBuild^1u],n=sRecCount[sRecBuild],j,k,used=0;
+    unsigned framePolygons=s.framePolygons,frameVertices=s.frameVertices;
+    int capture=sShadowCapture;
+    sMidValid=0;
+    if(!sMid || !sMatch || !sRecBeforeValid || !n)return;
+    sMidMatched=match_records(P,m,C,n,sMatch);
+    sMidPolygons=n;
+    if(n>=16u && sMidMatched*2u<n)return;   /* (a cut: too little in common) */
+    sMid->count=0;sMid->dropped=0;sMid->shadow_count=0;sMid->shadow_triangles=NULL;
+    sMid->serial=now->serial;sMid->swap_param=now->swap_param;
+    sMid->screen_width=now->screen_width;
+    memcpy(sMid->projection,now->projection,sizeof(sMid->projection));
+    sMid->stamp=now->stamp;
+    {
+        /* (replaying: no shadow triangles, no counts in the [gx3d] lines,
+         * the DS's limits counted afresh) */
+        __typeof__(sDiag) diag=sDiag;
+        sDest=sMid;sReplaying=1;sShadowCapture=0;
+        s.framePolygons=0;s.frameVertices=0;
+        for(j=0;j<n;j++){
+            int32_t clip[4][4];
+            const PolyRecord *c=&C[j];
+            int mid=0;
+            if(sMatch[j]>=0){
+                const PolyRecord *p=&P[sMatch[j]];
+                double x0,y0,x1,y1;
+                mid=p->count==c->count;
+                /* (moved more than a quarter of the screen: not the same
+                 * thing, or a jump; where it is now) */
+                if(mid && ndc_of(p->clip[0],&x0,&y0) && ndc_of(c->clip[0],&x1,&y1) &&
+                   (fabs(x1-x0)>0.5 || fabs(y1-y0)>0.5))mid=0;
+                if(mid){
+                    for(k=0;k<c->count;k++){
+                        int q;
+                        for(q=0;q<4;q++)clip[k][q]=(int32_t)(((int64_t)p->clip[k][q]+c->clip[k][q])/2);
+                    }
+                    used++;
+                }
+            }
+            if(!mid)memcpy(clip,c->clip,sizeof(clip));
+            replay_polygon(c,clip);
+        }
+        sDest=NULL;sReplaying=0;sShadowCapture=capture;
+        s.framePolygons=framePolygons;s.frameVertices=frameVertices;
+        sDiag=diag;
+    }
+    sMidMatched=used;
+    sMidValid=1;
+}
+/* At a SWAP_BUFFERS, after its scene is published: the in-between scene,
+ * then this scene's records become the scene before's. */
+static void interp_swap(const NitroGx3dScene *now)
+{
+    if(sInterp)make_mid_scene(now);
+    int wanted=__atomic_load_n(&sInterpWanted,__ATOMIC_ACQUIRE);
+    if(wanted && (!sRec[0] || !sMid)){
+        if(!sRec[0])sRec[0]=malloc(MAX_RECORDS*sizeof(PolyRecord));
+        if(!sRec[1])sRec[1]=malloc(MAX_RECORDS*sizeof(PolyRecord));
+        if(!sMatch)sMatch=malloc(MAX_RECORDS*sizeof(int32_t));
+        if(!sMid)sMid=malloc(sizeof(NitroGx3dScene));
+        if(!sRec[0]||!sRec[1]||!sMatch||!sMid){
+            static int told;
+            if(!told){told=1;NitroPort_Log("[gx3d] no memory for the in-between scenes");}
+            __atomic_store_n(&sInterpWanted,0,__ATOMIC_RELEASE);
+            wanted=0;
+        }
+    }
+    if(sInterp && wanted)sRecBeforeValid=1;
+    else{sRecBeforeValid=0;sMidValid=0;}
+    __atomic_store_n(&sInterp,wanted,__ATOMIC_RELEASE);
+    sRecBuild^=1u;
+    sRecCount[sRecBuild]=0;
+}
+
+void NitroPort_Gx3dSetInterpolation(int on)
+{
+    __atomic_store_n(&sInterpWanted,on!=0,__ATOMIC_RELEASE);
+}
+int NitroPort_Gx3dInterpolation(void)
+{
+    return __atomic_load_n(&sInterp,__ATOMIC_ACQUIRE);
+}
+const NitroGx3dScene *NitroPort_Gx3dMidScene(unsigned *matched,unsigned *polygons)
+{
+    if(matched)*matched=sMidMatched;
+    if(polygons)*polygons=sMidPolygons;
+    return sMidValid?sMid:NULL;
+}
+
 static void submit_vertex(void)
 {
     GeoVertex *vp;
@@ -848,6 +1137,7 @@ static void submit_vertex(void)
                 sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
                 stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
                 end_polygon(3);
+                record_polygon(&s.vertices[0],&s.vertices[1],&s.vertices[2],NULL);
             }
             n=0;
         }
@@ -863,6 +1153,7 @@ static void submit_vertex(void)
                 stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
                 stage_triangle(&s.vertices[0],&s.vertices[2],&s.vertices[3]);
                 end_polygon(4);
+                record_polygon(&s.vertices[0],&s.vertices[1],&s.vertices[2],&s.vertices[3]);
             }
             n=0;
         }
@@ -886,6 +1177,7 @@ static void submit_vertex(void)
                 sPolygonFront=polygon_front(first,second,vp);
                 stage_triangle(first,second,vp);
                 end_polygon(n==2?3:1);
+                record_polygon(first,second,vp,NULL);
             }
             s.stripOld=s.stripNew;s.stripNew=(int)(vp-s.vertices);n++;
         }
@@ -902,6 +1194,7 @@ static void submit_vertex(void)
                 stage_triangle(&s.vertices[0],&s.vertices[3],&s.vertices[2]);
                 /* The first quad of a strip brings 4 vertices, later ones 2. */
                 end_polygon(s.stripStarted?2:4);
+                record_polygon(&s.vertices[0],&s.vertices[1],&s.vertices[3],&s.vertices[2]);
             }
             s.stripStarted=1;
             s.vertices[0]=s.vertices[2];s.vertices[1]=s.vertices[3];n=2;
@@ -1153,6 +1446,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
             scene->count=0;scene->shadow_count=0;scene->dropped++;
         }
         sShadowCapture=NitroPort_SunShadows() && shadow_store();
+        interp_swap(scene);
         s.frameVertices=0;s.framePolygons=0;
         if(++sDiag.scenes>=120)diag_log();
         break;
@@ -1902,6 +2196,7 @@ void NitroPort_Gx3dReset(void)
     make_products();
     NitroPort_MailboxInit(&sMailbox);
     sBuilding=0;sDisplayed=1;sSerial=0;
+    sRecCount[0]=sRecCount[1]=0;sRecBeforeValid=0;sMidValid=0;sDest=NULL;sReplaying=0;
     identity(&s.proj);identity(&s.pos);identity(&s.vec);identity(&s.tex);
     set_wide_view(&s,sWideWidth);   /* (kept across resets) */
     s.viewport[0]=0;s.viewport[1]=0;s.viewport[2]=255;s.viewport[3]=191;

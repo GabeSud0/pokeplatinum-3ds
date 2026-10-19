@@ -479,6 +479,28 @@ doesn't say, so it has to be worked out from the display lists the game
 sends). That's the next step for the display; it costs a frame of delay
 (the in-between needs the scene after it).
 
+The geometry side is in (`NitroPort_Gx3dSetInterpolation`, port_gx3d.c;
+off by default, at no cost): with it on, each polygon that isn't wholly
+outside the view is kept as the game drew it (its vertices in clip space,
+before clipping and culling), and at each SWAP_BUFFERS the new scene's
+polygons are paired with the scene before's. First in order (the game
+draws the same things in the same order), which gives the scene's motion
+(the middle of the pairs' moves: most of a scene moves with the camera);
+then each polygon again with the polygon of its kind (its attributes but
+the alpha, its texture's format and size but not its address, its vertex
+count) nearest to where it is less that motion, within 64 polygons of
+where the order says, if nearer than 16 DS pixels plus one and a half
+times the scene's motion: a map's many tiles of one kind are told apart
+by where they are. Each paired polygon goes halfway between its two
+places, clipped and culled as any other; one with no pair is where the
+new scene has it. Too few pairs (under half: a cut, a new map) and
+there's no in-between scene. In the PC runner: `interp 1`, then `midsim
+PATH` draws the newest in-between scene as gpusim draws a scene. Walking
+and running in Jubilife and on Route 202, the in-between scenes are
+halfway (the scene 2 to 4 pixels on from the one before, the in-between
+1 to 2), with nothing out of place. Still to come: showing them on the
+3DS between the game's scenes (a setting, off by default).
+
 ## Known
 
 - In the Azahar emulator, the field's 3D sometimes flashes black for a

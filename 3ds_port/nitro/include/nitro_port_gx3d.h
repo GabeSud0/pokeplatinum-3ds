@@ -75,6 +75,21 @@ typedef struct NitroGx3dScene {
     NitroGx3dTriangle *shadow_triangles;
 } NitroGx3dScene;
 
+/* In-between scenes (60 frames a second in the field; port_gx3d.c): with
+ * them on, each scene's polygons are kept as the game drew them (before
+ * clipping), and at each SWAP_BUFFERS a scene halfway between the one
+ * before and the new one is made, each polygon matched with the same one
+ * of the scene before and its vertices halfway. On from the next
+ * SWAP_BUFFERS (any thread); off by default, at no cost. */
+void NitroPort_Gx3dSetInterpolation(int on);
+int NitroPort_Gx3dInterpolation(void);
+/* The newest in-between scene (between the newest scene and the one
+ * before it), or NULL (off, the first scene, or too little in common: a
+ * cut). matched/polygons: the newest scene's polygons placed halfway, of
+ * all it has. The geometry thread's (single-threaded inspection: the PC
+ * runner). */
+const NitroGx3dScene *NitroPort_Gx3dMidScene(unsigned *matched, unsigned *polygons);
+
 /* Reset engine and scene state, without clearing the 2D registers. */
 void NitroPort_Gx3dReset(void);
 
