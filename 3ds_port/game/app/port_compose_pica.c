@@ -520,7 +520,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
                           s ? "lower" : "upper");
         }
     }
-    NitroPort_PicaEdgePruning(config->edges != 2);
+    NitroPort_PicaEdgePruning(config->edges == 2);
     if (config->edges) {
         int d;
 
@@ -559,7 +559,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
                   filters[config->filter & 3],
                   config->stereo ? "with depth from the slider" : "flat",
                   !sConfig.edges        ? ", no outlines"
-                  : sConfig.edges == 2  ? ", outlines on the GPU (every polygon in their passes)"
+                  : sConfig.edges == 2  ? ", outlines on the GPU (each pass only the polygons it needs)"
                                         : ", outlines on the GPU",
                   config->flipV ? ", 2D flipped" : "");
     return 1;
@@ -870,7 +870,7 @@ static void prof_report(int stereo, int edges, u64 t0)
                 group = sProfPartGroup[mark];
                 len = (size_t)snprintf(line, sizeof(line), "[gpu] %s (%s, outlines %s):",
                                        groups[group < 0 || group > 2 ? 2 : group], stereo ? "stereo" : "mono",
-                                       !edges ? "off" : sConfig.edges == 2 ? "on, every polygon" : "on");
+                                       !edges ? "off" : sConfig.edges == 2 ? "on, pruned" : "on");
             }
             if (len < sizeof(line)) {
                 len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f ms;", sProfPart[mark], d);
