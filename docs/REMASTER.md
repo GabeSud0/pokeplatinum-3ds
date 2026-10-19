@@ -136,6 +136,38 @@ there without their texture (only their shape counts), and a texture is
 bound only when it changes: citro3d clears the GPU's texture cache with
 every bind.
 
+Those eight passes an eye were 70% of the GPU's time on a field frame
+(the `[gpu]` lines, Jubilife, October 2026), and most polygons can't get
+an outline anywhere: one gets it only where a neighbouring pixel shows
+another polygon ID, or the rear plane (where nothing is drawn: also past
+the edges of the DS's screen, where the scene stops). So each pass draws
+only the triangles it needs (`NitroPort_Gx3dPruneEdges`,
+`port_gx3d_prune.c`, worked out on the CPU once a scene and slider
+setting; index lists the GPU reads):
+
+- the outlines drawn: the triangles within two pixels of one of another
+  polygon ID, and those (of an ID other than the rear plane's) within two
+  pixels of a pixel no solid triangle surely covers (each eye's pixels, a
+  bit each; surely: its centre inside by a sixteenth of a pixel, which the
+  tenth of a DS pixel every edge is moved out by keeps shared edges
+  covered);
+- the moved passes: those, and the triangles within two pixels of one;
+- along the borders, four zones a few pixels wide past where the scene
+  stops (the slider moves it): there the triangles touching a zone are
+  drawn with the scissor test on it, rather than all of a big ground
+  triangle drawn for an outline at its end.
+
+The picture is the same as with every triangle in every pass:
+tests/test_gx3d.c draws both through a model of the passes (the vertex
+program's shift, the view matrix, the framebuffer turned a quarter turn,
+the scissor) for town and route scenes, slider down and up, the screen
+shaking, the lower screen, and compares every pixel; so did scenes from
+Jubilife and Route 202 run the same way on a PC. There the outlines'
+passes draw about 90% (moved) and 67% (outlines) of what they did in
+Jubilife, and 54% and 14% on Route 202. It costs the CPU about 0.1-0.2 ms
+a scene on a PC; `[perf] outlines:` says what share was drawn and what it
+cost on the 3DS. `edges all` draws them all, the way before.
+
 The 3D's textures are RGBA5551 where that's exact (every DS format but
 A3I5 and A5I3, sampled nearest, as `filter3d 0` has it: the DS's colours
 are 5 bits a channel, those formats' texels opaque or not there), RGBA8
@@ -419,6 +451,7 @@ frames waiting isn't drawn again until one has shown.
 | `stereo off` / `stereo 0.03` | no depth from the slider / its strength at full slider, in screen widths (default 0.02) |
 | `convergence 400` | the distance (the DS's w) that's at the screen's depth, instead of each scene's middle |
 | `edges off` | no outlines (edge marking) |
+| `edges all` | outlines drawn with every polygon in each of their passes (the way before the triangles each pass needs were worked out; for comparing: the same picture, slower) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
 | `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off. **Parked on the 3DS** (they hang its GPU; see below): off there until fixed |
 | `shadowdebug on` | debug only (for the sun shadows' hunt, with them on again): wait for GPU completion before/after the sun map, after the opaque scene, and after direct shadow receiving. Slower; the watchdog can identify the outstanding pass. Default off |
