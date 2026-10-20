@@ -201,6 +201,17 @@ away (PR #127), saved two thirds of that but looked wrong on a 3DS:
 outlines where there was nothing, and too thick on some buildings
 (2026-10-20).
 
+With the smooth 3D and outlines in each eye (PR #130) a stereo frame took
+the GPU 28-35 ms in towns and 40-51 ms on busier routes (19-21 frames a
+second there), 9-17 ms without the outlines (2026-10-20). So with the
+slider up they're drawn while they fit (`auto_outlines`,
+port_compose_pica.c): off after 3 stereo frames in a row over 33 ms (a
+frame at 30 a second), on again after 45 in a row (1.5 s) that would take
+under 29 ms with them: the frame without them times what they cost the
+last time they went off or on (the frames either side of that much the
+same scene; about 3 times). Each switch is a `[compose]` log line, and
+`[perf] display` says how many of the stereo frames had them.
+
 That time goes to a smoother 3D instead (`smooth3d`, on by default): the
 upper screen is drawn at twice the resolution each way,
 480 x 800 (the framebuffer's way round), and the transfer engine averages
@@ -541,7 +552,7 @@ frames waiting isn't drawn again until one has shown.
 | `edges off` | no outlines (edge marking) |
 | `edges drawn` | the outlines' left and right moved passes drawn, as before they were copied (for comparing: the same picture, slower) |
 | `edges pruned` | each outline pass draws only the polygons it needs (worked out on the CPU each scene; the same picture). Slower on a 3DS (see below): off by default |
-| `edges3d off` | no outlines with the 3D slider up (default on: drawn for each eye, about 9 ms of the GPU's an eye) |
+| `edges3d off` | no outlines with the 3D slider up (default on while they fit in a frame: drawn for each eye they cost 7-16 ms of the GPU's an eye; see How it works) |
 | `smooth3d off` / `smooth3d stereo` | the upper screen drawn at its own resolution / so only with the 3D slider down (default on: twice it and scaled down, no jagged edges, the outlines kept with the slider down; see How it works) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
 | `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off. **Parked on the 3DS** (they hang its GPU; see below): off there until fixed |

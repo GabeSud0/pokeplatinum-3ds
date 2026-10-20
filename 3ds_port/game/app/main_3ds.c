@@ -250,8 +250,9 @@ static void ReadRemasterConfig(bool new3ds)
     sCompose.stereoStrength = 0.02f;
     sCompose.convergence = 0.0f;
     sCompose.edges = 1;
-    /* The outlines with the slider up too (2026-10-20: the goal is 60 fps
-     * both ways; drawn for each eye they cost about 9 ms an eye). */
+    /* The outlines with the slider up too, while they fit in a frame
+     * (port_compose_pica.c, auto_outlines: drawn for each eye they cost
+     * 7-16 ms an eye, 2026-10-20). */
     sCompose.edges3d = 1;
     /* The upper screen drawn 2x2 and scaled down: no jagged edges. With
      * the slider up in the time the outlines took; with it down the
@@ -1878,7 +1879,7 @@ static void PerfFrame(u64 enter)
         frames = now.frames - last.frames;
         published = now.published - last.published;
         timed = now.timed - last.timed;
-        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, of %.1f scenes/s; %u scenes not shown), each %.1f ms building + %.1f ms GPU (drawn while the next is built: %.1f ms waited); %.0f%% in stereo, %.0f%% drawn 2x2; 3D textures converted %u (%.1f ms each); 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut; "
+        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, of %.1f scenes/s; %u scenes not shown), each %.1f ms building + %.1f ms GPU (drawn while the next is built: %.1f ms waited); %.0f%% in stereo (%.0f%% of it with outlines), %.0f%% drawn 2x2; 3D textures converted %u (%.1f ms each); 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut; "
                       "the picture behind the 3D one colour (painted by the clear) on %.1f screens a frame",
                       frames / seconds, timed / seconds, madeScenes / seconds,
                       (unsigned)(now.dropped - last.dropped),
@@ -1886,6 +1887,8 @@ static void PerfFrame(u64 enter)
                       frames ? (double)(now.gpuTicks - last.gpuTicks) * 1000.0 / SYSCLOCK_ARM11 / frames : 0.0,
                       frames ? (double)(now.waitTicks - last.waitTicks) * 1000.0 / SYSCLOCK_ARM11 / frames : 0.0,
                       frames ? 100.0 * (now.stereo - last.stereo) / frames : 0.0,
+                      now.stereo != last.stereo ? 100.0 * (now.stereoEdges - last.stereoEdges) / (now.stereo - last.stereo)
+                                                : 0.0,
                       frames ? 100.0 * (now.smooth - last.smooth) / frames : 0.0,
                       (unsigned)(tex - lastTex),
                       tex != lastTex ? (double)(texTicks - lastTexTicks) * 1000.0 / SYSCLOCK_ARM11 / (tex - lastTex) : 0.0,
