@@ -190,7 +190,9 @@ New 3DS (2026-10-19) the two drawn passes took half the four's time, and
 the copies 1.4 ms an eye through a linear buffer in the linear heap: it's
 in VRAM now (the linear heap if there's no room).
 
-With the 3D slider up there are no outlines (`edges3d on` keeps them).
+With the 3D slider up there were no outlines for a while (PR #128;
+`edges3d off` still leaves them out; on by default again since PR #130,
+drawn for each eye after the smooth 3D, as with the slider down, below).
 Drawn for each eye they took 8-13 ms an eye of a 25-43 ms stereo frame
 (2026-10-19), for about 3% of the picture (buildings' silhouettes, signs,
 a line round the DS's screen), and in 3D the depth sets shapes apart
@@ -217,16 +219,20 @@ the opaque polygons took 3.3-5.5 ms an eye drawn 2x2 (1.1-2.1 at the
 screen's resolution), a stereo frame 9-14 ms of GPU in Jubilife and on
 Route 202: less than the outlines had taken.
 
-With the slider down the outlines stay. The picture
+With outlines (the slider down; up too since PR #130, each eye in turn,
+the 2x2 framebuffer cleared between them) the frame is split. The picture
 behind and the opaque polygons are drawn 2x2 as above, then scaled down
-into the screen's own framebuffer (through a linear copy in the smooth
+into the screen's own framebuffer (the eye's) (through a linear copy in the smooth
 depth's memory, which is done with by then: two transfers); there the
 opaque polygons are drawn again for their depth and IDs alone (no
 colour), the edge buffers filled only then (that memory is theirs), and
 the outlines, the translucent polygons and the 2D in front go on at the
 screen's resolution. Every polygon edge is smooth, the outlines one pixel
 wide as before (their outer side softened by the smooth pixels next to
-them). `smooth3d stereo` keeps it to the slider up.
+them). `smooth3d stereo` keeps the smooth 3D to the slider up. A frame
+with the slider up and outlines took about 2 x 12.5 ms of the GPU's by
+the measures so far (2026-10-20): the frames in flight (Timing) are what
+let it keep 30 frames a second.
 
 The 3D's textures are RGBA5551 where that's exact (every DS format but
 A3I5 and A5I3, sampled nearest, as `filter3d 0` has it: the DS's colours
@@ -431,6 +437,23 @@ stretched:
 
 ## Timing
 
+The display thread builds a frame while the GPU draws the one before
+(since PR #130). citro3d's frames don't allow it: C3D_FrameBegin waits for
+the GPU before a frame's commands may start, into its one command list,
+and the queue of GPU operations (fills, command lists, transfers) runs
+only after C3D_FrameEnd. So the remaster has frames of its own
+(`NitroPort_PicaFrameOpen`): two command lists used in turn, cut with
+citro3d's own `C3Di_SplitFrame`, and two GX queues of its own, bound in
+turn while a frame is built (its operations recorded, not run) and run
+once the frame before is done (`flight_finish`; 128 entries, not
+citro3d's 32). What the frame being drawn reads stays as it is until then:
+its 2D sets (held, a count), its quads (two halves of one buffer), its
+vertices (two buffers, as before), its textures (one it drew isn't
+changed or freed before the GPU's done: `NitroPort_PicaGpuWait`). A frame
+goes on the LCD at its V-blank once the GPU's done with it (the queue's
+callback counts frames done). The log's `[perf] display` line has the
+time the display thread still waited for the GPU.
+
 Each 3D scene carries the V-blank count when the game finished it (its
 SWAP), and each published 2D picture the count when the drawers read the
 game's display state. A frame pairs the 3D with the newest 2D no newer
@@ -513,7 +536,7 @@ frames waiting isn't drawn again until one has shown.
 | `edges off` | no outlines (edge marking) |
 | `edges drawn` | the outlines' left and right moved passes drawn, as before they were copied (for comparing: the same picture, slower) |
 | `edges pruned` | each outline pass draws only the polygons it needs (worked out on the CPU each scene; the same picture). Slower on a 3DS (see below): off by default |
-| `edges3d on` | the outlines with the 3D slider up too (default off: see How it works; no smooth 3D then) |
+| `edges3d off` | no outlines with the 3D slider up (default on: drawn for each eye, about 9 ms of the GPU's an eye) |
 | `smooth3d off` / `smooth3d stereo` | the upper screen drawn at its own resolution / so only with the 3D slider down (default on: twice it and scaled down, no jagged edges, the outlines kept with the slider down; see How it works) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
 | `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off. **Parked on the 3DS** (they hang its GPU; see below): off there until fixed |

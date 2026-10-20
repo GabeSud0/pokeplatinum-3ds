@@ -231,7 +231,7 @@ static volatile bool sSuspended;
  * each scene), edges on/off/pruned/drawn (pruned: each outline pass only
  * the polygons it needs, worked out on the CPU: slower on a 3DS, October
  * 2026; drawn: the left and right moved passes drawn, not copied),
- * edges3d on/off (the outlines with the 3D slider up too; off by
+ * edges3d on/off (the outlines with the 3D slider up too; on by
  * default), smooth3d on/stereo/off (the upper screen drawn at twice the
  * resolution and scaled down: always, the default; with the slider up
  * only; never), flip on/off, filter3d
@@ -250,10 +250,9 @@ static void ReadRemasterConfig(bool new3ds)
     sCompose.stereoStrength = 0.02f;
     sCompose.convergence = 0.0f;
     sCompose.edges = 1;
-    /* With the slider up no outlines: drawn for each eye they cost 8-13 ms
-     * an eye of a 25-43 ms stereo frame (2026-10-19), and two light
-     * directions instead of four looked wrong (2026-10-20). */
-    sCompose.edges3d = 0;
+    /* The outlines with the slider up too (2026-10-20: the goal is 60 fps
+     * both ways; drawn for each eye they cost about 9 ms an eye). */
+    sCompose.edges3d = 1;
     /* The upper screen drawn 2x2 and scaled down: no jagged edges. With
      * the slider up in the time the outlines took; with it down the
      * outlines stay, drawn after it's scaled down. */
@@ -1528,7 +1527,8 @@ static void WaitForDrawing(void)
             return;   /* (a drawing thread itself crashed) */
         }
     }
-    while (DrawersBusy() || (sRemaster && __atomic_load_n(&sComposing, __ATOMIC_ACQUIRE))) {
+    while (DrawersBusy() ||
+           (sRemaster && (__atomic_load_n(&sComposing, __ATOMIC_ACQUIRE) || NitroPort_ComposeGpuBusy()))) {
         svcSleepThread(500000LL);
     }
 }
@@ -1564,11 +1564,15 @@ static void OnAptEvent(APT_HookType type, void *param)
         if (sRemaster) {
             NitroPort_ComposeHold(1);
         }
-        while ((__atomic_load_n(&sComposing, __ATOMIC_SEQ_CST) || DrawersBusy()) &&
+        /* (and the frame the GPU was given last: it goes on with it after
+         * the display thread's done) */
+        while ((__atomic_load_n(&sComposing, __ATOMIC_SEQ_CST) || DrawersBusy() ||
+                (sRemaster && NitroPort_ComposeGpuBusy())) &&
                svcGetSystemTick() - start < SYSCLOCK_ARM11) {
             svcSleepThread(1000000LL);
         }
-        settled = !__atomic_load_n(&sComposing, __ATOMIC_SEQ_CST) && !DrawersBusy();
+        settled = !__atomic_load_n(&sComposing, __ATOMIC_SEQ_CST) && !DrawersBusy() &&
+                  !(sRemaster && NitroPort_ComposeGpuBusy());
         NitroPort_CardFlush();   /* (the save's file whole, should the 3DS go off from here) */
         NitroPort_Log("[apt] %s: drawing stopped%s (%.0f ms)",
                       type == APTHOOK_ONEXIT ? "closing" : type == APTHOOK_ONSLEEP ? "going to sleep"
@@ -1867,12 +1871,13 @@ static void PerfFrame(u64 enter)
         frames = now.frames - last.frames;
         published = now.published - last.published;
         timed = now.timed - last.timed;
-        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, of %.1f scenes/s; %u scenes not shown), each %.1f ms building + %.1f ms GPU; %.0f%% in stereo, %.0f%% drawn 2x2; 3D textures converted %u (%.1f ms each); 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut; "
+        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, of %.1f scenes/s; %u scenes not shown), each %.1f ms building + %.1f ms GPU (drawn while the next is built: %.1f ms waited); %.0f%% in stereo, %.0f%% drawn 2x2; 3D textures converted %u (%.1f ms each); 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut; "
                       "the picture behind the 3D one colour (painted by the clear) on %.1f screens a frame",
                       frames / seconds, timed / seconds, madeScenes / seconds,
                       (unsigned)(now.dropped - last.dropped),
                       frames ? (double)(now.cpuTicks - last.cpuTicks) * 1000.0 / SYSCLOCK_ARM11 / frames : 0.0,
                       frames ? (double)(now.gpuTicks - last.gpuTicks) * 1000.0 / SYSCLOCK_ARM11 / frames : 0.0,
+                      frames ? (double)(now.waitTicks - last.waitTicks) * 1000.0 / SYSCLOCK_ARM11 / frames : 0.0,
                       frames ? 100.0 * (now.stereo - last.stereo) / frames : 0.0,
                       frames ? 100.0 * (now.smooth - last.smooth) / frames : 0.0,
                       (unsigned)(tex - lastTex),

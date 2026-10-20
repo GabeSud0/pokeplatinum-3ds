@@ -99,6 +99,7 @@ typedef struct Pending {
     int buf;
     u32 target;
     int stereo;
+    u32 serial;           /* its frame's GPU work (sGpuDone reaching it: drawn) */
 } Pending;
 
 typedef struct Screen {
@@ -138,24 +139,23 @@ static void *sEdgeBlock;          /* (the four, one after another: one VRAM bloc
  * resolution each way (480 x 800) and scaled down by the transfer engine:
  * every edge's pixels averaged, no jagged edges. Its depth/stencil is the
  * edge buffers' block (exactly the size), else a block of its own.
- *  - With the slider up (no outlines then), all of it, one eye after the
- *    other, each scaled down into its LCD framebuffer as soon as it's
- *    drawn. So too with the slider down when there are no outlines.
- *  - With the slider down and outlines (sSmoothSplit): the picture behind
- *    and the opaque polygons, scaled down into the screen's own
- *    framebuffer (through a linear copy in the smooth depth's memory,
- *    done with by then); there the opaque polygons' depth and IDs are
- *    drawn again (no colour), and the outlines (their buffers filled only
- *    now: the smooth depth was theirs), the translucent polygons and the
- *    2D in front go on at the screen's resolution. The outlines stay one
- *    pixel wide, as the DS's are. */
+ *  - Without outlines, all of it (each eye in turn, with the slider up),
+ *    scaled down into its LCD framebuffer as soon as it's drawn.
+ *  - With outlines (sSmoothSplit; each eye in turn with the slider up):
+ *    the picture behind and the opaque polygons, scaled down into the
+ *    screen's own framebuffer (the eye's; through a linear copy in the
+ *    smooth depth's memory, done with by then); there the opaque
+ *    polygons' depth and IDs are drawn again (no colour), and the outlines
+ *    (their buffers filled only now: the smooth depth was theirs), the
+ *    translucent polygons and the 2D in front go on at the screen's
+ *    resolution. The outlines stay one pixel wide, as the DS's are. */
 #define SMOOTH_W (SCREEN_H * 2)
 #define SMOOTH_H (TOP_W * 2)
 static void *sSmoothColor, *sSmoothOwnDepth;
 static uint8_t sSmoothFb[PICA_FRAMEBUF_BYTES] __attribute__((aligned(8)));
 static int sSmoothReady, sSmoothNow, sSmoothSplit;
 static u32 sEdgeClearNow;          /* (this frame: what the edge buffers are filled with) */
-static void smooth_down(Screen *scr, int edges);
+static void smooth_down(Screen *scr, int eye, int edges);
 static unsigned sEdgeCopiesNow;    /* (and which are copied instead) */
 static u32 sSmoothFrames;
 static LightLock sSetLock, sPresentLock;
@@ -177,10 +177,33 @@ static uint16_t sConverted16[2][CANVAS_MAX * DS_H];
  * ~10 ms a frame on the 3D's core, and with the 3D's geometry there too,
  * frames came late while a name slid in (2026-10-15). */
 static NitroPublishShadow sShadow[2];
-static NitroGx3dGpuVertex *sQuads;   /* this frame's quads */
+static NitroGx3dGpuVertex *sQuads;   /* this frame's quads (half of sQuadsAll: the frame before's other half) */
+static NitroGx3dGpuVertex *sQuadsAll;
+static int sQuadHalf;
 static int sQuadVertices;
 #define MAX_QUAD_VERTICES (6 * 32)
-static int sInFrame;
+/* ------------------------------------------------- frames in flight
+ * A frame's commands are built while the GPU draws the frame before
+ * (NitroPort_PicaFrameOpen): its GPU operations (fills, command lists,
+ * transfers) go into one of two queues of ours, bound while it's built
+ * and run once the frame before is done (flight_finish). What that frame
+ * reads stays as it is until then: its 2D (held), its quads (the other
+ * half of sQuadsAll), its vertices (port_gx3d_pica.c keeps two), its
+ * textures (NitroPort_PicaGpuWait). It shows at its V-blank once drawn
+ * (Pending.serial). */
+#define GX_QUEUE_ENTRIES 128
+static gxCmdQueue_s sGxQueue[2];
+static int sGxReady, sGxRecording;      /* (the queue the frame being built goes into) */
+static int sFlight, sFlightQueue;       /* a frame the GPU has, and its queue */
+static u32 sFlightMark;                 /* (NitroPort_PicaFrameClose's) */
+static LayerSet *sFlightSets[2];        /* (its 2D, held till it's drawn) */
+static u32 sGpuSubmitted;
+static volatile u32 sGpuDone;           /* (frames drawn: the queues' callback) */
+static volatile u64 sGpuDoneTick;
+static u64 sGpuRunTick, sWaitTicks, sLastGpuTicks;
+static void gpu_finished(gxCmdQueue_s *queue);
+static void flight_finish(int block);
+static void flight_wait(void);
 static int sReady;
 static volatile u32 sVBlanks;
 static u32 sFrames, sLate, sTimed, sSkipped;
@@ -284,12 +307,19 @@ void NitroPort_ComposeVBlank(void)
     for (s = 0; s < 2; s++) {
         Screen *scr = &sScreens[s];
 
-        /* The frames whose V-blank has come: the newest of them shows. */
+        /* The frames whose V-blank has come (and the GPU has drawn): the
+         * newest of them shows. */
+        u32 done = __atomic_load_n(&sGpuDone, __ATOMIC_ACQUIRE);
+
         while (scr->npending > 0 && (int32_t)(scr->pending[0].target - now) <= 0) {
-            if (scr->npending > 1 && (int32_t)(scr->pending[1].target - now) <= 0) {
+            if (scr->npending > 1 && (int32_t)(scr->pending[1].target - now) <= 0 &&
+                (int32_t)(done - scr->pending[1].serial) >= 0) {
                 scr->pending[0] = scr->pending[1];   /* (the older one skipped) */
                 scr->npending = 1;
                 continue;
+            }
+            if ((int32_t)(done - scr->pending[0].serial) < 0) {
+                break;   /* (not drawn yet: a V-blank later) */
             }
             present(s, scr->pending[0].buf, scr->pending[0].stereo);
             scr->pending[0] = scr->pending[1];
@@ -452,10 +482,23 @@ static void free_all(void)
         sSmoothOwnDepth = NULL;
     }
     sSmoothReady = 0;
-    if (sQuads) {
-        linearFree(sQuads);
+    if (sQuadsAll) {
+        linearFree(sQuadsAll);
+        sQuadsAll = NULL;
         sQuads = NULL;
     }
+    if (sGxReady) {
+        /* (the GPU done with both: flight_finish) */
+        gxCmdQueueStop(&sGxQueue[0]);
+        GX_BindQueue(NULL);
+        NitroPort_PicaGpuWait(NULL);
+        sGxReady = 0;
+    }
+    for (i = 0; i < 2; i++) {
+        free(sGxQueue[i].entries);
+        memset(&sGxQueue[i], 0, sizeof(sGxQueue[i]));
+    }
+    NitroPort_PicaFramesFree();
     sReady = 0;
 }
 
@@ -622,11 +665,30 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
             }
         }
     }
-    sQuads = linearAlloc(MAX_QUAD_VERTICES * sizeof(NitroGx3dGpuVertex));
-    if (!sQuads) {
+    sQuadsAll = linearAlloc(2u * MAX_QUAD_VERTICES * sizeof(NitroGx3dGpuVertex));
+    if (!sQuadsAll) {
         goto fail;
     }
-    sInFrame = 0;
+    sQuads = sQuadsAll;
+    /* The frames: two command lists and two queues of ours (frames in
+     * flight); bound from now on, citro3d's own frames unused. */
+    for (i = 0; i < 2; i++) {
+        sGxQueue[i].entries = malloc(GX_QUEUE_ENTRIES * sizeof(gxCmdEntry_s));
+        sGxQueue[i].maxEntries = GX_QUEUE_ENTRIES;
+        if (!sGxQueue[i].entries) {
+            goto fail;
+        }
+        gxCmdQueueSetCallback(&sGxQueue[i], gpu_finished, NULL);
+    }
+    if (!NitroPort_PicaFramesInit()) {
+        NitroPort_Log("[compose] not enough memory for a second command list");
+        goto fail;
+    }
+    sGxRecording = 0;
+    sFlight = 0;
+    GX_BindQueue(&sGxQueue[sGxRecording]);
+    NitroPort_PicaGpuWait(flight_wait);
+    sGxReady = 1;
     sReady = 1;
     NitroPort_Log("[compose] screens drawn by the GPU: %s, 2D %s, 3D %s%s%s%s%s",
                   config->wide ? "wide upper screen" : "the DS's width",
@@ -655,15 +717,8 @@ void NitroPort_ComposeExit(void)
     sReady = 0;
     sHeld = 1;
     LightLock_Unlock(&sPresentLock);
-    /* The frame begun after the last one drawn (to wait for the GPU) ends
-     * first: citro3d stops the program (svcBreak) if a render target is
-     * deleted inside a frame. Closing from HOME crashed the console there
-     * (2026-10-15: a prefetch abort in svcBreak, from
-     * C3D_RenderTargetDelete). */
-    if (sInFrame) {
-        C3D_FrameEnd(0);
-        sInFrame = 0;
-    }
+    /* The frame the GPU has, done first (its buffers are freed next). */
+    flight_finish(1);
     gspSetEventCallback(GSPGPU_EVENT_P3D, NULL, NULL, false);
     gspSetEventCallback(GSPGPU_EVENT_PSC0, NULL, NULL, false);
     gspSetEventCallback(GSPGPU_EVENT_PSC1, NULL, NULL, false);
@@ -924,16 +979,22 @@ static u32 rgba_of(uint16_t c, u32 alpha)
 
 /* ---------------------------------------------------------- GPU timings
  * One frame every PROF_EVERY frames with a 3D scene: its command list cut
- * at each NitroPort_PicaProfileMark (C3D_FrameSplit, as the second eye's
- * outline buffers already have it), and each part's completion (the
- * GPU's P3D interrupt; the fills' PSC0 and the transfers' PPF too) timed
- * on the GSP event thread. GSP runs the frame's queue in order: a part's
- * GPU time is from the event before it to its own. The queue holds 32
- * entries a frame: at most PROF_MARKS cuts (the frame's fills and
- * transfers are 14 at most). */
+ * at each NitroPort_PicaProfileMark (NitroPort_PicaFrameSplit, as the
+ * second eye's outline buffers already have it), and each part's
+ * completion (the GPU's P3D interrupt; the fills' PSC0 and the transfers'
+ * PPF too) timed on the GSP event thread. GSP runs the frame's queue in
+ * order: a part's GPU time is from the event before it to its own. The
+ * report once the frame's drawn (flight_finish). A frame's queue holds
+ * GX_QUEUE_ENTRIES: PROF_MARKS cuts and the rest. */
 #define PROF_EVERY 150u
-#define PROF_MARKS 13
-#define PROF_EVENTS 48
+#define PROF_MARKS 30
+#define PROF_EVENTS 96
+typedef struct ProfInfo {
+    int stereo, edges, smooth, split;
+    u64 t0;                                /* (its queue's start) */
+} ProfInfo;
+static ProfInfo sProfFlight;               /* (the frame in flight, when profiled) */
+static int sProfFlightOn;
 static int sProfOn;                        /* (this frame is profiled) */
 static unsigned sProfFrames;
 static int sProfMarks, sProfGroup;
@@ -978,7 +1039,7 @@ static void prof_split(const char *part, int forced)
     } else if (sProfOn) {
         sProfLost = 1;   /* (a part not named: the report would be off by one) */
     }
-    C3D_FrameSplit(GX_CMDLIST_FLUSH);
+    NitroPort_PicaFrameSplit();
 }
 
 void NitroPort_PicaProfileMark(const char *part)
@@ -994,10 +1055,11 @@ void NitroPort_PicaCut(const char *part)
 }
 
 /* The profiled frame's [gpu] lines: a line a screen (an eye), then the
- * clears, the transfers and the whole. t0: the frame's end (the queue's
- * start). */
-static void prof_report(int stereo, int edges, u64 t0)
+ * clears, the transfers and the whole. */
+static void prof_report(const ProfInfo *info)
 {
+    int stereo = info->stereo, edges = info->edges;
+    u64 t0 = info->t0;
     static const char *const groups[3] = { "upper screen, left eye", "upper screen, right eye",
                                            "lower screen" };
     const double ms = 1000.0 / SYSCLOCK_ARM11;
@@ -1036,8 +1098,9 @@ static void prof_report(int stereo, int edges, u64 t0)
                 group = sProfPartGroup[mark];
                 len = (size_t)snprintf(line, sizeof(line), "[gpu] %s (%s, outlines %s):",
                                        groups[group < 0 || group > 2 ? 2 : group],
-                                       sSmoothNow && group != 2
-                                           ? (stereo ? "stereo, drawn 2x2" : sSmoothSplit ? "mono, drawn 2x2 then 1x1" : "mono, drawn 2x2")
+                                       info->smooth && group != 2
+                                           ? (info->split ? (stereo ? "stereo, drawn 2x2 then 1x1" : "mono, drawn 2x2 then 1x1")
+                                                          : stereo ? "stereo, drawn 2x2" : "mono, drawn 2x2")
                                            : stereo ? "stereo" : "mono",
                                        !edges ? "off" : sConfig.edges == 2 ? "on, pruned"
                                        : sConfig.edges == 3 ? "on, all drawn" : "on");
@@ -1060,6 +1123,75 @@ static void prof_report(int stereo, int edges, u64 t0)
                   "%.1f ms in all (%d parts of %d marked, %lu events)",
                   fills, rest, transfers, n ? (double)(sProfTick[n - 1] - t0) * ms : 0.0, lists, sProfMarks,
                   (unsigned long)n);
+}
+
+/* A queue of ours run dry: its frame drawn (the GSP event thread). */
+static void gpu_finished(gxCmdQueue_s *queue)
+{
+    (void)queue;
+    sGpuDoneTick = svcGetSystemTick();
+    __atomic_add_fetch(&sGpuDone, 1u, __ATOMIC_ACQ_REL);
+}
+
+/* The frame the GPU has, once drawn (block: waiting for it): its queue
+ * stopped and emptied (the next frame's, after this one's turn), its 2D
+ * let go, its textures free to change, its GPU time and [gpu] report. */
+static void flight_finish(int block)
+{
+    gxCmdQueue_s *q;
+
+    if (!sFlight) {
+        return;
+    }
+    if ((int32_t)(__atomic_load_n(&sGpuDone, __ATOMIC_ACQUIRE) - sGpuSubmitted) < 0) {
+        u64 t;
+
+        if (!block) {
+            return;
+        }
+        t = svcGetSystemTick();
+        NitroPort_PicaStage("waiting for the GPU (the frame before)");
+        gxCmdQueueWait(&sGxQueue[sFlightQueue], -1);
+        /* (the callback comes a moment after the queue's end) */
+        while ((int32_t)(__atomic_load_n(&sGpuDone, __ATOMIC_ACQUIRE) - sGpuSubmitted) < 0) {
+            svcSleepThread(50000LL);
+        }
+        sWaitTicks += svcGetSystemTick() - t;
+    }
+    q = &sGxQueue[sFlightQueue];
+    gxCmdQueueStop(q);
+    gxCmdQueueClear(q);
+    sFlight = 0;
+    sLastGpuTicks = sGpuDoneTick - sGpuRunTick;
+    sGpuTicks += sLastGpuTicks;
+    NitroPort_PicaFrameDone(sFlightMark);
+    if (sProfFlightOn) {
+        /* (the GSP event thread runs the queue's end before its own
+         * callbacks: a moment for the last event's time) */
+        svcSleepThread(500000);
+        __atomic_store_n(&sProfArmed, 0, __ATOMIC_RELEASE);
+        prof_report(&sProfFlight);
+        sProfFlightOn = 0;
+    }
+    LightLock_Lock(&sSetLock);
+    for (int i = 0; i < 2; i++) {
+        if (sFlightSets[i] != NULL) {
+            sFlightSets[i]->held--;
+            sFlightSets[i] = NULL;
+        }
+    }
+    LightLock_Unlock(&sSetLock);
+}
+
+/* (port_gx3d_pica.c: a texture the GPU may be reading is to change) */
+static void flight_wait(void)
+{
+    flight_finish(1);
+}
+
+int NitroPort_ComposeGpuBusy(void)
+{
+    return sReady && (int32_t)(__atomic_load_n(&sGpuDone, __ATOMIC_ACQUIRE) - sGpuSubmitted) < 0;
 }
 
 /* The layer textures, described for the GPU. */
@@ -1178,7 +1310,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         NitroPort_PicaDrawScene(&view);
         if (smooth && sSmoothSplit) {
             /* The rest at the screen's resolution (see sSmoothFb). */
-            smooth_down(scr, edges);
+            smooth_down(scr, eye, edges);
             fb = &target->frameBuf;
             view.fb = fb;
             view.part = PICA_DRAW_AFTER;
@@ -1292,7 +1424,7 @@ static LayerSet *pick_set(Screen *scr, const NitroGx3dScene *scene, int syncTo3d
         best = oldest;
     }
     if (best != NULL) {
-        best->held = 1;
+        best->held++;   /* (till the frame drawn with it is: flight_finish) */
     }
     return best;
 }
@@ -1348,7 +1480,7 @@ static void fill_edge_buffers(Screen *scr, u32 value, unsigned copied);
  * screen's own framebuffer, through the smooth depth's memory (done with:
  * a linear 240 x 400 copy fits in it); then the edge buffers filled (that
  * memory is theirs). */
-static void smooth_down(Screen *scr, int edges)
+static void smooth_down(Screen *scr, int eye, int edges)
 {
     C3D_FrameBuf *fb = (C3D_FrameBuf *)sSmoothFb;
     u32 *temp = (u32 *)fb->depthBuf;
@@ -1357,7 +1489,7 @@ static void smooth_down(Screen *scr, int edges)
     prof_split("the opaque polygons", 1);
     GX_DisplayTransfer((u32 *)sSmoothColor, GX_BUFFER_DIM(SMOOTH_W, SMOOTH_H), temp,
                        GX_BUFFER_DIM(SMOOTH_W, SMOOTH_H), SMOOTH_DOWN_FLAGS);
-    GX_DisplayTransfer(temp, dim, (u32 *)scr->target[0]->frameBuf.colorBuf, dim, SMOOTH_TILE_FLAGS);
+    GX_DisplayTransfer(temp, dim, (u32 *)scr->target[eye]->frameBuf.colorBuf, dim, SMOOTH_TILE_FLAGS);
     if (edges) {
         fill_edge_buffers(scr, sEdgeClearNow, sEdgeCopiesNow);
     }
@@ -1396,11 +1528,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
     LayerSet *sets[2] = { NULL, NULL };
     u64 start = svcGetSystemTick(), gpuStart, prepareTicks = 0, texTicksBefore, texTicksAfter, texels;
-    u64 profStart = 0;
 
     if (!sReady) {
         return 0;
     }
+    flight_finish(0);   /* (the frame before, if it's drawn: its 2D let go) */
     {
         int look = __atomic_exchange_n(&sLookRequest, -1, __ATOMIC_ACQ_REL);
 
@@ -1463,7 +1595,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             }
         }
         if (!need[s]) {
-            set->held = 0;
+            set->held--;
             continue;
         }
         sets[s] = set;
@@ -1493,11 +1625,10 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             sSceneConvergence = scene_convergence(scene);
         }
     }
-    if (!sInFrame) {
-        NitroPort_PicaStage("the frame's start (waiting for the GPU)");
-        C3D_FrameBegin(0);
-        sInFrame = 1;
-    }
+    /* (built while the GPU draws the frame before: frames in flight) */
+    NitroPort_PicaFrameOpen();
+    sQuadHalf ^= 1;
+    sQuads = sQuadsAll + (sQuadHalf ? MAX_QUAD_VERTICES : 0);
     NitroPort_PicaStage("the frame's clears");
     sProfOn = 0;
     if (scene != NULL && ++sProfFrames >= PROF_EVERY) {
@@ -1514,11 +1645,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         edges = 0;
     }
     /* The smooth 3D (sSmoothFb): on the upper screen when the 3D is
-     * there; with the slider up only without outlines (its depth is
-     * theirs, and each eye would need it). */
-    sSmoothNow = sSmoothReady && need[0] && top3d &&
-                 (stereoNow ? !(edges && sSmoothOwnDepth == NULL) : sConfig.smooth3d == 2);
-    sSmoothSplit = sSmoothNow && !stereoNow && edges;
+     * there; with outlines, split (sSmoothSplit), each eye in turn. */
+    sSmoothNow = sSmoothReady && need[0] && top3d && (stereoNow || sConfig.smooth3d == 2);
+    sSmoothSplit = sSmoothNow && edges;
     /* The left and right edge buffers copied from the screen's own
      * (NitroPort_PicaEdgeCopies): its stencil then the rear plane's ID where
      * nothing is drawn, as theirs. */
@@ -1541,10 +1670,15 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             /* (the left eye's; the right eye's after it's drawn) */
             smooth_clear(sets[s], underCleared[s]);
             if (sSmoothSplit) {
-                /* (the screen's own framebuffer: its depth; its colour comes
-                 * scaled down, the edge buffers are filled after that) */
-                C3D_RenderTargetClear(sScreens[0].target[0], C3D_CLEAR_DEPTH, 0,
-                                      copies ? edgeClear : 0xFFFFFFFFu);
+                /* (the screen's own framebuffers (an eye each): their
+                 * depth; their colour comes scaled down, the edge buffers
+                 * are filled after that) */
+                u32 bytes = (u32)SCREEN_H * (u32)TOP_W * 4u, value = copies ? edgeClear : 0xFFFFFFFFu;
+                u8 *d0 = sScreens[0].target[0]->frameBuf.depthBuf;
+                u8 *d1 = stereoNow ? (u8 *)sScreens[0].target[1]->frameBuf.depthBuf : NULL;
+
+                GX_MemoryFill((u32 *)d0, value, (u32 *)(d0 + bytes), BIT(0) | (2u << 8), (u32 *)d1, d1 ? value : 0,
+                              d1 ? (u32 *)(d1 + bytes) : NULL, d1 ? BIT(0) | (2u << 8) : 0);
             }
             continue;
         }
@@ -1572,11 +1706,14 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
 
             draw_screen(scr, 0, sets[s], sc, -shift, edges, underCleared[s]);
             if (sSmoothNow) {
-                /* The left eye scaled down into its LCD framebuffer, then
-                 * the framebuffer cleared for the right eye: the commands
+                /* The left eye scaled down into its LCD framebuffer (with
+                 * outlines it's in its own framebuffer already), then the
+                 * 2x2 framebuffer cleared for the right eye: the commands
                  * so far go ahead. */
                 prof_split("the left eye's end", 1);
-                smooth_out(scr, lcdBuf[s], 0);
+                if (!sSmoothSplit) {
+                    smooth_out(scr, lcdBuf[s], 0);
+                }
                 smooth_clear(sets[s], underCleared[s]);
             } else if (sc != NULL && edges) {
                 /* The second eye needs the edge buffers filled again: the
@@ -1603,50 +1740,66 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     }
     GSPGPU_FlushDataCache(sQuads, (u32)(sQuadVertices * sizeof(NitroGx3dGpuVertex)));
     NitroPort_PicaStage("the frame's end");
-    if (sProfOn) {
-        profStart = svcGetSystemTick();
-        __atomic_store_n(&sProfEvents, 0u, __ATOMIC_RELEASE);
-        __atomic_store_n(&sProfArmed, 1, __ATOMIC_RELEASE);
-    }
-    C3D_FrameEnd(GX_CMDLIST_FLUSH);
-    NitroPort_PicaNoteCmdUse();
-    sInFrame = 0;
-    /* The targets into the screens' LCD framebuffers, after the drawing
-     * (queued behind it), then wait for all of it. */
-    for (s = 0; s < 2; s++) {
-        Screen *scr = &sScreens[s];
-        int eye;
+    {
+        u32 mark = NitroPort_PicaFrameClose();
 
-        if (!(drawn & (1 << s))) {
-            continue;
-        }
-        for (eye = 0; eye < (s == 0 && stereoNow ? 2 : 1); eye++) {
-            if (s == 0 && sSmoothNow && !sSmoothSplit) {
-                if (!stereoNow || eye == 1) {
-                    smooth_out(scr, lcdBuf[s], eye);   /* (the left eye's went after it was drawn) */
-                }
+        /* The targets into the screens' LCD framebuffers, after the
+         * drawing (queued behind it). */
+        for (s = 0; s < 2; s++) {
+            Screen *scr = &sScreens[s];
+            int eye;
+
+            if (!(drawn & (1 << s))) {
                 continue;
             }
-            GX_DisplayTransfer((u32 *)scr->target[eye]->frameBuf.colorBuf, GX_BUFFER_DIM(SCREEN_H, scr->width),
-                               (u32 *)scr->lcd[lcdBuf[s]][eye], GX_BUFFER_DIM(SCREEN_H, scr->width),
-                               SCREEN_TRANSFER_FLAGS);
+            for (eye = 0; eye < (s == 0 && stereoNow ? 2 : 1); eye++) {
+                if (s == 0 && sSmoothNow && !sSmoothSplit) {
+                    if (!stereoNow || eye == 1) {
+                        smooth_out(scr, lcdBuf[s], eye);   /* (the left eye's went after it was drawn) */
+                    }
+                    continue;
+                }
+                GX_DisplayTransfer((u32 *)scr->target[eye]->frameBuf.colorBuf, GX_BUFFER_DIM(SCREEN_H, scr->width),
+                                   (u32 *)scr->lcd[lcdBuf[s]][eye], GX_BUFFER_DIM(SCREEN_H, scr->width),
+                                   SCREEN_TRANSFER_FLAGS);
+            }
         }
-    }
-    gpuStart = svcGetSystemTick();
-    sCpuTicks += gpuStart - start;
-    NitroPort_PicaStage("the transfers to the screens (waiting for the GPU)");
-    C3D_FrameBegin(0);   /* (waits for the GPU and the transfers) */
-    if (sProfOn) {
-        /* (the GSP event thread runs the queue's end before its own
-         * callbacks: a moment for the last event's time) */
-        svcSleepThread(500000);
-        __atomic_store_n(&sProfArmed, 0, __ATOMIC_RELEASE);
-        prof_report(stereoNow, edges, profStart);
-        sProfOn = 0;
+        gpuStart = svcGetSystemTick();
+        sCpuTicks += gpuStart - start;
+        /* The frame before done (the GPU's had it while this one was
+         * built), then this one to the GPU. */
+        flight_finish(1);
+        sGpuSubmitted++;
+        sFlightQueue = sGxRecording;
+        sFlightMark = mark;
+        sFlightSets[0] = sets[0];
+        sFlightSets[1] = sets[1];
+        if (sProfOn) {
+            sProfFlight.stereo = stereoNow;
+            sProfFlight.edges = edges;
+            sProfFlight.smooth = sSmoothNow;
+            sProfFlight.split = sSmoothSplit;
+            sProfFlight.t0 = svcGetSystemTick();
+            __atomic_store_n(&sProfEvents, 0u, __ATOMIC_RELEASE);
+            __atomic_store_n(&sProfArmed, 1, __ATOMIC_RELEASE);
+            sProfFlightOn = 1;
+            sProfOn = 0;
+        }
+        sGpuRunTick = svcGetSystemTick();
+        NitroPort_PicaFrameRunning(mark);
+        if (sGxQueue[sFlightQueue].numEntries > 0) {
+            sFlight = 1;
+            gxCmdQueueRun(&sGxQueue[sFlightQueue]);
+        } else {
+            /* (nothing for the GPU: drawn as it is) */
+            __atomic_add_fetch(&sGpuDone, 1u, __ATOMIC_ACQ_REL);
+            sFlight = 1;
+            sGpuDoneTick = sGpuRunTick;
+        }
+        sGxRecording ^= 1;
+        GX_BindQueue(&sGxQueue[sGxRecording]);
     }
     NitroPort_PicaStage("between frames");
-    sInFrame = 1;
-    sGpuTicks += svcGetSystemTick() - gpuStart;
     sFrames++;
     if (stereoNow) {
         sStereoFrames++;
@@ -1667,7 +1820,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                           total, (double)prepareTicks * ms, (double)(gpuStart - start) * ms,
                           (unsigned long)(texAfter - texBefore),
                           (double)(texTicksAfter - texTicksBefore) * ms,
-                          (double)(svcGetSystemTick() - gpuStart) * ms, stereoNow ? "; stereo" : "");
+                          (double)sLastGpuTicks * ms, stereoNow ? "; stereo" : "");
             sHitchFrame = sFrames;
         }
     }
@@ -1682,9 +1835,6 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         u32 target = vblanks + 1u;
         Pending *p;
 
-        if (sets[s] != NULL) {
-            sets[s]->held = 0;
-        }
         if (!(drawn & (1 << s))) {
             continue;
         }
@@ -1718,7 +1868,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                                   (double)prepareTicks * ms, (double)(gpuStart - start) * ms,
                                   (unsigned long)(texAfter - texBefore),
                                   (double)(texTicksAfter - texTicksBefore) * ms,
-                                  (double)(svcGetSystemTick() - gpuStart) * ms,
+                                  (double)sLastGpuTicks * ms,
                                   stereoNow ? "; stereo" : "",
                                   sHitchQuiet ? "; more since the last line" : "");
                     sHitchFrame = sFrames;
@@ -1752,6 +1902,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         p->buf = lcdBuf[s];
         p->target = target;
         p->stereo = s == 0 && stereoNow;
+        p->serial = sGpuSubmitted;
     }
     LightLock_Unlock(&sPresentLock);
     return drawn;
@@ -1771,5 +1922,6 @@ void NitroPort_ComposeStats(ComposeStats *stats)
     stats->stereo = sStereoFrames;
     stats->underFills = sUnderFills;
     stats->smooth = sSmoothFrames;
+    stats->waitTicks = sWaitTicks;
 }
 #endif
