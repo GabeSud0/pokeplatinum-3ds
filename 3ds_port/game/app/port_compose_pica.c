@@ -134,17 +134,29 @@ void NitroPort_ComposeLook(int on)
 static Screen sScreens[2];        /* 0: upper, 1: lower */
 static void *sEdgeDepth[4];       /* 240 x 400 D24S8, a direction each, shared by the screens */
 static void *sEdgeBlock;          /* (the four, one after another: one VRAM block) */
-/* The smooth 3D (smooth3d): with the slider up the upper screen is drawn
- * at twice the resolution each way (480 x 800, one eye after the other)
- * and each eye scaled down into its LCD framebuffer by the transfer engine
- * as soon as it's drawn: every edge's pixels averaged, no jagged edges.
- * Its depth/stencil is the edge buffers' block (exactly the size, and
- * unused with the slider up: no outlines then), else a block of its own. */
+/* The smooth 3D (smooth3d): the upper screen is drawn at twice the
+ * resolution each way (480 x 800) and scaled down by the transfer engine:
+ * every edge's pixels averaged, no jagged edges. Its depth/stencil is the
+ * edge buffers' block (exactly the size), else a block of its own.
+ *  - With the slider up (no outlines then), all of it, one eye after the
+ *    other, each scaled down into its LCD framebuffer as soon as it's
+ *    drawn. So too with the slider down when there are no outlines.
+ *  - With the slider down and outlines (sSmoothSplit): the picture behind
+ *    and the opaque polygons, scaled down into the screen's own
+ *    framebuffer (through a linear copy in the smooth depth's memory,
+ *    done with by then); there the opaque polygons' depth and IDs are
+ *    drawn again (no colour), and the outlines (their buffers filled only
+ *    now: the smooth depth was theirs), the translucent polygons and the
+ *    2D in front go on at the screen's resolution. The outlines stay one
+ *    pixel wide, as the DS's are. */
 #define SMOOTH_W (SCREEN_H * 2)
 #define SMOOTH_H (TOP_W * 2)
 static void *sSmoothColor, *sSmoothOwnDepth;
 static uint8_t sSmoothFb[PICA_FRAMEBUF_BYTES] __attribute__((aligned(8)));
-static int sSmoothReady, sSmoothNow;
+static int sSmoothReady, sSmoothNow, sSmoothSplit;
+static u32 sEdgeClearNow;          /* (this frame: what the edge buffers are filled with) */
+static void smooth_down(Screen *scr, int edges);
+static unsigned sEdgeCopiesNow;    /* (and which are copied instead) */
 static u32 sSmoothFrames;
 static LightLock sSetLock, sPresentLock;
 static uint32_t sSeq;
@@ -567,7 +579,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
             }
         }
     }
-    if (config->stereo && config->smooth3d && sScreens[0].target[1] != NULL) {
+    if (config->smooth3d) {
         u32 colorSize = C3D_CalcColorBufSize(SMOOTH_W, SMOOTH_H, GPU_RB_RGBA8);
         u32 depthSize = C3D_CalcDepthBufSize(SMOOTH_W, SMOOTH_H, GPU_RB_DEPTH24_STENCIL8);
         void *depth = NULL;
@@ -616,7 +628,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     }
     sInFrame = 0;
     sReady = 1;
-    NitroPort_Log("[compose] screens drawn by the GPU: %s, 2D %s, 3D %s%s%s%s",
+    NitroPort_Log("[compose] screens drawn by the GPU: %s, 2D %s, 3D %s%s%s%s%s",
                   config->wide ? "wide upper screen" : "the DS's width",
                   filters[config->filter & 3],
                   config->stereo ? "with depth from the slider" : "flat",
@@ -625,10 +637,10 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
                   : sConfig.edges == 3  ? ", outlines on the GPU (all their moved passes drawn)"
                                         : ", outlines on the GPU",
                   !config->stereo ? ""
-                  : sSmoothReady && sConfig.edges && !config->edges3d
-                      ? " (with the slider up: none, the upper screen drawn 2x2 and scaled down)"
-                  : sSmoothReady ? " (with the slider up: the upper screen drawn 2x2 and scaled down)"
                   : sConfig.edges && !config->edges3d ? " (none with the slider up)" : "",
+                  !sSmoothReady ? ""
+                  : config->smooth3d == 1 ? ", with the slider up the upper screen drawn 2x2 and scaled down"
+                                          : ", the upper screen drawn 2x2 and scaled down",
                   config->flipV ? ", 2D flipped" : "");
     return 1;
 fail:
@@ -1024,7 +1036,9 @@ static void prof_report(int stereo, int edges, u64 t0)
                 group = sProfPartGroup[mark];
                 len = (size_t)snprintf(line, sizeof(line), "[gpu] %s (%s, outlines %s):",
                                        groups[group < 0 || group > 2 ? 2 : group],
-                                       !stereo ? "mono" : sSmoothNow && group != 2 ? "stereo, drawn 2x2" : "stereo",
+                                       sSmoothNow && group != 2
+                                           ? (stereo ? "stereo, drawn 2x2" : sSmoothSplit ? "mono, drawn 2x2 then 1x1" : "mono, drawn 2x2")
+                                           : stereo ? "stereo" : "mono",
                                        !edges ? "off" : sConfig.edges == 2 ? "on, pruned"
                                        : sConfig.edges == 3 ? "on, all drawn" : "on");
             }
@@ -1059,7 +1073,8 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
     int eyeDir;
     /* (the smooth 3D: the 2x2 framebuffer; the same picture, the viewport
      * twice the size) */
-    C3D_FrameBuf *fb = scr == &sScreens[0] && sSmoothNow ? (C3D_FrameBuf *)sSmoothFb : &target->frameBuf;
+    int smooth = scr == &sScreens[0] && sSmoothNow;
+    C3D_FrameBuf *fb = smooth ? (C3D_FrameBuf *)sSmoothFb : &target->frameBuf;
     C3D_Mtx pixels;
     const ComposeLayers *info = set ? &set->info : NULL;
     int canvasW = info && info->width > 0 ? info->width : DS_W;
@@ -1158,8 +1173,17 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         view.rect = rect3d;
         view.stereo = stereo;
         view.convergence = sConfig.convergence > 0.0f ? sConfig.convergence : sSceneConvergence;
+        view.part = smooth && sSmoothSplit ? PICA_DRAW_OPAQUE : PICA_DRAW_ALL;
         NitroPort_PicaProfileMark("the 2D behind");
         NitroPort_PicaDrawScene(&view);
+        if (smooth && sSmoothSplit) {
+            /* The rest at the screen's resolution (see sSmoothFb). */
+            smooth_down(scr, edges);
+            fb = &target->frameBuf;
+            view.fb = fb;
+            view.part = PICA_DRAW_AFTER;
+            NitroPort_PicaDrawScene(&view);
+        }
         C3D_SetFrameBuf(fb);
         C3D_SetViewport(0, 0, fb->width, fb->height);
         NitroPort_PicaSetView(&pixels, 0.0f, 1.0f);
@@ -1309,6 +1333,36 @@ static void smooth_out(Screen *scr, int buf, int eye)
     GX_DisplayTransfer((u32 *)sSmoothColor, dim, (u32 *)scr->lcd[buf][eye], dim, SMOOTH_TRANSFER_FLAGS);
 }
 
+/* RGBA8 to RGBA8: tiled, each 2x2 averaged, into linear; linear into tiled. */
+#define SMOOTH_DOWN_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | \
+     GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
+     GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_XY))
+#define SMOOTH_TILE_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_RAW_COPY(0) | \
+     GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
+     GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
+
+static void fill_edge_buffers(Screen *scr, u32 value, unsigned copied);
+
+/* The smooth 3D with outlines (sSmoothSplit): what's drawn 2x2 so far
+ * (queued after it: the command list cut) scaled down into the upper
+ * screen's own framebuffer, through the smooth depth's memory (done with:
+ * a linear 240 x 400 copy fits in it); then the edge buffers filled (that
+ * memory is theirs). */
+static void smooth_down(Screen *scr, int edges)
+{
+    C3D_FrameBuf *fb = (C3D_FrameBuf *)sSmoothFb;
+    u32 *temp = (u32 *)fb->depthBuf;
+    u32 dim = GX_BUFFER_DIM(SCREEN_H, TOP_W);
+
+    prof_split("the opaque polygons", 1);
+    GX_DisplayTransfer((u32 *)sSmoothColor, GX_BUFFER_DIM(SMOOTH_W, SMOOTH_H), temp,
+                       GX_BUFFER_DIM(SMOOTH_W, SMOOTH_H), SMOOTH_DOWN_FLAGS);
+    GX_DisplayTransfer(temp, dim, (u32 *)scr->target[0]->frameBuf.colorBuf, dim, SMOOTH_TILE_FLAGS);
+    if (edges) {
+        fill_edge_buffers(scr, sEdgeClearNow, sEdgeCopiesNow);
+    }
+}
+
 /* The edge marking buffers filled for a scene (memory fills, queued
  * ahead of the drawing), but those the transfer engine makes (copied: a
  * direction a bit): two a fill (the GPU's queue holds 32 entries a frame). */
@@ -1336,7 +1390,7 @@ static void fill_edge_buffers(Screen *scr, u32 value, unsigned copied)
 int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, int aOnTop, float slider,
                            int forced, int flush)
 {
-    int s, drawn = 0, stereoNow, need[2] = { 0, 0 }, timed = 0, edges = 0, lcdBuf[2] = { -1, -1 };
+    int s, drawn = 0, stereoNow, need[2] = { 0, 0 }, timed = 0, edges = 0, lcdBuf[2] = { -1, -1 }, top3d = 0;
     int underCleared[2] = { 0, 0 };
     unsigned copies;
     u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
@@ -1419,6 +1473,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         if (s == 0 && !has3d) {
             stereoNow = 0;
         }
+        if (s == 0) {
+            top3d = has3d;
+        }
     }
     LightLock_Unlock(&sPresentLock);
     LightLock_Unlock(&sSetLock);
@@ -1456,12 +1513,18 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     if (stereoNow && !sConfig.edges3d) {
         edges = 0;
     }
-    /* The smooth 3D (its depth the edge buffers': not with outlines). */
-    sSmoothNow = sSmoothReady && stereoNow && need[0] && !(edges && sSmoothOwnDepth == NULL);
+    /* The smooth 3D (sSmoothFb): on the upper screen when the 3D is
+     * there; with the slider up only without outlines (its depth is
+     * theirs, and each eye would need it). */
+    sSmoothNow = sSmoothReady && need[0] && top3d &&
+                 (stereoNow ? !(edges && sSmoothOwnDepth == NULL) : sConfig.smooth3d == 2);
+    sSmoothSplit = sSmoothNow && !stereoNow && edges;
     /* The left and right edge buffers copied from the screen's own
      * (NitroPort_PicaEdgeCopies): its stencil then the rear plane's ID where
      * nothing is drawn, as theirs. */
     copies = NitroPort_PicaEdgeCopies(edges);
+    sEdgeClearNow = edgeClear;
+    sEdgeCopiesNow = copies;
     /* The depth/stencil buffers cleared (before any drawing: the fills go
      * ahead of the frame's commands), the edge marking buffers with them. */
     for (s = 0; s < 2; s++) {
@@ -1477,6 +1540,12 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         if (s == 0 && sSmoothNow) {
             /* (the left eye's; the right eye's after it's drawn) */
             smooth_clear(sets[s], underCleared[s]);
+            if (sSmoothSplit) {
+                /* (the screen's own framebuffer: its depth; its colour comes
+                 * scaled down, the edge buffers are filled after that) */
+                C3D_RenderTargetClear(sScreens[0].target[0], C3D_CLEAR_DEPTH, 0,
+                                      copies ? edgeClear : 0xFFFFFFFFu);
+            }
             continue;
         }
         for (eye = 0; eye < (s == 0 && stereoNow ? 2 : 1); eye++) {
@@ -1552,9 +1621,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             continue;
         }
         for (eye = 0; eye < (s == 0 && stereoNow ? 2 : 1); eye++) {
-            if (s == 0 && sSmoothNow) {
-                if (eye == 1) {
-                    smooth_out(scr, lcdBuf[s], 1);   /* (the left eye's went after it was drawn) */
+            if (s == 0 && sSmoothNow && !sSmoothSplit) {
+                if (!stereoNow || eye == 1) {
+                    smooth_out(scr, lcdBuf[s], eye);   /* (the left eye's went after it was drawn) */
                 }
                 continue;
             }

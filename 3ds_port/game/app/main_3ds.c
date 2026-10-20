@@ -232,8 +232,9 @@ static volatile bool sSuspended;
  * the polygons it needs, worked out on the CPU: slower on a 3DS, October
  * 2026; drawn: the left and right moved passes drawn, not copied),
  * edges3d on/off (the outlines with the 3D slider up too; off by
- * default), smooth3d on/off (with the slider up the upper screen drawn
- * at twice the resolution and scaled down; on by default), flip on/off, filter3d
+ * default), smooth3d on/stereo/off (the upper screen drawn at twice the
+ * resolution and scaled down: always, the default; with the slider up
+ * only; never), flip on/off, filter3d
  * nearest/smooth/sharp/xbrz/xbrz-smooth, shadows on/off, grade on/off,
  * sun clock/<elevation>,<azimuth> (degrees). */
 static void ReadRemasterConfig(bool new3ds)
@@ -253,9 +254,10 @@ static void ReadRemasterConfig(bool new3ds)
      * an eye of a 25-43 ms stereo frame (2026-10-19), and two light
      * directions instead of four looked wrong (2026-10-20). */
     sCompose.edges3d = 0;
-    /* With the slider up the time the outlines took goes to drawing the
-     * upper screen 2x2 and scaling it down: no jagged edges. */
-    sCompose.smooth3d = 1;
+    /* The upper screen drawn 2x2 and scaled down: no jagged edges. With
+     * the slider up in the time the outlines took; with it down the
+     * outlines stay, drawn after it's scaled down. */
+    sCompose.smooth3d = 2;
     sCompose.flipV = 0;
     /* The 3D's textures as the DS's, nearest: made like the 2D (each texel
      * 2x2, then bilinear) the GPU took two to three times as long (the
@@ -313,7 +315,9 @@ static void ReadRemasterConfig(bool new3ds)
                                  : strcmp(value, "drawn") == 0  ? 3
                                                                 : 1;
             } else if (strcmp(name, "smooth3d") == 0) {
-                sCompose.smooth3d = !off;
+                sCompose.smooth3d = off                                                          ? 0
+                                    : strcmp(value, "stereo") == 0 || strcmp(value, "3d") == 0 ? 1
+                                                                                               : 2;
             } else if (strcmp(name, "edges3d") == 0) {
                 sCompose.edges3d = on || strcmp(value, "full") == 0;
             } else if (strcmp(name, "flip") == 0) {
@@ -1863,7 +1867,7 @@ static void PerfFrame(u64 enter)
         frames = now.frames - last.frames;
         published = now.published - last.published;
         timed = now.timed - last.timed;
-        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, of %.1f scenes/s; %u scenes not shown), each %.1f ms building + %.1f ms GPU; %.0f%% in stereo (%.0f%% drawn 2x2); 3D textures converted %u (%.1f ms each); 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut; "
+        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, of %.1f scenes/s; %u scenes not shown), each %.1f ms building + %.1f ms GPU; %.0f%% in stereo, %.0f%% drawn 2x2; 3D textures converted %u (%.1f ms each); 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut; "
                       "the picture behind the 3D one colour (painted by the clear) on %.1f screens a frame",
                       frames / seconds, timed / seconds, madeScenes / seconds,
                       (unsigned)(now.dropped - last.dropped),

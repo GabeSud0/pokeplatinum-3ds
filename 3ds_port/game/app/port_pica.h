@@ -127,7 +127,18 @@ typedef struct PicaView {
     PicaRect rect;           /* where the DS's screen goes */
     float stereo;            /* the eye's shift, in screen widths (0: none) */
     float convergence;       /* the distance (w) at which there's no shift */
+    int part;                /* PICA_DRAW_*: what of the scene to draw */
 } PicaView;
+/* What NitroPort_PicaDrawScene draws: all of it; or, for the smooth 3D
+ * with the outlines (port_compose_pica.c), first the opaque polygons alone
+ * into the 2x2 framebuffer, then (once that's scaled down into the
+ * screen's) their depth and polygon IDs alone, their outlines and the
+ * translucent polygons into the screen's own. */
+enum {
+    PICA_DRAW_ALL,
+    PICA_DRAW_OPAQUE,
+    PICA_DRAW_AFTER
+};
 
 /* Draw the prepared scene into view->fb (depth/stencil cleared by the
  * caller): the opaque polygons, their outlines (edge marking, when the
@@ -162,8 +173,9 @@ typedef struct ComposeConfig {
     int edges;               /* edge marking (the game's outlines) on the GPU: 1, or 2 with each pass
                               * only the polygons it needs (NitroPort_PicaEdgePruning), or 3 with all
                               * their moved passes drawn (NitroPort_PicaEdgeCopy off) */
-    int smooth3d;            /* with the 3D slider up, the upper screen drawn at twice the resolution
-                              * each way and scaled down (no jagged edges; no outlines then) */
+    int smooth3d;            /* the upper screen drawn at twice the resolution each way and scaled
+                              * down (no jagged edges): 0 never, 1 with the 3D slider up, 2 always
+                              * (with the slider down the outlines go on at its own resolution) */
     int edges3d;             /* the outlines with the 3D slider up too (off by default: each eye's
                               * outlines cost as much as the rest of its 3D, and the depth makes the
                               * shapes stand apart anyway) */
