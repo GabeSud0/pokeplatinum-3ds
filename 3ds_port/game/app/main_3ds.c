@@ -1346,8 +1346,11 @@ static void ShowScreen(int engine, bool aOnTop)
     u8 *fb;
 
     if (sRemaster) {
-        /* The layers upscaled into a texture, for the display thread. */
-        NitroPort_ComposePublish(engine, top ? 0 : 1);
+        /* The layers upscaled into a texture, for the display thread (if
+         * no set was free: drawn whole and published the next time). */
+        if (!NitroPort_ComposePublish(engine, top ? 0 : 1)) {
+            sMustDraw[top ? 0 : 1] = true;
+        }
         if (__atomic_load_n(&sGpuWakeReady, __ATOMIC_ACQUIRE)) {
             LightEvent_Signal(&sGpuWake);
         }
@@ -1527,8 +1530,12 @@ static void WaitForDrawing(void)
             return;   /* (a drawing thread itself crashed) */
         }
     }
+    u64 start = svcGetSystemTick();
+
+    /* (the GPU's frame: a second at most, should its queue have stopped) */
     while (DrawersBusy() ||
-           (sRemaster && (__atomic_load_n(&sComposing, __ATOMIC_ACQUIRE) || NitroPort_ComposeGpuBusy()))) {
+           (sRemaster && (__atomic_load_n(&sComposing, __ATOMIC_ACQUIRE) ||
+                          (NitroPort_ComposeGpuBusy() && svcGetSystemTick() - start < SYSCLOCK_ARM11)))) {
         svcSleepThread(500000LL);
     }
 }

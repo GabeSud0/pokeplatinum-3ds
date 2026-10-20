@@ -447,12 +447,17 @@ citro3d's own `C3Di_SplitFrame`, and two GX queues of its own, bound in
 turn while a frame is built (its operations recorded, not run) and run
 once the frame before is done (`flight_finish`; 128 entries, not
 citro3d's 32). What the frame being drawn reads stays as it is until then:
-its 2D sets (held, a count), its quads (two halves of one buffer), its
-vertices (two buffers, as before), its textures (one it drew isn't
-changed or freed before the GPU's done: `NitroPort_PicaGpuWait`). A frame
-goes on the LCD at its V-blank once the GPU's done with it (the queue's
-callback counts frames done). The log's `[perf] display` line has the
-time the display thread still waited for the GPU.
+its 2D sets (busy till the GPU's done with them: a publish that finds no
+set free has the drawer draw it all again the next time), its quads (two
+halves of one buffer), its vertices (two buffers, as before), its
+textures and the outlines' lists (one it drew isn't changed or freed
+before the GPU's done: `NitroPort_PicaGpuWait`). A frame goes on the LCD
+at its V-blank once the GPU's done with it (the queue's callback counts
+frames done); the lag (above) counts the V-blanks the GPU's last frame
+took. Should a frame's queue be stopped from outside (the HOME menu
+coming), it's run on after a fifth of a second. The log's
+`[perf] display` line has the time the display thread still waited for
+the GPU.
 
 Each 3D scene carries the V-blank count when the game finished it (its
 SWAP), and each published 2D picture the count when the drawers read the

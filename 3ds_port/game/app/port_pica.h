@@ -225,7 +225,9 @@ typedef struct ComposeLayers {
 } ComposeLayers;
 ComposeLayers *NitroPort_ComposeLayersOf(int engine);
 /* Into the textures of the screen (0 upper, 1 lower) the engine is on. */
-void NitroPort_ComposePublish(int engine, int screen);
+/* 0: no set free to publish into (one the GPU's drawing, one the frame
+ * being built, the newest): draw it all again next time. */
+int NitroPort_ComposePublish(int engine, int screen);
 /* How many times each engine's layers have been published. */
 uint32_t NitroPort_ComposePublished(int engine);
 

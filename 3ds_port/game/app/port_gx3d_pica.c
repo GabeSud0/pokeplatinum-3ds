@@ -855,7 +855,9 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     }
     sBoundTexKnown=0;   /* (a texture made again, maybe the bound one's entry) */
     sRecvTexKnown=0;
-    if(e && in_flight(e->lastFrame))settle();   /* (changed: made again where it is) */
+    /* (changed: made again where it is; drawn since the GPU last caught
+     * up, this frame's draws included, while it has a frame) */
+    if(e && sFlightFrame!=sSafeFrame && (int32_t)(e->lastFrame-sSafeFrame)>0)settle();
     if(!e){
         /* 2x2 texels a texel when sharp, if it fits (the PICA's 1024 and
          * the cache), else as it is; 16 bits a texel where that's exact */
@@ -1670,6 +1672,7 @@ static const NitroGx3dPruneResult *prune_for(const PicaView *view,const NitroGx3
     pv.stereo[1]=stereo;
     pv.convergence=view->convergence;
     pv.clear_id=edges->clearId;
+    settle();   /* (the frame the GPU has may be reading these lists) */
     ok=NitroPort_Gx3dPruneEdges(sVertices[sPrepared],sBatches,sPreparedBatches,sPruneRoles,&pv,
                                 sPruneIdx[sPrepared],PRUNE_INDICES,sPruneLists,&sPrune);
     if(ok && sPrune.indices)GSPGPU_FlushDataCache(sPruneIdx[sPrepared],(u32)(sPrune.indices*sizeof(uint16_t)));
@@ -1823,6 +1826,7 @@ static int copy_edge_buffers(const PicaView *view,u32 clear)
             GX_MemoryFill(sEdgeLinear,clear,sEdgeLinear+EDGE_LINE,BIT(0)|(2u<<8),
                           after,clear,after+EDGE_LINE,BIT(0)|(2u<<8));
         }else{
+            settle();   /* (the frame the GPU has may be copying through them) */
             for(i=0;i<EDGE_LINE;i++){
                 sEdgeLinear[i]=clear;
                 mid[lines*EDGE_LINE+i]=clear;

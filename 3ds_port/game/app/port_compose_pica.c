@@ -90,7 +90,8 @@ typedef struct LayerSet {
     int overTop, overBottom;   /* the DS's rows with anything in front of the 3D (a row more each side) */
     ComposeLayers info;   /* has3d etc., as published (no picture pointers) */
     uint32_t seq;         /* publish order (0: none, or being written) */
-    int writing, held;
+    int writing, held;    /* (held: by frames being built, a count) */
+    u32 flightSerial;     /* the last frame drawn with it (busy until sGpuDone reaches it) */
     NitroPublishTarget pub;   /* what its textures hold (publishing only what changed) */
 } LayerSet;
 
@@ -196,7 +197,6 @@ static gxCmdQueue_s sGxQueue[2];
 static int sGxReady, sGxRecording;      /* (the queue the frame being built goes into) */
 static int sFlight, sFlightQueue;       /* a frame the GPU has, and its queue */
 static u32 sFlightMark;                 /* (NitroPort_PicaFrameClose's) */
-static LayerSet *sFlightSets[2];        /* (its 2D, held till it's drawn) */
 static u32 sGpuSubmitted;
 static volatile u32 sGpuDone;           /* (frames drawn: the queues' callback) */
 static volatile u64 sGpuDoneTick;
@@ -860,7 +860,7 @@ static void flush_texture(void *data, uint32_t bytes)
     GSPGPU_FlushDataCache(data, bytes);
 }
 
-void NitroPort_ComposePublish(int engine, int screen)
+int NitroPort_ComposePublish(int engine, int screen)
 {
     int e = engine ? 1 : 0, i, buf = -1;
     Screen *scr = &sScreens[screen ? 1 : 0];
@@ -870,7 +870,7 @@ void NitroPort_ComposePublish(int engine, int screen)
     int w = l->width > 0 ? l->width : DS_W;
 
     if (!sReady || w > CANVAS_MAX || w * scr->texScale > scr->texW) {
-        return;
+        return 1;
     }
     /* The oldest set not held by the compositor, not the newest, and not
      * being written. */
@@ -886,8 +886,9 @@ void NitroPort_ComposePublish(int engine, int screen)
         for (i = 0; i < SETS; i++) {
             LayerSet *c = &scr->set[i];
 
-            if (c->writing || c->held || (c->seq == newest && newest != 0)) {
-                continue;
+            if (c->writing || c->held || (c->seq == newest && newest != 0) ||
+                (int32_t)(__atomic_load_n(&sGpuDone, __ATOMIC_ACQUIRE) - c->flightSerial) < 0) {
+                continue;   /* (in use, or the GPU still drawing a frame with it) */
             }
             if (buf < 0 || c->seq < scr->set[buf].seq) {
                 buf = i;
@@ -900,7 +901,10 @@ void NitroPort_ComposePublish(int engine, int screen)
     }
     LightLock_Unlock(&sSetLock);
     if (buf < 0) {
-        return;   /* (both engines publishing to one screen as they swap) */
+        /* (both engines publishing to one screen as they swap; or one set
+         * drawn by the GPU, one by the frame being built, the third the
+         * newest: the caller draws it all again next time) */
+        return 0;
     }
     set = &scr->set[buf];
     set->info = *l;
@@ -927,6 +931,7 @@ void NitroPort_ComposePublish(int engine, int screen)
     LightLock_Unlock(&sSetLock);
     __atomic_fetch_add(&sPublished, 1u, __ATOMIC_RELAXED);
     __atomic_fetch_add(&sPublishTicks, svcGetSystemTick() - start, __ATOMIC_RELAXED);
+    return 1;
 }
 
 /* -------------------------------------------------------------- the quads */
@@ -940,8 +945,10 @@ static void quad(float x0, float y0, float x1, float y1, float z, float u0, floa
     static const int corner[6][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 0 }, { 1, 1 }, { 0, 1 } };
     int i;
 
-    if (sQuadVertices + 6 > MAX_QUAD_VERTICES) {
-        return;
+    extern u32 gpuCmdBufSize, gpuCmdBufOffset;
+
+    if (sQuadVertices + 6 > MAX_QUAD_VERTICES || gpuCmdBufSize - gpuCmdBufOffset < 1024u) {
+        return;   /* (no room: in the quads, or in the command list) */
     }
     for (i = 0; i < 6; i++) {
         NitroGx3dGpuVertex *v = &sQuads[sQuadVertices + i];
@@ -1151,10 +1158,30 @@ static void flight_finish(int block)
         }
         t = svcGetSystemTick();
         NitroPort_PicaStage("waiting for the GPU (the frame before)");
-        gxCmdQueueWait(&sGxQueue[sFlightQueue], -1);
-        /* (the callback comes a moment after the queue's end) */
-        while ((int32_t)(__atomic_load_n(&sGpuDone, __ATOMIC_ACQUIRE) - sGpuSubmitted) < 0) {
-            svcSleepThread(50000LL);
+        for (;;) {
+            gxCmdQueue_s *fq = &sGxQueue[sFlightQueue];
+            u64 since = svcGetSystemTick();
+
+            gxCmdQueueWait(fq, -1);
+            /* (the callback comes a moment after the queue's end) */
+            while ((int32_t)(__atomic_load_n(&sGpuDone, __ATOMIC_ACQUIRE) - sGpuSubmitted) < 0 &&
+                   svcGetSystemTick() - since < SYSCLOCK_ARM11 / 5) {
+                svcSleepThread(50000LL);
+            }
+            if ((int32_t)(__atomic_load_n(&sGpuDone, __ATOMIC_ACQUIRE) - sGpuSubmitted) >= 0) {
+                break;
+            }
+            /* Not running, not finished (stopped from outside: the HOME
+             * menu's coming): run on from where it is. */
+            NitroPort_Log("[compose] a frame's GPU queue stopped at %u of %u: run again", (unsigned)fq->curEntry,
+                          (unsigned)fq->numEntries);
+            if (fq->lastEntry >= fq->numEntries) {
+                __atomic_add_fetch(&sGpuDone, 1u, __ATOMIC_ACQ_REL);   /* (all of it was done) */
+                sGpuDoneTick = svcGetSystemTick();
+                break;
+            }
+            fq->curEntry = fq->lastEntry;   /* (what was sent but not done, sent again) */
+            gxCmdQueueRun(fq);
         }
         sWaitTicks += svcGetSystemTick() - t;
     }
@@ -1173,14 +1200,6 @@ static void flight_finish(int block)
         prof_report(&sProfFlight);
         sProfFlightOn = 0;
     }
-    LightLock_Lock(&sSetLock);
-    for (int i = 0; i < 2; i++) {
-        if (sFlightSets[i] != NULL) {
-            sFlightSets[i]->held--;
-            sFlightSets[i] = NULL;
-        }
-    }
-    LightLock_Unlock(&sSetLock);
 }
 
 /* (port_gx3d_pica.c: a texture the GPU may be reading is to change) */
@@ -1772,8 +1791,16 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sGpuSubmitted++;
         sFlightQueue = sGxRecording;
         sFlightMark = mark;
-        sFlightSets[0] = sets[0];
-        sFlightSets[1] = sets[1];
+        /* (its 2D: no longer held by it as a frame being built, busy till
+         * the GPU's drawn it) */
+        LightLock_Lock(&sSetLock);
+        for (s = 0; s < 2; s++) {
+            if (sets[s] != NULL) {
+                sets[s]->held--;
+                sets[s]->flightSerial = sGpuSubmitted;
+            }
+        }
+        LightLock_Unlock(&sSetLock);
         if (sProfOn) {
             sProfFlight.stereo = stereoNow;
             sProfFlight.edges = edges;
@@ -1816,7 +1843,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
 
         if (total > 40.0 && (sFrames - sHitchFrame >= 15u || sHitchFrame == 0u)) {
             NitroPort_Log("[hitch] a frame took the display thread %.1f ms: %.1f ms preparing the scene, %.1f ms "
-                          "building (%lu textures converted: %.1f ms), %.1f ms GPU%s",
+                          "building (%lu textures converted: %.1f ms), %.1f ms GPU (the frame before)%s",
                           total, (double)prepareTicks * ms, (double)(gpuStart - start) * ms,
                           (unsigned long)(texAfter - texBefore),
                           (double)(texTicksAfter - texTicksBefore) * ms,
@@ -1840,7 +1867,10 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         }
         if (timed && screen3d && scene != NULL) {
             u32 wanted = scene->stamp + 1u + (u32)sLag;
-            int32_t slack = (int32_t)(wanted - (vblanks + 1u));
+            /* (it's drawn from now on: the V-blanks the GPU's last frame
+             * took count) */
+            u32 gpuVBlanks = (u32)(sLastGpuTicks / (u64)(SYSCLOCK_ARM11 / 60));
+            int32_t slack = (int32_t)(wanted - (vblanks + 1u + gpuVBlanks));
 
             sTimed++;
             if (slack < 0) {
@@ -1861,7 +1891,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
 
                     NitroPort_Log("[hitch] a 3D frame %d V-blank%s late (lag now %d): made at V-blank %lu, "
                                   "reached the display thread %lu V-blanks later, drawn from %lu after; %.1f ms "
-                                  "preparing, %.1f ms building (%lu textures converted: %.1f ms), %.1f ms GPU%s%s",
+                                  "preparing, %.1f ms building (%lu textures converted: %.1f ms), %.1f ms GPU (the frame "
+                                  "before)%s%s",
                                   (int)-slack, slack == -1 ? "" : "s", sLag, (unsigned long)scene->stamp,
                                   (unsigned long)(sSeenAt - scene->stamp),
                                   (unsigned long)(startVBlank - scene->stamp),
