@@ -44,6 +44,21 @@ unsigned NitroPort_PicaEdgeCopies(int edges);
 /* The command list cut here, always (on a profiled frame: a part named
  * `part`, as NitroPort_PicaProfileMark). */
 void NitroPort_PicaCut(const char *part);
+/* The remaster's frames (port_compose_pica.c), built while the GPU draws
+ * the one before: two command lists in turn (NitroPort_PicaFramesInit;
+ * 0 if there's no memory for them). Open a frame's list; cut it (into a
+ * GX command list, to the queue bound); close it (the mark: sFrame then).
+ * Tell when a frame's queue runs, and when it's done (the textures it
+ * drew may change then); wait: what waits for the frame running (a
+ * texture it may read is about to change). */
+int NitroPort_PicaFramesInit(void);
+void NitroPort_PicaFramesFree(void);
+void NitroPort_PicaFrameOpen(void);
+void NitroPort_PicaFrameSplit(void);
+u32 NitroPort_PicaFrameClose(void);
+void NitroPort_PicaFrameRunning(u32 mark);
+void NitroPort_PicaFrameDone(u32 mark);
+void NitroPort_PicaGpuWait(void (*wait)(void));
 /* A shader blob's DVLE (its shaders, in the order assembled), as libctru
  * lays them out (port_pica_abi.c: its enums are a different size from the
  * port's); NULL past the last. dvlb: a DVLB_s *. And libctru's DVLE_s's
@@ -210,7 +225,9 @@ typedef struct ComposeLayers {
 } ComposeLayers;
 ComposeLayers *NitroPort_ComposeLayersOf(int engine);
 /* Into the textures of the screen (0 upper, 1 lower) the engine is on. */
-void NitroPort_ComposePublish(int engine, int screen);
+/* 0: no set free to publish into (one the GPU's drawing, one the frame
+ * being built, the newest): draw it all again next time. */
+int NitroPort_ComposePublish(int engine, int screen);
 /* How many times each engine's layers have been published. */
 uint32_t NitroPort_ComposePublished(int engine);
 
@@ -235,10 +252,14 @@ typedef struct ComposeStats {
     u32 frames, published, timed, late, dropped, stereo;
     u32 underFills;          /* screens drawn whose picture behind the 3D was all one colour (the clear) */
     u32 smooth;              /* frames whose upper screen was drawn 2x2 (smooth3d) */
+    u64 waitTicks;           /* the display thread waiting for the GPU (to finish the frame before) */
     u64 gpuTicks, cpuTicks, publishTicks;
     int lag;
 } ComposeStats;
 void NitroPort_ComposeStats(ComposeStats *stats);
+/* The GPU still drawing a frame (it's given one and goes on with it while
+ * the next is built): what draws on the screens itself waits for it. */
+int NitroPort_ComposeGpuBusy(void);
 /* A V-blank happened: the frames due go onto the LCD (the V-blank thread
  * calls this, each V-blank); and how many V-blanks there have been (any
  * thread). */

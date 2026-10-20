@@ -91,9 +91,10 @@ static int room_for_draw(void)
 }
 /* The command list's peak use and the draws left out since last asked. */
 static float sCmdPeak;
+static int sFramesOwn;   /* (the remaster's frames: NitroPort_PicaFrameOpen) */
 void NitroPort_PicaCmdStats(float *peak,unsigned *cut)
 {
-    float now=C3D_GetCmdBufUsage();
+    float now=sFramesOwn?0.0f:C3D_GetCmdBufUsage();
     if(now>sCmdPeak)sCmdPeak=now;
     if(peak)*peak=sCmdPeak;
     if(cut)*cut=sDrawsCut;
@@ -103,6 +104,94 @@ void NitroPort_PicaNoteCmdUse(void)
 {
     float now=C3D_GetCmdBufUsage();
     if(now>sCmdPeak)sCmdPeak=now;
+}
+
+/* ------------------------------------------------ the remaster's frames
+ * The display (port_compose_pica.c) builds a frame's commands while the
+ * GPU draws the frame before: two command lists, used in turn, and the
+ * frame's GPU operations recorded in a queue of the display's own, run
+ * once the frame before is done. citro3d's frames don't allow it
+ * (C3D_FrameBegin waits for the GPU before a frame's commands may start,
+ * into its one command list): they aren't used there. A list is cut by
+ * citro3d's own C3Di_SplitFrame (with the framebuffer cache's flush, as
+ * C3D_FrameSplit does). */
+extern bool C3Di_SplitFrame(u32 **buf,u32 *size);
+static uint32_t sFrame;   /* (DrawScene's count, below) */
+static u32 *sFrameCmd[2];
+static int sFrameCmdNow;
+/* Textures and memory the GPU may still read: sFrame at the end of the
+ * frame it was given last (sFlightFrame), at the end of the last it
+ * finished (sSafeFrame); sGpuWait waits for it (NitroPort_PicaGpuWait). */
+static u32 sFlightFrame,sSafeFrame;
+static void (*sGpuWait)(void);
+
+int NitroPort_PicaFramesInit(void)
+{
+    int i;
+    for(i=0;i<2;i++){
+        if(!sFrameCmd[i])sFrameCmd[i]=linearAlloc(CMDBUF_BYTES);
+        if(!sFrameCmd[i])return 0;
+    }
+    sFramesOwn=1;
+    return 1;
+}
+
+void NitroPort_PicaFrameOpen(void)
+{
+    sFrameCmdNow^=1;
+    GPUCMD_SetBuffer(sFrameCmd[sFrameCmdNow],CMDBUF_BYTES/4u,0);
+}
+
+void NitroPort_PicaFrameSplit(void)
+{
+    u32 *buf,size;
+    float use=1.0f-(float)(gpuCmdBufSize-gpuCmdBufOffset)/(float)(CMDBUF_BYTES/4u);   /* (of the whole list) */
+    if(use>sCmdPeak)sCmdPeak=use;
+    if(C3Di_SplitFrame(&buf,&size))GX_ProcessCommandList(buf,size*4u,GX_CMDLIST_FLUSH);
+}
+
+u32 NitroPort_PicaFrameClose(void)
+{
+    NitroPort_PicaFrameSplit();
+    GPUCMD_SetBuffer(NULL,0,0);
+    return sFrame;
+}
+
+void NitroPort_PicaFrameRunning(u32 mark)
+{
+    sFlightFrame=mark;
+}
+
+void NitroPort_PicaFrameDone(u32 mark)
+{
+    sSafeFrame=mark;
+}
+
+void NitroPort_PicaGpuWait(void (*wait)(void))
+{
+    sGpuWait=wait;
+}
+
+/* Before what the GPU may be reading is changed: a texture drawn in a
+ * frame not known to be finished (but the one being built). */
+static int in_flight(u32 frame)
+{
+    return (int32_t)(frame-sSafeFrame)>0 && (int32_t)(frame-sFlightFrame)<=0;
+}
+static void settle(void)
+{
+    if(sGpuWait && sFlightFrame!=sSafeFrame)sGpuWait();
+}
+
+void NitroPort_PicaFramesFree(void)
+{
+    int i;
+    for(i=0;i<2;i++){
+        if(sFrameCmd[i])linearFree(sFrameCmd[i]);
+        sFrameCmd[i]=NULL;
+    }
+    sFramesOwn=0;
+    sGpuWait=NULL;
 }
 
 /* A scene has at most 4096 triangles; a batch per triangle at worst. */
@@ -308,6 +397,7 @@ void NitroPort_PicaTextureFilter(int mode)
     if(mode>4)mode=4;
     if(mode==sTexMode)return;
     sTexMode=mode;
+    settle();
     for(i=0;i<TEX_CACHE_ENTRIES;i++)free_texture(&sTextures[i]);   /* made again the new way */
 }
 
@@ -324,6 +414,7 @@ static void apply_grade(void)
     }
     NitroPort_Gx3dSetGrade(sGradeWanted>=0?sGradeTable:NULL);
     sGradePeriod=sGradeWanted;
+    settle();
     for(i=0;i<TEX_CACHE_ENTRIES;i++)free_texture(&sTextures[i]);
 }
 
@@ -516,7 +607,9 @@ static GPU_TEXTURE_WRAP_PARAM wrap_mode(uint32_t param,int repeatBit,int flipBit
 }
 
 /* Frees the least recently used texture not drawn this frame, to make
- * room. Returns it, or NULL if every texture is in use this frame. */
+ * room. Returns it, or NULL if every texture is in use this frame. One
+ * the GPU may still be reading (the frame it's drawing, NitroPort_PicaFrameOpen)
+ * only once it's done. */
 static TexEntry *evict_one(void)
 {
     TexEntry *oldest=NULL;
@@ -524,8 +617,10 @@ static TexEntry *evict_one(void)
     for(i=0;i<TEX_CACHE_ENTRIES;i++){
         TexEntry *e=&sTextures[i];
         if(!e->used || e->lastFrame==sFrame)continue;
+        if(sFramesOwn && (int32_t)(e->lastFrame-sFlightFrame)>0)continue;   /* (this frame's) */
         if(!oldest || e->lastFrame<oldest->lastFrame)oldest=e;
     }
+    if(oldest && in_flight(oldest->lastFrame))settle();
     if(oldest)free_texture(oldest);
     return oldest;
 }
@@ -760,6 +855,9 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     }
     sBoundTexKnown=0;   /* (a texture made again, maybe the bound one's entry) */
     sRecvTexKnown=0;
+    /* (changed: made again where it is; drawn since the GPU last caught
+     * up, this frame's draws included, while it has a frame) */
+    if(e && sFlightFrame!=sSafeFrame && (int32_t)(e->lastFrame-sSafeFrame)>0)settle();
     if(!e){
         /* 2x2 texels a texel when sharp, if it fits (the PICA's 1024 and
          * the cache), else as it is; 16 bits a texel where that's exact */
@@ -1574,6 +1672,7 @@ static const NitroGx3dPruneResult *prune_for(const PicaView *view,const NitroGx3
     pv.stereo[1]=stereo;
     pv.convergence=view->convergence;
     pv.clear_id=edges->clearId;
+    settle();   /* (the frame the GPU has may be reading these lists) */
     ok=NitroPort_Gx3dPruneEdges(sVertices[sPrepared],sBatches,sPreparedBatches,sPruneRoles,&pv,
                                 sPruneIdx[sPrepared],PRUNE_INDICES,sPruneLists,&sPrune);
     if(ok && sPrune.indices)GSPGPU_FlushDataCache(sPruneIdx[sPrepared],(u32)(sPrune.indices*sizeof(uint16_t)));
@@ -1727,6 +1826,7 @@ static int copy_edge_buffers(const PicaView *view,u32 clear)
             GX_MemoryFill(sEdgeLinear,clear,sEdgeLinear+EDGE_LINE,BIT(0)|(2u<<8),
                           after,clear,after+EDGE_LINE,BIT(0)|(2u<<8));
         }else{
+            settle();   /* (the frame the GPU has may be copying through them) */
             for(i=0;i<EDGE_LINE;i++){
                 sEdgeLinear[i]=clear;
                 mid[lines*EDGE_LINE+i]=clear;
@@ -2019,7 +2119,9 @@ void NitroPort_PicaShadowDebug(int enabled)
  * these waits deliberately sacrifice overlap and are not a perf mode. */
 static void shadow_checkpoint(const char *name)
 {
-    if(!sShadowDebug)return;
+    /* (not with the remaster's own frames, NitroPort_PicaFrameOpen: there
+     * are no citro3d frames to end; the sun shadows are parked anyway) */
+    if(!sShadowDebug || sFramesOwn)return;
     stage(name);
     C3D_FrameEnd(0);
     NitroPort_PicaNoteCmdUse();
@@ -2157,7 +2259,10 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     if(!sXbrzWorked){
         sXbrzWorked=1;   /* (once a scene: its first draw) */
         apply_grade();
-        if(sTexMode>=3)xbrz_work();
+        if(sTexMode>=3){
+            settle();   /* (xBRZ redoes textures where they are) */
+            xbrz_work();
+        }
     }
     blend=(NitroPort_IoReg[0x60]&8u)!=0;
     NitroPort_Gx3dEdgeSetup(&edges);
