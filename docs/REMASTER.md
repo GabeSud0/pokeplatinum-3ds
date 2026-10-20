@@ -190,24 +190,29 @@ New 3DS (2026-10-19) the two drawn passes took half the four's time, and
 the copies 1.4 ms an eye through a linear buffer in the linear heap: it's
 in VRAM now (the linear heap if there's no room).
 
-With the 3D slider up the outlines are drawn for each eye: on a New 3DS
-(2026-10-19) 8-13 ms an eye of a 25-43 ms stereo frame, for about 3% of
-the picture's pixels (in Jubilife the buildings' silhouettes, signs, and
-a line round the DS's screen's edges; the characters are sprites with
-their own). So with the slider up the outlines are light by default
-(`edges3d`): two neighbours tested instead of four, a knight's move away
-(a column across and two pixels up, and the opposite). 8 bytes and a
-line apart, both are copied, and every side of a shape still gets its
-outline: one pixel wide down its sides, two across its top and bottom
-(lines slanting along that move have none). The copies wrap round at the
-ends of the framebuffer's lines, the screen's top and bottom two rows,
-which the outlines leave out: no line along those two edges. About a
-third of the full outlines' time: the two shifted passes and half the
-outlines drawn saved. Tested two directions out of the four, the PC's
-simulation of Jubilife and Route 202 lost: left and right only, every
-top and bottom edge; right and below, every left and top one; the two
-diagonals (as close as the knight's moves, but neither copyable: 4 bytes
-apart) almost nothing.
+With the 3D slider up there are no outlines (`edges3d on` keeps them).
+Drawn for each eye they took 8-13 ms an eye of a 25-43 ms stereo frame
+(2026-10-19), for about 3% of the picture (buildings' silhouettes, signs,
+a line round the DS's screen), and in 3D the depth sets shapes apart
+anyway. Two directions tested instead of four, from copies a knight's move
+away (PR #127), saved two thirds of that but looked wrong on a 3DS:
+outlines where there was nothing, and too thick on some buildings
+(2026-10-20).
+
+That time goes to a smoother 3D instead (`smooth3d`, on by default): with
+the slider up the upper screen is drawn at twice the resolution each way,
+480 x 800 (the framebuffer's way round), and the transfer engine averages
+each 2x2 pixels into one as it copies the eye into its LCD framebuffer
+(citro3d's anti-aliasing: the output's size given as the input's), so
+polygons' edges come out smooth, not jagged. One framebuffer serves both
+eyes: the left eye drawn, copied out, the framebuffer cleared, then the
+right one. Its depth/stencil is the edge buffers' VRAM (one block now:
+4 x 240 x 400 x 4 bytes, exactly 480 x 800 D24S8), idle with the slider up;
+its colour 1.5 MB more VRAM, made room for by the classic display's
+render target, now made only if the classic display is used. Every pixel
+is drawn four times over: the 3D, and the 2D in front of and behind it.
+The 2D in front of the 3D (a text box) is drawn only over the rows with
+anything in them (with the slider down too).
 
 The 3D's textures are RGBA5551 where that's exact (every DS format but
 A3I5 and A5I3, sampled nearest, as `filter3d 0` has it: the DS's colours
@@ -494,7 +499,8 @@ frames waiting isn't drawn again until one has shown.
 | `edges off` | no outlines (edge marking) |
 | `edges drawn` | the outlines' left and right moved passes drawn, as before they were copied (for comparing: the same picture, slower) |
 | `edges pruned` | each outline pass draws only the polygons it needs (worked out on the CPU each scene; the same picture). Slower on a 3DS (see below): off by default |
-| `edges3d full` / `edges3d off` | with the 3D slider up, the outlines as with it down / none (default `light`: two directions tested instead of four, about a third of the time; see How it works) |
+| `edges3d on` | the outlines with the 3D slider up too (default off: see How it works; no smooth 3D then) |
+| `smooth3d off` | with the 3D slider up, the upper screen drawn at its own resolution (default on: twice it and scaled down, no jagged edges; see How it works) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
 | `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off. **Parked on the 3DS** (they hang its GPU; see below): off there until fixed |
 | `shadowdebug on` | debug only (for the sun shadows' hunt, with them on again): wait for GPU completion before/after the sun map, after the opaque scene, and after direct shadow receiving. Slower; the watchdog can identify the outstanding pass. Default off |
@@ -528,7 +534,7 @@ more.
 The log says what's on (`[compose] screens drawn by the GPU: ...`) and,
 every two seconds, `[perf] display: N frames/s drawn (N with a new 3D
 scene, of N scenes/s; N scenes not shown), each X ms building + X ms GPU;
-N% in stereo; 3D textures converted N (X ms each); 2D published N/s, X ms
+N% in stereo (N% drawn 2x2); 3D textures converted N (X ms each); 2D published N/s, X ms
 each; 3D shown N V-blanks after the game made it, N late; GPU command list
 N% full at most, N draws cut`. In the field the frames with a new 3D
 scene should match the scenes made (30 a second), none not shown;
@@ -552,8 +558,7 @@ screen's), then `[gpu] the frame: the clears X ms, the rest X ms, the
 transfers (the outlines' copies, to the screens) X ms; X ms in all`.
 Nothing changes on the other frames; the cuts are the ones the second
 eye's outlines already use. (The shifted passes are the up and down ones
-since the left and right are copied; none with the light outlines,
-`edges3d light`, both of whose are copied.)
+since the left and right are copied.)
 
 ## 60 frames a second in the 3D
 
