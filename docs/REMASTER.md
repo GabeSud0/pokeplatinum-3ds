@@ -121,6 +121,10 @@ behind; the 3D's rear plane (fogged when the game says so); the polygons
 a brightness effect on the 3D if the game has one; the layers in front;
 the master brightness. A screen isn't drawn again until the V-blank after
 its last frame was shown (its other framebuffer is on the LCD until then).
+A layer behind that's all one colour (in the field, often only the
+backdrop) is painted by the frame's clear instead of a quad the size of
+the screen (1.3-2 ms of the GPU's an eye); the `[perf] display:` line
+says how often.
 
 Edge marking on the GPU (the DS outlines a pixel of an opaque polygon when
 a neighbouring pixel belongs to another polygon and is further away): for
@@ -181,7 +185,10 @@ on the DS) and tiles it back into those two buffers from a line on and a
 line back (`NitroPort_PicaEdgeCopies`). Three transfers an eye instead of
 the scene drawn twice. Up and down are 4 bytes away, and the engine takes
 8-byte addresses, so those two are still drawn. Not with the sun shadows
-(they use the stencil). `edges drawn` draws all four, as before.
+(they use the stencil). `edges drawn` draws all four, as before. On a
+New 3DS (2026-10-19) the two drawn passes took half the four's time, and
+the copies 1.4 ms an eye through a linear buffer in the linear heap: it's
+in VRAM now (the linear heap if there's no room).
 
 The 3D's textures are RGBA5551 where that's exact (every DS format but
 A3I5 and A5I3, sampled nearest, as `filter3d 0` has it: the DS's colours

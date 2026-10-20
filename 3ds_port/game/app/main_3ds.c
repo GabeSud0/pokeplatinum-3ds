@@ -1850,7 +1850,8 @@ static void PerfFrame(u64 enter)
         frames = now.frames - last.frames;
         published = now.published - last.published;
         timed = now.timed - last.timed;
-        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, of %.1f scenes/s; %u scenes not shown), each %.1f ms building + %.1f ms GPU; %.0f%% in stereo; 3D textures converted %u (%.1f ms each); 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut",
+        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, of %.1f scenes/s; %u scenes not shown), each %.1f ms building + %.1f ms GPU; %.0f%% in stereo; 3D textures converted %u (%.1f ms each); 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut; "
+                      "the picture behind the 3D one colour (painted by the clear) on %.1f screens a frame",
                       frames / seconds, timed / seconds, madeScenes / seconds,
                       (unsigned)(now.dropped - last.dropped),
                       frames ? (double)(now.cpuTicks - last.cpuTicks) * 1000.0 / SYSCLOCK_ARM11 / frames : 0.0,
@@ -1860,7 +1861,8 @@ static void PerfFrame(u64 enter)
                       tex != lastTex ? (double)(texTicks - lastTexTicks) * 1000.0 / SYSCLOCK_ARM11 / (tex - lastTex) : 0.0,
                       published / seconds,
                       published ? (double)(now.publishTicks - last.publishTicks) * 1000.0 / SYSCLOCK_ARM11 / published : 0.0,
-                      now.lag, (unsigned)(now.late - last.late), (double)cmdPeak * 100.0, cmdCut);
+                      now.lag, (unsigned)(now.late - last.late), (double)cmdPeak * 100.0, cmdCut,
+                      frames ? (double)(now.underFills - last.underFills) / frames : 0.0);
         last = now;
         lastTex = tex;
         lastTexTicks = texTicks;
