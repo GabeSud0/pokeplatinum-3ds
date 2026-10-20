@@ -143,6 +143,26 @@ static void LogThreadTrouble(const char *what, size_t stack, s32 priority, int c
                   !probed ? "not tried" : R_SUCCEEDED(direct) ? "made" : "refused", (unsigned long)direct);
 }
 
+/* threadCreate, and again for up to a second if it fails (in case what's
+ * missing comes back: the start above went on with threads refused).
+ * When it works the first time, nothing more. */
+#define THREAD_TRIES 10
+static Thread CreateThreadPatiently(ThreadFunc entry, void *arg, size_t stack, int priority, int core,
+                                    bool detached)
+{
+    Thread t = threadCreate(entry, arg, stack, priority, core, detached);
+    int tries;
+
+    for (tries = 1; t == NULL && tries < THREAD_TRIES; tries++) {
+        svcSleepThread(100000000LL);
+        t = threadCreate(entry, arg, stack, priority, core, detached);
+    }
+    if (t != NULL && tries > 1) {
+        NitroPort_Log("[threads] a thread started on try %d", tries);
+    }
+    return t;
+}
+
 #define AUDIO_FRAMES 512
 #define AUDIO_BUFFERS 4
 static Thread sSoundThread;
@@ -234,7 +254,7 @@ static void StartSound(s32 priority)
     /* On the game's core (0), ahead of the game's threads, as it must keep
      * up with the speaker. (Core 1, the system's, gives a program only a
      * share of its time, and too little: in Azahar sound fell behind.) */
-    sSoundThread = threadCreate(SoundMain, NULL, 64 * 1024, priority - 2, 0, false);
+    sSoundThread = CreateThreadPatiently(SoundMain, NULL, 64 * 1024, priority - 2, 0, false);
     if (!sSoundThread) {
         __atomic_store_n(&sSoundThreadRunning, false, __ATOMIC_RELEASE);
         NitroPort_Log("[audio] couldn't start independent audio thread");
@@ -480,7 +500,7 @@ static void StartVBlankThread(s32 priority)
 {
     __atomic_store_n(&sVBlankRunning,true,__ATOMIC_RELEASE);
     /* Core 0, above everything else there: it does almost nothing, at once. */
-    sVBlankThread=threadCreate(VBlankMain,NULL,16*1024,priority-3,0,false);
+    sVBlankThread=CreateThreadPatiently(VBlankMain,NULL,16*1024,priority-3,0,false);
     if(!sVBlankThread){
         __atomic_store_n(&sVBlankRunning,false,__ATOMIC_RELEASE);
         NitroPort_Log("[compose] couldn't start the V-blank thread");
@@ -650,7 +670,7 @@ static void StartGpu(s32 priority,bool new3ds)
      * there. Not core 2: engine A's drawer, whose screen shows the 3D,
      * needs all of it, and shared with this it fell behind the 3D (fewer,
      * uneven 3D frames: a camera pan jittered). */
-    sGpuThread=threadCreate(GpuMain,NULL,128*1024,priority+1,sGpuCore,false);
+    sGpuThread=CreateThreadPatiently(GpuMain,NULL,128*1024,priority+1,sGpuCore,false);
     if(!sGpuThread){
         __atomic_store_n(&sGpuWakeReady,false,__ATOMIC_RELEASE);
         __atomic_store_n(&sGpuRunning,false,__ATOMIC_RELEASE);
@@ -746,7 +766,7 @@ static void GeometryOps(void)
 static void StartGeometryOn(s32 priority, int core)
 {
     GeometryOps();
-    sGeoThread = threadCreate(GeoMain, NULL, 64 * 1024, priority + 1, core, false);
+    sGeoThread = CreateThreadPatiently(GeoMain, NULL, 64 * 1024, priority + 1, core, false);
     sGeoCore = sGeoThread ? core : -1;
     if (!sGeoThread) {
         NitroPort_Gx3dStopThread();
@@ -1570,7 +1590,9 @@ static bool StartDrawer(int screens, s32 priority, s32 readPriority, int core)
     d->core = core;
     d->priority = priority;
     d->readPriority = readPriority;
-    d->thread = threadCreate(DrawerMain, d, 64 * 1024, readPriority, core, false);
+    /* (core 1: not waited for, the next one is tried instead) */
+    d->thread = core == 1 ? threadCreate(DrawerMain, d, 64 * 1024, readPriority, core, false)
+                          : CreateThreadPatiently(DrawerMain, d, 64 * 1024, readPriority, core, false);
     if (d->thread == NULL) {
         if (core != 1) {   /* (core 1: the next one tried instead) */
             LogThreadTrouble("drawing", 64 * 1024, readPriority, core);
@@ -2434,7 +2456,7 @@ int main(int argc, char **argv)
         }
         StartSound(priority);
         aptHook(&sAptHook, OnAptEvent, NULL);   /* (after citro3d's: called before it) */
-        if (threadCreate(GameThread, NULL, GAME_STACK_SIZE, priority, -2, true) == NULL) {
+        if (CreateThreadPatiently(GameThread, NULL, GAME_STACK_SIZE, priority, -2, true) == NULL) {
             NitroPort_Log("Can't start the game's thread.");
             LogThreadTrouble("the game", GAME_STACK_SIZE, priority, -2);
         } else {
