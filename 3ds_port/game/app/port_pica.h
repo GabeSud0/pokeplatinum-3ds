@@ -37,12 +37,10 @@ void NitroPort_PicaPruneStats(float *ms, unsigned *runs, unsigned *fails, float 
  * (off: `edges drawn`). */
 void NitroPort_PicaEdgeCopy(int on);
 /* For a frame, after its scene is prepared (edges: edge marking on this
- * frame; light: the light outlines, two directions, as with the 3D slider
- * up and `edges3d light`): *fill gets the directions (bits) whose edge
- * buffers the caller fills; returns whether the others are copied from the
- * screen's depth/stencil (the caller clears that to the edge buffers' value
- * then). */
-int NitroPort_PicaEdgeCopies(int edges, int light, unsigned *fill);
+ * frame): the directions (bits) whose edge buffers will be copied (the
+ * caller doesn't fill those, and clears the screen's depth/stencil to the
+ * edge buffers' value), or 0. */
+unsigned NitroPort_PicaEdgeCopies(int edges);
 /* The command list cut here, always (on a profiled frame: a part named
  * `part`, as NitroPort_PicaProfileMark). */
 void NitroPort_PicaCut(const char *part);
@@ -160,8 +158,9 @@ typedef struct ComposeConfig {
     int edges;               /* edge marking (the game's outlines) on the GPU: 1, or 2 with each pass
                               * only the polygons it needs (NitroPort_PicaEdgePruning), or 3 with all
                               * their moved passes drawn (NitroPort_PicaEdgeCopy off) */
-    int edges3d;             /* with the 3D slider up: 0 no outlines, 1 light ones (two directions:
-                              * see mark_edges in port_gx3d_pica.c), 2 as without it */
+    int edges3d;             /* the outlines with the 3D slider up too (off by default: each eye's
+                              * outlines cost as much as the rest of its 3D, and the depth makes the
+                              * shapes stand apart anyway) */
     int flipV;               /* (if the 2D comes out upside down) */
     int filter3d;            /* the 3D's textures: 0 nearest (the DS's), 1 bilinear, 2 sharp (2x2, bilinear),
                               * 3 xbrz (2x by xBRZ, nearest), 4 xbrz smooth (bilinear) */

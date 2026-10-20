@@ -231,8 +231,8 @@ static volatile bool sSuspended;
  * each scene), edges on/off/pruned/drawn (pruned: each outline pass only
  * the polygons it needs, worked out on the CPU: slower on a 3DS, October
  * 2026; drawn: the left and right moved passes drawn, not copied),
- * edges3d light/full/off (the outlines with the 3D slider up: light, the
- * default, tests two directions, not four), flip on/off, filter3d
+ * edges3d on/off (the outlines with the 3D slider up too; off by
+ * default), flip on/off, filter3d
  * nearest/smooth/sharp/xbrz/xbrz-smooth, shadows on/off, grade on/off,
  * sun clock/<elevation>,<azimuth> (degrees). */
 static void ReadRemasterConfig(bool new3ds)
@@ -248,10 +248,10 @@ static void ReadRemasterConfig(bool new3ds)
     sCompose.stereoStrength = 0.02f;
     sCompose.convergence = 0.0f;
     sCompose.edges = 1;
-    /* With the slider up the outlines are drawn for each eye: 8-13 ms an
-     * eye of a 25-43 ms stereo frame (2026-10-19). The light ones are about
-     * a third of that. */
-    sCompose.edges3d = 1;
+    /* With the slider up no outlines: drawn for each eye they cost 8-13 ms
+     * an eye of a 25-43 ms stereo frame (2026-10-19), and two light
+     * directions instead of four looked wrong (2026-10-20). */
+    sCompose.edges3d = 0;
     sCompose.flipV = 0;
     /* The 3D's textures as the DS's, nearest: made like the 2D (each texel
      * 2x2, then bilinear) the GPU took two to three times as long (the
@@ -309,9 +309,7 @@ static void ReadRemasterConfig(bool new3ds)
                                  : strcmp(value, "drawn") == 0  ? 3
                                                                 : 1;
             } else if (strcmp(name, "edges3d") == 0) {
-                sCompose.edges3d = off                           ? 0
-                                   : strcmp(value, "full") == 0 ? 2
-                                                                : 1;
+                sCompose.edges3d = on || strcmp(value, "full") == 0;
             } else if (strcmp(name, "flip") == 0) {
                 sCompose.flipV = on;
             } else if (strcmp(name, "shadows") == 0) {

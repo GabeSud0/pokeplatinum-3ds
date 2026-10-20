@@ -1640,28 +1640,20 @@ static int pruned_any(size_t b,int whole,int zones,const unsigned scissor[4][4])
  * each: the neighbours to the left and right are a line away. So the GPU's
  * transfer engine (as fast as the copies to the screens: a fraction of a
  * millisecond) makes those two buffers instead of the scene drawn twice:
- * the screen's buffer untiled into a linear one with spare lines each side
- * (the rear plane, as the edge buffers are cleared to: past the screen's
- * edges, as on the DS), then tiled into each buffer from a line on and a
- * line back. (Which one is left and which right doesn't matter: the
+ * the screen's buffer untiled into a linear one with a spare line each
+ * side (the rear plane, as the edge buffers are cleared to: past the
+ * screen's edges, as on the DS), then tiled into each buffer from a line on
+ * and a line back. (Which one is left and which right doesn't matter: the
  * outlines drawn test both.) Up and down are 4 bytes away and the engine
  * takes 8-byte addresses: those two are still drawn. Not with the sun
- * shadows on (they use the stencil); `edges drawn` draws all four.
- *
- * The light outlines (`edges3d light`, with the 3D slider up) take two
- * neighbours a knight's move away instead (EDGE_KNIGHT_X/Y: a column across
- * and two pixels up, and the opposite), 8 bytes from a line on and a line
- * back: both copied, and an outline on every side of a shape. */
+ * shadows on (they use the stencil); `edges drawn` draws all four. */
 #define EDGE_LINE 240u                 /* (pixels a framebuffer line: the screen's height) */
 #define EDGE_LINES_MAX 400u            /* (lines: the upper screen's width) */
-#define EDGE_PAD 2u                    /* (spare lines each side) */
-#define EDGE_KNIGHT 2u                 /* (pixels along the line, for the light outlines) */
 #define EDGE_UNTILE GX3D_TRANSFER_FLAGS
 #define EDGE_TILE (GX3D_TRANSFER_FLAGS|GX_TRANSFER_OUT_TILED(1))
 static int sEdgeCopy=1;
 static int sEdgeCopying;               /* (this frame: NitroPort_PicaEdgeCopies) */
-static int sEdgeLight;                 /* (this frame: the light outlines) */
-static u32 *sEdgeLinear;               /* (EDGE_LINE x (EDGE_LINES_MAX + 2 EDGE_PAD): VRAM, else the linear heap) */
+static u32 *sEdgeLinear;               /* (EDGE_LINE x (EDGE_LINES_MAX + 2): VRAM, else the linear heap) */
 static int sEdgeLinearInVram;
 static int sEdgeLinearFailed;
 static u32 sEdgePadValue,sEdgePadLines; /* (what its spare lines hold now: 0, nothing yet) */
@@ -1671,15 +1663,12 @@ void NitroPort_PicaEdgeCopy(int on)
     sEdgeCopy=on;
 }
 
-int NitroPort_PicaEdgeCopies(int edges,int light,unsigned *fill)
+unsigned NitroPort_PicaEdgeCopies(int edges)
 {
     sEdgeCopying=0;
-    sEdgeLight=edges && light;
-    /* (the light outlines: two directions) */
-    *fill=!edges?0u:sEdgeLight?3u:15u;
     if(!edges||!sEdgeCopy||sEdgeLinearFailed||sShadowReady)return 0;
     if(!sEdgeLinear){
-        size_t bytes=(size_t)EDGE_LINE*(EDGE_LINES_MAX+2u*EDGE_PAD)*sizeof(u32);
+        size_t bytes=(size_t)EDGE_LINE*(EDGE_LINES_MAX+2u)*sizeof(u32);
         /* In VRAM, the copies stay in it (in the linear heap they took 1.4
          * ms an eye, 2026-10-19). */
         sEdgeLinear=vramAlloc(bytes);
@@ -1700,8 +1689,7 @@ int NitroPort_PicaEdgeCopies(int edges,int light,unsigned *fill)
         sEdgePadValue=sEdgePadLines=0;
     }
     sEdgeCopying=1;
-    *fill&=~3u;   /* (directions 0 and 1 copied) */
-    return 1;
+    return 3u;   /* (the directions: 0 and 1) */
 }
 
 static void free_edge_copies(void)
@@ -1715,38 +1703,35 @@ static void free_edge_copies(void)
 }
 
 /* Queued after the opaque polygons (their command list cut off first: the
- * GPU's framebuffer cache is written back at the cut). 0 if they can't be.
- * The light outlines' neighbours are a line and EDGE_KNIGHT pixels away:
- * at the ends of a line (the screen's top and bottom rows) that's the next
- * line's other end, which mark_edges leaves out. */
+ * GPU's framebuffer cache is written back at the cut). 0 if they can't be. */
 static int copy_edge_buffers(const PicaView *view,u32 clear)
 {
     C3D_FrameBuf *fb=view->fb;
-    u32 lines=fb->height,dim,i,step=EDGE_LINE+(sEdgeLight?EDGE_KNIGHT:0u);
-    u32 *mid=sEdgeLinear+EDGE_PAD*EDGE_LINE;
+    u32 lines=fb->height,dim,i;
+    u32 *mid=sEdgeLinear+EDGE_LINE;
     if(!sEdgeLinear||fb->width!=EDGE_LINE||lines>EDGE_LINES_MAX||!view->edgeFb[0]||!view->edgeFb[1])return 0;
     if(sEdgePadValue!=clear||sEdgePadLines!=lines){
         /* the spare lines: in VRAM by a fill (queued ahead of the copies;
          * a frame's GPU queue has room for it), else by the CPU */
-        u32 *after=mid+lines*EDGE_LINE;
         if(sEdgeLinearInVram){
-            GX_MemoryFill(sEdgeLinear,clear,mid,BIT(0)|(2u<<8),
-                          after,clear,after+EDGE_PAD*EDGE_LINE,BIT(0)|(2u<<8));
+            u32 *after=mid+lines*EDGE_LINE;
+            GX_MemoryFill(sEdgeLinear,clear,sEdgeLinear+EDGE_LINE,BIT(0)|(2u<<8),
+                          after,clear,after+EDGE_LINE,BIT(0)|(2u<<8));
         }else{
-            for(i=0;i<EDGE_PAD*EDGE_LINE;i++){
+            for(i=0;i<EDGE_LINE;i++){
                 sEdgeLinear[i]=clear;
-                after[i]=clear;
+                mid[lines*EDGE_LINE+i]=clear;
             }
-            GSPGPU_FlushDataCache(sEdgeLinear,EDGE_PAD*EDGE_LINE*sizeof(u32));
-            GSPGPU_FlushDataCache(after,EDGE_PAD*EDGE_LINE*sizeof(u32));
+            GSPGPU_FlushDataCache(sEdgeLinear,EDGE_LINE*sizeof(u32));
+            GSPGPU_FlushDataCache(mid+lines*EDGE_LINE,EDGE_LINE*sizeof(u32));
         }
         sEdgePadValue=clear;
         sEdgePadLines=lines;
     }
     dim=GX_BUFFER_DIM(EDGE_LINE,lines);
     GX_DisplayTransfer((u32*)fb->depthBuf,dim,mid,dim,EDGE_UNTILE);
-    GX_DisplayTransfer(mid+step,dim,(u32*)view->edgeFb[0]->depthBuf,dim,EDGE_TILE);
-    GX_DisplayTransfer(mid-step,dim,(u32*)view->edgeFb[1]->depthBuf,dim,EDGE_TILE);
+    GX_DisplayTransfer(mid+EDGE_LINE,dim,(u32*)view->edgeFb[0]->depthBuf,dim,EDGE_TILE);
+    GX_DisplayTransfer(mid-EDGE_LINE,dim,(u32*)view->edgeFb[1]->depthBuf,dim,EDGE_TILE);
     return 1;
 }
 
@@ -1772,27 +1757,16 @@ static int copy_edge_buffers(const PicaView *view,u32 clear)
  *    and its neighbour's, a hair's breadth; it doesn't happen in practice.)
  * With anti-aliasing (DISP3DCNT bit 4) the outline is blended in at about
  * half strength, as the DS does. Each pass draws only the triangles it
- * needs (prune_for), when they're known.
- *
- * The light outlines (sEdgeLight: `edges3d light`, with the 3D slider up,
- * where each eye has the passes to itself) test two neighbours, not four:
- * a knight's move away, a column across and two pixels up, and the
- * opposite. Every side of a shape still gets its outline (one pixel wide
- * down its sides, two across its top and bottom; lines along that move's
- * slant don't); half the outlines drawn, and both moved passes copied
- * (copy_edge_buffers). The screen's top and bottom two rows are left out
- * then (the copies wrap around there): no outline along those edges. */
+ * needs (prune_for), when they're known. */
 static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
 {
     static const float dx[4]={-1.0f,1.0f,0.0f,0.0f},dy[4]={0.0f,0.0f,-1.0f,1.0f};
-    static const float lightDx[2]={-1.0f,1.0f},lightDy[2]={2.0f,-2.0f};
-    const NitroGx3dPruneResult *pruned=sEdgeLight?NULL:prune_for(view,edges);
+    const NitroGx3dPruneResult *pruned=prune_for(view,edges);
     unsigned scissor[4][4];
     size_t b;
-    int dir,z,copied=0,dirs=sEdgeLight?2:4;
+    int dir,z,copied=0;
     u32 clear;
-    /* the left and right ones (the light outlines: both) copied (the caller
-     * cut the command list) */
+    /* the left and right ones copied (the caller cut the command list) */
     NitroPort_PicaEdgeClearValue(&clear);
     if(sEdgeCopying){
         copied=3;
@@ -1811,14 +1785,13 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
     /* (the four A passes first, then the four B passes: each direction has
      * a buffer of its own, and A writes no colour; the same result, and
      * each half of the work timed on its own: NitroPort_PicaProfileMark) */
-    for(dir=0;dir<dirs;dir++){
+    for(dir=0;dir<4;dir++){
         PicaRect shifted=view->rect;
         C3D_FrameBuf *fb=view->edgeFb[dir];
-        float mx=sEdgeLight?lightDx[dir]:dx[dir],my=sEdgeLight?lightDy[dir]:dy[dir];
         if(fb==NULL || (copied&(1<<dir)))continue;
         /* pass A */
-        shifted.x0+=mx;shifted.x1+=mx;
-        shifted.y0+=my;shifted.y1+=my;
+        shifted.x0+=dx[dir];shifted.x1+=dx[dir];
+        shifted.y0+=dy[dir];shifted.y1+=dy[dir];
         C3D_SetFrameBuf(fb);
         C3D_SetViewport(0,0,fb->width,fb->height);
         begin_pass(view,&shifted);
@@ -1840,17 +1813,13 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
         }
     }
     NitroPort_PicaProfileMark("outlines, the shifted passes");
-    for(dir=0;dir<dirs;dir++){
+    for(dir=0;dir<4;dir++){
         C3D_FrameBuf *fb=view->edgeFb[dir];
         if(fb==NULL)continue;
         /* pass B */
         C3D_SetFrameBuf(fb);
         C3D_SetViewport(0,0,fb->width,fb->height);
         begin_pass(view,&view->rect);
-        /* (the light outlines' copies: not the lines' ends; the scissor's
-         * x runs along a framebuffer line, C3D_SetViewport turns it off) */
-        if(sEdgeLight && (copied&(1<<dir)))
-            C3D_SetScissor(GPU_SCISSOR_NORMAL,EDGE_KNIGHT,0,fb->width-EDGE_KNIGHT,fb->height);
         C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_KEEP);
         if(edges->antialias){
             C3D_BlendingColor(0x88000000u);   /* 17/32 */
