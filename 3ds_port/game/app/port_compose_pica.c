@@ -75,6 +75,11 @@ void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 #define SCREEN_TRANSFER_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | \
      GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
      GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
+/* The same, each 2x2 pixels averaged into one (the smooth 3D; the output's
+ * size given as the input's, as citro3d does: the engine halves it). */
+#define SMOOTH_TRANSFER_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | \
+     GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
+     GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_XY))
 
 /* A published picture: its textures and what it is. */
 typedef struct LayerSet {
@@ -82,6 +87,7 @@ typedef struct LayerSet {
     void *over;           /* RGBA8 texels, tiled (alpha multiplied in) */
     int overEmpty;        /* nothing in front of the 3D (the over texture not written) */
     int underColor;       /* the picture behind the 3D all this RGB565 colour, or -1 */
+    int overTop, overBottom;   /* the DS's rows with anything in front of the 3D (a row more each side) */
     ComposeLayers info;   /* has3d etc., as published (no picture pointers) */
     uint32_t seq;         /* publish order (0: none, or being written) */
     int writing, held;
@@ -127,6 +133,19 @@ void NitroPort_ComposeLook(int on)
 }
 static Screen sScreens[2];        /* 0: upper, 1: lower */
 static void *sEdgeDepth[4];       /* 240 x 400 D24S8, a direction each, shared by the screens */
+static void *sEdgeBlock;          /* (the four, one after another: one VRAM block) */
+/* The smooth 3D (smooth3d): with the slider up the upper screen is drawn
+ * at twice the resolution each way (480 x 800, one eye after the other)
+ * and each eye scaled down into its LCD framebuffer by the transfer engine
+ * as soon as it's drawn: every edge's pixels averaged, no jagged edges.
+ * Its depth/stencil is the edge buffers' block (exactly the size, and
+ * unused with the slider up: no outlines then), else a block of its own. */
+#define SMOOTH_W (SCREEN_H * 2)
+#define SMOOTH_H (TOP_W * 2)
+static void *sSmoothColor, *sSmoothOwnDepth;
+static uint8_t sSmoothFb[PICA_FRAMEBUF_BYTES] __attribute__((aligned(8)));
+static int sSmoothReady, sSmoothNow;
+static u32 sSmoothFrames;
 static LightLock sSetLock, sPresentLock;
 static uint32_t sSeq;
 static ComposeLayers sWork[2];    /* the drawers' pictures, by engine */
@@ -406,11 +425,21 @@ static void free_all(void)
         free_sets(&sScreens[s]);
     }
     for (i = 0; i < 4; i++) {
-        if (sEdgeDepth[i]) {
-            vramFree(sEdgeDepth[i]);
-            sEdgeDepth[i] = NULL;
-        }
+        sEdgeDepth[i] = NULL;
     }
+    if (sEdgeBlock) {
+        vramFree(sEdgeBlock);
+        sEdgeBlock = NULL;
+    }
+    if (sSmoothColor) {
+        vramFree(sSmoothColor);
+        sSmoothColor = NULL;
+    }
+    if (sSmoothOwnDepth) {
+        vramFree(sSmoothOwnDepth);
+        sSmoothOwnDepth = NULL;
+    }
+    sSmoothReady = 0;
     if (sQuads) {
         linearFree(sQuads);
         sQuads = NULL;
@@ -525,20 +554,50 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     NitroPort_PicaEdgePruning(config->edges == 2);
     NitroPort_PicaEdgeCopy(config->edges != 3);
     if (config->edges) {
+        u32 size = C3D_CalcDepthBufSize(SCREEN_H, TOP_W, GPU_RB_DEPTH24_STENCIL8);
         int d;
 
-        for (d = 0; d < 4; d++) {
-            sEdgeDepth[d] = vramAlloc(C3D_CalcDepthBufSize(SCREEN_H, TOP_W, GPU_RB_DEPTH24_STENCIL8));
-        }
-        if (!sEdgeDepth[3]) {
+        sEdgeBlock = vramAlloc((size_t)size * 4u);
+        if (!sEdgeBlock) {
             NitroPort_Log("[compose] no VRAM for the edge marking buffers: outlines off");
-            for (d = 0; d < 4; d++) {
-                if (sEdgeDepth[d]) {
-                    vramFree(sEdgeDepth[d]);
-                    sEdgeDepth[d] = NULL;
-                }
-            }
             sConfig.edges = 0;
+        } else {
+            for (d = 0; d < 4; d++) {
+                sEdgeDepth[d] = (u8 *)sEdgeBlock + (size_t)size * (size_t)d;
+            }
+        }
+    }
+    if (config->stereo && config->smooth3d && sScreens[0].target[1] != NULL) {
+        u32 colorSize = C3D_CalcColorBufSize(SMOOTH_W, SMOOTH_H, GPU_RB_RGBA8);
+        u32 depthSize = C3D_CalcDepthBufSize(SMOOTH_W, SMOOTH_H, GPU_RB_DEPTH24_STENCIL8);
+        void *depth = NULL;
+
+        if (sEdgeBlock && C3D_CalcDepthBufSize(SCREEN_H, TOP_W, GPU_RB_DEPTH24_STENCIL8) * 4u >= depthSize) {
+            depth = sEdgeBlock;
+        } else {
+            depth = sSmoothOwnDepth = vramAlloc(depthSize);
+        }
+        if (depth) {
+            /* (the colour in the other VRAM bank from the depth, as
+             * citro3d puts them: 0x1F000000-0x1F2FFFFF is bank A) */
+            sSmoothColor = vramAllocAt(colorSize, (u32)depth < 0x1F300000u ? VRAM_ALLOC_B : VRAM_ALLOC_A);
+            if (!sSmoothColor) {
+                sSmoothColor = vramAlloc(colorSize);
+            }
+        }
+        if (sSmoothColor &&
+            NitroPort_PicaFrameBufMake(sSmoothFb, sizeof(sSmoothFb), sSmoothColor, depth, SMOOTH_W, SMOOTH_H)) {
+            sSmoothReady = 1;
+        } else {
+            NitroPort_Log("[compose] no VRAM for the smooth 3D (drawn 2x2): the slider's 3D drawn as it is");
+            if (sSmoothColor) {
+                vramFree(sSmoothColor);
+                sSmoothColor = NULL;
+            }
+            if (sSmoothOwnDepth) {
+                vramFree(sSmoothOwnDepth);
+                sSmoothOwnDepth = NULL;
+            }
         }
     }
     for (s = 0; s < 2 && sEdgeDepth[0]; s++) {
@@ -565,7 +624,11 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
                   : sConfig.edges == 2  ? ", outlines on the GPU (each pass only the polygons it needs)"
                   : sConfig.edges == 3  ? ", outlines on the GPU (all their moved passes drawn)"
                                         : ", outlines on the GPU",
-                  sConfig.edges && config->stereo && !config->edges3d ? " (none with the slider up)" : "",
+                  !config->stereo ? ""
+                  : sSmoothReady && sConfig.edges && !config->edges3d
+                      ? " (with the slider up: none, the upper screen drawn 2x2 and scaled down)"
+                  : sSmoothReady ? " (with the slider up: the upper screen drawn 2x2 and scaled down)"
+                  : sConfig.edges && !config->edges3d ? " (none with the slider up)" : "",
                   config->flipV ? ", 2D flipped" : "");
     return 1;
 fail:
@@ -681,6 +744,42 @@ static u32 rgba_of_565(int c)
     return (((r << 3) | (r >> 2)) << 24) | (((g << 2) | (g >> 4)) << 16) | (((b << 3) | (b >> 2)) << 8) | 0xFFu;
 }
 
+/* The rows of the layer in front of the 3D with anything drawn in them
+ * (colour bit 15), and one more each side (the filter reads a texel past
+ * them): the quad drawing it covers those (a text box: a quarter of the
+ * screen, the GPU's time for it with it). Empty: *top >= *bottom. */
+static void over_rows(const uint16_t *over, int w, int *top, int *bottom)
+{
+    const uint32_t *words = (const uint32_t *)over;
+    int y, i, first = -1, last = -1;
+
+    *top = 0;
+    *bottom = DS_H;
+    if (((uintptr_t)over & 3u) || (w & 1)) {
+        return;   /* (all of it) */
+    }
+    for (y = 0; y < DS_H; y++) {
+        const uint32_t *row = words + (size_t)y * (size_t)(w / 2);
+        uint32_t any = 0;
+
+        for (i = 0; i < w / 2; i++) {
+            any |= row[i];
+        }
+        if (any & 0x80008000u) {
+            if (first < 0) {
+                first = y;
+            }
+            last = y;
+        }
+    }
+    if (first < 0) {
+        *bottom = 0;
+        return;
+    }
+    *top = first > 0 ? first - 1 : 0;
+    *bottom = last + 2 < DS_H ? last + 2 : DS_H;
+}
+
 /* The picture behind fills the screen (its colour can be the clear). */
 static int under_fills_screen(const Screen *scr, const LayerSet *set)
 {
@@ -743,6 +842,11 @@ void NitroPort_ComposePublish(int engine, int screen)
     set->info.overAlpha = NULL;
     set->overEmpty = 1;
     set->underColor = l->displayOff ? -1 : uniform_color(l->under, w * DS_H);
+    set->overTop = 0;
+    set->overBottom = DS_H;
+    if (!l->displayOff && l->has3d && l->over) {
+        over_rows(l->over, w, &set->overTop, &set->overBottom);
+    }
     if (!l->displayOff && sConfig.filter != COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
         set->overEmpty = !NitroPort_PublishDoubled(&sShadow[e], &set->pub, l->under, l->over, l->overAlpha,
                                                    l->has3d, w, set->under, set->over, scr->texW, sToRgb565,
@@ -919,7 +1023,8 @@ static void prof_report(int stereo, int edges, u64 t0)
                 }
                 group = sProfPartGroup[mark];
                 len = (size_t)snprintf(line, sizeof(line), "[gpu] %s (%s, outlines %s):",
-                                       groups[group < 0 || group > 2 ? 2 : group], stereo ? "stereo" : "mono",
+                                       groups[group < 0 || group > 2 ? 2 : group],
+                                       !stereo ? "mono" : sSmoothNow && group != 2 ? "stereo, drawn 2x2" : "stereo",
                                        !edges ? "off" : sConfig.edges == 2 ? "on, pruned"
                                        : sConfig.edges == 3 ? "on, all drawn" : "on");
             }
@@ -952,7 +1057,9 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
 {
     C3D_RenderTarget *target = scr->target[eye];
     int eyeDir;
-    C3D_FrameBuf *fb = &target->frameBuf;
+    /* (the smooth 3D: the 2x2 framebuffer; the same picture, the viewport
+     * twice the size) */
+    C3D_FrameBuf *fb = scr == &sScreens[0] && sSmoothNow ? (C3D_FrameBuf *)sSmoothFb : &target->frameBuf;
     C3D_Mtx pixels;
     const ComposeLayers *info = set ? &set->info : NULL;
     int canvasW = info && info->width > 0 ? info->width : DS_W;
@@ -1070,13 +1177,19 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
                  (info->tint3d == 2 ? 0xFFFFFF00u : 0x00000000u) | a);
         }
         /* 5. The layers in front, with their alpha (multiplied in). */
-        if (!set->overEmpty) {
+        if (!set->overEmpty && set->overTop < set->overBottom) {
+            /* (only the rows with anything in them; all of them flipped) */
+            int top = sConfig.flipV ? 0 : set->overTop, bottom = sConfig.flipV ? DS_H : set->overBottom;
+            float y0 = pic.y0 + (float)top * SCALE, y1 = pic.y0 + (float)bottom * SCALE;
+            float v0 = vTop + (vBottom - vTop) * (float)top / (float)DS_H;
+            float v1 = vTop + (vBottom - vTop) * (float)bottom / (float)DS_H;
+
             make_texture(&sOverTex, set->over, GPU_RGBA8, scr->texW, scr->texH, linear, GPU_CLAMP_TO_EDGE);
             C3D_TexBind(0, &sOverTex);
             quad_combiner(1);
             C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
                            GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
-            quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, 0, vTop, u1, vBottom, 0xFFFFFFFFu);
+            quad(pic.x0, y0, pic.x1, y1, 0.0f, 0, v0, u1, v1, 0xFFFFFFFFu);
         }
     }
     /* 6. The master brightness: towards white or black by factor / 16. */
@@ -1177,6 +1290,23 @@ static int free_lcd_buffer(const Screen *scr)
         }
     }
     return -1;
+}
+
+/* The smooth 3D's framebuffer cleared (a memory fill, queued): the depth,
+ * and the colour when the picture behind the 3D is all one colour. */
+static void smooth_clear(const LayerSet *set, int underCleared)
+{
+    C3D_FrameBufClear((C3D_FrameBuf *)sSmoothFb, underCleared ? C3D_CLEAR_ALL : C3D_CLEAR_DEPTH,
+                      underCleared ? rgba_of_565(set->underColor) : 0, 0xFFFFFFFFu);
+}
+
+/* An eye drawn by the smooth 3D into its LCD framebuffer, scaled down
+ * (queued after the drawing). */
+static void smooth_out(Screen *scr, int buf, int eye)
+{
+    u32 dim = GX_BUFFER_DIM(SMOOTH_W, SMOOTH_H);
+
+    GX_DisplayTransfer((u32 *)sSmoothColor, dim, (u32 *)scr->lcd[buf][eye], dim, SMOOTH_TRANSFER_FLAGS);
 }
 
 /* The edge marking buffers filled for a scene (memory fills, queued
@@ -1326,6 +1456,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     if (stereoNow && !sConfig.edges3d) {
         edges = 0;
     }
+    /* The smooth 3D (its depth the edge buffers': not with outlines). */
+    sSmoothNow = sSmoothReady && stereoNow && need[0] && !(edges && sSmoothOwnDepth == NULL);
     /* The left and right edge buffers copied from the screen's own
      * (NitroPort_PicaEdgeCopies): its stencil then the rear plane's ID where
      * nothing is drawn, as theirs. */
@@ -1341,6 +1473,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         underCleared[s] = under_fills_screen(&sScreens[s], sets[s]);
         if (underCleared[s]) {
             sUnderFills++;
+        }
+        if (s == 0 && sSmoothNow) {
+            /* (the left eye's; the right eye's after it's drawn) */
+            smooth_clear(sets[s], underCleared[s]);
+            continue;
         }
         for (eye = 0; eye < (s == 0 && stereoNow ? 2 : 1); eye++) {
             /* (one fill: the colour buffer too when the picture behind is
@@ -1365,7 +1502,14 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             float shift = sConfig.stereoStrength * slider * 0.5f;
 
             draw_screen(scr, 0, sets[s], sc, -shift, edges, underCleared[s]);
-            if (sc != NULL && edges) {
+            if (sSmoothNow) {
+                /* The left eye scaled down into its LCD framebuffer, then
+                 * the framebuffer cleared for the right eye: the commands
+                 * so far go ahead. */
+                prof_split("the left eye's end", 1);
+                smooth_out(scr, lcdBuf[s], 0);
+                smooth_clear(sets[s], underCleared[s]);
+            } else if (sc != NULL && edges) {
                 /* The second eye needs the edge buffers filled again: the
                  * commands so far go ahead, the fills after them. */
                 prof_split("the left eye's end", 1);
@@ -1408,6 +1552,12 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             continue;
         }
         for (eye = 0; eye < (s == 0 && stereoNow ? 2 : 1); eye++) {
+            if (s == 0 && sSmoothNow) {
+                if (eye == 1) {
+                    smooth_out(scr, lcdBuf[s], 1);   /* (the left eye's went after it was drawn) */
+                }
+                continue;
+            }
             GX_DisplayTransfer((u32 *)scr->target[eye]->frameBuf.colorBuf, GX_BUFFER_DIM(SCREEN_H, scr->width),
                                (u32 *)scr->lcd[lcdBuf[s]][eye], GX_BUFFER_DIM(SCREEN_H, scr->width),
                                SCREEN_TRANSFER_FLAGS);
@@ -1431,6 +1581,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     sFrames++;
     if (stereoNow) {
         sStereoFrames++;
+    }
+    if (sSmoothNow) {
+        sSmoothFrames++;
     }
     NitroPort_PicaTextureStats(&texAfter, &texels, &texTicksAfter);
     {
@@ -1548,5 +1701,6 @@ void NitroPort_ComposeStats(ComposeStats *stats)
     stats->dropped = sDropped;
     stats->stereo = sStereoFrames;
     stats->underFills = sUnderFills;
+    stats->smooth = sSmoothFrames;
 }
 #endif

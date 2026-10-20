@@ -453,9 +453,8 @@ int NitroPort_PicaInit(void)
      * stops the program then, a "Break" on Luma's crash screen). Drawing
      * also stops short of the end (room_for_draw). */
     if(!C3D_Init(CMDBUF_BYTES))return init_failed("citro3d (C3D_Init)");
-    sTarget=C3D_RenderTargetCreate(GX3D_W,GX3D_H,
-                     GPU_RB_RGBA8,GPU_RB_DEPTH24_STENCIL8);
-    if(!sTarget)return init_failed("the render target");
+    /* (the classic path's render target: made by its first scene, VRAM
+     * the remaster's screens use otherwise, NitroPort_PicaRender) */
     sDvlb=DVLB_ParseFile((u32*)gx3d_passthrough_shbin,
                          gx3d_passthrough_shbin_size);
     if(!sDvlb)return init_failed("the shaders (DVLB_ParseFile)");
@@ -1009,7 +1008,17 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     u32 clear,clearColor;
     NitroGx3dEdgeSetup edges;
     if(dropped)*dropped=scene ? scene->dropped : 0;
-    if(!sTarget||!scene)return -1;
+    if(!scene)return -1;
+    if(!sTarget){
+        static int failed;
+        if(failed)return -1;
+        sTarget=C3D_RenderTargetCreate(GX3D_W,GX3D_H,GPU_RB_RGBA8,GPU_RB_DEPTH24_STENCIL8);
+        if(!sTarget){
+            failed=1;
+            NitroPort_Log("[gx3d] no VRAM for the classic display's render target: no 3D");
+            return -1;
+        }
+    }
     slot=sBuffer;
     sBuffer^=1;
     sFrame++;

@@ -16,12 +16,15 @@
  */
 #include <3ds.h>
 #include <citro3d.h>
+#include <string.h>
 
 /* (declared in port_pica.h, not included here: its headers are the port's) */
 void *NitroPort_PicaDvle(void *dvlb, unsigned index);
 unsigned NitroPort_PicaDvleSize(void);
 unsigned NitroPort_PicaFrameBufSize(void);
 int NitroPort_PicaFrameBufWithDepth(void *out, unsigned outSize, const void *target, void *depth);
+int NitroPort_PicaFrameBufMake(void *out, unsigned outSize, void *color, void *depth, unsigned width,
+                               unsigned height);
 
 void *NitroPort_PicaDvle(void *dvlb, unsigned index)
 {
@@ -49,6 +52,19 @@ int NitroPort_PicaFrameBufWithDepth(void *out, unsigned outSize, const void *tar
     C3D_FrameBuf *fb = out;
     if (!out || !t || outSize < sizeof(C3D_FrameBuf)) return 0;
     *fb = t->frameBuf;
+    C3D_FrameBufDepth(fb, depth, GPU_RB_DEPTH24_STENCIL8);
+    return 1;
+}
+
+/* One of buffers the caller has: RGBA8 colour, D24S8 depth/stencil. */
+int NitroPort_PicaFrameBufMake(void *out, unsigned outSize, void *color, void *depth, unsigned width,
+                               unsigned height)
+{
+    C3D_FrameBuf *fb = out;
+    if (!out || !color || !depth || outSize < sizeof(C3D_FrameBuf)) return 0;
+    memset(fb, 0, sizeof(*fb));
+    C3D_FrameBufAttrib(fb, (u16)width, (u16)height, false);
+    C3D_FrameBufColor(fb, color, GPU_RB_RGBA8);
     C3D_FrameBufDepth(fb, depth, GPU_RB_DEPTH24_STENCIL8);
     return 1;
 }
