@@ -552,7 +552,8 @@ frames waiting isn't drawn again until one has shown.
 | `edges off` | no outlines (edge marking) |
 | `edges drawn` | the outlines' left and right moved passes drawn, as before they were copied (for comparing: the same picture, slower) |
 | `edges pruned` | each outline pass draws only the polygons it needs (worked out on the CPU each scene; the same picture). Slower on a 3DS (see below): off by default |
-| `edges3d off` | no outlines with the 3D slider up (default on while they fit in a frame: drawn for each eye they cost 7-16 ms of the GPU's an eye; see How it works) |
+| `edges3d on` | the outlines with the 3D slider up too, while they fit in a frame (default off since 60 frames a second: drawn for each eye they cost 7-16 ms of the GPU's an eye; see How it works) |
+| `fps60 off` | the field at the game's 30 frames a second (default on: an in-between scene shown between each two, while frames fit; see 60 frames a second) |
 | `smooth3d off` / `smooth3d stereo` | the upper screen drawn at its own resolution / so only with the 3D slider down (default on: twice it and scaled down, no jagged edges, the outlines kept with the slider down; see How it works) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
 | `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off. **Parked on the 3DS** (they hang its GPU; see below): off there until fixed |
@@ -645,8 +646,26 @@ there's no in-between scene. In the PC runner: `interp 1`, then `midsim
 PATH` draws the newest in-between scene as gpusim draws a scene. Walking
 and running in Jubilife and on Route 202, the in-between scenes are
 halfway (the scene 2 to 4 pixels on from the one before, the in-between
-1 to 2), with nothing out of place. Still to come: showing them on the
-3DS between the game's scenes (a setting, off by default).
+1 to 2), with nothing out of place.
+
+On the 3DS (`fps60`, on by default since PR #132): each mailbox slot has
+an in-between scene of its own, made before the slot's scene is
+published (`NitroPort_Gx3dMidOf`: as stable as the scene while it's
+acquired; the newest one before, `sMid`, was rewritten under the reader).
+The display thread draws a new scene's in-between scene first, shown a
+V-blank before the scene (the scene's lag less one; `ComposeFrame`'s
+`mid`: it doesn't count as the scene shown, and is prepared apart from
+it), then the scene, both built while the GPU draws the frame before (see
+Timing): a frame each V-blank, the game's 30 steps and 30 in between. A
+frame then has 16.7 ms of the GPU, not 33: while frames take longer the
+in-between scenes are left out (30 a second; `auto_fps60`: after 4 frames
+in a row over 16 ms, back after 60 in a row under 14.5 ms, with a
+`[compose]` log line each time). By the measures before it (2026-10-20),
+the slider down with the smooth 3D and outlines took 15 ms a frame in
+towns and 20-25 on busier routes; the slider up with the smooth 3D and no
+outlines 10-16. The outlines with the slider up are off by default for it
+(`edges3d on`: while they fit). `[perf] display` counts the in-between
+frames.
 
 ## Known
 

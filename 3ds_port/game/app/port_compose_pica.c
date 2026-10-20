@@ -202,6 +202,8 @@ static volatile u32 sGpuDone;           /* (frames drawn: the queues' callback) 
 static volatile u64 sGpuDoneTick;
 static u64 sGpuRunTick, sWaitTicks, sLastGpuTicks;
 static int sFlightStereo, sFlightEdgesWanted, sFlightEdges;   /* (the frame in flight: for auto_outlines) */
+static int sFlight3D;                   /* (and whether it drew the 3D: for auto_fps60) */
+static u32 sMidFrames;                  /* (in-between scenes drawn) */
 static void gpu_finished(gxCmdQueue_s *queue);
 static void flight_finish(int block);
 static void flight_wait(void);
@@ -1194,6 +1196,46 @@ static void auto_outlines(u64 ticks, int drawn)
     }
 }
 
+/* ------------------------------------------------- 60 frames a second
+ * With the in-between scenes (fps60) a frame has 16.7 ms of the GPU, not
+ * 33: drawn while the frames fit (auto_fps60: a frame's GPU time, the
+ * in-between scenes' frames and their scenes' alike), the scenes alone (30
+ * a second) after FPS60_OVER_FRAMES frames in a row over FPS60_OVER_MS,
+ * the in-between scenes again after FPS60_UNDER_FRAMES (2 s) in a row
+ * under FPS60_UNDER_MS. */
+#define FPS60_OVER_MS 16.0
+#define FPS60_UNDER_MS 14.5
+#define FPS60_OVER_FRAMES 4
+#define FPS60_UNDER_FRAMES 60
+static int sFps60 = 1, sFps60Over, sFps60Under;
+
+static void auto_fps60(u64 ticks)
+{
+    const double ms = (double)ticks * 1000.0 / SYSCLOCK_ARM11;
+
+    if (sFps60) {
+        sFps60Over = ms > FPS60_OVER_MS ? sFps60Over + 1 : 0;
+        if (sFps60Over >= FPS60_OVER_FRAMES) {
+            sFps60 = 0;
+            sFps60Over = 0;
+            sFps60Under = 0;
+            NitroPort_Log("[compose] 60 frames a second: off for now (a frame took the GPU %.1f ms)", ms);
+        }
+    } else {
+        sFps60Under = ms < FPS60_UNDER_MS ? sFps60Under + 1 : 0;
+        if (sFps60Under >= FPS60_UNDER_FRAMES) {
+            sFps60 = 1;
+            sFps60Under = 0;
+            NitroPort_Log("[compose] 60 frames a second: on again (frames take the GPU %.1f ms)", ms);
+        }
+    }
+}
+
+int NitroPort_ComposeWantsMid(void)
+{
+    return sFps60;
+}
+
 /* A queue of ours run dry: its frame drawn (the GSP event thread). */
 static void gpu_finished(gxCmdQueue_s *queue)
 {
@@ -1254,6 +1296,9 @@ static void flight_finish(int block)
     sLastGpuTicks = sGpuDoneTick - sGpuRunTick;
     if (sFlightStereo && sFlightEdgesWanted) {
         auto_outlines(sLastGpuTicks, sFlightEdges);
+    }
+    if (sFlight3D) {
+        auto_fps60(sLastGpuTicks);
     }
     sGpuTicks += sLastGpuTicks;
     NitroPort_PicaFrameDone(sFlightMark);
@@ -1604,7 +1649,7 @@ static void fill_edge_buffers(Screen *scr, u32 value, unsigned copied)
 }
 
 int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, int aOnTop, float slider,
-                           int forced, int flush)
+                           int forced, int flush, int mid)
 {
     int s, drawn = 0, stereoNow, need[2] = { 0, 0 }, timed = 0, edges = 0, lcdBuf[2] = { -1, -1 }, top3d = 0;
     int edgesWanted = 0;
@@ -1660,7 +1705,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             continue;   /* nothing to show yet */
         }
         has3d = screen3d && set->info.has3d && !set->info.displayOff && scene != NULL;
-        need[s] = forced || set->seq != scr->shownSeq || (has3d && sceneSerial != scr->shownScene) ||
+        need[s] = forced || set->seq != scr->shownSeq || (has3d && sceneSerial != scr->shownScene) || (mid && has3d) ||
                   (s == 0 && has3d && (stereoNow != scr->shownStereo ||
                                         (stereoNow && slider != scr->shownSlider)));
         /* A new scene: once the 2D it's shown with is here (or the next
@@ -1700,11 +1745,12 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         return 0;
     }
     NitroPort_PicaTextureStats(&texBefore, &texels, &texTicksBefore);
-    if (scene != NULL && (!sScenePrepared || sceneSerial != sPreparedScene)) {
+    /* (an in-between scene has its scene's serial: told apart) */
+    if (scene != NULL && (!sScenePrepared || sceneSerial * 2u + (mid ? 1u : 0u) != sPreparedScene)) {
         prepareTicks = svcGetSystemTick();
         NitroPort_PicaPrepareScene(scene, NULL);
         prepareTicks = svcGetSystemTick() - prepareTicks;
-        sPreparedScene = sceneSerial;
+        sPreparedScene = sceneSerial * 2u + (mid ? 1u : 0u);
         sScenePrepared = 1;
         if (sConfig.stereo && sConfig.convergence <= 0.0f) {
             sSceneConvergence = scene_convergence(scene);
@@ -1813,7 +1859,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             draw_screen(scr, 0, sets[s], sc, 0.0f, edges, underCleared[s]);
         }
         scr->shownSeq = sets[s]->seq;
-        if (screen3d) {
+        if (screen3d && !mid) {   /* (an in-between scene: its scene's still to come) */
             scr->shownScene = sceneSerial;
             sSceneWaiting = 0;
             sLast3D = sc != NULL && sets[s]->info.has3d && !sets[s]->info.displayOff;
@@ -1860,6 +1906,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sFlightQueue = sGxRecording;
         sFlightMark = mark;
         sFlightStereo = stereoNow;
+        sFlight3D = top3d || (scene != NULL && !aOnTop);
         sFlightEdgesWanted = edgesWanted;
         sFlightEdges = edges;
         if (stereoNow && edges) {
@@ -1939,7 +1986,19 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         if (!(drawn & (1 << s))) {
             continue;
         }
-        if (timed && screen3d && scene != NULL) {
+        if (timed && screen3d && scene != NULL && mid) {
+            /* An in-between scene: a V-blank before its scene's (not
+             * before the GPU can have drawn it), the lag left to its
+             * scene. */
+            u32 gpuVBlanks = (u32)(sLastGpuTicks / (u64)(SYSCLOCK_ARM11 / 60));
+            u32 wanted = scene->stamp + (u32)sLag;
+
+            target = (int32_t)(wanted - (vblanks + 1u + gpuVBlanks)) > 0 ? wanted : vblanks + 1u + gpuVBlanks;
+            if ((int32_t)(target - (vblanks + 1u)) > 6) {
+                target = vblanks + 1u + 6u;   /* (a stamp from before a pause) */
+            }
+            sMidFrames++;
+        } else if (timed && screen3d && scene != NULL) {
             u32 wanted = scene->stamp + 1u + (u32)sLag;
             /* (it's drawn from now on: the V-blanks the GPU's last frame
              * took count) */
@@ -2029,5 +2088,6 @@ void NitroPort_ComposeStats(ComposeStats *stats)
     stats->smooth = sSmoothFrames;
     stats->waitTicks = sWaitTicks;
     stats->stereoEdges = sStereoEdgeFrames;
+    stats->midFrames = sMidFrames;
 }
 #endif
