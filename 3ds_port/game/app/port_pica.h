@@ -253,6 +253,7 @@ typedef struct ComposeStats {
     u32 underFills;          /* screens drawn whose picture behind the 3D was all one colour (the clear) */
     u32 smooth;              /* frames whose upper screen was drawn 2x2 (smooth3d) */
     u64 waitTicks;           /* the display thread waiting for the GPU (to finish the frame before) */
+    u32 stereoEdges;         /* frames drawn in stereo with outlines (they're left out while they don't fit) */
     u64 gpuTicks, cpuTicks, publishTicks;
     int lag;
 } ComposeStats;

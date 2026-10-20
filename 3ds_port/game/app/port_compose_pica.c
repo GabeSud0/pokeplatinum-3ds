@@ -201,6 +201,7 @@ static u32 sGpuSubmitted;
 static volatile u32 sGpuDone;           /* (frames drawn: the queues' callback) */
 static volatile u64 sGpuDoneTick;
 static u64 sGpuRunTick, sWaitTicks, sLastGpuTicks;
+static int sFlightStereo, sFlightEdgesWanted, sFlightEdges;   /* (the frame in flight: for auto_outlines) */
 static void gpu_finished(gxCmdQueue_s *queue);
 static void flight_finish(int block);
 static void flight_wait(void);
@@ -1132,6 +1133,67 @@ static void prof_report(const ProfInfo *info)
                   (unsigned long)n);
 }
 
+/* ------------------------------------------- the outlines with the slider up
+ * With the slider up the outlines are drawn for each eye: in the field a
+ * stereo frame took 28-35 ms of the GPU's in towns and 40-51 on busier
+ * routes with them, 9-17 without (2026-10-20), against 33 ms a frame at 30
+ * frames a second. So they're drawn while they fit: off after a few
+ * stereo frames in a row over AUTO_OVER_MS, on again after a while of
+ * frames that would fit with them (AUTO_UNDER_MS, the frame without them
+ * times sAutoRatio: what they cost there, measured each time they go off
+ * or on, the frames either side of it being much the same scene). */
+#define AUTO_OVER_MS 33.0     /* (a frame at 30 a second: the CPU's part is done meanwhile) */
+#define AUTO_UNDER_MS 29.0
+#define AUTO_OVER_FRAMES 3
+#define AUTO_UNDER_FRAMES 45
+static int sAutoEdges = 1;               /* drawn now with the slider up */
+static int sAutoOver, sAutoUnder, sAutoSwitched;   /* (1 just on, -1 just off) */
+static float sAutoRatio = 3.0f;
+static u64 sAutoOn, sAutoOff;            /* (the last stereo frames' GPU time with them, without) */
+static u32 sStereoEdgeFrames;
+
+static void auto_outlines(u64 ticks, int drawn)
+{
+    const double ms = (double)ticks * 1000.0 / SYSCLOCK_ARM11;
+
+    if (drawn) {
+        if (sAutoSwitched == 1 && sAutoOff > 0) {
+            sAutoRatio = (float)ticks / (float)sAutoOff;
+        }
+        sAutoSwitched = 0;
+        sAutoOn = ticks;
+        sAutoOver = ms > AUTO_OVER_MS ? sAutoOver + 1 : 0;
+        if (sAutoOver >= AUTO_OVER_FRAMES) {
+            sAutoEdges = 0;
+            sAutoSwitched = -1;
+            sAutoOver = 0;
+            sAutoUnder = 0;
+            NitroPort_Log("[compose] the outlines with the slider up: off (a stereo frame took the GPU %.1f ms)", ms);
+        }
+    } else {
+        if (sAutoSwitched == -1 && ticks > 0) {
+            sAutoRatio = (float)sAutoOn / (float)ticks;
+        }
+        sAutoSwitched = 0;
+        sAutoOff = ticks;
+        sAutoUnder = ms * sAutoRatio < AUTO_UNDER_MS ? sAutoUnder + 1 : 0;
+        if (sAutoUnder >= AUTO_UNDER_FRAMES) {
+            sAutoEdges = 1;
+            sAutoSwitched = 1;
+            sAutoUnder = 0;
+            sAutoOver = 0;
+            NitroPort_Log("[compose] the outlines with the slider up: on (%.1f ms without them, about %.1f with)", ms,
+                          ms * sAutoRatio);
+        }
+    }
+    if (sAutoRatio < 1.5f) {
+        sAutoRatio = 1.5f;
+    }
+    if (sAutoRatio > 5.0f) {
+        sAutoRatio = 5.0f;
+    }
+}
+
 /* A queue of ours run dry: its frame drawn (the GSP event thread). */
 static void gpu_finished(gxCmdQueue_s *queue)
 {
@@ -1190,6 +1252,9 @@ static void flight_finish(int block)
     gxCmdQueueClear(q);
     sFlight = 0;
     sLastGpuTicks = sGpuDoneTick - sGpuRunTick;
+    if (sFlightStereo && sFlightEdgesWanted) {
+        auto_outlines(sLastGpuTicks, sFlightEdges);
+    }
     sGpuTicks += sLastGpuTicks;
     NitroPort_PicaFrameDone(sFlightMark);
     if (sProfFlightOn) {
@@ -1542,6 +1607,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                            int forced, int flush)
 {
     int s, drawn = 0, stereoNow, need[2] = { 0, 0 }, timed = 0, edges = 0, lcdBuf[2] = { -1, -1 }, top3d = 0;
+    int edgesWanted = 0;
     int underCleared[2] = { 0, 0 };
     unsigned copies;
     u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
@@ -1660,7 +1726,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     edges = sEdgeDepth[0] != NULL && scene != NULL && NitroPort_PicaEdgeClearValue(&edgeClear);
     /* With the 3D slider up (each eye drawn: the outlines twice), only
      * with `edges3d on`. */
-    if (stereoNow && !sConfig.edges3d) {
+    /* (wanted with the slider up: for auto_outlines) */
+    edgesWanted = edges && stereoNow && sConfig.edges3d;
+    if (stereoNow && (!sConfig.edges3d || !sAutoEdges)) {
         edges = 0;
     }
     /* The smooth 3D (sSmoothFb): on the upper screen when the 3D is
@@ -1791,6 +1859,12 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sGpuSubmitted++;
         sFlightQueue = sGxRecording;
         sFlightMark = mark;
+        sFlightStereo = stereoNow;
+        sFlightEdgesWanted = edgesWanted;
+        sFlightEdges = edges;
+        if (stereoNow && edges) {
+            sStereoEdgeFrames++;
+        }
         /* (its 2D: no longer held by it as a frame being built, busy till
          * the GPU's drawn it) */
         LightLock_Lock(&sSetLock);
@@ -1954,5 +2028,6 @@ void NitroPort_ComposeStats(ComposeStats *stats)
     stats->underFills = sUnderFills;
     stats->smooth = sSmoothFrames;
     stats->waitTicks = sWaitTicks;
+    stats->stereoEdges = sStereoEdgeFrames;
 }
 #endif
