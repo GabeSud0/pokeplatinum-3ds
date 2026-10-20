@@ -89,6 +89,10 @@ int NitroPort_Gx3dInterpolation(void);
  * all it has. The geometry thread's (single-threaded inspection: the PC
  * runner). */
 const NitroGx3dScene *NitroPort_Gx3dMidScene(unsigned *matched, unsigned *polygons);
+/* An acquired scene's in-between scene (between it and the scene before
+ * it; made before it was published, with it), or NULL: as stable as the
+ * scene, till it's released. */
+const NitroGx3dScene *NitroPort_Gx3dMidOf(const NitroGx3dScene *scene);
 
 /* Reset engine and scene state, without clearing the 2D registers. */
 void NitroPort_Gx3dReset(void);

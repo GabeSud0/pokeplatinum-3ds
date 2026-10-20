@@ -853,9 +853,12 @@ static PolyRecord *sRec[2];              /* [sRecBuild]: this scene's; the other
 static unsigned sRecCount[2], sRecBuild;
 static int sRecBeforeValid;
 static int sReplaying;
-static NitroGx3dScene *sMid;
+/* Each mailbox slot's in-between scene (the one between its scene and the
+ * scene before), made before the slot is published: with the scene, the
+ * display has its in-between scene too (NitroPort_Gx3dMidOf). */
+static NitroGx3dScene *sMids[3];
+static int sMidOk[3];
 static int32_t *sMatch;                  /* for each of this scene's polygons, the one before's, or -1 */
-static int sMidValid;
 static unsigned sMidMatched, sMidPolygons;
 
 static uint32_t record_signature(unsigned n)
@@ -1009,18 +1012,21 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
     return matched;
 }
 /* The in-between scene of the scene just finished (`now', its records
- * sRec[sRecBuild]) and the one before (sRec[sRecBuild ^ 1]): sMid. */
-static void make_mid_scene(const NitroGx3dScene *now)
+ * sRec[sRecBuild]) and the one before (sRec[sRecBuild ^ 1]), into sMid.
+ * Whether there is one. */
+static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
 {
     const PolyRecord *P=sRec[sRecBuild^1u],*C=sRec[sRecBuild];
     unsigned m=sRecCount[sRecBuild^1u],n=sRecCount[sRecBuild],j,k,used=0;
     unsigned framePolygons=s.framePolygons,frameVertices=s.frameVertices;
     int capture=sShadowCapture;
-    sMidValid=0;
-    if(!sMid || !sMatch || !sRecBeforeValid || !n)return;
+    if(!sMid || !sMatch || !sRecBeforeValid || !n){
+        sMidMatched=0;sMidPolygons=n;
+        return 0;
+    }
     sMidMatched=match_records(P,m,C,n,sMatch);
     sMidPolygons=n;
-    if(n>=16u && sMidMatched*2u<n)return;   /* (a cut: too little in common) */
+    if(n>=16u && sMidMatched*2u<n)return 0;   /* (a cut: too little in common) */
     sMid->count=0;sMid->dropped=0;sMid->shadow_count=0;sMid->shadow_triangles=NULL;
     sMid->serial=now->serial;sMid->swap_param=now->swap_param;
     sMid->screen_width=now->screen_width;
@@ -1060,20 +1066,25 @@ static void make_mid_scene(const NitroGx3dScene *now)
         sDiag=diag;
     }
     sMidMatched=used;
-    sMidValid=1;
+    return 1;
 }
-/* At a SWAP_BUFFERS, after its scene is published: the in-between scene,
- * then this scene's records become the scene before's. */
-static void interp_swap(const NitroGx3dScene *now)
+/* At a SWAP_BUFFERS, before its scene (the building slot) is published:
+ * its in-between scene. */
+static void interp_mid(const NitroGx3dScene *now)
 {
-    if(sInterp)make_mid_scene(now);
-    int wanted=__atomic_load_n(&sInterpWanted,__ATOMIC_ACQUIRE);
-    if(wanted && (!sRec[0] || !sMid)){
+    sMidOk[sBuilding]=sInterp && make_mid_scene(now,sMids[sBuilding]);
+}
+/* At a SWAP_BUFFERS, after its scene is published: this scene's records
+ * become the scene before's. */
+static void interp_swap(void)
+{
+    int wanted=__atomic_load_n(&sInterpWanted,__ATOMIC_ACQUIRE),i;
+    if(wanted && (!sRec[0] || !sMids[2])){
         if(!sRec[0])sRec[0]=malloc(MAX_RECORDS*sizeof(PolyRecord));
         if(!sRec[1])sRec[1]=malloc(MAX_RECORDS*sizeof(PolyRecord));
         if(!sMatch)sMatch=malloc(MAX_RECORDS*sizeof(int32_t));
-        if(!sMid)sMid=malloc(sizeof(NitroGx3dScene));
-        if(!sRec[0]||!sRec[1]||!sMatch||!sMid){
+        for(i=0;i<3;i++)if(!sMids[i])sMids[i]=malloc(sizeof(NitroGx3dScene));
+        if(!sRec[0]||!sRec[1]||!sMatch||!sMids[0]||!sMids[1]||!sMids[2]){
             static int told;
             if(!told){told=1;NitroPort_Log("[gx3d] no memory for the in-between scenes");}
             __atomic_store_n(&sInterpWanted,0,__ATOMIC_RELEASE);
@@ -1081,7 +1092,7 @@ static void interp_swap(const NitroGx3dScene *now)
         }
     }
     if(sInterp && wanted)sRecBeforeValid=1;
-    else{sRecBeforeValid=0;sMidValid=0;}
+    else sRecBeforeValid=0;
     __atomic_store_n(&sInterp,wanted,__ATOMIC_RELEASE);
     sRecBuild^=1u;
     sRecCount[sRecBuild]=0;
@@ -1099,7 +1110,13 @@ const NitroGx3dScene *NitroPort_Gx3dMidScene(unsigned *matched,unsigned *polygon
 {
     if(matched)*matched=sMidMatched;
     if(polygons)*polygons=sMidPolygons;
-    return sMidValid?sMid:NULL;
+    return sMidOk[sDisplayed]?sMids[sDisplayed]:NULL;
+}
+const NitroGx3dScene *NitroPort_Gx3dMidOf(const NitroGx3dScene *scene)
+{
+    int i;
+    for(i=0;i<3;i++)if(scene==&sScenes[i])return sMidOk[i]?sMids[i]:NULL;
+    return NULL;
 }
 
 static void submit_vertex(void)
@@ -1432,6 +1449,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         /* Which SWAP_BUFFERS it is (with the geometry thread, counting
          * them as the game's thread does: NitroPort_Gx3dEarlierSceneUnread). */
         NitroPort_MailboxTag(&sMailbox,sSwapsDone+1u);
+        interp_mid(scene);   /* (published with it) */
         if(NitroPort_MailboxPublish(&sMailbox,&next,&serial)){
             sDisplayed=sBuilding;
             sBuilding=(unsigned)next;
@@ -1446,7 +1464,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
             scene->count=0;scene->shadow_count=0;scene->dropped++;
         }
         sShadowCapture=NitroPort_SunShadows() && shadow_store();
-        interp_swap(scene);
+        interp_swap();
         s.frameVertices=0;s.framePolygons=0;
         if(++sDiag.scenes>=120)diag_log();
         break;
@@ -2196,7 +2214,7 @@ void NitroPort_Gx3dReset(void)
     make_products();
     NitroPort_MailboxInit(&sMailbox);
     sBuilding=0;sDisplayed=1;sSerial=0;
-    sRecCount[0]=sRecCount[1]=0;sRecBeforeValid=0;sMidValid=0;sDest=NULL;sReplaying=0;
+    sRecCount[0]=sRecCount[1]=0;sRecBeforeValid=0;sMidOk[0]=sMidOk[1]=sMidOk[2]=0;sDest=NULL;sReplaying=0;
     identity(&s.proj);identity(&s.pos);identity(&s.vec);identity(&s.tex);
     set_wide_view(&s,sWideWidth);   /* (kept across resets) */
     s.viewport[0]=0;s.viewport[1]=0;s.viewport[2]=255;s.viewport[3]=191;

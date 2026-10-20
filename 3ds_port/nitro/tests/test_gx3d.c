@@ -448,6 +448,23 @@ static void test_interpolation(void)
         CHECK(mid->triangles[0].v[0].clip[0]==-2700);
         CHECK(mid->triangles[2].v[0].clip[0]==-3000);  /* the triangle as drawn */
     }else CHECK(0);
+    {
+        /* the display's way: the acquired scene's own in-between scene,
+         * kept with it while it's held (scenes made meanwhile have theirs) */
+        uint32_t serial=0;
+        const NitroGx3dScene *scene=NitroPort_Gx3dAcquireScene(&serial);
+        const NitroGx3dScene *held=scene?NitroPort_Gx3dMidOf(scene):NULL;
+        CHECK(scene!=NULL && held==mid);
+        CHECK(NitroPort_Gx3dMidOf(NULL)==NULL);
+        quad_at(-2400,opaque);
+        swap_done();
+        CHECK(held && held->count==3 && held->triangles[0].v[0].clip[0]==-2700);
+        CHECK(NitroPort_Gx3dMidScene(NULL,NULL)!=held);
+        if(scene)NitroPort_Gx3dReleaseScene(scene);
+        quad_at(-2600,opaque);
+        triangle(0,0x001f);
+        swap_done();
+    }
     /* a jump (112 DS pixels in a scene): where it is now */
     quad_at(1000,opaque);
     swap_done();
