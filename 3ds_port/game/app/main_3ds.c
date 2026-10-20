@@ -44,11 +44,13 @@
  */
 
 #include <3ds.h>
+#include <malloc.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "platinum.h"
 #include "port_pica.h"
@@ -71,6 +73,75 @@ void NitroPort_SoundPumpReplies(void);
 void NitroPort_FsReadStats(uint32_t *reads, uint64_t *bytes, uint64_t *micros);
 /* (nitro_port.h) the save's changes waiting, into its file */
 void NitroPort_CardFlush(void);
+
+/* ------------------------------------------- a thread that couldn't start
+ * Why, in the log (2026-10-20: one start had every thread after the
+ * geometry's fail, the sound system's small one aside, and the game
+ * didn't start). libctru's threadCreate takes the thread's stack from
+ * malloc's heap and then asks the system for the thread, and says only
+ * that it failed: here the heap, a block the size of the stack, the
+ * process's threads and memory, and a thread made straight from the
+ * system with a stack of its own. At most THREAD_TROUBLE_LINES times. */
+#define THREAD_TROUBLE_LINES 8
+extern char *fake_heap_end;
+static int sThreadTroubles;
+static int sThreadProbing;
+static u8 sProbeStack[4096] __attribute__((aligned(8)));
+
+/* (no libctru set-up: it only ends) */
+static void ProbeThreadMain(void *unused)
+{
+    (void)unused;
+    svcExitThread();
+}
+
+static void LogThreadTrouble(const char *what, size_t stack, s32 priority, int core)
+{
+    struct mallinfo m;
+    char *top;
+    void *block;
+    bool room;
+    Handle limit = 0, probe = 0;
+    ResourceLimitType names[2] = { RESLIMIT_THREAD, RESLIMIT_COMMIT };
+    s64 used[2] = { -1, -1 }, most[2] = { -1, -1 };
+    Result direct = -1;
+    bool probed = false;
+
+    if (__atomic_fetch_add(&sThreadTroubles, 1, __ATOMIC_RELAXED) >= THREAD_TROUBLE_LINES) {
+        return;
+    }
+    m = mallinfo();
+    top = sbrk(0);
+    block = memalign(8, stack + 4096);
+    room = block != NULL;
+    free(block);
+    if (R_SUCCEEDED(svcGetResourceLimit(&limit, CUR_PROCESS_HANDLE))) {
+        svcGetResourceLimitCurrentValues(used, limit, names, 2);
+        svcGetResourceLimitLimitValues(most, limit, names, 2);
+        svcCloseHandle(limit);
+    }
+    /* (one at a time: they share the stack) */
+    if (__atomic_exchange_n(&sThreadProbing, 1, __ATOMIC_ACQUIRE) == 0) {
+        direct = svcCreateThread(&probe, ProbeThreadMain, 0, (u32 *)(sProbeStack + sizeof(sProbeStack)),
+                                 priority, core);
+        if (R_SUCCEEDED(direct)) {
+            svcWaitSynchronization(probe, U64_MAX);
+            svcCloseHandle(probe);
+        }
+        probed = true;
+        __atomic_store_n(&sThreadProbing, 0, __ATOMIC_RELEASE);
+    }
+    NitroPort_Log("[threads] %s: couldn't start (priority 0x%lx, core %d, %u KB stack). "
+                  "Heap: %u KB in use, %u KB taken (%u KB of it free), %ld KB not taken yet; "
+                  "a block of the stack's size: %s. The program's threads: %lld of %lld, memory %lld of %lld KB; "
+                  "a thread straight from the system: %s (0x%08lx)",
+                  what, (unsigned long)priority, core, (unsigned)(stack / 1024u),
+                  (unsigned)(m.uordblks / 1024u), (unsigned)(m.arena / 1024u), (unsigned)(m.fordblks / 1024u),
+                  (long)((fake_heap_end - top) / 1024),
+                  room ? "there" : "none",
+                  (long long)used[0], (long long)most[0], (long long)(used[1] / 1024), (long long)(most[1] / 1024),
+                  !probed ? "not tried" : R_SUCCEEDED(direct) ? "made" : "refused", (unsigned long)direct);
+}
 
 #define AUDIO_FRAMES 512
 #define AUDIO_BUFFERS 4
@@ -167,6 +238,7 @@ static void StartSound(s32 priority)
     if (!sSoundThread) {
         __atomic_store_n(&sSoundThreadRunning, false, __ATOMIC_RELEASE);
         NitroPort_Log("[audio] couldn't start independent audio thread");
+        LogThreadTrouble("sound", 64 * 1024, priority - 2, 0);
     }
 }
 
@@ -412,6 +484,7 @@ static void StartVBlankThread(s32 priority)
     if(!sVBlankThread){
         __atomic_store_n(&sVBlankRunning,false,__ATOMIC_RELEASE);
         NitroPort_Log("[compose] couldn't start the V-blank thread");
+        LogThreadTrouble("V-blank",16*1024,priority-3,0);
     }
 }
 static void StopVBlankThread(void)
@@ -583,6 +656,7 @@ static void StartGpu(s32 priority,bool new3ds)
         __atomic_store_n(&sGpuRunning,false,__ATOMIC_RELEASE);
         sRemaster=false;
         NitroPort_Log("[gx3d] couldn't start 3D worker thread");
+        LogThreadTrouble("display",128*1024,priority+1,sGpuCore);
         return;
     }
     /* Until it's set up: whether the remaster display is on decides how
@@ -677,6 +751,7 @@ static void StartGeometryOn(s32 priority, int core)
     if (!sGeoThread) {
         NitroPort_Gx3dStopThread();
         NitroPort_Log("[perf] geometry on the game's thread (no core %d)", core);
+        LogThreadTrouble("geometry", 64 * 1024, priority + 1, core);
         return;
     }
     NitroPort_Log("[perf] geometry on core %d", core);
@@ -722,6 +797,7 @@ static void StartGeometry(s32 priority, bool new3ds)
     if (!sGeoThread) {
         NitroPort_Gx3dStopThread();
         NitroPort_Log("[perf] geometry on the game's thread (no thread on core 1)");
+        LogThreadTrouble("geometry", 64 * 1024, priority - 1, 1);
         return;
     }
     sGeoCore = 1;
@@ -829,6 +905,9 @@ static void TimeCore(int core, s32 priority, double ms[3])
         t = threadCreate(SpeedJobMain, &job, 16 * 1024, priority, core, false);
         if (t == NULL) {
             ms[kind] = -1.0;
+            if (core != 1 && kind == 0) {   /* (core 1: no share of it, as usual) */
+                LogThreadTrouble("core speed check", 16 * 1024, priority, core);
+            }
             continue;
         }
         threadJoin(t, UINT64_MAX);
@@ -1493,6 +1572,9 @@ static bool StartDrawer(int screens, s32 priority, s32 readPriority, int core)
     d->readPriority = readPriority;
     d->thread = threadCreate(DrawerMain, d, 64 * 1024, readPriority, core, false);
     if (d->thread == NULL) {
+        if (core != 1) {   /* (core 1: the next one tried instead) */
+            LogThreadTrouble("drawing", 64 * 1024, readPriority, core);
+        }
         return false;
     }
     sDrawerCount++;
@@ -2354,6 +2436,7 @@ int main(int argc, char **argv)
         aptHook(&sAptHook, OnAptEvent, NULL);   /* (after citro3d's: called before it) */
         if (threadCreate(GameThread, NULL, GAME_STACK_SIZE, priority, -2, true) == NULL) {
             NitroPort_Log("Can't start the game's thread.");
+            LogThreadTrouble("the game", GAME_STACK_SIZE, priority, -2);
         } else {
             Status("Running");
             ShowLog(false);   /* the game's screens from the first frame */
