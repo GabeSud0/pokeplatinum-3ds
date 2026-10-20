@@ -2145,10 +2145,14 @@ static void draw_shadow_receivers(const PicaView *view)
 void NitroPort_PicaDrawScene(const PicaView *view)
 {
     size_t b;
-    int blend,edging,copying;
+    int blend,edging,copying,part,depthOnly;
     NitroGx3dEdgeSetup edges;
     if(sPrepared<0||!view||!view->fb)return;
-    sFrame++;
+    part=view->part;
+    /* (PICA_DRAW_AFTER: the opaque polygons' depth and IDs alone, the
+     * colour already there, scaled down from the 2x2 framebuffer) */
+    depthOnly=part==PICA_DRAW_AFTER;
+    if(!depthOnly)sFrame++;   /* (once a frame) */
     NitroPort_Gx3dMapTextureBanks(&sBanks);
     if(!sXbrzWorked){
         sXbrzWorked=1;   /* (once a scene: its first draw) */
@@ -2157,7 +2161,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     }
     blend=(NitroPort_IoReg[0x60]&8u)!=0;
     NitroPort_Gx3dEdgeSetup(&edges);
-    edging=edges.enabled && view->edgeFb[0]!=NULL;
+    edging=edges.enabled && view->edgeFb[0]!=NULL && part!=PICA_DRAW_OPAQUE;
     /* (the opaque polygons' stencil is their polygon ID, for the copies) */
     copying=edging && sEdgeCopying && !sShadowReady;
     if(sShadowReady && !sShadowDrawn){
@@ -2186,6 +2190,16 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(batch->translucent)continue;
         if(!room_for_draw())break;
+        if(depthOnly){
+            /* (as the outlines' moved passes draw them: the shape alone) */
+            int textured=bind_batch_shape(batch);
+            C3D_StencilTest(true,GPU_ALWAYS,copying?(int)((attr>>24)&63u):0xFF,0xFF,0xFF);
+            C3D_AlphaTest(true,GPU_GREATER,textured?sBoundCut:0);
+            C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+            C3D_DepthTest(true,depthFunc,GPU_WRITE_DEPTH);
+            draw_arrays((int)batch->first,(int)batch->count);
+            continue;
+        }
         bind_batch(batch);
         batch_fog(attr);
         C3D_StencilTest(true,GPU_ALWAYS,copying?(int)((attr>>24)&63u):0xFF,0xFF,0xFF);
@@ -2195,7 +2209,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
         draw_arrays((int)batch->first,(int)batch->count);
     }
-    if(sShadowReady){
+    if(sShadowReady && !depthOnly){
         shadow_checkpoint("waiting for the opaque scene before sun shadows");
         draw_shadow_receivers(view);
     }
@@ -2209,6 +2223,15 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         if(!batch->translucent || ((attr>>16)&31u)!=31u)continue;
         if(sShadowReady && sDecal[b])continue;
         if(!room_for_draw())break;
+        if(depthOnly){
+            int textured=bind_batch_shape(batch);
+            C3D_StencilTest(true,GPU_ALWAYS,copying?(int)((attr>>24)&63u):0xFF,0xFF,0xFF);
+            C3D_AlphaTest(textured,GPU_GREATER,254);
+            C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+            C3D_DepthTest(true,depthFunc,GPU_WRITE_DEPTH);
+            draw_arrays((int)batch->first,(int)batch->count);
+            continue;
+        }
         bind_batch(batch);
         batch_fog(attr);
         C3D_StencilTest(true,GPU_ALWAYS,copying?(int)((attr>>24)&63u):0xFF,0xFF,0xFF);
@@ -2217,9 +2240,19 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
         draw_arrays((int)batch->first,(int)batch->count);
     }
+    if(part==PICA_DRAW_OPAQUE){
+        /* (the rest after the caller has scaled it down) */
+        fog_mode(0);
+        C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
+        C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
+        C3D_AlphaTest(false,GPU_ALWAYS,0);
+        NitroPort_PicaProfileMark("the opaque polygons");
+        stage("the scene's opaque polygons drawn");
+        return;
+    }
     /* (with the copies: cut here, always, for them to come after) */
-    if(copying)NitroPort_PicaCut("the opaque polygons");
-    else NitroPort_PicaProfileMark("the opaque polygons");
+    if(copying)NitroPort_PicaCut(depthOnly?"the opaque polygons' depth":"the opaque polygons");
+    else NitroPort_PicaProfileMark(depthOnly?"the opaque polygons' depth":"the opaque polygons");
     if(edging)mark_edges(view,&edges);
     stage("the translucent polygons");
     /* The translucent polygons, over the outlines (but the game's own
