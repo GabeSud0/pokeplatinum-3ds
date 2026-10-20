@@ -127,6 +127,7 @@ void NitroPort_ComposeLook(int on)
 }
 static Screen sScreens[2];        /* 0: upper, 1: lower */
 static void *sEdgeDepth[4];       /* 240 x 400 D24S8, a direction each, shared by the screens */
+static int sEdgeLightNow;         /* (this frame: the light outlines, `edges3d light`) */
 static LightLock sSetLock, sPresentLock;
 static uint32_t sSeq;
 static ComposeLayers sWork[2];    /* the drawers' pictures, by engine */
@@ -557,7 +558,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     }
     sInFrame = 0;
     sReady = 1;
-    NitroPort_Log("[compose] screens drawn by the GPU: %s, 2D %s, 3D %s%s%s",
+    NitroPort_Log("[compose] screens drawn by the GPU: %s, 2D %s, 3D %s%s%s%s",
                   config->wide ? "wide upper screen" : "the DS's width",
                   filters[config->filter & 3],
                   config->stereo ? "with depth from the slider" : "flat",
@@ -565,6 +566,10 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
                   : sConfig.edges == 2  ? ", outlines on the GPU (each pass only the polygons it needs)"
                   : sConfig.edges == 3  ? ", outlines on the GPU (all their moved passes drawn)"
                                         : ", outlines on the GPU",
+                  !sConfig.edges || !config->stereo ? ""
+                  : sConfig.edges3d == 0            ? " (none with the slider up)"
+                  : sConfig.edges3d == 1            ? " (light ones with the slider up)"
+                                                    : "",
                   config->flipV ? ", 2D flipped" : "");
     return 1;
 fail:
@@ -919,7 +924,8 @@ static void prof_report(int stereo, int edges, u64 t0)
                 group = sProfPartGroup[mark];
                 len = (size_t)snprintf(line, sizeof(line), "[gpu] %s (%s, outlines %s):",
                                        groups[group < 0 || group > 2 ? 2 : group], stereo ? "stereo" : "mono",
-                                       !edges ? "off" : sConfig.edges == 2 ? "on, pruned"
+                                       !edges ? "off" : sEdgeLightNow ? "light"
+                                       : sConfig.edges == 2 ? "on, pruned"
                                        : sConfig.edges == 3 ? "on, all drawn" : "on");
             }
             if (len < sizeof(line)) {
@@ -1179,16 +1185,17 @@ static int free_lcd_buffer(const Screen *scr)
 }
 
 /* The edge marking buffers filled for a scene (memory fills, queued
- * ahead of the drawing), but those the transfer engine makes (copied: a
- * direction a bit): two a fill (the GPU's queue holds 32 entries a frame). */
-static void fill_edge_buffers(Screen *scr, u32 value, unsigned copied)
+ * ahead of the drawing): those of the directions in fill (a bit each; not
+ * those the transfer engine makes, nor those not used), two a fill (the
+ * GPU's queue holds 32 entries a frame). */
+static void fill_edge_buffers(Screen *scr, u32 value, unsigned fill)
 {
     u32 bytes = (u32)SCREEN_H * (u32)scr->width * 4u;
     u8 *buf[4];
     int n = 0, d;
 
     for (d = 0; d < 4; d++) {
-        if (!(copied & (1u << d))) {
+        if (fill & (1u << d)) {
             buf[n++] = sEdgeDepth[d];
         }
     }
@@ -1207,7 +1214,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
 {
     int s, drawn = 0, stereoNow, need[2] = { 0, 0 }, timed = 0, edges = 0, lcdBuf[2] = { -1, -1 };
     int underCleared[2] = { 0, 0 };
-    unsigned copies;
+    unsigned fill = 0;
+    int copies;
     u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
     LayerSet *sets[2] = { NULL, NULL };
     u64 start = svcGetSystemTick(), gpuStart, prepareTicks = 0, texTicksBefore, texTicksAfter, texels;
@@ -1320,10 +1328,17 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     }
     sQuadVertices = 0;
     edges = sEdgeDepth[0] != NULL && scene != NULL && NitroPort_PicaEdgeClearValue(&edgeClear);
-    /* The left and right edge buffers copied from the screen's own
+    /* With the 3D slider up (each eye drawn: the outlines twice), the
+     * outlines as `edges3d` has them: light (two directions, not four),
+     * none, or as without it. */
+    if (stereoNow && sConfig.edges3d == 0) {
+        edges = 0;
+    }
+    sEdgeLightNow = edges && stereoNow && sConfig.edges3d == 1;
+    /* Two edge buffers copied from the screen's own
      * (NitroPort_PicaEdgeCopies): its stencil then the rear plane's ID where
      * nothing is drawn, as theirs. */
-    copies = NitroPort_PicaEdgeCopies(edges);
+    copies = NitroPort_PicaEdgeCopies(edges, sEdgeLightNow, &fill);
     /* The depth/stencil buffers cleared (before any drawing: the fills go
      * ahead of the frame's commands), the edge marking buffers with them. */
     for (s = 0; s < 2; s++) {
@@ -1344,7 +1359,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                                   screen3d && copies ? edgeClear : 0xFFFFFFFFu);
         }
         if (screen3d && edges) {
-            fill_edge_buffers(&sScreens[s], edgeClear, copies);
+            fill_edge_buffers(&sScreens[s], edgeClear, fill);
         }
     }
     for (s = 0; s < 2; s++) {
@@ -1363,7 +1378,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                 /* The second eye needs the edge buffers filled again: the
                  * commands so far go ahead, the fills after them. */
                 prof_split("the left eye's end", 1);
-                fill_edge_buffers(scr, edgeClear, copies);
+                fill_edge_buffers(scr, edgeClear, fill);
             }
             draw_screen(scr, 1, sets[s], sc, shift, edges, underCleared[s]);
         } else {
