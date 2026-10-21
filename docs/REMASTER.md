@@ -738,7 +738,13 @@ where the order says, if nearer than 16 DS pixels plus one and a half
 times the scene's motion: a map's many tiles of one kind are told apart
 by where they are. Each paired polygon goes halfway between its two
 places, clipped and culled as any other; one with no pair is where the
-new scene has it. Too few pairs (under half: a cut, a new map) and
+scene's motion puts it halfway (half the motion back from where the new
+scene has it: mostly polygons coming into the view at its edges), and
+one of the scene before's that the motion takes out of the view goes
+halfway out (half the motion on). Where the new scene has them, the
+polygons coming in were half a step ahead of the rest for a frame, and
+those going out were gone half a step early: the edge of a roof coming
+in at the top flickered (2026-10-21). Too few pairs (under half: a cut, a new map) and
 there's no in-between scene. In the PC runner: `interp 1`, then `midsim
 PATH` draws the newest in-between scene as gpusim draws a scene. Walking
 and running in Jubilife and on Route 202, the in-between scenes are
