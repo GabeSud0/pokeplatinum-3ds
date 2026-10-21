@@ -469,6 +469,46 @@ static void test_interpolation(void)
         triangle(0,0x001f);
         swap_done();
     }
+    /* a new one while the scene moves (8 quads 200 to the right: 6.25 DS
+     * pixels): where the scene's motion puts it halfway, 100 back (a
+     * model coming into the view, not half a step ahead of the rest) */
+    for(i=0;i<8;i++)quad_at(-4000+500*i,opaque);
+    swap_done();
+    for(i=0;i<8;i++)quad_at(-3800+500*i,opaque);
+    triangle(0,0x001f);
+    swap_done();
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && matched==8 && polygons==9);
+    if(mid && mid->count==17){
+        CHECK(mid->triangles[0].v[0].clip[0]==-3900);   /* (a quad: halfway) */
+        CHECK(mid->triangles[16].v[0].clip[0]==-3100);  /* the triangle */
+        CHECK(mid->triangles[16].v[0].clip[1]==-3000);
+    }else CHECK(0);
+    /* and one the scene's motion takes out of the view: halfway out (on
+     * the right edge, 100 further right, cut at x = w), not gone early */
+    for(i=0;i<8;i++)quad_at(-4000+500*i,opaque);
+    NitroPort_GxDirectWrite(0x20,0x03e0);
+    NitroPort_GxDirectWrite(0x40,0);
+    vertex(3900,-100,0);vertex(4090,-100,0);vertex(4000,100,0);
+    NitroPort_GxDirectWrite(0x41,0);
+    swap_done();
+    for(i=0;i<8;i++)quad_at(-3800+500*i,opaque);
+    swap_done();
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && matched==8 && polygons==8);
+    if(mid && mid->count>16){
+        const NitroGx3dTriangle *t=&mid->triangles[16];
+        int k,lo=99999,hi=-99999;
+        for(k=0;k<3;k++){
+            if(t->v[k].clip[0]<lo)lo=t->v[k].clip[0];
+            if(t->v[k].clip[0]>hi)hi=t->v[k].clip[0];
+        }
+        CHECK(t->v[0].color==0x03e0);
+        CHECK(lo==4000 && hi==4096);
+    }else CHECK(0);
+    quad_at(-2600,opaque);
+    triangle(0,0x001f);
+    swap_done();
     /* a jump (112 DS pixels in a scene): where it is now */
     quad_at(1000,opaque);
     swap_done();

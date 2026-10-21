@@ -962,6 +962,11 @@ static float poly_distance(const PolyRecord *p,const PolyRecord *c,float dx,floa
     for(k=0;k<c->count;k++)d+=fabsf(c->px[k]-(p->px[k]+dx))+fabsf(c->py[k]-(p->py[k]+dy));
     return d/(float)c->count;
 }
+/* The scene's motion as match_records last worked it out (DS pixels, as
+ * PolyRecord.px/py: x / w * 128, y / w * 96); valid with 8 pairs or more. */
+static int sMotionValid;
+static uint8_t *sPUsed;   /* (the scene before's records paired with one of this one's) */
+static float sMotionX, sMotionY;
 static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C,unsigned n,int32_t *out)
 {
     unsigned i=0,j=0,matched=0,moves=0;
@@ -992,6 +997,8 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
         moves++;
     }
     if(moves>=8u){dx=median_of(mx,moves);dy=median_of(my,moves);}
+    sMotionValid=moves>=8u;
+    sMotionX=dx;sMotionY=dy;
     /* (a figure that moves on its own, the player against the camera's
      * motion: as far again as the scene moves) */
     near=MATCH_NEAR+1.5f*(fabsf(dx)+fabsf(dy));
@@ -1069,7 +1076,48 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
                 }
             }
             if(!mid)memcpy(clip,c->clip,sizeof(clip));
+            if(sMatch[j]<0 && c->onScreen && sMotionValid && (sMotionX!=0.0f || sMotionY!=0.0f)){
+                /* (one with no match: the scene's new ones, mostly, as a
+                 * model comes into the view whole: where the scene's
+                 * motion puts it halfway, not where it is now, half a
+                 * step ahead of the rest: a building's roof coming in at
+                 * the top jumped for a frame, 2026-10-21) */
+                double hx=-0.5*(double)sMotionX/128.0,hy=-0.5*(double)sMotionY/96.0;
+                for(k=0;k<c->count;k++){
+                    clip[k][0]+=(int32_t)floor(hx*(double)clip[k][3]+0.5);
+                    clip[k][1]+=(int32_t)floor(hy*(double)clip[k][3]+0.5);
+                }
+            }
             replay_polygon(c,clip);
+        }
+        if(sMotionValid && (sMotionX!=0.0f || sMotionY!=0.0f) && sPUsed){
+            /* The scene before's that the scene's motion takes out of the
+             * view (none of this one's: they've gone): halfway out, not
+             * gone half a step early (a strip at the screen's edge showed
+             * what's behind for a frame). */
+            double fx=(double)sMotionX/128.0,fy=(double)sMotionY/96.0;
+            unsigned i;
+            memset(sPUsed,0,m);
+            for(j=0;j<n;j++)if(sMatch[j]>=0)sPUsed[sMatch[j]]=1;
+            for(i=0;i<m;i++){
+                const PolyRecord *p=&P[i];
+                int32_t clip[4][4],full[4];
+                unsigned all=0x3Fu;
+                if(sPUsed[i] || !p->onScreen)continue;
+                for(k=0;k<p->count;k++){
+                    memcpy(full,p->clip[k],sizeof(full));
+                    full[0]+=(int32_t)floor(fx*(double)full[3]+0.5);
+                    full[1]+=(int32_t)floor(fy*(double)full[3]+0.5);
+                    all&=outcode(full);
+                }
+                if(!all)continue;   /* (not leaving the view: gone, as this scene has it) */
+                for(k=0;k<p->count;k++){
+                    memcpy(clip[k],p->clip[k],sizeof(clip[k]));
+                    clip[k][0]+=(int32_t)floor(0.5*fx*(double)clip[k][3]+0.5);
+                    clip[k][1]+=(int32_t)floor(0.5*fy*(double)clip[k][3]+0.5);
+                }
+                replay_polygon(p,clip);
+            }
         }
         sDest=NULL;sReplaying=0;sShadowCapture=capture;
         s.framePolygons=framePolygons;s.frameVertices=frameVertices;
@@ -1093,6 +1141,7 @@ static void interp_swap(void)
         if(!sRec[0])sRec[0]=malloc(MAX_RECORDS*sizeof(PolyRecord));
         if(!sRec[1])sRec[1]=malloc(MAX_RECORDS*sizeof(PolyRecord));
         if(!sMatch)sMatch=malloc(MAX_RECORDS*sizeof(int32_t));
+        if(!sPUsed)sPUsed=malloc(MAX_RECORDS);
         for(i=0;i<3;i++)if(!sMids[i])sMids[i]=malloc(sizeof(NitroGx3dScene));
         if(!sRec[0]||!sRec[1]||!sMatch||!sMids[0]||!sMids[1]||!sMids[2]){
             static int told;
