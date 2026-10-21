@@ -284,6 +284,12 @@ The intro's forest uses it (white fog, a linear table). The table goes
 to the GPU once per scene's draw (citro3d sends all 128 entries whenever
 it's bound; it was bound for each batch).
 
+A scene is drawn with the 3D registers the game had at its SWAP_BUFFERS
+(DISP3DCNT and 0x320-0x3BF: the clear colour, the fog, the outlines'
+colours; noted on the game's thread with the swap:
+`NitroGx3dScene.disp3dcnt`, `regs3d`), not as they are when it's drawn, a
+few V-blanks later.
+
 The vertex program (`gx3d_passthrough.v.pica`) does the view (where the
 DS's screen goes on the 3DS's turned framebuffer) and the stereoscopic
 shift: `x += strength * max(w - convergence, -w)`, for perspective
@@ -347,8 +353,12 @@ bytes, but DISPSTAT and the V-count). The 2D renderer draws each line with
 its own BG scroll, windows and affine matrices, and gives the compositor
 the 3D's scroll on each line (`scroll3dLine`). The compositor draws the
 3D a run of lines at a time, each run moved by its scroll and drawn
-inside its rows alone (the scissor, set again by each of the scene's
-passes: `PicaView.scissor`), its rear plane and its brightness tint too:
+inside its rows alone (the viewport of its rows, the view moved to match,
+so the GPU clips the polygons to the run: `PicaView.band`; and the
+scissor, set again by each of the scene's passes: `PicaView.scissor`; the
+scissor alone still had every run's polygons gone through everywhere, 62
+ms of the GPU a frame at a battle's start), its rear plane and its
+brightness tint too:
 at most 24 runs (12 an eye with the slider up), and no more than the GPU's
 command list has room for (each run is the scene's commands again); more
 lines are put together by an odd number of runs (lines sliding apart by

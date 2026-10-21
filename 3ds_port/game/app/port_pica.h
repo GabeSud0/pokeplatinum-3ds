@@ -152,6 +152,12 @@ typedef struct PicaView {
      * right, bottom: an H-blank effect's run of lines); 0: all of them */
     int scissor;
     u32 scissorRect[4];
+    /* only the screen's rows bandTop .. bandBottom - 1 (band: an H-blank
+     * effect's run of lines): the viewport just them, so the GPU clips the
+     * polygons to them and draws nothing elsewhere (the scissor alone
+     * still had each run's polygons gone through everywhere: a battle's
+     * start took 62 ms of the GPU a frame, 2026-10-21) */
+    int band, bandTop, bandBottom;
 } PicaView;
 /* What NitroPort_PicaDrawScene draws: all of it; or, for the smooth 3D
  * with the outlines (port_compose_pica.c), first the opaque polygons alone

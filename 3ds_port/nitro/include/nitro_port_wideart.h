@@ -124,6 +124,11 @@ const uint16_t *NitroPort_WideArtFindNear(uint64_t key, int curH, int curV, int 
 /* A picture's opaque columns (left .. right - 1), by its pixels as the
  * functions above gave them: 1 if known. Any thread. */
 int NitroPort_WideArtExtent(const uint16_t *pixels, int *left, int *right);
+/* Which of its rows have anything (a pixel of its own, or one of the
+ * game's: NITRO_WIDE_ART_H flags), by its pixels as the functions above
+ * gave them; NULL if not known. Any thread. Most of the opening's
+ * pictures are a strip across the screen: two rows of three are empty. */
+const uint8_t *NitroPort_WideArtRows(const uint16_t *pixels);
 /* Where a whole picture goes when its layer has moved `moved` pixels
  * sideways from where the picture was made (> 0: to the right), the
  * picture's opaque columns left .. right - 1: as far, while what it shows

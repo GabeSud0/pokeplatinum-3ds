@@ -43,6 +43,8 @@ typedef struct NitroGx3dTriangle {
     uint32_t sort_key;
 } NitroGx3dTriangle;
 
+#define NITRO_GX3D_REGS_AT 0x320u
+#define NITRO_GX3D_REGS_SIZE 0xA0u
 typedef struct NitroGx3dScene {
     uint32_t count, dropped, serial;
     /* W-buffer/Z-buffer mode belongs to the completed frame (SWAP_BUFFERS),
@@ -59,6 +61,14 @@ typedef struct NitroGx3dScene {
     /* When the game ended it: NitroPort_Gx3dStamp() at its SWAP_BUFFERS
      * (the platform's clock; the 3DS's counts V-blanks). */
     uint32_t stamp;
+    /* The 3D's registers as the game had them at its SWAP_BUFFERS (on the
+     * game's thread): DISP3DCNT, and 0x4000320-0x40003BF (the edge
+     * colours, the alpha test, the clear colour and depth, the fog, the
+     * toon table) at regs3d[offset - NITRO_GX3D_REGS_AT]. What draws the
+     * scene later reads them here, not as they are by then (the game may
+     * have changed them for its next scene). */
+    uint32_t disp3dcnt;
+    uint8_t regs3d[NITRO_GX3D_REGS_SIZE];
     NitroGx3dTriangle triangles[NITRO_GX3D_MAX_TRIANGLES];
     /* With the sun shadows on (NitroPort_SunShadows), the opaque triangles
      * that aren't drawn but can still cast a shadow into the view: those
@@ -145,6 +155,8 @@ typedef struct NitroGx3dEdgeSetup {
     uint32_t clearDepth;     /* its depth, 24 bits (CLEAR_DEPTH) */
 } NitroGx3dEdgeSetup;
 void NitroPort_Gx3dEdgeSetup(NitroGx3dEdgeSetup *setup);
+/* The same from a scene's registers (NitroGx3dScene.disp3dcnt, regs3d). */
+void NitroPort_Gx3dEdgeSetupFrom(NitroGx3dEdgeSetup *setup, uint32_t disp3dcnt, const uint8_t *regs3d);
 /* Outline a finished image: image is RGB555 | 0x8000 (drawn), alpha 0-31
  * per pixel; depthId per pixel: depth (24 bits, smaller is nearer) | the
  * opaque polygon ID there << 24, or 64-127 or 255 for none (64-127: the

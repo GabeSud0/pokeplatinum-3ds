@@ -71,6 +71,7 @@ typedef struct Slot {
     int16_t left, right;   /* its opaque pixels' columns: left .. right - 1 */
     uint32_t lastUse;
     uint16_t *pixels;      /* allocated once */
+    uint8_t rowUsed[NITRO_WIDE_ART_H];   /* (each row: anything in it, a pixel of its own or the game's) */
 } Slot;
 
 static Picture sPictures[MAX_PICTURES];
@@ -727,15 +728,19 @@ static const uint16_t *picture_pixels(int index)
     {
         const uint16_t *px = sSlots[oldest].pixels;
         int x, y, left = NITRO_WIDE_ART_W, right = 0;
+        uint8_t used[NITRO_WIDE_ART_H];   /* (worked out apart: a drawer may be reading the slot's) */
 
         for (y = 0; y < NITRO_WIDE_ART_H; y++) {
+            used[y] = 0;
             for (x = 0; x < NITRO_WIDE_ART_W; x++) {
                 if (px[y * NITRO_WIDE_ART_W + x]) {
                     if (x < left) left = x;
                     if (x >= right) right = x + 1;
+                    used[y] = 1;
                 }
             }
         }
+        memcpy(sSlots[oldest].rowUsed, used, sizeof(used));
         sSlots[oldest].left = (int16_t)left;
         sSlots[oldest].right = (int16_t)right;
         if (index < sCount && strcmp(sPictures[index].name, pic.name) == 0) {
@@ -790,6 +795,25 @@ int NitroPort_WideArtExtent(const uint16_t *pixels, int *left, int *right)
     }
     unlock();
     return found;
+}
+
+const uint8_t *NitroPort_WideArtRows(const uint16_t *pixels)
+{
+    const uint8_t *rows = NULL;
+    int i;
+
+    if (pixels == NULL) {
+        return NULL;
+    }
+    lock();
+    for (i = 0; i < CACHE_SLOTS; i++) {
+        if (sSlots[i].key != 0 && sSlots[i].pixels == pixels) {
+            rows = sSlots[i].rowUsed;
+            break;
+        }
+    }
+    unlock();
+    return rows;
 }
 
 /* The last ART_ENTRY pixels of the DS's slide (before what's coming in is

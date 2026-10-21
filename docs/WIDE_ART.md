@@ -288,7 +288,12 @@ round one with nothing else in the file (an odd size has a middle pixel).
   in its bands (`LookUpArt`, `SEG_ART`), one layer alone
   (`NitroPort_Render2DLayer`); the sprite groups (`ObjGroups`, keyed by
   the tiles they use), their pictures in the OBJ line (`LookUpObjArt`, `DrawObjs`),
-  one group alone (`NitroPort_Render2DObjLayer`).
+  one group alone (`NitroPort_Render2DObjLayer`). A picture's pixel is
+  worked out only where it can show (not behind a layer in front, nor
+  where the window hides its layer: `COVERED`), and its empty rows
+  (`NitroPort_WideArtRows`, kept with its pixels) are skipped: the
+  opening's strips took 32-38 ms a frame to draw on a New 3DS, about half
+  that since.
 - `3ds_port/game/app/main_3ds.c`: L + R + X, L + R + A; the PC runner:
   `--wide-art DIR` (and the sharing, `NitroPort_Render2DShareArt`), control
   commands `capture DIR`, `wideart DIR`, `oam`.
