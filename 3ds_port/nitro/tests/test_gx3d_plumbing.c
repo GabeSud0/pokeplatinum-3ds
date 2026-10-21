@@ -107,6 +107,19 @@ static void test_mailbox_unread(void) {
     CHECK(NitroPort_MailboxUnread(&b)==7);
     NitroPort_MailboxRelease(&b,slot);
     CHECK(NitroPort_MailboxUnread(&b)==0);
+    /* how many newer than the one acquired: none, one, two (the second
+     * taking the first's place) */
+    CHECK(NitroPort_MailboxNewerCount(&b,seen)==0);
+    CHECK(!NitroPort_MailboxNewer(&b,seen));
+    CHECK(NitroPort_MailboxPublish(&b,&next,NULL)==1);
+    CHECK(NitroPort_MailboxNewerCount(&b,seen)==1);
+    CHECK(NitroPort_MailboxNewer(&b,seen));
+    CHECK(NitroPort_MailboxPublish(&b,&next,NULL)==1);
+    CHECK(NitroPort_MailboxNewerCount(&b,seen)==2);
+    slot=NitroPort_MailboxAcquire(&b,&seen);
+    CHECK(slot>=0);
+    CHECK(NitroPort_MailboxNewerCount(&b,seen)==0);
+    NitroPort_MailboxRelease(&b,slot);
 }
 static NitroGx3dScene scene;
 static NitroGx3dGpuVertex verts[12];

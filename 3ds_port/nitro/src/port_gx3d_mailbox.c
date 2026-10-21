@@ -80,6 +80,14 @@ int NitroPort_MailboxNewer(NitroGx3dMailbox *b, uint32_t serial) {
     unlock(b);
     return newer;
 }
+uint32_t NitroPort_MailboxNewerCount(NitroGx3dMailbox *b, uint32_t serial) {
+    uint32_t n;
+    if(!b)return 0;
+    lock(b);
+    n=b->latest>=0?b->serial-serial:0u;
+    unlock(b);
+    return n;
+}
 void NitroPort_MailboxTag(NitroGx3dMailbox *b, uint32_t tag) {
     if(!b)return;
     lock(b);

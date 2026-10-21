@@ -557,30 +557,50 @@ static void GpuComposeLoop(void)
 {
     const NitroGx3dScene *scene=NULL,*mid=NULL;
     uint32_t seen=0;
+    /* The scene's own frame is done with: drawn on the 3D's screen, or
+     * nothing to draw (no 3D shown); else (waiting for its 2D, or for an
+     * LCD framebuffer) it's drawn at a later wake, before any newer scene
+     * takes its place (every scene shows: with 3 framebuffers and the lag
+     * at 4, the in-between scenes got them and the scenes were released
+     * undrawn, 2026-10-20). */
+    bool sceneDone=true;
     while(__atomic_load_n(&sGpuRunning,__ATOMIC_ACQUIRE)){
-        bool force;
+        bool force,aOnTop;
+        int bit,noBuf;
         LightEvent_Wait(&sGpuWake);
         if(!__atomic_load_n(&sGpuRunning,__ATOMIC_ACQUIRE))break;
+        /* (which screen the 3D's is, once for this wake: the game's thread
+         * sets it) */
+        aOnTop=sAOnTop;
+        bit=aOnTop?COMPOSE_DRAWN_UPPER:COMPOSE_DRAWN_LOWER;
+        noBuf=aOnTop?COMPOSE_NO_BUFFER_UPPER:COMPOSE_NO_BUFFER_LOWER;
         if(scene==NULL || NitroPort_Gx3dNewerScene(seen)){
             const NitroGx3dScene *next;
-            if(scene && NitroPort_ComposeSceneWaiting(seen)){
-                /* Still waiting for its 2D: drawn now, with the 2D there
-                 * is, before the newer one (not overtaken: every scene
-                 * shows; not its in-between scene: late already). */
+            if(scene && !sceneDone){
+                /* Still waiting (for its 2D, or a framebuffer): drawn now,
+                 * with the 2D there is, before the newer one (not
+                 * overtaken; not its in-between scene: late already). No
+                 * framebuffer yet: kept till the next V-blank frees one. */
+                int r=0;
                 __atomic_fetch_add(&sComposeAttempt,1u,__ATOMIC_RELAXED);
                 __atomic_store_n(&sComposing,true,__ATOMIC_SEQ_CST);
                 if(!sShowLog && !sScreensDirty && !__atomic_load_n(&sSuspended,__ATOMIC_SEQ_CST)){
                     u64 start=svcGetSystemTick();
-                    NitroPort_ComposeFrame(scene,seen,sAOnTop,osGet3DSliderState(),false,1,0);
+                    r=NitroPort_ComposeFrame(scene,seen,aOnTop,osGet3DSliderState(),false,1,0);
                     sGpuTicks+=svcGetSystemTick()-start;
                 }
                 __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
+                if(!(r&bit) && (r&noBuf) && NitroPort_Gx3dNewerScenes(seen)<2u){
+                    continue;   /* (one newer scene waits for it; two: it's skipped) */
+                }
             }
             if(scene){NitroPort_Gx3dReleaseScene(scene);scene=NULL;}
             mid=NULL;
+            sceneDone=true;
             next=NitroPort_Gx3dAcquireScene(&seen);
             if(next){
                 scene=next;
+                sceneDone=false;
                 /* 60 frames a second: its in-between scene first, a V-blank
                  * before it (while frames fit: NitroPort_ComposeWantsMid). */
                 if(sFps60)mid=NitroPort_Gx3dMidOf(scene);
@@ -601,20 +621,24 @@ static void GpuComposeLoop(void)
         {
             u64 start=svcGetSystemTick();
             if(mid && !force){
-                if(!NitroPort_ComposeWantsMid(osGet3DSliderState(),sAOnTop)){
+                if(!NitroPort_ComposeWantsMid(osGet3DSliderState(),aOnTop)){
                     mid=NULL;
                 }else{
-                    /* (drawn on the 3D's screen: done; waiting for its
-                     * 2D: the next V-blank, still before its scene; not
-                     * drawn otherwise (no 3D shown, no framebuffer free):
-                     * left out) */
-                    int drawn=NitroPort_ComposeFrame(mid,seen,sAOnTop,osGet3DSliderState(),false,0,1);
-                    if((drawn&(sAOnTop?1:2)) || !NitroPort_ComposeSceneWaiting(seen))mid=NULL;
+                    /* (drawn on the 3D's screen: done, its scene next;
+                     * waiting for its 2D or a framebuffer: the next
+                     * V-blank, still before its scene, unless its V-blank
+                     * has come; not drawn otherwise (no 3D shown): left
+                     * out) */
+                    int r=NitroPort_ComposeFrame(mid,seen,aOnTop,osGet3DSliderState(),false,0,1);
+                    if((r&bit) || (r&COMPOSE_MID_LATE) ||
+                       (!(r&noBuf) && !NitroPort_ComposeSceneWaiting(seen)))mid=NULL;
                 }
             }
             if(mid==NULL || force){
+                int r;
                 mid=NULL;
-                NitroPort_ComposeFrame(scene,seen,sAOnTop,osGet3DSliderState(),force,0,0);
+                r=NitroPort_ComposeFrame(scene,seen,aOnTop,osGet3DSliderState(),force,0,0);
+                sceneDone=scene==NULL || (r&bit) || (!(r&noBuf) && !NitroPort_ComposeSceneWaiting(seen));
             }
             __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
             sGpuTicks+=svcGetSystemTick()-start;
@@ -2013,7 +2037,7 @@ static void PerfFrame(u64 enter)
         frames = now.frames - last.frames;
         published = now.published - last.published;
         timed = now.timed - last.timed;
-        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, %.1f in between, of %.1f scenes/s; %u scenes not shown), each %.1f ms building + %.1f ms GPU (drawn while the next is built: %.1f ms waited); %.0f%% in stereo (%.0f%% of it with outlines), %.0f%% drawn 2x2, %.0f%% 2x1; 3D textures converted %u (%.1f ms each); 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut; "
+        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, %.1f in between, of %.1f scenes/s; %u scenes not shown), each %.1f ms building + %.1f ms GPU (drawn while the next is built: %.1f ms waited); %.0f%% in stereo (%.0f%% of it with outlines), %.0f%% drawn 2x2, %.0f%% 2x1; 3D textures converted %u (%.1f ms each); 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late (%u in-between); GPU command list %.0f%% full at most, %u draws cut; "
                       "the picture behind the 3D one colour (painted by the clear) on %.1f screens a frame",
                       frames / seconds, timed / seconds, (double)(now.midFrames - last.midFrames) / seconds,
                       madeScenes / seconds,
@@ -2030,7 +2054,8 @@ static void PerfFrame(u64 enter)
                       tex != lastTex ? (double)(texTicks - lastTexTicks) * 1000.0 / SYSCLOCK_ARM11 / (tex - lastTex) : 0.0,
                       published / seconds,
                       published ? (double)(now.publishTicks - last.publishTicks) * 1000.0 / SYSCLOCK_ARM11 / published : 0.0,
-                      now.lag, (unsigned)(now.late - last.late), (double)cmdPeak * 100.0, cmdCut,
+                      now.lag, (unsigned)(now.late - last.late), (unsigned)(now.midLate - last.midLate),
+                      (double)cmdPeak * 100.0, cmdCut,
                       frames ? (double)(now.underFills - last.underFills) / frames : 0.0);
         last = now;
         lastTex = tex;

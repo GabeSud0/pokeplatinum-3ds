@@ -119,6 +119,9 @@ void NitroPort_Gx3dReleaseScene(const NitroGx3dScene *scene);
  * consumer that keeps the acquired scene (to draw it again) can tell when
  * to release it and acquire the next. */
 int NitroPort_Gx3dNewerScene(uint32_t serial);
+/* How many newer than that have been made (the newest takes the place of
+ * any not yet taken). */
+unsigned NitroPort_Gx3dNewerScenes(uint32_t serial);
 /* The clock scenes are stamped with (NitroGx3dScene.stamp): weak, 0 unless
  * the platform has one. Called on the game's thread. */
 uint32_t NitroPort_Gx3dStamp(void);
