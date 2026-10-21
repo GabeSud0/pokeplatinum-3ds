@@ -53,6 +53,11 @@ typedef struct NitroRender2DSplit {
     /* Draw from the display state taken by NitroPort_Render2DTakeState
      * (registers, palettes, OAM as they were then), not the live one. */
     int snapshot;
+    /* (the remaster's screens) A window from the DS's x 1 or to its x 255
+     * (games' 0-255: the right end is exclusive) taken to the screen's edge:
+     * no column of the DS's picture left out (the wider canvas does so
+     * anyway). */
+    int windowsToEdge;
 } NitroRender2DSplit;
 /* (the game's thread, when it hands a frame to a drawing thread) Take the
  * engine's registers, palettes and OAM as they are now, for the next draw

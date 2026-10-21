@@ -356,6 +356,7 @@ static int RemasterShot(const char *path)
         memset(&split, 0, sizeof(split));
         split.over = over;
         split.overAlpha = overAlpha;
+        split.windowsToEdge = 1;   /* (as the 3DS remaster has it) */
         if (screen == 0) {
             NitroPort_WideLayout(engine, &split);
         }

@@ -1460,6 +1460,7 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         split.over = layers->over;
         split.overAlpha = layers->overAlpha;
         split.snapshot = 1;   /* (the state taken when the frame was handed over: DrawFrame) */
+        split.windowsToEdge = 1;
         /* The upper screen: the wider canvas (port_wide.c's layout). */
         if (top && sCompose.wide) {
             NitroPort_WideLayout(engine, &split);
@@ -2157,6 +2158,15 @@ void NitroPort_OnFrame(void)
      * (the intro has it on the lower one): from the next command on. */
     if (sRemaster && sCompose.wide) {
         NitroPort_Gx3dSetWideView(NitroPort_EngineAOnTop() ? 320 : 256);
+    }
+    /* 60 frames a second (the in-between scenes) in the game itself, not
+     * on the screens made of pictures (the opening, the title, the start
+     * of the game, the credits, the cutscenes: NitroPort_WidePictures):
+     * those stay at the game's 30, as made (their 2D animations flickered
+     * black and jittered between the in-between frames, 2026-10-21). From
+     * the next scene on. */
+    if (sRemaster) {
+        NitroPort_Gx3dSetInterpolation(sFps60 && !NitroPort_WidePictures());
     }
     NitroPort_Gx3dFlush();        /* the geometry thread has the frame's commands */
     sFrame++;

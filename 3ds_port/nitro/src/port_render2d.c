@@ -2767,20 +2767,25 @@ static BOOL InRange(int v, int lo, int hi)
  * the DS's left or right edge goes on to the canvas's (the intro's
  * letterbox, a window over the whole screen: the bands beside the DS's
  * picture are in it too). */
-static void FillRange(u8 *enable, int lo, int hi, u8 value, int origin, int width)
+static void FillRange(u8 *enable, int lo, int hi, u8 value, int origin, int width, BOOL toEdge)
 {
-    if (origin > 0 && lo < hi) {
-        /* A window a pixel short of an edge is at it: games cover the
-         * screen with 0-255 (the right end is exclusive, and 256 doesn't
-         * fit in the register), leaving the DS's last column out. On the
-         * wider screen that column and the band beyond it went black (the
-         * intro's city). */
+    /* (the wider canvas, or toEdge: NitroRender2DSplit.windowsToEdge) A
+     * window a pixel short of an edge is at it: games cover the screen
+     * with 0-255 (the right end is exclusive, and 256 doesn't fit in the
+     * register), leaving the DS's last column out. On the wider screen
+     * that column and the band beyond it went black (the intro's city); on
+     * the remaster's lower screen, drawn 1.25 times bigger, a black strip
+     * down its right edge (the intro's girl running, 2026-10-21). The DS's
+     * own picture keeps the DS's column. */
+    if ((toEdge || origin > 0) && lo < hi) {
         if (hi == 255) {
             hi = W;
         }
         if (lo == 1) {
             lo = 0;
         }
+    }
+    if (origin > 0 && lo < hi) {
         memset(enable + origin + lo, value, (size_t)(hi - lo));
         if (lo == 0) {
             memset(enable, value, (size_t)origin);
@@ -3283,10 +3288,10 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 }
             }
             if ((dispcnt & 0x4000) && InRange(y, win1v >> 8, win1v & 0xFF)) {
-                FillRange(enableLine, win1h >> 8, win1h & 0xFF, (winin >> 8) & 0x3F, e->origin, width);
+                FillRange(enableLine, win1h >> 8, win1h & 0xFF, (winin >> 8) & 0x3F, e->origin, width, split != NULL && split->windowsToEdge);
             }
             if ((dispcnt & 0x2000) && InRange(y, win0v >> 8, win0v & 0xFF)) {
-                FillRange(enableLine, win0h >> 8, win0h & 0xFF, winin & 0x3F, e->origin, width);
+                FillRange(enableLine, win0h >> 8, win0h & 0xFF, winin & 0x3F, e->origin, width, split != NULL && split->windowsToEdge);
             }
         }
 
@@ -4332,7 +4337,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
 
     /* the canvas, and where the windows are */
     small = (small ^ (u32)split->width ^ ((u32)split->origin << 9) ^
-             ((u32)split->anchorWindows << 18) ^ ((u32)split->clip[0] << 20) ^
+             ((u32)split->anchorWindows << 18) ^ ((u32)(split->windowsToEdge != 0) << 19) ^ ((u32)split->clip[0] << 20) ^
              ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
              ((u32)split->clip[3] << 23)) * 16777619u;
     if (split->width > W) {
