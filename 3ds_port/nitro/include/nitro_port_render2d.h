@@ -97,6 +97,16 @@ typedef struct NitroWidePictureShown {
     int picture, bg, prio, x, y, w, h, angle;
 } NitroWidePictureShown;
 int NitroPort_Render2DPictures(int engine, const NitroRender2DSplit *layout, NitroWidePictureShown *out, int max);
+/* The art folder's pictures of the layers an engine shows now (its BGs',
+ * its OBJ groups'), not shared yet, written into the folder's share/
+ * without the game's art (nitro_port_wideart.h): each pixel the same as
+ * the layer's own, where the picture was made, left out (NITRO_WIDE_ART_GAME
+ * for a BG's: the renderer puts the player's own game's back; nothing for
+ * an OBJ group's: its sprites show there anyway), and a picture of the
+ * bands only, nothing in the DS's part. A BG laid out in parts only where
+ * its picture was made. How many were written. The game's thread, between
+ * frames (as NitroPort_WideArtCapture). */
+int NitroPort_Render2DShareArt(int engine);
 
 #ifdef __cplusplus
 }

@@ -2,10 +2,11 @@
  * Wide art: hand-drawn pictures for the wider upper screen, and captures
  * for drawing them (include/nitro_port_wideart.h, docs/WIDE_ART.md).
  *
- * The folder's file names are read at load; a picture is read (PNG,
- * stb_image) the first time its layer shows, into one of a few cache
- * slots that are allocated once and never freed: a drawing thread may be
- * using a slot's pixels while another fills a different one.
+ * The built-in pictures' and the folder's file names are read at load; a
+ * picture is read (PNG, stb_image) the first time its layer shows, into
+ * one of a few cache slots that are allocated once and never freed: a
+ * drawing thread may be using a slot's pixels while another fills a
+ * different one.
  */
 #include <nitro_port_wideart.h>
 #include <nitro_port_render2d.h>
@@ -54,7 +55,9 @@ int NitroPort_EngineAOnTop(void);
 typedef struct Picture {
     uint64_t key;
     int16_t hofs, vofs;
+    int16_t builtIn;       /* its NitroPort_WideArtBuiltIn file, or -1: the folder's */
     uint8_t full, bad;
+    uint8_t shared;        /* (the folder's) in its share/, as it is now */
     /* (once read) its opaque pixels' columns: left .. right - 1 */
     uint8_t extentKnown;
     int16_t left, right;
@@ -71,7 +74,7 @@ typedef struct Slot {
 } Slot;
 
 static Picture sPictures[MAX_PICTURES];
-static int sCount;
+static int sCount, sUnshared;
 static char sDir[256];
 static Slot sSlots[CACHE_SLOTS];
 static uint32_t sUse;
@@ -90,6 +93,29 @@ static void unlock(void)
 }
 
 /* ------------------------------------------------------------- the folder */
+
+/* (the program's: the build makes one from wideart/, tools/embed_wideart.py) */
+__attribute__((weak)) const NitroWideArtFile *NitroPort_WideArtBuiltIn(int *count)
+{
+    *count = 0;
+    return NULL;
+}
+
+/* Whether the folder's file name is in its share/ as it is now (written
+ * after the file last changed: a second after, the SD card's times being
+ * that coarse; else it's shared again, which is no harm). */
+static int shared_now(const char *dir, const char *name)
+{
+    char path[400];
+    struct stat file, copy;
+
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    if (stat(path, &file) != 0) {
+        return 0;
+    }
+    snprintf(path, sizeof(path), "%s/share/%s", dir, name);
+    return stat(path, &copy) == 0 && copy.st_mtime > file.st_mtime;
+}
 
 /* (not ctype's: those are a table in newlib the libraries' check doesn't
  * expect, tools/check_sdk_coverage.py) */
@@ -169,40 +195,97 @@ int NitroPort_WideArtLoad(const char *dir)
 {
     DIR *d;
     struct dirent *ent;
-    int n = 0, i;
+    const NitroWideArtFile *files;
+    int n = 0, i, k, files_n = 0, built = 0, local = 0, unshared = 0, used = 0, listed = 0;
+    char line[256];
 
     lock();
     snprintf(sDir, sizeof(sDir), "%s", dir);
+    files = NitroPort_WideArtBuiltIn(&files_n);
+    for (k = 0; k < files_n && n < MAX_PICTURES; k++) {
+        Picture *p = &sPictures[n];
+        int h, v, f;
+
+        if (strlen(files[k].name) >= sizeof(p->name) ||
+            !NitroPort_WideArtParseName(files[k].name, &p->key, &h, &v, &f)) {
+            continue;
+        }
+        p->hofs = (int16_t)h;
+        p->vofs = (int16_t)v;
+        p->full = (uint8_t)f;
+        p->bad = 0;
+        p->extentKnown = 0;
+        p->builtIn = (int16_t)k;
+        p->shared = 1;
+        snprintf(p->name, sizeof(p->name), "%s", files[k].name);
+        n++;
+        built++;
+    }
     d = opendir(dir);
     if (d != NULL) {
         while ((ent = readdir(d)) != NULL && n < MAX_PICTURES) {
-            Picture *p = &sPictures[n];
+            Picture *p;
+            uint64_t key;
             int h, v, f;
 
             if (strlen(ent->d_name) >= sizeof(p->name) ||
-                !NitroPort_WideArtParseName(ent->d_name, &p->key, &h, &v, &f)) {
+                !NitroPort_WideArtParseName(ent->d_name, &key, &h, &v, &f)) {
                 continue;
             }
+            /* (the folder's in the place of a built-in one of its name) */
+            for (i = 0; i < n && !(sPictures[i].builtIn >= 0 && strcmp(sPictures[i].name, ent->d_name) == 0); i++) {
+            }
+            p = &sPictures[i];
+            if (i == n) {
+                n++;
+            } else {
+                built--;
+            }
+            p->key = key;
             p->hofs = (int16_t)h;
             p->vofs = (int16_t)v;
             p->full = (uint8_t)f;
             p->bad = 0;
             p->extentKnown = 0;
+            p->builtIn = -1;
             snprintf(p->name, sizeof(p->name), "%s", ent->d_name);
-            n++;
+            p->shared = (uint8_t)shared_now(dir, ent->d_name);
+            unshared += !p->shared;
+            local++;
         }
         closedir(d);
     }
     /* sorted; of two files for one key, the whole picture last (found) */
     qsort(sPictures, (size_t)n, sizeof(sPictures[0]), by_key);
     sCount = n;
+    sUnshared = unshared;
     for (i = 0; i < CACHE_SLOTS; i++) {
         sSlots[i].key = 0;
     }
     sSerial++;
+    /* (which aren't shared: to go to their screens; the share folder has
+     * the rest) */
+    line[0] = 0;
+    for (i = 0; i < n && used < (int)sizeof(line) - 1; i++) {
+        if (sPictures[i].builtIn < 0 && !sPictures[i].shared) {
+            int wrote = snprintf(line + used, sizeof(line) - (size_t)used, "%s%s", listed ? ", " : "",
+                                 sPictures[i].name);
+
+            if (wrote < 0 || used + wrote >= (int)sizeof(line)) {
+                break;
+            }
+            used += wrote;
+            listed++;
+        }
+    }
     unlock();
     if (n > 0) {
-        NitroPort_Log("[wide art] %d hand-drawn pictures in %s", n, dir);
+        NitroPort_Log("[wide art] %d hand-drawn pictures: %d built in, %d in %s (%d of those not shared yet)", n,
+                      built, local, dir, unshared);
+    }
+    if (unshared > 0) {
+        NitroPort_Log("[wide art] not shared yet (go to their screens; they're written into %s/share): %s%s", dir, line,
+                      listed < unshared ? ", ..." : "");
     }
     /* the layouts' pictures: read now, so none holds a screen up later */
     for (i = 1; i < NITRO_WIDE_PICTURES; i++) {
@@ -293,34 +376,41 @@ static int find_picture(uint64_t key)
     return found;
 }
 
-/* A picture's file into RGB555 | 0x8000 pixels (0: transparent). */
-static int read_picture(const char *path, uint16_t *out)
+/* A file's bytes (malloc'd; NULL if it can't be read), and how many. */
+static unsigned char *read_file(const char *path, long max, long *size)
 {
     FILE *f = fopen(path, "rb");
-    unsigned char *bytes, *rgba;
-    long size;
-    int w, h, n, i;
+    unsigned char *bytes;
 
     if (f == NULL) {
-        return 0;
+        return NULL;
     }
     (void)setvbuf(f, NULL, _IONBF, 0);   /* (read whole: one request, not one a KB) */
     fseek(f, 0, SEEK_END);
-    size = ftell(f);
+    *size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (size <= 0 || size > 8 * 1024 * 1024) {
+    if (*size <= 0 || *size > max) {
         fclose(f);
-        return 0;
+        return NULL;
     }
-    bytes = malloc((size_t)size);
-    if (bytes == NULL || fread(bytes, 1, (size_t)size, f) != (size_t)size) {
+    bytes = malloc((size_t)*size);
+    if (bytes == NULL || fread(bytes, 1, (size_t)*size, f) != (size_t)*size) {
         free(bytes);
         fclose(f);
-        return 0;
+        return NULL;
     }
     fclose(f);
+    return bytes;
+}
+
+/* A picture's PNG into RGB555 | 0x8000 pixels (0: transparent; alpha 64:
+ * NITRO_WIDE_ART_GAME, the layer's own). */
+static int decode_picture(const unsigned char *bytes, long size, uint16_t *out)
+{
+    unsigned char *rgba;
+    int w, h, n, i;
+
     rgba = stbi_load_from_memory(bytes, (int)size, &w, &h, &n, 4);
-    free(bytes);
     if (rgba == NULL) {
         return 0;
     }
@@ -331,11 +421,36 @@ static int read_picture(const char *path, uint16_t *out)
     for (i = 0; i < PIXELS; i++) {
         const unsigned char *p = rgba + i * 4;
 
-        out[i] = p[3] < 128 ? 0
-                            : (uint16_t)(0x8000 | (p[0] >> 3) | ((p[1] >> 3) << 5) | ((p[2] >> 3) << 10));
+        out[i] = p[3] == 64  ? (uint16_t)NITRO_WIDE_ART_GAME
+                 : p[3] < 128 ? 0
+                              : (uint16_t)(0x8000 | (p[0] >> 3) | ((p[1] >> 3) << 5) | ((p[2] >> 3) << 10));
     }
     stbi_image_free(rgba);
     return 1;
+}
+
+/* Picture pic's pixels: its built-in file's, or its file's in the folder. */
+static int read_picture(const Picture *pic, const char *dir, uint16_t *out)
+{
+    char path[400];
+    unsigned char *bytes;
+    long size = 0;
+    int ok;
+
+    if (pic->builtIn >= 0) {
+        int count;
+        const NitroWideArtFile *files = NitroPort_WideArtBuiltIn(&count);
+
+        return pic->builtIn < count && decode_picture(files[pic->builtIn].data, (long)files[pic->builtIn].size, out);
+    }
+    snprintf(path, sizeof(path), "%s/%s", dir, pic->name);
+    bytes = read_file(path, 8 * 1024 * 1024, &size);
+    if (bytes == NULL) {
+        return 0;
+    }
+    ok = decode_picture(bytes, size, out);
+    free(bytes);
+    return ok;
 }
 
 /* ---------------------------------------------- the layouts' pictures */
@@ -385,37 +500,16 @@ static int png_offset(const unsigned char *bytes, long size, int *x, int *y)
  * 2026-10-16), and where that goes from the layout's place (*dx, *dy: the
  * file's offset, if it has one, and the margin left out); NULL if there's
  * none, or nothing in it. */
-static uint16_t *read_named(const char *path, int *w, int *h, int *dx, int *dy)
+static uint16_t *decode_named(const unsigned char *bytes, long size, int *w, int *h, int *dx, int *dy)
 {
-    FILE *f = fopen(path, "rb");
-    unsigned char *bytes, *rgba;
+    unsigned char *rgba;
     uint16_t *out;
-    long size;
     int n, i, x, y, x0, y0, x1, y1, ox = 0, oy = 0;
 
-    if (f == NULL) {
-        return NULL;
-    }
-    (void)setvbuf(f, NULL, _IONBF, 0);
-    fseek(f, 0, SEEK_END);
-    size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (size <= 0 || size > 1024 * 1024) {
-        fclose(f);
-        return NULL;
-    }
-    bytes = malloc((size_t)size);
-    if (bytes == NULL || fread(bytes, 1, (size_t)size, f) != (size_t)size) {
-        free(bytes);
-        fclose(f);
-        return NULL;
-    }
-    fclose(f);
     if (!png_offset(bytes, size, &ox, &oy)) {
         ox = oy = 0;
     }
     rgba = stbi_load_from_memory(bytes, (int)size, w, h, &n, 4);
-    free(bytes);
     if (rgba == NULL) {
         return NULL;
     }
@@ -458,10 +552,40 @@ static uint16_t *read_named(const char *path, int *w, int *h, int *dx, int *dy)
     return out;
 }
 
+/* The picture named name: the folder's file (dir/name.png), else the
+ * built-in one of that name. */
+static uint16_t *read_named(const char *dir, const char *name, int *w, int *h, int *dx, int *dy)
+{
+    char path[400];
+    unsigned char *bytes = NULL;
+    long size = 0;
+    uint16_t *out;
+    int count, k;
+    const NitroWideArtFile *files;
+
+    if (dir[0] != 0) {
+        snprintf(path, sizeof(path), "%s/%s.png", dir, name);
+        bytes = read_file(path, 1024 * 1024, &size);
+    }
+    if (bytes != NULL) {
+        out = decode_named(bytes, size, w, h, dx, dy);
+        free(bytes);
+        return out;
+    }
+    files = NitroPort_WideArtBuiltIn(&count);
+    snprintf(path, sizeof(path), "%s.png", name);
+    for (k = 0; k < count; k++) {
+        if (strcmp(files[k].name, path) == 0) {
+            return decode_named(files[k].data, (long)files[k].size, w, h, dx, dy);
+        }
+    }
+    return NULL;
+}
+
 const uint16_t *NitroPort_WideArtPicture(int picture, int *w, int *h, int *dx, int *dy)
 {
     const char *name = NitroPort_WidePictureName(picture);
-    char path[320];
+    char dir[256];
     uint16_t *read;
     uint32_t serial;
     int rw = 0, rh = 0, rdx = 0, rdy = 0;
@@ -475,7 +599,7 @@ const uint16_t *NitroPort_WideArtPicture(int picture, int *w, int *h, int *dx, i
         sNamed[picture].serial = serial;
         sNamed[picture].state = 0;
     }
-    if (sNamed[picture].state != 0 || sDir[0] == 0) {
+    if (sNamed[picture].state != 0) {
         const uint16_t *pixels = sNamed[picture].state == 1 ? sNamed[picture].pixels : NULL;
 
         *w = sNamed[picture].w;
@@ -485,11 +609,11 @@ const uint16_t *NitroPort_WideArtPicture(int picture, int *w, int *h, int *dx, i
         unlock();
         return pixels;
     }
-    snprintf(path, sizeof(path), "%s/%s.png", sDir, name);
+    snprintf(dir, sizeof(dir), "%s", sDir);
     unlock();
 
     /* (read outside the lock: it takes a while) */
-    read = read_named(path, &rw, &rh, &rdx, &rdy);
+    read = read_named(dir, name, &rw, &rh, &rdx, &rdy);
     lock();
     if (sNamed[picture].serial == serial && sNamed[picture].state == 0) {
         if (read == NULL) {
@@ -530,7 +654,7 @@ static const uint16_t *picture_pixels(int index)
 {
     int i, oldest = 0;
     Picture pic = sPictures[index];
-    char path[320];
+    char dir[256];
     uint16_t *pixels;
 
     for (i = 0; i < CACHE_SLOTS; i++) {
@@ -545,7 +669,7 @@ static const uint16_t *picture_pixels(int index)
             return pixels;
         }
     }
-    snprintf(path, sizeof(path), "%s/%s", sDir, pic.name);
+    snprintf(dir, sizeof(dir), "%s", sDir);
     unlock();
 
     /* Not read yet: read it (outside the lock: it takes a while), then
@@ -554,14 +678,15 @@ static const uint16_t *picture_pixels(int index)
     if (pixels == NULL) {
         return NULL;
     }
-    if (!read_picture(path, pixels)) {
+    if (!read_picture(&pic, dir, pixels)) {
         free(pixels);
         lock();
         if (index < sCount && strcmp(sPictures[index].name, pic.name) == 0) {
             sPictures[index].bad = 1;
         }
         unlock();
-        NitroPort_Log("[wide art] can't read %s (a PNG of %dx%d?)", path, NITRO_WIDE_ART_W, NITRO_WIDE_ART_H);
+        NitroPort_Log("[wide art] can't read %s%s (a PNG of %dx%d?)", pic.name, pic.builtIn >= 0 ? " (built in)" : "",
+                      NITRO_WIDE_ART_W, NITRO_WIDE_ART_H);
         return NULL;
     }
     lock();
@@ -785,6 +910,80 @@ const uint16_t *NitroPort_WideArtFindNear(uint64_t key, int curH, int curV, int 
 /* ------------------------------------------------------------------- PNG */
 
 static uint32_t sCrcTable[256];
+
+/* ------------------------------------------------------------- sharing */
+
+int NitroPort_WideArtUnshared(void)
+{
+    return __atomic_load_n(&sUnshared, __ATOMIC_RELAXED);
+}
+
+int NitroPort_WideArtToShare(uint64_t key, int i, const uint16_t **pixels, int *hofs, int *vofs, int *full,
+                             char *name, size_t nameSize)
+{
+    int index, seen = 0;
+
+    if (key == 0 || NitroPort_WideArtUnshared() == 0) {
+        return 0;
+    }
+    lock();
+    for (index = first_picture(key); index >= 0 && index < sCount && sPictures[index].key == key; index++) {
+        const Picture *p = &sPictures[index];
+
+        if (p->builtIn >= 0 || p->shared || p->bad || seen++ < i) {
+            continue;
+        }
+        *hofs = p->hofs;
+        *vofs = p->vofs;
+        *full = p->full;
+        snprintf(name, nameSize, "%s", p->name);
+        *pixels = picture_pixels(index);   /* (unlocks) */
+        return *pixels != NULL;
+    }
+    unlock();
+    return 0;
+}
+
+static void to_rgba(const uint16_t *src, uint8_t *dst, int n);
+
+int NitroPort_WideArtShareWrite(const char *name, const uint16_t *pixels)
+{
+    static uint8_t rgba[PIXELS * 4];
+    char path[400];
+    int i, game = 0, yours = 0, left;
+
+    lock();
+    snprintf(path, sizeof(path), "%s/share", sDir);
+    unlock();
+    mkdir(path, 0777);
+    snprintf(path + strlen(path), sizeof(path) - strlen(path), "/%s", name);
+    to_rgba(pixels, rgba, PIXELS);
+    for (i = 0; i < PIXELS; i++) {
+        if (pixels[i] == NITRO_WIDE_ART_GAME) {
+            rgba[i * 4 + 0] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = 0;
+            rgba[i * 4 + 3] = 64;
+            game++;
+        } else if (pixels[i] & 0x8000) {
+            yours++;
+        }
+    }
+    if (NitroPort_WideArtWritePng(path, rgba, NITRO_WIDE_ART_W, NITRO_WIDE_ART_H) != 0) {
+        NitroPort_Log("[wide art] can't write %s", path);
+        return -1;
+    }
+    lock();
+    for (i = 0; i < sCount; i++) {
+        if (sPictures[i].builtIn < 0 && !sPictures[i].shared && strcmp(sPictures[i].name, name) == 0) {
+            sPictures[i].shared = 1;
+            sUnshared--;
+        }
+    }
+    left = sUnshared;
+    unlock();
+    NitroPort_Log("[wide art] shared %s: %d of its pixels the game's own (left out), %d yours; %d still to share", name,
+                  game, yours, left);
+    return 0;
+}
 
 static uint32_t crc(uint32_t c, const uint8_t *p, size_t n)
 {

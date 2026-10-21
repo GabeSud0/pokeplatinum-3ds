@@ -25,6 +25,16 @@
  * behind the layer. Made with the WideArt editor (tools/wideart) from
  * captures: NitroPort_WideArtCapture.
  *
+ * The pictures built into the program (the repository's wideart/ folder,
+ * made into C at the build: NitroPort_WideArtBuiltIn) come first; a file
+ * in the art folder of the same name takes the place of one. They hold no
+ * art of the game's: where a picture's pixel was the layer's own, it's
+ * NITRO_WIDE_ART_GAME (alpha 64 in the PNG), and the layer's own pixel
+ * there shows (the renderer's: its map where the picture was made), from
+ * the player's own game. The folder's pictures are shared so as the
+ * game shows them (NitroPort_Render2DShareArt): each written into the
+ * folder's share/ that way, to go into wideart/.
+ *
  * Plain C (stdio, dirent): the 3DS program and the PC runner.
  */
 #ifndef NITRO_PORT_WIDEART_H
@@ -48,9 +58,23 @@ extern "C" {
  * screen, shows nothing beyond the DS's edges, as on the DS. */
 #define NITRO_WIDE_ART_FULL 1
 #define NITRO_WIDE_ART_LOOP 2
+/* A picture's pixel that's the layer's own (see above): not opaque, not
+ * transparent (0). */
+#define NITRO_WIDE_ART_GAME 0x0001u
 
-/* What's in the art folder (its file names; the pictures are read when
- * first needed): how many pictures. Again to take in new files. */
+/* A picture built into the program: its file's name and bytes (a PNG). */
+typedef struct NitroWideArtFile {
+    const char *name;
+    const unsigned char *data;
+    unsigned size;
+} NitroWideArtFile;
+/* The program's (the build makes it from wideart/; none without):
+ * how many. */
+const NitroWideArtFile *NitroPort_WideArtBuiltIn(int *count);
+
+/* The pictures built in, and what's in the art folder (its file names;
+ * the pictures are read when first needed): how many pictures. Again to
+ * take in new files. */
 int NitroPort_WideArtLoad(const char *dir);
 /* Read pictures ahead (the first max of them, as many as are kept: see
  * port_wideart.c), so a picture's first showing doesn't wait for its file:
@@ -102,6 +126,17 @@ int NitroPort_WideArtMovedOffset(int moved, int left, int right);
  * (each layer's key, scroll or position, and priority). The path
  * made goes to made. 0 if done. On the game's thread, between frames. */
 int NitroPort_WideArtCapture(const char *dir, char *made, size_t madeSize);
+
+/* Sharing the folder's pictures (NitroPort_Render2DShareArt): how many of
+ * them (not the built-in ones) aren't in its share/ yet; the i-th of
+ * those for a key (its pixels, scroll, kind and file name), 0 when there's
+ * no more; and one written there, its pixels with NITRO_WIDE_ART_GAME
+ * where they're the game's own (0 if done; then it's shared). On the
+ * game's thread. */
+int NitroPort_WideArtUnshared(void);
+int NitroPort_WideArtToShare(uint64_t key, int i, const uint16_t **pixels, int *hofs, int *vofs, int *full,
+                             char *name, size_t nameSize);
+int NitroPort_WideArtShareWrite(const char *name, const uint16_t *pixels);
 
 /* (tests) a picture's file name read: 1 if it is one. */
 int NitroPort_WideArtParseName(const char *name, uint64_t *key, int *hofs, int *vofs, int *full);

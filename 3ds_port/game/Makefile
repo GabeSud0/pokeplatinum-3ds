@@ -403,6 +403,21 @@ PROGRAM_LDFLAGS := $(LDFLAGS) -rdynamic
 PROGRAM_LIBS := -lm
 endif
 
+# The wide art built into the program (the repository's wideart/: the
+# pictures without the game's art, docs/WIDE_ART.md), as C, for both
+# programs. tools/embed_wideart.py runs as make reads this file (quick) and
+# writes the C again only when the pictures changed (added, changed or
+# taken out), so the object is made again only then.
+WIDE_ART_FILES := $(sort $(wildcard $(ROOT)/wideart/*.png))
+WIDE_ART_C := $(OUT)/gen/wideart_builtin.c
+WIDE_ART_O := $(OUT)/gen/wideart_builtin.o
+APP_OBJS += $(WIDE_ART_O)
+$(shell mkdir -p $(OUT)/gen && python3 $(ROOT)/tools/embed_wideart.py --output $(WIDE_ART_C) $(WIDE_ART_FILES) >/dev/null)
+
+$(WIDE_ART_O): $(WIDE_ART_C) $(NITRO)/include/nitro_port_wideart.h
+	@echo "  APP CC wideart_builtin.c"
+	@$(CC) $(PORT_CFLAGS) -I$(NITRO)/include -c $< -o $@
+
 PROGRAM_LINK = $(write_game_objs_rsp)$(CC) $(PROGRAM_LDFLAGS) -Wl,--gc-sections -Wl,--wrap=ErrorHandling_AssertFail \
     $(APP_OBJS) @$(GAME_OBJS_RSP) $(OVERLAY_TABLE_O) \
     -Wl,--start-group $(LIBNNS) $(LIBNITRO) -Wl,--end-group $(PROGRAM_LIBS) $(OVERLAY_IDS) -o $(PROGRAM_ELF)

@@ -196,7 +196,41 @@ Files, in `3ds/pokeplatinum/wide`:
 
 320 x 192 pixels, the DS's picture at x 32-287. The pictures are made from
 the game's art: like the data pack, they stay on your SD card and aren't
-shared or committed.
+shared or committed as they are. To share them, see below.
+
+## Sharing your pictures: the art built into the port
+
+The repository's `wideart/` folder holds pictures built into the program
+(`tools/embed_wideart.py` makes them into C at the build), so that a player
+needs no `wide` folder of their own. They hold none of the game's art: each
+pixel that was the game's own is a marker (alpha 64), and the port draws
+the player's own game's pixel there (`NITRO_WIDE_ART_GAME`; from the layer's
+map where the picture was made, so a picture that has scrolled or slid
+since is still whole). A file in your `wide` folder of the same name takes
+the place of a built-in one, so you can keep drawing as before.
+
+The port tells your pixels from the game's by looking at the screen while
+it shows: as you play, each picture of a layer on screen that isn't shared
+yet is compared with that layer (its map where the picture was made; a
+sprite group's sprites where they are) and written, with the game's pixels
+left out, into `wide/share/` on the SD card (`NitroPort_Render2DShareArt`,
+a few times a second while any aren't shared). The log says which pictures
+are still to share at the start (`[wide art] not shared yet ...`) and each
+one shared (`[wide art] shared <name>: N of its pixels the game's own (left
+out), N yours`). A picture of a layer the port lays out in parts is shared
+only where it was made (its layout's place). So:
+
+1. Play through the screens your pictures are for (the opening, the
+   title, the menus...), with the slider anywhere, until the log says
+   nothing is left to share (`0 of those not shared yet` at the next
+   start, or no `not shared yet` line).
+2. Copy `wide/share/*.png` into the repository's `wideart/` folder, and the
+   layouts' pictures (`party_panel.png`, `pc_boxes_divider.png`...: drawn
+   whole by hand, so as they are) from `wide/` too.
+3. Build: they're in the program.
+
+A picture changed in the editor is shared again (its share is older than
+it). Nothing in `wide/share/` is read by the game.
 
 ### Pictures a screen's layout draws
 
