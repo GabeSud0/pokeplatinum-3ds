@@ -2337,6 +2337,11 @@ int NitroPort_Gx3dNewerScene(uint32_t serial)
     initialize();
     return NitroPort_MailboxNewer(&sMailbox,serial);
 }
+unsigned NitroPort_Gx3dNewerScenes(uint32_t serial)
+{
+    initialize();
+    return NitroPort_MailboxNewerCount(&sMailbox,serial);
+}
 void NitroPort_Gx3dReleaseScene(const NitroGx3dScene *scene)
 {
     int i;

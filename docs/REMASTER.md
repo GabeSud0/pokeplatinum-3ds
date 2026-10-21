@@ -492,9 +492,15 @@ game's own even pace (every second V-blank in the field), not whenever a
 scene happens to be done. `lag` starts at 2 and adapts (1 to 4): up when a
 frame would be late, back down after 600 frames in a row with a V-blank to
 spare, and twice as long before the next try each time a lowered lag
-doesn't hold. (Counting the frames with room since the last late one, it
-went down every 20-26 seconds in the field, a frame came late, and it went
-back up: a hitch every 26 seconds.)
+doesn't hold (up to 16 times as long: 5 minutes). (Counting the frames
+with room since the last late one, it went down every 20-26 seconds in the
+field, a frame came late, and it went back up: a hitch every 26 seconds.)
+With 60 frames a second (below) an in-between scene comes a V-blank before
+each scene: one late for its V-blank (it would show at its scene's, and be
+skipped for it: a step of 30 a second) raises the lag as a late scene
+does, and the lag is lowered only after frames with two V-blanks to spare,
+so that the in-between scenes are still on time with it lowered. The
+`[perf] display` line counts the late in-between scenes apart.
 
 A new scene is drawn once engine A's drawer is done with the 2D of the
 frame after it, or it's known there's none (the game hands the drawers a
@@ -539,14 +545,24 @@ jumped), and engine B's screen drew 14-25 frames a second
 (`geometry.txt`: `core 1` puts both back there).
 
 Showing is apart from drawing. The display thread draws a frame, has the
-GPU put it into one of three LCD framebuffers of the screen's own, and
-queues it with the V-blank it's for; a V-blank thread (`main_3ds.c`)
-counts the V-blanks and puts each frame on the LCD at its one
-(`GSPGPU_SetBufferSwap`). The display thread never waits for a V-blank: it
-goes on to the next scene. (The first version waited inside the frame, and
-the scenes made during the wait were never drawn: 10 to 14 frames a second
-of a game making 30, and the waiting grew the lag.) A screen with two
-frames waiting isn't drawn again until one has shown.
+GPU put it into one of the screen's own LCD framebuffers (the upper
+screen's seven, the lower's three, since PR #138), and queues it with the
+V-blank it's for; a V-blank thread (`main_3ds.c`) counts the V-blanks and
+puts each frame on the LCD at its one (`GSPGPU_SetBufferSwap`; of the
+frames whose V-blank has come and the GPU has drawn, the newest, the
+older skipped). The display thread never waits for a V-blank: it goes on
+to the next scene. (The first version waited inside the frame, and the
+scenes made during the wait were never drawn: 10 to 14 frames a second of
+a game making 30, and the waiting grew the lag.) A screen whose
+framebuffers are all taken (one on the LCD, the one before it still
+scanned out till the swap takes, the frames waiting) isn't drawn again
+until one has shown: at 60 frames a second a frame is built 1-2 V-blanks
+after its scene and shown up to 5 after, so 4-5 wait at once (with three
+framebuffers and the lag at 4, only the in-between scenes got one and the
+scenes were skipped: 45 frames a second of which 15 scenes, and the lag
+never came down, 2026-10-20). A scene that didn't get a framebuffer (or
+its 2D) is drawn before the next scene takes its place, and kept while
+only one newer scene waits.
 
 ## Settings
 
@@ -602,7 +618,7 @@ The log says what's on (`[compose] screens drawn by the GPU: ...`) and,
 every two seconds, `[perf] display: N frames/s drawn (N with a new 3D
 scene, of N scenes/s; N scenes not shown), each X ms building + X ms GPU;
 N% in stereo, N% drawn 2x2, N% 2x1; 3D textures converted N (X ms each); 2D published N/s, X ms
-each; 3D shown N V-blanks after the game made it, N late; GPU command list
+each; 3D shown N V-blanks after the game made it, N late (N in-between); GPU command list
 N% full at most, N draws cut`. In the field the frames with a new 3D
 scene should match the scenes made (30 a second), none not shown;
 building + GPU is what a frame costs the display thread, and must stay

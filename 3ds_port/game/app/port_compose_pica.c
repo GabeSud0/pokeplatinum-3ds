@@ -67,7 +67,17 @@ void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 #define SETS 3
 /* LCD framebuffers a screen: the one on the LCD, and up to two drawn
  * frames waiting for their V-blank. */
-#define LCD_BUFS 3
+/* LCD framebuffers a screen: one on the LCD, the one before it (scanned
+ * out until the next V-blank), and the frames waiting for their V-blanks.
+ * The upper screen's: at 60 frames a second a frame is built 1-2 V-blanks
+ * after the game made its scene and shown sLag + 1 after (the in-between
+ * scene's a V-blank earlier), 3-4 V-blanks apart at the most lag, so 4-5
+ * frames wait at once (with 3 buffers, one waiting frame: with lag 4 only
+ * the in-between scenes got a buffer, the scenes were skipped, 2026-10-20).
+ * The lower screen's frames show at the next V-blank: 3 do. */
+#define LCD_BUFS 7
+#define LCD_BUFS_LOWER 3
+#define PENDING_MAX (LCD_BUFS - 1)
 #define LCD_FORMAT GSP_RGB565_OES
 #define LCD_STRIDE (SCREEN_H * 2)
 
@@ -132,8 +142,9 @@ typedef struct Screen {
      * which is on the LCD (-1: none of ours yet), and the frames waiting
      * (under sPresentLock). */
     void *lcd[LCD_BUFS][2];
-    int onLcd;
-    Pending pending[2];
+    int nlcd;                      /* how many of them (LCD_BUFS or LCD_BUFS_LOWER) */
+    int onLcd, lastLcd;            /* (lastLcd: scanned out until the swap takes: not free yet) */
+    Pending pending[PENDING_MAX];
     int npending;
     unsigned presentSlot;
 } Screen;
@@ -243,8 +254,28 @@ static int sLag = 2, sOnTime;
  * lowered every 20-26 seconds in the field, a frame came late, and it went
  * back up: a hitch every 26 seconds (2026-10-15). */
 #define LAG_LOWER_AFTER 600
+#define LAG_LOWER_MOST 16   /* (... at most this many times as long: 5 minutes) */
 static int sLowerAfter = LAG_LOWER_AFTER, sLoweredRecently;
 static u32 sLoweredAt;
+static u32 sMidLate;        /* in-between scenes late (shown at their scene's V-blank, or left out) */
+static int sMidBefore;      /* (the scene being queued had its in-between scene drawn before it) */
+
+/* An in-between scene late for its V-blank (60 frames a second: it would
+ * be skipped for its scene's frame, a step of 30 a second): more lag from
+ * now on, as for a late scene. */
+static void mid_late(void)
+{
+    sMidLate++;
+    sLate++;
+    if (sLag < LAG_MAX) {
+        sLag++;
+    }
+    sOnTime = 0;
+    if (sLoweredRecently && sTimed - sLoweredAt < 1800u && sLowerAfter < LAG_LOWER_AFTER * LAG_LOWER_MOST) {
+        sLowerAfter *= 2;
+    }
+    sLoweredRecently = 0;
+}
 
 /* For the log, the hitches: the newest scene seen (and the V-blank it
  * came), the last one shown on the 3D's screen, whether that screen
@@ -285,6 +316,7 @@ static void present(int s, int buf, int stereo)
         info.unk = 0;
         GSPGPU_SetBufferSwap(s == 0 ? GSP_SCREEN_TOP : GSP_SCREEN_BOTTOM, &info);
     }
+    scr->lastLcd = scr->onLcd;
     scr->onLcd = buf;
 }
 
@@ -329,20 +361,19 @@ void NitroPort_ComposeVBlank(void)
         /* The frames whose V-blank has come (and the GPU has drawn): the
          * newest of them shows. */
         u32 done = __atomic_load_n(&sGpuDone, __ATOMIC_ACQUIRE);
+        int i, newest = -1;
 
-        while (scr->npending > 0 && (int32_t)(scr->pending[0].target - now) <= 0) {
-            if (scr->npending > 1 && (int32_t)(scr->pending[1].target - now) <= 0 &&
-                (int32_t)(done - scr->pending[1].serial) >= 0) {
-                scr->pending[0] = scr->pending[1];   /* (the older one skipped) */
-                scr->npending = 1;
-                continue;
+        /* (of those whose V-blank has come, the newest the GPU has drawn;
+         * the older ones are skipped; none drawn yet: a V-blank later) */
+        for (i = 0; i < scr->npending && (int32_t)(scr->pending[i].target - now) <= 0; i++) {
+            if ((int32_t)(done - scr->pending[i].serial) >= 0) {
+                newest = i;
             }
-            if ((int32_t)(done - scr->pending[0].serial) < 0) {
-                break;   /* (not drawn yet: a V-blank later) */
-            }
-            present(s, scr->pending[0].buf, scr->pending[0].stereo);
-            scr->pending[0] = scr->pending[1];
-            scr->npending--;
+        }
+        if (newest >= 0) {
+            present(s, scr->pending[newest].buf, scr->pending[newest].stereo);
+            scr->npending -= newest + 1;
+            memmove(scr->pending, scr->pending + newest + 1, (size_t)scr->npending * sizeof(scr->pending[0]));
         }
     }
     LightLock_Unlock(&sPresentLock);
@@ -601,6 +632,8 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
 
         scr->width = s == 0 ? TOP_W : BOTTOM_W;
         scr->onLcd = -1;
+        scr->lastLcd = -1;
+        scr->nlcd = s == 0 ? LCD_BUFS : LCD_BUFS_LOWER;
         for (i = 0; i < (s == 0 && config->stereo ? 2 : 1); i++) {
             int k;
 
@@ -610,7 +643,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
                 NitroPort_Log("[compose] no VRAM for the %s screen's render target", s ? "lower" : "upper");
                 goto fail;
             }
-            for (k = 0; k < LCD_BUFS; k++) {
+            for (k = 0; k < scr->nlcd; k++) {
                 scr->lcd[k][i] = linearAlloc((size_t)scr->width * SCREEN_H * 2u);
                 if (!scr->lcd[k][i]) {
                     NitroPort_Log("[compose] not enough memory for the LCD framebuffers");
@@ -1706,8 +1739,8 @@ static int free_lcd_buffer(const Screen *scr)
 {
     int b, i;
 
-    for (b = 0; b < LCD_BUFS; b++) {
-        int taken = b == scr->onLcd;
+    for (b = 0; b < scr->nlcd; b++) {
+        int taken = b == scr->onLcd || b == scr->lastLcd;
 
         for (i = 0; i < scr->npending; i++) {
             taken |= scr->pending[i].buf == b;
@@ -1879,12 +1912,20 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             sSceneWaiting = 1;
             sSceneWaitingSerial = sceneSerial;
         }
-        /* Not without a framebuffer to draw into (two frames waiting for
-         * their V-blanks already): the next V-blank frees one. */
+        /* An in-between scene whose V-blank has come (its scene's turn
+         * next): not drawn, and the lag is short (mid_late). */
+        if (need[s] && has3d && mid && (int32_t)(scene->stamp + (u32)sLag - (startVBlank + 1u)) < 0) {
+            need[s] = 0;
+            drawn |= COMPOSE_MID_LATE;
+            mid_late();
+        }
+        /* Not without a framebuffer to draw into (the frames waiting for
+         * their V-blanks have them all): the next V-blank frees one. */
         if (need[s]) {
             lcdBuf[s] = free_lcd_buffer(scr);
             if (lcdBuf[s] < 0) {
                 need[s] = 0;
+                drawn |= COMPOSE_NO_BUFFER;
             }
         }
         if (!need[s]) {
@@ -1905,7 +1946,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     LightLock_Unlock(&sPresentLock);
     LightLock_Unlock(&sSetLock);
     if (!need[0] && !need[1]) {
-        return 0;
+        return drawn;   /* (nothing drawn: why, if a frame was wanted) */
     }
     NitroPort_PicaTextureStats(&texBefore, &texels, &texTicksBefore);
     /* (an in-between scene has its scene's serial: told apart) */
@@ -2178,19 +2219,30 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             u32 gpuVBlanks = (u32)(sLastGpuTicks / (u64)(SYSCLOCK_ARM11 / 60));
             u32 wanted = scene->stamp + (u32)sLag;
 
-            target = (int32_t)(wanted - (vblanks + 1u + gpuVBlanks)) > 0 ? wanted : vblanks + 1u + gpuVBlanks;
+            target = (int32_t)(wanted - (vblanks + 1u + gpuVBlanks)) >= 0 ? wanted : vblanks + 1u + gpuVBlanks;
             if ((int32_t)(target - (vblanks + 1u)) > 6) {
                 target = vblanks + 1u + 6u;   /* (a stamp from before a pause) */
             }
+            if (target != wanted) {
+                /* Late: it would show at its scene's V-blank (or after),
+                 * and be skipped for it: a step of 30 a second. More lag
+                 * from now on, as for a late scene (the scene itself, a
+                 * V-blank later, still makes it: its lateness wouldn't
+                 * show the lag is short). */
+                mid_late();
+            }
             sMidFrames++;
+            sMidBefore = 1;
         } else if (timed && screen3d && scene != NULL) {
             u32 wanted = scene->stamp + 1u + (u32)sLag;
             /* (it's drawn from now on: the V-blanks the GPU's last frame
              * took count) */
             u32 gpuVBlanks = (u32)(sLastGpuTicks / (u64)(SYSCLOCK_ARM11 / 60));
             int32_t slack = (int32_t)(wanted - (vblanks + 1u + gpuVBlanks));
+            int midBefore = sMidBefore;
 
             sTimed++;
+            sMidBefore = 0;
             if (slack < 0) {
                 /* late: more lag from now on */
                 sLate++;
@@ -2198,7 +2250,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                     sLag++;
                 }
                 sOnTime = 0;
-                if (sLoweredRecently && sTimed - sLoweredAt < 1800u && sLowerAfter < LAG_LOWER_AFTER * 64) {
+                if (sLoweredRecently && sTimed - sLoweredAt < 1800u && sLowerAfter < LAG_LOWER_AFTER * LAG_LOWER_MOST) {
                     sLowerAfter *= 2;   /* (it didn't hold: twice as long before the next try) */
                 }
                 sLoweredRecently = 0;
@@ -2227,8 +2279,10 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                 }
             } else {
                 /* Lowered after a long while of frames with a V-blank to
-                 * spare, in a row (one without resets the count). */
-                if (slack >= 1) {
+                 * spare, in a row (one without resets the count); with an
+                 * in-between scene before each (a V-blank earlier), two
+                 * to spare, so that they're still on time with it lowered. */
+                if (slack >= 1 + midBefore) {
                     sOnTime++;
                 } else {
                     sOnTime = 0;
@@ -2242,9 +2296,10 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                 target = slack > 6 ? vblanks + 1u + 6u : wanted;   /* (a stamp from before a pause) */
             }
         }
-        if (scr->npending >= 2) {
+        if (scr->npending >= PENDING_MAX) {
             /* (can't happen: a free buffer was found above) */
-            scr->npending = 1;
+            memmove(scr->pending, scr->pending + 1, (size_t)(PENDING_MAX - 1) * sizeof(scr->pending[0]));
+            scr->npending = PENDING_MAX - 1;
             sSkipped++;
         }
         p = &scr->pending[scr->npending++];
@@ -2275,5 +2330,6 @@ void NitroPort_ComposeStats(ComposeStats *stats)
     stats->waitTicks = sWaitTicks;
     stats->stereoEdges = sStereoEdgeFrames;
     stats->midFrames = sMidFrames;
+    stats->midLate = sMidLate;
 }
 #endif

@@ -239,6 +239,11 @@ uint32_t NitroPort_ComposePublished(int engine);
  * not any longer (the next scene has come). Waits for the GPU. */
 int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, int aOnTop,
                            float slider, int forced, int flush, int mid);
+/* (its bits: the screens drawn, and when a wanted frame wasn't, why) */
+#define COMPOSE_DRAWN_UPPER 1
+#define COMPOSE_DRAWN_LOWER 2
+#define COMPOSE_NO_BUFFER 4     /* no LCD framebuffer free: the next V-blank frees one, draw it again then */
+#define COMPOSE_MID_LATE 8      /* the in-between scene's V-blank has come: its scene's turn */
 /* (mid: scene is the in-between scene of the scene of serial sceneSerial
  * (NitroPort_Gx3dMidOf), shown a V-blank before it; draw it first.) Whether
  * in-between scenes fit now, the slider and the screens as they are (60
@@ -263,6 +268,7 @@ typedef struct ComposeStats {
     u64 waitTicks;           /* the display thread waiting for the GPU (to finish the frame before) */
     u32 stereoEdges;         /* frames drawn in stereo with outlines (they're left out while they don't fit) */
     u32 midFrames;           /* frames of in-between scenes (60 frames a second) */
+    u32 midLate;             /* of them, late for their V-blank (shown at their scene's, or left out) */
     u64 gpuTicks, cpuTicks, publishTicks;
     int lag;
 } ComposeStats;
