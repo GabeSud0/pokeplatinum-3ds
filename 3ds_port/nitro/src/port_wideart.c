@@ -728,17 +728,19 @@ static const uint16_t *picture_pixels(int index)
     {
         const uint16_t *px = sSlots[oldest].pixels;
         int x, y, left = NITRO_WIDE_ART_W, right = 0;
+        uint8_t used[NITRO_WIDE_ART_H];   /* (worked out apart: a drawer may be reading the slot's) */
 
         for (y = 0; y < NITRO_WIDE_ART_H; y++) {
-            sSlots[oldest].rowUsed[y] = 0;
+            used[y] = 0;
             for (x = 0; x < NITRO_WIDE_ART_W; x++) {
                 if (px[y * NITRO_WIDE_ART_W + x]) {
                     if (x < left) left = x;
                     if (x >= right) right = x + 1;
-                    sSlots[oldest].rowUsed[y] = 1;
+                    used[y] = 1;
                 }
             }
         }
+        memcpy(sSlots[oldest].rowUsed, used, sizeof(used));
         sSlots[oldest].left = (int16_t)left;
         sSlots[oldest].right = (int16_t)right;
         if (index < sCount && strcmp(sPictures[index].name, pic.name) == 0) {

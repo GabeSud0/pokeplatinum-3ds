@@ -458,12 +458,12 @@ static void set_viewport(GeoState *g,uint32_t p0)
     if(g->wideNum!=g->wideDen)g->clipDirty=1;   /* (ensure_clip: the view's width) */
 }
 static int sWideWidth=256;
-/* Each SWAP_BUFFERS's time (NitroPort_Gx3dStamp), by its number, from the
- * game's thread to the geometry thread. */
-static uint32_t sSwapStamps[16];
-/* And its 3D registers (NitroGx3dScene.disp3dcnt, regs3d), the same way. */
-static uint32_t sSwapDisp3d[16];
-static uint8_t sSwapRegs3d[16][NITRO_GX3D_REGS_SIZE];
+/* With the geometry thread: the next SWAP_BUFFERS's time and 3D registers
+ * (NitroGx3dScene.stamp, disp3dcnt, regs3d), as the game had them when it
+ * sent it: handed over in the ring just before it (OP_SCENE_REGS, from the
+ * game's thread: swap_noted), so the thread can't get to the SWAP first. */
+static uint32_t sPendingStamp, sPendingDisp3d;
+static uint8_t sPendingRegs3d[NITRO_GX3D_REGS_SIZE];
 static uint32_t io_disp3dcnt(void)
 {
     return (uint32_t)NitroPort_IoReg[0x60]|((uint32_t)NitroPort_IoReg[0x61]<<8)|
@@ -1373,6 +1373,9 @@ static void test_command(GeoState *g,unsigned op,const uint32_t *p)
  * (NitroPort_Gx3dClearStackError), in the command stream's order. */
 #define OP_CLEAR_STACK_ERROR 0xF0u
 #define OP_WIDE_VIEW 0xF2u   /* one parameter: the screen width (NitroPort_Gx3dSetWideView) */
+/* The next SWAP_BUFFERS's time, DISP3DCNT and 3D registers (swap_noted) */
+#define OP_SCENE_REGS 0xF3u
+#define SCENE_REGS_WORDS (2u+NITRO_GX3D_REGS_SIZE/4u)
 
 /* The whole engine (s): one command and its parameters. */
 static inline __attribute__((always_inline)) void execute(unsigned op,const uint32_t *p)
@@ -1454,13 +1457,14 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         scene->screen_width=(uint32_t)(s.wideNum==s.wideDen?256:s.wideDen);
         memcpy(scene->projection,s.proj.a,sizeof(scene->projection));
         /* When the game ended it (with the thread: noted on the game's
-         * thread as the SWAP went in; swap_queued). */
-        scene->stamp=sThreaded?sSwapStamps[(sSwapsDone+1u)&15u]:NitroPort_Gx3dStamp();
-        /* (its registers: as the game had them then) */
+         * thread as the SWAP went in; swap_noted). */
+        /* (and its registers: as the game had them then) */
         if(sThreaded){
-            scene->disp3dcnt=sSwapDisp3d[(sSwapsDone+1u)&15u];
-            memcpy(scene->regs3d,sSwapRegs3d[(sSwapsDone+1u)&15u],NITRO_GX3D_REGS_SIZE);
+            scene->stamp=sPendingStamp;
+            scene->disp3dcnt=sPendingDisp3d;
+            memcpy(scene->regs3d,sPendingRegs3d,NITRO_GX3D_REGS_SIZE);
         }else{
+            scene->stamp=NitroPort_Gx3dStamp();
             scene->disp3dcnt=io_disp3dcnt();
             memcpy(scene->regs3d,NitroPort_IoReg+NITRO_GX3D_REGS_AT,NITRO_GX3D_REGS_SIZE);
         }
@@ -1493,6 +1497,11 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
     case 0x70:case 0x71:case 0x72:test_command(&s,op,p);break;
     case OP_CLEAR_STACK_ERROR:s.stackError=0;s.pjLevel=0;break;
     case OP_WIDE_VIEW:set_wide_view(&s,(int)p[0]);break;
+    case OP_SCENE_REGS:
+        sPendingStamp=p[0];
+        sPendingDisp3d=p[1];
+        memcpy(sPendingRegs3d,&p[2],NITRO_GX3D_REGS_SIZE);
+        break;
     default:break;
     }
     (void)i;
@@ -1604,14 +1613,22 @@ static void enqueue_packets(const uint32_t *words,uint32_t count,uint32_t flags)
     sWriteLocal+=need;
     if(sWriteLocal-sWritePublished>=RING_PUBLISH_WORDS)publish();
 }
+/* Before a SWAP_BUFFERS is handed on: its time and the 3D registers, in
+ * the ring ahead of it (a word written in the ring may be the thread's at
+ * once: whatever the SWAP takes must be there before it). */
+static void swap_noted(void)
+{
+    uint32_t w[SCENE_REGS_WORDS];
+    w[0]=NitroPort_Gx3dStamp();
+    w[1]=io_disp3dcnt();
+    memcpy(&w[2],NitroPort_IoReg+NITRO_GX3D_REGS_AT,NITRO_GX3D_REGS_SIZE);
+    enqueue(OP_SCENE_REGS,w,SCENE_REGS_WORDS,0);
+}
 /* After a SWAP_BUFFERS is handed on: hand it over now, and whether the
  * next scene is to be left out. */
 static void swap_queued(void)
 {
     uint32_t behind;
-    sSwapStamps[(sSwapsQueued+1u)&15u]=NitroPort_Gx3dStamp();
-    sSwapDisp3d[(sSwapsQueued+1u)&15u]=io_disp3dcnt();
-    memcpy(sSwapRegs3d[(sSwapsQueued+1u)&15u],NitroPort_IoReg+NITRO_GX3D_REGS_AT,NITRO_GX3D_REGS_SIZE);
     sSwapsQueued++;
     publish();
     behind=sSwapsQueued-__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE);
@@ -1677,6 +1694,7 @@ static void produce(unsigned op,const uint32_t *p)
      * speed, and the sound its time, whatever the 3D costs. */
     if(sSkipScene && ((op>=0x21u && op<=0x28u && op!=0x22u) || op==0x50u))
         flags=RING_SKIP;
+    if(op==0x50u)swap_noted();
     enqueue(op,p,n,flags);
     if(op==0x50u)swap_queued();
 }
@@ -2314,6 +2332,7 @@ void NitroPort_GxFifoWords(const uint32_t *words,size_t count)
                 int swapped;
                 size_t n=scan_packets(words,count,&swapped);
                 if(n){
+                    if(swapped)swap_noted();
                     enqueue_packets(words,(uint32_t)n,sSkipScene?RING_SKIP:0u);
                     words+=n;count-=n;
                     if(swapped)swap_queued();

@@ -998,6 +998,7 @@ static u32 io32(unsigned offset)
 {
     const uint8_t *r;
     if(offset==0x60)return sDisp3d;
+    if(offset<NITRO_GX3D_REGS_AT||offset+4u>NITRO_GX3D_REGS_AT+NITRO_GX3D_REGS_SIZE)return 0;   /* (none other) */
     r=&sRegs3d[offset-NITRO_GX3D_REGS_AT];
     return (u32)r[0]|((u32)r[1]<<8)|((u32)r[2]<<16)|((u32)r[3]<<24);
 }
