@@ -982,10 +982,28 @@ static void normalize_depth(NitroGx3dGpuVertex *v,size_t count,uint32_t swap)
     }
 }
 
+/* The prepared scene's 3D registers (NitroGx3dScene.disp3dcnt, regs3d: as
+ * the game had them at its SWAP_BUFFERS). Read live, a scene drawn a few
+ * V-blanks after the game made it had the clear colour, the fog and the
+ * outlines' colours of the game's scene since. */
+static u32 sDisp3d;
+static uint8_t sRegs3d[NITRO_GX3D_REGS_SIZE];
+static void scene_registers(const NitroGx3dScene *scene)
+{
+    sDisp3d=scene->disp3dcnt;
+    memcpy(sRegs3d,scene->regs3d,sizeof(sRegs3d));
+}
+/* A register of the prepared scene's: DISP3DCNT (0x60), or 0x320-0x3BF. */
 static u32 io32(unsigned offset)
 {
-    return (u32)NitroPort_IoReg[offset]|((u32)NitroPort_IoReg[offset+1]<<8)|
-           ((u32)NitroPort_IoReg[offset+2]<<16)|((u32)NitroPort_IoReg[offset+3]<<24);
+    const uint8_t *r;
+    if(offset==0x60)return sDisp3d;
+    r=&sRegs3d[offset-NITRO_GX3D_REGS_AT];
+    return (u32)r[0]|((u32)r[1]<<8)|((u32)r[2]<<16)|((u32)r[3]<<24);
+}
+static void scene_edge_setup(NitroGx3dEdgeSetup *edges)
+{
+    NitroPort_Gx3dEdgeSetupFrom(edges,sDisp3d,sRegs3d);
 }
 
 /* The DS's fog density (0-128) at a 24-bit depth: FOG_OFFSET, the shift
@@ -1018,8 +1036,8 @@ static void setup_fog(void)
      * do (it fogs the colour): left out. */
     sFogOn=(disp&0x80u) && !(disp&0x40u);
     if(!sFogOn)return;
-    table[0]=NitroPort_IoReg[0x360]&127u;
-    for(i=0;i<32;i++)table[i+1]=NitroPort_IoReg[0x360+i]&127u;
+    table[0]=sRegs3d[0x360-NITRO_GX3D_REGS_AT]&127u;
+    for(i=0;i<32;i++)table[i+1]=sRegs3d[0x360-NITRO_GX3D_REGS_AT+i]&127u;
     table[33]=table[32];
     for(i=0;i<=128;i++){
         float d=sDepthA+((float)i/128.0f)/sDepthK;
@@ -1107,6 +1125,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     NitroGx3dEdgeSetup edges;
     if(dropped)*dropped=scene ? scene->dropped : 0;
     if(!scene)return -1;
+    scene_registers(scene);
     if(!sTarget){
         static int failed;
         if(failed)return -1;
@@ -1130,8 +1149,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     /* CLEAR_COLOR: RGB555, alpha in bits 16-20 (alpha 0 leaves BG0
      * see-through where nothing is drawn). CLEAR_DEPTH is nearly always
      * the far plane; the target clears to the maximum depth. */
-    clear=(u32)NitroPort_IoReg[0x350]|((u32)NitroPort_IoReg[0x351]<<8)|
-          ((u32)NitroPort_IoReg[0x352]<<16)|((u32)NitroPort_IoReg[0x353]<<24);
+    clear=io32(0x350);
     clearColor=(widen5(clear&31u)<<24)|(widen5((clear>>5)&31u)<<16)|
                (widen5((clear>>10)&31u)<<8)|widen5((clear>>16)&31u);
     /* A see-through background clears to black: translucent polygons
@@ -1144,10 +1162,10 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
                    (widen5((c>>10)&31u)<<8)|widen5((clear>>16)&31u);
     }
     /* DISP3DCNT bit 3: alpha blending. */
-    blend=(NitroPort_IoReg[0x60]&8u)!=0;
+    blend=(sDisp3d&8u)!=0;
     /* Bit 5: edge marking. The rear plane is at the depth this target is
      * cleared to, the farthest. */
-    NitroPort_Gx3dEdgeSetup(&edges);
+    scene_edge_setup(&edges);
     edges.clearDepth=0xFFFFFFu;
     edging=edges.enabled && sEdgeMarking;
     /* Waits for the GPU to finish the previous frame (it has: this thread
@@ -1416,6 +1434,7 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
     int slot;
     if(dropped)*dropped=scene ? scene->dropped : 0;
     if(!sProgramReady||!scene)return -1;
+    scene_registers(scene);
     slot=sBuffer;
     sBuffer^=1;
     sPreparedCount=NitroPort_Gx3dBuildBatches(scene,sVertices[slot],
@@ -1482,8 +1501,7 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
     setup_fog();
     /* CLEAR_COLOR: the rear plane's colour and alpha, as the game has them
      * at this scene (fogged, if it is). */
-    clear=(u32)NitroPort_IoReg[0x350]|((u32)NitroPort_IoReg[0x351]<<8)|
-          ((u32)NitroPort_IoReg[0x352]<<16);
+    clear=io32(0x350)&0xFFFFFFu;
     sRearColor=fog_rear((uint16_t)(clear&0x7FFFu));
     sRearAlpha=(clear>>16)&31u;
     sBuildTicks+=svcGetSystemTick()-t0;
@@ -1493,7 +1511,7 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
 int NitroPort_PicaEdgeClearValue(u32 *value)
 {
     NitroGx3dEdgeSetup edges;
-    NitroPort_Gx3dEdgeSetup(&edges);
+    scene_edge_setup(&edges);
     if(value)*value=((u32)edges.clearId<<24)|0xFFFFFFu;
     return edges.enabled;
 }
@@ -1527,7 +1545,19 @@ static void scissor_off(void)
 static void begin_pass(const PicaView *view,const PicaRect *rect)
 {
     C3D_Mtx m;
-    NitroPort_PicaViewMatrix(&m,view->screenWidth,view->screenHeight,rect);
+    if(view->band && view->bandBottom>view->bandTop){
+        /* (PicaView.band) the viewport the run's rows alone, the view
+         * moved to match: the screen's row y is the band's y - bandTop */
+        PicaRect r=*rect;
+        u32 sy=(u32)view->fb->width/(u32)view->screenHeight;
+        r.y0-=(float)view->bandTop;
+        r.y1-=(float)view->bandTop;
+        C3D_SetViewport((u32)(view->screenHeight-view->bandBottom)*sy,0,
+                        (u32)(view->bandBottom-view->bandTop)*sy,view->fb->height);
+        NitroPort_PicaViewMatrix(&m,view->screenWidth,view->bandBottom-view->bandTop,&r);
+    }else{
+        NitroPort_PicaViewMatrix(&m,view->screenWidth,view->screenHeight,rect);
+    }
     NitroPort_PicaSetView(&m,view->stereo,view->convergence);
     sScissorOn=view->scissor;
     if(sScissorOn)memcpy(sScissor,view->scissorRect,sizeof(sScissor));
@@ -2323,8 +2353,8 @@ void NitroPort_PicaDrawScene(const PicaView *view)
             xbrz_work();
         }
     }
-    blend=(NitroPort_IoReg[0x60]&8u)!=0;
-    NitroPort_Gx3dEdgeSetup(&edges);
+    blend=(sDisp3d&8u)!=0;
+    scene_edge_setup(&edges);
     edging=edges.enabled && view->edgeFb[0]!=NULL && part!=PICA_DRAW_OPAQUE;
     /* (the opaque polygons' stencil is their polygon ID, for the copies) */
     copying=edging && sEdgeCopying && !sShadowReady;

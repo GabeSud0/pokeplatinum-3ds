@@ -461,6 +461,14 @@ static int sWideWidth=256;
 /* Each SWAP_BUFFERS's time (NitroPort_Gx3dStamp), by its number, from the
  * game's thread to the geometry thread. */
 static uint32_t sSwapStamps[16];
+/* And its 3D registers (NitroGx3dScene.disp3dcnt, regs3d), the same way. */
+static uint32_t sSwapDisp3d[16];
+static uint8_t sSwapRegs3d[16][NITRO_GX3D_REGS_SIZE];
+static uint32_t io_disp3dcnt(void)
+{
+    return (uint32_t)NitroPort_IoReg[0x60]|((uint32_t)NitroPort_IoReg[0x61]<<8)|
+           ((uint32_t)NitroPort_IoReg[0x62]<<16)|((uint32_t)NitroPort_IoReg[0x63]<<24);
+}
 /* The platform's clock for scenes (the 3DS: V-blanks); none by default. */
 __attribute__((weak,noinline)) uint32_t NitroPort_Gx3dStamp(void)
 {
@@ -1032,6 +1040,8 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
     sMid->screen_width=now->screen_width;
     memcpy(sMid->projection,now->projection,sizeof(sMid->projection));
     sMid->stamp=now->stamp;
+    sMid->disp3dcnt=now->disp3dcnt;
+    memcpy(sMid->regs3d,now->regs3d,sizeof(sMid->regs3d));
     {
         /* (replaying: no shadow triangles, no counts in the [gx3d] lines,
          * the DS's limits counted afresh) */
@@ -1446,6 +1456,14 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         /* When the game ended it (with the thread: noted on the game's
          * thread as the SWAP went in; swap_queued). */
         scene->stamp=sThreaded?sSwapStamps[(sSwapsDone+1u)&15u]:NitroPort_Gx3dStamp();
+        /* (its registers: as the game had them then) */
+        if(sThreaded){
+            scene->disp3dcnt=sSwapDisp3d[(sSwapsDone+1u)&15u];
+            memcpy(scene->regs3d,sSwapRegs3d[(sSwapsDone+1u)&15u],NITRO_GX3D_REGS_SIZE);
+        }else{
+            scene->disp3dcnt=io_disp3dcnt();
+            memcpy(scene->regs3d,NitroPort_IoReg+NITRO_GX3D_REGS_AT,NITRO_GX3D_REGS_SIZE);
+        }
         /* Which SWAP_BUFFERS it is (with the geometry thread, counting
          * them as the game's thread does: NitroPort_Gx3dEarlierSceneUnread). */
         NitroPort_MailboxTag(&sMailbox,sSwapsDone+1u);
@@ -1592,6 +1610,8 @@ static void swap_queued(void)
 {
     uint32_t behind;
     sSwapStamps[(sSwapsQueued+1u)&15u]=NitroPort_Gx3dStamp();
+    sSwapDisp3d[(sSwapsQueued+1u)&15u]=io_disp3dcnt();
+    memcpy(sSwapRegs3d[(sSwapsQueued+1u)&15u],NitroPort_IoReg+NITRO_GX3D_REGS_AT,NITRO_GX3D_REGS_SIZE);
     sSwapsQueued++;
     publish();
     behind=sSwapsQueued-__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE);

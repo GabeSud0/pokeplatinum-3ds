@@ -209,7 +209,9 @@ static NitroGx3dGpuVertex *sQuads;   /* this frame's quads (half of sQuadsAll: t
 static NitroGx3dGpuVertex *sQuadsAll;
 static int sQuadHalf;
 static int sQuadVertices;
-#define MAX_QUAD_VERTICES (6 * 32)
+/* (a frame's quads: 32, and an H-blank effect's runs' rear planes and
+ * tints, 2 x 24 at most: LINE_RUNS_MAX, LINE_RUNS_STEREO a side) */
+#define MAX_QUAD_VERTICES (6 * (32 + 2 * 24))
 /* ------------------------------------------------- frames in flight
  * A frame's commands are built while the GPU draws the frame before
  * (NitroPort_PicaFrameOpen): its GPU operations (fills, command lists,
@@ -1730,10 +1732,14 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         view.part = smooth && sSmoothSplit ? PICA_DRAW_OPAQUE : PICA_DRAW_ALL;
         view.again = 0;
         view.scissor = 0;
+        view.band = 0;
         NitroPort_PicaProfileMark("the 2D behind");
         for (r = 0; r < nruns; r++) {
+            PicaRect rows;   /* (the run's place and rows: its rear plane's, its tint's) */
+
             rect3d.x0 = base.x0 - (float)runs[r].scroll * SCALE;
             rect3d.x1 = base.x1 - (float)runs[r].scroll * SCALE;
+            rows = rect3d;
             if (nruns > 1) {
                 /* the run's rows (screen pixel (x, y) is the framebuffer's
                  * (height - 1 - y, width - 1 - x), in its own pixels: the
@@ -1747,6 +1753,11 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
                     continue;
                 }
                 view.scissor = 1;
+                view.band = 1;
+                view.bandTop = (int)y0;
+                view.bandBottom = (int)y1;
+                rows.y0 = (float)y0;
+                rows.y1 = (float)y1;
                 view.scissorRect[0] = (SCREEN_H - y1) * sy;
                 view.scissorRect[1] = 0;
                 view.scissorRect[2] = (SCREEN_H - y0) * sy;
@@ -1759,8 +1770,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
                 quad_combiner(0);
                 C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA,
                                GPU_ONE, GPU_ZERO);
-                quad(rect3d.x0, rect3d.y0, rect3d.x1, rect3d.y1, -1.0f, 0, 0, 0, 0,
-                     rgba_of(rearColor, rearAlpha * 255u / 31u));
+                quad(rows.x0, rows.y0, rows.x1, rows.y1, -1.0f, 0, 0, 0, 0, rgba_of(rearColor, rearAlpha * 255u / 31u));
             }
             /* 3. The polygons (their commands counted, the first run's). */
             view.rect = rect3d;
@@ -1787,12 +1797,13 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
                 C3D_AlphaTest(false, GPU_ALWAYS, 0);
                 C3D_SetScissor(GPU_SCISSOR_NORMAL, view.scissorRect[0], view.scissorRect[1], view.scissorRect[2],
                                view.scissorRect[3]);
-                tint_3d(info, &rect3d);
+                tint_3d(info, &rows);
             }
         }
         if (nruns > 1) {
             C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
             view.scissor = 0;
+            view.band = 0;
         }
         if (smooth && sSmoothSplit) {
             /* The rest at the screen's resolution (see sSmoothFb). */

@@ -36,18 +36,25 @@ static unsigned io16(unsigned offset)
     return NitroPort_IoReg[offset] | ((unsigned)NitroPort_IoReg[offset + 1] << 8);
 }
 
-void NitroPort_Gx3dEdgeSetup(NitroGx3dEdgeSetup *setup)
+void NitroPort_Gx3dEdgeSetupFrom(NitroGx3dEdgeSetup *setup, uint32_t disp3dcnt, const uint8_t *regs3d)
 {
-    unsigned disp3dcnt = io16(0x60), i;
-    uint32_t clear = io16(0x350) | ((uint32_t)io16(0x352) << 16);
+#define REG16(o) ((unsigned)regs3d[(o) - NITRO_GX3D_REGS_AT] | ((unsigned)regs3d[(o) - NITRO_GX3D_REGS_AT + 1] << 8))
+    uint32_t clear = REG16(0x350) | ((uint32_t)REG16(0x352) << 16);
+    unsigned i;
 
     setup->enabled = (disp3dcnt >> 5) & 1;
     setup->antialias = (disp3dcnt >> 4) & 1;
-    for (i = 0; i < 8; i++) setup->colors[i] = (uint16_t)(io16(0x330 + i * 2) & 0x7fff);
+    for (i = 0; i < 8; i++) setup->colors[i] = (uint16_t)(REG16(0x330 + i * 2) & 0x7fff);
     setup->clearId = (uint8_t)((clear >> 24) & 63);
     setup->clearColor = (uint16_t)(clear & 0x7fff);
     setup->clearAlpha = (uint8_t)((clear >> 16) & 31);
-    setup->clearDepth = (io16(0x354) & 0x7fffu) * 0x200u + 0x1ffu;
+    setup->clearDepth = (REG16(0x354) & 0x7fffu) * 0x200u + 0x1ffu;
+#undef REG16
+}
+
+void NitroPort_Gx3dEdgeSetup(NitroGx3dEdgeSetup *setup)
+{
+    NitroPort_Gx3dEdgeSetupFrom(setup, io16(0x60), NitroPort_IoReg + NITRO_GX3D_REGS_AT);
 }
 
 /* (a * 17 + b * 15) / 32 for each colour. */

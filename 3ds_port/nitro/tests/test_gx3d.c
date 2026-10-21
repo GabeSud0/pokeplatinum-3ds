@@ -35,6 +35,10 @@ static int32_t read32(unsigned offset)
     memcpy(&n,NitroPort_IoReg+offset,sizeof(n));
     return n;
 }
+static void write32(unsigned offset,uint32_t value)
+{
+    memcpy(NitroPort_IoReg+offset,&value,sizeof(value));
+}
 static void reset_geometry(void)
 {
     NitroPort_Gx3dReset();
@@ -1414,6 +1418,33 @@ static void test_earlier_scene_unread(void)
     CHECK(!NitroPort_Gx3dEarlierSceneUnread());
     NitroPort_Gx3dScene();
 }
+/* A scene's 3D registers are the game's at its SWAP_BUFFERS: what the
+ * game sets for its next scene (here before the thread has even got to
+ * this one) isn't the scene's. */
+static void test_scene_registers(void)
+{
+    const NitroGx3dScene *scene;
+    uint32_t clear, fog;
+    reset_geometry();
+    NitroPort_Gx3dScene();                 /* (caught up) */
+    sHold=1;
+    write32(0x350,0x001F7C1Fu);            /* CLEAR_COLOR: alpha 31, magenta */
+    write32(0x358,0x000003E0u);            /* FOG_COLOR: green */
+    write32(0x60,0x0089u);                 /* DISP3DCNT: textures, blending, fog */
+    triangle(0,RGB(31,0,0));swap();
+    write32(0x350,0x00000000u);            /* (the next scene's) */
+    write32(0x358,0x0000001Fu);
+    write32(0x60,0x0001u);
+    sHold=0;sem_post(&sGate);
+    scene=NitroPort_Gx3dScene();
+    memcpy(&clear,&scene->regs3d[0x350-NITRO_GX3D_REGS_AT],4);
+    memcpy(&fog,&scene->regs3d[0x358-NITRO_GX3D_REGS_AT],4);
+    CHECK(clear==0x001F7C1Fu);
+    CHECK(fog==0x000003E0u);
+    CHECK((scene->disp3dcnt&0xFFFFu)==0x0089u);
+    write32(0x60,0);
+    write32(0x358,0);
+}
 int main(void)
 {
     static const NitroGx3dThreadOps ops = {
@@ -1436,6 +1467,7 @@ int main(void)
     run_all();
     test_thread_behind();
     test_earlier_scene_unread();
+    test_scene_registers();
     sRunning = 0;
     wake_worker(NULL);
     pthread_join(thread, NULL);
