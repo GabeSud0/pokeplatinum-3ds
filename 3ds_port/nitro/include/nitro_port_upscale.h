@@ -91,16 +91,20 @@ typedef struct NitroPublishShadow {
     uint16_t over[NITRO_PUBLISH_MAX_W * NITRO_PUBLISH_H];
     uint8_t alpha[NITRO_PUBLISH_MAX_W * NITRO_PUBLISH_H];
     uint32_t premultiplied[NITRO_PUBLISH_MAX_W * NITRO_PUBLISH_H];   /* (working space) */
+    uint16_t packed[NITRO_PUBLISH_MAX_W * NITRO_PUBLISH_H];          /* (and for RGBA5551) */
     int width, underValid, overValid;
     uint32_t gen;
     uint32_t underChanged[NITRO_PUBLISH_BANDS], overChanged[NITRO_PUBLISH_BANDS];
     uint8_t overAny[NITRO_PUBLISH_BANDS];
+    uint8_t overPartial[NITRO_PUBLISH_BANDS];   /* (a band's over pixels: any of them partly see-through) */
 } NitroPublishShadow;
 
 typedef struct NitroPublishTarget {
     const NitroPublishShadow *heldBy;   /* whose pictures its textures hold (NULL: not known) */
     int heldWidth;
     uint32_t underGen, overGen;         /* up to date with that publish (0: not known) */
+    int allow16;                        /* (set by the caller) its over texture may be RGBA5551 */
+    int over16;                         /* its over texture is RGBA5551 now (else RGBA8) */
 } NitroPublishTarget;
 
 /* The over layer's pixels i .. j (colour bit 15: drawn; alpha 0-16) into
@@ -108,12 +112,24 @@ typedef struct NitroPublishTarget {
  * 0-16 as 0-255; whether any isn't transparent. */
 uint32_t NitroPort_PremultiplyOver(const uint16_t *over, const uint8_t *alpha, const uint8_t alpha16[17],
                                    uint32_t *out, int i, int j);
+/* Whether any of the over layer's pixels i .. j is drawn and partly
+ * see-through (its alpha, through alpha16, neither 0 nor 255). */
+int NitroPort_OverPartial(const uint16_t *over, const uint8_t *alpha, const uint8_t alpha16[17], int i, int j);
+/* Premultiplied RGBA8 texels i .. j, each alpha 0 or 255 (no pixel partly
+ * see-through), into RGBA5551 (red in the top 5 bits, alpha bit 0): the
+ * DS's colours exactly (5 bits each), and the same picture once the GPU
+ * widens them back. Half the bytes for the GPU to read. */
+void NitroPort_PackOver5551(const uint32_t *premultiplied, uint16_t *out, int i, int j);
 
 /* A picture w wide (a multiple of 4, at most NITRO_PUBLISH_MAX_W) into a
  * target's textures (texW texels wide, tiled; underTex RGB565 through
  * table as NitroPort_Double2xTiled16Table, 8-byte aligned; overTex RGBA8
  * premultiplied, written only if hasOver), the bands changed since it was
- * last written. flush(data, bytes) for each part of a texture written.
+ * last written. With the target's allow16, the over texture is RGBA5551
+ * (NitroPort_PackOver5551, the texels 16 bits each in the same memory)
+ * while none of the over layer is partly see-through, and RGBA8 when some
+ * is: target->over16 says which (all of it written again when that
+ * changes). flush(data, bytes) for each part of a texture written.
  * Returns whether the over layer has anything in it. */
 int NitroPort_PublishDoubled(NitroPublishShadow *shadow, NitroPublishTarget *target, const uint16_t *under,
                              const uint16_t *over, const uint8_t *overAlpha, int hasOver, int w,

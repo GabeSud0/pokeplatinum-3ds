@@ -28,7 +28,11 @@ What it does:
 - **The pixels as they are.** By default each DS pixel becomes 2x2 texels
   and the GPU's bilinear filter scales the rest of the way: every pixel the
   same size, only its borders a texel soft (no blur, no uneven pixels).
-  Scale2x and the others are settings. The 3D's textures stay the DS's
+  Scale2x and the others are settings. The layers in front of the 3D (a
+  text box) are 16 bits a texel (RGBA5551: the DS's colours exactly)
+  while none of them is partly see-through, 32 when some is (a fade):
+  with 32 a text box's quad took the GPU 2-3.7 ms of a frame (2026-10-20,
+  since PR #135). The 3D's textures stay the DS's
   (nearest texel) unless `filter3d` says otherwise: made like the 2D (each
   texel 2x2, then bilinear) the GPU took two to three times as long, the
   overworld lagged, and polygons' edges showed lines on the opening's
@@ -184,7 +188,11 @@ with a spare line either side (the rear plane: past the screen's edges, as
 on the DS) and tiles it back into those two buffers from a line on and a
 line back (`NitroPort_PicaEdgeCopies`). Three transfers an eye instead of
 the scene drawn twice. Up and down are 4 bytes away, and the engine takes
-8-byte addresses, so those two are still drawn. Not with the sun shadows
+8-byte addresses: the up one is drawn, and the down one is the up one two
+pixels on (8 bytes: untiled, tiled back from two pixels on;
+`derive_down_buffer`, since PR #135). Each line's last two pixels come
+from the next line's first two, so the outline the DS draws along the
+3D's top edge comes a row lower; nothing else changes. Not with the sun shadows
 (they use the stencil). `edges drawn` draws all four, as before. On a
 New 3DS (2026-10-19) the two drawn passes took half the four's time, and
 the copies 1.4 ms an eye through a linear buffer in the linear heap: it's
@@ -222,7 +230,12 @@ eyes: the left eye drawn, copied out, the framebuffer cleared, then the
 right one. Its depth/stencil is the edge buffers' VRAM (one block now:
 4 x 240 x 400 x 4 bytes, exactly 480 x 800 D24S8), idle with the slider up;
 its colour 1.5 MB more VRAM, made room for by the classic display's
-render target, now made only if the classic display is used. Every pixel
+render target, now made only if the classic display is used. Since PR
+#135 the upper screen's framebuffers (the eyes' and the smooth 3D's) are
+RGB565, as its LCD framebuffers are: half the bytes to clear, draw and
+copy (and half the smooth 3D's VRAM), the same picture on the LCD but for
+the blends' and averages' rounding at 5-6 bits; nothing reads their alpha
+(every blend is by the source's alpha or a constant). Every pixel
 is drawn four times over: the 3D, and the 2D in front of and behind it.
 The 2D in front of the 3D (a text box) is drawn only over the rows with
 anything in them (with the slider down too). On a New 3DS (2026-10-20)
@@ -588,7 +601,7 @@ more.
 The log says what's on (`[compose] screens drawn by the GPU: ...`) and,
 every two seconds, `[perf] display: N frames/s drawn (N with a new 3D
 scene, of N scenes/s; N scenes not shown), each X ms building + X ms GPU;
-N% in stereo, N% drawn 2x2; 3D textures converted N (X ms each); 2D published N/s, X ms
+N% in stereo, N% drawn 2x2, N% 2x1; 3D textures converted N (X ms each); 2D published N/s, X ms
 each; 3D shown N V-blanks after the game made it, N late; GPU command list
 N% full at most, N draws cut`. In the field the frames with a new 3D
 scene should match the scenes made (30 a second), none not shown;
@@ -611,8 +624,8 @@ polygons X ms; the 2D in front X ms;` (a line an eye, and the lower
 screen's), then `[gpu] the frame: the clears X ms, the rest X ms, the
 transfers (the outlines' copies, to the screens) X ms; X ms in all`.
 Nothing changes on the other frames; the cuts are the ones the second
-eye's outlines already use. (The shifted passes are the up and down ones
-since the left and right are copied.)
+eye's outlines already use. (The shifted passes are the up one since the
+left, right and down ones are copied.)
 
 ## 60 frames a second in the 3D
 
@@ -657,15 +670,29 @@ V-blank before the scene (the scene's lag less one; `ComposeFrame`'s
 `mid`: it doesn't count as the scene shown, and is prepared apart from
 it), then the scene, both built while the GPU draws the frame before (see
 Timing): a frame each V-blank, the game's 30 steps and 30 in between. A
-frame then has 16.7 ms of the GPU, not 33: while frames take longer the
-in-between scenes are left out (30 a second; `auto_fps60`: after 4 frames
-in a row over 16 ms, back after 60 in a row under 14.5 ms, with a
-`[compose]` log line each time). By the measures before it (2026-10-20),
-the slider down with the smooth 3D and outlines took 15 ms a frame in
-towns and 20-25 on busier routes; the slider up with the smooth 3D and no
-outlines 10-16. The outlines with the slider up are off by default for it
-(`edges3d on`: while they fit). `[perf] display` counts the in-between
-frames.
+frame then has 16.7 ms of the GPU, not 33. On a New 3DS (PR #132's build,
+2026-10-20, the field): with the slider up (smooth, no outlines) 9-11 ms
+a frame, 14-16.5 in the busiest places; with it down (smooth and
+outlines) 14-15.5, 18-20 with a text box up, so slider down was mostly at
+30. The 3D's smooth drawing was 3.3-5.8 ms an eye of it, the outlines
+8-9 ms (the shifted passes 2.4-2.9, the outlines drawn 4.7-5.8, the
+depth again 1.1).
+
+60 frames a second come first (`auto_fps60`, since PR #135): while
+frames don't fit (4 in a row over 16 ms) the upper screen's 3D is drawn
+more cheaply, a step at a time: 2x2, then 2x1 (two samples down the
+screen, one across: the framebuffer's lines, which the transfer engine
+halves on their own; half the 2x2's work), then as it is; only after
+that are the in-between scenes left out (30 a second, drawn 2x2 again: it
+fits in 33 ms). A step back up after 60 frames in a row that would be
+under 14.5 ms the next way up (the frame's time times what that step
+costs, measured each time a step is taken), 120, 240 or 480 after each
+step down, till they've stayed put for 10 s. The slider down and up each
+have their own steps (the outlines; each eye). A `[compose]` line says
+each step (`60 frames a second, slider down: the 3D drawn 2x1 for now`),
+and `[perf] display` counts the in-between frames and those drawn 2x2 and
+2x1. The outlines with the slider up are off by default for it
+(`edges3d on`: while they fit).
 
 ## Known
 

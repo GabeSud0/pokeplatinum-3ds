@@ -1753,7 +1753,8 @@ static int pruned_any(size_t b,int whole,int zones,const unsigned scissor[4][4])
  * screen's edges, as on the DS), then tiled into each buffer from a line on
  * and a line back. (Which one is left and which right doesn't matter: the
  * outlines drawn test both.) Up and down are 4 bytes away and the engine
- * takes 8-byte addresses: those two are still drawn. Not with the sun
+ * takes 8-byte addresses: the up one is drawn, and the down one is the
+ * up one two pixels on, 8 bytes (derive_down_buffer). Not with the sun
  * shadows on (they use the stencil); `edges drawn` draws all four. */
 #define EDGE_LINE 240u                 /* (pixels a framebuffer line: the screen's height) */
 #define EDGE_LINES_MAX 400u            /* (lines: the upper screen's width) */
@@ -1797,7 +1798,7 @@ unsigned NitroPort_PicaEdgeCopies(int edges)
         sEdgePadValue=sEdgePadLines=0;
     }
     sEdgeCopying=1;
-    return 3u;   /* (the directions: 0 and 1) */
+    return 11u;   /* (the directions: 0, 1 and 3) */
 }
 
 static void free_edge_copies(void)
@@ -1844,6 +1845,27 @@ static int copy_edge_buffers(const PicaView *view,u32 clear)
     return 1;
 }
 
+/* The down buffer (3) from the up one (2), drawn: the same, two pixels
+ * along its lines (8 bytes: an address the transfer engine takes),
+ * untiled into the linear buffer and tiled back from two pixels on. A
+ * line runs up the screen: each line's last two pixels (the screen's two
+ * top rows) come from the next line's first two, so the second row gets
+ * the rear plane (the up buffer's pixel past the screen's bottom) where
+ * it would get the top row, and the top row gets the next column's
+ * bottom pixel where it would get the rear plane: the outline the DS
+ * draws along the 3D's top edge (against the rear plane past it) comes a
+ * row lower. Nothing else changes. (The last line's come from the spare
+ * line after it: the rear plane.) Queued after the up buffer's pass (the
+ * command list cut: the framebuffer cache written back). It saves a
+ * pass: in the field 1.2-1.3 ms, against two transfers. */
+static void derive_down_buffer(const PicaView *view)
+{
+    u32 lines=view->fb->height,dim=GX_BUFFER_DIM(EDGE_LINE,lines);
+    u32 *mid=sEdgeLinear+EDGE_LINE;
+    GX_DisplayTransfer((u32*)view->edgeFb[2]->depthBuf,dim,mid,dim,EDGE_UNTILE);
+    GX_DisplayTransfer(mid+2,dim,(u32*)view->edgeFb[3]->depthBuf,dim,EDGE_TILE);
+}
+
 /* Edge marking on the GPU. The DS outlines a pixel of an opaque polygon
  * when a pixel next to it (left, right, above, below) belongs to another
  * polygon ID and is further away (the rear plane, with CLEAR_COLOR's ID
@@ -1878,12 +1900,16 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
     /* the left and right ones copied (the caller cut the command list) */
     NitroPort_PicaEdgeClearValue(&clear);
     if(sEdgeCopying){
-        copied=3;
-        if(!copy_edge_buffers(view,clear)){
+        copied=11;
+        if(!view->edgeFb[2]||!view->edgeFb[3]||!copy_edge_buffers(view,clear)){
             /* (can't be: the caller left them unfilled, so filled here) */
             u32 bytes=(u32)view->fb->width*view->fb->height*4u;
             u8 *a=(u8*)view->edgeFb[0]->depthBuf,*b1=(u8*)view->edgeFb[1]->depthBuf;
             GX_MemoryFill((u32*)a,clear,(u32*)(a+bytes),BIT(0)|(2u<<8),(u32*)b1,clear,(u32*)(b1+bytes),BIT(0)|(2u<<8));
+            if(view->edgeFb[3]){
+                u8 *d=(u8*)view->edgeFb[3]->depthBuf;
+                GX_MemoryFill((u32*)d,clear,(u32*)(d+bytes),BIT(0)|(2u<<8),NULL,0,NULL,0);
+            }
             copied=0;
         }
     }
@@ -1921,7 +1947,12 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             else draw_arrays((int)batch->first,(int)batch->count);
         }
     }
-    NitroPort_PicaProfileMark("outlines, the shifted passes");
+    if(copied&8){
+        NitroPort_PicaCut("outlines, the shifted passes");
+        derive_down_buffer(view);
+    }else{
+        NitroPort_PicaProfileMark("outlines, the shifted passes");
+    }
     for(dir=0;dir<4;dir++){
         C3D_FrameBuf *fb=view->edgeFb[dir];
         if(fb==NULL)continue;

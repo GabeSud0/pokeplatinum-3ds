@@ -340,6 +340,128 @@ static void test_publish_doubled(void)
     free(wantOver);
 }
 
+/* The same with the targets taking RGBA5551 (allow16): the over layer
+ * mostly opaque or clear (a text box), now and then partly see-through
+ * somewhere (a fade). After each publish the over texture is RGBA5551
+ * exactly when no drawn pixel of the picture is partly see-through, and
+ * either way it's the whole picture done at once in that format; the
+ * RGBA5551 texels are the RGBA8 ones' colours to 5 bits. */
+static void test_publish_doubled16(void)
+{
+    enum { TW = 1024, TEXEL_ROWS = 2 * NITRO_PUBLISH_H + 8, H = NITRO_PUBLISH_H, MAXW = NITRO_PUBLISH_MAX_W };
+    static NitroPublishShadow shadows[2];
+    static NitroPublishTarget targets[3];
+    static uint16_t table[32768], under[2][MAXW * H], over[2][MAXW * H], packed[MAXW * H];
+    static uint8_t alpha[2][MAXW * H], alpha16[17];
+    static uint32_t premul[MAXW * H];
+    uint32_t *overTex[3], *wantOver;
+    uint16_t *underTex[3], *wantOver16;
+    int width[2] = { 320, 320 }, i, step, okOver = 1, okKind = 1, okAny = 1, okExact = 1, as16 = 0, as32 = 0;
+
+    for (i = 0; i < 32768; i++) {
+        table[i] = (uint16_t)(i * 2654435761u >> 9);
+    }
+    for (i = 0; i <= 16; i++) {
+        alpha16[i] = (uint8_t)(i >= 16 ? 255 : i * 255 / 16);
+    }
+    for (i = 0; i < 3; i++) {
+        underTex[i] = malloc((size_t)TW * TEXEL_ROWS * 2);
+        overTex[i] = malloc((size_t)TW * TEXEL_ROWS * 4);
+        memset(underTex[i], 0, (size_t)TW * TEXEL_ROWS * 2);
+        memset(overTex[i], 0, (size_t)TW * TEXEL_ROWS * 4);
+        targets[i].allow16 = 1;
+    }
+    wantOver = malloc((size_t)TW * TEXEL_ROWS * 4);
+    wantOver16 = malloc((size_t)TW * TEXEL_ROWS * 2);
+    for (i = 0; i < MAXW * H; i++) {
+        under[0][i] = (uint16_t)Rnd(); under[1][i] = (uint16_t)Rnd();
+        over[0][i] = (uint16_t)(Rnd() & 1 ? 0x8000 | Rnd() : 0); over[1][i] = 0;
+        alpha[0][i] = (uint8_t)(Rnd() & 1 ? 16 : 0); alpha[1][i] = 16;
+    }
+    for (step = 0; step < 300; step++) {
+        int e = (Rnd() % 5) == 0, t = step % 3, w, hasOver = (Rnd() % 7) != 0, band, x, y, any, partial;
+        int r = (int)(Rnd() % 10);
+
+        if (r == 0) {
+            width[e] = width[e] == 320 ? 256 : 320;
+        }
+        w = width[e];
+        for (band = 0; band < H / 4; band++) {
+            int what = (int)(Rnd() % 16);
+
+            if (r == 1 || what == 0) {                     /* the over picture, opaque or clear */
+                for (i = band * 4 * w; i < (band + 1) * 4 * w; i++) {
+                    over[e][i] = (uint16_t)(Rnd() & 1 ? 0x8000 | Rnd() : 0);
+                    alpha[e][i] = (uint8_t)(Rnd() & 1 ? 16 : 0);
+                }
+            }
+        }
+        if (Rnd() % 4 == 0) {                              /* partly see-through, somewhere */
+            i = (int)(Rnd() % (unsigned)(w * H));
+            over[e][i] |= 0x8000;
+            alpha[e][i] = (uint8_t)(1 + Rnd() % 15);
+        }
+        if (Rnd() % 3 == 0) {                              /* and opaque again */
+            for (i = 0; i < MAXW * H; i++) {
+                if (alpha[e][i] != 0 && alpha[e][i] != 16) alpha[e][i] = 16;
+            }
+        }
+        any = NitroPort_PublishDoubled(&shadows[e], &targets[t], under[e], over[e], alpha[e], hasOver, w,
+                                       underTex[t], overTex[t], TW, table, alpha16, NULL);
+        if (!hasOver) {
+            okAny &= any == 0;
+            continue;
+        }
+        partial = NitroPort_OverPartial(over[e], alpha[e], alpha16, 0, w * H);
+        okKind &= targets[t].over16 == !partial;
+        okAny &= (NitroPort_PremultiplyOver(over[e], alpha[e], alpha16, premul, 0, w * H) != 0) == (any != 0);
+        if (targets[t].over16) {
+            const uint16_t *got = (const uint16_t *)(const void *)overTex[t];
+
+            as16++;
+            NitroPort_PackOver5551(premul, packed, 0, w * H);
+            for (i = 0; i < w * H; i++) {
+                uint32_t p = premul[i], q = packed[i];
+
+                /* (5 bits each, widened back: the RGBA8 texel again) */
+                okExact &= (p & 0xFFu) == 0 ? q == 0 && p == 0
+                                            : ((((q >> 11) & 31u) << 3 | ((q >> 11) & 31u) >> 2) == (p >> 24) &&
+                                               (((q >> 6) & 31u) << 3 | ((q >> 6) & 31u) >> 2) == ((p >> 16) & 0xFFu) &&
+                                               (((q >> 1) & 31u) << 3 | ((q >> 1) & 31u) >> 2) == ((p >> 8) & 0xFFu) &&
+                                               (q & 1u) == 1u);
+            }
+            NitroPort_Double2xTiled16(packed, w, H, wantOver16, TW);
+            for (y = 0; y <= 2 * H; y++) {
+                for (x = 0; x <= 2 * w; x++) {
+                    unsigned k = NitroPort_TiledIndex((unsigned)x, (unsigned)y, TW);
+                    okOver &= got[k] == wantOver16[k];
+                }
+            }
+        } else {
+            as32++;
+            NitroPort_Double2xTiled32(premul, w, H, wantOver, TW);
+            for (y = 0; y <= 2 * H; y++) {
+                for (x = 0; x <= 2 * w; x++) {
+                    unsigned k = NitroPort_TiledIndex((unsigned)x, (unsigned)y, TW);
+                    okOver &= overTex[t][k] == wantOver[k];
+                }
+            }
+        }
+    }
+    CHECK(okOver);
+    CHECK(okKind);
+    CHECK(okAny);
+    CHECK(okExact);
+    CHECK(as16 > 30);   /* (both kinds came up, and went back and forth) */
+    CHECK(as32 > 30);
+    for (i = 0; i < 3; i++) {
+        free(underTex[i]);
+        free(overTex[i]);
+    }
+    free(wantOver);
+    free(wantOver16);
+}
+
 int main(void)
 {
     test_tiled_index();
@@ -349,6 +471,7 @@ int main(void)
     test_double_table();
     test_double_rows();
     test_publish_doubled();
+    test_publish_doubled16();
     printf("upscaler and tiler: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;
 }
