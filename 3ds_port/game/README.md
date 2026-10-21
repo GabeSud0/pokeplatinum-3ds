@@ -18,14 +18,15 @@ programs built from it are for your own use: never share them.
 **Where it stands:** the game runs on the 3DS. `NitroMain` runs with the
 SDK's threads, interrupts, timers and overlays working, reads its files from
 the data pack, and gets answers from the ARM7's services (power, clock, save
-chip, touch screen). You can start a new game or continue a save, explore,
-battle, use the menus and save. The 2D is drawn by the port's software
+chip, touch screen). The game is fully playable (with some visual bugs
+still): a new game or a save, exploring, battles, menus and saving. The 2D is drawn by the port's software
 renderer; the 3D by the 3DS's GPU, from the geometry engine's scenes; the
 original ARM7 sequencer feeds a software DS sound chip, played through NDSP
 (or written to a WAV file on PC). On a New 3DS the remaster display fills
 both screens, with stereoscopic 3D and 60 fps in the field where it fits
-([docs/REMASTER.md](../../docs/REMASTER.md)). Not yet: the bottom screen's
-touch interface, the sun shadows on the 3DS, Wi-Fi, and a full playthrough.
+([docs/REMASTER.md](../../docs/REMASTER.md)). Work in progress: 60 fps,
+better 3D quality, a better bottom-screen UI, better lighting. Wi-Fi isn't
+ported.
 
 ## Running it on a 3DS
 

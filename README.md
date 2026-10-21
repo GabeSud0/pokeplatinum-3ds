@@ -29,12 +29,23 @@ HeartGold**, once the [pret/pokeheartgold](https://github.com/pret/pokeheartgold
 decompilation is far enough along. Both are Generation 4 games that share most
 of the same engine.
 
-> **Status:** the game runs on real hardware. You can start a new game or
-> continue a save, explore, battle, use the menus and save, at a steady 30 fps
-> on a New 3DS, and 60 in the field where it fits. It hasn't had a full
-> playthrough yet, and some areas are still being worked on: the bottom
-> screen's touch interface, higher-quality sprites and fonts, the sun shadows
-> (working on PC, parked on the 3DS), and Wi-Fi (not ported). Expect bugs.
+## Status
+
+**Works**
+- Fully playable on real hardware, from a new game or a save: exploring,
+  battles, menus and saving. It still has some visual bugs.
+- A new UI for the 3DS's top screen: menus, text boxes and battles laid out
+  across its full width.
+
+**Work in progress**
+- 60 frames a second
+- Better 3D quality
+- A better UI for the bottom screen
+- Better lighting
+
+**Future wishlist**
+- Wi-Fi
+- A Pokémon follower
 
 ## This repository contains no game content
 
@@ -195,12 +206,11 @@ inside `build/upstream/`.
 See [`docs/ROADMAP.md`](docs/ROADMAP.md). In short:
 
 - **Done:** the toolchain; the game's code built and running on the 3DS; 2D,
-  3D, sound, input, saving; the remastered display (both screens filled, sharp
-  and stereoscopic 3D, 60 fps in the field); the HOME Menu version.
-- **Now:** polishing the wide upper screen's menus, higher-quality sprites,
-  fonts and textures, and keeping the frame rate up.
-- **Next:** a long stress run across the whole game, the bottom screen's touch
-  interface, the sun shadows on the 3DS, and a sound remaster.
+  3D, sound, input, saving; the game fully playable; the new UI for the top
+  screen; the HOME Menu version.
+- **Work in progress:** 60 frames a second, better 3D quality, a better UI
+  for the bottom screen, better lighting.
+- **Future wishlist:** Wi-Fi, a Pokémon follower.
 - **Later:** SoulSilver / HeartGold on the same backend.
 
 ## Contributing
