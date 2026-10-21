@@ -153,6 +153,7 @@ typedef struct Engine {
      * since it was made, and whether it's the whole picture (else the
      * bands beside the DS's only). */
     const u16 *art[4];
+    const u8 *artRows[4];  /* (its rows with anything: NitroPort_WideArtRows; NULL, not known) */
     short artDx[4], artDy[4];
     short artH[4], artV[4];  /* (a text BG's) the scroll its picture was made at */
     u8 artFull[4];
@@ -406,6 +407,15 @@ typedef struct Target {
         }                                                                    \
     } while (0)
 
+/* Whether PUT would leave pixel x as it is whatever the colour: a layer in
+ * front has it, or the window hides this layer there (not for a layer's
+ * own line, T_PLAIN). A pixel worked out per pixel (a hand-drawn picture's)
+ * isn't worked out then: on the opening's strips, two of three BGs' picture
+ * pixels were behind another's (2026-10-21). */
+#define COVERED(x_, flags_)                                                  \
+    (!((flags_) & T_PLAIN) &&                                                \
+     ((row[(x_)] & OPAQUE) || (((flags_) & T_WINDOW) && !(enable[(x_)] & bit))))
+
 #define TARGET_LOCALS(t)                                                     \
     u16 *row = (t)->row;                                                     \
     u8 *layerOf = (t)->layerOf;                                              \
@@ -522,8 +532,8 @@ static u16 OwnTextPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int hof
  * drawn as it is, without the picture, at the scroll the picture was made
  * at (artH, artV: OwnTextPixel), so a BG scrolled or slid since shows the
  * same art (its key) there. */
-static u16 ArtTextPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int ax, int ay, int mapW, int mapH,
-                        OwnRow *own)
+static inline __attribute__((always_inline)) u16 ArtTextPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int ax,
+                                                              int ay, int mapW, int mapH, OwnRow *own)
 {
     u16 c = e->art[bg][ay * NITRO_WIDE_ART_W + ax];
 
@@ -1442,11 +1452,17 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
         int ay = ArtWrap(y + e->artDy[bg], H, mapH);
         ArtRun run;
 
+        if (ay < 0 || (e->artRows[bg] != NULL && !e->artRows[bg][ay])) {
+            continue;   /* (nothing on this row of it: nothing to put) */
+        }
         ArtRunStart(&run, x + e->artDx[bg], NITRO_WIDE_ART_W, mapW);
         (void)art;
         for (; x < xe; x++) {
             int ax = ArtRunNext(&run);
 
+            if (COVERED(x, flags)) {
+                continue;
+            }
             PUT(x,
                 (ay >= 0 && ax >= 0)
                     ? ArtTextPixel(e, bg, bgcnt, dispcnt, ax, ay, mapW, mapH, &own)
@@ -1479,16 +1495,39 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
         int ay = ArtWrap(y + e->artDy[bg], H, mapH);
         ArtRun run;
 
-        ArtRunStart(&run, x + e->artDx[bg], NITRO_WIDE_ART_W, mapW);
+        int lo = ay >= 0 ? e->origin : 0, hi = ay >= 0 ? e->origin + W : 0;
+        /* (nothing on this row of it: nothing where it's the picture's) */
+        BOOL empty = ay >= 0 && e->artRows[bg] != NULL && !e->artRows[bg][ay];
+        int dx = e->artDx[bg];
+
+        if (empty && x + dx >= 0 && xe - 1 + dx < NITRO_WIDE_ART_W) {
+            /* (an empty row of it, not going round: the picture's part,
+             * x lo - dx .. hi - dx, has nothing; the rest is the BG's own) */
+            int m0 = lo - dx, m1 = hi - dx;
+
+            for (; x < xe; x++) {
+                if (x >= m0 && x < m1) {
+                    x = m1 - 1;
+                    continue;
+                }
+                if (!COVERED(x, flags)) {
+                    PUT(x, TextBgPixel(e, bg, bgcnt, dispcnt, (x + off) & (mapW - 1), ty), flags);
+                }
+            }
+            continue;
+        }
+        ArtRunStart(&run, x + dx, NITRO_WIDE_ART_W, mapW);
+        (void)art;
         for (; x < xe; x++) {
             int ax = ArtRunNext(&run);
 
-            if (ay < 0) {
-                ax = -1;
+            if (COVERED(x, flags)) {
+                continue;
             }
-            (void)art;
-            if (ax >= e->origin && ax < e->origin + W) {
-                PUT(x, ArtTextPixel(e, bg, bgcnt, dispcnt, ax, ay, mapW, mapH, &own), flags);
+            if (ax >= lo && ax < hi) {
+                if (!empty) {
+                    PUT(x, ArtTextPixel(e, bg, bgcnt, dispcnt, ax, ay, mapW, mapH, &own), flags);
+                }
             } else {
                 PUT(x, TextBgPixel(e, bg, bgcnt, dispcnt, (x + off) & (mapW - 1), ty), flags);
             }
@@ -1502,12 +1541,19 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
         const u16 *art = e->art[bg];
         int ay = ArtWrap(y + e->artDy[bg], H, mapH);
 
+        BOOL empty = ay >= 0 && e->artRows[bg] != NULL && !e->artRows[bg][ay];
+
         for (; x < xe; x++) {
             int ax = x + e->artDx[bg];
 
             (void)art;
+            if (COVERED(x, flags)) {
+                continue;
+            }
             if (ay >= 0 && ax >= 0 && ax < NITRO_WIDE_ART_W) {
-                PUT(x, ArtTextPixel(e, bg, bgcnt, dispcnt, ax, ay, mapW, mapH, &own), flags);
+                if (!empty) {
+                    PUT(x, ArtTextPixel(e, bg, bgcnt, dispcnt, ax, ay, mapW, mapH, &own), flags);
+                }
             } else if (e->artExact[bg]) {
                 PUT(x, TextBgPixel(e, bg, bgcnt, dispcnt, (x + off) & (mapW - 1), ty), flags);
             } else {
@@ -2082,6 +2128,7 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
                 e->artV[bg] = (short)vofs;
                 e->artBands[bg] = 1;
                 e->art[bg] = art;
+                e->artRows[bg] = NitroPort_WideArtRows(art);
                 e->artFull[bg] = (u8)(full & NITRO_WIDE_ART_FULL);
                 continue;
             }
@@ -2126,6 +2173,7 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
             }
         }
         e->art[bg] = art;
+        e->artRows[bg] = NitroPort_WideArtRows(art);
         e->artFull[bg] = (u8)(full & NITRO_WIDE_ART_FULL);
         if (kind[bg] != BG_TEXT) {
             e->artBands[bg] = 1;
@@ -2161,6 +2209,7 @@ typedef struct Obj {
  * drawn into the OBJ layer where no OBJ is, at the group's priority. */
 typedef struct ObjArt {
     const u16 *art;
+    const u8 *rows;        /* (its rows with anything: NitroPort_WideArtRows) */
     short dx, dy;          /* how far the group has moved since its capture */
     u8 prio, full;
 } ObjArt;
@@ -2491,6 +2540,7 @@ static void LookUpObjArt(const Engine *e, ObjFrame *f, u32 dispcnt, int only)
         dy = (groups[i].y - y + 256) & 255;
         a = &f->art[f->artCount++];
         a->art = art;
+        a->rows = NitroPort_WideArtRows(art);
         a->dx = (short)(dx >= 256 ? dx - 512 : dx);
         a->dy = (short)(dy >= 128 ? dy - 256 : dy);
         a->prio = (u8)groups[i].prio;
@@ -2666,7 +2716,7 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
         const u16 *row;
         ArtRun run;
 
-        if (ay < 0) {
+        if (ay < 0 || (a->rows != NULL && !a->rows[ay])) {
             continue;
         }
         row = a->art + ay * NITRO_WIDE_ART_W;
