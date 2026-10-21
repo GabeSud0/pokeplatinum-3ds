@@ -1695,31 +1695,85 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
     NitroPort_PicaProfileMark(has3d ? "the 2D in front" : "the 2D");
 }
 
-/* The convergence distance for a scene: between the nearest and the
- * farthest of its perspective vertices (w > 1), so the scene's middle is
- * at the screen; 1 (no shift) for a scene with none. */
+/* The convergence distance a scene asks for: the geometric middle of the
+ * depths most of its perspective vertices (w > 1) are at, the 5th and the
+ * 95th percentile of their w (a histogram of 1/16 octaves, from the float's
+ * bits), so the scene's middle is at the screen; 0 for a scene with none.
+ * It was the nearest and the farthest vertex's: a few polygons near the
+ * camera or far away coming into view at an edge moved every polygon's
+ * stereo shift (each eye's picture jumped sideways: the geometry flickered
+ * with the slider up as things came on screen, 2026-10-21). */
+#define CONV_BINS 256          /* 16 octaves of w from 1, 16 bins each */
 static float scene_convergence(const NitroGx3dScene *scene)
 {
-    float lo = 0.0f, hi = 0.0f;
-    uint32_t i;
+    static uint32_t hist[CONV_BINS];
+    uint32_t i, total = 0, seen, lo = 0, hi = 0;
+    int b;
 
+    memset(hist, 0, sizeof(hist));
     for (i = 0; i < scene->count; i++) {
         int k;
 
         for (k = 0; k < 3; k++) {
-            float w = (float)scene->triangles[i].v[k].clip[3] / 4096.0f;
+            union {
+                float f;
+                uint32_t u;
+            } w;
+            int32_t bin;
 
-            if (w <= 1.0001f) {
+            w.f = (float)scene->triangles[i].v[k].clip[3] / 4096.0f;
+            if (!(w.f > 1.0001f)) {
                 continue;
             }
-            if (lo == 0.0f || w < lo) lo = w;
-            if (w > hi) hi = w;
+            bin = (int32_t)(w.u >> 19) - (127 << 4);   /* (exponent, then the mantissa's top 4 bits) */
+            hist[bin < 0 ? 0 : bin >= CONV_BINS ? CONV_BINS - 1 : bin]++;
+            total++;
         }
     }
-    if (lo == 0.0f) {
-        return 1.0f;
+    if (total == 0) {
+        return 0.0f;
     }
-    return sqrtf(lo * hi);
+    for (b = 0, seen = 0; b < CONV_BINS; b++) {
+        if (seen <= total / 20u && seen + hist[b] > total / 20u) {
+            lo = (uint32_t)b;
+        }
+        if (seen <= total - total / 20u - 1u && seen + hist[b] > total - total / 20u - 1u) {
+            hi = (uint32_t)b;
+        }
+        seen += hist[b];
+    }
+    /* (each bin's middle: 2 to the (bin + 0.5) / 16) */
+    return exp2f(((float)(lo + hi) * 0.5f + 0.5f) / 16.0f);
+}
+
+/* The convergence distance the eyes are drawn with: the scenes', followed
+ * a tenth of the way (in octaves) each new scene (not the in-between
+ * scenes: theirs is their scene's), so it moves smoothly with the camera
+ * and the scene; 1 (no shift) for a scene without perspective vertices,
+ * the followed distance kept through a few of them; taken at once the
+ * first time and after half a second (about) of them. */
+#define CONV_FOLLOW 0.1f
+#define CONV_FORGET 15u
+static float sConvFollowed;          /* (0: none yet) */
+static uint32_t sConvFlatScenes;
+static void follow_convergence(const NitroGx3dScene *scene)
+{
+    float target = scene_convergence(scene);
+
+    if (target <= 0.0f) {
+        if (++sConvFlatScenes >= CONV_FORGET) {
+            sConvFollowed = 0.0f;
+        }
+        sSceneConvergence = 1.0f;
+        return;
+    }
+    sConvFlatScenes = 0;
+    if (sConvFollowed <= 0.0f) {
+        sConvFollowed = target;
+    } else {
+        sConvFollowed *= powf(target / sConvFollowed, CONV_FOLLOW);
+    }
+    sSceneConvergence = sConvFollowed;
 }
 
 /* Which of a screen's sets to show: the newest, or with a 3D scene the
@@ -1980,8 +2034,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         prepareTicks = svcGetSystemTick() - prepareTicks;
         sPreparedScene = sceneSerial * 2u + (mid ? 1u : 0u);
         sScenePrepared = 1;
-        if (sConfig.stereo && sConfig.convergence <= 0.0f) {
-            sSceneConvergence = scene_convergence(scene);
+        if (sConfig.stereo && sConfig.convergence <= 0.0f && !mid) {
+            follow_convergence(scene);
         }
     }
     /* (built while the GPU draws the frame before: frames in flight) */
