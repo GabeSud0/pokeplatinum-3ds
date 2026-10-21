@@ -2113,6 +2113,21 @@ static void test_wide_window_edges(void)
     NitroPort_Render2D(0, sTop);
     CHECK(sTop[100 * 256 + 255] == GREY);
     CHECK(sTop[100 * 256 + 254] == RED);
+    /* the remaster's lower screen (the DS's width, drawn bigger): the last
+     * column inside, no black strip down its right edge */
+    memset(&split, 0, sizeof(split));
+    split.width = 256;
+    split.origin = 0;
+    memset(split.clip, 1, sizeof(split.clip));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[100 * 256 + 255] == GREY);   /* (without windowsToEdge: as the DS) */
+    split.windowsToEdge = 1;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[100 * 256 + 255] == RED);
+    CHECK(wide[100 * 256 + 0] == RED);
+    CHECK(wide[10 * 256 + 255] == GREY);
     GX_SetVisibleWnd(GX_WNDMASK_NONE);
 }
 

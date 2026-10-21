@@ -16,4 +16,8 @@ screens they're for (`tools/wideart/share_from_capture.py` from a capture);
 copy them here.
 
 `<name>.png` (the pictures a screen's layout draws: the party's panel and
-Poké Ball, the boxes' divider...) are hand-drawn whole and go in as they are.
+Poké Ball, the boxes' divider...) are hand-drawn whole and go in as they are,
+with their `oFFs` chunk: where the editor moved one from its layout's place
+(the boxes' divider, 3 left and 4 down). A copy re-saved without it is drawn
+at the layout's place instead, offset (2026-10-21). Other chunks (an image
+editor's metadata) can go.

@@ -589,7 +589,7 @@ only one newer scene waits.
 | `edges drawn` | the same, their left and right moved passes drawn, as before they were copied (for comparing: the same picture, slower) |
 | `edges pruned` | the same, each outline pass drawing only the polygons it needs (worked out on the CPU each scene; the same picture). Slower on a 3DS (see below) |
 | `edges3d on` | (with `edges on`) the outlines with the 3D slider up too, while they fit in a frame (default off: drawn for each eye they cost 7-16 ms of the GPU's an eye; see How it works) |
-| `fps60 off` | the field at the game's 30 frames a second (default on: an in-between scene shown between each two, while frames fit; see 60 frames a second) |
+| `fps60 off` | the field at the game's 30 frames a second (default on: an in-between scene shown between each two, while frames fit, in the game itself: not the opening, the title, the cutscenes; see 60 frames a second) |
 | `smooth3d off` / `smooth3d stereo` | the upper screen drawn at its own resolution / so only with the 3D slider down (default on: twice it and scaled down, no jagged edges, slider up or down; see How it works) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
 | `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off. **Parked on the 3DS** (they hang its GPU; see below): off there until fixed |
@@ -651,6 +651,12 @@ eye's outlines already use. (The shifted passes are the up one since the
 left, right and down ones are copied.)
 
 ## 60 frames a second in the 3D
+
+(In the game itself: the field, battles, menus over them. The screens made
+of pictures, the opening and the title, the start of the game, the
+credits and the cutscenes (`NitroPort_WidePictures`), stay at the game's
+30, as made: their 2D animations flickered black and jittered between the
+in-between frames, 2026-10-21.)
 
 The game runs its field at 30 frames a second: its main loop waits for two
 V-blanks, and everything in the field (walking, the camera, animations)

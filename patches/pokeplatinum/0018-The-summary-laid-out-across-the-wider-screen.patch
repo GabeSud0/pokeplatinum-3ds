@@ -82,8 +82,8 @@ index 396e4b65..8e059120 100644
 +    SUMMARY_WIDE_LEFT_COLUMN,
 +    SUMMARY_WIDE_LEFT_ITEM,
 +    SUMMARY_WIDE_PANEL(168, 167),
-+    WIDE_MOVE(SUMMARY_WIDE_BG1, 32, 144, 104, 168, -12),    // the stats' names
-+    WIDE_MOVE(SUMMARY_WIDE_BG1, 32, 144, 168, 256, 32),     // their values
++    WIDE_MOVE(SUMMARY_WIDE_BG1, 32, 144, 104, 176, -12),    // the stats' names
++    WIDE_MOVE(SUMMARY_WIDE_BG1, 32, 144, 176, 256, 32),     // their values
 +};
 +
 +// The moves' PP rows: the second line of each move's window.
