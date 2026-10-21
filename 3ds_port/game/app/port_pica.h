@@ -148,6 +148,10 @@ typedef struct PicaView {
      * place: an H-blank effect's lines): its textures as they were checked
      * for the first */
     int again;
+    /* only these of the framebuffer's pixels (C3D_SetScissor's left, top,
+     * right, bottom: an H-blank effect's run of lines); 0: all of them */
+    int scissor;
+    u32 scissorRect[4];
 } PicaView;
 /* What NitroPort_PicaDrawScene draws: all of it; or, for the smooth 3D
  * with the outlines (port_compose_pica.c), first the opaque polygons alone

@@ -777,12 +777,18 @@ static void test_dma(void)
  * handler runs before each line drawn (the V-count the line before's; for
  * line 0 the frame's last, 262), what it writes is that line's; without
  * the interrupt asked for (DISPSTAT), nothing. */
-static int sHBlankCalls;
+static int sHBlankCalls, sHBlankFlagged;
 static void onHBlank(void)
 {
     sHBlankCalls++;
+    sHBlankFlagged += GX_IsHBlank() != 0;   /* (some of the game's handlers do nothing without it) */
     *(vu16 *)REG_BG1HOFS_ADDR = (u16)(GX_GetVCount() & 0x1FF);
     *(vu16 *)(REG_BG1HOFS_ADDR + 0x1000) = (u16)((GX_GetVCount() + 1) & 0x1FF);   /* (engine B's) */
+    OS_SetIrqCheckFlag(OS_IE_H_BLANK);
+}
+
+static void onHBlankQuiet(void)
+{
     OS_SetIrqCheckFlag(OS_IE_H_BLANK);
 }
 
@@ -792,6 +798,7 @@ static void test_hblank_lines(void)
     OSIrqMask saved;
 
     sHBlankCalls = 0;
+    sHBlankFlagged = 0;
     OS_SetIrqFunction(OS_IE_H_BLANK, onHBlank);
     saved = OS_EnableIrqMask(OS_IE_H_BLANK);
     (void)OS_EnableIrq();
@@ -801,6 +808,8 @@ static void test_hblank_lines(void)
     GX_HBlankIntr(TRUE);
     NitroPort_HBlankLines();
     CHECK_EQ(sHBlankCalls, 193);
+    CHECK_EQ(sHBlankFlagged, 193);
+    CHECK(!GX_IsHBlank());   /* (not after them) */
     CHECK(NitroPort_LineRegs.active);
     CHECK_EQ(NitroPort_LineRegs.regs[0][0][0x14] | (NitroPort_LineRegs.regs[0][0][0x15] << 8), 262);
     for (y = 1; y < 192; y++) {
@@ -809,6 +818,19 @@ static void test_hblank_lines(void)
     }
     CHECK_EQ(wrong, 0);
     CHECK_EQ(reg_OS_IF & OS_IE_H_BLANK, 0);   /* (none left pending) */
+    /* a handler that changes nothing drawn: no line differs (the V-count
+     * and DISPSTAT aren't kept) */
+    OS_SetIrqFunction(OS_IE_H_BLANK, onHBlankQuiet);
+    NitroPort_HBlankLines();
+    CHECK(!NitroPort_LineRegs.active);
+    OS_SetIrqFunction(OS_IE_H_BLANK, onHBlank);
+    /* once a V-blank: the first time, then not again before the next */
+    sHBlankCalls = 0;
+    CHECK(NitroPort_HBlankLinesOnce());
+    CHECK_EQ(sHBlankCalls, 193);
+    CHECK(!NitroPort_HBlankLinesOnce());
+    CHECK_EQ(sHBlankCalls, 193);
+    CHECK(NitroPort_LineRegs.active);   /* (the lines kept) */
     GX_HBlankIntr(FALSE);
     (void)OS_SetIrqMask(saved);
     OS_SetIrqFunction(OS_IE_H_BLANK, NULL);

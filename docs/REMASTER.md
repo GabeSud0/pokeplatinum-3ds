@@ -330,21 +330,29 @@ that writes a register at every line): the start of a battle slices the
 screen into bands that slide apart (the grass), splits it (a trainer),
 waves it (water, caves); some moves wave the battle's background. The
 port draws a whole frame at once, so it goes through the frame's lines
-first (`NitroPort_HBlankLines`, port_os.c, on the game's thread before the
-display state is taken): before each line it runs that H-blank's DMAs and
-interrupt handler, with the V-count the game reads for it, and keeps each
-line's registers (`NitroPort_LineRegs`: each engine's first 0x70 bytes).
-The 2D renderer draws each line with its own BG scroll and windows, and
-gives the compositor the 3D's scroll on each line (`scroll3dLine`); the
-compositor draws the 3D a run of lines at a time, each run moved by its
-scroll and drawn inside its rows alone (the scissor): at most 32 runs (16
-an eye with the slider up), more lines put together by an odd number of
-runs (lines sliding apart by turns stay apart by turns). The colour
-effects, the affine BGs' matrices and OAM are the frame's (no effect of
-the game's changes those by line). Without an H-blank interrupt or DMA
-nothing of this runs; in the field the game keeps its H-blank interrupt
-on, so its handler runs 193 times a frame there (with nothing to do: the
-lines don't differ, and nothing is drawn differently).
+first (`NitroPort_HBlankLinesOnce`, port_os.c, on the game's thread before
+the display state is taken; once a V-blank: the game arms its H-blank
+DMAs again only in its V-blank interrupt): before each line it runs that
+H-blank's DMAs and interrupt handler, with the V-count the game reads for
+it and DISPSTAT's H-blank flag set (some handlers check it), and keeps
+each line's registers (`NitroPort_LineRegs`: each engine's first 0x70
+bytes, but DISPSTAT and the V-count). The 2D renderer draws each line with
+its own BG scroll, windows and affine matrices, and gives the compositor
+the 3D's scroll on each line (`scroll3dLine`). The compositor draws the
+3D a run of lines at a time, each run moved by its scroll and drawn
+inside its rows alone (the scissor, set again by each of the scene's
+passes: `PicaView.scissor`), its rear plane and its brightness tint too:
+at most 24 runs (12 an eye with the slider up), and no more than the GPU's
+command list has room for (each run is the scene's commands again); more
+lines are put together by an odd number of runs (lines sliding apart by
+turns stay apart by turns). Frames with runs aren't counted by the 60
+frames a second steps. The colour effects and OAM are the frame's (no
+effect of the game's changes those by line). Without an H-blank interrupt
+or DMA nothing of this runs; in the field the game keeps its H-blank
+interrupt on, so its handler runs 193 times a frame there (with nothing to
+do: the lines don't differ, and nothing is drawn differently). Without the
+remaster (the drawers read the game's live state) the lines are gone
+through only while no drawer reads them.
 
 Before this (2026-10-21) the effects showed as the frame's last line had
 the registers: the whole screen jumped, then went black.

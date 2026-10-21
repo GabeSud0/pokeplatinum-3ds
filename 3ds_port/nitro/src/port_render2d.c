@@ -4355,10 +4355,19 @@ static u32 EngineSmallSignature(int engine, int snapshot)
     h = (h ^ Rd16(ioAll, 0x304)) * 16777619u;           /* POWCNT1 */
     h = HashWords((snapshot ? st->pltt : NitroPort_Pltt) + (isA ? 0 : 0x400), 0x400, h);
     h = HashWords((snapshot ? st->oam : NitroPort_Oam) + (isA ? 0 : 0x400), 0x400, h);
-    /* (an H-blank effect: each line's registers) */
+    /* (an H-blank effect: each line's registers, but those two bits) */
     if (snapshot ? st->lines : NitroPort_LineRegs.active) {
-        h = HashWords(snapshot ? &st->lineRegs[0][0] : &NitroPort_LineRegs.regs[isA ? 0 : 1][0][0],
-                      (u32)(H * NITRO_LINE_REGS), h ^ 0x5A5A5A5Au);
+        const u8(*lines)[NITRO_LINE_REGS] = snapshot ? st->lineRegs : NitroPort_LineRegs.regs[isA ? 0 : 1];
+        int y;
+
+        h ^= 0x5A5A5A5Au;
+        for (y = 0; y < H; y++) {
+            memcpy(regs, lines[y], sizeof(regs));
+            if (isA) {
+                regs[0x60 / 4] &= ~0x3000u;
+            }
+            h = HashWords((const u8 *)regs, 0x70, h);
+        }
     }
     return h;
 }

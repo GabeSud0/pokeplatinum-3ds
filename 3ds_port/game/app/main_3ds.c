@@ -64,7 +64,7 @@ void NitroPort_Render2D(int engine, uint16_t *out);
 int NitroPort_Render2DIfChanged(int engine, uint16_t *out);
 int NitroPort_EngineAOnTop(void);
 /* (nitro_port.h) The frame's lines, for an H-blank effect. */
-void NitroPort_HBlankLines(void);
+int NitroPort_HBlankLinesOnce(void);
 
 /* Audio uses the port's plain-C mixer; it deliberately does not include
  * NitroSDK headers alongside libctru. */
@@ -1780,6 +1780,20 @@ static void OnAptEvent(APT_HookType type, void *param)
     }
 }
 
+/* Any drawing thread, on whichever core, still reading the game's display
+ * state. */
+static bool DrawersStillReading(void)
+{
+    int i;
+
+    for (i = 0; i < sDrawerCount; i++) {
+        if (__atomic_load_n(&sDrawers[i].reading, __ATOMIC_ACQUIRE)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Hand this frame to every drawing thread that's free; the others leave
  * it out. new3dOnly: only to the one with engine A's screen, and only if
  * a 3D image came out since it was last handed one. */
@@ -1810,8 +1824,12 @@ static void DrawFrame(bool new3dOnly)
         return;
     }
     /* (the frame's lines, for an H-blank effect: the battles' start, a
-     * wavy screen; nothing without one) */
-    NitroPort_HBlankLines();
+     * wavy screen; nothing without one. Once a V-blank; and without the
+     * remaster not while a drawer still reads them: they're the live ones
+     * there, the drawers' state isn't taken) */
+    if (sRemaster || !DrawersStillReading()) {
+        (void)NitroPort_HBlankLinesOnce();
+    }
     sAOnTop = NitroPort_EngineAOnTop() != 0;
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];

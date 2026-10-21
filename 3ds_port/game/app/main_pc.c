@@ -1026,7 +1026,7 @@ void NitroPort_OnFrame(void)
     sFrame++;
     /* (the frame's lines, for an H-blank effect: what the screenshots and
      * the screens drawn below show) */
-    NitroPort_HBlankLines();
+    (void)NitroPort_HBlankLinesOnce();
     /* (--wide DIR) its pictures shared without the game's art, as their
      * screens show (docs/WIDE_ART.md, "Sharing your pictures") */
     if (NitroPort_WideScreenExtra() && sFrame % 15 == 0 && NitroPort_WideArtUnshared() > 0) {

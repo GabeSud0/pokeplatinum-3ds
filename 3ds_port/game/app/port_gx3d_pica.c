@@ -1504,12 +1504,34 @@ void NitroPort_PicaRearPlane(uint16_t *color,unsigned *alpha)
     if(alpha)*alpha=sRearAlpha;
 }
 
-/* The state every pass needs: the shader, its view, the vertices. */
+/* The view's scissor (PicaView.scissor: an H-blank effect's run of
+ * lines), set again by each pass (C3D_SetViewport turns the scissor off)
+ * and after the outline passes' own; off once the scene is drawn. */
+static int sScissorOn;
+static u32 sScissor[4];
+static void view_scissor(void)
+{
+    if(sScissorOn)C3D_SetScissor(GPU_SCISSOR_NORMAL,sScissor[0],sScissor[1],sScissor[2],sScissor[3]);
+    else C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,0,0);
+}
+static void scissor_off(void)
+{
+    if(sScissorOn){
+        sScissorOn=0;
+        C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,0,0);
+    }
+}
+
+/* The state every pass needs: the shader, its view, the vertices; the
+ * view's scissor. */
 static void begin_pass(const PicaView *view,const PicaRect *rect)
 {
     C3D_Mtx m;
     NitroPort_PicaViewMatrix(&m,view->screenWidth,view->screenHeight,rect);
     NitroPort_PicaSetView(&m,view->stereo,view->convergence);
+    sScissorOn=view->scissor;
+    if(sScissorOn)memcpy(sScissor,view->scissorRect,sizeof(sScissor));
+    view_scissor();
 }
 
 /* The texture, combiner and alpha test of a batch, as the colour pass
@@ -1725,7 +1747,7 @@ static void draw_pruned(size_t b,int whole,int zones,const unsigned scissor[4][4
         scissored=1;
         draw_elements(idx+l->offset[zones+z],n);
     }
-    if(scissored)C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,0,0);
+    if(scissored)view_scissor();
 }
 
 /* Whether a batch has anything in an outline pass's lists. */
@@ -2390,6 +2412,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         C3D_AlphaTest(false,GPU_ALWAYS,0);
         NitroPort_PicaProfileMark("the opaque polygons");
         stage("the scene's opaque polygons drawn");
+        scissor_off();
         return;
     }
     /* (with the copies: cut here, always, for them to come after) */
@@ -2428,6 +2451,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
     C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
     C3D_AlphaTest(false,GPU_ALWAYS,0);
+    scissor_off();
     NitroPort_PicaProfileMark("the translucent polygons");
     stage("the scene drawn");
 }

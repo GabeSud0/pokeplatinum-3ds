@@ -160,6 +160,10 @@ extern NitroLineRegs NitroPort_LineRegs;
  * before the display state is taken for drawing. Does nothing (active 0)
  * without an H-blank interrupt or DMA. (src/port_os.c) */
 void NitroPort_HBlankLines(void);
+/* The same, once a V-blank (the game arms its H-blank DMAs again in its
+ * V-blank interrupt): later calls till the next V-blank keep the lines
+ * there are; whether it went through them. */
+BOOL NitroPort_HBlankLinesOnce(void);
 
 /* ---------------------------------------------------------------- threads */
 
