@@ -1639,6 +1639,103 @@ static void test_wide_art_split_bg(void)
     }
 }
 
+/* An H-blank effect (NitroPort_LineRegs): each line drawn with its own
+ * registers, the BGs' scroll and the windows; the 3D's scroll on each line
+ * for the compositor (scroll3dLine), only when the lines differ; the
+ * snapshot taken with them. */
+static void test_line_regs(void)
+{
+    static u8 tiles[64];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED, BLUE };
+    static u16 under[256 * 192], over[256 * 192];
+    static u8 overAlpha[256 * 192];
+    NitroRender2DSplit split;
+    int i, y;
+
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = (i % 32) < 16 ? 1 : 0;   /* red on the map's x 0-127 */
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    /* odd lines scrolled 8 left; line 100 with window 0 (x 0-49) showing
+     * BG1, nothing outside it */
+    for (y = 0; y < 192; y++) {
+        memcpy(NitroPort_LineRegs.regs[0][y], NitroPort_IoReg, NITRO_LINE_REGS);
+        memcpy(NitroPort_LineRegs.regs[1][y], NitroPort_IoReg + 0x1000, NITRO_LINE_REGS);
+        if (y & 1) {
+            NitroPort_LineRegs.regs[0][y][0x14] = 8;
+        }
+    }
+    {
+        u8 *l = NitroPort_LineRegs.regs[0][100];
+        u32 dispcnt = (u32)l[0] | ((u32)l[1] << 8) | ((u32)l[2] << 16) | ((u32)l[3] << 24);
+
+        dispcnt |= 0x2000;   /* window 0 */
+        l[0] = (u8)dispcnt;
+        l[1] = (u8)(dispcnt >> 8);
+        l[0x40] = 50;        /* WIN0H: 0-50 */
+        l[0x41] = 0;
+        l[0x44] = 192;       /* WIN0V: 0-192 */
+        l[0x45] = 0;
+        l[0x48] = 0x02;      /* in: BG1 */
+        l[0x4A] = 0x00;      /* out: nothing */
+    }
+    NitroPort_LineRegs.active = 1;
+    NitroPort_Render2D(0, sTop);
+    CHECK(sTop[0 * 256 + 124] == RED);    /* (the map's x 124) */
+    CHECK(sTop[1 * 256 + 124] == GREY);   /* (its x 132: nothing, the backdrop) */
+    CHECK(sTop[1 * 256 + 116] == RED);
+    CHECK(sTop[2 * 256 + 124] == RED);
+    CHECK(sTop[100 * 256 + 40] == RED);   /* (in window 0) */
+    CHECK(sTop[100 * 256 + 60] == GREY);  /* (out of it) */
+    CHECK(sTop[102 * 256 + 60] == RED);   /* (no window on the lines either side) */
+    /* the snapshot has them too; and without them, the frame's own */
+    NitroPort_Render2DTakeState(0);
+    NitroPort_LineRegs.active = 0;
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.snapshot = 1;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(under[1 * 256 + 124] == GREY);
+    CHECK(under[100 * 256 + 60] == GREY);
+    CHECK(!split.scroll3dLines);   /* (no 3D) */
+    split.snapshot = 0;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(under[1 * 256 + 124] == RED);
+    CHECK(under[100 * 256 + 60] == RED);
+    /* the 3D's scroll on each line (BG0, the 3D): lines 40-59 slid 16 left */
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1);
+    for (y = 0; y < 192; y++) {
+        memcpy(NitroPort_LineRegs.regs[0][y], NitroPort_IoReg, NITRO_LINE_REGS);
+        memcpy(NitroPort_LineRegs.regs[1][y], NitroPort_IoReg + 0x1000, NITRO_LINE_REGS);
+        if (y >= 40 && y < 60) {
+            NitroPort_LineRegs.regs[0][y][0x10] = 16;
+        }
+    }
+    NitroPort_LineRegs.active = 1;
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.has3d);
+    CHECK(split.scroll3dLines);
+    CHECK(split.scroll3d == 0 && split.scroll3dLine[39] == 0 && split.scroll3dLine[40] == 16 &&
+          split.scroll3dLine[59] == 16 && split.scroll3dLine[60] == 0);
+    NitroPort_LineRegs.active = 0;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(!split.scroll3dLines);
+    GX_SetVisiblePlane(0);
+}
+
 /* Wide art for a group of OBJs (a sprite background): its key doesn't
  * change with where the OBJs are or where their tiles are, the picture
  * goes into the OBJ layer where no OBJ is, at the group's priority, and
@@ -3114,6 +3211,7 @@ int main(int argc, char **argv)
     test_wide_art();
     test_wide_art_shared();
     test_wide_art_split_bg();
+    test_line_regs();
     test_wide_art_objs();
     test_wide_art_places();
     test_wide_art_sliding();

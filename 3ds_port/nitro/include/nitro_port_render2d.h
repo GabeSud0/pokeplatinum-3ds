@@ -28,6 +28,11 @@ typedef struct NitroRender2DSplit {
     int has3d;         /* BG0 is the 3D, drawn between under and over */
     int prio3d;        /* its priority, 0-3 */
     int scroll3d;      /* BG0HOFS, 0-511: the 3D moved left by this many pixels */
+    /* (an H-blank effect, NitroPort_LineRegs) scroll3d on each line, when
+     * it differs from line to line (scroll3dLines; else 0 and scroll3d is
+     * every line's) */
+    int scroll3dLines;
+    short scroll3dLine[192];
     /* The 3D as a first target of BLDCNT's effect: 0 none; 1 its pixels
      * blended with what's behind them by eva / 16 and evb / 16; 2
      * brightened by evy / 16; 3 darkened. */

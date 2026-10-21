@@ -63,6 +63,10 @@
 void NitroPort_Render2D(int engine, uint16_t *out);
 int NitroPort_Render2DIfChanged(int engine, uint16_t *out);
 int NitroPort_EngineAOnTop(void);
+/* (nitro_port.h) The frame's lines, for an H-blank effect. */
+int NitroPort_HBlankLinesOnce(void);
+int NitroPort_HBlankLinesDue(void);
+int NitroPort_LineRegsActive(void);
 
 /* Audio uses the port's plain-C mixer; it deliberately does not include
  * NitroSDK headers alongside libctru. */
@@ -1477,6 +1481,10 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         }
         layers->has3d = split.has3d && layers->over != NULL;
         layers->scroll3d = split.scroll3d;
+        layers->scroll3dLines = split.scroll3dLines;
+        if (split.scroll3dLines) {
+            memcpy(layers->scroll3dLine, split.scroll3dLine, sizeof(layers->scroll3dLine));
+        }
         layers->tint3d = split.tint3d;
         layers->eva = split.eva;
         layers->evb = split.evb;
@@ -1774,6 +1782,20 @@ static void OnAptEvent(APT_HookType type, void *param)
     }
 }
 
+/* Any drawing thread, on whichever core, still reading the game's display
+ * state. */
+static bool DrawersStillReading(void)
+{
+    int i;
+
+    for (i = 0; i < sDrawerCount; i++) {
+        if (__atomic_load_n(&sDrawers[i].reading, __ATOMIC_ACQUIRE)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Hand this frame to every drawing thread that's free; the others leave
  * it out. new3dOnly: only to the one with engine A's screen, and only if
  * a 3D image came out since it was last handed one. */
@@ -1802,6 +1824,19 @@ static void DrawFrame(bool new3dOnly)
     }
     if (!any) {
         return;
+    }
+    /* (the frame's lines, for an H-blank effect: the battles' start, a
+     * wavy screen; nothing without one. Once a V-blank. Without the
+     * remaster the drawers read the live ones: not while one still does;
+     * then if an effect's on, the frame waits for a later DrawFrame (the
+     * last V-blank's lines would be drawn: its scroll, its windows), else
+     * it's drawn with the frame's registers, as the lines last were) */
+    if (!sRemaster && NitroPort_HBlankLinesDue() && DrawersStillReading()) {
+        if (NitroPort_LineRegsActive()) {
+            return;
+        }
+    } else {
+        (void)NitroPort_HBlankLinesOnce();
     }
     sAOnTop = NitroPort_EngineAOnTop() != 0;
     for (i = 0; i < sDrawerCount; i++) {

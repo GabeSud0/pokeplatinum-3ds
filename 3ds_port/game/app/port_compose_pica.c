@@ -230,6 +230,7 @@ static volatile u64 sGpuDoneTick;
 static u64 sGpuRunTick, sWaitTicks, sLastGpuTicks;
 static int sFlightStereo, sFlightEdgesWanted, sFlightEdges;   /* (the frame in flight: for auto_outlines) */
 static int sFlight3D;                   /* (and whether it drew the 3D: for auto_fps60) */
+static int sFlightRuns;                 /* (and its H-blank effect's runs: sFrameLineRuns) */
 static int sFlightDrawn, sFlightSmoothable;   /* (and how: DRAWN_*, and whether it could have been 2x2) */
 static int sFlightState;                /* (and its steps: fps60_state) */
 static u32 sMidFrames;                  /* (in-between scenes drawn) */
@@ -1492,10 +1493,11 @@ static void flight_finish(int block)
     gxCmdQueueClear(q);
     sFlight = 0;
     sLastGpuTicks = sGpuDoneTick - sGpuRunTick;
-    if (sFlightStereo && sFlightEdgesWanted) {
+    /* (not a frame with an H-blank effect's runs: see LINE_RUNS_MAX) */
+    if (sFlightStereo && sFlightEdgesWanted && sFlightRuns <= 1) {
         auto_outlines(sLastGpuTicks, sFlightEdges);
     }
-    if (sFlight3D) {
+    if (sFlight3D && sFlightRuns <= 1) {
         auto_fps60(sLastGpuTicks, sFlightState, sFlightDrawn, sFlightSmoothable);
     }
     sGpuTicks += sLastGpuTicks;
@@ -1523,6 +1525,100 @@ int NitroPort_ComposeGpuBusy(void)
 
 /* The layer textures, described for the GPU. */
 static C3D_Tex sUnderTex, sOverTex;
+
+/* (an H-blank effect: ComposeLayers.scroll3dLines) The 3D's lines in runs
+ * of the same scroll, each drawn by itself, moved by it, inside its rows
+ * (the scissor): at most LINE_RUNS_MAX (LINE_RUNS_STEREO an eye with the
+ * slider up), each a scene drawn again (its commands and vertices; the
+ * pixels only inside the run), and no more than the command list has room
+ * for (all of the frame's together a third of the room at its start, each
+ * run's commands as many as a scene's last time, sSceneWords; both eyes
+ * the same number: runs_most).
+ * With more, k runs in a row (k odd: lines sliding apart by turns stay
+ * apart by turns) are one, its scroll the middle line's: the grass's
+ * slices 2 lines high, 96 of them, drawn 10 or 18 lines high. Frames with
+ * runs aren't counted by the 60 frames a second steps (a moment's effect
+ * shouldn't step the 3D down for the next minute). */
+#define LINE_RUNS_MAX 24
+#define LINE_RUNS_STEREO 12
+static u32 sSceneWords;      /* (a scene's commands, in words, the last time measured) */
+static int sFrameLineRuns;   /* (the most runs of a screen in the frame being built) */
+static int sFrameRunsMost;   /* (the most a screen may have, the frame being built: both eyes the same) */
+
+/* The most runs this frame's screens may have: LINE_RUNS_MAX (or
+ * LINE_RUNS_STEREO), no more than a third of the command list's room
+ * for them all. */
+static void runs_most(int stereo)
+{
+    extern u32 gpuCmdBufSize, gpuCmdBufOffset;
+    int most = stereo ? LINE_RUNS_STEREO : LINE_RUNS_MAX;
+
+    if (sSceneWords > 0) {
+        u32 room = (gpuCmdBufSize - gpuCmdBufOffset) / 3u / (stereo ? 2u : 1u) / sSceneWords;
+
+        most = room < 1u ? 1 : room < (u32)most ? (int)room : most;
+    }
+    sFrameRunsMost = most;
+    sFrameLineRuns = 0;
+}
+typedef struct LineRun {
+    short y0, y1, scroll;
+} LineRun;
+
+static int scroll_signed(int scroll)
+{
+    return scroll >= 256 ? scroll - 512 : scroll;
+}
+
+static int line_runs(const ComposeLayers *info, LineRun *runs, int most)
+{
+    LineRun all[DS_H];
+    int n = 0, y, k, i, out = 0;
+
+    for (y = 0; y < DS_H; y++) {
+        int scroll = scroll_signed(info->scroll3dLine[y] & 0x1FF);
+
+        if (n > 0 && all[n - 1].scroll == scroll) {
+            all[n - 1].y1 = (short)(y + 1);
+        } else {
+            all[n].y0 = (short)y;
+            all[n].y1 = (short)(y + 1);
+            all[n].scroll = (short)scroll;
+            n++;
+        }
+    }
+    k = (n + most - 1) / most;
+    if (k <= 1) {
+        memcpy(runs, all, (size_t)n * sizeof(LineRun));
+        return n;
+    }
+    if ((k & 1) == 0) {
+        k++;
+    }
+    for (i = 0; i < n; i += k) {
+        int last = i + k < n ? i + k - 1 : n - 1, mid = all[(i + last) / 2].y0 + (all[(i + last) / 2].y1 - all[(i + last) / 2].y0) / 2;
+
+        runs[out].y0 = all[i].y0;
+        runs[out].y1 = all[last].y1;
+        runs[out].scroll = (short)scroll_signed(info->scroll3dLine[mid] & 0x1FF);
+        out++;
+    }
+    return out;
+}
+
+/* A brightness effect on the 3D (BLDCNT with BG0 as a first target),
+ * over its place: alpha blending with the layer behind can't be done
+ * after the fact (it's left as drawn). The compositor's own view. */
+static void tint_3d(const ComposeLayers *info, const PicaRect *rect)
+{
+    if (info->tint3d == 2 || info->tint3d == 3) {
+        u32 a = (u32)(info->evy > 16 ? 16 : info->evy) * 255u / 16u;
+
+        quad_combiner(0);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ZERO);
+        quad(rect->x0, rect->y0, rect->x1, rect->y1, 0.0f, 0, 0, 0, 0, (info->tint3d == 2 ? 0xFFFFFF00u : 0x00000000u) | a);
+    }
+}
 
 /* One screen (one eye of it), into its render target. */
 static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx3dScene *scene, float stereo,
@@ -1594,47 +1690,110 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         uint16_t rearColor;
         unsigned rearAlpha;
         PicaView view;
+        PicaRect base;
+        LineRun runs[LINE_RUNS_MAX];
+        int nruns = 1, r;
 
         /* Where the 3D goes: the DS's screen in the picture, or (a scene
          * made for the wider view) the whole width; moved left by BG0HOFS
          * (the game's screen shakes). */
         if (scene->screen_width > DS_W) {
-            rect3d.x0 = ((float)scr->width - (float)scene->screen_width * SCALE) * 0.5f;
-            rect3d.x1 = rect3d.x0 + (float)scene->screen_width * SCALE;
+            base.x0 = ((float)scr->width - (float)scene->screen_width * SCALE) * 0.5f;
+            base.x1 = base.x0 + (float)scene->screen_width * SCALE;
         } else {
-            rect3d.x0 = pic.x0 + (canvasW - DS_W) * 0.5f * SCALE;
-            rect3d.x1 = rect3d.x0 + DS_W * SCALE;
+            base.x0 = pic.x0 + (canvasW - DS_W) * 0.5f * SCALE;
+            base.x1 = base.x0 + DS_W * SCALE;
         }
-        rect3d.y0 = 0.0f;
-        rect3d.y1 = SCREEN_H;
-        if (info->scroll3d) {
-            int scroll = info->scroll3d >= 256 ? info->scroll3d - 512 : info->scroll3d;
-
-            rect3d.x0 -= (float)scroll * SCALE;
-            rect3d.x1 -= (float)scroll * SCALE;
+        base.y0 = 0.0f;
+        base.y1 = SCREEN_H;
+        /* (an H-blank effect: its lines scrolled apart, a run at a time;
+         * not with the outlines, whose passes have scissors of their own) */
+        runs[0].y0 = 0;
+        runs[0].y1 = DS_H;
+        runs[0].scroll = (short)scroll_signed(info->scroll3d & 0x1FF);
+        if (info->scroll3dLines && !edges) {
+            nruns = line_runs(info, runs, sFrameRunsMost > 0 ? sFrameRunsMost : 1);
         }
-        /* 2. The rear plane: the clear colour, blended by its alpha. */
+        if (nruns > sFrameLineRuns) {
+            sFrameLineRuns = nruns;
+        }
+        rect3d = base;
         NitroPort_PicaRearPlane(&rearColor, &rearAlpha);
-        if (rearAlpha) {
-            quad_combiner(0);
-            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA,
-                           GPU_ONE, GPU_ZERO);
-            quad(rect3d.x0, rect3d.y0, rect3d.x1, rect3d.y1, -1.0f, 0, 0, 0, 0,
-                 rgba_of(rearColor, rearAlpha * 255u / 31u));
-        }
-        /* 3. The polygons. */
         view.fb = fb;
         for (eyeDir = 0; eyeDir < 4; eyeDir++) {
             view.edgeFb[eyeDir] = edges ? (C3D_FrameBuf *)scr->edgeFb[eye][eyeDir] : NULL;
         }
         view.screenWidth = scr->width;
         view.screenHeight = SCREEN_H;
-        view.rect = rect3d;
         view.stereo = stereo;
         view.convergence = sConfig.convergence > 0.0f ? sConfig.convergence : sSceneConvergence;
         view.part = smooth && sSmoothSplit ? PICA_DRAW_OPAQUE : PICA_DRAW_ALL;
+        view.again = 0;
+        view.scissor = 0;
         NitroPort_PicaProfileMark("the 2D behind");
-        NitroPort_PicaDrawScene(&view);
+        for (r = 0; r < nruns; r++) {
+            rect3d.x0 = base.x0 - (float)runs[r].scroll * SCALE;
+            rect3d.x1 = base.x1 - (float)runs[r].scroll * SCALE;
+            if (nruns > 1) {
+                /* the run's rows (screen pixel (x, y) is the framebuffer's
+                 * (height - 1 - y, width - 1 - x), in its own pixels: the
+                 * smooth 3D's twice the screen's), for everything of the
+                 * run: its rear plane, its polygons (each pass sets it
+                 * again: see begin_pass), its tint */
+                u32 sy = (u32)fb->width / SCREEN_H, sx = (u32)fb->height / (u32)scr->width;
+                u32 y0 = (u32)((float)runs[r].y0 * SCALE + 0.5f), y1 = (u32)((float)runs[r].y1 * SCALE + 0.5f);
+
+                if (y1 <= y0) {
+                    continue;
+                }
+                view.scissor = 1;
+                view.scissorRect[0] = (SCREEN_H - y1) * sy;
+                view.scissorRect[1] = 0;
+                view.scissorRect[2] = (SCREEN_H - y0) * sy;
+                view.scissorRect[3] = (u32)scr->width * sx;
+                C3D_SetScissor(GPU_SCISSOR_NORMAL, view.scissorRect[0], view.scissorRect[1], view.scissorRect[2],
+                               view.scissorRect[3]);
+            }
+            /* 2. The rear plane: the clear colour, blended by its alpha. */
+            if (rearAlpha) {
+                quad_combiner(0);
+                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA,
+                               GPU_ONE, GPU_ZERO);
+                quad(rect3d.x0, rect3d.y0, rect3d.x1, rect3d.y1, -1.0f, 0, 0, 0, 0,
+                     rgba_of(rearColor, rearAlpha * 255u / 31u));
+            }
+            /* 3. The polygons (their commands counted, the first run's). */
+            view.rect = rect3d;
+            {
+                /* (by the room left: a cut in the list, GPUCMD_Split, keeps it) */
+                extern u32 gpuCmdBufSize, gpuCmdBufOffset;
+                u32 before = gpuCmdBufSize - gpuCmdBufOffset;
+
+                NitroPort_PicaDrawScene(&view);
+                if (!view.again && view.part == PICA_DRAW_ALL && before > gpuCmdBufSize - gpuCmdBufOffset) {
+                    sSceneWords = before - (gpuCmdBufSize - gpuCmdBufOffset);
+                }
+            }
+            view.again = 1;
+            if (nruns > 1) {
+                /* (the run's tint and the next run's quad: the compositor's
+                 * own view again, the run's scissor too: the viewport and
+                 * the scene took it off) */
+                C3D_SetFrameBuf(fb);
+                C3D_SetViewport(0, 0, fb->width, fb->height);
+                NitroPort_PicaSetView(&pixels, 0.0f, 1.0f);
+                C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+                C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
+                C3D_AlphaTest(false, GPU_ALWAYS, 0);
+                C3D_SetScissor(GPU_SCISSOR_NORMAL, view.scissorRect[0], view.scissorRect[1], view.scissorRect[2],
+                               view.scissorRect[3]);
+                tint_3d(info, &rect3d);
+            }
+        }
+        if (nruns > 1) {
+            C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+            view.scissor = 0;
+        }
         if (smooth && sSmoothSplit) {
             /* The rest at the screen's resolution (see sSmoothFb). */
             smooth_down(scr, eye, edges);
@@ -1647,17 +1806,10 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         C3D_SetViewport(0, 0, fb->width, fb->height);
         NitroPort_PicaSetView(&pixels, 0.0f, 1.0f);
         C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
-        /* 4. A brightness effect on the 3D (BLDCNT with BG0 as a first
-         * target; alpha blending with the layer behind can't be done after
-         * the fact: it's left as drawn). */
-        if (info->tint3d == 2 || info->tint3d == 3) {
-            u32 a = (u32)(info->evy > 16 ? 16 : info->evy) * 255u / 16u;
-
-            quad_combiner(0);
-            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA,
-                           GPU_ONE, GPU_ZERO);
-            quad(rect3d.x0, rect3d.y0, rect3d.x1, rect3d.y1, 0.0f, 0, 0, 0, 0,
-                 (info->tint3d == 2 ? 0xFFFFFF00u : 0x00000000u) | a);
+        /* 4. A brightness effect on the 3D (with an H-blank effect's runs:
+         * each run's, done above). */
+        if (nruns == 1) {
+            tint_3d(info, &rect3d);
         }
         /* 5. The layers in front, with their alpha (multiplied in). */
         if (!set->overEmpty && set->overTop < set->overBottom) {
@@ -2061,6 +2213,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     }
     /* The smooth 3D (sSmoothFb): on the upper screen when the 3D is
      * there; with outlines, split (sSmoothSplit), each eye in turn. */
+    runs_most(stereoNow);
     smoothable = sSmoothReady && need[0] && top3d && (stereoNow || sConfig.smooth3d == 2);
     /* (2x2, or as 60 frames a second has it now: auto_fps60) */
     drawnAs = smoothable ? fps60_drawn(stereoNow) : DRAWN_PLAIN;
@@ -2204,6 +2357,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sFlightMark = mark;
         sFlightStereo = stereoNow;
         sFlight3D = top3d || (scene != NULL && !aOnTop);
+        sFlightRuns = sFrameLineRuns;
         sFlightDrawn = drawnAs;
         sFlightSmoothable = smoothable;
         sFlightState = fps60_state(stereoNow, aOnTop);

@@ -18,10 +18,15 @@
  *   - windows 0, 1 and OBJ, colour effects (alpha blending, brightness up
  *     and down) and the master brightness the game fades the screen with;
  *   - engine A's display modes: off, normal, and VRAM display.
+ *   - H-blank effects (NitroPort_LineRegs: the battles' start, a wavy
+ *     screen): each line's BG scroll and windows as the game set them for
+ *     it, and the 3D's scroll on each line for the compositor
+ *     (NitroRender2DSplit.scroll3dLine); the rest of the registers (the
+ *     colour effects, the affine BGs' matrices, OAM) as they are at the
+ *     frame's end.
  * Not yet: DS 3D on the 3DS GPU (PC shows captured triangles), mosaic, the large
- * bitmap BG of mode 6, the main-memory display mode, display capture, and
- * anything changed during the frame (H-blank effects): each frame is drawn
- * from the state at its end.
+ * bitmap BG of mode 6, the main-memory display mode and display capture
+ * (the legendary Pokemon's motion blur).
  *
  * VRAM: each CPU view (engine A BG, A OBJ, B BG, B OBJ, LCDC) is its own
  * block in the port (mmap_global.h), so BG and OBJ graphics are read where
@@ -101,6 +106,10 @@ typedef struct State2D {
     u8 io[0x2000];
     u8 pltt[0x800];
     u8 oam[0x800];
+    /* (an H-blank effect: NitroPort_LineRegs) the engine's registers on
+     * each line, when they differ */
+    int lines;
+    u8 lineRegs[H][NITRO_LINE_REGS];
 } State2D;
 static State2D sState[2];
 
@@ -112,6 +121,9 @@ static State2D sState[2];
 typedef struct Engine {
     const u8 *ioAll;       /* all the registers (live, or a State2D's) */
     const u8 *io;          /* the engine's registers (A: +0, B: +0x1000) */
+    /* (an H-blank effect) its first NITRO_LINE_REGS bytes on each line, or
+     * NULL: io's on every line (NitroPort_LineRegs) */
+    const u8 (*lines)[NITRO_LINE_REGS];
     const u8 *bgPltt;      /* 0x200 bytes */
     const u8 *objPltt;
     const u8 *oam;         /* 0x400 bytes */
@@ -2830,6 +2842,7 @@ typedef struct EngineWork {
     u8 layer1[WMAX];      /* each pixel's front layer (0-3 BG, 4 OBJ), for the effects */
     u8 alpha3d[WMAX];     /* BG0's 3D alpha (0-31) on this line, when scrolled */
     u16 picLine[WMAX];    /* the pictures drawn with a BG on this line (PicturesOnLine) */
+    u8 lineIo[0x2000];    /* (an H-blank effect) the registers as they are on the line being drawn */
 } EngineWork;
 
 static EngineWork sWork[2];
@@ -3271,10 +3284,53 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     blendState.evb = evb;
     blendState.evy = evy;
 
+    /* (an H-blank effect) Each line's registers: the BGs' scroll, the
+     * windows (where they are, which ones show, what's in and out of them)
+     * and the 3D's scroll, as the game set them for it. The colour effects
+     * and the rest are the frame's. */
+    if (e->lines != NULL) {
+        u8 *lineIo = work->lineIo;
+        int off = e->isA ? 0 : 0x1000;
+
+        memcpy(lineIo, e->ioAll, sizeof(work->lineIo));
+        e->ioAll = lineIo;
+        e->io = lineIo + off;
+    }
+    if (split != NULL) {
+        split->scroll3dLines = 0;
+    }
+
     for (y = 0; y < H; y++) {
         u16 *row = out + y * width;
-        BOOL objs = DrawObjs(e, objFrame, dispcnt, y, objLine);
+        BOOL objs;
         Target t;
+
+        if (e->lines != NULL) {
+            u8 *lineRegs = (u8 *)e->io;
+            u32 lineDispcnt;
+
+            memcpy(lineRegs, e->lines[y], NITRO_LINE_REGS);
+            lineDispcnt = Rd32(lineRegs, 0);
+            dispcnt = (dispcnt & ~0xE000u) | (lineDispcnt & 0xE000u);
+            win0h = Rd16(lineRegs, 0x40);
+            win1h = Rd16(lineRegs, 0x42);
+            win0v = Rd16(lineRegs, 0x44);
+            win1v = Rd16(lineRegs, 0x46);
+            winin = Rd16(lineRegs, 0x48);
+            winout = Rd16(lineRegs, 0x4A);
+            anyWindow = (dispcnt & 0xE000) != 0;
+            flags = (flags & ~T_WINDOW) | (anyWindow ? T_WINDOW : 0);
+            if (!anyWindow) {
+                memset(enableLine, 0x3F, (size_t)width);
+            }
+            if (split != NULL && split->has3d) {
+                int scroll = (Rd16(lineRegs, 0x10) - e->shift3d) & 0x1FF;
+
+                split->scroll3dLine[y] = (short)scroll;
+                split->scroll3dLines |= scroll != split->scroll3d;
+            }
+        }
+        objs = DrawObjs(e, objFrame, dispcnt, y, objLine);
 
         /* Which layers and effects each pixel shows (the windows): window
          * 0 over window 1 over the OBJ window over the outside. */
@@ -3588,6 +3644,9 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
     e->isA = engine == 0;
     e->ioAll = taken ? st->io : NitroPort_IoReg;
     e->io = e->ioAll + (e->isA ? 0 : 0x1000);
+    e->lines = taken ? (st->lines ? (const u8(*)[NITRO_LINE_REGS])st->lineRegs : NULL)
+                     : (NitroPort_LineRegs.active ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[e->isA ? 0 : 1]
+                                                  : NULL);
     e->bgPltt = (taken ? st->pltt : NitroPort_Pltt) + (e->isA ? 0 : 0x400);
     e->objPltt = e->bgPltt + 0x200;
     e->oam = (taken ? st->oam : NitroPort_Oam) + (e->isA ? 0 : 0x400);
@@ -4263,6 +4322,10 @@ void NitroPort_Render2DTakeState(int engine)
     memcpy(st->io, NitroPort_IoReg, sizeof(st->io));
     memcpy(st->pltt, NitroPort_Pltt, sizeof(st->pltt));
     memcpy(st->oam, NitroPort_Oam, sizeof(st->oam));
+    st->lines = NitroPort_LineRegs.active;
+    if (st->lines) {
+        memcpy(st->lineRegs, NitroPort_LineRegs.regs[engine ? 1 : 0], sizeof(st->lineRegs));
+    }
 }
 
 /* What an engine's picture is drawn from, in two parts: the small ones
@@ -4292,6 +4355,20 @@ static u32 EngineSmallSignature(int engine, int snapshot)
     h = (h ^ Rd16(ioAll, 0x304)) * 16777619u;           /* POWCNT1 */
     h = HashWords((snapshot ? st->pltt : NitroPort_Pltt) + (isA ? 0 : 0x400), 0x400, h);
     h = HashWords((snapshot ? st->oam : NitroPort_Oam) + (isA ? 0 : 0x400), 0x400, h);
+    /* (an H-blank effect: each line's registers, but those two bits) */
+    if (snapshot ? st->lines : NitroPort_LineRegs.active) {
+        const u8(*lines)[NITRO_LINE_REGS] = snapshot ? st->lineRegs : NitroPort_LineRegs.regs[isA ? 0 : 1];
+        int y;
+
+        h ^= 0x5A5A5A5Au;
+        for (y = 0; y < H; y++) {
+            memcpy(regs, lines[y], sizeof(regs));
+            if (isA) {
+                regs[0x60 / 4] &= ~0x3000u;
+            }
+            h = HashWords((const u8 *)regs, 0x70, h);
+        }
+    }
     return h;
 }
 

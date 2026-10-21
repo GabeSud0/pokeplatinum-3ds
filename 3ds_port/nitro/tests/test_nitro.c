@@ -723,14 +723,42 @@ static void test_dma(void)
     CHECK_EQ(flag, 1);
     CHECK(!MI_IsDmaBusy(1));
 
-    /* H-blank timing needs the renderer: reported, left armed (as if no
-     * H-blank came), and MI_StopDma releases the channel. */
-    MI_HBlankDmaCopy32(0, src, dst, 16);
-    CHECK(NitroPort_WasReported("DMA timing: H-blank"));
-    CHECK(MI_IsDmaBusy(0));
-    MI_StopDma(0);
-    MI_WaitDma(0);
-    CHECK(!MI_IsDmaBusy(0));
+    /* H-blank timing: armed until the port goes through a frame's lines
+     * (NitroPort_HBlankLines), then a unit at each H-blank of the 192
+     * lines drawn, into the same register (dest reload): each line has
+     * what the H-blank before it wrote (a wavy screen); line 0 what the
+     * register had. MI_StopDma releases the channel. */
+    {
+        static u32 lineSrc[192];
+        int y, wrong = 0;
+
+        for (y = 0; y < 192; y++) {
+            lineSrc[y] = (u32)(y * 3 + 1);
+        }
+        NitroPort_LineRegs.active = 0;
+        *(vu32 *)REG_BG0HOFS_ADDR = 7;
+        MI_HBlankDmaCopy32(0, lineSrc, (void *)REG_BG0HOFS_ADDR, 4);
+        CHECK(!NitroPort_WasReported("DMA timing: H-blank"));
+        CHECK(MI_IsDmaBusy(0));
+        CHECK_EQ(*(vu32 *)REG_BG0HOFS_ADDR, 7);   /* (nothing till the lines) */
+        NitroPort_HBlankLines();
+        CHECK(NitroPort_LineRegs.active);
+        CHECK_EQ(NitroPort_LineRegs.regs[0][0][0x10], 7);
+        for (y = 1; y < 192; y++) {
+            u32 v = (u32)NitroPort_LineRegs.regs[0][y][0x10] | ((u32)NitroPort_LineRegs.regs[0][y][0x11] << 8);
+
+            wrong += v != ((lineSrc[y - 1]) & 0xFFFFu);
+        }
+        CHECK_EQ(wrong, 0);
+        CHECK_EQ(*(vu32 *)REG_BG0HOFS_ADDR, lineSrc[191]);   /* (the last line's H-blank: its unit too) */
+        CHECK(MI_IsDmaBusy(0));   /* (it repeats) */
+        MI_StopDma(0);
+        MI_WaitDma(0);
+        CHECK(!MI_IsDmaBusy(0));
+        NitroPort_HBlankLines();   /* (nothing armed: no lines) */
+        CHECK(!NitroPort_LineRegs.active);
+        *(vu32 *)REG_BG0HOFS_ADDR = 0;
+    }
 
     /* The game's graphics loads go through DMA channel 3 by default. */
     for (i = 0; i < 32; i++) {
@@ -743,6 +771,81 @@ static void test_dma(void)
     G3X_Init();
     CHECK_EQ(*(vu32 *)REG_FOG_TABLE_0_ADDR, 0);
     CHECK(!MI_IsDmaBusy(3));
+}
+
+/* The H-blank interrupt, line by line (NitroPort_HBlankLines): its
+ * handler runs before each line drawn (the V-count the line before's; for
+ * line 0 the frame's last, 262), what it writes is that line's; without
+ * the interrupt asked for (DISPSTAT), nothing. */
+static int sHBlankCalls, sHBlankFlagged;
+static void onHBlank(void)
+{
+    sHBlankCalls++;
+    sHBlankFlagged += GX_IsHBlank() != 0;   /* (some of the game's handlers do nothing without it) */
+    *(vu16 *)REG_BG1HOFS_ADDR = (u16)(GX_GetVCount() & 0x1FF);
+    *(vu16 *)(REG_BG1HOFS_ADDR + 0x1000) = (u16)((GX_GetVCount() + 1) & 0x1FF);   /* (engine B's) */
+    OS_SetIrqCheckFlag(OS_IE_H_BLANK);
+}
+
+static void onHBlankQuiet(void)
+{
+    OS_SetIrqCheckFlag(OS_IE_H_BLANK);
+}
+
+static void test_hblank_lines(void)
+{
+    int y, wrong = 0;
+    OSIrqMask saved;
+
+    sHBlankCalls = 0;
+    sHBlankFlagged = 0;
+    OS_SetIrqFunction(OS_IE_H_BLANK, onHBlank);
+    saved = OS_EnableIrqMask(OS_IE_H_BLANK);
+    (void)OS_EnableIrq();
+    NitroPort_HBlankLines();
+    CHECK_EQ(sHBlankCalls, 0);   /* (DISPSTAT doesn't ask for it) */
+    CHECK(!NitroPort_LineRegs.active);
+    GX_HBlankIntr(TRUE);
+    NitroPort_HBlankLines();
+    CHECK_EQ(sHBlankCalls, 193);
+    CHECK_EQ(sHBlankFlagged, 193);
+    CHECK(!GX_IsHBlank());   /* (not after them) */
+    CHECK(NitroPort_LineRegs.active);
+    CHECK_EQ(NitroPort_LineRegs.regs[0][0][0x14] | (NitroPort_LineRegs.regs[0][0][0x15] << 8), 262);
+    for (y = 1; y < 192; y++) {
+        wrong += (NitroPort_LineRegs.regs[0][y][0x14] | (NitroPort_LineRegs.regs[0][y][0x15] << 8)) != y - 1;
+        wrong += (NitroPort_LineRegs.regs[1][y][0x14] | (NitroPort_LineRegs.regs[1][y][0x15] << 8)) != y;
+    }
+    CHECK_EQ(wrong, 0);
+    CHECK_EQ(reg_OS_IF & OS_IE_H_BLANK, 0);   /* (none left pending) */
+    /* a handler that changes nothing drawn: no line differs (the V-count
+     * and DISPSTAT aren't kept) */
+    OS_SetIrqFunction(OS_IE_H_BLANK, onHBlankQuiet);
+    NitroPort_HBlankLines();
+    CHECK(!NitroPort_LineRegs.active);
+    OS_SetIrqFunction(OS_IE_H_BLANK, onHBlank);
+    /* once a V-blank: the first time, then not again before the next */
+    sHBlankCalls = 0;
+    CHECK(NitroPort_HBlankLinesOnce());
+    CHECK_EQ(sHBlankCalls, 193);
+    CHECK(!NitroPort_HBlankLinesDue());
+    CHECK(!NitroPort_HBlankLinesOnce());
+    CHECK_EQ(sHBlankCalls, 193);
+    CHECK(NitroPort_LineRegs.active);   /* (the lines kept) */
+    /* and again after the next V-blank */
+    NitroPort_SpendDsTime(NITRO_PORT_CYCLES_PER_FRAME);
+    CHECK(NitroPort_HBlankLinesDue());
+    CHECK(NitroPort_HBlankLinesOnce());
+    CHECK_EQ(sHBlankCalls, 2 * 193);
+    GX_HBlankIntr(FALSE);
+    (void)OS_SetIrqMask(saved);
+    OS_SetIrqFunction(OS_IE_H_BLANK, NULL);
+    *(vu16 *)REG_BG1HOFS_ADDR = 0;
+    *(vu16 *)(REG_BG1HOFS_ADDR + 0x1000) = 0;
+    NitroPort_SpendDsTime(NITRO_PORT_CYCLES_PER_FRAME);
+    CHECK(!NitroPort_HBlankLinesDue());   /* (nothing armed) */
+    NitroPort_HBlankLines();
+    CHECK(!NitroPort_LineRegs.active);
 }
 
 static void test_lock_ids(void)
@@ -1017,6 +1120,7 @@ int main(void)
     test_math();
     test_interrupts();
     test_dma();
+    test_hblank_lines();
     test_lock_ids();
     test_arena();
     test_memory_map();
