@@ -31,7 +31,10 @@
  * art of the game's: where a picture's pixel was the layer's own, it's
  * NITRO_WIDE_ART_GAME (alpha 64 in the PNG), and the layer's own pixel
  * there shows (the renderer's: its map where the picture was made), from
- * the player's own game. The folder's pictures are shared so as the
+ * the player's own game; one that was the layer's own moved (a Pokemon of
+ * the opening's moved along so that it comes in from the wide screen's
+ * edge; the map's beyond the DS's edge copied into a band) says how far
+ * (NitroPort_WideArtGameAt). The folder's pictures are shared so as the
  * game shows them (NitroPort_Render2DShareArt): each written into the
  * folder's share/ that way, to go into wideart/.
  *
@@ -58,9 +61,20 @@ extern "C" {
  * screen, shows nothing beyond the DS's edges, as on the DS. */
 #define NITRO_WIDE_ART_FULL 1
 #define NITRO_WIDE_ART_LOOP 2
-/* A picture's pixel that's the layer's own (see above): not opaque, not
- * transparent (0). */
+/* A picture's pixel that's the layer's own (see above): not opaque (bit
+ * 15), not transparent (0); bit 0, with how far it was moved from the
+ * layer's own pixel, dx right (-255..255, bits 1-9) and dy down (-16..15,
+ * bits 10-14); in the PNG, with alpha 64, red and blue dx + 256 (the low
+ * byte, then the high), green 128 + dy: the layer's own pixel dx left and
+ * dy up of it shows there. */
 #define NITRO_WIDE_ART_GAME 0x0001u
+#define NITRO_WIDE_ART_MOVE_MAX 255
+#define NITRO_WIDE_ART_MOVE_UP_MAX 16
+#define NitroPort_WideArtGameAt(dx, dy) \
+    ((uint16_t)(NITRO_WIDE_ART_GAME | (((dx) & 0x1FF) << 1) | (((dy) & 0x1F) << 10)))
+#define NitroPort_WideArtIsGame(c) (((c) & 0x8001u) == NITRO_WIDE_ART_GAME)
+#define NitroPort_WideArtGameDx(c) ((int)(((c) >> 1) & 0x1FF) - ((((c) >> 1) & 0x100) ? 512 : 0))
+#define NitroPort_WideArtGameDy(c) ((int)(((c) >> 10) & 0x1F) - ((((c) >> 10) & 0x10) ? 32 : 0))
 
 /* A picture built into the program: its file's name and bytes (a PNG). */
 typedef struct NitroWideArtFile {
@@ -131,8 +145,8 @@ int NitroPort_WideArtCapture(const char *dir, char *made, size_t madeSize);
  * them (not the built-in ones) aren't in its share/ yet; the i-th of
  * those for a key (its pixels, scroll, kind and file name), 0 when there's
  * no more; and one written there, its pixels with NITRO_WIDE_ART_GAME
- * where they're the game's own (0 if done; then it's shared). On the
- * game's thread. */
+ * (NitroPort_WideArtGameAt) where they're the game's own (0 if done; then
+ * it's shared). On the game's thread. */
 int NitroPort_WideArtUnshared(void);
 int NitroPort_WideArtToShare(uint64_t key, int i, const uint16_t **pixels, int *hofs, int *vofs, int *full,
                              char *name, size_t nameSize);

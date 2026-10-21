@@ -1318,7 +1318,7 @@ const NitroWideArtFile *NitroPort_WideArtBuiltIn(int *count)
  * that name in the folder takes its place. */
 static void test_wide_art_shared(void)
 {
-    static u16 wide[320 * 192], over[320 * 192], art[320 * 192], layerPx[320 * 192], mapPx[320 * 192];
+    static u16 wide[320 * 192], over[320 * 192], art[320 * 192], layerPx[320 * 192];
     static u8 overAlpha[320 * 192];
     static u8 tiles[96];
     static u16 map[32 * 32];
@@ -1347,29 +1347,26 @@ static void test_wide_art_shared(void)
     split.origin = 32;
     memset(split.clip, 1, sizeof(split.clip));
     CHECK(NitroPort_Render2DLayer(0, 1, &split, layerPx, &key, &hofs, &vofs, &prio));
-    /* (and its map going on past the DS's edges: what the game's own
-     * pixel is in the bands) */
-    split.clip[1] = 0;
-    CHECK(NitroPort_Render2DLayer(0, 1, &split, mapPx, &key, &hofs, &vofs, &prio));
-    split.clip[1] = 1;
-
     /* a whole picture made at scroll 0: the BG's own in the middle (its
      * tiles' red, a blue pixel at each one's top left; one red pixel
      * painted green), blue bands; transparent where the BG isn't (the
-     * map's right half). The game's own pixels in it: the middle's, and
-     * a band pixel where the map, going round, has that blue too. */
+     * map's right half). The game's own pixels in it: those the same as
+     * the BG's as the port draws it there (the middle's), or as its map
+     * goes on past the DS's edges (the right band's blue pixels over the
+     * tiles' blue corners, the map's left half again; nothing in the left
+     * band: the right half, empty). */
     for (y = 0; y < 192; y++) {
         for (x = 0; x < 320; x++) {
             u16 c = (x < 32 || x >= 288) ? (BLUE | 0x8000) : layerPx[y * 320 + x];
 
             art[y * 320 + x] = c;
-            game += (c & 0x8000) && mapPx[y * 320 + x] == c;
+            game += (c & 0x8000) && layerPx[y * 320 + x] == c;
         }
     }
     game--;
     art[20 * 320 + 50] = (RGB(0, 31, 0) | 0x8000);
     {
-        int expected = game;
+        int expected = game + 4 * 24, moved = 0;
 
         game = 0;
     CHECK(mkdtemp(dir) != NULL);
@@ -1389,8 +1386,9 @@ static void test_wide_art_shared(void)
     got = NitroPort_WideArtFind(key, &hofs, &vofs, &full);
     CHECK(got != NULL);
     for (i = 0; got != NULL && i < 320 * 192; i++) {
-        if (got[i] == NITRO_WIDE_ART_GAME) {
+        if (NitroPort_WideArtIsGame(got[i])) {
             game++;
+            moved += got[i] != NITRO_WIDE_ART_GAME;
             wrong += !(art[i] & 0x8000);
         } else {
             mine += (got[i] & 0x8000) != 0;
@@ -1399,6 +1397,7 @@ static void test_wide_art_shared(void)
     }
     CHECK(wrong == 0);
     CHECK(game == expected && game > 100 * 192);
+    CHECK(moved == 0);   /* (nothing of it the BG's moved: its own art isn't) */
     CHECK(game + mine == 128 * 192 + 64 * 192);   /* (every opaque pixel one or the other) */
     }
     /* drawn from the shared picture: the same as from the whole one */
@@ -1449,6 +1448,81 @@ static void test_wide_art_shared(void)
         CHECK(wide[20 * 320 + 50] == BLUE);
         sTestBuiltIn = NULL;
         sTestBuiltInCount = 0;
+    }
+    /* A picture of the BG moved along (the editor's Move tool: the
+     * opening's Pokemon moved so that they come in from the wide screen's
+     * edge), made at scroll 16: its pixels the BG's own from 24 further
+     * left (the green one its own). Shared, they're the game's own, moved
+     * (the plain red matching where it is, the rest from 24 (or 8, 16: the
+     * tiles repeat) further left); drawn, the same picture. */
+    {
+        static u16 art2[320 * 192];
+        uint64_t key2;
+        const u16 *got2;
+        static u16 unclippedPx[320 * 192];
+        int opaque = 0, moved = 0, expected = 0;
+
+        NitroPort_WideArtLoad("/nonexistent");   /* (the BG's own, without the first picture) */
+        G2_SetBG1Offset(16, 0);
+        CHECK(NitroPort_Render2DLayer(0, 1, &split, layerPx, &key2, &hofs, &vofs, &prio));
+        CHECK(key2 == key);
+        for (y = 0; y < 192; y++) {
+            for (x = 0; x < 320; x++) {
+                u16 c = (x < 32 || x >= 288) ? (BLUE | 0x8000) : x >= 32 + 24 ? layerPx[y * 320 + x - 24] : 0;
+
+                art2[y * 320 + x] = c;
+                opaque += (c & 0x8000) != 0;
+            }
+        }
+        art2[20 * 320 + 50] = (RGB(0, 31, 0) | 0x8000);
+        opaque++;
+        /* (its own: the green, and the bands' blue but where the map, going
+         * on past the DS's edges, has its tiles' blue corners) */
+        {
+            NitroRender2DSplit unclipped = split;
+
+            unclipped.clip[1] = 0;
+            CHECK(NitroPort_Render2DLayer(0, 1, &unclipped, unclippedPx, &key2, &hofs, &vofs, &prio));
+            for (i = 0; i < 320 * 192; i++) {
+                if ((i % 320 < 32 || i % 320 >= 288) && unclippedPx[i] != art2[i]) {
+                    expected++;
+                }
+            }
+            expected++;
+        }
+        WriteArtKind(dir, key, 16, 0, NITRO_WIDE_ART_FULL, art2);
+        CHECK(NitroPort_WideArtLoad(dir) == 2);
+        CHECK(NitroPort_WideArtUnshared() == 2);   /* (the first, changed above, again) */
+        CHECK(NitroPort_Render2DShareArt(0) == 2);
+        CHECK(NitroPort_WideArtLoad(share) == 2);
+        got2 = NitroPort_WideArtFindNear(key, 16, 0, 256, 256, 256, 192, &hofs, &vofs, &full);
+        CHECK(got2 != NULL && hofs == 16);
+        game = mine = moved = wrong = 0;
+        for (i = 0; got2 != NULL && i < 320 * 192; i++) {
+            if (NitroPort_WideArtIsGame(got2[i])) {
+                game++;
+                moved += got2[i] != NITRO_WIDE_ART_GAME;
+                wrong += !(art2[i] & 0x8000) || NitroPort_WideArtGameDx(got2[i]) < 0 ||
+                         NitroPort_WideArtGameDx(got2[i]) > 24 || NitroPort_WideArtGameDy(got2[i]) != 0;
+            } else {
+                mine += (got2[i] & 0x8000) != 0;
+                wrong += got2[i] != art2[i];
+            }
+        }
+        CHECK(wrong == 0);
+        CHECK(moved == 24 * 192);   /* (the stretch past the map's red: moved) */
+        CHECK(mine == expected && game + mine == opaque);
+        NitroPort_Render2DSplit(0, wide, &split);
+        for (y = 0; y < 192; y++) {
+            for (x = 32; x < 288; x++) {
+                u16 c = art2[y * 320 + x];
+
+                wrong += (c & 0x8000) ? wide[y * 320 + x] != (c & 0x7FFF) : wide[y * 320 + x] != GREY;
+            }
+        }
+        CHECK(wrong == 0);
+        CHECK(wide[5 * 320 + 160] == RED);   /* (the map's red ends at 143 here: moved) */
+        G2_SetBG1Offset(0, 0);
     }
     NitroPort_SetWideScreen(0);
     NitroPort_WideArtLoad("/nonexistent");

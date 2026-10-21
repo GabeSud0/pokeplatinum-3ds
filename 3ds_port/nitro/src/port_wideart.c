@@ -404,7 +404,21 @@ static unsigned char *read_file(const char *path, long max, long *size)
 }
 
 /* A picture's PNG into RGB555 | 0x8000 pixels (0: transparent; alpha 64:
- * NITRO_WIDE_ART_GAME, the layer's own). */
+ * NITRO_WIDE_ART_GAME, the layer's own, red and green how far it was
+ * moved: nitro_port_wideart.h). */
+static uint16_t game_pixel(const unsigned char *p)
+{
+    int dx = (int)p[0] + ((int)p[2] << 8) - 256, dy = (int)p[1] - 128;
+
+    if (dx < -NITRO_WIDE_ART_MOVE_MAX || dx > NITRO_WIDE_ART_MOVE_MAX) {
+        dx = 0;
+    }
+    if (dy < -NITRO_WIDE_ART_MOVE_UP_MAX || dy >= NITRO_WIDE_ART_MOVE_UP_MAX) {
+        dy = 0;
+    }
+    return NitroPort_WideArtGameAt(dx, dy);
+}
+
 static int decode_picture(const unsigned char *bytes, long size, uint16_t *out)
 {
     unsigned char *rgba;
@@ -421,7 +435,7 @@ static int decode_picture(const unsigned char *bytes, long size, uint16_t *out)
     for (i = 0; i < PIXELS; i++) {
         const unsigned char *p = rgba + i * 4;
 
-        out[i] = p[3] == 64  ? (uint16_t)NITRO_WIDE_ART_GAME
+        out[i] = p[3] == 64  ? game_pixel(p)
                  : p[3] < 128 ? 0
                               : (uint16_t)(0x8000 | (p[0] >> 3) | ((p[1] >> 3) << 5) | ((p[2] >> 3) << 10));
     }
@@ -950,7 +964,7 @@ int NitroPort_WideArtShareWrite(const char *name, const uint16_t *pixels)
 {
     static uint8_t rgba[PIXELS * 4];
     char path[400];
-    int i, game = 0, yours = 0, left;
+    int i, game = 0, moved = 0, yours = 0, left;
 
     lock();
     snprintf(path, sizeof(path), "%s/share", sDir);
@@ -959,10 +973,15 @@ int NitroPort_WideArtShareWrite(const char *name, const uint16_t *pixels)
     snprintf(path + strlen(path), sizeof(path) - strlen(path), "/%s", name);
     to_rgba(pixels, rgba, PIXELS);
     for (i = 0; i < PIXELS; i++) {
-        if (pixels[i] == NITRO_WIDE_ART_GAME) {
-            rgba[i * 4 + 0] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = 0;
+        if (NitroPort_WideArtIsGame(pixels[i])) {
+            rgba[i * 4 + 0] = (uint8_t)(256 + NitroPort_WideArtGameDx(pixels[i]));
+            rgba[i * 4 + 1] = (uint8_t)(128 + NitroPort_WideArtGameDy(pixels[i]));
+            rgba[i * 4 + 2] = (uint8_t)((256 + NitroPort_WideArtGameDx(pixels[i])) >> 8);
             rgba[i * 4 + 3] = 64;
             game++;
+            if (pixels[i] != NITRO_WIDE_ART_GAME) {
+                moved++;
+            }
         } else if (pixels[i] & 0x8000) {
             yours++;
         }
@@ -980,8 +999,8 @@ int NitroPort_WideArtShareWrite(const char *name, const uint16_t *pixels)
     }
     left = sUnshared;
     unlock();
-    NitroPort_Log("[wide art] shared %s: %d of its pixels the game's own (left out), %d yours; %d still to share", name,
-                  game, yours, left);
+    NitroPort_Log("[wide art] shared %s: %d of its pixels the game's own (left out; %d of them moved), %d yours; %d still to share",
+                  name, game, moved, yours, left);
     return 0;
 }
 

@@ -2165,12 +2165,10 @@ void NitroPort_OnFrame(void)
             NitroPort_Log("[wide art] %d pictures taken in again", NitroPort_WideArtLoad(WIDE_ART_DIR));
         }
     }
-    /* The art folder's pictures shared without the game's art (into its
-     * share/, for the repository's wideart/: docs/WIDE_ART.md), as their
-     * screens show; a few times a second, while some aren't yet. */
-    if (sRemaster && sCompose.wide && (sFrame % 15u) == 0 && NitroPort_WideArtUnshared() > 0) {
-        NitroPort_Render2DShareArt(NitroPort_EngineAOnTop() ? 0 : 1);
-    }
+    /* (The art folder's pictures aren't shared here, without the game's
+     * art for the repository's wideart/: the PC runner does that, from the
+     * pictures or captures, docs/WIDE_ART.md. Looking for their screens a
+     * few times a second, and the sharing itself, cost frames, 2026-10-20.) */
     /* The remaster's look (sun shadows and the colour grade, remaster.txt's
      * shadows and grade) on or off: L + R + B. */
     if (sRemaster && (held & (KEY_L | KEY_R)) == (KEY_L | KEY_R) && (down & KEY_B)) {
