@@ -2291,7 +2291,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     /* (PICA_DRAW_AFTER: the opaque polygons' depth and IDs alone, the
      * colour already there, scaled down from the 2x2 framebuffer) */
     depthOnly=part==PICA_DRAW_AFTER;
-    if(!depthOnly)sFrame++;   /* (once a frame) */
+    if(!depthOnly && !view->again)sFrame++;   /* (once a frame) */
     NitroPort_Gx3dMapTextureBanks(&sBanks);
     if(!sXbrzWorked){
         sXbrzWorked=1;   /* (once a scene: its first draw) */

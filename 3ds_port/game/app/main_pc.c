@@ -386,7 +386,8 @@ static int RemasterShot(const char *path)
                 if (split.has3d) {
                     /* where the 3D's x is: the DS's 256 at origin, or (wide)
                      * the whole canvas */
-                    int scroll = split.scroll3d >= 256 ? split.scroll3d - 512 : split.scroll3d;
+                    int scroll3d = split.scroll3dLines ? split.scroll3dLine[y] : split.scroll3d;
+                    int scroll = scroll3d >= 256 ? scroll3d - 512 : scroll3d;
                     int ix = NitroPort_WideScreenExtra() && screen == 0 && width > 256
                                  ? (x + scroll) * 256 / width
                                  : x - split.origin + scroll;
@@ -1023,6 +1024,9 @@ void NitroPort_OnFrame(void)
     NitroPort_SoundPumpReplies(); /* deliver ARM7 alarms on ARM9's thread */
     pace_game_for_wav();
     sFrame++;
+    /* (the frame's lines, for an H-blank effect: what the screenshots and
+     * the screens drawn below show) */
+    NitroPort_HBlankLines();
     /* (--wide DIR) its pictures shared without the game's art, as their
      * screens show (docs/WIDE_ART.md, "Sharing your pictures") */
     if (NitroPort_WideScreenExtra() && sFrame % 15 == 0 && NitroPort_WideArtUnshared() > 0) {

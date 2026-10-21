@@ -63,6 +63,8 @@
 void NitroPort_Render2D(int engine, uint16_t *out);
 int NitroPort_Render2DIfChanged(int engine, uint16_t *out);
 int NitroPort_EngineAOnTop(void);
+/* (nitro_port.h) The frame's lines, for an H-blank effect. */
+void NitroPort_HBlankLines(void);
 
 /* Audio uses the port's plain-C mixer; it deliberately does not include
  * NitroSDK headers alongside libctru. */
@@ -1477,6 +1479,10 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         }
         layers->has3d = split.has3d && layers->over != NULL;
         layers->scroll3d = split.scroll3d;
+        layers->scroll3dLines = split.scroll3dLines;
+        if (split.scroll3dLines) {
+            memcpy(layers->scroll3dLine, split.scroll3dLine, sizeof(layers->scroll3dLine));
+        }
         layers->tint3d = split.tint3d;
         layers->eva = split.eva;
         layers->evb = split.evb;
@@ -1803,6 +1809,9 @@ static void DrawFrame(bool new3dOnly)
     if (!any) {
         return;
     }
+    /* (the frame's lines, for an H-blank effect: the battles' start, a
+     * wavy screen; nothing without one) */
+    NitroPort_HBlankLines();
     sAOnTop = NitroPort_EngineAOnTop() != 0;
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];

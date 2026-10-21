@@ -144,6 +144,10 @@ typedef struct PicaView {
     float stereo;            /* the eye's shift, in screen widths (0: none) */
     float convergence;       /* the distance (w) at which there's no shift */
     int part;                /* PICA_DRAW_*: what of the scene to draw */
+    /* the same frame's scene again (another part of the screen, its own
+     * place: an H-blank effect's lines): its textures as they were checked
+     * for the first */
+    int again;
 } PicaView;
 /* What NitroPort_PicaDrawScene draws: all of it; or, for the smooth 3D
  * with the outlines (port_compose_pica.c), first the opaque polygons alone
@@ -221,6 +225,11 @@ typedef struct ComposeLayers {
      * nitro_port.h, which can't be included next to 3ds.h): the fields the
      * compositor needs, copied by the caller. */
     int has3d, scroll3d, tint3d, eva, evb, evy, masterBright, backdrop;
+    /* (an H-blank effect) scroll3d on each of the 192 lines, when it
+     * differs from line to line (the battles' start slides the 3D's lines
+     * apart; a wavy screen) */
+    int scroll3dLines;
+    short scroll3dLine[192];
     int displayOff;          /* nothing drawn (the engine is off) */
     uint32_t stamp;          /* the V-blank count when the game's display state was read */
 } ComposeLayers;

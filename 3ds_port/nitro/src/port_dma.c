@@ -12,9 +12,12 @@
  *   go; the 3D command translator will take them from there.
  * - V-blank DMAs run at the next V-blank (NitroPort_DmaVBlank, called by
  *   NitroPort_Halt), and at every V-blank after that if they repeat.
- * - H-blank, display-start, main-memory-display, DS card and GBA cartridge
- *   timings need the renderer or the card. They're reported as not
- *   implemented and stay pending, as if the trigger never came.
+ * - H-blank DMAs (a register written line by line: a wavy screen) run at
+ *   each H-blank of the lines the port goes through when it draws a frame
+ *   (NitroPort_DmaHBlank, NitroPort_HBlankLines).
+ * - Display-start, main-memory-display, DS card and GBA cartridge timings
+ *   need the renderer or the card. They're reported as not implemented and
+ *   stay pending, as if the trigger never came.
  *
  * If the control register asks for an interrupt, the channel's interrupt
  * is raised at the end; that's how the SDK runs DMA completion callbacks.
@@ -143,8 +146,7 @@ void NitroPort_DmaStart(u32 dmaNo)
     case MI_DMA_TIMING_V_BLANK:
         break; /* NitroPort_DmaVBlank runs it */
     case MI_DMA_TIMING_H_BLANK:
-        NitroPort_Unimplemented("DMA timing: H-blank");
-        break;
+        break; /* NitroPort_DmaHBlank runs it, a line at a time */
     case MI_DMA_TIMING_DISP:
         NitroPort_Unimplemented("DMA timing: display start");
         break;
@@ -157,6 +159,34 @@ void NitroPort_DmaStart(u32 dmaNo)
     default:
         NitroPort_Unimplemented("DMA timing: GBA cartridge");
         break;
+    }
+}
+
+int NitroPort_DmaHBlankArmed(void)
+{
+    u32 dmaNo;
+
+    for (dmaNo = 0; dmaNo < PORT_DMA_CHANNELS; dmaNo++) {
+        u32 cnt = ChannelRegs(dmaNo)[2];
+
+        if ((cnt & MI_DMA_ENABLE) && (cnt & MI_DMA_TIMING_MASK) == MI_DMA_TIMING_H_BLANK) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void NitroPort_DmaHBlank(void)
+{
+    u32 dmaNo;
+
+    for (dmaNo = 0; dmaNo < PORT_DMA_CHANNELS; dmaNo++) {
+        u32 cnt = ChannelRegs(dmaNo)[2];
+
+        if ((cnt & MI_DMA_ENABLE) && (cnt & MI_DMA_TIMING_MASK) == MI_DMA_TIMING_H_BLANK) {
+            Transfer(dmaNo, cnt);
+            Finish(dmaNo, cnt, (cnt & MI_DMA_CONTINUOUS_ON) != 0);
+        }
     }
 }
 

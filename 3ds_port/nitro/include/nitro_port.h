@@ -132,6 +132,35 @@ void NitroPort_DmaStart(u32 dmaNo);
  * it as V-blank starts; a replacement Halt must call it too. */
 void NitroPort_DmaVBlank(void);
 
+/* An H-blank: the H-blank transfers' next unit each (NitroPort_HBlankLines
+ * goes through a frame's lines); whether any is armed. */
+void NitroPort_DmaHBlank(void);
+int NitroPort_DmaHBlankArmed(void);
+
+/* ------------------------------------------------- H-blank (line by line) */
+
+/* What the DS's display registers are on each line of a frame, where the
+ * game changes them line by line (an H-blank interrupt handler or DMA:
+ * the battles' start, a wavy screen): each engine's first 0x70 bytes
+ * (DISPCNT, the BGs, the windows, the colour effects; engine B's at
+ * 0x1000), for each of the 192 lines. active: the lines differ this frame
+ * (else the frame's own registers are each line's). */
+#define NITRO_LINE_REGS 0x70
+typedef struct NitroLineRegs {
+    int active;
+    u32 serial;   /* counts the frames gone through (that the renderer's signature has) */
+    u8 regs[2][NITRO_PORT_SCREEN_H][NITRO_LINE_REGS];
+} NitroLineRegs;
+extern NitroLineRegs NitroPort_LineRegs;
+
+/* Go through the frame about to be shown a line at a time, as the DS draws
+ * it: before each line, the H-blank of the line before (its H-blank DMAs,
+ * then its interrupt, with the V-count that line's), each line's registers
+ * kept in NitroPort_LineRegs. The game's thread, after its V-blank work,
+ * before the display state is taken for drawing. Does nothing (active 0)
+ * without an H-blank interrupt or DMA. (src/port_os.c) */
+void NitroPort_HBlankLines(void);
+
 /* ---------------------------------------------------------------- threads */
 
 /* OS_SaveContext / OS_LoadContext: every SDK thread is played by a thread

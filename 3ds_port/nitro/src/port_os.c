@@ -17,6 +17,9 @@
 #include <nitro_port.h>
 #include <nitro_port_gx3d.h>
 #include <stdlib.h>
+#include <string.h>
+
+extern unsigned char NitroPort_IoReg[];
 
 /* ---------------------------------------------------------------- the CPU */
 
@@ -56,6 +59,61 @@ void NitroPort_RaiseIrq(u32 mask)
         OSi_PortCpsr = (saved & ~HW_PSR_CPU_MODE_MASK) | HW_PSR_IRQ_MODE | HW_PSR_IRQ_DISABLE;
         OS_IrqHandler();
         OSi_PortCpsr = saved;
+    }
+}
+
+/* --------------------------------------------------- H-blank, line by line */
+
+NitroLineRegs NitroPort_LineRegs;
+
+static void KeepLine(int y)
+{
+    memcpy(NitroPort_LineRegs.regs[0][y], NitroPort_IoReg, NITRO_LINE_REGS);
+    memcpy(NitroPort_LineRegs.regs[1][y], NitroPort_IoReg + 0x1000, NITRO_LINE_REGS);
+}
+
+/* One H-blank, of line `line` (the V-count the game reads meanwhile): its
+ * DMAs (only on the 192 lines drawn, as on the DS), then its interrupt. */
+static void HBlank(int line, BOOL irq, BOOL dma)
+{
+    reg_GX_VCOUNT = (u16)line;
+    if (dma && line < NITRO_PORT_SCREEN_H) {
+        NitroPort_DmaHBlank();
+    }
+    if (irq) {
+        NitroPort_RaiseIrq(OS_IE_H_BLANK);
+    }
+}
+
+void NitroPort_HBlankLines(void)
+{
+    /* The H-blank interrupt is taken if the display asks for it (DISPSTAT),
+     * it's enabled (IE, IME) and the CPU takes interrupts now. */
+    BOOL irq = (reg_GX_DISPSTAT & REG_GX_DISPSTAT_HBI_MASK) && (reg_OS_IE & OS_IE_H_BLANK) && reg_OS_IME &&
+               !(OSi_PortCpsr & HW_PSR_IRQ_DISABLE);
+    BOOL dma = NitroPort_DmaHBlankArmed();
+    u16 vcount = reg_GX_VCOUNT;
+    int y;
+
+    NitroPort_LineRegs.serial++;
+    if (!irq && !dma) {
+        NitroPort_LineRegs.active = 0;
+        return;
+    }
+    /* Line 0 has what the last H-blank before it left (the frame's last
+     * line's, in the V-blank: its interrupt only), then each line what
+     * the H-blank of the line before did. */
+    HBlank(262, irq, FALSE);
+    for (y = 0; y < NITRO_PORT_SCREEN_H; y++) {
+        KeepLine(y);
+        HBlank(y, irq, dma);   /* (the last one's: for the DMAs' source, as on the DS) */
+    }
+    reg_OS_IF &= ~OS_IE_H_BLANK;   /* (not left pending for later) */
+    reg_GX_VCOUNT = vcount;
+    NitroPort_LineRegs.active = 0;
+    for (y = 1; y < NITRO_PORT_SCREEN_H && !NitroPort_LineRegs.active; y++) {
+        NitroPort_LineRegs.active = memcmp(NitroPort_LineRegs.regs[0][y], NitroPort_LineRegs.regs[0][0], NITRO_LINE_REGS) != 0 ||
+                                    memcmp(NitroPort_LineRegs.regs[1][y], NitroPort_LineRegs.regs[1][0], NITRO_LINE_REGS) != 0;
     }
 }
 
