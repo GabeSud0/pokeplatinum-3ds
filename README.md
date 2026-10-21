@@ -16,9 +16,10 @@ On a New 3DS:
   full 400-pixel width (menus, text boxes and battles included). Nothing is
   ever stretched or mirrored to fill the extra space.
 - **Sharper 3D.** The overworld and battles are drawn by the 3DS's GPU at the
-  screen's own resolution, with the game's outlines and fog, and a wider view
-  of the world at the sides.
-- **Stereoscopic 3D** from the 3D slider, with smooth (anti-aliased) edges.
+  screen's own resolution with smooth (anti-aliased) edges, the game's fog,
+  and a wider view of the world at the sides. (The DS's outlines round the
+  3D are off by default; `edges on` in `remaster.txt` draws them.)
+- **Stereoscopic 3D** from the 3D slider.
 - **60 frames a second in the field.** The game runs its field at 30; the port
   draws a frame in between each pair, and drops back to 30 where the GPU can't
   keep up (new, still being tuned).

@@ -12,9 +12,11 @@ What it does:
   lower screen's 256x192 fills its 320x240 exactly; the upper screen is
   320 DS pixels wide (400x240), laid out for the wider screen (below).
 - **Sharper 3D.** The 3D is drawn by the GPU straight into the screen at
-  the screen's own resolution, not at the DS's 256x192 and then enlarged.
-  The outlines the game draws round its 3D (the DS's edge marking) and its
-  fog are drawn by the GPU too.
+  the screen's own resolution, not at the DS's 256x192 and then enlarged
+  (at twice it and scaled down, in fact: no jagged edges). Its fog is
+  drawn by the GPU too, and the outlines the game draws round its 3D (the
+  DS's edge marking) can be (`edges on`): off by default since 2026-10-20,
+  on the bigger screen they get in the picture's way.
 - **The wider screen.** On the upper screen the 3D fills all 400 pixels:
   the geometry engine widens the game's camera by a quarter (what was on
   screen stays where it was; the sides show more of the world), and the
@@ -130,8 +132,12 @@ backdrop) is painted by the frame's clear instead of a quad the size of
 the screen (1.3-2 ms of the GPU's an eye); the `[perf] display:` line
 says how often.
 
-Edge marking on the GPU (the DS outlines a pixel of an opaque polygon when
-a neighbouring pixel belongs to another polygon and is further away): for
+Edge marking on the GPU (`edges on`; off by default since 2026-10-20, with
+the slider up and down: on the bigger screen the outlines get in the
+picture's way, and with the slider down they took 8-9 ms of a frame's GPU
+time, so it was mostly at 30 frames a second; the smooth 3D below has that
+time now). The DS outlines a pixel of an opaque polygon when
+a neighbouring pixel belongs to another polygon and is further away: for
 each of the four directions the opaque polygons are drawn again, moved a
 pixel, into a depth/stencil buffer of that direction's own (cleared by a
 memory fill ahead of the frame; so it holds what's visible at each pixel's
@@ -198,9 +204,9 @@ New 3DS (2026-10-19) the two drawn passes took half the four's time, and
 the copies 1.4 ms an eye through a linear buffer in the linear heap: it's
 in VRAM now (the linear heap if there's no room).
 
-With the 3D slider up there were no outlines for a while (PR #128;
-`edges3d off` still leaves them out; on by default again since PR #130,
-drawn for each eye after the smooth 3D, as with the slider down, below).
+With the 3D slider up there were no outlines for a while (PR #128; on
+by default again from PR #130 to #135, drawn for each eye after the
+smooth 3D, as with the slider down, below; `edges3d on` now).
 Drawn for each eye they took 8-13 ms an eye of a 25-43 ms stereo frame
 (2026-10-19), for about 3% of the picture (buildings' silhouettes, signs,
 a line round the DS's screen), and in 3D the depth sets shapes apart
@@ -243,8 +249,8 @@ the opaque polygons took 3.3-5.5 ms an eye drawn 2x2 (1.1-2.1 at the
 screen's resolution), a stereo frame 9-14 ms of GPU in Jubilife and on
 Route 202: less than the outlines had taken.
 
-With outlines (the slider down; up too since PR #130, each eye in turn,
-the 2x2 framebuffer cleared between them) the frame is split. The picture
+With outlines (`edges on`: the slider down; `edges3d on` too, each eye
+in turn, the 2x2 framebuffer cleared between them) the frame is split. The picture
 behind and the opaque polygons are drawn 2x2 as above, then scaled down
 into the screen's own framebuffer (the eye's) (through a linear copy in the smooth
 depth's memory, which is done with by then: two transfers); there the
@@ -579,12 +585,12 @@ only one newer scene waits.
 | `filter scale2x` | Scale2x, then bilinear: diagonals rounded off |
 | `stereo off` / `stereo 0.03` | no depth from the slider / its strength at full slider, in screen widths (default 0.02) |
 | `convergence 400` | the distance (the DS's w) that's at the screen's depth, instead of each scene's middle |
-| `edges off` | no outlines (edge marking) |
-| `edges drawn` | the outlines' left and right moved passes drawn, as before they were copied (for comparing: the same picture, slower) |
-| `edges pruned` | each outline pass draws only the polygons it needs (worked out on the CPU each scene; the same picture). Slower on a 3DS (see below): off by default |
-| `edges3d on` | the outlines with the 3D slider up too, while they fit in a frame (default off since 60 frames a second: drawn for each eye they cost 7-16 ms of the GPU's an eye; see How it works) |
+| `edges on` | the outlines (the DS's edge marking round the 3D) with the slider down (default off, 2026-10-20: on the bigger screen they get in the picture's way, and they took 8-9 ms of a slider-down frame) |
+| `edges drawn` | the same, their left and right moved passes drawn, as before they were copied (for comparing: the same picture, slower) |
+| `edges pruned` | the same, each outline pass drawing only the polygons it needs (worked out on the CPU each scene; the same picture). Slower on a 3DS (see below) |
+| `edges3d on` | (with `edges on`) the outlines with the 3D slider up too, while they fit in a frame (default off: drawn for each eye they cost 7-16 ms of the GPU's an eye; see How it works) |
 | `fps60 off` | the field at the game's 30 frames a second (default on: an in-between scene shown between each two, while frames fit; see 60 frames a second) |
-| `smooth3d off` / `smooth3d stereo` | the upper screen drawn at its own resolution / so only with the 3D slider down (default on: twice it and scaled down, no jagged edges, the outlines kept with the slider down; see How it works) |
+| `smooth3d off` / `smooth3d stereo` | the upper screen drawn at its own resolution / so only with the 3D slider down (default on: twice it and scaled down, no jagged edges, slider up or down; see How it works) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
 | `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off. **Parked on the 3DS** (they hang its GPU; see below): off there until fixed |
 | `shadowdebug on` | debug only (for the sun shadows' hunt, with them on again): wait for GPU completion before/after the sun map, after the opaque scene, and after direct shadow receiving. Slower; the watchdog can identify the outstanding pass. Default off |

@@ -324,8 +324,9 @@ static volatile bool sSuspended;
 /* remaster.txt: a setting a line, "name value": remaster on/off, wide
  * on/off, filter sharp/nearest/smooth/scale2x (on: sharp, off: nearest),
  * stereo on/off/<strength, e.g. 0.02>, convergence <distance> (0: from
- * each scene), edges on/off/pruned/drawn (pruned: each outline pass only
- * the polygons it needs, worked out on the CPU: slower on a 3DS, October
+ * each scene), edges on/off/pruned/drawn (off by default; on: the
+ * outlines with the slider down; pruned: each outline pass only the
+ * polygons it needs, worked out on the CPU: slower on a 3DS, October
  * 2026; drawn: the left and right moved passes drawn, not copied),
  * edges3d on/off (the outlines with the 3D slider up too, while they
  * fit; off by default), fps60 on/off (60 frames a second in the field, in-
@@ -346,15 +347,18 @@ static void ReadRemasterConfig(bool new3ds)
     sCompose.stereo = 1;
     sCompose.stereoStrength = 0.02f;
     sCompose.convergence = 0.0f;
-    sCompose.edges = 1;
-    /* No outlines with the slider up (2026-10-20: for 60 frames a second;
-     * drawn for each eye they cost 7-16 ms an eye. `edges3d on`: drawn
-     * while they fit, port_compose_pica.c auto_outlines). */
+    /* No outlines (the DS's edge marking round the 3D), slider up or down
+     * (2026-10-20): on the bigger screen they get in the picture's way,
+     * and with the slider down they took 8-9 ms of a frame's GPU time, the
+     * frame mostly at 30 a second for it. `edges on` draws them again with
+     * the slider down (`edges3d on` with it up too, while they fit:
+     * port_compose_pica.c auto_outlines; for each eye they cost 7-16 ms an
+     * eye). */
+    sCompose.edges = 0;
     sCompose.edges3d = 0;
     sFps60 = true;
-    /* The upper screen drawn 2x2 and scaled down: no jagged edges. With
-     * the slider up in the time the outlines took; with it down the
-     * outlines stay, drawn after it's scaled down. */
+    /* The upper screen drawn 2x2 and scaled down, slider up or down: no
+     * jagged edges, in the time the outlines took. */
     sCompose.smooth3d = 2;
     sCompose.flipV = 0;
     /* The 3D's textures as the DS's, nearest: made like the 2D (each texel
