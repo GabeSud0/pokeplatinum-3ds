@@ -1299,6 +1299,168 @@ static void test_wide_art(void)
     }
 }
 
+/* Built-in pictures (NitroPort_WideArtBuiltIn): none, but in the test
+ * below. */
+static const NitroWideArtFile *sTestBuiltIn;
+static int sTestBuiltInCount;
+
+const NitroWideArtFile *NitroPort_WideArtBuiltIn(int *count)
+{
+    *count = sTestBuiltInCount;
+    return sTestBuiltIn;
+}
+
+/* Wide art without the game's art: a picture shared as its screen shows
+ * (NitroPort_Render2DShareArt) has the BG's own pixels where it had them
+ * (NITRO_WIDE_ART_GAME), its own elsewhere; drawn, the BG's own pixels go
+ * back there (from the map where the picture was made, also when the BG
+ * has scrolled since); built into the program it's the same, and a file of
+ * that name in the folder takes its place. */
+static void test_wide_art_shared(void)
+{
+    static u16 wide[320 * 192], over[320 * 192], art[320 * 192], layerPx[320 * 192], mapPx[320 * 192];
+    static u8 overAlpha[320 * 192];
+    static u8 tiles[96];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED, BLUE };
+    char dir[] = "/tmp/wideshareXXXXXX", share[600], name[64], path[700];
+    NitroRender2DSplit split;
+    const u16 *got;
+    uint64_t key;
+    int hofs, vofs, prio, full, i, x, y, game = 0, mine = 0, wrong = 0;
+
+    /* BG1: red (tile 1) on the map's left half, nothing on its right */
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = (i % 32) < 16 ? 1 : 0;
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    NitroPort_SetWideScreen(32);
+    memset(&split, 0, sizeof(split));
+    split.width = 320;
+    split.origin = 32;
+    memset(split.clip, 1, sizeof(split.clip));
+    CHECK(NitroPort_Render2DLayer(0, 1, &split, layerPx, &key, &hofs, &vofs, &prio));
+    /* (and its map going on past the DS's edges: what the game's own
+     * pixel is in the bands) */
+    split.clip[1] = 0;
+    CHECK(NitroPort_Render2DLayer(0, 1, &split, mapPx, &key, &hofs, &vofs, &prio));
+    split.clip[1] = 1;
+
+    /* a whole picture made at scroll 0: the BG's own in the middle (its
+     * tiles' red, a blue pixel at each one's top left; one red pixel
+     * painted green), blue bands; transparent where the BG isn't (the
+     * map's right half). The game's own pixels in it: the middle's, and
+     * a band pixel where the map, going round, has that blue too. */
+    for (y = 0; y < 192; y++) {
+        for (x = 0; x < 320; x++) {
+            u16 c = (x < 32 || x >= 288) ? (BLUE | 0x8000) : layerPx[y * 320 + x];
+
+            art[y * 320 + x] = c;
+            game += (c & 0x8000) && mapPx[y * 320 + x] == c;
+        }
+    }
+    game--;
+    art[20 * 320 + 50] = (RGB(0, 31, 0) | 0x8000);
+    {
+        int expected = game;
+
+        game = 0;
+    CHECK(mkdtemp(dir) != NULL);
+    WriteArtKind(dir, key, 0, 0, NITRO_WIDE_ART_FULL, art);
+    snprintf(name, sizeof(name), "%016llx_0_0_full.png", (unsigned long long)key);
+    CHECK(NitroPort_WideArtLoad(dir) == 1);
+    CHECK(NitroPort_WideArtUnshared() == 1);
+    /* shared as the screen shows */
+    CHECK(NitroPort_Render2DShareArt(0) == 1);
+    CHECK(NitroPort_WideArtUnshared() == 0);
+    CHECK(NitroPort_Render2DShareArt(0) == 0);   /* (once) */
+    snprintf(share, sizeof(share), "%s/share", dir);
+    snprintf(path, sizeof(path), "%s/%s", share, name);
+    CHECK(access(path, F_OK) == 0);
+    /* what it holds: the map's red left out, the rest kept */
+    CHECK(NitroPort_WideArtLoad(share) == 1);
+    got = NitroPort_WideArtFind(key, &hofs, &vofs, &full);
+    CHECK(got != NULL);
+    for (i = 0; got != NULL && i < 320 * 192; i++) {
+        if (got[i] == NITRO_WIDE_ART_GAME) {
+            game++;
+            wrong += !(art[i] & 0x8000);
+        } else {
+            mine += (got[i] & 0x8000) != 0;
+            wrong += got[i] != art[i];
+        }
+    }
+    CHECK(wrong == 0);
+    CHECK(game == expected && game > 100 * 192);
+    CHECK(game + mine == 128 * 192 + 64 * 192);   /* (every opaque pixel one or the other) */
+    }
+    /* drawn from the shared picture: the same as from the whole one */
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 40] == RED);          /* the game's own, back */
+    CHECK(wide[20 * 320 + 50] == RGB(0, 31, 0));   /* the green kept */
+    CHECK(wide[5 * 320 + 3] == BLUE);
+    CHECK(wide[5 * 320 + 200] == GREY);        /* (transparent: the backdrop) */
+    /* scrolled 8 right since: the picture moves 8 left with it, the red
+     * from the map where it was made */
+    G2_SetBG1Offset(8, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[5 * 320 + 32] == RED);          /* (the picture's x 40) */
+    CHECK(wide[20 * 320 + 42] == RGB(0, 31, 0));
+    CHECK(wide[5 * 320 + 151] == RED);         /* (its 159, the last red) */
+    CHECK(wide[5 * 320 + 152] == GREY);
+    G2_SetBG1Offset(0, 0);
+    /* built in: the same */
+    {
+        static unsigned char bytes[400000];
+        static NitroWideArtFile file;
+        FILE *f = fopen(path, "rb");
+        size_t n = f != NULL ? fread(bytes, 1, sizeof(bytes), f) : 0;
+
+        if (f != NULL) {
+            fclose(f);
+        }
+        CHECK(n > 0 && n < sizeof(bytes));
+        file.name = name;
+        file.data = bytes;
+        file.size = (unsigned)n;
+        sTestBuiltIn = &file;
+        sTestBuiltInCount = 1;
+        CHECK(NitroPort_WideArtLoad("/nonexistent") == 1);
+        CHECK(NitroPort_WideArtUnshared() == 0);   /* (built in: nothing to share) */
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[5 * 320 + 40] == RED);
+        CHECK(wide[20 * 320 + 50] == RGB(0, 31, 0));
+        CHECK(wide[5 * 320 + 3] == BLUE);
+        /* the folder's of the same name in its place (and to share) */
+        art[20 * 320 + 50] = BLUE | 0x8000;
+        WriteArtKind(dir, key, 0, 0, NITRO_WIDE_ART_FULL, art);
+        CHECK(NitroPort_WideArtLoad(dir) == 1);
+        CHECK(NitroPort_WideArtUnshared() == 1);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[20 * 320 + 50] == BLUE);
+        sTestBuiltIn = NULL;
+        sTestBuiltInCount = 0;
+    }
+    NitroPort_SetWideScreen(0);
+    NitroPort_WideArtLoad("/nonexistent");
+    CHECK(NitroPort_WideArtCount() == 0);
+    {
+        char cmd[600];
+
+        snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+        CHECK(system(cmd) == 0);
+    }
+}
+
 /* Wide art for a group of OBJs (a sprite background): its key doesn't
  * change with where the OBJs are or where their tiles are, the picture
  * goes into the OBJ layer where no OBJ is, at the group's priority, and
@@ -2757,6 +2919,7 @@ int main(int argc, char **argv)
     test_split_layers();
     test_wide_canvas();
     test_wide_art();
+    test_wide_art_shared();
     test_wide_art_objs();
     test_wide_art_places();
     test_wide_art_sliding();

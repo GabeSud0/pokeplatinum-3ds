@@ -141,6 +141,7 @@ typedef struct Engine {
      * bands beside the DS's only). */
     const u16 *art[4];
     short artDx[4], artDy[4];
+    short artH[4], artV[4];  /* (a text BG's) the scroll its picture was made at */
     u8 artFull[4];
     u8 artBands[4];        /* its bands drawn (else nothing there: the layer is elsewhere) */
     /* A whole picture of a layer that has moved away from where it was made
@@ -444,6 +445,52 @@ static u16 TextBgPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int mapx
 
         return BgPal4(e, bg)[((entry >> 12) << 4) | ((px & 1) ? (pair >> 4) : (pair & 15))];
     }
+}
+
+/* A pixel of a run of a BG's line as the run draws it (not a hand-drawn
+ * picture's): the map's, its colour, or nothing. */
+static u16 SegmentPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, const Segment *s, int x, int ty, int mapW)
+{
+    if (s->fixed >= 0) {
+        return TextBgPixel(e, bg, bgcnt, dispcnt, s->fixed, ty);
+    }
+    if (s->fixed == -1) {
+        return TextBgPixel(e, bg, bgcnt, dispcnt, (x + s->off) & (mapW - 1), ty);
+    }
+    return s->fixed == SEG_COLOR ? s->color : 0;
+}
+
+static int PartSegments(const Engine *e, int bg, int ty, int hofs, int mapW, Segment *segs);
+
+/* A text BG's hand-drawn picture's pixel (ax, ay: on the canvas at x, the
+ * map's row ty): its own, or for NITRO_WIDE_ART_GAME (a picture that
+ * leaves the game's art out: nitro_port_wideart.h) the BG's own pixel
+ * where the picture had it. A BG laid out in parts (its picture is used
+ * where it was made): as its parts draw it here (parts: this line's,
+ * worked out the first time one's needed: *nparts < 0 till then); else
+ * its map where the picture was made (at the scroll artH, artV): the same
+ * art (its key), wherever the BG has scrolled or slid since. */
+static u16 ArtTextPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int ax, int ay, int x, int ty, int hofs,
+                        int mapW, int mapH, Segment *parts, int *nparts)
+{
+    u16 c = e->art[bg][ay * NITRO_WIDE_ART_W + ax];
+    int k;
+
+    if (c != NITRO_WIDE_ART_GAME) {
+        return c;
+    }
+    if ((e->partBgs >> bg) & 1) {
+        if (*nparts < 0) {
+            *nparts = PartSegments(e, bg, ty, hofs, mapW, parts);
+        }
+        for (k = 0; k < *nparts; k++) {
+            if (x >= parts[k].x0 && x < parts[k].x1) {
+                return SegmentPixel(e, bg, bgcnt, dispcnt, &parts[k], x, ty, mapW);
+            }
+        }
+        return 0;
+    }
+    return TextBgPixel(e, bg, bgcnt, dispcnt, ax - e->origin + e->artH[bg], (ay + e->artV[bg]) & (mapH - 1));
 }
 
 /* Whether a text BG's map has its tile at map x mapx (row ty) flipped
@@ -1308,8 +1355,8 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
     /* The map row this line is in: its address for the left and the right
      * 256-pixel half of the map. */
     u32 rowAddr = screenBase + (u32)((ty >> 8) * (mapW >> 8)) * 0x800 + (u32)((ty & 255) >> 3) * 64;
-    Segment segs[MAX_SEGMENTS];
-    int nsegs, seg;
+    Segment segs[MAX_SEGMENTS], parts[MAX_SEGMENTS];
+    int nsegs, seg, nparts = -1;
     TARGET_LOCALS(t);
 
     if (e->width == W && e->origin == 0 && !e->anchorWindows) {
@@ -1346,10 +1393,15 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
         ArtRun run;
 
         ArtRunStart(&run, x + e->artDx[bg], NITRO_WIDE_ART_W, mapW);
+        (void)art;
         for (; x < xe; x++) {
             int ax = ArtRunNext(&run);
 
-            PUT(x, (ay >= 0 && ax >= 0) ? art[ay * NITRO_WIDE_ART_W + ax] : 0, flags);
+            PUT(x,
+                (ay >= 0 && ax >= 0)
+                    ? ArtTextPixel(e, bg, bgcnt, dispcnt, ax, ay, x, ty, hofs, mapW, mapH, parts, &nparts)
+                    : 0,
+                flags);
         }
         continue;
     }
@@ -1384,8 +1436,9 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
             if (ay < 0) {
                 ax = -1;
             }
+            (void)art;
             if (ax >= e->origin && ax < e->origin + W) {
-                PUT(x, art[ay * NITRO_WIDE_ART_W + ax], flags);
+                PUT(x, ArtTextPixel(e, bg, bgcnt, dispcnt, ax, ay, x, ty, hofs, mapW, mapH, parts, &nparts), flags);
             } else {
                 PUT(x, TextBgPixel(e, bg, bgcnt, dispcnt, (x + off) & (mapW - 1), ty), flags);
             }
@@ -1402,8 +1455,9 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
         for (; x < xe; x++) {
             int ax = x + e->artDx[bg];
 
+            (void)art;
             if (ay >= 0 && ax >= 0 && ax < NITRO_WIDE_ART_W) {
-                PUT(x, art[ay * NITRO_WIDE_ART_W + ax], flags);
+                PUT(x, ArtTextPixel(e, bg, bgcnt, dispcnt, ax, ay, x, ty, hofs, mapW, mapH, parts, &nparts), flags);
             } else if (e->artExact[bg]) {
                 PUT(x, TextBgPixel(e, bg, bgcnt, dispcnt, (x + off) & (mapW - 1), ty), flags);
             } else {
@@ -1564,11 +1618,59 @@ static void Merge(Target *t, const u16 *line, const u8 *prioOf, int prio, int x0
 
 /* Affine and extended BGs: the texture coordinate of each pixel comes from
  * the reference point and the 2x2 matrix (8 fractional bits). */
+/* An affine (or extended, or bitmap) BG's pixel at its map's (tx, ty), as
+ * its kind (mode: 0 affine, 1 extended tiles, 2 256-colour bitmap, 3
+ * direct colour) has it: colour | OPAQUE, or 0 (off its map, unwrapped). */
+static inline u16 AffineSample(const Engine *e, int mode, const u8 *ext, u32 charBase, u32 screenBase, int mapW,
+                               int mapH, BOOL wrap, s32 tx, s32 ty)
+{
+    const u8 *vram = e->bgVram;
+    u32 mask = e->bgMask;
+
+    if (wrap) {
+        tx &= mapW - 1;
+        ty &= mapH - 1;
+    } else if (tx < 0 || ty < 0 || tx >= mapW || ty >= mapH) {
+        return 0;
+    }
+    switch (mode) {
+    case 3: {
+        u16 c = Rd16(vram, (screenBase + ((u32)ty * (u32)mapW + (u32)tx) * 2) & mask);
+
+        return (c & 0x8000) ? c : 0;   /* colour | OPAQUE */
+    }
+    case 2:
+        return e->bgPal8[vram[(screenBase + (u32)ty * (u32)mapW + (u32)tx) & mask]];
+    case 0: {
+        u32 tile = vram[(screenBase + (u32)(ty >> 3) * (u32)(mapW >> 3) + (u32)(tx >> 3)) & mask];
+
+        return e->bgPal8[vram[(charBase + tile * 64 + (u32)(ty & 7) * 8 + (u32)(tx & 7)) & mask]];
+    }
+    default: {
+        u32 entry = Rd16(vram, (screenBase + ((u32)(ty >> 3) * (u32)(mapW >> 3) + (u32)(tx >> 3)) * 2) & mask);
+        int px = tx & 7;
+        int py = ty & 7;
+        u32 index;
+
+        if (entry & 0x400) {
+            px = 7 - px;
+        }
+        if (entry & 0x800) {
+            py = 7 - py;
+        }
+        index = vram[(charBase + (entry & 0x3FF) * 64 + (u32)py * 8 + (u32)px) & mask];
+        if (index == 0) {
+            return 0;
+        }
+        return (u16)((ext != NULL ? PlttColor(ext, ((entry >> 12) << 8) | index) : PlttColor(e->bgPltt, index)) |
+                     OPAQUE);
+    }
+    }
+}
+
 static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt, int y, u16 *out)
 {
     const u8 *io = e->io;
-    const u8 *vram = e->bgVram;
-    u32 mask = e->bgMask;
     u32 base = bg == 2 ? 0x20 : 0x30;
     s32 pa = (s16)Rd16(io, base + 0);
     s32 pb = (s16)Rd16(io, base + 2);
@@ -1619,7 +1721,6 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
     for (x = xs; x < xe; x++, fx += pa, fy += pc) {
         s32 tx = fx >> 8;
         s32 ty = fy >> 8;
-        u32 index;
 
         out[x] = 0;
         if (splitHere) {
@@ -1629,11 +1730,16 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
              * picture's, made at rest). */
             if (art != NULL && (e->artFull[bg] || tx < 0 || tx >= W)) {
                 s32 ax = tx + e->origin;
+                u16 c = 0;
 
                 if (ax >= 0 && ax < NITRO_WIDE_ART_W && ty >= 0 && ty < H) {
-                    out[x] = art[ty * NITRO_WIDE_ART_W + ax];
+                    c = art[ty * NITRO_WIDE_ART_W + ax];
                 }
-                continue;
+                if (c != NITRO_WIDE_ART_GAME) {
+                    out[x] = c;
+                    continue;
+                }
+                /* (the game's own there: as the split draws it) */
             }
             if (ty != splitTy) {
                 nruns = PartRuns(e, bg, ty, 0, runs);
@@ -1662,50 +1768,7 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
                 }
             }
         }
-        if (wrap) {
-            tx &= mapW - 1;
-            ty &= mapH - 1;
-        } else if (tx < 0 || ty < 0 || tx >= mapW || ty >= mapH) {
-            continue;
-        }
-
-        switch (mode) {
-        case 3: {
-            u16 c = Rd16(vram, (screenBase + ((u32)ty * (u32)mapW + (u32)tx) * 2) & mask);
-
-            if (c & 0x8000) {
-                out[x] = c;   /* colour | OPAQUE */
-            }
-            break;
-        }
-        case 2:
-            out[x] = e->bgPal8[vram[(screenBase + (u32)ty * (u32)mapW + (u32)tx) & mask]];
-            break;
-        case 0: {
-            u32 tile = vram[(screenBase + (u32)(ty >> 3) * (u32)(mapW >> 3) + (u32)(tx >> 3)) & mask];
-
-            out[x] = e->bgPal8[vram[(charBase + tile * 64 + (u32)(ty & 7) * 8 + (u32)(tx & 7)) & mask]];
-            break;
-        }
-        default: {
-            u32 entry = Rd16(vram, (screenBase + ((u32)(ty >> 3) * (u32)(mapW >> 3) + (u32)(tx >> 3)) * 2) & mask);
-            int px = tx & 7;
-            int py = ty & 7;
-
-            if (entry & 0x400) {
-                px = 7 - px;
-            }
-            if (entry & 0x800) {
-                py = 7 - py;
-            }
-            index = vram[(charBase + (entry & 0x3FF) * 64 + (u32)py * 8 + (u32)px) & mask];
-            if (index != 0) {
-                out[x] = (ext != NULL ? PlttColor(ext, ((entry >> 12) << 8) | index)
-                                      : PlttColor(e->bgPltt, index)) | OPAQUE;
-            }
-            break;
-        }
-        }
+        out[x] = AffineSample(e, mode, ext, charBase, screenBase, mapW, mapH, wrap, tx, ty);
     }
     /* (wider canvas) beside the DS's screen, the edge's colour when the
      * edge is plain on this line (PlainRun) */
@@ -1743,7 +1806,20 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
 
         for (i = 0; i < e->width && i < NITRO_WIDE_ART_W; i++) {
             if (e->artFull[bg] || i < e->origin || i >= e->origin + W) {
-                out[i] = line[i];
+                u16 c = line[i];
+
+                if (c == NITRO_WIDE_ART_GAME) {
+                    /* the game's own: the BG's pixel there (drawn above
+                     * over the DS's part; beside it, where the matrix
+                     * takes it past the DS's edge) */
+                    if (i >= xs && i < xe) {
+                        continue;
+                    }
+                    c = AffineSample(e, mode, ext, charBase, screenBase, mapW, mapH, wrap,
+                                     (refX + pb * y + pa * (i - e->origin)) >> 8,
+                                     (refY + pd * y + pc * (i - e->origin)) >> 8);
+                }
+                out[i] = c;
             }
         }
     }
@@ -1946,6 +2022,8 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
                     continue;
                 }
                 e->artDx[bg] = e->artDy[bg] = 0;
+                e->artH[bg] = (short)hofs;
+                e->artV[bg] = (short)vofs;
                 e->artBands[bg] = 1;
                 e->art[bg] = art;
                 e->artFull[bg] = (u8)(full & NITRO_WIDE_ART_FULL);
@@ -1955,6 +2033,8 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
             if (art == NULL) {
                 continue;
             }
+            e->artH[bg] = (short)hofs;
+            e->artV[bg] = (short)vofs;
             /* how far it has scrolled since, the shorter way round its map */
             dx = ((curH - hofs) % mapW + mapW) % mapW;
             dy = ((curV - vofs) % mapH + mapH) % mapH;
@@ -3686,6 +3766,219 @@ int NitroPort_Render2DObjLayer(int engine, int group, const NitroRender2DSplit *
         }
     }
     return any;   /* (a group all off the screen: nothing to draw) */
+}
+
+/* ------------------------------------------------- sharing wide art */
+
+/* A picture of a BG with the BG's own pixels left out: those the same as
+ * the BG's, where the picture was made, made NITRO_WIDE_ART_GAME (the
+ * renderer puts the BG's own back there: ArtTextPixel, AffineSample);
+ * a picture of the bands only has nothing in the DS's part (it isn't
+ * shown there). 0 if the BG isn't where the picture can be told from (a
+ * BG laid out in parts, or split, away from where its picture was made). */
+static BOOL StripBgArt(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt, int hofs, int vofs, int full,
+                       u16 *px)
+{
+    int x, y, curH = Rd16(e->io, 0x10 + bg * 4) & 0x1FF, curV = Rd16(e->io, 0x12 + bg * 4) & 0x1FF;
+    BOOL parts = (e->partBgs >> bg) & 1;
+
+    if (kind == BG_TEXT) {
+        int mapW = sTextSizes[bgcnt >> 14][0], mapH = sTextSizes[bgcnt >> 14][1];
+        Segment segs[MAX_SEGMENTS];
+
+        if (parts && (curH != hofs || curV != vofs)) {
+            return FALSE;
+        }
+        for (y = 0; y < H; y++) {
+            int ty = (y + vofs) & (mapH - 1), n = parts ? PartSegments(e, bg, ty, hofs, mapW, segs) : 0, k = 0;
+
+            for (x = 0; x < NITRO_WIDE_ART_W; x++) {
+                u16 *c = &px[y * NITRO_WIDE_ART_W + x], g = 0;
+
+                if (!(*c & OPAQUE)) {
+                    continue;
+                }
+                if (parts) {
+                    for (k = 0; k < n && !(x >= segs[k].x0 && x < segs[k].x1); k++) {
+                    }
+                    g = k < n ? SegmentPixel(e, bg, bgcnt, dispcnt, &segs[k], x, ty, mapW) : 0;
+                } else {
+                    g = TextBgPixel(e, bg, bgcnt, dispcnt, x - e->origin + hofs, ty);
+                }
+                if ((g & OPAQUE) && (g & 0x7FFF) == (*c & 0x7FFF)) {
+                    *c = NITRO_WIDE_ART_GAME;
+                }
+            }
+        }
+    } else {
+        const u8 *io = e->io;
+        u32 base = bg == 2 ? 0x20 : 0x30;
+        s32 pa = (s16)Rd16(io, base + 0), pb = (s16)Rd16(io, base + 2);
+        s32 pc = (s16)Rd16(io, base + 4), pd = (s16)Rd16(io, base + 6);
+        s32 refX = (s32)(Rd32(io, base + 8) << 4) >> 4, refY = (s32)(Rd32(io, base + 12) << 4) >> 4;
+        BOOL wrap = (bgcnt & 0x2000) != 0;
+        int size = bgcnt >> 14, mode, mapW, mapH;
+        u32 charBase = CharBase(e, bgcnt, dispcnt), screenBase = ScreenBase(e, bgcnt, dispcnt);
+        const u8 *ext = NULL;
+
+        if (parts) {
+            return FALSE;   /* (split: where its matrix takes it, its parts) */
+        }
+        if (kind == BG_AFFINE) {
+            mode = 0;
+            mapW = mapH = 128 << size;
+        } else if (!(bgcnt & 0x80)) {
+            mode = 1;
+            mapW = mapH = 128 << size;
+            if (dispcnt & 0x40000000) {
+                ext = BgExtSlot(e, bg, bgcnt);
+            }
+        } else {
+            static const int bmp[4][2] = { { 128, 128 }, { 256, 256 }, { 512, 256 }, { 512, 512 } };
+
+            mode = (bgcnt & 0x4) ? 3 : 2;
+            mapW = bmp[size][0];
+            mapH = bmp[size][1];
+            screenBase = ((bgcnt >> 8) & 0x1F) * 0x4000;
+        }
+        /* (the matrix as it is now: an affine BG's picture is used
+         * wherever it's scrolled) */
+        for (y = 0; y < H; y++) {
+            for (x = 0; x < NITRO_WIDE_ART_W; x++) {
+                u16 *c = &px[y * NITRO_WIDE_ART_W + x], g;
+
+                if (!(*c & OPAQUE)) {
+                    continue;
+                }
+                g = AffineSample(e, mode, ext, charBase, screenBase, mapW, mapH, wrap,
+                                 (refX + pb * y + pa * (x - e->origin)) >> 8, (refY + pd * y + pc * (x - e->origin)) >> 8);
+                if ((g & OPAQUE) && (g & 0x7FFF) == (*c & 0x7FFF)) {
+                    *c = NITRO_WIDE_ART_GAME;
+                }
+            }
+        }
+    }
+    if (!(full & NITRO_WIDE_ART_FULL)) {
+        for (y = 0; y < H; y++) {
+            memset(px + y * NITRO_WIDE_ART_W + e->origin, 0, W * sizeof(u16));
+        }
+    }
+    return TRUE;
+}
+
+int NitroPort_Render2DShareArt(int engine)
+{
+    static u16 px[NITRO_WIDE_ART_W * H], layer[NITRO_WIDE_ART_W * H];
+    NitroRender2DSplit split;
+    Engine e;
+    u32 dispcnt;
+    u16 bgcnt[4];
+    int kind[4], b, shared = 0;
+    char name[64];
+
+    if (NitroPort_WideArtUnshared() == 0) {
+        return 0;
+    }
+    memset(&split, 0, sizeof(split));
+    NitroPort_WideLayout(engine, &split);
+    if (split.width != NITRO_WIDE_ART_W || !SetUpLayer(&e, engine, &split, &dispcnt)) {
+        return 0;
+    }
+    for (b = 0; b < 4; b++) {
+        bgcnt[b] = Rd16(e.io, 8 + b * 2);
+        kind[b] = (dispcnt & (0x100u << b)) ? BgKind(&e, b, dispcnt) : BG_NONE;
+    }
+    for (b = 0; b < 4; b++) {
+        const u16 *pixels;
+        uint64_t key;
+        int hofs, vofs, full, i = 0;
+
+        if (kind[b] == BG_NONE || kind[b] == BG_3D || kind[b] == BG_LARGE) {
+            continue;
+        }
+        key = BgKey(&e, b, kind[b], bgcnt[b], dispcnt);
+        while (NitroPort_WideArtToShare(key, i, &pixels, &hofs, &vofs, &full, name, sizeof(name))) {
+            memcpy(px, pixels, sizeof(px));
+            if (StripBgArt(&e, b, kind[b], bgcnt[b], dispcnt, hofs, vofs, full, px) &&
+                NitroPort_WideArtShareWrite(name, px) == 0) {
+                shared++;
+            } else {
+                i++;   /* (not now: another time, where the BG can be told from) */
+            }
+        }
+    }
+    if (dispcnt & 0x1000) {
+        /* The OBJ groups': their sprites' own pixels left out (a group's
+         * picture only goes where none of its OBJs is anyway). */
+        NitroObjGroup groups[32];
+        int count = ObjGroups(&e, dispcnt, groups, 32), g;
+
+        for (g = 0; g < count; g++) {
+            const u16 *pixels;
+            int hofs, vofs, full, i = 0, x, y, drawn = -1;
+
+            while (NitroPort_WideArtToShare(groups[g].key, i, &pixels, &hofs, &vofs, &full, name, sizeof(name))) {
+                int dx = groups[g].x - hofs, dy = groups[g].y - vofs;
+
+                memcpy(px, pixels, sizeof(px));
+                if (drawn < 0) {
+                    /* the group alone, without its picture (as
+                     * NitroPort_Render2DObjLayer draws it, but that) */
+                    ObjFrame *f = &sCaptureObjFrame;
+                    ObjLine *line = &sCaptureObjLine;
+                    int k;
+
+                    SortObjs(&e, f);
+                    for (y = 0; y < H; y++) {
+                        int n = 0;
+
+                        for (k = 0; k < f->lineCount[y]; k++) {
+                            const Obj *obj = &f->obj[f->onLine[y][k]];
+
+                            if (obj->mode < 2 && ObjGroupOf(obj) == groups[g].group) {
+                                f->onLine[y][n++] = f->onLine[y][k];
+                            }
+                        }
+                        f->lineCount[y] = (u8)n;
+                    }
+                    f->artCount = 0;
+                    drawn = 0;
+                    for (y = 0; y < H; y++) {
+                        u16 *row = layer + y * NITRO_WIDE_ART_W;
+
+                        if (!DrawObjs(&e, f, dispcnt, y, line)) {
+                            memset(row, 0, NITRO_WIDE_ART_W * sizeof(u16));
+                            continue;
+                        }
+                        for (x = 0; x < NITRO_WIDE_ART_W; x++) {
+                            row[x] = (line->color[x] & OPAQUE) ? line->color[x] : 0;
+                            drawn |= row[x] != 0;
+                        }
+                    }
+                }
+                for (y = 0; y < H; y++) {
+                    for (x = 0; x < NITRO_WIDE_ART_W; x++) {
+                        u16 *c = &px[y * NITRO_WIDE_ART_W + x];
+                        int cx = x + dx, cy = y + dy;
+
+                        if (!(full & NITRO_WIDE_ART_FULL) && x >= e.origin && x < e.origin + W) {
+                            *c = 0;
+                        } else if (drawn > 0 && (*c & OPAQUE) && cx >= 0 && cx < NITRO_WIDE_ART_W && cy >= 0 &&
+                                   cy < H && (layer[cy * NITRO_WIDE_ART_W + cx] & OPAQUE) &&
+                                   (layer[cy * NITRO_WIDE_ART_W + cx] & 0x7FFF) == (*c & 0x7FFF)) {
+                            *c = 0;
+                        }
+                    }
+                }
+                if (NitroPort_WideArtShareWrite(name, px) == 0) {
+                    shared++;
+                } else {
+                    i++;
+                }
+            }
+        }
+    }
+    return shared;
 }
 
 void NitroPort_Render2D(int engine, u16 *out)

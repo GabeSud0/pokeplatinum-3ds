@@ -1022,6 +1022,11 @@ void NitroPort_OnFrame(void)
     NitroPort_SoundPumpReplies(); /* deliver ARM7 alarms on ARM9's thread */
     pace_game_for_wav();
     sFrame++;
+    /* (--wide DIR) its pictures shared without the game's art, as their
+     * screens show (docs/WIDE_ART.md, "Sharing your pictures") */
+    if (NitroPort_WideScreenExtra() && sFrame % 15 == 0 && NitroPort_WideArtUnshared() > 0) {
+        NitroPort_Render2DShareArt(NitroPort_EngineAOnTop() ? 0 : 1);
+    }
     if (sDump3DFrame == sFrame) {
         char path[128];
         snprintf(path,sizeof(path),"3d_frame_%07ld.png",sFrame);
