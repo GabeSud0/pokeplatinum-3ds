@@ -28,7 +28,11 @@ What it does:
 - **The pixels as they are.** By default each DS pixel becomes 2x2 texels
   and the GPU's bilinear filter scales the rest of the way: every pixel the
   same size, only its borders a texel soft (no blur, no uneven pixels).
-  Scale2x and the others are settings. The 3D's textures stay the DS's
+  Scale2x and the others are settings. The layers in front of the 3D (a
+  text box) are 16 bits a texel (RGBA5551: the DS's colours exactly)
+  while none of them is partly see-through, 32 when some is (a fade):
+  with 32 a text box's quad took the GPU 2-3.7 ms of a frame (2026-10-20,
+  since PR #135). The 3D's textures stay the DS's
   (nearest texel) unless `filter3d` says otherwise: made like the 2D (each
   texel 2x2, then bilinear) the GPU took two to three times as long, the
   overworld lagged, and polygons' edges showed lines on the opening's
@@ -226,7 +230,12 @@ eyes: the left eye drawn, copied out, the framebuffer cleared, then the
 right one. Its depth/stencil is the edge buffers' VRAM (one block now:
 4 x 240 x 400 x 4 bytes, exactly 480 x 800 D24S8), idle with the slider up;
 its colour 1.5 MB more VRAM, made room for by the classic display's
-render target, now made only if the classic display is used. Every pixel
+render target, now made only if the classic display is used. Since PR
+#135 the upper screen's framebuffers (the eyes' and the smooth 3D's) are
+RGB565, as its LCD framebuffers are: half the bytes to clear, draw and
+copy (and half the smooth 3D's VRAM), the same picture on the LCD but for
+the blends' and averages' rounding at 5-6 bits; nothing reads their alpha
+(every blend is by the source's alpha or a constant). Every pixel
 is drawn four times over: the 3D, and the 2D in front of and behind it.
 The 2D in front of the 3D (a text box) is drawn only over the rows with
 anything in them (with the slider down too). On a New 3DS (2026-10-20)

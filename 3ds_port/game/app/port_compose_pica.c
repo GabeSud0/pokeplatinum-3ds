@@ -71,20 +71,32 @@ void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 #define LCD_FORMAT GSP_RGB565_OES
 #define LCD_STRIDE (SCREEN_H * 2)
 
-/* RGBA8 render targets to RGB565 framebuffers. */
+/* The upper screen's framebuffers (its eyes' and the smooth 3D's) are
+ * RGB565, as its LCD framebuffers are: half the bytes of RGBA8 to clear,
+ * draw into and copy (nothing reads their alpha: every blend is by the
+ * source's alpha or a constant), for the same picture on the LCD but the
+ * blends' and the 2x2 averages' rounding, at 5-6 bits not 8. The lower
+ * screen's stay RGBA8. */
+#define TOP_FB_FORMAT GPU_RB_RGB565
+#define TOP_TRANSFER_FMT GX_TRANSFER_FMT_RGB565
+/* Render targets to RGB565 framebuffers (the lower screen's RGBA8, the
+ * upper's RGB565). */
 #define SCREEN_TRANSFER_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | \
      GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
+     GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
+#define TOP_SCREEN_TRANSFER_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | \
+     GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(TOP_TRANSFER_FMT) | \
      GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
 /* The same, each 2x2 pixels averaged into one (the smooth 3D; the output's
  * size given as the input's, as citro3d does: the engine halves it). */
 #define SMOOTH_TRANSFER_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | \
-     GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
+     GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(TOP_TRANSFER_FMT) | \
      GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_XY))
 
 /* A published picture: its textures and what it is. */
 typedef struct LayerSet {
     void *under;          /* RGB565 texels, tiled */
-    void *over;           /* RGBA8 texels, tiled (alpha multiplied in) */
+    void *over;           /* RGBA8 texels, tiled (alpha multiplied in); RGBA5551 when pub.over16 */
     int overEmpty;        /* nothing in front of the 3D (the over texture not written) */
     int underColor;       /* the picture behind the 3D all this RGB565 colour, or -1 */
     int overTop, overBottom;   /* the DS's rows with anything in front of the 3D (a row more each side) */
@@ -534,6 +546,10 @@ static int alloc_sets(Screen *scr, int canvasW, int scale)
         memset(scr->set[i].under, 0, (size_t)scr->texW * scr->texH * 2u);
         memset(scr->set[i].over, 0, (size_t)scr->texW * scr->texH * 4u);
         memset(&scr->set[i].pub, 0, sizeof(scr->set[i].pub));   /* (holding nothing known) */
+        /* (the layers in front 16 bits a texel while none of them is
+         * partly see-through: in the field a text box's quad took the GPU
+         * 2-3.7 ms with RGBA8 texels, 2026-10-20) */
+        scr->set[i].pub.allow16 = 1;
     }
     return 1;
 }
@@ -588,7 +604,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
         for (i = 0; i < (s == 0 && config->stereo ? 2 : 1); i++) {
             int k;
 
-            scr->target[i] = C3D_RenderTargetCreate(SCREEN_H, scr->width, GPU_RB_RGBA8,
+            scr->target[i] = C3D_RenderTargetCreate(SCREEN_H, scr->width, s == 0 ? TOP_FB_FORMAT : GPU_RB_RGBA8,
                                                     GPU_RB_DEPTH24_STENCIL8);
             if (!scr->target[i]) {
                 NitroPort_Log("[compose] no VRAM for the %s screen's render target", s ? "lower" : "upper");
@@ -631,7 +647,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
         }
     }
     if (config->smooth3d) {
-        u32 colorSize = C3D_CalcColorBufSize(SMOOTH_W, SMOOTH_H, GPU_RB_RGBA8);
+        u32 colorSize = C3D_CalcColorBufSize(SMOOTH_W, SMOOTH_H, TOP_FB_FORMAT);
         u32 depthSize = C3D_CalcDepthBufSize(SMOOTH_W, SMOOTH_H, GPU_RB_DEPTH24_STENCIL8);
         void *depth = NULL;
 
@@ -649,7 +665,8 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
             }
         }
         if (sSmoothColor &&
-            NitroPort_PicaFrameBufMake(sSmoothFb, sizeof(sSmoothFb), sSmoothColor, depth, SMOOTH_W, SMOOTH_H)) {
+            NitroPort_PicaFrameBufMake(sSmoothFb, sizeof(sSmoothFb), sSmoothColor, depth, SMOOTH_W, SMOOTH_H,
+                                       TOP_FB_FORMAT == GPU_RB_RGB565)) {
             sSmoothReady = 1;
             sSmoothDepth = depth;
             sSmoothMadeHalf = 0;
@@ -765,6 +782,7 @@ static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *
     u32 rowsUsed = ((u32)DS_H * scr->texScale + 8u + 7u) & ~7u;
 
     set->pub.heldBy = NULL;   /* (not tracked this way) */
+    set->pub.over16 = 0;      /* (RGBA8 here) */
     for (i = 0; i < n; i++) {
         c16[i] = sToRgb565[l->under[i] & 0x7FFF];
     }
@@ -819,6 +837,13 @@ static u32 rgba_of_565(int c)
     u32 r = ((u32)c >> 11) & 31u, g = ((u32)c >> 5) & 63u, b = (u32)c & 31u;
 
     return (((r << 3) | (r >> 2)) << 24) | (((g << 2) | (g >> 4)) << 16) | (((b << 3) | (b >> 2)) << 8) | 0xFFu;
+}
+
+/* That colour as a fill of the upper screen's framebuffers (in their
+ * format: a 16-bit fill takes the value's low half as it is). */
+static u32 top_clear_color(int c)
+{
+    return TOP_FB_FORMAT == GPU_RB_RGB565 ? (u32)c & 0xFFFFu : rgba_of_565(c);
 }
 
 /* The rows of the layer in front of the 3D with anything drawn in them
@@ -1585,7 +1610,8 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             float v0 = vTop + (vBottom - vTop) * (float)top / (float)DS_H;
             float v1 = vTop + (vBottom - vTop) * (float)bottom / (float)DS_H;
 
-            make_texture(&sOverTex, set->over, GPU_RGBA8, scr->texW, scr->texH, linear, GPU_CLAMP_TO_EDGE);
+            make_texture(&sOverTex, set->over, set->pub.over16 ? GPU_RGBA5551 : GPU_RGBA8, scr->texW, scr->texH, linear,
+                         GPU_CLAMP_TO_EDGE);
             C3D_TexBind(0, &sOverTex);
             quad_combiner(1);
             C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
@@ -1698,7 +1724,7 @@ static int free_lcd_buffer(const Screen *scr)
 static void smooth_clear(const LayerSet *set, int underCleared)
 {
     C3D_FrameBufClear((C3D_FrameBuf *)sSmoothFb, underCleared ? C3D_CLEAR_ALL : C3D_CLEAR_DEPTH,
-                      underCleared ? rgba_of_565(set->underColor) : 0, 0xFFFFFFFFu);
+                      underCleared ? top_clear_color(set->underColor) : 0, 0xFFFFFFFFu);
 }
 
 /* The smooth framebuffer 2x2 or 2x1 for this frame (its size: what the
@@ -1707,14 +1733,14 @@ static void smooth_size(int half)
 {
     if (half != sSmoothMadeHalf &&
         NitroPort_PicaFrameBufMake(sSmoothFb, sizeof(sSmoothFb), sSmoothColor, sSmoothDepth, SMOOTH_W,
-                                   half ? TOP_W : SMOOTH_H)) {
+                                   half ? TOP_W : SMOOTH_H, TOP_FB_FORMAT == GPU_RB_RGB565)) {
         sSmoothMadeHalf = half;
     }
 }
 
 /* (each 2x1 averaged: the lines halved, as many of them) */
 #define SMOOTH_HALF_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | \
-     GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
+     GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(TOP_TRANSFER_FMT) | \
      GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_X))
 
 /* An eye drawn by the smooth 3D into its LCD framebuffer, scaled down
@@ -1727,15 +1753,16 @@ static void smooth_out(Screen *scr, int buf, int eye)
                        sSmoothMadeHalf ? SMOOTH_HALF_FLAGS : SMOOTH_TRANSFER_FLAGS);
 }
 
-/* RGBA8 to RGBA8: tiled, each 2x2 (2x1) averaged, into linear; linear into tiled. */
+/* The upper screen's format to itself: tiled, each 2x2 (2x1) averaged,
+ * into linear; linear into tiled. */
 #define SMOOTH_DOWN_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | \
-     GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
+     GX_TRANSFER_IN_FORMAT(TOP_TRANSFER_FMT) | GX_TRANSFER_OUT_FORMAT(TOP_TRANSFER_FMT) | \
      GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_XY))
 #define SMOOTH_DOWN_HALF_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | \
-     GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
+     GX_TRANSFER_IN_FORMAT(TOP_TRANSFER_FMT) | GX_TRANSFER_OUT_FORMAT(TOP_TRANSFER_FMT) | \
      GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_X))
 #define SMOOTH_TILE_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_RAW_COPY(0) | \
-     GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
+     GX_TRANSFER_IN_FORMAT(TOP_TRANSFER_FMT) | GX_TRANSFER_OUT_FORMAT(TOP_TRANSFER_FMT) | \
      GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
 
 static void fill_edge_buffers(Screen *scr, u32 value, unsigned copied);
@@ -1968,7 +1995,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             /* (one fill: the colour buffer too when the picture behind is
              * all one colour) */
             C3D_RenderTargetClear(sScreens[s].target[eye], underCleared[s] ? C3D_CLEAR_ALL : C3D_CLEAR_DEPTH,
-                                  underCleared[s] ? rgba_of_565(sets[s]->underColor) : 0,
+                                  underCleared[s] ? (s == 0 ? top_clear_color(sets[s]->underColor)
+                                                            : rgba_of_565(sets[s]->underColor))
+                                                  : 0,
                                   screen3d && copies ? edgeClear : 0xFFFFFFFFu);
         }
         if (screen3d && edges) {
@@ -2043,7 +2072,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                 }
                 GX_DisplayTransfer((u32 *)scr->target[eye]->frameBuf.colorBuf, GX_BUFFER_DIM(SCREEN_H, scr->width),
                                    (u32 *)scr->lcd[lcdBuf[s]][eye], GX_BUFFER_DIM(SCREEN_H, scr->width),
-                                   SCREEN_TRANSFER_FLAGS);
+                                   s == 0 ? TOP_SCREEN_TRANSFER_FLAGS : SCREEN_TRANSFER_FLAGS);
             }
         }
         gpuStart = svcGetSystemTick();

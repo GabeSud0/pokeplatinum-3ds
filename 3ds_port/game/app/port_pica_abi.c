@@ -24,7 +24,7 @@ unsigned NitroPort_PicaDvleSize(void);
 unsigned NitroPort_PicaFrameBufSize(void);
 int NitroPort_PicaFrameBufWithDepth(void *out, unsigned outSize, const void *target, void *depth);
 int NitroPort_PicaFrameBufMake(void *out, unsigned outSize, void *color, void *depth, unsigned width,
-                               unsigned height);
+                               unsigned height, int rgb565);
 
 void *NitroPort_PicaDvle(void *dvlb, unsigned index)
 {
@@ -56,15 +56,16 @@ int NitroPort_PicaFrameBufWithDepth(void *out, unsigned outSize, const void *tar
     return 1;
 }
 
-/* One of buffers the caller has: RGBA8 colour, D24S8 depth/stencil. */
+/* One of buffers the caller has: RGBA8 (rgb565: RGB565) colour, D24S8
+ * depth/stencil. */
 int NitroPort_PicaFrameBufMake(void *out, unsigned outSize, void *color, void *depth, unsigned width,
-                               unsigned height)
+                               unsigned height, int rgb565)
 {
     C3D_FrameBuf *fb = out;
     if (!out || !color || !depth || outSize < sizeof(C3D_FrameBuf)) return 0;
     memset(fb, 0, sizeof(*fb));
     C3D_FrameBufAttrib(fb, (u16)width, (u16)height, false);
-    C3D_FrameBufColor(fb, color, GPU_RB_RGBA8);
+    C3D_FrameBufColor(fb, color, rgb565 ? GPU_RB_RGB565 : GPU_RB_RGBA8);
     C3D_FrameBufDepth(fb, depth, GPU_RB_DEPTH24_STENCIL8);
     return 1;
 }

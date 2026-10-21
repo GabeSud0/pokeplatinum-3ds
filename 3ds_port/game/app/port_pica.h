@@ -73,10 +73,11 @@ unsigned NitroPort_PicaDvleSize(void);
 #define PICA_FRAMEBUF_BYTES 32
 unsigned NitroPort_PicaFrameBufSize(void);
 int NitroPort_PicaFrameBufWithDepth(void *out, unsigned outSize, const void *target, void *depth);
-/* The same of buffers the caller has: RGBA8 colour, D24S8 depth/stencil,
- * width x height (the framebuffer's: 240 across a screen's height). */
+/* The same of buffers the caller has: RGBA8 (rgb565: RGB565) colour, D24S8
+ * depth/stencil, width x height (the framebuffer's: 240 across a screen's
+ * height). */
 int NitroPort_PicaFrameBufMake(void *out, unsigned outSize, void *color, void *depth, unsigned width,
-                               unsigned height);
+                               unsigned height, int rgb565);
 /* Where the display thread's drawing is (for the log when it hangs): the
  * stage set last (any thread sets one), and the last draw's first vertex,
  * count and the draws so far. */

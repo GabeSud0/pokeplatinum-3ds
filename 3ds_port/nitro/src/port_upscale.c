@@ -218,6 +218,30 @@ uint32_t NitroPort_PremultiplyOver(const uint16_t *over, const uint8_t *alpha, c
     return any;
 }
 
+int NitroPort_OverPartial(const uint16_t *over, const uint8_t *alpha, const uint8_t alpha16[17], int i, int j)
+{
+    for (; i < j; i++) {
+        if (over[i] & 0x8000) {
+            uint32_t a = alpha16[alpha[i] > 16 ? 16 : alpha[i]];
+
+            if (a != 0 && a != 255) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+void NitroPort_PackOver5551(const uint32_t *premultiplied, uint16_t *out, int i, int j)
+{
+    for (; i < j; i++) {
+        uint32_t p = premultiplied[i];
+
+        out[i] = (p & 0xFFu) ? (uint16_t)(((p >> 27) << 11) | (((p >> 19) & 31u) << 6) | (((p >> 11) & 31u) << 1) | 1u)
+                             : 0;
+    }
+}
+
 int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, const uint16_t *under,
                              const uint16_t *over, const uint8_t *overAlpha, int hasOver, int w,
                              uint16_t *underTex, uint32_t *overTex, int texW, const uint16_t *table,
@@ -227,7 +251,7 @@ int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, cons
     const size_t band = (size_t)w * 4u;
     const uint32_t tileRow = (uint32_t)texW * 8u;   /* texels in a band's row of tiles (doubled) */
     uint32_t gen = ++sh->gen, any = 0;
-    int b, from, known = t->heldBy == sh && t->heldWidth == w;
+    int b, from, known = t->heldBy == sh && t->heldWidth == w, packed = 0, sameKind;
 
     /* What changed since the last picture. */
     if (!sh->underValid || sh->width != w) {
@@ -291,14 +315,30 @@ int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, cons
             }
         }
     }
-    for (b = 0, from = -1; b <= bands; b++) {
-        int redo = b < bands && (!known || t->overGen == 0 || sh->overChanged[b] > t->overGen);
-
-        if (b < bands && sh->overChanged[b] == gen) {
-            /* (converted now, and whether anything's in it) */
+    /* The bands changed converted now: whether anything's in them, and
+     * whether any of it is partly see-through (then RGBA8, else RGBA5551
+     * if the target takes it). */
+    for (b = 0; b < bands; b++) {
+        if (sh->overChanged[b] == gen) {
             sh->overAny[b] = NitroPort_PremultiplyOver(over, overAlpha, alpha16, sh->premultiplied,
                                                        (int)(band * b), (int)(band * (b + 1))) != 0;
+            sh->overPartial[b] = sh->overAny[b] &&
+                                 NitroPort_OverPartial(over, overAlpha, alpha16, (int)(band * b), (int)(band * (b + 1)));
         }
+    }
+    if (t->allow16) {
+        packed = 1;
+        for (b = 0; b < bands; b++) {
+            if (sh->overPartial[b]) {
+                packed = 0;
+                break;
+            }
+        }
+    }
+    sameKind = t->overGen == 0 || t->over16 == packed;   /* (else all of it again, the other way) */
+    for (b = 0, from = -1; b <= bands; b++) {
+        int redo = b < bands && (!known || !sameKind || t->overGen == 0 || sh->overChanged[b] > t->overGen);
+
         if (redo && from < 0) {
             from = b;
         } else if (!redo && from >= 0) {
@@ -312,9 +352,19 @@ int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, cons
                                                     (int)(band * k), (int)(band * (k + 1)));
                 }
             }
-            NitroPort_Double2xTiled32Rows(sh->premultiplied, w, h, from * 4, b * 4, overTex, texW);
-            if (flush) {
-                flush(overTex + (uint32_t)from * tileRow, rows * tileRow * 4u);
+            if (packed) {
+                uint16_t *overTex16 = (uint16_t *)(void *)overTex;
+
+                NitroPort_PackOver5551(sh->premultiplied, sh->packed, (int)(band * from), (int)(band * b));
+                NitroPort_Double2xTiled16Rows(sh->packed, w, h, from * 4, b * 4, overTex16, texW);
+                if (flush) {
+                    flush(overTex16 + (uint32_t)from * tileRow, rows * tileRow * 2u);
+                }
+            } else {
+                NitroPort_Double2xTiled32Rows(sh->premultiplied, w, h, from * 4, b * 4, overTex, texW);
+                if (flush) {
+                    flush(overTex + (uint32_t)from * tileRow, rows * tileRow * 4u);
+                }
             }
             from = -1;
         }
@@ -323,5 +373,6 @@ int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, cons
         any |= sh->overAny[b];
     }
     t->overGen = gen;
+    t->over16 = packed;
     return any != 0;
 }
