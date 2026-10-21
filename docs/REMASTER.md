@@ -287,7 +287,14 @@ it's bound; it was bound for each batch).
 The vertex program (`gx3d_passthrough.v.pica`) does the view (where the
 DS's screen goes on the 3DS's turned framebuffer) and the stereoscopic
 shift: `x += strength * max(w - convergence, -w)`, for perspective
-vertices (w > 1) only.
+vertices (w > 1) only. The convergence (the depth that's at the screen)
+is the middle of where most of a scene's perspective vertices are: the
+geometric mean of the 5th and the 95th percentile of their w, so a few
+polygons near the camera or far away don't move it; and the eyes follow
+it a tenth of the way (in octaves) each new scene, not at once, and not
+again for the in-between scenes. Taken from the nearest and the farthest
+vertex, each scene, it jumped when something came on screen, and every
+polygon's shift with it: the geometry flickered with the slider up.
 
 The GPU's command list is 1 MB; a draw that wouldn't fit is left out
 rather than overflow it (an overflow stopped the GPU thread on the real
