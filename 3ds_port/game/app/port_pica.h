@@ -242,8 +242,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
 /* (its bits: the screens drawn, and when a wanted frame wasn't, why) */
 #define COMPOSE_DRAWN_UPPER 1
 #define COMPOSE_DRAWN_LOWER 2
-#define COMPOSE_NO_BUFFER 4     /* no LCD framebuffer free: the next V-blank frees one, draw it again then */
-#define COMPOSE_MID_LATE 8      /* the in-between scene's V-blank has come: its scene's turn */
+#define COMPOSE_NO_BUFFER_UPPER 4   /* no LCD framebuffer of the screen's free: the next V-blank frees one, draw it again then */
+#define COMPOSE_NO_BUFFER_LOWER 8
+#define COMPOSE_MID_LATE 16         /* the in-between scene's V-blank has come: its scene's turn */
 /* (mid: scene is the in-between scene of the scene of serial sceneSerial
  * (NitroPort_Gx3dMidOf), shown a V-blank before it; draw it first.) Whether
  * in-between scenes fit now, the slider and the screens as they are (60

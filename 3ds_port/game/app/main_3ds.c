@@ -565,10 +565,15 @@ static void GpuComposeLoop(void)
      * undrawn, 2026-10-20). */
     bool sceneDone=true;
     while(__atomic_load_n(&sGpuRunning,__ATOMIC_ACQUIRE)){
-        bool force;
-        int bit=sAOnTop?COMPOSE_DRAWN_UPPER:COMPOSE_DRAWN_LOWER;
+        bool force,aOnTop;
+        int bit,noBuf;
         LightEvent_Wait(&sGpuWake);
         if(!__atomic_load_n(&sGpuRunning,__ATOMIC_ACQUIRE))break;
+        /* (which screen the 3D's is, once for this wake: the game's thread
+         * sets it) */
+        aOnTop=sAOnTop;
+        bit=aOnTop?COMPOSE_DRAWN_UPPER:COMPOSE_DRAWN_LOWER;
+        noBuf=aOnTop?COMPOSE_NO_BUFFER_UPPER:COMPOSE_NO_BUFFER_LOWER;
         if(scene==NULL || NitroPort_Gx3dNewerScene(seen)){
             const NitroGx3dScene *next;
             if(scene && !sceneDone){
@@ -581,11 +586,11 @@ static void GpuComposeLoop(void)
                 __atomic_store_n(&sComposing,true,__ATOMIC_SEQ_CST);
                 if(!sShowLog && !sScreensDirty && !__atomic_load_n(&sSuspended,__ATOMIC_SEQ_CST)){
                     u64 start=svcGetSystemTick();
-                    r=NitroPort_ComposeFrame(scene,seen,sAOnTop,osGet3DSliderState(),false,1,0);
+                    r=NitroPort_ComposeFrame(scene,seen,aOnTop,osGet3DSliderState(),false,1,0);
                     sGpuTicks+=svcGetSystemTick()-start;
                 }
                 __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
-                if(!(r&bit) && (r&COMPOSE_NO_BUFFER) && NitroPort_Gx3dNewerScenes(seen)<2u){
+                if(!(r&bit) && (r&noBuf) && NitroPort_Gx3dNewerScenes(seen)<2u){
                     continue;   /* (one newer scene waits for it; two: it's skipped) */
                 }
             }
@@ -616,7 +621,7 @@ static void GpuComposeLoop(void)
         {
             u64 start=svcGetSystemTick();
             if(mid && !force){
-                if(!NitroPort_ComposeWantsMid(osGet3DSliderState(),sAOnTop)){
+                if(!NitroPort_ComposeWantsMid(osGet3DSliderState(),aOnTop)){
                     mid=NULL;
                 }else{
                     /* (drawn on the 3D's screen: done, its scene next;
@@ -624,16 +629,16 @@ static void GpuComposeLoop(void)
                      * V-blank, still before its scene, unless its V-blank
                      * has come; not drawn otherwise (no 3D shown): left
                      * out) */
-                    int r=NitroPort_ComposeFrame(mid,seen,sAOnTop,osGet3DSliderState(),false,0,1);
+                    int r=NitroPort_ComposeFrame(mid,seen,aOnTop,osGet3DSliderState(),false,0,1);
                     if((r&bit) || (r&COMPOSE_MID_LATE) ||
-                       (!(r&COMPOSE_NO_BUFFER) && !NitroPort_ComposeSceneWaiting(seen)))mid=NULL;
+                       (!(r&noBuf) && !NitroPort_ComposeSceneWaiting(seen)))mid=NULL;
                 }
             }
             if(mid==NULL || force){
                 int r;
                 mid=NULL;
-                r=NitroPort_ComposeFrame(scene,seen,sAOnTop,osGet3DSliderState(),force,0,0);
-                sceneDone=scene==NULL || (r&bit) || (!(r&COMPOSE_NO_BUFFER) && !NitroPort_ComposeSceneWaiting(seen));
+                r=NitroPort_ComposeFrame(scene,seen,aOnTop,osGet3DSliderState(),force,0,0);
+                sceneDone=scene==NULL || (r&bit) || (!(r&noBuf) && !NitroPort_ComposeSceneWaiting(seen));
             }
             __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
             sGpuTicks+=svcGetSystemTick()-start;

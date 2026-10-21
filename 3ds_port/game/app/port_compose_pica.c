@@ -37,7 +37,7 @@
  * whenever a scene happens to be done, and the 2D in step with it.
  *
  * Showing is apart from drawing. A drawn frame is transferred into one of
- * three LCD framebuffers of the screen's own (not libctru's two), and
+ * the screen's own LCD framebuffers (LCD_BUFS; not libctru's two), and
  * queued with the V-blank it's for; the V-blank thread (main_3ds.c, which
  * calls NitroPort_ComposeVBlank) puts it on the LCD then. The display
  * thread never waits for a V-blank: it draws the next frame meanwhile
@@ -65,8 +65,6 @@ void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 #define SCALE 1.25f
 
 #define SETS 3
-/* LCD framebuffers a screen: the one on the LCD, and up to two drawn
- * frames waiting for their V-blank. */
 /* LCD framebuffers a screen: one on the LCD, the one before it (scanned
  * out until the next V-blank), and the frames waiting for their V-blanks.
  * The upper screen's: at 60 frames a second a frame is built 1-2 V-blanks
@@ -74,10 +72,13 @@ void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
  * scene's a V-blank earlier), 3-4 V-blanks apart at the most lag, so 4-5
  * frames wait at once (with 3 buffers, one waiting frame: with lag 4 only
  * the in-between scenes got a buffer, the scenes were skipped, 2026-10-20).
- * The lower screen's frames show at the next V-blank: 3 do. */
+ * The lower screen's frames show at the next V-blank, but for the 3D's
+ * when it's there (the opening's flight): 5. Fewer if the linear heap
+ * hasn't room (3 at least: 30 frames a second then). */
 #define LCD_BUFS 7
-#define LCD_BUFS_LOWER 3
-#define PENDING_MAX (LCD_BUFS - 1)
+#define LCD_BUFS_LOWER 5
+#define LCD_BUFS_LEAST 3
+#define PENDING_MAX LCD_BUFS
 #define LCD_FORMAT GSP_RGB565_OES
 #define LCD_STRIDE (SCREEN_H * 2)
 
@@ -364,9 +365,10 @@ void NitroPort_ComposeVBlank(void)
         int i, newest = -1;
 
         /* (of those whose V-blank has come, the newest the GPU has drawn;
-         * the older ones are skipped; none drawn yet: a V-blank later) */
-        for (i = 0; i < scr->npending && (int32_t)(scr->pending[i].target - now) <= 0; i++) {
-            if ((int32_t)(done - scr->pending[i].serial) >= 0) {
+         * the older ones are skipped; none drawn yet: a V-blank later.
+         * All of them looked at: they needn't be in order of V-blank.) */
+        for (i = 0; i < scr->npending; i++) {
+            if ((int32_t)(scr->pending[i].target - now) <= 0 && (int32_t)(done - scr->pending[i].serial) >= 0) {
                 newest = i;
             }
         }
@@ -646,6 +648,13 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
             for (k = 0; k < scr->nlcd; k++) {
                 scr->lcd[k][i] = linearAlloc((size_t)scr->width * SCREEN_H * 2u);
                 if (!scr->lcd[k][i]) {
+                    if (k >= LCD_BUFS_LEAST) {
+                        /* (fewer, then: frames wait in fewer at once) */
+                        NitroPort_Log("[compose] linear memory for %d LCD framebuffers of the %s screen's, not %d",
+                                      k, s ? "lower" : "upper", scr->nlcd);
+                        scr->nlcd = k;
+                        break;
+                    }
                     NitroPort_Log("[compose] not enough memory for the LCD framebuffers");
                     goto fail;
                 }
@@ -1734,7 +1743,7 @@ static LayerSet *pick_set(Screen *scr, const NitroGx3dScene *scene, int syncTo3d
 }
 
 /* A free LCD framebuffer of a screen: not on the LCD, not waiting. Under
- * sPresentLock. -1: none (two frames waiting already). */
+ * sPresentLock. -1: none (on the LCD, scanned out, or waiting). */
 static int free_lcd_buffer(const Screen *scr)
 {
     int b, i;
@@ -1925,7 +1934,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             lcdBuf[s] = free_lcd_buffer(scr);
             if (lcdBuf[s] < 0) {
                 need[s] = 0;
-                drawn |= COMPOSE_NO_BUFFER;
+                drawn |= s == 0 ? COMPOSE_NO_BUFFER_UPPER : COMPOSE_NO_BUFFER_LOWER;
             }
         }
         if (!need[s]) {

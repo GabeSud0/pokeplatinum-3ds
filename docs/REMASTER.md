@@ -546,7 +546,8 @@ jumped), and engine B's screen drew 14-25 frames a second
 
 Showing is apart from drawing. The display thread draws a frame, has the
 GPU put it into one of the screen's own LCD framebuffers (the upper
-screen's seven, the lower's three, since PR #138), and queues it with the
+screen's seven, the lower's five, since PR #138; fewer if the linear heap
+hasn't room, three at least), and queues it with the
 V-blank it's for; a V-blank thread (`main_3ds.c`) counts the V-blanks and
 puts each frame on the LCD at its one (`GSPGPU_SetBufferSwap`; of the
 frames whose V-blank has come and the GPU has drawn, the newest, the
