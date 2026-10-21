@@ -2,7 +2,7 @@
   <img src="docs/images/logo.png" alt="Pokémon Platinum 3DS" width="420">
 </p>
 
-# pokeplatinum-3ds
+# PokePlatinum-3ds
 
 A native Nintendo 3DS port of Pokémon Platinum, built from the
 [pret/pokeplatinum](https://github.com/pret/pokeplatinum) decompilation. It
