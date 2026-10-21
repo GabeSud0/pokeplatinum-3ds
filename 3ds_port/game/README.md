@@ -42,7 +42,8 @@ ported.
    makerom and bannertool, from source, at fixed versions; they need gcc,
    g++ and make) and makes the HOME Menu's icon and banner from your ROM's
    icon ([`tools/home_menu_art.py`](../../tools/home_menu_art.py)), in
-   `build/`. The banner plays the port's own chime when the game is
+   `build/`. The icon is the port's own ([`cia/icon.png`](cia/icon.png), 48 x 48,
+   original art) when it's there. The banner plays the port's own chime when the game is
    highlighted ([`cia/chime.wav`](cia/chime.wav): original music, 2.95 s,
    under the HOME Menu's 3-second limit); `CHIME=path/to/other.wav` uses
    another one.

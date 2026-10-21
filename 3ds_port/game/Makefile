@@ -482,10 +482,13 @@ $(PROGRAM_ELF): $(APP_OBJS) $(OVERLAY_TABLE_O) $(GAME_HEADER_DEFS) $(WIFI_STUBS_
 	@$(PROGRAM_LINK)
 
 ifeq ($(TARGET),3ds)
-# The HOME Menu's art (tools/home_menu_art.py, from your own ROM's icon:
-# made at build time, never committed). Without it, libctru's icon.
+# The HOME Menu's icon: the port's own (cia/icon.png, 48x48, original art),
+# else the one made from your ROM's icon (tools/home_menu_art.py: made at
+# build time, never committed), else libctru's.
 HOME_ART ?=
-ifneq ($(wildcard $(HOME_ART)/icon.png),)
+ifneq ($(wildcard cia/icon.png),)
+ICON := cia/icon.png
+else ifneq ($(wildcard $(HOME_ART)/icon.png),)
 ICON := $(HOME_ART)/icon.png
 else
 ICON := $(DEVKITPRO)/libctru/default_icon.png
