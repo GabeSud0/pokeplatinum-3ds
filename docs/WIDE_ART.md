@@ -206,27 +206,47 @@ needs no `wide` folder of their own. They hold none of the game's art: each
 pixel that was the game's own is a marker (alpha 64), and the port draws
 the player's own game's pixel there (`NITRO_WIDE_ART_GAME`; from the layer's
 map where the picture was made, so a picture that has scrolled or slid
-since is still whole). A file in your `wide` folder of the same name takes
-the place of a built-in one, so you can keep drawing as before.
+since is still whole). A pixel that was the game's own moved along (the
+opening's Pokémon, moved so that they come in from the wide screen's edge;
+the map's beyond the DS's edge copied into a band; a strip of sprites
+copied on) is a marker that says how far (red and blue, green: see
+`nitro_port_wideart.h`), and the port draws the game's pixel from that far
+back. A file in your `wide` folder of the same name takes the place of a
+built-in one, so you can keep drawing as before.
 
-The port tells your pixels from the game's by looking at the screen while
-it shows: as you play, each picture of a layer on screen that isn't shared
-yet is compared with that layer (its map where the picture was made; a
-sprite group's sprites where they are) and written, with the game's pixels
-left out, into `wide/share/` on the SD card (`NitroPort_Render2DShareArt`,
-a few times a second while any aren't shared). The log says which pictures
-are still to share at the start (`[wide art] not shared yet ...`) and each
-one shared (`[wide art] shared <name>: N of its pixels the game's own (left
-out), N yours`). A picture of a layer the port lays out in parts is shared
-only where it was made (its layout's place). So:
+The PC runner tells your pixels from the game's by looking at the screen
+while it shows (not the 3DS program: looking for the pictures' screens a
+few times a second, and the sharing itself, cost it frames). Run it with
+`--wide-art DIR` on your `wide` folder: each picture of a layer on screen
+that isn't shared yet is compared with that layer (its map where the
+picture was made, where its pixels are and where they were moved from: the
+move most of them agree on; a sprite group's sprites where they are) and
+written, with the game's pixels left out, into `DIR/share/`
+(`NitroPort_Render2DShareArt`, a few times a second while any aren't
+shared). The log says which pictures are still to share at the start
+(`[wide art] not shared yet ...`) and each one shared (`[wide art] shared
+<name>: N of its pixels the game's own (left out; N of them moved), N
+yours`). A picture of a layer the port lays out in parts is shared only
+where it was made (its layout's place). So:
 
 1. Play through the screens your pictures are for (the opening, the
-   title, the menus...), with the slider anywhere, until the log says
-   nothing is left to share (`0 of those not shared yet` at the next
-   start, or no `not shared yet` line).
-2. Copy `wide/share/*.png` into the repository's `wideart/` folder, and the
+   title, the menus...) in the PC runner, until the log says nothing is
+   left to share (`0 of those not shared yet` at the next start, or no
+   `not shared yet` line). A picture of a screen you can't get to (a
+   save that hasn't the Town Map yet) can be shared from a capture of
+   that screen instead: `python tools/wideart/share_from_capture.py
+   WIDE_FOLDER/<picture>.png WIDE_FOLDER/captures/NNNN` (the capture's
+   layer of the picture's key: a BG's `bg<N>_map.png`, its own pixels with
+   its map going on past the DS's edges, which is what the runner tells a
+   picture's pixels from too; a sprite group's `obj<G>.png`).
+2. Copy `DIR/share/*.png` into the repository's `wideart/` folder, and the
    layouts' pictures (`party_panel.png`, `pc_boxes_divider.png`...: drawn
-   whole by hand, so as they are) from `wide/` too.
+   whole by hand, so as they are) from `wide/` too. A picture shared with
+   nothing left in it (`0 yours`, no pixel of the game's moved: a layer
+   captured and saved as it was) adds nothing; leave it out. A picture of
+   a text window (a message box, a shop's list of names) changes its key
+   with the text and what the game put where, and is the game's text: leave
+   it out too.
 3. Build: they're in the program.
 
 A picture changed in the editor is shared again (its share is older than
@@ -270,7 +290,10 @@ round one with nothing else in the file (an odd size has a middle pixel).
   the tiles they use), their pictures in the OBJ line (`LookUpObjArt`, `DrawObjs`),
   one group alone (`NitroPort_Render2DObjLayer`).
 - `3ds_port/game/app/main_3ds.c`: L + R + X, L + R + A; the PC runner:
-  `--wide-art DIR`, control commands `capture DIR`, `wideart DIR`, `oam`.
+  `--wide-art DIR` (and the sharing, `NitroPort_Render2DShareArt`), control
+  commands `capture DIR`, `wideart DIR`, `oam`.
+- `tools/wideart/share_from_capture.py`: a picture shared from a capture
+  of its screen, as the runner does it.
 - `tools/wideart/`: the editor (Python, Tk, Pillow); CI builds
   `WideArt.exe` with PyInstaller (the `wideart-editor` job's artifact).
   `python tools/wideart/wideart.py` runs it from the source.
