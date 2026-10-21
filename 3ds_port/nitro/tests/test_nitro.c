@@ -828,14 +828,22 @@ static void test_hblank_lines(void)
     sHBlankCalls = 0;
     CHECK(NitroPort_HBlankLinesOnce());
     CHECK_EQ(sHBlankCalls, 193);
+    CHECK(!NitroPort_HBlankLinesDue());
     CHECK(!NitroPort_HBlankLinesOnce());
     CHECK_EQ(sHBlankCalls, 193);
     CHECK(NitroPort_LineRegs.active);   /* (the lines kept) */
+    /* and again after the next V-blank */
+    NitroPort_SpendDsTime(NITRO_PORT_CYCLES_PER_FRAME);
+    CHECK(NitroPort_HBlankLinesDue());
+    CHECK(NitroPort_HBlankLinesOnce());
+    CHECK_EQ(sHBlankCalls, 2 * 193);
     GX_HBlankIntr(FALSE);
     (void)OS_SetIrqMask(saved);
     OS_SetIrqFunction(OS_IE_H_BLANK, NULL);
     *(vu16 *)REG_BG1HOFS_ADDR = 0;
     *(vu16 *)(REG_BG1HOFS_ADDR + 0x1000) = 0;
+    NitroPort_SpendDsTime(NITRO_PORT_CYCLES_PER_FRAME);
+    CHECK(!NitroPort_HBlankLinesDue());   /* (nothing armed) */
     NitroPort_HBlankLines();
     CHECK(!NitroPort_LineRegs.active);
 }

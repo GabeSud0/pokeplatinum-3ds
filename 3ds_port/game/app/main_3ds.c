@@ -65,6 +65,8 @@ int NitroPort_Render2DIfChanged(int engine, uint16_t *out);
 int NitroPort_EngineAOnTop(void);
 /* (nitro_port.h) The frame's lines, for an H-blank effect. */
 int NitroPort_HBlankLinesOnce(void);
+int NitroPort_HBlankLinesDue(void);
+int NitroPort_LineRegsActive(void);
 
 /* Audio uses the port's plain-C mixer; it deliberately does not include
  * NitroSDK headers alongside libctru. */
@@ -1824,10 +1826,16 @@ static void DrawFrame(bool new3dOnly)
         return;
     }
     /* (the frame's lines, for an H-blank effect: the battles' start, a
-     * wavy screen; nothing without one. Once a V-blank; and without the
-     * remaster not while a drawer still reads them: they're the live ones
-     * there, the drawers' state isn't taken) */
-    if (sRemaster || !DrawersStillReading()) {
+     * wavy screen; nothing without one. Once a V-blank. Without the
+     * remaster the drawers read the live ones: not while one still does;
+     * then if an effect's on, the frame waits for a later DrawFrame (the
+     * last V-blank's lines would be drawn: its scroll, its windows), else
+     * it's drawn with the frame's registers, as the lines last were) */
+    if (!sRemaster && NitroPort_HBlankLinesDue() && DrawersStillReading()) {
+        if (NitroPort_LineRegsActive()) {
+            return;
+        }
+    } else {
         (void)NitroPort_HBlankLinesOnce();
     }
     sAOnTop = NitroPort_EngineAOnTop() != 0;

@@ -93,12 +93,17 @@ static void HBlank(int line, BOOL irq, BOOL dma)
     }
 }
 
+/* The H-blank interrupt is taken if the display asks for it (DISPSTAT),
+ * it's enabled (IE, IME) and the CPU takes interrupts now. */
+static BOOL HBlankIrq(void)
+{
+    return (reg_GX_DISPSTAT & REG_GX_DISPSTAT_HBI_MASK) && (reg_OS_IE & OS_IE_H_BLANK) && reg_OS_IME &&
+           !(OSi_PortCpsr & HW_PSR_IRQ_DISABLE);
+}
+
 void NitroPort_HBlankLines(void)
 {
-    /* The H-blank interrupt is taken if the display asks for it (DISPSTAT),
-     * it's enabled (IE, IME) and the CPU takes interrupts now. */
-    BOOL irq = (reg_GX_DISPSTAT & REG_GX_DISPSTAT_HBI_MASK) && (reg_OS_IE & OS_IE_H_BLANK) && reg_OS_IME &&
-               !(OSi_PortCpsr & HW_PSR_IRQ_DISABLE);
+    BOOL irq = HBlankIrq();
     BOOL dma = NitroPort_DmaHBlankArmed();
     u16 vcount = reg_GX_VCOUNT;
     int y;
@@ -129,6 +134,16 @@ void NitroPort_HBlankLines(void)
 /* The V-blanks so far (StartVBlank), and the one whose lines were last
  * worked out (NitroPort_HBlankLinesOnce). */
 static u32 sVBlanks, sLinesVBlank = 0xFFFFFFFFu;
+
+BOOL NitroPort_LineRegsActive(void)
+{
+    return NitroPort_LineRegs.active != 0;
+}
+
+BOOL NitroPort_HBlankLinesDue(void)
+{
+    return sLinesVBlank != sVBlanks && (HBlankIrq() || NitroPort_DmaHBlankArmed());
+}
 
 BOOL NitroPort_HBlankLinesOnce(void)
 {

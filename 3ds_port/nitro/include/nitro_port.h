@@ -164,6 +164,12 @@ void NitroPort_HBlankLines(void);
  * V-blank interrupt): later calls till the next V-blank keep the lines
  * there are; whether it went through them. */
 BOOL NitroPort_HBlankLinesOnce(void);
+/* Whether NitroPort_HBlankLinesOnce has lines to go through: not yet this
+ * V-blank, and an H-blank interrupt or DMA is armed (without, it only
+ * says the lines don't differ). */
+BOOL NitroPort_HBlankLinesDue(void);
+/* NitroPort_LineRegs.active (for those that can't include this header). */
+BOOL NitroPort_LineRegsActive(void);
 
 /* ---------------------------------------------------------------- threads */
 

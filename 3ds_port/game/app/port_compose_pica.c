@@ -230,6 +230,7 @@ static volatile u64 sGpuDoneTick;
 static u64 sGpuRunTick, sWaitTicks, sLastGpuTicks;
 static int sFlightStereo, sFlightEdgesWanted, sFlightEdges;   /* (the frame in flight: for auto_outlines) */
 static int sFlight3D;                   /* (and whether it drew the 3D: for auto_fps60) */
+static int sFlightRuns;                 /* (and its H-blank effect's runs: sFrameLineRuns) */
 static int sFlightDrawn, sFlightSmoothable;   /* (and how: DRAWN_*, and whether it could have been 2x2) */
 static int sFlightState;                /* (and its steps: fps60_state) */
 static u32 sMidFrames;                  /* (in-between scenes drawn) */
@@ -1492,10 +1493,11 @@ static void flight_finish(int block)
     gxCmdQueueClear(q);
     sFlight = 0;
     sLastGpuTicks = sGpuDoneTick - sGpuRunTick;
-    if (sFlightStereo && sFlightEdgesWanted) {
+    /* (not a frame with an H-blank effect's runs: see LINE_RUNS_MAX) */
+    if (sFlightStereo && sFlightEdgesWanted && sFlightRuns <= 1) {
         auto_outlines(sLastGpuTicks, sFlightEdges);
     }
-    if (sFlight3D) {
+    if (sFlight3D && sFlightRuns <= 1) {
         auto_fps60(sLastGpuTicks, sFlightState, sFlightDrawn, sFlightSmoothable);
     }
     sGpuTicks += sLastGpuTicks;
@@ -1529,8 +1531,9 @@ static C3D_Tex sUnderTex, sOverTex;
  * (the scissor): at most LINE_RUNS_MAX (LINE_RUNS_STEREO an eye with the
  * slider up), each a scene drawn again (its commands and vertices; the
  * pixels only inside the run), and no more than the command list has room
- * for (a third of what's left, a fifth for the first eye of two: each
- * run's commands as many as the last frame's first run's, sSceneWords).
+ * for (all of the frame's together a third of the room at its start, each
+ * run's commands as many as a scene's last time, sSceneWords; both eyes
+ * the same number: runs_most).
  * With more, k runs in a row (k odd: lines sliding apart by turns stay
  * apart by turns) are one, its scroll the middle line's: the grass's
  * slices 2 lines high, 96 of them, drawn 10 or 18 lines high. Frames with
@@ -1539,7 +1542,25 @@ static C3D_Tex sUnderTex, sOverTex;
 #define LINE_RUNS_MAX 24
 #define LINE_RUNS_STEREO 12
 static u32 sSceneWords;      /* (a scene's commands, in words, the last time measured) */
-static int sFrameLineRuns;   /* (the most runs of a screen in the frame being built)*/
+static int sFrameLineRuns;   /* (the most runs of a screen in the frame being built) */
+static int sFrameRunsMost;   /* (the most a screen may have, the frame being built: both eyes the same) */
+
+/* The most runs this frame's screens may have: LINE_RUNS_MAX (or
+ * LINE_RUNS_STEREO), no more than a third of the command list's room
+ * for them all. */
+static void runs_most(int stereo)
+{
+    extern u32 gpuCmdBufSize, gpuCmdBufOffset;
+    int most = stereo ? LINE_RUNS_STEREO : LINE_RUNS_MAX;
+
+    if (sSceneWords > 0) {
+        u32 room = (gpuCmdBufSize - gpuCmdBufOffset) / 3u / (stereo ? 2u : 1u) / sSceneWords;
+
+        most = room < 1u ? 1 : room < (u32)most ? (int)room : most;
+    }
+    sFrameRunsMost = most;
+    sFrameLineRuns = 0;
+}
 typedef struct LineRun {
     short y0, y1, scroll;
 } LineRun;
@@ -1691,15 +1712,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         runs[0].y1 = DS_H;
         runs[0].scroll = (short)scroll_signed(info->scroll3d & 0x1FF);
         if (info->scroll3dLines && !edges) {
-            extern u32 gpuCmdBufSize, gpuCmdBufOffset;
-            int most = stereo != 0.0f ? LINE_RUNS_STEREO : LINE_RUNS_MAX;
-
-            if (sSceneWords > 0) {
-                u32 room = (gpuCmdBufSize - gpuCmdBufOffset) / (stereo != 0.0f && eye == 0 ? 5u : 3u) / sSceneWords;
-
-                most = room < 1u ? 1 : room < (u32)most ? (int)room : most;
-            }
-            nruns = line_runs(info, runs, most);
+            nruns = line_runs(info, runs, sFrameRunsMost > 0 ? sFrameRunsMost : 1);
         }
         if (nruns > sFrameLineRuns) {
             sFrameLineRuns = nruns;
@@ -1757,7 +1770,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
                 u32 before = gpuCmdBufSize - gpuCmdBufOffset;
 
                 NitroPort_PicaDrawScene(&view);
-                if (!view.again && before > gpuCmdBufSize - gpuCmdBufOffset) {
+                if (!view.again && view.part == PICA_DRAW_ALL && before > gpuCmdBufSize - gpuCmdBufOffset) {
                     sSceneWords = before - (gpuCmdBufSize - gpuCmdBufOffset);
                 }
             }
@@ -2146,7 +2159,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     }
     /* The smooth 3D (sSmoothFb): on the upper screen when the 3D is
      * there; with outlines, split (sSmoothSplit), each eye in turn. */
-    sFrameLineRuns = 0;
+    runs_most(stereoNow);
     smoothable = sSmoothReady && need[0] && top3d && (stereoNow || sConfig.smooth3d == 2);
     /* (2x2, or as 60 frames a second has it now: auto_fps60) */
     drawnAs = smoothable ? fps60_drawn(stereoNow) : DRAWN_PLAIN;
@@ -2289,7 +2302,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sFlightQueue = sGxRecording;
         sFlightMark = mark;
         sFlightStereo = stereoNow;
-        sFlight3D = (top3d || (scene != NULL && !aOnTop)) && sFrameLineRuns <= 1;
+        sFlight3D = top3d || (scene != NULL && !aOnTop);
+        sFlightRuns = sFrameLineRuns;
         sFlightDrawn = drawnAs;
         sFlightSmoothable = smoothable;
         sFlightState = fps60_state(stereoNow, aOnTop);
