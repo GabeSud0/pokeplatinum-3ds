@@ -1,35 +1,40 @@
 # pokeplatinum-3ds
 
 A native Nintendo 3DS port of Pokémon Platinum, built from the
-[pret/pokeplatinum](https://github.com/pret/pokeplatinum) decompilation, with
-the goal of pushing the game's 3D further than the original hardware could:
+[pret/pokeplatinum](https://github.com/pret/pokeplatinum) decompilation. It
+isn't an emulator and it isn't a remake: the game's own code runs on the 3DS,
+and the port draws it the way a 3DS game would, keeping Platinum's 2.5D look.
 
-- **Higher resolution**: 3D rendered at the 3DS top screen's native 400×240
-  (vs. 256×192 on the DS), in widescreen.
-- **Stereoscopic 3D**: real depth for the overworld and battles, driven by the
-  3D slider.
-- **Both screens, redesigned**: a touch interface on the bottom screen.
-- **New 3DS first**: uses the faster CPU and extra memory of the New 3DS / New
-  3DS XL / New 2DS XL.
+On a New 3DS:
+
+- **Both screens filled.** The DS's pictures are drawn 1.25 times bigger: the
+  lower screen fills its 320×240, and the upper screen is laid out across its
+  full 400-pixel width (menus, text boxes and battles included). Nothing is
+  ever stretched or mirrored to fill the extra space.
+- **Sharper 3D.** The overworld and battles are drawn by the 3DS's GPU at the
+  screen's own resolution, with the game's outlines and fog, and a wider view
+  of the world at the sides.
+- **Stereoscopic 3D** from the 3D slider, with smooth (anti-aliased) edges.
+- **60 frames a second in the field.** The game runs its field at 30; the port
+  draws a frame in between each pair, and drops back to 30 where the GPU can't
+  keep up (new, still being tuned).
+- **Even, crisp pixels** for the 2D, and optional xBRZ smoothing for the 3D's
+  textures.
+- **Installs on the HOME Menu** (`.cia`), with your cartridge's icon.
+
+On an Old 3DS, it shows the DS's two screens in the middle of the 3DS's.
 
 Platinum is the **prototype**. The long-term target is **Pokémon SoulSilver /
 HeartGold**, once the [pret/pokeheartgold](https://github.com/pret/pokeheartgold)
-decompilation is far enough along. Both are Generation 4 games sharing much of
-the same engine, so most of the 3DS backend should carry over.
+decompilation is far enough along. Both are Generation 4 games that share most
+of the same engine.
 
-> **Status:** Phase 1. Toolchain working (stereoscopic test app runs in
-> Azahar); DS hardware layer mapped in
-> [`docs/HARDWARE_LAYER.md`](docs/HARDWARE_LAYER.md). NitroSDK and
-> NitroSystem build for the 3DS and pass their tests
-> ([`3ds_port/nitro`](3ds_port/nitro),
-> [`3ds_port/nitrosystem`](3ds_port/nitrosystem)), and all 1,012 of the
-> game's C files compile and link into a 3DS program that starts the game
-> ([`3ds_port/game`](3ds_port/game)): `NitroMain` runs with the SDK's threads, interrupts, timers and
-> overlays working, reading files from your data pack, and the DS's second
-> CPU's services (power, clock, save chip, touch screen) answering. It plays
-> its opening and title screen and starts a new game; 2D graphics are drawn,
-> and the original sound driver plays through a software DS sound chip
-> (being checked by ear). Next: 3D. **Nothing playable yet.**
+> **Status:** the game runs on real hardware. You can start a new game or
+> continue a save, explore, battle, use the menus and save, at a steady 30 fps
+> on a New 3DS, and 60 in the field where it fits. It hasn't had a full
+> playthrough yet, and some areas are still being worked on: the bottom
+> screen's touch interface, higher-quality sprites and fonts, the sun shadows
+> (working on PC, parked on the 3DS), and Wi-Fi (not ported). Expect bugs.
 
 ## This repository contains no game content
 
@@ -42,107 +47,161 @@ or in releases. The repository holds only:
 - the builder that turns **your own legally dumped cartridge** into the game's
   data, on your own computer (`builder/`).
 
+**Builds of the game are never published**, and you shouldn't share yours:
+they contain the game's code. CI builds and tests everything on every push
+but uploads only text reports and tools with no game code in them
+(`tools/check_ci_artifacts.py` fails the build otherwise).
+
 Never commit a ROM, an extracted asset, or a build of the game. The
 `.gitignore` blocks the common cases, but check `git status` before you commit.
+
+## What you need
+
+- A **3DS family console** with custom firmware (Luma3DS) and the Homebrew
+  Launcher (and **FBI** for the HOME Menu version). A New 3DS, New 3DS XL or
+  New 2DS XL is needed for the remastered display. Setup guide:
+  <https://3ds.hacks.guide>
+- Your own dump of **Pokémon Platinum (USA)**, Rev 0 or Rev 1.
+- [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the `3ds-dev`
+  package group, Python 3.10+ and Git.
+- Optional: the [Azahar](https://azahar-emu.org) emulator for testing on a PC.
+  It runs the 3DS's CPU slower than a real New 3DS, so judge performance on
+  the console.
+
+## Building and running it
+
+### On Windows
+
+Download [`tools/build_windows_msys2.sh`](tools/build_windows_msys2.sh) and
+run it in devkitPro's MSYS2 terminal (Start menu → devkitPro → MSYS2). It
+does everything: installs what the build needs besides devkitPro, clones this
+repository, builds the game (both versions), makes your data pack, and puts
+the SD card files in `%USERPROFILE%\pokeplatinum-sd` (and in Azahar's SD
+folder, if it finds it):
+
+```sh
+bash build_windows_msys2.sh 'C:\path\to\your\platinum.nds'
+```
+
+Then skip to [Copy to the SD card](#copy-to-the-sd-card).
+
+### On Linux or macOS
+
+1. **Fetch the decompilation and SDKs and build the game:**
+
+   ```sh
+   python tools/bootstrap.py
+   make game                                   # -> 3ds_port/game/build/3ds/pokeplatinum.3dsx
+   make game-cia ROM=/path/to/platinum.nds     # -> .../pokeplatinum.cia (HOME Menu version)
+   ```
+
+2. **Make your data pack** from your own dump
+   ([`builder/`](builder/README.md)):
+
+   ```sh
+   python builder/verify_rom.py /path/to/platinum.nds    # checks it's a supported dump
+   python builder/extract_rom.py /path/to/platinum.nds   # -> data_pack/
+   python builder/pack.py data_pack/                     # -> platinum3ds.pak
+   ```
+
+### Copy to the SD card
+
+```
+sdmc:/3ds/pokeplatinum/platinum3ds.pak
+sdmc:/3ds/pokeplatinum/manifest.json      (from data_pack/)
+sdmc:/3ds/pokeplatinum.3dsx               (for the Homebrew Launcher)
+sdmc:/cia/pokeplatinum.cia                (for the HOME Menu, optional)
+```
+
+In Azahar, these go in its emulated SD card folder.
+
+- **Homebrew Launcher:** run `pokeplatinum.3dsx`, or open it in Azahar.
+- **HOME Menu:** in FBI, go to **SD → cia → pokeplatinum.cia → Install CIA**.
+  The game then opens and closes from the HOME Menu like any other title. To
+  update it, install the new `.cia` the same way; your save stays.
+
+The game saves to `sdmc:/3ds/pokeplatinum/platinum.sav`, a raw 512 KB save
+like emulators keep, so you can copy your cartridge's save there.
+
+### While playing
+
+| Buttons | What it does |
+|---|---|
+| **L + R + SELECT** | show the log (also written to `sdmc:/3ds/pokeplatinum/log.txt`) |
+| **L + R + B** | turn the colour grade (and, on PC, the sun shadows) on or off |
+| **L + R + X** | capture the upper screen, for drawing its wide bands |
+| **L + R + A** | load newly drawn wide-screen pictures |
+| **L + R + Y** | save the newest 3D image as a PNG (for debugging) |
+
+The display has settings in `sdmc:/3ds/pokeplatinum/remaster.txt`; the
+defaults are what most people want. See [`docs/REMASTER.md`](docs/REMASTER.md).
+
+Where the port's own layout for the wider screen doesn't look right, you can
+draw the bands yourself with the **WideArt** editor: see
+[`docs/WIDE_ART.md`](docs/WIDE_ART.md).
+
+More detail (the PC runner, debugging crashes, audio) is in
+[`3ds_port/game/README.md`](3ds_port/game/README.md).
 
 ## How it works
 
 ```
-your ROM ──► builder/ ──► game data pack (stays on your computer / SD card)
+your ROM ──► builder/ ──► platinum3ds.pak (stays on your computer / SD card)
 
-pret/pokeplatinum @ pinned commit ──► + patches/pokeplatinum/ ──► + 3ds_port/ ──► .3dsx
+pret/pokeplatinum @ pinned commit ──► + patches/ ──► + 3ds_port/ ──► .3dsx / .cia
 ```
 
-The decompilation is pinned in [`upstream.lock`](upstream.lock) so everyone
-builds against the same code. Our changes to it live as patch files, which keeps
-them small, reviewable and easy to rebase onto a newer upstream.
+- The game's original C is compiled with GCC for the 3DS's CPU. The
+  decompilation is pinned in [`upstream.lock`](upstream.lock); the port's
+  changes to it live as patch files, small and easy to rebase onto a newer
+  upstream.
+- Nintendo's DS libraries (NitroSDK and NitroSystem) are built for the 3DS too
+  ([`3ds_port/nitro`](3ds_port/nitro), [`3ds_port/nitrosystem`](3ds_port/nitrosystem)).
+  The DS hardware they talk to is provided by the port: a 2D renderer, a 3D
+  geometry engine that hands scenes to the 3DS's GPU, a software DS sound chip,
+  and the services of the DS's second CPU (save chip, clock, power, touch
+  screen).
+- The game reads its files from your data pack, by their original file IDs
+  ([`docs/PAK_FORMAT.md`](docs/PAK_FORMAT.md)).
+- The work is spread over the New 3DS's cores: the game, the geometry engine
+  and the drawing each run on their own.
 
-## Requirements
+The DS hardware layer is mapped in [`docs/HARDWARE_LAYER.md`](docs/HARDWARE_LAYER.md).
 
-- A **New 3DS family console** with custom firmware (Luma3DS) and the Homebrew
-  Launcher. Setup guide: <https://3ds.hacks.guide>
-- [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the `3ds-dev`
-  package group (devkitARM, libctru, citro3d, picasso, 3dslink).
-- Python 3.10+ and Git.
-- Optional: the [Azahar](https://azahar-emu.org) emulator for fast testing on PC.
-
-## Quick start: the first milestone
-
-Before touching the game, prove the toolchain works with the `hello3d` test
-app: a spinning cube in stereoscopic 3D at 400×240.
+## Development
 
 ```sh
-cd 3ds_port/hello3d
-make
+python tools/bootstrap.py   # once: fetch the decompilation and SDKs, apply patches
+make test                   # build for the PC and run every test suite
+make game                   # the game for the 3DS
+make link-check             # link the whole game and report anything missing
 ```
 
-Then either open `hello3d.3dsx` in Azahar, or send it to your console over
-Wi‑Fi: open the Homebrew Launcher, press **Y**, and run
+The same game code also builds as **`pokeplatinum-pc`**, a PC runner without
+a screen, for finding quickly how far the game gets and where it stops
+([`3ds_port/game/README.md`](3ds_port/game/README.md)).
 
-```sh
-3dslink hello3d.3dsx
-```
+Two small test programs check the toolchain without the game:
+[`3ds_port/hello3d`](3ds_port/hello3d), a stereoscopic spinning cube, and
+[`3ds_port/platinum_smoke`](3ds_port/platinum_smoke/README.md), which runs a
+few of the game's original functions (`make` builds both).
 
-Move the 3D slider: the cube should gain depth. The bottom screen shows the
-CPU and GPU time per frame. **START** exits.
-
-Every push to GitHub also builds `hello3d` automatically (see the **Actions**
-tab), and the `.3dsx` can be downloaded from the run.
-
-## First original-game code on 3DS
-
-The [Platinum smoke app](3ds_port/platinum_smoke/README.md) is a second,
-separate native `.3dsx`. It **links and executes actual original Platinum
-game functions** for Coin Case, RNG, and Pokédex language selection, using
-the 3DS buttons to change their state. Build it yourself and launch
-`platinum-smoke.3dsx` in Azahar or on a 3DS with the Homebrew Launcher:
-
-```sh
-python tools/bootstrap.py
-make            # hello3d.3dsx and platinum-smoke.3dsx (needs devkitPro)
-make test       # every test suite, on the PC
-```
-
-**Builds that contain game code are never published.** CI builds and tests
-them on every push but uploads only `hello3d` and text reports
-(`tools/check_ci_artifacts.py` fails the build otherwise). Like the
-decompilation projects, this repository shares source code, not builds of
-the game; don't share your own builds either.
-
-This proves the code-linking and native execution path, **not the full
-Platinum game boot**. The original `NitroMain`, Nintendo DS hardware
-emulation, game assets, audio and save system remain to be integrated.
-
-## Fetching the decompilation
-
-```sh
-python tools/bootstrap.py
-```
-
-This downloads pret/pokeplatinum at the pinned commit into `build/upstream/`,
-plus the NitroSDK and NitroSystem decompilations it uses into
-`build/NitroSDK/` and `build/NitroSystem/`, and applies our patches from
-`patches/`. To build the original DS
-ROM from it (a good sanity check), follow pret's
-[INSTALL.md](https://github.com/pret/pokeplatinum/blob/main/INSTALL.md) inside
-`build/upstream/`.
-
-To check that your own dump is the right version:
-
-```sh
-python builder/verify_rom.py path/to/your/platinum.nds
-```
+To build the original DS ROM from the decompilation as a sanity check, follow
+pret's [INSTALL.md](https://github.com/pret/pokeplatinum/blob/main/INSTALL.md)
+inside `build/upstream/`.
 
 ## Roadmap
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md). In short:
 
-0. Toolchain: hello3d running on Azahar and on a New 3DS.
-1. Decomp: pokeplatinum fetched, patched and building.
-2. Platform layer: separate the game from the DS hardware.
-3. 3DS backend: 2D, 3D, audio, input, save data on the 3DS.
-4. The upgrade: 400×240 widescreen 3D, stereoscopic depth, touch UI.
-5. SoulSilver: move the backend onto pokeheartgold.
+- **Done:** the toolchain; the game's code built and running on the 3DS; 2D,
+  3D, sound, input, saving; the remastered display (both screens filled, sharp
+  and stereoscopic 3D, 60 fps in the field); the HOME Menu version.
+- **Now:** polishing the wide upper screen's menus, higher-quality sprites,
+  fonts and textures, and keeping the frame rate up.
+- **Next:** a long stress run across the whole game, the bottom screen's touch
+  interface, the sun shadows on the 3DS, and a sound remaster.
+- **Later:** SoulSilver / HeartGold on the same backend.
 
 ## Contributing
 
@@ -152,18 +211,21 @@ and [`AI_DISCLOSURE.md`](AI_DISCLOSURE.md) for how AI assistance is used.
 ## Repository layout
 
 ```
-3ds_port/        3DS-side code
-  hello3d/       toolchain test app (stereoscopic cube)
-  nitro/         NitroSDK built with GCC, plus PC unit tests
-  nitrosystem/   NitroSystem's Fnd/G2d/G3d/Gfd/Snd libraries and host tests
-  common.mk      shared host, host32 and devkitARM toolchain flags
-builder/         turns the player's own ROM into the data pack (Python)
-docs/            roadmap and design notes
-patches/         changes applied on top of the decompilation and SDKs
-tools/           bootstrap and helper scripts (Python)
-Makefile         `make` builds the 3DS programs, `make test` runs every test
-LICENSE          GPL-3.0, for this project's own code
-upstream.lock    the exact pret/pokeplatinum commit we build against
+3ds_port/          3DS-side code
+  game/            the game: the 3DS program, the PC runner, the display, sound, input
+  nitro/           NitroSDK built with GCC, the DS hardware layer, PC unit tests
+  nitrosystem/     NitroSystem's Fnd/G2d/G3d/Gfd/Snd libraries and host tests
+  pak/             the data pack reader
+  hello3d/         toolchain test app (stereoscopic cube)
+  platinum_smoke/  first test of original game code on the 3DS
+  common.mk        shared host, host32 and devkitARM toolchain flags
+builder/           turns your own ROM into the data pack (Python)
+docs/              design notes: remaster display, wide art, data pack, roadmap
+patches/           changes applied on top of the decompilation and SDKs
+tools/             bootstrap, build helpers, the WideArt editor (Python)
+Makefile           `make game`, `make game-cia`, `make test`, ...
+LICENSE            GPL-3.0, for this project's own code
+upstream.lock      the exact pret/pokeplatinum commit we build against
 ```
 
 ## Credits and legal
