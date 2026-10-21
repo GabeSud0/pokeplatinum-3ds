@@ -2,12 +2,12 @@
   <img src="docs/images/logo.png" alt="Pokémon Platinum 3DS" width="420">
 </p>
 
-# PokePlatinum-3ds
+# PokePlatinum-3DS
 
-A native Nintendo 3DS port of Pokémon Platinum, built from the
+A native Nintendo 3DS port of Pokémon Platinum, built for the New 3DS, from the
 [pret/pokeplatinum](https://github.com/pret/pokeplatinum) decompilation. It
 isn't an emulator and it isn't a remake: the game's own code runs on the 3DS,
-and the port draws it the way a 3DS game would, keeping Platinum's 2.5D look.
+and the port draws it the way a 3DS game would.
 
 On a New 3DS:
 
