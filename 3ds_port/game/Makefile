@@ -509,9 +509,15 @@ MAKEROM ?= $(CIA_TOOLS)/bin/makerom
 BANNERTOOL ?= $(CIA_TOOLS)/bin/bannertool
 PROGRAM_CIA := $(OUT)/pokeplatinum.cia
 
-$(OUT)/pokeplatinum.bnr: $(HOME_ART)/banner.png $(HOME_ART)/banner.wav
+# The banner's tune: the port's own chime (cia/chime.wav, original music,
+# under the HOME Menu's 3-second limit), or HOME_ART's moment of silence
+# without it. CHIME=path/to/other.wav chooses another one.
+CHIME ?= $(wildcard cia/chime.wav)
+BANNER_WAV := $(if $(CHIME),$(CHIME),$(HOME_ART)/banner.wav)
+
+$(OUT)/pokeplatinum.bnr: $(HOME_ART)/banner.png $(BANNER_WAV)
 	@test -n "$(HOME_ART)" || { echo "Set HOME_ART (tools/home_menu_art.py)"; exit 1; }
-	@$(BANNERTOOL) makebanner -i $(HOME_ART)/banner.png -a $(HOME_ART)/banner.wav -o $@ >/dev/null
+	@$(BANNERTOOL) makebanner -i $(HOME_ART)/banner.png -a $(BANNER_WAV) -o $@ >/dev/null
 
 $(PROGRAM_CIA): $(PROGRAM_ELF) $(OUT)/pokeplatinum.smdh $(OUT)/pokeplatinum.bnr cia/pokeplatinum.rsf
 	@$(MAKEROM) -f cia -o $@ -target t -exefslogo -rsf cia/pokeplatinum.rsf -elf $(PROGRAM_ELF) \
