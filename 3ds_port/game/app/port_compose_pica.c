@@ -219,6 +219,7 @@ static u64 sGpuRunTick, sWaitTicks, sLastGpuTicks;
 static int sFlightStereo, sFlightEdgesWanted, sFlightEdges;   /* (the frame in flight: for auto_outlines) */
 static int sFlight3D;                   /* (and whether it drew the 3D: for auto_fps60) */
 static int sFlightDrawn, sFlightSmoothable;   /* (and how: DRAWN_*, and whether it could have been 2x2) */
+static int sFlightState;                /* (and its steps: fps60_state) */
 static u32 sMidFrames;                  /* (in-between scenes drawn) */
 static void gpu_finished(gxCmdQueue_s *queue);
 static void flight_finish(int block);
@@ -1243,7 +1244,8 @@ static void auto_outlines(u64 ticks, int drawn)
  * of them (twice, four, eight times) after each step down, till the
  * steps have stayed put for a while (FPS60_SETTLED_FRAMES: 10 s). With the
  * slider down and up the GPU's work differs (outlines; each eye): each
- * has its own steps. In the field (2026-10-20, a 3DS): slider up, 9-11
+ * has its own steps, and so do frames with the 3D on the lower screen
+ * (never drawn 2x2: their only step is to 30). In the field (2026-10-20, a 3DS): slider up, 9-11
  * ms 2x2, 14-16.5 in the busiest places; slider down (with the outlines),
  * 14-15.5 2x2, 18-20 with a text box up. */
 #define FPS60_OVER_MS 16.0
@@ -1262,19 +1264,29 @@ typedef struct Fps60 {
     u32 lastFrame;        /* (the last frame of this slider position's: which, how drawn) */
     int lastDrawn, lastSmoothable;
 } Fps60;
-static Fps60 sFps60[2] = {
+static Fps60 sFps60[3] = {
     { DRAWN_FULL, 0, 0, 0, 0, 0, { 1.0f, 1.15f, 1.2f }, 0, 0, 0, 0 },   /* slider down */
     { DRAWN_FULL, 0, 0, 0, 0, 0, { 1.0f, 1.4f, 1.4f }, 0, 0, 0, 0 },    /* slider up */
+    { DRAWN_FULL, 0, 0, 0, 0, 0, { 1.0f, 1.15f, 1.2f }, 0, 0, 0, 0 },   /* the 3D on the lower screen */
 };
 static u32 sFps60Frames;
 static const char *const sDrawnName[4] = { "", "as it is", "2x1", "2x2" };
-static const char *const sSliderName[2] = { "slider down", "slider up" };
+static const char *const sSliderName[3] = { "slider down", "slider up", "the 3D on the lower screen" };
 
-/* A finished frame with 3D: its GPU time, the slider's position, how its
- * upper screen's 3D was drawn and whether it could have been drawn 2x2. */
-static void auto_fps60(u64 ticks, int stereo, int drawn, int smoothable)
+/* Which steps a frame's: the slider's position's, or (the 3D on the lower
+ * screen) their own. */
+static int fps60_state(int stereo, int aOnTop)
 {
-    Fps60 *f = &sFps60[stereo ? 1 : 0];
+    return !aOnTop ? 2 : stereo ? 1 : 0;
+}
+
+/* A finished frame with 3D: its GPU time, its steps (fps60_state), how
+ * its upper screen's 3D was drawn and whether it could have been drawn
+ * 2x2. */
+static void auto_fps60(u64 ticks, int state, int drawn, int smoothable)
+{
+    Fps60 *f = &sFps60[state];
+    const int stereo = state;   /* (for the log lines' names) */
     const double ms = (double)ticks * 1000.0 / SYSCLOCK_ARM11;
     int top = smoothable ? DRAWN_FULL : DRAWN_PLAIN, now;
     u32 frame = ++sFps60Frames;
@@ -1294,6 +1306,9 @@ static void auto_fps60(u64 ticks, int stereo, int drawn, int smoothable)
     f->lastSmoothable = smoothable;
     if (f->level >= 1) {
         now = f->level < top ? f->level : top;
+        if (drawn > now) {
+            return;   /* (built before the step down: the GPU had it already) */
+        }
         f->over = ms > FPS60_OVER_MS ? f->over + 1 : 0;
         if (f->over >= FPS60_OVER_FRAMES) {
             f->level = now > DRAWN_PLAIN ? now - 1 : 0;
@@ -1305,11 +1320,11 @@ static void auto_fps60(u64 ticks, int stereo, int drawn, int smoothable)
             }
             if (f->level) {
                 NitroPort_Log("[compose] 60 frames a second, %s: the 3D drawn %s for now (a frame took the GPU "
-                              "%.1f ms drawn %s)", sSliderName[stereo ? 1 : 0], sDrawnName[f->level], ms,
+                              "%.1f ms drawn %s)", sSliderName[stereo], sDrawnName[f->level], ms,
                               sDrawnName[drawn]);
             } else {
                 NitroPort_Log("[compose] 60 frames a second, %s: off for now (a frame took the GPU %.1f ms drawn %s)",
-                              sSliderName[stereo ? 1 : 0], ms, sDrawnName[drawn]);
+                              sSliderName[stereo], ms, sDrawnName[drawn]);
             }
             return;
         }
@@ -1324,7 +1339,7 @@ static void auto_fps60(u64 ticks, int stereo, int drawn, int smoothable)
                 f->level = now + 1;
                 f->under = 0;
                 NitroPort_Log("[compose] 60 frames a second, %s: the 3D drawn %s again (%.1f ms a frame drawn %s, "
-                              "about %.1f %s)", sSliderName[stereo ? 1 : 0], sDrawnName[f->level], ms,
+                              "about %.1f %s)", sSliderName[stereo], sDrawnName[f->level], ms,
                               sDrawnName[drawn], est, sDrawnName[f->level]);
             }
         } else {
@@ -1345,13 +1360,13 @@ static void auto_fps60(u64 ticks, int stereo, int drawn, int smoothable)
         } else {
             f->under = 0;
         }
-        if (f->under >= FPS60_UNDER_FRAMES) {
+        if (f->under >= (FPS60_UNDER_FRAMES << f->backoff)) {
             f->level = f->best;
             f->under = 0;
             f->over = 0;
             f->sinceDown = 0;
             NitroPort_Log("[compose] 60 frames a second, %s: on again, the 3D drawn %s (frames take the GPU %.1f ms "
-                          "drawn %s, about %.1f %s)", sSliderName[stereo ? 1 : 0], sDrawnName[f->level], ms,
+                          "drawn %s, about %.1f %s)", sSliderName[stereo], sDrawnName[f->level], ms,
                           sDrawnName[drawn], est, sDrawnName[d]);
         }
     }
@@ -1365,7 +1380,7 @@ static int stereo_for(float slider, int aOnTop)
 
 int NitroPort_ComposeWantsMid(float slider, int aOnTop)
 {
-    return sFps60[stereo_for(slider, aOnTop)].level >= 1;
+    return sFps60[fps60_state(stereo_for(slider, aOnTop), aOnTop)].level >= 1;
 }
 
 /* How the upper screen's 3D is drawn now, the slider as it is: 60 frames
@@ -1439,7 +1454,7 @@ static void flight_finish(int block)
         auto_outlines(sLastGpuTicks, sFlightEdges);
     }
     if (sFlight3D) {
-        auto_fps60(sLastGpuTicks, sFlightStereo, sFlightDrawn, sFlightSmoothable);
+        auto_fps60(sLastGpuTicks, sFlightState, sFlightDrawn, sFlightSmoothable);
     }
     sGpuTicks += sLastGpuTicks;
     NitroPort_PicaFrameDone(sFlightMark);
@@ -1789,7 +1804,7 @@ static void smooth_down(Screen *scr, int eye, int edges)
 
 /* The edge marking buffers filled for a scene (memory fills, queued
  * ahead of the drawing), but those the transfer engine makes (copied: a
- * direction a bit): two a fill (the GPU's queue holds 32 entries a frame). */
+ * direction a bit): two a fill (a frame's GPU queue holds GX_QUEUE_ENTRIES). */
 static void fill_edge_buffers(Screen *scr, u32 value, unsigned copied)
 {
     u32 bytes = (u32)SCREEN_H * (u32)scr->width * 4u;
@@ -2087,6 +2102,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sFlight3D = top3d || (scene != NULL && !aOnTop);
         sFlightDrawn = drawnAs;
         sFlightSmoothable = smoothable;
+        sFlightState = fps60_state(stereoNow, aOnTop);
         sFlightEdgesWanted = edgesWanted;
         sFlightEdges = edges;
         if (stereoNow && edges) {
