@@ -36,6 +36,10 @@ of the same engine.
   battles, menus and saving. It still has some visual bugs.
 - A new UI for the 3DS's top screen: menus, text boxes and battles laid out
   across its full width.
+- A new resolution for the New 3DS XL: both screens filled at the 3DS's own
+  size, with the 3D drawn at the screen's resolution.
+- Updated animations for the intro.
+- New animations for some of the UI.
 
 **Work in progress**
 - 60 frames a second
@@ -207,7 +211,8 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md). In short:
 
 - **Done:** the toolchain; the game's code built and running on the 3DS; 2D,
   3D, sound, input, saving; the game fully playable; the new UI for the top
-  screen; the HOME Menu version.
+  screen; the New 3DS XL's resolution; updated intro and UI animations; the
+  HOME Menu version.
 - **Work in progress:** 60 frames a second, better 3D quality, a better UI
   for the bottom screen, better lighting.
 - **Future wishlist:** Wi-Fi, a Pokémon follower.
