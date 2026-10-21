@@ -1762,6 +1762,7 @@ static int pruned_any(size_t b,int whole,int zones,const unsigned scissor[4][4])
 #define EDGE_TILE (GX3D_TRANSFER_FLAGS|GX_TRANSFER_OUT_TILED(1))
 static int sEdgeCopy=1;
 static int sEdgeCopying;               /* (this frame: NitroPort_PicaEdgeCopies) */
+static int sEdgeDeriving;              /* (and the down one from the up one: derive_down_buffer) */
 static u32 *sEdgeLinear;               /* (EDGE_LINE x (EDGE_LINES_MAX + 2): VRAM, else the linear heap) */
 static int sEdgeLinearInVram;
 static int sEdgeLinearFailed;
@@ -1798,7 +1799,12 @@ unsigned NitroPort_PicaEdgeCopies(int edges)
         sEdgePadValue=sEdgePadLines=0;
     }
     sEdgeCopying=1;
-    return 11u;   /* (the directions: 0, 1 and 3) */
+    /* (the down one from the up one too, but with `edges pruned`: its
+     * zones' triangles are drawn only inside their scissors, and two
+     * pixels on, the bottom zone's two inner rows would read where they
+     * weren't drawn) */
+    sEdgeDeriving=!sPruning;
+    return sEdgeDeriving?11u:3u;   /* (the directions: 0, 1, and 3) */
 }
 
 static void free_edge_copies(void)
@@ -1900,13 +1906,13 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
     /* the left and right ones copied (the caller cut the command list) */
     NitroPort_PicaEdgeClearValue(&clear);
     if(sEdgeCopying){
-        copied=11;
-        if(!view->edgeFb[2]||!view->edgeFb[3]||!copy_edge_buffers(view,clear)){
+        copied=sEdgeDeriving?11:3;
+        if((sEdgeDeriving&&(!view->edgeFb[2]||!view->edgeFb[3]))||!copy_edge_buffers(view,clear)){
             /* (can't be: the caller left them unfilled, so filled here) */
             u32 bytes=(u32)view->fb->width*view->fb->height*4u;
             u8 *a=(u8*)view->edgeFb[0]->depthBuf,*b1=(u8*)view->edgeFb[1]->depthBuf;
             GX_MemoryFill((u32*)a,clear,(u32*)(a+bytes),BIT(0)|(2u<<8),(u32*)b1,clear,(u32*)(b1+bytes),BIT(0)|(2u<<8));
-            if(view->edgeFb[3]){
+            if(sEdgeDeriving&&view->edgeFb[3]){
                 u8 *d=(u8*)view->edgeFb[3]->depthBuf;
                 GX_MemoryFill((u32*)d,clear,(u32*)(d+bytes),BIT(0)|(2u<<8),NULL,0,NULL,0);
             }
