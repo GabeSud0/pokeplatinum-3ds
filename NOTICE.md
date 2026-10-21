@@ -39,3 +39,12 @@ license, which is compatible with GPL-3.0.
 is a C version of the 2x scaler of xBRZ by Zenju, from the HqMAME project
 (the copy in PPSSPP's `ext/xbrz`), which is distributed under the GNU General
 Public License. This version is GPL-3.0 like the rest of the project.
+
+`3ds_port/game/cia/icon.png` (the HOME Menu icon) is original art made for
+this project, licensed with it.
+
+`3ds_port/game/cia/chime.wav` (the HOME Menu banner's chime) is original
+music written for this project, licensed with it. It was played with the
+GeneralUser GS SoundFont by S. Christian Collins
+(<https://www.schristiancollins.com>), whose license allows music made with
+it to be used without restriction.
