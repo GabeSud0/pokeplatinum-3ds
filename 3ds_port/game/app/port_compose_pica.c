@@ -152,13 +152,16 @@ static void *sEdgeBlock;          /* (the four, one after another: one VRAM bloc
  *    resolution. The outlines stay one pixel wide, as the DS's are. */
 #define SMOOTH_W (SCREEN_H * 2)
 #define SMOOTH_H (TOP_W * 2)
-static void *sSmoothColor, *sSmoothOwnDepth;
+/* (or 2x1, while 60 frames a second wouldn't fit 2x2: auto_fps60. Two
+ * samples down the screen (the framebuffer's lines, which the transfer
+ * engine can halve on their own), one across: TOP_W lines.) */
+static void *sSmoothColor, *sSmoothOwnDepth, *sSmoothDepth;
 static uint8_t sSmoothFb[PICA_FRAMEBUF_BYTES] __attribute__((aligned(8)));
-static int sSmoothReady, sSmoothNow, sSmoothSplit;
+static int sSmoothReady, sSmoothNow, sSmoothSplit, sSmoothHalf, sSmoothMadeHalf;
 static u32 sEdgeClearNow;          /* (this frame: what the edge buffers are filled with) */
 static void smooth_down(Screen *scr, int eye, int edges);
 static unsigned sEdgeCopiesNow;    /* (and which are copied instead) */
-static u32 sSmoothFrames;
+static u32 sSmoothFrames, sSmoothHalfFrames;
 static LightLock sSetLock, sPresentLock;
 static uint32_t sSeq;
 static ComposeLayers sWork[2];    /* the drawers' pictures, by engine */
@@ -203,6 +206,7 @@ static volatile u64 sGpuDoneTick;
 static u64 sGpuRunTick, sWaitTicks, sLastGpuTicks;
 static int sFlightStereo, sFlightEdgesWanted, sFlightEdges;   /* (the frame in flight: for auto_outlines) */
 static int sFlight3D;                   /* (and whether it drew the 3D: for auto_fps60) */
+static int sFlightDrawn, sFlightSmoothable;   /* (and how: DRAWN_*, and whether it could have been 2x2) */
 static u32 sMidFrames;                  /* (in-between scenes drawn) */
 static void gpu_finished(gxCmdQueue_s *queue);
 static void flight_finish(int block);
@@ -485,6 +489,7 @@ static void free_all(void)
         sSmoothOwnDepth = NULL;
     }
     sSmoothReady = 0;
+    sSmoothDepth = NULL;
     if (sQuadsAll) {
         linearFree(sQuadsAll);
         sQuadsAll = NULL;
@@ -646,6 +651,8 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
         if (sSmoothColor &&
             NitroPort_PicaFrameBufMake(sSmoothFb, sizeof(sSmoothFb), sSmoothColor, depth, SMOOTH_W, SMOOTH_H)) {
             sSmoothReady = 1;
+            sSmoothDepth = depth;
+            sSmoothMadeHalf = 0;
         } else {
             NitroPort_Log("[compose] no VRAM for the smooth 3D (drawn 2x2): the slider's 3D drawn as it is");
             if (sSmoothColor) {
@@ -1000,7 +1007,7 @@ static u32 rgba_of(uint16_t c, u32 alpha)
 #define PROF_MARKS 30
 #define PROF_EVENTS 96
 typedef struct ProfInfo {
-    int stereo, edges, smooth, split;
+    int stereo, edges, smooth, split, half;
     u64 t0;                                /* (its queue's start) */
 } ProfInfo;
 static ProfInfo sProfFlight;               /* (the frame in flight, when profiled) */
@@ -1109,8 +1116,10 @@ static void prof_report(const ProfInfo *info)
                 len = (size_t)snprintf(line, sizeof(line), "[gpu] %s (%s, outlines %s):",
                                        groups[group < 0 || group > 2 ? 2 : group],
                                        info->smooth && group != 2
-                                           ? (info->split ? (stereo ? "stereo, drawn 2x2 then 1x1" : "mono, drawn 2x2 then 1x1")
-                                                          : stereo ? "stereo, drawn 2x2" : "mono, drawn 2x2")
+                                           ? (info->split ? (stereo ? (info->half ? "stereo, drawn 2x1 then 1x1" : "stereo, drawn 2x2 then 1x1")
+                                                                    : (info->half ? "mono, drawn 2x1 then 1x1" : "mono, drawn 2x2 then 1x1"))
+                                                          : stereo ? (info->half ? "stereo, drawn 2x1" : "stereo, drawn 2x2")
+                                                                   : (info->half ? "mono, drawn 2x1" : "mono, drawn 2x2"))
                                            : stereo ? "stereo" : "mono",
                                        !edges ? "off" : sConfig.edges == 2 ? "on, pruned"
                                        : sConfig.edges == 3 ? "on, all drawn" : "on");
@@ -1198,42 +1207,149 @@ static void auto_outlines(u64 ticks, int drawn)
 
 /* ------------------------------------------------- 60 frames a second
  * With the in-between scenes (fps60) a frame has 16.7 ms of the GPU, not
- * 33: drawn while the frames fit (auto_fps60: a frame's GPU time, the
- * in-between scenes' frames and their scenes' alike), the scenes alone (30
- * a second) after FPS60_OVER_FRAMES frames in a row over FPS60_OVER_MS,
- * the in-between scenes again after FPS60_UNDER_FRAMES (2 s) in a row
- * under FPS60_UNDER_MS. */
+ * 33. 60 frames a second come first: while frames don't fit, the upper
+ * screen's 3D is drawn more cheaply, step by step (2x2, then 2x1, then
+ * as it is), and only if they still don't, the scenes alone (30 a second,
+ * 2x2 again: it fits in 33 ms). A step down after FPS60_OVER_FRAMES frames
+ * in a row over FPS60_OVER_MS; a step up after FPS60_UNDER_FRAMES frames
+ * in a row that would be under FPS60_UNDER_MS the next way up (the frame
+ * as drawn times what that step costs: ratio, measured each time a step
+ * is taken, the frames either side of it being much the same scene), more
+ * of them (twice, four, eight times) after each step down, till the
+ * steps have stayed put for a while (FPS60_SETTLED_FRAMES: 10 s). With the
+ * slider down and up the GPU's work differs (outlines; each eye): each
+ * has its own steps. In the field (2026-10-20, a 3DS): slider up, 9-11
+ * ms 2x2, 14-16.5 in the busiest places; slider down (with the outlines),
+ * 14-15.5 2x2, 18-20 with a text box up. */
 #define FPS60_OVER_MS 16.0
 #define FPS60_UNDER_MS 14.5
 #define FPS60_OVER_FRAMES 4
 #define FPS60_UNDER_FRAMES 60
-static int sFps60 = 1, sFps60Over, sFps60Under;
+#define FPS60_SETTLED_FRAMES 600
+#define FPS60_MAX_BACKOFF 3
+enum { DRAWN_PLAIN = 1, DRAWN_HALF = 2, DRAWN_FULL = 3 };   /* (as it is, 2x1, 2x2) */
+typedef struct Fps60 {
+    int level;            /* 0: 30 a second (drawn the best way); 1-3: 60, drawn as DRAWN_* */
+    int over, under, best, backoff;
+    u32 sinceDown;
+    float ratio[3];       /* [d]: a frame's GPU time drawn d + 1 / drawn d (d: DRAWN_PLAIN, DRAWN_HALF) */
+    u64 lastTicks;
+    u32 lastFrame;        /* (the last frame of this slider position's: which, how drawn) */
+    int lastDrawn, lastSmoothable;
+} Fps60;
+static Fps60 sFps60[2] = {
+    { DRAWN_FULL, 0, 0, 0, 0, 0, { 1.0f, 1.15f, 1.2f }, 0, 0, 0, 0 },   /* slider down */
+    { DRAWN_FULL, 0, 0, 0, 0, 0, { 1.0f, 1.4f, 1.4f }, 0, 0, 0, 0 },    /* slider up */
+};
+static u32 sFps60Frames;
+static const char *const sDrawnName[4] = { "", "as it is", "2x1", "2x2" };
+static const char *const sSliderName[2] = { "slider down", "slider up" };
 
-static void auto_fps60(u64 ticks)
+/* A finished frame with 3D: its GPU time, the slider's position, how its
+ * upper screen's 3D was drawn and whether it could have been drawn 2x2. */
+static void auto_fps60(u64 ticks, int stereo, int drawn, int smoothable)
 {
+    Fps60 *f = &sFps60[stereo ? 1 : 0];
     const double ms = (double)ticks * 1000.0 / SYSCLOCK_ARM11;
+    int top = smoothable ? DRAWN_FULL : DRAWN_PLAIN, now;
+    u32 frame = ++sFps60Frames;
 
-    if (sFps60) {
-        sFps60Over = ms > FPS60_OVER_MS ? sFps60Over + 1 : 0;
-        if (sFps60Over >= FPS60_OVER_FRAMES) {
-            sFps60 = 0;
-            sFps60Over = 0;
-            sFps60Under = 0;
-            NitroPort_Log("[compose] 60 frames a second: off for now (a frame took the GPU %.1f ms)", ms);
+    /* What a step costs: this frame against the one just before, drawn
+     * the next way up or down. */
+    if (f->lastDrawn && f->lastFrame + 1u == frame && f->lastSmoothable && smoothable && f->lastTicks && ticks &&
+        (drawn == f->lastDrawn + 1 || drawn + 1 == f->lastDrawn)) {
+        int d = drawn < f->lastDrawn ? drawn : f->lastDrawn;
+        float r = drawn > f->lastDrawn ? (float)ticks / (float)f->lastTicks : (float)f->lastTicks / (float)ticks;
+
+        f->ratio[d] = r < 1.02f ? 1.02f : r > 3.0f ? 3.0f : r;
+    }
+    f->lastDrawn = drawn;
+    f->lastTicks = ticks;
+    f->lastFrame = frame;
+    f->lastSmoothable = smoothable;
+    if (f->level >= 1) {
+        now = f->level < top ? f->level : top;
+        f->over = ms > FPS60_OVER_MS ? f->over + 1 : 0;
+        if (f->over >= FPS60_OVER_FRAMES) {
+            f->level = now > DRAWN_PLAIN ? now - 1 : 0;
+            f->over = 0;
+            f->under = 0;
+            f->sinceDown = 0;
+            if (f->backoff < FPS60_MAX_BACKOFF) {
+                f->backoff++;
+            }
+            if (f->level) {
+                NitroPort_Log("[compose] 60 frames a second, %s: the 3D drawn %s for now (a frame took the GPU "
+                              "%.1f ms drawn %s)", sSliderName[stereo ? 1 : 0], sDrawnName[f->level], ms,
+                              sDrawnName[drawn]);
+            } else {
+                NitroPort_Log("[compose] 60 frames a second, %s: off for now (a frame took the GPU %.1f ms drawn %s)",
+                              sSliderName[stereo ? 1 : 0], ms, sDrawnName[drawn]);
+            }
+            return;
+        }
+        if (f->sinceDown < FPS60_SETTLED_FRAMES && ++f->sinceDown == FPS60_SETTLED_FRAMES) {
+            f->backoff = 0;
+        }
+        if (now < top && drawn == now) {
+            double est = ms * f->ratio[now];
+
+            f->under = est < FPS60_UNDER_MS ? f->under + 1 : 0;
+            if (f->under >= (FPS60_UNDER_FRAMES << f->backoff)) {
+                f->level = now + 1;
+                f->under = 0;
+                NitroPort_Log("[compose] 60 frames a second, %s: the 3D drawn %s again (%.1f ms a frame drawn %s, "
+                              "about %.1f %s)", sSliderName[stereo ? 1 : 0], sDrawnName[f->level], ms,
+                              sDrawnName[drawn], est, sDrawnName[f->level]);
+            }
+        } else {
+            f->under = 0;
         }
     } else {
-        sFps60Under = ms < FPS60_UNDER_MS ? sFps60Under + 1 : 0;
-        if (sFps60Under >= FPS60_UNDER_FRAMES) {
-            sFps60 = 1;
-            sFps60Under = 0;
-            NitroPort_Log("[compose] 60 frames a second: on again (frames take the GPU %.1f ms)", ms);
+        /* 30 a second: back to 60 the best way that fits. */
+        int d = drawn;
+        double est = ms;
+
+        while (d > DRAWN_PLAIN && est >= FPS60_UNDER_MS) {
+            d--;
+            est /= f->ratio[d];
+        }
+        if (est < FPS60_UNDER_MS) {
+            f->best = f->under == 0 || d < f->best ? d : f->best;
+            f->under++;
+        } else {
+            f->under = 0;
+        }
+        if (f->under >= FPS60_UNDER_FRAMES) {
+            f->level = f->best;
+            f->under = 0;
+            f->over = 0;
+            f->sinceDown = 0;
+            NitroPort_Log("[compose] 60 frames a second, %s: on again, the 3D drawn %s (frames take the GPU %.1f ms "
+                          "drawn %s, about %.1f %s)", sSliderName[stereo ? 1 : 0], sDrawnName[f->level], ms,
+                          sDrawnName[drawn], est, sDrawnName[d]);
         }
     }
 }
 
-int NitroPort_ComposeWantsMid(void)
+/* The slider's position as ComposeFrame takes it (stereo or not). */
+static int stereo_for(float slider, int aOnTop)
 {
-    return sFps60;
+    return sConfig.stereo && slider > 0.0f && sScreens[0].target[1] != NULL && aOnTop;
+}
+
+int NitroPort_ComposeWantsMid(float slider, int aOnTop)
+{
+    return sFps60[stereo_for(slider, aOnTop)].level >= 1;
+}
+
+/* How the upper screen's 3D is drawn now, the slider as it is: 60 frames
+ * a second's step, or 2x2 at 30. */
+static int fps60_drawn(int stereo)
+{
+    int level = sFps60[stereo ? 1 : 0].level;
+
+    return level >= 1 ? level : DRAWN_FULL;
 }
 
 /* A queue of ours run dry: its frame drawn (the GSP event thread). */
@@ -1298,7 +1414,7 @@ static void flight_finish(int block)
         auto_outlines(sLastGpuTicks, sFlightEdges);
     }
     if (sFlight3D) {
-        auto_fps60(sLastGpuTicks);
+        auto_fps60(sLastGpuTicks, sFlightStereo, sFlightDrawn, sFlightSmoothable);
     }
     sGpuTicks += sLastGpuTicks;
     NitroPort_PicaFrameDone(sFlightMark);
@@ -1585,19 +1701,39 @@ static void smooth_clear(const LayerSet *set, int underCleared)
                       underCleared ? rgba_of_565(set->underColor) : 0, 0xFFFFFFFFu);
 }
 
+/* The smooth framebuffer 2x2 or 2x1 for this frame (its size: what the
+ * clears, the drawing's viewport and the transfers take from it). */
+static void smooth_size(int half)
+{
+    if (half != sSmoothMadeHalf &&
+        NitroPort_PicaFrameBufMake(sSmoothFb, sizeof(sSmoothFb), sSmoothColor, sSmoothDepth, SMOOTH_W,
+                                   half ? TOP_W : SMOOTH_H)) {
+        sSmoothMadeHalf = half;
+    }
+}
+
+/* (each 2x1 averaged: the lines halved, as many of them) */
+#define SMOOTH_HALF_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | \
+     GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
+     GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_X))
+
 /* An eye drawn by the smooth 3D into its LCD framebuffer, scaled down
  * (queued after the drawing). */
 static void smooth_out(Screen *scr, int buf, int eye)
 {
-    u32 dim = GX_BUFFER_DIM(SMOOTH_W, SMOOTH_H);
+    u32 dim = GX_BUFFER_DIM(SMOOTH_W, sSmoothMadeHalf ? TOP_W : SMOOTH_H);
 
-    GX_DisplayTransfer((u32 *)sSmoothColor, dim, (u32 *)scr->lcd[buf][eye], dim, SMOOTH_TRANSFER_FLAGS);
+    GX_DisplayTransfer((u32 *)sSmoothColor, dim, (u32 *)scr->lcd[buf][eye], dim,
+                       sSmoothMadeHalf ? SMOOTH_HALF_FLAGS : SMOOTH_TRANSFER_FLAGS);
 }
 
-/* RGBA8 to RGBA8: tiled, each 2x2 averaged, into linear; linear into tiled. */
+/* RGBA8 to RGBA8: tiled, each 2x2 (2x1) averaged, into linear; linear into tiled. */
 #define SMOOTH_DOWN_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | \
      GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
      GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_XY))
+#define SMOOTH_DOWN_HALF_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | \
+     GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
+     GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_X))
 #define SMOOTH_TILE_FLAGS (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_RAW_COPY(0) | \
      GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) | \
      GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
@@ -1614,10 +1750,10 @@ static void smooth_down(Screen *scr, int eye, int edges)
     C3D_FrameBuf *fb = (C3D_FrameBuf *)sSmoothFb;
     u32 *temp = (u32 *)fb->depthBuf;
     u32 dim = GX_BUFFER_DIM(SCREEN_H, TOP_W);
+    u32 in = GX_BUFFER_DIM(SMOOTH_W, sSmoothMadeHalf ? TOP_W : SMOOTH_H);
 
     prof_split("the opaque polygons", 1);
-    GX_DisplayTransfer((u32 *)sSmoothColor, GX_BUFFER_DIM(SMOOTH_W, SMOOTH_H), temp,
-                       GX_BUFFER_DIM(SMOOTH_W, SMOOTH_H), SMOOTH_DOWN_FLAGS);
+    GX_DisplayTransfer((u32 *)sSmoothColor, in, temp, in, sSmoothMadeHalf ? SMOOTH_DOWN_HALF_FLAGS : SMOOTH_DOWN_FLAGS);
     GX_DisplayTransfer(temp, dim, (u32 *)scr->target[eye]->frameBuf.colorBuf, dim, SMOOTH_TILE_FLAGS);
     if (edges) {
         fill_edge_buffers(scr, sEdgeClearNow, sEdgeCopiesNow);
@@ -1652,7 +1788,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                            int forced, int flush, int mid)
 {
     int s, drawn = 0, stereoNow, need[2] = { 0, 0 }, timed = 0, edges = 0, lcdBuf[2] = { -1, -1 }, top3d = 0;
-    int edgesWanted = 0;
+    int edgesWanted = 0, smoothable = 0, drawnAs = DRAWN_PLAIN;
     int underCleared[2] = { 0, 0 };
     unsigned copies;
     u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
@@ -1692,7 +1828,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sSeenAt = startVBlank;
         sSeenValid = 1;
     }
-    stereoNow = sConfig.stereo && slider > 0.0f && sScreens[0].target[1] != NULL && aOnTop;
+    stereoNow = stereo_for(slider, aOnTop);
     LightLock_Lock(&sSetLock);
     LightLock_Lock(&sPresentLock);
     for (s = 0; s < 2; s++) {
@@ -1779,7 +1915,20 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     }
     /* The smooth 3D (sSmoothFb): on the upper screen when the 3D is
      * there; with outlines, split (sSmoothSplit), each eye in turn. */
-    sSmoothNow = sSmoothReady && need[0] && top3d && (stereoNow || sConfig.smooth3d == 2);
+    smoothable = sSmoothReady && need[0] && top3d && (stereoNow || sConfig.smooth3d == 2);
+    /* (2x2, or as 60 frames a second has it now: auto_fps60) */
+    drawnAs = smoothable ? fps60_drawn(stereoNow) : DRAWN_PLAIN;
+    sSmoothNow = smoothable && drawnAs >= DRAWN_HALF;
+    sSmoothHalf = sSmoothNow && drawnAs == DRAWN_HALF;
+    if (sSmoothNow) {
+        smooth_size(sSmoothHalf);
+        if (sSmoothMadeHalf != sSmoothHalf) {
+            sSmoothHalf = sSmoothMadeHalf;   /* (couldn't be changed: as it was) */
+            drawnAs = sSmoothHalf ? DRAWN_HALF : DRAWN_FULL;
+        }
+    } else {
+        drawnAs = DRAWN_PLAIN;
+    }
     sSmoothSplit = sSmoothNow && edges;
     /* The left and right edge buffers copied from the screen's own
      * (NitroPort_PicaEdgeCopies): its stencil then the rear plane's ID where
@@ -1907,6 +2056,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sFlightMark = mark;
         sFlightStereo = stereoNow;
         sFlight3D = top3d || (scene != NULL && !aOnTop);
+        sFlightDrawn = drawnAs;
+        sFlightSmoothable = smoothable;
         sFlightEdgesWanted = edgesWanted;
         sFlightEdges = edges;
         if (stereoNow && edges) {
@@ -1926,6 +2077,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             sProfFlight.stereo = stereoNow;
             sProfFlight.edges = edges;
             sProfFlight.smooth = sSmoothNow;
+            sProfFlight.half = sSmoothHalf;
             sProfFlight.split = sSmoothSplit;
             sProfFlight.t0 = svcGetSystemTick();
             __atomic_store_n(&sProfEvents, 0u, __ATOMIC_RELEASE);
@@ -1953,7 +2105,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sStereoFrames++;
     }
     if (sSmoothNow) {
-        sSmoothFrames++;
+        if (sSmoothHalf) {
+            sSmoothHalfFrames++;
+        } else {
+            sSmoothFrames++;
+        }
     }
     NitroPort_PicaTextureStats(&texAfter, &texels, &texTicksAfter);
     {
@@ -2086,6 +2242,7 @@ void NitroPort_ComposeStats(ComposeStats *stats)
     stats->stereo = sStereoFrames;
     stats->underFills = sUnderFills;
     stats->smooth = sSmoothFrames;
+    stats->smoothHalf = sSmoothHalfFrames;
     stats->waitTicks = sWaitTicks;
     stats->stereoEdges = sStereoEdgeFrames;
     stats->midFrames = sMidFrames;

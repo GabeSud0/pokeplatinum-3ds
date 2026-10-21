@@ -240,9 +240,10 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                            float slider, int forced, int flush, int mid);
 /* (mid: scene is the in-between scene of the scene of serial sceneSerial
  * (NitroPort_Gx3dMidOf), shown a V-blank before it; draw it first.) Whether
- * in-between scenes fit now (60 frames a second: the GPU has 16.7 ms a
- * frame; off while frames take longer, port_compose_pica.c auto_fps60). */
-int NitroPort_ComposeWantsMid(void);
+ * in-between scenes fit now, the slider and the screens as they are (60
+ * frames a second: the GPU has 16.7 ms a frame; the 3D drawn more cheaply,
+ * then off, while frames take longer: port_compose_pica.c auto_fps60). */
+int NitroPort_ComposeWantsMid(float slider, int aOnTop);
 /* The look (sun shadows and the colour grade, NitroPort_PicaLook) on or
  * off from the next frame drawn. Any thread (L + R + B). */
 void NitroPort_ComposeLook(int on);
@@ -257,6 +258,7 @@ typedef struct ComposeStats {
     u32 frames, published, timed, late, dropped, stereo;
     u32 underFills;          /* screens drawn whose picture behind the 3D was all one colour (the clear) */
     u32 smooth;              /* frames whose upper screen was drawn 2x2 (smooth3d) */
+    u32 smoothHalf;          /* and 2x1 (60 frames a second while 2x2 doesn't fit) */
     u64 waitTicks;           /* the display thread waiting for the GPU (to finish the frame before) */
     u32 stereoEdges;         /* frames drawn in stereo with outlines (they're left out while they don't fit) */
     u32 midFrames;           /* frames of in-between scenes (60 frames a second) */

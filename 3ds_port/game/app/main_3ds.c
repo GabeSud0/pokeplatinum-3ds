@@ -601,7 +601,7 @@ static void GpuComposeLoop(void)
         {
             u64 start=svcGetSystemTick();
             if(mid && !force){
-                if(!NitroPort_ComposeWantsMid()){
+                if(!NitroPort_ComposeWantsMid(osGet3DSliderState(),sAOnTop)){
                     mid=NULL;
                 }else{
                     /* (drawn on the 3D's screen: done; waiting for its
@@ -2013,7 +2013,7 @@ static void PerfFrame(u64 enter)
         frames = now.frames - last.frames;
         published = now.published - last.published;
         timed = now.timed - last.timed;
-        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, %.1f in between, of %.1f scenes/s; %u scenes not shown), each %.1f ms building + %.1f ms GPU (drawn while the next is built: %.1f ms waited); %.0f%% in stereo (%.0f%% of it with outlines), %.0f%% drawn 2x2; 3D textures converted %u (%.1f ms each); 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut; "
+        NitroPort_Log("[perf] display: %.1f frames/s drawn (%.1f with a new 3D scene, %.1f in between, of %.1f scenes/s; %u scenes not shown), each %.1f ms building + %.1f ms GPU (drawn while the next is built: %.1f ms waited); %.0f%% in stereo (%.0f%% of it with outlines), %.0f%% drawn 2x2, %.0f%% 2x1; 3D textures converted %u (%.1f ms each); 2D published %.1f/s, %.1f ms each; 3D shown %d V-blanks after the game made it, %u late; GPU command list %.0f%% full at most, %u draws cut; "
                       "the picture behind the 3D one colour (painted by the clear) on %.1f screens a frame",
                       frames / seconds, timed / seconds, (double)(now.midFrames - last.midFrames) / seconds,
                       madeScenes / seconds,
@@ -2025,6 +2025,7 @@ static void PerfFrame(u64 enter)
                       now.stereo != last.stereo ? 100.0 * (now.stereoEdges - last.stereoEdges) / (now.stereo - last.stereo)
                                                 : 0.0,
                       frames ? 100.0 * (now.smooth - last.smooth) / frames : 0.0,
+                      frames ? 100.0 * (now.smoothHalf - last.smoothHalf) / frames : 0.0,
                       (unsigned)(tex - lastTex),
                       tex != lastTex ? (double)(texTicks - lastTexTicks) * 1000.0 / SYSCLOCK_ARM11 / (tex - lastTex) : 0.0,
                       published / seconds,
