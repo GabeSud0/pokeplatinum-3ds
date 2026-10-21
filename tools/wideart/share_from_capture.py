@@ -8,10 +8,10 @@ does it on the screen itself (NitroPort_Render2DShareArt, docs/WIDE_ART.md
 PICTURE: the picture (wide/<key>_<hofs>_<vofs>[_full|_loop].png). CAPTURE: a
 capture folder (wide/captures/NNNN) of the screen it's for, made where the
 picture was made (the same scroll); its info.txt names the layer of the
-picture's key: a BG's bg<N>.png (as the port drew it, its bands included)
-and bg<N>_map.png (its map going on past the DS's edges), or a sprite
-group's obj<G>.png. OUT: the file written (wide/share/<picture's name> if
-left out).
+picture's key: a BG's bg<N>_map.png (the BG's own pixels, its map going on
+past the DS's edges: what the runner tells the picture's pixels from), or a
+sprite group's obj<G>.png. OUT: the file written (wide/share/<picture's
+name> if left out).
 
 The picture's pixels the same as the layer's where they are are made the
 game's own (alpha 64; red 0, green 128, blue 1); those the same as the
@@ -128,7 +128,7 @@ def main(argv):
         for line in f:
             words = line.split()
             if len(words) > 5 and words[0] == 'bg' and words[5] == key:
-                references = [os.path.join(capture, f'bg{words[1]}.png'), os.path.join(capture, f'bg{words[1]}_map.png')]
+                references = [os.path.join(capture, f'bg{words[1]}_map.png')]
             elif len(words) > 5 and words[0] == 'obj' and words[5] == key:
                 references, sideways = [os.path.join(capture, f'obj{words[1]}.png')], True
     references = [r for r in references if os.path.exists(r)]

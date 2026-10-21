@@ -236,8 +236,9 @@ where it was made (its layout's place). So:
    save that hasn't the Town Map yet) can be shared from a capture of
    that screen instead: `python tools/wideart/share_from_capture.py
    WIDE_FOLDER/<picture>.png WIDE_FOLDER/captures/NNNN` (the capture's
-   layer of the picture's key, as the port drew it and its map going on
-   past the DS's edges).
+   layer of the picture's key: a BG's `bg<N>_map.png`, its own pixels with
+   its map going on past the DS's edges, which is what the runner tells a
+   picture's pixels from too; a sprite group's `obj<G>.png`).
 2. Copy `DIR/share/*.png` into the repository's `wideart/` folder, and the
    layouts' pictures (`party_panel.png`, `pc_boxes_divider.png`...: drawn
    whole by hand, so as they are) from `wide/` too. A picture shared with

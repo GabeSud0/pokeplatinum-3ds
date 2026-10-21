@@ -49,6 +49,7 @@
 #include <nitro_port_wide.h>
 #include <nitro_port_wideart.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define W 256
@@ -470,29 +471,36 @@ typedef struct OwnRow {
     Segment segs[MAX_SEGMENTS];
     int n, y;
 } OwnRow;
-#define OWN_ROW_INIT { { { 0, 0, 0, 0, 0 } }, 0, -1 }
+static inline void OwnRowStart(OwnRow *own)
+{
+    own->n = 0;
+    own->y = -1;
+}
 
 /* A text BG's own pixel at canvas x, y (any: past the canvas too), the BG
  * drawn as it is, without its hand-drawn picture, at the scroll hofs,
- * vofs: its runs' on the canvas (split or in parts as the port lays it
- * out), its map's beyond them, going on past the DS's edges. */
+ * vofs: its runs' on the canvas (TextBgSegments, ownOnly: the windows
+ * moved and the parts as the port lays it out, the map going on past the
+ * DS's edges; where a window was, nothing), the map's on the rows past
+ * the canvas. The same as a capture's bg<N>_map.png. */
 static u16 OwnTextPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int hofs, int vofs, int mapW, int mapH,
                         int x, int y, OwnRow *own)
 {
     int ty = (y + vofs) & (mapH - 1), k;
 
-    if (y >= 0 && y < H) {
-        if (own->y != y) {
-            own->n = TextBgSegments(e, bg, bgcnt, dispcnt, y, ty, hofs, mapW, own->segs, 1);
-            own->y = y;
-        }
-        for (k = 0; k < own->n; k++) {
-            if (x >= own->segs[k].x0 && x < own->segs[k].x1) {
-                return SegmentPixel(e, bg, bgcnt, dispcnt, &own->segs[k], x, ty, mapW);
-            }
+    if (y < 0 || y >= H) {
+        return TextBgPixel(e, bg, bgcnt, dispcnt, (x - e->origin + hofs) & (mapW - 1), ty);
+    }
+    if (own->y != y) {
+        own->n = TextBgSegments(e, bg, bgcnt, dispcnt, y, ty, hofs, mapW, own->segs, 1);
+        own->y = y;
+    }
+    for (k = 0; k < own->n; k++) {
+        if (x >= own->segs[k].x0 && x < own->segs[k].x1) {
+            return SegmentPixel(e, bg, bgcnt, dispcnt, &own->segs[k], x, ty, mapW);
         }
     }
-    return TextBgPixel(e, bg, bgcnt, dispcnt, (x - e->origin + hofs) & (mapW - 1), ty);
+    return 0;
 }
 
 /* A text BG's hand-drawn picture's pixel (ax, ay: on the canvas, the
@@ -1087,7 +1095,7 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
     if ((e->partBgs >> bg) & 1) {
         return PartSegments(e, bg, ty, hofs, mapW, segs);
     }
-    if (e->split[bg]) {
+    if (e->split[bg] && !ownOnly) {
         /* The halves to the edges, the plain middle widened. */
         segs[0].x0 = 0;
         segs[0].x1 = 128;
@@ -1188,16 +1196,20 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
     }
     /* The BG's own pixels, less where the windows were and where they went;
      * beside them, its edge's colour when its edge is plain on this line
-     * (a picture's border, say: widened without anything stretched). */
+     * (a picture's border, say: widened without anything stretched).
+     * (ownOnly: as if without clip, its map going on past the DS's edges
+     * and no colour beside it, nor split: the BG's own pixels as a capture's
+     * bg<N>_map.png has them, what a picture's pixels are told from.) */
     {
-        int bx0 = e->clip[bg] ? origin : 0, bx1 = e->clip[bg] ? origin + 256 : width;
+        int clip = e->clip[bg] && !ownOnly;
+        int bx0 = clip ? origin : 0, bx1 = clip ? origin + 256 : width;
         int cuts[2 * NITRO_WIDE_MAX_WINDOWS][2], ncuts = 0, x, run = PlainRun(e);
         /* (the colour beside it: worked out for the frame, DecideBandFills,
          * or looked at here) */
         u16 bandL = e->bandFills[bg] ? e->bandFill[bg][0][y] : 0, bandR = e->bandFills[bg] ? e->bandFill[bg][1][y] : 0;
-        int fillLeft = e->clip[bg] && origin > 0 &&
+        int fillLeft = clip && origin > 0 &&
                        (e->bandFills[bg] ? bandL != 0 : TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 0, run));
-        int fillRight = e->clip[bg] && origin + 256 < width &&
+        int fillRight = clip && origin + 256 < width &&
                         (e->bandFills[bg] ? bandR != 0 : TextBgPlain(e, bg, bgcnt, dispcnt, hofs, ty, 256 - run, run));
 
         if (fillLeft) {
@@ -1240,7 +1252,7 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
             } else if (x < origin + 256 && next > origin + 256) {
                 next = origin + 256;
             }
-            if (!e->clip[bg] && (x < origin || x >= origin + 256)) {
+            if (!clip && (x < origin || x >= origin + 256)) {
                 /* A BG whose map goes on past the DS's edges (the battle's
                  * background): there, tile by tile, the map's own pixels
                  * where it has a picture of its own (the player's
@@ -1277,10 +1289,10 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
             segs[n].x0 = (short)x;
             segs[n].x1 = (short)next;
             segs[n].off = (short)(hofs - origin);
-            if (x < origin && e->bandFills[bg]) {
+            if (x < origin && e->bandFills[bg] && clip) {
                 segs[n].fixed = SEG_COLOR;
                 segs[n].color = bandL;
-            } else if (x >= origin + 256 && e->bandFills[bg]) {
+            } else if (x >= origin + 256 && e->bandFills[bg] && clip) {
                 segs[n].fixed = SEG_COLOR;
                 segs[n].color = bandR;
             } else if (x < origin) {
@@ -1379,9 +1391,11 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
      * 256-pixel half of the map. */
     u32 rowAddr = screenBase + (u32)((ty >> 8) * (mapW >> 8)) * 0x800 + (u32)((ty & 255) >> 3) * 64;
     Segment segs[MAX_SEGMENTS];
-    OwnRow own = OWN_ROW_INIT;   /* (the BG's runs where its picture was made, for ArtTextPixel) */
+    OwnRow own;   /* (the BG's runs where its picture was made, for ArtTextPixel) */
     int nsegs, seg;
     TARGET_LOCALS(t);
+
+    OwnRowStart(&own);
 
     if (e->width == W && e->origin == 0 && !e->anchorWindows) {
         /* the DS's own screen: one run */
@@ -2490,6 +2504,7 @@ static inline void PutObjPixel(const Obj *obj, ObjLine *out, int x, u16 rgb, int
 /* The OBJ layer's line; returns whether any OBJ is on it. */
 static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, ObjLine *out)
 {
+    u16 sprites[WMAX];
     int k;
 
     if (!(dispcnt & 0x1000) || (f->lineCount[y] == 0 && f->artCount == 0)) {
@@ -2626,6 +2641,11 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
             }
         }
     }
+    if (f->artCount > 0) {
+        /* (the sprites' own pixels, before any picture goes on: a picture's
+         * pixel that's a sprite's moved along is drawn from them) */
+        memcpy(sprites, out->color, (size_t)e->width * sizeof(u16));
+    }
     for (k = 0; k < f->artCount; k++) {
         /* a group's picture where no OBJ is (in the bands beside the DS's
          * screen, or all over) */
@@ -2655,7 +2675,7 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
                  * picture had it there, moved) */
                 int gx = x - NitroPort_WideArtGameDx(c);
 
-                c = (gx >= 0 && gx < e->width && gx != x) ? out->color[gx] : 0;
+                c = (gx >= 0 && gx < e->width && gx != x) ? sprites[gx] : 0;
             }
             if (!(c & 0x8000)) {
                 continue;
@@ -3819,7 +3839,8 @@ int NitroPort_Render2DObjLayer(int engine, int group, const NitroRender2DSplit *
 #define SHARE_RH (H + 2 * SHARE_MY)
 #define SHARE_SAMPLES 512
 #define SHARE_VOTES_LEAST 16
-static u16 sShareRef[SHARE_RW * SHARE_RH];
+static u16 *sShareRef;   /* (got the first time something is shared: the 3DS program never does) */
+static u16 (*sShareVotes)[2 * SHARE_MX];
 #define SHARE_REF(x, y) sShareRef[((y) + SHARE_MY) * SHARE_RW + (x) + SHARE_MX]
 
 /* A picture's pixels that are the BG's own dx right and dy down of where
@@ -3872,7 +3893,7 @@ static BOOL ShareEdgePixel(const u16 *px, int x, int y)
  * here and there by chance). */
 static int ShareBestMove(const u16 *px, const u16 *orig, int sideways, int *dx, int *dy)
 {
-    static u16 votes[2 * SHARE_MY][2 * SHARE_MX];
+    u16 (*votes)[2 * SHARE_MX] = sShareVotes;
     int x, y, edges = 0, samples = 0, step, i = 0, best = 0, ox, oy;
     int oy0 = sideways ? 0 : -SHARE_MY, oy1 = sideways ? 1 : SHARE_MY;
 
@@ -3882,7 +3903,7 @@ static int ShareBestMove(const u16 *px, const u16 *orig, int sideways, int *dx, 
         }
     }
     step = edges / SHARE_SAMPLES + 1;
-    memset(votes, 0, sizeof(votes));
+    memset(votes, 0, sizeof(u16) * 2 * SHARE_MY * 2 * SHARE_MX);
     for (y = 0; y < H; y++) {
         for (x = 0; x < NITRO_WIDE_ART_W; x++) {
             u16 c = px[y * NITRO_WIDE_ART_W + x];
@@ -3941,8 +3962,9 @@ static BOOL StripBgArt(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt
 
     if (kind == BG_TEXT) {
         int mapW = sTextSizes[bgcnt >> 14][0], mapH = sTextSizes[bgcnt >> 14][1];
-        OwnRow own = OWN_ROW_INIT;
+        OwnRow own;
 
+        OwnRowStart(&own);
         /* (the BG as it's drawn where the picture was made: a BG laid out
          * in parts only when that's where it is) */
         if (parts && (curH != hofs || curV != vofs)) {
@@ -4023,6 +4045,18 @@ int NitroPort_Render2DShareArt(int engine)
 
     if (NitroPort_WideArtUnshared() == 0) {
         return 0;
+    }
+    if (sShareRef == NULL) {
+        sShareRef = malloc(sizeof(u16) * SHARE_RW * SHARE_RH);
+        sShareVotes = malloc(sizeof(u16) * 2 * SHARE_MY * 2 * SHARE_MX);
+        if (sShareRef == NULL || sShareVotes == NULL) {
+            NitroPort_Log("[wide art] no memory to share the pictures with");
+            free(sShareRef);
+            free(sShareVotes);
+            sShareRef = NULL;
+            sShareVotes = NULL;
+            return 0;
+        }
     }
     memset(&split, 0, sizeof(split));
     NitroPort_WideLayout(engine, &split);
@@ -4141,7 +4175,7 @@ int NitroPort_Render2DShareArt(int engine)
                      * elsewhere). */
                     int round, dx2, dy2;
 
-                    memset(sShareRef, 0, sizeof(sShareRef));
+                    memset(sShareRef, 0, sizeof(u16) * SHARE_RW * SHARE_RH);
                     for (y = 0; y < H; y++) {
                         for (x = 0; x < NITRO_WIDE_ART_W; x++) {
                             SHARE_REF(x, y) = layer[y * NITRO_WIDE_ART_W + x];

@@ -284,8 +284,8 @@ int NitroPort_WideArtLoad(const char *dir)
                       built, local, dir, unshared);
     }
     if (unshared > 0) {
-        NitroPort_Log("[wide art] not shared yet (go to their screens; they're written into %s/share): %s%s", dir, line,
-                      listed < unshared ? ", ..." : "");
+        NitroPort_Log("[wide art] not shared yet (the PC runner writes them into %s/share as their screens show, "
+                      "docs/WIDE_ART.md): %s%s", dir, line, listed < unshared ? ", ..." : "");
     }
     /* the layouts' pictures: read now, so none holds a screen up later */
     for (i = 1; i < NITRO_WIDE_PICTURES; i++) {

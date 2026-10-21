@@ -1535,6 +1535,110 @@ static void test_wide_art_shared(void)
     }
 }
 
+/* A shared picture of a BG the port splits (a plain middle, decorated
+ * sides: the halves to the screen's edges, the middle widened): its
+ * pixels the game's own are told from the BG's own layout, as the BG
+ * is drawn with a picture (the plain one, its map going on past the DS's
+ * edges), not the split (the split moves the sides: the game's own pixel
+ * drawn back there would be another's). */
+static void test_wide_art_split_bg(void)
+{
+    static u16 wide[320 * 192], over[320 * 192], art[320 * 192];
+    static u8 overAlpha[320 * 192];
+    static u8 tiles[3 * 32];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED, BLUE, GREEN };
+    char dir[] = "/tmp/widesplitXXXXXX", share[600];
+    NitroRender2DSplit split;
+    uint64_t key;
+    const u16 *got;
+    int hofs, vofs, full, prio, i, x, y, game = 0, mine = 0, wrong = 0;
+
+    Reset();
+    /* tile 1: red, blue at its top left and at the left of its row 4 (so
+     * that the sides aren't plain on the lines DecideSplits looks at);
+     * tile 2: green, plain; the map's columns 12-19 (the DS's x 96-159)
+     * green, the rest tile 1 */
+    MakeTile4(tiles + 32, 1);
+    tiles[32 + 16] = (u8)((1 << 4) | 2);
+    MakeTile4(tiles + 64, 3);
+    tiles[64] = (u8)((3 << 4) | 3);
+    for (i = 0; i < 32 * 32; i++) {
+        int col = i % 32;
+
+        map[i] = (u16)(col >= 12 && col < 20 ? 2 : 1);
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    NitroPort_SetWideScreen(32);
+    memset(&split, 0, sizeof(split));
+    split.width = 320;
+    split.origin = 32;
+    memset(split.clip, 1, sizeof(split.clip));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    /* without a picture: split (the left half at the left edge: its green
+     * from x 96; the right half's green ends at x 223) */
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 100] == GREEN);
+    CHECK(wide[20 * 320 + 201] == GREEN);
+    /* a whole picture of the plain layout (the map at the DS's x 0-255,
+     * nothing in the bands), one pixel its own */
+    for (y = 0; y < 192; y++) {
+        for (x = 32; x < 288; x++) {
+            int mx = x - 32, col = mx / 8;
+            u16 c = col >= 12 && col < 20 ? GREEN
+                    : (mx % 8 == 0 && (y % 8 == 0 || y % 8 == 4)) ? BLUE
+                                                                   : RED;
+
+            art[y * 320 + x] = (u16)(c | 0x8000);
+        }
+    }
+    art[20 * 320 + 150] = (u16)(GREY | 0x8000);
+    CHECK(NitroPort_Render2DLayer(0, 1, &split, over, &key, &hofs, &vofs, &prio));
+    CHECK(mkdtemp(dir) != NULL);
+    WriteArtKind(dir, key, 0, 0, NITRO_WIDE_ART_FULL, art);
+    CHECK(NitroPort_WideArtLoad(dir) == 1);
+    CHECK(NitroPort_Render2DShareArt(0) == 1);
+    snprintf(share, sizeof(share), "%s/share", dir);
+    CHECK(NitroPort_WideArtLoad(share) == 1);
+    got = NitroPort_WideArtFind(key, &hofs, &vofs, &full);
+    CHECK(got != NULL);
+    for (i = 0; got != NULL && i < 320 * 192; i++) {
+        if (NitroPort_WideArtIsGame(got[i])) {
+            game++;
+            wrong += got[i] != NITRO_WIDE_ART_GAME;
+        } else if (got[i] & 0x8000) {
+            mine++;
+        }
+    }
+    CHECK(wrong == 0 && game == 256 * 192 - 1 && mine == 1);   /* (told from the plain layout: all of it) */
+    /* drawn: the picture as made (the plain layout), the grey pixel */
+    NitroPort_Render2DSplit(0, wide, &split);
+    wrong = 0;
+    for (y = 0; y < 192; y++) {
+        for (x = 32; x < 288; x++) {
+            wrong += wide[y * 320 + x] != (art[y * 320 + x] & 0x7FFF);
+        }
+    }
+    CHECK(wrong == 0);
+    CHECK(wide[20 * 320 + 100] == RED);   /* (not split: the map's x 68) */
+    CHECK(wide[20 * 320 + 201] == RED);
+    CHECK(wide[20 * 320 + 150] == GREY);
+    NitroPort_SetWideScreen(0);
+    NitroPort_WideArtLoad("/nonexistent");
+    {
+        char cmd[600];
+
+        snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+        CHECK(system(cmd) == 0);
+    }
+}
+
 /* Wide art for a group of OBJs (a sprite background): its key doesn't
  * change with where the OBJs are or where their tiles are, the picture
  * goes into the OBJ layer where no OBJ is, at the group's priority, and
@@ -2994,6 +3098,7 @@ int main(int argc, char **argv)
     test_wide_canvas();
     test_wide_art();
     test_wide_art_shared();
+    test_wide_art_split_bg();
     test_wide_art_objs();
     test_wide_art_places();
     test_wide_art_sliding();
