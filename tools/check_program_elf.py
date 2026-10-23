@@ -6,10 +6,12 @@ Usage:
         3ds_port/game/build/3ds/pokeplatinum.elf
 
 tools/game_overlays.py gives each overlay's data sections of its own
-(ovl_data_<name>, ovl_bss_<name>); the linker places them by itself. This
-checks the result: each one is in the program's writable segment (so the
-3DS loader allocates it), and that segment's sizes are multiples of 4, as
-3dsxtool requires.
+(ovl_data_<name>, ovl_bss_<name>), and its table of static initializers
+(ovl_sinit_<name>); the linker places them by itself. This checks the
+result: each one is in the program's writable segment (so the 3DS loader
+allocates it), that segment's sizes are multiples of 4, as 3dsxtool
+requires, and no static initializers were left outside an overlay's table
+(nothing would call them).
 """
 
 from __future__ import annotations
@@ -68,16 +70,19 @@ def main() -> None:
     parser.add_argument("elf", type=Path)
     args = parser.parse_args()
     headers, mapping = segments(args.readelf, args.elf)
-    names = sorted({s for row in mapping for s in row if s.startswith(("ovl_data_", "ovl_bss_"))})
+    names = sorted({s for row in mapping for s in row
+                    if s.startswith(("ovl_data_", "ovl_bss_", "ovl_sinit_"))})
     sections = subprocess.run([args.readelf, "-SW", str(args.elf)], check=True,
                               capture_output=True, text=True).stdout
-    all_ovl = sorted(set(re.findall(r"\b(ovl_(?:data|bss)_\w+)", sections)))
+    all_ovl = sorted(set(re.findall(r"\b(ovl_(?:data|bss|sinit)_\w+)", sections)))
     problems = check(headers, mapping, all_ovl)
     if not all_ovl:
         problems.append("no overlay data sections at all")
+    if re.search(r"\s\.sinit\s", sections):
+        problems.append("static initializers (.sinit) outside any overlay's table")
     for p in problems:
         print(f"::error::{p}" if "GITHUB_ACTIONS" in __import__("os").environ else p)
-    print(f"{len(all_ovl)} overlay data sections, {len(names)} in segments: "
+    print(f"{len(all_ovl)} overlay sections, {len(names)} in segments: "
           + ("OK" if not problems else f"{len(problems)} problems"))
     sys.exit(1 if problems else 0)
 

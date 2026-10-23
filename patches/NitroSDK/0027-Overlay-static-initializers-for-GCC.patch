@@ -1,0 +1,21 @@
+From: Platinum 3DS port contributors
+Subject: [PATCH] Overlay static initializers for GCC
+
+---
+diff --git a/include/nitro/sinit.h b/include/nitro/sinit.h
+--- a/include/nitro/sinit.h
++++ b/include/nitro/sinit.h
+@@ -1,4 +1,12 @@
+-#if defined(SDK_CW) || defined(__MWERKS__)
++#if defined(SDK_PORT_3DS)
++    /* A pointer to the function in section .sinit. The game build gathers
++     * an overlay's pointers into a table of its own (tools/game_overlays.py),
++     * and FS_StartOverlay calls them once the overlay is loaded. */
++    static void NitroStaticInit(void);
++
++    __attribute__((section(".sinit"), used))
++    static void (*NitroStaticInit_[])(void) = { NitroStaticInit };
++#elif defined(SDK_CW) || defined(__MWERKS__)
+     static void NitroStaticInit(void);
+ 
+     #pragma define_section SINIT ".sinit" abs32 RWX
