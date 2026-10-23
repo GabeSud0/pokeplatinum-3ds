@@ -43,10 +43,14 @@ ported.
    g++ and make) and makes the HOME Menu's icon and banner from your ROM's
    icon ([`tools/home_menu_art.py`](../../tools/home_menu_art.py)), in
    `build/`. The icon is the port's own ([`cia/icon.png`](cia/icon.png), 48 x 48,
-   original art) when it's there. The banner plays the port's own chime when the game is
-   highlighted ([`cia/chime.wav`](cia/chime.wav): original music, 2.95 s,
-   under the HOME Menu's 3-second limit); `CHIME=path/to/other.wav` uses
-   another one.
+   original art) when it's there. The banner is an animated 3D one made from
+   your ROM: Platinum's title-screen Giratina in front of a portal glow, under
+   the logo ([`tools/banner3d`](../../tools/banner3d): needs Python 3.12+; if
+   it can't be made, or with `BANNER=flat`, the banner is a flat picture). It
+   plays the port's own chime when the game is highlighted
+   ([`cia/chime.wav`](cia/chime.wav): original music, 2.95 s, under the HOME
+   Menu's 3-second limit); `CHIME=path/to/other.wav` uses another one with
+   the flat banner.
 
    **On Windows**, use devkitPro's MSYS2 terminal (Start menu → devkitPro →
    MSYS2). [`tools/build_windows_msys2.sh`](../../tools/build_windows_msys2.sh)

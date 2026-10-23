@@ -70,9 +70,20 @@ fi
 CIA_TOOLS="$HOME/pokeplatinum-cia-tools"
 CIA=""
 step "Building pokeplatinum.cia (the HOME Menu version)"
+# Its banner: the animated 3D one, made from your ROM (tools/banner3d), or
+# the flat picture if that can't be made.
+BANNER3D="$PWD/build/home-menu-art/banner3d.bnr"
+make_banner3d() {
+    rm -f "$BANNER3D"
+    python3 tools/banner3d/make_banner.py --rom "$ROM" --bannertool "$CIA_TOOLS/bin/bannertool" \
+        --chime 3ds_port/game/cia/chime.wav -o "$BANNER3D" ||
+        { rm -f "$BANNER3D"; echo "(No 3D banner: see above. The .cia gets the flat one.)"; }
+}
 if bash tools/build_cia_tools.sh "$CIA_TOOLS" &&
    python3 tools/home_menu_art.py "$ROM" build/home-menu-art &&
-   make -C 3ds_port/game TARGET=3ds HOME_ART="$PWD/build/home-menu-art" CIA_TOOLS="$CIA_TOOLS" program cia; then
+   { make_banner3d; true; } &&
+   make -C 3ds_port/game TARGET=3ds HOME_ART="$PWD/build/home-menu-art" CIA_TOOLS="$CIA_TOOLS" \
+       HOME_BANNER="$([ -f "$BANNER3D" ] && echo "$BANNER3D")" program cia; then
     CIA=3ds_port/game/build/3ds/pokeplatinum.cia
 else
     echo "(Couldn't build the .cia: see the lines above. The .3dsx works as before.)"

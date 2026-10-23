@@ -518,9 +518,20 @@ PROGRAM_CIA := $(OUT)/pokeplatinum.cia
 CHIME ?= $(wildcard cia/chime.wav)
 BANNER_WAV := $(if $(CHIME),$(CHIME),$(HOME_ART)/banner.wav)
 
-$(OUT)/pokeplatinum.bnr: $(HOME_ART)/banner.png $(BANNER_WAV)
+# The banner itself: HOME_BANNER, a ready one (the animated 3D banner that
+# tools/banner3d/make_banner.py makes from your ROM; `make game-cia` passes
+# it), else HOME_ART's flat picture with the tune. (Made every time: the
+# choice may have changed.)
+HOME_BANNER ?=
+ifneq ($(strip $(HOME_BANNER)),)
+$(OUT)/pokeplatinum.bnr: $(HOME_BANNER) FORCE
+	@mkdir -p $(dir $@)
+	@cp "$(HOME_BANNER)" $@
+else
+$(OUT)/pokeplatinum.bnr: $(HOME_ART)/banner.png $(BANNER_WAV) FORCE
 	@test -n "$(HOME_ART)" || { echo "Set HOME_ART (tools/home_menu_art.py)"; exit 1; }
 	@$(BANNERTOOL) makebanner -i $(HOME_ART)/banner.png -a $(BANNER_WAV) -o $@ >/dev/null
+endif
 
 $(PROGRAM_CIA): $(PROGRAM_ELF) $(OUT)/pokeplatinum.smdh $(OUT)/pokeplatinum.bnr cia/pokeplatinum.rsf
 	@$(MAKEROM) -f cia -o $@ -target t -exefslogo -rsf cia/pokeplatinum.rsf -elf $(PROGRAM_ELF) \

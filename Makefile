@@ -7,7 +7,8 @@
 #                     (runs with your own data pack: 3ds_port/game/README.md)
 #   make game-cia ROM=platinum.nds
 #                     the same, installable on the HOME Menu: .../pokeplatinum.cia
-#                     (its icon from your ROM; builds makerom and bannertool once)
+#                     (its animated 3D banner made from your ROM; builds makerom
+#                     and bannertool once; BANNER=flat for the plain picture)
 #   make test         build for the PC and run every test suite
 #   make link-check   link the whole game for the 3DS and report what's missing
 #   make clean
@@ -49,16 +50,26 @@ game: check-bootstrap
 	@echo "Built $(PORT)/game/build/3ds/pokeplatinum.3dsx (contains game code: don't share it)"
 	@echo "It needs platinum3ds.pak and manifest.json in sdmc:/3ds/pokeplatinum/ (see $(PORT)/game/README.md)"
 
-# The HOME Menu version. Its art (from your ROM's icon) and the tools go in
-# build/: never committed.
+# The HOME Menu version. Its art and banner (made from your ROM) and the
+# tools go in build/: never committed. The animated 3D banner
+# (tools/banner3d/README.md) needs Python 3.12+ and git; if it can't be made,
+# the .cia gets the flat banner instead.
 CIA_TOOLS := $(CURDIR)/build/cia-tools
 HOME_ART := $(CURDIR)/build/home-menu-art
+BANNER ?= 3d
+BANNER3D := $(HOME_ART)/banner3d.bnr
 
 game-cia: check-bootstrap
 	@test -n "$(ROM)" || { echo "Usage: make game-cia ROM=path/to/your/platinum.nds"; exit 1; }
 	@bash tools/build_cia_tools.sh $(CIA_TOOLS)
 	@python3 tools/home_menu_art.py "$(ROM)" $(HOME_ART)
-	@$(MAKE) --no-print-directory -C $(PORT)/game TARGET=3ds HOME_ART=$(HOME_ART) CIA_TOOLS=$(CIA_TOOLS) program cia
+	@rm -f $(BANNER3D)
+	@if [ "$(BANNER)" = 3d ]; then \
+	    python3 tools/banner3d/make_banner.py --rom "$(ROM)" --bannertool $(CIA_TOOLS)/bin/bannertool \
+	        --chime $(PORT)/game/cia/chime.wav -o $(BANNER3D) || \
+	    { rm -f $(BANNER3D); echo "(No 3D banner: see above. The .cia gets the flat one.)"; }; fi
+	@$(MAKE) --no-print-directory -C $(PORT)/game TARGET=3ds HOME_ART=$(HOME_ART) CIA_TOOLS=$(CIA_TOOLS) \
+	    HOME_BANNER=$$(test -f $(BANNER3D) && echo $(BANNER3D)) program cia
 	@echo "Built $(PORT)/game/build/3ds/pokeplatinum.cia and .3dsx (contain game code: don't share them)"
 
 test: check-bootstrap
