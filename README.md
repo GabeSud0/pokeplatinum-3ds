@@ -37,8 +37,8 @@ of the same engine.
 ## Status
 
 **Works**
-- Fully playable on real hardware, from a new game or a save: exploring,
-  battles, menus and saving. It still has some visual bugs.
+- Playable on real hardware, from a new game or a save: exploring,
+  battles, menus and saving. It still has some visual and gameplay bugs.
 - A new UI for the 3DS's top screen: menus, text boxes and battles laid out
   across its full width.
 - A new resolution for the New 3DS XL: both screens filled at the 3DS's own
