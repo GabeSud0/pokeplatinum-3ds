@@ -43,6 +43,17 @@ Public License. This version is GPL-3.0 like the rest of the project.
 `3ds_port/game/cia/icon.png` (the HOME Menu icon) is original art made for
 this project, licensed with it.
 
+The HOME Menu's 3D banner (`tools/banner3d`) is made at build time from the
+player's own ROM: its Giratina model, textures and animation are the game's
+and are never included here. Its portal glow and logo (`tools/banner3d/art`)
+are original art made for this project, licensed with it. The banner's
+converter, skyfloogle/pycgfx, is downloaded at build time and not
+redistributed here (it has no licence that allows sharing it). The run-time
+fixes to it in `tools/banner3d/to_cgfx.py` follow the ones found by
+daaaaavia/CBC-for-YANBF (MIT licence). The NSBMD/NSBCA reading in
+`tools/banner3d/nitro.py` follows apicula by scurest (0BSD-style licence:
+use, copy, modify and distribute for any purpose).
+
 `3ds_port/game/cia/chime.wav` (the HOME Menu banner's chime) is original
 music written for this project, licensed with it. It was played with the
 GeneralUser GS SoundFont by S. Christian Collins
