@@ -101,10 +101,11 @@ filled, the upper screen's 2D and 3D laid out for its full width, the 3D at
 the screen's resolution with fog, outlines and depth from the 3D slider,
 and the 2D's pixels as they are, evenly sized (the remaster display, [docs/REMASTER.md](../../docs/REMASTER.md), with its
 settings in `sdmc:/3ds/pokeplatinum/remaster.txt`); on an Old 3DS, the
-DS's two screens in the middle of the 3DS's. Every button is the game's.
-The log is written to `sdmc:/3ds/pokeplatinum/log.txt`, and comes up on
-screen by itself when something goes wrong (the program's status above,
-the log below).
+DS's two screens in the middle of the 3DS's. It starts straight into the
+game: the screens stay black until the game's first frame. Every button is
+the game's. The log is written to `sdmc:/3ds/pokeplatinum/log.txt`, and
+comes up on screen only when something goes wrong (no data pack, the game
+stuck, a crash: the program's status above, the log below).
 When the game stops at something the port doesn't do yet, the log says
 what; after 5 seconds without a frame the program says the game is stuck,
 and HOME → Close quits. If anything crashes, the log has the crash address:
