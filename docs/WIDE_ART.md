@@ -9,11 +9,14 @@ screen, and the game shows your drawing instead.
 
 ## How to
 
-1. **Capture the screen.** In the game (on the 3DS, or in Azahar), on the
-   screen you want to draw, press **L + R + X**. The game saves a capture
-   into `3ds/pokeplatinum/wide/captures/0001` (then `0002`, ...) on the SD
-   card (Azahar: its `sdmc` folder). Capture as many screens as you like.
-   (While L and R are held, A, X, Y and SELECT go to the port, not the game.)
+1. **Capture the screen.** The game on the 3DS has no button for it any
+   more (every button is the game's, since 2026-10-23): captures are made
+   with the PC runner (`pokeplatinum-pc`, [3ds_port/game/README.md](../3ds_port/game/README.md)),
+   run with `--wide --control DIR`: on the screen you want to draw, its
+   control command `capture WIDE` saves a capture into
+   `WIDE/captures/0001` (then `0002`, ...), WIDE being the wide folder
+   (`3ds/pokeplatinum/wide` on the SD card, or a copy). The captures
+   already made stay usable.
 2. **Open WideArt.** It's `WideArt.exe` (no installing). The first time,
    File > Open folder and pick the SD card, Azahar's `sdmc` folder, or
    `3ds\pokeplatinum\wide`; it remembers. The captures are listed newest
@@ -30,8 +33,10 @@ screen, and the game shows your drawing instead.
    changed by accident; untick "Lock the DS's picture" to change it too.
 4. **Save** (Ctrl+S). The picture goes into `3ds/pokeplatinum/wide`, named
    after the layer.
-5. **In the game, L + R + A** takes the new pictures in (or restart it).
-   From then on, whenever that layer shows, your bands show with it.
+5. **Restart the game**: it reads the wide folder's pictures when it
+   starts. From then on, whenever that layer shows, your bands show with
+   it. (The PC runner reads them again with its control command
+   `wideart WIDE`.)
 
 ## The editor
 
@@ -294,9 +299,10 @@ round one with nothing else in the file (an odd size has a middle pixel).
   (`NitroPort_WideArtRows`, kept with its pixels) are skipped: the
   opening's strips took 32-38 ms a frame to draw on a New 3DS, about half
   that since.
-- `3ds_port/game/app/main_3ds.c`: L + R + X, L + R + A; the PC runner:
-  `--wide-art DIR` (and the sharing, `NitroPort_Render2DShareArt`), control
-  commands `capture DIR`, `wideart DIR`, `oam`.
+- `3ds_port/game/app/main_3ds.c`: the wide folder read at the start; the
+  PC runner: `--wide-art DIR` (and the sharing,
+  `NitroPort_Render2DShareArt`), control commands `capture DIR`,
+  `wideart DIR`, `oam`.
 - `tools/wideart/share_from_capture.py`: a picture shared from a capture
   of its screen, as the runner does it.
 - `tools/wideart/`: the editor (Python, Tk, Pillow); CI builds

@@ -10,9 +10,9 @@
  *
  * Screens: the DS's two screens, drawn by the port's 2D renderer
  * (nitro/src/port_render2d.c), in the middle of the 3DS's (the upper one
- * 400x240, the lower one 320x240). L + R + SELECT switches to the log and
- * back: the program's status above, the log below. The log also comes up by
- * itself when something goes wrong (the game stuck, a crash, OS_Terminate).
+ * 400x240, the lower one 320x240). The log (the program's status above, the
+ * log below) comes up by itself when something goes wrong (the game stuck, a
+ * crash, OS_Terminate); every button is the game's.
  *
  * Speed: the New 3DS's faster clock is switched on. The game's own code
  * takes little of a frame; drawing the two screens costs much more. So
@@ -2183,7 +2183,7 @@ static void NoteGameStall(u64 enter)
 
 void NitroPort_OnFrame(void)
 {
-    u32 held, down;
+    u32 held;
     u64 enter = svcGetSystemTick(), vblankWait = 0, readWait = 0;
 
     NoteGameStall(enter);
@@ -2211,54 +2211,17 @@ void NitroPort_OnFrame(void)
 
     hidScanInput();
     held = hidKeysHeld();
-    down = hidKeysDown();
-    if ((held & (KEY_L | KEY_R)) == (KEY_L | KEY_R) && (down & KEY_SELECT)) {
-        ShowLog(!sShowLog);
-    }
-    /* Compare against PC's --dump-3d reference. Read only the newest
-     * finished image, never the PICA's tiled framebuffer. */
-    if ((held & (KEY_L | KEY_R)) == (KEY_L | KEY_R) && (down & KEY_Y)) {
-        char path[128];
-        snprintf(path,sizeof(path),DATA_DIR "/3d_frame_%07lu.png",sFrame);
-        if (NitroPort_Gx3dDumpLatest(path))
-            NitroPort_Log("[gx3d] dumped 3D frame %lu to %s",sFrame,path);
-        else
-            NitroPort_Log("[gx3d] cannot dump frame %lu (no image or file error)",sFrame);
-    }
-    /* Wide art (docs/WIDE_ART.md): L + R + X captures the upper screen for
-     * the editor, L + R + A takes in the pictures in the art folder again. */
-    if (sRemaster && sCompose.wide && (held & (KEY_L | KEY_R)) == (KEY_L | KEY_R)) {
-        if (down & KEY_X) {
-            char made[300];
-
-            if (NitroPort_WideArtCapture(WIDE_ART_DIR, made, sizeof(made)) == 0) {
-                NitroPort_Log("[wide art] captured: %s (open it with the WideArt editor)", made);
-            }
-        }
-        if (down & KEY_A) {
-            NitroPort_Log("[wide art] %d pictures taken in again", NitroPort_WideArtLoad(WIDE_ART_DIR));
-        }
-    }
-    /* (The art folder's pictures aren't shared here, without the game's
-     * art for the repository's wideart/: the PC runner does that, from the
-     * pictures or captures, docs/WIDE_ART.md. Looking for their screens a
-     * few times a second, and the sharing itself, cost frames, 2026-10-20.) */
-    /* The remaster's look (sun shadows and the colour grade, remaster.txt's
-     * shadows and grade) on or off: L + R + B. */
-    if (sRemaster && (held & (KEY_L | KEY_R)) == (KEY_L | KEY_R) && (down & KEY_B)) {
-        static int look = -1;
-
-        if (look < 0) {
-            look = sCompose.shadows || sCompose.grade;
-        }
-        look = !look;
-        NitroPort_ComposeLook(look);
-        NitroPort_Log("[remaster] the look (sun shadows, colour grade) %s", look ? "on" : "off");
-    }
-    /* (with L and R held, A, B, X, Y and SELECT are the port's, not the game's) */
-    if ((held & (KEY_L | KEY_R)) == (KEY_L | KEY_R)) {
-        held &= ~(u32)(KEY_A | KEY_B | KEY_X | KEY_Y | KEY_SELECT);
-    }
+    /* Every button is the game's: no button combinations of the port's
+     * while playing (since 2026-10-23; they were L + R with SELECT:
+     * the log on screen, B: the look, X: a wide art capture, A: the wide
+     * art taken in again, Y: the 3D image saved, and while L and R were
+     * held those buttons didn't reach the game, its soft reset L + R +
+     * START + SELECT included). The log is still written to log.txt, and
+     * comes up on screen by itself when something goes wrong. (The art
+     * folder's pictures aren't shared here, without the game's art for the
+     * repository's wideart/: the PC runner does that, from the pictures or
+     * captures, docs/WIDE_ART.md. Looking for their screens a few times a
+     * second, and the sharing itself, cost frames, 2026-10-20.) */
     Platinum_SetButtons(DsButtons(held));
     if (held & KEY_TOUCH) {
         touchPosition touch;

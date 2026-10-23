@@ -184,11 +184,10 @@ patched original) with the port's `OS_Halt`: the 3D transfers the game
 queued for the V-blank are done when the frame ends, before the scene is
 drawn, and the 2D ones at the V-blank (`patches/NitroSystem/0004`).
 
-**Comparing orientation on real hardware/Azahar:** press **L+R+Y** to write
-`sdmc:/3ds/pokeplatinum/3d_frame_<frame>.png`. On PC, run
+**Checking orientation:** on PC, run
 `pokeplatinum-pc ... --dump-3d FRAME` to write
-`3d_frame_<frame>.png` in the working directory. Both use the exact same
-RGBA8 PNG writer, with alpha 0 for transparent BG0 and row 0 at the top.
+`3d_frame_<frame>.png` in the working directory (RGBA8, alpha 0 for
+transparent BG0, row 0 at the top).
 These are private outputs from your own pack; never commit them. Textures,
 complex alpha, exact W-depth, toon and effects are for later PRs in
 `docs/3D_STAGE2.md`.
