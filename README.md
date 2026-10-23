@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/logo.png" alt="Pokémon Platinum 3DS" width="420">
+  <img src="docs/images/logo.png" alt="Pokémon Platinum 3DS" width="600">
 </p>
 
 # PokePlatinum-3DS
@@ -145,13 +145,9 @@ like emulators keep, so you can copy your cartridge's save there.
 
 ### While playing
 
-| Buttons | What it does |
-|---|---|
-| **L + R + SELECT** | show the log (also written to `sdmc:/3ds/pokeplatinum/log.txt`) |
-| **L + R + B** | turn the colour grade (and, on PC, the sun shadows) on or off |
-| **L + R + X** | capture the upper screen, for drawing its wide bands |
-| **L + R + A** | load newly drawn wide-screen pictures |
-| **L + R + Y** | save the newest 3D image as a PNG (for debugging) |
+Every button is the game's. The port writes a log to
+`sdmc:/3ds/pokeplatinum/log.txt` (send it along when you report a
+problem); it comes up on screen by itself if something goes wrong.
 
 The display has settings in `sdmc:/3ds/pokeplatinum/remaster.txt`; the
 defaults are what most people want. See [`docs/REMASTER.md`](docs/REMASTER.md).

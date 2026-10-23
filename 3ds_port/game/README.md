@@ -101,10 +101,10 @@ filled, the upper screen's 2D and 3D laid out for its full width, the 3D at
 the screen's resolution with fog, outlines and depth from the 3D slider,
 and the 2D's pixels as they are, evenly sized (the remaster display, [docs/REMASTER.md](../../docs/REMASTER.md), with its
 settings in `sdmc:/3ds/pokeplatinum/remaster.txt`); on an Old 3DS, the
-DS's two screens in the middle of the 3DS's. **L + R + SELECT** switches to
-the log and back: the program's status above, the log below; it's also
-written to `sdmc:/3ds/pokeplatinum/log.txt`, and comes up by itself when
-something goes wrong.
+DS's two screens in the middle of the 3DS's. Every button is the game's.
+The log is written to `sdmc:/3ds/pokeplatinum/log.txt`, and comes up on
+screen by itself when something goes wrong (the program's status above,
+the log below).
 When the game stops at something the port doesn't do yet, the log says
 what; after 5 seconds without a frame the program says the game is stuck,
 and HOME → Close quits. If anything crashes, the log has the crash address:
@@ -112,35 +112,28 @@ look it up in `build/3ds/pokeplatinum.elf` with
 `arm-none-eabi-addr2line -e pokeplatinum.elf <address>`. Failed `GF_ASSERT`s
 in the game are logged with the caller's address the same way.
 
-**L + R + X** captures the upper screen and **L + R + A** takes in new
-hand-drawn pictures for its wide bands: drawing them with the WideArt
-editor is in [docs/WIDE_ART.md](../../docs/WIDE_ART.md).
+Hand-drawn pictures for the upper screen's wide bands, and drawing them
+with the WideArt editor: [docs/WIDE_ART.md](../../docs/WIDE_ART.md).
 
 The program uses the console's profile for the DS user settings the game
 reads (name, birthday, language).
 
 ### Debugging Stage 2 3D image orientation
 
-While running on a 3DS or in Azahar, press **L + R + Y** to save the
-**newest finished 3D BG0 image** as
-`sdmc:/3ds/pokeplatinum/3d_frame_<frame>.png`. It captures the off-screen
-GPU result, not the combined 2D screen. The PNG includes transparency, so
-missing polygons and flipped axes can be distinguished from 2D background
-issues. If no 3D image is ready or writing fails, the log reports it.
-
-For the same requested game frame in the PC runner:
+The PC runner saves the **newest finished 3D BG0 image** of a frame as a
+PNG (the 3DS has no button for it any more). It's the 3D alone, not the
+combined 2D screen, with transparency, so missing polygons and flipped axes
+can be told apart from 2D background issues:
 
 ```sh
 3ds_port/game/build/host32/pokeplatinum-pc platinum3ds.pak \
   data_pack/manifest.json --frames 1200 --dump-3d 1150
 ```
 
-This writes `3d_frame_0001150.png` to the current working directory.
-Both paths use the same RGBA PNG encoder (256 × 192 pixels, rows in DS
-top-to-bottom order). The 3DS produces the newest completed frame, so
-compare matching scene content rather than expecting the two processing
-threads to finish at precisely the same instant. These images may contain
-private game assets and must never be committed or uploaded to CI.
+This writes `3d_frame_0001150.png` to the current working directory
+(256 × 192 pixels, rows in DS top-to-bottom order). These images may
+contain private game assets and must never be committed or uploaded to
+CI.
 
 ### Audio output
 

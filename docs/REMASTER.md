@@ -47,8 +47,7 @@ What it does:
   tufts a shade off the grass) are left as they are: xBRZ smooths them
   too, into strokes half a texel wide that mostly fall between the 3DS's
   pixels, and the grass came out flat.
-- **The look: sun shadows and a colour grade** (`shadows on`, `grade on`;
-  L + R + B turns both on or off while playing). **The sun shadows are
+- **The look: sun shadows and a colour grade** (`shadows on`, `grade on`). **The sun shadows are
   parked on the 3DS for now** (see "Sun shadows: parked" below): `shadows
   on` leaves them off there; the PC runner still draws them. Every opaque object casts
   a real shadow from the sun, from its own shape: the scene's opaque
@@ -647,7 +646,7 @@ only one newer scene waits.
 | `fps60 off` | the field at the game's 30 frames a second (default on: an in-between scene shown between each two, while frames fit, in the game itself: not the opening, the title, the cutscenes; see 60 frames a second) |
 | `smooth3d off` / `smooth3d stereo` | the upper screen drawn at its own resolution / so only with the 3D slider down (default on: twice it and scaled down, no jagged edges, slider up or down; see How it works) |
 | `filter3d sharp` / `filter3d smooth` | the 3D's textures each texel 2x2 then bilinear / bilinear (default `nearest`: the DS's; the others cost the GPU two to three times as much) |
-| `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. L + R + B: the look on or off. **Parked on the 3DS** (they hang its GPU; see below): off there until fixed |
+| `shadows on` | sun shadows on the 3D (and no round shadow under objects), the sun by the time of day. **Parked on the 3DS** (they hang its GPU; see below): off there until fixed |
 | `shadowdebug on` | debug only (for the sun shadows' hunt, with them on again): wait for GPU completion before/after the sun map, after the opaque scene, and after direct shadow receiving. Slower; the watchdog can identify the outstanding pass. Default off |
 | `grade on` | the colour grade on the 3D's textures, by the time of day |
 | `sun 55,32` | the sun fixed: degrees above the ground, and from the screen's left (0) towards its top (90); `sun clock` (the default) by the time of day |
