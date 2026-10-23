@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/logo.png" alt="Pokémon Platinum 3DS" width="420">
+  <img src="docs/images/logo.png" alt="Pokémon Platinum 3DS" width="600">
 </p>
 
 # PokePlatinum-3DS
