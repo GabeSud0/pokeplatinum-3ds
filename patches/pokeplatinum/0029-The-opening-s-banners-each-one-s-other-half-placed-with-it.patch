@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 16:45:00 -0700
+Subject: [PATCH] The opening's banners: each one's other half placed with it
+ (SDK_PORT_3DS)
+
+When the opening puts its banners back at the start (ov77_021D636C), it
+places one half of each; the other half, beside the DS's screen, followed
+on the next frame's move. The 3DS remaster's wider screen shows that half,
+so for that frame a black gap showed at the banner's end. Both halves are
+placed at once now.
+---
+ src/game_opening/ov77_021D54B0.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/game_opening/ov77_021D54B0.c b/src/game_opening/ov77_021D54B0.c
+--- a/src/game_opening/ov77_021D54B0.c
++++ b/src/game_opening/ov77_021D54B0.c
+@@ -591,6 +591,12 @@ void ov77_021D636C(UnkStruct_ov77_021D5564 *param0, int param1)
+     v1.x = 128 * FX32_ONE;
+ 
+     Sprite_SetPosition(param0->unk_250[15], &v1);
++#ifdef SDK_PORT_3DS
++    // Each banner's other half, beside the DS's screen, put with it now
++    // rather than on the next frame's move: the 3DS remaster's wider screen
++    // shows it.
++    ov77_021D6290(param0, 0);
++#endif
+ }
+ 
+ void ov77_021D6470(UnkStruct_ov77_021D5564 *param0, int param1)
+-- 
+2.43.0

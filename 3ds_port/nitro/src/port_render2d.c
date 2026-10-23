@@ -158,6 +158,10 @@ typedef struct Engine {
     short artH[4], artV[4];  /* (a text BG's) the scroll its picture was made at */
     u8 artFull[4];
     u8 artBands[4];        /* its bands drawn (else nothing there: the layer is elsewhere) */
+    /* (a picture of the bands only of a strip that scrolls round: _loop)
+     * where its bands, moved with the layer, bring in its middle, the
+     * BG's own pixels go on (they're what the middle was) */
+    u8 artLoopBands[4];
     /* A whole picture of a layer that has moved away from where it was made
      * (a Pokemon sliding in): the whole layer from the picture, moved
      * (artDx, artDy: MovedOffset's, the slide made as wide as the screen);
@@ -1447,9 +1451,13 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
     if (segs[seg].fixed == SEG_ART) {
         /* the hand-drawn picture, moved by the scroll since it was made;
          * past its edge, round the map as the BG itself goes (a scrolling
-         * strip goes on) */
+         * strip goes on). A strip's picture of its bands only, moved so far
+         * that its middle comes in: there the BG's own pixels, what the
+         * middle was (the opening's blue strip: else nothing beside the
+         * DS's screen but where its bands had come round, 2026-10-23). */
         const u16 *art = e->art[bg];
         int ay = ArtWrap(y + e->artDy[bg], H, mapH);
+        int loop = e->artLoopBands[bg];
         ArtRun run;
 
         if (ay < 0 || (e->artRows[bg] != NULL && !e->artRows[bg][ay])) {
@@ -1461,6 +1469,10 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
             int ax = ArtRunNext(&run);
 
             if (COVERED(x, flags)) {
+                continue;
+            }
+            if (loop && ax >= e->origin && ax < e->origin + W) {
+                PUT(x, TextBgPixel(e, bg, bgcnt, dispcnt, (x + hofs - e->origin) & (mapW - 1), ty), flags);
                 continue;
             }
             PUT(x,
@@ -2130,6 +2142,7 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
                 e->art[bg] = art;
                 e->artRows[bg] = NitroPort_WideArtRows(art);
                 e->artFull[bg] = (u8)(full & NITRO_WIDE_ART_FULL);
+                e->artLoopBands[bg] = 0;
                 continue;
             }
             art = NitroPort_WideArtFindNear(key, curH, curV, mapW, mapH, W, H, &hofs, &vofs, &full);
@@ -2175,6 +2188,7 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
         e->art[bg] = art;
         e->artRows[bg] = NitroPort_WideArtRows(art);
         e->artFull[bg] = (u8)(full & NITRO_WIDE_ART_FULL);
+        e->artLoopBands[bg] = (u8)(kind[bg] == BG_TEXT && (full & NITRO_WIDE_ART_LOOP) && !(full & NITRO_WIDE_ART_FULL));
         if (kind[bg] != BG_TEXT) {
             e->artBands[bg] = 1;
         }

@@ -23,6 +23,7 @@
 
 #include <nitro.h>
 #include <nitro_port.h>
+#include <nitro_port_wide.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +32,7 @@ static const NitroPortOverlay *sOverlays;
 static u32 sCount;
 static u8 **sInitialData;
 static BOOL *sLoaded;
+static volatile uint32_t sSerial;
 
 void NitroPort_SetOverlays(const NitroPortOverlay *overlays, u32 count)
 {
@@ -40,6 +42,7 @@ void NitroPort_SetOverlays(const NitroPortOverlay *overlays, u32 count)
     free(sLoaded);
     sOverlays = overlays;
     sCount = count;
+    sSerial++;
     sInitialData = calloc(count ? count : 1, sizeof(*sInitialData));
     sLoaded = calloc(count ? count : 1, sizeof(*sLoaded));
     if (sInitialData == NULL || sLoaded == NULL) {
@@ -144,6 +147,7 @@ BOOL NitroPort_OverlayLoadImage(const FSOverlayInfo *p_ovi)
     }
     NitroPort_OverlayClearBss(p_ovi);
     sLoaded[id] = TRUE;
+    sSerial++;
     NitroPort_Log("[nitro] overlay %s loaded", o->name);
     return TRUE;
 }
@@ -154,5 +158,11 @@ void NitroPort_OverlayUnloaded(const FSOverlayInfo *p_ovi)
 
     if (id < sCount) {
         sLoaded[id] = FALSE;
+        sSerial++;
     }
+}
+
+uint32_t NitroPort_OverlaySerial(void)
+{
+    return sSerial;
 }
