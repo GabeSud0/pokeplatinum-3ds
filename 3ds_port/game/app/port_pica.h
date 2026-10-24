@@ -273,6 +273,11 @@ int NitroPort_ComposeWantsMid(float slider, int aOnTop);
 /* The look (sun shadows and the colour grade, NitroPort_PicaLook) on or
  * off from the next frame drawn. Any thread (L + R + B). */
 void NitroPort_ComposeLook(int on);
+
+/* Whether the lower screen was last drawn as the port's menu
+ * (nitro_port_lowermenu.h): its touches go through the menu then, else to
+ * the DS's screen filling the 3DS's. Any thread. */
+int NitroPort_ComposeLowerMenuShown(void);
 /* Whether that scene is waiting for its 2D (not drawn yet). */
 int NitroPort_ComposeSceneWaiting(uint32_t sceneSerial);
 /* For the [perf] line: frames drawn, the time building them (CPU) and the

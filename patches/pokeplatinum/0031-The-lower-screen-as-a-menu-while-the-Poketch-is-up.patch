@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 03:00:00 -0700
+Subject: [PATCH] =?UTF-8?q?The=20lower=20screen=20as=20a=20menu=20while=20?=
+ =?UTF-8?q?the=20Pok=C3=A9tch=20is=20up=20(SDK=5FPORT=5F3DS)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The 3DS remaster's lower screen is the port's menu in the field: a panel
+with the field's lower screen in it (the Pokétch, or the Poké Ball before
+the player has one) and a column of buttons beside it
+(3ds_port/nitro/include/nitro_port_lowermenu.h). The Pokétch's handlers
+turn it on and off with the Pokétch's screen, and tell the port whether
+the player's a girl (her bag's icon, as the start menu's).
+---
+ src/overlay005/ov5_021D5BC0.c | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/src/overlay005/ov5_021D5BC0.c b/src/overlay005/ov5_021D5BC0.c
+index 75f83bc1..39610155 100644
+--- a/src/overlay005/ov5_021D5BC0.c
++++ b/src/overlay005/ov5_021D5BC0.c
+@@ -9,6 +9,19 @@
+ 
+ #include "field_comm_manager.h"
+ #include "game_overlay.h"
++#ifdef SDK_PORT_3DS
++#include "generated/genders.h"
++
++#include "save_player.h"
++#include "trainer_info.h"
++
++// The 3DS remaster's lower screen is a menu in the field (the port draws it:
++// 3ds_port/nitro/include/nitro_port_lowermenu.h), with the Pokétch's screen
++// in its panel: on while the Pokétch is the field's lower screen. Its bag's
++// icon is the player's (hers for a girl, as the start menu's).
++extern void NitroPort_LowerMenuShow(int on);
++extern void NitroPort_LowerMenuSetFemale(int female);
++#endif
+ 
+ FS_EXTERN_OVERLAY(overlay56);
+ 
+@@ -81,6 +94,10 @@ BOOL FieldSystem_IsBottomScreenDone(FieldSystem *fieldSystem)
+ static void ov5_021D5C4C(FieldSystem *fieldSystem)
+ {
+     ov5_021EA728(fieldSystem);
++#ifdef SDK_PORT_3DS
++    NitroPort_LowerMenuSetFemale(TrainerInfo_Gender(SaveData_GetTrainerInfo(fieldSystem->saveData)) == GENDER_FEMALE);
++    NitroPort_LowerMenuShow(TRUE);
++#endif
+ }
+ 
+ static void ov5_021D5C54(FieldSystem *fieldSystem)
+@@ -97,6 +114,9 @@ static void ov5_021D5C5C(FieldSystem *fieldSystem)
+ static void ov5_021D5C78(FieldSystem *fieldSystem)
+ {
+     ov5_021EA790(fieldSystem);
++#ifdef SDK_PORT_3DS
++    NitroPort_LowerMenuShow(FALSE);
++#endif
+ }
+ 
+ static void ov5_021D5C80(FieldSystem *fieldSystem)
+-- 
+2.43.0
