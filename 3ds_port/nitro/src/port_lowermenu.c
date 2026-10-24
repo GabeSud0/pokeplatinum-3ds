@@ -8,12 +8,14 @@
  * in it, a button's name has 38), and the icons: the start menu's own, read
  * from the ROM (graphic/menu_gra.narc), and two drawn for the menu (MAP,
  * POKéTCH). The DS's lower screen goes in the panel when the screen is put
- * together (the compositor, or the PC runner's mshot).
+ * together (the compositor, or the PC runner's mshot); or the panel shows
+ * the Town Map, drawn here too (port_lowermap.c).
  */
 #include <nitro_port_lowermenu.h>
 #include <nitro_port_fs.h>
 #include <nitro_port.h>
 #include "port_platform.h"
+#include "port_lowermap.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -24,19 +26,23 @@
 /* ---------------------------------------------------------------- state */
 
 static volatile int sOn;
+static volatile int sTall;          /* (NitroPort_LowerMenuSetTall) */
 static volatile int sAvailable;     /* (NitroPort_LowerMenuSetAvailable) */
 static int sSelected = -1;          /* the game's cursor */
 static int sHeld = -1;              /* the button a finger is on */
 static int sFemale;
 /* The touch began: -1 none, 0 on the frame, 1 in the panel, 2 before the
  * menu came on (nobody's until it's let go: a finger still down from the
- * screen before isn't a press). */
+ * screen before isn't a press), 3 in the panel showing the map (the menu's:
+ * letting go there is a press, NITRO_LOWERMENU_PANEL_PRESS). */
 static int sTouchIn = -1;
 static int sTouchButton = -1;       /* (the button it began on) */
 static volatile int sPress = -1;    /* a press, not taken yet */
 static uint32_t sFrames;            /* (the menu's frames: NitroPort_LowerMenuTouch calls) */
 static uint32_t sPressFrame;        /* (the frame it was made in) */
 static uint32_t sEnabled = 0xFFFFFFFFu;
+static int sPanelShows;             /* (NitroPort_LowerMenuSetPanel) */
+static int sPictureHasPanel;        /* (the shared picture's panel drawn in it: under sLock) */
 
 static uint32_t sPicture[W * H];    /* the shared picture (under sLock) */
 static uint32_t sDraw[W * H];       /* (drawn here, then copied over) */
@@ -286,72 +292,6 @@ static uint32_t rd32(const uint8_t *p)
     return rd16(p) | (rd16(p + 2) << 16);
 }
 
-/* A member of a NARC (whole file in memory): its bytes and size, or NULL. */
-static const uint8_t *narc_member(const uint8_t *narc, uint32_t size, int index, uint32_t *memberSize)
-{
-    uint32_t p, fatSize, count, gmif, start, end;
-
-    /* (every check by subtraction: the sizes are the file's, not to be
-     * trusted, and a sum could wrap past the check) */
-    if (size < 16 || memcmp(narc, "NARC", 4) != 0) {
-        return NULL;
-    }
-    p = rd16(narc + 12);
-    if (p > size - 12 || memcmp(narc + p, "BTAF", 4) != 0) {
-        return NULL;
-    }
-    fatSize = rd32(narc + p + 4);
-    count = rd16(narc + p + 8);
-    if ((uint32_t)index >= count || 8u * count > size - p - 12) {
-        return NULL;
-    }
-    start = rd32(narc + p + 12 + 8 * (uint32_t)index);
-    end = rd32(narc + p + 16 + 8 * (uint32_t)index);
-    if (fatSize > size - p) {
-        return NULL;
-    }
-    p += fatSize;   /* the file names */
-    if (p > size - 8 || memcmp(narc + p, "BTNF", 4) != 0 || rd32(narc + p + 4) > size - p) {
-        return NULL;
-    }
-    p += rd32(narc + p + 4);
-    if (p > size - 8 || memcmp(narc + p, "GMIF", 4) != 0) {
-        return NULL;
-    }
-    gmif = p + 8;
-    if (end < start || end > size - gmif) {
-        return NULL;
-    }
-    *memberSize = end - start;
-    return narc + gmif + start;
-}
-
-/* A block of a Nitro file (RGCN, RLCN): its contents (after its 8-byte
- * header), or NULL. */
-static const uint8_t *nitro_block(const uint8_t *file, uint32_t size, const char *magic, uint32_t *blockSize)
-{
-    uint32_t p, n, i;
-
-    if (size < 16) {
-        return NULL;
-    }
-    p = rd16(file + 12);
-    n = rd16(file + 14);
-    for (i = 0; i < n && p <= size - 8; i++) {
-        uint32_t len = rd32(file + p + 4);
-
-        if (memcmp(file + p, magic, 4) == 0) {
-            *blockSize = len < 8 || len > size - p ? size - p - 8 : len - 8;
-            return file + p + 8;
-        }
-        if (len < 8 || len > size - p) {
-            break;
-        }
-        p += len;
-    }
-    return NULL;
-}
-
 static uint32_t rgb555(uint32_t c)
 {
     uint32_t r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
@@ -389,10 +329,10 @@ static void read_icons(void)
         return;
     }
     FS_CloseFile(&file);
-    ncgr = narc_member(narc, size, 6, &ncgrSize);
-    nclr = narc_member(narc, size, 5, &nclrSize);
-    chars = ncgr ? nitro_block(ncgr, ncgrSize, "RAHC", &charSize) : NULL;
-    pal = nclr ? nitro_block(nclr, nclrSize, "TTLP", &palSize) : NULL;
+    ncgr = NitroPort_NarcMember(narc, size, 6, &ncgrSize);
+    nclr = NitroPort_NarcMember(narc, size, 5, &nclrSize);
+    chars = ncgr ? NitroPort_NitroBlock(ncgr, ncgrSize, "RAHC", &charSize) : NULL;
+    pal = nclr ? NitroPort_NitroBlock(nclr, nclrSize, "TTLP", &palSize) : NULL;
     if (chars == NULL || pal == NULL || charSize < 24 || palSize < 16) {
         free(narc);
         NitroPort_Log("[lowermenu] menu_gra.narc's icons not as expected: no icons");
@@ -529,6 +469,12 @@ static void paste(const Icon *icon, int x0, int y0, int x1, int y1, uint32_t opa
 
 /* ------------------------------------------------------------ drawing */
 
+/* The panel shows the map (asked to, and it has one). */
+static int map_shown(void)
+{
+    return sPanelShows == NITRO_LOWERMENU_PANEL_MAP && NitroPort_LowerMapReady();
+}
+
 static void draw(void)
 {
     int i, x, y;
@@ -552,6 +498,14 @@ static void draw(void)
     for (y = 3; y < 237; y++) {
         put(2, y, WHITE);
         put(243, y, WHITE);
+    }
+    if (map_shown()) {
+        const uint32_t *panel = NitroPort_LowerMapPanel();
+
+        for (y = 0; y < NITRO_LOWERMENU_PANEL_H; y++) {
+            memcpy(sDraw + (NITRO_LOWERMENU_PANEL_Y0 + y) * W + NITRO_LOWERMENU_PANEL_X0, panel + y * NITRO_LOWERMENU_PANEL_W,
+                   NITRO_LOWERMENU_PANEL_W * sizeof(uint32_t));
+        }
     }
     /* The column. */
     for (y = 0; y < H; y++) {
@@ -629,6 +583,7 @@ static void redraw(void)
     draw();
     lock();
     memcpy(sPicture, sDraw, sizeof(sPicture));
+    sPictureHasPanel = map_shown();
     __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
     unlock();
 }
@@ -655,10 +610,25 @@ void NitroPort_LowerMenuShow(int on)
         }
         __atomic_store_n(&sOn, on, __ATOMIC_RELEASE);
         if (!on) {
+            __atomic_store_n(&sTall, 0, __ATOMIC_RELEASE);   /* (each screen says so again) */
             __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
         }
         NitroPort_Log("[lowermenu] %s", on ? "on" : "off");
     }
+}
+
+void NitroPort_LowerMenuSetTall(int tall)
+{
+    tall = tall ? 1 : 0;
+    if (tall != __atomic_load_n(&sTall, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&sTall, tall, __ATOMIC_RELEASE);
+        __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
+    }
+}
+
+int NitroPort_LowerMenuTall(void)
+{
+    return __atomic_load_n(&sTall, __ATOMIC_ACQUIRE);
 }
 
 int NitroPort_LowerMenuOn(void)
@@ -709,6 +679,123 @@ const uint32_t *NitroPort_LowerMenuLockFrame(uint32_t *serial)
     return sPicture;
 }
 
+int NitroPort_LowerMenuFrameHasPanel(void)
+{
+    return sPictureHasPanel;
+}
+
+void NitroPort_LowerMenuSetPanel(int shows)
+{
+    shows = shows == NITRO_LOWERMENU_PANEL_MAP ? NITRO_LOWERMENU_PANEL_MAP : NITRO_LOWERMENU_PANEL_DS;
+    if (shows != sPanelShows) {
+        int before = map_shown();
+
+        sPanelShows = shows;
+        if (sOn && map_shown() != before) {
+            redraw();
+        }
+    }
+}
+
+int NitroPort_LowerMenuPanel(void)
+{
+    return map_shown() ? NITRO_LOWERMENU_PANEL_MAP : NITRO_LOWERMENU_PANEL_DS;
+}
+
+void NitroPort_LowerMenuSetMap(const NitroLowerMap *map)
+{
+    if (NitroPort_LowerMapSet(map) && sOn && map_shown()) {
+        redraw();
+    }
+}
+
+static NitroLowerMap sPending;
+static uint16_t sPendingName[256 * 64], sPendingDesc[256 * 192];
+
+void NitroPort_LowerMenuMapBegin(void)
+{
+    /* (the text kept: the last one given, until new text or none) */
+    NitroLowerMap text = sPending;
+
+    memset(&sPending, 0, sizeof(sPending));
+    sPending.name = text.name;
+    sPending.nameX = text.nameX;
+    sPending.nameY = text.nameY;
+    sPending.nameW = text.nameW;
+    sPending.nameH = text.nameH;
+    sPending.desc = text.desc;
+    sPending.descX = text.descX;
+    sPending.descY = text.descY;
+    sPending.descW = text.descW;
+    sPending.descH = text.descH;
+}
+
+void NitroPort_LowerMenuMapSprite(int kind, int x, int y, int frame, int palette)
+{
+    if (sPending.sprites < NITRO_LOWERMAP_MAX_SPRITES) {
+        NitroLowerMapSprite *s = &sPending.sprite[sPending.sprites++];
+
+        s->kind = (uint8_t)kind;
+        s->x = (short)x;
+        s->y = (short)y;
+        s->frame = (uint8_t)frame;
+        s->palette = (uint8_t)palette;
+    }
+}
+
+void NitroPort_LowerMenuMapDot(int x, int y)
+{
+    if (sPending.dots < NITRO_LOWERMAP_MAX_DOTS) {
+        sPending.dot[sPending.dots].x = (short)x;
+        sPending.dot[sPending.dots].y = (short)y;
+        sPending.dots++;
+    }
+}
+
+void NitroPort_LowerMenuMapLayout(int hidden, int zoomX, int zoomY)
+{
+    sPending.hidden = (uint16_t)hidden;
+    sPending.zoomX = (short)zoomX;
+    sPending.zoomY = (short)zoomY;
+}
+
+uint16_t *NitroPort_LowerMenuMapText(int which, int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0 || w > 256 || h > (which == 0 ? 64 : 192)) {
+        return NULL;
+    }
+    if (which == 0) {
+        memset(sPendingName, 0, (size_t)w * (size_t)h * 2);
+        sPending.name = sPendingName;
+        sPending.nameX = (short)x;
+        sPending.nameY = (short)y;
+        sPending.nameW = (short)w;
+        sPending.nameH = (short)h;
+        return sPendingName;
+    }
+    memset(sPendingDesc, 0, (size_t)w * (size_t)h * 2);
+    sPending.desc = sPendingDesc;
+    sPending.descX = (short)x;
+    sPending.descY = (short)y;
+    sPending.descW = (short)w;
+    sPending.descH = (short)h;
+    return sPendingDesc;
+}
+
+void NitroPort_LowerMenuMapNoText(int which)
+{
+    if (which == 0) {
+        sPending.name = NULL;
+    } else {
+        sPending.desc = NULL;
+    }
+}
+
+void NitroPort_LowerMenuMapEnd(void)
+{
+    NitroPort_LowerMenuSetMap(&sPending);
+}
+
 void NitroPort_LowerMenuUnlockFrame(void)
 {
     unlock();
@@ -749,10 +836,13 @@ int NitroPort_LowerMenuPanelAt(int x, int y, int *dsX, int *dsY)
         return 0;
     }
     /* The canvas's pixel under the screen pixel's middle, then the DS's
-     * (the canvas rows outside the DS's 192 to its top or bottom row). */
+     * (the canvas rows outside the DS's 192 to its top or bottom row; tall,
+     * the canvas's row is the DS's). */
     cx = (2 * (x - NITRO_LOWERMENU_PANEL_X0) + 1) * NITRO_LOWERMENU_CANVAS_W / (2 * NITRO_LOWERMENU_PANEL_W);
     cy = (2 * (y - NITRO_LOWERMENU_PANEL_Y0) + 1) * NITRO_LOWERMENU_CANVAS_H / (2 * NITRO_LOWERMENU_PANEL_H);
-    cy -= NITRO_LOWERMENU_DS_ROW0;
+    if (!NitroPort_LowerMenuTall()) {
+        cy -= NITRO_LOWERMENU_DS_ROW0;
+    }
     if (dsX) {
         *dsX = cx;
     }
@@ -771,10 +861,18 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
         return 0;
     }
     sFrames++;
+    /* (the map's animations: a frame) */
+    if (NitroPort_LowerMapTick() && map_shown()) {
+        redraw();
+    }
     if (!down) {
         if (sTouchIn == 0 && sTouchButton >= 0 && sHeld == sTouchButton) {
             sPressFrame = sFrames;
             __atomic_store_n(&sPress, sTouchButton, __ATOMIC_RELEASE);
+        } else if (sTouchIn == 3 && map_shown()) {
+            /* (let go: still in the panel, or dragged off it, a tap) */
+            sPressFrame = sFrames;
+            __atomic_store_n(&sPress, NITRO_LOWERMENU_PANEL_PRESS, __ATOMIC_RELEASE);
         }
         sTouchIn = -1;
         sTouchButton = -1;
@@ -782,9 +880,10 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
     } else if (sTouchIn == 2) {
         return 0;   /* (down since before the menu came on) */
     } else if (sTouchIn < 0) {
-        /* A new touch: the panel's (the game's, all the way), or the frame's. */
+        /* A new touch: the panel's (the game's, all the way; or, the map
+         * shown, the menu's), or the frame's. */
         if (NitroPort_LowerMenuPanelAt(x, y, NULL, NULL)) {
-            sTouchIn = 1;
+            sTouchIn = map_shown() ? 3 : 1;
         } else {
             sTouchIn = 0;
             sTouchButton = NitroPort_LowerMenuButtonAt(x, y);

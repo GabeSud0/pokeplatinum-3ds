@@ -545,8 +545,9 @@ screens) the lower screen is the DS's, filling the screen as before.
   leave). The start menu's task still runs everything, so the apps open
   and come back as on the DS (the bag's and the party's uses go through
   it). POKéMON, BAG, TRAINER, POKéDEX, SAVE and OPTIONS are its entries;
-  MAP opens the Town Map (with it in the bag, where the bag can be used);
-  POKéTCH closes the menu (the Pokétch is in the panel). The buttons that
+  MAP (with the Town Map in the bag, where the bag can be used) puts the
+  map in the panel, or with the map there opens the Town Map app; POKéTCH
+  puts the Pokétch in the panel; either closes the menu. The buttons that
   can't be used now are dimmed (the field says which every frame while
   the player could open the menu). Where the menu has an entry with no
   button (RETIRE in the Great Marsh and the Pal Park, CHAT in the Union
@@ -564,11 +565,45 @@ screens) the lower screen is the DS's, filling the screen as before.
   the DS's 192 rows at its rows 27-218, its top row carried on above them
   and its bottom row below (on the Pokétch, its strap goes on up and down).
   Three quads from the DS's picture's texture.
+- **Tall:** a screen made for it (the game's `NitroPort_LowerMenuSetTall`)
+  has the lower screen's engine drawn 248 lines tall
+  (`NitroRender2DSplit.height`): its BGs' maps and its OBJs go on below
+  the DS's 192 rows as they would were its screen taller, and the panel
+  shows the picture's first 247 rows. The H-blank effects' lines past 191
+  are line 191's; never with the 3D (its lines past 191 black). For the
+  bag's and the party's tall layouts to come; nothing uses it yet.
+- **The map** (`port_lowermap.c`; the game's side in
+  `patches/pokeplatinum/0033`): once the player has the Town Map, the panel
+  shows it (the Pokétch, or the Poké Ball before it, goes on underneath,
+  running; MAP and POKéTCH choose). It's the Town Map item's upper screen
+  as the Town Map app makes it (its map, the hidden places found, the
+  towns' blocks, the cursor and the player's head, the places been through
+  before blinking one at a time, the place's name in its bar) and under it,
+  the canvas's last 55 rows, its guide page's rows 61-115: the place's
+  description over the zoomed-in map. The port draws it from the Town
+  Map's own pictures (`graphic/tmap_gra.narc`) as the game lays it out:
+  where the sprites are, which hidden places show, the zoomed-in map's
+  scroll, and the name and the description as the game prints them (its
+  font, the signpost's colours), told again while the map is chosen when
+  the player's square or place changes, or the field starts again (the
+  name and the description printed again only when they change: each
+  glyph is a read of the cartridge, which the port counts as the DS's
+  time; the Town Map's blocks and flags are read in one read each). The
+  same pixels as the Town Map app's (checked in the PC runner,
+  2026-10-24). The panel's picture is drawn in the menu's picture (the
+  canvas at 15/16 as the screens draw the DS's: each pixel 2 x 2, then
+  bilinear), only what changes drawn again (the cursor's frames, the
+  dots). A tap on the map (where MAP can be used), or MAP with the map
+  shown, opens the Town Map app; so does MAP if the port can't show the
+  map (no Town Map pictures).
 - **Touch:** a touch that begins in the panel is the game's, at the DS's
   pixel there (dragged out of the panel, the nearest pixel of it); one that
   begins on a button that can be used shows it pressed, and letting go on
   it is a press. The start menu takes it; with the menu closed, the field
-  opens it straight on that button, as X does (`StartMenu_PortTapOpens`).
+  opens it straight on that button, as X does (`StartMenu_PortTapOpens`;
+  MAP and POKéTCH only change the panel, the menu staying closed). With
+  the map in the panel, the panel's touches are the menu's (a tap a press,
+  `NITRO_LOWERMENU_PANEL_PRESS`), not the Pokétch's.
   A press not taken within half a second is dropped (one made while a
   script ran isn't used long after).
 - **The fades** cover the whole screen, the menu too.

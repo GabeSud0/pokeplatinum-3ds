@@ -3098,6 +3098,86 @@ static void test_wide_parts(void)
     NitroPort_WideForcePictures(-1);
 }
 
+/* A tall picture (NitroRender2DSplit.height: the remaster's lower screen
+ * as a tall panel): the lines past the DS's 192 go on with the BG's map
+ * and the OBJs placed there, as a taller screen would show them; without
+ * it, nothing past line 191 is written. */
+static void test_tall_picture(void)
+{
+    static u8 tiles[3 * 32];
+    static u16 map[32 * 32];
+    static u16 bgPltt[16] = { GREY, RED, GREEN, BLUE };
+    static u16 objPltt[16] = { 0, GREEN };
+    static u8 objTiles[2 * 32];
+    static GXOamAttr oam[128];
+    static u16 under[256 * 256];
+    NitroRender2DSplit split;
+    int i;
+
+    Reset();
+    MakeTile4(tiles + 32, 1);           /* tile 1: red (green top-left) */
+    MakeTile4(tiles + 64, 3);           /* tile 2: blue (green top-left) */
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = i < 24 * 32 ? 1 : 2;   /* the map's rows 0-23 red, 24-31 blue */
+    }
+    G2S_SetBG0Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                      GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GXS_LoadBG0Char(tiles, 0, sizeof(tiles));
+    GXS_LoadBG0Scr(map, 0, sizeof(map));
+    GXS_LoadBGPltt(bgPltt, 0, sizeof(bgPltt));
+    GXS_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_1D_32K);
+    MakeTile4(objTiles, 1);
+    MakeTile4(objTiles + 32, 1);
+    GXS_LoadOBJ(objTiles, 0, sizeof(objTiles));
+    GXS_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));   /* all hidden */
+    /* a 16x8 OBJ at (40, 200): past the DS's screen */
+    G2_SetOBJAttr(&oam[0], 40, 200, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_16x8, GX_OAM_COLORMODE_16, 0, 0, 0);
+    DC_FlushRange(oam, sizeof(oam));
+    GXS_LoadOAM(oam, 0, sizeof(oam));
+    GXS_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_OBJ);
+
+    /* The DS's screen: line 191 the last written. */
+    for (i = 0; i < 256 * 256; i++) {
+        under[i] = 0x1234;
+    }
+    memset(&split, 0, sizeof(split));
+    NitroPort_Render2DSplit(1, under, &split);
+    CHECK_PX(under, 3, 100, RED);
+    CHECK_PX(under, 3, 191, RED);
+    CHECK_PX(under, 3, 192, 0x1234);
+
+    /* Tall: 248 lines, the map's rows 24-30 and the OBJ below line 191. */
+    memset(&split, 0, sizeof(split));
+    split.height = 248;
+    NitroPort_Render2DSplit(1, under, &split);
+    CHECK_PX(under, 3, 100, RED);
+    CHECK_PX(under, 3, 191, RED);
+    CHECK_PX(under, 3, 195, BLUE);      /* the map's row 24 */
+    CHECK_PX(under, 0, 192, GREEN);     /* (its tile's top-left) */
+    CHECK_PX(under, 42, 202, GREEN);    /* the OBJ */
+    CHECK_PX(under, 60, 202, BLUE);
+    CHECK_PX(under, 3, 247, BLUE);
+    CHECK_PX(under, 3, 248, 0x1234);    /* nothing past it */
+
+    /* Scrolled down 16: line 180 is the map's row 196, blue. */
+    G2S_SetBG0Offset(0, 16);
+    NitroPort_Render2DSplit(1, under, &split);
+    CHECK_PX(under, 3, 170, RED);
+    CHECK_PX(under, 3, 180, BLUE);
+    G2S_SetBG0Offset(0, 0);
+
+    /* Too tall, or wider than the DS's: the DS's 192. */
+    for (i = 0; i < 256 * 256; i++) {
+        under[i] = 0x1234;
+    }
+    split.height = 300;
+    NitroPort_Render2DSplit(1, under, &split);
+    CHECK_PX(under, 3, 191, RED);
+    CHECK_PX(under, 3, 192, 0x1234);
+}
+
 static void test_engines_on_two_threads(void)
 {
     static u16 refA[256 * 192], refB[256 * 192];
@@ -3255,6 +3335,7 @@ int main(int argc, char **argv)
     test_wide_framed_windows();
     test_wide_splits();
     test_wide_parts();
+    test_tall_picture();
     test_engines_on_two_threads();
 
     printf("2D renderer: %d checks, %d failed\n", sChecks, sFailures);

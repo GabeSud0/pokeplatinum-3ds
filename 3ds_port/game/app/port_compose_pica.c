@@ -59,6 +59,10 @@ void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 #define DS_W 256
 #define DS_H 192
 #define CANVAS_MAX 320
+/* (the drawers' pictures: the wider upper screen's, or the lower screen's
+ * as a tall panel) */
+#define WORK_PIXELS (CANVAS_MAX * DS_H > DS_W * NITRO_LOWERMENU_TALL_LINES ? CANVAS_MAX * DS_H \
+                                                                           : DS_W * NITRO_LOWERMENU_TALL_LINES)
 #define TOP_W 400
 #define BOTTOM_W 320
 #define SCREEN_H 240
@@ -173,6 +177,7 @@ static void *sMenuTexData[2];
 static C3D_Tex sMenuTex;
 static int sMenuTexCur = -1;
 static uint32_t sMenuTexSerial;
+static int sMenuHasPanel;          /* (that picture has its panel drawn in it: the map) */
 static uint32_t sMenuCopy[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
 static uint16_t sMenu565[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
 static int sMenuNow;              /* (the screen being drawn is the menu) */
@@ -207,12 +212,12 @@ static u32 sSmoothFrames, sSmoothHalfFrames;
 static LightLock sSetLock, sPresentLock;
 static uint32_t sSeq;
 static ComposeLayers sWork[2];    /* the drawers' pictures, by engine */
-static uint16_t sWorkUnder[2][CANVAS_MAX * DS_H], sWorkOver[2][CANVAS_MAX * DS_H];
+static uint16_t sWorkUnder[2][WORK_PIXELS], sWorkOver[2][CANVAS_MAX * DS_H];
 static uint8_t sWorkAlpha[2][CANVAS_MAX * DS_H];
 static uint16_t sToRgb565[32768];
 static uint8_t sAlpha16[17];      /* the over layer's alpha, 0-16, as 0-255 */
 static uint32_t sConverted[2][CANVAS_MAX * DS_H];
-static uint16_t sConverted16[2][CANVAS_MAX * DS_H];
+static uint16_t sConverted16[2][WORK_PIXELS];
 
 /* Publishing only what changed (the default, sharp 2D): each engine's
  * last published picture, and for each band of 4 rows the publish it last
@@ -597,7 +602,8 @@ static int alloc_sets(Screen *scr, int canvasW, int scale)
         scr->texW *= 2;
     }
     scr->texH = 256;
-    while (scr->texH < DS_H * scale + 8) {
+    /* (room for the lower screen as a tall panel: its rows past the DS's) */
+    while (scr->texH < NITRO_LOWERMENU_TALL_LINES * scale + 8) {
         scr->texH *= 2;
     }
     for (i = 0; i < SETS; i++) {
@@ -861,12 +867,12 @@ static u32 widen5(u32 v)
 
 /* The picture into a set's textures whole: the filters other than sharp
  * (or a texel a pixel). */
-static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *set, int w)
+static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *set, int w, int h)
 {
     uint16_t *c16 = sConverted16[e];
-    int i, n = w * DS_H;
+    int i, n = w * h;
     /* (the texture's rows the picture uses: tile rows, whole) */
-    u32 rowsUsed = ((u32)DS_H * scr->texScale + 8u + 7u) & ~7u;
+    u32 rowsUsed = ((u32)h * scr->texScale + 8u + 7u) & ~7u;
 
     set->pub.heldBy = NULL;   /* (not tracked this way) */
     set->pub.over16 = 0;      /* (RGBA8 here) */
@@ -874,12 +880,12 @@ static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *
         c16[i] = sToRgb565[l->under[i] & 0x7FFF];
     }
     if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
-        NitroPort_Scale2xTiled16(c16, w, DS_H, set->under, scr->texW);
+        NitroPort_Scale2xTiled16(c16, w, h, set->under, scr->texW);
     } else {
-        NitroPort_Tile16(c16, w, DS_H, set->under, scr->texW);
+        NitroPort_Tile16(c16, w, h, set->under, scr->texW);
     }
     GSPGPU_FlushDataCache(set->under, (u32)scr->texW * rowsUsed * 2u);
-    if (l->has3d) {
+    if (l->has3d && h == DS_H) {
         /* Often there's nothing in front: then the texture isn't written. */
         uint32_t *c32 = sConverted[e];
 
@@ -990,8 +996,10 @@ int NitroPort_ComposePublish(int engine, int screen)
     LayerSet *set;
     u64 start = svcGetSystemTick();
     int w = l->width > 0 ? l->width : DS_W;
+    int h = l->height > DS_H ? l->height : DS_H;
 
-    if (!sReady || w > CANVAS_MAX || w * scr->texScale > scr->texW) {
+    if (!sReady || w > CANVAS_MAX || w * scr->texScale > scr->texW || w * h > WORK_PIXELS ||
+        h * scr->texScale + 8 > scr->texH) {
         return 1;
     }
     /* The oldest set not held by the compositor, not the newest, and not
@@ -1034,7 +1042,8 @@ int NitroPort_ComposePublish(int engine, int screen)
     set->info.over = NULL;
     set->info.overAlpha = NULL;
     set->overEmpty = 1;
-    set->underColor = l->displayOff ? -1 : uniform_color(l->under, w * DS_H);
+    set->info.height = h;
+    set->underColor = l->displayOff ? -1 : uniform_color(l->under, w * h);
     set->overTop = 0;
     set->overBottom = DS_H;
     if (!l->displayOff && l->has3d && l->over) {
@@ -1042,10 +1051,10 @@ int NitroPort_ComposePublish(int engine, int screen)
     }
     if (!l->displayOff && sConfig.filter != COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
         set->overEmpty = !NitroPort_PublishDoubled(&sShadow[e], &set->pub, l->under, l->over, l->overAlpha,
-                                                   l->has3d, w, set->under, set->over, scr->texW, sToRgb565,
-                                                   sAlpha16, flush_texture);
+                                                   l->has3d && h == DS_H, w, h, set->under, set->over, scr->texW,
+                                                   sToRgb565, sAlpha16, flush_texture);
     } else if (!l->displayOff) {
-        publish_whole(e, l, scr, set, w);
+        publish_whole(e, l, scr, set, w, h);
     }
     LightLock_Lock(&sSetLock);
     set->writing = 0;
@@ -1700,6 +1709,7 @@ static void menu_texture(void)
      * on it for as little as can be) */
     pic = NitroPort_LowerMenuLockFrame(&serial);
     memcpy(sMenuCopy, pic, sizeof(sMenuCopy));
+    sMenuHasPanel = NitroPort_LowerMenuFrameHasPanel();
     NitroPort_LowerMenuUnlockFrame();
     for (i = 0; i < NITRO_LOWERMENU_W * NITRO_LOWERMENU_H; i++) {
         uint32_t c = sMenuCopy[i];
@@ -1715,8 +1725,9 @@ static void menu_texture(void)
 /* The lower screen as the menu: its picture (a texel a pixel), and the DS's
  * lower screen in its panel at 15/16, a canvas 247 rows tall: the DS's 192
  * in the middle, its top row carried on above them and its bottom row
- * below (the Pokétch's strap). (u1, vTop, vBottom: the DS's picture in its
- * texture.) */
+ * below (the Pokétch's strap); or, the picture drawn tall (the game's
+ * NitroPort_LowerMenuSetTall, as the drawer had it), its first 247 rows.
+ * (u1, vTop, vBottom: the DS's 192 rows in their texture.) */
 static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vTop, float vBottom, int linear)
 {
     const float k = (float)NITRO_LOWERMENU_PANEL_H / (float)NITRO_LOWERMENU_CANVAS_H;
@@ -1740,8 +1751,16 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
     quad_combiner(1);
     quad(0, 0, NITRO_LOWERMENU_W, NITRO_LOWERMENU_H, 0.0f, 0, mTop, (float)NITRO_LOWERMENU_W / MENU_TEX_W, mBottom,
          0xFFFFFFFFu);
+    if (sMenuHasPanel) {
+        return;   /* (the panel is in the picture: the map) */
+    }
     make_texture(&sUnderTex, set->under, GPU_RGB565, scr->texW, scr->texH, linear, GPU_CLAMP_TO_EDGE);
     C3D_TexBind(0, &sUnderTex);
+    if (set->info.height >= NITRO_LOWERMENU_CANVAS_H) {
+        /* (tall: canvas row y is the picture's row y) */
+        quad(x0, y0, x1, yEnd, 0.0f, 0, vTop, u1, vTop - row * (float)NITRO_LOWERMENU_CANVAS_H, 0xFFFFFFFFu);
+        return;
+    }
     quad(x0, y0, x1, yA, 0.0f, 0, vRow0, u1, vRow0, 0xFFFFFFFFu);
     quad(x0, yA, x1, yB, 0.0f, 0, vTop, u1, vBottom, 0xFFFFFFFFu);
     quad(x0, yB, x1, yEnd, 0.0f, 0, vRowLast, u1, vRowLast, 0xFFFFFFFFu);

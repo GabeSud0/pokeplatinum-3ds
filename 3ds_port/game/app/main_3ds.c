@@ -1505,6 +1505,11 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         if (top && sCompose.wide) {
             NitroPort_WideLayout(engine, &split);
         }
+        /* The lower screen as the menu's tall panel: drawn on below the
+         * DS's 192 rows (nitro_port_lowermenu.h). */
+        if (!top && NitroPort_LowerMenuOn() && NitroPort_LowerMenuTall()) {
+            split.height = NITRO_LOWERMENU_TALL_LINES;
+        }
         if (sMustDraw[top ? 0 : 1]) {
             sMustDraw[top ? 0 : 1] = false;
             NitroPort_Render2DSplit(engine, layers->under, &split);
@@ -1528,6 +1533,8 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         layers->masterBright = split.masterBright;
         layers->backdrop = split.backdrop;
         layers->width = split.width > 256 ? split.width : 256;
+        /* (a tall picture only without the 3D: with it, the DS's lines) */
+        layers->height = !split.has3d && split.height > 192 ? split.height : 192;
         layers->stamp = stamp;
         layers->displayOff = 0;
         return true;

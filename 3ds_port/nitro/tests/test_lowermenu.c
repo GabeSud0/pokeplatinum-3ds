@@ -49,6 +49,35 @@ static void test_panel_mapping(void)
     CHECK(NitroPort_LowerMenuPanelAt(280, 10, &x, &y) == 0);
 }
 
+static void test_tall_mapping(void)
+{
+    int x = -1, y = -1;
+    uint32_t before = NitroPort_LowerMenuSerial();
+
+    /* Tall: the canvas's row is the DS's (no strap above); a row past 191
+     * is 191 for the game's touch. */
+    NitroPort_LowerMenuSetTall(1);
+    CHECK(NitroPort_LowerMenuTall() == 1);
+    CHECK(NitroPort_LowerMenuSerial() != before);
+    CHECK(NitroPort_LowerMenuPanelAt(3, 4, &x, &y) == 1 && x == 0 && y == 0);
+    CHECK(NitroPort_LowerMenuPanelAt(3, 28, &x, &y) == 1 && y == 26);   /* (pixel row 28's middle: 24.5 * 247 / 232 = 26.1) */
+    CHECK(NitroPort_LowerMenuPanelAt(123, 120, &x, &y) == 1 && x == 128 && y == 124);
+    CHECK(NitroPort_LowerMenuPanelAt(242, 235, &x, &y) == 1 && y == 191);
+    /* The same again: no change. */
+    before = NitroPort_LowerMenuSerial();
+    NitroPort_LowerMenuSetTall(1);
+    CHECK(NitroPort_LowerMenuSerial() == before);
+    /* Not tall: the strap again. */
+    NitroPort_LowerMenuSetTall(0);
+    CHECK(NitroPort_LowerMenuTall() == 0);
+    CHECK(NitroPort_LowerMenuPanelAt(123, 120, &x, &y) == 1 && y == 97);
+    /* The menu going off: not tall any more. */
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuSetTall(1);
+    NitroPort_LowerMenuShow(0);
+    CHECK(NitroPort_LowerMenuTall() == 0);
+}
+
 static void test_buttons(void)
 {
     /* The column's eight buttons: rows 3 + 23 i to + 21, x 250-316. */
@@ -162,6 +191,38 @@ static void test_enabled_and_expiry(void)
     CHECK(NitroPort_LowerMenuTakePress() == -1);
 }
 
+/* The map asked for without the Town Map's pictures (no data pack here):
+ * the panel stays the DS's lower screen, its touches the game's; the plain
+ * calls take what fits. */
+static void test_map_without_pictures(void)
+{
+    int x = -1, y = -1;
+    uint16_t *text;
+
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    NitroPort_LowerMenuMapBegin();
+    NitroPort_LowerMenuMapSprite(NITRO_LOWERMAP_CURSOR, 60, 134, 0, 0);
+    NitroPort_LowerMenuMapDot(60, 127);
+    NitroPort_LowerMenuMapLayout(0, 8, 288);
+    text = NitroPort_LowerMenuMapText(0, 24, 168, 232, 24);
+    CHECK(text != NULL);
+    CHECK(NitroPort_LowerMenuMapText(0, 0, 0, 300, 24) == NULL);   /* (too wide) */
+    CHECK(NitroPort_LowerMenuMapText(1, 0, 0, 224, 200) == NULL);  /* (too tall) */
+    CHECK(NitroPort_LowerMenuMapText(1, 8, 64, 224, 112) != NULL);
+    NitroPort_LowerMenuMapEnd();
+    NitroPort_LowerMenuSetPanel(NITRO_LOWERMENU_PANEL_MAP);
+    CHECK(NitroPort_LowerMenuPanel() == NITRO_LOWERMENU_PANEL_DS);
+    NitroPort_LowerMenuLockFrame(NULL);
+    CHECK(NitroPort_LowerMenuFrameHasPanel() == 0);
+    NitroPort_LowerMenuUnlockFrame();
+    /* (the panel's touches still the game's: no map shown) */
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    NitroPort_LowerMenuSetPanel(NITRO_LOWERMENU_PANEL_DS);
+}
+
 static void test_picture(void)
 {
     uint32_t serial, before;
@@ -202,9 +263,11 @@ int main(void)
 {
     NitroPort_LowerMenuSetAvailable(1);
     test_panel_mapping();
+    test_tall_mapping();
     test_buttons();
     test_touches();
     test_enabled_and_expiry();
+    test_map_without_pictures();
     test_picture();
     printf("lowermenu: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;

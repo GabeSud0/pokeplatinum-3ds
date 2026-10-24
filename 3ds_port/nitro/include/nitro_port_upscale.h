@@ -74,9 +74,11 @@ void NitroPort_Double2xTiled16TableRows(const uint16_t *src, int w, int h, int y
 
 /* ------------------------------------------------- publishing what changed
  *
- * A picture of up to NITRO_PUBLISH_MAX_W x NITRO_PUBLISH_H (the DS's 2D
- * layers: an "under" picture in the DS's colours, and an "over" one with
- * its alpha 0-16) published again and again into textures, each pixel
+ * A picture of up to NITRO_PUBLISH_MAX_W x NITRO_PUBLISH_H, or the DS's
+ * width and up to NITRO_PUBLISH_MAX_H rows (the remaster's lower screen as
+ * a tall panel) (the DS's 2D layers: an "under" picture in the DS's
+ * colours, and an "over" one with its alpha 0-16) published again and
+ * again into textures, each pixel
  * doubled (NitroPort_Double2xTiled*), into one of several sets of textures
  * in turn: only the bands of 4 rows changed since a set was last written
  * are done again. A shadow per source of pictures keeps its last picture
@@ -84,15 +86,18 @@ void NitroPort_Double2xTiled16TableRows(const uint16_t *src, int w, int h, int y
  * textures, what they hold. */
 #define NITRO_PUBLISH_MAX_W 320
 #define NITRO_PUBLISH_H 192
-#define NITRO_PUBLISH_BANDS (NITRO_PUBLISH_H / 4)
+#define NITRO_PUBLISH_MAX_H 248
+/* (the larger of 320 x 192 and 256 x 248) */
+#define NITRO_PUBLISH_MAX_PIXELS (256 * NITRO_PUBLISH_MAX_H)
+#define NITRO_PUBLISH_BANDS (NITRO_PUBLISH_MAX_H / 4)
 
 typedef struct NitroPublishShadow {
-    uint16_t under[NITRO_PUBLISH_MAX_W * NITRO_PUBLISH_H];
-    uint16_t over[NITRO_PUBLISH_MAX_W * NITRO_PUBLISH_H];
-    uint8_t alpha[NITRO_PUBLISH_MAX_W * NITRO_PUBLISH_H];
-    uint32_t premultiplied[NITRO_PUBLISH_MAX_W * NITRO_PUBLISH_H];   /* (working space) */
-    uint16_t packed[NITRO_PUBLISH_MAX_W * NITRO_PUBLISH_H];          /* (and for RGBA5551) */
-    int width, underValid, overValid;
+    uint16_t under[NITRO_PUBLISH_MAX_PIXELS];
+    uint16_t over[NITRO_PUBLISH_MAX_PIXELS];
+    uint8_t alpha[NITRO_PUBLISH_MAX_PIXELS];
+    uint32_t premultiplied[NITRO_PUBLISH_MAX_PIXELS];   /* (working space) */
+    uint16_t packed[NITRO_PUBLISH_MAX_PIXELS];          /* (and for RGBA5551) */
+    int width, height, underValid, overValid;
     uint32_t gen;
     uint32_t underChanged[NITRO_PUBLISH_BANDS], overChanged[NITRO_PUBLISH_BANDS];
     uint8_t overAny[NITRO_PUBLISH_BANDS];
@@ -101,7 +106,7 @@ typedef struct NitroPublishShadow {
 
 typedef struct NitroPublishTarget {
     const NitroPublishShadow *heldBy;   /* whose pictures its textures hold (NULL: not known) */
-    int heldWidth;
+    int heldWidth, heldHeight;
     uint32_t underGen, overGen;         /* up to date with that publish (0: not known) */
     int allow16;                        /* (set by the caller) its over texture may be RGBA5551 */
     int over16;                         /* its over texture is RGBA5551 now (else RGBA8) */
@@ -121,8 +126,9 @@ int NitroPort_OverPartial(const uint16_t *over, const uint8_t *alpha, const uint
  * widens them back. Half the bytes for the GPU to read. */
 void NitroPort_PackOver5551(const uint32_t *premultiplied, uint16_t *out, int i, int j);
 
-/* A picture w wide (a multiple of 4, at most NITRO_PUBLISH_MAX_W) into a
- * target's textures (texW texels wide, tiled; underTex RGB565 through
+/* A picture w wide (a multiple of 4, at most NITRO_PUBLISH_MAX_W) and h
+ * tall (a multiple of 4, at most NITRO_PUBLISH_MAX_H; w x h at most
+ * NITRO_PUBLISH_MAX_PIXELS) into a target's textures (texW texels wide, tiled; underTex RGB565 through
  * table as NitroPort_Double2xTiled16Table, 8-byte aligned; overTex RGBA8
  * premultiplied, written only if hasOver), the bands changed since it was
  * last written. With the target's allow16, the over texture is RGBA5551
@@ -132,7 +138,7 @@ void NitroPort_PackOver5551(const uint32_t *premultiplied, uint16_t *out, int i,
  * changes). flush(data, bytes) for each part of a texture written.
  * Returns whether the over layer has anything in it. */
 int NitroPort_PublishDoubled(NitroPublishShadow *shadow, NitroPublishTarget *target, const uint16_t *under,
-                             const uint16_t *over, const uint8_t *overAlpha, int hasOver, int w,
+                             const uint16_t *over, const uint8_t *overAlpha, int hasOver, int w, int h,
                              uint16_t *underTex, uint32_t *overTex, int texW, const uint16_t *table,
                              const uint8_t alpha16[17], void (*flush)(void *data, uint32_t bytes));
 

@@ -227,10 +227,13 @@ void NitroPort_ComposeExit(void);
  * (NitroPort_Render2DSplit), then published: upscaled into a texture the
  * GPU draws from. Publishing is the drawer's work (on its own core). */
 typedef struct ComposeLayers {
-    uint16_t *under;         /* width x 192 */
+    uint16_t *under;         /* width x height */
     uint16_t *over;          /* width x 192 (when split.has3d) */
     uint8_t *overAlpha;      /* width x 192 */
     int width;               /* the picture's width: 256, or up to 320 (the wider upper screen) */
+    /* its rows: 192, or NITRO_LOWERMENU_TALL_LINES (the lower screen as a
+     * tall panel: nitro_port_lowermenu.h; the DS's width then) */
+    int height;
     /* NitroRender2DSplit, as the 2D renderer filled it (declared in
      * nitro_port.h, which can't be included next to 3ds.h): the fields the
      * compositor needs, copied by the caller. */

@@ -496,10 +496,12 @@ static int RemasterShot(const char *path)
  * over it all. */
 static int MenuShot(const char *path)
 {
-    static uint16_t under[320 * 192], over[320 * 192];
+    static uint16_t under[320 * NITRO_LOWERMENU_TALL_LINES], over[320 * 192];
     static uint8_t overAlpha[320 * 192];
     static uint32_t out[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
     int engine = NitroPort_EngineAOnTop() ? 1 : 0;   /* the lower screen's */
+    int tall = NitroPort_LowerMenuTall();             /* (drawn on below the DS's rows: the canvas's own) */
+    int hasPanel;
     NitroRender2DSplit split;
     const uint32_t *pic;
     int x, y, width, mode, f;
@@ -509,12 +511,17 @@ static int MenuShot(const char *path)
     }
     pic = NitroPort_LowerMenuLockFrame(NULL);
     memcpy(out, pic, sizeof(out));
+    hasPanel = NitroPort_LowerMenuFrameHasPanel();
     NitroPort_LowerMenuUnlockFrame();
+    if (hasPanel) {
+        goto bright;   /* (the panel is in the picture: the map) */
+    }
     memset(&split, 0, sizeof(split));
     split.over = over;
     split.overAlpha = overAlpha;
     split.windowsToEdge = 1;
     split.snapshot = sStateTaken;
+    split.height = tall ? NITRO_LOWERMENU_TALL_LINES : 0;
     NitroPort_Render2DSplit(engine, under, &split);
     width = split.width > 256 ? split.width : 256;
     for (y = 0; y < NITRO_LOWERMENU_PANEL_H; y++) {
@@ -527,11 +534,11 @@ static int MenuShot(const char *path)
 
             for (i = 0; i < 4; i++) {
                 int txi = t0x + (i & 1), tyi = t0y + (i >> 1);
-                int cx = txi / 2 > 255 ? 255 : txi / 2, cy = tyi / 2 - NITRO_LOWERMENU_DS_ROW0;
+                int cx = txi / 2 > 255 ? 255 : txi / 2, cy = tyi / 2 - (tall ? 0 : NITRO_LOWERMENU_DS_ROW0);
                 float w = ((i & 1) ? fx : 1.0f - fx) * ((i >> 1) ? fy : 1.0f - fy);
                 uint16_t c;
 
-                cy = cy < 0 ? 0 : cy > 191 ? 191 : cy;
+                cy = cy < 0 ? 0 : cy > (tall ? NITRO_LOWERMENU_TALL_LINES - 1 : 191) ? (tall ? NITRO_LOWERMENU_TALL_LINES - 1 : 191) : cy;
                 c = under[cy * width + cx];
                 for (k = 0; k < 3; k++) {
                     int v = (c >> (5 * k)) & 31;
@@ -542,6 +549,15 @@ static int MenuShot(const char *path)
                 ((uint32_t)(acc[0] + 0.5f) << 24) | ((uint32_t)(acc[1] + 0.5f) << 16) |
                 ((uint32_t)(acc[2] + 0.5f) << 8) | 0xFFu;
         }
+    }
+bright:
+    if (hasPanel) {
+        /* (the master brightness still the lower screen's engine's) */
+        memset(&split, 0, sizeof(split));
+        split.over = over;
+        split.overAlpha = overAlpha;
+        split.snapshot = sStateTaken;
+        NitroPort_Render2DSplit(engine, under, &split);
     }
     mode = (split.masterBright >> 14) & 3;
     f = split.masterBright & 31;
