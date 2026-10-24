@@ -266,7 +266,7 @@ let it keep 30 frames a second.
 The 3D's textures are RGBA5551 where that's exact (every DS format but
 A3I5 and A5I3, sampled nearest, as `filter3d 0` has it: the DS's colours
 are 5 bits a channel, those formats' texels opaque or not there), RGBA8
-otherwise, as `docs/3D_STAGE2.md` planned. A frame draws the opaque
+otherwise. A frame draws the opaque
 polygons nine times with outlines on, those with see-through texels
 textured each time: in tall grass and among trees the GPU took 22-30 ms a
 frame of the 33 (2026-10-15), and RGBA8 textures were twice the memory to

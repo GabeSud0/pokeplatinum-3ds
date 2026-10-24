@@ -182,33 +182,24 @@ pret/pokeplatinum @ pinned commit ──► + patches/ ──► + 3ds_port/ ─
 - The work is spread over the New 3DS's cores: the game, the geometry engine
   and the drawing each run on their own.
 
-The DS hardware layer is mapped in [`docs/HARDWARE_LAYER.md`](docs/HARDWARE_LAYER.md).
-
 ## Development
 
 ```sh
 python tools/bootstrap.py   # once: fetch the decompilation and SDKs, apply patches
 make test                   # build for the PC and run every test suite
 make game                   # the game for the 3DS
-make link-check             # link the whole game and report anything missing
+make game-cia ROM=...       # the same, as a HOME Menu .cia
 ```
 
 The same game code also builds as **`pokeplatinum-pc`**, a PC runner without
 a screen, for finding quickly how far the game gets and where it stops
 ([`3ds_port/game/README.md`](3ds_port/game/README.md)).
 
-Two small test programs check the toolchain without the game:
-[`3ds_port/hello3d`](3ds_port/hello3d), a stereoscopic spinning cube, and
-[`3ds_port/platinum_smoke`](3ds_port/platinum_smoke/README.md), which runs a
-few of the game's original functions (`make` builds both).
-
 To build the original DS ROM from the decompilation as a sanity check, follow
 pret's [INSTALL.md](https://github.com/pret/pokeplatinum/blob/main/INSTALL.md)
 inside `build/upstream/`.
 
 ## Roadmap
-
-See [`docs/ROADMAP.md`](docs/ROADMAP.md). In short:
 
 - **Done:** the toolchain; the game's code built and running on the 3DS; 2D,
   3D, sound, input, saving; the game fully playable; the new UI for the top
@@ -232,11 +223,9 @@ and [`AI_DISCLOSURE.md`](AI_DISCLOSURE.md) for how AI assistance is used.
   nitro/           NitroSDK built with GCC, the DS hardware layer, PC unit tests
   nitrosystem/     NitroSystem's Fnd/G2d/G3d/Gfd/Snd libraries and host tests
   pak/             the data pack reader
-  hello3d/         toolchain test app (stereoscopic cube)
-  platinum_smoke/  first test of original game code on the 3DS
   common.mk        shared host, host32 and devkitARM toolchain flags
 builder/           turns your own ROM into the data pack (Python)
-docs/              design notes: remaster display, wide art, data pack, roadmap
+docs/              the remaster display, wide art, the data pack
 patches/           changes applied on top of the decompilation and SDKs
 tools/             bootstrap, build helpers, the WideArt editor (Python)
 Makefile           `make game`, `make game-cia`, `make test`, ...

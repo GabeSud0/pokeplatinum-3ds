@@ -162,11 +162,7 @@ make -C 3ds_port/game TARGET=host32 program       # 32-bit, as on the 3DS (gcc-m
 3ds_port/game/build/host32/pokeplatinum-pc platinum3ds.pak data_pack/manifest.json
 ```
 
-Linux (or WSL) with GCC. On Windows,
-[`tools/run_pc_wsl.sh`](../../tools/run_pc_wsl.sh), run in WSL's Ubuntu,
-installs what's needed, builds the runner and runs it with your data pack:
-`bash run_pc_wsl.sh 'C:\path\to\platinum3ds.pak' 'C:\path\to\manifest.json'`.
-Everything the port logs goes to stderr with the
+Linux (or WSL) with GCC. Everything the port logs goes to stderr with the
 frame number; a crash prints a backtrace. The save is `platinum.sav` next
 to the data pack, or `--save FILE`. `--frames N` stops after N
 frames; `--stop-at-missing-file` stops at the first file the pack doesn't
@@ -300,18 +296,6 @@ generated the same way, into `build/` (never committed):
 - Like Meson, the folders of generated headers are on the include path
   (some files include `"ending.naix"` by bare name).
 
-### Updating the lists
-
-Fix a cause, then compile every file on both kinds of target and rewrite the
-lists from the reports:
-
-```sh
-make -C 3ds_port/game TARGET=host32 probe PROBE_LIMIT=0   # needs gcc-multilib
-make -C 3ds_port/game TARGET=host   probe PROBE_LIMIT=0
-python tools/update_game_blocklist.py build/game-compile-survey/host32.json \
-                                      build/game-compile-survey/host.json
-```
-
 ## How it's built
 
 ```sh
@@ -320,7 +304,6 @@ make -C 3ds_port/game TARGET=host32         # the same, 32-bit (gcc-multilib)
 make -C 3ds_port/game TARGET=3ds            # compile for the 3DS (devkitARM)
 make -C 3ds_port/game TARGET=3ds program    # pokeplatinum.3dsx
 make -C 3ds_port/game TARGET=host program   # pokeplatinum-pc
-make -C 3ds_port/game TARGET=3ds link-check # link, reporting what's missing
 ```
 
 - The same shared flags and Nintendo headers as `libnitro` and
@@ -362,7 +345,7 @@ make -C 3ds_port/game TARGET=3ds link-check # link, reporting what's missing
   assets**.
 
 The programs link every game object; the library
-(`build/<target>/libplatinum_game.a`) is for the tests and the smoke app.
+(`build/<target>/libplatinum_game.a`) is for the tests.
 
 ### The tests
 
@@ -377,27 +360,11 @@ saved state, RC4, overlay IDs. They test that the game's code and both
 SDK libraries work together; tests that need a module's data (NARCs,
 messages) or heap aren't claimed by them.
 
-### Diagnose compilation blockers
-
-```sh
-make -C 3ds_port/game TARGET=host probe PROBE_LIMIT=80
-make -C 3ds_port/game TARGET=3ds probe PROBE_LIMIT=40
-```
-
-runs `-fsyntax-only` per file and writes a JSON report under ignored
-`build/game-compile-survey/` ([Game compile survey](../../docs/GAME_COMPILE_SURVEY.md)).
-
 ## What isn't done
 
-- **Graphics**: 3D (nothing 3D is drawn yet), mosaic, H-blank effects,
-  display capture; the 2D renderer is in software on the game's thread
-  (speed not measured on hardware yet).
-- **Sound**: the game runs the original ARM7 sequencer against a software
-  DS sound chip with an NDSP output path. Azahar/hardware playback and mixer
-  accuracy still need hands-on verification; ARM7 microphone and wireless
-  remain unavailable.
+- **Graphics**: display capture (the legendaries' motion blur), mosaic, the
+  large bitmap BG of mode 6.
+- **Sound**: the DS's microphone isn't emulated.
 - **Restarting** (`OS_ResetSystem`, the soft reset): the program says so and
-  stops. **Sleep mode** (closing the lid) and **H-blank effects** too.
+  stops.
 - **Online play** (Nintendo Wi-Fi Connection): not part of the port.
-
-See `docs/ROADMAP.md` and `docs/HARDWARE_LAYER.md`.

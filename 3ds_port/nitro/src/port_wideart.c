@@ -118,8 +118,7 @@ static int shared_now(const char *dir, const char *name)
     return stat(path, &copy) == 0 && copy.st_mtime > file.st_mtime;
 }
 
-/* (not ctype's: those are a table in newlib the libraries' check doesn't
- * expect, tools/check_sdk_coverage.py) */
+/* (not ctype's: those are a table in newlib) */
 static int is_digit(int c)
 {
     return c >= '0' && c <= '9';

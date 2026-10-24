@@ -6,7 +6,6 @@ on:
       - "tools/prepare_game_constants.py"
       - "tools/test_prepare_game_constants.py"
       - ".github/workflows/game-generated-constants.yml"
-      - "docs/GAME_CONSTANTS.md"
   workflow_dispatch:
 
 jobs:

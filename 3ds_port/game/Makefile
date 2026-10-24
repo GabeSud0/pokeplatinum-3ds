@@ -7,7 +7,6 @@
 # make TARGET=3ds program      build/3ds/pokeplatinum.3dsx: the game on a 3DS
 # make TARGET=host32 program   build/host32/pokeplatinum-pc: the game on a PC,
 #                              without a screen (for finding where it stops)
-# make TARGET=... link-check   link the program, reporting what's missing
 #
 # The programs need the player's data pack to run (README.md). Builds that
 # contain game code are for your own use: never share them.
@@ -32,7 +31,7 @@ endif
 # patches/pokeplatinum), except the ones listed in blocked_sources.txt with
 # the reason each doesn't compile yet. On a 64-bit PC a few more are left out
 # (blocked_sources_64bit.txt). Fix a cause, delete its lines, and those files
-# join the library; `make probe PROBE_LIMIT=0` reports what compiles.
+# join the library.
 blocklist = $(shell sed -e 's/\#.*//' -e '/^[[:space:]]*$$/d' $(1))
 GAME_BLOCKED := $(call blocklist,blocked_sources.txt)
 ifeq ($(TARGET),host)
@@ -251,7 +250,7 @@ GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
                $(GCC14_ERRORS)
 
 
-.PHONY: all lib test probe program cia link-check clean libnitro libnitrosystem FORCE
+.PHONY: all lib test program cia clean libnitro libnitrosystem FORCE
 
 ifeq ($(IS_HOST),yes)
 all: test
@@ -462,7 +461,7 @@ $(OUT)/app/port_compose_pica.o: app/port_compose_pica.c app/port_pica.h $(NITRO)
 	@echo "  APP CC port_compose_pica.c"
 	@$(CC) $(PORT_CFLAGS) -I$(DEVKITPRO)/libctru/include -I$(NITRO)/include -MMD -MP -c $< -o $@
 
-# Assemble the PICA200 vertex programs like hello3d, into one blob (one
+# Assemble the PICA200 vertex programs into one blob (one
 # DVLE each, in this order: the polygons, the sun shadows' map, the sun
 # shadows' scene). The generated blob symbol is gx3d_passthrough_shbin,
 # consumed by port_gx3d_pica.c.
@@ -544,36 +543,6 @@ endif
 program: $(PROGRAM)
 
 FORCE:
-
-# The same link, reporting every symbol still missing instead of failing
-# (tools/game_link_report.py): a to-do list while the port is incomplete.
-LINK_REPORT := $(ROOT)/build/game-link-report/$(TARGET).md
-
-link-check: $(APP_OBJS) $(OVERLAY_TABLE_O) $(GAME_HEADER_DEFS) $(WIFI_STUBS_O) $(LIBNNS) $(LIBNITRO) $(OVERLAY_IDS)
-	@mkdir -p $(dir $(LINK_REPORT)) $(OUT)/link
-	@$(PROGRAM_LINK) > $(OUT)/link/linker.txt 2>&1 || true
-	@python3 $(ROOT)/tools/game_link_report.py $(OUT)/link/linker.txt --target $(TARGET) --output $(LINK_REPORT)
-	@echo "Report: $(LINK_REPORT)"
-
-# The diagnostic survey exercises original game C files *without linking*.
-# This intentionally does not force every game source into libplatinum_game:
-# errors are reported as blockers, not masked by blanket compiler stubs.
-# Set PROBE_LIMIT=0 to check every file; use a bounded sample in CI.
-PROBE_LIMIT ?= 64
-PROBE_TIMEOUT ?= 10
-PROBE_REPORT := $(ROOT)/build/game-compile-survey/$(TARGET).json
-
-GAME_PROBE_CFLAGS := $(GAME_CFLAGS)
-
-probe: $(GAME_GENERATED) | libnitrosystem
-	@python3 $(ROOT)/tools/probe_game_compile.py \
-	    --source-dir="$(GAME)/src" \
-	    --compiler="$(CC)" \
-	    --flags="$(GAME_PROBE_CFLAGS)" \
-	    --target="$(TARGET)" \
-	    --limit="$(PROBE_LIMIT)" \
-	    --timeout="$(PROBE_TIMEOUT)" \
-	    --output="$(PROBE_REPORT)"
 
 clean:
 	rm -rf build

@@ -49,13 +49,6 @@ make -C 3ds_port/nitrosystem TARGET=host32
 # Requires devkitPro/devkitARM (3ds-dev):
 make -C 3ds_port/nitro TARGET=3ds
 make -C 3ds_port/nitrosystem TARGET=3ds
-
-# Check NitroSDK + NitroSystem symbols against game calls:
-python tools/check_sdk_coverage.py --strict
-python tools/check_sdk_coverage.py \
-  3ds_port/nitro/build/3ds/libnitro.a \
-  3ds_port/nitrosystem/build/3ds/libnitrosystem.a \
-  --nm "$DEVKITARM/bin/arm-none-eabi-nm" --strict
 ```
 
 GitHub Actions runs the above three targets in separate jobs. It also tests
@@ -77,23 +70,7 @@ resource-file tests; it must not be mistaken for comprehensive 32-bit coverage.
 The test retains untouched serialized bytes when checking loader pointer
 fixups.
 
-### Limits: compiling is not yet running the game
+### What the tests don't cover
 
-- **3D draw calls are not tested yet:** the tests call `NNS_G3dInit` and set
-  up a render object for every model, but don't call `NNS_G3dDraw`. Larger
-  display lists are sent with `MI_SendGXCommandAsync`, which waits for the 3D
-  engine's command FIFO to report "under half full"; that status and the FIFO
-  interrupt arrive with the 3D command translator. (`NNS_G3dInit` used to
-  hang too, but that was DMA, which libnitro now does in software.)
-- Virtual DS registers, VRAM and OAM exist in NitroSDK, but hardware rendering,
-  VRAM banking and command translation are future milestones.
-- NitroSystem sound code builds, but actual SDAT playback needs the virtual
-  ARM7 services / mixer / NDSP backend.
-- NitroSDK OS thread switching and several ARM7 services are still hooks,
-  not implemented runtime equivalents. See `../nitro/README.md`.
-- Symbol-coverage checks verify *linkable definitions*, not emulator or real
-  New 3DS gameplay. There is **no playable port or in-emulator boot** yet.
-
-Please check the current PR's CI before treating any reported tests as passed.
-For sequencing and intended hardware architecture, see
-`../../docs/HARDWARE_LAYER.md` and `../../docs/ROADMAP.md`.
+The 3D draw calls: the tests set up a render object for every model but
+don't call `NNS_G3dDraw`. The game's own drawing is checked by playing it.
