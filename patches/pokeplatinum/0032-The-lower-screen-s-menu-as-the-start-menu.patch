@@ -1,0 +1,454 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 04:00:00 -0700
+Subject: [PATCH] The lower screen's menu as the start menu (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+While the 3DS remaster's lower screen is its menu in the field, it is the
+start menu. The start menu's task still runs everything (the apps its
+buttons open, and the bag's and the party's uses that come back through
+it), but its window is never drawn and its sprites are hidden; its input
+is the lower menu's: up and down over the buttons that can be used, A, B
+or X, and taps on the buttons.
+
+- POKéMON, BAG, TRAINER, POKéDEX, SAVE and OPTIONS are the start menu's
+  entries; MAP opens the Town Map (with the Town Map in the bag, where the
+  bag can be used); POKéTCH closes the menu (the Pokétch is in the panel).
+- The buttons that can't be used now are dimmed: the field says which
+  every frame while the player could open the menu, the start menu when
+  it opens.
+- A tap on a button while the player could open the menu opens it
+  straight on that button (field_control.c: as X does).
+- Where the menu has an entry with no button (RETIRE in the Great Marsh
+  and the Pal Park, CHAT in the Union Room), it's the DS's start menu on
+  the upper screen, as before.
+---
+ include/start_menu.h           |   7 +
+ src/overlay005/field_control.c |  11 ++
+ src/start_menu.c               | 314 +++++++++++++++++++++++++++++++++
+ 3 files changed, 332 insertions(+)
+
+diff --git a/include/start_menu.h b/include/start_menu.h
+index f7d9fba4..b2466f52 100644
+--- a/include/start_menu.h
++++ b/include/start_menu.h
+@@ -77,5 +77,12 @@ BOOL StartMenu_ExitMail(FieldTask *fieldTask);
+ BOOL StartMenu_ExitPoffinCase(FieldTask *fieldTask);
+ BOOL StartMenu_ExitPalPad(FieldTask *fieldTask);
+ BOOL StartMenu_ExitVsRecorder(FieldTask *fieldTask);
++#ifdef SDK_PORT_3DS
++// The 3DS remaster's lower screen as the start menu (start_menu.c): the
++// field, while the player could open the menu, says which of its buttons
++// can be used, and opens the menu when one's tapped.
++void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem);
++BOOL StartMenu_PortTapOpens(void);
++#endif
+ 
+ #endif // POKEPLATINUM_START_MENU_H
+diff --git a/src/overlay005/field_control.c b/src/overlay005/field_control.c
+index ebb50f84..55b0601a 100644
+--- a/src/overlay005/field_control.c
++++ b/src/overlay005/field_control.c
+@@ -124,10 +124,21 @@ void FieldInput_Update(FieldInput *input, FieldSystem *fieldSystem, u16 pressedK
+     input->pressedKeys = pressedKeys;
+     input->heldKeys = heldKeys;
+ 
++#ifdef SDK_PORT_3DS
++    // The 3DS remaster's lower screen as the start menu: its buttons, and a
++    // tap on one opening the menu as X does.
++    StartMenu_PortUpdateButtons(fieldSystem);
++#endif
++
+     if (moveState == PLAYER_MOVE_STATE_END || moveState == PLAYER_MOVE_STATE_NONE) {
+         if (pressedKeys & PAD_BUTTON_X) {
+             input->menu = TRUE;
+         }
++#ifdef SDK_PORT_3DS
++        if (StartMenu_PortTapOpens()) {
++            input->menu = TRUE;
++        }
++#endif
+ 
+         if (pressedKeys & PAD_BUTTON_Y) {
+             input->registeredItem = TRUE;
+diff --git a/src/start_menu.c b/src/start_menu.c
+index f2d0b06a..0e892dd7 100644
+--- a/src/start_menu.c
++++ b/src/start_menu.c
+@@ -91,6 +91,10 @@
+ #include "res/text/bank/location_names.h"
+ #include "res/text/bank/start_menu.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "generated/items.h"
++#endif
++
+ enum StartMenuOption {
+     START_MENU_OPTION_POKEDEX = 0,
+     START_MENU_OPTION_POKEMON,
+@@ -179,6 +183,12 @@ static void StartMenu_EvolveInit(FieldTask *fieldTask);
+ static void StartMenu_Evolve(FieldTask *fieldTask);
+ static BOOL StartMenu_SelectRetire(FieldTask *fieldTask);
+ static void StartMenu_ProcessGivenMail(FieldSystem *fieldSystem, StartMenu *menu, u8 mode);
++#ifdef SDK_PORT_3DS
++static BOOL StartMenu_PortButtons(FieldSystem *fieldSystem, u32 hideOptionFlags, u32 *outButtons);
++static void StartMenu_PortInit(FieldSystem *fieldSystem, StartMenu *menu, u32 optionCount, u32 buttons);
++static BOOL StartMenu_PortSelect(FieldTask *fieldTask);
++static BOOL StartMenu_PortExitTownMap(FieldTask *fieldTask);
++#endif
+ 
+ typedef struct StartMenuAction {
+     u32 bankEntry;
+@@ -273,6 +283,54 @@ BOOL FieldSystem_IsInValidLocation(FieldSystem *fieldSystem)
+ #define HIDE_OPTION_CHAT         (1 << 7)
+ #define HIDE_OPTION_RETIRE       (1 << 8)
+ 
++#ifdef SDK_PORT_3DS
++// The 3DS remaster's lower screen is a menu in the field
++// (3ds_port/nitro/include/nitro_port_lowermenu.h). While it's on, it is the
++// start menu: this task still runs everything (the apps its buttons open,
++// and the bag's and the party's uses that come back through it), but its
++// window is never drawn and its sprites are hidden. Its input is the lower
++// menu's: up and down over the buttons that can be used, A, B or X, and
++// taps on the buttons; a tap while the player could open the menu opens it
++// straight on that button (field_control.c). Where the menu has an entry
++// with no button (RETIRE in the Great Marsh and the Pal Park, CHAT in the
++// Union Room), it's the DS's start menu on the upper screen, as before.
++extern int NitroPort_LowerMenuOn(void);
++extern void NitroPort_LowerMenuSelect(int button);
++extern void NitroPort_LowerMenuSetEnabled(u32 mask);
++extern int NitroPort_LowerMenuTakePress(void);
++extern int NitroPort_LowerMenuPressPending(void);
++
++// The lower menu's buttons, top to bottom (its NITRO_LOWERMENU_...).
++enum PortMenuButton {
++    PORT_BUTTON_MAP,
++    PORT_BUTTON_POKEMON,
++    PORT_BUTTON_BAG,
++    PORT_BUTTON_TRAINER,
++    PORT_BUTTON_POKEDEX,
++    PORT_BUTTON_POKETCH,
++    PORT_BUTTON_SAVE,
++    PORT_BUTTON_OPTIONS,
++    PORT_BUTTON_COUNT
++};
++
++// Each button's start menu entry (-1: the port's own).
++static const s8 sPortButtonOption[PORT_BUTTON_COUNT] = {
++    [PORT_BUTTON_MAP] = -1,
++    [PORT_BUTTON_POKEMON] = START_MENU_OPTION_POKEMON,
++    [PORT_BUTTON_BAG] = START_MENU_OPTION_BAG,
++    [PORT_BUTTON_TRAINER] = START_MENU_OPTION_TRAINER_CASE,
++    [PORT_BUTTON_POKEDEX] = START_MENU_OPTION_POKEDEX,
++    [PORT_BUTTON_POKETCH] = -1,
++    [PORT_BUTTON_SAVE] = START_MENU_OPTION_SAVE,
++    [PORT_BUTTON_OPTIONS] = START_MENU_OPTION_OPTIONS,
++};
++
++static BOOL sPortMode; // the open start menu is the lower one
++static u32 sPortButtons; // the buttons it can use (a bit each)
++static u32 sPortOptionCount; // its entries (menu->options)
++static int sPortCursor = -1; // its cursor, a button (kept from one opening to the next)
++#endif
++
+ void StartMenu_Open(FieldSystem *fieldSystem)
+ {
+     StartMenu *menu = StartMenu_New();
+@@ -427,6 +485,14 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
+         menu->state = START_MENU_STATE_SELECT;
+         break;
+     case START_MENU_STATE_SELECT:
++#ifdef SDK_PORT_3DS
++        if (sPortMode) {
++            if (StartMenu_PortSelect(fieldTask) == FALSE) {
++                return FALSE;
++            }
++            break;
++        }
++#endif
+         if (StartMenu_Select(fieldTask) == FALSE) {
+             return FALSE;
+         }
+@@ -523,10 +589,21 @@ static void StartMenu_InitMenu(FieldTask *fieldTask)
+     fieldSystem = FieldTask_GetFieldSystem(fieldTask);
+     StartMenu *menu = FieldTask_GetEnv(fieldTask);
+     u32 optionCount = StartMenu_MakeOptionList(menu, menu->options);
++#ifdef SDK_PORT_3DS
++    u32 portButtons = 0;
++
++    sPortMode = NitroPort_LowerMenuOn() && StartMenu_PortButtons(fieldSystem, menu->hideOptionFlags, &portButtons);
++#endif
+ 
+     Window_Add(fieldSystem->bgConfig, &menu->primaryWindow, BG_LAYER_MAIN_3, 20, 1, 11, optionCount * 3, 12, BASE_TILE_MESSAGE_WINDOW - 11 * 22);
+     LoadStandardWindowGraphics(fieldSystem->bgConfig, BG_LAYER_MAIN_3, BASE_TILE_STANDARD_WINDOW_FRAME, 11, STANDARD_WINDOW_FIELD, HEAP_ID_FIELD2);
++#ifdef SDK_PORT_3DS
++    if (!sPortMode) {
++        Window_DrawStandardFrame(&menu->primaryWindow, TRUE, BASE_TILE_STANDARD_WINDOW_FRAME, 11);
++    }
++#else
+     Window_DrawStandardFrame(&menu->primaryWindow, TRUE, BASE_TILE_STANDARD_WINDOW_FRAME, 11);
++#endif
+ 
+     loader = MessageLoader_Init(MSG_LOADER_PRELOAD_ENTIRE_BANK, NARC_INDEX_MSGDATA__PL_MSG, TEXT_BANK_START_MENU, HEAP_ID_FIELD2);
+ 
+@@ -575,8 +652,19 @@ static void StartMenu_InitMenu(FieldTask *fieldTask)
+ 
+     menu->menu = Menu_New(&template, 28, 4, menu->cursorPos, HEAP_ID_FIELD2, PAD_BUTTON_B | PAD_BUTTON_X);
+ 
++#ifdef SDK_PORT_3DS
++    if (!sPortMode) {
++        Window_ScheduleCopyToVRAM(&menu->primaryWindow);
++    }
++#else
+     Window_ScheduleCopyToVRAM(&menu->primaryWindow);
++#endif
+     StartMenu_InitSprites(menu, menu->options, optionCount, TrainerInfo_Gender(SaveData_GetTrainerInfo(fieldSystem->saveData)));
++#ifdef SDK_PORT_3DS
++    if (sPortMode) {
++        StartMenu_PortInit(fieldSystem, menu, optionCount, portButtons);
++    }
++#endif
+ }
+ 
+ #define ADD_OPTION_IF_NOT_HIDDEN(__menuOption, __hideFlag) \
+@@ -604,6 +692,12 @@ static u32 StartMenu_MakeOptionList(StartMenu *menu, u8 *listOut)
+ 
+ static void StartMenu_Close(StartMenu *menu)
+ {
++#ifdef SDK_PORT_3DS
++    if (sPortMode) {
++        NitroPort_LowerMenuSelect(-1);
++        sPortMode = FALSE;
++    }
++#endif
+     StartMenu_FreeSprites(menu);
+     Menu_Free(menu->menu, NULL);
+     StringList_Free(menu->menuOptions);
+@@ -1775,3 +1869,223 @@ static void StartMenu_Evolve(FieldTask *fieldTask)
+         StartMenu_SetCallback(menu, StartMenu_ExitBag);
+     }
+ }
++
++#ifdef SDK_PORT_3DS
++static BOOL StartMenu_PortHasTownMap(FieldSystem *fieldSystem)
++{
++    Bag *bag = SaveData_GetBag(fieldSystem->saveData);
++
++    // (the key items pocket read here, not Bag_CanRemoveItem: that loads the
++    // item's data to find its pocket, and this runs every frame)
++    for (u32 i = 0; i < KEY_ITEM_POCKET_SIZE; i++) {
++        if (bag->keyItems[i].item == ITEM_TOWN_MAP && bag->keyItems[i].quantity > 0) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++// Whether the lower menu can be the start menu with these entries hidden
++// (each one it would show has a button), and the buttons that can be used
++// (a bit each): the entries shown; MAP with the Town Map, when the bag can
++// be used; POKéTCH with the Pokétch.
++static BOOL StartMenu_PortButtons(FieldSystem *fieldSystem, u32 hideOptionFlags, u32 *outButtons)
++{
++    u32 buttons = 0;
++
++    *outButtons = 0;
++
++    if (!(hideOptionFlags & HIDE_OPTION_CHAT) || !(hideOptionFlags & HIDE_OPTION_RETIRE)) {
++        return FALSE;
++    }
++
++    for (int i = 0; i < PORT_BUTTON_COUNT; i++) {
++        if (sPortButtonOption[i] >= 0 && !(hideOptionFlags & (1 << sPortButtonOption[i]))) {
++            buttons |= 1u << i;
++        }
++    }
++
++    if ((buttons & (1u << PORT_BUTTON_BAG)) && StartMenu_PortHasTownMap(fieldSystem)) {
++        buttons |= 1u << PORT_BUTTON_MAP;
++    }
++
++    if (Poketch_IsEnabled(SaveData_GetPoketch(fieldSystem->saveData))) {
++        buttons |= 1u << PORT_BUTTON_POKETCH;
++    }
++
++    *outButtons = buttons;
++    return TRUE;
++}
++
++// The entries the start menu would hide if it opened now (as
++// StartMenu_OpenFromScript chooses them).
++static u32 StartMenu_PortHiddenOptions(FieldSystem *fieldSystem)
++{
++    if (SystemFlag_CheckSafariGameActive(SaveData_GetVarsFlags(fieldSystem->saveData)) == TRUE) {
++        return StartMenu_GetSafariHiddenOptions(fieldSystem);
++    } else if (SystemFlag_CheckInPalPark(SaveData_GetVarsFlags(fieldSystem->saveData)) == TRUE) {
++        return StartMenu_GetPalParkHiddenOptions(fieldSystem);
++    } else if (FieldSystem_IsInBattleTowerSalon(fieldSystem) == TRUE) {
++        return StartMenu_GetBattleTowerSalonHiddenOptions(fieldSystem);
++    } else if (fieldSystem->mapLoadType == MAP_LOAD_TYPE_COLOSSEUM) {
++        return StartMenu_GetColosseumHiddenOptions(fieldSystem);
++    } else if (fieldSystem->mapLoadType == MAP_LOAD_TYPE_UNION) {
++        return StartMenu_GetUnionRoomHiddenOptions(fieldSystem);
++    }
++
++    return StartMenu_GetNormalHiddenOptions(fieldSystem);
++}
++
++void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
++{
++    u32 buttons = 0;
++
++    if (!NitroPort_LowerMenuOn()) {
++        return;
++    }
++
++    if (FieldSystem_IsInValidLocation(fieldSystem)) {
++        StartMenu_PortButtons(fieldSystem, StartMenu_PortHiddenOptions(fieldSystem), &buttons);
++    }
++
++    NitroPort_LowerMenuSetEnabled(buttons);
++}
++
++BOOL StartMenu_PortTapOpens(void)
++{
++    int button = NitroPort_LowerMenuPressPending();
++
++    if (button == PORT_BUTTON_POKETCH) {
++        // (with the menu closed, the panel's the Pokétch already)
++        NitroPort_LowerMenuTakePress();
++        return FALSE;
++    }
++
++    return button >= 0 && button < PORT_BUTTON_COUNT;
++}
++
++static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, int button)
++{
++    sPortCursor = button;
++    NitroPort_LowerMenuSelect(button);
++
++    // The start menu's own cursor on the same entry, when the button is one:
++    // the DS's menu opens on it too.
++    for (u32 i = 0; i < sPortOptionCount; i++) {
++        if (menu->options[i] == sPortButtonOption[button]) {
++            menu->cursorPos = i;
++            fieldSystem->menuCursorPos = menu->options[i];
++        }
++    }
++}
++
++static void StartMenu_PortInit(FieldSystem *fieldSystem, StartMenu *menu, u32 optionCount, u32 buttons)
++{
++    int cursor = sPortCursor;
++
++    for (u32 i = 0; i < menu->spriteCount; i++) {
++        ManagedSprite_SetDrawFlag(menu->sprites[i], FALSE);
++    }
++
++    sPortButtons = buttons;
++    sPortOptionCount = optionCount;
++    NitroPort_LowerMenuSetEnabled(buttons);
++
++    // The cursor where it was last; else on the start menu's entry; else on
++    // the first button that can be used.
++    if (cursor < 0 || !(buttons & (1u << cursor))) {
++        cursor = -1;
++
++        for (int i = 0; i < PORT_BUTTON_COUNT && cursor < 0; i++) {
++            if ((buttons & (1u << i)) && sPortButtonOption[i] == fieldSystem->menuCursorPos) {
++                cursor = i;
++            }
++        }
++
++        for (int i = 0; i < PORT_BUTTON_COUNT && cursor < 0; i++) {
++            if (buttons & (1u << i)) {
++                cursor = i;
++            }
++        }
++    }
++
++    StartMenu_PortSetCursor(fieldSystem, menu, cursor);
++}
++
++static BOOL StartMenu_PortOpenTownMap(FieldTask *fieldTask)
++{
++    FieldSystem *fieldSystem = FieldTask_GetFieldSystem(fieldTask);
++    StartMenu *menu = FieldTask_GetEnv(fieldTask);
++
++    menu->taskData = FieldSystem_OpenTownMapItem(fieldSystem);
++    menu->callback = StartMenu_PortExitTownMap;
++
++    return FALSE;
++}
++
++static BOOL StartMenu_PortExitTownMap(FieldTask *fieldTask)
++{
++    FieldSystem *fieldSystem = FieldTask_GetFieldSystem(fieldTask);
++    StartMenu *menu = FieldTask_GetEnv(fieldTask);
++
++    Heap_FreeExplicit(HEAP_ID_FIELD2, menu->taskData);
++    menu->taskData = NULL;
++    FieldSystem_StartFieldMap(fieldSystem);
++
++    menu->state = START_MENU_STATE_REINIT;
++
++    return FALSE;
++}
++
++// StartMenu_Select's work for the lower menu.
++static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
++{
++    FieldSystem *fieldSystem = FieldTask_GetFieldSystem(fieldTask);
++    StartMenu *menu = FieldTask_GetEnv(fieldTask);
++    int button = NitroPort_LowerMenuTakePress();
++
++    if (button >= 0 && button < PORT_BUTTON_COUNT && (sPortButtons & (1u << button))) {
++        Sound_PlayEffect(SE_CONFIRM_sseq_3);
++        StartMenu_PortSetCursor(fieldSystem, menu, button);
++    } else if (JOY_NEW(PAD_BUTTON_A)) {
++        Sound_PlayEffect(SE_CONFIRM_sseq_3);
++        button = sPortCursor;
++    } else if (JOY_NEW(PAD_BUTTON_B | PAD_BUTTON_X)) {
++        Sound_PlayEffect(SE_CONFIRM_sseq_3);
++        menu->state = START_MENU_STATE_END;
++        return TRUE;
++    } else {
++        if (JOY_NEW(PAD_KEY_UP | PAD_KEY_DOWN)) {
++            // The next button that can be used, round the column.
++            int step = JOY_NEW(PAD_KEY_UP) ? PORT_BUTTON_COUNT - 1 : 1;
++            int next = sPortCursor;
++
++            do {
++                next = (next + step) % PORT_BUTTON_COUNT;
++            } while (!(sPortButtons & (1u << next)) && next != sPortCursor);
++
++            if (next != sPortCursor) {
++                Sound_PlayEffect(SEQ_SE_DP_SELECT78_sseq);
++                StartMenu_PortSetCursor(fieldSystem, menu, next);
++            }
++        }
++
++        return TRUE;
++    }
++
++    switch (button) {
++    case PORT_BUTTON_MAP:
++        FieldMap_FadeScreen(FADE_TYPE_BRIGHTNESS_OUT);
++        menu->callback = StartMenu_PortOpenTownMap;
++        menu->state = START_MENU_STATE_APP_START;
++        return TRUE;
++    case PORT_BUTTON_POKETCH:
++        // The menu goes: the Pokétch is in the panel, the player's to use.
++        menu->state = START_MENU_STATE_END;
++        return TRUE;
++    default:
++        return ((FieldTaskFunc)sStartMenuActions[sPortButtonOption[button]].callback)(fieldTask);
++    }
++}
++#endif
+-- 
+2.43.0
