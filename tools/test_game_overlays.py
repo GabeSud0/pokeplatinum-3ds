@@ -5,6 +5,7 @@ compiled here (skipped if there's no C compiler)."""
 from __future__ import annotations
 
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -116,7 +117,10 @@ class TableTests(unittest.TestCase):
         self.assertIn("extern u8 __start_ovl_data_first[], __stop_ovl_data_first[];", text)
         self.assertIn("extern u8 __start_ovl_bss_fast[], __stop_ovl_bss_fast[];", text)
         self.assertIn('{ "second", NITRO_PORT_OVERLAY_MAIN, __start_ovl_data_second, '
-                      '__stop_ovl_data_second, __start_ovl_bss_second, __stop_ovl_bss_second }', text)
+                      '__stop_ovl_data_second, __start_ovl_bss_second, __stop_ovl_bss_second, '
+                      '__start_ovl_sinit_second, __stop_ovl_sinit_second }', text)
+        self.assertIn("extern void (*__start_ovl_sinit_fast[])(void), "
+                      "(*__stop_ovl_sinit_fast[])(void);", text)
         self.assertIn('NITRO_PORT_OVERLAY_ITCM', text)
         self.assertIn('".section ovl_bss_placed,\\"aw\\",%nobits', text)
         self.assertIn("/*   3 */", text)
@@ -128,13 +132,17 @@ class TableTests(unittest.TestCase):
             (d / "nitro_port.h").write_text(
                 "typedef unsigned char u8; typedef unsigned int u32;\n"
                 "enum { NITRO_PORT_OVERLAY_MAIN, NITRO_PORT_OVERLAY_ITCM, NITRO_PORT_OVERLAY_DTCM };\n"
-                "typedef struct { const char *name; u32 region; u8 *a, *b, *c, *d; } NitroPortOverlay;\n",
+                "typedef struct { const char *name; u32 region; u8 *a, *b, *c, *d;\n"
+                "                 void (**e)(void), (**f)(void); } NitroPortOverlay;\n",
                 encoding="utf-8")
             (d / "t.c").write_text(go.render_table(go.parse_lsf(LSF)), encoding="utf-8")
-            subprocess.run(["cc", "-c", "-I", str(d), str(d / "t.c"), "-o", str(d / "t.o")], check=True)
+            subprocess.run(["cc", "-c", "-Werror", "-I", str(d), str(d / "t.c"), "-o", str(d / "t.o")],
+                           check=True)
             sections = dict(go.sections(d / "t.o"))
             self.assertEqual(sections["ovl_data_first"], 4)
             self.assertEqual(sections["ovl_bss_fast"], 4)
+            # A null pointer ends each table of static initializers.
+            self.assertEqual(sections["ovl_sinit_placed"], struct.calcsize("P"))
 
 
 @unittest.skipUnless(shutil.which("cc") and shutil.which("objcopy"), "needs cc and objcopy")
@@ -166,6 +174,19 @@ class RenameTests(unittest.TestCase):
         before = obj.read_bytes()
         self.assertEqual(go.rename_sections(obj, "field", "objcopy"), {"data", "bss"})
         self.assertEqual(obj.read_bytes(), before)
+
+    def test_static_initializers_renamed(self):
+        # What nitro/sinit.h leaves in an object for the port.
+        obj = self.compile("static void NitroStaticInit(void);\n"
+                           "__attribute__((section(\".sinit\"), used))\n"
+                           "static void (*NitroStaticInit_[])(void) = { NitroStaticInit };\n"
+                           "int x = 0; static void NitroStaticInit(void) { x = 1; }\n")
+        kinds = go.rename_sections(obj, "watch", "objcopy")
+        self.assertEqual(kinds, {"bss", "sinit"})
+        names = go.section_names(obj)
+        self.assertIn("ovl_sinit_watch", names)
+        self.assertNotIn(".sinit", names)
+        self.assertEqual(go.rename_sections(obj, "watch", "objcopy"), {"bss", "sinit"})
 
     def test_object_without_data(self):
         obj = self.compile("int f(int x) { return x + 1; }\n")

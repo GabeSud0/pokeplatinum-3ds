@@ -185,7 +185,8 @@ graphics.
 Without a data pack, two checks run in CI:
 
 - `pokeplatinum-pc --check-overlays` loads every overlay with the game's own
-  overlay manager and checks that each load resets the overlay's data.
+  overlay manager and checks that each load resets the overlay's data, and
+  that the overlays' static initializers are passed on.
 - `python tools/boot_smoke.py <pokeplatinum-pc>` starts the game with a
   made-up pack and reports where it stops.
 
@@ -214,7 +215,10 @@ machine-specific parts. The rest is in libnitro ([`../nitro`](../nitro)):
   all of them are linked into the program, and loading one resets its data
   in the same way: the build gathers each overlay's data into sections of
   its own (`tools/game_overlays.py`), and loading copies back the initial
-  values and clears the rest. The game's own overlay manager does the rest.
+  values and clears the rest. Then, as on the DS, the overlay's static
+  initializers run (`NitroStaticInit`: each Pokétch app's, for one, tells
+  the Pokétch how to start the app). The game's own overlay manager does
+  the rest.
 - **Files** come from the data pack (`NitroPort_OpenPak`); a file the game
   asks for that the pack doesn't have is logged.
 - **The ARM7.** The DS's second CPU answered the game's requests for the

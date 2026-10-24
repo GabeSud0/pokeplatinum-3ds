@@ -233,7 +233,9 @@ enum {
 };
 
 /* One overlay of the program, in overlay-ID order: the bounds of its
- * initialised data and of its zero-initialised data (NULL if none). */
+ * initialised data, of its zero-initialised data, and of its table of static
+ * initializers (NitroStaticInit, nitro/sinit.h: called each time it's
+ * loaded; NULL entries are skipped). NULL bounds if it has none. */
 typedef struct NitroPortOverlay {
     const char *name;
     u32 region;
@@ -241,6 +243,8 @@ typedef struct NitroPortOverlay {
     u8 *dataEnd;
     u8 *bssStart;
     u8 *bssEnd;
+    void (**sinitStart)(void);
+    void (**sinitEnd)(void);
 } NitroPortOverlay;
 
 /* Give the port the program's overlays, before any game code runs. A copy

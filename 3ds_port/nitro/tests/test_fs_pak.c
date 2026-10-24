@@ -26,8 +26,8 @@ static u8 sOvlData[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
 static u8 sOvlBss[4];
 static const NitroPortOverlay sOverlays[] = {
     { "test_main", NITRO_PORT_OVERLAY_MAIN, sOvlData, sOvlData + sizeof(sOvlData),
-      sOvlBss, sOvlBss + sizeof(sOvlBss) },
-    { "test_itcm", NITRO_PORT_OVERLAY_ITCM, NULL, NULL, NULL, NULL },
+      sOvlBss, sOvlBss + sizeof(sOvlBss), NULL, NULL },
+    { "test_itcm", NITRO_PORT_OVERLAY_ITCM, NULL, NULL, NULL, NULL, NULL, NULL },
 };
 
 static void check_overlays(void)
@@ -80,6 +80,53 @@ static void check_overlays(void)
     /* An overlay with no data loads too. */
     CHECK(FS_LoadOverlay(MI_PROCESSOR_ARM9, 1));
     CHECK(FS_UnloadOverlay(MI_PROCESSOR_ARM9, 1));
+}
+
+/* An overlay with static initializers (the game's NitroStaticInit): its
+ * table, as the game build makes it, ends with a null entry. They run on
+ * every load, after the overlay's data is back to its start. */
+static u8 sInitData[1] = { 5 };
+static int sInitCalls;
+static u8 sInitSaw;
+
+static void TestStaticInit(void)
+{
+    sInitCalls++;
+    sInitSaw = sInitData[0];
+}
+
+static void (*sInitTable[])(void) = { TestStaticInit, NULL };
+
+static const NitroPortOverlay sInitOverlays[] = {
+    { "test_init", NITRO_PORT_OVERLAY_MAIN, sInitData, sInitData + sizeof(sInitData),
+      NULL, NULL, sInitTable, sInitTable + 2 },
+};
+
+static void check_overlay_static_init(void)
+{
+    FSOverlayInfo info;
+    FSFile file;
+
+    NitroPort_SetOverlays(sInitOverlays, 1);
+    CHECK(FS_LoadOverlayInfo(&info, MI_PROCESSOR_ARM9, 0));
+    CHECK(info.header.sinit_init == sInitTable && info.header.sinit_init_end == sInitTable + 2);
+    CHECK(sInitCalls == 0);
+
+    sInitData[0] = 9;
+    CHECK(FS_LoadOverlay(MI_PROCESSOR_ARM9, 0));
+    CHECK(sInitCalls == 1 && sInitSaw == 5);
+    CHECK(FS_UnloadOverlay(MI_PROCESSOR_ARM9, 0));
+    CHECK(sInitCalls == 1);
+
+    /* The asynchronous form runs them from FS_StartOverlay. */
+    FS_InitFile(&file);
+    CHECK(FS_LoadOverlayImageAsync(&info, &file));
+    CHECK(FS_WaitAsync(&file));
+    CHECK(FS_CloseFile(&file));
+    CHECK(sInitCalls == 1);
+    FS_StartOverlay(&info);
+    CHECK(sInitCalls == 2);
+    CHECK(FS_UnloadOverlay(MI_PROCESSOR_ARM9, 0));
 }
 
 static void check_file(const char *path, u32 id, const char *expected,
@@ -176,8 +223,10 @@ int main(int argc, char **argv)
 
     /* Overlays are linked into the program (src/port_overlay.c): loading
      * one restores its initial data and clears its zero-initialised data,
-     * as reading a fresh copy from the cartridge did. */
+     * as reading a fresh copy from the cartridge did, then runs its static
+     * initializers. */
     check_overlays();
+    check_overlay_static_init();
 
     NitroPort_ClosePak();
     CHECK(!NitroPort_IsPakOpen());

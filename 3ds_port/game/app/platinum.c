@@ -128,10 +128,52 @@ void Platinum_Run(const PlatinumSettings *settings)
 int Platinum_CheckOverlays(void)
 {
     int failures = 0;
+    int withInit = 0;
     u32 id;
+    NitroPortOverlay *quiet;
 
     NitroPort_SetOverlays(gPlatinumOverlays, gPlatinumOverlayCount);
     FS_Init(FS_DMA_NOT_USE);
+
+    /* The SDK is told about each overlay's static initializers, which it
+     * calls once the overlay is loaded. */
+    for (id = 0; id < gPlatinumOverlayCount; id++) {
+        const NitroPortOverlay *o = &gPlatinumOverlays[id];
+        void (**f)(void);
+        FSOverlayInfo info;
+        BOOL any = FALSE;
+
+        for (f = o->sinitStart; f < o->sinitEnd; f++) {
+            any = any || *f != NULL;
+        }
+        withInit += any;
+        if (!FS_LoadOverlayInfo(&info, MI_PROCESSOR_ARM9, id)
+            || (any && (info.header.sinit_init != o->sinitStart
+                        || info.header.sinit_init_end != o->sinitEnd))) {
+            NitroPort_Log("[check] overlay %lu (%s): static initializers not passed on",
+                          (unsigned long)id, o->name);
+            failures++;
+        }
+    }
+    /* The game has some (every Pokétch app has one). */
+    if (withInit == 0) {
+        NitroPort_Log("[check] no overlay has static initializers");
+        failures++;
+    }
+
+    /* The loading checks run without them: they expect the game to be
+     * running (a Pokétch app's tells the Pokétch about the app). */
+    quiet = malloc(gPlatinumOverlayCount * sizeof(*quiet));
+    if (quiet == NULL) {
+        NitroPort_Log("[check] out of memory");
+        return 1;
+    }
+    memcpy(quiet, gPlatinumOverlays, gPlatinumOverlayCount * sizeof(*quiet));
+    for (id = 0; id < gPlatinumOverlayCount; id++) {
+        quiet[id].sinitStart = quiet[id].sinitEnd = NULL;
+    }
+    NitroPort_SetOverlays(quiet, gPlatinumOverlayCount);
+
     for (id = 0; id < gPlatinumOverlayCount; id++) {
         const NitroPortOverlay *o = &gPlatinumOverlays[id];
         u32 dataSize = (u32)(o->dataEnd - o->dataStart);
@@ -174,7 +216,8 @@ int Platinum_CheckOverlays(void)
         }
         free(initial);
     }
-    NitroPort_Log("[check] %lu overlays, %d failed", (unsigned long)gPlatinumOverlayCount, failures);
+    NitroPort_Log("[check] %lu overlays (%d with static initializers), %d failed",
+                  (unsigned long)gPlatinumOverlayCount, withInit, failures);
     return failures;
 }
 
