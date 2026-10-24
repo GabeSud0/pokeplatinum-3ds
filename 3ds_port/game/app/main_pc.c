@@ -67,6 +67,7 @@
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_vertex.h>
 #include <nitro_port_gx3d_texture.h>
+#include <nitro_port_lowermenu.h>
 #include <nitro_port_wide.h>
 #include <nitro_port_wideart.h>
 
@@ -201,6 +202,7 @@ static uint16_t sLiveButtons;
 static long sLiveButtonsUntil = -1;
 static int sLiveTouchX, sLiveTouchY;
 static long sLiveTouchUntil = -1;
+static int sLiveTouchMenu;   /* (mtouch: at the 3DS's lower screen, through the menu) */
 
 #define MAX_TOUCHES 4096
 static struct {
@@ -258,37 +260,24 @@ static void Chunk(FILE *f, const char *type, const unsigned char *data, uint32_t
     fwrite(tail, 1, 4, f);
 }
 
-/* A PNG of DS colours (15-bit), uncompressed (deflate's stored blocks), so
- * no image library is needed. */
-static int WritePng(const char *path, const uint16_t *pixels, int w, int h)
+/* A PNG of RGB rows (each a filter byte, 0, then 3 bytes a pixel; freed
+ * here), uncompressed (deflate's stored blocks), so no image library is
+ * needed. */
+static int WritePngRows(const char *path, unsigned char *rows, int w, int h)
 {
     size_t raw = (size_t)h * (size_t)(1 + w * 3);
     size_t blocks = (raw + 65534) / 65535;
     size_t zlen = 2 + raw + blocks * 5 + 4;
-    unsigned char *rows = malloc(raw);
     unsigned char *z = malloc(zlen);
     unsigned char ihdr[13];
     uint32_t a = 1, b = 0;
     size_t i, pos = 0, done = 0;
     FILE *f;
-    int x, y;
 
     if (rows == NULL || z == NULL) {
         free(rows);
         free(z);
         return -1;
-    }
-    for (y = 0; y < h; y++) {
-        unsigned char *r = rows + (size_t)y * (size_t)(1 + w * 3);
-
-        *r++ = 0;   /* filter: none */
-        for (x = 0; x < w; x++) {
-            uint16_t c = pixels[y * w + x];
-
-            *r++ = (unsigned char)(((c & 31) << 3) | ((c & 31) >> 2));
-            *r++ = (unsigned char)((((c >> 5) & 31) << 3) | (((c >> 5) & 31) >> 2));
-            *r++ = (unsigned char)((((c >> 10) & 31) << 3) | (((c >> 10) & 31) >> 2));
-        }
     }
     z[pos++] = 0x78;
     z[pos++] = 0x01;
@@ -330,6 +319,54 @@ static int WritePng(const char *path, const uint16_t *pixels, int w, int h)
     free(rows);
     free(z);
     return 0;
+}
+
+/* A PNG of DS colours (15-bit). */
+static int WritePng(const char *path, const uint16_t *pixels, int w, int h)
+{
+    unsigned char *rows = malloc((size_t)h * (size_t)(1 + w * 3));
+    int x, y;
+
+    if (rows == NULL) {
+        return -1;
+    }
+    for (y = 0; y < h; y++) {
+        unsigned char *r = rows + (size_t)y * (size_t)(1 + w * 3);
+
+        *r++ = 0;   /* filter: none */
+        for (x = 0; x < w; x++) {
+            uint16_t c = pixels[y * w + x];
+
+            *r++ = (unsigned char)(((c & 31) << 3) | ((c & 31) >> 2));
+            *r++ = (unsigned char)((((c >> 5) & 31) << 3) | (((c >> 5) & 31) >> 2));
+            *r++ = (unsigned char)((((c >> 10) & 31) << 3) | (((c >> 10) & 31) >> 2));
+        }
+    }
+    return WritePngRows(path, rows, w, h);
+}
+
+/* A PNG of (r << 24) | (g << 16) | (b << 8) | a texels (the alpha left out). */
+static int WritePngRgba(const char *path, const uint32_t *pixels, int w, int h)
+{
+    unsigned char *rows = malloc((size_t)h * (size_t)(1 + w * 3));
+    int x, y;
+
+    if (rows == NULL) {
+        return -1;
+    }
+    for (y = 0; y < h; y++) {
+        unsigned char *r = rows + (size_t)y * (size_t)(1 + w * 3);
+
+        *r++ = 0;
+        for (x = 0; x < w; x++) {
+            uint32_t c = pixels[y * w + x];
+
+            *r++ = (unsigned char)(c >> 24);
+            *r++ = (unsigned char)(c >> 16);
+            *r++ = (unsigned char)(c >> 8);
+        }
+    }
+    return WritePngRows(path, rows, w, h);
 }
 
 /* As the 3DS does (main_3ds.c, DrawFrame): the display state taken when
@@ -449,6 +486,80 @@ static int RemasterShot(const char *path)
         }
     }
     return WritePng(path, out, 320, 384);
+}
+
+/* The 3DS remaster's lower screen as the menu (port_lowermenu.c), at the
+ * 3DS's resolution, put together as the compositor does: the menu's
+ * picture, the DS's lower screen in its panel at 15/16 (its top row
+ * carried on above it, its bottom row below), sampled as the GPU samples
+ * its texture of 2 x 2 texels a pixel (bilinear), the master brightness
+ * over it all. */
+static int MenuShot(const char *path)
+{
+    static uint16_t under[320 * 192], over[320 * 192];
+    static uint8_t overAlpha[320 * 192];
+    static uint32_t out[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
+    int engine = NitroPort_EngineAOnTop() ? 1 : 0;   /* the lower screen's */
+    NitroRender2DSplit split;
+    const uint32_t *pic;
+    int x, y, width, mode, f;
+
+    if (!NitroPort_LowerMenuOn()) {
+        NitroPort_Log("[pc] mshot: the lower screen isn't the menu now (drawn anyway)");
+    }
+    pic = NitroPort_LowerMenuLockFrame(NULL);
+    memcpy(out, pic, sizeof(out));
+    NitroPort_LowerMenuUnlockFrame();
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.windowsToEdge = 1;
+    split.snapshot = sStateTaken;
+    NitroPort_Render2DSplit(engine, under, &split);
+    width = split.width > 256 ? split.width : 256;
+    for (y = 0; y < NITRO_LOWERMENU_PANEL_H; y++) {
+        for (x = 0; x < NITRO_LOWERMENU_PANEL_W; x++) {
+            /* the canvas's point there, in its 2x2 texels (as the GPU) */
+            float tx = ((float)x + 0.5f) * (2.0f * NITRO_LOWERMENU_CANVAS_W / NITRO_LOWERMENU_PANEL_W) - 0.5f;
+            float ty = ((float)y + 0.5f) * (2.0f * NITRO_LOWERMENU_CANVAS_H / NITRO_LOWERMENU_PANEL_H) - 0.5f;
+            int t0x = (int)tx, t0y = (int)ty, k, i;
+            float fx = tx - (float)t0x, fy = ty - (float)t0y, acc[3] = { 0, 0, 0 };
+
+            for (i = 0; i < 4; i++) {
+                int txi = t0x + (i & 1), tyi = t0y + (i >> 1);
+                int cx = txi / 2 > 255 ? 255 : txi / 2, cy = tyi / 2 - NITRO_LOWERMENU_DS_ROW0;
+                float w = ((i & 1) ? fx : 1.0f - fx) * ((i >> 1) ? fy : 1.0f - fy);
+                uint16_t c;
+
+                cy = cy < 0 ? 0 : cy > 191 ? 191 : cy;
+                c = under[cy * width + cx];
+                for (k = 0; k < 3; k++) {
+                    int v = (c >> (5 * k)) & 31;
+                    acc[k] += w * (float)((v << 3) | (v >> 2));
+                }
+            }
+            out[(NITRO_LOWERMENU_PANEL_Y0 + y) * NITRO_LOWERMENU_W + NITRO_LOWERMENU_PANEL_X0 + x] =
+                ((uint32_t)(acc[0] + 0.5f) << 24) | ((uint32_t)(acc[1] + 0.5f) << 16) |
+                ((uint32_t)(acc[2] + 0.5f) << 8) | 0xFFu;
+        }
+    }
+    mode = (split.masterBright >> 14) & 3;
+    f = split.masterBright & 31;
+    f = f > 16 ? 16 : f;
+    if (f && (mode == 1 || mode == 2)) {
+        for (y = 0; y < NITRO_LOWERMENU_W * NITRO_LOWERMENU_H; y++) {
+            uint32_t c = out[y], m = 0xFFu;
+            int k;
+
+            for (k = 24; k >= 8; k -= 8) {
+                int v = (int)((c >> k) & 0xFFu);
+                v = mode == 1 ? v + (255 - v) * f / 16 : v - v * f / 16;
+                m |= (uint32_t)v << k;
+            }
+            out[y] = m;
+        }
+    }
+    return WritePngRgba(path, out, NITRO_LOWERMENU_W, NITRO_LOWERMENU_H);
 }
 
 /* Both screens, the upper one above the lower one. */
@@ -638,6 +749,8 @@ void NitroPort_Log(const char *fmt, ...)
  *   touch X Y [N]    touch the lower screen for N frames (default 6)
  *   shot PATH        save both screens (PNG, upper above lower)
  *   rshot PATH       the same as the 3DS remaster lays them out (--wide)
+ *   mshot PATH       the 3DS's lower screen as the menu, at its 320 x 240
+ *   mtouch X Y [N]   touch the 3DS's lower screen at (X, Y) of its 320 x 240
  *   dump3d PATH      save the newest finished 3D image (PNG)
  *   ref3d PATH       draw the newest scene with the reference rasterizer
  *   gpusim PATH      draw it as the 3DS GPU path would (port_gx3d_gpusim.c)
@@ -708,6 +821,19 @@ static void ControlWait(void)
                 sLiveTouchX = (int)a;
                 sLiveTouchY = (int)b;
                 sLiveTouchUntil = sFrame + (c > 0 ? c : 6);
+                sLiveTouchMenu = 0;
+            } else if (sscanf(line, "mtouch %ld %ld %ld", &a, &b, &c) >= 2) {
+                /* the 3DS's lower screen touched at (a, b) of its 320 x 240,
+                 * as the 3DS takes it (the menu's buttons, or the game's
+                 * screen in its panel) */
+                sLiveTouchX = (int)a;
+                sLiveTouchY = (int)b;
+                sLiveTouchUntil = sFrame + (c > 0 ? c : 6);
+                sLiveTouchMenu = 1;
+            } else if (sscanf(line, "mshot %1023s", arg) == 1) {
+                if (MenuShot(arg) != 0) {
+                    NitroPort_Log("[pc] control: can't write %s", arg);
+                }
             } else if (sscanf(line, "shot %1023s", arg) == 1) {
                 static uint16_t both[256 * 384];
 
@@ -1068,9 +1194,21 @@ void NitroPort_OnFrame(void)
     }
     Platinum_SetButtons((uint16_t)(HeldButtons(sFrame) |
                                    (sFrame < sLiveButtonsUntil ? sLiveButtons : 0)));
-    if (sFrame < sLiveTouchUntil) {
+    if (sFrame < sLiveTouchUntil && sLiveTouchMenu) {
+        int x = 0, y = 0;
+
+        if (NitroPort_LowerMenuTouch(1, sLiveTouchX, sLiveTouchY, &x, &y)) {
+            Platinum_SetTouch(1, x, y);
+        } else {
+            Platinum_SetTouch(0, 0, 0);
+        }
+    } else if (sFrame < sLiveTouchUntil) {
         Platinum_SetTouch(1, sLiveTouchX, sLiveTouchY);
     } else if (sTouchCount > 0 || sLiveTouchUntil >= 0) {
+        if (sLiveTouchMenu) {
+            NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+            sLiveTouchMenu = 0;
+        }
         ApplyTouch(sFrame);
     }
 }

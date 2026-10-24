@@ -56,6 +56,7 @@
 #include "platinum.h"
 #include "port_pica.h"
 #include <nitro_port_gx3d.h>
+#include <nitro_port_lowermenu.h>
 #include <nitro_port_render2d.h>
 #include <nitro_port_wide.h>
 #include <nitro_port_wideart.h>
@@ -2258,7 +2259,25 @@ void NitroPort_OnFrame(void)
      * captures, docs/WIDE_ART.md. Looking for their screens a few times a
      * second, and the sharing itself, cost frames, 2026-10-20.) */
     Platinum_SetButtons(DsButtons(held));
-    if (held & KEY_TOUCH) {
+    if (sRemaster && NitroPort_LowerMenuOn()) {
+        /* The lower screen as the menu (nitro_port_lowermenu.h): a touch
+         * that begins in its panel is the game's, at the DS's pixel there;
+         * one on the frame presses its buttons. */
+        touchPosition touch;
+        int x = 0, y = 0;
+
+        if (held & KEY_TOUCH) {
+            hidTouchRead(&touch);
+            if (NitroPort_LowerMenuTouch(1, touch.px, touch.py, &x, &y)) {
+                Platinum_SetTouch(1, x, y);
+            } else {
+                Platinum_SetTouch(0, 0, 0);
+            }
+        } else {
+            NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+            Platinum_SetTouch(0, 0, 0);
+        }
+    } else if (held & KEY_TOUCH) {
         touchPosition touch;
 
         hidTouchRead(&touch);

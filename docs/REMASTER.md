@@ -11,6 +11,8 @@ What it does:
 - **Bigger screens.** The DS's pictures are drawn 1.25 times bigger: the
   lower screen's 256x192 fills its 320x240 exactly; the upper screen is
   320 DS pixels wide (400x240), laid out for the wider screen (below).
+  In the field the lower screen is a menu instead, with the DS's lower
+  screen in a panel (see "The lower screen as a menu").
 - **Sharper 3D.** The 3D is drawn by the GPU straight into the screen at
   the screen's own resolution, not at the DS's 256x192 and then enlarged
   (at twice it and scaled down, in fact: no jagged edges). Its fog is
@@ -518,6 +520,42 @@ stretched:
 - **The 3D** is drawn wide (the camera widened) only while it's on the
   upper screen; the intro's flyover is on the lower screen, at the DS's
   width.
+
+## The lower screen as a menu
+
+In the field the lower screen is the port's menu, drawn at the 3DS's
+resolution (`port_lowermenu.c`, `include/nitro_port_lowermenu.h`): on the
+left a panel with the DS's lower screen in it (the Pokétch, or the Poké
+Ball before the player has one), at 15/16 of its size; on the right a
+column of eight buttons (MAP, POKéMON, BAG, TRAINER, POKéDEX, POKéTCH,
+SAVE, OPTIONS), each with its icon and name, over two squares for the
+registered items. Everywhere else (battles, the apps that take both
+screens) the lower screen is the DS's, filling the screen as before.
+
+- **On and off:** the Pokétch's handlers in the field
+  (`patches/pokeplatinum/0031`): the menu is on while the Pokétch is the
+  field's lower screen. Only in the remaster display, and only without the
+  3D on the lower screen.
+- **The picture:** drawn on the CPU when it changes (on, off, the cursor
+  or a finger on a button), handed to the compositor under a lock with a
+  serial; the compositor puts it in a texture (RGB565, a texel a pixel,
+  two taken by turns) and draws the panel over it. The frame and the names
+  are the port's (the names in a small font of its own: the game's is too
+  wide for a button, POKéDEX is 42 pixels in it); the icons are the start
+  menu's own, read from the ROM (`graphic/menu_gra.narc`: `icons_NCGR` in
+  `menu_NCLR`'s coloured palette; the bag's for a girl is hers), and two
+  drawn for the menu (MAP and POKéTCH).
+- **The panel:** a canvas 256 x 247 DS pixels, drawn 240 x 232 at (3, 4):
+  the DS's 192 rows at its rows 27-218, its top row carried on above them
+  and its bottom row below (on the Pokétch, its strap goes on up and down).
+  Three quads from the DS's picture's texture.
+- **Touch:** a touch that begins in the panel is the game's, at the DS's
+  pixel there (dragged out of the panel, the nearest pixel of it); one that
+  begins on a button shows it pressed, and letting go on it is a press
+  (`NitroPort_LowerMenuTakePress`, for the menu's controller).
+- **The fades** cover the whole screen, the menu too.
+- **The PC runner:** `mshot PATH` writes the lower screen as the 3DS shows
+  it (320 x 240), `mtouch X Y` touches it there.
 
 ## Timing
 
