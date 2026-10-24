@@ -1079,6 +1079,9 @@ static void LogWritePending(void)
         fprintf(sLog, "[log] %u lines left out (too many at once)\n", dropped);
     }
     fflush(sLog);
+    /* On the card now, not when the file is closed: the program may not
+     * get that far (a crash, closed from the HOME Menu, the power off). */
+    fsync(fileno(sLog));
     LightLock_Unlock(&sLogFileLock);
 }
 
@@ -1095,13 +1098,20 @@ static void LogMain(void *unused)
 }
 
 /* Lowest priority: on core 1 if the program has a share of it, else on
- * the game's core, where it runs while the game waits for its V-blank. */
+ * the game's core, where it runs while the game waits for its V-blank. (A
+ * thread on core 1 without a share of it may never run: whether the
+ * program has one depends on how it was started, the .3dsx or the HOME
+ * Menu version.) */
 static void StartLogThread(void)
 {
+    u32 core1 = 0;
+
     LightLock_Init(&sLogFileLock);
     LightEvent_Init(&sLogWake, RESET_ONESHOT);
     __atomic_store_n(&sLogThreadRunning, true, __ATOMIC_RELEASE);
-    sLogThread = threadCreate(LogMain, NULL, 16 * 1024, 0x3F, 1, false);
+    if (R_SUCCEEDED(APT_GetAppCpuTimeLimit(&core1)) && core1 > 0) {
+        sLogThread = threadCreate(LogMain, NULL, 16 * 1024, 0x3F, 1, false);
+    }
     if (sLogThread == NULL) {
         sLogThread = threadCreate(LogMain, NULL, 16 * 1024, 0x3F, 0, false);
     }

@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define SAVE_BYTES (512u * 1024u)
 #define ERASE_SECTOR_BYTES (64u * 1024u)
@@ -151,8 +152,13 @@ static BOOL store(u32 offset, u32 length)
      * the stdio level (async CARD APIs included): this is its last page's
      * request, the write's earlier pages with it (flush_pending). */
     if (fseek(sSave, (long)offset, SEEK_SET) == 0 &&
-        fwrite(sImage + offset, 1, length, sSave) == length && fflush(sSave) == 0)
+        fwrite(sImage + offset, 1, length, sSave) == length && fflush(sSave) == 0) {
+        /* On the card now: the 3DS's file system keeps writes until the
+         * file is flushed or closed, and the program may not get to close
+         * it (closed from the HOME Menu, the power off). */
+        (void)fsync(fileno(sSave));
         return TRUE;
+    }
     if (fseek(sSave, (long)offset, SEEK_SET) != 0 ||
         fread(sImage + offset, 1, length, sSave) != length) {
         /* (can't tell what the file has: read it all again next time) */
