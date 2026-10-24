@@ -2396,8 +2396,21 @@ static void test_wide_framed_windows(void)
     CHECK(wide[26 * 320 + 274] == BLUE);          /* its sprite with it: 208 + 32 + 32 */
     CHECK(wide[26 * 320 + 242] == GREY);          /* (not where it was) */
     CHECK(wide[26 * 320 + 134] == BLUE);          /* the other sprite where it was: 100 + 32 */
-    NitroPort_WindowFramed(&menu, 0);             /* the frame taken off: back */
+    /* Drawn from the display state taken (the 3DS's drawing threads):
+     * the windows as they were then too. The game takes the menu's frame
+     * off before its tiles leave the VRAM (at its next V-blank): the menu
+     * stays where it was until the state is taken again. */
+    NitroPort_Render2DTakeState(0);
+    NitroPort_WindowFramed(&menu, 0);
+    split.snapshot = 1;
     NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 264] == RED && wide[20 * 320 + 240] == GREY);
+    CHECK(wide[26 * 320 + 274] == BLUE);
+    NitroPort_Render2DTakeState(0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 240] == RED && wide[20 * 320 + 300] == GREY);
+    split.snapshot = 0;
+    NitroPort_Render2DSplit(0, wide, &split);     /* the frame taken off: back */
     CHECK(wide[20 * 320 + 240] == RED);
     CHECK(wide[26 * 320 + 242] == BLUE);
     NitroPort_WindowRemoved(&menu);

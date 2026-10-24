@@ -110,6 +110,20 @@ typedef struct State2D {
      * each line, when they differ */
     int lines;
     u8 lineRegs[H][NITRO_LINE_REGS];
+    /* (the wider screen) the windows moved or widened on each BG
+     * (NitroPort_WideWindows), as they were: the game takes a menu's frame
+     * off before the menu's tiles leave the VRAM (at its next V-blank), so
+     * read live the menu showed a frame where the DS has it, 32 pixels to
+     * the left of where it had been (2026-10-23); and the screen's layout
+     * (NitroPort_WideSplits, NitroPort_WideParts), which the game also sets
+     * before the new screen's tiles are in */
+    NitroWideWindow wins[4][NITRO_WIDE_MAX_WINDOWS];
+    int nwins[4];
+    NitroWideSplit splits[NITRO_WIDE_MAX_SPLITS];
+    int nsplits;
+    NitroWidePart parts[NITRO_WIDE_MAX_PARTS];
+    int nparts;
+    uint32_t winSerial;
 } State2D;
 static State2D sState[2];
 
@@ -147,6 +161,7 @@ typedef struct Engine {
      * line, 2026-10-14). Nothing is mirrored anywhere. */
     u8 clip[4];
     u8 anchorWindows;
+    const State2D *taken;  /* (drawn from the display state taken: its windows) */
     u8 pictures;
     /* (wider canvas, worked out each frame) a BG's hand-drawn picture
      * (nitro_port_wideart.h): its pixels, how far the BG has scrolled
@@ -219,6 +234,18 @@ typedef struct Engine {
     u16 objPal4[256];
     u16 objPal8[256];
 } Engine;
+
+/* The windows moved or widened on a BG (NitroPort_WideWindows): as they
+ * were when the display state was taken, when drawn from that (as the
+ * VRAM's tiles were then too), else as they are. How many. */
+static int EngineWindows(const Engine *e, int bg, NitroWideWindow *out)
+{
+    if (e->taken != NULL) {
+        memcpy(out, e->taken->wins[bg], (size_t)e->taken->nwins[bg] * sizeof(*out));
+        return e->taken->nwins[bg];
+    }
+    return NitroPort_WideWindows(e->isA ? 0 : 1, bg, out, NITRO_WIDE_MAX_WINDOWS);
+}
 
 /* The OBJ layer's pixels on the current line. */
 typedef struct ObjLine {
@@ -1138,7 +1165,7 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
         return 3;
     }
     if (e->anchorWindows) {
-        nwins = NitroPort_WideWindows(e->isA ? 0 : 1, bg, wins, NITRO_WIDE_MAX_WINDOWS);
+        nwins = EngineWindows(e, bg, wins);
     }
     for (i = 0; i < nwins; i++) {
         int top = wins[i].top * 8, bottom = (wins[i].top + wins[i].height) * 8;
@@ -3627,7 +3654,18 @@ static void SetUpParts(Engine *e)
 {
     NitroWideSplit splits[NITRO_WIDE_MAX_SPLITS];
     NitroWidePart game[NITRO_WIDE_MAX_PARTS];
-    int eng = e->isA ? 0 : 1, ns = NitroPort_WideSplits(eng, splits), ng = NitroPort_WideParts(eng, game), i;
+    int eng = e->isA ? 0 : 1, ns, ng, i;
+
+    if (e->taken != NULL) {
+        /* (as they were when the display state was taken) */
+        ns = e->taken->nsplits;
+        ng = e->taken->nparts;
+        memcpy(splits, e->taken->splits, (size_t)ns * sizeof(*splits));
+        memcpy(game, e->taken->parts, (size_t)ng * sizeof(*game));
+    } else {
+        ns = NitroPort_WideSplits(eng, splits);
+        ng = NitroPort_WideParts(eng, game);
+    }
 
     for (i = 0; i < ns; i++) {
         const NitroWideSplit *sp = &splits[i];
@@ -3706,6 +3744,7 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
 
     memset(e, 0, sizeof(*e));
     e->isA = engine == 0;
+    e->taken = taken ? st : NULL;
     e->ioAll = taken ? st->io : NitroPort_IoReg;
     e->io = e->ioAll + (e->isA ? 0 : 0x1000);
     e->lines = taken ? (st->lines ? (const u8(*)[NITRO_LINE_REGS])st->lineRegs : NULL)
@@ -3735,7 +3774,7 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
              * sprites over them go with them. */
             for (bg = 0; bg < 4 && e->nObjMove < OBJ_MOVES_MAX; bg++) {
                 NitroWideWindow wins[NITRO_WIDE_MAX_WINDOWS];
-                int n = NitroPort_WideWindows(e->isA ? 0 : 1, bg, wins, NITRO_WIDE_MAX_WINDOWS), i;
+                int n = EngineWindows(e, bg, wins), i;
                 int hofs = Rd16(e->io, 0x10 + bg * 4) & 0x1FF, vofs = Rd16(e->io, 0x12 + bg * 4) & 0x1FF;
 
                 for (i = 0; i < n && e->nObjMove < OBJ_MOVES_MAX; i++) {
@@ -4390,6 +4429,16 @@ void NitroPort_Render2DTakeState(int engine)
     if (st->lines) {
         memcpy(st->lineRegs, NitroPort_LineRegs.regs[engine ? 1 : 0], sizeof(st->lineRegs));
     }
+    {
+        int bg;
+
+        st->winSerial = NitroPort_WideWindowsSerial();
+        for (bg = 0; bg < 4; bg++) {
+            st->nwins[bg] = NitroPort_WideWindows(engine ? 1 : 0, bg, st->wins[bg], NITRO_WIDE_MAX_WINDOWS);
+        }
+        st->nsplits = NitroPort_WideSplits(engine ? 1 : 0, st->splits);
+        st->nparts = NitroPort_WideParts(engine ? 1 : 0, st->parts);
+    }
 }
 
 /* What an engine's picture is drawn from, in two parts: the small ones
@@ -4484,7 +4533,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     if (split->width > W) {
         /* (the windows decide the edges' look, and where the anchored ones
          * are; hand-drawn pictures loaded again) */
-        small = (small ^ NitroPort_WideWindowsSerial()) * 16777619u;
+        small = (small ^ (split->snapshot ? sState[e].winSerial : NitroPort_WideWindowsSerial())) * 16777619u;
         small = (small ^ NitroPort_WideArtSerial()) * 16777619u;
     }
     /* The small parts changed (a scroll, a sprite, a colour: most frames of

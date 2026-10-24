@@ -332,6 +332,18 @@ static int WritePng(const char *path, const uint16_t *pixels, int w, int h)
     return 0;
 }
 
+/* As the 3DS does (main_3ds.c, DrawFrame): the display state taken when
+ * the game's V-blank work is done, which the remaster's picture is drawn
+ * from (the VRAM as it is: the game changes it only in that work). */
+static int sStateTaken;
+
+void NitroPort_VBlankWorkDone(void)
+{
+    NitroPort_Render2DTakeState(0);
+    NitroPort_Render2DTakeState(1);
+    sStateTaken = 1;
+}
+
 /* The 3DS remaster's picture of the screens, put together on the CPU the
  * way the 3DS's GPU does it (port_compose_pica.c), at the DS's scale: the
  * upper screen 320 pixels wide with --wide (the 3DS's 400 at 1.25), the
@@ -357,6 +369,7 @@ static int RemasterShot(const char *path)
         split.over = over;
         split.overAlpha = overAlpha;
         split.windowsToEdge = 1;   /* (as the 3DS remaster has it) */
+        split.snapshot = sStateTaken;
         if (screen == 0) {
             NitroPort_WideLayout(engine, &split);
         }
