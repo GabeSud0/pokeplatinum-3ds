@@ -626,7 +626,9 @@ screens) the lower screen is the DS's, filling the screen as before.
   on BAG. While the item list waits, the menu's other buttons work (with
   its sound): BAG puts the bag away and closes the menu; POKéMON, TRAINER,
   POKéDEX and OPTIONS open straight from the bag (both screens black at
-  once, as the DS's fade out leaves them, then the app's own fade in);
+  once, as the DS's fade out leaves them, then the app's own fade in; the
+  bag makes them black while they're still kept, because the 3DS shows the
+  game's pictures a frame late);
   SAVE, MAP and POKéTCH are acted on back in the field. A tap while the
   bag's busy (an item's menu, a message, moving an item) is nobody's.
   Leaving another way (an item used, given, a Berry's tag) is the DS's
@@ -643,7 +645,8 @@ screens) the lower screen is the DS's, filling the screen as before.
   fade), at once. Let go now (`NITRO_LOWERMENU_LET_GO_NOW`), it shows the
   game's picture from the next frame however bright (back without a fade).
   The lower screen is held only while the bag and the field swap without
-  a fade, and let go at once. The 3DS doesn't draw a screen while it's
+  a fade, and let go at once. (Nothing lets them go on a soft reset yet;
+  the port has none.) The 3DS doesn't draw a screen while it's
   kept (what's on its LCD stays); drawn again regardless (back from the
   HOME menu), it's black. The PC runner's `rshot` and `mshot` show what's
   kept.

@@ -52,13 +52,13 @@ bag is as before, across the wider upper screen.
 ---
  include/applications/bag/defs.h |  12 ++
  include/sprite_util.h           |  10 ++
- src/applications/bag/main.c     | 240 +++++++++++++++++++++++++++++++-
+ src/applications/bag/main.c     | 249 +++++++++++++++++++++++++++++++-
  src/applications/bag/sprites.c  |  42 ++++++
  src/applications/bag/windows.c  |  53 +++++--
  src/sprite_system.c             |  15 +-
  src/sprite_util.c               |  19 ++-
- src/start_menu.c                | 166 +++++++++++++++++++++-
- 8 files changed, 531 insertions(+), 26 deletions(-)
+ src/start_menu.c                | 187 +++++++++++++++++++++++-
+ 8 files changed, 561 insertions(+), 26 deletions(-)
 
 diff --git a/include/applications/bag/defs.h b/include/applications/bag/defs.h
 index 06a9b8bf..10b499c9 100644
@@ -106,10 +106,10 @@ index 0c1f8eee..d90da3e1 100644
  void SetSubScreenViewRect(G2dRenderer *g2dRenderer, fx32 x, fx32 y);
  void ReserveVramForWirelessIconChars(NNS_G2D_VRAM_TYPE vramType, GXOBJVRamModeChar vramMode);
 diff --git a/src/applications/bag/main.c b/src/applications/bag/main.c
-index 62ef2225..1288fd85 100644
+index 62ef2225..daa9a6ed 100644
 --- a/src/applications/bag/main.c
 +++ b/src/applications/bag/main.c
-@@ -55,6 +55,97 @@
+@@ -55,6 +55,98 @@
  
  #ifdef SDK_PORT_3DS
  #include "port_wide_layout.h"
@@ -132,6 +132,7 @@ index 62ef2225..1288fd85 100644
 +extern BOOL gStartMenuPortMenu;       // (start_menu.c)
 +extern BOOL gStartMenuPortInstantApp; // (start_menu.c)
 +extern int gStartMenuPortAppPress;    // (start_menu.c)
++extern BOOL StartMenu_PortButtonOpensApp(int button);
 +
 +// The field's bag, the lower start menu's (gStartMenuPortMenu): one of the
 +// menu's buttons tapped while the item list waits closes the bag, and the
@@ -207,7 +208,7 @@ index 62ef2225..1288fd85 100644
  
  // The bag across the 3DS remaster's wider upper screen (a reference drawn
  // for it, 2026-10-16): the bag, its pockets and the button below 21 pixels
-@@ -251,7 +342,11 @@ static const ListMenuTemplate sItemListMenuTemplate = {
+@@ -251,7 +343,11 @@ static const ListMenuTemplate sItemListMenuTemplate = {
      .printCallback = ItemListMenuPrintCB,
      .window = NULL,
      .count = 0,
@@ -219,7 +220,7 @@ index 62ef2225..1288fd85 100644
      .headerXOffset = 0,
      .textXOffset = 0,
      .cursorXOffset = 0,
-@@ -498,7 +593,36 @@ int BagApplication_Init(ApplicationManager *appMan, int *state)
+@@ -498,7 +594,36 @@ int BagApplication_Init(ApplicationManager *appMan, int *state)
      controller->bgConfig = BgConfig_New(HEAP_ID_BAG);
      controller->trainerGender = TrainerInfo_Gender(controller->trainerInfo);
  
@@ -256,7 +257,7 @@ index 62ef2225..1288fd85 100644
      SetAutorepeat(3, 8);
  
      RestoreCursorPosition(controller);
-@@ -511,7 +635,12 @@ int BagApplication_Init(ApplicationManager *appMan, int *state)
+@@ -511,7 +636,12 @@ int BagApplication_Init(ApplicationManager *appMan, int *state)
      LoadGraphics(controller);
      DrawTouchScreenButtons(controller);
  #ifdef SDK_PORT_3DS
@@ -270,7 +271,7 @@ index 62ef2225..1288fd85 100644
  #endif
  
      EnableTouchPad();
-@@ -550,6 +679,20 @@ int BagApplication_Main(ApplicationManager *appMan, int *state)
+@@ -550,6 +680,20 @@ int BagApplication_Main(ApplicationManager *appMan, int *state)
  {
      BagController *controller = ApplicationManager_Data(appMan);
  
@@ -291,7 +292,7 @@ index 62ef2225..1288fd85 100644
      switch (*state) {
      case BAG_APP_STATE_WAIT_INITIAL_SCREEN_FADE:
          if (IsScreenFadeDone() == TRUE) {
-@@ -664,7 +807,9 @@ int BagApplication_Exit(ApplicationManager *appMan, int *state)
+@@ -664,7 +808,9 @@ int BagApplication_Exit(ApplicationManager *appMan, int *state)
      BagController *controller = ApplicationManager_Data(appMan);
  
  #ifdef SDK_PORT_3DS
@@ -302,7 +303,7 @@ index 62ef2225..1288fd85 100644
  #endif
      BagUI_FreeSprites(controller);
      FreeItemListMenu(controller);
-@@ -692,6 +837,30 @@ int BagApplication_Exit(ApplicationManager *appMan, int *state)
+@@ -692,6 +838,30 @@ int BagApplication_Exit(ApplicationManager *appMan, int *state)
      Heap_Destroy(HEAP_ID_BAG);
      SetAutorepeat(4, 8);
  
@@ -333,7 +334,7 @@ index 62ef2225..1288fd85 100644
      return TRUE;
  }
  
-@@ -803,6 +972,14 @@ static void SetupBGLayers(BgConfig *bgConfig)
+@@ -803,6 +973,14 @@ static void SetupBGLayers(BgConfig *bgConfig)
          .areaOver = 0,
          .mosaic = FALSE,
      };
@@ -348,7 +349,7 @@ index 62ef2225..1288fd85 100644
      Bg_InitFromTemplate(bgConfig, BG_LAYER_MAIN_2, &layerMain2, BG_TYPE_STATIC);
      Bg_ClearTilemap(bgConfig, BG_LAYER_MAIN_2);
  
-@@ -876,6 +1053,11 @@ static void SetupBGLayers(BgConfig *bgConfig)
+@@ -876,6 +1054,11 @@ static void SetupBGLayers(BgConfig *bgConfig)
  
      Bg_ClearTilesRange(BG_LAYER_MAIN_0, 32, 0, HEAP_ID_BAG);
      Bg_ClearTilesRange(BG_LAYER_SUB_0, 32, 0, HEAP_ID_BAG);
@@ -360,7 +361,7 @@ index 62ef2225..1288fd85 100644
  }
  
  static void FreeBGLayers(BgConfig *bgConfig)
-@@ -1121,11 +1303,23 @@ static void RestrictItemListCursor(u16 *cursorScroll, u16 *cursorPos, u8 numEntr
+@@ -1121,11 +1304,23 @@ static void RestrictItemListCursor(u16 *cursorScroll, u16 *cursorPos, u8 numEntr
          numShownEntries = numEntries - 1;
      }
  
@@ -384,7 +385,7 @@ index 62ef2225..1288fd85 100644
          if (*cursorScroll + numShownEntries == numEntries - 1) {
              break;
          }
-@@ -1141,6 +1335,9 @@ static void CreateItemListMenu(BagController *controller, u16 initialScroll, u16
+@@ -1141,6 +1336,9 @@ static void CreateItemListMenu(BagController *controller, u16 initialScroll, u16
      template.window = &controller->windows[BAG_UI_WINDOW_ITEM_LIST];
      template.count = controller->bagCtx->accessiblePockets[controller->bagCtx->currPocketIdx].listEntryCount;
      template.parent = (void *)controller;
@@ -394,7 +395,7 @@ index 62ef2225..1288fd85 100644
  
      if (controller->bagCtx->accessiblePockets[controller->bagCtx->currPocketIdx].pocketType == POCKET_TMHMS
          || controller->bagCtx->accessiblePockets[controller->bagCtx->currPocketIdx].pocketType == POCKET_BERRIES) {
-@@ -1251,6 +1448,28 @@ static int ProcessItemListInput_Normal(BagController *controller)
+@@ -1251,6 +1449,36 @@ static int ProcessItemListInput_Normal(BagController *controller)
  {
      StepPocketSelectorArrowsAnim(controller);
  
@@ -412,6 +413,14 @@ index 62ef2225..1288fd85 100644
 +        if (sBagPortInstant) {
 +            sBagPortClosedInstantly = TRUE;
 +            NitroPort_LowerMenuHoldLower(TRUE);
++
++            // (an app opened straight from the bag: the screens black now,
++            // while they're kept, so that the pictures shown once they're
++            // let go are black too: the 3DS shows the game's a frame late)
++            if (StartMenu_PortButtonOpensApp(gStartMenuPortAppPress)) {
++                SetScreenColorBrightness(DS_SCREEN_MAIN, COLOR_BLACK);
++                SetScreenColorBrightness(DS_SCREEN_SUB, COLOR_BLACK);
++            }
 +        } else {
 +            App_StartScreenFade(TRUE, HEAP_ID_BAG);
 +        }
@@ -423,7 +432,7 @@ index 62ef2225..1288fd85 100644
      if (CheckItemListDialScroll_Normal(controller) == TRUE) {
          return BAG_APP_STATE_WAIT_SELECT_ITEM_GENERAL;
      }
-@@ -1336,6 +1555,15 @@ static u8 ProcessItemListMenuInput(BagController *interface)
+@@ -1336,6 +1564,15 @@ static u8 ProcessItemListMenuInput(BagController *interface)
          Sound_PlayEffect(SE_CONFIRM_sseq_3);
          interface->bagCtx->selectedItem = ITEM_NONE;
          interface->bagCtx->exitCode = BAG_EXIT_CODE_DONE;
@@ -439,7 +448,7 @@ index 62ef2225..1288fd85 100644
          App_StartScreenFade(TRUE, HEAP_ID_BAG);
          return ITEM_LIST_INPUT_EXIT_BAG;
      default:
-@@ -2123,10 +2351,18 @@ static int ProcessMenuInput_SelectAction(BagController *controller)
+@@ -2123,10 +2360,18 @@ static int ProcessMenuInput_SelectAction(BagController *controller)
  static void ToggleHideItemSprite(BagController *controller, u8 hide)
  {
      if (hide == FALSE) {
@@ -742,19 +751,20 @@ index cba2e5f6..30a4b866 100644
  }
  
 diff --git a/src/start_menu.c b/src/start_menu.c
-index c8d64836..4bd2d717 100644
+index c8d64836..aba27ce7 100644
 --- a/src/start_menu.c
 +++ b/src/start_menu.c
-@@ -196,6 +196,8 @@ static void StartMenu_ProcessGivenMail(FieldSystem *fieldSystem, StartMenu *menu
+@@ -196,6 +196,9 @@ static void StartMenu_ProcessGivenMail(FieldSystem *fieldSystem, StartMenu *menu
  static BOOL StartMenu_PortButtons(FieldSystem *fieldSystem, u32 hideOptionFlags, u32 *outButtons);
  static void StartMenu_PortInit(FieldSystem *fieldSystem, StartMenu *menu, u32 optionCount, u32 buttons);
  static BOOL StartMenu_PortSelect(FieldTask *fieldTask);
 +static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask);
++static FieldTaskFunc StartMenu_PortAppFromBag(int button);
 +static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, int button);
  static BOOL StartMenu_PortExitTownMap(FieldTask *fieldTask);
  #endif
  
-@@ -308,6 +310,26 @@ extern void NitroPort_LowerMenuSelect(int button);
+@@ -308,6 +311,26 @@ extern void NitroPort_LowerMenuSelect(int button);
  extern void NitroPort_LowerMenuSetEnabled(u32 mask);
  extern int NitroPort_LowerMenuTakePress(void);
  extern int NitroPort_LowerMenuPressPending(void);
@@ -781,7 +791,7 @@ index c8d64836..4bd2d717 100644
  
  // The panel beside the buttons shows the Town Map (once the player has it),
  // or the Pokétch (the DS's lower screen, running underneath all along):
-@@ -562,7 +584,17 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
+@@ -562,7 +585,17 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
              MapObjectMan_PauseAllMovement(fieldSystem->mapObjMan);
              StartMenu_InitMenu(fieldTask);
              StartMenu_PrintBallCount(fieldTask);
@@ -799,7 +809,7 @@ index c8d64836..4bd2d717 100644
              menu->state = START_MENU_STATE_REINIT_WAIT_FOR_FADE;
          }
          break;
-@@ -608,9 +640,35 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
+@@ -608,9 +641,35 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
          MapObjectMan_UnpauseAllMovement(fieldSystem->mapObjMan);
          return TRUE;
      case START_MENU_STATE_REINIT_WAIT_FOR_FADE:
@@ -824,7 +834,7 @@ index c8d64836..4bd2d717 100644
 +            break;
 +        }
 +
-+        sPortInjectedPress = sPortAfterReveal;
++        sPortInjectedPress = sPortMode ? sPortAfterReveal : -1; // (the DS's start menu back: nobody's)
 +        sPortAfterReveal = -1;
 +        menu->state = START_MENU_STATE_SELECT;
 +#else
@@ -835,7 +845,7 @@ index c8d64836..4bd2d717 100644
          break;
      }
  
-@@ -635,6 +693,7 @@ static void StartMenu_InitMenu(FieldTask *fieldTask)
+@@ -635,6 +694,7 @@ static void StartMenu_InitMenu(FieldTask *fieldTask)
      u32 portButtons = 0;
  
      sPortMode = NitroPort_LowerMenuOn() && StartMenu_PortButtons(fieldSystem, menu->hideOptionFlags, &portButtons);
@@ -843,7 +853,7 @@ index c8d64836..4bd2d717 100644
  #endif
  
      Window_Add(fieldSystem->bgConfig, &menu->primaryWindow, BG_LAYER_MAIN_3, 20, 1, 11, optionCount * 3, 12, BASE_TILE_MESSAGE_WINDOW - 11 * 22);
-@@ -736,7 +795,10 @@ static void StartMenu_Close(StartMenu *menu)
+@@ -736,7 +796,10 @@ static void StartMenu_Close(StartMenu *menu)
  {
  #ifdef SDK_PORT_3DS
      if (sPortMode) {
@@ -855,7 +865,7 @@ index c8d64836..4bd2d717 100644
          sPortMode = FALSE;
      }
  #endif
-@@ -1281,7 +1343,13 @@ static BOOL StartMenu_SelectBag(FieldTask *fieldTask)
+@@ -1281,7 +1344,13 @@ static BOOL StartMenu_SelectBag(FieldTask *fieldTask)
  {
      StartMenu *menu = FieldTask_GetEnv(fieldTask);
  
@@ -869,7 +879,7 @@ index c8d64836..4bd2d717 100644
  
      menu->callback = StartMenu_Bag;
      menu->state = START_MENU_STATE_APP_START;
-@@ -1294,6 +1362,10 @@ static BOOL StartMenu_Bag(FieldTask *fieldTask)
+@@ -1294,6 +1363,10 @@ static BOOL StartMenu_Bag(FieldTask *fieldTask)
      FieldSystem *fieldSystem = FieldTask_GetFieldSystem(fieldTask);
      StartMenu *menu = FieldTask_GetEnv(fieldTask);
  
@@ -880,7 +890,7 @@ index c8d64836..4bd2d717 100644
      menu->taskData = FieldSystem_OpenBag(fieldSystem, &menu->itemUseCtx);
      BagContext_SetSelectedMonSlot(menu->taskData, 0);
      menu->callback = StartMenu_ExitBag;
-@@ -1312,6 +1384,14 @@ static BOOL StartMenu_ExitBag(FieldTask *fieldTask)
+@@ -1312,6 +1385,17 @@ static BOOL StartMenu_ExitBag(FieldTask *fieldTask)
      memcpy(bagCtx, menu->taskData, BagContext_GetSize());
      Heap_Free(menu->taskData);
  
@@ -888,6 +898,9 @@ index c8d64836..4bd2d717 100644
 +    // (the bag left another way than closed (an item used, given...): it
 +    // faded out, as on the DS; back in the field, a fade in)
 +    if (BagContext_GetExitCode(bagCtx) != BAG_EXIT_CODE_DONE) {
++        if (sPortInstant) {
++            NitroPort_LowerMenuSelect(-1); // (BAG lit while the bag was up: as StartMenu_Close leaves it)
++        }
 +        sPortInstant = FALSE;
 +    }
 +#endif
@@ -895,7 +908,7 @@ index c8d64836..4bd2d717 100644
      switch (BagContext_GetExitCode(bagCtx)) {
      case BAG_EXIT_CODE_USE_ITEM:
          ItemMenuUseContext usageContext;
-@@ -1383,6 +1463,11 @@ static BOOL StartMenu_ExitBag(FieldTask *fieldTask)
+@@ -1383,6 +1467,11 @@ static BOOL StartMenu_ExitBag(FieldTask *fieldTask)
          break;
      case BAG_EXIT_CODE_DONE:
      default:
@@ -907,7 +920,7 @@ index c8d64836..4bd2d717 100644
          FieldSystem_StartFieldMap(fieldSystem);
          menu->state = START_MENU_STATE_REINIT;
      }
-@@ -2403,6 +2488,59 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
+@@ -2403,6 +2492,76 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
      return TRUE;
  }
  
@@ -929,28 +942,17 @@ index c8d64836..4bd2d717 100644
 +        return FALSE; // (B, or CLOSE BAG: the menu, on BAG)
 +    }
 +
-+    switch (button) {
-+    case PORT_BUTTON_POKEMON:
-+        open = StartMenu_OpenPartyMenu;
-+        break;
-+    case PORT_BUTTON_TRAINER:
-+        open = StartMenu_TrainerCase;
-+        break;
-+    case PORT_BUTTON_POKEDEX:
-+        open = StartMenu_OpenPokedex;
-+        break;
-+    case PORT_BUTTON_OPTIONS:
-+        open = StartMenu_Options;
-+        break;
-+    default:
++    open = StartMenu_PortAppFromBag(button);
++
++    if (open == NULL) {
 +        sPortAfterReveal = button;
 +        return FALSE;
 +    }
 +
 +    // An app not shown in the panel: the screens black at once (the bag
-+    // closed without a fade), as the field faded out leaves them on the
-+    // DS, and the app's own fade in from there. (The tap's sound: the
-+    // bag's.)
++    // closed without a fade; it made them black while they were kept), as
++    // the field faded out leaves them on the DS, and the app's own fade in
++    // from there. (The tap's sound: the bag's.)
 +    if (sPortInstant) {
 +        sPortInstant = FALSE;
 +        SetScreenColorBrightness(DS_SCREEN_MAIN, COLOR_BLACK);
@@ -958,16 +960,44 @@ index c8d64836..4bd2d717 100644
 +        NitroPort_LowerMenuHoldUpper(PORT_LET_GO_NOW);
 +        NitroPort_LowerMenuHoldLower(FALSE);
 +    }
++
++    // (the menu's cursor on the button when the app's done; none lit
++    // meanwhile, as StartMenu_Close leaves it)
 +    StartMenu_PortSetCursor(fieldSystem, menu, button);
++    NitroPort_LowerMenuSelect(-1);
 +    open(fieldTask);
 +
 +    return TRUE;
 +}
 +
++// The app a button opens straight from the bag (NULL: the button's acted on
++// back in the field).
++static FieldTaskFunc StartMenu_PortAppFromBag(int button)
++{
++    switch (button) {
++    case PORT_BUTTON_POKEMON:
++        return StartMenu_OpenPartyMenu;
++    case PORT_BUTTON_TRAINER:
++        return StartMenu_TrainerCase;
++    case PORT_BUTTON_POKEDEX:
++        return StartMenu_OpenPokedex;
++    case PORT_BUTTON_OPTIONS:
++        return StartMenu_Options;
++    default:
++        return NULL;
++    }
++}
++
++// (the bag's: whether a button tapped in it opens an app straight from it)
++BOOL StartMenu_PortButtonOpensApp(int button)
++{
++    return button >= 0 && button < PORT_BUTTON_COUNT && StartMenu_PortAppFromBag(button) != NULL;
++}
++
  static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, int button)
  {
      if (button < 0 || button >= PORT_BUTTON_COUNT) {
-@@ -2453,6 +2591,9 @@ static void StartMenu_PortInit(FieldSystem *fieldSystem, StartMenu *menu, u32 op
+@@ -2453,6 +2612,9 @@ static void StartMenu_PortInit(FieldSystem *fieldSystem, StartMenu *menu, u32 op
      }
  
      StartMenu_PortSetCursor(fieldSystem, menu, cursor);
@@ -977,7 +1007,7 @@ index c8d64836..4bd2d717 100644
  }
  
  static BOOL StartMenu_PortOpenTownMap(FieldTask *fieldTask)
-@@ -2486,6 +2627,15 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2486,6 +2648,15 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
      FieldSystem *fieldSystem = FieldTask_GetFieldSystem(fieldTask);
      StartMenu *menu = FieldTask_GetEnv(fieldTask);
      int button = NitroPort_LowerMenuTakePress();
@@ -993,7 +1023,7 @@ index c8d64836..4bd2d717 100644
  
      if (button == PORT_PANEL_PRESS && (sPortButtons & (1u << PORT_BUTTON_MAP)) && NitroPort_LowerMenuPanel() == PORT_PANEL_MAP) {
          // (the map tapped: the Town Map app, as MAP with the map shown)
-@@ -2493,7 +2643,9 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2493,7 +2664,9 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
          StartMenu_PortSetCursor(fieldSystem, menu, PORT_BUTTON_MAP);
          button = PORT_BUTTON_MAP;
      } else if (button >= 0 && button < PORT_BUTTON_COUNT && (sPortButtons & (1u << button))) {
@@ -1004,7 +1034,7 @@ index c8d64836..4bd2d717 100644
          StartMenu_PortSetCursor(fieldSystem, menu, button);
      } else if (JOY_NEW(PAD_BUTTON_A) && sPortCursor >= 0) {
          Sound_PlayEffect(SE_CONFIRM_sseq_3);
-@@ -2543,6 +2695,16 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2543,6 +2716,16 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
          menu->state = START_MENU_STATE_END;
          return TRUE;
      default:
