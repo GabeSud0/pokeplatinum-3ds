@@ -187,12 +187,15 @@ void NitroPort_LowerMenuSetMap(const NitroLowerMap *map);
  * name, 1 the description, its window at (x, y), w x h pixels: the buffer
  * for the game to fill (w x h, each pixel as NitroLowerMap's text), the
  * port's (no room on the game's heaps), or NULL if too big (the name's up
- * to 256 x 64, the description's 256 x 192). */
+ * to 256 x 64, the description's 256 x 192). Each text stays as last given
+ * from one map to the next (the game prints it again only when it
+ * changes) until new text, or none (MapNoText). */
 void NitroPort_LowerMenuMapBegin(void);
 void NitroPort_LowerMenuMapSprite(int kind, int x, int y, int frame, int palette);
 void NitroPort_LowerMenuMapDot(int x, int y);
 void NitroPort_LowerMenuMapLayout(int hidden, int zoomX, int zoomY);
 uint16_t *NitroPort_LowerMenuMapText(int which, int x, int y, int w, int h);
+void NitroPort_LowerMenuMapNoText(int which);
 void NitroPort_LowerMenuMapEnd(void);
 
 #ifdef __cplusplus

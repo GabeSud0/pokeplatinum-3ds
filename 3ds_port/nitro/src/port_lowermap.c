@@ -300,8 +300,8 @@ static void load(void)
          read_palettes(size, M_OBJ_PAL, G.objPal) && read_screen(size, M_TOP_BG, &G.topBg) &&
          read_screen(size, M_TOP_MAP, &G.topMap) && read_screen(size, M_HIDDEN_TOP, &G.hiddenTop) &&
          read_screen(size, M_ZOOM_BG, &G.zoomBg) && read_screen(size, M_ZOOM_MAP, &G.zoomMap) &&
-         read_screen(size, M_HIDDEN_ZOOM, &G.hiddenZoom) && G.topBg.w * G.topBg.h <= 32 * 32 &&
-         G.topMap.w * G.topMap.h <= 32 * 32 && G.zoomBg.w == 64 && G.zoomBg.h == 64 && G.zoomMap.w == 64 &&
+         read_screen(size, M_HIDDEN_ZOOM, &G.hiddenZoom) && G.topBg.w <= 32 && G.topBg.h <= 32 &&
+         G.topMap.w <= 32 && G.topMap.h <= 32 && G.zoomBg.w == 64 && G.zoomBg.h == 64 && G.zoomMap.w == 64 &&
          G.zoomMap.h == 64 && G.cursor.count >= 8 && G.player.count >= 8 && G.dot.count >= 1 && G.blocks.count >= 28;
     if (!ok) {
         free(G.narc);

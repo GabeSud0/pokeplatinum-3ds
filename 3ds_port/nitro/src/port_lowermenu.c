@@ -714,7 +714,20 @@ static uint16_t sPendingName[256 * 64], sPendingDesc[256 * 192];
 
 void NitroPort_LowerMenuMapBegin(void)
 {
+    /* (the text kept: the last one given, until new text or none) */
+    NitroLowerMap text = sPending;
+
     memset(&sPending, 0, sizeof(sPending));
+    sPending.name = text.name;
+    sPending.nameX = text.nameX;
+    sPending.nameY = text.nameY;
+    sPending.nameW = text.nameW;
+    sPending.nameH = text.nameH;
+    sPending.desc = text.desc;
+    sPending.descX = text.descX;
+    sPending.descY = text.descY;
+    sPending.descW = text.descW;
+    sPending.descH = text.descH;
 }
 
 void NitroPort_LowerMenuMapSprite(int kind, int x, int y, int frame, int palette)
@@ -769,11 +782,18 @@ uint16_t *NitroPort_LowerMenuMapText(int which, int x, int y, int w, int h)
     return sPendingDesc;
 }
 
+void NitroPort_LowerMenuMapNoText(int which)
+{
+    if (which == 0) {
+        sPending.name = NULL;
+    } else {
+        sPending.desc = NULL;
+    }
+}
+
 void NitroPort_LowerMenuMapEnd(void)
 {
     NitroPort_LowerMenuSetMap(&sPending);
-    sPending.name = NULL;
-    sPending.desc = NULL;
 }
 
 void NitroPort_LowerMenuUnlockFrame(void)

@@ -1533,7 +1533,8 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         layers->masterBright = split.masterBright;
         layers->backdrop = split.backdrop;
         layers->width = split.width > 256 ? split.width : 256;
-        layers->height = split.height > 192 ? split.height : 192;
+        /* (a tall picture only without the 3D: with it, the DS's lines) */
+        layers->height = !split.has3d && split.height > 192 ? split.height : 192;
         layers->stamp = stamp;
         layers->displayOff = 0;
         return true;

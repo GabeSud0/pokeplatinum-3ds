@@ -4548,7 +4548,8 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     small = (small ^ (u32)split->width ^ ((u32)split->origin << 9) ^
              ((u32)split->anchorWindows << 18) ^ ((u32)(split->windowsToEdge != 0) << 19) ^ ((u32)split->clip[0] << 20) ^
              ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
-             ((u32)split->clip[3] << 23) ^ ((u32)split->height << 24)) * 16777619u;
+             ((u32)split->clip[3] << 23)) * 16777619u;
+    small = (small ^ (u32)split->height) * 16777619u;   /* (a tall picture) */
     if (split->width > W) {
         /* (the windows decide the edges' look, and where the anchored ones
          * are; hand-drawn pictures loaded again) */

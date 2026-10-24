@@ -19,20 +19,31 @@ port (start_menu.c, StartMenu_PortSendMap):
 - the place's name and description, printed with the game's font into
   windows off the screens and handed over through their palettes (the
   font's, the signpost's), as PrintLocationName and
-  PrintLocationDescription print them.
+  PrintLocationDescription print them; printed again only when they
+  change.
 
-Told again when the field starts again (ov5_021D5BC0.c), the player's
-square changes or the place does. MAP and POKéTCH choose what the panel
-shows (the Pokétch runs underneath all along); a tap on the map, or MAP
-with the map shown, opens the Town Map app.
+Told again, while the map is chosen, when the field starts again
+(ov5_021D5BC0.c), the player's square changes or the place does. MAP and
+POKéTCH choose what the panel shows (the Pokétch runs underneath all
+along); a tap on the map (where MAP can be used), or MAP with the map
+shown, opens the Town Map app, as MAP does when the port can't show the
+map.
+
+The Town Map's blocks and description flags are read in one read each
+(map_blocks.c, context.c), not one read an entry: each read of the
+cartridge costs the port the DS's time for it, and the map is worked out
+as the player walks.
 ---
- include/start_menu.h          |   5 +-
- src/overlay005/ov5_021D5BC0.c |   2 +
- src/start_menu.c              | 324 +++++++++++++++++++++++++++++++++-
- 3 files changed, 325 insertions(+), 6 deletions(-)
+ include/start_menu.h                   |   7 +-
+ src/applications/town_map/context.c    |  21 ++
+ src/applications/town_map/map_blocks.c |  11 +
+ src/overlay005/field_control.c         |   2 +-
+ src/overlay005/ov5_021D5BC0.c          |   2 +
+ src/start_menu.c                       | 451 ++++++++++++++++++++++++-
+ 6 files changed, 485 insertions(+), 9 deletions(-)
 
 diff --git a/include/start_menu.h b/include/start_menu.h
-index b2466f52..0febed17 100644
+index b2466f52..4392c8ea 100644
 --- a/include/start_menu.h
 +++ b/include/start_menu.h
 @@ -80,9 +80,12 @@ BOOL StartMenu_ExitVsRecorder(FieldTask *fieldTask);
@@ -43,12 +54,98 @@ index b2466f52..0febed17 100644
 +// can be used (and keeps the map in its panel up to date), and opens the
 +// menu when one's tapped.
  void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem);
- BOOL StartMenu_PortTapOpens(void);
+-BOOL StartMenu_PortTapOpens(void);
++BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem);
 +// (the field's lower screen made again: the map in its panel told again)
 +void StartMenu_PortMapStale(void);
  #endif
  
  #endif // POKEPLATINUM_START_MENU_H
+diff --git a/src/applications/town_map/context.c b/src/applications/town_map/context.c
+index 610b9e8b..ac6198ed 100644
+--- a/src/applications/town_map/context.c
++++ b/src/applications/town_map/context.c
+@@ -167,6 +167,22 @@ static void PerformTownMapDescriptionsChecks(FieldSystem *fieldSystem, TownMapCo
+     int readLength = FS_ReadFile(&flagsFile, &numFlags, sizeof(int));
+     GF_ASSERT(readLength >= 0);
+ 
++#ifdef SDK_PORT_3DS
++    // The flags in one read, not one each: each read of the cartridge costs
++    // the port the DS's time for it (the 3DS remaster's lower menu works
++    // them out as the player walks: start_menu.c).
++    TownMapDescriptionFlags *allFlags = Heap_AllocAtEnd(HEAP_ID_FIELD2, sizeof(TownMapDescriptionFlags) * (numFlags > 0 ? numFlags : 1));
++    TownMapDescriptionFlags *descFlags;
++
++    MI_CpuClear8(allFlags, sizeof(TownMapDescriptionFlags) * (numFlags > 0 ? numFlags : 1));
++    readLength = FS_ReadFile(&flagsFile, allFlags, sizeof(TownMapDescriptionFlags) * numFlags);
++
++    ctx->numDescChecks = numFlags;
++
++    for (int i = 0; i < numFlags; i++) {
++        TownMapLocationDescCheckResults *checksResult = &(ctx->descCheckResults[i]);
++        descFlags = &allFlags[i];
++#else
+     TownMapDescriptionFlags *descFlags = Heap_AllocAtEnd(HEAP_ID_FIELD2, sizeof(TownMapDescriptionFlags));
+     MI_CpuClear8(descFlags, sizeof(TownMapDescriptionFlags));
+ 
+@@ -175,6 +191,7 @@ static void PerformTownMapDescriptionsChecks(FieldSystem *fieldSystem, TownMapCo
+     for (int i = 0; i < numFlags; i++) {
+         TownMapLocationDescCheckResults *checksResult = &(ctx->descCheckResults[i]);
+         readLength = FS_ReadFile(&flagsFile, descFlags, sizeof(TownMapDescriptionFlags));
++#endif
+ 
+         switch (descFlags->areaDescriptionFlagType) {
+         case TOWN_MAP_DESC_FLAG_FIRST_ARRIVAL:
+@@ -200,5 +217,9 @@ static void PerformTownMapDescriptionsChecks(FieldSystem *fieldSystem, TownMapCo
+     }
+ 
+     FS_CloseFile(&flagsFile);
++#ifdef SDK_PORT_3DS
++    Heap_Free(allFlags);
++#else
+     Heap_Free(descFlags);
++#endif
+ }
+diff --git a/src/applications/town_map/map_blocks.c b/src/applications/town_map/map_blocks.c
+index 2c5bc109..dfa51c5b 100644
+--- a/src/applications/town_map/map_blocks.c
++++ b/src/applications/town_map/map_blocks.c
+@@ -26,11 +26,22 @@ TownMapBlockList *TownMap_ReadBlocks(const char *path, enum HeapID heapID)
+ 
+     blockList->count = blockCount;
+ 
++#ifdef SDK_PORT_3DS
++    // The blocks in one read, not one each: each read of the cartridge
++    // costs the port the DS's time for it (the 3DS remaster's lower menu
++    // reads them as the player walks: start_menu.c).
++    readLength = FS_ReadFile(&tmapBlockFile, blockList->entries, sizeof(TownMapBlock) * blockCount);
++
++    for (int i = 0; i < blockList->count; i++) {
++        blockList->entries[i].index = i;
++    }
++#else
+     for (int i = 0; i < blockList->count; i++) {
+         TownMapBlock *block = &(blockList->entries[i]);
+         readLength = FS_ReadFile(&tmapBlockFile, block, sizeof(TownMapBlock));
+         block->index = i;
+     }
++#endif
+ 
+     (void)FS_CloseFile(&tmapBlockFile);
+ 
+diff --git a/src/overlay005/field_control.c b/src/overlay005/field_control.c
+index 55b0601a..604ed645 100644
+--- a/src/overlay005/field_control.c
++++ b/src/overlay005/field_control.c
+@@ -135,7 +135,7 @@ void FieldInput_Update(FieldInput *input, FieldSystem *fieldSystem, u16 pressedK
+             input->menu = TRUE;
+         }
+ #ifdef SDK_PORT_3DS
+-        if (StartMenu_PortTapOpens()) {
++        if (StartMenu_PortTapOpens(fieldSystem)) {
+             input->menu = TRUE;
+         }
+ #endif
 diff --git a/src/overlay005/ov5_021D5BC0.c b/src/overlay005/ov5_021D5BC0.c
 index 39610155..5197a2c8 100644
 --- a/src/overlay005/ov5_021D5BC0.c
@@ -70,7 +167,7 @@ index 39610155..5197a2c8 100644
  }
  
 diff --git a/src/start_menu.c b/src/start_menu.c
-index c79d2d5c..ee2fca9e 100644
+index c79d2d5c..d8c7456d 100644
 --- a/src/start_menu.c
 +++ b/src/start_menu.c
 @@ -93,6 +93,15 @@
@@ -89,7 +186,7 @@ index c79d2d5c..ee2fca9e 100644
  #endif
  
  enum StartMenuOption {
-@@ -300,6 +309,33 @@ extern void NitroPort_LowerMenuSetEnabled(u32 mask);
+@@ -300,6 +309,34 @@ extern void NitroPort_LowerMenuSetEnabled(u32 mask);
  extern int NitroPort_LowerMenuTakePress(void);
  extern int NitroPort_LowerMenuPressPending(void);
  
@@ -107,6 +204,7 @@ index c79d2d5c..ee2fca9e 100644
 +extern void NitroPort_LowerMenuMapDot(int x, int y);
 +extern void NitroPort_LowerMenuMapLayout(int hidden, int zoomX, int zoomY);
 +extern u16 *NitroPort_LowerMenuMapText(int which, int x, int y, int w, int h);
++extern void NitroPort_LowerMenuMapNoText(int which);
 +extern void NitroPort_LowerMenuMapEnd(void);
 +
 +#define PORT_PANEL_DS 0 // NITRO_LOWERMENU_PANEL_DS
@@ -123,17 +221,18 @@ index c79d2d5c..ee2fca9e 100644
  // The lower menu's buttons, top to bottom (its NITRO_LOWERMENU_...).
  enum PortMenuButton {
      PORT_BUTTON_MAP,
-@@ -330,6 +366,9 @@ static u32 sPortButtons; // the buttons it can use (a bit each)
+@@ -330,6 +367,10 @@ static u32 sPortButtons; // the buttons it can use (a bit each)
  static u32 sPortOptionCount; // its entries (menu->options)
  static int sPortCursor = -1; // its cursor, a button (kept from one opening to the next)
  static u32 sPortFieldButtons; // the buttons the field said can be used (StartMenu_PortUpdateButtons)
 +static int sPortPanelChoice = PORT_PANEL_MAP; // what the panel shows, as the player chose (the map once they have it)
 +static BOOL sPortMapStale = TRUE; // the map to be told again (the field started again)
 +static int sPortMapX = -1, sPortMapZ = -1, sPortMapHeader = -1; // the player's square and place it was told
++static int sPortMapNameHeader = -2, sPortMapDescKey = -2; // the name and the description the port has (-1: none; -2: to print again)
  #endif
  
  void StartMenu_Open(FieldSystem *fieldSystem)
-@@ -1942,9 +1981,233 @@ static u32 StartMenu_PortHiddenOptions(FieldSystem *fieldSystem)
+@@ -1942,6 +1983,359 @@ static u32 StartMenu_PortHiddenOptions(FieldSystem *fieldSystem)
      return StartMenu_GetNormalHiddenOptions(fieldSystem);
  }
  
@@ -174,9 +273,10 @@ index c79d2d5c..ee2fca9e 100644
 +    }
 +}
 +
-+// The place's name as the Town Map's LoadMapName has it (some squares off
-+// the main map's headers have their own).
-+static void StartMenu_PortMapName(MainMapMatrixData *matrix, int x, int z, String *name)
++// The place whose name is on the Town Map at this square, as its LoadMapName
++// finds it (some squares off the main map's headers have their own). The
++// main map's headers are read once: they are the cartridge's.
++static enum MapHeaderID StartMenu_PortMapNameHeader(int x, int z)
 +{
 +    static const struct {
 +        u8 x, z;
@@ -196,7 +296,19 @@ index c79d2d5c..ee2fca9e 100644
 +        { 12, 19, MAP_HEADER_MT_CORONET_1F_SOUTH },
 +        { 20, 12, MAP_HEADER_BATTLE_FRONTIER_GATE_TO_FIGHT_AREA },
 +    };
-+    enum MapHeaderID header = MainMapMatrixData_GetMapHeaderIDAtCoords(matrix, x, z);
++    static MainMapMatrixData mainMatrix;
++    static BOOL mainMatrixRead;
++    enum MapHeaderID header;
++
++    if (!mainMatrixRead) {
++        MainMapMatrixData *matrix = MainMapMatrixData_Load(HEAP_ID_FIELD2);
++
++        mainMatrix = *matrix;
++        MainMapMatrixData_Free(matrix);
++        mainMatrixRead = TRUE;
++    }
++
++    header = MainMapMatrixData_GetMapHeaderIDAtCoords(&mainMatrix, x, z);
 +
 +    if (header == MAP_HEADER_EVERYWHERE) {
 +        for (int i = 0; i < NELEMS(notOnMainMatrix); i++) {
@@ -207,18 +319,122 @@ index c79d2d5c..ee2fca9e 100644
 +        }
 +    }
 +
++    return header;
++}
++
++// A window off the screens to print into (as Window_AddToTopLeftCorner
++// makes one, its pixels on the field's heap that has room): FALSE if there
++// isn't room.
++static BOOL StartMenu_PortTextWindow(FieldSystem *fieldSystem, Window *window, u8 width, u8 height)
++{
++    u32 size = width * height * TILE_SIZE_4BPP;
++    void *pixels = Heap_AllocAtEnd(HEAP_ID_FIELD2, size);
++
++    Window_Init(window);
++
++    if (pixels == NULL) {
++        return FALSE;
++    }
++
++    memset(pixels, 0, size);
++    window->bgConfig = fieldSystem->bgConfig;
++    window->width = width;
++    window->height = height;
++    window->pixels = pixels;
++    window->colorMode = BG_COLOR_MODE_4BPP;
++
++    return TRUE;
++}
++
++// The name: its window (3, 21), 29 x 3 tiles, in the main BG's palette 15
++// (the font's), the name in the middle of the bar. FALSE if it couldn't be
++// printed.
++static BOOL StartMenu_PortPrintMapName(FieldSystem *fieldSystem, enum MapHeaderID header)
++{
++    NNSG2dPaletteData *paletteData;
++    Window window;
++    u16 *out;
++
++    if (!StartMenu_PortTextWindow(fieldSystem, &window, 29, 3)) {
++        return FALSE;
++    }
++
++    void *fontPalette = Graphics_GetPlttData(NARC_INDEX_GRAPHIC__PL_FONT, font_NCLR, &paletteData, HEAP_ID_FIELD2);
++    String *name = String_Init(22, HEAP_ID_FIELD2);
++
 +    MapHeader_LoadName(header, HEAP_ID_FIELD2, name);
++    Text_AddPrinterWithParamsAndColor(&window, FONT_SYSTEM, name, (HW_LCD_WIDTH - 6 * TILE_WIDTH_PIXELS - Font_CalcStringWidth(FONT_SYSTEM, name, 0)) / 2, 6, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(1, 2, 0), NULL);
++    out = NitroPort_LowerMenuMapText(0, 3 * TILE_WIDTH_PIXELS, 21 * TILE_HEIGHT_PIXELS, 29 * TILE_WIDTH_PIXELS, 3 * TILE_HEIGHT_PIXELS);
++
++    if (out != NULL) {
++        StartMenu_PortWindowPixels(&window, paletteData->pRawData, out, 3 * TILE_HEIGHT_PIXELS);
++    }
++
++    String_Free(name);
++    Heap_Free(fontPalette);
++    Window_Remove(&window);
++
++    return out != NULL;
++}
++
++// The description: its window on the guide page (1, 8), 28 x 14 tiles, in
++// the signpost's palette (its kind's), the area's and the landmark's as the
++// place's checks allow. FALSE if it couldn't be printed.
++static BOOL StartMenu_PortPrintMapDescription(FieldSystem *fieldSystem, const TownMapBlock *block, BOOL area, BOOL landmark)
++{
++    NNSG2dPaletteData *paletteData;
++    Window window;
++    u16 *out;
++
++    if (!StartMenu_PortTextWindow(fieldSystem, &window, 28, 14)) {
++        return FALSE;
++    }
++
++    void *signpostPalette = Graphics_GetPlttData(NARC_INDEX_GRAPHIC__FIELD_BOARD, signpost_NCLR, &paletteData, HEAP_ID_FIELD2);
++    MessageLoader *loader = MessageLoader_Init(MSG_LOADER_LOAD_ON_DEMAND, NARC_INDEX_MSGDATA__PL_MSG, TEXT_BANK_TOWN_MAP, HEAP_ID_FIELD2);
++
++    if (area) {
++        String *string = MessageLoader_GetNewString(loader, block->areaDescString);
++
++        Text_AddPrinterWithParamsAndColor(&window, FONT_SYSTEM, string, block->areaDescX, block->areaDescY, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(1, 2, 0), NULL);
++        String_Free(string);
++    }
++
++    if (landmark) {
++        String *string = MessageLoader_GetNewString(loader, block->landmarkDescString);
++
++        Text_AddPrinterWithParamsAndColor(&window, FONT_SYSTEM, string, block->landmarkDescX, block->landmarkDescY, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(1, 2, 0), NULL);
++        String_Free(string);
++    }
++
++    out = NitroPort_LowerMenuMapText(1, 1 * TILE_WIDTH_PIXELS, 8 * TILE_HEIGHT_PIXELS, 28 * TILE_WIDTH_PIXELS, 14 * TILE_HEIGHT_PIXELS);
++
++    if (out != NULL) {
++        StartMenu_PortWindowPixels(&window, (const u16 *)paletteData->pRawData + block->signpostType * 16, out, 14 * TILE_HEIGHT_PIXELS);
++    }
++
++    MessageLoader_Free(loader);
++    Heap_Free(signpostPalette);
++    Window_Remove(&window);
++
++    return out != NULL;
 +}
 +
 +// The map, laid out as the Town Map item lays out its upper screen
 +// (TownMap_LoadGraphics: CreateSprites, TownMap_LoadFlyLocations,
 +// LoadLocationHistory, PrintLocationName) and its guide page's description
-+// (MoveZoomedInMap, PrintLocationDescription), told to the port.
++// (MoveZoomedInMap, PrintLocationDescription), told to the port. The name
++// and the description are printed again only when they change (the port
++// keeps the last ones): walking from square to square, they mostly don't.
 +static void StartMenu_PortSendMap(FieldSystem *fieldSystem)
 +{
 +    TownMapContext *ctx = Heap_AllocAtEnd(HEAP_ID_FIELD2, sizeof(TownMapContext));
 +    int x, z, zoomX, zoomY, dots = 0;
 +    int dotX[TOWN_MAP_HISTORY_LENGTH], dotZ[TOWN_MAP_HISTORY_LENGTH];
++
++    if (ctx == NULL) {
++        return;
++    }
 +
 +    TownMapContext_Init(fieldSystem, ctx, TOWN_MAP_MODE_ITEM);
 +
@@ -289,62 +505,34 @@ index c79d2d5c..ee2fca9e 100644
 +    // The name and the description: only for a square that has a block.
 +    TownMapBlockList *blocks = TownMap_ReadBlocks("data/tmap_block.dat", HEAP_ID_FIELD2);
 +    TownMapBlock *block = blocks != NULL ? TownMap_GetMapBlockAtPosition(blocks, x, z, ctx->unlockedHiddenLocations) : NULL;
++    int nameHeader = -1, descKey = -1;
++    BOOL area = FALSE, landmark = FALSE;
 +
-+    if (block != NULL) {
-+        NNSG2dPaletteData *paletteData;
-+        MessageLoader *loader = MessageLoader_Init(MSG_LOADER_LOAD_ON_DEMAND, NARC_INDEX_MSGDATA__PL_MSG, TEXT_BANK_TOWN_MAP, HEAP_ID_FIELD2);
-+        Window window;
-+        u16 *out;
-+
-+        // The name: its window (3, 21), 29 x 3 tiles, in the main BG's
-+        // palette 15 (the font's), the name in the middle of the bar.
-+        void *fontPalette = Graphics_GetPlttData(NARC_INDEX_GRAPHIC__PL_FONT, font_NCLR, &paletteData, HEAP_ID_FIELD2);
-+        String *name = String_Init(22, HEAP_ID_FIELD2);
-+        MainMapMatrixData *matrix = MainMapMatrixData_Load(HEAP_ID_FIELD2);
-+
-+        StartMenu_PortMapName(matrix, x, z, name);
-+        Window_Init(&window);
-+        Window_AddToTopLeftCorner(fieldSystem->bgConfig, &window, 29, 3, 0, 0);
-+        Text_AddPrinterWithParamsAndColor(&window, FONT_SYSTEM, name, (HW_LCD_WIDTH - 6 * TILE_WIDTH_PIXELS - Font_CalcStringWidth(FONT_SYSTEM, name, 0)) / 2, 6, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(1, 2, 0), NULL);
-+        out = NitroPort_LowerMenuMapText(0, 3 * TILE_WIDTH_PIXELS, 21 * TILE_HEIGHT_PIXELS, 29 * TILE_WIDTH_PIXELS, 3 * TILE_HEIGHT_PIXELS);
-+        if (out != NULL) {
-+            StartMenu_PortWindowPixels(&window, paletteData->pRawData, out, 3 * TILE_HEIGHT_PIXELS);
-+        }
-+        Window_Remove(&window);
-+        MainMapMatrixData_Free(matrix);
-+        String_Free(name);
-+        Heap_Free(fontPalette);
-+
-+        // The description: its window on the guide page (1, 8), 28 x 14
-+        // tiles, in the signpost's palette (its kind's), the area's and the
-+        // landmark's as the place's checks allow.
-+        void *signpostPalette = Graphics_GetPlttData(NARC_INDEX_GRAPHIC__FIELD_BOARD, signpost_NCLR, &paletteData, HEAP_ID_FIELD2);
++    if (block != NULL && block->index < ctx->numDescChecks) {
 +        const TownMapLocationDescCheckResults *checks = &ctx->descCheckResults[block->index];
 +
-+        Window_Init(&window);
-+        Window_AddToTopLeftCorner(fieldSystem->bgConfig, &window, 28, 14, 0, 0);
++        area = block->areaDescString != 0xFFFF && (checks->areaDescHasCheck == FALSE || checks->areaDescCheckResult);
++        landmark = block->landmarkDescString != 0xFFFF && (checks->landmarkDescHasCheck == FALSE || checks->landmarkCheckResult);
++        nameHeader = StartMenu_PortMapNameHeader(x, z);
++        descKey = block->index * 4 + area * 2 + landmark;
++    }
 +
-+        if (block->areaDescString != 0xFFFF && (checks->areaDescHasCheck == FALSE || checks->areaDescCheckResult)) {
-+            String *string = MessageLoader_GetNewString(loader, block->areaDescString);
-+
-+            Text_AddPrinterWithParamsAndColor(&window, FONT_SYSTEM, string, block->areaDescX, block->areaDescY, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(1, 2, 0), NULL);
-+            String_Free(string);
++    if (nameHeader != sPortMapNameHeader) {
++        if (nameHeader < 0 || !StartMenu_PortPrintMapName(fieldSystem, nameHeader)) {
++            NitroPort_LowerMenuMapNoText(0);
++            nameHeader = -1;
 +        }
 +
-+        if (block->landmarkDescString != 0xFFFF && (checks->landmarkDescHasCheck == FALSE || checks->landmarkCheckResult)) {
-+            String *string = MessageLoader_GetNewString(loader, block->landmarkDescString);
++        sPortMapNameHeader = nameHeader;
++    }
 +
-+            Text_AddPrinterWithParamsAndColor(&window, FONT_SYSTEM, string, block->landmarkDescX, block->landmarkDescY, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(1, 2, 0), NULL);
-+            String_Free(string);
++    if (descKey != sPortMapDescKey) {
++        if (descKey < 0 || !StartMenu_PortPrintMapDescription(fieldSystem, block, area, landmark)) {
++            NitroPort_LowerMenuMapNoText(1);
++            descKey = -1;
 +        }
 +
-+        out = NitroPort_LowerMenuMapText(1, 1 * TILE_WIDTH_PIXELS, 8 * TILE_HEIGHT_PIXELS, 28 * TILE_WIDTH_PIXELS, 14 * TILE_HEIGHT_PIXELS);
-+        if (out != NULL) {
-+            StartMenu_PortWindowPixels(&window, (const u16 *)paletteData->pRawData + block->signpostType * 16, out, 14 * TILE_HEIGHT_PIXELS);
-+        }
-+        Window_Remove(&window);
-+        Heap_Free(signpostPalette);
-+        MessageLoader_Free(loader);
++        sPortMapDescKey = descKey;
 +    }
 +
 +    if (blocks != NULL) {
@@ -360,29 +548,26 @@ index c79d2d5c..ee2fca9e 100644
 +    sPortMapStale = TRUE;
 +}
 +
- void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
- {
-     u32 buttons = 0;
-+    BOOL hasMap;
- 
-     if (!NitroPort_LowerMenuOn()) {
-         return;
-@@ -1956,6 +2219,27 @@ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
- 
-     sPortFieldButtons = buttons;
-     NitroPort_LowerMenuSetEnabled(buttons);
++// The panel as the player chose it: the map once they have the Town Map
++// (told again first when the field has started again, the player's square
++// has changed, or the place has: its description may have come with the
++// first arrival), else the Pokétch.
++static void StartMenu_PortShowPanel(FieldSystem *fieldSystem)
++{
++    BOOL showMap = sPortPanelChoice == PORT_PANEL_MAP && StartMenu_PortHasTownMap(fieldSystem);
 +
-+    // The map: told again when the field starts again, the player's square
-+    // changes, or the place does (its description may have come with the
-+    // first arrival); shown if chosen and the player has the Town Map.
-+    hasMap = StartMenu_PortHasTownMap(fieldSystem);
-+
-+    if (hasMap) {
++    if (showMap) {
 +        int x, z;
 +
 +        StartMenu_PortMapSquare(fieldSystem, &x, &z);
 +
 +        if (sPortMapStale || x != sPortMapX || z != sPortMapZ || (int)fieldSystem->location->mapHeaderID != sPortMapHeader) {
++            // (the field started again: the text printed again too)
++            if (sPortMapStale) {
++                sPortMapNameHeader = -2;
++                sPortMapDescKey = -2;
++            }
++
 +            StartMenu_PortSendMap(fieldSystem);
 +            sPortMapStale = FALSE;
 +            sPortMapX = x;
@@ -391,17 +576,47 @@ index c79d2d5c..ee2fca9e 100644
 +        }
 +    }
 +
-+    NitroPort_LowerMenuSetPanel(hasMap && sPortPanelChoice == PORT_PANEL_MAP ? PORT_PANEL_MAP : PORT_PANEL_DS);
++    NitroPort_LowerMenuSetPanel(showMap ? PORT_PANEL_MAP : PORT_PANEL_DS);
++}
++
++// MAP: the map in the panel. FALSE if the port can't show it (it couldn't
++// read the Town Map's pictures): then MAP opens the Town Map app.
++static BOOL StartMenu_PortChooseMap(FieldSystem *fieldSystem)
++{
++    sPortPanelChoice = PORT_PANEL_MAP;
++    StartMenu_PortShowPanel(fieldSystem);
++
++    return NitroPort_LowerMenuPanel() == PORT_PANEL_MAP;
++}
++
+ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
+ {
+     u32 buttons = 0;
+@@ -1956,9 +2350,10 @@ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
+ 
+     sPortFieldButtons = buttons;
+     NitroPort_LowerMenuSetEnabled(buttons);
++    StartMenu_PortShowPanel(fieldSystem);
  }
  
- BOOL StartMenu_PortTapOpens(void)
-@@ -1966,11 +2250,24 @@ BOOL StartMenu_PortTapOpens(void)
+-BOOL StartMenu_PortTapOpens(void)
++BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
+ {
+     int button = NitroPort_LowerMenuPressPending();
+ 
+@@ -1966,14 +2361,42 @@ BOOL StartMenu_PortTapOpens(void)
          return FALSE;
      }
  
-+    // The map tapped: the menu opens on the Town Map app.
++    // The map tapped, where MAP can be used: the menu opens on the Town Map
++    // app. (Elsewhere: nothing.)
 +    if (button == PORT_PANEL_PRESS) {
-+        return NitroPort_LowerMenuPanel() == PORT_PANEL_MAP;
++        if (NitroPort_LowerMenuPanel() == PORT_PANEL_MAP && (sPortFieldButtons & (1u << PORT_BUTTON_MAP))) {
++            return TRUE;
++        }
++
++        NitroPort_LowerMenuTakePress();
++        return FALSE;
 +    }
 +
      // A tap on a button that can't be used here (made before the field
@@ -414,16 +629,28 @@ index c79d2d5c..ee2fca9e 100644
 +        return FALSE;
 +    }
 +
-+    // POKéTCH, or MAP with the Pokétch shown: the panel shows it, the menu
-+    // stays closed. (MAP with the map shown opens the Town Map app.)
-+    if (button == PORT_BUTTON_POKETCH || (button == PORT_BUTTON_MAP && NitroPort_LowerMenuPanel() != PORT_PANEL_MAP)) {
++    // POKéTCH: the panel shows the Pokétch, the menu stays closed.
++    if (button == PORT_BUTTON_POKETCH) {
          NitroPort_LowerMenuTakePress();
-+        sPortPanelChoice = button == PORT_BUTTON_MAP ? PORT_PANEL_MAP : PORT_PANEL_DS;
-+        NitroPort_LowerMenuSetPanel(sPortPanelChoice);
++        sPortPanelChoice = PORT_PANEL_DS;
++        StartMenu_PortShowPanel(fieldSystem);
          return FALSE;
      }
  
-@@ -2061,7 +2358,12 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
++    // MAP with the Pokétch shown: the panel shows the map, the menu stays
++    // closed. (MAP with the map shown, or when the port can't show it,
++    // opens the Town Map app.)
++    if (button == PORT_BUTTON_MAP && NitroPort_LowerMenuPanel() != PORT_PANEL_MAP) {
++        if (StartMenu_PortChooseMap(fieldSystem)) {
++            NitroPort_LowerMenuTakePress();
++            return FALSE;
++        }
++    }
++
+     return TRUE;
+ }
+ 
+@@ -2061,7 +2484,12 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
      StartMenu *menu = FieldTask_GetEnv(fieldTask);
      int button = NitroPort_LowerMenuTakePress();
  
@@ -437,19 +664,18 @@ index c79d2d5c..ee2fca9e 100644
          Sound_PlayEffect(SE_CONFIRM_sseq_3);
          StartMenu_PortSetCursor(fieldSystem, menu, button);
      } else if (JOY_NEW(PAD_BUTTON_A) && sPortCursor >= 0) {
-@@ -2092,12 +2394,24 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2092,12 +2520,23 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
  
      switch (button) {
      case PORT_BUTTON_MAP:
-+        if (NitroPort_LowerMenuPanel() != PORT_PANEL_MAP) {
++        if (NitroPort_LowerMenuPanel() != PORT_PANEL_MAP && StartMenu_PortChooseMap(fieldSystem)) {
 +            // The map in the panel; the menu goes.
-+            sPortPanelChoice = PORT_PANEL_MAP;
-+            NitroPort_LowerMenuSetPanel(PORT_PANEL_MAP);
 +            menu->state = START_MENU_STATE_END;
 +            return TRUE;
 +        }
 +
-+        // The map shown already: the Town Map app.
++        // The map shown already (or the port can't show it): the Town Map
++        // app.
          FieldMap_FadeScreen(FADE_TYPE_BRIGHTNESS_OUT);
          menu->callback = StartMenu_PortOpenTownMap;
          menu->state = START_MENU_STATE_APP_START;
@@ -459,9 +685,10 @@ index c79d2d5c..ee2fca9e 100644
 +        // The Pokétch in the panel; the menu goes (the Pokétch is the
 +        // player's to use).
 +        sPortPanelChoice = PORT_PANEL_DS;
-+        NitroPort_LowerMenuSetPanel(PORT_PANEL_DS);
++        StartMenu_PortShowPanel(fieldSystem);
          menu->state = START_MENU_STATE_END;
          return TRUE;
      default:
 -- 
 2.43.0
+

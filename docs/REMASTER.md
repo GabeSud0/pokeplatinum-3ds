@@ -584,13 +584,18 @@ screens) the lower screen is the DS's, filling the screen as before.
   Map's own pictures (`graphic/tmap_gra.narc`) as the game lays it out:
   where the sprites are, which hidden places show, the zoomed-in map's
   scroll, and the name and the description as the game prints them (its
-  font, the signpost's colours), told again when the player's square or
-  place changes, or the field starts again. The same pixels as the Town
-  Map app's (checked in the PC runner, 2026-10-24). The panel's picture is
-  drawn in the menu's picture (the canvas at 15/16 as the screens draw the
-  DS's: each pixel 2 x 2, then bilinear), only what changes drawn again
-  (the cursor's frames, the dots). A tap on the map, or MAP with the map
-  shown, opens the Town Map app.
+  font, the signpost's colours), told again while the map is chosen when
+  the player's square or place changes, or the field starts again (the
+  name and the description printed again only when they change: each
+  glyph is a read of the cartridge, which the port counts as the DS's
+  time; the Town Map's blocks and flags are read in one read each). The
+  same pixels as the Town Map app's (checked in the PC runner,
+  2026-10-24). The panel's picture is drawn in the menu's picture (the
+  canvas at 15/16 as the screens draw the DS's: each pixel 2 x 2, then
+  bilinear), only what changes drawn again (the cursor's frames, the
+  dots). A tap on the map (where MAP can be used), or MAP with the map
+  shown, opens the Town Map app; so does MAP if the port can't show the
+  map (no Town Map pictures).
 - **Touch:** a touch that begins in the panel is the game's, at the DS's
   pixel there (dragged out of the panel, the nearest pixel of it); one that
   begins on a button that can be used shows it pressed, and letting go on
