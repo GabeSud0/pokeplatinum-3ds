@@ -24,6 +24,7 @@
 /* ---------------------------------------------------------------- state */
 
 static volatile int sOn;
+static volatile int sAvailable;     /* (NitroPort_LowerMenuSetAvailable) */
 static int sSelected = -1;          /* the game's cursor */
 static int sHeld = -1;              /* the button a finger is on */
 static int sFemale;
@@ -33,6 +34,9 @@ static int sFemale;
 static int sTouchIn = -1;
 static int sTouchButton = -1;       /* (the button it began on) */
 static volatile int sPress = -1;    /* a press, not taken yet */
+static uint32_t sFrames;            /* (the menu's frames: NitroPort_LowerMenuTouch calls) */
+static uint32_t sPressFrame;        /* (the frame it was made in) */
+static uint32_t sEnabled = 0xFFFFFFFFu;
 
 static uint32_t sPicture[W * H];    /* the shared picture (under sLock) */
 static uint32_t sDraw[W * H];       /* (drawn here, then copied over) */
@@ -71,7 +75,7 @@ static const uint32_t BG = RGB(200, 208, 211), EDGE_HI = RGB(252, 253, 253), NAV
                       BTN_DIV = RGB(164, 176, 182), CELL = RGB(232, 237, 246), RED_HI = RGB(246, 93, 77),
                       RED = RGB(212, 59, 60), TEXT = RGB(18, 26, 38), SEL = RGB(46, 208, 155),
                       SEL_SHD = RGB(24, 153, 115), SEL_DIV = RGB(26, 108, 95), SEL_CELL = RGB(40, 190, 142),
-                      SEL_TXT = RGB(255, 255, 255), SEL_TXT_O = RGB(0, 84, 64);
+                      SEL_TXT = RGB(255, 255, 255), SEL_TXT_O = RGB(0, 84, 64), TEXT_OFF = RGB(150, 160, 170);
 
 /* The column: the buttons (outline x 250-316, 22 rows each, 23 apart from
  * row 3), each with its icon's little square (x 251-274), a divider (275)
@@ -493,14 +497,15 @@ static void shrink(const Icon *in, Icon *out)
     }
 }
 
-/* An icon over the picture, in the middle of a box (its alpha blended). */
-static void paste(const Icon *icon, int x0, int y0, int x1, int y1)
+/* An icon over the picture, in the middle of a box (its alpha blended,
+ * times opacity / 255: a button that can't be used now, faded). */
+static void paste(const Icon *icon, int x0, int y0, int x1, int y1, uint32_t opacity)
 {
     int x = x0 + (x1 - x0 + 1 - icon->w) / 2, y = y0 + (y1 - y0 + 1 - icon->h) / 2, i, j;
 
     for (j = 0; j < icon->h; j++) {
         for (i = 0; i < icon->w; i++) {
-            uint32_t p = icon->px[j * 32 + i], a = p & 0xFF;
+            uint32_t p = icon->px[j * 32 + i], a = (p & 0xFF) * opacity / 255;
             int X = x + i, Y = y + j;
 
             if (a == 0 || X < 0 || X >= W || Y < 0 || Y >= H) {
@@ -577,7 +582,7 @@ static void draw(void)
             icons[NITRO_LOWERMENU_POKEDEX] = icons[NITRO_LOWERMENU_SAVE] = icons[NITRO_LOWERMENU_OPTIONS] = NULL;
     }
     for (i = 0; i < 8; i++) {
-        int y0 = BTN_Y(i), sel = (i == sSelected || i == sHeld);
+        int y0 = BTN_Y(i), sel = (i == sSelected || i == sHeld), on = (sEnabled >> i) & 1;
         char name[8];
         int tx, ty, k;
 
@@ -599,10 +604,10 @@ static void draw(void)
         if (sel) {
             text_outlined(tx, ty, name, SEL_TXT, SEL_TXT_O);
         } else {
-            text(tx, ty, name, TEXT);
+            text(tx, ty, name, on ? TEXT : TEXT_OFF);
         }
         if (icons[i] != NULL) {
-            paste(icons[i], ICON_X0, y0 + 1, ICON_X1, y0 + 20);
+            paste(icons[i], ICON_X0, y0 + 1, ICON_X1, y0 + 20, on || sel ? 255 : 96);
         }
     }
     for (i = 0; i < 2; i++) {
@@ -630,9 +635,14 @@ static void redraw(void)
 
 /* ------------------------------------------------------------ the API */
 
+void NitroPort_LowerMenuSetAvailable(int available)
+{
+    __atomic_store_n(&sAvailable, available ? 1 : 0, __ATOMIC_RELEASE);
+}
+
 void NitroPort_LowerMenuShow(int on)
 {
-    on = on ? 1 : 0;
+    on = on && __atomic_load_n(&sAvailable, __ATOMIC_ACQUIRE) ? 1 : 0;
     if (on && sIconsRead == 0) {
         read_icons();
     }
@@ -653,7 +663,7 @@ void NitroPort_LowerMenuShow(int on)
 
 int NitroPort_LowerMenuOn(void)
 {
-    return __atomic_load_n(&sOn, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&sOn, __ATOMIC_ACQUIRE) && __atomic_load_n(&sAvailable, __ATOMIC_ACQUIRE);
 }
 
 void NitroPort_LowerMenuSelect(int button)
@@ -663,6 +673,16 @@ void NitroPort_LowerMenuSelect(int button)
     }
     if (button != sSelected) {
         sSelected = button;
+        if (sOn) {
+            redraw();
+        }
+    }
+}
+
+void NitroPort_LowerMenuSetEnabled(uint32_t mask)
+{
+    if (mask != sEnabled) {
+        sEnabled = mask;
         if (sOn) {
             redraw();
         }
@@ -750,8 +770,10 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
         sTouchIn = -1;
         return 0;
     }
+    sFrames++;
     if (!down) {
         if (sTouchIn == 0 && sTouchButton >= 0 && sHeld == sTouchButton) {
+            sPressFrame = sFrames;
             __atomic_store_n(&sPress, sTouchButton, __ATOMIC_RELEASE);
         }
         sTouchIn = -1;
@@ -766,6 +788,9 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
         } else {
             sTouchIn = 0;
             sTouchButton = NitroPort_LowerMenuButtonAt(x, y);
+            if (sTouchButton >= 0 && !((sEnabled >> sTouchButton) & 1)) {
+                sTouchButton = -1;   /* (one that can't be used now: nothing) */
+            }
             held = sTouchButton;
         }
     } else if (sTouchIn == 0) {
@@ -793,7 +818,18 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
     return 0;
 }
 
+int NitroPort_LowerMenuPressPending(void)
+{
+    if (sPress >= 0 && sFrames - sPressFrame > NITRO_LOWERMENU_PRESS_FRAMES) {
+        sPress = -1;   /* (too old) */
+    }
+    return sPress;
+}
+
 int NitroPort_LowerMenuTakePress(void)
 {
-    return __atomic_exchange_n(&sPress, -1, __ATOMIC_ACQ_REL);
+    int press = NitroPort_LowerMenuPressPending();
+
+    sPress = -1;
+    return press;
 }
