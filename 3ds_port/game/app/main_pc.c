@@ -1453,7 +1453,7 @@ int main(int argc, char **argv)
     const char *error;
     const char *savePath = NULL;
     char *defaultSave = NULL;
-    int i;
+    int i, classicMenu = 0;
 
     if (argc == 2 && strcmp(argv[1], "--check-overlays") == 0) {
         return Platinum_CheckOverlays() == 0 ? 0 : 1;
@@ -1462,7 +1462,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: %s <platinum3ds.pak> <manifest.json> [--save FILE] "
                 "[--frames N] [--wav FILE] [--stop-at-missing-file] [--stall-seconds N]\n"
                 "       [--screenshots DIR] [--screenshot-every N] [--dump-3d FRAME]\n"
-                "       [--press FRAME:BUTTONS,...] [--touch FRAME:X:Y,...]\n       [--control DIR] [--gx-thread | --gx-thread-skip] [--gx-record FILE]\n       %s --check-overlays\n", argv[0], argv[0]);
+                "       [--press FRAME:BUTTONS,...] [--touch FRAME:X:Y,...]\n       [--control DIR] [--gx-thread | --gx-thread-skip] [--gx-record FILE] [--classic-menu]\n       %s --check-overlays\n", argv[0], argv[0]);
         return 2;
     }
     for (i = 3; i < argc; i++) {
@@ -1523,6 +1523,10 @@ int main(int argc, char **argv)
             sGxThread = 2;
         } else if (strcmp(argv[i], "--stall-seconds") == 0 && i + 1 < argc) {
             sStallSeconds = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--classic-menu") == 0) {
+            /* the DS's start menu on the upper screen, not the lower
+             * screen's menu (the 3DS's classic display) */
+            classicMenu = 1;
         } else {
             fprintf(stderr, "unknown option %s\n", argv[i]);
             return 2;
@@ -1565,6 +1569,9 @@ int main(int argc, char **argv)
 
     Platinum_DefaultSettings(&settings);
     settings.savePath = savePath;
+    /* The lower screen as a menu in the field, as the 3DS's remaster has it
+     * (mshot shows it, mtouch touches it). */
+    NitroPort_LowerMenuSetAvailable(!classicMenu);
 
     {
         pthread_t watcher;

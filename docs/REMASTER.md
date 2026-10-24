@@ -534,8 +534,23 @@ screens) the lower screen is the DS's, filling the screen as before.
 
 - **On and off:** the Pokétch's handlers in the field
   (`patches/pokeplatinum/0031`): the menu is on while the Pokétch is the
-  field's lower screen. Only in the remaster display, and only without the
-  3D on the lower screen.
+  field's lower screen. Only in the remaster display (the compositor says
+  it can show it: `NitroPort_LowerMenuSetAvailable`, with the memory for
+  its picture), and only without the 3D on the lower screen. In the
+  classic display the game is the DS's.
+- **The start menu** (`patches/pokeplatinum/0032`): while the menu is on,
+  it is the start menu. X opens it as before, but its window is never
+  drawn and its icons are hidden: the cursor is on the lower screen's
+  buttons (up and down over the ones that can be used, A, B or X to
+  leave). The start menu's task still runs everything, so the apps open
+  and come back as on the DS (the bag's and the party's uses go through
+  it). POKéMON, BAG, TRAINER, POKéDEX, SAVE and OPTIONS are its entries;
+  MAP opens the Town Map (with it in the bag, where the bag can be used);
+  POKéTCH closes the menu (the Pokétch is in the panel). The buttons that
+  can't be used now are dimmed (the field says which every frame while
+  the player could open the menu). Where the menu has an entry with no
+  button (RETIRE in the Great Marsh and the Pal Park, CHAT in the Union
+  Room), it's the DS's start menu on the upper screen.
 - **The picture:** drawn on the CPU when it changes (on, off, the cursor
   or a finger on a button), handed to the compositor under a lock with a
   serial; the compositor puts it in a texture (RGB565, a texel a pixel,
@@ -551,11 +566,15 @@ screens) the lower screen is the DS's, filling the screen as before.
   Three quads from the DS's picture's texture.
 - **Touch:** a touch that begins in the panel is the game's, at the DS's
   pixel there (dragged out of the panel, the nearest pixel of it); one that
-  begins on a button shows it pressed, and letting go on it is a press
-  (`NitroPort_LowerMenuTakePress`, for the menu's controller).
+  begins on a button that can be used shows it pressed, and letting go on
+  it is a press. The start menu takes it; with the menu closed, the field
+  opens it straight on that button, as X does (`StartMenu_PortTapOpens`).
+  A press not taken within half a second is dropped (one made while a
+  script ran isn't used long after).
 - **The fades** cover the whole screen, the menu too.
 - **The PC runner:** `mshot PATH` writes the lower screen as the 3DS shows
-  it (320 x 240), `mtouch X Y` touches it there.
+  it (320 x 240), `mtouch X Y` touches it there. It has the menu unless
+  started with `--classic-menu`.
 
 ## Timing
 

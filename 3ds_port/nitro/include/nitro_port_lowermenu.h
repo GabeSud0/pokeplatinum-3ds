@@ -54,14 +54,24 @@ enum NitroLowerMenuButton {
     NITRO_LOWERMENU_COUNT
 };
 
+/* Whether the platform can show it (the 3DS: the remaster's compositor,
+ * with the memory for its picture; the PC runner: always); until it says
+ * so, the menu is never on, and the game is the DS's (its start menu on the
+ * upper screen). */
+void NitroPort_LowerMenuSetAvailable(int available);
+
 /* On or off (the game's thread: the field's lower screen). Turning it on
- * the first time reads the start menu's icons from the ROM. */
+ * the first time reads the start menu's icons from the ROM. On: shown and
+ * the start menu (it can be shown, and the game has it on). */
 void NitroPort_LowerMenuShow(int on);
 int NitroPort_LowerMenuOn(void);
 
-/* The button the game's cursor is on (-1: none), and whether the player's
- * a girl (her bag's icon). The game's thread. */
+/* The button the game's cursor is on (-1: none), the buttons that can be
+ * used now (a bit each, 1 << NITRO_LOWERMENU_...; the others drawn dimmed
+ * and not pressed by a touch; all of them until it's said), and whether
+ * the player's a girl (her bag's icon). The game's thread. */
 void NitroPort_LowerMenuSelect(int button);
+void NitroPort_LowerMenuSetEnabled(uint32_t mask);
 void NitroPort_LowerMenuSetFemale(int female);
 
 /* The picture: NITRO_LOWERMENU_W x NITRO_LOWERMENU_H texels, each
@@ -78,8 +88,15 @@ uint32_t NitroPort_LowerMenuSerial(void);
  * NitroPort_LowerMenuTakePress). */
 int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY);
 
-/* The button pressed since the last call (released on it), or -1. */
+/* The button pressed (released on it) and not taken yet, or -1; a press
+ * not taken within NITRO_LOWERMENU_PRESS_FRAMES of the menu's frames
+ * (NitroPort_LowerMenuTouch is told every frame) is dropped: one the game
+ * couldn't use then (a script running) isn't used much later. Half a
+ * second: the field takes it when the player's step ends. Take: the press
+ * is the caller's; Pending: it stays. */
+#define NITRO_LOWERMENU_PRESS_FRAMES 30
 int NitroPort_LowerMenuTakePress(void);
+int NitroPort_LowerMenuPressPending(void);
 
 /* Which button (x, y) is on, or -1; and whether it's in the panel (with
  * the DS's lower screen's pixel there, when it's one of its 192 rows). */

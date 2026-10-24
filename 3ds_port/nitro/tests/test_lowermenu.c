@@ -1,8 +1,9 @@
 /*
  * Tests for the lower screen as a menu (src/port_lowermenu.c): where a
  * touch goes (the panel's DS pixel, or a button), a press only when let go
- * on the button it began on, the picture redrawn when the cursor moves,
- * and nothing while it's off. (No data pack: the start menu's icons are
+ * on the button it began on and only on one that can be used now, a press
+ * not taken soon dropped, the picture redrawn when the cursor moves, and
+ * nothing while it's off. (No data pack: the start menu's icons are
  * left out, the rest drawn.)
  */
 #include <nitro_port_lowermenu.h>
@@ -70,6 +71,13 @@ static void test_touches(void)
     int x = -1, y = -1;
     const int bagY = 3 + 23 * NITRO_LOWERMENU_BAG + 10;
 
+    /* The platform can't show it: never on. */
+    NitroPort_LowerMenuSetAvailable(0);
+    NitroPort_LowerMenuShow(1);
+    CHECK(NitroPort_LowerMenuOn() == 0);
+    NitroPort_LowerMenuShow(0);
+    NitroPort_LowerMenuSetAvailable(1);
+
     /* Off: nothing is the menu's. */
     NitroPort_LowerMenuShow(0);
     CHECK(NitroPort_LowerMenuOn() == 0);
@@ -112,6 +120,48 @@ static void test_touches(void)
     CHECK(NitroPort_LowerMenuTakePress() == -1);
 }
 
+static void test_enabled_and_expiry(void)
+{
+    int i;
+    const int bagY = 3 + 23 * NITRO_LOWERMENU_BAG + 10, mapY = 3 + 10;
+    uint32_t before;
+
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    NitroPort_LowerMenuTakePress();
+    /* A button that can't be used now: drawn dimmed (its name grey), and a
+     * touch on it isn't a press; the others still are. */
+    before = NitroPort_LowerMenuSerial();
+    NitroPort_LowerMenuSetEnabled(~(1u << NITRO_LOWERMENU_MAP));
+    CHECK(NitroPort_LowerMenuSerial() != before);
+    NitroPort_LowerMenuTouch(1, 280, mapY, NULL, NULL);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    NitroPort_LowerMenuTouch(1, 280, bagY, NULL, NULL);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuPressPending() == NITRO_LOWERMENU_BAG);
+    CHECK(NitroPort_LowerMenuPressPending() == NITRO_LOWERMENU_BAG);   /* (still there) */
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_BAG);
+    CHECK(NitroPort_LowerMenuPressPending() == -1);
+    /* The same mask again: not drawn again. */
+    before = NitroPort_LowerMenuSerial();
+    NitroPort_LowerMenuSetEnabled(~(1u << NITRO_LOWERMENU_MAP));
+    CHECK(NitroPort_LowerMenuSerial() == before);
+    NitroPort_LowerMenuSetEnabled(0xFFFFFFFFu);
+
+    /* A press not taken: still there for NITRO_LOWERMENU_PRESS_FRAMES frames,
+     * then dropped. */
+    NitroPort_LowerMenuTouch(1, 280, bagY, NULL, NULL);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    for (i = 0; i < NITRO_LOWERMENU_PRESS_FRAMES; i++) {
+        NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    }
+    CHECK(NitroPort_LowerMenuPressPending() == NITRO_LOWERMENU_BAG);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuPressPending() == -1);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+}
+
 static void test_picture(void)
 {
     uint32_t serial, before;
@@ -150,9 +200,11 @@ static void test_picture(void)
 
 int main(void)
 {
+    NitroPort_LowerMenuSetAvailable(1);
     test_panel_mapping();
     test_buttons();
     test_touches();
+    test_enabled_and_expiry();
     test_picture();
     printf("lowermenu: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;

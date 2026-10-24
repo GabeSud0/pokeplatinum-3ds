@@ -540,6 +540,7 @@ static void free_all(void)
         }
         free_sets(&sScreens[s]);
     }
+    NitroPort_LowerMenuSetAvailable(0);
     for (i = 0; i < 2; i++) {
         if (sMenuTexData[i]) {
             linearFree(sMenuTexData[i]);
@@ -796,6 +797,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
             break;
         }
     }
+    NitroPort_LowerMenuSetAvailable(sMenuTexData[0] != NULL);
     sGxRecording = 0;
     sFlight = 0;
     GX_BindQueue(&sGxQueue[sGxRecording]);
