@@ -200,14 +200,26 @@ void NitroPort_WideForcePictures(int mode)
 
 int NitroPort_WidePictures(void)
 {
+    /* The answer, worked out again when an overlay is loaded or unloaded:
+     * the overlay's serial number and the answer in one word, so another
+     * thread reads both at once (the game asks for each sprite it places). */
+    static uint32_t cache = 0xFFFFFFFFu;
+    uint32_t serial = NitroPort_OverlaySerial() & 0x7FFFFFFFu, c = __atomic_load_n(&cache, __ATOMIC_RELAXED);
+    int pictures;
+
     if (sForcePictures >= 0) {
         return sForcePictures;
+    }
+    if (c != 0xFFFFFFFFu && (c >> 1) == serial) {
+        return (int)(c & 1);
     }
     /* The screens made of pictures rather than the game's UI: the opening
      * movie and the title (game_opening), the opening cutscene (game_start),
      * the credits, the cutscenes. */
-    return NitroPort_OverlayLoadedNamed("game_opening") || NitroPort_OverlayLoadedNamed("game_start") ||
-           NitroPort_OverlayLoadedNamed("end_credits") || NitroPort_OverlayLoadedNamed("cutscenes");
+    pictures = NitroPort_OverlayLoadedNamed("game_opening") || NitroPort_OverlayLoadedNamed("game_start") ||
+               NitroPort_OverlayLoadedNamed("end_credits") || NitroPort_OverlayLoadedNamed("cutscenes");
+    __atomic_store_n(&cache, (serial << 1) | (uint32_t)pictures, __ATOMIC_RELAXED);
+    return pictures;
 }
 
 uint32_t NitroPort_WideWindowsSerial(void)

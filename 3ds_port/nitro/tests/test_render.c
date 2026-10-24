@@ -1954,6 +1954,28 @@ static void test_wide_art_places(void)
     G2_SetBG1Offset(0, 200);
     NitroPort_Render2DSplit(0, wide, &split);
     CHECK(wide[100 * 320 + 3] == (STRIP & 0x7FFF));           /* nearer the strip's (line 100: map line 300) */
+    /* the strip's picture of its bands only (its middle clear), moved round
+     * with the strip so far that its middle comes in beside the DS's
+     * screen: there the BG's own pixels, what the middle was (the
+     * opening's blue strip, 2026-10-23: nothing there before) */
+    for (y = 0; y < 192; y++) {
+        for (x = 0; x < 320; x++) {
+            art[y * 320 + x] = (x >= 32 && x < 288) ? 0 : STRIP;
+        }
+    }
+    WriteArtKind(dir, key, 0, 256, NITRO_WIDE_ART_LOOP, art);
+    CHECK(NitroPort_WideArtLoad(dir) == 2);
+    G2_SetBG1Offset(8, 256);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[100 * 320 + 3] == (STRIP & 0x7FFF));           /* its band, moved 8 */
+    CHECK(wide[100 * 320 + 26] == BLUE);                      /* its middle come in: the BG's own */
+    G2_SetBG1Offset(100, 256);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[100 * 320 + 3] == BLUE && wide[100 * 320 + 300] == BLUE);
+    for (i = 0; i < 320 * 192; i++) {
+        art[i] = STRIP;
+    }
+    G2_SetBG1Offset(0, 200);
     /* not going round (the usual): its bands only where it was made */
     {
         char path[600];

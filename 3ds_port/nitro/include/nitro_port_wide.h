@@ -191,6 +191,8 @@ void NitroPort_WideLayout(int engine, struct NitroRender2DSplit *split);
 
 /* (port_overlay.c) Whether the overlay of that name is loaded. */
 int NitroPort_OverlayLoadedNamed(const char *name);
+/* (port_overlay.c) Changes whenever an overlay is loaded or unloaded. */
+uint32_t NitroPort_OverlaySerial(void);
 
 #ifdef __cplusplus
 }
