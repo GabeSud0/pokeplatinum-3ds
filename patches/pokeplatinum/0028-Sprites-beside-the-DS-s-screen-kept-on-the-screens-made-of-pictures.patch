@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 16:40:00 -0700
+Subject: [PATCH] Sprites beside the DS's screen kept on the screens made of
+ pictures (SDK_PORT_3DS)
+
+The game leaves out a sprite (a cell) that is all off the DS's screen. The
+3DS remaster's upper screen is 32 pixels wider each side, so on the screens
+made of pictures (the opening movie, the title, the cutscenes:
+NitroPort_WidePictures) only the cells beyond the wider screen are left
+out. The opening's banners are two halves side by side, each as wide as
+the DS's screen; when one half was all off the DS's screen it was left
+out, and a black gap showed beside the DS's screen for a frame, twice a
+second. On both screens: there the game swaps the screens after placing a
+frame's sprites.
+---
+ src/render_oam.c | 33 +++++++++++++++++++++++++++++++--
+ 1 file changed, 31 insertions(+), 2 deletions(-)
+
+diff --git a/src/render_oam.c b/src/render_oam.c
+--- a/src/render_oam.c
++++ b/src/render_oam.c
+@@ -9,6 +9,10 @@
+ #include "render_view.h"
+ #include "sprite.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++#endif
++
+ #define NUM_HW_OAM_ATTR            128
+ #define NUM_HW_OAM_ATTR_RESERVED   4
+ #define NUM_HW_OAM_AFFINES         32
+@@ -28,6 +32,31 @@ static u16 AddAffineToSubOamManager(const MtxFx22 *affineTransform);
+ 
+ static OamManager *sOamManager;
+ 
++#ifdef SDK_PORT_3DS
++extern int NitroPort_WidePictures(void);
++
++// The 3DS remaster's upper screen is wider than the DS's: 32 pixels more
++// each side (port_wide_layout.h). On the screens made of pictures (the
++// opening movie, the title, the cutscenes: NitroPort_WidePictures), a cell
++// beside the DS's screen shows there, so only the cells beyond the wider
++// screen are left out (the opening's banners: the half of a banner left of
++// the DS's screen was left out when it was all off it, a gap beside it).
++// On both screens: there the game swaps them after placing a frame's
++// sprites.
++static BOOL IsObjectInWideView(const NNSG2dCellData *cellData, const MtxFx32 *objectCoords, const NNSG2dViewRect *viewRect)
++{
++    NNSG2dViewRect view = *viewRect;
++    int extra = NitroPort_WidePictures() ? NitroPort_WideScreenExtra() : 0;
++
++    view.posTopLeft.x -= extra << FX32_SHIFT;
++    view.sizeView.x += (2 * extra) << FX32_SHIFT;
++    return IsObjectInView(cellData, objectCoords, &view);
++}
++#define CELL_IN_VIEW IsObjectInWideView
++#else
++#define CELL_IN_VIEW IsObjectInView
++#endif
++
+ void RenderOam_Init(int mainOamStart, int mainOamCount, int mainAffineOamStart, int mainAffineOamCount, int subOamStart, int subOamCount, int subAffineOamStart, int subAffineOamCount, enum HeapID heapID)
+ {
+     int trueMainOamStart;
+@@ -106,9 +135,9 @@ void RenderOam_InitSurface(NNSG2dRenderSurface *surface, NNSG2dViewRect *viewRec
+ {
+     GF_ASSERT(sOamManager);
+     if (surfaceType == NNS_G2D_SURFACETYPE_MAIN2D) {
+-        InitRenderSurface(surface, viewRect, AddToMainOamManager, AddAffineToMainOamManager, IsObjectInView, surfaceType, renderer);
++        InitRenderSurface(surface, viewRect, AddToMainOamManager, AddAffineToMainOamManager, CELL_IN_VIEW, surfaceType, renderer);
+     } else {
+-        InitRenderSurface(surface, viewRect, AddToSubOamManager, AddAffineToSubOamManager, IsObjectInView, surfaceType, renderer);
++        InitRenderSurface(surface, viewRect, AddToSubOamManager, AddAffineToSubOamManager, CELL_IN_VIEW, surfaceType, renderer);
+     }
+ }
+ 
+-- 
+2.43.0

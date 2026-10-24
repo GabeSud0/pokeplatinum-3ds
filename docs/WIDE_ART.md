@@ -136,7 +136,9 @@ it's scrolled. So:
   - **scrolls round all the time** (`_loop`, the editor's "Scrolls round
     all the time"): its bands move with it everywhere, and past the
     picture's edge they go round as the layer's map does (the opening's
-    blue strip);
+    blue strip); where a picture of the bands only has moved so far that
+    its middle comes in beside the DS's screen, the layer's own pixels
+    show there (they're what the middle was);
 - one layer can have **several pictures**, one for each place it was
   captured at: the opening's sky and its blue strip are the same layer (one
   tall map, the sky above, the strip below), each with its own picture.
