@@ -68,6 +68,7 @@ enum NitroLowerMenuButton {
  * so, the menu is never on, and the game is the DS's (its start menu on the
  * upper screen). */
 void NitroPort_LowerMenuSetAvailable(int available);
+int NitroPort_LowerMenuAvailable(void);
 
 /* On or off (the game's thread: the field's lower screen). Turning it on
  * the first time reads the start menu's icons from the ROM. On: shown and
@@ -82,6 +83,27 @@ int NitroPort_LowerMenuOn(void);
  * the lower screen's picture tall or not). */
 void NitroPort_LowerMenuSetTall(int tall);
 int NitroPort_LowerMenuTall(void);
+
+/* An app shown in the panel (the game's thread: the bag, laid out tall for
+ * it, the DS's main engine put on the lower screen).
+ *   PanelTouch: whether a touch in the panel is the game's (1, as on the
+ *     DS: the Pokétch) or nobody's (0: an app whose touch screen isn't
+ *     shown, its main screen in the panel instead; its touch buttons would
+ *     be pressed where they aren't shown). Back to 1 when the menu goes
+ *     off.
+ *   HoldUpper: the upper screen kept as it is (1: what it shows now stays
+ *     there, the game's picture for it not shown: the field, while an app
+ *     is in the panel); or let go (0): it shows the game's picture again
+ *     once that's as bright as what was kept (kept at full brightness, the
+ *     field: once it's back and faded in; kept black, after a fade: as soon
+ *     as the game's picture is black too, so a fade in shows whole).
+ *     UpperHeld: the game's wish (the platforms keep the picture). */
+void NitroPort_LowerMenuSetPanelTouch(int on);
+void NitroPort_LowerMenuHoldUpper(int hold);
+int NitroPort_LowerMenuUpperHeld(void);
+/* (the platforms) A screen's master brightness (the MASTER_BRIGHT
+ * register's value) as -16 (black) .. 16 (white), 0 as it is. */
+int NitroPort_LowerMenuBrightness(unsigned masterBright);
 
 /* The button the game's cursor is on (-1: none), the buttons that can be
  * used now (a bit each, 1 << NITRO_LOWERMENU_...; the others drawn dimmed

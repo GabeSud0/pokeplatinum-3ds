@@ -574,8 +574,8 @@ screens) the lower screen is the DS's, filling the screen as before.
   (`NitroRender2DSplit.height`): its BGs' maps and its OBJs go on below
   the DS's 192 rows as they would were its screen taller, and the panel
   shows the picture's first 247 rows. The H-blank effects' lines past 191
-  are line 191's; never with the 3D (its lines past 191 black). For the
-  bag's and the party's tall layouts to come; nothing uses it yet.
+  are line 191's; never with the 3D (its lines past 191 black). The bag
+  is laid out for it (below); the party's tall layout is to come.
 - **The map** (`port_lowermap.c`; the game's side in
   `patches/pokeplatinum/0033`): once the player has the Town Map, the panel
   shows it (the Pokétch, or the Poké Ball before it, goes on underneath,
@@ -600,6 +600,31 @@ screens) the lower screen is the DS's, filling the screen as before.
   dots). A tap on the map (where MAP can be used), or MAP with the map
   shown, opens the Town Map app; so does MAP if the port can't show the
   map (no Town Map pictures).
+- **The bag in the panel** (`patches/pokeplatinum/0035`): opened while
+  the platform can show the menu (`NitroPort_LowerMenuAvailable`), the bag
+  puts its main screen (the list, the pockets, the description) on the
+  lower screen (the DS's screen swap) and lays it out tall, as its approved
+  mock-up has it: the list's box 7 tile rows longer (its middle row again)
+  with 3 more lines of items (12), and below it, 7 rows lower, the
+  pockets' panel, the description bar, and the windows and sprites that
+  go with them (the item's menu, the messages, the counts, the item's
+  icon); above the pockets, the bag 1.25 times as big, drawn smoothly
+  (`NitroPort_Render2DSmoothObjs`: its texels blended), its shadow two
+  tiles wider. Its BG2 (the list) has its tiles in a block of their own
+  (the list's window is taller, the other windows' tiles stay where they
+  were). The sprite system's main screen goes on to line 255 then
+  (`SpriteUtil_PortTallMainScreen`: the sub screen's sprites from 256).
+  The bag's touch screen isn't shown, so the panel's touches are nobody's
+  (`NitroPort_LowerMenuSetPanelTouch`). With `--classic-menu` (or no menu)
+  the bag is as before, across the wider upper screen.
+- **The upper screen held** (`NitroPort_LowerMenuHoldUpper`): while an app
+  is in the panel, the upper screen keeps the field. The start menu holds
+  it before the bag's fade, so only the lower screen fades; the bag holds
+  it too (opened after a fade, it holds black). Let go, the game's upper
+  picture shows again once it's as bright as what was kept: back in the
+  field, at the end of its fade in (seamless); kept black, at once. The 3DS
+  doesn't draw the upper screen while it's kept (what's on its LCD stays);
+  the PC runner's `rshot` shows what's kept.
 - **Touch:** a touch that begins in the panel is the game's, at the DS's
   pixel there (dragged out of the panel, the nearest pixel of it); one that
   begins on a button that can be used shows it pressed, and letting go on

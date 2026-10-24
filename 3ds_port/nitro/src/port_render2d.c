@@ -2607,9 +2607,60 @@ static inline void PutObjPixel(const Obj *obj, ObjLine *out, int x, u16 rgb, int
     out->alpha[x] = (u8)alpha;
 }
 
+/* (NitroPort_Render2DSmoothObjs) */
+static volatile int sSmoothObjs[2];
+
+void NitroPort_Render2DSmoothObjs(int engine, int on)
+{
+    __atomic_store_n(&sSmoothObjs[engine ? 1 : 0], on ? 1 : 0, __ATOMIC_RELEASE);
+}
+
+/* An affine OBJ's pixel drawn smoothly: (u, v) where its middle falls in
+ * the OBJ's texels, in 256ths, from the top-left texel's middle; the four
+ * texels round it blended by how near each is, the clear ones left out (a
+ * pixel mostly clear: clear). 0: clear. */
+static u16 SmoothObjPixel(const Engine *e, const Obj *obj, u32 dispcnt, s32 u, s32 v, int *alpha)
+{
+    int tx = u >> 8, ty = v >> 8, ax = u & 255, ay = v & 255, k, weights = 0, a = 16, best = 0;
+    u32 r = 0, g = 0, b = 0;
+
+    for (k = 0; k < 4; k++) {
+        int px = tx + (k & 1), py = ty + (k >> 1);
+        int weight = ((k & 1) ? ax : 256 - ax) * ((k >> 1) ? ay : 256 - ay);
+        int texelAlpha;
+        u16 c;
+
+        if (weight == 0 || px < 0 || py < 0 || px >= obj->w || py >= obj->h) {
+            continue;
+        }
+        c = ObjPixel(e, obj, dispcnt, px, py, &texelAlpha);
+        if (c == 0) {
+            continue;
+        }
+        if (weight > best) {
+            best = weight;   /* (a bitmap OBJ's alpha: the nearest shown texel's) */
+            a = texelAlpha;
+        }
+        weights += weight;
+        r += (u32)(c & 31) * (u32)weight;
+        g += (u32)((c >> 5) & 31) * (u32)weight;
+        b += (u32)((c >> 10) & 31) * (u32)weight;
+    }
+    *alpha = a;
+    if (weights * 2 < 256 * 256) {
+        return 0;
+    }
+    r = (r + (u32)weights / 2) / (u32)weights;
+    g = (g + (u32)weights / 2) / (u32)weights;
+    b = (b + (u32)weights / 2) / (u32)weights;
+    return (u16)(r | (g << 5) | (b << 10) | OPAQUE);
+}
+
 /* The OBJ layer's line; returns whether any OBJ is on it. */
 static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, ObjLine *out)
 {
+    int smooth = __atomic_load_n(&sSmoothObjs[e->isA ? 0 : 1], __ATOMIC_ACQUIRE);
+
     u16 sprites[WMAX];
     int k;
 
@@ -2635,7 +2686,31 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
             out->x1 = (short)(obj->ox + end);
         }
 
-        if (obj->affine) {
+        if (obj->affine && smooth && obj->mode != 2) {
+            /* (NitroPort_Render2DSmoothObjs: the pixel's middle mapped,
+             * the texels round it blended) */
+            s32 dy = ly - obj->boxH / 2;
+            s32 dx = sx - obj->boxW / 2;
+            s32 fx = obj->pa * dx + obj->pb * dy + (obj->pa + obj->pb) / 2 + (obj->w << 7) - 128;
+            s32 fy = obj->pc * dx + obj->pd * dy + (obj->pc + obj->pd) / 2 + (obj->h << 7) - 128;
+
+            for (; sx < end; sx++, fx += obj->pa, fy += obj->pc) {
+                int x = obj->ox + sx;
+                int alpha;
+                u16 rgb;
+
+                if ((out->color[x] & OPAQUE) && obj->mode != 2) {
+                    continue;
+                }
+                if (fx < -256 || fy < -256 || fx >= obj->w << 8 || fy >= obj->h << 8) {
+                    continue;
+                }
+                rgb = SmoothObjPixel(e, obj, dispcnt, fx, fy, &alpha);
+                if (rgb) {
+                    PutObjPixel(obj, out, x, rgb, alpha);
+                }
+            }
+        } else if (obj->affine) {
             s32 dy = ly - obj->boxH / 2;
             s32 dx = sx - obj->boxW / 2;
             s32 fx = obj->pa * dx + obj->pb * dy;
@@ -4558,6 +4633,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
              ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
              ((u32)split->clip[3] << 23)) * 16777619u;
     small = (small ^ (u32)split->height) * 16777619u;   /* (a tall picture) */
+    small = (small ^ (u32)__atomic_load_n(&sSmoothObjs[e], __ATOMIC_ACQUIRE)) * 16777619u;
     if (split->width > W) {
         /* (the windows decide the edges' look, and where the anchored ones
          * are; hand-drawn pictures loaded again) */

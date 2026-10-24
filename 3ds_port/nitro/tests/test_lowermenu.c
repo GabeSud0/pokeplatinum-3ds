@@ -149,6 +149,54 @@ static void test_touches(void)
     CHECK(NitroPort_LowerMenuTakePress() == -1);
 }
 
+/* An app shown in the panel (the bag): the panel's touches nobody's, the
+ * upper screen held. */
+static void test_app_in_panel(void)
+{
+    int x = -1, y = -1;
+    const int bagY = 3 + 23 * NITRO_LOWERMENU_BAG + 10;
+
+    CHECK(NitroPort_LowerMenuAvailable() == 1);
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);   /* (no finger down) */
+    NitroPort_LowerMenuSetTall(1);
+    NitroPort_LowerMenuSetPanelTouch(0);
+    /* A touch in the panel: nobody's, all the way (dragged onto a button
+     * too); no press. */
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 0);
+    CHECK(NitroPort_LowerMenuTouch(1, 280, bagY, &x, &y) == 0);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    /* The buttons still the menu's. */
+    NitroPort_LowerMenuTouch(1, 280, bagY, &x, &y);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_BAG);
+    /* The menu off: the panel's touches the game's again. */
+    NitroPort_LowerMenuShow(0);
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    NitroPort_LowerMenuShow(0);
+
+    /* The upper screen held: the game's wish, until let go. */
+    CHECK(NitroPort_LowerMenuUpperHeld() == 0);
+    NitroPort_LowerMenuHoldUpper(1);
+    CHECK(NitroPort_LowerMenuUpperHeld() == 1);
+    NitroPort_LowerMenuHoldUpper(1);
+    CHECK(NitroPort_LowerMenuUpperHeld() == 1);
+    NitroPort_LowerMenuHoldUpper(0);
+    CHECK(NitroPort_LowerMenuUpperHeld() == 0);
+    /* How bright a screen is, from its MASTER_BRIGHT. */
+    CHECK(NitroPort_LowerMenuBrightness(0) == 0);
+    CHECK(NitroPort_LowerMenuBrightness(0x8010) == -16);   /* black */
+    CHECK(NitroPort_LowerMenuBrightness(0x8008) == -8);
+    CHECK(NitroPort_LowerMenuBrightness(0x4010) == 16);    /* white */
+    CHECK(NitroPort_LowerMenuBrightness(0x801F) == -16);   /* (16 at most) */
+    CHECK(NitroPort_LowerMenuBrightness(0x0010) == 0);     /* (no mode: as it is) */
+    CHECK(NitroPort_LowerMenuBrightness(0xC010) == 0);
+}
+
 static void test_enabled_and_expiry(void)
 {
     int i;
@@ -266,6 +314,7 @@ int main(void)
     test_tall_mapping();
     test_buttons();
     test_touches();
+    test_app_in_panel();
     test_enabled_and_expiry();
     test_map_without_pictures();
     test_picture();

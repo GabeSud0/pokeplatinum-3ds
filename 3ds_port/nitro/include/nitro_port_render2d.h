@@ -80,6 +80,11 @@ typedef struct NitroRender2DSplit {
  * with split->snapshot set: what the game changes while it's being drawn
  * doesn't get mixed in. */
 void NitroPort_Render2DTakeState(int engine);
+/* An engine's affine OBJs drawn smoothly (on: their texels blended, as
+ * the remaster smooths what it scales up; a pixel mostly clear, clear) or
+ * as the DS draws them (off, the default). The game's thread (the bag in
+ * the lower menu's panel: its bag 1.25 times as big). */
+void NitroPort_Render2DSmoothObjs(int engine, int on);
 void NitroPort_Render2DSplit(int engine, uint16_t *under, NitroRender2DSplit *split);
 /* The same, unless nothing it draws from changed since the last call for
  * that engine (returns 0 then, 1 when drawn). */

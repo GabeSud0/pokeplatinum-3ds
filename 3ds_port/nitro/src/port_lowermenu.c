@@ -27,6 +27,8 @@
 
 static volatile int sOn;
 static volatile int sTall;          /* (NitroPort_LowerMenuSetTall) */
+static int sPanelTouch = 1;         /* (NitroPort_LowerMenuSetPanelTouch) */
+static volatile int sHoldUpper;     /* (NitroPort_LowerMenuHoldUpper) */
 static volatile int sAvailable;     /* (NitroPort_LowerMenuSetAvailable) */
 static int sSelected = -1;          /* the game's cursor */
 static int sHeld = -1;              /* the button a finger is on */
@@ -595,6 +597,38 @@ void NitroPort_LowerMenuSetAvailable(int available)
     __atomic_store_n(&sAvailable, available ? 1 : 0, __ATOMIC_RELEASE);
 }
 
+int NitroPort_LowerMenuAvailable(void)
+{
+    return __atomic_load_n(&sAvailable, __ATOMIC_ACQUIRE);
+}
+
+void NitroPort_LowerMenuSetPanelTouch(int on)
+{
+    sPanelTouch = on ? 1 : 0;
+}
+
+void NitroPort_LowerMenuHoldUpper(int hold)
+{
+    hold = hold ? 1 : 0;
+    if (hold != __atomic_load_n(&sHoldUpper, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&sHoldUpper, hold, __ATOMIC_RELEASE);
+        NitroPort_Log("[lowermenu] upper screen %s", hold ? "held" : "let go");
+    }
+}
+
+int NitroPort_LowerMenuUpperHeld(void)
+{
+    return __atomic_load_n(&sHoldUpper, __ATOMIC_ACQUIRE);
+}
+
+int NitroPort_LowerMenuBrightness(unsigned masterBright)
+{
+    int mode = (int)(masterBright >> 14) & 3, f = (int)(masterBright & 31);
+
+    f = f > 16 ? 16 : f;
+    return mode == 1 ? f : mode == 2 ? -f : 0;
+}
+
 void NitroPort_LowerMenuShow(int on)
 {
     on = on && __atomic_load_n(&sAvailable, __ATOMIC_ACQUIRE) ? 1 : 0;
@@ -611,6 +645,7 @@ void NitroPort_LowerMenuShow(int on)
         __atomic_store_n(&sOn, on, __ATOMIC_RELEASE);
         if (!on) {
             __atomic_store_n(&sTall, 0, __ATOMIC_RELEASE);   /* (each screen says so again) */
+            sPanelTouch = 1;
             __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
         }
         NitroPort_Log("[lowermenu] %s", on ? "on" : "off");
@@ -883,7 +918,8 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
         /* A new touch: the panel's (the game's, all the way; or, the map
          * shown, the menu's), or the frame's. */
         if (NitroPort_LowerMenuPanelAt(x, y, NULL, NULL)) {
-            sTouchIn = map_shown() ? 3 : 1;
+            /* (an app whose touch screen isn't shown: nobody's till let go) */
+            sTouchIn = map_shown() ? 3 : sPanelTouch ? 1 : 2;
         } else {
             sTouchIn = 0;
             sTouchButton = NitroPort_LowerMenuButtonAt(x, y);

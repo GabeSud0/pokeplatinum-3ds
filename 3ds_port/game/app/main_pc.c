@@ -388,15 +388,55 @@ void NitroPort_VBlankWorkDone(void)
  * comes from the reference rasterizer (with --wide, its 256 pixels show
  * the wider view and are stretched to the 320), its translucency is only
  * approximate, and there's no stereo or upscaling. */
+static void RemasterRender(uint16_t *out);
+
+/* (the remaster) The upper screen kept while an app is in the lower menu's
+ * panel (NitroPort_LowerMenuHoldUpper), as the compositor keeps it: rshot
+ * shows it. Kept as it is when the game asks; let go once the game's
+ * picture there is as bright as what's kept. Each frame. */
+static uint16_t sKeptTop[320 * 192];
+static int sTopKept, sTopKeptBright;
+
+static void KeepUpperScreen(void)
+{
+    extern unsigned char NitroPort_IoReg[];
+    const unsigned char *io = NitroPort_IoReg + (NitroPort_EngineAOnTop() ? 0 : 0x1000);
+    int wish = NitroPort_LowerMenuUpperHeld();
+    int bright = NitroPort_LowerMenuBrightness((unsigned)(io[0x6C] | (io[0x6D] << 8)));
+
+    if (!sTopKept && wish) {
+        static uint16_t both[320 * 384];
+
+        RemasterRender(both);
+        memcpy(sKeptTop, both, sizeof(sKeptTop));
+        sTopKept = 1;
+        /* (kept mid-fade: as the end of a fade nearest it) */
+        sTopKeptBright = bright <= -8 ? -16 : bright >= 8 ? 16 : 0;
+    } else if (sTopKept && !wish && bright == sTopKeptBright) {
+        sTopKept = 0;
+    }
+}
+
 static int RemasterShot(const char *path)
 {
-    static uint16_t under[320 * 192], over[320 * 192], out[320 * 384];
+    static uint16_t out[320 * 384];
+
+    RemasterRender(out);
+    if (sTopKept) {
+        memcpy(out, sKeptTop, sizeof(sKeptTop));
+    }
+    return WritePng(path, out, 320, 384);
+}
+
+static void RemasterRender(uint16_t *out)
+{
+    static uint16_t under[320 * 192], over[320 * 192];
     static uint8_t overAlpha[320 * 192], alpha3d[256 * 192];
     static uint16_t image3d[256 * 192];
     int aOnTop = NitroPort_EngineAOnTop() ? 1 : 0;
     int screen;
 
-    memset(out, 0, sizeof(out));
+    memset(out, 0, 320 * 384 * sizeof(out[0]));
     for (screen = 0; screen < 2; screen++) {
         int engine = (screen == 0) == aOnTop ? 0 : 1;
         NitroRender2DSplit split;
@@ -485,7 +525,6 @@ static int RemasterShot(const char *path)
             }
         }
     }
-    return WritePng(path, out, 320, 384);
 }
 
 /* The 3DS remaster's lower screen as the menu (port_lowermenu.c), at the
@@ -1207,6 +1246,9 @@ void NitroPort_OnFrame(void)
         StopSound();            /* closes and finalizes optional WAV file */
         fflush(NULL);           /* stderr, and a --gx-record file */
         _exit(0);
+    }
+    if (NitroPort_LowerMenuAvailable()) {
+        KeepUpperScreen();   /* (an app in the menu's panel: the upper screen kept) */
     }
     if (sControlDir != NULL) {
         ControlWait();

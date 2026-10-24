@@ -173,6 +173,8 @@ static Screen sScreens[2];        /* 0: upper, 1: lower */
  * screen in its panel at 15/16. */
 #define MENU_TEX_W 512
 #define MENU_TEX_H 256
+static int sUpperKept, sUpperKeptBright;   /* (the upper screen kept: NitroPort_LowerMenuHoldUpper) */
+static int sUpperShownBright;             /* (its picture drawn last: how bright, -16..16) */
 static void *sMenuTexData[2];
 static C3D_Tex sMenuTex;
 static int sMenuTexCur = -1;
@@ -2231,6 +2233,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     int edgesWanted = 0, smoothable = 0, drawnAs = DRAWN_PLAIN;
     int underCleared[2] = { 0, 0 };
     int menu[2] = { 0, 0 };            /* (the lower screen as the menu) */
+    int keptBlack = 0;                 /* (the upper screen kept, but drawn again: black) */
     uint32_t menuSerial = NitroPort_LowerMenuSerial();
     unsigned copies;
     u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
@@ -2282,7 +2285,32 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         if (set == NULL) {
             continue;   /* nothing to show yet */
         }
-        has3d = screen3d && set->info.has3d && !set->info.displayOff && scene != NULL;
+        /* The upper screen kept as it is (an app in the lower menu's
+         * panel: the field stays above it), till the game's picture is as
+         * bright as what's kept (nitro_port_lowermenu.h; kept mid-fade: as
+         * the end of a fade nearest it, which every fade reaches). Kept:
+         * not drawn, what's on its LCD stays. Drawn again regardless (back
+         * from the HOME menu, sleep or the log): what was kept may be
+         * gone, and the game's picture there is the app's hidden screen
+         * (the bag's touch screen): black instead. */
+        if (s == 0) {
+            int wish = NitroPort_LowerMenuUpperHeld();
+
+            if (!sUpperKept && wish) {
+                sUpperKept = 1;
+                sUpperKeptBright = sUpperShownBright <= -8 ? -16 : sUpperShownBright >= 8 ? 16 : 0;
+            } else if (sUpperKept && !wish && !set->info.displayOff &&
+                       NitroPort_LowerMenuBrightness(set->info.masterBright) == sUpperKeptBright) {
+                sUpperKept = 0;
+            }
+            if (sUpperKept && !forced) {
+                stereoNow = 0;   /* (nothing drawn there: no 3D, no stereo) */
+                set->held--;
+                continue;
+            }
+            keptBlack = sUpperKept;
+        }
+        has3d = !(s == 0 && keptBlack) && screen3d && set->info.has3d && !set->info.displayOff && scene != NULL;
         /* The lower screen as the menu: in the field (the game says), with
          * its textures, and without the 3D on that screen. */
         menu[s] = s == 1 && sMenuTexData[0] != NULL && !has3d && !set->info.displayOff && NitroPort_LowerMenuOn();
@@ -2319,6 +2347,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             continue;
         }
         sets[s] = set;
+        if (s == 0 && !keptBlack) {
+            sUpperShownBright = set->info.displayOff ? -16 : NitroPort_LowerMenuBrightness(set->info.masterBright);
+        }
         if (has3d && sceneSerial != scr->shownScene) {
             timed = 1;   /* a new 3D frame: shown at its time */
         }
@@ -2461,12 +2492,15 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                 fill_edge_buffers(scr, edgeClear, copies);
             }
             draw_screen(scr, 1, sets[s], sc, shift, edges, underCleared[s]);
+        } else if (s == 0 && keptBlack) {
+            draw_screen(scr, 0, NULL, NULL, 0.0f, edges, underCleared[s]);   /* (black) */
         } else {
             sMenuNow = menu[s];
             draw_screen(scr, 0, sets[s], sc, 0.0f, edges, underCleared[s]);
             sMenuNow = 0;
         }
-        scr->shownSeq = sets[s]->seq;
+        /* (drawn black: the game's picture there still to be drawn) */
+        scr->shownSeq = s == 0 && keptBlack ? 0u : sets[s]->seq;
         __atomic_store_n(&scr->shownMenu, menu[s], __ATOMIC_RELEASE);
         scr->shownMenuSerial = menuSerial;
         if (screen3d && !mid) {   /* (an in-between scene: its scene's still to come) */

@@ -359,6 +359,69 @@ static void test_objs(void)
     CHECK_PX(sTop, 55, 50, GREEN);      /* tile 0's top-left, mirrored */
 }
 
+/* An affine OBJ drawn smoothly (NitroPort_Render2DSmoothObjs: the bag in
+ * the lower menu's panel, 1.25 times as big): 8x8, its left half blue and
+ * its right half red, shown twice as big. As the DS draws it, each pixel
+ * one texel's colour; smoothly, the pixels between two texels blended,
+ * the edge's pixels (mostly in the OBJ) its colour. Only that engine. */
+static void test_smooth_objs(void)
+{
+    static u8 tile[32];
+    static u16 objPltt[16] = { 0, BLUE, RED };
+    static GXOamAttr oam[128];
+    MtxFx22 twice = { FX32_ONE / 2, 0, 0, FX32_ONE / 2 };
+    u16 c;
+    int i;
+
+    Reset();
+    GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_1D_32K);
+    for (i = 0; i < 8; i++) {
+        tile[i * 4 + 0] = 0x11;   /* x 0-3: index 1 (blue) */
+        tile[i * 4 + 1] = 0x11;
+        tile[i * 4 + 2] = 0x22;   /* x 4-7: index 2 (red) */
+        tile[i * 4 + 3] = 0x22;
+    }
+    GX_LoadOBJ(tile, 0, sizeof(tile));
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));   /* all hidden */
+    /* double size: its 16x16 box at (40, 40), the OBJ filling it */
+    G2_SetOBJAttr(&oam[0], 40, 40, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_AFFINE_DOUBLE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 0, 0);
+    G2_SetOBJEffect(&oam[0], GX_OAM_EFFECT_AFFINE_DOUBLE, 0);
+    G2_SetOBJAffine((GXOamAffine *)&oam[0], &twice);
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    GX_SetVisiblePlane(GX_PLANEMASK_OBJ);
+
+    /* as the DS: texel 3 blue (x 46-47), texel 4 red (48-49) */
+    NitroPort_Render2D(0, sTop);
+    CHECK_PX(sTop, 47, 47, BLUE);
+    CHECK_PX(sTop, 48, 47, RED);
+    CHECK_PX(sTop, 40, 47, BLUE);
+    CHECK_PX(sTop, 55, 47, RED);
+
+    /* smoothly: x 47 three quarters blue, x 48 three quarters red; the
+     * edges (three quarters in the OBJ) their colour */
+    NitroPort_Render2DSmoothObjs(0, 1);
+    NitroPort_Render2D(0, sTop);
+    c = sTop[47 * 256 + 47];
+    CHECK((c & 31) >= 7 && (c & 31) <= 9 && ((c >> 10) & 31) >= 22 && ((c >> 10) & 31) <= 24);
+    c = sTop[47 * 256 + 48];
+    CHECK((c & 31) >= 22 && (c & 31) <= 24 && ((c >> 10) & 31) >= 7 && ((c >> 10) & 31) <= 9);
+    CHECK_PX(sTop, 40, 47, BLUE);
+    CHECK_PX(sTop, 55, 47, RED);
+    CHECK_PX(sTop, 44, 40, BLUE);
+    CHECK_PX(sTop, 44, 55, BLUE);
+    /* the other engine as the DS draws it */
+    NitroPort_Render2DSmoothObjs(1, 0);
+    NitroPort_Render2D(0, sTop);
+    c = sTop[47 * 256 + 47];
+    CHECK(c != BLUE && c != RED);
+    NitroPort_Render2DSmoothObjs(0, 0);
+    NitroPort_Render2D(0, sTop);
+    CHECK_PX(sTop, 47, 47, BLUE);
+}
+
 static void test_blend_and_window(void)
 {
     static u8 tiles[64];
@@ -3335,6 +3398,7 @@ int main(int argc, char **argv)
     test_text_bg();
     test_8bpp_ext_palette();
     test_objs();
+    test_smooth_objs();
     test_blend_and_window();
     test_3d_blends_with_layer_behind();
     test_bitmap_bg();
