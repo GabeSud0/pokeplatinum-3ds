@@ -28,38 +28,11 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends gcc libc6-dev patch
 
-      - name: Build hello3d
-        run: make -C 3ds_port/hello3d
-
       - name: Test the PICA ABI bridge across enum modes (real 3DS headers)
         run: python3 -m unittest discover -s tools -p test_pica_abi.py -v
 
       - name: Build portable pak reader for 3DS
         run: make -C 3ds_port/pak TARGET=3ds lib
-
-      # The HOME Menu version's tools and settings, checked on hello3d (no
-      # game code): makerom, bannertool and the game's RSF make a .cia.
-      # Nothing is uploaded.
-      - name: Make a HOME Menu .cia of hello3d (the game's RSF)
-        shell: bash
-        run: |
-          apt-get install -y --no-install-recommends g++ make
-          bash tools/build_cia_tools.sh build/cia-tools
-          python3 tools/home_menu_art.py --blank build/home-menu-art
-          $DEVKITPRO/tools/bin/smdhtool --create "hello3d" "CIA check" "pokeplatinum-3ds" \
-              build/home-menu-art/icon.png build/hello3d.smdh
-          build/cia-tools/bin/bannertool makebanner -i build/home-menu-art/banner.png \
-              -a build/home-menu-art/banner.wav -o build/hello3d.bnr
-          build/cia-tools/bin/makerom -f cia -o build/hello3d.cia -target t -exefslogo \
-              -rsf 3ds_port/game/cia/pokeplatinum.rsf -elf 3ds_port/hello3d/hello3d.elf \
-              -icon build/hello3d.smdh -banner build/hello3d.bnr
-          ls -l build/hello3d.cia
-
-      - name: Upload hello3d .3dsx
-        uses: actions/upload-artifact@v4
-        with:
-          name: hello3d
-          path: 3ds_port/hello3d/hello3d.3dsx
 
       - name: Fetch decompilation and both SDKs (fresh; check patches)
         run: python3 tools/bootstrap.py --clean
@@ -94,17 +67,6 @@ jobs:
             exit 1
           }
 
-      - name: Link the whole game for 3DS (report of missing symbols)
-        run: make -C 3ds_port/game TARGET=3ds link-check
-
-      - name: Upload 3DS full-game link report
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: game-link-report-3ds
-          path: build/game-link-report/3ds.md
-          if-no-files-found: ignore
-
       # Built to check that it links and converts to a .3dsx, but never
       # uploaded: it contains compiled game code. Build it yourself to run
       # it with your own data pack (3ds_port/game/README.md).
@@ -125,28 +87,18 @@ jobs:
           --readelf "$DEVKITARM/bin/arm-none-eabi-readelf"
           3ds_port/game/build/3ds/pokeplatinum.elf
 
-      # Built to check that it links, but never uploaded: it contains compiled
-      # game code. Build it yourself to run it (see README.md).
-      - name: Link native original-Platinum smoke application
-        run: make -C 3ds_port/platinum_smoke
-
-      - name: Survey original game C compilation blockers (3DS)
-        run: make -C 3ds_port/game TARGET=3ds probe PROBE_LIMIT=40 PROBE_TIMEOUT=7
-
-      - name: Upload 3DS game compilation survey
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: game-compile-survey-3ds
-          path: build/game-compile-survey/3ds.json
-          if-no-files-found: warn
-
-      - name: Check NitroSDK and NitroSystem coverage (3DS build)
-        run: >
-          python3 tools/check_sdk_coverage.py
-          3ds_port/nitro/build/3ds/libnitro.a
-          3ds_port/nitrosystem/build/3ds/libnitrosystem.a
-          --nm "$DEVKITARM/bin/arm-none-eabi-nm" --strict
+      # The HOME Menu version: makerom, bannertool and the game's RSF make
+      # a .cia of the program, with blank art (no ROM here). Never uploaded:
+      # it contains compiled game code.
+      - name: Make the HOME Menu .cia (blank art)
+        shell: bash
+        run: |
+          apt-get install -y --no-install-recommends g++ make
+          bash tools/build_cia_tools.sh build/cia-tools
+          python3 tools/home_menu_art.py --blank build/home-menu-art
+          make -C 3ds_port/game TARGET=3ds HOME_ART="$PWD/build/home-menu-art" \
+              CIA_TOOLS="$PWD/build/cia-tools" cia
+          ls -l 3ds_port/game/build/3ds/pokeplatinum.cia
 
   # The WideArt editor (tools/wideart: drawing the wide screen's bands by
   # hand) as a Windows program. It contains no game code or data: the
@@ -201,7 +153,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: CI uploads no game builds (only hello3d and text reports)
+      - name: CI uploads no game builds (only the WideArt editor)
         run: python tools/check_ci_artifacts.py
 
       - name: Check Python tools compile
@@ -224,9 +176,6 @@ jobs:
       - name: Fetch decompilation and both SDKs (fresh; check patches)
         run: python tools/bootstrap.py --clean
 
-      - name: Survey SDK usage
-        run: python tools/survey_sdk_usage.py
-
       - name: libnitro host unit tests
         run: timeout 600 make -C 3ds_port/nitro
 
@@ -247,20 +196,6 @@ jobs:
 
       - name: Start the game on the PC (made-up data pack; says how far it gets)
         run: python tools/boot_smoke.py 3ds_port/game/build/host/pokeplatinum-pc
-
-      - name: Survey original game C compilation blockers (PC)
-        run: timeout 300 make -C 3ds_port/game TARGET=host probe PROBE_LIMIT=80 PROBE_TIMEOUT=7
-
-      - name: Upload host game compilation survey
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: game-compile-survey-host
-          path: build/game-compile-survey/host.json
-          if-no-files-found: warn
-
-      - name: Check NitroSDK and NitroSystem coverage (PC build)
-        run: python tools/check_sdk_coverage.py --strict
 
   # Resource pointers in original Nintendo file formats are 32-bit.
   # Separate job so 64-bit host tests cannot hide a host32 regression.
@@ -311,9 +246,6 @@ jobs:
       - name: Compile and smoke-test original game code on 32-bit PC
         run: timeout 1800 make -j"$(nproc)" -C 3ds_port/game TARGET=host32 test
 
-      - name: Link the whole game on 32-bit PC (report of missing symbols)
-        run: make -C 3ds_port/game TARGET=host32 link-check
-
       - name: Build the game's 32-bit PC runner
         run: timeout 900 make -C 3ds_port/game TARGET=host32 program
 
@@ -326,27 +258,3 @@ jobs:
       - name: Start the game on a 32-bit PC (made-up data pack)
         run: python tools/boot_smoke.py 3ds_port/game/build/host32/pokeplatinum-pc
 
-      - name: Upload 32-bit full-game link report
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: game-link-report-host32
-          path: build/game-link-report/host32.md
-          if-no-files-found: ignore
-
-      - name: Survey original game C compilation blockers (32-bit PC)
-        run: timeout 300 make -C 3ds_port/game TARGET=host32 probe PROBE_LIMIT=40 PROBE_TIMEOUT=7
-
-      - name: Upload host32 game compilation survey
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: game-compile-survey-host32
-          path: build/game-compile-survey/host32.json
-          if-no-files-found: warn
-
-      - name: Check NitroSDK and NitroSystem coverage (32-bit PC build)
-        run: >
-          python tools/check_sdk_coverage.py
-          3ds_port/nitro/build/host32/libnitro.a
-          3ds_port/nitrosystem/build/host32/libnitrosystem.a --strict

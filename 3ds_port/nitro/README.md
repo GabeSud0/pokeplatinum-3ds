@@ -3,9 +3,8 @@
 Nintendo's NitroSDK (the DS system library the game is built on), compiled
 with GCC so it runs on the 3DS, plus unit tests that run on a PC.
 
-Every NitroSDK function the game calls (281 of them) now exists in the
-library; `tools/check_sdk_coverage.py` checks this in CI. That makes this the
-foundation for the next step: compiling the game itself.
+Every NitroSDK function the game calls exists in the library: the game's
+program links against it.
 
 ## How it fits together
 
@@ -108,8 +107,6 @@ the PC keeps the full Stage 1 reference rasterizer.
 ```sh
 python3 tools/bootstrap.py
 make -C 3ds_port/nitro test
-# Use your own locally generated data pack; nothing is checked into Git:
-tools/run_pc_wsl.sh  # supports --screenshots and --screenshot-every
 ```
 
 `tests/test_gx3d.c` builds only synthetic triangles/texture bytes, verifies
@@ -188,9 +185,7 @@ drawn, and the 2D ones at the V-blank (`patches/NitroSystem/0004`).
 `pokeplatinum-pc ... --dump-3d FRAME` to write
 `3d_frame_<frame>.png` in the working directory (RGBA8, alpha 0 for
 transparent BG0, row 0 at the top).
-These are private outputs from your own pack; never commit them. Textures,
-complex alpha, exact W-depth, toon and effects are for later PRs in
-`docs/3D_STAGE2.md`.
+These are private outputs from your own pack; never commit them.
 
 ## Virtual ARM7 sound driver and software sound chip
 
@@ -339,7 +334,6 @@ python tools/bootstrap.py         # fetches pokeplatinum, NitroSDK, NitroSystem
 cd 3ds_port/nitro
 make                              # builds for PC and runs the tests
 make TARGET=3ds                   # builds libnitro.a for the 3DS (devkitARM)
-python ../../tools/check_sdk_coverage.py   # every SDK function the game calls exists?
 ```
 
 The tests (664 checks) compare against values worked out independently

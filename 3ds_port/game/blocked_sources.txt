@@ -1,8 +1,4 @@
-# Original game sources that the port does not compile yet, and why.
-# Every other C file under build/upstream/src goes into libplatinum_game.
-# Made by tools/update_game_blocklist.py from full compile surveys (32-bit,
-# with the game's flags, which treat implicit function declarations as
-# errors as devkitARM's GCC does). To unblock files, fix the cause, then
-# rerun the surveys and the tool (see 3ds_port/game/README.md).
+# Original game sources the port leaves out of its build, and why. None at
+# present: every C file under build/upstream/src is compiled.
 #
 # Format: path relative to src/   # reason (first error)

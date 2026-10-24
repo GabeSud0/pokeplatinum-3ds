@@ -9,7 +9,7 @@ file types, but check the list of changed files before every commit. If a
 `.nds`, `.sav`, `.narc` or an image from the game shows up there, stop.
 
 The same goes for **builds**: anything compiled from the game's code (the
-smoke app, the game itself) contains Nintendo's code, so it's never committed,
+game's .3dsx and .cia) contains Nintendo's code, so it's never committed,
 attached to an issue or release, or uploaded by CI. CI's uploads are limited
 to an allow-list (`tools/check_ci_artifacts.py`); add to it only things with
 no game code or data in them.
@@ -27,7 +27,7 @@ no game code or data in them.
 4. **Test.** Check out the branch, build it with `make` (see README.md) and
    try it in Azahar. Changes that affect performance or stereo also get
    checked on a New 3DS when possible. CI doesn't publish builds that contain
-   game code (only `hello3d` and reports), so test from your own build.
+   game code (only the WideArt editor), so test from your own build.
 5. **Merge.** The repository owner merges after testing.
 
 ## Changing the decompilation or the SDK

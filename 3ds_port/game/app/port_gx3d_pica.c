@@ -1174,7 +1174,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
      * both screens, and this image isn't shown by itself; the 2D drawer
      * shows it at its own pace. */
     if(!C3D_FrameBegin(0))return -1;
-    /* As in hello3d, schedule framebuffer clear BEFORE drawing on it. */
+    /* Schedule the framebuffer's clear BEFORE drawing on it. */
     /* Depth24/stencil8 memory layout varies by byte packing; fill all
      * bits so the 24-bit depth is unambiguously the maximum (1.0). */
     C3D_RenderTargetClear(sTarget,C3D_CLEAR_ALL,clearColor,0xFFFFFFFFu);
