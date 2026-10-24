@@ -39,7 +39,7 @@ SDK still builds the original game with Metrowerks.
 | Threads | NitroSDK's own scheduler, unchanged. Each SDK thread is played by a thread of the machine (3DS or POSIX), one running at a time, handed over where the SDK saves and loads contexts; a switch an interrupt asks for happens at its end, as on the DS. Each thread keeps its interrupt state and divider operands | `src/port_thread.c`, `src/platform/` |
 | Timers | the four hardware timers counted from a real clock: reload, prescaler, cascade, overflow interrupts (none lost). The SDK's tick and alarms (`OS_Sleep`) and the game's own timer work. V-count follows the clock | `src/port_timer.c`, SDK `timer.h`, `os_tick.c` (patched) |
 | 2D graphics | both engines drawn in software: text, affine and extended BGs (bitmaps too), OBJs (affine, 8-bit, extended palettes, bitmap, semi-transparent, OBJ window), windows, blending, master brightness, VRAM display mode. `NitroPort_RenderScreens` gives the two screens as 15-bit pixels | `src/port_render2d.c` |
-| Overlays | all linked into the program; `FS_LoadOverlay` and co. describe each overlay and reset its data on loading, as reading it from the cartridge did. The program gives the port the overlays' data sections (`NitroPort_SetOverlays`) | `src/port_overlay.c`, SDK `fs_overlay.c` (patched) |
+| Overlays | all linked into the program; `FS_LoadOverlay` and co. describe each overlay and reset its data on loading, as reading it from the cartridge did, then run its static initializers (`NitroStaticInit`). The program gives the port the overlays' data sections and tables of static initializers (`NitroPort_SetOverlays`) | `src/port_overlay.c`, SDK `fs_overlay.c` (patched) |
 | Firmware state | the cartridge header, the user's settings (name, birthday, language, touch calibration), MAC address, buttons and lid, in DS memory where the game reads them | `src/port_boot.c` |
 | DMA | immediate and 3D-FIFO transfers run at once, V-blank transfers at V-blank; completion interrupts and callbacks. H-blank, display, card and cartridge timings are reported as not implemented | `src/port_dma.c`, SDK `mi_dma.c` (patched) |
 | Waiting for V-blank | `OS_Halt` advances one frame: calls the port's frame hook, starts V-blank (V-blank DMAs) and requests its interrupt, taken if the CPU has interrupts on | `src/port_os.c` |
@@ -315,7 +315,8 @@ make -C 3ds_port/nitro test
 
 Those tests generate a pack with `builder/pack.py` in ignored `build/`,
 and exercise the real SDK `FS_*` path and file-ID commands, read, seek and
-length, and overlay loading resetting an overlay's data. No copyrighted
+length, and overlay loading resetting an overlay's data and running its
+static initializers. No copyrighted
 content is used. `tests/test_threads.c` covers threads, interrupts with
 threads, timers, alarms and the PXI FIFO through the SDK's own API, with a
 clock the test drives.

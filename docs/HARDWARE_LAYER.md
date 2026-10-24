@@ -145,7 +145,9 @@ sections need to be reset on "load". That needs each overlay's sections kept
 separate, plus a small table of start/end addresses. *Done:* the build renames
 each overlay's data sections after it (`tools/game_overlays.py`), the linker
 gathers them, and loading an overlay restores its data
-(`3ds_port/nitro/src/port_overlay.c`).
+(`3ds_port/nitro/src/port_overlay.c`). An overlay's static initializers
+(`NitroStaticInit`, which the DS ran on every load) are gathered the same way,
+into a table per overlay, and run after the data is restored.
 
 Heaps can stay as they are, allocated from a larger block.
 

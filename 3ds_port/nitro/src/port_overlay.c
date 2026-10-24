@@ -14,6 +14,12 @@
  * data is taken then; loading an overlay copies it back and clears the
  * zero-initialised part.
  *
+ * Some overlays also have static initializers (NitroStaticInit, see
+ * nitro/sinit.h), which the DS ran each time the overlay was loaded: a
+ * Pokétch app's tells the Pokétch which functions start and stop it. The
+ * game build gathers each overlay's into a table of its own too; the
+ * overlay information below points the SDK's FS_StartOverlay at it.
+ *
  * The SDK's overlay functions (fs_overlay.c) call the functions below
  * instead of reading the cartridge. The overlay "addresses" they report are
  * only labels (the game's overlay manager compares them to see which
@@ -113,6 +119,10 @@ BOOL NitroPort_OverlayInfo(FSOverlayInfo *p_ovi, MIProcessor target, FSOverlayID
     p_ovi->header.ram_size = 0x100;   /* any size under 1 MB keeps them apart */
     p_ovi->header.bss_size = 0;
     p_ovi->header.file_id = id;
+    if (sOverlays[id].sinitEnd > sOverlays[id].sinitStart) {
+        p_ovi->header.sinit_init = sOverlays[id].sinitStart;
+        p_ovi->header.sinit_init_end = sOverlays[id].sinitEnd;
+    }
     p_ovi->target = MI_PROCESSOR_ARM9;
     return TRUE;
 }
