@@ -2247,6 +2247,26 @@ static void test_wide_window_edges(void)
     CHECK(wide[100 * 256 + 255] == RED);
     CHECK(wide[100 * 256 + 0] == RED);
     CHECK(wide[10 * 256 + 255] == GREY);
+    /* An empty window (x 0-0: a circle wipe's lines past its circle) covers
+     * nothing on the wider canvas either, the bands included (they showed
+     * the Town Map's side bars while its circle closed); a window across
+     * the middle leaves the bands outside. */
+    memset(&split, 0, sizeof(split));
+    split.width = 320;
+    split.origin = 32;
+    split.windowsToEdge = 1;
+    split.over = over;
+    split.overAlpha = overAlpha;
+    G2_SetWnd0Position(0, 32, 0, 160);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[100 * 320 + 3] == GREY);
+    CHECK(wide[100 * 320 + 32 + 100] == GREY);
+    CHECK(wide[100 * 320 + 310] == GREY);
+    G2_SetWnd0Position(100, 32, 156, 160);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[100 * 320 + 3] == GREY);
+    CHECK(wide[100 * 320 + 32 + 120] == RED);
+    CHECK(wide[100 * 320 + 310] == GREY);
     GX_SetVisibleWnd(GX_WNDMASK_NONE);
 }
 

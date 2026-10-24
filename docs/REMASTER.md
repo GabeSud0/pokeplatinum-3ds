@@ -417,7 +417,11 @@ stretched:
   on to the screen's: the intro's letterbox covers the bands too. A window
   from 0 to 255 counts as reaching the right edge (the register can't say
   256, so it leaves the DS's last column out; the bands went black beside
-  the intro's city).
+  the intro's city). An empty window (0 to 0: the circle wipes' lines
+  past their circle) covers nothing, the bands included (the Town Map's
+  side bars showed in them while its circle closed). Where a circle is
+  wider than the DS's screen, the game's window stops at its edges, so
+  for those few lines the bands are inside it.
 - **The battle background** is a 512-pixel map (the trainer's slide-in
   scrolls across it): the picture, then the same picture mirrored. After
   the intro the game draws the platforms (the terrain's sprites) into it
