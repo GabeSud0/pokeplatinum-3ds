@@ -32,7 +32,10 @@ static const NitroPortOverlay *sOverlays;
 static u32 sCount;
 static u8 **sInitialData;
 static BOOL *sLoaded;
-static volatile uint32_t sSerial;
+/* Changes after each load or unload (released after sLoaded, so a thread
+ * that sees the new number sees what changed: NitroPort_WidePictures keeps
+ * its answer until it changes). */
+static uint32_t sSerial;
 
 void NitroPort_SetOverlays(const NitroPortOverlay *overlays, u32 count)
 {
@@ -42,7 +45,6 @@ void NitroPort_SetOverlays(const NitroPortOverlay *overlays, u32 count)
     free(sLoaded);
     sOverlays = overlays;
     sCount = count;
-    sSerial++;
     sInitialData = calloc(count ? count : 1, sizeof(*sInitialData));
     sLoaded = calloc(count ? count : 1, sizeof(*sLoaded));
     if (sInitialData == NULL || sLoaded == NULL) {
@@ -67,6 +69,7 @@ void NitroPort_SetOverlays(const NitroPortOverlay *overlays, u32 count)
             memset(o->bssStart, 0, (size_t)(o->bssEnd - o->bssStart));
         }
     }
+    __atomic_add_fetch(&sSerial, 1, __ATOMIC_RELEASE);
 }
 
 u32 NitroPort_OverlayCount(void)
@@ -147,7 +150,7 @@ BOOL NitroPort_OverlayLoadImage(const FSOverlayInfo *p_ovi)
     }
     NitroPort_OverlayClearBss(p_ovi);
     sLoaded[id] = TRUE;
-    sSerial++;
+    __atomic_add_fetch(&sSerial, 1, __ATOMIC_RELEASE);
     NitroPort_Log("[nitro] overlay %s loaded", o->name);
     return TRUE;
 }
@@ -158,11 +161,11 @@ void NitroPort_OverlayUnloaded(const FSOverlayInfo *p_ovi)
 
     if (id < sCount) {
         sLoaded[id] = FALSE;
-        sSerial++;
+        __atomic_add_fetch(&sSerial, 1, __ATOMIC_RELEASE);
     }
 }
 
 uint32_t NitroPort_OverlaySerial(void)
 {
-    return sSerial;
+    return __atomic_load_n(&sSerial, __ATOMIC_ACQUIRE);
 }

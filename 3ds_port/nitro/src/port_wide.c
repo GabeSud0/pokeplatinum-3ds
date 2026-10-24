@@ -203,8 +203,8 @@ int NitroPort_WidePictures(void)
     /* The answer, worked out again when an overlay is loaded or unloaded:
      * the overlay's serial number and the answer in one word, so another
      * thread reads both at once (the game asks for each sprite it places). */
-    static volatile uint32_t cache = 0xFFFFFFFFu;
-    uint32_t serial = NitroPort_OverlaySerial() & 0x7FFFFFFFu, c = cache;
+    static uint32_t cache = 0xFFFFFFFFu;
+    uint32_t serial = NitroPort_OverlaySerial() & 0x7FFFFFFFu, c = __atomic_load_n(&cache, __ATOMIC_RELAXED);
     int pictures;
 
     if (sForcePictures >= 0) {
@@ -218,7 +218,7 @@ int NitroPort_WidePictures(void)
      * the credits, the cutscenes. */
     pictures = NitroPort_OverlayLoadedNamed("game_opening") || NitroPort_OverlayLoadedNamed("game_start") ||
                NitroPort_OverlayLoadedNamed("end_credits") || NitroPort_OverlayLoadedNamed("cutscenes");
-    cache = (serial << 1) | (uint32_t)pictures;
+    __atomic_store_n(&cache, (serial << 1) | (uint32_t)pictures, __ATOMIC_RELAXED);
     return pictures;
 }
 
