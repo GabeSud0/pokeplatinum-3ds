@@ -59,6 +59,7 @@
 
 #define W 256
 #define H 192
+#define HMAX NITRO_RENDER2D_MAX_H   /* (a tall picture: NitroRender2DSplit.height) */
 /* The widest picture drawn (the 3DS remaster's upper screen: the DS's 256
  * pixels and 32 more each side; NitroRender2DSplit's canvas). */
 #define WMAX 320
@@ -151,6 +152,8 @@ typedef struct Engine {
     /* The picture: width pixels, the DS's x = 0 at canvas x origin (256 and
      * 0 but for the remaster's wider canvas; see NitroRender2DSplit). */
     int width, origin;
+    /* The picture's lines: H, or up to HMAX (NitroRender2DSplit.height). */
+    int height;
     /* Wider canvas: each BG's pixels only within the DS's 256 (clip), or
      * wrapping round its map; the windows the game anchors moved to the
      * screen's edges (anchorWindows); and whether this is one of the
@@ -2263,8 +2266,8 @@ typedef struct ObjFrame {
     u8 blends;             /* some are semi-transparent or bitmap OBJs */
     u8 artCount;
     ObjArt art[OBJ_ART_MAX];
-    u8 onLine[H][128];
-    u8 lineCount[H];
+    u8 onLine[HMAX][128];
+    u8 lineCount[HMAX];
 } ObjFrame;
 
 /* OAM entry i as an Obj (its left edge on the canvas): FALSE if it's
@@ -2355,7 +2358,7 @@ static void SortObjs(const Engine *e, ObjFrame *f)
         }
 
         /* The lines it's on: (y - oy) & 255 < boxH. */
-        for (y = 0; y < H; y++) {
+        for (y = 0; y < e->height; y++) {
             if (((y - obj->oy) & 0xFF) < obj->boxH) {
                 f->onLine[y][f->lineCount[y]++] = f->count;
             }
@@ -3292,6 +3295,9 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             kind[bg] = BG_NONE;   /* large-bitmap mode still unsupported */
         }
     }
+    if (e->isA && kind[0] == BG_3D) {
+        e->height = H;   /* (a tall picture: never with the 3D) */
+    }
     if (fixedWidth == 0) {
         DecideSplits(e, kind, bgcnt, dispcnt);
         LookUpArt(e, kind, bgcnt, dispcnt);
@@ -3391,7 +3397,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         split->scroll3dLines = 0;
     }
 
-    for (y = 0; y < H; y++) {
+    for (y = 0; y < e->height; y++) {
         u16 *row = out + y * width;
         BOOL objs;
         Target t;
@@ -3400,7 +3406,8 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             u8 *lineRegs = (u8 *)e->io;
             u32 lineDispcnt;
 
-            memcpy(lineRegs, e->lines[y], NITRO_LINE_REGS);
+            /* (a tall picture's lines past the DS's: its last line's) */
+            memcpy(lineRegs, e->lines[y < H ? y : H - 1], NITRO_LINE_REGS);
             lineDispcnt = Rd32(lineRegs, 0);
             dispcnt = (dispcnt & ~0xE000u) | (lineDispcnt & 0xE000u);
             win0h = Rd16(lineRegs, 0x40);
@@ -3414,7 +3421,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             if (!anyWindow) {
                 memset(enableLine, 0x3F, (size_t)width);
             }
-            if (split != NULL && split->has3d) {
+            if (split != NULL && split->has3d && y < H) {
                 int scroll = (Rd16(lineRegs, 0x10) - e->shift3d) & 0x1FF;
 
                 split->scroll3dLine[y] = (short)scroll;
@@ -3758,6 +3765,10 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
     e->objVram = e->isA ? NitroPort_ObjVram : NitroPort_DbObjVram;
     e->objMask = e->isA ? 0x3FFFF : 0x1FFFF;
     e->width = W;
+    e->height = H;
+    if (split != NULL && split->height > H && split->height <= HMAX && split->width <= W) {
+        e->height = split->height;   /* (a tall picture: the DS's width only) */
+    }
     if (split != NULL && split->width > W && split->width <= WMAX) {
         int bg;
 
@@ -3811,25 +3822,33 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
 
     /* The engine powered off: nothing on that screen. */
     if (!(powcnt & (e.isA ? 0x0002 : 0x0200))) {
-        Fill(out, 0, e.width * H);
+        Fill(out, 0, e.width * e.height);
         return;
     }
     if (dispcnt & 0x80) {                  /* forced blank: white */
-        Fill(out, 0x7FFF, e.width * H);
+        Fill(out, 0x7FFF, e.width * e.height);
         return;
     }
     switch ((dispcnt >> 16) & (e.isA ? 3 : 1)) {
     case 0:                                /* display off: white */
-        Fill(out, 0x7FFF, e.width * H);
+        Fill(out, 0x7FFF, e.width * e.height);
         return;
-    case 1:
+    case 1: {
+        int lines = e.height;
+
         DrawEngine(&e, out, split);
+        if (e.height < lines) {
+            /* (a tall picture asked for with the 3D on: the DS's lines
+             * drawn, the rest black) */
+            Fill(out + e.width * e.height, 0, e.width * (lines - e.height));
+        }
         break;
+    }
     case 2: {                              /* VRAM display: a bank in LCDC */
         const u8 *bank = NitroPort_LcdcVram + ((dispcnt >> 18) & 3) * 0x20000;
         int i;
 
-        Fill(out, 0, e.width * H);
+        Fill(out, 0, e.width * e.height);
         for (i = 0; i < W * H; i++) {
             out[(i / W) * e.width + e.origin + i % W] = Rd16(bank, (u32)i * 2) & 0x7FFF;
         }
@@ -3837,11 +3856,11 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
     }
     default:
         NitroPort_Unimplemented("display mode: main memory display");
-        Fill(out, 0, e.width * H);
+        Fill(out, 0, e.width * e.height);
         return;
     }
     if (split == NULL) {
-        MasterBrightness(out, Rd16(e.io, 0x6C), e.width * H);
+        MasterBrightness(out, Rd16(e.io, 0x6C), e.width * e.height);
     }
 }
 
@@ -4529,7 +4548,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     small = (small ^ (u32)split->width ^ ((u32)split->origin << 9) ^
              ((u32)split->anchorWindows << 18) ^ ((u32)(split->windowsToEdge != 0) << 19) ^ ((u32)split->clip[0] << 20) ^
              ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
-             ((u32)split->clip[3] << 23)) * 16777619u;
+             ((u32)split->clip[3] << 23) ^ ((u32)split->height << 24)) * 16777619u;
     if (split->width > W) {
         /* (the windows decide the edges' look, and where the anchored ones
          * are; hand-drawn pictures loaded again) */

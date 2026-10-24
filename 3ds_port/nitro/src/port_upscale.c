@@ -243,18 +243,21 @@ void NitroPort_PackOver5551(const uint32_t *premultiplied, uint16_t *out, int i,
 }
 
 int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, const uint16_t *under,
-                             const uint16_t *over, const uint8_t *overAlpha, int hasOver, int w,
+                             const uint16_t *over, const uint8_t *overAlpha, int hasOver, int w, int h,
                              uint16_t *underTex, uint32_t *overTex, int texW, const uint16_t *table,
                              const uint8_t alpha16[17], void (*flush)(void *data, uint32_t bytes))
 {
-    const int h = NITRO_PUBLISH_H, bands = NITRO_PUBLISH_BANDS;
+    const int bands = h / 4;
     const size_t band = (size_t)w * 4u;
     const uint32_t tileRow = (uint32_t)texW * 8u;   /* texels in a band's row of tiles (doubled) */
     uint32_t gen = ++sh->gen, any = 0;
-    int b, from, known = t->heldBy == sh && t->heldWidth == w, packed = 0, sameKind;
+    int b, from, known = t->heldBy == sh && t->heldWidth == w && t->heldHeight == h, packed = 0, sameKind;
 
+    if (h <= 0 || h > NITRO_PUBLISH_MAX_H || (h & 3) || (size_t)w * (size_t)h > NITRO_PUBLISH_MAX_PIXELS) {
+        return 0;   /* (not a picture it can hold) */
+    }
     /* What changed since the last picture. */
-    if (!sh->underValid || sh->width != w) {
+    if (!sh->underValid || sh->width != w || sh->height != h) {
         memcpy(sh->under, under, band * bands * 2u);
         for (b = 0; b < bands; b++) {
             sh->underChanged[b] = gen;
@@ -262,6 +265,7 @@ int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, cons
         sh->underValid = 1;
         sh->overValid = 0;
         sh->width = w;
+        sh->height = h;
     } else {
         for (b = 0; b < bands; b++) {
             if (memcmp(under + band * b, sh->under + band * b, band * 2u) != 0) {
@@ -291,6 +295,7 @@ int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, cons
     t->underGen = gen;
     t->heldBy = sh;
     t->heldWidth = w;
+    t->heldHeight = h;
     if (!hasOver) {
         /* (not drawn, nor kept: all of it again when there is one; the
          * over texture holds what it did, maybe another source's) */

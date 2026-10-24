@@ -63,7 +63,18 @@ typedef struct NitroRender2DSplit {
      * no column of the DS's picture left out (the wider canvas does so
      * anyway). */
     int windowsToEdge;
+    /* (the remaster's lower screen as a tall panel: nitro_port_lowermenu.h)
+     * The picture's lines: 0 or 192 for the DS's screen; up to
+     * NITRO_RENDER2D_MAX_H to go on below it, the BGs' maps and the OBJs
+     * going on there as they would were the DS's screen taller (line y of
+     * a BG is its map's row y + its scroll; an OBJ is on line y when
+     * (y - its OAM y) & 255 is within it). Only on the DS's width (width 0
+     * or 256) and without the 3D (else 192); the H-blank effects' lines
+     * past 191 are line 191's. under is width x height then. The caller's
+     * choice, kept by the call. */
+    int height;
 } NitroRender2DSplit;
+#define NITRO_RENDER2D_MAX_H 256
 /* (the game's thread, when it hands a frame to a drawing thread) Take the
  * engine's registers, palettes and OAM as they are now, for the next draw
  * with split->snapshot set: what the game changes while it's being drawn

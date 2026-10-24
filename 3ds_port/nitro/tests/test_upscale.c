@@ -301,7 +301,7 @@ static void test_publish_doubled(void)
                 alpha[e][band * 4 * w + (int)(Rnd() % (unsigned)(4 * w))] ^= 1;
             }
         }
-        any = NitroPort_PublishDoubled(&shadows[e], &targets[t], under[e], over[e], alpha[e], hasOver, w,
+        any = NitroPort_PublishDoubled(&shadows[e], &targets[t], under[e], over[e], alpha[e], hasOver, w, H,
                                        underTex[t], overTex[t], TW, table, alpha16, NULL);
         partial += step > 3 && targets[t].heldBy == &shadows[e];
         /* The whole picture at once, compared where the picture is (and
@@ -338,6 +338,63 @@ static void test_publish_doubled(void)
     }
     free(wantUnder);
     free(wantOver);
+}
+
+/* A tall picture (the lower screen as a tall panel: 256 x 248) published
+ * after the DS's 192 rows and before: each time the whole picture done at
+ * once (rows past 192 too), its height changing counting as all of it
+ * changed; and a picture it can't hold not published. */
+static void test_publish_tall(void)
+{
+    enum { TW = 512, H = NITRO_PUBLISH_MAX_H, TEXEL_ROWS = 2 * H + 8, W = 256 };
+    static NitroPublishShadow shadow;
+    static NitroPublishTarget target;
+    static uint16_t table[32768], under[W * H];
+    static uint8_t alpha16[17];
+    uint16_t *tex = malloc((size_t)TW * TEXEL_ROWS * 2), *want = malloc((size_t)TW * TEXEL_ROWS * 2);
+    int i, step, x, y, ok = 1;
+
+    for (i = 0; i < 32768; i++) {
+        table[i] = (uint16_t)(i * 2654435761u >> 9);
+    }
+    for (i = 0; i <= 16; i++) {
+        alpha16[i] = (uint8_t)(i >= 16 ? 255 : i * 255 / 16);
+    }
+    memset(tex, 0, (size_t)TW * TEXEL_ROWS * 2);
+    for (step = 0; step < 6; step++) {
+        int h = (step == 2 || step == 3) ? NITRO_PUBLISH_H : H;   /* tall, tall, 192, 192, tall, tall */
+
+        for (i = 0; i < W * h; i++) {
+            if (step % 2 == 0 || (Rnd() % 8) == 0) {
+                under[i] = (uint16_t)Rnd();
+            }
+        }
+        (void)NitroPort_PublishDoubled(&shadow, &target, under, NULL, NULL, 0, W, h, tex, NULL, TW, table, alpha16,
+                                       NULL);
+        NitroPort_Double2xTiled16Table(under, W, h, want, TW, table);
+        for (y = 0; y < 2 * h; y++) {
+            for (x = 0; x < 2 * W; x++) {
+                unsigned k = NitroPort_TiledIndex((unsigned)x, (unsigned)y, TW);
+                ok &= tex[k] == want[k];
+            }
+        }
+    }
+    CHECK(ok);
+    /* Taller than it holds, or not a multiple of 4: nothing. */
+    tex[0] ^= 1;
+    CHECK(NitroPort_PublishDoubled(&shadow, &target, under, NULL, NULL, 0, W, H + 4, tex, NULL, TW, table, alpha16,
+                                   NULL) == 0);
+    CHECK(NitroPort_PublishDoubled(&shadow, &target, under, NULL, NULL, 0, W, 246, tex, NULL, TW, table, alpha16,
+                                   NULL) == 0);
+    CHECK(NitroPort_PublishDoubled(&shadow, &target, under, NULL, NULL, 0, 320, H, tex, NULL, TW, table, alpha16,
+                                   NULL) == 0);
+    {
+        unsigned k = NitroPort_TiledIndex(0, 0, TW);
+
+        CHECK(tex[k] != want[k]);   /* (left as it was) */
+    }
+    free(tex);
+    free(want);
 }
 
 /* The same with the targets taking RGBA5551 (allow16): the over layer
@@ -406,7 +463,7 @@ static void test_publish_doubled16(void)
                 if (alpha[e][i] != 0 && alpha[e][i] != 16) alpha[e][i] = 16;
             }
         }
-        any = NitroPort_PublishDoubled(&shadows[e], &targets[t], under[e], over[e], alpha[e], hasOver, w,
+        any = NitroPort_PublishDoubled(&shadows[e], &targets[t], under[e], over[e], alpha[e], hasOver, w, H,
                                        underTex[t], overTex[t], TW, table, alpha16, NULL);
         if (!hasOver) {
             okAny &= any == 0;
@@ -472,6 +529,7 @@ int main(void)
     test_double_rows();
     test_publish_doubled();
     test_publish_doubled16();
+    test_publish_tall();
     printf("upscaler and tiler: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;
 }
