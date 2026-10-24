@@ -27,8 +27,8 @@ or X, and taps on the buttons.
 ---
  include/start_menu.h           |   7 +
  src/overlay005/field_control.c |  11 ++
- src/start_menu.c               | 314 +++++++++++++++++++++++++++++++++
- 3 files changed, 332 insertions(+)
+ src/start_menu.c               | 330 +++++++++++++++++++++++++++++++++
+ 3 files changed, 348 insertions(+)
 
 diff --git a/include/start_menu.h b/include/start_menu.h
 index f7d9fba4..b2466f52 100644
@@ -74,7 +74,7 @@ index ebb50f84..55b0601a 100644
          if (pressedKeys & PAD_BUTTON_Y) {
              input->registeredItem = TRUE;
 diff --git a/src/start_menu.c b/src/start_menu.c
-index f2d0b06a..0e892dd7 100644
+index f2d0b06a..c79d2d5c 100644
 --- a/src/start_menu.c
 +++ b/src/start_menu.c
 @@ -91,6 +91,10 @@
@@ -101,7 +101,7 @@ index f2d0b06a..0e892dd7 100644
  
  typedef struct StartMenuAction {
      u32 bankEntry;
-@@ -273,6 +283,54 @@ BOOL FieldSystem_IsInValidLocation(FieldSystem *fieldSystem)
+@@ -273,6 +283,55 @@ BOOL FieldSystem_IsInValidLocation(FieldSystem *fieldSystem)
  #define HIDE_OPTION_CHAT         (1 << 7)
  #define HIDE_OPTION_RETIRE       (1 << 8)
  
@@ -151,12 +151,13 @@ index f2d0b06a..0e892dd7 100644
 +static u32 sPortButtons; // the buttons it can use (a bit each)
 +static u32 sPortOptionCount; // its entries (menu->options)
 +static int sPortCursor = -1; // its cursor, a button (kept from one opening to the next)
++static u32 sPortFieldButtons; // the buttons the field said can be used (StartMenu_PortUpdateButtons)
 +#endif
 +
  void StartMenu_Open(FieldSystem *fieldSystem)
  {
      StartMenu *menu = StartMenu_New();
-@@ -427,6 +485,14 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
+@@ -427,6 +486,14 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
          menu->state = START_MENU_STATE_SELECT;
          break;
      case START_MENU_STATE_SELECT:
@@ -171,7 +172,7 @@ index f2d0b06a..0e892dd7 100644
          if (StartMenu_Select(fieldTask) == FALSE) {
              return FALSE;
          }
-@@ -523,10 +589,21 @@ static void StartMenu_InitMenu(FieldTask *fieldTask)
+@@ -523,10 +590,21 @@ static void StartMenu_InitMenu(FieldTask *fieldTask)
      fieldSystem = FieldTask_GetFieldSystem(fieldTask);
      StartMenu *menu = FieldTask_GetEnv(fieldTask);
      u32 optionCount = StartMenu_MakeOptionList(menu, menu->options);
@@ -193,7 +194,7 @@ index f2d0b06a..0e892dd7 100644
  
      loader = MessageLoader_Init(MSG_LOADER_PRELOAD_ENTIRE_BANK, NARC_INDEX_MSGDATA__PL_MSG, TEXT_BANK_START_MENU, HEAP_ID_FIELD2);
  
-@@ -575,8 +652,19 @@ static void StartMenu_InitMenu(FieldTask *fieldTask)
+@@ -575,8 +653,19 @@ static void StartMenu_InitMenu(FieldTask *fieldTask)
  
      menu->menu = Menu_New(&template, 28, 4, menu->cursorPos, HEAP_ID_FIELD2, PAD_BUTTON_B | PAD_BUTTON_X);
  
@@ -213,7 +214,7 @@ index f2d0b06a..0e892dd7 100644
  }
  
  #define ADD_OPTION_IF_NOT_HIDDEN(__menuOption, __hideFlag) \
-@@ -604,6 +692,12 @@ static u32 StartMenu_MakeOptionList(StartMenu *menu, u8 *listOut)
+@@ -604,6 +693,12 @@ static u32 StartMenu_MakeOptionList(StartMenu *menu, u8 *listOut)
  
  static void StartMenu_Close(StartMenu *menu)
  {
@@ -226,7 +227,7 @@ index f2d0b06a..0e892dd7 100644
      StartMenu_FreeSprites(menu);
      Menu_Free(menu->menu, NULL);
      StringList_Free(menu->menuOptions);
-@@ -1775,3 +1869,223 @@ static void StartMenu_Evolve(FieldTask *fieldTask)
+@@ -1775,3 +1870,238 @@ static void StartMenu_Evolve(FieldTask *fieldTask)
          StartMenu_SetCallback(menu, StartMenu_ExitBag);
      }
  }
@@ -248,9 +249,9 @@ index f2d0b06a..0e892dd7 100644
 +}
 +
 +// Whether the lower menu can be the start menu with these entries hidden
-+// (each one it would show has a button), and the buttons that can be used
-+// (a bit each): the entries shown; MAP with the Town Map, when the bag can
-+// be used; POKéTCH with the Pokétch.
++// (each one it would show has a button, and there's one to use), and the
++// buttons that can be used (a bit each): the entries shown; MAP with the
++// Town Map, when the bag can be used; POKéTCH with the Pokétch.
 +static BOOL StartMenu_PortButtons(FieldSystem *fieldSystem, u32 hideOptionFlags, u32 *outButtons)
 +{
 +    u32 buttons = 0;
@@ -273,6 +274,10 @@ index f2d0b06a..0e892dd7 100644
 +
 +    if (Poketch_IsEnabled(SaveData_GetPoketch(fieldSystem->saveData))) {
 +        buttons |= 1u << PORT_BUTTON_POKETCH;
++    }
++
++    if (buttons == 0) {
++        return FALSE;
 +    }
 +
 +    *outButtons = buttons;
@@ -310,6 +315,7 @@ index f2d0b06a..0e892dd7 100644
 +        StartMenu_PortButtons(fieldSystem, StartMenu_PortHiddenOptions(fieldSystem), &buttons);
 +    }
 +
++    sPortFieldButtons = buttons;
 +    NitroPort_LowerMenuSetEnabled(buttons);
 +}
 +
@@ -317,17 +323,27 @@ index f2d0b06a..0e892dd7 100644
 +{
 +    int button = NitroPort_LowerMenuPressPending();
 +
-+    if (button == PORT_BUTTON_POKETCH) {
-+        // (with the menu closed, the panel's the Pokétch already)
++    if (button < 0) {
++        return FALSE;
++    }
++
++    // A tap on a button that can't be used here (made before the field
++    // said so: during a warp's fade, say) or on POKéTCH (with the menu
++    // closed, the panel's the Pokétch already): nothing.
++    if (button >= PORT_BUTTON_COUNT || button == PORT_BUTTON_POKETCH || !(sPortFieldButtons & (1u << button))) {
 +        NitroPort_LowerMenuTakePress();
 +        return FALSE;
 +    }
 +
-+    return button >= 0 && button < PORT_BUTTON_COUNT;
++    return TRUE;
 +}
 +
 +static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, int button)
 +{
++    if (button < 0 || button >= PORT_BUTTON_COUNT) {
++        return;
++    }
++
 +    sPortCursor = button;
 +    NitroPort_LowerMenuSelect(button);
 +
@@ -409,7 +425,7 @@ index f2d0b06a..0e892dd7 100644
 +    if (button >= 0 && button < PORT_BUTTON_COUNT && (sPortButtons & (1u << button))) {
 +        Sound_PlayEffect(SE_CONFIRM_sseq_3);
 +        StartMenu_PortSetCursor(fieldSystem, menu, button);
-+    } else if (JOY_NEW(PAD_BUTTON_A)) {
++    } else if (JOY_NEW(PAD_BUTTON_A) && sPortCursor >= 0) {
 +        Sound_PlayEffect(SE_CONFIRM_sseq_3);
 +        button = sPortCursor;
 +    } else if (JOY_NEW(PAD_BUTTON_B | PAD_BUTTON_X)) {
@@ -417,7 +433,7 @@ index f2d0b06a..0e892dd7 100644
 +        menu->state = START_MENU_STATE_END;
 +        return TRUE;
 +    } else {
-+        if (JOY_NEW(PAD_KEY_UP | PAD_KEY_DOWN)) {
++        if (JOY_NEW(PAD_KEY_UP | PAD_KEY_DOWN) && sPortCursor >= 0) {
 +            // The next button that can be used, round the column.
 +            int step = JOY_NEW(PAD_KEY_UP) ? PORT_BUTTON_COUNT - 1 : 1;
 +            int next = sPortCursor;
