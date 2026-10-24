@@ -10,9 +10,10 @@
  *
  * Screens: the DS's two screens, drawn by the port's 2D renderer
  * (nitro/src/port_render2d.c), in the middle of the 3DS's (the upper one
- * 400x240, the lower one 320x240). The log (the program's status above, the
- * log below) comes up by itself when something goes wrong (the game stuck, a
- * crash, OS_Terminate); every button is the game's.
+ * 400x240, the lower one 320x240), from the start: the screens stay black
+ * until the game's first frame. The log (the program's status above, the
+ * log below) comes up by itself only when something goes wrong (no data
+ * pack, the game stuck, a crash, OS_Terminate); every button is the game's.
  *
  * Speed: the New 3DS's faster clock is switched on. The game's own code
  * takes little of a frame; drawing the two screens costs much more. So
@@ -468,7 +469,7 @@ static int sGpuCore;
 static volatile u64 sGpuTicks;
 static volatile unsigned sGpuScenes, sGpuTriangles, sGpuDroppedTriangles;
 static volatile bool sAOnTop;    /* engine A on the upper screen, this frame */
-static volatile bool sShowLog = true;      /* the log instead of the game */
+static volatile bool sShowLog = false;     /* the log instead of the game */
 static volatile bool sScreensDirty = true; /* redraw the borders / consoles */
 
 /* Override the port's weak callback to notify, not copy, each SWAP scene. */
@@ -1185,7 +1186,6 @@ static void DrawLogScreens(void)
     consoleSelect(&sTop);
     printf("\n  Pokemon Platinum - 3DS port\n");
     printf("  The game's own code, running natively.\n\n");
-    printf("  L + R + SELECT: back to the game.\n");
     printf("  Log: " LOG_PATH "\n");
     DrawStatus();
     consoleSelect(&sBottom);
@@ -1199,6 +1199,31 @@ static void ShowLog(bool on)
     if (sShowLog != on) {
         sShowLog = on;
         sScreensDirty = true;
+    }
+}
+
+/* The log on the screens now (no drawing going on: before the game's
+ * first frame). */
+static void ShowLogNow(void)
+{
+    ShowLog(true);
+    if (sScreensDirty) {
+        sScreensDirty = false;
+        DrawLogScreens();
+    }
+}
+
+/* (before the game's first frame: the log on the screens) until the player
+ * presses START, or closes the program from the HOME menu. */
+static void WaitForStart(void)
+{
+    NitroPort_Log("Press START to quit.");
+    while (aptMainLoop()) {
+        hidScanInput();
+        if (hidKeysDown() & KEY_START) {
+            break;
+        }
+        gspWaitForVBlank();
     }
 }
 
@@ -2443,8 +2468,10 @@ int main(int argc, char **argv)
     MakeColorTable();
     LightEvent_Init(&sQuit, RESET_ONESHOT);
     CatchCrashes();
-    sScreensDirty = false;
-    DrawLogScreens();
+    /* No log on the screens at the start (ShowLogNow when something goes
+     * wrong): they stay black until the game's first frame, which sets
+     * them up for the game (sScreensDirty). */
+    sScreensDirty = true;
 
     mkdir("sdmc:/3ds", 0777);
     mkdir(DATA_DIR, 0777);
@@ -2453,17 +2480,11 @@ int main(int argc, char **argv)
 
     error = Platinum_OpenPak(PAK_PATH, MANIFEST_PATH);
     if (error != NULL) {
+        ShowLogNow();
         NitroPort_Log("Can't start: %s.", error);
         NitroPort_Log("Put platinum3ds.pak and manifest.json (made with the builder "
                       "from your own cartridge) in " DATA_DIR "/.");
-        NitroPort_Log("Press START to quit.");
-        while (aptMainLoop()) {
-            hidScanInput();
-            if (hidKeysDown() & KEY_START) {
-                break;
-            }
-            gspWaitForVBlank();
-        }
+        WaitForStart();
     } else {
         ReadProfile(&sSettings);
         sSettings.savePath = SAVE_PATH;
@@ -2499,11 +2520,12 @@ int main(int argc, char **argv)
         StartSound(priority);
         aptHook(&sAptHook, OnAptEvent, NULL);   /* (after citro3d's: called before it) */
         if (CreateThreadPatiently(GameThread, NULL, GAME_STACK_SIZE, priority, -2, true) == NULL) {
+            ShowLogNow();
             NitroPort_Log("Can't start the game's thread.");
             LogThreadTrouble("the game", GAME_STACK_SIZE, priority, -2);
+            WaitForStart();
         } else {
             Status("Running");
-            ShowLog(false);   /* the game's screens from the first frame */
             /* A step above the game's threads, so the watch below runs even
              * if the game never stops to wait. */
             svcSetThreadPriority(CUR_THREAD_HANDLE, priority - 1);
