@@ -96,11 +96,22 @@ int NitroPort_LowerMenuTall(void);
  *     is in the panel); or let go (0): it shows the game's picture again
  *     once that's as bright as what was kept (kept at full brightness, the
  *     field: once it's back and faded in; kept black, after a fade: as soon
- *     as the game's picture is black too, so a fade in shows whole).
- *     UpperHeld: the game's wish (the platforms keep the picture). */
+ *     as the game's picture is black too, so a fade in shows whole); or
+ *     let go now (NITRO_LOWERMENU_LET_GO_NOW: the game's picture from the
+ *     next frame, however bright: back without a fade, the field as it
+ *     was). UpperHeld: the game's wish (> 0 kept, 0 let go, < 0 let go
+ *     now; the platforms keep the picture). */
+#define NITRO_LOWERMENU_LET_GO_NOW (-1)
 void NitroPort_LowerMenuSetPanelTouch(int on);
 void NitroPort_LowerMenuHoldUpper(int hold);
 int NitroPort_LowerMenuUpperHeld(void);
+/* The lower screen kept as it is too (1), the menu and its panel as they
+ * are now, while the game swaps what's under them without a fade (the
+ * field going and the bag coming, the other way round: the switch looks
+ * instant); let go (0): the game's again from the next frame. LowerHeld:
+ * the game's wish (the platforms keep the picture). */
+void NitroPort_LowerMenuHoldLower(int hold);
+int NitroPort_LowerMenuLowerHeld(void);
 /* (the platforms) A screen's master brightness (the MASTER_BRIGHT
  * register's value) as -16 (black) .. 16 (white), 0 as it is. */
 int NitroPort_LowerMenuBrightness(unsigned masterBright);

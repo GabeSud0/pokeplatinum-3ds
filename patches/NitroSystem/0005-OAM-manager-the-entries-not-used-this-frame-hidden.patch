@@ -1,0 +1,34 @@
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Subject: [PATCH] OAM manager: the entries not used this frame hidden
+ (SDK_PORT_3DS)
+
+The OAM manager parks the entries it didn't use this frame at y 192,
+under the DS's screen, keeping their size, tiles and x. The 3DS port's
+lower menu shows a screen laid out 248 lines tall in its panel (the bag),
+lines 192-247 too, so the parked entries showed there: the list's red
+cursor and the bag, scrambled at the bottom whenever the bag hid them for
+a moment (switching pockets). They're hidden outright too (attr0's
+disable bit): on the DS they don't show either way.
+
+---
+diff --git a/libraries/g2d/src/g2d_OAM.c b/libraries/g2d/src/g2d_OAM.c
+index 1ca31e7..aa53890 100644
+--- a/libraries/g2d/src/g2d_OAM.c
++++ b/libraries/g2d/src/g2d_OAM.c
+@@ -9,7 +9,16 @@
+ NNS_G2D_DEFINE_NNSI_OBJSIZEWTBL;
+ NNS_G2D_DEFINE_NNSI_OBJSIZEHTBL;
+ 
++#ifdef SDK_PORT_3DS
++// The OAM entries not used this frame are parked at y 192, under the DS's
++// screen; on the 3DS port's taller lower screen (a screen laid out 248
++// lines tall: the lower menu's panel) lines 192-247 are shown, so the
++// parked entries (their size and tiles as before) showed there. They're
++// hidden outright (attr0's disable bit): on the DS they don't show either way.
++#define OAM_SETTING_INVISIBLE   (192 | 0x0200)
++#else
+ #define OAM_SETTING_INVISIBLE   192
++#endif
+ 
+ #define NUM_HW_OAM_ATTR         128
+ #define NUM_HW_OAM_AFFINE       32

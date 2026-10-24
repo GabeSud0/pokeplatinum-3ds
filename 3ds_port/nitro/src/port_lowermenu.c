@@ -29,6 +29,7 @@ static volatile int sOn;
 static volatile int sTall;          /* (NitroPort_LowerMenuSetTall) */
 static int sPanelTouch = 1;         /* (NitroPort_LowerMenuSetPanelTouch) */
 static volatile int sHoldUpper;     /* (NitroPort_LowerMenuHoldUpper) */
+static volatile int sHoldLower;     /* (NitroPort_LowerMenuHoldLower) */
 static volatile int sAvailable;     /* (NitroPort_LowerMenuSetAvailable) */
 static int sSelected = -1;          /* the game's cursor */
 static int sHeld = -1;              /* the button a finger is on */
@@ -609,16 +610,30 @@ void NitroPort_LowerMenuSetPanelTouch(int on)
 
 void NitroPort_LowerMenuHoldUpper(int hold)
 {
-    hold = hold ? 1 : 0;
+    hold = hold == NITRO_LOWERMENU_LET_GO_NOW ? NITRO_LOWERMENU_LET_GO_NOW : hold ? 1 : 0;
     if (hold != __atomic_load_n(&sHoldUpper, __ATOMIC_ACQUIRE)) {
         __atomic_store_n(&sHoldUpper, hold, __ATOMIC_RELEASE);
-        NitroPort_Log("[lowermenu] upper screen %s", hold ? "held" : "let go");
+        NitroPort_Log("[lowermenu] upper screen %s", hold > 0 ? "held" : hold < 0 ? "let go now" : "let go");
     }
 }
 
 int NitroPort_LowerMenuUpperHeld(void)
 {
     return __atomic_load_n(&sHoldUpper, __ATOMIC_ACQUIRE);
+}
+
+void NitroPort_LowerMenuHoldLower(int hold)
+{
+    hold = hold ? 1 : 0;
+    if (hold != __atomic_load_n(&sHoldLower, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&sHoldLower, hold, __ATOMIC_RELEASE);
+        NitroPort_Log("[lowermenu] lower screen %s", hold ? "held" : "let go");
+    }
+}
+
+int NitroPort_LowerMenuLowerHeld(void)
+{
+    return __atomic_load_n(&sHoldLower, __ATOMIC_ACQUIRE);
 }
 
 int NitroPort_LowerMenuBrightness(unsigned masterBright)

@@ -404,7 +404,7 @@ static void KeepUpperScreen(void)
     int wish = NitroPort_LowerMenuUpperHeld();
     int bright = NitroPort_LowerMenuBrightness((unsigned)(io[0x6C] | (io[0x6D] << 8)));
 
-    if (!sTopKept && wish) {
+    if (!sTopKept && wish > 0) {
         static uint16_t both[320 * 384];
 
         RemasterRender(both);
@@ -412,8 +412,8 @@ static void KeepUpperScreen(void)
         sTopKept = 1;
         /* (kept mid-fade: as the end of a fade nearest it) */
         sTopKeptBright = bright <= -8 ? -16 : bright >= 8 ? 16 : 0;
-    } else if (sTopKept && !wish && bright == sTopKeptBright) {
-        sTopKept = 0;
+    } else if (sTopKept && (wish < 0 || (wish == 0 && bright == sTopKeptBright))) {
+        sTopKept = 0;   /* (wish < 0: let go now) */
     }
 }
 
@@ -533,11 +533,39 @@ static void RemasterRender(uint16_t *out)
  * carried on above it, its bottom row below), sampled as the GPU samples
  * its texture of 2 x 2 texels a pixel (bilinear), the master brightness
  * over it all. */
+static void MenuRender(uint32_t *out);
+
+/* (the remaster) The lower screen kept while the game swaps the field and
+ * an app in the panel without a fade (NitroPort_LowerMenuHoldLower), as
+ * the compositor keeps it: mshot shows it. Each frame. */
+static uint32_t sKeptLower[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
+static int sLowerKept;
+
+static void KeepLowerScreen(void)
+{
+    int wish = NitroPort_LowerMenuLowerHeld();
+
+    if (!sLowerKept && wish) {
+        MenuRender(sKeptLower);
+    }
+    sLowerKept = wish;
+}
+
 static int MenuShot(const char *path)
+{
+    static uint32_t out[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
+
+    if (sLowerKept) {
+        return WritePngRgba(path, sKeptLower, NITRO_LOWERMENU_W, NITRO_LOWERMENU_H);
+    }
+    MenuRender(out);
+    return WritePngRgba(path, out, NITRO_LOWERMENU_W, NITRO_LOWERMENU_H);
+}
+
+static void MenuRender(uint32_t *out)
 {
     static uint16_t under[320 * NITRO_LOWERMENU_TALL_LINES], over[320 * 192];
     static uint8_t overAlpha[320 * 192];
-    static uint32_t out[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
     int engine = NitroPort_EngineAOnTop() ? 1 : 0;   /* the lower screen's */
     int tall = NitroPort_LowerMenuTall();             /* (drawn on below the DS's rows: the canvas's own) */
     int hasPanel;
@@ -549,7 +577,7 @@ static int MenuShot(const char *path)
         NitroPort_Log("[pc] mshot: the lower screen isn't the menu now (drawn anyway)");
     }
     pic = NitroPort_LowerMenuLockFrame(NULL);
-    memcpy(out, pic, sizeof(out));
+    memcpy(out, pic, NITRO_LOWERMENU_W * NITRO_LOWERMENU_H * sizeof(out[0]));
     hasPanel = NitroPort_LowerMenuFrameHasPanel();
     NitroPort_LowerMenuUnlockFrame();
     if (hasPanel) {
@@ -614,7 +642,6 @@ bright:
             out[y] = m;
         }
     }
-    return WritePngRgba(path, out, NITRO_LOWERMENU_W, NITRO_LOWERMENU_H);
 }
 
 /* Both screens, the upper one above the lower one. */
@@ -1249,6 +1276,7 @@ void NitroPort_OnFrame(void)
     }
     if (NitroPort_LowerMenuAvailable()) {
         KeepUpperScreen();   /* (an app in the menu's panel: the upper screen kept) */
+        KeepLowerScreen();
     }
     if (sControlDir != NULL) {
         ControlWait();

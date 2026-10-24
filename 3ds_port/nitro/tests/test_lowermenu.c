@@ -187,6 +187,17 @@ static void test_app_in_panel(void)
     CHECK(NitroPort_LowerMenuUpperHeld() == 1);
     NitroPort_LowerMenuHoldUpper(0);
     CHECK(NitroPort_LowerMenuUpperHeld() == 0);
+    NitroPort_LowerMenuHoldUpper(1);
+    NitroPort_LowerMenuHoldUpper(NITRO_LOWERMENU_LET_GO_NOW);
+    CHECK(NitroPort_LowerMenuUpperHeld() == NITRO_LOWERMENU_LET_GO_NOW);
+    NitroPort_LowerMenuHoldUpper(0);
+    CHECK(NitroPort_LowerMenuUpperHeld() == 0);
+    /* The lower screen held, the same. */
+    CHECK(NitroPort_LowerMenuLowerHeld() == 0);
+    NitroPort_LowerMenuHoldLower(1);
+    CHECK(NitroPort_LowerMenuLowerHeld() == 1);
+    NitroPort_LowerMenuHoldLower(0);
+    CHECK(NitroPort_LowerMenuLowerHeld() == 0);
     /* How bright a screen is, from its MASTER_BRIGHT. */
     CHECK(NitroPort_LowerMenuBrightness(0) == 0);
     CHECK(NitroPort_LowerMenuBrightness(0x8010) == -16);   /* black */

@@ -617,14 +617,42 @@ screens) the lower screen is the DS's, filling the screen as before.
   The bag's touch screen isn't shown, so the panel's touches are nobody's
   (`NitroPort_LowerMenuSetPanelTouch`). With `--classic-menu` (or no menu)
   the bag is as before, across the wider upper screen.
-- **The upper screen held** (`NitroPort_LowerMenuHoldUpper`): while an app
-  is in the panel, the upper screen keeps the field. The start menu holds
-  it before the bag's fade, so only the lower screen fades; the bag holds
-  it too (opened after a fade, it holds black). Let go, the game's upper
-  picture shows again once it's as bright as what was kept: back in the
-  field, at the end of its fade in (seamless); kept black, at once. The 3DS
-  doesn't draw the upper screen while it's kept (what's on its LCD stays);
-  the PC runner's `rshot` shows what's kept.
+- **The bag like a window** (`patches/pokeplatinum/0035`): BAG brings
+  the bag up at once, without a fade, and B (or CLOSE BAG) puts it away
+  the same way: both screens keep what they show (the field and the menu,
+  BAG lit) while the field goes and the bag comes, and show the bag whole
+  two frames after it's there; back, the bag stays till the field's been
+  drawn three frames, then the field shows as it was, the menu still open
+  on BAG. While the item list waits, the menu's other buttons work (with
+  its sound): BAG puts the bag away and closes the menu; POKéMON, TRAINER,
+  POKéDEX and OPTIONS open straight from the bag (both screens black at
+  once, as the DS's fade out leaves them, then the app's own fade in);
+  SAVE, MAP and POKéTCH are acted on back in the field. A tap while the
+  bag's busy (an item's menu, a message, moving an item) is nobody's.
+  Leaving another way (an item used, given, a Berry's tag) is the DS's
+  fade out; the bag opened again after that comes with fades too, and its
+  menu buttons close it with a fade. (The start menu hands the bag a flag,
+  `gStartMenuPortInstantApp`, and the bag hands back the button tapped,
+  `gStartMenuPortAppPress`: the menu forgets its own press when it goes
+  off.) With `--classic-menu` the bag's the DS's.
+- **The screens held** (`NitroPort_LowerMenuHoldUpper`,
+  `NitroPort_LowerMenuHoldLower`): while an app is in the panel, the upper
+  screen keeps the field. Let go (0), the game's upper picture shows again
+  once it's as bright as what was kept: back in the field after a fade, at
+  the end of its fade in (seamless); kept black (the bag opened after a
+  fade), at once. Let go now (`NITRO_LOWERMENU_LET_GO_NOW`), it shows the
+  game's picture from the next frame however bright (back without a fade).
+  The lower screen is held only while the bag and the field swap without
+  a fade, and let go at once. The 3DS doesn't draw a screen while it's
+  kept (what's on its LCD stays); drawn again regardless (back from the
+  HOME menu), it's black. The PC runner's `rshot` and `mshot` show what's
+  kept.
+- **The OAM entries not used** (`patches/NitroSystem/0005`): NitroSystem's
+  OAM manager parks the entries not used in a frame at line 192, just
+  under the DS's screen. Tall, line 192 shows: switching the bag's pockets
+  left stray pieces of sprites there (red lines, scrambled icons). They're
+  hidden outright now (the entry's disable bit), as they always were on
+  the DS.
 - **Touch:** a touch that begins in the panel is the game's, at the DS's
   pixel there (dragged out of the panel, the nearest pixel of it); one that
   begins on a button that can be used shows it pressed, and letting go on
