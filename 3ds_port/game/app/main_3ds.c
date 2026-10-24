@@ -1213,6 +1213,20 @@ static void ShowLogNow(void)
     }
 }
 
+/* (before the game's first frame: the log on the screens) until the player
+ * presses START, or closes the program from the HOME menu. */
+static void WaitForStart(void)
+{
+    NitroPort_Log("Press START to quit.");
+    while (aptMainLoop()) {
+        hidScanInput();
+        if (hidKeysDown() & KEY_START) {
+            break;
+        }
+        gspWaitForVBlank();
+    }
+}
+
 static void Status(const char *fmt, ...)
 {
     va_list args;
@@ -2470,14 +2484,7 @@ int main(int argc, char **argv)
         NitroPort_Log("Can't start: %s.", error);
         NitroPort_Log("Put platinum3ds.pak and manifest.json (made with the builder "
                       "from your own cartridge) in " DATA_DIR "/.");
-        NitroPort_Log("Press START to quit.");
-        while (aptMainLoop()) {
-            hidScanInput();
-            if (hidKeysDown() & KEY_START) {
-                break;
-            }
-            gspWaitForVBlank();
-        }
+        WaitForStart();
     } else {
         ReadProfile(&sSettings);
         sSettings.savePath = SAVE_PATH;
@@ -2516,6 +2523,7 @@ int main(int argc, char **argv)
             ShowLogNow();
             NitroPort_Log("Can't start the game's thread.");
             LogThreadTrouble("the game", GAME_STACK_SIZE, priority, -2);
+            WaitForStart();
         } else {
             Status("Running");
             /* A step above the game's threads, so the watch below runs even
