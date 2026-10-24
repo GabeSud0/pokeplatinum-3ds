@@ -29,15 +29,18 @@ static void test_panel_mapping(void)
      * canvas's first 27 rows are its top row carried on). */
     CHECK(NitroPort_LowerMenuPanelAt(3, 4, &x, &y) == 1);
     CHECK(x == 0 && y == 0);
-    /* The DS's row 0 starts at canvas row 27: 4 + 27 * 232 / 247 = 29.4. */
-    CHECK(NitroPort_LowerMenuPanelAt(3, 30, &x, &y) == 1 && y == 0);
-    CHECK(NitroPort_LowerMenuPanelAt(3, 31, &x, &y) == 1 && y == 1);
-    /* The middle: (123, 120) is canvas (128, 123), the DS's (128, 96). */
+    /* Each screen pixel's middle: the DS's row 0 starts at canvas row 27,
+     * at y 4 + 27 * 232 / 247 = 29.4, so pixel row 29's middle (29.5) is in
+     * it and row 28's isn't. */
+    CHECK(NitroPort_LowerMenuPanelAt(3, 28, &x, &y) == 1 && y == 0);   /* (the strap: the top row) */
+    CHECK(NitroPort_LowerMenuPanelAt(3, 29, &x, &y) == 1 && y == 0);
+    CHECK(NitroPort_LowerMenuPanelAt(3, 30, &x, &y) == 1 && y == 1);
+    /* The middle: (123, 120)'s middle is canvas (128.5, 124.0), the DS's (128, 97). */
     CHECK(NitroPort_LowerMenuPanelAt(123, 120, &x, &y) == 1);
-    CHECK(x == 128 && y == 96);
-    /* The bottom right: the DS's bottom row. */
+    CHECK(x == 128 && y == 97);
+    /* The bottom right: the DS's last column and bottom row. */
     CHECK(NitroPort_LowerMenuPanelAt(242, 235, &x, &y) == 1);
-    CHECK(x == 254 && y == 191);
+    CHECK(x == 255 && y == 191);
     /* Outside it: the frame, the column. */
     CHECK(NitroPort_LowerMenuPanelAt(2, 100, &x, &y) == 0);
     CHECK(NitroPort_LowerMenuPanelAt(243, 100, &x, &y) == 0);
@@ -74,8 +77,15 @@ static void test_touches(void)
     NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
     CHECK(NitroPort_LowerMenuTakePress() == -1);
 
+    /* On with a finger already down (from the screen before): nobody's
+     * touch until it's let go, not a press. */
+    NitroPort_LowerMenuTouch(1, 280, bagY, &x, &y);
     NitroPort_LowerMenuShow(1);
     CHECK(NitroPort_LowerMenuOn() == 1);
+    CHECK(NitroPort_LowerMenuTouch(1, 280, bagY, &x, &y) == 0);
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 0);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
     /* A button: pressed while held, a press when let go on it. */
     CHECK(NitroPort_LowerMenuTouch(1, 280, bagY, &x, &y) == 0);
     CHECK(NitroPort_LowerMenuTakePress() == -1);
@@ -91,9 +101,9 @@ static void test_touches(void)
     /* Begun in the panel: the game's all the way, even dragged onto the
      * buttons (the panel's nearest pixel); no press. */
     CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 1);
-    CHECK(x == 128 && y == 96);
+    CHECK(x == 128 && y == 97);
     CHECK(NitroPort_LowerMenuTouch(1, 280, bagY, &x, &y) == 1);
-    CHECK(x == 254);
+    CHECK(x == 255);
     NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
     CHECK(NitroPort_LowerMenuTakePress() == -1);
     /* Begun on the frame off the buttons: nothing. */
@@ -108,6 +118,7 @@ static void test_picture(void)
     const int x = 311, y = 3 + 23 * NITRO_LOWERMENU_SAVE + 8;   /* the SAVE button, right of its name */
 
     NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
     NitroPort_LowerMenuSelect(-1);
     /* The frame's light top-left edge, the panel's navy outline. */
     CHECK(pixel(0, 0) == 0xFCFDFDFFu);

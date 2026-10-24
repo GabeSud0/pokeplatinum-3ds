@@ -338,12 +338,13 @@ GX3D_PLUMBING_TEST_BIN := $(OUT)/test_gx3d_plumbing
 $(GX3D_PLUMBING_TEST_BIN): tests/test_gx3d_plumbing.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
 
-# The pixel-art upscaler and texture tiler: plain C, no SDK.
+# The lower screen as a menu: its drawing and its touches (port_lowermenu.c).
 LOWERMENU_TEST_BIN := $(OUT)/test_lowermenu
 $(LOWERMENU_TEST_BIN): tests/test_lowermenu.c $(LIB)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
 
+# The pixel-art upscaler and texture tiler: plain C, no SDK.
 UPSCALE_TEST_BIN := $(OUT)/test_upscale
 $(UPSCALE_TEST_BIN): tests/test_upscale.c src/port_upscale.c include/nitro_port_upscale.h
 	@mkdir -p $(dir $@)

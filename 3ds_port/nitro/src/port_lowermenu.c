@@ -13,6 +13,7 @@
 #include <nitro_port_lowermenu.h>
 #include <nitro_port_fs.h>
 #include <nitro_port.h>
+#include "port_platform.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -26,7 +27,10 @@ static volatile int sOn;
 static int sSelected = -1;          /* the game's cursor */
 static int sHeld = -1;              /* the button a finger is on */
 static int sFemale;
-static int sTouchIn = -1;           /* the touch began: -1 none, 0 on the frame, 1 in the panel */
+/* The touch began: -1 none, 0 on the frame, 1 in the panel, 2 before the
+ * menu came on (nobody's until it's let go: a finger still down from the
+ * screen before isn't a press). */
+static int sTouchIn = -1;
 static int sTouchButton = -1;       /* (the button it began on) */
 static volatile int sPress = -1;    /* a press, not taken yet */
 
@@ -35,9 +39,19 @@ static uint32_t sDraw[W * H];       /* (drawn here, then copied over) */
 static volatile uint32_t sSerial;
 static volatile int sLock;
 
+/* (spinning a little, then sleeping: the game's thread and the display
+ * thread share a core, the display thread at a lower priority; an endless
+ * spin by the game's thread would never let it finish and let go, as in
+ * port_gx3d_mailbox.c) */
 static void lock(void)
 {
+    unsigned spins = 0;
+
     while (__atomic_test_and_set(&sLock, __ATOMIC_ACQUIRE)) {
+        if (++spins >= 64u) {
+            NitroPortPlatform_Sleep(50);
+            spins = 0;
+        }
     }
 }
 
@@ -273,30 +287,35 @@ static const uint8_t *narc_member(const uint8_t *narc, uint32_t size, int index,
 {
     uint32_t p, fatSize, count, gmif, start, end;
 
+    /* (every check by subtraction: the sizes are the file's, not to be
+     * trusted, and a sum could wrap past the check) */
     if (size < 16 || memcmp(narc, "NARC", 4) != 0) {
         return NULL;
     }
     p = rd16(narc + 12);
-    if (p + 12 > size || memcmp(narc + p, "BTAF", 4) != 0) {
+    if (p > size - 12 || memcmp(narc + p, "BTAF", 4) != 0) {
         return NULL;
     }
     fatSize = rd32(narc + p + 4);
     count = rd16(narc + p + 8);
-    if ((uint32_t)index >= count || p + 12 + 8 * count > size) {
+    if ((uint32_t)index >= count || 8u * count > size - p - 12) {
         return NULL;
     }
     start = rd32(narc + p + 12 + 8 * (uint32_t)index);
     end = rd32(narc + p + 16 + 8 * (uint32_t)index);
+    if (fatSize > size - p) {
+        return NULL;
+    }
     p += fatSize;   /* the file names */
-    if (p + 8 > size || memcmp(narc + p, "BTNF", 4) != 0) {
+    if (p > size - 8 || memcmp(narc + p, "BTNF", 4) != 0 || rd32(narc + p + 4) > size - p) {
         return NULL;
     }
     p += rd32(narc + p + 4);
-    if (p + 8 > size || memcmp(narc + p, "GMIF", 4) != 0) {
+    if (p > size - 8 || memcmp(narc + p, "GMIF", 4) != 0) {
         return NULL;
     }
     gmif = p + 8;
-    if (end < start || gmif + end > size) {
+    if (end < start || end > size - gmif) {
         return NULL;
     }
     *memberSize = end - start;
@@ -314,14 +333,14 @@ static const uint8_t *nitro_block(const uint8_t *file, uint32_t size, const char
     }
     p = rd16(file + 12);
     n = rd16(file + 14);
-    for (i = 0; i < n && p + 8 <= size; i++) {
+    for (i = 0; i < n && p <= size - 8; i++) {
         uint32_t len = rd32(file + p + 4);
 
         if (memcmp(file + p, magic, 4) == 0) {
-            *blockSize = len < 8 || p + len > size ? size - p - 8 : len - 8;
+            *blockSize = len < 8 || len > size - p ? size - p - 8 : len - 8;
             return file + p + 8;
         }
-        if (len < 8) {
+        if (len < 8 || len > size - p) {
             break;
         }
         p += len;
@@ -605,7 +624,7 @@ static void redraw(void)
     draw();
     lock();
     memcpy(sPicture, sDraw, sizeof(sPicture));
-    sSerial++;
+    __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
     unlock();
 }
 
@@ -618,7 +637,7 @@ void NitroPort_LowerMenuShow(int on)
         read_icons();
     }
     if (on != sOn) {
-        sTouchIn = -1;
+        sTouchIn = on ? 2 : -1;   /* (a finger still down: nobody's until let go) */
         sHeld = -1;
         sPress = -1;
         if (on) {
@@ -626,9 +645,7 @@ void NitroPort_LowerMenuShow(int on)
         }
         __atomic_store_n(&sOn, on, __ATOMIC_RELEASE);
         if (!on) {
-            lock();
-            sSerial++;
-            unlock();
+            __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
         }
         NitroPort_Log("[lowermenu] %s", on ? "on" : "off");
     }
@@ -711,10 +728,10 @@ int NitroPort_LowerMenuPanelAt(int x, int y, int *dsX, int *dsY)
         y < NITRO_LOWERMENU_PANEL_Y0 || y >= NITRO_LOWERMENU_PANEL_Y0 + NITRO_LOWERMENU_PANEL_H) {
         return 0;
     }
-    /* The canvas's pixel there, then the DS's (the canvas rows outside the
-     * DS's 192 to its top or bottom row). */
-    cx = (x - NITRO_LOWERMENU_PANEL_X0) * NITRO_LOWERMENU_CANVAS_W / NITRO_LOWERMENU_PANEL_W;
-    cy = (y - NITRO_LOWERMENU_PANEL_Y0) * NITRO_LOWERMENU_CANVAS_H / NITRO_LOWERMENU_PANEL_H;
+    /* The canvas's pixel under the screen pixel's middle, then the DS's
+     * (the canvas rows outside the DS's 192 to its top or bottom row). */
+    cx = (2 * (x - NITRO_LOWERMENU_PANEL_X0) + 1) * NITRO_LOWERMENU_CANVAS_W / (2 * NITRO_LOWERMENU_PANEL_W);
+    cy = (2 * (y - NITRO_LOWERMENU_PANEL_Y0) + 1) * NITRO_LOWERMENU_CANVAS_H / (2 * NITRO_LOWERMENU_PANEL_H);
     cy -= NITRO_LOWERMENU_DS_ROW0;
     if (dsX) {
         *dsX = cx;
@@ -740,6 +757,8 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
         sTouchIn = -1;
         sTouchButton = -1;
         held = -1;
+    } else if (sTouchIn == 2) {
+        return 0;   /* (down since before the menu came on) */
     } else if (sTouchIn < 0) {
         /* A new touch: the panel's (the game's, all the way), or the frame's. */
         if (NitroPort_LowerMenuPanelAt(x, y, NULL, NULL)) {

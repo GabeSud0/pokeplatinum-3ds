@@ -2259,10 +2259,11 @@ void NitroPort_OnFrame(void)
      * captures, docs/WIDE_ART.md. Looking for their screens a few times a
      * second, and the sharing itself, cost frames, 2026-10-20.) */
     Platinum_SetButtons(DsButtons(held));
-    if (sRemaster && NitroPort_LowerMenuOn()) {
-        /* The lower screen as the menu (nitro_port_lowermenu.h): a touch
-         * that begins in its panel is the game's, at the DS's pixel there;
-         * one on the frame presses its buttons. */
+    if (sRemaster && NitroPort_LowerMenuOn() && NitroPort_ComposeLowerMenuShown()) {
+        /* The lower screen as the menu (nitro_port_lowermenu.h), as it's
+         * shown (not while the compositor shows the DS's screen instead):
+         * a touch that begins in its panel is the game's, at the DS's
+         * pixel there; one on the frame presses its buttons. */
         touchPosition touch;
         int x = 0, y = 0;
 

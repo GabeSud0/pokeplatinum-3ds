@@ -818,6 +818,9 @@ static void ControlWait(void)
                     NitroPort_Log("[pc] control: unknown buttons %s", arg);
                 }
             } else if (sscanf(line, "touch %ld %ld %ld", &a, &b, &c) >= 2) {
+                if (sLiveTouchMenu) {
+                    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);   /* (an mtouch let go) */
+                }
                 sLiveTouchX = (int)a;
                 sLiveTouchY = (int)b;
                 sLiveTouchUntil = sFrame + (c > 0 ? c : 6);
@@ -1204,12 +1207,16 @@ void NitroPort_OnFrame(void)
         }
     } else if (sFrame < sLiveTouchUntil) {
         Platinum_SetTouch(1, sLiveTouchX, sLiveTouchY);
-    } else if (sTouchCount > 0 || sLiveTouchUntil >= 0) {
-        if (sLiveTouchMenu) {
+    } else {
+        /* No finger on the menu: told every frame, as the 3DS does (a
+         * finger down as the menu came on counts once it's let go). */
+        if (NitroPort_LowerMenuOn()) {
             NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
-            sLiveTouchMenu = 0;
         }
-        ApplyTouch(sFrame);
+        sLiveTouchMenu = 0;
+        if (sTouchCount > 0 || sLiveTouchUntil >= 0) {
+            ApplyTouch(sFrame);
+        }
     }
 }
 

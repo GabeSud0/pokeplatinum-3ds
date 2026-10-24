@@ -173,6 +173,7 @@ static void *sMenuTexData[2];
 static C3D_Tex sMenuTex;
 static int sMenuTexCur = -1;
 static uint32_t sMenuTexSerial;
+static uint32_t sMenuCopy[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
 static uint16_t sMenu565[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
 static int sMenuNow;              /* (the screen being drawn is the menu) */
 static void *sEdgeDepth[4];       /* 240 x 400 D24S8, a direction each, shared by the screens */
@@ -700,19 +701,6 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
                           s ? "lower" : "upper");
         }
     }
-    /* The lower screen as the menu: without the memory for its picture,
-     * the lower screen stays the DS's, filling the screen. */
-    for (i = 0; i < 2; i++) {
-        sMenuTexData[i] = linearAlloc((size_t)MENU_TEX_W * MENU_TEX_H * 2u);
-        if (!sMenuTexData[i]) {
-            NitroPort_Log("[compose] no linear memory for the lower screen's menu: the DS's lower screen instead");
-            if (i == 1) {
-                linearFree(sMenuTexData[0]);
-                sMenuTexData[0] = NULL;
-            }
-            break;
-        }
-    }
     NitroPort_PicaEdgePruning(config->edges == 2);
     NitroPort_PicaEdgeCopy(config->edges != 3);
     if (config->edges) {
@@ -793,6 +781,20 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     if (!NitroPort_PicaFramesInit()) {
         NitroPort_Log("[compose] not enough memory for a second command list");
         goto fail;
+    }
+    /* The lower screen as the menu, after everything the display needs:
+     * without the memory for its picture, the lower screen stays the DS's,
+     * filling the screen. */
+    for (i = 0; i < 2; i++) {
+        sMenuTexData[i] = linearAlloc((size_t)MENU_TEX_W * MENU_TEX_H * 2u);
+        if (!sMenuTexData[i]) {
+            NitroPort_Log("[compose] no linear memory for the lower screen's menu: the DS's lower screen instead");
+            if (i == 1) {
+                linearFree(sMenuTexData[0]);
+                sMenuTexData[0] = NULL;
+            }
+            break;
+        }
     }
     sGxRecording = 0;
     sFlight = 0;
@@ -1659,7 +1661,6 @@ static void tint_3d(const ComposeLayers *info, const PicaRect *rect)
     }
 }
 
-/* One screen (one eye of it), into its render target. */
 /* The master brightness: the whole screen towards white or black by
  * factor / 16 (the menu's frame too, on the lower screen: it fades with
  * the game's). */
@@ -1678,6 +1679,11 @@ static void master_brightness(const Screen *scr, const ComposeLayers *info)
     }
 }
 
+int NitroPort_ComposeLowerMenuShown(void)
+{
+    return __atomic_load_n(&sScreens[1].shownMenu, __ATOMIC_ACQUIRE);
+}
+
 /* The menu's picture into the texture not used last, when it's changed. */
 static void menu_texture(void)
 {
@@ -1688,13 +1694,16 @@ static void menu_texture(void)
     if (sMenuTexCur >= 0 && NitroPort_LowerMenuSerial() == sMenuTexSerial) {
         return;
     }
+    /* (copied under the lock, converted after it: the game's thread waits
+     * on it for as little as can be) */
     pic = NitroPort_LowerMenuLockFrame(&serial);
+    memcpy(sMenuCopy, pic, sizeof(sMenuCopy));
+    NitroPort_LowerMenuUnlockFrame();
     for (i = 0; i < NITRO_LOWERMENU_W * NITRO_LOWERMENU_H; i++) {
-        uint32_t c = pic[i];
+        uint32_t c = sMenuCopy[i];
 
         sMenu565[i] = (uint16_t)(((c >> 27) << 11) | (((c >> 18) & 63u) << 5) | ((c >> 11) & 31u));
     }
-    NitroPort_LowerMenuUnlockFrame();
     sMenuTexCur = sMenuTexCur == 0 ? 1 : 0;
     NitroPort_Tile16(sMenu565, NITRO_LOWERMENU_W, NITRO_LOWERMENU_H, sMenuTexData[sMenuTexCur], MENU_TEX_W);
     GSPGPU_FlushDataCache(sMenuTexData[sMenuTexCur], (u32)MENU_TEX_W * NITRO_LOWERMENU_H * 2u);
@@ -1715,12 +1724,20 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
     float row = (vTop - vBottom) / (float)DS_H;   /* a DS row, in v */
     float vRow0 = vTop - 0.5f * row, vRowLast = vBottom + 0.5f * row;
 
+    float mTop = 1.0f, mBottom = 1.0f - (float)NITRO_LOWERMENU_H / MENU_TEX_H;
+
+    if (sConfig.flipV) {   /* (as the DS's pictures: see the flip setting) */
+        float t = mTop;
+
+        mTop = mBottom;
+        mBottom = t;
+    }
     menu_texture();
     make_texture(&sMenuTex, sMenuTexData[sMenuTexCur], GPU_RGB565, MENU_TEX_W, MENU_TEX_H, 0, GPU_CLAMP_TO_EDGE);
     C3D_TexBind(0, &sMenuTex);
     quad_combiner(1);
-    quad(0, 0, NITRO_LOWERMENU_W, NITRO_LOWERMENU_H, 0.0f, 0, 1.0f, (float)NITRO_LOWERMENU_W / MENU_TEX_W,
-         1.0f - (float)NITRO_LOWERMENU_H / MENU_TEX_H, 0xFFFFFFFFu);
+    quad(0, 0, NITRO_LOWERMENU_W, NITRO_LOWERMENU_H, 0.0f, 0, mTop, (float)NITRO_LOWERMENU_W / MENU_TEX_W, mBottom,
+         0xFFFFFFFFu);
     make_texture(&sUnderTex, set->under, GPU_RGB565, scr->texW, scr->texH, linear, GPU_CLAMP_TO_EDGE);
     C3D_TexBind(0, &sUnderTex);
     quad(x0, y0, x1, yA, 0.0f, 0, vRow0, u1, vRow0, 0xFFFFFFFFu);
@@ -1728,6 +1745,7 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
     quad(x0, yB, x1, yEnd, 0.0f, 0, vRowLast, u1, vRowLast, 0xFFFFFFFFu);
 }
 
+/* One screen (one eye of it), into its render target. */
 static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx3dScene *scene, float stereo,
                         int edges, int underCleared)
 {
@@ -2428,7 +2446,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             sMenuNow = 0;
         }
         scr->shownSeq = sets[s]->seq;
-        scr->shownMenu = menu[s];
+        __atomic_store_n(&scr->shownMenu, menu[s], __ATOMIC_RELEASE);
         scr->shownMenuSerial = menuSerial;
         if (screen3d && !mid) {   /* (an in-between scene: its scene's still to come) */
             scr->shownScene = sceneSerial;
