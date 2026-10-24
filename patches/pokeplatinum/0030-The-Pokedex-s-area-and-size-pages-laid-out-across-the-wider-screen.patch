@@ -1,0 +1,174 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 23:00:00 -0700
+Subject: [PATCH] =?UTF-8?q?The=20Pok=C3=A9dex's=20area=20and=20size=20page?=
+ =?UTF-8?q?s=20laid=20out=20across=20the=20wider=20screen=20(SDK=5FPORT=5F?=
+ =?UTF-8?q?3DS)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+As the info page's picture has it (2026-10-23): the header bar on to the
+screen's edges, and the background's pattern beside the DS's screen
+(8 pixels wide: copies of the plain columns at its right end, 248-255,
+which nothing on these pages reaches). The area page, the height check
+and the weight check.
+---
+ src/applications/pokedex/ov21_021DC9BC.c      | 28 +++++++++++++++++++
+ src/applications/pokedex/ov21_021E737C.c      | 28 +++++++++++++++++++
+ .../pokedex/pokedex_height_check.c            | 28 +++++++++++++++++++
+ 3 files changed, 84 insertions(+)
+
+diff --git a/src/applications/pokedex/ov21_021DC9BC.c b/src/applications/pokedex/ov21_021DC9BC.c
+index 2d9949b1..1716bf55 100644
+--- a/src/applications/pokedex/ov21_021DC9BC.c
++++ b/src/applications/pokedex/ov21_021DC9BC.c
+@@ -32,6 +32,28 @@
+ #include "res/graphics/pokedex/zukan.naix"
+ #include "res/text/bank/pokedex.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++
++// The area page on the wider screen, as the info page's picture has it
++// (2026-10-23): the header bar on to the edges, the background's pattern
++// (8 pixels wide, its right end's plain columns) beside the DS's screen.
++static const short sPokedexAreaWideLayout[][8] = {
++    WIDE_MOVE(WIDE_BG(2), 0, 17, 0, 256, 0),
++    WIDE_FILL(WIDE_BG(2), 0, 17, -32, 0, 0),
++    WIDE_FILL(WIDE_BG(2), 0, 17, 256, 288, 255),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 0, 256, 0),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, -280),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, -272),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, -264),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, -256),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, 8),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, 16),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, 24),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, 32),
++};
++#endif
++
+ #define TERMINALVALUE      0xffff
+ #define POKEDEXMAPXSCALE   5
+ #define POKEDEXMAPYSCALE   5
+@@ -477,10 +499,16 @@ static void ov21_021DCDD0(PokedexMapDisplay *mapDisplay, UnkStruct_ov21_021DCAE0
+     ov21_021DD2E0(mapDisplay, param1, param2, heapID);
+     ov21_021DDA48(mapDisplay, param2->encounterTime);
+     ov21_021DDCF4(param1, param2);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sPokedexAreaWideLayout);
++#endif
+ }
+ 
+ static void ov21_021DCE20(PokedexMapDisplay *mapDisplay, UnkStruct_ov21_021DCAE0 *param1)
+ {
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++#endif
+     ov21_021DD6C0(mapDisplay, param1);
+     ov21_021DD3FC(mapDisplay);
+     PokedexMapDisplay_DeleteCellActors(mapDisplay);
+diff --git a/src/applications/pokedex/ov21_021E737C.c b/src/applications/pokedex/ov21_021E737C.c
+index c044ff53..bce61893 100644
+--- a/src/applications/pokedex/ov21_021E737C.c
++++ b/src/applications/pokedex/ov21_021E737C.c
+@@ -37,6 +37,28 @@
+ #include "res/graphics/pokedex/zukan.naix"
+ #include "res/text/bank/pokedex.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++
++// The weight check page on the wider screen, as the area page's layout
++// (ov21_021DC9BC.c): the header bar on to the edges, the background's
++// pattern (8 pixels wide; its plain right end, 248-255) beside the DS's screen.
++static const short sPokedexWeightCheckWideLayout[][8] = {
++    WIDE_MOVE(WIDE_BG(2), 0, 17, 0, 256, 0),
++    WIDE_FILL(WIDE_BG(2), 0, 17, -32, 0, 0),
++    WIDE_FILL(WIDE_BG(2), 0, 17, 256, 288, 255),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 0, 256, 0),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, -280),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, -272),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, -264),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, -256),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, 8),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, 16),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, 24),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, 32),
++};
++#endif
++
+ typedef struct {
+     int unk_00;
+     BOOL unk_04;
+@@ -501,6 +523,9 @@ static void ov21_021E7800(UnkStruct_ov21_021E7714 *param0, UnkStruct_ov21_021E74
+     ov21_021E7904(param0, param1, param2, heapID);
+     ov21_021E7B34(param0, param1, param2, heapID);
+     ov21_021E7CF0(param0, param1, param2, heapID);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sPokedexWeightCheckWideLayout);
++#endif
+ 
+     SoftwareSprite_SetRotation(param1->unk_0C, 0);
+     SoftwareSprite_SetVisible(param1->unk_0C, 1);
+@@ -508,6 +533,9 @@ static void ov21_021E7800(UnkStruct_ov21_021E7714 *param0, UnkStruct_ov21_021E74
+ 
+ static void ov21_021E785C(UnkStruct_ov21_021E7714 *param0, UnkStruct_ov21_021E747C *param1)
+ {
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++#endif
+     ov21_021E7CF4(param0);
+     ov21_021E7CCC(param0);
+     ov21_021E7AA0(param0, param1);
+diff --git a/src/applications/pokedex/pokedex_height_check.c b/src/applications/pokedex/pokedex_height_check.c
+index d0c12968..883fc03d 100644
+--- a/src/applications/pokedex/pokedex_height_check.c
++++ b/src/applications/pokedex/pokedex_height_check.c
+@@ -33,6 +33,28 @@
+ #include "res/graphics/pokedex/zukan.naix"
+ #include "res/text/bank/pokedex.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++
++// The height check page on the wider screen, as the area page's layout
++// (ov21_021DC9BC.c): the header bar on to the edges, the background's
++// pattern (8 pixels wide; its plain right end, 248-255) beside the DS's screen.
++static const short sPokedexHeightCheckWideLayout[][8] = {
++    WIDE_MOVE(WIDE_BG(2), 0, 17, 0, 256, 0),
++    WIDE_FILL(WIDE_BG(2), 0, 17, -32, 0, 0),
++    WIDE_FILL(WIDE_BG(2), 0, 17, 256, 288, 255),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 0, 256, 0),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, -280),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, -272),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, -264),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, -256),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, 8),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, 16),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, 24),
++    WIDE_MOVE(WIDE_BG(3), 0, 192, 248, 256, 32),
++};
++#endif
++
+ typedef struct {
+     int *unk_00;
+     PokedexSortData *unk_04;
+@@ -307,10 +329,16 @@ static void DisplayHeightCheck(HeightCheckVisuals *heightCheckVisuals, PokedexGr
+     DisplayTrainerHeight(heightCheckVisuals, param1, param2, heapID);
+     DummyForMatching2(heightCheckVisuals, param1, param2, heapID);
+     DisplaySpeciesHeight(param1, param2);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sPokedexHeightCheckWideLayout);
++#endif
+ }
+ 
+ static void FreeVisuals(HeightCheckVisuals *heightCheckVisuals, PokedexGraphicData **param1)
+ {
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++#endif
+     DummyForMatching3(heightCheckVisuals);
+     FreeTrainerHeight(heightCheckVisuals);
+     FreeSprites(heightCheckVisuals, param1);
