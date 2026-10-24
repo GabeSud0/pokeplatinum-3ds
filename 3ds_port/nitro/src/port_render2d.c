@@ -2875,6 +2875,14 @@ static BOOL InRange(int v, int lo, int hi)
  * picture are in it too). */
 static void FillRange(u8 *enable, int lo, int hi, u8 value, int origin, int width, BOOL toEdge)
 {
+    /* An empty window (lo = hi: the circle wipes' lines past the circle are
+     * 0-0) covers nothing, the bands beside the DS's picture included: a
+     * window from x 0 reaches the left edge only when it covers x 0. (The
+     * Town Map's circle closing left its blue side bars showing in the
+     * bands, 2026-10-24.) */
+    if (lo == hi) {
+        return;
+    }
     /* (the wider canvas, or toEdge: NitroRender2DSplit.windowsToEdge) A
      * window a pixel short of an edge is at it: games cover the screen
      * with 0-255 (the right end is exclusive, and 256 doesn't fit in the

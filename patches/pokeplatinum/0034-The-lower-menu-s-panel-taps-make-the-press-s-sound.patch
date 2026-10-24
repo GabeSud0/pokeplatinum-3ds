@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 06:00:00 -0700
+Subject: [PATCH] The lower menu's panel taps make the press's sound
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+With the menu closed, a tap on POKéTCH, or on MAP with the Pokétch
+shown, only switches the 3DS remaster's lower menu's panel, and made no
+sound. They make the press's sound now, as the same buttons do with the
+menu open (StartMenu_PortSelect).
+---
+ src/start_menu.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/start_menu.c b/src/start_menu.c
+index d8c7456d..c8d64836 100644
+--- a/src/start_menu.c
++++ b/src/start_menu.c
+@@ -2379,9 +2379,11 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
+         return FALSE;
+     }
+ 
+-    // POKéTCH: the panel shows the Pokétch, the menu stays closed.
++    // POKéTCH: the panel shows the Pokétch, the menu stays closed (the
++    // press's sound, as in the menu).
+     if (button == PORT_BUTTON_POKETCH) {
+         NitroPort_LowerMenuTakePress();
++        Sound_PlayEffect(SE_CONFIRM_sseq_3);
+         sPortPanelChoice = PORT_PANEL_DS;
+         StartMenu_PortShowPanel(fieldSystem);
+         return FALSE;
+@@ -2393,6 +2395,7 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
+     if (button == PORT_BUTTON_MAP && NitroPort_LowerMenuPanel() != PORT_PANEL_MAP) {
+         if (StartMenu_PortChooseMap(fieldSystem)) {
+             NitroPort_LowerMenuTakePress();
++            Sound_PlayEffect(SE_CONFIRM_sseq_3);
+             return FALSE;
+         }
+     }
+-- 
+2.43.0
+
