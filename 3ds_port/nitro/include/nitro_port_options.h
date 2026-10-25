@@ -39,8 +39,9 @@ void NitroPort_OptionsSetListener(void (*listener)(int id, int value));
 /* The file read (a missing one: the defaults), its path kept for saving.
  * 1 if it was read. */
 int NitroPort_OptionsLoad(const char *path);
-/* Written if anything changed since (to a new file put in its place). 1 if
- * written or nothing to write. */
+/* Written if anything changed since (to a new file put in its place): the
+ * settings chosen on the page or read from the file, the others left to
+ * their defaults. 1 if written or nothing to write. */
 int NitroPort_OptionsSave(void);
 
 #endif

@@ -24,8 +24,8 @@ when the game starts. Without the menu it's the DS's options screen.
  platinum.us/main.lsf               |   1 +
  src/meson.build                    |   1 +
  src/overlay005/options_panel.c     | 943 +++++++++++++++++++++++++++++
- src/start_menu.c                   | 161 ++++-
- 6 files changed, 1125 insertions(+), 8 deletions(-)
+ src/start_menu.c                   | 162 ++++-
+ 6 files changed, 1126 insertions(+), 8 deletions(-)
  create mode 100644 include/overlay005/options_panel.h
  create mode 100644 src/overlay005/options_panel.c
 
@@ -1047,7 +1047,7 @@ index 00000000..33ae121f
 +}
 +#endif
 diff --git a/src/start_menu.c b/src/start_menu.c
-index f492ba10..4f0a7a70 100644
+index f492ba10..3eec0d5a 100644
 --- a/src/start_menu.c
 +++ b/src/start_menu.c
 @@ -22,6 +22,7 @@
@@ -1108,7 +1108,7 @@ index f492ba10..4f0a7a70 100644
                  StartMenu_PortShowPanel(fieldSystem);
                  NitroPort_LowerMenuFadePanel(FALSE);
                  NitroPort_LowerMenuKeepShown(FALSE);
-@@ -1772,6 +1782,126 @@ static BOOL StartMenu_PortSaveClosing(FieldSystem *fieldSystem)
+@@ -1772,6 +1782,127 @@ static BOOL StartMenu_PortSaveClosing(FieldSystem *fieldSystem)
  }
  #endif
  
@@ -1206,7 +1206,8 @@ index f492ba10..4f0a7a70 100644
 +        sPortOptionsPhase = 0;
 +        NitroPort_LowerMenuTakePress();
 +
-+        if ((after == PORT_BUTTON_BAG || after == PORT_BUTTON_POKEMON || after == PORT_BUTTON_TRAINER || after == PORT_BUTTON_SAVE)
++        if ((after == PORT_BUTTON_BAG || after == PORT_BUTTON_POKEMON || after == PORT_BUTTON_TRAINER
++                || (after == PORT_BUTTON_SAVE && StartMenu_PortSaveInPanel(fieldSystem)))
 +            && (sPortButtons & (1u << after))) {
 +            // (the panel kept black: the app or the save comes in it next)
 +            StartMenu_PortSetCursor(fieldSystem, menu, after);
@@ -1235,7 +1236,7 @@ index f492ba10..4f0a7a70 100644
  static void StartMenu_Save(FieldTask *fieldTask)
  {
      StartMenu *menu = FieldTask_GetEnv(fieldTask);
-@@ -1837,6 +1967,14 @@ static BOOL StartMenu_SelectOptions(FieldTask *fieldTask)
+@@ -1837,6 +1968,14 @@ static BOOL StartMenu_SelectOptions(FieldTask *fieldTask)
  {
      StartMenu *menu = FieldTask_GetEnv(fieldTask);
  
@@ -1250,7 +1251,7 @@ index f492ba10..4f0a7a70 100644
      FieldMap_FadeScreen(FADE_TYPE_BRIGHTNESS_OUT);
  
      menu->callback = StartMenu_Options;
-@@ -2678,7 +2816,16 @@ void StartMenu_PortMapStale(void)
+@@ -2678,7 +2817,16 @@ void StartMenu_PortMapStale(void)
  // till then, as the field faded in).
  void StartMenu_PortFieldStarts(FieldSystem *fieldSystem)
  {
@@ -1267,7 +1268,7 @@ index f492ba10..4f0a7a70 100644
          StartMenu_PortShowPanel(fieldSystem);
  
          if (sPortMapAgain) {
-@@ -2967,9 +3114,7 @@ static FieldTaskFunc StartMenu_PortAppFromApp(int button)
+@@ -2967,9 +3115,7 @@ static FieldTaskFunc StartMenu_PortAppFromApp(int button)
          return StartMenu_TrainerCase;
      case PORT_BUTTON_POKEDEX:
          return StartMenu_OpenPokedex;

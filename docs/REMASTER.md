@@ -899,8 +899,9 @@ screens) the lower screen is the DS's, filling the screen as before.
 - **The port's own settings** (`port_options.c`,
   `nitro_port_options.h`): 60 FPS, smooth 3D, the start tab, the
   enhancements and the cheats, a whole number each, kept in `options.txt`
-  beside the save (`name value` a line; written to a new file put in the
-  old one's place). The 3DS takes `remaster.txt`'s `fps60` and `smooth3d`
+  beside the save (`name value` a line, only those chosen on the page:
+  the others follow their defaults; written to a new file put in the old
+  one's place, the new one read if the power went off between). The 3DS takes `remaster.txt`'s `fps60` and `smooth3d`
   as their defaults, the file's over them, and applies a change at once:
   60 FPS from the next frame, smooth 3D from the compositor's next (its
   buffers now made whatever the setting, so it can be turned on). The PC

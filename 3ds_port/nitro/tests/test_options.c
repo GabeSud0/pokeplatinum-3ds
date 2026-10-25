@@ -73,7 +73,7 @@ int main(void)
         }
         fclose(f);
     }
-    CHECK(lines == NITRO_OPT_COUNT);
+    CHECK(lines == 2);   /* (only the two chosen: speed, start_tab; shiny stayed at its default) */
 
     /* Read back over other values (the listener not told: loading). */
     NitroPort_OptionSetDefault(NITRO_OPT_SPEED, 0);
@@ -81,8 +81,20 @@ int main(void)
     CHECK(NitroPort_OptionsLoad(path) == 1);
     CHECK(NitroPort_Option(NITRO_OPT_SPEED) == 4);
     CHECK(NitroPort_Option(NITRO_OPT_START_TAB) == 1);
-    CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 0);
+    CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 0);   /* (not in the file: the platform's default) */
     CHECK(sHeard == 2);
+
+    /* The power off mid-save: only the new file there. */
+    {
+        char tmp[64];
+
+        snprintf(tmp, sizeof(tmp), "%s.new", path);
+        CHECK(rename(path, tmp) == 0);
+        NitroPort_OptionSetDefault(NITRO_OPT_SPEED, 0);
+        CHECK(NitroPort_OptionsLoad(path) == 1);
+        CHECK(NitroPort_Option(NITRO_OPT_SPEED) == 4);
+        remove(tmp);
+    }
 
     /* Unknown names, bad lines and values out of range. */
     f = fopen(path, "w");

@@ -35,6 +35,7 @@ static const struct {
 };
 
 static int sValue[NITRO_OPT_COUNT];
+static unsigned char sChosen[NITRO_OPT_COUNT];   /* (set on the page, or read from the file: the ones the file keeps) */
 static int sReady;
 static int sDirty;
 static char sPath[256];
@@ -77,6 +78,7 @@ void NitroPort_OptionSet(int id, int value)
     value = clamp(id, value);
     if (value != sValue[id]) {
         sValue[id] = value;
+        sChosen[id] = 1;
         sDirty = 1;
         if (sListener) {
             sListener(id, value);
@@ -112,7 +114,15 @@ int NitroPort_OptionsLoad(const char *path)
     strcpy(sPath, path);
     f = fopen(path, "r");
     if (f == NULL) {
-        return 0;
+        /* (the power off while it was saved: the new file not yet in the
+         * old one's place) */
+        char tmp[sizeof(sPath) + 8];
+
+        snprintf(tmp, sizeof(tmp), "%s.new", path);
+        f = fopen(tmp, "r");
+        if (f == NULL) {
+            return 0;
+        }
     }
     while (fgets(line, sizeof(line), f)) {
         char name[48];
@@ -124,6 +134,7 @@ int NitroPort_OptionsLoad(const char *path)
         for (i = 0; i < NITRO_OPT_COUNT; i++) {
             if (strcmp(name, sDefs[i].name) == 0) {
                 sValue[i] = clamp(i, value);
+                sChosen[i] = 1;
                 read++;
             }
         }
@@ -151,8 +162,12 @@ int NitroPort_OptionsSave(void)
         NitroPort_Log("[options] can't write %s", tmp);
         return 0;
     }
+    /* (only those chosen: the others keep following their defaults,
+     * remaster.txt's where it has one) */
     for (i = 0; i < NITRO_OPT_COUNT; i++) {
-        fprintf(f, "%s %d\n", sDefs[i].name, sValue[i]);
+        if (sChosen[i]) {
+            fprintf(f, "%s %d\n", sDefs[i].name, sValue[i]);
+        }
     }
     ok = fflush(f) == 0;
     ok = fclose(f) == 0 && ok;
