@@ -105,7 +105,27 @@ bash build_windows_msys2.sh 'C:\path\to\your\platinum.nds'
 
 Then skip to [Copy to the SD card](#copy-to-the-sd-card).
 
-### On Linux or macOS
+### On Linux
+
+Download [`tools/build_linux.sh`](tools/build_linux.sh) into your home folder
+and run it. Like the Windows script, it does everything: installs devkitPro
+and the rest of what the build needs, clones this repository, builds the game
+(both versions), makes your data pack, and puts the SD card files in
+`~/pokeplatinum-sd` (and in Azahar's SD folder, if it finds it):
+
+```sh
+bash ~/build_linux.sh ~/path/to/your/platinum.nds
+```
+
+On **Bazzite** and other immutable systems (Fedora Silverblue, Kinoite,
+Aurora, Bluefin...), it works inside a distrobox it creates once
+(`pokeplatinum`, Ubuntu 24.04), so your system isn't changed; keep the ROM in
+your home folder. On **Ubuntu or Debian** it runs directly. Run it again to
+update and rebuild.
+
+Then skip to [Copy to the SD card](#copy-to-the-sd-card).
+
+### By hand (Linux or macOS)
 
 1. **Fetch the decompilation and SDKs and build the game:**
 
