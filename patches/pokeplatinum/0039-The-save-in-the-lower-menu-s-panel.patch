@@ -1,0 +1,1501 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] The save in the lower menu's panel (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+With the lower menu on and the Pokétch up, SAVE ends the Pokétch behind
+the panel's black and draws a save page on the sub engine, tall: the
+message box at the top, a report card (the trainer's picture, the name,
+IDNo., the place, POKéDEX, TIME, the badges at half size, the party's
+icons) and YES / NO buttons the port takes touches on. The save's own
+script runs unchanged: while the page is up its message box opens on
+the page, its YES/NO is the page's buttons, and the save info window
+isn't shown. When the script ends the panel fades to black and the
+Pokétch starts again. Without the menu it's the DS's save.
+
+SAVE tapped in the bag, the party or the trainer case goes to the page
+behind the panel's black (no map in between). The field's panel shows
+the tab chosen from the field's first frame (the map, not the Pokétch
+till the player can walk).
+---
+ include/overlay005/save_info_window.h |   10 +
+ include/start_menu.h                  |    1 +
+ src/overlay005/ov5_021D5BC0.c         |    2 +
+ src/overlay005/save_info_window.c     | 1059 +++++++++++++++++++++++++
+ src/overlay005/script_message.c       |   13 +
+ src/scrcmd.c                          |   38 +
+ src/start_menu.c                      |  165 +++-
+ 7 files changed, 1284 insertions(+), 4 deletions(-)
+
+diff --git a/include/overlay005/save_info_window.h b/include/overlay005/save_info_window.h
+index 1113c9e5..9f2a43b5 100644
+--- a/include/overlay005/save_info_window.h
++++ b/include/overlay005/save_info_window.h
+@@ -55,4 +55,14 @@ void SaveInfoWindow_Free(SaveInfoWindow *saveInfoWin);
+ BOOL FieldSystem_Save(FieldSystem *fieldSystem);
+ void FieldSystem_SaveStateIfCommunicationOff(FieldSystem *fieldSystem);
+ 
++#ifdef SDK_PORT_3DS
++// The save in the 3DS remaster's lower menu's panel (save_info_window.c).
++void SavePanel_Open(FieldSystem *fieldSystem);
++void SavePanel_Close(FieldSystem *fieldSystem);
++BOOL SavePanel_IsOpen(void);
++void SavePanel_AddMessageWindow(BgConfig *bgConfig, Window *window);
++void SavePanel_StartYesNo(void);
++int SavePanel_YesNoResult(void);
++#endif
++
+ #endif // POKEPLATINUM_SAVE_INFO_WINDOW_H
+diff --git a/include/start_menu.h b/include/start_menu.h
+index 3b3558b0..0d96a9f1 100644
+--- a/include/start_menu.h
++++ b/include/start_menu.h
+@@ -88,6 +88,7 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem);
+ BOOL StartMenu_PortTapOpening(void);
+ // (the field's lower screen made again: the map in its panel told again)
+ void StartMenu_PortMapStale(void);
++void StartMenu_PortFieldStarts(FieldSystem *fieldSystem);
+ #endif
+ 
+ #endif // POKEPLATINUM_START_MENU_H
+diff --git a/src/overlay005/ov5_021D5BC0.c b/src/overlay005/ov5_021D5BC0.c
+index 5197a2c8..d28f86e7 100644
+--- a/src/overlay005/ov5_021D5BC0.c
++++ b/src/overlay005/ov5_021D5BC0.c
+@@ -22,6 +22,7 @@
+ extern void NitroPort_LowerMenuShow(int on);
+ extern void NitroPort_LowerMenuSetFemale(int female);
+ extern void StartMenu_PortMapStale(void);
++extern void StartMenu_PortFieldStarts(FieldSystem *fieldSystem);
+ #endif
+ 
+ FS_EXTERN_OVERLAY(overlay56);
+@@ -99,6 +100,7 @@ static void ov5_021D5C4C(FieldSystem *fieldSystem)
+     NitroPort_LowerMenuSetFemale(TrainerInfo_Gender(SaveData_GetTrainerInfo(fieldSystem->saveData)) == GENDER_FEMALE);
+     NitroPort_LowerMenuShow(TRUE);
+     StartMenu_PortMapStale();   // (its map told again: start_menu.c)
++    StartMenu_PortFieldStarts(fieldSystem);   // (the panel on its tab from the first frame, not the Pokétch till the player can walk)
+ #endif
+ }
+ 
+diff --git a/src/overlay005/save_info_window.c b/src/overlay005/save_info_window.c
+index ef0ed636..ee2923ce 100644
+--- a/src/overlay005/save_info_window.c
++++ b/src/overlay005/save_info_window.c
+@@ -27,6 +27,31 @@
+ #include "text.h"
+ #include "trainer_info.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "constants/graphics.h"
++#include "constants/menu.h"
++#include "generated/genders.h"
++#include "generated/species.h"
++
++#include "badges.h"
++#include "graphics.h"
++#include "heap.h"
++#include "menu.h"
++#include "narc.h"
++#include "party.h"
++#include "pokemon.h"
++#include "pokemon_icon.h"
++#include "sound.h"
++#include "sound_playback.h"
++#include "string_template.h"
++#include "system.h"
++
++#include "res/graphics/poketch/poketch.naix"
++#include "res/graphics/trainer_case/trainer_case.naix"
++#include "res/text/bank/menu_entries.h"
++#include "res/text/bank/trainer_card.h"
++#endif
++
+ static void FieldSystem_SaveObjectsAndLocation(FieldSystem *fieldSystem);
+ 
+ static const int sSaveInfoLabels[] = {
+@@ -222,3 +247,1037 @@ void FieldSystem_SaveStateIfCommunicationOff(FieldSystem *fieldSystem)
+ 
+     FieldSystem_SaveObjectsAndLocation(fieldSystem);
+ }
++
++#ifdef SDK_PORT_3DS
++// ------------------------------------------------------------------------
++// The save in the 3DS remaster's lower menu's panel (an approved mock-up,
++// 2026-10-24, after the Emerald project's layout, Platinum's own pieces):
++// SAVE in the lower menu shows, in the panel, the save's question in
++// Platinum's message box at the top; a report card in its window frame
++// (the player's trainer card picture in a pale box, the name, IDNo., the
++// place in red, POKéDEX, TIME; the eight badges at half size, the ones not
++// earned yet a pale outline of their own shape; the party's icons, each on
++// a shadow); and YES / NO as two buttons. The save's script runs as on the
++// DS (common script 5), its message box, YES/NO and report here instead of
++// on the upper screen, which keeps the field.
++//
++// Drawn on the DS's lower screen, 248 lines tall (the port's tall panel),
++// while the Pokétch steps aside (the field's bottom screen ended behind the
++// panel's black, and started again once the save's done: start_menu.c).
++// The sub engine's BGs, 48 KB of VRAM (H and I; I is the sub OBJ's, none
++// meanwhile):
++//   BG0 (priority 0): the message box; half the badges and icons
++//   BG1 (priority 1): the trainer; the other badges and icons
++//   BG2 (priority 2): the report card (its frame, its windows), YES / NO
++//   BG3 (priority 3): the lower screen's own empty background (the Pokétch
++//                     unavailable one's), 27 lines down, its colour round it
++// The badges and icons sit at any pixel: drawn into a picture of their
++// rows and cut into tiles, a layer every other one (no tile shared by two:
++// a tile has one palette). The badges halved crisply from the badge case's
++// own badges (each 2 x 2 its commonest colour, a tie to the darker, then a
++// clean outline in the badge's darkest edge colour): no blends, only the
++// badge's colours, made at run time from the ROM.
++// ------------------------------------------------------------------------
++
++extern void NitroPort_LowerMenuSetPanelButtons(const short (*rects)[4], int count);
++extern int NitroPort_LowerMenuPressPending(void);
++extern int NitroPort_LowerMenuTakePress(void);
++#define PORT_BUTTON_PRESS(k) (10 + 1 + 4 + (k)) // NITRO_LOWERMENU_BUTTON_PRESS
++
++#define SAVE_PANEL_HEAP     HEAP_ID_POKETCH_APP // (the Pokétch's, stepped aside)
++#define SAVE_PANEL_MSG      BG_LAYER_SUB_0
++#define SAVE_PANEL_PICS     BG_LAYER_SUB_1
++#define SAVE_PANEL_CARD     BG_LAYER_SUB_2
++#define SAVE_PANEL_BACK     BG_LAYER_SUB_3
++
++// The sub BG's palettes.
++enum {
++    SP_PAL_BACK = 0,
++    SP_PAL_CARD = 1, // the card's colours, its lettering
++    SP_PAL_BUTTON = 2,
++    SP_PAL_FRAME = 3, // the report's window frame
++    SP_PAL_TRAINER = 4,
++    SP_PAL_PALE = 6, // the badges not earned yet
++    SP_PAL_ICONS = 7, // 7-9: the icons' three
++    SP_PAL_MSG_FRAME = 10,
++    SP_PAL_MSG_TEXT = 13,
++};
++static const u8 sSavePanelBadgePals[4] = { 11, 12, 14, 15 };
++
++// The card's colours: 1-2 the report's lettering, 3-4 its red (COLOR 1),
++// 5 pale edge, 6 the box's fill, 7 pale fill, 15 white.
++#define SP_INK       1
++#define SP_PALE      5
++#define SP_BOX       6
++#define SP_PALE2     7
++#define SP_WHITE     15
++static const u16 sSavePanelCardColours[16] = {
++    0, GX_RGB(90 >> 3, 90 >> 3, 82 >> 3), GX_RGB(173 >> 3, 189 >> 3, 189 >> 3), GX_RGB(239 >> 3, 33 >> 3, 16 >> 3),
++    GX_RGB(255 >> 3, 173 >> 3, 189 >> 3), GX_RGB(173 >> 3, 189 >> 3, 198 >> 3), GX_RGB(231 >> 3, 239 >> 3, 247 >> 3),
++    GX_RGB(214 >> 3, 222 >> 3, 231 >> 3), 0, 0, 0, 0, 0, 0, 0, GX_RGB(31, 31, 31)
++};
++
++// YES / NO: 1 outline, 2 inner edge, 3 fill, 4 the cursor's orange ring,
++// 5 lettering, 6 its shadow.
++static const u16 sSavePanelButtonColours[16] = {
++    0, GX_RGB(82 >> 3, 82 >> 3, 82 >> 3), GX_RGB(0, 66 >> 3, 231 >> 3), GX_RGB(0, 90 >> 3, 255 >> 3),
++    GX_RGB(239 >> 3, 90 >> 3, 0), GX_RGB(31, 31, 31), GX_RGB(41 >> 3, 41 >> 3, 41 >> 3)
++};
++
++static const u16 sSavePanelPaleColours[16] = {
++    0, GX_RGB(173 >> 3, 189 >> 3, 198 >> 3), GX_RGB(214 >> 3, 222 >> 3, 231 >> 3)
++};
++
++// The tiles: BG0, BG2, BG3 share the first 32 KB (char base 0); BG1 its own
++// 8 KB (char base 0x8000); the tilemaps after them.
++#define SP_TILE_WHITE    1
++#define SP_TILE_BACK     64 // (the background's 64)
++#define SP_TILE_MESSAGE  128 // (27 x 4)
++#define SP_TILE_FRAME    236 // (9)
++#define SP_TILE_TEXT     250 // (22 x 10)
++#define SP_TILE_BOX      470 // (8 x 10)
++#define SP_TILE_LINE     550 // (30)
++#define SP_TILE_SHADOWS  580 // (30)
++#define SP_TILE_YES      610 // (16 x 4)
++#define SP_TILE_NO       674 // (16 x 4)
++#define SP_TILE_MSG_PICS 740 // (the badges and icons in BG0, up to the message box's frame)
++#define SP_TILE_MSG_BOX  (1024 - (18 + 12))
++#define SP_PICS_TILES    256
++
++// The card (tiles): its inside x 1-30, rows 7-24; YES / NO rows 26-29.
++#define SP_CARD_X 1
++#define SP_CARD_Y 7
++#define SP_CARD_W 30
++#define SP_CARD_H 18
++
++// The badges' and icons' rows (pixels 136-199: tile rows 17-24); in BG1
++// the trainer's too (from row 56).
++#define SP_STRIP_Y0     136
++#define SP_STRIP_ROWS   64
++#define SP_TRAINER_Y0   56
++#define SP_BADGE_Y      141
++#define SP_ICON_Y     167
++#define SP_SHADOW_Y   195
++
++typedef struct SavePanelStrip {
++    int y0, rows;
++    u8 *px; // (rows x 256)
++    s8 pal[(SP_STRIP_Y0 + SP_STRIP_ROWS - SP_TRAINER_Y0) / 8][32];
++} SavePanelStrip;
++
++typedef struct SavePanelBadge {
++    u8 w, h;
++    u8 px[32][32]; // (indices into rgb; 0: none)
++    u16 rgb[16];
++} SavePanelBadge;
++
++typedef struct SavePanel {
++    FieldSystem *fieldSystem;
++    BgConfig *bgConfig;
++    Window text, box, line, shadows, yes, no;
++    int selected; // (YES 0, NO 1; -1: not asking)
++    int msgPicsNext, picsNext;
++} SavePanel;
++
++static SavePanel *sSavePanel;
++
++BOOL SavePanel_IsOpen(void)
++{
++    return sSavePanel != NULL;
++}
++
++static void SavePanel_LoadColours(const u16 *colours, int slot)
++{
++    static u16 buf[16];
++
++    memcpy(buf, colours, sizeof(buf));
++    DC_FlushRange(buf, sizeof(buf));
++    GXS_LoadBGPltt(buf, PLTT_OFFSET(slot), sizeof(buf));
++}
++
++static void SavePanel_InitLayer(BgConfig *bgConfig, u8 layer, u32 screenBase, u32 charBase, u8 priority)
++{
++    BgTemplate template = {
++        .x = 0,
++        .y = 0,
++        .bufferSize = 0x800,
++        .baseTile = 0,
++        .screenSize = BG_SCREEN_SIZE_256x256,
++        .colorMode = GX_BG_COLORMODE_16,
++        .screenBase = screenBase,
++        .charBase = charBase,
++        .bgExtPltt = GX_BG_EXTPLTT_01,
++        .priority = priority,
++        .areaOver = 0,
++        .mosaic = FALSE,
++    };
++
++    Bg_InitFromTemplate(bgConfig, layer, &template, BG_TYPE_STATIC);
++    Bg_ClearTilemap(bgConfig, layer);
++}
++
++// ----- the badges and icons, at any pixel
++
++static SavePanelStrip *SavePanel_NewStrip(int y0, int rows)
++{
++    SavePanelStrip *strip = Heap_Alloc(SAVE_PANEL_HEAP, sizeof(SavePanelStrip));
++
++    strip->y0 = y0;
++    strip->rows = rows;
++    strip->px = Heap_Alloc(SAVE_PANEL_HEAP, rows * 256);
++    memset(strip->px, 0, rows * 256);
++    memset(strip->pal, -1, sizeof(strip->pal));
++    return strip;
++}
++
++static void SavePanel_FreeStrip(SavePanelStrip *strip)
++{
++    Heap_Free(strip->px);
++    Heap_Free(strip);
++}
++
++static void SavePanel_StripPut(SavePanelStrip *strip, int x, int y, u8 colour, s8 pal)
++{
++    int sy = y - strip->y0;
++    s8 *tilePal;
++
++    if (colour == 0 || x < 0 || x > 255 || sy < 0 || sy >= strip->rows) {
++        return;
++    }
++
++    tilePal = &strip->pal[sy / 8][x / 8];
++
++    if (*tilePal >= 0 && *tilePal != pal) {
++        return; // (a tile has one palette: the first one's)
++    }
++
++    *tilePal = pal;
++    strip->px[sy * 256 + x] = colour;
++}
++
++// The strip cut into tiles (one each, the same ones once), in the layer's
++// tilemap. next: the layer's next free tile, up to last.
++static void SavePanel_StripToLayer(SavePanel *panel, SavePanelStrip *strip, u8 layer, int *next, int last)
++{
++    u16 *map = Bg_GetTilemapBuffer(panel->bgConfig, layer);
++    u8 tile[32];
++    int tx, ty, y, x, first = *next;
++    u8 *made = Heap_Alloc(SAVE_PANEL_HEAP, (last - first + 1) * 32);
++
++    for (ty = 0; ty < strip->rows / 8; ty++) {
++        for (tx = 0; tx < 32; tx++) {
++            int k, any = 0;
++
++            if (strip->pal[ty][tx] < 0) {
++                continue;
++            }
++
++            for (y = 0; y < 8; y++) {
++                for (x = 0; x < 8; x += 2) {
++                    u8 lo = strip->px[(ty * 8 + y) * 256 + tx * 8 + x], hi = strip->px[(ty * 8 + y) * 256 + tx * 8 + x + 1];
++
++                    tile[y * 4 + x / 2] = lo | (hi << 4);
++                    any |= lo | hi;
++                }
++            }
++
++            if (!any) {
++                continue;
++            }
++
++            for (k = first; k < *next && memcmp(&made[(k - first) * 32], tile, 32) != 0; k++) {
++            }
++
++            if (k == *next) {
++                if (*next > last) {
++                    continue; // (no room: left out)
++                }
++
++                memcpy(&made[(k - first) * 32], tile, 32);
++                (*next)++;
++            }
++
++            map[(strip->y0 / 8 + ty) * 32 + tx] = k | (strip->pal[ty][tx] << 12);
++        }
++    }
++
++    if (*next > first) {
++        DC_FlushRange(made, (*next - first) * 32);
++        Bg_LoadTiles(panel->bgConfig, layer, made, (*next - first) * 32, first);
++    }
++
++    Heap_Free(made);
++}
++
++static int SavePanel_Luma(u16 c)
++{
++    return (c & 31) * 30 + ((c >> 5) & 31) * 59 + ((c >> 10) & 31) * 11;
++}
++
++// A badge of the badge case's, halved crisply (see above): its 64 x 64
++// sprite's pixels (4 bits each, 1D) and its clean palette.
++static void SavePanel_HalveBadge(const u8 *tiles, const u16 *pal, SavePanelBadge *out)
++{
++    static u8 src[64][64];
++    static u8 peel[64 * 64 * 2];
++    int x, y, i, j, x0 = 64, y0 = 64, x1 = -1, y1 = -1, n = 0, w, h, sw, sh, pass;
++    int counts[16], best = -1;
++
++    for (y = 0; y < 64; y++) {
++        for (x = 0; x < 64; x++) {
++            u8 b = tiles[((y / 8) * 8 + x / 8) * 32 + (y % 8) * 4 + (x % 8) / 2];
++
++            src[y][x] = (x & 1) ? b >> 4 : b & 15;
++        }
++    }
++
++    // The case's mounting round it peeled off (its grey ring and light rim:
++    // the badge's own colours inside), a ring at a time, two at most.
++    for (pass = 0; pass < 2; pass++) {
++        n = 0;
++
++        for (y = 0; y < 64; y++) {
++            for (x = 0; x < 64; x++) {
++                u16 c = pal[src[y][x]];
++                BOOL rim = c == GX_RGB(98 >> 3, 98 >> 3, 98 >> 3) || c == GX_RGB(172 >> 3, 189 >> 3, 197 >> 3) || c == GX_RGB(31, 31, 31)
++                    || c == GX_RGB(230 >> 3, 255 >> 3, 255 >> 3) || c == GX_RGB(214 >> 3, 247 >> 3, 255 >> 3);
++                BOOL edge = x == 0 || y == 0 || x == 63 || y == 63 || !src[y][x - 1] || !src[y][x + 1] || !src[y - 1][x] || !src[y + 1][x];
++
++                if (src[y][x] && rim && edge) {
++                    peel[n++] = (u8)y;
++                    peel[n++] = (u8)x;
++                }
++            }
++        }
++
++        for (i = 0; i < n; i += 2) {
++            src[peel[i]][peel[i + 1]] = 0;
++        }
++
++        if (n == 0) {
++            break;
++        }
++    }
++
++    for (y = 0; y < 64; y++) {
++        for (x = 0; x < 64; x++) {
++            if (src[y][x]) {
++                x0 = x < x0 ? x : x0, x1 = x > x1 ? x : x1;
++                y0 = y < y0 ? y : y0, y1 = y > y1 ? y : y1;
++            }
++        }
++    }
++
++    memset(out, 0, sizeof(*out));
++    memcpy(out->rgb, pal, sizeof(out->rgb));
++
++    if (x1 < 0) {
++        return;
++    }
++
++    w = x1 - x0 + 1, h = y1 - y0 + 1;
++    sw = (w + 1) / 2, sh = (h + 1) / 2;
++    out->w = sw > 32 ? 32 : sw;
++    out->h = sh > 32 ? 32 : sh;
++
++    // Each 2 x 2 its commonest colour, a tie to the darker; kept where at
++    // least half of it is badge.
++    for (j = 0; j < out->h; j++) {
++        for (i = 0; i < out->w; i++) {
++            int seen = 0, a, b, c, pick = 0;
++
++            memset(counts, 0, sizeof(counts));
++
++            for (a = 0; a < 2; a++) {
++                for (b = 0; b < 2; b++) {
++                    if (2 * i + a < w && 2 * j + b < h && (c = src[y0 + 2 * j + b][x0 + 2 * i + a]) != 0) {
++                        counts[c]++, seen++;
++                    }
++                }
++            }
++
++            if (seen < 2) {
++                continue;
++            }
++
++            for (c = 1; c < 16; c++) {
++                if (counts[c] > counts[pick] || (counts[c] == counts[pick] && counts[c] > 0 && SavePanel_Luma(pal[c]) < SavePanel_Luma(pal[pick]))) {
++                    pick = c;
++                }
++            }
++
++            out->px[j][i] = (u8)pick;
++        }
++    }
++
++    // Its outline: the darkest colour used 3 times or more in its outer two
++    // pixels.
++    memset(counts, 0, sizeof(counts));
++
++    for (y = y0; y <= y1; y++) {
++        for (x = x0; x <= x1; x++) {
++            int dy, dx;
++            BOOL near = FALSE;
++
++            if (!src[y][x]) {
++                continue;
++            }
++
++            for (dy = -2; dy <= 2 && !near; dy++) {
++                for (dx = -2; dx <= 2 && !near; dx++) {
++                    int yy = y + dy, xx = x + dx;
++
++                    if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) > 2) {
++                        continue;
++                    }
++
++                    near = yy < 0 || xx < 0 || yy > 63 || xx > 63 || !src[yy][xx];
++                }
++            }
++
++            if (near) {
++                counts[src[y][x]]++;
++            }
++        }
++    }
++
++    for (i = 1; i < 16; i++) {
++        if (counts[i] >= 3 && (best < 0 || SavePanel_Luma(pal[i]) < SavePanel_Luma(pal[best]))) {
++            best = i;
++        }
++    }
++
++    if (best < 0) {
++        return;
++    }
++
++    {
++        static u8 edge[32][32];
++
++        memset(edge, 0, sizeof(edge));
++
++        for (j = 0; j < out->h; j++) {
++            for (i = 0; i < out->w; i++) {
++                edge[j][i] = out->px[j][i]
++                    && (i == 0 || j == 0 || i == out->w - 1 || j == out->h - 1 || !out->px[j][i - 1] || !out->px[j][i + 1] || !out->px[j - 1][i] || !out->px[j + 1][i]);
++            }
++        }
++
++        for (j = 0; j < out->h; j++) {
++            for (i = 0; i < out->w; i++) {
++                if (edge[j][i]) {
++                    out->px[j][i] = (u8)best;
++                }
++            }
++        }
++    }
++}
++
++// The badges halved (before the strips: the badge case's sprites are big).
++static SavePanelBadge *SavePanel_HalveBadges(NARC *narc)
++{
++    static const u32 badgePals[MAX_BADGES] = {
++        coal_badge_NCLR, forest_badge_NCLR, cobble_badge_NCLR, fen_badge_NCLR,
++        relic_badge_NCLR, mine_badge_NCLR, icicle_badge_NCLR, beacon_badge_NCLR
++    };
++    NNSG2dCharacterData *charData;
++    void *charBuf = Graphics_GetCharDataFromOpenNARC(narc, badge_case_sprites_NCGR, FALSE, &charData, SAVE_PANEL_HEAP);
++    SavePanelBadge *badges = Heap_Alloc(SAVE_PANEL_HEAP, sizeof(SavePanelBadge) * MAX_BADGES);
++    int k;
++
++    for (k = 0; k < MAX_BADGES; k++) {
++        NNSG2dPaletteData *palData;
++        void *palBuf = Graphics_GetPlttDataFromOpenNARC(narc, badgePals[k], &palData, SAVE_PANEL_HEAP);
++
++        SavePanel_HalveBadge((const u8 *)charData->pRawData + k * 64 * 32, palData->pRawData, &badges[k]);
++        Heap_Free(palBuf);
++    }
++
++    Heap_Free(charBuf);
++    return badges;
++}
++
++// The badges: their colours packed into four palettes (two badges a
++// palette, as their colours fit), drawn into the strips, every other one
++// in the other layer's; the ones not earned yet their pale outline.
++// (`badges` freed.)
++static void SavePanel_DrawBadges(SavePanel *panel, SavePanelBadge *badges, SavePanelStrip *strips[2], TrainerInfo *trainerInfo)
++{
++    u16 packed[4][16];
++    int packedCount[4] = { 1, 1, 1, 1 }, sumW = 0, k, i, j, slots = 0;
++    u8 remap[MAX_BADGES][16];
++    s8 badgePal[MAX_BADGES];
++    fx32 x, gap;
++
++    for (k = 0; k < MAX_BADGES; k++) {
++        sumW += badges[k].w;
++    }
++
++    memset(packed, 0, sizeof(packed));
++
++    // (each earned badge's colours into the first palette they fit in)
++    for (k = 0; k < MAX_BADGES; k++) {
++        BOOL used[16];
++
++        badgePal[k] = -1;
++        memset(remap[k], 0, sizeof(remap[k]));
++
++        if (!TrainerInfo_HasBadge(trainerInfo, k)) {
++            continue;
++        }
++
++        memset(used, 0, sizeof(used));
++
++        for (j = 0; j < badges[k].h; j++) {
++            for (i = 0; i < badges[k].w; i++) {
++                used[badges[k].px[j][i]] = TRUE;
++            }
++        }
++
++        for (slots = 0; slots < 4 && badgePal[k] < 0; slots++) {
++            int need = 0, c, m;
++
++            for (c = 1; c < 16; c++) {
++                if (used[c]) {
++                    for (m = 1; m < packedCount[slots] && packed[slots][m] != badges[k].rgb[c]; m++) {
++                    }
++
++                    need += m == packedCount[slots];
++                }
++            }
++
++            if (packedCount[slots] + need > 16) {
++                continue;
++            }
++
++            for (c = 1; c < 16; c++) {
++                if (used[c]) {
++                    for (m = 1; m < packedCount[slots] && packed[slots][m] != badges[k].rgb[c]; m++) {
++                    }
++
++                    if (m == packedCount[slots]) {
++                        packed[slots][packedCount[slots]++] = badges[k].rgb[c];
++                    }
++
++                    remap[k][c] = (u8)m;
++                }
++            }
++
++            badgePal[k] = (s8)slots;
++        }
++    }
++
++    for (slots = 0; slots < 4; slots++) {
++        SavePanel_LoadColours(packed[slots], sSavePanelBadgePals[slots]);
++    }
++
++    // (as the mock-up has them: from x 14, spread over 227 pixels)
++    gap = (FX32_ONE * (227 - sumW)) / 7;
++    x = FX32_ONE * 14;
++
++    for (k = 0; k < MAX_BADGES; k++) {
++        SavePanelStrip *strip = strips[k & 1];
++        int X = FX_Whole(x + FX32_ONE / 2), Y = SP_BADGE_Y + (24 - badges[k].h) / 2;
++
++        for (j = 0; j < badges[k].h; j++) {
++            for (i = 0; i < badges[k].w; i++) {
++                u8 c = badges[k].px[j][i];
++
++                if (!c) {
++                    continue;
++                }
++
++                if (badgePal[k] >= 0) {
++                    SavePanel_StripPut(strip, X + i, Y + j, remap[k][c], (s8)sSavePanelBadgePals[badgePal[k]]);
++                } else if (!TrainerInfo_HasBadge(trainerInfo, k)) {
++                    BOOL edge = i == 0 || j == 0 || i == badges[k].w - 1 || j == badges[k].h - 1 || !badges[k].px[j][i - 1]
++                        || !badges[k].px[j][i + 1] || !badges[k].px[j - 1][i] || !badges[k].px[j + 1][i];
++
++                    SavePanel_StripPut(strip, X + i, Y + j, edge ? 1 : 2, SP_PAL_PALE);
++                }
++            }
++        }
++
++        x += FX32_CONST(badges[k].w) + gap;
++    }
++
++    Heap_Free(badges);
++}
++
++// The party: each Pokémon's icon (its first frame), every other one in the
++// other layer's; their shadows in the card (SavePanel_DrawCard).
++static int SavePanel_IconX(int slot)
++{
++    return SP_CARD_X * 8 + 2 + ((SP_CARD_W * 8 - 5) * (2 * slot + 1)) / 12;
++}
++
++static void SavePanel_DrawIcons(SavePanel *panel, SavePanelStrip *strips[2], Party *party)
++{
++    NARC *narc = NARC_ctor(NARC_INDEX_POKETOOL__ICONGRA__PL_POKE_ICON, SAVE_PANEL_HEAP);
++    int count = Party_GetCurrentCount(party), k, x, y;
++
++    Graphics_LoadPaletteFromOpenNARC(narc, PokeIconPalettesFileIndex(), PAL_LOAD_SUB_BG, PLTT_OFFSET(SP_PAL_ICONS), PALETTE_SIZE_BYTES * 3, SAVE_PANEL_HEAP);
++
++    for (k = 0; k < count && k < MAX_PARTY_SIZE; k++) {
++        Pokemon *mon = Party_GetPokemonBySlotIndex(party, k);
++        NNSG2dCharacterData *charData;
++        void *charBuf;
++        const u8 *tiles;
++        int left = SavePanel_IconX(k) - 16;
++        s8 pal = (s8)(SP_PAL_ICONS + Pokemon_IconPaletteIndex(mon));
++
++        if (Pokemon_GetValue(mon, MON_DATA_SPECIES, NULL) == SPECIES_NONE) {
++            continue;
++        }
++
++        charBuf = Graphics_GetCharDataFromOpenNARC(narc, Pokemon_IconSpriteIndex(mon), FALSE, &charData, SAVE_PANEL_HEAP);
++        tiles = charData->pRawData;
++
++        for (y = 0; y < 32; y++) {
++            for (x = 0; x < 32; x++) {
++                u8 b = tiles[((y / 8) * 4 + x / 8) * 32 + (y % 8) * 4 + (x % 8) / 2];
++
++                SavePanel_StripPut(strips[(k & 1) ^ 1], left + x, SP_ICON_Y + y, (x & 1) ? b >> 4 : b & 15, pal);
++            }
++        }
++
++        Heap_Free(charBuf);
++    }
++
++    NARC_dtor(narc);
++}
++
++// ----- the trainer: the trainer card's own picture
++
++// Its pale box: x 12-67, rows 60-135 (the trainer's middle in it, its
++// feet 4 pixels over the box's bottom).
++#define SP_BOX_X0 12
++#define SP_BOX_X1 67
++#define SP_BOX_Y0 60
++#define SP_BOX_Y1 135
++
++static void SavePanel_DrawTrainer(SavePanel *panel, NARC *narc, TrainerInfo *trainerInfo, SavePanelStrip *strip)
++{
++    BOOL female = TrainerInfo_Gender(trainerInfo) == GENDER_FEMALE;
++    NNSG2dCharacterData *charData;
++    NNSG2dScreenData *screenData;
++    NNSG2dPaletteData *palData;
++    void *charBuf = Graphics_GetCharDataFromOpenNARC(narc, player_tiles_NCGR, FALSE, &charData, SAVE_PANEL_HEAP);
++    void *scrBuf = Graphics_GetScrnDataFromOpenNARC(narc, female ? lucas_NSCR + 1 : lucas_NSCR, FALSE, &screenData, SAVE_PANEL_HEAP);
++    void *palBuf = Graphics_GetPlttDataFromOpenNARC(narc, trainer_card_normal_NCLR, &palData, SAVE_PANEL_HEAP);
++    const u16 *entries = (const u16 *)screenData->rawData;
++    BOOL eightBit = charData->pixelFmt == GX_TEXFMT_PLTT256;
++    u8 *pic = Heap_Alloc(SAVE_PANEL_HEAP, 40 * 80);
++    int tx, ty, y, x, row = -1, minX = 40, maxX = -1, minY = 80, maxY = -1, left, top;
++
++    // Its picture: the trainer card's 5 x 10 tiles (its own colours: the
++    // boy's palette, or the girl's).
++    memset(pic, 0, 40 * 80);
++
++    for (ty = 0; ty < 10; ty++) {
++        for (tx = 0; tx < 5; tx++) {
++            u16 e = entries[(ty + 6) * 32 + tx + 23];
++            int t = e & 0x3FF;
++
++            for (y = 0; y < 8; y++) {
++                for (x = 0; x < 8; x++) {
++                    int sx = (e & 0x400) ? 7 - x : x, sy = (e & 0x800) ? 7 - y : y, v;
++
++                    if (eightBit) {
++                        v = ((const u8 *)charData->pRawData)[t * 64 + sy * 8 + sx];
++                    } else {
++                        u8 b = ((const u8 *)charData->pRawData)[t * 32 + sy * 4 + sx / 2];
++                        v = (sx & 1) ? b >> 4 : b & 15;
++                    }
++
++                    if (v != 0) {
++                        int px = tx * 8 + x, py = ty * 8 + y;
++
++                        row = eightBit ? v / 16 : (e >> 12);
++                        pic[py * 40 + px] = v & 15;
++                        minX = px < minX ? px : minX, maxX = px > maxX ? px : maxX;
++                        minY = py < minY ? py : minY, maxY = py > maxY ? py : maxY;
++                    }
++                }
++            }
++        }
++    }
++
++    if (row >= 0) {
++        DC_FlushRange(palData->pRawData, PLTT_OFFSET(row + 1));
++        GXS_LoadBGPltt((const u8 *)palData->pRawData + PLTT_OFFSET(row), PLTT_OFFSET(SP_PAL_TRAINER), PALETTE_SIZE_BYTES);
++        left = SP_BOX_X0 + (SP_BOX_X1 - SP_BOX_X0 + 1 - (maxX - minX + 1)) / 2;
++        top = SP_BOX_Y1 - 4 - (maxY - minY + 1);
++
++        for (y = minY; y <= maxY; y++) {
++            for (x = minX; x <= maxX; x++) {
++                SavePanel_StripPut(strip, left + x - minX, top + y - minY, pic[y * 40 + x], SP_PAL_TRAINER);
++            }
++        }
++    }
++
++    Heap_Free(pic);
++    Heap_Free(palBuf);
++    Heap_Free(scrBuf);
++    Heap_Free(charBuf);
++}
++
++// ----- the card
++
++static void SavePanel_Print(Window *window, MessageLoader *loader, StringTemplate *template, u32 entry, int x, int y, BOOL right)
++{
++    String *buf = MessageUtil_ExpandedString(template, loader, entry, SAVE_PANEL_HEAP);
++
++    if (right) {
++        x -= Font_CalcStringWidth(FONT_SYSTEM, buf, 0);
++    }
++
++    Text_AddPrinterWithParamsAndColor(window, FONT_SYSTEM, buf, x, y, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(1, 2, SP_WHITE), NULL);
++    String_Free(buf);
++}
++
++static void SavePanel_DrawCard(SavePanel *panel)
++{
++    BgConfig *bgConfig = panel->bgConfig;
++    FieldSystem *fieldSystem = panel->fieldSystem;
++    SaveInfo saveInfo;
++    StringTemplate *template = StringTemplate_Default(SAVE_PANEL_HEAP);
++    MessageLoader *infoLoader = MessageLoader_Init(MSG_LOADER_LOAD_ON_DEMAND, NARC_INDEX_MSGDATA__PL_MSG, TEXT_BANK_SAVE_INFO_WINDOW, SAVE_PANEL_HEAP);
++    MessageLoader *cardLoader = MessageLoader_Init(MSG_LOADER_LOAD_ON_DEMAND, NARC_INDEX_MSGDATA__PL_MSG, TEXT_BANK_TRAINER_CARD, SAVE_PANEL_HEAP);
++    String *buf = String_Init(16, SAVE_PANEL_HEAP);
++    int k, x, idRight = 22 * 8 - 5;
++    const int boxX0 = SP_BOX_X0 - SP_CARD_X * 8, boxY0 = SP_BOX_Y0 - SP_CARD_Y * 8, boxX1 = SP_BOX_X1 - SP_CARD_X * 8, boxY1 = SP_BOX_Y1 - SP_CARD_Y * 8;
++
++    SaveInfo_SetValues(&saveInfo, fieldSystem);
++    SaveInfoWindow_SetStrings(template, &saveInfo);
++
++    // Its frame (the report window's) round its inside, white.
++    LoadStandardWindowGraphics(bgConfig, SAVE_PANEL_CARD, SP_TILE_FRAME, SP_PAL_FRAME, STANDARD_WINDOW_SYSTEM, SAVE_PANEL_HEAP);
++    Bg_FillTilemapRect(bgConfig, SAVE_PANEL_CARD, SP_TILE_WHITE, SP_CARD_X, SP_CARD_Y, SP_CARD_W, SP_CARD_H, SP_PAL_CARD);
++    Bg_FillTilemapRect(bgConfig, SAVE_PANEL_CARD, SP_TILE_FRAME, SP_CARD_X - 1, SP_CARD_Y - 1, 1, 1, SP_PAL_FRAME);
++    Bg_FillTilemapRect(bgConfig, SAVE_PANEL_CARD, SP_TILE_FRAME + 1, SP_CARD_X, SP_CARD_Y - 1, SP_CARD_W, 1, SP_PAL_FRAME);
++    Bg_FillTilemapRect(bgConfig, SAVE_PANEL_CARD, SP_TILE_FRAME + 2, SP_CARD_X + SP_CARD_W, SP_CARD_Y - 1, 1, 1, SP_PAL_FRAME);
++    Bg_FillTilemapRect(bgConfig, SAVE_PANEL_CARD, SP_TILE_FRAME + 3, SP_CARD_X - 1, SP_CARD_Y, 1, SP_CARD_H, SP_PAL_FRAME);
++    Bg_FillTilemapRect(bgConfig, SAVE_PANEL_CARD, SP_TILE_FRAME + 5, SP_CARD_X + SP_CARD_W, SP_CARD_Y, 1, SP_CARD_H, SP_PAL_FRAME);
++    Bg_FillTilemapRect(bgConfig, SAVE_PANEL_CARD, SP_TILE_FRAME + 6, SP_CARD_X - 1, SP_CARD_Y + SP_CARD_H, 1, 1, SP_PAL_FRAME);
++    Bg_FillTilemapRect(bgConfig, SAVE_PANEL_CARD, SP_TILE_FRAME + 7, SP_CARD_X, SP_CARD_Y + SP_CARD_H, SP_CARD_W, 1, SP_PAL_FRAME);
++    Bg_FillTilemapRect(bgConfig, SAVE_PANEL_CARD, SP_TILE_FRAME + 8, SP_CARD_X + SP_CARD_W, SP_CARD_Y + SP_CARD_H, 1, 1, SP_PAL_FRAME);
++
++    // The pale box (a floor under the feet), the trainer over it (BG1).
++    Window_Add(bgConfig, &panel->box, SAVE_PANEL_CARD, SP_CARD_X, SP_CARD_Y, 8, 10, SP_PAL_CARD, SP_TILE_BOX);
++    Window_FillTilemap(&panel->box, SP_WHITE);
++    Window_FillRectWithColor(&panel->box, SP_PALE, boxX0 + 1, boxY0, boxX1 - boxX0 - 1, boxY1 - boxY0 + 1);
++    Window_FillRectWithColor(&panel->box, SP_PALE, boxX0, boxY0 + 1, boxX1 - boxX0 + 1, boxY1 - boxY0 - 1);
++    Window_FillRectWithColor(&panel->box, SP_BOX, boxX0 + 1, boxY0 + 1, boxX1 - boxX0 - 1, boxY1 - boxY0 - 1);
++    Window_FillRectWithColor(&panel->box, SP_PALE2, boxX0 + 1, boxY1 - 12, boxX1 - boxX0 - 1, 12);
++    Window_CopyToVRAM(&panel->box);
++
++    // The lines beside it: the name, IDNo.; a line; the place (red);
++    // POKéDEX; TIME.
++    Window_Add(bgConfig, &panel->text, SAVE_PANEL_CARD, 9, SP_CARD_Y, 22, 10, SP_PAL_CARD, SP_TILE_TEXT);
++    Window_FillTilemap(&panel->text, SP_WHITE);
++    SavePanel_Print(&panel->text, infoLoader, template, SAVE_INFO_PLAYER_NAME, 6, 4, FALSE);
++    String_FormatInt(buf, TrainerInfo_ID_LowHalf(saveInfo.trainerInfo), 5, PADDING_MODE_ZEROES, CHARSET_MODE_EN);
++    x = idRight - Font_CalcStringWidth(FONT_SYSTEM, buf, 0);
++    Text_AddPrinterWithParamsAndColor(&panel->text, FONT_SYSTEM, buf, x, 4, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(1, 2, SP_WHITE), NULL);
++    {
++        String *id = MessageLoader_GetNewString(cardLoader, TrainerCard_Text_IDNo);
++
++        Text_AddPrinterWithParamsAndColor(&panel->text, FONT_SYSTEM, id, x - Font_CalcStringWidth(FONT_SYSTEM, id, 0), 4, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(1, 2, SP_WHITE), NULL);
++        String_Free(id);
++    }
++    Window_FillRectWithColor(&panel->text, SP_PALE, 6, 21, idRight - 6 + 1, 1);
++    SavePanel_Print(&panel->text, infoLoader, template, SAVE_INFO_LABEL_MAP_NAME, 6, 24, FALSE);
++
++    if (saveInfo.pokedexCount != 0) {
++        String *label = MessageLoader_GetNewString(cardLoader, TrainerCard_Text_Pokedex);
++
++        Text_AddPrinterWithParamsAndColor(&panel->text, FONT_SYSTEM, label, 6, 42, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(1, 2, SP_WHITE), NULL);
++        String_Free(label);
++        SavePanel_Print(&panel->text, infoLoader, template, SAVE_INFO_POKEDEX_COUNT, idRight, 42, TRUE);
++    }
++
++    {
++        String *label = MessageLoader_GetNewString(cardLoader, TrainerCard_Text_Time);
++
++        Text_AddPrinterWithParamsAndColor(&panel->text, FONT_SYSTEM, label, 6, 60, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(1, 2, SP_WHITE), NULL);
++        String_Free(label);
++        SavePanel_Print(&panel->text, infoLoader, template, SAVE_INFO_PLAY_TIME, idRight, 60, TRUE);
++    }
++
++    Window_CopyToVRAM(&panel->text);
++
++    // A line under the badges; the icons' shadows.
++    Window_Add(bgConfig, &panel->line, SAVE_PANEL_CARD, SP_CARD_X, 21, SP_CARD_W, 1, SP_PAL_CARD, SP_TILE_LINE);
++    Window_FillTilemap(&panel->line, SP_WHITE);
++    Window_FillRectWithColor(&panel->line, SP_PALE, 2, 0, SP_CARD_W * 8 - 4, 1);
++    Window_CopyToVRAM(&panel->line);
++
++    Window_Add(bgConfig, &panel->shadows, SAVE_PANEL_CARD, SP_CARD_X, SP_SHADOW_Y / 8, SP_CARD_W, 1, SP_PAL_CARD, SP_TILE_SHADOWS);
++    Window_FillTilemap(&panel->shadows, SP_WHITE);
++
++    for (k = 0; k < MAX_PARTY_SIZE; k++) {
++        int cx = SavePanel_IconX(k) - SP_CARD_X * 8;
++
++        Window_FillRectWithColor(&panel->shadows, SP_PALE2, cx - 11, SP_SHADOW_Y % 8, 23, 1);
++        Window_FillRectWithColor(&panel->shadows, SP_PALE2, cx - 8, SP_SHADOW_Y % 8 + 1, 17, 1);
++    }
++
++    Window_CopyToVRAM(&panel->shadows);
++
++    String_Free(buf);
++    MessageLoader_Free(cardLoader);
++    MessageLoader_Free(infoLoader);
++    StringTemplate_Free(template);
++}
++
++// ----- YES / NO: two buttons, in the style of Platinum's CANCEL, wider
++
++static void SavePanel_DrawButton(Window *window, int x0, int x1, u32 entry, BOOL selected)
++{
++    const int y0 = 7, y1 = 30; // (rows 215-238)
++    MessageLoader *loader = MessageLoader_Init(MSG_LOADER_LOAD_ON_DEMAND, NARC_INDEX_MSGDATA__PL_MSG, TEXT_BANK_MENU_ENTRIES, SAVE_PANEL_HEAP);
++    String *label = MessageLoader_GetNewString(loader, entry);
++    int x, y;
++
++    // (inside the button: its corners rounded)
++#define SP_INSIDE(X, Y) ((X) >= x0 + ((Y) == y0 || (Y) == y1 ? 2 : (Y) == y0 + 1 || (Y) == y1 - 1 ? 1 : 0) \
++    && (X) <= x1 - ((Y) == y0 || (Y) == y1 ? 2 : (Y) == y0 + 1 || (Y) == y1 - 1 ? 1 : 0) && (Y) >= y0 && (Y) <= y1)
++
++    Window_FillTilemap(window, 0);
++
++    for (y = y0 - 3; y <= y1 + 3; y++) {
++        for (x = x0 - 3; x <= x1 + 3; x++) {
++            int dx, dy, near = 0;
++
++            if (x < 0 || y < 0 || x >= Window_GetWidth(window) * 8 || y >= Window_GetHeight(window) * 8) {
++                continue;
++            }
++
++            for (dy = -2; dy <= 2; dy++) {
++                for (dx = -2; dx <= 2; dx++) {
++                    BOOL in = SP_INSIDE(x + dx, y + dy);
++
++                    near += in;
++                }
++            }
++
++            if (SP_INSIDE(x, y)) {
++                BOOL outline = !SP_INSIDE(x - 1, y) || !SP_INSIDE(x + 1, y) || !SP_INSIDE(x, y - 1) || !SP_INSIDE(x, y + 1)
++                    || !SP_INSIDE(x - 1, y - 1) || !SP_INSIDE(x + 1, y - 1) || !SP_INSIDE(x - 1, y + 1) || !SP_INSIDE(x + 1, y + 1);
++                BOOL edge = !outline && (!SP_INSIDE(x - 2, y) || !SP_INSIDE(x + 2, y) || !SP_INSIDE(x, y - 2) || !SP_INSIDE(x, y + 2));
++
++                Window_FillRectWithColor(window, outline ? 1 : edge ? 2 : 3, x, y, 1, 1);
++            } else if (selected && near > 0) {
++                Window_FillRectWithColor(window, 4, x, y, 1, 1); // (the cursor's ring, 2 pixels)
++            }
++
++        }
++    }
++
++#undef SP_INSIDE
++
++    x = x0 + (x1 - x0 + 1 - (int)Font_CalcStringWidth(FONT_SYSTEM, label, 0)) / 2;
++    Text_AddPrinterWithParamsAndColor(window, FONT_SYSTEM, label, x, y0 + 4, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(5, 6, 3), NULL);
++    Window_CopyToVRAM(window);
++
++    String_Free(label);
++    MessageLoader_Free(loader);
++}
++
++static void SavePanel_DrawButtons(SavePanel *panel)
++{
++    SavePanel_DrawButton(&panel->yes, 8, 122, MenuEntries_Text_Yes, panel->selected == 0);
++    SavePanel_DrawButton(&panel->no, 5, 119, MenuEntries_Text_No, panel->selected == 1);
++}
++
++// ----- the panel
++
++void SavePanel_Open(FieldSystem *fieldSystem)
++{
++    static const short buttons[2][4] = { { 8, 215, 122, 238 }, { 133, 215, 247, 238 } };
++    SavePanel *panel;
++    BgConfig *bgConfig = fieldSystem->bgConfig;
++    TrainerInfo *trainerInfo = SaveData_GetTrainerInfo(fieldSystem->saveData);
++    SavePanelStrip *strips[2];
++    SavePanelBadge *badges;
++    NARC *narc;
++    u16 *map;
++    u32 zero[8] = { 0 }, white[8];
++    int k;
++
++    Heap_Create(HEAP_ID_APPLICATION, SAVE_PANEL_HEAP, HEAP_SIZE_PRE_POKETCH_SUBSCREEN);
++    panel = Heap_Alloc(SAVE_PANEL_HEAP, sizeof(SavePanel));
++    memset(panel, 0, sizeof(*panel));
++    panel->fieldSystem = fieldSystem;
++    panel->bgConfig = bgConfig;
++    panel->selected = -1;
++    panel->msgPicsNext = SP_TILE_MSG_PICS;
++    sSavePanel = panel;
++
++    // The sub engine: 48 KB of BG VRAM, four layers, no OBJs.
++    GX_SetBankForSubOBJ(GX_VRAM_SUB_OBJ_NONE);
++    GX_SetBankForSubBG(GX_VRAM_SUB_BG_48_HI);
++    GXS_SetGraphicsMode(GX_BGMODE_0);
++    G2S_BlendNone();
++    GXS_SetVisibleWnd(GX_WNDMASK_NONE);
++    SavePanel_InitLayer(bgConfig, SAVE_PANEL_MSG, GX_BG_SCRBASE_0xa000, GX_BG_CHARBASE_0x00000, 0);
++    SavePanel_InitLayer(bgConfig, SAVE_PANEL_PICS, GX_BG_SCRBASE_0xa800, GX_BG_CHARBASE_0x08000, 1);
++    SavePanel_InitLayer(bgConfig, SAVE_PANEL_CARD, GX_BG_SCRBASE_0xb000, GX_BG_CHARBASE_0x00000, 2);
++    SavePanel_InitLayer(bgConfig, SAVE_PANEL_BACK, GX_BG_SCRBASE_0xb800, GX_BG_CHARBASE_0x00000, 3);
++
++    for (k = 0; k < 8; k++) {
++        white[k] = 0xFFFFFFFF;
++    }
++
++    DC_FlushRange(zero, sizeof(zero));
++    DC_FlushRange(white, sizeof(white));
++    Bg_LoadTiles(bgConfig, SAVE_PANEL_MSG, zero, sizeof(zero), 0);
++    Bg_LoadTiles(bgConfig, SAVE_PANEL_PICS, zero, sizeof(zero), 0);
++    Bg_LoadTiles(bgConfig, SAVE_PANEL_MSG, white, sizeof(white), SP_TILE_WHITE);
++
++    SavePanel_LoadColours(sSavePanelCardColours, SP_PAL_CARD);
++    SavePanel_LoadColours(sSavePanelButtonColours, SP_PAL_BUTTON);
++    SavePanel_LoadColours(sSavePanelPaleColours, SP_PAL_PALE);
++    Font_LoadTextPalette(PAL_LOAD_SUB_BG, PLTT_OFFSET(SP_PAL_MSG_TEXT), SAVE_PANEL_HEAP);
++
++    // The background: the lower screen's own, 27 lines down (its first and
++    // last rows' colour round it).
++    narc = NARC_ctor(NARC_INDEX_GRAPHIC__POKETCH, SAVE_PANEL_HEAP);
++    Graphics_LoadTilesToBgLayerFromOpenNARC(narc, unavailable_bg_tiles_NCGR_lz, bgConfig, SAVE_PANEL_BACK, SP_TILE_BACK, 0, TRUE, SAVE_PANEL_HEAP);
++    Graphics_LoadTilemapToBgLayerFromOpenNARC(narc, unavailable_NSCR_lz, bgConfig, SAVE_PANEL_BACK, 0, 0, TRUE, SAVE_PANEL_HEAP);
++    Graphics_LoadPaletteFromOpenNARC(narc, unavailable_bg_tiles_NCLR, PAL_LOAD_SUB_BG, PLTT_OFFSET(SP_PAL_BACK), PALETTE_SIZE_BYTES, SAVE_PANEL_HEAP);
++    NARC_dtor(narc);
++    map = Bg_GetTilemapBuffer(bgConfig, SAVE_PANEL_BACK);
++
++    for (k = 0; k < 24 * 32; k++) {
++        map[k] = (map[k] & 0xFC00) | ((map[k] & 0x3FF) + SP_TILE_BACK);
++    }
++
++    for (k = 24 * 32; k < 32 * 32; k++) {
++        map[k] = map[0]; // (rows 192-255: its corner's tile, plain)
++    }
++
++    Bg_CopyTilemapBufferToVRAM(bgConfig, SAVE_PANEL_BACK);
++    Bg_SetOffset(bgConfig, SAVE_PANEL_BACK, BG_OFFSET_UPDATE_SET_Y, -27);
++
++    // The trainer, the card, the badges and icons.
++    narc = NARC_ctor(NARC_INDEX_GRAPHIC__TRAINER_CASE, SAVE_PANEL_HEAP);
++    badges = SavePanel_HalveBadges(narc);
++    strips[0] = SavePanel_NewStrip(SP_TRAINER_Y0, SP_STRIP_Y0 + SP_STRIP_ROWS - SP_TRAINER_Y0);
++    strips[1] = SavePanel_NewStrip(SP_STRIP_Y0, SP_STRIP_ROWS);
++    panel->picsNext = 1;
++
++    SavePanel_DrawTrainer(panel, narc, trainerInfo, strips[0]);
++    NARC_dtor(narc);
++    SavePanel_DrawBadges(panel, badges, strips, trainerInfo);
++    SavePanel_DrawIcons(panel, strips, SaveData_GetParty(fieldSystem->saveData));
++    SavePanel_DrawCard(panel);
++
++    SavePanel_StripToLayer(panel, strips[0], SAVE_PANEL_PICS, &panel->picsNext, SP_PICS_TILES - 1);
++    SavePanel_StripToLayer(panel, strips[1], SAVE_PANEL_MSG, &panel->msgPicsNext, SP_TILE_MSG_BOX - 1);
++    SavePanel_FreeStrip(strips[1]);
++    SavePanel_FreeStrip(strips[0]);
++
++    // YES / NO.
++    Window_Add(bgConfig, &panel->yes, SAVE_PANEL_CARD, 0, 26, 16, 4, SP_PAL_BUTTON, SP_TILE_YES);
++    Window_Add(bgConfig, &panel->no, SAVE_PANEL_CARD, 16, 26, 16, 4, SP_PAL_BUTTON, SP_TILE_NO);
++    SavePanel_DrawButtons(panel);
++    NitroPort_LowerMenuSetPanelButtons(buttons, 2);
++
++    Bg_CopyTilemapBufferToVRAM(bgConfig, SAVE_PANEL_MSG);
++    Bg_CopyTilemapBufferToVRAM(bgConfig, SAVE_PANEL_PICS);
++    Bg_CopyTilemapBufferToVRAM(bgConfig, SAVE_PANEL_CARD);
++    GXS_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1 | GX_PLANEMASK_BG2 | GX_PLANEMASK_BG3);
++}
++
++void SavePanel_Close(FieldSystem *fieldSystem)
++{
++    SavePanel *panel = sSavePanel;
++    BgConfig *bgConfig = fieldSystem->bgConfig;
++
++    if (panel == NULL) {
++        return;
++    }
++
++    NitroPort_LowerMenuSetPanelButtons(NULL, 0);
++    GXS_SetVisiblePlane(0);
++    Window_Remove(&panel->yes);
++    Window_Remove(&panel->no);
++    Window_Remove(&panel->shadows);
++    Window_Remove(&panel->line);
++    Window_Remove(&panel->text);
++    Window_Remove(&panel->box);
++    Bg_SetOffset(bgConfig, SAVE_PANEL_BACK, BG_OFFSET_UPDATE_SET_Y, 0);
++    Bg_FreeTilemapBuffer(bgConfig, SAVE_PANEL_MSG);
++    Bg_FreeTilemapBuffer(bgConfig, SAVE_PANEL_PICS);
++    Bg_FreeTilemapBuffer(bgConfig, SAVE_PANEL_CARD);
++    Bg_FreeTilemapBuffer(bgConfig, SAVE_PANEL_BACK);
++    GX_SetBankForSubBG(GX_VRAM_SUB_BG_32_H);
++    GX_SetBankForSubOBJ(GX_VRAM_SUB_OBJ_16_I);
++
++    sSavePanel = NULL;
++    Heap_Free(panel);
++    Heap_Destroy(SAVE_PANEL_HEAP);
++}
++
++// The save script's message box (script_message.c), at the panel's top.
++void SavePanel_AddMessageWindow(BgConfig *bgConfig, Window *window)
++{
++    Window_Add(bgConfig, window, SAVE_PANEL_MSG, 2, 1, 27, 4, SP_PAL_MSG_TEXT, SP_TILE_MESSAGE);
++}
++
++// The save script's YES / NO (scrcmd.c): the cursor on YES, as the DS's.
++void SavePanel_StartYesNo(void)
++{
++    if (sSavePanel == NULL) {
++        return;
++    }
++
++    sSavePanel->selected = 0;
++    SavePanel_DrawButtons(sSavePanel);
++    NitroPort_LowerMenuTakePress(); // (a tap made before the question: not its answer)
++}
++
++// Tapped (let go on it), A on the one the cursor's on, B: NO. Left (up):
++// the cursor on YES, right (down): on NO. MENU_NOTHING_CHOSEN till then.
++int SavePanel_YesNoResult(void)
++{
++    SavePanel *panel = sSavePanel;
++    int press = -1, chosen = -1;
++
++    if (panel == NULL) {
++        return MENU_NO;
++    }
++
++    if (NitroPort_LowerMenuPressPending() >= 0) {
++        press = NitroPort_LowerMenuTakePress();
++    }
++
++    if (press == PORT_BUTTON_PRESS(0) || press == PORT_BUTTON_PRESS(1)) {
++        chosen = press - PORT_BUTTON_PRESS(0);
++    } else if (JOY_NEW(PAD_BUTTON_A)) {
++        chosen = panel->selected;
++    } else if (JOY_NEW(PAD_BUTTON_B)) {
++        chosen = 1;
++    } else if (JOY_NEW(PAD_KEY_LEFT | PAD_KEY_RIGHT | PAD_KEY_UP | PAD_KEY_DOWN)) {
++        int next = JOY_NEW(PAD_KEY_LEFT | PAD_KEY_UP) ? 0 : 1;
++
++        if (next != panel->selected) {
++            Sound_PlayEffect(SEQ_SE_DP_SELECT78_sseq);
++            panel->selected = next;
++            SavePanel_DrawButtons(panel);
++        }
++    }
++
++    if (chosen < 0) {
++        return MENU_NOTHING_CHOSEN;
++    }
++
++    Sound_PlayEffect(SE_CONFIRM_sseq_3);
++    panel->selected = -1;
++    SavePanel_DrawButtons(panel);
++
++    return chosen == 0 ? MENU_YES : MENU_NO;
++}
++#endif
+diff --git a/src/overlay005/script_message.c b/src/overlay005/script_message.c
+index a0278bcf..e432e588 100644
+--- a/src/overlay005/script_message.c
++++ b/src/overlay005/script_message.c
+@@ -1,5 +1,9 @@
+ #include "overlay005/script_message.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "overlay005/save_info_window.h"
++#endif
++
+ #include "field/field_system.h"
+ 
+ #include "bg_window.h"
+@@ -127,7 +131,16 @@ static void Init_ScriptMessageTemplate(FieldSystem *fieldSystem, StringTemplate
+ static void OpenMessageBox(FieldSystem *fieldSystem, ScriptMessage *msgData)
+ {
+     if (*(msgData->isOpen) == FALSE) {
++#ifdef SDK_PORT_3DS
++        // (the save in the lower menu's panel: its message box there)
++        if (SavePanel_IsOpen()) {
++            SavePanel_AddMessageWindow(fieldSystem->bgConfig, msgData->window);
++        } else {
++            FieldMessage_AddWindow(fieldSystem->bgConfig, msgData->window, BG_LAYER_MAIN_3);
++        }
++#else
+         FieldMessage_AddWindow(fieldSystem->bgConfig, msgData->window, BG_LAYER_MAIN_3);
++#endif
+         FieldMessage_DrawWindow(msgData->window, SaveData_GetOptions(fieldSystem->saveData));
+         *(msgData->isOpen) = TRUE;
+     }
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+index d2291bb1..9de354a8 100644
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -314,6 +314,9 @@ static BOOL ScrCmd_ShowStartMenu(ScriptContext *ctx);
+ static BOOL ScriptContext_ScrollBG3(ScriptContext *ctx);
+ static BOOL ScrCmd_ScrollBG3(ScriptContext *ctx);
+ static BOOL ScrCmd_ShowYesNoMenu(ScriptContext *ctx);
++#ifdef SDK_PORT_3DS
++static BOOL ScriptContext_WaitForSavePanelYesNo(ScriptContext *ctx);
++#endif
+ static BOOL ScriptContext_WaitForYesNoResult(ScriptContext *ctx);
+ static BOOL ScrCmd_InitGlobalTextMenu(ScriptContext *ctx);
+ static BOOL ScrCmd_InitLocalTextMenu(ScriptContext *ctx);
+@@ -1768,6 +1771,15 @@ static BOOL ScrCmd_ShowYesNoMenu(ScriptContext *ctx)
+     Menu **menu = FieldSystem_GetScriptMemberPtr(fieldSystem, SCRIPT_MANAGER_UI_CONTROL);
+     u16 destVarID = ScriptContext_ReadHalfWord(ctx);
+ 
++#ifdef SDK_PORT_3DS
++    // (the save in the lower menu's panel: its YES / NO buttons)
++    if (SavePanel_IsOpen()) {
++        SavePanel_StartYesNo();
++        ctx->data[0] = destVarID;
++        ScriptContext_Pause(ctx, ScriptContext_WaitForSavePanelYesNo);
++        return TRUE;
++    }
++#endif
+     LoadStandardWindowGraphics(fieldSystem->bgConfig, BG_LAYER_MAIN_3, 1024 - (18 + 12) - 9, 11, STANDARD_WINDOW_SYSTEM, HEAP_ID_FIELD1);
+ 
+     *menu = Menu_MakeYesNoChoice(fieldSystem->bgConfig, &sYesNoWindowTemplate, 1024 - (18 + 12) - 9, 11, 4);
+@@ -1778,6 +1790,21 @@ static BOOL ScrCmd_ShowYesNoMenu(ScriptContext *ctx)
+     return TRUE;
+ }
+ 
++#ifdef SDK_PORT_3DS
++static BOOL ScriptContext_WaitForSavePanelYesNo(ScriptContext *ctx)
++{
++    u16 *destVar = FieldSystem_GetVarPointer(ctx->fieldSystem, ctx->data[0]);
++    int result = SavePanel_YesNoResult();
++
++    if (result == MENU_NOTHING_CHOSEN) {
++        return FALSE;
++    }
++
++    *destVar = result == MENU_YES ? MENU_YES : MENU_NO;
++    return TRUE;
++}
++#endif
++
+ static BOOL ScriptContext_WaitForYesNoResult(ScriptContext *ctx)
+ {
+     FieldSystem *fieldSystem = ctx->fieldSystem;
+@@ -6552,6 +6579,12 @@ static BOOL ScrCmd_OpenSaveInfo(ScriptContext *ctx)
+     FieldSystem *fieldSystem = ctx->fieldSystem;
+     SaveInfoWindow **saveInfoWin = FieldSystem_GetScriptMemberPtr(fieldSystem, SCRIPT_MANAGER_SAVE_INFO_WINDOW);
+ 
++#ifdef SDK_PORT_3DS
++    // (the save in the lower menu's panel: its report there already)
++    if (SavePanel_IsOpen()) {
++        return FALSE;
++    }
++#endif
+     if (!SaveData_OverwriteCheck(fieldSystem->saveData)) {
+         *saveInfoWin = SaveInfoWindow_New(fieldSystem, HEAP_ID_FIELD1, BG_LAYER_MAIN_3);
+         SaveInfoWindow_Draw(*saveInfoWin);
+@@ -6565,6 +6598,11 @@ static BOOL ScrCmd_CloseSaveInfo(ScriptContext *ctx)
+     FieldSystem *fieldSystem = ctx->fieldSystem;
+     SaveInfoWindow **saveInfoWin = FieldSystem_GetScriptMemberPtr(fieldSystem, SCRIPT_MANAGER_SAVE_INFO_WINDOW);
+ 
++#ifdef SDK_PORT_3DS
++    if (SavePanel_IsOpen()) {
++        return FALSE;
++    }
++#endif
+     if (!SaveData_OverwriteCheck(fieldSystem->saveData)) {
+         SaveInfoWindow_Erase(*saveInfoWin);
+         SaveInfoWindow_Free(*saveInfoWin);
+diff --git a/src/start_menu.c b/src/start_menu.c
+index 27b69d39..f492ba10 100644
+--- a/src/start_menu.c
++++ b/src/start_menu.c
+@@ -23,6 +23,9 @@
+ #include "field/field_system.h"
+ #include "overlay005/fieldmap.h"
+ #include "overlay005/save_info_window.h"
++#ifdef SDK_PORT_3DS
++#include "overlay005/ov5_021D5BC0.h"
++#endif
+ #include "overlay005/sprite_resource_manager.h"
+ 
+ #include "appearance.h"
+@@ -204,6 +207,7 @@ void StartMenu_PortAppLeaving(int button);
+ BOOL StartMenu_PortAppIsMenus(ApplicationManager *appMan);
+ static void StartMenu_PortAppGone(void);
+ static void StartMenu_PortShowPanel(FieldSystem *fieldSystem);
++static BOOL StartMenu_PortSaveInPanel(FieldSystem *fieldSystem);
+ static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, int button);
+ static BOOL StartMenu_PortExitTownMap(FieldTask *fieldTask);
+ #endif
+@@ -313,6 +317,9 @@ BOOL FieldSystem_IsInValidLocation(FieldSystem *fieldSystem)
+ // with no button (RETIRE in the Great Marsh and the Pal Park, CHAT in the
+ // Union Room), it's the DS's start menu on the upper screen, as before.
+ extern int NitroPort_LowerMenuOn(void);
++extern void NitroPort_LowerMenuSetTall(int tall);
++extern void NitroPort_LowerMenuShow(int on);
++extern void NitroPort_LowerMenuSetPanelTouch(int on);
+ extern void NitroPort_LowerMenuSelect(int button);
+ extern void NitroPort_LowerMenuSetEnabled(u32 mask);
+ extern int NitroPort_LowerMenuTakePress(void);
+@@ -689,12 +696,18 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
+             }
+ 
+             // The field whole: the screens the game's again, the panel
+-            // fading in on the tab chosen.
++            // fading in on the tab chosen. (SAVE tapped in the app: the
++            // panel kept black, the save's page coming in it next, no map
++            // in between: StartMenu_PortSaveOpening.)
+             sPortInstant = FALSE;
+-            StartMenu_PortShowPanel(fieldSystem);
+-            NitroPort_LowerMenuFadePanel(FALSE);
+             NitroPort_LowerMenuHoldUpper(PORT_LET_GO_NOW);
+-            NitroPort_LowerMenuKeepShown(FALSE);
++
++            if (sPortAfterReveal != PORT_BUTTON_SAVE || !(sPortButtons & (1u << PORT_BUTTON_SAVE))
++                || !StartMenu_PortSaveInPanel(fieldSystem)) {
++                StartMenu_PortShowPanel(fieldSystem);
++                NitroPort_LowerMenuFadePanel(FALSE);
++                NitroPort_LowerMenuKeepShown(FALSE);
++            }
+         } else if (!IsScreenFadeDone()) {
+             break;
+         } else if (sPortMode) {
+@@ -1632,6 +1645,11 @@ static BOOL StartMenu_SelectSave(FieldTask *fieldTask)
+     StartMenu *menu = FieldTask_GetEnv(fieldTask);
+ 
+     StartMenu_Close(menu);
++#ifdef SDK_PORT_3DS
++    if (StartMenu_PortSaveInPanel(FieldTask_GetFieldSystem(fieldTask))) {
++        NitroPort_LowerMenuSelect(PORT_BUTTON_SAVE); // (lit on through the save in the panel)
++    }
++#endif
+     Window_EraseStandardFrame(&menu->primaryWindow, TRUE);
+     Bg_ScheduleTilemapTransfer(menu->primaryWindow.bgConfig, menu->primaryWindow.bgLayer);
+     Window_Remove(&menu->primaryWindow);
+@@ -1642,12 +1660,130 @@ static BOOL StartMenu_SelectSave(FieldTask *fieldTask)
+     return TRUE;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// The save from the lower menu, in its panel (save_info_window.c: its
++// message box, report card and YES / NO there, the upper screen keeping
++// the field): the panel fades to black, the menu kept on, the field's
++// bottom screen (the Pokétch) steps aside behind it and the save's page
++// comes and pops in, then the save's script runs as on the DS. Done, the
++// panel fades to black again, the page goes, the Pokétch comes back behind
++// it, and the panel fades in on the map: back to walking. (Where the menu
++// isn't on, or the save can't be made (another adventure's on the card),
++// it's the DS's.)
++static int sPortSavePhase;
++static int sPortSaveFrames;
++
++// Before the save's script: TRUE while the page comes (the state stays).
++// Whether SAVE now shows the save in the panel.
++static BOOL StartMenu_PortSaveInPanel(FieldSystem *fieldSystem)
++{
++    return sPortSavePhase == 0 && gStartMenuPortMenu && NitroPort_LowerMenuAvailable() && NitroPort_LowerMenuOn()
++        && fieldSystem->bottomScreen == 1 && !SaveData_OverwriteCheck(fieldSystem->saveData);
++}
++
++static BOOL StartMenu_PortSaveOpening(FieldSystem *fieldSystem)
++{
++    switch (sPortSavePhase) {
++    case 0:
++        if (!StartMenu_PortSaveInPanel(fieldSystem)) {
++            return FALSE;
++        }
++
++        // (already black, SAVE tapped in an app of the panel's: at once)
++        NitroPort_LowerMenuKeepShown(TRUE);
++        NitroPort_LowerMenuFadePanel(TRUE);
++        NitroPort_LowerMenuSelect(PORT_BUTTON_SAVE); // (lit from the tap on: the menu's window closing unlit it)
++        sPortSavePhase = 1;
++        return TRUE;
++    case 1:
++        if (NitroPort_LowerMenuPanelFade() < PORT_FADE_BLACK) {
++            return TRUE;
++        }
++
++        FieldSystem_EndBottomScreen(fieldSystem);
++        sPortSavePhase = 2;
++        return TRUE;
++    case 2:
++        if (!FieldSystem_IsBottomScreenDone(fieldSystem)) {
++            return TRUE;
++        }
++
++        SavePanel_Open(fieldSystem);
++        NitroPort_LowerMenuSelect(PORT_BUTTON_SAVE); // (lit while it's up, as the bag's button)
++        NitroPort_LowerMenuShow(TRUE);
++        NitroPort_LowerMenuSetTall(TRUE);
++        NitroPort_LowerMenuSetPanel(PORT_PANEL_DS);
++        NitroPort_LowerMenuSetPanelTouch(FALSE);
++        sPortSaveFrames = 2;
++        sPortSavePhase = 3;
++        return TRUE;
++    case 3:
++        if (--sPortSaveFrames > 0) {
++            return TRUE;
++        }
++
++        NitroPort_LowerMenuFadePanel(PORT_CLEAR_NOW);
++        NitroPort_LowerMenuKeepShown(FALSE);
++        sPortSavePhase = 4;
++        return FALSE;
++    default:
++        return FALSE;
++    }
++}
++
++// After it: TRUE while the page goes and the Pokétch comes back.
++static BOOL StartMenu_PortSaveClosing(FieldSystem *fieldSystem)
++{
++    switch (sPortSavePhase) {
++    case 4:
++        NitroPort_LowerMenuKeepShown(TRUE);
++        NitroPort_LowerMenuFadePanel(TRUE);
++        sPortSavePhase = 5;
++        return TRUE;
++    case 5:
++        if (NitroPort_LowerMenuPanelFade() < PORT_FADE_BLACK) {
++            return TRUE;
++        }
++
++        SavePanel_Close(fieldSystem);
++        NitroPort_LowerMenuSetTall(FALSE); // (the menu stays on: the Pokétch's screen as it was)
++        NitroPort_LowerMenuSetPanelTouch(TRUE);
++        FieldSystem_InitBottomScreen(fieldSystem);
++        sPortSaveFrames = 3;
++        sPortSavePhase = 6;
++        return TRUE;
++    case 6:
++        // (the Pokétch drawn first, a few frames)
++        if (--sPortSaveFrames > 0) {
++            return TRUE;
++        }
++
++        StartMenu_PortShowPanel(fieldSystem);
++        NitroPort_LowerMenuSelect(-1);
++        NitroPort_LowerMenuFadePanel(FALSE);
++        NitroPort_LowerMenuKeepShown(FALSE);
++        NitroPort_LowerMenuTakePress(); // (a menu button tapped during the save: not acted on after it)
++        sPortSavePhase = 0;
++        return FALSE;
++    default:
++        sPortSavePhase = 0;
++        return FALSE;
++    }
++}
++#endif
++
+ static void StartMenu_Save(FieldTask *fieldTask)
+ {
+     StartMenu *menu = FieldTask_GetEnv(fieldTask);
+     FieldSystem *fieldSystem = FieldTask_GetFieldSystem(fieldTask);
+     SaveMenu *saveMenu;
+ 
++#ifdef SDK_PORT_3DS
++    if (StartMenu_PortSaveOpening(fieldSystem)) {
++        return;
++    }
++#endif
++
+     if (SaveData_OverwriteCheck(fieldSystem->saveData)) {
+         ScriptManager_Start(fieldTask, SCRIPT_ID(COMMON_SCRIPTS, 34), NULL, NULL);
+     } else {
+@@ -1667,6 +1803,12 @@ static void StartMenu_SaveWait(FieldTask *fieldTask)
+     StartMenu *menu = FieldTask_GetEnv(fieldTask);
+     SaveMenu *saveMenu = menu->taskData;
+ 
++#ifdef SDK_PORT_3DS
++    if (sPortSavePhase != 0 && StartMenu_PortSaveClosing(fieldSystem)) {
++        return;
++    }
++#endif
++
+     if (SaveData_OverwriteCheck(fieldSystem->saveData)) {
+         menu->state = START_MENU_STATE_INIT;
+ #ifdef SDK_PORT_3DS
+@@ -2530,6 +2672,21 @@ void StartMenu_PortMapStale(void)
+     sPortMapStale = TRUE;
+ }
+ 
++// (ov5_021D5BC0.c's) The field's bottom screen (the Pokétch) begun: the panel
++// on the tab chosen (the map once they have the Town Map) from the field's
++// first frame on, not only once the player can walk (the Pokétch showing
++// till then, as the field faded in).
++void StartMenu_PortFieldStarts(FieldSystem *fieldSystem)
++{
++    if (NitroPort_LowerMenuOn() && fieldSystem->playerAvatar != NULL && fieldSystem->location != NULL) {
++        StartMenu_PortShowPanel(fieldSystem);
++
++        if (sPortMapAgain) {
++            StartMenu_PortShowPanel(fieldSystem); // (the description too: the field's loading, no frame to spare it)
++        }
++    }
++}
++
+ // The tab a choice shows: the map once they have the Town Map (and the port
+ // can show it), else the Pokétch.
+ static int StartMenu_PortTabFor(FieldSystem *fieldSystem, int choice)
+-- 
+2.43.0
+
