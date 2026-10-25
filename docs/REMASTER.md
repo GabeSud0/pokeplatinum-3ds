@@ -811,10 +811,12 @@ screens) the lower screen is the DS's, filling the screen as before.
   where the lower screen's case has none); the badges' tab the lower
   screen's rows 0-191 in one piece (the clasp where the card's tab has it).
   There the lid is shaped for the panel (`TrainerCasePort_ShapeLid`): its
-  sides and rounded bottom corners moved in 6 pixels, so it covers the
+  sides and rounded bottom corners moved in 6 pixels, its GYM LEADERS
+  heading with them (as far from the side as on the DS), so it covers the
   badge case beneath by 2 pixels each side (not 8 wider than it, as on the
   DS's screen), and its bottom edge upside down over its plain top rows as
-  its top edge (new tiles in slots its tilemap doesn't use; the case's own
+  its top edge (made as a picture of its rows and cut into tiles again,
+  those changed in the slots its tilemap no longer uses; the case's own
   rows round its top made plain). It shrinks towards that top as on the DS,
   flipping up from the badge case's top; open, its strip up there is left
   out (laid out so once it's up, and with it again as it comes down). The
