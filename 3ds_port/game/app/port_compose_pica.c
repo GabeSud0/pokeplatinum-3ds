@@ -150,6 +150,7 @@ typedef struct Screen {
     void *lcd[LCD_BUFS][2];
     int nlcd;                      /* how many of them (LCD_BUFS or LCD_BUFS_LOWER) */
     int onLcd, lastLcd;            /* (lastLcd: scanned out until the swap takes: not free yet) */
+    int onStereo;                  /* (what's on the LCD has a right eye of its own) */
     Pending pending[PENDING_MAX];
     int npending;
     unsigned presentSlot;
@@ -176,6 +177,14 @@ static Screen sScreens[2];        /* 0: upper, 1: lower */
 #define MENU_TEX_W 512
 #define MENU_TEX_H 256
 static int sUpperKept, sUpperKeptBright;   /* (the upper screen kept: NitroPort_LowerMenuHoldUpper) */
+/* The field's picture (NITRO_LOWERMENU_HOLD_FIELD): the upper LCD's, copied
+ * as it began to be kept at full brightness (each eye, RGB565, as the LCD
+ * takes it), and the game's forgetting's count then; whether the LCD shows
+ * it now (or what it was copied from), and shows it again (back from the
+ * HOME menu). */
+static void *sFieldPic[2];
+static int sFieldValid, sFieldStereo, sUpperShowsField, sFieldAgain;
+static u32 sFieldSerial;
 static int sUpperShownBright;             /* (its picture drawn last: how bright, -16..16) */
 static void *sMenuTexData[2];
 static C3D_Tex sMenuTex;
@@ -366,6 +375,60 @@ static void present(int s, int buf, int stereo)
     }
     scr->lastLcd = scr->onLcd;
     scr->onLcd = buf;
+    scr->onStereo = s == 0 && stereo;
+}
+
+/* (the upper screen kept at full brightness, under sPresentLock) What's on
+ * its LCD copied, as the field's picture. */
+static void keep_field_picture(Screen *scr)
+{
+    size_t bytes = (size_t)scr->width * SCREEN_H * 2u;
+    int eye;
+
+    if (scr->onLcd < 0) {
+        return;   /* (the field's picture itself on the LCD still: kept as it is) */
+    }
+    sFieldValid = 0;
+    for (eye = 0; eye < (scr->onStereo ? 2 : 1); eye++) {
+        if (sFieldPic[eye] == NULL) {
+            sFieldPic[eye] = linearAlloc(bytes);
+        }
+        if (sFieldPic[eye] == NULL) {
+            return;   /* (no memory: black, as before) */
+        }
+        GSPGPU_InvalidateDataCache(scr->lcd[scr->onLcd][eye], (u32)bytes);
+        memcpy(sFieldPic[eye], scr->lcd[scr->onLcd][eye], bytes);
+        GSPGPU_FlushDataCache(sFieldPic[eye], (u32)bytes);
+    }
+    sFieldStereo = scr->onStereo;
+    sFieldSerial = NitroPort_LowerMenuFieldSerial();
+    sFieldValid = 1;
+}
+
+static int field_picture_kept(void)
+{
+    return sFieldValid && sFieldSerial == NitroPort_LowerMenuFieldSerial();
+}
+
+/* (under sPresentLock, nothing of the upper screen's waiting) The field's
+ * picture onto the upper LCD from the next V-blank. */
+static void present_field_picture(Screen *scr)
+{
+    u32 mode = LCD_FORMAT | (1u << 8) | (sFieldStereo ? 1u << 5 : 1u << 6);
+    GSPGPU_FramebufferInfo info;
+
+    scr->presentSlot ^= 1u;
+    info.active_framebuf = scr->presentSlot;
+    info.framebuf0_vaddr = (u32 *)sFieldPic[0];
+    info.framebuf1_vaddr = (u32 *)(sFieldStereo ? sFieldPic[1] : sFieldPic[0]);
+    info.framebuf_widthbytesize = LCD_STRIDE;
+    info.format = mode;
+    info.framebuf_dispselect = scr->presentSlot;
+    info.unk = 0;
+    GSPGPU_SetBufferSwap(GSP_SCREEN_TOP, &info);
+    scr->lastLcd = scr->onLcd;
+    scr->onLcd = -1;   /* (none of the LCD framebuffers: all free once that's off) */
+    scr->onStereo = sFieldStereo;
 }
 
 /* While the HOME menu (or another applet) has the screens, or the program
@@ -2543,6 +2606,13 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             if (!sUpperKept && wish > 0) {
                 sUpperKept = 1;
                 sUpperKeptBright = sUpperShownBright <= -8 ? -16 : sUpperShownBright >= 8 ? 16 : 0;
+                /* (at full brightness: the field, a panel app opening from
+                 * it; its picture kept for NITRO_LOWERMENU_HOLD_FIELD) */
+                sUpperShowsField = 0;
+                if (sUpperKeptBright == 0) {
+                    keep_field_picture(scr);
+                    sUpperShowsField = sFieldValid;
+                }
             } else if (sUpperKept && wish < 0) {
                 /* (let go now: once the game's picture there is one made
                  * since (the newest set: the game's as of its drawer's last
@@ -2560,7 +2630,26 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                        NitroPort_LowerMenuBrightness(set->info.masterBright) == sUpperKeptBright) {
                 sUpperKept = 0;
             }
-            if (sUpperKept && !forced) {
+            if (!sUpperKept) {
+                sUpperShowsField = 0;
+                sFieldAgain = 0;
+            }
+            /* Kept showing the field's picture (an app in the panel after
+             * one that took both screens: what's kept is that one's black):
+             * the field's put back on the LCD, once nothing of the upper
+             * screen's is waiting for its V-blank; again after the HOME
+             * menu. As bright as the field from then on. */
+            if (sUpperKept && forced && sUpperShowsField) {
+                sFieldAgain = 1;
+            }
+            if (sUpperKept && wish == NITRO_LOWERMENU_HOLD_FIELD && field_picture_kept() &&
+                (!sUpperShowsField || sFieldAgain) && scr->npending == 0) {
+                present_field_picture(scr);
+                sUpperShowsField = 1;
+                sFieldAgain = 0;
+                sUpperKeptBright = 0;
+            }
+            if (sUpperKept && (!forced || (sUpperShowsField && field_picture_kept()))) {
                 stereoNow = 0;   /* (nothing drawn there: no 3D, no stereo) */
                 set->held--;
                 continue;

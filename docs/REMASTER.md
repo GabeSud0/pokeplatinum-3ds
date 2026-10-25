@@ -715,7 +715,9 @@ screens) the lower screen is the DS's, filling the screen as before.
   Gracidea, a Berry away from a soft-soil patch), given from the item's
   menu, or given from the party's (and B there) goes the same way, the
   party coming behind the black panel (below); anything else (the
-  Bicycle, a Berry's tag, a mail to write...) is the DS's fade out. The
+  Bicycle, a Berry's tag, a mail to write for a Pokémon holding nothing:
+  the start menu tells the bag which one, `gStartMenuPortGiveSlot`) is the
+  DS's fade out. The
   bag's fades out are put off to its last state, which decides
   (`BagPort_LeavesInPanel`). (The bag hands the start menu the button
   tapped, `gStartMenuPortAppPress`: the menu forgets its own press when it
@@ -784,7 +786,16 @@ screens) the lower screen is the DS's, filling the screen as before.
   (`NITRO_LOWERMENU_LET_GO_NOW`), it shows the game's picture from the next
   frame however bright (back from the bag behind the panel's black): the
   first one made since (`NitroPort_LowerMenuUpperLetGoShows`; half a
-  second at most), not the app's hidden screen from before it.
+  second at most), not the app's hidden screen from before it. Kept
+  showing the field's picture (`NITRO_LOWERMENU_HOLD_FIELD`, the start
+  menu's panel apps): the platforms copy the upper screen's picture as it
+  begins to be kept at full brightness (the field, a panel app opening
+  from it) and put it back when an app in the panel comes after one that
+  took both screens (the bag after an evolution, the party after the
+  mail), whose fade out left black there; forgotten once the player walks
+  again (`NitroPort_LowerMenuForgetField`). The 3DS puts the copy on the
+  LCD itself (its own framebuffer, once nothing of the upper screen's is
+  waiting for its V-blank).
   (Nothing lets it go on a soft reset yet; the port has none.) The 3DS
   doesn't draw a screen while it's
   kept (what's on its LCD stays); drawn again regardless (back from the

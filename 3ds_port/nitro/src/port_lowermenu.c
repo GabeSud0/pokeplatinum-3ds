@@ -34,6 +34,7 @@ static volatile int sTall;          /* (NitroPort_LowerMenuSetTall) */
 static int sPanelTouch = 1;         /* (NitroPort_LowerMenuSetPanelTouch) */
 static volatile int sHoldUpper;     /* (NitroPort_LowerMenuHoldUpper) */
 static volatile uint32_t sLetGoAt;  /* (let go now: the clock then; NitroPort_LowerMenuUpperLetGoShows) */
+static volatile uint32_t sFieldSerial;   /* (NitroPort_LowerMenuForgetField) */
 static volatile int sAvailable;     /* (NitroPort_LowerMenuSetAvailable) */
 static int sSelected = -1;          /* the game's cursor */
 static int sHeld = -1;              /* the button a finger is on */
@@ -685,19 +686,32 @@ void NitroPort_LowerMenuSetPanelTouch(int on)
 
 void NitroPort_LowerMenuHoldUpper(int hold)
 {
-    hold = hold == NITRO_LOWERMENU_LET_GO_NOW ? NITRO_LOWERMENU_LET_GO_NOW : hold ? 1 : 0;
+    hold = hold == NITRO_LOWERMENU_LET_GO_NOW || hold == NITRO_LOWERMENU_HOLD_FIELD ? hold : hold ? 1 : 0;
     if (hold != __atomic_load_n(&sHoldUpper, __ATOMIC_ACQUIRE)) {
         if (hold == NITRO_LOWERMENU_LET_GO_NOW) {
             __atomic_store_n(&sLetGoAt, sClock ? sClock() : 0u, __ATOMIC_RELEASE);
         }
         __atomic_store_n(&sHoldUpper, hold, __ATOMIC_RELEASE);
-        NitroPort_Log("[lowermenu] upper screen %s", hold > 0 ? "held" : hold < 0 ? "let go now" : "let go");
+        NitroPort_Log("[lowermenu] upper screen %s", hold == NITRO_LOWERMENU_HOLD_FIELD ? "held, the field's picture"
+                                                     : hold > 0                         ? "held"
+                                                     : hold < 0                         ? "let go now"
+                                                                                        : "let go");
     }
 }
 
 int NitroPort_LowerMenuUpperHeld(void)
 {
     return __atomic_load_n(&sHoldUpper, __ATOMIC_ACQUIRE);
+}
+
+void NitroPort_LowerMenuForgetField(void)
+{
+    __atomic_add_fetch(&sFieldSerial, 1u, __ATOMIC_RELEASE);
+}
+
+uint32_t NitroPort_LowerMenuFieldSerial(void)
+{
+    return __atomic_load_n(&sFieldSerial, __ATOMIC_ACQUIRE);
 }
 
 int NitroPort_LowerMenuUpperLetGoShows(uint32_t stamp)

@@ -102,9 +102,19 @@ int NitroPort_LowerMenuTall(void);
  *     was). UpperHeld: the game's wish (> 0 kept, 0 let go, < 0 let go
  *     now; the platforms keep the picture). */
 #define NITRO_LOWERMENU_LET_GO_NOW (-1)
+/* (HoldUpper) Kept, showing the field's picture: the one the platform kept
+ * last as the upper screen began to be kept at full brightness (the field,
+ * a panel app opening from it), since the game last forgot it
+ * (ForgetField: walking again). For an app in the panel after one that
+ * took both screens (an evolution, the mail): the field above it, not the
+ * black that one's fade out left. None kept: as 1. FieldSerial: the
+ * forgetting's count (the platforms keep the picture with it). */
+#define NITRO_LOWERMENU_HOLD_FIELD 2
 void NitroPort_LowerMenuSetPanelTouch(int on);
 void NitroPort_LowerMenuHoldUpper(int hold);
 int NitroPort_LowerMenuUpperHeld(void);
+void NitroPort_LowerMenuForgetField(void);
+uint32_t NitroPort_LowerMenuFieldSerial(void);
 /* (the platforms, the upper screen kept and let go now) Whether the game's
  * picture made at stamp (the clock, SetClock's, then) is one to show: made
  * since the game let go, or half a second on (the 3DS draws the game's

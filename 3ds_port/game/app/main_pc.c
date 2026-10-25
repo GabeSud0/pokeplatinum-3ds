@@ -396,6 +396,11 @@ static void RemasterRender(uint16_t *out);
  * picture there is as bright as what's kept. Each frame. */
 static uint16_t sKeptTop[320 * 192];
 static int sTopKept, sTopKeptBright;
+/* The field's picture (NITRO_LOWERMENU_HOLD_FIELD): what was kept at full
+ * brightness, with the game's forgetting's count then; shown now. */
+static uint16_t sFieldTop[320 * 192];
+static int sFieldValid, sTopShowsField;
+static uint32_t sFieldSerial;
 
 static void KeepUpperScreen(void)
 {
@@ -412,8 +417,24 @@ static void KeepUpperScreen(void)
         sTopKept = 1;
         /* (kept mid-fade: as the end of a fade nearest it) */
         sTopKeptBright = bright <= -8 ? -16 : bright >= 8 ? 16 : 0;
+        sTopShowsField = 0;
+        if (sTopKeptBright == 0) {
+            memcpy(sFieldTop, sKeptTop, sizeof(sFieldTop));
+            sFieldSerial = NitroPort_LowerMenuFieldSerial();
+            sFieldValid = 1;
+            sTopShowsField = 1;
+        }
     } else if (sTopKept && (wish < 0 || (wish == 0 && bright == sTopKeptBright))) {
         sTopKept = 0;   /* (wish < 0: let go now) */
+        sTopShowsField = 0;
+    }
+    /* (kept showing the field's picture: an app in the panel after one
+     * that took both screens; as bright as the field from then on) */
+    if (sTopKept && wish == NITRO_LOWERMENU_HOLD_FIELD && !sTopShowsField && sFieldValid &&
+        sFieldSerial == NitroPort_LowerMenuFieldSerial()) {
+        memcpy(sKeptTop, sFieldTop, sizeof(sKeptTop));
+        sTopKeptBright = 0;
+        sTopShowsField = 1;
     }
 }
 

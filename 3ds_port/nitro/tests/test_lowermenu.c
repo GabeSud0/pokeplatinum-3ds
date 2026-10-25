@@ -583,6 +583,22 @@ static void test_upper_let_go_waits_for_picture(void)
     CHECK(NitroPort_LowerMenuUpperLetGoShows(8000) == 1);
     NitroPort_LowerMenuHoldUpper(0);
     NitroPort_LowerMenuSetClock(NULL);
+    /* Kept showing the field's picture: the platforms' wish 2; forgotten
+     * (walking again): its count goes on. */
+    {
+        uint32_t serial = NitroPort_LowerMenuFieldSerial();
+
+        NitroPort_LowerMenuHoldUpper(NITRO_LOWERMENU_HOLD_FIELD);
+        CHECK(NitroPort_LowerMenuUpperHeld() == NITRO_LOWERMENU_HOLD_FIELD);
+        NitroPort_LowerMenuHoldUpper(1);
+        CHECK(NitroPort_LowerMenuUpperHeld() == 1);
+        NitroPort_LowerMenuHoldUpper(5);
+        CHECK(NitroPort_LowerMenuUpperHeld() == 1);
+        NitroPort_LowerMenuHoldUpper(0);
+        CHECK(NitroPort_LowerMenuFieldSerial() == serial);
+        NitroPort_LowerMenuForgetField();
+        CHECK(NitroPort_LowerMenuFieldSerial() != serial);
+    }
 }
 
 /* The menu kept shown while off: its buttons still pressed then, the panel
