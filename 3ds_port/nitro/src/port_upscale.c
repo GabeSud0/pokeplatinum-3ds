@@ -248,6 +248,9 @@ int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, cons
                              const uint8_t alpha16[17], void (*flush)(void *data, uint32_t bytes))
 {
     const int bands = h / 4;
+    /* (the layers in front of the 3D: the DS's lines only, a tall picture's
+     * too: past them there's no 3D) */
+    const int overBands = (h > 192 ? 192 : h) / 4;
     const size_t band = (size_t)w * 4u;
     const uint32_t tileRow = (uint32_t)texW * 8u;   /* texels in a band's row of tiles (doubled) */
     uint32_t gen = ++sh->gen, any = 0;
@@ -304,14 +307,14 @@ int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, cons
         return 0;
     }
     if (!sh->overValid) {
-        memcpy(sh->over, over, band * bands * 2u);
-        memcpy(sh->alpha, overAlpha, band * bands);
-        for (b = 0; b < bands; b++) {
+        memcpy(sh->over, over, band * overBands * 2u);
+        memcpy(sh->alpha, overAlpha, band * overBands);
+        for (b = 0; b < overBands; b++) {
             sh->overChanged[b] = gen;
         }
         sh->overValid = 1;
     } else {
-        for (b = 0; b < bands; b++) {
+        for (b = 0; b < overBands; b++) {
             if (memcmp(over + band * b, sh->over + band * b, band * 2u) != 0 ||
                 memcmp(overAlpha + band * b, sh->alpha + band * b, band) != 0) {
                 memcpy(sh->over + band * b, over + band * b, band * 2u);
@@ -323,7 +326,7 @@ int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, cons
     /* The bands changed converted now: whether anything's in them, and
      * whether any of it is partly see-through (then RGBA8, else RGBA5551
      * if the target takes it). */
-    for (b = 0; b < bands; b++) {
+    for (b = 0; b < overBands; b++) {
         if (sh->overChanged[b] == gen) {
             sh->overAny[b] = NitroPort_PremultiplyOver(over, overAlpha, alpha16, sh->premultiplied,
                                                        (int)(band * b), (int)(band * (b + 1))) != 0;
@@ -333,7 +336,7 @@ int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, cons
     }
     if (t->allow16) {
         packed = 1;
-        for (b = 0; b < bands; b++) {
+        for (b = 0; b < overBands; b++) {
             if (sh->overPartial[b]) {
                 packed = 0;
                 break;
@@ -341,13 +344,13 @@ int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, cons
         }
     }
     sameKind = t->overGen == 0 || t->over16 == packed;   /* (else all of it again, the other way) */
-    for (b = 0, from = -1; b <= bands; b++) {
-        int redo = b < bands && (!known || !sameKind || t->overGen == 0 || sh->overChanged[b] > t->overGen);
+    for (b = 0, from = -1; b <= overBands; b++) {
+        int redo = b < overBands && (!known || !sameKind || t->overGen == 0 || sh->overChanged[b] > t->overGen);
 
         if (redo && from < 0) {
             from = b;
         } else if (!redo && from >= 0) {
-            uint32_t rows = (uint32_t)(b - from) + (b == bands ? 1u : 0u);
+            uint32_t rows = (uint32_t)(b - from) + (b == overBands ? 1u : 0u);
             int k;
 
             for (k = from; k < b; k++) {
@@ -374,7 +377,7 @@ int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, cons
             from = -1;
         }
     }
-    for (b = 0; b < bands; b++) {
+    for (b = 0; b < overBands; b++) {
         any |= sh->overAny[b];
     }
     t->overGen = gen;

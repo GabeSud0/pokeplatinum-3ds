@@ -1551,8 +1551,8 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         layers->masterBright = split.masterBright;
         layers->backdrop = split.backdrop;
         layers->width = split.width > 256 ? split.width : 256;
-        /* (a tall picture only without the 3D: with it, the DS's lines) */
-        layers->height = !split.has3d && split.height > 192 ? split.height : 192;
+        /* (a tall picture: with the 3D too, on its first 192 lines) */
+        layers->height = split.height > 192 ? split.height : 192;
         layers->stamp = stamp;
         layers->displayOff = 0;
         return true;
@@ -1565,8 +1565,9 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
     return NitroPort_Render2DIfChanged(engine, ds) != 0;
 }
 
-/* The picture onto its screen, shown from the next V-blank. */
-static void ShowScreen(int engine, bool aOnTop)
+/* The picture onto its screen, shown from the next V-blank (false: the
+ * remaster's compositor had no set free; drawn whole the next time). */
+static bool ShowScreen(int engine, bool aOnTop)
 {
     bool top = OnTop(engine, aOnTop);
     gfxScreen_t screen = top ? GFX_TOP : GFX_BOTTOM;
@@ -1576,18 +1577,21 @@ static void ShowScreen(int engine, bool aOnTop)
     if (sRemaster) {
         /* The layers upscaled into a texture, for the display thread (if
          * no set was free: drawn whole and published the next time). */
-        if (!NitroPort_ComposePublish(engine, top ? 0 : 1)) {
+        bool published = NitroPort_ComposePublish(engine, top ? 0 : 1) != 0;
+
+        if (!published) {
             sMustDraw[top ? 0 : 1] = true;
         }
         if (__atomic_load_n(&sGpuWakeReady, __ATOMIC_ACQUIRE)) {
             LightEvent_Signal(&sGpuWake);
         }
-        return;
+        return published;
     }
     Blit(screen, sPixels[top ? 0 : 1], top ? (400 - 256) / 2 : (320 - 256) / 2);
     fb = gfxGetFramebuffer(screen, GFX_LEFT, &width, &height);
     GSPGPU_FlushDataCache(fb, (u32)width * height * 2);
     gfxScreenSwapBuffers(screen, false);
+    return true;
 }
 
 static void DrawerMain(void *arg)
@@ -1631,8 +1635,12 @@ static void DrawerMain(void *arg)
         if (d->readPriority != d->priority && (drawA || drawB)) {
             svcSetThreadPriority(CUR_THREAD_HANDLE, d->priority);
         }
-        if (drawA) {
-            ShowScreen(0, d->aOnTop);
+        if (d->screens & ENGINE_A) {
+            /* (its screen's newest picture the game's as of this frame:
+             * published now, or unchanged; not if no set was free) */
+            if ((drawA ? ShowScreen(0, d->aOnTop) : !sMustDraw[OnTop(0, d->aOnTop) ? 0 : 1]) && sRemaster) {
+                NitroPort_Compose2DCurrent(OnTop(0, d->aOnTop) ? 0 : 1, d->stamp);
+            }
         }
         if (sRemaster && (d->screens & ENGINE_A)) {
             /* (a new 3D scene may be waiting for this frame's 2D) */
@@ -1641,8 +1649,10 @@ static void DrawerMain(void *arg)
                 LightEvent_Signal(&sGpuWake);
             }
         }
-        if (drawB) {
-            ShowScreen(1, d->aOnTop);
+        if (d->screens & ENGINE_B) {
+            if ((drawB ? ShowScreen(1, d->aOnTop) : !sMustDraw[OnTop(1, d->aOnTop) ? 0 : 1]) && sRemaster) {
+                NitroPort_Compose2DCurrent(OnTop(1, d->aOnTop) ? 0 : 1, d->stamp);
+            }
         }
         d->drawn += (unsigned)drawA + (unsigned)drawB;
         d->ticks += svcGetSystemTick() - start;
