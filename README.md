@@ -45,16 +45,16 @@ of the same engine.
   size, with the 3D drawn at the screen's resolution.
 - Updated animations for the intro.
 - New animations for some of the UI.
-
-**Work in progress**
 - 60 frames a second
 - Better 3D quality
+
+**Work in progress**
 - A better UI for the bottom screen
-- Better lighting
+- A Pokémon follower
 
 **Future wishlist**
 - Wi-Fi
-- A Pokémon follower
+- Better lighting
 
 ## This repository contains no game content
 
