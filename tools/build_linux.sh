@@ -3,6 +3,7 @@
 # the Linux counterpart of build_windows_msys2.sh:
 #
 #   bash build_linux.sh /path/to/your/platinum.nds
+#   PR=166 bash build_linux.sh /path/to/your/platinum.nds   (a pull request)
 #
 # On Bazzite, SteamOS-like and other immutable systems (Fedora Atomic:
 # Silverblue, Kinoite, Bazzite, Aurora, Bluefin...), where packages can't be
@@ -25,6 +26,7 @@ trap 'echo; echo "==> Stopped: the command on line $LINENO of build_linux.sh fai
 ROM="${1:-}"
 REPO_DIR="$HOME/pokeplatinum-3ds"
 BRANCH="${BRANCH:-main}"
+PR="${PR:-}"              # PR=166: build that pull request instead of main
 BOX="${BOX:-pokeplatinum-3ds}"
 BOX_IMAGE="docker.io/devkitpro/devkitarm:latest"
 step() { printf '\n==> %s\n' "$*"; }
@@ -65,7 +67,7 @@ if ! command -v apt-get >/dev/null; then
         distrobox create --name "$BOX" --image "$BOX_IMAGE" --yes
     fi
     step "Building inside the distrobox \"$BOX\""
-    exec distrobox enter "$BOX" -- env BRANCH="$BRANCH" bash "$SELF" "$ROM"
+    exec distrobox enter "$BOX" -- env BRANCH="$BRANCH" PR="$PR" bash "$SELF" "$ROM"
 fi
 
 # ---- Debian/Ubuntu (directly, or inside the distrobox) ---------------------
@@ -99,15 +101,21 @@ else
     sudo dkp-pacman -S --needed --noconfirm 3ds-dev
 fi
 
-if [ -d "$REPO_DIR/.git" ]; then
-    step "Updating $REPO_DIR"
-    git -C "$REPO_DIR" fetch origin
-    git -C "$REPO_DIR" checkout "$BRANCH"
-    git -C "$REPO_DIR" reset --hard "origin/$BRANCH"
-else
+if [ ! -d "$REPO_DIR/.git" ]; then
     step "Cloning the port into $REPO_DIR"
-    git clone -b "$BRANCH" https://github.com/GabeSud0/pokeplatinum-3ds.git "$REPO_DIR"
+    git clone https://github.com/GabeSud0/pokeplatinum-3ds.git "$REPO_DIR"
 fi
+if [ -n "$PR" ]; then
+    step "Getting pull request #$PR"
+    git -C "$REPO_DIR" fetch origin "pull/$PR/head"
+    git -C "$REPO_DIR" checkout -q --detach FETCH_HEAD
+else
+    step "Updating $REPO_DIR ($BRANCH)"
+    git -C "$REPO_DIR" fetch origin
+    git -C "$REPO_DIR" checkout -q "$BRANCH"
+    git -C "$REPO_DIR" reset -q --hard "origin/$BRANCH"
+fi
+git -C "$REPO_DIR" log -1 --format='    at %h: %s'
 cd "$REPO_DIR"
 
 step "Fetching the decompilation and the SDKs (a few minutes the first time)"
