@@ -66,6 +66,10 @@ static volatile int sRunsUpper;     /* (NitroPort_LowerMenuPanelShowsUpper) */
 static int sLastDsX, sLastDsY;      /* (a drag's last place on the lower screen's rows) */
 static int sTouchTab = -1;          /* (the tab a touch began on) */
 static int sTouchTabOn;             /* (still on it) */
+static short sButtons[NITRO_LOWERMENU_BUTTONS_MAX][4];   /* (NitroPort_LowerMenuSetPanelButtons) */
+static int sButtonCount;
+static int sTouchPanelButton = -1;  /* (the panel button a touch began on; -1 none) */
+static int sTouchPanelButtonOn;
 static int sTabCount, sTabActive;
 static char sTabLabels[NITRO_LOWERMENU_TABS_MAX][16];
 static NitroLowerTabStyle sTabStyle;
@@ -723,6 +727,25 @@ static int tab_at(int x, int y)
     return -1;
 }
 
+/* The panel button under a panel pixel (-1: none). */
+static int panel_button_at(int x, int y)
+{
+    int k, cx, cy;
+
+    if (sButtonCount <= 0 || x < NITRO_LOWERMENU_PANEL_X0 || x >= NITRO_LOWERMENU_PANEL_X0 + NITRO_LOWERMENU_PANEL_W ||
+        y < NITRO_LOWERMENU_PANEL_Y0 || y >= NITRO_LOWERMENU_PANEL_Y0 + NITRO_LOWERMENU_PANEL_H) {
+        return -1;
+    }
+    cx = (2 * (x - NITRO_LOWERMENU_PANEL_X0) + 1) * NITRO_LOWERMENU_CANVAS_W / (2 * NITRO_LOWERMENU_PANEL_W);
+    cy = canvas_row(y);
+    for (k = 0; k < sButtonCount; k++) {
+        if (cx >= sButtons[k][0] && cx <= sButtons[k][2] && cy >= sButtons[k][1] && cy <= sButtons[k][3]) {
+            return k;
+        }
+    }
+    return -1;
+}
+
 static uint32_t rgb888(uint32_t c)
 {
     return (c & 0xFFFFFFu) << 8 | 0xFFu;
@@ -966,6 +989,7 @@ void NitroPort_LowerMenuShow(int on)
                 }
             }
             NitroPort_LowerMenuSetPanelRuns(NULL, 0);
+            NitroPort_LowerMenuSetPanelButtons(NULL, 0);
             __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
         }
         NitroPort_Log("[lowermenu] %s", on ? "on" : "off");
@@ -1330,6 +1354,25 @@ int NitroPort_LowerMenuRunRow(const NitroLowerPanelRun *runs, int count, int can
         }
     }
     return -1;
+}
+
+void NitroPort_LowerMenuSetPanelButtons(const short (*rects)[4], int count)
+{
+    int k;
+
+    count = rects == NULL || count < 0 ? 0 : count > NITRO_LOWERMENU_BUTTONS_MAX ? NITRO_LOWERMENU_BUTTONS_MAX : count;
+    for (k = 0; k < count; k++) {
+        memcpy(sButtons[k], rects[k], sizeof(sButtons[k]));
+    }
+    sButtonCount = count;
+    if (sTouchPanelButton >= count) {
+        sTouchPanelButton = -1;
+    }
+}
+
+int NitroPort_LowerMenuPanelButtonHeld(void)
+{
+    return sTouchIn == 5 && sTouchPanelButtonOn ? sTouchPanelButton : -1;
 }
 
 void NitroPort_LowerMenuSetTabs(int count, const char *const *labels, int active, const NitroLowerTabStyle *style)
@@ -1783,6 +1826,12 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
             sLastPressFrame = sFrames;
             sPressFrame = sFrames;
             __atomic_store_n(&sPress, sTouchButton, __ATOMIC_RELEASE);
+        } else if (sTouchIn == 5 && sTouchPanelButton >= 0 && sTouchPanelButtonOn) {
+            /* (a panel button: let go on it) */
+            sPressDouble = 0;
+            sLastPress = -1;
+            sPressFrame = sFrames;
+            __atomic_store_n(&sPress, NITRO_LOWERMENU_BUTTON_PRESS(sTouchPanelButton), __ATOMIC_RELEASE);
         } else if (sTouchIn == 4 && sTouchTab >= 0 && sTouchTabOn) {
             /* (a tab: let go on it) */
             sPressDouble = 0;
@@ -1799,6 +1848,7 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
         sTouchIn = -1;
         sTouchButton = -1;
         sTouchTab = -1;
+        sTouchPanelButton = -1;
         held = -1;
     } else if (sTouchIn == 2) {
         return 0;   /* (down since before the menu came on) */
@@ -1810,7 +1860,12 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
              * shown while the game swaps what's under it: nobody's till let
              * go) */
             sTouchIn = !sOn || NitroPort_LowerMenuPanelFade() > 0 ? 2 : map_shown() ? 3 : sPanelTouch ? 1 : 2;
-            if (sTouchIn == 1 && sRunCount > 0 && !map_shown()) {
+            if (sOn && NitroPort_LowerMenuPanelFade() <= 0 && !map_shown() && panel_button_at(x, y) >= 0) {
+                /* (a button of the game's in the panel) */
+                sTouchPanelButton = panel_button_at(x, y);
+                sTouchPanelButtonOn = 1;
+                sTouchIn = 5;
+            } else if (sTouchIn == 1 && sRunCount > 0 && !map_shown()) {
                 /* (put together: the lower screen's rows the game's, the
                  * tabs' the tabs', the upper screen's nobody's) */
                 int from = NitroPort_LowerMenuRunRow(sRuns, sRunCount, canvas_row(y), NULL);
@@ -1837,6 +1892,8 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
         }
     } else if (sTouchIn == 4) {
         sTouchTabOn = tab_at(x, y) == sTouchTab;
+    } else if (sTouchIn == 5) {
+        sTouchPanelButtonOn = panel_button_at(x, y) == sTouchPanelButton;
     } else if (sTouchIn == 0) {
         /* Still on the button it began on: pressed; off it: not. */
         b = NitroPort_LowerMenuButtonAt(x, y);

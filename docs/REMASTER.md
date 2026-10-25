@@ -830,6 +830,37 @@ screens) the lower screen is the DS's, filling the screen as before.
   straight from it, MAP, POKéTCH and SAVE back in the field). Without the
   menu, or opened another way, it's the DS's, across the wider upper
   screen.
+- **The panel's buttons** (`NitroPort_LowerMenuSetPanelButtons`): up to
+  four rectangles on the canvas the port takes touches on itself, for a
+  page with buttons below the DS's 192 rows (the game's touch stops at row
+  191). A touch that begins on one is the port's (pressed while it's still
+  on it, `NitroPort_LowerMenuPanelButtonHeld`); let go on it, a press
+  (`NITRO_LOWERMENU_BUTTON_PRESS(button)`). Not while the panel is dark or
+  the map is out; gone with the menu.
+- **The save in the panel** (`patches/pokeplatinum/0039`): SAVE (tapped,
+  or A on it after X) with the Pokétch up fades the panel to black, ends
+  the Pokétch (`FieldSystem_EndBottomScreen`; its dot artist keeps its
+  picture as it goes) and draws a save page on the DS's lower screen,
+  tall, with SAVE lit (the approved mock-ups): Platinum's message box at
+  the top; a report card in the window frame (the trainer's picture in a
+  pale box, the name, IDNo., the place in red, POKéDEX, TIME, the eight
+  badges at half size with those not earned as pale outlines, the party's
+  icons on shadows); YES and NO buttons in the party's CANCEL style, the
+  one chosen ringed orange. The save's own script (common script 5) runs
+  as it is: while the page is up, its message box opens on the page
+  (`SavePanel_AddMessageWindow`), its YES/NO is the page's buttons
+  (`SavePanel_StartYesNo`, `ScriptContext_WaitForSavePanelYesNo`: a tap,
+  A, B for NO, the D-pad to choose) and the DS's save info window isn't
+  shown. The page is pictures put at any pixel on three layers (each cut
+  into tiles, alike ones shared): the badges from the badge case's sprites
+  (their mounting rim peeled off, each 2 x 2 pixels the commonest colour,
+  a tie the darker; the outline the darkest colour round the edge), the
+  icons, the trainer from the trainer card's. The sub engine has banks H
+  and I for its BG (48 KB) while it's up, as before after. When the
+  script ends the panel fades to black, the Pokétch starts again
+  (`FieldSystem_InitBottomScreen`) and the map or the Pokétch fades in as
+  the panel was. Without the menu, or with the Pokétch not up, it's the
+  DS's save.
 - **The apps' hand-over:** the start menu opens the panel's apps
   (`StartMenu_PortAppIsMenus`: the field's own app, the start menu's task
   the field's; not a script's, a registered item's, or an app's own like

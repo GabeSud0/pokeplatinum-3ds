@@ -299,6 +299,18 @@ typedef struct NitroLowerTabStyle {
 void NitroPort_LowerMenuSetTabs(int count, const char *const *labels, int active, const NitroLowerTabStyle *style);
 #define NITRO_LOWERMENU_TAB_PRESS(tab) (NITRO_LOWERMENU_PANEL_PRESS + 1 + (tab))
 
+/* Buttons in the panel, the game's (the save's YES and NO: its picture
+ * tall, past the DS's 192 rows the game's touch can't reach): rectangles
+ * in the canvas's pixels (x0, y0, x1, y1, inclusive), a press each,
+ * NITRO_LOWERMENU_BUTTON_PRESS(button), when a touch that began on it is
+ * let go on it (also while the panel's other touches are nobody's); held
+ * on it: NitroPort_LowerMenuPanelButtonHeld. None (count 0, and when the
+ * menu goes off): no buttons. */
+#define NITRO_LOWERMENU_BUTTONS_MAX 4
+void NitroPort_LowerMenuSetPanelButtons(const short (*rects)[4], int count);
+int NitroPort_LowerMenuPanelButtonHeld(void);
+#define NITRO_LOWERMENU_BUTTON_PRESS(button) (NITRO_LOWERMENU_TAB_PRESS(NITRO_LOWERMENU_TABS_MAX) + (button))
+
 enum NitroLowerMapSpriteKind {
     NITRO_LOWERMAP_CURSOR,   /* 16 x 16, its two frames by turns */
     NITRO_LOWERMAP_PLAYER,   /* 16 x 16; frame 0 the boy, 1 the girl */

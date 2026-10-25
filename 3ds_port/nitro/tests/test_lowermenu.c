@@ -783,6 +783,53 @@ static void test_panel_runs(void)
     NitroPort_LowerMenuShow(0);
 }
 
+/* Buttons of the game's in the panel (the save's YES and NO, tall): a press
+ * when let go on the one a touch began on, whatever the panel's touches;
+ * gone with the menu. */
+static void test_panel_buttons(void)
+{
+    static const short rects[2][4] = { { 8, 215, 122, 238 }, { 133, 215, 247, 238 } };
+    int x = -1, y = -1;
+
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuFadePanel(0);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    NitroPort_LowerMenuSetTall(1);
+    NitroPort_LowerMenuSetPanelTouch(0);
+    NitroPort_LowerMenuSetPanelButtons(rects, 2);
+    /* YES: canvas (60, 225) is screen (3 + 60 * 240 / 256, 4 + 225 * 232 / 247) = (59, 215). */
+    CHECK(NitroPort_LowerMenuTouch(1, 59, 216, &x, &y) == 0);
+    CHECK(NitroPort_LowerMenuPanelButtonHeld() == 0);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_BUTTON_PRESS(0));
+    /* NO */
+    NitroPort_LowerMenuTouch(1, 180, 216, &x, &y);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_BUTTON_PRESS(1));
+    /* slid off before letting go: none; between them: nothing */
+    NitroPort_LowerMenuTouch(1, 59, 216, &x, &y);
+    NitroPort_LowerMenuTouch(1, 59, 100, &x, &y);
+    CHECK(NitroPort_LowerMenuPanelButtonHeld() == -1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    NitroPort_LowerMenuTouch(1, 122, 216, &x, &y);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    /* the panel's own touches on: the button still the button's */
+    NitroPort_LowerMenuSetPanelTouch(1);
+    CHECK(NitroPort_LowerMenuTouch(1, 59, 216, &x, &y) == 0);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_BUTTON_PRESS(0));
+    /* the menu off: gone */
+    NitroPort_LowerMenuShow(0);
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    NitroPort_LowerMenuTouch(1, 59, 216, &x, &y);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    NitroPort_LowerMenuShow(0);
+}
+
 int main(void)
 {
     NitroPort_LowerMenuSetAvailable(1);
@@ -801,6 +848,7 @@ int main(void)
     test_fade_waits_for_picture();
     test_upper_let_go_waits_for_picture();
     test_panel_runs();
+    test_panel_buttons();
     printf("lowermenu: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;
 }
