@@ -3,8 +3,10 @@
  * touch goes (the panel's DS pixel, or a button), a press only when let go
  * on the button it began on and only on one that can be used now, a press
  * not taken soon dropped, the picture redrawn when the cursor moves, and
- * nothing while it's off. (No data pack: the start menu's icons are
- * left out, the rest drawn.)
+ * nothing while it's off; double taps, the panel's fade, the menu kept
+ * shown while the game swaps what's under it, the map handed over. (No data
+ * pack: the start menu's icons and the Town Map are left out, the rest
+ * drawn.)
  */
 #include <nitro_port_lowermenu.h>
 #include <stdio.h>
@@ -149,6 +151,59 @@ static void test_touches(void)
     CHECK(NitroPort_LowerMenuTakePress() == -1);
 }
 
+/* An app shown in the panel (the bag): the panel's touches nobody's, the
+ * upper screen held. */
+static void test_app_in_panel(void)
+{
+    int x = -1, y = -1;
+    const int bagY = 3 + 23 * NITRO_LOWERMENU_BAG + 10;
+
+    CHECK(NitroPort_LowerMenuAvailable() == 1);
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);   /* (no finger down) */
+    NitroPort_LowerMenuSetTall(1);
+    NitroPort_LowerMenuSetPanelTouch(0);
+    /* A touch in the panel: nobody's, all the way (dragged onto a button
+     * too); no press. */
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 0);
+    CHECK(NitroPort_LowerMenuTouch(1, 280, bagY, &x, &y) == 0);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    /* The buttons still the menu's. */
+    NitroPort_LowerMenuTouch(1, 280, bagY, &x, &y);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_BAG);
+    /* The menu off: the panel's touches the game's again. */
+    NitroPort_LowerMenuShow(0);
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    NitroPort_LowerMenuShow(0);
+
+    /* The upper screen held: the game's wish, until let go. */
+    CHECK(NitroPort_LowerMenuUpperHeld() == 0);
+    NitroPort_LowerMenuHoldUpper(1);
+    CHECK(NitroPort_LowerMenuUpperHeld() == 1);
+    NitroPort_LowerMenuHoldUpper(1);
+    CHECK(NitroPort_LowerMenuUpperHeld() == 1);
+    NitroPort_LowerMenuHoldUpper(0);
+    CHECK(NitroPort_LowerMenuUpperHeld() == 0);
+    NitroPort_LowerMenuHoldUpper(1);
+    NitroPort_LowerMenuHoldUpper(NITRO_LOWERMENU_LET_GO_NOW);
+    CHECK(NitroPort_LowerMenuUpperHeld() == NITRO_LOWERMENU_LET_GO_NOW);
+    NitroPort_LowerMenuHoldUpper(0);
+    CHECK(NitroPort_LowerMenuUpperHeld() == 0);
+    /* How bright a screen is, from its MASTER_BRIGHT. */
+    CHECK(NitroPort_LowerMenuBrightness(0) == 0);
+    CHECK(NitroPort_LowerMenuBrightness(0x8010) == -16);   /* black */
+    CHECK(NitroPort_LowerMenuBrightness(0x8008) == -8);
+    CHECK(NitroPort_LowerMenuBrightness(0x4010) == 16);    /* white */
+    CHECK(NitroPort_LowerMenuBrightness(0x801F) == -16);   /* (16 at most) */
+    CHECK(NitroPort_LowerMenuBrightness(0x0010) == 0);     /* (no mode: as it is) */
+    CHECK(NitroPort_LowerMenuBrightness(0xC010) == 0);
+}
+
 static void test_enabled_and_expiry(void)
 {
     int i;
@@ -191,31 +246,58 @@ static void test_enabled_and_expiry(void)
     CHECK(NitroPort_LowerMenuTakePress() == -1);
 }
 
+/* (the map's worker's wake, counted) */
+static int sWakes;
+static void wake(void)
+{
+    sWakes++;
+}
+
 /* The map asked for without the Town Map's pictures (no data pack here):
- * the panel stays the DS's lower screen, its touches the game's; the plain
- * calls take what fits. */
+ * the panel stays the DS's lower screen, its touches the game's; nothing
+ * handed to the map's drawer, no map picture. */
 static void test_map_without_pictures(void)
 {
-    int x = -1, y = -1;
-    uint16_t *text;
+    int x = -1, y = -1, y0, y1, i;
+    static uint8_t tiles[32 * 24 * 32];
+    static const uint16_t palette[16] = { 0, 0x7FFF, 0x001F };
+    uint32_t serial = 99;
 
+    CHECK(NitroPort_LowerMenuMapAvailable() == 0);
+    NitroPort_LowerMenuSetMapWorker(wake);
     NitroPort_LowerMenuShow(1);
     NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
     NitroPort_LowerMenuMapBegin();
     NitroPort_LowerMenuMapSprite(NITRO_LOWERMAP_CURSOR, 60, 134, 0, 0);
     NitroPort_LowerMenuMapDot(60, 127);
     NitroPort_LowerMenuMapLayout(0, 8, 288);
-    text = NitroPort_LowerMenuMapText(0, 24, 168, 232, 24);
-    CHECK(text != NULL);
-    CHECK(NitroPort_LowerMenuMapText(0, 0, 0, 300, 24) == NULL);   /* (too wide) */
-    CHECK(NitroPort_LowerMenuMapText(1, 0, 0, 224, 200) == NULL);  /* (too tall) */
-    CHECK(NitroPort_LowerMenuMapText(1, 8, 64, 224, 112) != NULL);
+    NitroPort_LowerMenuMapText(0, 24, 168, 29, 3, tiles, palette, 7);
+    NitroPort_LowerMenuMapText(0, 0, 0, 33, 3, tiles, palette, 8);   /* (too wide: none, not kept) */
+    NitroPort_LowerMenuMapText(1, 8, 64, 28, 14, tiles, palette, 7);
+    /* (the texts kept by their keys, each kind its own) */
+    CHECK(NitroPort_LowerMenuMapTextKept(0, 7) == 1);
+    CHECK(NitroPort_LowerMenuMapTextKept(0, 8) == 0);
+    CHECK(NitroPort_LowerMenuMapTextKept(1, 7) == 1);
+    CHECK(NitroPort_LowerMenuMapTextKept(1, 9) == 0);
+    for (i = 0; i < NITRO_LOWERMENU_TEXTS_KEPT; i++) {
+        NitroPort_LowerMenuMapText(1, 8, 64, 28, 14, tiles, palette, 100u + (uint32_t)i);
+    }
+    CHECK(NitroPort_LowerMenuMapTextKept(1, 7) == 0);   /* (the one used longest ago gone) */
+    CHECK(NitroPort_LowerMenuMapTextKept(1, 100) == 1);
+    CHECK(NitroPort_LowerMenuMapTextKept(0, 7) == 1);
     NitroPort_LowerMenuMapEnd();
+    CHECK(sWakes == 0);   /* (nothing to draw) */
+    CHECK(NitroPort_LowerMenuMapWork() == 0);
+    CHECK(NitroPort_LowerMenuLockMap(&serial) == NULL);
+    NitroPort_LowerMenuTakeMapDirtyRows(&y0, &y1);
+    CHECK(y0 >= y1);
+    NitroPort_LowerMenuUnlockMap();
+    CHECK(serial == NitroPort_LowerMenuMapSerial());
     NitroPort_LowerMenuSetPanel(NITRO_LOWERMENU_PANEL_MAP);
     CHECK(NitroPort_LowerMenuPanel() == NITRO_LOWERMENU_PANEL_DS);
-    NitroPort_LowerMenuLockFrame(NULL);
-    CHECK(NitroPort_LowerMenuFrameHasPanel() == 0);
-    NitroPort_LowerMenuUnlockFrame();
+    /* (no map: no black for it either) */
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    NitroPort_LowerMenuSetMapWorker(NULL);
     /* (the panel's touches still the game's: no map shown) */
     CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 1);
     NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
@@ -259,6 +341,212 @@ static void test_picture(void)
     CHECK(NitroPort_LowerMenuSerial() != before);
 }
 
+/* A tap on (x, y): down, then let go. */
+static void tap(int x, int y)
+{
+    NitroPort_LowerMenuTouch(1, x, y, NULL, NULL);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+}
+
+/* A double tap: the second press on a button within
+ * NITRO_LOWERMENU_DOUBLE_FRAMES of the first; a third starts again; one on
+ * another button in between, or too late, isn't. */
+static void test_double_tap(void)
+{
+    const int mapY = 3 + 23 * NITRO_LOWERMENU_MAP + 10, bagY = 3 + 23 * NITRO_LOWERMENU_BAG + 10;
+    int i;
+
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuSetEnabled(0xFFFFFFFFu);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    for (i = 0; i < NITRO_LOWERMENU_DOUBLE_FRAMES + 2; i++) {
+        NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    }
+    tap(280, mapY);
+    CHECK(NitroPort_LowerMenuPressPending() == NITRO_LOWERMENU_MAP);
+    CHECK(NitroPort_LowerMenuPressDouble() == 0);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_MAP);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    tap(280, mapY);
+    CHECK(NitroPort_LowerMenuPressDouble() == 1);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_MAP);
+    CHECK(NitroPort_LowerMenuPressDouble() == 1);   /* (the press taken last) */
+    tap(280, mapY);
+    CHECK(NitroPort_LowerMenuPressDouble() == 0);
+    NitroPort_LowerMenuTakePress();
+    /* (another button between) */
+    tap(280, bagY);
+    NitroPort_LowerMenuTakePress();
+    tap(280, mapY);
+    CHECK(NitroPort_LowerMenuPressDouble() == 0);
+    NitroPort_LowerMenuTakePress();
+    /* (too late) */
+    for (i = 0; i < NITRO_LOWERMENU_DOUBLE_FRAMES + 1; i++) {
+        NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    }
+    tap(280, mapY);
+    CHECK(NitroPort_LowerMenuPressDouble() == 0);
+    NitroPort_LowerMenuTakePress();
+    /* (the menu off between: not counted, however few of its frames) */
+    NitroPort_LowerMenuShow(0);
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    tap(280, mapY);
+    CHECK(NitroPort_LowerMenuPressDouble() == 0);
+    NitroPort_LowerMenuTakePress();
+    NitroPort_LowerMenuShow(0);
+}
+
+/* The panel's fade: towards black and back at a whole fade's speed of
+ * NITRO_LOWERMENU_FADE_FRAMES of the platform's frames, from how dark it is;
+ * clear at once; done at once without a clock. While it's dark, the panel's
+ * touches are nobody's. */
+static uint32_t sNow;
+static uint32_t now(void)
+{
+    return sNow;
+}
+
+static void test_fade(void)
+{
+    int x, y;
+
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    NitroPort_LowerMenuSetPanel(NITRO_LOWERMENU_PANEL_DS);
+    /* Without a clock: at once. */
+    NitroPort_LowerMenuFadePanel(1);
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    NitroPort_LowerMenuFadePanel(0);
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    /* With one: 16 levels over NITRO_LOWERMENU_FADE_FRAMES frames. */
+    NitroPort_LowerMenuSetClock(now);
+    sNow = 1000;
+    NitroPort_LowerMenuFadePanel(1);
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES / 2;
+    CHECK(NitroPort_LowerMenuPanelFade() == 8);
+    /* (asked again: no change) */
+    NitroPort_LowerMenuFadePanel(1);
+    CHECK(NitroPort_LowerMenuPanelFade() == 8);
+    /* Dark: the panel's touches nobody's (the buttons still the menu's). */
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 0);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    /* Back from half way: half a fade's time. */
+    NitroPort_LowerMenuFadePanel(0);
+    CHECK(NitroPort_LowerMenuPanelFade() == 8);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES / 4;
+    CHECK(NitroPort_LowerMenuPanelFade() == 4);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES / 4;
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    sNow += 100;
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    /* Black, then clear at once. */
+    NitroPort_LowerMenuFadePanel(1);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES;
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    sNow += 1000;
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    NitroPort_LowerMenuFadePanel(NITRO_LOWERMENU_CLEAR_NOW);
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    /* Clear: the panel's touches the game's again. */
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+
+    /* A tab changed with the fade: what it shows already, nothing. */
+    NitroPort_LowerMenuFadeToPanel(NITRO_LOWERMENU_PANEL_DS);
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    /* (the map: no Town Map's pictures here, the DS's shown for it; the
+     * change made all the same) To black, then back, the change made once
+     * it's black; asked for meanwhile, the same. */
+    NitroPort_LowerMenuFadeToPanel(NITRO_LOWERMENU_PANEL_MAP);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES / 2;
+    CHECK(NitroPort_LowerMenuPanelFade() == 8);
+    NitroPort_LowerMenuSetPanel(NITRO_LOWERMENU_PANEL_MAP);   /* (the game's every frame: still on its way) */
+    NitroPort_LowerMenuFadePanel(0);                          /* (fading in waits for the change) */
+    sNow += NITRO_LOWERMENU_FADE_FRAMES / 2;
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES / 2;
+    CHECK(NitroPort_LowerMenuPanelFade() == 8);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES / 2;
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    /* Back to the DS's lower screen, asked only well after: as it would be
+     * then (black at 8 frames, 4 more for its picture, 8 to fade in). */
+    NitroPort_LowerMenuFadeToPanel(NITRO_LOWERMENU_PANEL_DS);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES + 4 + NITRO_LOWERMENU_FADE_FRAMES / 2;
+    CHECK(NitroPort_LowerMenuPanelFade() == 8);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES / 2;
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    /* Called off by a fade to black (it stays black, nothing changed) or a
+     * clear at once. */
+    NitroPort_LowerMenuFadeToPanel(NITRO_LOWERMENU_PANEL_MAP);
+    NitroPort_LowerMenuFadePanel(1);
+    sNow += 100;
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    NitroPort_LowerMenuFadePanel(NITRO_LOWERMENU_CLEAR_NOW);
+    NitroPort_LowerMenuFadeToPanel(NITRO_LOWERMENU_PANEL_MAP);
+    sNow += 2;
+    NitroPort_LowerMenuFadePanel(NITRO_LOWERMENU_CLEAR_NOW);
+    sNow += 100;
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    NitroPort_LowerMenuSetPanel(NITRO_LOWERMENU_PANEL_DS);
+    NitroPort_LowerMenuSetClock(NULL);
+    NitroPort_LowerMenuShow(0);
+}
+
+/* The menu kept shown while off: its buttons still pressed then, the panel
+ * nobody's; the press not dropped when it goes off and on again meanwhile. */
+static void test_kept_shown(void)
+{
+    const int bagY = 3 + 23 * NITRO_LOWERMENU_BAG + 10;
+    uint32_t before;
+    int x, y;
+
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuKeptShown() == 0);
+    before = NitroPort_LowerMenuSerial();
+    NitroPort_LowerMenuKeepShown(1);
+    CHECK(NitroPort_LowerMenuKeptShown() == 1);
+    CHECK(NitroPort_LowerMenuSerial() != before);
+    /* Off meanwhile: the buttons still pressed, the panel nobody's; a
+     * press made then still there when it's on again. */
+    NitroPort_LowerMenuShow(0);
+    CHECK(NitroPort_LowerMenuOn() == 0);
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 0);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    tap(280, bagY);
+    NitroPort_LowerMenuShow(1);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_BAG);
+    NitroPort_LowerMenuKeepShown(0);
+    CHECK(NitroPort_LowerMenuKeptShown() == 0);
+    /* Off, not kept shown: nothing. */
+    NitroPort_LowerMenuShow(0);
+    tap(280, bagY);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+}
+
+/* The picture's rows changed, for the display to copy only them: all of
+ * it when it's drawn again; none once taken. */
+static void test_dirty_rows(void)
+{
+    int y0, y1;
+
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuSelect(-1);
+    NitroPort_LowerMenuSelect(NITRO_LOWERMENU_SAVE);
+    NitroPort_LowerMenuLockFrame(NULL);
+    NitroPort_LowerMenuTakeDirtyRows(&y0, &y1);
+    CHECK(y0 == 0 && y1 == NITRO_LOWERMENU_H);
+    NitroPort_LowerMenuTakeDirtyRows(&y0, &y1);
+    CHECK(y0 >= y1);
+    NitroPort_LowerMenuUnlockFrame();
+    NitroPort_LowerMenuSelect(-1);
+    NitroPort_LowerMenuShow(0);
+}
+
 int main(void)
 {
     NitroPort_LowerMenuSetAvailable(1);
@@ -266,9 +554,14 @@ int main(void)
     test_tall_mapping();
     test_buttons();
     test_touches();
+    test_app_in_panel();
     test_enabled_and_expiry();
     test_map_without_pictures();
     test_picture();
+    test_double_tap();
+    test_fade();
+    test_kept_shown();
+    test_dirty_rows();
     printf("lowermenu: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;
 }

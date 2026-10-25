@@ -1,0 +1,52 @@
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Subject: [PATCH] OAM manager: the entries not used this frame hidden
+ (SDK_PORT_3DS)
+
+The OAM manager parks the entries it didn't use this frame at y 192,
+under the DS's screen, keeping their size, tiles and x. The 3DS port's
+lower menu shows a screen laid out 248 lines tall in its panel (the bag),
+lines 192-247 too, so the parked entries showed there: the list's red
+cursor and the bag, scrambled at the bottom whenever the bag hid them for
+a moment (switching pockets). They're hidden outright too (attr0's
+disable bit): on the DS they don't show either way. (The unused affine
+parameters are reset to 192 as before.)
+
+---
+diff --git a/libraries/g2d/src/g2d_OAM.c b/libraries/g2d/src/g2d_OAM.c
+index 1ca31e7..36d04a5 100644
+--- a/libraries/g2d/src/g2d_OAM.c
++++ b/libraries/g2d/src/g2d_OAM.c
+@@ -9,7 +9,18 @@
+ NNS_G2D_DEFINE_NNSI_OBJSIZEWTBL;
+ NNS_G2D_DEFINE_NNSI_OBJSIZEHTBL;
+ 
++#ifdef SDK_PORT_3DS
++// The OAM entries not used this frame are parked at y 192, under the DS's
++// screen; on the 3DS port's taller lower screen (a screen laid out 248
++// lines tall: the lower menu's panel) lines 192-247 are shown, so the
++// parked entries (their size and tiles as before) showed there. They're
++// hidden outright (attr0's disable bit): on the DS they don't show either way.
++#define OAM_SETTING_INVISIBLE   (192 | 0x0200)
++#define OAM_AFFINE_RESET        192 // (the unused affine parameters: as before)
++#else
+ #define OAM_SETTING_INVISIBLE   192
++#define OAM_AFFINE_RESET        OAM_SETTING_INVISIBLE
++#endif
+ 
+ #define NUM_HW_OAM_ATTR         128
+ #define NUM_HW_OAM_AFFINE       32
+@@ -421,10 +432,10 @@ static NNS_G2D_INLINE void ResetAffine_ (NNSG2dOamType type, u16 fromIdx, u16 to
+     u16 i;
+ 
+     for (i = 0; i < numArea; i++) {
+-        pFrom->PA = OAM_SETTING_INVISIBLE;
+-        pFrom->PB = OAM_SETTING_INVISIBLE;
+-        pFrom->PC = OAM_SETTING_INVISIBLE;
+-        pFrom->PD = OAM_SETTING_INVISIBLE;
++        pFrom->PA = OAM_AFFINE_RESET;
++        pFrom->PB = OAM_AFFINE_RESET;
++        pFrom->PC = OAM_AFFINE_RESET;
++        pFrom->PD = OAM_AFFINE_RESET;
+         pFrom++;
+     }
+ }

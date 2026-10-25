@@ -550,16 +550,53 @@ screens) the lower screen is the DS's, filling the screen as before.
   and come back as on the DS (the bag's and the party's uses go through
   it). POKéMON, BAG, TRAINER, POKéDEX, SAVE and OPTIONS are its entries;
   MAP (with the Town Map in the bag, where the bag can be used) puts the
-  map in the panel, or with the map there opens the Town Map app; POKéTCH
-  puts the Pokétch in the panel; either closes the menu. The buttons that
+  map in the panel (A on it again, with the map there, opens the Town Map
+  app); POKéTCH puts the Pokétch in the panel. The buttons that
   can't be used now are dimmed (the field says which every frame while
   the player could open the menu). Where the menu has an entry with no
   button (RETIRE in the Great Marsh and the Pal Park, CHAT in the Union
   Room), it's the DS's start menu on the upper screen.
+- **Quick access** (`patches/pokeplatinum/0036`): a tap on a button does
+  what it says at once, with the press's sound (the menu's opening sound
+  is X's): the menu opens straight on it (its cursor on it from the
+  start). Leaving what the menu opened (B, or the bag's button again; the
+  party, the trainer card, the Pokédex, the options, the Town Map, the
+  save's question answered no) leaves the menu too, back to walking,
+  whether a tap or X opened it. A double tap on MAP
+  (`NitroPort_LowerMenuPressDouble`: the second press on a button within
+  half a second) opens the Town Map app; one tap only shows the map. A tap
+  on the map does nothing.
+- **The panel's tabs:** the map or the Pokétch, as chosen last (MAP,
+  POKéTCH; the map again once the bag's closed).
+- **The panel's fade** (`NitroPort_LowerMenuFadePanel`,
+  `NitroPort_LowerMenuPanelFade`): whenever what the panel shows changes,
+  it fades to black and back, the frame and the buttons as they are: the
+  same look for every change, and the loading in between hidden. A whole
+  fade is 8 of the platform's frames (`NITRO_LOWERMENU_FADE_FRAMES`, its
+  V-blanks: `NitroPort_LowerMenuSetClock`), from wherever a fade was; an
+  app pops in at once (`NITRO_LOWERMENU_CLEAR_NOW`). Fading in to the map,
+  the fade waits (black, half a second at most) till the map's drawn as the
+  game last gave it, and the map's panel is black till there's a map drawn
+  at all. The platforms draw black over the panel by as much (the
+  compositor a black quad, the PC runner its pixels darkened). While the
+  panel's dark its touches are nobody's. Tabs
+  (`NitroPort_LowerMenuFadeToPanel`): the panel fades to black, the port
+  shows the other tab once it's black, whatever the game's running then (a
+  tab chosen again on the way just changes where it's going), and fades
+  back in (the Pokétch 4 frames after it's shown: its picture drawn
+  first). A fade back to black, or an app popping in, calls the change
+  off.
+- **Kept shown** (`NitroPort_LowerMenuKeepShown`): while the game swaps the
+  field and the bag, the menu's kept on (drawn with its panel black, or the
+  map, while the game turns it off and on; its buttons drawn and pressed as
+  usual, the panel's touches nobody's).
 - **The picture:** drawn on the CPU when it changes (on, off, the cursor
   or a finger on a button), handed to the compositor under a lock with a
-  serial; the compositor puts it in a texture (RGB565, a texel a pixel,
-  two taken by turns) and draws the panel over it. The frame and the names
+  serial and the rows that changed (`NitroPort_LowerMenuTakeDirtyRows`);
+  the compositor puts it in a texture (RGB565, a texel a pixel, two taken
+  by turns, each brought up to date with only the rows it's behind on) and
+  draws the panel over it: the DS's lower screen, or the map's own picture
+  (the same way, textures of its own). The frame and the names
   are the port's (the names in a small font of its own: the game's is too
   wide for a button, POKéDEX is 42 pixels in it); the icons are the start
   menu's own, read from the ROM (`graphic/menu_gra.narc`: `icons_NCGR` in
@@ -574,8 +611,8 @@ screens) the lower screen is the DS's, filling the screen as before.
   (`NitroRender2DSplit.height`): its BGs' maps and its OBJs go on below
   the DS's 192 rows as they would were its screen taller, and the panel
   shows the picture's first 247 rows. The H-blank effects' lines past 191
-  are line 191's; never with the 3D (its lines past 191 black). For the
-  bag's and the party's tall layouts to come; nothing uses it yet.
+  are line 191's; never with the 3D (its lines past 191 black). The bag
+  is laid out for it (below); the party's tall layout is to come.
 - **The map** (`port_lowermap.c`; the game's side in
   `patches/pokeplatinum/0033`): once the player has the Town Map, the panel
   shows it (the Pokétch, or the Poké Ball before it, goes on underneath,
@@ -589,31 +626,118 @@ screens) the lower screen is the DS's, filling the screen as before.
   where the sprites are, which hidden places show, the zoomed-in map's
   scroll, and the name and the description as the game prints them (its
   font, the signpost's colours), told again while the map is chosen when
-  the player's square or place changes, or the field starts again (the
-  name and the description printed again only when they change: each
-  glyph is a read of the cartridge, which the port counts as the DS's
-  time; the Town Map's blocks and flags are read in one read each). The
+  the player's square or place changes, or the field starts again. The
   same pixels as the Town Map app's (checked in the PC runner,
-  2026-10-24). The panel's picture is drawn in the menu's picture (the
-  canvas at 15/16 as the screens draw the DS's: each pixel 2 x 2, then
-  bilinear), only what changes drawn again (the cursor's frames, the
-  dots). A tap on the map (where MAP can be used), or MAP with the map
-  shown, opens the Town Map app; so does MAP if the port can't show the
-  map (no Town Map pictures).
+  2026-10-24). A double tap on MAP opens the Town Map app; so does MAP if
+  the port can't show the map (no Town Map pictures).
+- **The map without a stutter:** walking with the map out costs the
+  game's thread next to nothing (a stutter, 2026-10-24, twice: the game's
+  thread drew the map and the whole menu, then only what changed; still a
+  hitch on the 3DS, its core 0 nearly full).
+  - The game tells the port cheaply: the Town Map's context worked out
+    each time with nothing read (the description flags' file read once and
+    kept: `town_map/context.c`), its blocks and the texts' palettes read
+    once; the name and the description printed only when they change, one
+    a frame while the panel's shown (both at once behind its black), and
+    only if the port hasn't kept them (`NitroPort_LowerMenuMapTextKept`: the last 8 of each, by the
+    game's key: going back and forth between two places prints nothing);
+    the windows' tiles handed over as they are (4 bits a pixel), the port
+    making them pixels. On the PC runner a new square is about 0.03 ms of
+    the game's time, a new place's texts about 0.06 and 0.1 ms on two
+    frames (they were 1 ms in one, the drawing with them).
+  - The port draws it off the game's thread: what the game hands over
+    (`NitroPort_LowerMenuMapEnd`; with the drawer still taking the last
+    one, handed over a moment later, nobody waiting) and the sprites'
+    animations go to the map's drawer (`NitroPort_LowerMenuSetMapWorker`, `MapWork`), on the 3DS
+    a thread at the lowest priority on a New 3DS's second core (core 0 on
+    an Old 3DS); it draws only what changed (the upper screen's background
+    only for other hidden places, the zoomed-in band when its scroll or the
+    description changes, the sprites where they were and are, the name's
+    window, the cursor's frames, the dots) at 15/16 as the screens draw the
+    DS's (each pixel 2 x 2, then bilinear), and hands over only those rows
+    (`NitroPort_LowerMenuLockMap`, `TakeMapDirtyRows`); the compositor
+    takes them only if the drawer isn't handing some over
+    (`NitroPort_LowerMenuTryLockMap`: else the texture it has, till the
+    next frame). The Town Map's pictures are read on the game's thread
+    (the data pack is its), once.
+  - The DS's lower screen (the Pokétch underneath) isn't drawn on the 3DS
+    while the panel shows the map: nothing of it shows (drawn whole again
+    once it does). Its brightness changing, it's drawn (the DS's fades
+    darken the menu with it: `NitroPort_Render2DMasterBright`).
+- **The bag in the panel** (`patches/pokeplatinum/0035`): opened while
+  the platform can show the menu (`NitroPort_LowerMenuAvailable`), the bag
+  puts its main screen (the list, the pockets, the description) on the
+  lower screen (the DS's screen swap) and lays it out tall, as its approved
+  mock-up has it: the list's box 7 tile rows longer (its middle row again)
+  with 3 more lines of items (12), and below it, 7 rows lower, the
+  pockets' panel, the description bar, and the windows and sprites that
+  go with them (the item's menu, the messages, the counts, the item's
+  icon); above the pockets, the bag 1.25 times as big, drawn smoothly
+  (`NitroPort_Render2DSmoothObjs`: its texels blended), its shadow two
+  tiles wider. Its BG2 (the list) has its tiles in a block of their own
+  (the list's window is taller, the other windows' tiles stay where they
+  were). The sprite system's main screen goes on to line 255 then
+  (`SpriteUtil_PortTallMainScreen`: the sub screen's sprites from 256).
+  The bag's touch screen isn't shown, so the panel's touches are nobody's
+  (`NitroPort_LowerMenuSetPanelTouch`). With `--classic-menu` (or no menu)
+  the bag is as before, across the wider upper screen.
+- **The bag in and out** (`patches/pokeplatinum/0035`, `0036`): BAG fades
+  the panel to black, the menu kept on (BAG lit) and the upper screen
+  keeping the field, and the field goes and the bag comes behind it; the
+  bag pops in two frames after it's whole. B (or CLOSE BAG, or BAG again)
+  fades the panel to black again, the field comes back behind it, and
+  three frames after the field's been drawn the panel fades in on the map
+  (the Pokétch for POKéTCH, or without the Town Map), the menu closed.
+  While the item list waits, the menu's other buttons work (with its
+  sound): BAG puts the bag away; POKéMON, TRAINER, POKéDEX and OPTIONS open
+  straight from the bag (the panel black, then both screens black, as the
+  DS's fade out leaves them, and the app's own fade in; the bag makes them
+  black while they're still kept, a frame before it goes, because the 3DS
+  shows the game's pictures a frame late); SAVE, MAP and POKéTCH are acted
+  on back in the field. A tap while the
+  bag's busy (an item's menu, a message, moving an item) is nobody's.
+  Leaving another way (an item used, given, a Berry's tag) is the DS's
+  fade out; the bag opened again after that comes with fades too, and its
+  menu buttons close it with a fade. (The start menu hands the bag a flag,
+  `gStartMenuPortInstantApp`, and the bag hands back the button tapped,
+  `gStartMenuPortAppPress`: the menu forgets its own press when it goes
+  off.) With `--classic-menu` the bag's the DS's.
+- **The upper screen held** (`NitroPort_LowerMenuHoldUpper`): while an app
+  is in the panel, the upper screen keeps the field. Let go (0), the
+  game's upper picture shows again once it's as bright as what was kept:
+  back in the field after a fade, at the end of its fade in (seamless);
+  kept black (the bag opened after a fade), at once. Let go now
+  (`NITRO_LOWERMENU_LET_GO_NOW`), it shows the game's picture from the next
+  frame however bright (back from the bag behind the panel's black).
+  (Nothing lets it go on a soft reset yet; the port has none.) The 3DS
+  doesn't draw a screen while it's
+  kept (what's on its LCD stays); drawn again regardless (back from the
+  HOME menu), it's black. The PC runner's `rshot` and `mshot` show what's
+  kept.
+- **The OAM entries not used** (`patches/NitroSystem/0005`): NitroSystem's
+  OAM manager parks the entries not used in a frame at line 192, just
+  under the DS's screen. Tall, line 192 shows: switching the bag's pockets
+  left stray pieces of sprites there (red lines, scrambled icons). They're
+  hidden outright now (the entry's disable bit), as they always were on
+  the DS.
 - **Touch:** a touch that begins in the panel is the game's, at the DS's
   pixel there (dragged out of the panel, the nearest pixel of it); one that
   begins on a button that can be used shows it pressed, and letting go on
   it is a press. The start menu takes it; with the menu closed, the field
-  opens it straight on that button, as X does (`StartMenu_PortTapOpens`;
-  MAP and POKéTCH only change the panel, the menu staying closed). With
-  the map in the panel, the panel's touches are the menu's (a tap a press,
-  `NITRO_LOWERMENU_PANEL_PRESS`), not the Pokétch's.
+  opens it straight on that button (`StartMenu_PortTapOpens`; MAP and
+  POKéTCH only change the panel, the menu staying closed). With the map in
+  the panel, the panel's touches are the menu's (a tap a press,
+  `NITRO_LOWERMENU_PANEL_PRESS`), not the Pokétch's; while it's dark,
+  nobody's.
   A press not taken within half a second is dropped (one made while a
   script ran isn't used long after).
-- **The fades** cover the whole screen, the menu too.
+- **The DS's fades** cover the whole screen, the menu too (the panel's own
+  only the panel).
 - **The PC runner:** `mshot PATH` writes the lower screen as the 3DS shows
   it (320 x 240), `mtouch X Y` touches it there. It has the menu unless
-  started with `--classic-menu`.
+  started with `--classic-menu`. The map's drawn on the game's thread as
+  it's handed over (the same pictures every run), or with `--map-thread`
+  on a thread of its own as on the 3DS.
 
 ## Timing
 

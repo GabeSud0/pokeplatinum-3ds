@@ -25,8 +25,15 @@
  *
  * The panel's picture is the canvas at 15/16 (240 x 232) as the screens
  * draw the DS's lower screen in the panel: each canvas pixel 2 x 2 texels,
- * then bilinear. Only what changes is drawn again: the whole of it for a
- * new map, the animated sprites' rectangles for a frame of theirs.
+ * then bilinear. Only what changes is drawn again: the upper screen's
+ * background only when the hidden places shown change; the zoomed-in band
+ * when its scroll or the description does; the sprites' rectangles where
+ * they were and where they are; the name's when it changes; the animated
+ * sprites' for a frame of theirs. The panel's rows drawn again are told
+ * (NitroPort_LowerMapTakeDirty). It's drawn by the map's drawer
+ * (port_lowermenu.c: a thread of the platform's, off the game's, or the
+ * game's own); the pictures are read on the game's thread
+ * (NitroPort_LowerMapLoad: the data pack is the game's thread's).
  */
 
 #include <nitro.h>
@@ -98,6 +105,7 @@ static uint16_t sCanvas[CW * CH];
 static uint32_t sPanel[PW * PH];
 static uint32_t sFrame;
 static int sCursorFrame, sDotShown = -1;
+static int sDirtyY0 = PH, sDirtyY1 = 0;   /* the panel's rows drawn again, not told yet */
 
 /* ------------------------------------------------------------- reading */
 
@@ -424,25 +432,34 @@ static void make_tilemaps(void)
 
 /* ------------------------------------------------------ the canvas drawn */
 
-/* A text BG's pixel: its colour index | palette << 4, or 0 (nothing). */
-static int bg_pixel(const uint16_t *map, int mapW, const Tiles *t, int mx, int my, int (*ix)(int, int))
+/* A row of a text BG: n pixels from (mx, my) to the right, each its colour
+ * index | palette << 4, or 0 (nothing), a tile's entry read once for its 8.
+ * wrap: the 512 x 512 zoomed-in map's (its blocks, x wrapping round); else
+ * mapW tiles wide. */
+static void bg_row(const uint16_t *map, int mapW, const Tiles *t, int mx, int my, int n, uint8_t *out, int wrap)
 {
-    uint16_t e = map[ix ? ix(mx >> 3, my >> 3) : (my >> 3) * mapW + (mx >> 3)];
-    uint32_t tile = e & 0x3FFu;
-    int px = mx & 7, py = my & 7, v;
+    int py = my & 7, i = 0;
 
-    if (tile >= t->count) {
-        return 0;
+    while (i < n) {
+        int tx = mx >> 3, px = mx & 7;
+        uint16_t e = wrap ? map[index512(tx, my >> 3)] : map[(my >> 3) * mapW + tx];
+        uint32_t tile = e & 0x3FFu;
+        int pal = (e >> 12) << 4, hflip = (e & 0x400) != 0;
+        const uint8_t *row = tile < t->count ? t->data + tile * 32 + ((e & 0x800) ? 7 - py : py) * 4 : NULL;
+
+        for (; px < 8 && i < n; px++, i++) {
+            int sx = hflip ? 7 - px : px, v;
+
+            if (row == NULL) {
+                out[i] = 0;
+                continue;
+            }
+            v = row[sx >> 1];
+            v = (sx & 1) ? v >> 4 : v & 15;
+            out[i] = v ? (uint8_t)(v | pal) : 0;
+        }
+        mx = wrap ? (mx + 8 - (mx & 7)) & 511 : mx + 8 - (mx & 7);
     }
-    if (e & 0x400) {
-        px = 7 - px;
-    }
-    if (e & 0x800) {
-        py = 7 - py;
-    }
-    v = t->data[tile * 32 + py * 4 + px / 2];
-    v = (px & 1) ? v >> 4 : v & 15;
-    return v ? v | ((e >> 12) << 4) : 0;
 }
 
 static uint16_t blend(uint16_t a, uint16_t b)
@@ -459,13 +476,19 @@ static uint16_t blend(uint16_t a, uint16_t b)
     return c;
 }
 
-static void draw_back(void)
+/* The canvas's background: the upper screen's rows (they change only with
+ * the hidden places shown), then the zoomed-in band's (with its scroll and
+ * the description). */
+static void draw_back_top(void)
 {
+    uint8_t rowA[CW], rowB[CW];
     int x, y;
 
     for (y = 0; y < TOP_H; y++) {
+        bg_row(sTopMap, 32, &G.top, 0, y, CW, rowA, 0);
+        bg_row(sTopBg, 32, &G.top, 0, y, CW, rowB, 0);
         for (x = 0; x < CW; x++) {
-            int a = bg_pixel(sTopMap, 32, &G.top, x, y, NULL), b = bg_pixel(sTopBg, 32, &G.top, x, y, NULL);
+            int a = rowA[x], b = rowB[x];
             uint16_t c;
 
             if (a && b) {
@@ -480,13 +503,20 @@ static void draw_back(void)
             sBack[y * CW + x] = c;
         }
     }
+}
+
+static void draw_back_band(void)
+{
+    uint8_t rowA[CW], rowB[CW];
+    int x, y;
+
     for (y = TOP_H; y < CH; y++) {
         int gy = y - TOP_H + BAND_ROW0, my = (gy + sMap.zoomY) & 511;
 
+        bg_row(sZoomMap, 64, &G.zoom, sMap.zoomX & 511, my, CW, rowA, 1);
+        bg_row(sZoomBg, 64, &G.zoom, sMap.zoomX & 511, my, CW, rowB, 1);
         for (x = 0; x < CW; x++) {
-            int mx = (x + sMap.zoomX) & 511;
-            int a = bg_pixel(sZoomMap, 64, &G.zoom, mx, my, index512);
-            int b = a ? 0 : bg_pixel(sZoomBg, 64, &G.zoom, mx, my, index512);
+            int a = rowA[x], b = a ? 0 : rowB[x];
             uint16_t c = a ? G.zoomPal[a >> 4][a & 15] : b ? G.zoomPal[b >> 4][b & 15] : G.zoomPal[0][0];
 
             /* the description's window over it */
@@ -638,57 +668,105 @@ static void make_tables(void)
     sTables = 1;
 }
 
-static uint32_t mix(uint16_t a, uint16_t b, int w)
+/* An RGB555 pixel's channels widened to 8 bits: r | g << 8 | b << 16. */
+static uint32_t widen(uint16_t a)
 {
-    /* each channel 8 bits (the DS's 5 widened), b at w / 256: r << 16 | g << 8 | b, as 8.8 */
-    uint32_t c = 0;
-    int k;
+    uint32_t r = a & 31, g = (a >> 5) & 31, b = (a >> 10) & 31;
 
-    for (k = 0; k < 15; k += 5) {
-        int va = (a >> k) & 31, vb = (b >> k) & 31;
+    return ((r << 3) | (r >> 2)) | (((g << 3) | (g >> 2)) << 8) | (((b << 3) | (b >> 2)) << 16);
+}
 
-        va = (va << 3) | (va >> 2);
-        vb = (vb << 3) | (vb >> 2);
-        c |= (uint32_t)(va * (256 - w) + vb * w) >> 8 << (k / 5 * 8);
+/* Two widened pixels mixed, b at w / 256, each channel rounded down: r and
+ * b in one multiply, g in another (each channel's sum fits its 16 bits). */
+static uint32_t mix(uint32_t a, uint32_t b, uint32_t w)
+{
+    uint32_t rb = (((a & 0x00FF00FFu) * (256u - w) + (b & 0x00FF00FFu) * w) >> 8) & 0x00FF00FFu;
+    uint32_t g = (((a & 0x0000FF00u) * (256u - w) + (b & 0x0000FF00u) * w) >> 8) & 0x0000FF00u;
+
+    return rb | g;
+}
+
+/* Two canvas rows widened (columns cx0-cx1), the last ones asked for. */
+static uint32_t sWide[2][CW];
+static int sWideRow[2] = { -1, -1 }, sWideX0[2], sWideX1[2];
+
+/* Canvas row `row` widened over columns cx0-cx1; `keep` (the other row the
+ * caller wants now) not thrown out for it. */
+static const uint32_t *widened_row(int row, int keep, int cx0, int cx1)
+{
+    int k, x;
+
+    for (k = 0; k < 2; k++) {
+        if (sWideRow[k] == row && sWideX0[k] <= cx0 && sWideX1[k] >= cx1) {
+            return sWide[k];
+        }
     }
-    return c;
+    k = sWideRow[0] == keep && keep != row ? 1 : 0;
+    for (x = cx0; x <= cx1; x++) {
+        sWide[k][x] = widen(sCanvas[row * CW + x]);
+    }
+    sWideRow[k] = row;
+    sWideX0[k] = cx0;
+    sWideX1[k] = cx1;
+    return sWide[k];
 }
 
 /* The panel's pixels over the canvas's rectangle (x0-x1, y0-y1) drawn again. */
 static void scale_rect(int x0, int y0, int x1, int y1)
 {
-    int x, y;
+    int x, y, ya = 0, yb = PH - 1, xa = 0, xb = PW - 1, cx0, cx1;
+
+    sWideRow[0] = sWideRow[1] = -1;   /* (the canvas may have changed since) */
 
     if (!sTables) {
         make_tables();
     }
-    for (y = 0; y < PH; y++) {
-        const uint16_t *r0, *r1;
-        int wy = sRows[y].w;
+    /* (the panel's rows and columns over it: the tables go up with them) */
+    while (ya < PH && sRows[ya].c1 < y0) {
+        ya++;
+    }
+    while (yb >= ya && sRows[yb].c0 > y1) {
+        yb--;
+    }
+    while (xa < PW && sCols[xa].c1 < x0) {
+        xa++;
+    }
+    while (xb >= xa && sCols[xb].c0 > x1) {
+        xb--;
+    }
+    if (ya > yb || xa > xb) {
+        return;
+    }
+    /* (the canvas's rows widened once each, over the columns used: the
+     * next panel row mostly uses the same two) */
+    cx0 = sCols[xa].c0;
+    cx1 = sCols[xb].c1;
+    for (y = ya; y <= yb; y++) {
+        const uint32_t *r0 = widened_row(sRows[y].c0, sRows[y].c1, cx0, cx1);
+        const uint32_t *r1 = widened_row(sRows[y].c1, sRows[y].c0, cx0, cx1);
+        uint32_t wy = (uint32_t)sRows[y].w, *out = sPanel + y * PW;
 
-        if (sRows[y].c1 < y0 || sRows[y].c0 > y1) {
-            continue;
-        }
-        r0 = sCanvas + sRows[y].c0 * CW;
-        r1 = sCanvas + sRows[y].c1 * CW;
-        for (x = 0; x < PW; x++) {
-            uint32_t top, bottom, c = 0;
-            int wx = sCols[x].w, k;
+        for (x = xa; x <= xb; x++) {
+            uint32_t wx = (uint32_t)sCols[x].w, c0 = (uint32_t)sCols[x].c0, c1 = (uint32_t)sCols[x].c1;
+            uint32_t top = mix(r0[c0], r0[c1], wx), bottom = mix(r1[c0], r1[c1], wx);
+            /* (the rows mixed, rounded to nearest) */
+            uint32_t rb = ((top & 0x00FF00FFu) * (256u - wy) + (bottom & 0x00FF00FFu) * wy + 0x00800080u) >> 8 & 0x00FF00FFu;
+            uint32_t g = ((top & 0x0000FF00u) * (256u - wy) + (bottom & 0x0000FF00u) * wy + 0x00008000u) >> 8 & 0x0000FF00u;
+            uint32_t c = rb | g;
 
-            if (sCols[x].c1 < x0 || sCols[x].c0 > x1) {
-                continue;
-            }
-            top = mix(r0[sCols[x].c0], r0[sCols[x].c1], wx);
-            bottom = mix(r1[sCols[x].c0], r1[sCols[x].c1], wx);
-            for (k = 0; k < 24; k += 8) {
-                uint32_t v = (((top >> k) & 255) * (uint32_t)(256 - wy) + ((bottom >> k) & 255) * (uint32_t)wy + 128) >> 8;
-
-                c |= v << k;
-            }
-            /* (r << 24 | g << 16 | b << 8 | 255: mix gives r in the low byte) */
-            sPanel[y * PW + x] = ((c & 255) << 24) | (((c >> 8) & 255) << 16) | (((c >> 16) & 255) << 8) | 255u;
+            /* (r << 24 | g << 16 | b << 8 | 255: c has r in its low byte) */
+            out[x] = ((c & 255u) << 24) | (((c >> 8) & 255u) << 16) | (((c >> 16) & 255u) << 8) | 255u;
         }
     }
+    sDirtyY0 = ya < sDirtyY0 ? ya : sDirtyY0;
+    sDirtyY1 = yb + 1 > sDirtyY1 ? yb + 1 : sDirtyY1;
+}
+
+/* A rectangle of the canvas drawn again, and the panel over it. */
+static void redraw_rect(int x0, int y0, int x1, int y1)
+{
+    draw_rect(x0, y0, x1, y1);
+    scale_rect(x0, y0, x1, y1);
 }
 
 /* ------------------------------------------------------------------ API */
@@ -739,16 +817,51 @@ static void update_animations(int *changed)
     }
 }
 
-int NitroPort_LowerMapSet(const NitroLowerMap *map)
+/* Whether a text's window changes: shown or not, where, its pixels (the
+ * old ones in buf). */
+static int text_changes(const uint16_t *was, int wasX, int wasY, int wasW, int wasH, const uint16_t *now, int x, int y,
+                        int w, int h, int fits)
 {
-    int changed = 0;
+    if ((was != NULL) != (now != NULL && fits)) {
+        return 1;
+    }
+    if (was == NULL) {
+        return 0;
+    }
+    return wasX != x || wasY != y || wasW != w || wasH != h || memcmp(was, now, (size_t)w * (size_t)h * 2) != 0;
+}
 
+static int sprite_same(const NitroLowerMapSprite *a, const NitroLowerMapSprite *b)
+{
+    return a->kind == b->kind && a->x == b->x && a->y == b->y && a->frame == b->frame && a->palette == b->palette;
+}
+
+int NitroPort_LowerMapLoad(void)
+{
     if (G.state == 0) {
         load();
     }
-    if (G.state < 0 || map == NULL) {
-        return 0;
+    return G.state > 0;
+}
+
+int NitroPort_LowerMapLoaded(void)
+{
+    return G.state > 0;
+}
+
+int NitroPort_LowerMapSet(const NitroLowerMap *map)
+{
+    NitroLowerMap old;
+    int changed = 0, full, band, nameChanges, descChanges, dotsChange, i, n;
+
+    if (G.state <= 0 || map == NULL) {
+        return 0;   /* (not read: NitroPort_LowerMapLoad, on the game's thread) */
     }
+    old = sMap;
+    nameChanges = text_changes(old.name, old.nameX, old.nameY, old.nameW, old.nameH, map->name, map->nameX, map->nameY,
+                               map->nameW, map->nameH, map->nameW > 0 && map->nameH > 0 && map->nameW <= 256 && map->nameH <= 64);
+    descChanges = text_changes(old.desc, old.descX, old.descY, old.descW, old.descH, map->desc, map->descX, map->descY,
+                               map->descW, map->descH, map->descW > 0 && map->descH > 0 && map->descW <= 256 && map->descH <= 192);
     sMap = *map;
     sMap.sprites = sMap.sprites < 0 ? 0 : sMap.sprites > NITRO_LOWERMAP_MAX_SPRITES ? NITRO_LOWERMAP_MAX_SPRITES : sMap.sprites;
     sMap.dots = sMap.dots < 0 ? 0 : sMap.dots > NITRO_LOWERMAP_MAX_DOTS ? NITRO_LOWERMAP_MAX_DOTS : sMap.dots;
@@ -764,31 +877,89 @@ int NitroPort_LowerMapSet(const NitroLowerMap *map)
         memcpy(sDesc, map->desc, (size_t)map->descW * (size_t)map->descH * 2);
         sMap.desc = sDesc;
     }
-    make_tilemaps();
-    draw_back();
-    sCursorFrame = (int)((sFrame / CURSOR_FRAMES) & 1u);
-    sDotShown = -1;
+    full = !sReady || sMap.hidden != old.hidden;
+    band = full || descChanges || sMap.zoomX != old.zoomX || sMap.zoomY != old.zoomY;
+    dotsChange = sMap.dots != old.dots || memcmp(sMap.dot, old.dot, (size_t)sMap.dots * sizeof(sMap.dot[0])) != 0;
+    if (full) {
+        make_tilemaps();
+        draw_back_top();
+    }
+    if (band) {
+        draw_back_band();
+    }
+    if (full) {
+        sCursorFrame = (int)((sFrame / CURSOR_FRAMES) & 1u);
+        sDotShown = -1;
+        update_animations(&changed);
+        redraw_rect(0, 0, CW - 1, CH - 1);
+        sReady = 1;
+        return 1;
+    }
+    /* Only what changed: the dot shown, chosen again when the dots change
+     * (first: the boxes below would draw it at its new place otherwise);
+     * the band; each sprite where it was and where it is; the name's
+     * window, before and after. */
+    if (dotsChange) {
+        int was = sDotShown;
+
+        sDotShown = -1;
+        if (was >= 0 && was < old.dots) {
+            redraw_rect(old.dot[was].x - 4, old.dot[was].y - 4, old.dot[was].x + 3, old.dot[was].y + 3);
+        }
+    }
+    if (band) {
+        redraw_rect(0, TOP_H, CW - 1, CH - 1);
+    }
+    n = sMap.sprites > old.sprites ? sMap.sprites : old.sprites;
+    for (i = 0; i < n; i++) {
+        int x0, y0, x1, y1;
+
+        if (i < sMap.sprites && i < old.sprites && sprite_same(&sMap.sprite[i], &old.sprite[i])) {
+            continue;
+        }
+        if (i < old.sprites) {
+            sprite_box(&old.sprite[i], &x0, &y0, &x1, &y1);
+            redraw_rect(x0, y0, x1, y1);
+        }
+        if (i < sMap.sprites) {
+            sprite_box(&sMap.sprite[i], &x0, &y0, &x1, &y1);
+            redraw_rect(x0, y0, x1, y1);
+        }
+    }
+    if (nameChanges) {
+        if (old.name != NULL) {
+            redraw_rect(old.nameX, old.nameY, old.nameX + old.nameW - 1, old.nameY + old.nameH - 1);
+        }
+        if (sMap.name != NULL) {
+            redraw_rect(sMap.nameX, sMap.nameY, sMap.nameX + sMap.nameW - 1, sMap.nameY + sMap.nameH - 1);
+        }
+    }
     update_animations(&changed);
-    draw_rect(0, 0, CW - 1, CH - 1);
-    scale_rect(0, 0, CW - 1, CH - 1);
-    sReady = 1;
     return 1;
 }
 
-int NitroPort_LowerMapReady(void)
+void NitroPort_LowerMapTakeDirty(int *y0, int *y1)
 {
-    return sReady;
+    *y0 = sDirtyY0;
+    *y1 = sDirtyY1;
+    sDirtyY0 = PH;
+    sDirtyY1 = 0;
 }
 
-int NitroPort_LowerMapTick(void)
+int NitroPort_LowerMapSetFrame(uint32_t frame)
 {
     int changed = 0;
 
-    sFrame++;
+    sFrame = frame;
     if (sReady) {
         update_animations(&changed);
     }
     return changed;
+}
+
+int NitroPort_LowerMapFrameChanges(uint32_t frame)
+{
+    return frame % CURSOR_FRAMES == 0 || frame % DOT_FRAMES == 0;
 }
 
 const uint32_t *NitroPort_LowerMapPanel(void)
