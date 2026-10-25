@@ -653,6 +653,126 @@ static void test_dirty_rows(void)
     NitroPort_LowerMenuShow(0);
 }
 
+/* The panel put together from runs (the trainer case): where a canvas row
+ * comes from, where touches go, the tabs drawn and pressed, all gone with
+ * the menu. */
+static void test_panel_runs(void)
+{
+    static const NitroLowerPanelRun runs[] = {
+        { 0, 25, NITRO_LOWERMENU_FROM_TABS, 0, 1, 0, 0 },
+        { 25, 177, NITRO_LOWERMENU_FROM_UPPER, 7, 1, 0, 0 },
+        { 202, 5, NITRO_LOWERMENU_FROM_LOWER, 153, 0, NITRO_LOWERMENU_SIDE(255, 255, 231), 0 },
+        { 207, 60, NITRO_LOWERMENU_FROM_LOWER, 152, 1, 0, 0 },   /* (past the canvas: cut) */
+    };
+    static const NitroLowerPanelRun flipped[] = {
+        { 0, 25, NITRO_LOWERMENU_FROM_TABS, 0, 1, 0, 0 },
+        { 35, 10, NITRO_LOWERMENU_FROM_LOWER, 151, -1, 0, 0 },
+        { 45, 152, NITRO_LOWERMENU_FROM_LOWER, 0, 1, 0, 0 },
+    };
+    static const char *const labels[] = { "TRAINER CARD", "BADGES" };
+    static const NitroLowerTabStyle style = { 0x737373, 0xEFE79C, 0xE7D694, 0xFFFFE7, 0x848484, 0xA5A5A5, 0xBDB584 };
+    NitroLowerPanelRun got[NITRO_LOWERMENU_RUNS_MAX];
+    uint32_t serial, serial2, before;
+    int x = -1, y = -1, src = -1, n;
+
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    NitroPort_LowerMenuFadePanel(0);   /* (the tests before left it black) */
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    /* None: as usual. */
+    CHECK(NitroPort_LowerMenuPanelRuns(got, &serial) == 0);
+    CHECK(NitroPort_LowerMenuRunRow(got, 0, 100, &src) == -1);
+    /* Set: the platforms' copy, cut to the canvas; a new serial, the
+     * picture's too. */
+    before = NitroPort_LowerMenuSerial();
+    NitroPort_LowerMenuSetPanelRuns(runs, 4);
+    n = NitroPort_LowerMenuPanelRuns(got, &serial2);
+    CHECK(n == 4 && serial2 != serial);
+    CHECK(got[3].y == 207 && got[3].rows == NITRO_LOWERMENU_CANVAS_H - 207);
+    CHECK(NitroPort_LowerMenuSerial() != before);
+    /* The same again: nothing new. */
+    NitroPort_LowerMenuSetPanelRuns(runs, 4);
+    CHECK(NitroPort_LowerMenuPanelRuns(NULL, &serial) == 4 && serial == serial2);
+    /* Each canvas row's source. */
+    CHECK(NitroPort_LowerMenuRunRow(got, n, 0, &src) == NITRO_LOWERMENU_FROM_TABS);
+    CHECK(NitroPort_LowerMenuRunRow(got, n, 25, &src) == NITRO_LOWERMENU_FROM_UPPER && src == 7);
+    CHECK(NitroPort_LowerMenuRunRow(got, n, 201, &src) == NITRO_LOWERMENU_FROM_UPPER && src == 183);
+    CHECK(NitroPort_LowerMenuRunRow(got, n, 204, &src) == NITRO_LOWERMENU_FROM_LOWER && src == 153);
+    CHECK(NitroPort_LowerMenuRunRow(got, n, 246, &src) == NITRO_LOWERMENU_FROM_LOWER && src == 191);
+    /* Touches: the lower screen's rows the game's, at the row shown
+     * (screen row 225: canvas 235, the lower screen's 180; row 194: canvas
+     * 202, its row 153 again). */
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 225, &x, &y) == 1);
+    CHECK(x == 128 && y == 180);
+    /* dragged up onto the upper screen's rows: where it last was */
+    CHECK(NitroPort_LowerMenuTouch(1, 60, 100, &x, &y) == 1);
+    CHECK(x == 128 && y == 180);
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 194, &x, &y) == 1 && y == 153);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    /* The upper screen's rows: nobody's. */
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 100, &x, &y) == 0);
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 225, &x, &y) == 0);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    /* No tabs set: their rows nobody's. */
+    CHECK(NitroPort_LowerMenuTouch(1, 60, 15, &x, &y) == 0);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    /* The tabs: drawn (the open one's fill under its label's row, the
+     * other's its own; what's round them at the top between them), a
+     * press when let go on the one it began on. */
+    NitroPort_LowerMenuSetTabs(2, labels, 0, &style);
+    CHECK(pixel(10, 20) == 0xEFE79CFFu);
+    CHECK(pixel(230, 20) == 0xE7D694FFu);
+    CHECK(pixel(122, 10) == 0x737373FFu);
+    CHECK(pixel(122, 25) == 0xEFE79CFFu);   /* (below the tabs: what they're the tabs of) */
+    CHECK(NitroPort_LowerMenuTouch(1, 200, 15, &x, &y) == 0);
+    NitroPort_LowerMenuTouch(1, 205, 16, &x, &y);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_TAB_PRESS(1));
+    NitroPort_LowerMenuTouch(1, 60, 15, &x, &y);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_TAB_PRESS(0));
+    /* slid onto the other before letting go: none */
+    NitroPort_LowerMenuTouch(1, 60, 15, &x, &y);
+    NitroPort_LowerMenuTouch(1, 200, 15, &x, &y);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    /* between them: nothing */
+    NitroPort_LowerMenuTouch(1, 122, 15, &x, &y);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    /* the game's touches off (an app that has none): the tabs still work */
+    NitroPort_LowerMenuSetPanelTouch(0);
+    NitroPort_LowerMenuTouch(1, 200, 15, &x, &y);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_TAB_PRESS(1));
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 225, &x, &y) == 0);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    NitroPort_LowerMenuSetPanelTouch(1);
+    /* The other open: redrawn. */
+    NitroPort_LowerMenuSetTabs(2, labels, 1, &style);
+    CHECK(pixel(10, 20) == 0xE7D694FFu);
+    CHECK(pixel(230, 20) == 0xEFE79CFFu);
+    /* Upside down: the rows backwards. */
+    NitroPort_LowerMenuSetPanelRuns(flipped, 3);
+    n = NitroPort_LowerMenuPanelRuns(got, NULL);
+    CHECK(NitroPort_LowerMenuRunRow(got, n, 35, &src) == NITRO_LOWERMENU_FROM_LOWER && src == 151);
+    CHECK(NitroPort_LowerMenuRunRow(got, n, 44, &src) == NITRO_LOWERMENU_FROM_LOWER && src == 142);
+    CHECK(NitroPort_LowerMenuRunRow(got, n, 45, &src) == NITRO_LOWERMENU_FROM_LOWER && src == 0);
+    CHECK(NitroPort_LowerMenuRunRow(got, n, 30, &src) == -1);
+    /* The menu off: none, no tabs. */
+    NitroPort_LowerMenuShow(0);
+    CHECK(NitroPort_LowerMenuPanelRuns(got, NULL) == 0);
+    NitroPort_LowerMenuShow(1);
+    CHECK(pixel(10, 20) == 0xB9C7D9FFu);   /* (the panel's own fill again) */
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 1 && y == 97);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    NitroPort_LowerMenuShow(0);
+}
+
 int main(void)
 {
     NitroPort_LowerMenuSetAvailable(1);
@@ -670,6 +790,7 @@ int main(void)
     test_dirty_rows();
     test_fade_waits_for_picture();
     test_upper_let_go_waits_for_picture();
+    test_panel_runs();
     printf("lowermenu: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;
 }

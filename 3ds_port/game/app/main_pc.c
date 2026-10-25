@@ -468,7 +468,7 @@ static void RemasterRender(uint16_t *out)
         split.overAlpha = overAlpha;
         split.windowsToEdge = 1;   /* (as the 3DS remaster has it) */
         split.snapshot = sStateTaken;
-        if (screen == 0) {
+        if (screen == 0 && !NitroPort_LowerMenuPanelShowsUpper()) {
             NitroPort_WideLayout(engine, &split);
         }
         NitroPort_Render2DSplit(engine, under, &split);
@@ -560,9 +560,93 @@ static void MenuRender(uint32_t *out);
 static void CanvasWith3D(uint16_t *canvas, int width, const NitroRender2DSplit *split, const uint16_t *over,
                          const uint8_t *overAlpha);
 
+/* The panel put together from runs (nitro_port_lowermenu.h), at the DS's
+ * pixels: 256 x 247, the canvas's rows from the lower screen's picture
+ * (lower, its width, tall or not), the upper screen's (rendered here at
+ * the DS's width, with its master brightness) or, the tabs' rows, the row
+ * below them (the port draws the tabs; tabRow says which); the sides'
+ * colours at columns 0, 1, 254, 255 when sides (a picture to compare with a
+ * mock-up; the platforms paint them at the 3DS's pixels). 0: no runs. */
+static int PanelCanvas(uint16_t *out, uint8_t *tabRow, const uint16_t *lower, int lowerWidth, int lowerTall,
+                       int sides)
+{
+    static uint16_t upper[320 * 192], upOver[320 * 192];
+    static uint8_t upAlpha[320 * 192];
+    NitroLowerPanelRun runs[NITRO_LOWERMENU_RUNS_MAX];
+    int n = NitroPort_LowerMenuPanelRuns(runs, NULL), y, x, upperDrawn = 0, upWidth = 256, upBright = 0;
+
+    if (n <= 0) {
+        return 0;
+    }
+    for (y = 0; y < NITRO_LOWERMENU_CANVAS_H; y++) {
+        int src, from = NitroPort_LowerMenuRunRow(runs, n, y, &src), i;
+        uint16_t *row = &out[y * 256];
+
+        tabRow[y] = from == NITRO_LOWERMENU_FROM_TABS;
+        if (from == NITRO_LOWERMENU_FROM_UPPER) {
+            if (!upperDrawn) {
+                NitroRender2DSplit split;
+
+                memset(&split, 0, sizeof(split));
+                split.over = upOver;
+                split.overAlpha = upAlpha;
+                split.windowsToEdge = 1;
+                split.snapshot = sStateTaken;
+                NitroPort_Render2DSplit(NitroPort_EngineAOnTop() ? 0 : 1, upper, &split);
+                upWidth = split.width > 256 ? split.width : 256;
+                upBright = NitroPort_LowerMenuBrightness((unsigned)split.masterBright);
+                upperDrawn = 1;
+            }
+            src = src < 0 ? 0 : src > 191 ? 191 : src;
+            for (x = 0; x < 256; x++) {
+                uint16_t c = upper[src * upWidth + (upWidth - 256) / 2 + x];
+
+                if (upBright) {
+                    uint16_t m = 0;
+                    int k;
+
+                    for (k = 0; k < 15; k += 5) {
+                        int v = (c >> k) & 31;
+
+                        v = upBright > 0 ? v + (31 - v) * upBright / 16 : v + v * upBright / 16;
+                        m |= (uint16_t)(v << k);
+                    }
+                    c = m;
+                }
+                row[x] = c;
+            }
+        } else if (from == NITRO_LOWERMENU_FROM_LOWER || from < 0) {
+            if (from < 0) {
+                src = lowerTall ? y : y - NITRO_LOWERMENU_DS_ROW0;
+            }
+            src = src < 0 ? 0 : src > (lowerTall ? NITRO_LOWERMENU_TALL_LINES - 1 : 191) ? (lowerTall ? NITRO_LOWERMENU_TALL_LINES - 1 : 191) : src;
+            memcpy(row, &lower[src * lowerWidth], 256 * sizeof(row[0]));
+        }
+        for (i = 0; sides && i < n; i++) {
+            if (y >= runs[i].y && y < runs[i].y + runs[i].rows) {
+                if (runs[i].sides & 0x8000u) {
+                    row[0] = row[255] = runs[i].sides & 0x7FFFu;
+                }
+                if (runs[i].sidesIn & 0x8000u) {
+                    row[1] = row[254] = runs[i].sidesIn & 0x7FFFu;
+                }
+            }
+        }
+    }
+    /* (the tabs' rows: the first row below them that isn't) */
+    for (y = NITRO_LOWERMENU_CANVAS_H - 1; y >= 0; y--) {
+        if (tabRow[y]) {
+            memcpy(&out[y * 256], y + 1 < NITRO_LOWERMENU_CANVAS_H ? &out[(y + 1) * 256] : &out[y * 256],
+                   256 * sizeof(out[0]));
+        }
+    }
+    return 1;
+}
+
 /* The lower screen's engine as the panel shows it, at the DS's pixels (256
  * wide; 248 lines when it's tall, else 192): a tall layout checked against
- * its mock-up, pixel for pixel. */
+ * its mock-up, pixel for pixel. Put together from runs: 256 x 247, as the
+ * runs have it (the tabs' rows magenta: the port draws them). */
 static int CanvasShot(const char *path)
 {
     static uint16_t canvas[320 * NITRO_LOWERMENU_TALL_LINES], over[320 * 192];
@@ -581,6 +665,22 @@ static int CanvasShot(const char *path)
     width = split.width > 256 ? split.width : 256;
     if (split.has3d) {
         CanvasWith3D(canvas, width, &split, over, overAlpha);
+    }
+    {
+        static uint8_t tabRow[NITRO_LOWERMENU_CANVAS_H];
+
+        if (PanelCanvas(out, tabRow, canvas, width, lines > 192, 1)) {
+            for (y = 0; y < NITRO_LOWERMENU_CANVAS_H; y++) {
+                if (tabRow[y]) {
+                    int x;
+
+                    for (x = 0; x < 256; x++) {
+                        out[y * 256 + x] = 0x7C1F;
+                    }
+                }
+            }
+            return WritePng(path, out, 256, NITRO_LOWERMENU_CANVAS_H);
+        }
     }
     for (y = 0; y < lines; y++) {
         memcpy(&out[y * 256], &canvas[y * width], 256 * sizeof(out[0]));
@@ -698,7 +798,9 @@ static void MenuRender(uint32_t *out)
     NitroRender2DSplit split;
     const uint32_t *pic;
     const uint16_t *canvas = under;
-    int x, y, width, mode, f;
+    static uint16_t together[256 * NITRO_LOWERMENU_CANVAS_H];
+    static uint8_t tabRow[NITRO_LOWERMENU_CANVAS_H];
+    int x, y, width, mode, f, runs;
 
     if (!NitroPort_LowerMenuOn() && !NitroPort_LowerMenuKeptShown()) {
         NitroPort_Log("[pc] mshot: the lower screen isn't the menu now (drawn anyway)");
@@ -728,7 +830,18 @@ static void MenuRender(uint32_t *out)
         NitroPort_LowerMenuUnlockMap();
         goto fade;
     }
+    /* (put together from runs: that canvas, its rows as they are) */
+    runs = PanelCanvas(together, tabRow, under, width, tall, 0);
+    if (runs) {
+        canvas = together;
+        width = 256;
+    }
     for (y = 0; y < NITRO_LOWERMENU_PANEL_H; y++) {
+        int cyPixel = (2 * y + 1) * NITRO_LOWERMENU_CANVAS_H / (2 * NITRO_LOWERMENU_PANEL_H);
+
+        if (runs && tabRow[cyPixel]) {
+            continue;   /* (the tabs: the menu's picture) */
+        }
         for (x = 0; x < NITRO_LOWERMENU_PANEL_W; x++) {
             /* the canvas's point there, in its 2x2 texels (as the GPU) */
             float tx = ((float)x + 0.5f) * (2.0f * NITRO_LOWERMENU_CANVAS_W / NITRO_LOWERMENU_PANEL_W) - 0.5f;
@@ -738,11 +851,12 @@ static void MenuRender(uint32_t *out)
 
             for (i = 0; i < 4; i++) {
                 int txi = t0x + (i & 1), tyi = t0y + (i >> 1);
-                int cx = txi / 2 > 255 ? 255 : txi / 2, cy = tyi / 2 - (tall ? 0 : NITRO_LOWERMENU_DS_ROW0);
+                int cx = txi / 2 > 255 ? 255 : txi / 2, cy = tyi / 2 - (tall || runs ? 0 : NITRO_LOWERMENU_DS_ROW0);
+                int last = runs ? NITRO_LOWERMENU_CANVAS_H - 1 : tall ? NITRO_LOWERMENU_TALL_LINES - 1 : 191;
                 float w = ((i & 1) ? fx : 1.0f - fx) * ((i >> 1) ? fy : 1.0f - fy);
                 uint16_t c;
 
-                cy = cy < 0 ? 0 : cy > (tall ? NITRO_LOWERMENU_TALL_LINES - 1 : 191) ? (tall ? NITRO_LOWERMENU_TALL_LINES - 1 : 191) : cy;
+                cy = cy < 0 ? 0 : cy > last ? last : cy;
                 c = canvas[cy * width + cx];
                 for (k = 0; k < 3; k++) {
                     int v = (c >> (5 * k)) & 31;
@@ -752,6 +866,35 @@ static void MenuRender(uint32_t *out)
             out[(NITRO_LOWERMENU_PANEL_Y0 + y) * NITRO_LOWERMENU_W + NITRO_LOWERMENU_PANEL_X0 + x] =
                 ((uint32_t)(acc[0] + 0.5f) << 24) | ((uint32_t)(acc[1] + 0.5f) << 16) |
                 ((uint32_t)(acc[2] + 0.5f) << 8) | 0xFFu;
+        }
+    }
+    if (runs) {
+        /* (the sides: the panel's outer pixel column each side, then the
+         * one inside it, as the compositor paints them) */
+        NitroLowerPanelRun r[NITRO_LOWERMENU_RUNS_MAX];
+        int n = NitroPort_LowerMenuPanelRuns(r, NULL), i;
+
+        for (y = 0; y < NITRO_LOWERMENU_PANEL_H; y++) {
+            int cy = (2 * y + 1) * NITRO_LOWERMENU_CANVAS_H / (2 * NITRO_LOWERMENU_PANEL_H);
+            uint32_t *row = &out[(NITRO_LOWERMENU_PANEL_Y0 + y) * NITRO_LOWERMENU_W + NITRO_LOWERMENU_PANEL_X0];
+
+            for (i = 0; i < n; i++) {
+                if (cy >= r[i].y && cy < r[i].y + r[i].rows) {
+                    int side;
+
+                    for (side = 0; side < 2; side++) {
+                        unsigned c = side ? r[i].sidesIn : r[i].sides;
+
+                        if (c & 0x8000u) {
+                            uint32_t rgba = ((uint32_t)(((c & 31) << 3) | ((c & 31) >> 2)) << 24) |
+                                            ((uint32_t)((((c >> 5) & 31) << 3) | (((c >> 5) & 31) >> 2)) << 16) |
+                                            ((uint32_t)((((c >> 10) & 31) << 3) | (((c >> 10) & 31) >> 2)) << 8) | 0xFFu;
+
+                            row[side] = row[NITRO_LOWERMENU_PANEL_W - 1 - side] = rgba;
+                        }
+                    }
+                }
+            }
         }
     }
 fade:

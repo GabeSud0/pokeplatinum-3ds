@@ -1,0 +1,557 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] The trainer case in the lower menu's panel (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+On the 3DS remaster's lower menu, the trainer case shows in the panel, as
+two folder tabs on the case (its approved mock-ups), and comes and goes as
+the bag and the party do:
+
+- Opened by the lower start menu (TRAINER, or switching from the bag or
+  the party: StartMenu_PortAppIsMenus), the menu kept on and its panel
+  black (NitroPort_LowerMenuKeptShown), the trainer case comes behind it
+  and pops in two frames after it's whole, the upper screen keeping the
+  field (NITRO_LOWERMENU_HOLD_FIELD); no fade, none of the wider upper
+  screen's layouts.
+- Its two screens are both in the panel, by turns: TRAINER CARD, the card
+  (the upper screen's rows) above the case's clasp; BADGES, the badge case
+  (the lower screen's) above it. The port puts the panel together from the
+  two screens' rows (NitroPort_LowerMenuSetPanelRuns): the card's tab the
+  card (rows 7-183, the case's corner at rows 7-8 left out), the clasp and
+  the case's rounded bottom (rows 152-191); the badges' tab the lid's
+  bottom edge upside down as its top (rows 151-142), the lid (rows 0-151)
+  and the same bottom; open, the badge case without the lid's strip at its
+  top (rows 12-151), laid out so once the lid's up, and with the lid again
+  as it comes down. The case's body between them a plain row of it from
+  below the card (the upper screen's row 188), its light edge painted on
+  where the rows haven't it. The tabs are the port's
+  (NitroPort_LowerMenuSetTabs), in the case's colours.
+- A tab tapped (NITRO_LOWERMENU_TAB_PRESS), or Left / Right, shows it; the
+  clasp in the card's tab shows the badges and opens the case; A turns the
+  card in its tab; B, TRAINER or another of the menu's buttons leaves in
+  the panel, faded to black, the menu kept on: the start menu does what
+  the button says (StartMenu_ExitTrainerCase: StartMenu_PortAppGone,
+  StartMenu_PortSwitchFromApp; BAG and POKéMON switch in the panel, the
+  bag and the party switch to it so too, POKéDEX and OPTIONS open
+  straight from it, MAP, POKéTCH and SAVE back in the field). The menu's
+  other taps meanwhile: nobody's.
+- Without the menu, or opened another way, it's as before.
+---
+ src/applications/trainer_case/main.c | 316 ++++++++++++++++++++++++++-
+ src/start_menu.c                     |  40 ++--
+ 2 files changed, 340 insertions(+), 16 deletions(-)
+
+diff --git a/src/applications/trainer_case/main.c b/src/applications/trainer_case/main.c
+index eeba8692..2905fc15 100644
+--- a/src/applications/trainer_case/main.c
++++ b/src/applications/trainer_case/main.c
+@@ -71,6 +71,163 @@ static const short sWideCardBack[][7] = {
+     // LINK TRADES
+     { WIDE_CARD_TEXT, 88, 104, 140, -WIDE_CARD_SPREAD, WIDE_CARD_SPREAD, 0 },
+ };
++
++// The 3DS remaster's lower menu (3ds_port/nitro/include/
++// nitro_port_lowermenu.h; the game has no port headers: plain calls).
++extern int NitroPort_LowerMenuAvailable(void);
++extern void NitroPort_LowerMenuShow(int on);
++extern void NitroPort_LowerMenuSetTall(int tall);
++extern void NitroPort_LowerMenuSetPanel(int shows);
++extern void NitroPort_LowerMenuSetPanelTouch(int on);
++extern void NitroPort_LowerMenuHoldUpper(int hold);
++extern int NitroPort_LowerMenuPressPending(void);
++extern int NitroPort_LowerMenuTakePress(void);
++extern void NitroPort_LowerMenuKeepShown(int on);
++extern int NitroPort_LowerMenuKeptShown(void);
++extern void NitroPort_LowerMenuFadePanel(int black);
++extern int NitroPort_LowerMenuPanelFade(void);
++extern BOOL StartMenu_PortAppIsMenus(ApplicationManager *appMan);
++extern BOOL StartMenu_PortButtonOpensApp(int button);
++extern void StartMenu_PortAppLeaving(int button);
++extern int gStartMenuPortAppPress; // (start_menu.c)
++
++// (NitroLowerPanelRun, NitroLowerTabStyle)
++typedef struct TrainerCasePortRun {
++    short y, rows, from, srcY, step;
++    unsigned short sides, sidesIn;
++} TrainerCasePortRun;
++
++typedef struct TrainerCasePortTabStyle {
++    u32 back, fill, fillOff, edge, ink, inkShadow, inkOff;
++} TrainerCasePortTabStyle;
++
++extern void NitroPort_LowerMenuSetPanelRuns(const TrainerCasePortRun *runs, int count);
++extern void NitroPort_LowerMenuSetTabs(int count, const char *const *labels, int active, const TrainerCasePortTabStyle *style);
++
++#define PORT_CLEAR_NOW     (-1) // NITRO_LOWERMENU_CLEAR_NOW
++#define PORT_FADE_BLACK    16   // (NitroPort_LowerMenuPanelFade: the panel black)
++#define PORT_PANEL_DS      0    // NITRO_LOWERMENU_PANEL_DS
++#define PORT_HOLD_FIELD    2    // NITRO_LOWERMENU_HOLD_FIELD
++#define PORT_MENU_BUTTONS  8    // NITRO_LOWERMENU_ITEM1: the menu's buttons before it
++#define PORT_TAB_PRESS(k)  (11 + (k)) // NITRO_LOWERMENU_TAB_PRESS
++#define PORT_FROM_LOWER    0    // NITRO_LOWERMENU_FROM_*
++#define PORT_FROM_UPPER    1
++#define PORT_FROM_TABS     2
++#define PORT_SIDE(r, g, b) ((unsigned short)(0x8000 | ((b) >> 3) << 10 | ((g) >> 3) << 5 | ((r) >> 3)))
++
++// The trainer case in the lower menu's panel (opened from the lower menu,
++// from the field or from its other apps: StartMenu_PortAppIsMenus): it comes
++// behind the panel faded to black, the menu kept on, and pops in once it's
++// whole, two frames on, the upper screen keeping the field. Its two
++// screens are both in the panel, by turns, as two folder tabs on the case
++// (the approved mock-ups, 2026-10-25): TRAINER CARD, the card (the upper
++// screen's rows) above the case's clasp; BADGES, the badge case (the lower
++// screen's: the lid, GYM LEADERS, or the badges once opened) above it.
++// The panel is put together from the two screens' rows (the port's runs,
++// nitro_port_lowermenu.h), the case's body drawn on where they leave a
++// gap (a plain row of it below the card, again: no sprite ever there, and
++// nobody's to touch), the case's light edge drawn on at the sides where
++// the rows haven't it: the card's
++// tab the case's top edge (the upper screen's rows 0-6, the tabs standing
++// on it instead) and the card (rows 7-183); the badges' tab the lid's
++// bottom edge mirrored as its top (rounded corners and all), the lid (or,
++// open, the badge case without the lid's strip at its top: rows 12-151);
++// both the clasp and the case's rounded bottom (rows 152-191). The tabs
++// are the port's, drawn in its own font in the case's colours. A tab
++// tapped (or Left / Right) shows it; the clasp in the card's tab shows the
++// badges, opening the case. A flips the card in its tab, B closes; the
++// menu's buttons work as in the bag: TRAINER closes it, BAG and POKéMON
++// switch to them in the panel, POKéDEX and OPTIONS open straight from it,
++// MAP, POKéTCH and SAVE back in the field.
++static BOOL sTrainerCasePortPanel;
++static int sTrainerCasePortReveal;
++static int sTrainerCasePortTab;          // 0 the card, 1 the badges
++static BOOL sTrainerCasePortLid;         // (the badges' tab laid out with the lid: closed, or closing)
++static BOOL sTrainerCasePortLeaving;     // (left in the panel)
++static BOOL sTrainerCasePortBlack;       // (the screens made black for an app opened from it)
++
++#define TC_PORT_LIGHT PORT_SIDE(255, 255, 231)
++#define TC_PORT_CREAM PORT_SIDE(239, 231, 156)
++
++static const TrainerCasePortRun sTrainerCasePortCard[] = {
++    { 0, 25, PORT_FROM_TABS, 0, 1, 0, 0 },
++    { 25, 2, PORT_FROM_UPPER, 7, 1, TC_PORT_LIGHT, TC_PORT_CREAM }, // (the card's frame's top, the case's corner left out)
++    { 27, 175, PORT_FROM_UPPER, 9, 1, 0, 0 },
++    { 202, 5, PORT_FROM_UPPER, 188, 0, 0, 0 }, // (the case's body: a plain row of it)
++    { 207, 24, PORT_FROM_LOWER, 152, 1, TC_PORT_LIGHT, 0 },
++    { 231, 16, PORT_FROM_LOWER, 176, 1, 0, 0 },
++};
++
++static const TrainerCasePortRun sTrainerCasePortBadgesLid[] = {
++    { 0, 25, PORT_FROM_TABS, 0, 1, 0, 0 },
++    { 25, 10, PORT_FROM_UPPER, 188, 0, 0, 0 },
++    { 35, 9, PORT_FROM_LOWER, 151, -1, TC_PORT_LIGHT, 0 }, // (the lid's bottom edge, upside down)
++    { 44, 1, PORT_FROM_LOWER, 142, 1, 0, 0 },
++    { 45, 152, PORT_FROM_LOWER, 0, 1, 0, 0 },
++    { 197, 10, PORT_FROM_UPPER, 188, 0, 0, 0 },
++    { 207, 24, PORT_FROM_LOWER, 152, 1, TC_PORT_LIGHT, 0 },
++    { 231, 16, PORT_FROM_LOWER, 176, 1, 0, 0 },
++};
++
++static const TrainerCasePortRun sTrainerCasePortBadgesOpen[] = {
++    { 0, 25, PORT_FROM_TABS, 0, 1, 0, 0 },
++    { 25, 32, PORT_FROM_UPPER, 188, 0, 0, 0 },
++    { 57, 140, PORT_FROM_LOWER, 12, 1, TC_PORT_LIGHT, 0 },
++    { 197, 10, PORT_FROM_UPPER, 188, 0, 0, 0 },
++    { 207, 24, PORT_FROM_LOWER, 152, 1, TC_PORT_LIGHT, 0 },
++    { 231, 16, PORT_FROM_LOWER, 176, 1, 0, 0 },
++};
++
++// The panel as the tab shown has it.
++static void TrainerCasePort_Show(void)
++{
++    static const char *const labels[2] = { "TRAINER CARD", "BADGES" };
++    static const TrainerCasePortTabStyle style = {
++        .back = 0x737373,
++        .fill = 0xEFE79C,
++        .fillOff = 0xE7D694,
++        .edge = 0xFFFFE7,
++        .ink = 0x848484,
++        .inkShadow = 0xA5A5A5,
++        .inkOff = 0xBDB584,
++    };
++
++    if (sTrainerCasePortTab == 0) {
++        NitroPort_LowerMenuSetPanelRuns(sTrainerCasePortCard, NELEMS(sTrainerCasePortCard));
++    } else if (sTrainerCasePortLid) {
++        NitroPort_LowerMenuSetPanelRuns(sTrainerCasePortBadgesLid, NELEMS(sTrainerCasePortBadgesLid));
++    } else {
++        NitroPort_LowerMenuSetPanelRuns(sTrainerCasePortBadgesOpen, NELEMS(sTrainerCasePortBadgesOpen));
++    }
++
++    NitroPort_LowerMenuSetTabs(2, labels, sTrainerCasePortTab, &style);
++}
++
++static void TrainerCasePort_ChooseTab(int tab, BOOL sound)
++{
++    if (tab == sTrainerCasePortTab) {
++        return;
++    }
++
++    if (sound) {
++        Sound_PlayEffect(SEQ_SE_DP_SELECT78_sseq);
++    }
++
++    sTrainerCasePortTab = tab;
++    TrainerCasePort_Show();
++}
++
++// Left in the panel (B, or a menu button: -1 for B): the panel faded to
++// black first, the menu kept on; the start menu does what the button says
++// (the app's state then its exit's).
++static void TrainerCasePort_Leave(void)
++{
++    sTrainerCasePortLeaving = TRUE;
++    sTrainerCasePortBlack = FALSE;
++    NitroPort_LowerMenuKeepShown(TRUE);
++    NitroPort_LowerMenuFadePanel(TRUE);
++    StartMenu_PortAppLeaving(gStartMenuPortAppPress);
++}
+ #endif
+ 
+ enum TrainerCaseState {
+@@ -252,6 +409,27 @@ BOOL TrainerCaseApp_Init(ApplicationManager *appMan, int *state)
+     SetAutorepeat(4, 8);
+     Heap_Create(HEAP_ID_APPLICATION, HEAP_ID_TRAINER_CASE, HEAP_SIZE_TRAINER_CASE);
+ 
++#ifdef SDK_PORT_3DS
++    // In the lower menu's panel (from the lower menu): both screens there,
++    // the card's tab first; the upper screen keeping the field.
++    sTrainerCasePortPanel = NitroPort_LowerMenuAvailable() && NitroPort_LowerMenuKeptShown() && StartMenu_PortAppIsMenus(appMan);
++    sTrainerCasePortReveal = sTrainerCasePortPanel ? 2 : 0;
++    sTrainerCasePortLeaving = FALSE;
++    sTrainerCasePortBlack = FALSE;
++    gStartMenuPortAppPress = -1;
++
++    if (sTrainerCasePortPanel) {
++        sTrainerCasePortTab = 0;
++        sTrainerCasePortLid = TRUE;
++        NitroPort_LowerMenuHoldUpper(PORT_HOLD_FIELD);
++        NitroPort_LowerMenuShow(TRUE);
++        NitroPort_LowerMenuSetTall(FALSE);
++        NitroPort_LowerMenuSetPanel(PORT_PANEL_DS);
++        NitroPort_LowerMenuSetPanelTouch(TRUE);
++        TrainerCasePort_Show();
++    }
++#endif
++
+     NARC *narc = NARC_ctor(NARC_INDEX_GRAPHIC__TRAINER_CASE, HEAP_ID_TRAINER_CASE);
+     TrainerCaseApp *trainerCaseApp = ApplicationManager_NewData(appMan, sizeof(TrainerCaseApp), HEAP_ID_TRAINER_CASE);
+ 
+@@ -331,13 +509,23 @@ BOOL TrainerCaseApp_Init(ApplicationManager *appMan, int *state)
+ 
+     TrainerCase_ResetAffineTransforms();
+ #ifdef SDK_PORT_3DS
+-    NitroPort_WideSplitScreen(WIDE_CARD_ENGINE, &sWideCardFront[0][0], NELEMS(sWideCardFront));
++    // (in the panel: as on the DS, the panel the width it is)
++    if (!sTrainerCasePortPanel) {
++        NitroPort_WideSplitScreen(WIDE_CARD_ENGINE, &sWideCardFront[0][0], NELEMS(sWideCardFront));
++    }
+ #endif
+ 
+     SetVBlankCallback(TrainerCase_TransferGraphicsOnVBlank, NULL);
+     NetworkIcon_InitIfConnected();
+     Sound_SetPlayerVolume(PLAYER_FIELD, SOUND_VOLUME_MAX / 3);
++#ifdef SDK_PORT_3DS
++    // (in the panel: no fade, it pops in)
++    if (!sTrainerCasePortPanel) {
++        StartScreenFade(FADE_SUB_THEN_MAIN, FADE_TYPE_DOWNWARD_IN, FADE_TYPE_DOWNWARD_IN, COLOR_BLACK, 6, 1, HEAP_ID_TRAINER_CASE);
++    }
++#else
+     StartScreenFade(FADE_SUB_THEN_MAIN, FADE_TYPE_DOWNWARD_IN, FADE_TYPE_DOWNWARD_IN, COLOR_BLACK, 6, 1, HEAP_ID_TRAINER_CASE);
++#endif
+     NARC_dtor(narc);
+ 
+     return TRUE;
+@@ -347,8 +535,51 @@ BOOL TrainerCaseApp_Main(ApplicationManager *appMan, int *state)
+ {
+     TrainerCaseApp *trainerCaseApp = ApplicationManager_Data(appMan);
+ 
++#ifdef SDK_PORT_3DS
++    // (come behind the black panel: popping in once it's whole)
++    if (sTrainerCasePortReveal > 0 && --sTrainerCasePortReveal == 0) {
++        NitroPort_LowerMenuFadePanel(PORT_CLEAR_NOW);
++        NitroPort_LowerMenuKeepShown(FALSE);
++    }
++
++    // In the panel: a tab tapped, or Left / Right, shows it; one of the
++    // menu's buttons closes it, the start menu doing what the button says
++    // (start_menu.c). While it's busy (the card turning, the case opening),
++    // before it's shown or once it's leaving: nobody's.
++    if (sTrainerCasePortPanel) {
++        BOOL ready = *state == TRAINER_CASE_STATE_MAIN && sTrainerCasePortReveal == 0;
++
++        if (NitroPort_LowerMenuPressPending() >= 0) {
++            int press = NitroPort_LowerMenuTakePress();
++
++            if (ready && (press == PORT_TAB_PRESS(0) || press == PORT_TAB_PRESS(1))) {
++                TrainerCasePort_ChooseTab(press - PORT_TAB_PRESS(0), TRUE);
++            } else if (ready && press >= 0 && press < PORT_MENU_BUTTONS) {
++                Sound_PlayEffect(SE_CONFIRM_sseq_3);
++                gStartMenuPortAppPress = press;
++                TrainerCasePort_Leave();
++                *state = TRAINER_CASE_STATE_EXIT;
++                ready = FALSE;
++            }
++        }
++
++        if (ready && JOY_NEW(PAD_KEY_LEFT | PAD_KEY_RIGHT)) {
++            TrainerCasePort_ChooseTab(JOY_NEW(PAD_KEY_RIGHT) ? 1 : 0, TRUE);
++        }
++    }
++#endif
++
+     switch (*state) {
+     case TRAINER_CASE_STATE_INITIAL:
++#ifdef SDK_PORT_3DS
++        if (sTrainerCasePortPanel) {
++            if (sTrainerCasePortReveal == 0) {
++                *state = TRAINER_CASE_STATE_MAIN;
++            }
++
++            break;
++        }
++#endif
+         if (IsScreenFadeDone()) {
+             *state = TRAINER_CASE_STATE_MAIN;
+         }
+@@ -359,6 +590,20 @@ BOOL TrainerCaseApp_Main(ApplicationManager *appMan, int *state)
+         int input = TrainerCase_GetPlayerInput(trainerCaseApp);
+ 
+         if (input == INPUT_TOUCH_SCREEN_TAP) {
++#ifdef SDK_PORT_3DS
++            // (in the panel, the card's tab: the clasp shows the badges,
++            // the case opening if it's closed)
++            if (sTrainerCasePortPanel && sTrainerCasePortTab == 0 && trainerCaseApp->touchedRectangleIndex == TOUCH_RECTANGLE_OPEN_CLOSE_BADGE_CASE) {
++                TrainerCasePort_ChooseTab(1, trainerCaseApp->badgeCaseOpenState != BADGE_CASE_CLOSED);
++
++                if (trainerCaseApp->badgeCaseOpenState != BADGE_CASE_CLOSED) {
++                    trainerCaseApp->touchedRectangleIndex = TOUCHSCREEN_INPUT_NONE;
++                }
++            }
++
++            if (trainerCaseApp->touchedRectangleIndex == TOUCHSCREEN_INPUT_NONE) {
++            } else
++#endif
+             if (trainerCaseApp->touchedRectangleIndex == TOUCH_RECTANGLE_OPEN_CLOSE_BADGE_CASE) {
+                 trainerCaseApp->badgeCaseButtonPushed = TRUE;
+                 trainerCaseApp->badgeCaseButtonState = BUTTON_STATE_PUSHED;
+@@ -397,6 +642,19 @@ BOOL TrainerCaseApp_Main(ApplicationManager *appMan, int *state)
+                 TrainerCase_ResetBadgePolishingState(&trainerCaseApp->badgePolishingState);
+             }
+ 
++#ifdef SDK_PORT_3DS
++            // (in the panel: A turns the card in its tab; B leaves in the
++            // panel)
++            if (input == INPUT_A_BUTTON && sTrainerCasePortPanel && sTrainerCasePortTab != 0) {
++                input = INPUT_NONE;
++            } else if (input == INPUT_B_BUTTON && sTrainerCasePortPanel) {
++                Sound_PlayEffect(SE_CONFIRM_sseq_3);
++                gStartMenuPortAppPress = -1;
++                TrainerCasePort_Leave();
++                *state = TRAINER_CASE_STATE_EXIT;
++                input = INPUT_NONE;
++            }
++#endif
+             if (input == INPUT_A_BUTTON) {
+                 trainerCaseApp->subState = FLIP_SUBSTATE_INITIAL;
+                 *state = TRAINER_CASE_STATE_FLIP_CARD;
+@@ -412,6 +670,25 @@ BOOL TrainerCaseApp_Main(ApplicationManager *appMan, int *state)
+         break;
+     }
+     case TRAINER_CASE_STATE_EXIT:
++#ifdef SDK_PORT_3DS
++        // (left in the panel: once it's black; for an app opened from it,
++        // the screens made black then, while they're kept, a frame before
++        // it goes: the 3DS shows the game's pictures a frame late)
++        if (sTrainerCasePortLeaving) {
++            if (NitroPort_LowerMenuPanelFade() < PORT_FADE_BLACK) {
++                break;
++            }
++
++            if (StartMenu_PortButtonOpensApp(gStartMenuPortAppPress) && !sTrainerCasePortBlack) {
++                SetScreenColorBrightness(DS_SCREEN_MAIN, COLOR_BLACK);
++                SetScreenColorBrightness(DS_SCREEN_SUB, COLOR_BLACK);
++                sTrainerCasePortBlack = TRUE;
++                break;
++            }
++
++            return TRUE;
++        }
++#endif
+         if (IsScreenFadeDone()) {
+             return TRUE;
+         }
+@@ -485,6 +762,21 @@ BOOL TrainerCaseApp_Exit(ApplicationManager *appMan, int *state)
+     Heap_Destroy(HEAP_ID_TRAINER_CASE);
+     Sound_SetPlayerVolume(PLAYER_FIELD, SOUND_VOLUME_MAX);
+ 
++#ifdef SDK_PORT_3DS
++    // Out of the lower menu's panel (its runs and tabs going with it): left
++    // in it, the menu kept, its panel black, the upper screen kept for what
++    // comes next (the start menu lets it go once the field's back).
++    if (sTrainerCasePortPanel) {
++        NitroPort_LowerMenuShow(FALSE);
++
++        if (!sTrainerCasePortLeaving) {
++            NitroPort_LowerMenuHoldUpper(FALSE);
++        }
++
++        sTrainerCasePortPanel = FALSE;
++    }
++#endif
++
+     return TRUE;
+ }
+ 
+@@ -849,7 +1141,9 @@ static BOOL TrainerCase_FlipTrainerCard(TrainerCaseApp *trainerCaseApp)
+             TrainerCard_DrawBackText(trainerCaseApp->windows, trainerCaseApp->trainerCase);
+             TrainerCase_DisplaySignature(trainerCaseApp->bgConfig, BG_LAYER_SUB_3, trainerCaseApp->signature);
+ #ifdef SDK_PORT_3DS
+-            NitroPort_WideSplitScreen(WIDE_CARD_ENGINE, &sWideCardBack[0][0], NELEMS(sWideCardBack));
++            if (!sTrainerCasePortPanel) {
++                NitroPort_WideSplitScreen(WIDE_CARD_ENGINE, &sWideCardBack[0][0], NELEMS(sWideCardBack));
++            }
+ #endif
+         } else {
+             trainerCaseApp->viewingBack = FALSE;
+@@ -859,7 +1153,9 @@ static BOOL TrainerCase_FlipTrainerCard(TrainerCaseApp *trainerCaseApp)
+             TrainerCase_DrawTrainer(trainerCaseApp);
+             TrainerCard_DrawFrontText(trainerCaseApp->windows, trainerCaseApp->trainerCase);
+ #ifdef SDK_PORT_3DS
+-            NitroPort_WideSplitScreen(WIDE_CARD_ENGINE, &sWideCardFront[0][0], NELEMS(sWideCardFront));
++            if (!sTrainerCasePortPanel) {
++                NitroPort_WideSplitScreen(WIDE_CARD_ENGINE, &sWideCardFront[0][0], NELEMS(sWideCardFront));
++            }
+ #endif
+         }
+ 
+@@ -929,6 +1225,13 @@ static BOOL TrainerCase_OpenCloseBadgeCase(TrainerCaseApp *trainerCaseApp)
+             trainerCaseApp->subState = BADGE_CASE_SUBSTATE_OPEN;
+         } else {
+             trainerCaseApp->subState = BADGE_CASE_SUBSTATE_CLOSE;
++#ifdef SDK_PORT_3DS
++            // (in the panel: laid out with the lid as it comes down)
++            if (sTrainerCasePortPanel) {
++                sTrainerCasePortLid = TRUE;
++                TrainerCasePort_Show();
++            }
++#endif
+         }
+ 
+         TrainerCase_PlayOpenCloseBadgeCaseSoundEffect(trainerCaseApp->badgeCaseOpenState);
+@@ -939,6 +1242,13 @@ static BOOL TrainerCase_OpenCloseBadgeCase(TrainerCaseApp *trainerCaseApp)
+         if (trainerCaseApp->badgeCaseTransitionIndex == NELEMS(sBadgeCaseCoverScalingSpeeds)) {
+             trainerCaseApp->badgeCaseOpenState = BADGE_CASE_OPEN;
+             trainerCaseApp->subState = BADGE_CASE_SUBSTATE_DONE;
++#ifdef SDK_PORT_3DS
++            // (in the panel: laid out without the lid, up out of sight)
++            if (sTrainerCasePortPanel) {
++                sTrainerCasePortLid = FALSE;
++                TrainerCasePort_Show();
++            }
++#endif
+         }
+         break;
+     case BADGE_CASE_SUBSTATE_CLOSE:
+diff --git a/src/start_menu.c b/src/start_menu.c
+index 60eb0e00..27b69d39 100644
+--- a/src/start_menu.c
++++ b/src/start_menu.c
+@@ -344,15 +344,14 @@ extern void NitroPort_LowerMenuFadeToPanel(int shows);
+ // with X, too).
+ static BOOL sPortTapOpening; // a tap opens the menu this frame (no opening sound)
+ 
+-// The bag or the party opened from the lower menu (the apps shown in its
+-// panel): the panel fades to black (the menu kept on meanwhile), the field
++// The bag, the party or the trainer case opened from the lower menu (the
++// apps shown in its panel): the panel fades to black (the menu kept on meanwhile), the field
+ // goes and the app comes behind it, and it pops in once it's whole, the
+ // upper screen keeping the field all the while. Closed, the panel fades to
+ // black again, the field comes back behind it, and the panel fades in on
+ // the map. While it's open the menu's other buttons work: its own button
+-// closes it (back to walking), BAG from the party and POKéMON from the bag
+-// switch to the other in the panel, TRAINER, POKéDEX and OPTIONS open
+-// straight from it, SAVE, MAP and POKéTCH back in the field
++// closes it (back to walking), BAG, POKéMON and TRAINER switch to that
++// one in the panel, POKéDEX and OPTIONS open straight from it, SAVE, MAP and POKéTCH back in the field
+ // (StartMenu_PortSwitchFromApp). Between the panel's apps (the bag, the
+ // party, the summary: an item used on a Pokemon or given, the summary and
+ // back...), the same: one goes behind the black panel, the next comes
+@@ -1578,7 +1577,13 @@ static BOOL StartMenu_SelectTrainerCase(FieldTask *fieldTask)
+ {
+     StartMenu *menu = FieldTask_GetEnv(fieldTask);
+ 
++#ifdef SDK_PORT_3DS
++    if (!sPortInstant) {
++        FieldMap_FadeScreen(FADE_TYPE_BRIGHTNESS_OUT);
++    }
++#else
+     FieldMap_FadeScreen(FADE_TYPE_BRIGHTNESS_OUT);
++#endif
+ 
+     menu->callback = StartMenu_TrainerCase;
+     menu->state = START_MENU_STATE_APP_START;
+@@ -1607,6 +1612,14 @@ static BOOL StartMenu_ExitTrainerCase(FieldTask *fieldTask)
+ 
+     TrainerCase_SaveBadgePolish(fieldSystem, (TrainerCase *)menu->taskData);
+     TrainerCase_Free((TrainerCase *)menu->taskData);
++
++#ifdef SDK_PORT_3DS
++    StartMenu_PortAppGone();
++
++    if (StartMenu_PortSwitchFromApp(fieldTask, PORT_BUTTON_TRAINER)) {
++        return FALSE;
++    }
++#endif
+     FieldSystem_StartFieldMap(fieldSystem);
+ 
+     menu->state = START_MENU_STATE_REINIT;
+@@ -2683,12 +2696,12 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
+     return TRUE;
+ }
+ 
+-// The bag or the party (the lower menu's: the apps shown in its panel)
+-// closed by one of the menu's buttons, or by B: what next. The other one
+-// (BAG from the party, POKéMON from the bag): opened in the panel straight
++// The bag, the party or the trainer case (the lower menu's: the apps shown
++// in its panel) closed by one of the menu's buttons, or by B: what next.
++// Another of them (BAG, POKéMON, TRAINER): opened in the panel straight
+ // away, as it was itself (behind the panel's black, popping in), or with
+-// the DS's fade in after one. TRAINER, POKéDEX, OPTIONS: opened straight
+-// from it (the field not loaded in between); TRUE then. Otherwise back to
++// the DS's fade in after one. POKéDEX, OPTIONS: opened straight from it
++// (the field not loaded in between); TRUE then. Otherwise back to
+ // the field: its own button closes the menu as B does, SAVE, MAP and
+ // POKéTCH are acted on there (as if tapped then).
+ static BOOL StartMenu_PortSwitchFromApp(FieldTask *fieldTask, int own)
+@@ -2809,7 +2822,7 @@ static FieldTaskFunc StartMenu_PortAppFromApp(int button)
+ BOOL StartMenu_PortButtonOpensApp(int button)
+ {
+     return button >= 0 && button < PORT_BUTTON_COUNT && button != PORT_BUTTON_BAG && button != PORT_BUTTON_POKEMON &&
+-        StartMenu_PortAppFromApp(button) != NULL;
++        button != PORT_BUTTON_TRAINER && StartMenu_PortAppFromApp(button) != NULL;
+ }
+ 
+ static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, int button)
+@@ -2976,12 +2989,13 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+         menu->state = START_MENU_STATE_END;
+         return TRUE;
+     default:
+-        // The bag and the party, shown in the panel: the panel fades to
++        // The bag, the party and the trainer case, shown in the panel: the panel fades to
+         // black, the menu kept on, and the field goes and the app comes
+         // behind it once it's black (StartMenu_ApplicationStart), the upper
+         // screen keeping the field; the app pops in once it's whole
+         // (bag/main.c, party_menu/main.c).
+-        if ((button == PORT_BUTTON_BAG || button == PORT_BUTTON_POKEMON) && NitroPort_LowerMenuAvailable()) {
++        if ((button == PORT_BUTTON_BAG || button == PORT_BUTTON_POKEMON || button == PORT_BUTTON_TRAINER) &&
++            NitroPort_LowerMenuAvailable()) {
+             sPortInstant = TRUE;
+             sPortAfterReveal = -1;
+             NitroPort_LowerMenuKeepShown(TRUE);
+-- 
+2.43.0
+

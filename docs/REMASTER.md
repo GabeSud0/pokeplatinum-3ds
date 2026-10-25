@@ -594,7 +594,8 @@ screens) the lower screen is the DS's, filling the screen as before.
   first). A fade back to black, or an app popping in, calls the change
   off.
 - **Kept shown** (`NitroPort_LowerMenuKeepShown`): while the game swaps the
-  field and the panel's apps (the bag, the party, the summary), the menu's
+  field and the panel's apps (the bag, the party, the summary, the trainer
+  case), the menu's
   kept on (drawn with its panel black, or the map, while the game turns it
   off and on; its buttons drawn and pressed as usual, the panel's touches
   nobody's). An app that finds it so when it starts came behind the
@@ -703,8 +704,9 @@ screens) the lower screen is the DS's, filling the screen as before.
   three frames after the field's been drawn the panel fades in on the map
   (the Pokétch for POKéTCH, or without the Town Map), the menu closed.
   While the item list waits, the menu's other buttons work (with its
-  sound): BAG puts the bag away; POKéMON switches to the party in the
-  panel (below); TRAINER, POKéDEX and OPTIONS open straight from the bag
+  sound): BAG puts the bag away; POKéMON and TRAINER switch to the party
+  and the trainer case in the panel (below); POKéDEX and OPTIONS open
+  straight from the bag
   (the panel black, then both screens black, as the DS's fade out leaves
   them, and the app's own fade in; the bag makes them black while they're
   still kept, a frame before it goes, because the 3DS shows the game's
@@ -752,8 +754,9 @@ screens) the lower screen is the DS's, filling the screen as before.
   panel to black, the party comes behind it and pops in; B (or CANCEL, or
   POKéMON again) fades it to black, and the map fades in once the field's
   back. While the cursor waits on the panels the menu's other buttons
-  work: BAG switches to the bag in the panel (and POKéMON in the bag back
-  to the party), TRAINER, POKéDEX and OPTIONS open straight from it, SAVE,
+  work: BAG and TRAINER switch to the bag and the trainer case in the
+  panel (and POKéMON in them back to the party), POKéDEX and OPTIONS open
+  straight from it, SAVE,
   MAP and POKéTCH are acted on in the field; a tap while it's busy (a
   Pokémon's menu, a message, a switch), before it's shown, or in a party
   not the menu's (a script's) is nobody's (the bag's the same). The
@@ -769,6 +772,56 @@ screens) the lower screen is the DS's, filling the screen as before.
   nobody's (the pad does what they do), the menu's taps nobody's. Left, it
   goes the same way and the party comes behind it. From anywhere else
   (the PC's boxes...) it's the DS's.
+- **The panel put together** (`NitroPort_LowerMenuSetPanelRuns`): an app
+  whose two DS screens both go in the panel has the canvas made of runs of
+  rows: each the DS's lower screen's rows, the upper screen's (its DS 256
+  columns), or the port's tabs; a row after another, upside down, or one
+  row again (a plain row stretched); the canvas's outer two columns each
+  side painted a colour where the layout wants an edge the rows haven't
+  (`sides`, `sidesIn`; painted at the panel's outer two pixel columns).
+  Rows no run covers are as usual. Touches on the lower screen's rows are
+  the game's, at the row they show (dragged onto another's rows: where the
+  drag last was on the lower screen's); on the upper screen's, nobody's.
+  The upper screen is drawn at the DS's width then
+  (`NitroPort_LowerMenuPanelShowsUpper`: no wider layout). The compositor
+  draws a quad a run from the lower screen's texture or the upper screen's
+  (its newest picture held for the frame, the panel drawn again when it
+  changes; the panel's fresh-picture wait goes by the older of the two),
+  the upper screen's master brightness over its rows; the PC runner puts
+  the canvas together the same way (`cshot` writes it, 256 x 247, the
+  tabs' rows magenta). Gone with the menu (`NitroPort_LowerMenuShow(0)`).
+- **The panel's tabs** (`NitroPort_LowerMenuSetTabs`): folder tabs over
+  the runs' tab rows, drawn by the port in its picture at the 3DS's
+  pixels: side by side 4 pixels apart, their top corners rounded, each a
+  small Poké Ball and its label in the port's font made bold, the open one
+  opening into what's under it (its top line runs on under the others), in
+  the colours the app gives. A tap let go on the one it began on is a
+  press (`NITRO_LOWERMENU_TAB_PRESS(tab)`), also while the panel's other
+  touches are nobody's; the panel's fade darkens them with it.
+- **The trainer case in the panel** (`patches/pokeplatinum/0038`): TRAINER
+  (or switching from the bag or the party) brings the trainer case behind
+  the panel's black, as the bag; it pops in, the upper screen keeping the
+  field. Its two screens are in the panel by turns, as two tabs on the case
+  (the approved mock-ups, the same pixels in the PC runner but the
+  lettering of the tabs, 2026-10-25): TRAINER CARD, the card above the
+  case's clasp; BADGES, the badge case above it. Put together from runs:
+  the card's tab the card (the upper screen's rows 7-183; at rows 7-8 the
+  case's corner left out, its edge painted on), the clasp and the case's
+  rounded bottom (the lower screen's rows 152-191, the edge painted on
+  where the lower screen's case has none); the badges' tab the lid's
+  bottom edge mirrored as its top (the lower screen's rows 151-142,
+  upside down), the lid (rows 0-151) and the same bottom; open, without
+  the lid's strip at the top (rows 12-151), laid out so once the lid's up
+  and with the lid again as it comes down. The case's body between them is
+  a plain row of it from below the card (the upper screen's row 188: no
+  sprite there, nobody's to touch). The tabs in the case's colours, their
+  labels the port's. A tab tapped, or Left / Right, shows it; the clasp in
+  the card's tab shows the badges and opens the case; A turns the card in
+  its tab; B, TRAINER, or another of the menu's buttons leaves as the bag
+  does (BAG and POKéMON switch in the panel, POKéDEX and OPTIONS open
+  straight from it, MAP, POKéTCH and SAVE back in the field). Without the
+  menu, or opened another way, it's the DS's, across
+  the wider upper screen.
 - **The apps' hand-over:** the start menu opens the panel's apps
   (`StartMenu_PortAppIsMenus`: the field's own app, the start menu's task
   the field's; not a script's, a registered item's, or an app's own like
@@ -822,7 +875,7 @@ screens) the lower screen is the DS's, filling the screen as before.
   only the panel).
 - **The PC runner:** `mshot PATH` writes the lower screen as the 3DS shows
   it (320 x 240), `cshot PATH` the panel's picture at the DS's pixels (256 x
-  248 when it's tall), `mtouch X Y` touches it there. It has the menu unless
+  248 when it's tall, 256 x 247 put together), `mtouch X Y` touches it there. It has the menu unless
   started with `--classic-menu`. The map's drawn on the game's thread as
   it's handed over (the same pictures every run), or with `--map-thread`
   on a thread of its own as on the 3DS.
