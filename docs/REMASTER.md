@@ -802,26 +802,32 @@ screens) the lower screen is the DS's, filling the screen as before.
   (or switching from the bag or the party) brings the trainer case behind
   the panel's black, as the bag; it pops in, the upper screen keeping the
   field. Its two screens are in the panel by turns, as two tabs on the case
-  (the approved mock-ups, the same pixels in the PC runner but the
-  lettering of the tabs, 2026-10-25): TRAINER CARD, the card above the
+  (the approved mock-ups; the card's tab the same pixels in the PC runner
+  but the tabs' lettering, 2026-10-25): TRAINER CARD, the card above the
   case's clasp; BADGES, the badge case above it. Put together from runs:
   the card's tab the card (the upper screen's rows 7-183; at rows 7-8 the
   case's corner left out, its edge painted on), the clasp and the case's
   rounded bottom (the lower screen's rows 152-191, the edge painted on
-  where the lower screen's case has none); the badges' tab the lid's
-  bottom edge mirrored as its top (the lower screen's rows 151-142,
-  upside down), the lid (rows 0-151) and the same bottom; open, without
-  the lid's strip at the top (rows 12-151), laid out so once the lid's up
-  and with the lid again as it comes down. The case's body between them is
-  a plain row of it from below the card (the upper screen's row 188: no
-  sprite there, nobody's to touch). The tabs in the case's colours, their
-  labels the port's. A tab tapped, or Left / Right, shows it; the clasp in
+  where the lower screen's case has none); the badges' tab the lower
+  screen's rows 0-191 in one piece (the clasp where the card's tab has it).
+  There the lid is shaped for the panel (`TrainerCasePort_ShapeLid`): its
+  sides and rounded bottom corners moved in 6 pixels, so it covers the
+  badge case beneath by 2 pixels each side (not 8 wider than it, as on the
+  DS's screen), and its bottom edge upside down over its plain top rows as
+  its top edge (new tiles in slots its tilemap doesn't use; the case's own
+  rows round its top made plain). It shrinks towards that top as on the DS,
+  flipping up from the badge case's top; open, its strip up there is left
+  out (laid out so once it's up, and with it again as it comes down). The
+  case's body above them is a plain row of it from below the card (the
+  upper screen's row 188: no sprite there, nobody's to touch; a lower
+  screen's row or a mirrored one would show the clasp's tap circles). The
+  tabs in the case's colours, their labels the port's. A tab tapped, or Left / Right, shows it; the clasp in
   the card's tab shows the badges and opens the case; A turns the card in
   its tab; B, TRAINER, or another of the menu's buttons leaves as the bag
   does (BAG and POKéMON switch in the panel, POKéDEX and OPTIONS open
   straight from it, MAP, POKéTCH and SAVE back in the field). Without the
-  menu, or opened another way, it's the DS's, across
-  the wider upper screen.
+  menu, or opened another way, it's the DS's, across the wider upper
+  screen.
 - **The apps' hand-over:** the start menu opens the panel's apps
   (`StartMenu_PortAppIsMenus`: the field's own app, the start menu's task
   the field's; not a script's, a registered item's, or an app's own like

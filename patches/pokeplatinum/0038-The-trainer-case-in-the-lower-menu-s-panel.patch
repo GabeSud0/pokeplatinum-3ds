@@ -21,14 +21,21 @@ the bag and the party do:
   (the lower screen's) above it. The port puts the panel together from the
   two screens' rows (NitroPort_LowerMenuSetPanelRuns): the card's tab the
   card (rows 7-183, the case's corner at rows 7-8 left out), the clasp and
-  the case's rounded bottom (rows 152-191); the badges' tab the lid's
-  bottom edge upside down as its top (rows 151-142), the lid (rows 0-151)
-  and the same bottom; open, the badge case without the lid's strip at its
-  top (rows 12-151), laid out so once the lid's up, and with the lid again
-  as it comes down. The case's body between them a plain row of it from
-  below the card (the upper screen's row 188), its light edge painted on
-  where the rows haven't it. The tabs are the port's
-  (NitroPort_LowerMenuSetTabs), in the case's colours.
+  the case's rounded bottom (rows 152-191); the badges' tab the lower
+  screen's rows 0-191 in one piece (open, without the lid's strip at the
+  top, rows 0-11: laid out so once the lid's up, and with it again as it
+  comes down). The case's body above them a plain row of it from below the
+  card (the upper screen's row 188), its light edge painted on where the
+  rows haven't it. The tabs are the port's (NitroPort_LowerMenuSetTabs), in
+  the case's colours.
+- The lid shaped for the panel (TrainerCasePort_ShapeLid): its sides and
+  rounded bottom corners moved in 6 pixels (on its GYM LEADERS rows only
+  the side, the Poké Ball beside it staying), so it covers the badge case
+  beneath by 2 pixels each side, and its bottom edge upside down over its
+  plain top rows as its top edge: new tiles in slots its tilemap doesn't
+  use (its entries a byte each, without flips); the case's top rows round
+  it made plain. Shrinking towards its top as on the DS, it flips up from
+  the badge case's top.
 - A tab tapped (NITRO_LOWERMENU_TAB_PRESS), or Left / Right, shows it; the
   clasp in the card's tab shows the badges and opens the case; A turns the
   card in its tab; B, TRAINER or another of the menu's buttons leaves in
@@ -40,15 +47,15 @@ the bag and the party do:
   other taps meanwhile: nobody's.
 - Without the menu, or opened another way, it's as before.
 ---
- src/applications/trainer_case/main.c | 316 ++++++++++++++++++++++++++-
- src/start_menu.c                     |  40 ++--
- 2 files changed, 340 insertions(+), 16 deletions(-)
+ src/applications/trainer_case/main.c | 475 ++++++++++++++++++++++++++-
+ src/start_menu.c                     |  40 ++-
+ 2 files changed, 499 insertions(+), 16 deletions(-)
 
 diff --git a/src/applications/trainer_case/main.c b/src/applications/trainer_case/main.c
-index eeba8692..2905fc15 100644
+index eeba8692..81990ff0 100644
 --- a/src/applications/trainer_case/main.c
 +++ b/src/applications/trainer_case/main.c
-@@ -71,6 +71,163 @@ static const short sWideCardBack[][7] = {
+@@ -71,6 +71,317 @@ static const short sWideCardBack[][7] = {
      // LINK TRADES
      { WIDE_CARD_TEXT, 88, 104, 140, -WIDE_CARD_SPREAD, WIDE_CARD_SPREAD, 0 },
  };
@@ -108,12 +115,12 @@ index eeba8692..2905fc15 100644
 +// nitro_port_lowermenu.h), the case's body drawn on where they leave a
 +// gap (a plain row of it below the card, again: no sprite ever there, and
 +// nobody's to touch), the case's light edge drawn on at the sides where
-+// the rows haven't it: the card's
-+// tab the case's top edge (the upper screen's rows 0-6, the tabs standing
-+// on it instead) and the card (rows 7-183); the badges' tab the lid's
-+// bottom edge mirrored as its top (rounded corners and all), the lid (or,
-+// open, the badge case without the lid's strip at its top: rows 12-151);
-+// both the clasp and the case's rounded bottom (rows 152-191). The tabs
++// the rows haven't it: the card's tab the card (the upper screen's rows
++// 7-183, the tabs standing on the case's top instead of its rows 0-6), the
++// clasp and the case's rounded bottom (the lower screen's rows 152-191);
++// the badges' tab the lower screen's rows in one piece, the lid shaped for
++// the panel (TrainerCasePort_ShapeLid: about the badge case's width, with a
++// top edge; open, its strip at the top left out). The tabs
 +// are the port's, drawn in its own font in the case's colours. A tab
 +// tapped (or Left / Right) shows it; the clasp in the card's tab shows the
 +// badges, opening the case. A flips the card in its tab, B closes; the
@@ -139,23 +146,21 @@ index eeba8692..2905fc15 100644
 +    { 231, 16, PORT_FROM_LOWER, 176, 1, 0, 0 },
 +};
 +
++// (the lid shaped for the panel: TrainerCasePort_ShapeLid. Its top edge at
++// canvas row 55, the lower screen's rows on without a gap: the clasp where
++// the card's tab has it)
 +static const TrainerCasePortRun sTrainerCasePortBadgesLid[] = {
 +    { 0, 25, PORT_FROM_TABS, 0, 1, 0, 0 },
-+    { 25, 10, PORT_FROM_UPPER, 188, 0, 0, 0 },
-+    { 35, 9, PORT_FROM_LOWER, 151, -1, TC_PORT_LIGHT, 0 }, // (the lid's bottom edge, upside down)
-+    { 44, 1, PORT_FROM_LOWER, 142, 1, 0, 0 },
-+    { 45, 152, PORT_FROM_LOWER, 0, 1, 0, 0 },
-+    { 197, 10, PORT_FROM_UPPER, 188, 0, 0, 0 },
-+    { 207, 24, PORT_FROM_LOWER, 152, 1, TC_PORT_LIGHT, 0 },
++    { 25, 30, PORT_FROM_UPPER, 188, 0, 0, 0 },
++    { 55, 176, PORT_FROM_LOWER, 0, 1, TC_PORT_LIGHT, 0 },
 +    { 231, 16, PORT_FROM_LOWER, 176, 1, 0, 0 },
 +};
 +
++// (open: the lid's strip, up at the top, left out)
 +static const TrainerCasePortRun sTrainerCasePortBadgesOpen[] = {
 +    { 0, 25, PORT_FROM_TABS, 0, 1, 0, 0 },
-+    { 25, 32, PORT_FROM_UPPER, 188, 0, 0, 0 },
-+    { 57, 140, PORT_FROM_LOWER, 12, 1, TC_PORT_LIGHT, 0 },
-+    { 197, 10, PORT_FROM_UPPER, 188, 0, 0, 0 },
-+    { 207, 24, PORT_FROM_LOWER, 152, 1, TC_PORT_LIGHT, 0 },
++    { 25, 42, PORT_FROM_UPPER, 188, 0, 0, 0 },
++    { 67, 164, PORT_FROM_LOWER, 12, 1, TC_PORT_LIGHT, 0 },
 +    { 231, 16, PORT_FROM_LOWER, 176, 1, 0, 0 },
 +};
 +
@@ -209,10 +214,166 @@ index eeba8692..2905fc15 100644
 +    NitroPort_LowerMenuFadePanel(TRUE);
 +    StartMenu_PortAppLeaving(gStartMenuPortAppPress);
 +}
++
++// A new tile of the lid's (8 bits a pixel, 64 bytes): the one it had
++// (own) if the same, or one made already, or a new one in a slot its
++// tilemap doesn't use (work: all its tiles; freeSlots, used: how many of
++// them taken). -1: no room.
++static int TrainerCasePort_LidTile(const u8 *tile, u8 *work, int own, const u8 *freeSlots, int freeCount, int *used)
++{
++    int i;
++
++    if (memcmp(tile, &work[own * 64], 64) == 0) {
++        return own;
++    }
++
++    for (i = 0; i < *used; i++) {
++        if (memcmp(tile, &work[freeSlots[i] * 64], 64) == 0) {
++            return freeSlots[i];
++        }
++    }
++
++    if (*used >= freeCount) {
++        return -1;
++    }
++
++    memcpy(&work[freeSlots[*used] * 64], tile, 64);
++    return freeSlots[(*used)++];
++}
++
++#define TC_PORT_LID_IN 6 // (how far its sides move in: it covers the case's, 8 in, by 2)
++
++// In the panel the badge case's lid (BG_LAYER_MAIN_3) is about the width
++// of the case it covers (x 6-249; the case 8-247): its sides, their 4
++// pixels and its rounded bottom corners, moved in 6 pixels, nothing outside
++// them (on its GYM LEADERS rows only the side itself moves, the Poké Ball
++// beside it staying); and it has a top edge: its bottom edge (rows
++// 142-151) upside down, over its plain top rows (0-9). Shrinking towards its
++// top (TrainerCase_OpenCloseBadgeCase), it flips up from the case's top.
++// (Its tilemap's entries are a byte each, without flips: the tiles changed
++// are new tiles, in slots its tilemap doesn't use. The case (BG_LAYER_MAIN_2)
++// loaded already.)
++static void TrainerCasePort_ShapeLid(BgConfig *bgConfig, NARC *narc)
++{
++    NNSG2dCharacterData *charData;
++    void *buffer = Graphics_GetCharDataFromOpenNARC(narc, badge_case_lid_tiles_NCGR, FALSE, &charData, HEAP_ID_TRAINER_CASE);
++    int count = (int)(charData->szByte / 64), freeCount = 0, taken = 0, x, y, j, k;
++    u8 *map = Bg_GetTilemapBuffer(bgConfig, BG_LAYER_MAIN_3);
++    u8 *work = Heap_Alloc(HEAP_ID_TRAINER_CASE, 256 * 64);
++    u8 shaped[32 * 32], tile[64], used[256], freeSlots[128], strip[32], sides[4][64];
++    BOOL fits = count > 0 && count <= 256;
++
++    if (fits) {
++        memset(work, 0, 256 * 64);
++        memcpy(work, charData->pRawData, count * 64);
++    }
++
++    memset(used, 0, sizeof(used));
++
++    for (j = 0; j < 32 * 32; j++) {
++        used[map[j]] = 1;
++    }
++
++    for (j = 0; j < 256 && freeCount < (int)sizeof(freeSlots); j++) {
++        if (!used[j] || j >= count) {
++            freeSlots[freeCount++] = (u8)j;
++        }
++    }
++
++    memcpy(shaped, map, sizeof(shaped));
++
++    // The sides: each pixel row of the outer two tile columns each side.
++    for (y = 0; y < 32 * 8 && fits; y++) {
++        int ty = y / 8, row = y % 8, l0 = map[ty * 32], l1 = map[ty * 32 + 1], r0 = map[ty * 32 + 30], r1 = map[ty * 32 + 31];
++        u8 left[16], right[16];
++        BOOL keepInside = y >= 10 && y <= 21; // (GYM LEADERS: its ball 4 pixels from the side)
++
++        memcpy(strip, &work[l0 * 64 + row * 8], 8);
++        memcpy(strip + 8, &work[l1 * 64 + row * 8], 8);
++        memcpy(strip + 16, &work[r0 * 64 + row * 8], 8);
++        memcpy(strip + 24, &work[r1 * 64 + row * 8], 8);
++
++        for (k = 0; k < 16; k++) {
++            left[k] = k < TC_PORT_LID_IN ? 0 : keepInside && k >= TC_PORT_LID_IN + 4 ? strip[k] : strip[k - TC_PORT_LID_IN];
++            right[k] = k >= 16 - TC_PORT_LID_IN ? 0 : strip[16 + k + TC_PORT_LID_IN];
++        }
++
++        // (a tile row's four tiles built a pixel row at a time, then put
++        // in place)
++        memcpy(&sides[0][row * 8], left, 8);
++        memcpy(&sides[1][row * 8], left + 8, 8);
++        memcpy(&sides[2][row * 8], right, 8);
++        memcpy(&sides[3][row * 8], right + 8, 8);
++
++        if (row == 7) {
++            static const int at[4] = { 0, 1, 30, 31 };
++
++            for (k = 0; k < 4 && fits; k++) {
++                int n = TrainerCasePort_LidTile(sides[k], work, map[ty * 32 + at[k]], freeSlots, freeCount, &taken);
++
++                if (n < 0) {
++                    fits = FALSE;
++                } else {
++                    shaped[ty * 32 + at[k]] = (u8)n;
++                }
++            }
++        }
++    }
++
++    // The top edge: rows 0-7 its rows 151-144; rows 8-9 its rows 143-142,
++    // then its own 10-15.
++    for (x = 0; x < 32 && fits; x++) {
++        int b17 = shaped[17 * 32 + x], b18 = shaped[18 * 32 + x], t0 = shaped[x], t1 = shaped[32 + x], n0, n1;
++
++        for (j = 0; j < 8; j++) {
++            memcpy(&tile[j * 8], &work[b18 * 64 + (7 - j) * 8], 8);
++        }
++
++        n0 = TrainerCasePort_LidTile(tile, work, t0, freeSlots, freeCount, &taken);
++        memcpy(tile, &work[t1 * 64], 64);
++        memcpy(&tile[0], &work[b17 * 64 + 7 * 8], 8);
++        memcpy(&tile[8], &work[b17 * 64 + 6 * 8], 8);
++        n1 = TrainerCasePort_LidTile(tile, work, t1, freeSlots, freeCount, &taken);
++
++        if (n0 < 0 || n1 < 0) {
++            fits = FALSE;
++            break;
++        }
++
++        shaped[x] = (u8)n0;
++        shaped[32 + x] = (u8)n1;
++    }
++
++    // (no room for the new tiles: the lid as on the DS)
++    if (fits) {
++        u16 *caseMap = Bg_GetTilemapBuffer(bgConfig, BG_LAYER_MAIN_2);
++
++        DC_FlushRange(work, 256 * 64);
++
++        for (j = 0; j < taken; j++) {
++            Bg_LoadTiles(bgConfig, BG_LAYER_MAIN_3, &work[freeSlots[j] * 64], 64, freeSlots[j]);
++        }
++
++        memcpy(map, shaped, sizeof(shaped));
++
++        // Round the lid, where it's narrower and its top corners are
++        // rounded: the case plain (its top rows, 0-15, where the lid's
++        // rolled up when open on the DS, as a plain tile of it from under
++        // the lid, row 19).
++        for (j = 0; j < 2 * 32; j++) {
++            caseMap[j] = caseMap[19 * 32 + 2];
++        }
++
++        Bg_CopyTilemapBufferToVRAM(bgConfig, BG_LAYER_MAIN_2);
++    }
++
++    Heap_Free(work);
++    Heap_Free(buffer);
++}
  #endif
  
  enum TrainerCaseState {
-@@ -252,6 +409,27 @@ BOOL TrainerCaseApp_Init(ApplicationManager *appMan, int *state)
+@@ -252,6 +563,27 @@ BOOL TrainerCaseApp_Init(ApplicationManager *appMan, int *state)
      SetAutorepeat(4, 8);
      Heap_Create(HEAP_ID_APPLICATION, HEAP_ID_TRAINER_CASE, HEAP_SIZE_TRAINER_CASE);
  
@@ -240,7 +401,7 @@ index eeba8692..2905fc15 100644
      NARC *narc = NARC_ctor(NARC_INDEX_GRAPHIC__TRAINER_CASE, HEAP_ID_TRAINER_CASE);
      TrainerCaseApp *trainerCaseApp = ApplicationManager_NewData(appMan, sizeof(TrainerCaseApp), HEAP_ID_TRAINER_CASE);
  
-@@ -331,13 +509,23 @@ BOOL TrainerCaseApp_Init(ApplicationManager *appMan, int *state)
+@@ -331,13 +663,23 @@ BOOL TrainerCaseApp_Init(ApplicationManager *appMan, int *state)
  
      TrainerCase_ResetAffineTransforms();
  #ifdef SDK_PORT_3DS
@@ -265,7 +426,7 @@ index eeba8692..2905fc15 100644
      NARC_dtor(narc);
  
      return TRUE;
-@@ -347,8 +535,51 @@ BOOL TrainerCaseApp_Main(ApplicationManager *appMan, int *state)
+@@ -347,8 +689,51 @@ BOOL TrainerCaseApp_Main(ApplicationManager *appMan, int *state)
  {
      TrainerCaseApp *trainerCaseApp = ApplicationManager_Data(appMan);
  
@@ -317,7 +478,7 @@ index eeba8692..2905fc15 100644
          if (IsScreenFadeDone()) {
              *state = TRAINER_CASE_STATE_MAIN;
          }
-@@ -359,6 +590,20 @@ BOOL TrainerCaseApp_Main(ApplicationManager *appMan, int *state)
+@@ -359,6 +744,20 @@ BOOL TrainerCaseApp_Main(ApplicationManager *appMan, int *state)
          int input = TrainerCase_GetPlayerInput(trainerCaseApp);
  
          if (input == INPUT_TOUCH_SCREEN_TAP) {
@@ -338,7 +499,7 @@ index eeba8692..2905fc15 100644
              if (trainerCaseApp->touchedRectangleIndex == TOUCH_RECTANGLE_OPEN_CLOSE_BADGE_CASE) {
                  trainerCaseApp->badgeCaseButtonPushed = TRUE;
                  trainerCaseApp->badgeCaseButtonState = BUTTON_STATE_PUSHED;
-@@ -397,6 +642,19 @@ BOOL TrainerCaseApp_Main(ApplicationManager *appMan, int *state)
+@@ -397,6 +796,19 @@ BOOL TrainerCaseApp_Main(ApplicationManager *appMan, int *state)
                  TrainerCase_ResetBadgePolishingState(&trainerCaseApp->badgePolishingState);
              }
  
@@ -358,7 +519,7 @@ index eeba8692..2905fc15 100644
              if (input == INPUT_A_BUTTON) {
                  trainerCaseApp->subState = FLIP_SUBSTATE_INITIAL;
                  *state = TRAINER_CASE_STATE_FLIP_CARD;
-@@ -412,6 +670,25 @@ BOOL TrainerCaseApp_Main(ApplicationManager *appMan, int *state)
+@@ -412,6 +824,25 @@ BOOL TrainerCaseApp_Main(ApplicationManager *appMan, int *state)
          break;
      }
      case TRAINER_CASE_STATE_EXIT:
@@ -384,7 +545,7 @@ index eeba8692..2905fc15 100644
          if (IsScreenFadeDone()) {
              return TRUE;
          }
-@@ -485,6 +762,21 @@ BOOL TrainerCaseApp_Exit(ApplicationManager *appMan, int *state)
+@@ -485,6 +916,21 @@ BOOL TrainerCaseApp_Exit(ApplicationManager *appMan, int *state)
      Heap_Destroy(HEAP_ID_TRAINER_CASE);
      Sound_SetPlayerVolume(PLAYER_FIELD, SOUND_VOLUME_MAX);
  
@@ -406,7 +567,19 @@ index eeba8692..2905fc15 100644
      return TRUE;
  }
  
-@@ -849,7 +1141,9 @@ static BOOL TrainerCase_FlipTrainerCard(TrainerCaseApp *trainerCaseApp)
+@@ -793,6 +1239,11 @@ static void TrainerCase_DrawTrainerCard(TrainerCaseApp *trainerCaseApp, NARC *na
+ 
+     Graphics_LoadTilesToBgLayerFromOpenNARC(narc, badge_case_lid_tiles_NCGR, trainerCaseApp->bgConfig, BG_LAYER_MAIN_3, 0, 0, FALSE, HEAP_ID_TRAINER_CASE);
+     Graphics_LoadTilemapToBgLayerFromOpenNARC(narc, badge_case_lid_NSCR, trainerCaseApp->bgConfig, BG_LAYER_MAIN_3, 0, 0, FALSE, HEAP_ID_TRAINER_CASE);
++#ifdef SDK_PORT_3DS
++    if (sTrainerCasePortPanel) {
++        TrainerCasePort_ShapeLid(trainerCaseApp->bgConfig, narc);
++    }
++#endif
+ 
+     TrainerCase_ConvertSignature1BppTo8Bpp(trainerCaseApp->trainerCase->signature, trainerCaseApp->signature);
+ }
+@@ -849,7 +1300,9 @@ static BOOL TrainerCase_FlipTrainerCard(TrainerCaseApp *trainerCaseApp)
              TrainerCard_DrawBackText(trainerCaseApp->windows, trainerCaseApp->trainerCase);
              TrainerCase_DisplaySignature(trainerCaseApp->bgConfig, BG_LAYER_SUB_3, trainerCaseApp->signature);
  #ifdef SDK_PORT_3DS
@@ -417,7 +590,7 @@ index eeba8692..2905fc15 100644
  #endif
          } else {
              trainerCaseApp->viewingBack = FALSE;
-@@ -859,7 +1153,9 @@ static BOOL TrainerCase_FlipTrainerCard(TrainerCaseApp *trainerCaseApp)
+@@ -859,7 +1312,9 @@ static BOOL TrainerCase_FlipTrainerCard(TrainerCaseApp *trainerCaseApp)
              TrainerCase_DrawTrainer(trainerCaseApp);
              TrainerCard_DrawFrontText(trainerCaseApp->windows, trainerCaseApp->trainerCase);
  #ifdef SDK_PORT_3DS
@@ -428,7 +601,7 @@ index eeba8692..2905fc15 100644
  #endif
          }
  
-@@ -929,6 +1225,13 @@ static BOOL TrainerCase_OpenCloseBadgeCase(TrainerCaseApp *trainerCaseApp)
+@@ -929,6 +1384,13 @@ static BOOL TrainerCase_OpenCloseBadgeCase(TrainerCaseApp *trainerCaseApp)
              trainerCaseApp->subState = BADGE_CASE_SUBSTATE_OPEN;
          } else {
              trainerCaseApp->subState = BADGE_CASE_SUBSTATE_CLOSE;
@@ -442,7 +615,7 @@ index eeba8692..2905fc15 100644
          }
  
          TrainerCase_PlayOpenCloseBadgeCaseSoundEffect(trainerCaseApp->badgeCaseOpenState);
-@@ -939,6 +1242,13 @@ static BOOL TrainerCase_OpenCloseBadgeCase(TrainerCaseApp *trainerCaseApp)
+@@ -939,6 +1401,13 @@ static BOOL TrainerCase_OpenCloseBadgeCase(TrainerCaseApp *trainerCaseApp)
          if (trainerCaseApp->badgeCaseTransitionIndex == NELEMS(sBadgeCaseCoverScalingSpeeds)) {
              trainerCaseApp->badgeCaseOpenState = BADGE_CASE_OPEN;
              trainerCaseApp->subState = BADGE_CASE_SUBSTATE_DONE;
