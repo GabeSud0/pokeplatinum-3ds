@@ -612,7 +612,7 @@ screens) the lower screen is the DS's, filling the screen as before.
   the DS's 192 rows as they would were its screen taller, and the panel
   shows the picture's first 247 rows. The H-blank effects' lines past 191
   are line 191's; never with the 3D (its lines past 191 black). The bag
-  is laid out for it (below); the party's tall layout is to come.
+  and the party are laid out for it (below).
 - **The map** (`port_lowermap.c`; the game's side in
   `patches/pokeplatinum/0033`): once the player has the Town Map, the panel
   shows it (the Pokétch, or the Poké Ball before it, goes on underneath,
@@ -689,12 +689,13 @@ screens) the lower screen is the DS's, filling the screen as before.
   three frames after the field's been drawn the panel fades in on the map
   (the Pokétch for POKéTCH, or without the Town Map), the menu closed.
   While the item list waits, the menu's other buttons work (with its
-  sound): BAG puts the bag away; POKéMON, TRAINER, POKéDEX and OPTIONS open
-  straight from the bag (the panel black, then both screens black, as the
-  DS's fade out leaves them, and the app's own fade in; the bag makes them
-  black while they're still kept, a frame before it goes, because the 3DS
-  shows the game's pictures a frame late); SAVE, MAP and POKéTCH are acted
-  on back in the field. A tap while the
+  sound): BAG puts the bag away; POKéMON switches to the party in the
+  panel (below); TRAINER, POKéDEX and OPTIONS open straight from the bag
+  (the panel black, then both screens black, as the DS's fade out leaves
+  them, and the app's own fade in; the bag makes them black while they're
+  still kept, a frame before it goes, because the 3DS shows the game's
+  pictures a frame late); SAVE, MAP and POKéTCH are acted on back in the
+  field. A tap while the
   bag's busy (an item's menu, a message, moving an item) is nobody's.
   Leaving another way (an item used, given, a Berry's tag) is the DS's
   fade out; the bag opened again after that comes with fades too, and its
@@ -702,6 +703,48 @@ screens) the lower screen is the DS's, filling the screen as before.
   `gStartMenuPortInstantApp`, and the bag hands back the button tapped,
   `gStartMenuPortAppPress`: the menu forgets its own press when it goes
   off.) With `--classic-menu` the bag's the DS's.
+- **The party in the panel** (`patches/pokeplatinum/0037`): opened while
+  the platform can show the menu, the party puts its main screen (the
+  panels, the message, CANCEL) on the lower screen and lays it out tall,
+  as its approved mock-up has it (the same pixels, checked in the PC
+  runner with `cshot`, 2026-10-25; but for the cursor's top-right corner,
+  whole now). Each row of panels 16 pixels lower than the one above it
+  (the first 16, the second 32, the third 48), in tiles: the panels, their
+  windows, their sprites and the cursor's places (`PARTY_PORT_TALL_SLOT_DY`);
+  what was under them 56 lower, at the bottom: the message's windows,
+  CANCEL (and CONFIRM), a Pokémon's menu, YES/NO
+  (`PARTY_PORT_TALL_BOTTOM_DY`). The background (BG3) is drawn anew when
+  the party opens, from its own tiles, by the rules the mock-up was made
+  with: the stripes from 7, 7 (the plain border round them), the panels'
+  rows of the DS's background each moved with its row, the teal bands
+  between the columns run on along the DS's diagonal from one panel to
+  the next (20 wide), the dashed line beside each right panel, the
+  message's rows 56 lower; its tiles go after the party's own, the same
+  ones once. The second left panel loses its top edge (tiles without it,
+  kept on that row as panels are drawn and switched:
+  `PartyPortTall_FixEdges`; an empty panel there too). A form change
+  (Giratina's Griseous Orb, Shaymin's Gracidea) has no 3D sparkles in the
+  panel (the tall screen shows no 3D past line 191, nor the menu over
+  it): the effect's sound, and the icon changes when it would. The touch
+  screen (the Poké Balls) isn't
+  shown, so the panel's touches are nobody's; the upper screen keeps the
+  field. With `--classic-menu` the party is as before, across the wider
+  upper screen.
+- **The party in and out** (`0037`): as the bag (above): POKéMON fades the
+  panel to black, the party comes behind it and pops in; B (or CANCEL, or
+  POKéMON again) fades it to black, and the map fades in once the field's
+  back. While the cursor waits on the panels the menu's other buttons
+  work: BAG switches to the bag in the panel (and POKéMON in the bag back
+  to the party), TRAINER, POKéDEX and OPTIONS open straight from it, SAVE,
+  MAP and POKéTCH are acted on in the field; a tap while it's busy (a
+  Pokémon's menu, a message, a switch), before it's shown, or in a party
+  not the menu's (an item used from the bag, a script's) is nobody's (the
+  bag's the same). Leaving another way
+  (the summary, a field move, an item given) is the DS's fade out, and
+  what comes next fades in (the party back from the summary: the upper
+  screen black meanwhile, what was kept). The bag's item used on a
+  Pokémon brings the party with the DS's fades, the upper screen keeping
+  the field.
 - **The upper screen held** (`NitroPort_LowerMenuHoldUpper`): while an app
   is in the panel, the upper screen keeps the field. Let go (0), the
   game's upper picture shows again once it's as bright as what was kept:
@@ -734,7 +777,8 @@ screens) the lower screen is the DS's, filling the screen as before.
 - **The DS's fades** cover the whole screen, the menu too (the panel's own
   only the panel).
 - **The PC runner:** `mshot PATH` writes the lower screen as the 3DS shows
-  it (320 x 240), `mtouch X Y` touches it there. It has the menu unless
+  it (320 x 240), `cshot PATH` the panel's picture at the DS's pixels (256 x
+  248 when it's tall), `mtouch X Y` touches it there. It has the menu unless
   started with `--classic-menu`. The map's drawn on the game's thread as
   it's handed over (the same pictures every run), or with `--map-thread`
   on a thread of its own as on the 3DS.

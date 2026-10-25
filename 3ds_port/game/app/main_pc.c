@@ -535,6 +535,31 @@ static void RemasterRender(uint16_t *out)
  * over the panel as dark as its fade; the master brightness over it all. */
 static void MenuRender(uint32_t *out);
 
+/* The lower screen's engine as the panel shows it, at the DS's pixels (256
+ * wide; 248 lines when it's tall, else 192): a tall layout checked against
+ * its mock-up, pixel for pixel. */
+static int CanvasShot(const char *path)
+{
+    static uint16_t canvas[320 * NITRO_LOWERMENU_TALL_LINES], over[320 * 192];
+    static uint8_t overAlpha[320 * 192];
+    static uint16_t out[256 * NITRO_LOWERMENU_TALL_LINES];
+    NitroRender2DSplit split;
+    int lines = NitroPort_LowerMenuTall() ? NITRO_LOWERMENU_TALL_LINES : 192, width, y;
+
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.windowsToEdge = 1;
+    split.snapshot = sStateTaken;
+    split.height = lines == 192 ? 0 : lines;
+    NitroPort_Render2DSplit(NitroPort_EngineAOnTop() ? 1 : 0, canvas, &split);
+    width = split.width > 256 ? split.width : 256;
+    for (y = 0; y < lines; y++) {
+        memcpy(&out[y * 256], &canvas[y * width], 256 * sizeof(out[0]));
+    }
+    return WritePng(path, out, 256, lines);
+}
+
 static int MenuShot(const char *path)
 {
     static uint32_t out[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
@@ -868,6 +893,8 @@ void NitroPort_Log(const char *fmt, ...)
  *   shot PATH        save both screens (PNG, upper above lower)
  *   rshot PATH       the same as the 3DS remaster lays them out (--wide)
  *   mshot PATH       the 3DS's lower screen as the menu, at its 320 x 240
+ *   cshot PATH       the lower screen's engine as the panel shows it, at the DS's
+ *                    pixels (256 x 248 when it's tall)
  *   mtouch X Y [N]   touch the 3DS's lower screen at (X, Y) of its 320 x 240
  *   dump3d PATH      save the newest finished 3D image (PNG)
  *   ref3d PATH       draw the newest scene with the reference rasterizer
@@ -953,6 +980,10 @@ static void ControlWait(void)
                 sLiveTouchMenu = 1;
             } else if (sscanf(line, "mshot %1023s", arg) == 1) {
                 if (MenuShot(arg) != 0) {
+                    NitroPort_Log("[pc] control: can't write %s", arg);
+                }
+            } else if (sscanf(line, "cshot %1023s", arg) == 1) {
+                if (CanvasShot(arg) != 0) {
                     NitroPort_Log("[pc] control: can't write %s", arg);
                 }
             } else if (sscanf(line, "shot %1023s", arg) == 1) {
