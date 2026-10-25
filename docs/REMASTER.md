@@ -858,9 +858,17 @@ screens) the lower screen is the DS's, filling the screen as before.
   icons, the trainer from the trainer card's. The sub engine has banks H
   and I for its BG (48 KB) while it's up, as before after. When the
   script ends the panel fades to black, the Pokétch starts again
-  (`FieldSystem_InitBottomScreen`) and the map or the Pokétch fades in as
-  the panel was. Without the menu, or with the Pokétch not up, it's the
-  DS's save.
+  (`FieldSystem_InitBottomScreen`; the panel no longer tall, its touches
+  the Pokétch's again) and the map or the Pokétch fades in as the panel
+  was. SAVE tapped in the bag, the party or the trainer case: the field
+  comes back behind the panel's black and the page comes straight in it
+  (no map in between). Taps made before a question are not its answer, and
+  menu buttons tapped during the save aren't acted on after it. Without
+  the menu, or with the Pokétch not up, it's the DS's save.
+- **The panel at the field's start** (`StartMenu_PortFieldStarts`, from the
+  Pokétch's start): the tab chosen (the map once they have the Town Map)
+  from the field's first frame, its name and description printed at once,
+  not the Pokétch till the player can first walk.
 - **The apps' hand-over:** the start menu opens the panel's apps
   (`StartMenu_PortAppIsMenus`: the field's own app, the start menu's task
   the field's; not a script's, a registered item's, or an app's own like

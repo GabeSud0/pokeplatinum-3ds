@@ -15,13 +15,20 @@ script runs unchanged: while the page is up its message box opens on
 the page, its YES/NO is the page's buttons, and the save info window
 isn't shown. When the script ends the panel fades to black and the
 Pokétch starts again. Without the menu it's the DS's save.
+
+SAVE tapped in the bag, the party or the trainer case goes to the page
+behind the panel's black (no map in between). The field's panel shows
+the tab chosen from the field's first frame (the map, not the Pokétch
+till the player can walk).
 ---
  include/overlay005/save_info_window.h |   10 +
- src/overlay005/save_info_window.c     | 1044 +++++++++++++++++++++++++
+ include/start_menu.h                  |    1 +
+ src/overlay005/ov5_021D5BC0.c         |    2 +
+ src/overlay005/save_info_window.c     | 1059 +++++++++++++++++++++++++
  src/overlay005/script_message.c       |   13 +
  src/scrcmd.c                          |   38 +
- src/start_menu.c                      |  119 +++
- 5 files changed, 1224 insertions(+)
+ src/start_menu.c                      |  165 +++-
+ 7 files changed, 1284 insertions(+), 4 deletions(-)
 
 diff --git a/include/overlay005/save_info_window.h b/include/overlay005/save_info_window.h
 index 1113c9e5..9f2a43b5 100644
@@ -42,8 +49,40 @@ index 1113c9e5..9f2a43b5 100644
 +#endif
 +
  #endif // POKEPLATINUM_SAVE_INFO_WINDOW_H
+diff --git a/include/start_menu.h b/include/start_menu.h
+index 3b3558b0..0d96a9f1 100644
+--- a/include/start_menu.h
++++ b/include/start_menu.h
+@@ -88,6 +88,7 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem);
+ BOOL StartMenu_PortTapOpening(void);
+ // (the field's lower screen made again: the map in its panel told again)
+ void StartMenu_PortMapStale(void);
++void StartMenu_PortFieldStarts(FieldSystem *fieldSystem);
+ #endif
+ 
+ #endif // POKEPLATINUM_START_MENU_H
+diff --git a/src/overlay005/ov5_021D5BC0.c b/src/overlay005/ov5_021D5BC0.c
+index 5197a2c8..d28f86e7 100644
+--- a/src/overlay005/ov5_021D5BC0.c
++++ b/src/overlay005/ov5_021D5BC0.c
+@@ -22,6 +22,7 @@
+ extern void NitroPort_LowerMenuShow(int on);
+ extern void NitroPort_LowerMenuSetFemale(int female);
+ extern void StartMenu_PortMapStale(void);
++extern void StartMenu_PortFieldStarts(FieldSystem *fieldSystem);
+ #endif
+ 
+ FS_EXTERN_OVERLAY(overlay56);
+@@ -99,6 +100,7 @@ static void ov5_021D5C4C(FieldSystem *fieldSystem)
+     NitroPort_LowerMenuSetFemale(TrainerInfo_Gender(SaveData_GetTrainerInfo(fieldSystem->saveData)) == GENDER_FEMALE);
+     NitroPort_LowerMenuShow(TRUE);
+     StartMenu_PortMapStale();   // (its map told again: start_menu.c)
++    StartMenu_PortFieldStarts(fieldSystem);   // (the panel on its tab from the first frame, not the Pokétch till the player can walk)
+ #endif
+ }
+ 
 diff --git a/src/overlay005/save_info_window.c b/src/overlay005/save_info_window.c
-index ef0ed636..60e5e034 100644
+index ef0ed636..ee2923ce 100644
 --- a/src/overlay005/save_info_window.c
 +++ b/src/overlay005/save_info_window.c
 @@ -27,6 +27,31 @@
@@ -78,7 +117,7 @@ index ef0ed636..60e5e034 100644
  static void FieldSystem_SaveObjectsAndLocation(FieldSystem *fieldSystem);
  
  static const int sSaveInfoLabels[] = {
-@@ -222,3 +247,1022 @@ void FieldSystem_SaveStateIfCommunicationOff(FieldSystem *fieldSystem)
+@@ -222,3 +247,1037 @@ void FieldSystem_SaveStateIfCommunicationOff(FieldSystem *fieldSystem)
  
      FieldSystem_SaveObjectsAndLocation(fieldSystem);
  }
@@ -508,10 +547,8 @@ index ef0ed636..60e5e034 100644
 +    }
 +}
 +
-+// The badges: halved, their colours packed into four palettes (two badges
-+// a palette, as their colours fit), drawn into the strips, every other
-+// one in the other layer's; the ones not earned yet their pale outline.
-+static void SavePanel_DrawBadges(SavePanel *panel, NARC *narc, SavePanelStrip *strips[2], TrainerInfo *trainerInfo)
++// The badges halved (before the strips: the badge case's sprites are big).
++static SavePanelBadge *SavePanel_HalveBadges(NARC *narc)
 +{
 +    static const u32 badgePals[MAX_BADGES] = {
 +        coal_badge_NCLR, forest_badge_NCLR, cobble_badge_NCLR, fen_badge_NCLR,
@@ -520,11 +557,7 @@ index ef0ed636..60e5e034 100644
 +    NNSG2dCharacterData *charData;
 +    void *charBuf = Graphics_GetCharDataFromOpenNARC(narc, badge_case_sprites_NCGR, FALSE, &charData, SAVE_PANEL_HEAP);
 +    SavePanelBadge *badges = Heap_Alloc(SAVE_PANEL_HEAP, sizeof(SavePanelBadge) * MAX_BADGES);
-+    u16 packed[4][16];
-+    int packedCount[4] = { 1, 1, 1, 1 }, sumW = 0, k, i, j, slots = 0;
-+    u8 remap[MAX_BADGES][16];
-+    s8 badgePal[MAX_BADGES];
-+    fx32 x, gap;
++    int k;
 +
 +    for (k = 0; k < MAX_BADGES; k++) {
 +        NNSG2dPaletteData *palData;
@@ -532,10 +565,28 @@ index ef0ed636..60e5e034 100644
 +
 +        SavePanel_HalveBadge((const u8 *)charData->pRawData + k * 64 * 32, palData->pRawData, &badges[k]);
 +        Heap_Free(palBuf);
-+        sumW += badges[k].w;
 +    }
 +
 +    Heap_Free(charBuf);
++    return badges;
++}
++
++// The badges: their colours packed into four palettes (two badges a
++// palette, as their colours fit), drawn into the strips, every other one
++// in the other layer's; the ones not earned yet their pale outline.
++// (`badges` freed.)
++static void SavePanel_DrawBadges(SavePanel *panel, SavePanelBadge *badges, SavePanelStrip *strips[2], TrainerInfo *trainerInfo)
++{
++    u16 packed[4][16];
++    int packedCount[4] = { 1, 1, 1, 1 }, sumW = 0, k, i, j, slots = 0;
++    u8 remap[MAX_BADGES][16];
++    s8 badgePal[MAX_BADGES];
++    fx32 x, gap;
++
++    for (k = 0; k < MAX_BADGES; k++) {
++        sumW += badges[k].w;
++    }
++
 +    memset(packed, 0, sizeof(packed));
 +
 +    // (each earned badge's colours into the first palette they fit in)
@@ -923,6 +974,7 @@ index ef0ed636..60e5e034 100644
 +    BgConfig *bgConfig = fieldSystem->bgConfig;
 +    TrainerInfo *trainerInfo = SaveData_GetTrainerInfo(fieldSystem->saveData);
 +    SavePanelStrip *strips[2];
++    SavePanelBadge *badges;
 +    NARC *narc;
 +    u16 *map;
 +    u32 zero[8] = { 0 }, white[8];
@@ -984,14 +1036,15 @@ index ef0ed636..60e5e034 100644
 +    Bg_SetOffset(bgConfig, SAVE_PANEL_BACK, BG_OFFSET_UPDATE_SET_Y, -27);
 +
 +    // The trainer, the card, the badges and icons.
++    narc = NARC_ctor(NARC_INDEX_GRAPHIC__TRAINER_CASE, SAVE_PANEL_HEAP);
++    badges = SavePanel_HalveBadges(narc);
 +    strips[0] = SavePanel_NewStrip(SP_TRAINER_Y0, SP_STRIP_Y0 + SP_STRIP_ROWS - SP_TRAINER_Y0);
 +    strips[1] = SavePanel_NewStrip(SP_STRIP_Y0, SP_STRIP_ROWS);
 +    panel->picsNext = 1;
 +
-+    narc = NARC_ctor(NARC_INDEX_GRAPHIC__TRAINER_CASE, SAVE_PANEL_HEAP);
 +    SavePanel_DrawTrainer(panel, narc, trainerInfo, strips[0]);
-+    SavePanel_DrawBadges(panel, narc, strips, trainerInfo);
 +    NARC_dtor(narc);
++    SavePanel_DrawBadges(panel, badges, strips, trainerInfo);
 +    SavePanel_DrawIcons(panel, strips, SaveData_GetParty(fieldSystem->saveData));
 +    SavePanel_DrawCard(panel);
 +
@@ -1057,6 +1110,7 @@ index ef0ed636..60e5e034 100644
 +
 +    sSavePanel->selected = 0;
 +    SavePanel_DrawButtons(sSavePanel);
++    NitroPort_LowerMenuTakePress(); // (a tap made before the question: not its answer)
 +}
 +
 +// Tapped (let go on it), A on the one the cursor's on, B: NO. Left (up):
@@ -1210,7 +1264,7 @@ index d2291bb1..9de354a8 100644
          SaveInfoWindow_Erase(*saveInfoWin);
          SaveInfoWindow_Free(*saveInfoWin);
 diff --git a/src/start_menu.c b/src/start_menu.c
-index 27b69d39..b4a744ac 100644
+index 27b69d39..f492ba10 100644
 --- a/src/start_menu.c
 +++ b/src/start_menu.c
 @@ -23,6 +23,9 @@
@@ -1223,7 +1277,15 @@ index 27b69d39..b4a744ac 100644
  #include "overlay005/sprite_resource_manager.h"
  
  #include "appearance.h"
-@@ -313,6 +316,9 @@ BOOL FieldSystem_IsInValidLocation(FieldSystem *fieldSystem)
+@@ -204,6 +207,7 @@ void StartMenu_PortAppLeaving(int button);
+ BOOL StartMenu_PortAppIsMenus(ApplicationManager *appMan);
+ static void StartMenu_PortAppGone(void);
+ static void StartMenu_PortShowPanel(FieldSystem *fieldSystem);
++static BOOL StartMenu_PortSaveInPanel(FieldSystem *fieldSystem);
+ static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, int button);
+ static BOOL StartMenu_PortExitTownMap(FieldTask *fieldTask);
+ #endif
+@@ -313,6 +317,9 @@ BOOL FieldSystem_IsInValidLocation(FieldSystem *fieldSystem)
  // with no button (RETIRE in the Great Marsh and the Pal Park, CHAT in the
  // Union Room), it's the DS's start menu on the upper screen, as before.
  extern int NitroPort_LowerMenuOn(void);
@@ -1233,7 +1295,42 @@ index 27b69d39..b4a744ac 100644
  extern void NitroPort_LowerMenuSelect(int button);
  extern void NitroPort_LowerMenuSetEnabled(u32 mask);
  extern int NitroPort_LowerMenuTakePress(void);
-@@ -1642,12 +1648,119 @@ static BOOL StartMenu_SelectSave(FieldTask *fieldTask)
+@@ -689,12 +696,18 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
+             }
+ 
+             // The field whole: the screens the game's again, the panel
+-            // fading in on the tab chosen.
++            // fading in on the tab chosen. (SAVE tapped in the app: the
++            // panel kept black, the save's page coming in it next, no map
++            // in between: StartMenu_PortSaveOpening.)
+             sPortInstant = FALSE;
+-            StartMenu_PortShowPanel(fieldSystem);
+-            NitroPort_LowerMenuFadePanel(FALSE);
+             NitroPort_LowerMenuHoldUpper(PORT_LET_GO_NOW);
+-            NitroPort_LowerMenuKeepShown(FALSE);
++
++            if (sPortAfterReveal != PORT_BUTTON_SAVE || !(sPortButtons & (1u << PORT_BUTTON_SAVE))
++                || !StartMenu_PortSaveInPanel(fieldSystem)) {
++                StartMenu_PortShowPanel(fieldSystem);
++                NitroPort_LowerMenuFadePanel(FALSE);
++                NitroPort_LowerMenuKeepShown(FALSE);
++            }
+         } else if (!IsScreenFadeDone()) {
+             break;
+         } else if (sPortMode) {
+@@ -1632,6 +1645,11 @@ static BOOL StartMenu_SelectSave(FieldTask *fieldTask)
+     StartMenu *menu = FieldTask_GetEnv(fieldTask);
+ 
+     StartMenu_Close(menu);
++#ifdef SDK_PORT_3DS
++    if (StartMenu_PortSaveInPanel(FieldTask_GetFieldSystem(fieldTask))) {
++        NitroPort_LowerMenuSelect(PORT_BUTTON_SAVE); // (lit on through the save in the panel)
++    }
++#endif
+     Window_EraseStandardFrame(&menu->primaryWindow, TRUE);
+     Bg_ScheduleTilemapTransfer(menu->primaryWindow.bgConfig, menu->primaryWindow.bgLayer);
+     Window_Remove(&menu->primaryWindow);
+@@ -1642,12 +1660,130 @@ static BOOL StartMenu_SelectSave(FieldTask *fieldTask)
      return TRUE;
  }
  
@@ -1251,17 +1348,25 @@ index 27b69d39..b4a744ac 100644
 +static int sPortSaveFrames;
 +
 +// Before the save's script: TRUE while the page comes (the state stays).
++// Whether SAVE now shows the save in the panel.
++static BOOL StartMenu_PortSaveInPanel(FieldSystem *fieldSystem)
++{
++    return sPortSavePhase == 0 && gStartMenuPortMenu && NitroPort_LowerMenuAvailable() && NitroPort_LowerMenuOn()
++        && fieldSystem->bottomScreen == 1 && !SaveData_OverwriteCheck(fieldSystem->saveData);
++}
++
 +static BOOL StartMenu_PortSaveOpening(FieldSystem *fieldSystem)
 +{
 +    switch (sPortSavePhase) {
 +    case 0:
-+        if (!gStartMenuPortMenu || !NitroPort_LowerMenuAvailable() || !NitroPort_LowerMenuOn() || fieldSystem->bottomScreen != 1
-+            || SaveData_OverwriteCheck(fieldSystem->saveData)) {
++        if (!StartMenu_PortSaveInPanel(fieldSystem)) {
 +            return FALSE;
 +        }
 +
++        // (already black, SAVE tapped in an app of the panel's: at once)
 +        NitroPort_LowerMenuKeepShown(TRUE);
 +        NitroPort_LowerMenuFadePanel(TRUE);
++        NitroPort_LowerMenuSelect(PORT_BUTTON_SAVE); // (lit from the tap on: the menu's window closing unlit it)
 +        sPortSavePhase = 1;
 +        return TRUE;
 +    case 1:
@@ -1315,6 +1420,8 @@ index 27b69d39..b4a744ac 100644
 +        }
 +
 +        SavePanel_Close(fieldSystem);
++        NitroPort_LowerMenuSetTall(FALSE); // (the menu stays on: the Pokétch's screen as it was)
++        NitroPort_LowerMenuSetPanelTouch(TRUE);
 +        FieldSystem_InitBottomScreen(fieldSystem);
 +        sPortSaveFrames = 3;
 +        sPortSavePhase = 6;
@@ -1329,6 +1436,7 @@ index 27b69d39..b4a744ac 100644
 +        NitroPort_LowerMenuSelect(-1);
 +        NitroPort_LowerMenuFadePanel(FALSE);
 +        NitroPort_LowerMenuKeepShown(FALSE);
++        NitroPort_LowerMenuTakePress(); // (a menu button tapped during the save: not acted on after it)
 +        sPortSavePhase = 0;
 +        return FALSE;
 +    default:
@@ -1353,7 +1461,7 @@ index 27b69d39..b4a744ac 100644
      if (SaveData_OverwriteCheck(fieldSystem->saveData)) {
          ScriptManager_Start(fieldTask, SCRIPT_ID(COMMON_SCRIPTS, 34), NULL, NULL);
      } else {
-@@ -1667,6 +1780,12 @@ static void StartMenu_SaveWait(FieldTask *fieldTask)
+@@ -1667,6 +1803,12 @@ static void StartMenu_SaveWait(FieldTask *fieldTask)
      StartMenu *menu = FieldTask_GetEnv(fieldTask);
      SaveMenu *saveMenu = menu->taskData;
  
@@ -1366,6 +1474,28 @@ index 27b69d39..b4a744ac 100644
      if (SaveData_OverwriteCheck(fieldSystem->saveData)) {
          menu->state = START_MENU_STATE_INIT;
  #ifdef SDK_PORT_3DS
+@@ -2530,6 +2672,21 @@ void StartMenu_PortMapStale(void)
+     sPortMapStale = TRUE;
+ }
+ 
++// (ov5_021D5BC0.c's) The field's bottom screen (the Pokétch) begun: the panel
++// on the tab chosen (the map once they have the Town Map) from the field's
++// first frame on, not only once the player can walk (the Pokétch showing
++// till then, as the field faded in).
++void StartMenu_PortFieldStarts(FieldSystem *fieldSystem)
++{
++    if (NitroPort_LowerMenuOn() && fieldSystem->playerAvatar != NULL && fieldSystem->location != NULL) {
++        StartMenu_PortShowPanel(fieldSystem);
++
++        if (sPortMapAgain) {
++            StartMenu_PortShowPanel(fieldSystem); // (the description too: the field's loading, no frame to spare it)
++        }
++    }
++}
++
+ // The tab a choice shows: the map once they have the Town Map (and the port
+ // can show it), else the Pokétch.
+ static int StartMenu_PortTabFor(FieldSystem *fieldSystem, int choice)
 -- 
 2.43.0
 
