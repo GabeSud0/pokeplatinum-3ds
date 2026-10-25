@@ -56,6 +56,20 @@ static volatile int sPanelShows;    /* (NitroPort_LowerMenuSetPanel) */
 static volatile int sKeepShown;     /* (NitroPort_LowerMenuKeepShown) */
 static uint32_t (*sClock)(void);    /* (NitroPort_LowerMenuSetClock) */
 
+/* The panel put together (NitroPort_LowerMenuSetPanelRuns: the game's
+ * thread; the platforms' copies under sRunLock) and its tabs. */
+static NitroLowerPanelRun sRuns[NITRO_LOWERMENU_RUNS_MAX];
+static int sRunCount;
+static volatile uint32_t sRunSerial;
+static volatile int sRunLock;
+static volatile int sRunsUpper;     /* (NitroPort_LowerMenuPanelShowsUpper) */
+static int sLastDsX, sLastDsY;      /* (a drag's last place on the lower screen's rows) */
+static int sTouchTab = -1;          /* (the tab a touch began on) */
+static int sTouchTabOn;             /* (still on it) */
+static int sTabCount, sTabActive;
+static char sTabLabels[NITRO_LOWERMENU_TABS_MAX][16];
+static NitroLowerTabStyle sTabStyle;
+
 static uint32_t sPicture[W * H];    /* the shared picture (under sLock) */
 static uint32_t sDraw[W * H];       /* (drawn here, then copied over) */
 static int sDirtyY0, sDirtyY1 = H;  /* the shared picture's rows changed, not taken yet (under sLock) */
@@ -561,6 +575,8 @@ static int drawn(void)
     return sOn || sKeepShown;
 }
 
+static void draw_tabs(void);
+
 static void draw(void)
 {
     int i, x, y;
@@ -647,6 +663,195 @@ static void draw(void)
         int sel = (NITRO_LOWERMENU_ITEM1 + i == sSelected || NITRO_LOWERMENU_ITEM1 + i == sHeld);
 
         box(s[0], s[1], s[2], s[3], NAVY, sel ? SEL : BTN, BTN_TOP, !sel, sel ? SEL_SHD : BTN_SHD, 2);
+    }
+    draw_tabs();
+}
+
+/* ------------------------------------------------------------ the tabs */
+
+/* The canvas's row a panel pixel's row shows (as NitroPort_LowerMenuPanelAt). */
+static int canvas_row(int y)
+{
+    return (2 * (y - NITRO_LOWERMENU_PANEL_Y0) + 1) * NITRO_LOWERMENU_CANVAS_H / (2 * NITRO_LOWERMENU_PANEL_H);
+}
+
+/* The first tabs' run's panel rows (-1: none). */
+static int tab_rows(int *y0, int *y1)
+{
+    int i, y;
+
+    for (i = 0; i < sRunCount; i++) {
+        if (sRuns[i].from == NITRO_LOWERMENU_FROM_TABS && sRuns[i].rows > 0) {
+            *y0 = *y1 = -1;
+            for (y = NITRO_LOWERMENU_PANEL_Y0; y < NITRO_LOWERMENU_PANEL_Y0 + NITRO_LOWERMENU_PANEL_H; y++) {
+                int c = canvas_row(y);
+
+                if (c >= sRuns[i].y && c < sRuns[i].y + sRuns[i].rows) {
+                    *y0 = *y0 < 0 ? y : *y0;
+                    *y1 = y;
+                }
+            }
+            return *y0 >= 0 ? 0 : -1;
+        }
+    }
+    return -1;
+}
+
+/* Tab k's columns (the panel's 240, 4 apart). */
+static void tab_columns(int k, int *x0, int *x1)
+{
+    int w = (NITRO_LOWERMENU_PANEL_W - 4 * (sTabCount - 1)) / sTabCount;
+
+    *x0 = NITRO_LOWERMENU_PANEL_X0 + k * (w + 4);
+    *x1 = k == sTabCount - 1 ? NITRO_LOWERMENU_PANEL_X0 + NITRO_LOWERMENU_PANEL_W - 1 : *x0 + w - 1;
+}
+
+/* The tab under a panel pixel (-1: none; its rows above the top line). */
+static int tab_at(int x, int y)
+{
+    int y0, y1, k, x0, x1;
+
+    if (sTabCount <= 0 || tab_rows(&y0, &y1) < 0 || y < y0 || y > y1) {
+        return -1;
+    }
+    for (k = 0; k < sTabCount; k++) {
+        tab_columns(k, &x0, &x1);
+        if (x >= x0 && x <= x1) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+static uint32_t rgb888(uint32_t c)
+{
+    return (c & 0xFFFFFFu) << 8 | 0xFFu;
+}
+
+/* A small Poké Ball: its ring, its band and its button. */
+static const char *const sTabBall[9] = {
+    "...###...", ".##...##.", ".#.....#.", "#..###..#", "####.####",
+    "#..###..#", ".#.....#.", ".##...##.", "...###...",
+};
+
+static void tab_ball(int x, int y, uint32_t c)
+{
+    int i, j;
+
+    for (j = 0; j < 9; j++) {
+        for (i = 0; i < 9; i++) {
+            if (sTabBall[j][i] == '#') {
+                put(x + i, y + j, c);
+                put(x + i + 1, y + j, c);   /* (bold, as the case's own lettering) */
+            }
+        }
+    }
+}
+
+/* The tabs' lettering: the names' font, bold (each column twice), a
+ * pixel more between the letters. */
+static int text_bold_width(const char *s)
+{
+    int w = 0, n = 0;
+
+    for (; *s; s++, n++) {
+        const Glyph *g = glyph(*s);
+        w += (g ? (int)strlen(g->rows[0]) : 4) + 1;
+    }
+    return n ? w + 2 * (n - 1) : 0;
+}
+
+static void text_bold(int x, int y, const char *s, uint32_t c)
+{
+    for (; *s; s++) {
+        const Glyph *g = glyph(*s);
+        int gx, gy, gw = 4;
+
+        if (g) {
+            gw = (int)strlen(g->rows[0]);
+            for (gy = 0; gy < GLYPH_H; gy++) {
+                for (gx = 0; gx < gw; gx++) {
+                    if (g->rows[gy][gx] == '#') {
+                        put(x + gx, y + gy, c);
+                        put(x + gx + 1, y + gy, c);
+                    }
+                }
+            }
+        }
+        x += gw + 3;
+    }
+}
+
+static void draw_tabs(void)
+{
+    /* (each row of a tab's rounded top corner: how far in it begins) */
+    static const int corner[] = { 5, 3, 2, 1, 1 };
+    const int nCorner = (int)(sizeof(corner) / sizeof(corner[0]));
+    int y0, y1, top, line, k, x, y;
+    uint32_t back = rgb888(sTabStyle.back), edge = rgb888(sTabStyle.edge), fill = rgb888(sTabStyle.fill);
+
+    if (sTabCount <= 0 || tab_rows(&y0, &y1) < 0) {
+        return;
+    }
+    top = y0 + 2;          /* the tabs' top line */
+    line = y1 - 5;         /* the top line of what they're the tabs of */
+    if (line - top < 13) {
+        top = line - 13 < y0 ? y0 : line - 13;
+    }
+    rect(NITRO_LOWERMENU_PANEL_X0, y0, NITRO_LOWERMENU_PANEL_X0 + NITRO_LOWERMENU_PANEL_W - 1, line - 1, back);
+    /* What's under them: its fill, its edge at the sides; its top line. */
+    rect(NITRO_LOWERMENU_PANEL_X0, line, NITRO_LOWERMENU_PANEL_X0 + NITRO_LOWERMENU_PANEL_W - 1, y1, fill);
+    for (y = line; y <= y1; y++) {
+        put(NITRO_LOWERMENU_PANEL_X0, y, edge);
+        put(NITRO_LOWERMENU_PANEL_X0 + NITRO_LOWERMENU_PANEL_W - 1, y, edge);
+    }
+    for (x = NITRO_LOWERMENU_PANEL_X0; x < NITRO_LOWERMENU_PANEL_X0 + NITRO_LOWERMENU_PANEL_W; x++) {
+        put(x, line, edge);
+    }
+    for (k = 0; k < sTabCount; k++) {
+        int x0, x1, on = k == sTabActive, w, lx, ly;
+        uint32_t f = on ? fill : rgb888(sTabStyle.fillOff);
+        uint32_t ink = rgb888(on ? sTabStyle.ink : sTabStyle.inkShadow);
+        uint32_t shadow = rgb888(on ? sTabStyle.inkShadow : sTabStyle.inkOff);
+
+        tab_columns(k, &x0, &x1);
+        /* Its fill and edges down to the line, the top corners rounded. */
+        for (y = top; y < line; y++) {
+            int in = y - top < nCorner ? corner[y - top] : 0;
+
+            for (x = x0 + in; x <= x1 - in; x++) {
+                put(x, y, f);
+            }
+            put(x0 + in, y, edge);
+            put(x1 - in, y, edge);
+            if (y > top) {
+                /* (the edge joined to the row above's) */
+                int above = y - 1 - top < nCorner ? corner[y - 1 - top] : 0, i;
+
+                for (i = in + 1; i < above; i++) {
+                    put(x0 + i, y, edge);
+                    put(x1 - i, y, edge);
+                }
+            } else {
+                for (x = x0 + in; x <= x1 - in; x++) {
+                    put(x, y, edge);
+                }
+            }
+        }
+        /* The open one opens into what's under it: no line under it. */
+        if (on) {
+            for (x = x0 + 1; x < x1; x++) {
+                put(x, line, f);
+            }
+        }
+        /* Its ball and label, in the middle of its fill. */
+        w = 10 + 4 + text_bold_width(sTabLabels[k]);
+        lx = x0 + (x1 - x0 + 1 - w) / 2;
+        ly = top + 1 + (line - top - 1 - GLYPH_H) / 2;
+        tab_ball(lx + 1, ly + 1, shadow);
+        tab_ball(lx, ly, ink);
+        text_bold(lx + 14 + 1, ly + 1, sTabLabels[k], shadow);
+        text_bold(lx + 14, ly, sTabLabels[k], ink);
     }
 }
 
@@ -754,6 +959,13 @@ void NitroPort_LowerMenuShow(int on)
         if (!on) {
             __atomic_store_n(&sTall, 0, __ATOMIC_RELEASE);   /* (each screen says so again) */
             sPanelTouch = 1;
+            if (sTabCount > 0) {
+                sTabCount = 0;
+                if (sKeepShown) {
+                    redraw();
+                }
+            }
+            NitroPort_LowerMenuSetPanelRuns(NULL, 0);
             __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
         }
         NitroPort_Log("[lowermenu] %s", on ? "on" : "off");
@@ -1024,6 +1236,128 @@ void NitroPort_LowerMenuKeepShown(int on)
 int NitroPort_LowerMenuKeptShown(void)
 {
     return __atomic_load_n(&sKeepShown, __ATOMIC_ACQUIRE);
+}
+
+/* ------------------------------------------------- the panel put together */
+
+static int runs_equal(const NitroLowerPanelRun *a, const NitroLowerPanelRun *b, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (a[i].y != b[i].y || a[i].rows != b[i].rows || a[i].from != b[i].from || a[i].srcY != b[i].srcY ||
+            a[i].step != b[i].step || a[i].sides != b[i].sides || a[i].sidesIn != b[i].sidesIn) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+void NitroPort_LowerMenuSetPanelRuns(const NitroLowerPanelRun *runs, int count)
+{
+    int hadTabs, i, n = 0;
+    NitroLowerPanelRun next[NITRO_LOWERMENU_RUNS_MAX];
+
+    count = runs == NULL || count < 0 ? 0 : count > NITRO_LOWERMENU_RUNS_MAX ? NITRO_LOWERMENU_RUNS_MAX : count;
+    for (i = 0; i < count; i++) {
+        NitroLowerPanelRun r = runs[i];
+
+        /* (the step one of the three; kept in the canvas) */
+        r.step = r.step > 0 ? 1 : r.step < 0 ? -1 : 0;
+        if (r.y < 0) {
+            r.rows += r.y;
+            r.srcY += (short)(-r.y * r.step);
+            r.y = 0;
+        }
+        if (r.y + r.rows > NITRO_LOWERMENU_CANVAS_H) {
+            r.rows = (short)(NITRO_LOWERMENU_CANVAS_H - r.y);
+        }
+        if (r.rows > 0 && r.from >= NITRO_LOWERMENU_FROM_LOWER && r.from <= NITRO_LOWERMENU_FROM_TABS) {
+            next[n++] = r;
+        }
+    }
+    if (n == sRunCount && runs_equal(next, sRuns, n)) {
+        return;
+    }
+    hadTabs = tab_rows(&i, &i) == 0;
+    spin_lock(&sRunLock);
+    memcpy(sRuns, next, sizeof(next[0]) * (size_t)n);
+    sRunCount = n;
+    for (i = 0; i < n && next[i].from != NITRO_LOWERMENU_FROM_UPPER; i++) {
+    }
+    __atomic_store_n(&sRunsUpper, i < n, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&sRunSerial, 1u, __ATOMIC_RELEASE);
+    spin_unlock(&sRunLock);
+    /* (the tabs drawn where they now are) */
+    if ((hadTabs || tab_rows(&i, &i) == 0) && sTabCount > 0 && drawn()) {
+        redraw();
+    } else {
+        __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
+    }
+}
+
+int NitroPort_LowerMenuPanelShowsUpper(void)
+{
+    return __atomic_load_n(&sRunsUpper, __ATOMIC_ACQUIRE);
+}
+
+int NitroPort_LowerMenuPanelRuns(NitroLowerPanelRun *out, uint32_t *serial)
+{
+    int n;
+
+    spin_lock(&sRunLock);
+    n = sRunCount;
+    if (out != NULL) {
+        memcpy(out, sRuns, sizeof(sRuns[0]) * (size_t)n);
+    }
+    if (serial != NULL) {
+        *serial = sRunSerial;
+    }
+    spin_unlock(&sRunLock);
+    return n;
+}
+
+int NitroPort_LowerMenuRunRow(const NitroLowerPanelRun *runs, int count, int canvasY, int *srcY)
+{
+    int i;
+
+    for (i = 0; i < count; i++) {
+        if (canvasY >= runs[i].y && canvasY < runs[i].y + runs[i].rows) {
+            if (srcY != NULL) {
+                *srcY = runs[i].srcY + (canvasY - runs[i].y) * runs[i].step;
+            }
+            return runs[i].from;
+        }
+    }
+    return -1;
+}
+
+void NitroPort_LowerMenuSetTabs(int count, const char *const *labels, int active, const NitroLowerTabStyle *style)
+{
+    int k, changed;
+
+    count = labels == NULL || style == NULL || count < 0 ? 0 : count > NITRO_LOWERMENU_TABS_MAX ? NITRO_LOWERMENU_TABS_MAX : count;
+    changed = count != sTabCount || active != sTabActive || (count > 0 && memcmp(style, &sTabStyle, sizeof(sTabStyle)) != 0);
+    for (k = 0; k < count; k++) {
+        const char *l = labels[k] ? labels[k] : "";
+
+        if (strncmp(l, sTabLabels[k], sizeof(sTabLabels[k]) - 1) != 0) {
+            strncpy(sTabLabels[k], l, sizeof(sTabLabels[k]) - 1);
+            sTabLabels[k][sizeof(sTabLabels[k]) - 1] = '\0';
+            changed = 1;
+        }
+    }
+    if (!changed) {
+        return;
+    }
+    sTabCount = count;
+    sTabActive = active;
+    if (style != NULL) {
+        sTabStyle = *style;
+    }
+    if (drawn()) {
+        redraw();
+    }
 }
 
 /* ------------------------------------------------------------ the map */
@@ -1396,15 +1730,31 @@ int NitroPort_LowerMenuPanelAt(int x, int y, int *dsX, int *dsY)
      * (the canvas rows outside the DS's 192 to its top or bottom row; tall,
      * the canvas's row is the DS's). */
     cx = (2 * (x - NITRO_LOWERMENU_PANEL_X0) + 1) * NITRO_LOWERMENU_CANVAS_W / (2 * NITRO_LOWERMENU_PANEL_W);
-    cy = (2 * (y - NITRO_LOWERMENU_PANEL_Y0) + 1) * NITRO_LOWERMENU_CANVAS_H / (2 * NITRO_LOWERMENU_PANEL_H);
-    if (!NitroPort_LowerMenuTall()) {
+    cy = canvas_row(y);
+    if (sRunCount > 0) {
+        /* (put together: the lower screen's row there; on another's, where
+         * the drag last was on the lower screen's) */
+        int src, from = NitroPort_LowerMenuRunRow(sRuns, sRunCount, cy, &src);
+
+        if (from == NITRO_LOWERMENU_FROM_LOWER) {
+            cy = src;
+        } else if (from >= 0) {
+            cx = sLastDsX;
+            cy = sLastDsY;
+        } else if (!NitroPort_LowerMenuTall()) {
+            cy -= NITRO_LOWERMENU_DS_ROW0;
+        }
+    } else if (!NitroPort_LowerMenuTall()) {
         cy -= NITRO_LOWERMENU_DS_ROW0;
     }
+    cy = cy < 0 ? 0 : cy > 191 ? 191 : cy;
+    sLastDsX = cx;
+    sLastDsY = cy;
     if (dsX) {
         *dsX = cx;
     }
     if (dsY) {
-        *dsY = cy < 0 ? 0 : cy > 191 ? 191 : cy;
+        *dsY = cy;
     }
     return 1;
 }
@@ -1433,6 +1783,12 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
             sLastPressFrame = sFrames;
             sPressFrame = sFrames;
             __atomic_store_n(&sPress, sTouchButton, __ATOMIC_RELEASE);
+        } else if (sTouchIn == 4 && sTouchTab >= 0 && sTouchTabOn) {
+            /* (a tab: let go on it) */
+            sPressDouble = 0;
+            sLastPress = -1;
+            sPressFrame = sFrames;
+            __atomic_store_n(&sPress, NITRO_LOWERMENU_TAB_PRESS(sTouchTab), __ATOMIC_RELEASE);
         } else if (sTouchIn == 3 && map_shown()) {
             /* (let go: still in the panel, or dragged off it, a tap) */
             sPressDouble = 0;
@@ -1442,6 +1798,7 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
         }
         sTouchIn = -1;
         sTouchButton = -1;
+        sTouchTab = -1;
         held = -1;
     } else if (sTouchIn == 2) {
         return 0;   /* (down since before the menu came on) */
@@ -1453,6 +1810,23 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
              * shown while the game swaps what's under it: nobody's till let
              * go) */
             sTouchIn = !sOn || NitroPort_LowerMenuPanelFade() > 0 ? 2 : map_shown() ? 3 : sPanelTouch ? 1 : 2;
+            if (sTouchIn == 1 && sRunCount > 0 && !map_shown()) {
+                /* (put together: the lower screen's rows the game's, the
+                 * tabs' the tabs', the upper screen's nobody's) */
+                int from = NitroPort_LowerMenuRunRow(sRuns, sRunCount, canvas_row(y), NULL);
+
+                sTouchTab = from == NITRO_LOWERMENU_FROM_TABS ? tab_at(x, y) : -1;
+                sTouchTabOn = 1;
+                sTouchIn = from == NITRO_LOWERMENU_FROM_TABS ? (sTouchTab >= 0 ? 4 : 2)
+                           : from == NITRO_LOWERMENU_FROM_UPPER ? 2
+                                                                : 1;
+            } else if (sTouchIn == 2 && sRunCount > 0 && sOn && NitroPort_LowerMenuPanelFade() <= 0 && !map_shown() &&
+                       NitroPort_LowerMenuRunRow(sRuns, sRunCount, canvas_row(y), NULL) == NITRO_LOWERMENU_FROM_TABS) {
+                /* (the tabs work while the game's touches don't) */
+                sTouchTab = tab_at(x, y);
+                sTouchTabOn = 1;
+                sTouchIn = sTouchTab >= 0 ? 4 : 2;
+            }
         } else {
             sTouchIn = 0;
             sTouchButton = NitroPort_LowerMenuButtonAt(x, y);
@@ -1461,6 +1835,8 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
             }
             held = sTouchButton;
         }
+    } else if (sTouchIn == 4) {
+        sTouchTabOn = tab_at(x, y) == sTouchTab;
     } else if (sTouchIn == 0) {
         /* Still on the button it began on: pressed; off it: not. */
         b = NitroPort_LowerMenuButtonAt(x, y);

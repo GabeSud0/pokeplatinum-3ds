@@ -1505,8 +1505,18 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         split.snapshot = 1;   /* (the state taken when the frame was handed over: DrawFrame) */
         split.windowsToEdge = 1;
         /* The upper screen: the wider canvas (port_wide.c's layout). */
-        if (top && sCompose.wide) {
-            NitroPort_WideLayout(engine, &split);
+        if (top) {
+            /* (the menu's panel showing it: at the DS's width; that
+             * changing, drawn again) */
+            static int shownInPanel;
+            int inPanel = NitroPort_LowerMenuPanelShowsUpper();
+
+            if (sCompose.wide && !inPanel) {
+                NitroPort_WideLayout(engine, &split);
+            }
+            if (__atomic_exchange_n(&shownInPanel, inPanel, __ATOMIC_ACQ_REL) != inPanel) {
+                sMustDraw[0] = true;
+            }
         }
         /* The lower screen as the menu's tall panel: drawn on below the
          * DS's 192 rows (nitro_port_lowermenu.h). */

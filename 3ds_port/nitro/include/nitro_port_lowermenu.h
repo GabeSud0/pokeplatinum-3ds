@@ -242,6 +242,63 @@ void NitroPort_LowerMenuFadeToPanel(int shows);
 void NitroPort_LowerMenuKeepShown(int on);
 int NitroPort_LowerMenuKeptShown(void);
 
+/* ------------------------------------------------- the panel put together
+ *
+ * An app whose two DS screens both go in the panel (the trainer case: its
+ * card on the upper screen, its case on the lower) has the canvas put
+ * together from runs of rows: each the DS's lower screen's rows (as tall as
+ * the game draws it), the upper screen's (its DS 256 columns), or the
+ * port's tabs; a row after the other (step 1), upside down (-1) or the same
+ * row again (0); the canvas's columns 0 and 255 painted one colour (sides),
+ * 1 and 254 another (sidesIn), where the layout wants an edge the DS's rows
+ * haven't.
+ * Rows no run covers: as the DS's lower screen is usually shown. Touches:
+ * on the lower screen's rows the game's (as PanelTouch says), at the row
+ * they show; on the upper screen's nobody's; on the tabs a press,
+ * NITRO_LOWERMENU_TAB_PRESS(tab), when let go. None (count 0, and when the
+ * menu goes off): the panel as usual. Runs: the platforms' copy and its
+ * serial. */
+enum NitroLowerPanelFrom {
+    NITRO_LOWERMENU_FROM_LOWER,
+    NITRO_LOWERMENU_FROM_UPPER,
+    NITRO_LOWERMENU_FROM_TABS,
+};
+typedef struct NitroLowerPanelRun {
+    short y, rows;           /* the canvas's rows */
+    short from;              /* NITRO_LOWERMENU_FROM_* */
+    short srcY;              /* the source's row for the first */
+    short step;              /* 1, -1, 0 */
+    unsigned short sides;    /* columns 0 and 255: 0x8000 | RGB555, or 0 */
+    unsigned short sidesIn;  /* columns 1 and 254: the same */
+} NitroLowerPanelRun;
+#define NITRO_LOWERMENU_SIDE(r, g, b) ((unsigned short)(0x8000u | ((b) >> 3) << 10 | ((g) >> 3) << 5 | ((r) >> 3)))
+#define NITRO_LOWERMENU_RUNS_MAX 12
+void NitroPort_LowerMenuSetPanelRuns(const NitroLowerPanelRun *runs, int count);
+int NitroPort_LowerMenuPanelRuns(NitroLowerPanelRun *out, uint32_t *serial);
+/* Some of the runs are the upper screen's (its drawer draws it at the DS's
+ * width then: no wider layout). */
+int NitroPort_LowerMenuPanelShowsUpper(void);
+/* Where a canvas row comes from (the runs; or as usual: from the lower
+ * screen's row, which may be past its 192 when tall, or the map's): from
+ * (NITRO_LOWERMENU_FROM_*) and the source's row; -1, no run there. */
+int NitroPort_LowerMenuRunRow(const NitroLowerPanelRun *runs, int count, int canvasY, int *srcY);
+
+/* The tabs (the runs' NITRO_LOWERMENU_FROM_TABS rows): drawn by the port in
+ * its picture, at the 3DS's pixels, in its own font, as folder tabs on the
+ * top of what's under them: count of them side by side (4 pixels apart),
+ * active the one open, each a small ball and its label (capitals); below
+ * the tabs, in the run's last rows, the top of what they're the tabs of
+ * (fill, its edge at the sides, its top line under the ones not open).
+ * Colours (RGB888): what's round them, the open one's fill, the others',
+ * the edge, the lettering and its shadow (the others': the shadow's colour
+ * and inkOff's). Labels: up to 15 characters. */
+#define NITRO_LOWERMENU_TABS_MAX 4
+typedef struct NitroLowerTabStyle {
+    uint32_t back, fill, fillOff, edge, ink, inkShadow, inkOff;
+} NitroLowerTabStyle;
+void NitroPort_LowerMenuSetTabs(int count, const char *const *labels, int active, const NitroLowerTabStyle *style);
+#define NITRO_LOWERMENU_TAB_PRESS(tab) (NITRO_LOWERMENU_PANEL_PRESS + 1 + (tab))
+
 enum NitroLowerMapSpriteKind {
     NITRO_LOWERMAP_CURSOR,   /* 16 x 16, its two frames by turns */
     NITRO_LOWERMAP_PLAYER,   /* 16 x 16; frame 0 the boy, 1 the girl */

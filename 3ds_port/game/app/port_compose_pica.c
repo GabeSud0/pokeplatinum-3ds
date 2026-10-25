@@ -159,6 +159,7 @@ typedef struct Screen {
     int shownMenu;
     uint32_t shownMenuSerial, shownMapSerial;
     int shownFade;
+    uint32_t shownRunSerial, shownUpSeq;   /* (its panel put together: the runs, the upper screen's picture) */
 } Screen;
 
 static ComposeConfig sConfig;
@@ -209,6 +210,11 @@ static int sMapStaleY0[2], sMapStaleY1[2] = { NITRO_LOWERMENU_PANEL_H, NITRO_LOW
 static int sMenuPanel;                 /* (the menu's panel this frame: NitroPort_LowerMenuPanel, once) */
 static int sMenuFade;                  /* (how dark its panel is this frame: NitroPort_LowerMenuPanelFade, once) */
 static int sMenuNow;              /* (the screen being drawn is the menu) */
+/* (and its panel put together: NitroPort_LowerMenuSetPanelRuns, as read
+ * for the frame; the upper screen's picture its runs show, held for it) */
+static NitroLowerPanelRun sPanelRuns[NITRO_LOWERMENU_RUNS_MAX];
+static int sPanelRunCount;
+static LayerSet *sPanelUp;
 static int sMenu3dNow;            /* (and its 3D goes in its panel) */
 static void *sEdgeDepth[4];       /* 240 x 400 D24S8, a direction each, shared by the screens */
 static void *sEdgeBlock;          /* (the four, one after another: one VRAM block) */
@@ -261,9 +267,11 @@ static NitroGx3dGpuVertex *sQuads;   /* this frame's quads (half of sQuadsAll: t
 static NitroGx3dGpuVertex *sQuadsAll;
 static int sQuadHalf;
 static int sQuadVertices;
-/* (a frame's quads: 32, and an H-blank effect's runs' rear planes and
- * tints, 2 x 24 at most: LINE_RUNS_MAX, LINE_RUNS_STEREO a side) */
-#define MAX_QUAD_VERTICES (6 * (32 + 2 * 24))
+/* (a frame's quads: 32, an H-blank effect's runs' rear planes and
+ * tints, 2 x 24 at most: LINE_RUNS_MAX, LINE_RUNS_STEREO a side; the
+ * menu's panel put together, 96 at most: PANEL_PIECES_MAX, their sides and
+ * brightness) */
+#define MAX_QUAD_VERTICES (6 * (32 + 2 * 24 + 96))
 /* ------------------------------------------------- frames in flight
  * A frame's commands are built while the GPU draws the frame before
  * (NitroPort_PicaFrameOpen): its GPU operations (fills, command lists,
@@ -1685,7 +1693,7 @@ int NitroPort_ComposeGpuBusy(void)
 }
 
 /* The layer textures, described for the GPU. */
-static C3D_Tex sUnderTex, sOverTex;
+static C3D_Tex sUnderTex, sOverTex, sPanelUpTex;
 
 /* (an H-blank effect: ComposeLayers.scroll3dLines) The 3D's lines in runs
  * of the same scroll, each drawn by itself, moved by it, inside its rows
@@ -1986,6 +1994,188 @@ static void draw_menu_3d(const Screen *scr, const LayerSet *set, const NitroGx3d
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
 }
 
+/* The panel put together (nitro_port_lowermenu.h): each run's rows from
+ * the lower screen's picture (bound) or the upper screen's (sPanelUp: its
+ * DS's 256 columns), a row after another, upside down or one row again;
+ * the rows no run covers as usual; the tabs' rows left as the menu's
+ * picture has them (the tabs). Then the sides' colours, at the panel's
+ * outer two pixel columns each side, and the upper screen's own master
+ * brightness over its rows. */
+#define PANEL_PIECES_MAX 32
+typedef struct PanelPiece {
+    int y, rows, from, srcY, step;
+} PanelPiece;
+
+static int panel_pieces(int tall, PanelPiece *out)
+{
+    int n = 0, y = 0;
+
+    while (y < NITRO_LOWERMENU_CANVAS_H && n < PANEL_PIECES_MAX) {
+        int i, next = NITRO_LOWERMENU_CANVAS_H, run = -1;
+
+        for (i = 0; i < sPanelRunCount; i++) {
+            const NitroLowerPanelRun *r = &sPanelRuns[i];
+
+            if (y >= r->y && y < r->y + r->rows) {
+                run = i;
+                break;
+            }
+            if (r->y > y && r->y < next) {
+                next = r->y;
+            }
+        }
+        if (run >= 0) {
+            const NitroLowerPanelRun *r = &sPanelRuns[run];
+            int end = r->y + r->rows;
+
+            /* (overlapping runs: the first one has a row, as for touches) */
+            for (i = 0; i < run; i++) {
+                if (sPanelRuns[i].y > y && sPanelRuns[i].y < end) {
+                    end = sPanelRuns[i].y;
+                }
+            }
+            out[n].y = y;
+            out[n].rows = end - y;
+            out[n].from = r->from;
+            out[n].srcY = r->srcY + (y - r->y) * r->step;
+            out[n].step = r->step;
+        } else {
+            /* (as usual: tall, the canvas's row the picture's; else the
+             * DS's 192 from row 27, its top row above them, its bottom
+             * row below) */
+            out[n].y = y;
+            out[n].from = NITRO_LOWERMENU_FROM_LOWER;
+            if (tall) {
+                out[n].rows = next - y;
+                out[n].srcY = y;
+                out[n].step = 1;
+            } else if (y < NITRO_LOWERMENU_DS_ROW0) {
+                out[n].rows = (next < NITRO_LOWERMENU_DS_ROW0 ? next : NITRO_LOWERMENU_DS_ROW0) - y;
+                out[n].srcY = 0;
+                out[n].step = 0;
+            } else if (y < NITRO_LOWERMENU_DS_ROW0 + DS_H) {
+                out[n].rows = (next < NITRO_LOWERMENU_DS_ROW0 + DS_H ? next : NITRO_LOWERMENU_DS_ROW0 + DS_H) - y;
+                out[n].srcY = y - NITRO_LOWERMENU_DS_ROW0;
+                out[n].step = 1;
+            } else {
+                out[n].rows = next - y;
+                out[n].srcY = DS_H - 1;
+                out[n].step = 0;
+            }
+        }
+        y += out[n].rows;
+        n++;
+    }
+    return n;
+}
+
+/* A piece's quad: its rows' texture rows, from vTop a row (row, in v) each. */
+static void panel_piece_quad(const PanelPiece *p, float x0, float x1, float u0, float u1, float vTop, float row)
+{
+    const float k = (float)NITRO_LOWERMENU_PANEL_H / (float)NITRO_LOWERMENU_CANVAS_H;
+    float ya = NITRO_LOWERMENU_PANEL_Y0 + (float)p->y * k, yb = NITRO_LOWERMENU_PANEL_Y0 + (float)(p->y + p->rows) * k;
+    float va, vb;
+
+    if (p->step > 0) {
+        va = vTop - (float)p->srcY * row;
+        vb = vTop - (float)(p->srcY + p->rows) * row;
+    } else if (p->step < 0) {
+        va = vTop - (float)(p->srcY + 1) * row;
+        vb = vTop - (float)(p->srcY + 1 - p->rows) * row;
+    } else {
+        va = vb = vTop - ((float)p->srcY + 0.5f) * row;
+    }
+    quad(x0, ya, x1, yb, 0.0f, u0, va, u1, vb, 0xFFFFFFFFu);
+}
+
+static u32 rgba_of_side(unsigned short side)
+{
+    return ((u32)widen5(side & 31u) << 24) | ((u32)widen5((side >> 5) & 31u) << 16) |
+           ((u32)widen5((side >> 10) & 31u) << 8) | 0xFFu;
+}
+
+static void draw_panel_runs(const LayerSet *set, float u1, float vTop, float vBottom, int linear)
+{
+    const float k = (float)NITRO_LOWERMENU_PANEL_H / (float)NITRO_LOWERMENU_CANVAS_H;
+    float x0 = NITRO_LOWERMENU_PANEL_X0, x1 = x0 + NITRO_LOWERMENU_PANEL_W;
+    float row = (vTop - vBottom) / (float)DS_H;
+    PanelPiece pieces[PANEL_PIECES_MAX];
+    int n = panel_pieces(set->info.height >= NITRO_LOWERMENU_CANVAS_H, pieces), i, side;
+
+    /* The lower screen's (its texture bound). */
+    for (i = 0; i < n; i++) {
+        if (pieces[i].from == NITRO_LOWERMENU_FROM_LOWER) {
+            panel_piece_quad(&pieces[i], x0, x1, 0.0f, u1, vTop, row);
+        }
+    }
+    /* The upper screen's: its DS's 256 columns (in the middle of a wider
+     * picture). */
+    if (sPanelUp != NULL && !sPanelUp->info.displayOff) {
+        const Screen *up = &sScreens[0];
+        int w = sPanelUp->info.width > 0 ? sPanelUp->info.width : DS_W;
+        float uA = (float)((w - DS_W) / 2 * up->texScale) / (float)up->texW;
+        float uB = uA + (float)(DS_W * up->texScale) / (float)up->texW;
+        float vT = 1.0f, vB = 1.0f - (float)(DS_H * up->texScale) / (float)up->texH;
+        int mode = (sPanelUp->info.masterBright >> 14) & 3, factor = sPanelUp->info.masterBright & 31;
+
+        if (sConfig.flipV) {
+            float t = vT;
+
+            vT = vB;
+            vB = t;
+        }
+        make_texture(&sPanelUpTex, sPanelUp->under, GPU_RGB565, up->texW, up->texH, linear, GPU_CLAMP_TO_EDGE);
+        C3D_TexBind(0, &sPanelUpTex);
+        for (i = 0; i < n; i++) {
+            if (pieces[i].from == NITRO_LOWERMENU_FROM_UPPER) {
+                panel_piece_quad(&pieces[i], x0, x1, uA, uB, vT, (vT - vB) / (float)DS_H);
+            }
+        }
+        /* (its master brightness, over its rows) */
+        factor = factor > 16 ? 16 : factor;
+        if (factor && (mode == 1 || mode == 2)) {
+            quad_combiner(0);
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ZERO);
+            for (i = 0; i < n; i++) {
+                if (pieces[i].from == NITRO_LOWERMENU_FROM_UPPER) {
+                    quad(x0, NITRO_LOWERMENU_PANEL_Y0 + (float)pieces[i].y * k, x1,
+                         NITRO_LOWERMENU_PANEL_Y0 + (float)(pieces[i].y + pieces[i].rows) * k, 0.0f, 0, 0, 0, 0,
+                         (mode == 1 ? 0xFFFFFF00u : 0x00000000u) | ((u32)factor * 255u / 16u));
+                }
+            }
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+            quad_combiner(1);
+        }
+    } else {
+        /* (no picture of it yet: black) */
+        quad_combiner(0);
+        for (i = 0; i < n; i++) {
+            if (pieces[i].from == NITRO_LOWERMENU_FROM_UPPER) {
+                quad(x0, NITRO_LOWERMENU_PANEL_Y0 + (float)pieces[i].y * k, x1,
+                     NITRO_LOWERMENU_PANEL_Y0 + (float)(pieces[i].y + pieces[i].rows) * k, 0.0f, 0, 0, 0, 0,
+                     0x000000FFu);
+            }
+        }
+        quad_combiner(1);
+    }
+    /* The sides: the outer pixel column each side, then the one inside it. */
+    quad_combiner(0);
+    for (i = 0; i < sPanelRunCount; i++) {
+        const NitroLowerPanelRun *r = &sPanelRuns[i];
+        float ya = NITRO_LOWERMENU_PANEL_Y0 + (float)r->y * k, yb = NITRO_LOWERMENU_PANEL_Y0 + (float)(r->y + r->rows) * k;
+
+        for (side = 0; side < 2; side++) {
+            unsigned short c = side == 0 ? r->sides : r->sidesIn;
+
+            if (c & 0x8000u) {
+                quad(x0 + (float)side, ya, x0 + (float)side + 1.0f, yb, 0.0f, 0, 0, 0, 0, rgba_of_side(c));
+                quad(x1 - (float)side - 1.0f, ya, x1 - (float)side, yb, 0.0f, 0, 0, 0, 0, rgba_of_side(c));
+            }
+        }
+    }
+    quad_combiner(1);
+}
+
 static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vTop, float vBottom, int linear,
                       const NitroGx3dScene *scene3d, C3D_FrameBuf *fb)
 {
@@ -2028,7 +2218,11 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
         C3D_TexBind(0, &sUnderTex);
         rect3d.x0 = x0;
         rect3d.x1 = x1;
-        if (set->info.height >= NITRO_LOWERMENU_CANVAS_H) {
+        if (sPanelRunCount > 0) {
+            draw_panel_runs(set, u1, vTop, vBottom, linear);
+            rect3d.y0 = set->info.height >= NITRO_LOWERMENU_CANVAS_H ? y0 : yA;
+            rect3d.y1 = set->info.height >= NITRO_LOWERMENU_CANVAS_H ? y0 + DS_H * k : yB;
+        } else if (set->info.height >= NITRO_LOWERMENU_CANVAS_H) {
             /* (tall: canvas row y is the picture's row y) */
             quad(x0, y0, x1, yEnd, 0.0f, 0, vTop, u1, vTop - row * (float)NITRO_LOWERMENU_CANVAS_H, 0xFFFFFFFFu);
             rect3d.y0 = y0;
@@ -2040,7 +2234,9 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
             rect3d.y0 = yA;
             rect3d.y1 = yB;
         }
-        if (scene3d != NULL) {
+        /* (put together: no 3D, its rows aren't where the runs put the
+         * lower screen's) */
+        if (scene3d != NULL && sPanelRunCount == 0) {
             draw_menu_3d(scr, set, scene3d, fb, &rect3d, u1, vTop, vBottom, linear);
         }
     }
@@ -2537,6 +2733,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     unsigned copies;
     u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
     LayerSet *sets[2] = { NULL, NULL };
+    LayerSet *panelUp = NULL;          /* (the upper screen's picture, in the menu's panel put together) */
+    uint32_t runSerial = 0;
+    int panelUpper = 0;
     int keptShown;
     u32 current2d[2];
     u64 start = svcGetSystemTick(), gpuStart, prepareTicks = 0, texTicksBefore, texTicksAfter, texels;
@@ -2557,6 +2756,10 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     }
     keptShown = NitroPort_LowerMenuKeptShown();
     sMenuPanel = NitroPort_LowerMenuPanel();   /* (as decided: the game may change it while this frame's built) */
+    sPanelRunCount = NitroPort_LowerMenuPanelRuns(sPanelRuns, &runSerial);
+    for (s = 0; s < sPanelRunCount; s++) {
+        panelUpper |= sPanelRuns[s].from == NITRO_LOWERMENU_FROM_UPPER;
+    }
     sMenuFade = NitroPort_LowerMenuPanelFade();
     startVBlank = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
     if (scene != NULL && (!sSeenValid || sceneSerial != sSeenSerial)) {
@@ -2673,11 +2876,25 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
          * made, for the port's fade in (NitroPort_LowerMenuPanelShown); the
          * newest set is the game's as of its drawer's last frame, changed
          * or not: NitroPort_Compose2DCurrent) */
+        if (menu[s] && sMenuPanel != NITRO_LOWERMENU_PANEL_MAP && panelUpper) {
+            /* (put together with the upper screen's rows: its picture too,
+             * held for the frame) */
+            panelUp = pick_set(&sScreens[0], NULL, 0);
+        }
         if (menu[s] && sMenuPanel != NITRO_LOWERMENU_PANEL_MAP) {
             u32 shownStamp = set->info.stamp;
 
             if (set->seq == newest_seq(scr) && (int32_t)(current2d[s] - shownStamp) > 0) {
                 shownStamp = current2d[s];
+            }
+            if (panelUp != NULL) {
+                /* (the panel's as fresh as the older of its two pictures) */
+                u32 upStamp = panelUp->info.stamp;
+
+                if (panelUp->seq == newest_seq(&sScreens[0]) && (int32_t)(current2d[0] - upStamp) > 0) {
+                    upStamp = current2d[0];
+                }
+                shownStamp = (int32_t)(upStamp - shownStamp) < 0 ? upStamp : shownStamp;
             }
             NitroPort_LowerMenuPanelShown(shownStamp);
         }
@@ -2685,6 +2902,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                   menu[s] != scr->shownMenu || (menu[s] && menuSerial != scr->shownMenuSerial) ||
                   (menu[s] && sMenuFade != scr->shownFade) ||
                   (menu[s] && sMenuPanel == NITRO_LOWERMENU_PANEL_MAP && mapSerial != scr->shownMapSerial) ||
+                  (menu[s] && sMenuPanel != NITRO_LOWERMENU_PANEL_MAP &&
+                   (runSerial != scr->shownRunSerial || (panelUp != NULL ? panelUp->seq : 0u) != scr->shownUpSeq)) ||
                   (s == 0 && has3d && (stereoNow != scr->shownStereo ||
                                         (stereoNow && slider != scr->shownSlider)));
         /* A new scene: once the 2D it's shown with is here (or the next
@@ -2713,6 +2932,10 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         }
         if (!need[s]) {
             set->held--;
+            if (s == 1 && panelUp != NULL) {
+                panelUp->held--;
+                panelUp = NULL;
+            }
             continue;
         }
         sets[s] = set;
@@ -2866,9 +3089,14 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         } else {
             sMenuNow = menu[s];
             sMenu3dNow = has3dOf[s];
+            sPanelUp = s == 1 ? panelUp : NULL;
+            if (!(s == 1 && menu[s] && sMenuPanel != NITRO_LOWERMENU_PANEL_MAP)) {
+                sPanelRunCount = s == 1 ? 0 : sPanelRunCount;   /* (as usual) */
+            }
             draw_screen(scr, 0, sets[s], sc, 0.0f, edges, underCleared[s]);
             sMenuNow = 0;
             sMenu3dNow = 0;
+            sPanelUp = NULL;
         }
         /* (drawn black: the game's picture there still to be drawn) */
         scr->shownSeq = s == 0 && keptBlack ? 0u : sets[s]->seq;
@@ -2876,6 +3104,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         scr->shownMenuSerial = menuSerial;
         scr->shownMapSerial = s == 1 && menu[s] && sMenuPanel == NITRO_LOWERMENU_PANEL_MAP ? sMapTexSerial : mapSerial;
         scr->shownFade = sMenuFade;
+        scr->shownRunSerial = runSerial;
+        scr->shownUpSeq = s == 1 && panelUp != NULL ? panelUp->seq : 0u;
         if (screen3d && !mid) {   /* (an in-between scene: its scene's still to come) */
             scr->shownScene = sceneSerial;
             sSceneWaiting = 0;
@@ -2941,6 +3171,10 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                 sets[s]->held--;
                 sets[s]->flightSerial = sGpuSubmitted;
             }
+        }
+        if (panelUp != NULL) {
+            panelUp->held--;
+            panelUp->flightSerial = sGpuSubmitted;
         }
         LightLock_Unlock(&sSetLock);
         if (sProfOn) {
