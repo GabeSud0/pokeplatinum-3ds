@@ -19,6 +19,7 @@
 # if there is one). Nothing is uploaded. The program and the pack contain
 # game code and data: keep them to yourself.
 set -euo pipefail
+trap 'echo; echo "==> Stopped: the command on line $LINENO of build_linux.sh failed (see the lines above)."' ERR
 
 ROM="${1:-}"
 REPO_DIR="$HOME/pokeplatinum-3ds"
@@ -79,7 +80,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommend
 if ! command -v dkp-pacman >/dev/null; then
     step "Installing devkitPro's package manager (https://devkitpro.org/wiki/devkitPro_pacman)"
     [ -e /etc/mtab ] || sudo ln -s /proc/self/mounts /etc/mtab   # (containers and WSL lack it)
-    wget -q -O /tmp/install-devkitpro-pacman https://apt.devkitpro.org/install-devkitpro-pacman
+    wget -nv -O /tmp/install-devkitpro-pacman https://apt.devkitpro.org/install-devkitpro-pacman
     chmod +x /tmp/install-devkitpro-pacman
     sudo DEBIAN_FRONTEND=noninteractive /tmp/install-devkitpro-pacman   # (as devkitPro's own Docker images do)
 fi
