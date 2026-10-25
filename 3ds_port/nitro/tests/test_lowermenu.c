@@ -495,6 +495,96 @@ static void test_fade(void)
     NitroPort_LowerMenuShow(0);
 }
 
+/* Fading in to the DS's lower screen, or clearing at once (an app popping
+ * in), once the platform says what it draws there: black till it's drawn a
+ * picture made since (half a second at most). Last: the port then waits
+ * for the rest of the run. */
+static void test_fade_waits_for_picture(void)
+{
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuSetPanel(NITRO_LOWERMENU_PANEL_DS);
+    NitroPort_LowerMenuSetClock(now);
+    sNow = 5000;
+    NitroPort_LowerMenuPanelShown(4990);
+    NitroPort_LowerMenuFadePanel(1);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES;
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    /* Cleared at once: black, its picture from before. */
+    NitroPort_LowerMenuFadePanel(NITRO_LOWERMENU_CLEAR_NOW);
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    sNow += 2;
+    NitroPort_LowerMenuPanelShown(sNow - 3);
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    /* A picture made since: clear. */
+    NitroPort_LowerMenuPanelShown(sNow);
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    /* Faded in: the fade begins once there's one. */
+    NitroPort_LowerMenuFadePanel(1);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES;
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    NitroPort_LowerMenuFadePanel(0);
+    sNow += 3;
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    NitroPort_LowerMenuPanelShown(sNow);
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES / 2;
+    CHECK(NitroPort_LowerMenuPanelFade() == 8);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES / 2;
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    /* None coming: clear after half a second all the same. */
+    NitroPort_LowerMenuFadePanel(1);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES;
+    NitroPort_LowerMenuFadePanel(NITRO_LOWERMENU_CLEAR_NOW);
+    sNow += 29;
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    sNow += 1;
+    CHECK(NitroPort_LowerMenuPanelFade() == 0);
+    /* Left again before it popped in: black all along, never the picture
+     * from before. */
+    NitroPort_LowerMenuFadePanel(1);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES;
+    NitroPort_LowerMenuFadePanel(NITRO_LOWERMENU_CLEAR_NOW);
+    NitroPort_LowerMenuPanelShown(sNow - 1);
+    sNow += 1;
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    NitroPort_LowerMenuFadePanel(1);
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    sNow += NITRO_LOWERMENU_FADE_FRAMES / 2;
+    CHECK(NitroPort_LowerMenuPanelFade() == 16);
+    NitroPort_LowerMenuSetClock(NULL);
+    NitroPort_LowerMenuShow(0);
+}
+
+/* The upper screen let go now: the game's picture shown once it's one made
+ * since (or half a second on); without a clock, at once. */
+static void test_upper_let_go_waits_for_picture(void)
+{
+    NitroPort_LowerMenuHoldUpper(1);
+    CHECK(NitroPort_LowerMenuUpperLetGoShows(0) == 1);   /* (no clock) */
+    NitroPort_LowerMenuSetClock(now);
+    sNow = 7000;
+    NitroPort_LowerMenuHoldUpper(NITRO_LOWERMENU_LET_GO_NOW);
+    CHECK(NitroPort_LowerMenuUpperHeld() < 0);
+    CHECK(NitroPort_LowerMenuUpperLetGoShows(6998) == 0);
+    sNow += 2;
+    CHECK(NitroPort_LowerMenuUpperLetGoShows(6999) == 0);
+    CHECK(NitroPort_LowerMenuUpperLetGoShows(7000) == 1);
+    CHECK(NitroPort_LowerMenuUpperLetGoShows(7001) == 1);
+    /* (none coming: shown after half a second all the same) */
+    sNow = 7000 + 29;
+    CHECK(NitroPort_LowerMenuUpperLetGoShows(6990) == 0);
+    sNow += 1;
+    CHECK(NitroPort_LowerMenuUpperLetGoShows(6990) == 1);
+    /* (let go again later: its own time) */
+    NitroPort_LowerMenuHoldUpper(1);
+    sNow = 8000;
+    NitroPort_LowerMenuHoldUpper(NITRO_LOWERMENU_LET_GO_NOW);
+    CHECK(NitroPort_LowerMenuUpperLetGoShows(7500) == 0);
+    CHECK(NitroPort_LowerMenuUpperLetGoShows(8000) == 1);
+    NitroPort_LowerMenuHoldUpper(0);
+    NitroPort_LowerMenuSetClock(NULL);
+}
+
 /* The menu kept shown while off: its buttons still pressed then, the panel
  * nobody's; the press not dropped when it goes off and on again meanwhile. */
 static void test_kept_shown(void)
@@ -562,6 +652,8 @@ int main(void)
     test_fade();
     test_kept_shown();
     test_dirty_rows();
+    test_fade_waits_for_picture();
+    test_upper_let_go_waits_for_picture();
     printf("lowermenu: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;
 }

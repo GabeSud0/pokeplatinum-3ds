@@ -7,7 +7,9 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 On the 3DS remaster's lower menu, the party shows in the panel, laid out
-tall as its approved mock-up has it, and comes and goes as the bag does:
+tall as its approved mock-up has it, and comes and goes as the bag does;
+the summary shows there too, and the panel's apps hand over to each other
+behind its black:
 
 - Opened while the platform can show the menu
   (NitroPort_LowerMenuAvailable), the party puts its main screen (the
@@ -26,9 +28,8 @@ tall as its approved mock-up has it, and comes and goes as the bag does:
   to the next, the dashed line beside each right panel, the message's rows
   56 lower (PartyPortTall_LayOutBackground: its tiles after the party's
   own). The second left panel without its top edge (PartyPortTall_FixEdges,
-  as panels are drawn and switched; an empty one too). A form change
-  without its 3D sparkles (no 3D on the tall screen): the effect's sound,
-  the icon changed when it would be.
+  as panels are drawn and switched; an empty one too). A form change's 3D
+  sparkles at the icon moved with its row.
 - From the lower menu, POKéMON fades the panel to black, the party comes
   behind it and pops in; B, CANCEL or POKéMON again fade it to black, and
   the map fades in once the field's back. While the cursor waits on the
@@ -36,21 +37,38 @@ tall as its approved mock-up has it, and comes and goes as the bag does:
   panel (POKéMON in the bag back to the party: StartMenu_PortSwitchFromApp,
   the bag's StartMenu_PortSwitchFromBag made the two apps'), TRAINER,
   POKéDEX and OPTIONS open straight from it, SAVE, MAP and POKéTCH are acted
-  on in the field. Left another way (the summary, a field move, an item
-  given), the DS's fades. A tap on the menu while the party's busy, before
-  it's shown, or in a party not the menu's: nobody's (the bag's the same,
-  so a quick second tap on BAG doesn't close the bag it opened).
-- With the classic display (no menu), the party is as before.
+  on in the field. A tap on the menu while the party's busy, before it's
+  shown, or in a party not the menu's: nobody's (the bag's the same, so a
+  quick second tap on BAG doesn't close the bag it opened).
+- The summary in the panel: from the party in the panel, its main screen
+  (the pages, the Pokémon) on the lower screen at the DS's size, none of
+  the wider upper screen's layouts; its touch screen not shown; the upper
+  screen keeping the field.
+- The panel's apps hand over behind its black: an app leaving for another
+  of them (the party for the summary, the bag to give an item, back to the
+  bag; the bag for the party, an item used on a Pokémon or given; the
+  summary back to the party) fades the panel to black, the menu kept on
+  (NitroPort_LowerMenuKeepShown), and the next one finds it so
+  (NitroPort_LowerMenuKeptShown) and pops in (PartyPort_LeavesInPanel,
+  BagPort_LeavesInPanel: the bag's fades out put off to its last state,
+  which decides). The start menu opens them (StartMenu_PortAppIsMenus: the
+  field's own app, its task the field's; not an app's own, the Poffin
+  Case's party) and, each gone, knows how (StartMenu_PortAppGone); the
+  menu still kept when the player walks again, it's let go. Left another
+  way (a field move, the mail, an evolution), the DS's fades.
+- With the classic display (no menu), the party, the bag and the summary
+  are as before.
 ---
- include/applications/party_menu/defs.h     |  14 +
- src/applications/bag/main.c                |  13 +-
- src/applications/party_menu/context_menu.c |   4 +
- src/applications/party_menu/form_change.c  |  29 ++
- src/applications/party_menu/main.c         | 560 ++++++++++++++++++++-
- src/applications/party_menu/sprites.c      |  13 +
- src/applications/party_menu/windows.c      |  44 ++
- src/start_menu.c                           | 163 ++++--
- 8 files changed, 784 insertions(+), 56 deletions(-)
+ include/applications/party_menu/defs.h        |  14 +
+ src/applications/bag/main.c                   | 166 +++--
+ src/applications/party_menu/context_menu.c    |   4 +
+ src/applications/party_menu/form_change.c     |   7 +
+ src/applications/party_menu/main.c            | 586 +++++++++++++++++-
+ src/applications/party_menu/sprites.c         |  13 +
+ src/applications/party_menu/windows.c         |  44 ++
+ .../pokemon_summary_screen/main.c             |  97 +++
+ src/start_menu.c                              | 225 +++++--
+ 9 files changed, 1048 insertions(+), 108 deletions(-)
 
 diff --git a/include/applications/party_menu/defs.h b/include/applications/party_menu/defs.h
 index 1bec6bff..cf5b12ac 100644
@@ -76,28 +94,160 @@ index 1bec6bff..cf5b12ac 100644
 +
  #endif // POKEPLATINUM_PARTY_MENU_DEFS_H
 diff --git a/src/applications/bag/main.c b/src/applications/bag/main.c
-index 5569b04f..f6c2c041 100644
+index 5569b04f..1609707e 100644
 --- a/src/applications/bag/main.c
 +++ b/src/applications/bag/main.c
-@@ -79,7 +79,7 @@ extern BOOL gStartMenuPortMenu;       // (start_menu.c)
- extern BOOL gStartMenuPortInstantApp; // (start_menu.c)
+@@ -70,45 +70,115 @@ extern void NitroPort_LowerMenuHoldUpper(int hold);
+ extern int NitroPort_LowerMenuPressPending(void);
+ extern int NitroPort_LowerMenuTakePress(void);
+ extern void NitroPort_LowerMenuKeepShown(int on);
++extern int NitroPort_LowerMenuKeptShown(void);
+ extern void NitroPort_LowerMenuFadePanel(int black);
+ extern int NitroPort_LowerMenuPanelFade(void);
+ #define PORT_CLEAR_NOW (-1)    // NITRO_LOWERMENU_CLEAR_NOW
+ #define PORT_FADE_BLACK 16     // (NitroPort_LowerMenuPanelFade: the panel black)
+ extern void NitroPort_Render2DSmoothObjs(int engine, int on);
+-extern BOOL gStartMenuPortMenu;       // (start_menu.c)
+-extern BOOL gStartMenuPortInstantApp; // (start_menu.c)
  extern int gStartMenuPortAppPress;    // (start_menu.c)
++extern BOOL StartMenu_PortAppIsMenus(ApplicationManager *appMan);
  extern BOOL StartMenu_PortButtonOpensApp(int button);
 -extern void StartMenu_PortBagLeaving(int button);
+-
+-// The field's bag, the lower start menu's (gStartMenuPortMenu): one of the
+-// menu's buttons tapped while the item list waits closes the bag, and the
+-// start menu does what the button says.
 +extern void StartMenu_PortAppLeaving(int button);
++
++// The lower start menu's bag (StartMenu_PortAppIsMenus: opened by it, from
++// the field or from the party): what comes next in the panel comes there
++// too (BagPort_LeavesInPanel). Its own (BAG_MODE_NORMAL, sBagPortMenu): one
++// of the menu's buttons tapped while the item list waits closes the bag,
++// and the start menu does what the button says.
++static BOOL sBagPortApps;
+ static BOOL sBagPortMenu;
  
- // The field's bag, the lower start menu's (gStartMenuPortMenu): one of the
- // menu's buttons tapped while the item list waits closes the bag, and the
-@@ -108,7 +108,7 @@ static void BagPort_Leave(int press)
+-// Opened from the lower menu, the bag comes behind the panel faded to black
+-// (start_menu.c; the upper screen keeping the field) and pops in once it's
+-// whole, two frames on; closed (B, CLOSE BAG, or one of the menu's buttons
+-// tapped), the panel fades to black again, the menu kept on, and the field
+-// comes back behind it (or the app the button opens).
++// The lower menu's apps come and go behind its panel faded to black, the
++// menu kept on (NitroPort_LowerMenuKeptShown) and the upper screen keeping
++// the field: the bag comes so from the field or the party and pops in once
++// it's whole, two frames on; left for one of them (B, CLOSE BAG or a menu
++// button, an item used on a Pokemon or given), the panel fades to black
++// again and it goes, the next one coming behind it.
+ static BOOL sBagPortInstant;
+ static BOOL sBagPortClosedInstantly;
+ static int sBagPortReveal;
+ static BOOL sBagPortBlack; // (the screens made black for an app opened from the bag)
+ 
+-// The bag closed by the player (B, CLOSE BAG: press -1; a menu button):
+-// opened from the menu, it goes as it came: the panel faded to black first.
+-static void BagPort_Leave(int press)
++// The bag's fades out are put off till its EXIT state, which decides how it
++// goes (the exit code known by then): in the panel, or with the DS's fade
++// (App_StartScreenFade below).
++static BOOL sBagPortFadeAsked;
++
++static void BagPort_FadeOutAsTheDS(void)
+ {
+-    if (!sBagPortInstant) {
++    App_StartScreenFade(TRUE, HEAP_ID_BAG);
++}
++
++static void BagPort_StartScreenFade(u8 fadeOut, enum HeapID heapID)
++{
++    if (!fadeOut || !gBagPortTall) {
++        App_StartScreenFade(fadeOut, heapID);
+         return;
+     }
+ 
++    sBagPortFadeAsked = TRUE;
++}
++
++#define App_StartScreenFade(fadeOut, heapID) BagPort_StartScreenFade(fadeOut, heapID)
++
++// An item used that the start menu uses on a Pokemon in the party
++// (item_use_functions.c: UseHealingItemFromMenu and the ones like it; a
++// berry on an empty patch is planted instead).
++static BOOL BagPort_ItemOpensParty(BagController *controller)
++{
++    switch (Item_LoadParam(controller->bagCtx->selectedItem, ITEM_PARAM_FIELD_USE_FUNC, HEAP_ID_BAG)) {
++    case ITEM_USE_FUNC_HEALING:
++    case ITEM_USE_FUNC_TM_HM:
++    case ITEM_USE_FUNC_EVO_STONE:
++    case ITEM_USE_FUNC_GRACIDEA:
++        return TRUE;
++    case ITEM_USE_FUNC_BERRY:
++        return controller->bagCtx->itemUseCtx != NULL && !BerryPatch_IsEmpty(controller->bagCtx->itemUseCtx);
++    default:
++        return FALSE;
++    }
++}
++
++// Whether the bag's left for what comes in the panel too (the start menu's:
++// start_menu.c): closed (B, CLOSE BAG, a menu button: the field, the party,
++// or the app the button opens), an item to give (the party), an item given
++// from the party's menu, or B there (back to the party; not a mail to
++// write), an item used on a Pokemon. (Anything else, the Bicycle, the berry
++// tag...: with the DS's fade.)
++static BOOL BagPort_LeavesInPanel(BagController *controller)
++{
++    if (!sBagPortApps) {
++        return FALSE;
++    }
++
++    switch (controller->bagCtx->exitCode) {
++    case BAG_EXIT_CODE_DONE:
++    case BAG_EXIT_CODE_GIVE_ITEM:
++        return TRUE;
++    case BAG_EXIT_CODE_GIVE_FROM_MON_MENU:
++        return !Item_IsMail(controller->bagCtx->selectedItem);
++    case BAG_EXIT_CODE_USE_ITEM:
++        return BagPort_ItemOpensParty(controller);
++    default:
++        return FALSE;
++    }
++}
++
++// The bag leaving so: the panel faded to black first, the menu kept on.
++// (Closed: the menu button tapped, -1 for B or CLOSE BAG, the start menu's.)
++static void BagPort_Leave(BagController *controller)
++{
+     sBagPortClosedInstantly = TRUE;
      sBagPortBlack = FALSE;
      NitroPort_LowerMenuKeepShown(TRUE);
      NitroPort_LowerMenuFadePanel(TRUE);
 -    StartMenu_PortBagLeaving(press);
-+    StartMenu_PortAppLeaving(press);
++
++    if (controller->bagCtx->exitCode == BAG_EXIT_CODE_DONE) {
++        StartMenu_PortAppLeaving(gStartMenuPortAppPress);
++    } else {
++        gStartMenuPortAppPress = -1;
++    }
  }
  
  #define BAG_PORT_MENU_BUTTONS 8 // NITRO_LOWERMENU_ITEM1: the menu's buttons before it
-@@ -717,10 +717,11 @@ int BagApplication_Main(ApplicationManager *appMan, int *state)
+@@ -621,11 +691,13 @@ int BagApplication_Init(ApplicationManager *appMan, int *state)
+     // main engine on the lower screen, the upper screen keeping what it
+     // shows (the field), the panel tall and untouched.
+     gBagPortTall = NitroPort_LowerMenuAvailable() ? TRUE : FALSE;
+-    sBagPortMenu = gBagPortTall && gStartMenuPortMenu && controller->bagCtx->mode == BAG_MODE_NORMAL;
+-    sBagPortInstant = sBagPortMenu && gStartMenuPortInstantApp;
++    sBagPortApps = gBagPortTall && StartMenu_PortAppIsMenus(appMan);
++    sBagPortMenu = sBagPortApps && controller->bagCtx->mode == BAG_MODE_NORMAL;
++    sBagPortInstant = sBagPortApps && NitroPort_LowerMenuKeptShown();
+     sBagPortClosedInstantly = FALSE;
++    sBagPortFadeAsked = FALSE;
+     sBagPortReveal = sBagPortInstant ? 2 : 0;
+-    gStartMenuPortInstantApp = FALSE;
++    gStartMenuPortAppPress = -1;
+ 
+     if (gBagPortTall) {
+         NitroPort_LowerMenuHoldUpper(TRUE);
+@@ -717,10 +789,11 @@ int BagApplication_Main(ApplicationManager *appMan, int *state)
          NitroPort_LowerMenuKeepShown(FALSE);
      }
  
@@ -113,6 +263,84 @@ index 5569b04f..f6c2c041 100644
          NitroPort_LowerMenuTakePress();
      }
  #endif
+@@ -821,9 +894,22 @@ int BagApplication_Main(ApplicationManager *appMan, int *state)
+         break;
+     case BAG_APP_STATE_EXIT:
+ #ifdef SDK_PORT_3DS
+-        // (closed as it came: once the panel's black; for an app opened
+-        // from it, the screens made black then, while they're kept, a frame
+-        // before it goes: the 3DS shows the game's pictures a frame late)
++        // (the fade out asked for: in the panel, for what comes there too;
++        // else the DS's)
++        if (sBagPortFadeAsked) {
++            sBagPortFadeAsked = FALSE;
++
++            if (BagPort_LeavesInPanel(controller)) {
++                BagPort_Leave(controller);
++            } else {
++                BagPort_FadeOutAsTheDS();
++            }
++            break;
++        }
++
++        // (left in the panel: once it's black; for an app opened from it,
++        // the screens made black then, while they're kept, a frame before
++        // it goes: the 3DS shows the game's pictures a frame late)
+         if (sBagPortClosedInstantly) {
+             if (NitroPort_LowerMenuPanelFade() < PORT_FADE_BLACK) {
+                 break;
+@@ -898,14 +984,16 @@ int BagApplication_Exit(ApplicationManager *appMan, int *state)
+         GXLayers_SwapDisplay();
+         NitroPort_LowerMenuShow(FALSE);
+ 
+-        // (closed as it came: the start menu lets the upper screen go once
+-        // the field's back; after a fade (an item used, given...): the game's
+-        // once it's as bright as what was kept)
++        // (left in the panel: the upper screen kept for what comes next,
++        // the start menu letting it go once the field's back; after a fade
++        // (the Bicycle, the berry tag...): the game's once it's as bright
++        // as what was kept)
+         if (!sBagPortClosedInstantly) {
+             NitroPort_LowerMenuHoldUpper(FALSE);
+         }
+ 
+         gBagPortTall = FALSE;
++        sBagPortApps = FALSE;
+         sBagPortMenu = FALSE;
+         sBagPortInstant = FALSE;
+     }
+@@ -1508,12 +1596,7 @@ static int ProcessItemListInput_Normal(BagController *controller)
+         Sound_PlayEffect(SE_CONFIRM_sseq_3);
+         controller->bagCtx->selectedItem = ITEM_NONE;
+         controller->bagCtx->exitCode = BAG_EXIT_CODE_DONE;
+-
+-        BagPort_Leave(gStartMenuPortAppPress);
+-
+-        if (!sBagPortInstant) {
+-            App_StartScreenFade(TRUE, HEAP_ID_BAG);
+-        }
++        App_StartScreenFade(TRUE, HEAP_ID_BAG); // (in the panel: BagPort_LeavesInPanel)
+ 
+         return BAG_APP_STATE_EXIT;
+     }
+@@ -1604,17 +1687,6 @@ static u8 ProcessItemListMenuInput(BagController *interface)
+         Sound_PlayEffect(SE_CONFIRM_sseq_3);
+         interface->bagCtx->selectedItem = ITEM_NONE;
+         interface->bagCtx->exitCode = BAG_EXIT_CODE_DONE;
+-#ifdef SDK_PORT_3DS
+-        // (the lower menu's bag, opened from the menu: closed as it came,
+-        // the panel faded to black)
+-        if (sBagPortMenu) {
+-            BagPort_Leave(-1);
+-
+-            if (sBagPortInstant) {
+-                return ITEM_LIST_INPUT_EXIT_BAG;
+-            }
+-        }
+-#endif
+         App_StartScreenFade(TRUE, HEAP_ID_BAG);
+         return ITEM_LIST_INPUT_EXIT_BAG;
+     default:
 diff --git a/src/applications/party_menu/context_menu.c b/src/applications/party_menu/context_menu.c
 index 13cc8315..1b124656 100644
 --- a/src/applications/party_menu/context_menu.c
@@ -129,64 +357,29 @@ index 13cc8315..1b124656 100644
  #undef ScrollOut1
  }
 diff --git a/src/applications/party_menu/form_change.c b/src/applications/party_menu/form_change.c
-index e01b80d9..ce66fbda 100644
+index e01b80d9..eb16fc60 100644
 --- a/src/applications/party_menu/form_change.c
 +++ b/src/applications/party_menu/form_change.c
-@@ -39,6 +39,10 @@ static u32 AllocTexVram(u32 size, BOOL is4x4comp);
- static u32 AllocPaletteVram(u32 size, BOOL is4pltt);
- static void EmitterCallback(SPLEmitter *emitter);
+@@ -207,7 +207,14 @@ static void EmitterCallback(SPLEmitter *emitter)
+     PartyMenuFormChange *formChanger = ParticleSystem_GetEmitterCallbackParam();
  
+     SPLEmitter_SetPosX(emitter, sPartySlotParticlePositions[formChanger->partySlot][0]);
 +#ifdef SDK_PORT_3DS
-+#define PARTY_PORT_FORM_CHANGE_WAIT 20 // (the party tall: the form changed without the 3D sparkles)
++    // (the party tall, in the 3DS remaster's lower menu's panel: at the
++    // slot's icon, moved down with its row; 48 pixels are 1.953125 of the
++    // particles' units, the DS's rows apart)
++    SPLEmitter_SetPosY(emitter, sPartySlotParticlePositions[formChanger->partySlot][1] - PARTY_PORT_TALL_SLOT_DY(formChanger->partySlot) * FX32_CONST(1.953125) / 48);
++#else
+     SPLEmitter_SetPosY(emitter, sPartySlotParticlePositions[formChanger->partySlot][1]);
 +#endif
-+
- static const fx32 sPartySlotParticlePositions[][2] = {
-     { FX32_CONST(-4.0283203125), FX32_CONST(2.9296875) },
-     { FX32_CONST(1.220703125), FX32_CONST(2.8076171875) },
-@@ -92,6 +96,17 @@ BOOL PartyMenuFormChange_ChangeForm(PartyMenuApplication *app)
-         formChanger->state++;
-         break;
-     case 3:
-+#ifdef SDK_PORT_3DS
-+        // In the 3DS remaster's lower menu's panel (the party tall): no 3D
-+        // (the tall screen shows none past line 191, nor the menu over it),
-+        // so no sparkles; the effect's sound, and the icon changes when it
-+        // would have (PARTY_PORT_FORM_CHANGE_WAIT).
-+        if (gPartyPortTall) {
-+            Sound_PlayEffect(formChanger->species == SPECIES_GIRATINA ? SEQ_SE_PL_W467109_sseq : SEQ_SE_PL_W363_sseq);
-+            formChanger->state = PARTY_PORT_FORM_CHANGE_WAIT;
-+            break;
-+        }
-+#endif
-         SetupAnimation(app);
-         formChanger->state++;
-         break;
-@@ -144,6 +159,20 @@ BOOL PartyMenuFormChange_ChangeForm(PartyMenuApplication *app)
-         }
+ }
  
-         break;
-+#ifdef SDK_PORT_3DS
-+    case PARTY_PORT_FORM_CHANGE_WAIT:
-+        formChanger->elapsedFrames++;
-+
-+        if (formChanger->elapsedFrames == formChanger->framesBeforeFormChange) {
-+            PartyMenu_LoadMemberSpeciesIcon(app, app->currPartySlot);
-+        }
-+
-+        // (about as long as the sparkles go on after it)
-+        if (formChanger->elapsedFrames >= formChanger->framesBeforeFormChange + 20) {
-+            formChanger->state = 7;
-+        }
-+        break;
-+#endif
-     }
- 
-     return FALSE;
+ static int DrawParticleSystem(void)
 diff --git a/src/applications/party_menu/main.c b/src/applications/party_menu/main.c
-index 3872f766..2a1d3c75 100644
+index 3872f766..d8e2f0e3 100644
 --- a/src/applications/party_menu/main.c
 +++ b/src/applications/party_menu/main.c
-@@ -70,6 +70,76 @@
+@@ -70,6 +70,101 @@
  
  #ifdef SDK_PORT_3DS
  #include "port_wide_layout.h"
@@ -203,31 +396,34 @@ index 3872f766..2a1d3c75 100644
 +extern int NitroPort_LowerMenuPressPending(void);
 +extern int NitroPort_LowerMenuTakePress(void);
 +extern void NitroPort_LowerMenuKeepShown(int on);
++extern int NitroPort_LowerMenuKeptShown(void);
 +extern void NitroPort_LowerMenuFadePanel(int black);
 +extern int NitroPort_LowerMenuPanelFade(void);
 +#define PORT_CLEAR_NOW  (-1) // NITRO_LOWERMENU_CLEAR_NOW
 +#define PORT_FADE_BLACK 16   // (NitroPort_LowerMenuPanelFade: the panel black)
 +#define PORT_PANEL_DS   0    // NITRO_LOWERMENU_PANEL_DS
-+extern BOOL gStartMenuPortMenu;       // (start_menu.c)
-+extern BOOL gStartMenuPortInstantApp; // (start_menu.c)
 +extern int gStartMenuPortAppPress;    // (start_menu.c)
++extern BOOL StartMenu_PortAppIsMenus(ApplicationManager *appMan);
 +extern BOOL StartMenu_PortButtonOpensApp(int button);
 +extern void StartMenu_PortAppLeaving(int button);
 +
 +u8 gPartyPortTall;
 +
-+// The field's party, the lower start menu's (gStartMenuPortMenu), as it is
-+// in the field (PARTY_MENU_MODE_FIELD, also back from giving an item): one
-+// of the menu's buttons tapped while the cursor waits on the panels closes
-+// the party, and the start menu does what the button says. Any other tap
-+// on the menu, nobody's.
++// The lower start menu's party (StartMenu_PortAppIsMenus: opened by it,
++// from the field or from its other apps, not by one of them as its own): what comes next in the panel
++// comes there too (PartyPort_LeavesInPanel). As it is in the field
++// (PARTY_MENU_MODE_FIELD, also back from giving an item), one of the menu's
++// buttons tapped while the cursor waits on the panels closes it, and the
++// start menu does what the button says. Any other tap on the menu,
++// nobody's.
 +static BOOL sPartyPortMenu;
 +
-+// Opened from the lower menu, the party comes behind the panel faded to
-+// black (start_menu.c; the upper screen keeping the field) and pops in once
-+// it's whole, two frames on; closed (B, CANCEL, or one of the menu's
-+// buttons tapped), the panel fades to black again, the menu kept on, and
-+// the field comes back behind it (or the bag, or the app the button opens).
++// The lower menu's apps come and go behind its panel faded to black, the
++// menu kept on (NitroPort_LowerMenuKeptShown) and the upper screen keeping
++// the field: the party comes so from the field, the bag or the summary and
++// pops in once it's whole, two frames on; left for one of them (B, CANCEL
++// or a menu button, the summary, an item to give...), the panel fades to
++// black again and it goes, the next one coming behind it.
 +static BOOL sPartyPortInstant;
 +static BOOL sPartyPortClosedInstantly;
 +static int sPartyPortReveal;
@@ -243,27 +439,49 @@ index 3872f766..2a1d3c75 100644
 +    return press >= 0 && press < PARTY_PORT_MENU_BUTTONS ? press : -1;
 +}
 +
-+// The party closed by the player (B, CANCEL: press -1; a menu button):
-+// opened from the menu, it goes as it came, the panel faded to black first.
-+// FALSE: closed with the DS's fade.
-+static BOOL PartyPort_Leave(int press)
++// Whether the party's left for what comes in the panel too (the start
++// menu's: start_menu.c): closed (B, CANCEL, a menu button: the field, the
++// bag, or the app the button opens), the summary (also to choose a move to
++// forget), the bag to give an item, back to the bag. (Anything else, a
++// field move, the mail, an evolution: with the DS's fade.)
++static BOOL PartyPort_LeavesInPanel(PartyMenuApplication *application)
 +{
-+    if (!sPartyPortInstant) {
++    if (!sPartyPortMenu) {
 +        return FALSE;
 +    }
 +
++    switch (application->partyMenu->menuSelectionResult) {
++    case PARTY_MENU_EXIT_CODE_DONE:
++    case PARTY_MENU_EXIT_CODE_SUMMARY:
++    case PARTY_MENU_EXIT_CODE_OVERWRITE_MOVE_TM_HM:
++    case PARTY_MENU_EXIT_CODE_OVERWRITE_MOVE_LEVEL_UP:
++    case PARTY_MENU_EXIT_CODE_GIVE_ITEM:
++    case PARTY_MENU_EXIT_CODE_RETURN_TO_BAG:
++        return TRUE;
++    default:
++        return FALSE;
++    }
++}
++
++// The party leaving so: the panel faded to black first, the menu kept on.
++// (Closed: the menu button tapped, -1 for B or CANCEL, the start menu's.)
++static void PartyPort_Leave(PartyMenuApplication *application)
++{
 +    sPartyPortClosedInstantly = TRUE;
 +    sPartyPortBlack = FALSE;
-+    gStartMenuPortAppPress = press;
 +    NitroPort_LowerMenuKeepShown(TRUE);
 +    NitroPort_LowerMenuFadePanel(TRUE);
-+    StartMenu_PortAppLeaving(press);
-+    return TRUE;
++
++    if (application->partyMenu->menuSelectionResult == PARTY_MENU_EXIT_CODE_DONE) {
++        StartMenu_PortAppLeaving(gStartMenuPortAppPress);
++    } else {
++        gStartMenuPortAppPress = -1;
++    }
 +}
  
  // The party across the 3DS remaster's wider upper screen (a reference drawn
  // for it, 2026-10-16): the panels, their sprites and the CANCEL button 32
-@@ -350,6 +420,360 @@ static const GridMenuCursorPosition sCursorPosTable_SelectEgg[] = {
+@@ -350,6 +445,360 @@ static const GridMenuCursorPosition sCursorPosTable_SelectEgg[] = {
  };
  // clang-format on
  
@@ -624,7 +842,7 @@ index 3872f766..2a1d3c75 100644
  static const u16 sFieldMoves[FIELD_MOVE_MAX] = {
      [FIELD_MOVE_CUT] = MOVE_CUT,
      [FIELD_MOVE_FLY] = MOVE_FLY,
-@@ -389,11 +813,50 @@ static BOOL PartyMenu_Init(ApplicationManager *appMan, int *state)
+@@ -389,11 +838,50 @@ static BOOL PartyMenu_Init(ApplicationManager *appMan, int *state)
      narc = NARC_ctor(NARC_INDEX_GRAPHIC__PL_PLIST_GRA, HEAP_ID_PARTY_MENU);
      application = NewPartyMenuApplication(appMan);
  
@@ -633,11 +851,11 @@ index 3872f766..2a1d3c75 100644
 +    // main engine on the lower screen, the upper screen keeping what it
 +    // shows (the field), the panel tall and untouched.
 +    gPartyPortTall = NitroPort_LowerMenuAvailable() ? TRUE : FALSE;
-+    sPartyPortMenu = gPartyPortTall && gStartMenuPortMenu;
-+    sPartyPortInstant = sPartyPortMenu && application->partyMenu->mode == PARTY_MENU_MODE_FIELD && gStartMenuPortInstantApp;
++    sPartyPortMenu = gPartyPortTall && StartMenu_PortAppIsMenus(appMan);
++    sPartyPortInstant = sPartyPortMenu && NitroPort_LowerMenuKeptShown();
 +    sPartyPortClosedInstantly = FALSE;
 +    sPartyPortReveal = sPartyPortInstant ? 2 : 0;
-+    gStartMenuPortInstantApp = FALSE;
++    gStartMenuPortAppPress = -1;
 +
 +    if (gPartyPortTall) {
 +        NitroPort_LowerMenuHoldUpper(TRUE);
@@ -675,7 +893,7 @@ index 3872f766..2a1d3c75 100644
      EnableTouchPad();
      InitializeTouchPad(4);
      Sound_SetSceneAndPlayBGM(SOUND_SCENE_SUB_57, SEQ_NONE, 0);
-@@ -402,7 +865,9 @@ static BOOL PartyMenu_Init(ApplicationManager *appMan, int *state)
+@@ -402,7 +890,9 @@ static BOOL PartyMenu_Init(ApplicationManager *appMan, int *state)
      PartyMenu_InitSpriteResources(application);
      PartyMenu_InitSprites(application);
  #ifdef SDK_PORT_3DS
@@ -686,7 +904,7 @@ index 3872f766..2a1d3c75 100644
  #endif
  
      SetupRequestedMode(application);
-@@ -456,6 +921,30 @@ static BOOL PartyMenu_Main(ApplicationManager *appMan, int *state)
+@@ -456,6 +946,30 @@ static BOOL PartyMenu_Main(ApplicationManager *appMan, int *state)
  {
      PartyMenuApplication *partyMenu = ApplicationManager_Data(appMan);
  
@@ -717,14 +935,14 @@ index 3872f766..2a1d3c75 100644
      switch (*state) {
      case PARTY_MENU_STATE_START:
          *state = sub_0207E490(partyMenu);
-@@ -569,10 +1058,38 @@ static BOOL PartyMenu_Main(ApplicationManager *appMan, int *state)
+@@ -569,10 +1083,38 @@ static BOOL PartyMenu_Main(ApplicationManager *appMan, int *state)
          }
          break;
      case PARTY_MENU_STATE_FADE_OUT:
 +#ifdef SDK_PORT_3DS
-+        // (opened from the menu and closed (B, CANCEL, a menu button): as
-+        // it came, the panel faded to black)
-+        if (partyMenu->partyMenu->menuSelectionResult == PARTY_MENU_EXIT_CODE_DONE && PartyPort_Leave(gStartMenuPortAppPress)) {
++        // (left for what comes in the panel too: the panel faded to black)
++        if (PartyPort_LeavesInPanel(partyMenu)) {
++            PartyPort_Leave(partyMenu);
 +            *state = PARTY_MENU_STATE_WAIT_FADE_OUT;
 +            break;
 +        }
@@ -734,9 +952,9 @@ index 3872f766..2a1d3c75 100644
          break;
      case PARTY_MENU_STATE_WAIT_FADE_OUT:
 +#ifdef SDK_PORT_3DS
-+        // (closed as it came: once the panel's black; for an app opened
-+        // from it, the screens made black then, while they're kept, a frame
-+        // before it goes: the 3DS shows the game's pictures a frame late)
++        // (left in the panel: once it's black; for an app opened from it,
++        // the screens made black then, while they're kept, a frame before
++        // it goes: the 3DS shows the game's pictures a frame late)
 +        if (sPartyPortClosedInstantly) {
 +            if (NitroPort_LowerMenuPanelFade() < PORT_FADE_BLACK) {
 +                break;
@@ -756,7 +974,7 @@ index 3872f766..2a1d3c75 100644
          if (IsScreenFadeDone() == TRUE) {
              partyMenu->partyMenu->selectedMonSlot = partyMenu->currPartySlot;
              return TRUE;
-@@ -581,7 +1098,9 @@ static BOOL PartyMenu_Main(ApplicationManager *appMan, int *state)
+@@ -581,7 +1123,9 @@ static BOOL PartyMenu_Main(ApplicationManager *appMan, int *state)
      }
  
  #ifdef SDK_PORT_3DS
@@ -767,7 +985,7 @@ index 3872f766..2a1d3c75 100644
  #endif
      PartyMenu_UpdateMemberIcons(partyMenu);
      PartyMenu_UpdateTouchButtonEffect(partyMenu);
-@@ -812,6 +1331,28 @@ static BOOL PartyMenu_Exit(ApplicationManager *appMan, int *state)
+@@ -812,6 +1356,29 @@ static BOOL PartyMenu_Exit(ApplicationManager *appMan, int *state)
      ApplicationManager_FreeData(appMan);
      Heap_Destroy(HEAP_ID_PARTY_MENU);
  
@@ -780,9 +998,10 @@ index 3872f766..2a1d3c75 100644
 +        GXLayers_SwapDisplay();
 +        NitroPort_LowerMenuShow(FALSE);
 +
-+        // (closed as it came: the start menu lets the upper screen go once
-+        // the field's back, or the bag comes; after a fade (the summary, a
-+        // field move...): the game's once it's as bright as what was kept)
++        // (left in the panel: the upper screen kept for what comes next,
++        // the start menu letting it go once the field's back; after a fade
++        // (a field move, the mail...): the game's once it's as bright as
++        // what was kept)
 +        if (!sPartyPortClosedInstantly) {
 +            NitroPort_LowerMenuHoldUpper(FALSE);
 +        }
@@ -796,7 +1015,7 @@ index 3872f766..2a1d3c75 100644
      return 1;
  }
  
-@@ -1176,6 +1717,12 @@ static void SetupRequestedMode(PartyMenuApplication *application)
+@@ -1176,6 +1743,12 @@ static void SetupRequestedMode(PartyMenuApplication *application)
          application->cursorPosTable = sCursorPosTable_Basic;
      }
  
@@ -809,7 +1028,7 @@ index 3872f766..2a1d3c75 100644
      if (application->partyMenu->mode != PARTY_MENU_MODE_SELECT_CONFIRM
          && application->partyMenu->mode != PARTY_MENU_MODE_BATTLE_TOWER
          && application->partyMenu->mode != PARTY_MENU_MODE_BATTLE_CASTLE
-@@ -1344,6 +1891,9 @@ static void DrawMemberPanel(PartyMenuApplication *application, u8 slot, u8 panel
+@@ -1344,6 +1917,9 @@ static void DrawMemberPanel(PartyMenuApplication *application, u8 slot, u8 panel
  
      Bg_ChangeTilemapRectPalette(application->bgConfig, 2, panelXPos, panelYPos, MEMBER_PANEL_WIDTH, MEMBER_PANEL_HEIGHT, 3 + slot);
      PartyMenu_UpdateSlotPalette(application, slot);
@@ -819,7 +1038,7 @@ index 3872f766..2a1d3c75 100644
  }
  
  static void SetupRequestedModePanels(PartyMenuApplication *application)
-@@ -1356,6 +1906,12 @@ static void SetupRequestedModePanels(PartyMenuApplication *application)
+@@ -1356,6 +1932,12 @@ static void SetupRequestedModePanels(PartyMenuApplication *application)
          templates = sMemberPanelTemplates[0];
      }
  
@@ -941,11 +1160,162 @@ index 18592a39..1fb86dce 100644
  }
  
  static void PrintMemberEvoComment(PartyMenuApplication *application, u8 slot, u8 which)
+diff --git a/src/applications/pokemon_summary_screen/main.c b/src/applications/pokemon_summary_screen/main.c
+index 021c56d1..a7652264 100644
+--- a/src/applications/pokemon_summary_screen/main.c
++++ b/src/applications/pokemon_summary_screen/main.c
+@@ -63,6 +63,36 @@
+ #ifdef SDK_PORT_3DS
+ #include "port_wide_layout.h"
+ 
++// The 3DS remaster's lower menu (3ds_port/nitro/include/
++// nitro_port_lowermenu.h; the game has no port headers: plain calls).
++extern int NitroPort_LowerMenuAvailable(void);
++extern void NitroPort_LowerMenuShow(int on);
++extern void NitroPort_LowerMenuSetTall(int tall);
++extern void NitroPort_LowerMenuSetPanel(int shows);
++extern void NitroPort_LowerMenuSetPanelTouch(int on);
++extern void NitroPort_LowerMenuHoldUpper(int hold);
++extern int NitroPort_LowerMenuPressPending(void);
++extern int NitroPort_LowerMenuTakePress(void);
++extern void NitroPort_LowerMenuKeepShown(int on);
++extern int NitroPort_LowerMenuKeptShown(void);
++extern void NitroPort_LowerMenuFadePanel(int black);
++extern int NitroPort_LowerMenuPanelFade(void);
++extern BOOL StartMenu_PortAppIsMenus(ApplicationManager *appMan);
++#define PORT_CLEAR_NOW  (-1) // NITRO_LOWERMENU_CLEAR_NOW
++#define PORT_FADE_BLACK 16   // (NitroPort_LowerMenuPanelFade: the panel black)
++#define PORT_PANEL_DS   0    // NITRO_LOWERMENU_PANEL_DS
++
++// The summary in the lower menu's panel: opened from the lower menu's party
++// (party_menu/main.c), it comes behind the panel faded to black, the menu
++// kept on (NitroPort_LowerMenuKeptShown), and pops in once it's whole, two
++// frames on: its main screen (the pages, the Pokemon) on the lower screen,
++// at the DS's size; the upper screen keeps the field, its touch screen (the
++// buttons) not shown, the panel's touches nobody's (its buttons are the
++// pad's too). Left, it goes the same way, the panel faded to black first,
++// and the party comes behind it. The menu's taps meanwhile: nobody's.
++static BOOL sSummaryPortPanel;
++static int sSummaryPortReveal;
++
+ // The summary across the 3DS remaster's wider upper screen (a reference
+ // drawn for it, 2026-10-16): the left column (the name, the picture, the
+ // markings) moved toward the screen's left edge, the item bars to it; the
+@@ -162,6 +192,11 @@ static const short sSummaryWideExit[][8] = {
+ 
+ static void SetWideLayout(PokemonSummaryScreen *summaryScreen, BOOL moveInfo)
+ {
++    // (in the panel: as on the DS)
++    if (sSummaryPortPanel) {
++        return;
++    }
++
+     switch (summaryScreen->page) {
+     case SUMMARY_PAGE_INFO:
+         WIDE_LAYOUT(WIDE_ENGINE_MAIN, sSummaryWideInfo);
+@@ -355,6 +390,22 @@ static int PokemonSummaryScreen_Init(ApplicationManager *appMan, int *state)
+     SetAutorepeat(4, 8);
+     Heap_Create(HEAP_ID_APPLICATION, HEAP_ID_POKEMON_SUMMARY_SCREEN, HEAP_ALLOCATION_SIZE);
+ 
++#ifdef SDK_PORT_3DS
++    // In the lower menu's panel (from its party): the main engine on the
++    // lower screen, the upper screen keeping what it shows (the field).
++    sSummaryPortPanel = NitroPort_LowerMenuAvailable() && NitroPort_LowerMenuKeptShown() && StartMenu_PortAppIsMenus(appMan);
++    sSummaryPortReveal = sSummaryPortPanel ? 2 : 0;
++
++    if (sSummaryPortPanel) {
++        NitroPort_LowerMenuHoldUpper(TRUE);
++        NitroPort_LowerMenuShow(TRUE);
++        NitroPort_LowerMenuSetTall(FALSE);
++        NitroPort_LowerMenuSetPanel(PORT_PANEL_DS);
++        NitroPort_LowerMenuSetPanelTouch(FALSE);
++        GX_SetDispSelect(GX_DISP_SELECT_SUB_MAIN);
++    }
++#endif
++
+     NARC *narc = NARC_ctor(NARC_INDEX_GRAPHIC__PL_PST_GRA, HEAP_ID_POKEMON_SUMMARY_SCREEN);
+     PokemonSummaryScreen *summaryScreen = ApplicationManager_NewData(appMan, sizeof(PokemonSummaryScreen), HEAP_ID_POKEMON_SUMMARY_SCREEN);
+ 
+@@ -398,8 +449,30 @@ static int PokemonSummaryScreen_Main(ApplicationManager *appMan, int *state)
+ {
+     PokemonSummaryScreen *summaryScreen = ApplicationManager_Data(appMan);
+ 
++#ifdef SDK_PORT_3DS
++    // (come behind the black panel: popping in once it's whole)
++    if (sSummaryPortReveal > 0 && --sSummaryPortReveal == 0) {
++        NitroPort_LowerMenuFadePanel(PORT_CLEAR_NOW);
++        NitroPort_LowerMenuKeepShown(FALSE);
++    }
++
++    // (the menu tapped: nobody's)
++    if (sSummaryPortPanel && NitroPort_LowerMenuPressPending() >= 0) {
++        NitroPort_LowerMenuTakePress();
++    }
++#endif
++
+     switch (*state) {
+     case SUMMARY_STATE_TRANSITION_IN:
++#ifdef SDK_PORT_3DS
++        // (in the panel: no fade, the Pokemon's cry once it's popped in)
++        if (sSummaryPortPanel) {
++            if (sSummaryPortReveal == 0) {
++                *state = SUMMARY_STATE_WAIT_TRANSITION;
++            }
++            break;
++        }
++#endif
+         App_StartScreenFade(FALSE, HEAP_ID_POKEMON_SUMMARY_SCREEN);
+         *state = SUMMARY_STATE_WAIT_TRANSITION;
+         break;
+@@ -496,6 +569,16 @@ static int PokemonSummaryScreen_Exit(ApplicationManager *appMan, int *state)
+     ApplicationManager_FreeData(appMan);
+     Heap_Destroy(HEAP_ID_POKEMON_SUMMARY_SCREEN);
+ 
++#ifdef SDK_PORT_3DS
++    // Out of the lower menu's panel: the screens as they were (the menu
++    // kept, its panel black, the upper screen kept, for the party).
++    if (sSummaryPortPanel) {
++        GXLayers_SwapDisplay();
++        NitroPort_LowerMenuShow(FALSE);
++        sSummaryPortPanel = FALSE;
++    }
++#endif
++
+     return TRUE;
+ }
+ 
+@@ -1164,12 +1247,26 @@ static int WaitForPoffinFeedMsgInput(PokemonSummaryScreen *dummy)
+ 
+ static u8 SummaryScreenTransitionOut(PokemonSummaryScreen *dummy)
+ {
++#ifdef SDK_PORT_3DS
++    // (in the panel: the panel faded to black, the menu kept on, the party
++    // coming behind it)
++    if (sSummaryPortPanel) {
++        NitroPort_LowerMenuKeepShown(TRUE);
++        NitroPort_LowerMenuFadePanel(TRUE);
++        return SUMMARY_STATE_WAIT_EXIT;
++    }
++#endif
+     App_StartScreenFade(TRUE, HEAP_ID_POKEMON_SUMMARY_SCREEN);
+     return SUMMARY_STATE_WAIT_EXIT;
+ }
+ 
+ static u8 ScreenTransitionIsDone(PokemonSummaryScreen *dummy)
+ {
++#ifdef SDK_PORT_3DS
++    if (sSummaryPortPanel) {
++        return NitroPort_LowerMenuPanelFade() >= PORT_FADE_BLACK;
++    }
++#endif
+     return IsScreenFadeDone() == TRUE;
+ }
+ 
 diff --git a/src/start_menu.c b/src/start_menu.c
-index 4c591840..d6b5628a 100644
+index 4c591840..db988d10 100644
 --- a/src/start_menu.c
 +++ b/src/start_menu.c
-@@ -196,8 +196,11 @@ static void StartMenu_ProcessGivenMail(FieldSystem *fieldSystem, StartMenu *menu
+@@ -196,8 +196,13 @@ static void StartMenu_ProcessGivenMail(FieldSystem *fieldSystem, StartMenu *menu
  static BOOL StartMenu_PortButtons(FieldSystem *fieldSystem, u32 hideOptionFlags, u32 *outButtons);
  static void StartMenu_PortInit(FieldSystem *fieldSystem, StartMenu *menu, u32 optionCount, u32 buttons);
  static BOOL StartMenu_PortSelect(FieldTask *fieldTask);
@@ -956,10 +1326,23 @@ index 4c591840..d6b5628a 100644
 +static BOOL StartMenu_PortBagFromApp(FieldTask *fieldTask);
 +BOOL StartMenu_PortButtonOpensApp(int button);
 +void StartMenu_PortAppLeaving(int button);
++BOOL StartMenu_PortAppIsMenus(ApplicationManager *appMan);
++static void StartMenu_PortAppGone(void);
  static void StartMenu_PortShowPanel(FieldSystem *fieldSystem);
  static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, int button);
  static BOOL StartMenu_PortExitTownMap(FieldTask *fieldTask);
-@@ -336,21 +339,23 @@ extern void NitroPort_LowerMenuFadeToPanel(int shows);
+@@ -314,8 +319,10 @@ extern int NitroPort_LowerMenuTakePress(void);
+ extern int NitroPort_LowerMenuPressPending(void);
+ extern int NitroPort_LowerMenuAvailable(void);
+ extern void NitroPort_LowerMenuHoldUpper(int hold);
++extern int NitroPort_LowerMenuUpperHeld(void);
+ extern int NitroPort_LowerMenuPressDouble(void);
+ extern void NitroPort_LowerMenuKeepShown(int on);
++extern int NitroPort_LowerMenuKeptShown(void);
+ extern void NitroPort_LowerMenuFadePanel(int black);
+ extern int NitroPort_LowerMenuPanelFade(void);
+ extern void NitroPort_LowerMenuFadeToPanel(int shows);
+@@ -336,21 +343,27 @@ extern void NitroPort_LowerMenuFadeToPanel(int shows);
  // with X, too).
  static BOOL sPortTapOpening; // a tap opens the menu this frame (no opening sound)
  
@@ -985,19 +1368,34 @@ index 4c591840..d6b5628a 100644
 +// closes it (back to walking), BAG from the party and POKéMON from the bag
 +// switch to the other in the panel, TRAINER, POKéDEX and OPTIONS open
 +// straight from it, SAVE, MAP and POKéTCH back in the field
-+// (StartMenu_PortSwitchFromApp). (Left another way, an item used, the
-+// summary..., what comes next comes and goes with the DS's fades.)
-+BOOL gStartMenuPortMenu;       // the start menu the lower one, while its apps run (read by the bag and the party)
-+BOOL gStartMenuPortInstantApp; // (read by the bag and the party: bag/main.c, party_menu/main.c)
++// (StartMenu_PortSwitchFromApp). Between the panel's apps (the bag, the
++// party, the summary: an item used on a Pokemon or given, the summary and
++// back...), the same: one goes behind the black panel, the next comes
++// (NitroPort_LowerMenuKeptShown: StartMenu_PortAppGone). (Left another way,
++// a field move, the mail, an evolution..., what comes next comes and goes
++// with the DS's fades.)
++BOOL gStartMenuPortMenu;       // the start menu the lower one, while its apps run (StartMenu_PortAppIsMenus)
 +int gStartMenuPortAppPress = -1; // (the bag's or the party's: one of the menu's buttons tapped in it)
-+static BOOL sPortInstant;      // the bag or the party opened so, till the screens are let go back in the field
++static BOOL sPortInstant;      // the panel's apps coming and going so, till the screens are let go back in the field
++static FieldSystem *sPortFieldSystem; // (StartMenu_PortAppIsMenus; none once walking again)
  static int sPortReveal;        // frames till they're let go (the field drawn whole)
 -static int sPortAfterReveal = -1; // a button tapped in the bag, acted on then
 +static int sPortAfterReveal = -1; // a button tapped in the bag or the party, acted on then
  static int sPortInjectedPress = -1; // (that button, as if pressed now)
  
  // The panel beside the buttons shows the Town Map (once the player has it),
-@@ -687,9 +692,9 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
+@@ -613,8 +626,8 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
+             StartMenu_InitMenu(fieldTask);
+             StartMenu_PrintBallCount(fieldTask);
+ #ifdef SDK_PORT_3DS
+-            // (back from the bag, the panel black: the screens let go once
+-            // the field's drawn whole, a few frames on)
++            // (back from the panel's apps, the panel black: the screens let
++            // go once the field's drawn whole, a few frames on)
+             if (sPortInstant) {
+                 sPortReveal = 3;
+             } else {
+@@ -687,9 +700,9 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
              StartMenu_PortShowPanel(fieldSystem);   // (back from an app: the tab chosen)
          }
  
@@ -1010,7 +1408,15 @@ index 4c591840..d6b5628a 100644
              sPortAfterReveal = -1;
              menu->state = START_MENU_STATE_END;
              break;
-@@ -1168,7 +1173,13 @@ static BOOL StartMenu_SelectPokemon(FieldTask *fieldTask)
+@@ -728,6 +741,7 @@ static void StartMenu_InitMenu(FieldTask *fieldTask)
+ 
+     sPortMode = NitroPort_LowerMenuOn() && StartMenu_PortButtons(fieldSystem, menu->hideOptionFlags, &portButtons);
+     gStartMenuPortMenu = sPortMode;
++    sPortFieldSystem = fieldSystem;
+ #endif
+ 
+     Window_Add(fieldSystem->bgConfig, &menu->primaryWindow, BG_LAYER_MAIN_3, 20, 1, 11, optionCount * 3, 12, BASE_TILE_MESSAGE_WINDOW - 11 * 22);
+@@ -1168,7 +1182,13 @@ static BOOL StartMenu_SelectPokemon(FieldTask *fieldTask)
  {
      StartMenu *menu = FieldTask_GetEnv(fieldTask);
  
@@ -1024,38 +1430,28 @@ index 4c591840..d6b5628a 100644
  
      menu->callback = StartMenu_OpenPartyMenu;
      menu->state = START_MENU_STATE_APP_START;
-@@ -1181,6 +1192,10 @@ static BOOL StartMenu_OpenPartyMenu(FieldTask *fieldTask)
+@@ -1181,6 +1201,9 @@ static BOOL StartMenu_OpenPartyMenu(FieldTask *fieldTask)
      FieldSystem *fieldSystem = FieldTask_GetFieldSystem(fieldTask);
      StartMenu *menu = FieldTask_GetEnv(fieldTask);
  
 +#ifdef SDK_PORT_3DS
-+    gStartMenuPortInstantApp = sPortInstant;
 +    gStartMenuPortAppPress = -1;
 +#endif
      menu->taskData = FieldSystem_OpenPartyMenu(fieldSystem, &menu->fieldMoveContext, 0);
      menu->callback = StartMenu_ExitPartyMenu;
  
-@@ -1196,6 +1211,19 @@ BOOL StartMenu_ExitPartyMenu(FieldTask *fieldTask)
+@@ -1196,6 +1219,10 @@ BOOL StartMenu_ExitPartyMenu(FieldTask *fieldTask)
      memcpy(partyMenu, menu->taskData, sizeof(PartyMenu));
      Heap_Free(menu->taskData);
  
 +#ifdef SDK_PORT_3DS
-+    // (the party left another way than closed (the summary, a field move,
-+    // an item given...): it faded out, as on the DS; what comes next fades
-+    // in)
-+    if (partyMenu->menuSelectionResult != PARTY_MENU_EXIT_CODE_DONE) {
-+        if (sPortInstant) {
-+            NitroPort_LowerMenuSelect(-1); // (POKéMON lit while the party was up: as StartMenu_Close leaves it)
-+        }
-+        sPortInstant = FALSE;
-+        gStartMenuPortAppPress = -1;
-+    }
++    StartMenu_PortAppGone();
 +#endif
 +
      PokemonSummary *summary;
      MenuEvolutionData *evoData;
      switch (partyMenu->menuSelectionResult) {
-@@ -1374,6 +1402,11 @@ BOOL StartMenu_ExitPartyMenu(FieldTask *fieldTask)
+@@ -1374,6 +1401,11 @@ BOOL StartMenu_ExitPartyMenu(FieldTask *fieldTask)
              menu->taskData = FieldSystem_OpenBag(fieldSystem, &menu->itemUseCtx);
              StartMenu_SetCallback(menu, StartMenu_ExitBag);
          } else {
@@ -1067,7 +1463,15 @@ index 4c591840..d6b5628a 100644
              FieldSystem_StartFieldMap(fieldSystem);
              menu->state = START_MENU_STATE_REINIT;
          }
-@@ -1420,6 +1453,24 @@ static BOOL StartMenu_Bag(FieldTask *fieldTask)
+@@ -1408,7 +1440,6 @@ static BOOL StartMenu_Bag(FieldTask *fieldTask)
+     StartMenu *menu = FieldTask_GetEnv(fieldTask);
+ 
+ #ifdef SDK_PORT_3DS
+-    gStartMenuPortInstantApp = sPortInstant;
+     gStartMenuPortAppPress = -1;
+ #endif
+     menu->taskData = FieldSystem_OpenBag(fieldSystem, &menu->itemUseCtx);
+@@ -1420,6 +1451,23 @@ static BOOL StartMenu_Bag(FieldTask *fieldTask)
      return FALSE;
  }
  
@@ -1079,7 +1483,6 @@ index 4c591840..d6b5628a 100644
 +    FieldSystem *fieldSystem = FieldTask_GetFieldSystem(fieldTask);
 +    StartMenu *menu = FieldTask_GetEnv(fieldTask);
 +
-+    gStartMenuPortInstantApp = sPortInstant;
 +    gStartMenuPortAppPress = -1;
 +    menu->taskData = FieldSystem_OpenBag(fieldSystem, &menu->itemUseCtx);
 +    BagContext_SetSelectedMonSlot(menu->taskData, 0);
@@ -1092,7 +1495,23 @@ index 4c591840..d6b5628a 100644
  static BOOL StartMenu_ExitBag(FieldTask *fieldTask)
  {
      FieldSystem *fieldSystem = FieldTask_GetFieldSystem(fieldTask);
-@@ -1512,7 +1563,7 @@ static BOOL StartMenu_ExitBag(FieldTask *fieldTask)
+@@ -1430,14 +1478,7 @@ static BOOL StartMenu_ExitBag(FieldTask *fieldTask)
+     Heap_Free(menu->taskData);
+ 
+ #ifdef SDK_PORT_3DS
+-    // (the bag left another way than closed (an item used, given...): it
+-    // faded out, as on the DS; back in the field, a fade in)
+-    if (BagContext_GetExitCode(bagCtx) != BAG_EXIT_CODE_DONE) {
+-        if (sPortInstant) {
+-            NitroPort_LowerMenuSelect(-1); // (BAG lit while the bag was up: as StartMenu_Close leaves it)
+-        }
+-        sPortInstant = FALSE;
+-    }
++    StartMenu_PortAppGone();
+ #endif
+ 
+     switch (BagContext_GetExitCode(bagCtx)) {
+@@ -1512,7 +1553,7 @@ static BOOL StartMenu_ExitBag(FieldTask *fieldTask)
      case BAG_EXIT_CODE_DONE:
      default:
  #ifdef SDK_PORT_3DS
@@ -1101,7 +1520,42 @@ index 4c591840..d6b5628a 100644
              break;
          }
  #endif
-@@ -2612,12 +2663,15 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
+@@ -1750,6 +1791,10 @@ static BOOL StartMenu_ExitSummary(FieldTask *fieldTask)
+     memcpy(summary, menu->taskData, sizeof(PokemonSummary));
+     Heap_Free(menu->taskData);
+ 
++#ifdef SDK_PORT_3DS
++    StartMenu_PortAppGone();
++#endif
++
+     switch (summary->mode) {
+     case SUMMARY_MODE_SELECT_MOVE: {
+         PartyMenu *partyMenu = Heap_Alloc(HEAP_ID_FIELD2, sizeof(PartyMenu));
+@@ -2544,6 +2589,23 @@ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
+ 
+     sPortTapOpening = FALSE;   // (a tap that opened nothing last frame)
+ 
++    // (walking: nothing the menu opened is up. The menu kept shown, its
++    // panel black, or the upper screen held (an app gone a way not
++    // foreseen): the game's again.)
++    if (sPortInstant || NitroPort_LowerMenuKeptShown()) {
++        sPortInstant = FALSE;
++        NitroPort_LowerMenuKeepShown(FALSE);
++
++        if (NitroPort_LowerMenuUpperHeld() > 0) {
++            NitroPort_LowerMenuHoldUpper(PORT_LET_GO_NOW);
++        }
++    }
++
++    // (and no app of the start menu's up: none counted as its until it opens
++    // one again)
++    gStartMenuPortMenu = FALSE;
++    sPortFieldSystem = NULL;
++
+     if (!NitroPort_LowerMenuOn()) {
+         return;
+     }
+@@ -2612,12 +2674,15 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
      return TRUE;
  }
  
@@ -1123,7 +1577,7 @@ index 4c591840..d6b5628a 100644
  {
      FieldSystem *fieldSystem = FieldTask_GetFieldSystem(fieldTask);
      StartMenu *menu = FieldTask_GetEnv(fieldTask);
-@@ -2626,21 +2680,29 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
+@@ -2626,21 +2691,29 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
  
      gStartMenuPortAppPress = -1;
  
@@ -1160,7 +1614,7 @@ index 4c591840..d6b5628a 100644
      if (sPortInstant) {
          sPortInstant = FALSE;
          SetScreenColorBrightness(DS_SCREEN_MAIN, COLOR_BLACK);
-@@ -2659,11 +2721,11 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
+@@ -2659,11 +2732,11 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
      return TRUE;
  }
  
@@ -1177,13 +1631,42 @@ index 4c591840..d6b5628a 100644
  {
      if (button >= 0 && button < PORT_BUTTON_COUNT) {
          sPortCursor = button;
-@@ -2673,13 +2735,15 @@ void StartMenu_PortBagLeaving(int button)
+@@ -2673,13 +2746,44 @@ void StartMenu_PortBagLeaving(int button)
      sPortPanelChoice = button == PORT_BUTTON_POKETCH ? PORT_PANEL_DS : PORT_PANEL_MAP;
  }
  
 -// The app a button opens straight from the bag (NULL: the button's acted on
 -// back in the field).
 -static FieldTaskFunc StartMenu_PortAppFromBag(int button)
++// (the bag's, the party's and the summary's) Whether the lower start menu
++// opened this app (from the field, or from its other apps): the field's own
++// app, with the start menu's task the field's (not a script's, a registered
++// item's, nor an app's own: the Poffin Case's party).
++BOOL StartMenu_PortAppIsMenus(ApplicationManager *appMan)
++{
++    return gStartMenuPortMenu && sPortFieldSystem != NULL && sPortFieldSystem->task != NULL &&
++        sPortFieldSystem->task->func == StartMenu_Main && sPortFieldSystem->processManager->child == appMan;
++}
++
++// The bag, the party or the summary gone: left in the panel (the menu
++// kept, its panel black), what comes next comes behind it (the next of
++// them, popping in, or the field); left with the DS's fade, what comes
++// next fades in, and the field after it.
++static void StartMenu_PortAppGone(void)
++{
++    if (NitroPort_LowerMenuKeptShown()) {
++        sPortInstant = TRUE;
++        return;
++    }
++
++    if (sPortInstant) {
++        NitroPort_LowerMenuSelect(-1); // (its button lit while it was up: as StartMenu_Close leaves it)
++    }
++
++    sPortInstant = FALSE;
++    gStartMenuPortAppPress = -1;
++}
++
 +// The app a button opens straight from the bag or the party (NULL: the
 +// button's acted on back in the field).
 +static FieldTaskFunc StartMenu_PortAppFromApp(int button)
@@ -1196,7 +1679,7 @@ index 4c591840..d6b5628a 100644
      case PORT_BUTTON_TRAINER:
          return StartMenu_TrainerCase;
      case PORT_BUTTON_POKEDEX:
-@@ -2691,10 +2755,12 @@ static FieldTaskFunc StartMenu_PortAppFromBag(int button)
+@@ -2691,10 +2795,12 @@ static FieldTaskFunc StartMenu_PortAppFromBag(int button)
      }
  }
  
@@ -1211,7 +1694,7 @@ index 4c591840..d6b5628a 100644
  }
  
  static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, int button)
-@@ -2861,11 +2927,12 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2861,11 +2967,12 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
          menu->state = START_MENU_STATE_END;
          return TRUE;
      default:

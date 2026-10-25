@@ -318,5 +318,10 @@ u32 NitroPort_ComposeVBlanks(void);
 void NitroPort_Compose2DOffered(u32 stamp);
 void NitroPort_Compose2DHanded(u32 stamp);
 void NitroPort_Compose2DDone(u32 stamp);
+/* A screen's (0 upper, 1 lower) newest published picture is the game's as
+ * of the frame at stamp: published then, or unchanged since (not when its
+ * publish found no set free). For the lower menu's waits for a picture
+ * made since (NitroPort_LowerMenuPanelShown, UpperLetGoShows). */
+void NitroPort_Compose2DCurrent(int screen, u32 stamp);
 #endif
 #endif

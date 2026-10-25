@@ -33,6 +33,7 @@ static volatile int sOn;
 static volatile int sTall;          /* (NitroPort_LowerMenuSetTall) */
 static int sPanelTouch = 1;         /* (NitroPort_LowerMenuSetPanelTouch) */
 static volatile int sHoldUpper;     /* (NitroPort_LowerMenuHoldUpper) */
+static volatile uint32_t sLetGoAt;  /* (let go now: the clock then; NitroPort_LowerMenuUpperLetGoShows) */
 static volatile int sAvailable;     /* (NitroPort_LowerMenuSetAvailable) */
 static int sSelected = -1;          /* the game's cursor */
 static int sHeld = -1;              /* the button a finger is on */
@@ -68,6 +69,15 @@ static uint32_t sFadeStart, sFadeAsked, sFadeWaitSub;
 static volatile int sFadeLock;
 static int sPanelNext = -1;  /* (NitroPort_LowerMenuFadeToPanel: shown once the panel's black; under sFadeLock) */
 #define FADE_WAIT_MAX 30   /* (half a second at most) */
+/* Fading in to (or clearing at once on) the DS's lower screen: not till the
+ * platform has drawn a picture of it made since (sDsWait: the clock then,
+ * 0 none), so an app popping in never shows a frame from before it was
+ * whole; the platform's newest one, NitroPort_LowerMenuPanelShown (sDsShown;
+ * sDsKnown once it has said). */
+static uint32_t sDsWait;
+static int sDsPop;   /* (the wait's for clearing at once: black meanwhile) */
+static volatile uint32_t sDsShown;
+static volatile int sDsKnown;
 #define FADE_DS_HOLD 4     /* (the DS's lower screen shown: its picture drawn first, these frames black) */
 
 /* The map: what the game gives (its plain calls into sPend, handed over
@@ -677,6 +687,9 @@ void NitroPort_LowerMenuHoldUpper(int hold)
 {
     hold = hold == NITRO_LOWERMENU_LET_GO_NOW ? NITRO_LOWERMENU_LET_GO_NOW : hold ? 1 : 0;
     if (hold != __atomic_load_n(&sHoldUpper, __ATOMIC_ACQUIRE)) {
+        if (hold == NITRO_LOWERMENU_LET_GO_NOW) {
+            __atomic_store_n(&sLetGoAt, sClock ? sClock() : 0u, __ATOMIC_RELEASE);
+        }
         __atomic_store_n(&sHoldUpper, hold, __ATOMIC_RELEASE);
         NitroPort_Log("[lowermenu] upper screen %s", hold > 0 ? "held" : hold < 0 ? "let go now" : "let go");
     }
@@ -685,6 +698,16 @@ void NitroPort_LowerMenuHoldUpper(int hold)
 int NitroPort_LowerMenuUpperHeld(void)
 {
     return __atomic_load_n(&sHoldUpper, __ATOMIC_ACQUIRE);
+}
+
+int NitroPort_LowerMenuUpperLetGoShows(uint32_t stamp)
+{
+    uint32_t at = __atomic_load_n(&sLetGoAt, __ATOMIC_ACQUIRE);
+
+    if (sClock == NULL) {
+        return 1;
+    }
+    return (int32_t)(stamp - at) >= 0 || (int32_t)(sClock() - at) >= FADE_WAIT_MAX;
 }
 
 int NitroPort_LowerMenuBrightness(unsigned masterBright)
@@ -846,21 +869,28 @@ static int fade_level(uint32_t now)
  * `wait` frames. Fading in to the map: once it's drawn as given by now. */
 static void fade_to(int to, uint32_t now, uint32_t wait)
 {
-    sFadeFrom = fade_level(now);
+    /* (from how dark it is now: black while an app's still to pop in) */
+    sFadeFrom = sDsWait != 0 && sDsPop ? 16 : fade_level(now);
     sFadeTo = to;
     sFadeStart = now + wait;
     sFadeAsked = now;
     sFadeWaitSub = to ? 0 : __atomic_load_n(&sSubSerial, __ATOMIC_ACQUIRE);
+    sDsWait = to ? 0 : now;
+    sDsPop = 0;
 }
 
 void NitroPort_LowerMenuFadePanel(int black)
 {
-    uint32_t now = sClock ? sClock() : 0;
+    uint32_t now;
 
     spin_lock(&sFadeLock);
+    now = sClock ? sClock() : 0;   /* (read under the lock: no fade asked for after it) */
     if (black == NITRO_LOWERMENU_CLEAR_NOW) {
         sFadeFrom = sFadeTo = 0;
         sFadeWaitSub = 0;
+        sFadeAsked = now;
+        sDsWait = now;     /* (black till there's a picture of it from now on: see PanelFade) */
+        sDsPop = 1;
         sPanelNext = -1;   /* (a change on its way: not made; the game shows what it wants) */
     } else if (black) {
         sPanelNext = -1;   /* (black to stay so: a change on its way not made) */
@@ -876,10 +906,11 @@ void NitroPort_LowerMenuFadePanel(int black)
 
 void NitroPort_LowerMenuFadeToPanel(int shows)
 {
-    uint32_t now = sClock ? sClock() : 0;
+    uint32_t now;
 
     shows = shows == NITRO_LOWERMENU_PANEL_MAP ? shows : NITRO_LOWERMENU_PANEL_DS;
     spin_lock(&sFadeLock);
+    now = sClock ? sClock() : 0;
     if (shows != (sPanelNext >= 0 ? sPanelNext : sPanelShows)) {
         if (sClock == NULL) {
             show_panel(shows);   /* (no clock: at once) */
@@ -896,10 +927,11 @@ void NitroPort_LowerMenuFadeToPanel(int shows)
 
 int NitroPort_LowerMenuPanelFade(void)
 {
-    uint32_t now = sClock ? sClock() : 0;
+    uint32_t now;
     int level;
 
     spin_lock(&sFadeLock);
+    now = sClock ? sClock() : 0;   /* (read under the lock: never before a fade asked for) */
     /* A change on its way, the panel black: made, and faded back in (the DS's
      * lower screen a few frames on: its picture drawn first). On whichever
      * thread asks first: the display's every frame, whatever the game's
@@ -926,19 +958,39 @@ int NitroPort_LowerMenuPanelFade(void)
             /* (fading in to the map: not begun till it's drawn as it was
              * given when the fade was asked for, half a second at most) */
             if ((int32_t)(__atomic_load_n(&sMapDrawnSub, __ATOMIC_ACQUIRE) - sFadeWaitSub) < 0 &&
-                sClock != NULL && now - sFadeAsked < FADE_WAIT_MAX) {
+                sClock != NULL && (int32_t)(now - sFadeAsked) < FADE_WAIT_MAX) {
                 sFadeStart = now;
             } else {
                 sFadeWaitSub = 0;
             }
         }
     }
-    level = fade_level(now);
+    if (sDsWait != 0 && map_shown()) {
+        sDsWait = 0;   /* (the map shown instead: its own wait) */
+    } else if (sFadeTo == 0 && sDsWait != 0) {
+        /* (fading in to the DS's lower screen: the fade not begun (cleared
+         * at once: black) till the platform's drawn a picture of it made
+         * since; half a second at most) */
+        if (__atomic_load_n(&sDsKnown, __ATOMIC_ACQUIRE) && sClock != NULL &&
+            (int32_t)(__atomic_load_n(&sDsShown, __ATOMIC_ACQUIRE) - sDsWait) < 0 &&
+            (int32_t)(now - sFadeAsked) < FADE_WAIT_MAX) {
+            sFadeStart = now;
+        } else {
+            sDsWait = 0;
+        }
+    }
+    level = sDsWait != 0 && sDsPop ? 16 : fade_level(now);
     if (sClock == NULL && sFadeTo == 0 && map_shown() && !__atomic_load_n(&sMapPicReady, __ATOMIC_ACQUIRE)) {
         level = 16;
     }
     spin_unlock(&sFadeLock);
     return level;
+}
+
+void NitroPort_LowerMenuPanelShown(uint32_t stamp)
+{
+    __atomic_store_n(&sDsShown, stamp, __ATOMIC_RELEASE);
+    __atomic_store_n(&sDsKnown, 1, __ATOMIC_RELEASE);
 }
 
 void NitroPort_LowerMenuKeepShown(int on)

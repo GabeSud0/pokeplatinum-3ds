@@ -577,7 +577,14 @@ screens) the lower screen is the DS's, filling the screen as before.
   app pops in at once (`NITRO_LOWERMENU_CLEAR_NOW`). Fading in to the map,
   the fade waits (black, half a second at most) till the map's drawn as the
   game last gave it, and the map's panel is black till there's a map drawn
-  at all. The platforms draw black over the panel by as much (the
+  at all. Fading in to the DS's lower screen, or an app popping in, the
+  panel stays black till the platform has drawn a picture of it made since
+  (`NitroPort_LowerMenuPanelShown`; half a second at most; the 3DS's
+  drawers say how recent each screen's newest picture is, changed or not:
+  `NitroPort_Compose2DCurrent`): the 3DS draws
+  the game's pictures a frame or more late, and its newest one could still
+  be from before the app was whole (a glitch for a frame, 2026-10-25). The
+  platforms draw black over the panel by as much (the
   compositor a black quad, the PC runner its pixels darkened). While the
   panel's dark its touches are nobody's. Tabs
   (`NitroPort_LowerMenuFadeToPanel`): the panel fades to black, the port
@@ -587,9 +594,16 @@ screens) the lower screen is the DS's, filling the screen as before.
   first). A fade back to black, or an app popping in, calls the change
   off.
 - **Kept shown** (`NitroPort_LowerMenuKeepShown`): while the game swaps the
-  field and the bag, the menu's kept on (drawn with its panel black, or the
-  map, while the game turns it off and on; its buttons drawn and pressed as
-  usual, the panel's touches nobody's).
+  field and the panel's apps (the bag, the party, the summary), the menu's
+  kept on (drawn with its panel black, or the map, while the game turns it
+  off and on; its buttons drawn and pressed as usual, the panel's touches
+  nobody's). An app that finds it so when it starts came behind the
+  panel's black, and pops in.
+- **3D in the panel:** an app shown in the panel with its 3D (the summary's
+  Pokémon, the party's form change) has it drawn there: the DS's 256 x 192
+  at the panel's place for the DS's rows (on a tall screen its first 192
+  lines), clipped to the panel, the layers in front of it over it
+  (`draw_menu_3d` in the compositor, `CanvasWith3D` in the PC runner).
 - **The picture:** drawn on the CPU when it changes (on, off, the cursor
   or a finger on a button), handed to the compositor under a lock with a
   serial and the rows that changed (`NitroPort_LowerMenuTakeDirtyRows`);
@@ -697,12 +711,15 @@ screens) the lower screen is the DS's, filling the screen as before.
   pictures a frame late); SAVE, MAP and POKéTCH are acted on back in the
   field. A tap while the
   bag's busy (an item's menu, a message, moving an item) is nobody's.
-  Leaving another way (an item used, given, a Berry's tag) is the DS's
-  fade out; the bag opened again after that comes with fades too, and its
-  menu buttons close it with a fade. (The start menu hands the bag a flag,
-  `gStartMenuPortInstantApp`, and the bag hands back the button tapped,
-  `gStartMenuPortAppPress`: the menu forgets its own press when it goes
-  off.) With `--classic-menu` the bag's the DS's.
+  An item used on a Pokémon (a Potion, a TM, an evolution stone, the
+  Gracidea, a Berry away from a soft-soil patch), given from the item's
+  menu, or given from the party's (and B there) goes the same way, the
+  party coming behind the black panel (below); anything else (the
+  Bicycle, a Berry's tag, a mail to write...) is the DS's fade out. The
+  bag's fades out are put off to its last state, which decides
+  (`BagPort_LeavesInPanel`). (The bag hands the start menu the button
+  tapped, `gStartMenuPortAppPress`: the menu forgets its own press when it
+  goes off.) With `--classic-menu` the bag's the DS's.
 - **The party in the panel** (`patches/pokeplatinum/0037`): opened while
   the platform can show the menu, the party puts its main screen (the
   panels, the message, CANCEL) on the lower screen and lays it out tall,
@@ -723,10 +740,9 @@ screens) the lower screen is the DS's, filling the screen as before.
   ones once. The second left panel loses its top edge (tiles without it,
   kept on that row as panels are drawn and switched:
   `PartyPortTall_FixEdges`; an empty panel there too). A form change
-  (Giratina's Griseous Orb, Shaymin's Gracidea) has no 3D sparkles in the
-  panel (the tall screen shows no 3D past line 191, nor the menu over
-  it): the effect's sound, and the icon changes when it would. The touch
-  screen (the Poké Balls) isn't
+  (Giratina's Griseous Orb, Shaymin's Gracidea) has its 3D sparkles in the
+  panel, at the icon moved with its row (48 pixels are 1.953125 of the
+  particles' units). The touch screen (the Poké Balls) isn't
   shown, so the panel's touches are nobody's; the upper screen keeps the
   field. With `--classic-menu` the party is as before, across the wider
   upper screen.
@@ -738,20 +754,37 @@ screens) the lower screen is the DS's, filling the screen as before.
   to the party), TRAINER, POKéDEX and OPTIONS open straight from it, SAVE,
   MAP and POKéTCH are acted on in the field; a tap while it's busy (a
   Pokémon's menu, a message, a switch), before it's shown, or in a party
-  not the menu's (an item used from the bag, a script's) is nobody's (the
-  bag's the same). Leaving another way
-  (the summary, a field move, an item given) is the DS's fade out, and
-  what comes next fades in (the party back from the summary: the upper
-  screen black meanwhile, what was kept). The bag's item used on a
-  Pokémon brings the party with the DS's fades, the upper screen keeping
-  the field.
+  not the menu's (a script's) is nobody's (the bag's the same). The
+  summary (also to choose a move to forget), the bag to give an item, and
+  back to the bag go the same way, behind the black panel
+  (`PartyPort_LeavesInPanel`); a field move, the mail or an evolution is
+  the DS's fade out, and what comes next fades in.
+- **The summary in the panel** (`0037`): from the party in the panel, the
+  summary comes behind the black panel and pops in: its main screen (the
+  pages, the Pokémon, 3D) on the lower screen at the DS's size (not tall,
+  none of the wider upper screen's layouts), the upper screen keeping the
+  field; its touch screen (the buttons) isn't shown, the panel's touches
+  nobody's (the pad does what they do), the menu's taps nobody's. Left, it
+  goes the same way and the party comes behind it. From anywhere else
+  (the PC's boxes...) it's the DS's.
+- **The apps' hand-over:** the start menu opens the panel's apps
+  (`StartMenu_PortAppIsMenus`: the field's own app, the start menu's task
+  the field's; not a script's, a registered item's, or an app's own like
+  the Poffin Case's party) and knows, when one's gone, whether it went behind
+  the panel's black (`StartMenu_PortAppGone`: the menu still kept): then
+  the next one pops in, or the field comes and the panel fades in;
+  else what comes next fades in as on the DS. Walking again with the menu
+  still kept, or the upper screen held (an app gone a way not foreseen),
+  they're let go (`StartMenu_PortUpdateButtons`).
 - **The upper screen held** (`NitroPort_LowerMenuHoldUpper`): while an app
   is in the panel, the upper screen keeps the field. Let go (0), the
   game's upper picture shows again once it's as bright as what was kept:
   back in the field after a fade, at the end of its fade in (seamless);
   kept black (the bag opened after a fade), at once. Let go now
   (`NITRO_LOWERMENU_LET_GO_NOW`), it shows the game's picture from the next
-  frame however bright (back from the bag behind the panel's black).
+  frame however bright (back from the bag behind the panel's black): the
+  first one made since (`NitroPort_LowerMenuUpperLetGoShows`; half a
+  second at most), not the app's hidden screen from before it.
   (Nothing lets it go on a soft reset yet; the port has none.) The 3DS
   doesn't draw a screen while it's
   kept (what's on its LCD stays); drawn again regardless (back from the

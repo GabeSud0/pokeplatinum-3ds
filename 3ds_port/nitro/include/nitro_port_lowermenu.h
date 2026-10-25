@@ -105,6 +105,12 @@ int NitroPort_LowerMenuTall(void);
 void NitroPort_LowerMenuSetPanelTouch(int on);
 void NitroPort_LowerMenuHoldUpper(int hold);
 int NitroPort_LowerMenuUpperHeld(void);
+/* (the platforms, the upper screen kept and let go now) Whether the game's
+ * picture made at stamp (the clock, SetClock's, then) is one to show: made
+ * since the game let go, or half a second on (the 3DS draws the game's
+ * pictures a frame or more late: what's newest may be from before, the
+ * app's hidden screen). No clock: yes. */
+int NitroPort_LowerMenuUpperLetGoShows(uint32_t stamp);
 /* (the platforms) A screen's master brightness (the MASTER_BRIGHT
  * register's value) as -16 (black) .. 16 (white), 0 as it is. */
 int NitroPort_LowerMenuBrightness(unsigned masterBright);
@@ -202,6 +208,13 @@ int NitroPort_LowerMenuPanel(void);
 void NitroPort_LowerMenuFadePanel(int black);
 int NitroPort_LowerMenuPanelFade(void);
 void NitroPort_LowerMenuSetClock(uint32_t (*now)(void));
+/* (the platform, as it draws the panel showing the DS's lower screen) The
+ * clock (SetClock's) when the picture it draws there was made. Fading in to
+ * the DS's lower screen, or clearing at once (an app popping in), the panel
+ * stays black till there's one made since (half a second at most): no frame
+ * of what was there before the app was whole (the 3DS draws the game's
+ * pictures a frame or more late). A platform that never says: no wait. */
+void NitroPort_LowerMenuPanelShown(uint32_t stamp);
 /* What the panel shows, changed with the fade (the game's thread: a tab
  * chosen): it fades to black, the panel then shows it and fades back in (the
  * DS's lower screen a few frames on: its picture drawn first), on the

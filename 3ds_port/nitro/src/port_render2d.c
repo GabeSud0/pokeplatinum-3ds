@@ -3378,8 +3378,8 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             kind[bg] = BG_NONE;   /* large-bitmap mode still unsupported */
         }
     }
-    if (e->isA && kind[0] == BG_3D) {
-        e->height = H;   /* (a tall picture: never with the 3D) */
+    if (e->isA && kind[0] == BG_3D && split == NULL) {
+        e->height = H;   /* (a tall picture with the 3D: only in two layers, the 3D on the DS's lines) */
     }
     if (fixedWidth == 0) {
         DecideSplits(e, kind, bgcnt, dispcnt);
@@ -3552,7 +3552,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 const u8 *prioOf = NULL;
                 int layer, x0 = 0, x1 = width;
 
-                if (slot == 0 && split != NULL && split->has3d && p == split->prio3d) {
+                if (slot == 0 && split != NULL && split->has3d && p == split->prio3d && y < H) {
                     /* The 3D's place among the layers: what's drawn so far
                      * is in front of it. */
                     SnapshotOver(split, &blendState, row, y, nlist, blend2, flags, effect,
@@ -3622,9 +3622,10 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             }
         }
 
-        if (split != NULL && split->has3d && !snapped) {
+        if (split != NULL && split->has3d && !snapped && y < H) {
             /* (the line was full before the 3D's place: everything drawn
-             * is in front of it, and nothing behind it was drawn) */
+             * is in front of it, and nothing behind it was drawn; a tall
+             * picture's lines past the DS's have no 3D: all of it behind) */
             SnapshotOver(split, &blendState, row, y, nlist, blend2, flags, effect, evy, bldcnt,
                          enableLine, layer1);
             memset(row, 0, (size_t)width * sizeof(u16));
@@ -3670,7 +3671,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             blendState.nlist = nlist;
             BlendLine(&blendState, row, enableLine, layer1, anyWindow);
         }
-        if (split != NULL && split->has3d && anyWindow) {
+        if (split != NULL && split->has3d && anyWindow && y < H) {
             /* Where a window hides the 3D, what's behind it shows. */
             u16 *over = split->over + y * width;
             u8 *alpha = split->overAlpha + y * width;

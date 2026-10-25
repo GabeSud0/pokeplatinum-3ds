@@ -200,6 +200,7 @@ static int sMapStaleY0[2], sMapStaleY1[2] = { NITRO_LOWERMENU_PANEL_H, NITRO_LOW
 static int sMenuPanel;                 /* (the menu's panel this frame: NitroPort_LowerMenuPanel, once) */
 static int sMenuFade;                  /* (how dark its panel is this frame: NitroPort_LowerMenuPanelFade, once) */
 static int sMenuNow;              /* (the screen being drawn is the menu) */
+static int sMenu3dNow;            /* (and its 3D goes in its panel) */
 static void *sEdgeDepth[4];       /* 240 x 400 D24S8, a direction each, shared by the screens */
 static void *sEdgeBlock;          /* (the four, one after another: one VRAM block) */
 /* The smooth 3D (smooth3d): the upper screen is drawn at twice the
@@ -455,6 +456,13 @@ void NitroPort_Compose2DHanded(u32 stamp)
 void NitroPort_Compose2DDone(u32 stamp)
 {
     __atomic_store_n(&s2DDone, stamp, __ATOMIC_RELEASE);
+}
+
+static volatile u32 s2DCurrent[2];   /* (NitroPort_Compose2DCurrent) */
+
+void NitroPort_Compose2DCurrent(int screen, u32 stamp)
+{
+    __atomic_store_n(&s2DCurrent[screen ? 1 : 0], stamp, __ATOMIC_RELEASE);
 }
 
 /* Whether a new scene can be drawn yet: the DS shows it with the 2D of the
@@ -922,11 +930,12 @@ static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *
         NitroPort_Tile16(c16, w, h, set->under, scr->texW);
     }
     GSPGPU_FlushDataCache(set->under, (u32)scr->texW * rowsUsed * 2u);
-    if (l->has3d && h == DS_H) {
-        /* Often there's nothing in front: then the texture isn't written. */
+    if (l->has3d) {
+        /* Often there's nothing in front: then the texture isn't written.
+         * (A tall picture's: the DS's lines, the 3D's.) */
         uint32_t *c32 = sConverted[e];
 
-        if (NitroPort_PremultiplyOver(l->over, l->overAlpha, sAlpha16, c32, 0, n)) {
+        if (NitroPort_PremultiplyOver(l->over, l->overAlpha, sAlpha16, c32, 0, w * DS_H)) {
             if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
                 NitroPort_Scale2xTiled32(c32, w, DS_H, set->over, scr->texW);
             } else {
@@ -1088,7 +1097,7 @@ int NitroPort_ComposePublish(int engine, int screen)
     }
     if (!l->displayOff && sConfig.filter != COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
         set->overEmpty = !NitroPort_PublishDoubled(&sShadow[e], &set->pub, l->under, l->over, l->overAlpha,
-                                                   l->has3d && h == DS_H, w, h, set->under, set->over, scr->texW,
+                                                   l->has3d, w, h, set->under, set->over, scr->texW,
                                                    sToRgb565, sAlpha16, flush_texture);
     } else if (!l->displayOff) {
         publish_whole(e, l, scr, set, w, h);
@@ -1850,7 +1859,72 @@ static int map_texture(void)
  * drawer had it), its first 247 rows. Over the panel, black as dark as its
  * fade (NitroPort_LowerMenuPanelFade). (u1, vTop, vBottom: the DS's 192
  * rows in their texture.) */
-static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vTop, float vBottom, int linear)
+/* The 3D in the menu's panel (an app shown there with its 3D: the
+ * summary's Pokemon, the party's sparkles): the DS's 256 x 192 at rect,
+ * clipped to it; then the layers in front of it, over the same rows. */
+static void draw_menu_3d(const Screen *scr, const LayerSet *set, const NitroGx3dScene *scene, C3D_FrameBuf *fb,
+                         const PicaRect *rect, float u1, float vTop, float vBottom, int linear)
+{
+    const ComposeLayers *info = &set->info;
+    C3D_Mtx pixels;
+    PicaView view;
+    uint16_t rearColor;
+    unsigned rearAlpha;
+    u32 sy = (u32)fb->width / SCREEN_H, sx = (u32)fb->height / (u32)scr->width;
+    int dir;
+
+    memset(&view, 0, sizeof(view));
+    view.fb = fb;
+    for (dir = 0; dir < 4; dir++) {
+        view.edgeFb[dir] = NULL;
+    }
+    view.screenWidth = scr->width;
+    view.screenHeight = SCREEN_H;
+    view.rect = *rect;
+    view.rect.x0 -= (float)scroll_signed(info->scroll3d & 0x1FF) * (rect->x1 - rect->x0) / DS_W;
+    view.rect.x1 -= (float)scroll_signed(info->scroll3d & 0x1FF) * (rect->x1 - rect->x0) / DS_W;
+    view.stereo = 0.0f;
+    view.convergence = sConfig.convergence > 0.0f ? sConfig.convergence : sSceneConvergence;
+    view.part = PICA_DRAW_ALL;
+    /* (only the panel's pixels: screen pixel (x, y) is the framebuffer's
+     * (height - 1 - y, width - 1 - x)) */
+    view.scissor = 1;
+    view.scissorRect[0] = (u32)((float)SCREEN_H - rect->y1 + 0.5f) * sy;
+    view.scissorRect[1] = (u32)((float)scr->width - rect->x1 + 0.5f) * sx;
+    view.scissorRect[2] = (u32)((float)SCREEN_H - rect->y0 + 0.5f) * sy;
+    view.scissorRect[3] = (u32)((float)scr->width - rect->x0 + 0.5f) * sx;
+    C3D_SetScissor(GPU_SCISSOR_NORMAL, view.scissorRect[0], view.scissorRect[1], view.scissorRect[2], view.scissorRect[3]);
+    NitroPort_PicaRearPlane(&rearColor, &rearAlpha);
+    if (rearAlpha) {
+        quad_combiner(0);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ZERO);
+        quad(rect->x0, rect->y0, rect->x1, rect->y1, -1.0f, 0, 0, 0, 0, rgba_of(rearColor, rearAlpha * 255u / 31u));
+    }
+    NitroPort_PicaDrawScene(&view);
+    /* (the compositor's own view again: the scene took it off) */
+    C3D_SetFrameBuf(fb);
+    C3D_SetViewport(0, 0, fb->width, fb->height);
+    NitroPort_PicaPixelMatrix(&pixels, scr->width, SCREEN_H);
+    NitroPort_PicaSetView(&pixels, 0.0f, 1.0f);
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+    C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    C3D_SetScissor(GPU_SCISSOR_NORMAL, view.scissorRect[0], view.scissorRect[1], view.scissorRect[2], view.scissorRect[3]);
+    tint_3d(info, rect);
+    C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+    if (!set->overEmpty && set->overTop < set->overBottom) {
+        make_texture(&sOverTex, set->over, set->pub.over16 ? GPU_RGBA5551 : GPU_RGBA8, scr->texW, scr->texH, linear,
+                     GPU_CLAMP_TO_EDGE);
+        C3D_TexBind(0, &sOverTex);
+        quad_combiner(1);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+        quad(rect->x0, rect->y0, rect->x1, rect->y1, 0.0f, 0, vTop, u1, vBottom, 0xFFFFFFFFu);
+    }
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+}
+
+static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vTop, float vBottom, int linear,
+                      const NitroGx3dScene *scene3d, C3D_FrameBuf *fb)
 {
     const float k = (float)NITRO_LOWERMENU_PANEL_H / (float)NITRO_LOWERMENU_CANVAS_H;
     float x0 = NITRO_LOWERMENU_PANEL_X0, x1 = x0 + NITRO_LOWERMENU_PANEL_W, y0 = NITRO_LOWERMENU_PANEL_Y0;
@@ -1885,15 +1959,26 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
             quad(x0, y0, x1, yEnd, 0.0f, 0, pTop, (float)NITRO_LOWERMENU_PANEL_W / MAP_TEX_W, pBottom, 0xFFFFFFFFu);
         }
     } else {
+        PicaRect rect3d;
+
         make_texture(&sUnderTex, set->under, GPU_RGB565, scr->texW, scr->texH, linear, GPU_CLAMP_TO_EDGE);
         C3D_TexBind(0, &sUnderTex);
+        rect3d.x0 = x0;
+        rect3d.x1 = x1;
         if (set->info.height >= NITRO_LOWERMENU_CANVAS_H) {
             /* (tall: canvas row y is the picture's row y) */
             quad(x0, y0, x1, yEnd, 0.0f, 0, vTop, u1, vTop - row * (float)NITRO_LOWERMENU_CANVAS_H, 0xFFFFFFFFu);
+            rect3d.y0 = y0;
+            rect3d.y1 = y0 + DS_H * k;
         } else {
             quad(x0, y0, x1, yA, 0.0f, 0, vRow0, u1, vRow0, 0xFFFFFFFFu);
             quad(x0, yA, x1, yB, 0.0f, 0, vTop, u1, vBottom, 0xFFFFFFFFu);
             quad(x0, yB, x1, yEnd, 0.0f, 0, vRowLast, u1, vRowLast, 0xFFFFFFFFu);
+            rect3d.y0 = yA;
+            rect3d.y1 = yB;
+        }
+        if (scene3d != NULL) {
+            draw_menu_3d(scr, set, scene3d, fb, &rect3d, u1, vTop, vBottom, linear);
         }
     }
     if (sMenuFade > 0) {
@@ -1956,9 +2041,10 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         vTop = vBottom;
         vBottom = t;
     }
-    /* The lower screen as the menu (no 3D on it: see the frame's start). */
+    /* The lower screen as the menu (its 3D in the panel: see the frame's
+     * start). */
     if (sMenuNow && scr == &sScreens[1]) {
-        draw_menu(scr, set, u1, vTop, vBottom, linear);
+        draw_menu(scr, set, u1, vTop, vBottom, linear, sMenu3dNow && has3d ? scene : NULL, fb);
         master_brightness(scr, info);
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
         NitroPort_PicaProfileMark("the 2D");
@@ -2215,6 +2301,20 @@ static void follow_convergence(const NitroGx3dScene *scene)
     sSceneConvergence = sConvFollowed;
 }
 
+/* The newest set's publish order (0: none). */
+static uint32_t newest_seq(const Screen *scr)
+{
+    uint32_t newest = 0;
+    int i;
+
+    for (i = 0; i < SETS; i++) {
+        if (!scr->set[i].writing && scr->set[i].seq > newest) {
+            newest = scr->set[i].seq;
+        }
+    }
+    return newest;
+}
+
 /* Which of a screen's sets to show: the newest, or with a 3D scene the
  * newest no newer than the 2D the DS showed that scene with (the DS's 3D
  * is a frame behind its 2D): stamp <= the scene's + 1. Held for the frame
@@ -2368,12 +2468,14 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     int edgesWanted = 0, smoothable = 0, drawnAs = DRAWN_PLAIN;
     int underCleared[2] = { 0, 0 };
     int menu[2] = { 0, 0 };            /* (the lower screen as the menu) */
+    int has3dOf[2] = { 0, 0 };         /* (each screen's 3D, as decided: in the menu's panel too) */
     int keptBlack = 0;                 /* (the upper screen kept, but drawn again: black) */
     uint32_t menuSerial = NitroPort_LowerMenuSerial(), mapSerial = NitroPort_LowerMenuMapSerial();
     unsigned copies;
     u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
     LayerSet *sets[2] = { NULL, NULL };
     int keptShown;
+    u32 current2d[2];
     u64 start = svcGetSystemTick(), gpuStart, prepareTicks = 0, texTicksBefore, texTicksAfter, texels;
 
     if (!sReady) {
@@ -2413,6 +2515,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sSeenValid = 1;
     }
     stereoNow = stereo_for(slider, aOnTop);
+    /* (before the sets are picked: the newest then is at least as new) */
+    current2d[0] = __atomic_load_n(&s2DCurrent[0], __ATOMIC_ACQUIRE);
+    current2d[1] = __atomic_load_n(&s2DCurrent[1], __ATOMIC_ACQUIRE);
     LightLock_Lock(&sSetLock);
     LightLock_Lock(&sPresentLock);
     for (s = 0; s < 2; s++) {
@@ -2439,7 +2544,18 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                 sUpperKept = 1;
                 sUpperKeptBright = sUpperShownBright <= -8 ? -16 : sUpperShownBright >= 8 ? 16 : 0;
             } else if (sUpperKept && wish < 0) {
-                sUpperKept = 0;   /* (let go now) */
+                /* (let go now: once the game's picture there is one made
+                 * since (the newest set: the game's as of its drawer's last
+                 * frame, changed or not), not the app's hidden screen from
+                 * before) */
+                u32 shownStamp = set->info.stamp;
+
+                if (set->seq == newest_seq(scr) && (int32_t)(current2d[s] - shownStamp) > 0) {
+                    shownStamp = current2d[s];
+                }
+                if (NitroPort_LowerMenuUpperLetGoShows(shownStamp)) {
+                    sUpperKept = 0;
+                }
             } else if (sUpperKept && wish == 0 && !set->info.displayOff &&
                        NitroPort_LowerMenuBrightness(set->info.masterBright) == sUpperKeptBright) {
                 sUpperKept = 0;
@@ -2451,14 +2567,31 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             }
             keptBlack = sUpperKept;
         }
-        has3d = !(s == 0 && keptBlack) && !(s == 1 && keptShown) && screen3d && set->info.has3d &&
+        has3d = !(s == 0 && keptBlack) && !(s == 1 && keptShown && sMenuFade >= 16) && screen3d && set->info.has3d &&
                 !set->info.displayOff && scene != NULL;
         /* The lower screen as the menu: in the field (the game says), with
-         * its textures, and without the 3D on that screen; or kept shown
-         * while the game swaps what's under it (its panel black or the map:
-         * whatever the DS's lower screen is then). */
+         * its textures; or kept shown while the game swaps what's under it
+         * (its panel black or the map: whatever the DS's lower screen is
+         * then). The 3D on that screen goes in the panel (an app shown
+         * there: the summary's Pokemon), not with the map. */
         menu[s] = s == 1 && sMenuTexData[0] != NULL &&
-                  ((!has3d && !set->info.displayOff && NitroPort_LowerMenuOn()) || keptShown);
+                  ((!set->info.displayOff && NitroPort_LowerMenuOn()) || keptShown);
+        if (menu[s] && (sMenuPanel == NITRO_LOWERMENU_PANEL_MAP || sMenuFade >= 16)) {
+            has3d = 0;
+        }
+        has3dOf[s] = has3d;
+        /* (the panel showing the DS's lower screen: when its picture was
+         * made, for the port's fade in (NitroPort_LowerMenuPanelShown); the
+         * newest set is the game's as of its drawer's last frame, changed
+         * or not: NitroPort_Compose2DCurrent) */
+        if (menu[s] && sMenuPanel != NITRO_LOWERMENU_PANEL_MAP) {
+            u32 shownStamp = set->info.stamp;
+
+            if (set->seq == newest_seq(scr) && (int32_t)(current2d[s] - shownStamp) > 0) {
+                shownStamp = current2d[s];
+            }
+            NitroPort_LowerMenuPanelShown(shownStamp);
+        }
         need[s] = forced || set->seq != scr->shownSeq || (has3d && sceneSerial != scr->shownScene) || (mid && has3d) ||
                   menu[s] != scr->shownMenu || (menu[s] && menuSerial != scr->shownMenuSerial) ||
                   (menu[s] && sMenuFade != scr->shownFade) ||
@@ -2643,8 +2776,10 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             draw_screen(scr, 0, NULL, NULL, 0.0f, edges, underCleared[s]);   /* (black) */
         } else {
             sMenuNow = menu[s];
+            sMenu3dNow = has3dOf[s];
             draw_screen(scr, 0, sets[s], sc, 0.0f, edges, underCleared[s]);
             sMenuNow = 0;
+            sMenu3dNow = 0;
         }
         /* (drawn black: the game's picture there still to be drawn) */
         scr->shownSeq = s == 0 && keptBlack ? 0u : sets[s]->seq;
