@@ -44,14 +44,17 @@ if ! command -v apt-get >/dev/null; then
         echo "Install distrobox (https://distrobox.it), or build on Debian/Ubuntu."
         exit 1
     fi
+    # (compared with the real path of home: on Bazzite and Fedora Atomic, /home is
+    # a link to /var/home)
+    HOME_REAL="$(realpath "$HOME")"
     case "$ROM" in
-        "$HOME"/*|/run/media/*|/media/*|/mnt/*) ;;
+        "$HOME"/*|"$HOME_REAL"/*|/var/home/*|/home/*|/run/media/*|/var/run/media/*|/media/*|/mnt/*|/var/mnt/*) ;;
         *) echo "Put the ROM in your home folder (the distrobox only sees your home and"
            echo "external drives), then run this again."; exit 1 ;;
     esac
     SELF="$(realpath "$0")"
     case "$SELF" in
-        "$HOME"/*) ;;
+        "$HOME"/*|"$HOME_REAL"/*) ;;
         *) cp "$SELF" "$HOME/build_linux.sh"; SELF="$HOME/build_linux.sh" ;;
     esac
     BOXES="$(distrobox list 2>/dev/null | awk -F'|' '{gsub(/ /, "", $2); print $2}')"
