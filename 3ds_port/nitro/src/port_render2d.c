@@ -4662,6 +4662,13 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     return 1;
 }
 
+unsigned NitroPort_Render2DMasterBright(int engine, int snapshot)
+{
+    const u8 *io = (snapshot ? sState[engine ? 1 : 0].io : NitroPort_IoReg) + (engine ? 0x1000 : 0);
+
+    return Rd16(io, 0x6C);
+}
+
 int NitroPort_Render2DIfChanged(int engine, u16 *out)
 {
     static struct { u32 signature; u32 images; int valid; int following; } last[2];

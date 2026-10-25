@@ -529,72 +529,55 @@ static void RemasterRender(uint16_t *out)
 
 /* The 3DS remaster's lower screen as the menu (port_lowermenu.c), at the
  * 3DS's resolution, put together as the compositor does: the menu's
- * picture, the DS's lower screen in its panel at 15/16 (its top row
- * carried on above it, its bottom row below), sampled as the GPU samples
- * its texture of 2 x 2 texels a pixel (bilinear), the master brightness
- * over it all. */
+ * picture; in its panel the map's picture, or the DS's lower screen at
+ * 15/16 (its top row carried on above it, its bottom row below), sampled as
+ * the GPU samples its texture of 2 x 2 texels a pixel (bilinear); black
+ * over the panel as dark as its fade; the master brightness over it all. */
 static void MenuRender(uint32_t *out);
-
-/* (the remaster) The lower screen kept while the game swaps the field and
- * an app in the panel without a fade (NitroPort_LowerMenuHoldLower), as
- * the compositor keeps it: mshot shows it. Each frame. */
-static uint32_t sKeptLower[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
-static int sLowerKept;
-
-static void KeepLowerScreen(void)
-{
-    int wish = NitroPort_LowerMenuLowerHeld();
-
-    if (!sLowerKept && wish) {
-        MenuRender(sKeptLower);
-    }
-    sLowerKept = wish;
-}
 
 static int MenuShot(const char *path)
 {
     static uint32_t out[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
 
-    if (sLowerKept) {
-        return WritePngRgba(path, sKeptLower, NITRO_LOWERMENU_W, NITRO_LOWERMENU_H);
-    }
     MenuRender(out);
     return WritePngRgba(path, out, NITRO_LOWERMENU_W, NITRO_LOWERMENU_H);
 }
 
-/* (the remaster) The panel's pictures (NitroPort_LowerMenuKeepPicture):
- * the lower screen's canvas as it was, kept when the game asks. Each
- * frame. */
-static uint16_t sPicCanvas[NITRO_LOWERMENU_PICTURES][320 * NITRO_LOWERMENU_TALL_LINES];
-static int sPicCanvasWidth[NITRO_LOWERMENU_PICTURES], sPicCanvasTall[NITRO_LOWERMENU_PICTURES];
-static uint32_t sPicCanvasDone[NITRO_LOWERMENU_PICTURES];
-
-static void KeepPanelPictures(void)
+/* (the remaster) The panel's fades go by the runner's frames (its V-blanks). */
+static uint32_t MenuClock(void)
 {
-    static uint16_t over[320 * 192];
-    static uint8_t overAlpha[320 * 192];
-    int k;
+    return (uint32_t)sFrame;
+}
 
-    for (k = 0; k < NITRO_LOWERMENU_PICTURES; k++) {
-        uint32_t wish = NitroPort_LowerMenuPictureWish(k);
-        NitroRender2DSplit split;
+/* --map-thread: the map's drawer on a thread of its own, as the 3DS has it
+ * (off: drawn on the game's thread as it's handed over, the runner's
+ * pictures the same every run). */
+static sem_t sMapGo;
 
-        if (wish == sPicCanvasDone[k]) {
-            continue;
+static void MapWake(void)
+{
+    sem_post(&sMapGo);
+}
+
+static void *MapThread(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        while (sem_wait(&sMapGo) != 0) {
         }
-        memset(&split, 0, sizeof(split));
-        split.over = over;
-        split.overAlpha = overAlpha;
-        split.windowsToEdge = 1;
-        split.snapshot = sStateTaken;
-        split.height = NitroPort_LowerMenuTall() ? NITRO_LOWERMENU_TALL_LINES : 0;
-        NitroPort_Render2DSplit(NitroPort_EngineAOnTop() ? 1 : 0, sPicCanvas[k], &split);
-        sPicCanvasWidth[k] = split.width > 256 ? split.width : 256;
-        sPicCanvasTall[k] = split.height >= NITRO_LOWERMENU_CANVAS_H;
-        sPicCanvasDone[k] = wish;
-        NitroPort_LowerMenuPictureKept(k, 1);
-        NitroPort_Log("[pc] the menu panel's picture %d kept (engine %c, %s)", k, NitroPort_EngineAOnTop() ? 'B' : 'A',
-                      sPicCanvasTall[k] ? "tall" : "192 rows");
+        NitroPort_LowerMenuMapWork();
+    }
+    return NULL;
+}
+
+static void StartMapThread(void)
+{
+    pthread_t thread;
+
+    if (sem_init(&sMapGo, 0, 0) == 0 && pthread_create(&thread, NULL, MapThread, NULL) == 0) {
+        pthread_detach(thread);
+        NitroPort_LowerMenuSetMapWorker(MapWake);
+        NitroPort_Log("[pc] the map's drawer on a thread of its own");
     }
 }
 
@@ -604,7 +587,7 @@ static void MenuRender(uint32_t *out)
     static uint8_t overAlpha[320 * 192];
     int engine = NitroPort_EngineAOnTop() ? 1 : 0;   /* the lower screen's */
     int tall = NitroPort_LowerMenuTall();             /* (drawn on below the DS's rows: the canvas's own) */
-    int hasPanel, picture = NitroPort_LowerMenuPanel() - NITRO_LOWERMENU_PANEL_PICTURE0;
+    int mapShown = NitroPort_LowerMenuPanel() == NITRO_LOWERMENU_PANEL_MAP, fade = NitroPort_LowerMenuPanelFade();
     NitroRender2DSplit split;
     const uint32_t *pic;
     const uint16_t *canvas = under;
@@ -615,24 +598,25 @@ static void MenuRender(uint32_t *out)
     }
     pic = NitroPort_LowerMenuLockFrame(NULL);
     memcpy(out, pic, NITRO_LOWERMENU_W * NITRO_LOWERMENU_H * sizeof(out[0]));
-    hasPanel = NitroPort_LowerMenuFrameHasPanel();
     NitroPort_LowerMenuUnlockFrame();
-    if (hasPanel) {
-        goto bright;   /* (the panel is in the picture: the map) */
-    }
     memset(&split, 0, sizeof(split));
     split.over = over;
     split.overAlpha = overAlpha;
     split.windowsToEdge = 1;
     split.snapshot = sStateTaken;
     split.height = tall ? NITRO_LOWERMENU_TALL_LINES : 0;
-    NitroPort_Render2DSplit(engine, under, &split);
+    NitroPort_Render2DSplit(engine, under, &split);   /* (its master brightness too) */
     width = split.width > 256 ? split.width : 256;
-    if (picture >= 0 && picture < NITRO_LOWERMENU_PICTURES) {
-        /* (a picture kept: its canvas instead) */
-        canvas = sPicCanvas[picture];
-        width = sPicCanvasWidth[picture];
-        tall = sPicCanvasTall[picture];
+    if (mapShown) {
+        /* (the map's picture: none yet, the panel black, the fade) */
+        const uint32_t *map = NitroPort_LowerMenuLockMap(NULL);
+
+        for (y = 0; map != NULL && y < NITRO_LOWERMENU_PANEL_H; y++) {
+            memcpy(out + (NITRO_LOWERMENU_PANEL_Y0 + y) * NITRO_LOWERMENU_W + NITRO_LOWERMENU_PANEL_X0,
+                   map + y * NITRO_LOWERMENU_PANEL_W, NITRO_LOWERMENU_PANEL_W * sizeof(out[0]));
+        }
+        NitroPort_LowerMenuUnlockMap();
+        goto fade;
     }
     for (y = 0; y < NITRO_LOWERMENU_PANEL_H; y++) {
         for (x = 0; x < NITRO_LOWERMENU_PANEL_W; x++) {
@@ -660,14 +644,23 @@ static void MenuRender(uint32_t *out)
                 ((uint32_t)(acc[2] + 0.5f) << 8) | 0xFFu;
         }
     }
-bright:
-    if (hasPanel) {
-        /* (the master brightness still the lower screen's engine's) */
-        memset(&split, 0, sizeof(split));
-        split.over = over;
-        split.overAlpha = overAlpha;
-        split.snapshot = sStateTaken;
-        NitroPort_Render2DSplit(engine, under, &split);
+fade:
+    if (fade > 0) {
+        /* (black over the panel at fade / 16, as the GPU blends it) */
+        uint32_t a = (uint32_t)(fade > 16 ? 16 : fade) * 255u / 16u;
+
+        for (y = 0; y < NITRO_LOWERMENU_PANEL_H; y++) {
+            for (x = 0; x < NITRO_LOWERMENU_PANEL_W; x++) {
+                uint32_t *p = &out[(NITRO_LOWERMENU_PANEL_Y0 + y) * NITRO_LOWERMENU_W + NITRO_LOWERMENU_PANEL_X0 + x];
+                uint32_t c = *p, m = 0xFFu;
+                int k;
+
+                for (k = 24; k >= 8; k -= 8) {
+                    m |= (((c >> k) & 0xFFu) * (255u - a) / 255u) << k;
+                }
+                *p = m;
+            }
+        }
     }
     mode = (split.masterBright >> 14) & 3;
     f = split.masterBright & 31;
@@ -1318,9 +1311,8 @@ void NitroPort_OnFrame(void)
         _exit(0);
     }
     if (NitroPort_LowerMenuAvailable()) {
-        KeepPanelPictures();   /* (first: what's shown now, before the game changes it) */
         KeepUpperScreen();   /* (an app in the menu's panel: the upper screen kept) */
-        KeepLowerScreen();
+        (void)NitroPort_LowerMenuPanelFade();   /* (each frame, as the compositor: a tab change made once it's black) */
     }
     if (sControlDir != NULL) {
         ControlWait();
@@ -1583,7 +1575,7 @@ int main(int argc, char **argv)
     const char *error;
     const char *savePath = NULL;
     char *defaultSave = NULL;
-    int i, classicMenu = 0;
+    int i, classicMenu = 0, mapThread = 0;
 
     if (argc == 2 && strcmp(argv[1], "--check-overlays") == 0) {
         return Platinum_CheckOverlays() == 0 ? 0 : 1;
@@ -1592,7 +1584,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: %s <platinum3ds.pak> <manifest.json> [--save FILE] "
                 "[--frames N] [--wav FILE] [--stop-at-missing-file] [--stall-seconds N]\n"
                 "       [--screenshots DIR] [--screenshot-every N] [--dump-3d FRAME]\n"
-                "       [--press FRAME:BUTTONS,...] [--touch FRAME:X:Y,...]\n       [--control DIR] [--gx-thread | --gx-thread-skip] [--gx-record FILE] [--classic-menu]\n       %s --check-overlays\n", argv[0], argv[0]);
+                "       [--press FRAME:BUTTONS,...] [--touch FRAME:X:Y,...]\n       [--control DIR] [--gx-thread | --gx-thread-skip] [--gx-record FILE] [--classic-menu] [--map-thread]\n       %s --check-overlays\n", argv[0], argv[0]);
         return 2;
     }
     for (i = 3; i < argc; i++) {
@@ -1653,6 +1645,8 @@ int main(int argc, char **argv)
             sGxThread = 2;
         } else if (strcmp(argv[i], "--stall-seconds") == 0 && i + 1 < argc) {
             sStallSeconds = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--map-thread") == 0) {
+            mapThread = 1;
         } else if (strcmp(argv[i], "--classic-menu") == 0) {
             /* the DS's start menu on the upper screen, not the lower
              * screen's menu (the 3DS's classic display) */
@@ -1702,6 +1696,10 @@ int main(int argc, char **argv)
     /* The lower screen as a menu in the field, as the 3DS's remaster has it
      * (mshot shows it, mtouch touches it). */
     NitroPort_LowerMenuSetAvailable(!classicMenu);
+    NitroPort_LowerMenuSetClock(MenuClock);
+    if (mapThread && !classicMenu) {
+        StartMapThread();
+    }
 
     {
         pthread_t watcher;

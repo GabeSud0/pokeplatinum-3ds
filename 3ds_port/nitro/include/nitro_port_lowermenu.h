@@ -60,7 +60,7 @@ enum NitroLowerMenuButton {
     NITRO_LOWERMENU_COUNT
 };
 /* (a press, NitroPort_LowerMenuTakePress) the panel tapped while it shows
- * the map or a picture (NitroPort_LowerMenuSetPanel) */
+ * the map (NitroPort_LowerMenuSetPanel) */
 #define NITRO_LOWERMENU_PANEL_PRESS NITRO_LOWERMENU_COUNT
 
 /* Whether the platform can show it (the 3DS: the remaster's compositor,
@@ -105,13 +105,6 @@ int NitroPort_LowerMenuTall(void);
 void NitroPort_LowerMenuSetPanelTouch(int on);
 void NitroPort_LowerMenuHoldUpper(int hold);
 int NitroPort_LowerMenuUpperHeld(void);
-/* The lower screen kept as it is too (1), the menu and its panel as they
- * are now, while the game swaps what's under them without a fade (the
- * field going and the bag coming, the other way round: the switch looks
- * instant); let go (0): the game's again from the next frame. LowerHeld:
- * the game's wish (the platforms keep the picture). */
-void NitroPort_LowerMenuHoldLower(int hold);
-int NitroPort_LowerMenuLowerHeld(void);
 /* (the platforms) A screen's master brightness (the MASTER_BRIGHT
  * register's value) as -16 (black) .. 16 (white), 0 as it is. */
 int NitroPort_LowerMenuBrightness(unsigned masterBright);
@@ -130,12 +123,10 @@ void NitroPort_LowerMenuSetFemale(int female);
 const uint32_t *NitroPort_LowerMenuLockFrame(uint32_t *serial);
 void NitroPort_LowerMenuUnlockFrame(void);
 uint32_t NitroPort_LowerMenuSerial(void);
-/* (with the picture held) Whether its panel is drawn in it (the map), not
- * the DS's lower screen for the screens to draw there. */
-int NitroPort_LowerMenuFrameHasPanel(void);
 /* (with the picture held; the display's) The rows changed since it last
  * asked: y0 to y1 - 1 (none: y0 >= y1). Taking a copy, it need only take
- * those again. */
+ * those again. The panel's left for the platforms to draw over: the DS's
+ * lower screen, or the map's picture (below). */
 void NitroPort_LowerMenuTakeDirtyRows(int *y0, int *y1);
 
 /* The screen touched at (x, y) of the 320 x 240 (down: 1 while touched, 0
@@ -169,7 +160,8 @@ int NitroPort_LowerMenuPanelAt(int x, int y, int *dsX, int *dsY);
 /* ------------------------------------------------------------- the map
  *
  * The panel can show the Town Map instead of the DS's lower screen (which
- * goes on underneath, the Pokétch running; its touches the menu's then): the
+ * goes on underneath, the Pokétch running; its touches the menu's then; the
+ * platforms needn't draw it meanwhile): the
  * Town Map app's upper screen (its map, the towns' blocks, the cursor with
  * the player's head on it, the places been through before blinking in
  * turn, the place's name in its bar) and under it, the canvas's last 55
@@ -183,46 +175,47 @@ int NitroPort_LowerMenuPanelAt(int x, int y, int *dsX, int *dsY);
 enum NitroLowerMenuPanelShows {
     NITRO_LOWERMENU_PANEL_DS,
     NITRO_LOWERMENU_PANEL_MAP,
-    NITRO_LOWERMENU_PANEL_PICTURE0,   /* (a picture kept: NitroPort_LowerMenuKeepPicture) */
-    NITRO_LOWERMENU_PANEL_PICTURE1,
 };
-#define NITRO_LOWERMENU_PICTURES 2
-/* What the panel shows (the game's thread; the map only once it has been
- * given: NitroPort_LowerMenuSetMap; a picture only once there is one). The
- * map and the pictures: the panel's touches are the menu's (a tap a press,
+/* What the panel shows (the game's thread; the map only once the Town Map's
+ * pictures could be read: NitroPort_LowerMenuMapAvailable). The map: the
+ * panel's touches are the menu's (a tap a press,
  * NITRO_LOWERMENU_PANEL_PRESS). */
 void NitroPort_LowerMenuSetPanel(int shows);
 int NitroPort_LowerMenuPanel(void);
 
-/* ---------------------------------------------------- the panel's pictures
+/* ------------------------------------------------------ the panel's fade
  *
- * The lower screen's picture kept, to show in the panel instead of the
- * DS's (the game's thread): an app's last picture (the bag as the player
- * left it) shown while it isn't running, its tab still chosen, and while
- * the game swaps the field and it. KeepPicture: the picture the lower
- * screen shows now (the platform's newest; tall or not, as it is) kept as
- * picture n, from the next frame the platform draws (asked for before the
- * panel's set to show it: the platform keeps it first). PictureReady:
- * whether picture n has been kept (then it's shown as soon as asked).
- * PictureKept: (the platforms') picture n kept, or not (the memory gone). */
-void NitroPort_LowerMenuKeepPicture(int n);
-int NitroPort_LowerMenuPictureReady(int n);
-void NitroPort_LowerMenuPictureKept(int n, int kept);
-/* (the platforms') The pictures the game asked to keep, a count each: kept
- * when it changes; and the platform's clock when it last asked
- * (SetClock: the clock its pictures are stamped with, so it keeps the
- * picture the game had made by then, not one made after: the app gone). */
-uint32_t NitroPort_LowerMenuPictureWish(int n);
-uint32_t NitroPort_LowerMenuPictureStamp(int n);
+ * The panel faded to black and back as the game changes what it shows (the
+ * map, the Pokétch, the bag: the loading in between hidden), the menu's
+ * frame and buttons as they are. FadePanel (the game's thread): towards
+ * black (1) or clear (0) from how dark it is now, at a whole fade's speed
+ * of NITRO_LOWERMENU_FADE_FRAMES of the platform's frames; or clear at once
+ * (NITRO_LOWERMENU_CLEAR_NOW: an app popping in). Fading in to the map, the
+ * fade waits (black) till the map's drawn as the game last gave it, half a
+ * second at most; with no map drawn yet, the map's panel is black.
+ * PanelFade (any thread): how dark it is now, 0 (clear) to 16 (black): the
+ * platforms draw black over the panel by as much. SetClock: the platform's
+ * frame count (its V-blanks: the 3DS's compositor's, the PC runner's frames)
+ * for the fades; without one, a fade's done at once. */
+#define NITRO_LOWERMENU_FADE_FRAMES 8
+#define NITRO_LOWERMENU_CLEAR_NOW (-1)
+void NitroPort_LowerMenuFadePanel(int black);
+int NitroPort_LowerMenuPanelFade(void);
 void NitroPort_LowerMenuSetClock(uint32_t (*now)(void));
+/* What the panel shows, changed with the fade (the game's thread: a tab
+ * chosen): it fades to black, the panel then shows it and fades back in (the
+ * DS's lower screen a few frames on: its picture drawn first), on the
+ * platform's frames whatever the game does meanwhile. What it shows (or will)
+ * already: nothing. Meanwhile SetPanel changes what it will show, fading in
+ * waits for it, fading to black (or clear at once) calls it off. */
+void NitroPort_LowerMenuFadeToPanel(int shows);
 
 /* The menu kept on the lower screen while the game swaps what's under it
  * (the field going, an app coming, and back) and turns the menu off and on
- * meanwhile: drawn on with its panel's map or picture (not with the DS's
- * lower screen: what's there then isn't anything); its buttons drawn as
- * the game says, their touches nobody's while the menu's off. KeptShown:
- * whether the platforms draw it so now (asked, and the panel the map or a
- * picture there is). */
+ * meanwhile, its panel black (faded: what the DS's lower screen shows then
+ * isn't anything) or the map; its buttons drawn as the game says, their
+ * touches nobody's while the menu's off. KeptShown: whether the platforms
+ * draw it so now. */
 void NitroPort_LowerMenuKeepShown(int on);
 int NitroPort_LowerMenuKeptShown(void);
 
@@ -259,23 +252,62 @@ typedef struct NitroLowerMap {
     const uint16_t *desc;
     short descX, descY, descW, descH;
 } NitroLowerMap;
-/* The map's contents (the game's thread; copied). */
+/* The map's contents, drawn at once on the calling thread (the tests;
+ * not with a map worker: NitroPort_LowerMenuSetMapWorker). Copied. */
 void NitroPort_LowerMenuSetMap(const NitroLowerMap *map);
-/* The same in plain calls (the game's code: no port headers there): begun,
- * its parts in turn (the sprites front first), then handed over. Text: 0 the
- * name, 1 the description, its window at (x, y), w x h pixels: the buffer
- * for the game to fill (w x h, each pixel as NitroLowerMap's text), the
- * port's (no room on the game's heaps), or NULL if too big (the name's up
- * to 256 x 64, the description's 256 x 192). Each text stays as last given
- * from one map to the next (the game prints it again only when it
- * changes) until new text, or none (MapNoText). */
+/* (the game's thread) Whether the port can show the map: the Town Map's
+ * pictures read from the data pack (the first time it's asked). */
+int NitroPort_LowerMenuMapAvailable(void);
+/* The map in plain calls (the game's code: no port headers there), the
+ * game's thread: begun, its parts in turn (the sprites front first), then
+ * handed over (End) to the map's drawer. Text: 0 the name, 1 the
+ * description, its window at (x, y) as the game's window holds it: wTiles x
+ * hTiles tiles of 8 x 8, 4 bits a pixel, one after another (rows of tiles),
+ * and its 16 colours (RGB555; colour 0: nothing there); copied (the name's
+ * up to 32 x 8 tiles, the description's 32 x 24; bigger: none). Each text
+ * stays as last given from one map to the next (the game prints it again
+ * only when it changes) until new text, or none (MapNoText). */
 void NitroPort_LowerMenuMapBegin(void);
 void NitroPort_LowerMenuMapSprite(int kind, int x, int y, int frame, int palette);
 void NitroPort_LowerMenuMapDot(int x, int y);
 void NitroPort_LowerMenuMapLayout(int hidden, int zoomX, int zoomY);
-uint16_t *NitroPort_LowerMenuMapText(int which, int x, int y, int w, int h);
+void NitroPort_LowerMenuMapText(int which, int x, int y, int wTiles, int hTiles, const void *tiles,
+                                const uint16_t *palette, uint32_t key);
 void NitroPort_LowerMenuMapNoText(int which);
+/* The texts given are kept (the last NITRO_LOWERMENU_TEXTS_KEPT of each,
+ * under the game's key for what was printed: the place, the description
+ * and its checks): TextKept makes the one kept under key this map's text, as
+ * MapText would, and says whether there was one (the game prints it only
+ * if not: walking back and forth between two places prints nothing). */
+#define NITRO_LOWERMENU_TEXTS_KEPT 8
+int NitroPort_LowerMenuMapTextKept(int which, uint32_t key);
 void NitroPort_LowerMenuMapEnd(void);
+
+/* The map's drawer: what the game hands over (the player on a new square, a
+ * new place) and the sprites' animations are drawn on a thread of the
+ * platform's, off the game's (the 3DS: a low priority, on a core with time
+ * to spare), so walking costs the game nothing (it never waits for the
+ * drawer: a map given while the drawer's taking the last one is handed over
+ * the next frame). The platform starts it and
+ * gives SetMapWorker the function that wakes it; woken, it calls MapWork
+ * (which draws what's new since it last did: the newest the game gave, the
+ * animations' frame now). Without one, the game's thread draws as it hands
+ * over. MapWork: 1 if it drew something. */
+void NitroPort_LowerMenuSetMapWorker(void (*wake)(void));
+int NitroPort_LowerMenuMapWork(void);
+
+/* (the platforms) The map's picture, drawn over the panel when it shows the
+ * map: NITRO_LOWERMENU_PANEL_W x NITRO_LOWERMENU_PANEL_H texels as the
+ * menu's picture's, held till UnlockMap (always called); NULL while
+ * there's none yet. *serial changes whenever it does. TakeMapDirtyRows (held):
+ * as TakeDirtyRows, the map's. */
+const uint32_t *NitroPort_LowerMenuLockMap(uint32_t *serial);
+/* The same if the map's drawer hasn't the lock (0 if it has: nothing held;
+ * the display, which mustn't wait on it, takes it next time). */
+int NitroPort_LowerMenuTryLockMap(const uint32_t **map, uint32_t *serial);
+void NitroPort_LowerMenuTakeMapDirtyRows(int *y0, int *y1);
+void NitroPort_LowerMenuUnlockMap(void);
+uint32_t NitroPort_LowerMenuMapSerial(void);
 
 #ifdef __cplusplus
 }

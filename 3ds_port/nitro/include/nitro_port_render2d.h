@@ -89,6 +89,11 @@ void NitroPort_Render2DSplit(int engine, uint16_t *under, NitroRender2DSplit *sp
 /* The same, unless nothing it draws from changed since the last call for
  * that engine (returns 0 then, 1 when drawn). */
 int NitroPort_Render2DSplitIfChanged(int engine, uint16_t *under, NitroRender2DSplit *split);
+/* An engine's master brightness (its MASTER_BRIGHT register), from the
+ * state taken when the frame was handed over (snapshot: 1) or as it is: for
+ * a screen not drawn (the lower menu's panel showing the map) whose
+ * brightness still counts (the menu fades with it). */
+unsigned NitroPort_Render2DMasterBright(int engine, int snapshot);
 
 /* One BG of an engine alone (for capturing it: nitro_port_wideart.h), on
  * the canvas layout gives (width, origin, clip, anchorWindows; NULL: the

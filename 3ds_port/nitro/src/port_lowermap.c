@@ -25,13 +25,15 @@
  *
  * The panel's picture is the canvas at 15/16 (240 x 232) as the screens
  * draw the DS's lower screen in the panel: each canvas pixel 2 x 2 texels,
- * then bilinear. Only what changes is drawn again (the game's thread does
- * it, so it's kept small: the player walking onto a new square shouldn't
- * cost the game a frame): the upper screen's background only when the
- * hidden places shown change; the zoomed-in band when its scroll or the
- * description does; the sprites' rectangles where they were and where they
- * are; the name's when it changes; the animated sprites' for a frame of
- * theirs. The panel's rows drawn again are told (NitroPort_LowerMapTakeDirty).
+ * then bilinear. Only what changes is drawn again: the upper screen's
+ * background only when the hidden places shown change; the zoomed-in band
+ * when its scroll or the description does; the sprites' rectangles where
+ * they were and where they are; the name's when it changes; the animated
+ * sprites' for a frame of theirs. The panel's rows drawn again are told
+ * (NitroPort_LowerMapTakeDirty). It's drawn by the map's drawer
+ * (port_lowermenu.c: a thread of the platform's, off the game's, or the
+ * game's own); the pictures are read on the game's thread
+ * (NitroPort_LowerMapLoad: the data pack is the game's thread's).
  */
 
 #include <nitro.h>
@@ -834,16 +836,26 @@ static int sprite_same(const NitroLowerMapSprite *a, const NitroLowerMapSprite *
     return a->kind == b->kind && a->x == b->x && a->y == b->y && a->frame == b->frame && a->palette == b->palette;
 }
 
+int NitroPort_LowerMapLoad(void)
+{
+    if (G.state == 0) {
+        load();
+    }
+    return G.state > 0;
+}
+
+int NitroPort_LowerMapLoaded(void)
+{
+    return G.state > 0;
+}
+
 int NitroPort_LowerMapSet(const NitroLowerMap *map)
 {
     NitroLowerMap old;
     int changed = 0, full, band, nameChanges, descChanges, dotsChange, i, n;
 
-    if (G.state == 0) {
-        load();
-    }
-    if (G.state < 0 || map == NULL) {
-        return 0;
+    if (G.state <= 0 || map == NULL) {
+        return 0;   /* (not read: NitroPort_LowerMapLoad, on the game's thread) */
     }
     old = sMap;
     nameChanges = text_changes(old.name, old.nameX, old.nameY, old.nameW, old.nameH, map->name, map->nameX, map->nameY,
@@ -934,20 +946,20 @@ void NitroPort_LowerMapTakeDirty(int *y0, int *y1)
     sDirtyY1 = 0;
 }
 
-int NitroPort_LowerMapReady(void)
-{
-    return sReady;
-}
-
-int NitroPort_LowerMapTick(void)
+int NitroPort_LowerMapSetFrame(uint32_t frame)
 {
     int changed = 0;
 
-    sFrame++;
+    sFrame = frame;
     if (sReady) {
         update_animations(&changed);
     }
     return changed;
+}
+
+int NitroPort_LowerMapFrameChanges(uint32_t frame)
+{
+    return frame % CURSOR_FRAMES == 0 || frame % DOT_FRAMES == 0;
 }
 
 const uint32_t *NitroPort_LowerMapPanel(void)

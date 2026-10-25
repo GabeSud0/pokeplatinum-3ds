@@ -9,7 +9,10 @@
  * from the ROM (graphic/menu_gra.narc), and two drawn for the menu (MAP,
  * POKéTCH). The DS's lower screen goes in the panel when the screen is put
  * together (the compositor, or the PC runner's mshot); or the panel shows
- * the Town Map, drawn here too (port_lowermap.c).
+ * the Town Map: a picture of its own (port_lowermap.c), drawn by the map's
+ * drawer (a thread of the platform's, off the game's) and put over the
+ * panel the same way. The panel fades to black and back as the game
+ * changes what it shows (the platforms draw the black over it).
  */
 #include <nitro_port_lowermenu.h>
 #include <nitro_port_fs.h>
@@ -17,6 +20,7 @@
 #include "port_platform.h"
 #include "port_lowermap.h"
 
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,7 +33,6 @@ static volatile int sOn;
 static volatile int sTall;          /* (NitroPort_LowerMenuSetTall) */
 static int sPanelTouch = 1;         /* (NitroPort_LowerMenuSetPanelTouch) */
 static volatile int sHoldUpper;     /* (NitroPort_LowerMenuHoldUpper) */
-static volatile int sHoldLower;     /* (NitroPort_LowerMenuHoldLower) */
 static volatile int sAvailable;     /* (NitroPort_LowerMenuSetAvailable) */
 static int sSelected = -1;          /* the game's cursor */
 static int sHeld = -1;              /* the button a finger is on */
@@ -48,29 +51,71 @@ static int sLastPress = -1;         /* (the press before, and its frame) */
 static uint32_t sLastPressFrame;
 static uint32_t sEnabled = 0xFFFFFFFFu;
 static volatile int sPanelShows;    /* (NitroPort_LowerMenuSetPanel) */
-static volatile uint32_t sPictureWish[NITRO_LOWERMENU_PICTURES];   /* (NitroPort_LowerMenuKeepPicture) */
-static volatile int sPictureReady[NITRO_LOWERMENU_PICTURES];       /* (NitroPort_LowerMenuPictureKept) */
 static volatile int sKeepShown;     /* (NitroPort_LowerMenuKeepShown) */
-static volatile uint32_t sPictureStamp[NITRO_LOWERMENU_PICTURES];  /* (the clock when asked) */
 static uint32_t (*sClock)(void);    /* (NitroPort_LowerMenuSetClock) */
-static int sPictureHasPanel;        /* (the shared picture's panel drawn in it: under sLock) */
 
 static uint32_t sPicture[W * H];    /* the shared picture (under sLock) */
 static uint32_t sDraw[W * H];       /* (drawn here, then copied over) */
-static int sDrawHasMap;             /* (sDraw drawn with the map in its panel) */
 static int sDirtyY0, sDirtyY1 = H;  /* the shared picture's rows changed, not taken yet (under sLock) */
 static volatile uint32_t sSerial;
 static volatile int sLock;
+
+/* The panel's fade (under sFadeLock): from sFadeFrom at sFadeStart to
+ * sFadeTo (0-16), at 16 levels a NITRO_LOWERMENU_FADE_FRAMES; fading in to the
+ * map, waiting for the map given by then (sFadeWaitSub) since sFadeAsked. */
+static int sFadeFrom, sFadeTo;
+static uint32_t sFadeStart, sFadeAsked, sFadeWaitSub;
+static volatile int sFadeLock;
+static int sPanelNext = -1;  /* (NitroPort_LowerMenuFadeToPanel: shown once the panel's black; under sFadeLock) */
+#define FADE_WAIT_MAX 30   /* (half a second at most) */
+#define FADE_DS_HOLD 4     /* (the DS's lower screen shown: its picture drawn first, these frames black) */
+
+/* The map: what the game gives (its plain calls into sPend, handed over
+ * into sSub under sMapLock, sSubSerial counting them), what the map's drawer
+ * took last (sWork), and the map's picture for the platforms (sMapPic,
+ * under sMapPicLock). The texts as the game's windows hold them (4 bits a
+ * pixel), made pixels by the drawer. */
+typedef struct MapText {
+    int shown;
+    short x, y, wTiles, hTiles;
+    uint16_t palette[16];
+    uint8_t tiles[32 * 24 * 32];
+} MapText;
+#define MAP_TEXT_MAX_H(which) ((which) == 0 ? 8 : 24)   /* (in tiles: 64 and 192 rows) */
+static NitroLowerMap sPend;
+static MapText sPendText[2];
+static int sPendTextNew[2];
+static int sPendWaiting;   /* (given, not handed over yet: the drawer had the lock) */
+/* (the texts given, kept: the game's thread's) */
+static struct {
+    int used;
+    uint32_t key, last;
+    MapText text;
+} sKeptText[2][NITRO_LOWERMENU_TEXTS_KEPT];
+static uint32_t sKeptClock;
+static NitroLowerMap sSub;
+static MapText sSubText[2];
+static uint32_t sSubTextSerial[2], sSubSerial;
+static volatile int sMapLock;
+static NitroLowerMap sWork;
+static uint32_t sWorkTextSerial[2], sWorkSub;
+static uint16_t sWorkName[256 * 64], sWorkDesc[256 * 192];
+static volatile uint32_t sMapFrame;          /* (the menu's frames, for the animations) */
+static void (*sMapWake)(void);               /* (NitroPort_LowerMenuSetMapWorker) */
+static uint32_t sMapPic[NITRO_LOWERMENU_PANEL_W * NITRO_LOWERMENU_PANEL_H];
+static int sMapPicY0 = NITRO_LOWERMENU_PANEL_H, sMapPicY1;
+static volatile uint32_t sMapPicSerial, sMapDrawnSub;
+static volatile int sMapPicReady, sMapPicLock;
 
 /* (spinning a little, then sleeping: the game's thread and the display
  * thread share a core, the display thread at a lower priority; an endless
  * spin by the game's thread would never let it finish and let go, as in
  * port_gx3d_mailbox.c) */
-static void lock(void)
+static void spin_lock(volatile int *l)
 {
     unsigned spins = 0;
 
-    while (__atomic_test_and_set(&sLock, __ATOMIC_ACQUIRE)) {
+    while (__atomic_test_and_set(l, __ATOMIC_ACQUIRE)) {
         if (++spins >= 64u) {
             NitroPortPlatform_Sleep(50);
             spins = 0;
@@ -78,9 +123,19 @@ static void lock(void)
     }
 }
 
+static void spin_unlock(volatile int *l)
+{
+    __atomic_clear(l, __ATOMIC_RELEASE);
+}
+
+static void lock(void)
+{
+    spin_lock(&sLock);
+}
+
 static void unlock(void)
 {
-    __atomic_clear(&sLock, __ATOMIC_RELEASE);
+    spin_unlock(&sLock);
 }
 
 /* ------------------------------------------------------------ the frame */
@@ -482,24 +537,11 @@ static void paste(const Icon *icon, int x0, int y0, int x1, int y1, uint32_t opa
 
 /* ------------------------------------------------------------ drawing */
 
-/* The panel shows the map (asked to, and it has one). */
+/* The panel shows the map (asked to, and the Town Map's pictures could be
+ * read: the map's drawer draws it). */
 static int map_shown(void)
 {
-    return sPanelShows == NITRO_LOWERMENU_PANEL_MAP && NitroPort_LowerMapReady();
-}
-
-/* The picture the panel shows (-1: none). */
-static int picture_shown(void)
-{
-    int n = sPanelShows - NITRO_LOWERMENU_PANEL_PICTURE0;
-
-    return n >= 0 && n < NITRO_LOWERMENU_PICTURES && __atomic_load_n(&sPictureReady[n], __ATOMIC_ACQUIRE) ? n : -1;
-}
-
-/* The panel's touches the menu's: the map or a picture in it. */
-static int panel_is_menus(void)
-{
-    return map_shown() || picture_shown() >= 0;
+    return sPanelShows == NITRO_LOWERMENU_PANEL_MAP && NitroPort_LowerMapLoaded();
 }
 
 /* The picture drawn (on, or kept on while the game swaps what's under it). */
@@ -531,15 +573,6 @@ static void draw(void)
     for (y = 3; y < 237; y++) {
         put(2, y, WHITE);
         put(243, y, WHITE);
-    }
-    sDrawHasMap = map_shown();
-    if (sDrawHasMap) {
-        const uint32_t *panel = NitroPort_LowerMapPanel();
-
-        for (y = 0; y < NITRO_LOWERMENU_PANEL_H; y++) {
-            memcpy(sDraw + (NITRO_LOWERMENU_PANEL_Y0 + y) * W + NITRO_LOWERMENU_PANEL_X0, panel + y * NITRO_LOWERMENU_PANEL_W,
-                   NITRO_LOWERMENU_PANEL_W * sizeof(uint32_t));
-        }
     }
     /* The column. */
     for (y = 0; y < H; y++) {
@@ -615,46 +648,10 @@ static void redraw(void)
                        sPoketchIconPalette);
     }
     draw();
-    if (sDrawHasMap) {
-        int y0, y1;
-
-        NitroPort_LowerMapTakeDirty(&y0, &y1);   /* (all of it drawn) */
-    }
     lock();
     memcpy(sPicture, sDraw, sizeof(sPicture));
-    sPictureHasPanel = map_shown();
     sDirtyY0 = 0;
     sDirtyY1 = H;
-    __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
-    unlock();
-}
-
-/* The map's rows drawn again (the player on a new square, a sprite's
- * frame) into the picture, the rest of it as it is, and handed over: on the
- * game's thread, so only them, not the whole picture. */
-static void redraw_map_rows(void)
-{
-    const uint32_t *panel = NitroPort_LowerMapPanel();
-    int y0, y1, y;
-
-    if (!sDrawHasMap) {
-        redraw();   /* (the picture drawn without the map: all of it) */
-        return;
-    }
-    NitroPort_LowerMapTakeDirty(&y0, &y1);
-    if (y0 >= y1) {
-        return;
-    }
-    for (y = y0; y < y1; y++) {
-        memcpy(sDraw + (NITRO_LOWERMENU_PANEL_Y0 + y) * W + NITRO_LOWERMENU_PANEL_X0, panel + y * NITRO_LOWERMENU_PANEL_W,
-               NITRO_LOWERMENU_PANEL_W * sizeof(uint32_t));
-    }
-    y0 += NITRO_LOWERMENU_PANEL_Y0;
-    y1 += NITRO_LOWERMENU_PANEL_Y0;
-    lock();
-    memcpy(sPicture + y0 * W, sDraw + y0 * W, (size_t)(y1 - y0) * W * sizeof(uint32_t));
-    sDirtyY0 = y0 < sDirtyY0 ? y0 : sDirtyY0;
-    sDirtyY1 = y1 > sDirtyY1 ? y1 : sDirtyY1;
     __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
     unlock();
 }
@@ -688,20 +685,6 @@ void NitroPort_LowerMenuHoldUpper(int hold)
 int NitroPort_LowerMenuUpperHeld(void)
 {
     return __atomic_load_n(&sHoldUpper, __ATOMIC_ACQUIRE);
-}
-
-void NitroPort_LowerMenuHoldLower(int hold)
-{
-    hold = hold ? 1 : 0;
-    if (hold != __atomic_load_n(&sHoldLower, __ATOMIC_ACQUIRE)) {
-        __atomic_store_n(&sHoldLower, hold, __ATOMIC_RELEASE);
-        NitroPort_Log("[lowermenu] lower screen %s", hold ? "held" : "let go");
-    }
-}
-
-int NitroPort_LowerMenuLowerHeld(void)
-{
-    return __atomic_load_n(&sHoldLower, __ATOMIC_ACQUIRE);
 }
 
 int NitroPort_LowerMenuBrightness(unsigned masterBright)
@@ -802,11 +785,6 @@ const uint32_t *NitroPort_LowerMenuLockFrame(uint32_t *serial)
     return sPicture;
 }
 
-int NitroPort_LowerMenuFrameHasPanel(void)
-{
-    return sPictureHasPanel;
-}
-
 void NitroPort_LowerMenuTakeDirtyRows(int *y0, int *y1)
 {
     *y0 = sDirtyY0;
@@ -815,64 +793,152 @@ void NitroPort_LowerMenuTakeDirtyRows(int *y0, int *y1)
     sDirtyY1 = 0;
 }
 
+/* (under sFadeLock, or the game's thread with no change on its way) */
+static void show_panel(int shows)
+{
+    if (shows != sPanelShows) {
+        __atomic_store_n(&sPanelShows, shows, __ATOMIC_RELEASE);
+        __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);   /* (the platforms draw the panel) */
+    }
+}
+
 void NitroPort_LowerMenuSetPanel(int shows)
 {
-    shows = shows >= NITRO_LOWERMENU_PANEL_MAP && shows < NITRO_LOWERMENU_PANEL_PICTURE0 + NITRO_LOWERMENU_PICTURES
-                ? shows
-                : NITRO_LOWERMENU_PANEL_DS;
-    if (shows != sPanelShows) {
-        int before = map_shown();
-
-        __atomic_store_n(&sPanelShows, shows, __ATOMIC_RELEASE);
-        if (drawn() && map_shown() != before) {
-            redraw();   /* (the map's in the picture, or no longer) */
-        } else {
-            __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);   /* (the platforms draw the panel otherwise) */
-        }
+    shows = shows == NITRO_LOWERMENU_PANEL_MAP ? shows : NITRO_LOWERMENU_PANEL_DS;
+    spin_lock(&sFadeLock);
+    if (sPanelNext >= 0) {
+        sPanelNext = shows;   /* (a change on its way: shown once the panel's black) */
+    } else {
+        show_panel(shows);
     }
+    spin_unlock(&sFadeLock);
 }
 
 int NitroPort_LowerMenuPanel(void)
 {
-    int n = picture_shown();
-
-    return map_shown() ? NITRO_LOWERMENU_PANEL_MAP : n >= 0 ? NITRO_LOWERMENU_PANEL_PICTURE0 + n : NITRO_LOWERMENU_PANEL_DS;
+    return map_shown() ? NITRO_LOWERMENU_PANEL_MAP : NITRO_LOWERMENU_PANEL_DS;
 }
+
+/* ----------------------------------------------------------- the fade */
 
 void NitroPort_LowerMenuSetClock(uint32_t (*now)(void))
 {
     sClock = now;
 }
 
-uint32_t NitroPort_LowerMenuPictureStamp(int n)
+/* How dark the panel is at the time now (under sFadeLock; a fade that
+ * starts later: as it starts). */
+static int fade_level(uint32_t now)
 {
-    return n >= 0 && n < NITRO_LOWERMENU_PICTURES ? __atomic_load_n(&sPictureStamp[n], __ATOMIC_ACQUIRE) : 0;
-}
+    int span = sFadeTo > sFadeFrom ? sFadeTo - sFadeFrom : sFadeFrom - sFadeTo;
+    int32_t frames = span * NITRO_LOWERMENU_FADE_FRAMES / 16, t = (int32_t)(now - sFadeStart);
 
-void NitroPort_LowerMenuKeepPicture(int n)
-{
-    if (n >= 0 && n < NITRO_LOWERMENU_PICTURES) {
-        __atomic_store_n(&sPictureStamp[n], sClock ? sClock() : 0u, __ATOMIC_RELEASE);
-        __atomic_add_fetch(&sPictureWish[n], 1u, __ATOMIC_RELEASE);
-        __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);   /* (a frame drawn: the platforms keep it then) */
+    if (sClock == NULL || frames == 0 || t >= frames) {
+        return sFadeTo;
     }
-}
-
-uint32_t NitroPort_LowerMenuPictureWish(int n)
-{
-    return n >= 0 && n < NITRO_LOWERMENU_PICTURES ? __atomic_load_n(&sPictureWish[n], __ATOMIC_ACQUIRE) : 0;
-}
-
-int NitroPort_LowerMenuPictureReady(int n)
-{
-    return n >= 0 && n < NITRO_LOWERMENU_PICTURES && __atomic_load_n(&sPictureReady[n], __ATOMIC_ACQUIRE);
-}
-
-void NitroPort_LowerMenuPictureKept(int n, int kept)
-{
-    if (n >= 0 && n < NITRO_LOWERMENU_PICTURES) {
-        __atomic_store_n(&sPictureReady[n], kept ? 1 : 0, __ATOMIC_RELEASE);
+    if (t <= 0) {
+        return sFadeFrom;
     }
+    return sFadeFrom + (sFadeTo - sFadeFrom) * t / frames;
+}
+
+/* (under sFadeLock) A fade from how dark it is now to `to`, beginning in
+ * `wait` frames. Fading in to the map: once it's drawn as given by now. */
+static void fade_to(int to, uint32_t now, uint32_t wait)
+{
+    sFadeFrom = fade_level(now);
+    sFadeTo = to;
+    sFadeStart = now + wait;
+    sFadeAsked = now;
+    sFadeWaitSub = to ? 0 : __atomic_load_n(&sSubSerial, __ATOMIC_ACQUIRE);
+}
+
+void NitroPort_LowerMenuFadePanel(int black)
+{
+    uint32_t now = sClock ? sClock() : 0;
+
+    spin_lock(&sFadeLock);
+    if (black == NITRO_LOWERMENU_CLEAR_NOW) {
+        sFadeFrom = sFadeTo = 0;
+        sFadeWaitSub = 0;
+        sPanelNext = -1;   /* (a change on its way: not made; the game shows what it wants) */
+    } else if (black) {
+        sPanelNext = -1;   /* (black to stay so: a change on its way not made) */
+        if (sFadeTo != 16) {
+            fade_to(16, now, 0);
+        }
+    } else if (sPanelNext < 0 && sFadeTo != 0) {
+        /* (with a change on its way, it fades in itself) */
+        fade_to(0, now, 0);
+    }
+    spin_unlock(&sFadeLock);
+}
+
+void NitroPort_LowerMenuFadeToPanel(int shows)
+{
+    uint32_t now = sClock ? sClock() : 0;
+
+    shows = shows == NITRO_LOWERMENU_PANEL_MAP ? shows : NITRO_LOWERMENU_PANEL_DS;
+    spin_lock(&sFadeLock);
+    if (shows != (sPanelNext >= 0 ? sPanelNext : sPanelShows)) {
+        if (sClock == NULL) {
+            show_panel(shows);   /* (no clock: at once) */
+            sPanelNext = -1;
+        } else {
+            sPanelNext = shows;
+            if (sFadeTo != 16) {
+                fade_to(16, now, 0);
+            }
+        }
+    }
+    spin_unlock(&sFadeLock);
+}
+
+int NitroPort_LowerMenuPanelFade(void)
+{
+    uint32_t now = sClock ? sClock() : 0;
+    int level;
+
+    spin_lock(&sFadeLock);
+    /* A change on its way, the panel black: made, and faded back in (the DS's
+     * lower screen a few frames on: its picture drawn first). On whichever
+     * thread asks first: the display's every frame, whatever the game's
+     * doing. */
+    if (sPanelNext >= 0 && fade_level(now) >= 16) {
+        int shows = sPanelNext, span = 16 - sFadeFrom;
+        /* (from when it went black, however late it's asked) */
+        uint32_t black = sClock != NULL ? sFadeStart + (uint32_t)(span * NITRO_LOWERMENU_FADE_FRAMES / 16) : now;
+
+        if ((int32_t)(now - black) < 0) {
+            black = now;
+        }
+        sPanelNext = -1;
+        show_panel(shows);
+        fade_to(0, black, shows == NITRO_LOWERMENU_PANEL_DS ? FADE_DS_HOLD : 0);
+        sFadeAsked = now;
+    }
+    if (sFadeTo == 0 && map_shown()) {
+        if (!__atomic_load_n(&sMapPicReady, __ATOMIC_ACQUIRE)) {
+            /* (no map drawn yet: black, faded in once it is) */
+            sFadeFrom = 16;
+            sFadeStart = now;
+        } else if (sFadeWaitSub != 0) {
+            /* (fading in to the map: not begun till it's drawn as it was
+             * given when the fade was asked for, half a second at most) */
+            if ((int32_t)(__atomic_load_n(&sMapDrawnSub, __ATOMIC_ACQUIRE) - sFadeWaitSub) < 0 &&
+                sClock != NULL && now - sFadeAsked < FADE_WAIT_MAX) {
+                sFadeStart = now;
+            } else {
+                sFadeWaitSub = 0;
+            }
+        }
+    }
+    level = fade_level(now);
+    if (sClock == NULL && sFadeTo == 0 && map_shown() && !__atomic_load_n(&sMapPicReady, __ATOMIC_ACQUIRE)) {
+        level = 16;
+    }
+    spin_unlock(&sFadeLock);
+    return level;
 }
 
 void NitroPort_LowerMenuKeepShown(int on)
@@ -891,41 +957,54 @@ void NitroPort_LowerMenuKeepShown(int on)
 
 int NitroPort_LowerMenuKeptShown(void)
 {
-    return __atomic_load_n(&sKeepShown, __ATOMIC_ACQUIRE) && panel_is_menus();
+    return __atomic_load_n(&sKeepShown, __ATOMIC_ACQUIRE);
+}
+
+/* ------------------------------------------------------------ the map */
+
+/* The panel's rows the map's drawer drew again, into the map's picture for
+ * the platforms. */
+static void publish_map(void)
+{
+    const uint32_t *panel = NitroPort_LowerMapPanel();
+    int y0, y1;
+
+    NitroPort_LowerMapTakeDirty(&y0, &y1);
+    if (y0 >= y1) {
+        return;
+    }
+    spin_lock(&sMapPicLock);
+    memcpy(sMapPic + y0 * NITRO_LOWERMENU_PANEL_W, panel + y0 * NITRO_LOWERMENU_PANEL_W,
+           (size_t)(y1 - y0) * NITRO_LOWERMENU_PANEL_W * sizeof(uint32_t));
+    sMapPicY0 = y0 < sMapPicY0 ? y0 : sMapPicY0;
+    sMapPicY1 = y1 > sMapPicY1 ? y1 : sMapPicY1;
+    __atomic_store_n(&sMapPicReady, 1, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&sMapPicSerial, 1u, __ATOMIC_RELEASE);
+    spin_unlock(&sMapPicLock);
 }
 
 void NitroPort_LowerMenuSetMap(const NitroLowerMap *map)
 {
-    if (NitroPort_LowerMapSet(map) && drawn() && map_shown()) {
-        redraw_map_rows();
+    if (NitroPort_LowerMapLoad() && NitroPort_LowerMapSet(map)) {
+        publish_map();
     }
 }
 
-static NitroLowerMap sPending;
-static uint16_t sPendingName[256 * 64], sPendingDesc[256 * 192];
+int NitroPort_LowerMenuMapAvailable(void)
+{
+    return NitroPort_LowerMapLoad();
+}
 
 void NitroPort_LowerMenuMapBegin(void)
 {
-    /* (the text kept: the last one given, until new text or none) */
-    NitroLowerMap text = sPending;
-
-    memset(&sPending, 0, sizeof(sPending));
-    sPending.name = text.name;
-    sPending.nameX = text.nameX;
-    sPending.nameY = text.nameY;
-    sPending.nameW = text.nameW;
-    sPending.nameH = text.nameH;
-    sPending.desc = text.desc;
-    sPending.descX = text.descX;
-    sPending.descY = text.descY;
-    sPending.descW = text.descW;
-    sPending.descH = text.descH;
+    /* (the texts kept: the last ones given, new till they're handed over) */
+    memset(&sPend, 0, sizeof(sPend));
 }
 
 void NitroPort_LowerMenuMapSprite(int kind, int x, int y, int frame, int palette)
 {
-    if (sPending.sprites < NITRO_LOWERMAP_MAX_SPRITES) {
-        NitroLowerMapSprite *s = &sPending.sprite[sPending.sprites++];
+    if (sPend.sprites < NITRO_LOWERMAP_MAX_SPRITES) {
+        NitroLowerMapSprite *s = &sPend.sprite[sPend.sprites++];
 
         s->kind = (uint8_t)kind;
         s->x = (short)x;
@@ -937,55 +1016,275 @@ void NitroPort_LowerMenuMapSprite(int kind, int x, int y, int frame, int palette
 
 void NitroPort_LowerMenuMapDot(int x, int y)
 {
-    if (sPending.dots < NITRO_LOWERMAP_MAX_DOTS) {
-        sPending.dot[sPending.dots].x = (short)x;
-        sPending.dot[sPending.dots].y = (short)y;
-        sPending.dots++;
+    if (sPend.dots < NITRO_LOWERMAP_MAX_DOTS) {
+        sPend.dot[sPend.dots].x = (short)x;
+        sPend.dot[sPend.dots].y = (short)y;
+        sPend.dots++;
     }
 }
 
 void NitroPort_LowerMenuMapLayout(int hidden, int zoomX, int zoomY)
 {
-    sPending.hidden = (uint16_t)hidden;
-    sPending.zoomX = (short)zoomX;
-    sPending.zoomY = (short)zoomY;
+    sPend.hidden = (uint16_t)hidden;
+    sPend.zoomX = (short)zoomX;
+    sPend.zoomY = (short)zoomY;
 }
 
-uint16_t *NitroPort_LowerMenuMapText(int which, int x, int y, int w, int h)
+void NitroPort_LowerMenuMapText(int which, int x, int y, int wTiles, int hTiles, const void *tiles,
+                                const uint16_t *palette, uint32_t key)
 {
-    if (w <= 0 || h <= 0 || w > 256 || h > (which == 0 ? 64 : 192)) {
-        return NULL;
+    MapText *t;
+    int k, slot = 0;
+
+    if (which < 0 || which > 1) {
+        return;
     }
-    if (which == 0) {
-        memset(sPendingName, 0, (size_t)w * (size_t)h * 2);
-        sPending.name = sPendingName;
-        sPending.nameX = (short)x;
-        sPending.nameY = (short)y;
-        sPending.nameW = (short)w;
-        sPending.nameH = (short)h;
-        return sPendingName;
+    t = &sPendText[which];
+    sPendTextNew[which] = 1;
+    t->shown = tiles != NULL && palette != NULL && wTiles > 0 && hTiles > 0 && wTiles <= 32 &&
+               hTiles <= MAP_TEXT_MAX_H(which);
+    if (!t->shown) {
+        return;
     }
-    memset(sPendingDesc, 0, (size_t)w * (size_t)h * 2);
-    sPending.desc = sPendingDesc;
-    sPending.descX = (short)x;
-    sPending.descY = (short)y;
-    sPending.descW = (short)w;
-    sPending.descH = (short)h;
-    return sPendingDesc;
+    t->x = (short)x;
+    t->y = (short)y;
+    t->wTiles = (short)wTiles;
+    t->hTiles = (short)hTiles;
+    memcpy(t->palette, palette, sizeof(t->palette));
+    memcpy(t->tiles, tiles, (size_t)wTiles * (size_t)hTiles * 32u);
+    /* (kept: in the slot with that key, else an empty one, else the one used
+     * longest ago) */
+    for (k = 0; k < NITRO_LOWERMENU_TEXTS_KEPT; k++) {
+        if (sKeptText[which][k].used && sKeptText[which][k].key == key) {
+            slot = k;
+            break;
+        }
+        if (!sKeptText[which][k].used || (sKeptText[which][slot].used && sKeptText[which][k].last < sKeptText[which][slot].last)) {
+            slot = k;
+        }
+    }
+    sKeptText[which][slot].used = 1;
+    sKeptText[which][slot].key = key;
+    sKeptText[which][slot].last = ++sKeptClock;
+    memcpy(&sKeptText[which][slot].text, t, offsetof(MapText, tiles) + (size_t)wTiles * (size_t)hTiles * 32u);
+}
+
+int NitroPort_LowerMenuMapTextKept(int which, uint32_t key)
+{
+    int k;
+
+    if (which < 0 || which > 1) {
+        return 0;
+    }
+    for (k = 0; k < NITRO_LOWERMENU_TEXTS_KEPT; k++) {
+        if (sKeptText[which][k].used && sKeptText[which][k].key == key) {
+            const MapText *from = &sKeptText[which][k].text;
+
+            sKeptText[which][k].last = ++sKeptClock;
+            memcpy(&sPendText[which], from, offsetof(MapText, tiles) + (size_t)from->wTiles * (size_t)from->hTiles * 32u);
+            sPendTextNew[which] = 1;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 void NitroPort_LowerMenuMapNoText(int which)
 {
-    if (which == 0) {
-        sPending.name = NULL;
-    } else {
-        sPending.desc = NULL;
+    if (which >= 0 && which <= 1) {
+        sPendText[which].shown = 0;
+        sPendTextNew[which] = 1;
     }
+}
+
+/* The map's drawer wanted: woken, or (no worker) drawing now. */
+static void want_map_work(void)
+{
+    if (sMapWake != NULL) {
+        sMapWake();
+    } else {
+        NitroPort_LowerMenuMapWork();
+    }
+}
+
+/* What the game gave handed over to the map's drawer, if its lock's free:
+ * the game's thread never waits for the drawer (on another core, at a low
+ * priority, it may be held up while it has the lock); else again next frame
+ * (NitroPort_LowerMenuTouch). */
+static void hand_over(void)
+{
+    int k;
+
+    if (!sPendWaiting || __atomic_test_and_set(&sMapLock, __ATOMIC_ACQUIRE)) {
+        return;
+    }
+    sPendWaiting = 0;
+    sSub = sPend;
+    for (k = 0; k < 2; k++) {
+        if (sPendTextNew[k]) {
+            const MapText *from = &sPendText[k];
+            MapText *to = &sSubText[k];
+
+            /* (as much as it holds) */
+            memcpy(to, from, offsetof(MapText, tiles));
+            if (from->shown) {
+                memcpy(to->tiles, from->tiles, (size_t)from->wTiles * (size_t)from->hTiles * 32u);
+            }
+            sSubTextSerial[k]++;
+            sPendTextNew[k] = 0;
+        }
+    }
+    __atomic_add_fetch(&sSubSerial, 1u, __ATOMIC_RELEASE);
+    spin_unlock(&sMapLock);
+    want_map_work();
 }
 
 void NitroPort_LowerMenuMapEnd(void)
 {
-    NitroPort_LowerMenuSetMap(&sPending);
+    if (!NitroPort_LowerMapLoad()) {
+        return;   /* (no Town Map's pictures: no map) */
+    }
+    sPendWaiting = 1;
+    hand_over();
+}
+
+void NitroPort_LowerMenuSetMapWorker(void (*wake)(void))
+{
+    sMapWake = wake;
+}
+
+/* A text's window as pixels (NitroLowerMap's: 0x8000 | its colour, or 0). */
+static void text_pixels(const MapText *t, uint16_t *out)
+{
+    int w = t->wTiles * 8, h = t->hTiles * 8, x, y;
+
+    for (y = 0; y < h; y++) {
+        const uint8_t *row = t->tiles + (size_t)(y >> 3) * (size_t)t->wTiles * 32u + (size_t)(y & 7) * 4u;
+
+        for (x = 0; x < w; x += 2) {
+            int b = row[(x >> 3) * 32 + ((x & 7) >> 1)], lo = b & 15, hi = b >> 4;
+
+            out[y * w + x] = lo ? (uint16_t)(0x8000u | (t->palette[lo] & 0x7FFFu)) : 0;
+            out[y * w + x + 1] = hi ? (uint16_t)(0x8000u | (t->palette[hi] & 0x7FFFu)) : 0;
+        }
+    }
+}
+
+int NitroPort_LowerMenuMapWork(void)
+{
+    static MapText text[2];   /* (the drawer's) */
+    int take, fresh[2] = { 0, 0 }, k, drew;
+    uint32_t sub, before = __atomic_load_n(&sMapPicSerial, __ATOMIC_ACQUIRE);
+
+    spin_lock(&sMapLock);
+    sub = sSubSerial;
+    take = sub != sWorkSub;
+    if (take) {
+        NitroLowerMap keep = sWork;   /* (the texts' places, as last made) */
+
+        sWork = sSub;
+        sWork.name = keep.name;
+        sWork.nameX = keep.nameX;
+        sWork.nameY = keep.nameY;
+        sWork.nameW = keep.nameW;
+        sWork.nameH = keep.nameH;
+        sWork.desc = keep.desc;
+        sWork.descX = keep.descX;
+        sWork.descY = keep.descY;
+        sWork.descW = keep.descW;
+        sWork.descH = keep.descH;
+        for (k = 0; k < 2; k++) {
+            if (sSubTextSerial[k] != sWorkTextSerial[k]) {
+                memcpy(&text[k], &sSubText[k], offsetof(MapText, tiles));
+                if (sSubText[k].shown) {
+                    memcpy(text[k].tiles, sSubText[k].tiles, (size_t)sSubText[k].wTiles * (size_t)sSubText[k].hTiles * 32u);
+                }
+                sWorkTextSerial[k] = sSubTextSerial[k];
+                fresh[k] = 1;
+            }
+        }
+        sWorkSub = sub;
+    }
+    spin_unlock(&sMapLock);
+    /* (the animations' frame first: a whole map drawn at it) */
+    NitroPort_LowerMapSetFrame(__atomic_load_n(&sMapFrame, __ATOMIC_ACQUIRE));
+    if (take) {
+        for (k = 0; k < 2; k++) {
+            uint16_t *pixels = k == 0 ? sWorkName : sWorkDesc;
+
+            if (!fresh[k]) {
+                continue;
+            }
+            if (!text[k].shown) {
+                if (k == 0) {
+                    sWork.name = NULL;
+                } else {
+                    sWork.desc = NULL;
+                }
+                continue;
+            }
+            text_pixels(&text[k], pixels);
+            if (k == 0) {
+                sWork.name = pixels;
+                sWork.nameX = text[k].x;
+                sWork.nameY = text[k].y;
+                sWork.nameW = (short)(text[k].wTiles * 8);
+                sWork.nameH = (short)(text[k].hTiles * 8);
+            } else {
+                sWork.desc = pixels;
+                sWork.descX = text[k].x;
+                sWork.descY = text[k].y;
+                sWork.descW = (short)(text[k].wTiles * 8);
+                sWork.descH = (short)(text[k].hTiles * 8);
+            }
+        }
+        NitroPort_LowerMapSet(&sWork);
+    }
+    publish_map();
+    if (take) {
+        __atomic_store_n(&sMapDrawnSub, sub, __ATOMIC_RELEASE);
+    }
+    drew = __atomic_load_n(&sMapPicSerial, __ATOMIC_ACQUIRE) != before;
+    return drew;
+}
+
+const uint32_t *NitroPort_LowerMenuLockMap(uint32_t *serial)
+{
+    spin_lock(&sMapPicLock);
+    if (serial) {
+        *serial = sMapPicSerial;
+    }
+    return sMapPicReady ? sMapPic : NULL;
+}
+
+int NitroPort_LowerMenuTryLockMap(const uint32_t **map, uint32_t *serial)
+{
+    if (__atomic_test_and_set(&sMapPicLock, __ATOMIC_ACQUIRE)) {
+        return 0;
+    }
+    if (serial) {
+        *serial = sMapPicSerial;
+    }
+    *map = sMapPicReady ? sMapPic : NULL;
+    return 1;
+}
+
+void NitroPort_LowerMenuTakeMapDirtyRows(int *y0, int *y1)
+{
+    *y0 = sMapPicY0;
+    *y1 = sMapPicY1;
+    sMapPicY0 = NITRO_LOWERMENU_PANEL_H;
+    sMapPicY1 = 0;
+}
+
+void NitroPort_LowerMenuUnlockMap(void)
+{
+    spin_unlock(&sMapPicLock);
+}
+
+uint32_t NitroPort_LowerMenuMapSerial(void)
+{
+    return __atomic_load_n(&sMapPicSerial, __ATOMIC_ACQUIRE);
 }
 
 void NitroPort_LowerMenuUnlockFrame(void)
@@ -1049,13 +1348,15 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
     int b, held = sHeld;
 
     sFrames++;
+    hand_over();   /* (a map the drawer's lock held up) */
     if (!sOn && !sKeepShown) {
         sTouchIn = -1;
         return 0;
     }
-    /* (the map's animations: a frame) */
-    if (NitroPort_LowerMapTick() && map_shown()) {
-        redraw_map_rows();
+    /* (the map's animations: drawn when they change, the map shown) */
+    if (NitroPort_LowerMapFrameChanges(__atomic_add_fetch(&sMapFrame, 1u, __ATOMIC_ACQ_REL)) && map_shown() &&
+        __atomic_load_n(&sMapPicReady, __ATOMIC_ACQUIRE)) {
+        want_map_work();
     }
     if (!down) {
         if (sTouchIn == 0 && sTouchButton >= 0 && sHeld == sTouchButton) {
@@ -1066,7 +1367,7 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
             sLastPressFrame = sFrames;
             sPressFrame = sFrames;
             __atomic_store_n(&sPress, sTouchButton, __ATOMIC_RELEASE);
-        } else if (sTouchIn == 3 && panel_is_menus()) {
+        } else if (sTouchIn == 3 && map_shown()) {
             /* (let go: still in the panel, or dragged off it, a tap) */
             sPressDouble = 0;
             sLastPress = -1;
@@ -1085,7 +1386,7 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
             /* (an app whose touch screen isn't shown, or the menu kept
              * shown while the game swaps what's under it: nobody's till let
              * go) */
-            sTouchIn = !sOn ? 2 : panel_is_menus() ? 3 : sPanelTouch ? 1 : 2;
+            sTouchIn = !sOn || NitroPort_LowerMenuPanelFade() > 0 ? 2 : map_shown() ? 3 : sPanelTouch ? 1 : 2;
         } else {
             sTouchIn = 0;
             sTouchButton = NitroPort_LowerMenuButtonAt(x, y);

@@ -1474,6 +1474,9 @@ static volatile bool sMustDraw[2];
 
 /* Each screen's picture, in the DS's colours. */
 static u16 sPixels[2][256 * 192];   /* 0: upper, 1: lower */
+/* (the remaster) The lower screen not drawn: the menu's panel shows the map
+ * over it (its drawer's). */
+static bool sLowerHidden;
 
 /* Engine A shows on the upper screen when POWCNT1 says so. */
 static bool OnTop(int engine, bool aOnTop)
@@ -1509,6 +1512,21 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
          * DS's 192 rows (nitro_port_lowermenu.h). */
         if (!top && NitroPort_LowerMenuOn() && NitroPort_LowerMenuTall()) {
             split.height = NITRO_LOWERMENU_TALL_LINES;
+        }
+        /* The menu's panel showing the map: the DS's lower screen (the
+         * Pokétch underneath) isn't shown, so not drawn; drawn whole again
+         * once it's shown. Its master brightness still counts (the whole
+         * menu fades with it, as with the field's fades): drawn when that
+         * changes. */
+        if (!top && NitroPort_LowerMenuOn() && !NitroPort_LowerMenuKeptShown() &&
+            NitroPort_LowerMenuPanel() == NITRO_LOWERMENU_PANEL_MAP && !layers->displayOff && !sMustDraw[1] &&
+            (int)NitroPort_Render2DMasterBright(engine, 1) == layers->masterBright) {
+            sLowerHidden = true;
+            return false;
+        }
+        if (!top && sLowerHidden) {
+            sLowerHidden = false;
+            sMustDraw[1] = true;
         }
         if (sMustDraw[top ? 0 : 1]) {
             sMustDraw[top ? 0 : 1] = false;
@@ -1720,6 +1738,73 @@ static void StopDrawers(void)
         }
     }
     sDrawerCount = 0;
+}
+
+/* ------------------------------------------------------- the map's drawer
+ * (the remaster's lower menu: nitro_port_lowermenu.h) The Town Map in the
+ * menu's panel drawn off the game's thread: the player walking onto a new
+ * square or into a new place, the cursor's and the dots' animations. At
+ * the lowest priority, on a core with time to spare: a New 3DS's second
+ * (engine A's drawer and the geometry first: the map's a frame or two
+ * late at worst), else core 0, after everything there. The game's core
+ * only hands it over: walking with the map out costs the game nothing. */
+static Thread sMapThread;
+static LightEvent sMapGo;
+static volatile bool sMapQuit;
+
+static void MapWake(void)
+{
+    LightEvent_Signal(&sMapGo);
+}
+
+static void MapMain(void *arg)
+{
+    (void)arg;
+    CatchCrashes();
+    for (;;) {
+        LightEvent_Wait(&sMapGo);
+        if (__atomic_load_n(&sMapQuit, __ATOMIC_ACQUIRE)) {
+            break;
+        }
+        NitroPort_LowerMenuMapWork();
+    }
+    threadExit(0);
+}
+
+static void StartMapDrawer(s32 priority, bool isNew3ds)
+{
+    int core = isNew3ds ? 2 : 0;
+
+    if (!sRemaster) {
+        return;   /* (no menu without the remaster's compositor) */
+    }
+    LightEvent_Init(&sMapGo, RESET_ONESHOT);
+    __atomic_store_n(&sMapQuit, false, __ATOMIC_RELEASE);
+    sMapThread = CreateThreadPatiently(MapMain, NULL, 32 * 1024, priority + 4, core, false);
+    if (sMapThread == NULL) {
+        NitroPort_Log("[lowermenu] couldn't start the map's drawer: the game's thread draws the map");
+        LogThreadTrouble("map", 32 * 1024, priority + 4, core);
+        return;
+    }
+    NitroPort_LowerMenuSetMapWorker(MapWake);
+}
+
+static void StopMapDrawer(void)
+{
+    if (sMapThread == NULL) {
+        return;
+    }
+    /* (the worker left set: a map handed over meanwhile isn't drawn, rather
+     * than drawn on the game's thread while the drawer may be too) */
+    __atomic_store_n(&sMapQuit, true, __ATOMIC_RELEASE);
+    LightEvent_Signal(&sMapGo);
+    if (R_SUCCEEDED(threadJoin(sMapThread, 1000000000ULL))) {
+        threadFree(sMapThread);
+    } else {
+        sStopFailed = true;
+        NitroPort_Log("The map's drawer didn't stop: quitting without it");
+    }
+    sMapThread = NULL;
 }
 
 static bool DrawersBusy(void)
@@ -2546,6 +2631,7 @@ int main(int argc, char **argv)
             StartGeometry(priority, isNew3ds);   /* first: core 1's share */
             CheckCoreSpeed(priority, isNew3ds);  /* (with that share, nothing drawing yet) */
             StartDrawers(priority, isNew3ds);
+            StartMapDrawer(priority, isNew3ds);
             if (sDrawerCount == 2) {
                 NitroPort_Log("[perf] %s 3DS; drawing: the 3D engine's screen on core %d, the other on core %d",
                               isNew3ds ? "New" : "Old", sDrawers[0].core, sDrawers[1].core);
@@ -2581,6 +2667,7 @@ int main(int argc, char **argv)
             NitroPort_Log("[quit] %s (%.0f ms)", what, (double)(svcGetSystemTick() - t0) * 1000.0 / SYSCLOCK_ARM11); } while (0)
         NitroPort_Log("[quit] closing");
         QUIT_STEP("drawing threads stopped", StopDrawers());
+        QUIT_STEP("the map's drawer stopped", StopMapDrawer());
         QUIT_STEP("geometry stopped", StopGeometry());
         QUIT_STEP("display stopped", StopGpu());
         QUIT_STEP("sound stopped", StopSound());

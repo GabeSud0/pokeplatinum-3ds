@@ -7,35 +7,45 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 On the 3DS remaster's lower menu, a tap on a button does what it says at
-once, and leaving what it opened leaves the menu too:
+once, leaving what the menu opened leaves the menu too, and the panel
+fades to black and back whenever what it shows changes:
 
-- A tap opens the menu straight on the button with the press's sound
-  (the menu's opening sound is X's: field_control.c asks
-  StartMenu_PortTapOpening). What the tap opened, left (B, or the bag's
-  button again; the party, the trainer card, the Pokédex, the options, the
-  Town Map, the save's question answered no), leaves the menu: back to
-  walking. Opened with X, the menu comes back as on the DS.
-- The panel keeps the tab chosen last: the map, the Pokétch, or the bag as
-  the player left it. The bag's tab shows the bag's picture (the platform
-  keeps the lower screen's picture when the bag settles and as it's left:
-  NitroPort_LowerMenuKeepPicture); a tap on it opens the bag.
-- BAG: the picture shown at once, the bag itself once it's whole (the
-  upper screen keeping the field, the menu kept on meanwhile:
-  NitroPort_LowerMenuKeepShown); B or BAG puts it away the same way, the
-  picture as it was left kept on while the field comes back. The first
-  time (no picture yet) the lower screen is kept as it is instead.
-- From the bag, MAP shows the map in the panel at once (the port draws
-  it), POKéTCH the Pokétch as it was when the bag came (its picture) till
-  the field's back; the button tapped is lit at once.
+- A tap opens the menu straight on the button (its cursor on it from the
+  start) with the press's sound (the menu's opening sound is X's:
+  field_control.c asks StartMenu_PortTapOpening). What the menu opened,
+  left (B, or the bag's button again; the party, the trainer card, the
+  Pokédex, the options, the Town Map, the save's question answered no),
+  leaves the menu: back to walking, whether a tap or X opened it.
+- The panel shows the tab chosen, the map or the Pokétch. Changing tabs
+  (MAP, POKéTCH) it fades to black, shows the other one and fades back in
+  (NitroPort_LowerMenuFadeToPanel: the port makes the change once the
+  panel's black, whatever the game's running then; the Pokétch's picture
+  drawn first).
+- BAG: the panel fades to black, the menu kept on
+  (NitroPort_LowerMenuKeepShown), and the field goes and the bag comes
+  behind it, the upper screen keeping the field; the bag pops in once it's
+  whole. B or BAG: the panel fades to black again, the field comes back
+  behind it, and the panel fades in on the map (the Pokétch for POKéTCH,
+  or without the Town Map). The bag's other buttons as before (apps
+  straight from it, SAVE back in the field).
 - MAP shows the map; only a double tap on it (NitroPort_LowerMenuPressDouble)
   opens the Town Map app, or A on it with the map shown in the menu opened
   with X. A tap on the map does nothing.
+- The map told to the port cheaply as the player walks (the port draws it
+  off the game's thread): the Town Map's context worked out each time
+  with nothing read (town_map/context.c keeps the description flags'
+  file, read once), its blocks and the texts' palettes read once, the
+  name and the description printed only when they change, one a frame
+  while the panel's shown, and only when the port hasn't kept them
+  (NitroPort_LowerMenuMapTextKept); the windows' tiles handed over as
+  they are (the port makes them pixels).
 ---
- include/start_menu.h           |   2 +
- src/applications/bag/main.c    |  78 ++++++++++--
- src/overlay005/field_control.c |  26 ++++
- src/start_menu.c               | 211 +++++++++++++++++++++++++++------
- 4 files changed, 267 insertions(+), 50 deletions(-)
+ include/start_menu.h                |   2 +
+ src/applications/bag/main.c         | 100 +++++--
+ src/applications/town_map/context.c |  57 ++--
+ src/overlay005/field_control.c      |  26 ++
+ src/start_menu.c                    | 392 +++++++++++++++++++---------
+ 5 files changed, 406 insertions(+), 171 deletions(-)
 
 diff --git a/include/start_menu.h b/include/start_menu.h
 index 4392c8ea..3b3558b0 100644
@@ -51,18 +61,21 @@ index 4392c8ea..3b3558b0 100644
  void StartMenu_PortMapStale(void);
  #endif
 diff --git a/src/applications/bag/main.c b/src/applications/bag/main.c
-index daa9a6ed..ab362138 100644
+index daa9a6ed..5569b04f 100644
 --- a/src/applications/bag/main.c
 +++ b/src/applications/bag/main.c
-@@ -70,11 +70,17 @@ extern void NitroPort_LowerMenuHoldUpper(int hold);
- extern void NitroPort_LowerMenuHoldLower(int hold);
+@@ -67,27 +67,49 @@ extern void NitroPort_LowerMenuSetTall(int tall);
+ extern void NitroPort_LowerMenuSetPanel(int shows);
+ extern void NitroPort_LowerMenuSetPanelTouch(int on);
+ extern void NitroPort_LowerMenuHoldUpper(int hold);
+-extern void NitroPort_LowerMenuHoldLower(int hold);
  extern int NitroPort_LowerMenuPressPending(void);
  extern int NitroPort_LowerMenuTakePress(void);
-+extern void NitroPort_LowerMenuKeepPicture(int n);
-+extern int NitroPort_LowerMenuPictureReady(int n);
 +extern void NitroPort_LowerMenuKeepShown(int on);
-+#define PORT_PICTURE_BAG 0 // (start_menu.c's: the panel's picture of the bag)
-+#define PORT_PANEL_BAG 2   // NITRO_LOWERMENU_PANEL_PICTURE0
++extern void NitroPort_LowerMenuFadePanel(int black);
++extern int NitroPort_LowerMenuPanelFade(void);
++#define PORT_CLEAR_NOW (-1)    // NITRO_LOWERMENU_CLEAR_NOW
++#define PORT_FADE_BLACK 16     // (NitroPort_LowerMenuPanelFade: the panel black)
  extern void NitroPort_Render2DSmoothObjs(int engine, int on);
  extern BOOL gStartMenuPortMenu;       // (start_menu.c)
  extern BOOL gStartMenuPortInstantApp; // (start_menu.c)
@@ -72,91 +85,113 @@ index daa9a6ed..ab362138 100644
  
  // The field's bag, the lower start menu's (gStartMenuPortMenu): one of the
  // menu's buttons tapped while the item list waits closes the bag, and the
-@@ -82,12 +88,41 @@ extern BOOL StartMenu_PortButtonOpensApp(int button);
+ // start menu does what the button says.
  static BOOL sBagPortMenu;
  
- // Opened from the lower menu, the bag comes like a window brought back:
+-// Opened from the lower menu, the bag comes like a window brought back:
 -// no fade in (both screens kept as they were till it's whole: shown two
 -// frames on), none out when it's closed (B, CLOSE BAG, or one of the
 -// menu's buttons tapped).
-+// no fade in (the upper screen keeping the field, the lower one the menu
-+// with the bag's picture in its panel (start_menu.c) till the bag's whole:
-+// shown two frames on), none out when it's closed (B, CLOSE BAG, or one of
-+// the menu's buttons tapped: the menu kept on with the bag's picture as it
-+// was left till the field's back).
++// Opened from the lower menu, the bag comes behind the panel faded to black
++// (start_menu.c; the upper screen keeping the field) and pops in once it's
++// whole, two frames on; closed (B, CLOSE BAG, or one of the menu's buttons
++// tapped), the panel fades to black again, the menu kept on, and the field
++// comes back behind it (or the app the button opens).
  static BOOL sBagPortInstant;
  static BOOL sBagPortClosedInstantly;
  static int sBagPortReveal;
-+// The bag's picture kept for the panel (its tab, while it isn't running)
-+// once it's settled, and again as it's left.
-+static int sBagPortSettled;
++static BOOL sBagPortBlack; // (the screens made black for an app opened from the bag)
 +
 +// The bag closed by the player (B, CLOSE BAG: press -1; a menu button):
-+// its picture as it's left kept; opened from the menu, closed as it came,
-+// the menu kept on with that picture in the panel (the first time, as it
-+// is), or what the button shows (start_menu.c).
++// opened from the menu, it goes as it came: the panel faded to black first.
 +static void BagPort_Leave(int press)
 +{
-+    NitroPort_LowerMenuKeepPicture(PORT_PICTURE_BAG);
-+
 +    if (!sBagPortInstant) {
 +        return;
 +    }
 +
 +    sBagPortClosedInstantly = TRUE;
-+
-+    if (NitroPort_LowerMenuPictureReady(PORT_PICTURE_BAG)) {
-+        NitroPort_LowerMenuSetPanel(PORT_PANEL_BAG);
-+        NitroPort_LowerMenuKeepShown(TRUE);
-+    } else {
-+        NitroPort_LowerMenuHoldLower(TRUE);
-+    }
-+
++    sBagPortBlack = FALSE;
++    NitroPort_LowerMenuKeepShown(TRUE);
++    NitroPort_LowerMenuFadePanel(TRUE);
 +    StartMenu_PortBagLeaving(press);
 +}
  
  #define BAG_PORT_MENU_BUTTONS 8 // NITRO_LOWERMENU_ITEM1: the menu's buttons before it
  
-@@ -603,13 +638,20 @@ int BagApplication_Init(ApplicationManager *appMan, int *state)
-     sBagPortInstant = sBagPortMenu && gStartMenuPortInstantApp;
-     sBagPortClosedInstantly = FALSE;
-     sBagPortReveal = sBagPortInstant ? 2 : 0;
-+    sBagPortSettled = 0;
-     gStartMenuPortInstantApp = FALSE;
- 
+@@ -608,8 +630,16 @@ int BagApplication_Init(ApplicationManager *appMan, int *state)
      if (gBagPortTall) {
          NitroPort_LowerMenuHoldUpper(TRUE);
          NitroPort_LowerMenuShow(TRUE);
 -        NitroPort_LowerMenuSetPanel(PORT_PANEL_DS);
          NitroPort_LowerMenuSetTall(TRUE);
++        NitroPort_LowerMenuSetPanel(PORT_PANEL_DS);
 +
-+        // (opened from the menu: the bag's picture, or the screen kept,
-+        // till it's whole)
++        // (with the DS's fade in: the panel clear, the fade the whole
++        // screen's)
 +        if (!sBagPortInstant) {
-+            NitroPort_LowerMenuSetPanel(PORT_PANEL_DS);
++            NitroPort_LowerMenuFadePanel(PORT_CLEAR_NOW);
++            NitroPort_LowerMenuKeepShown(FALSE);
 +        }
 +
          NitroPort_LowerMenuSetPanelTouch(FALSE);
          GX_SetDispSelect(GX_DISP_SELECT_SUB_MAIN);
          SpriteUtil_PortTallMainScreen(TRUE);
-@@ -683,7 +725,16 @@ int BagApplication_Main(ApplicationManager *appMan, int *state)
+@@ -681,9 +711,10 @@ int BagApplication_Main(ApplicationManager *appMan, int *state)
+     BagController *controller = ApplicationManager_Data(appMan);
+ 
  #ifdef SDK_PORT_3DS
-     // (come without a fade: the lower screen the bag's once it's whole)
+-    // (come without a fade: the lower screen the bag's once it's whole)
++    // (come behind the black panel: popping in once it's whole)
      if (sBagPortReveal > 0 && --sBagPortReveal == 0) {
-+        NitroPort_LowerMenuSetPanel(PORT_PANEL_DS);
-         NitroPort_LowerMenuHoldLower(FALSE);
+-        NitroPort_LowerMenuHoldLower(FALSE);
++        NitroPort_LowerMenuFadePanel(PORT_CLEAR_NOW);
 +        NitroPort_LowerMenuKeepShown(FALSE);
-+    }
-+
-+    // (its picture for the panel, once it's settled: a few frames of the
-+    // item list shown)
-+    if (sBagPortMenu && sBagPortSettled < 4 && sBagPortReveal == 0 && *state == BAG_APP_STATE_WAIT_SELECT_ITEM_GENERAL &&
-+        ++sBagPortSettled == 4) {
-+        NitroPort_LowerMenuKeepPicture(PORT_PICTURE_BAG);
      }
  
      // (the menu tapped while the bag's busy (an item's menu, a message...):
-@@ -1460,10 +1511,9 @@ static int ProcessItemListInput_Normal(BagController *controller)
+@@ -789,6 +820,25 @@ int BagApplication_Main(ApplicationManager *appMan, int *state)
+         *state = ProcessItemListInput_Gardening(controller);
+         break;
+     case BAG_APP_STATE_EXIT:
++#ifdef SDK_PORT_3DS
++        // (closed as it came: once the panel's black; for an app opened
++        // from it, the screens made black then, while they're kept, a frame
++        // before it goes: the 3DS shows the game's pictures a frame late)
++        if (sBagPortClosedInstantly) {
++            if (NitroPort_LowerMenuPanelFade() < PORT_FADE_BLACK) {
++                break;
++            }
++
++            if (StartMenu_PortButtonOpensApp(gStartMenuPortAppPress) && !sBagPortBlack) {
++                SetScreenColorBrightness(DS_SCREEN_MAIN, COLOR_BLACK);
++                SetScreenColorBrightness(DS_SCREEN_SUB, COLOR_BLACK);
++                sBagPortBlack = TRUE;
++                break;
++            }
++
++            return TRUE;
++        }
++#endif
+         if (IsScreenFadeDone() == TRUE) {
+             return TRUE;
+         }
+@@ -848,11 +898,10 @@ int BagApplication_Exit(ApplicationManager *appMan, int *state)
+         GXLayers_SwapDisplay();
+         NitroPort_LowerMenuShow(FALSE);
+ 
+-        // (closed without a fade: the start menu lets the screens go once
+-        // the field's back; after a fade (an item used, given...): the
+-        // upper screen the game's once it's as bright as what was kept)
++        // (closed as it came: the start menu lets the upper screen go once
++        // the field's back; after a fade (an item used, given...): the game's
++        // once it's as bright as what was kept)
+         if (!sBagPortClosedInstantly) {
+-            NitroPort_LowerMenuHoldLower(FALSE);
+             NitroPort_LowerMenuHoldUpper(FALSE);
+         }
+ 
+@@ -1460,18 +1509,9 @@ static int ProcessItemListInput_Normal(BagController *controller)
          controller->bagCtx->selectedItem = ITEM_NONE;
          controller->bagCtx->exitCode = BAG_EXIT_CODE_DONE;
  
@@ -165,11 +200,19 @@ index daa9a6ed..ab362138 100644
 -            NitroPort_LowerMenuHoldLower(TRUE);
 +        BagPort_Leave(gStartMenuPortAppPress);
  
-+        if (sBagPortInstant) {
-             // (an app opened straight from the bag: the screens black now,
-             // while they're kept, so that the pictures shown once they're
-             // let go are black too: the 3DS shows the game's a frame late)
-@@ -1565,12 +1615,14 @@ static u8 ProcessItemListMenuInput(BagController *interface)
+-            // (an app opened straight from the bag: the screens black now,
+-            // while they're kept, so that the pictures shown once they're
+-            // let go are black too: the 3DS shows the game's a frame late)
+-            if (StartMenu_PortButtonOpensApp(gStartMenuPortAppPress)) {
+-                SetScreenColorBrightness(DS_SCREEN_MAIN, COLOR_BLACK);
+-                SetScreenColorBrightness(DS_SCREEN_SUB, COLOR_BLACK);
+-            }
+-        } else {
++        if (!sBagPortInstant) {
+             App_StartScreenFade(TRUE, HEAP_ID_BAG);
+         }
+ 
+@@ -1565,12 +1605,14 @@ static u8 ProcessItemListMenuInput(BagController *interface)
          interface->bagCtx->selectedItem = ITEM_NONE;
          interface->bagCtx->exitCode = BAG_EXIT_CODE_DONE;
  #ifdef SDK_PORT_3DS
@@ -179,8 +222,8 @@ index daa9a6ed..ab362138 100644
 -            sBagPortClosedInstantly = TRUE;
 -            NitroPort_LowerMenuHoldLower(TRUE);
 -            return ITEM_LIST_INPUT_EXIT_BAG;
-+        // (the lower menu's bag: its picture as it's left; opened from the
-+        // menu, closed as it came, no fade)
++        // (the lower menu's bag, opened from the menu: closed as it came,
++        // the panel faded to black)
 +        if (sBagPortMenu) {
 +            BagPort_Leave(-1);
 +
@@ -190,6 +233,89 @@ index daa9a6ed..ab362138 100644
          }
  #endif
          App_StartScreenFade(TRUE, HEAP_ID_BAG);
+diff --git a/src/applications/town_map/context.c b/src/applications/town_map/context.c
+index ac6198ed..2e1651f1 100644
+--- a/src/applications/town_map/context.c
++++ b/src/applications/town_map/context.c
+@@ -155,6 +155,43 @@ static void PerformTownMapDescriptionsChecks(FieldSystem *fieldSystem, TownMapCo
+ {
+     VarsFlags *varsFlags = SaveData_GetVarsFlags(fieldSystem->saveData);
+ 
++#ifdef SDK_PORT_3DS
++    // The flags read once, in one read, and kept (they're the cartridge's):
++    // the 3DS remaster's lower menu works the checks out as the player walks
++    // (start_menu.c), and each read of the cartridge costs the port the DS's
++    // time for it.
++    static TownMapDescriptionFlags allFlags[NELEMS(ctx->descCheckResults)];
++    static int numFlags = -1;
++    TownMapDescriptionFlags *descFlags;
++
++    if (numFlags < 0) {
++        FSFile flagsFile;
++        int count = 0;
++
++        FS_InitFile(&flagsFile);
++
++        if (!FS_OpenFile(&flagsFile, flagsFilePath)) {
++            GF_ASSERT(FALSE);
++            return;
++        }
++
++        if (FS_ReadFile(&flagsFile, &count, sizeof(int)) != sizeof(int) || count < 0) {
++            count = 0;
++        }
++
++        count = count < (int)NELEMS(allFlags) ? count : (int)NELEMS(allFlags);
++        MI_CpuClear8(allFlags, sizeof(allFlags));
++        FS_ReadFile(&flagsFile, allFlags, sizeof(TownMapDescriptionFlags) * count);
++        FS_CloseFile(&flagsFile);
++        numFlags = count;
++    }
++
++    ctx->numDescChecks = numFlags;
++
++    for (int i = 0; i < numFlags; i++) {
++        TownMapLocationDescCheckResults *checksResult = &(ctx->descCheckResults[i]);
++        descFlags = &allFlags[i];
++#else
+     FSFile flagsFile;
+     FS_InitFile(&flagsFile);
+ 
+@@ -167,22 +204,6 @@ static void PerformTownMapDescriptionsChecks(FieldSystem *fieldSystem, TownMapCo
+     int readLength = FS_ReadFile(&flagsFile, &numFlags, sizeof(int));
+     GF_ASSERT(readLength >= 0);
+ 
+-#ifdef SDK_PORT_3DS
+-    // The flags in one read, not one each: each read of the cartridge costs
+-    // the port the DS's time for it (the 3DS remaster's lower menu works
+-    // them out as the player walks: start_menu.c).
+-    TownMapDescriptionFlags *allFlags = Heap_AllocAtEnd(HEAP_ID_FIELD2, sizeof(TownMapDescriptionFlags) * (numFlags > 0 ? numFlags : 1));
+-    TownMapDescriptionFlags *descFlags;
+-
+-    MI_CpuClear8(allFlags, sizeof(TownMapDescriptionFlags) * (numFlags > 0 ? numFlags : 1));
+-    readLength = FS_ReadFile(&flagsFile, allFlags, sizeof(TownMapDescriptionFlags) * numFlags);
+-
+-    ctx->numDescChecks = numFlags;
+-
+-    for (int i = 0; i < numFlags; i++) {
+-        TownMapLocationDescCheckResults *checksResult = &(ctx->descCheckResults[i]);
+-        descFlags = &allFlags[i];
+-#else
+     TownMapDescriptionFlags *descFlags = Heap_AllocAtEnd(HEAP_ID_FIELD2, sizeof(TownMapDescriptionFlags));
+     MI_CpuClear8(descFlags, sizeof(TownMapDescriptionFlags));
+ 
+@@ -216,10 +237,8 @@ static void PerformTownMapDescriptionsChecks(FieldSystem *fieldSystem, TownMapCo
+         }
+     }
+ 
++#ifndef SDK_PORT_3DS
+     FS_CloseFile(&flagsFile);
+-#ifdef SDK_PORT_3DS
+-    Heap_Free(allFlags);
+-#else
+     Heap_Free(descFlags);
+ #endif
+ }
 diff --git a/src/overlay005/field_control.c b/src/overlay005/field_control.c
 index 604ed645..372a7dbe 100644
 --- a/src/overlay005/field_control.c
@@ -253,7 +379,7 @@ index 604ed645..372a7dbe 100644
          return TRUE;
      }
 diff --git a/src/start_menu.c b/src/start_menu.c
-index aba27ce7..bcf74d43 100644
+index aba27ce7..4c591840 100644
 --- a/src/start_menu.c
 +++ b/src/start_menu.c
 @@ -198,6 +198,7 @@ static void StartMenu_PortInit(FieldSystem *fieldSystem, StartMenu *menu, u32 op
@@ -264,83 +390,106 @@ index aba27ce7..bcf74d43 100644
  static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, int button);
  static BOOL StartMenu_PortExitTownMap(FieldTask *fieldTask);
  #endif
-@@ -314,16 +315,38 @@ extern int NitroPort_LowerMenuPressPending(void);
+@@ -313,17 +314,37 @@ extern int NitroPort_LowerMenuTakePress(void);
+ extern int NitroPort_LowerMenuPressPending(void);
  extern int NitroPort_LowerMenuAvailable(void);
  extern void NitroPort_LowerMenuHoldUpper(int hold);
- extern void NitroPort_LowerMenuHoldLower(int hold);
+-extern void NitroPort_LowerMenuHoldLower(int hold);
 +extern int NitroPort_LowerMenuPressDouble(void);
-+extern void NitroPort_LowerMenuKeepPicture(int n);
-+extern int NitroPort_LowerMenuPictureReady(int n);
 +extern void NitroPort_LowerMenuKeepShown(int on);
++extern void NitroPort_LowerMenuFadePanel(int black);
++extern int NitroPort_LowerMenuPanelFade(void);
++extern void NitroPort_LowerMenuFadeToPanel(int shows);
  #define PORT_LET_GO_NOW (-1) // NITRO_LOWERMENU_LET_GO_NOW
-+#define PORT_PICTURE_BAG 0 // the panel's picture 0: the bag as the player left it
-+#define PORT_PICTURE_FIELD 1 // 1: the field's lower screen (the Pokétch) as it was when the bag came
-+
-+// The lower menu is quick access. A tap on a button does what it says at
-+// once, with the press's sound (the menu's opening sound is X's): the
-+// menu opens straight on it (field_control.c), and what it opened, left
-+// (B, or the bag's button again), leaves the menu too, back to walking.
-+// Opened with X, the menu comes back as on the DS. The panel shows the tab
-+// chosen last, kept: the map, the Pokétch, or the bag as the player left
-+// it (a picture of it: tapped, or BAG, opens it). MAP shows the map; a
-+// double tap on it opens the Town Map app (A on MAP with the map shown, in
-+// the menu opened with X, too).
-+static BOOL sPortTapOpening; // a tap opens the menu this frame (no opening sound)
-+static BOOL sPortOpenedByTap; // the open menu was opened by a tap
-+static BOOL sPortFieldPictureNow; // the Pokétch's picture kept as this bag came (not an older one)
- 
- // The bag opened from the lower menu like a window brought back, not a
+-
+-// The bag opened from the lower menu like a window brought back, not a
 -// program started: no fade either way. Both screens keep what they show
 -// while the field goes and the bag comes (and back), and show the bag (or
 -// the field) whole once it's there. While the bag's open the menu's other
-+// program started: no fade either way. While the field goes and the bag
-+// comes (and back), the upper screen keeps the field and the lower one the
-+// menu, the bag as the player left it in its panel (its picture kept by
-+// the platform: the first time, the screen as it is), and the bag (or the
-+// field) shows once it's whole. While the bag's open the menu's other
- // buttons work: BAG closes it (back to walking), POKéMON, TRAINER,
- // POKéDEX and OPTIONS open straight from it, SAVE, MAP and POKéTCH back in
+-// buttons work: BAG closes it (back to walking), POKéMON, TRAINER,
+-// POKéDEX and OPTIONS open straight from it, SAVE, MAP and POKéTCH back in
 -// the field (StartMenu_ExitBag). (So in the bag opened again after an
 -// item's used, as on the DS, with fades.)
-+// the field (StartMenu_ExitBag; the map and the Pokétch in the panel at
-+// once). (So in the bag opened again after an item's used, as on the DS,
-+// with fades.)
++#define PORT_CLEAR_NOW (-1) // NITRO_LOWERMENU_CLEAR_NOW
++#define PORT_FADE_BLACK 16 // (NitroPort_LowerMenuPanelFade: the panel black)
++
++// The lower menu is quick access. A tap on a button does what it says at
++// once, with the press's sound (the menu's opening sound is X's): the
++// menu opens straight on it (field_control.c). What the menu opened, left
++// (B, or the bag's button again), leaves the menu too, back to walking,
++// whether a tap or X opened it. The panel shows the tab chosen: the map or
++// the Pokétch (the map again once the bag's closed). Changing what it
++// shows, it fades to black and back, the loading in between hidden
++// (NitroPort_LowerMenuFadeToPanel: the port makes the change once it's
++// black, whatever runs meanwhile). MAP shows the map; a double tap on it
++// opens the Town Map app (A on MAP with the map shown, in the menu opened
++// with X, too).
++static BOOL sPortTapOpening; // a tap opens the menu this frame (no opening sound)
++
++// The bag opened from the lower menu: the panel fades to black (the menu
++// kept on meanwhile), the field goes and the bag comes behind it, and the
++// bag pops in once it's whole, the upper screen keeping the field all the
++// while. Closed, the panel fades to black again, the field comes back
++// behind it, and the panel fades in on the map. While the bag's open the
++// menu's other buttons work: BAG closes it (back to walking), POKéMON,
++// TRAINER, POKéDEX and OPTIONS open straight from it, SAVE, MAP and
++// POKéTCH back in the field (StartMenu_ExitBag). (The bag opened again
++// after an item's used comes and goes with the DS's fades.)
  BOOL gStartMenuPortMenu;       // the start menu the lower one, while its apps run (read by the bag: bag/main.c)
  BOOL gStartMenuPortInstantApp; // (read by the bag: bag/main.c)
  int gStartMenuPortAppPress = -1; // (the bag's: one of the menu's buttons tapped in it)
-@@ -385,6 +408,9 @@ static const s8 sPortButtonOption[PORT_BUTTON_COUNT] = {
-     [PORT_BUTTON_OPTIONS] = START_MENU_OPTION_OPTIONS,
- };
+@@ -345,9 +366,11 @@ extern void NitroPort_LowerMenuMapBegin(void);
+ extern void NitroPort_LowerMenuMapSprite(int kind, int x, int y, int frame, int palette);
+ extern void NitroPort_LowerMenuMapDot(int x, int y);
+ extern void NitroPort_LowerMenuMapLayout(int hidden, int zoomX, int zoomY);
+-extern u16 *NitroPort_LowerMenuMapText(int which, int x, int y, int w, int h);
++extern void NitroPort_LowerMenuMapText(int which, int x, int y, int wTiles, int hTiles, const void *tiles, const u16 *palette, u32 key);
++extern int NitroPort_LowerMenuMapTextKept(int which, u32 key);
+ extern void NitroPort_LowerMenuMapNoText(int which);
+ extern void NitroPort_LowerMenuMapEnd(void);
++extern int NitroPort_LowerMenuMapAvailable(void);
  
-+#define PORT_PANEL_BAG 2 // (sPortPanelChoice) the bag's tab: NITRO_LOWERMENU_PANEL_PICTURE0
-+#define PORT_PANEL_PICTURE_FIELD 3 // NITRO_LOWERMENU_PANEL_PICTURE1
-+
- static BOOL sPortMode; // the open start menu is the lower one
- static u32 sPortButtons; // the buttons it can use (a bit each)
- static u32 sPortOptionCount; // its entries (menu->options)
-@@ -476,6 +502,11 @@ static StartMenu *StartMenu_New(void)
+ #define PORT_PANEL_DS 0 // NITRO_LOWERMENU_PANEL_DS
+ #define PORT_PANEL_MAP 1 // NITRO_LOWERMENU_PANEL_MAP
+@@ -394,6 +417,7 @@ static int sPortPanelChoice = PORT_PANEL_MAP; // what the panel shows, as the pl
+ static BOOL sPortMapStale = TRUE; // the map to be told again (the field started again)
+ static int sPortMapX = -1, sPortMapZ = -1, sPortMapHeader = -1; // the player's square and place it was told
+ static int sPortMapNameHeader = -2, sPortMapDescKey = -2; // the name and the description the port has (-1: none; -2: to print again)
++static BOOL sPortMapAgain; // (the description's turn next frame: one text printed a frame)
+ #endif
+ 
+ void StartMenu_Open(FieldSystem *fieldSystem)
+@@ -476,6 +500,9 @@ static StartMenu *StartMenu_New(void)
  {
      StartMenu *menu = Heap_Alloc(HEAP_ID_FIELD2, sizeof(StartMenu));
  
 +#ifdef SDK_PORT_3DS
-+    // (every opening: by a tap on the lower menu this frame, or not)
-+    sPortOpenedByTap = sPortTapOpening;
-+    sPortTapOpening = FALSE;
++    sPortTapOpening = FALSE; // (its sound decided: field_control.c)
 +#endif
      menu->state = START_MENU_STATE_INIT;
      menu->cursorPos = 0;
      menu->taskData = NULL;
-@@ -647,16 +678,23 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
+@@ -586,7 +613,7 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
+             StartMenu_InitMenu(fieldTask);
+             StartMenu_PrintBallCount(fieldTask);
+ #ifdef SDK_PORT_3DS
+-            // (back from the bag without a fade: the screens let go once
++            // (back from the bag, the panel black: the screens let go once
+             // the field's drawn whole, a few frames on)
+             if (sPortInstant) {
+                 sPortReveal = 3;
+@@ -647,16 +674,22 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
                  break;
              }
  
 -            // The field whole: the screens the game's again.
-+            // The field whole: the screens the game's again, the panel the
-+            // tab chosen.
++            // The field whole: the screens the game's again, the panel
++            // fading in on the tab chosen.
              sPortInstant = FALSE;
 +            StartMenu_PortShowPanel(fieldSystem);
++            NitroPort_LowerMenuFadePanel(FALSE);
              NitroPort_LowerMenuHoldUpper(PORT_LET_GO_NOW);
-             NitroPort_LowerMenuHoldLower(FALSE);
+-            NitroPort_LowerMenuHoldLower(FALSE);
 +            NitroPort_LowerMenuKeepShown(FALSE);
          } else if (!IsScreenFadeDone()) {
              break;
@@ -351,78 +500,353 @@ index aba27ce7..bcf74d43 100644
 -        // A button tapped in the bag acted on now (BAG: the menu closes).
 -        if (sPortAfterReveal == PORT_BUTTON_BAG) {
 +        // A button tapped in the bag acted on now (BAG: the menu closes);
-+        // else, the menu opened by a tap: back to walking, what it opened
-+        // left.
-+        if (sPortAfterReveal == PORT_BUTTON_BAG || (sPortAfterReveal < 0 && sPortMode && sPortOpenedByTap)) {
++        // else, the lower menu: back to walking, what it opened left.
++        if (sPortAfterReveal == PORT_BUTTON_BAG || (sPortAfterReveal < 0 && sPortMode)) {
              sPortAfterReveal = -1;
              menu->state = START_MENU_STATE_END;
              break;
-@@ -1563,9 +1601,20 @@ static void StartMenu_SaveWait(FieldTask *fieldTask)
+@@ -1037,6 +1070,17 @@ static void StartMenu_ApplicationStart(FieldTask *fieldTask)
+         return;
+     }
+ 
++#ifdef SDK_PORT_3DS
++    // (the bag from the lower menu: once the panel's black, the upper
++    // screen keeping the field while the field goes)
++    if (sPortInstant) {
++        if (NitroPort_LowerMenuPanelFade() < PORT_FADE_BLACK) {
++            return;
++        }
++
++        NitroPort_LowerMenuHoldUpper(TRUE);
++    }
++#endif
+     FieldSystem *fieldSystem = FieldTask_GetFieldSystem(fieldTask);
+     StartMenu *menu = FieldTask_GetEnv(fieldTask);
+ 
+@@ -1563,9 +1607,20 @@ static void StartMenu_SaveWait(FieldTask *fieldTask)
  
      if (SaveData_OverwriteCheck(fieldSystem->saveData)) {
          menu->state = START_MENU_STATE_INIT;
 +#ifdef SDK_PORT_3DS
-+        if (sPortOpenedByTap) {
-+            menu->state = START_MENU_STATE_SAVED; // (opened by a tap: back to walking)
++        if (gStartMenuPortMenu) {
++            menu->state = START_MENU_STATE_SAVED; // (the lower menu's: back to walking)
 +        }
 +#endif
      } else {
          if (saveMenu->result == 0) {
              menu->state = START_MENU_STATE_INIT;
 +#ifdef SDK_PORT_3DS
-+            // (the menu opened by a tap: back to walking, as saved)
-+            if (sPortOpenedByTap) {
++            // (the lower menu's: back to walking, as saved)
++            if (gStartMenuPortMenu) {
 +                menu->state = START_MENU_STATE_SAVED;
 +            }
 +#endif
          } else {
              menu->state = START_MENU_STATE_SAVED;
          }
-@@ -2387,10 +2436,19 @@ void StartMenu_PortMapStale(void)
- // The panel as the player chose it: the map once they have the Town Map
- // (told again first when the field has started again, the player's square
- // has changed, or the place has: its description may have come with the
+@@ -2091,22 +2146,52 @@ static void StartMenu_PortMapSquare(FieldSystem *fieldSystem, int *x, int *z)
+     *z = playerZ / MAP_TILES_COUNT_Z;
+ }
+ 
+-// A window's pixels (4 bits each, tiled) through its palette into the
+-// port's buffer: each pixel 0x8000 | its colour, or 0 where nothing is.
+-static void StartMenu_PortWindowPixels(const Window *window, const u16 *palette, u16 *out, int rows)
++// The palettes the map's texts are printed in, read once (the font's: the
++// name's; the signposts', one a kind: the description's). NULL if they
++// couldn't be.
++static const u16 *StartMenu_PortTextPalette(BOOL signpost)
++{
++    static u16 colours[2][16 * 16];
++    static BOOL read[2];
++    int k = signpost ? 1 : 0;
++
++    if (!read[k]) {
++        NNSG2dPaletteData *paletteData;
++        void *data = Graphics_GetPlttData(signpost ? NARC_INDEX_GRAPHIC__FIELD_BOARD : NARC_INDEX_GRAPHIC__PL_FONT,
++            signpost ? signpost_NCLR : font_NCLR, &paletteData, HEAP_ID_FIELD2);
++
++        if (data == NULL) {
++            return NULL;
++        }
++
++        memcpy(colours[k], paletteData->pRawData, paletteData->szByte < sizeof(colours[k]) ? paletteData->szByte : sizeof(colours[k]));
++        Heap_Free(data);
++        read[k] = TRUE;
++    }
++
++    return colours[k];
++}
++
++// The Town Map's blocks (data/tmap_block.dat), read once: the cartridge's.
++static TownMapBlockList *StartMenu_PortBlocks(void)
+ {
+-    const u8 *pixels = window->pixels;
+-    int w = window->width * TILE_WIDTH_PIXELS;
++    static TownMapBlock entries[256];
++    static TownMapBlockList list = { 0, entries };
++    static BOOL read;
+ 
+-    for (int y = 0; y < rows && y < window->height * TILE_HEIGHT_PIXELS; y++) {
+-        for (int x = 0; x < w; x++) {
+-            int tile = (y / TILE_HEIGHT_PIXELS) * window->width + x / TILE_WIDTH_PIXELS;
+-            int v = pixels[tile * TILE_SIZE_4BPP + (y % TILE_HEIGHT_PIXELS) * 4 + (x % TILE_WIDTH_PIXELS) / 2];
++    if (!read) {
++        TownMapBlockList *blocks = TownMap_ReadBlocks("data/tmap_block.dat", HEAP_ID_FIELD2);
+ 
+-            v = (x & 1) ? v >> 4 : v & 0xF;
+-            out[y * w + x] = v ? (0x8000 | (palette[v] & 0x7FFF)) : 0;
++        if (blocks != NULL) {
++            list.count = blocks->count < (int)NELEMS(entries) ? blocks->count : (int)NELEMS(entries);
++            memcpy(entries, blocks->entries, sizeof(TownMapBlock) * list.count);
++            TownMap_FreeBlocks(blocks);
+         }
++
++        read = TRUE;
+     }
++
++    return &list;
+ }
+ 
+ // The place whose name is on the Town Map at this square, as its LoadMapName
+@@ -2187,46 +2272,39 @@ static BOOL StartMenu_PortTextWindow(FieldSystem *fieldSystem, Window *window, u
+ // printed.
+ static BOOL StartMenu_PortPrintMapName(FieldSystem *fieldSystem, enum MapHeaderID header)
+ {
+-    NNSG2dPaletteData *paletteData;
++    const u16 *palette = StartMenu_PortTextPalette(FALSE);
+     Window window;
+-    u16 *out;
+ 
+-    if (!StartMenu_PortTextWindow(fieldSystem, &window, 29, 3)) {
++    if (palette == NULL || !StartMenu_PortTextWindow(fieldSystem, &window, 29, 3)) {
+         return FALSE;
+     }
+ 
+-    void *fontPalette = Graphics_GetPlttData(NARC_INDEX_GRAPHIC__PL_FONT, font_NCLR, &paletteData, HEAP_ID_FIELD2);
+     String *name = String_Init(22, HEAP_ID_FIELD2);
+ 
+     MapHeader_LoadName(header, HEAP_ID_FIELD2, name);
+     Text_AddPrinterWithParamsAndColor(&window, FONT_SYSTEM, name, (HW_LCD_WIDTH - 6 * TILE_WIDTH_PIXELS - Font_CalcStringWidth(FONT_SYSTEM, name, 0)) / 2, 6, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(1, 2, 0), NULL);
+-    out = NitroPort_LowerMenuMapText(0, 3 * TILE_WIDTH_PIXELS, 21 * TILE_HEIGHT_PIXELS, 29 * TILE_WIDTH_PIXELS, 3 * TILE_HEIGHT_PIXELS);
+-
+-    if (out != NULL) {
+-        StartMenu_PortWindowPixels(&window, paletteData->pRawData, out, 3 * TILE_HEIGHT_PIXELS);
+-    }
++    // (the window's tiles as they are: the port makes them pixels, off the
++    // game's thread)
++    NitroPort_LowerMenuMapText(0, 3 * TILE_WIDTH_PIXELS, 21 * TILE_HEIGHT_PIXELS, 29, 3, window.pixels, palette, header);
+ 
+     String_Free(name);
+-    Heap_Free(fontPalette);
+     Window_Remove(&window);
+ 
+-    return out != NULL;
++    return TRUE;
+ }
+ 
+ // The description: its window on the guide page (1, 8), 28 x 14 tiles, in
+ // the signpost's palette (its kind's), the area's and the landmark's as the
+ // place's checks allow. FALSE if it couldn't be printed.
+-static BOOL StartMenu_PortPrintMapDescription(FieldSystem *fieldSystem, const TownMapBlock *block, BOOL area, BOOL landmark)
++static BOOL StartMenu_PortPrintMapDescription(FieldSystem *fieldSystem, const TownMapBlock *block, BOOL area, BOOL landmark, int key)
+ {
+-    NNSG2dPaletteData *paletteData;
++    const u16 *palette = StartMenu_PortTextPalette(TRUE);
+     Window window;
+-    u16 *out;
+ 
+-    if (!StartMenu_PortTextWindow(fieldSystem, &window, 28, 14)) {
++    if (palette == NULL || block->signpostType >= 16 || !StartMenu_PortTextWindow(fieldSystem, &window, 28, 14)) {
+         return FALSE;
+     }
+ 
+-    void *signpostPalette = Graphics_GetPlttData(NARC_INDEX_GRAPHIC__FIELD_BOARD, signpost_NCLR, &paletteData, HEAP_ID_FIELD2);
+     MessageLoader *loader = MessageLoader_Init(MSG_LOADER_LOAD_ON_DEMAND, NARC_INDEX_MSGDATA__PL_MSG, TEXT_BANK_TOWN_MAP, HEAP_ID_FIELD2);
+ 
+     if (area) {
+@@ -2243,35 +2321,30 @@ static BOOL StartMenu_PortPrintMapDescription(FieldSystem *fieldSystem, const To
+         String_Free(string);
+     }
+ 
+-    out = NitroPort_LowerMenuMapText(1, 1 * TILE_WIDTH_PIXELS, 8 * TILE_HEIGHT_PIXELS, 28 * TILE_WIDTH_PIXELS, 14 * TILE_HEIGHT_PIXELS);
+-
+-    if (out != NULL) {
+-        StartMenu_PortWindowPixels(&window, (const u16 *)paletteData->pRawData + block->signpostType * 16, out, 14 * TILE_HEIGHT_PIXELS);
+-    }
++    NitroPort_LowerMenuMapText(1, 1 * TILE_WIDTH_PIXELS, 8 * TILE_HEIGHT_PIXELS, 28, 14, window.pixels, palette + block->signpostType * 16, key);
+ 
+     MessageLoader_Free(loader);
+-    Heap_Free(signpostPalette);
+     Window_Remove(&window);
+ 
+-    return out != NULL;
++    return TRUE;
+ }
+ 
+ // The map, laid out as the Town Map item lays out its upper screen
+ // (TownMap_LoadGraphics: CreateSprites, TownMap_LoadFlyLocations,
+ // LoadLocationHistory, PrintLocationName) and its guide page's description
+-// (MoveZoomedInMap, PrintLocationDescription), told to the port. The name
+-// and the description are printed again only when they change (the port
+-// keeps the last ones): walking from square to square, they mostly don't.
++// (MoveZoomedInMap, PrintLocationDescription), told to the port (which
++// draws it off the game's thread). Kept cheap for the game, walking from
++// square to square: the Town Map's context worked out with nothing read
++// (its flags and blocks read once: context.c, StartMenu_PortBlocks); the
++// name and the description printed again only when they change (the port
++// keeps the last ones), and only one a frame while the panel's shown.
+ static void StartMenu_PortSendMap(FieldSystem *fieldSystem)
+ {
+-    TownMapContext *ctx = Heap_AllocAtEnd(HEAP_ID_FIELD2, sizeof(TownMapContext));
++    static TownMapContext ctxNow; // (no room on the game's heaps for it each time)
++    TownMapContext *ctx = &ctxNow;
+     int x, z, zoomX, zoomY, dots = 0;
+     int dotX[TOWN_MAP_HISTORY_LENGTH], dotZ[TOWN_MAP_HISTORY_LENGTH];
+ 
+-    if (ctx == NULL) {
+-        return;
+-    }
+-
+     TownMapContext_Init(fieldSystem, ctx, TOWN_MAP_MODE_ITEM);
+ 
+     if (ctx->playerX == 0 && ctx->playerZ == 0) {
+@@ -2339,8 +2412,7 @@ static void StartMenu_PortSendMap(FieldSystem *fieldSystem)
+     NitroPort_LowerMenuMapLayout(ctx->unlockedHiddenLocations, zoomX, zoomY);
+ 
+     // The name and the description: only for a square that has a block.
+-    TownMapBlockList *blocks = TownMap_ReadBlocks("data/tmap_block.dat", HEAP_ID_FIELD2);
+-    TownMapBlock *block = blocks != NULL ? TownMap_GetMapBlockAtPosition(blocks, x, z, ctx->unlockedHiddenLocations) : NULL;
++    TownMapBlock *block = TownMap_GetMapBlockAtPosition(StartMenu_PortBlocks(), x, z, ctx->unlockedHiddenLocations);
+     int nameHeader = -1, descKey = -1;
+     BOOL area = FALSE, landmark = FALSE;
+ 
+@@ -2353,17 +2425,30 @@ static void StartMenu_PortSendMap(FieldSystem *fieldSystem)
+         descKey = block->index * 4 + area * 2 + landmark;
+     }
+ 
++    sPortMapAgain = FALSE;
++
++    // (the port keeps the texts it was given: printed only the first time)
+     if (nameHeader != sPortMapNameHeader) {
+-        if (nameHeader < 0 || !StartMenu_PortPrintMapName(fieldSystem, nameHeader)) {
++        if (nameHeader >= 0 && NitroPort_LowerMenuMapTextKept(0, nameHeader)) {
++            // (kept)
++        } else if (nameHeader < 0 || !StartMenu_PortPrintMapName(fieldSystem, nameHeader)) {
+             NitroPort_LowerMenuMapNoText(0);
+             nameHeader = -1;
++        } else {
++            // (a name printed with the panel shown: the description, if it's
++            // changed too and must be printed, next frame; behind the black,
++            // at once)
++            sPortMapAgain = descKey != sPortMapDescKey && (descKey < 0 || !NitroPort_LowerMenuMapTextKept(1, descKey)) &&
++                NitroPort_LowerMenuPanelFade() < PORT_FADE_BLACK;
+         }
+ 
+         sPortMapNameHeader = nameHeader;
+     }
+ 
+-    if (descKey != sPortMapDescKey) {
+-        if (descKey < 0 || !StartMenu_PortPrintMapDescription(fieldSystem, block, area, landmark)) {
++    if (descKey != sPortMapDescKey && !sPortMapAgain) {
++        if (descKey >= 0 && NitroPort_LowerMenuMapTextKept(1, descKey)) {
++            // (kept)
++        } else if (descKey < 0 || !StartMenu_PortPrintMapDescription(fieldSystem, block, area, landmark, descKey)) {
+             NitroPort_LowerMenuMapNoText(1);
+             descKey = -1;
+         }
+@@ -2371,12 +2456,7 @@ static void StartMenu_PortSendMap(FieldSystem *fieldSystem)
+         sPortMapDescKey = descKey;
+     }
+ 
+-    if (blocks != NULL) {
+-        TownMap_FreeBlocks(blocks);
+-    }
+-
+     NitroPort_LowerMenuMapEnd();
+-    Heap_Free(ctx);
+ }
+ 
+ void StartMenu_PortMapStale(void)
+@@ -2384,20 +2464,34 @@ void StartMenu_PortMapStale(void)
+     sPortMapStale = TRUE;
+ }
+ 
+-// The panel as the player chose it: the map once they have the Town Map
+-// (told again first when the field has started again, the player's square
+-// has changed, or the place has: its description may have come with the
 -// first arrival), else the Pokétch.
-+// first arrival); the bag as they left it (its picture, once there's one);
-+// else the Pokétch.
++// The tab a choice shows: the map once they have the Town Map (and the port
++// can show it), else the Pokétch.
++static int StartMenu_PortTabFor(FieldSystem *fieldSystem, int choice)
++{
++    return choice == PORT_PANEL_MAP && StartMenu_PortHasTownMap(fieldSystem) && NitroPort_LowerMenuMapAvailable() ? PORT_PANEL_MAP : PORT_PANEL_DS;
++}
++
++// The panel as the player chose it (the map told again first when the field
++// has started again, the player's square has changed, or the place has: its
++// description may have come with the first arrival).
  static void StartMenu_PortShowPanel(FieldSystem *fieldSystem)
  {
 -    BOOL showMap = sPortPanelChoice == PORT_PANEL_MAP && StartMenu_PortHasTownMap(fieldSystem);
 +    BOOL showMap;
 +
-+    // (the field and the bag swapping without a fade: the panel the start
-+    // menu's till the field's whole, the Pokétch's first frames not drawn)
++    // (the field and the bag swapping, the panel black: the start menu's
++    // till the field's whole)
 +    if (sPortInstant) {
 +        return;
 +    }
 +
-+    showMap = sPortPanelChoice == PORT_PANEL_MAP && StartMenu_PortHasTownMap(fieldSystem);
++    showMap = StartMenu_PortTabFor(fieldSystem, sPortPanelChoice) == PORT_PANEL_MAP;
  
      if (showMap) {
          int x, z;
-@@ -2412,7 +2470,20 @@ static void StartMenu_PortShowPanel(FieldSystem *fieldSystem)
-         }
-     }
  
--    NitroPort_LowerMenuSetPanel(showMap ? PORT_PANEL_MAP : PORT_PANEL_DS);
-+    if (showMap) {
-+        NitroPort_LowerMenuSetPanel(PORT_PANEL_MAP);
-+    } else if (sPortPanelChoice == PORT_PANEL_BAG && NitroPort_LowerMenuPictureReady(PORT_PICTURE_BAG) &&
-+               (sPortFieldButtons & (1u << PORT_BUTTON_BAG))) {
-+        NitroPort_LowerMenuSetPanel(PORT_PANEL_BAG);
-+    } else if (sPortPanelChoice == PORT_PANEL_BAG && StartMenu_PortHasTownMap(fieldSystem)) {
-+        // (the bag's tab where the bag can't be used: the map meanwhile,
-+        // the tab kept)
-+        sPortPanelChoice = PORT_PANEL_MAP;
-+        StartMenu_PortShowPanel(fieldSystem);
-+        sPortPanelChoice = PORT_PANEL_BAG;
-+    } else {
-+        NitroPort_LowerMenuSetPanel(PORT_PANEL_DS);
-+    }
+         StartMenu_PortMapSquare(fieldSystem, &x, &z);
+ 
+-        if (sPortMapStale || x != sPortMapX || z != sPortMapZ || (int)fieldSystem->location->mapHeaderID != sPortMapHeader) {
++        if (sPortMapStale || sPortMapAgain || x != sPortMapX || z != sPortMapZ || (int)fieldSystem->location->mapHeaderID != sPortMapHeader) {
+             // (the field started again: the text printed again too)
+             if (sPortMapStale) {
+                 sPortMapNameHeader = -2;
+@@ -2415,20 +2509,41 @@ static void StartMenu_PortShowPanel(FieldSystem *fieldSystem)
+     NitroPort_LowerMenuSetPanel(showMap ? PORT_PANEL_MAP : PORT_PANEL_DS);
  }
  
- // MAP: the map in the panel. FALSE if the port can't show it (it couldn't
-@@ -2429,6 +2500,8 @@ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
+-// MAP: the map in the panel. FALSE if the port can't show it (it couldn't
+-// read the Town Map's pictures): then MAP opens the Town Map app.
+-static BOOL StartMenu_PortChooseMap(FieldSystem *fieldSystem)
++// A tab chosen (MAP, POKéTCH): the panel fades to black, shows it and fades
++// back in (the port makes the change: NitroPort_LowerMenuFadeToPanel). The
++// map told to the port at once, drawn while the panel fades. The tab shown
++// already: nothing.
++static void StartMenu_PortChooseTab(FieldSystem *fieldSystem, int choice)
+ {
+-    sPortPanelChoice = PORT_PANEL_MAP;
++    sPortPanelChoice = choice;
++    NitroPort_LowerMenuFadeToPanel(StartMenu_PortTabFor(fieldSystem, choice));
+     StartMenu_PortShowPanel(fieldSystem);
++}
++
++// MAP: the map in the panel (faded to). FALSE if the port can't show it (it
++// couldn't read the Town Map's pictures): then MAP opens the Town Map app.
++static BOOL StartMenu_PortChooseMap(FieldSystem *fieldSystem)
++{
++    if (StartMenu_PortTabFor(fieldSystem, PORT_PANEL_MAP) != PORT_PANEL_MAP) {
++        return FALSE;
++    }
++
++    StartMenu_PortChooseTab(fieldSystem, PORT_PANEL_MAP);
++    return TRUE;
++}
+ 
+-    return NitroPort_LowerMenuPanel() == PORT_PANEL_MAP;
++// Whether the panel shows the map, or is fading to it.
++static BOOL StartMenu_PortMapChosen(FieldSystem *fieldSystem)
++{
++    return StartMenu_PortTabFor(fieldSystem, sPortPanelChoice) == PORT_PANEL_MAP;
+ }
+ 
+ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
  {
      u32 buttons = 0;
  
@@ -431,37 +855,48 @@ index aba27ce7..bcf74d43 100644
      if (!NitroPort_LowerMenuOn()) {
          return;
      }
-@@ -2442,6 +2515,13 @@ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
+@@ -2440,6 +2555,19 @@ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
+     sPortFieldButtons = buttons;
+     NitroPort_LowerMenuSetEnabled(buttons);
      StartMenu_PortShowPanel(fieldSystem);
- }
- 
++
++    // (the field running: the panel never left black; a tab change on its
++    // way fades in itself)
++    if (!sPortInstant) {
++        NitroPort_LowerMenuFadePanel(FALSE);
++    }
++}
++
 +// (field_control.c's) A tap opens the menu this frame: without the menu's
 +// opening sound (the press's instead, StartMenu_PortSelect).
 +BOOL StartMenu_PortTapOpening(void)
 +{
 +    return sPortTapOpening;
-+}
-+
+ }
+ 
  BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
- {
-     int button = NitroPort_LowerMenuPressPending();
-@@ -2450,10 +2530,12 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
+@@ -2450,13 +2578,8 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
          return FALSE;
      }
  
 -    // The map tapped, where MAP can be used: the menu opens on the Town Map
 -    // app. (Elsewhere: nothing.)
-+    // The bag's picture tapped, where BAG can be used: the bag opens (as
-+    // BAG). The map tapped: nothing (a double tap on MAP opens the Town
-+    // Map app).
++    // The map tapped: nothing (a double tap on MAP opens the Town Map app).
      if (button == PORT_PANEL_PRESS) {
 -        if (NitroPort_LowerMenuPanel() == PORT_PANEL_MAP && (sPortFieldButtons & (1u << PORT_BUTTON_MAP))) {
-+        if (NitroPort_LowerMenuPanel() == PORT_PANEL_BAG && (sPortFieldButtons & (1u << PORT_BUTTON_BAG))) {
-+            sPortTapOpening = TRUE;
-             return TRUE;
-         }
- 
-@@ -2478,17 +2560,16 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
+-            return TRUE;
+-        }
+-
+         NitroPort_LowerMenuTakePress();
+         return FALSE;
+     }
+@@ -2473,22 +2596,19 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
+     if (button == PORT_BUTTON_POKETCH) {
+         NitroPort_LowerMenuTakePress();
+         Sound_PlayEffect(SE_CONFIRM_sseq_3);
+-        sPortPanelChoice = PORT_PANEL_DS;
+-        StartMenu_PortShowPanel(fieldSystem);
++        StartMenu_PortChooseTab(fieldSystem, PORT_PANEL_DS);
          return FALSE;
      }
  
@@ -476,8 +911,7 @@ index aba27ce7..bcf74d43 100644
 -        }
 +    // MAP: the panel shows the map, the menu stays closed. A double tap
 +    // (or the port can't show the map) opens the menu on the Town Map app.
-+    if (button == PORT_BUTTON_MAP && !NitroPort_LowerMenuPressDouble() &&
-+        (NitroPort_LowerMenuPanel() == PORT_PANEL_MAP || StartMenu_PortChooseMap(fieldSystem))) {
++    if (button == PORT_BUTTON_MAP && !NitroPort_LowerMenuPressDouble() && StartMenu_PortChooseMap(fieldSystem)) {
 +        NitroPort_LowerMenuTakePress();
 +        Sound_PlayEffect(SE_CONFIRM_sseq_3);
 +        return FALSE;
@@ -487,7 +921,7 @@ index aba27ce7..bcf74d43 100644
      return TRUE;
  }
  
-@@ -2513,7 +2594,7 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
+@@ -2513,20 +2633,21 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
      open = StartMenu_PortAppFromBag(button);
  
      if (open == NULL) {
@@ -496,49 +930,72 @@ index aba27ce7..bcf74d43 100644
          return FALSE;
      }
  
-@@ -2527,6 +2608,7 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
+-    // An app not shown in the panel: the screens black at once (the bag
+-    // closed without a fade; it made them black while they were kept), as
+-    // the field faded out leaves them on the DS, and the app's own fade in
+-    // from there. (The tap's sound: the bag's.)
++    // An app not shown in the panel: the screens black (the bag faded the
++    // panel to black, then made them black while they were kept), as the
++    // field faded out leaves them on the DS, and the app's own fade in from
++    // there. (The tap's sound: the bag's.)
+     if (sPortInstant) {
+         sPortInstant = FALSE;
+         SetScreenColorBrightness(DS_SCREEN_MAIN, COLOR_BLACK);
          SetScreenColorBrightness(DS_SCREEN_SUB, COLOR_BLACK);
          NitroPort_LowerMenuHoldUpper(PORT_LET_GO_NOW);
-         NitroPort_LowerMenuHoldLower(FALSE);
+-        NitroPort_LowerMenuHoldLower(FALSE);
 +        NitroPort_LowerMenuKeepShown(FALSE);
++        NitroPort_LowerMenuFadePanel(PORT_CLEAR_NOW); // (the menu back after it: the field's fade in)
      }
  
      // (the menu's cursor on the button when the app's done; none lit
-@@ -2538,6 +2620,33 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
+@@ -2538,6 +2659,20 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
      return TRUE;
  }
  
-+// (the bag's) The bag closed without a fade (B: -1, or a menu button): the
-+// panel what the button says at once where it can, while the field comes
-+// back: the map (the port's own), the Pokétch as it was (kept when the bag
-+// came); else the bag's picture, as the bag left it.
++// (the bag's) The bag closing, its panel fading to black (B: -1, or a menu
++// button): back in the field the panel fades in on the map (the Pokétch for
++// POKéTCH, or without the Town Map); the button tapped lit at once, as the
++// menu has it next.
 +void StartMenu_PortBagLeaving(int button)
 +{
 +    if (button >= 0 && button < PORT_BUTTON_COUNT) {
-+        sPortCursor = button; // (lit at once, as the menu has it next)
++        sPortCursor = button;
 +        NitroPort_LowerMenuSelect(button);
 +    }
 +
-+    if (button == PORT_BUTTON_MAP) {
-+        sPortPanelChoice = PORT_PANEL_MAP;
-+        NitroPort_LowerMenuSetPanel(PORT_PANEL_MAP);
-+
-+        if (NitroPort_LowerMenuPanel() != PORT_PANEL_MAP) {
-+            NitroPort_LowerMenuSetPanel(PORT_PANEL_BAG); // (no map drawn yet)
-+        }
-+    } else if (button == PORT_BUTTON_POKETCH) {
-+        sPortPanelChoice = PORT_PANEL_DS;
-+
-+        if (sPortFieldPictureNow && NitroPort_LowerMenuPictureReady(PORT_PICTURE_FIELD)) {
-+            NitroPort_LowerMenuSetPanel(PORT_PANEL_PICTURE_FIELD);
-+        }
-+    }
++    sPortPanelChoice = button == PORT_BUTTON_POKETCH ? PORT_PANEL_DS : PORT_PANEL_MAP;
 +}
 +
  // The app a button opens straight from the bag (NULL: the button's acted on
  // back in the field).
  static FieldTaskFunc StartMenu_PortAppFromBag(int button)
-@@ -2648,7 +2757,7 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2583,7 +2718,7 @@ static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, i
+ 
+ static void StartMenu_PortInit(FieldSystem *fieldSystem, StartMenu *menu, u32 optionCount, u32 buttons)
+ {
+-    int cursor = sPortCursor;
++    int cursor = sPortCursor, pressed = NitroPort_LowerMenuPressPending();
+ 
+     for (u32 i = 0; i < menu->spriteCount; i++) {
+         ManagedSprite_SetDrawFlag(menu->sprites[i], FALSE);
+@@ -2593,8 +2728,13 @@ static void StartMenu_PortInit(FieldSystem *fieldSystem, StartMenu *menu, u32 op
+     sPortOptionCount = optionCount;
+     NitroPort_LowerMenuSetEnabled(buttons);
+ 
+-    // The cursor where it was last; else on the start menu's entry; else on
+-    // the first button that can be used.
++    // The cursor on the button tapped to open it; else where it was last;
++    // else on the start menu's entry; else on the first button that can be
++    // used.
++    if (pressed >= 0 && pressed < PORT_BUTTON_COUNT && (buttons & (1u << pressed))) {
++        cursor = pressed;
++    }
++
+     if (cursor < 0 || !(buttons & (1u << cursor))) {
+         cursor = -1;
+ 
+@@ -2648,7 +2788,7 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
      FieldSystem *fieldSystem = FieldTask_GetFieldSystem(fieldTask);
      StartMenu *menu = FieldTask_GetEnv(fieldTask);
      int button = NitroPort_LowerMenuTakePress();
@@ -547,7 +1004,7 @@ index aba27ce7..bcf74d43 100644
  
      // (a button tapped in the bag, its turn now (StartMenu_ExitBag); its
      // sound the bag's)
-@@ -2656,13 +2765,14 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2656,14 +2796,10 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
          button = sPortInjectedPress;
          sPortInjectedPress = -1;
          injected = TRUE;
@@ -556,17 +1013,15 @@ index aba27ce7..bcf74d43 100644
  
 -    if (button == PORT_PANEL_PRESS && (sPortButtons & (1u << PORT_BUTTON_MAP)) && NitroPort_LowerMenuPanel() == PORT_PANEL_MAP) {
 -        // (the map tapped: the Town Map app, as MAP with the map shown)
-+    if (button == PORT_PANEL_PRESS && (sPortButtons & (1u << PORT_BUTTON_BAG)) && NitroPort_LowerMenuPanel() == PORT_PANEL_BAG) {
-+        // (the bag's picture tapped: the bag, as BAG)
-         Sound_PlayEffect(SE_CONFIRM_sseq_3);
+-        Sound_PlayEffect(SE_CONFIRM_sseq_3);
 -        StartMenu_PortSetCursor(fieldSystem, menu, PORT_BUTTON_MAP);
 -        button = PORT_BUTTON_MAP;
-+        StartMenu_PortSetCursor(fieldSystem, menu, PORT_BUTTON_BAG);
-+        button = PORT_BUTTON_BAG;
-     } else if (button >= 0 && button < PORT_BUTTON_COUNT && (sPortButtons & (1u << button))) {
+-    } else if (button >= 0 && button < PORT_BUTTON_COUNT && (sPortButtons & (1u << button))) {
++    if (button >= 0 && button < PORT_BUTTON_COUNT && (sPortButtons & (1u << button))) {
          if (!injected) {
              Sound_PlayEffect(SE_CONFIRM_sseq_3);
-@@ -2671,6 +2781,7 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+         }
+@@ -2671,6 +2807,7 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
      } else if (JOY_NEW(PAD_BUTTON_A) && sPortCursor >= 0) {
          Sound_PlayEffect(SE_CONFIRM_sseq_3);
          button = sPortCursor;
@@ -574,7 +1029,7 @@ index aba27ce7..bcf74d43 100644
      } else if (JOY_NEW(PAD_BUTTON_B | PAD_BUTTON_X)) {
          Sound_PlayEffect(SE_CONFIRM_sseq_3);
          menu->state = START_MENU_STATE_END;
-@@ -2696,14 +2807,23 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2696,14 +2833,23 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
  
      switch (button) {
      case PORT_BUTTON_MAP:
@@ -583,7 +1038,7 @@ index aba27ce7..bcf74d43 100644
 +        // The map in the panel. A tap: the menu goes (a double tap opens
 +        // the Town Map app). A, the map shown already: the Town Map app;
 +        // else the menu stays (A again opens it).
-+        if (!doubled && NitroPort_LowerMenuPanel() != PORT_PANEL_MAP && StartMenu_PortChooseMap(fieldSystem)) {
++        if (!doubled && !StartMenu_PortMapChosen(fieldSystem) && StartMenu_PortChooseMap(fieldSystem)) {
 +            if (tapped) {
 +                menu->state = START_MENU_STATE_END;
 +            }
@@ -591,7 +1046,7 @@ index aba27ce7..bcf74d43 100644
 +            return TRUE;
 +        }
 +
-+        if (!doubled && tapped && NitroPort_LowerMenuPanel() == PORT_PANEL_MAP) {
++        if (!doubled && tapped && StartMenu_PortMapChosen(fieldSystem)) {
              menu->state = START_MENU_STATE_END;
              return TRUE;
          }
@@ -602,39 +1057,30 @@ index aba27ce7..bcf74d43 100644
          FieldMap_FadeScreen(FADE_TYPE_BRIGHTNESS_OUT);
          menu->callback = StartMenu_PortOpenTownMap;
          menu->state = START_MENU_STATE_APP_START;
-@@ -2716,14 +2836,31 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2711,19 +2857,19 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+     case PORT_BUTTON_POKETCH:
+         // The Pokétch in the panel; the menu goes (the Pokétch is the
+         // player's to use).
+-        sPortPanelChoice = PORT_PANEL_DS;
+-        StartMenu_PortShowPanel(fieldSystem);
++        StartMenu_PortChooseTab(fieldSystem, PORT_PANEL_DS);
          menu->state = START_MENU_STATE_END;
          return TRUE;
      default:
 -        // The bag, shown in the panel: like a window brought back, both
 -        // screens kept as they are while the field goes and the bag comes,
 -        // no fade (bag/main.c shows it whole).
-+        // The bag, shown in the panel: like a window brought back, no fade.
-+        // The upper screen keeps the field; the lower one the menu with
-+        // the bag as the player left it in its panel (its picture: shown
-+        // at once, the bag itself a moment later, bag/main.c), or the first
-+        // time, as it is, while the field goes and the bag comes. The
-+        // Pokétch's picture kept for going back to it. The bag's tab chosen.
++        // The bag, shown in the panel: the panel fades to black, the menu
++        // kept on, and the field goes and the bag comes behind it once it's
++        // black (StartMenu_ApplicationStart), the upper screen keeping the
++        // field; the bag pops in once it's whole (bag/main.c).
          if (button == PORT_BUTTON_BAG && NitroPort_LowerMenuAvailable()) {
              sPortInstant = TRUE;
              sPortAfterReveal = -1;
-+
-+            sPortFieldPictureNow = NitroPort_LowerMenuPanel() == PORT_PANEL_DS;
-+
-+            if (sPortFieldPictureNow) {
-+                NitroPort_LowerMenuKeepPicture(PORT_PICTURE_FIELD);
-+            }
-+
-+            sPortPanelChoice = PORT_PANEL_BAG;
-             NitroPort_LowerMenuHoldUpper(TRUE);
+-            NitroPort_LowerMenuHoldUpper(TRUE);
 -            NitroPort_LowerMenuHoldLower(TRUE);
-+
-+            if (NitroPort_LowerMenuPictureReady(PORT_PICTURE_BAG)) {
-+                NitroPort_LowerMenuSetPanel(PORT_PANEL_BAG);
-+                NitroPort_LowerMenuKeepShown(TRUE);
-+            } else {
-+                NitroPort_LowerMenuHoldLower(TRUE);
-+            }
++            NitroPort_LowerMenuKeepShown(TRUE);
++            NitroPort_LowerMenuFadePanel(TRUE); // (a tab change on its way called off)
          }
  
          return ((FieldTaskFunc)sStartMenuActions[sPortButtonOption[button]].callback)(fieldTask);
