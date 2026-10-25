@@ -570,8 +570,11 @@ screens) the lower screen is the DS's, filling the screen as before.
   (below); a tap on it opens the bag.
 - **The panel's pictures** (`NitroPort_LowerMenuKeepPicture`): the platform
   keeps the lower screen's picture as it is when the game asks (the 3DS's
-  compositor copies the screen's newest texture, before it draws anything
-  that frame; the PC runner draws the screen then): picture 0 the bag
+  compositor copies the screen's newest texture made by then: each ask
+  carries the compositor's frame count (`NitroPort_LowerMenuSetClock`,
+  `NitroPort_LowerMenuPictureStamp`), and the copy waits for the GPU to
+  finish that texture, before the compositor draws anything that frame;
+  the PC runner draws the screen then): picture 0 the bag
   (once it's settled, and as it's left), picture 1 the field's lower
   screen (the Pokétch) when the bag comes. The panel shows one
   (`NITRO_LOWERMENU_PANEL_PICTURE0`, `1`) once it's been kept, its touches

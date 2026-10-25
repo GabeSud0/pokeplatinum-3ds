@@ -365,6 +365,13 @@ static void test_double_tap(void)
     tap(280, mapY);
     CHECK(NitroPort_LowerMenuPressDouble() == 0);
     NitroPort_LowerMenuTakePress();
+    /* (the menu off between: not counted, however few of its frames) */
+    NitroPort_LowerMenuShow(0);
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    tap(280, mapY);
+    CHECK(NitroPort_LowerMenuPressDouble() == 0);
+    NitroPort_LowerMenuTakePress();
     NitroPort_LowerMenuShow(0);
 }
 

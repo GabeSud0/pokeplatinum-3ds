@@ -191,6 +191,7 @@ static void *sPicData[NITRO_LOWERMENU_PICTURES];
 static int sPicTall[NITRO_LOWERMENU_PICTURES];
 static uint32_t sPicDone[NITRO_LOWERMENU_PICTURES];   /* (the wish kept last) */
 static C3D_Tex sPicTex;
+static int sMenuPanel;                 /* (the menu's panel this frame: NitroPort_LowerMenuPanel, once) */
 static int sMenuNow;              /* (the screen being drawn is the menu) */
 static void *sEdgeDepth[4];       /* 240 x 400 D24S8, a direction each, shared by the screens */
 static void *sEdgeBlock;          /* (the four, one after another: one VRAM block) */
@@ -832,6 +833,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
             NitroPort_Log("[compose] no linear memory for the menu panel's picture %d", i);
         }
     }
+    NitroPort_LowerMenuSetClock(NitroPort_ComposeVBlanks);   /* (the pictures' stamps) */
     NitroPort_LowerMenuSetAvailable(sMenuTexData[0] != NULL);
     sGxRecording = 0;
     sFlight = 0;
@@ -1810,7 +1812,7 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
     if (sMenuHasPanel) {
         return;   /* (the panel is in the picture: the map) */
     }
-    pic = NitroPort_LowerMenuPanel() - NITRO_LOWERMENU_PANEL_PICTURE0;
+    pic = sMenuPanel - NITRO_LOWERMENU_PANEL_PICTURE0;
     if (pic >= 0 && pic < NITRO_LOWERMENU_PICTURES && sPicData[pic] != NULL) {
         /* (a picture kept: the lower screen's texture as it was) */
         make_texture(&sPicTex, sPicData[pic], GPU_RGB565, scr->texW, scr->texH, linear, GPU_CLAMP_TO_EDGE);
@@ -2290,13 +2292,15 @@ static void fill_edge_buffers(Screen *scr, u32 value, unsigned copied)
 }
 
 /* The pictures the game asked to keep for the menu's panel
- * (NitroPort_LowerMenuKeepPicture): the lower screen's newest texture
- * copied as it is (held meanwhile: not written over), before anything's
- * drawn with them. */
+ * (NitroPort_LowerMenuKeepPicture): the lower screen's texture copied as
+ * it is (held meanwhile: not written over), before anything's drawn with
+ * them: its newest made by the time the game asked (stamped no later), or
+ * failing that its oldest (the drawers publish on their own time: one
+ * made after may be of the app going). The frame before drawn first (the
+ * GPU may still be drawing it with the picture written over). */
 static void keep_pictures(void)
 {
     uint32_t wish[NITRO_LOWERMENU_PICTURES];
-    LayerSet *from = NULL;
     Screen *scr = &sScreens[1];
     int k, i, any = 0;
 
@@ -2307,22 +2311,35 @@ static void keep_pictures(void)
     if (!any) {
         return;
     }
-    LightLock_Lock(&sSetLock);
-    for (i = 0; i < SETS; i++) {
-        LayerSet *c = &scr->set[i];
-
-        if (!c->writing && c->seq != 0 && (from == NULL || c->seq > from->seq)) {
-            from = c;
-        }
-    }
-    if (from != NULL) {
-        from->held++;
-    }
-    LightLock_Unlock(&sSetLock);
+    flight_finish(1);
     for (k = 0; k < NITRO_LOWERMENU_PICTURES; k++) {
+        uint32_t stamp = NitroPort_LowerMenuPictureStamp(k);
+        LayerSet *from = NULL, *oldest = NULL;
+
         if (wish[k] == sPicDone[k] || sPicData[k] == NULL) {
             continue;
         }
+        LightLock_Lock(&sSetLock);
+        for (i = 0; i < SETS; i++) {
+            LayerSet *c = &scr->set[i];
+
+            if (c->writing || c->seq == 0) {
+                continue;
+            }
+            if (oldest == NULL || c->seq < oldest->seq) {
+                oldest = c;
+            }
+            if ((int32_t)(c->info.stamp - stamp) <= 0 && (from == NULL || c->seq > from->seq)) {
+                from = c;
+            }
+        }
+        if (from == NULL) {
+            from = oldest;
+        }
+        if (from != NULL) {
+            from->held++;
+        }
+        LightLock_Unlock(&sSetLock);
         if (from != NULL && !from->info.displayOff) {
             u32 rows = ((u32)from->info.height * (u32)scr->texScale + 8u + 7u) & ~7u;
 
@@ -2333,11 +2350,11 @@ static void keep_pictures(void)
             NitroPort_LowerMenuPictureKept(k, 1);
         }
         sPicDone[k] = wish[k];   /* (nothing to keep: the one before stays) */
-    }
-    if (from != NULL) {
-        LightLock_Lock(&sSetLock);
-        from->held--;
-        LightLock_Unlock(&sSetLock);
+        if (from != NULL) {
+            LightLock_Lock(&sSetLock);
+            from->held--;
+            LightLock_Unlock(&sSetLock);
+        }
     }
 }
 
@@ -2373,6 +2390,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     }
     keep_pictures();
     keptShown = NitroPort_LowerMenuKeptShown();
+    sMenuPanel = NitroPort_LowerMenuPanel();   /* (as decided: the game may change it while this frame's built) */
     startVBlank = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
     if (scene != NULL && (!sSeenValid || sceneSerial != sSeenSerial)) {
         /* A scene not seen before: the one before it, if the 3D was on

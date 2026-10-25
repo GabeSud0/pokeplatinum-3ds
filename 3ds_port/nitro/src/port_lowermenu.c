@@ -51,6 +51,8 @@ static volatile int sPanelShows;    /* (NitroPort_LowerMenuSetPanel) */
 static volatile uint32_t sPictureWish[NITRO_LOWERMENU_PICTURES];   /* (NitroPort_LowerMenuKeepPicture) */
 static volatile int sPictureReady[NITRO_LOWERMENU_PICTURES];       /* (NitroPort_LowerMenuPictureKept) */
 static volatile int sKeepShown;     /* (NitroPort_LowerMenuKeepShown) */
+static volatile uint32_t sPictureStamp[NITRO_LOWERMENU_PICTURES];  /* (the clock when asked) */
+static uint32_t (*sClock)(void);    /* (NitroPort_LowerMenuSetClock) */
 static int sPictureHasPanel;        /* (the shared picture's panel drawn in it: under sLock) */
 
 static uint32_t sPicture[W * H];    /* the shared picture (under sLock) */
@@ -723,6 +725,7 @@ void NitroPort_LowerMenuShow(int on)
             sTouchIn = on ? 2 : -1;   /* (a finger still down: nobody's until let go) */
             sHeld = -1;
             sPress = -1;
+            sLastPress = -1;          /* (no double tap across the time it was off) */
         }
         if (on) {
             redraw();
@@ -836,9 +839,20 @@ int NitroPort_LowerMenuPanel(void)
     return map_shown() ? NITRO_LOWERMENU_PANEL_MAP : n >= 0 ? NITRO_LOWERMENU_PANEL_PICTURE0 + n : NITRO_LOWERMENU_PANEL_DS;
 }
 
+void NitroPort_LowerMenuSetClock(uint32_t (*now)(void))
+{
+    sClock = now;
+}
+
+uint32_t NitroPort_LowerMenuPictureStamp(int n)
+{
+    return n >= 0 && n < NITRO_LOWERMENU_PICTURES ? __atomic_load_n(&sPictureStamp[n], __ATOMIC_ACQUIRE) : 0;
+}
+
 void NitroPort_LowerMenuKeepPicture(int n)
 {
     if (n >= 0 && n < NITRO_LOWERMENU_PICTURES) {
+        __atomic_store_n(&sPictureStamp[n], sClock ? sClock() : 0u, __ATOMIC_RELEASE);
         __atomic_add_fetch(&sPictureWish[n], 1u, __ATOMIC_RELEASE);
         __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);   /* (a frame drawn: the platforms keep it then) */
     }
@@ -882,7 +896,7 @@ int NitroPort_LowerMenuKeptShown(void)
 
 void NitroPort_LowerMenuSetMap(const NitroLowerMap *map)
 {
-    if (NitroPort_LowerMapSet(map) && sOn && map_shown()) {
+    if (NitroPort_LowerMapSet(map) && drawn() && map_shown()) {
         redraw_map_rows();
     }
 }

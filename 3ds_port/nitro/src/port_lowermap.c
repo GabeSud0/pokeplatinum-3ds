@@ -883,9 +883,18 @@ int NitroPort_LowerMapSet(const NitroLowerMap *map)
         sReady = 1;
         return 1;
     }
-    /* Only what changed: the band; each sprite where it was and where it is;
-     * the name's window, before and after; the dot shown, chosen again when
-     * the dots change. */
+    /* Only what changed: the dot shown, chosen again when the dots change
+     * (first: the boxes below would draw it at its new place otherwise);
+     * the band; each sprite where it was and where it is; the name's
+     * window, before and after. */
+    if (dotsChange) {
+        int was = sDotShown;
+
+        sDotShown = -1;
+        if (was >= 0 && was < old.dots) {
+            redraw_rect(old.dot[was].x - 4, old.dot[was].y - 4, old.dot[was].x + 3, old.dot[was].y + 3);
+        }
+    }
     if (band) {
         redraw_rect(0, TOP_H, CW - 1, CH - 1);
     }
@@ -911,14 +920,6 @@ int NitroPort_LowerMapSet(const NitroLowerMap *map)
         }
         if (sMap.name != NULL) {
             redraw_rect(sMap.nameX, sMap.nameY, sMap.nameX + sMap.nameW - 1, sMap.nameY + sMap.nameH - 1);
-        }
-    }
-    if (dotsChange) {
-        int was = sDotShown;
-
-        sDotShown = -1;
-        if (was >= 0 && was < old.dots) {
-            redraw_rect(old.dot[was].x - 4, old.dot[was].y - 4, old.dot[was].x + 3, old.dot[was].y + 3);
         }
     }
     update_animations(&changed);

@@ -32,10 +32,10 @@ once, and leaving what it opened leaves the menu too:
   with X. A tap on the map does nothing.
 ---
  include/start_menu.h           |   2 +
- src/applications/bag/main.c    |  78 ++++++++++---
- src/overlay005/field_control.c |   8 ++
- src/start_menu.c               | 195 ++++++++++++++++++++++++++-------
- 4 files changed, 233 insertions(+), 50 deletions(-)
+ src/applications/bag/main.c    |  78 ++++++++++--
+ src/overlay005/field_control.c |  26 ++++
+ src/start_menu.c               | 211 +++++++++++++++++++++++++++------
+ 4 files changed, 267 insertions(+), 50 deletions(-)
 
 diff --git a/include/start_menu.h b/include/start_menu.h
 index 4392c8ea..3b3558b0 100644
@@ -191,7 +191,7 @@ index daa9a6ed..ab362138 100644
  #endif
          App_StartScreenFade(TRUE, HEAP_ID_BAG);
 diff --git a/src/overlay005/field_control.c b/src/overlay005/field_control.c
-index 604ed645..5fd16f73 100644
+index 604ed645..372a7dbe 100644
 --- a/src/overlay005/field_control.c
 +++ b/src/overlay005/field_control.c
 @@ -340,7 +340,15 @@ BOOL FieldInput_Process(const FieldInput *input, FieldSystem *fieldSystem)
@@ -210,8 +210,50 @@ index 604ed645..5fd16f73 100644
          StartMenu_Open(fieldSystem);
          return TRUE;
      }
+@@ -429,7 +437,13 @@ BOOL FieldInput_Process_Colosseum(FieldInput *input, FieldSystem *fieldSystem)
+     }
+ 
+     if (input->menu) {
++#ifdef SDK_PORT_3DS
++        if (!StartMenu_PortTapOpening()) { // (opened by a tap: the press's sound)
++            Sound_PlayEffect(SEQ_SE_DP_WIN_OPEN_sseq);
++        }
++#else
+         Sound_PlayEffect(SEQ_SE_DP_WIN_OPEN_sseq);
++#endif
+         StartMenu_OpenColosseum(fieldSystem);
+         return TRUE;
+     }
+@@ -486,7 +500,13 @@ BOOL FieldInput_Process_UnionRoom(const FieldInput *input, FieldSystem *fieldSys
+     }
+ 
+     if (input->menu && CommSys_ConnectedCount() <= 1) {
++#ifdef SDK_PORT_3DS
++        if (!StartMenu_PortTapOpening()) { // (opened by a tap: the press's sound)
++            Sound_PlayEffect(SEQ_SE_DP_WIN_OPEN_sseq);
++        }
++#else
+         Sound_PlayEffect(SEQ_SE_DP_WIN_OPEN_sseq);
++#endif
+         StartMenu_OpenUnionRoom(fieldSystem);
+         sub_0205BEA8(4);
+         CommManager_PauseUnionServer();
+@@ -543,7 +563,13 @@ int FieldInput_Process_BattleTower(const FieldInput *input, FieldSystem *fieldSy
+     }
+ 
+     if (input->menu) {
++#ifdef SDK_PORT_3DS
++        if (!StartMenu_PortTapOpening()) { // (opened by a tap: the press's sound)
++            Sound_PlayEffect(SEQ_SE_DP_WIN_OPEN_sseq);
++        }
++#else
+         Sound_PlayEffect(SEQ_SE_DP_WIN_OPEN_sseq);
++#endif
+         StartMenu_Open(fieldSystem);
+         return TRUE;
+     }
 diff --git a/src/start_menu.c b/src/start_menu.c
-index aba27ce7..861f50a7 100644
+index aba27ce7..bcf74d43 100644
 --- a/src/start_menu.c
 +++ b/src/start_menu.c
 @@ -198,6 +198,7 @@ static void StartMenu_PortInit(FieldSystem *fieldSystem, StartMenu *menu, u32 op
@@ -222,7 +264,7 @@ index aba27ce7..861f50a7 100644
  static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, int button);
  static BOOL StartMenu_PortExitTownMap(FieldTask *fieldTask);
  #endif
-@@ -314,16 +315,37 @@ extern int NitroPort_LowerMenuPressPending(void);
+@@ -314,16 +315,38 @@ extern int NitroPort_LowerMenuPressPending(void);
  extern int NitroPort_LowerMenuAvailable(void);
  extern void NitroPort_LowerMenuHoldUpper(int hold);
  extern void NitroPort_LowerMenuHoldLower(int hold);
@@ -245,6 +287,7 @@ index aba27ce7..861f50a7 100644
 +// the menu opened with X, too).
 +static BOOL sPortTapOpening; // a tap opens the menu this frame (no opening sound)
 +static BOOL sPortOpenedByTap; // the open menu was opened by a tap
++static BOOL sPortFieldPictureNow; // the Pokétch's picture kept as this bag came (not an older one)
  
  // The bag opened from the lower menu like a window brought back, not a
 -// program started: no fade either way. Both screens keep what they show
@@ -265,7 +308,7 @@ index aba27ce7..861f50a7 100644
  BOOL gStartMenuPortMenu;       // the start menu the lower one, while its apps run (read by the bag: bag/main.c)
  BOOL gStartMenuPortInstantApp; // (read by the bag: bag/main.c)
  int gStartMenuPortAppPress = -1; // (the bag's: one of the menu's buttons tapped in it)
-@@ -385,6 +407,9 @@ static const s8 sPortButtonOption[PORT_BUTTON_COUNT] = {
+@@ -385,6 +408,9 @@ static const s8 sPortButtonOption[PORT_BUTTON_COUNT] = {
      [PORT_BUTTON_OPTIONS] = START_MENU_OPTION_OPTIONS,
  };
  
@@ -275,18 +318,19 @@ index aba27ce7..861f50a7 100644
  static BOOL sPortMode; // the open start menu is the lower one
  static u32 sPortButtons; // the buttons it can use (a bit each)
  static u32 sPortOptionCount; // its entries (menu->options)
-@@ -416,6 +441,10 @@ void StartMenu_Open(FieldSystem *fieldSystem)
-         PlayerAvatar_ForceStopMovement(fieldSystem->playerAvatar, PlayerAvatar_GetFacingDir(fieldSystem->playerAvatar));
-     }
+@@ -476,6 +502,11 @@ static StartMenu *StartMenu_New(void)
+ {
+     StartMenu *menu = Heap_Alloc(HEAP_ID_FIELD2, sizeof(StartMenu));
  
 +#ifdef SDK_PORT_3DS
++    // (every opening: by a tap on the lower menu this frame, or not)
 +    sPortOpenedByTap = sPortTapOpening;
 +    sPortTapOpening = FALSE;
 +#endif
-     FieldSystem_CreateTask(fieldSystem, StartMenu_Main, menu);
- }
- 
-@@ -647,16 +676,23 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
+     menu->state = START_MENU_STATE_INIT;
+     menu->cursorPos = 0;
+     menu->taskData = NULL;
+@@ -647,16 +678,23 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
                  break;
              }
  
@@ -313,7 +357,15 @@ index aba27ce7..861f50a7 100644
              sPortAfterReveal = -1;
              menu->state = START_MENU_STATE_END;
              break;
-@@ -1566,6 +1602,12 @@ static void StartMenu_SaveWait(FieldTask *fieldTask)
+@@ -1563,9 +1601,20 @@ static void StartMenu_SaveWait(FieldTask *fieldTask)
+ 
+     if (SaveData_OverwriteCheck(fieldSystem->saveData)) {
+         menu->state = START_MENU_STATE_INIT;
++#ifdef SDK_PORT_3DS
++        if (sPortOpenedByTap) {
++            menu->state = START_MENU_STATE_SAVED; // (opened by a tap: back to walking)
++        }
++#endif
      } else {
          if (saveMenu->result == 0) {
              menu->state = START_MENU_STATE_INIT;
@@ -326,7 +378,7 @@ index aba27ce7..861f50a7 100644
          } else {
              menu->state = START_MENU_STATE_SAVED;
          }
-@@ -2387,10 +2429,19 @@ void StartMenu_PortMapStale(void)
+@@ -2387,10 +2436,19 @@ void StartMenu_PortMapStale(void)
  // The panel as the player chose it: the map once they have the Town Map
  // (told again first when the field has started again, the player's square
  // has changed, or the place has: its description may have come with the
@@ -348,22 +400,29 @@ index aba27ce7..861f50a7 100644
  
      if (showMap) {
          int x, z;
-@@ -2412,7 +2463,13 @@ static void StartMenu_PortShowPanel(FieldSystem *fieldSystem)
+@@ -2412,7 +2470,20 @@ static void StartMenu_PortShowPanel(FieldSystem *fieldSystem)
          }
      }
  
 -    NitroPort_LowerMenuSetPanel(showMap ? PORT_PANEL_MAP : PORT_PANEL_DS);
 +    if (showMap) {
 +        NitroPort_LowerMenuSetPanel(PORT_PANEL_MAP);
-+    } else if (sPortPanelChoice == PORT_PANEL_BAG && NitroPort_LowerMenuPictureReady(PORT_PICTURE_BAG)) {
++    } else if (sPortPanelChoice == PORT_PANEL_BAG && NitroPort_LowerMenuPictureReady(PORT_PICTURE_BAG) &&
++               (sPortFieldButtons & (1u << PORT_BUTTON_BAG))) {
 +        NitroPort_LowerMenuSetPanel(PORT_PANEL_BAG);
++    } else if (sPortPanelChoice == PORT_PANEL_BAG && StartMenu_PortHasTownMap(fieldSystem)) {
++        // (the bag's tab where the bag can't be used: the map meanwhile,
++        // the tab kept)
++        sPortPanelChoice = PORT_PANEL_MAP;
++        StartMenu_PortShowPanel(fieldSystem);
++        sPortPanelChoice = PORT_PANEL_BAG;
 +    } else {
 +        NitroPort_LowerMenuSetPanel(PORT_PANEL_DS);
 +    }
  }
  
  // MAP: the map in the panel. FALSE if the port can't show it (it couldn't
-@@ -2429,6 +2486,8 @@ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
+@@ -2429,6 +2500,8 @@ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
  {
      u32 buttons = 0;
  
@@ -372,7 +431,7 @@ index aba27ce7..861f50a7 100644
      if (!NitroPort_LowerMenuOn()) {
          return;
      }
-@@ -2442,6 +2501,13 @@ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
+@@ -2442,6 +2515,13 @@ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
      StartMenu_PortShowPanel(fieldSystem);
  }
  
@@ -386,7 +445,7 @@ index aba27ce7..861f50a7 100644
  BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
  {
      int button = NitroPort_LowerMenuPressPending();
-@@ -2450,10 +2516,12 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
+@@ -2450,10 +2530,12 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
          return FALSE;
      }
  
@@ -402,7 +461,7 @@ index aba27ce7..861f50a7 100644
              return TRUE;
          }
  
-@@ -2478,17 +2546,16 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
+@@ -2478,17 +2560,16 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
          return FALSE;
      }
  
@@ -428,7 +487,7 @@ index aba27ce7..861f50a7 100644
      return TRUE;
  }
  
-@@ -2513,7 +2580,7 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
+@@ -2513,7 +2594,7 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
      open = StartMenu_PortAppFromBag(button);
  
      if (open == NULL) {
@@ -437,7 +496,7 @@ index aba27ce7..861f50a7 100644
          return FALSE;
      }
  
-@@ -2527,6 +2594,7 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
+@@ -2527,6 +2608,7 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
          SetScreenColorBrightness(DS_SCREEN_SUB, COLOR_BLACK);
          NitroPort_LowerMenuHoldUpper(PORT_LET_GO_NOW);
          NitroPort_LowerMenuHoldLower(FALSE);
@@ -445,7 +504,7 @@ index aba27ce7..861f50a7 100644
      }
  
      // (the menu's cursor on the button when the app's done; none lit
-@@ -2538,6 +2606,33 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
+@@ -2538,6 +2620,33 @@ static BOOL StartMenu_PortSwitchFromBag(FieldTask *fieldTask)
      return TRUE;
  }
  
@@ -470,7 +529,7 @@ index aba27ce7..861f50a7 100644
 +    } else if (button == PORT_BUTTON_POKETCH) {
 +        sPortPanelChoice = PORT_PANEL_DS;
 +
-+        if (NitroPort_LowerMenuPictureReady(PORT_PICTURE_FIELD)) {
++        if (sPortFieldPictureNow && NitroPort_LowerMenuPictureReady(PORT_PICTURE_FIELD)) {
 +            NitroPort_LowerMenuSetPanel(PORT_PANEL_PICTURE_FIELD);
 +        }
 +    }
@@ -479,7 +538,7 @@ index aba27ce7..861f50a7 100644
  // The app a button opens straight from the bag (NULL: the button's acted on
  // back in the field).
  static FieldTaskFunc StartMenu_PortAppFromBag(int button)
-@@ -2648,7 +2743,7 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2648,7 +2757,7 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
      FieldSystem *fieldSystem = FieldTask_GetFieldSystem(fieldTask);
      StartMenu *menu = FieldTask_GetEnv(fieldTask);
      int button = NitroPort_LowerMenuTakePress();
@@ -488,7 +547,7 @@ index aba27ce7..861f50a7 100644
  
      // (a button tapped in the bag, its turn now (StartMenu_ExitBag); its
      // sound the bag's)
-@@ -2656,13 +2751,14 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2656,13 +2765,14 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
          button = sPortInjectedPress;
          sPortInjectedPress = -1;
          injected = TRUE;
@@ -507,7 +566,7 @@ index aba27ce7..861f50a7 100644
      } else if (button >= 0 && button < PORT_BUTTON_COUNT && (sPortButtons & (1u << button))) {
          if (!injected) {
              Sound_PlayEffect(SE_CONFIRM_sseq_3);
-@@ -2671,6 +2767,7 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2671,6 +2781,7 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
      } else if (JOY_NEW(PAD_BUTTON_A) && sPortCursor >= 0) {
          Sound_PlayEffect(SE_CONFIRM_sseq_3);
          button = sPortCursor;
@@ -515,7 +574,7 @@ index aba27ce7..861f50a7 100644
      } else if (JOY_NEW(PAD_BUTTON_B | PAD_BUTTON_X)) {
          Sound_PlayEffect(SE_CONFIRM_sseq_3);
          menu->state = START_MENU_STATE_END;
-@@ -2696,14 +2793,23 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2696,14 +2807,23 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
  
      switch (button) {
      case PORT_BUTTON_MAP:
@@ -543,7 +602,7 @@ index aba27ce7..861f50a7 100644
          FieldMap_FadeScreen(FADE_TYPE_BRIGHTNESS_OUT);
          menu->callback = StartMenu_PortOpenTownMap;
          menu->state = START_MENU_STATE_APP_START;
-@@ -2716,14 +2822,29 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+@@ -2716,14 +2836,31 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
          menu->state = START_MENU_STATE_END;
          return TRUE;
      default:
@@ -560,7 +619,9 @@ index aba27ce7..861f50a7 100644
              sPortInstant = TRUE;
              sPortAfterReveal = -1;
 +
-+            if (NitroPort_LowerMenuPanel() == PORT_PANEL_DS) {
++            sPortFieldPictureNow = NitroPort_LowerMenuPanel() == PORT_PANEL_DS;
++
++            if (sPortFieldPictureNow) {
 +                NitroPort_LowerMenuKeepPicture(PORT_PICTURE_FIELD);
 +            }
 +

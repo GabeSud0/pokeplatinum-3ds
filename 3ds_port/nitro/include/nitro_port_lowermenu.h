@@ -209,8 +209,12 @@ void NitroPort_LowerMenuKeepPicture(int n);
 int NitroPort_LowerMenuPictureReady(int n);
 void NitroPort_LowerMenuPictureKept(int n, int kept);
 /* (the platforms') The pictures the game asked to keep, a count each: kept
- * when it changes. */
+ * when it changes; and the platform's clock when it last asked
+ * (SetClock: the clock its pictures are stamped with, so it keeps the
+ * picture the game had made by then, not one made after: the app gone). */
 uint32_t NitroPort_LowerMenuPictureWish(int n);
+uint32_t NitroPort_LowerMenuPictureStamp(int n);
+void NitroPort_LowerMenuSetClock(uint32_t (*now)(void));
 
 /* The menu kept on the lower screen while the game swaps what's under it
  * (the field going, an app coming, and back) and turns the menu off and on
