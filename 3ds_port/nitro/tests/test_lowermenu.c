@@ -762,6 +762,16 @@ static void test_panel_runs(void)
     CHECK(NitroPort_LowerMenuRunRow(got, n, 44, &src) == NITRO_LOWERMENU_FROM_LOWER && src == 142);
     CHECK(NitroPort_LowerMenuRunRow(got, n, 45, &src) == NITRO_LOWERMENU_FROM_LOWER && src == 0);
     CHECK(NitroPort_LowerMenuRunRow(got, n, 30, &src) == -1);
+    /* Begun above the canvas: cut there, its rows as they'd have been (a
+     * step of 3 is a step of 1). */
+    {
+        static const NitroLowerPanelRun above[] = { { -5, 10, NITRO_LOWERMENU_FROM_LOWER, 100, 3, 0, 0 } };
+
+        NitroPort_LowerMenuSetPanelRuns(above, 1);
+        n = NitroPort_LowerMenuPanelRuns(got, NULL);
+        CHECK(n == 1 && got[0].y == 0 && got[0].rows == 5 && got[0].step == 1);
+        CHECK(NitroPort_LowerMenuRunRow(got, n, 0, &src) == NITRO_LOWERMENU_FROM_LOWER && src == 105);
+    }
     /* The menu off: none, no tabs. */
     NitroPort_LowerMenuShow(0);
     CHECK(NitroPort_LowerMenuPanelRuns(got, NULL) == 0);

@@ -1262,7 +1262,8 @@ void NitroPort_LowerMenuSetPanelRuns(const NitroLowerPanelRun *runs, int count)
     for (i = 0; i < count; i++) {
         NitroLowerPanelRun r = runs[i];
 
-        /* (kept in the canvas; the step one of the three) */
+        /* (the step one of the three; kept in the canvas) */
+        r.step = r.step > 0 ? 1 : r.step < 0 ? -1 : 0;
         if (r.y < 0) {
             r.rows += r.y;
             r.srcY += (short)(-r.y * r.step);
@@ -1271,7 +1272,6 @@ void NitroPort_LowerMenuSetPanelRuns(const NitroLowerPanelRun *runs, int count)
         if (r.y + r.rows > NITRO_LOWERMENU_CANVAS_H) {
             r.rows = (short)(NITRO_LOWERMENU_CANVAS_H - r.y);
         }
-        r.step = r.step > 0 ? 1 : r.step < 0 ? -1 : 0;
         if (r.rows > 0 && r.from >= NITRO_LOWERMENU_FROM_LOWER && r.from <= NITRO_LOWERMENU_FROM_TABS) {
             next[n++] = r;
         }

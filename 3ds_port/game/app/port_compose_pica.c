@@ -2026,9 +2026,16 @@ static int panel_pieces(int tall, PanelPiece *out)
         }
         if (run >= 0) {
             const NitroLowerPanelRun *r = &sPanelRuns[run];
+            int end = r->y + r->rows;
 
+            /* (overlapping runs: the first one has a row, as for touches) */
+            for (i = 0; i < run; i++) {
+                if (sPanelRuns[i].y > y && sPanelRuns[i].y < end) {
+                    end = sPanelRuns[i].y;
+                }
+            }
             out[n].y = y;
-            out[n].rows = r->y + r->rows - y;
+            out[n].rows = end - y;
             out[n].from = r->from;
             out[n].srcY = r->srcY + (y - r->y) * r->step;
             out[n].step = r->step;
@@ -2227,7 +2234,9 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
             rect3d.y0 = yA;
             rect3d.y1 = yB;
         }
-        if (scene3d != NULL) {
+        /* (put together: no 3D, its rows aren't where the runs put the
+         * lower screen's) */
+        if (scene3d != NULL && sPanelRunCount == 0) {
             draw_menu_3d(scr, set, scene3d, fb, &rect3d, u1, vTop, vBottom, linear);
         }
     }
