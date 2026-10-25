@@ -43,12 +43,20 @@ static int sTouchButton = -1;       /* (the button it began on) */
 static volatile int sPress = -1;    /* a press, not taken yet */
 static uint32_t sFrames;            /* (the menu's frames: NitroPort_LowerMenuTouch calls) */
 static uint32_t sPressFrame;        /* (the frame it was made in) */
+static int sPressDouble;            /* (it was the second of two on that button: NitroPort_LowerMenuPressDouble) */
+static int sLastPress = -1;         /* (the press before, and its frame) */
+static uint32_t sLastPressFrame;
 static uint32_t sEnabled = 0xFFFFFFFFu;
-static int sPanelShows;             /* (NitroPort_LowerMenuSetPanel) */
+static volatile int sPanelShows;    /* (NitroPort_LowerMenuSetPanel) */
+static volatile uint32_t sPictureWish[NITRO_LOWERMENU_PICTURES];   /* (NitroPort_LowerMenuKeepPicture) */
+static volatile int sPictureReady[NITRO_LOWERMENU_PICTURES];       /* (NitroPort_LowerMenuPictureKept) */
+static volatile int sKeepShown;     /* (NitroPort_LowerMenuKeepShown) */
 static int sPictureHasPanel;        /* (the shared picture's panel drawn in it: under sLock) */
 
 static uint32_t sPicture[W * H];    /* the shared picture (under sLock) */
 static uint32_t sDraw[W * H];       /* (drawn here, then copied over) */
+static int sDrawHasMap;             /* (sDraw drawn with the map in its panel) */
+static int sDirtyY0, sDirtyY1 = H;  /* the shared picture's rows changed, not taken yet (under sLock) */
 static volatile uint32_t sSerial;
 static volatile int sLock;
 
@@ -478,6 +486,26 @@ static int map_shown(void)
     return sPanelShows == NITRO_LOWERMENU_PANEL_MAP && NitroPort_LowerMapReady();
 }
 
+/* The picture the panel shows (-1: none). */
+static int picture_shown(void)
+{
+    int n = sPanelShows - NITRO_LOWERMENU_PANEL_PICTURE0;
+
+    return n >= 0 && n < NITRO_LOWERMENU_PICTURES && __atomic_load_n(&sPictureReady[n], __ATOMIC_ACQUIRE) ? n : -1;
+}
+
+/* The panel's touches the menu's: the map or a picture in it. */
+static int panel_is_menus(void)
+{
+    return map_shown() || picture_shown() >= 0;
+}
+
+/* The picture drawn (on, or kept on while the game swaps what's under it). */
+static int drawn(void)
+{
+    return sOn || sKeepShown;
+}
+
 static void draw(void)
 {
     int i, x, y;
@@ -502,7 +530,8 @@ static void draw(void)
         put(2, y, WHITE);
         put(243, y, WHITE);
     }
-    if (map_shown()) {
+    sDrawHasMap = map_shown();
+    if (sDrawHasMap) {
         const uint32_t *panel = NitroPort_LowerMapPanel();
 
         for (y = 0; y < NITRO_LOWERMENU_PANEL_H; y++) {
@@ -584,9 +613,46 @@ static void redraw(void)
                        sPoketchIconPalette);
     }
     draw();
+    if (sDrawHasMap) {
+        int y0, y1;
+
+        NitroPort_LowerMapTakeDirty(&y0, &y1);   /* (all of it drawn) */
+    }
     lock();
     memcpy(sPicture, sDraw, sizeof(sPicture));
     sPictureHasPanel = map_shown();
+    sDirtyY0 = 0;
+    sDirtyY1 = H;
+    __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
+    unlock();
+}
+
+/* The map's rows drawn again (the player on a new square, a sprite's
+ * frame) into the picture, the rest of it as it is, and handed over: on the
+ * game's thread, so only them, not the whole picture. */
+static void redraw_map_rows(void)
+{
+    const uint32_t *panel = NitroPort_LowerMapPanel();
+    int y0, y1, y;
+
+    if (!sDrawHasMap) {
+        redraw();   /* (the picture drawn without the map: all of it) */
+        return;
+    }
+    NitroPort_LowerMapTakeDirty(&y0, &y1);
+    if (y0 >= y1) {
+        return;
+    }
+    for (y = y0; y < y1; y++) {
+        memcpy(sDraw + (NITRO_LOWERMENU_PANEL_Y0 + y) * W + NITRO_LOWERMENU_PANEL_X0, panel + y * NITRO_LOWERMENU_PANEL_W,
+               NITRO_LOWERMENU_PANEL_W * sizeof(uint32_t));
+    }
+    y0 += NITRO_LOWERMENU_PANEL_Y0;
+    y1 += NITRO_LOWERMENU_PANEL_Y0;
+    lock();
+    memcpy(sPicture + y0 * W, sDraw + y0 * W, (size_t)(y1 - y0) * W * sizeof(uint32_t));
+    sDirtyY0 = y0 < sDirtyY0 ? y0 : sDirtyY0;
+    sDirtyY1 = y1 > sDirtyY1 ? y1 : sDirtyY1;
     __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
     unlock();
 }
@@ -651,9 +717,13 @@ void NitroPort_LowerMenuShow(int on)
         read_icons();
     }
     if (on != sOn) {
-        sTouchIn = on ? 2 : -1;   /* (a finger still down: nobody's until let go) */
-        sHeld = -1;
-        sPress = -1;
+        /* (kept shown meanwhile, the menu never went: its touches and press
+         * go on) */
+        if (!sKeepShown) {
+            sTouchIn = on ? 2 : -1;   /* (a finger still down: nobody's until let go) */
+            sHeld = -1;
+            sPress = -1;
+        }
         if (on) {
             redraw();
         }
@@ -693,7 +763,7 @@ void NitroPort_LowerMenuSelect(int button)
     }
     if (button != sSelected) {
         sSelected = button;
-        if (sOn) {
+        if (drawn()) {
             redraw();
         }
     }
@@ -703,7 +773,7 @@ void NitroPort_LowerMenuSetEnabled(uint32_t mask)
 {
     if (mask != sEnabled) {
         sEnabled = mask;
-        if (sOn) {
+        if (drawn()) {
             redraw();
         }
     }
@@ -714,7 +784,7 @@ void NitroPort_LowerMenuSetFemale(int female)
     female = female ? 1 : 0;
     if (female != sFemale) {
         sFemale = female;
-        if (sOn) {
+        if (drawn()) {
             redraw();
         }
     }
@@ -734,28 +804,86 @@ int NitroPort_LowerMenuFrameHasPanel(void)
     return sPictureHasPanel;
 }
 
+void NitroPort_LowerMenuTakeDirtyRows(int *y0, int *y1)
+{
+    *y0 = sDirtyY0;
+    *y1 = sDirtyY1;
+    sDirtyY0 = H;
+    sDirtyY1 = 0;
+}
+
 void NitroPort_LowerMenuSetPanel(int shows)
 {
-    shows = shows == NITRO_LOWERMENU_PANEL_MAP ? NITRO_LOWERMENU_PANEL_MAP : NITRO_LOWERMENU_PANEL_DS;
+    shows = shows >= NITRO_LOWERMENU_PANEL_MAP && shows < NITRO_LOWERMENU_PANEL_PICTURE0 + NITRO_LOWERMENU_PICTURES
+                ? shows
+                : NITRO_LOWERMENU_PANEL_DS;
     if (shows != sPanelShows) {
         int before = map_shown();
 
-        sPanelShows = shows;
-        if (sOn && map_shown() != before) {
-            redraw();
+        __atomic_store_n(&sPanelShows, shows, __ATOMIC_RELEASE);
+        if (drawn() && map_shown() != before) {
+            redraw();   /* (the map's in the picture, or no longer) */
+        } else {
+            __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);   /* (the platforms draw the panel otherwise) */
         }
     }
 }
 
 int NitroPort_LowerMenuPanel(void)
 {
-    return map_shown() ? NITRO_LOWERMENU_PANEL_MAP : NITRO_LOWERMENU_PANEL_DS;
+    int n = picture_shown();
+
+    return map_shown() ? NITRO_LOWERMENU_PANEL_MAP : n >= 0 ? NITRO_LOWERMENU_PANEL_PICTURE0 + n : NITRO_LOWERMENU_PANEL_DS;
+}
+
+void NitroPort_LowerMenuKeepPicture(int n)
+{
+    if (n >= 0 && n < NITRO_LOWERMENU_PICTURES) {
+        __atomic_add_fetch(&sPictureWish[n], 1u, __ATOMIC_RELEASE);
+        __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);   /* (a frame drawn: the platforms keep it then) */
+    }
+}
+
+uint32_t NitroPort_LowerMenuPictureWish(int n)
+{
+    return n >= 0 && n < NITRO_LOWERMENU_PICTURES ? __atomic_load_n(&sPictureWish[n], __ATOMIC_ACQUIRE) : 0;
+}
+
+int NitroPort_LowerMenuPictureReady(int n)
+{
+    return n >= 0 && n < NITRO_LOWERMENU_PICTURES && __atomic_load_n(&sPictureReady[n], __ATOMIC_ACQUIRE);
+}
+
+void NitroPort_LowerMenuPictureKept(int n, int kept)
+{
+    if (n >= 0 && n < NITRO_LOWERMENU_PICTURES) {
+        __atomic_store_n(&sPictureReady[n], kept ? 1 : 0, __ATOMIC_RELEASE);
+    }
+}
+
+void NitroPort_LowerMenuKeepShown(int on)
+{
+    on = on ? 1 : 0;
+    if (on != sKeepShown) {
+        __atomic_store_n(&sKeepShown, on, __ATOMIC_RELEASE);
+        if (on && !sOn) {
+            redraw();   /* (as the game has it now) */
+        } else {
+            __atomic_add_fetch(&sSerial, 1u, __ATOMIC_RELEASE);
+        }
+        NitroPort_Log("[lowermenu] %s", on ? "kept shown" : "not kept shown");
+    }
+}
+
+int NitroPort_LowerMenuKeptShown(void)
+{
+    return __atomic_load_n(&sKeepShown, __ATOMIC_ACQUIRE) && panel_is_menus();
 }
 
 void NitroPort_LowerMenuSetMap(const NitroLowerMap *map)
 {
     if (NitroPort_LowerMapSet(map) && sOn && map_shown()) {
-        redraw();
+        redraw_map_rows();
     }
 }
 
@@ -906,21 +1034,28 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
 {
     int b, held = sHeld;
 
-    if (!sOn) {
+    sFrames++;
+    if (!sOn && !sKeepShown) {
         sTouchIn = -1;
         return 0;
     }
-    sFrames++;
     /* (the map's animations: a frame) */
     if (NitroPort_LowerMapTick() && map_shown()) {
-        redraw();
+        redraw_map_rows();
     }
     if (!down) {
         if (sTouchIn == 0 && sTouchButton >= 0 && sHeld == sTouchButton) {
+            /* (the second press on a button within NITRO_LOWERMENU_DOUBLE_FRAMES
+             * of the first: a double tap) */
+            sPressDouble = sTouchButton == sLastPress && sFrames - sLastPressFrame <= NITRO_LOWERMENU_DOUBLE_FRAMES;
+            sLastPress = sPressDouble ? -1 : sTouchButton;   /* (a third starts again) */
+            sLastPressFrame = sFrames;
             sPressFrame = sFrames;
             __atomic_store_n(&sPress, sTouchButton, __ATOMIC_RELEASE);
-        } else if (sTouchIn == 3 && map_shown()) {
+        } else if (sTouchIn == 3 && panel_is_menus()) {
             /* (let go: still in the panel, or dragged off it, a tap) */
+            sPressDouble = 0;
+            sLastPress = -1;
             sPressFrame = sFrames;
             __atomic_store_n(&sPress, NITRO_LOWERMENU_PANEL_PRESS, __ATOMIC_RELEASE);
         }
@@ -933,8 +1068,10 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY)
         /* A new touch: the panel's (the game's, all the way; or, the map
          * shown, the menu's), or the frame's. */
         if (NitroPort_LowerMenuPanelAt(x, y, NULL, NULL)) {
-            /* (an app whose touch screen isn't shown: nobody's till let go) */
-            sTouchIn = map_shown() ? 3 : sPanelTouch ? 1 : 2;
+            /* (an app whose touch screen isn't shown, or the menu kept
+             * shown while the game swaps what's under it: nobody's till let
+             * go) */
+            sTouchIn = !sOn ? 2 : panel_is_menus() ? 3 : sPanelTouch ? 1 : 2;
         } else {
             sTouchIn = 0;
             sTouchButton = NitroPort_LowerMenuButtonAt(x, y);
@@ -974,6 +1111,11 @@ int NitroPort_LowerMenuPressPending(void)
         sPress = -1;   /* (too old) */
     }
     return sPress;
+}
+
+int NitroPort_LowerMenuPressDouble(void)
+{
+    return sPressDouble;
 }
 
 int NitroPort_LowerMenuTakePress(void)

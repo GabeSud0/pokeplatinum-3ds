@@ -60,7 +60,7 @@ enum NitroLowerMenuButton {
     NITRO_LOWERMENU_COUNT
 };
 /* (a press, NitroPort_LowerMenuTakePress) the panel tapped while it shows
- * the map */
+ * the map or a picture (NitroPort_LowerMenuSetPanel) */
 #define NITRO_LOWERMENU_PANEL_PRESS NITRO_LOWERMENU_COUNT
 
 /* Whether the platform can show it (the 3DS: the remaster's compositor,
@@ -133,6 +133,10 @@ uint32_t NitroPort_LowerMenuSerial(void);
 /* (with the picture held) Whether its panel is drawn in it (the map), not
  * the DS's lower screen for the screens to draw there. */
 int NitroPort_LowerMenuFrameHasPanel(void);
+/* (with the picture held; the display's) The rows changed since it last
+ * asked: y0 to y1 - 1 (none: y0 >= y1). Taking a copy, it need only take
+ * those again. */
+void NitroPort_LowerMenuTakeDirtyRows(int *y0, int *y1);
 
 /* The screen touched at (x, y) of the 320 x 240 (down: 1 while touched, 0
  * when let go). Returns 1 with the DS's lower screen's (*dsX, *dsY) when
@@ -150,6 +154,11 @@ int NitroPort_LowerMenuTouch(int down, int x, int y, int *dsX, int *dsY);
 #define NITRO_LOWERMENU_PRESS_FRAMES 30
 int NitroPort_LowerMenuTakePress(void);
 int NitroPort_LowerMenuPressPending(void);
+/* Whether the press (pending, or taken last) was the second of two on the
+ * same button within NITRO_LOWERMENU_DOUBLE_FRAMES of the menu's frames: a
+ * double tap (MAP's opens the Town Map app). */
+int NitroPort_LowerMenuPressDouble(void);
+#define NITRO_LOWERMENU_DOUBLE_FRAMES 30
 
 /* Which button (x, y) is on, or -1; and whether it's in the panel (with
  * the DS's lower screen's pixel there: tall, the canvas's; the game's touch
@@ -174,11 +183,44 @@ int NitroPort_LowerMenuPanelAt(int x, int y, int *dsX, int *dsY);
 enum NitroLowerMenuPanelShows {
     NITRO_LOWERMENU_PANEL_DS,
     NITRO_LOWERMENU_PANEL_MAP,
+    NITRO_LOWERMENU_PANEL_PICTURE0,   /* (a picture kept: NitroPort_LowerMenuKeepPicture) */
+    NITRO_LOWERMENU_PANEL_PICTURE1,
 };
+#define NITRO_LOWERMENU_PICTURES 2
 /* What the panel shows (the game's thread; the map only once it has been
- * given: NitroPort_LowerMenuSetMap). */
+ * given: NitroPort_LowerMenuSetMap; a picture only once there is one). The
+ * map and the pictures: the panel's touches are the menu's (a tap a press,
+ * NITRO_LOWERMENU_PANEL_PRESS). */
 void NitroPort_LowerMenuSetPanel(int shows);
 int NitroPort_LowerMenuPanel(void);
+
+/* ---------------------------------------------------- the panel's pictures
+ *
+ * The lower screen's picture kept, to show in the panel instead of the
+ * DS's (the game's thread): an app's last picture (the bag as the player
+ * left it) shown while it isn't running, its tab still chosen, and while
+ * the game swaps the field and it. KeepPicture: the picture the lower
+ * screen shows now (the platform's newest; tall or not, as it is) kept as
+ * picture n, from the next frame the platform draws (asked for before the
+ * panel's set to show it: the platform keeps it first). PictureReady:
+ * whether picture n has been kept (then it's shown as soon as asked).
+ * PictureKept: (the platforms') picture n kept, or not (the memory gone). */
+void NitroPort_LowerMenuKeepPicture(int n);
+int NitroPort_LowerMenuPictureReady(int n);
+void NitroPort_LowerMenuPictureKept(int n, int kept);
+/* (the platforms') The pictures the game asked to keep, a count each: kept
+ * when it changes. */
+uint32_t NitroPort_LowerMenuPictureWish(int n);
+
+/* The menu kept on the lower screen while the game swaps what's under it
+ * (the field going, an app coming, and back) and turns the menu off and on
+ * meanwhile: drawn on with its panel's map or picture (not with the DS's
+ * lower screen: what's there then isn't anything); its buttons drawn as
+ * the game says, their touches nobody's while the menu's off. KeptShown:
+ * whether the platforms draw it so now (asked, and the panel the map or a
+ * picture there is). */
+void NitroPort_LowerMenuKeepShown(int on);
+int NitroPort_LowerMenuKeptShown(void);
 
 enum NitroLowerMapSpriteKind {
     NITRO_LOWERMAP_CURSOR,   /* 16 x 16, its two frames by turns */

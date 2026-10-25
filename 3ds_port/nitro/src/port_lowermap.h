@@ -9,9 +9,13 @@
 #include <nitro_port_lowermenu.h>
 #include <stdint.h>
 
-/* The map's contents: the canvas made again, the panel's picture all drawn
- * again. 0 if the Town Map's pictures can't be read (no data pack). */
+/* The map's contents: what changed of the canvas made again, and of the
+ * panel's picture (the first map, or other hidden places shown: all of it).
+ * 0 if the Town Map's pictures can't be read (no data pack). */
 int NitroPort_LowerMapSet(const NitroLowerMap *map);
+/* The panel's rows drawn again since last asked: y0 to y1 - 1 (none: y0 >=
+ * y1). */
+void NitroPort_LowerMapTakeDirty(int *y0, int *y1);
 /* Whether it has a map to show. */
 int NitroPort_LowerMapReady(void);
 /* A frame gone by (its animations): 1 if the panel's picture changed. */

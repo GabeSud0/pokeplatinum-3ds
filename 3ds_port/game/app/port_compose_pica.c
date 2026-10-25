@@ -182,6 +182,15 @@ static uint32_t sMenuTexSerial;
 static int sMenuHasPanel;          /* (that picture has its panel drawn in it: the map) */
 static uint32_t sMenuCopy[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
 static uint16_t sMenu565[NITRO_LOWERMENU_W * NITRO_LOWERMENU_H];
+/* (each texture's rows behind the picture: to be made again when it's next
+ * written; all of them to begin with) */
+static int sMenuStaleY0[2], sMenuStaleY1[2] = { NITRO_LOWERMENU_H, NITRO_LOWERMENU_H };
+/* The panel's pictures (NitroPort_LowerMenuKeepPicture): the lower
+ * screen's texture as it was, and whether it was tall. */
+static void *sPicData[NITRO_LOWERMENU_PICTURES];
+static int sPicTall[NITRO_LOWERMENU_PICTURES];
+static uint32_t sPicDone[NITRO_LOWERMENU_PICTURES];   /* (the wish kept last) */
+static C3D_Tex sPicTex;
 static int sMenuNow;              /* (the screen being drawn is the menu) */
 static void *sEdgeDepth[4];       /* 240 x 400 D24S8, a direction each, shared by the screens */
 static void *sEdgeBlock;          /* (the four, one after another: one VRAM block) */
@@ -553,8 +562,17 @@ static void free_all(void)
             linearFree(sMenuTexData[i]);
             sMenuTexData[i] = NULL;
         }
+        sMenuStaleY0[i] = 0;   /* (made whole again when there's one) */
+        sMenuStaleY1[i] = NITRO_LOWERMENU_H;
     }
     sMenuTexCur = -1;
+    for (i = 0; i < NITRO_LOWERMENU_PICTURES; i++) {
+        NitroPort_LowerMenuPictureKept(i, 0);
+        if (sPicData[i]) {
+            linearFree(sPicData[i]);
+            sPicData[i] = NULL;
+        }
+    }
     for (i = 0; i < 4; i++) {
         sEdgeDepth[i] = NULL;
     }
@@ -803,6 +821,15 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
                 sMenuTexData[0] = NULL;
             }
             break;
+        }
+    }
+    /* (and its panel's pictures: without them, the game keeps the lower
+     * screen as it is instead while it swaps the field and an app) */
+    for (i = 0; i < NITRO_LOWERMENU_PICTURES && sMenuTexData[0] != NULL; i++) {
+        sPicData[i] = linearAlloc((size_t)sScreens[1].texW * sScreens[1].texH * 2u);
+        sPicDone[i] = NitroPort_LowerMenuPictureWish(i);
+        if (!sPicData[i]) {
+            NitroPort_Log("[compose] no linear memory for the menu panel's picture %d", i);
         }
     }
     NitroPort_LowerMenuSetAvailable(sMenuTexData[0] != NULL);
@@ -1697,30 +1724,56 @@ int NitroPort_ComposeLowerMenuShown(void)
     return __atomic_load_n(&sScreens[1].shownMenu, __ATOMIC_ACQUIRE);
 }
 
-/* The menu's picture into the texture not used last, when it's changed. */
+/* The menu's picture into the texture not used last, when it's changed:
+ * only the rows it's behind on (the map's few, as the player walks; the
+ * other texture keeps them to catch up on next time). */
 static void menu_texture(void)
 {
     const uint32_t *pic;
     uint32_t serial;
-    int i;
+    int i, b, y0, y1, k;
 
     if (sMenuTexCur >= 0 && NitroPort_LowerMenuSerial() == sMenuTexSerial) {
         return;
     }
+    b = sMenuTexCur == 0 ? 1 : 0;
     /* (copied under the lock, converted after it: the game's thread waits
      * on it for as little as can be) */
     pic = NitroPort_LowerMenuLockFrame(&serial);
-    memcpy(sMenuCopy, pic, sizeof(sMenuCopy));
+    NitroPort_LowerMenuTakeDirtyRows(&y0, &y1);
+    for (k = 0; k < 2 && y0 < y1; k++) {
+        if (sMenuStaleY0[k] >= sMenuStaleY1[k]) {
+            sMenuStaleY0[k] = y0;
+            sMenuStaleY1[k] = y1;
+        } else {
+            sMenuStaleY0[k] = y0 < sMenuStaleY0[k] ? y0 : sMenuStaleY0[k];
+            sMenuStaleY1[k] = y1 > sMenuStaleY1[k] ? y1 : sMenuStaleY1[k];
+        }
+    }
+    /* (whole tiles: 8 rows) */
+    y0 = sMenuStaleY0[b] & ~7;
+    y1 = (sMenuStaleY1[b] + 7) & ~7;
+    y1 = y1 > NITRO_LOWERMENU_H ? NITRO_LOWERMENU_H : y1;
+    if (y0 < y1) {
+        memcpy(sMenuCopy + y0 * NITRO_LOWERMENU_W, pic + y0 * NITRO_LOWERMENU_W,
+               (size_t)(y1 - y0) * NITRO_LOWERMENU_W * sizeof(uint32_t));
+    }
     sMenuHasPanel = NitroPort_LowerMenuFrameHasPanel();
     NitroPort_LowerMenuUnlockFrame();
-    for (i = 0; i < NITRO_LOWERMENU_W * NITRO_LOWERMENU_H; i++) {
-        uint32_t c = sMenuCopy[i];
+    if (y0 < y1) {
+        for (i = y0 * NITRO_LOWERMENU_W; i < y1 * NITRO_LOWERMENU_W; i++) {
+            uint32_t c = sMenuCopy[i];
 
-        sMenu565[i] = (uint16_t)(((c >> 27) << 11) | (((c >> 18) & 63u) << 5) | ((c >> 11) & 31u));
+            sMenu565[i] = (uint16_t)(((c >> 27) << 11) | (((c >> 18) & 63u) << 5) | ((c >> 11) & 31u));
+        }
+        NitroPort_Tile16(sMenu565 + y0 * NITRO_LOWERMENU_W, NITRO_LOWERMENU_W, y1 - y0,
+                         (uint16_t *)sMenuTexData[b] + (y0 / 8) * (MENU_TEX_W / 8) * 64, MENU_TEX_W);
+        GSPGPU_FlushDataCache((uint16_t *)sMenuTexData[b] + (y0 / 8) * (MENU_TEX_W / 8) * 64,
+                              (u32)MENU_TEX_W * (u32)(y1 - y0) * 2u);
     }
-    sMenuTexCur = sMenuTexCur == 0 ? 1 : 0;
-    NitroPort_Tile16(sMenu565, NITRO_LOWERMENU_W, NITRO_LOWERMENU_H, sMenuTexData[sMenuTexCur], MENU_TEX_W);
-    GSPGPU_FlushDataCache(sMenuTexData[sMenuTexCur], (u32)MENU_TEX_W * NITRO_LOWERMENU_H * 2u);
+    sMenuStaleY0[b] = NITRO_LOWERMENU_H;
+    sMenuStaleY1[b] = 0;
+    sMenuTexCur = b;
     sMenuTexSerial = serial;
 }
 
@@ -1740,6 +1793,7 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
     float vRow0 = vTop - 0.5f * row, vRowLast = vBottom + 0.5f * row;
 
     float mTop = 1.0f, mBottom = 1.0f - (float)NITRO_LOWERMENU_H / MENU_TEX_H;
+    int pic, tall;
 
     if (sConfig.flipV) {   /* (as the DS's pictures: see the flip setting) */
         float t = mTop;
@@ -1756,9 +1810,18 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
     if (sMenuHasPanel) {
         return;   /* (the panel is in the picture: the map) */
     }
-    make_texture(&sUnderTex, set->under, GPU_RGB565, scr->texW, scr->texH, linear, GPU_CLAMP_TO_EDGE);
-    C3D_TexBind(0, &sUnderTex);
-    if (set->info.height >= NITRO_LOWERMENU_CANVAS_H) {
+    pic = NitroPort_LowerMenuPanel() - NITRO_LOWERMENU_PANEL_PICTURE0;
+    if (pic >= 0 && pic < NITRO_LOWERMENU_PICTURES && sPicData[pic] != NULL) {
+        /* (a picture kept: the lower screen's texture as it was) */
+        make_texture(&sPicTex, sPicData[pic], GPU_RGB565, scr->texW, scr->texH, linear, GPU_CLAMP_TO_EDGE);
+        C3D_TexBind(0, &sPicTex);
+        tall = sPicTall[pic];
+    } else {
+        make_texture(&sUnderTex, set->under, GPU_RGB565, scr->texW, scr->texH, linear, GPU_CLAMP_TO_EDGE);
+        C3D_TexBind(0, &sUnderTex);
+        tall = set->info.height >= NITRO_LOWERMENU_CANVAS_H;
+    }
+    if (tall) {
         /* (tall: canvas row y is the picture's row y) */
         quad(x0, y0, x1, yEnd, 0.0f, 0, vTop, u1, vTop - row * (float)NITRO_LOWERMENU_CANVAS_H, 0xFFFFFFFFu);
         return;
@@ -2226,6 +2289,58 @@ static void fill_edge_buffers(Screen *scr, u32 value, unsigned copied)
     }
 }
 
+/* The pictures the game asked to keep for the menu's panel
+ * (NitroPort_LowerMenuKeepPicture): the lower screen's newest texture
+ * copied as it is (held meanwhile: not written over), before anything's
+ * drawn with them. */
+static void keep_pictures(void)
+{
+    uint32_t wish[NITRO_LOWERMENU_PICTURES];
+    LayerSet *from = NULL;
+    Screen *scr = &sScreens[1];
+    int k, i, any = 0;
+
+    for (k = 0; k < NITRO_LOWERMENU_PICTURES; k++) {
+        wish[k] = NitroPort_LowerMenuPictureWish(k);
+        any |= wish[k] != sPicDone[k] && sPicData[k] != NULL;
+    }
+    if (!any) {
+        return;
+    }
+    LightLock_Lock(&sSetLock);
+    for (i = 0; i < SETS; i++) {
+        LayerSet *c = &scr->set[i];
+
+        if (!c->writing && c->seq != 0 && (from == NULL || c->seq > from->seq)) {
+            from = c;
+        }
+    }
+    if (from != NULL) {
+        from->held++;
+    }
+    LightLock_Unlock(&sSetLock);
+    for (k = 0; k < NITRO_LOWERMENU_PICTURES; k++) {
+        if (wish[k] == sPicDone[k] || sPicData[k] == NULL) {
+            continue;
+        }
+        if (from != NULL && !from->info.displayOff) {
+            u32 rows = ((u32)from->info.height * (u32)scr->texScale + 8u + 7u) & ~7u;
+
+            rows = rows > (u32)scr->texH ? (u32)scr->texH : rows;
+            memcpy(sPicData[k], from->under, (size_t)scr->texW * rows * 2u);
+            GSPGPU_FlushDataCache(sPicData[k], (u32)scr->texW * rows * 2u);
+            sPicTall[k] = from->info.height >= NITRO_LOWERMENU_CANVAS_H;
+            NitroPort_LowerMenuPictureKept(k, 1);
+        }
+        sPicDone[k] = wish[k];   /* (nothing to keep: the one before stays) */
+    }
+    if (from != NULL) {
+        LightLock_Lock(&sSetLock);
+        from->held--;
+        LightLock_Unlock(&sSetLock);
+    }
+}
+
 int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, int aOnTop, float slider,
                            int forced, int flush, int mid)
 {
@@ -2239,6 +2354,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     unsigned copies;
     u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
     LayerSet *sets[2] = { NULL, NULL };
+    int keptShown;
     u64 start = svcGetSystemTick(), gpuStart, prepareTicks = 0, texTicksBefore, texTicksAfter, texels;
 
     if (!sReady) {
@@ -2255,6 +2371,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                                sConfig.sunAzimuth);
         }
     }
+    keep_pictures();
+    keptShown = NitroPort_LowerMenuKeptShown();
     startVBlank = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
     if (scene != NULL && (!sSeenValid || sceneSerial != sSeenSerial)) {
         /* A scene not seen before: the one before it, if the 3D was on
@@ -2322,11 +2440,14 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             }
             lowerKeptBlack = 1;
         }
-        has3d = !(s == 0 && keptBlack) && screen3d && set->info.has3d && !set->info.displayOff && scene != NULL;
+        has3d = !(s == 0 && keptBlack) && !(s == 1 && keptShown) && screen3d && set->info.has3d &&
+                !set->info.displayOff && scene != NULL;
         /* The lower screen as the menu: in the field (the game says), with
-         * its textures, and without the 3D on that screen. */
-        menu[s] = s == 1 && !lowerKeptBlack && sMenuTexData[0] != NULL && !has3d && !set->info.displayOff &&
-                  NitroPort_LowerMenuOn();
+         * its textures, and without the 3D on that screen; or kept shown
+         * while the game swaps what's under it (its panel the map or a
+         * picture: whatever the DS's lower screen is then). */
+        menu[s] = s == 1 && !lowerKeptBlack && sMenuTexData[0] != NULL &&
+                  ((!has3d && !set->info.displayOff && NitroPort_LowerMenuOn()) || keptShown);
         need[s] = forced || set->seq != scr->shownSeq || (has3d && sceneSerial != scr->shownScene) || (mid && has3d) ||
                   menu[s] != scr->shownMenu || (menu[s] && menuSerial != scr->shownMenuSerial) ||
                   (s == 0 && has3d && (stereoNow != scr->shownStereo ||

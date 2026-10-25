@@ -562,18 +562,55 @@ static int MenuShot(const char *path)
     return WritePngRgba(path, out, NITRO_LOWERMENU_W, NITRO_LOWERMENU_H);
 }
 
+/* (the remaster) The panel's pictures (NitroPort_LowerMenuKeepPicture):
+ * the lower screen's canvas as it was, kept when the game asks. Each
+ * frame. */
+static uint16_t sPicCanvas[NITRO_LOWERMENU_PICTURES][320 * NITRO_LOWERMENU_TALL_LINES];
+static int sPicCanvasWidth[NITRO_LOWERMENU_PICTURES], sPicCanvasTall[NITRO_LOWERMENU_PICTURES];
+static uint32_t sPicCanvasDone[NITRO_LOWERMENU_PICTURES];
+
+static void KeepPanelPictures(void)
+{
+    static uint16_t over[320 * 192];
+    static uint8_t overAlpha[320 * 192];
+    int k;
+
+    for (k = 0; k < NITRO_LOWERMENU_PICTURES; k++) {
+        uint32_t wish = NitroPort_LowerMenuPictureWish(k);
+        NitroRender2DSplit split;
+
+        if (wish == sPicCanvasDone[k]) {
+            continue;
+        }
+        memset(&split, 0, sizeof(split));
+        split.over = over;
+        split.overAlpha = overAlpha;
+        split.windowsToEdge = 1;
+        split.snapshot = sStateTaken;
+        split.height = NitroPort_LowerMenuTall() ? NITRO_LOWERMENU_TALL_LINES : 0;
+        NitroPort_Render2DSplit(NitroPort_EngineAOnTop() ? 1 : 0, sPicCanvas[k], &split);
+        sPicCanvasWidth[k] = split.width > 256 ? split.width : 256;
+        sPicCanvasTall[k] = split.height >= NITRO_LOWERMENU_CANVAS_H;
+        sPicCanvasDone[k] = wish;
+        NitroPort_LowerMenuPictureKept(k, 1);
+        NitroPort_Log("[pc] the menu panel's picture %d kept (engine %c, %s)", k, NitroPort_EngineAOnTop() ? 'B' : 'A',
+                      sPicCanvasTall[k] ? "tall" : "192 rows");
+    }
+}
+
 static void MenuRender(uint32_t *out)
 {
     static uint16_t under[320 * NITRO_LOWERMENU_TALL_LINES], over[320 * 192];
     static uint8_t overAlpha[320 * 192];
     int engine = NitroPort_EngineAOnTop() ? 1 : 0;   /* the lower screen's */
     int tall = NitroPort_LowerMenuTall();             /* (drawn on below the DS's rows: the canvas's own) */
-    int hasPanel;
+    int hasPanel, picture = NitroPort_LowerMenuPanel() - NITRO_LOWERMENU_PANEL_PICTURE0;
     NitroRender2DSplit split;
     const uint32_t *pic;
+    const uint16_t *canvas = under;
     int x, y, width, mode, f;
 
-    if (!NitroPort_LowerMenuOn()) {
+    if (!NitroPort_LowerMenuOn() && !NitroPort_LowerMenuKeptShown()) {
         NitroPort_Log("[pc] mshot: the lower screen isn't the menu now (drawn anyway)");
     }
     pic = NitroPort_LowerMenuLockFrame(NULL);
@@ -591,6 +628,12 @@ static void MenuRender(uint32_t *out)
     split.height = tall ? NITRO_LOWERMENU_TALL_LINES : 0;
     NitroPort_Render2DSplit(engine, under, &split);
     width = split.width > 256 ? split.width : 256;
+    if (picture >= 0 && picture < NITRO_LOWERMENU_PICTURES) {
+        /* (a picture kept: its canvas instead) */
+        canvas = sPicCanvas[picture];
+        width = sPicCanvasWidth[picture];
+        tall = sPicCanvasTall[picture];
+    }
     for (y = 0; y < NITRO_LOWERMENU_PANEL_H; y++) {
         for (x = 0; x < NITRO_LOWERMENU_PANEL_W; x++) {
             /* the canvas's point there, in its 2x2 texels (as the GPU) */
@@ -606,7 +649,7 @@ static void MenuRender(uint32_t *out)
                 uint16_t c;
 
                 cy = cy < 0 ? 0 : cy > (tall ? NITRO_LOWERMENU_TALL_LINES - 1 : 191) ? (tall ? NITRO_LOWERMENU_TALL_LINES - 1 : 191) : cy;
-                c = under[cy * width + cx];
+                c = canvas[cy * width + cx];
                 for (k = 0; k < 3; k++) {
                     int v = (c >> (5 * k)) & 31;
                     acc[k] += w * (float)((v << 3) | (v >> 2));
@@ -1275,6 +1318,7 @@ void NitroPort_OnFrame(void)
         _exit(0);
     }
     if (NitroPort_LowerMenuAvailable()) {
+        KeepPanelPictures();   /* (first: what's shown now, before the game changes it) */
         KeepUpperScreen();   /* (an app in the menu's panel: the upper screen kept) */
         KeepLowerScreen();
     }
@@ -1296,7 +1340,7 @@ void NitroPort_OnFrame(void)
     } else {
         /* No finger on the menu: told every frame, as the 3DS does (a
          * finger down as the menu came on counts once it's let go). */
-        if (NitroPort_LowerMenuOn()) {
+        if (NitroPort_LowerMenuOn() || NitroPort_LowerMenuKeptShown()) {
             NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
         }
         sLiveTouchMenu = 0;

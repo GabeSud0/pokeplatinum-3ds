@@ -3,8 +3,9 @@
  * touch goes (the panel's DS pixel, or a button), a press only when let go
  * on the button it began on and only on one that can be used now, a press
  * not taken soon dropped, the picture redrawn when the cursor moves, and
- * nothing while it's off. (No data pack: the start menu's icons are
- * left out, the rest drawn.)
+ * nothing while it's off; double taps, the panel's pictures, the menu kept
+ * shown while the game swaps what's under it. (No data pack: the start
+ * menu's icons are left out, the rest drawn.)
  */
 #include <nitro_port_lowermenu.h>
 #include <stdio.h>
@@ -318,6 +319,138 @@ static void test_picture(void)
     CHECK(NitroPort_LowerMenuSerial() != before);
 }
 
+/* A tap on (x, y): down, then let go. */
+static void tap(int x, int y)
+{
+    NitroPort_LowerMenuTouch(1, x, y, NULL, NULL);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+}
+
+/* A double tap: the second press on a button within
+ * NITRO_LOWERMENU_DOUBLE_FRAMES of the first; a third starts again; one on
+ * another button in between, or too late, isn't. */
+static void test_double_tap(void)
+{
+    const int mapY = 3 + 23 * NITRO_LOWERMENU_MAP + 10, bagY = 3 + 23 * NITRO_LOWERMENU_BAG + 10;
+    int i;
+
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuSetEnabled(0xFFFFFFFFu);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    for (i = 0; i < NITRO_LOWERMENU_DOUBLE_FRAMES + 2; i++) {
+        NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    }
+    tap(280, mapY);
+    CHECK(NitroPort_LowerMenuPressPending() == NITRO_LOWERMENU_MAP);
+    CHECK(NitroPort_LowerMenuPressDouble() == 0);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_MAP);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    tap(280, mapY);
+    CHECK(NitroPort_LowerMenuPressDouble() == 1);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_MAP);
+    CHECK(NitroPort_LowerMenuPressDouble() == 1);   /* (the press taken last) */
+    tap(280, mapY);
+    CHECK(NitroPort_LowerMenuPressDouble() == 0);
+    NitroPort_LowerMenuTakePress();
+    /* (another button between) */
+    tap(280, bagY);
+    NitroPort_LowerMenuTakePress();
+    tap(280, mapY);
+    CHECK(NitroPort_LowerMenuPressDouble() == 0);
+    NitroPort_LowerMenuTakePress();
+    /* (too late) */
+    for (i = 0; i < NITRO_LOWERMENU_DOUBLE_FRAMES + 1; i++) {
+        NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    }
+    tap(280, mapY);
+    CHECK(NitroPort_LowerMenuPressDouble() == 0);
+    NitroPort_LowerMenuTakePress();
+    NitroPort_LowerMenuShow(0);
+}
+
+/* The panel's pictures: shown only once kept; a picture's panel touches
+ * the menu's. The menu kept shown while off: only with a picture (or the
+ * map) in its panel; its buttons still pressed then, the panel nobody's;
+ * the press not dropped when it goes off and on again meanwhile. */
+static void test_pictures_and_kept_shown(void)
+{
+    const int bagY = 3 + 23 * NITRO_LOWERMENU_BAG + 10;
+    uint32_t wish, before;
+    int x, y;
+
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuPictureReady(0) == 0);
+    NitroPort_LowerMenuSetPanel(NITRO_LOWERMENU_PANEL_PICTURE0);
+    CHECK(NitroPort_LowerMenuPanel() == NITRO_LOWERMENU_PANEL_DS);   /* (none kept yet) */
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 1);      /* (the game's) */
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    /* Asked for: the wish counts; kept by the platform: shown. */
+    wish = NitroPort_LowerMenuPictureWish(0);
+    before = NitroPort_LowerMenuSerial();
+    NitroPort_LowerMenuKeepPicture(0);
+    CHECK(NitroPort_LowerMenuPictureWish(0) == wish + 1u);
+    CHECK(NitroPort_LowerMenuSerial() != before);
+    CHECK(NitroPort_LowerMenuPictureWish(1) == 0);
+    NitroPort_LowerMenuPictureKept(0, 1);
+    CHECK(NitroPort_LowerMenuPictureReady(0) == 1);
+    CHECK(NitroPort_LowerMenuPanel() == NITRO_LOWERMENU_PANEL_PICTURE0);
+    NitroPort_LowerMenuLockFrame(NULL);
+    CHECK(NitroPort_LowerMenuFrameHasPanel() == 0);   /* (the platforms draw it) */
+    NitroPort_LowerMenuUnlockFrame();
+    /* Its touches the menu's: a tap a press. */
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 0);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_PANEL_PRESS);
+    /* Kept shown: not with the DS's screen in the panel. */
+    NitroPort_LowerMenuSetPanel(NITRO_LOWERMENU_PANEL_DS);
+    NitroPort_LowerMenuKeepShown(1);
+    CHECK(NitroPort_LowerMenuKeptShown() == 0);
+    NitroPort_LowerMenuSetPanel(NITRO_LOWERMENU_PANEL_PICTURE0);
+    CHECK(NitroPort_LowerMenuKeptShown() == 1);
+    /* Off meanwhile: the buttons still pressed, the panel nobody's; a
+     * press made then still there when it's on again. */
+    NitroPort_LowerMenuShow(0);
+    CHECK(NitroPort_LowerMenuOn() == 0);
+    CHECK(NitroPort_LowerMenuTouch(1, 123, 120, &x, &y) == 0);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    tap(280, bagY);
+    NitroPort_LowerMenuShow(1);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_BAG);
+    NitroPort_LowerMenuKeepShown(0);
+    CHECK(NitroPort_LowerMenuKeptShown() == 0);
+    /* Off, not kept shown: nothing. */
+    NitroPort_LowerMenuShow(0);
+    tap(280, bagY);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    /* The memory gone: not shown. */
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuPictureKept(0, 0);
+    CHECK(NitroPort_LowerMenuPanel() == NITRO_LOWERMENU_PANEL_DS);
+    NitroPort_LowerMenuSetPanel(NITRO_LOWERMENU_PANEL_DS);
+    NitroPort_LowerMenuShow(0);
+}
+
+/* The picture's rows changed, for the display to copy only them: all of
+ * it when it's drawn again; none once taken. */
+static void test_dirty_rows(void)
+{
+    int y0, y1;
+
+    NitroPort_LowerMenuShow(1);
+    NitroPort_LowerMenuSelect(-1);
+    NitroPort_LowerMenuSelect(NITRO_LOWERMENU_SAVE);
+    NitroPort_LowerMenuLockFrame(NULL);
+    NitroPort_LowerMenuTakeDirtyRows(&y0, &y1);
+    CHECK(y0 == 0 && y1 == NITRO_LOWERMENU_H);
+    NitroPort_LowerMenuTakeDirtyRows(&y0, &y1);
+    CHECK(y0 >= y1);
+    NitroPort_LowerMenuUnlockFrame();
+    NitroPort_LowerMenuSelect(-1);
+    NitroPort_LowerMenuShow(0);
+}
+
 int main(void)
 {
     NitroPort_LowerMenuSetAvailable(1);
@@ -329,6 +462,9 @@ int main(void)
     test_enabled_and_expiry();
     test_map_without_pictures();
     test_picture();
+    test_double_tap();
+    test_pictures_and_kept_shown();
+    test_dirty_rows();
     printf("lowermenu: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;
 }
