@@ -57,6 +57,7 @@
 #include "port_pica.h"
 #include <nitro_port_gx3d.h>
 #include <nitro_port_lowermenu.h>
+#include <nitro_port_options.h>
 #include <nitro_port_render2d.h>
 #include <nitro_port_wide.h>
 #include <nitro_port_wideart.h>
@@ -317,7 +318,7 @@ static ComposeConfig sCompose;
 /* 60 frames a second in the field (remaster.txt fps60, on by default): an
  * in-between scene shown before each scene (port_gx3d.c's
  * NitroPort_Gx3dMidOf; GpuComposeLoop). */
-static bool sFps60 = true;
+static volatile bool sFps60 = true;
 static volatile bool sComposing;      /* the display thread is inside a frame */
 static u32 sComposeAttempt;           /* changes on every entry, for the watchdog */
 static volatile bool sComposeForce;   /* draw everything again (back from the log) */
@@ -739,6 +740,32 @@ static void StopGpu(void)
 #define MANIFEST_PATH DATA_DIR "/manifest.json"
 #define LOG_PATH      DATA_DIR "/log.txt"
 #define SAVE_PATH     DATA_DIR "/platinum.sav"
+/* The options page's settings (nitro_port_options.h). */
+#define OPTIONS_PATH  DATA_DIR "/options.txt"
+/* A setting changed on the options page (the game's thread): the ones
+ * applied while the game runs. (60 FPS: from the next frame, StepFrame's
+ * NitroPort_Gx3dSetInterpolation; smooth 3D: the compositor's next.) */
+static void OnOptionChanged(int id, int value)
+{
+    if (id == NITRO_OPT_FPS60) {
+        sFps60 = value != 0;
+    } else if (id == NITRO_OPT_SMOOTH3D && sRemaster) {
+        NitroPort_ComposeSetSmooth3d(value);
+    }
+}
+
+/* The options page's settings: remaster.txt's 60 FPS and smooth 3D their
+ * defaults, the file's (written by the page) over them. */
+static void ReadOptions(void)
+{
+    NitroPort_OptionSetDefault(NITRO_OPT_FPS60, sFps60);
+    NitroPort_OptionSetDefault(NITRO_OPT_SMOOTH3D, sCompose.smooth3d);
+    NitroPort_OptionsLoad(OPTIONS_PATH);
+    sFps60 = NitroPort_Option(NITRO_OPT_FPS60) != 0;
+    sCompose.smooth3d = NitroPort_Option(NITRO_OPT_SMOOTH3D);
+    NitroPort_OptionsSetListener(OnOptionChanged);
+}
+
 /* Hand-drawn pictures for the wide upper screen, and captures for drawing
  * them (docs/WIDE_ART.md). */
 #define WIDE_ART_DIR  DATA_DIR "/wide"
@@ -2636,6 +2663,7 @@ int main(int argc, char **argv)
 
             APT_CheckNew3DS(&isNew3ds);
             ReadRemasterConfig(isNew3ds);
+            ReadOptions();
             StartGpu(priority, isNew3ds);
             NitroPort_Gx3dSetWideView(sRemaster && sCompose.wide ? 320 : 256);
             NitroPort_SetWideScreen(sRemaster && sCompose.wide ? 32 : 0);

@@ -868,7 +868,43 @@ screens) the lower screen is the DS's, filling the screen as before.
 - **The panel at the field's start** (`StartMenu_PortFieldStarts`, from the
   Pokétch's start): the tab chosen (the map once they have the Town Map)
   from the field's first frame, its name and description printed at once,
-  not the Pokétch till the player can first walk.
+  not the Pokétch till the player can first walk; the game's first field
+  on the tab the options' START WITH says (the map or the Pokétch).
+- **The options in the panel** (`patches/pokeplatinum/0040`,
+  `options_panel.c`): OPTIONS (tapped, A on it after X, or tapped in the
+  bag, the party or the trainer case, which go through the field behind the
+  panel's black as SAVE does) with the Pokétch up fades the panel to black,
+  ends the Pokétch and draws an options page on the DS's lower screen,
+  tall, OPTIONS lit (the approved mock-ups, the same pixels in the PC
+  runner but for the cards added since): tabs (SETTINGS, ENHANCEMENTS,
+  CHEATS), then cards in two columns, each its name and its value in red
+  between arrows, the cursor Platinum's options screen's red frame.
+  SETTINGS: the game's six (into its save, as its options screen sets
+  them; the sound and the buttons at once), 60 FPS, SMOOTH 3D and START
+  WITH; ENHANCEMENTS and CHEATS: kept, their effects to come; CHEATS's
+  GIVE ITEMS a page of its own (a pocket, an item, how many; no key
+  items). Drawn into a window off the screen as one picture (the cards,
+  the game's text on them, their edges and the cursor over it) and cut
+  into tiles, alike ones once (48 KB of the sub engine's VRAM, BG0 alone),
+  drawn whole again on any change. Up / Down go through the cards (the
+  left column, then the right), Left / Right change one, A changes it (or
+  does it), L / R the tabs, B or X close (B on GIVE ITEMS: back to
+  CHEATS); taps: the tabs, a card's left half its left arrow and its
+  right half its right one (the port's panel buttons, now up to 32).
+  Another of the menu's buttons closes the page and is acted on (BAG,
+  POKéMON, TRAINER and SAVE straight on from the black panel; MAP,
+  POKéTCH, POKéDEX once it's faded in). Closed, the Pokétch comes back and
+  the port's settings are saved. Without the menu it's the DS's options
+  screen.
+- **The port's own settings** (`port_options.c`,
+  `nitro_port_options.h`): 60 FPS, smooth 3D, the start tab, the
+  enhancements and the cheats, a whole number each, kept in `options.txt`
+  beside the save (`name value` a line; written to a new file put in the
+  old one's place). The 3DS takes `remaster.txt`'s `fps60` and `smooth3d`
+  as their defaults, the file's over them, and applies a change at once:
+  60 FPS from the next frame, smooth 3D from the compositor's next (its
+  buffers now made whatever the setting, so it can be turned on). The PC
+  runner keeps the file beside its save.
 - **The apps' hand-over:** the start menu opens the panel's apps
   (`StartMenu_PortAppIsMenus`: the field's own app, the start menu's task
   the field's; not a script's, a registered item's, or an app's own like

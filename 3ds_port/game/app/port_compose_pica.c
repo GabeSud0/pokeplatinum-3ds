@@ -238,6 +238,7 @@ static void *sEdgeBlock;          /* (the four, one after another: one VRAM bloc
  * samples down the screen (the framebuffer's lines, which the transfer
  * engine can halve on their own), one across: TOP_W lines.) */
 static void *sSmoothColor, *sSmoothOwnDepth, *sSmoothDepth;
+static volatile int sSmooth3d;          /* (the setting now: sConfig.smooth3d's, then the options page's) */
 static uint8_t sSmoothFb[PICA_FRAMEBUF_BYTES] __attribute__((aligned(8)));
 static int sSmoothReady, sSmoothNow, sSmoothSplit, sSmoothHalf, sSmoothMadeHalf;
 static u32 sEdgeClearNow;          /* (this frame: what the edge buffers are filled with) */
@@ -736,6 +737,13 @@ static int alloc_sets(Screen *scr, int canvasW, int scale)
 enum { PROF_LIST, PROF_FILL, PROF_FILL1, PROF_TRANSFER };
 static void prof_event(void *data);
 
+/* The smooth 3D as the options page sets it (0 off, 1 with the slider up,
+ * 2 always): from the next frame. */
+void NitroPort_ComposeSetSmooth3d(int smooth3d)
+{
+    __atomic_store_n(&sSmooth3d, smooth3d, __ATOMIC_RELEASE);
+}
+
 int NitroPort_ComposeInit(const ComposeConfig *config)
 {
     static const char *const filters[] = { "sharp (the pixels as they are, 2x then bilinear)", "nearest",
@@ -833,7 +841,10 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
             }
         }
     }
-    if (config->smooth3d) {
+    /* (made whatever the setting: the options page can turn it on while
+     * the game runs, NitroPort_ComposeSetSmooth3d) */
+    __atomic_store_n(&sSmooth3d, config->smooth3d, __ATOMIC_RELEASE);
+    {
         u32 colorSize = C3D_CalcColorBufSize(SMOOTH_W, SMOOTH_H, TOP_FB_FORMAT);
         u32 depthSize = C3D_CalcDepthBufSize(SMOOTH_W, SMOOTH_H, GPU_RB_DEPTH24_STENCIL8);
         void *depth = NULL;
@@ -2724,7 +2735,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                            int forced, int flush, int mid)
 {
     int s, drawn = 0, stereoNow, need[2] = { 0, 0 }, timed = 0, edges = 0, lcdBuf[2] = { -1, -1 }, top3d = 0;
-    int edgesWanted = 0, smoothable = 0, drawnAs = DRAWN_PLAIN;
+    int edgesWanted = 0, smoothable = 0, drawnAs = DRAWN_PLAIN, smooth3d;
     int underCleared[2] = { 0, 0 };
     int menu[2] = { 0, 0 };            /* (the lower screen as the menu) */
     int has3dOf[2] = { 0, 0 };         /* (each screen's 3D, as decided: in the menu's panel too) */
@@ -2993,7 +3004,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     /* The smooth 3D (sSmoothFb): on the upper screen when the 3D is
      * there; with outlines, split (sSmoothSplit), each eye in turn. */
     runs_most(stereoNow);
-    smoothable = sSmoothReady && need[0] && top3d && (stereoNow || sConfig.smooth3d == 2);
+    smooth3d = __atomic_load_n(&sSmooth3d, __ATOMIC_ACQUIRE);
+    smoothable = sSmoothReady && need[0] && top3d && smooth3d != 0 && (stereoNow || smooth3d == 2);
     /* (2x2, or as 60 frames a second has it now: auto_fps60) */
     drawnAs = smoothable ? fps60_drawn(stereoNow) : DRAWN_PLAIN;
     sSmoothNow = smoothable && drawnAs >= DRAWN_HALF;
