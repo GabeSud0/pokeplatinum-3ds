@@ -6,9 +6,10 @@
 #
 # On Bazzite, SteamOS-like and other immutable systems (Fedora Atomic:
 # Silverblue, Kinoite, Bazzite, Aurora, Bluefin...), where packages can't be
-# installed the usual way, it works inside a distrobox ("pokeplatinum",
-# Ubuntu 24.04) that it creates the first time: devkitPro, gcc and Python go
-# in there and your system isn't changed. On Ubuntu or Debian it runs
+# installed the usual way, it works inside a distrobox ("pokeplatinum-3ds")
+# that it creates the first time from devkitPro's own image on Docker Hub (the
+# one the project's CI builds with), so the 3DS tools come ready-made; gcc and
+# Python go in there too and your system isn't changed. On Ubuntu or Debian it runs
 # directly (it asks for sudo to install packages). Your home folder is shared
 # with the distrobox, so the files it makes are in your own folders.
 #
@@ -24,8 +25,8 @@ trap 'echo; echo "==> Stopped: the command on line $LINENO of build_linux.sh fai
 ROM="${1:-}"
 REPO_DIR="$HOME/pokeplatinum-3ds"
 BRANCH="${BRANCH:-main}"
-BOX="${BOX:-pokeplatinum}"
-BOX_IMAGE="docker.io/library/ubuntu:24.04"
+BOX="${BOX:-pokeplatinum-3ds}"
+BOX_IMAGE="docker.io/devkitpro/devkitarm:latest"
 step() { printf '\n==> %s\n' "$*"; }
 
 if [ -z "$ROM" ]; then
@@ -77,17 +78,26 @@ sudo apt-get update -q
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
     git python3 gcc g++ make patch libc6-dev wget ca-certificates gnupg xz-utils
 
-if ! command -v dkp-pacman >/dev/null; then
-    step "Installing devkitPro's package manager (https://devkitpro.org/wiki/devkitPro_pacman)"
-    [ -e /etc/mtab ] || sudo ln -s /proc/self/mounts /etc/mtab   # (containers and WSL lack it)
-    wget -nv -O /tmp/install-devkitpro-pacman https://apt.devkitpro.org/install-devkitpro-pacman
-    chmod +x /tmp/install-devkitpro-pacman
-    sudo DEBIAN_FRONTEND=noninteractive /tmp/install-devkitpro-pacman   # (as devkitPro's own Docker images do)
+# The 3DS tools: already there in devkitPro's image (the distrobox), otherwise
+# installed from devkitPro's servers.
+if [ -x "$DEVKITARM/bin/arm-none-eabi-gcc" ] && [ -d "$DEVKITPRO/libctru" ]; then
+    step "The 3DS tools (devkitARM, libctru) are already installed"
+else
+    if ! command -v dkp-pacman >/dev/null; then
+        step "Installing devkitPro's package manager (https://devkitpro.org/wiki/devkitPro_pacman)"
+        [ -e /etc/mtab ] || sudo ln -s /proc/self/mounts /etc/mtab   # (containers and WSL lack it)
+        if ! wget -nv -O /tmp/install-devkitpro-pacman https://apt.devkitpro.org/install-devkitpro-pacman; then
+            echo "devkitPro's server refused the download (a 403 means it blocks this network:"
+            echo "try without a VPN or on another network)."
+            exit 1
+        fi
+        chmod +x /tmp/install-devkitpro-pacman
+        sudo DEBIAN_FRONTEND=noninteractive /tmp/install-devkitpro-pacman   # (as devkitPro's own Docker images do)
+    fi
+    step "Installing the 3DS tools"
+    sudo dkp-pacman -Syu --noconfirm
+    sudo dkp-pacman -S --needed --noconfirm 3ds-dev
 fi
-
-step "Making sure the 3DS tools are installed"
-sudo dkp-pacman -Syu --noconfirm
-sudo dkp-pacman -S --needed --noconfirm 3ds-dev
 
 if [ -d "$REPO_DIR/.git" ]; then
     step "Updating $REPO_DIR"

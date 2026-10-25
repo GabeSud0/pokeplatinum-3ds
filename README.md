@@ -119,8 +119,8 @@ bash ~/build_linux.sh ~/path/to/your/platinum.nds
 
 On **Bazzite** and other immutable systems (Fedora Silverblue, Kinoite,
 Aurora, Bluefin...), it works inside a distrobox it creates once
-(`pokeplatinum`, Ubuntu 24.04), so your system isn't changed; keep the ROM in
-your home folder. On **Ubuntu or Debian** it runs directly. Run it again to
+(`pokeplatinum-3ds`, from devkitPro's own image, the one CI builds with), so your system isn't
+changed; keep the ROM in your home folder. On **Ubuntu or Debian** it runs directly. Run it again to
 update and rebuild.
 
 Then skip to [Copy to the SD card](#copy-to-the-sd-card).
