@@ -566,7 +566,13 @@ stretched:
   - the Pokédex's registration page: the Pokémon's box (and the 3D
     Pokémon in it) 24 pixels to the left, the title 24 to the right;
   - the evolution's background: a 512-wide map whose right half came
-    round beside the DS's screen; its edge columns carried on instead;
+    round beside the DS's screen; its edge columns carried on instead,
+    and since 2026-10-26 hand-drawn bands (`wideart/6570e913eaa0988b_0_0.png`:
+    while its palette is the evolution's teal; fading in and in the white
+    flash, the edge columns). After a battle the battle's overlay is
+    still loaded: its BG3 is left unclipped (its own map beside the DS's
+    screen) only without a screen laid out in parts, so the evolution's
+    picture is looked up (`NitroPort_WideLayout`);
   - the battle's trainers slide off (the player after throwing the ball,
     the opponent) till they're past the wider screen's edges, not the
     DS's (they vanished in the sides);

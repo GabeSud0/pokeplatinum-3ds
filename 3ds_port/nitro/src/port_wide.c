@@ -491,7 +491,17 @@ void NitroPort_WideLayout(int engine, struct NitroRender2DSplit *split)
         split->clip[bg] = 1;
     }
     if (engine == 0 && NitroPort_OverlayLoadedNamed("battle")) {
-        split->clip[3] = 0;
+        int laidOut;
+
+        /* (not a screen laid out in parts while the battle's loaded: the
+         * evolution after a battle, its background BG3 too, with a
+         * hand-drawn picture: 2026-10-26) */
+        lock();
+        laidOut = sPartCount[0] > 0;
+        unlock();
+        if (!laidOut) {
+            split->clip[3] = 0;
+        }
     }
     split->anchorWindows = sWideExtra > 0;
 }
