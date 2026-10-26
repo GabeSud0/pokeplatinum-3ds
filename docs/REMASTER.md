@@ -954,8 +954,9 @@ screens) the lower screen is the DS's, filling the screen as before.
     A battle holds it at 1x while it waits for the player
     (`NitroPort_SpeedHold`): its menus on the lower screen (from when one
     is drawn till a move or a target is chosen or the panel goes blank),
-    its bag and its party; the battle's animations and text go at the
-    speed set. SPEED above 1x turns 60 FPS off (when it's on), 1x on again
+    its bag and its party (not a battle video's STOP button: playback
+    doesn't wait for the player); the battle's animations and text go at
+    the speed set. SPEED above 1x turns 60 FPS off (when it's on), 1x on again
     unless the player has set 60 FPS since (`fps60_held` in
     `options.txt`). The PC runner isn't paced, so it doesn't show.
   - EXP ON CATCH: after "Gotcha!" the catch stops while the battle's
@@ -968,8 +969,10 @@ screens) the lower screen is the DS's, filling the screen as before.
     (each its own message, its gauge, its level up); then the rest of the
     party as much as each of those got (before their own boosts: a Lucky
     Egg, traded), under one message, "Your party gained ... Exp. Points!"
-    (the port's text: the game has none), with their levels up as usual (a
-    held Exp. Share adds nothing then).
+    (the port's text: the game has none), with their levels up as usual
+    and their effort values, as later games' Exp. Share (a held Exp. Share
+    adds nothing then). When none of those that battled is still up (an
+    Explosion, Destiny Bond...), the rest get the whole amount each.
   - TRADE EVO AT 40: a Pokémon that evolves by trade (with or without its
     item) evolves by level from 40 instead.
   - HMs WITHOUT MOVES: a field move whose HM is in the bag is the party's

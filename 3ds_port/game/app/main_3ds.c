@@ -2556,7 +2556,7 @@ void NitroPort_OnFrame(void)
      * at 1x it reads while the game waits for the V-blank; faster, the
      * game hardly waits, and it went on reading through the frames that
      * aren't shown, their changes in it (a battle's lower screen garbled at
-     * 4x, 2026-10-25). Once a frame shown. */
+     * 4x, 2026-10-25). (Only after a frame shown is there one reading.) */
     {
         u64 start = svcGetSystemTick();
 
@@ -2564,8 +2564,9 @@ void NitroPort_OnFrame(void)
             while (DrawersStillReading() && svcGetSystemTick() - start < 2 * FRAME_TICKS) {
                 svcSleepThread(100000LL);
             }
+        } else {
+            WaitForReading(FRAME_TICKS);
         }
-        WaitForReading(FRAME_TICKS);
         readWait = svcGetSystemTick() - start;
         sPerfReadWaitTicks += readWait;
     }

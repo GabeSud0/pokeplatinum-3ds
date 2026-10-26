@@ -66,8 +66,8 @@ the wrong screens.
  src/applications/trainer_case/main.c     |    4 +
  src/battle/battle_controller_player.c    |   22 +-
  src/battle/battle_main.c                 |   41 +-
- src/battle/battle_script.c               |  209 ++++-
- src/battle/battle_subscreen.c            |   19 +
+ src/battle/battle_script.c               |  211 ++++-
+ src/battle/battle_subscreen.c            |   21 +
  src/battle/battle_system.c               |   14 +
  src/battle_sub_menus/battle_bag.c        |   10 +
  src/battle_sub_menus/battle_party.c      |   10 +
@@ -81,7 +81,7 @@ the wrong screens.
  src/start_menu.c                         |  162 +++-
  src/trainer_info.c                       |   13 +
  src/unk_02054884.c                       |   41 +
- 28 files changed, 2103 insertions(+), 16 deletions(-)
+ 28 files changed, 2107 insertions(+), 16 deletions(-)
  create mode 100644 include/overlay005/options_panel.h
  create mode 100644 include/port_options.h
  create mode 100644 src/overlay005/options_panel.c
@@ -823,7 +823,7 @@ index dc92931e..470e6b64 100644
      GX_SetVisibleWnd(GX_WNDMASK_NONE);
      GXS_SetVisibleWnd(GX_WNDMASK_NONE);
 diff --git a/src/battle/battle_script.c b/src/battle/battle_script.c
-index ac895a2d..f5812991 100644
+index ac895a2d..12f8dac3 100644
 --- a/src/battle/battle_script.c
 +++ b/src/battle/battle_script.c
 @@ -51,6 +51,10 @@
@@ -837,7 +837,7 @@ index ac895a2d..f5812991 100644
  #include "pc_boxes.h"
  #include "pokemon.h"
  #include "pokemon_icon.h"
-@@ -2216,6 +2220,20 @@ static BOOL BtlCmd_CalcExpGain(BattleSystem *battleSys, BattleContext *battleCtx
+@@ -2216,6 +2220,22 @@ static BOOL BtlCmd_CalcExpGain(BattleSystem *battleSys, BattleContext *battleCtx
          u16 exp = SpeciesData_GetSpeciesValue(battleCtx->battleMons[battleCtx->faintedMon].species, SPECIES_DATA_BASE_EXP_REWARD);
          exp = (exp * battleCtx->battleMons[battleCtx->faintedMon].level) / 7;
  
@@ -845,9 +845,11 @@ index ac895a2d..f5812991 100644
 +        // (the options page's PARTY EXP SHARE: the Pokémon that fought get
 +        // the whole of it between them, as without it, and the rest of the
 +        // party as much as each of them: BattleScript_GetExpTask. A held
-+        // Exp. Share adds nothing then.)
-+        if (PortOption_On(PORT_OPT_EXP_SHARE) && totalMonsGainingExp) {
-+            battleCtx->gainedExp = exp / totalMonsGainingExp;
++        // Exp. Share adds nothing then. None of those that fought still up
++        // (an Explosion, Destiny Bond, Aftermath...): the rest the whole of
++        // it each; the game's own sums below would divide by 0 then.)
++        if (PortOption_On(PORT_OPT_EXP_SHARE)) {
++            battleCtx->gainedExp = totalMonsGainingExp ? exp / totalMonsGainingExp : exp;
 +            battleCtx->sharedExp = 0;
 +
 +            if (battleCtx->gainedExp == 0) {
@@ -858,7 +860,7 @@ index ac895a2d..f5812991 100644
          if (totalMonsWithExpShare) {
              battleCtx->gainedExp = (exp / 2) / totalMonsGainingExp;
  
-@@ -2297,7 +2315,10 @@ enum GetExpTaskDataIndex {
+@@ -2297,7 +2317,10 @@ enum GetExpTaskDataIndex {
      GET_EXP_NEW_EXP,
      GET_EXP_MOVE,
      GET_EXP_MOVE_SLOT,
@@ -870,7 +872,7 @@ index ac895a2d..f5812991 100644
  };
  
  /**
-@@ -2321,6 +2342,9 @@ static BOOL BtlCmd_StartGetExpTask(BattleSystem *battleSys, BattleContext *battl
+@@ -2321,6 +2344,9 @@ static BOOL BtlCmd_StartGetExpTask(BattleSystem *battleSys, BattleContext *battl
      battleCtx->taskData->battleCtx = battleCtx;
      battleCtx->taskData->seqNum = SEQ_GET_EXP_START;
      battleCtx->taskData->tmpData[GET_EXP_PARTY_SLOT] = 0;
@@ -880,7 +882,7 @@ index ac895a2d..f5812991 100644
  
      SysTask_Start(BattleScript_GetExpTask, battleCtx->taskData, NULL);
  
-@@ -2594,10 +2618,48 @@ static BOOL BtlCmd_StartCatchMonTask(BattleSystem *battleSys, BattleContext *bat
+@@ -2594,10 +2620,48 @@ static BOOL BtlCmd_StartCatchMonTask(BattleSystem *battleSys, BattleContext *bat
   * @param battleCtx
   * @return FALSE
   */
@@ -929,7 +931,7 @@ index ac895a2d..f5812991 100644
      }
  
      battleCtx->battleProgressFlag = TRUE;
-@@ -9675,6 +9737,90 @@ typedef struct PokemonStats {
+@@ -9675,6 +9739,90 @@ typedef struct PokemonStats {
      int stat[STAT_MAX];
  } PokemonStats;
  
@@ -1020,7 +1022,7 @@ index ac895a2d..f5812991 100644
  /**
   * @brief System task-state machine for controlling the UX flow for a battler
   * gaining Exp. Points.
-@@ -9701,6 +9847,12 @@ static void BattleScript_GetExpTask(SysTask *task, void *inData)
+@@ -9701,6 +9849,12 @@ static void BattleScript_GetExpTask(SysTask *task, void *inData)
      expBattler = 0;
  
      // Figure out which mon we're working on
@@ -1033,7 +1035,7 @@ index ac895a2d..f5812991 100644
      for (slot = data->tmpData[GET_EXP_PARTY_SLOT]; slot < BattleSystem_GetPartyCount(data->battleSys, expBattler); slot++) {
          mon = BattleSystem_GetPartyPokemon(data->battleSys, expBattler, slot);
          item = Pokemon_GetValue(mon, MON_DATA_HELD_ITEM, NULL);
-@@ -9742,6 +9894,11 @@ static void BattleScript_GetExpTask(SysTask *task, void *inData)
+@@ -9742,6 +9896,11 @@ static void BattleScript_GetExpTask(SysTask *task, void *inData)
                  totalExp = data->battleCtx->gainedExp;
              }
  
@@ -1045,7 +1047,7 @@ index ac895a2d..f5812991 100644
              if (itemEffect == HOLD_EFFECT_EXP_SHARE) {
                  totalExp += data->battleCtx->sharedExp;
              }
-@@ -9780,6 +9937,28 @@ static void BattleScript_GetExpTask(SysTask *task, void *inData)
+@@ -9780,6 +9939,28 @@ static void BattleScript_GetExpTask(SysTask *task, void *inData)
          }
  
          if (totalExp) {
@@ -1074,7 +1076,7 @@ index ac895a2d..f5812991 100644
              msg.tags = TAG_NICKNAME_NUM;
              msg.params[0] = expBattler | (slot << 8);
              msg.params[1] = totalExp;
-@@ -10500,6 +10679,18 @@ static void BattleScript_CatchMonTask(SysTask *task, void *inData)
+@@ -10500,6 +10681,18 @@ static void BattleScript_CatchMonTask(SysTask *task, void *inData)
          break;
      case SEQ_CATCH_MON_WAIT_PRINT_POKEMON_WAS_CAUGHT:
          if (Text_IsPrinterActive(data->tmpData[CATCH_MON_MSG_INDEX]) == FALSE) {
@@ -1093,7 +1095,7 @@ index ac895a2d..f5812991 100644
              data->seqNum = SEQ_CATCH_MON_SET_CAUGHT_SPECIES;
              ov12_022368C8(data->ballRotation, 7);
          }
-@@ -10906,6 +11097,11 @@ static int BattleScript_CalcCatchShakes(BattleSystem *battleSys, BattleContext *
+@@ -10906,6 +11099,11 @@ static int BattleScript_CalcCatchShakes(BattleSystem *battleSys, BattleContext *
      if (BattleSystem_GetBattleType(battleSys) & BATTLE_TYPE_ALWAYS_CATCH) {
          return BALL_3_SHAKES_SUCCESS;
      }
@@ -1105,7 +1107,7 @@ index ac895a2d..f5812991 100644
  
      u32 speciesMod;
      if (battleCtx->msgItemTemp == ITEM_SAFARI_BALL) {
-@@ -11977,6 +12173,11 @@ static void BattleScript_LoadPartyLevelUpIcon(BattleSystem *battleSys, BattleScr
+@@ -11977,6 +12175,11 @@ static void BattleScript_LoadPartyLevelUpIcon(BattleSystem *battleSys, BattleScr
      SpriteSystem_LoadAnimResObj(spriteSys, spriteMan, NARC_INDEX_BATTLE__GRAPHIC__PL_BATT_OBJ, 258, TRUE, 20013);
  
      data->sprites[0] = SpriteSystem_NewSprite(spriteSys, spriteMan, &sSpriteTemplate_LevelUpStar);
@@ -1117,7 +1119,7 @@ index ac895a2d..f5812991 100644
  
      ManagedSprite_TickFrame(data->sprites[0]);
      SpriteSystem_LoadCharResObjAtEndWithHardwareMappingType(spriteSys, spriteMan, NARC_INDEX_POKETOOL__ICONGRA__PL_POKE_ICON, Pokemon_IconSpriteIndex(mon), FALSE, NNS_G2D_VRAM_TYPE_2DMAIN, 20022);
-@@ -11985,6 +12186,9 @@ static void BattleScript_LoadPartyLevelUpIcon(BattleSystem *battleSys, BattleScr
+@@ -11985,6 +12188,9 @@ static void BattleScript_LoadPartyLevelUpIcon(BattleSystem *battleSys, BattleScr
      SpriteSystem_LoadAnimResObj(spriteSys, spriteMan, NARC_INDEX_POKETOOL__ICONGRA__PL_POKE_ICON, PokeIcon64KAnimationFileIndex(), FALSE, 20014);
  
      data->sprites[1] = SpriteSystem_NewSprite(spriteSys, spriteMan, &sSpriteTemplate_LevelUpPokeIcon);
@@ -1127,7 +1129,7 @@ index ac895a2d..f5812991 100644
  
      Sprite_SetExplicitPaletteOffsetAutoAdjust(data->sprites[1]->sprite, Pokemon_IconPaletteIndex(mon));
      ManagedSprite_TickFrame(data->sprites[1]);
-@@ -12023,6 +12227,9 @@ static void BattleScript_LoadPartyLevelUpIcon(BattleSystem *battleSys, BattleScr
+@@ -12023,6 +12229,9 @@ static void BattleScript_LoadPartyLevelUpIcon(BattleSystem *battleSys, BattleScr
      v12.unk_10 = NULL;
      v12.unk_14 = charTransferAllocation.offset;
      v12.unk_18 = 176;
@@ -1138,7 +1140,7 @@ index ac895a2d..f5812991 100644
      v12.unk_20 = 0;
      v12.unk_24 = 100;
 diff --git a/src/battle/battle_subscreen.c b/src/battle/battle_subscreen.c
-index c6326add..0d5e82ad 100644
+index c6326add..72236726 100644
 --- a/src/battle/battle_subscreen.c
 +++ b/src/battle/battle_subscreen.c
 @@ -52,6 +52,10 @@
@@ -1173,18 +1175,20 @@ index c6326add..0d5e82ad 100644
      if (btlSubscreen->suppressActivationSfxPtr) {
          *btlSubscreen->suppressActivationSfxPtr = btlSubscreen->suppressActivationSfx;
      }
-@@ -1040,6 +1051,10 @@ void BattleSubscreen_SetupBackground(NARC *unused, NARC *spriteNarc, BattleSubsc
+@@ -1040,6 +1051,12 @@ void BattleSubscreen_SetupBackground(NARC *unused, NARC *spriteNarc, BattleSubsc
      }
  
      btlSubscreen->isPanelSliding = 0;
 +#ifdef SDK_PORT_3DS
-+    // (a menu at 1x, whatever SPEED says: index 0 is none)
-+    NitroPort_SpeedHold(PORT_SPEED_HOLD_BATTLE_MENU, menuConfigIndex != 0);
++    // (a menu at 1x, whatever SPEED says: index 0 is none; 18 is a battle
++    // video's STOP button, up all through its playback, which doesn't wait
++    // for the player)
++    NitroPort_SpeedHold(PORT_SPEED_HOLD_BATTLE_MENU, menuConfigIndex != 0 && menuConfigIndex != 18);
 +#endif
  
      BgConfig *bgConfig = BattleSystem_GetBgConfig(btlSubscreen->battleSys);
      SpriteSystem *spriteSys = BattleSystem_GetSpriteSystem(btlSubscreen->battleSys);
-@@ -2552,6 +2567,10 @@ static void BattleSubscreen_Cleanup(BattleSubscreen *btlSubscreen, BOOL freeSpri
+@@ -2552,6 +2569,10 @@ static void BattleSubscreen_Cleanup(BattleSubscreen *btlSubscreen, BOOL freeSpri
  
      if (resetBg == TRUE) {
          SysTask_ExecuteAfterVBlank(SysTask_ResetSubscreenBg, btlSubscreen, 10);
