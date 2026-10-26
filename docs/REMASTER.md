@@ -588,7 +588,24 @@ stretched:
     else up, else down: Roark leaving the mine after the boulder). When
     the script ends (or the next starts), the ones it didn't take away go
     back where it put them. Only walks east and west change (the screen
-    isn't taller).
+    isn't taller). Since 2026-10-26: one whose script turns it or waits
+    before its first steps (Professor Rowan, Dawn, Looker) is moved out
+    before it's drawn, so it isn't seen standing where the script put it
+    first; the way round something also goes round the people standing
+    there (not the ones the script sets walking with it: its
+    ApplyMovement commands before the WaitMovement);
+  - Route 201's Pokémon Breeder (who stands just past the DS's left
+    edge, on the way Rowan and Dawn come in from Twinleaf Town) stands 5
+    tiles further right (`map_header_data.c`, `sPortWideMoves`): in the
+    wider screen's edge he was cut in half, and they walked through him;
+  - the Pokédex's registration page (2026-10-26): its left edge carries
+    the page's border on, not the arc round the footprint again; the
+    entry's text is wrapped again across a box as wide as the screen's
+    (up to 240 pixels: `InfoMain_PortRewrap`, at the spaces; a word the
+    DS split at its hyphen joined again) instead of
+    the DS's lines squeezed in its middle;
+  - selling in a Poké Mart with the lower screen's menu: the store stays
+    on the upper screen (it was black while the bag was up);
 - **OBJs** (sprites) placed past the DS's edges show.
 - **The 3D** is drawn wide (the camera widened) only while it's on the
   upper screen; the intro's flyover is on the lower screen, at the DS's
@@ -604,6 +621,24 @@ game starts from its opening with nothing left over. Started from the
 Homebrew Launcher (a `.3dsx`) there's nothing to jump back to: it closes to
 the launcher. The PC runner starts itself again with the same arguments
 (`execv`), the control directory carrying on.
+
+## A catch with the party full
+
+A Pokémon caught with six in the party goes to the PC, as on the DS. Back
+in the field, once the field's tasks are all over (a legendary's script
+has finished, its sprite gone: `field_task.c`, `patches/pokeplatinum/0042`,
+`encounter.c`), the game asks
+"Your party is full. Add X to your party?"; YES opens the party to pick
+the one that goes to the PC in its place (B: none, the caught one stays
+in the PC), then "X was added to the party and Y was sent to the PC." The
+caught one takes the picked one's place in the party, the picked one the
+caught one's place in the PC (healed, as the PC heals). One holding Mail
+or with a Ball Capsule stays (the PC takes neither: "Y is holding Mail. It
+can't be sent to the PC."). The battle notes where it put the caught one (box, place, its
+personality value) and the field checks it's still there. Not in the
+Safari Zone, Pal Park or the catching tutorial, nor with the Poké Radar's
+chain going (its grass would be lost with the map). The texts are English
+(the game has none of its own for it).
 
 ## The lower screen as a menu
 
@@ -1037,7 +1072,9 @@ screens) the lower screen is the DS's, filling the screen as before.
     battles' health bars and animations stopped; 2026-10-26).
     SPEED above 1x turns 60 FPS off (when it's on), 1x on again
     unless the player has set 60 FPS since (`fps60_held` in
-    `options.txt`). The PC runner isn't paced, so it doesn't show.
+    `options.txt`). Every start is at 1x (since 2026-10-26): SPEED is
+    for now, not kept, and 60 FPS comes back on with it if SPEED had
+    turned it off. The PC runner isn't paced, so it doesn't show.
   - EXP ON CATCH: after "Gotcha!" the catch stops while the battle's
     script pays out experience for the caught Pokémon as for a defeated
     one (its messages, levels and moves, as after a battle), then goes on
@@ -1397,7 +1434,14 @@ step down, till they've stayed put for 10 s. The slider down and up each
 have their own steps (the outlines; each eye). A `[compose]` line says
 each step (`60 frames a second, slider down: the 3D drawn 2x1 for now`),
 and `[perf] display` counts the in-between frames and those drawn 2x2 and
-2x1. The outlines with the slider up are off by default for it
+2x1. Matching the polygons costs the geometry core time per scene: in the
+starter's choice (its many polygons) it was 21 ms a scene on the 3DS, so
+some in-between scenes were left out there and the animation stuttered.
+Since 2026-10-26 a polygon whose counterpart in the next scene is the
+one in the same place in the list, and near enough to be certain, is
+taken without the search round it; the search stops comparing a polygon
+once it's further than the best so far; and the median that sets
+"near enough" is found without sorting (half the cost there, on the PC). The outlines with the slider up are off by default for it
 (`edges3d on`: while they fit).
 
 ## Known

@@ -76,11 +76,12 @@ int main(void)
     }
     CHECK(lines == 2);   /* (only the two chosen: speed, start_tab; shiny stayed at its default) */
 
-    /* Read back over other values (the listener not told: loading). */
+    /* Read back over other values (the listener not told: loading); SPEED
+     * back at 1x, as every time the game starts. */
     NitroPort_OptionSetDefault(NITRO_OPT_SPEED, 0);
     NitroPort_OptionSetDefault(NITRO_OPT_START_TAB, 0);
     CHECK(NitroPort_OptionsLoad(path) == 1);
-    CHECK(NitroPort_Option(NITRO_OPT_SPEED) == 4);
+    CHECK(NitroPort_Option(NITRO_OPT_SPEED) == 0);
     CHECK(NitroPort_Option(NITRO_OPT_START_TAB) == 1);
     CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 0);   /* (not in the file: the platform's default) */
     CHECK(sHeard == 2);
@@ -91,9 +92,9 @@ int main(void)
 
         snprintf(tmp, sizeof(tmp), "%s.new", path);
         CHECK(rename(path, tmp) == 0);
-        NitroPort_OptionSetDefault(NITRO_OPT_SPEED, 0);
+        NitroPort_OptionSetDefault(NITRO_OPT_START_TAB, 0);
         CHECK(NitroPort_OptionsLoad(path) == 1);
-        CHECK(NitroPort_Option(NITRO_OPT_SPEED) == 4);
+        CHECK(NitroPort_Option(NITRO_OPT_START_TAB) == 1);
         remove(tmp);
     }
 
@@ -105,7 +106,7 @@ int main(void)
         fclose(f);
     }
     CHECK(NitroPort_OptionsLoad(path) == 1);
-    CHECK(NitroPort_Option(NITRO_OPT_SPEED) == 2);
+    CHECK(NitroPort_Option(NITRO_OPT_SPEED) == 0);
     CHECK(NitroPort_Option(NITRO_OPT_ENCOUNTERS) == 4);
 
     /* SPEED above 1x turns 60 FPS off, 1x on again; set by the player in
@@ -120,8 +121,8 @@ int main(void)
     CHECK(NitroPort_OptionsSave() == 1);
     NitroPort_OptionSetDefault(NITRO_OPT_FPS60_HELD, 0);
     CHECK(NitroPort_OptionsLoad(path) == 1);
-    CHECK(NitroPort_Option(NITRO_OPT_FPS60_HELD) == 1);
-    NitroPort_OptionSet(NITRO_OPT_SPEED, 0);
+    /* (the game started again: SPEED at 1x, 60 FPS on again) */
+    CHECK(NitroPort_Option(NITRO_OPT_SPEED) == 0);
     CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 1 && NitroPort_Option(NITRO_OPT_FPS60_HELD) == 0);
     NitroPort_OptionSet(NITRO_OPT_SPEED, 3);
     CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 0);

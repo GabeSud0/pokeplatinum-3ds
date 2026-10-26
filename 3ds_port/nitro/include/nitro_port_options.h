@@ -41,7 +41,8 @@ void NitroPort_OptionSet(int id, int value);
 void NitroPort_OptionSetDefault(int id, int value);
 void NitroPort_OptionsSetListener(void (*listener)(int id, int value));
 /* The file read (a missing one: the defaults), its path kept for saving.
- * 1 if it was read. */
+ * 1 if it was read. SPEED is back at 1x after it (each time the game
+ * starts), 60 FPS on again if SPEED had turned it off. */
 int NitroPort_OptionsLoad(const char *path);
 /* Written if anything changed since (to a new file put in its place): the
  * settings chosen on the page or read from the file, the others left to

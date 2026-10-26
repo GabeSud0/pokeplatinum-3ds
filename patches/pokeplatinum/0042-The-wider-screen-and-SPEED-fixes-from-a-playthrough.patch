@@ -1,4 +1,4 @@
-From e3c15799c0dee923f874e9883231410813da8d46 Mon Sep 17 00:00:00 2001
+From 7bb873545f66fbb010e6e43218e568f3e8a8a990 Mon Sep 17 00:00:00 2001
 From: pokeplatinum-3ds <noreply@users.noreply.github.com>
 Date: Sun, 25 Oct 2026 08:00:00 -0700
 Subject: [PATCH] The wider screen and SPEED: fixes from a playthrough
@@ -10,6 +10,19 @@ Content-Transfer-Encoding: 8bit
 SPEED is held at 1x while the start menu and what it opened are up
 (PORT_SPEED_HOLD_MENU), released when the player walks again: only the
 walking and the field go faster.
+
+A Pokémon caught with the party full, put in the PC, is offered for the
+party back in the field, once the field's tasks are all over (a
+legendary's script finished: field_task.c, Encounter_PortStartTakeCaught;
+encounter.c, FieldTask_PortTakeCaught; the battle notes its box, place
+and personality, Encounter_PortCaughtToPC):
+YES opens the party to pick the one that goes to the PC in its place,
+then "X was added to the party and Y was sent to the PC" (not one with
+Mail or a Ball Capsule, which the PC doesn't take). Not in the
+Safari Zone, Pal Park, the catching tutorial, or with a Poké Radar chain.
+
+Selling in a Poké Mart with the lower screen's menu keeps the store on
+the upper screen (shop_menu.c: its message layer cleared, then held).
 
 A new game saves over the old save, as if that had been erased first
 (SaveData_OverwriteCheck: never a different game's save to refuse; the
@@ -23,10 +36,14 @@ On the remaster's wider upper screen:
   draws it at the widened box's right edge; a BG set up anew or freed is
   told too (NitroPort_WideBgReset: the text box frames kept there go);
 - the Pokédex's registration page: the Pokémon's box 24 pixels to the
-  left with its 3D Pokémon, the title 24 to the right;
+  left with its 3D Pokémon, the title 24 to the right; its left edge the
+  page's border carried on (not the footprint's arc again); the entry's
+  text wrapped again across the wider box (InfoMain_PortRewrap; a word
+  split at its hyphen joined again);
 - the evolution's background: its edge columns carried on beside the
   DS's screen (its map's other half came round there);
-- the battle's trainers slide off past the wider screen's edges;
+- the battle's trainers slide off past the wider screen's edges (the
+  battle's OAM culled at the wider screen's edges: NitroPort_WideCells);
 - the HM cut-in: the band of Poké Balls repeats to the screen's edges;
   the Pokémon waits beyond the wider screen's right edge and slides off
   past its left one;
@@ -35,25 +52,72 @@ On the remaster's wider upper screen:
   first steps; one whose walk out ends there walks the extra tiles out;
   one walking straight out through something the DS's picture didn't
   show goes round it (the ground's collisions, ledges and cliffs, the
-  height carried along the way). When the script ends, or the next one
-  starts (script_manager.c), the ones still moved go back where the
-  script put them.
+  height carried along the way; the other people standing there too,
+  not the ones the script sets walking with it).
+  One whose first commands turn it or wait is moved before it's drawn.
+  When the script ends, or the next one starts (script_manager.c), the
+  ones still moved go back where the script put them;
+- Route 201's Pokémon Breeder stands 5 tiles further right
+  (map_header_data.c, sPortWideMoves): Rowan and Dawn walked through him.
 ---
+ include/applications/pokedex/infomain.h  |   5 +
+ include/encounter.h                      |   9 +
  include/port_options.h                   |   3 +
  include/scrcmd.h                         |   5 +
- src/applications/pokedex/ov21_021E8D48.c |   9 +-
+ src/applications/pokedex/infomain.c      | 115 ++++
+ src/applications/pokedex/ov21_021E8D48.c |  22 +-
  src/battle/battle_display.c              |  20 +-
- src/bg_window.c                          |  25 ++
+ src/battle/battle_script.c               |  13 +
+ src/bg_window.c                          |  25 +
+ src/encounter.c                          | 319 +++++++++++
  src/evolution.c                          |  18 +
+ src/field_task.c                         |   9 +
  src/main_menu/main_menu.c                |   6 +
+ src/map_header_data.c                    |  45 ++
  src/overlay006/hm_cut_in.c               |  34 +-
+ src/overlay007/shop_menu.c               |  30 +
+ src/render_oam.c                         |  14 +-
  src/savedata.c                           |  13 +
- src/scrcmd.c                             | 550 +++++++++++++++++++++++
+ src/scrcmd.c                             | 667 +++++++++++++++++++++++
  src/script_manager.c                     |   9 +
  src/start_menu.c                         |   3 +
  src/text.c                               |   9 +
- 13 files changed, 696 insertions(+), 8 deletions(-)
+ 22 files changed, 1379 insertions(+), 14 deletions(-)
 
+diff --git a/include/applications/pokedex/infomain.h b/include/applications/pokedex/infomain.h
+index d6dc2623..85596cf1 100644
+--- a/include/applications/pokedex/infomain.h
++++ b/include/applications/pokedex/infomain.h
+@@ -38,6 +38,11 @@ void InfoMain_FreeScreen(PokedexScreenManager *screenManager);
+ BOOL InfoMain_SetDisplayPosition(InfoMainState *displayState, int unused);
+ BOOL InfoMain_SetEntryOffset(InfoMainState *displayState, int entryOffset);
+ void InfoMain_RenderHeightWeightEntry(Window *window, int species, enum HeapID heapID, int entryOffset, u32 textColor);
++#ifdef SDK_PORT_3DS
++// (the registration page on the 3DS remaster's wider screen) The entry on
++// lines as wide as the DS's screen allows, while on.
++void InfoMain_PortWideEntry(BOOL on);
++#endif
+ int PokedexGraphics_GetAnimIDfromType(int monType);
+ Window *InfoMain_CreateCategoryWindow(PokedexTextManager *textMan, enum Species species, enum HeapID heapID);
+ 
+diff --git a/include/encounter.h b/include/encounter.h
+index e42c8f0d..7ff71159 100644
+--- a/include/encounter.h
++++ b/include/encounter.h
+@@ -22,4 +22,13 @@ void Encounter_NewVsLinkWithRecording(FieldSystem *fieldSystem, const u8 *partyO
+ void Encounter_NewVsLinkWithRecordingAndParty(FieldSystem *fieldSystem, const Party *party, int battleType);
+ void Encounter_NewVsGiratinaOrigin(FieldTask *task, u16 species, u8 level, int *resultMaskPtr, BOOL isLegendary);
+ 
++#ifdef SDK_PORT_3DS
++// A Pokémon caught with the party full, put in the PC at boxID / pos
++// (boxID -1: none): offered for the party when the battle ends.
++void Encounter_PortCaughtToPC(int boxID, int pos, u32 personality);
++// The field's tasks all over: asks about that one, if there is one (TRUE: a
++// task started for it).
++BOOL Encounter_PortStartTakeCaught(FieldSystem *fieldSystem);
++#endif
++
+ #endif // POKEPLATINUM_ENCOUNTER_H
 diff --git a/include/port_options.h b/include/port_options.h
 index 4e913df8..14122032 100644
 --- a/include/port_options.h
@@ -83,8 +147,144 @@ index bcadc780..2e795ae0 100644
 +#endif
  
  #endif // POKEPLATINUM_SCRCMD_H
+diff --git a/src/applications/pokedex/infomain.c b/src/applications/pokedex/infomain.c
+index 1c2935bc..be8496fd 100644
+--- a/src/applications/pokedex/infomain.c
++++ b/src/applications/pokedex/infomain.c
+@@ -35,6 +35,8 @@
+ #include "text.h"
+ #include "unk_02012744.h"
+ 
++#include "constants/charcode.h"
++
+ #include "res/graphics/pokedex/zukan.naix"
+ #include "res/text/bank/pokedex.h"
+ 
+@@ -460,9 +462,122 @@ static void RenderWeight(Window *window, enum HeapID heapID, int species, u32 te
+     MessageLoader_Free(weightMsgLoader);
+ }
+ 
++#ifdef SDK_PORT_3DS
++extern int NitroPort_WideScreenExtra(void);
++
++// (the 3DS remaster's wider upper screen: InfoMain_PortWideEntry)
++static BOOL sPortWideEntry;
++
++void InfoMain_PortWideEntry(BOOL on)
++{
++    sPortWideEntry = on;
++}
++
++#define PORT_ENTRY_MAX_WIDTH 240
++
++// The entry's words on lines as wide as maxWidth allows (the DS's line
++// breaks taken out): a new string, or NULL (something in it besides plain
++// characters, spaces and line breaks: as it is).
++static String *InfoMain_PortRewrap(const String *src, u32 maxWidth, enum HeapID heapID)
++{
++    charcode_t *chars;
++    String *out, *line, *test, *word;
++    u32 i, n = String_Length(src), size = n + 8;
++
++    chars = Heap_Alloc(heapID, sizeof(charcode_t) * (n + 1));
++    String_ToChars(src, chars, n + 1);
++
++    for (i = 0; i < n; i++) {
++        if (chars[i] >= CHAR_CONTROL_SCREEN_INDICATOR && chars[i] != CHAR_CR) {
++            Heap_Free(chars);
++            return NULL;
++        }
++    }
++
++    out = String_Init(size, heapID);
++    line = String_Init(size, heapID);
++    test = String_Init(size, heapID);
++    word = String_Init(size, heapID);
++
++    for (i = 0; i <= n; i++) {
++        BOOL gap = i == n || chars[i] == CHAR_CR || chars[i] == CHAR_SPACE;
++
++        // (a word split over two lines at its hyphen: "10,000-\nhorsepower"
++        // stays one word, "10,000-horsepower")
++        if (i < n && chars[i] == CHAR_CR && String_Length(word) > 0 && chars[i - 1] == CHAR_MINUS) {
++            continue;
++        }
++
++        if (!gap) {
++            String_AppendChar(word, chars[i]);
++            continue;
++        }
++
++        if (String_Length(word) == 0) {
++            continue;
++        }
++
++        String_Copy(test, line);
++
++        if (String_Length(line) > 0) {
++            String_AppendChar(test, CHAR_SPACE);
++        }
++
++        String_Concat(test, word);
++
++        if (String_Length(line) > 0 && Font_CalcStringWidth(FONT_SYSTEM, test, 0) > maxWidth) {
++            if (String_Length(out) > 0) {
++                String_AppendChar(out, CHAR_CR);
++            }
++
++            String_Concat(out, line);
++            String_Copy(line, word);
++        } else {
++            String_Copy(line, test);
++        }
++
++        String_Clear(word);
++    }
++
++    if (String_Length(line) > 0) {
++        if (String_Length(out) > 0) {
++            String_AppendChar(out, CHAR_CR);
++        }
++
++        String_Concat(out, line);
++    }
++
++    String_Free(word);
++    String_Free(test);
++    String_Free(line);
++    Heap_Free(chars);
++    return out;
++}
++#endif
++
+ static void RenderDexEntry(Window *window, enum HeapID heapID, int species, int entryOffset, u32 textColor)
+ {
+     String *entryString = PokedexText_DexEntry(species, GAME_LANGUAGE, entryOffset, heapID);
++#ifdef SDK_PORT_3DS
++    // On the wider screen's registration page (its text box across the
++    // screen) the entry on lines as wide as the DS's screen allows, not as
++    // the DS broke them for its narrower box, in the middle of the box as
++    // the DS's lines were.
++    if (sPortWideEntry && NitroPort_WideScreenExtra() > 0) {
++        String *wide = InfoMain_PortRewrap(entryString, PORT_ENTRY_MAX_WIDTH, heapID);
++
++        if (wide != NULL) {
++            u32 lines = String_NumLines(entryString), wideLines = String_NumLines(wide);
++            u32 wideWidth = Font_CalcMaxLineWidth(FONT_SYSTEM, wide, 0);
++            int y = 136 + (int)lines * 8 - (int)wideLines * 8;
++
++            Text_AddPrinterWithParamsAndColor(window, FONT_SYSTEM, wide, 128 - wideWidth / 2, y, TEXT_SPEED_INSTANT, textColor, NULL);
++            String_Free(wide);
++            PokedexText_Free(entryString);
++            return;
++        }
++    }
++#endif
+     u32 stringWidth = Font_CalcMaxLineWidth(FONT_SYSTEM, entryString, 0);
+     u32 xPosition = (stringWidth < 240) ? 128 - stringWidth / 2 : 8;
+ 
 diff --git a/src/applications/pokedex/ov21_021E8D48.c b/src/applications/pokedex/ov21_021E8D48.c
-index 6869e7f4..54178055 100644
+index 6869e7f4..4349954f 100644
 --- a/src/applications/pokedex/ov21_021E8D48.c
 +++ b/src/applications/pokedex/ov21_021E8D48.c
 @@ -44,7 +44,8 @@
@@ -97,18 +297,39 @@ index 6869e7f4..54178055 100644
  static const short sPokedexRegisterWideLayout[][8] = {
      WIDE_MOVE(WIDE_BG(2), 0, 17, 0, 256, 0),
      WIDE_FILL(WIDE_BG(2), 0, 17, -32, 0, 0),
-@@ -72,6 +73,12 @@ static const short sPokedexRegisterWideLayout[][8] = {
+@@ -72,6 +73,19 @@ static const short sPokedexRegisterWideLayout[][8] = {
      WIDE_FILL(WIDE_BG(3), 130, 190, -5, 27, 27),
      WIDE_MOVE(WIDE_BG(3), 130, 190, 229, 256, 32),
      WIDE_FILL(WIDE_BG(3), 130, 190, 229, 261, 228),
-+    // (2026-10-25) the Pokémon's picture frame 24 pixels to the left (the
-+    // pattern behind it 8 pixels wide: still in step), the Pokémon (the 3D)
-+    // with it; the title (its name and kind, sprites) 24 to the right
-+    WIDE_MOVE(WIDE_BG(3), 24, 120, 0, 120, -24),
++    // (2026-10-25) the Pokémon's picture frame (columns 4-91) 24 pixels to
++    // the left (the pattern behind it 8 pixels wide: still in step), the
++    // Pokémon (the 3D) with it; where it was, the pattern (the screen's
++    // right end's, in step); the footprint's circle (from column 96) where
++    // it is (2026-10-26: its left part went with the frame, an arc of it
++    // beside the frame); the title (its name and kind, sprites) 24 to the
++    // right
++    WIDE_MOVE(WIDE_BG(3), 24, 120, 0, 96, -24),
++    WIDE_MOVE(WIDE_BG(3), 24, 120, 248, 256, 72 - 248),
++    WIDE_MOVE(WIDE_BG(3), 24, 120, 248, 256, 80 - 248),
++    WIDE_MOVE(WIDE_BG(3), 24, 120, 248, 256, 88 - 248),
 +    WIDE_SHIFT3D(-24),
 +    WIDE_OBJS(14, 62, 96, 256, 24),
  };
  #endif
+ 
+@@ -770,7 +784,13 @@ static BOOL ov21_021E9948(PaletteData *param0, PokemonSprite *param1)
+ 
+ static void ov21_021E9968(Window *param0, int param1, int param2)
+ {
++#ifdef SDK_PORT_3DS
++    InfoMain_PortWideEntry(TRUE);
++    InfoMain_RenderHeightWeightEntry(param0, param2, param1, 0, TEXT_COLOR(2, 1, 0));
++    InfoMain_PortWideEntry(FALSE);
++#else
+     InfoMain_RenderHeightWeightEntry(param0, param2, param1, 0, TEXT_COLOR(2, 1, 0));
++#endif
+     ov21_021E998C(param0, param1);
+ }
  
 diff --git a/src/battle/battle_display.c b/src/battle/battle_display.c
 index d2528aee..02095d20 100644
@@ -168,6 +389,37 @@ index d2528aee..02095d20 100644
                  slideTrainerOutData->state++;
              }
          }
+diff --git a/src/battle/battle_script.c b/src/battle/battle_script.c
+index 12f8dac3..f1ee03ec 100644
+--- a/src/battle/battle_script.c
++++ b/src/battle/battle_script.c
+@@ -53,6 +53,7 @@
+ #include "party.h"
+ #include "port_options.h"
+ #ifdef SDK_PORT_3DS
++#include "encounter.h"
+ #include "port_wide_layout.h"
+ #endif
+ #include "pc_boxes.h"
+@@ -10938,6 +10939,18 @@ static void BattleScript_CatchMonTask(SysTask *task, void *inData)
+                     BattleSystem_DexFlagCaught(data->battleSys, battler);
+                 }
+ 
++#ifdef SDK_PORT_3DS
++                if (!(BattleSystem_GetBattleType(data->battleSys) & (BATTLE_TYPE_SAFARI | BATTLE_TYPE_PAL_PARK | BATTLE_TYPE_CATCH_TUTORIAL))) {
++                    int pos;
++
++                    for (pos = 0; pos < MAX_MONS_PER_BOX; pos++) {
++                        if (PCBoxes_GetBoxMonData(pcBoxes, firstEmptyBoxID, pos, MON_DATA_SPECIES, NULL) == SPECIES_NONE) {
++                            Encounter_PortCaughtToPC(firstEmptyBoxID, pos, Pokemon_GetValue(mon, MON_DATA_PERSONALITY, NULL));
++                            break;
++                        }
++                    }
++                }
++#endif
+                 PCBoxes_TryStoreBoxMonInBox(pcBoxes, firstEmptyBoxID, Pokemon_GetBoxPokemon(mon));
+ 
+                 if (data->seqNum == SEQ_CATCH_MON_DIDNT_GIVE_NICKNAME) {
 diff --git a/src/bg_window.c b/src/bg_window.c
 index dc6e78d7..696255ee 100644
 --- a/src/bg_window.c
@@ -239,6 +491,340 @@ index dc6e78d7..696255ee 100644
      if (window->bgConfig->bgs[window->bgLayer].colorMode == GX_BG_COLORMODE_16) {
          ScrollWindow4bpp(window, direction, distance, fillVal);
      } else {
+diff --git a/src/encounter.c b/src/encounter.c
+index 3379c2f4..8ce88e50 100644
+--- a/src/encounter.c
++++ b/src/encounter.c
+@@ -115,6 +115,9 @@ static BOOL FieldTask_RunBattle(FieldTask *task)
+ 
+ static void CallBattleTask(FieldTask *task, FieldBattleDTO *dto)
+ {
++#ifdef SDK_PORT_3DS
++    Encounter_PortCaughtToPC(-1, 0, 0); // (one from a battle before, never taken)
++#endif
+     FieldTask_InitCall(task, FieldTask_RunBattle, dto);
+ }
+ 
+@@ -991,3 +994,319 @@ void Encounter_NewVsGiratinaOrigin(FieldTask *task, u16 species, u8 level, int *
+     GameRecords_IncrementRecordValue(SaveData_GetGameRecords(fieldSystem->saveData), RECORD_WILD_BATTLES_FOUGHT);
+     StartEncounter(task, dto, EncEffects_CutInEffect(dto), EncEffects_BGM(dto), resultMaskPtr);
+ }
++
++#ifdef SDK_PORT_3DS
++#include "constants/field/window.h"
++
++#include "applications/party_menu/defs.h"
++
++#include "bg_window.h"
++#include "field_message.h"
++#include "item.h"
++#include "menu.h"
++#include "render_window.h"
++#include "string_gf.h"
++#include "system.h"
++
++/*
++ * A Pokémon caught with the party full went to the PC; back on the
++ * field, the player is asked whether to take it into the party, then
++ * picks the party member that goes to the PC in its place (as the
++ * battle's own text, the messages are English: the game has none).
++ */
++static struct {
++    int boxID; // (-1: none)
++    int pos;
++    u32 personality;
++} sPortCaught = { -1, 0, 0 };
++
++void Encounter_PortCaughtToPC(int boxID, int pos, u32 personality)
++{
++    sPortCaught.boxID = boxID;
++    sPortCaught.pos = pos;
++    sPortCaught.personality = personality;
++}
++
++static BoxPokemon *Encounter_PortCaughtBoxMon(FieldSystem *fieldSystem)
++{
++    PCBoxes *pcBoxes = SaveData_GetPCBoxes(fieldSystem->saveData);
++    BoxPokemon *boxMon;
++
++    if (sPortCaught.boxID < 0 || sPortCaught.boxID >= MAX_PC_BOXES
++        || sPortCaught.pos < 0 || sPortCaught.pos >= MAX_MONS_PER_BOX) {
++        return NULL;
++    }
++
++    boxMon = PCBoxes_GetBoxMonAt(pcBoxes, sPortCaught.boxID, sPortCaught.pos);
++
++    if (BoxPokemon_GetValue(boxMon, MON_DATA_SPECIES, NULL) == SPECIES_NONE
++        || BoxPokemon_GetValue(boxMon, MON_DATA_PERSONALITY, NULL) != sPortCaught.personality) {
++        return NULL;
++    }
++
++    return boxMon;
++}
++
++static BOOL Encounter_PortTakeCaughtPending(FieldSystem *fieldSystem)
++{
++    Party *party = SaveData_GetParty(fieldSystem->saveData);
++
++    if (Encounter_PortCaughtBoxMon(fieldSystem) == NULL
++        || Party_GetCurrentCount(party) < MAX_PARTY_SIZE
++        || GetRadarChainActive(fieldSystem->chain)) {
++        Encounter_PortCaughtToPC(-1, 0, 0);
++        return FALSE;
++    }
++
++    return TRUE;
++}
++
++static BOOL FieldTask_PortTakeCaught(FieldTask *task);
++
++// (field_task.c: the field's tasks all over) The question about one caught
++// with the party full, once what the battle was part of is over (a script's
++// legendary: the script has taken its sprite away and given its messages).
++BOOL Encounter_PortStartTakeCaught(FieldSystem *fieldSystem)
++{
++    if (sPortCaught.boxID < 0 || fieldSystem->task != NULL
++        || !FieldSystem_IsRunningFieldMap(fieldSystem)
++        || !Encounter_PortTakeCaughtPending(fieldSystem)) {
++        return FALSE;
++    }
++
++    FieldSystem_CreateTask(fieldSystem, FieldTask_PortTakeCaught, NULL);
++    return TRUE;
++}
++
++static void Encounter_PortAppendLetters(String *string, const char *letters)
++{
++    for (; *letters; letters++) {
++        int c = (unsigned char)*letters;
++
++        if (c >= 'A' && c <= 'Z') {
++            String_AppendChar(string, 0x12B + (c - 'A'));
++        } else if (c >= 'a' && c <= 'z') {
++            String_AppendChar(string, 0x145 + (c - 'a'));
++        } else if (c == ' ') {
++            String_AppendChar(string, 0x1DE);
++        } else if (c == '.') {
++            String_AppendChar(string, 0x1AE);
++        } else if (c == '!') {
++            String_AppendChar(string, 0x1AB);
++        } else if (c == '?') {
++            String_AppendChar(string, 0x1AC);
++        } else if (c == '\'') {
++            String_AppendChar(string, 0x1B3); // (’, as the game's English texts)
++        } else if (c == '\n') {
++            String_AppendChar(string, 0xE000);
++        }
++    }
++}
++
++enum {
++    PORT_TAKE_ASK = 0,
++    PORT_TAKE_ASK_WAIT,
++    PORT_TAKE_YES_NO,
++    PORT_TAKE_OPEN_PARTY,
++    PORT_TAKE_PARTY_WAIT,
++    PORT_TAKE_FIELD_BACK,
++    PORT_TAKE_TELL,
++    PORT_TAKE_TELL_WAIT,
++    PORT_TAKE_DONE,
++};
++
++typedef struct PortTakeCaught {
++    Window window;
++    Menu *menu;
++    String *string;
++    PartyMenu *partyMenu;
++    u8 printerID;
++    BOOL windowOpen;
++} PortTakeCaught;
++
++static void PortTakeCaught_Print(FieldSystem *fieldSystem, PortTakeCaught *take)
++{
++    if (!take->windowOpen) {
++        FieldMessage_AddWindow(fieldSystem->bgConfig, &take->window, BG_LAYER_MAIN_3);
++        FieldMessage_DrawWindow(&take->window, SaveData_GetOptions(fieldSystem->saveData));
++        take->windowOpen = TRUE;
++    } else {
++        Window_FillTilemap(&take->window, 15);
++    }
++
++    take->printerID = FieldMessage_Print(&take->window, take->string, SaveData_GetOptions(fieldSystem->saveData), TRUE);
++}
++
++static void PortTakeCaught_CloseWindow(PortTakeCaught *take)
++{
++    if (take->windowOpen) {
++        Window_EraseMessageBox(&take->window, FALSE);
++        Window_Remove(&take->window);
++        take->windowOpen = FALSE;
++    }
++}
++
++// The caught one into the party slot picked, the one there to the
++// caught one's place in the PC. FALSE (nothing changed) if that one holds
++// Mail or has a Ball Capsule, which the PC doesn't take.
++static BOOL PortTakeCaught_Swap(FieldSystem *fieldSystem, PortTakeCaught *take, int slot)
++{
++    Party *party = SaveData_GetParty(fieldSystem->saveData);
++    PCBoxes *pcBoxes = SaveData_GetPCBoxes(fieldSystem->saveData);
++    BoxPokemon *caught = Encounter_PortCaughtBoxMon(fieldSystem);
++    Pokemon *partyMon = Party_GetPokemonBySlotIndex(party, slot);
++    Pokemon *newMon;
++    String *name;
++
++    String_Clear(take->string);
++    name = String_Init(32, HEAP_ID_FIELD2);
++
++    if (Item_IsMail(Pokemon_GetValue(partyMon, MON_DATA_HELD_ITEM, NULL))) {
++        Pokemon_GetValue(partyMon, MON_DATA_NICKNAME_STRING, name);
++        String_Concat(take->string, name);
++        Encounter_PortAppendLetters(take->string, " is holding Mail.\nIt can't be sent to the PC.");
++        String_Free(name);
++        return FALSE;
++    }
++
++    // (nor one with a Ball Capsule: a party Pokémon's alone)
++    if (Pokemon_GetValue(partyMon, MON_DATA_BALL_CAPSULE_ID, NULL) != 0) {
++        Pokemon_GetValue(partyMon, MON_DATA_NICKNAME_STRING, name);
++        String_Concat(take->string, name);
++        Encounter_PortAppendLetters(take->string, " has a Ball Capsule.\nIt can't be sent to the PC.");
++        String_Free(name);
++        return FALSE;
++    }
++
++    newMon = Pokemon_New(HEAP_ID_FIELD2);
++    Pokemon_FromBoxPokemon(caught, newMon);
++
++    BoxPokemon_GetValue(caught, MON_DATA_NICKNAME_STRING, name);
++    String_Concat(take->string, name);
++    Encounter_PortAppendLetters(take->string, " was added to the party\nand ");
++    Pokemon_GetValue(partyMon, MON_DATA_NICKNAME_STRING, name);
++    String_Concat(take->string, name);
++    Encounter_PortAppendLetters(take->string, " was sent to the PC.");
++
++    PCBoxes_InitBoxMonAt(pcBoxes, sPortCaught.boxID, sPortCaught.pos);
++    PCBoxes_TryStoreBoxMonAt(pcBoxes, sPortCaught.boxID, sPortCaught.pos, Pokemon_GetBoxPokemon(partyMon));
++    Party_AddPokemonBySlotIndex(party, slot, newMon);
++    SaveData_SetFullSaveRequired();
++
++    Heap_Free(newMon);
++    String_Free(name);
++    return TRUE;
++}
++
++static BOOL FieldTask_PortTakeCaught(FieldTask *task)
++{
++    static const WindowTemplate yesNoTemplate = {
++        .bgLayer = BG_LAYER_MAIN_3,
++        .tilemapLeft = 25,
++        .tilemapTop = 13,
++        .width = 6,
++        .height = 4,
++        .palette = FIELD_MESSAGE_PALETTE_INDEX,
++        .baseTile = 0x21F,
++    };
++    FieldSystem *fieldSystem = FieldTask_GetFieldSystem(task);
++    PortTakeCaught *take = FieldTask_GetEnv(task);
++    int *state = FieldTask_GetState(task);
++
++    switch (*state) {
++    case PORT_TAKE_ASK: {
++        String *name = String_Init(32, HEAP_ID_FIELD2);
++
++        take = Heap_AllocAtEnd(HEAP_ID_FIELD2, sizeof(PortTakeCaught));
++        MI_CpuClear8(take, sizeof(PortTakeCaught));
++        task->env = take;
++        take->string = String_Init(256, HEAP_ID_FIELD2);
++
++        MapObjectMan_PauseAllMovement(fieldSystem->mapObjMan);
++        BoxPokemon_GetValue(Encounter_PortCaughtBoxMon(fieldSystem), MON_DATA_NICKNAME_STRING, name);
++        Encounter_PortAppendLetters(take->string, "Your party is full.\nAdd ");
++        String_Concat(take->string, name);
++        Encounter_PortAppendLetters(take->string, " to your party?");
++        String_Free(name);
++
++        PortTakeCaught_Print(fieldSystem, take);
++        *state = PORT_TAKE_ASK_WAIT;
++        break;
++    }
++    case PORT_TAKE_ASK_WAIT:
++        if (FieldMessage_FinishedPrinting(take->printerID)) {
++            LoadStandardWindowGraphics(fieldSystem->bgConfig, BG_LAYER_MAIN_3, 1024 - (18 + 12) - 9, 11, STANDARD_WINDOW_SYSTEM, HEAP_ID_FIELD1);
++            take->menu = Menu_MakeYesNoChoice(fieldSystem->bgConfig, &yesNoTemplate, 1024 - (18 + 12) - 9, 11, HEAP_ID_FIELD1);
++            *state = PORT_TAKE_YES_NO;
++        }
++        break;
++    case PORT_TAKE_YES_NO: {
++        u32 result = Menu_ProcessInputAndHandleExit(take->menu, HEAP_ID_FIELD1);
++
++        if (result == MENU_NOTHING_CHOSEN) {
++            break;
++        }
++
++        take->menu = NULL;
++        PortTakeCaught_CloseWindow(take);
++
++        if (result == MENU_YES) {
++            FieldTransition_FadeOutAndFinishMap(task);
++            *state = PORT_TAKE_OPEN_PARTY;
++        } else {
++            *state = PORT_TAKE_DONE;
++        }
++        break;
++    }
++    case PORT_TAKE_OPEN_PARTY:
++        take->partyMenu = FieldSystem_OpenPartyMenu_SelectPokemon(0, fieldSystem);
++        *state = PORT_TAKE_PARTY_WAIT;
++        break;
++    case PORT_TAKE_PARTY_WAIT: {
++        int slot;
++
++        if (FieldSystem_IsRunningApplication(fieldSystem)) {
++            break;
++        }
++
++        slot = PartyMenu_GetSelectedSlot(take->partyMenu);
++        Heap_Free(take->partyMenu);
++        take->partyMenu = NULL;
++
++        if (slot >= 0 && slot < MAX_PARTY_SIZE && Encounter_PortCaughtBoxMon(fieldSystem) != NULL) {
++            PortTakeCaught_Swap(fieldSystem, take, slot);
++        } else {
++            String_Clear(take->string);
++        }
++
++        FieldTransition_StartMapAndFadeIn(task);
++        *state = PORT_TAKE_FIELD_BACK;
++        break;
++    }
++    case PORT_TAKE_FIELD_BACK:
++        MapObjectMan_PauseAllMovement(fieldSystem->mapObjMan);
++        *state = String_Length(take->string) > 0 ? PORT_TAKE_TELL : PORT_TAKE_DONE;
++        break;
++    case PORT_TAKE_TELL:
++        PortTakeCaught_Print(fieldSystem, take);
++        *state = PORT_TAKE_TELL_WAIT;
++        break;
++    case PORT_TAKE_TELL_WAIT:
++        if (FieldMessage_FinishedPrinting(take->printerID)
++            && (gSystem.pressedKeys & (PAD_BUTTON_A | PAD_BUTTON_B))) {
++            PortTakeCaught_CloseWindow(take);
++            *state = PORT_TAKE_DONE;
++        }
++        break;
++    case PORT_TAKE_DONE:
++        Encounter_PortCaughtToPC(-1, 0, 0);
++        MapObjectMan_UnpauseAllMovement(fieldSystem->mapObjMan);
++        String_Free(take->string);
++        Heap_Free(take);
++        task->env = NULL;
++        return TRUE;
++    }
++
++    return FALSE;
++}
++#endif
 diff --git a/src/evolution.c b/src/evolution.c
 index 3f4fec91..bad3bb46 100644
 --- a/src/evolution.c
@@ -279,6 +865,33 @@ index 3f4fec91..bad3bb46 100644
      GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG0, 0);
      GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG1, 0);
      Bg_FreeTilemapBuffer(bgConfig, BG_LAYER_MAIN_1);
+diff --git a/src/field_task.c b/src/field_task.c
+index bf0cb8b2..4ff6a8a4 100644
+--- a/src/field_task.c
++++ b/src/field_task.c
+@@ -7,6 +7,9 @@
+ 
+ #include "field_system.h"
+ #include "heap.h"
++#ifdef SDK_PORT_3DS
++#include "encounter.h"
++#endif
+ 
+ typedef struct FieldTaskEnv {
+     int state;
+@@ -80,6 +83,12 @@ BOOL FieldTask_Run(FieldSystem *fieldSys)
+ 
+         fieldSys->task = prev;
+         if (prev == NULL) {
++#ifdef SDK_PORT_3DS
++            // (a Pokémon caught with the party full: asked about now)
++            if (Encounter_PortStartTakeCaught(fieldSys)) {
++                continue;
++            }
++#endif
+             return TRUE;
+         }
+     }
 diff --git a/src/main_menu/main_menu.c b/src/main_menu/main_menu.c
 index 26af1583..104d0d98 100644
 --- a/src/main_menu/main_menu.c
@@ -297,6 +910,69 @@ index 26af1583..104d0d98 100644
                  appData->pendingAlerts |= NEW_GAME_WARN;
                  appData->alertsPending = TRUE;
                  *state = MAIN_MENU_STATE_CONFIRM_NEW_GAME;
+diff --git a/src/map_header_data.c b/src/map_header_data.c
+index 6e468587..f310264f 100644
+--- a/src/map_header_data.c
++++ b/src/map_header_data.c
+@@ -19,6 +19,48 @@ static void MapHeaderData_LoadEvents(MapHeaderData *data, enum MapHeaderID mapHe
+ static void MapHeaderData_ParseEvents(MapHeaderData *data);
+ static void MapHeaderData_LoadInitScripts(MapHeaderData *data, int headerID);
+ 
++#ifdef SDK_PORT_3DS
++extern int NitroPort_WideScreenExtra(void);
++
++// People the 3DS remaster's wider upper screen shows where the DS didn't,
++// in the way: moved a little (their map's events, as each map loads).
++static const struct {
++    u16 mapHeaderID, localID, x, z;
++    s16 dx, dz;
++} sPortWideMoves[] = {
++    // Route 201's Pokémon Breeder, at the right of the tall grass: cut by
++    // the wider screen's edge as Professor Rowan stops the player, and in
++    // the way where Rowan and his assistant walk off. On the path to the
++    // right of the grass.
++    { MAP_HEADER_ROUTE_201, 0, 123, 854, 5, 0 },
++};
++
++static void MapHeaderData_PortWideMoves(MapHeaderData *data, enum MapHeaderID mapHeaderID)
++{
++    int i, j;
++
++    if (NitroPort_WideScreenExtra() <= 0) {
++        return;
++    }
++
++    for (i = 0; i < (int)NELEMS(sPortWideMoves); i++) {
++        if (sPortWideMoves[i].mapHeaderID != mapHeaderID) {
++            continue;
++        }
++
++        for (j = 0; j < (int)data->numObjectEvents; j++) {
++            ObjectEvent *e = (ObjectEvent *)&data->objectEvents[j];
++
++            // (that one, where the DS's map has it)
++            if (e->localID == sPortWideMoves[i].localID && e->x == sPortWideMoves[i].x && e->z == sPortWideMoves[i].z) {
++                e->x += sPortWideMoves[i].dx;
++                e->z += sPortWideMoves[i].dz;
++            }
++        }
++    }
++}
++#endif
++
+ void MapHeaderData_Init(FieldSystem *fieldSystem, enum HeapID heapID)
+ {
+     GF_ASSERT(fieldSystem->mapHeaderData == NULL);
+@@ -37,6 +79,9 @@ void MapHeaderData_Load(FieldSystem *fieldSystem, enum MapHeaderID mapHeaderID)
+ 
+     MapHeaderData_LoadEvents(fieldSystem->mapHeaderData, mapHeaderID);
+     MapHeaderData_ParseEvents(fieldSystem->mapHeaderData);
++#ifdef SDK_PORT_3DS
++    MapHeaderData_PortWideMoves(fieldSystem->mapHeaderData, mapHeaderID);
++#endif
+     MapHeaderData_LoadWildEncounters(&fieldSystem->mapHeaderData->wildEncounters, mapHeaderID);
+     MapHeaderData_LoadInitScripts(fieldSystem->mapHeaderData, mapHeaderID);
+ }
 diff --git a/src/overlay006/hm_cut_in.c b/src/overlay006/hm_cut_in.c
 index ef28d99d..c3226fb1 100644
 --- a/src/overlay006/hm_cut_in.c
@@ -384,6 +1060,82 @@ index ef28d99d..c3226fb1 100644
      CutIn_DeleteSpriteResources(cutIn);
  
      G2_SetBG0Priority(cutIn->bg0Priority);
+diff --git a/src/overlay007/shop_menu.c b/src/overlay007/shop_menu.c
+index 7c255979..f13891e4 100644
+--- a/src/overlay007/shop_menu.c
++++ b/src/overlay007/shop_menu.c
+@@ -1621,8 +1621,38 @@ static void Shop_SetCursorSpritePalette(ShopMenu *shopMenu, u8 selected)
+     Sprite_SetExplicitPalette2(shopMenu->sprites[SHOP_SPRITE_CURSOR], selected);
+ }
+ 
++#ifdef SDK_PORT_3DS
++extern int NitroPort_LowerMenuAvailable(void);
++extern void NitroPort_LowerMenuHoldUpper(int hold);
++
++static u8 sShopPortHoldWait;
++#endif
++
+ static void Shop_StartScreenFade(FieldSystem *fieldSystem, ShopMenu *shopMenu)
+ {
++#ifdef SDK_PORT_3DS
++    // Selling with the lower menu (the bag in its panel): the store stays
++    // on the upper screen while the bag's open (it went black): the menu
++    // and the message taken off first, then the upper screen held as it shows
++    // (the bag's hold carries on; let go when the bag closes and the shop
++    // is back).
++    if (NitroPort_LowerMenuAvailable()) {
++        if (sShopPortHoldWait == 0) {
++            // (BG3: the menu and the clerk's message, the script's; the
++            // field's BGs are set up anew after the bag anyway)
++            Bg_ClearTilemap(fieldSystem->bgConfig, BG_LAYER_MAIN_3);
++            sShopPortHoldWait = 3;
++            return;
++        }
++
++        // (the picture without them on the screens first)
++        if (--sShopPortHoldWait > 0) {
++            return;
++        }
++
++        NitroPort_LowerMenuHoldUpper(TRUE);
++    }
++#endif
+     FieldMap_FadeScreen(FADE_TYPE_BRIGHTNESS_OUT);
+     shopMenu->state = SHOP_STATE_WAIT_SCREEN_TRANSITION;
+ }
+diff --git a/src/render_oam.c b/src/render_oam.c
+index 7c47e7a5..b8ce2f45 100644
+--- a/src/render_oam.c
++++ b/src/render_oam.c
+@@ -33,20 +33,22 @@ static u16 AddAffineToSubOamManager(const MtxFx22 *affineTransform);
+ static OamManager *sOamManager;
+ 
+ #ifdef SDK_PORT_3DS
+-extern int NitroPort_WidePictures(void);
++extern int NitroPort_WideCells(void);
+ 
+ // The 3DS remaster's upper screen is wider than the DS's: 32 pixels more
+ // each side (port_wide_layout.h). On the screens made of pictures (the
+-// opening movie, the title, the cutscenes: NitroPort_WidePictures), a cell
+-// beside the DS's screen shows there, so only the cells beyond the wider
+-// screen are left out (the opening's banners: the half of a banner left of
+-// the DS's screen was left out when it was all off it, a gap beside it).
++// opening movie, the title, the cutscenes) and in a battle
++// (NitroPort_WideCells), a cell beside the DS's screen shows there, so only
++// the cells beyond the wider screen are left out (the opening's banners:
++// the half of a banner left of the DS's screen was left out when it was
++// all off it, a gap beside it; the player's trainer gone a few frames
++// early as it slid off after throwing the ball).
+ // On both screens: there the game swaps them after placing a frame's
+ // sprites.
+ static BOOL IsObjectInWideView(const NNSG2dCellData *cellData, const MtxFx32 *objectCoords, const NNSG2dViewRect *viewRect)
+ {
+     NNSG2dViewRect view = *viewRect;
+-    int extra = NitroPort_WidePictures() ? NitroPort_WideScreenExtra() : 0;
++    int extra = NitroPort_WideCells() ? NitroPort_WideScreenExtra() : 0;
+ 
+     view.posTopLeft.x -= extra << FX32_SHIFT;
+     view.sizeView.x += (2 * extra) << FX32_SHIFT;
 diff --git a/src/savedata.c b/src/savedata.c
 index ddbdda4f..cb7fefce 100644
 --- a/src/savedata.c
@@ -420,10 +1172,10 @@ index ddbdda4f..cb7fefce 100644
          extraData = SaveDataExtra_Get(saveData, HEAP_ID_APPLICATION, extraTable[i].dataID, &loadResult);
  
 diff --git a/src/scrcmd.c b/src/scrcmd.c
-index 9de354a8..81ae1857 100644
+index 9de354a8..659a6d58 100644
 --- a/src/scrcmd.c
 +++ b/src/scrcmd.c
-@@ -2068,6 +2068,539 @@ static BOOL ScrCmd_SetMenuYOriginSide(ScriptContext *ctx)
+@@ -2068,6 +2068,655 @@ static BOOL ScrCmd_SetMenuYOriginSide(ScriptContext *ctx)
      return TRUE;
  }
  
@@ -504,6 +1256,15 @@ index 9de354a8..81ae1857 100644
 +    return FALSE;
 +}
 +
++// A wait or a turn on the spot (no step).
++static BOOL ScrCmd_PortWideStill(u16 action)
++{
++    return (action >= MOVEMENT_ACTION_FACE_NORTH && action <= MOVEMENT_ACTION_FACE_EAST)
++        || (action >= MOVEMENT_ACTION_DELAY_1 && action <= MOVEMENT_ACTION_DELAY_32)
++        || (action >= MOVEMENT_ACTION_WALK_ON_SPOT_SLOWER_NORTH && action <= MOVEMENT_ACTION_WALK_ON_SPOT_FASTER_EAST)
++        || action == MOVEMENT_ACTION_EMOTE_EXCLAMATION_MARK;
++}
++
 +// A step east (1) or west (-1), else 0.
 +static int ScrCmd_PortWalkDx(u16 action)
 +{
@@ -559,6 +1320,13 @@ index 9de354a8..81ae1857 100644
 +    MapObject_UpdateCoords(mapObj);
 +    MapObject_RecalculateObjectHeight(mapObj);
 +    MapObject_SetTileBehaviors(mapObj);
++
++    // Its sprite there now, not where it was till its own task's next turn:
++    // drawn a frame where the script put it (Rowan, Dawn, Looker flashed
++    // in the wider picture's side before walking in).
++    if (MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_14)) {
++        sub_02062B68(mapObj);
++    }
 +}
 +
 +static PortWideScripted *ScrCmd_PortWideFind(FieldSystem *fieldSystem, MapObject *mapObj)
@@ -676,12 +1444,101 @@ index 9de354a8..81ae1857 100644
 +
 +typedef struct PortWidePathSearch {
 +    FieldSystem *fieldSystem;
++    MapObject *mapObj;
 +    int midX, midZ, out, outDir;
 +    int nodes;
 +    u8 path[PORT_WIDE_PATH_MAX];
 +    u16 seen[PORT_WIDE_SEARCH_MAX];
 +    int seenCount;
 +} PortWidePathSearch;
++
++// The people the script sets walking together (its ApplyMovement commands
++// before a WaitMovement: the ones given theirs already, and the ones the
++// next commands give theirs). They walk out together: not in each other's
++// way.
++#define PORT_WIDE_WALKERS_MAX 8
++static MapObject *sPortWideWalkers[PORT_WIDE_WALKERS_MAX];
++static int sPortWideWalkerCount;
++
++static void ScrCmd_PortWideAddWalker(MapObject *mapObj)
++{
++    int i;
++
++    if (mapObj == NULL) {
++        return;
++    }
++
++    for (i = 0; i < sPortWideWalkerCount; i++) {
++        if (sPortWideWalkers[i] == mapObj) {
++            return;
++        }
++    }
++
++    if (sPortWideWalkerCount < PORT_WIDE_WALKERS_MAX) {
++        sPortWideWalkers[sPortWideWalkerCount++] = mapObj;
++    }
++}
++
++static BOOL ScrCmd_PortWideIsWalker(MapObject *mapObj)
++{
++    int i;
++
++    for (i = 0; i < sPortWideWalkerCount; i++) {
++        if (sPortWideWalkers[i] == mapObj) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++// ctx: at an ApplyMovement's end (its walker, mapObj). movementsGoing:
++// the walks not over yet (none: a new group).
++static void ScrCmd_PortWideNoteWalkers(ScriptContext *ctx, MapObject *mapObj, int movementsGoing)
++{
++    const u8 *next = ctx->scriptPtr;
++    int n;
++
++    if (movementsGoing == 0) {
++        sPortWideWalkerCount = 0;
++    }
++
++    ScrCmd_PortWideAddWalker(mapObj);
++
++    for (n = 0; n < PORT_WIDE_WALKERS_MAX; n++, next += 8) {
++        u16 command = (u16)(next[0] | (next[1] << 8));
++        u16 localID = (u16)(next[2] | (next[3] << 8));
++
++        if (command >= gNumFieldScriptCommands || gFieldScriptCommands[command] != ScrCmd_ApplyMovement) {
++            break;
++        }
++
++        ScrCmd_PortWideAddWalker(GetLocalMapObjByIndex(ctx->fieldSystem, FieldSystem_TryGetVar(ctx->fieldSystem, localID)));
++    }
++}
++
++// Someone standing on (x, z), not walking a script's way (they walk out
++// together), nor the walker or the player.
++static BOOL ScrCmd_PortWideSomeoneThere(FieldSystem *fieldSystem, MapObject *walker, int x, int z)
++{
++    MapObject *other;
++    MapObject *player = PlayerAvatar_GetMapObject(fieldSystem->playerAvatar);
++    int i = 0;
++
++    while (MapObjectMan_FindObjectWithStatus(fieldSystem->mapObjMan, &other, &i, MAP_OBJ_STATUS_0) == TRUE) {
++        if (other == walker || other == player || MapObject_CheckStatus(other, MAP_OBJ_STATUS_4)
++            || ScrCmd_PortWideIsWalker(other)) {
++            continue;
++        }
++
++        if ((MapObject_GetX(other) == x && MapObject_GetZ(other) == z)
++            || (MapObject_GetXPrev(other) == x && MapObject_GetZPrev(other) == z)) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
 +
 +static u16 ScrCmd_PortWideKey(PortWidePathSearch *search, int x, int z)
 +{
@@ -732,7 +1589,8 @@ index 9de354a8..81ae1857 100644
 +
 +        // (entered from here, not just seen: a ledge's tile may be entered
 +        // from another side)
-+        if (ScrCmd_PortWideSeen(search, toX, toZ) || ScrCmd_PortWideBlocked(search->fieldSystem, x, z, &toY, dirs[i])) {
++        if (ScrCmd_PortWideSeen(search, toX, toZ) || ScrCmd_PortWideBlocked(search->fieldSystem, x, z, &toY, dirs[i])
++            || ScrCmd_PortWideSomeoneThere(search->fieldSystem, search->mapObj, toX, toZ)) {
 +            continue;
 +        }
 +
@@ -756,6 +1614,7 @@ index 9de354a8..81ae1857 100644
 +    int count, i, last = -1, out = ScrCmd_PortWideOutTiles(), at, speed = 0, dir;
 +    int midX, midZ, startX, startZ, x, endX, endDx;
 +    BOOL straight = TRUE;
++    int lead = -1;
 +
 +    if (out == 0 || !ScrCmd_PortWideEligible(fieldSystem, mapObj)) {
 +        return NULL;
@@ -801,7 +1660,12 @@ index 9de354a8..81ae1857 100644
 +        if (dx != 0) {
 +            x += dx * cmds[i].count;
 +            last = i;
-+        } else {
++
++            if (lead < 0) {
++                lead = i;
++            }
++        } else if (lead >= 0 || !ScrCmd_PortWideStill(cmds[i].movementAction)) {
++            // (a wait or a turn before the walk is still a walk out: Rowan's)
 +            straight = FALSE;
 +        }
 +    }
@@ -820,7 +1684,7 @@ index 9de354a8..81ae1857 100644
 +    }
 +
 +    // (straight: every step that way)
-+    for (i = 0; i < count; i++) {
++    for (i = lead; i < count; i++) {
 +        if (ScrCmd_PortWalkDx(cmds[i].movementAction) != at) {
 +            straight = FALSE;
 +        }
@@ -850,7 +1714,8 @@ index 9de354a8..81ae1857 100644
 +        for (x = from, n = 0; (x - midX) * at < out && n < 64; x += at, n++) {
 +            int stepDx = (x + at - midX) * at;
 +
-+            if (ScrCmd_PortWideBlocked(fieldSystem, x, straight ? startZ : endZ, &y, dir)) {
++            if (ScrCmd_PortWideBlocked(fieldSystem, x, straight ? startZ : endZ, &y, dir)
++                || ScrCmd_PortWideSomeoneThere(fieldSystem, mapObj, x + at, straight ? startZ : endZ)) {
 +                blockedAt = stepDx;
 +                break;
 +            }
@@ -867,6 +1732,7 @@ index 9de354a8..81ae1857 100644
 +
 +            memset(search, 0, sizeof(*search));
 +            search->fieldSystem = fieldSystem;
++            search->mapObj = mapObj;
 +            search->midX = midX;
 +            search->midZ = midZ;
 +            search->out = out;
@@ -883,9 +1749,11 @@ index 9de354a8..81ae1857 100644
 +                    wayZ += MapObject_GetDzFromDir(search->path[steps]);
 +                }
 +
-+                copy = Heap_Alloc(HEAP_ID_FIELD1, sizeof(MapObjectAnimCmd) * (runs + 1));
++                copy = Heap_Alloc(HEAP_ID_FIELD1, sizeof(MapObjectAnimCmd) * (lead + runs + 1));
++                // (the waits and turns before the walk, as the script has them)
++                memcpy(copy, cmds, sizeof(MapObjectAnimCmd) * lead);
 +
-+                for (i = 0, runs = 0; i < steps; i++) {
++                for (i = 0, runs = lead; i < steps; i++) {
 +                    if (i == 0 || search->path[i] != search->path[i - 1]) {
 +                        copy[runs].movementAction = sPortWideWalks[speed][search->path[i]];
 +                        copy[runs].count = 0;
@@ -963,14 +1831,15 @@ index 9de354a8..81ae1857 100644
  static BOOL ScrCmd_ApplyMovement(ScriptContext *ctx)
  {
      u16 localID = ScriptContext_GetVar(ctx);
-@@ -2078,11 +2611,20 @@ static BOOL ScrCmd_ApplyMovement(ScriptContext *ctx)
+@@ -2078,11 +2727,21 @@ static BOOL ScrCmd_ApplyMovement(ScriptContext *ctx)
          return FALSE;
      }
  
 +#ifdef SDK_PORT_3DS
++    u8 *movementCount = FieldSystem_GetScriptMemberPtr(ctx->fieldSystem, SCRIPT_MANAGER_MOVEMENT_COUNT);
++    ScrCmd_PortWideNoteWalkers(ctx, object, *movementCount);
 +    MapObjectAnimCmd *portMovement = ScrCmd_PortWideMovement(ctx->fieldSystem, object, (MapObjectAnimCmd *)(ctx->scriptPtr + movementOffset));
 +    SysTask *task = MapObject_StartAnimation(object, portMovement != NULL ? portMovement : (MapObjectAnimCmd *)(ctx->scriptPtr + movementOffset));
-+    u8 *movementCount = FieldSystem_GetScriptMemberPtr(ctx->fieldSystem, SCRIPT_MANAGER_MOVEMENT_COUNT);
 +    (*movementCount)++;
 +    sub_02040F28(ctx->fieldSystem, task, portMovement);
 +    return FALSE;
@@ -984,7 +1853,7 @@ index 9de354a8..81ae1857 100644
  }
  
  static BOOL ScrCmd_Unused_2A1(ScriptContext *ctx)
-@@ -2394,6 +2936,11 @@ static BOOL ScrCmd_AddObject(ScriptContext *ctx)
+@@ -2394,6 +3053,11 @@ static BOOL ScrCmd_AddObject(ScriptContext *ctx)
      if (mapObj == NULL) {
          GF_ASSERT(FALSE);
      }
@@ -996,7 +1865,7 @@ index 9de354a8..81ae1857 100644
  
      return FALSE;
  }
-@@ -2407,6 +2954,9 @@ static BOOL ScrCmd_RemoveObject(ScriptContext *ctx)
+@@ -2407,6 +3071,9 @@ static BOOL ScrCmd_RemoveObject(ScriptContext *ctx)
      if (mapObj == NULL) {
          GF_ASSERT(FALSE);
      } else {

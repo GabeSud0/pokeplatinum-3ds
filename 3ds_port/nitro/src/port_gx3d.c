@@ -856,6 +856,7 @@ typedef struct PolyRecord {
  * MATCH_NEAR DS pixels (a vertex, on average). */
 #define MATCH_WINDOW 64
 #define MATCH_NEAR 16.0f
+#define MATCH_SURE 1.0f
 static int sInterpWanted, sInterp;
 static PolyRecord *sRec[2];              /* [sRecBuild]: this scene's; the other: the scene before's */
 static unsigned sRecCount[2], sRecBuild;
@@ -946,20 +947,37 @@ static int ndc_of(const int32_t clip[4],double *x,double *y)
  * it). out[j]: P's index, or -1. The number paired. */
 static float median_of(float *v,unsigned n)
 {
-    /* (partial selection sort to the middle: n is small) */
-    unsigned i,j,mid=n/2u;
-    for(i=0;i<=mid;i++){
-        unsigned best=i;
-        for(j=i+1;j<n;j++)if(v[j]<v[best])best=j;
-        {float t=v[i];v[i]=v[best];v[best]=t;}
+    /* (selection: Hoare's, to the middle; v is reordered) */
+    unsigned lo=0,hi=n-1u,mid=n/2u;
+    while(lo<hi){
+        float pivot=v[(lo+hi)/2u];
+        unsigned i=lo,j=hi;
+        while(i<=j){
+            while(v[i]<pivot)i++;
+            while(v[j]>pivot)j--;
+            if(i<=j){
+                float t=v[i];v[i]=v[j];v[j]=t;
+                i++;
+                if(j==0)break;
+                j--;
+            }
+        }
+        if(mid<=j)hi=j;
+        else if(mid>=i)lo=i;
+        else break;
     }
     return v[mid];
 }
-static float poly_distance(const PolyRecord *p,const PolyRecord *c,float dx,float dy)
+/* (limit: the average past which the caller doesn't care; it stops
+ * there, returning at least the limit) */
+static float poly_distance(const PolyRecord *p,const PolyRecord *c,float dx,float dy,float limit)
 {
-    float d=0.0f;
+    float d=0.0f,stop=limit*(float)c->count;
     unsigned k;
-    for(k=0;k<c->count;k++)d+=fabsf(c->px[k]-(p->px[k]+dx))+fabsf(c->py[k]-(p->py[k]+dy));
+    for(k=0;k<c->count;k++){
+        d+=fabsf(c->px[k]-(p->px[k]+dx))+fabsf(c->py[k]-(p->py[k]+dy));
+        if(d>=stop)return limit;
+    }
     return d/(float)c->count;
 }
 /* The scene's motion as match_records last worked it out (DS pixels, as
@@ -1012,13 +1030,24 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
             if(out[j]>=0)matched++;
             continue;
         }
+        /* The pair the order gave, where the scene's motion puts it (a
+         * pixel at most): that one, without looking further. (Most are:
+         * the window's search, every polygon of a kind against each
+         * other, took the in-between scene longer than the scene itself
+         * where a model is many polygons of one kind, the starters'
+         * briefcase: 2026-10-26.) */
+        if(out[j]>=0 && P[out[j]].onScreen && P[out[j]].count==C[j].count &&
+           poly_distance(&P[out[j]],&C[j],dx,dy,MATCH_SURE)<MATCH_SURE){
+            offset=out[j]-(int)j;matched++;
+            continue;
+        }
         lo=center-MATCH_WINDOW;hi=center+MATCH_WINDOW;
         if(lo<0)lo=0;
         if(hi>(int)m-1)hi=(int)m-1;
         for(q=lo;q<=hi;q++){
             float d;
             if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)continue;
-            d=poly_distance(&P[q],&C[j],dx,dy);
+            d=poly_distance(&P[q],&C[j],dx,dy,bestD);
             if(d<bestD){bestD=d;best=q;}
         }
         out[j]=best;

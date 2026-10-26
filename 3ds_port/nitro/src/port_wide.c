@@ -260,6 +260,27 @@ void NitroPort_WideForcePictures(int mode)
     sForcePictures = mode;
 }
 
+int NitroPort_WideCells(void)
+{
+    /* (cached as NitroPort_WidePictures is) */
+    static uint32_t cache = 0xFFFFFFFFu;
+    uint32_t serial = NitroPort_OverlaySerial() & 0x7FFFFFFFu, c = __atomic_load_n(&cache, __ATOMIC_RELAXED);
+    int cells;
+
+    if (sForcePictures >= 0) {
+        return sForcePictures || NitroPort_OverlayLoadedNamed("battle");
+    }
+    if (c != 0xFFFFFFFFu && (c >> 1) == serial) {
+        return (int)(c & 1);
+    }
+    /* The pictures' screens, and the battle: its trainers slide off and
+     * its balls fly beside the DS's screen (the player went a frame early,
+     * half a sprite still showing, 2026-10-26). */
+    cells = NitroPort_WidePictures() || NitroPort_OverlayLoadedNamed("battle");
+    __atomic_store_n(&cache, (serial << 1) | (uint32_t)cells, __ATOMIC_RELAXED);
+    return cells;
+}
+
 int NitroPort_WidePictures(void)
 {
     /* The answer, worked out again when an overlay is loaded or unloaded:

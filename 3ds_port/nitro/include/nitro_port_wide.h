@@ -75,6 +75,11 @@ int NitroPort_WideWindows(int engine, int bg, NitroWideWindow *out, int max);
  * cutscenes) rather than the game's UI: pictures are mirrored at the DS's
  * edges, the UI isn't. */
 int NitroPort_WidePictures(void);
+/* Whether the game's sprite cells beside the DS's screen are placed there
+ * (render_oam.c, patch 0028): on the pictures' screens and in a battle;
+ * elsewhere only those on the DS's screen, as the DS has it (menus park
+ * sprites just off it). */
+int NitroPort_WideCells(void);
 /* (tests, the PC runner) 1: pictures, 0: the UI, -1: as the overlays say. */
 void NitroPort_WideForcePictures(int mode);
 /* Changes whenever a window is added or removed. */

@@ -158,6 +158,18 @@ int NitroPort_OptionsLoad(const char *path)
         }
     }
     fclose(f);
+    /* SPEED starts at 1x every time the game starts (the file keeps it for
+     * nothing else): 60 FPS back on if SPEED had turned it off. */
+    if (sValue[NITRO_OPT_SPEED] != 0) {
+        sValue[NITRO_OPT_SPEED] = 0;
+        sDirty = 1;
+    }
+    if (sValue[NITRO_OPT_FPS60_HELD]) {
+        sValue[NITRO_OPT_FPS60] = 1;
+        sValue[NITRO_OPT_FPS60_HELD] = 0;
+        sChosen[NITRO_OPT_FPS60] = 1;
+        sDirty = 1;
+    }
     NitroPort_Log("[options] %d settings read from %s", read, path);
     return 1;
 }
