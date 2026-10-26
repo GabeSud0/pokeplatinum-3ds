@@ -26,13 +26,17 @@ one.
 The enhancements and cheats (port_options.h: the port's settings):
 EXP ON CATCH (the catch stops after "Gotcha!" while the script pays out
 experience as for a defeated Pokémon), PARTY EXP SHARE (every Pokémon
-able to: the participants their share, the others half), TRADE EVO AT 40
+able to: the participants their share, each with its own message, then
+the rest of the party as much as each of them under one message, "Your
+party gained ... Exp. Points!", with their levels up), TRADE EVO AT 40
 (a trade evolution by level 40), HMs WITHOUT MOVES (a field move whose HM
 the bag has is the party's first Pokémon's: the scripts' checks and the
 party menu's Fly and Defog), AUTO-RUN (running unless B is held, with
 the running shoes), ALWAYS CATCH, INSTANT VICTORY (the player's attacks
 knock out, past Endure and the focus items), FAST EGGS, INFINITE MONEY,
-WILD ENCOUNTERS (off, 1/4, 1/2, 2x) and SHINY ODDS (to always).
+WILD ENCOUNTERS (off, 1/4, 1/2, 2x) and SHINY ODDS (to always). The
+battle holds the port's SPEED at 1x while it waits for the player: its
+menus on the lower screen, its bag, its party.
 
 The battle's text box has its frame's edges clear (the DS fills them
 with black: a black box behind the box, wider on the 3DS) and the ground
@@ -42,9 +46,16 @@ On the wider screen: the Pokédex's page after a catch laid out as the
 info page (its maps came round beside the DS's screen), and the cry
 page's wave from edge to edge (a window of its own, 512 wide, shown on
 beside the DS's screen) with its band's lower edge at the screen's bottom.
+A level up's box with the Pokémon's icon goes to the screen's edge with
+the stats below it.
+
+The trainer case leaves the screens as they were when it leaves the
+panel, as the bag and the party do: the Pokédex opened from it came up on
+the wrong screens.
 ---
+ include/battle/battle_system.h           |    3 +
  include/overlay005/options_panel.h       |   33 +
- include/port_options.h                   |   31 +
+ include/port_options.h                   |   40 +
  include/port_wide_layout.h               |    4 +
  include/start_menu.h                     |    3 +
  include/unk_02054884.h                   |    3 +
@@ -52,9 +63,14 @@ beside the DS's screen) with its band's lower edge at the screen's bottom.
  src/applications/party_menu/main.c       |   25 +
  src/applications/pokedex/ov21_021E3FFC.c |  230 +++++
  src/applications/pokedex/ov21_021E8D48.c |   46 +
+ src/applications/trainer_case/main.c     |    4 +
  src/battle/battle_controller_player.c    |   22 +-
  src/battle/battle_main.c                 |   41 +-
- src/battle/battle_script.c               |   83 ++
+ src/battle/battle_script.c               |  209 ++++-
+ src/battle/battle_subscreen.c            |   19 +
+ src/battle/battle_system.c               |   14 +
+ src/battle_sub_menus/battle_bag.c        |   10 +
+ src/battle_sub_menus/battle_party.c      |   10 +
  src/meson.build                          |    1 +
  src/overlay005/daycare.c                 |   17 +-
  src/overlay005/options_panel.c           | 1097 ++++++++++++++++++++++
@@ -65,11 +81,24 @@ beside the DS's screen) with its band's lower edge at the screen's bottom.
  src/start_menu.c                         |  162 +++-
  src/trainer_info.c                       |   13 +
  src/unk_02054884.c                       |   41 +
- 22 files changed, 1909 insertions(+), 15 deletions(-)
+ 28 files changed, 2103 insertions(+), 16 deletions(-)
  create mode 100644 include/overlay005/options_panel.h
  create mode 100644 include/port_options.h
  create mode 100644 src/overlay005/options_panel.c
 
+diff --git a/include/battle/battle_system.h b/include/battle/battle_system.h
+index 998fce1d..6cd7e1bd 100644
+--- a/include/battle/battle_system.h
++++ b/include/battle/battle_system.h
+@@ -309,5 +309,8 @@ u8 BattleMessage_PrintTrainerMessage(BattleSystem *battleSys, int trainerID, int
+  */
+ u8 BattleMessage_Print(BattleSystem *battleSys, MessageLoader *msgLoader, BattleMessage *battleMsg, int renderDelay);
+ u8 BattleMessage_PrintToWindow(BattleSystem *battleSys, Window *window, MessageLoader *msgLoader, BattleMessage *battleMsg, int xOffset, int yOffset, int param6, int param7, int renderDelay);
++#ifdef SDK_PORT_3DS
++u8 BattleMessage_PrintString(BattleSystem *battleSys, const String *string, int renderDelay);
++#endif
+ 
+ #endif // POKEPLATINUM_BATTLE_BATTLE_SYSTEM_H
 diff --git a/include/overlay005/options_panel.h b/include/overlay005/options_panel.h
 new file mode 100644
 index 00000000..fabe6670
@@ -111,10 +140,10 @@ index 00000000..fabe6670
 +#endif // POKEPLATINUM_OPTIONS_PANEL_H
 diff --git a/include/port_options.h b/include/port_options.h
 new file mode 100644
-index 00000000..b21b868b
+index 00000000..5d8cfee7
 --- /dev/null
 +++ b/include/port_options.h
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,40 @@
 +#ifndef POKEPLATINUM_PORT_OPTIONS_H
 +#define POKEPLATINUM_PORT_OPTIONS_H
 +
@@ -143,6 +172,15 @@ index 00000000..b21b868b
 +int NitroPort_OptionsSave(void);
 +
 +#define PortOption_On(id) (NitroPort_Option(id) != 0)
++
++// SPEED kept at 1x while the battle waits for the player: its menus on
++// the lower screen, its bag, its party (the port's NitroPort_SpeedHold).
++// A bit each.
++#define PORT_SPEED_HOLD_BATTLE_MENU  1
++#define PORT_SPEED_HOLD_BATTLE_BAG   2
++#define PORT_SPEED_HOLD_BATTLE_PARTY 4
++
++void NitroPort_SpeedHold(unsigned bit, int on);
 +#endif
 +
 +#endif // POKEPLATINUM_PORT_OPTIONS_H
@@ -634,6 +672,21 @@ index 5f9106db..6869e7f4 100644
      ov21_021E9AC8(&param0->unk_228);
      ov21_021E968C(&param0->unk_200);
      ov21_021E95EC(&param0->unk_200, param0->unk_1A0);
+diff --git a/src/applications/trainer_case/main.c b/src/applications/trainer_case/main.c
+index 0695a816..ecd465e7 100644
+--- a/src/applications/trainer_case/main.c
++++ b/src/applications/trainer_case/main.c
+@@ -908,6 +908,10 @@ BOOL TrainerCaseApp_Exit(ApplicationManager *appMan, int *state)
+     // in it, the menu kept, its panel black, the upper screen kept for what
+     // comes next (the start menu lets it go once the field's back).
+     if (sTrainerCasePortPanel) {
++        // (the screens as they were, as the bag and the party leave them:
++        // the Pokédex opened from it doesn't set them, and came up on the
++        // wrong screens, 2026-10-25)
++        GXLayers_SwapDisplay();
+         NitroPort_LowerMenuShow(FALSE);
+ 
+         if (!sTrainerCasePortLeaving) {
 diff --git a/src/battle/battle_controller_player.c b/src/battle/battle_controller_player.c
 index 17366e7b..fd1310dc 100644
 --- a/src/battle/battle_controller_player.c
@@ -770,42 +823,64 @@ index dc92931e..470e6b64 100644
      GX_SetVisibleWnd(GX_WNDMASK_NONE);
      GXS_SetVisibleWnd(GX_WNDMASK_NONE);
 diff --git a/src/battle/battle_script.c b/src/battle/battle_script.c
-index ac895a2d..f5ad2080 100644
+index ac895a2d..f5812991 100644
 --- a/src/battle/battle_script.c
 +++ b/src/battle/battle_script.c
-@@ -51,6 +51,7 @@
+@@ -51,6 +51,10 @@
  #include "overlay_manager.h"
  #include "palette.h"
  #include "party.h"
 +#include "port_options.h"
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++#endif
  #include "pc_boxes.h"
  #include "pokemon.h"
  #include "pokemon_icon.h"
-@@ -2216,6 +2217,23 @@ static BOOL BtlCmd_CalcExpGain(BattleSystem *battleSys, BattleContext *battleCtx
+@@ -2216,6 +2220,20 @@ static BOOL BtlCmd_CalcExpGain(BattleSystem *battleSys, BattleContext *battleCtx
          u16 exp = SpeciesData_GetSpeciesValue(battleCtx->battleMons[battleCtx->faintedMon].species, SPECIES_DATA_BASE_EXP_REWARD);
          exp = (exp * battleCtx->battleMons[battleCtx->faintedMon].level) / 7;
  
 +#ifdef SDK_PORT_3DS
 +        // (the options page's PARTY EXP SHARE: the Pokémon that fought get
-+        // the whole of it between them, the rest of the party half of it
-+        // each, as later games' Exp. Share)
++        // the whole of it between them, as without it, and the rest of the
++        // party as much as each of them: BattleScript_GetExpTask. A held
++        // Exp. Share adds nothing then.)
 +        if (PortOption_On(PORT_OPT_EXP_SHARE) && totalMonsGainingExp) {
 +            battleCtx->gainedExp = exp / totalMonsGainingExp;
-+            battleCtx->sharedExp = exp / 2;
++            battleCtx->sharedExp = 0;
 +
 +            if (battleCtx->gainedExp == 0) {
 +                battleCtx->gainedExp = 1;
-+            }
-+
-+            if (battleCtx->sharedExp == 0) {
-+                battleCtx->sharedExp = 1;
 +            }
 +        } else
 +#endif
          if (totalMonsWithExpShare) {
              battleCtx->gainedExp = (exp / 2) / totalMonsGainingExp;
  
-@@ -2594,10 +2612,48 @@ static BOOL BtlCmd_StartCatchMonTask(BattleSystem *battleSys, BattleContext *bat
+@@ -2297,7 +2315,10 @@ enum GetExpTaskDataIndex {
+     GET_EXP_NEW_EXP,
+     GET_EXP_MOVE,
+     GET_EXP_MOVE_SLOT,
+-    GET_EXP_PARTY_SLOT
++    GET_EXP_PARTY_SLOT,
++#ifdef SDK_PORT_3DS
++    GET_EXP_PORT_PARTY, // (PARTY EXP SHARE: BattleScript_PortPartyExpSlot)
++#endif
+ };
+ 
+ /**
+@@ -2321,6 +2342,9 @@ static BOOL BtlCmd_StartGetExpTask(BattleSystem *battleSys, BattleContext *battl
+     battleCtx->taskData->battleCtx = battleCtx;
+     battleCtx->taskData->seqNum = SEQ_GET_EXP_START;
+     battleCtx->taskData->tmpData[GET_EXP_PARTY_SLOT] = 0;
++#ifdef SDK_PORT_3DS
++    battleCtx->taskData->tmpData[GET_EXP_PORT_PARTY] = 0;
++#endif
+ 
+     SysTask_Start(BattleScript_GetExpTask, battleCtx->taskData, NULL);
+ 
+@@ -2594,10 +2618,48 @@ static BOOL BtlCmd_StartCatchMonTask(BattleSystem *battleSys, BattleContext *bat
   * @param battleCtx
   * @return FALSE
   */
@@ -854,31 +929,152 @@ index ac895a2d..f5ad2080 100644
      }
  
      battleCtx->battleProgressFlag = TRUE;
-@@ -9709,6 +9765,11 @@ static void BattleScript_GetExpTask(SysTask *task, void *inData)
-         if (itemEffect == HOLD_EFFECT_EXP_SHARE || (data->battleCtx->sideGetExpMask[battler] & FlagIndex(slot))) {
-             break;
-         }
-+#ifdef SDK_PORT_3DS
-+        if (PortOption_On(PORT_OPT_EXP_SHARE) && Pokemon_GetValue(mon, MON_DATA_HP, NULL) && Pokemon_GetValue(mon, MON_DATA_IS_EGG, NULL) == FALSE) {
-+            break; // (PARTY EXP SHARE: every Pokémon able to)
-+        }
-+#endif
-     }
+@@ -9675,6 +9737,90 @@ typedef struct PokemonStats {
+     int stat[STAT_MAX];
+ } PokemonStats;
  
-     if (slot == BattleSystem_GetPartyCount(data->battleSys, expBattler)) {
-@@ -9745,6 +9806,11 @@ static void BattleScript_GetExpTask(SysTask *task, void *inData)
++#ifdef SDK_PORT_3DS
++// The options page's PARTY EXP SHARE: first the Pokémon that fought, each
++// as without it (its own message, its gauge, its level up), then the rest
++// of the party able to, as much as each of those (before their own
++// boosts: a Lucky Egg, traded), under one message, with their levels up.
++// tmpData[GET_EXP_PORT_PARTY]: the slots of those that fought (bits 0 to
++// 5), the rest's turn (bit 8), their message shown (bit 9).
++#define PORT_PARTY_EXP_REST  (1 << 8)
++#define PORT_PARTY_EXP_SHOWN (1 << 9)
++
++// The slot whose turn it is (the party's count: none left).
++static int BattleScript_PortPartyExpSlot(BattleScriptTaskData *data, int battler)
++{
++    int count = BattleSystem_GetPartyCount(data->battleSys, 0);
++    int *state = &data->tmpData[GET_EXP_PORT_PARTY];
++
++    for (;;) {
++        for (int slot = data->tmpData[GET_EXP_PARTY_SLOT]; slot < count; slot++) {
++            Pokemon *mon = BattleSystem_GetPartyPokemon(data->battleSys, 0, slot);
++
++            if ((*state & PORT_PARTY_EXP_REST) == 0) {
++                if (data->battleCtx->sideGetExpMask[battler] & FlagIndex(slot)) {
++                    *state |= FlagIndex(slot);
++                    return slot;
++                }
++            } else if ((*state & FlagIndex(slot)) == 0
++                && Pokemon_GetValue(mon, MON_DATA_HP, NULL)
++                && Pokemon_GetValue(mon, MON_DATA_IS_EGG, NULL) == FALSE) {
++                return slot;
++            }
++        }
++
++        if (*state & PORT_PARTY_EXP_REST) {
++            return count;
++        }
++
++        *state |= PORT_PARTY_EXP_REST;
++        data->tmpData[GET_EXP_PARTY_SLOT] = 0;
++    }
++}
++
++static void BattleScript_PortAppendLetters(String *string, const char *letters)
++{
++    for (; *letters; letters++) {
++        int c = (unsigned char)*letters;
++
++        if (c >= 'A' && c <= 'Z') {
++            String_AppendChar(string, 0x12B + (c - 'A'));
++        } else if (c >= 'a' && c <= 'z') {
++            String_AppendChar(string, 0x145 + (c - 'a'));
++        } else if (c == ' ') {
++            String_AppendChar(string, 0x1DE);
++        } else if (c == '.') {
++            String_AppendChar(string, 0x1AE);
++        } else if (c == '!') {
++            String_AppendChar(string, 0x1AB);
++        } else if (c == '\n') {
++            String_AppendChar(string, 0xE000);
++        }
++    }
++}
++
++// "Your party gained\n{exp} Exp. Points!" (the game has no such text:
++// English, as the options page), as the game's own exp message is shown.
++static u8 BattleScript_PortPartyExpMessage(BattleSystem *battleSys, u32 exp)
++{
++    String *string = String_Init(64, HEAP_ID_BATTLE);
++    String *number = String_Init(16, HEAP_ID_BATTLE);
++    u8 printerID;
++
++    BattleScript_PortAppendLetters(string, "Your party gained\n");
++    String_FormatInt(number, exp, 10, PADDING_MODE_NONE, CHARSET_MODE_EN);
++    String_Concat(string, number);
++    BattleScript_PortAppendLetters(string, " Exp. Points!");
++    String_AppendChar(string, 0x25BC); // (the end of a page, as the game's: \r)
++
++    printerID = BattleMessage_PrintString(battleSys, string, BattleSystem_GetTextSpeed(battleSys));
++    String_Free(number);
++    String_Free(string);
++
++    return printerID;
++}
++#endif
++
+ /**
+  * @brief System task-state machine for controlling the UX flow for a battler
+  * gaining Exp. Points.
+@@ -9701,6 +9847,12 @@ static void BattleScript_GetExpTask(SysTask *task, void *inData)
+     expBattler = 0;
+ 
+     // Figure out which mon we're working on
++#ifdef SDK_PORT_3DS
++    if (PortOption_On(PORT_OPT_EXP_SHARE)) {
++        slot = BattleScript_PortPartyExpSlot(data, battler);
++        mon = BattleSystem_GetPartyPokemon(data->battleSys, expBattler, slot < BattleSystem_GetPartyCount(data->battleSys, expBattler) ? slot : 0);
++    } else
++#endif
+     for (slot = data->tmpData[GET_EXP_PARTY_SLOT]; slot < BattleSystem_GetPartyCount(data->battleSys, expBattler); slot++) {
+         mon = BattleSystem_GetPartyPokemon(data->battleSys, expBattler, slot);
+         item = Pokemon_GetValue(mon, MON_DATA_HELD_ITEM, NULL);
+@@ -9742,6 +9894,11 @@ static void BattleScript_GetExpTask(SysTask *task, void *inData)
+                 totalExp = data->battleCtx->gainedExp;
+             }
+ 
++#ifdef SDK_PORT_3DS
++            if (PortOption_On(PORT_OPT_EXP_SHARE)) {
++                totalExp = data->battleCtx->gainedExp; // (PARTY EXP SHARE: the rest as much as each that fought)
++            } else
++#endif
              if (itemEffect == HOLD_EFFECT_EXP_SHARE) {
                  totalExp += data->battleCtx->sharedExp;
              }
+@@ -9780,6 +9937,28 @@ static void BattleScript_GetExpTask(SysTask *task, void *inData)
+         }
+ 
+         if (totalExp) {
 +#ifdef SDK_PORT_3DS
-+            else if (PortOption_On(PORT_OPT_EXP_SHARE) && (data->battleCtx->sideGetExpMask[battler] & FlagIndex(slot)) == FALSE) {
-+                totalExp += data->battleCtx->sharedExp; // (PARTY EXP SHARE: half to those that didn't fight)
++            if (PortOption_On(PORT_OPT_EXP_SHARE) && (data->tmpData[GET_EXP_PORT_PARTY] & PORT_PARTY_EXP_REST)) {
++                // (the rest of the party: one message, with the first of
++                // them; as much as each that fought got, its boosts aside)
++                if (data->tmpData[GET_EXP_PORT_PARTY] & PORT_PARTY_EXP_SHOWN) {
++                    data->seqNum = SEQ_GET_EXP_GAUGE;
++                    break;
++                }
++
++                u32 partyExp = data->battleCtx->gainedExp;
++
++                if (battleType & BATTLE_TYPE_TRAINER) {
++                    partyExp = partyExp * 150 / 100;
++                }
++
++                data->tmpData[GET_EXP_PORT_PARTY] |= PORT_PARTY_EXP_SHOWN;
++                data->tmpData[GET_EXP_MSG_INDEX] = BattleScript_PortPartyExpMessage(data->battleSys, partyExp);
++                data->tmpData[GET_EXP_MSG_DELAY] = 30 / 4;
++                data->seqNum++;
++                break;
 +            }
 +#endif
- 
-             if (itemEffect == HOLD_EFFECT_EXP_UP) {
-                 totalExp = totalExp * 150 / 100;
-@@ -10500,6 +10566,18 @@ static void BattleScript_CatchMonTask(SysTask *task, void *inData)
+             msg.tags = TAG_NICKNAME_NUM;
+             msg.params[0] = expBattler | (slot << 8);
+             msg.params[1] = totalExp;
+@@ -10500,6 +10679,18 @@ static void BattleScript_CatchMonTask(SysTask *task, void *inData)
          break;
      case SEQ_CATCH_MON_WAIT_PRINT_POKEMON_WAS_CAUGHT:
          if (Text_IsPrinterActive(data->tmpData[CATCH_MON_MSG_INDEX]) == FALSE) {
@@ -897,7 +1093,7 @@ index ac895a2d..f5ad2080 100644
              data->seqNum = SEQ_CATCH_MON_SET_CAUGHT_SPECIES;
              ov12_022368C8(data->ballRotation, 7);
          }
-@@ -10906,6 +10984,11 @@ static int BattleScript_CalcCatchShakes(BattleSystem *battleSys, BattleContext *
+@@ -10906,6 +11097,11 @@ static int BattleScript_CalcCatchShakes(BattleSystem *battleSys, BattleContext *
      if (BattleSystem_GetBattleType(battleSys) & BATTLE_TYPE_ALWAYS_CATCH) {
          return BALL_3_SHAKES_SUCCESS;
      }
@@ -909,6 +1105,191 @@ index ac895a2d..f5ad2080 100644
  
      u32 speciesMod;
      if (battleCtx->msgItemTemp == ITEM_SAFARI_BALL) {
+@@ -11977,6 +12173,11 @@ static void BattleScript_LoadPartyLevelUpIcon(BattleSystem *battleSys, BattleScr
+     SpriteSystem_LoadAnimResObj(spriteSys, spriteMan, NARC_INDEX_BATTLE__GRAPHIC__PL_BATT_OBJ, 258, TRUE, 20013);
+ 
+     data->sprites[0] = SpriteSystem_NewSprite(spriteSys, spriteMan, &sSpriteTemplate_LevelUpStar);
++#ifdef SDK_PORT_3DS
++    // (the box over the stats, with them at the wider upper screen's edge:
++    // a menu by the DS's edge goes there, render_window.c)
++    ManagedSprite_OffsetPositionXY(data->sprites[0], NitroPort_WideScreenExtra(), 0);
++#endif
+ 
+     ManagedSprite_TickFrame(data->sprites[0]);
+     SpriteSystem_LoadCharResObjAtEndWithHardwareMappingType(spriteSys, spriteMan, NARC_INDEX_POKETOOL__ICONGRA__PL_POKE_ICON, Pokemon_IconSpriteIndex(mon), FALSE, NNS_G2D_VRAM_TYPE_2DMAIN, 20022);
+@@ -11985,6 +12186,9 @@ static void BattleScript_LoadPartyLevelUpIcon(BattleSystem *battleSys, BattleScr
+     SpriteSystem_LoadAnimResObj(spriteSys, spriteMan, NARC_INDEX_POKETOOL__ICONGRA__PL_POKE_ICON, PokeIcon64KAnimationFileIndex(), FALSE, 20014);
+ 
+     data->sprites[1] = SpriteSystem_NewSprite(spriteSys, spriteMan, &sSpriteTemplate_LevelUpPokeIcon);
++#ifdef SDK_PORT_3DS
++    ManagedSprite_OffsetPositionXY(data->sprites[1], NitroPort_WideScreenExtra(), 0);
++#endif
+ 
+     Sprite_SetExplicitPaletteOffsetAutoAdjust(data->sprites[1]->sprite, Pokemon_IconPaletteIndex(mon));
+     ManagedSprite_TickFrame(data->sprites[1]);
+@@ -12023,6 +12227,9 @@ static void BattleScript_LoadPartyLevelUpIcon(BattleSystem *battleSys, BattleScr
+     v12.unk_10 = NULL;
+     v12.unk_14 = charTransferAllocation.offset;
+     v12.unk_18 = 176;
++#ifdef SDK_PORT_3DS
++    v12.unk_18 += NitroPort_WideScreenExtra();
++#endif
+     v12.unk_1C = 8;
+     v12.unk_20 = 0;
+     v12.unk_24 = 100;
+diff --git a/src/battle/battle_subscreen.c b/src/battle/battle_subscreen.c
+index c6326add..0d5e82ad 100644
+--- a/src/battle/battle_subscreen.c
++++ b/src/battle/battle_subscreen.c
+@@ -52,6 +52,10 @@
+ 
+ #include "res/text/bank/battle_strings.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_options.h"
++#endif
++
+ static void *BattleSubscreen_Alloc(void);
+ static void BattleSubscreen_OpenActionMenu(BattleSubscreen *btlSubscreen, int unused1, int unused2);
+ static void BattleSubscreen_DrawActionMenu(BattleSubscreen *btlSubscreen, int unused1, int unused2);
+@@ -868,6 +872,10 @@ void BattleSubscreenBg_Free(BgConfig *bgConfig)
+ void *BattleSubscreen_New(NARC *unused1, NARC *unused2, BattleSystem *battleSys, int trainerGender, u8 *subscreenCursorOn)
+ {
+     BattleSubscreen *btlSubscreen = BattleSubscreen_Alloc();
++#ifdef SDK_PORT_3DS
++    // (none left from a battle the game was reset in)
++    NitroPort_SpeedHold(PORT_SPEED_HOLD_BATTLE_MENU | PORT_SPEED_HOLD_BATTLE_BAG | PORT_SPEED_HOLD_BATTLE_PARTY, 0);
++#endif
+     btlSubscreen->battleSys = battleSys;
+     btlSubscreen->trainerGender = trainerGender;
+     btlSubscreen->suppressActivationSfxPtr = subscreenCursorOn;
+@@ -965,6 +973,9 @@ void *BattleSubscreen_New(NARC *unused1, NARC *unused2, BattleSystem *battleSys,
+ 
+ void BattleSubscreen_Free(BattleSubscreen *btlSubscreen)
+ {
++#ifdef SDK_PORT_3DS
++    NitroPort_SpeedHold(PORT_SPEED_HOLD_BATTLE_MENU | PORT_SPEED_HOLD_BATTLE_BAG | PORT_SPEED_HOLD_BATTLE_PARTY, 0);
++#endif
+     if (btlSubscreen->suppressActivationSfxPtr) {
+         *btlSubscreen->suppressActivationSfxPtr = btlSubscreen->suppressActivationSfx;
+     }
+@@ -1040,6 +1051,10 @@ void BattleSubscreen_SetupBackground(NARC *unused, NARC *spriteNarc, BattleSubsc
+     }
+ 
+     btlSubscreen->isPanelSliding = 0;
++#ifdef SDK_PORT_3DS
++    // (a menu at 1x, whatever SPEED says: index 0 is none)
++    NitroPort_SpeedHold(PORT_SPEED_HOLD_BATTLE_MENU, menuConfigIndex != 0);
++#endif
+ 
+     BgConfig *bgConfig = BattleSystem_GetBgConfig(btlSubscreen->battleSys);
+     SpriteSystem *spriteSys = BattleSystem_GetSpriteSystem(btlSubscreen->battleSys);
+@@ -2552,6 +2567,10 @@ static void BattleSubscreen_Cleanup(BattleSubscreen *btlSubscreen, BOOL freeSpri
+ 
+     if (resetBg == TRUE) {
+         SysTask_ExecuteAfterVBlank(SysTask_ResetSubscreenBg, btlSubscreen, 10);
++#ifdef SDK_PORT_3DS
++        // (a move or a target chosen: the menu goes, SPEED as it's set)
++        NitroPort_SpeedHold(PORT_SPEED_HOLD_BATTLE_MENU, 0);
++#endif
+     }
+ }
+ 
+diff --git a/src/battle/battle_system.c b/src/battle/battle_system.c
+index 808d7c0d..dce343f6 100644
+--- a/src/battle/battle_system.c
++++ b/src/battle/battle_system.c
+@@ -1662,6 +1662,20 @@ u8 BattleMessage_Print(BattleSystem *battleSys, MessageLoader *msgLoader, Battle
+     return Text_AddPrinterWithParams(textWindow, FONT_MESSAGE, battleSys->msgBuffer, 0, 0, renderDelay, BattleMessage_Callback);
+ }
+ 
++#ifdef SDK_PORT_3DS
++// (the 3DS remaster's own text, already made, in the main text window as
++// BattleMessage_Print: PARTY EXP SHARE's message)
++u8 BattleMessage_PrintString(BattleSystem *battleSys, const String *string, int renderDelay)
++{
++    Window *textWindow = BattleSystem_GetWindow(battleSys, 0);
++
++    String_Copy(battleSys->msgBuffer, string);
++    Window_FillTilemap(textWindow, 0xFF);
++
++    return Text_AddPrinterWithParams(textWindow, FONT_MESSAGE, battleSys->msgBuffer, 0, 0, renderDelay, BattleMessage_Callback);
++}
++
++#endif
+ u8 BattleMessage_PrintToWindow(BattleSystem *battleSys, Window *window, MessageLoader *msgLoader, BattleMessage *battleMsg, int xOffset, int yOffset, int flags, int alignWidth, int renderDelay)
+ {
+     int xAdjust;
+diff --git a/src/battle_sub_menus/battle_bag.c b/src/battle_sub_menus/battle_bag.c
+index cbfc3100..dbb1a694 100644
+--- a/src/battle_sub_menus/battle_bag.c
++++ b/src/battle_sub_menus/battle_bag.c
+@@ -41,6 +41,10 @@
+ #include "res/text/bank/battle_bag.h"
+ #include "res/text/bank/common_strings.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_options.h"
++#endif
++
+ #define TASK_STATE_INITIALIZE               0
+ #define TASK_STATE_MENU_SCREEN              1
+ #define TASK_STATE_POCKET_MENU_SCREEN       2
+@@ -133,6 +137,9 @@ void BattleBagTask_Start(BattleBagContext *context)
+     battleBagTask->background = BattleSystem_GetBgConfig(context->battleSys);
+     battleBagTask->palette = BattleSystem_GetPaletteData(context->battleSys);
+     battleBagTask->currentState = TASK_STATE_INITIALIZE;
++#ifdef SDK_PORT_3DS
++    NitroPort_SpeedHold(PORT_SPEED_HOLD_BATTLE_BAG, 1);
++#endif
+ 
+     BagCursor *cursor = BattleSystem_GetBagCursor(context->battleSys);
+ 
+@@ -570,6 +577,9 @@ static BOOL BattleBagTask_FinishTask(SysTask *task, BattleBag *battleBag)
+     }
+ 
+     battleBag->context->battleBagExited = TRUE;
++#ifdef SDK_PORT_3DS
++    NitroPort_SpeedHold(PORT_SPEED_HOLD_BATTLE_BAG, 0);
++#endif
+     SysTask_FinishAndFreeParam(task);
+ 
+     return TRUE;
+diff --git a/src/battle_sub_menus/battle_party.c b/src/battle_sub_menus/battle_party.c
+index 13d2b2e3..72dec343 100644
+--- a/src/battle_sub_menus/battle_party.c
++++ b/src/battle_sub_menus/battle_party.c
+@@ -44,6 +44,10 @@
+ 
+ #include "res/text/bank/battle_party.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_options.h"
++#endif
++
+ #define TASK_STATE_INITIALIZE                          0
+ #define TASK_STATE_PARTY_POKEMON_SCREEN                1
+ #define TASK_STATE_SELECT_POKEMON_SCREEN               2
+@@ -237,6 +241,9 @@ void BattlePartyTask_Start(BattlePartyContext *context)
+ 
+     battleParty = SysTask_GetParam(SysTask_StartAndAllocateParam(BattlePartyTask_Tick, sizeof(BattleParty), 0, context->heapID));
+     memset(battleParty, 0, sizeof(BattleParty));
++#ifdef SDK_PORT_3DS
++    NitroPort_SpeedHold(PORT_SPEED_HOLD_BATTLE_PARTY, 1);
++#endif
+ 
+     battleParty->context = context;
+     battleParty->background = BattleSystem_GetBgConfig(context->battleSys);
+@@ -1058,6 +1065,9 @@ static BOOL BattlePartyTask_FinishTask(SysTask *task, BattleParty *battleParty)
+     Font_Free(FONT_SUBSCREEN);
+ 
+     battleParty->context->battlePartyExited = TRUE;
++#ifdef SDK_PORT_3DS
++    NitroPort_SpeedHold(PORT_SPEED_HOLD_BATTLE_PARTY, 0);
++#endif
+     SysTask_FinishAndFreeParam(task);
+ 
+     return TRUE;
 diff --git a/src/meson.build b/src/meson.build
 index 4b0c04d0..7b865f0a 100644
 --- a/src/meson.build

@@ -200,3 +200,19 @@ int NitroPort_OptionsSave(void)
     NitroPort_Log("[options] saved to %s", sPath);
     return 1;
 }
+
+static unsigned sSpeedHolds;
+
+void NitroPort_SpeedHold(unsigned bit, int on)
+{
+    if (on) {
+        sSpeedHolds |= bit;
+    } else {
+        sSpeedHolds &= ~bit;
+    }
+}
+
+int NitroPort_SpeedHeld(void)
+{
+    return sSpeedHolds != 0;
+}

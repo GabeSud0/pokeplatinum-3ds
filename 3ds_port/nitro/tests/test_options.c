@@ -137,6 +137,18 @@ int main(void)
     NitroPort_OptionSet(NITRO_OPT_SPEED, 0);
     CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 0);
 
+    /* Held at 1x while anyone holds it, the setting itself left as it is. */
+    CHECK(!NitroPort_SpeedHeld());
+    NitroPort_SpeedHold(1, 1);
+    NitroPort_SpeedHold(4, 1);
+    CHECK(NitroPort_SpeedHeld());
+    NitroPort_SpeedHold(1, 0);
+    CHECK(NitroPort_SpeedHeld());
+    NitroPort_SpeedHold(4, 0);
+    NitroPort_SpeedHold(2, 0);
+    CHECK(!NitroPort_SpeedHeld());
+    CHECK(NitroPort_Option(NITRO_OPT_SPEED) == 0);
+
     remove(path);
     printf("options: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;

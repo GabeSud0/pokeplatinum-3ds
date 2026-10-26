@@ -550,7 +550,10 @@ stretched:
   the cry page's wave).
 - **The battle's health boxes** go to the screen's edges, the player's
   right and the opponent's left (`patches/pokeplatinum/0013`, by
-  `NitroPort_WideScreenExtra`).
+  `NitroPort_WideScreenExtra`). A level up's stats (a framed menu by the
+  DS's right edge) go to the screen's right edge, and since 2026-10-25 the
+  box above them with the Pokémon's icon, name and level with them
+  (`patches/pokeplatinum/0040`; it stayed where the DS has it).
 - **OBJs** (sprites) placed past the DS's edges show.
 - **The 3D** is drawn wide (the camera widened) only while it's on the
   upper screen; the intro's flyover is on the lower screen, at the DS's
@@ -860,7 +863,9 @@ screens) the lower screen is the DS's, filling the screen as before.
   does (BAG and POKéMON switch in the panel, POKéDEX and OPTIONS open
   straight from it, MAP, POKéTCH and SAVE back in the field). Without the
   menu, or opened another way, it's the DS's, across the wider upper
-  screen.
+  screen. Leaving the panel it sets the screens back as they were, as the
+  bag and the party do (the Pokédex, opened straight from it, doesn't set
+  them, and came up on the wrong screens: 2026-10-25).
 - **The panel's buttons** (`NitroPort_LowerMenuSetPanelButtons`): up to
   four rectangles on the canvas the port takes touches on itself, for a
   page with buttons below the DS's 192 rows (the game's touch stops at row
@@ -941,17 +946,30 @@ screens) the lower screen is the DS's, filling the screen as before.
     screen's drawer: they only run while the game waits) are done with
     the one before, and for the V-blank: without that, at 4x the lower
     screen stopped being drawn again and the screens stayed black after a
-    battle (2026-10-25). SPEED above 1x turns 60 FPS off (when it's on),
-    1x on again unless the player has set 60 FPS since
-    (`fps60_held` in `options.txt`). The PC runner isn't paced, so it
-    doesn't show.
+    battle (2026-10-25). And the game waits at the end of the frame after
+    a shown one till every drawer is done reading its display state, the
+    one on the game's core too (at 1x it reads while the game waits for
+    the V-blank; faster, it went on reading through the frames not shown,
+    their changes in its picture: a battle's lower screen garbled at 4x).
+    A battle holds it at 1x while it waits for the player
+    (`NitroPort_SpeedHold`): its menus on the lower screen (from when one
+    is drawn till a move or a target is chosen or the panel goes blank),
+    its bag and its party; the battle's animations and text go at the
+    speed set. SPEED above 1x turns 60 FPS off (when it's on), 1x on again
+    unless the player has set 60 FPS since (`fps60_held` in
+    `options.txt`). The PC runner isn't paced, so it doesn't show.
   - EXP ON CATCH: after "Gotcha!" the catch stops while the battle's
     script pays out experience for the caught Pokémon as for a defeated
     one (its messages, levels and moves, as after a battle), then goes on
     to the Pokédex and the nickname. Not in the catching tutorial, the Pal
     Park or a battle with no experience.
   - PARTY EXP SHARE: every Pokémon able to (not fainted, not an egg) gets
-    experience: those that battled their share, the others half.
+    experience. First those that battled, their share each, as without it
+    (each its own message, its gauge, its level up); then the rest of the
+    party as much as each of those got (before their own boosts: a Lucky
+    Egg, traded), under one message, "Your party gained ... Exp. Points!"
+    (the port's text: the game has none), with their levels up as usual (a
+    held Exp. Share adds nothing then).
   - TRADE EVO AT 40: a Pokémon that evolves by trade (with or without its
     item) evolves by level from 40 instead.
   - HMs WITHOUT MOVES: a field move whose HM is in the bag is the party's

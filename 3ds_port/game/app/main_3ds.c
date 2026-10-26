@@ -2090,6 +2090,10 @@ static int SpeedHalves(void)
     static const u8 halves[5] = { 2, 3, 4, 6, 8 };
     int speed = NitroPort_Option(NITRO_OPT_SPEED);
 
+    /* (1x where the game holds it there: the battle's menus) */
+    if (NitroPort_SpeedHeld()) {
+        return 2;
+    }
     return speed >= 0 && speed < 5 ? halves[speed] : 2;
 }
 
@@ -2548,10 +2552,19 @@ void NitroPort_OnFrame(void)
 
     /* The game changes the display as soon as this returns (its V-blank
      * work): a drawer still reading it would show some of that. Let it
-     * finish (usually it has). */
+     * finish (usually it has). Faster than 1x a drawer on core 0 as well:
+     * at 1x it reads while the game waits for the V-blank; faster, the
+     * game hardly waits, and it went on reading through the frames that
+     * aren't shown, their changes in it (a battle's lower screen garbled at
+     * 4x, 2026-10-25). Once a frame shown. */
     {
         u64 start = svcGetSystemTick();
 
+        if (SpeedHalves() > 2) {
+            while (DrawersStillReading() && svcGetSystemTick() - start < 2 * FRAME_TICKS) {
+                svcSleepThread(100000LL);
+            }
+        }
         WaitForReading(FRAME_TICKS);
         readWait = svcGetSystemTick() - start;
         sPerfReadWaitTicks += readWait;

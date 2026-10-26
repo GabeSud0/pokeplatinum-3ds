@@ -47,4 +47,10 @@ int NitroPort_OptionsLoad(const char *path);
  * their defaults. 1 if written or nothing to write. */
 int NitroPort_OptionsSave(void);
 
+/* SPEED kept at 1x for a while, whatever it's set to: the game's, where
+ * it waits for the player (the battle's menus). Each who holds it has a
+ * bit of its own; at 1x while any is held. */
+void NitroPort_SpeedHold(unsigned bit, int on);
+int NitroPort_SpeedHeld(void);
+
 #endif
