@@ -624,21 +624,25 @@ the launcher. The PC runner starts itself again with the same arguments
 
 ## A catch with the party full
 
-A Pokémon caught with six in the party goes to the PC, as on the DS. Back
-in the field, once the field's tasks are all over (a legendary's script
-has finished, its sprite gone: `field_task.c`, `patches/pokeplatinum/0042`,
-`encounter.c`), the game asks
-"Your party is full. Add X to your party?"; YES opens the party to pick
-the one that goes to the PC in its place (B: none, the caught one stays
-in the PC), then "X was added to the party and Y was sent to the PC." The
-caught one takes the picked one's place in the party, the picked one the
-caught one's place in the PC (healed, as the PC heals). One holding Mail
-or with a Ball Capsule stays (the PC takes neither: "Y is holding Mail. It
-can't be sent to the PC."). The battle notes where it put the caught one (box, place, its
-personality value) and the field checks it's still there. Not in the
-Safari Zone, Pal Park or the catching tutorial, nor with the Poké Radar's
-chain going (its grass would be lost with the map). The texts are English
-(the game has none of its own for it).
+A Pokémon caught with six in the party goes to the PC, as on the DS. In
+the battle, after the Pokédex's page and before the nickname
+(`patches/pokeplatinum/0042`, `battle_script.c`), the game asks "Your
+party is full. Add X to your party?"; YES opens the battle's party screen
+(its SHIFT reads SEND TO PC, and any of them can be picked: the one in
+battle, a fainted one, an egg) to pick the one that goes to the PC in its
+place, then "X was added to the party and Y was sent to the PC." and the
+nickname as ever; the box message is left out (and from the naming
+screen). NO, or the party screen left with its back button: the PC, as
+ever. One holding Mail or with a Ball Capsule can't be picked (the PC
+takes neither: "Y is holding Mail. It can't be sent to the PC.", and the
+party screen again). The caught one goes to the PC as ever and the
+battle notes where (box, place, its personality value); the two change
+places once the battle's party is back in the save (`encounter.c`,
+`UpdateFieldSystemFromDTO`): the battle's end writes its battlers back
+over their party slots, so not before. The caught one takes the picked
+one's slot, healed (as from the PC). Not in the Safari Zone, Pal Park or
+the catching tutorial. The texts are English (the game has none of its
+own for it).
 
 ## The lower screen as a menu
 

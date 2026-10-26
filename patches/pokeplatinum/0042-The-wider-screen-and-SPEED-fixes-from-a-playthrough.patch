@@ -1,4 +1,4 @@
-From 7bb873545f66fbb010e6e43218e568f3e8a8a990 Mon Sep 17 00:00:00 2001
+From 0021a097b42e889b0c7927c9db465ac6bec1c2ac Mon Sep 17 00:00:00 2001
 From: pokeplatinum-3ds <noreply@users.noreply.github.com>
 Date: Sun, 25 Oct 2026 08:00:00 -0700
 Subject: [PATCH] The wider screen and SPEED: fixes from a playthrough
@@ -11,15 +11,16 @@ SPEED is held at 1x while the start menu and what it opened are up
 (PORT_SPEED_HOLD_MENU), released when the player walks again: only the
 walking and the field go faster.
 
-A Pokémon caught with the party full, put in the PC, is offered for the
-party back in the field, once the field's tasks are all over (a
-legendary's script finished: field_task.c, Encounter_PortStartTakeCaught;
-encounter.c, FieldTask_PortTakeCaught; the battle notes its box, place
-and personality, Encounter_PortCaughtToPC):
-YES opens the party to pick the one that goes to the PC in its place,
-then "X was added to the party and Y was sent to the PC" (not one with
-Mail or a Ball Capsule, which the PC doesn't take). Not in the
-Safari Zone, Pal Park, the catching tutorial, or with a Poké Radar chain.
+A Pokémon caught with the party full may take a party member's place: in
+the battle, before the nickname, "Your party is full. Add X to your
+party?" (battle_script.c); YES opens the battle's party screen to pick
+the one that goes to the PC (any of them: battle_party.c; its SHIFT reads
+SEND TO PC, battle_party_text.c), then "X was added to the party and Y
+was sent to the PC." (not one with Mail or a Ball Capsule, which the PC
+doesn't take). The caught one goes to the PC as ever, the battle noting
+where; the two change places once the battle's party is back in the save
+(encounter.c, UpdateFieldSystemFromDTO). Not in the Safari Zone, Pal
+Park or the catching tutorial.
 
 Selling in a Poké Mart with the lower screen's menu keeps the store on
 the upper screen (shop_menu.c: its message layer cleared, then held).
@@ -61,17 +62,18 @@ On the remaster's wider upper screen:
   (map_header_data.c, sPortWideMoves): Rowan and Dawn walked through him.
 ---
  include/applications/pokedex/infomain.h  |   5 +
- include/encounter.h                      |   9 +
+ include/encounter.h                      |  14 +
  include/port_options.h                   |   3 +
  include/scrcmd.h                         |   5 +
  src/applications/pokedex/infomain.c      | 115 ++++
  src/applications/pokedex/ov21_021E8D48.c |  22 +-
  src/battle/battle_display.c              |  20 +-
- src/battle/battle_script.c               |  13 +
+ src/battle/battle_script.c               | 174 ++++++
+ src/battle_sub_menus/battle_party.c      |   9 +
+ src/battle_sub_menus/battle_party_text.c |  22 +
  src/bg_window.c                          |  25 +
- src/encounter.c                          | 319 +++++++++++
+ src/encounter.c                          | 105 ++++
  src/evolution.c                          |  18 +
- src/field_task.c                         |   9 +
  src/main_menu/main_menu.c                |   6 +
  src/map_header_data.c                    |  45 ++
  src/overlay006/hm_cut_in.c               |  34 +-
@@ -82,7 +84,7 @@ On the remaster's wider upper screen:
  src/script_manager.c                     |   9 +
  src/start_menu.c                         |   3 +
  src/text.c                               |   9 +
- 22 files changed, 1379 insertions(+), 14 deletions(-)
+ 23 files changed, 1353 insertions(+), 14 deletions(-)
 
 diff --git a/include/applications/pokedex/infomain.h b/include/applications/pokedex/infomain.h
 index d6dc2623..85596cf1 100644
@@ -101,20 +103,25 @@ index d6dc2623..85596cf1 100644
  Window *InfoMain_CreateCategoryWindow(PokedexTextManager *textMan, enum Species species, enum HeapID heapID);
  
 diff --git a/include/encounter.h b/include/encounter.h
-index e42c8f0d..7ff71159 100644
+index e42c8f0d..705af51c 100644
 --- a/include/encounter.h
 +++ b/include/encounter.h
-@@ -22,4 +22,13 @@ void Encounter_NewVsLinkWithRecording(FieldSystem *fieldSystem, const u8 *partyO
+@@ -22,4 +22,18 @@ void Encounter_NewVsLinkWithRecording(FieldSystem *fieldSystem, const u8 *partyO
  void Encounter_NewVsLinkWithRecordingAndParty(FieldSystem *fieldSystem, const Party *party, int battleType);
  void Encounter_NewVsGiratinaOrigin(FieldTask *task, u16 species, u8 level, int *resultMaskPtr, BOOL isLegendary);
  
 +#ifdef SDK_PORT_3DS
 +// A Pokémon caught with the party full, put in the PC at boxID / pos
-+// (boxID -1: none): offered for the party when the battle ends.
++// (boxID -1: none).
 +void Encounter_PortCaughtToPC(int boxID, int pos, u32 personality);
-+// The field's tasks all over: asks about that one, if there is one (TRUE: a
-+// task started for it).
-+BOOL Encounter_PortStartTakeCaught(FieldSystem *fieldSystem);
++// The party member picked to go to the PC in its place (-1: none): the two
++// change places once the battle is over.
++void Encounter_PortSetPartyPick(int slot);
++int Encounter_PortPartyPick(void);
++// While the battle's party screen picks that party member.
++void Encounter_PortSetPickingForPC(BOOL on);
++BOOL Encounter_PortPickingForPC(void);
++BOOL Encounter_PortCanGoToPC(Pokemon *mon);
 +#endif
 +
  #endif // POKEPLATINUM_ENCOUNTER_H
@@ -390,7 +397,7 @@ index d2528aee..02095d20 100644
              }
          }
 diff --git a/src/battle/battle_script.c b/src/battle/battle_script.c
-index 12f8dac3..f1ee03ec 100644
+index 12f8dac3..ae97c7d9 100644
 --- a/src/battle/battle_script.c
 +++ b/src/battle/battle_script.c
 @@ -53,6 +53,7 @@
@@ -401,7 +408,121 @@ index 12f8dac3..f1ee03ec 100644
  #include "port_wide_layout.h"
  #endif
  #include "pc_boxes.h"
-@@ -10938,6 +10939,18 @@ static void BattleScript_CatchMonTask(SysTask *task, void *inData)
+@@ -9795,6 +9796,10 @@ static void BattleScript_PortAppendLetters(String *string, const char *letters)
+             String_AppendChar(string, 0x1AE);
+         } else if (c == '!') {
+             String_AppendChar(string, 0x1AB);
++        } else if (c == '?') {
++            String_AppendChar(string, 0x1AC);
++        } else if (c == '\'') {
++            String_AppendChar(string, 0x1B3); // (’, as the game's English texts)
+         } else if (c == '\n') {
+             String_AppendChar(string, 0xE000);
+         }
+@@ -10523,8 +10528,63 @@ enum CatchMonTaskState {
+     SEQ_CATCH_MON_PRINT_POKEMON_BROKE_FREE,
+     SEQ_CATCH_MON_DONE_POKEMON_BROKE_FREE,
+     SEQ_CATCH_MON_DONE,
++#ifdef SDK_PORT_3DS
++    SEQ_CATCH_MON_PORT_ASK_TAKE,
++    SEQ_CATCH_MON_PORT_ASK_TAKE_YES_NO,
++    SEQ_CATCH_MON_PORT_ASK_TAKE_INPUT,
++    SEQ_CATCH_MON_PORT_PICK,
++    SEQ_CATCH_MON_PORT_PICK_INPUT,
++    SEQ_CATCH_MON_PORT_PICK_REFUSED,
++    SEQ_CATCH_MON_PORT_TOLD,
++#endif
+ };
+ 
++#ifdef SDK_PORT_3DS
++// A Pokémon caught with the party full: asked whether it joins the party
++// in a party member's place (the question once a catch: sPortAskedTake).
++static BOOL sPortAskedTake;
++
++static void BattleScript_PortAppendLetters(String *string, const char *letters);
++
++static u8 BattleScript_PortPrintTake(BattleSystem *battleSys, Pokemon *caught, Pokemon *picked, int what)
++{
++    String *string = String_Init(160, HEAP_ID_BATTLE);
++    String *name = String_Init(32, HEAP_ID_BATTLE);
++    u8 printerID;
++
++    switch (what) {
++    case 0: // the question
++        BattleScript_PortAppendLetters(string, "Your party is full.\nAdd ");
++        Pokemon_GetValue(caught, MON_DATA_NICKNAME_STRING, name);
++        String_Concat(string, name);
++        BattleScript_PortAppendLetters(string, " to your party?");
++        break;
++    case 1: // the one picked can't go to the PC
++        Pokemon_GetValue(picked, MON_DATA_NICKNAME_STRING, name);
++        String_Concat(string, name);
++        if (Item_IsMail(Pokemon_GetValue(picked, MON_DATA_HELD_ITEM, NULL))) {
++            BattleScript_PortAppendLetters(string, " is holding Mail.\nIt can't be sent to the PC.");
++        } else {
++            BattleScript_PortAppendLetters(string, " has a Ball Capsule.\nIt can't be sent to the PC.");
++        }
++        break;
++    default: // done
++        Pokemon_GetValue(caught, MON_DATA_NICKNAME_STRING, name);
++        String_Concat(string, name);
++        BattleScript_PortAppendLetters(string, " was added to the party\nand ");
++        Pokemon_GetValue(picked, MON_DATA_NICKNAME_STRING, name);
++        String_Concat(string, name);
++        BattleScript_PortAppendLetters(string, " was sent to the PC.");
++        break;
++    }
++
++    printerID = BattleMessage_PrintString(battleSys, string, BattleSystem_GetTextSpeed(battleSys));
++    String_Free(name);
++    String_Free(string);
++    return printerID;
++}
++#endif
++
+ enum CatchMonTaskDataIndex {
+     CATCH_MON_MSG_INDEX = 0,
+     CATCH_MON_DELAY,
+@@ -10552,6 +10612,11 @@ static void BattleScript_CatchMonTask(SysTask *task, void *inData)
+     case SEQ_CATCH_MON_START:
+         if (data->flag == 0) {
+             BallThrow ballThrow;
++#ifdef SDK_PORT_3DS
++            sPortAskedTake = FALSE;
++            Encounter_PortSetPartyPick(-1);
++            Encounter_PortSetPickingForPC(FALSE);
++#endif
+ 
+             ballThrow.mode = BALL_THROW_MODE_THROW;
+             ballThrow.heapID = HEAP_ID_BATTLE;
+@@ -10820,6 +10885,15 @@ static void BattleScript_CatchMonTask(SysTask *task, void *inData)
+         }
+         break;
+     case SEQ_CATCH_MON_PRINT_YES_NO_GIVE_NICKNAME:
++#ifdef SDK_PORT_3DS
++        if (!sPortAskedTake
++            && BattleSystem_GetPartyCount(data->battleSys, 0) >= MAX_PARTY_SIZE
++            && !(BattleSystem_GetBattleType(data->battleSys) & (BATTLE_TYPE_SAFARI | BATTLE_TYPE_PAL_PARK | BATTLE_TYPE_CATCH_TUTORIAL))) {
++            sPortAskedTake = TRUE;
++            data->seqNum = SEQ_CATCH_MON_PORT_ASK_TAKE;
++            break;
++        }
++#endif
+         int v15 = battler | (data->battleCtx->selectedPartySlot[battler]);
+         BattleController_EmitShowYesNoMenu(data->battleSys, data->battleCtx, 0, BattleStrings_Text_GiveANicknameToTheCaughtPokemonYesNo, 5, NULL, v15);
+         data->seqNum++;
+@@ -10854,6 +10928,10 @@ static void BattleScript_CatchMonTask(SysTask *task, void *inData)
+ 
+             if (BattleSystem_GetPartyCount(data->battleSys, 0) < MAX_PARTY_SIZE) {
+                 namingScreenArgs->battleMsgID = 0;
++#ifdef SDK_PORT_3DS
++            } else if (Encounter_PortPartyPick() >= 0) {
++                namingScreenArgs->battleMsgID = 0; // (it goes to the party: told already)
++#endif
+             } else {
+                 namingScreenArgs->battleMsgID = BattleStrings_Text_PokemonWasTransferredToBoxInSomeonesPC + BattleSystem_GetMetBebe(data->battleSys);
+             }
+@@ -10938,8 +11016,36 @@ static void BattleScript_CatchMonTask(SysTask *task, void *inData)
                      BattleSystem_DexFlagCaught(data->battleSys, battler);
                  }
  
@@ -419,7 +540,167 @@ index 12f8dac3..f1ee03ec 100644
 +#endif
                  PCBoxes_TryStoreBoxMonInBox(pcBoxes, firstEmptyBoxID, Pokemon_GetBoxPokemon(mon));
  
++#ifdef SDK_PORT_3DS
++                // (to the party once the battle is over, in the place of the
++                // one picked: told already)
++                if (Encounter_PortPartyPick() >= 0) {
++                    PCBoxes_SetCurrentBox(pcBoxes, currentBoxID);
++
++                    if (data->seqNum == SEQ_CATCH_MON_DIDNT_GIVE_NICKNAME) {
++                        sub_02015738(BattleSystem_GetPaletteAnimator(data->battleSys), 1);
++                        PaletteData_StartFade(paletteData, PLTTBUF_MAIN_BG_F | PLTTBUF_SUB_BG_F | PLTTBUF_MAIN_OBJ_F | PLTTBUF_SUB_OBJ_F, 0xFFFF, 1, 0, 16, 0);
++                        PokemonSpriteManager_StartFadeAll(monSpriteMan, 0, 16, 0, 0);
++                    }
++
++                    data->seqNum = SEQ_CATCH_MON_DONE;
++                    break;
++                }
++#endif
                  if (data->seqNum == SEQ_CATCH_MON_DIDNT_GIVE_NICKNAME) {
+                     if (currentBoxID == firstEmptyBoxID) {
+                         msg.id = BattleStrings_Text_PokemonWasTransferredToBoxInSomeonesPC + BattleSystem_GetMetBebe(data->battleSys);
+@@ -10963,6 +11069,74 @@ static void BattleScript_CatchMonTask(SysTask *task, void *inData)
+             }
+         }
+         break;
++#ifdef SDK_PORT_3DS
++    case SEQ_CATCH_MON_PORT_ASK_TAKE:
++        mon = BattleSystem_GetPartyPokemon(data->battleSys, battler, data->battleCtx->selectedPartySlot[battler]);
++        data->tmpData[CATCH_MON_MSG_INDEX] = BattleScript_PortPrintTake(data->battleSys, mon, NULL, 0);
++        data->seqNum = SEQ_CATCH_MON_PORT_ASK_TAKE_YES_NO;
++        break;
++    case SEQ_CATCH_MON_PORT_ASK_TAKE_YES_NO:
++        if (Text_IsPrinterActive(data->tmpData[CATCH_MON_MSG_INDEX]) == FALSE) {
++            BattleController_EmitShowYesNoMenu(data->battleSys, data->battleCtx, 0, 0, 5, 0, 0);
++            data->seqNum = SEQ_CATCH_MON_PORT_ASK_TAKE_INPUT;
++        }
++        break;
++    case SEQ_CATCH_MON_PORT_ASK_TAKE_INPUT:
++        if (BattleContext_IOBufferVal(data->battleCtx, 0)) {
++            if (BattleContext_IOBufferVal(data->battleCtx, 0) == PLAYER_INPUT_CANCEL) {
++                data->seqNum = SEQ_CATCH_MON_PRINT_YES_NO_GIVE_NICKNAME; // (to the PC, as ever)
++            } else {
++                data->seqNum = SEQ_CATCH_MON_PORT_PICK;
++            }
++        }
++        break;
++    case SEQ_CATCH_MON_PORT_PICK:
++        Encounter_PortSetPickingForPC(TRUE);
++        BattleController_EmitShowPartyMenu(data->battleSys, data->battleCtx, 0, 0, 0, 6);
++        data->seqNum = SEQ_CATCH_MON_PORT_PICK_INPUT;
++        break;
++    case SEQ_CATCH_MON_PORT_PICK_INPUT: {
++        u8 input = BattleContext_IOBufferVal(data->battleCtx, 0);
++        Pokemon *picked;
++
++        if (input == 0) {
++            break;
++        }
++
++        Encounter_PortSetPickingForPC(FALSE);
++
++        if (input == PLAYER_INPUT_CANCEL || input - 1 >= BattleSystem_GetPartyCount(data->battleSys, 0)) {
++            data->seqNum = SEQ_CATCH_MON_PRINT_YES_NO_GIVE_NICKNAME; // (to the PC, as ever)
++            break;
++        }
++
++        mon = BattleSystem_GetPartyPokemon(data->battleSys, battler, data->battleCtx->selectedPartySlot[battler]);
++        picked = BattleSystem_GetPartyPokemon(data->battleSys, 0, input - 1);
++
++        if (!Encounter_PortCanGoToPC(picked)) {
++            data->tmpData[CATCH_MON_MSG_INDEX] = BattleScript_PortPrintTake(data->battleSys, mon, picked, 1);
++            data->tmpData[CATCH_MON_DELAY] = 40;
++            data->seqNum = SEQ_CATCH_MON_PORT_PICK_REFUSED;
++            break;
++        }
++
++        Encounter_PortSetPartyPick(input - 1);
++        data->tmpData[CATCH_MON_MSG_INDEX] = BattleScript_PortPrintTake(data->battleSys, mon, picked, 2);
++        data->tmpData[CATCH_MON_DELAY] = 40;
++        data->seqNum = SEQ_CATCH_MON_PORT_TOLD;
++        break;
++    }
++    case SEQ_CATCH_MON_PORT_PICK_REFUSED:
++        if (Text_IsPrinterActive(data->tmpData[CATCH_MON_MSG_INDEX]) == FALSE && --data->tmpData[CATCH_MON_DELAY] == 0) {
++            data->seqNum = SEQ_CATCH_MON_PORT_PICK; // (another, or none)
++        }
++        break;
++    case SEQ_CATCH_MON_PORT_TOLD:
++        if (Text_IsPrinterActive(data->tmpData[CATCH_MON_MSG_INDEX]) == FALSE && --data->tmpData[CATCH_MON_DELAY] == 0) {
++            data->seqNum = SEQ_CATCH_MON_PRINT_YES_NO_GIVE_NICKNAME;
++        }
++        break;
++#endif
+     case SEQ_CATCH_MON_WAIT_PRINT_TRANSFERRED_TO_BOX:
+         if (Text_IsPrinterActive(data->tmpData[CATCH_MON_MSG_INDEX]) == FALSE) {
+             if (--data->tmpData[CATCH_MON_DELAY] == 0) {
+diff --git a/src/battle_sub_menus/battle_party.c b/src/battle_sub_menus/battle_party.c
+index 72dec343..1f837d4a 100644
+--- a/src/battle_sub_menus/battle_party.c
++++ b/src/battle_sub_menus/battle_party.c
+@@ -45,6 +45,7 @@
+ #include "res/text/bank/battle_party.h"
+ 
+ #ifdef SDK_PORT_3DS
++#include "encounter.h"
+ #include "port_options.h"
+ #endif
+ 
+@@ -1629,6 +1630,14 @@ static BOOL CheckCanSwitchPokemon(BattleParty *battleParty)
+ {
+     BattlePartyPokemon *pokemon = &battleParty->partyPokemon[battleParty->context->selectedPartyIndex];
+ 
++#ifdef SDK_PORT_3DS
++    // (picking the one that goes to the PC for a Pokémon just caught: any
++    // of them, battle_script.c)
++    if (Encounter_PortPickingForPC()) {
++        return TRUE;
++    }
++#endif
++
+     if (BattlePartyTask_CheckIfSwitchingWithPartnersPokemon(battleParty, battleParty->context->selectedPartyIndex) == TRUE) {
+         String *string = MessageLoader_GetNewString(battleParty->messageLoader, BattleParty_Text_CantSwitchWithPartnersPokemon);
+ 
+diff --git a/src/battle_sub_menus/battle_party_text.c b/src/battle_sub_menus/battle_party_text.c
+index 320859d1..f2b6e952 100644
+--- a/src/battle_sub_menus/battle_party_text.c
++++ b/src/battle_sub_menus/battle_party_text.c
+@@ -25,6 +25,10 @@
+ 
+ #include "res/text/bank/battle_party.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "encounter.h"
++#endif
++
+ #define BATTLE_POKEMON_PARTY_SCREEN_WINDOW_NUM                    6
+ #define BATTLE_SELECT_POKEMON_SCREEN_WINDOW_NUM                   4
+ #define BATTLE_POKEMON_SUMMARY_SCREEN_WINDOW_NUM                  35
+@@ -1926,6 +1930,24 @@ static void RenderSelectPokemonScreen(BattleParty *battleParty)
+ 
+     PrintSelectedPokemonName(battleParty, battleParty->context->selectedPartyIndex);
+ 
++#ifdef SDK_PORT_3DS
++    // (picking the one that goes to the PC for a Pokémon just caught)
++    if (Encounter_PortPickingForPC()) {
++        static const u16 sendToPC[] = { 0x13D, 0x12F, 0x138, 0x12E, 0x1DE, 0x13E, 0x139, 0x1DE, 0x13A, 0x12D };
++        Window *window = &battleParty->windows[BATTLE_SELECT_POKEMON_SCREEN_WINDOW_SHIFT];
++        String *string = String_Init(16, battleParty->context->heapID);
++        u32 i, stringWidth;
++
++        for (i = 0; i < NELEMS(sendToPC); i++) {
++            String_AppendChar(string, sendToPC[i]);
++        }
++
++        stringWidth = Font_CalcStringWidth(FONT_SUBSCREEN, string, 0);
++        Text_AddPrinterWithParamsAndColor(window, FONT_SUBSCREEN, string, (Window_GetWidth(window) * TILE_WIDTH_PIXELS - stringWidth) / 2, 6, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(7, 8, 9), NULL);
++        String_Free(string);
++        Window_ScheduleCopyToVRAM(window);
++    } else
++#endif
+     PrintButtonText(battleParty, BATTLE_SELECT_POKEMON_SCREEN_WINDOW_SHIFT, BattleParty_Text_ShiftButton);
+ 
+     if (battleParty->partyPokemon[battleParty->context->selectedPartyIndex].isEgg == FALSE) {
 diff --git a/src/bg_window.c b/src/bg_window.c
 index dc6e78d7..696255ee 100644
 --- a/src/bg_window.c
@@ -492,48 +773,65 @@ index dc6e78d7..696255ee 100644
          ScrollWindow4bpp(window, direction, distance, fillVal);
      } else {
 diff --git a/src/encounter.c b/src/encounter.c
-index 3379c2f4..8ce88e50 100644
+index 3379c2f4..d55ccf3b 100644
 --- a/src/encounter.c
 +++ b/src/encounter.c
-@@ -115,6 +115,9 @@ static BOOL FieldTask_RunBattle(FieldTask *task)
+@@ -69,6 +69,10 @@ typedef struct WildEncounter {
+ static Encounter *NewEncounter(FieldBattleDTO *dto, int introEffectID, int battleBGM, int *resultMaskPtr);
+ static WildEncounter *NewWildEncounter(FieldBattleDTO *dto, int introEffectID, int battleBGM, int *resultMaskPtr);
+ static void FreeEncounter(Encounter *encounter);
++#ifdef SDK_PORT_3DS
++static void Encounter_PortForget(void);
++static void Encounter_PortApplySwap(FieldSystem *fieldSystem);
++#endif
+ static void FreeWildEncounter(WildEncounter *encounter);
+ 
+ static void CallBattleTask(FieldTask *task, FieldBattleDTO *dto);
+@@ -115,6 +119,9 @@ static BOOL FieldTask_RunBattle(FieldTask *task)
  
  static void CallBattleTask(FieldTask *task, FieldBattleDTO *dto)
  {
 +#ifdef SDK_PORT_3DS
-+    Encounter_PortCaughtToPC(-1, 0, 0); // (one from a battle before, never taken)
++    Encounter_PortForget(); // (one from a battle before, never taken)
 +#endif
      FieldTask_InitCall(task, FieldTask_RunBattle, dto);
  }
  
-@@ -991,3 +994,319 @@ void Encounter_NewVsGiratinaOrigin(FieldTask *task, u16 species, u8 level, int *
+@@ -155,6 +162,9 @@ static void UpdateFieldSystemFromDTO(const FieldBattleDTO *dto, FieldSystem *fie
+     }
+ 
+     FieldBattleDTO_UpdateFieldSystem(dto, fieldSystem);
++#ifdef SDK_PORT_3DS
++    Encounter_PortApplySwap(fieldSystem);
++#endif
+ }
+ 
+ static BOOL FieldTask_Encounter(FieldTask *task)
+@@ -991,3 +1001,98 @@ void Encounter_NewVsGiratinaOrigin(FieldTask *task, u16 species, u8 level, int *
      GameRecords_IncrementRecordValue(SaveData_GetGameRecords(fieldSystem->saveData), RECORD_WILD_BATTLES_FOUGHT);
      StartEncounter(task, dto, EncEffects_CutInEffect(dto), EncEffects_BGM(dto), resultMaskPtr);
  }
 +
 +#ifdef SDK_PORT_3DS
-+#include "constants/field/window.h"
-+
-+#include "applications/party_menu/defs.h"
-+
-+#include "bg_window.h"
-+#include "field_message.h"
 +#include "item.h"
-+#include "menu.h"
-+#include "render_window.h"
-+#include "string_gf.h"
-+#include "system.h"
 +
 +/*
-+ * A Pokémon caught with the party full went to the PC; back on the
-+ * field, the player is asked whether to take it into the party, then
-+ * picks the party member that goes to the PC in its place (as the
-+ * battle's own text, the messages are English: the game has none).
++ * A Pokémon caught with the party full: in the battle, before it goes to
++ * the PC, the player may pick a party member to go to the PC in its place
++ * (battle_script.c asks, and the battle's party screen picks: its SHIFT
++ * reads SEND TO PC, Encounter_PortPickingForPC). The battle puts the
++ * caught one in the PC as ever and notes where, and which party member
++ * was picked; once the battle's party is back in the save
++ * (UpdateFieldSystemFromDTO) the two change places. Not in the middle of
++ * the battle: its end writes the battlers back over their party slots.
 + */
 +static struct {
 +    int boxID; // (-1: none)
 +    int pos;
 +    u32 personality;
-+} sPortCaught = { -1, 0, 0 };
++    int slot; // (the party member picked; -1: none)
++    BOOL picking;
++} sPortCaught = { -1, 0, 0, -1, FALSE };
 +
 +void Encounter_PortCaughtToPC(int boxID, int pos, u32 personality)
 +{
@@ -542,287 +840,70 @@ index 3379c2f4..8ce88e50 100644
 +    sPortCaught.personality = personality;
 +}
 +
-+static BoxPokemon *Encounter_PortCaughtBoxMon(FieldSystem *fieldSystem)
++void Encounter_PortSetPartyPick(int slot)
 +{
++    sPortCaught.slot = slot;
++}
++
++int Encounter_PortPartyPick(void)
++{
++    return sPortCaught.slot;
++}
++
++void Encounter_PortSetPickingForPC(BOOL on)
++{
++    sPortCaught.picking = on;
++}
++
++BOOL Encounter_PortPickingForPC(void)
++{
++    return sPortCaught.picking;
++}
++
++static void Encounter_PortForget(void)
++{
++    sPortCaught.boxID = -1;
++    sPortCaught.slot = -1;
++    sPortCaught.picking = FALSE;
++}
++
++// The PC takes no Pokémon holding Mail, nor one with a Ball Capsule.
++BOOL Encounter_PortCanGoToPC(Pokemon *mon)
++{
++    return !Item_IsMail(Pokemon_GetValue(mon, MON_DATA_HELD_ITEM, NULL))
++        && Pokemon_GetValue(mon, MON_DATA_BALL_CAPSULE_ID, NULL) == 0;
++}
++
++static void Encounter_PortApplySwap(FieldSystem *fieldSystem)
++{
++    Party *party = SaveData_GetParty(fieldSystem->saveData);
 +    PCBoxes *pcBoxes = SaveData_GetPCBoxes(fieldSystem->saveData);
-+    BoxPokemon *boxMon;
++    BoxPokemon *caught;
++    Pokemon *partyMon, *newMon;
 +
 +    if (sPortCaught.boxID < 0 || sPortCaught.boxID >= MAX_PC_BOXES
-+        || sPortCaught.pos < 0 || sPortCaught.pos >= MAX_MONS_PER_BOX) {
-+        return NULL;
++        || sPortCaught.pos < 0 || sPortCaught.pos >= MAX_MONS_PER_BOX
++        || sPortCaught.slot < 0 || sPortCaught.slot >= Party_GetCurrentCount(party)) {
++        Encounter_PortForget();
++        return;
 +    }
 +
-+    boxMon = PCBoxes_GetBoxMonAt(pcBoxes, sPortCaught.boxID, sPortCaught.pos);
++    caught = PCBoxes_GetBoxMonAt(pcBoxes, sPortCaught.boxID, sPortCaught.pos);
++    partyMon = Party_GetPokemonBySlotIndex(party, sPortCaught.slot);
 +
-+    if (BoxPokemon_GetValue(boxMon, MON_DATA_SPECIES, NULL) == SPECIES_NONE
-+        || BoxPokemon_GetValue(boxMon, MON_DATA_PERSONALITY, NULL) != sPortCaught.personality) {
-+        return NULL;
++    if (BoxPokemon_GetValue(caught, MON_DATA_SPECIES, NULL) != SPECIES_NONE
++        && BoxPokemon_GetValue(caught, MON_DATA_PERSONALITY, NULL) == sPortCaught.personality
++        && Encounter_PortCanGoToPC(partyMon)) {
++        newMon = Pokemon_New(HEAP_ID_FIELD2);
++        Pokemon_FromBoxPokemon(caught, newMon);
++        PCBoxes_InitBoxMonAt(pcBoxes, sPortCaught.boxID, sPortCaught.pos);
++        PCBoxes_TryStoreBoxMonAt(pcBoxes, sPortCaught.boxID, sPortCaught.pos, Pokemon_GetBoxPokemon(partyMon));
++        Party_AddPokemonBySlotIndex(party, sPortCaught.slot, newMon);
++        SaveData_SetFullSaveRequired();
++        Heap_Free(newMon);
 +    }
 +
-+    return boxMon;
-+}
-+
-+static BOOL Encounter_PortTakeCaughtPending(FieldSystem *fieldSystem)
-+{
-+    Party *party = SaveData_GetParty(fieldSystem->saveData);
-+
-+    if (Encounter_PortCaughtBoxMon(fieldSystem) == NULL
-+        || Party_GetCurrentCount(party) < MAX_PARTY_SIZE
-+        || GetRadarChainActive(fieldSystem->chain)) {
-+        Encounter_PortCaughtToPC(-1, 0, 0);
-+        return FALSE;
-+    }
-+
-+    return TRUE;
-+}
-+
-+static BOOL FieldTask_PortTakeCaught(FieldTask *task);
-+
-+// (field_task.c: the field's tasks all over) The question about one caught
-+// with the party full, once what the battle was part of is over (a script's
-+// legendary: the script has taken its sprite away and given its messages).
-+BOOL Encounter_PortStartTakeCaught(FieldSystem *fieldSystem)
-+{
-+    if (sPortCaught.boxID < 0 || fieldSystem->task != NULL
-+        || !FieldSystem_IsRunningFieldMap(fieldSystem)
-+        || !Encounter_PortTakeCaughtPending(fieldSystem)) {
-+        return FALSE;
-+    }
-+
-+    FieldSystem_CreateTask(fieldSystem, FieldTask_PortTakeCaught, NULL);
-+    return TRUE;
-+}
-+
-+static void Encounter_PortAppendLetters(String *string, const char *letters)
-+{
-+    for (; *letters; letters++) {
-+        int c = (unsigned char)*letters;
-+
-+        if (c >= 'A' && c <= 'Z') {
-+            String_AppendChar(string, 0x12B + (c - 'A'));
-+        } else if (c >= 'a' && c <= 'z') {
-+            String_AppendChar(string, 0x145 + (c - 'a'));
-+        } else if (c == ' ') {
-+            String_AppendChar(string, 0x1DE);
-+        } else if (c == '.') {
-+            String_AppendChar(string, 0x1AE);
-+        } else if (c == '!') {
-+            String_AppendChar(string, 0x1AB);
-+        } else if (c == '?') {
-+            String_AppendChar(string, 0x1AC);
-+        } else if (c == '\'') {
-+            String_AppendChar(string, 0x1B3); // (’, as the game's English texts)
-+        } else if (c == '\n') {
-+            String_AppendChar(string, 0xE000);
-+        }
-+    }
-+}
-+
-+enum {
-+    PORT_TAKE_ASK = 0,
-+    PORT_TAKE_ASK_WAIT,
-+    PORT_TAKE_YES_NO,
-+    PORT_TAKE_OPEN_PARTY,
-+    PORT_TAKE_PARTY_WAIT,
-+    PORT_TAKE_FIELD_BACK,
-+    PORT_TAKE_TELL,
-+    PORT_TAKE_TELL_WAIT,
-+    PORT_TAKE_DONE,
-+};
-+
-+typedef struct PortTakeCaught {
-+    Window window;
-+    Menu *menu;
-+    String *string;
-+    PartyMenu *partyMenu;
-+    u8 printerID;
-+    BOOL windowOpen;
-+} PortTakeCaught;
-+
-+static void PortTakeCaught_Print(FieldSystem *fieldSystem, PortTakeCaught *take)
-+{
-+    if (!take->windowOpen) {
-+        FieldMessage_AddWindow(fieldSystem->bgConfig, &take->window, BG_LAYER_MAIN_3);
-+        FieldMessage_DrawWindow(&take->window, SaveData_GetOptions(fieldSystem->saveData));
-+        take->windowOpen = TRUE;
-+    } else {
-+        Window_FillTilemap(&take->window, 15);
-+    }
-+
-+    take->printerID = FieldMessage_Print(&take->window, take->string, SaveData_GetOptions(fieldSystem->saveData), TRUE);
-+}
-+
-+static void PortTakeCaught_CloseWindow(PortTakeCaught *take)
-+{
-+    if (take->windowOpen) {
-+        Window_EraseMessageBox(&take->window, FALSE);
-+        Window_Remove(&take->window);
-+        take->windowOpen = FALSE;
-+    }
-+}
-+
-+// The caught one into the party slot picked, the one there to the
-+// caught one's place in the PC. FALSE (nothing changed) if that one holds
-+// Mail or has a Ball Capsule, which the PC doesn't take.
-+static BOOL PortTakeCaught_Swap(FieldSystem *fieldSystem, PortTakeCaught *take, int slot)
-+{
-+    Party *party = SaveData_GetParty(fieldSystem->saveData);
-+    PCBoxes *pcBoxes = SaveData_GetPCBoxes(fieldSystem->saveData);
-+    BoxPokemon *caught = Encounter_PortCaughtBoxMon(fieldSystem);
-+    Pokemon *partyMon = Party_GetPokemonBySlotIndex(party, slot);
-+    Pokemon *newMon;
-+    String *name;
-+
-+    String_Clear(take->string);
-+    name = String_Init(32, HEAP_ID_FIELD2);
-+
-+    if (Item_IsMail(Pokemon_GetValue(partyMon, MON_DATA_HELD_ITEM, NULL))) {
-+        Pokemon_GetValue(partyMon, MON_DATA_NICKNAME_STRING, name);
-+        String_Concat(take->string, name);
-+        Encounter_PortAppendLetters(take->string, " is holding Mail.\nIt can't be sent to the PC.");
-+        String_Free(name);
-+        return FALSE;
-+    }
-+
-+    // (nor one with a Ball Capsule: a party Pokémon's alone)
-+    if (Pokemon_GetValue(partyMon, MON_DATA_BALL_CAPSULE_ID, NULL) != 0) {
-+        Pokemon_GetValue(partyMon, MON_DATA_NICKNAME_STRING, name);
-+        String_Concat(take->string, name);
-+        Encounter_PortAppendLetters(take->string, " has a Ball Capsule.\nIt can't be sent to the PC.");
-+        String_Free(name);
-+        return FALSE;
-+    }
-+
-+    newMon = Pokemon_New(HEAP_ID_FIELD2);
-+    Pokemon_FromBoxPokemon(caught, newMon);
-+
-+    BoxPokemon_GetValue(caught, MON_DATA_NICKNAME_STRING, name);
-+    String_Concat(take->string, name);
-+    Encounter_PortAppendLetters(take->string, " was added to the party\nand ");
-+    Pokemon_GetValue(partyMon, MON_DATA_NICKNAME_STRING, name);
-+    String_Concat(take->string, name);
-+    Encounter_PortAppendLetters(take->string, " was sent to the PC.");
-+
-+    PCBoxes_InitBoxMonAt(pcBoxes, sPortCaught.boxID, sPortCaught.pos);
-+    PCBoxes_TryStoreBoxMonAt(pcBoxes, sPortCaught.boxID, sPortCaught.pos, Pokemon_GetBoxPokemon(partyMon));
-+    Party_AddPokemonBySlotIndex(party, slot, newMon);
-+    SaveData_SetFullSaveRequired();
-+
-+    Heap_Free(newMon);
-+    String_Free(name);
-+    return TRUE;
-+}
-+
-+static BOOL FieldTask_PortTakeCaught(FieldTask *task)
-+{
-+    static const WindowTemplate yesNoTemplate = {
-+        .bgLayer = BG_LAYER_MAIN_3,
-+        .tilemapLeft = 25,
-+        .tilemapTop = 13,
-+        .width = 6,
-+        .height = 4,
-+        .palette = FIELD_MESSAGE_PALETTE_INDEX,
-+        .baseTile = 0x21F,
-+    };
-+    FieldSystem *fieldSystem = FieldTask_GetFieldSystem(task);
-+    PortTakeCaught *take = FieldTask_GetEnv(task);
-+    int *state = FieldTask_GetState(task);
-+
-+    switch (*state) {
-+    case PORT_TAKE_ASK: {
-+        String *name = String_Init(32, HEAP_ID_FIELD2);
-+
-+        take = Heap_AllocAtEnd(HEAP_ID_FIELD2, sizeof(PortTakeCaught));
-+        MI_CpuClear8(take, sizeof(PortTakeCaught));
-+        task->env = take;
-+        take->string = String_Init(256, HEAP_ID_FIELD2);
-+
-+        MapObjectMan_PauseAllMovement(fieldSystem->mapObjMan);
-+        BoxPokemon_GetValue(Encounter_PortCaughtBoxMon(fieldSystem), MON_DATA_NICKNAME_STRING, name);
-+        Encounter_PortAppendLetters(take->string, "Your party is full.\nAdd ");
-+        String_Concat(take->string, name);
-+        Encounter_PortAppendLetters(take->string, " to your party?");
-+        String_Free(name);
-+
-+        PortTakeCaught_Print(fieldSystem, take);
-+        *state = PORT_TAKE_ASK_WAIT;
-+        break;
-+    }
-+    case PORT_TAKE_ASK_WAIT:
-+        if (FieldMessage_FinishedPrinting(take->printerID)) {
-+            LoadStandardWindowGraphics(fieldSystem->bgConfig, BG_LAYER_MAIN_3, 1024 - (18 + 12) - 9, 11, STANDARD_WINDOW_SYSTEM, HEAP_ID_FIELD1);
-+            take->menu = Menu_MakeYesNoChoice(fieldSystem->bgConfig, &yesNoTemplate, 1024 - (18 + 12) - 9, 11, HEAP_ID_FIELD1);
-+            *state = PORT_TAKE_YES_NO;
-+        }
-+        break;
-+    case PORT_TAKE_YES_NO: {
-+        u32 result = Menu_ProcessInputAndHandleExit(take->menu, HEAP_ID_FIELD1);
-+
-+        if (result == MENU_NOTHING_CHOSEN) {
-+            break;
-+        }
-+
-+        take->menu = NULL;
-+        PortTakeCaught_CloseWindow(take);
-+
-+        if (result == MENU_YES) {
-+            FieldTransition_FadeOutAndFinishMap(task);
-+            *state = PORT_TAKE_OPEN_PARTY;
-+        } else {
-+            *state = PORT_TAKE_DONE;
-+        }
-+        break;
-+    }
-+    case PORT_TAKE_OPEN_PARTY:
-+        take->partyMenu = FieldSystem_OpenPartyMenu_SelectPokemon(0, fieldSystem);
-+        *state = PORT_TAKE_PARTY_WAIT;
-+        break;
-+    case PORT_TAKE_PARTY_WAIT: {
-+        int slot;
-+
-+        if (FieldSystem_IsRunningApplication(fieldSystem)) {
-+            break;
-+        }
-+
-+        slot = PartyMenu_GetSelectedSlot(take->partyMenu);
-+        Heap_Free(take->partyMenu);
-+        take->partyMenu = NULL;
-+
-+        if (slot >= 0 && slot < MAX_PARTY_SIZE && Encounter_PortCaughtBoxMon(fieldSystem) != NULL) {
-+            PortTakeCaught_Swap(fieldSystem, take, slot);
-+        } else {
-+            String_Clear(take->string);
-+        }
-+
-+        FieldTransition_StartMapAndFadeIn(task);
-+        *state = PORT_TAKE_FIELD_BACK;
-+        break;
-+    }
-+    case PORT_TAKE_FIELD_BACK:
-+        MapObjectMan_PauseAllMovement(fieldSystem->mapObjMan);
-+        *state = String_Length(take->string) > 0 ? PORT_TAKE_TELL : PORT_TAKE_DONE;
-+        break;
-+    case PORT_TAKE_TELL:
-+        PortTakeCaught_Print(fieldSystem, take);
-+        *state = PORT_TAKE_TELL_WAIT;
-+        break;
-+    case PORT_TAKE_TELL_WAIT:
-+        if (FieldMessage_FinishedPrinting(take->printerID)
-+            && (gSystem.pressedKeys & (PAD_BUTTON_A | PAD_BUTTON_B))) {
-+            PortTakeCaught_CloseWindow(take);
-+            *state = PORT_TAKE_DONE;
-+        }
-+        break;
-+    case PORT_TAKE_DONE:
-+        Encounter_PortCaughtToPC(-1, 0, 0);
-+        MapObjectMan_UnpauseAllMovement(fieldSystem->mapObjMan);
-+        String_Free(take->string);
-+        Heap_Free(take);
-+        task->env = NULL;
-+        return TRUE;
-+    }
-+
-+    return FALSE;
++    Encounter_PortForget();
 +}
 +#endif
 diff --git a/src/evolution.c b/src/evolution.c
@@ -865,33 +946,6 @@ index 3f4fec91..bad3bb46 100644
      GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG0, 0);
      GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG1, 0);
      Bg_FreeTilemapBuffer(bgConfig, BG_LAYER_MAIN_1);
-diff --git a/src/field_task.c b/src/field_task.c
-index bf0cb8b2..4ff6a8a4 100644
---- a/src/field_task.c
-+++ b/src/field_task.c
-@@ -7,6 +7,9 @@
- 
- #include "field_system.h"
- #include "heap.h"
-+#ifdef SDK_PORT_3DS
-+#include "encounter.h"
-+#endif
- 
- typedef struct FieldTaskEnv {
-     int state;
-@@ -80,6 +83,12 @@ BOOL FieldTask_Run(FieldSystem *fieldSys)
- 
-         fieldSys->task = prev;
-         if (prev == NULL) {
-+#ifdef SDK_PORT_3DS
-+            // (a Pokémon caught with the party full: asked about now)
-+            if (Encounter_PortStartTakeCaught(fieldSys)) {
-+                continue;
-+            }
-+#endif
-             return TRUE;
-         }
-     }
 diff --git a/src/main_menu/main_menu.c b/src/main_menu/main_menu.c
 index 26af1583..104d0d98 100644
 --- a/src/main_menu/main_menu.c
