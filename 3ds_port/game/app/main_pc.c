@@ -68,6 +68,7 @@
 #include <nitro_port_gx3d_vertex.h>
 #include <nitro_port_gx3d_texture.h>
 #include <nitro_port_lowermenu.h>
+#include <nitro_port_options.h>
 #include <nitro_port_wide.h>
 #include <nitro_port_wideart.h>
 
@@ -1953,6 +1954,19 @@ int main(int argc, char **argv)
 
     Platinum_DefaultSettings(&settings);
     settings.savePath = savePath;
+    /* The options page's settings: options.txt beside the save. */
+    {
+        const char *slash = strrchr(savePath, '/');
+        size_t dir = slash != NULL ? (size_t)(slash - savePath + 1) : 0;
+        char *optionsPath = malloc(dir + sizeof("options.txt"));
+
+        if (optionsPath != NULL) {
+            memcpy(optionsPath, savePath, dir);
+            strcpy(optionsPath + dir, "options.txt");
+            NitroPort_OptionsLoad(optionsPath);
+            free(optionsPath);
+        }
+    }
     /* The lower screen as a menu in the field, as the 3DS's remaster has it
      * (mshot shows it, mtouch touches it). */
     NitroPort_LowerMenuSetAvailable(!classicMenu);

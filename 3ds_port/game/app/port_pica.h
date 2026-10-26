@@ -221,6 +221,7 @@ typedef struct ComposeConfig {
 
 int NitroPort_ComposeInit(const ComposeConfig *config);
 void NitroPort_ComposeExit(void);
+void NitroPort_ComposeSetSmooth3d(int smooth3d);
 
 /* The 2D layers of an engine's picture: the drawer's working buffers
  * (owned by the compositor; one set per engine), filled by the 2D renderer

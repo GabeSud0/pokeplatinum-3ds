@@ -289,7 +289,7 @@ void NitroPort_WideScreenParts(int engine, const short *rows, int count)
         const short *row = rows + i * 8;
         NitroWidePart *p = &got[n];
 
-        if (row[0] < NITRO_WIDE_MOVE || row[0] > NITRO_WIDE_CLEAR) {
+        if (row[0] < NITRO_WIDE_MOVE || row[0] > NITRO_WIDE_SHOW) {
             continue;
         }
         if (row[0] == NITRO_WIDE_CLEAR) {
@@ -303,7 +303,7 @@ void NitroPort_WideScreenParts(int engine, const short *rows, int count)
         } else if (row[0] != NITRO_WIDE_SHIFT3D && (row[3] <= row[2] || row[5] <= row[4])) {
             continue;   /* (no lines, or no columns) */
         }
-        if ((row[0] == NITRO_WIDE_MOVE || row[0] == NITRO_WIDE_FILL) && (row[1] & 0x0F) == 0) {
+        if ((row[0] == NITRO_WIDE_MOVE || row[0] == NITRO_WIDE_FILL || row[0] == NITRO_WIDE_SHOW) && (row[1] & 0x0F) == 0) {
             continue;   /* (no BGs) */
         }
         p->kind = (uint8_t)row[0];

@@ -447,13 +447,24 @@ stretched:
   list, the party's menus); one in the middle, or across the screen,
   stays. The sprites over a moved window go with it (the field menu's
   icons).
+- **The battle's text box** has its frame's edges clear and the ground
+  under it (patch 0040, 2026-10-25): the game fills a frame's clear pixels
+  with its colour 10 in battles (black in 19 of the 20 frames), and the
+  battle's background has nothing under the box (rows 20-23), so a black
+  box showed behind it, wider for the wider box. Now the clear pixels stay
+  clear and the background's last row of pictures (the ground, row 19) is
+  carried on down through rows 20-23.
 - **Text boxes span the screen.** A text box across the DS's screen has
   its frame's left part at the screen's left edge and its right part at
   the right edge, each line of the frame's inner columns drawn on between
   them; the text starts a pixel inside the frame's left part (2026-10-16,
   from a drawing of the PC's text box: the room the wider screen gives is
   used, the text at the left as on the DS). Its lines stay as the game
-  broke them.
+  broke them. What's drawn on right of the text is the window's own last
+  column (its top and bottom borders and the box's inside), whatever the
+  frame (2026-10-25): it was the frame's right part's first column, which
+  in many of the 20 frames is the frame's own drawing, a red or dark band
+  across the box (the battle's text box after the frame was changed).
 - **Screens redrawn for the wider screen.** For a screen with a reference
   drawn for the wider screen, the game lays the screen out in parts that
   move apart (`NitroPort_WideSplitScreen`): on given lines of given BGs,
@@ -502,6 +513,23 @@ stretched:
     box, the menus at the right edge;
   - the Pokédex's list: its label and picture left, its rows and scroll
     bar right, the counts apart.
+  - the Pokédex's page after a catch (patch 0040, 2026-10-25), in the
+    battle: its maps are 256 wide, so they came round beside the DS's
+    screen (the entry's picture frame and text box over again). Now as the
+    info page's picture has it: the banner on to the edges, the
+    background's pattern beside the DS's screen, the text box's ends at the
+    screen's edges and its middle drawn on between.
+  - the Pokédex's cry page (patch 0040, 2026-10-25): the wave from edge to
+    edge. The DS draws it a few columns a frame into a 256-wide map it
+    scrolls, the oldest columns coming round next to the newest at its
+    right (a glitch at the wave's end); here it's drawn into a 512-wide
+    window of its own, the newest columns at the wider screen's right edge,
+    the map shown on beside the DS's screen (SHOW parts, below); the rest
+    of that map is a clear tile. Its band's lower edge is 3 lines lower, at
+    the screen's bottom (the DS has 3 lines of the page's background under
+    it, which looked like a mistake there), drawn on the wave's layer (shown
+    beside the DS's screen and faded with the page), so the background
+    layer's hand-drawn picture still fits it.
   - the shop's list (patch 0026, 2026-10-17): its box 31 pixels wider
     to the right, the prices at its right edge, the cursor as wide as its
     row, the scroll arrows at its middle; the green panel below across the
@@ -516,10 +544,16 @@ stretched:
   once round as the boxes slide; the party's panel at the left edge, its
   Poké Ball turning a little as the cursor moves, its lights changing now
   and then. A layout sent again unchanged (an animation's still frames)
-  draws nothing again.
+  draws nothing again. A SHOW part (2026-10-25) shows a BG's lines across
+  the whole wider screen, its map going on beside the DS's screen as it
+  scrolls (a picture wider than the DS's screen in a map wider than it:
+  the cry page's wave).
 - **The battle's health boxes** go to the screen's edges, the player's
   right and the opponent's left (`patches/pokeplatinum/0013`, by
-  `NitroPort_WideScreenExtra`).
+  `NitroPort_WideScreenExtra`). A level up's stats (a framed menu by the
+  DS's right edge) go to the screen's right edge, and since 2026-10-25 the
+  box above them with the Pokémon's icon, name and level with them
+  (`patches/pokeplatinum/0040`; it stayed where the DS has it).
 - **OBJs** (sprites) placed past the DS's edges show.
 - **The 3D** is drawn wide (the camera widened) only while it's on the
   upper screen; the intro's flyover is on the lower screen, at the DS's
@@ -829,7 +863,9 @@ screens) the lower screen is the DS's, filling the screen as before.
   does (BAG and POKéMON switch in the panel, POKéDEX and OPTIONS open
   straight from it, MAP, POKéTCH and SAVE back in the field). Without the
   menu, or opened another way, it's the DS's, across the wider upper
-  screen.
+  screen. Leaving the panel it sets the screens back as they were, as the
+  bag and the party do (the Pokédex, opened straight from it, doesn't set
+  them, and came up on the wrong screens: 2026-10-25).
 - **The panel's buttons** (`NitroPort_LowerMenuSetPanelButtons`): up to
   four rectangles on the canvas the port takes touches on itself, for a
   page with buttons below the DS's 192 rows (the game's touch stops at row
@@ -868,7 +904,101 @@ screens) the lower screen is the DS's, filling the screen as before.
 - **The panel at the field's start** (`StartMenu_PortFieldStarts`, from the
   Pokétch's start): the tab chosen (the map once they have the Town Map)
   from the field's first frame, its name and description printed at once,
-  not the Pokétch till the player can first walk.
+  not the Pokétch till the player can first walk; the game's first field
+  on the tab the options' START WITH says (the map or the Pokétch).
+- **The options in the panel** (`patches/pokeplatinum/0040`,
+  `options_panel.c`): OPTIONS (tapped, A on it after X, or tapped in the
+  bag, the party or the trainer case, which go through the field behind the
+  panel's black as SAVE does) with the Pokétch up fades the panel to black,
+  ends the Pokétch and draws an options page on the DS's lower screen,
+  tall, OPTIONS lit (the approved mock-ups, the same pixels in the PC
+  runner but for the cards added since): tabs (SETTINGS, ENHANCEMENTS,
+  CHEATS), then cards in two columns, each its name and its value in red
+  between arrows, the cursor Platinum's options screen's red frame.
+  SETTINGS: the game's six (into its save, as its options screen sets
+  them; the sound and the buttons at once), 60 FPS, SMOOTH 3D and START
+  WITH; ENHANCEMENTS and CHEATS (below); CHEATS's GIVE ITEMS a page of
+  its own (a pocket, an item, how many; no key items). The FRAME card is
+  drawn as a message box in the frame chosen, a preview (the frame's
+  tiles stretched to the card, in the sub BG's palette 1: the frame's
+  colours and the few the card's text and cursor need). Closed and opened
+  again, the page comes back on the tab and the cards it was on (the start
+  menu keeps them). Drawn into a window off the screen as one picture (the cards,
+  the game's text on them, their edges and the cursor over it) and cut
+  into tiles, alike ones once (48 KB of the sub engine's VRAM, BG0 alone),
+  drawn whole again on any change. The D-pad only moves the cursor (Up /
+  Down in its column, round again; Left / Right to the other column's card
+  on the same row, its last if it's shorter: 2026-10-25, it used to change
+  values), A changes the card (or does it), L / R the tabs, B or X close
+  (B on GIVE ITEMS: back to CHEATS); taps: the tabs, a card's left half its left arrow and its
+  right half its right one (the port's panel buttons, now up to 32).
+  Another of the menu's buttons closes the page and is acted on (BAG,
+  POKéMON, TRAINER and SAVE straight on from the black panel; MAP,
+  POKéTCH, POKéDEX once it's faded in). Closed, the Pokétch comes back and
+  the port's settings are saved. Without the menu it's the DS's options
+  screen.
+- **The enhancements and cheats** (`port_options.h` in the
+  decompilation: the port's settings, read where the game decides):
+  - SPEED (1x, 1.5x, 2x, 3x, 4x; the 3DS): that many game frames to each
+    one shown, the others not drawn nor waited for (the music keeps its
+    own clock, the audio thread's). Each frame shown waits till the
+    threads below the game on its core (the display thread, the lower
+    screen's drawer: they only run while the game waits) are done with
+    the one before, and for the V-blank: without that, at 4x the lower
+    screen stopped being drawn again and the screens stayed black after a
+    battle (2026-10-25). And the game waits at the end of the frame after
+    a shown one till every drawer is done reading its display state, the
+    one on the game's core too (at 1x it reads while the game waits for
+    the V-blank; faster, it went on reading through the frames not shown,
+    their changes in its picture: a battle's lower screen garbled at 4x).
+    A battle holds it at 1x while it waits for the player
+    (`NitroPort_SpeedHold`): its menus on the lower screen (from when one
+    is drawn till a move or a target is chosen or the panel goes blank),
+    its bag and its party (not a battle video's STOP button: playback
+    doesn't wait for the player); the battle's animations and text go at
+    the speed set. SPEED above 1x turns 60 FPS off (when it's on), 1x on again
+    unless the player has set 60 FPS since (`fps60_held` in
+    `options.txt`). The PC runner isn't paced, so it doesn't show.
+  - EXP ON CATCH: after "Gotcha!" the catch stops while the battle's
+    script pays out experience for the caught Pokémon as for a defeated
+    one (its messages, levels and moves, as after a battle), then goes on
+    to the Pokédex and the nickname. Not in the catching tutorial, the Pal
+    Park or a battle with no experience.
+  - PARTY EXP SHARE: every Pokémon able to (not fainted, not an egg) gets
+    experience. First those that battled, their share each, as without it
+    (each its own message, its gauge, its level up); then the rest of the
+    party as much as each of those got (before their own boosts: a Lucky
+    Egg, traded), under one message, "Your party gained ... Exp. Points!"
+    (the port's text: the game has none), with their levels up as usual
+    and their effort values, as later games' Exp. Share (a held Exp. Share
+    adds nothing then). When none of those that battled is still up (an
+    Explosion, Destiny Bond...), the rest get the whole amount each.
+  - TRADE EVO AT 40: a Pokémon that evolves by trade (with or without its
+    item) evolves by level from 40 instead.
+  - HMs WITHOUT MOVES: a field move whose HM is in the bag is the party's
+    first Pokémon's (not an egg), whatever it knows (its badge still
+    needed): the scripts' checks (Cut, Surf, Strength, Rock Smash...) and
+    the party menu's Fly and Defog (Flash is a TM in Platinum).
+  - AUTO-RUN: running unless B is held (once the player has the running
+    shoes).
+  - ALWAYS CATCH (every ball catches), INSTANT VICTORY (the player's
+    attacks knock the opponent out, Endure and a Focus Band or Sash no
+    help; a Substitute still takes the hit), FAST EGGS (the day care's chance at
+    an egg every step rather than every 256; an egg in the party hatches
+    in a couple of steps), INFINITE MONEY (as much as can be had,
+    whatever's spent; the save's own amount stays), WILD ENCOUNTERS
+    (normal, off, 1/4, 1/2, 2x; where there are none, none), SHINY ODDS (1/8192 as the game has it,
+    1/4096, 1/1024, 1/256, 1/64, always).
+- **The port's own settings** (`port_options.c`,
+  `nitro_port_options.h`): 60 FPS, smooth 3D, the start tab, the
+  enhancements and the cheats, a whole number each, kept in `options.txt`
+  beside the save (`name value` a line, only those chosen on the page:
+  the others follow their defaults; written to a new file put in the old
+  one's place, the new one read if the power went off between). The 3DS takes `remaster.txt`'s `fps60` and `smooth3d`
+  as their defaults, the file's over them, and applies a change at once:
+  60 FPS from the next frame, smooth 3D from the compositor's next (its
+  buffers now made whatever the setting, so it can be turned on). The PC
+  runner keeps the file beside its save.
 - **The apps' hand-over:** the start menu opens the panel's apps
   (`StartMenu_PortAppIsMenus`: the field's own app, the start menu's task
   the field's; not a script's, a registered item's, or an app's own like

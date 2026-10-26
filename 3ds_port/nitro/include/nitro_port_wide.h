@@ -121,7 +121,11 @@ int NitroPort_WideSplits(int engine, NitroWideSplit *out);
  *     panel's background drawn into its edges on the DS (the stripes behind
  *     the boxes' panel, in front of what's beside it now: 2026-10-16), so
  *     what's behind the BG shows there as it did on the DS (top, bottom,
- *     x0, x1: not used).
+ *     x0, x1: not used);
+ *   SHOW: on lines top..bottom-1 of the BGs in bgs, the BG's map going on
+ *     beside the DS's screen as it scrolls, across the whole canvas (a
+ *     picture wider than the DS's screen in a map wider than it: the
+ *     Pokédex's cry wave, 2026-10-25; x0, x1, dx, col: not used).
  * Lines and columns of the BG's own picture, as with splits (a text BG's
  * map, an affine BG's picture before its matrix); only the DS's 256
  * columns move. On a line of a BG with parts, the DS's picture shows where
@@ -140,6 +144,7 @@ enum {
     NITRO_WIDE_SHIFT3D = 4,
     NITRO_WIDE_PICTURE = 5,
     NITRO_WIDE_CLEAR = 6,
+    NITRO_WIDE_SHOW = 7,
 };
 /* The pictures a screen's layout can draw (NITRO_WIDE_PICTURE's col): each
  * a file <name>.png in the wide art folder (NitroPort_WidePictureName). */

@@ -57,6 +57,7 @@
 #include "port_pica.h"
 #include <nitro_port_gx3d.h>
 #include <nitro_port_lowermenu.h>
+#include <nitro_port_options.h>
 #include <nitro_port_render2d.h>
 #include <nitro_port_wide.h>
 #include <nitro_port_wideart.h>
@@ -317,7 +318,7 @@ static ComposeConfig sCompose;
 /* 60 frames a second in the field (remaster.txt fps60, on by default): an
  * in-between scene shown before each scene (port_gx3d.c's
  * NitroPort_Gx3dMidOf; GpuComposeLoop). */
-static bool sFps60 = true;
+static volatile bool sFps60 = true;
 static volatile bool sComposing;      /* the display thread is inside a frame */
 static u32 sComposeAttempt;           /* changes on every entry, for the watchdog */
 static volatile bool sComposeForce;   /* draw everything again (back from the log) */
@@ -739,6 +740,32 @@ static void StopGpu(void)
 #define MANIFEST_PATH DATA_DIR "/manifest.json"
 #define LOG_PATH      DATA_DIR "/log.txt"
 #define SAVE_PATH     DATA_DIR "/platinum.sav"
+/* The options page's settings (nitro_port_options.h). */
+#define OPTIONS_PATH  DATA_DIR "/options.txt"
+/* A setting changed on the options page (the game's thread): the ones
+ * applied while the game runs. (60 FPS: from the next frame, StepFrame's
+ * NitroPort_Gx3dSetInterpolation; smooth 3D: the compositor's next.) */
+static void OnOptionChanged(int id, int value)
+{
+    if (id == NITRO_OPT_FPS60) {
+        sFps60 = value != 0;
+    } else if (id == NITRO_OPT_SMOOTH3D && sRemaster) {
+        NitroPort_ComposeSetSmooth3d(value);
+    }
+}
+
+/* The options page's settings: remaster.txt's 60 FPS and smooth 3D their
+ * defaults, the file's (written by the page) over them. */
+static void ReadOptions(void)
+{
+    NitroPort_OptionSetDefault(NITRO_OPT_FPS60, sFps60);
+    NitroPort_OptionSetDefault(NITRO_OPT_SMOOTH3D, sCompose.smooth3d);
+    NitroPort_OptionsLoad(OPTIONS_PATH);
+    sFps60 = NitroPort_Option(NITRO_OPT_FPS60) != 0;
+    sCompose.smooth3d = NitroPort_Option(NITRO_OPT_SMOOTH3D);
+    NitroPort_OptionsSetListener(OnOptionChanged);
+}
+
 /* Hand-drawn pictures for the wide upper screen, and captures for drawing
  * them (docs/WIDE_ART.md). */
 #define WIDE_ART_DIR  DATA_DIR "/wide"
@@ -2050,10 +2077,46 @@ static unsigned sHaltsSinceVBlankWork = 2;
 /* The game is done with what it changes after V-blank (patches/
  * pokeplatinum/0011): the display is as the DS shows it this frame, and
  * the game won't change much of it until the next V-blank. Draw it. */
+/* The options page's SPEED (nitro_port_options.h): game frames for each
+ * one shown, in halves (2: 1x, 3: 1.5x, 4: 2x, 6: 3x, 8: 4x). The frames
+ * between aren't drawn or waited for; the music keeps its own clock (the
+ * sound is mixed by the audio thread, port_snd.c). sFrameShown: this
+ * frame's (NitroPort_OnFrame decides, its V-blank work follows). */
+static int sSpeedCredit;
+static bool sFrameShown = true;
+
+static int SpeedHalves(void)
+{
+    static const u8 halves[5] = { 2, 3, 4, 6, 8 };
+    int speed = NitroPort_Option(NITRO_OPT_SPEED);
+
+    /* (1x where the game holds it there: the battle's menus) */
+    if (NitroPort_SpeedHeld()) {
+        return 2;
+    }
+    return speed >= 0 && speed < 5 ? halves[speed] : 2;
+}
+
+static bool SpeedFrameShown(void)
+{
+    int halves = SpeedHalves();
+
+    if (halves <= 2) {
+        sSpeedCredit = 0;
+        return true;
+    }
+    sSpeedCredit += 2;
+    if (sSpeedCredit >= halves) {
+        sSpeedCredit -= halves;
+        return true;
+    }
+    return false;
+}
+
 void NitroPort_VBlankWorkDone(void)
 {
     sHaltsSinceVBlankWork = 0;
-    if (!sShowLog && !sScreensDirty) {
+    if (!sShowLog && !sScreensDirty && sFrameShown) {
         DrawFrame(false);
     }
 }
@@ -2348,8 +2411,10 @@ void NitroPort_OnFrame(void)
      * those stay at the game's 30, as made (their 2D animations flickered
      * black and jittered between the in-between frames, 2026-10-21). From
      * the next scene on. */
+    /* (and not above 1x SPEED: the game makes more scenes itself then, the
+     * in-between ones would only add work) */
     if (sRemaster) {
-        NitroPort_Gx3dSetInterpolation(sFps60 && !NitroPort_WidePictures());
+        NitroPort_Gx3dSetInterpolation(sFps60 && !NitroPort_WidePictures() && SpeedHalves() <= 2);
     }
     NitroPort_Gx3dFlush();        /* the geometry thread has the frame's commands */
     sFrame++;
@@ -2426,9 +2491,25 @@ void NitroPort_OnFrame(void)
         }
     }
 
-    {
+    sFrameShown = SpeedFrameShown();
+    if (sFrameShown && SpeedHalves() > 2) {
+        /* Faster than 1x the game hardly waits, and the threads below it
+         * on its core (the display thread, a New 3DS's lower screen's
+         * drawer, an Old 3DS's drawers) only run while it does: they were
+         * left with the last frame half done (the lower screen not drawn
+         * again, the screens black after a battle). Each frame shown waits
+         * till they're done with the one before (two frames at most), and
+         * for the V-blank below. */
+        u64 start = svcGetSystemTick();
+
+        while ((DrawersBusy() || __atomic_load_n(&sComposing, __ATOMIC_ACQUIRE)) &&
+               svcGetSystemTick() - start < 2 * FRAME_TICKS) {
+            svcSleepThread(500000LL);
+        }
+    }
+    if (sFrameShown) {
         u64 now = svcGetSystemTick();
-        bool ahead = sDeadline == 0 || now < sDeadline;
+        bool ahead = sDeadline == 0 || now < sDeadline || SpeedHalves() > 2;
         /* Half a frame or more to go until the V-blank. */
         bool early = sDeadline == 0 || (ahead && sDeadline - now >= FRAME_TICKS / 2);
 
@@ -2471,11 +2552,21 @@ void NitroPort_OnFrame(void)
 
     /* The game changes the display as soon as this returns (its V-blank
      * work): a drawer still reading it would show some of that. Let it
-     * finish (usually it has). */
+     * finish (usually it has). Faster than 1x a drawer on core 0 as well:
+     * at 1x it reads while the game waits for the V-blank; faster, the
+     * game hardly waits, and it went on reading through the frames that
+     * aren't shown, their changes in it (a battle's lower screen garbled at
+     * 4x, 2026-10-25). (Only after a frame shown is there one reading.) */
     {
         u64 start = svcGetSystemTick();
 
-        WaitForReading(FRAME_TICKS);
+        if (SpeedHalves() > 2) {
+            while (DrawersStillReading() && svcGetSystemTick() - start < 2 * FRAME_TICKS) {
+                svcSleepThread(100000LL);
+            }
+        } else {
+            WaitForReading(FRAME_TICKS);
+        }
         readWait = svcGetSystemTick() - start;
         sPerfReadWaitTicks += readWait;
     }
@@ -2636,6 +2727,7 @@ int main(int argc, char **argv)
 
             APT_CheckNew3DS(&isNew3ds);
             ReadRemasterConfig(isNew3ds);
+            ReadOptions();
             StartGpu(priority, isNew3ds);
             NitroPort_Gx3dSetWideView(sRemaster && sCompose.wide ? 320 : 256);
             NitroPort_SetWideScreen(sRemaster && sCompose.wide ? 32 : 0);

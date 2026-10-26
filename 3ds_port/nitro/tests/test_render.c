@@ -2555,6 +2555,17 @@ static void test_wide_framed_windows(void)
     CHECK(wide[y * 320 + 310] == BLUE);
     CHECK(wide[y * 320 + 319] == BLUE);
     CHECK(wide[140 * 320 + 3] == GREY);           /* above the box: nothing */
+    /* A frame whose right part starts with its own drawing (red, as the
+     * frames with a coloured right end have it): between, the inside's
+     * last column drawn on, white, not the red. */
+    for (y = 18; y <= 23; y++) {
+        map[y * 32 + 29] = 1;
+    }
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[164 * 320 + 280] == WHITE);        /* drawn on: the inside's */
+    CHECK(wide[164 * 320 + 295] == WHITE);
+    CHECK(wide[164 * 320 + 299] == RED);          /* the right part's first tile: DS 232-239 at 296-303 */
     NitroPort_WindowRemoved(&box);
 
     /* The UI's band beside a panel: a background of stripes (lines red,
@@ -2959,6 +2970,27 @@ static void test_wide_parts(void)
     CHECK(wide[y * 320 + 168] == GREY);   /* x 136-143: moved */
     CHECK(wide[y * 320 + 176] == WHITE);  /* x 144: where it is */
     CHECK(wide[y * 320 + 268] == RED && wide[y * 320 + 275] == RED);
+    /* the map going on beside the DS's screen on lines 0-95 (SHOW), as it's
+     * scrolled (8: the canvas's x 0 is the map's -24, round to 232): blue,
+     * then the red of its start; on the right its x 264 on, round to 8: the
+     * empty column, then red. Its other lines: nothing beside. */
+    {
+        static const short show[][8] = {
+            { NITRO_WIDE_SHOW, 2, 0, 96, 0, 1, 0, 0 },
+        };
+
+        NitroPort_WideScreenParts(0, &show[0][0], 1);
+        CHECK(NitroPort_WideParts(0, got) == 1 && got[0].kind == NITRO_WIDE_SHOW);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[y * 320 + 0] == BLUE && wide[y * 320 + 23] == BLUE);
+        CHECK(wide[y * 320 + 24] == RED && wide[y * 320 + 31] == RED);
+        CHECK(wide[y * 320 + 32] == GREY);    /* the DS's x 0: the map's 8, the empty column */
+        CHECK(wide[y * 320 + 40] == RED);
+        CHECK(wide[y * 320 + 176] == WHITE);  /* the DS's x 144: the map's 152, white */
+        CHECK(wide[y * 320 + 288] == GREY && wide[y * 320 + 295] == GREY);
+        CHECK(wide[y * 320 + 296] == RED && wide[y * 320 + 319] == RED);
+        CHECK(wide[120 * 320 + 0] == GREY && wide[120 * 320 + 319] == GREY);
+    }
     G2_SetBG1Offset(0, 0);
 
     /* a moved BG shows its own pixels, not a hand-drawn picture of it made

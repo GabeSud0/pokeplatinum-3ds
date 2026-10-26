@@ -344,6 +344,12 @@ $(LOWERMENU_TEST_BIN): tests/test_lowermenu.c $(LIB)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
 
+# The port's own settings (port_options.c): plain C, no SDK.
+OPTIONS_TEST_BIN := $(OUT)/test_options
+$(OPTIONS_TEST_BIN): tests/test_options.c src/port_options.c include/nitro_port_options.h
+	@mkdir -p $(dir $@)
+	$(CC) $(PORT_CFLAGS) $(LDFLAGS) -Iinclude tests/test_options.c src/port_options.c -o $@
+
 # The pixel-art upscaler and texture tiler: plain C, no SDK.
 UPSCALE_TEST_BIN := $(OUT)/test_upscale
 $(UPSCALE_TEST_BIN): tests/test_upscale.c src/port_upscale.c include/nitro_port_upscale.h
@@ -373,7 +379,7 @@ $(GX3D_REPLAY_BIN): tests/gx3d_replay.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -pthread -o $@
 replay: $(GX3D_REPLAY_BIN)
 
-test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN) $(GX3D_TEST_BIN) $(GX3D_PLUMBING_TEST_BIN) $(VRAM_TRANSFER_TEST_BIN) $(UPSCALE_TEST_BIN) $(XBRZ_TEST_BIN) $(SHADOW_TEST_BIN) $(LOWERMENU_TEST_BIN)
+test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_TEST_BIN) $(SOUND_CHIP_TEST_BIN) $(SOUND_SEQ_TEST_BIN) $(RENDER_TEST_BIN) $(GX3D_TEST_BIN) $(GX3D_PLUMBING_TEST_BIN) $(VRAM_TRANSFER_TEST_BIN) $(UPSCALE_TEST_BIN) $(XBRZ_TEST_BIN) $(SHADOW_TEST_BIN) $(LOWERMENU_TEST_BIN) $(OPTIONS_TEST_BIN)
 	./$(TEST_BIN)
 	./$(FS_TEST_BIN) $(FS_FIXTURE_DIR)
 	./$(THREAD_TEST_BIN)
@@ -386,6 +392,7 @@ test: $(TEST_BIN) $(FS_TEST_BIN) $(FS_FIXTURE_STAMP) $(THREAD_TEST_BIN) $(ARM7_T
 	./$(VRAM_TRANSFER_TEST_BIN)
 	./$(UPSCALE_TEST_BIN)
 	./$(LOWERMENU_TEST_BIN)
+	cd $(OUT) && ./test_options
 	./$(XBRZ_TEST_BIN)
 	./$(SHADOW_TEST_BIN)
 
