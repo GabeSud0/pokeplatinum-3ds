@@ -1194,7 +1194,7 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
              * bottom borders and the inside, whatever the frame: not the
              * right part's first column, which is the frame's own drawing
              * in many of the 20 frames, a red or a dark band drawn on). */
-            int fl = wins[i].frameLeft * 8, fr = wins[i].frameRight * 8;
+            int fl = wins[i].frameLeft * 8, fr = wins[i].frameRight * 8, ind = 0;
             int m0 = wins[i].left * 8, m1 = (wins[i].left + wins[i].width) * 8;
             int in0 = origin + m0 - hofs + fl, in1 = origin + m1 - hofs - fr, move;
 
@@ -1207,6 +1207,12 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
             }
             in0 += move;
             in1 += move;
+            /* (the game's screen indicator in the window's last 3 tiles,
+             * its first 32 lines: with the frame's right part, the plain
+             * inside drawn on from the column before it) */
+            if (wins[i].indicator && ty >= top + 8 && ty < top + 8 + 32 && in1 - 24 >= in0) {
+                ind = 24;
+            }
             n = 0;
             segs[n].x0 = 0;
             segs[n].x1 = (short)fl;
@@ -1221,18 +1227,18 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
                 n++;
             }
             segs[n].x0 = (short)in0;
-            segs[n].x1 = (short)in1;
+            segs[n].x1 = (short)(in1 - ind);
             segs[n].off = (short)(hofs - origin - move);
             segs[n].fixed = -1;
             n++;
             if (in1 < width - fr) {
-                segs[n].x0 = (short)in1;
-                segs[n].x1 = (short)(width - fr);
+                segs[n].x0 = (short)(in1 - ind);
+                segs[n].x1 = (short)(width - fr - ind);
                 segs[n].off = 0;
-                segs[n].fixed = (short)((m1 - fr - 1) & (mapW - 1));
+                segs[n].fixed = (short)((m1 - fr - ind - 1) & (mapW - 1));
                 n++;
             }
-            segs[n].x0 = (short)(width - fr);
+            segs[n].x0 = (short)(width - fr - ind);
             segs[n].x1 = (short)width;
             segs[n].off = (short)(m1 - width);
             segs[n].fixed = -1;

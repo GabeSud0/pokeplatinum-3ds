@@ -554,6 +554,41 @@ stretched:
   DS's right edge) go to the screen's right edge, and since 2026-10-25 the
   box above them with the Pokémon's icon, name and level with them
   (`patches/pokeplatinum/0040`; it stayed where the DS has it).
+- **Fixes from a playthrough** (patch 0042, 2026-10-26):
+  - a text box taken off and put back between messages (Professor
+    Rowan's opening speech) keeps its widened frame while it's away
+    (`port_wide.c`: the box is remembered till another window is put over
+    it, its BG is set up anew or freed, or the screen changes), so it
+    doesn't narrow and widen with every
+    message; the icon at its top right that says which screen to look at
+    (`Text_RenderScreenIndicator`, `NitroPort_WindowIndicator`) goes to the
+    widened box's right edge, where the DS has it in its box;
+  - the Pokédex's registration page: the Pokémon's box (and the 3D
+    Pokémon in it) 24 pixels to the left, the title 24 to the right;
+  - the evolution's background: a 512-wide map whose right half came
+    round beside the DS's screen; its edge columns carried on instead;
+  - the battle's trainers slide off (the player after throwing the ball,
+    the opponent) till they're past the wider screen's edges, not the
+    DS's (they vanished in the sides);
+  - the HM cut-in: its band of Poké Balls (BG3, a 256-pixel map) repeats
+    to the screen's edges (a SHOW part) instead of a stripe of its plain
+    lines; the Pokémon waits beyond the wider screen's right edge and
+    slides off past its left one (it sat still in the right side);
+  - the people the scripts bring on and send off (`scrcmd.c`): the
+    scripts put them just past the DS's edge, where they popped up,
+    vanished or walked through things in the wider screen's sides. One
+    added beside the DS's picture but not beyond the wider one's is put
+    beyond it, 12 tiles from the middle (the 2 tiles more each side, the
+    sprite's width, the perspective), and its first steps in take it the
+    extra tiles; one whose walk out ends off the DS's picture (9 tiles or
+    more from the middle) walks the extra tiles out before the script
+    takes it away; one walking straight out through something the DS's
+    picture didn't show (the ground's collisions, ledges, cliffs; not the
+    other people, who walk out together) goes round it (outwards first,
+    else up, else down: Roark leaving the mine after the boulder). When
+    the script ends (or the next starts), the ones it didn't take away go
+    back where it put them. Only walks east and west change (the screen
+    isn't taller).
 - **OBJs** (sprites) placed past the DS's edges show.
 - **The 3D** is drawn wide (the camera widened) only while it's on the
   upper screen; the intro's flyover is on the lower screen, at the DS's
@@ -911,7 +946,13 @@ screens) the lower screen is the DS's, filling the screen as before.
   comes back behind the panel's black and the page comes straight in it
   (no map in between). Taps made before a question are not its answer, and
   menu buttons tapped during the save aren't acted on after it. Without
-  the menu, or with the Pokétch not up, it's the DS's save.
+  the menu, or with the Pokétch not up, it's the DS's save. A new game
+  saves over the old one (`patches/pokeplatinum/0042`): the DS refused
+  until the old save was erased from the title screen (and warned about
+  it when NEW GAME was chosen); the first save of the new game writes
+  over it, the old save there until then, and starts the Hall of Fame
+  anew as erasing did (`SaveDataExtra_Init`). Nothing asks first: saving
+  is the choice.
 - **The two squares** (`patches/pokeplatinum/0041`): the registered items'
   icons (the game's own, read from `itemtool/itemdata/item_icon.narc` by
   the port when the item changes: `NitroPort_LowerMenuSetItem`), the first
@@ -985,7 +1026,16 @@ screens) the lower screen is the DS's, filling the screen as before.
     is drawn till a move or a target is chosen or the panel goes blank),
     its bag and its party (not a battle video's STOP button: playback
     doesn't wait for the player); the battle's animations and text go at
-    the speed set. SPEED above 1x turns 60 FPS off (when it's on), 1x on again
+    the speed set. The start menu holds it at 1x too, and what it opens
+    (the bag, the party, the Pokédex, the options...), till the player
+    walks again (patch 0042): only the walking and what happens in the
+    field go faster. A frame shown is drawn after the game's next V-blank
+    work, whichever halt it was shown on: in the field (30 frames a
+    second, two halts a frame) at 4x every fourth halt fell on the one
+    without V-blank work, so nothing was drawn at all, the screens left
+    as they were while the game went on (black rooms, no text boxes, the
+    battles' health bars and animations stopped; 2026-10-26).
+    SPEED above 1x turns 60 FPS off (when it's on), 1x on again
     unless the player has set 60 FPS since (`fps60_held` in
     `options.txt`). The PC runner isn't paced, so it doesn't show.
   - EXP ON CATCH: after "Gotcha!" the catch stops while the battle's

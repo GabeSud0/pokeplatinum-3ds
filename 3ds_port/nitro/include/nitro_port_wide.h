@@ -39,6 +39,7 @@ typedef struct NitroWideWindow {
     uint8_t left, top, width, height;
     int8_t anchor;
     uint8_t widen, frameLeft, frameRight;
+    uint8_t indicator;   /* (widen) its last 3 tiles' first 32 lines go with the frame's right part */
 } NitroWideWindow;
 
 /* From the game (bgLayer: 0-3 engine A's BGs, 4-7 engine B's). */
@@ -49,6 +50,15 @@ void NitroPort_WindowRemoved(const void *window);
  * only the window's first (left) tiles move, when what it shows is
  * narrower than the window (0: all of it). */
 void NitroPort_WindowAnchor(const void *window, int side, int widthTiles);
+/* From the game: a screen indicator drawn in the window (on: the game's
+ * icon in its last 3 tiles, its first 32 lines: "look at the lower
+ * screen"...), or the window cleared (off). A widened text box's goes to
+ * its right end with the frame. */
+void NitroPort_WindowIndicator(const void *window, int on);
+/* From the game: a BG (0-7, engine B's 4-7) set up anew or freed: the text
+ * box frames kept there after their windows went (NitroPort_WindowRemoved)
+ * are gone. */
+void NitroPort_WideBgReset(int bgLayer);
 /* From the game (patches/pokeplatinum/0015): a frame was drawn round this
  * window (1: a menu's, a tile all round; 2: a text box's, 2 tiles left and
  * 3 right) or taken off (0). On the wider screen, a framed window by the

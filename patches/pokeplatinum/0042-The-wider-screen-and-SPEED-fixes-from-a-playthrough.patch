@@ -1,0 +1,1086 @@
+From e3c15799c0dee923f874e9883231410813da8d46 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] The wider screen and SPEED: fixes from a playthrough
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+SPEED is held at 1x while the start menu and what it opened are up
+(PORT_SPEED_HOLD_MENU), released when the player walks again: only the
+walking and the field go faster.
+
+A new game saves over the old save, as if that had been erased first
+(SaveData_OverwriteCheck: never a different game's save to refuse; the
+main menu's NEW GAME warning about it skipped; SaveDataExtra_Init starts
+the Hall of Fame anew with the rest of the extra data).
+
+On the remaster's wider upper screen:
+- the screen indicator at a text box's top right is told to the port
+  (NitroPort_WindowIndicator: set by Text_RenderScreenIndicator, cleared
+  when the window or that corner is cleared or the text scrolls), which
+  draws it at the widened box's right edge; a BG set up anew or freed is
+  told too (NitroPort_WideBgReset: the text box frames kept there go);
+- the Pokédex's registration page: the Pokémon's box 24 pixels to the
+  left with its 3D Pokémon, the title 24 to the right;
+- the evolution's background: its edge columns carried on beside the
+  DS's screen (its map's other half came round there);
+- the battle's trainers slide off past the wider screen's edges;
+- the HM cut-in: the band of Poké Balls repeats to the screen's edges;
+  the Pokémon waits beyond the wider screen's right edge and slides off
+  past its left one;
+- the scripts' people: one added beside the DS's picture but not beyond
+  the wider one's is put beyond it and walks the extra tiles in with its
+  first steps; one whose walk out ends there walks the extra tiles out;
+  one walking straight out through something the DS's picture didn't
+  show goes round it (the ground's collisions, ledges and cliffs, the
+  height carried along the way). When the script ends, or the next one
+  starts (script_manager.c), the ones still moved go back where the
+  script put them.
+---
+ include/port_options.h                   |   3 +
+ include/scrcmd.h                         |   5 +
+ src/applications/pokedex/ov21_021E8D48.c |   9 +-
+ src/battle/battle_display.c              |  20 +-
+ src/bg_window.c                          |  25 ++
+ src/evolution.c                          |  18 +
+ src/main_menu/main_menu.c                |   6 +
+ src/overlay006/hm_cut_in.c               |  34 +-
+ src/savedata.c                           |  13 +
+ src/scrcmd.c                             | 550 +++++++++++++++++++++++
+ src/script_manager.c                     |   9 +
+ src/start_menu.c                         |   3 +
+ src/text.c                               |   9 +
+ 13 files changed, 696 insertions(+), 8 deletions(-)
+
+diff --git a/include/port_options.h b/include/port_options.h
+index 4e913df8..14122032 100644
+--- a/include/port_options.h
++++ b/include/port_options.h
+@@ -34,6 +34,9 @@ int NitroPort_OptionsSave(void);
+ #define PORT_SPEED_HOLD_BATTLE_MENU  1
+ #define PORT_SPEED_HOLD_BATTLE_BAG   2
+ #define PORT_SPEED_HOLD_BATTLE_PARTY 4
++// (and while the start menu and what it opened are up: the bag, the
++// party, the Pokédex, the options... till the player walks again)
++#define PORT_SPEED_HOLD_MENU         8
+ 
+ void NitroPort_SpeedHold(unsigned bit, int on);
+ #endif
+diff --git a/include/scrcmd.h b/include/scrcmd.h
+index bcadc780..2e795ae0 100644
+--- a/include/scrcmd.h
++++ b/include/scrcmd.h
+@@ -5,5 +5,10 @@
+ 
+ BOOL sub_02041CC8(ScriptContext *ctx);
+ BOOL ScriptContext_WaitForApplicationExit(ScriptContext *ctx);
++#ifdef SDK_PORT_3DS
++// (script_manager.c) The script over: the people the remaster's wider
++// screen moved go back where the script put them, if they stay.
++void ScrCmd_PortWideScriptEnd(FieldSystem *fieldSystem);
++#endif
+ 
+ #endif // POKEPLATINUM_SCRCMD_H
+diff --git a/src/applications/pokedex/ov21_021E8D48.c b/src/applications/pokedex/ov21_021E8D48.c
+index 6869e7f4..54178055 100644
+--- a/src/applications/pokedex/ov21_021E8D48.c
++++ b/src/applications/pokedex/ov21_021E8D48.c
+@@ -44,7 +44,8 @@
+ // has it: the banner on to the edges; the background's pattern (8 pixels
+ // wide; its plain right end, 248-255) beside the DS's screen; the text box
+ // (rows 130-189: its ends 0-26 and 229-255, its middle between) its ends at
+-// the screen's edges, its middle drawn on between.
++// the screen's edges, its middle drawn on between. The picture frame and
++// the Pokémon a little to the left, the title a little to the right.
+ static const short sPokedexRegisterWideLayout[][8] = {
+     WIDE_MOVE(WIDE_BG(2), 0, 17, 0, 256, 0),
+     WIDE_FILL(WIDE_BG(2), 0, 17, -32, 0, 0),
+@@ -72,6 +73,12 @@ static const short sPokedexRegisterWideLayout[][8] = {
+     WIDE_FILL(WIDE_BG(3), 130, 190, -5, 27, 27),
+     WIDE_MOVE(WIDE_BG(3), 130, 190, 229, 256, 32),
+     WIDE_FILL(WIDE_BG(3), 130, 190, 229, 261, 228),
++    // (2026-10-25) the Pokémon's picture frame 24 pixels to the left (the
++    // pattern behind it 8 pixels wide: still in step), the Pokémon (the 3D)
++    // with it; the title (its name and kind, sprites) 24 to the right
++    WIDE_MOVE(WIDE_BG(3), 24, 120, 0, 120, -24),
++    WIDE_SHIFT3D(-24),
++    WIDE_OBJS(14, 62, 96, 256, 24),
+ };
+ #endif
+ 
+diff --git a/src/battle/battle_display.c b/src/battle/battle_display.c
+index d2528aee..02095d20 100644
+--- a/src/battle/battle_display.c
++++ b/src/battle/battle_display.c
+@@ -79,6 +79,18 @@
+ 
+ #include "res/text/bank/battle_strings.h"
+ 
++#ifdef SDK_PORT_3DS
++// (the 3DS remaster's wider upper screen: a trainer sliding off the screen
++// gone once past its edges, not the DS's)
++extern int NitroPort_WideScreenExtra(void);
++#define PORT_TRAINER_GONE_LEFT  (-40 - NitroPort_WideScreenExtra())
++#define PORT_TRAINER_GONE_RIGHT (256 + 40 + NitroPort_WideScreenExtra())
++#else
++#define PORT_TRAINER_GONE_LEFT  -40
++#define PORT_TRAINER_GONE_RIGHT (256 + 40)
++#endif
++
++
+ typedef struct TrainerEncounterData {
+     BattleSystem *battleSys;
+     Terrain *terrain;
+@@ -2915,7 +2927,7 @@ static void Task_ThrowTrainerBall(SysTask *task, void *data)
+                     ov12_0223786C(battlerData->ballRotation, 0);
+                     ov12_02237E4C(battlerData->ballRotation, 12);
+                 }
+-            } else if (x >= (256 + 40)) {
++            } else if (x >= PORT_TRAINER_GONE_RIGHT) {
+                 SpriteManager *spriteMan = BattleSystem_GetSpriteManager(trainerThrowBallData->battleSys);
+                 Sprite_DeleteAndFreeResources(trainerThrowBallData->battlerData->managedSprite);
+                 trainerThrowBallData->battlerData->managedSprite = NULL;
+@@ -2960,7 +2972,7 @@ static void Task_ThrowTrainerBall(SysTask *task, void *data)
+             }
+         }
+ 
+-        if (x <= -40) {
++        if (x <= PORT_TRAINER_GONE_LEFT) {
+             SpriteManager *spriteMan = BattleSystem_GetSpriteManager(trainerThrowBallData->battleSys);
+ 
+             Sprite_DeleteAndFreeResources(trainerThrowBallData->battlerData->managedSprite);
+@@ -3035,14 +3047,14 @@ static void Task_SlideTrainerOut(SysTask *task, void *data)
+             ManagedSprite_OffsetPositionXY(slideTrainerOutData->battlerData->managedSprite, 5, 0);
+             ManagedSprite_GetPositionXY(slideTrainerOutData->battlerData->managedSprite, &x, &y);
+ 
+-            if (x >= (256 + 40)) {
++            if (x >= PORT_TRAINER_GONE_RIGHT) {
+                 slideTrainerOutData->state++;
+             }
+         } else {
+             ManagedSprite_OffsetPositionXY(slideTrainerOutData->battlerData->managedSprite, -5, 0);
+             ManagedSprite_GetPositionXY(slideTrainerOutData->battlerData->managedSprite, &x, &y);
+ 
+-            if (x <= -40) {
++            if (x <= PORT_TRAINER_GONE_LEFT) {
+                 slideTrainerOutData->state++;
+             }
+         }
+diff --git a/src/bg_window.c b/src/bg_window.c
+index dc6e78d7..696255ee 100644
+--- a/src/bg_window.c
++++ b/src/bg_window.c
+@@ -12,6 +12,10 @@
+ // (3ds_port/nitro/include/nitro_port_wide.h).
+ extern void NitroPort_WindowAdded(const void *window, int bgLayer, int left, int top, int width, int height);
+ extern void NitroPort_WindowRemoved(const void *window);
++// (the window cleared: no screen indicator in it, Text_RenderScreenIndicator)
++extern void NitroPort_WindowIndicator(const void *window, int on);
++// (the BG set up anew or freed: the text box frames it kept are gone)
++extern void NitroPort_WideBgReset(int bgLayer);
+ #endif
+ 
+ #include "gx_layers.h"
+@@ -98,6 +102,10 @@ void Bg_InitFromTemplate(BgConfig *bgConfig, u8 bgLayer, const BgTemplate *bgTem
+ {
+     u8 screenSize = ConvertToGxBgScreenSize(bgTemplate->screenSize, bgType);
+ 
++#ifdef SDK_PORT_3DS
++    NitroPort_WideBgReset(bgLayer);
++#endif
++
+     switch (bgLayer) {
+     case BG_LAYER_MAIN_0:
+         GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG0, TRUE);
+@@ -555,6 +563,9 @@ static void GetBgScreenTileDimensions(u8 bgScreenSize, u8 *outXTiles, u8 *outYTi
+ 
+ void Bg_FreeTilemapBuffer(BgConfig *bgConfig, u8 bgLayer)
+ {
++#ifdef SDK_PORT_3DS
++    NitroPort_WideBgReset(bgLayer);
++#endif
+     if (bgConfig->bgs[bgLayer].tilemapBuffer == NULL) {
+         return;
+     }
+@@ -1997,6 +2008,9 @@ void Window_FillTilemap(Window *window, u8 val)
+     u32 size = window->bgConfig->bgs[window->bgLayer].tileSize * window->width * window->height;
+ 
+     MI_CpuFillFast(window->pixels, fill, size);
++#ifdef SDK_PORT_3DS
++    NitroPort_WindowIndicator(window, 0);
++#endif
+ }
+ 
+ void Window_BlitBitmapRect(Window *window, void *src, u16 srcX, u16 srcY, u16 srcWidth, u16 srcHeight, u16 destX, u16 destY, u16 destWidth, u16 destHeight)
+@@ -2027,6 +2041,13 @@ void Window_FillRectWithColor(Window *window, u8 color, u16 x, u16 y, u16 width,
+ {
+     Bitmap bmp;
+ 
++#ifdef SDK_PORT_3DS
++    // (over the window's top right corner: its screen indicator gone)
++    if (x + width > (window->width - 3) * 8 && y < 32) {
++        NitroPort_WindowIndicator(window, 0);
++    }
++#endif
++
+     bmp.pixels = window->pixels;
+     bmp.width = window->width * 8;
+     bmp.height = window->height * 8;
+@@ -2211,6 +2232,10 @@ void Window_CopyGlyph(Window *window, const u8 *glyphPixels, u16 srcWidth, u16 s
+ 
+ void Window_Scroll(Window *window, u8 direction, u8 distance, u8 fillVal)
+ {
++#ifdef SDK_PORT_3DS
++    // (the text scrolled: the screen indicator scrolled away with it)
++    NitroPort_WindowIndicator(window, 0);
++#endif
+     if (window->bgConfig->bgs[window->bgLayer].colorMode == GX_BG_COLORMODE_16) {
+         ScrollWindow4bpp(window, direction, distance, fillVal);
+     } else {
+diff --git a/src/evolution.c b/src/evolution.c
+index 3f4fec91..bad3bb46 100644
+--- a/src/evolution.c
++++ b/src/evolution.c
+@@ -56,6 +56,18 @@
+ #include "res/graphics/diploma/diploma.naix"
+ #include "res/text/bank/battle_strings.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++
++// The evolution's background (BG3, a 512-wide map: another picture in its
++// right half, which came round beside the DS's screen) on the wider upper
++// screen: its edge columns carried on to the screen's edges.
++static const short sEvolutionWideLayout[][8] = {
++    WIDE_FILL(WIDE_BG(3), 0, 192, -32, 0, 0),
++    WIDE_FILL(WIDE_BG(3), 0, 192, 256, 288, 255),
++};
++#endif
++
+ static void SysTask_Evolution(SysTask *task, void *data);
+ BOOL Evolution_IsDone(EvolutionData *evolutionData);
+ void Evolution_Free(EvolutionData *evolutionData);
+@@ -924,10 +936,16 @@ static void Evolution_InitGraphics(EvolutionData *evolutionData, BgConfig *bgCon
+     GXLayers_TurnBothDispOn();
+     GXLayers_EngineAToggleLayers(GX_PLANEMASK_OBJ, 1);
+     SetVBlankCallback(Evolution_VBlankCallback, evolutionData);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sEvolutionWideLayout);
++#endif
+ }
+ 
+ static void Evolution_FreeBgs(BgConfig *bgConfig)
+ {
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++#endif
+     GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG0, 0);
+     GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG1, 0);
+     Bg_FreeTilemapBuffer(bgConfig, BG_LAYER_MAIN_1);
+diff --git a/src/main_menu/main_menu.c b/src/main_menu/main_menu.c
+index 26af1583..104d0d98 100644
+--- a/src/main_menu/main_menu.c
++++ b/src/main_menu/main_menu.c
+@@ -1228,7 +1228,13 @@ static BOOL MainMenu_Main(ApplicationManager *appMan, int *state)
+                 MainMenuUtil_SetFadeToWhite(TRUE);
+             }
+ 
++#ifdef SDK_PORT_3DS
++            // (the 3DS remaster saves a new adventure over the old one:
++            // its warning that it can't be saved isn't so; straight on)
++            if (0) {
++#else
+             if (appData->nextApplication == NEXT_APP_GAME_INTRO) {
++#endif
+                 appData->pendingAlerts |= NEW_GAME_WARN;
+                 appData->alertsPending = TRUE;
+                 *state = MAIN_MENU_STATE_CONFIRM_NEW_GAME;
+diff --git a/src/overlay006/hm_cut_in.c b/src/overlay006/hm_cut_in.c
+index ef28d99d..c3226fb1 100644
+--- a/src/overlay006/hm_cut_in.c
++++ b/src/overlay006/hm_cut_in.c
+@@ -33,6 +33,18 @@
+ #include "sys_task.h"
+ #include "sys_task_manager.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++
++// The Pokémon waits beyond the wider screen's right edge and slides off
++// past its left one, as it does on the DS's screen.
++#define PORT_CUTIN_MON_START_X (256 + 40 + NitroPort_WideScreenExtra())
++#define PORT_CUTIN_MON_GONE_X  (-40 - NitroPort_WideScreenExtra())
++#else
++#define PORT_CUTIN_MON_START_X (256 + 40)
++#define PORT_CUTIN_MON_GONE_X  (-40)
++#endif
++
+ typedef struct HMCutIn {
+     int state;
+     int isFinished;
+@@ -1120,7 +1132,7 @@ static BOOL HMCutIn_InitSprites(HMCutIn *cutIn)
+     }
+ 
+     VecFx32 playerSpritePosition = { FX32_ONE * 128, FX32_ONE * 96, 0 };
+-    VecFx32 pokemonSpritePosition = { FX32_ONE * (256 + 40), FX32_ONE * 96, 0 };
++    VecFx32 pokemonSpritePosition = { FX32_ONE * PORT_CUTIN_MON_START_X, FX32_ONE * 96, 0 };
+ 
+     cutIn->playerSprite = CutIn_InitPlayerSprite(cutIn, &playerSpritePosition);
+     cutIn->pokemonSprite = CutIn_InitPokemonSprite(cutIn, &pokemonSpritePosition);
+@@ -1281,7 +1293,7 @@ static BOOL HMCutIn_SlideMonOut(HMCutIn *cutIn)
+ 
+     Sprite_SetPosition(cutIn->pokemonSprite, &v1);
+ 
+-    if (v1.x <= (FX32_ONE * -40)) {
++    if (v1.x <= (FX32_ONE * PORT_CUTIN_MON_GONE_X)) {
+         cutIn->windowDelta = 0x1000;
+         cutIn->state++;
+     }
+@@ -1383,7 +1395,7 @@ static BOOL CutIn_InitSpritesFly(HMCutIn *cutIn)
+     }
+ 
+     VecFx32 playerSpritePosition = { (FX32_ONE * 128), FX32_ONE * 96, 0 };
+-    VecFx32 pokemonSpritePosition = { (FX32_ONE * (256 + 40)), FX32_ONE * 96, 0 };
++    VecFx32 pokemonSpritePosition = { (FX32_ONE * PORT_CUTIN_MON_START_X), FX32_ONE * 96, 0 };
+ 
+     cutIn->playerSprite = CutIn_InitPlayerSprite(cutIn, &playerSpritePosition);
+     cutIn->pokemonSprite = CutIn_InitPokemonSprite(cutIn, &pokemonSpritePosition);
+@@ -1682,6 +1694,16 @@ static void SysTask_CutIn_FinalizeBirdSpriteTransfer(SysTask *task, void *hmCutI
+     }
+ }
+ 
++#ifdef SDK_PORT_3DS
++// The band (BG3, a 256-pixel map of Poké Balls) goes on to the wider
++// screen's edges, repeating as the DS's map wraps, not the plain lines
++// beside the balls carried on (a stripe).
++static const short sCutInWideLayout[][8] = {
++    WIDE_SHOW(WIDE_BG(3), 0, 192),
++};
++
++#endif
++
+ static void CutIn_InitSpriteResources(HMCutIn *cutIn)
+ {
+     NARC *narc = CutIn_GetCutInNarc();
+@@ -1704,6 +1726,9 @@ static void CutIn_InitSpriteResources(HMCutIn *cutIn)
+ 
+     NARC_dtor(narc);
+     cutIn->unk_244 = OverworldAnimManagerList_New(HEAP_ID_FIELD1, 32);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sCutInWideLayout);
++#endif
+     GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG3, 1);
+ }
+ 
+@@ -1713,6 +1738,9 @@ static void CutIn_DeleteSprites(HMCutIn *cutIn)
+     OverworldAnimManagerList_FinishAndFree(cutIn->unk_244);
+ 
+     CutIn_ClearTileMapBG3(cutIn->fieldSystem->bgConfig);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++#endif
+     CutIn_DeleteSpriteResources(cutIn);
+ 
+     G2_SetBG0Priority(cutIn->bg0Priority);
+diff --git a/src/savedata.c b/src/savedata.c
+index ddbdda4f..cb7fefce 100644
+--- a/src/savedata.c
++++ b/src/savedata.c
+@@ -245,7 +245,16 @@ static void SaveData_MiscSaveBlock_SetInitFlag(SaveData *saveData)
+ 
+ BOOL SaveData_OverwriteCheck(const SaveData *saveData)
+ {
++#ifdef SDK_PORT_3DS
++    // (the 3DS remaster: a new adventure saves over the one already saved,
++    // as if that had been erased first: SaveData_Save clears the old one's
++    // blocks before the first save of a new game, and SaveDataExtra_Init
++    // after it starts the Hall of Fame anew with the rest of the extra data)
++    (void)saveData;
++    return FALSE;
++#else
+     return SaveData_IsNewGameData(saveData) && SaveData_DataExists(saveData);
++#endif
+ }
+ 
+ BOOL SaveData_FullSaveRequired(const SaveData *saveData)
+@@ -905,9 +914,13 @@ void SaveDataExtra_Init(SaveData *saveData)
+     void *extraData;
+ 
+     for (i = 0; i < gExtraSaveTableSize; i++) {
++#ifndef SDK_PORT_3DS
++        // (the DS: a new game's first save only after the old save was
++        // erased, the Hall of Fame with it)
+         if (extraTable[i].dataID == EXTRA_SAVE_TABLE_ENTRY_HALL_OF_FAME) {
+             continue;
+         }
++#endif
+ 
+         extraData = SaveDataExtra_Get(saveData, HEAP_ID_APPLICATION, extraTable[i].dataID, &loadResult);
+ 
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+index 9de354a8..81ae1857 100644
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -2068,6 +2068,539 @@ static BOOL ScrCmd_SetMenuYOriginSide(ScriptContext *ctx)
+     return TRUE;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// The 3DS remaster's wider upper screen shows 2 tiles more each side than
++// the DS's. The scripts place the people who walk on (Dawn with the bag,
++// the rival, Looker) and send off the ones who leave (Rowan and Dawn,
++// Roark) just past the DS's edge, where nobody saw them: there they
++// popped into view, vanished, or walked through what's in the way, in the
++// wider picture's sides. So:
++//   one added beside the DS's picture, but not beyond the wider one's, is
++//     put beyond it and walks the extra tiles in with its first steps;
++//   one whose walk out ends there walks the extra tiles out before the
++//     script takes it away;
++//   one walking out through something in the way beside the DS's picture
++//     goes round it (outwards first, else up, else down) to beyond the
++//     wider picture.
++// Where it stays instead (it doesn't walk in, or isn't taken away), it goes
++// back where the script put it.
++
++#include "map_tile_behavior.h"
++#include "terrain_collision_manager.h"
++
++extern int NitroPort_WideScreenExtra(void);
++
++#define PORT_WIDE_DS_TILES      8  // from the middle of the picture to the DS's edge (tile 8 half on it)
++#define PORT_WIDE_SENT_TILES    9  // a walk out ending here or further: off the DS's picture
++#define PORT_WIDE_TOP_TILES     9  // above the middle, beyond the top of the picture
++#define PORT_WIDE_BOTTOM_TILES  8  // below it, beyond the bottom
++#define PORT_WIDE_SCRIPTED_MAX  8
++#define PORT_WIDE_PATH_MAX      48 // steps of a way round
++#define PORT_WIDE_SEARCH_MAX    512
++
++enum PortWideScriptedKind {
++    PORT_WIDE_ADDED = 1, // put further out: walks in further
++    PORT_WIDE_SENT,      // walked further out, or round
++};
++
++typedef struct PortWideScripted {
++    MapObject *mapObj;
++    u16 localID;
++    u16 mapHeaderID;
++    s8 shiftX, shiftZ; // tiles it was moved (east, south +), to be undone if it stays
++    u8 kind;
++} PortWideScripted;
++
++static PortWideScripted sPortWideScripted[PORT_WIDE_SCRIPTED_MAX];
++
++// The walks, a row a speed: north, south, west, east (DIR_*).
++static const u16 sPortWideWalks[][4] = {
++    { MOVEMENT_ACTION_WALK_SLOWER_NORTH, MOVEMENT_ACTION_WALK_SLOWER_SOUTH, MOVEMENT_ACTION_WALK_SLOWER_WEST, MOVEMENT_ACTION_WALK_SLOWER_EAST },
++    { MOVEMENT_ACTION_WALK_SLOW_NORTH, MOVEMENT_ACTION_WALK_SLOW_SOUTH, MOVEMENT_ACTION_WALK_SLOW_WEST, MOVEMENT_ACTION_WALK_SLOW_EAST },
++    { MOVEMENT_ACTION_WALK_NORMAL_NORTH, MOVEMENT_ACTION_WALK_NORMAL_SOUTH, MOVEMENT_ACTION_WALK_NORMAL_WEST, MOVEMENT_ACTION_WALK_NORMAL_EAST },
++    { MOVEMENT_ACTION_WALK_FAST_NORTH, MOVEMENT_ACTION_WALK_FAST_SOUTH, MOVEMENT_ACTION_WALK_FAST_WEST, MOVEMENT_ACTION_WALK_FAST_EAST },
++    { MOVEMENT_ACTION_WALK_FASTER_NORTH, MOVEMENT_ACTION_WALK_FASTER_SOUTH, MOVEMENT_ACTION_WALK_FASTER_WEST, MOVEMENT_ACTION_WALK_FASTER_EAST },
++    { MOVEMENT_ACTION_WALK_SLIGHTLY_FAST_NORTH, MOVEMENT_ACTION_WALK_SLIGHTLY_FAST_SOUTH, MOVEMENT_ACTION_WALK_SLIGHTLY_FAST_WEST, MOVEMENT_ACTION_WALK_SLIGHTLY_FAST_EAST },
++    { MOVEMENT_ACTION_WALK_SLIGHTLY_FASTER_NORTH, MOVEMENT_ACTION_WALK_SLIGHTLY_FASTER_SOUTH, MOVEMENT_ACTION_WALK_SLIGHTLY_FASTER_WEST, MOVEMENT_ACTION_WALK_SLIGHTLY_FASTER_EAST },
++    { MOVEMENT_ACTION_WALK_FASTEST_NORTH, MOVEMENT_ACTION_WALK_FASTEST_SOUTH, MOVEMENT_ACTION_WALK_FASTEST_WEST, MOVEMENT_ACTION_WALK_FASTEST_EAST },
++    { MOVEMENT_ACTION_RUN_NORTH, MOVEMENT_ACTION_RUN_SOUTH, MOVEMENT_ACTION_RUN_WEST, MOVEMENT_ACTION_RUN_EAST },
++    { MOVEMENT_ACTION_WALK_EVER_SO_SLIGHTLY_FAST_NORTH, MOVEMENT_ACTION_WALK_EVER_SO_SLIGHTLY_FAST_SOUTH, MOVEMENT_ACTION_WALK_EVER_SO_SLIGHTLY_FAST_WEST, MOVEMENT_ACTION_WALK_EVER_SO_SLIGHTLY_FAST_EAST },
++};
++
++// A walk's speed (its row) and direction (DIR_*), or FALSE.
++static BOOL ScrCmd_PortWalk(u16 action, int *speed, int *dir)
++{
++    int i, j;
++
++    for (i = 0; i < (int)NELEMS(sPortWideWalks); i++) {
++        for (j = 0; j < 4; j++) {
++            if (action == sPortWideWalks[i][j]) {
++                *speed = i;
++                *dir = j;
++                return TRUE;
++            }
++        }
++    }
++
++    return FALSE;
++}
++
++// A step east (1) or west (-1), else 0.
++static int ScrCmd_PortWalkDx(u16 action)
++{
++    int speed, dir;
++
++    if (!ScrCmd_PortWalk(action, &speed, &dir)) {
++        return 0;
++    }
++
++    return dir == DIR_EAST ? 1 : dir == DIR_WEST ? -1 : 0;
++}
++
++// Beyond the wider picture's edge, the sprite's width and the view's
++// perspective (more shows at the top) counted: in tiles from its middle.
++// 0 on the DS's screen.
++static int ScrCmd_PortWideOutTiles(void)
++{
++    int extra = NitroPort_WideScreenExtra();
++
++    return extra > 0 ? PORT_WIDE_DS_TILES + (extra + 15) / 16 + 2 : 0;
++}
++
++// The picture's middle (the camera's target), in tiles.
++static void ScrCmd_PortWideMiddle(FieldSystem *fieldSystem, int *x, int *z)
++{
++    VecFx32 target = Camera_GetTarget(fieldSystem->camera);
++
++    *x = target.x / (16 * FX32_ONE);
++    *z = target.z / (16 * FX32_ONE);
++}
++
++static BOOL ScrCmd_PortWideEligible(FieldSystem *fieldSystem, MapObject *mapObj)
++{
++    MapObject **cameraObject = FieldSystem_GetScriptMemberPtr(fieldSystem, SCRIPT_MANAGER_CAMERA_OBJECT);
++
++    return mapObj != NULL && mapObj != PlayerAvatar_GetMapObject(fieldSystem->playerAvatar) && mapObj != *cameraObject;
++}
++
++static void ScrCmd_PortWideNudge(MapObject *mapObj, int tilesX, int tilesZ)
++{
++    VecFx32 pos;
++
++    if (tilesX == 0 && tilesZ == 0) {
++        return;
++    }
++
++    MapObject_GetPosPtr(mapObj, &pos);
++    pos.x += tilesX * (16 * FX32_ONE);
++    pos.z += tilesZ * (16 * FX32_ONE);
++    MapObject_SetPos(mapObj, &pos);
++    MapObject_SetX(mapObj, MapObject_GetX(mapObj) + tilesX);
++    MapObject_SetZ(mapObj, MapObject_GetZ(mapObj) + tilesZ);
++    MapObject_UpdateCoords(mapObj);
++    MapObject_RecalculateObjectHeight(mapObj);
++    MapObject_SetTileBehaviors(mapObj);
++}
++
++static PortWideScripted *ScrCmd_PortWideFind(FieldSystem *fieldSystem, MapObject *mapObj)
++{
++    int i;
++
++    for (i = 0; i < PORT_WIDE_SCRIPTED_MAX; i++) {
++        PortWideScripted *e = &sPortWideScripted[i];
++
++        if (e->kind != 0 && e->mapObj == mapObj) {
++            // (still that one: not taken away, the map not changed)
++            if (e->mapHeaderID == fieldSystem->location->mapHeaderID
++                && MapObjMan_LocalMapObjByIndex(fieldSystem->mapObjMan, e->localID) == mapObj) {
++                return e;
++            }
++
++            e->kind = 0;
++        }
++    }
++
++    return NULL;
++}
++
++static BOOL ScrCmd_PortWideRemember(FieldSystem *fieldSystem, MapObject *mapObj, int shiftX, int shiftZ, int kind)
++{
++    int i;
++
++    for (i = 0; i < PORT_WIDE_SCRIPTED_MAX; i++) {
++        PortWideScripted *e = &sPortWideScripted[i];
++
++        if (e->kind == 0) {
++            e->mapObj = mapObj;
++            e->localID = MapObject_GetLocalID(mapObj);
++            e->mapHeaderID = fieldSystem->location->mapHeaderID;
++            e->shiftX = shiftX;
++            e->shiftZ = shiftZ;
++            e->kind = kind;
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++static void ScrCmd_PortWideRemoved(MapObject *mapObj);
++
++static void ScrCmd_PortWideAdded(FieldSystem *fieldSystem, MapObject *mapObj)
++{
++    int out = ScrCmd_PortWideOutTiles(), midX, midZ, dx, shift;
++
++    // (a new object, wherever an old one was)
++    ScrCmd_PortWideRemoved(mapObj);
++
++    if (out == 0 || !ScrCmd_PortWideEligible(fieldSystem, mapObj)) {
++        return;
++    }
++
++    ScrCmd_PortWideMiddle(fieldSystem, &midX, &midZ);
++    dx = MapObject_GetX(mapObj) - midX;
++
++    if (dx >= PORT_WIDE_DS_TILES && dx < out) {
++        shift = out - dx;
++    } else if (-dx >= PORT_WIDE_DS_TILES && -dx < out) {
++        shift = -(out + dx);
++    } else {
++        return;
++    }
++
++    if (ScrCmd_PortWideRemember(fieldSystem, mapObj, shift, 0, PORT_WIDE_ADDED)) {
++        ScrCmd_PortWideNudge(mapObj, shift, 0);
++    }
++}
++
++// Something in the way of a step from (x, z), at height y, towards dir:
++// the ground (its collision, a ledge or a one-way tile, a cliff), not the
++// other people (they walk out together). The height there to *y.
++static BOOL ScrCmd_PortWideBlocked(FieldSystem *fieldSystem, int x, int z, fx32 *y, int dir)
++{
++    static BOOL (*const leaving[4])(u8) = {
++        TileBehavior_BlocksMovementNorthward,
++        TileBehavior_BlocksMovementSouthward,
++        TileBehavior_BlocksMovementWestward,
++        TileBehavior_BlocksMovementEastward
++    };
++    static BOOL (*const entering[4])(u8) = {
++        TileBehavior_BlocksMovementSouthward,
++        TileBehavior_BlocksMovementNorthward,
++        TileBehavior_BlocksMovementEastward,
++        TileBehavior_BlocksMovementWestward
++    };
++    VecFx32 pos;
++    int toX = x + MapObject_GetDxFromDir(dir), toZ = z + MapObject_GetDzFromDir(dir);
++    u8 from = TerrainCollisionManager_GetTileBehavior(fieldSystem, x, z);
++    u8 to = TerrainCollisionManager_GetTileBehavior(fieldSystem, toX, toZ);
++    u8 source;
++    fx32 height;
++
++    pos.x = MAP_OBJECT_COORD_CENTER_TO_FX32(x);
++    pos.y = *y;
++    pos.z = MAP_OBJECT_COORD_CENTER_TO_FX32(z);
++
++    if (to == GetNullTileBehaviorID() || leaving[dir](from) || entering[dir](to)
++        || TerrainCollisionManager_WillMapObjectCollide(fieldSystem, &pos, toX, toZ, NULL)) {
++        return TRUE;
++    }
++
++    height = TerrainCollisionManager_GetHeight(fieldSystem, *y, MAP_OBJECT_COORD_CENTER_TO_FX32(toX), MAP_OBJECT_COORD_CENTER_TO_FX32(toZ), &source);
++
++    if (source != CALCULATED_HEIGHT_SOURCE_NONE) {
++        *y = height;
++    }
++
++    return FALSE;
++}
++
++typedef struct PortWidePathSearch {
++    FieldSystem *fieldSystem;
++    int midX, midZ, out, outDir;
++    int nodes;
++    u8 path[PORT_WIDE_PATH_MAX];
++    u16 seen[PORT_WIDE_SEARCH_MAX];
++    int seenCount;
++} PortWidePathSearch;
++
++static u16 ScrCmd_PortWideKey(PortWidePathSearch *search, int x, int z)
++{
++    return (u16)(((x - search->midX + 64) & 0xFF) | (((z - search->midZ + 64) & 0xFF) << 8));
++}
++
++static BOOL ScrCmd_PortWideSeen(PortWidePathSearch *search, int x, int z)
++{
++    u16 key = ScrCmd_PortWideKey(search, x, z);
++    int i;
++
++    for (i = 0; i < search->seenCount; i++) {
++        if (search->seen[i] == key) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++static void ScrCmd_PortWideSee(PortWidePathSearch *search, int x, int z)
++{
++    if (search->seenCount < PORT_WIDE_SEARCH_MAX) {
++        search->seen[search->seenCount++] = ScrCmd_PortWideKey(search, x, z);
++    }
++}
++
++// A way out of the wider picture from (x, z), depth steps taken: outwards
++// first, else up, else down (never back), as far as it goes before
++// turning.
++static BOOL ScrCmd_PortWideFindWay(PortWidePathSearch *search, int x, int z, fx32 y, int depth)
++{
++    const int dirs[3] = { search->outDir, DIR_NORTH, DIR_SOUTH };
++    int dx = x - search->midX, dz = z - search->midZ, i;
++
++    if ((search->outDir == DIR_EAST ? dx : -dx) >= search->out || dz <= -PORT_WIDE_TOP_TILES || dz >= PORT_WIDE_BOTTOM_TILES) {
++        search->path[depth] = 0xFF;
++        return TRUE;
++    }
++
++    if (depth >= PORT_WIDE_PATH_MAX - 1 || ++search->nodes > PORT_WIDE_SEARCH_MAX) {
++        return FALSE;
++    }
++
++    for (i = 0; i < 3; i++) {
++        int toX = x + MapObject_GetDxFromDir(dirs[i]), toZ = z + MapObject_GetDzFromDir(dirs[i]);
++        fx32 toY = y;
++
++        // (entered from here, not just seen: a ledge's tile may be entered
++        // from another side)
++        if (ScrCmd_PortWideSeen(search, toX, toZ) || ScrCmd_PortWideBlocked(search->fieldSystem, x, z, &toY, dirs[i])) {
++            continue;
++        }
++
++        ScrCmd_PortWideSee(search, toX, toZ);
++        search->path[depth] = dirs[i];
++
++        if (ScrCmd_PortWideFindWay(search, toX, toZ, toY, depth + 1)) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++// The movement the script gave, changed for the wider screen (a heap copy,
++// freed with the movement: sub_02040F28), or NULL to use the script's.
++static MapObjectAnimCmd *ScrCmd_PortWideMovement(FieldSystem *fieldSystem, MapObject *mapObj, const MapObjectAnimCmd *cmds)
++{
++    PortWideScripted *e;
++    MapObjectAnimCmd *copy;
++    int count, i, last = -1, out = ScrCmd_PortWideOutTiles(), at, speed = 0, dir;
++    int midX, midZ, startX, startZ, x, endX, endDx;
++    BOOL straight = TRUE;
++
++    if (out == 0 || !ScrCmd_PortWideEligible(fieldSystem, mapObj)) {
++        return NULL;
++    }
++
++    for (count = 0; cmds[count].movementAction != MOVEMENT_ACTION_END; count++) {
++        if (count >= 254) {
++            return NULL;
++        }
++    }
++
++    e = ScrCmd_PortWideFind(fieldSystem, mapObj);
++
++    if (e != NULL) {
++        int shiftX = e->shiftX, shiftZ = e->shiftZ;
++
++        e->kind = 0;
++
++        // Put further out when added: walking in, it walks in from there.
++        if (shiftZ == 0 && shiftX != 0 && count > 0 && cmds[0].count > 0 && ScrCmd_PortWalkDx(cmds[0].movementAction) == (shiftX > 0 ? -1 : 1)) {
++            copy = Heap_Alloc(HEAP_ID_FIELD1, sizeof(MapObjectAnimCmd) * (count + 2));
++            copy[0].movementAction = cmds[0].movementAction;
++            copy[0].count = shiftX > 0 ? shiftX : -shiftX;
++            memcpy(&copy[1], cmds, sizeof(MapObjectAnimCmd) * (count + 1));
++            return copy;
++        }
++
++        // Else (or sent further out before, and moving again): from where
++        // the script put it.
++        ScrCmd_PortWideNudge(mapObj, -shiftX, -shiftZ);
++    }
++
++    // Walking out: where to (the walks east and west; only those, else
++    // left as it is).
++    ScrCmd_PortWideMiddle(fieldSystem, &midX, &midZ);
++    startX = MapObject_GetX(mapObj);
++    startZ = MapObject_GetZ(mapObj);
++    x = startX;
++
++    for (i = 0; i < count; i++) {
++        int dx = ScrCmd_PortWalkDx(cmds[i].movementAction);
++
++        if (dx != 0) {
++            x += dx * cmds[i].count;
++            last = i;
++        } else {
++            straight = FALSE;
++        }
++    }
++
++    if (last < 0 || last != count - 1 || cmds[last].count == 0) {
++        return NULL;
++    }
++
++    ScrCmd_PortWalk(cmds[last].movementAction, &speed, &dir);
++    at = dir == DIR_EAST ? 1 : -1;
++    endX = x;
++    endDx = (x - midX) * at;
++
++    if (endDx < PORT_WIDE_DS_TILES) {
++        return NULL;
++    }
++
++    // (straight: every step that way)
++    for (i = 0; i < count; i++) {
++        if (ScrCmd_PortWalkDx(cmds[i].movementAction) != at) {
++            straight = FALSE;
++        }
++    }
++
++    // The tiles walked out beside the DS's picture and the extra ones to
++    // beyond the wider picture's edge, along the last row: something in the
++    // way there that the DS didn't show? (A walk straight out, one way:
++    // round it instead. Else as the script has it.)
++    {
++        int blockedAt = 0, endZ = startZ, n, from;
++        fx32 y;
++        VecFx32 pos;
++
++        for (i = 0; i < count; i++) {
++            int stepSpeed, stepDir;
++
++            if (ScrCmd_PortWalk(cmds[i].movementAction, &stepSpeed, &stepDir) && (stepDir == DIR_NORTH || stepDir == DIR_SOUTH)) {
++                endZ += MapObject_GetDzFromDir(stepDir) * cmds[i].count;
++            }
++        }
++
++        MapObject_GetPosPtr(mapObj, &pos);
++        y = pos.y;
++        from = straight ? startX : endX - at * cmds[last].count;
++
++        for (x = from, n = 0; (x - midX) * at < out && n < 64; x += at, n++) {
++            int stepDx = (x + at - midX) * at;
++
++            if (ScrCmd_PortWideBlocked(fieldSystem, x, straight ? startZ : endZ, &y, dir)) {
++                blockedAt = stepDx;
++                break;
++            }
++        }
++
++        if (blockedAt != 0 && blockedAt < PORT_WIDE_DS_TILES) {
++            // (in the DS's picture too: as the DS has it)
++            return NULL;
++        }
++
++        if (blockedAt != 0 && straight) {
++            PortWidePathSearch *search = Heap_Alloc(HEAP_ID_FIELD1, sizeof(PortWidePathSearch));
++            int steps, runs, wayX = startX, wayZ = startZ;
++
++            memset(search, 0, sizeof(*search));
++            search->fieldSystem = fieldSystem;
++            search->midX = midX;
++            search->midZ = midZ;
++            search->out = out;
++            search->outDir = dir;
++            ScrCmd_PortWideSee(search, startX, startZ);
++
++            if (ScrCmd_PortWideFindWay(search, startX, startZ, pos.y, 0)) {
++                for (steps = 0, runs = 0; search->path[steps] != 0xFF; steps++) {
++                    if (steps == 0 || search->path[steps] != search->path[steps - 1]) {
++                        runs++;
++                    }
++
++                    wayX += MapObject_GetDxFromDir(search->path[steps]);
++                    wayZ += MapObject_GetDzFromDir(search->path[steps]);
++                }
++
++                copy = Heap_Alloc(HEAP_ID_FIELD1, sizeof(MapObjectAnimCmd) * (runs + 1));
++
++                for (i = 0, runs = 0; i < steps; i++) {
++                    if (i == 0 || search->path[i] != search->path[i - 1]) {
++                        copy[runs].movementAction = sPortWideWalks[speed][search->path[i]];
++                        copy[runs].count = 0;
++                        runs++;
++                    }
++
++                    copy[runs - 1].count++;
++                }
++
++                copy[runs].movementAction = MOVEMENT_ACTION_END;
++                copy[runs].count = 0;
++                Heap_Free(search);
++
++                if (!ScrCmd_PortWideRemember(fieldSystem, mapObj, wayX - endX, wayZ - startZ, PORT_WIDE_SENT)) {
++                    Heap_Free(copy);
++                    return NULL;
++                }
++
++                return copy;
++            }
++
++            Heap_Free(search);
++        }
++
++        if (blockedAt != 0) {
++            return NULL;
++        }
++    }
++
++    // Walking out to off the DS's picture, short of the wider one's edge:
++    // a few steps more.
++    if (endDx < PORT_WIDE_SENT_TILES || endDx >= out) {
++        return NULL;
++    }
++
++    if (!ScrCmd_PortWideRemember(fieldSystem, mapObj, at * (out - endDx), 0, PORT_WIDE_SENT)) {
++        return NULL;
++    }
++
++    copy = Heap_Alloc(HEAP_ID_FIELD1, sizeof(MapObjectAnimCmd) * (count + 1));
++    memcpy(copy, cmds, sizeof(MapObjectAnimCmd) * (count + 1));
++    copy[last].count += out - endDx;
++    return copy;
++}
++
++static void ScrCmd_PortWideRemoved(MapObject *mapObj)
++{
++    int i;
++
++    for (i = 0; i < PORT_WIDE_SCRIPTED_MAX; i++) {
++        if (sPortWideScripted[i].mapObj == mapObj) {
++            sPortWideScripted[i].kind = 0;
++        }
++    }
++}
++
++// The script over: the ones still beside the picture go back where the
++// script put them (they stay there).
++void ScrCmd_PortWideScriptEnd(FieldSystem *fieldSystem)
++{
++    int i;
++
++    for (i = 0; i < PORT_WIDE_SCRIPTED_MAX; i++) {
++        PortWideScripted *e = &sPortWideScripted[i];
++
++        if (e->kind != 0 && ScrCmd_PortWideFind(fieldSystem, e->mapObj) == e) {
++            ScrCmd_PortWideNudge(e->mapObj, -e->shiftX, -e->shiftZ);
++        }
++
++        e->kind = 0;
++    }
++}
++#endif
++
+ static BOOL ScrCmd_ApplyMovement(ScriptContext *ctx)
+ {
+     u16 localID = ScriptContext_GetVar(ctx);
+@@ -2078,11 +2611,20 @@ static BOOL ScrCmd_ApplyMovement(ScriptContext *ctx)
+         return FALSE;
+     }
+ 
++#ifdef SDK_PORT_3DS
++    MapObjectAnimCmd *portMovement = ScrCmd_PortWideMovement(ctx->fieldSystem, object, (MapObjectAnimCmd *)(ctx->scriptPtr + movementOffset));
++    SysTask *task = MapObject_StartAnimation(object, portMovement != NULL ? portMovement : (MapObjectAnimCmd *)(ctx->scriptPtr + movementOffset));
++    u8 *movementCount = FieldSystem_GetScriptMemberPtr(ctx->fieldSystem, SCRIPT_MANAGER_MOVEMENT_COUNT);
++    (*movementCount)++;
++    sub_02040F28(ctx->fieldSystem, task, portMovement);
++    return FALSE;
++#else
+     SysTask *task = MapObject_StartAnimation(object, (MapObjectAnimCmd *)(ctx->scriptPtr + movementOffset));
+     u8 *movementCount = FieldSystem_GetScriptMemberPtr(ctx->fieldSystem, SCRIPT_MANAGER_MOVEMENT_COUNT);
+     (*movementCount)++;
+     sub_02040F28(ctx->fieldSystem, task, NULL);
+     return FALSE;
++#endif
+ }
+ 
+ static BOOL ScrCmd_Unused_2A1(ScriptContext *ctx)
+@@ -2394,6 +2936,11 @@ static BOOL ScrCmd_AddObject(ScriptContext *ctx)
+     if (mapObj == NULL) {
+         GF_ASSERT(FALSE);
+     }
++#ifdef SDK_PORT_3DS
++    else {
++        ScrCmd_PortWideAdded(fieldSystem, mapObj);
++    }
++#endif
+ 
+     return FALSE;
+ }
+@@ -2407,6 +2954,9 @@ static BOOL ScrCmd_RemoveObject(ScriptContext *ctx)
+     if (mapObj == NULL) {
+         GF_ASSERT(FALSE);
+     } else {
++#ifdef SDK_PORT_3DS
++        ScrCmd_PortWideRemoved(mapObj);
++#endif
+         MapObject_SetFlagAndDeleteObject(mapObj);
+     }
+ 
+diff --git a/src/script_manager.c b/src/script_manager.c
+index 5fe7e744..998c1ced 100644
+--- a/src/script_manager.c
++++ b/src/script_manager.c
+@@ -31,6 +31,8 @@
+ #ifdef SDK_PORT_3DS
+ // abs(), which Metrowerks provided without an include.
+ #include <stdlib.h>
++
++#include "scrcmd.h"
+ #endif
+ 
+ // clang-format off
+@@ -131,6 +133,10 @@ static BOOL FieldTask_RunScript(FieldTask *taskManager)
+ 
+     switch (scriptManager->state) {
+     case 0:
++#ifdef SDK_PORT_3DS
++        // (and any left by a script run another way)
++        ScrCmd_PortWideScriptEnd(fieldSystem);
++#endif
+         scriptManager->ctx[SCRIPT_CONTEXT_MAIN] = ScriptContext_CreateAndStart(fieldSystem, scriptManager->scriptID);
+         scriptManager->numActiveContexts = 1;
+         scriptManager->strTemplate = StringTemplate_New(8, 64, HEAP_ID_FIELD2);
+@@ -152,6 +158,9 @@ static BOOL FieldTask_RunScript(FieldTask *taskManager)
+         }
+ 
+         if (scriptManager->numActiveContexts <= 0) {
++#ifdef SDK_PORT_3DS
++            ScrCmd_PortWideScriptEnd(fieldSystem);
++#endif
+             scriptFunction = scriptManager->function;
+             StringTemplate_Free(scriptManager->strTemplate);
+             String_Free(scriptManager->msgBuf);
+diff --git a/src/start_menu.c b/src/start_menu.c
+index 85ede0c7..766910c7 100644
+--- a/src/start_menu.c
++++ b/src/start_menu.c
+@@ -773,6 +773,7 @@ static void StartMenu_InitMenu(FieldTask *fieldTask)
+ #ifdef SDK_PORT_3DS
+     u32 portButtons = 0;
+ 
++    NitroPort_SpeedHold(PORT_SPEED_HOLD_MENU, 1); // (the menus at 1x, whatever SPEED says)
+     sPortMode = NitroPort_LowerMenuOn() && StartMenu_PortButtons(fieldSystem, menu->hideOptionFlags, &portButtons);
+     if (sPortMode) {
+         sPortItem2Key = -1; // (the bag looked at again)
+@@ -3029,6 +3030,8 @@ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
+ {
+     u32 buttons = 0;
+ 
++    NitroPort_SpeedHold(PORT_SPEED_HOLD_MENU, 0); // (walking: SPEED as it's set)
++
+     sPortTapOpening = FALSE;   // (a tap that opened nothing last frame)
+ 
+     // (walking: nothing the menu opened is up. The menu kept shown, its
+diff --git a/src/text.c b/src/text.c
+index 0d8040c0..94afb799 100644
+--- a/src/text.c
++++ b/src/text.c
+@@ -347,6 +347,15 @@ void Text_RenderScreenIndicator(TextPrinter *printer, u16 unusedX, u16 unusedY,
+     unusedX = (Window_GetWidth(window) - 3) * 8;
+ 
+     Window_BlitBitmapRect(window, tiles, 0, 0, 24, 32, unusedX, 0, 24, 32);
++#ifdef SDK_PORT_3DS
++    {
++        // (the 3DS remaster's wider text boxes: at the box's right end,
++        // with its frame, not left where the DS's box ends)
++        extern void NitroPort_WindowIndicator(const void *window, int on);
++
++        NitroPort_WindowIndicator(window, 1);
++    }
++#endif
+ }
+ 
+ static void Text_FreePrinterIconGfx(TextPrinter *printer)
+-- 
+2.43.0
+
