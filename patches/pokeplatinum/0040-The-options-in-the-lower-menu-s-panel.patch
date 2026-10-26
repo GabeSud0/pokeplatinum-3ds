@@ -19,7 +19,9 @@ the black panel). OPTIONS in the bag, the party or the trainer case goes
 to the page behind the black, as SAVE. START WITH chooses the panel's tab
 when the game starts. Without the menu it's the DS's options screen.
 The page opens again on the tab and cards it closed on; the FRAME card is
-drawn as a message box in the frame chosen.
+drawn as a message box in the frame chosen. The D-pad moves between the
+cards (up and down a column, left and right across); A or a tap changes
+one.
 
 The enhancements and cheats (port_options.h: the port's settings):
 EXP ON CATCH (the catch stops after "Gotcha!" while the script pays out
@@ -31,6 +33,10 @@ party menu's Fly and Defog), AUTO-RUN (running unless B is held, with
 the running shoes), ALWAYS CATCH, INSTANT VICTORY (the player's attacks
 knock out, past Endure and the focus items), FAST EGGS, INFINITE MONEY,
 WILD ENCOUNTERS (off, 1/4, 1/2, 2x) and SHINY ODDS (to always).
+
+The battle's text box has its frame's edges clear (the DS fills them
+with black: a black box behind the box, wider on the 3DS) and the ground
+of the battle's background carried on under it.
 
 On the wider screen: the Pokédex's page after a catch laid out as the
 info page (its maps came round beside the DS's screen), and the cry
@@ -47,10 +53,11 @@ beside the DS's screen) with its band's lower edge at the screen's bottom.
  src/applications/pokedex/ov21_021E3FFC.c |  230 +++++
  src/applications/pokedex/ov21_021E8D48.c |   46 +
  src/battle/battle_controller_player.c    |   22 +-
+ src/battle/battle_main.c                 |   41 +-
  src/battle/battle_script.c               |   83 ++
  src/meson.build                          |    1 +
  src/overlay005/daycare.c                 |   17 +-
- src/overlay005/options_panel.c           | 1086 ++++++++++++++++++++++
+ src/overlay005/options_panel.c           | 1097 ++++++++++++++++++++++
  src/overlay006/wild_encounters.c         |   35 +
  src/player_move.c                        |    7 +
  src/pokemon.c                            |   13 +
@@ -58,7 +65,7 @@ beside the DS's screen) with its band's lower edge at the screen's bottom.
  src/start_menu.c                         |  162 +++-
  src/trainer_info.c                       |   13 +
  src/unk_02054884.c                       |   41 +
- 21 files changed, 1859 insertions(+), 13 deletions(-)
+ 22 files changed, 1909 insertions(+), 15 deletions(-)
  create mode 100644 include/overlay005/options_panel.h
  create mode 100644 include/port_options.h
  create mode 100644 src/overlay005/options_panel.c
@@ -686,6 +693,82 @@ index 17366e7b..fd1310dc 100644
          battleCtx->storedDamage[battleCtx->defender] += battleCtx->damage;
  
          if (battleCtx->battleMons[battleCtx->defender].timesDamaged < 0xFF) {
+diff --git a/src/battle/battle_main.c b/src/battle/battle_main.c
+index dc92931e..470e6b64 100644
+--- a/src/battle/battle_main.c
++++ b/src/battle/battle_main.c
+@@ -90,6 +90,37 @@
+ 
+ #include "res/text/bank/battle_strings.h"
+ 
++#ifdef SDK_PORT_3DS
++// The text box's frame clear round its edges: the DS fills a frame's clear
++// pixels with its colour 10 here (black in all but one of the frames), a
++// black box behind the text box, the wider for the 3DS's wider box. And
++// the background under the box carried on down from its last row of
++// pictures (row 19, lines 152-159: the ground) through rows 20-23 (empty),
++// in both halves of its map, so what shows round the frame is the ground.
++#define PORT_TEXT_BOX_EDGE 0
++
++static void BattleSystem_PortGroundUnderTextBox(BgConfig *bgConfig)
++{
++    u16 *map = Bg_GetTilemapBuffer(bgConfig, BG_LAYER_MAIN_3);
++
++    if (map == NULL) {
++        return;
++    }
++
++    for (int half = 0; half < 2; half++) {
++        for (int y = 20; y < 24; y++) {
++            for (int x = 0; x < 32; x++) {
++                map[half * 32 * 32 + y * 32 + x] = map[half * 32 * 32 + 19 * 32 + x];
++            }
++        }
++    }
++
++    Bg_CopyTilemapBufferToVRAM(bgConfig, BG_LAYER_MAIN_3);
++}
++#else
++#define PORT_TEXT_BOX_EDGE 10
++#endif
++
+ FS_EXTERN_OVERLAY(overlay10);
+ FS_EXTERN_OVERLAY(overlay11);
+ FS_EXTERN_OVERLAY(battle_anim);
+@@ -442,12 +473,15 @@ void BattleSystem_SetupBattleScreen(BattleSystem *battleSys)
+ 
+     int frame = BattleSystem_GetOptionsFrame(battleSys);
+ 
+-    ReplaceTransparentTiles(battleSys->bgConfig, 1, 1, 10, frame, HEAP_ID_BATTLE);
++    ReplaceTransparentTiles(battleSys->bgConfig, 1, 1, PORT_TEXT_BOX_EDGE, frame, HEAP_ID_BATTLE);
+     Graphics_LoadTilesToBgLayer(NARC_INDEX_BATTLE__GRAPHIC__PL_BATT_BG, 3 + battleSys->background, battleSys->bgConfig, BG_LAYER_MAIN_3, 0, 0, 1, HEAP_ID_BATTLE);
+     PaletteData_LoadBufferFromFileStart(battleSys->paletteData, NARC_INDEX_BATTLE__GRAPHIC__PL_BATT_BG, 172 + battleSys->background * 3 + BattleSystem_GetBackgroundTimeOffset(battleSys), HEAP_ID_BATTLE, PLTTBUF_MAIN_BG, 0, PLTT_DEST(0));
+     PaletteData_LoadBufferFromFileStart(battleSys->paletteData, NARC_INDEX_GRAPHIC__PL_WINFRAME, GetMessageBoxPaletteNARCMember(frame), HEAP_ID_BATTLE, PLTTBUF_MAIN_BG, PALETTE_SIZE_BYTES, PLTT_DEST(10));
+     PaletteData_LoadBufferFromFileStart(battleSys->paletteData, NARC_INDEX_GRAPHIC__PL_FONT, 7, HEAP_ID_BATTLE, PLTTBUF_MAIN_BG, PALETTE_SIZE_BYTES, PLTT_DEST(11));
+     Graphics_LoadTilemapToBgLayer(NARC_INDEX_BATTLE__GRAPHIC__PL_BATT_BG, 2, battleSys->bgConfig, 3, 0, 0, 1, HEAP_ID_BATTLE);
++#ifdef SDK_PORT_3DS
++    BattleSystem_PortGroundUnderTextBox(battleSys->bgConfig);
++#endif
+ 
+     GX_SetVisibleWnd(GX_WNDMASK_NONE);
+     GXS_SetVisibleWnd(GX_WNDMASK_NONE);
+@@ -892,12 +926,15 @@ static void BattleMain_InitBattleGraphics(BattleSystem *battleSys, BgConfig *bgC
+ 
+     int frame = BattleSystem_GetOptionsFrame(battleSys);
+ 
+-    ReplaceTransparentTiles(bgConfig, 1, 1, 10, frame, HEAP_ID_BATTLE);
++    ReplaceTransparentTiles(bgConfig, 1, 1, PORT_TEXT_BOX_EDGE, frame, HEAP_ID_BATTLE);
+     Graphics_LoadTilesToBgLayer(NARC_INDEX_BATTLE__GRAPHIC__PL_BATT_BG, 3 + battleSys->background, bgConfig, BG_LAYER_MAIN_3, 0, 0, 1, HEAP_ID_BATTLE);
+     PaletteData_LoadBufferFromFileStart(battleSys->paletteData, NARC_INDEX_BATTLE__GRAPHIC__PL_BATT_BG, 172 + battleSys->background * 3 + BattleSystem_GetBackgroundTimeOffset(battleSys), HEAP_ID_BATTLE, PLTTBUF_MAIN_BG, 0, PLTT_DEST(0));
+     PaletteData_LoadBufferFromFileStart(battleSys->paletteData, NARC_INDEX_GRAPHIC__PL_WINFRAME, GetMessageBoxPaletteNARCMember(frame), HEAP_ID_BATTLE, PLTTBUF_MAIN_BG, PALETTE_SIZE_BYTES, PLTT_DEST(10));
+     PaletteData_LoadBufferFromFileStart(battleSys->paletteData, NARC_INDEX_GRAPHIC__PL_FONT, 7, HEAP_ID_BATTLE, PLTTBUF_MAIN_BG, PALETTE_SIZE_BYTES, PLTT_DEST(11));
+     Graphics_LoadTilemapToBgLayer(NARC_INDEX_BATTLE__GRAPHIC__PL_BATT_BG, 2, bgConfig, 3, 0, 0, 1, HEAP_ID_BATTLE);
++#ifdef SDK_PORT_3DS
++    BattleSystem_PortGroundUnderTextBox(bgConfig);
++#endif
+ 
+     GX_SetVisibleWnd(GX_WNDMASK_NONE);
+     GXS_SetVisibleWnd(GX_WNDMASK_NONE);
 diff --git a/src/battle/battle_script.c b/src/battle/battle_script.c
 index ac895a2d..f5ad2080 100644
 --- a/src/battle/battle_script.c
@@ -890,10 +973,10 @@ index 9a4c97a0..f14f2655 100644
                          eggCycles--;
 diff --git a/src/overlay005/options_panel.c b/src/overlay005/options_panel.c
 new file mode 100644
-index 00000000..e4e72a0f
+index 00000000..34124062
 --- /dev/null
 +++ b/src/overlay005/options_panel.c
-@@ -0,0 +1,1086 @@
+@@ -0,0 +1,1097 @@
 +#include "overlay005/options_panel.h"
 +
 +#ifdef SDK_PORT_3DS
@@ -940,7 +1023,8 @@ index 00000000..e4e72a0f
 +// and cut into tiles, alike ones shared: drawn whole again when anything
 +// changes. Touches: the port's panel buttons (the page is taller than the
 +// DS's 192 rows the game's touch reaches), a card's left half its left
-+// arrow, its right half its right one.
++// arrow, its right half its right one. A changes the card the cursor is
++// on; the D-pad only moves the cursor.
 +//
 +// The game's six settings go in its save (as its options screen sets them);
 +// the port's own (60 FPS, smooth 3D, the start tab, the enhancements and
@@ -1946,16 +2030,26 @@ index 00000000..e4e72a0f
 +            Sound_PlayEffect(SE_CONFIRM_sseq_3);
 +            redraw = TRUE;
 +        }
-+    } else if (JOY_NEW(PAD_KEY_UP | PAD_KEY_DOWN) && def->count > 0) {
-+        // (down the left column, then the right; round again)
-+        *cursor = (*cursor + def->count + (JOY_NEW(PAD_KEY_DOWN) ? 1 : -1)) % def->count;
-+        Sound_PlayEffect(SEQ_SE_DP_SELECT78_sseq);
-+        redraw = TRUE;
-+    } else if (JOY_NEW(PAD_KEY_LEFT | PAD_KEY_RIGHT) && def->count > 0) {
-+        const OptionsCard *card = &def->cards[*cursor];
++    } else if (JOY_NEW(PAD_KEY_UP | PAD_KEY_DOWN | PAD_KEY_LEFT | PAD_KEY_RIGHT) && def->count > 0) {
++        // The D-pad goes from card to card (the values change with A or a
++        // tap): up and down in its column, round again; left and right to
++        // the other column's card on the same row (its last, if it's
++        // shorter).
++        int column = *cursor >= def->left, row = column ? *cursor - def->left : *cursor;
++        int lengths[2] = { def->left, def->count - def->left };
++        int to = *cursor;
 +
-+        if (card->kind != OPK_ACTION) {
-+            OptionsPanel_Step(panel, *cursor, JOY_NEW(PAD_KEY_RIGHT) ? 1 : -1);
++        if (JOY_NEW(PAD_KEY_UP | PAD_KEY_DOWN)) {
++            row = (row + lengths[column] + (JOY_NEW(PAD_KEY_DOWN) ? 1 : -1)) % lengths[column];
++            to = (column ? def->left : 0) + row;
++        } else if (lengths[!column] > 0) {
++            column = !column;
++            to = (column ? def->left : 0) + (row < lengths[column] ? row : lengths[column] - 1);
++        }
++
++        if (to != *cursor) {
++            *cursor = to;
++            Sound_PlayEffect(SEQ_SE_DP_SELECT78_sseq);
 +            redraw = TRUE;
 +        }
 +    } else if (JOY_NEW(PAD_BUTTON_A) && def->count > 0) {

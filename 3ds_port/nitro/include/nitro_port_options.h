@@ -24,6 +24,7 @@ enum {
     NITRO_OPT_INFINITE_MONEY,
     NITRO_OPT_ENCOUNTERS,        /* 0 normal, 1 off, 2 1/4, 3 1/2, 4 2x */
     NITRO_OPT_SHINY,             /* 0 1/8192 (the game's), 1 1/4096, 2 1/1024, 3 1/256, 4 1/64, 5 always */
+    NITRO_OPT_FPS60_HELD,        /* (not on the page) 1: 60 FPS turned off by SPEED, on again at 1x */
     NITRO_OPT_COUNT
 };
 
@@ -31,7 +32,9 @@ enum {
 int NitroPort_OptionValues(int id);
 int NitroPort_Option(int id);
 /* Changed (kept within its values): the listener told, saved by the next
- * NitroPort_OptionsSave. */
+ * NitroPort_OptionsSave. SPEED above 1x turns 60 FPS off (if it's on) and
+ * 1x turns it on again; 60 FPS set itself is the player's choice from then
+ * on (NITRO_OPT_FPS60_HELD). */
 void NitroPort_OptionSet(int id, int value);
 /* (the platform's, before NitroPort_OptionsLoad) */
 void NitroPort_OptionSetDefault(int id, int value);

@@ -2488,9 +2488,24 @@ void NitroPort_OnFrame(void)
     }
 
     sFrameShown = SpeedFrameShown();
+    if (sFrameShown && SpeedHalves() > 2) {
+        /* Faster than 1x the game hardly waits, and the threads below it
+         * on its core (the display thread, a New 3DS's lower screen's
+         * drawer, an Old 3DS's drawers) only run while it does: they were
+         * left with the last frame half done (the lower screen not drawn
+         * again, the screens black after a battle). Each frame shown waits
+         * till they're done with the one before (two frames at most), and
+         * for the V-blank below. */
+        u64 start = svcGetSystemTick();
+
+        while ((DrawersBusy() || __atomic_load_n(&sComposing, __ATOMIC_ACQUIRE)) &&
+               svcGetSystemTick() - start < 2 * FRAME_TICKS) {
+            svcSleepThread(500000LL);
+        }
+    }
     if (sFrameShown) {
         u64 now = svcGetSystemTick();
-        bool ahead = sDeadline == 0 || now < sDeadline;
+        bool ahead = sDeadline == 0 || now < sDeadline || SpeedHalves() > 2;
         /* Half a frame or more to go until the V-blank. */
         bool early = sDeadline == 0 || (ahead && sDeadline - now >= FRAME_TICKS / 2);
 

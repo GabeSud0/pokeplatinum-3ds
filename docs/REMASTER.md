@@ -447,6 +447,13 @@ stretched:
   list, the party's menus); one in the middle, or across the screen,
   stays. The sprites over a moved window go with it (the field menu's
   icons).
+- **The battle's text box** has its frame's edges clear and the ground
+  under it (patch 0040, 2026-10-25): the game fills a frame's clear pixels
+  with its colour 10 in battles (black in 19 of the 20 frames), and the
+  battle's background has nothing under the box (rows 20-23), so a black
+  box showed behind it, wider for the wider box. Now the clear pixels stay
+  clear and the background's last row of pictures (the ground, row 19) is
+  carried on down through rows 20-23.
 - **Text boxes span the screen.** A text box across the DS's screen has
   its frame's left part at the screen's left edge and its right part at
   the right edge, each line of the frame's inner columns drawn on between
@@ -914,10 +921,11 @@ screens) the lower screen is the DS's, filling the screen as before.
   menu keeps them). Drawn into a window off the screen as one picture (the cards,
   the game's text on them, their edges and the cursor over it) and cut
   into tiles, alike ones once (48 KB of the sub engine's VRAM, BG0 alone),
-  drawn whole again on any change. Up / Down go through the cards (the
-  left column, then the right), Left / Right change one, A changes it (or
-  does it), L / R the tabs, B or X close (B on GIVE ITEMS: back to
-  CHEATS); taps: the tabs, a card's left half its left arrow and its
+  drawn whole again on any change. The D-pad only moves the cursor (Up /
+  Down in its column, round again; Left / Right to the other column's card
+  on the same row, its last if it's shorter: 2026-10-25, it used to change
+  values), A changes the card (or does it), L / R the tabs, B or X close
+  (B on GIVE ITEMS: back to CHEATS); taps: the tabs, a card's left half its left arrow and its
   right half its right one (the port's panel buttons, now up to 32).
   Another of the menu's buttons closes the page and is acted on (BAG,
   POKéMON, TRAINER and SAVE straight on from the black panel; MAP,
@@ -928,8 +936,15 @@ screens) the lower screen is the DS's, filling the screen as before.
   decompilation: the port's settings, read where the game decides):
   - SPEED (1x, 1.5x, 2x, 3x, 4x; the 3DS): that many game frames to each
     one shown, the others not drawn nor waited for (the music keeps its
-    own clock, the audio thread's); faster than 1x the in-between frames
-    of 60 FPS are left out. The PC runner isn't paced, so it doesn't show.
+    own clock, the audio thread's). Each frame shown waits till the
+    threads below the game on its core (the display thread, the lower
+    screen's drawer: they only run while the game waits) are done with
+    the one before, and for the V-blank: without that, at 4x the lower
+    screen stopped being drawn again and the screens stayed black after a
+    battle (2026-10-25). SPEED above 1x turns 60 FPS off (when it's on),
+    1x on again unless the player has set 60 FPS since
+    (`fps60_held` in `options.txt`). The PC runner isn't paced, so it
+    doesn't show.
   - EXP ON CATCH: after "Gotcha!" the catch stops while the battle's
     script pays out experience for the caught Pokémon as for a defeated
     one (its messages, levels and moves, as after a battle), then goes on

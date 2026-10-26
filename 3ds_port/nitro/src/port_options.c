@@ -32,6 +32,7 @@ static const struct {
     [NITRO_OPT_INFINITE_MONEY] = { "infinite_money", 2, 0 },
     [NITRO_OPT_ENCOUNTERS] = { "encounters", 5, 0 },
     [NITRO_OPT_SHINY] = { "shiny", 6, 0 },
+    [NITRO_OPT_FPS60_HELD] = { "fps60_held", 2, 0 },
 };
 
 static int sValue[NITRO_OPT_COUNT];
@@ -69,12 +70,8 @@ int NitroPort_Option(int id)
     return id >= 0 && id < NITRO_OPT_COUNT ? sValue[id] : 0;
 }
 
-void NitroPort_OptionSet(int id, int value)
+static void set(int id, int value)
 {
-    ready();
-    if (id < 0 || id >= NITRO_OPT_COUNT) {
-        return;
-    }
     value = clamp(id, value);
     if (value != sValue[id]) {
         sValue[id] = value;
@@ -83,6 +80,26 @@ void NitroPort_OptionSet(int id, int value)
         if (sListener) {
             sListener(id, value);
         }
+    }
+}
+
+void NitroPort_OptionSet(int id, int value)
+{
+    ready();
+    if (id < 0 || id >= NITRO_OPT_COUNT) {
+        return;
+    }
+    set(id, value);
+    /* (60 FPS off while the game runs faster: its in-between pictures would
+     * only take time; back on at 1x, unless the player chose it since) */
+    if (id == NITRO_OPT_SPEED && sValue[id] > 0 && sValue[NITRO_OPT_FPS60]) {
+        set(NITRO_OPT_FPS60, 0);
+        set(NITRO_OPT_FPS60_HELD, 1);
+    } else if (id == NITRO_OPT_SPEED && sValue[id] == 0 && sValue[NITRO_OPT_FPS60_HELD]) {
+        set(NITRO_OPT_FPS60, 1);
+        set(NITRO_OPT_FPS60_HELD, 0);
+    } else if (id == NITRO_OPT_FPS60) {
+        set(NITRO_OPT_FPS60_HELD, 0);
     }
 }
 

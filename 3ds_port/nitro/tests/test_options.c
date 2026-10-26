@@ -107,6 +107,36 @@ int main(void)
     CHECK(NitroPort_Option(NITRO_OPT_SPEED) == 2);
     CHECK(NitroPort_Option(NITRO_OPT_ENCOUNTERS) == 4);
 
+    /* SPEED above 1x turns 60 FPS off, 1x on again; set by the player in
+     * between, it stays as set (and with 60 FPS off to begin with, SPEED
+     * leaves it). Kept in the file. */
+    NitroPort_OptionSet(NITRO_OPT_SPEED, 0);
+    NitroPort_OptionSet(NITRO_OPT_FPS60, 1);
+    NitroPort_OptionSet(NITRO_OPT_SPEED, 4);
+    CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 0 && NitroPort_Option(NITRO_OPT_FPS60_HELD) == 1);
+    NitroPort_OptionSet(NITRO_OPT_SPEED, 2);
+    CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 0 && NitroPort_Option(NITRO_OPT_FPS60_HELD) == 1);
+    CHECK(NitroPort_OptionsSave() == 1);
+    NitroPort_OptionSetDefault(NITRO_OPT_FPS60_HELD, 0);
+    CHECK(NitroPort_OptionsLoad(path) == 1);
+    CHECK(NitroPort_Option(NITRO_OPT_FPS60_HELD) == 1);
+    NitroPort_OptionSet(NITRO_OPT_SPEED, 0);
+    CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 1 && NitroPort_Option(NITRO_OPT_FPS60_HELD) == 0);
+    NitroPort_OptionSet(NITRO_OPT_SPEED, 3);
+    CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 0);
+    NitroPort_OptionSet(NITRO_OPT_FPS60, 1);   /* (the player's: on till SPEED changes) */
+    CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 1 && NitroPort_Option(NITRO_OPT_FPS60_HELD) == 0);
+    NitroPort_OptionSet(NITRO_OPT_SPEED, 1);   /* (still above 1x: off again, held) */
+    CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 0 && NitroPort_Option(NITRO_OPT_FPS60_HELD) == 1);
+    NitroPort_OptionSet(NITRO_OPT_SPEED, 0);
+    CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 1);
+    NitroPort_OptionSet(NITRO_OPT_FPS60, 0);   /* (off by the player: stays off at 1x) */
+    NitroPort_OptionSet(NITRO_OPT_SPEED, 0);
+    CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 0);
+    NitroPort_OptionSet(NITRO_OPT_SPEED, 4);
+    NitroPort_OptionSet(NITRO_OPT_SPEED, 0);
+    CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 0);
+
     remove(path);
     printf("options: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;
