@@ -1615,7 +1615,16 @@ static char **sArgv;
 
 /* The game's soft reset (L + R + START + SELECT): the save's file written,
  * then the runner started again as it was (the same arguments, the same
- * process: the control directory carries on). */
+ * process: the control directory carries on), less those counted from the
+ * start or written from the start (--press, --touch, --frames: they'd
+ * reset it again at the same frame; --wav, --gx-record: they'd be written
+ * over). */
+static int OneShotOption(const char *arg)
+{
+    return strcmp(arg, "--press") == 0 || strcmp(arg, "--touch") == 0 || strcmp(arg, "--frames") == 0 ||
+           strcmp(arg, "--wav") == 0 || strcmp(arg, "--gx-record") == 0;
+}
+
 void NitroPort_ResetSystem(u32 parameter)
 {
     NitroPort_Log("[pc] the game asked to restart (OS_ResetSystem %lu); restarting",
@@ -1623,6 +1632,18 @@ void NitroPort_ResetSystem(u32 parameter)
     StopSound();
     NitroPort_CardFlush();
     fflush(NULL);
+    if (sArgv != NULL) {
+        int i, n = 0;
+
+        for (i = 0; sArgv[i] != NULL; i++) {
+            if (i > 0 && OneShotOption(sArgv[i]) && sArgv[i + 1] != NULL) {
+                i++;   /* (and its value) */
+            } else {
+                sArgv[n++] = sArgv[i];
+            }
+        }
+        sArgv[n] = NULL;
+    }
     if (sArgv != NULL) {
         /* (by the program's own name, so it's still called that) */
         char self[4096];

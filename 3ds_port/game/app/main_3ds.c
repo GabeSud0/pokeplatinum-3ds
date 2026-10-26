@@ -1326,6 +1326,8 @@ void NitroPort_Terminate(void)
     StopWithMessage();
 }
 
+static volatile bool sRestarting;   /* (NitroPort_ResetSystem: started again as the program closes) */
+
 /* The game's soft reset (L + R + START + SELECT, or after a link error):
  * the program closes as from the HOME menu (the save's file written) and
  * the system starts it again (libctru's chainload to itself: the HOME
@@ -1338,6 +1340,7 @@ void NitroPort_ResetSystem(uint32_t parameter)
         NitroPort_Log("(started from the Homebrew Launcher: it closes to the launcher instead)");
     } else {
         aptSetChainloaderToSelf();
+        sRestarting = true;
     }
     Quit();
 }
@@ -2795,8 +2798,9 @@ int main(int argc, char **argv)
         QUIT_STEP("the save's file written", NitroPort_CardFlush());
         aptUnhook(&sAptHook);
 #undef QUIT_STEP
-        NitroPort_Log("[quit] done in %.0f ms%s", (double)(svcGetSystemTick() - start) * 1000.0 / SYSCLOCK_ARM11,
-                      sStopFailed ? "; a thread didn't stop: ending the program at once" : "");
+        NitroPort_Log("[quit] done in %.0f ms%s%s", (double)(svcGetSystemTick() - start) * 1000.0 / SYSCLOCK_ARM11,
+                      sStopFailed ? "; a thread didn't stop: ending the program at once" : "",
+                      sStopFailed && sRestarting ? " (not started again)" : sRestarting ? "; starting again" : "");
     }
     if (sLog != NULL) {
         LogWritePending();
