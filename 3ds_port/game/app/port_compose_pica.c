@@ -2823,7 +2823,14 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                 /* (at full brightness: the field, a panel app opening from
                  * it; its picture kept for NITRO_LOWERMENU_HOLD_FIELD) */
                 sUpperShowsField = 0;
-                if (sUpperKeptBright == 0) {
+                if (sUpperKeptBright == 0 && wish == NITRO_LOWERMENU_HOLD_FIELD && field_picture_kept()) {
+                    /* (the field's picture kept already, asked for again:
+                     * what's on the LCD now isn't the field. The bag after
+                     * an evolution, which ends in a palette fade: the
+                     * master brightness full, the LCD the evolution's
+                     * screen gone dark, and that was kept as the field,
+                     * 2026-10-26.) It's put back below. */
+                } else if (sUpperKeptBright == 0) {
                     keep_field_picture(scr);
                     sUpperShowsField = sFieldValid;
                 }

@@ -419,7 +419,12 @@ static void KeepUpperScreen(void)
         /* (kept mid-fade: as the end of a fade nearest it) */
         sTopKeptBright = bright <= -8 ? -16 : bright >= 8 ? 16 : 0;
         sTopShowsField = 0;
-        if (sTopKeptBright == 0) {
+        if (sTopKeptBright == 0 && wish == NITRO_LOWERMENU_HOLD_FIELD && sFieldValid &&
+            sFieldSerial == NitroPort_LowerMenuFieldSerial()) {
+            /* (the field's picture kept already, asked for again: what's
+             * shown now isn't the field: the bag after an evolution, gone
+             * dark in a palette fade; put back below) */
+        } else if (sTopKeptBright == 0) {
             memcpy(sFieldTop, sKeptTop, sizeof(sFieldTop));
             sFieldSerial = NitroPort_LowerMenuFieldSerial();
             sFieldValid = 1;

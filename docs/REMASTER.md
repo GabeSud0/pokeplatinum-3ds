@@ -1149,8 +1149,12 @@ screens) the lower screen is the DS's, filling the screen as before.
   from it) and put it back when an app in the panel comes after one that
   took both screens (the bag after an evolution, the party after the
   mail), whose fade out left black there; forgotten once the player walks
-  again (`NitroPort_LowerMenuForgetField`). The 3DS puts the copy on the
-  LCD itself (its own framebuffer, once nothing of the upper screen's is
+  again (`NitroPort_LowerMenuForgetField`). A copy kept already isn't
+  copied over when the field's picture is asked for again: the bag after
+  an evolution started being kept at full brightness, the evolution's
+  screen gone dark in its palette fade (not a brightness fade) on the
+  LCD, and that was kept as the field and shown frozen above the bag
+  (2026-10-26). The 3DS puts the copy on the LCD itself (its own framebuffer, once nothing of the upper screen's is
   waiting for its V-blank).
   (A soft reset starts the program again: nothing's kept.) The 3DS
   doesn't draw a screen while it's
