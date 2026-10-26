@@ -564,6 +564,167 @@ static void paste(const Icon *icon, int x0, int y0, int x1, int y1, uint32_t opa
     }
 }
 
+/* ---------------------------------------------------- the squares' items */
+
+/* The two squares' items (NitroPort_LowerMenuSetItem): the item, its icon's
+ * and palette's members of itemtool/itemdata/item_icon.narc, its picture. */
+typedef struct SquareItem {
+    int item, icon, palette;
+    Icon picture;
+} SquareItem;
+
+static SquareItem sItems[2];
+
+/* A member of a NARC read from the file (a few small reads: the header,
+ * the member's place, the member), malloc'd; NULL if it can't be. */
+static uint8_t *read_narc_member(FSFile *file, int index, uint32_t *size)
+{
+    uint8_t b[16];
+    uint32_t fat, fatSize, count, start, end, fnt, gmif, length = FS_GetLength(file);
+    uint8_t *member;
+
+    if (!FS_SeekFile(file, 0, FS_SEEK_SET) || FS_ReadFile(file, b, 16) != 16 || memcmp(b, "NARC", 4) != 0) {
+        return NULL;
+    }
+    fat = rd16(b + 12);
+    if (fat > length - 12 || !FS_SeekFile(file, (s32)fat, FS_SEEK_SET) || FS_ReadFile(file, b, 12) != 12 ||
+        memcmp(b, "BTAF", 4) != 0) {
+        return NULL;
+    }
+    fatSize = rd32(b + 4);
+    count = rd16(b + 8);
+    if (index < 0 || (uint32_t)index >= count || fatSize > length - fat ||
+        !FS_SeekFile(file, (s32)(fat + 12 + 8 * (uint32_t)index), FS_SEEK_SET) || FS_ReadFile(file, b, 8) != 8) {
+        return NULL;
+    }
+    start = rd32(b);
+    end = rd32(b + 4);
+    fnt = fat + fatSize;
+    if (fnt > length - 8 || !FS_SeekFile(file, (s32)fnt, FS_SEEK_SET) || FS_ReadFile(file, b, 8) != 8 ||
+        memcmp(b, "BTNF", 4) != 0 || rd32(b + 4) > length - fnt) {
+        return NULL;
+    }
+    gmif = fnt + rd32(b + 4);
+    if (gmif > length - 8 || !FS_SeekFile(file, (s32)gmif, FS_SEEK_SET) || FS_ReadFile(file, b, 8) != 8 ||
+        memcmp(b, "GMIF", 4) != 0) {
+        return NULL;
+    }
+    gmif += 8;
+    if (end < start || end - start > 65536 || end > length - gmif) {
+        return NULL;
+    }
+    member = malloc(end - start ? end - start : 1);
+    if (member == NULL || !FS_SeekFile(file, (s32)(gmif + start), FS_SEEK_SET) ||
+        FS_ReadFile(file, member, (s32)(end - start)) != (s32)(end - start)) {
+        free(member);
+        return NULL;
+    }
+    *size = end - start;
+    return member;
+}
+
+/* An item's icon (32 x 32, 4 bits a pixel, 16 tiles in rows of 4, its
+ * palette's first 16 colours), cropped to what's drawn. 0 if it can't be
+ * read. */
+static int read_item_icon(int iconMember, int paletteMember, Icon *icon)
+{
+    FSFile file;
+    uint8_t *ncgr = NULL, *nclr = NULL;
+    uint32_t ncgrSize = 0, nclrSize = 0, charSize, palSize;
+    const uint8_t *chars, *pal;
+    int ok = 0;
+
+    icon->w = icon->h = 0;
+    if (!NitroPort_IsPakOpen()) {
+        return 0;
+    }
+    FS_InitFile(&file);
+    if (!FS_OpenFile(&file, "itemtool/itemdata/item_icon.narc")) {
+        NitroPort_Log("[lowermenu] can't open itemtool/itemdata/item_icon.narc: no item icons");
+        return 0;
+    }
+    ncgr = read_narc_member(&file, iconMember, &ncgrSize);
+    nclr = read_narc_member(&file, paletteMember, &nclrSize);
+    FS_CloseFile(&file);
+    chars = ncgr ? NitroPort_NitroBlock(ncgr, ncgrSize, "RAHC", &charSize) : NULL;
+    pal = nclr ? NitroPort_NitroBlock(nclr, nclrSize, "TTLP", &palSize) : NULL;
+    if (chars != NULL && pal != NULL && charSize >= 24 && palSize >= 16) {
+        uint32_t dataSize = rd32(chars + 16), dataOffset = rd32(chars + 20);
+        uint32_t colorOffset = rd32(pal + 12);
+
+        if (dataOffset <= charSize && dataSize <= charSize - dataOffset && dataSize >= 16u * 32u &&
+            colorOffset <= palSize && palSize - colorOffset >= 32) {
+            const uint8_t *tiles = chars + dataOffset, *c555 = pal + colorOffset;
+            uint32_t palette[16], full[32 * 32];
+            int i, t, x, y, x0 = 32, y0 = 32, x1 = -1, y1 = -1;
+
+            for (i = 0; i < 16; i++) {
+                palette[i] = rgb555(rd16(c555 + 2 * i));
+            }
+            for (t = 0; t < 16; t++) {
+                const uint8_t *tile = tiles + t * 32;
+
+                for (y = 0; y < 8; y++) {
+                    for (x = 0; x < 8; x++) {
+                        int b = tile[y * 4 + x / 2], v = (x & 1) ? b >> 4 : b & 15;
+                        int X = (t % 4) * 8 + x, Y = (t / 4) * 8 + y;
+
+                        full[Y * 32 + X] = v ? palette[v] : 0;
+                        if (v) {
+                            x0 = X < x0 ? X : x0;
+                            y0 = Y < y0 ? Y : y0;
+                            x1 = X > x1 ? X : x1;
+                            y1 = Y > y1 ? Y : y1;
+                        }
+                    }
+                }
+            }
+            memset(icon->px, 0, sizeof(icon->px));
+            icon->w = x1 >= x0 ? x1 - x0 + 1 : 0;
+            icon->h = y1 >= y0 ? y1 - y0 + 1 : 0;
+            for (y = 0; y < icon->h; y++) {
+                for (x = 0; x < icon->w; x++) {
+                    icon->px[y * 32 + x] = full[(y0 + y) * 32 + x0 + x];
+                }
+            }
+            ok = 1;
+        }
+    }
+    if (!ok) {
+        NitroPort_Log("[lowermenu] item icon %d / palette %d not as expected", iconMember, paletteMember);
+    }
+    free(ncgr);
+    free(nclr);
+    return ok;
+}
+
+/* The Y on the first square's item (the item on Y): a small red pill, a
+ * dark Y in it (the approved mock-up, after the Emerald project's). */
+static void draw_y_pill(int x0, int y0)
+{
+    static const char *const pill[8] = {
+        "..#######..",
+        ".#RRRRRRR#.",
+        "#RR#RRR#RR#",
+        "#RRR#R#RRR#",
+        "#RRRR#RRRR#",
+        "#RRRR#RRRR#",
+        ".#RRR#RRR#.",
+        "..#######..",
+    };
+    int i, j;
+
+    for (j = 0; j < 8; j++) {
+        for (i = 0; pill[j][i]; i++) {
+            if (pill[j][i] == '#') {
+                put(x0 + i, y0 + j, RGB(72, 8, 8));
+            } else if (pill[j][i] == 'R') {
+                put(x0 + i, y0 + j, RGB(232, 32, 32));
+            }
+        }
+    }
+}
+
 /* ------------------------------------------------------------ drawing */
 
 /* The panel shows the map (asked to, and the Town Map's pictures could be
@@ -667,6 +828,16 @@ static void draw(void)
         int sel = (NITRO_LOWERMENU_ITEM1 + i == sSelected || NITRO_LOWERMENU_ITEM1 + i == sHeld);
 
         box(s[0], s[1], s[2], s[3], NAVY, sel ? SEL : BTN, BTN_TOP, !sel, sel ? SEL_SHD : BTN_SHD, 2);
+        if (sItems[i].item > 0) {
+            int on = (sEnabled >> (NITRO_LOWERMENU_ITEM1 + i)) & 1;
+
+            /* (in the square above its shading; faded where it can't be
+             * used now) */
+            paste(&sItems[i].picture, s[0] + 1, s[1] + 1, s[2] - 1, s[3] - 3, on || sel ? 255 : 96);
+            if (i == 0) {
+                draw_y_pill(s[0] + 2, s[1] + 2);
+            }
+        }
     }
     draw_tabs();
 }
@@ -1035,6 +1206,30 @@ void NitroPort_LowerMenuSetEnabled(uint32_t mask)
         if (drawn()) {
             redraw();
         }
+    }
+}
+
+void NitroPort_LowerMenuSetItem(int square, int item, int iconMember, int paletteMember)
+{
+    SquareItem *s;
+
+    if (square < 0 || square > 1) {
+        return;
+    }
+    s = &sItems[square];
+    item = item > 0 ? item : 0;
+    if (s->item == item && (item == 0 || (s->icon == iconMember && s->palette == paletteMember))) {
+        return;
+    }
+    s->item = item;
+    s->icon = iconMember;
+    s->palette = paletteMember;
+    s->picture.w = s->picture.h = 0;
+    if (item > 0) {
+        read_item_icon(iconMember, paletteMember, &s->picture);
+    }
+    if (drawn()) {
+        redraw();
     }
 }
 

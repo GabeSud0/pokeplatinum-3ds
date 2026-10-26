@@ -33,6 +33,7 @@ static const struct {
     [NITRO_OPT_ENCOUNTERS] = { "encounters", 5, 0 },
     [NITRO_OPT_SHINY] = { "shiny", 6, 0 },
     [NITRO_OPT_FPS60_HELD] = { "fps60_held", 2, 0 },
+    [NITRO_OPT_ITEM2] = { "item2", 1024, 0 },
 };
 
 static int sValue[NITRO_OPT_COUNT];

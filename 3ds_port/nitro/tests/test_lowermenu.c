@@ -233,6 +233,26 @@ static void test_enabled_and_expiry(void)
     CHECK(NitroPort_LowerMenuSerial() == before);
     NitroPort_LowerMenuSetEnabled(0xFFFFFFFFu);
 
+    /* The squares: an item each (no data pack here: no icon read, the
+     * square still drawn), drawn again when it changes, not when it's the
+     * same; a square pressed as a button, not when it can't be used. */
+    before = NitroPort_LowerMenuSerial();
+    NitroPort_LowerMenuSetItem(0, 450, 300, 301);
+    CHECK(NitroPort_LowerMenuSerial() != before);
+    before = NitroPort_LowerMenuSerial();
+    NitroPort_LowerMenuSetItem(0, 450, 300, 301);
+    NitroPort_LowerMenuSetItem(2, 450, 300, 301);   /* (no third square: nothing) */
+    CHECK(NitroPort_LowerMenuSerial() == before);
+    NitroPort_LowerMenuTouch(1, 301, 213, NULL, NULL);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == NITRO_LOWERMENU_ITEM2);
+    NitroPort_LowerMenuSetEnabled(~(1u << NITRO_LOWERMENU_ITEM1));
+    NitroPort_LowerMenuTouch(1, 266, 213, NULL, NULL);
+    NitroPort_LowerMenuTouch(0, 0, 0, NULL, NULL);
+    CHECK(NitroPort_LowerMenuTakePress() == -1);
+    NitroPort_LowerMenuSetEnabled(0xFFFFFFFFu);
+    NitroPort_LowerMenuSetItem(0, 0, 0, 0);
+
     /* A press not taken: still there for NITRO_LOWERMENU_PRESS_FRAMES frames,
      * then dropped. */
     NitroPort_LowerMenuTouch(1, 280, bagY, NULL, NULL);

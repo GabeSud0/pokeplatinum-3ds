@@ -1610,11 +1610,32 @@ void NitroPort_Terminate(void)
     _exit(3);
 }
 
+/* (main's arguments: the soft reset starts the runner again with them) */
+static char **sArgv;
+
+/* The game's soft reset (L + R + START + SELECT): the save's file written,
+ * then the runner started again as it was (the same arguments, the same
+ * process: the control directory carries on). */
 void NitroPort_ResetSystem(u32 parameter)
 {
-    NitroPort_Log("[pc] the game asked to restart (OS_ResetSystem %lu); stopping",
+    NitroPort_Log("[pc] the game asked to restart (OS_ResetSystem %lu); restarting",
                   (unsigned long)parameter);
-    fflush(stderr);
+    StopSound();
+    NitroPort_CardFlush();
+    fflush(NULL);
+    if (sArgv != NULL) {
+        /* (by the program's own name, so it's still called that) */
+        char self[4096];
+        ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+
+        if (n > 0) {
+            self[n] = '\0';
+            execv(self, sArgv);
+        }
+        execv("/proc/self/exe", sArgv);
+        NitroPort_Log("[pc] couldn't start again (%s); stopping", strerror(errno));
+        fflush(stderr);
+    }
     _exit(4);
 }
 
@@ -1837,6 +1858,8 @@ int main(int argc, char **argv)
     const char *savePath = NULL;
     char *defaultSave = NULL;
     int i, classicMenu = 0, mapThread = 0;
+
+    sArgv = argv;
 
     if (argc == 2 && strcmp(argv[1], "--check-overlays") == 0) {
         return Platinum_CheckOverlays() == 0 ? 0 : 1;

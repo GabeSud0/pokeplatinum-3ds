@@ -1326,11 +1326,20 @@ void NitroPort_Terminate(void)
     StopWithMessage();
 }
 
+/* The game's soft reset (L + R + START + SELECT, or after a link error):
+ * the program closes as from the HOME menu (the save's file written) and
+ * the system starts it again (libctru's chainload to itself: the HOME
+ * menu jumps back to this title). Started from the Homebrew Launcher (a
+ * .3dsx) there's no jumping back: it closes to the launcher. */
 void NitroPort_ResetSystem(uint32_t parameter)
 {
-    NitroPort_Log("The game asked to restart (OS_ResetSystem %lu). Restarting isn't "
-                  "supported yet.", (unsigned long)parameter);
-    StopWithMessage();
+    NitroPort_Log("The game asked to restart (OS_ResetSystem %lu): restarting", (unsigned long)parameter);
+    if (envIsHomebrew()) {
+        NitroPort_Log("(started from the Homebrew Launcher: it closes to the launcher instead)");
+    } else {
+        aptSetChainloaderToSelf();
+    }
+    Quit();
 }
 
 /* ------------------------------------------------------------- crashes */

@@ -25,6 +25,7 @@ enum {
     NITRO_OPT_ENCOUNTERS,        /* 0 normal, 1 off, 2 1/4, 3 1/2, 4 2x */
     NITRO_OPT_SHINY,             /* 0 1/8192 (the game's), 1 1/4096, 2 1/1024, 3 1/256, 4 1/64, 5 always */
     NITRO_OPT_FPS60_HELD,        /* (not on the page) 1: 60 FPS turned off by SPEED, on again at 1x */
+    NITRO_OPT_ITEM2,             /* (not on the page) the lower menu's second square's item (0 none) */
     NITRO_OPT_COUNT
 };
 

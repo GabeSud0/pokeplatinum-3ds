@@ -559,6 +559,17 @@ stretched:
   upper screen; the intro's flyover is on the lower screen, at the DS's
   width.
 
+## The soft reset
+
+L + R + START + SELECT (the game's own soft reset, or its restart after a
+link error: `OS_ResetSystem`) closes the program as from the HOME menu (the
+save's file written) and has the system start it again
+(`aptSetChainloaderToSelf`: the HOME menu jumps back to the title), so the
+game starts from its opening with nothing left over. Started from the
+Homebrew Launcher (a `.3dsx`) there's nothing to jump back to: it closes to
+the launcher. The PC runner starts itself again with the same arguments
+(`execv`), the control directory carrying on.
+
 ## The lower screen as a menu
 
 In the field the lower screen is the port's menu, drawn at the 3DS's
@@ -901,6 +912,24 @@ screens) the lower screen is the DS's, filling the screen as before.
   (no map in between). Taps made before a question are not its answer, and
   menu buttons tapped during the save aren't acted on after it. Without
   the menu, or with the Pokétch not up, it's the DS's save.
+- **The two squares** (`patches/pokeplatinum/0041`): the registered items'
+  icons (the game's own, read from `itemtool/itemdata/item_icon.narc` by
+  the port when the item changes: `NitroPort_LowerMenuSetItem`), the first
+  with a small red Y (the approved mock-up). The first is the item on Y
+  (the save's registered item); the second the one that was on Y before:
+  REGISTER in the bag puts an item on Y and moves the one that was there
+  to the second square, DESELECT takes it off either square. The second is
+  the port's, not the save's (`item2` in `options.txt`, saved at once), so
+  saves stay the DS's; shown only while the bag has it (another
+  adventure's isn't). The bag marks Y's item as before (its "Y SET"), not
+  the second's. A tap on a square uses its item as Y does
+  (`RegisteredItem_PortUse`: the same checks and messages; the Bicycle,
+  the rods, the Journal, the Vs. Recorder...); with the menu open (X) the
+  cursor goes onto them (Up / Down round the column and the squares, Left
+  / Right between the two) and A uses it; tapped in the bag, the party, the
+  trainer case or the options page, those close and it's used back in the
+  field. Dimmed where Y does nothing (the Battle Tower's salon, the Pal
+  Park). Without the menu, the bag's REGISTER is the DS's.
 - **The panel at the field's start** (`StartMenu_PortFieldStarts`, from the
   Pokétch's start): the tab chosen (the map once they have the Town Map)
   from the field's first frame, its name and description printed at once,
@@ -1026,7 +1055,7 @@ screens) the lower screen is the DS's, filling the screen as before.
   again (`NitroPort_LowerMenuForgetField`). The 3DS puts the copy on the
   LCD itself (its own framebuffer, once nothing of the upper screen's is
   waiting for its V-blank).
-  (Nothing lets it go on a soft reset yet; the port has none.) The 3DS
+  (A soft reset starts the program again: nothing's kept.) The 3DS
   doesn't draw a screen while it's
   kept (what's on its LCD stays); drawn again regardless (back from the
   HOME menu), it's black. The PC runner's `rshot` and `mshot` show what's

@@ -1,0 +1,622 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] The lower menu's two squares (SDK_PORT_3DS)
+
+The two squares under the lower menu's buttons show the registered
+items' icons (handed to the port: NitroPort_LowerMenuSetItem) and use
+them. The first is the item on Y; the second the one that was on Y
+before it: REGISTER in the bag moves the item that was on Y to the second
+square, DESELECT takes an item off either. The second square's item is
+the port's (its setting item2), not the save's; it's shown only while the
+bag has it.
+
+A tap on a square uses its item as Y does (RegisteredItem_PortUse: Y's
+work with any item; sub_02069238 calls it with the registered one), the
+field taking the press with its input (FieldInput's portItem2 for the
+second). With the menu open the cursor goes onto the squares (Up and
+Down round the column and the squares, Left and Right between them) and
+A uses the item; tapped in the bag, the party, the trainer case or the
+options page, those close and the item's used back in the field. The
+squares are dimmed where Y does nothing (the Battle Tower's salon, the
+Pal Park). Without the lower menu the bag registers as the DS's.
+---
+ include/item_use_functions.h         |   5 +
+ include/overlay005/field_control.h   |   5 +
+ include/port_options.h               |   1 +
+ include/start_menu.h                 |  10 ++
+ src/applications/bag/main.c          |  27 ++++-
+ src/applications/party_menu/main.c   |   2 +-
+ src/applications/trainer_case/main.c |   2 +-
+ src/item_use_functions.c             |  18 +++
+ src/overlay005/field_control.c       |  26 ++++-
+ src/overlay005/options_panel.c       |   7 +-
+ src/start_menu.c                     | 158 +++++++++++++++++++++++++--
+ 11 files changed, 243 insertions(+), 18 deletions(-)
+
+diff --git a/include/item_use_functions.h b/include/item_use_functions.h
+index 14c59f1b..f33abe29 100644
+--- a/include/item_use_functions.h
++++ b/include/item_use_functions.h
+@@ -73,5 +73,10 @@ u32 ItemUseFunction_Get(u16 funcType, u16 functionIdx);
+ void ItemUseContext_Init(FieldSystem *fieldSystem, ItemUseContext *param1);
+ BOOL BerryPatch_IsEmpty(const ItemUseContext *usageContext);
+ BOOL sub_02069238(FieldSystem *fieldSystem);
++#ifdef SDK_PORT_3DS
++// (the 3DS remaster's lower menu: its second square's item used as Y uses
++// the registered one)
++BOOL RegisteredItem_PortUse(FieldSystem *fieldSystem, u16 item);
++#endif
+ 
+ #endif // POKEPLATINUM_ITEM_USE_FUNCTIONS_H
+diff --git a/include/overlay005/field_control.h b/include/overlay005/field_control.h
+index 02d9a989..ee3e047d 100644
+--- a/include/overlay005/field_control.h
++++ b/include/overlay005/field_control.h
+@@ -16,7 +16,12 @@ typedef struct FieldInput {
+     u16 dummy3 : 1;
+     u16 dummy4 : 1;
+     u16 dummy5 : 1;
++#ifdef SDK_PORT_3DS
++    u16 portItem2 : 1; // (the 3DS remaster's lower menu: its second square tapped)
++    u16 padding : 3;
++#else
+     u16 padding : 4;
++#endif
+     u8 playerDir;
+     s8 transitionDir;
+     u16 pressedKeys;
+diff --git a/include/port_options.h b/include/port_options.h
+index 5d8cfee7..4e913df8 100644
+--- a/include/port_options.h
++++ b/include/port_options.h
+@@ -19,6 +19,7 @@
+ #define PORT_OPT_INFINITE_MONEY  12
+ #define PORT_OPT_ENCOUNTERS      13 // 0 normal, 1 off, 2 1/4, 3 1/2, 4 2x
+ #define PORT_OPT_SHINY           14 // 0 1/8192, 1 1/4096, 2 1/1024, 3 1/256, 4 1/64, 5 always
++#define PORT_OPT_ITEM2           16 // (not on the page) the lower menu's second square's item
+ 
+ int NitroPort_Option(int id);
+ void NitroPort_OptionSet(int id, int value);
+diff --git a/include/start_menu.h b/include/start_menu.h
+index e51ef7db..37c633ad 100644
+--- a/include/start_menu.h
++++ b/include/start_menu.h
+@@ -92,6 +92,16 @@ BOOL StartMenu_PortTapOpening(void);
+ // (the field's lower screen made again: the map in its panel told again)
+ void StartMenu_PortMapStale(void);
+ void StartMenu_PortFieldStarts(FieldSystem *fieldSystem);
++// The lower menu's two squares (the registered items): the item each one
++// uses now (0: none, or not one the bag has: the second's is the port's,
++// not the save's), and the square tapped (1 or 2; 0: none), taken once a
++// frame by the field (the tap from the field, or from the menu or an app
++// of its, once the field's back).
++u16 StartMenu_PortSquareItem(FieldSystem *fieldSystem, int square);
++int StartMenu_PortTakeSquarePress(void);
++// (the bag's) An item registered (on Y, the first square): the one that
++// was there goes to the second square; or taken off either (ITEM_NONE).
++void StartMenu_PortRegisterItem(void *bag, u16 item, BOOL on);
+ #endif
+ 
+ #endif // POKEPLATINUM_START_MENU_H
+diff --git a/src/applications/bag/main.c b/src/applications/bag/main.c
+index a1681d2c..38c57faf 100644
+--- a/src/applications/bag/main.c
++++ b/src/applications/bag/main.c
+@@ -80,6 +80,17 @@ extern int NitroPort_LowerMenuPanelFade(void);
+ #define PORT_HOLD_FIELD 2      // NITRO_LOWERMENU_HOLD_FIELD
+ extern void NitroPort_Render2DSmoothObjs(int engine, int on);
+ extern int gStartMenuPortAppPress;    // (start_menu.c)
++extern void StartMenu_PortRegisterItem(void *bag, u16 item, BOOL on);
++extern int NitroPort_Option(int id);
++#define PORT_OPT_ITEM2 16 // (port_options.h: the lower menu's second square's item)
++
++// (the 3DS remaster: an item on one of the lower menu's two squares, the
++// registered one or the second)
++static BOOL BagPort_OnSquare(BagController *controller, u16 item)
++{
++    return item != ITEM_NONE && (Bag_GetRegisteredItem(controller->bag) == item ||
++        (NitroPort_LowerMenuAvailable() && NitroPort_Option(PORT_OPT_ITEM2) == item));
++}
+ extern int gStartMenuPortGiveSlot;    // (start_menu.c)
+ extern BOOL StartMenu_PortAppIsMenus(ApplicationManager *appMan);
+ extern BOOL StartMenu_PortButtonOpensApp(int button);
+@@ -200,7 +211,7 @@ static void BagPort_Leave(BagController *controller)
+     }
+ }
+ 
+-#define BAG_PORT_MENU_BUTTONS 8 // NITRO_LOWERMENU_ITEM1: the menu's buttons before it
++#define BAG_PORT_MENU_BUTTONS 10 // NITRO_LOWERMENU_COUNT: the menu's buttons and its two squares
+ 
+ // One of the menu's buttons tapped (-1: none).
+ static int BagPort_MenuPress(void)
+@@ -2427,7 +2438,11 @@ static void MakeItemActionsMenu(BagController *controller)
+             }
+         }
+         if (Item_Get(itemData, ITEM_PARAM_CAN_REGISTER)) {
++#ifdef SDK_PORT_3DS
++            if (BagPort_OnSquare(controller, controller->bagCtx->selectedItem)) { // (either square's)
++#else
+             if (Bag_GetRegisteredItem(controller->bag) == controller->bagCtx->selectedItem) {
++#endif
+                 itemActions[itemActionsIdx] = ITEM_ACTION_DESELECT;
+             } else {
+                 itemActions[itemActionsIdx] = ITEM_ACTION_REGISTER;
+@@ -2937,7 +2952,12 @@ static int CheckPlayerDismissedTrashedMsg(BagController *controller)
+ 
+ static int ItemActionFunc_Register(BagController *controller)
+ {
++#ifdef SDK_PORT_3DS
++    // (on Y and the lower menu's first square; what was there to its second)
++    StartMenu_PortRegisterItem(controller->bag, controller->bagCtx->selectedItem, TRUE);
++#else
+     Bag_RegisterItem(controller->bag, controller->bagCtx->selectedItem);
++#endif
+     ListMenu_Draw(controller->itemList);
+     BagUI_CloseItemActionsMenu(controller);
+     Window_ScheduleCopyToVRAM(&controller->windows[BAG_UI_WINDOW_ITEM_DESCRIPTION]);
+@@ -2948,7 +2968,12 @@ static int ItemActionFunc_Register(BagController *controller)
+ 
+ static int ItemActionFunc_Deselect(BagController *controller)
+ {
++#ifdef SDK_PORT_3DS
++    // (off whichever square it's on)
++    StartMenu_PortRegisterItem(controller->bag, controller->bagCtx->selectedItem, FALSE);
++#else
+     Bag_RegisterItem(controller->bag, ITEM_NONE);
++#endif
+     ListMenu_Draw(controller->itemList);
+     BagUI_CloseItemActionsMenu(controller);
+     Window_ScheduleCopyToVRAM(&controller->windows[BAG_UI_WINDOW_ITEM_DESCRIPTION]);
+diff --git a/src/applications/party_menu/main.c b/src/applications/party_menu/main.c
+index fc77d888..4305d8fc 100644
+--- a/src/applications/party_menu/main.c
++++ b/src/applications/party_menu/main.c
+@@ -118,7 +118,7 @@ static BOOL sPartyPortClosedInstantly;
+ static int sPartyPortReveal;
+ static BOOL sPartyPortBlack; // (the screens made black for an app opened from the party)
+ 
+-#define PARTY_PORT_MENU_BUTTONS 8 // NITRO_LOWERMENU_ITEM1: the menu's buttons before it
++#define PARTY_PORT_MENU_BUTTONS 10 // NITRO_LOWERMENU_COUNT: the menu's buttons and its two squares
+ 
+ // One of the menu's buttons tapped (-1: none).
+ static int PartyPort_MenuPress(void)
+diff --git a/src/applications/trainer_case/main.c b/src/applications/trainer_case/main.c
+index ecd465e7..16187df4 100644
+--- a/src/applications/trainer_case/main.c
++++ b/src/applications/trainer_case/main.c
+@@ -108,7 +108,7 @@ extern void NitroPort_LowerMenuSetTabs(int count, const char *const *labels, int
+ #define PORT_FADE_BLACK    16   // (NitroPort_LowerMenuPanelFade: the panel black)
+ #define PORT_PANEL_DS      0    // NITRO_LOWERMENU_PANEL_DS
+ #define PORT_HOLD_FIELD    2    // NITRO_LOWERMENU_HOLD_FIELD
+-#define PORT_MENU_BUTTONS  8    // NITRO_LOWERMENU_ITEM1: the menu's buttons before it
++#define PORT_MENU_BUTTONS  10   // NITRO_LOWERMENU_COUNT: the menu's buttons and its two squares
+ #define PORT_TAB_PRESS(k)  (11 + (k)) // NITRO_LOWERMENU_TAB_PRESS
+ #define PORT_FROM_LOWER    0    // NITRO_LOWERMENU_FROM_*
+ #define PORT_FROM_UPPER    1
+diff --git a/src/item_use_functions.c b/src/item_use_functions.c
+index a3d90523..2206abc0 100644
+--- a/src/item_use_functions.c
++++ b/src/item_use_functions.c
+@@ -858,7 +858,12 @@ static BOOL UseBagMessageItem(ItemFieldUseContext *usageContext)
+     v0->unk_16 = 0;
+     v0->unk_10 = String_Init(128, HEAP_ID_FIELD2);
+ 
++#ifdef SDK_PORT_3DS
++    // (the item used: the second square's, or the registered one)
++    BagContext_FormatUsageMessage(usageContext->fieldSystem->saveData, v0->unk_10, usageContext->unk_28, HEAP_ID_FIELD2);
++#else
+     BagContext_FormatUsageMessage(usageContext->fieldSystem->saveData, v0->unk_10, Bag_GetRegisteredItem(SaveData_GetBag(usageContext->fieldSystem->saveData)), HEAP_ID_FIELD2);
++#endif
+     FieldSystem_CreateTask(usageContext->fieldSystem, PrintRegisteredKeyItemUseMessage, v0);
+ 
+     return FALSE;
+@@ -1039,6 +1044,15 @@ static void *OpenPartyMenuForGracidea(void *fieldSystem)
+ }
+ 
+ BOOL sub_02069238(FieldSystem *fieldSystem)
++#ifdef SDK_PORT_3DS
++{
++    return RegisteredItem_PortUse(fieldSystem, (u16)Bag_GetRegisteredItem(SaveData_GetBag(fieldSystem->saveData)));
++}
++
++// Y's work with any item (the registered one, or the 3DS remaster's lower
++// menu's second square's).
++BOOL RegisteredItem_PortUse(FieldSystem *fieldSystem, u16 portItem)
++#endif
+ {
+     ItemFieldUseContext *usageContext;
+     ItemFieldUseFunc useInField;
+@@ -1055,7 +1069,11 @@ BOOL sub_02069238(FieldSystem *fieldSystem)
+         return FALSE;
+     }
+ 
++#ifdef SDK_PORT_3DS
++    item = portItem;
++#else
+     item = (u16)Bag_GetRegisteredItem(SaveData_GetBag(fieldSystem->saveData));
++#endif
+     itemUseFuncIdx = (u16)Item_LoadParam(item, ITEM_PARAM_FIELD_USE_FUNC, HEAP_ID_FIELD2);
+     checkUse = (ItemCheckUseFunc)ItemUseFunction_Get(ITEM_FUNC_CHECK_CAN_USE, itemUseFuncIdx);
+     useInField = (ItemFieldUseFunc)ItemUseFunction_Get(ITEM_FUNC_USE_IN_FIELD, itemUseFuncIdx);
+diff --git a/src/overlay005/field_control.c b/src/overlay005/field_control.c
+index 372a7dbe..03567690 100644
+--- a/src/overlay005/field_control.c
++++ b/src/overlay005/field_control.c
+@@ -109,6 +109,9 @@ static void FieldInput_Clear(FieldInput *input)
+     input->dummy3 = FALSE;
+     input->dummy4 = FALSE;
+     input->dummy5 = FALSE;
++#ifdef SDK_PORT_3DS
++    input->portItem2 = FALSE;
++#endif
+     input->playerDir = DIR_NONE;
+     input->transitionDir = DIR_NONE;
+ }
+@@ -126,8 +129,9 @@ void FieldInput_Update(FieldInput *input, FieldSystem *fieldSystem, u16 pressedK
+ 
+ #ifdef SDK_PORT_3DS
+     // The 3DS remaster's lower screen as the start menu: its buttons, and a
+-    // tap on one opening the menu as X does.
++    // tap on one opening the menu as X does (or a square's item used).
+     StartMenu_PortUpdateButtons(fieldSystem);
++    int square;
+ #endif
+ 
+     if (moveState == PLAYER_MOVE_STATE_END || moveState == PLAYER_MOVE_STATE_NONE) {
+@@ -138,11 +142,21 @@ void FieldInput_Update(FieldInput *input, FieldSystem *fieldSystem, u16 pressedK
+         if (StartMenu_PortTapOpens(fieldSystem)) {
+             input->menu = TRUE;
+         }
++
++        square = StartMenu_PortTakeSquarePress();
+ #endif
+ 
+         if (pressedKeys & PAD_BUTTON_Y) {
+             input->registeredItem = TRUE;
+         }
++#ifdef SDK_PORT_3DS
++        // (the lower menu's squares: the first as Y, the second its item)
++        if (square == 1) {
++            input->registeredItem = TRUE;
++        } else if (square == 2) {
++            input->portItem2 = TRUE;
++        }
++#endif
+ 
+         if (pressedKeys & PAD_BUTTON_A) {
+             input->interact = TRUE;
+@@ -338,6 +352,11 @@ BOOL FieldInput_Process(const FieldInput *input, FieldSystem *fieldSystem)
+     if (input->registeredItem && sub_02069238(fieldSystem) == TRUE) {
+         return TRUE;
+     }
++#ifdef SDK_PORT_3DS
++    if (input->portItem2 && RegisteredItem_PortUse(fieldSystem, StartMenu_PortSquareItem(fieldSystem, 2)) == TRUE) {
++        return TRUE;
++    }
++#endif
+ 
+     if (input->menu && FieldSystem_IsInValidLocation(fieldSystem) == TRUE) {
+ #ifdef SDK_PORT_3DS
+@@ -561,6 +580,11 @@ int FieldInput_Process_BattleTower(const FieldInput *input, FieldSystem *fieldSy
+     if (input->registeredItem && sub_02069238(fieldSystem) == TRUE) {
+         return TRUE;
+     }
++#ifdef SDK_PORT_3DS
++    if (input->portItem2 && RegisteredItem_PortUse(fieldSystem, StartMenu_PortSquareItem(fieldSystem, 2)) == TRUE) {
++        return TRUE;
++    }
++#endif
+ 
+     if (input->menu) {
+ #ifdef SDK_PORT_3DS
+diff --git a/src/overlay005/options_panel.c b/src/overlay005/options_panel.c
+index 34124062..4c069755 100644
+--- a/src/overlay005/options_panel.c
++++ b/src/overlay005/options_panel.c
+@@ -59,6 +59,7 @@ extern int NitroPort_LowerMenuTakePress(void);
+ 
+ #define PORT_BUTTON_OPTIONS  7 // (start_menu.c's PORT_BUTTON_OPTIONS)
+ #define PORT_BUTTON_COUNT    8
++#define PORT_MENU_PRESSES    10 // NITRO_LOWERMENU_COUNT: the buttons and the two squares
+ #define PORT_BUTTON_PRESS(k) (10 + 1 + 4 + (k)) // NITRO_LOWERMENU_BUTTON_PRESS
+ #define PORT_BUTTONS_MAX     32                 // NITRO_LOWERMENU_BUTTONS_MAX
+ 
+@@ -1007,9 +1008,9 @@ int OptionsPanel_Update(void)
+         press = NitroPort_LowerMenuTakePress();
+     }
+ 
+-    // The menu's buttons: OPTIONS closes the page; the others close it and
+-    // are acted on after.
+-    if (press >= 0 && press < PORT_BUTTON_COUNT) {
++    // The menu's buttons: OPTIONS closes the page; the others (and the
++    // squares) close it and are acted on after.
++    if (press >= 0 && press < PORT_MENU_PRESSES) {
+         Sound_PlayEffect(SE_CONFIRM_sseq_3);
+         return press == PORT_BUTTON_OPTIONS ? OPTIONS_PANEL_CLOSE : press;
+     }
+diff --git a/src/start_menu.c b/src/start_menu.c
+index c75f9e7c..05ba394b 100644
+--- a/src/start_menu.c
++++ b/src/start_menu.c
+@@ -200,6 +200,7 @@ static void StartMenu_ProcessGivenMail(FieldSystem *fieldSystem, StartMenu *menu
+ #ifdef SDK_PORT_3DS
+ static BOOL StartMenu_PortButtons(FieldSystem *fieldSystem, u32 hideOptionFlags, u32 *outButtons);
+ static void StartMenu_PortInit(FieldSystem *fieldSystem, StartMenu *menu, u32 optionCount, u32 buttons);
++static u32 StartMenu_PortSquareButtons(FieldSystem *fieldSystem);
+ static BOOL StartMenu_PortSelect(FieldTask *fieldTask);
+ static BOOL StartMenu_PortSwitchFromApp(FieldTask *fieldTask, int own);
+ static FieldTaskFunc StartMenu_PortAppFromApp(int button);
+@@ -338,6 +339,7 @@ extern int NitroPort_LowerMenuKeptShown(void);
+ extern void NitroPort_LowerMenuFadePanel(int black);
+ extern int NitroPort_LowerMenuPanelFade(void);
+ extern void NitroPort_LowerMenuFadeToPanel(int shows);
++extern void NitroPort_LowerMenuSetItem(int square, int item, int iconMember, int paletteMember);
+ #define PORT_LET_GO_NOW (-1) // NITRO_LOWERMENU_LET_GO_NOW
+ #define PORT_CLEAR_NOW (-1) // NITRO_LOWERMENU_CLEAR_NOW
+ #define PORT_FADE_BLACK 16 // (NitroPort_LowerMenuPanelFade: the panel black)
+@@ -422,6 +424,13 @@ enum PortMenuButton {
+ };
+ 
+ // Each button's start menu entry (-1: the port's own).
++// The two squares under the buttons (the registered items): pressed as
++// buttons are, after them.
++#define PORT_BUTTON_ITEM1 8 // NITRO_LOWERMENU_ITEM1: the item on Y
++#define PORT_BUTTON_ITEM2 9 // NITRO_LOWERMENU_ITEM2: the second one
++#define PORT_PRESSES      10 // the buttons and the squares
++#define PORT_IS_SQUARE(b) ((b) == PORT_BUTTON_ITEM1 || (b) == PORT_BUTTON_ITEM2)
++
+ static const s8 sPortButtonOption[PORT_BUTTON_COUNT] = {
+     [PORT_BUTTON_MAP] = -1,
+     [PORT_BUTTON_POKEMON] = START_MENU_OPTION_POKEMON,
+@@ -438,6 +447,8 @@ static u32 sPortButtons; // the buttons it can use (a bit each)
+ static u32 sPortOptionCount; // its entries (menu->options)
+ static int sPortCursor = -1; // its cursor, a button (kept from one opening to the next)
+ static u32 sPortFieldButtons; // the buttons the field said can be used (StartMenu_PortUpdateButtons)
++static int sPortSquarePress; // a square tapped, its item to be used by the field (1, 2; 0 none)
++static int sPortItem2Key = -1, sPortItem2Owned; // (the second square's item: whether the bag has it, as last looked)
+ static int sPortPanelChoice = PORT_PANEL_MAP; // what the panel shows, as the player chose (the map once they have it)
+ static BOOL sPortMapStale = TRUE; // the map to be told again (the field started again)
+ static int sPortMapX = -1, sPortMapZ = -1, sPortMapHeader = -1; // the player's square and place it was told
+@@ -763,6 +774,9 @@ static void StartMenu_InitMenu(FieldTask *fieldTask)
+     u32 portButtons = 0;
+ 
+     sPortMode = NitroPort_LowerMenuOn() && StartMenu_PortButtons(fieldSystem, menu->hideOptionFlags, &portButtons);
++    if (sPortMode) {
++        portButtons |= StartMenu_PortSquareButtons(fieldSystem);
++    }
+     gStartMenuPortMenu = sPortMode;
+     sPortFieldSystem = fieldSystem;
+ #endif
+@@ -1891,7 +1905,7 @@ static void StartMenu_PortOptions(FieldTask *fieldTask)
+         NitroPort_LowerMenuFadePanel(FALSE);
+         NitroPort_LowerMenuKeepShown(FALSE);
+ 
+-        if (after >= 0 && after < PORT_BUTTON_COUNT && (sPortButtons & (1u << after))) {
++        if (after >= 0 && after < PORT_PRESSES && (sPortButtons & (1u << after))) {
+             StartMenu_PortSetCursor(fieldSystem, menu, after);
+             sPortInjectedPress = after;
+             menu->state = START_MENU_STATE_SELECT;
+@@ -2819,6 +2833,8 @@ void StartMenu_PortFieldStarts(FieldSystem *fieldSystem)
+ {
+     static BOOL startTabRead;
+ 
++    sPortItem2Key = -1; // (the bag looked at again: an item had since)
++
+     if (NitroPort_LowerMenuOn() && fieldSystem->playerAvatar != NULL && fieldSystem->location != NULL) {
+         // (the game's first field: the tab the options page's START WITH
+         // says, the map or the Pokétch)
+@@ -2909,6 +2925,97 @@ static BOOL StartMenu_PortMapChosen(FieldSystem *fieldSystem)
+     return StartMenu_PortTabFor(fieldSystem, sPortPanelChoice) == PORT_PANEL_MAP;
+ }
+ 
++// The second square's item, if the bag has it (the port keeps it, not the
++// save: another adventure's, or one not had yet, isn't shown). Looked up
++// again when it changes or the field starts (Bag_CanRemoveItem reads the
++// item's data).
++static BOOL StartMenu_PortItem2Owned(FieldSystem *fieldSystem, u16 item)
++{
++    if (item != sPortItem2Key) {
++        sPortItem2Key = item;
++        sPortItem2Owned = item != ITEM_NONE && item < NUM_ITEMS &&
++            Bag_CanRemoveItem(SaveData_GetBag(fieldSystem->saveData), item, 1, HEAP_ID_FIELD2);
++    }
++
++    return sPortItem2Owned;
++}
++
++u16 StartMenu_PortSquareItem(FieldSystem *fieldSystem, int square)
++{
++    u16 registered = (u16)Bag_GetRegisteredItem(SaveData_GetBag(fieldSystem->saveData));
++    u16 item = (u16)NitroPort_Option(PORT_OPT_ITEM2);
++
++    if (square == 1) {
++        return registered;
++    }
++
++    return item != registered && StartMenu_PortItem2Owned(fieldSystem, item) ? item : ITEM_NONE;
++}
++
++// The squares' items to the port (their icons), and the squares that can be
++// used now: an item there, and not where Y does nothing (the Battle Tower's
++// salon, the Pal Park).
++static u32 StartMenu_PortSquareButtons(FieldSystem *fieldSystem)
++{
++    BOOL usable = !FieldSystem_IsInBattleTowerSalon(fieldSystem) &&
++        !SystemFlag_CheckInPalPark(SaveData_GetVarsFlags(fieldSystem->saveData));
++    u32 buttons = 0;
++
++    for (int square = 1; square <= 2; square++) {
++        u16 item = StartMenu_PortSquareItem(fieldSystem, square);
++
++        NitroPort_LowerMenuSetItem(square - 1, item, Item_FileID(item, ITEM_FILE_TYPE_ICON), Item_FileID(item, ITEM_FILE_TYPE_PALETTE));
++
++        if (item != ITEM_NONE && usable) {
++            buttons |= 1u << (PORT_BUTTON_ITEM1 + square - 1);
++        }
++    }
++
++    return buttons;
++}
++
++int StartMenu_PortTakeSquarePress(void)
++{
++    int square = sPortSquarePress;
++
++    sPortSquarePress = 0;
++    return square;
++}
++
++void StartMenu_PortRegisterItem(void *bagData, u16 item, BOOL on)
++{
++    Bag *bag = bagData;
++    u16 registered = (u16)Bag_GetRegisteredItem(bag);
++    u16 second = (u16)NitroPort_Option(PORT_OPT_ITEM2);
++
++    // (without the lower menu, as the DS's: no second square)
++    if (!NitroPort_LowerMenuAvailable()) {
++        Bag_RegisterItem(bag, on ? item : ITEM_NONE);
++        return;
++    }
++
++    if (on) {
++        // On Y; the one that was there to the second square (or, the item
++        // the second's, the second's empty now).
++        Bag_RegisterItem(bag, item);
++
++        if (registered != ITEM_NONE && registered != item) {
++            second = registered;
++        } else if (second == item) {
++            second = ITEM_NONE;
++        }
++    } else if (registered == item) {
++        Bag_RegisterItem(bag, ITEM_NONE);
++    } else if (second == item) {
++        second = ITEM_NONE;
++    }
++
++    if (second != NitroPort_Option(PORT_OPT_ITEM2)) {
++        NitroPort_OptionSet(PORT_OPT_ITEM2, second);
++        NitroPort_OptionsSave();
++    }
++}
++
+ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
+ {
+     u32 buttons = 0;
+@@ -2941,6 +3048,7 @@ void StartMenu_PortUpdateButtons(FieldSystem *fieldSystem)
+         StartMenu_PortButtons(fieldSystem, StartMenu_PortHiddenOptions(fieldSystem), &buttons);
+     }
+ 
++    buttons |= StartMenu_PortSquareButtons(fieldSystem); // (as Y: wherever the field reads it)
+     sPortFieldButtons = buttons;
+     NitroPort_LowerMenuSetEnabled(buttons);
+     StartMenu_PortShowPanel(fieldSystem);
+@@ -2975,11 +3083,19 @@ BOOL StartMenu_PortTapOpens(FieldSystem *fieldSystem)
+ 
+     // A tap on a button that can't be used here (made before the field
+     // said so: during a warp's fade, say): nothing.
+-    if (button >= PORT_BUTTON_COUNT || !(sPortFieldButtons & (1u << button))) {
++    if (button >= PORT_PRESSES || !(sPortFieldButtons & (1u << button))) {
+         NitroPort_LowerMenuTakePress();
+         return FALSE;
+     }
+ 
++    // A square: its item used, as Y uses the registered one (the menu
++    // stays closed; the item's own sounds).
++    if (PORT_IS_SQUARE(button)) {
++        NitroPort_LowerMenuTakePress();
++        sPortSquarePress = button - PORT_BUTTON_ITEM1 + 1;
++        return FALSE;
++    }
++
+     // POKéTCH: the panel shows the Pokétch, the menu stays closed (the
+     // press's sound, as in the menu).
+     if (button == PORT_BUTTON_POKETCH) {
+@@ -3018,11 +3134,11 @@ static BOOL StartMenu_PortSwitchFromApp(FieldTask *fieldTask, int own)
+ 
+     gStartMenuPortAppPress = -1;
+ 
+-    if (button < 0 || button >= PORT_BUTTON_COUNT || button == own || !(sPortButtons & (1u << button))) {
++    if (button < 0 || button >= PORT_PRESSES || button == own || !(sPortButtons & (1u << button))) {
+         return FALSE; // (B, CLOSE BAG, CANCEL, its own button: back to walking)
+     }
+ 
+-    open = StartMenu_PortAppFromApp(button);
++    open = PORT_IS_SQUARE(button) ? NULL : StartMenu_PortAppFromApp(button); // (a square: its item used in the field)
+ 
+     if (open == NULL) {
+         sPortAfterReveal = button; // (back in the field, acted on there)
+@@ -3130,7 +3246,7 @@ BOOL StartMenu_PortButtonOpensApp(int button)
+ 
+ static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, int button)
+ {
+-    if (button < 0 || button >= PORT_BUTTON_COUNT) {
++    if (button < 0 || button >= PORT_PRESSES) {
+         return;
+     }
+ 
+@@ -3230,11 +3346,14 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+         doubled = FALSE;
+     }
+ 
+-    if (button >= 0 && button < PORT_BUTTON_COUNT && (sPortButtons & (1u << button))) {
+-        if (!injected) {
++    if (button >= 0 && button < PORT_PRESSES && (sPortButtons & (1u << button))) {
++        if (!injected && !PORT_IS_SQUARE(button)) {
+             Sound_PlayEffect(SE_CONFIRM_sseq_3);
+         }
+         StartMenu_PortSetCursor(fieldSystem, menu, button);
++    } else if (JOY_NEW(PAD_BUTTON_A) && sPortCursor >= 0 && PORT_IS_SQUARE(sPortCursor)) {
++        button = sPortCursor;
++        tapped = FALSE;
+     } else if (JOY_NEW(PAD_BUTTON_A) && sPortCursor >= 0) {
+         Sound_PlayEffect(SE_CONFIRM_sseq_3);
+         button = sPortCursor;
+@@ -3244,15 +3363,24 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+         menu->state = START_MENU_STATE_END;
+         return TRUE;
+     } else {
+-        if (JOY_NEW(PAD_KEY_UP | PAD_KEY_DOWN) && sPortCursor >= 0) {
+-            // The next button that can be used, round the column.
+-            int step = JOY_NEW(PAD_KEY_UP) ? PORT_BUTTON_COUNT - 1 : 1;
++        if (JOY_NEW(PAD_KEY_UP | PAD_KEY_DOWN | PAD_KEY_LEFT | PAD_KEY_RIGHT) && sPortCursor >= 0) {
++            // The next button that can be used, round the column and its
++            // two squares (Up / Down; Left / Right between the squares).
++            int step = JOY_NEW(PAD_KEY_UP | PAD_KEY_LEFT) ? PORT_PRESSES - 1 : 1;
+             int next = sPortCursor;
+ 
++            if (JOY_NEW(PAD_KEY_LEFT | PAD_KEY_RIGHT) && !PORT_IS_SQUARE(sPortCursor)) {
++                return TRUE;
++            }
++
+             do {
+-                next = (next + step) % PORT_BUTTON_COUNT;
++                next = (next + step) % PORT_PRESSES;
+             } while (!(sPortButtons & (1u << next)) && next != sPortCursor);
+ 
++            if (JOY_NEW(PAD_KEY_LEFT | PAD_KEY_RIGHT) && !PORT_IS_SQUARE(next)) {
++                return TRUE;
++            }
++
+             if (next != sPortCursor) {
+                 Sound_PlayEffect(SEQ_SE_DP_SELECT78_sseq);
+                 StartMenu_PortSetCursor(fieldSystem, menu, next);
+@@ -3262,6 +3390,14 @@ static BOOL StartMenu_PortSelect(FieldTask *fieldTask)
+         return TRUE;
+     }
+ 
++    // A square: the menu goes and the field uses its item (as Y), the
++    // menu's own sounds none (the item's own).
++    if (PORT_IS_SQUARE(button)) {
++        sPortSquarePress = button - PORT_BUTTON_ITEM1 + 1;
++        menu->state = START_MENU_STATE_END;
++        return TRUE;
++    }
++
+     switch (button) {
+     case PORT_BUTTON_MAP:
+         // The map in the panel. A tap: the menu goes (a double tap opens
+-- 
+2.43.0
+

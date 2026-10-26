@@ -40,6 +40,7 @@ int main(void)
     CHECK(NitroPort_Option(NITRO_OPT_START_TAB) == 0);
     CHECK(NitroPort_OptionValues(NITRO_OPT_SHINY) == 6);
     CHECK(NitroPort_OptionValues(NITRO_OPT_COUNT) == 0);
+    CHECK(NitroPort_OptionValues(NITRO_OPT_ITEM2) == 1024 && NitroPort_Option(NITRO_OPT_ITEM2) == 0);
     NitroPort_OptionSetDefault(NITRO_OPT_FPS60, 0);
     CHECK(NitroPort_Option(NITRO_OPT_FPS60) == 0);
 
