@@ -27,10 +27,10 @@ experience as for a defeated Pokémon), PARTY EXP SHARE (every Pokémon
 able to: the participants their share, the others half), TRADE EVO AT 40
 (a trade evolution by level 40), HMs WITHOUT MOVES (a field move whose HM
 the bag has is the party's first Pokémon's: the scripts' checks and the
-party menu's Fly, Defog and Flash), AUTO-RUN (running unless B is held,
-with the running shoes), ALWAYS CATCH, INSTANT VICTORY (the player's
-attacks knock out), FAST EGGS, INFINITE MONEY, WILD ENCOUNTERS (off,
-1/4, 1/2, 2x) and SHINY ODDS (to always).
+party menu's Fly and Defog), AUTO-RUN (running unless B is held, with
+the running shoes), ALWAYS CATCH, INSTANT VICTORY (the player's attacks
+knock out, past Endure and the focus items), FAST EGGS, INFINITE MONEY,
+WILD ENCOUNTERS (off, 1/4, 1/2, 2x) and SHINY ODDS (to always).
 
 On the wider screen: the Pokédex's page after a catch laid out as the
 info page (its maps came round beside the DS's screen), and the cry
@@ -44,9 +44,9 @@ beside the DS's screen) with its band's lower edge at the screen's bottom.
  include/unk_02054884.h                   |    3 +
  platinum.us/main.lsf                     |    1 +
  src/applications/party_menu/main.c       |   25 +
- src/applications/pokedex/ov21_021E3FFC.c |  227 +++++
+ src/applications/pokedex/ov21_021E3FFC.c |  230 +++++
  src/applications/pokedex/ov21_021E8D48.c |   46 +
- src/battle/battle_controller_player.c    |   12 +
+ src/battle/battle_controller_player.c    |   22 +-
  src/battle/battle_script.c               |   83 ++
  src/meson.build                          |    1 +
  src/overlay005/daycare.c                 |   17 +-
@@ -58,7 +58,7 @@ beside the DS's screen) with its band's lower edge at the screen's bottom.
  src/start_menu.c                         |  162 +++-
  src/trainer_info.c                       |   13 +
  src/unk_02054884.c                       |   41 +
- 21 files changed, 1848 insertions(+), 11 deletions(-)
+ 21 files changed, 1859 insertions(+), 13 deletions(-)
  create mode 100644 include/overlay005/options_panel.h
  create mode 100644 include/port_options.h
  create mode 100644 src/overlay005/options_panel.c
@@ -202,7 +202,7 @@ index 2dd55102..e86a5643 100644
  	Object main.nef.p/src_overlay005_field_motion_blur.c.o
  	Object main.nef.p/src_overlay005_encounter_effect_core.c.o
 diff --git a/src/applications/party_menu/main.c b/src/applications/party_menu/main.c
-index 4db86b39..3ee012da 100644
+index 4db86b39..fc77d888 100644
 --- a/src/applications/party_menu/main.c
 +++ b/src/applications/party_menu/main.c
 @@ -46,6 +46,7 @@
@@ -218,11 +218,11 @@ index 4db86b39..3ee012da 100644
              }
  
 +#ifdef SDK_PORT_3DS
-+            // (the options page's HMs WITHOUT MOVES: the field moves used
-+            // from here, Fly, Defog and Flash, on the party's first
-+            // Pokémon when the bag has their HMs)
++            // (the options page's HMs WITHOUT MOVES: the HMs' field moves
++            // used from here, Fly and Defog, on the party's first Pokémon
++            // when the bag has their HMs; Flash is a TM in Platinum)
 +            {
-+                static const u16 hmMenuMoves[] = { MOVE_FLY, MOVE_DEFOG, MOVE_FLASH };
++                static const u16 hmMenuMoves[] = { MOVE_FLY, MOVE_DEFOG };
 +
 +                for (u8 j = 0; j < NELEMS(hmMenuMoves) && fieldMoveIndex < LEARNED_MOVES_MAX; j++) {
 +                    move = hmMenuMoves[j];
@@ -245,10 +245,10 @@ index 4db86b39..3ee012da 100644
              count++;
  
 diff --git a/src/applications/pokedex/ov21_021E3FFC.c b/src/applications/pokedex/ov21_021E3FFC.c
-index 723bbabd..401b8e46 100644
+index 723bbabd..38f9d664 100644
 --- a/src/applications/pokedex/ov21_021E3FFC.c
 +++ b/src/applications/pokedex/ov21_021E3FFC.c
-@@ -27,6 +27,38 @@
+@@ -27,6 +27,39 @@
  
  #include "res/graphics/pokedex/zukan.naix"
  
@@ -266,28 +266,29 @@ index 723bbabd..401b8e46 100644
 +// (WIDE_SHOW). And the band's lower edge 3 lines lower, at the screen's
 +// bottom: the DS has 3 lines of the page's background under it, as above
 +// the band, which at the bottom of the wider screen looked like a mistake.
-+// (Drawn on BG2, over BG3's own: BG3 as it is, its hand-drawn picture's key
-+// the same.)
++// (Drawn on BG1 too, over BG3's own, its lines shown on beside the DS's
++// screen and faded with the page: BG3 as it is, its hand-drawn picture's
++// key the same.)
 +#define CRY_WIDE_W   512
 +#define CRY_WIDE_TOP 14 // (the window's first row of tiles: the wave is on lines 119-183)
 +#define CRY_WIDE_H   9
 +#define CRY_WIDE_Y0  (CRY_WIDE_TOP * 8)
 +#define CRY_EDGE_ROW 23 // (the band's lower edge: its map's row of tiles)
-+#define CRY_EDGE_TILE 1023 // (new tiles for it on BG2, down from its last: its own end at 511)
++#define CRY_EDGE_TILE 1023 // (new tiles for it on BG1, down from its last: the window's are 1-576)
 +#define CRY_EDGE_DOWN 3
 +
 +static Window sCryWideWindow;
 +static BOOL sCryWide;
 +
 +static const short sCryWideLayout[][8] = {
-+    WIDE_SHOW(WIDE_BG(1), CRY_WIDE_Y0, CRY_WIDE_Y0 + CRY_WIDE_H * 8),
++    WIDE_SHOW(WIDE_BG(1), CRY_WIDE_Y0, (CRY_EDGE_ROW + 1) * 8),
 +};
 +#endif
 +
  typedef struct {
      int *unk_00;
      PokedexSortData *unk_04;
-@@ -489,9 +521,161 @@ static BOOL ov21_021E4518(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
+@@ -489,9 +522,163 @@ static BOOL ov21_021E4518(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
      return 0;
  }
  
@@ -315,13 +316,15 @@ index 723bbabd..401b8e46 100644
 +    }
 +}
 +
-+// The band's lower edge 3 lines lower: its row of tiles made again (on
-+// BG2, over BG3's: the same tiles and palettes), their first 3 lines the
-+// band's (the row above's), then the edge's first 5 (its colours, the
-+// page's background under it left out).
-+static void CryWide_LowerEdge(BgConfig *bgConfig, BOOL on)
++// The band's lower edge 3 lines lower: its row of tiles made again on BG1
++// (the same palettes; across its 512-wide map, the band and edge being the
++// same all along), their first 3 lines the band's (the row above's), then
++// the edge's first 5 (its colours, the page's background under it left
++// out).
++static void CryWide_LowerEdge(BgConfig *bgConfig)
 +{
-+    u16 *map = Bg_GetTilemapBuffer(bgConfig, BG_LAYER_MAIN_3), *over = Bg_GetTilemapBuffer(bgConfig, BG_LAYER_MAIN_2);
++    const u16 *map = Bg_GetTilemapBuffer(bgConfig, BG_LAYER_MAIN_3);
++    u16 *over = Bg_GetTilemapBuffer(bgConfig, BG_LAYER_MAIN_1);
 +    const u8 *chars = Bg_GetCharPtr(BG_LAYER_MAIN_3);
 +    static u8 tiles[8][TILE_SIZE_4BPP];
 +    u16 made[8][2];
@@ -331,13 +334,11 @@ index 723bbabd..401b8e46 100644
 +        return;
 +    }
 +
-+    for (int x = 0; x < 32; x++) {
-+        u16 band = map[(CRY_EDGE_ROW - 1) * 32 + x], edge = map[CRY_EDGE_ROW * 32 + x];
++    for (int x = 0; x < CRY_WIDE_W / 8; x++) {
++        u16 band = map[(CRY_EDGE_ROW - 1) * 32 + x % 32], edge = map[CRY_EDGE_ROW * 32 + x % 32];
 +        int k;
 +
-+        over[CRY_EDGE_ROW * 32 + x] = 0;
-+
-+        if (!on || (band >> 12) != (edge >> 12)) {
++        if ((band >> 12) != (edge >> 12)) {
 +            continue; // (in palettes apart: as it is)
 +        }
 +
@@ -358,20 +359,21 @@ index 723bbabd..401b8e46 100644
 +            n++;
 +        }
 +
-+        over[CRY_EDGE_ROW * 32 + x] = (u16)((CRY_EDGE_TILE - k) | (edge & 0xF000));
++        // (the map's second half after its first, 32 x 32 entries each)
++        over[(x / 32) * 32 * 32 + CRY_EDGE_ROW * 32 + x % 32] = (u16)((CRY_EDGE_TILE - k) | (edge & 0xF000));
 +    }
 +
 +    for (int k = 0; k < n; k++) {
 +        DC_FlushRange(tiles[k], TILE_SIZE_4BPP);
-+        Bg_LoadTiles(bgConfig, BG_LAYER_MAIN_2, tiles[k], TILE_SIZE_4BPP, CRY_EDGE_TILE - k);
++        Bg_LoadTiles(bgConfig, BG_LAYER_MAIN_1, tiles[k], TILE_SIZE_4BPP, CRY_EDGE_TILE - k);
 +    }
 +
-+    Bg_ScheduleTilemapTransfer(bgConfig, BG_LAYER_MAIN_2);
++    Bg_ScheduleTilemapTransfer(bgConfig, BG_LAYER_MAIN_1);
 +}
 +
 +// The page up on the wider screen: BG1 512 wide, the wave's window, its
 +// layout; the band's edge lower.
-+static void CryWide_Start(UnkStruct_ov21_021E4108 *param0)
++static void CryWide_Start(UnkStruct_ov21_021E4108 *param0, enum HeapID heapID)
 +{
 +    BgConfig *bgConfig = param0->unk_00->bgConfig;
 +    BgTemplate template = {
@@ -395,12 +397,14 @@ index 723bbabd..401b8e46 100644
 +        return;
 +    }
 +
++    // (the window from tile 1: the rest of the map is tile 0, kept clear)
 +    Bg_FreeTilemapBuffer(bgConfig, BG_LAYER_MAIN_1);
 +    Bg_InitFromTemplate(bgConfig, BG_LAYER_MAIN_1, &template, BG_TYPE_STATIC);
++    Bg_ClearTilesRange(BG_LAYER_MAIN_1, TILE_SIZE_4BPP, 0, heapID);
 +    Bg_ClearTilemap(bgConfig, BG_LAYER_MAIN_1);
-+    Window_Add(bgConfig, &sCryWideWindow, BG_LAYER_MAIN_1, 0, CRY_WIDE_TOP, CRY_WIDE_W / 8, CRY_WIDE_H, 9, 0);
++    Window_Add(bgConfig, &sCryWideWindow, BG_LAYER_MAIN_1, 0, CRY_WIDE_TOP, CRY_WIDE_W / 8, CRY_WIDE_H, 9, 1);
 +    Window_FillTilemap(&sCryWideWindow, 0);
-+    CryWide_LowerEdge(bgConfig, TRUE);
++    CryWide_LowerEdge(bgConfig);
 +    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sCryWideLayout);
 +}
 +
@@ -429,7 +433,6 @@ index 723bbabd..401b8e46 100644
 +    }
 +
 +    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
-+    CryWide_LowerEdge(bgConfig, FALSE);
 +    Window_FillTilemap(&sCryWideWindow, 0);
 +    Window_CopyToVRAM(&sCryWideWindow);
 +    Window_Remove(&sCryWideWindow);
@@ -444,12 +447,12 @@ index 723bbabd..401b8e46 100644
  {
      ov21_021E45FC(param1, param2, heapID);
 +#ifdef SDK_PORT_3DS
-+    CryWide_Start(param1);
++    CryWide_Start(param1, heapID);
 +#endif
      ov21_021E46A8(param0, param1, heapID);
      ov21_021E47CC(param0, param1, heapID);
      ov21_021E4890(param0, param1, param2, heapID);
-@@ -523,6 +707,9 @@ static void ov21_021E45FC(UnkStruct_ov21_021E4108 *param0, const UnkStruct_ov21_
+@@ -523,6 +710,9 @@ static void ov21_021E45FC(UnkStruct_ov21_021E4108 *param0, const UnkStruct_ov21_
  
  static void ov21_021E4664(UnkStruct_ov21_021E4108 *param0)
  {
@@ -459,7 +462,7 @@ index 723bbabd..401b8e46 100644
      Bg_ScheduleScroll(param0->unk_00->bgConfig, 1, 0, 0);
      Window_FillRectWithColor(&param0->unk_00->window, 0, 0, 0, 256, 192);
      Bg_ClearTilemap(param0->unk_00->bgConfig, 1);
-@@ -623,7 +810,12 @@ static void ov21_021E48B0(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
+@@ -623,7 +813,12 @@ static void ov21_021E48B0(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
      int v2;
      int v3;
  
@@ -472,7 +475,7 @@ index 723bbabd..401b8e46 100644
  
      v3 = param4 - param3;
  
-@@ -632,7 +824,11 @@ static void ov21_021E48B0(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
+@@ -632,7 +827,11 @@ static void ov21_021E48B0(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
          v2 = FX_Div(v2, param5 << FX32_SHIFT) >> FX32_SHIFT;
          v2 += param3;
  
@@ -484,7 +487,7 @@ index 723bbabd..401b8e46 100644
  
          param6 += 1;
      }
-@@ -678,12 +874,22 @@ static void ov21_021E49D0(UnkStruct_ov21_021E4108 *param0, int param1, int param
+@@ -678,12 +877,22 @@ static void ov21_021E49D0(UnkStruct_ov21_021E4108 *param0, int param1, int param
  {
      int v0;
  
@@ -507,7 +510,7 @@ index 723bbabd..401b8e46 100644
  }
  
  static void ov21_021E4A28(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E4108 *param1, const UnkStruct_ov21_021E4898 *param2)
-@@ -691,6 +897,15 @@ static void ov21_021E4A28(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
+@@ -691,6 +900,15 @@ static void ov21_021E4A28(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
      int v0;
  
      param0->unk_324 += 4;
@@ -523,7 +526,7 @@ index 723bbabd..401b8e46 100644
      param0->unk_324 %= 256;
  
      v0 = param0->unk_324 - (4 * 2);
-@@ -698,6 +913,7 @@ static void ov21_021E4A28(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
+@@ -698,6 +916,7 @@ static void ov21_021E4A28(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
      if (v0 < 0) {
          v0 += 256;
      }
@@ -531,7 +534,7 @@ index 723bbabd..401b8e46 100644
  
      if (param0->unk_32C != param2->unk_04) {
          ov21_021E48B0(param0, param1, param2->unk_00, param0->unk_32C, param2->unk_04, 4, v0, 151, &param0->unk_328);
-@@ -706,13 +922,24 @@ static void ov21_021E4A28(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
+@@ -706,13 +925,24 @@ static void ov21_021E4A28(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
      }
  
      Bg_ScheduleScroll(param1->unk_00->bgConfig, 1, 0, param0->unk_324);
@@ -625,7 +628,7 @@ index 5f9106db..6869e7f4 100644
      ov21_021E968C(&param0->unk_200);
      ov21_021E95EC(&param0->unk_200, param0->unk_1A0);
 diff --git a/src/battle/battle_controller_player.c b/src/battle/battle_controller_player.c
-index 17366e7b..9c0a7a5d 100644
+index 17366e7b..fd1310dc 100644
 --- a/src/battle/battle_controller_player.c
 +++ b/src/battle/battle_controller_player.c
 @@ -38,6 +38,7 @@
@@ -636,24 +639,53 @@ index 17366e7b..9c0a7a5d 100644
  #include "pokemon.h"
  #include "screen_fade.h"
  #include "sound_playback.h"
-@@ -3378,6 +3379,17 @@ static void BattleControllerPlayer_UpdateHP(BattleSystem *battleSys, BattleConte
+@@ -3378,12 +3379,28 @@ static void BattleControllerPlayer_UpdateHP(BattleSystem *battleSys, BattleConte
              return;
          }
  
 +#ifdef SDK_PORT_3DS
 +        // (the options page's INSTANT VICTORY: a hit from the player's side
-+        // knocks the other side's Pokémon out; False Swipe still leaves it
-+        // 1 HP, below)
-+        if (PortOption_On(PORT_OPT_INSTANT_VICTORY) && battleCtx->damage < 0
++        // knocks the other side's Pokémon out, Endure and a Focus Band or
++        // Sash no help; False Swipe still leaves it 1 HP, below)
++        BOOL portInstantKO = PortOption_On(PORT_OPT_INSTANT_VICTORY) && battleCtx->damage < 0
 +            && BattleSystem_GetBattlerSide(battleSys, battleCtx->attacker) == BATTLER_US
-+            && BattleSystem_GetBattlerSide(battleSys, battleCtx->defender) != BATTLER_US) {
++            && BattleSystem_GetBattlerSide(battleSys, battleCtx->defender) != BATTLER_US;
++
++        if (portInstantKO) {
 +            battleCtx->damage = DEFENDING_MON.curHP * -1;
 +        }
++#define PORT_NOT_INSTANT_KO (!portInstantKO)
++#else
++#define PORT_NOT_INSTANT_KO TRUE
 +#endif
 +
          if (CURRENT_MOVE_DATA.effect == BATTLE_EFFECT_LEAVE_WITH_1_HP
              && DEFENDING_MON.curHP + battleCtx->damage <= 0) {
              battleCtx->damage = (DEFENDING_MON.curHP - 1) * -1;
+         }
+ 
+-        if (DEFENDER_TURN_FLAGS.enduring == 0) {
++        if (DEFENDER_TURN_FLAGS.enduring == 0 && PORT_NOT_INSTANT_KO) {
+             if (itemEffect == HOLD_EFFECT_MAYBE_ENDURE && (BattleSystem_RandNext(battleSys) % 100) < itemPower) {
+                 DEFENDER_SELF_TURN_FLAGS.focusItemActivated = TRUE;
+             }
+@@ -3394,7 +3411,7 @@ static void BattleControllerPlayer_UpdateHP(BattleSystem *battleSys, BattleConte
+         }
+ 
+         if ((DEFENDER_TURN_FLAGS.enduring || DEFENDER_SELF_TURN_FLAGS.focusItemActivated)
+-            && DEFENDING_MON.curHP + battleCtx->damage <= 0) {
++            && DEFENDING_MON.curHP + battleCtx->damage <= 0 && PORT_NOT_INSTANT_KO) {
+             battleCtx->damage = (DEFENDING_MON.curHP - 1) * -1;
+ 
+             if (DEFENDER_TURN_FLAGS.enduring) {
+@@ -3404,6 +3421,7 @@ static void BattleControllerPlayer_UpdateHP(BattleSystem *battleSys, BattleConte
+             }
+         }
+ 
++#undef PORT_NOT_INSTANT_KO
+         battleCtx->storedDamage[battleCtx->defender] += battleCtx->damage;
+ 
+         if (battleCtx->battleMons[battleCtx->defender].timesDamaged < 0xFF) {
 diff --git a/src/battle/battle_script.c b/src/battle/battle_script.c
 index ac895a2d..f5ad2080 100644
 --- a/src/battle/battle_script.c
@@ -1949,7 +1981,7 @@ index 00000000..e4e72a0f
 +}
 +#endif
 diff --git a/src/overlay006/wild_encounters.c b/src/overlay006/wild_encounters.c
-index ebfbabce..ce252330 100644
+index ebfbabce..04b6bbd8 100644
 --- a/src/overlay006/wild_encounters.c
 +++ b/src/overlay006/wild_encounters.c
 @@ -40,6 +40,7 @@
@@ -1972,17 +2004,17 @@ index ebfbabce..ce252330 100644
 +        encounterRate = 0;
 +        break;
 +    case 2:
-+        encounterRate = encounterRate / 4 > 0 ? encounterRate / 4 : 1;
++        encounterRate = encounterRate / 4 > 0 || encounterRate == 0 ? encounterRate / 4 : 1;
 +        break;
 +    case 3:
-+        encounterRate = encounterRate / 2 > 0 ? encounterRate / 2 : 1;
++        encounterRate = encounterRate / 2 > 0 || encounterRate == 0 ? encounterRate / 2 : 1;
 +        break;
 +    case 4:
 +        encounterRate = encounterRate >= 128 ? 255 : encounterRate * 2;
 +        break;
 +    }
 +
-+    if (encounterRate != 0 && ShouldGetRandomEncounter(fieldSystem, encounterRate, tileBehavior)) {
++    if (NitroPort_Option(PORT_OPT_ENCOUNTERS) != 1 && ShouldGetRandomEncounter(fieldSystem, encounterRate, tileBehavior)) {
 +#else
      if (ShouldGetRandomEncounter(fieldSystem, encounterRate, tileBehavior)) {
 +#endif

@@ -517,11 +517,12 @@ stretched:
     scrolls, the oldest columns coming round next to the newest at its
     right (a glitch at the wave's end); here it's drawn into a 512-wide
     window of its own, the newest columns at the wider screen's right edge,
-    the map shown on beside the DS's screen (SHOW parts, below). Its band's
-    lower edge is 3 lines lower, at the screen's bottom, drawn on the layer
-    above (the DS has 3 lines of the page's background under it, which
-    looked like a mistake there), so the background layer's picture still
-    fits it.
+    the map shown on beside the DS's screen (SHOW parts, below); the rest
+    of that map is a clear tile. Its band's lower edge is 3 lines lower, at
+    the screen's bottom (the DS has 3 lines of the page's background under
+    it, which looked like a mistake there), drawn on the wave's layer (shown
+    beside the DS's screen and faded with the page), so the background
+    layer's hand-drawn picture still fits it.
   - the shop's list (patch 0026, 2026-10-17): its box 31 pixels wider
     to the right, the prices at its right edge, the cursor as wide as its
     row, the scroll arrows at its middle; the green panel below across the
@@ -941,15 +942,16 @@ screens) the lower screen is the DS's, filling the screen as before.
   - HMs WITHOUT MOVES: a field move whose HM is in the bag is the party's
     first Pokémon's (not an egg), whatever it knows (its badge still
     needed): the scripts' checks (Cut, Surf, Strength, Rock Smash...) and
-    the party menu's Fly, Defog and Flash.
+    the party menu's Fly and Defog (Flash is a TM in Platinum).
   - AUTO-RUN: running unless B is held (once the player has the running
     shoes).
   - ALWAYS CATCH (every ball catches), INSTANT VICTORY (the player's
-    attacks knock the opponent out), FAST EGGS (the day care's chance at
+    attacks knock the opponent out, Endure and a Focus Band or Sash no
+    help; a Substitute still takes the hit), FAST EGGS (the day care's chance at
     an egg every step rather than every 256; an egg in the party hatches
     in a couple of steps), INFINITE MONEY (as much as can be had,
     whatever's spent; the save's own amount stays), WILD ENCOUNTERS
-    (normal, off, 1/4, 1/2, 2x), SHINY ODDS (1/8192 as the game has it,
+    (normal, off, 1/4, 1/2, 2x; where there are none, none), SHINY ODDS (1/8192 as the game has it,
     1/4096, 1/1024, 1/256, 1/64, always).
 - **The port's own settings** (`port_options.c`,
   `nitro_port_options.h`): 60 FPS, smooth 3D, the start tab, the
