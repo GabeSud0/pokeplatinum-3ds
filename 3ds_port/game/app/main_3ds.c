@@ -2077,10 +2077,42 @@ static unsigned sHaltsSinceVBlankWork = 2;
 /* The game is done with what it changes after V-blank (patches/
  * pokeplatinum/0011): the display is as the DS shows it this frame, and
  * the game won't change much of it until the next V-blank. Draw it. */
+/* The options page's SPEED (nitro_port_options.h): game frames for each
+ * one shown, in halves (2: 1x, 3: 1.5x, 4: 2x, 6: 3x, 8: 4x). The frames
+ * between aren't drawn or waited for; the music keeps its own clock (the
+ * sound is mixed by the audio thread, port_snd.c). sFrameShown: this
+ * frame's (NitroPort_OnFrame decides, its V-blank work follows). */
+static int sSpeedCredit;
+static bool sFrameShown = true;
+
+static int SpeedHalves(void)
+{
+    static const u8 halves[5] = { 2, 3, 4, 6, 8 };
+    int speed = NitroPort_Option(NITRO_OPT_SPEED);
+
+    return speed >= 0 && speed < 5 ? halves[speed] : 2;
+}
+
+static bool SpeedFrameShown(void)
+{
+    int halves = SpeedHalves();
+
+    if (halves <= 2) {
+        sSpeedCredit = 0;
+        return true;
+    }
+    sSpeedCredit += 2;
+    if (sSpeedCredit >= halves) {
+        sSpeedCredit -= halves;
+        return true;
+    }
+    return false;
+}
+
 void NitroPort_VBlankWorkDone(void)
 {
     sHaltsSinceVBlankWork = 0;
-    if (!sShowLog && !sScreensDirty) {
+    if (!sShowLog && !sScreensDirty && sFrameShown) {
         DrawFrame(false);
     }
 }
@@ -2375,8 +2407,10 @@ void NitroPort_OnFrame(void)
      * those stay at the game's 30, as made (their 2D animations flickered
      * black and jittered between the in-between frames, 2026-10-21). From
      * the next scene on. */
+    /* (and not above 1x SPEED: the game makes more scenes itself then, the
+     * in-between ones would only add work) */
     if (sRemaster) {
-        NitroPort_Gx3dSetInterpolation(sFps60 && !NitroPort_WidePictures());
+        NitroPort_Gx3dSetInterpolation(sFps60 && !NitroPort_WidePictures() && SpeedHalves() <= 2);
     }
     NitroPort_Gx3dFlush();        /* the geometry thread has the frame's commands */
     sFrame++;
@@ -2453,7 +2487,8 @@ void NitroPort_OnFrame(void)
         }
     }
 
-    {
+    sFrameShown = SpeedFrameShown();
+    if (sFrameShown) {
         u64 now = svcGetSystemTick();
         bool ahead = sDeadline == 0 || now < sDeadline;
         /* Half a frame or more to go until the V-blank. */

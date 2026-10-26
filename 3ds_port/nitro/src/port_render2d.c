@@ -941,6 +941,12 @@ static int PartRuns(const Engine *e, int bg, int ty, int hofs, PartRun *runs)
             c1 = origin + x1 - hofs + p->dx;
             iv[niv].shift = p->dx;
             iv[niv].col = -1;
+        } else if (p->kind == NITRO_WIDE_SHOW) {
+            /* (the map going on beside the DS's screen: the whole canvas) */
+            c0 = 0;
+            c1 = width;
+            iv[niv].shift = 0;
+            iv[niv].col = -1;
         } else {
             c0 = origin + px0 - hofs;
             c1 = origin + px1 - hofs;
@@ -1184,7 +1190,10 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
              * room the wider box has is on the right of the text, as drawn
              * for it, 2026-10-16), and between, each line of the frame's
              * inner columns drawn on (its top and bottom borders, the box's
-             * inside). */
+             * inside): on the right, the window's last column (its top and
+             * bottom borders and the inside, whatever the frame: not the
+             * right part's first column, which is the frame's own drawing
+             * in many of the 20 frames, a red or a dark band drawn on). */
             int fl = wins[i].frameLeft * 8, fr = wins[i].frameRight * 8;
             int m0 = wins[i].left * 8, m1 = (wins[i].left + wins[i].width) * 8;
             int in0 = origin + m0 - hofs + fl, in1 = origin + m1 - hofs - fr, move;
@@ -1220,7 +1229,7 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
                 segs[n].x0 = (short)in1;
                 segs[n].x1 = (short)(width - fr);
                 segs[n].off = 0;
-                segs[n].fixed = (short)((m1 - fr) & (mapW - 1));
+                segs[n].fixed = (short)((m1 - fr - 1) & (mapW - 1));
                 n++;
             }
             segs[n].x0 = (short)(width - fr);
@@ -3794,6 +3803,7 @@ static void SetUpParts(Engine *e)
         switch (p->kind) {
         case NITRO_WIDE_MOVE:
         case NITRO_WIDE_FILL:
+        case NITRO_WIDE_SHOW:
             e->parts[e->nParts++] = *p;
             e->partBgs |= p->bgs & 0x0F;
             if (p->kind == NITRO_WIDE_MOVE) {

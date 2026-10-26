@@ -453,7 +453,11 @@ stretched:
   them; the text starts a pixel inside the frame's left part (2026-10-16,
   from a drawing of the PC's text box: the room the wider screen gives is
   used, the text at the left as on the DS). Its lines stay as the game
-  broke them.
+  broke them. What's drawn on right of the text is the window's own last
+  column (its top and bottom borders and the box's inside), whatever the
+  frame (2026-10-25): it was the frame's right part's first column, which
+  in many of the 20 frames is the frame's own drawing, a red or dark band
+  across the box (the battle's text box after the frame was changed).
 - **Screens redrawn for the wider screen.** For a screen with a reference
   drawn for the wider screen, the game lays the screen out in parts that
   move apart (`NitroPort_WideSplitScreen`): on given lines of given BGs,
@@ -502,6 +506,22 @@ stretched:
     box, the menus at the right edge;
   - the Pokédex's list: its label and picture left, its rows and scroll
     bar right, the counts apart.
+  - the Pokédex's page after a catch (patch 0040, 2026-10-25), in the
+    battle: its maps are 256 wide, so they came round beside the DS's
+    screen (the entry's picture frame and text box over again). Now as the
+    info page's picture has it: the banner on to the edges, the
+    background's pattern beside the DS's screen, the text box's ends at the
+    screen's edges and its middle drawn on between.
+  - the Pokédex's cry page (patch 0040, 2026-10-25): the wave from edge to
+    edge. The DS draws it a few columns a frame into a 256-wide map it
+    scrolls, the oldest columns coming round next to the newest at its
+    right (a glitch at the wave's end); here it's drawn into a 512-wide
+    window of its own, the newest columns at the wider screen's right edge,
+    the map shown on beside the DS's screen (SHOW parts, below). Its band's
+    lower edge is 3 lines lower, at the screen's bottom, drawn on the layer
+    above (the DS has 3 lines of the page's background under it, which
+    looked like a mistake there), so the background layer's picture still
+    fits it.
   - the shop's list (patch 0026, 2026-10-17): its box 31 pixels wider
     to the right, the prices at its right edge, the cursor as wide as its
     row, the scroll arrows at its middle; the green panel below across the
@@ -516,7 +536,10 @@ stretched:
   once round as the boxes slide; the party's panel at the left edge, its
   Poké Ball turning a little as the cursor moves, its lights changing now
   and then. A layout sent again unchanged (an animation's still frames)
-  draws nothing again.
+  draws nothing again. A SHOW part (2026-10-25) shows a BG's lines across
+  the whole wider screen, its map going on beside the DS's screen as it
+  scrolls (a picture wider than the DS's screen in a map wider than it:
+  the cry page's wave).
 - **The battle's health boxes** go to the screen's edges, the player's
   right and the opponent's left (`patches/pokeplatinum/0013`, by
   `NitroPort_WideScreenExtra`).
@@ -881,9 +904,13 @@ screens) the lower screen is the DS's, filling the screen as before.
   between arrows, the cursor Platinum's options screen's red frame.
   SETTINGS: the game's six (into its save, as its options screen sets
   them; the sound and the buttons at once), 60 FPS, SMOOTH 3D and START
-  WITH; ENHANCEMENTS and CHEATS: kept, their effects to come; CHEATS's
-  GIVE ITEMS a page of its own (a pocket, an item, how many; no key
-  items). Drawn into a window off the screen as one picture (the cards,
+  WITH; ENHANCEMENTS and CHEATS (below); CHEATS's GIVE ITEMS a page of
+  its own (a pocket, an item, how many; no key items). The FRAME card is
+  drawn as a message box in the frame chosen, a preview (the frame's
+  tiles stretched to the card, in the sub BG's palette 1: the frame's
+  colours and the few the card's text and cursor need). Closed and opened
+  again, the page comes back on the tab and the cards it was on (the start
+  menu keeps them). Drawn into a window off the screen as one picture (the cards,
   the game's text on them, their edges and the cursor over it) and cut
   into tiles, alike ones once (48 KB of the sub engine's VRAM, BG0 alone),
   drawn whole again on any change. Up / Down go through the cards (the
@@ -896,6 +923,34 @@ screens) the lower screen is the DS's, filling the screen as before.
   POKéTCH, POKéDEX once it's faded in). Closed, the Pokétch comes back and
   the port's settings are saved. Without the menu it's the DS's options
   screen.
+- **The enhancements and cheats** (`port_options.h` in the
+  decompilation: the port's settings, read where the game decides):
+  - SPEED (1x, 1.5x, 2x, 3x, 4x; the 3DS): that many game frames to each
+    one shown, the others not drawn nor waited for (the music keeps its
+    own clock, the audio thread's); faster than 1x the in-between frames
+    of 60 FPS are left out. The PC runner isn't paced, so it doesn't show.
+  - EXP ON CATCH: after "Gotcha!" the catch stops while the battle's
+    script pays out experience for the caught Pokémon as for a defeated
+    one (its messages, levels and moves, as after a battle), then goes on
+    to the Pokédex and the nickname. Not in the catching tutorial, the Pal
+    Park or a battle with no experience.
+  - PARTY EXP SHARE: every Pokémon able to (not fainted, not an egg) gets
+    experience: those that battled their share, the others half.
+  - TRADE EVO AT 40: a Pokémon that evolves by trade (with or without its
+    item) evolves by level from 40 instead.
+  - HMs WITHOUT MOVES: a field move whose HM is in the bag is the party's
+    first Pokémon's (not an egg), whatever it knows (its badge still
+    needed): the scripts' checks (Cut, Surf, Strength, Rock Smash...) and
+    the party menu's Fly, Defog and Flash.
+  - AUTO-RUN: running unless B is held (once the player has the running
+    shoes).
+  - ALWAYS CATCH (every ball catches), INSTANT VICTORY (the player's
+    attacks knock the opponent out), FAST EGGS (the day care's chance at
+    an egg every step rather than every 256; an egg in the party hatches
+    in a couple of steps), INFINITE MONEY (as much as can be had,
+    whatever's spent; the save's own amount stays), WILD ENCOUNTERS
+    (normal, off, 1/4, 1/2, 2x), SHINY ODDS (1/8192 as the game has it,
+    1/4096, 1/1024, 1/256, 1/64, always).
 - **The port's own settings** (`port_options.c`,
   `nitro_port_options.h`): 60 FPS, smooth 3D, the start tab, the
   enhancements and the cheats, a whole number each, kept in `options.txt`

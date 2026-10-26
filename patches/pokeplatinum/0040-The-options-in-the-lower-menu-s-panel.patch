@@ -18,23 +18,57 @@ after (the bag, the party, the trainer case and the save straight on from
 the black panel). OPTIONS in the bag, the party or the trainer case goes
 to the page behind the black, as SAVE. START WITH chooses the panel's tab
 when the game starts. Without the menu it's the DS's options screen.
+The page opens again on the tab and cards it closed on; the FRAME card is
+drawn as a message box in the frame chosen.
+
+The enhancements and cheats (port_options.h: the port's settings):
+EXP ON CATCH (the catch stops after "Gotcha!" while the script pays out
+experience as for a defeated Pokémon), PARTY EXP SHARE (every Pokémon
+able to: the participants their share, the others half), TRADE EVO AT 40
+(a trade evolution by level 40), HMs WITHOUT MOVES (a field move whose HM
+the bag has is the party's first Pokémon's: the scripts' checks and the
+party menu's Fly, Defog and Flash), AUTO-RUN (running unless B is held,
+with the running shoes), ALWAYS CATCH, INSTANT VICTORY (the player's
+attacks knock out), FAST EGGS, INFINITE MONEY, WILD ENCOUNTERS (off,
+1/4, 1/2, 2x) and SHINY ODDS (to always).
+
+On the wider screen: the Pokédex's page after a catch laid out as the
+info page (its maps came round beside the DS's screen), and the cry
+page's wave from edge to edge (a window of its own, 512 wide, shown on
+beside the DS's screen) with its band's lower edge at the screen's bottom.
 ---
- include/overlay005/options_panel.h |  24 +
- include/start_menu.h               |   3 +
- platinum.us/main.lsf               |   1 +
- src/meson.build                    |   1 +
- src/overlay005/options_panel.c     | 943 +++++++++++++++++++++++++++++
- src/start_menu.c                   | 162 ++++-
- 6 files changed, 1126 insertions(+), 8 deletions(-)
+ include/overlay005/options_panel.h       |   33 +
+ include/port_options.h                   |   31 +
+ include/port_wide_layout.h               |    4 +
+ include/start_menu.h                     |    3 +
+ include/unk_02054884.h                   |    3 +
+ platinum.us/main.lsf                     |    1 +
+ src/applications/party_menu/main.c       |   25 +
+ src/applications/pokedex/ov21_021E3FFC.c |  227 +++++
+ src/applications/pokedex/ov21_021E8D48.c |   46 +
+ src/battle/battle_controller_player.c    |   12 +
+ src/battle/battle_script.c               |   83 ++
+ src/meson.build                          |    1 +
+ src/overlay005/daycare.c                 |   17 +-
+ src/overlay005/options_panel.c           | 1086 ++++++++++++++++++++++
+ src/overlay006/wild_encounters.c         |   35 +
+ src/player_move.c                        |    7 +
+ src/pokemon.c                            |   13 +
+ src/scrcmd_party.c                       |   16 +
+ src/start_menu.c                         |  162 +++-
+ src/trainer_info.c                       |   13 +
+ src/unk_02054884.c                       |   41 +
+ 21 files changed, 1848 insertions(+), 11 deletions(-)
  create mode 100644 include/overlay005/options_panel.h
+ create mode 100644 include/port_options.h
  create mode 100644 src/overlay005/options_panel.c
 
 diff --git a/include/overlay005/options_panel.h b/include/overlay005/options_panel.h
 new file mode 100644
-index 00000000..a8337c9c
+index 00000000..fabe6670
 --- /dev/null
 +++ b/include/overlay005/options_panel.h
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,33 @@
 +#ifndef POKEPLATINUM_OPTIONS_PANEL_H
 +#define POKEPLATINUM_OPTIONS_PANEL_H
 +
@@ -52,13 +86,81 @@ index 00000000..a8337c9c
 +#define OPTIONS_PANEL_STAY  -1
 +#define OPTIONS_PANEL_CLOSE -2
 +
-+void OptionsPanel_Open(FieldSystem *fieldSystem);
-+void OptionsPanel_Close(FieldSystem *fieldSystem);
++// Where the page was when it closed (the start menu keeps it, so the page
++// opens again on the tab and the cards it was on).
++#define OPTIONS_PANEL_PAGES 4
++
++typedef struct OptionsPanelPlace {
++    int page;
++    int cursor[OPTIONS_PANEL_PAGES];
++} OptionsPanelPlace;
++
++void OptionsPanel_Open(FieldSystem *fieldSystem, const OptionsPanelPlace *place);
++void OptionsPanel_Close(FieldSystem *fieldSystem, OptionsPanelPlace *place);
 +BOOL OptionsPanel_IsOpen(void);
 +int OptionsPanel_Update(void);
 +#endif
 +
 +#endif // POKEPLATINUM_OPTIONS_PANEL_H
+diff --git a/include/port_options.h b/include/port_options.h
+new file mode 100644
+index 00000000..b21b868b
+--- /dev/null
++++ b/include/port_options.h
+@@ -0,0 +1,31 @@
++#ifndef POKEPLATINUM_PORT_OPTIONS_H
++#define POKEPLATINUM_PORT_OPTIONS_H
++
++#ifdef SDK_PORT_3DS
++// The 3DS remaster's own settings, as its options page sets them (the
++// port's nitro_port_options.h: these ids are its NITRO_OPT_ ones).
++#define PORT_OPT_FPS60           0
++#define PORT_OPT_SMOOTH3D        1
++#define PORT_OPT_START_TAB       2 // 0 the map, 1 the Pokétch
++#define PORT_OPT_SPEED           3 // 0 1x, 1 1.5x, 2 2x, 3 3x, 4 4x
++#define PORT_OPT_EXP_ON_CATCH    4 // 0 off, 1 on (the rest too)
++#define PORT_OPT_EXP_SHARE       5
++#define PORT_OPT_TRADE_EVO       6
++#define PORT_OPT_HM_FREE         7
++#define PORT_OPT_AUTO_RUN        8
++#define PORT_OPT_ALWAYS_CATCH    9
++#define PORT_OPT_INSTANT_VICTORY 10
++#define PORT_OPT_FAST_EGGS       11
++#define PORT_OPT_INFINITE_MONEY  12
++#define PORT_OPT_ENCOUNTERS      13 // 0 normal, 1 off, 2 1/4, 3 1/2, 4 2x
++#define PORT_OPT_SHINY           14 // 0 1/8192, 1 1/4096, 2 1/1024, 3 1/256, 4 1/64, 5 always
++
++int NitroPort_Option(int id);
++void NitroPort_OptionSet(int id, int value);
++int NitroPort_OptionValues(int id);
++int NitroPort_OptionsSave(void);
++
++#define PortOption_On(id) (NitroPort_Option(id) != 0)
++#endif
++
++#endif // POKEPLATINUM_PORT_OPTIONS_H
+diff --git a/include/port_wide_layout.h b/include/port_wide_layout.h
+index 111ea269..8ffa9c72 100644
+--- a/include/port_wide_layout.h
++++ b/include/port_wide_layout.h
+@@ -31,6 +31,9 @@
+ //     mask (bit i: index i; a 16-colour BG) shown clear, all over the BG:
+ //     a panel's background drawn into its edges (the stripes behind the
+ //     boxes' panel), so what's behind the BG shows there, as it did.
++//   WIDE_SHOW: the BGs' lines top..bottom-1 across the whole wider screen,
++//     their maps going on beside the DS's screen as they scroll (a picture
++//     wider than the DS's screen drawn in a map wider than it).
+ // WIDE_SCREEN_COLUMNS with a part's BGs: its x0..x1-1 are columns of the
+ // DS's screen, not of the BG's picture: they stay put as the BG scrolls
+ // (a WIDE_FILL's col is still the picture's).
+@@ -55,6 +58,7 @@ extern void NitroPort_WindowFramed(const void *window, int frame);
+ #define WIDE_SHIFT3D(dx)                          { 4, 0, 0, 0, 0, 0, (dx), 0 }
+ #define WIDE_PICTURE(bg, picture, x, y, angle)    { 5, WIDE_BG(bg), (y), (y) + 1, (x), (x) + 1, (angle), (picture) }
+ #define WIDE_CLEAR(bg, pal, mask)                 { 6, WIDE_BG(bg), 0, 1, 0, 1, (pal), (mask) }
++#define WIDE_SHOW(bgs, top, bottom)               { 7, (bgs), (top), (bottom), 0, 1, 0, 0 }
+ 
+ // The pictures (their files: <name>.png; the port's numbers, in
+ // 3ds_port/nitro/include/nitro_port_wide.h, are the same).
 diff --git a/include/start_menu.h b/include/start_menu.h
 index 0d96a9f1..e51ef7db 100644
 --- a/include/start_menu.h
@@ -73,6 +175,20 @@ index 0d96a9f1..e51ef7db 100644
  };
  
  enum MailUsageType {
+diff --git a/include/unk_02054884.h b/include/unk_02054884.h
+index 54b1c04c..99faaf6a 100644
+--- a/include/unk_02054884.h
++++ b/include/unk_02054884.h
+@@ -10,6 +10,9 @@ BOOL Pokemon_GiveMonFromScript(enum HeapID heapID, SaveData *saveData, u16 speci
+ BOOL sub_02054930(int unused, SaveData *saveData, u16 param2, u8 param3, int param4, int param5);
+ void Party_ResetMonMoveSlot(Party *party, int partySlot, int moveSlot, u16 moveID);
+ int Party_HasMonWithMove(Party *party, u16 moveID);
++#ifdef SDK_PORT_3DS
++int Party_PortHmFreeSlot(Party *party, u16 moveID);
++#endif
+ int Party_AliveMonsCount(const Party *party);
+ Pokemon *Party_FindFirstEligibleBattler(const Party *party);
+ Pokemon *Party_FindFirstHatchedMon(const Party *party);
 diff --git a/platinum.us/main.lsf b/platinum.us/main.lsf
 index 2dd55102..e86a5643 100644
 --- a/platinum.us/main.lsf
@@ -85,6 +201,599 @@ index 2dd55102..e86a5643 100644
  	Object main.nef.p/src_overlay005_motion_blur.c.o
  	Object main.nef.p/src_overlay005_field_motion_blur.c.o
  	Object main.nef.p/src_overlay005_encounter_effect_core.c.o
+diff --git a/src/applications/party_menu/main.c b/src/applications/party_menu/main.c
+index 4db86b39..3ee012da 100644
+--- a/src/applications/party_menu/main.c
++++ b/src/applications/party_menu/main.c
+@@ -46,6 +46,7 @@
+ #include "network_icon.h"
+ #include "overlay_manager.h"
+ #include "party.h"
++#include "unk_02054884.h"
+ #include "pokemon.h"
+ #include "render_window.h"
+ #include "screen_fade.h"
+@@ -2516,6 +2517,30 @@ static u8 GetContextMenuEntriesForPartyMon(PartyMenuApplication *application, u8
+                 }
+             }
+ 
++#ifdef SDK_PORT_3DS
++            // (the options page's HMs WITHOUT MOVES: the field moves used
++            // from here, Fly, Defog and Flash, on the party's first
++            // Pokémon when the bag has their HMs)
++            {
++                static const u16 hmMenuMoves[] = { MOVE_FLY, MOVE_DEFOG, MOVE_FLASH };
++
++                for (u8 j = 0; j < NELEMS(hmMenuMoves) && fieldMoveIndex < LEARNED_MOVES_MAX; j++) {
++                    move = hmMenuMoves[j];
++
++                    if (Party_PortHmFreeSlot(application->partyMenu->party, move) != application->currPartySlot
++                        || Pokemon_GetValue(mon, MON_DATA_MOVE1, NULL) == move || Pokemon_GetValue(mon, MON_DATA_MOVE2, NULL) == move
++                        || Pokemon_GetValue(mon, MON_DATA_MOVE3, NULL) == move || Pokemon_GetValue(mon, MON_DATA_MOVE4, NULL) == move) {
++                        continue;
++                    }
++
++                    menuEntriesBuffer[count] = GetFieldMoveIndex(move);
++                    count++;
++                    PartyMenu_SetKnownFieldMove(application, move, fieldMoveIndex);
++                    fieldMoveIndex++;
++                }
++            }
++#endif
++
+             menuEntriesBuffer[count] = 0;
+             count++;
+ 
+diff --git a/src/applications/pokedex/ov21_021E3FFC.c b/src/applications/pokedex/ov21_021E3FFC.c
+index 723bbabd..401b8e46 100644
+--- a/src/applications/pokedex/ov21_021E3FFC.c
++++ b/src/applications/pokedex/ov21_021E3FFC.c
+@@ -27,6 +27,38 @@
+ 
+ #include "res/graphics/pokedex/zukan.naix"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++
++// The cry page on the wider screen (2026-10-25): the wave from edge to edge.
++// The DS draws it into the Pokédex's window on BG1 (a 256-wide map) a few
++// columns a frame, the BG scrolled along: the newest columns at the
++// screen's right, the oldest (as long ago as the map is wide) come round
++// next to them, its last 4 columns. On the wider screen it's drawn into a
++// window of its own, 512 columns wide (BG1's map made 512 wide while the
++// page is up, past the other maps, at 0x1800), the newest columns at the
++// wider screen's right edge, the map shown on beside the DS's screen
++// (WIDE_SHOW). And the band's lower edge 3 lines lower, at the screen's
++// bottom: the DS has 3 lines of the page's background under it, as above
++// the band, which at the bottom of the wider screen looked like a mistake.
++// (Drawn on BG2, over BG3's own: BG3 as it is, its hand-drawn picture's key
++// the same.)
++#define CRY_WIDE_W   512
++#define CRY_WIDE_TOP 14 // (the window's first row of tiles: the wave is on lines 119-183)
++#define CRY_WIDE_H   9
++#define CRY_WIDE_Y0  (CRY_WIDE_TOP * 8)
++#define CRY_EDGE_ROW 23 // (the band's lower edge: its map's row of tiles)
++#define CRY_EDGE_TILE 1023 // (new tiles for it on BG2, down from its last: its own end at 511)
++#define CRY_EDGE_DOWN 3
++
++static Window sCryWideWindow;
++static BOOL sCryWide;
++
++static const short sCryWideLayout[][8] = {
++    WIDE_SHOW(WIDE_BG(1), CRY_WIDE_Y0, CRY_WIDE_Y0 + CRY_WIDE_H * 8),
++};
++#endif
++
+ typedef struct {
+     int *unk_00;
+     PokedexSortData *unk_04;
+@@ -489,9 +521,161 @@ static BOOL ov21_021E4518(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
+     return 0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// The window the wave is drawn into, and the line its middle is on there.
++static Window *CryWave_Window(UnkStruct_ov21_021E4108 *param0)
++{
++    return sCryWide ? &sCryWideWindow : &param0->unk_00->window;
++}
++
++static int CryWave_Y(int y)
++{
++    return sCryWide ? y - CRY_WIDE_Y0 : y;
++}
++
++// One line of a tile as the map shows it (flipped as its entry says).
++static void CryWide_TileLine(const u8 *chars, u16 entry, int line, u8 *out)
++{
++    const u8 *row = chars + (entry & 0x3FF) * TILE_SIZE_4BPP + ((entry & 0x800) ? 7 - line : line) * 4;
++
++    for (int k = 0; k < 4; k++) {
++        u8 b = (entry & 0x400) ? row[3 - k] : row[k];
++
++        out[k] = (entry & 0x400) ? (u8)((b >> 4) | (b << 4)) : b;
++    }
++}
++
++// The band's lower edge 3 lines lower: its row of tiles made again (on
++// BG2, over BG3's: the same tiles and palettes), their first 3 lines the
++// band's (the row above's), then the edge's first 5 (its colours, the
++// page's background under it left out).
++static void CryWide_LowerEdge(BgConfig *bgConfig, BOOL on)
++{
++    u16 *map = Bg_GetTilemapBuffer(bgConfig, BG_LAYER_MAIN_3), *over = Bg_GetTilemapBuffer(bgConfig, BG_LAYER_MAIN_2);
++    const u8 *chars = Bg_GetCharPtr(BG_LAYER_MAIN_3);
++    static u8 tiles[8][TILE_SIZE_4BPP];
++    u16 made[8][2];
++    int n = 0;
++
++    if (map == NULL || over == NULL || chars == NULL) {
++        return;
++    }
++
++    for (int x = 0; x < 32; x++) {
++        u16 band = map[(CRY_EDGE_ROW - 1) * 32 + x], edge = map[CRY_EDGE_ROW * 32 + x];
++        int k;
++
++        over[CRY_EDGE_ROW * 32 + x] = 0;
++
++        if (!on || (band >> 12) != (edge >> 12)) {
++            continue; // (in palettes apart: as it is)
++        }
++
++        for (k = 0; k < n && (made[k][0] != band || made[k][1] != edge); k++) {
++        }
++
++        if (k == n) {
++            if (n == 8) {
++                continue;
++            }
++
++            for (int line = 0; line < 8; line++) {
++                CryWide_TileLine(chars, line < CRY_EDGE_DOWN ? band : edge, line < CRY_EDGE_DOWN ? line : line - CRY_EDGE_DOWN, tiles[n] + line * 4);
++            }
++
++            made[n][0] = band;
++            made[n][1] = edge;
++            n++;
++        }
++
++        over[CRY_EDGE_ROW * 32 + x] = (u16)((CRY_EDGE_TILE - k) | (edge & 0xF000));
++    }
++
++    for (int k = 0; k < n; k++) {
++        DC_FlushRange(tiles[k], TILE_SIZE_4BPP);
++        Bg_LoadTiles(bgConfig, BG_LAYER_MAIN_2, tiles[k], TILE_SIZE_4BPP, CRY_EDGE_TILE - k);
++    }
++
++    Bg_ScheduleTilemapTransfer(bgConfig, BG_LAYER_MAIN_2);
++}
++
++// The page up on the wider screen: BG1 512 wide, the wave's window, its
++// layout; the band's edge lower.
++static void CryWide_Start(UnkStruct_ov21_021E4108 *param0)
++{
++    BgConfig *bgConfig = param0->unk_00->bgConfig;
++    BgTemplate template = {
++        .x = 0,
++        .y = 0,
++        .bufferSize = 0x1000,
++        .baseTile = 0,
++        .screenSize = BG_SCREEN_SIZE_512x256,
++        .colorMode = GX_BG_COLORMODE_16,
++        .screenBase = GX_BG_SCRBASE_0x1800,
++        .charBase = GX_BG_CHARBASE_0x04000,
++        .bgExtPltt = GX_BG_EXTPLTT_01,
++        .priority = 0,
++        .areaOver = 0,
++        .mosaic = FALSE,
++    };
++
++    sCryWide = NitroPort_WideScreenExtra() > 0;
++
++    if (!sCryWide) {
++        return;
++    }
++
++    Bg_FreeTilemapBuffer(bgConfig, BG_LAYER_MAIN_1);
++    Bg_InitFromTemplate(bgConfig, BG_LAYER_MAIN_1, &template, BG_TYPE_STATIC);
++    Bg_ClearTilemap(bgConfig, BG_LAYER_MAIN_1);
++    Window_Add(bgConfig, &sCryWideWindow, BG_LAYER_MAIN_1, 0, CRY_WIDE_TOP, CRY_WIDE_W / 8, CRY_WIDE_H, 9, 0);
++    Window_FillTilemap(&sCryWideWindow, 0);
++    CryWide_LowerEdge(bgConfig, TRUE);
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sCryWideLayout);
++}
++
++// And down: BG1 as the Pokédex has it (its window's tiles cleared, as the
++// page leaves the Pokédex's window).
++static void CryWide_End(UnkStruct_ov21_021E4108 *param0)
++{
++    BgConfig *bgConfig = param0->unk_00->bgConfig;
++    BgTemplate template = {
++        .x = 0,
++        .y = 0,
++        .bufferSize = 0x800,
++        .baseTile = 0,
++        .screenSize = BG_SCREEN_SIZE_256x256,
++        .colorMode = GX_BG_COLORMODE_16,
++        .screenBase = GX_BG_SCRBASE_0x0000,
++        .charBase = GX_BG_CHARBASE_0x04000,
++        .bgExtPltt = GX_BG_EXTPLTT_01,
++        .priority = 0,
++        .areaOver = 0,
++        .mosaic = FALSE,
++    };
++
++    if (!sCryWide) {
++        return;
++    }
++
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++    CryWide_LowerEdge(bgConfig, FALSE);
++    Window_FillTilemap(&sCryWideWindow, 0);
++    Window_CopyToVRAM(&sCryWideWindow);
++    Window_Remove(&sCryWideWindow);
++    Bg_FreeTilemapBuffer(bgConfig, BG_LAYER_MAIN_1);
++    Bg_InitFromTemplate(bgConfig, BG_LAYER_MAIN_1, &template, BG_TYPE_STATIC);
++    Bg_ClearTilemap(bgConfig, BG_LAYER_MAIN_1);
++    sCryWide = FALSE;
++}
++#endif
++
+ static void ov21_021E4590(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E4108 *param1, const UnkStruct_ov21_021E40F4 *param2, const UnkStruct_ov21_021E4898 *param3, enum HeapID heapID)
+ {
+     ov21_021E45FC(param1, param2, heapID);
++#ifdef SDK_PORT_3DS
++    CryWide_Start(param1);
++#endif
+     ov21_021E46A8(param0, param1, heapID);
+     ov21_021E47CC(param0, param1, heapID);
+     ov21_021E4890(param0, param1, param2, heapID);
+@@ -523,6 +707,9 @@ static void ov21_021E45FC(UnkStruct_ov21_021E4108 *param0, const UnkStruct_ov21_
+ 
+ static void ov21_021E4664(UnkStruct_ov21_021E4108 *param0)
+ {
++#ifdef SDK_PORT_3DS
++    CryWide_End(param0);
++#endif
+     Bg_ScheduleScroll(param0->unk_00->bgConfig, 1, 0, 0);
+     Window_FillRectWithColor(&param0->unk_00->window, 0, 0, 0, 256, 192);
+     Bg_ClearTilemap(param0->unk_00->bgConfig, 1);
+@@ -623,7 +810,12 @@ static void ov21_021E48B0(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
+     int v2;
+     int v3;
+ 
++#ifdef SDK_PORT_3DS
++    param7 = CryWave_Y(param7);
++    Window_FillRectWithColor(CryWave_Window(param1), 0, param6, param7 - 32, 1 * (param5), 32 * 2);
++#else
+     Window_FillRectWithColor(&param1->unk_00->window, 0, param6, param7 - 32, 1 * (param5), 32 * 2);
++#endif
+ 
+     v3 = param4 - param3;
+ 
+@@ -632,7 +824,11 @@ static void ov21_021E48B0(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
+         v2 = FX_Div(v2, param5 << FX32_SHIFT) >> FX32_SHIFT;
+         v2 += param3;
+ 
++#ifdef SDK_PORT_3DS
++        ov21_021E495C(CryWave_Window(param1), v0[v2], param6, param7, param8);
++#else
+         ov21_021E495C(&param1->unk_00->window, v0[v2], param6, param7, param8);
++#endif
+ 
+         param6 += 1;
+     }
+@@ -678,12 +874,22 @@ static void ov21_021E49D0(UnkStruct_ov21_021E4108 *param0, int param1, int param
+ {
+     int v0;
+ 
++#ifdef SDK_PORT_3DS
++    param4 = CryWave_Y(param4);
++    Window_FillRectWithColor(CryWave_Window(param0), 0, param3, param4 - 32, 1 * (param2 - param1), 32 * 2);
++
++    for (v0 = param1; v0 < param2; v0++) {
++        ov21_021E495C(CryWave_Window(param0), 0, param3, param4, param5);
++        param3 += 1;
++    }
++#else
+     Window_FillRectWithColor(&param0->unk_00->window, 0, param3, param4 - 32, 1 * (param2 - param1), 32 * 2);
+ 
+     for (v0 = param1; v0 < param2; v0++) {
+         ov21_021E495C(&param0->unk_00->window, 0, param3, param4, param5);
+         param3 += 1;
+     }
++#endif
+ }
+ 
+ static void ov21_021E4A28(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E4108 *param1, const UnkStruct_ov21_021E4898 *param2)
+@@ -691,6 +897,15 @@ static void ov21_021E4A28(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
+     int v0;
+ 
+     param0->unk_324 += 4;
++#ifdef SDK_PORT_3DS
++    if (sCryWide) {
++        // (the newest columns at the wider screen's right edge: the DS's
++        // x 284-287 now; nothing old left there)
++        param0->unk_324 %= CRY_WIDE_W;
++        v0 = (param0->unk_324 + 256 + NitroPort_WideScreenExtra() - 4) % CRY_WIDE_W;
++    } else
++#endif
++    {
+     param0->unk_324 %= 256;
+ 
+     v0 = param0->unk_324 - (4 * 2);
+@@ -698,6 +913,7 @@ static void ov21_021E4A28(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
+     if (v0 < 0) {
+         v0 += 256;
+     }
++    }
+ 
+     if (param0->unk_32C != param2->unk_04) {
+         ov21_021E48B0(param0, param1, param2->unk_00, param0->unk_32C, param2->unk_04, 4, v0, 151, &param0->unk_328);
+@@ -706,13 +922,24 @@ static void ov21_021E4A28(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E41
+     }
+ 
+     Bg_ScheduleScroll(param1->unk_00->bgConfig, 1, 0, param0->unk_324);
++#ifdef SDK_PORT_3DS
++    Window_ScheduleCopyToVRAM(CryWave_Window(param1));
++#else
+     Window_ScheduleCopyToVRAM(&param1->unk_00->window);
++#endif
+ 
+     param0->unk_32C = param2->unk_04;
+ }
+ 
+ static void ov21_021E4ABC(UnkStruct_ov21_021E4360 *param0, UnkStruct_ov21_021E4108 *param1)
+ {
++#ifdef SDK_PORT_3DS
++    if (sCryWide) {
++        ov21_021E49D0(param1, 0, CRY_WIDE_W, 0, 151, &param0->unk_328);
++        Window_CopyToVRAM(&sCryWideWindow);
++        return;
++    }
++#endif
+     Window_SetPalette(&param1->unk_00->window, 9);
+     ov21_021E49D0(param1, 0, 256, 0, 151, &param0->unk_328);
+     Window_CopyToVRAM(&param1->unk_00->window);
+diff --git a/src/applications/pokedex/ov21_021E8D48.c b/src/applications/pokedex/ov21_021E8D48.c
+index 5f9106db..6869e7f4 100644
+--- a/src/applications/pokedex/ov21_021E8D48.c
++++ b/src/applications/pokedex/ov21_021E8D48.c
+@@ -35,6 +35,46 @@
+ #include "res/graphics/pokedex/zukan.naix"
+ #include "res/text/bank/pokedex.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++
++// The Pokédex's page after a catch (in the battle, its BGs 256 wide: their
++// maps came round again beside the DS's screen, the entry's picture frame
++// and text box over again) on the wider screen, as the info page's picture
++// has it: the banner on to the edges; the background's pattern (8 pixels
++// wide; its plain right end, 248-255) beside the DS's screen; the text box
++// (rows 130-189: its ends 0-26 and 229-255, its middle between) its ends at
++// the screen's edges, its middle drawn on between.
++static const short sPokedexRegisterWideLayout[][8] = {
++    WIDE_MOVE(WIDE_BG(2), 0, 17, 0, 256, 0),
++    WIDE_FILL(WIDE_BG(2), 0, 17, -32, 0, 0),
++    WIDE_FILL(WIDE_BG(2), 0, 17, 256, 288, 255),
++    WIDE_MOVE(WIDE_BG(3), 0, 130, 0, 256, 0),
++    WIDE_MOVE(WIDE_BG(3), 190, 192, 0, 256, 0),
++    WIDE_MOVE(WIDE_BG(3), 0, 130, 248, 256, -280),
++    WIDE_MOVE(WIDE_BG(3), 0, 130, 248, 256, -272),
++    WIDE_MOVE(WIDE_BG(3), 0, 130, 248, 256, -264),
++    WIDE_MOVE(WIDE_BG(3), 0, 130, 248, 256, -256),
++    WIDE_MOVE(WIDE_BG(3), 0, 130, 248, 256, 8),
++    WIDE_MOVE(WIDE_BG(3), 0, 130, 248, 256, 16),
++    WIDE_MOVE(WIDE_BG(3), 0, 130, 248, 256, 24),
++    WIDE_MOVE(WIDE_BG(3), 0, 130, 248, 256, 32),
++    WIDE_MOVE(WIDE_BG(3), 190, 192, 248, 256, -280),
++    WIDE_MOVE(WIDE_BG(3), 190, 192, 248, 256, -272),
++    WIDE_MOVE(WIDE_BG(3), 190, 192, 248, 256, -264),
++    WIDE_MOVE(WIDE_BG(3), 190, 192, 248, 256, -256),
++    WIDE_MOVE(WIDE_BG(3), 190, 192, 248, 256, 8),
++    WIDE_MOVE(WIDE_BG(3), 190, 192, 248, 256, 16),
++    WIDE_MOVE(WIDE_BG(3), 190, 192, 248, 256, 24),
++    WIDE_MOVE(WIDE_BG(3), 190, 192, 248, 256, 32),
++    WIDE_MOVE(WIDE_BG(3), 130, 190, 27, 229, 0),
++    WIDE_MOVE(WIDE_BG(3), 130, 190, 0, 27, -32),
++    WIDE_FILL(WIDE_BG(3), 130, 190, -5, 27, 27),
++    WIDE_MOVE(WIDE_BG(3), 130, 190, 229, 256, 32),
++    WIDE_FILL(WIDE_BG(3), 130, 190, 229, 261, 228),
++};
++#endif
++
+ typedef struct {
+     Sprite *unk_00;
+     SpriteResource *unk_04[4];
+@@ -240,10 +280,16 @@ static void ov21_021E8E0C(UnkStruct_ov21_021E8D48 *param0, const PokedexEntryScr
+     param0->unk_248 = 1;
+ 
+     NARC_dtor(v1);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sPokedexRegisterWideLayout);
++#endif
+ }
+ 
+ static void ov21_021E900C(UnkStruct_ov21_021E8D48 *param0)
+ {
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++#endif
+     ov21_021E9AC8(&param0->unk_228);
+     ov21_021E968C(&param0->unk_200);
+     ov21_021E95EC(&param0->unk_200, param0->unk_1A0);
+diff --git a/src/battle/battle_controller_player.c b/src/battle/battle_controller_player.c
+index 17366e7b..9c0a7a5d 100644
+--- a/src/battle/battle_controller_player.c
++++ b/src/battle/battle_controller_player.c
+@@ -38,6 +38,7 @@
+ #include "item.h"
+ #include "move_table.h"
+ #include "party.h"
++#include "port_options.h"
+ #include "pokemon.h"
+ #include "screen_fade.h"
+ #include "sound_playback.h"
+@@ -3378,6 +3379,17 @@ static void BattleControllerPlayer_UpdateHP(BattleSystem *battleSys, BattleConte
+             return;
+         }
+ 
++#ifdef SDK_PORT_3DS
++        // (the options page's INSTANT VICTORY: a hit from the player's side
++        // knocks the other side's Pokémon out; False Swipe still leaves it
++        // 1 HP, below)
++        if (PortOption_On(PORT_OPT_INSTANT_VICTORY) && battleCtx->damage < 0
++            && BattleSystem_GetBattlerSide(battleSys, battleCtx->attacker) == BATTLER_US
++            && BattleSystem_GetBattlerSide(battleSys, battleCtx->defender) != BATTLER_US) {
++            battleCtx->damage = DEFENDING_MON.curHP * -1;
++        }
++#endif
++
+         if (CURRENT_MOVE_DATA.effect == BATTLE_EFFECT_LEAVE_WITH_1_HP
+             && DEFENDING_MON.curHP + battleCtx->damage <= 0) {
+             battleCtx->damage = (DEFENDING_MON.curHP - 1) * -1;
+diff --git a/src/battle/battle_script.c b/src/battle/battle_script.c
+index ac895a2d..f5ad2080 100644
+--- a/src/battle/battle_script.c
++++ b/src/battle/battle_script.c
+@@ -51,6 +51,7 @@
+ #include "overlay_manager.h"
+ #include "palette.h"
+ #include "party.h"
++#include "port_options.h"
+ #include "pc_boxes.h"
+ #include "pokemon.h"
+ #include "pokemon_icon.h"
+@@ -2216,6 +2217,23 @@ static BOOL BtlCmd_CalcExpGain(BattleSystem *battleSys, BattleContext *battleCtx
+         u16 exp = SpeciesData_GetSpeciesValue(battleCtx->battleMons[battleCtx->faintedMon].species, SPECIES_DATA_BASE_EXP_REWARD);
+         exp = (exp * battleCtx->battleMons[battleCtx->faintedMon].level) / 7;
+ 
++#ifdef SDK_PORT_3DS
++        // (the options page's PARTY EXP SHARE: the Pokémon that fought get
++        // the whole of it between them, the rest of the party half of it
++        // each, as later games' Exp. Share)
++        if (PortOption_On(PORT_OPT_EXP_SHARE) && totalMonsGainingExp) {
++            battleCtx->gainedExp = exp / totalMonsGainingExp;
++            battleCtx->sharedExp = exp / 2;
++
++            if (battleCtx->gainedExp == 0) {
++                battleCtx->gainedExp = 1;
++            }
++
++            if (battleCtx->sharedExp == 0) {
++                battleCtx->sharedExp = 1;
++            }
++        } else
++#endif
+         if (totalMonsWithExpShare) {
+             battleCtx->gainedExp = (exp / 2) / totalMonsGainingExp;
+ 
+@@ -2594,10 +2612,48 @@ static BOOL BtlCmd_StartCatchMonTask(BattleSystem *battleSys, BattleContext *bat
+  * @param battleCtx
+  * @return FALSE
+  */
++#ifdef SDK_PORT_3DS
++// The options page's EXP ON CATCH: the catch stops after "Gotcha!" (the
++// catch task, BattleScript_CatchMonTask), the script pays out experience
++// for the caught Pokémon as for a defeated one (subscript_grant_exp: the
++// messages, levels and moves as after a battle), then the catch goes on
++// (the Pokédex, the nickname). 0: nothing; 1: the catch has stopped for it;
++// 2: paid out (the script back here); 3: the catch going on.
++static int sPortCatchExp;
++static void *sPortCatchTaskData; // (the catch's, while the experience's task has the slot)
++
++static BOOL BattleScript_PortCatchPaysExp(BattleSystem *battleSys, BattleContext *battleCtx, int battler)
++{
++    return PortOption_On(PORT_OPT_EXP_ON_CATCH)
++        && (BattleSystem_GetBattleType(battleSys) & (BATTLE_TYPE_CATCH_TUTORIAL | BATTLE_TYPE_PAL_PARK | BATTLE_TYPE_NO_EXPERIENCE)) == FALSE
++        && battleCtx->sideGetExpMask[(battler >> 1) & 1] != 0;
++}
++#endif
++
+ static BOOL BtlCmd_WaitCatchMonTask(BattleSystem *battleSys, BattleContext *battleCtx)
+ {
++#ifdef SDK_PORT_3DS
++    if (battleCtx->taskData != NULL && sPortCatchExp == 1) {
++        // (stays on this command: the experience first, its task in the
++        // slot the catch's has, then back here)
++        sPortCatchExp = 2;
++        sPortCatchTaskData = battleCtx->taskData;
++        battleCtx->taskData = NULL;
++        BattleScript_Call(battleCtx, NARC_INDEX_BATTLE__SKILL__SUB_SEQ, subscript_grant_exp);
++        return FALSE;
++    }
++
++    if (sPortCatchExp == 2) {
++        battleCtx->taskData = sPortCatchTaskData;
++        sPortCatchTaskData = NULL;
++        sPortCatchExp = 3;
++    }
++#endif
+     if (battleCtx->taskData == NULL) {
+         BattleScript_Iter(battleCtx, 1);
++#ifdef SDK_PORT_3DS
++        sPortCatchExp = 0;
++#endif
+     }
+ 
+     battleCtx->battleProgressFlag = TRUE;
+@@ -9709,6 +9765,11 @@ static void BattleScript_GetExpTask(SysTask *task, void *inData)
+         if (itemEffect == HOLD_EFFECT_EXP_SHARE || (data->battleCtx->sideGetExpMask[battler] & FlagIndex(slot))) {
+             break;
+         }
++#ifdef SDK_PORT_3DS
++        if (PortOption_On(PORT_OPT_EXP_SHARE) && Pokemon_GetValue(mon, MON_DATA_HP, NULL) && Pokemon_GetValue(mon, MON_DATA_IS_EGG, NULL) == FALSE) {
++            break; // (PARTY EXP SHARE: every Pokémon able to)
++        }
++#endif
+     }
+ 
+     if (slot == BattleSystem_GetPartyCount(data->battleSys, expBattler)) {
+@@ -9745,6 +9806,11 @@ static void BattleScript_GetExpTask(SysTask *task, void *inData)
+             if (itemEffect == HOLD_EFFECT_EXP_SHARE) {
+                 totalExp += data->battleCtx->sharedExp;
+             }
++#ifdef SDK_PORT_3DS
++            else if (PortOption_On(PORT_OPT_EXP_SHARE) && (data->battleCtx->sideGetExpMask[battler] & FlagIndex(slot)) == FALSE) {
++                totalExp += data->battleCtx->sharedExp; // (PARTY EXP SHARE: half to those that didn't fight)
++            }
++#endif
+ 
+             if (itemEffect == HOLD_EFFECT_EXP_UP) {
+                 totalExp = totalExp * 150 / 100;
+@@ -10500,6 +10566,18 @@ static void BattleScript_CatchMonTask(SysTask *task, void *inData)
+         break;
+     case SEQ_CATCH_MON_WAIT_PRINT_POKEMON_WAS_CAUGHT:
+         if (Text_IsPrinterActive(data->tmpData[CATCH_MON_MSG_INDEX]) == FALSE) {
++#ifdef SDK_PORT_3DS
++            // (EXP ON CATCH: stopped here for the experience, BtlCmd_WaitCatchMonTask)
++            if (sPortCatchExp == 0 && BattleScript_PortCatchPaysExp(data->battleSys, data->battleCtx, battler)) {
++                data->battleCtx->faintedMon = battler;
++                sPortCatchExp = 1;
++                break;
++            }
++
++            if (sPortCatchExp == 1 || sPortCatchExp == 2) {
++                break;
++            }
++#endif
+             data->seqNum = SEQ_CATCH_MON_SET_CAUGHT_SPECIES;
+             ov12_022368C8(data->ballRotation, 7);
+         }
+@@ -10906,6 +10984,11 @@ static int BattleScript_CalcCatchShakes(BattleSystem *battleSys, BattleContext *
+     if (BattleSystem_GetBattleType(battleSys) & BATTLE_TYPE_ALWAYS_CATCH) {
+         return BALL_3_SHAKES_SUCCESS;
+     }
++#ifdef SDK_PORT_3DS
++    if (PortOption_On(PORT_OPT_ALWAYS_CATCH)) {
++        return BALL_3_SHAKES_SUCCESS; // (the options page's ALWAYS CATCH)
++    }
++#endif
+ 
+     u32 speciesMod;
+     if (battleCtx->msgItemTemp == ITEM_SAFARI_BALL) {
 diff --git a/src/meson.build b/src/meson.build
 index 4b0c04d0..7b865f0a 100644
 --- a/src/meson.build
@@ -97,12 +806,62 @@ index 4b0c04d0..7b865f0a 100644
      'overlay005/motion_blur.c',
      'overlay005/field_motion_blur.c',
      'overlay005/encounter_effect_core.c',
+diff --git a/src/overlay005/daycare.c b/src/overlay005/daycare.c
+index 9a4c97a0..f14f2655 100644
+--- a/src/overlay005/daycare.c
++++ b/src/overlay005/daycare.c
+@@ -23,6 +23,7 @@
+ #include "message.h"
+ #include "message_util.h"
+ #include "party.h"
++#include "port_options.h"
+ #include "pokemon.h"
+ #include "save_player.h"
+ #include "savedata.h"
+@@ -933,8 +934,16 @@ BOOL Daycare_Update(Daycare *daycare, Party *party, FieldSystem *fieldSystem)
+         }
+     }
+ 
++#ifdef SDK_PORT_3DS
++    // (the options page's FAST EGGS: the day care's chance at an egg every
++    // step, not every 256; an egg in the party hatches in two steps)
++    BOOL fastEggs = PortOption_On(PORT_OPT_FAST_EGGS);
++#else
++    BOOL fastEggs = FALSE;
++#endif
++
+     if ((Daycare_HasEgg(daycare) == FALSE) && (monCount == NUM_DAYCARE_MONS)) {
+-        if ((DaycareMon_GetSteps(Daycare_GetDaycareMon(daycare, 1)) & 0xff) == 0xff) {
++        if (fastEggs || (DaycareMon_GetSteps(Daycare_GetDaycareMon(daycare, 1)) & 0xff) == 0xff) {
+             compatibilityScore = Daycare_GetCompatibilityScore(daycare);
+             rand = LCRNG_Next();
+             rand = (rand * 100) / 0xffff;
+@@ -948,7 +957,7 @@ BOOL Daycare_Update(Daycare *daycare, Party *party, FieldSystem *fieldSystem)
+     steps = Daycare_GetStepCounter(daycare);
+     Daycare_SetStepCounter(daycare, ++steps);
+ 
+-    if (steps == Daycare_GetEggCycleLength(fieldSystem)) {
++    if (fastEggs || steps == Daycare_GetEggCycleLength(fieldSystem)) {
+         Daycare_SetStepCounter(daycare, 0);
+         toSubtract = Party_GetEggCyclesToSubtract(party);
+ 
+@@ -963,7 +972,9 @@ BOOL Daycare_Update(Daycare *daycare, Party *party, FieldSystem *fieldSystem)
+                 eggCycles = Pokemon_GetValue(mon, MON_DATA_FRIENDSHIP, NULL);
+ 
+                 if (eggCycles != 0) {
+-                    if (eggCycles >= toSubtract) {
++                    if (fastEggs) {
++                        eggCycles = 0;
++                    } else if (eggCycles >= toSubtract) {
+                         eggCycles -= toSubtract;
+                     } else {
+                         eggCycles--;
 diff --git a/src/overlay005/options_panel.c b/src/overlay005/options_panel.c
 new file mode 100644
-index 00000000..33ae121f
+index 00000000..e4e72a0f
 --- /dev/null
 +++ b/src/overlay005/options_panel.c
-@@ -0,0 +1,943 @@
+@@ -0,0 +1,1086 @@
 +#include "overlay005/options_panel.h"
 +
 +#ifdef SDK_PORT_3DS
@@ -112,6 +871,7 @@ index 00000000..33ae121f
 +#include "constants/game_options.h"
 +#include "constants/heap.h"
 +#include "constants/items.h"
++#include "constants/narc.h"
 +#include "generated/items.h"
 +
 +#include "field/field_system.h"
@@ -120,9 +880,12 @@ index 00000000..33ae121f
 +#include "bg_window.h"
 +#include "font.h"
 +#include "game_options.h"
++#include "graphics.h"
 +#include "heap.h"
 +#include "item.h"
++#include "port_options.h"
 +#include "message.h"
++#include "render_window.h"
 +#include "save_player.h"
 +#include "savedata.h"
 +#include "sound.h"
@@ -153,30 +916,9 @@ index 00000000..33ae121f
 +// the page closes.
 +// ------------------------------------------------------------------------
 +
-+extern int NitroPort_Option(int id);
-+extern void NitroPort_OptionSet(int id, int value);
-+extern int NitroPort_OptionValues(int id);
-+extern int NitroPort_OptionsSave(void);
 +extern void NitroPort_LowerMenuSetPanelButtons(const short (*rects)[4], int count);
 +extern int NitroPort_LowerMenuPressPending(void);
 +extern int NitroPort_LowerMenuTakePress(void);
-+
-+// (nitro_port_options.h's)
-+#define PORT_OPT_FPS60           0
-+#define PORT_OPT_SMOOTH3D        1
-+#define PORT_OPT_START_TAB       2
-+#define PORT_OPT_SPEED           3
-+#define PORT_OPT_EXP_ON_CATCH    4
-+#define PORT_OPT_EXP_SHARE       5
-+#define PORT_OPT_TRADE_EVO       6
-+#define PORT_OPT_HM_FREE         7
-+#define PORT_OPT_AUTO_RUN        8
-+#define PORT_OPT_ALWAYS_CATCH    9
-+#define PORT_OPT_INSTANT_VICTORY 10
-+#define PORT_OPT_FAST_EGGS       11
-+#define PORT_OPT_INFINITE_MONEY  12
-+#define PORT_OPT_ENCOUNTERS      13
-+#define PORT_OPT_SHINY           14
 +
 +#define PORT_BUTTON_OPTIONS  7 // (start_menu.c's PORT_BUTTON_OPTIONS)
 +#define PORT_BUTTON_COUNT    8
@@ -219,6 +961,22 @@ index 00000000..33ae121f
 +    GX_RGB(31, 0, 0), // (255, 0, 0): its cursor
 +};
 +
++// The FRAME card is drawn in the frame chosen, as a message box of it would
++// be (the options screen shows its frame on its message box): its tiles in
++// the sub BG's palette 1, the frame's colours 5 to 15 (as the frames have
++// them), below them the few the card's text and its cursor need.
++enum {
++    OPF_INK = 1,
++    OPF_INK_SHADOW,
++    OPF_RED, // (the cursor too: near enough its red)
++    OPF_RED_SHADOW,
++    OPF_FRAME_FIRST, // (5: the frames' first colour)
++    OPF_WHITE = 15, // (the frames' white: inside a message box)
++};
++
++#define OP_FRAME_PALETTE 1
++#define OP_FRAME_CARD    5 // (SETTINGS's FRAME: the left column's last)
++
 +// ----- the pages and their cards
 +
 +enum OptionsPage {
@@ -228,6 +986,9 @@ index 00000000..33ae121f
 +    OP_PAGE_GIVE, // (CHEATS 2/2)
 +    OP_PAGE_COUNT
 +};
++
++// (the start menu keeps a cursor a page: OptionsPanelPlace)
++typedef char OptionsPanelPagesCheck[OP_PAGE_COUNT == OPTIONS_PANEL_PAGES ? 1 : -1];
 +
 +enum OptionsCardKind {
 +    OPK_GAME, // the game's setting `id` (OptionsPanel_Game*)
@@ -369,6 +1130,11 @@ index 00000000..33ae121f
 +    u16 giveCount[OP_GIVE_POCKETS];
 +    int givePocket, giveItem, giveHowMany;
 +    int giveDone; // (frames left showing what GIVE did: > 0 given, < 0 no room)
++    // the FRAME card's frame: its tiles (18, a message box's), its colours
++    void *frameFile;
++    const u8 *frameTiles;
++    int frameShown; // (-1 none loaded)
++    u16 frameColours[16];
 +} OptionsPanel;
 +
 +static OptionsPanel *sOptionsPanel;
@@ -672,6 +1438,100 @@ index 00000000..33ae121f
 +    panel->rectCount++;
 +}
 +
++// ----- the FRAME card
++
++static u8 *OptionsPanel_PixelByte(OptionsPanel *panel, int x, int y)
++{
++    return panel->canvas.pixels + ((y / 8) * OP_W + x / 8) * TILE_SIZE_4BPP + (y % 8) * 4 + (x % 8) / 2;
++}
++
++// The frame chosen: its tiles and its colours, loaded when it changes.
++// FALSE: none to show (the card drawn as the others then).
++static BOOL OptionsPanel_LoadFrame(OptionsPanel *panel)
++{
++    int frame = Options_Frame(panel->options);
++    NNSG2dCharacterData *chars = NULL;
++    NNSG2dPaletteData *colours = NULL;
++    void *coloursFile;
++
++    if (frame == panel->frameShown) {
++        return panel->frameTiles != NULL;
++    }
++
++    if (panel->frameFile != NULL) {
++        Heap_Free(panel->frameFile);
++        panel->frameFile = NULL;
++        panel->frameTiles = NULL;
++    }
++
++    panel->frameShown = frame;
++    panel->frameFile = Graphics_GetCharData(NARC_INDEX_GRAPHIC__PL_WINFRAME, GetMessageBoxTilesNARCMember(frame), FALSE, &chars, OP_HEAP);
++    coloursFile = Graphics_GetPlttData(NARC_INDEX_GRAPHIC__PL_WINFRAME, GetMessageBoxPaletteNARCMember(frame), &colours, OP_HEAP);
++
++    if (panel->frameFile != NULL && chars != NULL && chars->szByte >= 18 * TILE_SIZE_4BPP
++        && coloursFile != NULL && colours != NULL && colours->szByte >= sizeof(panel->frameColours)) {
++        panel->frameTiles = chars->pRawData;
++        memcpy(panel->frameColours, colours->pRawData, sizeof(panel->frameColours));
++        panel->frameColours[0] = sOptionsPanelColours[OPC_BACK];
++        panel->frameColours[OPF_INK] = sOptionsPanelColours[OPC_INK];
++        panel->frameColours[OPF_INK_SHADOW] = sOptionsPanelColours[OPC_INK_SHADOW];
++        panel->frameColours[OPF_RED] = sOptionsPanelColours[OPC_RED];
++        panel->frameColours[OPF_RED_SHADOW] = sOptionsPanelColours[OPC_RED_SHADOW];
++        DC_FlushRange(panel->frameColours, sizeof(panel->frameColours));
++        GXS_LoadBGPltt(panel->frameColours, OP_FRAME_PALETTE * PALETTE_SIZE_BYTES, PALETTE_SIZE_BYTES);
++    } else if (panel->frameFile != NULL) {
++        Heap_Free(panel->frameFile);
++        panel->frameFile = NULL;
++    }
++
++    if (coloursFile != NULL) {
++        Heap_Free(coloursFile);
++    }
++
++    return panel->frameTiles != NULL;
++}
++
++// The FRAME card drawn again as a message box in the frame chosen: the
++// frame's two tiles on the left, its three on the right, its top and bottom
++// rows, their middles repeated between (as a message box stretches it); the
++// value inside, white as a message box is. Its tiles (the card's, a pixel
++// round it for the cursor, out to the tiles' edges: nothing else of the
++// page in them, the left column's last card) take palette 1's colours:
++// the page's background there 0 (the backdrop: the same colour), the
++// cursor the red.
++static void OptionsPanel_DrawFrameCard(OptionsPanel *panel, int x0, int y0, int x1, int y1)
++{
++    int x, y;
++    int ix0 = x0 + 16, ix1 = x1 - 24;
++
++    for (y = (y0 - 1) & ~7; y <= ((y1 + 1) | 7); y++) {
++        for (x = (x0 - 1) & ~7; x <= ((x1 + 1) | 7); x++) {
++            u8 *byte = OptionsPanel_PixelByte(panel, x, y);
++            u8 v = ((x & 1) ? *byte >> 4 : *byte & 0xF) == OPC_CURSOR ? OPF_RED : 0;
++
++            if (x >= x0 && x <= x1 && y >= y0 && y <= y1) {
++                int fx = x - x0 < 16 ? x - x0 : x1 - x < 24 ? 47 - (x1 - x) : 16 + (x - x0 - 16) % 8;
++                int fy = y - y0 < 8 ? y - y0 : y1 - y < 8 ? 23 - (y1 - y) : 8 + (y - y0 - 8) % 8;
++                const u8 *f = panel->frameTiles + ((fy / 8) * 6 + fx / 8) * TILE_SIZE_4BPP + (fy % 8) * 4 + (fx % 8) / 2;
++                u8 colour = (fx & 1) ? *f >> 4 : *f & 0xF;
++
++                if (colour != 0) {
++                    v = colour;
++                }
++            }
++
++            *byte = (x & 1) ? (*byte & 0x0F) | (v << 4) : (*byte & 0xF0) | v;
++        }
++    }
++
++    OptionsPanel_CardValue(panel, &sSettingsCards[OP_FRAME_CARD]);
++    OptionsPanel_Print(panel, ix0, ix1, y0 + 9, OPF_RED, OPF_RED_SHADOW, OPF_WHITE);
++    OptionsPanel_SetLetters(panel->text, "<");
++    OptionsPanel_Print(panel, ix0 + 2, -1, y0 + 9, OPF_INK, OPF_INK_SHADOW, OPF_WHITE);
++    OptionsPanel_SetLetters(panel->text, ">");
++    OptionsPanel_Print(panel, ix1 - 1 - OptionsPanel_TextWidth(panel), -1, y0 + 9, OPF_INK, OPF_INK_SHADOW, OPF_WHITE);
++}
++
 +// The page as it is now: drawn, cut into tiles, put on the screen; its
 +// touch rectangles given to the port.
 +static void OptionsPanel_Draw(OptionsPanel *panel)
@@ -680,6 +1540,7 @@ index 00000000..33ae121f
 +    u16 *map = Bg_GetTilemapBuffer(panel->bgConfig, OP_LAYER);
 +    const u8 *pixels = panel->canvas.pixels;
 +    int k, n, t;
++    int framed[4] = { 0, 0, -1, -1 }; // (the FRAME card's tiles: x0, y0, x1, y1)
 +
 +    OptionsPanel_Fill(panel, OPC_BACK, 0, 0, 255, OP_PAGE_LINES - 1);
 +    panel->rectCount = 0;
@@ -746,6 +1607,17 @@ index 00000000..33ae121f
 +        OptionsPanel_Cursor(panel, x0, y0, x1, y1);
 +    }
 +
++    if (panel->page == OP_PAGE_SETTINGS && OptionsPanel_LoadFrame(panel)) {
++        int x0, y0, x1, y1;
++
++        OptionsPanel_CardBox(OP_PAGE_SETTINGS, OP_FRAME_CARD, &x0, &y0, &x1, &y1);
++        OptionsPanel_DrawFrameCard(panel, x0, y0, x1, y1);
++        framed[0] = (x0 - 1) / 8;
++        framed[1] = (y0 - 1) / 8;
++        framed[2] = (x1 + 1) / 8;
++        framed[3] = (y1 + 1) / 8;
++    }
++
 +    // Cut into tiles: tile 0 the plain background (the rows under the
 +    // page), then each tile not seen before.
 +    memset(panel->hashHead, 0xFF, sizeof(panel->hashHead));
@@ -780,6 +1652,10 @@ index 00000000..33ae121f
 +            panel->hashHead[hash] = found;
 +        }
 +
++        if (found > 0 && t % OP_W >= framed[0] && t % OP_W <= framed[2] && t / OP_W >= framed[1] && t / OP_W <= framed[3]) {
++            found |= OP_FRAME_PALETTE << 12;
++        }
++
 +        map[(t / OP_W) * 32 + t % OP_W] = found < 0 ? 0 : found;
 +    }
 +
@@ -794,7 +1670,9 @@ index 00000000..33ae121f
 +
 +// ----- open, close
 +
-+void OptionsPanel_Open(FieldSystem *fieldSystem)
++static void OptionsPanel_ShowPage(OptionsPanel *panel, int page);
++
++void OptionsPanel_Open(FieldSystem *fieldSystem, const OptionsPanelPlace *place)
 +{
 +    OptionsPanel *panel;
 +    BgTemplate template = {
@@ -821,6 +1699,7 @@ index 00000000..33ae121f
 +    panel->page = OP_PAGE_SETTINGS;
 +    panel->givePocket = 0;
 +    panel->giveHowMany = 1;
++    panel->frameShown = -1;
 +
 +    // The sub engine: 48 KB of BG VRAM, BG0 alone.
 +    GX_SetBankForSubOBJ(GX_VRAM_SUB_OBJ_NONE);
@@ -845,16 +1724,35 @@ index 00000000..33ae121f
 +    panel->text = String_Init(64, OP_HEAP);
 +    sOptionsPanel = panel;
 +
++    // (where it was when it closed)
++    if (place != NULL && place->page >= 0 && place->page < OP_PAGE_COUNT) {
++        for (int k = 0; k < OP_PAGE_COUNT; k++) {
++            if (place->cursor[k] >= 0 && place->cursor[k] < sOptionsPages[k].count) {
++                panel->cursor[k] = place->cursor[k];
++            }
++        }
++
++        OptionsPanel_ShowPage(panel, place->page);
++    }
++
 +    OptionsPanel_Draw(panel);
 +    GXS_SetVisiblePlane(GX_PLANEMASK_BG0);
 +}
 +
-+void OptionsPanel_Close(FieldSystem *fieldSystem)
++void OptionsPanel_Close(FieldSystem *fieldSystem, OptionsPanelPlace *place)
 +{
 +    OptionsPanel *panel = sOptionsPanel;
 +
 +    if (panel == NULL) {
 +        return;
++    }
++
++    if (place != NULL) {
++        place->page = panel->page;
++
++        for (int k = 0; k < OP_PAGE_COUNT; k++) {
++            place->cursor[k] = panel->cursor[k];
++        }
 +    }
 +
 +    NitroPort_LowerMenuSetPanelButtons(NULL, 0);
@@ -863,6 +1761,10 @@ index 00000000..33ae121f
 +
 +    if (panel->giveItems != NULL) {
 +        Heap_Free(panel->giveItems);
++    }
++
++    if (panel->frameFile != NULL) {
++        Heap_Free(panel->frameFile);
 +    }
 +
 +    String_Free(panel->text);
@@ -1046,19 +1948,171 @@ index 00000000..33ae121f
 +    return OPTIONS_PANEL_STAY;
 +}
 +#endif
+diff --git a/src/overlay006/wild_encounters.c b/src/overlay006/wild_encounters.c
+index ebfbabce..ce252330 100644
+--- a/src/overlay006/wild_encounters.c
++++ b/src/overlay006/wild_encounters.c
+@@ -40,6 +40,7 @@
+ #include "narc.h"
+ #include "party.h"
+ #include "player_avatar.h"
++#include "port_options.h"
+ #include "pokedex.h"
+ #include "pokemon.h"
+ #include "pokeradar.h"
+@@ -269,7 +270,28 @@ BOOL WildEncounters_TryWildEncounter(FieldSystem *fieldSystem)
+     ModifyEncounterRateWithFlute(fieldSystem, &encounterRate);
+     ModifyEncounterRateWithHeldItem(firstPartyMon, &encounterRate);
+ 
++#ifdef SDK_PORT_3DS
++    // (the options page's WILD ENCOUNTERS: none, a quarter, half or twice
++    // as many while walking; the Poké Radar's patches still happen)
++    switch (NitroPort_Option(PORT_OPT_ENCOUNTERS)) {
++    case 1:
++        encounterRate = 0;
++        break;
++    case 2:
++        encounterRate = encounterRate / 4 > 0 ? encounterRate / 4 : 1;
++        break;
++    case 3:
++        encounterRate = encounterRate / 2 > 0 ? encounterRate / 2 : 1;
++        break;
++    case 4:
++        encounterRate = encounterRate >= 128 ? 255 : encounterRate * 2;
++        break;
++    }
++
++    if (encounterRate != 0 && ShouldGetRandomEncounter(fieldSystem, encounterRate, tileBehavior)) {
++#else
+     if (ShouldGetRandomEncounter(fieldSystem, encounterRate, tileBehavior)) {
++#endif
+         gettingEncounter = TRUE;
+     } else {
+         gettingEncounter = FALSE;
+@@ -1046,6 +1068,19 @@ static void CreateWildMonShinyWithGenderOrNature(const u16 species, const u8 lev
+ 
+ static void CreateWildMon(u16 species, u8 level, const int partyDest, const WildEncounters_FieldParams *encounterFieldParams, Pokemon *firstPartyMon, FieldBattleDTO *battleParams)
+ {
++#ifdef SDK_PORT_3DS
++    // (the options page's SHINY ODDS: a wild Pokémon shiny at 1 in 4096,
++    // 1024, 256 or 64, or always; else the game's own 1 in 8192)
++    {
++        static const u16 odds[] = { 0, 4096, 1024, 256, 64, 1 };
++        int choice = NitroPort_Option(PORT_OPT_SHINY);
++
++        if (choice > 0 && choice < (int)NELEMS(odds) && LCRNG_RandMod(odds[choice]) == 0) {
++            CreateWildMonShinyWithGenderOrNature(species, level, partyDest, encounterFieldParams->trainerID, encounterFieldParams, firstPartyMon, battleParams);
++            return;
++        }
++    }
++#endif
+     Pokemon *newEncounter = Pokemon_New(HEAP_ID_FIELD2);
+     Pokemon_Init(newEncounter);
+     BOOL hasRandomGender = TRUE;
+diff --git a/src/player_move.c b/src/player_move.c
+index 2c8b2f50..203bcb6e 100644
+--- a/src/player_move.c
++++ b/src/player_move.c
+@@ -26,6 +26,7 @@
+ #include "map_tile_behavior.h"
+ #include "persisted_map_features_init.h"
+ #include "player_avatar.h"
++#include "port_options.h"
+ #include "sound_playback.h"
+ #include "terrain_collision_manager.h"
+ #include "unk_020655F4.h"
+@@ -2468,6 +2469,12 @@ static BOOL MovementAction_IsWalkOnSpotSlow(enum MovementAction movementAction)
+  */
+ BOOL PlayerAvatar_IsRunButtonHeld(PlayerAvatar *playerAvatar, u16 pad)
+ {
++#ifdef SDK_PORT_3DS
++    // (the options page's AUTO-RUN: running unless B is held)
++    if (PortOption_On(PORT_OPT_AUTO_RUN)) {
++        return (pad & PAD_BUTTON_B) ? FALSE : TRUE;
++    }
++#endif
+     if (pad & PAD_BUTTON_B) {
+         return TRUE;
+     }
+diff --git a/src/pokemon.c b/src/pokemon.c
+index 2700366a..5cbbe714 100644
+--- a/src/pokemon.c
++++ b/src/pokemon.c
+@@ -42,6 +42,7 @@
+ #include "party.h"
+ #include "pokemon_anim.h"
+ #include "pokemon_sprite.h"
++#include "port_options.h"
+ #include "rtc.h"
+ #include "sound_chatot.h"
+ #include "sound_playback.h"
+@@ -3716,6 +3717,18 @@ u16 Pokemon_GetEvolutionTargetSpecies(Party *party, Pokemon *mon, u8 evoClass, u
+                     *evoTypeResult = EVO_LEVEL_ICE_ROCK;
+                 }
+                 break;
++#ifdef SDK_PORT_3DS
++            // (the options page's TRADE EVO AT 40: those that evolve by
++            // trading, with or without an item held, by reaching level 40;
++            // no item needed or used)
++            case EVO_TRADE:
++            case EVO_TRADE_WITH_HELD_ITEM:
++                if (PortOption_On(PORT_OPT_TRADE_EVO) && monLevel >= 40) {
++                    targetSpecies = speciesEvolutions[i].targetSpecies;
++                    *evoTypeResult = EVO_LEVEL;
++                }
++                break;
++#endif
+             }
+ 
+             if (targetSpecies) {
+diff --git a/src/scrcmd_party.c b/src/scrcmd_party.c
+index 49d000e7..771bfe61 100644
+--- a/src/scrcmd_party.c
++++ b/src/scrcmd_party.c
+@@ -134,6 +134,12 @@ BOOL ScrCmd_CheckPartyMonHasMove(ScriptContext *ctx)
+         *destVar = TRUE;
+     }
+ 
++#ifdef SDK_PORT_3DS
++    if (Party_PortHmFreeSlot(SaveData_GetParty(fieldSystem->saveData), move) == partySlot) {
++        *destVar = TRUE; // (HMs WITHOUT MOVES)
++    }
++#endif
++
+     return FALSE;
+ }
+ 
+@@ -162,6 +168,16 @@ BOOL ScrCmd_FindPartySlotWithMove(ScriptContext *ctx)
+         }
+     }
+ 
++#ifdef SDK_PORT_3DS
++    if (*destVar == MAX_PARTY_SIZE) {
++        int portSlot = Party_PortHmFreeSlot(SaveData_GetParty(fieldSystem->saveData), move);
++
++        if (portSlot != PARTY_SLOT_NONE) {
++            *destVar = portSlot; // (HMs WITHOUT MOVES)
++        }
++    }
++#endif
++
+     return FALSE;
+ }
+ 
 diff --git a/src/start_menu.c b/src/start_menu.c
-index f492ba10..3eec0d5a 100644
+index f492ba10..c75f9e7c 100644
 --- a/src/start_menu.c
 +++ b/src/start_menu.c
-@@ -22,6 +22,7 @@
+@@ -22,6 +22,8 @@
  #include "applications/town_map/main.h"
  #include "field/field_system.h"
  #include "overlay005/fieldmap.h"
 +#include "overlay005/options_panel.h"
++#include "port_options.h"
  #include "overlay005/save_info_window.h"
  #ifdef SDK_PORT_3DS
  #include "overlay005/ov5_021D5BC0.h"
-@@ -208,6 +209,8 @@ BOOL StartMenu_PortAppIsMenus(ApplicationManager *appMan);
+@@ -208,6 +210,8 @@ BOOL StartMenu_PortAppIsMenus(ApplicationManager *appMan);
  static void StartMenu_PortAppGone(void);
  static void StartMenu_PortShowPanel(FieldSystem *fieldSystem);
  static BOOL StartMenu_PortSaveInPanel(FieldSystem *fieldSystem);
@@ -1067,16 +2121,7 @@ index f492ba10..3eec0d5a 100644
  static void StartMenu_PortSetCursor(FieldSystem *fieldSystem, StartMenu *menu, int button);
  static BOOL StartMenu_PortExitTownMap(FieldTask *fieldTask);
  #endif
-@@ -321,6 +324,8 @@ extern void NitroPort_LowerMenuSetTall(int tall);
- extern void NitroPort_LowerMenuShow(int on);
- extern void NitroPort_LowerMenuSetPanelTouch(int on);
- extern void NitroPort_LowerMenuSelect(int button);
-+extern int NitroPort_Option(int id);
-+#define PORT_OPT_START_TAB 2 // NITRO_OPT_START_TAB: 0 the map, 1 the Pokétch
- extern void NitroPort_LowerMenuSetEnabled(u32 mask);
- extern int NitroPort_LowerMenuTakePress(void);
- extern int NitroPort_LowerMenuPressPending(void);
-@@ -674,6 +679,11 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
+@@ -674,6 +678,11 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
              Heap_Free(menu);
          }
          break;
@@ -1088,7 +2133,7 @@ index f492ba10..3eec0d5a 100644
      case START_MENU_STATE_SAVED:
          Heap_Free(menu);
          MapObjectMan_UnpauseAllMovement(fieldSystem->mapObjMan);
-@@ -696,14 +706,14 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
+@@ -696,14 +705,14 @@ static BOOL StartMenu_Main(FieldTask *fieldTask)
              }
  
              // The field whole: the screens the game's again, the panel
@@ -1108,7 +2153,7 @@ index f492ba10..3eec0d5a 100644
                  StartMenu_PortShowPanel(fieldSystem);
                  NitroPort_LowerMenuFadePanel(FALSE);
                  NitroPort_LowerMenuKeepShown(FALSE);
-@@ -1772,6 +1782,127 @@ static BOOL StartMenu_PortSaveClosing(FieldSystem *fieldSystem)
+@@ -1772,6 +1781,128 @@ static BOOL StartMenu_PortSaveClosing(FieldSystem *fieldSystem)
  }
  #endif
  
@@ -1125,6 +2170,7 @@ index f492ba10..3eec0d5a 100644
 +static int sPortOptionsPhase;
 +static int sPortOptionsFrames;
 +static int sPortOptionsAfter;
++static OptionsPanelPlace sPortOptionsPlace; // (the page's tab and cards when it last closed)
 +
 +static BOOL StartMenu_PortOptionsInPanel(FieldSystem *fieldSystem)
 +{
@@ -1154,7 +2200,7 @@ index f492ba10..3eec0d5a 100644
 +        break;
 +    case 2:
 +        if (FieldSystem_IsBottomScreenDone(fieldSystem)) {
-+            OptionsPanel_Open(fieldSystem);
++            OptionsPanel_Open(fieldSystem, &sPortOptionsPlace);
 +            NitroPort_LowerMenuShow(TRUE);
 +            NitroPort_LowerMenuSetTall(TRUE);
 +            NitroPort_LowerMenuSetPanel(PORT_PANEL_DS);
@@ -1188,7 +2234,7 @@ index f492ba10..3eec0d5a 100644
 +        break;
 +    case 5:
 +        if (NitroPort_LowerMenuPanelFade() >= PORT_FADE_BLACK) {
-+            OptionsPanel_Close(fieldSystem);
++            OptionsPanel_Close(fieldSystem, &sPortOptionsPlace);
 +            NitroPort_LowerMenuSetTall(FALSE); // (the menu stays on: the Pokétch's screen as it was)
 +            NitroPort_LowerMenuSetPanelTouch(TRUE);
 +            FieldSystem_InitBottomScreen(fieldSystem);
@@ -1279,6 +2325,112 @@ index f492ba10..3eec0d5a 100644
          return NULL;
      }
  }
+diff --git a/src/trainer_info.c b/src/trainer_info.c
+index 23893752..e5c71de9 100644
+--- a/src/trainer_info.c
++++ b/src/trainer_info.c
+@@ -7,6 +7,7 @@
+ 
+ #include "charcode_util.h"
+ #include "heap.h"
++#include "port_options.h"
+ #include "string_gf.h"
+ 
+ #define MONEY_MAX 999999
+@@ -132,6 +133,13 @@ int TrainerInfo_BadgeCount(const TrainerInfo *info)
+ 
+ u32 TrainerInfo_Money(const TrainerInfo *info)
+ {
++#ifdef SDK_PORT_3DS
++    // (the options page's INFINITE MONEY: as much as can be had, whatever
++    // is spent; what was saved stays as it was)
++    if (PortOption_On(PORT_OPT_INFINITE_MONEY)) {
++        return MONEY_MAX;
++    }
++#endif
+     return info->money;
+ }
+ 
+@@ -172,6 +180,11 @@ u32 TrainerInfo_GiveMoney(TrainerInfo *info, u32 money)
+ 
+ u32 TrainerInfo_TakeMoney(TrainerInfo *info, u32 money)
+ {
++#ifdef SDK_PORT_3DS
++    if (PortOption_On(PORT_OPT_INFINITE_MONEY)) {
++        return MONEY_MAX;
++    }
++#endif
+     if (info->money < money) {
+         info->money = 0;
+     } else {
+diff --git a/src/unk_02054884.c b/src/unk_02054884.c
+index 344ecd25..a2bff8df 100644
+--- a/src/unk_02054884.c
++++ b/src/unk_02054884.c
+@@ -10,7 +10,11 @@
+ 
+ #include "overlay005/daycare.h"
+ 
++#include "bag.h"
++#include "generated/items.h"
+ #include "heap.h"
++#include "item.h"
++#include "port_options.h"
+ #include "party.h"
+ #include "pokemon.h"
+ #include "save_catchrecords.h"
+@@ -83,6 +87,39 @@ void Party_ResetMonMoveSlot(Party *party, int partySlot, int moveSlot, u16 moveI
+ 
+ // In many of the functions below, C99-style iterator declaration doesn't match
+ 
++#ifdef SDK_PORT_3DS
++// The options page's HMs WITHOUT MOVES: a field move whose HM the bag has
++// is the party's first Pokémon's (not an egg), whatever it knows (its badge
++// still needed, as the game checks it). PARTY_SLOT_NONE otherwise.
++int Party_PortHmFreeSlot(Party *party, u16 moveID)
++{
++    int item, i;
++    int partyCount = Party_GetCurrentCount(party);
++
++    if (!PortOption_On(PORT_OPT_HM_FREE) || !Item_IsHMMove(moveID)) {
++        return PARTY_SLOT_NONE;
++    }
++
++    for (item = ITEM_HM01; item <= ITEM_HM08; item++) {
++        if (Item_MoveForTMHM(item) == moveID) {
++            break;
++        }
++    }
++
++    if (item > ITEM_HM08 || Bag_GetItemQuantity(SaveData_GetBag(SaveData_Ptr()), item, HEAP_ID_SYSTEM) == 0) {
++        return PARTY_SLOT_NONE;
++    }
++
++    for (i = 0; i < partyCount; i++) {
++        if (Pokemon_GetValue(Party_GetPokemonBySlotIndex(party, i), MON_DATA_IS_EGG, NULL) == FALSE) {
++            return i;
++        }
++    }
++
++    return PARTY_SLOT_NONE;
++}
++#endif
++
+ int Party_HasMonWithMove(Party *party, u16 moveID)
+ {
+     int i;
+@@ -103,7 +140,11 @@ int Party_HasMonWithMove(Party *party, u16 moveID)
+         }
+     }
+ 
++#ifdef SDK_PORT_3DS
++    return Party_PortHmFreeSlot(party, moveID);
++#else
+     return PARTY_SLOT_NONE;
++#endif
+ }
+ 
+ int Party_AliveMonsCount(const Party *party)
 -- 
 2.43.0
 
