@@ -302,6 +302,38 @@ main { padding: 0 1rem; }
 .prose li::marker { color: var(--violet); font-family: var(--display); font-weight: 700; }
 .steps li { padding-left: 0.3rem; }
 
+.release-notes summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+  list-style: none;
+}
+.release-notes summary::-webkit-details-marker { display: none; }
+.release-name::before {                 /* (the marker a flex summary loses) */
+  content: "▸";
+  color: var(--violet);
+  display: inline-block;
+  width: 1.1rem;
+}
+.release-notes[open] .release-name::before { content: "▾"; }
+.release-name { font: 700 var(--step-1) var(--display); }
+.release-tag {
+  font: 600 var(--step--1) var(--display);
+  color: var(--void);
+  background: var(--gold);
+  border-radius: 999px;
+  padding: 0.05rem 0.6rem;
+}
+.release-tag.built { background: var(--violet); color: #fff; }
+.release-date { font: 400 var(--step--1) var(--body); color: var(--platinum-dim); }
+.notes { color: var(--platinum); }
+.notes > :first-child { margin-top: 0.6rem; }
+.notes h1, .notes h2, .notes h3, .notes h4 { font: 700 var(--step-0) var(--display); margin: 1rem 0 0.3rem; }
+.notes ul, .notes ol { padding-left: 1.2rem; }
+.notes p, .notes li { color: var(--platinum); }
+.notes pre { overflow-x: auto; background: rgba(148, 102, 255, 0.1); padding: 0.6rem; border-radius: 6px; }
+
 .update-pick { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
 .update-pick select {
   font: inherit;

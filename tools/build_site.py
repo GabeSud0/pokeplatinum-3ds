@@ -8,8 +8,10 @@ copies web/ to OUT (with the logo and the HOME Menu icon), and the release's fil
 web-manifest.json, PokePlatinum3DS-WebPayload.zip, pokeplatinum.3dsx and
 SHA256SUMS.txt (GitHub doesn't let a page download release files from
 another site, so the site carries the latest release's). OUT/release/
-releases.json lists every release's data pack format, for the page's
-"Updating" helper. With no release yet, the page says so.
+releases.json lists every release: its data pack format, for the page's
+"Updating" helper, and its notes (the release's description on GitHub, as
+GitHub writes it in HTML, kept to plain formatting), for "What's new". With
+no release yet, the page says so.
 
 With gh, GH_TOKEN (or gh's login) and --repo (default: GITHUB_REPOSITORY,
 else GabeSud0/pokeplatinum-3ds) say where the releases are.
@@ -17,6 +19,8 @@ else GabeSud0/pokeplatinum-3ds) say where the releases are.
 from __future__ import annotations
 
 import argparse
+import html
+import html.parser
 import json
 import os
 import shutil
@@ -29,30 +33,91 @@ IMAGES = {"docs/images/logo.png": "logo.png", "3ds_port/game/cia/icon.png": "ico
 ASSETS = ["web-manifest.json", "PokePlatinum3DS-WebPayload.zip", "pokeplatinum.3dsx", "SHA256SUMS.txt"]
 
 
-def gh_api(path: str, *, raw: bool = False):
+def gh_api(path: str, *, raw: bool = False, accept: str | None = None):
     """GitHub's REST API through gh (its login or GH_TOKEN)."""
     args = ["gh", "api", path]
     if raw:
-        args[2:2] = ["-H", "Accept: application/octet-stream"]
+        accept = "application/octet-stream"
+    if accept:
+        args[2:2] = ["-H", f"Accept: {accept}"]
     out = subprocess.run(args, check=True, capture_output=True).stdout
     return out if raw else json.loads(out)
 
 
-def summary(manifest: dict, published: str | None = None) -> dict:
-    return {"tag": manifest["releaseTag"], "version": manifest["releaseVersion"], "published": published,
+class _Notes(html.parser.HTMLParser):
+    """Release notes' HTML kept to plain formatting: these elements, links
+    to web pages only, and no other attributes; anything else's text kept
+    as text (a script's or a style's dropped)."""
+    KEEP = {"p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "strong", "b", "em", "i",
+            "code", "pre", "blockquote", "a", "del", "s", "sub", "sup"}
+    VOID = {"br", "hr"}
+    DROP = {"script", "style", "template", "iframe", "object", "svg", "math"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out, self.open, self.dropping = [], [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.DROP:
+            self.dropping += 1
+        if self.dropping or tag not in self.KEEP:
+            return
+        if tag == "a":
+            href = dict(attrs).get("href") or ""
+            if href.startswith(("https://", "http://")):
+                self.out.append(f'<a href="{html.escape(href, quote=True)}" rel="noopener">')
+            else:
+                self.out.append("<a>")
+        else:
+            self.out.append(f"<{tag}>")
+        if tag not in self.VOID:
+            self.open.append(tag)
+
+    def handle_endtag(self, tag):
+        if tag in self.DROP:
+            self.dropping = max(0, self.dropping - 1)
+            return
+        if self.dropping or tag not in self.open:
+            return
+        while self.open:                         # (closes what was left open inside it)
+            inner = self.open.pop()
+            self.out.append(f"</{inner}>")
+            if inner == tag:
+                break
+
+    def handle_data(self, data):
+        if not self.dropping:
+            self.out.append(html.escape(data, quote=False))
+
+
+def clean_notes(text: str | None) -> str:
+    parser = _Notes()
+    parser.feed(text or "")
+    parser.close()
+    parser.out.extend(f"</{tag}>" for tag in reversed(parser.open))
+    return "".join(parser.out).strip()
+
+
+def summary(manifest: dict, release: dict | None = None) -> dict:
+    release = release or {}
+    return {"tag": manifest["releaseTag"], "version": manifest["releaseVersion"],
+            "name": release.get("name") or manifest["releaseTag"],
+            "published": release.get("published_at"), "prerelease": bool(release.get("prerelease")),
+            "url": release.get("html_url"), "notes": clean_notes(release.get("body_html")),
             "dataPack": manifest.get("dataPack")}
 
 
 def from_github(repo: str, release_dir: Path) -> list[dict]:
     """The latest release's files into release_dir; every release's summary."""
-    listed = [r for r in gh_api(f"repos/{repo}/releases?per_page=100") if not r["draft"]]   # (newest first)
+    listed = [r for r in gh_api(f"repos/{repo}/releases?per_page=100",       # (newest first; notes in HTML)
+                                accept="application/vnd.github.html+json") if not r["draft"]]
     summaries, usable = [], []
     for release in listed:
         assets = {a["name"]: a for a in release["assets"]}
         if "web-manifest.json" not in assets or any(name not in assets for name in ASSETS):
             continue                            # a release from before the web builder
         manifest = json.loads(gh_api(f"repos/{repo}/releases/assets/{assets['web-manifest.json']['id']}", raw=True))
-        summaries.append(summary(manifest, release["published_at"]))
+        summaries.append(summary(manifest, release))
         usable.append((release, assets))
     # The newest full release; a pre-release only while there's none.
     latest = next((u for u in usable if not u[0]["prerelease"]), usable[0] if usable else None)

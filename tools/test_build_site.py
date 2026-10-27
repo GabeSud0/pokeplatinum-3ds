@@ -37,6 +37,18 @@ class Site(unittest.TestCase):
             self.assertIn({"sha1": hashlib.sha1(rom.read_bytes()).hexdigest(), "name": "Made-up test ROM (not a game)"},
                           manifest["supportedRoms"])
 
+    def test_release_notes_kept_to_plain_formatting(self):
+        sys.path.insert(0, str(HERE))
+        from build_site import clean_notes
+        self.assertEqual(
+            clean_notes('<h2 dir="auto">New</h2><ul><li><strong>Fixed</strong> '
+                        '<a href="https://example.com/?a=1&amp;b=2" class="x">this</a></li>'
+                        '<li><a href="javascript:alert(1)">that</a></li></ul>'
+                        '<script>alert(1)</script><img src=x onerror=alert(1)><p>1 &lt; 2<div>end'),
+            '<h2>New</h2><ul><li><strong>Fixed</strong> <a href="https://example.com/?a=1&amp;b=2" rel="noopener">'
+            'this</a></li><li><a>that</a></li></ul><p>1 &lt; 2end</p>')
+        self.assertEqual(clean_notes(None), "")
+
     def test_every_page_string_in_both_languages(self):
         # Every data-i18n key in index.html is in i18n.mjs, in English and Spanish.
         import re

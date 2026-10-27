@@ -177,30 +177,44 @@ jobs:
       contents: write
       actions: write          # (to start the website's workflow, below)
     steps:
+      # (for the release's notes: docs/releases/<tag>.md, if written)
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: docs/releases
+
       - uses: actions/download-artifact@v4
         with:
           name: release
           path: dist/release
 
+      # The notes: docs/releases/<tag>.md if there is one (what's new, known
+      # issues: written in a PR before tagging; also shown on the website),
+      # else GitHub's list of the merged pull requests; then the files.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          cat > notes.md <<'EOF'
-          **Pokémon Platinum for the 3DS.** You need your own Pokémon Platinum (USA) cartridge dump: the game's data is never included here.
+          OWN="docs/releases/$GITHUB_REF_NAME.md"
+          GENERATE=""
+          if [ -f "$OWN" ]; then
+            { cat "$OWN"; echo; echo "---"; echo; } > notes.md
+          else
+            : > notes.md
+            GENERATE="--generate-notes"
+          fi
+          cat >> notes.md <<'EOF'
+          **Build it from your own cartridge at the web builder: <https://gabesud0.github.io/pokeplatinum-3ds/>.** You need your own Pokémon Platinum (USA) dump: the game's data is never included here.
 
           - `pokeplatinum.3dsx`: the program, for the Homebrew Launcher.
           - `PokePlatinum3DS-WebPayload.zip` and `web-manifest.json`: what the web builder uses to make your data pack (and the HOME Menu version) from your ROM, in your browser.
           - `SHA256SUMS.txt`: the files' checksums.
-
-          To make the data pack on your own computer instead, see `builder/README.md`.
           EOF
           PRERELEASE=""
           case "$GITHUB_REF_NAME" in *-*) PRERELEASE="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" dist/release/* --repo "$GITHUB_REPOSITORY" \
               --verify-tag --title "Pokémon Platinum 3DS $GITHUB_REF_NAME" \
-              --notes-file notes.md --generate-notes $PRERELEASE
+              --notes-file notes.md $GENERATE $PRERELEASE
 
       # The website with this release's files (pages.yml). A release made
       # with this workflow's token doesn't start other workflows by itself;

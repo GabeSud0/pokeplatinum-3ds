@@ -38,12 +38,15 @@ function applyLanguage() {
   document.title = t("page.title");
   for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n);
   for (const el of document.querySelectorAll("[data-i18n-html]")) el.innerHTML = t(el.dataset.i18nHtml);
-  if (manifest) $("release").textContent = t("hero.release", { version: manifest.releaseVersion });
+  // (a pre-release's version has a dash: 0.1.0-alpha.1)
+  if (manifest) $("release").textContent = t(manifest.releaseVersion.includes("-") ? "hero.prerelease" : "hero.release",
+                                             { version: manifest.releaseVersion });
   else if (!$("release").hidden) $("release").textContent = t("hero.noRelease");
   if (romFile) $("drop-hint").textContent = romFile.name;
   $("choose").textContent = t(romFile ? "bottom.change" : "bottom.choose");
   renderTop();
   renderUpdate();
+  renderNews();
 }
 
 function setTop(state, title, detail = "", values = {}) {
@@ -199,6 +202,57 @@ function renderUpdate() {
   download.hidden = !same;
   download.href = `${RELEASE_URL}pokeplatinum.3dsx`;
   download.setAttribute("download", "pokeplatinum.3dsx");
+}
+
+// What's new: each release's notes, newest first (the one this page builds
+// open). The notes are GitHub's HTML of the release's description, kept to
+// plain formatting by tools/build_site.py.
+function renderNews() {
+  const list = $("news");
+  const shown = releases.slice(0, 12);
+  $("news-section").hidden = !manifest || shown.length === 0;
+  list.replaceChildren();
+  const dateFormat = new Intl.DateTimeFormat(lang, { year: "numeric", month: "long", day: "numeric" });
+  for (const r of shown) {
+    const item = document.createElement("details");
+    item.className = "release-notes";
+    item.open = r.tag === manifest?.releaseTag;
+    const summary = document.createElement("summary");
+    const name = document.createElement("span");
+    name.className = "release-name";
+    name.textContent = r.name || r.tag;
+    summary.append(name);
+    const tags = [];
+    if (r.prerelease) tags.push(["pre", t("news.pre")]);
+    if (r.tag === manifest?.releaseTag) tags.push(["built", t("news.built")]);
+    for (const [kind, text] of tags) {
+      const tag = document.createElement("span");
+      tag.className = `release-tag ${kind}`;
+      tag.textContent = text;
+      summary.append(tag);
+    }
+    if (r.published) {
+      const date = document.createElement("span");
+      date.className = "release-date";
+      date.textContent = dateFormat.format(new Date(r.published));
+      summary.append(date);
+    }
+    item.append(summary);
+    const body = document.createElement("div");
+    body.className = "notes";
+    if (r.notes) body.innerHTML = r.notes;
+    else body.textContent = t("news.empty");
+    if (r.url) {
+      const link = document.createElement("p");
+      const a = document.createElement("a");
+      a.href = r.url;
+      a.textContent = t("news.github");
+      link.append(a);
+      body.append(link);
+    }
+    item.append(body);
+    list.append(item);
+  }
 }
 
 async function loadRelease() {
