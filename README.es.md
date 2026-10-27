@@ -201,7 +201,8 @@ En Azahar, van en la carpeta de su tarjeta SD emulada.
 
 - **Menú HOME (recomendado):** en FBI, ve a **SD → cia → pokeplatinum.cia →
   Install CIA**. Después el juego se abre y se cierra desde el menú HOME como
-  cualquier otro, con toda la memoria que necesitan las pantallas completas.
+  cualquier otro, normalmente con toda la memoria que necesitan las pantallas
+  completas.
   Para actualizarlo, instala el `.cia` nuevo de la misma forma; tu partida se
   conserva.
 - **Homebrew Launcher:** abre `pokeplatinum.3dsx`, o ábrelo en Azahar. Abierto

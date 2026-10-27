@@ -195,8 +195,8 @@ In Azahar, these go in its emulated SD card folder.
 
 - **HOME Menu (recommended):** in FBI, go to **SD → cia → pokeplatinum.cia →
   Install CIA**. The game then opens and closes from the HOME Menu like any
-  other title, with all the memory the full-width screens need. To update it,
-  install the new `.cia` the same way; your save stays.
+  other title, normally with all the memory the full-width screens need. To
+  update it, install the new `.cia` the same way; your save stays.
 - **Homebrew Launcher:** run `pokeplatinum.3dsx`, or open it in Azahar. Opened
   from the Rosalina menu, the Homebrew Launcher gives games less memory, and on
   a New 3DS the game may then show only the DS's two screens; installed on the
