@@ -2,6 +2,8 @@
   <img src="docs/images/logo.png" alt="Pokémon Platinum 3DS" width="600">
 </p>
 
+<p align="center"><b>English</b> · <a href="README.es.md">Español</a></p>
+
 # PokePlatinum-3DS
 
 A native Nintendo 3DS port of Pokémon Platinum, built for the New 3DS, from the
