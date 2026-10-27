@@ -655,10 +655,14 @@ screen's 320 x 192 at 1.25 times, as above.
   weather's BG drawn by the GPU from line -24 of its map.
 - **The game** reads `NitroPort_WideScreenExtra` as 72 there: the people the
   scripts bring on from the sides come from beyond the 400 pixels.
-- Still to do: text boxes at the screen's bottom and the place name sign at
-  its top (they're where the DS has them, 24 lines in); the people scripts
-  bring on from above or below (they show the last few tiles of their
-  walk); weather sprites (rain, snow) only on the DS's lines.
+- **The game's windows** go to the picture's top or bottom
+  (`DecideTallWindows`): those wholly in the DS's lower half 24 lines down
+  (a text box at the screen's bottom, YES/NO with it), those wholly in its
+  upper half 24 up (the place name sign at the top), the OBJs over them
+  with them; the lines they leave are drawn from nowhere.
+- Still to do: the people scripts bring on from above or below (they show
+  the last few tiles of their walk in); weather sprites (rain, snow) only
+  on the DS's lines.
 
 ## The soft reset
 

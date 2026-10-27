@@ -168,6 +168,14 @@ typedef struct Engine {
      * map past the DS's lines is never shown: the field's text BG had
      * leftover tiles there) */
     u8 tallEdge[4][2];
+    /* (a tall field, worked out each frame: DecideTallWindows) the game's
+     * windows on a BG in the DS's lower half go to the picture's bottom,
+     * those in its upper half to its top (a text box at the screen's
+     * bottom, the place name sign at its top): the line of the BG drawn on
+     * each of the picture's lines (or -1: none), for the BGs with windows
+     * moved (tallMoved) */
+    u8 tallMoved;
+    short tallSrc[4][HMAX];
     /* Wider canvas: each BG's pixels only within the DS's 256 (clip), or
      * wrapping round its map; the windows the game anchors moved to the
      * screen's edges (anchorWindows); and whether this is one of the
@@ -214,7 +222,7 @@ typedef struct Engine {
     /* (worked out each frame) the windows moved to the screen's edges, on
      * the DS's screen (pixels), and how far: the game's sprites over them
      * go with them (a menu's icons). */
-    struct { short x0, y0, x1, y1, shift, stretch; } objMove[OBJ_MOVES_MAX];
+    struct { short x0, y0, x1, y1, shift, stretch, dy; } objMove[OBJ_MOVES_MAX];
     int nObjMove;
     /* (wider canvas, the game's: NitroPort_WideSplitScreen,
      * NitroPort_WideScreenParts) a screen laid out anew in parts: the BGs'
@@ -1815,6 +1823,12 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
  * or -1: nothing. */
 static inline int TallLineOf(const Engine *e, int bg, int y)
 {
+    if (e->top != 0 && ((e->tallMoved >> bg) & 1)) {
+        y = e->tallSrc[bg][y];   /* (its windows moved to the picture's top or bottom) */
+        if (y < 0) {
+            return -1;
+        }
+    }
     if (e->top == 0 || !e->clip[bg] || (y >= e->top && y < e->top + H)) {
         return y;
     }
@@ -1844,6 +1858,79 @@ static void DecideTallEdges(Engine *e, const int *kind, const u16 *bgcnt, u32 di
             int ty = ((side ? e->top + H - 1 : e->top) + vofs) & (mapH - 1);
 
             e->tallEdge[bg][side] = (u8)TextBgPlain(e, bg, bgcnt[bg], dispcnt, hofs, ty, 0, W);
+        }
+    }
+}
+
+/* (a tall field) The game's windows on each text BG (NitroPort_WideWindows)
+ * to the picture's top or bottom: those wholly in the DS's lower half down
+ * by top (to the bottom: a text box, YES/NO above it), wholly in its upper
+ * half up by top (the place name sign); the BG's lines they leave drawn
+ * from nowhere (the rest of such a line is the BG's own, usually clear).
+ * The OBJs over them go with them (objMove's dy). */
+static void DecideTallWindows(Engine *e, const int *kind)
+{
+    int bg;
+
+    e->tallMoved = 0;
+    if (e->top == 0 || !e->anchorWindows) {
+        return;
+    }
+    for (bg = 0; bg < 4; bg++) {
+        NitroWideWindow wins[NITRO_WIDE_MAX_WINDOWS];
+        int n, i, y, moved = 0, vofs;
+
+        if (kind[bg] != BG_TEXT) {
+            continue;
+        }
+        n = EngineWindows(e, bg, wins);
+        vofs = Rd16(e->io, 0x12 + bg * 4) & 0x1FF;   /* (the picture's lines: the DS's less top) */
+        for (y = 0; y < e->height; y++) {
+            e->tallSrc[bg][y] = (short)y;
+        }
+        /* where they were: none of them there now */
+        for (i = 0; i < n; i++) {
+            int y0 = ((wins[i].top * 8 - vofs) & 0x1FF) - (((wins[i].top * 8 - vofs) & 0x100) ? 512 : 0);
+            int y1 = y0 + wins[i].height * 8, ds0 = y0 - e->top, ds1 = y1 - e->top;
+            int dy = ds0 >= H / 2 ? e->top : ds1 <= H / 2 ? -e->top : 0;
+
+            if (dy == 0) {
+                continue;
+            }
+            for (y = y0 < 0 ? 0 : y0; y < y1 && y < e->height; y++) {
+                e->tallSrc[bg][y] = -1;
+            }
+            moved = 1;
+        }
+        /* where they go */
+        for (i = 0; i < n; i++) {
+            int y0 = ((wins[i].top * 8 - vofs) & 0x1FF) - (((wins[i].top * 8 - vofs) & 0x100) ? 512 : 0);
+            int y1 = y0 + wins[i].height * 8, ds0 = y0 - e->top, ds1 = y1 - e->top;
+            int dy = ds0 >= H / 2 ? e->top : ds1 <= H / 2 ? -e->top : 0;
+
+            if (dy == 0) {
+                continue;
+            }
+            for (y = y0; y < y1; y++) {
+                if (y + dy >= 0 && y + dy < e->height) {
+                    e->tallSrc[bg][y + dy] = (short)y;
+                }
+            }
+            if (e->nObjMove < OBJ_MOVES_MAX) {
+                int hofs = Rd16(e->io, 0x10 + bg * 4) & 0x1FF;
+
+                e->objMove[e->nObjMove].x0 = (short)(wins[i].left * 8 - hofs);
+                e->objMove[e->nObjMove].x1 = (short)((wins[i].left + wins[i].width) * 8 - hofs);
+                e->objMove[e->nObjMove].y0 = (short)y0;
+                e->objMove[e->nObjMove].y1 = (short)y1;
+                e->objMove[e->nObjMove].shift = 0;
+                e->objMove[e->nObjMove].stretch = 0;
+                e->objMove[e->nObjMove].dy = (short)dy;
+                e->nObjMove++;
+            }
+        }
+        if (moved) {
+            e->tallMoved |= (u8)(1 << bg);
         }
     }
 }
@@ -2478,12 +2565,21 @@ static BOOL ReadObj(const Engine *e, int i, Obj *obj)
         int cx = obj->ox + obj->boxW / 2, cy = (obj->oy + obj->boxH / 2) & 255, k;
 
         for (k = 0; k < e->nObjMove; k++) {
-            if (cx >= e->objMove[k].x0 && cx < e->objMove[k].x1 && cy >= e->objMove[k].y0 &&
-                cy < e->objMove[k].y1) {
+            if (e->objMove[k].dy == 0 && cx >= e->objMove[k].x0 && cx < e->objMove[k].x1 &&
+                cy >= e->objMove[k].y0 && cy < e->objMove[k].y1) {
                 obj->ox += e->objMove[k].shift;
                 if (e->objMove[k].stretch && !obj->affine && obj->mode != 2) {
                     obj->stretch = e->objMove[k].shift;
                 }
+                break;
+            }
+        }
+        /* (a tall field: over a window moved to the picture's top or
+         * bottom, with it; the window's x as the DS has it) */
+        for (k = 0; k < e->nObjMove; k++) {
+            if (e->objMove[k].dy != 0 && cx >= e->objMove[k].x0 && cx < e->objMove[k].x1 &&
+                cy >= e->objMove[k].y0 && cy < e->objMove[k].y1) {
+                obj->oy = (u8)(obj->oy + e->objMove[k].dy);
                 break;
             }
         }
@@ -3554,6 +3650,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         }
         DecideBandFills(e, kind, bgcnt, dispcnt);
         DecideTallEdges(e, kind, bgcnt, dispcnt);
+        DecideTallWindows(e, kind);
     }
     if (split != NULL) {
         split->has3d = e->isA && kind[0] == BG_3D;
