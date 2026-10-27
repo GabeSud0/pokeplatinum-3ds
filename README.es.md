@@ -4,6 +4,12 @@
 
 <p align="center"><a href="README.md">English</a> · <b>Español</b></p>
 
+<p align="center">
+  <a href="https://discord.gg/YjyA5ygpC">
+    <img src="https://img.shields.io/badge/Discord-%C3%9Anete%20al%20servidor-5865F2?logo=discord&logoColor=white" alt="Discord">
+  </a>
+</p>
+
 # PokePlatinum-3DS
 
 Un port nativo de Pokémon Platino para Nintendo 3DS, hecho para la New 3DS, a
