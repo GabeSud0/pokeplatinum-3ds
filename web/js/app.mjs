@@ -38,7 +38,9 @@ function applyLanguage() {
   document.title = t("page.title");
   for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n);
   for (const el of document.querySelectorAll("[data-i18n-html]")) el.innerHTML = t(el.dataset.i18nHtml);
-  if (manifest) $("release").textContent = t("hero.release", { version: manifest.releaseVersion });
+  // (a pre-release's version has a dash: 0.1.0-alpha.1)
+  if (manifest) $("release").textContent = t(manifest.releaseVersion.includes("-") ? "hero.prerelease" : "hero.release",
+                                             { version: manifest.releaseVersion });
   else if (!$("release").hidden) $("release").textContent = t("hero.noRelease");
   if (romFile) $("drop-hint").textContent = romFile.name;
   $("choose").textContent = t(romFile ? "bottom.change" : "bottom.choose");

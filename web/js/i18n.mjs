@@ -10,6 +10,7 @@ export const STRINGS = {
     "hero.tagline": "Build the 3DS port of Pokémon Platinum from your own cartridge, right in this page.",
     "hero.privacy": "Your ROM is read by this page only. It never leaves your computer.",
     "hero.release": "Version {version}",
+    "hero.prerelease": "Version {version}: an early version, with bugs. Keep a backup of your save, and report what you find.",
     "hero.noRelease": "No version has been released yet. Come back soon.",
 
     "top.idle.title": "Choose your Pokémon Platinum ROM to begin.",
@@ -97,6 +98,7 @@ export const STRINGS = {
     "hero.tagline": "Crea el port de Pokémon Platinum para 3DS desde tu propio cartucho, aquí mismo en esta página.",
     "hero.privacy": "Tu ROM solo la lee esta página. Nunca sale de tu computadora.",
     "hero.release": "Versión {version}",
+    "hero.prerelease": "Versión {version}: una versión temprana, con errores. Guarda una copia de tu partida y reporta lo que encuentres.",
     "hero.noRelease": "Todavía no hay ninguna versión publicada. Vuelve pronto.",
 
     "top.idle.title": "Elige tu ROM de Pokémon Platinum para empezar.",
