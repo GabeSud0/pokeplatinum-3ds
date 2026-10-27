@@ -751,24 +751,32 @@ void NitroPort_ComposeSetSmooth3d(int smooth3d)
 static int compose_init(const ComposeConfig *config, int small);
 
 /* The display on the GPU; with too little linear memory for it as it is
- * (a .3dsx started from the Homebrew Launcher in its small memory, about
- * 18 MB of it: issue #188), smaller: the fewest LCD framebuffers and the
- * 2D's textures a texel a pixel, rather than the classic display. */
+ * (the 64 MB memory mode: about 20 MB of it, issue #188), smaller rather
+ * than the classic display: first the 2D's textures a texel a pixel (most
+ * of the memory: about 10 MB less), then also the fewest LCD framebuffers
+ * (frames waiting for their V-blank: fewer, and 60 frames a second holds
+ * less well). Each kept only if it leaves room for the 3D's textures,
+ * the last whatever it leaves. */
 int NitroPort_ComposeInit(const ComposeConfig *config)
 {
+    static const char *const how[] = { "", "the 2D a texel a pixel", "the 2D a texel a pixel, 3 frames on the way at most" };
+    int small;
+
     NitroPort_Log("[compose] linear memory: %lu KB free", (unsigned long)(linearSpaceFree() / 1024u));
-    if (compose_init(config, 0)) {
-        if (linearSpaceFree() >= COMPOSE_TEXTURE_ROOM) {
-            return 1;
+    for (small = 0; small <= 2; small++) {
+        if (!compose_init(config, small)) {
+            continue;
         }
-        NitroPort_Log("[compose] %lu KB of linear memory left for the 3D's textures: the display made smaller",
-                      (unsigned long)(linearSpaceFree() / 1024u));
-        free_all();
-    }
-    if (compose_init(config, 1)) {
-        NitroPort_Log("[compose] the display made smaller for the memory (%lu KB left): 3 frames on the way at "
-                      "most, the 2D a texel a pixel",
-                      (unsigned long)(linearSpaceFree() / 1024u));
+        if (small < 2 && linearSpaceFree() < COMPOSE_TEXTURE_ROOM) {
+            NitroPort_Log("[compose] %lu KB of linear memory left for the 3D's textures: the display made smaller",
+                          (unsigned long)(linearSpaceFree() / 1024u));
+            free_all();
+            continue;
+        }
+        if (small) {
+            NitroPort_Log("[compose] the display made smaller for the memory (%lu KB left): %s",
+                          (unsigned long)(linearSpaceFree() / 1024u), how[small]);
+        }
         return 1;
     }
     return 0;
@@ -818,7 +826,7 @@ static int compose_init(const ComposeConfig *config, int small)
         scr->width = s == 0 ? TOP_W : BOTTOM_W;
         scr->onLcd = -1;
         scr->lastLcd = -1;
-        scr->nlcd = small ? LCD_BUFS_LEAST : s == 0 ? LCD_BUFS : LCD_BUFS_LOWER;
+        scr->nlcd = small >= 2 ? LCD_BUFS_LEAST : s == 0 ? LCD_BUFS : LCD_BUFS_LOWER;
         for (i = 0; i < (s == 0 && config->stereo ? 2 : 1); i++) {
             int k;
 
