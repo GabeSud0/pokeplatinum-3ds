@@ -623,6 +623,43 @@ stretched:
   upper screen; the intro's flyover is on the lower screen, at the DS's
   width.
 
+### The field at the DS's pixel size (PIXEL PERFECT)
+
+An option on the settings page (on by default, `pixel_field` in
+`options.txt`): in the field the upper screen's 400 x 240 pixels are each
+one of the DS's, nothing scaled, so the pixel art stays exact; the view
+shows more of the world instead of making it bigger (2026-10-27). In the
+field only (`NitroPort_PixelField`: overlay5 loaded, not a battle, not a
+screen laid out in parts or made of pictures); everywhere else the wider
+screen's 320 x 192 at 1.25 times, as above.
+
+- **The 3D**: the view 400 x 240 (`NitroPort_Gx3dSetView`): clip x scaled
+  by 256 / 400 and y by 192 / 240 (with the DS's full-size viewport), so
+  the game's own box tests pass what that shows. Each scene says its size
+  (`screen_width`, `screen_height`); the compositor draws a scene at a
+  pixel a DS pixel at the screen's height (1.25 for 192 lines, 1 for 240),
+  whatever the 2D's picture is.
+- **The 2D**: a 400 x 240 picture, the DS's in its middle (x 0 at 72, line
+  0 at 24: `NitroRender2DSplit.top`). The renderer draws the lines above
+  and below as the DS would were its screen taller: the BGs' maps (VOFS
+  less 24), the OBJs (y plus 24, mod 256: one placed just above the DS's
+  screen shows above it), the H-blank effects' lines (the first's above,
+  the last's below), the windows (one from the DS's top or to its bottom
+  from the picture's). A clipped BG's map past the DS's lines isn't shown
+  (the field's text BG has leftover tiles there) unless its first or last
+  line is one colour across (a fade, Flash's dark): that line goes on. The
+  weather's BG (unclipped) goes on as its map does. No hand-drawn wide art
+  here (it's for the 320).
+- **The compositor**: that picture at a pixel a pixel (`ComposeLayers.top`,
+  `PIC_SCALE`), the layers in front of the 3D on all 240 lines; the
+  weather's BG drawn by the GPU from line -24 of its map.
+- **The game** reads `NitroPort_WideScreenExtra` as 72 there: the people the
+  scripts bring on from the sides come from beyond the 400 pixels.
+- Still to do: text boxes at the screen's bottom and the place name sign at
+  its top (they're where the DS has them, 24 lines in); the people scripts
+  bring on from above or below (they show the last few tiles of their
+  walk); weather sprites (rain, snow) only on the DS's lines.
+
 ## The soft reset
 
 L + R + START + SELECT (the game's own soft reset, or its restart after a

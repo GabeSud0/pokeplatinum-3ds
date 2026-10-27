@@ -247,10 +247,19 @@ int NitroPort_PublishDoubled(NitroPublishShadow *sh, NitroPublishTarget *t, cons
                              uint16_t *underTex, uint32_t *overTex, int texW, const uint16_t *table,
                              const uint8_t alpha16[17], void (*flush)(void *data, uint32_t bytes))
 {
-    const int bands = h / 4;
     /* (the layers in front of the 3D: the DS's lines only, a tall picture's
      * too: past them there's no 3D) */
-    const int overBands = (h > 192 ? 192 : h) / 4;
+    return NitroPort_PublishDoubledOver(sh, t, under, over, overAlpha, hasOver, w, h, h > 192 ? 192 : h, underTex,
+                                        overTex, texW, table, alpha16, flush);
+}
+
+int NitroPort_PublishDoubledOver(NitroPublishShadow *sh, NitroPublishTarget *t, const uint16_t *under,
+                                 const uint16_t *over, const uint8_t *overAlpha, int hasOver, int w, int h,
+                                 int overH, uint16_t *underTex, uint32_t *overTex, int texW, const uint16_t *table,
+                                 const uint8_t alpha16[17], void (*flush)(void *data, uint32_t bytes))
+{
+    const int bands = h / 4;
+    const int overBands = (overH > h ? h : overH < 0 ? 0 : overH) / 4;
     const size_t band = (size_t)w * 4u;
     const uint32_t tileRow = (uint32_t)texW * 8u;   /* texels in a band's row of tiles (doubled) */
     uint32_t gen = ++sh->gen, any = 0;

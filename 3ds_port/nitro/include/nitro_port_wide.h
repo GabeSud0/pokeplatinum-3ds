@@ -209,6 +209,21 @@ int NitroPort_WideParts(int engine, NitroWidePart *out);
 void NitroPort_SetWideScreen(int extra);
 int NitroPort_WideScreenExtra(void);
 
+/* The field at the DS's pixel size (the 3DS remaster's option, on or off):
+ * the upper screen's 400 x 240 pixels each a DS pixel, showing more of the
+ * world, nothing scaled (pixel perfect). In the field only (not in a battle,
+ * the screens laid out in parts or made of pictures, nor without the wider
+ * screen): NitroPort_PixelField says when. Then the 3D's view is 400 x 240
+ * (NitroPort_Gx3dSetView), the 2D's picture too, the DS's in its middle
+ * (NitroPort_WideLayout: NITRO_PIXEL_FIELD_EXTRA each side, TOP above), and
+ * NitroPort_WideScreenExtra says 72. Any thread. */
+#define NITRO_PIXEL_FIELD_W     400
+#define NITRO_PIXEL_FIELD_H     240
+#define NITRO_PIXEL_FIELD_EXTRA ((NITRO_PIXEL_FIELD_W - 256) / 2)
+#define NITRO_PIXEL_FIELD_TOP   ((NITRO_PIXEL_FIELD_H - 192) / 2)
+void NitroPort_SetPixelField(int on);
+int NitroPort_PixelField(void);
+
 /* (the game: patches/pokeplatinum/0047, the field's weather) A BG of
  * engine A whose map is a pattern that repeats (the field's weather: the
  * clouds' shadows, fog, sand), on or off (off again when the weather

@@ -478,9 +478,32 @@ void NitroPort_SetWideScreen(int extra)
     sWideExtra = extra < 0 ? 0 : extra > 32 ? 32 : extra;
 }
 
+static int sPixelFieldOn;   /* (NitroPort_SetPixelField) */
+
+void NitroPort_SetPixelField(int on)
+{
+    __atomic_store_n(&sPixelFieldOn, on != 0, __ATOMIC_RELEASE);
+}
+
+int NitroPort_PixelField(void)
+{
+    int laidOut;
+
+    if (!__atomic_load_n(&sPixelFieldOn, __ATOMIC_ACQUIRE) || sWideExtra <= 0 ||
+        !NitroPort_OverlayLoadedNamed("overlay5") || NitroPort_OverlayLoadedNamed("battle") ||
+        NitroPort_WidePictures()) {
+        return 0;
+    }
+    lock();
+    laidOut = sPartCount[0] > 0;
+    unlock();
+    return !laidOut;
+}
+
 int NitroPort_WideScreenExtra(void)
 {
-    return sWideExtra;
+    /* (the field at the DS's pixel size: the 3DS's whole 400 pixels) */
+    return sWideExtra > 0 && NitroPort_PixelField() ? NITRO_PIXEL_FIELD_EXTRA : sWideExtra;
 }
 
 /*
@@ -513,10 +536,18 @@ int NitroPort_WideScreenExtra(void)
  */
 void NitroPort_WideLayout(int engine, struct NitroRender2DSplit *split)
 {
-    int bg;
+    int bg, extra = sWideExtra;
 
-    split->width = 256 + 2 * sWideExtra;
-    split->origin = sWideExtra;
+    split->top = 0;
+    if (engine == 0 && NitroPort_PixelField()) {
+        /* (the field at the DS's pixel size on the 3DS's whole screen: the
+         * DS's picture in the middle of 400 x 240) */
+        extra = NITRO_PIXEL_FIELD_EXTRA;
+        split->top = NITRO_PIXEL_FIELD_TOP;
+        split->height = NITRO_PIXEL_FIELD_H;
+    }
+    split->width = 256 + 2 * extra;
+    split->origin = extra;
     for (bg = 0; bg < 4; bg++) {
         split->clip[bg] = 1;
     }

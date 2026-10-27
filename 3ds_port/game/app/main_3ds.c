@@ -735,6 +735,7 @@ static void GpuMain(void *unused)
     if(sRemaster){
         if(!NitroPort_ComposeInit(&sCompose)){
             NitroPort_Log("[compose] couldn't set the GPU display up: the classic display instead");
+            NitroPort_SetPixelField(0);   /* (the DS's picture, as it is) */
             NitroPort_PicaTextureFilter(0);   /* (the classic image: the DS's texels) */
             NitroPort_PicaLook(0, 0, 0, 0.0f, 0.0f);
             sRemaster=false;
@@ -816,6 +817,8 @@ static void OnOptionChanged(int id, int value)
         sFps60 = value != 0;
     } else if (id == NITRO_OPT_SMOOTH3D && sRemaster) {
         NitroPort_ComposeSetSmooth3d(value);
+    } else if (id == NITRO_OPT_PIXEL_FIELD) {
+        NitroPort_SetPixelField(sRemaster && sCompose.wide && value != 0);
     }
 }
 
@@ -828,6 +831,8 @@ static void ReadOptions(void)
     NitroPort_OptionsLoad(OPTIONS_PATH);
     sFps60 = NitroPort_Option(NITRO_OPT_FPS60) != 0;
     sCompose.smooth3d = NitroPort_Option(NITRO_OPT_SMOOTH3D);
+    /* (the field at the DS's pixel size: with the remaster's wider screen) */
+    NitroPort_SetPixelField(sRemaster && sCompose.wide && NitroPort_Option(NITRO_OPT_PIXEL_FIELD) != 0);
     NitroPort_OptionsSetListener(OnOptionChanged);
 }
 
@@ -1704,6 +1709,7 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         layers->width = split.width > 256 ? split.width : 256;
         /* (a tall picture: with the 3D too, on its first 192 lines) */
         layers->height = split.height > 192 ? split.height : 192;
+        layers->top = split.top;
         layers->stamp = stamp;
         layers->displayOff = 0;
         return true;
@@ -2535,7 +2541,12 @@ void NitroPort_OnFrame(void)
     /* The remaster's wider view only while the 3D is on the upper screen
      * (the intro has it on the lower one): from the next command on. */
     if (sRemaster && sCompose.wide) {
-        NitroPort_Gx3dSetWideView(NitroPort_EngineAOnTop() ? 320 : 256);
+        if (NitroPort_EngineAOnTop() && NitroPort_PixelField()) {
+            /* (the field at the DS's pixel size: the whole 400 x 240) */
+            NitroPort_Gx3dSetView(NITRO_PIXEL_FIELD_W, NITRO_PIXEL_FIELD_H);
+        } else {
+            NitroPort_Gx3dSetWideView(NitroPort_EngineAOnTop() ? 320 : 256);
+        }
     }
     /* 60 frames a second (the in-between scenes) in the game itself, not
      * on the screens made of pictures (the opening, the title, the start

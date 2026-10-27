@@ -386,7 +386,8 @@ static void test_publish_tall(void)
                                    NULL) == 0);
     CHECK(NitroPort_PublishDoubled(&shadow, &target, under, NULL, NULL, 0, W, 246, tex, NULL, TW, table, alpha16,
                                    NULL) == 0);
-    CHECK(NitroPort_PublishDoubled(&shadow, &target, under, NULL, NULL, 0, 320, H, tex, NULL, TW, table, alpha16,
+    /* (more pixels than it holds: 400 x 248, past the field's 400 x 240) */
+    CHECK(NitroPort_PublishDoubled(&shadow, &target, under, NULL, NULL, 0, 400, H, tex, NULL, TW, table, alpha16,
                                    NULL) == 0);
     {
         unsigned k = NitroPort_TiledIndex(0, 0, TW);

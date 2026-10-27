@@ -62,7 +62,7 @@
 #define HMAX NITRO_RENDER2D_MAX_H   /* (a tall picture: NitroRender2DSplit.height) */
 /* The widest picture drawn (the 3DS remaster's upper screen: the DS's 256
  * pixels and 32 more each side; NitroRender2DSplit's canvas). */
-#define WMAX 320
+#define WMAX 400   /* (the field at the DS's pixel size: the 3DS's 400; the wider screen's 320) */
 #define OPAQUE 0x8000
 
 /* ---------------------------------------------------------------- memory */
@@ -77,6 +77,11 @@ typedef u32 __attribute__((may_alias)) u32a;
 static inline u16 Rd16(const u8 *p, u32 off)
 {
     return *(const u16a *)(p + off);
+}
+
+static inline void Wr16(u8 *p, u32 off, u16 v)
+{
+    *(u16a *)(p + off) = v;
 }
 
 static inline u32 Rd32(const u8 *p, u32 off)
@@ -152,8 +157,17 @@ typedef struct Engine {
     /* The picture: width pixels, the DS's x = 0 at canvas x origin (256 and
      * 0 but for the remaster's wider canvas; see NitroRender2DSplit). */
     int width, origin;
-    /* The picture's lines: H, or up to HMAX (NitroRender2DSplit.height). */
-    int height;
+    /* The picture's lines: H, or up to HMAX (NitroRender2DSplit.height);
+     * the DS's line 0 at the picture's line top (NitroRender2DSplit.top:
+     * the BGs' maps, the OBJs and the windows moved down by it), and the
+     * lines with the 3D (h3d: the DS's, or all of a tall field's). */
+    int height, top, h3d;
+    /* (a tall field, worked out each frame) a clipped BG's lines above and
+     * below the DS's: its DS's first (or last) line again where that's one
+     * colour across (a fade's black, Flash's dark), else nothing (a BG's
+     * map past the DS's lines is never shown: the field's text BG had
+     * leftover tiles there) */
+    u8 tallEdge[4][2];
     /* Wider canvas: each BG's pixels only within the DS's 256 (clip), or
      * wrapping round its map; the windows the game anchors moved to the
      * screen's edges (anchorWindows); and whether this is one of the
@@ -196,7 +210,7 @@ typedef struct Engine {
      * colour | OPAQUE, or 0 nothing. bandFills[bg]: worked out (else the
      * edges are looked at line by line, as before). */
     u8 bandFills[4];
-    u16 bandFill[4][2][H];
+    u16 bandFill[4][2][HMAX];
     /* (worked out each frame) the windows moved to the screen's edges, on
      * the DS's screen (pixels), and how far: the game's sprites over them
      * go with them (a menu's icons). */
@@ -238,6 +252,8 @@ typedef struct Engine {
     u16 objPal4[256];
     u16 objPal8[256];
 } Engine;
+
+static void ShiftDown(const struct Engine *e, u8 *regs);
 
 /* The windows moved or widened on a BG (NitroPort_WideWindows): as they
  * were when the display state was taken, when drawn from that (as the
@@ -749,8 +765,8 @@ static void DecideBandFills(Engine *e, const int *kind, const u16 *bgcnt, u32 di
 
     for (bg = 0; bg < 4; bg++) {
         int mapH, hofs, vofs, y, run = PlainRun(e);
-        u16 own[2][H];
-        u8 edge[2][H];   /* the BG has something at its edge, not plain */
+        u16 own[2][HMAX];
+        u8 edge[2][HMAX];   /* the BG has something at its edge, not plain */
 
         e->bandFills[bg] = 0;
         if (e->width <= W || kind[bg] != BG_TEXT || !e->clip[bg] || e->art[bg] != NULL || e->split[bg] ||
@@ -764,7 +780,7 @@ static void DecideBandFills(Engine *e, const int *kind, const u16 *bgcnt, u32 di
         for (side = 0; side < 2; side++) {
             int x0 = side ? W - run : 0;
 
-            for (y = 0; y < H; y++) {
+            for (y = 0; y < e->height; y++) {
                 int ty = (y + vofs) & (mapH - 1);
 
                 own[side][y] = TextBgPlain(e, bg, bgcnt[bg], dispcnt, hofs, ty, x0, run)
@@ -780,7 +796,7 @@ static void DecideBandFills(Engine *e, const int *kind, const u16 *bgcnt, u32 di
         }
         for (side = 0; side < 2; side++) {
             y = 0;
-            while (y < H) {
+            while (y < e->height) {
                 int a, b, k, p, up, down, src, dir, len;
 
                 if (!edge[side][y]) {
@@ -788,14 +804,14 @@ static void DecideBandFills(Engine *e, const int *kind, const u16 *bgcnt, u32 di
                     continue;
                 }
                 /* a run of such lines, a .. b - 1 */
-                for (a = y, b = y; b < H && edge[side][b]; b++) {
+                for (a = y, b = y; b < e->height && edge[side][b]; b++) {
                 }
                 y = b;
                 /* the plain lines next to it, above and below (as many as
                  * there are in a row, 16 at most) */
                 for (up = 0; up < 16 && a - 1 - up >= 0 && own[side][a - 1 - up]; up++) {
                 }
-                for (down = 0; down < 16 && b + down < H && own[side][b + down]; down++) {
+                for (down = 0; down < 16 && b + down < e->height && own[side][b + down]; down++) {
                 }
                 /* carried on from above (from below if there are fewer
                  * than two plain lines above): the pattern of the plain
@@ -1794,8 +1810,50 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
     t->filled = filled;
 }
 
+/* (a tall field) The line of a BG drawn on the picture's line y: y, or
+ * for a clipped BG past the DS's lines, its DS's first or last (tallEdge),
+ * or -1: nothing. */
+static inline int TallLineOf(const Engine *e, int bg, int y)
+{
+    if (e->top == 0 || !e->clip[bg] || (y >= e->top && y < e->top + H)) {
+        return y;
+    }
+    return y < e->top ? (e->tallEdge[bg][0] ? e->top : -1) : (e->tallEdge[bg][1] ? e->top + H - 1 : -1);
+}
+
+/* (a tall field) Which clipped text BGs' first and last DS lines go on
+ * past them: one colour across the DS's 256 columns. */
+static void DecideTallEdges(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
+{
+    int bg, side;
+
+    memset(e->tallEdge, 0, sizeof(e->tallEdge));
+    if (e->top == 0) {
+        return;
+    }
+    for (bg = 0; bg < 4; bg++) {
+        int mapH, hofs, vofs;
+
+        if (kind[bg] != BG_TEXT || !e->clip[bg]) {
+            continue;
+        }
+        mapH = sTextSizes[bgcnt[bg] >> 14][1];
+        hofs = Rd16(e->io, 0x10 + bg * 4) & 0x1FF;
+        vofs = Rd16(e->io, 0x12 + bg * 4) & 0x1FF;
+        for (side = 0; side < 2; side++) {
+            int ty = ((side ? e->top + H - 1 : e->top) + vofs) & (mapH - 1);
+
+            e->tallEdge[bg][side] = (u8)TextBgPlain(e, bg, bgcnt[bg], dispcnt, hofs, ty, 0, W);
+        }
+    }
+}
+
 static void DrawTextBg(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y, Target *t, int flags)
 {
+    y = TallLineOf(e, bg, y);
+    if (y < 0) {
+        return;
+    }
     switch (flags) {
     case T_PLAIN:
         DrawTextBgT(e, bg, bgcnt, dispcnt, y, t, T_PLAIN);
@@ -1905,6 +1963,11 @@ static inline u16 AffineSample(const Engine *e, int mode, const u8 *ext, u32 cha
 static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt, int y, u16 *out)
 {
     const u8 *io = e->io;
+
+    if (TallLineOf(e, bg, y) < 0) {
+        memset(out, 0, (size_t)e->width * sizeof(u16));   /* (a tall field: nothing past the DS's lines) */
+        return;
+    }
     u32 base = bg == 2 ? 0x20 : 0x30;
     s32 pa = (s16)Rd16(io, base + 0);
     s32 pb = (s16)Rd16(io, base + 2);
@@ -1921,8 +1984,8 @@ static void DrawAffineBg(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispc
     int nruns = -1, run = 0;
     s32 splitTy = -0x7FFFFFFF;
     const u16 *art = splitHere ? e->art[bg] : NULL;
-    s32 fx = refX + pb * y + pa * (xs - e->origin);
-    s32 fy = refY + pd * y + pc * (xs - e->origin);
+    s32 fx = refX + pb * (y - e->top) + pa * (xs - e->origin);
+    s32 fy = refY + pd * (y - e->top) + pc * (xs - e->origin);
     BOOL wrap = (bgcnt & 0x2000) != 0;
     int size = bgcnt >> 14;
     u32 charBase = CharBase(e, bgcnt, dispcnt);
@@ -2403,7 +2466,7 @@ static BOOL ReadObj(const Engine *e, int i, Obj *obj)
             obj->boxH *= 2;
         }
     }
-    obj->oy = (u8)(a0 & 0xFF);
+    obj->oy = (u8)((a0 & 0xFF) + e->top);   /* (a tall field's lines above the DS's: moved down by them) */
     obj->ox = (s16)(a1 & 0x1FF);
     /* (x 256-511 is left of the screen; on a wider canvas the first of
      * those are right of the DS's screen, where the canvas goes on) */
@@ -3140,6 +3203,10 @@ static const u16 *LayerLine(const Engine *e, EngineWork *work, int bg, int kind,
     u16 *line = work->lineOf[bg];
     int x;
 
+    if (kind != BG_3D && TallLineOf(e, bg, y) < 0) {
+        memset(line, 0, (size_t)e->width * sizeof(u16));   /* (a tall field: nothing past the DS's lines) */
+        return line;
+    }
     if (kind == BG_TEXT) {
         Target t;
 
@@ -3479,9 +3546,14 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         e->height = H;   /* (a tall picture with the 3D: only in two layers, the 3D on the DS's lines) */
     }
     if (fixedWidth == 0) {
-        DecideSplits(e, kind, bgcnt, dispcnt);
-        LookUpArt(e, kind, bgcnt, dispcnt);
+        if (e->top == 0) {
+            /* (a tall field: no pictures split, no hand-drawn ones: those
+             * are the DS's lines' at the wider screen's 320) */
+            DecideSplits(e, kind, bgcnt, dispcnt);
+            LookUpArt(e, kind, bgcnt, dispcnt);
+        }
         DecideBandFills(e, kind, bgcnt, dispcnt);
+        DecideTallEdges(e, kind, bgcnt, dispcnt);
     }
     if (split != NULL) {
         split->has3d = e->isA && kind[0] == BG_3D;
@@ -3607,8 +3679,16 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             u8 *lineRegs = (u8 *)e->io;
             u32 lineDispcnt;
 
-            /* (a tall picture's lines past the DS's: its last line's) */
-            memcpy(lineRegs, e->lines[y < H ? y : H - 1], NITRO_LINE_REGS);
+            /* (a tall picture's lines past the DS's: its last line's; a
+             * tall field's above them: its first's) */
+            {
+                int ds = y - e->top;
+
+                memcpy(lineRegs, e->lines[ds < 0 ? 0 : ds < H ? ds : H - 1], NITRO_LINE_REGS);
+                if (e->top) {
+                    ShiftDown(e, lineRegs);
+                }
+            }
             lineDispcnt = Rd32(lineRegs, 0);
             dispcnt = (dispcnt & ~0xE000u) | (lineDispcnt & 0xE000u);
             win0h = Rd16(lineRegs, 0x40);
@@ -3622,10 +3702,10 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             if (!anyWindow) {
                 memset(enableLine, 0x3F, (size_t)width);
             }
-            if (split != NULL && split->has3d && y < H) {
+            if (split != NULL && split->has3d && y - e->top >= 0 && y - e->top < H) {
                 int scroll = (Rd16(lineRegs, 0x10) - e->shift3d) & 0x1FF;
 
-                split->scroll3dLine[y] = (short)scroll;
+                split->scroll3dLine[y - e->top] = (short)scroll;
                 split->scroll3dLines |= scroll != split->scroll3d;
             }
         }
@@ -3670,7 +3750,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 const u8 *prioOf = NULL;
                 int layer, x0 = 0, x1 = width;
 
-                if (slot == 0 && split != NULL && split->has3d && p == split->prio3d && y < H) {
+                if (slot == 0 && split != NULL && split->has3d && p == split->prio3d && y < e->h3d) {
                     /* The 3D's place among the layers: what's drawn so far
                      * is in front of it. */
                     SnapshotOver(split, &blendState, row, y, nlist, blend2, flags, effect,
@@ -3740,7 +3820,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             }
         }
 
-        if (split != NULL && split->has3d && !snapped && y < H) {
+        if (split != NULL && split->has3d && !snapped && y < e->h3d) {
             /* (the line was full before the 3D's place: everything drawn
              * is in front of it, and nothing behind it was drawn; a tall
              * picture's lines past the DS's have no 3D: all of it behind) */
@@ -3789,7 +3869,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             blendState.nlist = nlist;
             BlendLine(&blendState, row, enableLine, layer1, anyWindow);
         }
-        if (split != NULL && split->has3d && anyWindow && y < H) {
+        if (split != NULL && split->has3d && anyWindow && y < e->h3d) {
             /* Where a window hides the 3D, what's behind it shows. */
             u16 *over = split->over + y * width;
             u8 *alpha = split->overAlpha + y * width;
@@ -3948,6 +4028,30 @@ static void SetUpParts(Engine *e)
     }
 }
 
+/* (a tall field: NitroRender2DSplit.top) An engine's registers as the
+ * picture's lines see them, the DS's line 0 at line top: the BGs' maps
+ * moved down (VOFS less top) and the windows (WIN0V, WIN1V; one from the
+ * DS's top or to its bottom from the picture's). The OBJs: ReadObj; an
+ * affine BG: DrawAffineBg. */
+static void ShiftDown(const struct Engine *e, u8 *regs)
+{
+    int bg, k;
+
+    for (bg = 0; bg < 4; bg++) {
+        u16 v = Rd16(regs, 0x12 + bg * 4);
+
+        Wr16(regs, 0x12 + bg * 4, (u16)((v & ~0x1FFu) | ((v - e->top) & 0x1FFu)));
+    }
+    for (k = 0; k < 2; k++) {
+        u16 v = Rd16(regs, 0x44 + k * 2);
+        int v0 = v >> 8, v1 = v & 0xFF;
+
+        v0 = v0 == 0 ? 0 : v0 + e->top;
+        v1 = v1 >= H || v1 == 0 ? e->height : v1 + e->top;
+        Wr16(regs, 0x44 + k * 2, (u16)(((v0 > 255 ? 255 : v0) << 8) | (v1 > 255 ? 255 : v1)));
+    }
+}
+
 /* An engine's registers and memory, and the canvas (split's: width,
  * origin, clip; NULL: the DS's). */
 static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
@@ -3972,8 +4076,24 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
     e->objMask = e->isA ? 0x3FFFF : 0x1FFFF;
     e->width = W;
     e->height = H;
+    e->h3d = H;
     if (split != NULL && split->height > H && split->height <= HMAX && split->width <= W) {
         e->height = split->height;   /* (a tall picture: the DS's width only) */
+    }
+    if (split != NULL && e->isA && split->top > 0 && split->height > H && split->height <= HMAX &&
+        split->top + H <= split->height) {
+        /* (the field at the DS's pixel size on the 3DS's whole screen: lines
+         * above and below the DS's, the 3D on all of them; the registers
+         * as those lines see them, in a copy) */
+        static u8 shifted[0x2000];
+
+        e->height = split->height;
+        e->h3d = split->height;
+        e->top = split->top;
+        memcpy(shifted, e->ioAll, sizeof(shifted));
+        e->ioAll = shifted;
+        e->io = shifted;
+        ShiftDown(e, shifted);
     }
     if (split != NULL && split->width > W && split->width <= WMAX) {
         int bg;
@@ -4841,7 +4961,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
              ((u32)split->anchorWindows << 18) ^ ((u32)(split->windowsToEdge != 0) << 19) ^ ((u32)split->clip[0] << 20) ^
              ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
              ((u32)split->clip[3] << 23)) * 16777619u;
-    small = (small ^ (u32)split->height) * 16777619u;   /* (a tall picture) */
+    small = (small ^ (u32)split->height ^ ((u32)split->top << 12)) * 16777619u;   /* (a tall picture) */
     small = (small ^ (u32)__atomic_load_n(&sSmoothObjs[e], __ATOMIC_ACQUIRE)) * 16777619u;
     if (split->width > W) {
         /* (the windows decide the edges' look, and where the anchored ones

@@ -444,6 +444,8 @@ static void KeepUpperScreen(void)
     }
 }
 
+static int sViewW = 320, sViewH = 192;   /* (the view command: the upper screen's 3D view) */
+
 static int RemasterShot(const char *path)
 {
     static uint16_t out[320 * 384];
@@ -455,11 +457,17 @@ static int RemasterShot(const char *path)
     return WritePng(path, out, 320, 384);
 }
 
+/* (pshot) The upper screen as RemasterRender puts it together, at its own
+ * size (the field at the DS's pixel size: 400 x 240), its 3D drawn at that
+ * size as the 3DS's GPU does (gpusim): sPixelShot set, into it. */
+static uint16_t *sPixelShot;
+static int sPixelShotW, sPixelShotH;
+
 static void RemasterRender(uint16_t *out)
 {
-    static uint16_t under[320 * 192], over[320 * 192];
-    static uint8_t overAlpha[320 * 192], alpha3d[256 * 192];
-    static uint16_t image3d[256 * 192], bgPicture[256 * 256];
+    static uint16_t under[400 * 240], over[400 * 240], full[400 * 240];
+    static uint8_t overAlpha[400 * 240], alpha3d[256 * 192];
+    static uint16_t image3d[256 * 192], bgPicture[256 * 256], sim3d[400 * 240];
     int aOnTop = NitroPort_EngineAOnTop() ? 1 : 0;
     int screen, gpuBg;
 
@@ -467,7 +475,7 @@ static void RemasterRender(uint16_t *out)
     for (screen = 0; screen < 2; screen++) {
         int engine = (screen == 0) == aOnTop ? 0 : 1;
         NitroRender2DSplit split;
-        int width, x, y, left;
+        int width, height, x, y, left, sim = 0;
 
         memset(&split, 0, sizeof(split));
         split.over = over;
@@ -482,6 +490,7 @@ static void RemasterRender(uint16_t *out)
         }
         NitroPort_Render2DSplit(engine, under, &split);
         width = split.width > 256 ? split.width : 256;
+        height = split.top > 0 && split.height > 192 ? split.height : 192;
         gpuBg = split.gpuBgLeftOut ? __builtin_ctz((unsigned)split.gpuBgLeftOut) : -1;
         if (gpuBg >= 0 && !NitroPort_Render2DBgPicture(gpuBg, split.snapshot, bgPicture)) {
             gpuBg = -1;
@@ -502,12 +511,25 @@ static void RemasterRender(uint16_t *out)
                 }
                 NitroPort_Gx3dReleaseImage(img);
             }
+            if (screen == 0 && sPixelShot != NULL) {
+                /* (the 3D at the picture's size, as the 3DS's GPU draws it) */
+                const NitroGx3dScene *scene = NitroPort_Gx3dScene();
+
+                if (scene != NULL && (int)scene->screen_width == width && (int)scene->screen_height == height) {
+                    NitroPort_Gx3dSimulateGpuSized(scene, sim3d, width, height);
+                    sim = 1;
+                }
+            }
         }
-        for (y = 0; y < 192; y++) {
+        for (y = 0; y < height; y++) {
             for (x = 0; x < width; x++) {
                 uint16_t c = under[y * width + x];
 
-                if (split.has3d) {
+                if (sim) {
+                    if (sim3d[y * width + x] & 0x8000) {
+                        c = sim3d[y * width + x] & 0x7FFF;
+                    }
+                } else if (split.has3d) {
                     /* where the 3D's x is: the DS's 256 at origin, or (wide)
                      * the whole canvas */
                     int scroll3d = split.scroll3dLines ? split.scroll3dLine[y] : split.scroll3d;
@@ -515,10 +537,11 @@ static void RemasterRender(uint16_t *out)
                     int ix = NitroPort_WideScreenExtra() && screen == 0 && width > 256
                                  ? (x + scroll) * 256 / width
                                  : x - split.origin + scroll;
+                    int iy = y * 192 / height;   /* (a tall field's: squeezed, as the PC's 3D) */
 
-                    if (ix >= 0 && ix < 256 && (image3d[y * 256 + ix] & 0x8000)) {
-                        uint16_t p = image3d[y * 256 + ix] & 0x7FFF;
-                        int a = alpha3d[y * 256 + ix], k;
+                    if (ix >= 0 && ix < 256 && (image3d[iy * 256 + ix] & 0x8000)) {
+                        uint16_t p = image3d[iy * 256 + ix] & 0x7FFF;
+                        int a = alpha3d[iy * 256 + ix], k;
                         uint16_t m = 0;
 
                         for (k = 0; k < 15; k += 5) {
@@ -573,7 +596,25 @@ static void RemasterRender(uint16_t *out)
                         c = m;
                     }
                 }
-                out[(screen * 192 + y) * 320 + left + x] = c;
+                full[y * width + x] = c;
+            }
+        }
+        if (screen == 0 && sPixelShot != NULL) {
+            memcpy(sPixelShot, full, (size_t)width * (size_t)height * sizeof(full[0]));
+            sPixelShotW = width;
+            sPixelShotH = height;
+        }
+        if (width <= 320 && height == 192) {
+            for (y = 0; y < 192; y++) {
+                memcpy(&out[(screen * 192 + y) * 320 + left], &full[y * width], (size_t)width * sizeof(full[0]));
+            }
+        } else {
+            /* (the field at the DS's pixel size: 400 x 240, here squeezed
+             * into the 320 x 192 the rest takes; pshot has it as it is) */
+            for (y = 0; y < 192; y++) {
+                for (x = 0; x < 320; x++) {
+                    out[(screen * 192 + y) * 320 + x] = full[(y * height / 192) * width + x * width / 320];
+                }
             }
         }
     }
@@ -1159,6 +1200,12 @@ void NitroPort_Log(const char *fmt, ...)
  *   ref3d PATH       draw the newest scene with the reference rasterizer
  *   gpusim PATH      draw it as the 3DS GPU path would (port_gx3d_gpusim.c)
  *   interp 0|1       in-between scenes off or on (NitroPort_Gx3dSetInterpolation)
+ *   pshot PATH       the upper screen at its own size (pixelfield 1: 400 x
+ *                    240), its 3D as the 3DS's GPU draws it
+ *   pixelfield 0|1   the field at the DS's pixel size (NitroPort_SetPixelField)
+ *   viewsim PATH     gpusim at the view's own size (view W H)
+ *   view W H         the 3D's view: 320 192 (--wide), 400 240 (the field at
+ *                    the DS's pixel size on the whole 3DS screen)
  *   midsim PATH      draw the newest in-between scene (halfway between the
  *                    newest scene and the one before) as gpusim does, and
  *                    log how many of its polygons were matched
@@ -1345,6 +1392,20 @@ static void ControlWait(void)
                 }
             } else if (sscanf(line, "wideart %1023s", arg) == 1) {
                 NitroPort_WideArtLoad(arg);
+            } else if (sscanf(line, "pshot %1023s", arg) == 1) {
+                /* the upper screen at its own size (the field at the DS's
+                 * pixel size: 400 x 240), the 3D as the 3DS's GPU draws it */
+                static uint16_t both[320 * 384], shot[400 * 240];
+
+                sPixelShot = shot;
+                sPixelShotW = 0;
+                RemasterRender(both);
+                sPixelShot = NULL;
+                if (sPixelShotW == 0 || WritePng(arg, shot, sPixelShotW, sPixelShotH) != 0) {
+                    NitroPort_Log("[pc] control: can't write %s", arg);
+                }
+            } else if (sscanf(line, "pixelfield %ld", &a) == 1) {
+                NitroPort_SetPixelField((int)a);
             } else if (sscanf(line, "rshot %1023s", arg) == 1) {
                 if (RemasterShot(arg) != 0) {
                     NitroPort_Log("[pc] control: can't write %s", arg);
@@ -1367,6 +1428,27 @@ static void ControlWait(void)
                 if (!NitroPort_Gx3dWritePng(arg, image)) {
                     NitroPort_Log("[pc] control: can't write %s", arg);
                 }
+            } else if (sscanf(line, "viewsim %1023s", arg) == 1) {
+                /* The same at the view's own size (NitroPort_Gx3dSetView:
+                 * the DS's pixel size, the 3DS's whole screen). */
+                static uint16_t image[512 * 256];
+                const NitroGx3dScene *scene = NitroPort_Gx3dScene();
+                int w = scene ? (int)scene->screen_width : 256, h = scene ? (int)scene->screen_height : 192;
+
+                if (h < 192) {
+                    h = 192;
+                }
+                NitroPort_Gx3dSimulateGpuSized(scene, image, w, h);
+                if (WritePng(arg, image, w, h) != 0) {
+                    NitroPort_Log("[pc] control: can't write %s", arg);
+                }
+            } else if (sscanf(line, "view %ld %ld", &a, &b) == 2) {
+                /* the 3D's view (NitroPort_Gx3dSetView): 320 192 the 3DS
+                 * remaster's wide one, 400 240 the field at the DS's pixel
+                 * size */
+                sViewW = (int)a;
+                sViewH = (int)b;
+                NitroPort_Gx3dSetView((int)a, (int)b);
             } else if (sscanf(line, "interp %ld", &a) == 1) {
                 NitroPort_Gx3dSetInterpolation((int)a);
             } else if (sscanf(line, "midsim %1023s", arg) == 1) {
@@ -1568,7 +1650,13 @@ void NitroPort_OnFrame(void)
 {
     /* (--wide) the wider view only while the 3D is on the upper screen */
     if (NitroPort_WideScreenExtra()) {
-        NitroPort_Gx3dSetWideView(NitroPort_EngineAOnTop() ? 320 : 256);
+        if (NitroPort_EngineAOnTop() && NitroPort_PixelField()) {
+            NitroPort_Gx3dSetView(NITRO_PIXEL_FIELD_W, NITRO_PIXEL_FIELD_H);
+        } else if (NitroPort_EngineAOnTop()) {
+            NitroPort_Gx3dSetView(sViewW, sViewH);
+        } else {
+            NitroPort_Gx3dSetWideView(256);
+        }
     }
     NitroPort_Gx3dFlush();
     NitroPort_SoundPumpReplies(); /* deliver ARM7 alarms on ARM9's thread */
