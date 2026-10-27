@@ -26,6 +26,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,8 +41,15 @@ def gh_api(path: str, *, raw: bool = False, accept: str | None = None):
         accept = "application/octet-stream"
     if accept:
         args[2:2] = ["-H", f"Accept: {accept}"]
-    out = subprocess.run(args, check=True, capture_output=True).stdout
-    return out if raw else json.loads(out)
+    # (a few tries: right after a release is published, GitHub can briefly
+    # refuse its files; what gh said goes in the error)
+    for attempt in range(5):
+        result = subprocess.run(args, capture_output=True)
+        if result.returncode == 0:
+            return result.stdout if raw else json.loads(result.stdout)
+        if attempt < 4:
+            time.sleep(10 * (attempt + 1))
+    raise SystemExit(f"build_site: gh api {path} failed: {result.stderr.decode(errors='replace').strip()}")
 
 
 class _Notes(html.parser.HTMLParser):
