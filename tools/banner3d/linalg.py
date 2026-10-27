@@ -1,5 +1,5 @@
 """The little matrix maths the banner needs, in plain Python (no numpy, so the
-build runs on any Python 3.12, MSYS2's included).
+build runs on any Python 3.11 or later, MSYS2's included).
 
 Matrices are lists of rows; 4x4 ones are affine, column-vector convention
 (p' = M p). Vectors are lists.

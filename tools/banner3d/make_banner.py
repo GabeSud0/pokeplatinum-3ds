@@ -10,7 +10,7 @@ your ROM (demo/title/titledemo.narc), at build time; the banner made is
 yours and never committed (it contains the game's model). The portal and the
 logo are this project's own art (art/). The scene is turned into CGFX by
 skyfloogle/pycgfx, fetched once at a pinned commit into build/pycgfx (needs
-git), with the fixes in to_cgfx.py. Needs Python 3.12 or later; standard
+git), with the fixes in to_cgfx.py. Needs Python 3.11 or later; standard
 library only. See README.md for what the banner is and how it was tested.
 """
 import argparse
@@ -57,8 +57,8 @@ def fetch_pycgfx(dest, commit):
 
 
 def main():
-    if sys.version_info < (3, 12):
-        sys.exit("The 3D banner needs Python 3.12 or later (pycgfx uses it).")
+    if sys.version_info < (3, 11):
+        sys.exit("The 3D banner needs Python 3.11 or later (pycgfx uses it).")
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--fetch-pycgfx-only", action="store_true", help="just fetch pycgfx (for the tests)")
     src = ap.add_mutually_exclusive_group()

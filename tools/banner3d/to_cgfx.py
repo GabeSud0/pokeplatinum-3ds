@@ -22,6 +22,7 @@ pycgfx and its two libraries are swapped for standard-library stand-ins
 (shims/: Pillow and gltflib, just the parts pycgfx calls).
 """
 import importlib.util
+import itertools
 import math
 import os
 import sys
@@ -32,7 +33,20 @@ CGFX_LIMIT = 0x80000          # the HOME Menu's limit for a banner's CGFX
 BILLBOARDS = ("portal", "logo")
 
 
+def _batched(iterable, n):
+    # itertools.batched, new in Python 3.12 (pycgfx calls it): for 3.11, as
+    # devkitPro's image (Debian 12) has, where build_linux.sh builds
+    it = iter(iterable)
+    while True:
+        batch = tuple(itertools.islice(it, n))
+        if not batch:
+            return
+        yield batch
+
+
 def load_pycgfx(pycgfx_dir):
+    if not hasattr(itertools, "batched"):
+        itertools.batched = _batched
     shims = os.path.join(HERE, "shims")
     for p in (pycgfx_dir, shims):
         if p not in sys.path:

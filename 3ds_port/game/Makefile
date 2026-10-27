@@ -496,7 +496,7 @@ endif
 # (made every time: quick, and the icon may have come or gone)
 $(OUT)/pokeplatinum.smdh: FORCE
 	@mkdir -p $(dir $@)
-	@$(DEVKITPRO)/tools/bin/smdhtool --create "Pokemon Platinum" "3DS port (needs your data pack)" \
+	@$(DEVKITPRO)/tools/bin/smdhtool --create "Pokémon Platinum" "Pokémon Platinum 3DS" \
 	    "pokeplatinum-3ds" "$(ICON)" $@
 
 $(PROGRAM): $(PROGRAM_ELF) $(OUT)/pokeplatinum.smdh
