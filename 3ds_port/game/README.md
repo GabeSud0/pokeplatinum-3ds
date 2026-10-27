@@ -12,8 +12,9 @@ compiled with GCC, and the programs that run it:
   finding out quickly how far it gets and where it stops.
 
 Both read the game's files from **your own data pack**, made from your own
-cartridge by the builder. Nothing from the game is in this repository, and
-programs built from it are for your own use: never share them.
+cartridge by the builder. Nothing from the game is in this repository; the
+project's releases carry the 3DS program, and what's made from your ROM (the
+data pack, the .cia's banner) is for your own use: never share it.
 
 **Where it stands:** the game runs on the 3DS. `NitroMain` runs with the
 SDK's threads, interrupts, timers and overlays working, reads its files from

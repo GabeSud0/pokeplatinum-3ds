@@ -8,8 +8,9 @@
 # make TARGET=host32 program   build/host32/pokeplatinum-pc: the game on a PC,
 #                              without a screen (for finding where it stops)
 #
-# The programs need the player's data pack to run (README.md). Builds that
-# contain game code are for your own use: never share them.
+# The programs need the player's data pack to run (README.md). The project's
+# releases publish the 3DS program; anything made from your ROM (the data
+# pack, the .cia's banner) is for your own use: never share it.
 
 .DEFAULT_GOAL := all
 comma := ,
@@ -376,8 +377,8 @@ endif
 #   TARGET=host/host32  app/main_pc.c  -> build/<target>/pokeplatinum-pc,
 #                       which runs the game on a PC without a screen
 # The game objects go in themselves (not through the library), so every
-# overlay's data sections are there for the overlay table. Programs built
-# from the game are for your own use: never share them (CONTRIBUTING.md).
+# overlay's data sections are there for the overlay table. Never commit
+# programs built from the game (CONTRIBUTING.md).
 DEVKITPRO ?= /opt/devkitpro
 APP_OBJS := $(OUT)/app/platinum.o
 # Linked after the game's objects: see tools/game_overlays.py (render_table).
@@ -501,7 +502,7 @@ $(OUT)/pokeplatinum.smdh: FORCE
 
 $(PROGRAM): $(PROGRAM_ELF) $(OUT)/pokeplatinum.smdh
 	@$(DEVKITPRO)/tools/bin/3dsxtool $< $@ --smdh=$(OUT)/pokeplatinum.smdh
-	@echo "built $@ (contains game code: for your own use, never share it)"
+	@echo "built $@"
 
 # The HOME Menu version: the same program installed as a title of its own
 # (opens and closes from the HOME Menu). Needs makerom and bannertool
@@ -535,7 +536,7 @@ endif
 $(PROGRAM_CIA): $(PROGRAM_ELF) $(OUT)/pokeplatinum.smdh $(OUT)/pokeplatinum.bnr cia/pokeplatinum.rsf
 	@$(MAKEROM) -f cia -o $@ -target t -exefslogo -rsf cia/pokeplatinum.rsf -elf $(PROGRAM_ELF) \
 	    -icon $(OUT)/pokeplatinum.smdh -banner $(OUT)/pokeplatinum.bnr
-	@echo "built $@ (contains game code: for your own use, never share it)"
+	@echo "built $@ (its banner is made from your ROM: for your own use, never share it)"
 
 cia: $(PROGRAM_CIA)
 endif
