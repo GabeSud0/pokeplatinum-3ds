@@ -59,9 +59,12 @@ En una New 3DS:
 | | Qué esperar |
 | :--- | :--- |
 | **Las dos pantallas llenas** | Las imágenes de la DS se dibujan 1,25 veces más grandes: la pantalla inferior llena sus 320×240, y la superior se reparte a lo largo de sus 400 píxeles de ancho (menús, cuadros de texto y combates incluidos). Nunca se estira ni se refleja nada para llenar el espacio extra. |
+| **Un menú en la pantalla inferior** | En el mapa, la pantalla inferior es un menú junto al Pokéreloj: MAP, POKéMON, BAG, TRAINER, POKéDEX, POKéTCH, SAVE y OPTIONS, a un toque (o con X y la cruceta). La mochila, el equipo, los datos del Pokémon, la ficha de entrenador, el guardado, las opciones y el Mapa Pueblo se abren dentro de su panel mientras el mapa sigue en la pantalla superior. Dos casillas guardan tus objetos registrados: toca una para usarlo. |
 | **3D más nítido** | El mundo y los combates los dibuja la GPU de la 3DS a la resolución de la propia pantalla, con bordes suavizados (antialiasing), la niebla del juego y una vista más amplia del mundo a los lados. Los contornos de la DS alrededor del 3D vienen apagados; `edges on` en `remaster.txt` los dibuja. |
 | **3D estereoscópico** | Con el deslizador 3D. |
 | **60 imágenes por segundo** | El juego mueve el mapa a 30; el port dibuja una imagen intermedia entre cada par, y vuelve a 30 donde la GPU no da abasto (nuevo, todavía en ajuste). |
+| **Mejoras y trucos** | Opcionales, desde OPTIONS: SPEED hasta 4x (los menús y las decisiones en combate siguen a 1x), Repartir Experiencia para todo el equipo, experiencia al capturar, evoluciones por intercambio al nivel 40, MO sin enseñar los movimientos, correr siempre; y trucos (captura segura, victoria instantánea, huevos rápidos, dinero infinito, frecuencia de Pokémon salvajes, probabilidad de shiny, dar objetos). |
+| **Pequeñas comodidades** | Si capturas un Pokémon con el equipo lleno, puedes cambiarlo por uno de tu equipo ahí mismo, en el combate. Una partida nueva guarda encima de la anterior sin tener que borrarla antes. L + R + START + SELECT reinicia el juego desde la intro. |
 | **Píxeles nítidos** | Píxeles parejos y nítidos en el 2D, y suavizado xBRZ opcional para las texturas del 3D. |
 | **En el menú HOME** | Se instala como `.cia`, con el icono de tu cartucho y un banner 3D animado. |
 | **Hecho con tu propio cartucho** | El builder crea los datos del juego en tu propia computadora, a partir de tu propio volcado. No se distribuye nada del juego. |
@@ -70,8 +73,10 @@ En una New 3DS:
 
 | ✅ Funciona | 🛠️ En progreso | 💭 Lista de deseos |
 | :--- | :--- | :--- |
-| Jugable en consola real, desde una partida nueva o una guardada: explorar, combates, menús y guardar (todavía tiene algunos errores visuales y de juego) | Una mejor interfaz para la pantalla inferior | Wi-Fi |
+| Jugable en consola real, desde una partida nueva o una guardada: explorar, combates, menús y guardar (todavía tiene algunos errores visuales y de juego) | Pulir la interfaz de la pantalla inferior (la pantalla para aprender un movimiento) | Wi-Fi |
 | Una interfaz nueva para la pantalla superior: menús, cuadros de texto y combates a lo largo de todo su ancho | Un Pokémon que te sigue | Mejor iluminación |
+| Una interfaz nueva para la pantalla inferior: un menú junto al Pokéreloj, con la mochila, el equipo, los datos del Pokémon, la ficha de entrenador, el guardado, las opciones y el Mapa Pueblo en su panel | | |
+| Mejoras y trucos desde las opciones (SPEED, Repartir Experiencia para el equipo y más) | | |
 | La resolución de la New 3DS XL: las dos pantallas llenas, el 3D dibujado a la resolución de la pantalla | | |
 | Animaciones actualizadas para la intro, y animaciones nuevas para parte de la interfaz | | |
 | 60 imágenes por segundo y mejor calidad en el 3D | | |
@@ -192,16 +197,23 @@ tu cartucho.
 
 ### Mientras juegas
 
-Todos los botones son los del juego. El port escribe un registro en
+Todos los botones son los del juego; en el mapa, la pantalla inferior es un
+menú que puedes tocar. L + R + START + SELECT (el reinicio del propio juego)
+reinicia el juego desde la intro. El port escribe un registro en
 `sdmc:/3ds/pokeplatinum/log.txt` (envíalo cuando reportes un problema); aparece
 solo en pantalla si algo sale mal.
 
-La pantalla tiene ajustes en `sdmc:/3ds/pokeplatinum/remaster.txt`; los valores
-por defecto son los que casi todos quieren. Consulta
+Las opciones del juego, los 60 FPS, el 3D suavizado, y las mejoras y los
+trucos están en la página **OPTIONS** de la pantalla inferior; el port guarda
+los suyos en `sdmc:/3ds/pokeplatinum/options.txt`, junto a la partida. La
+pantalla tiene más ajustes en `sdmc:/3ds/pokeplatinum/remaster.txt`; los
+valores por defecto son los que casi todos quieren. Consulta
 [`docs/REMASTER.md`](docs/REMASTER.md) (en inglés).
 
 Donde la distribución del port para la pantalla más ancha no se vea bien,
-puedes dibujar las franjas tú mismo con el editor **WideArt**: consulta
+puedes dibujar las franjas tú mismo con el editor **WideArt** (los dibujos
+hechos hasta ahora, como el fondo de la evolución, ya vienen en el juego):
+consulta
 [`docs/WIDE_ART.md`](docs/WIDE_ART.md) (en inglés).
 
 > [!TIP]
@@ -291,6 +303,7 @@ builder/           convierte tu propia ROM en el paquete de datos (Python)
 docs/              la pantalla remasterizada, el arte ancho, el paquete de datos
 patches/           cambios aplicados sobre la decompilación y los SDK
 tools/             bootstrap, ayudas de compilación, el editor WideArt (Python)
+wideart/           franjas dibujadas a mano para la pantalla más ancha, incluidas en el juego (sin píxeles del juego)
 Makefile           `make game`, `make game-cia`, `make test`, ...
 LICENSE            GPL-3.0, para el código propio de este proyecto
 upstream.lock      el commit exacto de pret/pokeplatinum sobre el que se compila
@@ -303,10 +316,13 @@ upstream.lock      el commit exacto de pret/pokeplatinum sobre el que se compila
 - **Hecho:** las herramientas de compilación; el código del juego compilado y
   corriendo en la 3DS; 2D, 3D, sonido, controles, guardado; el juego
   completamente jugable; la interfaz nueva de la pantalla superior; la
-  resolución de la New 3DS XL; animaciones actualizadas de la intro y la
-  interfaz; la versión del menú HOME.
-- **En progreso:** 60 imágenes por segundo, mejor calidad en el 3D, una mejor
-  interfaz para la pantalla inferior, mejor iluminación.
+  pantalla inferior como menú, con la mochila, el equipo, los datos del
+  Pokémon, la ficha de entrenador, el guardado, las opciones y el Mapa
+  Pueblo en su panel; mejoras y trucos; la resolución de la New 3DS XL;
+  animaciones actualizadas de la intro y la interfaz; la versión del menú
+  HOME.
+- **En progreso:** 60 imágenes por segundo, mejor calidad en el 3D, pulir la
+  interfaz de la pantalla inferior, mejor iluminación.
 - **Lista de deseos:** Wi-Fi, un Pokémon que te sigue.
 - **Más adelante:** SoulSilver / HeartGold sobre la misma base.
 
