@@ -387,6 +387,86 @@ static u32 ScreenBase(const Engine *e, u16 bgcnt, u32 dispcnt)
     return base;
 }
 
+/* (the remaster's compositor: NitroRender2DSplit.gpuBgs) Of the BGs it
+ * asks for (a bit each), the one it can draw itself now, as the DS would:
+ * engine A's text BG, 256 x 256, no mosaic, not 8 bits a pixel with the
+ * extended palettes; in front of the 3D with nothing between the two (no
+ * BG, no OBJ) and BLDCNT's alpha blending it, alone, onto the 3D (the
+ * field's weather: the clouds' shadows, fog, sand); no windows and no
+ * H-blank effect. Else -1. From the registers and OAM given (the state
+ * taken, or the live one). */
+static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted)
+{
+    u32 dispcnt = Rd32(io, 0);
+    u16 bldcnt = Rd16(io, 0x50);
+    int bg, k, i, key, key3d, mode = dispcnt & 7;
+
+    if (wanted == 0 || lines || (dispcnt & 0xE000) || (dispcnt & 0x108) != 0x108 || ((dispcnt >> 16) & 3) != 1) {
+        return -1;
+    }
+    for (bg = 1; bg < 4 && !((wanted >> bg) & 1); bg++) {
+    }
+    if (bg > 3 || !(dispcnt & (0x100u << bg))) {
+        return -1;
+    }
+    {
+        u16 bgcnt = Rd16(io, 8 + bg * 2);
+        /* (a text BG in this mode: BgKind's) */
+        int text = mode == 0 || (mode == 1 && bg < 3) || (mode == 2 && bg < 2) || (mode == 3 && bg < 3) ||
+                   (mode >= 4 && mode <= 5 && bg < 2);
+
+        if (!text || (bgcnt & 0x40) || (bgcnt >> 14) != 0 || ((bgcnt & 0x80) && (dispcnt & 0x40000000u))) {
+            return -1;
+        }
+        key = (bgcnt & 3) * 4 + bg;
+    }
+    key3d = (Rd16(io, 8) & 3) * 4;
+    /* alpha blending, this BG the only first target, the 3D a second one */
+    if (((bldcnt >> 6) & 3) != 1 || (bldcnt & 0x3F) != (1u << bg) || !(bldcnt & 0x100)) {
+        return -1;
+    }
+    if (key >= key3d) {
+        return -1;   /* (behind the 3D) */
+    }
+    for (k = 1; k < 4; k++) {
+        int kk;
+
+        if (k == bg || !(dispcnt & (0x100u << k))) {
+            continue;
+        }
+        kk = (Rd16(io, 8 + k * 2) & 3) * 4 + k;
+        if (kk > key && kk < key3d) {
+            return -1;   /* (a BG between it and the 3D) */
+        }
+    }
+    if (dispcnt & 0x1000) {
+        int prioBg = key / 4, prio3d = key3d / 4;
+
+        for (i = 0; i < 128; i++) {
+            u16 a0 = Rd16(oam, (u32)i * 8), a2 = Rd16(oam, (u32)i * 8 + 4);
+            int prio = (a2 >> 10) & 3;
+
+            if (!(a0 & 0x100) && (a0 & 0x200)) {
+                continue;   /* (hidden) */
+            }
+            if (((a0 >> 10) & 3) == 2) {
+                continue;   /* (a window OBJ: no windows anyway) */
+            }
+            /* (an OBJ is in front of the BGs of its priority or lower) */
+            if (prio > prioBg && prio <= prio3d) {
+                return -1;   /* (an OBJ between it and the 3D) */
+            }
+            /* (a semi-transparent or bitmap OBJ in front of it: the DS
+             * blends it with what's under it, this BG; left out, it would
+             * be blended with the 3D instead) */
+            if (prio <= prioBg && ((a0 >> 10) & 3) != 0) {
+                return -1;
+            }
+        }
+    }
+    return bg;
+}
+
 /* The extended palette slot a BG uses: its own number, or BG0/BG1 can
  * take slot 2/3 (BGxCNT bit 13). */
 static const u8 *BgExtSlot(const Engine *e, int bg, u16 bgcnt)
@@ -3418,6 +3498,27 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
              * the line reaches it. */
             kind[0] = BG_NONE;
         }
+        /* A BG the compositor draws itself (NitroRender2DSplit.gpuBgs):
+         * left out, with what it needs to draw it. */
+        if (split->has3d && split->gpuBgs) {
+            int gb = GpuBgOf(io, e->oam, e->lines != NULL, split->gpuBgs);
+
+            if (gb >= 0 && kind[gb] == BG_TEXT) {
+                u64 key = BgKeyCached(e, gb, BG_TEXT, bgcnt[gb], dispcnt);
+                u32 i;
+
+                for (i = 0; i < 0x200; i += 4) {
+                    key = (key ^ Rd32(e->bgPltt, i)) * 0x100000001B3ull;
+                }
+                split->gpuBgLeftOut = 1 << gb;
+                split->gpuBgEva = eva;
+                split->gpuBgEvb = evb;
+                split->gpuBgHofs = Rd16(io, 0x10 + gb * 4) & 0x1FF;
+                split->gpuBgVofs = Rd16(io, 0x12 + gb * 4) & 0x1FF;
+                split->gpuBgKey = key;
+                kind[gb] = BG_NONE;
+            }
+        }
     } else if (e->isA && kind[0] == BG_3D) {
         gx3dPixels = NitroPort_Gx3dAcquireImage();
         gx3dAlpha = gx3dPixels != NULL ? NitroPort_Gx3dImageAlpha(gx3dPixels) : NULL;
@@ -3967,6 +4068,75 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
     if (split == NULL) {
         MasterBrightness(out, Rd16(e.io, 0x6C), e.width * e.height);
     }
+}
+
+void NitroPort_Render2DBgOffsets(uint16_t out[8])
+{
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        out[i] = (uint16_t)(Rd16(NitroPort_IoReg, 0x10 + 2 * i) & 0x1FF);
+    }
+}
+
+int NitroPort_Render2DBgPicture(int bg, int snapshot, uint16_t *out)
+{
+    NitroRender2DSplit layout;
+    Engine e;
+    u32 dispcnt, charBase, screenBase;
+    u16 bgcnt;
+    int bpp8, tx, ty, x, y;
+
+    if (bg < 0 || bg > 3) {
+        return 0;
+    }
+    memset(&layout, 0, sizeof(layout));
+    layout.snapshot = snapshot;
+    SetUpEngine(&e, 0, &layout);
+    dispcnt = Rd32(e.io, 0);
+    bgcnt = Rd16(e.io, 8 + bg * 2);
+    if ((bgcnt >> 14) != 0 || BgKind(&e, bg, dispcnt) != BG_TEXT) {
+        return 0;
+    }
+    bpp8 = (bgcnt & 0x80) != 0;
+    charBase = CharBase(&e, bgcnt, dispcnt);
+    screenBase = ScreenBase(&e, bgcnt, dispcnt);
+    for (ty = 0; ty < 32; ty++) {
+        for (tx = 0; tx < 32; tx++) {
+            u16 entry = Rd16(e.bgVram, (screenBase + (u32)(ty * 32 + tx) * 2) & e.bgMask);
+            u32 tile = entry & 0x3FF, pal = (u32)(entry >> 12) * 16;
+            int hflip = (entry >> 10) & 1, vflip = (entry >> 11) & 1;
+
+            for (y = 0; y < 8; y++) {
+                int sy = vflip ? 7 - y : y;
+                uint16_t *row = out + (size_t)(ty * 8 + y) * 256 + tx * 8;
+
+                for (x = 0; x < 8; x++) {
+                    int sx = hflip ? 7 - x : x;
+                    u32 index;
+                    u16 c;
+
+                    if (bpp8) {
+                        index = e.bgVram[(charBase + tile * 64 + (u32)(sy * 8 + sx)) & e.bgMask];
+                    } else {
+                        u8 b = e.bgVram[(charBase + tile * 32 + (u32)(sy * 4 + sx / 2)) & e.bgMask];
+
+                        index = sx & 1 ? b >> 4 : b & 15;
+                        if (index != 0) {
+                            index += pal;
+                        }
+                    }
+                    if (index == 0) {
+                        row[x] = 0;
+                        continue;
+                    }
+                    c = Rd16(e.bgPltt, index * 2);
+                    row[x] = (uint16_t)(((c & 31) << 11) | (((c >> 5) & 31) << 6) | (((c >> 10) & 31) << 1) | 1);
+                }
+            }
+        }
+    }
+    return 1;
 }
 
 int NitroPort_Render2DLayer(int engine, int bg, const NitroRender2DSplit *layout, u16 *out, uint64_t *key, int *hofs,
@@ -4568,7 +4738,7 @@ void NitroPort_Render2DTakeState(int engine)
 /* What an engine's picture is drawn from, in two parts: the small ones
  * (registers, palettes, OAM) and its VRAM (the most part: 864 KB for
  * engine A, read in full to work it out). */
-static u32 EngineSmallSignature(int engine, int snapshot)
+static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg)
 {
     BOOL isA = engine == 0;
     const State2D *st = &sState[isA ? 0 : 1];
@@ -4586,6 +4756,11 @@ static u32 EngineSmallSignature(int engine, int snapshot)
     memcpy(regs, io, sizeof(regs));
     if (isA) {
         regs[0x60 / 4] &= ~0x3000u;
+    }
+    /* (a BG the compositor draws itself: its scroll isn't in the picture,
+     * which needn't be drawn again as it scrolls) */
+    if (isA && gpuBg >= 0) {
+        regs[(0x10 + gpuBg * 4) / 4] = 0;
     }
     h = HashWords((const u8 *)regs, 0x70, h);
     h = HashWords(ioAll + 0x240, 0x10, h);              /* VRAMCNT */
@@ -4630,7 +4805,7 @@ static u32 EngineVramSignature(int engine, const u8 *io)
 
 static u32 EngineSignature(int engine)
 {
-    return (EngineSmallSignature(engine, 0) * 31u) ^
+    return (EngineSmallSignature(engine, 0, -1) * 31u) ^
            EngineVramSignature(engine, NitroPort_IoReg + (engine ? 0x1000 : 0));
 }
 
@@ -4647,7 +4822,19 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     /* (its own record: the 3D doesn't come into these layers) */
     static struct { u32 small, vram; int valid, vramValid; } last[2];
     int e = engine ? 1 : 0;
-    u32 small = EngineSmallSignature(e, split->snapshot), vram;
+    /* (a BG the compositor would draw itself now: GpuBgOf, as drawing
+     * would find; drawn when that changes) */
+    int gpuBg = -1;
+    u32 small, vram;
+
+    if (e == 0 && split->gpuBgs) {
+        const State2D *st = &sState[0];
+
+        gpuBg = GpuBgOf(split->snapshot ? st->io : NitroPort_IoReg, split->snapshot ? st->oam : NitroPort_Oam,
+                        split->snapshot ? st->lines : NitroPort_LineRegs.active, split->gpuBgs);
+    }
+    small = EngineSmallSignature(e, split->snapshot, gpuBg);
+    small = (small ^ (u32)(gpuBg + 1) ^ ((u32)split->gpuBgs << 4)) * 16777619u;
 
     /* the canvas, and where the windows are */
     small = (small ^ (u32)split->width ^ ((u32)split->origin << 9) ^

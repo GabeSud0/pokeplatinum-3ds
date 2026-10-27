@@ -2401,6 +2401,114 @@ static void test_wide_map_past_edges(void)
 }
 
 /* One 4bpp tile all colour index `index`. */
+/* (the remaster's compositor) A repeating BG it draws itself
+ * (NitroRender2DSplit.gpuBgs: the field's weather): left out of the
+ * picture when it's alpha-blended alone onto the 3D right in front of it,
+ * its scroll then no reason to draw the picture again; its whole map as a
+ * picture (NitroPort_Render2DBgPicture). Not with an OBJ between it and
+ * the 3D. */
+static void test_gpu_bg(void)
+{
+    static u8 tiles[2 * 32];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED, GREEN, BLUE };
+    static uint32_t rgba[256 * 192];
+    static u16 under[256 * 192], over[256 * 192], picture[256 * 256];
+    static u8 overAlpha[256 * 192];
+    NitroRender2DSplit split;
+    int i, any;
+
+    Reset();
+    MakeTile4(tiles + 32, 1);           /* tile 1: red, green top-left */
+    memset(map, 0, sizeof(map));
+    map[0] = 1;
+    map[1] = 1 | 0x400;                 /* (8,0): flipped horizontally */
+    map[32 * 31 + 31] = 1;              /* the map's last tile */
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    G2_SetBG2ControlText(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0800,
+                         GX_BG_CHARBASE_0x04000);
+    GX_LoadBG2Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG2Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    G2_SetBG0Priority(2);
+    G2_SetBG2Priority(1);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG2);
+    G2_SetBlendAlpha(GX_BLEND_PLANEMASK_BG2, GX_BLEND_PLANEMASK_BG0, 6, 10);
+    for (i = 0; i < 256 * 192; i++) {
+        rgba[i] = 0x404040FFu;
+    }
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.has3d);
+    CHECK(split.gpuBgLeftOut == 0);     /* not asked for: drawn */
+    CHECK(over[3 * 256 + 3] & 0x8000);
+
+    split.gpuBgs = 1 << 2;
+    G2_SetBG2Offset(5, 7);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuBgLeftOut == 1 << 2);
+    CHECK(split.gpuBgEva == 6 && split.gpuBgEvb == 10);
+    CHECK(split.gpuBgHofs == 5 && split.gpuBgVofs == 7);
+    for (i = 0, any = 0; i < 256 * 192; i++) {
+        any |= over[i] & 0x8000;
+    }
+    CHECK(any == 0);                    /* nothing of it in front of the 3D */
+
+    /* its picture: the whole map, RGBA5551, 0 where it's clear */
+    CHECK(NitroPort_Render2DBgPicture(2, 0, picture));
+    CHECK(picture[0] == (u16)((0 << 11) | (31 << 6) | (0 << 1) | 1));        /* green top-left */
+    CHECK(picture[3 * 256 + 3] == (u16)((31 << 11) | 1));                     /* red */
+    CHECK(picture[15] == (u16)((0 << 11) | (31 << 6) | 1));                   /* flipped: green at the right */
+    CHECK(picture[20 * 256 + 20] == 0);                                      /* clear */
+    CHECK(picture[255 * 256 + 255] == (u16)((31 << 11) | 1));                 /* the map's last tile */
+
+    /* its scroll alone: not drawn again; anything else: drawn (the first
+     * two times: drawn, then the VRAM noted) */
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    G2_SetBG2Offset(9, 12);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    G2_SetBG2Offset(10, 12);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    split.gpuBgs = 0;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    G2_SetBG2Offset(11, 12);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    split.gpuBgs = 1 << 2;
+
+    /* an OBJ between it and the 3D (priority 2): drawn as before */
+    {
+        u16 obj[4] = { 0, 0, (u16)(2 << 10), 0 };
+
+        memcpy(NitroPort_Oam, obj, sizeof(obj));
+        GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG2 | GX_PLANEMASK_OBJ);
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuBgLeftOut == 0);
+        obj[2] = (u16)(1 << 10);        /* in front of it: fine */
+        memcpy(NitroPort_Oam, obj, sizeof(obj));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuBgLeftOut == 1 << 2);
+        obj[0] = (u16)(1 << 10);        /* in front of it, semi-transparent: drawn as before */
+        memcpy(NitroPort_Oam, obj, sizeof(obj));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuBgLeftOut == 0);
+        MI_CpuClearFast(NitroPort_Oam, 0x800);
+    }
+    /* blended with something else too, or behind the 3D: drawn */
+    G2_SetBlendAlpha(GX_BLEND_PLANEMASK_BG2 | GX_BLEND_PLANEMASK_BG1, GX_BLEND_PLANEMASK_BG0, 6, 10);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuBgLeftOut == 0);
+    G2_SetBlendAlpha(GX_BLEND_PLANEMASK_BG2, GX_BLEND_PLANEMASK_BG0, 6, 10);
+    G2_SetBG2Priority(3);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuBgLeftOut == 0);
+}
+
 static void SolidTile4(u8 *tile, int index)
 {
     memset(tile, index | (index << 4), 32);
@@ -3462,6 +3570,7 @@ int main(int argc, char **argv)
     test_wide_art_sliding();
     test_wide_window_edges();
     test_wide_map_past_edges();
+    test_gpu_bg();
     test_wide_framed_windows();
     test_wide_splits();
     test_wide_parts();

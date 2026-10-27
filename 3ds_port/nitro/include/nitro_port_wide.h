@@ -209,6 +209,18 @@ int NitroPort_WideParts(int engine, NitroWidePart *out);
 void NitroPort_SetWideScreen(int extra);
 int NitroPort_WideScreenExtra(void);
 
+/* (the game: patches/pokeplatinum/0047, the field's weather) A BG of
+ * engine A whose map is a pattern that repeats (the field's weather: the
+ * clouds' shadows, fog, sand), on or off (off again when the weather
+ * goes). Such a BG goes on beside the DS's screen as its map does
+ * (NitroRender2DSplit.clip off), never its edge's colours drawn on (which
+ * stretched it); and the remaster's compositor may draw it itself,
+ * scrolled on the GPU (NitroRender2DSplit.gpuBgs). */
+void NitroPort_RepeatingBg(int bg, int on);
+/* Those BGs (a bit each), while they count: in the field only (overlay5
+ * loaded, not the battle's, no screen laid out in parts); 0 otherwise. */
+int NitroPort_RepeatingBgs(void);
+
 /* The layout of an engine's picture on the wider upper screen, for this
  * moment of the game (NitroRender2DSplit's canvas: width, origin, clip,
  * anchorWindows; declared in nitro_port_render2d.h). */

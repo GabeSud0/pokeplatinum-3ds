@@ -69,6 +69,18 @@ typedef struct NitroGx3dScene {
      * have changed them for its next scene). */
     uint32_t disp3dcnt;
     uint8_t regs3d[NITRO_GX3D_REGS_SIZE];
+    /* And engine A's BG scrolls then (BG0-3's HOFS and VOFS, 0x4000010-
+     * 0x400001F, as words of 9 bits): what a BG the compositor draws itself
+     * is scrolled by in the frame with this 3D (NitroRender2DSplit.gpuBgs:
+     * the field's weather). An in-between scene's: halfway, the shorter way
+     * round the map, from the scene before's. (The game sets its scrolls
+     * in the V-blank after the SWAP: these are a frame behind the 2D the
+     * DS shows the scene with; the compositor has those, by stamp, and
+     * these only when it hasn't.) */
+    uint16_t bg_ofs[8];
+    /* The stamp of the scene before an in-between scene's (its own stamp
+     * is the newer scene's); a scene's own: its stamp. */
+    uint32_t stamp_before;
     NitroGx3dTriangle triangles[NITRO_GX3D_MAX_TRIANGLES];
     /* With the sun shadows on (NitroPort_SunShadows), the opaque triangles
      * that aren't drawn but can still cast a shadow into the view: those

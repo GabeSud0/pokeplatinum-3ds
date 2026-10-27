@@ -121,7 +121,31 @@ typedef struct LayerSet {
     int writing, held;    /* (held: by frames being built, a count) */
     u32 flightSerial;     /* the last frame drawn with it (busy until sGpuDone reaches it) */
     NitroPublishTarget pub;   /* what its textures hold (publishing only what changed) */
+    /* (the upper screen's) A BG the compositor draws itself (the field's
+     * weather: ComposeLayers.gpuBg): its whole map, 2x2 texels a pixel
+     * (512 x 512 RGBA5551, tiled), and its key (bgValid: written). */
+    void *bgTex;
+    uint64_t bgKey;
+    int bgValid;
 } LayerSet;
+
+/* BG pictures: 2x2 texels a pixel of a 256 x 256 map (and a row of tiles
+ * more, unused, that NitroPort_Double2xTiled16 writes the edge into). */
+#define BG_TEX_W 512
+#define BG_TEX_BYTES (BG_TEX_W * BG_TEX_W * 2)
+#define BG_TEX_ALLOC (BG_TEX_BYTES + BG_TEX_W * 8 * 2)
+static int sBgsAvailable;   /* (the upper screen's sets have their bgTex) */
+static C3D_Tex sBgTex;
+/* Engine A's BG scrolls by frame (NitroPort_ComposeNoteBgOffsets): the
+ * last BG_OFS_KEPT frames the game handed over. */
+#define BG_OFS_KEPT 16
+static struct {
+    uint32_t stamp;
+    uint16_t ofs[8];
+    int valid;
+} sBgOfs[BG_OFS_KEPT];
+static unsigned sBgOfsNext;
+static LightLock sBgOfsLock;   /* (LightLock_Init: the display's setting up) */
 
 /* A drawn frame in an LCD framebuffer, waiting for its V-blank. */
 typedef struct Pending {
@@ -618,8 +642,11 @@ static void free_sets(Screen *scr)
     for (i = 0; i < SETS; i++) {
         if (scr->set[i].under) linearFree(scr->set[i].under);
         if (scr->set[i].over) linearFree(scr->set[i].over);
+        if (scr->set[i].bgTex) linearFree(scr->set[i].bgTex);
         scr->set[i].under = NULL;
         scr->set[i].over = NULL;
+        scr->set[i].bgTex = NULL;
+        scr->set[i].bgValid = 0;
     }
 }
 
@@ -644,6 +671,7 @@ static void free_all(void)
         }
         free_sets(&sScreens[s]);
     }
+    sBgsAvailable = 0;
     NitroPort_LowerMenuSetAvailable(0);
     for (i = 0; i < 2; i++) {
         if (sMenuTexData[i]) {
@@ -764,6 +792,8 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
                        config->sunAzimuth);
     memset(sScreens, 0, sizeof(sScreens));
     LightLock_Init(&sSetLock);
+    LightLock_Init(&sBgOfsLock);
+    memset(sBgOfs, 0, sizeof(sBgOfs));
     LightLock_Init(&sPresentLock);
     sHeld = 0;
     for (c = 0; c < 32768; c++) {
@@ -929,6 +959,25 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
             }
         }
     }
+    /* (last, as it can do without: the field's weather's BG drawn by the
+     * GPU, NitroPort_ComposeDrawsBgs) */
+    sBgsAvailable = 1;
+    for (i = 0; i < SETS && sBgsAvailable; i++) {
+        sScreens[0].set[i].bgTex = linearAlloc(BG_TEX_ALLOC);
+        sScreens[0].set[i].bgValid = 0;
+        if (!sScreens[0].set[i].bgTex) {
+            sBgsAvailable = 0;
+        }
+    }
+    if (!sBgsAvailable) {
+        for (i = 0; i < SETS; i++) {
+            if (sScreens[0].set[i].bgTex) {
+                linearFree(sScreens[0].set[i].bgTex);
+                sScreens[0].set[i].bgTex = NULL;
+            }
+        }
+        NitroPort_Log("[compose] not enough memory for the weather's BG on the GPU: drawn with the 2D");
+    }
     NitroPort_LowerMenuSetClock(NitroPort_ComposeVBlanks);   /* (the panel's fades) */
     NitroPort_LowerMenuSetAvailable(sMenuTexData[0] != NULL);
     sGxRecording = 0;
@@ -979,6 +1028,57 @@ void NitroPort_ComposeExit(void)
 ComposeLayers *NitroPort_ComposeLayersOf(int engine)
 {
     return &sWork[engine ? 1 : 0];
+}
+
+int NitroPort_ComposeDrawsBgs(void)
+{
+    return sReady && sBgsAvailable;
+}
+
+
+void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, const uint16_t ofs[8])
+{
+    LightLock_Lock(&sBgOfsLock);
+    sBgOfs[sBgOfsNext].stamp = stamp;
+    memcpy(sBgOfs[sBgOfsNext].ofs, ofs, sizeof(sBgOfs[0].ofs));
+    sBgOfs[sBgOfsNext].valid = 1;
+    sBgOfsNext = (sBgOfsNext + 1u) % BG_OFS_KEPT;
+    LightLock_Unlock(&sBgOfsLock);
+}
+
+/* The scrolls the DS shows a scene of this stamp with: the first frame
+ * handed over after it (its V-blank set them). Whether they're known. */
+static int bg_offsets_after(uint32_t stamp, uint16_t out[8])
+{
+    int i, found = -1;
+    uint32_t best = 0;
+
+    LightLock_Lock(&sBgOfsLock);
+    for (i = 0; i < BG_OFS_KEPT; i++) {
+        uint32_t d = sBgOfs[i].stamp - stamp;
+
+        if (sBgOfs[i].valid && d >= 1u && d <= 4u && (found < 0 || d < best)) {
+            found = i;
+            best = d;
+        }
+    }
+    if (found >= 0) {
+        memcpy(out, sBgOfs[found].ofs, sizeof(sBgOfs[0].ofs));
+    }
+    LightLock_Unlock(&sBgOfsLock);
+    return found >= 0;
+}
+
+/* Halfway from a to b (9-bit scrolls), the shorter way round a 512 map; a
+ * jump of more than a quarter of it: b. */
+static int bg_offset_halfway(int a, int b)
+{
+    int d = (b - a) & 0x1FF;
+
+    if (d >= 256) {
+        d -= 512;
+    }
+    return d > 128 || d < -128 ? b : (a + d / 2) & 0x1FF;
 }
 
 uint32_t NitroPort_ComposePublished(int engine)
@@ -1169,6 +1269,7 @@ int NitroPort_ComposePublish(int engine, int screen)
     set->info.under = NULL;
     set->info.over = NULL;
     set->info.overAlpha = NULL;
+    set->info.gpuBgPicture = NULL;   /* (the drawer's: the set has its own, bgTex) */
     set->overEmpty = 1;
     set->info.height = h;
     set->underColor = l->displayOff ? -1 : uniform_color(l->under, w * h);
@@ -1183,6 +1284,16 @@ int NitroPort_ComposePublish(int engine, int screen)
                                                    sToRgb565, sAlpha16, flush_texture);
     } else if (!l->displayOff) {
         publish_whole(e, l, scr, set, w, h);
+    }
+    /* A BG drawn here (the field's weather): its picture, when the set
+     * doesn't hold it yet (made by the drawer as it read the game's state:
+     * l->gpuBgPicture). */
+    if (!l->displayOff && l->gpuBg >= 0 && set->bgTex && l->gpuBgPicture &&
+        (!set->bgValid || set->bgKey != l->gpuBgKey)) {
+        NitroPort_Double2xTiled16(l->gpuBgPicture, 256, 256, set->bgTex, BG_TEX_W);
+        GSPGPU_FlushDataCache(set->bgTex, BG_TEX_BYTES);
+        set->bgKey = l->gpuBgKey;
+        set->bgValid = 1;
     }
     LightLock_Lock(&sSetLock);
     set->writing = 0;
@@ -1236,6 +1347,16 @@ static void quad_combiner(int textured)
     C3D_TexEnvInit(env);
     C3D_TexEnvSrc(env, C3D_Both, textured ? GPU_TEXTURE0 : GPU_PRIMARY_COLOR, 0, 0);
     C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+}
+
+/* The combiner for a quad: the texture times the vertex colour. */
+static void quad_combiner_modulate(void)
+{
+    C3D_TexEnv *env = C3D_GetTexEnv(0);
+
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
+    C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
 }
 
 static u32 rgba_of(uint16_t c, u32 alpha)
@@ -2466,6 +2587,45 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
          * each run's, done above). */
         if (nruns == 1) {
             tint_3d(info, &rect3d);
+        }
+        /* 4b. A BG drawn here, in front of the 3D and behind the rest (the
+         * field's weather: ComposeLayers.gpuBg), from its picture, repeated
+         * and scrolled as the 3D scene had it, blended onto the 3D as the
+         * DS does: its colour x eva / 16 + the 3D's x evb / 16 where it isn't
+         * clear (the texture's colours are 0 there: what's under stays). */
+        if (info->gpuBg >= 0 && set->bgTex && set->bgValid && set->bgKey == info->gpuBgKey) {
+            int hofs = scene->bg_ofs[info->gpuBg * 2], vofs = scene->bg_ofs[info->gpuBg * 2 + 1];
+            uint16_t now[8], before[8];
+
+            /* (the scrolls of the frame the DS shows the scene in; an
+             * in-between scene's halfway from the scene before's; the
+             * scene's own, a frame behind, when they aren't known) */
+            if (bg_offsets_after(scene->stamp, now)) {
+                hofs = now[info->gpuBg * 2];
+                vofs = now[info->gpuBg * 2 + 1];
+                if (scene->stamp_before != scene->stamp && bg_offsets_after(scene->stamp_before, before)) {
+                    hofs = bg_offset_halfway(before[info->gpuBg * 2], hofs);
+                    vofs = bg_offset_halfway(before[info->gpuBg * 2 + 1], vofs);
+                }
+            }
+            int origin = (canvasW - DS_W) / 2;
+            float bu0 = (float)(hofs - origin) / 256.0f, bu1 = bu0 + (float)canvasW / 256.0f;
+            float bvTop = 1.0f - (float)vofs / 256.0f, bvBottom = bvTop - (float)DS_H / 256.0f;
+            u32 a = (u32)(info->gpuBgEva * 255 / 16), b = (u32)((16 - info->gpuBgEvb) * 255 / 16);
+
+            if (sConfig.flipV) {
+                float t = bvTop;
+
+                bvTop = bvBottom;
+                bvBottom = t;
+            }
+            make_texture(&sBgTex, set->bgTex, GPU_RGBA5551, BG_TEX_W, BG_TEX_W, linear, GPU_REPEAT);
+            C3D_TexBind(0, &sBgTex);
+            quad_combiner_modulate();
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
+                           GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+            quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, bu0, bvTop, bu1, bvBottom, (a << 24) | (a << 16) | (a << 8) | b);
+            NitroPort_PicaProfileMark("the weather's BG");
         }
         /* 5. The layers in front, with their alpha (multiplied in). */
         if (!set->overEmpty && set->overTop < set->overBottom) {

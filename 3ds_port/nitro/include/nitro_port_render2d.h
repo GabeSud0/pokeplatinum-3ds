@@ -39,6 +39,14 @@ typedef struct NitroRender2DSplit {
     int tint3d;
     int eva, evb, evy;
     int blend3d;       /* BLDCNT's second targets (bits 8-13): what 3D pixels of alpha 1-30 blend with */
+    /* (asked for with gpuBgs, below) The BG left out of the picture for the
+     * compositor to draw itself (a bit, or 0 none), and what it takes to:
+     * BLDALPHA's eva and evb (0-16) blending it onto the 3D, its scroll,
+     * and its picture's key (its map, tiles and colours: drawn again,
+     * NitroPort_Render2DBgPicture, when it changes). */
+    int gpuBgLeftOut;
+    int gpuBgEva, gpuBgEvb, gpuBgHofs, gpuBgVofs;
+    uint64_t gpuBgKey;
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
     int backdrop;      /* the backdrop colour (RGB555): what shows where no layer does */
     uint16_t *over;    /* width x 192 */
@@ -73,6 +81,15 @@ typedef struct NitroRender2DSplit {
      * past 191 are line 191's. under is width x height then. The caller's
      * choice, kept by the call. */
     int height;
+    /* (the remaster's compositor, which can draw a repeating BG itself
+     * from a picture of its whole map, scrolled on the GPU: the field's
+     * weather, NitroPort_RepeatingBgs) The BGs it may draw so (a bit each;
+     * 0 none). One that's in front of the 3D with nothing between and
+     * alpha-blended onto it alone is left out of the picture
+     * (gpuBgLeftOut, above), and its scroll doesn't count as a change
+     * (NitroPort_Render2DSplitIfChanged): the picture isn't drawn again
+     * as it scrolls. The caller's choice, kept by the call. */
+    int gpuBgs;
 } NitroRender2DSplit;
 #define NITRO_RENDER2D_MAX_H 256
 /* (the game's thread, when it hands a frame to a drawing thread) Take the
@@ -94,6 +111,15 @@ int NitroPort_Render2DSplitIfChanged(int engine, uint16_t *under, NitroRender2DS
  * a screen not drawn (the lower menu's panel showing the map) whose
  * brightness still counts (the menu fades with it). */
 unsigned NitroPort_Render2DMasterBright(int engine, int snapshot);
+
+/* A BG of engine A's whole map (256 x 256 pixels: a text BG of that size;
+ * 0 otherwise, nothing written) into out, a line of 256 after another, as
+ * RGBA5551 (red in the top bits; 0 where the BG is clear): what the
+ * compositor draws a BG left out of the picture from (gpuBgLeftOut). From
+ * the state taken (snapshot: 1) or the live one; the VRAM as it is. */
+int NitroPort_Render2DBgPicture(int bg, int snapshot, uint16_t *out);
+/* Engine A's BG scrolls now (BG0-3's HOFS and VOFS, 9 bits each). */
+void NitroPort_Render2DBgOffsets(uint16_t out[8]);
 
 /* One BG of an engine alone (for capturing it: nitro_port_wideart.h), on
  * the canvas layout gives (width, origin, clip, anchorWindows; NULL: the

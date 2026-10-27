@@ -459,9 +459,9 @@ static void RemasterRender(uint16_t *out)
 {
     static uint16_t under[320 * 192], over[320 * 192];
     static uint8_t overAlpha[320 * 192], alpha3d[256 * 192];
-    static uint16_t image3d[256 * 192];
+    static uint16_t image3d[256 * 192], bgPicture[256 * 256];
     int aOnTop = NitroPort_EngineAOnTop() ? 1 : 0;
-    int screen;
+    int screen, gpuBg;
 
     memset(out, 0, 320 * 384 * sizeof(out[0]));
     for (screen = 0; screen < 2; screen++) {
@@ -476,9 +476,16 @@ static void RemasterRender(uint16_t *out)
         split.snapshot = sStateTaken;
         if (screen == 0 && !NitroPort_LowerMenuPanelShowsUpper()) {
             NitroPort_WideLayout(engine, &split);
+            /* (the field's weather's BG drawn by the compositor, as the
+             * 3DS has it: below) */
+            split.gpuBgs = NitroPort_RepeatingBgs();
         }
         NitroPort_Render2DSplit(engine, under, &split);
         width = split.width > 256 ? split.width : 256;
+        gpuBg = split.gpuBgLeftOut ? __builtin_ctz((unsigned)split.gpuBgLeftOut) : -1;
+        if (gpuBg >= 0 && !NitroPort_Render2DBgPicture(gpuBg, split.snapshot, bgPicture)) {
+            gpuBg = -1;
+        }
         left = (320 - width) / 2;
         if (split.has3d) {
             /* the newest 3D image, as the 2D renderer would take it */
@@ -518,6 +525,24 @@ static void RemasterRender(uint16_t *out)
                             int pc = (p >> k) & 31, uc = (c >> k) & 31;
 
                             m |= (uint16_t)(((pc * a + uc * (31 - a)) / 31) << k);
+                        }
+                        c = m;
+                    }
+                }
+                if (gpuBg >= 0) {
+                    /* (the 3DS's compositor: its picture, repeated and
+                     * scrolled, blended onto what's under it: RGBA5551) */
+                    uint16_t b = bgPicture[((y + split.gpuBgVofs) & 255) * 256 +
+                                           ((x - split.origin + split.gpuBgHofs) & 255)];
+
+                    if (b & 1) {
+                        uint16_t m = 0;
+                        int k;
+
+                        for (k = 0; k < 15; k += 5) {
+                            int bc = (b >> (11 - k)) & 31, v = (bc * split.gpuBgEva + ((c >> k) & 31) * split.gpuBgEvb) / 16;
+
+                            m |= (uint16_t)((v > 31 ? 31 : v) << k);
                         }
                         c = m;
                     }
