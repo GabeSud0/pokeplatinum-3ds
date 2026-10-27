@@ -207,7 +207,8 @@ En Azahar, van en la carpeta de su tarjeta SD emulada.
 - **Homebrew Launcher:** abre `pokeplatinum.3dsx`, o ábrelo en Azahar. Abierto
   desde el menú Rosalina, el Homebrew Launcher les da menos memoria a los
   juegos, y en una New 3DS el juego puede mostrar solo las dos pantallas de la
-  DS.
+  DS; instalado en el menú HOME como una aplicación propia (un `.cia`), se la
+  da toda.
 - **Actualizar:** crea la nueva versión con el creador web y copia sus archivos
   encima de los anteriores. Cuando una versión lee sus datos igual que la
   anterior, su página lo dice: entonces basta con copiar el nuevo

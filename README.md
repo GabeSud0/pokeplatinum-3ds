@@ -199,7 +199,8 @@ In Azahar, these go in its emulated SD card folder.
   install the new `.cia` the same way; your save stays.
 - **Homebrew Launcher:** run `pokeplatinum.3dsx`, or open it in Azahar. Opened
   from the Rosalina menu, the Homebrew Launcher gives games less memory, and on
-  a New 3DS the game may then show only the DS's two screens.
+  a New 3DS the game may then show only the DS's two screens; installed on the
+  HOME Menu as an app of its own (a `.cia`), it gives them all of it.
 - **Updating:** build the new version with the web builder and copy its files
   over the old ones. When a version reads its data the same way, its page
   says so: then copying the new `pokeplatinum.3dsx` is enough.
