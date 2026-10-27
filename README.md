@@ -91,9 +91,10 @@ On a New 3DS:
 
 ### What you need
 
-- A **3DS family console** with custom firmware (Luma3DS) and the Homebrew
-  Launcher (and **FBI** for the HOME Menu version). A New 3DS, New 3DS XL or
-  New 2DS XL is needed for the remastered display. Setup guide:
+- A **3DS family console** with custom firmware (an up-to-date **Luma3DS**: an
+  old one can give the game too little memory for the remastered display) and
+  the Homebrew Launcher (and **FBI** for the HOME Menu version). A New 3DS, New
+  3DS XL or New 2DS XL is needed for the remastered display. Setup guide:
   <https://3ds.hacks.guide>
 - Your own dump of **Pokémon Platinum (USA)**, Rev 0 or Rev 1.
 - A computer with an up-to-date browser. Only to build it yourself:

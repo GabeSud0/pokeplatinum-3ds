@@ -45,7 +45,7 @@ export const STRINGS = {
     "bottom.download": "Download the ZIP",
 
     "need.title": "What you need",
-    "need.console": "A 3DS with custom firmware (Luma3DS) and the Homebrew Launcher, and FBI for the HOME Menu version. A New 3DS, New 3DS XL or New 2DS XL gets the full-width screens; an Old 3DS shows the DS's two screens in the middle. Setup guide: <a href=\"https://3ds.hacks.guide\">3ds.hacks.guide</a>.",
+    "need.console": "A 3DS with custom firmware (an up-to-date Luma3DS: an old one can give the game too little memory for the full-width screens) and the Homebrew Launcher, and FBI for the HOME Menu version. A New 3DS, New 3DS XL or New 2DS XL gets the full-width screens; an Old 3DS shows the DS's two screens in the middle. Setup guide: <a href=\"https://3ds.hacks.guide\">3ds.hacks.guide</a>.",
     "need.rom": "Your own Pokémon Platinum (USA) cartridge, dumped as a .nds file. GodMode9 on your 3DS can dump it: <a href=\"https://3ds.hacks.guide/dumping-titles-and-game-cartridges\">how to dump a cartridge</a>.",
     "need.computer": "A computer with an up-to-date browser and a way to copy files to the SD card.",
 
@@ -133,7 +133,7 @@ export const STRINGS = {
     "bottom.download": "Descargar el ZIP",
 
     "need.title": "Qué necesitas",
-    "need.console": "Una 3DS con firmware personalizado (Luma3DS) y el Homebrew Launcher, y FBI para la versión del menú HOME. Una New 3DS, New 3DS XL o New 2DS XL usa las pantallas completas; una 3DS anterior muestra las dos pantallas de la DS en el centro. Guía de instalación: <a href=\"https://3ds.hacks.guide\">3ds.hacks.guide</a>.",
+    "need.console": "Una 3DS con firmware personalizado (un Luma3DS actualizado: uno viejo puede darle al juego muy poca memoria para las pantallas completas) y el Homebrew Launcher, y FBI para la versión del menú HOME. Una New 3DS, New 3DS XL o New 2DS XL usa las pantallas completas; una 3DS anterior muestra las dos pantallas de la DS en el centro. Guía de instalación: <a href=\"https://3ds.hacks.guide\">3ds.hacks.guide</a>.",
     "need.rom": "Tu propio cartucho de Pokémon Platinum (EE. UU.), volcado como archivo .nds. GodMode9 en tu 3DS puede volcarlo: <a href=\"https://3ds.hacks.guide/dumping-titles-and-game-cartridges\">cómo volcar un cartucho</a>.",
     "need.computer": "Una computadora con un navegador actualizado y una forma de copiar archivos a la tarjeta SD.",
 

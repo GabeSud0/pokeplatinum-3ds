@@ -94,8 +94,10 @@ En una New 3DS:
 
 ### Qué necesitas
 
-- Una **consola de la familia 3DS** con custom firmware (Luma3DS) y el Homebrew
-  Launcher (y **FBI** para la versión del menú HOME). Para la pantalla
+- Una **consola de la familia 3DS** con custom firmware (un **Luma3DS**
+  actualizado: uno viejo puede darle al juego muy poca memoria para la pantalla
+  remasterizada) y el Homebrew Launcher (y **FBI** para la versión del menú
+  HOME). Para la pantalla
   remasterizada hace falta una New 3DS, New 3DS XL o New 2DS XL. Guía para
   prepararla: <https://3ds.hacks.guide/es_ES/>
 - Tu propio volcado de **Pokémon Platinum (USA)**, Rev 0 o Rev 1.
