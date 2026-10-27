@@ -57,8 +57,8 @@ class Payload(unittest.TestCase):
         for name, entry in m["files"].items():
             data = self.zip.read(name)
             self.assertEqual((hashlib.sha256(data).hexdigest(), len(data)), (entry["sha256"], entry["size"]))
-        for path in (m["cia"]["elf"], m["cia"]["icon"], m["cia"]["rsf"], m["cia"]["chime"],
-                     "program/pokeplatinum.3dsx", "python/builder/web.py"):
+        for path in (m["cia"]["elf"], m["cia"]["icon"], m["cia"]["rsf"], m["cia"]["chime"], m["cia"]["bannertool"],
+                     m["cia"]["makerom"], "licenses/cia-tools.md", "program/pokeplatinum.3dsx", "python/builder/web.py"):
             self.assertIn(path, names)
 
     def test_no_game_files_or_pycgfx(self):

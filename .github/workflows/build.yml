@@ -121,6 +121,14 @@ jobs:
           cmp "$OUT/pokeplatinum.elf.cxi" build/web/pokeplatinum.elf.cxi
           rm -f "$OUT/pokeplatinum.elf.cxi" build/web/pokeplatinum.elf.cxi
 
+      # The web builder makes the .cia in the browser: bannertool and makerom
+      # compiled to WebAssembly (WASI), run by web/js/cia.mjs. Checked here
+      # against the native tools on this program: the same banners (the flat
+      # one and a made-up 3D scene) and the same title.
+      - name: The CIA tools for the browser make what the native ones make
+        shell: bash
+        run: bash tools/ci_annotate.sh "CIA tools for the browser" bash tools/ci_cia_wasm.sh
+
       # A release's files (tools/build_web_payload.py): the program, and the
       # web builder's payload (what makes the rest from the player's ROM, in
       # their browser). Made on every run, to test it; uploaded for the
@@ -132,13 +140,22 @@ jobs:
             refs/tags/v*) VERSION="${GITHUB_REF_NAME#v}" ;;
             *) VERSION="0.0.0-dev.${GITHUB_SHA::7}" ;;
           esac
-          python3 tools/banner3d/make_banner.py --fetch-pycgfx-only
           OUT=3ds_port/game/build/3ds
           python3 tools/build_web_payload.py --version "$VERSION" --commit "$GITHUB_SHA" \
               --program "$OUT/pokeplatinum.3dsx" --elf build/web/pokeplatinum.elf \
-              --smdh "$OUT/pokeplatinum.smdh" --pycgfx build/pycgfx --out dist/release
+              --smdh "$OUT/pokeplatinum.smdh" --cia-tools build/cia-tools-wasm \
+              --pycgfx build/pycgfx --out dist/release
           ls -l dist/release
           cat dist/release/SHA256SUMS.txt
+
+      # The website (web/), end to end in Chromium: this program, its .cia
+      # tools and pycgfx in a release that also accepts a made-up ROM (no
+      # game data here); the page builds the SD card's files, and the ZIP is
+      # checked (tools/test_web_builder.py). The made-up ROM has no title
+      # screen, so the .cia gets the flat banner.
+      - name: The web builder makes the SD card's files in a browser
+        shell: bash
+        run: bash tools/ci_annotate.sh "Web builder in a browser" bash tools/ci_web_builder.sh
 
       - name: Upload the release's files (version tags only)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -158,31 +175,54 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: write          # (to start the website's workflow, below)
     steps:
+      # (for the release's notes: docs/releases/<tag>.md, if written)
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: docs/releases
+
       - uses: actions/download-artifact@v4
         with:
           name: release
           path: dist/release
 
+      # The notes: docs/releases/<tag>.md if there is one (what's new, known
+      # issues: written in a PR before tagging; also shown on the website),
+      # else GitHub's list of the merged pull requests; then the files.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          cat > notes.md <<'EOF'
-          **Pokémon Platinum for the 3DS.** You need your own Pokémon Platinum (USA) cartridge dump: the game's data is never included here.
+          OWN="docs/releases/$GITHUB_REF_NAME.md"
+          GENERATE=""
+          if [ -f "$OWN" ]; then
+            { cat "$OWN"; echo; echo "---"; echo; } > notes.md
+          else
+            : > notes.md
+            GENERATE="--generate-notes"
+          fi
+          cat >> notes.md <<'EOF'
+          **Build it from your own cartridge at the web builder: <https://gabesud0.github.io/pokeplatinum-3ds/>.** You need your own Pokémon Platinum (USA) dump: the game's data is never included here.
 
           - `pokeplatinum.3dsx`: the program, for the Homebrew Launcher.
           - `PokePlatinum3DS-WebPayload.zip` and `web-manifest.json`: what the web builder uses to make your data pack (and the HOME Menu version) from your ROM, in your browser.
           - `SHA256SUMS.txt`: the files' checksums.
-
-          To make the data pack on your own computer instead, see `builder/README.md`.
           EOF
           PRERELEASE=""
           case "$GITHUB_REF_NAME" in *-*) PRERELEASE="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" dist/release/* --repo "$GITHUB_REPOSITORY" \
               --verify-tag --title "Pokémon Platinum 3DS $GITHUB_REF_NAME" \
-              --notes-file notes.md --generate-notes $PRERELEASE
+              --notes-file notes.md $GENERATE $PRERELEASE
+
+      # The website with this release's files (pages.yml). A release made
+      # with this workflow's token doesn't start other workflows by itself;
+      # asking for a run does.
+      - name: Update the website
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main
 
   # The WideArt editor (tools/wideart: drawing the wide screen's bands by
   # hand) as a Windows program. It contains no game code or data: the
@@ -264,8 +304,8 @@ jobs:
         run: |
           set -o pipefail
           {
-            npm install --no-save --prefix build/pyodide "pyodide@$(python tools/build_web_payload.py --pyodide-version)" &&
-            node tools/pyodide_test.mjs build/pyodide/node_modules/pyodide \
+            bash tools/fetch_pyodide.sh build/pyodide-core &&
+            node tools/pyodide_test.mjs build/pyodide-core/pyodide \
                 builder.test_web builder.test_extract_rom builder.test_pack \
                 tools.test_banner3d tools.test_home_menu_art
           } 2>&1 | tee pyodide-tests.log || {

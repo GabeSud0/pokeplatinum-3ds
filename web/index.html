@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-i18n="page.title">Pokémon Platinum 3DS: build it from your cartridge</title>
+  <meta name="description" content="Build the 3DS port of Pokémon Platinum from your own cartridge, in your browser. Your ROM never leaves your computer.">
+  <meta name="theme-color" content="#140e22">
+  <meta property="og:title" content="Pokémon Platinum 3DS">
+  <meta property="og:description" content="Build the 3DS port of Pokémon Platinum from your own cartridge, in your browser.">
+  <meta property="og:image" content="img/logo.png">
+  <link rel="icon" href="img/icon.png">
+  <link rel="stylesheet" href="css/site.css">
+  <script type="module" src="js/app.mjs"></script>
+</head>
+<body>
+  <header class="bar">
+    <a class="bar-link" href="https://github.com/GabeSud0/pokeplatinum-3ds">GitHub</a>
+    <button class="bar-link" id="lang" type="button" data-i18n="lang.other">Español</button>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1><img class="logo" src="img/logo.png" alt="Pokémon Platinum 3DS" width="1000" height="330"></h1>
+      <p class="tagline" data-i18n="hero.tagline">Build the 3DS port of Pokémon Platinum from your own cartridge, right in this page.</p>
+      <p class="release" id="release" hidden></p>
+    </section>
+
+    <!-- The builder, as the console's two screens: what's happening above,
+         what you do below. -->
+    <section class="console" id="builder" aria-live="polite">
+      <div class="screen top" id="top" data-state="idle">
+        <div class="top-inner">
+          <p class="top-title" id="top-title" data-i18n="top.idle.title">Choose your Pokémon Platinum ROM to begin.</p>
+          <p class="top-detail" id="top-detail" data-i18n="top.idle.detail">A clean dump of the USA cartridge, as a .nds file.</p>
+          <div class="meter" id="meter" hidden>
+            <div class="meter-fill" id="meter-fill"></div>
+          </div>
+          <p class="top-stage" id="top-stage"></p>
+        </div>
+      </div>
+      <div class="hinge" aria-hidden="true"></div>
+      <div class="screen bottom" id="bottom">
+        <label class="drop" id="drop">
+          <input type="file" id="rom" accept=".nds,.NDS,application/octet-stream" disabled>
+          <span class="button" id="choose" data-i18n="bottom.choose">Choose ROM</span>
+          <span class="drop-hint" id="drop-hint" data-i18n="bottom.drop">or drop the .nds file here</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="want-cia" checked>
+          <span data-i18n="bottom.cia">Also make the HOME Menu version (.cia)</span>
+        </label>
+        <button class="button primary" id="build" type="button" disabled data-i18n="bottom.build">Build</button>
+        <a class="button primary" id="download" hidden data-i18n="bottom.download">Download the ZIP</a>
+      </div>
+      <p class="privacy" data-i18n="hero.privacy">Your ROM is read by this page only. It never leaves your computer.</p>
+    </section>
+
+    <section class="prose">
+      <div id="news-section" hidden>
+        <h2 data-i18n="news.title">What's new</h2>
+        <div id="news"></div>
+      </div>
+
+      <h2 data-i18n="need.title">What you need</h2>
+      <ul>
+        <li data-i18n-html="need.console"></li>
+        <li data-i18n-html="need.rom"></li>
+        <li data-i18n="need.computer"></li>
+      </ul>
+
+      <h2 data-i18n="install.title">Put it on your 3DS</h2>
+      <ol class="steps">
+        <li data-i18n="install.1"></li>
+        <li data-i18n-html="install.2"></li>
+        <li data-i18n="install.3"></li>
+        <li data-i18n-html="install.4"></li>
+      </ol>
+      <p data-i18n-html="install.save"></p>
+      <p data-i18n-html="install.azahar"></p>
+
+      <div id="update-section" hidden>
+        <h2 data-i18n="update.title">Updating</h2>
+        <p data-i18n="update.intro"></p>
+        <p class="update-pick">
+          <label for="update-from" data-i18n="update.pick">My version</label>
+          <select id="update-from"></select>
+        </p>
+        <p class="update-answer" id="update-answer"></p>
+        <p><a class="button" id="update-download" hidden data-i18n="update.download">Download pokeplatinum.3dsx</a></p>
+      </div>
+
+      <h2 data-i18n="faq.title">Questions</h2>
+      <details><summary data-i18n="faq.upload.q"></summary><p data-i18n="faq.upload.a"></p></details>
+      <details><summary data-i18n="faq.rejected.q"></summary><p data-i18n="faq.rejected.a"></p></details>
+      <details><summary data-i18n="faq.cia.q"></summary><p data-i18n="faq.cia.a"></p></details>
+      <details><summary data-i18n="faq.share.q"></summary><p data-i18n="faq.share.a"></p></details>
+      <details><summary data-i18n="faq.help.q"></summary><p data-i18n-html="faq.help.a"></p></details>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>
+      <a href="https://github.com/GabeSud0/pokeplatinum-3ds" data-i18n="foot.source">Source code</a>
+      <a href="https://discord.gg/YjyA5ygpC">Discord</a>
+    </p>
+    <p data-i18n="foot.license"></p>
+    <p class="legal" data-i18n="foot.legal"></p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,379 @@
+/* Pokémon Platinum 3DS's web builder. The palette is the logo's: the
+   Distortion World's violet dark, platinum, Giratina's red, gold. The builder
+   is drawn as the console's two screens. */
+
+@font-face {
+  font-family: "Chakra Petch";
+  src: url("../fonts/ChakraPetch-SemiBold.woff") format("woff");
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Chakra Petch";
+  src: url("../fonts/ChakraPetch-Bold.woff") format("woff");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible";
+  src: url("../fonts/AtkinsonHyperlegible-Regular.woff") format("woff");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible";
+  src: url("../fonts/AtkinsonHyperlegible-Bold.woff") format("woff");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible";
+  src: url("../fonts/AtkinsonHyperlegible-Italic.woff") format("woff");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  --void: #140e22;
+  --shell: #241a3a;
+  --shell-edge: #3a2d5a;
+  --lcd: #0e0a18;
+  --platinum: #e4e7ef;
+  --platinum-dim: #aab0c4;
+  --red: #e3263f;
+  --red-deep: #b5162c;
+  --gold: #f2c14e;
+  --violet: #9466ff;
+
+  --display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
+  --body: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --step--1: 0.875rem;
+  --step-0: 1.0625rem;
+  --step-1: 1.3125rem;
+  --step-2: 1.75rem;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html { background: var(--void); }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--platinum);
+  font-family: var(--body);
+  font-size: var(--step-0);
+  line-height: 1.55;
+  background:
+    radial-gradient(ellipse 70% 42% at 50% 12%, rgba(148, 102, 255, 0.28), transparent 70%),
+    var(--void);
+  background-repeat: no-repeat;
+}
+
+a { color: var(--platinum); text-decoration-color: var(--violet); text-underline-offset: 0.18em; }
+a:hover { color: #fff; text-decoration-color: var(--red); }
+:focus-visible { outline: 3px solid var(--violet); outline-offset: 3px; border-radius: 4px; }
+
+code {
+  font-size: 0.92em;
+  background: rgba(148, 102, 255, 0.14);
+  padding: 0.08em 0.35em;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+
+/* The top bar: the source and the other language. */
+.bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1.25rem;
+  padding: 1rem 1rem 0;
+  max-width: 68rem;
+  margin: 0 auto;
+}
+.bar-link {
+  font: 600 var(--step--1) var(--display);
+  letter-spacing: 0.02em;
+  color: var(--platinum-dim);
+  background: none;
+  border: 0;
+  padding: 0.25rem 0;
+  cursor: pointer;
+  text-decoration: none;
+}
+.bar-link:hover { color: var(--platinum); }
+
+main { padding: 0 1rem; }
+
+.hero {
+  max-width: 44rem;
+  margin: 0 auto;
+  text-align: center;
+  padding: 0.75rem 0 1.5rem;
+}
+.hero h1 { margin: 0; }
+.logo { width: min(100%, 28rem); height: auto; display: block; margin: 0 auto; }
+.tagline {
+  font: 600 var(--step-1) / 1.35 var(--display);
+  margin: 1.25rem auto 0;
+  max-width: 38ch;
+  text-wrap: balance;
+}
+.release { margin: 0.5rem 0 0; color: var(--platinum-dim); font-size: var(--step--1); }
+
+/* The builder: the 3DS's two screens. The upper one 5:3 (400x240), the
+   lower one 4:3 (320x240) and 80% as wide, as on the console. */
+.console {
+  --width: min(100%, 32rem);
+  width: var(--width);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.screen {
+  background: var(--lcd);
+  border: 14px solid var(--shell);
+  box-shadow: 0 0 0 1px var(--shell-edge), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  width: 100%;
+}
+.top {
+  aspect-ratio: 5 / 3;
+  border-radius: 18px 18px 6px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+.top::before {      /* the rift's glow on the upper screen, brighter as the build goes */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 120%, rgba(148, 102, 255, var(--glow, 0.18)), transparent 65%);
+  pointer-events: none;
+  transition: background 0.4s;
+}
+.top[data-state="building"] { --glow: 0.38; }
+.top[data-state="done"] { --glow: 0.3; }
+.top[data-state="done"]::before { background: radial-gradient(circle at 50% 120%, rgba(242, 193, 78, 0.3), transparent 65%); }
+.top[data-state="bad"]::before,
+.top[data-state="error"]::before { background: radial-gradient(circle at 50% 120%, rgba(227, 38, 63, 0.3), transparent 65%); }
+
+.top-inner {
+  position: relative;
+  width: 100%;
+  padding: 1.25rem 1.5rem;
+  text-align: center;
+}
+.top-title {
+  font: 700 var(--step-2) / 1.15 var(--display);
+  margin: 0;
+  text-wrap: balance;
+}
+.top[data-state="idle"] .top-title,
+.top[data-state="checking"] .top-title { font-size: var(--step-1); font-weight: 600; }
+.top-detail {
+  margin: 0.6rem auto 0;
+  max-width: 40ch;
+  color: var(--platinum-dim);
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+.top-detail:empty { display: none; }
+.top-stage { margin: 0.6rem 0 0; font-size: var(--step--1); color: var(--platinum-dim); min-height: 1.5em; }
+.top-stage:empty { display: none; }
+
+.meter {
+  margin: 1rem auto 0;
+  width: 80%;
+  height: 10px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.meter-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--violet), #c9b2ff);
+  box-shadow: 0 0 12px rgba(148, 102, 255, 0.8);
+  border-radius: inherit;
+  transition: width 0.25s ease-out;
+}
+.top[data-state="done"] .meter-fill { background: var(--gold); box-shadow: 0 0 12px rgba(242, 193, 78, 0.7); }
+
+.hinge {
+  width: 86%;
+  height: 12px;
+  background: linear-gradient(var(--shell-edge), var(--shell));
+  border-radius: 0 0 6px 6px;
+}
+
+.bottom {
+  width: 80%;
+  aspect-ratio: 4 / 3;
+  border-radius: 6px 6px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  padding: 1rem;
+}
+
+.drop {
+  width: 100%;
+  border: 2px dashed rgba(170, 176, 196, 0.35);
+  border-radius: 10px;
+  padding: 1rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+.drop:hover, .drop.over { border-color: var(--violet); background: rgba(148, 102, 255, 0.08); }
+.drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.drop:focus-within { outline: 3px solid var(--violet); outline-offset: 3px; }
+.drop-hint { font-size: var(--step--1); color: var(--platinum-dim); overflow-wrap: anywhere; }
+
+.check {
+  display: flex;
+  gap: 0.55rem;
+  align-items: flex-start;
+  font-size: var(--step--1);
+  color: var(--platinum-dim);
+  cursor: pointer;
+  width: 100%;
+}
+.check input { accent-color: var(--red); width: 1.1rem; height: 1.1rem; margin: 0.15rem 0 0; flex: none; }
+
+.button {
+  display: inline-block;
+  font: 700 var(--step-0) var(--display);
+  letter-spacing: 0.02em;
+  color: var(--platinum);
+  background: var(--shell);
+  border: 1px solid var(--shell-edge);
+  border-radius: 999px;
+  padding: 0.55rem 1.4rem;
+  cursor: pointer;
+  text-decoration: none;
+  text-align: center;
+}
+.button:hover { background: var(--shell-edge); color: #fff; }
+.button.primary {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+  min-width: 11rem;
+  box-shadow: 0 4px 0 var(--red-deep);
+}
+.button.primary:hover { background: #f03650; }
+.button.primary:active { transform: translateY(2px); box-shadow: 0 2px 0 var(--red-deep); }
+.button:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; transform: none; }
+.button[hidden] { display: none; }
+
+.privacy {
+  margin: 1rem 0 0;
+  font-size: var(--step--1);
+  color: var(--platinum-dim);
+  text-align: center;
+  max-width: 34ch;
+}
+
+/* The guide below. */
+.prose {
+  max-width: 40rem;
+  margin: 3.5rem auto 0;
+  padding-bottom: 2rem;
+}
+.prose h2 {
+  font: 700 var(--step-2) / 1.2 var(--display);
+  margin: 2.75rem 0 0.75rem;
+}
+.prose ul, .prose ol { padding-left: 1.3rem; }
+.prose li { margin: 0.55rem 0; }
+.prose li::marker { color: var(--violet); font-family: var(--display); font-weight: 700; }
+.steps li { padding-left: 0.3rem; }
+
+.release-notes summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+  list-style: none;
+}
+.release-notes summary::-webkit-details-marker { display: none; }
+.release-name::before {                 /* (the marker a flex summary loses) */
+  content: "▸";
+  color: var(--violet);
+  display: inline-block;
+  width: 1.1rem;
+}
+.release-notes[open] .release-name::before { content: "▾"; }
+.release-name { font: 700 var(--step-1) var(--display); }
+.release-tag {
+  font: 600 var(--step--1) var(--display);
+  color: var(--void);
+  background: var(--gold);
+  border-radius: 999px;
+  padding: 0.05rem 0.6rem;
+}
+.release-tag.built { background: var(--violet); color: #fff; }
+.release-date { font: 400 var(--step--1) var(--body); color: var(--platinum-dim); }
+.notes { color: var(--platinum); }
+.notes > :first-child { margin-top: 0.6rem; }
+.notes h1, .notes h2, .notes h3, .notes h4 { font: 700 var(--step-0) var(--display); margin: 1rem 0 0.3rem; }
+.notes ul, .notes ol { padding-left: 1.2rem; }
+.notes p, .notes li { color: var(--platinum); }
+.notes pre { overflow-x: auto; background: rgba(148, 102, 255, 0.1); padding: 0.6rem; border-radius: 6px; }
+
+.update-pick { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+.update-pick select {
+  font: inherit;
+  color: var(--platinum);
+  background: var(--shell);
+  border: 1px solid var(--shell-edge);
+  border-radius: 8px;
+  padding: 0.35rem 0.6rem;
+}
+.update-answer:empty { display: none; }
+
+details {
+  border-top: 1px solid var(--shell-edge);
+  padding: 0.75rem 0;
+}
+details:last-of-type { border-bottom: 1px solid var(--shell-edge); }
+summary {
+  cursor: pointer;
+  font: 600 var(--step-0) var(--display);
+}
+details p { margin: 0.6rem 0 0.2rem; color: var(--platinum-dim); }
+
+.foot {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+  font-size: var(--step--1);
+  color: var(--platinum-dim);
+}
+.foot p { margin: 0.4rem 0; }
+.foot p:first-child { display: flex; gap: 1.25rem; }
+.legal { font-size: 0.8125rem; }
+
+@media (max-width: 30rem) {
+  .screen { border-width: 10px; }
+  .bottom { width: 100%; aspect-ratio: auto; }
+  .top { aspect-ratio: 4 / 3; }
+  .top-title { font-size: var(--step-1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
