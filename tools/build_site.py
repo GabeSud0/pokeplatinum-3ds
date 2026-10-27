@@ -4,7 +4,7 @@
     python3 tools/build_site.py --out _site                  (the latest release, with gh)
     python3 tools/build_site.py --out _site --release-dir DIR  (a release's files in DIR)
 
-copies web/ to OUT, and the release's files the page uses to OUT/release/:
+copies web/ to OUT (with the logo and the HOME Menu icon), and the release's files the page uses to OUT/release/:
 web-manifest.json, PokePlatinum3DS-WebPayload.zip, pokeplatinum.3dsx and
 SHA256SUMS.txt (GitHub doesn't let a page download release files from
 another site, so the site carries the latest release's). OUT/release/
@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+IMAGES = {"docs/images/logo.png": "logo.png", "3ds_port/game/cia/icon.png": "icon.png"}
 ASSETS = ["web-manifest.json", "PokePlatinum3DS-WebPayload.zip", "pokeplatinum.3dsx", "SHA256SUMS.txt"]
 
 
@@ -81,6 +82,10 @@ def main() -> int:
     if args.out.exists():
         shutil.rmtree(args.out)
     shutil.copytree(ROOT / "web", args.out)
+    # The project's own pictures, where they are kept in the repository.
+    (args.out / "img").mkdir(exist_ok=True)
+    for src, dst in IMAGES.items():
+        shutil.copy2(ROOT / src, args.out / "img" / dst)
     release_dir = args.out / "release"
     releases = from_folder(args.release_dir, release_dir) if args.release_dir else from_github(args.repo, release_dir)
     if releases:

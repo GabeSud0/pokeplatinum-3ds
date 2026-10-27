@@ -1,8 +1,8 @@
 name: Website
 
 # The web builder's website (web/) on GitHub Pages, with the latest release's
-# files (tools/build_site.py): published again for every release, and when
-# the site itself changes on main. (Pages must be set to "GitHub Actions" in
+# files (tools/build_site.py): published again for every release (build.yml's
+# release job runs this), and when the site itself changes on main. (Pages must be set to "GitHub Actions" in
 # the repository's settings: Settings > Pages > Source.)
 on:
   release:

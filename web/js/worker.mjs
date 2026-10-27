@@ -1,6 +1,6 @@
 // The build, in a Web Worker so the page stays responsive. app.mjs sends:
 //
-//   { type: "build", rom: ArrayBuffer, wantCia, manifest, releaseUrl, pyodideUrl, pycgfxUrl }
+//   { type: "build", rom: ArrayBuffer, wantCia, releaseUrl, pyodideUrl, pycgfxUrl }
 //
 // and gets back { type: "progress", stage, fraction } as it goes, then
 // { type: "done", zip: Blob, fileName, banner, bannerWhy } or
@@ -44,7 +44,7 @@ async function sha256(data) {
 async function download(url, what) {
   let response;
   try {
-    response = await fetch(url);
+    response = await fetch(url, { cache: "no-cache" });   // (never last version's, just after a release)
   } catch (e) {
     throw new BuildError("error.network", { what }, `${url}: ${e.message}`);
   }
@@ -91,8 +91,20 @@ function readmeText(version) {
   ].join("\r\n");
 }
 
+const NAME = /^[A-Za-z_]\w*$/;
+const PAYLOAD_PATH = /^[\w./-]+$/;
+
+// The data pack's file, without copying it out of Pyodide's files (it's as
+// big as the ROM): MEMFS keeps each file in a JS array of its own.
+function takeFile(FS, path) {
+  const node = FS.lookupPath(path).node;
+  const data = node.contents.subarray(0, node.usedBytes);
+  FS.unlink(path);
+  return data;
+}
+
 async function build(request) {
-  const { wantCia, manifest, releaseUrl, pyodideUrl, pycgfxUrl } = request;
+  const { wantCia, releaseUrl, pyodideUrl, pycgfxUrl } = request;
   let rom = request.rom;
   request.rom = null;              // (the ROM's only copy in this worker: freed once Python has it)
   progress("python");
@@ -100,25 +112,41 @@ async function build(request) {
   const FS = pyodide.FS;
   progress("python", 1);
 
-  // This version's payload, checked against SHA256SUMS.txt and, file by
-  // file, against its web-manifest.json.
+  // This version's files, checked against SHA256SUMS.txt: the manifest
+  // (which says what to run) and the payload, whose own copy of the
+  // manifest must be the same, and whose every file is checked against it.
   progress("release");
   const sums = new TextDecoder().decode(await download(`${releaseUrl}SHA256SUMS.txt`, "SHA256SUMS.txt"));
+  const sumOf = (name) => sums.split(/\r?\n/).map((l) => l.split(/\s+/)).find((f) => f[1] === name)?.[0];
+  const fetchChecked = async (name) => {
+    const data = await download(`${releaseUrl}${name}`, name);
+    if (!sumOf(name) || sumOf(name) !== (await sha256(data))) throw new BuildError("error.checksum", { what: name });
+    return data;
+  };
+  const manifestBytes = await fetchChecked("web-manifest.json");
+  const manifest = JSON.parse(new TextDecoder().decode(manifestBytes));
+  const entry = manifest.entrypoint;
+  if (!NAME.test(entry.module) || !NAME.test(entry.function) || !entry.pythonPath.every((p) => PAYLOAD_PATH.test(p))) {
+    throw new BuildError("error.checksum", { what: "web-manifest.json" });
+  }
   const payloadName = "PokePlatinum3DS-WebPayload.zip";
-  const payload = await download(`${releaseUrl}${payloadName}`, payloadName);
-  const expected = sums.split(/\r?\n/).map((l) => l.split(/\s+/)).find((f) => f[1] === payloadName)?.[0];
-  if (!expected || expected !== (await sha256(payload))) throw new BuildError("error.checksum", { what: payloadName });
+  const payload = await fetchChecked(payloadName);
   progress("release", 0.6);
   try { FS.unlink("/payload.zip"); } catch { /* first build */ }
   FS.writeFile("/payload.zip", payload);
+  pyodide.globals.set("outer_manifest", manifestBytes);
   const bad = pyodide.runPython(`
 import hashlib, json, shutil, zipfile
 shutil.rmtree("/payload", ignore_errors=True)
 with zipfile.ZipFile("/payload.zip") as z:
     z.extractall("/payload")
-    listed = json.loads(z.read("web-manifest.json"))["files"]
+    inner = z.read("web-manifest.json")
+listed = json.loads(inner)["files"]
 bad = [n for n, f in listed.items()
        if hashlib.sha256(open("/payload/" + n, "rb").read()).hexdigest() != f["sha256"]]
+if inner != outer_manifest.to_bytes():
+    bad.append("web-manifest.json")
+del outer_manifest
 ",".join(bad)
 `);
   FS.unlink("/payload.zip");
@@ -132,6 +160,7 @@ bad = [n for n, f in listed.items()
     try {
       const base = pycgfxUrl || manifest.pycgfx.rawBase;
       for (const file of manifest.pycgfx.files) {
+        if (!PAYLOAD_PATH.test(file.path)) throw new Error(`pycgfx's ${file.path}: not a file name`);
         const data = await download(base + file.path, "pycgfx");
         if ((await sha256(data)) !== file.sha256) throw new Error(`pycgfx's ${file.path} isn't the expected file`);
         const path = "/pycgfx/" + file.path;
@@ -145,45 +174,50 @@ bad = [n for n, f in listed.items()
   }
   progress("release", 1);
 
-  // The data pack and the banner's pieces (builder/web.py).
+  // The data pack and the banner's pieces (builder/web.py). A Python error
+  // comes back as text, with Python's own record of it cleared: that record
+  // would keep the ROM alive.
   progress("rom");
-  const entry = manifest.entrypoint;
   pyodide.globals.set("rom_js", new Uint8Array(rom));
   rom = null;
   pyodide.globals.set("report", (stage, done, total) => progress(stage, total ? done / total : 0));
   pyodide.globals.set("pycgfx_dir", pycgfxDir);
   pyodide.globals.set("check_rom", !manifest.synthetic);
-  let result;
-  try {
-    result = pyodide.runPython(`
-import json, shutil, sys
+  const result = JSON.parse(pyodide.runPython(`
+import json, shutil, sys, traceback
 for p in ${JSON.stringify(entry.pythonPath.map((p) => "/payload/" + p))}:
     if p not in sys.path:
         sys.path.insert(0, p)
-import ${entry.module} as builder
-shutil.rmtree("/out", ignore_errors=True)
-rom = rom_js.to_bytes()
-del rom_js
+def _build():
+    import ${entry.module} as builder
+    shutil.rmtree("/out", ignore_errors=True)
+    rom = rom_js.to_bytes()
+    try:
+        r = builder.${entry.function}(rom, "/out", pycgfx_dir=pycgfx_dir, progress=report, verify=check_rom)
+    finally:
+        del rom
+    return {"banner_error": r["banner_error"]}
 try:
-    r = builder.${entry.function}(rom, "/out", pycgfx_dir=pycgfx_dir, progress=report, verify=check_rom)
+    _out = _build()
+except BaseException as e:
+    _out = {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()}
+    del e
 finally:
-    del rom
-json.dumps({"banner_error": r["banner_error"], "files": list(r["files"])})
-`);
-  } catch (e) {
-    const text = String(e.message || e);
-    if (/MemoryError|out of memory|Cannot enlarge memory/i.test(text)) throw new BuildError("error.memory", {}, text);
-    throw new BuildError("top.error.detail", { message: text.split("\n").filter(Boolean).pop() }, text);
+    del rom_js
+sys.last_exc = sys.last_value = sys.last_type = sys.last_traceback = None
+json.dumps(_out)
+`));
+  if (result.error) {
+    if (/MemoryError|out of memory|Cannot enlarge memory/i.test(result.error)) throw new BuildError("error.memory", {}, result.trace);
+    throw new BuildError("top.error.detail", { message: result.error }, result.trace);
   }
-  const made = JSON.parse(result);
-  if (made.banner_error) bannerWhy = made.banner_error;
+  if (result.banner_error) bannerWhy = result.banner_error;
   const out = (name) => "/out/" + name;
   const files = [
     { name: "3ds/pokeplatinum.3dsx", data: FS.readFile("/payload/program/pokeplatinum.3dsx") },
-    { name: entry.outputs.pak, data: FS.readFile(out(entry.outputs.pak)) },
+    { name: entry.outputs.pak, data: takeFile(FS, out(entry.outputs.pak)) },
     { name: entry.outputs.manifest, data: FS.readFile(out(entry.outputs.manifest)) },
   ];
-  FS.unlink(out(entry.outputs.pak));
 
   // The HOME Menu version.
   let banner = null;

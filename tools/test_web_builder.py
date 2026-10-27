@@ -87,6 +87,7 @@ def main() -> int:
             page.on("pageerror", lambda e: problems.append(f"page error: {e}"))
             page.on("console", lambda m: print(f"  [console.{m.type}] {m.text}") if m.type in ("error", "warning") else None)
             page.goto(url)
+            page.wait_for_selector("#rom:not([disabled])", state="attached", timeout=30_000)
             page.set_input_files("#rom", str(args.rom))
             page.wait_for_selector('#top[data-state="ok"]', timeout=60_000)
             if page.is_checked("#want-cia") != args.cia:

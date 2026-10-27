@@ -15,6 +15,8 @@ export const STRINGS = {
     "top.idle.title": "Choose your Pokémon Platinum ROM to begin.",
     "top.idle.detail": "A clean dump of the USA cartridge, as a .nds file.",
     "top.checking.title": "Checking your ROM…",
+    "top.size.detail": "This file is {size} MB: a Pokémon Platinum ROM is 128 MB.",
+    "top.read.detail": "The file couldn't be read ({message}). Choose it again.",
     "top.ok.title": "Ready to build.",
     "top.ok.detail": "{name}",
     "top.bad.title": "This ROM can't be used.",
@@ -40,7 +42,6 @@ export const STRINGS = {
     "bottom.cia": "Also make the HOME Menu version (.cia)",
     "bottom.build": "Build",
     "bottom.download": "Download the ZIP",
-    "bottom.again": "Build again",
 
     "need.title": "What you need",
     "need.console": "A 3DS with custom firmware (Luma3DS) and the Homebrew Launcher, and FBI for the HOME Menu version. A New 3DS, New 3DS XL or New 2DS XL gets the full-width screens; an Old 3DS shows the DS's two screens in the middle. Setup guide: <a href=\"https://3ds.hacks.guide\">3ds.hacks.guide</a>.",
@@ -95,6 +96,8 @@ export const STRINGS = {
     "top.idle.title": "Elige tu ROM de Pokémon Platinum para empezar.",
     "top.idle.detail": "Un volcado limpio del cartucho de EE. UU., en un archivo .nds.",
     "top.checking.title": "Revisando tu ROM…",
+    "top.size.detail": "Este archivo pesa {size} MB: una ROM de Pokémon Platinum pesa 128 MB.",
+    "top.read.detail": "No se pudo leer el archivo ({message}). Vuelve a elegirlo.",
     "top.ok.title": "Listo para crear.",
     "top.ok.detail": "{name}",
     "top.bad.title": "Esta ROM no sirve.",
@@ -120,7 +123,6 @@ export const STRINGS = {
     "bottom.cia": "Hacer también la versión del menú HOME (.cia)",
     "bottom.build": "Crear",
     "bottom.download": "Descargar el ZIP",
-    "bottom.again": "Crear de nuevo",
 
     "need.title": "Qué necesitas",
     "need.console": "Una 3DS con firmware personalizado (Luma3DS) y el Homebrew Launcher, y FBI para la versión del menú HOME. Una New 3DS, New 3DS XL o New 2DS XL usa las pantallas completas; una 3DS anterior muestra las dos pantallas de la DS en el centro. Guía de instalación: <a href=\"https://3ds.hacks.guide\">3ds.hacks.guide</a>.",

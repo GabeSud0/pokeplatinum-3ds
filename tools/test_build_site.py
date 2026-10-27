@@ -25,7 +25,7 @@ class Site(unittest.TestCase):
                             "--release-dir", str(tmp / "release")], check=True, stdout=subprocess.DEVNULL)
             site = tmp / "site"
             for page in ("index.html", "js/app.mjs", "js/worker.mjs", "js/wasi.mjs", "js/cia.mjs", "js/zip.mjs",
-                         "css/site.css", ".nojekyll"):
+                         "css/site.css", ".nojekyll", "img/logo.png", "img/icon.png"):
                 self.assertTrue((site / page).is_file(), page)
             for asset in ("web-manifest.json", "PokePlatinum3DS-WebPayload.zip", "pokeplatinum.3dsx",
                           "SHA256SUMS.txt"):

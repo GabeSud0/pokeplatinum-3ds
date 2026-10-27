@@ -2,12 +2,17 @@
 // update helper.
 //
 // The release's files are in release/ next to this page (the site's deploy,
-// tools/build_site.py, puts the latest release's there); ?release=URL/,
-// ?pyodide=URL/ and ?pycgfx=URL/ point elsewhere (the tests).
+// tools/build_site.py, puts the latest release's there). On this computer
+// only (localhost: the tests), ?release=URL/, ?pyodide=URL/ and ?pycgfx=URL/
+// point elsewhere; the published page ignores them.
 import { STRINGS, pickLanguage, translate } from "./i18n.mjs";
 
 const params = new URLSearchParams(location.search);
-const RELEASE_URL = params.get("release") || "release/";
+const LOCAL = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+const testOption = (name) => (LOCAL ? params.get(name) : null);
+const RELEASE_URL = testOption("release") || "release/";
+// A Pokémon Platinum ROM is 128 MiB: anything far from it isn't one (and isn't read).
+const ROM_SIZE_LIMITS = [16 << 20, 256 << 20];
 const $ = (id) => document.getElementById(id);
 
 let lang = "en";
@@ -19,6 +24,10 @@ let zipUrl = null;
 let topState = { state: "idle", title: "top.idle.title", detail: "top.idle.detail", values: {}, stage: "" };
 
 const t = (key, values) => translate(lang, key, values);
+const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+// For strings that hold markup: the values filled in are text.
+const tHtml = (key, values = {}) =>
+  t(key, Object.fromEntries(Object.entries(values).map(([k, v]) => [k, escapeHtml(v)])));
 
 function storage(fn) {
   try { return fn(window.localStorage); } catch { return null; }
@@ -58,17 +67,28 @@ async function sha1(buffer) {
 }
 
 async function chooseRom(file) {
-  if (!file) return;
+  if (!file || !manifest || building) return;
   romFile = file;
   romInfo = null;
   resetDownload();
   $("drop-hint").textContent = file.name;
   $("choose").textContent = t("bottom.change");
   $("build").disabled = true;
+  // (a test release's made-up ROMs are small)
+  if ((file.size < ROM_SIZE_LIMITS[0] && !manifest.synthetic) || file.size > ROM_SIZE_LIMITS[1]) {
+    setTop("bad", "top.bad.title", "top.size.detail", { size: Math.round(file.size / 1048576) });
+    return;
+  }
   setTop("checking", "top.checking.title");
-  const digest = await sha1(await file.arrayBuffer());
+  let digest;
+  try {
+    digest = await sha1(await file.arrayBuffer());
+  } catch (e) {
+    if (romFile === file) setTop("bad", "top.bad.title", "top.read.detail", { message: String(e.message || e) });
+    return;
+  }
   if (romFile !== file) return;            // another was chosen meanwhile
-  const known = manifest?.supportedRoms.find((r) => r.sha1 === digest);
+  const known = manifest.supportedRoms.find((r) => r.sha1 === digest);
   if (!known) {
     setTop("bad", "top.bad.title", "top.bad.detail", { sha1: digest });
     return;
@@ -83,17 +103,49 @@ function resetDownload() {
   zipUrl = null;
   $("download").hidden = true;
   $("build").hidden = false;
+  $("build").disabled = !romInfo;
+}
+
+// While a build runs, the ROM and the choices stay as they are.
+let building = false;
+function setBuilding(on) {
+  building = on;
+  $("rom").disabled = on || !manifest;
+  $("want-cia").disabled = on;
+  $("build").disabled = on || !romInfo;
+}
+
+// A worker for each build, ended after it: Python's memory (the size of a
+// ROM or more) goes back to the browser, and a build that ran out of memory
+// leaves nothing broken behind.
+function endWorker() {
+  if (worker) worker.terminate();
+  worker = null;
+}
+
+function buildFailed(key, values, detail) {
+  console.error(detail);
+  endWorker();
+  setBuilding(false);
+  setTop("error", "top.error.title", key, values);
 }
 
 async function startBuild() {
-  if (!romFile || !romInfo || !manifest) return;
-  $("build").disabled = true;
-  $("rom").disabled = true;
+  if (!romFile || !romInfo || !manifest || building) return;
+  setBuilding(true);
   setTop("building", "top.building.title");
   $("meter-fill").style.width = "0%";
-  const rom = await romFile.arrayBuffer();
-  if (!worker) worker = new Worker(new URL("./worker.mjs", import.meta.url), { type: "module" });
-  const pyodideUrl = params.get("pyodide") || `https://cdn.jsdelivr.net/pyodide/v${manifest.pyodide.version}/full/`;
+  let rom;
+  try {
+    rom = await romFile.arrayBuffer();
+  } catch (e) {
+    buildFailed("top.read.detail", { message: String(e.message || e) }, e);
+    return;
+  }
+  endWorker();
+  worker = new Worker(new URL("./worker.mjs", import.meta.url), { type: "module" });
+  const pyodideUrl = testOption("pyodide") || `https://cdn.jsdelivr.net/pyodide/v${manifest.pyodide.version}/full/`;
+  worker.onerror = (e) => buildFailed("top.error.detail", { message: e.message || "the builder didn't start" }, e);
   worker.onmessage = ({ data }) => {
     if (data.type === "progress") {
       topState.stage = data.stage;
@@ -106,22 +158,20 @@ async function startBuild() {
       link.download = data.fileName;
       link.hidden = false;
       $("build").hidden = true;
-      $("rom").disabled = false;
+      endWorker();
+      setBuilding(false);
       $("meter-fill").style.width = "100%";
       $("top").dataset.banner = data.banner || "none";
       if (data.banner === "flat") setTop("done", "top.done.title", "top.done.flat", { why: data.bannerWhy });
       else setTop("done", "top.done.title", "top.done.detail");
       link.focus();
     } else if (data.type === "error") {
-      console.error(data.detail);
-      setTop("error", "top.error.title", data.key, data.values);
-      $("build").disabled = false;
-      $("rom").disabled = false;
+      buildFailed(data.key, data.values, data.detail);
     }
   };
   worker.postMessage({
-    type: "build", rom, wantCia: $("want-cia").checked, manifest,
-    releaseUrl: new URL(RELEASE_URL, location.href).href, pyodideUrl, pycgfxUrl: params.get("pycgfx"),
+    type: "build", rom, wantCia: $("want-cia").checked,
+    releaseUrl: new URL(RELEASE_URL, location.href).href, pyodideUrl, pycgfxUrl: testOption("pycgfx"),
   }, [rom]);
 }
 
@@ -145,7 +195,7 @@ function renderUpdate() {
   const same = from && from.dataPack && from.dataPack.format === manifest.dataPack.format &&
     from.dataPack.buildId === manifest.dataPack.buildId;
   const version = manifest.releaseTag;
-  answer.innerHTML = t(same ? "update.same" : from && from.dataPack ? "update.changed" : "update.unknown", { version });
+  answer.innerHTML = tHtml(same ? "update.same" : from && from.dataPack ? "update.changed" : "update.unknown", { version });
   download.hidden = !same;
   download.href = `${RELEASE_URL}pokeplatinum.3dsx`;
   download.setAttribute("download", "pokeplatinum.3dsx");
@@ -157,6 +207,7 @@ async function loadRelease() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     manifest = await response.json();
     $("release").hidden = false;
+    $("rom").disabled = false;               // (a ROM is checked against the manifest's list)
   } catch {
     manifest = null;
     $("release").hidden = false;

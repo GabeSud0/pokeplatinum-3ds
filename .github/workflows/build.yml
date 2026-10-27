@@ -175,6 +175,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: write          # (to start the website's workflow, below)
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -200,6 +201,14 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/release/* --repo "$GITHUB_REPOSITORY" \
               --verify-tag --title "Pokémon Platinum 3DS $GITHUB_REF_NAME" \
               --notes-file notes.md --generate-notes $PRERELEASE
+
+      # The website with this release's files (pages.yml). A release made
+      # with this workflow's token doesn't start other workflows by itself;
+      # asking for a run does.
+      - name: Update the website
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main
 
   # The WideArt editor (tools/wideart: drawing the wide screen's bands by
   # hand) as a Windows program. It contains no game code or data: the
