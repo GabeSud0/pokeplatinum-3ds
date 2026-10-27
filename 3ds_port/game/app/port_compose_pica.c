@@ -772,7 +772,45 @@ void NitroPort_ComposeSetSmooth3d(int smooth3d)
     __atomic_store_n(&sSmooth3d, smooth3d, __ATOMIC_RELEASE);
 }
 
+/* Linear memory the 3D's textures want left once the display is set up
+ * (port_gx3d_pica.c's cache: up to 8 MB; the field's in a few MB). */
+#define COMPOSE_TEXTURE_ROOM (4u * 1024u * 1024u)
+
+static int compose_init(const ComposeConfig *config, int small);
+
+/* The display on the GPU; with too little linear memory for it as it is
+ * (the 64 MB memory mode: about 20 MB of it, issue #188), smaller rather
+ * than the classic display: first the 2D's textures a texel a pixel (most
+ * of the memory: about 10 MB less), then also the fewest LCD framebuffers
+ * (frames waiting for their V-blank: fewer, and 60 frames a second holds
+ * less well). Each kept only if it leaves room for the 3D's textures,
+ * the last whatever it leaves. */
 int NitroPort_ComposeInit(const ComposeConfig *config)
+{
+    static const char *const how[] = { "", "the 2D a texel a pixel", "the 2D a texel a pixel, 3 frames on the way at most" };
+    int small;
+
+    NitroPort_Log("[compose] linear memory: %lu KB free", (unsigned long)(linearSpaceFree() / 1024u));
+    for (small = 0; small <= 2; small++) {
+        if (!compose_init(config, small)) {
+            continue;
+        }
+        if (small < 2 && linearSpaceFree() < COMPOSE_TEXTURE_ROOM) {
+            NitroPort_Log("[compose] %lu KB of linear memory left for the 3D's textures: the display made smaller",
+                          (unsigned long)(linearSpaceFree() / 1024u));
+            free_all();
+            continue;
+        }
+        if (small) {
+            NitroPort_Log("[compose] the display made smaller for the memory (%lu KB left): %s",
+                          (unsigned long)(linearSpaceFree() / 1024u), how[small]);
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static int compose_init(const ComposeConfig *config, int small)
 {
     static const char *const filters[] = { "sharp (the pixels as they are, 2x then bilinear)", "nearest",
                                            "smooth (bilinear)", "Scale2x" };
@@ -813,12 +851,12 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     for (s = 0; s < 2; s++) {
         Screen *scr = &sScreens[s];
         int canvasW = s == 0 && config->wide ? CANVAS_MAX : DS_W;
-        int scale = config->filter == COMPOSE_FILTER_SHARP || config->filter == COMPOSE_FILTER_SCALE2X ? 2 : 1;
+        int scale = !small && (config->filter == COMPOSE_FILTER_SHARP || config->filter == COMPOSE_FILTER_SCALE2X) ? 2 : 1;
 
         scr->width = s == 0 ? TOP_W : BOTTOM_W;
         scr->onLcd = -1;
         scr->lastLcd = -1;
-        scr->nlcd = s == 0 ? LCD_BUFS : LCD_BUFS_LOWER;
+        scr->nlcd = small >= 2 ? LCD_BUFS_LEAST : s == 0 ? LCD_BUFS : LCD_BUFS_LOWER;
         for (i = 0; i < (s == 0 && config->stereo ? 2 : 1); i++) {
             int k;
 
@@ -838,7 +876,8 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
                         scr->nlcd = k;
                         break;
                     }
-                    NitroPort_Log("[compose] not enough memory for the LCD framebuffers");
+                    NitroPort_Log("[compose] not enough memory for the LCD framebuffers (%lu KB free)",
+                                  (unsigned long)(linearSpaceFree() / 1024u));
                     goto fail;
                 }
                 memset(scr->lcd[k][i], 0, (size_t)scr->width * SCREEN_H * 2u);
@@ -848,7 +887,8 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
             /* Not enough memory at 2 texels a pixel: 1 (bilinear). */
             free_sets(scr);
             if (scale == 1 || !alloc_sets(scr, canvasW, 1)) {
-                NitroPort_Log("[compose] not enough memory for the 2D layer textures");
+                NitroPort_Log("[compose] not enough memory for the 2D layer textures (%lu KB free)",
+                              (unsigned long)(linearSpaceFree() / 1024u));
                 goto fail;
             }
             NitroPort_Log("[compose] not enough memory for the sharp 2D on the %s screen: smooth instead",
@@ -922,6 +962,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     }
     sQuadsAll = linearAlloc(2u * MAX_QUAD_VERTICES * sizeof(NitroGx3dGpuVertex));
     if (!sQuadsAll) {
+        NitroPort_Log("[compose] not enough memory for the quads");
         goto fail;
     }
     sQuads = sQuadsAll;

@@ -62,6 +62,71 @@
 #include <nitro_port_wide.h>
 #include <nitro_port_wideart.h>
 
+/* ---------------------------------------------------------------- memory
+ * libctru's own split of the program's memory (allocateHeaps.c), but for a
+ * small amount: half each, the linear heap the GPU reads (the display's
+ * buffers and the 3D's textures) as short as the heap the game allocates
+ * from. The game takes at most about 13 MB of its heap (logs up to
+ * 2026-10-27); the remaster's display, at its smallest, about 14 MB of
+ * linear memory and more for the textures. With little memory (the .cia
+ * in the 64 MB mode, the Homebrew Launcher opened from the Rosalina menu:
+ * about 36 MB left after the program, issue #188) the heap gets 16 MB, the
+ * linear heap the rest; with more, as libctru splits it. */
+#define HEAP_SMALL_TOTAL (48u << 20)
+#define HEAP_SMALL_GAME  (16u << 20)
+extern char *fake_heap_start;
+extern char *fake_heap_end;
+/* (libctru's, allocateHeaps.c: its weak __system_allocateHeaps is this one) */
+extern u32 __ctru_heap, __ctru_linear_heap, __ctru_heap_size, __ctru_linear_heap_size;
+
+void __system_allocateHeaps(void)
+{
+    Handle reslimit = 0;
+    s64 maxCommit = 0, currentCommit = 0;
+    ResourceLimitType type = RESLIMIT_COMMIT;
+    u32 remaining;
+    Result rc;
+
+    if (R_FAILED(svcGetResourceLimit(&reslimit, CUR_PROCESS_HANDLE))) {
+        svcBreak(USERBREAK_PANIC);
+    }
+    svcGetResourceLimitLimitValues(&maxCommit, reslimit, &type, 1);
+    svcGetResourceLimitCurrentValues(&currentCommit, reslimit, &type, 1);
+    svcCloseHandle(reslimit);
+    remaining = (u32)(maxCommit - currentCommit) & ~0xFFFu;
+
+    if (remaining < HEAP_SMALL_TOTAL && remaining > HEAP_SMALL_GAME * 2u) {
+        __ctru_heap_size = HEAP_SMALL_GAME;
+        __ctru_linear_heap_size = remaining - __ctru_heap_size;
+    } else {
+        /* (libctru's: half each; the heap at most 24 MB while the linear
+         * heap's under 32 MB) */
+        __ctru_linear_heap_size = (remaining / 2u) & ~0xFFFu;
+        __ctru_heap_size = remaining - __ctru_linear_heap_size;
+        if (__ctru_heap_size > (24u << 20)) {
+            __ctru_heap_size = 24u << 20;
+            __ctru_linear_heap_size = remaining - __ctru_heap_size;
+            if (__ctru_linear_heap_size > (32u << 20)) {
+                __ctru_linear_heap_size = 32u << 20;
+                __ctru_heap_size = remaining - __ctru_linear_heap_size;
+            }
+        }
+    }
+    rc = svcControlMemory(&__ctru_heap, OS_HEAP_AREA_BEGIN, 0x0, __ctru_heap_size, MEMOP_ALLOC,
+                          MEMPERM_READ | MEMPERM_WRITE);
+    if (R_FAILED(rc)) {
+        svcBreak(USERBREAK_PANIC);
+    }
+    rc = svcControlMemory(&__ctru_linear_heap, 0x0, 0x0, __ctru_linear_heap_size, MEMOP_ALLOC_LINEAR,
+                          MEMPERM_READ | MEMPERM_WRITE);
+    if (R_FAILED(rc)) {
+        svcBreak(USERBREAK_PANIC);
+    }
+    mappableInit(OS_MAP_AREA_BEGIN, OS_MAP_AREA_END);
+    fake_heap_start = (char *)__ctru_heap;
+    fake_heap_end = fake_heap_start + __ctru_heap_size;
+}
+
 /* The 2D renderer (nitro_port.h, which can't be included next to 3ds.h). */
 void NitroPort_Render2D(int engine, uint16_t *out);
 int NitroPort_Render2DIfChanged(int engine, uint16_t *out);
@@ -906,6 +971,18 @@ static void EnableSpeedup(void)
 
 static void LogSpeedup(bool new3ds)
 {
+    /* (how much memory the system gave the program: the .cia on a New 3DS
+     * should have the 124 MB mode, issue #188) */
+    NitroPort_Log("[memory] the program's region %lu MB (%s), the program itself %lu KB; heap %lu KB, linear heap %lu KB",
+                  (unsigned long)(osGetMemRegionSize(MEMREGION_APPLICATION) >> 20),
+                  osGetMemRegionSize(MEMREGION_APPLICATION) >= (100u << 20) ? "the New 3DS's larger mode"
+                                                                           : "the 64 MB mode",
+                  (unsigned long)((osGetMemRegionUsed(MEMREGION_APPLICATION) - __ctru_heap_size - __ctru_linear_heap_size) >> 10),
+                  (unsigned long)(__ctru_heap_size >> 10), (unsigned long)(__ctru_linear_heap_size >> 10));
+    if (new3ds && osGetMemRegionSize(MEMREGION_APPLICATION) < (100u << 20)) {
+        NitroPort_Log("[memory] a New 3DS in the 64 MB mode: from the HOME Menu, an old Luma3DS gives the .cia this "
+                      "(issue #188: update Luma3DS); the Homebrew Launcher opened from the Rosalina menu does too");
+    }
     if (!new3ds) {
         return;
     }
