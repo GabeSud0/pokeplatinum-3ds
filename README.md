@@ -74,11 +74,11 @@ On a New 3DS:
 | :--- | :--- | :--- |
 | Playable on real hardware, from a new game or a save: exploring, battles, menus and saving (it still has some visual and gameplay bugs) | Polishing the bottom screen's UI (the learn-a-move screen) | Wi-Fi |
 | A new UI for the top screen: menus, text boxes and battles across its full width | A Pokémon follower | Better lighting |
-| A new UI for the bottom screen: a menu beside the Pokétch, with the bag, party, summary, trainer card, save, options and Town Map in its panel | | |
+| A new UI for the bottom screen: a menu beside the Pokétch, with the bag, party, summary, trainer card, save, options and Town Map in its panel | 60 frames a second and better 3D quality | |
 | Enhancements and cheats from the options (SPEED, Exp. Share for the party, and more) | | |
 | The New 3DS XL's resolution: both screens filled, the 3D drawn at the screen's resolution | | |
 | Updated animations for the intro, and new animations for some of the UI | | |
-| 60 frames a second and better 3D quality | | |
+
 
 > [!IMPORTANT]
 > **This repository contains no game content.** No ROM, graphics, music,
