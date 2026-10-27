@@ -56,6 +56,12 @@ export const STRINGS = {
     "install.save": "The game saves to <code>sd:/3ds/pokeplatinum/platinum.sav</code>, a raw 512 KB save, so you can bring your cartridge's save along.",
     "install.azahar": "On a PC, the <a href=\"https://azahar-emu.org\">Azahar</a> emulator runs it too: copy the same folders into its emulated SD card and open <b>pokeplatinum.3dsx</b>.",
 
+    "news.title": "What's new",
+    "news.pre": "Pre-release",
+    "news.built": "The version this page builds",
+    "news.empty": "No notes for this version.",
+    "news.github": "See it on GitHub",
+
     "update.title": "Updating",
     "update.intro": "Your save stays where it is. Choose the version you have now:",
     "update.pick": "My version",
@@ -136,6 +142,12 @@ export const STRINGS = {
     "install.4": "Para el menú HOME: abre FBI, ve a <b>SD → cia → pokeplatinum.cia</b> y elige <b>Install CIA</b>.",
     "install.save": "El juego guarda en <code>sd:/3ds/pokeplatinum/platinum.sav</code>, una partida en bruto de 512 KB, así que puedes traer la partida de tu cartucho.",
     "install.azahar": "En una PC también funciona con el emulador <a href=\"https://azahar-emu.org\">Azahar</a>: copia las mismas carpetas a su tarjeta SD emulada y abre <b>pokeplatinum.3dsx</b>.",
+
+    "news.title": "Novedades",
+    "news.pre": "Versión preliminar",
+    "news.built": "La versión que crea esta página",
+    "news.empty": "Esta versión no tiene notas.",
+    "news.github": "Verla en GitHub",
 
     "update.title": "Actualizar",
     "update.intro": "Tu partida se queda donde está. Elige la versión que tienes ahora:",

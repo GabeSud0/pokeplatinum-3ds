@@ -6,7 +6,7 @@ name: Website
 # the repository's settings: Settings > Pages > Source.)
 on:
   release:
-    types: [published]
+    types: [published, edited, deleted]   # (notes edited on GitHub show on the site too)
   push:
     branches: [main]
     paths: ["web/**", "tools/build_site.py", ".github/workflows/pages.yml"]
