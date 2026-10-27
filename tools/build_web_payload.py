@@ -27,7 +27,9 @@ the same bytes.
 
     python3 tools/build_web_payload.py --synthetic --out DIR
 
-does the same with a made-up program (for the tests: no game code).
+does the same with a made-up program (for the tests: no game code); any of
+--program, --elf, --smdh, --cia-tools and --pycgfx given are used as they
+are, and --synthetic-rom ROM makes the release accept that made-up ROM too.
     python3 tools/build_web_payload.py --pyodide-version
 prints the Pyodide the website loads (and CI tests the builder in).
 """
@@ -123,13 +125,14 @@ def pycgfx_files(pycgfx: Path) -> list[dict]:
 
 
 def make_manifest(files: dict[str, bytes], *, version: str, commit: str, pycgfx: list[dict],
-                  synthetic: bool = False) -> dict:
+                  synthetic: bool = False, extra_roms: list[dict] = ()) -> dict:
     build_id = program_build_id()
     if build_id != pack.DEFAULT_BUILD_ID:
         raise SystemExit(f"build_web_payload: the program opens packs with build ID {build_id!r}, "
                          f"but builder/pack.py makes {pack.DEFAULT_BUILD_ID!r}")
     roms = [{"sha1": sha1, "name": name} for sha1, name in sorted(verify_rom.SUPPORTED.items(),
                                                                   key=lambda item: item[1])]
+    roms += list(extra_roms)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "kind": KIND,
@@ -176,13 +179,14 @@ def write_zip(path: Path, files: dict[str, bytes]) -> None:
 
 
 def build(out: Path, *, program: bytes, elf: bytes, smdh: bytes, cia_tools: dict[str, bytes], version: str,
-          commit: str, pycgfx: list[dict], synthetic: bool = False) -> dict:
+          commit: str, pycgfx: list[dict], synthetic: bool = False, extra_roms: list[dict] = ()) -> dict:
     files = {"program/" + PROGRAM_NAME: program, "cia/pokeplatinum.elf": elf, "cia/pokeplatinum.smdh": smdh}
     files.update(cia_tools)
     files.update({dst: (ROOT / src).read_bytes() for dst, src in CIA.items()})
     files.update({dst: (ROOT / src).read_bytes() for dst, src in LICENSES.items()})
     files.update(builder_files())
-    manifest = make_manifest(files, version=version, commit=commit, pycgfx=pycgfx, synthetic=synthetic)
+    manifest = make_manifest(files, version=version, commit=commit, pycgfx=pycgfx, synthetic=synthetic,
+                             extra_roms=extra_roms)
     manifest_bytes = (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     out.mkdir(parents=True, exist_ok=True)
     write_zip(out / PAYLOAD_NAME, {**files, MANIFEST_NAME: manifest_bytes})
@@ -203,6 +207,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--pyodide-version", action="store_true", help="print the Pyodide version and stop")
     ap.add_argument("--synthetic", action="store_true", help="a made-up program (tests)")
+    ap.add_argument("--synthetic-rom", type=Path, help="with --synthetic: a made-up ROM the release accepts too")
     ap.add_argument("--version", help="the release's version (0.1.0: its tag is v0.1.0)")
     ap.add_argument("--commit", help="the commit it's built from")
     ap.add_argument("--program", type=Path, help="pokeplatinum.3dsx")
@@ -218,10 +223,17 @@ def main() -> int:
     if not args.out:
         ap.error("needs --out")
     if args.synthetic:
-        fake_tools = {dst: f"synthetic {name}".encode() for name, dst in CIA_TOOLS.items()}
-        manifest = build(args.out, program=b"3DSX synthetic", elf=b"\x7fELF synthetic", smdh=b"SMDH synthetic",
-                         cia_tools=fake_tools, version=args.version or "0.0.0", commit=args.commit or "0" * 40,
-                         pycgfx=synthetic_pycgfx(), synthetic=True)
+        # Made-up files, or any of the real ones given (the web builder's tests in a browser).
+        read = lambda path, fake: path.read_bytes() if path else fake
+        tools = (cia_tools_files(args.cia_tools) if args.cia_tools else
+                 {dst: f"synthetic {name}".encode() for name, dst in CIA_TOOLS.items()})
+        manifest = build(args.out, program=read(args.program, b"3DSX synthetic"),
+                         elf=read(args.elf, b"\x7fELF synthetic"), smdh=read(args.smdh, b"SMDH synthetic"),
+                         cia_tools=tools, version=args.version or "0.0.0", commit=args.commit or "0" * 40,
+                         pycgfx=pycgfx_files(args.pycgfx) if args.pycgfx else synthetic_pycgfx(),
+                         synthetic=True, extra_roms=[{
+                             "sha1": hashlib.sha1(args.synthetic_rom.read_bytes()).hexdigest(),
+                             "name": "Made-up test ROM (not a game)"}] if args.synthetic_rom else [])
     else:
         if not (args.version and args.commit and args.program and args.elf and args.smdh and args.cia_tools
                 and args.pycgfx):

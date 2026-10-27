@@ -148,6 +148,15 @@ jobs:
           ls -l dist/release
           cat dist/release/SHA256SUMS.txt
 
+      # The website (web/), end to end in Chromium: this program, its .cia
+      # tools and pycgfx in a release that also accepts a made-up ROM (no
+      # game data here); the page builds the SD card's files, and the ZIP is
+      # checked (tools/test_web_builder.py). The made-up ROM has no title
+      # screen, so the .cia gets the flat banner.
+      - name: The web builder makes the SD card's files in a browser
+        shell: bash
+        run: bash tools/ci_annotate.sh "Web builder in a browser" bash tools/ci_web_builder.sh
+
       - name: Upload the release's files (version tags only)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
