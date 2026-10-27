@@ -76,11 +76,11 @@ En una New 3DS:
 | :--- | :--- | :--- |
 | Jugable en consola real, desde una partida nueva o una guardada: explorar, combates, menús y guardar (todavía tiene algunos errores visuales y de juego) | Pulir la interfaz de la pantalla inferior (la pantalla para aprender un movimiento) | Wi-Fi |
 | Una interfaz nueva para la pantalla superior: menús, cuadros de texto y combates a lo largo de todo su ancho | Un Pokémon que te sigue | Mejor iluminación |
-| Una interfaz nueva para la pantalla inferior: un menú junto al Pokéreloj, con la mochila, el equipo, los datos del Pokémon, la ficha de entrenador, el guardado, las opciones y el Mapa Pueblo en su panel | | |
+| Una interfaz nueva para la pantalla inferior: un menú junto al Pokéreloj, con la mochila, el equipo, los datos del Pokémon, la ficha de entrenador, el guardado, las opciones y el Mapa Pueblo en su panel | 60 FPS y mejor calidad en el 3D | |
 | Mejoras y trucos desde las opciones (SPEED, Repartir Experiencia para el equipo y más) | | |
 | La resolución de la New 3DS XL: las dos pantallas llenas, el 3D dibujado a la resolución de la pantalla | | |
 | Animaciones actualizadas para la intro, y animaciones nuevas para parte de la interfaz | | |
-| 60 imágenes por segundo y mejor calidad en el 3D | | |
+
 
 > [!IMPORTANT]
 > **Este repositorio no contiene nada del juego.** Aquí y en las versiones
