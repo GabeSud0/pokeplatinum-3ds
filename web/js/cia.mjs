@@ -29,10 +29,14 @@ export async function makeBanner({ bannertool, chime, cgfx, flatBanner }) {
   const logs = [];
   if (cgfx && !isCgfx(cgfx)) logs.push("(the 3D banner's scene isn't a CGFX file within 512 KB: the flat banner instead)\n");
   if (isCgfx(cgfx)) {
-    const r = await run(bannertool, ["bannertool", "makebanner", "-ci", "/banner.cgfx", "-a", "/chime.wav", "-o", "/banner.bnr"],
-                        { "/banner.cgfx": cgfx, "/chime.wav": chime });
-    logs.push(r.log);
-    if (r.code === 0 && r.files.has("/banner.bnr")) return { bnr: r.files.get("/banner.bnr"), banner: "3d", log: logs.join("") };
+    try {
+      const r = await run(bannertool, ["bannertool", "makebanner", "-ci", "/banner.cgfx", "-a", "/chime.wav", "-o", "/banner.bnr"],
+                          { "/banner.cgfx": cgfx, "/chime.wav": chime });
+      logs.push(r.log);
+      if (r.code === 0 && r.files.has("/banner.bnr")) return { bnr: r.files.get("/banner.bnr"), banner: "3d", log: logs.join("") };
+    } catch (e) {                               // (bannertool crashed: the flat banner instead)
+      logs.push(`bannertool stopped: ${e}\n`);
+    }
   }
   const r = await run(bannertool, ["bannertool", "makebanner", "-i", "/banner.png", "-a", "/chime.wav", "-o", "/banner.bnr"],
                       { "/banner.png": flatBanner, "/chime.wav": chime });

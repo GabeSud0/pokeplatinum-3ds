@@ -151,7 +151,7 @@ export async function runWasi(module, args, files = {}) {
         if (oflags & OFLAGS.DIRECTORY) return ERRNO.NOTDIR;
         if ((oflags & OFLAGS.CREAT) && (oflags & OFLAGS.EXCL)) return ERRNO.EXIST;
         const file = fs.get(path);
-        if (oflags & OFLAGS.TRUNC) file.size = 0;
+        if (oflags & OFLAGS.TRUNC) { file.data = new Uint8Array(0); file.size = 0; }
         open = { path, file, pos: 0, append: !!(fdflags & FDFLAGS_APPEND) };
       } else if (isDir(path)) {
         if (oflags & (OFLAGS.CREAT | OFLAGS.TRUNC)) return ERRNO.ISDIR;
@@ -214,6 +214,10 @@ export async function runWasi(module, args, files = {}) {
         if (!open || !open.file) return ERRNO.BADF;
         const file = open.file;
         if (open.append) open.pos = file.size;
+        if (open.pos > file.size) {                // written past the end: the gap reads as zeros
+          grow(file, open.pos);
+          file.data.fill(0, file.size, open.pos);
+        }
         for (const [buf, len] of list) {
           grow(file, open.pos + len);
           file.data.set(bytes().subarray(buf, buf + len), open.pos);
