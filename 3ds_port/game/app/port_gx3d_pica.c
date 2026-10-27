@@ -907,6 +907,10 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
         sTexTexels+=(u64)width*height;
         sTexConverted++;
     }
+    /* (DIAGNOSTIC, not for merging: the player's sprite's texture) */
+    if(param==NitroPort_Gx3dDiagWatched())
+        NitroPort_Log("[diag] 3DS: texture %08lx palette %lx converted (%s)",(unsigned long)param,
+                      (unsigned long)palette,e->hash?"again":"new");
     e->hash=hash;
     e->checkedFrame=e->lastFrame=sFrame;
     sBoundCut=e->filtered?127:0;

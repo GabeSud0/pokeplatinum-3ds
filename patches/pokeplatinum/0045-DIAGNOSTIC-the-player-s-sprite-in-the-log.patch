@@ -1,0 +1,108 @@
+From c06fc41e5de391066a1d97d137dcc293846f6ff5 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] DIAGNOSTIC, not for merging: the player's sprite in the log
+ (SDK_PORT_3DS)
+
+---
+ src/billboard.c               | 31 +++++++++++++++++++++++++++++++
+ src/overlay005/ov5_021EB1A0.c | 27 +++++++++++++++++++++++++++
+ 2 files changed, 58 insertions(+)
+
+diff --git a/src/billboard.c b/src/billboard.c
+index 8cdadfd6..4c9cd328 100644
+--- a/src/billboard.c
++++ b/src/billboard.c
+@@ -59,6 +59,32 @@ static void SetBillboardGfxSeqAndResetVRAMTransfer(Billboard *billboard, const B
+ static BillboardList *sBillboardLists = NULL;
+ static int sBillboardListCount = 0;
+ 
++#ifdef SDK_PORT_3DS
++// DIAGNOSTIC (not for merging): the player's sprite as the game draws it.
++extern void NitroPort_Log(const char *fmt, ...);
++extern void NitroPort_Gx3dDiagWatch(u32 param, u32 pltt);
++Billboard *gPortDiagBillboard;
++
++static void PortDiag_Billboard(Billboard *billboard)
++{
++    static int lastState = -1, lastAnim = -1;
++    static u32 lastParam;
++    NNSG3dResMatData *mat = NNS_G3dGetMatDataByIdx(NNS_G3dGetMat(billboard->model), 0);
++    u32 param = mat->texImageParam;
++
++    if (billboard->state != lastState || billboard->animNum != lastAnim) {
++        NitroPort_Log("[diag] player sprite: state %d anim %d frame %d, texture %08lx palette %x%s",
++            billboard->state, billboard->animNum, (int)(billboard->frameNum >> FX32_SHIFT),
++            (unsigned long)param, mat->texPlttBase, param == lastParam ? " (texture unchanged)" : "");
++        NitroPort_Gx3dDiagWatch(param, mat->texPlttBase);
++        lastState = billboard->state;
++        lastAnim = billboard->animNum;
++    }
++
++    lastParam = param;
++}
++#endif
++
+ static void BillboardList_Reset(BillboardList *list)
+ {
+     list->active = FALSE;
+@@ -259,6 +285,11 @@ static void BillboardList_Draw(BillboardList *list)
+             } else if (billboard->state == BILLBOARD_STATE_VRAM_TRANSFER) {
+                 Billboard_TryRequestVRAMTransfer(billboard);
+             }
++#ifdef SDK_PORT_3DS
++            if (billboard == gPortDiagBillboard) {
++                PortDiag_Billboard(billboard);
++            }
++#endif
+ 
+             rotMatrix = billboard->rotMatrix;
+ 
+diff --git a/src/overlay005/ov5_021EB1A0.c b/src/overlay005/ov5_021EB1A0.c
+index be51f09f..2cf62609 100644
+--- a/src/overlay005/ov5_021EB1A0.c
++++ b/src/overlay005/ov5_021EB1A0.c
+@@ -780,6 +780,12 @@ void ov5_021EBA8C(MapObject *mapObj)
+     }
+ }
+ 
++#ifdef SDK_PORT_3DS
++// DIAGNOSTIC (not for merging): the player's map object as it's drawn.
++extern void NitroPort_Log(const char *fmt, ...);
++extern Billboard *gPortDiagBillboard;
++#endif
++
+ void ov5_021EBAD0(MapObject *mapObj)
+ {
+     int v0, v1;
+@@ -788,6 +794,27 @@ void ov5_021EBAD0(MapObject *mapObj)
+ 
+     v2 = sub_02062AF0(mapObj);
+ 
++#ifdef SDK_PORT_3DS
++    if (MapObject_GetLocalID(mapObj) == 0xff) {
++        static int lastFacing = -1, lastCode = -1, lastSkip = -1, lastNull = -1, lastGfx = -1;
++        int facing = MapObject_GetFacingDir(mapObj), code = sub_02062A14(mapObj);
++        int skip = ov5_021EDD94(mapObj), isNull = v3 == NULL, gfx = MapObject_GetGraphicsID(mapObj);
++
++        if (facing != lastFacing || skip != lastSkip || isNull != lastNull || gfx != lastGfx) {
++            NitroPort_Log("[diag] player: facing %d, drawn as %d (last facing %d), sprite %s, updates %s, graphics %d, status %08lx",
++                facing, code, v2->unk_00, isNull ? "none" : "there", skip ? "SKIPPED" : "on", gfx,
++                (unsigned long)MapObject_GetStatus(mapObj));
++            lastFacing = facing;
++            lastSkip = skip;
++            lastNull = isNull;
++            lastGfx = gfx;
++        }
++
++        lastCode = code;
++        gPortDiagBillboard = v3;
++    }
++#endif
++
+     if (ov5_021EDD94(mapObj) == 1) {
+         return;
+     }
+-- 
+2.43.0
+

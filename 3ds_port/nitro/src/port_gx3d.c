@@ -21,6 +21,7 @@
 #include <nitro_port_shadow.h>
 #include "port_platform.h"
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -681,6 +682,54 @@ static void keep_for_shadow(const GeoVertex *a,const GeoVertex *b,const GeoVerte
     tri->v[0]=to_screen(a);tri->v[1]=to_screen(b);tri->v[2]=to_screen(c);
     scene->shadow_count++;
 }
+/* DIAGNOSTIC (not for merging): the player's sprite. The game names the
+ * texture it asks for (NitroPort_Gx3dDiagWatch); the next 20 scenes are
+ * checked for it, and the textures with the same palette they have. */
+static uint32_t sDiagWatch[2];          /* param, palette (game's thread writes) */
+static uint32_t sDiagCur[2];            /* (the thread's copy) */
+static unsigned sDiagScenes, sDiagHits, sDiagHitNow;
+static uint32_t sDiagSame[8];
+static unsigned sDiagSameCount;
+void NitroPort_Gx3dDiagWatch(uint32_t param,uint32_t pltt)
+{
+    __atomic_store_n(&sDiagWatch[1],pltt,__ATOMIC_RELAXED);
+    __atomic_store_n(&sDiagWatch[0],param,__ATOMIC_RELEASE);
+}
+uint32_t NitroPort_Gx3dDiagWatched(void)
+{
+    return __atomic_load_n(&sDiagWatch[0],__ATOMIC_ACQUIRE);
+}
+static void diag_triangle(uint32_t param,uint32_t pltt)
+{
+    unsigned i;
+    if(!sDiagCur[0])return;
+    if(param==sDiagCur[0])sDiagHitNow=1;
+    if(pltt!=sDiagCur[1] || ((param>>20)&0x3Fu)!=((sDiagCur[0]>>20)&0x3Fu))return;   /* (same palette and size) */
+    for(i=0;i<sDiagSameCount;i++)if(sDiagSame[i]==param)return;
+    if(sDiagSameCount<8)sDiagSame[sDiagSameCount++]=param;
+}
+static void diag_swap(void)
+{
+    uint32_t w=__atomic_load_n(&sDiagWatch[0],__ATOMIC_ACQUIRE);
+    if(w!=sDiagCur[0]){
+        sDiagCur[0]=w;
+        sDiagCur[1]=__atomic_load_n(&sDiagWatch[1],__ATOMIC_RELAXED);
+        sDiagScenes=sDiagHits=sDiagHitNow=0;
+        sDiagSameCount=0;
+        return;
+    }
+    if(!w || sDiagScenes>=20)return;
+    sDiagHits+=sDiagHitNow;
+    sDiagHitNow=0;
+    if(++sDiagScenes==20){
+        char list[8*10+1];
+        unsigned i,n=0;
+        list[0]=0;
+        for(i=0;i<sDiagSameCount;i++)n+=(unsigned)snprintf(list+n,sizeof(list)-n," %08lx",(unsigned long)sDiagSame[i]);
+        NitroPort_Log("[diag] 3D scenes: texture %08lx in %u of 20; sprite textures with its palette:%s",
+                      (unsigned long)w,sDiagHits,sDiagSameCount?list:" none");
+    }
+}
 /* Whether the polygon being built is culled: facing the side not drawn. */
 static int polygon_culled(void)
 {
@@ -706,6 +755,7 @@ static int add_screen_triangle(const NitroGx3dVertex *aa,const NitroGx3dVertex *
     tri->polygon_attr=s.attr;
     tri->texture_param=s.texparam;
     tri->palette_base=s.plttbase;
+    diag_triangle(s.texparam,s.plttbase);
     return 0;
 }
 static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
@@ -1529,6 +1579,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         int next=-1;
         uint32_t serial=0;
         NitroGx3dScene *scene=&sScenes[sBuilding];
+        diag_swap();
         /* All vertex and attribute writes precede the release publication. */
         scene->swap_param=p[0];
         scene->serial=sSerial+1;

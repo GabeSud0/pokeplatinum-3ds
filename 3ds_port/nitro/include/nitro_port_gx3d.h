@@ -291,4 +291,10 @@ void NitroPort_Gx3dRasterizeSceneAlpha(const NitroGx3dScene *scene, uint16_t *rg
 #ifdef __cplusplus
 }
 #endif
+/* DIAGNOSTIC (not for merging): the texture the game asks for the
+ * player's sprite, checked in the next scenes (and on the 3DS, when it's
+ * converted). */
+void NitroPort_Gx3dDiagWatch(uint32_t param, uint32_t pltt);
+uint32_t NitroPort_Gx3dDiagWatched(void);
+
 #endif
