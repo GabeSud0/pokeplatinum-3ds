@@ -8,6 +8,7 @@
 </p>
 
 <p align="center">
+  <a href="https://gabesud0.github.io/pokeplatinum-3ds/"><img src="https://img.shields.io/badge/Web_builder-Build_it_in_your_browser-9466FF?style=for-the-badge&amp;logo=googlechrome&amp;logoColor=white" alt="Build it in your browser with the web builder"></a>
   <a href="https://discord.gg/YjyA5ygpC"><img src="https://img.shields.io/badge/Discord-Join_the_server-5865F2?style=for-the-badge&amp;logo=discord&amp;logoColor=white" alt="Join the server on Discord"></a>
   <a href="https://github.com/GabeSud0/pokeplatinum-3ds/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/GabeSud0/pokeplatinum-3ds/build.yml?branch=main&amp;style=for-the-badge&amp;label=Build&amp;logo=github" alt="Build status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-4B5563?style=for-the-badge" alt="GPL-3.0 licence"></a>
