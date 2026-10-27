@@ -246,7 +246,21 @@ typedef struct ComposeLayers {
     short scroll3dLine[192];
     int displayOff;          /* nothing drawn (the engine is off) */
     uint32_t stamp;          /* the V-blank count when the game's display state was read */
+    /* A BG left out of the picture for the compositor to draw itself
+     * (NitroRender2DSplit.gpuBgLeftOut: the field's weather), or -1: its
+     * blending onto the 3D (eva, evb: 0-16), its scroll when the picture
+     * was drawn (the 3D scene's are newer: NitroGx3dScene.bg_ofs), and its
+     * picture's key (NitroPort_Render2DBgPicture made again when it
+     * changes). */
+    int gpuBg, gpuBgEva, gpuBgEvb, gpuBgHofs, gpuBgVofs;
+    uint64_t gpuBgKey;
+    /* (the drawer's) its picture (NitroPort_Render2DBgPicture: 256 x 256
+     * RGBA5551), made as the game's state was read, when the key changed */
+    const uint16_t *gpuBgPicture;
 } ComposeLayers;
+/* Whether the compositor can draw a BG itself (its picture's textures
+ * made: NitroRender2DSplit.gpuBgs). Any thread. */
+int NitroPort_ComposeDrawsBgs(void);
 ComposeLayers *NitroPort_ComposeLayersOf(int engine);
 /* Into the textures of the screen (0 upper, 1 lower) the engine is on. */
 /* 0: no set free to publish into (one the GPU's drawing, one the frame

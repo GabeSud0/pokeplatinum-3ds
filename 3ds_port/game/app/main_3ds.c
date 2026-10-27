@@ -1553,6 +1553,12 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             if (sCompose.wide && !inPanel) {
                 NitroPort_WideLayout(engine, &split);
             }
+            /* (the field's weather: its BG drawn by the compositor itself,
+             * scrolled on the GPU, the picture not drawn again as it
+             * scrolls; not in the menu's panel) */
+            if (engine == 0 && !inPanel && NitroPort_ComposeDrawsBgs()) {
+                split.gpuBgs = NitroPort_RepeatingBgs();
+            }
             if (__atomic_exchange_n(&shownInPanel, inPanel, __ATOMIC_ACQ_REL) != inPanel) {
                 sMustDraw[0] = true;
             }
@@ -1596,6 +1602,25 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         layers->tint3d = split.tint3d;
         layers->eva = split.eva;
         layers->evb = split.evb;
+        layers->gpuBg = split.gpuBgLeftOut ? __builtin_ctz((unsigned)split.gpuBgLeftOut) : -1;
+        layers->gpuBgEva = split.gpuBgEva;
+        layers->gpuBgEvb = split.gpuBgEvb;
+        layers->gpuBgHofs = split.gpuBgHofs;
+        layers->gpuBgVofs = split.gpuBgVofs;
+        layers->gpuBgKey = split.gpuBgKey;
+        if (layers->gpuBg >= 0) {
+            /* (its picture, made again only when it changed: read now,
+             * from the state taken, as the rest was) */
+            static uint16_t picture[256 * 256];
+            static uint64_t pictureKey;
+            static int pictureValid;
+
+            if (!pictureValid || pictureKey != split.gpuBgKey) {
+                pictureValid = NitroPort_Render2DBgPicture(layers->gpuBg, 1, picture);
+                pictureKey = split.gpuBgKey;
+            }
+            layers->gpuBgPicture = pictureValid ? picture : NULL;
+        }
         layers->evy = split.evy;
         layers->masterBright = split.masterBright;
         layers->backdrop = split.backdrop;

@@ -1,0 +1,71 @@
+From 1e100e29c935632457c5691f9c87bdff66d12f7c Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] The field's weather a repeating pattern beside the DS's
+ screen (SDK_PORT_3DS)
+
+On the 3DS remaster's wider screen the weather's BG (Eterna Forest's
+clouds, the fog, the snow) is a pattern that repeats: the screen beside
+the DS's carries on with it instead of its edge colours stretched out.
+Not the dark of Flash's circle, whose edge colour carries on.
+---
+ src/overlay005/ov5_021D5EB8.c | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/src/overlay005/ov5_021D5EB8.c b/src/overlay005/ov5_021D5EB8.c
+index 60ea5e71..a0d144f7 100644
+--- a/src/overlay005/ov5_021D5EB8.c
++++ b/src/overlay005/ov5_021D5EB8.c
+@@ -1,9 +1,16 @@
+ #include "overlay005/ov5_021D5EB8.h"
+ 
++#ifdef SDK_PORT_3DS
++extern void NitroPort_RepeatingBg(int bg, int on);
++#endif
++
+ #include <nitro.h>
+ #include <string.h>
+ 
+ #include "constants/heap.h"
++#ifdef SDK_PORT_3DS
++#include "constants/overworld_weather.h"
++#endif
+ 
+ #include "field/field_system.h"
+ #include "field/field_system_sub2_t.h"
+@@ -1174,6 +1181,12 @@ static BOOL ov5_021D676C(UnkStruct_ov5_021D6594 *param0, int param1, int param2,
+ 
+         G2_SetBG2Priority(1);
+         G2_SetBG0Priority(2);
++#ifdef SDK_PORT_3DS
++        // (the 3DS remaster's wider screen) the weather's BG a pattern
++        // that repeats: beside the DS's screen it goes on; not the dark of
++        // Flash's circle, whose edge colour goes on
++        NitroPort_RepeatingBg(2, param1 != OVERWORLD_WEATHER_DARK_FLASH);
++#endif
+     }
+ 
+     return 1;
+@@ -1209,6 +1222,9 @@ static void ov5_021D68B8(UnkStruct_ov5_021D6594 *param0, int param1)
+         G2_SetBG2Priority(3);
+         G2_SetBG0Priority(1);
+         G2_BlendNone();
++#ifdef SDK_PORT_3DS
++        NitroPort_RepeatingBg(2, FALSE);
++#endif
+     }
+ 
+     if (v0->unk_0C != NULL) {
+@@ -1263,6 +1279,9 @@ static void ov5_021D69B8(UnkStruct_ov5_021D69B8 *param0)
+         G2_SetBG2Priority(3);
+         G2_SetBG0Priority(1);
+         G2_BlendNone();
++#ifdef SDK_PORT_3DS
++        NitroPort_RepeatingBg(2, FALSE);
++#endif
+     }
+ 
+     if (param0->unk_08 != NULL) {
+-- 
+2.43.0
+

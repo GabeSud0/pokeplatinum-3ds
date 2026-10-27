@@ -446,6 +446,32 @@ int NitroPort_WideParts(int engine, NitroWidePart *out)
 /* ------------------------------------------------------- the layout */
 
 static int sWideExtra;
+static unsigned sRepeating;   /* (NitroPort_RepeatingBg: engine A's BGs, a bit each) */
+
+void NitroPort_RepeatingBg(int bg, int on)
+{
+    if (bg < 0 || bg > 3) {
+        return;
+    }
+    lock();
+    sRepeating = on ? sRepeating | (1u << bg) : sRepeating & ~(1u << bg);
+    unlock();
+}
+
+int NitroPort_RepeatingBgs(void)
+{
+    unsigned bgs;
+    int laidOut;
+
+    if (!NitroPort_OverlayLoadedNamed("overlay5") || NitroPort_OverlayLoadedNamed("battle")) {
+        return 0;
+    }
+    lock();
+    bgs = sRepeating;
+    laidOut = sPartCount[0] > 0;
+    unlock();
+    return laidOut ? 0 : (int)bgs;
+}
 
 void NitroPort_SetWideScreen(int extra)
 {
@@ -505,6 +531,15 @@ void NitroPort_WideLayout(int engine, struct NitroRender2DSplit *split)
         unlock();
         if (!laidOut) {
             split->clip[3] = 0;
+        }
+    } else if (engine == 0) {
+        /* (the field: its weather's BG a repeating pattern, NitroPort_RepeatingBg) */
+        int bgs = NitroPort_RepeatingBgs();
+
+        for (bg = 0; bg < 4; bg++) {
+            if ((bgs >> bg) & 1) {
+                split->clip[bg] = 0;
+            }
         }
     }
     split->anchorWindows = sWideExtra > 0;

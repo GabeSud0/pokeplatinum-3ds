@@ -464,6 +464,15 @@ static int sWideWidth=256;
  * game's thread: swap_noted), so the thread can't get to the SWAP first. */
 static uint32_t sPendingStamp, sPendingDisp3d;
 static uint8_t sPendingRegs3d[NITRO_GX3D_REGS_SIZE];
+static uint16_t sPendingBgOfs[8];
+/* (the scene before's BG scrolls: an in-between scene's are halfway) */
+static uint16_t sLastBgOfs[8];
+static int sLastBgOfsValid;
+static void io_bg_ofs(uint16_t out[8])
+{
+    int i;
+    for(i=0;i<8;i++)out[i]=(uint16_t)((NitroPort_IoReg[0x10+i*2]|(NitroPort_IoReg[0x11+i*2]<<8))&0x1FF);
+}
 static uint32_t io_disp3dcnt(void)
 {
     return (uint32_t)NitroPort_IoReg[0x60]|((uint32_t)NitroPort_IoReg[0x61]<<8)|
@@ -1079,6 +1088,16 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
     sMid->disp3dcnt=now->disp3dcnt;
     memcpy(sMid->regs3d,now->regs3d,sizeof(sMid->regs3d));
     {
+        /* (the BGs' scrolls halfway, the shorter way round a 512 map;
+         * a jump of more than a quarter of it: the new one) */
+        int i;
+        for(i=0;i<8;i++){
+            int a=sLastBgOfsValid?sLastBgOfs[i]:now->bg_ofs[i],d=((int)now->bg_ofs[i]-a)&0x1FF;
+            if(d>=256)d-=512;
+            sMid->bg_ofs[i]=(uint16_t)((d>128||d<-128)?now->bg_ofs[i]:((a+d/2)&0x1FF));
+        }
+    }
+    {
         /* (replaying: no shadow triangles, no counts in the [gx3d] lines,
          * the DS's limits counted afresh) */
         __typeof__(sDiag) diag=sDiag;
@@ -1453,7 +1472,7 @@ static void test_command(GeoState *g,unsigned op,const uint32_t *p)
 #define OP_WIDE_VIEW 0xF2u   /* one parameter: the screen width (NitroPort_Gx3dSetWideView) */
 /* The next SWAP_BUFFERS's time, DISP3DCNT and 3D registers (swap_noted) */
 #define OP_SCENE_REGS 0xF3u
-#define SCENE_REGS_WORDS (2u+NITRO_GX3D_REGS_SIZE/4u)
+#define SCENE_REGS_WORDS (2u+NITRO_GX3D_REGS_SIZE/4u+4u)
 
 /* The whole engine (s): one command and its parameters. */
 static inline __attribute__((always_inline)) void execute(unsigned op,const uint32_t *p)
@@ -1541,15 +1560,19 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
             scene->stamp=sPendingStamp;
             scene->disp3dcnt=sPendingDisp3d;
             memcpy(scene->regs3d,sPendingRegs3d,NITRO_GX3D_REGS_SIZE);
+            memcpy(scene->bg_ofs,sPendingBgOfs,sizeof(scene->bg_ofs));
         }else{
             scene->stamp=NitroPort_Gx3dStamp();
             scene->disp3dcnt=io_disp3dcnt();
             memcpy(scene->regs3d,NitroPort_IoReg+NITRO_GX3D_REGS_AT,NITRO_GX3D_REGS_SIZE);
+            io_bg_ofs(scene->bg_ofs);
         }
         /* Which SWAP_BUFFERS it is (with the geometry thread, counting
          * them as the game's thread does: NitroPort_Gx3dEarlierSceneUnread). */
         NitroPort_MailboxTag(&sMailbox,sSwapsDone+1u);
         interp_mid(scene);   /* (published with it) */
+        memcpy(sLastBgOfs,scene->bg_ofs,sizeof(sLastBgOfs));
+        sLastBgOfsValid=1;
         if(NitroPort_MailboxPublish(&sMailbox,&next,&serial)){
             sDisplayed=sBuilding;
             sBuilding=(unsigned)next;
@@ -1579,6 +1602,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         sPendingStamp=p[0];
         sPendingDisp3d=p[1];
         memcpy(sPendingRegs3d,&p[2],NITRO_GX3D_REGS_SIZE);
+        memcpy(sPendingBgOfs,&p[2+NITRO_GX3D_REGS_SIZE/4],sizeof(sPendingBgOfs));
         break;
     default:break;
     }
@@ -1700,6 +1724,7 @@ static void swap_noted(void)
     w[0]=NitroPort_Gx3dStamp();
     w[1]=io_disp3dcnt();
     memcpy(&w[2],NitroPort_IoReg+NITRO_GX3D_REGS_AT,NITRO_GX3D_REGS_SIZE);
+    io_bg_ofs((uint16_t *)&w[2+NITRO_GX3D_REGS_SIZE/4]);
     enqueue(OP_SCENE_REGS,w,SCENE_REGS_WORDS,0);
 }
 /* After a SWAP_BUFFERS is handed on: hand it over now, and whether the
