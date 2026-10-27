@@ -1,0 +1,44 @@
+From f08e8a50799d923089cbec0b7bb5917c2b879191 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] The player's frame table kept while he uses it (SDK_PORT_3DS)
+
+ov5_021EDB3C (is a frame table used by any object but this one?) read
+v0 before setting it, on the first object: whatever its register held.
+Built for the 3DS that was sometimes 0xffff, and then every object was
+skipped: the table counted unused and freed while the player still drew
+from it. Its memory went to something else, his frames were read from
+that (his first start frames overwritten), and he stayed in one pose
+whichever way he went, till the field was made again (the bag).
+
+Now the object's graphics are read first, as ov5_021EDAB4 (the models'
+check) does.
+---
+ src/overlay005/ov5_021ECE40.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/src/overlay005/ov5_021ECE40.c b/src/overlay005/ov5_021ECE40.c
+index 48a3e35a..109fcda6 100644
+--- a/src/overlay005/ov5_021ECE40.c
++++ b/src/overlay005/ov5_021ECE40.c
+@@ -1100,6 +1100,17 @@ static int ov5_021EDB3C(const MapObjectManager *param0, int param1, const MapObj
+             continue;
+         }
+ 
++#ifdef SDK_PORT_3DS
++        // The DS's code reads v0 here before it's ever set (on the first
++        // object): whatever was in its register. Built for the 3DS that
++        // was sometimes 0xffff, and then every object was skipped: no one
++        // used the frame table, so it was freed while the player still
++        // drew from it (he stayed in one pose, his frames read from the
++        // memory given to something else, till the field was made again).
++        // As ov5_021EDAB4 does it: the object's graphics first.
++        v0 = MapObject_GetGraphicsID(v2);
++#endif
++
+         if (v0 == 0xffff) {
+             continue;
+         }
+-- 
+2.43.0
+

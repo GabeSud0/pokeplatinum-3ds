@@ -3019,6 +3019,20 @@ static void test_wide_parts(void)
         CHECK(NitroPort_WideArtLoad(dir) == 2);
         NitroPort_Render2DSplit(0, wide, &split);
         CHECK(wide[40 * 320 + 0] == GREEN && wide[40 * 320 + 100] == GREEN && wide[120 * 320 + 100] == GREEN);
+        /* NO_ART: that BG without its picture, the parts as they are */
+        {
+            static const short noArt[][8] = {
+                { NITRO_WIDE_NO_ART, 2, 0, 1, 0, 1, 0, 0 },
+            };
+            short withNoArt[4][8];
+
+            memcpy(withNoArt, apart, sizeof(apart));
+            memcpy(withNoArt[3], noArt[0], sizeof(noArt[0]));
+            NitroPort_WideScreenParts(0, &withNoArt[0][0], 4);
+            NitroPort_Render2DSplit(0, wide, &split);
+            CHECK(wide[40 * 320 + 0] == RED && wide[40 * 320 + 100] == WHITE && wide[120 * 320 + 100] == RED);
+            NitroPort_WideScreenParts(0, &apart[0][0], 3);
+        }
         snprintf(made, sizeof(made), "%s/%016llx_0_0_full.png", dir, (unsigned long long)key);
         CHECK(remove(made) == 0);
         WriteArt(dir, key, 0, 0, 0, art);
