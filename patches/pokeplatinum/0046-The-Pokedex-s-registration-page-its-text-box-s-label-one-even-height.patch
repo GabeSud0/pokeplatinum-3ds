@@ -1,0 +1,46 @@
+From 8f50e145a29dfcc3ad8ed84aa71094891ab41d2e Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] =?UTF-8?q?The=20Pok=C3=A9dex's=20registration=20page:=20i?=
+ =?UTF-8?q?ts=20text=20box's=20label=20one=20even=20height=20(SDK=5FPORT?=
+ =?UTF-8?q?=5F3DS)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+On the wider screen, the box's middle was drawn on from its label's
+ends (columns 27 and 228), which are rounded: a pixel shorter at the top
+and the bottom. Drawn on from columns 28 and 227 instead, the label is
+one height across; its rounded ends stay at the widened box's ends.
+---
+ src/applications/pokedex/ov21_021E8D48.c | 14 +++++++++-----
+ 1 file changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/src/applications/pokedex/ov21_021E8D48.c b/src/applications/pokedex/ov21_021E8D48.c
+index 6eaad902..899e59cd 100644
+--- a/src/applications/pokedex/ov21_021E8D48.c
++++ b/src/applications/pokedex/ov21_021E8D48.c
+@@ -68,11 +68,15 @@ static const short sPokedexRegisterWideLayout[][8] = {
+     WIDE_MOVE(WIDE_BG(3), 190, 192, 248, 256, 16),
+     WIDE_MOVE(WIDE_BG(3), 190, 192, 248, 256, 24),
+     WIDE_MOVE(WIDE_BG(3), 190, 192, 248, 256, 32),
+-    WIDE_MOVE(WIDE_BG(3), 130, 190, 27, 229, 0),
+-    WIDE_MOVE(WIDE_BG(3), 130, 190, 0, 27, -32),
+-    WIDE_FILL(WIDE_BG(3), 130, 190, -5, 27, 27),
+-    WIDE_MOVE(WIDE_BG(3), 130, 190, 229, 256, 32),
+-    WIDE_FILL(WIDE_BG(3), 130, 190, 229, 261, 228),
++    // (2026-10-27) the white label's rounded ends (columns 27 and 228, a
++    // pixel shorter at the top and bottom) kept at the widened box's ends:
++    // its middle drawn on from columns 28 and 227 (full height), so the
++    // label is one even height across
++    WIDE_MOVE(WIDE_BG(3), 130, 190, 28, 228, 0),
++    WIDE_MOVE(WIDE_BG(3), 130, 190, 0, 28, -32),
++    WIDE_FILL(WIDE_BG(3), 130, 190, -4, 28, 28),
++    WIDE_MOVE(WIDE_BG(3), 130, 190, 228, 256, 32),
++    WIDE_FILL(WIDE_BG(3), 130, 190, 228, 260, 227),
+     // (2026-10-25) the Pokémon's picture frame (columns 4-91) 24 pixels to
+     // the left (the pattern behind it 8 pixels wide: still in step), the
+     // Pokémon (the 3D) with it; where it was, the pattern (the screen's
+-- 
+2.43.0
+
