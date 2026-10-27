@@ -41,20 +41,16 @@ avanzada. Los dos son juegos de la Generación 4 que comparten casi todo el moto
 
 <p align="center"><em>Sinnoh, en las dos pantallas de una New 3DS.</em></p>
 
-<!-- CAPTURAS: cambia cada URL por el enlace de una imagen (400 px de ancho se ve mejor).
 <table>
   <tr>
-    <td><img src="SCREENSHOT_1_URL" alt="Captura 1" width="400"></td>
-    <td><img src="SCREENSHOT_2_URL" alt="Captura 2" width="400"></td>
+    <td align="center"><img src="docs/images/screenshots/jubilife.png" alt="Ciudad Jubileo, con el mapa abajo" width="400"><br><sub>Ciudad Jubileo, con el mapa abajo</sub></td>
+    <td align="center"><img src="docs/images/screenshots/route.png" alt="En una ruta" width="400"><br><sub>En una ruta</sub></td>
   </tr>
   <tr>
-    <td><img src="SCREENSHOT_3_URL" alt="Captura 3" width="400"></td>
-    <td><img src="SCREENSHOT_4_URL" alt="Captura 4" width="400"></td>
+    <td align="center"><img src="docs/images/screenshots/battle.png" alt="Un combate" width="400"><br><sub>Un combate</sub></td>
+    <td align="center"><img src="docs/images/screenshots/cave.png" alt="Bajo tierra, con la mochila" width="400"><br><sub>Bajo tierra, con la mochila</sub></td>
   </tr>
 </table>
--->
-
-<p align="center"><em>Capturas muy pronto.</em></p>
 
 ## Características
 

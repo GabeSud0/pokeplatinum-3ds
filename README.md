@@ -41,20 +41,16 @@ of the same engine.
 
 <p align="center"><em>Sinnoh, across both screens of a New 3DS.</em></p>
 
-<!-- SCREENSHOTS: replace each URL below with a picture's link (400 px wide looks best).
 <table>
   <tr>
-    <td><img src="SCREENSHOT_1_URL" alt="Screenshot 1" width="400"></td>
-    <td><img src="SCREENSHOT_2_URL" alt="Screenshot 2" width="400"></td>
+    <td align="center"><img src="docs/images/screenshots/jubilife.png" alt="Jubilife City, with the map below" width="400"><br><sub>Jubilife City, with the map below</sub></td>
+    <td align="center"><img src="docs/images/screenshots/route.png" alt="Out on a route" width="400"><br><sub>Out on a route</sub></td>
   </tr>
   <tr>
-    <td><img src="SCREENSHOT_3_URL" alt="Screenshot 3" width="400"></td>
-    <td><img src="SCREENSHOT_4_URL" alt="Screenshot 4" width="400"></td>
+    <td align="center"><img src="docs/images/screenshots/battle.png" alt="A battle" width="400"><br><sub>A battle</sub></td>
+    <td align="center"><img src="docs/images/screenshots/cave.png" alt="Underground, with the bag" width="400"><br><sub>Underground, with the bag</sub></td>
   </tr>
 </table>
--->
-
-<p align="center"><em>Screenshots coming soon.</em></p>
 
 ## Features
 
