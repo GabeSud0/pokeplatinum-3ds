@@ -1,0 +1,38 @@
+From 494e4894cae51bb0bdc172cb2a9ecc382309b92e Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] Eterna Forest's clouds up and down with the camera
+ (SDK_PORT_3DS)
+
+The clouds' shadows moved up and down at 3/4 of the camera's speed, from
+side to side at its speed: walking up and down they seemed to shrink and
+grow. The 3DS remaster moves them with the camera both ways.
+---
+ src/overlay005/ov5_021D5EB8.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/overlay005/ov5_021D5EB8.c b/src/overlay005/ov5_021D5EB8.c
+index a0d144f7..65595a1b 100644
+--- a/src/overlay005/ov5_021D5EB8.c
++++ b/src/overlay005/ov5_021D5EB8.c
+@@ -5225,11 +5225,17 @@ static void ov5_021DB144(SysTask *param0, void *param1)
+ 
+         ov5_021D71B4(v0, &v6, &v7);
+ 
++#ifndef SDK_PORT_3DS
+         if (v7 < 0) {
+             v7 = FX_Mul(v7, FX32_CONST(0.75));
+         } else {
+             v7 = FX_Mul(v7, FX32_CONST(0.75));
+         }
++#else
++        // (the 3DS remaster) the clouds up and down with the camera, as
++        // from side to side: at 3/4 of its speed they seemed to shrink and
++        // grow as the player walked up and down
++#endif
+ 
+         v1->unk_AC += v6;
+         v1->unk_B0 += v7;
+-- 
+2.43.0
+
