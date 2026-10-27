@@ -71,12 +71,13 @@ typedef struct NitroShadowSetup {
 /* The setup for a scene, from its triangles' vertices (count of them, three
  * a triangle; each x, y, z, w floats, stride bytes apart) and projection
  * (the DS's 4x4, 20.12, rows as the DS keeps them: clip = position x P),
- * the view's width (NitroGx3dScene.screen_width: 256, or wider: x was
- * scaled by 256 / it), the sun and the map's size in texels. 0 (no
+ * the view's width and height (NitroGx3dScene.screen_width, screen_height:
+ * 256 and 192, or more: x was scaled by 256 / the width, y by 192 / the
+ * height), the sun and the map's size in texels. 0 (no
  * shadows) if the projection isn't a camera's perspective or no ground
  * stands out (a battle, a menu). */
 int NitroPort_ShadowSetup(const float *positions, size_t stride, size_t count,
-                          const int32_t projection[16], unsigned screenWidth,
+                          const int32_t projection[16], unsigned screenWidth, unsigned screenHeight,
                           const NitroShadowSun *sun, unsigned mapSize, NitroShadowSetup *out);
 
 /* A setup's distances reaching further towards the sun, for triangles that

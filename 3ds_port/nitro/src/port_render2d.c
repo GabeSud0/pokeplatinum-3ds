@@ -2486,6 +2486,7 @@ typedef struct Obj {
     s16 stretch;           /* (moved by a screen's part) its edge column drawn on over this many pixels back
                             * to where it was: its first column left of it (> 0), its last right of it (< 0) */
     u8 oy;
+    short oyTall;          /* (a tall field: Engine.top) its top line on the picture, signed: no wrapping */
     u8 w, h;
     u16 boxW, boxH;        /* doubled for double-size affine OBJs */
     u8 affine, hflip, vflip, bpp8;
@@ -2553,7 +2554,17 @@ static BOOL ReadObj(const Engine *e, int i, Obj *obj)
             obj->boxH *= 2;
         }
     }
-    obj->oy = (u8)((a0 & 0xFF) + e->top);   /* (a tall field's lines above the DS's: moved down by them) */
+    obj->oy = (u8)(a0 & 0xFF);
+    if (e->top) {
+        /* (a tall field's lines above the DS's: moved down by them. On
+         * the DS one from y 192 comes round to the top only where it goes
+         * past 256; one above 192 never does, however tall: its lines past
+         * the DS's are below it here, not at the picture's top) */
+        int y = a0 & 0xFF;
+
+        obj->oyTall = (short)((y >= H && (y + obj->boxH > 256 || y >= 256 - e->top) ? y - 256 : y) + e->top);
+        obj->oy = (u8)obj->oyTall;
+    }
     obj->ox = (s16)(a1 & 0x1FF);
     /* (x 256-511 is left of the screen; on a wider canvas the first of
      * those are right of the DS's screen, where the canvas goes on) */
@@ -2562,7 +2573,7 @@ static BOOL ReadObj(const Engine *e, int i, Obj *obj)
     }
     if (e->nObjMove) {
         /* (over a window moved to an edge: with it) */
-        int cx = obj->ox + obj->boxW / 2, cy = (obj->oy + obj->boxH / 2) & 255, k;
+        int cx = obj->ox + obj->boxW / 2, cy = e->top ? obj->oyTall + obj->boxH / 2 : (obj->oy + obj->boxH / 2) & 255, k;
 
         for (k = 0; k < e->nObjMove; k++) {
             if (e->objMove[k].dy == 0 && cx >= e->objMove[k].x0 && cx < e->objMove[k].x1 &&
@@ -2579,7 +2590,8 @@ static BOOL ReadObj(const Engine *e, int i, Obj *obj)
         for (k = 0; k < e->nObjMove; k++) {
             if (e->objMove[k].dy != 0 && cx >= e->objMove[k].x0 && cx < e->objMove[k].x1 &&
                 cy >= e->objMove[k].y0 && cy < e->objMove[k].y1) {
-                obj->oy = (u8)(obj->oy + e->objMove[k].dy);
+                obj->oyTall = (short)(obj->oyTall + e->objMove[k].dy);
+                obj->oy = (u8)obj->oyTall;
                 break;
             }
         }
@@ -2615,7 +2627,7 @@ static void SortObjs(const Engine *e, ObjFrame *f)
 
         /* The lines it's on: (y - oy) & 255 < boxH. */
         for (y = 0; y < e->height; y++) {
-            if (((y - obj->oy) & 0xFF) < obj->boxH) {
+            if (e->top ? y - obj->oyTall >= 0 && y - obj->oyTall < obj->boxH : ((y - obj->oy) & 0xFF) < obj->boxH) {
                 f->onLine[y][f->lineCount[y]++] = f->count;
             }
         }
@@ -2931,7 +2943,7 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
 
     for (k = 0; k < f->lineCount[y]; k++) {
         const Obj *obj = &f->obj[f->onLine[y][k]];
-        int ly = (y - obj->oy) & 0xFF;
+        int ly = e->top ? y - obj->oyTall : (y - obj->oy) & 0xFF;
         int sx = obj->ox < 0 ? -obj->ox : 0;
         int end = obj->ox + obj->boxW > e->width ? e->width - obj->ox : obj->boxW;
 
@@ -4182,12 +4194,13 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
         /* (the field at the DS's pixel size on the 3DS's whole screen: lines
          * above and below the DS's, the 3D on all of them; the registers
          * as those lines see them, in a copy) */
-        static u8 shifted[0x2000];
+        static u8 shiftedOf[2][0x2000];   /* (each engine's drawer its own) */
+        u8 *shifted = shiftedOf[engine ? 1 : 0];
 
         e->height = split->height;
         e->h3d = split->height;
         e->top = split->top;
-        memcpy(shifted, e->ioAll, sizeof(shifted));
+        memcpy(shifted, e->ioAll, sizeof(shiftedOf[0]));
         e->ioAll = shifted;
         e->io = shifted;
         ShiftDown(e, shifted);

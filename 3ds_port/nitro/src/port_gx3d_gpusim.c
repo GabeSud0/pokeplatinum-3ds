@@ -287,7 +287,7 @@ static void simulate(const NitroGx3dScene *scene, uint16_t *out555)
         shade[2] = 1.0f - (1.0f - NITRO_SHADOW_SHADE_B / 255.0f) * strength;
     }
     if (sShadows && nv && strength >= 0.02f &&
-        NitroPort_ShadowSetup(verts[0].position, sizeof(verts[0]), nv, scene->projection, scene->screen_width,
+        NitroPort_ShadowSetup(verts[0].position, sizeof(verts[0]), nv, scene->projection, scene->screen_width, scene->screen_height,
                               &sun, SHADOW_SIZE, &shadow)) {
         size_t ns = 0, n;
         shadowed = 1;

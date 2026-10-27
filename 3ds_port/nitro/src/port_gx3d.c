@@ -469,7 +469,7 @@ static uint16_t sPendingBgOfs[8];
 /* (the scene before's BG scrolls: an in-between scene's are halfway) */
 static uint16_t sLastBgOfs[8];
 static int sLastBgOfsValid;
-static uint32_t sLastStamp;
+static uint32_t sLastStamp, sLastWidth, sLastHeight;   /* (the scene before's) */
 static void io_bg_ofs(uint16_t out[8])
 {
     int i;
@@ -1109,6 +1109,9 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
     sMidMatched=match_records(P,m,C,n,sMatch);
     sMidPolygons=n;
     if(n>=16u && sMidMatched*2u<n)return 0;   /* (a cut: too little in common) */
+    /* (the view's size changed between them: no in-between, its clip
+     * spaces aren't the same) */
+    if(sLastBgOfsValid && (now->screen_width!=sLastWidth || now->screen_height!=sLastHeight))return 0;
     sMid->count=0;sMid->dropped=0;sMid->shadow_count=0;sMid->shadow_triangles=NULL;
     sMid->serial=now->serial;sMid->swap_param=now->swap_param;
     sMid->screen_width=now->screen_width;
@@ -1606,6 +1609,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         interp_mid(scene);   /* (published with it) */
         memcpy(sLastBgOfs,scene->bg_ofs,sizeof(sLastBgOfs));
         sLastStamp=scene->stamp;
+        sLastWidth=scene->screen_width;sLastHeight=scene->screen_height;
         sLastBgOfsValid=1;
         if(NitroPort_MailboxPublish(&sMailbox,&next,&serial)){
             sDisplayed=sBuilding;

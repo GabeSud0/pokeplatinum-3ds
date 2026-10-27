@@ -2597,6 +2597,26 @@ static void test_tall_field(void)
      * left, the 3D under it there (under: nothing drawn, the backdrop) */
     CHECK(!(over[0] & 0x8000));
 
+    /* a 32-tall OBJ below the DS's screen (y 210, its last 8 lines drawn):
+     * its lines past 256 don't come round to the picture's top (the DS
+     * would, its screen not that tall) */
+    {
+        static u8 tile12[13 * 32];
+
+        memset(tile12, 0, sizeof(tile12));
+        memset(tile12 + 12 * 32, 0x11, 32);   /* tile 12: the 32x32's bottom-left */
+        GX_LoadOBJ(tile12, 0, sizeof(tile12));
+        G2_SetOBJAttr(&oam[1], 200, 210, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_32x32,
+                      GX_OAM_COLORMODE_16, 0, 0, 0);
+        DC_FlushRange(oam, sizeof(oam));
+        GX_LoadOAM(oam, 0, sizeof(oam));
+        NitroPort_Render2DSplit(0, under, &split);
+        for (i = 0; i < 12; i++) {
+            CHECK(!(over[i * TW + OX + 200] & 0x8000));
+        }
+        GX_LoadOBJ(objTile, 0, sizeof(objTile));
+    }
+
     /* unclipped, BG1's map goes on above: its row 31 at the picture's 16-23 */
     split.clip[1] = 0;
     NitroPort_Render2DSplit(0, under, &split);

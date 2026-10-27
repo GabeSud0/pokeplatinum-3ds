@@ -1462,7 +1462,7 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
     sShadowDrawn=0;
     sShadowReady=look_now() && sShadowMode && sPreparedCount &&
                  NitroPort_ShadowSetup(sVertices[slot][0].position,sizeof(NitroGx3dGpuVertex),sPreparedCount,
-                                       scene->projection,scene->screen_width,&sSun,SHADOW_SIZE,&sShadow);
+                                       scene->projection,scene->screen_width,scene->screen_height,&sSun,SHADOW_SIZE,&sShadow);
     sShadowOnlyBatches=0;
     if(sShadowReady){
         /* what only casts (outside the view, or facing away), after the

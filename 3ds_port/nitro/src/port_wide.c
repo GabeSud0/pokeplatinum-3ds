@@ -7,6 +7,7 @@
  */
 #include <nitro_port_wide.h>
 #include <nitro_port_render2d.h>
+#include <nitro_port_lowermenu.h>
 #include <string.h>
 
 #define MAX_TRACKED 96
@@ -487,12 +488,25 @@ void NitroPort_SetPixelField(int on)
 
 int NitroPort_PixelField(void)
 {
-    int laidOut;
+    /* (the overlays' part kept by their serial: the game's code reads this
+     * for every cell it draws, NitroPort_WideScreenExtra) */
+    static uint32_t cache = 0xFFFFFFFFu;
+    uint32_t serial = NitroPort_OverlaySerial() & 0x7FFFFFFFu, c;
+    int field, laidOut;
 
-    if (!__atomic_load_n(&sPixelFieldOn, __ATOMIC_ACQUIRE) || sWideExtra <= 0 ||
-        !NitroPort_OverlayLoadedNamed("overlay5") || NitroPort_OverlayLoadedNamed("battle") ||
-        NitroPort_WidePictures()) {
+    if (!__atomic_load_n(&sPixelFieldOn, __ATOMIC_ACQUIRE) || sWideExtra <= 0) {
         return 0;
+    }
+    c = __atomic_load_n(&cache, __ATOMIC_RELAXED);
+    if (c != 0xFFFFFFFFu && (c >> 1) == serial) {
+        field = (int)(c & 1);
+    } else {
+        field = NitroPort_OverlayLoadedNamed("overlay5") && !NitroPort_OverlayLoadedNamed("battle") &&
+                !NitroPort_WidePictures();
+        __atomic_store_n(&cache, (serial << 1) | (uint32_t)field, __ATOMIC_RELAXED);
+    }
+    if (!field || NitroPort_LowerMenuPanelShowsUpper()) {
+        return 0;   /* (the lower menu's panel showing the upper screen: at the DS's size there) */
     }
     lock();
     laidOut = sPartCount[0] > 0;

@@ -532,7 +532,8 @@ static void RemasterRender(uint16_t *out)
                 } else if (split.has3d) {
                     /* where the 3D's x is: the DS's 256 at origin, or (wide)
                      * the whole canvas */
-                    int scroll3d = split.scroll3dLines ? split.scroll3dLine[y] : split.scroll3d;
+                    int dsY = y - split.top < 0 ? 0 : y - split.top >= 192 ? 191 : y - split.top;
+                    int scroll3d = split.scroll3dLines ? split.scroll3dLine[dsY] : split.scroll3d;
                     int scroll = scroll3d >= 256 ? scroll3d - 512 : scroll3d;
                     int ix = NitroPort_WideScreenExtra() && screen == 0 && width > 256
                                  ? (x + scroll) * 256 / width
@@ -1438,6 +1439,10 @@ static void ControlWait(void)
                 if (h < 192) {
                     h = 192;
                 }
+                if (w > 512 || h > 256) {
+                    w = 256;   /* (what NitroPort_Gx3dSimulateGpuSized draws then) */
+                    h = 192;
+                }
                 NitroPort_Gx3dSimulateGpuSized(scene, image, w, h);
                 if (WritePng(arg, image, w, h) != 0) {
                     NitroPort_Log("[pc] control: can't write %s", arg);
@@ -1555,8 +1560,8 @@ static void ControlWait(void)
             } else if (sscanf(line, "bench2ds %ld", &a) == 1) {
                 /* The same, as the 3DS remaster draws them: in two layers,
                  * the upper screen on the wider canvas with its pictures. */
-                static uint16_t under[320 * 192], over[320 * 192];
-                static uint8_t overAlpha[320 * 192];
+                static uint16_t under[400 * 240], over[400 * 240];   /* (the pixel-perfect field's) */
+                static uint8_t overAlpha[400 * 240];
                 int engine, only = -1, aOnTop = NitroPort_EngineAOnTop() ? 1 : 0;
                 sscanf(line, "bench2ds %ld %d", &a, &only);
                 for (engine = 0; engine < 2; engine++) {
