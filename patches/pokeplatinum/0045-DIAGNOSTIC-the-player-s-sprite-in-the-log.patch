@@ -1,19 +1,19 @@
-From e2afc799798d99d3a3aed9d0016e866500616e19 Mon Sep 17 00:00:00 2001
+From db3c9c979fa1c246e9a374899b0e3442701e3953 Mon Sep 17 00:00:00 2001
 From: pokeplatinum-3ds <noreply@users.noreply.github.com>
 Date: Sun, 25 Oct 2026 08:00:00 -0700
 Subject: [PATCH] DIAGNOSTIC, not for merging: the player's sprite in the log
  (SDK_PORT_3DS)
 
 ---
- src/billboard.c               | 50 +++++++++++++++++++++++++++++++++++
- src/overlay005/ov5_021EB1A0.c | 27 +++++++++++++++++++
- 2 files changed, 77 insertions(+)
+ src/billboard.c               | 83 +++++++++++++++++++++++++++++++++++
+ src/overlay005/ov5_021EB1A0.c | 27 ++++++++++++
+ 2 files changed, 110 insertions(+)
 
 diff --git a/src/billboard.c b/src/billboard.c
-index 8cdadfd6..75c653e9 100644
+index 8cdadfd6..719e310e 100644
 --- a/src/billboard.c
 +++ b/src/billboard.c
-@@ -59,6 +59,51 @@ static void SetBillboardGfxSeqAndResetVRAMTransfer(Billboard *billboard, const B
+@@ -59,6 +59,84 @@ static void SetBillboardGfxSeqAndResetVRAMTransfer(Billboard *billboard, const B
  static BillboardList *sBillboardLists = NULL;
  static int sBillboardListCount = 0;
  
@@ -58,6 +58,39 @@ index 8cdadfd6..75c653e9 100644
 +        lastAnim = billboard->animNum;
 +    }
 +
++    {
++        // (the frame table damaged: its start frames out of order)
++        static const void *reported;
++        const BillboardGfxSequence *seq = &billboard->gfxSequence;
++        int k, bad = -1;
++
++        for (k = 1; k < (int)seq->seqCount && k < 64; k++) {
++            if (seq->startFrame[k] <= seq->startFrame[k - 1]) {
++                bad = k;
++                break;
++            }
++        }
++
++        if (bad >= 0 && reported != seq->startFrame) {
++            extern u8 NitroPort_MainMem[];
++            const u8 *at = (const u8 *)seq->startFrame - 4;
++            char hex[3 * 32 + 1];
++            int row, b;
++
++            reported = seq->startFrame;
++            NitroPort_Log("[diag] FRAME TABLE DAMAGED at entry %d (count %lu), main memory +%lx",
++                bad, (unsigned long)seq->seqCount, (unsigned long)(at - NitroPort_MainMem));
++
++            for (row = -1; row < 3; row++) {
++                for (b = 0; b < 32; b++) {
++                    snprintf(hex + 3 * b, 4, "%02x ", at[row * 32 + b]);
++                }
++
++                NitroPort_Log("[diag]   %+4d: %s", row * 32, hex);
++            }
++        }
++    }
++
 +    lastParam = param;
 +}
 +#endif
@@ -65,7 +98,7 @@ index 8cdadfd6..75c653e9 100644
  static void BillboardList_Reset(BillboardList *list)
  {
      list->active = FALSE;
-@@ -259,6 +304,11 @@ static void BillboardList_Draw(BillboardList *list)
+@@ -259,6 +337,11 @@ static void BillboardList_Draw(BillboardList *list)
              } else if (billboard->state == BILLBOARD_STATE_VRAM_TRANSFER) {
                  Billboard_TryRequestVRAMTransfer(billboard);
              }
