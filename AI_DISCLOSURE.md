@@ -1,11 +1,10 @@
 # AI disclosure
 
-This project is developed with help from Claude, an AI assistant made by
-Anthropic.
+This project is developed with help from Claude
 
 ## What the AI does
 
-- Writes much of the C code for the 3DS backend and the Python tooling.
+- Writes much of the C code for the 3DS backend.
 - Researches and documents the decompilation and the DS and 3DS hardware.
 - Reviews build failures and proposes fixes.
 
@@ -24,3 +23,4 @@ Anthropic.
 - Generating, recreating or "cleaning up" game assets. All game content comes
   from the player's own cartridge dump at build time.
 - Reproducing code from leaked sources or from ports that bundle game assets.
+- Generates art or AI content, all new features are created by the developer.
