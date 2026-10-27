@@ -575,7 +575,9 @@ stretched:
     picture is looked up (`NitroPort_WideLayout`);
   - the battle's trainers slide off (the player after throwing the ball,
     the opponent) till they're past the wider screen's edges, not the
-    DS's (they vanished in the sides);
+    DS's (they vanished in the sides); since 2026-10-26 (patch 0043) till
+    all of the sprite is (it reaches 60 pixels on from its position: the
+    player went with 20 pixels of it still in the left band);
   - the HM cut-in: its band of Poké Balls (BG3, a 256-pixel map) repeats
     to the screen's edges (a SHOW part) instead of a stripe of its plain
     lines; the Pokémon waits beyond the wider screen's right edge and
@@ -610,6 +612,10 @@ stretched:
     (up to 240 pixels: `InfoMain_PortRewrap`, at the spaces; a word the
     DS split at its hyphen joined again) instead of
     the DS's lines squeezed in its middle;
+  - the Pokédex's page after a catch (patch 0043): its background shows
+    no hand-drawn picture (`WIDE_NO_ART`): as its header blinks, the art
+    is at times the info page's, whose built-in picture is laid out as that
+    page is, and the page flashed between the two layouts;
   - selling in a Poké Mart with the lower screen's menu: the store stays
     on the upper screen (it was black while the bag was up);
 - **OBJs** (sprites) placed past the DS's edges show.

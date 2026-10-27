@@ -1,0 +1,80 @@
+From 507b1ceeeb27ab42ea5ed8ce737c13bcdd17f484 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] =?UTF-8?q?The=20wider=20screen:=20the=20trainer's=20throw?=
+ =?UTF-8?q?,=20the=20Pok=C3=A9dex=20page's=20flashing=20(SDK=5FPORT=5F3DS)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The player's (and the opponent's) trainer, sliding off after throwing
+the ball, is taken away only once all of it is past the wider screen's
+edge (battle_display.c, PORT_TRAINER_REACH: the sprite reaches 60 pixels
+on from its position; at the DS's -40 less the wider screen's 32, 20
+pixels of the player were still showing when it went).
+
+The Pokédex's page after a catch: its background shows no hand-drawn
+picture (WIDE_NO_ART, port_wide_layout.h): as the header blinks, its art
+is at times the info page's, whose built-in picture is laid out as that
+page is, and the page flashed between the two.
+---
+ include/port_wide_layout.h               |  1 +
+ src/applications/pokedex/ov21_021E8D48.c |  6 ++++++
+ src/battle/battle_display.c              | 11 ++++++++---
+ 3 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/include/port_wide_layout.h b/include/port_wide_layout.h
+index 8ffa9c72..db1564b3 100644
+--- a/include/port_wide_layout.h
++++ b/include/port_wide_layout.h
+@@ -59,6 +59,7 @@ extern void NitroPort_WindowFramed(const void *window, int frame);
+ #define WIDE_PICTURE(bg, picture, x, y, angle)    { 5, WIDE_BG(bg), (y), (y) + 1, (x), (x) + 1, (angle), (picture) }
+ #define WIDE_CLEAR(bg, pal, mask)                 { 6, WIDE_BG(bg), 0, 1, 0, 1, (pal), (mask) }
+ #define WIDE_SHOW(bgs, top, bottom)               { 7, (bgs), (top), (bottom), 0, 1, 0, 0 }
++#define WIDE_NO_ART(bgs)                          { 8, (bgs), 0, 1, 0, 1, 0, 0 }
+ 
+ // The pictures (their files: <name>.png; the port's numbers, in
+ // 3ds_port/nitro/include/nitro_port_wide.h, are the same).
+diff --git a/src/applications/pokedex/ov21_021E8D48.c b/src/applications/pokedex/ov21_021E8D48.c
+index 4349954f..6eaad902 100644
+--- a/src/applications/pokedex/ov21_021E8D48.c
++++ b/src/applications/pokedex/ov21_021E8D48.c
+@@ -86,6 +86,12 @@ static const short sPokedexRegisterWideLayout[][8] = {
+     WIDE_MOVE(WIDE_BG(3), 24, 120, 248, 256, 88 - 248),
+     WIDE_SHIFT3D(-24),
+     WIDE_OBJS(14, 62, 96, 256, 24),
++    // (2026-10-26) the background without a hand-drawn picture: as the
++    // header blinks, its art is at times the info page's, whose picture
++    // (built in: fedf88a75a541576) is laid out as that page is (the frame
++    // where the DS has it, the text box wider), and the page flashed
++    // between the two
++    WIDE_NO_ART(WIDE_BG(3)),
+ };
+ #endif
+ 
+diff --git a/src/battle/battle_display.c b/src/battle/battle_display.c
+index 02095d20..439dc697 100644
+--- a/src/battle/battle_display.c
++++ b/src/battle/battle_display.c
+@@ -81,10 +81,15 @@
+ 
+ #ifdef SDK_PORT_3DS
+ // (the 3DS remaster's wider upper screen: a trainer sliding off the screen
+-// gone once past its edges, not the DS's)
++// gone once past its edges, not the DS's. The sprite reaches 60 pixels on
++// from its position (its cells, 2026-10-26: the player's back sprite at
++// -67 still showed 20 pixels of its right side in the wider screen's left
++// band), and the DS's -40 left 20 of it on the DS's screen, where the cell
++// test hid it: here it's gone only once all of it is past the edge.)
+ extern int NitroPort_WideScreenExtra(void);
+-#define PORT_TRAINER_GONE_LEFT  (-40 - NitroPort_WideScreenExtra())
+-#define PORT_TRAINER_GONE_RIGHT (256 + 40 + NitroPort_WideScreenExtra())
++#define PORT_TRAINER_REACH      64
++#define PORT_TRAINER_GONE_LEFT  (-PORT_TRAINER_REACH - NitroPort_WideScreenExtra())
++#define PORT_TRAINER_GONE_RIGHT (256 + PORT_TRAINER_REACH + NitroPort_WideScreenExtra())
+ #else
+ #define PORT_TRAINER_GONE_LEFT  -40
+ #define PORT_TRAINER_GONE_RIGHT (256 + 40)
+-- 
+2.43.0
+

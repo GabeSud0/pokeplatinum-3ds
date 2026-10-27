@@ -211,6 +211,7 @@ typedef struct Engine {
     NitroWidePart parts[NITRO_WIDE_MAX_PARTS + 3 * NITRO_WIDE_MAX_SPLITS];
     int nParts;
     u8 partBgs, movedBgs, objsMoved;
+    u8 noArtBgs;           /* (NITRO_WIDE_NO_ART) BGs shown without a hand-drawn picture */
     short shift3d;
     /* (NITRO_WIDE_PICTURE parts) the pictures drawn with the BGs: their
      * pixels, size, top-left on the canvas, turn (cos, sin: 16.16), the
@@ -2158,8 +2159,9 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
         int hofs, vofs, full, moved = (e->movedBgs >> bg) & 1;
         const u16 *art;
 
-        if (kind[bg] == BG_NONE || kind[bg] == BG_3D || !e->clip[bg] || (moved && kind[bg] != BG_TEXT)) {
-            continue;   /* (a BG the screen's parts move: its own pixels) */
+        if (kind[bg] == BG_NONE || kind[bg] == BG_3D || !e->clip[bg] || (moved && kind[bg] != BG_TEXT) ||
+            ((e->noArtBgs >> bg) & 1)) {
+            continue;   /* (a BG the screen's parts move: its own pixels; NO_ART: no picture) */
         }
         key = BgKeyCached(e, bg, kind[bg], bgcnt[bg], dispcnt);
         if (key == 0) {
@@ -3837,6 +3839,9 @@ static void SetUpParts(Engine *e)
         case NITRO_WIDE_CLEAR:
             e->clearBgs |= (u8)(p->bgs & 0x0F);
             e->clearMask[p->dx & 15] |= (u16)p->col;
+            break;
+        case NITRO_WIDE_NO_ART:
+            e->noArtBgs |= (u8)(p->bgs & 0x0F);
             break;
         }
     }
