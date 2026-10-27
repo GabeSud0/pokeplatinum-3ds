@@ -554,10 +554,101 @@ stretched:
   DS's right edge) go to the screen's right edge, and since 2026-10-25 the
   box above them with the Pokémon's icon, name and level with them
   (`patches/pokeplatinum/0040`; it stayed where the DS has it).
+- **Fixes from a playthrough** (patch 0042, 2026-10-26):
+  - a text box taken off and put back between messages (Professor
+    Rowan's opening speech) keeps its widened frame while it's away
+    (`port_wide.c`: the box is remembered till another window is put over
+    it, its BG is set up anew or freed, or the screen changes), so it
+    doesn't narrow and widen with every
+    message; the icon at its top right that says which screen to look at
+    (`Text_RenderScreenIndicator`, `NitroPort_WindowIndicator`) goes to the
+    widened box's right edge, where the DS has it in its box;
+  - the Pokédex's registration page: the Pokémon's box (and the 3D
+    Pokémon in it) 24 pixels to the left, the title 24 to the right;
+  - the evolution's background: a 512-wide map whose right half came
+    round beside the DS's screen; its edge columns carried on instead,
+    and since 2026-10-26 hand-drawn bands (`wideart/6570e913eaa0988b_0_0.png`:
+    while its palette is the evolution's teal; fading in and in the white
+    flash, the edge columns). After a battle the battle's overlay is
+    still loaded: its BG3 is left unclipped (its own map beside the DS's
+    screen) only without a screen laid out in parts, so the evolution's
+    picture is looked up (`NitroPort_WideLayout`);
+  - the battle's trainers slide off (the player after throwing the ball,
+    the opponent) till they're past the wider screen's edges, not the
+    DS's (they vanished in the sides);
+  - the HM cut-in: its band of Poké Balls (BG3, a 256-pixel map) repeats
+    to the screen's edges (a SHOW part) instead of a stripe of its plain
+    lines; the Pokémon waits beyond the wider screen's right edge and
+    slides off past its left one (it sat still in the right side);
+  - the people the scripts bring on and send off (`scrcmd.c`): the
+    scripts put them just past the DS's edge, where they popped up,
+    vanished or walked through things in the wider screen's sides. One
+    added beside the DS's picture but not beyond the wider one's is put
+    beyond it, 12 tiles from the middle (the 2 tiles more each side, the
+    sprite's width, the perspective), and its first steps in take it the
+    extra tiles; one whose walk out ends off the DS's picture (9 tiles or
+    more from the middle) walks the extra tiles out before the script
+    takes it away; one walking straight out through something the DS's
+    picture didn't show (the ground's collisions, ledges, cliffs; not the
+    other people, who walk out together) goes round it (outwards first,
+    else up, else down: Roark leaving the mine after the boulder). When
+    the script ends (or the next starts), the ones it didn't take away go
+    back where it put them. Only walks east and west change (the screen
+    isn't taller). Since 2026-10-26: one whose script turns it or waits
+    before its first steps (Professor Rowan, Dawn, Looker) is moved out
+    before it's drawn, so it isn't seen standing where the script put it
+    first; the way round something also goes round the people standing
+    there (not the ones the script sets walking with it: its
+    ApplyMovement commands before the WaitMovement);
+  - Route 201's Pokémon Breeder (who stands just past the DS's left
+    edge, on the way Rowan and Dawn come in from Twinleaf Town) stands 5
+    tiles further right (`map_header_data.c`, `sPortWideMoves`): in the
+    wider screen's edge he was cut in half, and they walked through him;
+  - the Pokédex's registration page (2026-10-26): its left edge carries
+    the page's border on, not the arc round the footprint again; the
+    entry's text is wrapped again across a box as wide as the screen's
+    (up to 240 pixels: `InfoMain_PortRewrap`, at the spaces; a word the
+    DS split at its hyphen joined again) instead of
+    the DS's lines squeezed in its middle;
+  - selling in a Poké Mart with the lower screen's menu: the store stays
+    on the upper screen (it was black while the bag was up);
 - **OBJs** (sprites) placed past the DS's edges show.
 - **The 3D** is drawn wide (the camera widened) only while it's on the
   upper screen; the intro's flyover is on the lower screen, at the DS's
   width.
+
+## The soft reset
+
+L + R + START + SELECT (the game's own soft reset, or its restart after a
+link error: `OS_ResetSystem`) closes the program as from the HOME menu (the
+save's file written) and has the system start it again
+(`aptSetChainloaderToSelf`: the HOME menu jumps back to the title), so the
+game starts from its opening with nothing left over. Started from the
+Homebrew Launcher (a `.3dsx`) there's nothing to jump back to: it closes to
+the launcher. The PC runner starts itself again with the same arguments
+(`execv`), the control directory carrying on.
+
+## A catch with the party full
+
+A Pokémon caught with six in the party goes to the PC, as on the DS. In
+the battle, after the Pokédex's page and before the nickname
+(`patches/pokeplatinum/0042`, `battle_script.c`), the game asks "Your
+party is full. Add X to your party?"; YES opens the battle's party screen
+(its SHIFT reads SEND TO PC, and any of them can be picked: the one in
+battle, a fainted one, an egg) to pick the one that goes to the PC in its
+place, then "X was added to the party and Y was sent to the PC." and the
+nickname as ever; the box message is left out (and from the naming
+screen). NO, or the party screen left with its back button: the PC, as
+ever. One holding Mail or with a Ball Capsule can't be picked (the PC
+takes neither: "Y is holding Mail. It can't be sent to the PC.", and the
+party screen again). The caught one goes to the PC as ever and the
+battle notes where (box, place, its personality value); the two change
+places once the battle's party is back in the save (`encounter.c`,
+`UpdateFieldSystemFromDTO`): the battle's end writes its battlers back
+over their party slots, so not before. The caught one takes the picked
+one's slot, healed (as from the PC). Not in the Safari Zone, Pal Park or
+the catching tutorial. The texts are English (the game has none of its
+own for it).
 
 ## The lower screen as a menu
 
@@ -900,7 +991,31 @@ screens) the lower screen is the DS's, filling the screen as before.
   comes back behind the panel's black and the page comes straight in it
   (no map in between). Taps made before a question are not its answer, and
   menu buttons tapped during the save aren't acted on after it. Without
-  the menu, or with the Pokétch not up, it's the DS's save.
+  the menu, or with the Pokétch not up, it's the DS's save. A new game
+  saves over the old one (`patches/pokeplatinum/0042`): the DS refused
+  until the old save was erased from the title screen (and warned about
+  it when NEW GAME was chosen); the first save of the new game writes
+  over it, the old save there until then, and starts the Hall of Fame
+  anew as erasing did (`SaveDataExtra_Init`). Nothing asks first: saving
+  is the choice.
+- **The two squares** (`patches/pokeplatinum/0041`): the registered items'
+  icons (the game's own, read from `itemtool/itemdata/item_icon.narc` by
+  the port when the item changes: `NitroPort_LowerMenuSetItem`), the first
+  with a small red Y (the approved mock-up). The first is the item on Y
+  (the save's registered item); the second the one that was on Y before:
+  REGISTER in the bag puts an item on Y and moves the one that was there
+  to the second square, DESELECT takes it off either square. The second is
+  the port's, not the save's (`item2` in `options.txt`, saved at once), so
+  saves stay the DS's; shown only while the bag has it (another
+  adventure's isn't). The bag marks Y's item as before (its "Y SET"), not
+  the second's. A tap on a square uses its item as Y does
+  (`RegisteredItem_PortUse`: the same checks and messages; the Bicycle,
+  the rods, the Journal, the Vs. Recorder...); with the menu open (X) the
+  cursor goes onto them (Up / Down round the column and the squares, Left
+  / Right between the two) and A uses it; tapped in the bag, the party, the
+  trainer case or the options page, those close and it's used back in the
+  field. Dimmed where Y does nothing (the Battle Tower's salon, the Pal
+  Park). Without the menu, the bag's REGISTER is the DS's.
 - **The panel at the field's start** (`StartMenu_PortFieldStarts`, from the
   Pokétch's start): the tab chosen (the map once they have the Town Map)
   from the field's first frame, its name and description printed at once,
@@ -956,9 +1071,20 @@ screens) the lower screen is the DS's, filling the screen as before.
     is drawn till a move or a target is chosen or the panel goes blank),
     its bag and its party (not a battle video's STOP button: playback
     doesn't wait for the player); the battle's animations and text go at
-    the speed set. SPEED above 1x turns 60 FPS off (when it's on), 1x on again
+    the speed set. The start menu holds it at 1x too, and what it opens
+    (the bag, the party, the Pokédex, the options...), till the player
+    walks again (patch 0042): only the walking and what happens in the
+    field go faster. A frame shown is drawn after the game's next V-blank
+    work, whichever halt it was shown on: in the field (30 frames a
+    second, two halts a frame) at 4x every fourth halt fell on the one
+    without V-blank work, so nothing was drawn at all, the screens left
+    as they were while the game went on (black rooms, no text boxes, the
+    battles' health bars and animations stopped; 2026-10-26).
+    SPEED above 1x turns 60 FPS off (when it's on), 1x on again
     unless the player has set 60 FPS since (`fps60_held` in
-    `options.txt`). The PC runner isn't paced, so it doesn't show.
+    `options.txt`). Every start is at 1x (since 2026-10-26): SPEED is
+    for now, not kept, and 60 FPS comes back on with it if SPEED had
+    turned it off. The PC runner isn't paced, so it doesn't show.
   - EXP ON CATCH: after "Gotcha!" the catch stops while the battle's
     script pays out experience for the caught Pokémon as for a defeated
     one (its messages, levels and moves, as after a battle), then goes on
@@ -1023,10 +1149,14 @@ screens) the lower screen is the DS's, filling the screen as before.
   from it) and put it back when an app in the panel comes after one that
   took both screens (the bag after an evolution, the party after the
   mail), whose fade out left black there; forgotten once the player walks
-  again (`NitroPort_LowerMenuForgetField`). The 3DS puts the copy on the
-  LCD itself (its own framebuffer, once nothing of the upper screen's is
+  again (`NitroPort_LowerMenuForgetField`). A copy kept already isn't
+  copied over when the field's picture is asked for again: the bag after
+  an evolution started being kept at full brightness, the evolution's
+  screen gone dark in its palette fade (not a brightness fade) on the
+  LCD, and that was kept as the field and shown frozen above the bag
+  (2026-10-26). The 3DS puts the copy on the LCD itself (its own framebuffer, once nothing of the upper screen's is
   waiting for its V-blank).
-  (Nothing lets it go on a soft reset yet; the port has none.) The 3DS
+  (A soft reset starts the program again: nothing's kept.) The 3DS
   doesn't draw a screen while it's
   kept (what's on its LCD stays); drawn again regardless (back from the
   HOME menu), it's black. The PC runner's `rshot` and `mshot` show what's
@@ -1318,7 +1448,14 @@ step down, till they've stayed put for 10 s. The slider down and up each
 have their own steps (the outlines; each eye). A `[compose]` line says
 each step (`60 frames a second, slider down: the 3D drawn 2x1 for now`),
 and `[perf] display` counts the in-between frames and those drawn 2x2 and
-2x1. The outlines with the slider up are off by default for it
+2x1. Matching the polygons costs the geometry core time per scene: in the
+starter's choice (its many polygons) it was 21 ms a scene on the 3DS, so
+some in-between scenes were left out there and the animation stuttered.
+Since 2026-10-26 a polygon whose counterpart in the next scene is the
+one in the same place in the list, and near enough to be certain, is
+taken without the search round it; the search stops comparing a polygon
+once it's further than the best so far; and the median that sets
+"near enough" is found without sorting (half the cost there, on the PC). The outlines with the slider up are off by default for it
 (`edges3d on`: while they fit).
 
 ## Known

@@ -132,6 +132,13 @@ int NitroPort_LowerMenuBrightness(unsigned masterBright);
 void NitroPort_LowerMenuSelect(int button);
 void NitroPort_LowerMenuSetEnabled(uint32_t mask);
 void NitroPort_LowerMenuSetFemale(int female);
+/* The two squares' items (square 0: the one on Y, drawn with a small red Y;
+ * 1: the second): an item's icon, read from itemtool/itemdata/
+ * item_icon.narc (its picture's and its palette's members there, as the
+ * game's Item_FileID gives them) when it changes; item 0: none, the square
+ * empty. Pressed like the buttons (NITRO_LOWERMENU_ITEM1 + square), when
+ * SetEnabled says it can be used. The game's thread. */
+void NitroPort_LowerMenuSetItem(int square, int item, int iconMember, int paletteMember);
 
 /* The picture: NITRO_LOWERMENU_W x NITRO_LOWERMENU_H texels, each
  * (r << 24) | (g << 16) | (b << 8) | a, rows from the top; held until

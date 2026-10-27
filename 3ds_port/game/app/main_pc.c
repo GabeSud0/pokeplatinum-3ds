@@ -419,7 +419,12 @@ static void KeepUpperScreen(void)
         /* (kept mid-fade: as the end of a fade nearest it) */
         sTopKeptBright = bright <= -8 ? -16 : bright >= 8 ? 16 : 0;
         sTopShowsField = 0;
-        if (sTopKeptBright == 0) {
+        if (sTopKeptBright == 0 && wish == NITRO_LOWERMENU_HOLD_FIELD && sFieldValid &&
+            sFieldSerial == NitroPort_LowerMenuFieldSerial()) {
+            /* (the field's picture kept already, asked for again: what's
+             * shown now isn't the field: the bag after an evolution, gone
+             * dark in a palette fade; put back below) */
+        } else if (sTopKeptBright == 0) {
             memcpy(sFieldTop, sKeptTop, sizeof(sFieldTop));
             sFieldSerial = NitroPort_LowerMenuFieldSerial();
             sFieldValid = 1;
@@ -1610,11 +1615,53 @@ void NitroPort_Terminate(void)
     _exit(3);
 }
 
+/* (main's arguments: the soft reset starts the runner again with them) */
+static char **sArgv;
+
+/* The game's soft reset (L + R + START + SELECT): the save's file written,
+ * then the runner started again as it was (the same arguments, the same
+ * process: the control directory carries on), less those counted from the
+ * start or written from the start (--press, --touch, --frames: they'd
+ * reset it again at the same frame; --wav, --gx-record: they'd be written
+ * over). */
+static int OneShotOption(const char *arg)
+{
+    return strcmp(arg, "--press") == 0 || strcmp(arg, "--touch") == 0 || strcmp(arg, "--frames") == 0 ||
+           strcmp(arg, "--wav") == 0 || strcmp(arg, "--gx-record") == 0;
+}
+
 void NitroPort_ResetSystem(u32 parameter)
 {
-    NitroPort_Log("[pc] the game asked to restart (OS_ResetSystem %lu); stopping",
+    NitroPort_Log("[pc] the game asked to restart (OS_ResetSystem %lu); restarting",
                   (unsigned long)parameter);
-    fflush(stderr);
+    StopSound();
+    NitroPort_CardFlush();
+    fflush(NULL);
+    if (sArgv != NULL) {
+        int i, n = 0;
+
+        for (i = 0; sArgv[i] != NULL; i++) {
+            if (i > 0 && OneShotOption(sArgv[i]) && sArgv[i + 1] != NULL) {
+                i++;   /* (and its value) */
+            } else {
+                sArgv[n++] = sArgv[i];
+            }
+        }
+        sArgv[n] = NULL;
+    }
+    if (sArgv != NULL) {
+        /* (by the program's own name, so it's still called that) */
+        char self[4096];
+        ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+
+        if (n > 0) {
+            self[n] = '\0';
+            execv(self, sArgv);
+        }
+        execv("/proc/self/exe", sArgv);
+        NitroPort_Log("[pc] couldn't start again (%s); stopping", strerror(errno));
+        fflush(stderr);
+    }
     _exit(4);
 }
 
@@ -1837,6 +1884,8 @@ int main(int argc, char **argv)
     const char *savePath = NULL;
     char *defaultSave = NULL;
     int i, classicMenu = 0, mapThread = 0;
+
+    sArgv = argv;
 
     if (argc == 2 && strcmp(argv[1], "--check-overlays") == 0) {
         return Platinum_CheckOverlays() == 0 ? 0 : 1;

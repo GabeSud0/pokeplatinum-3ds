@@ -57,9 +57,12 @@ On a New 3DS:
 | | What to expect |
 | :--- | :--- |
 | **Both screens filled** | The DS's pictures are drawn 1.25 times bigger: the lower screen fills its 320×240, and the upper screen is laid out across its full 400-pixel width (menus, text boxes and battles included). Nothing is ever stretched or mirrored to fill the extra space. |
+| **A menu on the bottom screen** | In the field, the bottom screen is a menu beside the Pokétch: MAP, POKéMON, BAG, TRAINER, POKéDEX, POKéTCH, SAVE and OPTIONS, a tap away (or X and the D-pad). The bag, the party, the summary, the trainer card, the save, the options and the Town Map open right in its panel while the field stays on the top screen. Two squares hold your registered items: tap one to use it. |
 | **Sharper 3D** | The overworld and battles are drawn by the 3DS's GPU at the screen's own resolution with smooth (anti-aliased) edges, the game's fog, and a wider view of the world at the sides. The DS's outlines round the 3D are off by default; `edges on` in `remaster.txt` draws them. |
 | **Stereoscopic 3D** | From the 3D slider. |
 | **60 frames a second** | The game runs its field at 30; the port draws a frame in between each pair, and drops back to 30 where the GPU can't keep up (new, still being tuned). |
+| **Enhancements and cheats** | Optional, from OPTIONS: SPEED up to 4x (menus and battle choices stay at 1x), Exp. Share for the whole party, experience for catches, trade evolutions at level 40, HMs without teaching the moves, auto-run; and cheats (always catch, instant victory, fast eggs, infinite money, wild encounter rate, shiny odds, give items). |
+| **Small conveniences** | Catch a Pokémon with a full party and you can swap it for one in your party right there in the battle. A new game saves over the old save without erasing it first. L + R + START + SELECT restarts the game from the opening. |
 | **Crisp pixels** | Even, crisp pixels for the 2D, and optional xBRZ smoothing for the 3D's textures. |
 | **On the HOME Menu** | Installs as a `.cia`, with your cartridge's icon and an animated 3D banner. |
 | **Built from your own cartridge** | The builder makes the game's data on your own computer, from your own dump. No game content is distributed. |
@@ -68,8 +71,10 @@ On a New 3DS:
 
 | ✅ Works | 🛠️ Work in progress | 💭 Future wishlist |
 | :--- | :--- | :--- |
-| Playable on real hardware, from a new game or a save: exploring, battles, menus and saving (it still has some visual and gameplay bugs) | A better UI for the bottom screen | Wi-Fi |
+| Playable on real hardware, from a new game or a save: exploring, battles, menus and saving (it still has some visual and gameplay bugs) | Polishing the bottom screen's UI (the learn-a-move screen) | Wi-Fi |
 | A new UI for the top screen: menus, text boxes and battles across its full width | A Pokémon follower | Better lighting |
+| A new UI for the bottom screen: a menu beside the Pokétch, with the bag, party, summary, trainer card, save, options and Town Map in its panel | | |
+| Enhancements and cheats from the options (SPEED, Exp. Share for the party, and more) | | |
 | The New 3DS XL's resolution: both screens filled, the 3D drawn at the screen's resolution | | |
 | Updated animations for the intro, and new animations for some of the UI | | |
 | 60 frames a second and better 3D quality | | |
@@ -185,15 +190,21 @@ like emulators keep, so you can copy your cartridge's save there.
 
 ### While playing
 
-Every button is the game's. The port writes a log to
+Every button is the game's; in the field, the bottom screen is a menu you can
+tap. L + R + START + SELECT (the game's own soft reset) restarts the game
+from the opening. The port writes a log to
 `sdmc:/3ds/pokeplatinum/log.txt` (send it along when you report a
 problem); it comes up on screen by itself if something goes wrong.
 
-The display has settings in `sdmc:/3ds/pokeplatinum/remaster.txt`; the
-defaults are what most people want. See [`docs/REMASTER.md`](docs/REMASTER.md).
+The game's options, 60 FPS, smooth 3D, and the enhancements and cheats are
+on the bottom screen's **OPTIONS** page; the port keeps its own in
+`sdmc:/3ds/pokeplatinum/options.txt`, beside the save. The display has more
+settings in `sdmc:/3ds/pokeplatinum/remaster.txt`; the defaults are what most
+people want. See [`docs/REMASTER.md`](docs/REMASTER.md).
 
 Where the port's own layout for the wider screen doesn't look right, you can
-draw the bands yourself with the **WideArt** editor: see
+draw the bands yourself with the **WideArt** editor (the pictures drawn so far,
+like the evolution's background, are built into the game): see
 [`docs/WIDE_ART.md`](docs/WIDE_ART.md).
 
 > [!TIP]
@@ -282,6 +293,7 @@ builder/           turns your own ROM into the data pack (Python)
 docs/              the remaster display, wide art, the data pack
 patches/           changes applied on top of the decompilation and SDKs
 tools/             bootstrap, build helpers, the WideArt editor (Python)
+wideart/           hand-drawn bands for the wider screen, built in (none of the game's pixels)
 Makefile           `make game`, `make game-cia`, `make test`, ...
 LICENSE            GPL-3.0, for this project's own code
 upstream.lock      the exact pret/pokeplatinum commit we build against
@@ -293,10 +305,12 @@ upstream.lock      the exact pret/pokeplatinum commit we build against
 
 - **Done:** the toolchain; the game's code built and running on the 3DS; 2D,
   3D, sound, input, saving; the game fully playable; the new UI for the top
-  screen; the New 3DS XL's resolution; updated intro and UI animations; the
-  HOME Menu version.
-- **Work in progress:** 60 frames a second, better 3D quality, a better UI
-  for the bottom screen, better lighting.
+  screen; the bottom screen as a menu, with the bag, party, summary, trainer
+  card, save, options and Town Map in its panel; enhancements and cheats; the
+  New 3DS XL's resolution; updated intro and UI animations; the HOME Menu
+  version.
+- **Work in progress:** 60 frames a second, better 3D quality, polishing the
+  bottom screen's UI, better lighting.
 - **Future wishlist:** Wi-Fi, a Pokémon follower.
 - **Later:** SoulSilver / HeartGold on the same backend.
 

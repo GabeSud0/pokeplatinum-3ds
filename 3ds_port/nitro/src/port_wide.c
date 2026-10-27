@@ -17,6 +17,9 @@ typedef struct Tracked {
     int8_t anchor;
     uint8_t anchorWidth;   /* the tiles that move (0: all of the window's) */
     uint8_t frame;         /* NitroPort_WindowFramed: 0 none, 1 a menu's, 2 a text box's */
+    uint8_t ghost;         /* removed with its text box's frame still drawn (window NULL) */
+    uint8_t indicator;     /* NitroPort_WindowIndicator */
+    uint32_t overlays;     /* (a ghost: the overlays' serial then; gone when they change) */
 } Tracked;
 
 static Tracked sTable[MAX_TRACKED];
@@ -41,7 +44,12 @@ static void unlock(void)
  * window's struct without removing it). */
 static int still_there(const Tracked *t)
 {
-    const uint8_t *w = (const uint8_t *)t->window + sizeof(void *);
+    const uint8_t *w;
+
+    if (t->ghost) {
+        return t->overlays == NitroPort_OverlaySerial();
+    }
+    w = (const uint8_t *)t->window + sizeof(void *);
 
     return w[0] == t->bgLayer && w[1] == t->left && w[2] == t->top && w[3] == t->width &&
            w[4] == t->height;
@@ -55,6 +63,16 @@ void NitroPort_WindowAdded(const void *window, int bgLayer, int left, int top, i
         return;
     }
     lock();
+    /* (a text box removed with its frame left drawn: gone once another
+     * window comes over it, the same one again most often) */
+    for (i = 0; i < sCount; i++) {
+        Tracked *g = &sTable[i];
+
+        if (g->ghost && g->bgLayer == bgLayer && left < g->left + g->width + 3 && g->left - 2 < left + width &&
+            top < g->top + g->height + 1 && g->top - 1 < top + height) {
+            sTable[i--] = sTable[--sCount];
+        }
+    }
     for (i = 0; i < sCount; i++) {
         if (sTable[i].window == window) {
             slot = i;
@@ -84,6 +102,8 @@ void NitroPort_WindowAdded(const void *window, int bgLayer, int left, int top, i
         sTable[slot].anchor = 0;
         sTable[slot].anchorWidth = 0;
         sTable[slot].frame = 0;
+        sTable[slot].ghost = 0;
+        sTable[slot].indicator = 0;
     }
     sSerial++;
     unlock();
@@ -120,15 +140,56 @@ void NitroPort_WindowAnchor(const void *window, int side, int widthTiles)
     unlock();
 }
 
+void NitroPort_WindowIndicator(const void *window, int on)
+{
+    int i;
+
+    lock();
+    for (i = 0; i < sCount; i++) {
+        if (sTable[i].window == window && !sTable[i].ghost) {
+            if (sTable[i].indicator != (on != 0)) {
+                sTable[i].indicator = on != 0;
+                sSerial++;
+            }
+            break;
+        }
+    }
+    unlock();
+}
+
 void NitroPort_WindowRemoved(const void *window)
 {
     int i;
 
     lock();
     for (i = 0; i < sCount; i++) {
-        if (sTable[i].window == window) {
-            sTable[i] = sTable[--sCount];
+        if (sTable[i].window == window && !sTable[i].ghost) {
+            if (sTable[i].frame == 2) {
+                /* Its frame still drawn (the game took the window away
+                 * without erasing it: Rowan's talk between his messages,
+                 * with a choice up): still widened, till another window
+                 * comes over it or the overlays change (another screen). */
+                sTable[i].window = NULL;
+                sTable[i].ghost = 1;
+                sTable[i].overlays = NitroPort_OverlaySerial();
+            } else {
+                sTable[i] = sTable[--sCount];
+            }
             break;
+        }
+    }
+    sSerial++;
+    unlock();
+}
+
+void NitroPort_WideBgReset(int bgLayer)
+{
+    int i;
+
+    lock();
+    for (i = 0; i < sCount; i++) {
+        if (sTable[i].ghost && sTable[i].bgLayer == bgLayer) {
+            sTable[i--] = sTable[--sCount];
         }
     }
     sSerial++;
@@ -177,6 +238,7 @@ int NitroPort_WideWindows(int engine, int bg, NitroWideWindow *out, int max)
                 w->widen = 1;
                 w->frameLeft = (uint8_t)fl;
                 w->frameRight = (uint8_t)fr;
+                w->indicator = t->indicator && t->width > 3;
             } else if (byRight && !byLeft) {
                 w->anchor = 1;
             } else if (byLeft && !byRight) {
@@ -196,6 +258,27 @@ static int sForcePictures = -1;
 void NitroPort_WideForcePictures(int mode)
 {
     sForcePictures = mode;
+}
+
+int NitroPort_WideCells(void)
+{
+    /* (cached as NitroPort_WidePictures is) */
+    static uint32_t cache = 0xFFFFFFFFu;
+    uint32_t serial = NitroPort_OverlaySerial() & 0x7FFFFFFFu, c = __atomic_load_n(&cache, __ATOMIC_RELAXED);
+    int cells;
+
+    if (sForcePictures >= 0) {
+        return sForcePictures || NitroPort_OverlayLoadedNamed("battle");
+    }
+    if (c != 0xFFFFFFFFu && (c >> 1) == serial) {
+        return (int)(c & 1);
+    }
+    /* The pictures' screens, and the battle: its trainers slide off and
+     * its balls fly beside the DS's screen (the player went a frame early,
+     * half a sprite still showing, 2026-10-26). */
+    cells = NitroPort_WidePictures() || NitroPort_OverlayLoadedNamed("battle");
+    __atomic_store_n(&cache, (serial << 1) | (uint32_t)cells, __ATOMIC_RELAXED);
+    return cells;
 }
 
 int NitroPort_WidePictures(void)
@@ -408,7 +491,17 @@ void NitroPort_WideLayout(int engine, struct NitroRender2DSplit *split)
         split->clip[bg] = 1;
     }
     if (engine == 0 && NitroPort_OverlayLoadedNamed("battle")) {
-        split->clip[3] = 0;
+        int laidOut;
+
+        /* (not a screen laid out in parts while the battle's loaded: the
+         * evolution after a battle, its background BG3 too, with a
+         * hand-drawn picture: 2026-10-26) */
+        lock();
+        laidOut = sPartCount[0] > 0;
+        unlock();
+        if (!laidOut) {
+            split->clip[3] = 0;
+        }
     }
     split->anchorWindows = sWideExtra > 0;
 }

@@ -1326,11 +1326,23 @@ void NitroPort_Terminate(void)
     StopWithMessage();
 }
 
+static volatile bool sRestarting;   /* (NitroPort_ResetSystem: started again as the program closes) */
+
+/* The game's soft reset (L + R + START + SELECT, or after a link error):
+ * the program closes as from the HOME menu (the save's file written) and
+ * the system starts it again (libctru's chainload to itself: the HOME
+ * menu jumps back to this title). Started from the Homebrew Launcher (a
+ * .3dsx) there's no jumping back: it closes to the launcher. */
 void NitroPort_ResetSystem(uint32_t parameter)
 {
-    NitroPort_Log("The game asked to restart (OS_ResetSystem %lu). Restarting isn't "
-                  "supported yet.", (unsigned long)parameter);
-    StopWithMessage();
+    NitroPort_Log("The game asked to restart (OS_ResetSystem %lu): restarting", (unsigned long)parameter);
+    if (envIsHomebrew()) {
+        NitroPort_Log("(started from the Homebrew Launcher: it closes to the launcher instead)");
+    } else {
+        aptSetChainloaderToSelf();
+        sRestarting = true;
+    }
+    Quit();
 }
 
 /* ------------------------------------------------------------- crashes */
@@ -1973,18 +1985,19 @@ static bool DrawersStillReading(void)
 
 /* Hand this frame to every drawing thread that's free; the others leave
  * it out. new3dOnly: only to the one with engine A's screen, and only if
- * a 3D image came out since it was last handed one. */
-static void DrawFrame(bool new3dOnly)
+ * a 3D image came out since it was last handed one. Whether any drawing
+ * thread was handed it. */
+static bool DrawFrame(bool new3dOnly)
 {
     u32 images = NitroPort_Gx3dImageCount();
     int i;
     bool any = false;
 
     if (new3dOnly && sRemaster) {
-        return;   /* (the display thread draws each new 3D scene itself) */
+        return false;   /* (the display thread draws each new 3D scene itself) */
     }
     if (__atomic_load_n(&sSuspended, __ATOMIC_SEQ_CST)) {
-        return;   /* (the HOME menu has the screens) */
+        return false;   /* (the HOME menu has the screens) */
     }
     if (sRemaster) {
         NitroPort_Compose2DOffered(NitroPort_ComposeVBlanks());
@@ -1998,7 +2011,7 @@ static void DrawFrame(bool new3dOnly)
         any |= !__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE);
     }
     if (!any) {
-        return;
+        return false;
     }
     /* (the frame's lines, for an H-blank effect: the battles' start, a
      * wavy screen; nothing without one. Once a V-blank. Without the
@@ -2008,7 +2021,7 @@ static void DrawFrame(bool new3dOnly)
      * it's drawn with the frame's registers, as the lines last were) */
     if (!sRemaster && NitroPort_HBlankLinesDue() && DrawersStillReading()) {
         if (NitroPort_LineRegsActive()) {
-            return;
+            return false;
         }
     } else {
         (void)NitroPort_HBlankLinesOnce();
@@ -2040,6 +2053,7 @@ static void DrawFrame(bool new3dOnly)
             LightEvent_Signal(&d->go);
         }
     }
+    return true;
 }
 
 /* A drawing thread on a core of its own still reading the game's display
@@ -2084,6 +2098,12 @@ static unsigned sHaltsSinceVBlankWork = 2;
  * frame's (NitroPort_OnFrame decides, its V-blank work follows). */
 static int sSpeedCredit;
 static bool sFrameShown = true;
+/* A frame shown since the game's last V-blank work: drawn after the next.
+ * (Faster than 1x a frame shown needn't be one followed by V-blank work:
+ * in the field, at 30 frames a second, the game halts twice for each, and
+ * at 4x every fourth halt fell on the one without: nothing drawn at all,
+ * the screens left as they were while the game went on, 2026-10-25.) */
+static bool sDrawPending = true;
 
 static int SpeedHalves(void)
 {
@@ -2116,8 +2136,10 @@ static bool SpeedFrameShown(void)
 void NitroPort_VBlankWorkDone(void)
 {
     sHaltsSinceVBlankWork = 0;
-    if (!sShowLog && !sScreensDirty && sFrameShown) {
-        DrawFrame(false);
+    /* (pending till a drawer takes it: all busy, the next V-blank work
+     * tries again) */
+    if (!sShowLog && !sScreensDirty && sDrawPending && DrawFrame(false)) {
+        sDrawPending = false;
     }
 }
 
@@ -2492,6 +2514,9 @@ void NitroPort_OnFrame(void)
     }
 
     sFrameShown = SpeedFrameShown();
+    if (sFrameShown) {
+        sDrawPending = true;
+    }
     if (sFrameShown && SpeedHalves() > 2) {
         /* Faster than 1x the game hardly waits, and the threads below it
          * on its core (the display thread, a New 3DS's lower screen's
@@ -2521,7 +2546,9 @@ void NitroPort_OnFrame(void)
         } else if (sHaltsSinceVBlankWork >= 2) {
             /* The game doesn't say when its V-blank work is done (a loop
              * of its own): drawn here, before the V-blank. */
-            DrawFrame(false);
+            if (DrawFrame(false)) {
+                sDrawPending = false;
+            }
         } else if (early) {
             /* Drawn after the V-blank work (NitroPort_VBlankWorkDone); and
              * a 3D image that came out since is shown a frame sooner when
@@ -2786,8 +2813,9 @@ int main(int argc, char **argv)
         QUIT_STEP("the save's file written", NitroPort_CardFlush());
         aptUnhook(&sAptHook);
 #undef QUIT_STEP
-        NitroPort_Log("[quit] done in %.0f ms%s", (double)(svcGetSystemTick() - start) * 1000.0 / SYSCLOCK_ARM11,
-                      sStopFailed ? "; a thread didn't stop: ending the program at once" : "");
+        NitroPort_Log("[quit] done in %.0f ms%s%s", (double)(svcGetSystemTick() - start) * 1000.0 / SYSCLOCK_ARM11,
+                      sStopFailed ? "; a thread didn't stop: ending the program at once" : "",
+                      sStopFailed && sRestarting ? " (not started again)" : sRestarting ? "; starting again" : "");
     }
     if (sLog != NULL) {
         LogWritePending();
