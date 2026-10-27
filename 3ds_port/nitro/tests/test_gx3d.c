@@ -531,6 +531,58 @@ static void test_interpolation(void)
     CHECK(!NitroPort_Gx3dInterpolation());
     CHECK(NitroPort_Gx3dMidScene(NULL,NULL)==NULL);
 }
+/* (a small quad, its corner at x, y) */
+static void small_quad_at(int x,int y,uint32_t attr)
+{
+    NitroPort_GxDirectWrite(0x29,attr);
+    NitroPort_GxDirectWrite(0x20,0x7fff);
+    NitroPort_GxDirectWrite(0x40,1);
+    vertex(x,y,0);
+    vertex(x+400,y,0);
+    vertex(x+400,y+400,0);
+    vertex(x,y+400,0);
+    NitroPort_GxDirectWrite(0x41,0);
+}
+/* What the camera follows (the player, and one who follows him: Cheryl in
+ * Eterna Forest) stays where it was on the screen as the scene moves. The
+ * scene moving further than half the gap between the two (at a run, a
+ * scene left out): the follower in its own place halfway, not halfway
+ * from where the player was (she jumped about). */
+static void test_interpolation_followed(void)
+{
+    const NitroGx3dScene *mid;
+    unsigned matched=0,polygons=0;
+    int i,scene;
+    const uint32_t opaque=(3u<<6)|(31u<<16);
+    reset_geometry();
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    /* the map: 8 of them, 256 (8 DS pixels) to the left each scene; the
+     * follower 448 (14 DS pixels) left of the player, both still */
+    for(scene=0;scene<2;scene++){
+        for(i=0;i<8;i++)small_quad_at(-3600+900*i-256*scene,-3000,opaque);
+        small_quad_at(-448,0,opaque);
+        small_quad_at(0,0,opaque);
+        swap_done();
+    }
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && matched==10 && polygons==10);
+    if(mid && mid->count==20){
+        CHECK(mid->triangles[0].v[0].clip[0]==-3600-128);   /* the map: halfway */
+        CHECK(mid->triangles[16].v[0].clip[0]==-448);       /* the follower: where she is */
+        CHECK(mid->triangles[18].v[0].clip[0]==0);          /* the player */
+    }else CHECK(0);
+    /* and one who walks on her own, past the player: still halfway */
+    for(scene=0;scene<2;scene++){
+        for(i=0;i<8;i++)small_quad_at(-3600+900*i,-3000,opaque);
+        small_quad_at(-448+64*scene,0,opaque);
+        small_quad_at(0,0,opaque);
+        swap_done();
+    }
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && mid->count==20 && mid->triangles[16].v[0].clip[0]==-448+32);
+    NitroPort_Gx3dSetInterpolation(0);
+}
 static void test_shadow_triangles(void)
 {
     const NitroGx3dScene *scene;
@@ -1523,6 +1575,7 @@ static void run_all(void)
     test_culling();
     test_shadow_triangles();
     test_interpolation();
+    test_interpolation_followed();
     test_triangle_strip();
     test_hidden_vertices();
     test_textures();

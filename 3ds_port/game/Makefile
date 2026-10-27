@@ -425,12 +425,12 @@ PROGRAM_LINK = $(write_game_objs_rsp)$(CC) $(PROGRAM_LDFLAGS) -Wl,--gc-sections 
 $(OUT)/app/platinum.o: app/platinum.c app/platinum.h | libnitrosystem
 	@mkdir -p $(dir $@)
 	@echo "  APP CC platinum.c"
-	@$(CC) $(PORT_CFLAGS) $(SDK_INCLUDES) -I$(ROOT)/3ds_port/pak/include -I$(GAME)/include -c $< -o $@
+	@$(CC) $(PORT_CFLAGS) $(SDK_INCLUDES) -I$(ROOT)/3ds_port/pak/include -I$(GAME)/include -MMD -MP -c $< -o $@
 
 $(OUT)/app/main_pc.o: app/main_pc.c app/platinum.h | libnitrosystem
 	@mkdir -p $(dir $@)
 	@echo "  APP CC main_pc.c"
-	@$(CC) $(PORT_CFLAGS) $(SDK_INCLUDES) -c $< -o $@
+	@$(CC) $(PORT_CFLAGS) $(SDK_INCLUDES) -MMD -MP -c $< -o $@
 
 # main_3ds.c uses libctru, and none of the SDK's headers (the port's
 # portable geometry header only).
@@ -453,7 +453,7 @@ $(OUT)/app/port_pica_abi.o: app/port_pica_abi.c
 	@echo "  APP CC port_pica_abi.c"
 	@$(CC) $(filter-out -fno-short-enums,$(PORT_CFLAGS)) -I$(DEVKITPRO)/libctru/include -MMD -MP -c $< -o $@
 
-# (the 3DS program's own files rebuilt when a header they include changes)
+# (the program's own files rebuilt when a header they include changes)
 -include $(wildcard $(OUT)/app/*.d)
 
 # The screens put together on the GPU (the remaster display).

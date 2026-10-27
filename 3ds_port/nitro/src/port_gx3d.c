@@ -1031,7 +1031,7 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
     near=MATCH_NEAR+1.5f*(fabsf(dx)+fabsf(dy));
     /* each again, by where it is */
     for(j=0;j<n;j++){
-        int center=out[j]>=0?out[j]:(int)j+offset,lo,hi,q,best=-1;
+        int center=out[j]>=0?out[j]:(int)j+offset,order=out[j],lo,hi,q,best=-1;
         float bestD=near;
         if(!C[j].onScreen){
             /* (behind the camera in part: in order, or not at all) */
@@ -1058,6 +1058,17 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
             if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)continue;
             d=poly_distance(&P[q],&C[j],dx,dy,bestD);
             if(d<bestD){bestD=d;best=q;}
+        }
+        /* What the camera follows stays where it was on the screen as the
+         * scene moves: the player, and one who follows him. The order's
+         * pair where it was (a pixel at most), when that fits better than
+         * anything the scene's motion explains: the scene moving further
+         * than half the gap between the two (at a run, with a scene left
+         * out), Cheryl behind the player in Eterna Forest took his place
+         * from the scene before, and jumped about (2026-10-27). */
+        if(order>=0 && order!=best && P[order].onScreen && P[order].count==C[j].count){
+            float still=poly_distance(&P[order],&C[j],0.0f,0.0f,MATCH_SURE);
+            if(still<MATCH_SURE && (best<0 || still+MATCH_SURE<bestD))best=order;
         }
         out[j]=best;
         if(best>=0){offset=best-(int)j;matched++;}
