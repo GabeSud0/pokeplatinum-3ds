@@ -879,9 +879,16 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
         }
         e=free_slot;
         memset(e,0,sizeof(*e));
-        if(!C3D_TexInit(&e->tex,(u16)(width*scale),(u16)(height*scale),packed?GPU_RGBA5551:GPU_RGBA8)){
-            if(scale==1u || !C3D_TexInit(&e->tex,(u16)width,(u16)height,GPU_RGBA8))return NULL;
-            scale=1u;
+        /* (no linear memory for it: as it is, then older ones let go
+         * until it fits; with little memory the cache's 8 MB aren't
+         * there, issue #188) */
+        for(;;){
+            if(C3D_TexInit(&e->tex,(u16)(width*scale),(u16)(height*scale),packed?GPU_RGBA5551:GPU_RGBA8))break;
+            if(scale==2u && C3D_TexInit(&e->tex,(u16)width,(u16)height,packed?GPU_RGBA5551:GPU_RGBA8)){
+                scale=1u;
+                break;
+            }
+            if(!evict_one())return NULL;
         }
         e->scale=scale;
         e->packed=packed;

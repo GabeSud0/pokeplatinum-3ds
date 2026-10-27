@@ -744,7 +744,37 @@ void NitroPort_ComposeSetSmooth3d(int smooth3d)
     __atomic_store_n(&sSmooth3d, smooth3d, __ATOMIC_RELEASE);
 }
 
+/* Linear memory the 3D's textures want left once the display is set up
+ * (port_gx3d_pica.c's cache: up to 8 MB; the field's in a few MB). */
+#define COMPOSE_TEXTURE_ROOM (4u * 1024u * 1024u)
+
+static int compose_init(const ComposeConfig *config, int small);
+
+/* The display on the GPU; with too little linear memory for it as it is
+ * (a .3dsx started from the Homebrew Launcher in its small memory, about
+ * 18 MB of it: issue #188), smaller: the fewest LCD framebuffers and the
+ * 2D's textures a texel a pixel, rather than the classic display. */
 int NitroPort_ComposeInit(const ComposeConfig *config)
+{
+    NitroPort_Log("[compose] linear memory: %lu KB free", (unsigned long)(linearSpaceFree() / 1024u));
+    if (compose_init(config, 0)) {
+        if (linearSpaceFree() >= COMPOSE_TEXTURE_ROOM) {
+            return 1;
+        }
+        NitroPort_Log("[compose] %lu KB of linear memory left for the 3D's textures: the display made smaller",
+                      (unsigned long)(linearSpaceFree() / 1024u));
+        free_all();
+    }
+    if (compose_init(config, 1)) {
+        NitroPort_Log("[compose] the display made smaller for the memory (%lu KB left): 3 frames on the way at "
+                      "most, the 2D a texel a pixel",
+                      (unsigned long)(linearSpaceFree() / 1024u));
+        return 1;
+    }
+    return 0;
+}
+
+static int compose_init(const ComposeConfig *config, int small)
 {
     static const char *const filters[] = { "sharp (the pixels as they are, 2x then bilinear)", "nearest",
                                            "smooth (bilinear)", "Scale2x" };
@@ -783,12 +813,12 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     for (s = 0; s < 2; s++) {
         Screen *scr = &sScreens[s];
         int canvasW = s == 0 && config->wide ? CANVAS_MAX : DS_W;
-        int scale = config->filter == COMPOSE_FILTER_SHARP || config->filter == COMPOSE_FILTER_SCALE2X ? 2 : 1;
+        int scale = !small && (config->filter == COMPOSE_FILTER_SHARP || config->filter == COMPOSE_FILTER_SCALE2X) ? 2 : 1;
 
         scr->width = s == 0 ? TOP_W : BOTTOM_W;
         scr->onLcd = -1;
         scr->lastLcd = -1;
-        scr->nlcd = s == 0 ? LCD_BUFS : LCD_BUFS_LOWER;
+        scr->nlcd = small ? LCD_BUFS_LEAST : s == 0 ? LCD_BUFS : LCD_BUFS_LOWER;
         for (i = 0; i < (s == 0 && config->stereo ? 2 : 1); i++) {
             int k;
 
@@ -808,7 +838,8 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
                         scr->nlcd = k;
                         break;
                     }
-                    NitroPort_Log("[compose] not enough memory for the LCD framebuffers");
+                    NitroPort_Log("[compose] not enough memory for the LCD framebuffers (%lu KB free)",
+                                  (unsigned long)(linearSpaceFree() / 1024u));
                     goto fail;
                 }
                 memset(scr->lcd[k][i], 0, (size_t)scr->width * SCREEN_H * 2u);
@@ -818,7 +849,8 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
             /* Not enough memory at 2 texels a pixel: 1 (bilinear). */
             free_sets(scr);
             if (scale == 1 || !alloc_sets(scr, canvasW, 1)) {
-                NitroPort_Log("[compose] not enough memory for the 2D layer textures");
+                NitroPort_Log("[compose] not enough memory for the 2D layer textures (%lu KB free)",
+                              (unsigned long)(linearSpaceFree() / 1024u));
                 goto fail;
             }
             NitroPort_Log("[compose] not enough memory for the sharp 2D on the %s screen: smooth instead",
@@ -892,6 +924,7 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
     }
     sQuadsAll = linearAlloc(2u * MAX_QUAD_VERTICES * sizeof(NitroGx3dGpuVertex));
     if (!sQuadsAll) {
+        NitroPort_Log("[compose] not enough memory for the quads");
         goto fail;
     }
     sQuads = sQuadsAll;
