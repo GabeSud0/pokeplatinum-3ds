@@ -96,6 +96,50 @@ def _load_manifest(root: Path) -> tuple[list[tuple[int, Path, int]], dict]:
     return entries, manifest
 
 
+def _index(entries: list[tuple[int, int]]) -> list[tuple[int, int, int]]:
+    """(file ID, offset, size) of each (file ID, size), in the given order."""
+    count = len(entries)
+    if count > (MAX_U32 - HEADER.size) // ENTRY.size:
+        raise ValueError("Too many NitroFS files")
+    offset = _align4(HEADER.size + ENTRY.size * count)
+    index = []
+    for file_id, size in entries:
+        if offset > MAX_U32 or size > MAX_U32 - offset:
+            raise ValueError("Pack exceeds 32-bit offset/size limit")
+        index.append((file_id, offset, size))
+        offset = _align4(offset + size)
+        if offset > MAX_U32:
+            raise ValueError("Pack exceeds 32-bit offset/size limit")
+    return index
+
+
+def write_pak(handle, files, *, build_id: str, rom_sha1: str, progress=None) -> int:
+    """Write a v1 pack of in-memory files to a binary file object: the same
+    bytes pack() writes from a data pack folder (the web builder's way: no
+    folder of extracted files). files: (NitroFS file ID, bytes-like) pairs.
+    progress(done, total), if given, is called after each file. Returns the
+    pack's size."""
+    files = sorted(files, key=lambda item: item[0])
+    ids = [file_id for file_id, _ in files]
+    if any(type(i) is not int or not 0 <= i <= MAX_U32 for i in ids) or len(set(ids)) != len(ids):
+        raise ValueError("NitroFS file IDs must be unique 32-bit integers")
+    index = _index([(file_id, len(data)) for file_id, data in files])
+    written = HEADER.size
+    handle.write(HEADER.pack(MAGIC, VERSION, _build_id_bytes(build_id), _sha1_bytes(rom_sha1), len(files)))
+    for record in index:
+        handle.write(ENTRY.pack(*record))
+        written += ENTRY.size
+    for n, ((_, data), (_, offset, size)) in enumerate(zip(files, index)):
+        handle.write(b"\0" * (offset - written))
+        handle.write(data)
+        written = offset + size
+        handle.write(b"\0" * (_align4(written) - written))
+        written = _align4(written)
+        if progress is not None:
+            progress(n + 1, len(files))
+    return written
+
+
 def pack(data_pack: Path, output: Path, *, build_id: str,
          rom_sha1: str | None = None,
          supported: Collection[str] | None = None) -> None:
@@ -121,17 +165,7 @@ def pack(data_pack: Path, output: Path, *, build_id: str,
         raise ValueError("Unsupported ROM: run builder/verify_rom.py first")
 
     count = len(entries)
-    if count > (MAX_U32 - HEADER.size) // ENTRY.size:
-        raise ValueError("Too many NitroFS files")
-    offset = _align4(HEADER.size + ENTRY.size * count)
-    index = []
-    for file_id, path, size in entries:
-        if offset > MAX_U32 or size > MAX_U32 - offset:
-            raise ValueError("Pack exceeds 32-bit offset/size limit")
-        index.append((file_id, offset, size))
-        offset = _align4(offset + size)
-        if offset > MAX_U32:
-            raise ValueError("Pack exceeds 32-bit offset/size limit")
+    index = _index([(file_id, size) for file_id, _, size in entries])
 
     output = Path(output).resolve()
     if output in {path for _, path, _ in entries} or output == (root / "manifest.json").resolve():

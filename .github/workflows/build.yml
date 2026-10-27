@@ -3,6 +3,8 @@ name: Build
 on:
   push:
     branches: [main]
+    # A version tag (v0.1.0) also publishes a release (the release job below).
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -67,9 +69,7 @@ jobs:
             exit 1
           }
 
-      # Built to check that it links and converts to a .3dsx, but never
-      # uploaded: it contains compiled game code. Build it yourself to run
-      # it with your own data pack (3ds_port/game/README.md).
+      # Published only in a release (a version tag: the last steps here).
       - name: Build the game program for the 3DS
         shell: bash
         run: |
@@ -88,8 +88,9 @@ jobs:
           3ds_port/game/build/3ds/pokeplatinum.elf
 
       # The HOME Menu version: makerom, bannertool and the game's RSF make
-      # a .cia of the program, with blank art (no ROM here). Never uploaded:
-      # it contains compiled game code.
+      # a .cia of the program, with blank art (no ROM here). Not uploaded:
+      # the web builder makes it in the player's browser, with the banner
+      # made from their ROM.
       - name: Make the HOME Menu .cia (blank art)
         shell: bash
         run: |
@@ -99,6 +100,89 @@ jobs:
           make -C 3ds_port/game TARGET=3ds HOME_ART="$PWD/build/home-menu-art" \
               CIA_TOOLS="$PWD/build/cia-tools" cia
           ls -l 3ds_port/game/build/3ds/pokeplatinum.cia
+
+      # The web builder's .cia is made from the program's ELF without its
+      # debug information (a smaller download): it must make the same title.
+      # (makerom's .cia has a random ticket and content ID, so the titles
+      # themselves, .cxi, are compared.)
+      - name: The ELF without debug information makes the same title
+        shell: bash
+        run: |
+          ROOT="$PWD"
+          OUT="$ROOT/3ds_port/game/build/3ds"
+          mkdir -p build/web
+          "$DEVKITARM/bin/arm-none-eabi-strip" --strip-debug -o build/web/pokeplatinum.elf "$OUT/pokeplatinum.elf"
+          ls -l "$OUT/pokeplatinum.elf" build/web/pokeplatinum.elf
+          for elf in "$OUT/pokeplatinum.elf" "$ROOT/build/web/pokeplatinum.elf"; do
+            (cd 3ds_port/game && "$ROOT/build/cia-tools/bin/makerom" -f cxi -o "$elf.cxi" -target t \
+                -exefslogo -rsf cia/pokeplatinum.rsf -elf "$elf" \
+                -icon "$OUT/pokeplatinum.smdh" -banner "$OUT/pokeplatinum.bnr")
+          done
+          cmp "$OUT/pokeplatinum.elf.cxi" build/web/pokeplatinum.elf.cxi
+          rm -f "$OUT/pokeplatinum.elf.cxi" build/web/pokeplatinum.elf.cxi
+
+      # A release's files (tools/build_web_payload.py): the program, and the
+      # web builder's payload (what makes the rest from the player's ROM, in
+      # their browser). Made on every run, to test it; uploaded for the
+      # release job only on a version tag.
+      - name: The release's files
+        shell: bash
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) VERSION="${GITHUB_REF_NAME#v}" ;;
+            *) VERSION="0.0.0-dev.${GITHUB_SHA::7}" ;;
+          esac
+          python3 tools/banner3d/make_banner.py --fetch-pycgfx-only
+          OUT=3ds_port/game/build/3ds
+          python3 tools/build_web_payload.py --version "$VERSION" --commit "$GITHUB_SHA" \
+              --program "$OUT/pokeplatinum.3dsx" --elf build/web/pokeplatinum.elf \
+              --smdh "$OUT/pokeplatinum.smdh" --pycgfx build/pycgfx --out dist/release
+          ls -l dist/release
+          cat dist/release/SHA256SUMS.txt
+
+      - name: Upload the release's files (version tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: dist/release/
+          retention-days: 3
+          if-no-files-found: error
+
+  # A version tag (git tag v0.1.0 && git push origin v0.1.0): once every
+  # build and test passed, its release, with the files build-3ds made.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-3ds, tools-and-tests, test-host32]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist/release
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cat > notes.md <<'EOF'
+          **Pokémon Platinum for the 3DS.** You need your own Pokémon Platinum (USA) cartridge dump: the game's data is never included here.
+
+          - `pokeplatinum.3dsx`: the program, for the Homebrew Launcher.
+          - `PokePlatinum3DS-WebPayload.zip` and `web-manifest.json`: what the web builder uses to make your data pack (and the HOME Menu version) from your ROM, in your browser.
+          - `SHA256SUMS.txt`: the files' checksums.
+
+          To make the data pack on your own computer instead, see `builder/README.md`.
+          EOF
+          PRERELEASE=""
+          case "$GITHUB_REF_NAME" in *-*) PRERELEASE="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/release/* --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --title "Pokémon Platinum 3DS $GITHUB_REF_NAME" \
+              --notes-file notes.md --generate-notes $PRERELEASE
 
   # The WideArt editor (tools/wideart: drawing the wide screen's bands by
   # hand) as a Windows program. It contains no game code or data: the
@@ -153,7 +237,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: CI uploads no game builds (only the WideArt editor)
+      - name: CI uploads no game data (the WideArt editor; a release's files on tags)
         run: python tools/check_ci_artifacts.py
 
       - name: Check Python tools compile
@@ -172,6 +256,25 @@ jobs:
 
       - name: Builder unit tests (synthetic ROM images only)
         run: python -m unittest discover -s builder -p 'test_*.py' -v
+
+      # The web builder runs the builder in the player's browser, in Pyodide:
+      # the same tests, there (the 3D banner's converter included).
+      - name: Builder tests in Pyodide (the web builder's Python)
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            npm install --no-save --prefix build/pyodide "pyodide@$(python tools/build_web_payload.py --pyodide-version)" &&
+            node tools/pyodide_test.mjs build/pyodide/node_modules/pyodide \
+                builder.test_web builder.test_extract_rom builder.test_pack \
+                tools.test_banner3d tools.test_home_menu_art
+          } 2>&1 | tee pyodide-tests.log || {
+            # (the job's log isn't always at hand: the failure in its annotations)
+            grep -E "FAIL|ERROR|Error|SKIPPED|npm error" pyodide-tests.log | head -30 > pyodide-fails.txt || true
+            tail -25 pyodide-tests.log >> pyodide-fails.txt
+            echo "::error title=Pyodide tests::$(sed -e 's/%/%25/g' -e 's/\r//g' pyodide-fails.txt | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+            exit 1
+          }
 
       - name: Fetch decompilation and both SDKs (fresh; check patches)
         run: python tools/bootstrap.py --clean

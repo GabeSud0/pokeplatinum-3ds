@@ -33,13 +33,33 @@ PYCGFX_REPO = "https://github.com/skyfloogle/pycgfx.git"
 TESTED_CGFX_SHA1 = "61f6c04af266d2d1207f9f8de7957613bc6ebd1d"
 
 
-def titledemo_from_rom(rom_path):
+def titledemo_from_rom_data(data):
+    """The title screen's archive, from the ROM's bytes."""
     import extract_rom
-    data = open(rom_path, "rb").read()
     for entry in extract_rom.parse_nitrofs(data):
         if entry["path"] == TITLEDEMO:
-            return data[entry["offset"]:entry["offset"] + entry["size"]]
+            return bytes(data[entry["offset"]:entry["offset"] + entry["size"]])
     raise ValueError(f"{TITLEDEMO} isn't in this ROM")
+
+
+def titledemo_from_rom(rom_path):
+    with open(rom_path, "rb") as f:
+        return titledemo_from_rom_data(f.read())
+
+
+def cgfx_from_titledemo(archive, pycgfx_dir, work):
+    """The banner's CGFX: Giratina from the title screen's archive, the
+    project's art, turned into CGFX with pycgfx (already in pycgfx_dir).
+    The glTF scene is written to the folder work."""
+    import narc
+    import scene
+    import to_cgfx
+
+    nsbmd, nsbca = narc.member(archive, GIRATINA_NSBMD), narc.member(archive, GIRATINA_NSBCA)
+    if nsbmd[:4] != b"BMD0" or nsbca[:4] != b"BCA0":
+        raise ValueError("titledemo.narc doesn't hold the title-screen Giratina where expected")
+    gltf = scene.build(nsbmd, nsbca, os.path.join(HERE, "art"), work)
+    return to_cgfx.convert(pycgfx_dir, gltf)
 
 
 def fetch_pycgfx(dest, commit):
@@ -71,8 +91,6 @@ def main():
     ap.add_argument("--keep", help="keep the glTF scene and CGFX in this folder")
     args = ap.parse_args()
 
-    import narc
-    import scene
     import to_cgfx
 
     if args.fetch_pycgfx_only:
@@ -85,15 +103,14 @@ def main():
         archive = titledemo_from_rom(args.rom)
     else:
         archive = open(os.path.join(args.data_pack, *TITLEDEMO.split("/")), "rb").read()
-    nsbmd, nsbca = narc.member(archive, GIRATINA_NSBMD), narc.member(archive, GIRATINA_NSBCA)
-    if nsbmd[:4] != b"BMD0" or nsbca[:4] != b"BCA0":
-        raise SystemExit("titledemo.narc doesn't hold the title-screen Giratina where expected")
 
     fetch_pycgfx(args.pycgfx, to_cgfx.PYCGFX_COMMIT)
     with tempfile.TemporaryDirectory() as tmp:
         work = args.keep or tmp
-        gltf = scene.build(nsbmd, nsbca, os.path.join(HERE, "art"), work)
-        cgfx = to_cgfx.convert(args.pycgfx, gltf)
+        try:
+            cgfx = cgfx_from_titledemo(archive, args.pycgfx, work)
+        except ValueError as e:
+            raise SystemExit(str(e))
         cgfx_path = os.path.join(work, "banner.cgfx")
         with open(cgfx_path, "wb") as f:
             f.write(cgfx)

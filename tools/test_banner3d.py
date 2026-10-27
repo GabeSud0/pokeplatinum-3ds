@@ -1,6 +1,7 @@
 """tools/banner3d (the HOME Menu's 3D banner) on made-up data only: no ROM, no
 game files. The pycgfx part runs when build/pycgfx is there (CI fetches it:
 make_banner.py --fetch-pycgfx-only) on Python 3.11+, and is skipped otherwise."""
+import hashlib
 import json
 import math
 import os
@@ -17,6 +18,8 @@ import nitro  # noqa: E402
 import pngio  # noqa: E402
 
 PYCGFX = os.path.join(os.path.dirname(HERE), "build", "pycgfx")
+# What to_cgfx makes of synthetic_scene (Python 3.11 to 3.13; pycgfx at to_cgfx.PYCGFX_COMMIT)
+SYNTHETIC_CGFX_SHA1 = "1d50ebe1e74d3382f54b2b992d3492fa4cf82a25"
 
 
 class PNG(unittest.TestCase):
@@ -158,6 +161,24 @@ def synthetic_scene(out):
     return os.path.join(out, "s.gltf")
 
 
+class Hash64(unittest.TestCase):
+    def test_a_64_bit_pythons_hash(self):
+        import random
+        import to_cgfx
+        rng = random.Random(1)
+        values = [0, 1, -1, -2, 2**61 - 1, 2**61, -(2**61), 2**64 + 5, -(2**70)]
+        tuples = [(), (0,), (-1,), tuple(values), ((1, 2), (3, (4,)))]
+        tuples += [tuple(rng.randrange(-2**40, 2**40) for _ in range(rng.randrange(1, 40))) for _ in range(200)]
+        # the numbers this test expects are a 64-bit CPython's own (its hash() is the reference there)
+        if sys.maxsize == 2**63 - 1 and sys.implementation.name == "cpython":
+            for v in values + tuples:
+                self.assertEqual(to_cgfx.hash64(v), hash(v), v)
+        self.assertEqual(to_cgfx.hash64((1, 2, 3)), 529344067295497451)
+        self.assertEqual(to_cgfx.hash64(-1), -2)
+        with self.assertRaises(TypeError):
+            to_cgfx.hash64(1.5)
+
+
 @unittest.skipUnless(sys.version_info >= (3, 11) and os.path.isfile(os.path.join(PYCGFX, "main.py")),
                      "needs Python 3.11+ and build/pycgfx (make_banner.py --fetch-pycgfx-only)")
 class Convert(unittest.TestCase):
@@ -172,6 +193,9 @@ class Convert(unittest.TestCase):
         key = struct.pack("<ff", 600.0, 2 * math.pi)
         self.assertIn(key, raw)
         self.assertIn(b"autorotate\0", raw)
+        # The same bytes on every Python, and in the browser (tools/pyodide_test.mjs
+        # runs this test in Pyodide): the web builder makes the banner there.
+        self.assertEqual(hashlib.sha1(raw).hexdigest(), SYNTHETIC_CGFX_SHA1)
 
 
 if __name__ == "__main__":

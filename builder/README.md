@@ -60,6 +60,22 @@ outside the supported ROM revisions, including manifest-supplied hashes.
 
 Both `data_pack/` and the generated `.pak` are private outputs; never commit them.
 
+## The web builder's build
+
+`builder/web.py` makes the same data pack and `manifest.json` from the ROM's
+bytes, in memory (no folder of extracted files, no other programs), so the
+web builder can run it in your browser with Pyodide. It also makes the HOME
+Menu banner's pieces (the 3D scene, with pycgfx, and the flat fallback). On a
+PC:
+
+```sh
+python builder/web.py /path/to/platinum.nds out/ --pycgfx build/pycgfx
+```
+
+A release's files (the program and the web builder's payload, no game data)
+are made by `tools/build_web_payload.py`; CI publishes them when a version is
+tagged.
+
 ## Tests
 
 ```sh
