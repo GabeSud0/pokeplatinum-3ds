@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report on Discord instead
+    url: https://discord.gg/YjyA5ygpC
+    about: No GitHub account? Post in the #bug-reports forum on Discord.
+  - name: Web builder
+    url: https://gabesud0.github.io/pokeplatinum-3ds/
+    about: Build the game from your own cartridge in your browser.

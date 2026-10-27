@@ -1,0 +1,75 @@
+name: Bug report
+description: Something looks wrong, crashes or doesn't work in the game.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing! No GitHub account? You can also report bugs in the **#bug-reports** forum on [Discord](https://discord.gg/YjyA5ygpC).
+
+        Please **don't attach your ROM, data pack (`.pak`) or a build of the game**: they contain game data and can't be shared here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What went wrong, and what you expected instead.
+      placeholder: "In Eterna Forest, my partner disappeared after a battle."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      description: The steps that lead to the bug, if you know them.
+      placeholder: |
+        1. Go to ...
+        2. Talk to ...
+        3. ...
+  - type: dropdown
+    id: device
+    attributes:
+      label: Where are you playing?
+      options:
+        - New 3DS / New 3DS XL / New 2DS XL
+        - Old 3DS / 3DS XL / 2DS
+        - Azahar (emulator)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: version
+    attributes:
+      label: Which version of the game?
+      options:
+        - Homebrew Launcher (.3dsx)
+        - HOME Menu (.cia)
+    validations:
+      required: true
+  - type: input
+    id: release
+    attributes:
+      label: Release or build
+      description: The release you installed (for example v0.1.0-alpha.1), or the commit you built.
+      placeholder: v0.1.0-alpha.1
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log file
+      description: Drag in `sd:/3ds/pokeplatinum/log.txt` from your SD card (or Azahar's SD folder). It helps a lot.
+  - type: textarea
+    id: pictures
+    attributes:
+      label: Screenshots or video
+      description: "Optional. On the 3DS: L + Down + Select opens Luma's menu, then Take screenshot."
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before sending
+      options:
+        - label: I searched the existing issues and this isn't already reported.
+          required: true
+        - label: I'm using my own dump of Pokémon Platinum (USA).
+          required: true
