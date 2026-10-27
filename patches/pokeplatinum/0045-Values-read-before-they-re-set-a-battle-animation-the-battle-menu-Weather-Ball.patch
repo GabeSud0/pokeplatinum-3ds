@@ -1,0 +1,110 @@
+From 034640f85dc8bbb554bb2ed88dd6823f19090756 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] Values read before they're set: a battle animation, the
+ battle menu, Weather Ball (SDK_PORT_3DS)
+
+Built with GCC these read whatever was in a register (on the DS,
+Metrowerks happened to leave something harmless):
+- IsEmitterActive: with no particles left, age and lifeTime were never
+  set; a move's emitter could stay "active" for ever and its task never
+  end, the battle stuck in the animation. None left: not active.
+- BattleSystem_Cursor_Menu: UP on RUN skips BattleSystem_MoveCursor and
+  button was never set; the switch could act on it as A (RUN chosen) or
+  B. Nothing pressed, as MoveCursor gives.
+- Weather Ball without weather (CalcMoveType, Move_CalcVariableType,
+  TrainerAI_MoveType): no type set; Normal, as it is then.
+---
+ src/battle/battle_lib.c            | 9 +++++++++
+ src/battle/battle_subscreen.c      | 7 +++++++
+ src/battle/trainer_ai/trainer_ai.c | 5 +++++
+ src/battle_anim/script_funcs_3.c   | 9 +++++++++
+ 4 files changed, 30 insertions(+)
+
+diff --git a/src/battle/battle_lib.c b/src/battle/battle_lib.c
+index f1addf3e..f398da62 100644
+--- a/src/battle/battle_lib.c
++++ b/src/battle/battle_lib.c
+@@ -7892,6 +7892,11 @@ static int CalcMoveType(BattleSystem *battleSys, BattleContext *battleCtx, int i
+         break;
+ 
+     case MOVE_WEATHER_BALL:
++#ifdef SDK_PORT_3DS
++        // (without weather the type was never set: whatever was in its
++        // register. Normal, as Weather Ball is then.)
++        type = TYPE_NORMAL;
++#endif
+         if (NO_CLOUD_NINE
+             && battleCtx->fieldConditionsMask & FIELD_CONDITION_WEATHER) {
+             if (WEATHER_IS_RAIN) {
+@@ -8174,6 +8179,10 @@ int Move_CalcVariableType(BattleSystem *battleSys, BattleContext *battleCtx, Pok
+         break;
+ 
+     case MOVE_WEATHER_BALL:
++#ifdef SDK_PORT_3DS
++        // (as in CalcMoveType: Normal without weather)
++        type = TYPE_NORMAL;
++#endif
+         if (NO_CLOUD_NINE) {
+             if (battleCtx->fieldConditionsMask & FIELD_CONDITION_WEATHER) {
+                 if (WEATHER_IS_RAIN) {
+diff --git a/src/battle/battle_subscreen.c b/src/battle/battle_subscreen.c
+index 72236726..38a41638 100644
+--- a/src/battle/battle_subscreen.c
++++ b/src/battle/battle_subscreen.c
+@@ -3206,7 +3206,14 @@ static int BattleSystem_Cursor_Menu(BattleSubscreen *btlSubscreen, BOOL cursorHi
+ {
+     // Returns the ID of the menu button pressed, or -1 if nothing was pressed
+     MenuCursor *cursor;
++#ifdef SDK_PORT_3DS
++    // (UP on RUN skips BattleSystem_MoveCursor: button was never set, and
++    // the switch below acted on whatever was in its register, maybe A,
++    // RUN chosen, or B. Nothing pressed, as MoveCursor gives.)
++    u32 button = 0;
++#else
+     u32 button;
++#endif
+     int buttonId;
+ 
+     cursor = &btlSubscreen->cursor;
+diff --git a/src/battle/trainer_ai/trainer_ai.c b/src/battle/trainer_ai/trainer_ai.c
+index 8a00538b..0710984b 100644
+--- a/src/battle/trainer_ai/trainer_ai.c
++++ b/src/battle/trainer_ai/trainer_ai.c
+@@ -3220,6 +3220,11 @@ static int TrainerAI_MoveType(BattleSystem *battleSys, BattleContext *battleCtx,
+         break;
+ 
+     case MOVE_WEATHER_BALL:
++#ifdef SDK_PORT_3DS
++        // (without weather the type was never set: the AI judged Weather
++        // Ball by whatever was in its register. Normal, as it is then.)
++        result = TYPE_NORMAL;
++#endif
+         if (NO_CLOUD_NINE && (battleCtx->fieldConditionsMask & FIELD_CONDITION_WEATHER)) {
+             if (WEATHER_IS_RAIN) {
+                 result = TYPE_WATER;
+diff --git a/src/battle_anim/script_funcs_3.c b/src/battle_anim/script_funcs_3.c
+index 97934024..f3686563 100644
+--- a/src/battle_anim/script_funcs_3.c
++++ b/src/battle_anim/script_funcs_3.c
+@@ -3352,8 +3352,17 @@ static BOOL IsEmitterActive(SPLEmitter *emitter)
+     BOOL active = FALSE;
+     SPLParticle *particle = emitter->particles.first;
+ 
++#ifdef SDK_PORT_3DS
++    // (no particles: age and lifeTime were never set, and compared as
++    // whatever was in their registers: a move's emitter could stay
++    // "active" for ever, its task never ending, the battle stuck in the
++    // animation. None left: not active.)
++    int age = 0;
++    int lifeTime = 0;
++#else
+     int age;
+     int lifeTime;
++#endif
+     while (particle != NULL) {
+         age = particle->age;
+         lifeTime = particle->lifeTime;
+-- 
+2.43.0
+
