@@ -192,18 +192,22 @@ la raíz de la tarjeta SD.
 sdmc:/3ds/pokeplatinum/platinum3ds.pak
 sdmc:/3ds/pokeplatinum/manifest.json      (de data_pack/)
 sdmc:/3ds/pokeplatinum.3dsx               (para el Homebrew Launcher)
-sdmc:/cia/pokeplatinum.cia                (para el menú HOME, opcional)
+sdmc:/cia/pokeplatinum.cia                (para el menú HOME, recomendado)
 ```
 
 En Azahar, van en la carpeta de su tarjeta SD emulada.
 
 ### 3. Juega
 
-- **Homebrew Launcher:** abre `pokeplatinum.3dsx`, o ábrelo en Azahar.
-- **Menú HOME:** en FBI, ve a **SD → cia → pokeplatinum.cia → Install CIA**.
-  Después el juego se abre y se cierra desde el menú HOME como cualquier otro.
+- **Menú HOME (recomendado):** en FBI, ve a **SD → cia → pokeplatinum.cia →
+  Install CIA**. Después el juego se abre y se cierra desde el menú HOME como
+  cualquier otro, con toda la memoria que necesitan las pantallas completas.
   Para actualizarlo, instala el `.cia` nuevo de la misma forma; tu partida se
   conserva.
+- **Homebrew Launcher:** abre `pokeplatinum.3dsx`, o ábrelo en Azahar. Abierto
+  desde el menú Rosalina, el Homebrew Launcher les da menos memoria a los
+  juegos, y en una New 3DS el juego puede mostrar solo las dos pantallas de la
+  DS.
 - **Actualizar:** crea la nueva versión con el creador web y copia sus archivos
   encima de los anteriores. Cuando una versión lee sus datos igual que la
   anterior, su página lo dice: entonces basta con copiar el nuevo

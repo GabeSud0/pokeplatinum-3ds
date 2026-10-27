@@ -186,17 +186,20 @@ the root of the SD card.
 sdmc:/3ds/pokeplatinum/platinum3ds.pak
 sdmc:/3ds/pokeplatinum/manifest.json      (from data_pack/)
 sdmc:/3ds/pokeplatinum.3dsx               (for the Homebrew Launcher)
-sdmc:/cia/pokeplatinum.cia                (for the HOME Menu, optional)
+sdmc:/cia/pokeplatinum.cia                (for the HOME Menu, recommended)
 ```
 
 In Azahar, these go in its emulated SD card folder.
 
 ### 3. Play
 
-- **Homebrew Launcher:** run `pokeplatinum.3dsx`, or open it in Azahar.
-- **HOME Menu:** in FBI, go to **SD → cia → pokeplatinum.cia → Install CIA**.
-  The game then opens and closes from the HOME Menu like any other title. To
-  update it, install the new `.cia` the same way; your save stays.
+- **HOME Menu (recommended):** in FBI, go to **SD → cia → pokeplatinum.cia →
+  Install CIA**. The game then opens and closes from the HOME Menu like any
+  other title, with all the memory the full-width screens need. To update it,
+  install the new `.cia` the same way; your save stays.
+- **Homebrew Launcher:** run `pokeplatinum.3dsx`, or open it in Azahar. Opened
+  from the Rosalina menu, the Homebrew Launcher gives games less memory, and on
+  a New 3DS the game may then show only the DS's two screens.
 - **Updating:** build the new version with the web builder and copy its files
   over the old ones. When a version reads its data the same way, its page
   says so: then copying the new `pokeplatinum.3dsx` is enough.
