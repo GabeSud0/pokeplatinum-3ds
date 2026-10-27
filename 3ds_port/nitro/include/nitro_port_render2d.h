@@ -118,6 +118,8 @@ unsigned NitroPort_Render2DMasterBright(int engine, int snapshot);
  * compositor draws a BG left out of the picture from (gpuBgLeftOut). From
  * the state taken (snapshot: 1) or the live one; the VRAM as it is. */
 int NitroPort_Render2DBgPicture(int bg, int snapshot, uint16_t *out);
+/* Engine A's BG scrolls now (BG0-3's HOFS and VOFS, 9 bits each). */
+void NitroPort_Render2DBgOffsets(uint16_t out[8]);
 
 /* One BG of an engine alone (for capturing it: nitro_port_wideart.h), on
  * the canvas layout gives (width, origin, clip, anchorWindows; NULL: the

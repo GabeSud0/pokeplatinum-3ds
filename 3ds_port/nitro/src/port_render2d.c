@@ -456,6 +456,12 @@ static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted)
             if (prio > prioBg && prio <= prio3d) {
                 return -1;   /* (an OBJ between it and the 3D) */
             }
+            /* (a semi-transparent or bitmap OBJ in front of it: the DS
+             * blends it with what's under it, this BG; left out, it would
+             * be blended with the 3D instead) */
+            if (prio <= prioBg && ((a0 >> 10) & 3) != 0) {
+                return -1;
+            }
         }
     }
     return bg;
@@ -4061,6 +4067,15 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
     }
     if (split == NULL) {
         MasterBrightness(out, Rd16(e.io, 0x6C), e.width * e.height);
+    }
+}
+
+void NitroPort_Render2DBgOffsets(uint16_t out[8])
+{
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        out[i] = (uint16_t)(Rd16(NitroPort_IoReg, 0x10 + 2 * i) & 0x1FF);
     }
 }
 

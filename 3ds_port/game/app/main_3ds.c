@@ -2052,6 +2052,14 @@ static bool DrawFrame(bool new3dOnly)
         (void)NitroPort_HBlankLinesOnce();
     }
     sAOnTop = NitroPort_EngineAOnTop() != 0;
+    if (sRemaster && NitroPort_ComposeDrawsBgs()) {
+        /* (the scrolls of this frame, whether a drawer takes it or not:
+         * the weather's BG drawn by the compositor goes with them) */
+        uint16_t ofs[8];
+
+        NitroPort_Render2DBgOffsets(ofs);
+        NitroPort_ComposeNoteBgOffsets(NitroPort_ComposeVBlanks(), ofs);
+    }
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
 

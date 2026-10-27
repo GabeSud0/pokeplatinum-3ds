@@ -2493,6 +2493,10 @@ static void test_gpu_bg(void)
         memcpy(NitroPort_Oam, obj, sizeof(obj));
         NitroPort_Render2DSplit(0, under, &split);
         CHECK(split.gpuBgLeftOut == 1 << 2);
+        obj[0] = (u16)(1 << 10);        /* in front of it, semi-transparent: drawn as before */
+        memcpy(NitroPort_Oam, obj, sizeof(obj));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuBgLeftOut == 0);
         MI_CpuClearFast(NitroPort_Oam, 0x800);
     }
     /* blended with something else too, or behind the 3D: drawn */

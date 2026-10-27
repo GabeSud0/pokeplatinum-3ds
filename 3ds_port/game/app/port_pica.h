@@ -261,6 +261,11 @@ typedef struct ComposeLayers {
 /* Whether the compositor can draw a BG itself (its picture's textures
  * made: NitroRender2DSplit.gpuBgs). Any thread. */
 int NitroPort_ComposeDrawsBgs(void);
+/* (the game's thread, each frame it hands over: after its V-blank work)
+ * Engine A's BG scrolls in the frame of this V-blank count: what a BG the
+ * compositor draws itself is scrolled by with the 3D shown in it (a scene
+ * of stamp S: the frame S + 1's, as the DS has it). */
+void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, const uint16_t ofs[8]);
 ComposeLayers *NitroPort_ComposeLayersOf(int engine);
 /* Into the textures of the screen (0 upper, 1 lower) the engine is on. */
 /* 0: no set free to publish into (one the GPU's drawing, one the frame

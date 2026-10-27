@@ -468,6 +468,7 @@ static uint16_t sPendingBgOfs[8];
 /* (the scene before's BG scrolls: an in-between scene's are halfway) */
 static uint16_t sLastBgOfs[8];
 static int sLastBgOfsValid;
+static uint32_t sLastStamp;
 static void io_bg_ofs(uint16_t out[8])
 {
     int i;
@@ -1067,8 +1068,13 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
          * out), Cheryl behind the player in Eterna Forest took his place
          * from the scene before, and jumped about (2026-10-27). */
         if(order>=0 && order!=best && P[order].onScreen && P[order].count==C[j].count){
+            /* (only when the motion's fit is clearly off: a map's floor
+             * moves unevenly in the perspective, and a tile's neighbour
+             * of its kind, paired by an order that shifted, can be where
+             * it is now when the scene moved by a tile) */
+            float clearly=fmaxf(4.0f*MATCH_SURE,0.5f*(fabsf(dx)+fabsf(dy)));
             float still=poly_distance(&P[order],&C[j],0.0f,0.0f,MATCH_SURE);
-            if(still<MATCH_SURE && (best<0 || still+MATCH_SURE<bestD))best=order;
+            if(still<MATCH_SURE && (best<0 || bestD>clearly))best=order;
         }
         out[j]=best;
         if(best>=0){offset=best-(int)j;matched++;}
@@ -1096,6 +1102,7 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
     sMid->screen_width=now->screen_width;
     memcpy(sMid->projection,now->projection,sizeof(sMid->projection));
     sMid->stamp=now->stamp;
+    sMid->stamp_before=sLastBgOfsValid?sLastStamp:now->stamp;
     sMid->disp3dcnt=now->disp3dcnt;
     memcpy(sMid->regs3d,now->regs3d,sizeof(sMid->regs3d));
     {
@@ -1578,11 +1585,13 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
             memcpy(scene->regs3d,NitroPort_IoReg+NITRO_GX3D_REGS_AT,NITRO_GX3D_REGS_SIZE);
             io_bg_ofs(scene->bg_ofs);
         }
+        scene->stamp_before=scene->stamp;
         /* Which SWAP_BUFFERS it is (with the geometry thread, counting
          * them as the game's thread does: NitroPort_Gx3dEarlierSceneUnread). */
         NitroPort_MailboxTag(&sMailbox,sSwapsDone+1u);
         interp_mid(scene);   /* (published with it) */
         memcpy(sLastBgOfs,scene->bg_ofs,sizeof(sLastBgOfs));
+        sLastStamp=scene->stamp;
         sLastBgOfsValid=1;
         if(NitroPort_MailboxPublish(&sMailbox,&next,&serial)){
             sDisplayed=sBuilding;

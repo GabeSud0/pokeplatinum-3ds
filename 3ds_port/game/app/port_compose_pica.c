@@ -136,6 +136,16 @@ typedef struct LayerSet {
 #define BG_TEX_ALLOC (BG_TEX_BYTES + BG_TEX_W * 8 * 2)
 static int sBgsAvailable;   /* (the upper screen's sets have their bgTex) */
 static C3D_Tex sBgTex;
+/* Engine A's BG scrolls by frame (NitroPort_ComposeNoteBgOffsets): the
+ * last BG_OFS_KEPT frames the game handed over. */
+#define BG_OFS_KEPT 16
+static struct {
+    uint32_t stamp;
+    uint16_t ofs[8];
+    int valid;
+} sBgOfs[BG_OFS_KEPT];
+static unsigned sBgOfsNext;
+static LightLock sBgOfsLock;   /* (LightLock_Init: the display's setting up) */
 
 /* A drawn frame in an LCD framebuffer, waiting for its V-blank. */
 typedef struct Pending {
@@ -782,6 +792,8 @@ int NitroPort_ComposeInit(const ComposeConfig *config)
                        config->sunAzimuth);
     memset(sScreens, 0, sizeof(sScreens));
     LightLock_Init(&sSetLock);
+    LightLock_Init(&sBgOfsLock);
+    memset(sBgOfs, 0, sizeof(sBgOfs));
     LightLock_Init(&sPresentLock);
     sHeld = 0;
     for (c = 0; c < 32768; c++) {
@@ -1023,6 +1035,52 @@ int NitroPort_ComposeDrawsBgs(void)
     return sReady && sBgsAvailable;
 }
 
+
+void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, const uint16_t ofs[8])
+{
+    LightLock_Lock(&sBgOfsLock);
+    sBgOfs[sBgOfsNext].stamp = stamp;
+    memcpy(sBgOfs[sBgOfsNext].ofs, ofs, sizeof(sBgOfs[0].ofs));
+    sBgOfs[sBgOfsNext].valid = 1;
+    sBgOfsNext = (sBgOfsNext + 1u) % BG_OFS_KEPT;
+    LightLock_Unlock(&sBgOfsLock);
+}
+
+/* The scrolls the DS shows a scene of this stamp with: the first frame
+ * handed over after it (its V-blank set them). Whether they're known. */
+static int bg_offsets_after(uint32_t stamp, uint16_t out[8])
+{
+    int i, found = -1;
+    uint32_t best = 0;
+
+    LightLock_Lock(&sBgOfsLock);
+    for (i = 0; i < BG_OFS_KEPT; i++) {
+        uint32_t d = sBgOfs[i].stamp - stamp;
+
+        if (sBgOfs[i].valid && d >= 1u && d <= 4u && (found < 0 || d < best)) {
+            found = i;
+            best = d;
+        }
+    }
+    if (found >= 0) {
+        memcpy(out, sBgOfs[found].ofs, sizeof(sBgOfs[0].ofs));
+    }
+    LightLock_Unlock(&sBgOfsLock);
+    return found >= 0;
+}
+
+/* Halfway from a to b (9-bit scrolls), the shorter way round a 512 map; a
+ * jump of more than a quarter of it: b. */
+static int bg_offset_halfway(int a, int b)
+{
+    int d = (b - a) & 0x1FF;
+
+    if (d >= 256) {
+        d -= 512;
+    }
+    return d > 128 || d < -128 ? b : (a + d / 2) & 0x1FF;
+}
+
 uint32_t NitroPort_ComposePublished(int engine)
 {
     (void)engine;
@@ -1211,6 +1269,7 @@ int NitroPort_ComposePublish(int engine, int screen)
     set->info.under = NULL;
     set->info.over = NULL;
     set->info.overAlpha = NULL;
+    set->info.gpuBgPicture = NULL;   /* (the drawer's: the set has its own, bgTex) */
     set->overEmpty = 1;
     set->info.height = h;
     set->underColor = l->displayOff ? -1 : uniform_color(l->under, w * h);
@@ -2536,6 +2595,19 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
          * clear (the texture's colours are 0 there: what's under stays). */
         if (info->gpuBg >= 0 && set->bgTex && set->bgValid && set->bgKey == info->gpuBgKey) {
             int hofs = scene->bg_ofs[info->gpuBg * 2], vofs = scene->bg_ofs[info->gpuBg * 2 + 1];
+            uint16_t now[8], before[8];
+
+            /* (the scrolls of the frame the DS shows the scene in; an
+             * in-between scene's halfway from the scene before's; the
+             * scene's own, a frame behind, when they aren't known) */
+            if (bg_offsets_after(scene->stamp, now)) {
+                hofs = now[info->gpuBg * 2];
+                vofs = now[info->gpuBg * 2 + 1];
+                if (scene->stamp_before != scene->stamp && bg_offsets_after(scene->stamp_before, before)) {
+                    hofs = bg_offset_halfway(before[info->gpuBg * 2], hofs);
+                    vofs = bg_offset_halfway(before[info->gpuBg * 2 + 1], vofs);
+                }
+            }
             int origin = (canvasW - DS_W) / 2;
             float bu0 = (float)(hofs - origin) / 256.0f, bu1 = bu0 + (float)canvasW / 256.0f;
             float bvTop = 1.0f - (float)vofs / 256.0f, bvBottom = bvTop - (float)DS_H / 256.0f;
