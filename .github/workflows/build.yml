@@ -237,7 +237,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: CI uploads no game builds (only the WideArt editor)
+      - name: CI uploads no game data (the WideArt editor; a release's files on tags)
         run: python tools/check_ci_artifacts.py
 
       - name: Check Python tools compile
@@ -260,11 +260,21 @@ jobs:
       # The web builder runs the builder in the player's browser, in Pyodide:
       # the same tests, there (the 3D banner's converter included).
       - name: Builder tests in Pyodide (the web builder's Python)
+        shell: bash
         run: |
-          npm install --no-save --prefix build/pyodide "pyodide@$(python tools/build_web_payload.py --pyodide-version)"
-          node tools/pyodide_test.mjs build/pyodide/node_modules/pyodide \
-              builder.test_web builder.test_extract_rom builder.test_pack \
-              tools.test_banner3d tools.test_home_menu_art
+          set -o pipefail
+          {
+            npm install --no-save --prefix build/pyodide "pyodide@$(python tools/build_web_payload.py --pyodide-version)" &&
+            node tools/pyodide_test.mjs build/pyodide/node_modules/pyodide \
+                builder.test_web builder.test_extract_rom builder.test_pack \
+                tools.test_banner3d tools.test_home_menu_art
+          } 2>&1 | tee pyodide-tests.log || {
+            # (the job's log isn't always at hand: the failure in its annotations)
+            grep -E "FAIL|ERROR|Error|SKIPPED|npm error" pyodide-tests.log | head -30 > pyodide-fails.txt || true
+            tail -25 pyodide-tests.log >> pyodide-fails.txt
+            echo "::error title=Pyodide tests::$(sed -e 's/%/%25/g' -e 's/\r//g' pyodide-fails.txt | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+            exit 1
+          }
 
       - name: Fetch decompilation and both SDKs (fresh; check patches)
         run: python tools/bootstrap.py --clean
