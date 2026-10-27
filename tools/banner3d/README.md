@@ -17,8 +17,8 @@ python3 tools/banner3d/make_banner.py --rom platinum.nds \
 If it can't be made, the `.cia` gets the flat banner instead
 (`make game-cia BANNER=flat` asks for that one).
 
-**Needs** Python 3.12 or later and git: nothing else (the standard library
-only, MSYS2's Python included).
+**Needs** Python 3.11 or later and git: nothing else (the standard library
+only, MSYS2's Python and the Linux build's Debian 12 one included).
 
 ## What comes from where
 

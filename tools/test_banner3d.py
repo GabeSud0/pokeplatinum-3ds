@@ -1,6 +1,6 @@
 """tools/banner3d (the HOME Menu's 3D banner) on made-up data only: no ROM, no
 game files. The pycgfx part runs when build/pycgfx is there (CI fetches it:
-make_banner.py --fetch-pycgfx-only) on Python 3.12+, and is skipped otherwise."""
+make_banner.py --fetch-pycgfx-only) on Python 3.11+, and is skipped otherwise."""
 import json
 import math
 import os
@@ -158,8 +158,8 @@ def synthetic_scene(out):
     return os.path.join(out, "s.gltf")
 
 
-@unittest.skipUnless(sys.version_info >= (3, 12) and os.path.isfile(os.path.join(PYCGFX, "main.py")),
-                     "needs Python 3.12+ and build/pycgfx (make_banner.py --fetch-pycgfx-only)")
+@unittest.skipUnless(sys.version_info >= (3, 11) and os.path.isfile(os.path.join(PYCGFX, "main.py")),
+                     "needs Python 3.11+ and build/pycgfx (make_banner.py --fetch-pycgfx-only)")
 class Convert(unittest.TestCase):
     def test_synthetic_scene_to_cgfx(self):
         import to_cgfx
