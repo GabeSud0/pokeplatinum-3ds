@@ -6,7 +6,7 @@
 # has no title screen, so the .cia gets the flat banner.
 set -euxo pipefail
 apt-get install -y --no-install-recommends python3-pip bzip2
-pip3 install --break-system-packages -q playwright==1.48.2
+pip3 install --break-system-packages -q playwright==1.48.0
 python3 -m playwright install --with-deps chromium > /dev/null
 bash tools/fetch_pyodide.sh build/pyodide-core
 python3 - <<'PY'
