@@ -34,7 +34,8 @@ const inputs = { elf: read(opts.elf), icon: read(opts.icon), rsf: read(opts.rsf)
 const cgfx = opts.cgfx ? read(opts.cgfx) : null;
 
 const work = mkdtempSync(path.join(tmpdir(), "cia-wasm-"));
-const native = (tool, args) => execFileSync(path.join(opts.native, tool), args, { cwd: work, stdio: "pipe" });
+// (the native tools run in the work folder: their own folder made absolute)
+const native = (tool, args) => execFileSync(path.resolve(opts.native, tool), args, { cwd: work, stdio: "pipe" });
 const same = (a, b) => a.length === b.length && Buffer.compare(Buffer.from(a), Buffer.from(b)) === 0;
 let failures = 0;
 const check = (ok, what) => {
