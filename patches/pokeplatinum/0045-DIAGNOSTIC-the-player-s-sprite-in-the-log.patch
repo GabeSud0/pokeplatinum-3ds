@@ -1,24 +1,25 @@
-From c06fc41e5de391066a1d97d137dcc293846f6ff5 Mon Sep 17 00:00:00 2001
+From e2afc799798d99d3a3aed9d0016e866500616e19 Mon Sep 17 00:00:00 2001
 From: pokeplatinum-3ds <noreply@users.noreply.github.com>
 Date: Sun, 25 Oct 2026 08:00:00 -0700
 Subject: [PATCH] DIAGNOSTIC, not for merging: the player's sprite in the log
  (SDK_PORT_3DS)
 
 ---
- src/billboard.c               | 31 +++++++++++++++++++++++++++++++
- src/overlay005/ov5_021EB1A0.c | 27 +++++++++++++++++++++++++++
- 2 files changed, 58 insertions(+)
+ src/billboard.c               | 50 +++++++++++++++++++++++++++++++++++
+ src/overlay005/ov5_021EB1A0.c | 27 +++++++++++++++++++
+ 2 files changed, 77 insertions(+)
 
 diff --git a/src/billboard.c b/src/billboard.c
-index 8cdadfd6..4c9cd328 100644
+index 8cdadfd6..75c653e9 100644
 --- a/src/billboard.c
 +++ b/src/billboard.c
-@@ -59,6 +59,32 @@ static void SetBillboardGfxSeqAndResetVRAMTransfer(Billboard *billboard, const B
+@@ -59,6 +59,51 @@ static void SetBillboardGfxSeqAndResetVRAMTransfer(Billboard *billboard, const B
  static BillboardList *sBillboardLists = NULL;
  static int sBillboardListCount = 0;
  
 +#ifdef SDK_PORT_3DS
 +// DIAGNOSTIC (not for merging): the player's sprite as the game draws it.
++#include <stdio.h>
 +extern void NitroPort_Log(const char *fmt, ...);
 +extern void NitroPort_Gx3dDiagWatch(u32 param, u32 pltt);
 +Billboard *gPortDiagBillboard;
@@ -31,9 +32,27 @@ index 8cdadfd6..4c9cd328 100644
 +    u32 param = mat->texImageParam;
 +
 +    if (billboard->state != lastState || billboard->animNum != lastAnim) {
++        NNSG3dResMat *mats = NNS_G3dGetMat(billboard->model);
++        NNSG3dResDict *dict = (NNSG3dResDict *)((u8 *)mats + mats->ofsDictTexToMatList);
++        BillboardTexPlttIndex idx = BillboardGfxSequence_GetTexPlttIndexAt(&billboard->gfxSequence, billboard->frameNum >> FX32_SHIFT);
++        const NNSG3dResDictTexData *frameTex = NNS_G3dGetTexDataByIdx(billboard->animTexture, idx.textureIdx);
++        char flags[40];
++        int i, n = 0;
++
++        for (i = 0; i < dict->numEntry && i < 8; i++) {
++            NNSG3dResDictTexToMatIdxData *d = (NNSG3dResDictTexToMatIdxData *)NNS_G3dGetResDataByIdx(dict, i);
++            n += snprintf(flags + n, sizeof(flags) - n, "%s%d/%d", i ? "," : "", d->flag & 1, d->numIdx);
++        }
++
 +        NitroPort_Log("[diag] player sprite: state %d anim %d frame %d, texture %08lx palette %x%s",
 +            billboard->state, billboard->animNum, (int)(billboard->frameNum >> FX32_SHIFT),
 +            (unsigned long)param, mat->texPlttBase, param == lastParam ? " (texture unchanged)" : "");
++        NitroPort_Log("[diag]   frame's texture %d (%08lx), materials %d, bound %s, model %p (drawn %p), set %p, texture %p/%p, key %08lx/%08lx, draw flags %08lx, recorded %p",
++            idx.textureIdx, frameTex ? (unsigned long)frameTex->texImageParam : 0ul, mats->dict.numEntry, flags,
++            (void *)billboard->model, (void *)billboard->renderObj.resMdl, (void *)billboard->modelSet,
++            (void *)billboard->texture, (void *)billboard->animTexture, (unsigned long)billboard->texKey,
++            (unsigned long)billboard->texture->texInfo.vramKey, (unsigned long)billboard->renderObj.flag,
++            (void *)billboard->renderObj.recMatAnm);
 +        NitroPort_Gx3dDiagWatch(param, mat->texPlttBase);
 +        lastState = billboard->state;
 +        lastAnim = billboard->animNum;
@@ -46,7 +65,7 @@ index 8cdadfd6..4c9cd328 100644
  static void BillboardList_Reset(BillboardList *list)
  {
      list->active = FALSE;
-@@ -259,6 +285,11 @@ static void BillboardList_Draw(BillboardList *list)
+@@ -259,6 +304,11 @@ static void BillboardList_Draw(BillboardList *list)
              } else if (billboard->state == BILLBOARD_STATE_VRAM_TRANSFER) {
                  Billboard_TryRequestVRAMTransfer(billboard);
              }
