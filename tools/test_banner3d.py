@@ -1,6 +1,7 @@
 """tools/banner3d (the HOME Menu's 3D banner) on made-up data only: no ROM, no
 game files. The pycgfx part runs when build/pycgfx is there (CI fetches it:
 make_banner.py --fetch-pycgfx-only) on Python 3.11+, and is skipped otherwise."""
+import hashlib
 import json
 import math
 import os
@@ -17,6 +18,8 @@ import nitro  # noqa: E402
 import pngio  # noqa: E402
 
 PYCGFX = os.path.join(os.path.dirname(HERE), "build", "pycgfx")
+# What to_cgfx makes of synthetic_scene (Python 3.11 to 3.13; pycgfx at to_cgfx.PYCGFX_COMMIT)
+SYNTHETIC_CGFX_SHA1 = "1d50ebe1e74d3382f54b2b992d3492fa4cf82a25"
 
 
 class PNG(unittest.TestCase):
@@ -172,6 +175,9 @@ class Convert(unittest.TestCase):
         key = struct.pack("<ff", 600.0, 2 * math.pi)
         self.assertIn(key, raw)
         self.assertIn(b"autorotate\0", raw)
+        # The same bytes on every Python, and in the browser (tools/pyodide_test.mjs
+        # runs this test in Pyodide): the web builder makes the banner there.
+        self.assertEqual(hashlib.sha1(raw).hexdigest(), SYNTHETIC_CGFX_SHA1)
 
 
 if __name__ == "__main__":

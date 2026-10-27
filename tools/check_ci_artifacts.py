@@ -4,12 +4,13 @@
 Usage:
     python tools/check_ci_artifacts.py [WORKFLOW.yml ...]
 
-Anything built from the game's code (the game's program, its library) is
-a build of the game, and the repository never publishes one: CI builds and
-tests it, but only the WideArt editor (a drawing tool) leaves the run.
-This reads every actions/upload-artifact step in .github/workflows and
-checks each uploaded path against the list below. Add to the list only
-things that contain no game code or data.
+Game data (anything from the ROM) never leaves a run. The game's program
+leaves it only as a release's files (dist/release, made by
+tools/build_web_payload.py when a version is tagged: the program and the web
+builder's payload, no game data); the WideArt editor (a drawing tool) is the
+only other thing uploaded. This reads every actions/upload-artifact step in
+.github/workflows and checks each uploaded path against the list below. Add
+to the list only things that contain no game data.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 ALLOWED = [
     "dist/WideArt.exe",                       # the wide art editor (tools/wideart), no game code
+    "dist/release/",                          # a release's files (tools/build_web_payload.py)
 ]
 
 
@@ -56,7 +58,7 @@ def main() -> int:
         print("CI uploads something that isn't on the allowed list (tools/check_ci_artifacts.py):")
         for line in bad:
             print(f"  {line}")
-        print("Builds containing game code must never be uploaded.")
+        print("Game data, and builds outside a release's files, must never be uploaded.")
         return 1
     print(f"CI artifacts OK ({len(files)} workflow files checked)")
     return 0

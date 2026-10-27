@@ -66,7 +66,7 @@ def parse_nitrofs(data: bytes) -> list[dict]:
                 raise ValueError("Invalid FNT name")
             raw = fnt[off:off + length]
             off += length
-            name = raw.decode("ascii")
+            name = bytes(raw).decode("ascii")
             if name in (".", "..") or "/" in name or "\\" in name or ":" in name:
                 raise ValueError("Unsafe FNT path")
             if kind & 0x80:
@@ -92,6 +92,12 @@ def parse_nitrofs(data: bytes) -> list[dict]:
     return result
 
 
+def manifest_text(rom_sha1: str, entries: list[dict]) -> str:
+    """manifest.json's text: the ROM's SHA-1 and each file's ID, path and size."""
+    files = [{"id": e["id"], "path": e["path"], "size": e["size"]} for e in entries]
+    return json.dumps({"rom_sha1": rom_sha1, "files": files}, indent=2) + "\n"
+
+
 def extract(rom: Path, output: Path, *, verify: bool = True) -> list[dict]:
     data = rom.read_bytes()
     rom_sha1 = hashlib.sha1(data).hexdigest()
@@ -113,8 +119,7 @@ def extract(rom: Path, output: Path, *, verify: bool = True) -> list[dict]:
     manifest = [{"id": e["id"], "path": e["path"], "size": e["size"]}
                 for e in entries]
     output.mkdir(parents=True, exist_ok=True)
-    (output / "manifest.json").write_text(
-        json.dumps({"rom_sha1": rom_sha1, "files": manifest}, indent=2) + "\n", encoding="utf-8")
+    (output / "manifest.json").write_text(manifest_text(rom_sha1, entries), encoding="utf-8")
     return manifest
 
 
