@@ -18,6 +18,10 @@ Ours, also from hardware tests:
      10 seconds against the HOME Menu's own spin (as Pokemon Y's y_autorotate);
   6. each curve loops over its own keys (Giratina's 4-second idle) inside the
      10-second animation.
+  7. the two hashes pycgfx writes in each material (Python's hash() of a
+     tuple of numbers) are worked out as a 64-bit PC's Python does, on any
+     Python: the browser's (Pyodide) is 32-bit, and its hash() gives other
+     numbers, so the banner it made wasn't the one tested on the 3DS.
 pycgfx and its two libraries are swapped for standard-library stand-ins
 (shims/: Pillow and gltflib, just the parts pycgfx calls).
 """
@@ -44,6 +48,30 @@ def _batched(iterable, n):
         yield batch
 
 
+_MASK64 = (1 << 64) - 1
+_HASH_MODULUS = (1 << 61) - 1                  # CPython's _PyHASH_MODULUS, 64-bit
+_XXPRIME_1, _XXPRIME_2, _XXPRIME_5 = 11400714785074694791, 14029467366897019727, 2870177450012600261
+
+
+def hash64(value):
+    """hash(value) as a 64-bit CPython (3.8 and later) works it out, for
+    integers and tuples of them: what pycgfx's material hashes need (7.)."""
+    if type(value) is int:
+        h = value % _HASH_MODULUS if value >= 0 else -(-value % _HASH_MODULUS)
+        return -2 if h == -1 else h
+    if type(value) is tuple:                   # tupleobject.c: xxHash's mixing
+        acc = _XXPRIME_5
+        for item in value:
+            acc = (acc + (hash64(item) & _MASK64) * _XXPRIME_2) & _MASK64
+            acc = ((acc << 31) | (acc >> 33)) & _MASK64
+            acc = (acc * _XXPRIME_1) & _MASK64
+        acc = (acc + (len(value) ^ (_XXPRIME_5 ^ 3527539))) & _MASK64
+        if acc == _MASK64:
+            return 1546275796
+        return acc - (1 << 64) if acc >= 1 << 63 else acc
+    raise TypeError(f"hash64: {type(value).__name__} (only integers and tuples of them)")
+
+
 def load_pycgfx(pycgfx_dir):
     if not hasattr(itertools, "batched"):
         itertools.batched = _batched
@@ -54,6 +82,9 @@ def load_pycgfx(pycgfx_dir):
     spec = importlib.util.spec_from_file_location("pycgfx_main", os.path.join(pycgfx_dir, "main.py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # 7. (the materials' hash() calls, all in cgfx/mtob.py)
+    import cgfx.mtob
+    cgfx.mtob.hash = hash64
     return module
 
 

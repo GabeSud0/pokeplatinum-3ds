@@ -161,6 +161,24 @@ def synthetic_scene(out):
     return os.path.join(out, "s.gltf")
 
 
+class Hash64(unittest.TestCase):
+    def test_a_64_bit_pythons_hash(self):
+        import random
+        import to_cgfx
+        rng = random.Random(1)
+        values = [0, 1, -1, -2, 2**61 - 1, 2**61, -(2**61), 2**64 + 5, -(2**70)]
+        tuples = [(), (0,), (-1,), tuple(values), ((1, 2), (3, (4,)))]
+        tuples += [tuple(rng.randrange(-2**40, 2**40) for _ in range(rng.randrange(1, 40))) for _ in range(200)]
+        # the numbers this test expects are a 64-bit CPython's own (its hash() is the reference there)
+        if sys.maxsize == 2**63 - 1 and sys.implementation.name == "cpython":
+            for v in values + tuples:
+                self.assertEqual(to_cgfx.hash64(v), hash(v), v)
+        self.assertEqual(to_cgfx.hash64((1, 2, 3)), 529344067295497451)
+        self.assertEqual(to_cgfx.hash64(-1), -2)
+        with self.assertRaises(TypeError):
+            to_cgfx.hash64(1.5)
+
+
 @unittest.skipUnless(sys.version_info >= (3, 11) and os.path.isfile(os.path.join(PYCGFX, "main.py")),
                      "needs Python 3.11+ and build/pycgfx (make_banner.py --fetch-pycgfx-only)")
 class Convert(unittest.TestCase):
