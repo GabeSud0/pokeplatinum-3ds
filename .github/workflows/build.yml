@@ -121,6 +121,26 @@ jobs:
           cmp "$OUT/pokeplatinum.elf.cxi" build/web/pokeplatinum.elf.cxi
           rm -f "$OUT/pokeplatinum.elf.cxi" build/web/pokeplatinum.elf.cxi
 
+      # The web builder makes the .cia in the browser: bannertool and makerom
+      # compiled to WebAssembly (WASI), run by web/js/cia.mjs. Checked here
+      # against the native tools on this program: the same banners (the flat
+      # one and a made-up 3D scene) and the same title.
+      - name: The CIA tools for the browser make what the native ones make
+        shell: bash
+        run: |
+          apt-get install -y --no-install-recommends curl nodejs
+          bash tools/build_cia_tools_wasm.sh build/cia-tools-wasm
+          python3 tools/banner3d/make_banner.py --fetch-pycgfx-only
+          python3 -c "import sys, tempfile; sys.path[:0] = ['tools', 'tools/banner3d']
+          import test_banner3d, to_cgfx
+          with tempfile.TemporaryDirectory() as d:
+              open('build/web/synthetic.cgfx', 'wb').write(to_cgfx.convert('build/pycgfx', test_banner3d.synthetic_scene(d)))"
+          OUT=3ds_port/game/build/3ds
+          node tools/test_cia_wasm.mjs --wasm build/cia-tools-wasm --native build/cia-tools/bin \
+              --elf build/web/pokeplatinum.elf --icon "$OUT/pokeplatinum.smdh" \
+              --rsf 3ds_port/game/cia/pokeplatinum.rsf --chime 3ds_port/game/cia/chime.wav \
+              --flat build/home-menu-art/banner.png --cgfx build/web/synthetic.cgfx
+
       # A release's files (tools/build_web_payload.py): the program, and the
       # web builder's payload (what makes the rest from the player's ROM, in
       # their browser). Made on every run, to test it; uploaded for the
@@ -132,11 +152,11 @@ jobs:
             refs/tags/v*) VERSION="${GITHUB_REF_NAME#v}" ;;
             *) VERSION="0.0.0-dev.${GITHUB_SHA::7}" ;;
           esac
-          python3 tools/banner3d/make_banner.py --fetch-pycgfx-only
           OUT=3ds_port/game/build/3ds
           python3 tools/build_web_payload.py --version "$VERSION" --commit "$GITHUB_SHA" \
               --program "$OUT/pokeplatinum.3dsx" --elf build/web/pokeplatinum.elf \
-              --smdh "$OUT/pokeplatinum.smdh" --pycgfx build/pycgfx --out dist/release
+              --smdh "$OUT/pokeplatinum.smdh" --cia-tools build/cia-tools-wasm \
+              --pycgfx build/pycgfx --out dist/release
           ls -l dist/release
           cat dist/release/SHA256SUMS.txt
 
