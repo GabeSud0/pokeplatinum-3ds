@@ -7,8 +7,8 @@
 #
 # writes DEST/bannertool.wasm, DEST/makerom.wasm and DEST/LICENSES.md (their
 # licences and where their sources are). Needs git, curl and tar; wasi-sdk is
-# fetched into DEST/wasi-sdk (a pinned release, checked by its SHA-256)
-# unless WASI_SDK names one. tools/test_cia_wasm.mjs checks that they make
+# fetched into DEST/wasi-sdk (a pinned release, checked by its SHA-256: about
+# 115 MB on Linux, 520 MB on Windows) unless WASI_SDK names one. tools/test_cia_wasm.mjs checks that they make
 # what the native tools make.
 set -euo pipefail
 
@@ -18,8 +18,20 @@ MAKEROM_TAG=makerom-v0.18.4
 BANNERTOOL_REPO=https://github.com/diasurgical/bannertool.git
 BANNERTOOL_TAG=1.2.0
 WASI_SDK_VERSION=25
-WASI_SDK_URL="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-$WASI_SDK_VERSION/wasi-sdk-$WASI_SDK_VERSION.0-x86_64-linux.tar.gz"
-WASI_SDK_SHA256=52640dde13599bf127a95499e61d6d640256119456d1af8897ab6725bcf3d89c
+# (the compiler for this computer: Linux, or Windows in devkitPro's MSYS2; what
+# it makes is the same either way)
+case "$(uname -s)" in
+    Linux)
+        WASI_SDK_HOST=x86_64-linux
+        WASI_SDK_SHA256=52640dde13599bf127a95499e61d6d640256119456d1af8897ab6725bcf3d89c ;;
+    MINGW*|MSYS*|CYGWIN*)
+        WASI_SDK_HOST=x86_64-windows
+        WASI_SDK_SHA256=ebd4868f95a6e764bf29283e3bdf54df0df3902a29737176da9c17da218b939b ;;
+    *)
+        echo "build_cia_tools_wasm.sh: wasi-sdk is fetched for Linux or Windows only (or set WASI_SDK)" >&2
+        exit 1 ;;
+esac
+WASI_SDK_URL="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-$WASI_SDK_VERSION/wasi-sdk-$WASI_SDK_VERSION.0-$WASI_SDK_HOST.tar.gz"
 
 mkdir -p "$DEST"
 DEST="$(cd "$DEST" && pwd)"
@@ -35,6 +47,8 @@ if [ -z "${WASI_SDK:-}" ]; then
         rm "$DEST/wasi-sdk.tar.gz"
     fi
 fi
+# (makerom prints the time it was built: a fixed one, so every build makes the same files)
+export SOURCE_DATE_EPOCH=1577836800
 CC=("$WASI_SDK/bin/clang" --sysroot="$WASI_SDK/share/wasi-sysroot" --target=wasm32-wasip1 -O2)
 CXX=("$WASI_SDK/bin/clang++" --sysroot="$WASI_SDK/share/wasi-sysroot" --target=wasm32-wasip1 -O2)
 LINK=(-Wl,--strip-all)
