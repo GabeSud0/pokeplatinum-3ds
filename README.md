@@ -81,9 +81,10 @@ On a New 3DS:
 
 > [!IMPORTANT]
 > **This repository contains no game content.** No ROM, graphics, music,
-> text or any other data from the game is stored here or in releases, and
-> **builds of the game are never published**: you make your own from your own
-> cartridge, and you shouldn't share yours, since it contains the game's code.
+> text or any other data from the game is stored here or in the releases. The
+> releases carry the port's program; the game's data is made from **your own
+> cartridge**, on your computer or in your browser, and never leaves it.
+> Don't share the files you make: they hold your cartridge's data.
 
 ## Getting started
 
@@ -94,15 +95,23 @@ On a New 3DS:
   New 2DS XL is needed for the remastered display. Setup guide:
   <https://3ds.hacks.guide>
 - Your own dump of **Pokémon Platinum (USA)**, Rev 0 or Rev 1.
-- [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the `3ds-dev`
+- A computer with an up-to-date browser. Only to build it yourself:
+  [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the `3ds-dev`
   package group, Python 3.10+ and Git.
 - Optional: the [Azahar](https://azahar-emu.org) emulator for testing on a PC.
   It runs the 3DS's CPU slower than a real New 3DS, so judge performance on
   the console.
 
-### 1. Build it
+### 1. Make the game's files
 
-<details open>
+**The easy way: [the web builder](https://gabesud0.github.io/pokeplatinum-3ds/).** Choose your ROM, press
+**Build**, and download a ZIP with every file below, laid out for the SD card.
+It all happens in your browser: your ROM is never uploaded. It also makes the
+HOME Menu version, with an animated banner made from your cartridge.
+
+**Or build it yourself**, from the source:
+
+<details>
 <summary><strong>Windows</strong></summary>
 
 <br>
@@ -169,6 +178,9 @@ Debian** it runs directly. Run it again to update and rebuild.
 
 ### 2. Copy to the SD card
 
+The web builder's ZIP has these in its `3ds` and `cia` folders: copy both to
+the root of the SD card.
+
 ```
 sdmc:/3ds/pokeplatinum/platinum3ds.pak
 sdmc:/3ds/pokeplatinum/manifest.json      (from data_pack/)
@@ -184,6 +196,9 @@ In Azahar, these go in its emulated SD card folder.
 - **HOME Menu:** in FBI, go to **SD → cia → pokeplatinum.cia → Install CIA**.
   The game then opens and closes from the HOME Menu like any other title. To
   update it, install the new `.cia` the same way; your save stays.
+- **Updating:** build the new version with the web builder and copy its files
+  over the old ones. When a version reads its data the same way, its page
+  says so: then copying the new `pokeplatinum.3dsx` is enough.
 
 The game saves to `sdmc:/3ds/pokeplatinum/platinum.sav`, a raw 512 KB save
 like emulators keep, so you can copy your cartridge's save there.
@@ -293,6 +308,7 @@ builder/           turns your own ROM into the data pack (Python)
 docs/              the remaster display, wide art, the data pack
 patches/           changes applied on top of the decompilation and SDKs
 tools/             bootstrap, build helpers, the WideArt editor (Python)
+web/               the web builder's website (GitHub Pages; tools/build_site.py)
 wideart/           hand-drawn bands for the wider screen, built in (none of the game's pixels)
 Makefile           `make game`, `make game-cia`, `make test`, ...
 LICENSE            GPL-3.0, for this project's own code

@@ -84,9 +84,10 @@ En una New 3DS:
 > [!IMPORTANT]
 > **Este repositorio no contiene nada del juego.** Aquí y en las versiones
 > publicadas no se guarda ninguna ROM, gráfico, música, texto ni ningún otro
-> dato del juego, y **nunca se publican compilaciones del juego**: tú haces la
-> tuya con tu propio cartucho, y no deberías compartirla, porque contiene el
-> código del juego.
+> dato del juego. Las versiones publicadas traen el programa del port; los
+> datos del juego se hacen desde **tu propio cartucho**, en tu computadora o en
+> tu navegador, y nunca salen de ahí. No compartas los archivos que hagas:
+> contienen los datos de tu cartucho.
 
 ## Cómo empezar
 
@@ -97,15 +98,24 @@ En una New 3DS:
   remasterizada hace falta una New 3DS, New 3DS XL o New 2DS XL. Guía para
   prepararla: <https://3ds.hacks.guide/es_ES/>
 - Tu propio volcado de **Pokémon Platinum (USA)**, Rev 0 o Rev 1.
-- [devkitPro](https://devkitpro.org/wiki/Getting_Started) con el grupo de
+- Una computadora con un navegador actualizado. Solo para compilarlo tú mismo:
+  [devkitPro](https://devkitpro.org/wiki/Getting_Started) con el grupo de
   paquetes `3ds-dev`, Python 3.10 o superior y Git.
 - Opcional: el emulador [Azahar](https://azahar-emu.org) para probar en la PC.
   Corre la CPU de la 3DS más lento que una New 3DS real, así que juzga el
   rendimiento en la consola.
 
-### 1. Compílalo
+### 1. Haz los archivos del juego
 
-<details open>
+**La forma fácil: [el creador web](https://gabesud0.github.io/pokeplatinum-3ds/?lang=es).** Elige tu ROM, presiona
+**Crear** y descarga un ZIP con todos los archivos de abajo, listos para la
+tarjeta SD. Todo pasa en tu navegador: tu ROM nunca se sube a ningún lado.
+También hace la versión del menú HOME, con un banner animado hecho desde tu
+cartucho.
+
+**O compílalo tú mismo**, desde el código fuente:
+
+<details>
 <summary><strong>Windows</strong></summary>
 
 <br>
@@ -174,6 +184,9 @@ para actualizar y volver a compilar.
 
 ### 2. Copia a la tarjeta SD
 
+El ZIP del creador web los trae en sus carpetas `3ds` y `cia`: copia las dos a
+la raíz de la tarjeta SD.
+
 ```
 sdmc:/3ds/pokeplatinum/platinum3ds.pak
 sdmc:/3ds/pokeplatinum/manifest.json      (de data_pack/)
@@ -190,6 +203,10 @@ En Azahar, van en la carpeta de su tarjeta SD emulada.
   Después el juego se abre y se cierra desde el menú HOME como cualquier otro.
   Para actualizarlo, instala el `.cia` nuevo de la misma forma; tu partida se
   conserva.
+- **Actualizar:** crea la nueva versión con el creador web y copia sus archivos
+  encima de los anteriores. Cuando una versión lee sus datos igual que la
+  anterior, su página lo dice: entonces basta con copiar el nuevo
+  `pokeplatinum.3dsx`.
 
 El juego guarda en `sdmc:/3ds/pokeplatinum/platinum.sav`, un guardado de 512 KB
 en bruto como los de los emuladores, así que puedes copiar ahí el guardado de
@@ -303,6 +320,7 @@ builder/           convierte tu propia ROM en el paquete de datos (Python)
 docs/              la pantalla remasterizada, el arte ancho, el paquete de datos
 patches/           cambios aplicados sobre la decompilación y los SDK
 tools/             bootstrap, ayudas de compilación, el editor WideArt (Python)
+web/               el sitio del creador web (GitHub Pages; tools/build_site.py)
 wideart/           franjas dibujadas a mano para la pantalla más ancha, incluidas en el juego (sin píxeles del juego)
 Makefile           `make game`, `make game-cia`, `make test`, ...
 LICENSE            GPL-3.0, para el código propio de este proyecto

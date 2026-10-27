@@ -18,6 +18,24 @@ covered by this project's license, the GNU General Public License v3.0 (see
 - **Third-party libraries.** devkitARM, libctru and citro3d keep their own
   licenses.
 
+## Releases and the web builder
+
+The releases carry the 3DS program, built from this project's code and the
+decompilation, and the web builder's files: never a ROM or anything taken from
+one. The web builder (`web/`) makes the data pack and the HOME Menu version in
+the player's browser, from their own cartridge, with:
+
+- [Pyodide](https://pyodide.org) (MPL-2.0), loaded from its CDN;
+- bannertool (MIT) and makerom (MIT, with mbedtls under Apache-2.0, libyaml
+  under MIT and blz under GPL-3.0-or-later), compiled to WebAssembly and
+  carried in the release with their licences
+  (`tools/build_cia_tools_wasm.sh`);
+- [pycgfx](https://github.com/skyfloogle/pycgfx), which has no licence that
+  allows sharing it: it is never copied here or into a release, and the page
+  fetches it from its own repository at a pinned commit;
+- the Chakra Petch and Atkinson Hyperlegible fonts (SIL Open Font License,
+  `web/fonts/`).
+
 ## Rules for contributors
 
 - Never commit ROMs, extracted assets, save files or built game binaries.
