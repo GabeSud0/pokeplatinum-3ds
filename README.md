@@ -33,9 +33,7 @@ isn't an emulator and it isn't a remake: **the game's own code runs on the
 the DS's two screens in the middle of the 3DS's.
 
 Platinum is the **prototype**. The long-term target is **Pokémon SoulSilver /
-HeartGold**, once the [pret/pokeheartgold](https://github.com/pret/pokeheartgold)
-decompilation is far enough along. Both are Generation 4 games that share most
-of the same engine.
+HeartGold**
 
 ## Screenshots
 
