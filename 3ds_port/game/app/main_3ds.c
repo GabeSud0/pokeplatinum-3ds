@@ -979,6 +979,10 @@ static void LogSpeedup(bool new3ds)
                                                                            : "the 64 MB mode",
                   (unsigned long)((osGetMemRegionUsed(MEMREGION_APPLICATION) - __ctru_heap_size - __ctru_linear_heap_size) >> 10),
                   (unsigned long)(__ctru_heap_size >> 10), (unsigned long)(__ctru_linear_heap_size >> 10));
+    if (new3ds && osGetMemRegionSize(MEMREGION_APPLICATION) < (100u << 20)) {
+        NitroPort_Log("[memory] a New 3DS in the 64 MB mode: from the HOME Menu, an old Luma3DS gives the .cia this "
+                      "(issue #188: update Luma3DS); the Homebrew Launcher opened from the Rosalina menu does too");
+    }
     if (!new3ds) {
         return;
     }
