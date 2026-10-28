@@ -695,6 +695,15 @@ screen's 320 x 192 at 1.25 times, as above.
   down they keep their shape. Not the cut-ins with a trainer's picture
   (the leaders, the Elite Four, the Champion) nor the legendaries' (the
   camera only).
+- **The circle fades** (patch 0054, also with the 320-wide screen): the
+  screen closing round the middle (walking into Eterna Forest) is a window
+  the game shapes line by line for the DS's 256 x 192. It was cut flat at
+  the DS's sides, the lines it covered whole reached the screen's edges as
+  a band, and the taller field's lines above and below the DS's had its
+  first and last line's. Each step the game now tells the port the circle
+  (`NitroPort_SetWindowCircle`: middle and radius), and the 2D renderer
+  draws it across the whole canvas; off when the fade ends or another
+  starts. Test: `test_window_circle`.
 - **A walk out up or down** (patch 0053): a script's walk straight out up
   or down that meets something in the way beyond the DS's picture (more
   than 5 rows from the middle) goes to a door within the walk's reach

@@ -1,0 +1,86 @@
+From bb66ede26647956b6d4c3f2bc9745ef9beba0e7d Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] The circle fades drawn as circles on the wider screen
+ (SDK_PORT_3DS)
+
+The circle fades (the screen closing round the middle: walking into
+Eterna Forest) shape a window line by line for the DS's 256 x 192. On
+the wider screen the circle was cut flat at the DS's sides, the lines it
+covered whole reached the screen's edges as a band, and on the taller
+field the lines above and below the DS's had its first and last line's.
+Each step now also tells the port the circle (NitroPort_SetWindowCircle:
+its middle and radius), which draws it across the whole screen; off
+when the fade ends, and when a new fade starts (one cut short).
+---
+ src/screen_fade.c       | 13 +++++++++++++
+ src/screen_fade_funcs.c | 15 +++++++++++++++
+ 2 files changed, 28 insertions(+)
+
+diff --git a/src/screen_fade.c b/src/screen_fade.c
+index 3f763635..b21371b4 100644
+--- a/src/screen_fade.c
++++ b/src/screen_fade.c
+@@ -131,6 +131,19 @@ void StartScreenFade(enum FadeMode mode, enum FadeType typeMain, enum FadeType t
+     GF_ASSERT(sScreenFadeManager.active == FALSE);
+ 
+     ScreenFadeManager *manager = &sScreenFadeManager;
++#ifdef SDK_PORT_3DS
++    {
++        // (a circle fade left behind, cut short: its windows the game's again)
++        extern void NitroPort_SetWindowCircle(int engine, int window, int cx, int cy, int r);
++        int engine, window;
++
++        for (engine = 0; engine < 2; engine++) {
++            for (window = 0; window < 2; window++) {
++                NitroPort_SetWindowCircle(engine, window, 0, 0, -1);
++            }
++        }
++    }
++#endif
+     ZeroScreenFadeManager(manager);
+     SetupScreenFadeParams(mode, &manager->screen);
+     ClearHBlanks(&manager->hblanks);
+diff --git a/src/screen_fade_funcs.c b/src/screen_fade_funcs.c
+index 90ff4e51..c5ebdcee 100644
+--- a/src/screen_fade_funcs.c
++++ b/src/screen_fade_funcs.c
+@@ -12,6 +12,14 @@
+ #include "sys_task.h"
+ #include "sys_task_manager.h"
+ 
++#ifdef SDK_PORT_3DS
++// (the 3DS remaster's wider upper screen, and the field at the DS's pixel
++// size: taller too) The circle fades' windows per line are the DS's 256 x
++// 192: the port draws the circle itself across the whole screen
++// (3ds_port/nitro/include/nitro_port_wide.h).
++extern void NitroPort_SetWindowCircle(int engine, int window, int cx, int cy, int r);
++#endif
++
+ typedef struct {
+     int unk_00;
+     int unk_04;
+@@ -2070,6 +2078,9 @@ static BOOL sub_0201109C(UnkStruct_0201109C *param0)
+             SysTask_ExecuteAfterVBlank(sub_02010624, &param0->unk_00, 1023);
+         } else {
+             RequestDisableScreenHBlank(param0->unk_34, param0->unk_00.screen, param0->heapID);
++#ifdef SDK_PORT_3DS
++            NitroPort_SetWindowCircle(param0->unk_00.screen != DS_SCREEN_MAIN, sub_02010604(&param0->unk_00, 0)->unk_600, 0, 0, -1);
++#endif
+             return 1;
+         }
+     }
+@@ -2137,6 +2148,10 @@ static void sub_02011180(UnkStruct_0201109C *param0)
+         v5->unk_300[0][v1] = v2;
+         v5->unk_300[1][v1] = v3;
+     }
++
++#ifdef SDK_PORT_3DS
++    NitroPort_SetWindowCircle(v0->screen != DS_SCREEN_MAIN, v5->unk_600, param0->unk_10, param0->unk_14, param0->unk_0C / 128);
++#endif
+ }
+ 
+ static void sub_02011204(ScreenFade *param0, const UnkStruct_0200FC2C *param1)
+-- 
+2.43.0
+

@@ -2333,6 +2333,67 @@ static void test_wide_window_edges(void)
     GX_SetVisibleWnd(GX_WNDMASK_NONE);
 }
 
+/* A circle fade's window (NitroPort_SetWindowCircle: walking into Eterna
+ * Forest) drawn as a circle across the whole canvas, the wider screen's
+ * bands and a tall field's lines above and below the DS's included,
+ * whatever the game's windows on each line say (theirs stop at the DS's
+ * columns: the lines it covers whole reached the screen's edges). */
+static void test_window_circle(void)
+{
+    static u16 wide[400 * 240], over[400 * 240];
+    static u8 overAlpha[400 * 240];
+    static u8 tiles[64];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED };
+    NitroRender2DSplit split;
+    int i;
+
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = 1;
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    G2_SetWnd0Position(0, 0, 255, 192);   /* (the game's, the whole DS's screen: not used) */
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG1, FALSE);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_NONE, FALSE);
+    GX_SetVisibleWnd(GX_WNDMASK_W0);
+    NitroPort_SetWindowCircle(0, 0, 128, 96, 150);
+    memset(&split, 0, sizeof(split));
+    split.width = 400;
+    split.origin = 72;
+    split.top = 24;
+    split.height = 240;
+    split.windowsToEdge = 1;
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[120 * 400 + 210] == RED);              /* the middle */
+    CHECK(wide[120 * 400 + 200 - 149] == RED);        /* in the left band, within the radius */
+    CHECK(wide[120 * 400 + 200 - 151] == GREY);       /* past it: outside */
+    CHECK(wide[120 * 400 + 200 + 149] == RED);
+    CHECK(wide[120 * 400 + 399] == GREY);
+    CHECK(wide[0 * 400 + 210] == RED);                /* above the DS's lines: 120 up, within */
+    CHECK(wide[0 * 400 + 200 + 100] == GREY);         /* (sqrt(150^2 - 120^2) = 90) */
+    CHECK(wide[0 * 400 + 200 + 89] == RED);
+    CHECK(wide[239 * 400 + 210] == RED);              /* below them */
+    /* closed: nothing inside */
+    NitroPort_SetWindowCircle(0, 0, 128, 96, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[120 * 400 + 210] == GREY);
+    /* off: the game's windows again */
+    NitroPort_SetWindowCircle(0, 0, 0, 0, -1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[120 * 400 + 210] == RED);
+    CHECK(wide[120 * 400 + 3] == RED);
+    GX_SetVisibleWnd(GX_WNDMASK_NONE);
+}
+
 /* A BG whose map goes on past the DS's edges (the battle's background,
  * clip off): a 512-wide map, its picture then the same picture mirrored
  * (tiles flipped sideways), but for a few tiles of a picture of its own
@@ -3760,6 +3821,7 @@ int main(int argc, char **argv)
     test_wide_art_places();
     test_wide_art_sliding();
     test_wide_window_edges();
+    test_window_circle();
     test_wide_map_past_edges();
     test_gpu_bg();
     test_tall_field();

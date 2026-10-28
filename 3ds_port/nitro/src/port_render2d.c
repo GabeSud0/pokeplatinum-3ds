@@ -108,6 +108,25 @@ static u8 BankCnt(const u8 *io, int bank)
  * frame's sprites, scroll, colours) doesn't get mixed into the picture.
  * The VRAM is read as it is (too big to copy each frame; the game changes
  * it in its V-blank work, and the drawers are waited for before that). */
+/* The circle fades' windows (NitroPort_SetWindowCircle): on, middle,
+ * radius in the DS's pixels; by engine and window. */
+typedef struct WindowCircle {
+    int on, cx, cy, r;
+} WindowCircle;
+static WindowCircle sCircles[2][2];
+static u32 sCirclesSerial;
+
+void NitroPort_SetWindowCircle(int engine, int window, int cx, int cy, int r)
+{
+    WindowCircle *c = &sCircles[engine ? 1 : 0][window ? 1 : 0];
+
+    c->on = r >= 0;
+    c->cx = cx;
+    c->cy = cy;
+    c->r = r < 0 ? 0 : r;
+    sCirclesSerial++;
+}
+
 typedef struct State2D {
     u8 io[0x2000];
     u8 pltt[0x800];
@@ -130,6 +149,7 @@ typedef struct State2D {
     NitroWidePart parts[NITRO_WIDE_MAX_PARTS];
     int nparts;
     uint32_t winSerial;
+    WindowCircle circles[2];   /* (NitroPort_SetWindowCircle) */
 } State2D;
 static State2D sState[2];
 
@@ -144,6 +164,7 @@ typedef struct Engine {
     /* (an H-blank effect) its first NITRO_LINE_REGS bytes on each line, or
      * NULL: io's on every line (NitroPort_LineRegs) */
     const u8 (*lines)[NITRO_LINE_REGS];
+    const WindowCircle *circles;   /* windows 0 and 1 (NitroPort_SetWindowCircle) */
     const u8 *bgPltt;      /* 0x200 bytes */
     const u8 *objPltt;
     const u8 *oam;         /* 0x400 bytes */
@@ -3383,6 +3404,55 @@ static void FillRange(u8 *enable, int lo, int hi, u8 value, int origin, int widt
     }
 }
 
+/* A circle fade's window on one line (dsY: the DS's line; the lines of a
+ * tall field above and below the DS's count on), across the whole canvas:
+ * the half chord as the game works it out (the square root of r^2 less
+ * the line's distance squared, rounded down), from x - half to x + half.
+ * (The game's own windows per line stop at the DS's columns and lines:
+ * walking into Eterna Forest the circle was cut flat at the DS's sides,
+ * a band of the lines it covered whole reached the screen's edges, and
+ * the lines above and below the DS's had its first and last line's.) */
+static void CircleRange(u8 *enable, const WindowCircle *c, int dsY, u8 value, int origin, int width)
+{
+    int dy = dsY - c->cy, lo, hi;
+    long rr = (long)c->r * c->r, q;
+    int half;
+
+    if (dy < 0) {
+        dy = -dy;
+    }
+    if (dy >= c->r) {
+        return;
+    }
+    q = rr - (long)dy * dy;
+    {
+        /* (the integer square root, rounded down) */
+        int lo2 = 0, hi2 = c->r;
+
+        while (lo2 < hi2) {
+            int mid = (lo2 + hi2 + 1) / 2;
+
+            if ((long)mid * mid <= q) {
+                lo2 = mid;
+            } else {
+                hi2 = mid - 1;
+            }
+        }
+        half = lo2;
+    }
+    lo = origin + c->cx - half;
+    hi = origin + c->cx + half;
+    if (lo < 0) {
+        lo = 0;
+    }
+    if (hi > width) {
+        hi = width;
+    }
+    if (lo < hi) {
+        memset(enable + lo, value, (size_t)(hi - lo));
+    }
+}
+
 /* The layers of a line, front to back: the OBJs of priority 0, the BGs of
  * priority 0 (by number), the OBJs of priority 1, and so on. */
 #define SLOT_OBJ 4
@@ -3940,10 +4010,14 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                     }
                 }
             }
-            if ((dispcnt & 0x4000) && InRange(y, win1v >> 8, win1v & 0xFF)) {
+            if ((dispcnt & 0x4000) && e->circles[1].on) {
+                CircleRange(enableLine, &e->circles[1], y - e->top, (winin >> 8) & 0x3F, e->origin, width);
+            } else if ((dispcnt & 0x4000) && InRange(y, win1v >> 8, win1v & 0xFF)) {
                 FillRange(enableLine, win1h >> 8, win1h & 0xFF, (winin >> 8) & 0x3F, e->origin, width, split != NULL && split->windowsToEdge);
             }
-            if ((dispcnt & 0x2000) && InRange(y, win0v >> 8, win0v & 0xFF)) {
+            if ((dispcnt & 0x2000) && e->circles[0].on) {
+                CircleRange(enableLine, &e->circles[0], y - e->top, winin & 0x3F, e->origin, width);
+            } else if ((dispcnt & 0x2000) && InRange(y, win0v >> 8, win0v & 0xFF)) {
                 FillRange(enableLine, win0h >> 8, win0h & 0xFF, winin & 0x3F, e->origin, width, split != NULL && split->windowsToEdge);
             }
         }
@@ -4285,6 +4359,7 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
     e->lines = taken ? (st->lines ? (const u8(*)[NITRO_LINE_REGS])st->lineRegs : NULL)
                      : (NitroPort_LineRegs.active ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[e->isA ? 0 : 1]
                                                   : NULL);
+    e->circles = taken ? st->circles : sCircles[e->isA ? 0 : 1];
     e->bgPltt = (taken ? st->pltt : NitroPort_Pltt) + (e->isA ? 0 : 0x400);
     e->objPltt = e->bgPltt + 0x200;
     e->oam = (taken ? st->oam : NitroPort_Oam) + (e->isA ? 0 : 0x400);
@@ -5063,6 +5138,7 @@ void NitroPort_Render2DTakeState(int engine)
     if (st->lines) {
         memcpy(st->lineRegs, NitroPort_LineRegs.regs[engine ? 1 : 0], sizeof(st->lineRegs));
     }
+    memcpy(st->circles, sCircles[engine ? 1 : 0], sizeof(st->circles));
     {
         int bg;
 
@@ -5182,6 +5258,15 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
              ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
              ((u32)split->clip[3] << 23)) * 16777619u;
     small = (small ^ (u32)split->height ^ ((u32)split->top << 12)) * 16777619u;   /* (a tall picture) */
+    {
+        /* (a circle fade's windows) */
+        const WindowCircle *c = split->snapshot ? sState[e].circles : sCircles[e];
+        int w;
+
+        for (w = 0; w < 2; w++) {
+            small = (small ^ (u32)(c[w].on ? 1 + c[w].cx * 7 + c[w].cy * 131 + c[w].r * 4099 : 0)) * 16777619u;
+        }
+    }
     small = (small ^ (u32)__atomic_load_n(&sSmoothObjs[e], __ATOMIC_ACQUIRE)) * 16777619u;
     if (split->width > W) {
         /* (the windows decide the edges' look, and where the anchored ones

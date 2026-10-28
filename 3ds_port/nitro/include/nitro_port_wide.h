@@ -246,6 +246,16 @@ void NitroPort_RepeatingBg(int bg, int on);
  * loaded, not the battle's, no screen laid out in parts); 0 otherwise. */
 int NitroPort_RepeatingBgs(void);
 
+/* (the game: patch 0054, screen_fade_funcs.c) A window (0 or 1) of an
+ * engine shaped by the game's circle fades (the screen closing or opening
+ * round the middle: walking into Eterna Forest): the circle's middle
+ * (cx, cy) and radius r in the DS's pixels, or r < 0: off again. The
+ * windows the game writes on each line (H-blank) are made for the DS's
+ * 256 x 192; with this the renderer draws the circle itself, across the
+ * whole canvas (the wider screen's sides, a tall field's lines above and
+ * below the DS's). The game's thread. */
+void NitroPort_SetWindowCircle(int engine, int window, int cx, int cy, int r);
+
 /* The layout of an engine's picture on the wider upper screen, for this
  * moment of the game (NitroRender2DSplit's canvas: width, origin, clip,
  * anchorWindows; declared in nitro_port_render2d.h). */
