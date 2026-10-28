@@ -660,6 +660,38 @@ screen's 320 x 192 at 1.25 times, as above.
   (a text box at the screen's bottom, YES/NO with it), those wholly in its
   upper half 24 up (the place name sign at the top), the OBJs over them
   with them; the lines they leave are drawn from nowhere.
+- **The people of the maps beside** (patch 0050, also with the 320-wide
+  field): the DS makes a map's people as the player walks into it and drops
+  those of the map left, all out of its screen; on the wider one they
+  popped in and out (the berry trees and people at Floaroma's edge). Now
+  the people of the maps beside the player's are there ahead
+  (`MAP_OBJ_STATUS_PORT_NEIGHBOUR`): `FieldMap_PortNeighbours` brings those
+  within 17 tiles left or right, 13 up, 11 down (one a frame, read from
+  their map's events, while there's room for their pictures and 12 places
+  left for the game's own), and drops those 4 tiles further out; walking
+  into a map, the map left's in reach stay beside, and the new map's are
+  taken as the game's own (`MapObjectMan_AddMapObjectFromHeader`). They walk
+  and are in the way, but can't be talked to, don't see the player, aren't
+  found by a script's local ID and aren't saved: as on the DS, where they
+  weren't there yet. A map's own flags (cleared walking into it) count as
+  clear for its people seen from beside; one hidden by a flag set since is
+  dropped. Taken as the game's own only as their event has them (a Vs.
+  Seeker's spin, a script's hiding: made again from it); not the invisible
+  ones (nothing to see). Their pictures' places are given back as they go,
+  and walking into a map the people beside are given up (the furthest
+  first) while the new map's pictures wouldn't fit.
+- **A battle's start** (patch 0051): the encounter effects are made for the
+  DS's screen (windows and H-blank slices across its columns and lines,
+  wipes drawn into a 256 x 192 BG). While one plays (`NitroPort_SetFieldEffect`)
+  the upper screen's 2D is laid out as the DS's and stretched over the
+  whole screen by the compositor (`NitroRender2DSplit.stretch`), the 3D at
+  the screen's own size, its H-blank scrolls stretched too: the slices and
+  wipes reach the screen's edges. The sprites (the Poké Balls, the Galactic
+  logo) are drawn 4/5 as wide round their middles (a sprite of several OBJs
+  touching, round its whole middle), so stretched 1.5625 across and 1.25
+  down they keep their shape. Not the cut-ins with a trainer's picture
+  (the leaders, the Elite Four, the Champion) nor the legendaries' (the
+  camera only).
 - Still to do: the people scripts bring on from above or below (they show
   the last few tiles of their walk in); weather sprites (rain, snow) only
   on the DS's lines.
