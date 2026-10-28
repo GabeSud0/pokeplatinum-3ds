@@ -1710,6 +1710,7 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         /* (a tall picture: with the 3D too, on its first 192 lines) */
         layers->height = split.height > 192 ? split.height : 192;
         layers->top = split.top;
+        layers->stretch = split.stretch;
         layers->stamp = stamp;
         layers->displayOff = 0;
         return true;

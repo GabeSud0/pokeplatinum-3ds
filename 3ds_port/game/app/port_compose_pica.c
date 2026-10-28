@@ -2459,6 +2459,12 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
     pic.x1 = pic.x0 + canvasW * scale;
     pic.y0 = 0.0f;
     pic.y1 = SCREEN_H;
+    if (info != NULL && info->stretch) {
+        /* (a battle's start on the wider field: the DS's picture over the
+         * whole screen) */
+        pic.x0 = 0.0f;
+        pic.x1 = (float)scr->width;
+    }
     C3D_SetFrameBuf(fb);
     C3D_SetViewport(0, 0, fb->width, fb->height);
     NitroPort_PicaPixelMatrix(&pixels, scr->width, SCREEN_H);
@@ -2524,7 +2530,12 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
          * 240 at the DS's pixel size) */
         float s3 = (float)SCREEN_H / (float)(scene->screen_height > DS_H ? scene->screen_height : DS_H);
 
-        if (scene->screen_width > DS_W) {
+        if (info->stretch) {
+            /* (a battle's start on the wider field: the whole screen, as
+             * the stretched picture over it) */
+            base.x0 = 0.0f;
+            base.x1 = (float)scr->width;
+        } else if (scene->screen_width > DS_W) {
             base.x0 = ((float)scr->width - (float)scene->screen_width * s3) * 0.5f;
             base.x1 = base.x0 + (float)scene->screen_width * s3;
         } else {
@@ -2562,8 +2573,11 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         for (r = 0; r < nruns; r++) {
             PicaRect rows;   /* (the run's place and rows: its rear plane's, its tint's) */
 
-            rect3d.x0 = base.x0 - (float)runs[r].scroll * s3;
-            rect3d.x1 = base.x1 - (float)runs[r].scroll * s3;
+            /* (a stretched picture's scrolls stretched with it) */
+            float sx3 = info->stretch ? (float)scr->width / (float)DS_W : s3;
+
+            rect3d.x0 = base.x0 - (float)runs[r].scroll * sx3;
+            rect3d.x1 = base.x1 - (float)runs[r].scroll * sx3;
             rows = rect3d;
             if (nruns > 1) {
                 /* the run's rows (screen pixel (x, y) is the framebuffer's

@@ -224,6 +224,16 @@ int NitroPort_WideScreenExtra(void);
 void NitroPort_SetPixelField(int on);
 int NitroPort_PixelField(void);
 
+/* The battle's start in the field (the game's encounter effects: patch
+ * 0051, encounter_effect.c), on while it plays. Its effects are made for
+ * the DS's screen (windows and H-blank slices with the DS's columns and
+ * lines, wipes drawn into a 256 x 192 BG): on the wider field the upper
+ * screen's 2D is then laid out as the DS's and stretched to fill the
+ * screen, over the 3D at the screen's own size (NitroRender2DSplit.stretch).
+ * The game's thread. */
+void NitroPort_SetFieldEffect(int on);
+int NitroPort_FieldEffect(void);
+
 /* (the game: patches/pokeplatinum/0047, the field's weather) A BG of
  * engine A whose map is a pattern that repeats (the field's weather: the
  * clouds' shadows, fog, sand), on or off (off again when the weather

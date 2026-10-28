@@ -2514,6 +2514,82 @@ static void test_gpu_bg(void)
  * BG's map past the DS's lines isn't shown (its leftover tiles), but a
  * line one colour across goes on; the OBJs go on above and below as on a
  * taller screen; an unclipped BG's map goes on; the 3D on every line. */
+/* A battle's start stretched over the wider screen (NitroRender2DSplit.
+ * stretch): the DS's layout, each OBJ 4/5 as wide round its middle. */
+static void test_stretch_squeeze(void)
+{
+    static u8 objTile[4 * 32];
+    static u16 objPltt[16] = { 0, BLUE };
+    static GXOamAttr oam[128];
+    static uint32_t rgba[256 * 192];
+    static u16 under[256 * 192], over[256 * 192];
+    static u8 overAlpha[256 * 192];
+    NitroRender2DSplit split;
+    int i, x, first = -1, last = -1;
+
+    Reset();
+    memset(objTile, 0x11, sizeof(objTile));   /* a 16 x 16 OBJ, all blue */
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    G2_SetBG0Priority(3);
+    GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_1D_32K);
+    GX_LoadOBJ(objTile, 0, sizeof(objTile));
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));
+    G2_SetOBJAttr(&oam[0], 100, 50, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_16x16,
+                  GX_OAM_COLORMODE_16, 0, 0, 0);
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_OBJ);
+    for (i = 0; i < 256 * 192; i++) {
+        rgba[i] = 0x404040FFu;
+    }
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.stretch = 1;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.has3d);
+    for (x = 0; x < 256; x++) {
+        if (over[58 * 256 + x] & 0x8000) {
+            if (first < 0) {
+                first = x;
+            }
+            last = x;
+        }
+    }
+    /* 16 wide at x 100, now 13 round its middle (108): 102-114 */
+    CHECK(first == 102 && last == 114);
+    /* its height as it was */
+    CHECK((over[50 * 256 + 108] & 0x8000) && (over[65 * 256 + 108] & 0x8000) && !(over[66 * 256 + 108] & 0x8000));
+    /* without: 100-115 */
+    split.stretch = 0;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK((over[58 * 256 + 100] & 0x8000) && (over[58 * 256 + 115] & 0x8000) && !(over[58 * 256 + 116] & 0x8000));
+
+    /* two OBJs side by side, one picture (x 100-131): narrower round its
+     * middle (116) as one, no gap between them: 104-128 */
+    G2_SetOBJAttr(&oam[1], 116, 50, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_16x16,
+                  GX_OAM_COLORMODE_16, 0, 0, 0);
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    split.stretch = 1;
+    NitroPort_Render2DSplit(0, under, &split);
+    first = last = -1;
+    for (x = 0; x < 256; x++) {
+        if (over[58 * 256 + x] & 0x8000) {
+            if (first < 0) {
+                first = x;
+            }
+            last = x;
+        } else if (first >= 0 && last == x - 1) {
+            break;   /* (the end of the first run) */
+        }
+    }
+    CHECK(first == 104 && last == 128);
+}
+
 static void test_tall_field(void)
 {
     enum { TW = 400, TH = 240, TOP = 24, OX = 72 };
@@ -3687,6 +3763,7 @@ int main(int argc, char **argv)
     test_wide_map_past_edges();
     test_gpu_bg();
     test_tall_field();
+    test_stretch_squeeze();
     test_wide_framed_windows();
     test_wide_splits();
     test_wide_parts();

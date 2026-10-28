@@ -90,6 +90,12 @@ typedef struct NitroRender2DSplit {
      * Only for engine A, with the wider canvas. over and overAlpha are
      * width x height then. 0: the DS's line 0 at the top. */
     int top;
+    /* (a battle's start on the wider field: NitroPort_SetFieldEffect) The
+     * picture at the DS's size and layout (256 x 192, as the game draws its
+     * effect: its windows, slices, wipes), stretched by the compositor to
+     * fill the screen, over the 3D at the screen's own size (its H-blank
+     * scrolls stretched with it). Set by NitroPort_WideLayout; else 0. */
+    int stretch;
     /* (the remaster's compositor, which can draw a repeating BG itself
      * from a picture of its whole map, scrolled on the GPU: the field's
      * weather, NitroPort_RepeatingBgs) The BGs it may draw so (a bit each;

@@ -1,0 +1,103 @@
+From 2a0a48d21092f0a5605a3993cab840ed53f8445e Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] A battle's start stretched over the wider field
+ (SDK_PORT_3DS)
+
+The encounter effects are made for the DS's screen: windows and H-blank
+slices across its columns and lines, wipes drawn into a 256 x 192 BG.
+While one plays (NitroPort_SetFieldEffect) the port lays the upper
+screen's 2D out as the DS's and stretches it over the whole screen, the
+3D at the screen's own size: the slices and wipes reach the edges. Not
+the cut-ins with a trainer's picture (leaders, Elite Four, Champion) nor
+the legendaries' (the camera only). Off again when the effect finishes,
+or when the field runs with no task (one that never finished).
+---
+ src/overlay005/encounter_effect.c | 24 ++++++++++++++++++++++++
+ src/overlay005/fieldmap.c         | 19 +++++++++++++++++++
+ 2 files changed, 43 insertions(+)
+
+diff --git a/src/overlay005/encounter_effect.c b/src/overlay005/encounter_effect.c
+index fd645e1a..b0f995eb 100644
+--- a/src/overlay005/encounter_effect.c
++++ b/src/overlay005/encounter_effect.c
+@@ -175,8 +175,28 @@ static const u16 Unk_ov5_021F9A2C[8][2] = {
+ 
+ static UnkStruct_ov5_02202120 *Unk_ov5_02202120 = NULL;
+ 
++#ifdef SDK_PORT_3DS
++extern void NitroPort_SetFieldEffect(int on);
++
++// The effects made for the DS's screen (windows and H-blank slices across
++// its columns and lines, wipes drawn into a 256 x 192 BG): on the 3DS's
++// wider field, the DS's picture stretched to fill the screen over the 3D
++// at its own size while they play. Not the cut-ins with the trainer's
++// picture (leaders, the Elite Four, the Champion: laid out as the wider
++// screen's), nor the legendaries' (the camera only).
++static BOOL EncounterEffect_PortStretches(enum EncEffectCutIn effect)
++{
++    return effect <= ENCEFF_CUTIN_TRAINER_CAVE_HIGHER_LEVEL
++        || effect == ENCEFF_CUTIN_GALACTIC_GRUNT || effect == ENCEFF_CUTIN_GALACTIC_BOSS
++        || effect == ENCEFF_CUTIN_FRONTIER || effect == ENCEFF_CUTIN_DOUBLE;
++}
++#endif
++
+ void EncounterEffect_Start(enum EncEffectCutIn effect, FieldSystem *fieldSystem, BOOL *done)
+ {
++#ifdef SDK_PORT_3DS
++    NitroPort_SetFieldEffect(EncounterEffect_PortStretches(effect));
++#endif
+     SysTask *effectTask = SysTask_StartAndAllocateParam(sEncounterEffectTaskFuncs[effect], sizeof(EncounterEffect), 5, HEAP_ID_FIELD1);
+     EncounterEffect *encEffect = SysTask_GetParam(effectTask);
+     encEffect->fieldSystem = fieldSystem;
+@@ -192,6 +212,10 @@ void EncounterEffect_Start(enum EncEffectCutIn effect, FieldSystem *fieldSystem,
+ 
+ void EncounterEffect_Finish(EncounterEffect *encEffect, SysTask *effectTask)
+ {
++#ifdef SDK_PORT_3DS
++    // (the screen black by now: the battle next)
++    NitroPort_SetFieldEffect(FALSE);
++#endif
+     NARC_dtor(encEffect->narc);
+     Heap_FreeExplicit(HEAP_ID_FIELD1, encEffect->param);
+     SysTask_FinishAndFreeParam(effectTask);
+diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
+index c09dd13e..ad4e5c9f 100644
+--- a/src/overlay005/fieldmap.c
++++ b/src/overlay005/fieldmap.c
+@@ -162,6 +162,13 @@ static BOOL FieldMap_Init(ApplicationManager *appMan, int *state)
+ 
+     switch (*state) {
+     case FIELD_MAP_INIT_STATE_RESET:
++#ifdef SDK_PORT_3DS
++        {
++            extern void NitroPort_SetFieldEffect(int on);
++
++            NitroPort_SetFieldEffect(FALSE); // (the field's own picture: a battle's start long over)
++        }
++#endif
+         SetVBlankCallback(NULL, NULL);
+         DisableHBlank();
+ 
+@@ -255,6 +262,18 @@ static BOOL FieldMap_Main(ApplicationManager *appMan, int *param1)
+ {
+     FieldSystem *fieldSystem = ApplicationManager_Args(appMan);
+ 
++#ifdef SDK_PORT_3DS
++    {
++        extern void NitroPort_SetFieldEffect(int on);
++        extern int NitroPort_FieldEffect(void);
++
++        // (a battle's start that never finished: the field's own picture)
++        if (NitroPort_FieldEffect() && !FieldSystem_IsRunningTask(fieldSystem)) {
++            NitroPort_SetFieldEffect(FALSE);
++        }
++    }
++#endif
++
+     if (FieldSystem_UpdateLocationToPlayerPosition(fieldSystem)) {
+         BerryPatches_UpdateGrowthStates(fieldSystem);
+         ov5_021D13B4(fieldSystem);
+-- 
+2.43.0
+

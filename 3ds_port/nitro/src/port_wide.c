@@ -548,11 +548,37 @@ int NitroPort_WideScreenExtra(void)
  * player's platform's left part), never the map's mirrored half
  * (TextBgSegments, port_render2d.c).
  */
+static volatile int sFieldEffect;
+
+void NitroPort_SetFieldEffect(int on)
+{
+    __atomic_store_n(&sFieldEffect, on != 0, __ATOMIC_RELEASE);
+}
+
+int NitroPort_FieldEffect(void)
+{
+    return __atomic_load_n(&sFieldEffect, __ATOMIC_ACQUIRE);
+}
+
 void NitroPort_WideLayout(int engine, struct NitroRender2DSplit *split)
 {
     int bg, extra = sWideExtra;
 
     split->top = 0;
+    split->stretch = 0;
+    if (engine == 0 && sWideExtra > 0 && NitroPort_FieldEffect() && NitroPort_OverlayLoadedNamed("overlay5") &&
+        !NitroPort_OverlayLoadedNamed("battle")) {
+        /* (a battle's start: the DS's picture, stretched by the compositor
+         * over the 3D at the screen's size) */
+        split->width = 256;
+        split->origin = 0;
+        split->stretch = 1;
+        for (bg = 0; bg < 4; bg++) {
+            split->clip[bg] = 1;
+        }
+        split->anchorWindows = 0;
+        return;
+    }
     if (engine == 0 && NitroPort_PixelField()) {
         /* (the field at the DS's pixel size on the 3DS's whole screen: the
          * DS's picture in the middle of 400 x 240) */

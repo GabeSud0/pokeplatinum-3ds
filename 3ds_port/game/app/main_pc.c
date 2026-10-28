@@ -475,7 +475,7 @@ static void RemasterRender(uint16_t *out)
     for (screen = 0; screen < 2; screen++) {
         int engine = (screen == 0) == aOnTop ? 0 : 1;
         NitroRender2DSplit split;
-        int width, height, x, y, left, sim = 0;
+        int width, height, x, y, left, sim = 0, outW, outH;
 
         memset(&split, 0, sizeof(split));
         split.over = over;
@@ -495,7 +495,16 @@ static void RemasterRender(uint16_t *out)
         if (gpuBg >= 0 && !NitroPort_Render2DBgPicture(gpuBg, split.snapshot, bgPicture)) {
             gpuBg = -1;
         }
-        left = (320 - width) / 2;
+        /* (a battle's start on the wider field: the DS's picture stretched
+         * over the screen, the 3D at the screen's size: NitroRender2DSplit.
+         * stretch; pshot at the 3DS's 400 x 240) */
+        outW = width;
+        outH = height;
+        if (split.stretch) {
+            outW = sPixelShot != NULL && screen == 0 ? 400 : 320;
+            outH = sPixelShot != NULL && screen == 0 ? 240 : 192;
+        }
+        left = (320 - outW) / 2;
         if (split.has3d) {
             /* the newest 3D image, as the 2D renderer would take it */
             const uint16_t *img = NitroPort_Gx3dAcquireImage();
@@ -515,19 +524,41 @@ static void RemasterRender(uint16_t *out)
                 /* (the 3D at the picture's size, as the 3DS's GPU draws it) */
                 const NitroGx3dScene *scene = NitroPort_Gx3dScene();
 
-                if (scene != NULL && (int)scene->screen_width == width && (int)scene->screen_height == height) {
-                    NitroPort_Gx3dSimulateGpuSized(scene, sim3d, width, height);
+                if (scene != NULL && (int)scene->screen_width == outW && (int)scene->screen_height == outH) {
+                    NitroPort_Gx3dSimulateGpuSized(scene, sim3d, outW, outH);
                     sim = 1;
                 }
             }
         }
-        for (y = 0; y < height; y++) {
-            for (x = 0; x < width; x++) {
-                uint16_t c = under[y * width + x];
+        for (y = 0; y < outH; y++) {
+            for (x = 0; x < outW; x++) {
+                int cx = split.stretch ? x * width / outW : x, cy = split.stretch ? y * height / outH : y;
+                uint16_t c = under[cy * width + cx];
 
-                if (sim) {
+                if (sim && split.stretch) {
+                    /* (its H-blank scrolls stretched too) */
+                    int scroll3d = split.scroll3dLines ? split.scroll3dLine[cy] : split.scroll3d;
+                    int sx = x + (scroll3d >= 256 ? scroll3d - 512 : scroll3d) * outW / 256;
+
+                    if (sx >= 0 && sx < outW && (sim3d[y * outW + sx] & 0x8000)) {
+                        c = sim3d[y * outW + sx] & 0x7FFF;
+                    }
+                } else if (sim) {
                     if (sim3d[y * width + x] & 0x8000) {
                         c = sim3d[y * width + x] & 0x7FFF;
+                    }
+                } else if (split.has3d && split.stretch) {
+                    int scroll3d = split.scroll3dLines ? split.scroll3dLine[cy] : split.scroll3d;
+                    int ix = cx + (scroll3d >= 256 ? scroll3d - 512 : scroll3d);
+
+                    if (ix >= 0 && ix < 256 && (image3d[cy * 256 + ix] & 0x8000)) {
+                        uint16_t p = image3d[cy * 256 + ix] & 0x7FFF, m = 0;
+                        int a = alpha3d[cy * 256 + ix], k;
+
+                        for (k = 0; k < 15; k += 5) {
+                            m |= (uint16_t)(((((p >> k) & 31) * a + ((c >> k) & 31) * (31 - a)) / 31) << k);
+                        }
+                        c = m;
                     }
                 } else if (split.has3d) {
                     /* where the 3D's x is: the DS's 256 at origin, or (wide)
@@ -556,8 +587,8 @@ static void RemasterRender(uint16_t *out)
                 if (gpuBg >= 0) {
                     /* (the 3DS's compositor: its picture, repeated and
                      * scrolled, blended onto what's under it: RGBA5551) */
-                    uint16_t b = bgPicture[((y + split.gpuBgVofs) & 255) * 256 +
-                                           ((x - split.origin + split.gpuBgHofs) & 255)];
+                    uint16_t b = bgPicture[((cy + split.gpuBgVofs) & 255) * 256 +
+                                           ((cx - split.origin + split.gpuBgHofs) & 255)];
 
                     if (b & 1) {
                         uint16_t m = 0;
@@ -571,9 +602,9 @@ static void RemasterRender(uint16_t *out)
                         c = m;
                     }
                 }
-                if (split.has3d && (over[y * width + x] & 0x8000)) {
-                    int a = overAlpha[y * width + x], k;
-                    uint16_t o = over[y * width + x] & 0x7FFF, m = 0;
+                if (split.has3d && (over[cy * width + cx] & 0x8000)) {
+                    int a = overAlpha[cy * width + cx], k;
+                    uint16_t o = over[cy * width + cx] & 0x7FFF, m = 0;
 
                     for (k = 0; k < 15; k += 5) {
                         m |= (uint16_t)(((((o >> k) & 31) * a + ((c >> k) & 31) * (16 - a)) / 16) << k);
@@ -597,14 +628,16 @@ static void RemasterRender(uint16_t *out)
                         c = m;
                     }
                 }
-                full[y * width + x] = c;
+                full[y * outW + x] = c;
             }
         }
         if (screen == 0 && sPixelShot != NULL) {
-            memcpy(sPixelShot, full, (size_t)width * (size_t)height * sizeof(full[0]));
-            sPixelShotW = width;
-            sPixelShotH = height;
+            memcpy(sPixelShot, full, (size_t)outW * (size_t)outH * sizeof(full[0]));
+            sPixelShotW = outW;
+            sPixelShotH = outH;
         }
+        width = outW;
+        height = outH;
         if (width <= 320 && height == 192) {
             for (y = 0; y < 192; y++) {
                 memcpy(&out[(screen * 192 + y) * 320 + left], &full[y * width], (size_t)width * sizeof(full[0]));

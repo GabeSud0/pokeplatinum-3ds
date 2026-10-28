@@ -186,6 +186,10 @@ typedef struct Engine {
      * line, 2026-10-14). Nothing is mirrored anywhere. */
     u8 clip[4];
     u8 anchorWindows;
+    /* (a battle's start stretched over the wider screen: NitroRender2DSplit.
+     * stretch) each OBJ drawn 4/5 as wide round its middle: stretched 1.5625
+     * across and 1.25 down by the compositor, its own shape on the screen */
+    u8 squeeze;
     const State2D *taken;  /* (drawn from the display state taken: its windows) */
     u8 pictures;
     /* (wider canvas, worked out each frame) a BG's hand-drawn picture
@@ -2495,6 +2499,7 @@ typedef struct Obj {
     u8 pal;
     u16 tile;
     s32 pa, pb, pc, pd;
+    s16 mid2;              /* (Engine.squeeze) twice the x it's drawn narrower round: its sprite's middle */
 } Obj;
 
 /* (wider canvas) a group of OBJs' hand-drawn picture (see ObjGroups):
@@ -2635,6 +2640,54 @@ static void SortObjs(const Engine *e, ObjFrame *f)
             f->blends = 1;
         }
         f->count++;
+    }
+    if (e->squeeze) {
+        /* (Engine.squeeze) each sprite drawn narrower round its middle: the
+         * OBJs touching or overlapping one another one sprite (a big
+         * picture made of several), so its pieces stay together */
+        u8 root[128];
+        int j, k;
+
+        for (i = 0; i < f->count; i++) {
+            root[i] = (u8)i;
+        }
+        for (i = 0; i < f->count; i++) {
+            const Obj *a = &f->obj[i];
+
+            for (j = i + 1; j < f->count; j++) {
+                const Obj *b = &f->obj[j];
+                int ra, rb;
+
+                if (a->mode == 2 || b->mode == 2 || a->ox > b->ox + b->boxW || b->ox > a->ox + a->boxW ||
+                    a->oy > b->oy + b->boxH || b->oy > a->oy + a->boxH) {
+                    continue;
+                }
+                for (ra = i; root[ra] != ra; ra = root[ra]) { }
+                for (rb = j; root[rb] != rb; rb = root[rb]) { }
+                if (ra != rb) {
+                    root[ra > rb ? ra : rb] = (u8)(ra < rb ? ra : rb);
+                }
+            }
+        }
+        for (i = 0; i < f->count; i++) {
+            int r, lo = 32767, hi = -32768;
+
+            for (r = i; root[r] != r; r = root[r]) { }
+            for (k = 0; k < f->count; k++) {
+                int rk;
+
+                for (rk = k; root[rk] != rk; rk = root[rk]) { }
+                if (rk == r) {
+                    if (f->obj[k].ox < lo) {
+                        lo = f->obj[k].ox;
+                    }
+                    if (f->obj[k].ox + f->obj[k].boxW > hi) {
+                        hi = f->obj[k].ox + f->obj[k].boxW;
+                    }
+                }
+            }
+            f->obj[i].mid2 = (s16)(lo + hi);
+        }
     }
 }
 
@@ -2954,7 +3007,63 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
             out->x1 = (short)(obj->ox + end);
         }
 
-        if (obj->affine && smooth && obj->mode != 2) {
+        if (e->squeeze && obj->mode != 2) {
+            /* (Engine.squeeze) its sprite 4/5 as wide round the sprite's
+             * middle (window OBJs stretch with the windows): each pixel's
+             * middle 5/4 as far from it, in 1/256 pixels; through its
+             * matrix if it has one */
+            s32 dy = ly - obj->boxH / 2;
+            s32 mid = obj->mid2 * 128;
+            int x0 = (int)((mid + (obj->ox * 256 - mid) * 4 / 5) >> 8);
+            int x1 = (int)((mid + ((obj->ox + obj->boxW) * 256 - mid) * 4 / 5 + 255) >> 8);
+            int x;
+
+            if (x0 < 0) {
+                x0 = 0;
+            }
+            if (x1 > e->width) {
+                x1 = e->width;
+            }
+            if (x0 < out->x0) {
+                out->x0 = (short)x0;
+            }
+            if (x1 > out->x1) {
+                out->x1 = (short)x1;
+            }
+            for (x = x0; x < x1; x++) {
+                s32 rel = mid + (x * 256 + 128 - mid) * 5 / 4 - 128 - obj->ox * 256;
+                int tx, ty, alpha;
+                u16 rgb;
+
+                if (out->color[x] & OPAQUE) {
+                    continue;
+                }
+                if (obj->affine) {
+                    s32 dx = rel - (obj->boxW / 2) * 256;
+                    s32 fx = ((obj->pa * dx) >> 8) + obj->pb * dy;
+                    s32 fy = ((obj->pc * dx) >> 8) + obj->pd * dy;
+
+                    tx = (fx >> 8) + obj->w / 2;
+                    ty = (fy >> 8) + obj->h / 2;
+                } else {
+                    tx = rel >> 8;
+                    ty = ly;
+                    if (obj->hflip) {
+                        tx = obj->w - 1 - tx;
+                    }
+                    if (obj->vflip) {
+                        ty = obj->h - 1 - ty;
+                    }
+                }
+                if (tx < 0 || ty < 0 || tx >= obj->w || ty >= obj->h) {
+                    continue;
+                }
+                rgb = ObjPixel(e, obj, dispcnt, tx, ty, &alpha);
+                if (rgb) {
+                    PutObjPixel(obj, out, x, rgb, alpha);
+                }
+            }
+        } else if (obj->affine && smooth && obj->mode != 2) {
             /* (NitroPort_Render2DSmoothObjs: the pixel's middle mapped,
              * the texels round it blended) */
             s32 dy = ly - obj->boxH / 2;
@@ -4186,6 +4295,7 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
     e->width = W;
     e->height = H;
     e->h3d = H;
+    e->squeeze = (u8)(split != NULL && e->isA && split->stretch);
     if (split != NULL && split->height > H && split->height <= HMAX && split->width <= W) {
         e->height = split->height;   /* (a tall picture: the DS's width only) */
     }
