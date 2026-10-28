@@ -1501,6 +1501,26 @@ static void ControlWait(void)
                         NitroPort_Log("[pc] control: can't write %s", arg);
                     }
                 }
+            } else if (sscanf(line, "midview %1023s", arg) == 1) {
+                /* The in-between scene at the view's own size (as viewsim) */
+                static uint16_t image[512 * 256];
+                unsigned matched = 0, polygons = 0;
+                const NitroGx3dScene *mid = NitroPort_Gx3dMidScene(&matched, &polygons);
+                int w = mid ? (int)mid->screen_width : 256, h = mid ? (int)mid->screen_height : 192;
+
+                if (h < 192) {
+                    h = 192;
+                }
+                if (w > 512 || h > 256) {
+                    w = 256;
+                    h = 192;
+                }
+                if (mid) {
+                    NitroPort_Gx3dSimulateGpuSized(mid, image, w, h);
+                    if (WritePng(arg, image, w, h) != 0) {
+                        NitroPort_Log("[pc] control: can't write %s", arg);
+                    }
+                }
             } else if (strncmp(line, "look ", 5) == 0) {
                 int sh = 0, gr = 0, n;
                 float e = 55.0f, az = 32.0f;

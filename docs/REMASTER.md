@@ -577,7 +577,10 @@ stretched:
     the opponent) till they're past the wider screen's edges, not the
     DS's (they vanished in the sides); since 2026-10-26 (patch 0043) till
     all of the sprite is (it reaches 60 pixels on from its position: the
-    player went with 20 pixels of it still in the left band);
+    player went with 20 pixels of it still in the left band); past the
+    DS's -40 the player's Poké Ball is left to its arc as on the DS (patch
+    0052: the trainer's hand took it off the screen for the 4 frames it
+    hangs at the top, and it vanished);
   - the HM cut-in: its band of Poké Balls (BG3, a 256-pixel map) repeats
     to the screen's edges (a SHOW part) instead of a stripe of its plain
     lines; the Pokémon waits beyond the wider screen's right edge and
@@ -692,6 +695,13 @@ screen's 320 x 192 at 1.25 times, as above.
   down they keep their shape. Not the cut-ins with a trainer's picture
   (the leaders, the Elite Four, the Champion) nor the legendaries' (the
   camera only).
+- **A walk out up or down** (patch 0053): a script's walk straight out up
+  or down that meets something in the way beyond the DS's picture (more
+  than 5 rows from the middle) goes to a door within the walk's reach
+  instead (on the walk's way first, else west, else east): Dawn leaving
+  the lab after the Pokédex walked 10 steps south beside the door, into
+  the wall, where the DS's screen had ended. With no door near, the
+  script's walk as it is.
 - Still to do: the people scripts bring on from above or below (they show
   the last few tiles of their walk in); weather sprites (rain, snow) only
   on the DS's lines.
@@ -1536,6 +1546,22 @@ taken without the search round it; the search stops comparing a polygon
 once it's further than the best so far; and the median that sets
 "near enough" is found without sorting (half the cost there, on the PC). The outlines with the slider up are off by default for it
 (`edges3d on`: while they fit).
+
+The scene's motion (2026-10-27): the order's pairs give it only while the
+order holds. A map's block coming into the view puts its tiles among the
+rest, all of one kind, and every pair after it was a tile with its
+neighbour: on Route 205's lawn at a run the in-between scene had its
+tiles halfway to the wrong ones (holes, the stairs stretched). Now the
+motion is the one most of a sample of 64 polygons fits (each with one of
+its kind in the scene before within 2 DS pixels of where it puts it): the
+order's, the scene before's (the camera's pace is steady) or none. And
+while the scene itself stays still, a polygon takes the order's pair when
+that's no more than 3 DS pixels further than the nearest of its kind: the
+starters' Poké Balls wobbling in the briefcase had their faces paired
+with the next face or the next ball, and the in-between scenes showed
+grey blocks. Both in `test_gx3d.c` (`test_interpolation_order_shift`,
+`test_interpolation_swaying`). The PC runner's `midview FILE` draws the
+in-between scene at the view's size (as `viewsim`).
 
 ## Known
 

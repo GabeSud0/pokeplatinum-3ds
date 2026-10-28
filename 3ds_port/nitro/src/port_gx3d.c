@@ -879,6 +879,7 @@ typedef struct PolyRecord {
 #define MATCH_WINDOW 64
 #define MATCH_NEAR 16.0f
 #define MATCH_SURE 1.0f
+#define ORDER_SLACK 3.0f   /* (match_records: the order's pair, if no further than this from the nearest's) */
 static int sInterpWanted, sInterp;
 static PolyRecord *sRec[2];              /* [sRecBuild]: this scene's; the other: the scene before's */
 static unsigned sRecCount[2], sRecBuild;
@@ -1007,6 +1008,30 @@ static float poly_distance(const PolyRecord *p,const PolyRecord *c,float dx,floa
 static int sMotionValid;
 static uint8_t *sPUsed;   /* (the scene before's records paired with one of this one's) */
 static float sMotionX, sMotionY;
+/* The motion the scene before had (sMotionValid then): the camera's pace
+ * at a walk or a run is steady from one scene to the next. */
+static int sPrevMotionValid;
+static float sPrevMotionX, sPrevMotionY;
+/* How many of a sample of this scene's polygons (up to 64, spread through
+ * it) have one of their kind in the scene before, near where the order
+ * pairs them, where the motion (dx, dy) puts it (2 DS pixels, a vertex on
+ * average). */
+static unsigned motion_support(const PolyRecord *P,unsigned m,const PolyRecord *C,unsigned n,
+                               const int32_t *out,float dx,float dy)
+{
+    unsigned j,found=0,step=n/64u+1u;
+    for(j=0;j<n;j+=step){
+        int center=out[j]>=0?out[j]:(int)j,lo=center-MATCH_WINDOW,hi=center+MATCH_WINDOW,q;
+        if(!C[j].onScreen)continue;
+        if(lo<0)lo=0;
+        if(hi>(int)m-1)hi=(int)m-1;
+        for(q=lo;q<=hi;q++){
+            if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)continue;
+            if(poly_distance(&P[q],&C[j],dx,dy,2.0f*MATCH_SURE)<2.0f*MATCH_SURE){found++;break;}
+        }
+    }
+    return found;
+}
 static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C,unsigned n,int32_t *out)
 {
     unsigned i=0,j=0,matched=0,moves=0;
@@ -1037,7 +1062,31 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
         moves++;
     }
     if(moves>=8u){dx=median_of(mx,moves);dy=median_of(my,moves);}
+    /* The order's pairs give the motion only while the order holds. A
+     * map's block coming into the view puts its tiles among the rest,
+     * all of one kind, and every pair after it is a tile with another
+     * (Route 205's lawn at a run, 2026-10-27: its tiles halfway to the
+     * wrong ones, holes and stretched stairs in the in-between scene).
+     * So the motion that most of a sample of polygons fits: the order's,
+     * the scene before's, or none. */
+    if(n>=16u){
+        float cx[3],cy[3];
+        unsigned c=0,k,best=0,bestSupport=0;
+        if(moves>=8u){cx[c]=dx;cy[c]=dy;c++;}
+        if(sPrevMotionValid){cx[c]=sPrevMotionX;cy[c]=sPrevMotionY;c++;}
+        cx[c]=0.0f;cy[c]=0.0f;c++;
+        for(k=0;k<c;k++){
+            unsigned support=motion_support(P,m,C,n,out,cx[k],cy[k]);
+            if(support>bestSupport){bestSupport=support;best=k;}
+        }
+        if(bestSupport>0){
+            if(moves<8u || cx[best]!=dx || cy[best]!=dy)moves=8u;   /* (valid: it fits) */
+            dx=cx[best];dy=cy[best];
+        }
+    }
     sMotionValid=moves>=8u;
+    sPrevMotionValid=sMotionValid;
+    sPrevMotionX=dx;sPrevMotionY=dy;
     sMotionX=dx;sMotionY=dy;
     /* (a figure that moves on its own, the player against the camera's
      * motion: as far again as the scene moves) */
@@ -1071,6 +1120,19 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
             if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)continue;
             d=poly_distance(&P[q],&C[j],dx,dy,bestD);
             if(d<bestD){bestD=d;best=q;}
+        }
+        /* The order's pair when it's nearly as near as the nearest: a model
+         * that turns or sways (the starters' Poké Balls in the briefcase,
+         * wobbling) has its parts a pixel or two from where they were, and
+         * as near a part of its kind (the ball's other faces, the other
+         * balls): taken, the in-between scene showed bits of the wrong
+         * ones, grey blocks (2026-10-27). Only while the scene itself
+         * stays (a map scrolling, the order shifts as its tiles come and go:
+         * a cliff's tile paired a little off left a crack). */
+        if(order>=0 && order!=best && fabsf(dx)+fabsf(dy)<MATCH_SURE &&
+           P[order].onScreen && P[order].count==C[j].count){
+            float d=poly_distance(&P[order],&C[j],dx,dy,near);
+            if(d<near && (best<0 || d<=bestD+ORDER_SLACK)){best=order;bestD=d;}
         }
         /* What the camera follows stays where it was on the screen as the
          * scene moves: the player, and one who follows him. The order's
