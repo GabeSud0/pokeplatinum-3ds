@@ -1067,14 +1067,19 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
      * all of one kind, and every pair after it is a tile with another
      * (Route 205's lawn at a run, 2026-10-27: its tiles halfway to the
      * wrong ones, holes and stretched stairs in the in-between scene).
-     * So the motion that most of a sample of polygons fits: the order's,
-     * the scene before's, or none. */
+     * So the motion that most of a sample of polygons fits: the order's
+     * or the scene before's (the camera's pace is steady); none only
+     * without either. (Not none against a moving camera's: a floor moving
+     * a tile a scene, the bike's top gear, has every tile where its
+     * neighbour was, and none fitted them all: the floor at 30.) The
+     * order's wins a tie. */
     if(n>=16u){
         float cx[3],cy[3];
         unsigned c=0,k,best=0,bestSupport=0;
         if(moves>=8u){cx[c]=dx;cy[c]=dy;c++;}
-        if(sPrevMotionValid){cx[c]=sPrevMotionX;cy[c]=sPrevMotionY;c++;}
-        cx[c]=0.0f;cy[c]=0.0f;c++;
+        if(sPrevMotionValid && (sPrevMotionX!=0.0f || sPrevMotionY!=0.0f) &&
+           (!c || sPrevMotionX!=dx || sPrevMotionY!=dy)){cx[c]=sPrevMotionX;cy[c]=sPrevMotionY;c++;}
+        if(!c){cx[c]=0.0f;cy[c]=0.0f;c++;}
         for(k=0;k<c;k++){
             unsigned support=motion_support(P,m,C,n,out,cx[k],cy[k]);
             if(support>bestSupport){bestSupport=support;best=k;}
@@ -1165,15 +1170,15 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
     unsigned framePolygons=s.framePolygons,frameVertices=s.frameVertices;
     int capture=sShadowCapture;
     if(!sMid || !sMatch || !sRecBeforeValid || !n){
-        sMidMatched=0;sMidPolygons=n;
+        sMidMatched=0;sMidPolygons=n;sPrevMotionValid=0;
         return 0;
     }
     sMidMatched=match_records(P,m,C,n,sMatch);
     sMidPolygons=n;
-    if(n>=16u && sMidMatched*2u<n)return 0;   /* (a cut: too little in common) */
+    if(n>=16u && sMidMatched*2u<n){sPrevMotionValid=0;return 0;}   /* (a cut: too little in common) */
     /* (the view's size changed between them: no in-between, its clip
      * spaces aren't the same) */
-    if(sLastBgOfsValid && (now->screen_width!=sLastWidth || now->screen_height!=sLastHeight))return 0;
+    if(sLastBgOfsValid && (now->screen_width!=sLastWidth || now->screen_height!=sLastHeight)){sPrevMotionValid=0;return 0;}
     sMid->count=0;sMid->dropped=0;sMid->shadow_count=0;sMid->shadow_triangles=NULL;
     sMid->serial=now->serial;sMid->swap_param=now->swap_param;
     sMid->screen_width=now->screen_width;
@@ -1296,6 +1301,7 @@ static void interp_swap(void)
     }
     if(sInterp && wanted)sRecBeforeValid=1;
     else sRecBeforeValid=0;
+    if(!sRecBeforeValid)sPrevMotionValid=0;   /* (the motion before: from scenes in a row only) */
     __atomic_store_n(&sInterp,wanted,__ATOMIC_RELEASE);
     sRecBuild^=1u;
     sRecCount[sRecBuild]=0;
@@ -2462,6 +2468,7 @@ void NitroPort_Gx3dReset(void)
     NitroPort_MailboxInit(&sMailbox);
     sBuilding=0;sDisplayed=1;sSerial=0;
     sRecCount[0]=sRecCount[1]=0;sRecBeforeValid=0;sMidOk[0]=sMidOk[1]=sMidOk[2]=0;sDest=NULL;sReplaying=0;
+    sPrevMotionValid=0;
     identity(&s.proj);identity(&s.pos);identity(&s.vec);identity(&s.tex);
     set_wide_view(&s,sWideWidth,sWideHeight);   /* (kept across resets) */
     s.viewport[0]=0;s.viewport[1]=0;s.viewport[2]=255;s.viewport[3]=191;

@@ -1554,13 +1554,16 @@ neighbour: on Route 205's lawn at a run the in-between scene had its
 tiles halfway to the wrong ones (holes, the stairs stretched). Now the
 motion is the one most of a sample of 64 polygons fits (each with one of
 its kind in the scene before within 2 DS pixels of where it puts it): the
-order's, the scene before's (the camera's pace is steady) or none. And
+order's or the scene before's (the camera's pace is steady; forgotten
+after a cut, a change of view or the in-between scenes off), none only
+without either (a floor moving a tile a scene, the bike's top gear, has
+every tile where its neighbour was: none fitted it all). And
 while the scene itself stays still, a polygon takes the order's pair when
 that's no more than 3 DS pixels further than the nearest of its kind: the
 starters' Poké Balls wobbling in the briefcase had their faces paired
 with the next face or the next ball, and the in-between scenes showed
-grey blocks. Both in `test_gx3d.c` (`test_interpolation_order_shift`,
-`test_interpolation_swaying`). The PC runner's `midview FILE` draws the
+grey blocks. In `test_gx3d.c`: `test_interpolation_order_shift`,
+`test_interpolation_tile_a_scene`, `test_interpolation_swaying`. The PC runner's `midview FILE` draws the
 in-between scene at the view's size (as `viewsim`).
 
 ## Known

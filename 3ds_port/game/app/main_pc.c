@@ -1515,6 +1515,8 @@ static void ControlWait(void)
                     w = 256;
                     h = 192;
                 }
+                NitroPort_Log("[pc] in-between scene: %s, %u of %u polygons halfway", mid ? "made" : "none",
+                              matched, polygons);
                 if (mid) {
                     NitroPort_Gx3dSimulateGpuSized(mid, image, w, h);
                     if (WritePng(arg, image, w, h) != 0) {
