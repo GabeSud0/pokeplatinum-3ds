@@ -38,28 +38,33 @@ trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000).
 Its Poké Ball: coming out it grows from nothing (its picture made at no
 size: ov5_021ECE40.c, PortFollower_StartsSmall), going in it shrinks
 away where it stands, 6 frames each, with the battle's send-out and
-recall sounds. Those are in the battle's sound bank, which the field
+recall sounds. The ball is seen: the item ball's picture (a map object of
+its own, local ID 0xF4, flagged as the follower is: not saved, not found
+by scripts, not talked to, walked through) where the Pokémon stands, a
+little in front: coming out it drops in and opens, the Pokémon growing
+out of it; going in the Pokémon shrinks into it and it stays a moment.
+No room or no free map object for it: the Pokémon alone. Those are in the battle's sound bank, which the field
 never loads: the field's sound effects load them too (sound.c), the
 sound heap 128 kB larger for their 84 kB of waves (sound_system.h). It
 comes and goes as set while the options' page is up (the field running
 behind it, patch 0057).
 ---
  include/constants/map_object.h |   2 +
- include/port_follower.h        |  48 ++++
+ include/port_follower.h        |  49 +++
  include/port_options.h         |   1 +
  include/sound_system.h         |   6 +
  platinum.us/main.lsf           |   1 +
  src/map_object.c               |  23 +-
  src/meson.build                |   1 +
- src/narc.c                     |  65 +++++
+ src/narc.c                     |  65 ++++
  src/overlay005/fieldmap.c      |   2 +
  src/overlay005/options_panel.c |   3 +-
  src/overlay005/ov5_021ECC20.c  |   7 +
- src/overlay005/ov5_021ECE40.c  |  33 ++-
- src/port_follower.c            | 553 +++++++++++++++++++++++++++++++++++++++++
+ src/overlay005/ov5_021ECE40.c  |  33 +-
+ src/port_follower.c            | 674 +++++++++++++++++++++++++++++++++++++++++
  src/sound.c                    |   7 +
  src/unk_020EDBAC.c             |   5 +-
- 15 files changed, 752 insertions(+), 5 deletions(-)
+ 15 files changed, 874 insertions(+), 5 deletions(-)
 
 diff --git a/include/constants/map_object.h b/include/constants/map_object.h
 index d692a8b6..7d4cb6d8 100644
@@ -76,10 +81,10 @@ index d692a8b6..7d4cb6d8 100644
  #define MAP_OBJ_UNK_A0_00 0
 diff --git a/include/port_follower.h b/include/port_follower.h
 new file mode 100644
-index 00000000..f7076b72
+index 00000000..cdc40c7f
 --- /dev/null
 +++ b/include/port_follower.h
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,49 @@
 +#ifndef POKEPLATINUM_PORT_FOLLOWER_H
 +#define POKEPLATINUM_PORT_FOLLOWER_H
 +
@@ -107,6 +112,7 @@ index 00000000..f7076b72
 +#define PORT_FOLLOWER_GFX_COUNT       0x800
 +#define PORT_FOLLOWER_NARC_FIRST      0x7000 // (no archive has this many members)
 +#define PORT_FOLLOWER_LOCAL_ID        0xF3
++#define PORT_FOLLOWER_BALL_LOCAL_ID   0xF4   // (its Poké Ball, seen as it goes in and comes out)
 +#define PORT_MOVEMENT_TYPE_FOLLOW_MON 0x44   // (Platinum's go to 0x43)
 +
 +BOOL PortFollower_IsGfx(int graphicsID);
@@ -516,10 +522,10 @@ index dbe4ac67..04528579 100644
  
 diff --git a/src/port_follower.c b/src/port_follower.c
 new file mode 100644
-index 00000000..56e2f8bf
+index 00000000..34ba740e
 --- /dev/null
 +++ b/src/port_follower.c
-@@ -0,0 +1,553 @@
+@@ -0,0 +1,674 @@
 +#include "port_follower.h"
 +
 +#include <nitro.h>
@@ -797,6 +803,15 @@ index 00000000..56e2f8bf
 +        }
 +    }
 +
++    {
++        static int sSaid; // (each species once)
++
++        if (sSaid != species) {
++            sSaid = species;
++            NitroPort_Log("[follower] no sprite for species %d: Platinum has its own for 24 only, the rest come with the data pack (rebuild it with the follower sprites)", species);
++        }
++    }
++
 +    return 0;
 +}
 +
@@ -824,13 +839,14 @@ index 00000000..56e2f8bf
 +            || action == MOVEMENT_ACTION_JUMP_FARTHER_WEST || action == MOVEMENT_ACTION_JUMP_FARTHER_EAST);
 +}
 +
-+static MapObject *PortFollower_Find(const MapObjectManager *mapObjMan)
++// (the Pokémon: PORT_FOLLOWER_LOCAL_ID; its ball: PORT_FOLLOWER_BALL_LOCAL_ID)
++static MapObject *PortFollower_FindID(const MapObjectManager *mapObjMan, u32 localID)
 +{
 +    int i = 0;
 +    MapObject *mapObj;
 +
 +    while (MapObjectMan_FindObjectWithStatus(mapObjMan, &mapObj, &i, MAP_OBJ_STATUS_0) == TRUE) {
-+        if (MapObject_PortIsFollower(mapObj)) {
++        if (MapObject_PortIsFollower(mapObj) && MapObject_GetLocalID(mapObj) == localID) {
 +            return mapObj;
 +        }
 +    }
@@ -914,7 +930,7 @@ index 00000000..56e2f8bf
 +    }
 +}
 +
-+static BOOL PortFollower_SetScale(MapObject *mapObj, int step)
++static BOOL PortFollower_ScaleOf(MapObject *mapObj, int step, int steps)
 +{
 +    Billboard *billboard = ov5_021EB1A0(mapObj);
 +    VecFx32 scale;
@@ -923,18 +939,114 @@ index 00000000..56e2f8bf
 +        return FALSE; // (its picture not made yet)
 +    }
 +
-+    scale.x = scale.y = scale.z = FX32_ONE * step / POP_FRAMES;
++    scale.x = scale.y = scale.z = FX32_ONE * step / steps;
 +    Billboard_SetScale(billboard, &scale);
 +    return TRUE;
++}
++
++static BOOL PortFollower_SetScale(MapObject *mapObj, int step)
++{
++    return PortFollower_ScaleOf(mapObj, step, POP_FRAMES);
++}
++
++// The ball itself, seen: the item ball's picture where the Pokémon stands, a
++// little in front of it, growing in and shrinking away BALL_POP steps each.
++// Coming out it drops in, BALL_LEAD steps before it opens and the Pokémon
++// grows out of it; going in it's there as the Pokémon shrinks into it and
++// BALL_AFTER steps after. (No room for it, no free map object: the
++// Pokémon alone, as before.)
++#define BALL_POP   3
++#define BALL_LEAD  8
++#define BALL_AFTER 6
++
++static int sBallLeft, sBallTotal;
++
++static BOOL PortFollower_ShowBall(FieldSystem *fieldSystem, MapObject *at, int steps)
++{
++    MapObjectManager *mapObjMan = fieldSystem->mapObjMan;
++    MapObject *ball = PortFollower_FindID(mapObjMan, PORT_FOLLOWER_BALL_LOCAL_ID);
++    VecFx32 front = { 0, 0, FX32_ONE * 4 }; // (drawn over the Pokémon's feet)
++
++    if (ball != NULL) {
++        PortFollower_Remove(fieldSystem, ball);
++    }
++
++    sBallLeft = 0;
++
++    if (MapObjectMan_PortFreeSlots(mapObjMan) <= 1 || !MapObjectGfx_PortHasRoom(mapObjMan, OBJ_EVENT_GFX_POKEBALL)) {
++        return FALSE;
++    }
++
++    ball = MapObjectMan_AddMapObject(mapObjMan, MapObject_GetX(at), MapObject_GetZ(at), DIR_SOUTH, OBJ_EVENT_GFX_POKEBALL,
++        MOVEMENT_TYPE_NONE, fieldSystem->location->mapHeaderID);
++
++    if (ball == NULL) {
++        return FALSE;
++    }
++
++    // (not saved, not found by scripts, not talked to, walked through)
++    MapObject_SetLocalID(ball, PORT_FOLLOWER_BALL_LOCAL_ID);
++    MapObject_SetStatusFlagOn(ball, MAP_OBJ_STATUS_PORT_FOLLOWER | MAP_OBJ_STATUS_PERSISTENT);
++    sub_02062D80(ball, FALSE);
++
++    if (MapObject_CheckStatus(at, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE)) {
++        MapObject_SetStatusFlagOn(ball, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE);
++    }
++
++    MapObject_SetSpritePosOffset(ball, &front);
++    PortFollower_ScaleOf(ball, 0, BALL_POP);
++    sBallLeft = sBallTotal = steps;
++    return TRUE;
++}
++
++// (shortened to go away now: the Pokémon put away before it was seen)
++static void PortFollower_BallAway(void)
++{
++    if (sBallLeft > BALL_POP) {
++        sBallLeft = BALL_POP;
++        sBallTotal = BALL_POP * 2;
++    }
++}
++
++static void PortFollower_UpdateBall(FieldSystem *fieldSystem, BOOL dropIn)
++{
++    MapObject *ball = PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_BALL_LOCAL_ID);
++    int done, step;
++
++    if (ball == NULL) {
++        sBallLeft = 0;
++        return;
++    }
++
++    if (sBallLeft <= 0) {
++        PortFollower_Remove(fieldSystem, ball);
++        return;
++    }
++
++    done = sBallTotal - sBallLeft;
++    step = done < sBallLeft ? done : sBallLeft;
++    step = step < BALL_POP ? step : BALL_POP;
++    PortFollower_ScaleOf(ball, step, BALL_POP);
++
++    {
++        // (coming out: dropped in from above as it grows)
++        VecFx32 hop = { 0, dropIn && done < BALL_POP ? FX32_ONE * 6 * (BALL_POP - done) : 0, 0 };
++        MapObject_SetSpriteJumpOffset(ball, &hop);
++    }
++
++    sBallLeft--;
 +}
 +
 +// (coming out: frames of it so far, -1 not yet begun: its picture or, -2,
 +// the player's step off its tile awaited; going in: frames left)
 +static int sOut, sIn;
 +
++static int sOpenIn; // (coming out, sOut -3: the ball's steps before it opens)
++static BOOL sDropIn;
++
 +BOOL PortFollower_StartsSmall(const MapObject *mapObj)
 +{
-+    return MapObject_PortIsFollower(mapObj) && sOut < 0;
++    return MapObject_PortIsFollower(mapObj) && (MapObject_GetLocalID(mapObj) != PORT_FOLLOWER_LOCAL_ID || sOut < 0);
 +}
 +
 +void PortFollower_Update(FieldSystem *fieldSystem)
@@ -951,11 +1063,13 @@ index 00000000..56e2f8bf
 +    }
 +
 +    player = PlayerAvatar_GetMapObject(fieldSystem->playerAvatar);
-+    mapObj = PortFollower_Find(fieldSystem->mapObjMan);
++    mapObj = PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_LOCAL_ID);
 +
 +    if (player == NULL) {
 +        return;
 +    }
++
++    PortFollower_UpdateBall(fieldSystem, sDropIn);
 +
 +    if (mapObj != sLast) {
 +        // (another one, or none: made anew, or the field's objects made again)
@@ -1013,24 +1127,37 @@ index 00000000..56e2f8bf
 +            NitroPort_Log("[follower] in its ball (%s)", why);
 +
 +            if (sOut < 0 || MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE)) {
-+                PortFollower_Remove(fieldSystem, mapObj); // (never seen: no ball)
++                PortFollower_Remove(fieldSystem, mapObj); // (never seen: its ball, if it was there, goes)
++                PortFollower_BallAway();
 +                mapObj = sLast = NULL;
 +                sWait = 8;
 +            } else {
 +                MapObject_SetPauseMovementOn(mapObj); // (it stays where it is)
 +                sIn = sOut > 0 && sOut < POP_FRAMES ? sOut : POP_FRAMES;
 +                sOut = POP_FRAMES;
++                sDropIn = FALSE;
++                PortFollower_ShowBall(fieldSystem, mapObj, sIn + BALL_AFTER + BALL_POP);
 +                PortFollower_Sound(SEQ_SE_DP_SLOT02_sseq_1); // (SEQ_SE_DP_SUIKOMU: the battle's recall)
 +            }
-+        } else if (sOut < 0) {
-+            // Coming out: once its picture is made (and, on the player's
-+            // tile, once the player has stepped off it), from nothing.
-+            BOOL waits = MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE) && dx == 0 && dz == 0 && sOut == -2;
-+
-+            if (!waits && PortFollower_SetScale(mapObj, 0)) {
++        } else if (sOut == -3) {
++            // Coming out: its ball there, then open.
++            if (sOpenIn > 0) {
++                sOpenIn--;
++            } else {
 +                MapObject_SetHidden(mapObj, FALSE);
 +                sOut = 0;
 +                PortFollower_Sound(SEQ_SE_DP_SLOT01_sseq_1); // (SEQ_SE_DP_BOWA2: the battle's send-out)
++            }
++        } else if (sOut < 0) {
++            // Coming out: once its picture is made (and, on the player's
++            // tile, once the player has stepped off it), its ball first,
++            // then it from nothing.
++            BOOL waits = MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE) && dx == 0 && dz == 0 && sOut == -2;
++
++            if (!waits && PortFollower_SetScale(mapObj, 0)) {
++                sDropIn = TRUE;
++                sOut = -3;
++                sOpenIn = PortFollower_ShowBall(fieldSystem, mapObj, BALL_LEAD + 2 * BALL_POP) ? BALL_LEAD : 0;
 +            }
 +        } else if (sOut < POP_FRAMES) {
 +            sOut++;

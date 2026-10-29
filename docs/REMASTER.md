@@ -1249,12 +1249,17 @@ screens) the lower screen is the DS's, filling the screen as before.
     Poké Ball: coming out it grows from nothing (its picture made at no
     size, so it never shows whole first), going in it shrinks away where
     it stands, 6 frames each, with the battle's send-out and recall
-    sounds. Those are in the battle's sound bank, which the field never
+    sounds. The ball itself is seen (the item ball's picture, a map
+    object of its own: local ID 0xF4, not saved, not found by scripts,
+    walked through): coming out it drops in and opens; going in the
+    Pokémon shrinks into it and it stays a moment. Those are in the battle's sound bank, which the field never
     loads: the field's sound effects load them too (`sound.c`), the sound
     heap 128 KB larger for their 84 KB of waves (`sound_system.h`; the
     DS's heap had 74 KB left there). The log says when it comes out, why
     it goes back, and what it waits for when it can't come out ("no map
-    object free", "no sprites", "no room for its picture yet").
+    object free", "no sprites", "no room for its picture yet"), and when
+    the first Pokémon has no sprite (a data pack made without the
+    follower sprites: only Platinum's 24).
   - ALWAYS CATCH (every ball catches), INSTANT VICTORY (the player's
     attacks knock the opponent out, Endure and a Focus Band or Sash no
     help; a Substitute still takes the hit), FAST EGGS (the day care's chance at
