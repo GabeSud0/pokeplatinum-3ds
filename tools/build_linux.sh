@@ -156,7 +156,14 @@ fi
 
 step "Making your data pack from $ROM"
 python3 builder/extract_rom.py "$ROM" -o data_pack
-python3 builder/pack.py data_pack -o platinum3ds.pak
+# The follower Pokémon's sprites (HeartGold and SoulSilver's, downloaded
+# once, checked; never in the repository): without them only Platinum's
+# own Pokémon follow.
+FOLLOWERS=()
+if python3 builder/followers.py -o build/followers.bin; then
+    FOLLOWERS=(--followers build/followers.bin)
+fi
+python3 builder/pack.py data_pack -o platinum3ds.pak "${FOLLOWERS[@]}"
 
 step "Putting the SD card files in $SD_DIR"
 mkdir -p "$SD_DIR/3ds/pokeplatinum"

@@ -13,6 +13,10 @@ It writes, in OUT_DIR:
     work/banner.cgfx                    the 3D banner's scene (with --pycgfx; for bannertool)
     work/home-art/banner.png, .wav      the flat banner (the fallback for the 3D one)
 
+With followers_dir (the website's download of the follower Pokémon's
+sprites, builder/followers.py: never in the payload), the data pack has
+them too.
+
 The program (pokeplatinum.3dsx) isn't made here: it's the release's, built
 without the ROM. Nothing is uploaded: the ROM and everything made from it
 stay with the player. The release's web-manifest.json (made by
@@ -35,6 +39,7 @@ for _path in (HERE, BANNER3D, TOOLS):
         sys.path.append(_path)
 
 import extract_rom  # noqa: E402
+import followers  # noqa: E402
 import pack  # noqa: E402
 import verify_rom  # noqa: E402
 
@@ -54,15 +59,18 @@ def check_rom(rom, *, verify: bool = True) -> dict:
     return {"sha1": sha1, "name": name or "(not checked)"}
 
 
-def build_data(rom, pak_file, *, rom_sha1: str, progress=None) -> str:
+def build_data(rom, pak_file, *, rom_sha1: str, progress=None, follower_bundle: bytes | None = None) -> str:
     """The data pack, written to the binary file pak_file, and its
     manifest.json's text (returned): the same bytes builder/extract_rom.py
-    and builder/pack.py make from this ROM."""
+    and builder/pack.py make from this ROM (with --followers, when
+    follower_bundle is given: builder/followers.py's file)."""
     view = memoryview(rom)
     entries = extract_rom.parse_nitrofs(view)
     if any(e["path"] == "manifest.json" for e in entries):
         raise ValueError("ROM file would collide with manifest.json")
     files = [(e["id"], view[e["offset"]:e["offset"] + e["size"]]) for e in entries]
+    if follower_bundle is not None:
+        files.append((followers.PAK_ID, follower_bundle))
     pack.write_pak(pak_file, files, build_id=pack.DEFAULT_BUILD_ID, rom_sha1=rom_sha1, progress=progress)
     return extract_rom.manifest_text(rom_sha1, entries)
 
@@ -75,12 +83,25 @@ def build_banner_cgfx(rom, pycgfx_dir: str, work_dir: str) -> bytes:
     return make_banner.cgfx_from_titledemo(archive, pycgfx_dir, work_dir)
 
 
+def read_followers(followers_dir: str) -> bytes:
+    """builder/followers.py's file from the sprites downloaded into
+    followers_dir (at their paths in pokeheartgold), each checked."""
+    sprites = []
+    for n in range(followers.sprite_count()):
+        path = followers.sources.SPRITE_PATH.format(followers.sources.FIRST_FILE + n)
+        with open(os.path.join(followers_dir, *path.split("/")), "rb") as f:
+            sprites.append(f.read())
+    return followers.make_bundle(sprites)
+
+
 def run_web_build(rom, out_dir: str, *, pycgfx_dir: str | None = None, progress=None,
-                  verify: bool = True) -> dict:
+                  verify: bool = True, followers_dir: str | None = None) -> dict:
     """The whole build (see the top of this file). progress(stage, done,
     total), if given, is called as it goes: stage "rom", "pack" or "banner".
     Returns what was made: {"rom": check_rom's answer, "files": {name:
-    path}, "banner_error": why the 3D banner couldn't be made, or None}."""
+    path}, "banner_error": why the 3D banner couldn't be made, or None,
+    "followers_error": why the follower sprites aren't in the data pack
+    (followers_dir given), or None}."""
     def report(stage, done, total):
         if progress is not None:
             progress(stage, done, total)
@@ -89,13 +110,20 @@ def run_web_build(rom, out_dir: str, *, pycgfx_dir: str | None = None, progress=
     rom_info = check_rom(rom, verify=verify)
     report("rom", 1, 1)
 
+    bundle, followers_error = None, None
+    if followers_dir is not None:
+        try:
+            bundle = read_followers(followers_dir)
+        except (OSError, followers.FollowersError) as e:   # the game works without them
+            followers_error = f"{type(e).__name__}: {e}"
+
     made = {}
     pak_path = os.path.join(out_dir, *PAK.split("/"))
     os.makedirs(os.path.dirname(pak_path), exist_ok=True)
     temp = pak_path + ".part"
     try:
         with open(temp, "wb") as f:
-            manifest = build_data(rom, f, rom_sha1=rom_info["sha1"],
+            manifest = build_data(rom, f, rom_sha1=rom_info["sha1"], follower_bundle=bundle,
                                   progress=lambda done, total: report("pack", done, total))
         os.replace(temp, pak_path)
     finally:
@@ -128,7 +156,7 @@ def run_web_build(rom, out_dir: str, *, pycgfx_dir: str | None = None, progress=
                 f.write(cgfx)
             made[CGFX] = cgfx_path
         report("banner", 1, 1)
-    return {"rom": rom_info, "files": made, "banner_error": banner_error}
+    return {"rom": rom_info, "files": made, "banner_error": banner_error, "followers_error": followers_error}
 
 
 def main() -> int:
@@ -136,11 +164,12 @@ def main() -> int:
     parser.add_argument("rom", help="your own Pokémon Platinum (USA) .nds")
     parser.add_argument("out_dir")
     parser.add_argument("--pycgfx", help="pycgfx's folder (tools/banner3d/make_banner.py --fetch-pycgfx-only)")
+    parser.add_argument("--followers", help="a pokeheartgold checkout's folder with the follower sprites")
     args = parser.parse_args()
     with open(args.rom, "rb") as f:
         rom = f.read()
     try:
-        result = run_web_build(rom, args.out_dir, pycgfx_dir=args.pycgfx)
+        result = run_web_build(rom, args.out_dir, pycgfx_dir=args.pycgfx, followers_dir=args.followers)
     except (OSError, ValueError) as e:
         parser.exit(1, f"Build failed: {e}\n")
     print(f"{result['rom']['name']}:")
@@ -148,6 +177,8 @@ def main() -> int:
         print(f"  {name}")
     if result["banner_error"]:
         print(f"(no 3D banner: {result['banner_error']})")
+    if result["followers_error"]:
+        print(f"(no follower sprites: {result['followers_error']})")
     return 0
 
 

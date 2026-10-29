@@ -40,6 +40,17 @@ All offsets, sizes and counts fit in `u32`, so a v1 pack cannot exceed the
 by the builder to locate the extracted input. The reader can use file IDs
 for `FS_OpenFile`-style lookups and NARC access.
 
+## The port's own files
+
+Besides the ROM's NitroFS files, a pack may hold files the port adds, at IDs
+no NitroFS file has (the ROM's are below 0x10000):
+
+| ID | What | Made by |
+|---|---|---|
+| `0x10000000` | the follower Pokémon's sprites (HeartGold and SoulSilver's, downloaded and checked on the player's computer; optional) | `builder/followers.py` (layout in `make_bundle`), `pack.py --followers`, the web builder |
+
+A pack without them is complete: the game goes on without what they add.
+
 ## Compatibility checks
 
 Before serving any file, the 3DS runtime should:

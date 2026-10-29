@@ -36,6 +36,16 @@ the player's browser, from their own cartridge, with:
 - the Chakra Petch and Atkinson Hyperlegible fonts (SIL Open Font License,
   `web/fonts/`).
 
+**HeartGold and SoulSilver's follower sprites** (the Pokémon that walks
+behind the player, OPTIONS: FOLLOWER) are Nintendo, Game Freak and
+Creatures' work, not relicensed. They are never in this repository or a
+release: the web builder (in the player's browser) and `builder/followers.py`
+(on their computer) download them from
+[pret/pokeheartgold](https://github.com/pret/pokeheartgold) at the commit
+pinned in `builder/follower_sources.py`, check each file's size and SHA-256,
+and put them in the player's own data pack. That file holds only numbers:
+the commit, the files' sizes and digests, and which sprite each species uses.
+
 ## Rules for contributors
 
 - Never commit ROMs, extracted assets, save files or built game binaries.
