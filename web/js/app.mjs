@@ -3,8 +3,9 @@
 //
 // The release's files are in release/ next to this page (the site's deploy,
 // tools/build_site.py, puts the latest release's there). On this computer
-// only (localhost: the tests), ?release=URL/, ?pyodide=URL/ and ?pycgfx=URL/
-// point elsewhere; the published page ignores them.
+// only (localhost: the tests), ?release=URL/, ?pyodide=URL/, ?pycgfx=URL/
+// and ?followers=URL/ (the follower sprites, at their paths in
+// pokeheartgold) point elsewhere; the published page ignores them.
 import { STRINGS, pickLanguage, translate } from "./i18n.mjs";
 
 const params = new URLSearchParams(location.search);
@@ -175,6 +176,7 @@ async function startBuild() {
   worker.postMessage({
     type: "build", rom, wantCia: $("want-cia").checked,
     releaseUrl: new URL(RELEASE_URL, location.href).href, pyodideUrl, pycgfxUrl: testOption("pycgfx"),
+    followersUrl: testOption("followers"),
   }, [rom]);
 }
 

@@ -21,5 +21,18 @@ python3 tools/build_web_payload.py --synthetic --synthetic-rom build/web/made-up
     --smdh "$OUT/pokeplatinum.smdh" --cia-tools build/cia-tools-wasm --pycgfx build/pycgfx \
     --out build/web/test-release
 python3 tools/build_site.py --out build/web/test-site --release-dir build/web/test-release
+# The follower sprites (builder/followers.py: downloaded and checked here),
+# laid out at their paths in pokeheartgold for the page to fetch.
+python3 builder/followers.py -o build/web/followers.bin --cache build/web/follower-sprites
+python3 - <<'PY'
+import shutil, sys
+from pathlib import Path
+sys.path.insert(0, "builder")
+import follower_sources as s
+for n in range(len(s.FILES)):
+    dest = Path("build/web/followers-site") / s.SPRITE_PATH.format(s.FIRST_FILE + n)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(f"build/web/follower-sprites/{s.FIRST_FILE + n:08d}.NSBTX", dest)
+PY
 python3 tools/test_web_builder.py --site build/web/test-site --pyodide build/pyodide-core/pyodide \
-    --pycgfx build/pycgfx --rom build/web/made-up.nds --cia --banner flat
+    --pycgfx build/pycgfx --followers build/web/followers-site --rom build/web/made-up.nds --cia --banner flat

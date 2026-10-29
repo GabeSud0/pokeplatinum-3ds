@@ -47,10 +47,10 @@ def serve(root: Path):
     return server
 
 
-def expected_files(rom: bytes) -> dict[str, bytes]:
+def expected_files(rom: bytes, followers: Path | None = None) -> dict[str, bytes]:
     import web
     with tempfile.TemporaryDirectory() as tmp:
-        web.run_web_build(rom, tmp, verify=False)
+        web.run_web_build(rom, tmp, verify=False, followers_dir=str(followers) if followers else None)
         return {name: (Path(tmp) / name).read_bytes() for name in (web.PAK, web.MANIFEST)}
 
 
@@ -59,6 +59,9 @@ def main() -> int:
     ap.add_argument("--site", type=Path, required=True)
     ap.add_argument("--pyodide", type=Path, required=True, help="Pyodide's folder (tools/fetch_pyodide.sh)")
     ap.add_argument("--pycgfx", type=Path, help="pycgfx's folder (else the page fetches it from GitHub)")
+    ap.add_argument("--followers", type=Path,
+                    help="the follower sprites at their paths in pokeheartgold (else the page fetches them from GitHub,"
+                         " and the data pack isn't compared)")
     ap.add_argument("--rom", type=Path, required=True)
     ap.add_argument("--cia", action="store_true", help="also make the HOME Menu version")
     ap.add_argument("--banner", choices=("flat", "3d"), default="flat", help="the .cia's banner expected")
@@ -77,6 +80,9 @@ def main() -> int:
         if args.pycgfx:
             shutil.copytree(args.pycgfx, root / "pycgfx-test", ignore=shutil.ignore_patterns(".git"))
             query += "&pycgfx=/pycgfx-test/"
+        if args.followers:
+            shutil.copytree(args.followers, root / "followers-test")
+            query += "&followers=/followers-test/"
         server = serve(root)
         url = f"http://127.0.0.1:{server.server_address[1]}/{query}"
         release = root / "release"
@@ -117,7 +123,9 @@ def main() -> int:
             print(f"ZIP: {len(data):,} bytes: {sorted(n for n in names if not n.endswith('/'))}")
             if z.read("3ds/pokeplatinum.3dsx") != (release / "pokeplatinum.3dsx").read_bytes():
                 problems.append("the program isn't the release's")
-            for name, want in expected_files(args.rom.read_bytes()).items():
+            for name, want in expected_files(args.rom.read_bytes(), args.followers).items():
+                if not args.followers and name.endswith(".pak"):
+                    continue   # (the page's follower sprites, from GitHub: maybe not)
                 if name not in names or z.read(name) != want:
                     problems.append(f"{name} isn't what builder/web.py makes from the ROM")
             if args.cia:

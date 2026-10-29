@@ -1,6 +1,6 @@
 // The build, in a Web Worker so the page stays responsive. app.mjs sends:
 //
-//   { type: "build", rom: ArrayBuffer, wantCia, releaseUrl, pyodideUrl, pycgfxUrl }
+//   { type: "build", rom: ArrayBuffer, wantCia, releaseUrl, pyodideUrl, pycgfxUrl, followersUrl }
 //
 // and gets back { type: "progress", stage, fraction } as it goes, then
 // { type: "done", zip: Blob, fileName, banner, bannerWhy } or
@@ -104,7 +104,7 @@ function takeFile(FS, path) {
 }
 
 async function build(request) {
-  const { wantCia, releaseUrl, pyodideUrl, pycgfxUrl } = request;
+  const { wantCia, releaseUrl, pyodideUrl, pycgfxUrl, followersUrl } = request;
   let rom = request.rom;
   request.rom = null;              // (the ROM's only copy in this worker: freed once Python has it)
   progress("python");
@@ -189,7 +189,7 @@ del outer_manifest
         while (next < list.length) {
           const file = list[next++];
           if (!PAYLOAD_PATH.test(file.path)) throw new Error(`${file.path}: not a file name`);
-          const data = await download(manifest.followers.rawBase + file.path, "followers");
+          const data = await download((followersUrl || manifest.followers.rawBase) + file.path, "followers");
           if (data.length !== file.size || (await sha256(data)) !== file.sha256) {
             throw new Error(`${file.path} isn't the expected file`);
           }

@@ -28,9 +28,9 @@ the Underground, the Union Room and maps with features of their own; a
 64 x 64 one only outdoors. Not an egg, not fainted. Out behind the player
 when that tile is free, else on the player's tile hidden till they step
 off it (walking out of a door: it comes out after them). Back in its ball
-when not to be out, another Pokémon is first, it's left behind (a
-script walked the player more than 2 tiles), or the player jumps down a
-ledge (the follow code can't keep up with the jump): out again behind the
+when not to be out, another Pokémon is first, the game moves the player
+(a script's walk: out again when the player is theirs again), it's left
+behind (a warp within the map), or the player jumps down a ledge (the follow code can't keep up with the jump): out again behind the
 player where they stop. Its graphics IDs from 0x4000, past the berry
 trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000).
 ---
@@ -45,9 +45,9 @@ trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000).
  src/overlay005/options_panel.c |   3 +-
  src/overlay005/ov5_021ECC20.c  |   7 +
  src/overlay005/ov5_021ECE40.c  |  25 ++-
- src/port_follower.c            | 442 +++++++++++++++++++++++++++++++++++++++++
+ src/port_follower.c            | 455 +++++++++++++++++++++++++++++++++++++++++
  src/unk_020EDBAC.c             |   5 +-
- 13 files changed, 618 insertions(+), 5 deletions(-)
+ 13 files changed, 631 insertions(+), 5 deletions(-)
 
 diff --git a/include/constants/map_object.h b/include/constants/map_object.h
 index d692a8b6..7d4cb6d8 100644
@@ -469,10 +469,10 @@ index dbe4ac67..5bcc32cd 100644
  
 diff --git a/src/port_follower.c b/src/port_follower.c
 new file mode 100644
-index 00000000..cde14160
+index 00000000..6b8ef6e3
 --- /dev/null
 +++ b/src/port_follower.c
-@@ -0,0 +1,442 @@
+@@ -0,0 +1,455 @@
 +#include "port_follower.h"
 +
 +#include <nitro.h>
@@ -851,7 +851,7 @@ index 00000000..cde14160
 +
 +void PortFollower_Update(FieldSystem *fieldSystem)
 +{
-+    static int sWait;
++    static int sWait, sPlayerX, sPlayerZ;
 +    MapObject *mapObj, *player;
 +    int graphicsID = 0, x, z, dx, dz;
 +    BOOL big = FALSE, scripted;
@@ -882,24 +882,37 @@ index 00000000..cde14160
 +    z = PlayerAvatar_GetZPos(fieldSystem->playerAvatar);
 +
 +    if (mapObj != NULL) {
++        const char *why = NULL;
++
 +        dx = MapObject_GetX(mapObj) - x;
 +        dz = MapObject_GetZ(mapObj) - z;
 +
-+        // Back in its ball: not to be out, another Pokémon first, or left
-+        // behind (a script moved the player; a warp within the map).
-+        if (graphicsID != MapObject_GetGraphicsID(mapObj) || PortFollower_PlayerJumping(fieldSystem, player)
-+            || (!MapObject_IsMoving(mapObj) && !PortFollower_PlayerStepping(fieldSystem) && dx * dx + dz * dz > 1)) {
-+            if (!scripted || graphicsID != MapObject_GetGraphicsID(mapObj) || dx * dx + dz * dz > 4) {
-+                NitroPort_Log("[follower] in its ball (%s)", graphicsID != MapObject_GetGraphicsID(mapObj) ? (graphicsID ? "another Pokémon" : "not to be out")
-+                    : PortFollower_PlayerJumping(fieldSystem, player) ? "a ledge" : "left behind");
-+                PortFollower_Remove(fieldSystem, mapObj);
-+                mapObj = NULL;
-+                sWait = 8;
-+            }
++        // Back in its ball: not to be out, another Pokémon first, the game
++        // moving the player (a script's walk: it waits in its ball till the
++        // player is theirs again), a ledge, or left behind (a warp within
++        // the map).
++        if (graphicsID != MapObject_GetGraphicsID(mapObj)) {
++            why = graphicsID ? "another Pokémon" : "not to be out";
++        } else if (scripted && (x != sPlayerX || z != sPlayerZ)) {
++            why = "the game moves the player";
++        } else if (PortFollower_PlayerJumping(fieldSystem, player)) {
++            why = "a ledge";
++        } else if (!scripted && !MapObject_IsMoving(mapObj) && !PortFollower_PlayerStepping(fieldSystem) && dx * dx + dz * dz > 1) {
++            why = "left behind";
++        }
++
++        if (why != NULL) {
++            NitroPort_Log("[follower] in its ball (%s)", why);
++            PortFollower_Remove(fieldSystem, mapObj);
++            mapObj = NULL;
++            sWait = 8;
 +        } else if (MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE) && (dx != 0 || dz != 0)) {
 +            MapObject_SetHidden(mapObj, FALSE); // (the player stepped off its tile)
 +        }
 +    }
++
++    sPlayerX = x;
++    sPlayerZ = z;
 +
 +    // Out (not during a script's or a menu's task: when it ends).
 +    if (mapObj == NULL && graphicsID != 0 && !scripted && !PortFollower_PlayerStepping(fieldSystem)) {
