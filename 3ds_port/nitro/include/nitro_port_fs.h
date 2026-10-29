@@ -25,6 +25,10 @@ PakResult NitroPort_OpenPak(const char *pak_path, const char *manifest_path,
                             const char *expected_build_id);
 void NitroPort_ClosePak(void);
 BOOL NitroPort_IsPakOpen(void);
+/* The port's own files in the pack (docs/PAK_FORMAT.md): a size (0: none),
+ * and a read of [offset, offset + size). The game's thread. */
+uint32_t NitroPort_PakOwnFileSize(uint32_t id);
+BOOL NitroPort_PakOwnFileRead(uint32_t id, uint32_t offset, void *dest, uint32_t size);
 
 /* Called when the game asks for a path the pack doesn't have. Weak; the
  * default logs it. */

@@ -1214,6 +1214,29 @@ screens) the lower screen is the DS's, filling the screen as before.
     the party menu's Fly and Defog (Flash is a TM in Platinum).
   - AUTO-RUN: running unless B is held (once the player has the running
     shoes).
+  - FOLLOWER (patch 0056, `port_follower.c`; off by default): the party's
+    first Pokémon (not an egg, not fainted) walks behind the player, on
+    HeartGold and SoulSilver's sprites when the data pack has them
+    (`builder/followers.py` downloads them from pret/pokeheartgold at a
+    pinned commit, checks each file and lays each out as Platinum's
+    walking sprites: 16 textures, 4 a direction; shiny ones with their
+    palettes swapped), else on Platinum's own for the 24 it has (the
+    Amity Square Pokémon, the starters' lines, Machop, Croagunk, Shaymin,
+    Regigigas). A map object of its own (`MAP_OBJ_STATUS_PORT_FOLLOWER`,
+    local ID 0xF3), moving with the partner trainers' code under its own
+    movement type (scripts never take it for the partner): walked
+    through, kept across zone changes, never saved, not talked to. Its
+    graphics IDs (0x1000 + 2 x sprite + shiny) are answered by the
+    overworld sprites' lookups as Pikachu's (Regigigas's for 64 x 64),
+    their texture an archive member past the archive's own (`narc.c`).
+    Out while the player walks (in its ball on the bike, surfing, during
+    field moves, with Cheryl and the other partners or Amity Square's
+    Pokémon, in the Underground, the Union Room and maps with features of
+    their own; a 64 x 64 one indoors), behind the player or, where that
+    tile isn't free (out of a door), on the player's tile hidden till they
+    step off it. Back in its ball when a script walks the player more
+    than 2 tiles. A ledge: it waits above it and jumps it after the
+    player. The log says when it comes out and why it goes back.
   - ALWAYS CATCH (every ball catches), INSTANT VICTORY (the player's
     attacks knock the opponent out, Endure and a Focus Band or Sash no
     help; a Substitute still takes the hit), FAST EGGS (the day care's chance at

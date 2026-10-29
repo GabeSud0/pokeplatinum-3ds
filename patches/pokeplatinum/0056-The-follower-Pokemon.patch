@@ -1,0 +1,971 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 08:00:00 -0700
+Subject: [PATCH] The follower Pokémon (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+OPTIONS: ENHANCEMENTS: FOLLOWER (PORT_OPT_FOLLOWER, off by default): the
+party's first Pokémon walks behind the player (port_follower.c).
+
+Its sprite: HeartGold and SoulSilver's when the player's data pack has
+them (builder/followers.py: a port file at PORT_FOLLOWER_PAK_ID, each laid
+out as Platinum's walking sprites), else Platinum's own for the 24 it has.
+HeartGold's are graphics IDs of their own (PORT_FOLLOWER_GFX_FIRST + 2 *
+sprite + shiny): their texture a member of the overworld sprites' archive
+past its own (narc.c: PortFollower_NarcMember; the shiny one with its two
+palettes swapped), drawn as Pikachu is (Regigigas for 64 x 64) with
+Platinum's walk (ov5_021ECE40.c, ov5_021ECC20.c, map_object.c lookups).
+
+It is a map object (MAP_OBJ_STATUS_PORT_FOLLOWER, local ID 0xF3) moving
+with MOVEMENT_TYPE_FOLLOW_PLAYER's code under a movement type of its own
+(PORT_MOVEMENT_TYPE_FOLLOW_MON), so scripts never take it for the partner
+trainer: walked through, kept across zone changes, never saved, not
+talked to. Out when the player walks (not on the bike, surfing or using
+a field move), with no partner trainer or Amity Square's Pokémon, outside
+the Underground, the Union Room and maps with features of their own; a
+64 x 64 one only outdoors. Not an egg, not fainted. Out behind the player
+when that tile is free, else on the player's tile hidden till they step
+off it (walking out of a door: it comes out after them). Back in its ball
+when not to be out, another Pokémon is first, or it's left behind (a
+script walked the player more than 2 tiles). A ledge: it waits above it
+and jumps it after the player.
+---
+ include/constants/map_object.h |   2 +
+ include/port_follower.h        |  50 +++++
+ include/port_options.h         |   1 +
+ platinum.us/main.lsf           |   1 +
+ src/map_object.c               |  23 ++-
+ src/meson.build                |   1 +
+ src/narc.c                     |  64 ++++++
+ src/overlay005/fieldmap.c      |   2 +
+ src/overlay005/options_panel.c |   3 +-
+ src/overlay005/ov5_021ECC20.c  |   7 +
+ src/overlay005/ov5_021ECE40.c  |  25 ++-
+ src/port_follower.c            | 436 +++++++++++++++++++++++++++++++++++++++++
+ src/unk_02069BE0.c             |  21 ++
+ src/unk_020EDBAC.c             |   5 +-
+ 14 files changed, 636 insertions(+), 5 deletions(-)
+
+diff --git a/include/constants/map_object.h b/include/constants/map_object.h
+index d692a8b6..7d4cb6d8 100644
+--- a/include/constants/map_object.h
++++ b/include/constants/map_object.h
+@@ -46,6 +46,8 @@
+ // The 3DS's wider field: someone of a map beside the player's, shown where
+ // the DS's screen didn't reach (map_object.c, MapObject_PortIsNeighbour).
+ #define MAP_OBJ_STATUS_PORT_NEIGHBOUR (1 << 30)
++// The 3DS remaster's follower Pokémon (port_follower.h).
++#define MAP_OBJ_STATUS_PORT_FOLLOWER (1u << 31)
+ #endif
+ 
+ #define MAP_OBJ_UNK_A0_00 0
+diff --git a/include/port_follower.h b/include/port_follower.h
+new file mode 100644
+index 00000000..fe479c6d
+--- /dev/null
++++ b/include/port_follower.h
+@@ -0,0 +1,50 @@
++#ifndef POKEPLATINUM_PORT_FOLLOWER_H
++#define POKEPLATINUM_PORT_FOLLOWER_H
++
++#ifdef SDK_PORT_3DS
++#include "field/field_system_decl.h"
++#include "struct_decls/map_object.h"
++
++// The 3DS remaster's follower Pokémon (OPTIONS: ENHANCEMENTS: FOLLOWER):
++// the party's first Pokémon walks behind the player (port_follower.c).
++//
++// Its sprite is HeartGold and SoulSilver's when the player's data pack has
++// them (builder/followers.py; a port file at PORT_FOLLOWER_PAK_ID, each laid
++// out as Platinum's walking sprites), else Platinum's own for the few it has.
++// HeartGold's are graphics IDs of their own (PORT_FOLLOWER_GFX_FIRST + 2 *
++// sprite + shiny), their files members of the overworld sprites' archive
++// past its own (narc.c: PortFollower_NarcMember), drawn as Pikachu is (or
++// Regigigas: 64 x 64) with Platinum's walk.
++//
++// It's a map object of its own (MAP_OBJ_STATUS_PORT_FOLLOWER, local ID
++// PORT_FOLLOWER_LOCAL_ID) moving as the partner trainers do (Platinum's
++// MOVEMENT_TYPE_FOLLOW_PLAYER's code, its own movement type so scripts never
++// take it for the partner): walked through, never saved, not talked to.
++#define PORT_FOLLOWER_PAK_ID          0x10000000
++#define PORT_FOLLOWER_GFX_FIRST       0x1000
++#define PORT_FOLLOWER_GFX_COUNT       0x800
++#define PORT_FOLLOWER_NARC_FIRST      0x7000 // (no archive has this many members)
++#define PORT_FOLLOWER_LOCAL_ID        0xF3
++#define PORT_MOVEMENT_TYPE_FOLLOW_MON 0x44   // (Platinum's go to 0x43)
++
++BOOL PortFollower_IsGfx(int graphicsID);
++// The Platinum graphics ID whose renderer and details it borrows (Pikachu),
++// and whose model and walk (Pikachu's, or Regigigas's for 64 x 64 ones).
++int PortFollower_DetailsGfx(int graphicsID);
++int PortFollower_ModelGfx(int graphicsID);
++// Its texture's member of the overworld sprites' archive.
++u32 PortFollower_TextureMember(int graphicsID);
++// A member past an archive's own: its bytes (kept till the next call), or NULL.
++const void *PortFollower_NarcMember(u32 memberIndex, u32 *size);
++
++BOOL MapObject_PortIsFollower(const MapObject *mapObj);
++// (x0, z0) and (x1, z1) two tiles apart in a line with a ledge between
++// that jumps from the first to the second (it jumps after the player).
++BOOL PortFollower_IsLedgeBetween(FieldSystem *fieldSystem, int x0, int z0, int x1, int z1);
++BOOL PortFollower_IsLedge(FieldSystem *fieldSystem, int x, int z);
++// Every frame of the field (fieldmap.c): out, in its ball or swapped as the
++// party, the option and the field are.
++void PortFollower_Update(FieldSystem *fieldSystem);
++#endif
++
++#endif // POKEPLATINUM_PORT_FOLLOWER_H
+diff --git a/include/port_options.h b/include/port_options.h
+index 4a0ee601..e74732cb 100644
+--- a/include/port_options.h
++++ b/include/port_options.h
+@@ -21,6 +21,7 @@
+ #define PORT_OPT_SHINY           14 // 0 1/8192, 1 1/4096, 2 1/1024, 3 1/256, 4 1/64, 5 always
+ #define PORT_OPT_ITEM2           16 // (not on the page) the lower menu's second square's item
+ #define PORT_OPT_PIXEL_FIELD     17 // 0 off, 1 on: the field at the DS's pixel size (the whole 400 x 240)
++#define PORT_OPT_FOLLOWER        18 // 0 off, 1 on: the party's first Pokémon walks behind the player (port_follower.h)
+ 
+ int NitroPort_Option(int id);
+ void NitroPort_OptionSet(int id, int value);
+diff --git a/platinum.us/main.lsf b/platinum.us/main.lsf
+index e86a5643..efd447c9 100644
+--- a/platinum.us/main.lsf
++++ b/platinum.us/main.lsf
+@@ -32,6 +32,7 @@ Static main
+ 	Object main.nef.p/src_sys_task_extensions.c.o
+ 	Object main.nef.p/src_overlay_manager.c.o
+ 	Object main.nef.p/src_narc.c.o
++	Object main.nef.p/src_port_follower.c.o
+ 	Object main.nef.p/src_graphics.c.o
+ 	Object main.nef.p/src_pokemon_sprite.c.o
+ 	Object main.nef.p/src_sprite_util.c.o
+diff --git a/src/map_object.c b/src/map_object.c
+index 0ed40251..9e9226b7 100644
+--- a/src/map_object.c
++++ b/src/map_object.c
+@@ -25,6 +25,7 @@
+ #include "narc.h"
+ #ifdef SDK_PORT_3DS
+ #include "player_avatar.h"
++#include "port_follower.h"
+ #endif
+ #include "script_manager.h"
+ #include "sys_task.h"
+@@ -479,6 +480,10 @@ void MapObjectMan_SaveAll(FieldSystem *fieldSystem, const MapObjectManager *mapO
+         if (MapObject_PortIsNeighbour(mapObj)) {
+             continue; // (brought again from their map's events)
+         }
++
++        if (MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_PORT_FOLLOWER)) {
++            continue; // (the follower Pokémon: out again from the party, port_follower.c)
++        }
+ #endif
+         MapObject_Save(fieldSystem, mapObj, mapObjSave);
+         mapObjSave++;
+@@ -732,6 +737,9 @@ static void MapObjectMan_AddMoveTask(const MapObjectManager *mapObjMan, MapObjec
+     SysTask *task;
+ 
+     if (movementType == MOVEMENT_TYPE_FOLLOW_PLAYER
++#ifdef SDK_PORT_3DS
++        || movementType == PORT_MOVEMENT_TYPE_FOLLOW_MON
++#endif
+         || movementType == MOVEMENT_TYPE_FOLLOW_PARTNER_TRAINER) {
+         v0 += 2;
+     }
+@@ -892,6 +900,7 @@ MapObject *MapObjMan_LocalMapObjByIndex(const MapObjectManager *mapObjMan, int i
+         if (MapObject_CheckStatusFlag(mapObj, MAP_OBJ_STATUS_0) == TRUE && sub_02062E94(mapObj) == FALSE
+ #ifdef SDK_PORT_3DS
+             && !MapObject_PortIsNeighbour(mapObj)
++            && !MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_PORT_FOLLOWER)
+ #endif
+             && MapObject_GetLocalID(mapObj) == index) {
+             return mapObj;
+@@ -2411,7 +2420,11 @@ static int ObjectEvent_GetHiddenFlagNoScript(const ObjectEvent *objectEvent)
+ 
+ static const UnkStruct_020EDF0C *sub_0206320C(u32 param0)
+ {
++#ifdef SDK_PORT_3DS
++    GF_ASSERT(param0 <= PORT_MOVEMENT_TYPE_FOLLOW_MON);
++#else
+     GF_ASSERT(param0 < 0x44);
++#endif
+     return Unk_020EE3A8[param0];
+ }
+ 
+@@ -2459,6 +2472,10 @@ static const UnkStruct_ov5_021FB0F0 *sub_02063244(u32 param0)
+ {
+     const ObjectEventGfxRendererEntry *v0 = gObjectEventGfxRenderersTable;
+ 
++#ifdef SDK_PORT_3DS
++    param0 = PortFollower_DetailsGfx(param0); // (a follower Pokémon's: Pikachu's)
++#endif
++
+     do {
+         if (v0->graphicsID == param0) {
+             return v0->renderer;
+@@ -2702,14 +2719,16 @@ static MapObject *MapObjectMan_PortFurthestNeighbour(const MapObjectManager *map
+     return furthest;
+ }
+ 
+-// The object at (x, z), not one of the people beside (sub_0206326C).
++// The object at (x, z), not one of the people beside nor the follower
++// Pokémon (sub_0206326C).
+ MapObject *MapObjectMan_PortObjectAt(const MapObjectManager *mapObjMan, int x, int z)
+ {
+     int i = 0;
+     MapObject *mapObj;
+ 
+     while (MapObjectMan_FindObjectWithStatus(mapObjMan, &mapObj, &i, MAP_OBJ_STATUS_0) == TRUE) {
+-        if (!MapObject_PortIsNeighbour(mapObj) && MapObject_GetX(mapObj) == x && MapObject_GetZ(mapObj) == z) {
++        if (!MapObject_PortIsNeighbour(mapObj) && !MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_PORT_FOLLOWER)
++            && MapObject_GetX(mapObj) == x && MapObject_GetZ(mapObj) == z) {
+             return mapObj;
+         }
+     }
+diff --git a/src/meson.build b/src/meson.build
+index 7b865f0a..4199b7ef 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -12,6 +12,7 @@ pokeplatinum_c = files(
+     'map_header.c',
+     'move_table.c',
+     'narc.c',
++    'port_follower.c',
+     'party.c',
+     'poffin.c',
+     'string_gf.c',
+diff --git a/src/narc.c b/src/narc.c
+index 83a3d793..50078ddb 100644
+--- a/src/narc.c
++++ b/src/narc.c
+@@ -4,6 +4,9 @@
+ #include <string.h>
+ 
+ #include "heap.h"
++#ifdef SDK_PORT_3DS
++#include "port_follower.h"
++#endif
+ 
+ // Mapping of NARC indices to filesystem paths.
+ static const char *sNarcPaths[] = {
+@@ -426,6 +429,28 @@ void *NARC_AllocAndReadWholeMember(NARC *narc, u32 memberIndex, enum HeapID heap
+     u32 fileEnd;
+     void *dest;
+ 
++#ifdef SDK_PORT_3DS
++    if (memberIndex >= narc->numFiles) {
++        // (the port's own members: the follower Pokémon's sprites, port_follower.h)
++        u32 size = 0;
++        const void *own = PortFollower_NarcMember(memberIndex, &size);
++
++        GF_ASSERT(own != NULL);
++
++        if (own == NULL) {
++            return NULL;
++        }
++
++        dest = Heap_Alloc(heapID, size);
++
++        if (dest != NULL) {
++            memcpy(dest, own, size);
++        }
++
++        return dest;
++    }
++#endif
++
+     GF_ASSERT(narc->numFiles > memberIndex);
+ 
+     FS_SeekFile(&narc->file, narc->fatbStart + 12 + memberIndex * 8, FS_SEEK_SET);
+@@ -447,6 +472,21 @@ void NARC_ReadWholeMember(NARC *narc, u32 memberIndex, void *dest)
+     u32 fileStart;
+     u32 fileEnd;
+ 
++#ifdef SDK_PORT_3DS
++    if (memberIndex >= narc->numFiles) {
++        u32 size = 0;
++        const void *own = PortFollower_NarcMember(memberIndex, &size);
++
++        GF_ASSERT(own != NULL);
++
++        if (own != NULL) {
++            memcpy(dest, own, size);
++        }
++
++        return;
++    }
++#endif
++
+     GF_ASSERT(narc->numFiles > memberIndex);
+ 
+     FS_SeekFile(&narc->file, narc->fatbStart + 12 + memberIndex * 8, FS_SEEK_SET);
+@@ -461,6 +501,15 @@ u32 NARC_GetMemberSize(NARC *narc, u32 memberIndex)
+     u32 fileStart;
+     u32 fileEnd;
+ 
++#ifdef SDK_PORT_3DS
++    if (memberIndex >= narc->numFiles) {
++        u32 size = 0;
++
++        GF_ASSERT(PortFollower_NarcMember(memberIndex, &size) != NULL);
++        return size;
++    }
++#endif
++
+     GF_ASSERT(narc->numFiles > memberIndex);
+ 
+     FS_SeekFile(&narc->file, narc->fatbStart + 12 + memberIndex * 8, FS_SEEK_SET);
+@@ -474,6 +523,21 @@ void NARC_ReadFromMember(NARC *narc, u32 memberIndex, u32 offset, u32 bytesToRea
+ {
+     u32 fileStart;
+ 
++#ifdef SDK_PORT_3DS
++    if (memberIndex >= narc->numFiles) {
++        u32 size = 0;
++        const void *own = PortFollower_NarcMember(memberIndex, &size);
++
++        GF_ASSERT(own != NULL && offset + bytesToRead <= size);
++
++        if (own != NULL && offset + bytesToRead <= size) {
++            memcpy(dest, (const u8 *)own + offset, bytesToRead);
++        }
++
++        return;
++    }
++#endif
++
+     GF_ASSERT(narc->numFiles > memberIndex);
+ 
+     FS_SeekFile(&narc->file, narc->fatbStart + 12 + memberIndex * 8, FS_SEEK_SET);
+diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
+index 06580163..39566381 100644
+--- a/src/overlay005/fieldmap.c
++++ b/src/overlay005/fieldmap.c
+@@ -88,6 +88,7 @@
+ #include "generated/map_headers.h"
+ #include "generated/movement_types.h"
+ 
++#include "port_follower.h"
+ #include "save_player.h"
+ #include "trainer_info.h"
+ #include "vars_flags.h"
+@@ -292,6 +293,7 @@ static BOOL FieldMap_Main(ApplicationManager *appMan, int *param1)
+ 
+ #ifdef SDK_PORT_3DS
+     FieldMap_PortNeighbours(fieldSystem);
++    PortFollower_Update(fieldSystem);
+ #endif
+ 
+     ov5_021D134C(fieldSystem, fieldSystem->unk_C0);
+diff --git a/src/overlay005/options_panel.c b/src/overlay005/options_panel.c
+index 73151f06..a7f7ab29 100644
+--- a/src/overlay005/options_panel.c
++++ b/src/overlay005/options_panel.c
+@@ -183,6 +183,7 @@ static const OptionsCard sEnhancementCards[] = {
+     { "TRADE EVO AT 40", 0, OPK_PORT, PORT_OPT_TRADE_EVO },
+     { "HMs WITHOUT MOVES", 0, OPK_PORT, PORT_OPT_HM_FREE },
+     { "AUTO-RUN", 0, OPK_PORT, PORT_OPT_AUTO_RUN },
++    { "FOLLOWER", 0, OPK_PORT, PORT_OPT_FOLLOWER },
+ };
+ 
+ static const OptionsCard sCheatCards[] = {
+@@ -205,7 +206,7 @@ static const OptionsCard sGiveCards[] = {
+ 
+ static const OptionsPageDef sOptionsPages[OP_PAGE_COUNT] = {
+     [OP_PAGE_SETTINGS] = { "SETTINGS", sSettingsCards, 6, NELEMS(sSettingsCards) },
+-    [OP_PAGE_ENHANCEMENTS] = { "ENHANCEMENTS", sEnhancementCards, 3, NELEMS(sEnhancementCards) },
++    [OP_PAGE_ENHANCEMENTS] = { "ENHANCEMENTS", sEnhancementCards, 4, NELEMS(sEnhancementCards) },
+     [OP_PAGE_CHEATS] = { "CHEATS 1/2", sCheatCards, 4, NELEMS(sCheatCards) },
+     [OP_PAGE_GIVE] = { "CHEATS 2/2", sGiveCards, 5, NELEMS(sGiveCards) },
+ };
+diff --git a/src/overlay005/ov5_021ECC20.c b/src/overlay005/ov5_021ECC20.c
+index 9de78103..9f907c55 100644
+--- a/src/overlay005/ov5_021ECC20.c
++++ b/src/overlay005/ov5_021ECC20.c
+@@ -13,6 +13,9 @@
+ #include "heap.h"
+ #include "map_object.h"
+ #include "narc.h"
++#ifdef SDK_PORT_3DS
++#include "port_follower.h"
++#endif
+ 
+ static void ov5_021ECCA4(MapObjectManager *param0);
+ static void ov5_021ECCBC(MapObjectManager *param0);
+@@ -87,6 +90,10 @@ static const ObjectEventGfxRenderDetailsEntry *ov5_021ECD10(int param0)
+ {
+     const ObjectEventGfxRenderDetailsEntry *v0 = gObjectEventGfxRenderDetailsTable;
+ 
++#ifdef SDK_PORT_3DS
++    param0 = PortFollower_DetailsGfx(param0); // (a follower Pokémon's: Pikachu's)
++#endif
++
+     do {
+         if (v0->graphicsID == param0) {
+             return v0;
+diff --git a/src/overlay005/ov5_021ECE40.c b/src/overlay005/ov5_021ECE40.c
+index dbe4ac67..5bcc32cd 100644
+--- a/src/overlay005/ov5_021ECE40.c
++++ b/src/overlay005/ov5_021ECE40.c
+@@ -33,6 +33,9 @@
+ #include "resource_collection.h"
+ #include "sys_task.h"
+ #include "sys_task_manager.h"
++#ifdef SDK_PORT_3DS
++#include "port_follower.h"
++#endif
+ 
+ typedef enum {
+     UnkEnum_ov5_021ED334_00 = 0,
+@@ -506,6 +509,17 @@ static void ov5_021ED2AC(UnkStruct_ov5_021ED0A4 *param0)
+ 
+ static const ObjectEventGfxFileEntry *ov5_021ED2D0(int param0, int param1, const ObjectEventGfxFileEntry *param2)
+ {
++#ifdef SDK_PORT_3DS
++    if (param2 == gObjectEventGfxTexturesTable && PortFollower_IsGfx(param0)) {
++        // (a follower Pokémon's sprite: port_follower.h)
++        static ObjectEventGfxFileEntry sFollower;
++
++        sFollower.id = param0;
++        sFollower.narcIdx = PortFollower_TextureMember(param0);
++        return &sFollower;
++    }
++#endif
++
+     do {
+         if (param2->id == param0) {
+             return param2;
+@@ -1293,6 +1307,10 @@ static const ObjectEventGfxModelAnimEntry *ov5_021EDD04(int param0)
+ {
+     const ObjectEventGfxModelAnimEntry *v0 = gObjectEventGfxModelAnimsTable;
+ 
++#ifdef SDK_PORT_3DS
++    param0 = PortFollower_ModelGfx(param0); // (a follower Pokémon's: Pikachu's model and walk, or Regigigas's)
++#endif
++
+     do {
+         if (v0->graphicsID == param0) {
+             return v0;
+@@ -1931,6 +1949,11 @@ static Billboard *ov5_021EE454(MapObject *param0, int param1, UnkFuncPtr_ov5_021
+         v3 = v2;
+         v7 = gObjectEventGfxTexturesTable;
+ 
++#ifdef SDK_PORT_3DS
++        if (PortFollower_IsGfx(v3)) {
++            v7 = ov5_021ED2D0(v3, 0xffff, gObjectEventGfxTexturesTable);
++        } else
++#endif
+         do {
+             if (v7->id == v3) {
+                 break;
+@@ -2088,7 +2111,7 @@ BOOL MapObjectGfx_PortHasRoom(const MapObjectManager *mapObjMan, int graphicsID)
+         }
+     }
+ 
+-    while (details->graphicsID != 0xffff && details->graphicsID != graphicsID) {
++    while (details->graphicsID != 0xffff && details->graphicsID != PortFollower_DetailsGfx(graphicsID)) {
+         details++;
+     }
+ 
+diff --git a/src/port_follower.c b/src/port_follower.c
+new file mode 100644
+index 00000000..0696e369
+--- /dev/null
++++ b/src/port_follower.c
+@@ -0,0 +1,436 @@
++#include "port_follower.h"
++
++#include <nitro.h>
++#include <string.h>
++
++#include "constants/field/dynamic_map_features.h"
++#include "constants/map_object.h"
++#include "constants/player_avatar.h"
++#include "generated/genders.h"
++#include "generated/map_headers.h"
++#include "generated/movement_types.h"
++#include "generated/object_events_gfx.h"
++#include "generated/pokemon_data_params.h"
++#include "generated/species.h"
++
++#include "field/field_system.h"
++#include "overlay005/ov5_021ECE40.h"
++
++#include "field_task.h"
++#include "map_header.h"
++#include "map_object.h"
++#include "map_object_move.h"
++#include "party.h"
++#include "persisted_map_features.h"
++#include "player_avatar.h"
++#include "pokemon.h"
++#include "port_options.h"
++#include "savedata_misc.h"
++#include "map_tile_behavior.h"
++#include "system_flags.h"
++#include "terrain_collision_manager.h"
++#include "vars_flags.h"
++
++// The port's own files in the data pack (port_fs.c).
++extern u32 NitroPort_PakOwnFileSize(u32 id);
++extern BOOL NitroPort_PakOwnFileRead(u32 id, u32 offset, void *dest, u32 size);
++extern void NitroPort_Log(const char *fmt, ...);
++
++// The data pack's follower file (builder/followers.py, make_bundle):
++// 'PFOL', u16 version, u16 species, u32 sprites, u32 0; species x {u16
++// first sprite, u8 forms after it, u8 females' own}; sprites x {u32 offset,
++// u32 size, u8 width, u8 height, u16 0}; the sprites (NSBTX, Platinum's
++// walking sprites' layout: 16 textures; palettes normal, shiny).
++#define BUNDLE_VERSION   1
++#define BUNDLE_SPECIES   493
++#define BUNDLE_SPRITES   (PORT_FOLLOWER_GFX_COUNT / 2)
++#define SPRITE_BYTES_MAX (16 + 4 + 0x3C + 0x400 + 0x80 + 64 * 64 / 2 * 8 + 64)
++
++typedef struct BundleSpecies {
++    u16 first;
++    u8 forms;
++    u8 female;
++} BundleSpecies;
++
++typedef struct BundleSprite {
++    u32 offset;
++    u32 size;
++    u8 width;
++    u8 height;
++    u16 pad;
++} BundleSprite;
++
++static int sBundleState; // 0 not looked for, 1 there, -1 none
++static u32 sBundleSprites;
++static BundleSpecies sSpecies[BUNDLE_SPECIES];
++static BundleSprite sSprites[BUNDLE_SPRITES];
++static u32 sMemberCached = 0xffffffff; // (PortFollower_NarcMember's)
++static u32 sMemberSize;
++static u32 sMember[SPRITE_BYTES_MAX / 4];
++
++static BOOL Bundle_Ready(void)
++{
++    u32 head[4];
++
++    if (sBundleState != 0) {
++        return sBundleState > 0;
++    }
++
++    sBundleState = -1;
++
++    if (NitroPort_PakOwnFileSize(PORT_FOLLOWER_PAK_ID) < sizeof(head)
++        || !NitroPort_PakOwnFileRead(PORT_FOLLOWER_PAK_ID, 0, head, sizeof(head))) {
++        NitroPort_Log("[follower] no HeartGold/SoulSilver sprites in the data pack: Platinum's own only");
++        return FALSE;
++    }
++
++    if (memcmp(head, "PFOL", 4) != 0 || (head[1] & 0xffff) != BUNDLE_VERSION || (head[1] >> 16) != BUNDLE_SPECIES
++        || head[2] == 0 || head[2] > BUNDLE_SPRITES) {
++        NitroPort_Log("[follower] the data pack's follower sprites aren't this version's: rebuild the data pack");
++        return FALSE;
++    }
++
++    sBundleSprites = head[2];
++
++    if (!NitroPort_PakOwnFileRead(PORT_FOLLOWER_PAK_ID, 16, sSpecies, sizeof(sSpecies))
++        || !NitroPort_PakOwnFileRead(PORT_FOLLOWER_PAK_ID, 16 + sizeof(sSpecies), sSprites, sizeof(BundleSprite) * sBundleSprites)) {
++        return FALSE;
++    }
++
++    sBundleState = 1;
++    NitroPort_Log("[follower] %u HeartGold/SoulSilver sprites", (unsigned)sBundleSprites);
++    return TRUE;
++}
++
++BOOL PortFollower_IsGfx(int graphicsID)
++{
++    return graphicsID >= PORT_FOLLOWER_GFX_FIRST && graphicsID < PORT_FOLLOWER_GFX_FIRST + PORT_FOLLOWER_GFX_COUNT;
++}
++
++static u32 PortFollower_Sprite(int graphicsID)
++{
++    return (u32)(graphicsID - PORT_FOLLOWER_GFX_FIRST) / 2;
++}
++
++static BOOL PortFollower_IsBig(int graphicsID)
++{
++    u32 sprite = PortFollower_Sprite(graphicsID);
++    return Bundle_Ready() && sprite < sBundleSprites && sSprites[sprite].width > 32;
++}
++
++int PortFollower_DetailsGfx(int graphicsID)
++{
++    return PortFollower_IsGfx(graphicsID) ? OBJ_EVENT_GFX_PIKACHU : graphicsID;
++}
++
++int PortFollower_ModelGfx(int graphicsID)
++{
++    if (!PortFollower_IsGfx(graphicsID)) {
++        return graphicsID;
++    }
++
++    return PortFollower_IsBig(graphicsID) ? OBJ_EVENT_GFX_REGIGIGAS : OBJ_EVENT_GFX_PIKACHU;
++}
++
++u32 PortFollower_TextureMember(int graphicsID)
++{
++    return PORT_FOLLOWER_NARC_FIRST + (u32)(graphicsID - PORT_FOLLOWER_GFX_FIRST);
++}
++
++const void *PortFollower_NarcMember(u32 memberIndex, u32 *size)
++{
++    u32 n = memberIndex - PORT_FOLLOWER_NARC_FIRST, sprite = n / 2;
++    const BundleSprite *s;
++
++    if (memberIndex < PORT_FOLLOWER_NARC_FIRST || n >= PORT_FOLLOWER_GFX_COUNT || !Bundle_Ready() || sprite >= sBundleSprites) {
++        return NULL;
++    }
++
++    if (sMemberCached != memberIndex) {
++        s = &sSprites[sprite];
++
++        if (s->size > sizeof(sMember) || !NitroPort_PakOwnFileRead(PORT_FOLLOWER_PAK_ID, s->offset, sMember, s->size)) {
++            return NULL;
++        }
++
++        sMemberSize = s->size;
++        sMemberCached = memberIndex;
++
++        if (n & 1) {
++            // Shiny: its two palettes' entries swapped, so the walk (which
++            // shows palette 0) shows the shiny one.
++            u8 *data = (u8 *)sMember;
++            u32 tex = *(u32 *)(data + 16);
++            u32 dict = tex + *(u32 *)(data + tex + 0x34);
++
++            if (data[dict + 1] == 2) {
++                u8 *entry = data + dict + 8 + 4 * 3 + 4;
++                u32 first;
++
++                memcpy(&first, entry, 4);
++                memcpy(entry, entry + 4, 4);
++                memcpy(entry + 4, &first, 4);
++            }
++        }
++    }
++
++    *size = sMemberSize;
++    return sMember;
++}
++
++// Platinum's own walking sprites of Pokémon, for a data pack without
++// HeartGold's (the rest stay in their balls).
++static const struct {
++    u16 species;
++    u16 graphicsID;
++} sPlatinumSprites[] = {
++    { SPECIES_PIKACHU, OBJ_EVENT_GFX_PIKACHU },
++    { SPECIES_CLEFAIRY, OBJ_EVENT_GFX_CLEFAIRY },
++    { SPECIES_JIGGLYPUFF, OBJ_EVENT_GFX_JIGGLYPUFF },
++    { SPECIES_PSYDUCK, OBJ_EVENT_GFX_PSYDUCK },
++    { SPECIES_MACHOP, OBJ_EVENT_GFX_MACHOP },
++    { SPECIES_TORCHIC, OBJ_EVENT_GFX_TORCHIC },
++    { SPECIES_SHROOMISH, OBJ_EVENT_GFX_SHROOMISH },
++    { SPECIES_SKITTY, OBJ_EVENT_GFX_SKITTY },
++    { SPECIES_TURTWIG, OBJ_EVENT_GFX_TURTWIG },
++    { SPECIES_GROTLE, OBJ_EVENT_GFX_GROTLE },
++    { SPECIES_TORTERRA, OBJ_EVENT_GFX_TORTERRA },
++    { SPECIES_CHIMCHAR, OBJ_EVENT_GFX_CHIMCHAR },
++    { SPECIES_MONFERNO, OBJ_EVENT_GFX_MONFERNO },
++    { SPECIES_INFERNAPE, OBJ_EVENT_GFX_INFERNAPE },
++    { SPECIES_PIPLUP, OBJ_EVENT_GFX_PIPLUP },
++    { SPECIES_PRINPLUP, OBJ_EVENT_GFX_PRINPLUP },
++    { SPECIES_EMPOLEON, OBJ_EVENT_GFX_EMPOLEON },
++    { SPECIES_PACHIRISU, OBJ_EVENT_GFX_PACHIRISU },
++    { SPECIES_DRIFLOON, OBJ_EVENT_GFX_DRIFLOON },
++    { SPECIES_BUNEARY, OBJ_EVENT_GFX_BUNEARY },
++    { SPECIES_HAPPINY, OBJ_EVENT_GFX_HAPPINY },
++    { SPECIES_CROAGUNK, OBJ_EVENT_GFX_CROAGUNK },
++    { SPECIES_REGIGIGAS, OBJ_EVENT_GFX_REGIGIGAS },
++    { SPECIES_SHAYMIN, OBJ_EVENT_GFX_SHAYMIN },
++};
++
++// The party's first Pokémon's graphics ID, or 0: none (an egg, fainted,
++// or no sprite for it). HeartGold's way (FollowMon_GetSpriteID): a female
++// has her own sprite where the species does, else the form's.
++static int PortFollower_PartyGfx(FieldSystem *fieldSystem, BOOL *big)
++{
++    Party *party = SaveData_GetParty(fieldSystem->saveData);
++    Pokemon *mon;
++    int species, form, i;
++
++    *big = FALSE;
++
++    if (party == NULL || Party_GetCurrentCount(party) == 0) {
++        return 0;
++    }
++
++    mon = Party_GetPokemonBySlotIndex(party, 0);
++
++    if (Pokemon_GetValue(mon, MON_DATA_IS_EGG, NULL) || Pokemon_GetValue(mon, MON_DATA_HP, NULL) == 0) {
++        return 0;
++    }
++
++    species = Pokemon_GetValue(mon, MON_DATA_SPECIES, NULL);
++    form = Pokemon_GetValue(mon, MON_DATA_FORM, NULL);
++
++    if (species < 1 || species > BUNDLE_SPECIES) {
++        return 0;
++    }
++
++    if (Bundle_Ready()) {
++        const BundleSpecies *s = &sSpecies[species - 1];
++        u32 sprite = s->first;
++
++        if (s->female) {
++            sprite += Pokemon_GetGender(mon) == GENDER_FEMALE;
++        } else if (form <= s->forms) {
++            sprite += form;
++        }
++
++        if (sprite >= sBundleSprites) {
++            return 0;
++        }
++
++        *big = sSprites[sprite].width > 32;
++        return PORT_FOLLOWER_GFX_FIRST + 2 * sprite + (Pokemon_IsShiny(mon) ? 1 : 0);
++    }
++
++    for (i = 0; i < (int)NELEMS(sPlatinumSprites); i++) {
++        if (sPlatinumSprites[i].species == species) {
++            *big = species == SPECIES_REGIGIGAS;
++            return sPlatinumSprites[i].graphicsID;
++        }
++    }
++
++    return 0;
++}
++
++BOOL MapObject_PortIsFollower(const MapObject *mapObj)
++{
++    return MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_PORT_FOLLOWER) != 0;
++}
++
++BOOL PortFollower_IsLedge(FieldSystem *fieldSystem, int x, int z)
++{
++    u8 behavior = TerrainCollisionManager_GetTileBehavior(fieldSystem, x, z);
++
++    return TileBehavior_IsJumpSouth(behavior) || TileBehavior_IsJumpNorth(behavior)
++        || TileBehavior_IsJumpEast(behavior) || TileBehavior_IsJumpWest(behavior);
++}
++
++BOOL PortFollower_IsLedgeBetween(FieldSystem *fieldSystem, int x0, int z0, int x1, int z1)
++{
++    int dx = x1 - x0, dz = z1 - z0;
++    u8 behavior;
++
++    if (!((dx == 0 && (dz == 2 || dz == -2)) || (dz == 0 && (dx == 2 || dx == -2)))) {
++        return FALSE;
++    }
++
++    behavior = TerrainCollisionManager_GetTileBehavior(fieldSystem, x0 + dx / 2, z0 + dz / 2);
++
++    return (dz > 0 && TileBehavior_IsJumpSouth(behavior)) || (dz < 0 && TileBehavior_IsJumpNorth(behavior))
++        || (dx > 0 && TileBehavior_IsJumpEast(behavior)) || (dx < 0 && TileBehavior_IsJumpWest(behavior));
++}
++
++static MapObject *PortFollower_Find(const MapObjectManager *mapObjMan)
++{
++    int i = 0;
++    MapObject *mapObj;
++
++    while (MapObjectMan_FindObjectWithStatus(mapObjMan, &mapObj, &i, MAP_OBJ_STATUS_0) == TRUE) {
++        if (MapObject_PortIsFollower(mapObj)) {
++            return mapObj;
++        }
++    }
++
++    return NULL;
++}
++
++// Where it may be out: walking (not on the bike, surfing or using a field
++// move), with no partner trainer or Amity Square's Pokémon following, not
++// in the Underground, the Union Room or a map with features of its own (the
++// Distortion World, the gyms' puzzles); one 64 x 64 only outdoors.
++static BOOL PortFollower_MayBeOut(FieldSystem *fieldSystem, BOOL big)
++{
++    enum MapHeaderID here = fieldSystem->location->mapHeaderID;
++
++    if (PlayerAvatar_GetPlayerState(fieldSystem->playerAvatar) != PLAYER_AVATAR_WALKING
++        || SystemFlag_CheckHasPartner(SaveData_GetVarsFlags(fieldSystem->saveData))
++        || MapObjMan_GetLocalMapObjByMovementType(fieldSystem->mapObjMan, MOVEMENT_TYPE_FOLLOW_PLAYER) != NULL
++        || here == MAP_HEADER_UNDERGROUND || MapHeader_IsUnionRoom(here)
++        || PersistedMapFeatures_GetID(MiscSaveBlock_GetPersistedMapFeatures(fieldSystem->saveData)) != DYNAMIC_MAP_FEATURES_NONE) {
++        return FALSE;
++    }
++
++    return !big || MapHeader_IsOutdoors(here);
++}
++
++static void PortFollower_Remove(FieldSystem *fieldSystem, MapObject *mapObj)
++{
++    MapObject_Delete(mapObj);
++    ov5_021EDA38(fieldSystem->mapObjMan, sub_0206285C(fieldSystem->mapObjMan));
++}
++
++// Out behind the player when the tile behind is free, else on the player's
++// tile, hidden till the player steps off it (walking out of a door: it
++// comes out after them).
++static MapObject *PortFollower_Add(FieldSystem *fieldSystem, int graphicsID)
++{
++    MapObject *player = PlayerAvatar_GetMapObject(fieldSystem->playerAvatar);
++    int x = PlayerAvatar_GetXPos(fieldSystem->playerAvatar);
++    int z = PlayerAvatar_GetZPos(fieldSystem->playerAvatar);
++    int dir = PlayerAvatar_GetFacingDir(fieldSystem->playerAvatar);
++    int back = dir == DIR_NORTH ? DIR_SOUTH : dir == DIR_SOUTH ? DIR_NORTH : dir == DIR_WEST ? DIR_EAST : DIR_WEST;
++    int bx = x + MapObject_GetDxFromDir(back), bz = z + MapObject_GetDzFromDir(back);
++    BOOL behind = sub_02063E94(player, bx, MapObject_GetY(player), bz, back) == MAP_OBJ_COLLISION_NONE;
++    MapObject *mapObj;
++
++    mapObj = MapObjectMan_AddMapObject(fieldSystem->mapObjMan, behind ? bx : x, behind ? bz : z, dir, graphicsID,
++        PORT_MOVEMENT_TYPE_FOLLOW_MON, fieldSystem->location->mapHeaderID);
++
++    if (mapObj == NULL) {
++        return NULL;
++    }
++
++    MapObject_SetLocalID(mapObj, PORT_FOLLOWER_LOCAL_ID);
++    MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_PORT_FOLLOWER | MAP_OBJ_STATUS_PERSISTENT);
++
++    if (MapObject_CheckStatus(player, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE)) {
++        MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE);
++    }
++
++    if (!behind) {
++        MapObject_SetHidden(mapObj, TRUE);
++    }
++
++    return mapObj;
++}
++
++void PortFollower_Update(FieldSystem *fieldSystem)
++{
++    static int sWait;
++    MapObject *mapObj, *player;
++    int graphicsID = 0, x, z, dx, dz;
++    BOOL big = FALSE, scripted;
++
++    if (fieldSystem == NULL || fieldSystem->mapObjMan == NULL || fieldSystem->playerAvatar == NULL
++        || fieldSystem->location == NULL || fieldSystem->saveData == NULL) {
++        return;
++    }
++
++    player = PlayerAvatar_GetMapObject(fieldSystem->playerAvatar);
++    mapObj = PortFollower_Find(fieldSystem->mapObjMan);
++
++    if (player == NULL) {
++        return;
++    }
++
++    scripted = FieldSystem_IsRunningTask(fieldSystem);
++
++    if (PortOption_On(PORT_OPT_FOLLOWER)) {
++        graphicsID = PortFollower_PartyGfx(fieldSystem, &big);
++
++        if (graphicsID != 0 && !PortFollower_MayBeOut(fieldSystem, big)) {
++            graphicsID = 0;
++        }
++    }
++
++    x = PlayerAvatar_GetXPos(fieldSystem->playerAvatar);
++    z = PlayerAvatar_GetZPos(fieldSystem->playerAvatar);
++
++    if (mapObj != NULL) {
++        dx = MapObject_GetX(mapObj) - x;
++        dz = MapObject_GetZ(mapObj) - z;
++
++        // Back in its ball: not to be out, another Pokémon first, or left
++        // behind (a script moved the player; a warp within the map).
++        if (graphicsID != MapObject_GetGraphicsID(mapObj)
++            || (!MapObject_IsMoving(mapObj) && !MapObject_IsMoving(player) && dx * dx + dz * dz > 1
++                && !PortFollower_IsLedgeBetween(fieldSystem, x + dx, z + dz, x, z))) {
++            if (!scripted || graphicsID != MapObject_GetGraphicsID(mapObj) || dx * dx + dz * dz > 4) {
++                NitroPort_Log("[follower] in its ball (%s)", graphicsID != MapObject_GetGraphicsID(mapObj) ? (graphicsID ? "another Pokémon" : "not to be out") : "left behind");
++                PortFollower_Remove(fieldSystem, mapObj);
++                mapObj = NULL;
++                sWait = 8;
++            }
++        } else if (MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE) && (dx != 0 || dz != 0)) {
++            MapObject_SetHidden(mapObj, FALSE); // (the player stepped off its tile)
++        }
++    }
++
++    // Out (not during a script's or a menu's task: when it ends).
++    if (mapObj == NULL && graphicsID != 0 && !scripted && !MapObject_IsMoving(player)) {
++        if (sWait > 0) {
++            sWait--;
++        } else if (MapObjectMan_PortFreeSlots(fieldSystem->mapObjMan) > 1
++            && (!PortFollower_IsGfx(graphicsID) || Bundle_Ready()) && MapObjectGfx_PortHasRoom(fieldSystem->mapObjMan, graphicsID)) {
++            mapObj = PortFollower_Add(fieldSystem, graphicsID);
++            NitroPort_Log("[follower] out: graphics %d at %d,%d%s", graphicsID, mapObj ? MapObject_GetX(mapObj) : -1,
++                mapObj ? MapObject_GetZ(mapObj) : -1, mapObj && MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE) ? " (hidden till the player moves)" : "");
++        } else {
++            sWait = 4;
++        }
++    }
++}
+diff --git a/src/unk_02069BE0.c b/src/unk_02069BE0.c
+index 437a7e17..57284b98 100644
+--- a/src/unk_02069BE0.c
++++ b/src/unk_02069BE0.c
+@@ -17,6 +17,9 @@
+ #include "map_tile_behavior.h"
+ #include "overworld_anim_manager.h"
+ #include "player_avatar.h"
++#ifdef SDK_PORT_3DS
++#include "port_follower.h"
++#endif
+ #include "terrain_collision_manager.h"
+ #include "trainer_encounter.h"
+ #include "unk_020655F4.h"
+@@ -236,6 +239,24 @@ static int sub_02069D8C(MapObject *mapObj)
+         u32 v6 = sub_02069D50(mapObj);
+         int dir = GetDirectionBetweenPoints(xCur, zCur, xPrev, zPrev);
+ 
++#ifdef SDK_PORT_3DS
++        // (the follower Pokémon, port_follower.h: the player's ledge jump
++        // walked to where it began, and the ledge jumped after them)
++        if (MapObject_GetMovementType(mapObj) == PORT_MOVEMENT_TYPE_FOLLOW_MON) {
++            if (PortFollower_IsLedge(fieldSystem, xPrev, zPrev)) {
++                return 0; // (not onto the ledge: it waits above it)
++            }
++
++            if (v6 >= MOVEMENT_ACTION_JUMP_FAR_NORTH && v6 <= MOVEMENT_ACTION_JUMP_FAR_EAST) {
++                v6 = MOVEMENT_ACTION_WALK_NORMAL_NORTH;
++            }
++
++            if (PortFollower_IsLedgeBetween(fieldSystem, xCur, zCur, xPrev, zPrev)) {
++                v6 = MOVEMENT_ACTION_JUMP_FAR_NORTH;
++            }
++        }
++#endif
++
+         v6 = MovementAction_TurnActionTowardsDir(dir, v6);
+         sub_02065668(mapObj, v6);
+ 
+diff --git a/src/unk_020EDBAC.c b/src/unk_020EDBAC.c
+index 1ddd7482..685b53de 100644
+--- a/src/unk_020EDBAC.c
++++ b/src/unk_020EDBAC.c
+@@ -624,7 +624,10 @@ const UnkStruct_020EDF0C *const Unk_020EE3A8[] = {
+     &Unk_020EE088,
+     &Unk_020EE09C,
+     &Unk_020EE0D8,
+-    &Unk_020EE2B8
++    &Unk_020EE2B8,
++#ifdef SDK_PORT_3DS
++    &Unk_020EDF48, // PORT_MOVEMENT_TYPE_FOLLOW_MON: the follower Pokémon (port_follower.h), as MOVEMENT_TYPE_FOLLOW_PLAYER
++#endif
+ };
+ 
+ BOOL (*const *const gMovementActionFuncs[MAX_MOVEMENT_ACTION])(MapObject *) = {
+-- 
+2.43.0
+

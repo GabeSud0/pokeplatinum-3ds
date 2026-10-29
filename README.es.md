@@ -64,7 +64,7 @@ En una New 3DS:
 | **3D más nítido** | El mundo y los combates los dibuja la GPU de la 3DS a la resolución de la propia pantalla, con bordes suavizados (antialiasing), la niebla del juego y una vista más amplia del mundo a los lados. Los contornos de la DS alrededor del 3D vienen apagados; `edges on` en `remaster.txt` los dibuja. |
 | **3D estereoscópico** | Con el deslizador 3D. |
 | **60 imágenes por segundo** | El juego mueve el mapa a 30; el port dibuja una imagen intermedia entre cada par, y vuelve a 30 donde la GPU no da abasto (nuevo, todavía en ajuste). |
-| **Mejoras y trucos** | Opcionales, desde OPTIONS: SPEED hasta 4x (los menús y las decisiones en combate siguen a 1x), Repartir Experiencia para todo el equipo, experiencia al capturar, evoluciones por intercambio al nivel 40, MO sin enseñar los movimientos, correr siempre; y trucos (captura segura, victoria instantánea, huevos rápidos, dinero infinito, frecuencia de Pokémon salvajes, probabilidad de shiny, dar objetos). |
+| **Mejoras y trucos** | Opcionales, desde OPTIONS: SPEED hasta 4x (los menús y las decisiones en combate siguen a 1x), Repartir Experiencia para todo el equipo, experiencia al capturar, evoluciones por intercambio al nivel 40, MO sin enseñar los movimientos, correr siempre, tu primer Pokémon siguiéndote (FOLLOWER: los sprites de HeartGold/SoulSilver, que descarga el creador); y trucos (captura segura, victoria instantánea, huevos rápidos, dinero infinito, frecuencia de Pokémon salvajes, probabilidad de shiny, dar objetos). |
 | **Pequeñas comodidades** | Si capturas un Pokémon con el equipo lleno, puedes cambiarlo por uno de tu equipo ahí mismo, en el combate. Una partida nueva guarda encima de la anterior sin tener que borrarla antes. L + R + START + SELECT reinicia el juego desde la intro. |
 | **Píxeles nítidos** | Píxeles parejos y nítidos en el 2D, y suavizado xBRZ opcional para las texturas del 3D. |
 | **En el menú HOME** | Se instala como `.cia`, con el icono de tu cartucho y un banner 3D animado. |
@@ -341,8 +341,8 @@ upstream.lock      el commit exacto de pret/pokeplatinum sobre el que se compila
   animaciones actualizadas de la intro y la interfaz; la versión del menú
   HOME.
 - **En progreso:** 60 imágenes por segundo, mejor calidad en el 3D, pulir la
-  interfaz de la pantalla inferior, mejor iluminación.
-- **Lista de deseos:** Wi-Fi, un Pokémon que te sigue.
+  interfaz de la pantalla inferior, mejor iluminación, un Pokémon que te sigue.
+- **Lista de deseos:** Wi-Fi.
 - **Más adelante:** SoulSilver / HeartGold sobre la misma base.
 
 ### Contribuir
