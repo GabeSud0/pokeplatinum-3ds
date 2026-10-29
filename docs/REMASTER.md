@@ -683,6 +683,15 @@ screen's 320 x 192 at 1.25 times, as above.
   ones (nothing to see). Their pictures' places are given back as they go,
   and walking into a map the people beside are given up (the furthest
   first) while the new map's pictures wouldn't fit.
+  - The player's counterpart (patch 0055): her graphics are a variable's
+    (`OBJ_EVENT_GFX_VAR_0`), set by her map's script as the player walks
+    in, so she was never brought and popped in at the zone change (Dawn
+    outside the lab in Sandgem Town, 4 tiles away). On the overworld only
+    she has one, each map setting Dawn for a boy and Lucas for a girl, so a
+    neighbour's `VAR_0` is that; where the scripts move or hide her in some
+    of the story's states she's placed the same way
+    (`sPortCounterpartPlaces`: Sandgem, Route 202, Jubilife, Veilstone,
+    Canalave). The other variables' (only indoors) aren't brought.
 - **A battle's start** (patch 0051): the encounter effects are made for the
   DS's screen (windows and H-blank slices across its columns and lines,
   wipes drawn into a 256 x 192 BG). While one plays (`NitroPort_SetFieldEffect`)
