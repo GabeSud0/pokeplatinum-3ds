@@ -43,28 +43,36 @@ its own, local ID 0xF4, flagged as the follower is: not saved, not found
 by scripts, not talked to, walked through) where the Pokémon stands, a
 little in front: coming out it drops in and opens, the Pokémon growing
 out of it; going in the Pokémon shrinks into it and it stays a moment.
-No room or no free map object for it: the Pokémon alone. Those are in the battle's sound bank, which the field
+No room or no free map object for it: the Pokémon alone. The ball has no
+shadow, and the Pokémon none while it's smaller than itself.
+
+Out and standing it steps in place, as HeartGold's do (its draw state the
+slow walk's). Talked to (A facing it: field_control.c,
+PortFollower_TryTalk), its cry and a word on how it feels by its
+friendship or a status condition (the port's text), turned to the player,
+in a field task of its own. Those are in the battle's sound bank, which the field
 never loads: the field's sound effects load them too (sound.c), the
 sound heap 128 kB larger for their 84 kB of waves (sound_system.h). It
 comes and goes as set while the options' page is up (the field running
 behind it, patch 0057).
 ---
  include/constants/map_object.h |   2 +
- include/port_follower.h        |  49 +++
+ include/port_follower.h        |  51 +++
  include/port_options.h         |   1 +
  include/sound_system.h         |   6 +
  platinum.us/main.lsf           |   1 +
  src/map_object.c               |  23 +-
  src/meson.build                |   1 +
  src/narc.c                     |  65 ++++
+ src/overlay005/field_control.c |  15 +
  src/overlay005/fieldmap.c      |   2 +
  src/overlay005/options_panel.c |   3 +-
  src/overlay005/ov5_021ECC20.c  |   7 +
  src/overlay005/ov5_021ECE40.c  |  33 +-
- src/port_follower.c            | 674 +++++++++++++++++++++++++++++++++++++++++
+ src/port_follower.c            | 819 +++++++++++++++++++++++++++++++++++++++++
  src/sound.c                    |   7 +
  src/unk_020EDBAC.c             |   5 +-
- 15 files changed, 874 insertions(+), 5 deletions(-)
+ 16 files changed, 1036 insertions(+), 5 deletions(-)
 
 diff --git a/include/constants/map_object.h b/include/constants/map_object.h
 index d692a8b6..7d4cb6d8 100644
@@ -81,10 +89,10 @@ index d692a8b6..7d4cb6d8 100644
  #define MAP_OBJ_UNK_A0_00 0
 diff --git a/include/port_follower.h b/include/port_follower.h
 new file mode 100644
-index 00000000..cdc40c7f
+index 00000000..e78a60ba
 --- /dev/null
 +++ b/include/port_follower.h
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,51 @@
 +#ifndef POKEPLATINUM_PORT_FOLLOWER_H
 +#define POKEPLATINUM_PORT_FOLLOWER_H
 +
@@ -128,6 +136,8 @@ index 00000000..cdc40c7f
 +BOOL MapObject_PortIsFollower(const MapObject *mapObj);
 +// Its picture made before it has come out of its ball: from nothing (ov5_021ECE40.c).
 +BOOL PortFollower_StartsSmall(const MapObject *mapObj);
++// A pressed facing it, out (field_control.c): its cry and a word; TRUE if so.
++BOOL PortFollower_TryTalk(FieldSystem *fieldSystem);
 +// Every frame of the field (fieldmap.c): out, in its ball or swapped as the
 +// party, the option and the field are.
 +void PortFollower_Update(FieldSystem *fieldSystem);
@@ -375,6 +385,39 @@ index 83a3d793..a21a5fc8 100644
      GF_ASSERT(narc->numFiles > memberIndex);
  
      FS_SeekFile(&narc->file, narc->fatbStart + 12 + memberIndex * 8, FS_SEEK_SET);
+diff --git a/src/overlay005/field_control.c b/src/overlay005/field_control.c
+index 03567690..aa8fce7c 100644
+--- a/src/overlay005/field_control.c
++++ b/src/overlay005/field_control.c
+@@ -70,6 +70,10 @@
+ #include "vars_flags.h"
+ #include "wireless_manager.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_follower.h"
++#endif
++
+ static BOOL Field_CheckMapTransition(FieldSystem *fieldSystem, const FieldInput *input);
+ static u16 Field_TileBehaviorToScript(FieldSystem *fieldSystem, u8 behavior);
+ static BOOL Field_CheckWildEncounter(FieldSystem *fieldSystem);
+@@ -301,6 +305,17 @@ BOOL FieldInput_Process(const FieldInput *input, FieldSystem *fieldSystem)
+             return TRUE;
+         }
+ 
++#ifdef SDK_PORT_3DS
++        // (the follower Pokémon: no script of its own, port_follower.c)
++        if (PortFollower_TryTalk(fieldSystem)) {
++            if (PlayerAvatar_CheckForceStopMovement(fieldSystem->playerAvatar) == TRUE) {
++                PlayerAvatar_ForceStopMovement(fieldSystem->playerAvatar, PlayerAvatar_GetFacingDir(fieldSystem->playerAvatar));
++            }
++
++            return TRUE;
++        }
++#endif
++
+         enum AvatarDistortionState distortionState = PlayerAvatar_MapDistortionState(fieldSystem->playerAvatar);
+ 
+         if (distortionState == AVATAR_DISTORTION_STATE_NONE || distortionState == AVATAR_DISTORTION_STATE_ACTIVE) {
 diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
 index 06580163..39566381 100644
 --- a/src/overlay005/fieldmap.c
@@ -522,10 +565,10 @@ index dbe4ac67..04528579 100644
  
 diff --git a/src/port_follower.c b/src/port_follower.c
 new file mode 100644
-index 00000000..34ba740e
+index 00000000..a3ffb475
 --- /dev/null
 +++ b/src/port_follower.c
-@@ -0,0 +1,674 @@
+@@ -0,0 +1,819 @@
 +#include "port_follower.h"
 +
 +#include <nitro.h>
@@ -547,8 +590,11 @@ index 00000000..34ba740e
 +#include "overlay005/ov5_021ECE40.h"
 +#include "overlay005/options_panel.h"
 +
++#include "bg_window.h"
 +#include "billboard.h"
++#include "field_message.h"
 +#include "field_task.h"
++#include "heap.h"
 +#include "map_header.h"
 +#include "map_object.h"
 +#include "map_object_move.h"
@@ -559,7 +605,11 @@ index 00000000..34ba740e
 +#include "pokemon.h"
 +#include "port_options.h"
 +#include "savedata_misc.h"
++#include "render_window.h"
++#include "save_player.h"
 +#include "sound_playback.h"
++#include "string_gf.h"
++#include "system.h"
 +#include "system_flags.h"
 +#include "vars_flags.h"
 +
@@ -1023,6 +1073,7 @@ index 00000000..34ba740e
 +        return;
 +    }
 +
++    MapObject_SetStatusFlagOn(ball, MAP_OBJ_STATUS_HIDE_SHADOW); // (the Pokémon's own only)
 +    done = sBallTotal - sBallLeft;
 +    step = done < sBallLeft ? done : sBallLeft;
 +    step = step < BALL_POP ? step : BALL_POP;
@@ -1042,6 +1093,7 @@ index 00000000..34ba740e
 +static int sOut, sIn;
 +
 +static int sOpenIn; // (coming out, sOut -3: the ball's steps before it opens)
++static BOOL sShadowHidden; // (its shadow as the field had it when it began coming out)
 +static BOOL sDropIn;
 +
 +BOOL PortFollower_StartsSmall(const MapObject *mapObj)
@@ -1155,6 +1207,7 @@ index 00000000..34ba740e
 +            BOOL waits = MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE) && dx == 0 && dz == 0 && sOut == -2;
 +
 +            if (!waits && PortFollower_SetScale(mapObj, 0)) {
++                sShadowHidden = MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE_SHADOW) != 0; // (in grass, on water...)
 +                sDropIn = TRUE;
 +                sOut = -3;
 +                sOpenIn = PortFollower_ShowBall(fieldSystem, mapObj, BALL_LEAD + 2 * BALL_POP) ? BALL_LEAD : 0;
@@ -1162,6 +1215,19 @@ index 00000000..34ba740e
 +        } else if (sOut < POP_FRAMES) {
 +            sOut++;
 +            PortFollower_SetScale(mapObj, sOut);
++
++            if (sOut == POP_FRAMES && !sShadowHidden) {
++                MapObject_SetStatusFlagOff(mapObj, MAP_OBJ_STATUS_HIDE_SHADOW); // (its shadow once it's its size)
++            }
++        } else if (sub_02062A14(mapObj) == 0 && !MapObject_IsMoving(mapObj)) {
++            // Out, standing: stepping in place, as HeartGold's do (the walk
++            // at a slow walk's pace; walking, the follow code's own).
++            sub_02062A0C(mapObj, 1);
++        }
++
++        // (no shadow under it while it's smaller than itself)
++        if (mapObj != NULL && (sIn > 0 || sOut < POP_FRAMES)) {
++            MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_HIDE_SHADOW);
 +        }
 +    }
 +
@@ -1199,6 +1265,128 @@ index 00000000..34ba740e
 +            }
 +        }
 +    }
++}
++
++// ----- Talking to it (A facing it): its cry and how it feels, by its
++// friendship, as HeartGold and SoulSilver's say (the port's text: the game
++// has none; English, as the options page). It turns to the player.
++
++static void PortFollower_AppendLetters(String *string, const char *letters)
++{
++    for (; *letters; letters++) {
++        int c = (unsigned char)*letters;
++
++        if (c >= 'A' && c <= 'Z') {
++            String_AppendChar(string, 0x12B + (c - 'A'));
++        } else if (c >= 'a' && c <= 'z') {
++            String_AppendChar(string, 0x145 + (c - 'a'));
++        } else if (c == ' ') {
++            String_AppendChar(string, 0x1DE);
++        } else if (c == '.') {
++            String_AppendChar(string, 0x1AE);
++        } else if (c == '!') {
++            String_AppendChar(string, 0x1AB);
++        } else if (c == '\'') {
++            String_AppendChar(string, 0x1B3); // (’, as the game's English texts)
++        } else if (c == '\n') {
++            String_AppendChar(string, 0xE000);
++        }
++    }
++}
++
++typedef struct PortFollowerTalk {
++    int state;
++    u8 printerID;
++    Window window;
++    String *string;
++    MapObject *mapObj;
++} PortFollowerTalk;
++
++static BOOL PortFollower_TalkTask(FieldTask *task)
++{
++    FieldSystem *fieldSystem = FieldTask_GetFieldSystem(task);
++    PortFollowerTalk *talk = FieldTask_GetEnv(task);
++
++    switch (talk->state) {
++    case 0:
++        FieldMessage_AddWindow(fieldSystem->bgConfig, &talk->window, BG_LAYER_MAIN_3);
++        FieldMessage_DrawWindow(&talk->window, SaveData_GetOptions(fieldSystem->saveData));
++        talk->printerID = FieldMessage_Print(&talk->window, talk->string, SaveData_GetOptions(fieldSystem->saveData), TRUE);
++        talk->state = 1;
++        break;
++    case 1:
++        if (FieldMessage_FinishedPrinting(talk->printerID) == TRUE) {
++            talk->state = 2;
++        }
++        break;
++    case 2:
++        if (gSystem.pressedKeys & (PAD_BUTTON_A | PAD_BUTTON_B)) {
++            Window_EraseMessageBox(&talk->window, FALSE);
++            Window_Remove(&talk->window);
++            String_Free(talk->string);
++
++            if (PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_LOCAL_ID) == talk->mapObj) {
++                MapObject_SetPauseMovementOff(talk->mapObj);
++            }
++
++            Heap_Free(talk);
++            return TRUE;
++        }
++        break;
++    }
++
++    return FALSE;
++}
++
++BOOL PortFollower_TryTalk(FieldSystem *fieldSystem)
++{
++    MapObject *mapObj = PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_LOCAL_ID);
++    int dir = PlayerAvatar_GetFacingDir(fieldSystem->playerAvatar);
++    int x = PlayerAvatar_GetXPos(fieldSystem->playerAvatar) + MapObject_GetDxFromDir(dir);
++    int z = PlayerAvatar_GetZPos(fieldSystem->playerAvatar) + MapObject_GetDzFromDir(dir);
++    Party *party = SaveData_GetParty(fieldSystem->saveData);
++    PortFollowerTalk *talk;
++    Pokemon *mon;
++    String *name;
++    int friendship;
++
++    // (out and its size, where the player faces)
++    if (mapObj == NULL || sOut < POP_FRAMES || sIn > 0 || MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE)
++        || MapObject_GetX(mapObj) != x || MapObject_GetZ(mapObj) != z || Party_GetCurrentCount(party) == 0) {
++        return FALSE;
++    }
++
++    mon = Party_GetPokemonBySlotIndex(party, 0);
++    friendship = Pokemon_GetValue(mon, MON_DATA_FRIENDSHIP, NULL);
++
++    talk = Heap_Alloc(HEAP_ID_FIELD2, sizeof(PortFollowerTalk));
++    memset(talk, 0, sizeof(PortFollowerTalk));
++    talk->mapObj = mapObj;
++    talk->string = String_Init(128, HEAP_ID_FIELD2);
++    name = String_Init(32, HEAP_ID_FIELD2);
++    Pokemon_GetValue(mon, MON_DATA_NICKNAME_STRING, name);
++    String_Concat(talk->string, name);
++    String_Free(name);
++
++    if (Pokemon_GetValue(mon, MON_DATA_STATUS, NULL) != 0) {
++        PortFollower_AppendLetters(talk->string, " doesn't seem\nto be feeling well.");
++    } else if (friendship >= 220) {
++        PortFollower_AppendLetters(talk->string, " is overjoyed\nto be walking with you!");
++    } else if (friendship >= 150) {
++        PortFollower_AppendLetters(talk->string, " looks very happy.");
++    } else if (friendship >= 70) {
++        PortFollower_AppendLetters(talk->string, " is happy\nto see you.");
++    } else {
++        PortFollower_AppendLetters(talk->string, " is keeping\nan eye on you.");
++    }
++
++    // (it stays and turns to the player while they talk)
++    MapObject_SetPauseMovementOn(mapObj);
++    MapObject_Face(mapObj, dir == DIR_NORTH ? DIR_SOUTH : dir == DIR_SOUTH ? DIR_NORTH : dir == DIR_WEST ? DIR_EAST : DIR_WEST);
++    Pokemon_PlayCry(mon);
++
++    FieldSystem_CreateTask(fieldSystem, PortFollower_TalkTask, talk);
++    return TRUE;
 +}
 diff --git a/src/sound.c b/src/sound.c
 index cb0e092b..a8c8d7d1 100644

@@ -682,6 +682,82 @@ static void test_interpolation_swaying(void)
     }else CHECK(0);
     NitroPort_Gx3dSetInterpolation(0);
 }
+/* PIXEL PERFECT's sprites a texel a pixel (port_gx3d_vertex.c,
+ * sprite_texel_a_pixel): a person's quad (32 x 32 texels) drawn by the
+ * camera at 35.7 pixels and a fraction of a pixel off comes out 32 pixels
+ * on pixel corners, its feet where they were; one scaled on purpose, one
+ * not facing the camera, or the 1.25x field, as it was. */
+static NitroGx3dScene sSpriteScene;
+static void sprite_quad(NitroGx3dScene *sc,float px0,float py0,float size,int32_t w2)
+{
+    /* (corners in screen pixels of a 400 x 240 view; s, t in texels) */
+    static const float cs[4]={0,32,32,0}, ct[4]={32,32,0,0};
+    static const int tri[2][3]={{0,1,2},{0,2,3}};
+    int i,k;
+    sc->count=2;
+    for(i=0;i<2;i++){
+        NitroGx3dTriangle *t=&sc->triangles[i];
+        memset(t,0,sizeof(*t));
+        t->polygon_attr=(31u<<16);
+        t->texture_param=(3u<<26)|(2u<<20)|(2u<<23);   /* 16 colours, 32 x 32 */
+        for(k=0;k<3;k++){
+            int c=tri[i][k];
+            NitroGx3dVertex *v=&t->v[k];
+            float x=px0+cs[c]/32.0f*size, y=py0+ct[c]/32.0f*size-size;
+            v->x=(int32_t)(x/(400.0f/256.0f)*256.0f);
+            v->y=(int32_t)(y/1.25f*256.0f);
+            v->clip[3]=w2;
+            v->s=cs[c]; v->t=ct[c];
+        }
+    }
+}
+static void sprite_corners(NitroGx3dScene *sc,float *minx,float *maxx,float *miny,float *maxy)
+{
+    static NitroGx3dGpuVertex verts[64];
+    static NitroGx3dBatch batches[8];
+    size_t nb,n,i;
+    unsigned lost;
+    n=NitroPort_Gx3dBuildBatches(sc,verts,64,batches,8,&nb,&lost);
+    *minx=*miny=1e9f;*maxx=*maxy=-1e9f;
+    for(i=0;i<n;i++){
+        float x=(verts[i].position[0]/verts[i].position[3]+1.0f)*200.0f;   /* (400 pixels across) */
+        float y=(1.0f-verts[i].position[1]/verts[i].position[3])*0.5f*240.0f;
+        if(x<*minx)*minx=x;
+        if(x>*maxx)*maxx=x;
+        if(y<*miny)*miny=y;
+        if(y>*maxy)*maxy=y;
+    }
+}
+static void test_sprite_texel_a_pixel(void)
+{
+    NitroGx3dScene *sc=&sSpriteScene;
+    float x0,x1,y0,y1;
+    memset(sc,0,sizeof(*sc));
+    sc->screen_width=400;sc->screen_height=240;
+    /* feet at (180.3 + 35.7 / 2, 150.4) */
+    sprite_quad(sc,180.3f,150.4f,35.7f,2481011);
+    sprite_corners(sc,&x0,&x1,&y0,&y1);
+    CHECK(fabsf((x1-x0)-32.0f)<0.01f && fabsf((y1-y0)-32.0f)<0.01f);
+    CHECK(fabsf(x0-floorf(x0+0.5f))<0.01f && fabsf(y0-floorf(y0+0.5f))<0.01f);
+    CHECK(fabsf((x0+x1)*0.5f-(180.3f+35.7f*0.5f))<=0.5f);
+    CHECK(fabsf(y1-150.4f)<=0.5f);
+    /* growing out of its ball: half its size, as it was (its edges moved
+     * out a little, as every polygon's) */
+    sprite_quad(sc,180.3f,150.4f,16.0f,2481011);
+    sprite_corners(sc,&x0,&x1,&y0,&y1);
+    CHECK(fabsf((x1-x0)-16.0f)<1.0f);
+    /* not facing the camera (its corners' depths differ): as it was */
+    sprite_quad(sc,180.3f,150.4f,35.7f,2481011);
+    sc->triangles[0].v[2].clip[3]=2481111;
+    sprite_corners(sc,&x0,&x1,&y0,&y1);
+    CHECK(fabsf((x1-x0)-35.7f)<0.5f);
+    /* the 1.25x field (192 lines): as it was */
+    sprite_quad(sc,180.3f,150.4f,35.7f,2481011);
+    sc->screen_height=192;
+    sprite_corners(sc,&x0,&x1,&y0,&y1);
+    CHECK(fabsf((x1-x0)-32.0f)>1.0f);
+}
+
 static void test_shadow_triangles(void)
 {
     const NitroGx3dScene *scene;
@@ -1673,6 +1749,7 @@ static void run_all(void)
     test_triangles_and_depth();
     test_culling();
     test_shadow_triangles();
+    test_sprite_texel_a_pixel();
     test_interpolation();
     test_interpolation_followed();
     test_interpolation_order_shift();

@@ -656,6 +656,21 @@ screen's 320 x 192 at 1.25 times, as above.
 - **The compositor**: that picture at a pixel a pixel (`ComposeLayers.top`,
   `PIC_SCALE`), the layers in front of the 3D on all 240 lines; the
   weather's BG drawn by the GPU from line -24 of its map.
+- **The sprites a texel a pixel** (`port_gx3d_vertex.c`,
+  `sprite_texel_a_pixel`): the people, the Pokémon and the item balls are
+  billboards, quads facing the camera, and its perspective still makes
+  them a little bigger or smaller than their texels (a person near the
+  screen's bottom 32 texels over 35.7 pixels) and puts them a fraction of
+  a pixel off: the DS's nearest-texel drawing doubled or dropped a texel
+  here and there, and the smooth 3D (drawn 2x2 and averaged) blended the
+  texels' edges into the pixels beside them, blurring the pixel art
+  (2026-10-29). Here a textured triangle with its three corners at one
+  depth, upright and within 0.85-1.25 of a pixel a texel, is laid out at
+  a texel a pixel, the texture's bottom middle (the feet) on the nearest
+  pixel corner, its edges not moved out: each texel whole pixels, sharp
+  with the smooth 3D or without; the 3D (buildings, signs) as smooth as
+  before. One scaled on purpose (a Pokémon growing out of its ball) is
+  left as it is; the 1.25x field too (a texel 1.25 pixels there).
 - **The game** reads `NitroPort_WideScreenExtra` as 72 there: the people the
   scripts bring on from the sides come from beyond the 400 pixels.
 - **The game's windows** go to the picture's top or bottom
@@ -1251,8 +1266,16 @@ screens) the lower screen is the DS's, filling the screen as before.
     it stands, 6 frames each, with the battle's send-out and recall
     sounds. The ball itself is seen (the item ball's picture, a map
     object of its own: local ID 0xF4, not saved, not found by scripts,
-    walked through): coming out it drops in and opens; going in the
-    Pokémon shrinks into it and it stays a moment. Those are in the battle's sound bank, which the field never
+    walked through; no shadow): coming out it drops in and opens; going
+    in the Pokémon shrinks into it and it stays a moment. The Pokémon has
+    no shadow while it's smaller than itself. Out and standing it steps
+    in place, as HeartGold's do (the walk at a slow walk's pace). Talked
+    to (A facing it, out): its cry, and a word on how it feels by its
+    friendship ("... is overjoyed to be walking with you!", "... looks
+    very happy.", "... is happy to see you.", "... is keeping an eye on
+    you."; "... doesn't seem to be feeling well." with a status
+    condition), the port's text (`PortFollower_TryTalk`, from
+    `field_control.c`); it turns to the player. The sounds are in the battle's sound bank, which the field never
     loads: the field's sound effects load them too (`sound.c`), the sound
     heap 128 KB larger for their 84 KB of waves (`sound_system.h`; the
     DS's heap had 74 KB left there). The log says when it comes out, why
