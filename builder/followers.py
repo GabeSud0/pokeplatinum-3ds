@@ -269,16 +269,31 @@ def read_bundle(bundle: bytes) -> dict:
     return {"species": table, "sprites": sprites}
 
 
-def fetch(progress=None, workers: int = 8) -> list[bytes]:
+def fetch(progress=None, workers: int = 8, cache: Path | None = None) -> list[bytes]:
     """Every sprite, downloaded (urllib: the proxy settings of the
-    environment) and checked. OSError or FollowersError if one can't be."""
+    environment) and checked. With a cache folder, the files already there
+    and right aren't downloaded again, and the others are kept there.
+    OSError or FollowersError if one can't be had."""
     import urllib.request
 
     def get(n: int) -> bytes:
+        kept = cache / f"{sources.FIRST_FILE + n:08d}.NSBTX" if cache is not None else None
+        if kept is not None and kept.is_file():
+            data = kept.read_bytes()
+            try:
+                check_file(n, data)
+                return data
+            except FollowersError:
+                pass   # (another pin's: downloaded again)
         with urllib.request.urlopen(sprite_url(n), timeout=60) as response:
             data = response.read()
         check_file(n, data)
+        if kept is not None:
+            kept.write_bytes(data)
         return data
+
+    if cache is not None:
+        cache.mkdir(parents=True, exist_ok=True)
 
     count = sprite_count()
     out = [b""] * count
@@ -293,22 +308,12 @@ def fetch(progress=None, workers: int = 8) -> list[bytes]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("-o", "--output", type=Path, default=Path("followers.bin"))
+    parser.add_argument("--cache", type=Path,
+                        help="where the downloaded files are kept between builds (default: beside the output, follower-sprites)")
     args = parser.parse_args()
-    if args.output.is_file():   # (kept from a build before: downloaded again only if re-pinned)
-        try:
-            kept = read_bundle(args.output.read_bytes())
-            if len(kept["sprites"]) != sprite_count():
-                raise FollowersError("another pin")
-            for n, sprite in enumerate(kept["sprites"]):
-                check_file(n, sprite["data"])
-        except FollowersError:
-            pass
-        else:
-            print(f"Follower sprites already in {args.output}")
-            return 0
-    print(f"Downloading the follower sprites ({sprite_count()} files, {sources.REPO}@{sources.COMMIT[:12]})...")
+    print(f"The follower sprites ({sprite_count()} files, {sources.REPO}@{sources.COMMIT[:12]}): downloading the ones not kept...")
     try:
-        bundle = make_bundle(fetch())
+        bundle = make_bundle(fetch(cache=args.cache or args.output.parent / "follower-sprites"))
     except (OSError, FollowersError) as e:
         print(f"Couldn't get the follower sprites: {e}", file=sys.stderr)
         print("The game works without them (only Platinum's own Pokémon follow).", file=sys.stderr)

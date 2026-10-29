@@ -13,7 +13,7 @@ Its sprite: HeartGold and SoulSilver's when the player's data pack has
 them (builder/followers.py: a port file at PORT_FOLLOWER_PAK_ID, each laid
 out as Platinum's walking sprites), else Platinum's own for the 24 it has.
 HeartGold's are graphics IDs of their own (PORT_FOLLOWER_GFX_FIRST + 2 *
-sprite + shiny): their texture a member of the overworld sprites' archive
+sprite + shiny; from 0x4000): their texture a member of the overworld sprites' archive
 past its own (narc.c: PortFollower_NarcMember; the shiny one with its two
 palettes swapped), drawn as Pikachu is (Regigigas for 64 x 64) with
 Platinum's walk (ov5_021ECE40.c, ov5_021ECC20.c, map_object.c lookups).
@@ -28,25 +28,26 @@ the Underground, the Union Room and maps with features of their own; a
 64 x 64 one only outdoors. Not an egg, not fainted. Out behind the player
 when that tile is free, else on the player's tile hidden till they step
 off it (walking out of a door: it comes out after them). Back in its ball
-when not to be out, another Pokémon is first, or it's left behind (a
-script walked the player more than 2 tiles). A ledge: it waits above it
-and jumps it after the player.
+when not to be out, another Pokémon is first, it's left behind (a
+script walked the player more than 2 tiles), or the player jumps down a
+ledge (the follow code can't keep up with the jump): out again behind the
+player where they stop. Its graphics IDs from 0x4000, past the berry
+trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000).
 ---
  include/constants/map_object.h |   2 +
- include/port_follower.h        |  50 +++++
+ include/port_follower.h        |  46 +++++
  include/port_options.h         |   1 +
  platinum.us/main.lsf           |   1 +
  src/map_object.c               |  23 ++-
  src/meson.build                |   1 +
- src/narc.c                     |  64 ++++++
+ src/narc.c                     |  65 ++++++
  src/overlay005/fieldmap.c      |   2 +
  src/overlay005/options_panel.c |   3 +-
  src/overlay005/ov5_021ECC20.c  |   7 +
  src/overlay005/ov5_021ECE40.c  |  25 ++-
- src/port_follower.c            | 436 +++++++++++++++++++++++++++++++++++++++++
- src/unk_02069BE0.c             |  21 ++
+ src/port_follower.c            | 442 +++++++++++++++++++++++++++++++++++++++++
  src/unk_020EDBAC.c             |   5 +-
- 14 files changed, 636 insertions(+), 5 deletions(-)
+ 13 files changed, 618 insertions(+), 5 deletions(-)
 
 diff --git a/include/constants/map_object.h b/include/constants/map_object.h
 index d692a8b6..7d4cb6d8 100644
@@ -63,10 +64,10 @@ index d692a8b6..7d4cb6d8 100644
  #define MAP_OBJ_UNK_A0_00 0
 diff --git a/include/port_follower.h b/include/port_follower.h
 new file mode 100644
-index 00000000..fe479c6d
+index 00000000..bddb70cc
 --- /dev/null
 +++ b/include/port_follower.h
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,46 @@
 +#ifndef POKEPLATINUM_PORT_FOLLOWER_H
 +#define POKEPLATINUM_PORT_FOLLOWER_H
 +
@@ -90,7 +91,7 @@ index 00000000..fe479c6d
 +// MOVEMENT_TYPE_FOLLOW_PLAYER's code, its own movement type so scripts never
 +// take it for the partner): walked through, never saved, not talked to.
 +#define PORT_FOLLOWER_PAK_ID          0x10000000
-+#define PORT_FOLLOWER_GFX_FIRST       0x1000
++#define PORT_FOLLOWER_GFX_FIRST       0x4000 // (past the berry trees' 0x1000 and OBJ_EVENT_GFX_INVISIBLE's 0x2000)
 +#define PORT_FOLLOWER_GFX_COUNT       0x800
 +#define PORT_FOLLOWER_NARC_FIRST      0x7000 // (no archive has this many members)
 +#define PORT_FOLLOWER_LOCAL_ID        0xF3
@@ -107,10 +108,6 @@ index 00000000..fe479c6d
 +const void *PortFollower_NarcMember(u32 memberIndex, u32 *size);
 +
 +BOOL MapObject_PortIsFollower(const MapObject *mapObj);
-+// (x0, z0) and (x1, z1) two tiles apart in a line with a ledge between
-+// that jumps from the first to the second (it jumps after the player).
-+BOOL PortFollower_IsLedgeBetween(FieldSystem *fieldSystem, int x0, int z0, int x1, int z1);
-+BOOL PortFollower_IsLedge(FieldSystem *fieldSystem, int x, int z);
 +// Every frame of the field (fieldmap.c): out, in its ball or swapped as the
 +// party, the option and the field are.
 +void PortFollower_Update(FieldSystem *fieldSystem);
@@ -237,7 +234,7 @@ index 7b865f0a..4199b7ef 100644
      'poffin.c',
      'string_gf.c',
 diff --git a/src/narc.c b/src/narc.c
-index 83a3d793..50078ddb 100644
+index 83a3d793..a21a5fc8 100644
 --- a/src/narc.c
 +++ b/src/narc.c
 @@ -4,6 +4,9 @@
@@ -301,23 +298,24 @@ index 83a3d793..50078ddb 100644
      GF_ASSERT(narc->numFiles > memberIndex);
  
      FS_SeekFile(&narc->file, narc->fatbStart + 12 + memberIndex * 8, FS_SEEK_SET);
-@@ -461,6 +501,15 @@ u32 NARC_GetMemberSize(NARC *narc, u32 memberIndex)
+@@ -461,6 +501,16 @@ u32 NARC_GetMemberSize(NARC *narc, u32 memberIndex)
      u32 fileStart;
      u32 fileEnd;
  
 +#ifdef SDK_PORT_3DS
 +    if (memberIndex >= narc->numFiles) {
 +        u32 size = 0;
++        const void *own = PortFollower_NarcMember(memberIndex, &size);
 +
-+        GF_ASSERT(PortFollower_NarcMember(memberIndex, &size) != NULL);
-+        return size;
++        GF_ASSERT(own != NULL);
++        return own != NULL ? size : 0;
 +    }
 +#endif
 +
      GF_ASSERT(narc->numFiles > memberIndex);
  
      FS_SeekFile(&narc->file, narc->fatbStart + 12 + memberIndex * 8, FS_SEEK_SET);
-@@ -474,6 +523,21 @@ void NARC_ReadFromMember(NARC *narc, u32 memberIndex, u32 offset, u32 bytesToRea
+@@ -474,6 +524,21 @@ void NARC_ReadFromMember(NARC *narc, u32 memberIndex, u32 offset, u32 bytesToRea
  {
      u32 fileStart;
  
@@ -471,10 +469,10 @@ index dbe4ac67..5bcc32cd 100644
  
 diff --git a/src/port_follower.c b/src/port_follower.c
 new file mode 100644
-index 00000000..0696e369
+index 00000000..cde14160
 --- /dev/null
 +++ b/src/port_follower.c
-@@ -0,0 +1,436 @@
+@@ -0,0 +1,442 @@
 +#include "port_follower.h"
 +
 +#include <nitro.h>
@@ -485,6 +483,7 @@ index 00000000..0696e369
 +#include "constants/player_avatar.h"
 +#include "generated/genders.h"
 +#include "generated/map_headers.h"
++#include "generated/movement_actions.h"
 +#include "generated/movement_types.h"
 +#include "generated/object_events_gfx.h"
 +#include "generated/pokemon_data_params.h"
@@ -500,12 +499,11 @@ index 00000000..0696e369
 +#include "party.h"
 +#include "persisted_map_features.h"
 +#include "player_avatar.h"
++#include "player_move.h"
 +#include "pokemon.h"
 +#include "port_options.h"
 +#include "savedata_misc.h"
-+#include "map_tile_behavior.h"
 +#include "system_flags.h"
-+#include "terrain_collision_manager.h"
 +#include "vars_flags.h"
 +
 +// The port's own files in the data pack (port_fs.c).
@@ -625,8 +623,9 @@ index 00000000..0696e369
 +
 +    if (sMemberCached != memberIndex) {
 +        s = &sSprites[sprite];
++        sMemberCached = 0xffffffff; // (the buffer's other member gone, whatever comes of the read)
 +
-+        if (s->size > sizeof(sMember) || !NitroPort_PakOwnFileRead(PORT_FOLLOWER_PAK_ID, s->offset, sMember, s->size)) {
++        if (s->size < 0x40 || s->size > sizeof(sMember) || !NitroPort_PakOwnFileRead(PORT_FOLLOWER_PAK_ID, s->offset, sMember, s->size)) {
 +            return NULL;
 +        }
 +
@@ -634,14 +633,21 @@ index 00000000..0696e369
 +        sMemberCached = memberIndex;
 +
 +        if (n & 1) {
-+            // Shiny: its two palettes' entries swapped, so the walk (which
-+            // shows palette 0) shows the shiny one.
++            // Shiny: its two palettes' dictionary entries swapped, so the
++            // walk (which shows palette 0) shows the shiny one.
 +            u8 *data = (u8 *)sMember;
-+            u32 tex = *(u32 *)(data + 16);
-+            u32 dict = tex + *(u32 *)(data + tex + 0x34);
++            u32 tex = *(u32 *)(data + 16), dict = 0, entries = 0;
 +
-+            if (data[dict + 1] == 2) {
-+                u8 *entry = data + dict + 8 + 4 * 3 + 4;
++            if (tex + 0x3C <= s->size) {
++                dict = tex + *(u32 *)(data + tex + 0x34);
++            }
++
++            if (dict != 0 && dict + 8 <= s->size) {
++                entries = dict + *(u16 *)(data + dict + 6); // (the entries' block: where the tree's header says)
++            }
++
++            if (entries != 0 && data[dict + 1] == 2 && entries + 4 + 8 <= s->size) {
++                u8 *entry = data + entries + 4;
 +                u32 first;
 +
 +                memcpy(&first, entry, 4);
@@ -748,27 +754,23 @@ index 00000000..0696e369
 +    return MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_PORT_FOLLOWER) != 0;
 +}
 +
-+BOOL PortFollower_IsLedge(FieldSystem *fieldSystem, int x, int z)
++// The player jumping down a ledge (2 tiles, or 3): the follower can't keep
++// up with the jump (the follow code goes a tile a step behind), so it waits
++// in its ball and comes out behind them where they stop.
++// (the player's steps aren't map object movements: MapObject_IsMoving is 0)
++static BOOL PortFollower_PlayerStepping(FieldSystem *fieldSystem)
 +{
-+    u8 behavior = TerrainCollisionManager_GetTileBehavior(fieldSystem, x, z);
-+
-+    return TileBehavior_IsJumpSouth(behavior) || TileBehavior_IsJumpNorth(behavior)
-+        || TileBehavior_IsJumpEast(behavior) || TileBehavior_IsJumpWest(behavior);
++    int state = PlayerAvatar_GetMoveState(fieldSystem->playerAvatar);
++    return state == PLAYER_MOVE_STATE_START || state == PLAYER_MOVE_STATE_MOVING;
 +}
 +
-+BOOL PortFollower_IsLedgeBetween(FieldSystem *fieldSystem, int x0, int z0, int x1, int z1)
++static BOOL PortFollower_PlayerJumping(FieldSystem *fieldSystem, MapObject *player)
 +{
-+    int dx = x1 - x0, dz = z1 - z0;
-+    u8 behavior;
++    u32 action = MapObject_GetMovementAction(player); // (the player's map object's own: the jump)
 +
-+    if (!((dx == 0 && (dz == 2 || dz == -2)) || (dz == 0 && (dx == 2 || dx == -2)))) {
-+        return FALSE;
-+    }
-+
-+    behavior = TerrainCollisionManager_GetTileBehavior(fieldSystem, x0 + dx / 2, z0 + dz / 2);
-+
-+    return (dz > 0 && TileBehavior_IsJumpSouth(behavior)) || (dz < 0 && TileBehavior_IsJumpNorth(behavior))
-+        || (dx > 0 && TileBehavior_IsJumpEast(behavior)) || (dx < 0 && TileBehavior_IsJumpWest(behavior));
++    return PortFollower_PlayerStepping(fieldSystem)
++        && ((action >= MOVEMENT_ACTION_JUMP_FAR_NORTH && action <= MOVEMENT_ACTION_JUMP_FAR_EAST)
++            || action == MOVEMENT_ACTION_JUMP_FARTHER_WEST || action == MOVEMENT_ACTION_JUMP_FARTHER_EAST);
 +}
 +
 +static MapObject *PortFollower_Find(const MapObjectManager *mapObjMan)
@@ -821,7 +823,9 @@ index 00000000..0696e369
 +    int dir = PlayerAvatar_GetFacingDir(fieldSystem->playerAvatar);
 +    int back = dir == DIR_NORTH ? DIR_SOUTH : dir == DIR_SOUTH ? DIR_NORTH : dir == DIR_WEST ? DIR_EAST : DIR_WEST;
 +    int bx = x + MapObject_GetDxFromDir(back), bz = z + MapObject_GetDzFromDir(back);
-+    BOOL behind = sub_02063E94(player, bx, MapObject_GetY(player), bz, back) == MAP_OBJ_COLLISION_NONE;
++    // (a tile the player could walk to: not a wall, water, a ledge, a ramp, a
++    // warp or someone's)
++    BOOL behind = PlayerAvatar_CheckCollision(fieldSystem->playerAvatar, player, back) == PLAYER_COLLISION_NONE;
 +    MapObject *mapObj;
 +
 +    mapObj = MapObjectMan_AddMapObject(fieldSystem->mapObjMan, behind ? bx : x, behind ? bz : z, dir, graphicsID,
@@ -883,11 +887,11 @@ index 00000000..0696e369
 +
 +        // Back in its ball: not to be out, another Pokémon first, or left
 +        // behind (a script moved the player; a warp within the map).
-+        if (graphicsID != MapObject_GetGraphicsID(mapObj)
-+            || (!MapObject_IsMoving(mapObj) && !MapObject_IsMoving(player) && dx * dx + dz * dz > 1
-+                && !PortFollower_IsLedgeBetween(fieldSystem, x + dx, z + dz, x, z))) {
++        if (graphicsID != MapObject_GetGraphicsID(mapObj) || PortFollower_PlayerJumping(fieldSystem, player)
++            || (!MapObject_IsMoving(mapObj) && !PortFollower_PlayerStepping(fieldSystem) && dx * dx + dz * dz > 1)) {
 +            if (!scripted || graphicsID != MapObject_GetGraphicsID(mapObj) || dx * dx + dz * dz > 4) {
-+                NitroPort_Log("[follower] in its ball (%s)", graphicsID != MapObject_GetGraphicsID(mapObj) ? (graphicsID ? "another Pokémon" : "not to be out") : "left behind");
++                NitroPort_Log("[follower] in its ball (%s)", graphicsID != MapObject_GetGraphicsID(mapObj) ? (graphicsID ? "another Pokémon" : "not to be out")
++                    : PortFollower_PlayerJumping(fieldSystem, player) ? "a ledge" : "left behind");
 +                PortFollower_Remove(fieldSystem, mapObj);
 +                mapObj = NULL;
 +                sWait = 8;
@@ -898,7 +902,7 @@ index 00000000..0696e369
 +    }
 +
 +    // Out (not during a script's or a menu's task: when it ends).
-+    if (mapObj == NULL && graphicsID != 0 && !scripted && !MapObject_IsMoving(player)) {
++    if (mapObj == NULL && graphicsID != 0 && !scripted && !PortFollower_PlayerStepping(fieldSystem)) {
 +        if (sWait > 0) {
 +            sWait--;
 +        } else if (MapObjectMan_PortFreeSlots(fieldSystem->mapObjMan) > 1
@@ -911,45 +915,6 @@ index 00000000..0696e369
 +        }
 +    }
 +}
-diff --git a/src/unk_02069BE0.c b/src/unk_02069BE0.c
-index 437a7e17..57284b98 100644
---- a/src/unk_02069BE0.c
-+++ b/src/unk_02069BE0.c
-@@ -17,6 +17,9 @@
- #include "map_tile_behavior.h"
- #include "overworld_anim_manager.h"
- #include "player_avatar.h"
-+#ifdef SDK_PORT_3DS
-+#include "port_follower.h"
-+#endif
- #include "terrain_collision_manager.h"
- #include "trainer_encounter.h"
- #include "unk_020655F4.h"
-@@ -236,6 +239,24 @@ static int sub_02069D8C(MapObject *mapObj)
-         u32 v6 = sub_02069D50(mapObj);
-         int dir = GetDirectionBetweenPoints(xCur, zCur, xPrev, zPrev);
- 
-+#ifdef SDK_PORT_3DS
-+        // (the follower Pokémon, port_follower.h: the player's ledge jump
-+        // walked to where it began, and the ledge jumped after them)
-+        if (MapObject_GetMovementType(mapObj) == PORT_MOVEMENT_TYPE_FOLLOW_MON) {
-+            if (PortFollower_IsLedge(fieldSystem, xPrev, zPrev)) {
-+                return 0; // (not onto the ledge: it waits above it)
-+            }
-+
-+            if (v6 >= MOVEMENT_ACTION_JUMP_FAR_NORTH && v6 <= MOVEMENT_ACTION_JUMP_FAR_EAST) {
-+                v6 = MOVEMENT_ACTION_WALK_NORMAL_NORTH;
-+            }
-+
-+            if (PortFollower_IsLedgeBetween(fieldSystem, xCur, zCur, xPrev, zPrev)) {
-+                v6 = MOVEMENT_ACTION_JUMP_FAR_NORTH;
-+            }
-+        }
-+#endif
-+
-         v6 = MovementAction_TurnActionTowardsDir(dir, v6);
-         sub_02065668(mapObj, v6);
- 
 diff --git a/src/unk_020EDBAC.c b/src/unk_020EDBAC.c
 index 1ddd7482..685b53de 100644
 --- a/src/unk_020EDBAC.c

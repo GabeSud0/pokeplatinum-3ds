@@ -1226,7 +1226,7 @@ screens) the lower screen is the DS's, filling the screen as before.
     local ID 0xF3), moving with the partner trainers' code under its own
     movement type (scripts never take it for the partner): walked
     through, kept across zone changes, never saved, not talked to. Its
-    graphics IDs (0x1000 + 2 x sprite + shiny) are answered by the
+    graphics IDs (0x4000 + 2 x sprite + shiny) are answered by the
     overworld sprites' lookups as Pikachu's (Regigigas's for 64 x 64),
     their texture an archive member past the archive's own (`narc.c`).
     Out while the player walks (in its ball on the bike, surfing, during
@@ -1234,9 +1234,13 @@ screens) the lower screen is the DS's, filling the screen as before.
     Pokémon, in the Underground, the Union Room and maps with features of
     their own; a 64 x 64 one indoors), behind the player or, where that
     tile isn't free (out of a door), on the player's tile hidden till they
-    step off it. Back in its ball when a script walks the player more
-    than 2 tiles. A ledge: it waits above it and jumps it after the
-    player. The log says when it comes out and why it goes back.
+    step off it (the tile behind checked as the player's step would be:
+    no water, ledge or ramp). Back in its ball when a script walks the
+    player more than 2 tiles, and while the player jumps down a ledge (the
+    follow code moves a tile a step behind and can't keep up with the
+    jump): out again where they stop. Its graphics IDs from 0x4000, past
+    the berry trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000). The
+    log says when it comes out and why it goes back.
   - ALWAYS CATCH (every ball catches), INSTANT VICTORY (the player's
     attacks knock the opponent out, Endure and a Focus Band or Sash no
     help; a Substitute still takes the hit), FAST EGGS (the day care's chance at

@@ -96,6 +96,37 @@ class BundleTest(unittest.TestCase):
         with self.assertRaises(followers.FollowersError):
             followers.make_bundle(self.sprites[:3])
 
+    def test_cache(self):
+        """Files kept in the cache and right aren't downloaded; wrong ones are."""
+        with tempfile.TemporaryDirectory() as d:
+            cache = Path(d)
+            for n, sprite in enumerate(self.sprites):
+                (cache / f"{followers.sources.FIRST_FILE + n:08d}.NSBTX").write_bytes(sprite if n else b"stale")
+            asked = []
+
+            class Response:
+                def __init__(self, data):
+                    self.data = data
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *exc):
+                    return False
+
+                def read(self):
+                    return self.data
+
+            def urlopen(url, timeout):
+                asked.append(url)
+                return Response(self.sprites[0])
+
+            with mock.patch("urllib.request.urlopen", urlopen):
+                got = followers.fetch(cache=cache)
+            self.assertEqual(got, self.sprites)
+            self.assertEqual(asked, [followers.sprite_url(0)])
+            self.assertEqual((cache / f"{followers.sources.FIRST_FILE:08d}.NSBTX").read_bytes(), self.sprites[0])
+
     def test_url(self):
         self.assertEqual(followers.sprite_url(1),
                          "https://raw.githubusercontent.com/example/repo/" + "0" * 40 + "/dir/mmodel_00000011.NSBTX")
