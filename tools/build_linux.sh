@@ -118,6 +118,15 @@ fi
 git -C "$REPO_DIR" log -1 --format='    at %h: %s'
 cd "$REPO_DIR"
 
+# A copy of this script kept from before (~/build_linux.sh) would build the
+# new code the old way (an older one made the data pack without the follower
+# sprites): the one just fetched takes over, once.
+if [ -z "${BUILD_LINUX_FRESH:-}" ] && ! cmp -s "$0" tools/build_linux.sh; then
+    step "This script changed: running the new one (kept as ~/build_linux.sh)"
+    cp tools/build_linux.sh "$HOME/build_linux.sh"
+    exec env BUILD_LINUX_FRESH=1 BRANCH="$BRANCH" PR="$PR" bash "$HOME/build_linux.sh" "$ROM"
+fi
+
 step "Fetching the decompilation and the SDKs (a few minutes the first time)"
 python3 tools/bootstrap.py --clean
 

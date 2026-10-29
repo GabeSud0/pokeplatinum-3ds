@@ -51,6 +51,15 @@ else
 fi
 cd "$REPO_DIR"
 
+# A copy of this script kept from before would build the new code the old
+# way (an older one made the data pack without the follower sprites): the
+# one just fetched takes over, once.
+if [ -z "${BUILD_WINDOWS_FRESH:-}" ] && ! cmp -s "$0" tools/build_windows_msys2.sh; then
+    step "This script changed: running the new one (kept as ~/build_windows_msys2.sh)"
+    cp tools/build_windows_msys2.sh "$HOME/build_windows_msys2.sh"
+    exec env BUILD_WINDOWS_FRESH=1 BRANCH="$BRANCH" bash "$HOME/build_windows_msys2.sh" "$ROM"
+fi
+
 step "Fetching the decompilation and the SDKs (a few minutes the first time)"
 python3 tools/bootstrap.py --clean
 
