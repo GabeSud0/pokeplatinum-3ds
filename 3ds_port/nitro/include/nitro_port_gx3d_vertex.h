@@ -139,6 +139,9 @@ void NitroPort_Gx3dPruneScissor(const int zone[4], int width, int height, unsign
  * software the way port_gx3d_pica.c asks the PICA to (port_gx3d_gpusim.c),
  * into RGB555|coverage pixels like the reference rasterizer's. */
 void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555);
+/* The same at another size (up to 512 x 256): a bigger view at the DS's
+ * pixel size (NitroGx3dScene.screen_width x screen_height). */
+void NitroPort_Gx3dSimulateGpuSized(const NitroGx3dScene *scene, uint16_t *out555, int width, int height);
 /* The remaster's look in the simulation, as port_gx3d_pica.c draws it
  * (remaster.txt: shadows, grade, sun; NitroPort_PicaLook): sun shadows,
  * the colour grade, the sun fixed (degrees) or by the clock. */

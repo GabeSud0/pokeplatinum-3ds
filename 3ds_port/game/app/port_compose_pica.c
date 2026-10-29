@@ -58,16 +58,23 @@ void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 #define DS_W 256
 #define DS_H 192
-#define CANVAS_MAX 320
-/* (the drawers' pictures: the wider upper screen's, or the lower screen's
- * as a tall panel) */
-#define WORK_PIXELS (CANVAS_MAX * DS_H > DS_W * NITRO_LOWERMENU_TALL_LINES ? CANVAS_MAX * DS_H \
-                                                                           : DS_W * NITRO_LOWERMENU_TALL_LINES)
+#define CANVAS_MAX 400
+#define CANVAS_MAX_H 240   /* (the field at the DS's pixel size: 400 x 240) */
+/* (the drawers' pictures: the wider upper screen's, the field's at the DS's
+ * pixel size, or the lower screen's as a tall panel) */
+#define WORK_PIXELS (CANVAS_MAX * CANVAS_MAX_H > DS_W * NITRO_LOWERMENU_TALL_LINES ? CANVAS_MAX * CANVAS_MAX_H \
+                                                                                   : DS_W * NITRO_LOWERMENU_TALL_LINES)
 #define TOP_W 400
 #define BOTTOM_W 320
 #define SCREEN_H 240
 /* The DS's picture on a 3DS screen: 1.25 times the size. */
 #define SCALE 1.25f
+
+/* (the field at the DS's pixel size: ComposeLayers.top) A picture's rows
+ * with the layers in front of the 3D (the DS's 192, the 3D's; the field's
+ * all of them), and its size on the screen: a pixel a pixel, or SCALE. */
+#define OVER_ROWS(l) ((l)->top > 0 && (l)->height > DS_H ? (l)->height : DS_H)
+#define PIC_SCALE(l) ((l) != NULL && (l)->top > 0 && (l)->height > DS_H ? (float)SCREEN_H / (float)(l)->height : SCALE)
 
 #define SETS 3
 /* LCD framebuffers a screen: one on the LCD, the one before it (scanned
@@ -272,11 +279,11 @@ static u32 sSmoothFrames, sSmoothHalfFrames;
 static LightLock sSetLock, sPresentLock;
 static uint32_t sSeq;
 static ComposeLayers sWork[2];    /* the drawers' pictures, by engine */
-static uint16_t sWorkUnder[2][WORK_PIXELS], sWorkOver[2][CANVAS_MAX * DS_H];
-static uint8_t sWorkAlpha[2][CANVAS_MAX * DS_H];
+static uint16_t sWorkUnder[2][WORK_PIXELS], sWorkOver[2][CANVAS_MAX * CANVAS_MAX_H];
+static uint8_t sWorkAlpha[2][CANVAS_MAX * CANVAS_MAX_H];
 static uint16_t sToRgb565[32768];
 static uint8_t sAlpha16[17];      /* the over layer's alpha, 0-16, as 0-255 */
-static uint32_t sConverted[2][CANVAS_MAX * DS_H];
+static uint32_t sConverted[2][CANVAS_MAX * CANVAS_MAX_H];
 static uint16_t sConverted16[2][WORK_PIXELS];
 
 /* Publishing only what changed (the default, sharp 2D): each engine's
@@ -1158,11 +1165,11 @@ static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *
          * (A tall picture's: the DS's lines, the 3D's.) */
         uint32_t *c32 = sConverted[e];
 
-        if (NitroPort_PremultiplyOver(l->over, l->overAlpha, sAlpha16, c32, 0, w * DS_H)) {
+        if (NitroPort_PremultiplyOver(l->over, l->overAlpha, sAlpha16, c32, 0, w * OVER_ROWS(l))) {
             if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
-                NitroPort_Scale2xTiled32(c32, w, DS_H, set->over, scr->texW);
+                NitroPort_Scale2xTiled32(c32, w, OVER_ROWS(l), set->over, scr->texW);
             } else {
-                NitroPort_Tile32(c32, w, DS_H, set->over, scr->texW);
+                NitroPort_Tile32(c32, w, OVER_ROWS(l), set->over, scr->texW);
             }
             GSPGPU_FlushDataCache(set->over, (u32)scr->texW * rowsUsed * 4u);
             set->overEmpty = 0;
@@ -1212,17 +1219,17 @@ static u32 top_clear_color(int c)
  * (colour bit 15), and one more each side (the filter reads a texel past
  * them): the quad drawing it covers those (a text box: a quarter of the
  * screen, the GPU's time for it with it). Empty: *top >= *bottom. */
-static void over_rows(const uint16_t *over, int w, int *top, int *bottom)
+static void over_rows(const uint16_t *over, int w, int rows, int *top, int *bottom)
 {
     const uint32_t *words = (const uint32_t *)over;
     int y, i, first = -1, last = -1;
 
     *top = 0;
-    *bottom = DS_H;
+    *bottom = rows;
     if (((uintptr_t)over & 3u) || (w & 1)) {
         return;   /* (all of it) */
     }
-    for (y = 0; y < DS_H; y++) {
+    for (y = 0; y < rows; y++) {
         const uint32_t *row = words + (size_t)y * (size_t)(w / 2);
         uint32_t any = 0;
 
@@ -1241,7 +1248,7 @@ static void over_rows(const uint16_t *over, int w, int *top, int *bottom)
         return;
     }
     *top = first > 0 ? first - 1 : 0;
-    *bottom = last + 2 < DS_H ? last + 2 : DS_H;
+    *bottom = last + 2 < rows ? last + 2 : rows;
 }
 
 /* The picture behind fills the screen (its colour can be the clear). */
@@ -1249,7 +1256,8 @@ static int under_fills_screen(const Screen *scr, const LayerSet *set)
 {
     int canvasW = set->info.width > 0 ? set->info.width : DS_W;
 
-    return set->underColor >= 0 && !set->info.displayOff && (float)canvasW * SCALE >= (float)scr->width - 0.5f;
+    return set->underColor >= 0 && !set->info.displayOff &&
+           (float)canvasW * PIC_SCALE(&set->info) >= (float)scr->width - 0.5f;
 }
 
 static void flush_texture(void *data, uint32_t bytes)
@@ -1315,14 +1323,14 @@ int NitroPort_ComposePublish(int engine, int screen)
     set->info.height = h;
     set->underColor = l->displayOff ? -1 : uniform_color(l->under, w * h);
     set->overTop = 0;
-    set->overBottom = DS_H;
+    set->overBottom = OVER_ROWS(l);
     if (!l->displayOff && l->has3d && l->over) {
-        over_rows(l->over, w, &set->overTop, &set->overBottom);
+        over_rows(l->over, w, OVER_ROWS(l), &set->overTop, &set->overBottom);
     }
     if (!l->displayOff && sConfig.filter != COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
-        set->overEmpty = !NitroPort_PublishDoubled(&sShadow[e], &set->pub, l->under, l->over, l->overAlpha,
-                                                   l->has3d, w, h, set->under, set->over, scr->texW,
-                                                   sToRgb565, sAlpha16, flush_texture);
+        set->overEmpty = !NitroPort_PublishDoubledOver(&sShadow[e], &set->pub, l->under, l->over, l->overAlpha,
+                                                       l->has3d, w, h, OVER_ROWS(l), set->under, set->over,
+                                                       scr->texW, sToRgb565, sAlpha16, flush_texture);
     } else if (!l->displayOff) {
         publish_whole(e, l, scr, set, w, h);
     }
@@ -2437,15 +2445,26 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
     float u1, vTop, vBottom;
     int linear = sConfig.filter != COMPOSE_FILTER_NEAREST;
     int has3d = info != NULL && !info->displayOff && info->has3d && scene != NULL;
+    /* (the field at the DS's pixel size: a pixel a pixel, its rows all
+     * drawn from, the DS's line 0 at row top) */
+    float scale = PIC_SCALE(info);
+    int rows = info != NULL ? OVER_ROWS(info) : DS_H, top = info != NULL && scale == 1.0f ? info->top : 0;
 
     sProfGroup = scr == &sScreens[0] ? eye : 2;
 
     /* The picture, 1.25 times the DS's size, in the middle (it fills the
-     * screen: 320 DS pixels on the upper one, 256 on the lower). */
-    pic.x0 = ((float)scr->width - canvasW * SCALE) * 0.5f;
-    pic.x1 = pic.x0 + canvasW * SCALE;
+     * screen: 320 DS pixels on the upper one, 256 on the lower); the field
+     * at the DS's pixel size, a pixel a pixel (its 400 x 240 fill it). */
+    pic.x0 = ((float)scr->width - canvasW * scale) * 0.5f;
+    pic.x1 = pic.x0 + canvasW * scale;
     pic.y0 = 0.0f;
     pic.y1 = SCREEN_H;
+    if (info != NULL && info->stretch) {
+        /* (a battle's start on the wider field: the DS's picture over the
+         * whole screen) */
+        pic.x0 = 0.0f;
+        pic.x1 = (float)scr->width;
+    }
     C3D_SetFrameBuf(fb);
     C3D_SetViewport(0, 0, fb->width, fb->height);
     NitroPort_PicaPixelMatrix(&pixels, scr->width, SCREEN_H);
@@ -2466,7 +2485,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
      * texture row 0, at v = 1 (the PICA reads row height - 1 - t). */
     u1 = (float)(canvasW * scr->texScale) / (float)scr->texW;
     vTop = 1.0f;
-    vBottom = 1.0f - (float)(DS_H * scr->texScale) / (float)scr->texH;
+    vBottom = 1.0f - (float)(rows * scr->texScale) / (float)scr->texH;
     if (sConfig.flipV) {
         float t = vTop;
 
@@ -2506,12 +2525,22 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         /* Where the 3D goes: the DS's screen in the picture, or (a scene
          * made for the wider view) the whole width; moved left by BG0HOFS
          * (the game's screen shakes). */
-        if (scene->screen_width > DS_W) {
-            base.x0 = ((float)scr->width - (float)scene->screen_width * SCALE) * 0.5f;
-            base.x1 = base.x0 + (float)scene->screen_width * SCALE;
+        /* (a scene's own size: its view's, a pixel a DS pixel at the
+         * screen's height: 1.25 for the DS's 192 lines, 1 for the field's
+         * 240 at the DS's pixel size) */
+        float s3 = (float)SCREEN_H / (float)(scene->screen_height > DS_H ? scene->screen_height : DS_H);
+
+        if (info->stretch) {
+            /* (a battle's start on the wider field: the whole screen, as
+             * the stretched picture over it) */
+            base.x0 = 0.0f;
+            base.x1 = (float)scr->width;
+        } else if (scene->screen_width > DS_W) {
+            base.x0 = ((float)scr->width - (float)scene->screen_width * s3) * 0.5f;
+            base.x1 = base.x0 + (float)scene->screen_width * s3;
         } else {
-            base.x0 = pic.x0 + (canvasW - DS_W) * 0.5f * SCALE;
-            base.x1 = base.x0 + DS_W * SCALE;
+            base.x0 = pic.x0 + (canvasW - DS_W) * 0.5f * s3;
+            base.x1 = base.x0 + DS_W * s3;
         }
         base.y0 = 0.0f;
         base.y1 = SCREEN_H;
@@ -2544,8 +2573,11 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         for (r = 0; r < nruns; r++) {
             PicaRect rows;   /* (the run's place and rows: its rear plane's, its tint's) */
 
-            rect3d.x0 = base.x0 - (float)runs[r].scroll * SCALE;
-            rect3d.x1 = base.x1 - (float)runs[r].scroll * SCALE;
+            /* (a stretched picture's scrolls stretched with it) */
+            float sx3 = info->stretch ? (float)scr->width / (float)DS_W : s3;
+
+            rect3d.x0 = base.x0 - (float)runs[r].scroll * sx3;
+            rect3d.x1 = base.x1 - (float)runs[r].scroll * sx3;
             rows = rect3d;
             if (nruns > 1) {
                 /* the run's rows (screen pixel (x, y) is the framebuffer's
@@ -2554,7 +2586,11 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
                  * run: its rear plane, its polygons (each pass sets it
                  * again: see begin_pass), its tint */
                 u32 sy = (u32)fb->width / SCREEN_H, sx = (u32)fb->height / (u32)scr->width;
-                u32 y0 = (u32)((float)runs[r].y0 * SCALE + 0.5f), y1 = (u32)((float)runs[r].y1 * SCALE + 0.5f);
+                /* (the DS's lines on the screen: a tall field's from its
+                 * row top, the first run from the screen's top, the last
+                 * to its bottom) */
+                u32 y0 = runs[r].y0 == 0 ? 0u : (u32)((float)(runs[r].y0 + top) * scale + 0.5f);
+                u32 y1 = runs[r].y1 >= DS_H ? (u32)SCREEN_H : (u32)((float)(runs[r].y1 + top) * scale + 0.5f);
 
                 if (y1 <= y0) {
                     continue;
@@ -2651,7 +2687,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             }
             int origin = (canvasW - DS_W) / 2;
             float bu0 = (float)(hofs - origin) / 256.0f, bu1 = bu0 + (float)canvasW / 256.0f;
-            float bvTop = 1.0f - (float)vofs / 256.0f, bvBottom = bvTop - (float)DS_H / 256.0f;
+            float bvTop = 1.0f - (float)(vofs - top) / 256.0f, bvBottom = bvTop - (float)rows / 256.0f;
             u32 a = (u32)(info->gpuBgEva * 255 / 16), b = (u32)((16 - info->gpuBgEvb) * 255 / 16);
 
             if (sConfig.flipV) {
@@ -2671,10 +2707,10 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         /* 5. The layers in front, with their alpha (multiplied in). */
         if (!set->overEmpty && set->overTop < set->overBottom) {
             /* (only the rows with anything in them; all of them flipped) */
-            int top = sConfig.flipV ? 0 : set->overTop, bottom = sConfig.flipV ? DS_H : set->overBottom;
-            float y0 = pic.y0 + (float)top * SCALE, y1 = pic.y0 + (float)bottom * SCALE;
-            float v0 = vTop + (vBottom - vTop) * (float)top / (float)DS_H;
-            float v1 = vTop + (vBottom - vTop) * (float)bottom / (float)DS_H;
+            int first = sConfig.flipV ? 0 : set->overTop, bottom = sConfig.flipV ? rows : set->overBottom;
+            float y0 = pic.y0 + (float)first * scale, y1 = pic.y0 + (float)bottom * scale;
+            float v0 = vTop + (vBottom - vTop) * (float)first / (float)rows;
+            float v1 = vTop + (vBottom - vTop) * (float)bottom / (float)rows;
 
             make_texture(&sOverTex, set->over, set->pub.over16 ? GPU_RGBA5551 : GPU_RGBA8, scr->texW, scr->texH, linear,
                          GPU_CLAMP_TO_EDGE);

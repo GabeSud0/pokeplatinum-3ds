@@ -2333,6 +2333,67 @@ static void test_wide_window_edges(void)
     GX_SetVisibleWnd(GX_WNDMASK_NONE);
 }
 
+/* A circle fade's window (NitroPort_SetWindowCircle: walking into Eterna
+ * Forest) drawn as a circle across the whole canvas, the wider screen's
+ * bands and a tall field's lines above and below the DS's included,
+ * whatever the game's windows on each line say (theirs stop at the DS's
+ * columns: the lines it covers whole reached the screen's edges). */
+static void test_window_circle(void)
+{
+    static u16 wide[400 * 240], over[400 * 240];
+    static u8 overAlpha[400 * 240];
+    static u8 tiles[64];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED };
+    NitroRender2DSplit split;
+    int i;
+
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = 1;
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    G2_SetWnd0Position(0, 0, 255, 192);   /* (the game's, the whole DS's screen: not used) */
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG1, FALSE);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_NONE, FALSE);
+    GX_SetVisibleWnd(GX_WNDMASK_W0);
+    NitroPort_SetWindowCircle(0, 0, 128, 96, 150);
+    memset(&split, 0, sizeof(split));
+    split.width = 400;
+    split.origin = 72;
+    split.top = 24;
+    split.height = 240;
+    split.windowsToEdge = 1;
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[120 * 400 + 210] == RED);              /* the middle */
+    CHECK(wide[120 * 400 + 200 - 149] == RED);        /* in the left band, within the radius */
+    CHECK(wide[120 * 400 + 200 - 151] == GREY);       /* past it: outside */
+    CHECK(wide[120 * 400 + 200 + 149] == RED);
+    CHECK(wide[120 * 400 + 399] == GREY);
+    CHECK(wide[0 * 400 + 210] == RED);                /* above the DS's lines: 120 up, within */
+    CHECK(wide[0 * 400 + 200 + 100] == GREY);         /* (sqrt(150^2 - 120^2) = 90) */
+    CHECK(wide[0 * 400 + 200 + 89] == RED);
+    CHECK(wide[239 * 400 + 210] == RED);              /* below them */
+    /* closed: nothing inside */
+    NitroPort_SetWindowCircle(0, 0, 128, 96, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[120 * 400 + 210] == GREY);
+    /* off: the game's windows again */
+    NitroPort_SetWindowCircle(0, 0, 0, 0, -1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[120 * 400 + 210] == RED);
+    CHECK(wide[120 * 400 + 3] == RED);
+    GX_SetVisibleWnd(GX_WNDMASK_NONE);
+}
+
 /* A BG whose map goes on past the DS's edges (the battle's background,
  * clip off): a 512-wide map, its picture then the same picture mirrored
  * (tiles flipped sideways), but for a few tiles of a picture of its own
@@ -2507,6 +2568,197 @@ static void test_gpu_bg(void)
     G2_SetBG2Priority(3);
     NitroPort_Render2DSplit(0, under, &split);
     CHECK(split.gpuBgLeftOut == 0);
+}
+
+/* The field at the DS's pixel size (NitroRender2DSplit.top): a 400 x 240
+ * picture, the DS's in its middle (line 0 at 24, x 0 at 72). A clipped
+ * BG's map past the DS's lines isn't shown (its leftover tiles), but a
+ * line one colour across goes on; the OBJs go on above and below as on a
+ * taller screen; an unclipped BG's map goes on; the 3D on every line. */
+/* A battle's start stretched over the wider screen (NitroRender2DSplit.
+ * stretch): the DS's layout, each OBJ 4/5 as wide round its middle. */
+static void test_stretch_squeeze(void)
+{
+    static u8 objTile[4 * 32];
+    static u16 objPltt[16] = { 0, BLUE };
+    static GXOamAttr oam[128];
+    static uint32_t rgba[256 * 192];
+    static u16 under[256 * 192], over[256 * 192];
+    static u8 overAlpha[256 * 192];
+    NitroRender2DSplit split;
+    int i, x, first = -1, last = -1;
+
+    Reset();
+    memset(objTile, 0x11, sizeof(objTile));   /* a 16 x 16 OBJ, all blue */
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    G2_SetBG0Priority(3);
+    GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_1D_32K);
+    GX_LoadOBJ(objTile, 0, sizeof(objTile));
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));
+    G2_SetOBJAttr(&oam[0], 100, 50, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_16x16,
+                  GX_OAM_COLORMODE_16, 0, 0, 0);
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_OBJ);
+    for (i = 0; i < 256 * 192; i++) {
+        rgba[i] = 0x404040FFu;
+    }
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.stretch = 1;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.has3d);
+    for (x = 0; x < 256; x++) {
+        if (over[58 * 256 + x] & 0x8000) {
+            if (first < 0) {
+                first = x;
+            }
+            last = x;
+        }
+    }
+    /* 16 wide at x 100, now 13 round its middle (108): 102-114 */
+    CHECK(first == 102 && last == 114);
+    /* its height as it was */
+    CHECK((over[50 * 256 + 108] & 0x8000) && (over[65 * 256 + 108] & 0x8000) && !(over[66 * 256 + 108] & 0x8000));
+    /* without: 100-115 */
+    split.stretch = 0;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK((over[58 * 256 + 100] & 0x8000) && (over[58 * 256 + 115] & 0x8000) && !(over[58 * 256 + 116] & 0x8000));
+
+    /* two OBJs side by side, one picture (x 100-131): narrower round its
+     * middle (116) as one, no gap between them: 104-128 */
+    G2_SetOBJAttr(&oam[1], 116, 50, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_16x16,
+                  GX_OAM_COLORMODE_16, 0, 0, 0);
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    split.stretch = 1;
+    NitroPort_Render2DSplit(0, under, &split);
+    first = last = -1;
+    for (x = 0; x < 256; x++) {
+        if (over[58 * 256 + x] & 0x8000) {
+            if (first < 0) {
+                first = x;
+            }
+            last = x;
+        } else if (first >= 0 && last == x - 1) {
+            break;   /* (the end of the first run) */
+        }
+    }
+    CHECK(first == 104 && last == 128);
+}
+
+static void test_tall_field(void)
+{
+    enum { TW = 400, TH = 240, TOP = 24, OX = 72 };
+    static u8 tiles[3 * 32], objTile[32];
+    static u16 map1[32 * 32], map2[32 * 32], pltt[16] = { GREY, RED, GREEN, BLUE };
+    static u16 objPltt[16] = { 0, BLUE };
+    static GXOamAttr oam[128];
+    static uint32_t rgba[256 * 192];
+    static u16 under[TW * TH], over[TW * TH];
+    static u8 overAlpha[TW * TH];
+    NitroRender2DSplit split;
+    int i;
+
+#define TALL_PX(buf, x, y) ((buf)[(y) * TW + (x)] & 0x7FFF)
+    Reset();
+    for (i = 0; i < 32; i++) {
+        tiles[32 + i] = 0x11;   /* tile 1: red */
+        tiles[64 + i] = 0x22;   /* tile 2: green */
+        objTile[i] = 0x11;      /* blue */
+    }
+    memset(map1, 0, sizeof(map1));
+    map1[0] = 1;                 /* the DS's line 0: red at x 0-7 */
+    map1[32 * 31] = 2;           /* map row 31 (above the DS's line 0): leftover green */
+    memset(map2, 0, sizeof(map2));
+    for (i = 0; i < 32; i++) {
+        map2[32 * 23 + i] = 2;   /* BG2's last DS line's row: green across */
+    }
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0800,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    G2_SetBG2ControlText(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x1000,
+                         GX_BG_CHARBASE_0x04000);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map1, 0, sizeof(map1));
+    GX_LoadBG2Scr(map2, 0, sizeof(map2));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    G2_SetBG0Priority(3);
+    G2_SetBG1Priority(0);
+    G2_SetBG2Priority(1);
+    GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_1D_32K);
+    GX_LoadOBJ(objTile, 0, sizeof(objTile));
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));   /* all hidden */
+    /* an OBJ 6 lines above the DS's screen (y 250), at x 100 */
+    G2_SetOBJAttr(&oam[0], 100, 250, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_8x8,
+                  GX_OAM_COLORMODE_16, 0, 0, 0);
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1 | GX_PLANEMASK_BG2 | GX_PLANEMASK_OBJ);
+    for (i = 0; i < 256 * 192; i++) {
+        rgba[i] = 0x404040FFu;
+    }
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.width = TW;
+    split.origin = OX;
+    split.height = TH;
+    split.top = TOP;
+    split.clip[0] = split.clip[1] = split.clip[2] = split.clip[3] = 1;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.has3d);
+    /* BG1 (in front of the 3D): its line 0 at the picture's line 24 */
+    CHECK(TALL_PX(over, OX, TOP) == RED && (over[TOP * TW + OX] & 0x8000));
+    CHECK(TALL_PX(over, OX + 7, TOP + 7) == RED);
+    /* its map row 31 (the DS's line -8..-1) not shown: nothing in front there */
+    CHECK(!(over[(TOP - 4) * TW + OX] & 0x8000));
+    /* the OBJ at the DS's line -6 (the picture's 18), x 100 (172) */
+    CHECK(TALL_PX(over, OX + 100, TOP - 6) == BLUE && (over[(TOP - 6) * TW + OX + 100] & 0x8000));
+    CHECK(TALL_PX(over, OX + 100, TOP + 1) == BLUE);
+    CHECK(!(over[(TOP - 7) * TW + OX + 100] & 0x8000));
+    /* BG2 (in front of the 3D): its last DS line green across, so on below
+     * it to the picture's bottom (the DS's line 191: the picture's 215) */
+    CHECK(TALL_PX(over, OX + 50, TOP + 191) == GREEN);
+    CHECK(TALL_PX(over, OX + 50, TH - 1) == GREEN && (over[(TH - 1) * TW + OX + 50] & 0x8000));
+    /* and its first line clear: nothing above it */
+    CHECK(!(over[2 * TW + OX + 50] & 0x8000));
+    /* the 3D on every line: nothing in front of it at the picture's top
+     * left, the 3D under it there (under: nothing drawn, the backdrop) */
+    CHECK(!(over[0] & 0x8000));
+
+    /* a 32-tall OBJ below the DS's screen (y 210, its last 8 lines drawn):
+     * its lines past 256 don't come round to the picture's top (the DS
+     * would, its screen not that tall) */
+    {
+        static u8 tile12[13 * 32];
+
+        memset(tile12, 0, sizeof(tile12));
+        memset(tile12 + 12 * 32, 0x11, 32);   /* tile 12: the 32x32's bottom-left */
+        GX_LoadOBJ(tile12, 0, sizeof(tile12));
+        G2_SetOBJAttr(&oam[1], 200, 210, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_32x32,
+                      GX_OAM_COLORMODE_16, 0, 0, 0);
+        DC_FlushRange(oam, sizeof(oam));
+        GX_LoadOAM(oam, 0, sizeof(oam));
+        NitroPort_Render2DSplit(0, under, &split);
+        for (i = 0; i < 12; i++) {
+            CHECK(!(over[i * TW + OX + 200] & 0x8000));
+        }
+        GX_LoadOBJ(objTile, 0, sizeof(objTile));
+    }
+
+    /* unclipped, BG1's map goes on above: its row 31 at the picture's 16-23 */
+    split.clip[1] = 0;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(TALL_PX(over, OX, TOP - 4) == GREEN && (over[(TOP - 4) * TW + OX] & 0x8000));
+#undef TALL_PX
 }
 
 static void SolidTile4(u8 *tile, int index)
@@ -3569,8 +3821,11 @@ int main(int argc, char **argv)
     test_wide_art_places();
     test_wide_art_sliding();
     test_wide_window_edges();
+    test_window_circle();
     test_wide_map_past_edges();
     test_gpu_bg();
+    test_tall_field();
+    test_stretch_squeeze();
     test_wide_framed_windows();
     test_wide_splits();
     test_wide_parts();

@@ -1,0 +1,40 @@
+From c0e2f202f0842e9593a96273a4abe4dc5ff7886c Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] The options page: PIXEL PERFECT (SDK_PORT_3DS)
+
+The 3DS remaster's field at the DS's pixel size (the whole 400 x 240 of
+the upper screen, nothing scaled), on or off: PORT_OPT_PIXEL_FIELD, on
+the settings page with 60 FPS and SMOOTH 3D.
+---
+ include/port_options.h         | 1 +
+ src/overlay005/options_panel.c | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/include/port_options.h b/include/port_options.h
+index 14122032..4a0ee601 100644
+--- a/include/port_options.h
++++ b/include/port_options.h
+@@ -20,6 +20,7 @@
+ #define PORT_OPT_ENCOUNTERS      13 // 0 normal, 1 off, 2 1/4, 3 1/2, 4 2x
+ #define PORT_OPT_SHINY           14 // 0 1/8192, 1 1/4096, 2 1/1024, 3 1/256, 4 1/64, 5 always
+ #define PORT_OPT_ITEM2           16 // (not on the page) the lower menu's second square's item
++#define PORT_OPT_PIXEL_FIELD     17 // 0 off, 1 on: the field at the DS's pixel size (the whole 400 x 240)
+ 
+ int NitroPort_Option(int id);
+ void NitroPort_OptionSet(int id, int value);
+diff --git a/src/overlay005/options_panel.c b/src/overlay005/options_panel.c
+index 4c069755..73151f06 100644
+--- a/src/overlay005/options_panel.c
++++ b/src/overlay005/options_panel.c
+@@ -173,6 +173,7 @@ static const OptionsCard sSettingsCards[] = {
+     { "60 FPS", 0, OPK_PORT, PORT_OPT_FPS60 },
+     { "SMOOTH 3D", 0, OPK_PORT, PORT_OPT_SMOOTH3D },
+     { "START WITH", 0, OPK_PORT, PORT_OPT_START_TAB },
++    { "PIXEL PERFECT", 0, OPK_PORT, PORT_OPT_PIXEL_FIELD },
+ };
+ 
+ static const OptionsCard sEnhancementCards[] = {
+-- 
+2.43.0
+

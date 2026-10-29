@@ -49,8 +49,8 @@ typedef struct NitroRender2DSplit {
     uint64_t gpuBgKey;
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
     int backdrop;      /* the backdrop colour (RGB555): what shows where no layer does */
-    uint16_t *over;    /* width x 192 */
-    uint8_t *overAlpha;/* width x 192 */
+    uint16_t *over;    /* width x 192 (x height with top) */
+    uint8_t *overAlpha;/* width x 192 (x height with top) */
     /* The picture's canvas (the caller's choice, kept by the call): 0 or
      * 256 for the DS's screen; up to 320 for the remaster's wider upper
      * screen, the DS's x = 0 at origin. under, over and overAlpha are
@@ -81,6 +81,21 @@ typedef struct NitroRender2DSplit {
      * past 191 are line 191's. under is width x height then. The caller's
      * choice, kept by the call. */
     int height;
+    /* (the field at the DS's pixel size on the 3DS's whole screen:
+     * NitroPort_WideLayout) The DS's line 0 at the picture's line top, the
+     * picture height lines (both the caller's, kept by the call): the
+     * BGs' maps, the OBJs and the H-blank effects' lines go on above and
+     * below the DS's as they would were its screen taller, the windows from
+     * its top or to its bottom from the picture's, the 3D on every line.
+     * Only for engine A, with the wider canvas. over and overAlpha are
+     * width x height then. 0: the DS's line 0 at the top. */
+    int top;
+    /* (a battle's start on the wider field: NitroPort_SetFieldEffect) The
+     * picture at the DS's size and layout (256 x 192, as the game draws its
+     * effect: its windows, slices, wipes), stretched by the compositor to
+     * fill the screen, over the 3D at the screen's own size (its H-blank
+     * scrolls stretched with it). Set by NitroPort_WideLayout; else 0. */
+    int stretch;
     /* (the remaster's compositor, which can draw a repeating BG itself
      * from a picture of its whole map, scrolled on the GPU: the field's
      * weather, NitroPort_RepeatingBgs) The BGs it may draw so (a bit each;

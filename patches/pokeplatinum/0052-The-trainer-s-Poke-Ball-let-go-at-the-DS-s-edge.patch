@@ -1,0 +1,78 @@
+From 329808599461774e75d1c0d07d0f881991c8cdc0 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH 1/2] =?UTF-8?q?The=20trainer's=20Pok=C3=A9=20Ball=20let=20?=
+ =?UTF-8?q?go=20at=20the=20DS's=20edge=20on=20the=20wider=20screen=20(SDK?=
+ =?UTF-8?q?=5FPORT=5F3DS)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+On the wider screen the player's trainer slides on past the DS's -40,
+where the DS's throw task ended, so the trainer is gone only once all of
+it is past the wider screen's edge. While it slid on, the task kept
+putting the ball at the trainer's hand; the ball hangs at the top of its
+arc for 4 frames (the arc doesn't move it then), so the hand took it off
+the screen and it vanished for those frames. Past the DS's -40 the ball
+is left to its arc, as on the DS.
+---
+ src/battle/battle_display.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/src/battle/battle_display.c b/src/battle/battle_display.c
+index 439dc697..e5b0fb09 100644
+--- a/src/battle/battle_display.c
++++ b/src/battle/battle_display.c
+@@ -579,6 +579,9 @@ typedef struct TrainerThrowBallData {
+     int ballTypeIn;
+     int delay;
+     int ballTargetState;
++#ifdef SDK_PORT_3DS
++    BOOL portBallLetGo;
++#endif
+ } TrainerThrowBallData;
+ 
+ void BattleDisplay_InitTaskThrowTrainerBall(BattleSystem *battleSys, BattlerData *battlerData, TrainerThrowBallMessage *message)
+@@ -586,6 +589,9 @@ void BattleDisplay_InitTaskThrowTrainerBall(BattleSystem *battleSys, BattlerData
+     TrainerThrowBallData *trainerThrowBallData = Heap_Alloc(HEAP_ID_BATTLE, sizeof(TrainerThrowBallData));
+ 
+     trainerThrowBallData->state = 0;
++#ifdef SDK_PORT_3DS
++    trainerThrowBallData->portBallLetGo = FALSE;
++#endif
+     trainerThrowBallData->battleSys = battleSys;
+     trainerThrowBallData->command = message->command;
+     trainerThrowBallData->ballTypeIn = message->ballTypeIn;
+@@ -2954,7 +2960,16 @@ static void Task_ThrowTrainerBall(SysTask *task, void *data)
+         ManagedSprite_OffsetPositionXY(trainerThrowBallData->battlerData->managedSprite, -5, 0);
+         ManagedSprite_GetPositionXY(trainerThrowBallData->battlerData->managedSprite, &x, &y);
+ 
++#ifdef SDK_PORT_3DS
++        // (the wider screen: the trainer slides on past the DS's -40, where
++        // the DS's task ended. The ball, in the air by then, is left alone
++        // as on the DS: while it hangs at the top of its arc (4 frames the
++        // arc doesn't move it), its position here, the trainer's hand, took
++        // it off the screen and it vanished.)
++        if (trainerThrowBallData->battlerData->ballRotation && !trainerThrowBallData->portBallLetGo) {
++#else
+         if (trainerThrowBallData->battlerData->ballRotation) {
++#endif
+             animFrame = ManagedSprite_GetAnimationFrame(trainerThrowBallData->battlerData->managedSprite);
+ 
+             if (v5[trainerThrowBallData->backSpriteIdx][animFrame][0] != 0x7FFF) {
+@@ -2977,6 +2992,12 @@ static void Task_ThrowTrainerBall(SysTask *task, void *data)
+             }
+         }
+ 
++#ifdef SDK_PORT_3DS
++        if (x <= -40) {
++            trainerThrowBallData->portBallLetGo = TRUE;
++        }
++#endif
++
+         if (x <= PORT_TRAINER_GONE_LEFT) {
+             SpriteManager *spriteMan = BattleSystem_GetSpriteManager(trainerThrowBallData->battleSys);
+ 
+-- 
+2.43.0
+

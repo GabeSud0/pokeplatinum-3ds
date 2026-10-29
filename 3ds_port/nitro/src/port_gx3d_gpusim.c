@@ -20,8 +20,13 @@
 
 extern unsigned char NitroPort_IoReg[];
 
-#define W NITRO_GX3D_WIDTH
-#define H NITRO_GX3D_HEIGHT
+/* The picture's size: the DS's, or a bigger view's at the DS's pixel size
+ * (NitroPort_Gx3dSimulateGpuSized). */
+#define MAX_W 512
+#define MAX_H 256
+static int sW = NITRO_GX3D_WIDTH, sH = NITRO_GX3D_HEIGHT;
+#define W sW
+#define H sH
 
 typedef struct { float r, g, b, a; } Color;
 
@@ -73,7 +78,7 @@ static float edge(float ax, float ay, float bx, float by, float px, float py)
 static int sShadows, sGrade, sSunFixed;
 static NitroShadowSun sFixedSun = { 55.0f, 32.0f };
 static float sShadowMap[SHADOW_SIZE * SHADOW_SIZE];
-static float sLit[W * H];   /* (the opaque pixels' light, for the mask) */
+static float sLit[MAX_W * MAX_H];   /* (the opaque pixels' light, for the mask) */
 /* (as port_gx3d_pica.c: room for the cards' copies turned to the sun, and
  * the batches that are the game's painted shadows, left out) */
 #define SHADOW_CARD_TRIANGLES 512u
@@ -167,8 +172,8 @@ static void shadow_map(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *ba
  * shade + (1 - shade) * it. */
 static void apply_mask(Color *color, const float shade[3])
 {
-    enum { MW = W / 2, MH = H / 2 };
-    static float mask[MW * MH], blurred[MW * MH];
+    const int MW = W / 2, MH = H / 2;
+    static float mask[(MAX_W / 2) * (MAX_H / 2)], blurred[(MAX_W / 2) * (MAX_H / 2)];
     int x, y, k;
 #define TAP(m, u, v) bilinear(m, MW, MH, u, v)
     for (y = 0; y < MH; y++)
@@ -206,7 +211,25 @@ static float shadow_lookup(float u, float v, float d)
     return (s[0] * (1.0f - fx) + s[1] * fx) * (1.0f - fy) + (s[2] * (1.0f - fx) + s[3] * fx) * fy;
 }
 
+static void simulate(const NitroGx3dScene *scene, uint16_t *out555);
+
 void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
+{
+    sW = NITRO_GX3D_WIDTH;
+    sH = NITRO_GX3D_HEIGHT;
+    simulate(scene, out555);
+}
+
+void NitroPort_Gx3dSimulateGpuSized(const NitroGx3dScene *scene, uint16_t *out555, int width, int height)
+{
+    sW = width > 0 && width <= MAX_W ? width : NITRO_GX3D_WIDTH;
+    sH = height > 0 && height <= MAX_H ? height : NITRO_GX3D_HEIGHT;
+    simulate(scene, out555);
+    sW = NITRO_GX3D_WIDTH;
+    sH = NITRO_GX3D_HEIGHT;
+}
+
+static void simulate(const NitroGx3dScene *scene, uint16_t *out555)
 {
     /* (after the scene's, the sun shadows' own, as port_gx3d_pica.c) */
     static NitroGx3dGpuVertex verts[NITRO_GX3D_PICA_MAX_VERTICES + 3 * NITRO_GX3D_MAX_SHADOW_TRIANGLES +
@@ -214,13 +237,13 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
     static uint32_t decalTexels[4096];
     static NitroGx3dBatch batches[NITRO_GX3D_MAX_TRIANGLES + 2048 + SHADOW_CARD_BATCHES];
     static uint32_t tiled[1024 * 1024];
-    static Color color[W * H];
-    static float depth[W * H];
+    static Color color[MAX_W * MAX_H];
+    static float depth[MAX_W * MAX_H];
     /* As port_gx3d_pica.c keeps it: translucent polygon ID + 64, 0xFF:
      * none; then the opaque polygon IDs for edge marking. */
-    static uint8_t stencil[W * H];
-    static uint32_t depthId[W * H];
-    static uint8_t alpha[W * H];
+    static uint8_t stencil[MAX_W * MAX_H];
+    static uint32_t depthId[MAX_W * MAX_H];
+    static uint8_t alpha[MAX_W * MAX_H];
     NitroGx3dTexBanks banks;
     NitroGx3dEdgeSetup edges;
     NitroShadowSetup shadow;
@@ -264,7 +287,7 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
         shade[2] = 1.0f - (1.0f - NITRO_SHADOW_SHADE_B / 255.0f) * strength;
     }
     if (sShadows && nv && strength >= 0.02f &&
-        NitroPort_ShadowSetup(verts[0].position, sizeof(verts[0]), nv, scene->projection, scene->screen_width,
+        NitroPort_ShadowSetup(verts[0].position, sizeof(verts[0]), nv, scene->projection, scene->screen_width, scene->screen_height,
                               &sun, SHADOW_SIZE, &shadow)) {
         size_t ns = 0, n;
         shadowed = 1;
@@ -359,8 +382,8 @@ void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
             for (j = 0; j < 3; j++) {
                 float w = v[j].position[3];
                 iw[j] = w != 0.0f ? 1.0f / w : 0.0f;
-                sx[j] = (v[j].position[0] * iw[j] + 1.0f) * 128.0f;
-                sy[j] = (1.0f - v[j].position[1] * iw[j]) * 96.0f;
+                sx[j] = (v[j].position[0] * iw[j] + 1.0f) * (float)W * 0.5f;
+                sy[j] = (1.0f - v[j].position[1] * iw[j]) * (float)H * 0.5f;
                 sz[j] = -v[j].position[2] * iw[j];
             }
             area = edge(sx[0], sy[0], sx[1], sy[1], sx[2], sy[2]);

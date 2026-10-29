@@ -583,6 +583,105 @@ static void test_interpolation_followed(void)
     CHECK(mid && mid->count==20 && mid->triangles[16].v[0].clip[0]==-448+32);
     NitroPort_Gx3dSetInterpolation(0);
 }
+/* A map's block coming into the view: a new tile at the list's start,
+ * all the rest one place on in the order, so the order pairs each tile
+ * with its neighbour (Route 205's lawn at a run: stretched stairs and
+ * holes in the in-between scene). The scene's motion the most of them fit
+ * (the scene before's here): each tile halfway along it. */
+static void test_interpolation_order_shift(void)
+{
+    const NitroGx3dScene *mid;
+    unsigned matched=0,polygons=0;
+    int i,scene;
+    const uint32_t opaque=(3u<<6)|(31u<<16);
+    reset_geometry();
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    /* 16 tiles, 256 (8 DS pixels) to the left each scene */
+    for(scene=0;scene<3;scene++){
+        if(scene==2)small_quad_at(3200-256*scene,1000,opaque);   /* (the new one, first) */
+        for(i=0;i<16;i++)small_quad_at(-3600+450*i+70*(i%3)-256*scene,-3000,opaque);
+        swap_done();
+    }
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && polygons==17 && matched>=16);
+    if(mid && mid->count>=34){
+        int ok=1;
+        for(i=0;i<16;i++){
+            /* (after the new one's two triangles) */
+            if(mid->triangles[2+2*i].v[0].clip[0]!=-3600+450*i+70*(i%3)-256-128)ok=0;
+        }
+        CHECK(ok);
+    }else CHECK(0);
+    NitroPort_Gx3dSetInterpolation(0);
+}
+/* A floor moving a tile a scene (the bike's top gear): each tile where
+ * its neighbour was, rows of them further apart nearer the camera (the
+ * perspective). Still a camera moving: each tile halfway along its own
+ * row's motion, not where it is now. */
+static void test_interpolation_tile_a_scene(void)
+{
+    const NitroGx3dScene *mid;
+    unsigned matched=0,polygons=0;
+    int i,r,scene,bad=0,t=0;
+    const uint32_t opaque=(3u<<6)|(31u<<16);
+    reset_geometry();
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    for(scene=0;scene<3;scene++){
+        for(r=0;r<4;r++){
+            int sp=256+64*r;
+            for(i=0;i<16;i++)small_quad_at(-3000+sp*(i-scene),-3000+1500*r,opaque);
+        }
+        swap_done();
+    }
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && polygons==64);
+    if(mid && mid->count==128){
+        for(r=0;r<4;r++){
+            int sp=256+64*r;
+            for(i=0;i<16;i++,t++){
+                int want=-3000+sp*(i-2)+sp/2,got=mid->triangles[2*t].v[0].clip[0];
+                if(got<want-8 || got>want+8)bad++;
+            }
+        }
+        CHECK(bad==0);
+    }else CHECK(0);
+    NitroPort_Gx3dSetInterpolation(0);
+}
+/* A model that sways where it is (the starters' Poké Balls in their
+ * briefcase): its parts a few pixels from where they were, some nearer a
+ * neighbour of their kind than their own place. The scene still: each
+ * part with the one the order gives (bits of the wrong ones made grey
+ * blocks). */
+static void test_interpolation_swaying(void)
+{
+    const NitroGx3dScene *mid;
+    unsigned matched=0,polygons=0;
+    int i,scene;
+    const uint32_t opaque=(3u<<6)|(31u<<16);
+    reset_geometry();
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    for(scene=0;scene<2;scene++){
+        /* the still room around it: another kind */
+        for(i=0;i<12;i++)small_quad_at(-3600+600*i,-3000,opaque|(1u<<24));
+        /* the model: 6 parts 120 apart, every other one 100 right, the
+         * rest 100 left */
+        for(i=0;i<6;i++)small_quad_at(-600+120*i+(scene?(i&1?-100:100):0),0,opaque);
+        swap_done();
+    }
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && polygons==18 && matched==18);
+    if(mid && mid->count==36){
+        int ok=1;
+        for(i=0;i<6;i++){
+            if(mid->triangles[24+2*i].v[0].clip[0]!=-600+120*i+(i&1?-50:50))ok=0;
+        }
+        CHECK(ok);
+    }else CHECK(0);
+    NitroPort_Gx3dSetInterpolation(0);
+}
 static void test_shadow_triangles(void)
 {
     const NitroGx3dScene *scene;
@@ -1576,6 +1675,9 @@ static void run_all(void)
     test_shadow_triangles();
     test_interpolation();
     test_interpolation_followed();
+    test_interpolation_order_shift();
+    test_interpolation_tile_a_scene();
+    test_interpolation_swaying();
     test_triangle_strip();
     test_hidden_vertices();
     test_textures();

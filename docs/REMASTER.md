@@ -577,7 +577,10 @@ stretched:
     the opponent) till they're past the wider screen's edges, not the
     DS's (they vanished in the sides); since 2026-10-26 (patch 0043) till
     all of the sprite is (it reaches 60 pixels on from its position: the
-    player went with 20 pixels of it still in the left band);
+    player went with 20 pixels of it still in the left band); past the
+    DS's -40 the player's Poké Ball is left to its arc as on the DS (patch
+    0052: the trainer's hand took it off the screen for the 4 frames it
+    hangs at the top, and it vanished);
   - the HM cut-in: its band of Poké Balls (BG3, a 256-pixel map) repeats
     to the screen's edges (a SHOW part) instead of a stripe of its plain
     lines; the Pokémon waits beyond the wider screen's right edge and
@@ -622,6 +625,104 @@ stretched:
 - **The 3D** is drawn wide (the camera widened) only while it's on the
   upper screen; the intro's flyover is on the lower screen, at the DS's
   width.
+
+### The field at the DS's pixel size (PIXEL PERFECT)
+
+An option on the settings page (on by default, `pixel_field` in
+`options.txt`): in the field the upper screen's 400 x 240 pixels are each
+one of the DS's, nothing scaled, so the pixel art stays exact; the view
+shows more of the world instead of making it bigger (2026-10-27). In the
+field only (`NitroPort_PixelField`: overlay5 loaded, not a battle, not a
+screen laid out in parts or made of pictures); everywhere else the wider
+screen's 320 x 192 at 1.25 times, as above.
+
+- **The 3D**: the view 400 x 240 (`NitroPort_Gx3dSetView`): clip x scaled
+  by 256 / 400 and y by 192 / 240 (with the DS's full-size viewport), so
+  the game's own box tests pass what that shows. Each scene says its size
+  (`screen_width`, `screen_height`); the compositor draws a scene at a
+  pixel a DS pixel at the screen's height (1.25 for 192 lines, 1 for 240),
+  whatever the 2D's picture is.
+- **The 2D**: a 400 x 240 picture, the DS's in its middle (x 0 at 72, line
+  0 at 24: `NitroRender2DSplit.top`). The renderer draws the lines above
+  and below as the DS would were its screen taller: the BGs' maps (VOFS
+  less 24), the OBJs (y plus 24, mod 256: one placed just above the DS's
+  screen shows above it), the H-blank effects' lines (the first's above,
+  the last's below), the windows (one from the DS's top or to its bottom
+  from the picture's). A clipped BG's map past the DS's lines isn't shown
+  (the field's text BG has leftover tiles there) unless its first or last
+  line is one colour across (a fade, Flash's dark): that line goes on. The
+  weather's BG (unclipped) goes on as its map does. No hand-drawn wide art
+  here (it's for the 320).
+- **The compositor**: that picture at a pixel a pixel (`ComposeLayers.top`,
+  `PIC_SCALE`), the layers in front of the 3D on all 240 lines; the
+  weather's BG drawn by the GPU from line -24 of its map.
+- **The game** reads `NitroPort_WideScreenExtra` as 72 there: the people the
+  scripts bring on from the sides come from beyond the 400 pixels.
+- **The game's windows** go to the picture's top or bottom
+  (`DecideTallWindows`): those wholly in the DS's lower half 24 lines down
+  (a text box at the screen's bottom, YES/NO with it), those wholly in its
+  upper half 24 up (the place name sign at the top), the OBJs over them
+  with them; the lines they leave are drawn from nowhere.
+- **The people of the maps beside** (patch 0050, also with the 320-wide
+  field): the DS makes a map's people as the player walks into it and drops
+  those of the map left, all out of its screen; on the wider one they
+  popped in and out (the berry trees and people at Floaroma's edge). Now
+  the people of the maps beside the player's are there ahead
+  (`MAP_OBJ_STATUS_PORT_NEIGHBOUR`): `FieldMap_PortNeighbours` brings those
+  within 17 tiles left or right, 13 up, 11 down (one a frame, read from
+  their map's events, while there's room for their pictures and 12 places
+  left for the game's own), and drops those 4 tiles further out; walking
+  into a map, the map left's in reach stay beside, and the new map's are
+  taken as the game's own (`MapObjectMan_AddMapObjectFromHeader`). They walk
+  and are in the way, but can't be talked to, don't see the player, aren't
+  found by a script's local ID and aren't saved: as on the DS, where they
+  weren't there yet. A map's own flags (cleared walking into it) count as
+  clear for its people seen from beside; one hidden by a flag set since is
+  dropped. Taken as the game's own only as their event has them (a Vs.
+  Seeker's spin, a script's hiding: made again from it); not the invisible
+  ones (nothing to see). Their pictures' places are given back as they go,
+  and walking into a map the people beside are given up (the furthest
+  first) while the new map's pictures wouldn't fit.
+  - The player's counterpart (patch 0055): her graphics are a variable's
+    (`OBJ_EVENT_GFX_VAR_0`), set by her map's script as the player walks
+    in, so she was never brought and popped in at the zone change (Dawn
+    outside the lab in Sandgem Town, 4 tiles away). On the overworld only
+    she has one, each map setting Dawn for a boy and Lucas for a girl, so a
+    neighbour's `VAR_0` is that; where the scripts move or hide her in some
+    of the story's states she's placed the same way
+    (`sPortCounterpartPlaces`: Sandgem, Route 202, Jubilife, Veilstone,
+    Canalave). The other variables' (only indoors) aren't brought.
+- **A battle's start** (patch 0051): the encounter effects are made for the
+  DS's screen (windows and H-blank slices across its columns and lines,
+  wipes drawn into a 256 x 192 BG). While one plays (`NitroPort_SetFieldEffect`)
+  the upper screen's 2D is laid out as the DS's and stretched over the
+  whole screen by the compositor (`NitroRender2DSplit.stretch`), the 3D at
+  the screen's own size, its H-blank scrolls stretched too: the slices and
+  wipes reach the screen's edges. The sprites (the Poké Balls, the Galactic
+  logo) are drawn 4/5 as wide round their middles (a sprite of several OBJs
+  touching, round its whole middle), so stretched 1.5625 across and 1.25
+  down they keep their shape. Not the cut-ins with a trainer's picture
+  (the leaders, the Elite Four, the Champion) nor the legendaries' (the
+  camera only).
+- **The circle fades** (patch 0054, also with the 320-wide screen): the
+  screen closing round the middle (walking into Eterna Forest) is a window
+  the game shapes line by line for the DS's 256 x 192. It was cut flat at
+  the DS's sides, the lines it covered whole reached the screen's edges as
+  a band, and the taller field's lines above and below the DS's had its
+  first and last line's. Each step the game now tells the port the circle
+  (`NitroPort_SetWindowCircle`: middle and radius), and the 2D renderer
+  draws it across the whole canvas; off when the fade ends or another
+  starts. Test: `test_window_circle`.
+- **A walk out up or down** (patch 0053): a script's walk straight out up
+  or down that meets something in the way beyond the DS's picture (more
+  than 5 rows from the middle) goes to a door within the walk's reach
+  instead (on the walk's way first, else west, else east): Dawn leaving
+  the lab after the Pokédex walked 10 steps south beside the door, into
+  the wall, where the DS's screen had ended. With no door near, the
+  script's walk as it is.
+- Still to do: the people scripts bring on from above or below (they show
+  the last few tiles of their walk in); weather sprites (rain, snow) only
+  on the DS's lines.
 
 ## The soft reset
 
@@ -1463,6 +1564,25 @@ taken without the search round it; the search stops comparing a polygon
 once it's further than the best so far; and the median that sets
 "near enough" is found without sorting (half the cost there, on the PC). The outlines with the slider up are off by default for it
 (`edges3d on`: while they fit).
+
+The scene's motion (2026-10-27): the order's pairs give it only while the
+order holds. A map's block coming into the view puts its tiles among the
+rest, all of one kind, and every pair after it was a tile with its
+neighbour: on Route 205's lawn at a run the in-between scene had its
+tiles halfway to the wrong ones (holes, the stairs stretched). Now the
+motion is the one most of a sample of 64 polygons fits (each with one of
+its kind in the scene before within 2 DS pixels of where it puts it): the
+order's or the scene before's (the camera's pace is steady; forgotten
+after a cut, a change of view or the in-between scenes off), none only
+without either (a floor moving a tile a scene, the bike's top gear, has
+every tile where its neighbour was: none fitted it all). And
+while the scene itself stays still, a polygon takes the order's pair when
+that's no more than 3 DS pixels further than the nearest of its kind: the
+starters' Poké Balls wobbling in the briefcase had their faces paired
+with the next face or the next ball, and the in-between scenes showed
+grey blocks. In `test_gx3d.c`: `test_interpolation_order_shift`,
+`test_interpolation_tile_a_scene`, `test_interpolation_swaying`. The PC runner's `midview FILE` draws the
+in-between scene at the view's size (as `viewsim`).
 
 ## Known
 

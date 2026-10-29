@@ -47,6 +47,7 @@ typedef struct GeoState {
     int64_t xfTrans[4];   /* its row 3, << 12: what (0, 0, 0, 1.0) adds */
     int clipDirty;
     int32_t wideNum, wideDen;   /* the view's width scale (NitroPort_Gx3dSetWideView) */
+    int32_t tallNum, tallDen;   /* and its height's (NitroPort_Gx3dSetView) */
     Matrix pjStack, texStack;
     Matrix posStack[31], vecStack[31];
     int mode, pvLevel, pjLevel, texLevel, stackError;
@@ -455,9 +456,9 @@ static void set_viewport(GeoState *g,uint32_t p0)
     g->viewport[1]=(int)((p0>>8)&255);
     g->viewport[2]=(int)((p0>>16)&255);
     g->viewport[3]=(int)((p0>>24)&255);
-    if(g->wideNum!=g->wideDen)g->clipDirty=1;   /* (ensure_clip: the view's width) */
+    if(g->wideNum!=g->wideDen || g->tallNum!=g->tallDen)g->clipDirty=1;   /* (ensure_clip: the view's size) */
 }
-static int sWideWidth=256;
+static int sWideWidth=256,sWideHeight=192;
 /* With the geometry thread: the next SWAP_BUFFERS's time and 3D registers
  * (NitroGx3dScene.stamp, disp3dcnt, regs3d), as the game had them when it
  * sent it: handed over in the ring just before it (OP_SCENE_REGS, from the
@@ -468,7 +469,7 @@ static uint16_t sPendingBgOfs[8];
 /* (the scene before's BG scrolls: an in-between scene's are halfway) */
 static uint16_t sLastBgOfs[8];
 static int sLastBgOfsValid;
-static uint32_t sLastStamp;
+static uint32_t sLastStamp, sLastWidth, sLastHeight;   /* (the scene before's) */
 static void io_bg_ofs(uint16_t out[8])
 {
     int i;
@@ -484,10 +485,12 @@ __attribute__((weak,noinline)) uint32_t NitroPort_Gx3dStamp(void)
 {
     return 0;
 }
-static void set_wide_view(GeoState *g,int screenWidth)
+static void set_wide_view(GeoState *g,int screenWidth,int screenHeight)
 {
     g->wideNum=256;g->wideDen=screenWidth;
     if(screenWidth==256){g->wideNum=1;g->wideDen=1;}
+    g->tallNum=192;g->tallDen=screenHeight;
+    if(screenHeight==192){g->tallNum=1;g->tallDen=1;}
     g->clipDirty=1;
 }
 static void ensure_clip(GeoState *g)
@@ -503,6 +506,15 @@ static void ensure_clip(GeoState *g)
             /* rounded to nearest, towards zero at a half */
             v=(v>=0?v+g->wideDen/2:v-g->wideDen/2)/g->wideDen;
             g->xf.a[j*4]=saturation(v);
+        }
+    }
+    /* (and taller: y, with the DS's full-height viewport) */
+    if(g->tallNum!=g->tallDen && ((g->viewport[3]-g->viewport[1]+1)&0xFF)==192 &&
+       ((g->viewport[2]-g->viewport[0]+1)&0x1FF)==256){
+        for(j=0;j<4;j++){
+            int64_t v=(int64_t)g->clip.a[j*4+1]*g->tallNum;
+            v=(v>=0?v+g->tallDen/2:v-g->tallDen/2)/g->tallDen;
+            g->xf.a[j*4+1]=saturation(v);
         }
     }
     for(j=0;j<4;j++)g->xfTrans[j]=(int64_t)g->xf.a[12+j]<<12;
@@ -867,6 +879,7 @@ typedef struct PolyRecord {
 #define MATCH_WINDOW 64
 #define MATCH_NEAR 16.0f
 #define MATCH_SURE 1.0f
+#define ORDER_SLACK 3.0f   /* (match_records: the order's pair, if no further than this from the nearest's) */
 static int sInterpWanted, sInterp;
 static PolyRecord *sRec[2];              /* [sRecBuild]: this scene's; the other: the scene before's */
 static unsigned sRecCount[2], sRecBuild;
@@ -995,6 +1008,30 @@ static float poly_distance(const PolyRecord *p,const PolyRecord *c,float dx,floa
 static int sMotionValid;
 static uint8_t *sPUsed;   /* (the scene before's records paired with one of this one's) */
 static float sMotionX, sMotionY;
+/* The motion the scene before had (sMotionValid then): the camera's pace
+ * at a walk or a run is steady from one scene to the next. */
+static int sPrevMotionValid;
+static float sPrevMotionX, sPrevMotionY;
+/* How many of a sample of this scene's polygons (up to 64, spread through
+ * it) have one of their kind in the scene before, near where the order
+ * pairs them, where the motion (dx, dy) puts it (2 DS pixels, a vertex on
+ * average). */
+static unsigned motion_support(const PolyRecord *P,unsigned m,const PolyRecord *C,unsigned n,
+                               const int32_t *out,float dx,float dy)
+{
+    unsigned j,found=0,step=n/64u+1u;
+    for(j=0;j<n;j+=step){
+        int center=out[j]>=0?out[j]:(int)j,lo=center-MATCH_WINDOW,hi=center+MATCH_WINDOW,q;
+        if(!C[j].onScreen)continue;
+        if(lo<0)lo=0;
+        if(hi>(int)m-1)hi=(int)m-1;
+        for(q=lo;q<=hi;q++){
+            if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)continue;
+            if(poly_distance(&P[q],&C[j],dx,dy,2.0f*MATCH_SURE)<2.0f*MATCH_SURE){found++;break;}
+        }
+    }
+    return found;
+}
 static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C,unsigned n,int32_t *out)
 {
     unsigned i=0,j=0,matched=0,moves=0;
@@ -1025,7 +1062,36 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
         moves++;
     }
     if(moves>=8u){dx=median_of(mx,moves);dy=median_of(my,moves);}
+    /* The order's pairs give the motion only while the order holds. A
+     * map's block coming into the view puts its tiles among the rest,
+     * all of one kind, and every pair after it is a tile with another
+     * (Route 205's lawn at a run, 2026-10-27: its tiles halfway to the
+     * wrong ones, holes and stretched stairs in the in-between scene).
+     * So the motion that most of a sample of polygons fits: the order's
+     * or the scene before's (the camera's pace is steady); none only
+     * without either. (Not none against a moving camera's: a floor moving
+     * a tile a scene, the bike's top gear, has every tile where its
+     * neighbour was, and none fitted them all: the floor at 30.) The
+     * order's wins a tie. */
+    if(n>=16u){
+        float cx[3],cy[3];
+        unsigned c=0,k,best=0,bestSupport=0;
+        if(moves>=8u){cx[c]=dx;cy[c]=dy;c++;}
+        if(sPrevMotionValid && (sPrevMotionX!=0.0f || sPrevMotionY!=0.0f) &&
+           (!c || sPrevMotionX!=dx || sPrevMotionY!=dy)){cx[c]=sPrevMotionX;cy[c]=sPrevMotionY;c++;}
+        if(!c){cx[c]=0.0f;cy[c]=0.0f;c++;}
+        for(k=0;k<c;k++){
+            unsigned support=motion_support(P,m,C,n,out,cx[k],cy[k]);
+            if(support>bestSupport){bestSupport=support;best=k;}
+        }
+        if(bestSupport>0){
+            if(moves<8u || cx[best]!=dx || cy[best]!=dy)moves=8u;   /* (valid: it fits) */
+            dx=cx[best];dy=cy[best];
+        }
+    }
     sMotionValid=moves>=8u;
+    sPrevMotionValid=sMotionValid;
+    sPrevMotionX=dx;sPrevMotionY=dy;
     sMotionX=dx;sMotionY=dy;
     /* (a figure that moves on its own, the player against the camera's
      * motion: as far again as the scene moves) */
@@ -1060,6 +1126,19 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
             d=poly_distance(&P[q],&C[j],dx,dy,bestD);
             if(d<bestD){bestD=d;best=q;}
         }
+        /* The order's pair when it's nearly as near as the nearest: a model
+         * that turns or sways (the starters' Poké Balls in the briefcase,
+         * wobbling) has its parts a pixel or two from where they were, and
+         * as near a part of its kind (the ball's other faces, the other
+         * balls): taken, the in-between scene showed bits of the wrong
+         * ones, grey blocks (2026-10-27). Only while the scene itself
+         * stays (a map scrolling, the order shifts as its tiles come and go:
+         * a cliff's tile paired a little off left a crack). */
+        if(order>=0 && order!=best && fabsf(dx)+fabsf(dy)<MATCH_SURE &&
+           P[order].onScreen && P[order].count==C[j].count){
+            float d=poly_distance(&P[order],&C[j],dx,dy,near);
+            if(d<near && (best<0 || d<=bestD+ORDER_SLACK)){best=order;bestD=d;}
+        }
         /* What the camera follows stays where it was on the screen as the
          * scene moves: the player, and one who follows him. The order's
          * pair where it was (a pixel at most), when that fits better than
@@ -1091,15 +1170,19 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
     unsigned framePolygons=s.framePolygons,frameVertices=s.frameVertices;
     int capture=sShadowCapture;
     if(!sMid || !sMatch || !sRecBeforeValid || !n){
-        sMidMatched=0;sMidPolygons=n;
+        sMidMatched=0;sMidPolygons=n;sPrevMotionValid=0;
         return 0;
     }
     sMidMatched=match_records(P,m,C,n,sMatch);
     sMidPolygons=n;
-    if(n>=16u && sMidMatched*2u<n)return 0;   /* (a cut: too little in common) */
+    if(n>=16u && sMidMatched*2u<n){sPrevMotionValid=0;return 0;}   /* (a cut: too little in common) */
+    /* (the view's size changed between them: no in-between, its clip
+     * spaces aren't the same) */
+    if(sLastBgOfsValid && (now->screen_width!=sLastWidth || now->screen_height!=sLastHeight)){sPrevMotionValid=0;return 0;}
     sMid->count=0;sMid->dropped=0;sMid->shadow_count=0;sMid->shadow_triangles=NULL;
     sMid->serial=now->serial;sMid->swap_param=now->swap_param;
     sMid->screen_width=now->screen_width;
+    sMid->screen_height=now->screen_height;
     memcpy(sMid->projection,now->projection,sizeof(sMid->projection));
     sMid->stamp=now->stamp;
     sMid->stamp_before=sLastBgOfsValid?sLastStamp:now->stamp;
@@ -1218,6 +1301,7 @@ static void interp_swap(void)
     }
     if(sInterp && wanted)sRecBeforeValid=1;
     else sRecBeforeValid=0;
+    if(!sRecBeforeValid)sPrevMotionValid=0;   /* (the motion before: from scenes in a row only) */
     __atomic_store_n(&sInterp,wanted,__ATOMIC_RELEASE);
     sRecBuild^=1u;
     sRecCount[sRecBuild]=0;
@@ -1570,6 +1654,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         scene->swap_param=p[0];
         scene->serial=sSerial+1;
         scene->screen_width=(uint32_t)(s.wideNum==s.wideDen?256:s.wideDen);
+        scene->screen_height=(uint32_t)(s.tallNum==s.tallDen?192:s.tallDen);
         memcpy(scene->projection,s.proj.a,sizeof(scene->projection));
         /* When the game ended it (with the thread: noted on the game's
          * thread as the SWAP went in; swap_noted). */
@@ -1592,6 +1677,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         interp_mid(scene);   /* (published with it) */
         memcpy(sLastBgOfs,scene->bg_ofs,sizeof(sLastBgOfs));
         sLastStamp=scene->stamp;
+        sLastWidth=scene->screen_width;sLastHeight=scene->screen_height;
         sLastBgOfsValid=1;
         if(NitroPort_MailboxPublish(&sMailbox,&next,&serial)){
             sDisplayed=sBuilding;
@@ -1617,7 +1703,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         break;
     case 0x70:case 0x71:case 0x72:test_command(&s,op,p);break;
     case OP_CLEAR_STACK_ERROR:s.stackError=0;s.pjLevel=0;break;
-    case OP_WIDE_VIEW:set_wide_view(&s,(int)p[0]);break;
+    case OP_WIDE_VIEW:set_wide_view(&s,(int)(p[0]&0xFFFFu),(int)(p[0]>>16));break;
     case OP_SCENE_REGS:
         sPendingStamp=p[0];
         sPendingDisp3d=p[1];
@@ -2332,20 +2418,26 @@ void NitroPort_Gx3dThreadStats(uint64_t *busy,uint32_t *scenes,uint32_t *skipped
 /* ------------------------------------------------- the game's side */
 static NitroGx3dRecorder sRecorder;
 void NitroPort_Gx3dSetRecorder(NitroGx3dRecorder recorder){sRecorder=recorder;}
-void NitroPort_Gx3dSetWideView(int screenWidth)
+void NitroPort_Gx3dSetView(int screenWidth,int screenHeight)
 {
-    uint32_t p=(uint32_t)screenWidth;
+    uint32_t p;
     initialize();
     if(screenWidth<=0||screenWidth>1024)screenWidth=256;
-    p=(uint32_t)screenWidth;
-    sWideWidth=screenWidth;
-    if(sResults->wideDen==(screenWidth==256?1:screenWidth) && sResults->wideNum==(screenWidth==256?1:256))
+    if(screenHeight<=0||screenHeight>1024)screenHeight=192;
+    p=(uint32_t)screenWidth|((uint32_t)screenHeight<<16);
+    sWideWidth=screenWidth;sWideHeight=screenHeight;
+    if(sResults->wideDen==(screenWidth==256?1:screenWidth) && sResults->wideNum==(screenWidth==256?1:256) &&
+       sResults->tallDen==(screenHeight==192?1:screenHeight) && sResults->tallNum==(screenHeight==192?1:192))
         return;   /* (as it is) */
     /* The shadow now (the game's box tests); the thread at this point of
      * its stream. */
-    set_wide_view(sResults,screenWidth);
+    set_wide_view(sResults,screenWidth,screenHeight);
     if(sThreaded)enqueue(OP_WIDE_VIEW,&p,1,0);
-    else if(sResults!=&s)set_wide_view(&s,screenWidth);
+    else if(sResults!=&s)set_wide_view(&s,screenWidth,screenHeight);
+}
+void NitroPort_Gx3dSetWideView(int screenWidth)
+{
+    NitroPort_Gx3dSetView(screenWidth,192);
 }
 #define RECORD(type,words,count) do{if(sRecorder)sRecorder((type),(words),(count));}while(0)
 /* A decoded command: done here, or handed to the geometry thread. */
@@ -2376,8 +2468,9 @@ void NitroPort_Gx3dReset(void)
     NitroPort_MailboxInit(&sMailbox);
     sBuilding=0;sDisplayed=1;sSerial=0;
     sRecCount[0]=sRecCount[1]=0;sRecBeforeValid=0;sMidOk[0]=sMidOk[1]=sMidOk[2]=0;sDest=NULL;sReplaying=0;
+    sPrevMotionValid=0;
     identity(&s.proj);identity(&s.pos);identity(&s.vec);identity(&s.tex);
-    set_wide_view(&s,sWideWidth);   /* (kept across resets) */
+    set_wide_view(&s,sWideWidth,sWideHeight);   /* (kept across resets) */
     s.viewport[0]=0;s.viewport[1]=0;s.viewport[2]=255;s.viewport[3]=191;
     s.rgb=0x7fff;s.diffuse=0x7fff;s.attr=(3u<<6)|(31u<<16);
     s.pendingAttr=s.attr;

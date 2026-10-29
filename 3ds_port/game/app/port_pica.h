@@ -231,10 +231,18 @@ typedef struct ComposeLayers {
     uint16_t *under;         /* width x height */
     uint16_t *over;          /* width x 192 (when split.has3d) */
     uint8_t *overAlpha;      /* width x 192 */
-    int width;               /* the picture's width: 256, or up to 320 (the wider upper screen) */
+    int width;               /* the picture's width: 256, or up to 320 (the wider upper screen), 400 (the field at the DS's pixel size) */
     /* its rows: 192, or NITRO_LOWERMENU_TALL_LINES (the lower screen as a
      * tall panel: nitro_port_lowermenu.h; the DS's width then) */
     int height;
+    /* (the field at the DS's pixel size: NitroRender2DSplit.top) the DS's
+     * line 0 at the picture's line top, the picture (width x height:
+     * 400 x 240) at a pixel a pixel, the 3D on all its lines; else 0 */
+    int top;
+    /* (a battle's start on the wider field: NitroRender2DSplit.stretch)
+     * the picture (the DS's 256 x 192) stretched over the whole screen,
+     * the 3D at the screen's own size, its H-blank scrolls stretched too */
+    int stretch;
     /* NitroRender2DSplit, as the 2D renderer filled it (declared in
      * nitro_port.h, which can't be included next to 3ds.h): the fields the
      * compositor needs, copied by the caller. */

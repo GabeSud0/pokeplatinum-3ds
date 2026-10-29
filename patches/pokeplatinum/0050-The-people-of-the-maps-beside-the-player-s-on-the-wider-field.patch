@@ -1,0 +1,927 @@
+From 5476f7113d0e906733e12b561a7972128773ee95 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 08:00:00 -0700
+Subject: [PATCH] The people of the maps beside the player's on the wider field
+ (SDK_PORT_3DS)
+
+The DS makes a map's people (map objects: NPCs, berry trees, signs) as
+the player walks into its map header and drops those of the map left,
+all out of its screen; on the 3DS's wider field they popped in and out.
+The people of the maps beside the player's are now there ahead
+(MAP_OBJ_STATUS_PORT_NEIGHBOUR): FieldMap_PortNeighbours brings those in
+reach from their map's events (MapHeaderData_PortObjectEvents), one a
+frame, while there's room for their pictures (MapObjectGfx_PortHasRoom)
+and for the game's own, and drops those out of reach. At the zone change
+the map left's in reach stay beside (sub_0206184C), and the new map's
+are taken as the game's own (MapObjectMan_AddMapObjectFromHeader). They
+walk and are in the way, but can't be talked to, don't see the player,
+aren't found by a script's local ID and aren't saved: as on the DS, where
+they weren't there yet. Only while the field is wider than the DS's,
+outside the Distortion World and the gyms' dynamic maps.
+---
+ include/constants/map_object.h    |   5 +
+ include/map_header_data.h         |   3 +
+ include/map_object.h              |  23 ++++
+ include/overlay005/ov5_021ECE40.h |   6 +
+ src/berry_patch_manager.c         |  21 ++++
+ src/map_header_data.c             |  42 ++++++-
+ src/map_object.c                  | 193 +++++++++++++++++++++++++++++
+ src/overlay005/fieldmap.c         | 196 ++++++++++++++++++++++++++++++
+ src/overlay005/ov5_021ECE40.c     | 138 +++++++++++++++++++++
+ src/trainer_encounter.c           |   5 +
+ src/unk_0203C954.c                |  14 +++
+ 11 files changed, 643 insertions(+), 3 deletions(-)
+
+diff --git a/include/constants/map_object.h b/include/constants/map_object.h
+index 5291155b..d692a8b6 100644
+--- a/include/constants/map_object.h
++++ b/include/constants/map_object.h
+@@ -42,6 +42,11 @@
+ #define MAP_OBJ_DO_NOT_SINK_INTO_TERRAIN           (1 << 27)
+ #define MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE          (1 << 28)
+ #define MAP_OBJ_DYNAMIC_HEIGHT_CALCULATION_ENABLED (1 << 29)
++#ifdef SDK_PORT_3DS
++// The 3DS's wider field: someone of a map beside the player's, shown where
++// the DS's screen didn't reach (map_object.c, MapObject_PortIsNeighbour).
++#define MAP_OBJ_STATUS_PORT_NEIGHBOUR (1 << 30)
++#endif
+ 
+ #define MAP_OBJ_UNK_A0_00 0
+ #define MAP_OBJ_UNK_A0_01 1
+diff --git a/include/map_header_data.h b/include/map_header_data.h
+index 40974f55..4e7c9c04 100644
+--- a/include/map_header_data.h
++++ b/include/map_header_data.h
+@@ -78,6 +78,9 @@ int MapHeaderData_GetNumCoordEvents(const FieldSystem *fieldSystem);
+ const CoordEvent *MapHeaderData_GetCoordEvents(const FieldSystem *fieldSystem);
+ u32 MapHeaderData_GetNumObjectEvents(const FieldSystem *fieldSystem);
+ const ObjectEvent *MapHeaderData_GetObjectEvents(const FieldSystem *fieldSystem);
++#ifdef SDK_PORT_3DS
++int MapHeaderData_PortObjectEvents(enum MapHeaderID mapHeaderID, ObjectEvent *objectEvents, int max);
++#endif
+ BOOL MapHeaderData_SetObjectEventPos(FieldSystem *fieldSystem, int index, u16 x, u16 z);
+ BOOL MapHeaderData_SetObjectEventDir(FieldSystem *fieldSystem, int localID, int dir);
+ BOOL MapHeaderData_SetObjectEventMovementType(FieldSystem *fieldSystem, int localID, int movementType);
+diff --git a/include/map_object.h b/include/map_object.h
+index 878e351a..49353aab 100644
+--- a/include/map_object.h
++++ b/include/map_object.h
+@@ -309,4 +309,27 @@ void sub_020633F4(MapObject *mapObj);
+ void sub_020633F8(MapObject *mapObj);
+ void sub_020633FC(MapObject *mapObj);
+ 
++#ifdef SDK_PORT_3DS
++// The 3DS's wider field shows past the DS's screen, into the maps beside the
++// player's. The DS made a map's people as the player walked into it and
++// dropped those of the map left (all out of its screen): on the 3DS's they
++// popped in and out. The people of the maps beside (MAP_OBJ_STATUS_PORT_
++// NEIGHBOUR) are there to be seen, ahead of the DS: walking, in the way,
++// but not talked to, not seeing the player, not found by a script's local
++// ID, not saved (as on the DS, where they weren't there yet). Walking into
++// their map, the game takes them as its own (MapObjectMan_AddMapObjectFromHeader).
++// fieldmap.c brings them (FieldMap_PortNeighbours).
++#define MAP_OBJ_PORT_NEAR_X 17 // (tiles from the player: brought; the 3DS's screen
++#define MAP_OBJ_PORT_NEAR_N 13 // shows about 13 either side, 8 up, 7 down, more
++#define MAP_OBJ_PORT_NEAR_S 11 // at the top: the camera looks down at the field)
++#define MAP_OBJ_PORT_FAR    4  // (and kept till this much further)
++
++BOOL MapObject_PortIsNeighbour(const MapObject *mapObj);
++void MapObject_PortSetNeighbour(MapObject *mapObj);
++BOOL MapObject_PortInReach(int x, int z, int playerX, int playerZ, int further);
++void MapObjectMan_PortSetNeighboursOn(BOOL on);
++int MapObjectMan_PortFreeSlots(const MapObjectManager *mapObjMan);
++MapObject *MapObjectMan_PortObjectAt(const MapObjectManager *mapObjMan, int x, int z);
++#endif
++
+ #endif // POKEPLATINUM_UNK_02061804_H
+diff --git a/include/overlay005/ov5_021ECE40.h b/include/overlay005/ov5_021ECE40.h
+index abc5fa60..ed67646b 100644
+--- a/include/overlay005/ov5_021ECE40.h
++++ b/include/overlay005/ov5_021ECE40.h
+@@ -40,5 +40,11 @@ int ov5_021EDF18(int param0);
+ int ov5_021EDF24(int param0);
+ int ov5_021EDF30(int param0);
+ Billboard *ov5_021EE3FC(MapObject *param0, int param1, UnkFuncPtr_ov5_021EE454 param2, void *param3);
++#ifdef SDK_PORT_3DS
++#include "map_header_data.h"
++
++BOOL MapObjectGfx_PortHasRoom(const MapObjectManager *mapObjMan, int graphicsID);
++BOOL MapObjectGfx_PortRoomFor(const MapObjectManager *mapObjMan, int objEventCount, const ObjectEvent *objectEvent);
++#endif
+ 
+ #endif // POKEPLATINUM_OV5_021ECE40_H
+diff --git a/src/berry_patch_manager.c b/src/berry_patch_manager.c
+index 589623df..84e4cfb7 100644
+--- a/src/berry_patch_manager.c
++++ b/src/berry_patch_manager.c
+@@ -141,6 +141,11 @@ void BerryPatches_UpdateGrowthStates(FieldSystem *fieldSystem)
+     BerryPatch *berryPatches = MiscSaveBlock_GetBerryPatches(fieldSystem->saveData);
+ 
+     while (MapObjectMan_FindObjectWithStatus(fieldSystem->mapObjMan, &mapObject, &objectIndex, 1 << 0) == 1) {
++#ifdef SDK_PORT_3DS
++        if (MapObject_PortIsNeighbour(mapObject)) {
++            continue; // (of a map beside, on the 3DS's wider field: as on the DS)
++        }
++#endif
+         if (BerryPatchGraphics_IsBerryPatch(MapObject_GetGraphicsID(mapObject)) == TRUE && BerryPatches_IsInView(fieldSystem, MapObject_GetPos(mapObject))) {
+             int patchID = MapObject_GetDataAt(mapObject, 0);
+             BerryPatches_SetIsPatchGrowing(berryPatches, patchID, TRUE);
+@@ -299,7 +304,15 @@ static MapObject *BerryPatches_GetAdjacentObject(FieldSystem *fieldSystem, enum
+         playerX += 1;
+     }
+ 
++#ifdef SDK_PORT_3DS
++    {
++        MapObject *mapObj = sub_0206326C(fieldSystem->mapObjMan, playerX, playerZ, 0);
++
++        return mapObj != NULL && MapObject_PortIsNeighbour(mapObj) ? NULL : mapObj;
++    }
++#else
+     return sub_0206326C(fieldSystem->mapObjMan, playerX, playerZ, 0);
++#endif
+ }
+ 
+ static MapObject *BerryPatches_GetTargetPatch(FieldSystem *fieldSystem, BerryWateringTask *task)
+@@ -315,7 +328,15 @@ static MapObject *BerryPatches_GetTargetPatch(FieldSystem *fieldSystem, BerryWat
+         GF_ASSERT(FALSE);
+     }
+ 
++#ifdef SDK_PORT_3DS
++    {
++        MapObject *mapObj = sub_0206326C(fieldSystem->mapObjMan, playerX, playerZ, 0);
++
++        return mapObj != NULL && MapObject_PortIsNeighbour(mapObj) ? NULL : mapObj;
++    }
++#else
+     return sub_0206326C(fieldSystem->mapObjMan, playerX, playerZ, 0);
++#endif
+ }
+ 
+ static BOOL BerryPatches_IsBerryPatch(MapObject *mapObject)
+diff --git a/src/map_header_data.c b/src/map_header_data.c
+index f310264f..d639894b 100644
+--- a/src/map_header_data.c
++++ b/src/map_header_data.c
+@@ -35,7 +35,7 @@ static const struct {
+     { MAP_HEADER_ROUTE_201, 0, 123, 854, 5, 0 },
+ };
+ 
+-static void MapHeaderData_PortWideMoves(MapHeaderData *data, enum MapHeaderID mapHeaderID)
++static void MapHeaderData_PortWideMovesOf(ObjectEvent *objectEvents, int numObjectEvents, enum MapHeaderID mapHeaderID)
+ {
+     int i, j;
+ 
+@@ -48,8 +48,8 @@ static void MapHeaderData_PortWideMoves(MapHeaderData *data, enum MapHeaderID ma
+             continue;
+         }
+ 
+-        for (j = 0; j < (int)data->numObjectEvents; j++) {
+-            ObjectEvent *e = (ObjectEvent *)&data->objectEvents[j];
++        for (j = 0; j < numObjectEvents; j++) {
++            ObjectEvent *e = &objectEvents[j];
+ 
+             // (that one, where the DS's map has it)
+             if (e->localID == sPortWideMoves[i].localID && e->x == sPortWideMoves[i].x && e->z == sPortWideMoves[i].z) {
+@@ -59,6 +59,42 @@ static void MapHeaderData_PortWideMoves(MapHeaderData *data, enum MapHeaderID ma
+         }
+     }
+ }
++
++static void MapHeaderData_PortWideMoves(MapHeaderData *data, enum MapHeaderID mapHeaderID)
++{
++    MapHeaderData_PortWideMovesOf((ObjectEvent *)data->objectEvents, (int)data->numObjectEvents, mapHeaderID);
++}
++
++// The people of a map beside the player's, for the 3DS's wider field
++// (map_object.h, MAP_OBJ_STATUS_PORT_NEIGHBOUR): its object events, as
++// MapHeaderData_Load reads them. How many, at most max.
++int MapHeaderData_PortObjectEvents(enum MapHeaderID mapHeaderID, ObjectEvent *objectEvents, int max)
++{
++    static u32 buf[512]; // (as tmpEventsBuf)
++    const u8 *events = (const u8 *)buf;
++    int eventsID = MapHeader_GetEventsArchiveID(mapHeaderID);
++    u32 n;
++
++    if (NARC_GetMemberSizeByIndexPair(NARC_INDEX_FIELDDATA__EVENTDATA__ZONE_EVENT, eventsID) >= sizeof(buf)) {
++        return 0;
++    }
++
++    NARC_ReadWholeMemberByIndexPair(buf, NARC_INDEX_FIELDDATA__EVENTDATA__ZONE_EVENT, eventsID);
++
++    n = *(const u32 *)events; // (the bg events first)
++    events += sizeof(u32) + n * sizeof(BgEvent);
++    n = *(const u32 *)events;
++    events += sizeof(u32);
++
++    if (n > (u32)max) {
++        n = (u32)max;
++    }
++
++    memcpy(objectEvents, events, n * sizeof(ObjectEvent));
++    MapHeaderData_PortWideMovesOf(objectEvents, (int)n, mapHeaderID);
++
++    return (int)n;
++}
+ #endif
+ 
+ void MapHeaderData_Init(FieldSystem *fieldSystem, enum HeapID heapID)
+diff --git a/src/map_object.c b/src/map_object.c
+index 2c543ac4..0bcd5ca8 100644
+--- a/src/map_object.c
++++ b/src/map_object.c
+@@ -23,6 +23,9 @@
+ #include "map_header_data.h"
+ #include "map_object_move.h"
+ #include "narc.h"
++#ifdef SDK_PORT_3DS
++#include "player_avatar.h"
++#endif
+ #include "script_manager.h"
+ #include "sys_task.h"
+ #include "sys_task_manager.h"
+@@ -139,6 +142,11 @@ static MapObjectManager *sub_02062A48(const MapObject *mapObj);
+ static const ObjectEvent *sub_020631A4(int param0, int param1, const ObjectEvent *objectEvent);
+ static int ObjectEvent_HasNoScript(const ObjectEvent *objectEvent);
+ static int ObjectEvent_GetHiddenFlagNoScript(const ObjectEvent *objectEvent);
++#ifdef SDK_PORT_3DS
++static BOOL MapObjectMan_PortKeepBeside(const MapObjectManager *mapObjMan, const MapObject *mapObj);
++static MapObject *MapObjectMan_PortNeighbourOf(const MapObjectManager *mapObjMan, int localID, enum MapHeaderID mapHeaderID);
++static MapObject *MapObjectMan_PortFurthestNeighbour(const MapObjectManager *mapObjMan);
++#endif
+ 
+ static const UnkStruct_020EDF0C *sub_0206320C(u32 param0);
+ static UnkFuncPtr_020EDF0C sub_02063224(const UnkStruct_020EDF0C *param0);
+@@ -180,6 +188,13 @@ void sub_0206184C(MapObjectManager *mapObjMan, enum MapHeaderID oldMapHeaderID,
+             switch (v0) {
+             case 0:
+                 if (MapObject_GetMapHeaderID(mapObj) != newMapHeaderID && !MapObject_CheckStatusFlag(mapObj, MAP_OBJ_STATUS_PERSISTENT)) {
++#ifdef SDK_PORT_3DS
++                    // (the map left's, still on the 3DS's screen: kept, beside)
++                    if (MapObjectMan_PortKeepBeside(mapObjMan, mapObj)) {
++                        MapObject_PortSetNeighbour(mapObj);
++                        break;
++                    }
++#endif
+                     MapObject_Delete(mapObj);
+                 }
+                 break;
+@@ -195,6 +210,14 @@ void sub_0206184C(MapObjectManager *mapObjMan, enum MapHeaderID oldMapHeaderID,
+     }
+ 
+     ov5_021EDA38(mapObjMan, sub_0206285C(mapObjMan));
++#ifdef SDK_PORT_3DS
++    // (the new map's people all made now: room for their pictures, the
++    // people beside given up, the furthest first, while it's short)
++    while (!MapObjectGfx_PortRoomFor(mapObjMan, objEventCount, objectEvent) && (mapObj = MapObjectMan_PortFurthestNeighbour(mapObjMan)) != NULL) {
++        MapObject_Delete(mapObj);
++        ov5_021EDA38(mapObjMan, sub_0206285C(mapObjMan));
++    }
++#endif
+ }
+ 
+ static MapObjectManager *MapObjectMan_Alloc(int maxObjs)
+@@ -225,6 +248,30 @@ MapObject *MapObjectMan_AddMapObjectFromHeader(const MapObjectManager *mapObjMan
+ 
+     int localID = ObjectEvent_GetLocalID(v2);
+ 
++#ifdef SDK_PORT_3DS
++    // (one of this map's people already there, from beside it: the game's own
++    // now, as the DS would have made them)
++    if (ObjectEvent_HasNoScript(v2) == FALSE) {
++        mapObj = MapObjectMan_PortNeighbourOf(mapObjMan, localID, mapHeaderID);
++
++        if (mapObj != NULL) {
++            // (changed from its event while beside: a Vs. Seeker's spin
++            // kept from the map left, hidden or stopped by a script: made
++            // again from its event, as the DS would)
++            if (MapObject_GetMovementType(mapObj) != ObjectEvent_GetMovementType(v2)
++                || MapObject_GetGraphicsID(mapObj) != ObjectEvent_GetGraphicsID(v2)
++                || MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE | MAP_OBJ_STATUS_PAUSE_MOVEMENT)) {
++                MapObject_Delete(mapObj);
++            } else {
++                MapObject_SetStatusFlagOff(mapObj, MAP_OBJ_STATUS_PORT_NEIGHBOUR);
++                MapObject_SetScript(mapObj, ObjectEvent_GetScript(v2));
++                MapObject_SetFlag(mapObj, ObjectEvent_GetHiddenFlag(v2));
++                return mapObj;
++            }
++        }
++    }
++#endif
++
+     if (ObjectEvent_HasNoScript(v2) == FALSE) {
+         mapObj = sub_02062154(mapObjMan, localID, mapHeaderID);
+ 
+@@ -427,6 +474,11 @@ void MapObjectMan_SaveAll(FieldSystem *fieldSystem, const MapObjectManager *mapO
+     MapObject *mapObj;
+ 
+     while (MapObjectMan_FindObjectWithStatus(mapObjMan, &mapObj, &v0, MAP_OBJ_STATUS_0)) {
++#ifdef SDK_PORT_3DS
++        if (MapObject_PortIsNeighbour(mapObj)) {
++            continue; // (brought again from their map's events)
++        }
++#endif
+         MapObject_Save(fieldSystem, mapObj, mapObjSave);
+         mapObjSave++;
+         param3--;
+@@ -642,6 +694,17 @@ static MapObject *sub_02062120(const MapObjectManager *mapObjMan)
+         i++;
+     } while (i < maxObjects);
+ 
++#ifdef SDK_PORT_3DS
++    // (none free: the place of the furthest of the people beside, the game's
++    // own come first)
++    mapObj = MapObjectMan_PortFurthestNeighbour(mapObjMan);
++
++    if (mapObj != NULL) {
++        MapObject_Delete(mapObj);
++        return mapObj;
++    }
++#endif
++
+     return NULL;
+ }
+ 
+@@ -826,6 +889,9 @@ MapObject *MapObjMan_LocalMapObjByIndex(const MapObjectManager *mapObjMan, int i
+ 
+     do {
+         if (MapObject_CheckStatusFlag(mapObj, MAP_OBJ_STATUS_0) == TRUE && sub_02062E94(mapObj) == FALSE
++#ifdef SDK_PORT_3DS
++            && !MapObject_PortIsNeighbour(mapObj)
++#endif
+             && MapObject_GetLocalID(mapObj) == index) {
+             return mapObj;
+         }
+@@ -953,6 +1019,9 @@ static void sub_020626D0(MapObject *mapObj, const ObjectEvent *objectEvent, enum
+ {
+     GF_ASSERT(sub_02062E94(mapObj) == TRUE);
+ 
++#ifdef SDK_PORT_3DS
++    MapObject_SetStatusFlagOff(mapObj, MAP_OBJ_STATUS_PORT_NEIGHBOUR);
++#endif
+     sub_02062E78(mapObj, 0);
+     MapObject_SetMapHeaderID(mapObj, mapHeaderID);
+     MapObject_SetScript(mapObj, ObjectEvent_GetScript(objectEvent));
+@@ -963,6 +1032,9 @@ static void sub_02062714(MapObject *mapObj, enum MapHeaderID mapHeaderID, const
+ {
+     GF_ASSERT(ObjectEvent_HasNoScript(objectEvent) == TRUE);
+ 
++#ifdef SDK_PORT_3DS
++    MapObject_SetStatusFlagOff(mapObj, MAP_OBJ_STATUS_PORT_NEIGHBOUR);
++#endif
+     sub_02062E78(mapObj, 1);
+     MapObject_SetScript(mapObj, ObjectEvent_GetScript(objectEvent));
+     MapObject_SetFlag(mapObj, ObjectEvent_GetHiddenFlagNoScript(objectEvent));
+@@ -2523,3 +2595,124 @@ void sub_020633FC(MapObject *mapObj)
+ {
+     return;
+ }
++
++#ifdef SDK_PORT_3DS
++// The people of the maps beside the player's, on the 3DS's wider field
++// (map_object.h). On while the field is wider than the DS's, outside the
++// Distortion World (fieldmap.c, FieldMap_PortNeighbours).
++static BOOL sPortNeighboursOn;
++
++void MapObjectMan_PortSetNeighboursOn(BOOL on)
++{
++    sPortNeighboursOn = on;
++}
++
++BOOL MapObject_PortIsNeighbour(const MapObject *mapObj)
++{
++    return MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_PORT_NEIGHBOUR) != 0;
++}
++
++void MapObject_PortSetNeighbour(MapObject *mapObj)
++{
++    MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_PORT_NEIGHBOUR);
++}
++
++BOOL MapObject_PortInReach(int x, int z, int playerX, int playerZ, int further)
++{
++    return x >= playerX - MAP_OBJ_PORT_NEAR_X - further && x <= playerX + MAP_OBJ_PORT_NEAR_X + further
++        && z >= playerZ - MAP_OBJ_PORT_NEAR_N - further && z <= playerZ + MAP_OBJ_PORT_NEAR_S + further;
++}
++
++int MapObjectMan_PortFreeSlots(const MapObjectManager *mapObjMan)
++{
++    int i, n = 0;
++    int maxObjects = MapObjectMan_GetMaxObjects(mapObjMan);
++    const MapObject *mapObj = MapObjectMan_GetMapObjectStatic(mapObjMan);
++
++    for (i = 0; i < maxObjects; i++, mapObj++) {
++        if (!MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_0)) {
++            n++;
++        }
++    }
++
++    return n;
++}
++
++// The map left's people, at the zone change: kept beside while the 3DS's
++// screen may show them (the game's own handed on ones, MAP_OBJ_STATUS_25,
++// and the link's players aside: as the DS does them).
++static BOOL MapObjectMan_PortKeepBeside(const MapObjectManager *mapObjMan, const MapObject *mapObj)
++{
++    FieldSystem *fieldSystem = MapObjectMan_FieldSystem(mapObjMan);
++
++    if (!sPortNeighboursOn || fieldSystem == NULL || fieldSystem->playerAvatar == NULL
++        || sub_02062E94(mapObj) == TRUE || MapObject_GetLocalID(mapObj) >= 0xff
++        || MapObject_GetGraphicsID(mapObj) == OBJ_EVENT_GFX_INVISIBLE // (nothing to see: a script's camera, a trigger)
++        || MapObject_GetMovementType(mapObj) == MOVEMENT_TYPE_VS_SEEKER_SPIN) { // (the DS stops it walking away)
++        return FALSE;
++    }
++
++    return MapObject_PortInReach(MapObject_GetX(mapObj), MapObject_GetZ(mapObj),
++        PlayerAvatar_GetXPos(fieldSystem->playerAvatar), PlayerAvatar_GetZPos(fieldSystem->playerAvatar), MAP_OBJ_PORT_FAR);
++}
++
++static MapObject *MapObjectMan_PortNeighbourOf(const MapObjectManager *mapObjMan, int localID, enum MapHeaderID mapHeaderID)
++{
++    int i = 0;
++    MapObject *mapObj;
++
++    while (MapObjectMan_FindObjectWithStatus(mapObjMan, &mapObj, &i, MAP_OBJ_STATUS_0) == TRUE) {
++        if (MapObject_PortIsNeighbour(mapObj) && MapObject_GetLocalID(mapObj) == localID
++            && MapObject_GetMapHeaderID(mapObj) == mapHeaderID) {
++            return mapObj;
++        }
++    }
++
++    return NULL;
++}
++
++static MapObject *MapObjectMan_PortFurthestNeighbour(const MapObjectManager *mapObjMan)
++{
++    FieldSystem *fieldSystem = MapObjectMan_FieldSystem(mapObjMan);
++    int i = 0, d, best = -1, x = 0, z = 0;
++    MapObject *mapObj, *furthest = NULL;
++
++    if (fieldSystem != NULL && fieldSystem->playerAvatar != NULL) {
++        x = PlayerAvatar_GetXPos(fieldSystem->playerAvatar);
++        z = PlayerAvatar_GetZPos(fieldSystem->playerAvatar);
++    }
++
++    while (MapObjectMan_FindObjectWithStatus(mapObjMan, &mapObj, &i, MAP_OBJ_STATUS_0) == TRUE) {
++        if (MapObject_PortIsNeighbour(mapObj)) {
++            d = MATH_IAbs(MapObject_GetX(mapObj) - x) + MATH_IAbs(MapObject_GetZ(mapObj) - z);
++
++            // (the player's map's last: about to be taken as the game's own)
++            if (fieldSystem != NULL && MapObject_GetMapHeaderID(mapObj) != fieldSystem->location->mapHeaderID) {
++                d += 0x10000;
++            }
++
++            if (d > best) {
++                best = d;
++                furthest = mapObj;
++            }
++        }
++    }
++
++    return furthest;
++}
++
++// The object at (x, z), not one of the people beside (sub_0206326C).
++MapObject *MapObjectMan_PortObjectAt(const MapObjectManager *mapObjMan, int x, int z)
++{
++    int i = 0;
++    MapObject *mapObj;
++
++    while (MapObjectMan_FindObjectWithStatus(mapObjMan, &mapObj, &i, MAP_OBJ_STATUS_0) == TRUE) {
++        if (!MapObject_PortIsNeighbour(mapObj) && MapObject_GetX(mapObj) == x && MapObject_GetZ(mapObj) == z) {
++            return mapObj;
++        }
++    }
++
++    return NULL;
++}
++#endif
+diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
+index 874cadf8..c09dd13e 100644
+--- a/src/overlay005/fieldmap.c
++++ b/src/overlay005/fieldmap.c
+@@ -8,6 +8,9 @@
+ #include "constants/field/map.h"
+ #include "constants/field/map_load.h"
+ #include "constants/heap.h"
++#ifdef SDK_PORT_3DS
++#include "generated/object_events_gfx.h"
++#endif
+ 
+ #include "field/field_system.h"
+ #include "field/field_system_sub2_decl.h"
+@@ -78,6 +81,9 @@
+ #include "system.h"
+ #include "unk_0202419C.h"
+ #include "unk_020559DC.h"
++#ifdef SDK_PORT_3DS
++#include "vars_flags.h"
++#endif
+ #include "vram_transfer.h"
+ 
+ #define FIELD_MAP_INIT_STATE_RESET         0
+@@ -120,6 +126,9 @@ static void fieldmap(void *param0);
+ static void ov5_021D13B4(FieldSystem *fieldSystem);
+ static enum FieldExtensionOverlay FieldMap_GetExtOverlayForActiveDynMapFeatures(FieldSystem *fieldSystem);
+ static BOOL FieldMap_InDistortionWorld(FieldSystem *fieldSystem);
++#ifdef SDK_PORT_3DS
++static void FieldMap_PortNeighbours(FieldSystem *fieldSystem);
++#endif
+ static MapObjectsToPreload *FetchMapObjectsToPreload(enum HeapID heapID, int memberID);
+ static const int *MapObjectsToPreload_GetIDs(const MapObjectsToPreload *mapObjectsToPreload);
+ static int MapObjectsToPreload_GetCount(const MapObjectsToPreload *mapObjectsToPreload);
+@@ -254,6 +263,10 @@ static BOOL FieldMap_Main(ApplicationManager *appMan, int *param1)
+         FieldMap_ChangeZone(fieldSystem);
+     }
+ 
++#ifdef SDK_PORT_3DS
++    FieldMap_PortNeighbours(fieldSystem);
++#endif
++
+     ov5_021D134C(fieldSystem, fieldSystem->unk_C0);
+ 
+     if (fieldSystem->runningFieldMap) {
+@@ -941,3 +954,186 @@ static BOOL FieldMap_InDistortionWorld(FieldSystem *fieldSystem)
+ 
+     return FALSE;
+ }
++
++#ifdef SDK_PORT_3DS
++extern int NitroPort_WideScreenExtra(void);
++
++#define PORT_NEIGHBOUR_MAPS   4
++#define PORT_NEIGHBOUR_EVENTS 64
++
++// The people of the maps beside the player's, on the 3DS's wider field
++// (map_object.h, MAP_OBJ_STATUS_PORT_NEIGHBOUR): every frame, the ones out
++// of reach dropped, and one more of those in reach brought from their map's
++// events (one a frame: their pictures load as the field's own do, a few
++// places at a time; they're brought before the screen gets to them).
++static void FieldMap_PortNeighbours(FieldSystem *fieldSystem)
++{
++    static ObjectEvent sEvents[PORT_NEIGHBOUR_MAPS][PORT_NEIGHBOUR_EVENTS];
++    static int sEventsHeader[PORT_NEIGHBOUR_MAPS] = { -1, -1, -1, -1 };
++    static int sNumEvents[PORT_NEIGHBOUR_MAPS];
++    static int sLastX = -1, sLastZ = -1, sLastHere = -1, sMore, sWait;
++    MapObjectManager *mapObjMan = fieldSystem->mapObjMan;
++    MapObject *mapObj;
++    enum MapHeaderID here, beside[PORT_NEIGHBOUR_MAPS];
++    int numBeside = 0, playerX, playerZ, i, j, k;
++    BOOL on, dropped = FALSE;
++
++    if (mapObjMan == NULL || fieldSystem->playerAvatar == NULL || fieldSystem->mapMatrix == NULL) {
++        return;
++    }
++
++    on = NitroPort_WideScreenExtra() > 0
++        && PersistedMapFeatures_GetID(MiscSaveBlock_GetPersistedMapFeatures(FieldSystem_GetSaveData(fieldSystem))) == DYNAMIC_MAP_FEATURES_NONE;
++    MapObjectMan_PortSetNeighboursOn(on);
++
++    here = fieldSystem->location->mapHeaderID;
++    playerX = PlayerAvatar_GetXPos(fieldSystem->playerAvatar);
++    playerZ = PlayerAvatar_GetZPos(fieldSystem->playerAvatar);
++
++    // Dropped: all, off; out of reach; of the player's map (not taken as
++    // the game's own walking into it: hidden there now); hidden by a flag
++    // set since. Their pictures' places given back.
++    i = 0;
++    while (MapObjectMan_FindObjectWithStatus(mapObjMan, &mapObj, &i, MAP_OBJ_STATUS_0) == TRUE) {
++        int flag;
++
++        if (!MapObject_PortIsNeighbour(mapObj)) {
++            continue;
++        }
++
++        flag = MapObject_GetFlag(mapObj);
++
++        if (!on || MapObject_GetMapHeaderID(mapObj) == here
++            || !MapObject_PortInReach(MapObject_GetX(mapObj), MapObject_GetZ(mapObj), playerX, playerZ, MAP_OBJ_PORT_FAR)
++            || (flag != 0 && !(flag >= MAP_LOCAL_FLAGS_START && flag <= MAP_LOCAL_FLAGS_END) && FieldSystem_CheckFlag(fieldSystem, flag))) {
++            MapObject_Delete(mapObj);
++            dropped = TRUE;
++        }
++    }
++
++    if (dropped) {
++        ov5_021EDA38(mapObjMan, sub_0206285C(mapObjMan));
++    }
++
++    if (!on || FieldSystem_IsRunningTask(fieldSystem)) {
++        return; // (none brought during a script's: as they are)
++    }
++
++    // The maps in reach.
++    {
++        int offX = LandDataManager_GetOffsetTileX(fieldSystem->landDataMan);
++        int offZ = LandDataManager_GetOffsetTileZ(fieldSystem->landDataMan);
++        int width = MapMatrix_GetWidth(fieldSystem->mapMatrix);
++        int height = MapMatrix_GetHeight(fieldSystem->mapMatrix);
++        int x0 = (playerX - offX - MAP_OBJ_PORT_NEAR_X) / MAP_TILES_COUNT_X, x1 = (playerX - offX + MAP_OBJ_PORT_NEAR_X) / MAP_TILES_COUNT_X;
++        int z0 = (playerZ - offZ - MAP_OBJ_PORT_NEAR_N) / MAP_TILES_COUNT_Z, z1 = (playerZ - offZ + MAP_OBJ_PORT_NEAR_S) / MAP_TILES_COUNT_Z;
++        int cx, cz;
++
++        if (playerX - offX - MAP_OBJ_PORT_NEAR_X < 0) {
++            x0 = 0;
++        }
++
++        if (playerZ - offZ - MAP_OBJ_PORT_NEAR_N < 0) {
++            z0 = 0;
++        }
++
++        for (cz = z0; cz <= z1 && cz < height; cz++) {
++            for (cx = x0; cx <= x1 && cx < width; cx++) {
++                enum MapHeaderID id = MapMatrix_GetMapHeaderIDAtCoords(fieldSystem->mapMatrix, cx, cz);
++
++                for (k = 0; k < numBeside && beside[k] != id; k++) { }
++
++                if (id != here && id != 0 && k == numBeside && numBeside < PORT_NEIGHBOUR_MAPS) {
++                    beside[numBeside++] = id;
++                }
++            }
++        }
++    }
++
++    // (looked for again as the player moves, while there are more to bring,
++    // and twice a second: a flag set)
++    if (playerX == sLastX && playerZ == sLastZ && (int)here == sLastHere && !sMore && --sWait > 0) {
++        return;
++    }
++    sLastX = playerX;
++    sLastZ = playerZ;
++    sLastHere = here;
++    sMore = FALSE;
++    sWait = 30;
++
++    // (room kept for the game's own)
++    if (numBeside == 0 || MapObjectMan_PortFreeSlots(mapObjMan) < 12) {
++        return;
++    }
++
++    for (k = 0; k < numBeside; k++) {
++        ObjectEvent *events;
++
++        // Their events (kept for the maps in reach).
++        for (j = 0; j < PORT_NEIGHBOUR_MAPS && sEventsHeader[j] != (int)beside[k]; j++) { }
++
++        if (j == PORT_NEIGHBOUR_MAPS) {
++            for (j = 0; j < PORT_NEIGHBOUR_MAPS; j++) {
++                int b;
++
++                for (b = 0; b < numBeside && sEventsHeader[j] != (int)beside[b]; b++) { }
++
++                if (b == numBeside) {
++                    break; // (a place not in reach)
++                }
++            }
++
++            sEventsHeader[j] = beside[k];
++            sNumEvents[j] = MapHeaderData_PortObjectEvents(beside[k], sEvents[j], PORT_NEIGHBOUR_EVENTS);
++        }
++
++        events = sEvents[j];
++
++        for (i = 0; i < sNumEvents[j]; i++) {
++            const ObjectEvent *e = &events[i];
++            int localID = ObjectEvent_GetLocalID(e), hiddenFlag = ObjectEvent_GetHiddenFlag(e), n = 0;
++            BOOL there = FALSE;
++
++            // (not: the game's hand-ons, ObjectEvent_HasNoScript, whose script
++            // field says so; hidden; out of reach. The map's own flags, set
++            // now for the player's map, are cleared as the player walks into
++            // theirs: as clear)
++            if (ObjectEvent_GetScript(e) == 0xffff
++                || ObjectEvent_GetGraphicsID(e) == OBJ_EVENT_GFX_INVISIBLE // (nothing to see)
++                || (hiddenFlag != 0 && !(hiddenFlag >= MAP_LOCAL_FLAGS_START && hiddenFlag <= MAP_LOCAL_FLAGS_END)
++                    && FieldSystem_CheckFlag(fieldSystem, hiddenFlag))
++                || !MapObject_PortInReach(ObjectEvent_GetX(e), ObjectEvent_GetZ(e), playerX, playerZ, 0)) {
++                continue;
++            }
++
++            // (there already: the map's own, beside, or handed on by the game)
++            while (MapObjectMan_FindObjectWithStatus(mapObjMan, &mapObj, &n, MAP_OBJ_STATUS_0) == TRUE) {
++                if (MapObject_GetLocalID(mapObj) == localID
++                    && (MapObject_GetMapHeaderID(mapObj) == beside[k]
++                        || (MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_25) && MapObject_GetFlag(mapObj) == (int)beside[k]))) {
++                    there = TRUE;
++                    break;
++                }
++            }
++
++            if (there) {
++                continue;
++            }
++
++            if (!MapObjectGfx_PortHasRoom(mapObjMan, ObjectEvent_GetGraphicsID(e))) {
++                sWait = 4; // (pictures loading, or no room: soon again)
++                continue;
++            }
++
++            mapObj = MapObjectMan_AddMapObjectFromHeader(mapObjMan, e, beside[k]);
++
++            if (mapObj != NULL) {
++                MapObject_PortSetNeighbour(mapObj);
++            }
++
++            sMore = TRUE;
++            return; // (one a frame)
++        }
++    }
++}
++#endif
+diff --git a/src/overlay005/ov5_021ECE40.c b/src/overlay005/ov5_021ECE40.c
+index 109fcda6..dbe4ac67 100644
+--- a/src/overlay005/ov5_021ECE40.c
++++ b/src/overlay005/ov5_021ECE40.c
+@@ -2055,3 +2055,141 @@ static void ov5_021EE698(SysTask *param0, void *param1)
+         }
+     }
+ }
++
++#ifdef SDK_PORT_3DS
++static int ov5_PortFreeOf(const int *list, int count)
++{
++    int n = 0;
++
++    for (; count > 0; count--, list++) {
++        if (*list == 0xffff) {
++            n++;
++        }
++    }
++
++    return n;
++}
++
++// Room for someone of a map beside the player's, on the 3DS's wider field
++// (map_object.h, MAP_OBJ_STATUS_PORT_NEIGHBOUR): their pictures in already,
++// or room for them with places left for the game's own (this field's places
++// for the people's textures, billboard models and frames are few, made for
++// the DS's screen), and nothing loading.
++BOOL MapObjectGfx_PortHasRoom(const MapObjectManager *mapObjMan, int graphicsID)
++{
++    UnkStruct_ov5_021ED0A4 *gfx = sub_0206285C(mapObjMan);
++    const ObjectEventGfxRenderDetailsEntry *details = gObjectEventGfxRenderDetailsTable;
++    UnkStruct_ov5_021EDF3C *loading = gfx->unk_100;
++    int i;
++
++    for (i = 0; i < loading->unk_00; i++) {
++        if (loading->unk_08[i].unk_04 != NULL || loading->unk_0C[i].unk_0C != NULL) {
++            return FALSE;
++        }
++    }
++
++    while (details->graphicsID != 0xffff && details->graphicsID != graphicsID) {
++        details++;
++    }
++
++    if (details->graphicsID == 0xffff) {
++        return FALSE;
++    }
++
++    if (details->modelType != MODEL_TYPE_BILLBOARD) {
++        return TRUE; // (their own model, or nothing to draw)
++    }
++
++    if (BerryPatchGraphics_IsBerryPatch(graphicsID) == TRUE) {
++        // (the berry's picture: room for any)
++        return ov5_PortFreeOf(&ov5_021EDCB8(gfx)[ov5_021EDCE8(gfx)], ov5_021EDCF0(gfx)) >= 6
++            && ov5_PortFreeOf(&ov5_021EDCBC(gfx)[ov5_021EDCC8(gfx)], ov5_021EDCD0(gfx)) >= 2
++            && ov5_PortFreeOf(&ov5_021EDCC0(gfx)[ov5_021EDCD8(gfx)], ov5_021EDCE0(gfx)) >= 2;
++    }
++
++    if (ov5_021ED810(gfx, graphicsID) == 0 && ov5_021ED924(gfx, graphicsID) == 0
++        && ov5_PortFreeOf(&ov5_021EDCB8(gfx)[ov5_021EDCE8(gfx)], ov5_021EDCF0(gfx)) < 6) {
++        return FALSE;
++    }
++
++    {
++        int model = ov5_021EDD2C(graphicsID), frames = ov5_021EDD38(graphicsID);
++
++        if (ov5_021ED598(gfx, model) == 0 && ov5_021ED5E8(gfx, model) == 0
++            && ov5_PortFreeOf(&ov5_021EDCBC(gfx)[ov5_021EDCC8(gfx)], ov5_021EDCD0(gfx)) < 2) {
++            return FALSE;
++        }
++
++        if (ov5_021ED6D4(gfx, frames) == 0 && ov5_021ED724(gfx, frames) == 0
++            && ov5_PortFreeOf(&ov5_021EDCC0(gfx)[ov5_021EDCD8(gfx)], ov5_021EDCE0(gfx)) < 2) {
++            return FALSE;
++        }
++    }
++
++    return TRUE;
++}
++
++// Room for the pictures of a map's people about to be made (all at once,
++// walking into the map: sub_0206184C), the places of those not in yet
++// counted once each.
++BOOL MapObjectGfx_PortRoomFor(const MapObjectManager *mapObjMan, int objEventCount, const ObjectEvent *objectEvent)
++{
++    UnkStruct_ov5_021ED0A4 *gfx = sub_0206285C(mapObjMan);
++    int texNeed = 0, modelNeed = 0, framesNeed = 0, i, j;
++    u16 texSeen[64], modelSeen[8], framesSeen[8];
++    int nTex = 0, nModel = 0, nFrames = 0;
++
++    for (i = 0; i < objEventCount; i++) {
++        int graphicsID = ObjectEvent_GetGraphicsID(&objectEvent[i]);
++        const ObjectEventGfxRenderDetailsEntry *details = gObjectEventGfxRenderDetailsTable;
++
++        while (details->graphicsID != 0xffff && details->graphicsID != graphicsID) {
++            details++;
++        }
++
++        if (details->graphicsID == 0xffff || details->modelType != MODEL_TYPE_BILLBOARD) {
++            continue;
++        }
++
++        if (BerryPatchGraphics_IsBerryPatch(graphicsID) == TRUE) {
++            texNeed++; // (a berry's picture: any)
++            continue;
++        }
++
++        if (ov5_021ED810(gfx, graphicsID) == 0 && ov5_021ED924(gfx, graphicsID) == 0) {
++            for (j = 0; j < nTex && texSeen[j] != graphicsID; j++) { }
++
++            if (j == nTex && nTex < 64) {
++                texSeen[nTex++] = (u16)graphicsID;
++                texNeed++;
++            }
++        }
++
++        {
++            int model = ov5_021EDD2C(graphicsID), frames = ov5_021EDD38(graphicsID);
++
++            if (ov5_021ED598(gfx, model) == 0 && ov5_021ED5E8(gfx, model) == 0) {
++                for (j = 0; j < nModel && modelSeen[j] != model; j++) { }
++
++                if (j == nModel && nModel < 8) {
++                    modelSeen[nModel++] = (u16)model;
++                    modelNeed++;
++                }
++            }
++
++            if (ov5_021ED6D4(gfx, frames) == 0 && ov5_021ED724(gfx, frames) == 0) {
++                for (j = 0; j < nFrames && framesSeen[j] != frames; j++) { }
++
++                if (j == nFrames && nFrames < 8) {
++                    framesSeen[nFrames++] = (u16)frames;
++                    framesNeed++;
++                }
++            }
++        }
++    }
++
++    return ov5_PortFreeOf(&ov5_021EDCB8(gfx)[ov5_021EDCE8(gfx)], ov5_021EDCF0(gfx)) >= texNeed
++        && ov5_PortFreeOf(&ov5_021EDCBC(gfx)[ov5_021EDCC8(gfx)], ov5_021EDCD0(gfx)) >= modelNeed
++        && ov5_PortFreeOf(&ov5_021EDCC0(gfx)[ov5_021EDCD8(gfx)], ov5_021EDCE0(gfx)) >= framesNeed;
++}
++#endif
+diff --git a/src/trainer_encounter.c b/src/trainer_encounter.c
+index 1cba0660..646b5e12 100644
+--- a/src/trainer_encounter.c
++++ b/src/trainer_encounter.c
+@@ -137,6 +137,11 @@ static BOOL FindUndefeatedTrainerInSight(FieldSystem *fieldSystem, MapObjectMana
+     int distance = DISTANCE_INVALID;
+ 
+     while (MapObjectMan_FindObjectWithStatus(mapObjMan, &trainerMapObj, &startIdx, MAP_OBJ_STATUS_0)) {
++#ifdef SDK_PORT_3DS
++        if (MapObject_PortIsNeighbour(trainerMapObj)) {
++            continue; // (of a map beside, on the 3DS's wider field: not there yet, on the DS)
++        }
++#endif
+         if (knownTrainer == NULL || knownTrainer != trainerMapObj) {
+             distance = GetTrainerDistToPlayer(trainerMapObj, playerAvatar, &direction);
+ 
+diff --git a/src/unk_0203C954.c b/src/unk_0203C954.c
+index 658520e7..4c6f2bc4 100644
+--- a/src/unk_0203C954.c
++++ b/src/unk_0203C954.c
+@@ -82,13 +82,27 @@ void sub_0203C9D4(FieldSystem *fieldSystem, MapObject **param1)
+         }
+     }
+ 
++#ifdef SDK_PORT_3DS
++    // (not one of the people beside on the 3DS's wider field: not there
++    // yet, on the DS; one of the player's map's on the same tile instead)
++    *param1 = MapObjectMan_PortObjectAt(fieldSystem->mapObjMan, v0, v1);
++#else
+     *param1 = sub_0206326C(fieldSystem->mapObjMan, v0, v1, 0);
++#endif
+ }
+ 
+ u8 sub_0203CA40(FieldSystem *fieldSystem, MapObject **param1)
+ {
+     sub_0203C9D4(fieldSystem, param1);
+ 
++#ifdef SDK_PORT_3DS
++    // (someone of a map beside, on the 3DS's wider field: not there yet, on
++    // the DS; their map's script isn't loaded)
++    if (*param1 != NULL && MapObject_PortIsNeighbour(*param1)) {
++        return 0;
++    }
++#endif
++
+     if (*param1 != NULL) {
+         if ((sub_02062D9C(*param1) == 1) && (sub_0203C9B0(fieldSystem->playerAvatar, *param1) == 1)) {
+             return 1;
+-- 
+2.43.0
+

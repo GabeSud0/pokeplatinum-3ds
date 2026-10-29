@@ -209,6 +209,31 @@ int NitroPort_WideParts(int engine, NitroWidePart *out);
 void NitroPort_SetWideScreen(int extra);
 int NitroPort_WideScreenExtra(void);
 
+/* The field at the DS's pixel size (the 3DS remaster's option, on or off):
+ * the upper screen's 400 x 240 pixels each a DS pixel, showing more of the
+ * world, nothing scaled (pixel perfect). In the field only (not in a battle,
+ * the screens laid out in parts or made of pictures, nor without the wider
+ * screen): NitroPort_PixelField says when. Then the 3D's view is 400 x 240
+ * (NitroPort_Gx3dSetView), the 2D's picture too, the DS's in its middle
+ * (NitroPort_WideLayout: NITRO_PIXEL_FIELD_EXTRA each side, TOP above), and
+ * NitroPort_WideScreenExtra says 72. Any thread. */
+#define NITRO_PIXEL_FIELD_W     400
+#define NITRO_PIXEL_FIELD_H     240
+#define NITRO_PIXEL_FIELD_EXTRA ((NITRO_PIXEL_FIELD_W - 256) / 2)
+#define NITRO_PIXEL_FIELD_TOP   ((NITRO_PIXEL_FIELD_H - 192) / 2)
+void NitroPort_SetPixelField(int on);
+int NitroPort_PixelField(void);
+
+/* The battle's start in the field (the game's encounter effects: patch
+ * 0051, encounter_effect.c), on while it plays. Its effects are made for
+ * the DS's screen (windows and H-blank slices with the DS's columns and
+ * lines, wipes drawn into a 256 x 192 BG): on the wider field the upper
+ * screen's 2D is then laid out as the DS's and stretched to fill the
+ * screen, over the 3D at the screen's own size (NitroRender2DSplit.stretch).
+ * The game's thread. */
+void NitroPort_SetFieldEffect(int on);
+int NitroPort_FieldEffect(void);
+
 /* (the game: patches/pokeplatinum/0047, the field's weather) A BG of
  * engine A whose map is a pattern that repeats (the field's weather: the
  * clouds' shadows, fog, sand), on or off (off again when the weather
@@ -220,6 +245,16 @@ void NitroPort_RepeatingBg(int bg, int on);
 /* Those BGs (a bit each), while they count: in the field only (overlay5
  * loaded, not the battle's, no screen laid out in parts); 0 otherwise. */
 int NitroPort_RepeatingBgs(void);
+
+/* (the game: patch 0054, screen_fade_funcs.c) A window (0 or 1) of an
+ * engine shaped by the game's circle fades (the screen closing or opening
+ * round the middle: walking into Eterna Forest): the circle's middle
+ * (cx, cy) and radius r in the DS's pixels, or r < 0: off again. The
+ * windows the game writes on each line (H-blank) are made for the DS's
+ * 256 x 192; with this the renderer draws the circle itself, across the
+ * whole canvas (the wider screen's sides, a tall field's lines above and
+ * below the DS's). The game's thread. */
+void NitroPort_SetWindowCircle(int engine, int window, int cx, int cy, int r);
 
 /* The layout of an engine's picture on the wider upper screen, for this
  * moment of the game (NitroRender2DSplit's canvas: width, origin, clip,

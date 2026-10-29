@@ -53,6 +53,8 @@ typedef struct NitroGx3dScene {
     /* The view's width this scene was made for (NitroPort_Gx3dSetWideView):
      * 256, or the screen's width when the view is wider. */
     uint32_t screen_width;
+    /* And its height (NitroPort_Gx3dSetView): 192, or taller. */
+    uint32_t screen_height;
     /* The projection matrix at its SWAP_BUFFERS (20.12, rows as the DS's:
      * clip = position x projection): the camera's, in the field, which
      * every polygon of the scene went through (sun shadows, port_shadow.c,
@@ -284,6 +286,11 @@ void NitroPort_Gx3dSetRecorder(NitroGx3dRecorder recorder);
  * effect from the next command (with the geometry thread, at that point of
  * its stream); each scene says what it was made for (screen_width). */
 void NitroPort_Gx3dSetWideView(int screenWidth);
+/* The same, and taller: y scaled by 192 / screenHeight (with the DS's
+ * full-size viewport), the picture showing more of the world above and
+ * below (the field at the DS's pixel size on the 3DS's whole 400 x 240
+ * screen). 192 (the DS's height) turns that off. */
+void NitroPort_Gx3dSetView(int screenWidth, int screenHeight);
 
 /* GXSTAT's bit 15 is write-one-to-clear on the DS, and resetting it
  * also clears the single-entry projection stack pointer. */

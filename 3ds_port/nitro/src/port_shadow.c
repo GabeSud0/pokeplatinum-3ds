@@ -51,7 +51,7 @@ static void row(float *out, const Back *b, V3 axis, float k, float c)
 typedef struct { int key[3]; float area; V3 sum; int used; } Bin;
 
 int NitroPort_ShadowSetup(const float *positions, size_t stride, size_t count,
-                          const int32_t projection[16], unsigned screenWidth,
+                          const int32_t projection[16], unsigned screenWidth, unsigned screenHeight,
                           const NitroShadowSun *sun, unsigned mapSize, NitroShadowSetup *out)
 {
     const float k = 1.0f / 4096.0f;
@@ -75,12 +75,13 @@ int NitroPort_ShadowSetup(const float *positions, size_t stride, size_t count,
     {
         /* z = w / p23; x = (x' * wide - z p20 - p30) / p00; y likewise */
         float wide = (float)(screenWidth ? screenWidth : 256u) / 256.0f;
+        float tall = (float)(screenHeight ? screenHeight : 192u) / 192.0f;   /* (the field at the DS's pixel size) */
         memset(&b, 0, sizeof(b));
         b.m[2][2] = 1.0f / p[11];
         b.m[0][0] = wide / p[0];
         b.m[0][2] = -p[8] / (p[11] * p[0]);
         b.m[0][3] = -p[12] / p[0];
-        b.m[1][1] = 1.0f / p[5];
+        b.m[1][1] = tall / p[5];
         b.m[1][2] = -p[9] / (p[11] * p[5]);
         b.m[1][3] = -p[13] / p[5];
     }

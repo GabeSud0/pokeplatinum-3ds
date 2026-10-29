@@ -1,0 +1,164 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 08:00:00 -0700
+Subject: [PATCH] Dawn and Lucas beside the player's map on the wider field
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The people of the maps beside the player's (patch 0050) were never
+brought when their graphics are a variable's (OBJ_EVENT_GFX_VAR_0-F):
+the room check looked the variable up in the pictures' table, found
+nothing and tried again forever. So the player's counterpart waiting in
+Sandgem Town before the Pokédex appeared only as the player walked into
+her map, 4 tiles from her and in full view on the wider field.
+
+The variable is set by the map's on-transition script as the player
+walks in, so it may hold another map's yet. On the overworld only the
+counterpart has one (VAR_OBJ_GFX_ID_0: Sandgem Town, Routes 201, 202 and
+207, Jubilife, Canalave and Veilstone, each setting Dawn for a boy and
+Lucas for a girl), so a neighbour's VAR_0 is that; the other variables'
+aren't brought. Where those scripts move or hide her in some of the
+story's states (Sandgem, Route 202, Jubilife, Veilstone, Canalave), she
+is placed the same way (sPortCounterpartPlaces). At the zone change the
+one beside is taken as the game's own when its picture is the one the
+map's script has just set.
+---
+ src/map_object.c          |  5 +--
+ src/overlay005/fieldmap.c | 83 ++++++++++++++++++++++++++++++++++++++++++++---
+ 2 files changed, 82 insertions(+), 6 deletions(-)
+
+diff --git a/src/map_object.c b/src/map_object.c
+index 0bcd5ca8..0ed40251 100644
+--- a/src/map_object.c
++++ b/src/map_object.c
+@@ -257,9 +257,10 @@ MapObject *MapObjectMan_AddMapObjectFromHeader(const MapObjectManager *mapObjMan
+         if (mapObj != NULL) {
+             // (changed from its event while beside: a Vs. Seeker's spin
+             // kept from the map left, hidden or stopped by a script: made
+-            // again from its event, as the DS would)
++            // again from its event, as the DS would. A variable's picture as
++            // the map's script has just set it)
+             if (MapObject_GetMovementType(mapObj) != ObjectEvent_GetMovementType(v2)
+-                || MapObject_GetGraphicsID(mapObj) != ObjectEvent_GetGraphicsID(v2)
++                || MapObject_GetGraphicsID(mapObj) != MapObject_GetFieldSystemGraphicsID(MapObjectMan_FieldSystem(mapObjMan), ObjectEvent_GetGraphicsID(v2))
+                 || MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE | MAP_OBJ_STATUS_PAUSE_MOVEMENT)) {
+                 MapObject_Delete(mapObj);
+             } else {
+diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
+index ad4e5c9f..06580163 100644
+--- a/src/overlay005/fieldmap.c
++++ b/src/overlay005/fieldmap.c
+@@ -82,6 +82,14 @@
+ #include "unk_0202419C.h"
+ #include "unk_020559DC.h"
+ #ifdef SDK_PORT_3DS
++#include "constants/map_object.h"
++#include "constants/savedata/vars_flags.h"
++#include "generated/genders.h"
++#include "generated/map_headers.h"
++#include "generated/movement_types.h"
++
++#include "save_player.h"
++#include "trainer_info.h"
+ #include "vars_flags.h"
+ #endif
+ #include "vram_transfer.h"
+@@ -980,6 +988,71 @@ extern int NitroPort_WideScreenExtra(void);
+ #define PORT_NEIGHBOUR_MAPS   4
+ #define PORT_NEIGHBOUR_EVENTS 64
+ 
++// The player's counterpart where her map's script will put her as the
++// player walks in (its on-transition script), for the ones it moves or
++// hides in some of the story's states.
++static const struct {
++    u16 mapHeaderID, var, state;
++    BOOL orMore;  // (the var at state or more, else at state)
++    u16 x, z;     // (0, 0: hidden)
++    u16 movementType, dir;
++} sPortCounterpartPlaces[] = {
++    { MAP_HEADER_SANDGEM_TOWN, VAR_SANDGEM_TOWN_STATE, 1, FALSE, 168, 845, MOVEMENT_TYPE_LOOK_NORTH, DIR_NORTH },
++    { MAP_HEADER_ROUTE_202, VAR_ROUTE_202_STATE, 2, TRUE, 186, 817, MOVEMENT_TYPE_LOOK_SOUTH, DIR_SOUTH },
++    { MAP_HEADER_JUBILIFE_CITY, VAR_JUBILIFE_CITY_STATE, 3, TRUE, 176, 739, MOVEMENT_TYPE_LOOK_WEST, DIR_WEST },
++    { MAP_HEADER_VEILSTONE_CITY, VAR_VEILSTONE_CITY_COUNTERPART_NEEDS_HELP_STATE, 2, TRUE, 696, 596, MOVEMENT_TYPE_LOOK_EAST, DIR_EAST },
++    { MAP_HEADER_CANALAVE_CITY, VAR_CANALAVE_CITY_STATE, 5, FALSE, 0, 0, 0, 0 },
++};
++
++// Someone beside whose graphics are a variable's (OBJ_EVENT_GFX_VAR_0-F):
++// the variable is set by their map's script as the player walks into it, so
++// it may hold another map's yet. On the overworld only the player's
++// counterpart has one (VAR_OBJ_GFX_ID_0: Sandgem Town, Routes 201, 202 and
++// 207, Jubilife, Canalave and Veilstone, each setting Dawn for a boy and
++// Lucas for a girl), placed as her script will (sPortCounterpartPlaces).
++// FALSE: not brought (the other variables', or hidden).
++static BOOL FieldMap_PortNeighbourEvent(FieldSystem *fieldSystem, ObjectEvent *e, enum MapHeaderID mapHeaderID)
++{
++    int i;
++
++    if (e->graphicsID < OBJ_EVENT_GFX_VAR_0 || e->graphicsID > OBJ_EVENT_GFX_VAR_F) {
++        return TRUE;
++    }
++
++    if (e->graphicsID != OBJ_EVENT_GFX_VAR_0) {
++        return FALSE;
++    }
++
++    e->graphicsID = TrainerInfo_Gender(SaveData_GetTrainerInfo(fieldSystem->saveData)) == GENDER_MALE
++        ? OBJ_EVENT_GFX_PLAYER_F
++        : OBJ_EVENT_GFX_PLAYER_M;
++
++    for (i = 0; i < (int)NELEMS(sPortCounterpartPlaces); i++) {
++        u16 state;
++
++        if (sPortCounterpartPlaces[i].mapHeaderID != mapHeaderID) {
++            continue;
++        }
++
++        state = *FieldSystem_GetVarPointer(fieldSystem, sPortCounterpartPlaces[i].var);
++
++        if (sPortCounterpartPlaces[i].orMore ? state < sPortCounterpartPlaces[i].state : state != sPortCounterpartPlaces[i].state) {
++            continue;
++        }
++
++        if (sPortCounterpartPlaces[i].x == 0 && sPortCounterpartPlaces[i].z == 0) {
++            return FALSE;
++        }
++
++        e->x = sPortCounterpartPlaces[i].x;
++        e->z = sPortCounterpartPlaces[i].z;
++        e->movementType = sPortCounterpartPlaces[i].movementType;
++        e->dir = sPortCounterpartPlaces[i].dir;
++    }
++
++    return TRUE;
++}
++
+ // The people of the maps beside the player's, on the 3DS's wider field
+ // (map_object.h, MAP_OBJ_STATUS_PORT_NEIGHBOUR): every frame, the ones out
+ // of reach dropped, and one more of those in reach brought from their map's
+@@ -1109,15 +1182,17 @@ static void FieldMap_PortNeighbours(FieldSystem *fieldSystem)
+         events = sEvents[j];
+ 
+         for (i = 0; i < sNumEvents[j]; i++) {
+-            const ObjectEvent *e = &events[i];
++            ObjectEvent e[1] = { events[i] };
+             int localID = ObjectEvent_GetLocalID(e), hiddenFlag = ObjectEvent_GetHiddenFlag(e), n = 0;
+             BOOL there = FALSE;
+ 
+             // (not: the game's hand-ons, ObjectEvent_HasNoScript, whose script
+-            // field says so; hidden; out of reach. The map's own flags, set
+-            // now for the player's map, are cleared as the player walks into
+-            // theirs: as clear)
++            // field says so; a variable's picture we can't tell, or hidden by
++            // their map's script; hidden; out of reach. The map's own flags,
++            // set now for the player's map, are cleared as the player walks
++            // into theirs: as clear)
+             if (ObjectEvent_GetScript(e) == 0xffff
++                || !FieldMap_PortNeighbourEvent(fieldSystem, e, beside[k])
+                 || ObjectEvent_GetGraphicsID(e) == OBJ_EVENT_GFX_INVISIBLE // (nothing to see)
+                 || (hiddenFlag != 0 && !(hiddenFlag >= MAP_LOCAL_FLAGS_START && hiddenFlag <= MAP_LOCAL_FLAGS_END)
+                     && FieldSystem_CheckFlag(fieldSystem, hiddenFlag))
+-- 
+2.43.0
+

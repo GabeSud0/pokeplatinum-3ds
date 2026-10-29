@@ -109,7 +109,7 @@ static void test_post_shadow(void)
     double tx, tz;
     int ok;
     build(1, 0);
-    ok = NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, sProj, WIDTH, &sun, 512, &s);
+    ok = NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, sProj, WIDTH, 192, &sun, 512, &s);
     CHECK(ok);
     if (!ok) return;
     /* the ground's normal in the camera's space: world up, turned */
@@ -162,7 +162,7 @@ static void test_azimuth(void)
     NitroShadowSun sun = { 50.0f, 90.0f };
     NitroShadowSetup s;
     build(1, 0);
-    CHECK(NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, sProj, WIDTH, &sun, 512, &s));
+    CHECK(NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, sProj, WIDTH, 192, &sun, 512, &s));
     CHECK(NEAR(s.light[0], 0.0, 1e-3));
     /* along the ground towards the camera: down the screen */
     CHECK(-s.light[1] * sin(PITCH) + s.light[2] * cos(PITCH) > 0.3);
@@ -175,10 +175,10 @@ static void test_none(void)
     NitroShadowSetup s;
     int32_t ortho[16] = { 4096, 0, 0, 0, 0, 4096, 0, 0, 0, 0, 4096, 0, 0, 0, 0, 4096 };
     build(0, 1);
-    CHECK(!NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, sProj, WIDTH, &sun, 512, &s));
+    CHECK(!NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, sProj, WIDTH, 192, &sun, 512, &s));
     build(1, 0);
-    CHECK(!NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, ortho, WIDTH, &sun, 512, &s));
-    CHECK(!NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), 0, sProj, WIDTH, &sun, 512, &s));
+    CHECK(!NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, ortho, WIDTH, 192, &sun, 512, &s));
+    CHECK(!NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), 0, sProj, WIDTH, 192, &sun, 512, &s));
 }
 
 /* As the camera moves a little, the map stays the same size (its size
@@ -189,9 +189,9 @@ static void test_stable(void)
     NitroShadowSetup s0, s1;
     int i;
     build(1, 0);
-    NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, sProj, WIDTH, &sun, 512, &s0);
+    NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, sProj, WIDTH, 192, &sun, 512, &s0);
     for (i = 0; i < sCount; i++) sV[i].pos[0] -= (float)(3.3 * sProj[0] / 4096.0 * 256.0 / WIDTH);
-    NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, sProj, WIDTH, &sun, 512, &s1);
+    NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, sProj, WIDTH, 192, &sun, 512, &s1);
     CHECK(NEAR(s0.extent, s1.extent, 1e-3));
 }
 
@@ -250,7 +250,7 @@ static void test_roles_reach(void)
     double roof[3][3] = { { -10, 40, 20 }, { 10, 40, 20 }, { 0, 50, 30 } };   /* tilted 45 degrees */
     build(1, 0);
     groundCount = 8 * 6 * 6;
-    CHECK(NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, sProj, WIDTH, &sun, 512, &s));
+    CHECK(NitroPort_ShadowSetup(sV[0].pos, sizeof(Vtx), (size_t)sCount, sProj, WIDTH, 192, &sun, 512, &s));
     n = sCount;
     tri(roof[0], roof[1], roof[2]);
     for (i = 0; i < sCount; i++) {
@@ -338,7 +338,7 @@ static void test_cards_decals(void)
     n = ground + 6;
     memset(&batch, 0, sizeof(batch));
     batch.count = (uint32_t)n;
-    CHECK(NitroPort_ShadowSetup(v[0].position, sizeof(v[0]), (size_t)n, sProj, WIDTH, &side, 512, &s));
+    CHECK(NitroPort_ShadowSetup(v[0].position, sizeof(v[0]), (size_t)n, sProj, WIDTH, 192, &side, 512, &s));
     NitroPort_ShadowRoles(v[0].position, &v[0].color[3], sizeof(v[0]), (size_t)n, &s);
     w = NitroPort_ShadowCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s);
     CHECK(w == 6 && nb == 1 && outBatches[0].first == (uint32_t)n && outBatches[0].count == 6);
@@ -354,7 +354,7 @@ static void test_cards_decals(void)
     /* from the top (straight towards the camera): facing it already, only
      * stood upright: its foot as it was, its top lower on the screen */
     for (k = 0; k < 6; k++) v[ground + k].color[3] = 255;
-    CHECK(NitroPort_ShadowSetup(v[0].position, sizeof(v[0]), (size_t)n, sProj, WIDTH, &top, 512, &s));
+    CHECK(NitroPort_ShadowSetup(v[0].position, sizeof(v[0]), (size_t)n, sProj, WIDTH, 192, &top, 512, &s));
     w = NitroPort_ShadowCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s);
     CHECK(w == 6);
     CHECK(NEAR(out[0].position[0], v[ground].position[0], 0.1) && NEAR(out[0].position[1], v[ground].position[1], 0.1));

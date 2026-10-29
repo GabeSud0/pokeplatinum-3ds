@@ -84,11 +84,12 @@ void NitroPort_Double2xTiled16TableRows(const uint16_t *src, int w, int h, int y
  * are done again. A shadow per source of pictures keeps its last picture
  * and, for each band, the publish it last changed in; a target per set of
  * textures, what they hold. */
-#define NITRO_PUBLISH_MAX_W 320
+#define NITRO_PUBLISH_MAX_W 400
 #define NITRO_PUBLISH_H 192
 #define NITRO_PUBLISH_MAX_H 248
-/* (the larger of 320 x 192 and 256 x 248) */
-#define NITRO_PUBLISH_MAX_PIXELS (256 * NITRO_PUBLISH_MAX_H)
+/* (the largest of 320 x 192, 256 x 248 and 400 x 240: the field at the DS's
+ * pixel size) */
+#define NITRO_PUBLISH_MAX_PIXELS (400 * 240)
 #define NITRO_PUBLISH_BANDS (NITRO_PUBLISH_MAX_H / 4)
 
 typedef struct NitroPublishShadow {
@@ -141,6 +142,14 @@ int NitroPort_PublishDoubled(NitroPublishShadow *shadow, NitroPublishTarget *tar
                              const uint16_t *over, const uint8_t *overAlpha, int hasOver, int w, int h,
                              uint16_t *underTex, uint32_t *overTex, int texW, const uint16_t *table,
                              const uint8_t alpha16[17], void (*flush)(void *data, uint32_t bytes));
+/* The same, the over layer on its first overH rows (a multiple of 4, at
+ * most h): NitroPort_PublishDoubled's are the DS's 192 at most (a tall
+ * picture has no 3D past them), the field at the DS's pixel size all of
+ * them (its 3D on every line). */
+int NitroPort_PublishDoubledOver(NitroPublishShadow *shadow, NitroPublishTarget *target, const uint16_t *under,
+                                 const uint16_t *over, const uint8_t *overAlpha, int hasOver, int w, int h,
+                                 int overH, uint16_t *underTex, uint32_t *overTex, int texW, const uint16_t *table,
+                                 const uint8_t alpha16[17], void (*flush)(void *data, uint32_t bytes));
 
 #ifdef __cplusplus
 }
