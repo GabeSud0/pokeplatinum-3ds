@@ -30,24 +30,36 @@ when that tile is free, else on the player's tile hidden till they step
 off it (walking out of a door: it comes out after them). Back in its ball
 when not to be out, another Pokémon is first, the game moves the player
 (a script's walk: out again when the player is theirs again), it's left
-behind (a warp within the map), or the player jumps down a ledge (the follow code can't keep up with the jump): out again behind the
-player where they stop. Its graphics IDs from 0x4000, past the berry
+behind (a warp within the map), or the player jumps down a ledge (the
+follow code can't keep up with the jump): out again behind the player
+where they stop. Its graphics IDs from 0x4000, past the berry
 trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000).
+
+Its Poké Ball: coming out it grows from nothing (its picture made at no
+size: ov5_021ECE40.c, PortFollower_StartsSmall), going in it shrinks
+away where it stands, 6 frames each, with the battle's send-out and
+recall sounds. Those are in the battle's sound bank, which the field
+never loads: the field's sound effects load them too (sound.c), the
+sound heap 128 kB larger for their 84 kB of waves (sound_system.h). It
+comes and goes as set while the options' page is up (the field running
+behind it, patch 0057).
 ---
  include/constants/map_object.h |   2 +
- include/port_follower.h        |  46 +++++
+ include/port_follower.h        |  48 ++++
  include/port_options.h         |   1 +
+ include/sound_system.h         |   6 +
  platinum.us/main.lsf           |   1 +
- src/map_object.c               |  23 ++-
+ src/map_object.c               |  23 +-
  src/meson.build                |   1 +
- src/narc.c                     |  65 ++++++
+ src/narc.c                     |  65 +++++
  src/overlay005/fieldmap.c      |   2 +
  src/overlay005/options_panel.c |   3 +-
  src/overlay005/ov5_021ECC20.c  |   7 +
- src/overlay005/ov5_021ECE40.c  |  25 ++-
- src/port_follower.c            | 455 +++++++++++++++++++++++++++++++++++++++++
+ src/overlay005/ov5_021ECE40.c  |  33 ++-
+ src/port_follower.c            | 553 +++++++++++++++++++++++++++++++++++++++++
+ src/sound.c                    |   7 +
  src/unk_020EDBAC.c             |   5 +-
- 13 files changed, 631 insertions(+), 5 deletions(-)
+ 15 files changed, 752 insertions(+), 5 deletions(-)
 
 diff --git a/include/constants/map_object.h b/include/constants/map_object.h
 index d692a8b6..7d4cb6d8 100644
@@ -64,10 +76,10 @@ index d692a8b6..7d4cb6d8 100644
  #define MAP_OBJ_UNK_A0_00 0
 diff --git a/include/port_follower.h b/include/port_follower.h
 new file mode 100644
-index 00000000..bddb70cc
+index 00000000..f7076b72
 --- /dev/null
 +++ b/include/port_follower.h
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,48 @@
 +#ifndef POKEPLATINUM_PORT_FOLLOWER_H
 +#define POKEPLATINUM_PORT_FOLLOWER_H
 +
@@ -108,6 +120,8 @@ index 00000000..bddb70cc
 +const void *PortFollower_NarcMember(u32 memberIndex, u32 *size);
 +
 +BOOL MapObject_PortIsFollower(const MapObject *mapObj);
++// Its picture made before it has come out of its ball: from nothing (ov5_021ECE40.c).
++BOOL PortFollower_StartsSmall(const MapObject *mapObj);
 +// Every frame of the field (fieldmap.c): out, in its ball or swapped as the
 +// party, the option and the field are.
 +void PortFollower_Update(FieldSystem *fieldSystem);
@@ -126,6 +140,24 @@ index 4a0ee601..e74732cb 100644
  
  int NitroPort_Option(int id);
  void NitroPort_OptionSet(int id, int value);
+diff --git a/include/sound_system.h b/include/sound_system.h
+index f8cbafd8..fb266917 100644
+--- a/include/sound_system.h
++++ b/include/sound_system.h
+@@ -8,7 +8,13 @@
+ #include "game_options.h"
+ #include "sys_task.h"
+ 
++#ifdef SDK_PORT_3DS
++// (+128 kB: the battle's Poké Ball sounds kept in the field for the follower
++// Pokémon, their bank and its 84 kB of waves; sound.c)
++#define SOUND_SYSTEM_HEAP_SIZE           (0xBBC00 + 0x20000)
++#else
+ #define SOUND_SYSTEM_HEAP_SIZE           0xBBC00 // ~750kB
++#endif
+ #define SOUND_SYSTEM_CAPTURE_BUFFER_SIZE 0x1000
+ #define SOUND_HEAP_STATE_INVALID         -1
+ #define SOUND_FILTER_MAX_SIZE            8
 diff --git a/platinum.us/main.lsf b/platinum.us/main.lsf
 index e86a5643..efd447c9 100644
 --- a/platinum.us/main.lsf
@@ -404,7 +436,7 @@ index 9de78103..9f907c55 100644
          if (v0->graphicsID == param0) {
              return v0;
 diff --git a/src/overlay005/ov5_021ECE40.c b/src/overlay005/ov5_021ECE40.c
-index dbe4ac67..5bcc32cd 100644
+index dbe4ac67..04528579 100644
 --- a/src/overlay005/ov5_021ECE40.c
 +++ b/src/overlay005/ov5_021ECE40.c
 @@ -33,6 +33,9 @@
@@ -417,7 +449,22 @@ index dbe4ac67..5bcc32cd 100644
  
  typedef enum {
      UnkEnum_ov5_021ED334_00 = 0,
-@@ -506,6 +509,17 @@ static void ov5_021ED2AC(UnkStruct_ov5_021ED0A4 *param0)
+@@ -227,6 +230,14 @@ Billboard *ov5_021ECF1C(MapObject *param0, int param1)
+ 
+     GF_ASSERT(v2 != NULL);
+ 
++#ifdef SDK_PORT_3DS
++    if (v2 != NULL && PortFollower_StartsSmall(param0)) {
++        // (the follower Pokémon's, not yet out of its ball: port_follower.c grows it)
++        VecFx32 none = { 0, 0, 0 };
++        Billboard_SetScale(v2, &none);
++    }
++#endif
++
+     return v2;
+ }
+ 
+@@ -506,6 +517,17 @@ static void ov5_021ED2AC(UnkStruct_ov5_021ED0A4 *param0)
  
  static const ObjectEventGfxFileEntry *ov5_021ED2D0(int param0, int param1, const ObjectEventGfxFileEntry *param2)
  {
@@ -435,7 +482,7 @@ index dbe4ac67..5bcc32cd 100644
      do {
          if (param2->id == param0) {
              return param2;
-@@ -1293,6 +1307,10 @@ static const ObjectEventGfxModelAnimEntry *ov5_021EDD04(int param0)
+@@ -1293,6 +1315,10 @@ static const ObjectEventGfxModelAnimEntry *ov5_021EDD04(int param0)
  {
      const ObjectEventGfxModelAnimEntry *v0 = gObjectEventGfxModelAnimsTable;
  
@@ -446,7 +493,7 @@ index dbe4ac67..5bcc32cd 100644
      do {
          if (v0->graphicsID == param0) {
              return v0;
-@@ -1931,6 +1949,11 @@ static Billboard *ov5_021EE454(MapObject *param0, int param1, UnkFuncPtr_ov5_021
+@@ -1931,6 +1957,11 @@ static Billboard *ov5_021EE454(MapObject *param0, int param1, UnkFuncPtr_ov5_021
          v3 = v2;
          v7 = gObjectEventGfxTexturesTable;
  
@@ -458,7 +505,7 @@ index dbe4ac67..5bcc32cd 100644
          do {
              if (v7->id == v3) {
                  break;
-@@ -2088,7 +2111,7 @@ BOOL MapObjectGfx_PortHasRoom(const MapObjectManager *mapObjMan, int graphicsID)
+@@ -2088,7 +2119,7 @@ BOOL MapObjectGfx_PortHasRoom(const MapObjectManager *mapObjMan, int graphicsID)
          }
      }
  
@@ -469,10 +516,10 @@ index dbe4ac67..5bcc32cd 100644
  
 diff --git a/src/port_follower.c b/src/port_follower.c
 new file mode 100644
-index 00000000..6b8ef6e3
+index 00000000..56e2f8bf
 --- /dev/null
 +++ b/src/port_follower.c
-@@ -0,0 +1,455 @@
+@@ -0,0 +1,553 @@
 +#include "port_follower.h"
 +
 +#include <nitro.h>
@@ -490,8 +537,11 @@ index 00000000..6b8ef6e3
 +#include "generated/species.h"
 +
 +#include "field/field_system.h"
++#include "overlay005/ov5_021EB1A0.h"
 +#include "overlay005/ov5_021ECE40.h"
++#include "overlay005/options_panel.h"
 +
++#include "billboard.h"
 +#include "field_task.h"
 +#include "map_header.h"
 +#include "map_object.h"
@@ -503,6 +553,7 @@ index 00000000..6b8ef6e3
 +#include "pokemon.h"
 +#include "port_options.h"
 +#include "savedata_misc.h"
++#include "sound_playback.h"
 +#include "system_flags.h"
 +#include "vars_flags.h"
 +
@@ -849,9 +900,47 @@ index 00000000..6b8ef6e3
 +    return mapObj;
 +}
 +
++// Its Poké Ball: coming out it grows from nothing to its size, going in it
++// shrinks away where it is, POP_FRAMES each, with the battle's send-out and
++// recall sounds.
++#define POP_FRAMES 6
++
++static void PortFollower_Sound(u16 seqID)
++{
++    static int sFailed;
++
++    if (!Sound_PlayEffect(seqID) && sFailed++ < 4) {
++        NitroPort_Log("[follower] sound %d not played", seqID);
++    }
++}
++
++static BOOL PortFollower_SetScale(MapObject *mapObj, int step)
++{
++    Billboard *billboard = ov5_021EB1A0(mapObj);
++    VecFx32 scale;
++
++    if (billboard == NULL) {
++        return FALSE; // (its picture not made yet)
++    }
++
++    scale.x = scale.y = scale.z = FX32_ONE * step / POP_FRAMES;
++    Billboard_SetScale(billboard, &scale);
++    return TRUE;
++}
++
++// (coming out: frames of it so far, -1 not yet begun: its picture or, -2,
++// the player's step off its tile awaited; going in: frames left)
++static int sOut, sIn;
++
++BOOL PortFollower_StartsSmall(const MapObject *mapObj)
++{
++    return MapObject_PortIsFollower(mapObj) && sOut < 0;
++}
++
 +void PortFollower_Update(FieldSystem *fieldSystem)
 +{
-+    static int sWait, sPlayerX, sPlayerZ;
++    static int sWait, sPlayerX, sPlayerZ, sNoRoom;
++    static MapObject *sLast;
 +    MapObject *mapObj, *player;
 +    int graphicsID = 0, x, z, dx, dz;
 +    BOOL big = FALSE, scripted;
@@ -868,7 +957,16 @@ index 00000000..6b8ef6e3
 +        return;
 +    }
 +
-+    scripted = FieldSystem_IsRunningTask(fieldSystem);
++    if (mapObj != sLast) {
++        // (another one, or none: made anew, or the field's objects made again)
++        sIn = 0;
++        sOut = mapObj != NULL ? -1 : 0;
++        sLast = mapObj;
++    }
++
++    // (the options' page in the lower menu's panel: a task, but the field
++    // going on behind it, the player still: it comes and goes as there set)
++    scripted = FieldSystem_IsRunningTask(fieldSystem) && !OptionsPanel_IsOpen();
 +
 +    if (PortOption_On(PORT_OPT_FOLLOWER)) {
 +        graphicsID = PortFollower_PartyGfx(fieldSystem, &big);
@@ -881,7 +979,17 @@ index 00000000..6b8ef6e3
 +    x = PlayerAvatar_GetXPos(fieldSystem->playerAvatar);
 +    z = PlayerAvatar_GetZPos(fieldSystem->playerAvatar);
 +
-+    if (mapObj != NULL) {
++    if (mapObj != NULL && sIn > 0) {
++        // Going in: smaller each frame, then gone.
++        sIn--;
++        PortFollower_SetScale(mapObj, sIn);
++
++        if (sIn == 0) {
++            PortFollower_Remove(fieldSystem, mapObj);
++            mapObj = sLast = NULL;
++            sWait = 8;
++        }
++    } else if (mapObj != NULL) {
 +        const char *why = NULL;
 +
 +        dx = MapObject_GetX(mapObj) - x;
@@ -903,11 +1011,30 @@ index 00000000..6b8ef6e3
 +
 +        if (why != NULL) {
 +            NitroPort_Log("[follower] in its ball (%s)", why);
-+            PortFollower_Remove(fieldSystem, mapObj);
-+            mapObj = NULL;
-+            sWait = 8;
-+        } else if (MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE) && (dx != 0 || dz != 0)) {
-+            MapObject_SetHidden(mapObj, FALSE); // (the player stepped off its tile)
++
++            if (sOut < 0 || MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE)) {
++                PortFollower_Remove(fieldSystem, mapObj); // (never seen: no ball)
++                mapObj = sLast = NULL;
++                sWait = 8;
++            } else {
++                MapObject_SetPauseMovementOn(mapObj); // (it stays where it is)
++                sIn = sOut > 0 && sOut < POP_FRAMES ? sOut : POP_FRAMES;
++                sOut = POP_FRAMES;
++                PortFollower_Sound(SEQ_SE_DP_SLOT02_sseq_1); // (SEQ_SE_DP_SUIKOMU: the battle's recall)
++            }
++        } else if (sOut < 0) {
++            // Coming out: once its picture is made (and, on the player's
++            // tile, once the player has stepped off it), from nothing.
++            BOOL waits = MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE) && dx == 0 && dz == 0 && sOut == -2;
++
++            if (!waits && PortFollower_SetScale(mapObj, 0)) {
++                MapObject_SetHidden(mapObj, FALSE);
++                sOut = 0;
++                PortFollower_Sound(SEQ_SE_DP_SLOT01_sseq_1); // (SEQ_SE_DP_BOWA2: the battle's send-out)
++            }
++        } else if (sOut < POP_FRAMES) {
++            sOut++;
++            PortFollower_SetScale(mapObj, sOut);
 +        }
 +    }
 +
@@ -920,14 +1047,50 @@ index 00000000..6b8ef6e3
 +            sWait--;
 +        } else if (MapObjectMan_PortFreeSlots(fieldSystem->mapObjMan) > 1
 +            && (!PortFollower_IsGfx(graphicsID) || Bundle_Ready()) && MapObjectGfx_PortHasRoom(fieldSystem->mapObjMan, graphicsID)) {
-+            mapObj = PortFollower_Add(fieldSystem, graphicsID);
++            BOOL onPlayer;
++
++            sOut = -1; // (its picture, made as it's added, starts from nothing)
++            mapObj = sLast = PortFollower_Add(fieldSystem, graphicsID);
++            onPlayer = mapObj != NULL && MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE);
 +            NitroPort_Log("[follower] out: graphics %d at %d,%d%s", graphicsID, mapObj ? MapObject_GetX(mapObj) : -1,
-+                mapObj ? MapObject_GetZ(mapObj) : -1, mapObj && MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE) ? " (hidden till the player moves)" : "");
++                mapObj ? MapObject_GetZ(mapObj) : -1, onPlayer ? " (on the player's tile till they step off it)" : "");
++
++            if (mapObj != NULL) {
++                MapObject_SetHidden(mapObj, TRUE); // (shown as it comes out of its ball)
++                PortFollower_SetScale(mapObj, 0);  // (its picture made with it, before it was the follower)
++                sOut = onPlayer ? -2 : -1;
++                sIn = 0;
++            }
++
++            sNoRoom = 0;
 +        } else {
 +            sWait = 4;
++
++            if (++sNoRoom == 15) { // (about 2 seconds: said once)
++                NitroPort_Log("[follower] waiting: %s", MapObjectMan_PortFreeSlots(fieldSystem->mapObjMan) <= 1 ? "no map object free"
++                    : PortFollower_IsGfx(graphicsID) && !Bundle_Ready() ? "no sprites" : "no room for its picture yet");
++            }
 +        }
 +    }
 +}
+diff --git a/src/sound.c b/src/sound.c
+index cb0e092b..a8c8d7d1 100644
+--- a/src/sound.c
++++ b/src/sound.c
+@@ -159,6 +159,13 @@ int Sound_LoadSoundEffectsForScene(u8 scene)
+     case SOUND_SCENE_FIELD:
+     case 22:
+         result = SoundSystem_LoadSoundGroup(GROUP_SE_FIELD);
++#ifdef SDK_PORT_3DS
++        // The follower Pokémon's Poké Ball (port_follower.c): the battle's
++        // send-out and recall sounds, in the battle's bank (sound_system.h:
++        // the heap's room for it).
++        SoundSystem_LoadSequenceEx(SEQ_SE_DP_SLOT01_sseq_1, NNS_SND_ARC_LOAD_SEQ | NNS_SND_ARC_LOAD_BANK | NNS_SND_ARC_LOAD_WAVE);
++        SoundSystem_LoadSequenceEx(SEQ_SE_DP_SLOT02_sseq_1, NNS_SND_ARC_LOAD_SEQ); // (the same bank)
++#endif
+         break;
+     case SOUND_SCENE_BATTLE:
+         result = SoundSystem_LoadSoundGroup(GROUP_SE_BATTLE);
 diff --git a/src/unk_020EDBAC.c b/src/unk_020EDBAC.c
 index 1ddd7482..685b53de 100644
 --- a/src/unk_020EDBAC.c

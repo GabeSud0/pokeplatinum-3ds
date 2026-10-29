@@ -1158,7 +1158,11 @@ screens) the lower screen is the DS's, filling the screen as before.
   POKéMON, TRAINER and SAVE straight on from the black panel; MAP,
   POKéTCH, POKéDEX once it's faded in). Closed, the Pokétch comes back and
   the port's settings are saved. Without the menu it's the DS's options
-  screen.
+  screen. The field isn't paused while the page is up (patch 0057: the
+  start menu pauses everyone's movement, the page lets them go), so
+  people walk about and changes are seen as they're made (the follower
+  coming out or going in); the player stays still, every button the
+  page's.
 - **The enhancements and cheats** (`port_options.h` in the
   decompilation: the port's settings, read where the game decides):
   - SPEED (1x, 1.5x, 2x, 3x, 4x; the 3DS): that many game frames to each
@@ -1241,8 +1245,16 @@ screens) the lower screen is the DS's, filling the screen as before.
     player jumps down a ledge (the
     follow code moves a tile a step behind and can't keep up with the
     jump): out again where they stop. Its graphics IDs from 0x4000, past
-    the berry trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000). The
-    log says when it comes out and why it goes back.
+    the berry trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000). Its
+    Poké Ball: coming out it grows from nothing (its picture made at no
+    size, so it never shows whole first), going in it shrinks away where
+    it stands, 6 frames each, with the battle's send-out and recall
+    sounds. Those are in the battle's sound bank, which the field never
+    loads: the field's sound effects load them too (`sound.c`), the sound
+    heap 128 KB larger for their 84 KB of waves (`sound_system.h`; the
+    DS's heap had 74 KB left there). The log says when it comes out, why
+    it goes back, and what it waits for when it can't come out ("no map
+    object free", "no sprites", "no room for its picture yet").
   - ALWAYS CATCH (every ball catches), INSTANT VICTORY (the player's
     attacks knock the opponent out, Endure and a Focus Band or Sash no
     help; a Substitute still takes the hit), FAST EGGS (the day care's chance at
