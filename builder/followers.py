@@ -63,9 +63,9 @@ def check_file(n: int, data: bytes) -> None:
         raise FollowersError(f"follower sprite {n} isn't the pinned file (size {len(data)}, expected {size})")
 
 
-def texture_size(data: bytes) -> tuple[int, int]:
-    """(width, height) of an NSBTX of FRAMES square 16-colour textures, all
-    one size; a FollowersError for anything else."""
+def texture_size(data: bytes, frames: int = FRAMES) -> tuple[int, int]:
+    """(width, height) of an NSBTX of `frames` square 16-colour textures,
+    all one size; a FollowersError for anything else."""
     try:
         if data[:4] != b"BTX0":
             raise FollowersError("not an NSBTX")
@@ -74,8 +74,8 @@ def texture_size(data: bytes) -> tuple[int, int]:
             raise FollowersError("no TEX0 block")
         info = tex + struct.unpack_from("<H", data, tex + 0x0E)[0]
         count = data[info + 1]
-        if count != FRAMES:
-            raise FollowersError(f"{count} textures, not {FRAMES}")
+        if count != frames:
+            raise FollowersError(f"{count} textures, not {frames}")
         # The info dictionary: its header, the tree's header and count + 1
         # nodes, the entries' size and offset (u16 each), the entries.
         entries = info + 4 + 4 + 4 * (count + 1) + 4
@@ -97,6 +97,121 @@ def texture_size(data: bytes) -> tuple[int, int]:
     return w, h
 
 
+# Platinum's overworld people and Pokémon have 16 textures, 4 a direction
+# (north, south, west, east; named NAME.1 to NAME.16, the dictionary in
+# name order), and its walk (generic_walk: BILLBOARD_FRAME_SEQ_GENERIC_WALK)
+# shows them by index. HeartGold's followers have 8, 2 a direction (up,
+# down, left, right), and two palettes: normal, shiny. So each is laid out
+# as Platinum's (platinum_layout): 16 entries, entry NAME.k showing frame
+# 2 * direction + (step % 2), the textures' pixels shared. With Platinum's
+# walk the follower walks as its people do, its frames A B A B.
+PLATINUM_FRAMES = 16
+NAME = b"tsure_poke"
+
+
+def _name_bits(name: bytes) -> int:
+    return int.from_bytes(name.ljust(16, b"\0")[:16], "little")
+
+
+def dictionary_tree(names: list[bytes]) -> list[tuple[int, int, int, int]]:
+    """The NNS dictionary's Patricia tree for its names (by index): node 0
+    the header, each (bit tested, left, right, entry). NNS_G3dGetResDictIdxByName
+    walks it; the billboards don't (they go by index), but it's kept right."""
+    keys = [_name_bits(n) for n in names]
+    nodes = [[127, 0, 0, 0]]
+    node_key = [0]
+
+    def bit(value: int, b: int) -> int:
+        return (value >> b) & 1
+
+    for entry, key in enumerate(keys):
+        p, x = 0, nodes[0][1]
+        while nodes[p][0] > nodes[x][0]:
+            p, x = x, nodes[x][2] if bit(key, nodes[x][0]) else nodes[x][1]
+        i = 127
+        while i >= 0 and bit(key, i) == bit(node_key[x], i):
+            i -= 1
+        if i < 0:
+            raise FollowersError(f"names {names[entry]!r} twice")
+        p, x = 0, nodes[0][1]
+        while nodes[p][0] > nodes[x][0] > i:
+            p, x = x, nodes[x][2] if bit(key, nodes[x][0]) else nodes[x][1]
+        t = len(nodes)
+        nodes.append([i, x if bit(key, i) else t, t if bit(key, i) else x, entry])
+        node_key.append(key)
+        if p == 0:
+            nodes[0][1] = t
+        elif bit(key, nodes[p][0]):
+            nodes[p][2] = t
+        else:
+            nodes[p][1] = t
+    return [tuple(n) for n in nodes]
+
+
+def dictionary_lookup(tree, names: list[bytes], name: bytes) -> int:
+    """The entry of name, as NNS looks it up (-1: none). For the tests."""
+    key = _name_bits(name)
+    p, x = tree[0], tree[tree[0][1]]
+    while p[0] > x[0]:
+        p, x = x, tree[x[2]] if (key >> x[0]) & 1 else tree[x[1]]
+    return x[3] if names[x[3]].ljust(16, b"\0") == name.ljust(16, b"\0") else -1
+
+
+def _dictionary(names: list[bytes], entries: list[bytes]) -> bytes:
+    n, size = len(names), len(entries[0])
+    tree = dictionary_tree(names)
+    tree_part = struct.pack("<HH", 8, 8 + 4 * (n + 1)) + b"".join(struct.pack("<4B", *node) for node in tree)
+    entry_part = struct.pack("<HH", size, 4 + size * n) + b"".join(entries) + b"".join(m.ljust(16, b"\0") for m in names)
+    return struct.pack("<BBH", 0, n, 4 + len(tree_part) + len(entry_part)) + tree_part + entry_part
+
+
+def platinum_layout(data: bytes) -> bytes:
+    """A HeartGold follower's NSBTX (texture_size checked) laid out as
+    Platinum's walking sprites (PLATINUM_FRAMES textures, see above); the
+    pixels and both palettes as they are."""
+    texture_size(data)
+    tex = struct.unpack_from("<I", data, 16)[0]
+    block = data[tex:tex + struct.unpack_from("<I", data, tex + 4)[0]]
+    tex_dict = struct.unpack_from("<H", block, 0x0E)[0]
+    tex_data = struct.unpack_from("<I", block, 0x14)[0]
+    pltt_dict = struct.unpack_from("<I", block, 0x34)[0]
+    pltt_data = struct.unpack_from("<I", block, 0x38)[0]
+    tex_size = struct.unpack_from("<H", block, 0x0C)[0] << 3
+    pltt_size = struct.unpack_from("<H", block, 0x30)[0] << 3
+    count = block[tex_dict + 1]
+    at = tex_dict + 8 + 4 * (count + 1) + 4
+    params = [block[at + 8 * i:at + 8 * i + 8] for i in range(count)]
+    pltt = block[pltt_dict:pltt_dict + struct.unpack_from("<H", block, pltt_dict + 2)[0]]
+    if not (tex_dict < pltt_dict < tex_data and tex_data + tex_size <= pltt_data and pltt_data + pltt_size <= len(block)):
+        raise FollowersError("NSBTX blocks out of order")
+
+    names = sorted(NAME + b".%d" % k for k in range(1, PLATINUM_FRAMES + 1))
+    frames = []
+    for name in names:
+        k = int(name.rsplit(b".", 1)[1]) - 1
+        frames.append(params[2 * (k // 4) + (k % 2)])
+    new_tex_dict = _dictionary(names, frames)
+
+    header = bytearray(block[:0x3C])
+    new_pltt_dict = 0x3C + len(new_tex_dict)
+    new_tex_data = new_pltt_dict + len(pltt)
+    new_pltt_data = new_tex_data + tex_size
+    struct.pack_into("<H", header, 0x0E, 0x3C)
+    struct.pack_into("<I", header, 0x14, new_tex_data)
+    struct.pack_into("<I", header, 0x24, new_pltt_data)   # (no 4x4 textures: at the palettes, as theirs)
+    struct.pack_into("<I", header, 0x28, new_pltt_data)
+    struct.pack_into("<I", header, 0x34, new_pltt_dict)
+    struct.pack_into("<I", header, 0x38, new_pltt_data)
+    body = (bytes(header) + new_tex_dict + pltt + block[tex_data:tex_data + tex_size]
+            + block[pltt_data:pltt_data + pltt_size])
+    struct.pack_into("<I", header, 0x04, len(body))
+    body = bytes(header) + body[0x3C:]
+    head = bytearray(data[:16])
+    struct.pack_into("<I", head, 8, 16 + 4 + len(body))
+    struct.pack_into("<HH", head, 12, 16, 1)
+    return bytes(head) + struct.pack("<I", 20) + body
+
+
 def make_bundle(sprites: list[bytes]) -> bytes:
     """The data pack's follower file from the fetched sprites, in order
     (each checked). Layout (little endian):
@@ -104,8 +219,8 @@ def make_bundle(sprites: list[bytes]) -> bytes:
         0   'PFOL', u16 version 1, u16 species S (493), u32 sprites N, u32 0
         16  S x {u16 first sprite, u8 forms after it, u8 females' own (1/0)}
             N x {u32 offset, u32 size, u8 width, u8 height, u16 0}
-            the sprites (HeartGold's NSBTX files as they are), each at a
-            4-byte boundary
+            the sprites (HeartGold's NSBTX files laid out as Platinum's
+            walking sprites: platinum_layout), each at a 4-byte boundary
 
     Species s's sprite: first + 1 for a female when females' own is 1, else
     first + form when form <= forms (FollowMon_GetSpriteID's way)."""
@@ -119,6 +234,7 @@ def make_bundle(sprites: list[bytes]) -> bytes:
     for n, sprite in enumerate(sprites):
         check_file(n, sprite)
         w, h = texture_size(sprite)
+        sprite = platinum_layout(sprite)
         offset = (offset + 3) & ~3
         directory.append(SPRITE_ENTRY.pack(offset, len(sprite), w, h, 0))
         data.append((offset, sprite))

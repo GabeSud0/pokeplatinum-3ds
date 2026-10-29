@@ -17,15 +17,33 @@ import pack  # noqa: E402
 
 
 def make_nsbtx(size=32, frames=8, fmt=3, mixed=False) -> bytes:
-    """An NSBTX with only what texture_size reads: the headers and the
-    texture info dictionary's parameters."""
-    count = frames
+    """A made-up follower NSBTX as HeartGold's are laid out: the TEX0
+    block's header, a texture dictionary of `frames` 16-colour textures
+    (pixels: the frame's number), two palettes (normal, shiny)."""
     code = {8: 0, 16: 1, 32: 2, 64: 3}   # (width = 8 << code)
-    entries = b"".join(struct.pack("<II", (fmt << 26) | (code[size // (2 if mixed and i else 1)] << 20)
-                                   | (code[size] << 23), 0) for i in range(count))
-    info = bytes((0, count)) + struct.pack("<H", 0) + b"\0" * 4 + b"\0" * (4 * (count + 1)) + b"\0" * 4 + entries
-    tex0 = b"TEX0" + b"\0" * 10 + struct.pack("<H", 0x3C) + b"\0" * (0x3C - 16) + info
-    return b"BTX0" + b"\0" * 12 + struct.pack("<I", 20) + tex0
+    texel = size * size // 2
+    names = sorted(b"tsure_poke.%d" % k for k in [1] + list(range(10, 10 + frames - 1)))
+    params = []
+    for i in range(frames):
+        w = size // (2 if mixed and i else 1)
+        params.append(struct.pack("<II", (fmt << 26) | (code[w] << 20) | (code[size] << 23) | (i * texel >> 3), 0))
+    tex_dict = followers._dictionary(names, params)
+    pltt_dict = followers._dictionary([b"tsure_poke0", b"tsure_poke1"], [struct.pack("<HH", 0, 0), struct.pack("<HH", 4, 0)])
+    tex_data = b"".join(bytes([i]) * texel for i in range(frames))
+    pltt_data = bytes(range(32)) + bytes(range(100, 132))
+    header = bytearray(0x3C)
+    header[0:4] = b"TEX0"
+    td = 0x3C + len(tex_dict) + len(pltt_dict)
+    pd = td + len(tex_data)
+    struct.pack_into("<HH", header, 0x0C, len(tex_data) >> 3, 0x3C)
+    struct.pack_into("<I", header, 0x14, td)
+    struct.pack_into("<II", header, 0x24, pd, pd)
+    struct.pack_into("<H", header, 0x30, len(pltt_data) >> 3)
+    struct.pack_into("<II", header, 0x34, 0x3C + len(tex_dict), pd)
+    body = bytes(header) + tex_dict + pltt_dict + tex_data + pltt_data
+    struct.pack_into("<I", header, 0x04, len(body))
+    body = bytes(header) + body[0x3C:]
+    return b"BTX0" + struct.pack("<HHIHH", 0xFEFF, 1, 20 + len(body), 16, 1) + struct.pack("<I", 20) + body
 
 
 class FakeSources:
@@ -67,7 +85,7 @@ class BundleTest(unittest.TestCase):
         self.assertEqual(len(bundle) % 4, 0)
         out = followers.read_bundle(bundle)
         self.assertEqual(out["species"], [(0, 0, 0), (1, 0, 1), (3, 0, 0)])
-        self.assertEqual([s["data"] for s in out["sprites"]], self.sprites)
+        self.assertEqual([s["data"] for s in out["sprites"]], [followers.platinum_layout(s) for s in self.sprites])
         self.assertEqual([s["width"] for s in out["sprites"]], [32, 32, 32, 64])
 
     def test_checks_each_file(self):
@@ -105,6 +123,44 @@ class BundleTest(unittest.TestCase):
             self.assertEqual(files, {5: b"abc", followers.PAK_ID: bundle})
             with self.assertRaises(ValueError):
                 pack.pack(root, out, build_id="t", extra=[(5, b"x")])
+
+
+class PlatinumLayoutTest(unittest.TestCase):
+    """A follower laid out as Platinum's walking sprites."""
+
+    def entries(self, data):
+        tex = struct.unpack_from("<I", data, 16)[0]
+        d = tex + struct.unpack_from("<H", data, tex + 0x0E)[0]
+        n = data[d + 1]
+        at = d + 8 + 4 * (n + 1) + 4
+        names = [data[at + 8 * n + 16 * i:at + 8 * n + 16 * i + 16].rstrip(b"\0") for i in range(n)]
+        params = [struct.unpack_from("<I", data, at + 8 * i)[0] for i in range(n)]
+        return names, params, tex
+
+    def test_frames(self):
+        original = make_nsbtx(32)
+        out = followers.platinum_layout(original)
+        names, params, tex = self.entries(out)
+        self.assertEqual(len(names), 16)
+        self.assertEqual(names, sorted(names))
+        texel = 32 * 32 // 2
+        for name, param in zip(names, params):
+            k = int(name.rsplit(b".", 1)[1]) - 1
+            frame = (param & 0xFFFF) * 8 // texel
+            self.assertEqual(frame, 2 * (k // 4) + k % 2, name)   # (direction k // 4: its two frames by turns)
+        tree = followers.dictionary_tree(names)
+        for i, name in enumerate(names):
+            self.assertEqual(followers.dictionary_lookup(tree, names, name), i)
+        self.assertEqual(followers.texture_size(out, 16), (32, 32))
+        # the pixels and palettes kept
+        texdata = tex + struct.unpack_from("<I", out, tex + 0x14)[0]
+        self.assertEqual(out[texdata:texdata + 8 * texel], b"".join(bytes([i]) * texel for i in range(8)))
+        self.assertTrue(out.endswith(bytes(range(32)) + bytes(range(100, 132))))
+        self.assertEqual(struct.unpack_from("<I", out, 8)[0], len(out))
+
+    def test_big(self):
+        out = followers.platinum_layout(make_nsbtx(64))
+        self.assertEqual(followers.texture_size(out, 16), (64, 64))
 
 
 class PinnedSourcesTest(unittest.TestCase):
