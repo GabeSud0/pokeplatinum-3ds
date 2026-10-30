@@ -98,16 +98,28 @@ class BallSpritesTest(unittest.TestCase):
         pictures = ball_sprites.ball_pictures(made_up_archive())
         for k, (closed, opened, palette) in enumerate(pictures):
             self.assertEqual(palette[1], 0x7FFF - k)
-        # at 4/5: a 10-texel block on the bottom row, its middle on the
-        # origin's column, comes out 8 across, still on the bottom row
-        block = [0] * 1024
-        for x in range(11, 21):
-            block[31 * 32 + x] = 5
-        small = ball_sprites.shrink(block, 0.8)
-        row = [small[31 * 32 + x] for x in range(32)]
-        self.assertEqual(sum(1 for c in row if c), 8)
-        self.assertEqual(row[ball_sprites.ORIGIN[0]], 5)
-        self.assertEqual(sum(1 for c in small if c), 8)
+
+    def test_carve(self):
+        """A 14 x 14 square with a band two rows tall and a button column:
+        12 x 12 after, the band and the button kept, the bottom row and the
+        middle where they were."""
+        pic = [0] * 1024
+        for y in range(17, 31):
+            for x in range(9, 23):
+                pic[y * 32 + x] = 1                         # body
+        for x in range(9, 23):
+            pic[23 * 32 + x] = pic[24 * 32 + x] = 2         # band
+        for y in range(17, 31):
+            pic[y * 32 + 15] = pic[y * 32 + 16] = 3         # button column
+        out = ball_sprites.carve(pic)
+        ys = [y for y in range(32) if any(out[y * 32:(y + 1) * 32])]
+        xs = [x for x in range(32) if any(out[y * 32 + x] for y in range(32))]
+        self.assertEqual((len(xs), len(ys)), (12, 12))
+        self.assertEqual(ys[-1], 30)
+        self.assertEqual((xs[0] + xs[-1] + 1) / 2, 16)
+        self.assertIn(2, out)
+        self.assertTrue(all(any(out[y * 32 + x] == 3 for x in xs) for y in ys))   # (the button kept)
+        self.assertEqual(ball_sprites.carve([0] * 1024), [0] * 1024)
 
     def test_open_facing_north(self):
         """A ball's 16 textures: the 4 facing north (Platinum's NAME.1-4)

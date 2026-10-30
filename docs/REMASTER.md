@@ -1266,13 +1266,17 @@ screens) the lower screen is the DS's, filling the screen as before.
     it stands, 6 frames each, with the battle's send-out and recall
     sounds. The ball itself is seen (the item ball's picture, a map
     object of its own: local ID 0xF4, not saved, not found by scripts,
-    walked through; no shadow): coming out it drops in and opens; going
+    walked through; no shadow; on the Pokémon's own spot, its ground
+    line the player's): coming out it drops in and opens; going
     in the Pokémon shrinks into it and it stays a moment. It's the ball
     the Pokémon was caught in (`MON_DATA_POKEBALL`), closed or open, as
     the battles draw it: `builder/ball_sprites.py` makes each of the 17
     kinds from the ROM's battle ball sprites (`pl_batt_obj.narc`: the
-    closed cell and the open one) at 0.74 of their size (a little under
-    the overworld item ball's), into a port file of the data pack
+    closed cell and the open one) two rows and columns smaller, the
+    overworld item ball's size: carved, not resampled, the rows and
+    columns most like their neighbours taken (the columns in mirrored
+    pairs), so the outline, the band, the button and the markings stay
+    (resampled to 3/4 they went), into a port file of the data pack
     (`0x10000001`, with the follower sprites); without it, the item ball.
     Open and closed are one sprite, open facing north: the ball opens and
     closes by turning, the same object, its texture already loaded. (Made
@@ -1282,7 +1286,7 @@ screens) the lower screen is the DS's, filling the screen as before.
     the player beside it: a flicker to the side, 2026-10-29.) As it opens, the battle's
     send-out burst for its kind (`ball_particle.narc`, a particle system of
     its own drawn after the billboards with the field's camera, its sizes
-    and speeds 4 times: the battle's camera is a few units away, the
+    and speeds 3.25 times: the battle's camera is a few units away, the
     field's units about a pixel), only when the field heap and the 3D VRAM
     have room for it. The Pokémon has
     no shadow while it's smaller than itself. Out and standing it steps

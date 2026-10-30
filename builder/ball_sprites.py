@@ -5,8 +5,8 @@ as the battles draw it, made from the player's own ROM.
 When the follower comes out of its ball or goes back in (OPTIONS:
 FOLLOWER), the ball it was caught in is seen. The battles' ball sprites
 (battle/graphic/pl_batt_obj.narc: a ball's tiles, palette, cells) are
-turned here into overworld sprites, one for each of the 17 kinds, at
-about 3/4 of their size (SCALE: the overworld item ball's), laid out as
+turned here into overworld sprites, one for each of the 17 kinds, the
+overworld item ball's size (CARVE: two rows and columns fewer), laid out as
 the follower sprites are (Platinum's walking sprites: 16 textures of 32 x
 32, builder/followers.py's platinum_layout), the ball's bottom at the
 texture's: facing north it's open, any other way closed, so the game
@@ -45,10 +45,10 @@ SIZE = 32
 ORIGIN = (16, 24)            # the cells' (0, 0) in the texture: the ball's bottom at its bottom
 CLOSED_CELL, OPEN_CELL = 0, 9
 # The battles' balls are bigger than the overworld's item ball (14 pixels
-# across to its 12): drawn smaller (nearest texel, from the bottom middle),
-# so they stay a texel a pixel and sharp. (4/5 looked a little big on the
-# 3DS: 2026-10-29.)
-SCALE = 0.74
+# across to its 12): CARVE rows and columns fewer (carve()), the ones most
+# like their neighbours, so the outline, the band, the button and the
+# markings stay (resampled, at 4/5 or 3/4, they lost detail: 2026-10-29).
+CARVE = 2
 
 # The battles' ball throw graphics (src/battle_anim/ov12_02235E94.c,
 # sBallThrowGraphics; res/graphics/battle/sprites.naix): (tiles, palette,
@@ -216,17 +216,53 @@ def draw_cell(cell, tiles: bytes, shift: int = 1) -> list[int]:
     return texels
 
 
-def shrink(texels: list[int], scale: float = SCALE) -> list[int]:
-    """The picture at `scale`, each texel the nearest of the original's,
-    its bottom middle (ORIGIN's column, the texture's bottom) where it was."""
-    ox, oy = ORIGIN[0], SIZE - 1
+def _line_cost(lines: list[list[int]], i: int) -> int:
+    """What taking line i away loses: its texels unlike the nearer of its
+    neighbours (0: a copy of one); the outermost lines (the outline) never."""
+    if i == 0 or i == len(lines) - 1:
+        return 1 << 20
+    return min(sum(1 for a, c in zip(lines[i], lines[j]) if a != c) for j in (i - 1, i + 1))
+
+
+def carve(texels: list[int], count: int = CARVE) -> list[int]:
+    """The picture `count` columns and rows smaller: the columns taken in
+    mirrored pairs (the balls are symmetric; an odd one alone), the rows one
+    at a time, each time the line(s) costing least (_line_cost; a tie: the
+    nearer the middle). Its bottom row and middle column where they were."""
+    rows = [texels[y * SIZE:(y + 1) * SIZE] for y in range(SIZE)]
+    ys = [y for y in range(SIZE) if any(rows[y])]
+    if not ys:
+        return list(texels)
+    xs = [x for x in range(SIZE) if any(rows[y][x] for y in ys)]
+    x0, x1, y0, y1 = xs[0], xs[-1], ys[0], ys[-1]
+    lines = [list(r[x0:x1 + 1]) for r in rows[y0:y1 + 1]]
+    for _ in range(count):
+        if len(lines) > 3:
+            mid = (len(lines) - 1) / 2
+            lines.pop(min(range(len(lines)), key=lambda i: (_line_cost(lines, i), abs(i - mid))))
+    cols = [list(c) for c in zip(*lines)]
+    left = count
+    while left >= 2 and len(cols) > 5:
+        n = len(cols)
+        # (not the middle two together: two alike, both gone, a feature
+        # two columns wide would be lost whole)
+        pairs = [i for i in range(1, n // 2) if n - 1 - i > i + 1]
+        if not pairs:
+            break
+        i = min(pairs, key=lambda i: (_line_cost(cols, i) + _line_cost(cols, n - 1 - i), -i))
+        cols.pop(n - 1 - i)
+        cols.pop(i)
+        left -= 2
+    if left and len(cols) > 3:
+        mid = (len(cols) - 1) / 2
+        cols.pop(min(range(len(cols)), key=lambda i: (_line_cost(cols, i), abs(i - mid))))
+    lines = [list(r) for r in zip(*cols)]
+    h, w = len(lines), len(lines[0])
+    left_x = int(round((x0 + x1 + 1) / 2 - w / 2))
     out = [0] * (SIZE * SIZE)
-    for y in range(SIZE):
-        for x in range(SIZE):
-            X = int(round(ox + (x - ox + 0.5) / scale - 0.5))
-            Y = int(round(oy + (y - oy + 0.5) / scale - 0.5))
-            if 0 <= X < SIZE and 0 <= Y < SIZE:
-                out[y * SIZE + x] = texels[Y * SIZE + X]
+    for y in range(h):
+        for x in range(w):
+            out[(y1 - h + 1 + y) * SIZE + left_x + x] = lines[y][x]
     return out
 
 
@@ -276,7 +312,7 @@ def ball_pictures(narc: bytes) -> list[tuple[list[int], list[int], list[int]]]:
             raise BallSpritesError("the battle graphics archive is too short") from None
         if len(cells) <= OPEN_CELL:
             raise BallSpritesError("a ball with too few cells")
-        out.append((shrink(draw_cell(cells[CLOSED_CELL], tiles)), shrink(draw_cell(cells[OPEN_CELL], tiles)), palette))
+        out.append((carve(draw_cell(cells[CLOSED_CELL], tiles)), carve(draw_cell(cells[OPEN_CELL], tiles)), palette))
     return out
 
 
