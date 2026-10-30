@@ -1,6 +1,6 @@
 // The build, in a Web Worker so the page stays responsive. app.mjs sends:
 //
-//   { type: "build", rom: ArrayBuffer, wantCia, releaseUrl, pyodideUrl, pycgfxUrl }
+//   { type: "build", rom: ArrayBuffer, wantCia, releaseUrl, pyodideUrl, pycgfxUrl, followersUrl }
 //
 // and gets back { type: "progress", stage, fraction } as it goes, then
 // { type: "done", zip: Blob, fileName, banner, bannerWhy } or
@@ -25,7 +25,7 @@ class BuildError extends Error {
 
 const post = (message, transfer) => self.postMessage(message, transfer || []);
 // The bar's share of each step (they add up to 1).
-const WEIGHTS = { python: 0.12, release: 0.08, rom: 0.05, pack: 0.45, banner: 0.1, cia: 0.12, zip: 0.08 };
+const WEIGHTS = { python: 0.12, release: 0.08, followers: 0.05, rom: 0.05, pack: 0.4, banner: 0.1, cia: 0.12, zip: 0.08 };
 const ORDER = Object.keys(WEIGHTS);
 function progress(stage, part = 0) {
   let before = 0;
@@ -104,7 +104,7 @@ function takeFile(FS, path) {
 }
 
 async function build(request) {
-  const { wantCia, releaseUrl, pyodideUrl, pycgfxUrl } = request;
+  const { wantCia, releaseUrl, pyodideUrl, pycgfxUrl, followersUrl } = request;
   let rom = request.rom;
   request.rom = null;              // (the ROM's only copy in this worker: freed once Python has it)
   progress("python");
@@ -174,6 +174,39 @@ del outer_manifest
   }
   progress("release", 1);
 
+  // The follower Pokémon's sprites (HeartGold and SoulSilver's), from
+  // pokeheartgold at the pinned commit, each checked: never in the payload
+  // (builder/followers.py). Without them the game works the same, and
+  // only Platinum's own Pokémon follow.
+  let followersDir = null;
+  if (manifest.followers) {
+    progress("followers");
+    try {
+      const list = manifest.followers.files;
+      let next = 0;
+      let done = 0;
+      const worker = async () => {
+        while (next < list.length) {
+          const file = list[next++];
+          if (!PAYLOAD_PATH.test(file.path)) throw new Error(`${file.path}: not a file name`);
+          const data = await download((followersUrl || manifest.followers.rawBase) + file.path, "followers");
+          if (data.length !== file.size || (await sha256(data)) !== file.sha256) {
+            throw new Error(`${file.path} isn't the expected file`);
+          }
+          const path = "/followers/" + file.path;
+          mkdirs(FS, path.slice(0, path.lastIndexOf("/")));
+          FS.writeFile(path, data);
+          progress("followers", ++done / list.length);
+        }
+      };
+      await Promise.all(Array.from({ length: 8 }, worker));
+      followersDir = "/followers";
+    } catch (e) {
+      console.warn("No follower sprites:", e.detail || e.message);
+    }
+    progress("followers", 1);
+  }
+
   // The data pack and the banner's pieces (builder/web.py). A Python error
   // comes back as text, with Python's own record of it cleared: that record
   // would keep the ROM alive.
@@ -183,6 +216,7 @@ del outer_manifest
   pyodide.globals.set("report", (stage, done, total) => progress(stage, total ? done / total : 0));
   pyodide.globals.set("pycgfx_dir", pycgfxDir);
   pyodide.globals.set("check_rom", !manifest.synthetic);
+  pyodide.globals.set("followers_dir", followersDir);
   const result = JSON.parse(pyodide.runPython(`
 import json, shutil, sys, traceback
 for p in ${JSON.stringify(entry.pythonPath.map((p) => "/payload/" + p))}:
@@ -193,7 +227,8 @@ def _build():
     shutil.rmtree("/out", ignore_errors=True)
     rom = rom_js.to_bytes()
     try:
-        r = builder.${entry.function}(rom, "/out", pycgfx_dir=pycgfx_dir, progress=report, verify=check_rom)
+        more = {"followers_dir": followers_dir} if followers_dir else {}
+        r = builder.${entry.function}(rom, "/out", pycgfx_dir=pycgfx_dir, progress=report, verify=check_rom, **more)
     finally:
         del rom
     return {"banner_error": r["banner_error"]}

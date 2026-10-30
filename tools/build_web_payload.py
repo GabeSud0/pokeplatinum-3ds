@@ -49,6 +49,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "builder"))
 sys.path.insert(0, str(ROOT / "tools" / "banner3d"))
 
+import followers  # noqa: E402
 import pack  # noqa: E402
 import verify_rom  # noqa: E402
 import web  # noqa: E402
@@ -68,6 +69,7 @@ FIXED_TIME = (2020, 1, 1, 0, 0, 0)
 # The builder's Python, as it is in the repository (web.py finds the rest
 # from where it is).
 PYTHON = ["builder/web.py", "builder/extract_rom.py", "builder/pack.py", "builder/verify_rom.py",
+          "builder/followers.py", "builder/follower_sources.py", "builder/ball_sprites.py",
           "tools/home_menu_art.py"]
 BANNER3D = "tools/banner3d"
 CIA = {"cia/pokeplatinum.rsf": "3ds_port/game/cia/pokeplatinum.rsf",
@@ -108,6 +110,16 @@ def builder_files() -> dict[str, bytes]:
                 and path.suffix in (".py", ".png") and not path.name.startswith("test_")):
             files["python/" + BANNER3D + "/" + rel.as_posix()] = path.read_bytes()
     return files
+
+
+def follower_manifest() -> dict:
+    """Where the website fetches the follower sprites, in order, with their
+    SHA-256 (builder/follower_sources.py)."""
+    src = followers.sources
+    return {"repository": f"https://github.com/{src.REPO}", "commit": src.COMMIT,
+            "rawBase": f"https://raw.githubusercontent.com/{src.REPO}/{src.COMMIT}/",
+            "files": [{"path": src.SPRITE_PATH.format(src.FIRST_FILE + n), "size": size, "sha256": digest}
+                      for n, (size, digest) in enumerate(src.FILES)]}
 
 
 def pycgfx_files(pycgfx: Path) -> list[dict]:
@@ -164,6 +176,11 @@ def make_manifest(files: dict[str, bytes], *, version: str, commit: str, pycgfx:
         "pycgfx": {"repository": PYCGFX_REPOSITORY, "commit": PYCGFX_COMMIT,
                    "rawBase": f"https://raw.githubusercontent.com/skyfloogle/pycgfx/{PYCGFX_COMMIT}/",
                    "files": pycgfx},
+        # The follower Pokémon's sprites (HeartGold and SoulSilver's): fetched
+        # by the website in the player's browser, checked, never in the
+        # payload (builder/followers.py). The site passes them to the
+        # entrypoint only when this is here.
+        "followers": follower_manifest(),
         "files": {name: {"sha256": sha256(data), "size": len(data)} for name, data in sorted(files.items())},
     }
 

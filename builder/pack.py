@@ -10,6 +10,7 @@ import json
 import os
 import re
 import struct
+import sys
 import tempfile
 from collections.abc import Collection
 from pathlib import Path
@@ -142,14 +143,24 @@ def write_pak(handle, files, *, build_id: str, rom_sha1: str, progress=None) -> 
 
 def pack(data_pack: Path, output: Path, *, build_id: str,
          rom_sha1: str | None = None,
-         supported: Collection[str] | None = None) -> None:
+         supported: Collection[str] | None = None,
+         extra: Collection[tuple[int, bytes]] = ()) -> None:
     """Write a canonical v1 pack; use a temporary file to avoid partial output.
 
     If `supported` is given, the ROM SHA-1 that would be written (from the
     manifest or `rom_sha1`) must be one of those lowercase hex digests.
+    `extra`: (file ID, bytes) pairs the port adds to the ROM's files (the
+    follower sprites: builder/followers.py), at IDs no NitroFS file has.
     """
     root = Path(data_pack).resolve()
     entries, manifest = _load_manifest(root)
+    ids = {file_id for file_id, _, _ in entries}
+    for file_id, data in extra:
+        if type(file_id) is not int or not 0 <= file_id <= MAX_U32 or file_id in ids:
+            raise ValueError(f"Extra file ID {file_id!r} isn't free")
+        ids.add(file_id)
+        entries.append((file_id, bytes(data), len(data)))
+    entries.sort(key=lambda entry: entry[0])
     header_build_id = _build_id_bytes(build_id)
     manifest_sha1 = manifest.get("rom_sha1")
     if manifest_sha1 is not None:
@@ -168,7 +179,7 @@ def pack(data_pack: Path, output: Path, *, build_id: str,
     index = _index([(file_id, size) for file_id, _, size in entries])
 
     output = Path(output).resolve()
-    if output in {path for _, path, _ in entries} or output == (root / "manifest.json").resolve():
+    if output in {path for _, path, _ in entries if isinstance(path, Path)} or output == (root / "manifest.json").resolve():
         raise ValueError("Output would overwrite an input file")
     temp_name = None
     try:
@@ -180,6 +191,10 @@ def pack(data_pack: Path, output: Path, *, build_id: str,
                 handle.write(ENTRY.pack(*record))
             for (_, path, size), (_, expected_offset, _) in zip(entries, index):
                 handle.write(b"\0" * (expected_offset - handle.tell()))
+                if isinstance(path, bytes):   # (an extra file, in memory)
+                    handle.write(path)
+                    handle.write(b"\0" * (_align4(handle.tell()) - handle.tell()))
+                    continue
                 with path.open("rb") as source:
                     remaining = size
                     while remaining:
@@ -257,6 +272,8 @@ def main() -> int:
     rom = parser.add_mutually_exclusive_group()
     rom.add_argument("--rom", type=Path, help="Read-only verified source ROM to obtain SHA-1")
     rom.add_argument("--rom-sha1", help="40-character SHA-1 of the verified source ROM")
+    parser.add_argument("--followers", type=Path,
+                        help="the follower sprites (builder/followers.py's file), if you have them")
     args = parser.parse_args()
     try:
         try:
@@ -264,8 +281,27 @@ def main() -> int:
         except ImportError:
             import verify_rom
         sha1 = verify_rom.sha1_of(args.rom) if args.rom is not None else args.rom_sha1
+        extra = []
+        if args.followers is not None:
+            try:
+                from . import followers
+            except ImportError:
+                import followers
+            bundle = args.followers.read_bytes()
+            followers.read_bundle(bundle)
+            extra.append((followers.PAK_ID, bundle))
+            # (and the follower's Poké Balls, from the ROM's battle graphics)
+            try:
+                from . import ball_sprites
+            except ImportError:
+                import ball_sprites
+            try:
+                narc = (args.data_pack / ball_sprites.NARC_PATH).read_bytes()
+                extra.append((ball_sprites.PAK_ID, ball_sprites.make_file(narc)))
+            except (OSError, ball_sprites.BallSpritesError) as exc:   # (the item ball instead)
+                print(f"No Poke Ball sprites for the follower: {exc}", file=sys.stderr)
         pack(args.data_pack, args.output, build_id=args.build_id, rom_sha1=sha1,
-             supported=verify_rom.SUPPORTED)
+             supported=verify_rom.SUPPORTED, extra=extra)
     except (OSError, ValueError, UnicodeError) as exc:
         parser.exit(1, f"Packing failed: {exc}\n")
     print(f"Wrote {args.output}")

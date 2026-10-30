@@ -176,13 +176,68 @@ void NitroPort_Gx3dExpandTriangle(const float sx[3],const float sy[3],float dx[3
     }
 }
 
+/* PIXEL PERFECT's sprites (the people, the Pokémon, the item balls: the
+ * game's billboards, each a textured quad facing the camera, all three
+ * corners at one depth) a texel a pixel, their texels on the screen's
+ * pixels. Where the field is at the DS's pixel size (the scene 240 lines
+ * tall: a DS pixel a screen pixel) the camera's perspective still makes
+ * them a little bigger or smaller than their texels (a person near the
+ * screen's bottom 32 texels over 35.7 pixels), and wherever they stand a
+ * fraction of a pixel off: the DS's nearest-texel drawing doubles or drops
+ * a texel here and there, and the smooth 3D (drawn 2x2 and averaged)
+ * blends the texels' edges into the pixels beside them, blurring the
+ * pixel art. Laid out at a texel a pixel instead, the texture's bottom
+ * middle (the feet) on the nearest pixel corner to where it was, each
+ * texel covers whole pixels and stays sharp, smooth 3D or not. Only quads
+ * near their texels' size (a sprite scaled on purpose, a Pokémon growing
+ * out of its ball, is left as it is), not mirrored differently each way.
+ * sx/sy: the triangle's corners in the DS's units, changed if so. */
+static int sprite_texel_a_pixel(const NitroGx3dScene *scene,const NitroGx3dTriangle *tri,
+                                float tw,float th,float *sx,float *sy)
+{
+    const NitroGx3dVertex *v=tri->v;
+    float fx,fy,px[3],py[3],ds1,dt1,ds2,dt2,det,a,b,e,f,x0,y0,ax,ay,ar,anchor_t;
+    float sa,sf;
+    int k;
+    if(!scene || scene->screen_height!=240u || ((tri->texture_param>>26)&7u)==0u)return 0;
+    if(v[0].clip[3]!=v[1].clip[3] || v[0].clip[3]!=v[2].clip[3] || v[0].clip[3]<=0)return 0;
+    /* (screen pixels: the view's width over the DS's 256 units, its 240 lines over 192) */
+    fx=(float)scene->screen_width/256.0f;
+    fy=240.0f/192.0f;
+    for(k=0;k<3;k++){px[k]=v[k].x/256.0f*fx;py[k]=v[k].y/256.0f*fy;}
+    ds1=v[1].s-v[0].s;dt1=v[1].t-v[0].t;ds2=v[2].s-v[0].s;dt2=v[2].t-v[0].t;
+    det=ds1*dt2-ds2*dt1;
+    if(det>-1e-3f && det<1e-3f)return 0;
+    /* screen = (a s + b t, e s + f t) + origin */
+    a=((px[1]-px[0])*dt2-(px[2]-px[0])*dt1)/det;
+    b=((px[2]-px[0])*ds1-(px[1]-px[0])*ds2)/det;
+    e=((py[1]-py[0])*dt2-(py[2]-py[0])*dt1)/det;
+    f=((py[2]-py[0])*ds1-(py[1]-py[0])*ds2)/det;
+    ax=a<0?-a:a; ay=f<0?-f:f;
+    if(ax<0.85f || ax>1.25f || ay<0.85f || ay>1.25f)return 0;      /* (scaled on purpose) */
+    if((b<0?-b:b)>0.02f*ax || (e<0?-e:e)>0.02f*ay)return 0;           /* (not upright) */
+    ar=ax-ay; if(ar<0)ar=-ar; if(ar>0.1f)return 0;
+    sa=a<0?-1.0f:1.0f; sf=f<0?-1.0f:1.0f;
+    x0=px[0]-a*v[0].s-b*v[0].t;
+    y0=py[0]-e*v[0].s-f*v[0].t;
+    /* the texture's bottom middle: its feet */
+    anchor_t=f>0?th:0.0f;
+    ax=floorf(x0+a*(tw*0.5f)+0.5f);
+    ay=floorf(y0+f*anchor_t+0.5f);
+    for(k=0;k<3;k++){
+        sx[k]=(ax+sa*(v[k].s-tw*0.5f))/fx;
+        sy[k]=(ay+sf*(v[k].t-anchor_t))/fy;
+    }
+    return 1;
+}
+
 static void put_vertex(NitroGx3dGpuVertex *dst,const NitroGx3dVertex *v,
                        uint32_t swap_param,unsigned alpha,float tw,float th,
-                       float dx,float dy)
+                       float sx,float sy)
 {
     float w=v->clip[3]/4096.0f;
-    float ndc_x=(v->x/256.0f+dx)/128.0f-1.0f;
-    float ndc_y=1.0f-(v->y/256.0f+dy)/96.0f;
+    float ndc_x=sx/128.0f-1.0f;
+    float ndc_y=1.0f-sy/96.0f;
     dst->position[0]=ndc_x*w;
     dst->position[1]=ndc_y*w;
     dst->position[2]=NitroPort_Gx3dClipZ(v,swap_param);
@@ -253,10 +308,16 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
         th=(float)(8u<<((tri->texture_param>>23)&7u));
         {
             float sx[3],sy[3],dx[3],dy[3];
-            for(k=0;k<3;k++){sx[k]=tri->v[k].x/256.0f;sy[k]=tri->v[k].y/256.0f;}
-            NitroPort_Gx3dExpandTriangle(sx,sy,dx,dy);
-            for(k=0;k<3;k++)
-                put_vertex(&out[count++],&tri->v[k],scene->swap_param,alpha,tw,th,dx[k],dy[k]);
+            if(sprite_texel_a_pixel(scene,tri,tw,th,sx,sy)){
+                /* (its edges on pixel corners: not moved out) */
+                for(k=0;k<3;k++)
+                    put_vertex(&out[count++],&tri->v[k],scene->swap_param,alpha,tw,th,sx[k],sy[k]);
+            }else{
+                for(k=0;k<3;k++){sx[k]=tri->v[k].x/256.0f;sy[k]=tri->v[k].y/256.0f;}
+                NitroPort_Gx3dExpandTriangle(sx,sy,dx,dy);
+                for(k=0;k<3;k++)
+                    put_vertex(&out[count++],&tri->v[k],scene->swap_param,alpha,tw,th,sx[k]+dx[k],sy[k]+dy[k]);
+            }
         }
         batch->count+=3;
     }
@@ -297,7 +358,7 @@ size_t NitroPort_Gx3dBuildShadowBatches(const NitroGx3dScene *scene, size_t firs
         }
         tw=(float)(8u<<((tri->texture_param>>20)&7u));
         th=(float)(8u<<((tri->texture_param>>23)&7u));
-        for(k=0;k<3;k++)put_vertex(&out[count++],&tri->v[k],scene->swap_param,31u,tw,th,0.0f,0.0f);
+        for(k=0;k<3;k++)put_vertex(&out[count++],&tri->v[k],scene->swap_param,31u,tw,th,tri->v[k].x/256.0f,tri->v[k].y/256.0f);
         batch->count+=3;
     }
     if(batch_count)*batch_count=nb;

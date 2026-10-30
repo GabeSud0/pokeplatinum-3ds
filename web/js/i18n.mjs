@@ -31,6 +31,7 @@ export const STRINGS = {
 
     "stage.python": "Loading the builder (about 15 MB, once)",
     "stage.release": "Downloading this version's files",
+    "stage.followers": "Downloading the follower Pokémon's sprites",
     "stage.rom": "Reading your ROM",
     "stage.pack": "Packing the game's data",
     "stage.banner": "Making the HOME Menu banner",
@@ -119,6 +120,7 @@ export const STRINGS = {
 
     "stage.python": "Cargando el creador (unos 15 MB, una sola vez)",
     "stage.release": "Descargando los archivos de esta versión",
+    "stage.followers": "Descargando los sprites de los Pokémon acompañantes",
     "stage.rom": "Leyendo tu ROM",
     "stage.pack": "Empaquetando los datos del juego",
     "stage.banner": "Haciendo el banner del menú HOME",

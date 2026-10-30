@@ -656,6 +656,26 @@ screen's 320 x 192 at 1.25 times, as above.
 - **The compositor**: that picture at a pixel a pixel (`ComposeLayers.top`,
   `PIC_SCALE`), the layers in front of the 3D on all 240 lines; the
   weather's BG drawn by the GPU from line -24 of its map.
+- **The sprites a texel a pixel** (`port_gx3d_vertex.c`,
+  `sprite_texel_a_pixel`): the people, the Pokémon and the item balls are
+  billboards, quads facing the camera, and its perspective still makes
+  them a little bigger or smaller than their texels (a person near the
+  screen's bottom 32 texels over 35.7 pixels) and puts them a fraction of
+  a pixel off: the DS's nearest-texel drawing doubled or dropped a texel
+  here and there, and the smooth 3D (drawn 2x2 and averaged) blended the
+  texels' edges into the pixels beside them, blurring the pixel art
+  (2026-10-29). Here a textured triangle with its three corners at one
+  depth, upright and within 0.85-1.25 of a pixel a texel, is laid out at
+  a texel a pixel, the texture's bottom middle (the feet) on the nearest
+  pixel corner, its edges not moved out: each texel whole pixels, sharp
+  with the smooth 3D or without; the 3D (buildings, signs) as smooth as
+  before. One scaled on purpose (a Pokémon growing out of its ball) is
+  left as it is; the 1.25x field too (a texel 1.25 pixels there). Each
+  is on its own nearest pixel every scene, so one moving on the screen
+  steps a whole pixel or none while the ground under it slides smoothly
+  (a slight wobble against it). Keeping the fraction instead (sliding with
+  the ground) was tried and taken back: it can't be sharp off the pixel
+  grid, and the softness while moving looked worse (2026-10-29).
 - **The game** reads `NitroPort_WideScreenExtra` as 72 there: the people the
   scripts bring on from the sides come from beyond the 400 pixels.
 - **The game's windows** go to the picture's top or bottom
@@ -1158,7 +1178,11 @@ screens) the lower screen is the DS's, filling the screen as before.
   POKéMON, TRAINER and SAVE straight on from the black panel; MAP,
   POKéTCH, POKéDEX once it's faded in). Closed, the Pokétch comes back and
   the port's settings are saved. Without the menu it's the DS's options
-  screen.
+  screen. The field isn't paused while the page is up (patch 0057: the
+  start menu pauses everyone's movement, the page lets them go), so
+  people walk about and changes are seen as they're made (the follower
+  coming out or going in); the player stays still, every button the
+  page's.
 - **The enhancements and cheats** (`port_options.h` in the
   decompilation: the port's settings, read where the game decides):
   - SPEED (1x, 1.5x, 2x, 3x, 4x; the 3DS): that many game frames to each
@@ -1214,6 +1238,93 @@ screens) the lower screen is the DS's, filling the screen as before.
     the party menu's Fly and Defog (Flash is a TM in Platinum).
   - AUTO-RUN: running unless B is held (once the player has the running
     shoes).
+  - FOLLOWER (patch 0056, `port_follower.c`; off by default): the party's
+    first Pokémon (not an egg, not fainted) walks behind the player, on
+    HeartGold and SoulSilver's sprites when the data pack has them
+    (`builder/followers.py` downloads them from pret/pokeheartgold at a
+    pinned commit, checks each file and lays each out as Platinum's
+    walking sprites: 16 textures, 4 a direction; shiny ones with their
+    palettes swapped), else on Platinum's own for the 24 it has (the
+    Amity Square Pokémon, the starters' lines, Machop, Croagunk, Shaymin,
+    Regigigas). A map object of its own (`MAP_OBJ_STATUS_PORT_FOLLOWER`,
+    local ID 0xF3), moving with the partner trainers' code under its own
+    movement type (scripts never take it for the partner): walked
+    through, kept across zone changes, never saved, not talked to. Its
+    graphics IDs (0x4000 + 2 x sprite + shiny) are answered by the
+    overworld sprites' lookups as Pikachu's (Regigigas's for 64 x 64),
+    their texture an archive member past the archive's own (`narc.c`).
+    Out while the player walks (in its ball on the bike, surfing, during
+    field moves, with Cheryl and the other partners or Amity Square's
+    Pokémon, in the Underground, the Union Room and maps with features of
+    their own; a 64 x 64 one indoors), behind the player or, where that
+    tile isn't free (out of a door), on the player's tile hidden till they
+    step off it (the tile behind checked as the player's step would be:
+    no water, ledge or ramp). Back in its ball whenever the game moves
+    the player (a script's walk; out again when the player is theirs
+    again: scenes where it stays out may come later), when someone walks
+    onto its tile in a script (a person coming up behind the player: the
+    two stood in each other, 2026-10-29), and while the
+    player jumps down a ledge (the
+    follow code moves a tile a step behind and can't keep up with the
+    jump): out again where they stop. Its graphics IDs from 0x4000, past
+    the berry trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000). Its
+    Poké Ball: coming out it grows from nothing (its picture made at no
+    size, so it never shows whole first), going in it shrinks away where
+    it stands, 6 frames each, with the battle's send-out and recall
+    sounds. The ball itself is seen (the item ball's picture, a map
+    object of its own: local ID 0xF4, not saved, not found by scripts,
+    walked through; no shadow; on the Pokémon's own spot, its ground
+    line the player's): coming out it drops in and opens; going
+    in the Pokémon shrinks into it and it stays a moment. It's the ball
+    the Pokémon was caught in (`MON_DATA_POKEBALL`), closed or open, as
+    the battles draw it: `builder/ball_sprites.py` makes each of the 17
+    kinds from the ROM's battle ball sprites (`pl_batt_obj.narc`: the
+    closed cell and the open one) two rows and columns smaller, the
+    overworld item ball's size: carved, not resampled, the rows and
+    columns most like their neighbours taken (the columns in mirrored
+    pairs), so the band, the button and the markings stay (resampled to
+    3/4 they went); the closed ball's outline then drawn again as a
+    circle 12 across, its inside carved to fit within it (carved whole,
+    the outline went diamond-like), into a port file of the data pack
+    (`0x10000001`, with the follower sprites); without it, the item ball.
+    Open and closed are one sprite, open facing north: the ball opens and
+    closes by turning, the same object, its texture already loaded. (Made
+    again as it opened or closed, a new object, it was missing for two
+    scenes while its texture loaded, drawn once with the texture not there
+    yet, a block of noise, and paired by the 60 FPS in-between scenes with
+    the player beside it: a flicker to the side, 2026-10-29.) As it opens, the battle's
+    send-out burst for its kind (`ball_particle.narc`, a particle system of
+    its own drawn after the billboards with the field's camera, its sizes
+    and speeds 3.25 times: the battle's camera is a few units away, the
+    field's units about a pixel), only when the field heap and the 3D VRAM
+    have room for it; it goes along with the Pokémon (its emitters and
+    their particles moved as it moves) if the player walks on as it
+    comes out. The Pokémon has
+    no shadow while it's smaller than itself. Out and standing it steps
+    in place, as HeartGold's do (the walk at a slow walk's pace). Talked
+    to (A facing it, out): it turns to the player, its cry, a bubble over
+    it (a heart, a note, "...", "!", "?": the builder's own drawings, in
+    the ball file) and, happy, a hop; then a word, the port's text
+    (`PortFollower_TryTalk`, from `field_control.c`): unwell with a status
+    condition; else half the time a line for the weather (rain, snow,
+    dust, fog; a Water type loves the rain, an Ice type the snow), the
+    place (a cave, a Pokémon Center, outdoors) or the time (night: sleepy,
+    or livelier for a Ghost or Dark type; morning); else its friendship
+    ("... is overjoyed to be walking with you!", "... looks very happy.",
+    "... is happy to see you.", "... is keeping an eye on you."). Now and
+    then it has found something (friendship 100 or more, 1 talk in 5, 3 a
+    day while the game runs, room in the bag): a common item 70% of the
+    time (Potion, Antidote, Parlyz Heal, Poké Ball, Oran or Pecha Berry),
+    less common 25% (Super Potion, Great Ball, Ether, Leppa Berry,
+    TinyMushroom, Honey), rare 5% (Ultra Ball, Revive, Rare Candy, Nugget,
+    Stardust), with the item fanfare. The sounds are in the battle's sound bank, which the field never
+    loads: the field's sound effects load them too (`sound.c`), the sound
+    heap 128 KB larger for their 84 KB of waves (`sound_system.h`; the
+    DS's heap had 74 KB left there). The log says when it comes out, why
+    it goes back, and what it waits for when it can't come out ("no map
+    object free", "no sprites", "no room for its picture yet"), and when
+    the first Pokémon has no sprite (a data pack made without the
+    follower sprites: only Platinum's 24).
   - ALWAYS CATCH (every ball catches), INSTANT VICTORY (the player's
     attacks knock the opponent out, Endure and a Focus Band or Sash no
     help; a Substitute still takes the hit), FAST EGGS (the day care's chance at
@@ -1510,7 +1621,11 @@ the alpha, its texture's format and size but not its address, its vertex
 count) nearest to where it is less that motion, within 64 polygons of
 where the order says, if nearer than 16 DS pixels plus one and a half
 times the scene's motion: a map's many tiles of one kind are told apart
-by where they are. Each paired polygon goes halfway between its two
+by where they are. One each: a polygon of the scene before paired with
+two of the new scene's goes to the nearer (where the motion puts it, or
+where it was: what the camera follows), the other has none (a figure
+new beside one of its kind, the follower's Poké Ball beside the player,
+took the player's pair and was drawn halfway to him: 2026-10-29). Each paired polygon goes halfway between its two
 places, clipped and culled as any other; one with no pair is where the
 scene's motion puts it halfway (half the motion back from where the new
 scene has it: mostly polygons coming into the view at its edges), and

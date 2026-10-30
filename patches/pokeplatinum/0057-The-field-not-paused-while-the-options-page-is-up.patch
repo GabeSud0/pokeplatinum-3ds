@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 14:00:00 -0700
+Subject: [PATCH] The field not paused while the options' page is up
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The start menu pauses everyone's movement while it's open; the options'
+page in the lower menu's panel (patch 0040: OPTIONS tapped, or chosen
+from the X menu) lets them go while it's up, so people walk about and
+changes are seen as they're made (the follower Pokémon coming out or
+going in, patch 0056). The player stays still (the start menu's task
+runs, the field's input waits), every button the page's. Paused again as
+the page closes, as the start menu keeps it.
+---
+ src/start_menu.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/start_menu.c b/src/start_menu.c
+index 766910c7..6cd6f541 100644
+--- a/src/start_menu.c
++++ b/src/start_menu.c
+@@ -1807,6 +1807,8 @@ static BOOL StartMenu_PortSaveClosing(FieldSystem *fieldSystem)
+ // By another of the menu's buttons: that one acted on, as if pressed then
+ // (the bag, the party, the trainer case and the save straight on from the
+ // black panel; the others once it's faded in).
++// The field isn't paused while the page is up (people walk about, changes
++// seen as they're made); the player stays still, every button the page's.
+ static int sPortOptionsPhase;
+ static int sPortOptionsFrames;
+ static int sPortOptionsAfter;
+@@ -1827,6 +1829,7 @@ static void StartMenu_PortOptions(FieldTask *fieldTask)
+     switch (sPortOptionsPhase) {
+     case 0:
+         // (already black, OPTIONS tapped in an app of the panel's: at once)
++        MapObjectMan_UnpauseAllMovement(fieldSystem->mapObjMan); // (paused again as it closes)
+         NitroPort_LowerMenuKeepShown(TRUE);
+         NitroPort_LowerMenuFadePanel(TRUE);
+         NitroPort_LowerMenuSelect(PORT_BUTTON_OPTIONS);
+@@ -1888,6 +1891,7 @@ static void StartMenu_PortOptions(FieldTask *fieldTask)
+             break;
+         }
+ 
++        MapObjectMan_PauseAllMovement(fieldSystem->mapObjMan); // (as the start menu keeps it: unpaused as it ends)
+         after = sPortOptionsAfter;
+         sPortOptionsPhase = 0;
+         NitroPort_LowerMenuTakePress();
+-- 
+2.43.0
+

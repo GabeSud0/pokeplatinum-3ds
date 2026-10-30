@@ -314,6 +314,29 @@ PakResult NitroPort_OpenPak(const char *pak_path, const char *manifest_path,
     return PAK_OK;
 }
 
+/* The port's own files in the pack (docs/PAK_FORMAT.md, "The port's own
+ * files": the follower Pokémon's sprites), at IDs no NitroFS file has: the
+ * size of one (0: not in the pack), and its bytes [offset, offset + size). */
+uint32_t NitroPort_PakOwnFileSize(uint32_t id)
+{
+    uint32_t size = 0;
+
+    if (sPak == NULL || pak_find(sPak, id, &size) != PAK_OK) {
+        return 0;
+    }
+    return size;
+}
+
+BOOL NitroPort_PakOwnFileRead(uint32_t id, uint32_t offset, void *dest, uint32_t size)
+{
+    uint32_t total = NitroPort_PakOwnFileSize(id);
+
+    if (total == 0 || offset > total || size > total - offset) {
+        return FALSE;
+    }
+    return pak_read(sPak, id, offset, dest, size) == PAK_OK ? TRUE : FALSE;
+}
+
 /* (NitroPort_FsReadStats; the game's thread only) */
 static uint32_t sStatReads;
 static uint64_t sStatBytes, sStatNanos;

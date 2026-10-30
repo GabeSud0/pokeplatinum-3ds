@@ -1,0 +1,2207 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 08:00:00 -0700
+Subject: [PATCH] The follower Pokémon (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+OPTIONS: ENHANCEMENTS: FOLLOWER (PORT_OPT_FOLLOWER, off by default): the
+party's first Pokémon walks behind the player (port_follower.c).
+
+Its sprite: HeartGold and SoulSilver's when the player's data pack has
+them (builder/followers.py: a port file at PORT_FOLLOWER_PAK_ID, each laid
+out as Platinum's walking sprites), else Platinum's own for the 24 it has.
+HeartGold's are graphics IDs of their own (PORT_FOLLOWER_GFX_FIRST + 2 *
+sprite + shiny; from 0x4000): their texture a member of the overworld sprites' archive
+past its own (narc.c: PortFollower_NarcMember; the shiny one with its two
+palettes swapped), drawn as Pikachu is (Regigigas for 64 x 64) with
+Platinum's walk (ov5_021ECE40.c, ov5_021ECC20.c, map_object.c lookups).
+
+It is a map object (MAP_OBJ_STATUS_PORT_FOLLOWER, local ID 0xF3) moving
+with MOVEMENT_TYPE_FOLLOW_PLAYER's code under a movement type of its own
+(PORT_MOVEMENT_TYPE_FOLLOW_MON), so scripts never take it for the partner
+trainer: walked through, kept across zone changes, never saved, not
+talked to. Out when the player walks (not on the bike, surfing or using
+a field move), with no partner trainer or Amity Square's Pokémon, outside
+the Underground, the Union Room and maps with features of their own; a
+64 x 64 one only outdoors. Not an egg, not fainted. Out behind the player
+when that tile is free, else on the player's tile hidden till they step
+off it (walking out of a door: it comes out after them). Back in its ball
+when not to be out, another Pokémon is first, the game moves the player
+(a script's walk: out again when the player is theirs again), someone
+walks onto its tile in a script (a person coming up behind the player:
+they'd stand in each other), it's left behind (a warp within the map),
+or the player jumps down a ledge (the
+follow code can't keep up with the jump): out again behind the player
+where they stop. Its graphics IDs from 0x4000, past the berry
+trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000).
+
+Its Poké Ball: coming out it grows from nothing (its picture made at no
+size: ov5_021ECE40.c, PortFollower_StartsSmall), going in it shrinks
+away where it stands, 6 frames each, with the battle's send-out and
+recall sounds. The ball is seen: the item ball's picture (a map object of
+its own, local ID 0xF4, flagged as the follower is: not saved, not found
+by scripts, not talked to, walked through) where the Pokémon stands, a
+little in front: coming out it drops in and opens, the Pokémon growing
+out of it; going in the Pokémon shrinks into it and it stays a moment.
+No room or no free map object for it: the Pokémon alone. The ball has no
+shadow, and the Pokémon none while it's smaller than itself: its shadow
+is made once it's out (a new shadow is drawn once before it first looks
+at its object's flags, so it showed alone before the ball came).
+
+The ball is the one it was caught in, as the battles draw it
+(builder/ball_sprites.py: a port file at 0x10000001, graphics IDs after
+the follower sprites'), open facing north: it opens and closes by
+turning, one object (made again, it went missing while its texture
+loaded and was drawn once with noise); without it, the item ball. As it opens, the
+battle's send-out burst for its kind (ball_particle.narc: a particle
+system of its own, drawn after the billboards with the field's camera,
+fieldmap.c; freed as the field ends), going along with the Pokémon if the
+player walks on as it comes out.
+
+Out and standing it steps in place, as HeartGold's do (its draw state the
+slow walk's). Talked to (A facing it: field_control.c,
+PortFollower_TryTalk): it turns to the player, its cry, a bubble over it
+(local ID 0xF5: a heart, a note, "...", "!", "?" from the ball file) and,
+happy, a hop; then a word (the port's text) on the weather, the place,
+the time or its friendship, or unwell; now and then an item it found
+(friendship 100+, 1 talk in 5, 3 a day, with the item fanfare). Those are in the battle's sound bank, which the field
+never loads: the field's sound effects load them too (sound.c), the
+sound heap 128 kB larger for their 84 kB of waves (sound_system.h). It
+comes and goes as set while the options' page is up (the field running
+behind it, patch 0057).
+---
+ include/constants/map_object.h |    2 +
+ include/port_follower.h        |   65 ++
+ include/port_options.h         |    1 +
+ include/sound_system.h         |    6 +
+ platinum.us/main.lsf           |    1 +
+ src/map_object.c               |   23 +-
+ src/meson.build                |    1 +
+ src/narc.c                     |   65 ++
+ src/overlay005/field_control.c |   15 +
+ src/overlay005/fieldmap.c      |    8 +
+ src/overlay005/options_panel.c |    3 +-
+ src/overlay005/ov5_021ECC20.c  |    7 +
+ src/overlay005/ov5_021ECE40.c  |   33 +-
+ src/port_follower.c            | 1549 ++++++++++++++++++++++++++++++++++++++++
+ src/sound.c                    |    7 +
+ src/unk_020EDBAC.c             |    5 +-
+ 16 files changed, 1786 insertions(+), 5 deletions(-)
+
+diff --git a/include/constants/map_object.h b/include/constants/map_object.h
+index d692a8b6..7d4cb6d8 100644
+--- a/include/constants/map_object.h
++++ b/include/constants/map_object.h
+@@ -46,6 +46,8 @@
+ // The 3DS's wider field: someone of a map beside the player's, shown where
+ // the DS's screen didn't reach (map_object.c, MapObject_PortIsNeighbour).
+ #define MAP_OBJ_STATUS_PORT_NEIGHBOUR (1 << 30)
++// The 3DS remaster's follower Pokémon (port_follower.h).
++#define MAP_OBJ_STATUS_PORT_FOLLOWER (1u << 31)
+ #endif
+ 
+ #define MAP_OBJ_UNK_A0_00 0
+diff --git a/include/port_follower.h b/include/port_follower.h
+new file mode 100644
+index 00000000..f6c00006
+--- /dev/null
++++ b/include/port_follower.h
+@@ -0,0 +1,65 @@
++#ifndef POKEPLATINUM_PORT_FOLLOWER_H
++#define POKEPLATINUM_PORT_FOLLOWER_H
++
++#ifdef SDK_PORT_3DS
++#include "field/field_system_decl.h"
++#include "struct_decls/map_object.h"
++
++// The 3DS remaster's follower Pokémon (OPTIONS: ENHANCEMENTS: FOLLOWER):
++// the party's first Pokémon walks behind the player (port_follower.c).
++//
++// Its sprite is HeartGold and SoulSilver's when the player's data pack has
++// them (builder/followers.py; a port file at PORT_FOLLOWER_PAK_ID, each laid
++// out as Platinum's walking sprites), else Platinum's own for the few it has.
++// HeartGold's are graphics IDs of their own (PORT_FOLLOWER_GFX_FIRST + 2 *
++// sprite + shiny), their files members of the overworld sprites' archive
++// past its own (narc.c: PortFollower_NarcMember), drawn as Pikachu is (or
++// Regigigas: 64 x 64) with Platinum's walk.
++//
++// It's a map object of its own (MAP_OBJ_STATUS_PORT_FOLLOWER, local ID
++// PORT_FOLLOWER_LOCAL_ID) moving as the partner trainers do (Platinum's
++// MOVEMENT_TYPE_FOLLOW_PLAYER's code, its own movement type so scripts never
++// take it for the partner): walked through, never saved, not talked to.
++#define PORT_FOLLOWER_PAK_ID          0x10000000
++#define PORT_FOLLOWER_GFX_FIRST       0x4000 // (past the berry trees' 0x1000 and OBJ_EVENT_GFX_INVISIBLE's 0x2000)
++#define PORT_FOLLOWER_GFX_COUNT       0x800
++#define PORT_FOLLOWER_NARC_FIRST      0x7000 // (no archive has this many members)
++#define PORT_FOLLOWER_LOCAL_ID        0xF3
++#define PORT_FOLLOWER_BALL_LOCAL_ID   0xF4   // (its Poké Ball, seen as it goes in and comes out)
++#define PORT_FOLLOWER_EMOTE_LOCAL_ID  0xF5   // (its bubble, talked to)
++// Its Poké Ball: each kind as the battles draw it, made from the player's
++// ROM (builder/ball_sprites.py: a port file at PORT_FOLLOWER_BALLS_PAK_ID),
++// open facing north and closed the other ways; graphics IDs after the
++// follower sprites' (PORT_FOLLOWER_BALL_GFX_FIRST + ball - 1, then the
++// talk bubbles), their textures archive members after theirs; drawn as
++// the follower sprites are.
++#define PORT_FOLLOWER_BALLS_PAK_ID    0x10000001
++#define PORT_FOLLOWER_BALL_GFX_FIRST  (PORT_FOLLOWER_GFX_FIRST + PORT_FOLLOWER_GFX_COUNT)
++#define PORT_FOLLOWER_BALL_GFX_COUNT  0x40
++#define PORT_MOVEMENT_TYPE_FOLLOW_MON 0x44   // (Platinum's go to 0x43)
++
++BOOL PortFollower_IsGfx(int graphicsID);
++// The Platinum graphics ID whose renderer and details it borrows (Pikachu),
++// and whose model and walk (Pikachu's, or Regigigas's for 64 x 64 ones).
++int PortFollower_DetailsGfx(int graphicsID);
++int PortFollower_ModelGfx(int graphicsID);
++// Its texture's member of the overworld sprites' archive.
++u32 PortFollower_TextureMember(int graphicsID);
++// A member past an archive's own: its bytes (kept till the next call), or NULL.
++const void *PortFollower_NarcMember(u32 memberIndex, u32 *size);
++
++BOOL MapObject_PortIsFollower(const MapObject *mapObj);
++// Its picture made before it has come out of its ball: from nothing (ov5_021ECE40.c).
++BOOL PortFollower_StartsSmall(const MapObject *mapObj);
++// A pressed facing it, out (field_control.c): its cry and a word; TRUE if so.
++BOOL PortFollower_TryTalk(FieldSystem *fieldSystem);
++// The ball's burst drawn (fieldmap.c, after the billboards), and freed as the
++// field ends (FieldMap_Exit).
++void PortFollower_Draw(void);
++void PortFollower_FieldEnds(void);
++// Every frame of the field (fieldmap.c): out, in its ball or swapped as the
++// party, the option and the field are.
++void PortFollower_Update(FieldSystem *fieldSystem);
++#endif
++
++#endif // POKEPLATINUM_PORT_FOLLOWER_H
+diff --git a/include/port_options.h b/include/port_options.h
+index 4a0ee601..e74732cb 100644
+--- a/include/port_options.h
++++ b/include/port_options.h
+@@ -21,6 +21,7 @@
+ #define PORT_OPT_SHINY           14 // 0 1/8192, 1 1/4096, 2 1/1024, 3 1/256, 4 1/64, 5 always
+ #define PORT_OPT_ITEM2           16 // (not on the page) the lower menu's second square's item
+ #define PORT_OPT_PIXEL_FIELD     17 // 0 off, 1 on: the field at the DS's pixel size (the whole 400 x 240)
++#define PORT_OPT_FOLLOWER        18 // 0 off, 1 on: the party's first Pokémon walks behind the player (port_follower.h)
+ 
+ int NitroPort_Option(int id);
+ void NitroPort_OptionSet(int id, int value);
+diff --git a/include/sound_system.h b/include/sound_system.h
+index f8cbafd8..fb266917 100644
+--- a/include/sound_system.h
++++ b/include/sound_system.h
+@@ -8,7 +8,13 @@
+ #include "game_options.h"
+ #include "sys_task.h"
+ 
++#ifdef SDK_PORT_3DS
++// (+128 kB: the battle's Poké Ball sounds kept in the field for the follower
++// Pokémon, their bank and its 84 kB of waves; sound.c)
++#define SOUND_SYSTEM_HEAP_SIZE           (0xBBC00 + 0x20000)
++#else
+ #define SOUND_SYSTEM_HEAP_SIZE           0xBBC00 // ~750kB
++#endif
+ #define SOUND_SYSTEM_CAPTURE_BUFFER_SIZE 0x1000
+ #define SOUND_HEAP_STATE_INVALID         -1
+ #define SOUND_FILTER_MAX_SIZE            8
+diff --git a/platinum.us/main.lsf b/platinum.us/main.lsf
+index e86a5643..efd447c9 100644
+--- a/platinum.us/main.lsf
++++ b/platinum.us/main.lsf
+@@ -32,6 +32,7 @@ Static main
+ 	Object main.nef.p/src_sys_task_extensions.c.o
+ 	Object main.nef.p/src_overlay_manager.c.o
+ 	Object main.nef.p/src_narc.c.o
++	Object main.nef.p/src_port_follower.c.o
+ 	Object main.nef.p/src_graphics.c.o
+ 	Object main.nef.p/src_pokemon_sprite.c.o
+ 	Object main.nef.p/src_sprite_util.c.o
+diff --git a/src/map_object.c b/src/map_object.c
+index 0ed40251..9e9226b7 100644
+--- a/src/map_object.c
++++ b/src/map_object.c
+@@ -25,6 +25,7 @@
+ #include "narc.h"
+ #ifdef SDK_PORT_3DS
+ #include "player_avatar.h"
++#include "port_follower.h"
+ #endif
+ #include "script_manager.h"
+ #include "sys_task.h"
+@@ -479,6 +480,10 @@ void MapObjectMan_SaveAll(FieldSystem *fieldSystem, const MapObjectManager *mapO
+         if (MapObject_PortIsNeighbour(mapObj)) {
+             continue; // (brought again from their map's events)
+         }
++
++        if (MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_PORT_FOLLOWER)) {
++            continue; // (the follower Pokémon: out again from the party, port_follower.c)
++        }
+ #endif
+         MapObject_Save(fieldSystem, mapObj, mapObjSave);
+         mapObjSave++;
+@@ -732,6 +737,9 @@ static void MapObjectMan_AddMoveTask(const MapObjectManager *mapObjMan, MapObjec
+     SysTask *task;
+ 
+     if (movementType == MOVEMENT_TYPE_FOLLOW_PLAYER
++#ifdef SDK_PORT_3DS
++        || movementType == PORT_MOVEMENT_TYPE_FOLLOW_MON
++#endif
+         || movementType == MOVEMENT_TYPE_FOLLOW_PARTNER_TRAINER) {
+         v0 += 2;
+     }
+@@ -892,6 +900,7 @@ MapObject *MapObjMan_LocalMapObjByIndex(const MapObjectManager *mapObjMan, int i
+         if (MapObject_CheckStatusFlag(mapObj, MAP_OBJ_STATUS_0) == TRUE && sub_02062E94(mapObj) == FALSE
+ #ifdef SDK_PORT_3DS
+             && !MapObject_PortIsNeighbour(mapObj)
++            && !MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_PORT_FOLLOWER)
+ #endif
+             && MapObject_GetLocalID(mapObj) == index) {
+             return mapObj;
+@@ -2411,7 +2420,11 @@ static int ObjectEvent_GetHiddenFlagNoScript(const ObjectEvent *objectEvent)
+ 
+ static const UnkStruct_020EDF0C *sub_0206320C(u32 param0)
+ {
++#ifdef SDK_PORT_3DS
++    GF_ASSERT(param0 <= PORT_MOVEMENT_TYPE_FOLLOW_MON);
++#else
+     GF_ASSERT(param0 < 0x44);
++#endif
+     return Unk_020EE3A8[param0];
+ }
+ 
+@@ -2459,6 +2472,10 @@ static const UnkStruct_ov5_021FB0F0 *sub_02063244(u32 param0)
+ {
+     const ObjectEventGfxRendererEntry *v0 = gObjectEventGfxRenderersTable;
+ 
++#ifdef SDK_PORT_3DS
++    param0 = PortFollower_DetailsGfx(param0); // (a follower Pokémon's: Pikachu's)
++#endif
++
+     do {
+         if (v0->graphicsID == param0) {
+             return v0->renderer;
+@@ -2702,14 +2719,16 @@ static MapObject *MapObjectMan_PortFurthestNeighbour(const MapObjectManager *map
+     return furthest;
+ }
+ 
+-// The object at (x, z), not one of the people beside (sub_0206326C).
++// The object at (x, z), not one of the people beside nor the follower
++// Pokémon (sub_0206326C).
+ MapObject *MapObjectMan_PortObjectAt(const MapObjectManager *mapObjMan, int x, int z)
+ {
+     int i = 0;
+     MapObject *mapObj;
+ 
+     while (MapObjectMan_FindObjectWithStatus(mapObjMan, &mapObj, &i, MAP_OBJ_STATUS_0) == TRUE) {
+-        if (!MapObject_PortIsNeighbour(mapObj) && MapObject_GetX(mapObj) == x && MapObject_GetZ(mapObj) == z) {
++        if (!MapObject_PortIsNeighbour(mapObj) && !MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_PORT_FOLLOWER)
++            && MapObject_GetX(mapObj) == x && MapObject_GetZ(mapObj) == z) {
+             return mapObj;
+         }
+     }
+diff --git a/src/meson.build b/src/meson.build
+index 7b865f0a..4199b7ef 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -12,6 +12,7 @@ pokeplatinum_c = files(
+     'map_header.c',
+     'move_table.c',
+     'narc.c',
++    'port_follower.c',
+     'party.c',
+     'poffin.c',
+     'string_gf.c',
+diff --git a/src/narc.c b/src/narc.c
+index 83a3d793..a21a5fc8 100644
+--- a/src/narc.c
++++ b/src/narc.c
+@@ -4,6 +4,9 @@
+ #include <string.h>
+ 
+ #include "heap.h"
++#ifdef SDK_PORT_3DS
++#include "port_follower.h"
++#endif
+ 
+ // Mapping of NARC indices to filesystem paths.
+ static const char *sNarcPaths[] = {
+@@ -426,6 +429,28 @@ void *NARC_AllocAndReadWholeMember(NARC *narc, u32 memberIndex, enum HeapID heap
+     u32 fileEnd;
+     void *dest;
+ 
++#ifdef SDK_PORT_3DS
++    if (memberIndex >= narc->numFiles) {
++        // (the port's own members: the follower Pokémon's sprites, port_follower.h)
++        u32 size = 0;
++        const void *own = PortFollower_NarcMember(memberIndex, &size);
++
++        GF_ASSERT(own != NULL);
++
++        if (own == NULL) {
++            return NULL;
++        }
++
++        dest = Heap_Alloc(heapID, size);
++
++        if (dest != NULL) {
++            memcpy(dest, own, size);
++        }
++
++        return dest;
++    }
++#endif
++
+     GF_ASSERT(narc->numFiles > memberIndex);
+ 
+     FS_SeekFile(&narc->file, narc->fatbStart + 12 + memberIndex * 8, FS_SEEK_SET);
+@@ -447,6 +472,21 @@ void NARC_ReadWholeMember(NARC *narc, u32 memberIndex, void *dest)
+     u32 fileStart;
+     u32 fileEnd;
+ 
++#ifdef SDK_PORT_3DS
++    if (memberIndex >= narc->numFiles) {
++        u32 size = 0;
++        const void *own = PortFollower_NarcMember(memberIndex, &size);
++
++        GF_ASSERT(own != NULL);
++
++        if (own != NULL) {
++            memcpy(dest, own, size);
++        }
++
++        return;
++    }
++#endif
++
+     GF_ASSERT(narc->numFiles > memberIndex);
+ 
+     FS_SeekFile(&narc->file, narc->fatbStart + 12 + memberIndex * 8, FS_SEEK_SET);
+@@ -461,6 +501,16 @@ u32 NARC_GetMemberSize(NARC *narc, u32 memberIndex)
+     u32 fileStart;
+     u32 fileEnd;
+ 
++#ifdef SDK_PORT_3DS
++    if (memberIndex >= narc->numFiles) {
++        u32 size = 0;
++        const void *own = PortFollower_NarcMember(memberIndex, &size);
++
++        GF_ASSERT(own != NULL);
++        return own != NULL ? size : 0;
++    }
++#endif
++
+     GF_ASSERT(narc->numFiles > memberIndex);
+ 
+     FS_SeekFile(&narc->file, narc->fatbStart + 12 + memberIndex * 8, FS_SEEK_SET);
+@@ -474,6 +524,21 @@ void NARC_ReadFromMember(NARC *narc, u32 memberIndex, u32 offset, u32 bytesToRea
+ {
+     u32 fileStart;
+ 
++#ifdef SDK_PORT_3DS
++    if (memberIndex >= narc->numFiles) {
++        u32 size = 0;
++        const void *own = PortFollower_NarcMember(memberIndex, &size);
++
++        GF_ASSERT(own != NULL && offset + bytesToRead <= size);
++
++        if (own != NULL && offset + bytesToRead <= size) {
++            memcpy(dest, (const u8 *)own + offset, bytesToRead);
++        }
++
++        return;
++    }
++#endif
++
+     GF_ASSERT(narc->numFiles > memberIndex);
+ 
+     FS_SeekFile(&narc->file, narc->fatbStart + 12 + memberIndex * 8, FS_SEEK_SET);
+diff --git a/src/overlay005/field_control.c b/src/overlay005/field_control.c
+index 03567690..aa8fce7c 100644
+--- a/src/overlay005/field_control.c
++++ b/src/overlay005/field_control.c
+@@ -70,6 +70,10 @@
+ #include "vars_flags.h"
+ #include "wireless_manager.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_follower.h"
++#endif
++
+ static BOOL Field_CheckMapTransition(FieldSystem *fieldSystem, const FieldInput *input);
+ static u16 Field_TileBehaviorToScript(FieldSystem *fieldSystem, u8 behavior);
+ static BOOL Field_CheckWildEncounter(FieldSystem *fieldSystem);
+@@ -301,6 +305,17 @@ BOOL FieldInput_Process(const FieldInput *input, FieldSystem *fieldSystem)
+             return TRUE;
+         }
+ 
++#ifdef SDK_PORT_3DS
++        // (the follower Pokémon: no script of its own, port_follower.c)
++        if (PortFollower_TryTalk(fieldSystem)) {
++            if (PlayerAvatar_CheckForceStopMovement(fieldSystem->playerAvatar) == TRUE) {
++                PlayerAvatar_ForceStopMovement(fieldSystem->playerAvatar, PlayerAvatar_GetFacingDir(fieldSystem->playerAvatar));
++            }
++
++            return TRUE;
++        }
++#endif
++
+         enum AvatarDistortionState distortionState = PlayerAvatar_MapDistortionState(fieldSystem->playerAvatar);
+ 
+         if (distortionState == AVATAR_DISTORTION_STATE_NONE || distortionState == AVATAR_DISTORTION_STATE_ACTIVE) {
+diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
+index 06580163..ce648848 100644
+--- a/src/overlay005/fieldmap.c
++++ b/src/overlay005/fieldmap.c
+@@ -88,6 +88,7 @@
+ #include "generated/map_headers.h"
+ #include "generated/movement_types.h"
+ 
++#include "port_follower.h"
+ #include "save_player.h"
+ #include "trainer_info.h"
+ #include "vars_flags.h"
+@@ -292,6 +293,7 @@ static BOOL FieldMap_Main(ApplicationManager *appMan, int *param1)
+ 
+ #ifdef SDK_PORT_3DS
+     FieldMap_PortNeighbours(fieldSystem);
++    PortFollower_Update(fieldSystem);
+ #endif
+ 
+     ov5_021D134C(fieldSystem, fieldSystem->unk_C0);
+@@ -310,6 +312,9 @@ static BOOL FieldMap_Exit(ApplicationManager *appMan, int *param1)
+ 
+     switch (*param1) {
+     case 0:
++#ifdef SDK_PORT_3DS
++        PortFollower_FieldEnds(); // (before the field's heap and VRAM go)
++#endif
+         DynamicMapFeatures_Free(fieldSystem);
+         LandDataManager_ForgetTrackedTarget(fieldSystem->landDataMan);
+ 
+@@ -751,6 +756,9 @@ static void ov5_021D15F4(FieldSystem *fieldSystem)
+ 
+     FieldEffectManager_Render(fieldSystem->fieldEffMan);
+     BillboardLists_Draw();
++#ifdef SDK_PORT_3DS
++    PortFollower_Draw(); // (its ball's burst)
++#endif
+ 
+     if (FieldMap_InDistortionWorld(fieldSystem) == TRUE) {
+         DistWorld_ApplyGiratinaSpritePalette(fieldSystem);
+diff --git a/src/overlay005/options_panel.c b/src/overlay005/options_panel.c
+index 73151f06..a7f7ab29 100644
+--- a/src/overlay005/options_panel.c
++++ b/src/overlay005/options_panel.c
+@@ -183,6 +183,7 @@ static const OptionsCard sEnhancementCards[] = {
+     { "TRADE EVO AT 40", 0, OPK_PORT, PORT_OPT_TRADE_EVO },
+     { "HMs WITHOUT MOVES", 0, OPK_PORT, PORT_OPT_HM_FREE },
+     { "AUTO-RUN", 0, OPK_PORT, PORT_OPT_AUTO_RUN },
++    { "FOLLOWER", 0, OPK_PORT, PORT_OPT_FOLLOWER },
+ };
+ 
+ static const OptionsCard sCheatCards[] = {
+@@ -205,7 +206,7 @@ static const OptionsCard sGiveCards[] = {
+ 
+ static const OptionsPageDef sOptionsPages[OP_PAGE_COUNT] = {
+     [OP_PAGE_SETTINGS] = { "SETTINGS", sSettingsCards, 6, NELEMS(sSettingsCards) },
+-    [OP_PAGE_ENHANCEMENTS] = { "ENHANCEMENTS", sEnhancementCards, 3, NELEMS(sEnhancementCards) },
++    [OP_PAGE_ENHANCEMENTS] = { "ENHANCEMENTS", sEnhancementCards, 4, NELEMS(sEnhancementCards) },
+     [OP_PAGE_CHEATS] = { "CHEATS 1/2", sCheatCards, 4, NELEMS(sCheatCards) },
+     [OP_PAGE_GIVE] = { "CHEATS 2/2", sGiveCards, 5, NELEMS(sGiveCards) },
+ };
+diff --git a/src/overlay005/ov5_021ECC20.c b/src/overlay005/ov5_021ECC20.c
+index 9de78103..9f907c55 100644
+--- a/src/overlay005/ov5_021ECC20.c
++++ b/src/overlay005/ov5_021ECC20.c
+@@ -13,6 +13,9 @@
+ #include "heap.h"
+ #include "map_object.h"
+ #include "narc.h"
++#ifdef SDK_PORT_3DS
++#include "port_follower.h"
++#endif
+ 
+ static void ov5_021ECCA4(MapObjectManager *param0);
+ static void ov5_021ECCBC(MapObjectManager *param0);
+@@ -87,6 +90,10 @@ static const ObjectEventGfxRenderDetailsEntry *ov5_021ECD10(int param0)
+ {
+     const ObjectEventGfxRenderDetailsEntry *v0 = gObjectEventGfxRenderDetailsTable;
+ 
++#ifdef SDK_PORT_3DS
++    param0 = PortFollower_DetailsGfx(param0); // (a follower Pokémon's: Pikachu's)
++#endif
++
+     do {
+         if (v0->graphicsID == param0) {
+             return v0;
+diff --git a/src/overlay005/ov5_021ECE40.c b/src/overlay005/ov5_021ECE40.c
+index dbe4ac67..04528579 100644
+--- a/src/overlay005/ov5_021ECE40.c
++++ b/src/overlay005/ov5_021ECE40.c
+@@ -33,6 +33,9 @@
+ #include "resource_collection.h"
+ #include "sys_task.h"
+ #include "sys_task_manager.h"
++#ifdef SDK_PORT_3DS
++#include "port_follower.h"
++#endif
+ 
+ typedef enum {
+     UnkEnum_ov5_021ED334_00 = 0,
+@@ -227,6 +230,14 @@ Billboard *ov5_021ECF1C(MapObject *param0, int param1)
+ 
+     GF_ASSERT(v2 != NULL);
+ 
++#ifdef SDK_PORT_3DS
++    if (v2 != NULL && PortFollower_StartsSmall(param0)) {
++        // (the follower Pokémon's, not yet out of its ball: port_follower.c grows it)
++        VecFx32 none = { 0, 0, 0 };
++        Billboard_SetScale(v2, &none);
++    }
++#endif
++
+     return v2;
+ }
+ 
+@@ -506,6 +517,17 @@ static void ov5_021ED2AC(UnkStruct_ov5_021ED0A4 *param0)
+ 
+ static const ObjectEventGfxFileEntry *ov5_021ED2D0(int param0, int param1, const ObjectEventGfxFileEntry *param2)
+ {
++#ifdef SDK_PORT_3DS
++    if (param2 == gObjectEventGfxTexturesTable && PortFollower_IsGfx(param0)) {
++        // (a follower Pokémon's sprite: port_follower.h)
++        static ObjectEventGfxFileEntry sFollower;
++
++        sFollower.id = param0;
++        sFollower.narcIdx = PortFollower_TextureMember(param0);
++        return &sFollower;
++    }
++#endif
++
+     do {
+         if (param2->id == param0) {
+             return param2;
+@@ -1293,6 +1315,10 @@ static const ObjectEventGfxModelAnimEntry *ov5_021EDD04(int param0)
+ {
+     const ObjectEventGfxModelAnimEntry *v0 = gObjectEventGfxModelAnimsTable;
+ 
++#ifdef SDK_PORT_3DS
++    param0 = PortFollower_ModelGfx(param0); // (a follower Pokémon's: Pikachu's model and walk, or Regigigas's)
++#endif
++
+     do {
+         if (v0->graphicsID == param0) {
+             return v0;
+@@ -1931,6 +1957,11 @@ static Billboard *ov5_021EE454(MapObject *param0, int param1, UnkFuncPtr_ov5_021
+         v3 = v2;
+         v7 = gObjectEventGfxTexturesTable;
+ 
++#ifdef SDK_PORT_3DS
++        if (PortFollower_IsGfx(v3)) {
++            v7 = ov5_021ED2D0(v3, 0xffff, gObjectEventGfxTexturesTable);
++        } else
++#endif
+         do {
+             if (v7->id == v3) {
+                 break;
+@@ -2088,7 +2119,7 @@ BOOL MapObjectGfx_PortHasRoom(const MapObjectManager *mapObjMan, int graphicsID)
+         }
+     }
+ 
+-    while (details->graphicsID != 0xffff && details->graphicsID != graphicsID) {
++    while (details->graphicsID != 0xffff && details->graphicsID != PortFollower_DetailsGfx(graphicsID)) {
+         details++;
+     }
+ 
+diff --git a/src/port_follower.c b/src/port_follower.c
+new file mode 100644
+index 00000000..53f5206c
+--- /dev/null
++++ b/src/port_follower.c
+@@ -0,0 +1,1549 @@
++#include "port_follower.h"
++
++#include <nitro.h>
++#include <string.h>
++
++#include "constants/field/dynamic_map_features.h"
++#include "constants/overworld_weather.h"
++#include "constants/map_object.h"
++#include "constants/player_avatar.h"
++#include "generated/genders.h"
++#include "generated/items.h"
++#include "generated/map_headers.h"
++#include "generated/movement_actions.h"
++#include "generated/movement_types.h"
++#include "generated/object_events_gfx.h"
++#include "generated/pokemon_data_params.h"
++#include "generated/pokemon_types.h"
++#include "generated/species.h"
++#include "generated/time_of_day.h"
++
++#include "field/field_system.h"
++#include "overlay005/ov5_021EB1A0.h"
++#include "overlay005/ov5_021ECE40.h"
++#include "overlay005/ov5_021F134C.h"
++#include "overlay005/options_panel.h"
++
++#include "bag.h"
++#include "bg_window.h"
++#include "billboard.h"
++#include "camera.h"
++#include "field_message.h"
++#include "field_overworld_weather.h"
++#include "field_task.h"
++#include "heap.h"
++#include "item.h"
++#include "map_header.h"
++#include "map_object.h"
++#include "map_object_move.h"
++#include "math_util.h"
++#include "particle_system.h"
++#include "party.h"
++#include "persisted_map_features.h"
++#include "player_avatar.h"
++#include "player_move.h"
++#include "pokemon.h"
++#include "port_options.h"
++#include "savedata_misc.h"
++#include "render_window.h"
++#include "rtc.h"
++#include "save_player.h"
++#include "sound_playback.h"
++#include "string_gf.h"
++#include "system.h"
++#include "system_flags.h"
++#include "unk_020655F4.h"
++#include "vars_flags.h"
++
++// The port's own files in the data pack (port_fs.c).
++extern u32 NitroPort_PakOwnFileSize(u32 id);
++extern BOOL NitroPort_PakOwnFileRead(u32 id, u32 offset, void *dest, u32 size);
++extern void NitroPort_Log(const char *fmt, ...);
++
++// The data pack's follower file (builder/followers.py, make_bundle):
++// 'PFOL', u16 version, u16 species, u32 sprites, u32 0; species x {u16
++// first sprite, u8 forms after it, u8 females' own}; sprites x {u32 offset,
++// u32 size, u8 width, u8 height, u16 0}; the sprites (NSBTX, Platinum's
++// walking sprites' layout: 16 textures; palettes normal, shiny).
++#define BUNDLE_VERSION   1
++#define BUNDLE_SPECIES   493
++#define BUNDLE_SPRITES   (PORT_FOLLOWER_GFX_COUNT / 2)
++#define SPRITE_BYTES_MAX (16 + 4 + 0x3C + 0x400 + 0x80 + 64 * 64 / 2 * 8 + 64)
++
++typedef struct BundleSpecies {
++    u16 first;
++    u8 forms;
++    u8 female;
++} BundleSpecies;
++
++typedef struct BundleSprite {
++    u32 offset;
++    u32 size;
++    u8 width;
++    u8 height;
++    u16 pad;
++} BundleSprite;
++
++static int sBundleState; // 0 not looked for, 1 there, -1 none
++static u32 sBundleSprites;
++static BundleSpecies sSpecies[BUNDLE_SPECIES];
++static BundleSprite sSprites[BUNDLE_SPRITES];
++static u32 sMemberCached = 0xffffffff; // (PortFollower_NarcMember's)
++static u32 sMemberSize;
++static u32 sMember[SPRITE_BYTES_MAX / 4];
++
++static BOOL Bundle_Ready(void)
++{
++    u32 head[4];
++
++    if (sBundleState != 0) {
++        return sBundleState > 0;
++    }
++
++    sBundleState = -1;
++
++    if (NitroPort_PakOwnFileSize(PORT_FOLLOWER_PAK_ID) < sizeof(head)
++        || !NitroPort_PakOwnFileRead(PORT_FOLLOWER_PAK_ID, 0, head, sizeof(head))) {
++        NitroPort_Log("[follower] no HeartGold/SoulSilver sprites in the data pack: Platinum's own only");
++        return FALSE;
++    }
++
++    if (memcmp(head, "PFOL", 4) != 0 || (head[1] & 0xffff) != BUNDLE_VERSION || (head[1] >> 16) != BUNDLE_SPECIES
++        || head[2] == 0 || head[2] > BUNDLE_SPRITES) {
++        NitroPort_Log("[follower] the data pack's follower sprites aren't this version's: rebuild the data pack");
++        return FALSE;
++    }
++
++    sBundleSprites = head[2];
++
++    if (!NitroPort_PakOwnFileRead(PORT_FOLLOWER_PAK_ID, 16, sSpecies, sizeof(sSpecies))
++        || !NitroPort_PakOwnFileRead(PORT_FOLLOWER_PAK_ID, 16 + sizeof(sSpecies), sSprites, sizeof(BundleSprite) * sBundleSprites)) {
++        return FALSE;
++    }
++
++    sBundleState = 1;
++    NitroPort_Log("[follower] %u HeartGold/SoulSilver sprites", (unsigned)sBundleSprites);
++    return TRUE;
++}
++
++BOOL PortFollower_IsGfx(int graphicsID)
++{
++    return graphicsID >= PORT_FOLLOWER_GFX_FIRST && graphicsID < PORT_FOLLOWER_BALL_GFX_FIRST + PORT_FOLLOWER_BALL_GFX_COUNT;
++}
++
++// The data pack's ball file (builder/ball_sprites.py, make_file): 'PFBL',
++// u16 version, u16 0, u32 sprites, u32 0; sprites x {u32 offset, u32 size};
++// the sprites (NSBTX, as the follower sprites).
++#define BALLS_VERSION 2 // (2: one sprite a ball, open facing north)
++
++static int sBallsState; // 0 not looked for, 1 there, -1 none
++static u32 sBallsCount;
++static u32 sBallsDir[PORT_FOLLOWER_BALL_GFX_COUNT][2];
++
++static BOOL Balls_Ready(void)
++{
++    u32 head[4];
++
++    if (sBallsState != 0) {
++        return sBallsState > 0;
++    }
++
++    sBallsState = -1;
++
++    if (NitroPort_PakOwnFileSize(PORT_FOLLOWER_BALLS_PAK_ID) < sizeof(head)
++        || !NitroPort_PakOwnFileRead(PORT_FOLLOWER_BALLS_PAK_ID, 0, head, sizeof(head))
++        || memcmp(head, "PFBL", 4) != 0 || (head[1] & 0xffff) != BALLS_VERSION || head[2] == 0 || head[2] > PORT_FOLLOWER_BALL_GFX_COUNT
++        || !NitroPort_PakOwnFileRead(PORT_FOLLOWER_BALLS_PAK_ID, 16, sBallsDir, 8 * head[2])) {
++        NitroPort_Log("[follower] no Poke Ball sprites in the data pack: the item ball");
++        return FALSE;
++    }
++
++    sBallsCount = head[2];
++    sBallsState = 1;
++    return TRUE;
++}
++
++static u32 PortFollower_Sprite(int graphicsID)
++{
++    return (u32)(graphicsID - PORT_FOLLOWER_GFX_FIRST) / 2;
++}
++
++static BOOL PortFollower_IsBig(int graphicsID)
++{
++    u32 sprite = PortFollower_Sprite(graphicsID);
++    return Bundle_Ready() && sprite < sBundleSprites && sSprites[sprite].width > 32;
++}
++
++int PortFollower_DetailsGfx(int graphicsID)
++{
++    return PortFollower_IsGfx(graphicsID) ? OBJ_EVENT_GFX_PIKACHU : graphicsID;
++}
++
++int PortFollower_ModelGfx(int graphicsID)
++{
++    if (!PortFollower_IsGfx(graphicsID)) {
++        return graphicsID;
++    }
++
++    return PortFollower_IsBig(graphicsID) ? OBJ_EVENT_GFX_REGIGIGAS : OBJ_EVENT_GFX_PIKACHU;
++}
++
++u32 PortFollower_TextureMember(int graphicsID)
++{
++    return PORT_FOLLOWER_NARC_FIRST + (u32)(graphicsID - PORT_FOLLOWER_GFX_FIRST);
++}
++
++const void *PortFollower_NarcMember(u32 memberIndex, u32 *size)
++{
++    u32 n = memberIndex - PORT_FOLLOWER_NARC_FIRST, sprite = n / 2;
++    const BundleSprite *s;
++
++    if (memberIndex >= PORT_FOLLOWER_NARC_FIRST && n >= PORT_FOLLOWER_GFX_COUNT && n < PORT_FOLLOWER_GFX_COUNT + PORT_FOLLOWER_BALL_GFX_COUNT) {
++        // A ball's (open facing north) or a bubble's
++        u32 k = n - PORT_FOLLOWER_GFX_COUNT;
++
++        if (!Balls_Ready() || k >= sBallsCount) {
++            return NULL;
++        }
++
++        if (sMemberCached != memberIndex) {
++            sMemberCached = 0xffffffff;
++
++            if (sBallsDir[k][1] < 0x40 || sBallsDir[k][1] > sizeof(sMember)
++                || !NitroPort_PakOwnFileRead(PORT_FOLLOWER_BALLS_PAK_ID, sBallsDir[k][0], sMember, sBallsDir[k][1])) {
++                return NULL;
++            }
++
++            sMemberSize = sBallsDir[k][1];
++            sMemberCached = memberIndex;
++        }
++
++        *size = sMemberSize;
++        return sMember;
++    }
++
++    if (memberIndex < PORT_FOLLOWER_NARC_FIRST || n >= PORT_FOLLOWER_GFX_COUNT || !Bundle_Ready() || sprite >= sBundleSprites) {
++        return NULL;
++    }
++
++    if (sMemberCached != memberIndex) {
++        s = &sSprites[sprite];
++        sMemberCached = 0xffffffff; // (the buffer's other member gone, whatever comes of the read)
++
++        if (s->size < 0x40 || s->size > sizeof(sMember) || !NitroPort_PakOwnFileRead(PORT_FOLLOWER_PAK_ID, s->offset, sMember, s->size)) {
++            return NULL;
++        }
++
++        sMemberSize = s->size;
++        sMemberCached = memberIndex;
++
++        if (n & 1) {
++            // Shiny: its two palettes' dictionary entries swapped, so the
++            // walk (which shows palette 0) shows the shiny one.
++            u8 *data = (u8 *)sMember;
++            u32 tex = *(u32 *)(data + 16), dict = 0, entries = 0;
++
++            if (tex + 0x3C <= s->size) {
++                dict = tex + *(u32 *)(data + tex + 0x34);
++            }
++
++            if (dict != 0 && dict + 8 <= s->size) {
++                entries = dict + *(u16 *)(data + dict + 6); // (the entries' block: where the tree's header says)
++            }
++
++            if (entries != 0 && data[dict + 1] == 2 && entries + 4 + 8 <= s->size) {
++                u8 *entry = data + entries + 4;
++                u32 first;
++
++                memcpy(&first, entry, 4);
++                memcpy(entry, entry + 4, 4);
++                memcpy(entry + 4, &first, 4);
++            }
++        }
++    }
++
++    *size = sMemberSize;
++    return sMember;
++}
++
++// Platinum's own walking sprites of Pokémon, for a data pack without
++// HeartGold's (the rest stay in their balls).
++static const struct {
++    u16 species;
++    u16 graphicsID;
++} sPlatinumSprites[] = {
++    { SPECIES_PIKACHU, OBJ_EVENT_GFX_PIKACHU },
++    { SPECIES_CLEFAIRY, OBJ_EVENT_GFX_CLEFAIRY },
++    { SPECIES_JIGGLYPUFF, OBJ_EVENT_GFX_JIGGLYPUFF },
++    { SPECIES_PSYDUCK, OBJ_EVENT_GFX_PSYDUCK },
++    { SPECIES_MACHOP, OBJ_EVENT_GFX_MACHOP },
++    { SPECIES_TORCHIC, OBJ_EVENT_GFX_TORCHIC },
++    { SPECIES_SHROOMISH, OBJ_EVENT_GFX_SHROOMISH },
++    { SPECIES_SKITTY, OBJ_EVENT_GFX_SKITTY },
++    { SPECIES_TURTWIG, OBJ_EVENT_GFX_TURTWIG },
++    { SPECIES_GROTLE, OBJ_EVENT_GFX_GROTLE },
++    { SPECIES_TORTERRA, OBJ_EVENT_GFX_TORTERRA },
++    { SPECIES_CHIMCHAR, OBJ_EVENT_GFX_CHIMCHAR },
++    { SPECIES_MONFERNO, OBJ_EVENT_GFX_MONFERNO },
++    { SPECIES_INFERNAPE, OBJ_EVENT_GFX_INFERNAPE },
++    { SPECIES_PIPLUP, OBJ_EVENT_GFX_PIPLUP },
++    { SPECIES_PRINPLUP, OBJ_EVENT_GFX_PRINPLUP },
++    { SPECIES_EMPOLEON, OBJ_EVENT_GFX_EMPOLEON },
++    { SPECIES_PACHIRISU, OBJ_EVENT_GFX_PACHIRISU },
++    { SPECIES_DRIFLOON, OBJ_EVENT_GFX_DRIFLOON },
++    { SPECIES_BUNEARY, OBJ_EVENT_GFX_BUNEARY },
++    { SPECIES_HAPPINY, OBJ_EVENT_GFX_HAPPINY },
++    { SPECIES_CROAGUNK, OBJ_EVENT_GFX_CROAGUNK },
++    { SPECIES_REGIGIGAS, OBJ_EVENT_GFX_REGIGIGAS },
++    { SPECIES_SHAYMIN, OBJ_EVENT_GFX_SHAYMIN },
++};
++
++// The party's first Pokémon's graphics ID, or 0: none (an egg, fainted,
++// or no sprite for it). HeartGold's way (FollowMon_GetSpriteID): a female
++// has her own sprite where the species does, else the form's.
++static int PortFollower_PartyGfx(FieldSystem *fieldSystem, BOOL *big)
++{
++    Party *party = SaveData_GetParty(fieldSystem->saveData);
++    Pokemon *mon;
++    int species, form, i;
++
++    *big = FALSE;
++
++    if (party == NULL || Party_GetCurrentCount(party) == 0) {
++        return 0;
++    }
++
++    mon = Party_GetPokemonBySlotIndex(party, 0);
++
++    if (Pokemon_GetValue(mon, MON_DATA_IS_EGG, NULL) || Pokemon_GetValue(mon, MON_DATA_HP, NULL) == 0) {
++        return 0;
++    }
++
++    species = Pokemon_GetValue(mon, MON_DATA_SPECIES, NULL);
++    form = Pokemon_GetValue(mon, MON_DATA_FORM, NULL);
++
++    if (species < 1 || species > BUNDLE_SPECIES) {
++        return 0;
++    }
++
++    if (Bundle_Ready()) {
++        const BundleSpecies *s = &sSpecies[species - 1];
++        u32 sprite = s->first;
++
++        if (s->female) {
++            sprite += Pokemon_GetGender(mon) == GENDER_FEMALE;
++        } else if (form <= s->forms) {
++            sprite += form;
++        }
++
++        if (sprite >= sBundleSprites) {
++            return 0;
++        }
++
++        *big = sSprites[sprite].width > 32;
++        return PORT_FOLLOWER_GFX_FIRST + 2 * sprite + (Pokemon_IsShiny(mon) ? 1 : 0);
++    }
++
++    for (i = 0; i < (int)NELEMS(sPlatinumSprites); i++) {
++        if (sPlatinumSprites[i].species == species) {
++            *big = species == SPECIES_REGIGIGAS;
++            return sPlatinumSprites[i].graphicsID;
++        }
++    }
++
++    {
++        static int sSaid; // (each species once)
++
++        if (sSaid != species) {
++            sSaid = species;
++            NitroPort_Log("[follower] no sprite for species %d: Platinum has its own for 24 only, the rest come with the data pack (rebuild it with the follower sprites)", species);
++        }
++    }
++
++    return 0;
++}
++
++BOOL MapObject_PortIsFollower(const MapObject *mapObj)
++{
++    return MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_PORT_FOLLOWER) != 0;
++}
++
++// The player jumping down a ledge (2 tiles, or 3): the follower can't keep
++// up with the jump (the follow code goes a tile a step behind), so it waits
++// in its ball and comes out behind them where they stop.
++// (the player's steps aren't map object movements: MapObject_IsMoving is 0)
++static BOOL PortFollower_PlayerStepping(FieldSystem *fieldSystem)
++{
++    int state = PlayerAvatar_GetMoveState(fieldSystem->playerAvatar);
++    return state == PLAYER_MOVE_STATE_START || state == PLAYER_MOVE_STATE_MOVING;
++}
++
++static BOOL PortFollower_PlayerJumping(FieldSystem *fieldSystem, MapObject *player)
++{
++    u32 action = MapObject_GetMovementAction(player); // (the player's map object's own: the jump)
++
++    return PortFollower_PlayerStepping(fieldSystem)
++        && ((action >= MOVEMENT_ACTION_JUMP_FAR_NORTH && action <= MOVEMENT_ACTION_JUMP_FAR_EAST)
++            || action == MOVEMENT_ACTION_JUMP_FARTHER_WEST || action == MOVEMENT_ACTION_JUMP_FARTHER_EAST);
++}
++
++// (the Pokémon: PORT_FOLLOWER_LOCAL_ID; its ball: PORT_FOLLOWER_BALL_LOCAL_ID)
++static MapObject *PortFollower_FindID(const MapObjectManager *mapObjMan, u32 localID)
++{
++    int i = 0;
++    MapObject *mapObj;
++
++    while (MapObjectMan_FindObjectWithStatus(mapObjMan, &mapObj, &i, MAP_OBJ_STATUS_0) == TRUE) {
++        if (MapObject_PortIsFollower(mapObj) && MapObject_GetLocalID(mapObj) == localID) {
++            return mapObj;
++        }
++    }
++
++    return NULL;
++}
++
++// Where it may be out: walking (not on the bike, surfing or using a field
++// move), with no partner trainer or Amity Square's Pokémon following, not
++// in the Underground, the Union Room or a map with features of its own (the
++// Distortion World, the gyms' puzzles); one 64 x 64 only outdoors.
++static BOOL PortFollower_MayBeOut(FieldSystem *fieldSystem, BOOL big)
++{
++    enum MapHeaderID here = fieldSystem->location->mapHeaderID;
++
++    if (PlayerAvatar_GetPlayerState(fieldSystem->playerAvatar) != PLAYER_AVATAR_WALKING
++        || SystemFlag_CheckHasPartner(SaveData_GetVarsFlags(fieldSystem->saveData))
++        || MapObjMan_GetLocalMapObjByMovementType(fieldSystem->mapObjMan, MOVEMENT_TYPE_FOLLOW_PLAYER) != NULL
++        || here == MAP_HEADER_UNDERGROUND || MapHeader_IsUnionRoom(here)
++        || PersistedMapFeatures_GetID(MiscSaveBlock_GetPersistedMapFeatures(fieldSystem->saveData)) != DYNAMIC_MAP_FEATURES_NONE) {
++        return FALSE;
++    }
++
++    return !big || MapHeader_IsOutdoors(here);
++}
++
++// In a script, someone else on its tile or stepping onto it (a person
++// walking up to the player from behind: they'd stand in each other).
++static BOOL PortFollower_SomeoneComes(FieldSystem *fieldSystem, MapObject *follower)
++{
++    MapObject *player = PlayerAvatar_GetMapObject(fieldSystem->playerAvatar), *other;
++    int fx = MapObject_GetX(follower), fz = MapObject_GetZ(follower), i = 0, x, z, dir;
++
++    while (MapObjectMan_FindObjectWithStatus(fieldSystem->mapObjMan, &other, &i, MAP_OBJ_STATUS_0) == TRUE) {
++        if (other == player || MapObject_PortIsFollower(other) || MapObject_CheckStatus(other, MAP_OBJ_STATUS_HIDE)) {
++            continue;
++        }
++
++        x = MapObject_GetX(other); // (moving: the tile it's going to)
++        z = MapObject_GetZ(other);
++
++        if (x == fx && z == fz) {
++            return TRUE;
++        }
++
++        if (MapObject_IsMoving(other)) { // (and the one after, its way)
++            dir = MapObject_GetMovingDir(other);
++
++            if (dir >= DIR_NORTH && dir <= DIR_EAST && x + MapObject_GetDxFromDir(dir) == fx && z + MapObject_GetDzFromDir(dir) == fz) {
++                return TRUE;
++            }
++        }
++    }
++
++    return FALSE;
++}
++
++// Its shadow: made yet (PortFollower_Add), and hidden by this file while
++// it's smaller than itself (sShadowWas: as the field had it before).
++static BOOL sShadowMade, sShadowForced, sShadowWas;
++
++static void PortFollower_Remove(FieldSystem *fieldSystem, MapObject *mapObj)
++{
++    MapObject_Delete(mapObj);
++    ov5_021EDA38(fieldSystem->mapObjMan, sub_0206285C(fieldSystem->mapObjMan));
++}
++
++// Out behind the player when the tile behind is free, else on the player's
++// tile, hidden till the player steps off it (walking out of a door: it
++// comes out after them).
++static MapObject *PortFollower_Add(FieldSystem *fieldSystem, int graphicsID)
++{
++    MapObject *player = PlayerAvatar_GetMapObject(fieldSystem->playerAvatar);
++    int x = PlayerAvatar_GetXPos(fieldSystem->playerAvatar);
++    int z = PlayerAvatar_GetZPos(fieldSystem->playerAvatar);
++    int dir = PlayerAvatar_GetFacingDir(fieldSystem->playerAvatar);
++    int back = dir == DIR_NORTH ? DIR_SOUTH : dir == DIR_SOUTH ? DIR_NORTH : dir == DIR_WEST ? DIR_EAST : DIR_WEST;
++    int bx = x + MapObject_GetDxFromDir(back), bz = z + MapObject_GetDzFromDir(back);
++    // (a tile the player could walk to: not a wall, water, a ledge, a ramp, a
++    // warp or someone's)
++    BOOL behind = PlayerAvatar_CheckCollision(fieldSystem->playerAvatar, player, back) == PLAYER_COLLISION_NONE;
++    MapObject *mapObj;
++
++    mapObj = MapObjectMan_AddMapObject(fieldSystem->mapObjMan, behind ? bx : x, behind ? bz : z, dir, graphicsID,
++        PORT_MOVEMENT_TYPE_FOLLOW_MON, fieldSystem->location->mapHeaderID);
++
++    if (mapObj == NULL) {
++        return NULL;
++    }
++
++    MapObject_SetLocalID(mapObj, PORT_FOLLOWER_LOCAL_ID);
++    MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_PORT_FOLLOWER | MAP_OBJ_STATUS_PERSISTENT);
++
++    // Its shadow made once it's out (PortFollower_Update), not by the
++    // movement code on its first frame: a new shadow is drawn once before
++    // it first looks at its object's flags, so it showed alone, hidden or
++    // not, before the ball came.
++    sShadowMade = MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_SHOW_SHADOW) != 0;
++    MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_SHOW_SHADOW);
++
++    if (MapObject_CheckStatus(player, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE)) {
++        MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE);
++    }
++
++    if (!behind) {
++        MapObject_SetHidden(mapObj, TRUE);
++    }
++
++    return mapObj;
++}
++
++// Its Poké Ball: coming out it grows from nothing to its size, going in it
++// shrinks away where it is, POP_FRAMES each, with the battle's send-out and
++// recall sounds.
++#define POP_FRAMES 6
++
++static void PortFollower_Sound(u16 seqID)
++{
++    static int sFailed;
++
++    if (!Sound_PlayEffect(seqID) && sFailed++ < 4) {
++        NitroPort_Log("[follower] sound %d not played", seqID);
++    }
++}
++
++static BOOL PortFollower_ScaleOf(MapObject *mapObj, int step, int steps)
++{
++    Billboard *billboard = ov5_021EB1A0(mapObj);
++    VecFx32 scale;
++
++    if (billboard == NULL) {
++        return FALSE; // (its picture not made yet)
++    }
++
++    scale.x = scale.y = scale.z = FX32_ONE * step / steps;
++    Billboard_SetScale(billboard, &scale);
++    return TRUE;
++}
++
++static BOOL PortFollower_SetScale(MapObject *mapObj, int step)
++{
++    return PortFollower_ScaleOf(mapObj, step, POP_FRAMES);
++}
++
++// The ball itself, seen: its picture where the Pokémon stands, growing in
++// and shrinking away BALL_POP steps each.
++// Coming out it drops in, BALL_LEAD steps before it opens and the Pokémon
++// grows out of it; going in it's there as the Pokémon shrinks into it and
++// BALL_AFTER steps after. (No room for it, no free map object: the
++// Pokémon alone, as before.)
++#define BALL_POP   3
++#define BALL_LEAD  8
++#define BALL_AFTER 6
++
++static int sBallLeft, sBallTotal;
++static int sBallKind = 4; // (the ball it was caught in: the game's numbers, 1 the Master Ball... 4 the Poké Ball)
++
++// (the ball's picture: its kind's from the ball file, facing north it's
++// open, any other way closed; else the item ball, the same either way)
++#define BALL_KINDS 17
++
++static int PortFollower_BallGfx(void)
++{
++    int kind = sBallKind >= 1 && sBallKind <= BALL_KINDS ? sBallKind : 4;
++    u32 k = kind - 1;
++
++    if (!Balls_Ready() || k >= sBallsCount) {
++        return OBJ_EVENT_GFX_POKEBALL;
++    }
++
++    return PORT_FOLLOWER_BALL_GFX_FIRST + (int)k;
++}
++
++static BOOL PortFollower_ShowBall(FieldSystem *fieldSystem, MapObject *at, int steps, BOOL open)
++{
++    MapObjectManager *mapObjMan = fieldSystem->mapObjMan;
++    MapObject *ball = PortFollower_FindID(mapObjMan, PORT_FOLLOWER_BALL_LOCAL_ID);
++    int x = MapObject_GetX(at), z = MapObject_GetZ(at), graphicsID = PortFollower_BallGfx();
++    BOOL bridge = MapObject_CheckStatus(at, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE) != 0;
++
++    if (ball != NULL && MapObject_GetGraphicsID(ball) == graphicsID && MapObject_GetX(ball) == x && MapObject_GetZ(ball) == z) {
++        // (still there, where it's wanted: kept, its time begun again; not
++        // made again, so nothing reloads and 60 FPS's in-between scenes
++        // keep it where it is)
++        MapObject_Face(ball, open ? DIR_NORTH : DIR_SOUTH);
++        sBallLeft = sBallTotal = steps;
++        return TRUE;
++    }
++
++    if (ball != NULL) {
++        PortFollower_Remove(fieldSystem, ball);
++    }
++
++    sBallLeft = 0;
++
++    if (MapObjectMan_PortFreeSlots(mapObjMan) <= 1 || !MapObjectGfx_PortHasRoom(mapObjMan, graphicsID)) {
++        return FALSE;
++    }
++
++    ball = MapObjectMan_AddMapObject(mapObjMan, x, z, open ? DIR_NORTH : DIR_SOUTH, graphicsID, MOVEMENT_TYPE_NONE,
++        fieldSystem->location->mapHeaderID);
++
++    if (ball == NULL) {
++        return FALSE;
++    }
++
++    // (not saved, not found by scripts, not talked to, walked through)
++    MapObject_SetLocalID(ball, PORT_FOLLOWER_BALL_LOCAL_ID);
++    MapObject_SetStatusFlagOn(ball, MAP_OBJ_STATUS_PORT_FOLLOWER | MAP_OBJ_STATUS_PERSISTENT);
++    sub_02062D80(ball, FALSE);
++
++    if (bridge) {
++        MapObject_SetStatusFlagOn(ball, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE);
++    }
++
++    // (no shadow: not made at all, as the movement code would on its first
++    // frame, nor shown)
++    MapObject_SetStatusFlagOn(ball, MAP_OBJ_STATUS_SHOW_SHADOW | MAP_OBJ_STATUS_HIDE_SHADOW);
++    // (where the Pokémon stands, on its ground line: moved toward the camera,
++    // it showed a few pixels lower than the player and the Pokémon,
++    // 2026-10-29)
++    PortFollower_ScaleOf(ball, 0, BALL_POP);
++    sBallLeft = sBallTotal = steps;
++    return TRUE;
++}
++
++// (shortened to go away now: the Pokémon put away before it was seen)
++static void PortFollower_BallAway(void)
++{
++    if (sBallLeft > BALL_POP) {
++        sBallLeft = BALL_POP;
++        sBallTotal = BALL_POP * 2;
++    }
++}
++
++// (its scale this step of its time: in BALL_POP steps, away in the last)
++static int PortFollower_BallStep(void)
++{
++    int done = sBallTotal - sBallLeft, step = done < sBallLeft ? done : sBallLeft;
++    return step < BALL_POP ? step : BALL_POP;
++}
++
++// The ball opened (the Pokémon coming out) or closed (it gone in): turned
++// to its other picture (north: open), its time going on. (The item ball
++// has one picture only.)
++static void PortFollower_SwapBall(FieldSystem *fieldSystem, BOOL open)
++{
++    MapObject *ball = PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_BALL_LOCAL_ID);
++
++    // (turned: the same object, its texture already there, where it is)
++    if (ball != NULL && sBallLeft > 0) {
++        MapObject_Face(ball, open ? DIR_NORTH : DIR_SOUTH);
++    }
++}
++
++static void PortFollower_UpdateBall(FieldSystem *fieldSystem, BOOL dropIn)
++{
++    MapObject *ball = PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_BALL_LOCAL_ID);
++    int done, step;
++
++    if (ball == NULL) {
++        sBallLeft = 0;
++        return;
++    }
++
++    if (sBallLeft <= 0) {
++        PortFollower_Remove(fieldSystem, ball);
++        return;
++    }
++
++    MapObject_SetStatusFlagOn(ball, MAP_OBJ_STATUS_HIDE_SHADOW); // (the Pokémon's own only)
++    done = sBallTotal - sBallLeft;
++    step = PortFollower_BallStep();
++    PortFollower_ScaleOf(ball, step, BALL_POP);
++
++    {
++        // (coming out: dropped in from above as it grows)
++        VecFx32 hop = { 0, dropIn && done < BALL_POP ? FX32_ONE * 6 * (BALL_POP - done) : 0, 0 };
++        MapObject_SetSpriteJumpOffset(ball, &hop);
++    }
++
++    sBallLeft--;
++}
++
++// (coming out: frames of it so far, -1 not yet begun: its picture or, -2,
++// the player's step off its tile awaited; going in: frames left)
++static int sOut, sIn;
++
++static int sOpenIn; // (coming out, sOut -3: the ball's steps before it opens)
++
++static void PortFollower_HideShadow(MapObject *mapObj)
++{
++    if (!sShadowForced) {
++        sShadowForced = TRUE;
++        sShadowWas = MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE_SHADOW) != 0; // (in grass, on water...)
++    }
++
++    MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_HIDE_SHADOW);
++}
++
++static void PortFollower_ShowShadow(MapObject *mapObj)
++{
++    if (!sShadowMade) {
++        sShadowMade = TRUE;
++        ov5_021F1570(mapObj);
++    }
++
++    if (sShadowForced) {
++        sShadowForced = FALSE;
++
++        if (!sShadowWas) {
++            MapObject_SetStatusFlagOff(mapObj, MAP_OBJ_STATUS_HIDE_SHADOW);
++        }
++    }
++}
++static BOOL sDropIn;
++
++BOOL PortFollower_StartsSmall(const MapObject *mapObj)
++{
++    return MapObject_PortIsFollower(mapObj) && (MapObject_GetLocalID(mapObj) != PORT_FOLLOWER_LOCAL_ID || sOut < 0);
++}
++
++// ----- The ball's burst as it opens: the battles' send-out particles for
++// its kind (wazaeffect/effectdata/ball_particle.narc, as
++// battle_anim/ov12_02235E94.c picks them: Unk_ov12_0223AD70), a particle
++// system of its own drawn with the field's camera after the billboards
++// (fieldmap.c: PortFollower_Draw), freed when its emitters are done or the
++// field ends. Only with room for it: the field heap's and the 3D VRAM's,
++// else the ball opens without it.
++#define BURST_HEAP      0x4800
++#define BURST_MAX_STEPS 90
++#ifndef BURST_SCALE
++#define BURST_SCALE (FX32_ONE * 13 / 4) // (4: a little big on the 3DS, 2026-10-29)
++#endif
++
++static const u8 sBurstMember[17][2] = {
++    // (member, emitters) for each ball, the game's ball numbers less one
++    { 0x1, 0x5 }, { 0x2, 0x4 }, { 0x3, 0x3 }, { 0x4, 0x3 }, { 0x5, 0x3 }, { 0x6, 0x4 }, { 0x7, 0x3 }, { 0x8, 0x4 }, { 0x9, 0x3 },
++    { 0xA, 0x5 }, { 0xB, 0x4 }, { 0xC, 0x3 }, { 0xD, 0x3 }, { 0xE, 0x3 }, { 0xF, 0x4 }, { 0x10, 0x4 }, { 0x11, 0x3 }
++};
++
++static ParticleSystem *sBurst;
++static void *sBurstHeap;
++static int sBurstSteps;
++
++static u32 PortFollower_BurstTexAlloc(u32 size, BOOL is4x4comp)
++{
++    NNSGfdTexKey key = NNS_GfdAllocTexVram(size, is4x4comp, 0);
++
++    ParticleSystem_RegisterTextureKey(key);
++    return NNS_GfdGetTexKeyAddr(key);
++}
++
++static u32 PortFollower_BurstPlttAlloc(u32 size, BOOL is4pltt)
++{
++    NNSGfdPlttKey key = NNS_GfdAllocPlttVram(size, is4pltt, 0);
++
++    ParticleSystem_RegisterPaletteKey(key);
++    return NNS_GfdGetPlttKeyAddr(key);
++}
++
++static void PortFollower_EndBurst(void)
++{
++    if (sBurst != NULL) {
++        ParticleSystem_Free(sBurst); // (its textures' and palettes' VRAM with it)
++        sBurst = NULL;
++    }
++
++    if (sBurstHeap != NULL) {
++        Heap_Free(sBurstHeap);
++        sBurstHeap = NULL;
++    }
++}
++
++// (whether `size` bytes of the textures' VRAM and `pltt` of the palettes'
++// are free: taken and given back)
++static BOOL PortFollower_VramFree(u32 size, u32 pltt)
++{
++    NNSGfdTexKey tex = NNS_GfdAllocTexVram(size, FALSE, 0);
++    NNSGfdPlttKey pal;
++
++    if (tex == NNS_GFD_ALLOC_ERROR_TEXKEY) {
++        return FALSE;
++    }
++
++    pal = NNS_GfdAllocPlttVram(pltt, FALSE, 0);
++    NNS_GfdFreeTexVram(tex);
++
++    if (pal == NNS_GFD_ALLOC_ERROR_PLTTKEY) {
++        return FALSE;
++    }
++
++    NNS_GfdFreePlttVram(pal);
++    return TRUE;
++}
++
++static VecFx32 sBurstPos;
++
++// (each emitter as it's made: at the ball, its offset, sizes and speeds made
++// for the battle's camera, a few units away, BURST_SCALE times: the field's
++// units are about a pixel; its emitters keep themselves, so they're only
++// seen here)
++static void PortFollower_BurstEmitter(SPLEmitter *emitter)
++{
++    VecFx32 at = emitter->position; // (the resource's offset from the ball)
++
++    emitter->position.x = sBurstPos.x + FX_Mul(at.x, BURST_SCALE);
++    emitter->position.y = sBurstPos.y + FX_Mul(at.y, BURST_SCALE);
++    emitter->position.z = sBurstPos.z + FX_Mul(at.z, BURST_SCALE);
++    emitter->radius = FX_Mul(emitter->radius, BURST_SCALE);
++    emitter->length = FX_Mul(emitter->length, BURST_SCALE);
++    emitter->initVelPositionAmplifier = FX_Mul(emitter->initVelPositionAmplifier, BURST_SCALE);
++    emitter->initVelAxisAmplifier = FX_Mul(emitter->initVelAxisAmplifier, BURST_SCALE);
++    emitter->baseScale = FX_Mul(emitter->baseScale, BURST_SCALE);
++}
++
++static void PortFollower_StartBurst(FieldSystem *fieldSystem, MapObject *ball)
++{
++    int kind = (sBallKind >= 1 && sBallKind <= 17 ? sBallKind : 4) - 1;
++    VecFx32 pos;
++    MtxFx44 projection;
++    void *resource;
++    int i;
++    static BOOL sSaid;
++
++    PortFollower_EndBurst();
++
++    if (ball == NULL || HeapExp_FndGetTotalFreeSize(HEAP_ID_FIELD1) < BURST_HEAP + 0x6000) {
++        if (!sSaid) {
++            sSaid = TRUE;
++            NitroPort_Log("[follower] no room for the ball's burst (heap)");
++        }
++        return;
++    }
++
++    resource = ParticleSystem_LoadResourceFromNARC(NARC_INDEX_WAZAEFFECT__EFFECTDATA__BALL_PARTICLE, sBurstMember[kind][0], HEAP_ID_FIELD1);
++
++    if (resource == NULL) {
++        return;
++    }
++
++    // (its textures' size: the SPA header's, at 0x14)
++    if (!PortFollower_VramFree(((const u32 *)resource)[5], 0x200)) {
++        Heap_Free(resource);
++
++        if (!sSaid) {
++            sSaid = TRUE;
++            NitroPort_Log("[follower] no room for the ball's burst (VRAM)");
++        }
++        return;
++    }
++
++    sBurstHeap = Heap_Alloc(HEAP_ID_FIELD1, BURST_HEAP);
++    // (made with a camera of its own, as ParticleSystem_New needs one, then
++    // without it: drawn with the field's, which is the active one again, its
++    // projection as it was: the new camera set its own)
++    projection = *NNS_G3dGlbGetProjectionMtx();
++    sBurst = ParticleSystem_New(PortFollower_BurstTexAlloc, PortFollower_BurstPlttAlloc, sBurstHeap, BURST_HEAP, TRUE, HEAP_ID_FIELD1);
++
++    if (sBurst == NULL) {
++        Heap_Free(resource);
++        PortFollower_EndBurst();
++        Camera_SetAsActive(fieldSystem->camera);
++        NNS_G3dGlbSetProjectionMtx(&projection);
++        return;
++    }
++
++    if (sBurst->camera != NULL) {
++        Camera_Delete(sBurst->camera);
++        sBurst->camera = NULL;
++    }
++
++    Camera_SetAsActive(fieldSystem->camera);
++    NNS_G3dGlbSetProjectionMtx(&projection);
++
++    ParticleSystem_SetResource(sBurst, resource, VRAM_AUTO_RELEASE_TEXTURE_LNK | VRAM_AUTO_RELEASE_PALETTE_LNK, TRUE);
++
++    // (from the ball's middle, in front of the Pokémon coming out)
++    MapObject_GetPosPtr(ball, &pos);
++    pos.y += FX32_ONE * 30;
++    pos.z += FX32_ONE * 16;
++
++    sBurstPos = pos;
++
++    for (i = 0; i < sBurstMember[kind][1]; i++) {
++        ParticleSystem_CreateEmitterWithCallback(sBurst, i, PortFollower_BurstEmitter, NULL);
++    }
++
++    sBurstSteps = 0;
++}
++
++static VecFx32 sBurstMon; // (where the Pokémon was: the burst goes along with it)
++static BOOL sBurstGoesAlong;
++
++// Its emitters and their particles (each keeps where its emitter was as
++// it was made) moved by d.
++static void PortFollower_MoveBurst(const VecFx32 *d)
++{
++    SPLEmitter *emitter;
++    SPLParticle *particle;
++
++    for (emitter = sBurst->manager->activeEmitters.first; emitter != NULL; emitter = emitter->next) {
++        VEC_Add(&emitter->position, d, &emitter->position);
++
++        for (particle = emitter->particles.first; particle != NULL; particle = particle->next) {
++            VEC_Add(&particle->emitterPos, d, &particle->emitterPos);
++        }
++
++        for (particle = emitter->childParticles.first; particle != NULL; particle = particle->next) {
++            VEC_Add(&particle->emitterPos, d, &particle->emitterPos);
++        }
++    }
++
++    VEC_Add(&sBurstPos, d, &sBurstPos);
++}
++
++// (the player walking off as it comes out: the burst with the Pokémon, not
++// left where it opened)
++static void PortFollower_BurstFollows(MapObject *mapObj)
++{
++    VecFx32 pos, d;
++
++    if (sBurst == NULL || mapObj == NULL) {
++        sBurstGoesAlong = FALSE;
++        return;
++    }
++
++    MapObject_GetPosPtr(mapObj, &pos);
++
++    if (!sBurstGoesAlong) {
++        sBurstGoesAlong = TRUE;
++        sBurstMon = pos;
++        return;
++    }
++
++    VEC_Subtract(&pos, &sBurstMon, &d);
++    sBurstMon = pos;
++
++    if (d.x != 0 || d.y != 0 || d.z != 0) {
++        PortFollower_MoveBurst(&d);
++    }
++}
++
++static void PortFollower_UpdateBurst(void)
++{
++    if (sBurst == NULL) {
++        return;
++    }
++
++    ParticleSystem_Update(sBurst);
++
++    if (ParticleSystem_GetActiveEmitterCount(sBurst) == 0 || ++sBurstSteps > BURST_MAX_STEPS) {
++        PortFollower_EndBurst();
++    }
++}
++
++void PortFollower_Draw(void)
++{
++    if (sBurst != NULL) {
++        ParticleSystem_Draw(sBurst);
++    }
++}
++
++void PortFollower_FieldEnds(void)
++{
++    PortFollower_EndBurst();
++}
++
++static void PortFollower_UpdateEmote(FieldSystem *fieldSystem);
++
++// (the ball the party's first Pokémon was caught in: its ball's, as it
++// comes out and goes back in)
++static void PortFollower_TakeBallKind(FieldSystem *fieldSystem)
++{
++    Party *party = SaveData_GetParty(fieldSystem->saveData);
++
++    if (Party_GetCurrentCount(party) > 0) {
++        sBallKind = Pokemon_GetValue(Party_GetPokemonBySlotIndex(party, 0), MON_DATA_POKEBALL, NULL);
++    }
++}
++
++void PortFollower_Update(FieldSystem *fieldSystem)
++{
++    static int sWait, sPlayerX, sPlayerZ, sNoRoom;
++    static MapObject *sLast;
++    MapObject *mapObj, *player;
++    int graphicsID = 0, x, z, dx, dz;
++    BOOL big = FALSE, scripted;
++
++    if (fieldSystem == NULL || fieldSystem->mapObjMan == NULL || fieldSystem->playerAvatar == NULL
++        || fieldSystem->location == NULL || fieldSystem->saveData == NULL) {
++        return;
++    }
++
++    player = PlayerAvatar_GetMapObject(fieldSystem->playerAvatar);
++    mapObj = PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_LOCAL_ID);
++
++    if (player == NULL) {
++        return;
++    }
++
++    PortFollower_UpdateBall(fieldSystem, sDropIn);
++    PortFollower_UpdateBurst();
++    PortFollower_UpdateEmote(fieldSystem);
++
++    if (mapObj != sLast) {
++        // (another one, or none: made anew, or the field's objects made again)
++        sIn = 0;
++        sOut = mapObj != NULL ? -1 : 0;
++        sLast = mapObj;
++        sShadowForced = FALSE;
++
++        if (mapObj != NULL) {
++            sShadowMade = TRUE; // (made again with the field's objects: the movement code's)
++            PortFollower_TakeBallKind(fieldSystem);
++        }
++    }
++
++    // (the options' page in the lower menu's panel: a task, but the field
++    // going on behind it, the player still: it comes and goes as there set)
++    scripted = FieldSystem_IsRunningTask(fieldSystem) && !OptionsPanel_IsOpen();
++
++    if (PortOption_On(PORT_OPT_FOLLOWER)) {
++        graphicsID = PortFollower_PartyGfx(fieldSystem, &big);
++
++        if (graphicsID != 0 && !PortFollower_MayBeOut(fieldSystem, big)) {
++            graphicsID = 0;
++        }
++    }
++
++    x = PlayerAvatar_GetXPos(fieldSystem->playerAvatar);
++    z = PlayerAvatar_GetZPos(fieldSystem->playerAvatar);
++
++    if (mapObj != NULL && sIn > 0) {
++        // Going in: smaller each frame, then gone.
++        sIn--;
++        PortFollower_SetScale(mapObj, sIn);
++
++        if (sIn == 0) {
++            PortFollower_Remove(fieldSystem, mapObj);
++            PortFollower_SwapBall(fieldSystem, FALSE); // (in: closed)
++            mapObj = sLast = NULL;
++            sWait = 8;
++        }
++    } else if (mapObj != NULL) {
++        const char *why = NULL;
++
++        dx = MapObject_GetX(mapObj) - x;
++        dz = MapObject_GetZ(mapObj) - z;
++
++        // Back in its ball: not to be out, another Pokémon first, the game
++        // moving the player (a script's walk: it waits in its ball till the
++        // player is theirs again), someone walking onto its tile in a
++        // script, a ledge, or left behind (a warp within the map).
++        if (graphicsID != MapObject_GetGraphicsID(mapObj)) {
++            why = graphicsID ? "another Pokémon" : "not to be out";
++        } else if (scripted && (x != sPlayerX || z != sPlayerZ)) {
++            why = "the game moves the player";
++        } else if (scripted && sOut >= 0 && PortFollower_SomeoneComes(fieldSystem, mapObj)) {
++            why = "someone comes to its spot";
++        } else if (PortFollower_PlayerJumping(fieldSystem, player)) {
++            why = "a ledge";
++        } else if (!scripted && !MapObject_IsMoving(mapObj) && !PortFollower_PlayerStepping(fieldSystem) && dx * dx + dz * dz > 1) {
++            why = "left behind";
++        }
++
++        if (why != NULL) {
++            NitroPort_Log("[follower] in its ball (%s)", why);
++
++            if (sOut < 0 || MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE)) {
++                PortFollower_Remove(fieldSystem, mapObj); // (never seen: its ball, if it was there, goes)
++                PortFollower_BallAway();
++                mapObj = sLast = NULL;
++                sWait = 8;
++            } else {
++                MapObject_SetPauseMovementOn(mapObj); // (it stays where it is)
++                sIn = sOut > 0 && sOut < POP_FRAMES ? sOut : POP_FRAMES;
++                sOut = POP_FRAMES;
++                sDropIn = FALSE;
++                PortFollower_ShowBall(fieldSystem, mapObj, sIn + BALL_AFTER + BALL_POP, TRUE); // (open as it goes in)
++                PortFollower_Sound(SEQ_SE_DP_SLOT02_sseq_1); // (SEQ_SE_DP_SUIKOMU: the battle's recall)
++            }
++        } else if (sOut == -3) {
++            // Coming out: its ball there, then open.
++            if (sOpenIn > 0) {
++                sOpenIn--;
++            } else {
++                MapObject_SetHidden(mapObj, FALSE);
++                sOut = 0;
++                PortFollower_SwapBall(fieldSystem, TRUE); // (it opens)
++                PortFollower_StartBurst(fieldSystem, PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_BALL_LOCAL_ID));
++                sBurstGoesAlong = FALSE; // (from where it is now)
++                PortFollower_Sound(SEQ_SE_DP_SLOT01_sseq_1); // (SEQ_SE_DP_BOWA2: the battle's send-out)
++            }
++        } else if (sOut < 0) {
++            // Coming out: once its picture is made (and, on the player's
++            // tile, once the player has stepped off it), its ball first,
++            // then it from nothing.
++            BOOL waits = MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE) && dx == 0 && dz == 0 && sOut == -2;
++
++            if (!waits && PortFollower_SetScale(mapObj, 0)) {
++                sDropIn = TRUE;
++                sOut = -3;
++                sOpenIn = PortFollower_ShowBall(fieldSystem, mapObj, BALL_LEAD + 2 * BALL_POP, FALSE) ? BALL_LEAD : 0;
++            }
++        } else if (sOut < POP_FRAMES) {
++            sOut++;
++            PortFollower_SetScale(mapObj, sOut);
++
++            if (sOut == POP_FRAMES) {
++                PortFollower_ShowShadow(mapObj); // (its shadow once it's its size)
++            }
++        } else if (sub_02062A14(mapObj) == 0 && !MapObject_IsMoving(mapObj)) {
++            // Out, standing: stepping in place, as HeartGold's do (the walk
++            // at a slow walk's pace; walking, the follow code's own).
++            sub_02062A0C(mapObj, 1);
++        }
++
++        // (no shadow under it while it's smaller than itself)
++        if (mapObj != NULL && (sIn > 0 || sOut < POP_FRAMES)) {
++            PortFollower_HideShadow(mapObj);
++        }
++    }
++
++    PortFollower_BurstFollows(mapObj);
++
++    sPlayerX = x;
++    sPlayerZ = z;
++
++    // Out (not during a script's or a menu's task: when it ends).
++    if (mapObj == NULL && graphicsID != 0 && !scripted && !PortFollower_PlayerStepping(fieldSystem)) {
++        if (sWait > 0) {
++            sWait--;
++        } else if (MapObjectMan_PortFreeSlots(fieldSystem->mapObjMan) > 1
++            && (!PortFollower_IsGfx(graphicsID) || Bundle_Ready()) && MapObjectGfx_PortHasRoom(fieldSystem->mapObjMan, graphicsID)) {
++            BOOL onPlayer;
++
++            sOut = -1; // (its picture, made as it's added, starts from nothing)
++            PortFollower_TakeBallKind(fieldSystem);
++            mapObj = sLast = PortFollower_Add(fieldSystem, graphicsID);
++            onPlayer = mapObj != NULL && MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE);
++            NitroPort_Log("[follower] out: graphics %d at %d,%d%s", graphicsID, mapObj ? MapObject_GetX(mapObj) : -1,
++                mapObj ? MapObject_GetZ(mapObj) : -1, onPlayer ? " (on the player's tile till they step off it)" : "");
++
++            if (mapObj != NULL) {
++                MapObject_SetHidden(mapObj, TRUE); // (shown as it comes out of its ball)
++                PortFollower_SetScale(mapObj, 0);  // (its picture made with it, before it was the follower)
++                sOut = onPlayer ? -2 : -1;
++                sIn = 0;
++            }
++
++            sNoRoom = 0;
++        } else {
++            sWait = 4;
++
++            if (++sNoRoom == 15) { // (about 2 seconds: said once)
++                NitroPort_Log("[follower] waiting: %s", MapObjectMan_PortFreeSlots(fieldSystem->mapObjMan) <= 1 ? "no map object free"
++                    : PortFollower_IsGfx(graphicsID) && !Bundle_Ready() ? "no sprites" : "no room for its picture yet");
++            }
++        }
++    }
++}
++
++// ----- Talking to it (A facing it), as HeartGold and SoulSilver's: it
++// turns to the player, its cry, a bubble over it (a heart, a note, "...",
++// "!", "?": builder/ball_sprites.py's drawings, in the ball file) and, when
++// it's happy, a hop; then a word on how it feels: unwell, the weather, the
++// place, the time of day, or its friendship. Now and then (its friendship
++// 100 or more, 1 in 5, 3 a day) it has found an item for the player. The
++// port's text (the game has none): English, as the options page.
++
++enum {
++    EMOTE_HEART,
++    EMOTE_NOTE,
++    EMOTE_DOTS,
++    EMOTE_EXCLAIM,
++    EMOTE_QUESTION,
++    EMOTE_COUNT
++};
++
++#define BALL_SPRITES        BALL_KINDS // (the ball file's balls, before its bubbles)
++#define EMOTE_POP           2
++#define FOUND_A_DAY         3
++
++static int sEmoteLeft, sEmoteTotal;
++
++static void PortFollower_ShowEmote(FieldSystem *fieldSystem, MapObject *at, int emote, int steps, BOOL big)
++{
++    MapObjectManager *mapObjMan = fieldSystem->mapObjMan;
++    MapObject *bubble = PortFollower_FindID(mapObjMan, PORT_FOLLOWER_EMOTE_LOCAL_ID);
++    VecFx32 front = { 0, 0, FX32_ONE * 6 };
++    VecFx32 above = { 0, FX32_ONE * (big ? 76 : 44), 0 }; // (30 and 60 sat on its head: 2026-10-29)
++    int graphicsID = PORT_FOLLOWER_BALL_GFX_FIRST + BALL_SPRITES + emote;
++
++    if (bubble != NULL) {
++        PortFollower_Remove(fieldSystem, bubble);
++    }
++
++    sEmoteLeft = 0;
++
++    if (!Balls_Ready() || BALL_SPRITES + emote >= (int)sBallsCount || MapObjectMan_PortFreeSlots(mapObjMan) <= 1
++        || !MapObjectGfx_PortHasRoom(mapObjMan, graphicsID)) {
++        return;
++    }
++
++    bubble = MapObjectMan_AddMapObject(mapObjMan, MapObject_GetX(at), MapObject_GetZ(at), DIR_SOUTH, graphicsID,
++        MOVEMENT_TYPE_NONE, fieldSystem->location->mapHeaderID);
++
++    if (bubble == NULL) {
++        return;
++    }
++
++    MapObject_SetLocalID(bubble, PORT_FOLLOWER_EMOTE_LOCAL_ID);
++    MapObject_SetStatusFlagOn(bubble, MAP_OBJ_STATUS_PORT_FOLLOWER | MAP_OBJ_STATUS_PERSISTENT
++            | MAP_OBJ_STATUS_SHOW_SHADOW | MAP_OBJ_STATUS_HIDE_SHADOW);
++    sub_02062D80(bubble, FALSE);
++
++    if (MapObject_CheckStatus(at, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE)) {
++        MapObject_SetStatusFlagOn(bubble, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE);
++    }
++
++    MapObject_SetSpritePosOffset(bubble, &front);
++    MapObject_SetSpriteJumpOffset(bubble, &above);
++    PortFollower_ScaleOf(bubble, 0, EMOTE_POP);
++    sEmoteLeft = sEmoteTotal = steps;
++}
++
++// (shortened to go away now)
++static void PortFollower_EmoteAway(void)
++{
++    if (sEmoteLeft > EMOTE_POP) {
++        sEmoteLeft = EMOTE_POP;
++        sEmoteTotal = EMOTE_POP * 2;
++    }
++}
++
++static void PortFollower_UpdateEmote(FieldSystem *fieldSystem)
++{
++    MapObject *bubble = PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_EMOTE_LOCAL_ID);
++    int done, step;
++
++    if (bubble == NULL) {
++        sEmoteLeft = 0;
++        return;
++    }
++
++    if (sEmoteLeft <= 0) {
++        PortFollower_Remove(fieldSystem, bubble);
++        return;
++    }
++
++    MapObject_SetStatusFlagOn(bubble, MAP_OBJ_STATUS_HIDE_SHADOW);
++    done = sEmoteTotal - sEmoteLeft;
++    step = done < sEmoteLeft ? done : sEmoteLeft;
++    PortFollower_ScaleOf(bubble, step < EMOTE_POP ? step : EMOTE_POP, EMOTE_POP);
++    sEmoteLeft--;
++}
++
++static void PortFollower_AppendLetters(String *string, const char *letters)
++{
++    for (; *letters; letters++) {
++        int c = (unsigned char)*letters;
++
++        if (c >= 'A' && c <= 'Z') {
++            String_AppendChar(string, 0x12B + (c - 'A'));
++        } else if (c >= 'a' && c <= 'z') {
++            String_AppendChar(string, 0x145 + (c - 'a'));
++        } else if (c == ' ') {
++            String_AppendChar(string, 0x1DE);
++        } else if (c == '.') {
++            String_AppendChar(string, 0x1AE);
++        } else if (c == '!') {
++            String_AppendChar(string, 0x1AB);
++        } else if (c == '?') {
++            String_AppendChar(string, 0x1AC);
++        } else if (c == '\'') {
++            String_AppendChar(string, 0x1B3); // (’, as the game's English texts)
++        } else if (c == '\n') {
++            String_AppendChar(string, 0xE000);
++        }
++    }
++}
++
++// What it says: its emote, whether it hops, the words after its name.
++typedef struct PortFollowerLine {
++    u8 emote;
++    u8 hop;
++    const char *words;
++} PortFollowerLine;
++
++static const PortFollowerLine sUnwell = { EMOTE_DOTS, FALSE, " doesn't seem\nto be feeling well." };
++static const PortFollowerLine sFound = { EMOTE_EXCLAIM, TRUE, " seems to have\nfound something!" };
++static const PortFollowerLine sFriendship[] = {
++    { EMOTE_HEART, TRUE, " is overjoyed\nto be walking with you!" },
++    { EMOTE_NOTE, TRUE, " looks very happy." },
++    { EMOTE_EXCLAIM, FALSE, " is happy\nto see you." },
++    { EMOTE_DOTS, FALSE, " is keeping\nan eye on you." },
++};
++static const PortFollowerLine sRainLover = { EMOTE_NOTE, TRUE, " is splashing\nhappily in the rain!" };
++static const PortFollowerLine sRain = { EMOTE_DOTS, FALSE, " is shaking off\nthe rain." };
++static const PortFollowerLine sSnowLover = { EMOTE_NOTE, TRUE, " is happily\nplaying in the snow!" };
++static const PortFollowerLine sSnow = { EMOTE_DOTS, FALSE, " looks a little cold." };
++static const PortFollowerLine sDust = { EMOTE_DOTS, FALSE, " is squinting\nthrough the dust." };
++static const PortFollowerLine sFog = { EMOTE_QUESTION, FALSE, " is peering\nthrough the fog." };
++static const PortFollowerLine sCave = { EMOTE_QUESTION, FALSE, " is listening\nto the echoes." };
++static const PortFollowerLine sCenter = { EMOTE_NOTE, FALSE, " looks relaxed\nin here." };
++static const PortFollowerLine sNightOwl = { EMOTE_EXCLAIM, TRUE, " seems livelier\nat night!" };
++static const PortFollowerLine sSleepy = { EMOTE_DOTS, FALSE, " looks sleepy." };
++static const PortFollowerLine sMorning = { EMOTE_EXCLAIM, TRUE, " seems full of\nenergy this morning!" };
++static const PortFollowerLine sOutdoors = { EMOTE_NOTE, FALSE, " is enjoying\nthe fresh air." };
++
++static BOOL PortFollower_HasType(Pokemon *mon, int type)
++{
++    return Pokemon_GetValue(mon, MON_DATA_TYPE_1, NULL) == type || Pokemon_GetValue(mon, MON_DATA_TYPE_2, NULL) == type;
++}
++
++// (where it is and when: one line of those that fit, picked at random, or NULL)
++static const PortFollowerLine *PortFollower_ContextLine(FieldSystem *fieldSystem, Pokemon *mon)
++{
++    const PortFollowerLine *fit[4];
++    int n = 0, here = fieldSystem->location->mapHeaderID;
++    int weather = FieldSystem_GetWeather(fieldSystem, here);
++    enum TimeOfDay time = GetTimeOfDay();
++
++    switch (weather) {
++    case OVERWORLD_WEATHER_RAINING:
++    case OVERWORLD_WEATHER_HEAVY_RAIN:
++    case OVERWORLD_WEATHER_THUNDERSTORM:
++        fit[n++] = PortFollower_HasType(mon, TYPE_WATER) ? &sRainLover : &sRain;
++        break;
++    case OVERWORLD_WEATHER_SNOWING:
++    case OVERWORLD_WEATHER_HEAVY_SNOW:
++    case OVERWORLD_WEATHER_BLIZZARD:
++    case OVERWORLD_WEATHER_HAILING:
++        fit[n++] = PortFollower_HasType(mon, TYPE_ICE) ? &sSnowLover : &sSnow;
++        break;
++    case OVERWORLD_WEATHER_SANDSTORM:
++    case OVERWORLD_WEATHER_SLOW_ASHFALL:
++        fit[n++] = &sDust;
++        break;
++    case OVERWORLD_WEATHER_FOG:
++    case OVERWORLD_WEATHER_DEEP_FOG:
++        fit[n++] = &sFog;
++        break;
++    }
++
++    if (MapHeader_IsCave(here)) {
++        fit[n++] = &sCave;
++    } else if (MapHeader_IsPokemonCenter(here)) {
++        fit[n++] = &sCenter;
++    } else if (MapHeader_IsOutdoors(here) && weather == OVERWORLD_WEATHER_CLEAR) {
++        fit[n++] = &sOutdoors;
++    }
++
++    if (time == TIMEOFDAY_NIGHT || time == TIMEOFDAY_LATE_NIGHT) {
++        fit[n++] = PortFollower_HasType(mon, TYPE_GHOST) || PortFollower_HasType(mon, TYPE_DARK) ? &sNightOwl : &sSleepy;
++    } else if (time == TIMEOFDAY_MORNING) {
++        fit[n++] = &sMorning;
++    }
++
++    return n > 0 ? fit[LCRNG_Next() % n] : NULL;
++}
++
++// What it may find: most often the first row, now and then the second, rarely the third.
++static const u16 sFoundItems[3][6] = {
++    { ITEM_POTION, ITEM_ANTIDOTE, ITEM_PARLYZ_HEAL, ITEM_POKE_BALL, ITEM_ORAN_BERRY, ITEM_PECHA_BERRY },
++    { ITEM_SUPER_POTION, ITEM_GREAT_BALL, ITEM_ETHER, ITEM_LEPPA_BERRY, ITEM_TINYMUSHROOM, ITEM_HONEY },
++    { ITEM_ULTRA_BALL, ITEM_REVIVE, ITEM_RARE_CANDY, ITEM_NUGGET, ITEM_STARDUST, ITEM_SUPER_POTION },
++};
++
++// (an item for the player, or ITEM_NONE: its friendship 100 or more, 1 in
++// 5 talks, FOUND_A_DAY a day, room in the bag)
++static u16 PortFollower_FoundItem(FieldSystem *fieldSystem, Pokemon *mon)
++{
++    static int sDay = -1, sToday;
++    RTCDate date;
++    int day, roll;
++    u16 item;
++
++    GetCurrentDate(&date);
++    day = DayNumberForDate(&date) + date.year * 400;
++
++    if (day != sDay) {
++        sDay = day;
++        sToday = 0;
++    }
++
++    if (sToday >= FOUND_A_DAY || Pokemon_GetValue(mon, MON_DATA_FRIENDSHIP, NULL) < 100 || LCRNG_Next() % 5 != 0) {
++        return ITEM_NONE;
++    }
++
++    roll = LCRNG_Next() % 100;
++    item = sFoundItems[roll < 70 ? 0 : roll < 95 ? 1 : 2][LCRNG_Next() % 6];
++
++    if (!Bag_CanFitItem(SaveData_GetBag(fieldSystem->saveData), item, 1, HEAP_ID_FIELD2)) {
++        return ITEM_NONE;
++    }
++
++    sToday++;
++    return item;
++}
++
++typedef struct PortFollowerTalk {
++    int state;
++    int wait;
++    u8 printerID;
++    u16 item;
++    Window window;
++    String *string;
++    MapObject *mapObj;
++} PortFollowerTalk;
++
++static void PortFollower_TalkPrint(FieldSystem *fieldSystem, PortFollowerTalk *talk)
++{
++    talk->printerID = FieldMessage_Print(&talk->window, talk->string, SaveData_GetOptions(fieldSystem->saveData), TRUE);
++}
++
++static BOOL PortFollower_TalkTask(FieldTask *task)
++{
++    FieldSystem *fieldSystem = FieldTask_GetFieldSystem(task);
++    PortFollowerTalk *talk = FieldTask_GetEnv(task);
++    BOOL out = PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_LOCAL_ID) == talk->mapObj;
++
++    switch (talk->state) {
++    case 0:
++        // (its hop and its bubble first)
++        talk->wait++;
++
++        if (talk->wait >= 20 && (!out || sub_020656AC(talk->mapObj))) {
++            if (out) {
++                MapObject_SetPauseMovementOn(talk->mapObj);
++            }
++
++            FieldMessage_AddWindow(fieldSystem->bgConfig, &talk->window, BG_LAYER_MAIN_3);
++            FieldMessage_DrawWindow(&talk->window, SaveData_GetOptions(fieldSystem->saveData));
++            PortFollower_TalkPrint(fieldSystem, talk);
++            talk->state = 1;
++        }
++        break;
++    case 1:
++        if (FieldMessage_FinishedPrinting(talk->printerID) == TRUE) {
++            talk->state = 2;
++        }
++        break;
++    case 2:
++        if (gSystem.pressedKeys & (PAD_BUTTON_A | PAD_BUTTON_B)) {
++            if (talk->item != ITEM_NONE) {
++                // "You found <item>!", with the game's item fanfare
++                String *name = String_Init(32, HEAP_ID_FIELD2);
++
++                Bag_TryAddItem(SaveData_GetBag(fieldSystem->saveData), talk->item, 1, HEAP_ID_FIELD2);
++                String_Clear(talk->string);
++                PortFollower_AppendLetters(talk->string, "You found\n");
++                Item_LoadName(name, talk->item, HEAP_ID_FIELD2);
++                String_Concat(talk->string, name);
++                PortFollower_AppendLetters(talk->string, "!");
++                String_Free(name);
++                talk->item = ITEM_NONE;
++                FieldMessage_ClearWindow(&talk->window);
++                PortFollower_TalkPrint(fieldSystem, talk);
++                Sound_PlayFanfare(SEQ_FANFA4_sseq);
++                talk->state = 3;
++                break;
++            }
++
++            talk->state = 4;
++        }
++        break;
++    case 3:
++        if (FieldMessage_FinishedPrinting(talk->printerID) == TRUE && Sound_IsBGMPausedByFanfare() == FALSE) {
++            talk->state = 2;
++        }
++        break;
++    case 4:
++        Window_EraseMessageBox(&talk->window, FALSE);
++        Window_Remove(&talk->window);
++        String_Free(talk->string);
++        PortFollower_EmoteAway();
++
++        if (out) {
++            MapObject_SetPauseMovementOff(talk->mapObj);
++        }
++
++        Heap_Free(talk);
++        return TRUE;
++    }
++
++    return FALSE;
++}
++
++BOOL PortFollower_TryTalk(FieldSystem *fieldSystem)
++{
++    MapObject *mapObj = PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_LOCAL_ID);
++    int dir = PlayerAvatar_GetFacingDir(fieldSystem->playerAvatar);
++    int x = PlayerAvatar_GetXPos(fieldSystem->playerAvatar) + MapObject_GetDxFromDir(dir);
++    int z = PlayerAvatar_GetZPos(fieldSystem->playerAvatar) + MapObject_GetDzFromDir(dir);
++    int back = dir == DIR_NORTH ? DIR_SOUTH : dir == DIR_SOUTH ? DIR_NORTH : dir == DIR_WEST ? DIR_EAST : DIR_WEST;
++    Party *party = SaveData_GetParty(fieldSystem->saveData);
++    const PortFollowerLine *line;
++    PortFollowerTalk *talk;
++    Pokemon *mon;
++    String *name;
++    int friendship;
++
++    // (out and its size, where the player faces)
++    if (mapObj == NULL || sOut < POP_FRAMES || sIn > 0 || MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE)
++        || MapObject_GetX(mapObj) != x || MapObject_GetZ(mapObj) != z || Party_GetCurrentCount(party) == 0) {
++        return FALSE;
++    }
++
++    mon = Party_GetPokemonBySlotIndex(party, 0);
++    friendship = Pokemon_GetValue(mon, MON_DATA_FRIENDSHIP, NULL);
++
++    talk = Heap_Alloc(HEAP_ID_FIELD2, sizeof(PortFollowerTalk));
++    memset(talk, 0, sizeof(PortFollowerTalk));
++    talk->mapObj = mapObj;
++    talk->item = ITEM_NONE;
++
++    if (Pokemon_GetValue(mon, MON_DATA_STATUS, NULL) != 0) {
++        line = &sUnwell;
++    } else if ((talk->item = PortFollower_FoundItem(fieldSystem, mon)) != ITEM_NONE) {
++        line = &sFound;
++    } else {
++        line = LCRNG_Next() % 2 ? PortFollower_ContextLine(fieldSystem, mon) : NULL;
++
++        if (line == NULL) {
++            line = &sFriendship[friendship >= 220 ? 0 : friendship >= 150 ? 1 : friendship >= 70 ? 2 : 3];
++        }
++    }
++
++    talk->string = String_Init(160, HEAP_ID_FIELD2);
++    name = String_Init(32, HEAP_ID_FIELD2);
++    Pokemon_GetValue(mon, MON_DATA_NICKNAME_STRING, name);
++    String_Concat(talk->string, name);
++    String_Free(name);
++    PortFollower_AppendLetters(talk->string, line->words);
++
++    // (it turns to the player, its cry, its bubble, a hop when it's happy)
++    MapObject_Face(mapObj, back);
++    Pokemon_PlayCry(mon);
++    PortFollower_ShowEmote(fieldSystem, mapObj, line->emote, 400, PortFollower_IsBig(MapObject_GetGraphicsID(mapObj)));
++
++    if (line->hop) {
++        MapObject_SetPauseMovementOff(mapObj);
++        LocalMapObj_SetAnimationCode(mapObj, MOVEMENT_ACTION_JUMP_ON_SPOT_FAST_NORTH + back);
++    } else {
++        MapObject_SetPauseMovementOn(mapObj);
++    }
++
++    FieldSystem_CreateTask(fieldSystem, PortFollower_TalkTask, talk);
++    return TRUE;
++}
+diff --git a/src/sound.c b/src/sound.c
+index cb0e092b..a8c8d7d1 100644
+--- a/src/sound.c
++++ b/src/sound.c
+@@ -159,6 +159,13 @@ int Sound_LoadSoundEffectsForScene(u8 scene)
+     case SOUND_SCENE_FIELD:
+     case 22:
+         result = SoundSystem_LoadSoundGroup(GROUP_SE_FIELD);
++#ifdef SDK_PORT_3DS
++        // The follower Pokémon's Poké Ball (port_follower.c): the battle's
++        // send-out and recall sounds, in the battle's bank (sound_system.h:
++        // the heap's room for it).
++        SoundSystem_LoadSequenceEx(SEQ_SE_DP_SLOT01_sseq_1, NNS_SND_ARC_LOAD_SEQ | NNS_SND_ARC_LOAD_BANK | NNS_SND_ARC_LOAD_WAVE);
++        SoundSystem_LoadSequenceEx(SEQ_SE_DP_SLOT02_sseq_1, NNS_SND_ARC_LOAD_SEQ); // (the same bank)
++#endif
+         break;
+     case SOUND_SCENE_BATTLE:
+         result = SoundSystem_LoadSoundGroup(GROUP_SE_BATTLE);
+diff --git a/src/unk_020EDBAC.c b/src/unk_020EDBAC.c
+index 1ddd7482..685b53de 100644
+--- a/src/unk_020EDBAC.c
++++ b/src/unk_020EDBAC.c
+@@ -624,7 +624,10 @@ const UnkStruct_020EDF0C *const Unk_020EE3A8[] = {
+     &Unk_020EE088,
+     &Unk_020EE09C,
+     &Unk_020EE0D8,
+-    &Unk_020EE2B8
++    &Unk_020EE2B8,
++#ifdef SDK_PORT_3DS
++    &Unk_020EDF48, // PORT_MOVEMENT_TYPE_FOLLOW_MON: the follower Pokémon (port_follower.h), as MOVEMENT_TYPE_FOLLOW_PLAYER
++#endif
+ };
+ 
+ BOOL (*const *const gMovementActionFuncs[MAX_MOVEMENT_ACTION])(MapObject *) = {
+-- 
+2.43.0
+

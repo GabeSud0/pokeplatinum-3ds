@@ -27,6 +27,7 @@ enum {
     NITRO_OPT_FPS60_HELD,        /* (not on the page) 1: 60 FPS turned off by SPEED, on again at 1x */
     NITRO_OPT_ITEM2,             /* (not on the page) the lower menu's second square's item (0 none) */
     NITRO_OPT_PIXEL_FIELD,       /* 0 off, 1 on: the field at the DS's pixel size (NitroPort_SetPixelField) */
+    NITRO_OPT_FOLLOWER,          /* 0 off, 1 on: the party's first Pokémon walks behind the player (the game's port_follower.c) */
     NITRO_OPT_COUNT
 };
 
