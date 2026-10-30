@@ -592,7 +592,12 @@ stretched:
     the wider screen too (`NitroPort_SetFieldCells` while it plays: in the
     field the cells beside the DS's screen are otherwise left out, as the
     menus park sprites there; each streak shown left of the screen past
-    the right band, as the DS's 9-bit sprite x wraps);
+    the right band, as the DS's 9-bit sprite x wraps); its band of rings
+    goes on as drawn for the wider screen (2026-10-30: three more rings
+    each side, fading in two darker shades), made from the game's own band
+    as the cut-in starts (its middle ring's shape stamped behind the
+    band's rings; BG3's map made 512 wide, the sides in its second half;
+    `CutIn_PortWideBand`, patch 0058);
   - the gym leaders' battle intro (patch 0058): the leader's picture, its
     art ending at the DS screen's right edge, slides to the wider screen's
     right edge, not the DS's (it looked cut off, the band going on beside
