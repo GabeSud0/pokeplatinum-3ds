@@ -191,7 +191,20 @@ void NitroPort_Gx3dExpandTriangle(const float sx[3],const float sy[3],float dx[3
  * texel covers whole pixels and stays sharp, smooth 3D or not. Only quads
  * near their texels' size (a sprite scaled on purpose, a Pokémon growing
  * out of its ball, is left as it is), not mirrored differently each way.
- * sx/sy: the triangle's corners in the DS's units, changed if so. */
+ * Not in a scene with an orthographic camera (the interiors': the Pokémon
+ * Centers, the shops, Eterna's gym): there every polygon is at one depth
+ * and a texel a pixel, the room's floor, fences and paths as much as its
+ * people, and each laid out on its own nearest pixel they came apart
+ * (Gardenia's gym in pieces, 2026-10-30); its sprites are a texel a pixel
+ * there already, as on the DS. sx/sy: the triangle's corners in the
+ * DS's units, changed if so. */
+static int orthographic(const NitroGx3dScene *scene)
+{
+    /* (w the same wherever a point is: the projection's last column
+     * 0, 0, 0, w; rows as the DS's) */
+    return scene->projection[3]==0 && scene->projection[7]==0 && scene->projection[11]==0 &&
+           scene->projection[15]!=0;
+}
 static int sprite_texel_a_pixel(const NitroGx3dScene *scene,const NitroGx3dTriangle *tri,
                                 float tw,float th,float *sx,float *sy)
 {
@@ -199,7 +212,7 @@ static int sprite_texel_a_pixel(const NitroGx3dScene *scene,const NitroGx3dTrian
     float fx,fy,px[3],py[3],ds1,dt1,ds2,dt2,det,a,b,e,f,x0,y0,ax,ay,ar,anchor_t;
     float sa,sf;
     int k;
-    if(!scene || scene->screen_height!=240u || ((tri->texture_param>>26)&7u)==0u)return 0;
+    if(!scene || scene->screen_height!=240u || ((tri->texture_param>>26)&7u)==0u || orthographic(scene))return 0;
     if(v[0].clip[3]!=v[1].clip[3] || v[0].clip[3]!=v[2].clip[3] || v[0].clip[3]<=0)return 0;
     /* (screen pixels: the view's width over the DS's 256 units, its 240 lines over 192) */
     fx=(float)scene->screen_width/256.0f;

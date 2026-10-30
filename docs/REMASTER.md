@@ -670,7 +670,12 @@ screen's 320 x 192 at 1.25 times, as above.
   pixel corner, its edges not moved out: each texel whole pixels, sharp
   with the smooth 3D or without; the 3D (buildings, signs) as smooth as
   before. One scaled on purpose (a Pokémon growing out of its ball) is
-  left as it is; the 1.25x field too (a texel 1.25 pixels there). Each
+  left as it is; the 1.25x field too (a texel 1.25 pixels there), and
+  scenes with an orthographic camera (the interiors: Pokémon Centers,
+  shops, Eterna's gym), where every polygon is at one depth and a texel a
+  pixel, the room's own floor, fences and paths as much as its people:
+  each laid out on its own nearest pixel, Gardenia's gym came apart
+  (2026-10-30); its sprites are a texel a pixel there already. Each
   is on its own nearest pixel every scene, so one moving on the screen
   steps a whole pixel or none while the ground under it slides smoothly
   (a slight wobble against it). Keeping the fraction instead (sliding with
