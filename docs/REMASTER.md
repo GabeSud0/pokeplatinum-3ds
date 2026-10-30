@@ -582,9 +582,17 @@ stretched:
     0052: the trainer's hand took it off the screen for the 4 frames it
     hangs at the top, and it vanished);
   - the HM cut-in: its band of Poké Balls (BG3, a 256-pixel map) repeats
-    to the screen's edges (a SHOW part) instead of a stripe of its plain
-    lines; the Pokémon waits beyond the wider screen's right edge and
-    slides off past its left one (it sat still in the right side);
+    to the screen's edges (a repeating BG of the field's,
+    `NitroPort_RepeatingBg`, as the weather's; a SHOW part until
+    2026-10-30, but a screen laid out in parts takes the field out of
+    PIXEL PERFECT, and the field zoomed in for the cut-in and back out)
+    instead of a stripe of its plain lines; the Pokémon waits beyond the
+    wider screen's right edge and slides off past its left one (it sat
+    still in the right side);
+  - the gym leaders' battle intro (patch 0058): the leader's picture, its
+    art ending at the DS screen's right edge, slides to the wider screen's
+    right edge, not the DS's (it looked cut off, the band going on beside
+    it); the name stays by the VS;
   - the people the scripts bring on and send off (`scrcmd.c`): the
     scripts put them just past the DS's edge, where they popped up,
     vanished or walked through things in the wider screen's sides. One
@@ -1254,7 +1262,9 @@ screens) the lower screen is the DS's, filling the screen as before.
     overworld sprites' lookups as Pikachu's (Regigigas's for 64 x 64),
     their texture an archive member past the archive's own (`narc.c`).
     Out while the player walks (in its ball on the bike, surfing, during
-    field moves, with Cheryl and the other partners or Amity Square's
+    field moves, while the player hands the party to a Pokémon Center's
+    nurse for healing (the player's picture holding out the Poké Balls),
+    with Cheryl and the other partners or Amity Square's
     Pokémon, in the Underground, the Union Room and maps with features of
     their own; a 64 x 64 one indoors), behind the player or, where that
     tile isn't free (out of a door), on the player's tile hidden till they

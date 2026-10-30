@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 09:30:00 -0700
+Subject: [PATCH] The HM cut-in in PIXEL PERFECT; the leaders' pictures at the
+ wider screen's edge (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The HM cut-in's band (BG3, a 256-pixel map of Poké Balls) goes on to the
+wider screen's edges as a repeating BG of the field's (NitroPort_RepeatingBg,
+as the weather's), not a screen laid out in parts: a laid-out screen takes
+the field out of PIXEL PERFECT's DS pixel size, so the field zoomed in for
+the cut-in and back out after it.
+
+The gym leaders' battle intro: the leader's picture, whose art ends at the
+DS screen's right edge, slides to the wider screen's right edge
+(NitroPort_WideScreenExtra), not the DS's, where it looked cut off with
+the band going on beside it. Its name stays by the VS.
+---
+ src/overlay005/encounter_effect_core.c | 16 ++++++++++++++--
+ src/overlay006/hm_cut_in.c             | 14 +++++++-------
+ 2 files changed, 21 insertions(+), 9 deletions(-)
+
+diff --git a/src/overlay005/encounter_effect_core.c b/src/overlay005/encounter_effect_core.c
+index 9119e8ca..52ba1fc5 100644
+--- a/src/overlay005/encounter_effect_core.c
++++ b/src/overlay005/encounter_effect_core.c
+@@ -2892,6 +2892,18 @@ static String *EncounterEffect_GetGymLeaderName(u32 trainerID, enum HeapID heapI
+     return result;
+ }
+ 
++#ifdef SDK_PORT_3DS
++extern int NitroPort_WideScreenExtra(void);
++
++// The leader's picture ends at the DS screen's right edge (its art cut
++// there): on the wider screen, at the wider screen's right edge, the band
++// going on beside it no more (it looked cropped, 2026-10-30). Its name
++// stays where it was, by the VS.
++#define PORT_LEADER_SHIFT (NitroPort_WideScreenExtra() * FX32_ONE)
++#else
++#define PORT_LEADER_SHIFT 0
++#endif
++
+ static BOOL EncounterEffect_GymLeader(EncounterEffect *encEffect, enum HeapID heapID, const GymLeaderEncounterParam *param)
+ {
+     GymLeaderEncounterEffect *leaderEncEffect = encEffect->param;
+@@ -2996,7 +3008,7 @@ static BOOL EncounterEffect_GymLeader(EncounterEffect *encEffect, enum HeapID he
+ 
+     case 6:
+ 
+-        QuadraticInterpolationTaskFX32_Init(&leaderEncEffect->unk_00, 272 * FX32_ONE, param->endX, -64 * FX32_ONE, 4);
++        QuadraticInterpolationTaskFX32_Init(&leaderEncEffect->unk_00, 272 * FX32_ONE + PORT_LEADER_SHIFT, param->endX + PORT_LEADER_SHIFT, -64 * FX32_ONE, 4);
+         Sprite_SetDrawFlag(leaderEncEffect->mugshotSprite, TRUE);
+         Sprite_SetExplicitPriority(leaderEncEffect->mugshotSprite, 0);
+ 
+@@ -3041,7 +3053,7 @@ static BOOL EncounterEffect_GymLeader(EncounterEffect *encEffect, enum HeapID he
+ 
+             BrightnessController_SetScreenBrightness(-14, GX_BLEND_PLANEMASK_BG0 | GX_BLEND_PLANEMASK_BD, BRIGHTNESS_MAIN_SCREEN);
+ 
+-            Bg_ScheduleScroll(encEffect->fieldSystem->bgConfig, 2, 0, -((leaderEncEffect->unk_00.currentValue >> FX32_SHIFT) + -92));
++            Bg_ScheduleScroll(encEffect->fieldSystem->bgConfig, 2, 0, -(((leaderEncEffect->unk_00.currentValue - PORT_LEADER_SHIFT) >> FX32_SHIFT) + -92));
+             GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG2, 1);
+             Bg_SetPriority(BG_LAYER_MAIN_2, 0);
+             encEffect->state++;
+diff --git a/src/overlay006/hm_cut_in.c b/src/overlay006/hm_cut_in.c
+index c3226fb1..50a23280 100644
+--- a/src/overlay006/hm_cut_in.c
++++ b/src/overlay006/hm_cut_in.c
+@@ -1697,11 +1697,11 @@ static void SysTask_CutIn_FinalizeBirdSpriteTransfer(SysTask *task, void *hmCutI
+ #ifdef SDK_PORT_3DS
+ // The band (BG3, a 256-pixel map of Poké Balls) goes on to the wider
+ // screen's edges, repeating as the DS's map wraps, not the plain lines
+-// beside the balls carried on (a stripe).
+-static const short sCutInWideLayout[][8] = {
+-    WIDE_SHOW(WIDE_BG(3), 0, 192),
+-};
+-
++// beside the balls carried on (a stripe): a repeating BG of the field's
++// (NitroPort_RepeatingBg, as the weather's), not a screen laid out in
++// parts, which took the field out of PIXEL PERFECT's DS pixel size for the
++// cut-in (the field zoomed in and back out, 2026-10-30).
++extern void NitroPort_RepeatingBg(int bg, int on);
+ #endif
+ 
+ static void CutIn_InitSpriteResources(HMCutIn *cutIn)
+@@ -1727,7 +1727,7 @@ static void CutIn_InitSpriteResources(HMCutIn *cutIn)
+     NARC_dtor(narc);
+     cutIn->unk_244 = OverworldAnimManagerList_New(HEAP_ID_FIELD1, 32);
+ #ifdef SDK_PORT_3DS
+-    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sCutInWideLayout);
++    NitroPort_RepeatingBg(3, TRUE);
+ #endif
+     GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG3, 1);
+ }
+@@ -1739,7 +1739,7 @@ static void CutIn_DeleteSprites(HMCutIn *cutIn)
+ 
+     CutIn_ClearTileMapBG3(cutIn->fieldSystem->bgConfig);
+ #ifdef SDK_PORT_3DS
+-    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++    NitroPort_RepeatingBg(3, FALSE);
+ #endif
+     CutIn_DeleteSpriteResources(cutIn);
+ 
+-- 
+2.43.0
+
