@@ -583,6 +583,33 @@ static void test_interpolation_followed(void)
     CHECK(mid && mid->count==20 && mid->triangles[16].v[0].clip[0]==-448+32);
     NitroPort_Gx3dSetInterpolation(0);
 }
+/* A figure new in the scene beside another of its kind already there,
+ * both still (the follower's Poké Ball made again beside the player,
+ * 2026-10-29): the player is paired with himself; the new one with
+ * nothing, where it is, not halfway from the player. */
+static void test_interpolation_one_each(void)
+{
+    const NitroGx3dScene *mid;
+    unsigned matched=0,polygons=0;
+    int i,scene;
+    const uint32_t opaque=(3u<<6)|(31u<<16);
+    reset_geometry();
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    for(scene=0;scene<2;scene++){
+        for(i=0;i<8;i++)small_quad_at(-3600+900*i,-3000,opaque);
+        if(scene==1)small_quad_at(-448,0,opaque);   /* (the new one, before the player) */
+        small_quad_at(0,0,opaque);
+        swap_done();
+    }
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && polygons==10 && matched==9);
+    if(mid && mid->count==20){
+        CHECK(mid->triangles[16].v[0].clip[0]==-448);   /* the new one: where it is */
+        CHECK(mid->triangles[18].v[0].clip[0]==0);      /* the player */
+    }else CHECK(0);
+    NitroPort_Gx3dSetInterpolation(0);
+}
 /* A map's block coming into the view: a new tile at the list's start,
  * all the rest one place on in the order, so the order pairs each tile
  * with its neighbour (Route 205's lawn at a run: stretched stairs and
@@ -1752,6 +1779,7 @@ static void run_all(void)
     test_sprite_texel_a_pixel();
     test_interpolation();
     test_interpolation_followed();
+    test_interpolation_one_each();
     test_interpolation_order_shift();
     test_interpolation_tile_a_scene();
     test_interpolation_swaying();

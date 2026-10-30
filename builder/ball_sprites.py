@@ -5,25 +5,26 @@ as the battles draw it, made from the player's own ROM.
 When the follower comes out of its ball or goes back in (OPTIONS:
 FOLLOWER), the ball it was caught in is seen. The battles' ball sprites
 (battle/graphic/pl_batt_obj.narc: a ball's tiles, palette, cells) are
-turned here into overworld sprites, a closed ball and an open one for each
-of the 17 kinds, at 4/5 of their size (the overworld item ball's), laid
-out as the follower sprites are (Platinum's walking sprites: 16 textures
-of 32 x 32, builder/followers.py's platinum_layout), the ball's bottom at
-the texture's. pack.py and web.py put the file in the
+turned here into overworld sprites, one for each of the 17 kinds, at
+about 3/4 of their size (SCALE: the overworld item ball's), laid out as
+the follower sprites are (Platinum's walking sprites: 16 textures of 32 x
+32, builder/followers.py's platinum_layout), the ball's bottom at the
+texture's: facing north it's open, any other way closed, so the game
+opens and closes it by turning it (one object, one texture: nothing
+loaded or made again as it opens). pack.py and web.py put the file in the
 data pack (file ID PAK_ID) with the follower sprites. Nothing here is game
 data: the pictures come from the ROM as the player builds.
 
 The file (little endian):
 
-    0   'PFBL', u16 version 1, u16 0, u32 sprites N (39), u32 0
+    0   'PFBL', u16 version 2, u16 0, u32 sprites N (22), u32 0
     16  N x {u32 offset, u32 size}
-        the sprites, each at a 4-byte boundary: ball k (the game's ball
-        numbers less one: 0 the Master Ball, 3 the Poké Ball ... 16 the
-        Park Ball) closed at 2k, open at 2k + 1; then the emote bubbles
-        (EMOTES, in that order)
+        the sprites, each at a 4-byte boundary: ball k at k (the game's
+        ball numbers less one: 0 the Master Ball, 3 the Poké Ball ... 16
+        the Park Ball); then the emote bubbles (EMOTES, in that order)
 
 The emote bubbles the follower shows when it's talked to (a heart, a
-note, "...", "!", "?") are this file's own drawings (EMOTE_ART), not the
+note, "...", "!", "?") are this file's own drawings (_BUBBLE, _SYMBOLS), not the
 game's: plain symbols in a speech bubble, 16 x 16 at the texture's bottom
 middle.
 """
@@ -38,15 +39,16 @@ except ImportError:
 
 PAK_ID = 0x10000001
 MAGIC = b"PFBL"
-VERSION = 1
+VERSION = 2
 NARC_PATH = "battle/graphic/pl_batt_obj.narc"
 SIZE = 32
 ORIGIN = (16, 24)            # the cells' (0, 0) in the texture: the ball's bottom at its bottom
 CLOSED_CELL, OPEN_CELL = 0, 9
 # The battles' balls are bigger than the overworld's item ball (14 pixels
-# across to its 12): drawn at 4/5 (nearest texel, from the bottom middle),
-# so they stay a texel a pixel and sharp.
-SCALE = 0.8
+# across to its 12): drawn smaller (nearest texel, from the bottom middle),
+# so they stay a texel a pixel and sharp. (4/5 looked a little big on the
+# 3DS: 2026-10-29.)
+SCALE = 0.74
 
 # The battles' ball throw graphics (src/battle_anim/ov12_02235E94.c,
 # sBallThrowGraphics; res/graphics/battle/sprites.naix): (tiles, palette,
@@ -228,15 +230,20 @@ def shrink(texels: list[int], scale: float = SCALE) -> list[int]:
     return out
 
 
-def nsbtx(texels: list[int], palette: list[int]) -> bytes:
+def nsbtx(texels: list[int], palette: list[int], north: list[int] | None = None) -> bytes:
     """One 16-colour SIZE x SIZE picture as Platinum's walking sprites (16
     textures sharing it), through followers.platinum_layout: made first as
-    HeartGold's followers are (8 textures, two palettes, both this one)."""
+    HeartGold's followers are (8 textures, two palettes, both this one).
+    north: another picture for the north-facing textures (a ball's open
+    one: the ball opens by turning north, the same object and texture)."""
     code = {8: 0, 16: 1, 32: 2, 64: 3}[SIZE]
-    tex_data = bytes(texels[i] | texels[i + 1] << 4 for i in range(0, len(texels), 2))
+    pictures = [texels] + ([north] if north is not None else [])
+    tex_data = b"".join(bytes(t[i] | t[i + 1] << 4 for i in range(0, len(t), 2)) for t in pictures)
     pal = b"".join(struct.pack("<H", c) for c in (palette + [0] * 16)[:16])
     names = sorted(b"tsure_poke.%d" % k for k in [1] + list(range(10, 17)))
-    params = [struct.pack("<II", (3 << 26) | (code << 20) | (code << 23), 0)] * 8
+    second = (SIZE * SIZE // 2) >> 3 if north is not None else 0   # (the north picture's offset, in 8 bytes)
+    # (HeartGold's frames: up, up, down, down, left, left, right, right)
+    params = [struct.pack("<II", (3 << 26) | (code << 20) | (code << 23) | (second if i < 2 else 0), 0) for i in range(8)]
     tex_dict = followers._dictionary(names, params)
     pltt_dict = followers._dictionary([b"tsure_poke0", b"tsure_poke1"], [struct.pack("<HH", 0, 0), struct.pack("<HH", 4, 0)])
     pltt_data = pal + pal
@@ -371,7 +378,7 @@ def make_file(narc: bytes) -> bytes:
     """The data pack's ball file from the ROM's battle graphics archive."""
     sprites = []
     for closed, opened, palette in ball_pictures(narc):
-        sprites += [nsbtx(closed, palette), nsbtx(opened, palette)]
+        sprites.append(nsbtx(closed, palette, north=opened))
     sprites += [nsbtx(emote_picture(name), EMOTE_PALETTE) for name in EMOTES]
     head = struct.pack("<4sHHII", MAGIC, VERSION, 0, len(sprites), 0)
     offset = len(head) + 8 * len(sprites)

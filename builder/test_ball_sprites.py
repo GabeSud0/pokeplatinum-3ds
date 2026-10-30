@@ -77,7 +77,7 @@ class BallSpritesTest(unittest.TestCase):
         self.assertEqual(data[:4], b"PFBL")
         self.assertEqual(len(data) % 4, 0)
         sprites = ball_sprites.read_file(data)
-        self.assertEqual(len(sprites), 2 * len(ball_sprites.BALLS) + len(ball_sprites.EMOTES))
+        self.assertEqual(len(sprites), len(ball_sprites.BALLS) + len(ball_sprites.EMOTES))
         for s in sprites:
             self.assertEqual(followers.texture_size(s, 16), (32, 32))
 
@@ -103,11 +103,25 @@ class BallSpritesTest(unittest.TestCase):
         block = [0] * 1024
         for x in range(11, 21):
             block[31 * 32 + x] = 5
-        small = ball_sprites.shrink(block)
+        small = ball_sprites.shrink(block, 0.8)
         row = [small[31 * 32 + x] for x in range(32)]
         self.assertEqual(sum(1 for c in row if c), 8)
         self.assertEqual(row[ball_sprites.ORIGIN[0]], 5)
         self.assertEqual(sum(1 for c in small if c), 8)
+
+    def test_open_facing_north(self):
+        """A ball's 16 textures: the 4 facing north (Platinum's NAME.1-4)
+        show its open picture, the rest its closed one."""
+        data = ball_sprites.read_file(ball_sprites.make_file(made_up_archive()))[3]
+        tex = struct.unpack_from("<I", data, 16)[0]
+        d = tex + struct.unpack_from("<H", data, tex + 0x0E)[0]
+        n = data[d + 1]
+        at = d + 8 + 4 * (n + 1) + 4
+        names = [data[at + 8 * n + 16 * i:at + 8 * n + 16 * i + 16].rstrip(b"\0") for i in range(n)]
+        offsets = {int(names[i].rsplit(b".", 1)[1]): struct.unpack_from("<I", data, at + 8 * i)[0] & 0xFFFF for i in range(n)}
+        self.assertEqual(len(offsets), 16)
+        for k, off in offsets.items():
+            self.assertEqual(off, 64 if k <= 4 else 0, k)   # (the second picture at 512 bytes)
 
     def test_emotes(self):
         for name in ball_sprites.EMOTES:

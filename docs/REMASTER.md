@@ -1271,9 +1271,15 @@ screens) the lower screen is the DS's, filling the screen as before.
     the Pokémon was caught in (`MON_DATA_POKEBALL`), closed or open, as
     the battles draw it: `builder/ball_sprites.py` makes each of the 17
     kinds from the ROM's battle ball sprites (`pl_batt_obj.narc`: the
-    closed cell and the open one) at 4/5 of their size, the overworld item
-    ball's, into a port file of the data pack (`0x10000001`, with the
-    follower sprites); without it, the item ball. As it opens, the battle's
+    closed cell and the open one) at 0.74 of their size (a little under
+    the overworld item ball's), into a port file of the data pack
+    (`0x10000001`, with the follower sprites); without it, the item ball.
+    Open and closed are one sprite, open facing north: the ball opens and
+    closes by turning, the same object, its texture already loaded. (Made
+    again as it opened or closed, a new object, it was missing for two
+    scenes while its texture loaded, drawn once with the texture not there
+    yet, a block of noise, and paired by the 60 FPS in-between scenes with
+    the player beside it: a flicker to the side, 2026-10-29.) As it opens, the battle's
     send-out burst for its kind (`ball_particle.narc`, a particle system of
     its own drawn after the billboards with the field's camera, its sizes
     and speeds 4 times: the battle's camera is a few units away, the
@@ -1600,7 +1606,11 @@ the alpha, its texture's format and size but not its address, its vertex
 count) nearest to where it is less that motion, within 64 polygons of
 where the order says, if nearer than 16 DS pixels plus one and a half
 times the scene's motion: a map's many tiles of one kind are told apart
-by where they are. Each paired polygon goes halfway between its two
+by where they are. One each: a polygon of the scene before paired with
+two of the new scene's goes to the nearer (where the motion puts it, or
+where it was: what the camera follows), the other has none (a figure
+new beside one of its kind, the follower's Poké Ball beside the player,
+took the player's pair and was drawn halfway to him: 2026-10-29). Each paired polygon goes halfway between its two
 places, clipped and culled as any other; one with no pair is where the
 scene's motion puts it halfway (half the motion back from where the new
 scene has it: mostly polygons coming into the view at its edges), and

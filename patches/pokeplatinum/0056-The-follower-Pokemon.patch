@@ -48,9 +48,11 @@ shadow, and the Pokémon none while it's smaller than itself: its shadow
 is made once it's out (a new shadow is drawn once before it first looks
 at its object's flags, so it showed alone before the ball came).
 
-The ball is the one it was caught in, closed and open, as the battles
-draw it (builder/ball_sprites.py: a port file at 0x10000001, graphics IDs
-after the follower sprites'); without it, the item ball. As it opens, the
+The ball is the one it was caught in, as the battles draw it
+(builder/ball_sprites.py: a port file at 0x10000001, graphics IDs after
+the follower sprites'), open facing north: it opens and closes by
+turning, one object (made again, it went missing while its texture
+loaded and was drawn once with noise); without it, the item ball. As it opens, the
 battle's send-out burst for its kind (ball_particle.narc: a particle
 system of its own, drawn after the billboards with the field's camera,
 fieldmap.c; freed as the field ends).
@@ -68,7 +70,7 @@ comes and goes as set while the options' page is up (the field running
 behind it, patch 0057).
 ---
  include/constants/map_object.h |    2 +
- include/port_follower.h        |   64 ++
+ include/port_follower.h        |   65 ++
  include/port_options.h         |    1 +
  include/sound_system.h         |    6 +
  platinum.us/main.lsf           |    1 +
@@ -80,10 +82,10 @@ behind it, patch 0057).
  src/overlay005/options_panel.c |    3 +-
  src/overlay005/ov5_021ECC20.c  |    7 +
  src/overlay005/ov5_021ECE40.c  |   33 +-
- src/port_follower.c            | 1459 ++++++++++++++++++++++++++++++++++++++++
+ src/port_follower.c            | 1460 ++++++++++++++++++++++++++++++++++++++++
  src/sound.c                    |    7 +
  src/unk_020EDBAC.c             |    5 +-
- 16 files changed, 1695 insertions(+), 5 deletions(-)
+ 16 files changed, 1697 insertions(+), 5 deletions(-)
 
 diff --git a/include/constants/map_object.h b/include/constants/map_object.h
 index d692a8b6..7d4cb6d8 100644
@@ -100,10 +102,10 @@ index d692a8b6..7d4cb6d8 100644
  #define MAP_OBJ_UNK_A0_00 0
 diff --git a/include/port_follower.h b/include/port_follower.h
 new file mode 100644
-index 00000000..be46ca65
+index 00000000..f6c00006
 --- /dev/null
 +++ b/include/port_follower.h
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,65 @@
 +#ifndef POKEPLATINUM_PORT_FOLLOWER_H
 +#define POKEPLATINUM_PORT_FOLLOWER_H
 +
@@ -133,11 +135,12 @@ index 00000000..be46ca65
 +#define PORT_FOLLOWER_LOCAL_ID        0xF3
 +#define PORT_FOLLOWER_BALL_LOCAL_ID   0xF4   // (its Poké Ball, seen as it goes in and comes out)
 +#define PORT_FOLLOWER_EMOTE_LOCAL_ID  0xF5   // (its bubble, talked to)
-+// Its Poké Ball: each kind as the battles draw it, closed and open, made
-+// from the player's ROM (builder/ball_sprites.py: a port file at
-+// PORT_FOLLOWER_BALLS_PAK_ID), graphics IDs after the follower sprites'
-+// (PORT_FOLLOWER_BALL_GFX_FIRST + 2 * (ball - 1) + open), their textures
-+// archive members after theirs; drawn as the follower sprites are.
++// Its Poké Ball: each kind as the battles draw it, made from the player's
++// ROM (builder/ball_sprites.py: a port file at PORT_FOLLOWER_BALLS_PAK_ID),
++// open facing north and closed the other ways; graphics IDs after the
++// follower sprites' (PORT_FOLLOWER_BALL_GFX_FIRST + ball - 1, then the
++// talk bubbles), their textures archive members after theirs; drawn as
++// the follower sprites are.
 +#define PORT_FOLLOWER_BALLS_PAK_ID    0x10000001
 +#define PORT_FOLLOWER_BALL_GFX_FIRST  (PORT_FOLLOWER_GFX_FIRST + PORT_FOLLOWER_GFX_COUNT)
 +#define PORT_FOLLOWER_BALL_GFX_COUNT  0x40
@@ -609,10 +612,10 @@ index dbe4ac67..04528579 100644
  
 diff --git a/src/port_follower.c b/src/port_follower.c
 new file mode 100644
-index 00000000..993b48b6
+index 00000000..7a457184
 --- /dev/null
 +++ b/src/port_follower.c
-@@ -0,0 +1,1459 @@
+@@ -0,0 +1,1460 @@
 +#include "port_follower.h"
 +
 +#include <nitro.h>
@@ -749,7 +752,7 @@ index 00000000..993b48b6
 +// The data pack's ball file (builder/ball_sprites.py, make_file): 'PFBL',
 +// u16 version, u16 0, u32 sprites, u32 0; sprites x {u32 offset, u32 size};
 +// the sprites (NSBTX, as the follower sprites).
-+#define BALLS_VERSION 1
++#define BALLS_VERSION 2 // (2: one sprite a ball, open facing north)
 +
 +static int sBallsState; // 0 not looked for, 1 there, -1 none
 +static u32 sBallsCount;
@@ -814,7 +817,7 @@ index 00000000..993b48b6
 +    const BundleSprite *s;
 +
 +    if (memberIndex >= PORT_FOLLOWER_NARC_FIRST && n >= PORT_FOLLOWER_GFX_COUNT && n < PORT_FOLLOWER_GFX_COUNT + PORT_FOLLOWER_BALL_GFX_COUNT) {
-+        // A ball's (closed or open)
++        // A ball's (open facing north) or a bubble's
 +        u32 k = n - PORT_FOLLOWER_GFX_COUNT;
 +
 +        if (!Balls_Ready() || k >= sBallsCount) {
@@ -1136,12 +1139,14 @@ index 00000000..993b48b6
 +static int sBallLeft, sBallTotal;
 +static int sBallKind = 4; // (the ball it was caught in: the game's numbers, 1 the Master Ball... 4 the Poké Ball)
 +
-+// (the ball's picture: its kind's, closed or open, from the ball file; else
-+// the item ball)
-+static int PortFollower_BallGfx(BOOL open)
++// (the ball's picture: its kind's from the ball file, facing north it's
++// open, any other way closed; else the item ball, the same either way)
++#define BALL_KINDS 17
++
++static int PortFollower_BallGfx(void)
 +{
-+    int kind = sBallKind >= 1 && sBallKind <= 17 ? sBallKind : 4;
-+    u32 k = 2 * (kind - 1) + (open ? 1 : 0);
++    int kind = sBallKind >= 1 && sBallKind <= BALL_KINDS ? sBallKind : 4;
++    u32 k = kind - 1;
 +
 +    if (!Balls_Ready() || k >= sBallsCount) {
 +        return OBJ_EVENT_GFX_POKEBALL;
@@ -1155,8 +1160,17 @@ index 00000000..993b48b6
 +    MapObjectManager *mapObjMan = fieldSystem->mapObjMan;
 +    MapObject *ball = PortFollower_FindID(mapObjMan, PORT_FOLLOWER_BALL_LOCAL_ID);
 +    VecFx32 front = { 0, 0, FX32_ONE * 4 }; // (drawn over the Pokémon's feet)
-+    int x = MapObject_GetX(at), z = MapObject_GetZ(at), graphicsID = PortFollower_BallGfx(open);
-+    BOOL bridge = MapObject_CheckStatus(at, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE) != 0; // (at may be the ball, about to go)
++    int x = MapObject_GetX(at), z = MapObject_GetZ(at), graphicsID = PortFollower_BallGfx();
++    BOOL bridge = MapObject_CheckStatus(at, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE) != 0;
++
++    if (ball != NULL && MapObject_GetGraphicsID(ball) == graphicsID && MapObject_GetX(ball) == x && MapObject_GetZ(ball) == z) {
++        // (still there, where it's wanted: kept, its time begun again; not
++        // made again, so nothing reloads and 60 FPS's in-between scenes
++        // keep it where it is)
++        MapObject_Face(ball, open ? DIR_NORTH : DIR_SOUTH);
++        sBallLeft = sBallTotal = steps;
++        return TRUE;
++    }
 +
 +    if (ball != NULL) {
 +        PortFollower_Remove(fieldSystem, ball);
@@ -1168,7 +1182,8 @@ index 00000000..993b48b6
 +        return FALSE;
 +    }
 +
-+    ball = MapObjectMan_AddMapObject(mapObjMan, x, z, DIR_SOUTH, graphicsID, MOVEMENT_TYPE_NONE, fieldSystem->location->mapHeaderID);
++    ball = MapObjectMan_AddMapObject(mapObjMan, x, z, open ? DIR_NORTH : DIR_SOUTH, graphicsID, MOVEMENT_TYPE_NONE,
++        fieldSystem->location->mapHeaderID);
 +
 +    if (ball == NULL) {
 +        return FALSE;
@@ -1208,27 +1223,16 @@ index 00000000..993b48b6
 +    return step < BALL_POP ? step : BALL_POP;
 +}
 +
-+// The ball opened (the Pokémon coming out) or closed (it gone in): the
-+// other picture of its kind where it is, its time going on. (The item
-+// ball has one picture only.)
++// The ball opened (the Pokémon coming out) or closed (it gone in): turned
++// to its other picture (north: open), its time going on. (The item ball
++// has one picture only.)
 +static void PortFollower_SwapBall(FieldSystem *fieldSystem, BOOL open)
 +{
 +    MapObject *ball = PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_BALL_LOCAL_ID);
-+    int left = sBallLeft, total = sBallTotal;
 +
-+    if (ball == NULL || left <= 0 || PortFollower_BallGfx(open) == OBJ_EVENT_GFX_POKEBALL
-+        || MapObject_GetGraphicsID(ball) == PortFollower_BallGfx(open)) {
-+        return;
-+    }
-+
-+    if (PortFollower_ShowBall(fieldSystem, ball, left, open)) {
-+        sBallLeft = left;
-+        sBallTotal = total;
-+        ball = PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_BALL_LOCAL_ID);
-+
-+        if (ball != NULL) {
-+            PortFollower_ScaleOf(ball, PortFollower_BallStep(), BALL_POP); // (no frame at no size)
-+        }
++    // (turned: the same object, its texture already there, where it is)
++    if (ball != NULL && sBallLeft > 0) {
++        MapObject_Face(ball, open ? DIR_NORTH : DIR_SOUTH);
 +    }
 +}
 +
@@ -1700,7 +1704,7 @@ index 00000000..993b48b6
 +    EMOTE_COUNT
 +};
 +
-+#define BALL_SPRITES        34 // (the ball file's balls, before its bubbles)
++#define BALL_SPRITES        BALL_KINDS // (the ball file's balls, before its bubbles)
 +#define EMOTE_POP           2
 +#define FOUND_A_DAY         3
 +

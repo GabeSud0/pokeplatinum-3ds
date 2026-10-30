@@ -1007,6 +1007,7 @@ static float poly_distance(const PolyRecord *p,const PolyRecord *c,float dx,floa
  * PolyRecord.px/py: x / w * 128, y / w * 96); valid with 8 pairs or more. */
 static int sMotionValid;
 static uint8_t *sPUsed;   /* (the scene before's records paired with one of this one's) */
+static int32_t sOrderOut[MAX_RECORDS], sOwner[MAX_RECORDS];   /* (match_records: the order's pairs; each before's pair) */
 static float sMotionX, sMotionY;
 /* The motion the scene before had (sMotionValid then): the camera's pace
  * at a walk or a run is steady from one scene to the next. */
@@ -1096,6 +1097,7 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
     /* (a figure that moves on its own, the player against the camera's
      * motion: as far again as the scene moves) */
     near=MATCH_NEAR+1.5f*(fabsf(dx)+fabsf(dy));
+    memcpy(sOrderOut,out,n*sizeof(*out));
     /* each again, by where it is */
     for(j=0;j<n;j++){
         int center=out[j]>=0?out[j]:(int)j+offset,order=out[j],lo,hi,q,best=-1;
@@ -1157,6 +1159,30 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
         }
         out[j]=best;
         if(best>=0){offset=best-(int)j;matched++;}
+    }
+    /* One each: a polygon of the scene before paired with two of this
+     * one's goes to the nearer (where the scene's motion puts it, or where
+     * it was: what the camera follows; a tie, the order's pair, else the
+     * first); the other has none, and is where it is now. A figure new in
+     * the scene beside one of its kind (the follower Pokémon's Poké Ball
+     * made again beside the player as it closed, 2026-10-29) took the
+     * player's pair, by the order and by nearness: the in-between scene
+     * drew it halfway to the player, a flicker to the side. */
+    for(j=0;j<m;j++)sOwner[j]=-1;
+    for(j=0;j<n;j++){
+        int q=out[j],o;
+        float dj,doo;
+        if(q<0)continue;
+        o=sOwner[q];
+        if(o<0){sOwner[q]=(int32_t)j;continue;}
+        dj=fminf(poly_distance(&P[q],&C[j],dx,dy,1e9f),poly_distance(&P[q],&C[j],0.0f,0.0f,1e9f));
+        doo=fminf(poly_distance(&P[q],&C[o],dx,dy,1e9f),poly_distance(&P[q],&C[o],0.0f,0.0f,1e9f));
+        if(dj<doo || (dj==doo && sOrderOut[j]==q && sOrderOut[o]!=q)){
+            out[o]=-1;sOwner[q]=(int32_t)j;
+        }else{
+            out[j]=-1;
+        }
+        matched--;
     }
     return matched;
 }
