@@ -38,6 +38,7 @@ for _path in (HERE, BANNER3D, TOOLS):
     if _path not in sys.path:
         sys.path.append(_path)
 
+import ball_sprites  # noqa: E402
 import extract_rom  # noqa: E402
 import followers  # noqa: E402
 import pack  # noqa: E402
@@ -71,6 +72,15 @@ def build_data(rom, pak_file, *, rom_sha1: str, progress=None, follower_bundle: 
     files = [(e["id"], view[e["offset"]:e["offset"] + e["size"]]) for e in entries]
     if follower_bundle is not None:
         files.append((followers.PAK_ID, follower_bundle))
+        # (and the follower's Poké Balls, from the ROM's battle graphics, as
+        # pack.py makes them)
+        narc = next((e for e in entries if e["path"] == ball_sprites.NARC_PATH), None)
+        try:
+            if narc is None:
+                raise ball_sprites.BallSpritesError(f"no {ball_sprites.NARC_PATH}")
+            files.append((ball_sprites.PAK_ID, ball_sprites.make_file(bytes(view[narc["offset"]:narc["offset"] + narc["size"]]))))
+        except ball_sprites.BallSpritesError:   # (the item ball instead)
+            pass
     pack.write_pak(pak_file, files, build_id=pack.DEFAULT_BUILD_ID, rom_sha1=rom_sha1, progress=progress)
     return extract_rom.manifest_text(rom_sha1, entries)
 

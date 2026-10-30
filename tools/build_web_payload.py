@@ -69,7 +69,8 @@ FIXED_TIME = (2020, 1, 1, 0, 0, 0)
 # The builder's Python, as it is in the repository (web.py finds the rest
 # from where it is).
 PYTHON = ["builder/web.py", "builder/extract_rom.py", "builder/pack.py", "builder/verify_rom.py",
-          "builder/followers.py", "builder/follower_sources.py", "tools/home_menu_art.py"]
+          "builder/followers.py", "builder/follower_sources.py", "builder/ball_sprites.py",
+          "tools/home_menu_art.py"]
 BANNER3D = "tools/banner3d"
 CIA = {"cia/pokeplatinum.rsf": "3ds_port/game/cia/pokeplatinum.rsf",
        "cia/chime.wav": "3ds_port/game/cia/chime.wav"}

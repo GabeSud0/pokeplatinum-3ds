@@ -1267,15 +1267,36 @@ screens) the lower screen is the DS's, filling the screen as before.
     sounds. The ball itself is seen (the item ball's picture, a map
     object of its own: local ID 0xF4, not saved, not found by scripts,
     walked through; no shadow): coming out it drops in and opens; going
-    in the Pokémon shrinks into it and it stays a moment. The Pokémon has
+    in the Pokémon shrinks into it and it stays a moment. It's the ball
+    the Pokémon was caught in (`MON_DATA_POKEBALL`), closed or open, as
+    the battles draw it: `builder/ball_sprites.py` makes each of the 17
+    kinds from the ROM's battle ball sprites (`pl_batt_obj.narc`: the
+    closed cell and the open one) at 4/5 of their size, the overworld item
+    ball's, into a port file of the data pack (`0x10000001`, with the
+    follower sprites); without it, the item ball. As it opens, the battle's
+    send-out burst for its kind (`ball_particle.narc`, a particle system of
+    its own drawn after the billboards with the field's camera, its sizes
+    and speeds 4 times: the battle's camera is a few units away, the
+    field's units about a pixel), only when the field heap and the 3D VRAM
+    have room for it. The Pokémon has
     no shadow while it's smaller than itself. Out and standing it steps
     in place, as HeartGold's do (the walk at a slow walk's pace). Talked
-    to (A facing it, out): its cry, and a word on how it feels by its
-    friendship ("... is overjoyed to be walking with you!", "... looks
-    very happy.", "... is happy to see you.", "... is keeping an eye on
-    you."; "... doesn't seem to be feeling well." with a status
-    condition), the port's text (`PortFollower_TryTalk`, from
-    `field_control.c`); it turns to the player. The sounds are in the battle's sound bank, which the field never
+    to (A facing it, out): it turns to the player, its cry, a bubble over
+    it (a heart, a note, "...", "!", "?": the builder's own drawings, in
+    the ball file) and, happy, a hop; then a word, the port's text
+    (`PortFollower_TryTalk`, from `field_control.c`): unwell with a status
+    condition; else half the time a line for the weather (rain, snow,
+    dust, fog; a Water type loves the rain, an Ice type the snow), the
+    place (a cave, a Pokémon Center, outdoors) or the time (night: sleepy,
+    or livelier for a Ghost or Dark type; morning); else its friendship
+    ("... is overjoyed to be walking with you!", "... looks very happy.",
+    "... is happy to see you.", "... is keeping an eye on you."). Now and
+    then it has found something (friendship 100 or more, 1 talk in 5, 3 a
+    day while the game runs, room in the bag): a common item 70% of the
+    time (Potion, Antidote, Parlyz Heal, Poké Ball, Oran or Pecha Berry),
+    less common 25% (Super Potion, Great Ball, Ether, Leppa Berry,
+    TinyMushroom, Honey), rare 5% (Ultra Ball, Revive, Rare Candy, Nugget,
+    Stardust), with the item fanfare. The sounds are in the battle's sound bank, which the field never
     loads: the field's sound effects load them too (`sound.c`), the sound
     heap 128 KB larger for their 84 KB of waves (`sound_system.h`; the
     DS's heap had 74 KB left there). The log says when it comes out, why

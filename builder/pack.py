@@ -10,6 +10,7 @@ import json
 import os
 import re
 import struct
+import sys
 import tempfile
 from collections.abc import Collection
 from pathlib import Path
@@ -289,6 +290,16 @@ def main() -> int:
             bundle = args.followers.read_bytes()
             followers.read_bundle(bundle)
             extra.append((followers.PAK_ID, bundle))
+            # (and the follower's Poké Balls, from the ROM's battle graphics)
+            try:
+                from . import ball_sprites
+            except ImportError:
+                import ball_sprites
+            try:
+                narc = (args.data_pack / ball_sprites.NARC_PATH).read_bytes()
+                extra.append((ball_sprites.PAK_ID, ball_sprites.make_file(narc)))
+            except (OSError, ball_sprites.BallSpritesError) as exc:   # (the item ball instead)
+                print(f"No Poke Ball sprites for the follower: {exc}", file=sys.stderr)
         pack(args.data_pack, args.output, build_id=args.build_id, rom_sha1=sha1,
              supported=verify_rom.SUPPORTED, extra=extra)
     except (OSError, ValueError, UnicodeError) as exc:

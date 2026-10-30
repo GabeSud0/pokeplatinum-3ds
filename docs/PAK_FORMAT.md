@@ -48,6 +48,7 @@ no NitroFS file has (the ROM's are below 0x10000):
 | ID | What | Made by |
 |---|---|---|
 | `0x10000000` | the follower Pokémon's sprites (HeartGold and SoulSilver's, downloaded and checked on the player's computer; optional) | `builder/followers.py` (layout in `make_bundle`), `pack.py --followers`, the web builder |
+| `0x10000001` | the follower's Poké Balls (each kind closed and open, made from the ROM's battle ball sprites at 4/5) and its emote bubbles (the builder's own drawings); with the follower sprites | `builder/ball_sprites.py` (layout in its docstring), `pack.py --followers`, the web builder |
 
 A pack without them is complete: the game goes on without what they add.
 
