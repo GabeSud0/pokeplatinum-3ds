@@ -784,6 +784,34 @@ static void test_sprite_texel_a_pixel(void)
     sprite_corners(sc,&x0,&x1,&y0,&y1);
     CHECK(fabsf((x1-x0)-32.0f)>1.0f);
 }
+/* Moving, a sprite keeps the fraction it was moved by when it stood (the
+ * ground slides under it smoothly: put on its nearest pixel each scene, it
+ * wobbled on it); still again (the scene after), on a pixel corner; one
+ * that jumped further than a few pixels, on its own nearest. */
+static void test_sprite_moving(void)
+{
+    NitroGx3dScene *sc=&sSpriteScene;
+    float a0,b0,c0,d0,x1,y0,y1,ya,yb;
+    memset(sc,0,sizeof(*sc));
+    sc->screen_width=400;sc->screen_height=240;
+    sc->serial=100;
+    sprite_quad(sc,180.3f,150.4f,32.0f,2481011);
+    sprite_corners(sc,&a0,&x1,&ya,&y1);
+    CHECK(fabsf(a0-floorf(a0+0.5f))<0.01f);
+    sc->serial=101;
+    sprite_quad(sc,181.0f,149.6f,32.0f,2481011);   /* (the in-between scene's, the next's: one serial) */
+    sprite_corners(sc,&b0,&x1,&yb,&y1);
+    CHECK(fabsf((b0-a0)-0.7f)<0.03f && fabsf((yb-ya)+0.8f)<0.03f);
+    sc->serial=102;
+    sprite_quad(sc,181.0f,149.6f,32.0f,2481011);   /* (still) */
+    sprite_corners(sc,&c0,&x1,&y0,&y1);
+    CHECK(fabsf(c0-floorf(c0+0.5f))<0.01f && fabsf(y0-floorf(y0+0.5f))<0.01f);
+    CHECK(fabsf(c0-b0)<=0.5f);
+    sc->serial=103;
+    sprite_quad(sc,231.3f,149.6f,32.0f,2481011);   /* (somewhere else) */
+    sprite_corners(sc,&d0,&x1,&y0,&y1);
+    CHECK(fabsf(d0-floorf(d0+0.5f))<0.01f && fabsf(d0-231.3f)<=0.5f);
+}
 
 static void test_shadow_triangles(void)
 {
@@ -1777,6 +1805,7 @@ static void run_all(void)
     test_culling();
     test_shadow_triangles();
     test_sprite_texel_a_pixel();
+    test_sprite_moving();
     test_interpolation();
     test_interpolation_followed();
     test_interpolation_one_each();

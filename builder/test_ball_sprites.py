@@ -121,6 +121,33 @@ class BallSpritesTest(unittest.TestCase):
         self.assertTrue(all(any(out[y * 32 + x] == 3 for x in xs) for y in ys))   # (the button kept)
         self.assertEqual(ball_sprites.carve([0] * 1024), [0] * 1024)
 
+    def test_round_ball(self):
+        """A 14 x 14 ball, its corners cut square (diamond-like), outline 1,
+        a band 3 two rows tall: 12 x 12 after, its rows as round as
+        _disc's, its edge the outline, the band kept, the bottom row and the
+        middle where they were."""
+        pic = [0] * 1024
+        for y in range(17, 31):
+            for x in range(9, 23):
+                d = min(y - 17, 30 - y) + min(x - 9, 22 - x)
+                if d >= 3:
+                    pic[y * 32 + x] = 1 if d == 3 or y in (17, 30) or x in (9, 22) else 2
+        for x in range(10, 22):
+            if pic[23 * 32 + x] == 2:
+                pic[23 * 32 + x] = pic[24 * 32 + x] = 3
+        out = ball_sprites.round_ball(pic)
+        ys = [y for y in range(32) if any(out[y * 32:(y + 1) * 32])]
+        widths = [sum(1 for x in range(32) if out[y * 32 + x]) for y in ys]
+        self.assertEqual(widths, [4, 8, 10, 10, 12, 12, 12, 12, 10, 10, 8, 4])
+        self.assertEqual(ys[-1], 30)
+        xs = [x for x in range(32) if any(out[y * 32 + x] for y in range(32))]
+        self.assertEqual((xs[0] + xs[-1] + 1) / 2, 16)
+        for y in ys:   # (each row's ends: the outline)
+            row = [x for x in range(32) if out[y * 32 + x]]
+            self.assertEqual((out[y * 32 + row[0]], out[y * 32 + row[-1]]), (1, 1))
+        self.assertIn(3, out)
+        self.assertEqual(ball_sprites.round_ball([0] * 1024), [0] * 1024)
+
     def test_open_facing_north(self):
         """A ball's 16 textures: the 4 facing north (Platinum's NAME.1-4)
         show its open picture, the rest its closed one."""

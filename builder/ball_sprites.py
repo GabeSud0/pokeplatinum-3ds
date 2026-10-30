@@ -6,7 +6,7 @@ When the follower comes out of its ball or goes back in (OPTIONS:
 FOLLOWER), the ball it was caught in is seen. The battles' ball sprites
 (battle/graphic/pl_batt_obj.narc: a ball's tiles, palette, cells) are
 turned here into overworld sprites, one for each of the 17 kinds, the
-overworld item ball's size (CARVE: two rows and columns fewer), laid out as
+overworld item ball's size (round_ball: 12 across, round), laid out as
 the follower sprites are (Platinum's walking sprites: 16 textures of 32 x
 32, builder/followers.py's platinum_layout), the ball's bottom at the
 texture's: facing north it's open, any other way closed, so the game
@@ -48,7 +48,10 @@ CLOSED_CELL, OPEN_CELL = 0, 9
 # across to its 12): CARVE rows and columns fewer (carve()), the ones most
 # like their neighbours, so the outline, the band, the button and the
 # markings stay (resampled, at 4/5 or 3/4, they lost detail: 2026-10-29).
+# The closed ball: its inside carved so, in a round outline ACROSS across
+# (round_ball; carved whole, its outline went diamond-like: 2026-10-29).
 CARVE = 2
+ACROSS = 12
 
 # The battles' ball throw graphics (src/battle_anim/ov12_02235E94.c,
 # sBallThrowGraphics; res/graphics/battle/sprites.naix): (tiles, palette,
@@ -224,39 +227,47 @@ def _line_cost(lines: list[list[int]], i: int) -> int:
     return min(sum(1 for a, c in zip(lines[i], lines[j]) if a != c) for j in (i - 1, i + 1))
 
 
-def carve(texels: list[int], count: int = CARVE) -> list[int]:
-    """The picture `count` columns and rows smaller: the columns taken in
+def _carve_lines(lines: list[list[int]], rows: int, cols: int) -> list[list[int]]:
+    """lines `rows` rows and `cols` columns fewer: the columns taken in
     mirrored pairs (the balls are symmetric; an odd one alone), the rows one
     at a time, each time the line(s) costing least (_line_cost; a tie: the
-    nearer the middle). Its bottom row and middle column where they were."""
-    rows = [texels[y * SIZE:(y + 1) * SIZE] for y in range(SIZE)]
-    ys = [y for y in range(SIZE) if any(rows[y])]
-    if not ys:
-        return list(texels)
-    xs = [x for x in range(SIZE) if any(rows[y][x] for y in ys)]
-    x0, x1, y0, y1 = xs[0], xs[-1], ys[0], ys[-1]
-    lines = [list(r[x0:x1 + 1]) for r in rows[y0:y1 + 1]]
-    for _ in range(count):
+    nearer the middle)."""
+    lines = [list(r) for r in lines]
+    for _ in range(rows):
         if len(lines) > 3:
             mid = (len(lines) - 1) / 2
             lines.pop(min(range(len(lines)), key=lambda i: (_line_cost(lines, i), abs(i - mid))))
-    cols = [list(c) for c in zip(*lines)]
-    left = count
-    while left >= 2 and len(cols) > 5:
-        n = len(cols)
+    cols_ = [list(c) for c in zip(*lines)]
+    left = cols
+    while left >= 2 and len(cols_) > 5:
+        n = len(cols_)
         # (not the middle two together: two alike, both gone, a feature
         # two columns wide would be lost whole)
         pairs = [i for i in range(1, n // 2) if n - 1 - i > i + 1]
         if not pairs:
             break
-        i = min(pairs, key=lambda i: (_line_cost(cols, i) + _line_cost(cols, n - 1 - i), -i))
-        cols.pop(n - 1 - i)
-        cols.pop(i)
+        i = min(pairs, key=lambda i: (_line_cost(cols_, i) + _line_cost(cols_, n - 1 - i), -i))
+        cols_.pop(n - 1 - i)
+        cols_.pop(i)
         left -= 2
-    if left and len(cols) > 3:
-        mid = (len(cols) - 1) / 2
-        cols.pop(min(range(len(cols)), key=lambda i: (_line_cost(cols, i), abs(i - mid))))
-    lines = [list(r) for r in zip(*cols)]
+    if left and len(cols_) > 3:
+        mid = (len(cols_) - 1) / 2
+        cols_.pop(min(range(len(cols_)), key=lambda i: (_line_cost(cols_, i), abs(i - mid))))
+    return [list(r) for r in zip(*cols_)]
+
+
+def _bounds(texels: list[int]):
+    """(x0, x1, y0, y1): the picture's box, or None (nothing drawn)."""
+    ys = [y for y in range(SIZE) if any(texels[y * SIZE:(y + 1) * SIZE])]
+    if not ys:
+        return None
+    xs = [x for x in range(SIZE) if any(texels[y * SIZE + x] for y in ys)]
+    return xs[0], xs[-1], ys[0], ys[-1]
+
+
+def _place(lines: list[list[int]], x0: int, x1: int, y1: int) -> list[int]:
+    """lines on a texture: their bottom row at y1, their middle at the
+    middle of x0..x1."""
     h, w = len(lines), len(lines[0])
     left_x = int(round((x0 + x1 + 1) / 2 - w / 2))
     out = [0] * (SIZE * SIZE)
@@ -264,6 +275,76 @@ def carve(texels: list[int], count: int = CARVE) -> list[int]:
         for x in range(w):
             out[(y1 - h + 1 + y) * SIZE + left_x + x] = lines[y][x]
     return out
+
+
+def carve(texels: list[int], count: int = CARVE) -> list[int]:
+    """The picture `count` columns and rows smaller (_carve_lines), its
+    bottom row and middle column where they were."""
+    box = _bounds(texels)
+    if box is None:
+        return list(texels)
+    x0, x1, y0, y1 = box
+    lines = [texels[y * SIZE + x0:y * SIZE + x1 + 1] for y in range(y0, y1 + 1)]
+    return _place(_carve_lines(lines, count, count), x0, x1, y1)
+
+
+def _disc(across: int) -> list[list[bool]]:
+    """A round pixel outline's inside and edge, across x across (12: rows
+    4, 8, 10, 10, 12, 12, 12, 12, 10, 10, 8, 4 wide)."""
+    c, r = (across - 1) / 2, across / 2
+    return [[(x - c) ** 2 + (y - c) ** 2 <= r * r for x in range(across)] for y in range(across)]
+
+
+def round_ball(texels: list[int], across: int = ACROSS) -> list[int]:
+    """The closed ball across x across and round: its outline (its edge's
+    most common colour) drawn again as a circle (_disc), the inside within
+    it carved to fit (_carve_lines), so its band, button and markings
+    stay. Its bottom row and middle where they were."""
+    box = _bounds(texels)
+    if box is None:
+        return list(texels)
+    x0, x1, y0, y1 = box
+
+    def edge(x, y):
+        return any(not (0 <= x + dx < SIZE and 0 <= y + dy < SIZE) or not texels[(y + dy) * SIZE + x + dx]
+                   for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+
+    rim = [(x, y) for y in range(y0, y1 + 1) for x in range(x0, x1 + 1) if texels[y * SIZE + x] and edge(x, y)]
+    counts: dict[int, int] = {}
+    for x, y in rim:
+        counts[texels[y * SIZE + x]] = counts.get(texels[y * SIZE + x], 0) + 1
+    outline = max(counts, key=lambda c: (counts[c], -c))
+    rim_set = set(rim)
+    inside = [[0 if (x, y) in rim_set else texels[y * SIZE + x] for x in range(x0 + 1, x1)] for y in range(y0 + 1, y1)]
+    inner = across - 2
+    if len(inside) < inner or len(inside[0]) < inner:
+        return list(texels)
+    inside = _carve_lines(inside, len(inside) - inner, len(inside[0]) - inner)
+    ih, iw = len(inside), len(inside[0])
+    disc = _disc(across)
+    out = [[0] * across for _ in range(across)]
+    for y in range(across):
+        for x in range(across):
+            if not disc[y][x]:
+                continue
+            if any(not (0 <= x + dx < across and 0 <= y + dy < across) or not disc[y + dy][x + dx]
+                   for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                out[y][x] = outline
+                continue
+            # (the inside's texel here; where the old outline cut its
+            # corner, the nearest inside texel)
+            ix, iy = x - 1 - (inner - iw) // 2, y - 1 - (inner - ih)
+            best = None
+            for yy in range(ih):
+                for xx in range(iw):
+                    if inside[yy][xx]:
+                        d = (xx - ix) ** 2 + (yy - iy) ** 2
+                        if best is None or d < best[0]:
+                            best = (d, inside[yy][xx])
+                        if d == 0:
+                            break
+            out[y][x] = best[1] if best else outline
+    return _place(out, x0, x1, y1)
 
 
 def nsbtx(texels: list[int], palette: list[int], north: list[int] | None = None) -> bytes:
@@ -312,7 +393,7 @@ def ball_pictures(narc: bytes) -> list[tuple[list[int], list[int], list[int]]]:
             raise BallSpritesError("the battle graphics archive is too short") from None
         if len(cells) <= OPEN_CELL:
             raise BallSpritesError("a ball with too few cells")
-        out.append((carve(draw_cell(cells[CLOSED_CELL], tiles)), carve(draw_cell(cells[OPEN_CELL], tiles)), palette))
+        out.append((round_ball(draw_cell(cells[CLOSED_CELL], tiles)), carve(draw_cell(cells[OPEN_CELL], tiles)), palette))
     return out
 
 

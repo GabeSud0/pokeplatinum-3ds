@@ -670,7 +670,17 @@ screen's 320 x 192 at 1.25 times, as above.
   pixel corner, its edges not moved out: each texel whole pixels, sharp
   with the smooth 3D or without; the 3D (buildings, signs) as smooth as
   before. One scaled on purpose (a Pokémon growing out of its ball) is
-  left as it is; the 1.25x field too (a texel 1.25 pixels there).
+  left as it is; the 1.25x field too (a texel 1.25 pixels there). Moving
+  on the screen (the camera going along, a person walking) a sprite keeps
+  the fraction of a pixel it was moved by when it stood (`snap_offset`:
+  each scene's sprites told from the scene before's, or the in-between
+  scene's, by their texture's kind and palette, nearest within 12
+  pixels), so it slides with the ground under it, and is on its nearest
+  pixel corner again once it stands still: put on its own nearest pixel
+  each scene, it stepped a whole pixel or none while the ground slid
+  smoothly and seemed to wobble on it, the more so at 60 FPS
+  (2026-10-29). The player and the follower, still on the screen as the
+  camera follows them, stay on their pixels.
 - **The game** reads `NitroPort_WideScreenExtra` as 72 there: the people the
   scripts bring on from the sides come from beyond the 400 pixels.
 - **The game's windows** go to the picture's top or bottom
@@ -1256,7 +1266,9 @@ screens) the lower screen is the DS's, filling the screen as before.
     step off it (the tile behind checked as the player's step would be:
     no water, ledge or ramp). Back in its ball whenever the game moves
     the player (a script's walk; out again when the player is theirs
-    again: scenes where it stays out may come later), and while the
+    again: scenes where it stays out may come later), when someone walks
+    onto its tile in a script (a person coming up behind the player: the
+    two stood in each other, 2026-10-29), and while the
     player jumps down a ledge (the
     follow code moves a tile a step behind and can't keep up with the
     jump): out again where they stop. Its graphics IDs from 0x4000, past
@@ -1275,8 +1287,10 @@ screens) the lower screen is the DS's, filling the screen as before.
     closed cell and the open one) two rows and columns smaller, the
     overworld item ball's size: carved, not resampled, the rows and
     columns most like their neighbours taken (the columns in mirrored
-    pairs), so the outline, the band, the button and the markings stay
-    (resampled to 3/4 they went), into a port file of the data pack
+    pairs), so the band, the button and the markings stay (resampled to
+    3/4 they went); the closed ball's outline then drawn again as a
+    circle 12 across, its inside carved to fit within it (carved whole,
+    the outline went diamond-like), into a port file of the data pack
     (`0x10000001`, with the follower sprites); without it, the item ball.
     Open and closed are one sprite, open facing north: the ball opens and
     closes by turning, the same object, its texture already loaded. (Made
@@ -1288,7 +1302,9 @@ screens) the lower screen is the DS's, filling the screen as before.
     its own drawn after the billboards with the field's camera, its sizes
     and speeds 3.25 times: the battle's camera is a few units away, the
     field's units about a pixel), only when the field heap and the 3D VRAM
-    have room for it. The Pokémon has
+    have room for it; it goes along with the Pokémon (its emitters and
+    their particles moved as it moves) if the player walks on as it
+    comes out. The Pokémon has
     no shadow while it's smaller than itself. Out and standing it steps
     in place, as HeartGold's do (the walk at a slow walk's pace). Talked
     to (A facing it, out): it turns to the player, its cry, a bubble over

@@ -29,8 +29,10 @@ the Underground, the Union Room and maps with features of their own; a
 when that tile is free, else on the player's tile hidden till they step
 off it (walking out of a door: it comes out after them). Back in its ball
 when not to be out, another Pokémon is first, the game moves the player
-(a script's walk: out again when the player is theirs again), it's left
-behind (a warp within the map), or the player jumps down a ledge (the
+(a script's walk: out again when the player is theirs again), someone
+walks onto its tile in a script (a person coming up behind the player:
+they'd stand in each other), it's left behind (a warp within the map),
+or the player jumps down a ledge (the
 follow code can't keep up with the jump): out again behind the player
 where they stop. Its graphics IDs from 0x4000, past the berry
 trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000).
@@ -55,7 +57,8 @@ turning, one object (made again, it went missing while its texture
 loaded and was drawn once with noise); without it, the item ball. As it opens, the
 battle's send-out burst for its kind (ball_particle.narc: a particle
 system of its own, drawn after the billboards with the field's camera,
-fieldmap.c; freed as the field ends).
+fieldmap.c; freed as the field ends), going along with the Pokémon if the
+player walks on as it comes out.
 
 Out and standing it steps in place, as HeartGold's do (its draw state the
 slow walk's). Talked to (A facing it: field_control.c,
@@ -82,10 +85,10 @@ behind it, patch 0057).
  src/overlay005/options_panel.c |    3 +-
  src/overlay005/ov5_021ECC20.c  |    7 +
  src/overlay005/ov5_021ECE40.c  |   33 +-
- src/port_follower.c            | 1461 ++++++++++++++++++++++++++++++++++++++++
+ src/port_follower.c            | 1549 ++++++++++++++++++++++++++++++++++++++++
  src/sound.c                    |    7 +
  src/unk_020EDBAC.c             |    5 +-
- 16 files changed, 1698 insertions(+), 5 deletions(-)
+ 16 files changed, 1786 insertions(+), 5 deletions(-)
 
 diff --git a/include/constants/map_object.h b/include/constants/map_object.h
 index d692a8b6..7d4cb6d8 100644
@@ -612,10 +615,10 @@ index dbe4ac67..04528579 100644
  
 diff --git a/src/port_follower.c b/src/port_follower.c
 new file mode 100644
-index 00000000..865fd0c3
+index 00000000..53f5206c
 --- /dev/null
 +++ b/src/port_follower.c
-@@ -0,0 +1,1461 @@
+@@ -0,0 +1,1549 @@
 +#include "port_follower.h"
 +
 +#include <nitro.h>
@@ -1037,6 +1040,37 @@ index 00000000..865fd0c3
 +    }
 +
 +    return !big || MapHeader_IsOutdoors(here);
++}
++
++// In a script, someone else on its tile or stepping onto it (a person
++// walking up to the player from behind: they'd stand in each other).
++static BOOL PortFollower_SomeoneComes(FieldSystem *fieldSystem, MapObject *follower)
++{
++    MapObject *player = PlayerAvatar_GetMapObject(fieldSystem->playerAvatar), *other;
++    int fx = MapObject_GetX(follower), fz = MapObject_GetZ(follower), i = 0, x, z, dir;
++
++    while (MapObjectMan_FindObjectWithStatus(fieldSystem->mapObjMan, &other, &i, MAP_OBJ_STATUS_0) == TRUE) {
++        if (other == player || MapObject_PortIsFollower(other) || MapObject_CheckStatus(other, MAP_OBJ_STATUS_HIDE)) {
++            continue;
++        }
++
++        x = MapObject_GetX(other); // (moving: the tile it's going to)
++        z = MapObject_GetZ(other);
++
++        if (x == fx && z == fz) {
++            return TRUE;
++        }
++
++        if (MapObject_IsMoving(other)) { // (and the one after, its way)
++            dir = MapObject_GetMovingDir(other);
++
++            if (dir >= DIR_NORTH && dir <= DIR_EAST && x + MapObject_GetDxFromDir(dir) == fx && z + MapObject_GetDzFromDir(dir) == fz) {
++                return TRUE;
++            }
++        }
++    }
++
++    return FALSE;
 +}
 +
 +// Its shadow: made yet (PortFollower_Add), and hidden by this file while
@@ -1473,6 +1507,58 @@ index 00000000..865fd0c3
 +    sBurstSteps = 0;
 +}
 +
++static VecFx32 sBurstMon; // (where the Pokémon was: the burst goes along with it)
++static BOOL sBurstGoesAlong;
++
++// Its emitters and their particles (each keeps where its emitter was as
++// it was made) moved by d.
++static void PortFollower_MoveBurst(const VecFx32 *d)
++{
++    SPLEmitter *emitter;
++    SPLParticle *particle;
++
++    for (emitter = sBurst->manager->activeEmitters.first; emitter != NULL; emitter = emitter->next) {
++        VEC_Add(&emitter->position, d, &emitter->position);
++
++        for (particle = emitter->particles.first; particle != NULL; particle = particle->next) {
++            VEC_Add(&particle->emitterPos, d, &particle->emitterPos);
++        }
++
++        for (particle = emitter->childParticles.first; particle != NULL; particle = particle->next) {
++            VEC_Add(&particle->emitterPos, d, &particle->emitterPos);
++        }
++    }
++
++    VEC_Add(&sBurstPos, d, &sBurstPos);
++}
++
++// (the player walking off as it comes out: the burst with the Pokémon, not
++// left where it opened)
++static void PortFollower_BurstFollows(MapObject *mapObj)
++{
++    VecFx32 pos, d;
++
++    if (sBurst == NULL || mapObj == NULL) {
++        sBurstGoesAlong = FALSE;
++        return;
++    }
++
++    MapObject_GetPosPtr(mapObj, &pos);
++
++    if (!sBurstGoesAlong) {
++        sBurstGoesAlong = TRUE;
++        sBurstMon = pos;
++        return;
++    }
++
++    VEC_Subtract(&pos, &sBurstMon, &d);
++    sBurstMon = pos;
++
++    if (d.x != 0 || d.y != 0 || d.z != 0) {
++        PortFollower_MoveBurst(&d);
++    }
++}
++
 +static void PortFollower_UpdateBurst(void)
 +{
 +    if (sBurst == NULL) {
@@ -1582,12 +1668,14 @@ index 00000000..865fd0c3
 +
 +        // Back in its ball: not to be out, another Pokémon first, the game
 +        // moving the player (a script's walk: it waits in its ball till the
-+        // player is theirs again), a ledge, or left behind (a warp within
-+        // the map).
++        // player is theirs again), someone walking onto its tile in a
++        // script, a ledge, or left behind (a warp within the map).
 +        if (graphicsID != MapObject_GetGraphicsID(mapObj)) {
 +            why = graphicsID ? "another Pokémon" : "not to be out";
 +        } else if (scripted && (x != sPlayerX || z != sPlayerZ)) {
 +            why = "the game moves the player";
++        } else if (scripted && sOut >= 0 && PortFollower_SomeoneComes(fieldSystem, mapObj)) {
++            why = "someone comes to its spot";
 +        } else if (PortFollower_PlayerJumping(fieldSystem, player)) {
 +            why = "a ledge";
 +        } else if (!scripted && !MapObject_IsMoving(mapObj) && !PortFollower_PlayerStepping(fieldSystem) && dx * dx + dz * dz > 1) {
@@ -1619,6 +1707,7 @@ index 00000000..865fd0c3
 +                sOut = 0;
 +                PortFollower_SwapBall(fieldSystem, TRUE); // (it opens)
 +                PortFollower_StartBurst(fieldSystem, PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_BALL_LOCAL_ID));
++                sBurstGoesAlong = FALSE; // (from where it is now)
 +                PortFollower_Sound(SEQ_SE_DP_SLOT01_sseq_1); // (SEQ_SE_DP_BOWA2: the battle's send-out)
 +            }
 +        } else if (sOut < 0) {
@@ -1650,6 +1739,8 @@ index 00000000..865fd0c3
 +            PortFollower_HideShadow(mapObj);
 +        }
 +    }
++
++    PortFollower_BurstFollows(mapObj);
 +
 +    sPlayerX = x;
 +    sPlayerZ = z;
@@ -1716,7 +1807,7 @@ index 00000000..865fd0c3
 +    MapObjectManager *mapObjMan = fieldSystem->mapObjMan;
 +    MapObject *bubble = PortFollower_FindID(mapObjMan, PORT_FOLLOWER_EMOTE_LOCAL_ID);
 +    VecFx32 front = { 0, 0, FX32_ONE * 6 };
-+    VecFx32 above = { 0, FX32_ONE * (big ? 60 : 30), 0 };
++    VecFx32 above = { 0, FX32_ONE * (big ? 76 : 44), 0 }; // (30 and 60 sat on its head: 2026-10-29)
 +    int graphicsID = PORT_FOLLOWER_BALL_GFX_FIRST + BALL_SPRITES + emote;
 +
 +    if (bubble != NULL) {
