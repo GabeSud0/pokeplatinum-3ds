@@ -44,7 +44,9 @@ by scripts, not talked to, walked through) where the Pokémon stands, a
 little in front: coming out it drops in and opens, the Pokémon growing
 out of it; going in the Pokémon shrinks into it and it stays a moment.
 No room or no free map object for it: the Pokémon alone. The ball has no
-shadow, and the Pokémon none while it's smaller than itself.
+shadow, and the Pokémon none while it's smaller than itself: its shadow
+is made once it's out (a new shadow is drawn once before it first looks
+at its object's flags, so it showed alone before the ball came).
 
 Out and standing it steps in place, as HeartGold's do (its draw state the
 slow walk's). Talked to (A facing it: field_control.c,
@@ -69,10 +71,10 @@ behind it, patch 0057).
  src/overlay005/options_panel.c |   3 +-
  src/overlay005/ov5_021ECC20.c  |   7 +
  src/overlay005/ov5_021ECE40.c  |  33 +-
- src/port_follower.c            | 819 +++++++++++++++++++++++++++++++++++++++++
+ src/port_follower.c            | 863 +++++++++++++++++++++++++++++++++++++++++
  src/sound.c                    |   7 +
  src/unk_020EDBAC.c             |   5 +-
- 16 files changed, 1036 insertions(+), 5 deletions(-)
+ 16 files changed, 1080 insertions(+), 5 deletions(-)
 
 diff --git a/include/constants/map_object.h b/include/constants/map_object.h
 index d692a8b6..7d4cb6d8 100644
@@ -565,10 +567,10 @@ index dbe4ac67..04528579 100644
  
 diff --git a/src/port_follower.c b/src/port_follower.c
 new file mode 100644
-index 00000000..a3ffb475
+index 00000000..0adebe64
 --- /dev/null
 +++ b/src/port_follower.c
-@@ -0,0 +1,819 @@
+@@ -0,0 +1,863 @@
 +#include "port_follower.h"
 +
 +#include <nitro.h>
@@ -588,6 +590,7 @@ index 00000000..a3ffb475
 +#include "field/field_system.h"
 +#include "overlay005/ov5_021EB1A0.h"
 +#include "overlay005/ov5_021ECE40.h"
++#include "overlay005/ov5_021F134C.h"
 +#include "overlay005/options_panel.h"
 +
 +#include "bg_window.h"
@@ -923,6 +926,10 @@ index 00000000..a3ffb475
 +    return !big || MapHeader_IsOutdoors(here);
 +}
 +
++// Its shadow: made yet (PortFollower_Add), and hidden by this file while
++// it's smaller than itself (sShadowWas: as the field had it before).
++static BOOL sShadowMade, sShadowForced, sShadowWas;
++
 +static void PortFollower_Remove(FieldSystem *fieldSystem, MapObject *mapObj)
 +{
 +    MapObject_Delete(mapObj);
@@ -954,6 +961,13 @@ index 00000000..a3ffb475
 +
 +    MapObject_SetLocalID(mapObj, PORT_FOLLOWER_LOCAL_ID);
 +    MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_PORT_FOLLOWER | MAP_OBJ_STATUS_PERSISTENT);
++
++    // Its shadow made once it's out (PortFollower_Update), not by the
++    // movement code on its first frame: a new shadow is drawn once before
++    // it first looks at its object's flags, so it showed alone, hidden or
++    // not, before the ball came.
++    sShadowMade = MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_SHOW_SHADOW) != 0;
++    MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_SHOW_SHADOW);
 +
 +    if (MapObject_CheckStatus(player, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE)) {
 +        MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE);
@@ -1043,6 +1057,9 @@ index 00000000..a3ffb475
 +        MapObject_SetStatusFlagOn(ball, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE);
 +    }
 +
++    // (no shadow: not made at all, as the movement code would on its first
++    // frame, nor shown)
++    MapObject_SetStatusFlagOn(ball, MAP_OBJ_STATUS_SHOW_SHADOW | MAP_OBJ_STATUS_HIDE_SHADOW);
 +    MapObject_SetSpritePosOffset(ball, &front);
 +    PortFollower_ScaleOf(ball, 0, BALL_POP);
 +    sBallLeft = sBallTotal = steps;
@@ -1093,7 +1110,32 @@ index 00000000..a3ffb475
 +static int sOut, sIn;
 +
 +static int sOpenIn; // (coming out, sOut -3: the ball's steps before it opens)
-+static BOOL sShadowHidden; // (its shadow as the field had it when it began coming out)
++
++static void PortFollower_HideShadow(MapObject *mapObj)
++{
++    if (!sShadowForced) {
++        sShadowForced = TRUE;
++        sShadowWas = MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE_SHADOW) != 0; // (in grass, on water...)
++    }
++
++    MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_HIDE_SHADOW);
++}
++
++static void PortFollower_ShowShadow(MapObject *mapObj)
++{
++    if (!sShadowMade) {
++        sShadowMade = TRUE;
++        ov5_021F1570(mapObj);
++    }
++
++    if (sShadowForced) {
++        sShadowForced = FALSE;
++
++        if (!sShadowWas) {
++            MapObject_SetStatusFlagOff(mapObj, MAP_OBJ_STATUS_HIDE_SHADOW);
++        }
++    }
++}
 +static BOOL sDropIn;
 +
 +BOOL PortFollower_StartsSmall(const MapObject *mapObj)
@@ -1128,6 +1170,11 @@ index 00000000..a3ffb475
 +        sIn = 0;
 +        sOut = mapObj != NULL ? -1 : 0;
 +        sLast = mapObj;
++        sShadowForced = FALSE;
++
++        if (mapObj != NULL) {
++            sShadowMade = TRUE; // (made again with the field's objects: the movement code's)
++        }
 +    }
 +
 +    // (the options' page in the lower menu's panel: a task, but the field
@@ -1207,7 +1254,6 @@ index 00000000..a3ffb475
 +            BOOL waits = MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE) && dx == 0 && dz == 0 && sOut == -2;
 +
 +            if (!waits && PortFollower_SetScale(mapObj, 0)) {
-+                sShadowHidden = MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE_SHADOW) != 0; // (in grass, on water...)
 +                sDropIn = TRUE;
 +                sOut = -3;
 +                sOpenIn = PortFollower_ShowBall(fieldSystem, mapObj, BALL_LEAD + 2 * BALL_POP) ? BALL_LEAD : 0;
@@ -1216,8 +1262,8 @@ index 00000000..a3ffb475
 +            sOut++;
 +            PortFollower_SetScale(mapObj, sOut);
 +
-+            if (sOut == POP_FRAMES && !sShadowHidden) {
-+                MapObject_SetStatusFlagOff(mapObj, MAP_OBJ_STATUS_HIDE_SHADOW); // (its shadow once it's its size)
++            if (sOut == POP_FRAMES) {
++                PortFollower_ShowShadow(mapObj); // (its shadow once it's its size)
 +            }
 +        } else if (sub_02062A14(mapObj) == 0 && !MapObject_IsMoving(mapObj)) {
 +            // Out, standing: stepping in place, as HeartGold's do (the walk
@@ -1227,7 +1273,7 @@ index 00000000..a3ffb475
 +
 +        // (no shadow under it while it's smaller than itself)
 +        if (mapObj != NULL && (sIn > 0 || sOut < POP_FRAMES)) {
-+            MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_HIDE_SHADOW);
++            PortFollower_HideShadow(mapObj);
 +        }
 +    }
 +
