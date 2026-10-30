@@ -493,7 +493,10 @@ static void simulate(const NitroGx3dScene *scene, uint16_t *out555)
         unsigned bl = (unsigned)(color[i].b * 255.0f + 0.5f) >> 3;
         out555[i] = (uint16_t)(r | (g << 5) | (bl << 10) | (color[i].a > 0.0f ? 0x8000u : 0u));
     }
-    if (edges.enabled) {
+    /* (NitroPort_Gx3dMarkEdges outlines a DS-sized image: at a view's own
+     * size, the 3DS's GPU draws the outlines, not shown here; taken as
+     * 256 wide, a wider picture's rows came out in black bands) */
+    if (edges.enabled && W == NITRO_GX3D_WIDTH && H == NITRO_GX3D_HEIGHT) {
         for (i = 0; i < W * H; i++) {
             float z = depth[i] < 0.0f ? 0.0f : depth[i] > 1.0f ? 1.0f : depth[i];
             depthId[i] = (uint32_t)(z * 16777215.0f) | ((uint32_t)stencil[i] << 24);
