@@ -143,6 +143,9 @@ void NitroPort_SoundRender(int16_t *stereo, size_t frames);
 void NitroPort_SoundPumpReplies(void);
 /* (nitro_port_fs.h, which needs the SDK's headers) */
 void NitroPort_FsReadStats(uint32_t *reads, uint64_t *bytes, uint64_t *micros);
+void NitroPort_PakDiskStats(uint32_t *reads, uint64_t *bytes);
+void NitroPort_PakCacheBlocks(uint32_t blocks);
+uint32_t NitroPort_PakWarmField(void);
 /* (nitro_port.h) the save's changes waiting, into its file */
 void NitroPort_CardFlush(void);
 
@@ -2509,7 +2512,7 @@ static void PerfFrame(u64 enter)
  * own work (of which its file reads, and its waits for the geometry
  * thread), or the port's between frames. For the stalls the [perf] lines
  * only average over two seconds (going between a route and a town). */
-#define STALL_GAME_MS 100.0
+#define STALL_GAME_MS 34.0   /* (more than a scene's time at 30 a second: a scene missed) */
 #define STALL_PORT_MS 50.0
 static double TicksMs(u64 ticks)
 {
@@ -2518,21 +2521,25 @@ static double TicksMs(u64 ticks)
 
 static void NoteGameStall(u64 enter)
 {
-    static uint32_t lastReads;
-    static uint64_t lastBytes, lastFsMicros, lastGeoMicros;
-    uint32_t reads;
-    uint64_t bytes, fsMicros, geoMicros = NitroPort_Gx3dProducerWaitMicros();
+    static uint32_t lastReads, lastDiskReads;
+    static uint64_t lastBytes, lastDiskBytes, lastFsMicros, lastGeoMicros;
+    uint32_t reads, diskReads;
+    uint64_t bytes, diskBytes, fsMicros, geoMicros = NitroPort_Gx3dProducerWaitMicros();
 
     NitroPort_FsReadStats(&reads, &bytes, &fsMicros);
+    NitroPort_PakDiskStats(&diskReads, &diskBytes);
     if (sFrameExit != 0 && TicksMs(enter - sFrameExit) > STALL_GAME_MS) {
-        NitroPort_Log("[stall] frame %lu: %.0f ms in the game (file reads: %lu, %llu KB, %.0f ms; "
+        NitroPort_Log("[stall] frame %lu: %.0f ms in the game (file reads: %lu, %llu KB, %.0f ms, of them from the SD card %lu, %llu KB; "
                       "waiting for the geometry thread: %.0f ms)",
                       sFrame, TicksMs(enter - sFrameExit), (unsigned long)(reads - lastReads),
                       (unsigned long long)((bytes - lastBytes) / 1024u),
-                      (double)(fsMicros - lastFsMicros) / 1000.0, (double)(geoMicros - lastGeoMicros) / 1000.0);
+                      (double)(fsMicros - lastFsMicros) / 1000.0, (unsigned long)(diskReads - lastDiskReads),
+                      (unsigned long long)((diskBytes - lastDiskBytes) / 1024u), (double)(geoMicros - lastGeoMicros) / 1000.0);
     }
     lastReads = reads;
     lastBytes = bytes;
+    lastDiskReads = diskReads;
+    lastDiskBytes = diskBytes;
     lastFsMicros = fsMicros;
     lastGeoMicros = geoMicros;
 }
@@ -2881,6 +2888,21 @@ int main(int argc, char **argv)
             bool isNew3ds = false;
 
             APT_CheckNew3DS(&isNew3ds);
+            {
+                /* More of the data pack kept in memory on a New 3DS (its
+                 * larger memory), and the field's small files read into
+                 * it now: going between a route and a town reads 120-240
+                 * small pieces in a frame (2026-10-30). */
+                u64 warmStart = svcGetSystemTick();
+                uint32_t kb;
+
+                if (isNew3ds) {
+                    NitroPort_PakCacheBlocks(2048);
+                }
+                kb = NitroPort_PakWarmField();
+                NitroPort_Log("[perf] data pack: %u MB kept in memory at most; the field's small files read ahead (%lu KB, %.0f ms)",
+                              isNew3ds ? 16u : 4u, (unsigned long)kb, TicksMs(svcGetSystemTick() - warmStart));
+            }
             ReadRemasterConfig(isNew3ds);
             ReadOptions();
             StartGpu(priority, isNew3ds);

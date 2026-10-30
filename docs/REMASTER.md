@@ -1570,9 +1570,22 @@ only one newer scene waits.
 | `filter3d xbrz` / `filter3d xbrz-smooth` | the 3D's textures 2x by xBRZ, nearest / bilinear (smooth: no shimmer while the picture moves, but sharp's cost and lines may come back). On trial: the [perf] line's 3D times say what it costs |
 | `flip on` | the 2D layers upside down (if a GPU's texture rows come out the other way round) |
 
-A frame that took long is in the log with where its time went:
-`[stall] frame N: X ms in the game (file reads: n, KB, ms; waiting for the
-geometry thread: ms)`, or `X ms in the port between frames (...)`.
+A frame that took long (more than 34 ms of the game's own, a scene's
+time at 30 a second: the field missed a scene) is in the log with where
+its time went: `[stall] frame N: X ms in the game (file reads: n, KB, ms,
+of them from the SD card n, KB; waiting for the geometry thread: ms)`, or
+`X ms in the port between frames (...)`.
+
+The data pack is read through blocks kept in memory (`3ds_port/pak`, 8 KB
+each: the game's reads are mostly small, an archive's header, a file
+table, a few glyphs, and each read of the SD card costs about 1 ms). 4 MB
+of them on an Old 3DS, 16 MB on a New 3DS (`pak_set_cache_blocks`), and
+before the game starts the field's small files are read into them
+(`NitroPort_PakWarmField`, about 1.4 MB: the font, the place name's frame,
+the zones' events, encounters and scripts, the people's list, the field
+effects, the weather...): going between a route and a town the game makes
+120-240 small reads in a frame, and the field's streaming (its map
+blocks, buildings, music) pushed those files out of 4 MB (2026-10-30).
 The log file is written by a thread of its own, at the lowest priority, a
 moment after the lines come: written on the thread that logged, each line
 cost the SD card's time, and the `[perf]` lines held the game up 35 ms
