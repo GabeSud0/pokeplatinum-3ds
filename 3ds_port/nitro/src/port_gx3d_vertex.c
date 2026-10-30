@@ -191,13 +191,29 @@ void NitroPort_Gx3dExpandTriangle(const float sx[3],const float sy[3],float dx[3
  * texel covers whole pixels and stays sharp, smooth 3D or not. Only quads
  * near their texels' size (a sprite scaled on purpose, a Pokémon growing
  * out of its ball, is left as it is), not mirrored differently each way.
- * Not in a scene with an orthographic camera (the interiors': the Pokémon
- * Centers, the shops, Eterna's gym): there every polygon is at one depth
- * and a texel a pixel, the room's floor, fences and paths as much as its
- * people, and each laid out on its own nearest pixel they came apart
- * (Gardenia's gym in pieces, 2026-10-30); its sprites are a texel a pixel
- * there already, as on the DS. sx/sy: the triangle's corners in the
- * DS's units, changed if so. */
+ * With an orthographic camera (the interiors: the Pokémon Centers, the
+ * shops, Eterna's gym) every polygon is at one depth and about a texel a
+ * pixel, the room's floor, fences and paths as much as its people: each
+ * laid out on its own nearest pixel, they came apart (Gardenia's gym in
+ * pieces, 2026-10-30). There only the people's: lit (the rooms' own
+ * polygons never are, in every interior looked at) and the whole of their
+ * texture, once (sprite_whole); left as they were, they were a fraction
+ * of a pixel off and soft with the smooth 3D. sx/sy: the triangle's
+ * corners in the DS's units, changed if so. */
+/* A person's: lit, its texture once over, from corner to corner. */
+static int sprite_whole(const NitroGx3dTriangle *tri,float tw,float th)
+{
+    float s0=tri->v[0].s,s1=s0,t0=tri->v[0].t,t1=t0;
+    int k;
+    if(!(tri->polygon_attr&15u))return 0;
+    for(k=1;k<3;k++){
+        if(tri->v[k].s<s0)s0=tri->v[k].s;
+        if(tri->v[k].s>s1)s1=tri->v[k].s;
+        if(tri->v[k].t<t0)t0=tri->v[k].t;
+        if(tri->v[k].t>t1)t1=tri->v[k].t;
+    }
+    return fabsf(s0)<0.05f && fabsf(s1-tw)<0.05f && fabsf(t0)<0.05f && fabsf(t1-th)<0.05f;
+}
 static int orthographic(const NitroGx3dScene *scene)
 {
     /* (w the same wherever a point is: the projection's last column
@@ -212,7 +228,8 @@ static int sprite_texel_a_pixel(const NitroGx3dScene *scene,const NitroGx3dTrian
     float fx,fy,px[3],py[3],ds1,dt1,ds2,dt2,det,a,b,e,f,x0,y0,ax,ay,ar,anchor_t;
     float sa,sf;
     int k;
-    if(!scene || scene->screen_height!=240u || ((tri->texture_param>>26)&7u)==0u || orthographic(scene))return 0;
+    if(!scene || scene->screen_height!=240u || ((tri->texture_param>>26)&7u)==0u)return 0;
+    if(orthographic(scene) && !sprite_whole(tri,tw,th))return 0;
     if(v[0].clip[3]!=v[1].clip[3] || v[0].clip[3]!=v[2].clip[3] || v[0].clip[3]<=0)return 0;
     /* (screen pixels: the view's width over the DS's 256 units, its 240 lines over 192) */
     fx=(float)scene->screen_width/256.0f;

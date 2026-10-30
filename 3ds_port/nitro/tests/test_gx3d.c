@@ -713,8 +713,8 @@ static void test_interpolation_swaying(void)
  * sprite_texel_a_pixel): a person's quad (32 x 32 texels) drawn by the
  * camera at 35.7 pixels and a fraction of a pixel off comes out 32 pixels
  * on pixel corners, its feet where they were; one scaled on purpose, one
- * not facing the camera, one in an orthographic camera's scene, or the
- * 1.25x field, as it was. */
+ * not facing the camera, one of a room's own in an orthographic camera's
+ * scene, or the 1.25x field, as it was. */
 static NitroGx3dScene sSpriteScene;
 static void sprite_quad(NitroGx3dScene *sc,float px0,float py0,float size,int32_t w2)
 {
@@ -780,11 +780,21 @@ static void test_sprite_texel_a_pixel(void)
     sprite_corners(sc,&x0,&x1,&y0,&y1);
     CHECK(fabsf((x1-x0)-35.7f)<0.5f);
     /* an orthographic camera's scene (the interiors': the room's own
-     * polygons all at one depth too): as it was */
+     * polygons all at one depth too): an unlit one (the room's) as it
+     * was; a lit one, its whole texture (a person), a texel a pixel */
     sprite_quad(sc,180.3f,150.4f,35.7f,4096);
     sc->projection[15]=4096;
     sprite_corners(sc,&x0,&x1,&y0,&y1);
     CHECK(fabsf((x1-x0)-35.7f)<1.0f && fabsf(x0-180.3f)<0.5f);   /* (its edges moved out a little) */
+    sprite_quad(sc,180.3f,150.4f,35.7f,4096);
+    sc->triangles[0].polygon_attr|=1u;sc->triangles[1].polygon_attr|=1u;
+    sprite_corners(sc,&x0,&x1,&y0,&y1);
+    CHECK(fabsf((x1-x0)-32.0f)<0.01f && fabsf(x0-floorf(x0+0.5f))<0.01f);
+    sprite_quad(sc,180.3f,150.4f,35.7f,4096);   /* (lit, but a part of its texture) */
+    sc->triangles[0].polygon_attr|=1u;sc->triangles[1].polygon_attr|=1u;
+    sc->triangles[0].v[0].s=sc->triangles[1].v[0].s=4.0f;
+    sprite_corners(sc,&x0,&x1,&y0,&y1);
+    CHECK(fabsf(x0-floorf(x0+0.5f))>0.05f || fabsf((x1-x0)-32.0f)>0.5f);
     sc->projection[15]=0;
     /* the 1.25x field (192 lines): as it was */
     sprite_quad(sc,180.3f,150.4f,35.7f,2481011);
