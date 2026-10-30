@@ -23,7 +23,9 @@ with MOVEMENT_TYPE_FOLLOW_PLAYER's code under a movement type of its own
 (PORT_MOVEMENT_TYPE_FOLLOW_MON), so scripts never take it for the partner
 trainer: walked through, kept across zone changes, never saved, not
 talked to. Out when the player walks (not on the bike, surfing or using
-a field move), with no partner trainer or Amity Square's Pokémon, outside
+a field move, nor while the player hands the party to a Pokémon Center's
+nurse: in its ball with the rest for the healing), with no partner trainer
+or Amity Square's Pokémon, outside
 the Underground, the Union Room and maps with features of their own; a
 64 x 64 one only outdoors. Not an egg, not fainted. Out behind the player
 when that tile is free, else on the player's tile hidden till they step
@@ -85,10 +87,10 @@ behind it, patch 0057).
  src/overlay005/options_panel.c |    3 +-
  src/overlay005/ov5_021ECC20.c  |    7 +
  src/overlay005/ov5_021ECE40.c  |   33 +-
- src/port_follower.c            | 1549 ++++++++++++++++++++++++++++++++++++++++
+ src/port_follower.c            | 1559 ++++++++++++++++++++++++++++++++++++++++
  src/sound.c                    |    7 +
  src/unk_020EDBAC.c             |    5 +-
- 16 files changed, 1786 insertions(+), 5 deletions(-)
+ 16 files changed, 1796 insertions(+), 5 deletions(-)
 
 diff --git a/include/constants/map_object.h b/include/constants/map_object.h
 index d692a8b6..7d4cb6d8 100644
@@ -615,10 +617,10 @@ index dbe4ac67..04528579 100644
  
 diff --git a/src/port_follower.c b/src/port_follower.c
 new file mode 100644
-index 00000000..53f5206c
+index 00000000..02118995
 --- /dev/null
 +++ b/src/port_follower.c
-@@ -0,0 +1,1549 @@
+@@ -0,0 +1,1559 @@
 +#include "port_follower.h"
 +
 +#include <nitro.h>
@@ -1024,12 +1026,22 @@ index 00000000..53f5206c
 +}
 +
 +// Where it may be out: walking (not on the bike, surfing or using a field
-+// move), with no partner trainer or Amity Square's Pokémon following, not
-+// in the Underground, the Union Room or a map with features of its own (the
-+// Distortion World, the gyms' puzzles); one 64 x 64 only outdoors.
++// move, nor handing the party to a Pokémon Center's nurse: in its ball with
++// the rest for the healing, as HeartGold's), with no partner trainer or
++// Amity Square's Pokémon following, not in the Underground, the Union Room
++// or a map with features of its own (the Distortion World, the gyms'
++// puzzles); one 64 x 64 only outdoors.
 +static BOOL PortFollower_MayBeOut(FieldSystem *fieldSystem, BOOL big)
 +{
 +    enum MapHeaderID here = fieldSystem->location->mapHeaderID;
++    MapObject *player = PlayerAvatar_GetMapObject(fieldSystem->playerAvatar);
++    int playerGfx = player != NULL ? MapObject_GetGraphicsID(player) : 0;
++
++    // (the player holding out the Poké Balls: the healing script's
++    // PLAYER_TRANSITION_HEALING, the player's state still walking)
++    if (playerGfx == OBJ_EVENT_GFX_PLAYER_M_POKECENTER_HEAL || playerGfx == OBJ_EVENT_GFX_PLAYER_F_POKECENTER_HEAL) {
++        return FALSE;
++    }
 +
 +    if (PlayerAvatar_GetPlayerState(fieldSystem->playerAvatar) != PLAYER_AVATAR_WALKING
 +        || SystemFlag_CheckHasPartner(SaveData_GetVarsFlags(fieldSystem->saveData))

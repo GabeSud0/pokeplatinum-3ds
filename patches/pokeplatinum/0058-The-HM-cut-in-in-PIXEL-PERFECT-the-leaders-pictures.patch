@@ -1,0 +1,418 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 09:30:00 -0700
+Subject: [PATCH] The HM cut-in in PIXEL PERFECT; the leaders' pictures at the
+ wider screen's edge (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The HM cut-in's band (BG3, a 256-pixel map of Poké Balls) goes on to the
+wider screen's edges as a repeating BG of the field's (NitroPort_RepeatingBg,
+as the weather's), not a screen laid out in parts: a laid-out screen takes
+the field out of PIXEL PERFECT's DS pixel size, so the field zoomed in for
+the cut-in and back out after it. Its wind (the white streaks) blows
+across the wider screen too: their cells beside the DS's screen are placed
+there while it plays (NitroPort_SetFieldCells), each streak shown left of
+the screen past the right band, as the DS's 9-bit sprite x wraps. Its
+band goes on beside the DS's screen as drawn for the wider screen: three
+more rings each side, fading on in two darker shades of the band's colour
+(palette 12's colours 6 and 7), made as the cut-in starts from the game's
+own band (its middle ring's shape stamped behind the band's rings), the
+map made 512 wide (CutIn_PortWideBand); the VRAM it takes and BG3's size
+put back as it ends.
+
+The gym leaders' battle intro: the leader's picture, whose art ends at the
+DS screen's right edge, slides to the wider screen's right edge
+(NitroPort_WideScreenExtra), not the DS's, where it looked cut off with
+the band going on beside it. Its name stays by the VS.
+---
+ src/overlay005/encounter_effect_core.c |  16 +-
+ src/overlay006/hm_cut_in.c             | 300 ++++++++++++++++++++++++++++++++-
+ 2 files changed, 308 insertions(+), 8 deletions(-)
+
+diff --git a/src/overlay005/encounter_effect_core.c b/src/overlay005/encounter_effect_core.c
+index 9119e8ca..52ba1fc5 100644
+--- a/src/overlay005/encounter_effect_core.c
++++ b/src/overlay005/encounter_effect_core.c
+@@ -2892,6 +2892,18 @@ static String *EncounterEffect_GetGymLeaderName(u32 trainerID, enum HeapID heapI
+     return result;
+ }
+ 
++#ifdef SDK_PORT_3DS
++extern int NitroPort_WideScreenExtra(void);
++
++// The leader's picture ends at the DS screen's right edge (its art cut
++// there): on the wider screen, at the wider screen's right edge, the band
++// going on beside it no more (it looked cropped, 2026-10-30). Its name
++// stays where it was, by the VS.
++#define PORT_LEADER_SHIFT (NitroPort_WideScreenExtra() * FX32_ONE)
++#else
++#define PORT_LEADER_SHIFT 0
++#endif
++
+ static BOOL EncounterEffect_GymLeader(EncounterEffect *encEffect, enum HeapID heapID, const GymLeaderEncounterParam *param)
+ {
+     GymLeaderEncounterEffect *leaderEncEffect = encEffect->param;
+@@ -2996,7 +3008,7 @@ static BOOL EncounterEffect_GymLeader(EncounterEffect *encEffect, enum HeapID he
+ 
+     case 6:
+ 
+-        QuadraticInterpolationTaskFX32_Init(&leaderEncEffect->unk_00, 272 * FX32_ONE, param->endX, -64 * FX32_ONE, 4);
++        QuadraticInterpolationTaskFX32_Init(&leaderEncEffect->unk_00, 272 * FX32_ONE + PORT_LEADER_SHIFT, param->endX + PORT_LEADER_SHIFT, -64 * FX32_ONE, 4);
+         Sprite_SetDrawFlag(leaderEncEffect->mugshotSprite, TRUE);
+         Sprite_SetExplicitPriority(leaderEncEffect->mugshotSprite, 0);
+ 
+@@ -3041,7 +3053,7 @@ static BOOL EncounterEffect_GymLeader(EncounterEffect *encEffect, enum HeapID he
+ 
+             BrightnessController_SetScreenBrightness(-14, GX_BLEND_PLANEMASK_BG0 | GX_BLEND_PLANEMASK_BD, BRIGHTNESS_MAIN_SCREEN);
+ 
+-            Bg_ScheduleScroll(encEffect->fieldSystem->bgConfig, 2, 0, -((leaderEncEffect->unk_00.currentValue >> FX32_SHIFT) + -92));
++            Bg_ScheduleScroll(encEffect->fieldSystem->bgConfig, 2, 0, -(((leaderEncEffect->unk_00.currentValue - PORT_LEADER_SHIFT) >> FX32_SHIFT) + -92));
+             GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG2, 1);
+             Bg_SetPriority(BG_LAYER_MAIN_2, 0);
+             encEffect->state++;
+diff --git a/src/overlay006/hm_cut_in.c b/src/overlay006/hm_cut_in.c
+index c3226fb1..b071f6f9 100644
+--- a/src/overlay006/hm_cut_in.c
++++ b/src/overlay006/hm_cut_in.c
+@@ -1697,11 +1697,277 @@ static void SysTask_CutIn_FinalizeBirdSpriteTransfer(SysTask *task, void *hmCutI
+ #ifdef SDK_PORT_3DS
+ // The band (BG3, a 256-pixel map of Poké Balls) goes on to the wider
+ // screen's edges, repeating as the DS's map wraps, not the plain lines
+-// beside the balls carried on (a stripe).
+-static const short sCutInWideLayout[][8] = {
+-    WIDE_SHOW(WIDE_BG(3), 0, 192),
+-};
++// beside the balls carried on (a stripe): a repeating BG of the field's
++// (NitroPort_RepeatingBg, as the weather's), not a screen laid out in
++// parts, which took the field out of PIXEL PERFECT's DS pixel size for the
++// cut-in (the field zoomed in and back out, 2026-10-30).
++extern void NitroPort_RepeatingBg(int bg, int on);
++// Its wind (the white streaks) blows across the wider screen too: their
++// cells beside the DS's screen are placed there (NitroPort_SetFieldCells);
++// each streak's x goes round a 512-pixel span, two of them 256 apart, as
++// the DS's sprites' x does (past 256 + its band, on the left side).
++extern void NitroPort_SetFieldCells(int on);
++
++// The band beside the DS's screen: three more rings each side, fading on
++// (two darker shades of the band's colour), as drawn for the wider screen
++// (2026-10-30). Made here from the game's own band: its middle ring's
++// shape stamped behind the band's rings at those places, the band's map
++// made 512 wide (its second half the right side, its end the left: the
++// map going round), the tiles put after the band's own. All put back as
++// they were when the cut-in ends.
++#define PORT_BAND_TOP      56   // (the band's lines in the map)
++#define PORT_BAND_H        80
++#define PORT_BAND_SIDE     72   // (PIXEL PERFECT's band; the 320 view shows 32 of it)
++#define PORT_BAND_W        (256 + 2 * PORT_BAND_SIDE)
++#define PORT_BAND_RING     48
++#define PORT_BAND_MAX_TILES 384
++
++typedef struct PortWideBand {
++    BOOL on;
++    u16 bg3cnt;
++    u16 firstTile, tiles;
++    u16 savedScr[32 * 32];                       // (the map's second 256 pixels' VRAM)
++    u8 savedChar[PORT_BAND_MAX_TILES * 32];      // (the VRAM the new tiles go in)
++} PortWideBand;
++
++static PortWideBand *sPortBand;
++static u16 sPortBandShades[2];   // (palette 12, colours 6 and 7: the new shades)
++
++static u8 CutIn_PortTexel(const u8 *chars, u32 numTiles, u16 entry, int x, int y)
++{
++    u32 tile = entry & 0x3FF;
++    int px = (entry & 0x400) ? 7 - x : x, py = (entry & 0x800) ? 7 - y : y;
++    u8 b;
++
++    if (tile >= numTiles) {
++        return 0;
++    }
++
++    b = chars[tile * 32 + py * 4 + px / 2];
++    return (px & 1) ? b >> 4 : b & 15;
++}
++
++static int CutIn_PortPaletteIndex(const u16 *colours, u16 colour)
++{
++    int i;
++
++    for (i = 1; i < 16; i++) {
++        if ((colours[i] & 0x7FFF) == colour) {
++            return i;
++        }
++    }
++
++    return -1;
++}
++
++static void CutIn_PortWideBand(NARC *narc, BgConfig *bgConfig)
++{
++    // (each side's rings: their left edges in the wider band, the darkest
++    // last: E the band's darkest shade, F and G the new ones)
++    static const struct {
++        short x;
++        u8 shade;
++    } rings[] = { { 49, 0 }, { 303, 0 }, { 17, 1 }, { 335, 1 }, { -15, 2 }, { 367, 2 } };
++    NNSG2dCharacterData *charData;
++    NNSG2dPaletteData *paletteData;
++    void *ncgrFile, *nclrFile;
++    const u16 *map = Bg_GetTilemapBuffer(bgConfig, BG_LAYER_MAIN_3);
++    u8 *canvas = NULL, *newChars = NULL, *stamp = NULL;
++    u16 *newMap = NULL;
++    const u8 *chars;
++    u32 numTiles;
++    int x, y, r, c, ringIndex, bg, shades[3], x0 = 256, y0 = PORT_BAND_H, x1 = -1, y1 = -1, n = 0;
++
++    if (NitroPort_WideScreenExtra() <= 0 || map == NULL) {
++        return;
++    }
++
++    ncgrFile = NARC_AllocAndReadWholeMember(narc, 0, HEAP_ID_FIELD1);
++    nclrFile = NARC_AllocAndReadWholeMember(narc, 2, HEAP_ID_FIELD1);
++    NNS_G2dGetUnpackedCharacterData(ncgrFile, &charData);
++    NNS_G2dGetUnpackedPaletteData(nclrFile, &paletteData);
++    chars = charData->pRawData;
++    numTiles = charData->szByte / 32;
++
++    sPortBand = Heap_Alloc(HEAP_ID_FIELD1, sizeof(PortWideBand));
++    canvas = Heap_Alloc(HEAP_ID_FIELD1, PORT_BAND_W * PORT_BAND_H);
++    stamp = Heap_Alloc(HEAP_ID_FIELD1, PORT_BAND_RING * PORT_BAND_RING);
++    newChars = Heap_Alloc(HEAP_ID_FIELD1, PORT_BAND_MAX_TILES * 32);
++    newMap = Heap_Alloc(HEAP_ID_FIELD1, (PORT_BAND_W / 8) * (PORT_BAND_H / 8) * sizeof(u16));
++
++    if (sPortBand == NULL || canvas == NULL || stamp == NULL || newChars == NULL || newMap == NULL) {
++        goto done;
++    }
++
++    sPortBand->on = FALSE;
++
++    // The DS's band, its colour indices, in the middle.
++    memset(canvas, 0, PORT_BAND_W * PORT_BAND_H);
++
++    for (y = 0; y < PORT_BAND_H; y++) {
++        for (x = 0; x < 256; x++) {
++            u16 entry = map[((PORT_BAND_TOP + y) / 8) * 32 + x / 8];
++            canvas[y * PORT_BAND_W + PORT_BAND_SIDE + x] = CutIn_PortTexel(chars, numTiles, entry, x % 8, (PORT_BAND_TOP + y) % 8);
++        }
++    }
++
++    // Its background (the black behind the rings) on the sides too.
++    bg = canvas[PORT_BAND_SIDE];
++
++    for (y = 0; y < PORT_BAND_H; y++) {
++        for (x = 0; x < PORT_BAND_SIDE; x++) {
++            canvas[y * PORT_BAND_W + x] = bg;
++            canvas[y * PORT_BAND_W + PORT_BAND_SIDE + 256 + x] = bg;
++        }
++    }
++
++    // The middle ring's shape: the brightest ring, on top of the others.
++    ringIndex = canvas[16 * PORT_BAND_W + PORT_BAND_SIDE + 128];
++
++    for (y = 0; y < PORT_BAND_H; y++) {
++        for (x = 0; x < 256; x++) {
++            if (canvas[y * PORT_BAND_W + PORT_BAND_SIDE + x] == ringIndex) {
++                x0 = x < x0 ? x : x0;
++                x1 = x > x1 ? x : x1;
++                y0 = y < y0 ? y : y0;
++                y1 = y > y1 ? y : y1;
++            }
++        }
++    }
++
++    shades[0] = CutIn_PortPaletteIndex(paletteData->pRawData, 7 | (5 << 5));   // (#392900, the band's own)
++    shades[1] = 6;
++    shades[2] = 7;
++
++    // (not the band this was made for: as the DS has it)
++    if (ringIndex == 0 || ringIndex == bg || x1 - x0 + 1 != PORT_BAND_RING || y1 - y0 + 1 != PORT_BAND_RING || shades[0] < 0) {
++        goto done;
++    }
++
++    for (y = 0; y < PORT_BAND_H && shades[1] >= 0; y++) {
++        for (x = 0; x < 256; x++) {
++            int i = canvas[y * PORT_BAND_W + PORT_BAND_SIDE + x];
++
++            if (i == shades[1] || i == shades[2]) {
++                goto done;   // (colours 6 and 7 in use: not free for the new shades)
++            }
++        }
++    }
++
++    for (y = 0; y < PORT_BAND_RING; y++) {
++        for (x = 0; x < PORT_BAND_RING; x++) {
++            stamp[y * PORT_BAND_RING + x] = canvas[(y0 + y) * PORT_BAND_W + PORT_BAND_SIDE + x0 + x] == ringIndex;
++        }
++    }
++
++    // Each ring behind what's there (the brighter ones in front).
++    for (r = 0; r < (int)NELEMS(rings); r++) {
++        for (y = 0; y < PORT_BAND_RING; y++) {
++            for (x = 0; x < PORT_BAND_RING; x++) {
++                int cx = rings[r].x + x, cy = y0 + y;
++
++                if (stamp[y * PORT_BAND_RING + x] && cx >= 0 && cx < PORT_BAND_W && canvas[cy * PORT_BAND_W + cx] == bg) {
++                    canvas[cy * PORT_BAND_W + cx] = shades[rings[r].shade];
++                }
++            }
++        }
++    }
++
++    // In tiles, after the band's own (the same tile used again).
++    for (r = 0; r < PORT_BAND_H / 8; r++) {
++        for (c = 0; c < PORT_BAND_W / 8; c++) {
++            u8 tile[32];
++            int t;
++
++            for (y = 0; y < 8; y++) {
++                for (x = 0; x < 8; x += 2) {
++                    tile[y * 4 + x / 2] = canvas[(r * 8 + y) * PORT_BAND_W + c * 8 + x] | (canvas[(r * 8 + y) * PORT_BAND_W + c * 8 + x + 1] << 4);
++                }
++            }
++
++            for (t = 0; t < n && memcmp(&newChars[t * 32], tile, 32) != 0; t++) {
++            }
++
++            if (t == n) {
++                if (n == PORT_BAND_MAX_TILES) {
++                    goto done;
++                }
++
++                memcpy(&newChars[n * 32], tile, 32);
++                n++;
++            }
++
++            newMap[r * (PORT_BAND_W / 8) + c] = (u16)((numTiles + t) | (12 << 12));
++        }
++    }
++
++    // Put in: the VRAM it takes kept, the map 512 wide.
++    sPortBand->firstTile = (u16)numTiles;
++    sPortBand->tiles = (u16)n;
++    memcpy(sPortBand->savedChar, (u8 *)G2_GetBG3CharPtr() + numTiles * 32, n * 32);
++    memcpy(sPortBand->savedScr, (u8 *)G2_GetBG3ScrPtr() + 0x800, sizeof(sPortBand->savedScr));
++    sPortBand->bg3cnt = reg_G2_BG3CNT;
++
++    DC_FlushRange(newChars, n * 32);
++    GX_LoadBG3Char(newChars, numTiles * 32, n * 32);
++
++    for (r = 0; r < PORT_BAND_H / 8; r++) {
++        for (c = 0; c < PORT_BAND_W / 8; c++) {
++            int mapX = (c * 8 - PORT_BAND_SIDE) & 511, row = PORT_BAND_TOP / 8 + r;
++            u16 entry = newMap[r * (PORT_BAND_W / 8) + c];
++
++            DC_FlushRange(&entry, sizeof(entry));
++            GX_LoadBG3Scr(&entry, (mapX / 256) * 0x800 + (row * 32 + (mapX & 255) / 8) * 2, sizeof(entry));
++        }
++    }
++
++    sPortBandShades[0] = 4 | (3 << 5);   // (as drawn: two steps on from #392900)
++    sPortBandShades[1] = 3 | (2 << 5);
++    Bg_LoadPalette(BG_LAYER_MAIN_3, sPortBandShades, sizeof(sPortBandShades), 32 * 12 + shades[1] * 2);
++
++    reg_G2_BG3CNT = (u16)((reg_G2_BG3CNT & ~REG_G2_BG3CNT_SCREENSIZE_MASK) | (GX_BG_SCRSIZE_TEXT_512x256 << REG_G2_BG3CNT_SCREENSIZE_SHIFT));
++    sPortBand->on = TRUE;
++
++done:
++    if (sPortBand != NULL && !sPortBand->on) {
++        Heap_Free(sPortBand);
++        sPortBand = NULL;
++    }
++
++    if (newMap != NULL) {
++        Heap_Free(newMap);
++    }
++
++    if (newChars != NULL) {
++        Heap_Free(newChars);
++    }
+ 
++    if (stamp != NULL) {
++        Heap_Free(stamp);
++    }
++
++    if (canvas != NULL) {
++        Heap_Free(canvas);
++    }
++
++    Heap_Free(nclrFile);
++    Heap_Free(ncgrFile);
++}
++
++static void CutIn_PortWideBandEnd(void)
++{
++    if (sPortBand == NULL) {
++        return;
++    }
++
++    reg_G2_BG3CNT = sPortBand->bg3cnt;
++    DC_FlushRange(sPortBand->savedChar, sPortBand->tiles * 32);
++    GX_LoadBG3Char(sPortBand->savedChar, sPortBand->firstTile * 32, sPortBand->tiles * 32);
++    DC_FlushRange(sPortBand->savedScr, sizeof(sPortBand->savedScr));
++    GX_LoadBG3Scr(sPortBand->savedScr, 0x800, sizeof(sPortBand->savedScr));
++    Heap_Free(sPortBand);
++    sPortBand = NULL;
++}
+ #endif
+ 
+ static void CutIn_InitSpriteResources(HMCutIn *cutIn)
+@@ -1722,12 +1988,16 @@ static void CutIn_InitSpriteResources(HMCutIn *cutIn)
+     CutIn_LoadBgPalette(narc, 2, &cutIn->g2dPaletteData);
+     CutIn_LoadBgPatternChar(cutIn->fieldSystem->bgConfig, narc, 0, &cutIn->g2dCharData);
+     CutIn_LoadBgPatternPalette(cutIn->fieldSystem->bgConfig, narc, 1, &cutIn->g2dScreenData);
++#ifdef SDK_PORT_3DS
++    CutIn_PortWideBand(narc, cutIn->fieldSystem->bgConfig);
++#endif
+     CutIn_LoadSpriteResources(cutIn, narc);
+ 
+     NARC_dtor(narc);
+     cutIn->unk_244 = OverworldAnimManagerList_New(HEAP_ID_FIELD1, 32);
+ #ifdef SDK_PORT_3DS
+-    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sCutInWideLayout);
++    NitroPort_RepeatingBg(3, TRUE);
++    NitroPort_SetFieldCells(TRUE);
+ #endif
+     GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG3, 1);
+ }
+@@ -1737,9 +2007,13 @@ static void CutIn_DeleteSprites(HMCutIn *cutIn)
+     GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG3, 0);
+     OverworldAnimManagerList_FinishAndFree(cutIn->unk_244);
+ 
++#ifdef SDK_PORT_3DS
++    CutIn_PortWideBandEnd();   // (before the map's cleared: the DS's map size again)
++#endif
+     CutIn_ClearTileMapBG3(cutIn->fieldSystem->bgConfig);
+ #ifdef SDK_PORT_3DS
+-    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++    NitroPort_RepeatingBg(3, FALSE);
++    NitroPort_SetFieldCells(FALSE);
+ #endif
+     CutIn_DeleteSpriteResources(cutIn);
+ 
+@@ -2316,7 +2590,21 @@ static void WindParticleAnim_AnimateParticle(OverworldAnimManager *animMan, void
+     newPos.x %= (FX32_ONE * 512);
+ 
+     OverworldAnimManager_SetPosition(animMan, &newPos);
++#ifdef SDK_PORT_3DS
++    {
++        // (shown where the DS shows it: past the right band, left of the
++        // screen, as the DS's 9-bit sprite x wraps)
++        VecFx32 shown = newPos;
++
++        if (shown.x >= (256 + NitroPort_WideScreenExtra() + 32) * FX32_ONE) {
++            shown.x -= FX32_ONE * 512;
++        }
++
++        Sprite_SetPosition(env->sprite, &shown);
++    }
++#else
+     Sprite_SetPosition(env->sprite, &newPos);
++#endif
+ 
+     if (env->data.allowWindParticles == TRUE) {
+         HMCutIn *v2 = env->data.cutIn;
+-- 
+2.43.0
+

@@ -848,8 +848,8 @@ static void ReadOptions(void)
 /* The DS geometry engine (vertices, lighting, clipping: most of a 3D
  * frame's work) on a core of its own, so the game's thread, and with it
  * the game's speed against the music, doesn't carry it. On a New 3DS core
- * 2, below engine A's drawer there (the drawer is idle most of the time;
- * the geometry takes a fraction of the core). Core 1 is the system's: a
+ * 2, above engine A's drawer there (StartGeometryOn: the drawer can wait
+ * for it, the geometry can't). Core 1 is the system's: a
  * program gets a share of it (APT_SetAppCpuTimeLimit), 30% in practice,
  * and there the geometry took 18-30 ms a scene, left out 3-10 scenes a
  * second, and the intro's flyover panned in uneven jumps (log of
@@ -893,16 +893,22 @@ static void GeometryOps(void)
     NitroPort_Gx3dStartThread(&ops);
 }
 
-/* Core 2 (New 3DS), below its drawer: its screen shows the 3D. */
+/* Core 2 (New 3DS), above engine A's drawer there: the geometry has a
+ * scene to finish every 2 V-blanks or it's left out, the drawer only
+ * pictures to hand over when it can. Below it, with the upper screen's 2D
+ * changing every frame (text, the HM cut-in: 11-14 ms a picture), the
+ * geometry left out 6-10 scenes a second and the field dropped to 48-52
+ * frames a second (a log of 2026-10-30); together they take about 3/4 of
+ * the core. */
 static void StartGeometryOn(s32 priority, int core)
 {
     GeometryOps();
-    sGeoThread = CreateThreadPatiently(GeoMain, NULL, 64 * 1024, priority + 1, core, false);
+    sGeoThread = CreateThreadPatiently(GeoMain, NULL, 64 * 1024, priority - 1, core, false);
     sGeoCore = sGeoThread ? core : -1;
     if (!sGeoThread) {
         NitroPort_Gx3dStopThread();
         NitroPort_Log("[perf] geometry on the game's thread (no core %d)", core);
-        LogThreadTrouble("geometry", 64 * 1024, priority + 1, core);
+        LogThreadTrouble("geometry", 64 * 1024, priority - 1, core);
         return;
     }
     NitroPort_Log("[perf] geometry on core %d", core);

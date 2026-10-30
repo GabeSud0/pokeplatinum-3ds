@@ -582,9 +582,26 @@ stretched:
     0052: the trainer's hand took it off the screen for the 4 frames it
     hangs at the top, and it vanished);
   - the HM cut-in: its band of Poké Balls (BG3, a 256-pixel map) repeats
-    to the screen's edges (a SHOW part) instead of a stripe of its plain
-    lines; the Pokémon waits beyond the wider screen's right edge and
-    slides off past its left one (it sat still in the right side);
+    to the screen's edges (a repeating BG of the field's,
+    `NitroPort_RepeatingBg`, as the weather's; a SHOW part until
+    2026-10-30, but a screen laid out in parts takes the field out of
+    PIXEL PERFECT, and the field zoomed in for the cut-in and back out)
+    instead of a stripe of its plain lines; the Pokémon waits beyond the
+    wider screen's right edge and slides off past its left one (it sat
+    still in the right side); its wind (the white streaks) blows across
+    the wider screen too (`NitroPort_SetFieldCells` while it plays: in the
+    field the cells beside the DS's screen are otherwise left out, as the
+    menus park sprites there; each streak shown left of the screen past
+    the right band, as the DS's 9-bit sprite x wraps); its band of rings
+    goes on as drawn for the wider screen (2026-10-30: three more rings
+    each side, fading in two darker shades), made from the game's own band
+    as the cut-in starts (its middle ring's shape stamped behind the
+    band's rings; BG3's map made 512 wide, the sides in its second half;
+    `CutIn_PortWideBand`, patch 0058);
+  - the gym leaders' battle intro (patch 0058): the leader's picture, its
+    art ending at the DS screen's right edge, slides to the wider screen's
+    right edge, not the DS's (it looked cut off, the band going on beside
+    it); the name stays by the VS;
   - the people the scripts bring on and send off (`scrcmd.c`): the
     scripts put them just past the DS's edge, where they popped up,
     vanished or walked through things in the wider screen's sides. One
@@ -1262,7 +1279,9 @@ screens) the lower screen is the DS's, filling the screen as before.
     overworld sprites' lookups as Pikachu's (Regigigas's for 64 x 64),
     their texture an archive member past the archive's own (`narc.c`).
     Out while the player walks (in its ball on the bike, surfing, during
-    field moves, with Cheryl and the other partners or Amity Square's
+    field moves, while the player hands the party to a Pokémon Center's
+    nurse for healing (the player's picture holding out the Poké Balls),
+    with Cheryl and the other partners or Amity Square's
     Pokémon, in the Underground, the Union Room and maps with features of
     their own; a 64 x 64 one indoors), behind the player or, where that
     tile isn't free (out of a door), on the player's tile hidden till they
@@ -1493,7 +1512,11 @@ first, and the VRAM (864 KB for engine A) only when they're the same.
 
 Where things run on a New 3DS: the game, the display thread and engine B's
 drawer on core 0 (the game first); engine A's drawer and the geometry on
-core 2. Core 1 is the system's; a program gets 30% of it, and there the
+core 2, the geometry first (it has a scene to finish every 2 V-blanks or
+it's left out; with the drawer first, the upper screen's 2D changing every
+frame, text or the HM cut-in, left out 6-10 scenes a second and the field
+dropped to 48-52 frames a second, 2026-10-30). Core 1 is the system's; a
+program gets 30% of it, and there the
 geometry took 18-30 ms a scene and left scenes out (the intro's flyover
 jumped), and engine B's screen drew 14-25 frames a second
 (`geometry.txt`: `core 1` puts both back there).

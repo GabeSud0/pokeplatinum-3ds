@@ -80,6 +80,10 @@ int NitroPort_WidePictures(void);
  * elsewhere only those on the DS's screen, as the DS has it (menus park
  * sprites just off it). */
 int NitroPort_WideCells(void);
+/* From the game: a field effect whose sprites go on beside the DS's screen
+ * (the HM cut-in's wind), so its cells there are placed there too while it
+ * plays (NitroPort_WideCells). */
+void NitroPort_SetFieldCells(int on);
 /* (tests, the PC runner) 1: pictures, 0: the UI, -1: as the overlays say. */
 void NitroPort_WideForcePictures(int mode);
 /* Changes whenever a window is added or removed. */
