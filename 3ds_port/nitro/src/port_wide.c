@@ -255,6 +255,12 @@ int NitroPort_WideWindows(int engine, int bg, NitroWideWindow *out, int max)
 }
 
 static int sForcePictures = -1;
+static volatile int sFieldCells;   /* (NitroPort_SetFieldCells) */
+
+void NitroPort_SetFieldCells(int on)
+{
+    __atomic_store_n(&sFieldCells, on != 0, __ATOMIC_RELEASE);
+}
 
 void NitroPort_WideForcePictures(int mode)
 {
@@ -270,6 +276,9 @@ int NitroPort_WideCells(void)
 
     if (sForcePictures >= 0) {
         return sForcePictures || NitroPort_OverlayLoadedNamed("battle");
+    }
+    if (__atomic_load_n(&sFieldCells, __ATOMIC_ACQUIRE)) {
+        return 1;   /* (a field effect's: the HM cut-in's wind) */
     }
     if (c != 0xFFFFFFFFu && (c >> 1) == serial) {
         return (int)(c & 1);

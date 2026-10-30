@@ -588,7 +588,11 @@ stretched:
     PIXEL PERFECT, and the field zoomed in for the cut-in and back out)
     instead of a stripe of its plain lines; the Pokémon waits beyond the
     wider screen's right edge and slides off past its left one (it sat
-    still in the right side);
+    still in the right side); its wind (the white streaks) blows across
+    the wider screen too (`NitroPort_SetFieldCells` while it plays: in the
+    field the cells beside the DS's screen are otherwise left out, as the
+    menus park sprites there; each streak shown left of the screen past
+    the right band, as the DS's 9-bit sprite x wraps);
   - the gym leaders' battle intro (patch 0058): the leader's picture, its
     art ending at the DS screen's right edge, slides to the wider screen's
     right edge, not the DS's (it looked cut off, the band going on beside
@@ -1495,7 +1499,11 @@ first, and the VRAM (864 KB for engine A) only when they're the same.
 
 Where things run on a New 3DS: the game, the display thread and engine B's
 drawer on core 0 (the game first); engine A's drawer and the geometry on
-core 2. Core 1 is the system's; a program gets 30% of it, and there the
+core 2, the geometry first (it has a scene to finish every 2 V-blanks or
+it's left out; with the drawer first, the upper screen's 2D changing every
+frame, text or the HM cut-in, left out 6-10 scenes a second and the field
+dropped to 48-52 frames a second, 2026-10-30). Core 1 is the system's; a
+program gets 30% of it, and there the
 geometry took 18-30 ms a scene and left scenes out (the intro's flyover
 jumped), and engine B's screen drew 14-25 frames a second
 (`geometry.txt`: `core 1` puts both back there).

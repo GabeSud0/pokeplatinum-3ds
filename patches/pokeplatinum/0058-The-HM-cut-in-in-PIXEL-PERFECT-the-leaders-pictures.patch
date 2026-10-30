@@ -11,7 +11,10 @@ The HM cut-in's band (BG3, a 256-pixel map of Poké Balls) goes on to the
 wider screen's edges as a repeating BG of the field's (NitroPort_RepeatingBg,
 as the weather's), not a screen laid out in parts: a laid-out screen takes
 the field out of PIXEL PERFECT's DS pixel size, so the field zoomed in for
-the cut-in and back out after it.
+the cut-in and back out after it. Its wind (the white streaks) blows
+across the wider screen too: their cells beside the DS's screen are placed
+there while it plays (NitroPort_SetFieldCells), each streak shown left of
+the screen past the right band, as the DS's 9-bit sprite x wraps.
 
 The gym leaders' battle intro: the leader's picture, whose art ends at the
 DS screen's right edge, slides to the wider screen's right edge
@@ -19,8 +22,8 @@ DS screen's right edge, slides to the wider screen's right edge
 the band going on beside it. Its name stays by the VS.
 ---
  src/overlay005/encounter_effect_core.c | 16 ++++++++++++++--
- src/overlay006/hm_cut_in.c             | 14 +++++++-------
- 2 files changed, 21 insertions(+), 9 deletions(-)
+ src/overlay006/hm_cut_in.c             | 35 +++++++++++++++++++++++++++-------
+ 2 files changed, 42 insertions(+), 9 deletions(-)
 
 diff --git a/src/overlay005/encounter_effect_core.c b/src/overlay005/encounter_effect_core.c
 index 9119e8ca..52ba1fc5 100644
@@ -64,10 +67,10 @@ index 9119e8ca..52ba1fc5 100644
              Bg_SetPriority(BG_LAYER_MAIN_2, 0);
              encEffect->state++;
 diff --git a/src/overlay006/hm_cut_in.c b/src/overlay006/hm_cut_in.c
-index c3226fb1..50a23280 100644
+index c3226fb1..68e6ae6c 100644
 --- a/src/overlay006/hm_cut_in.c
 +++ b/src/overlay006/hm_cut_in.c
-@@ -1697,11 +1697,11 @@ static void SysTask_CutIn_FinalizeBirdSpriteTransfer(SysTask *task, void *hmCutI
+@@ -1697,11 +1697,16 @@ static void SysTask_CutIn_FinalizeBirdSpriteTransfer(SysTask *task, void *hmCutI
  #ifdef SDK_PORT_3DS
  // The band (BG3, a 256-pixel map of Poké Balls) goes on to the wider
  // screen's edges, repeating as the DS's map wraps, not the plain lines
@@ -81,27 +84,56 @@ index c3226fb1..50a23280 100644
 +// parts, which took the field out of PIXEL PERFECT's DS pixel size for the
 +// cut-in (the field zoomed in and back out, 2026-10-30).
 +extern void NitroPort_RepeatingBg(int bg, int on);
++// Its wind (the white streaks) blows across the wider screen too: their
++// cells beside the DS's screen are placed there (NitroPort_SetFieldCells);
++// each streak's x goes round a 512-pixel span, two of them 256 apart, as
++// the DS's sprites' x does (past 256 + its band, on the left side).
++extern void NitroPort_SetFieldCells(int on);
  #endif
  
  static void CutIn_InitSpriteResources(HMCutIn *cutIn)
-@@ -1727,7 +1727,7 @@ static void CutIn_InitSpriteResources(HMCutIn *cutIn)
+@@ -1727,7 +1732,8 @@ static void CutIn_InitSpriteResources(HMCutIn *cutIn)
      NARC_dtor(narc);
      cutIn->unk_244 = OverworldAnimManagerList_New(HEAP_ID_FIELD1, 32);
  #ifdef SDK_PORT_3DS
 -    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sCutInWideLayout);
 +    NitroPort_RepeatingBg(3, TRUE);
++    NitroPort_SetFieldCells(TRUE);
  #endif
      GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG3, 1);
  }
-@@ -1739,7 +1739,7 @@ static void CutIn_DeleteSprites(HMCutIn *cutIn)
+@@ -1739,7 +1745,8 @@ static void CutIn_DeleteSprites(HMCutIn *cutIn)
  
      CutIn_ClearTileMapBG3(cutIn->fieldSystem->bgConfig);
  #ifdef SDK_PORT_3DS
 -    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
 +    NitroPort_RepeatingBg(3, FALSE);
++    NitroPort_SetFieldCells(FALSE);
  #endif
      CutIn_DeleteSpriteResources(cutIn);
  
+@@ -2316,7 +2323,21 @@ static void WindParticleAnim_AnimateParticle(OverworldAnimManager *animMan, void
+     newPos.x %= (FX32_ONE * 512);
+ 
+     OverworldAnimManager_SetPosition(animMan, &newPos);
++#ifdef SDK_PORT_3DS
++    {
++        // (shown where the DS shows it: past the right band, left of the
++        // screen, as the DS's 9-bit sprite x wraps)
++        VecFx32 shown = newPos;
++
++        if (shown.x >= (256 + NitroPort_WideScreenExtra() + 32) * FX32_ONE) {
++            shown.x -= FX32_ONE * 512;
++        }
++
++        Sprite_SetPosition(env->sprite, &shown);
++    }
++#else
+     Sprite_SetPosition(env->sprite, &newPos);
++#endif
+ 
+     if (env->data.allowWindParticles == TRUE) {
+         HMCutIn *v2 = env->data.cutIn;
 -- 
 2.43.0
 
