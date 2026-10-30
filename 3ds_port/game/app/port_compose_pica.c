@@ -2824,9 +2824,12 @@ static uint32_t newest_seq(const Screen *scr)
 
 /* Which of a screen's sets to show: the newest, or with a 3D scene the
  * newest no newer than the 2D the DS showed that scene with (the DS's 3D
- * is a frame behind its 2D): stamp <= the scene's + 1. Held for the frame
- * (the drawers won't write it). Under sSetLock. */
-static LayerSet *pick_set(Screen *scr, const NitroGx3dScene *scene, int syncTo3d)
+ * is a frame behind its 2D): stamp <= the scene's + 1. With an in-between
+ * scene (mid), halfway between the scene before and its own: no newer
+ * than its own (stamp <= the scene's), the 2D the DS showed then, there
+ * already (the scene before's). Held for the frame (the drawers won't
+ * write it). Under sSetLock. */
+static LayerSet *pick_set(Screen *scr, const NitroGx3dScene *scene, int syncTo3d, int mid)
 {
     LayerSet *best = NULL, *oldest = NULL;
     int i;
@@ -2841,7 +2844,7 @@ static LayerSet *pick_set(Screen *scr, const NitroGx3dScene *scene, int syncTo3d
             oldest = c;
         }
         if (syncTo3d && scene != NULL && c->info.has3d &&
-            (int32_t)(c->info.stamp - (scene->stamp + 1u)) > 0) {
+            (int32_t)(c->info.stamp - (scene->stamp + (mid ? 0u : 1u))) > 0) {
             continue;   /* newer 2D than this scene goes with */
         }
         if (best == NULL || c->seq > best->seq) {
@@ -3037,7 +3040,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     for (s = 0; s < 2; s++) {
         Screen *scr = &sScreens[s];
         int screen3d = (s == 0) == (aOnTop != 0);   /* engine A's screen: the 3D's */
-        LayerSet *set = pick_set(scr, scene, screen3d);
+        LayerSet *set = pick_set(scr, scene, screen3d, mid);
         int has3d;
 
         if (set == NULL) {
@@ -3134,7 +3137,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         if (menu[s] && sMenuPanel != NITRO_LOWERMENU_PANEL_MAP && panelUpper) {
             /* (put together with the upper screen's rows: its picture too,
              * held for the frame) */
-            panelUp = pick_set(&sScreens[0], NULL, 0);
+            panelUp = pick_set(&sScreens[0], NULL, 0, 0);
         }
         if (menu[s] && sMenuPanel != NITRO_LOWERMENU_PANEL_MAP) {
             u32 shownStamp = set->info.stamp;
@@ -3162,8 +3165,14 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                   (s == 0 && has3d && (stereoNow != scr->shownStereo ||
                                         (stereoNow && slider != scr->shownSlider)));
         /* A new scene: once the 2D it's shown with is here (or the next
-         * scene has come: flush). */
-        if (need[s] && has3d && !forced && !flush && sceneSerial != scr->shownScene &&
+         * scene has come: flush). Not its in-between scene, which has its
+         * 2D (pick_set): waiting for the scene's, the in-between scene
+         * went out with it or not at all, and while the 2D changed (a
+         * sign sliding in, a window) the 3D stepped at 30 frames a second
+         * by turns, an in-between frame left out for each new picture, 5
+         * to 15 a second (a log of 2026-10-30: the people in Eterna
+         * seemed to shake as the player walked). */
+        if (need[s] && has3d && !forced && !flush && !mid && sceneSerial != scr->shownScene &&
             !paired_2d_ready(scene->stamp)) {
             need[s] = 0;
             sSceneWaiting = 1;

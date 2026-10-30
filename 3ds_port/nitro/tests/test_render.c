@@ -119,14 +119,26 @@ static void test_backdrop_and_power(void)
     GX_SetMasterBrightness(0);
 }
 
-/* A screen whose registers, palettes, OAM and VRAM didn't change isn't
- * drawn again; any change to them draws it. */
+/* A screen whose registers, palettes, OAM and the VRAM it shows didn't
+ * change isn't drawn again; any change to them draws it. VRAM it doesn't
+ * show doesn't count: a hidden BG's, tiles its map doesn't use, the 3D's
+ * texture palettes, the OBJs' while none is shown. */
 static void test_unchanged_screen(void)
 {
     static u16 backdrop = GREY, other = WHITE;
     static u16 tile[16] = { 0x1111 };
+    static u16 map[1] = { 32 };   /* (tile 32: 0x400 into the tiles) */
+    int i;
 
     Reset();
+    for (i = 0; i < 128; i++) {
+        u16 hidden = 0x200;   /* (every OBJ hidden) */
+
+        memcpy((u8 *)NitroPort_Oam + i * 8, &hidden, 2);
+    }
+    G2_SetBG0Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000, GX_BG_CHARBASE_0x04000,
+                     GX_BG_EXTPLTT_01);
+    GX_SetBankForTexPltt(GX_VRAM_TEXPLTT_0123_E);
     GX_LoadBGPltt(&backdrop, 0, 2);
     CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);    /* first: drawn */
     CHECK_PX(sTop, 0, 0, GREY);
@@ -135,7 +147,31 @@ static void test_unchanged_screen(void)
     CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);
     CHECK_PX(sTop, 0, 0, WHITE);
     CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
-    GX_LoadBG0Char(tile, 0x400, sizeof(tile));            /* VRAM */
+    GX_LoadBG0Char(tile, 0x400, sizeof(tile));            /* VRAM of a BG not shown */
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0);                 /* shown: a register */
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    GX_LoadBG0Scr(map, 0, sizeof(map));                   /* its map: that tile at the top left */
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    tile[0] = 0x2222;
+    GX_LoadBG0Char(tile, 0x400, sizeof(tile));            /* a tile it shows */
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    GX_LoadBG0Char(tile, 0x800, sizeof(tile));            /* one its map doesn't use */
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    NitroPort_LcdcVram[0x80000] ^= 0x55;                  /* the 3D's texture palettes (E) */
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_OBJ);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);
+    GX_LoadOBJ(tile, 0, sizeof(tile));                    /* the OBJs', none shown */
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    memset(NitroPort_Oam, 0, 2);                          /* one shown: a change, and then theirs counts */
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);
+    CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    tile[0] = 0x3333;
+    GX_LoadOBJ(tile, 0, sizeof(tile));
     CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);
     G2_SetBG0Offset(3, 0);                                /* a register */
     CHECK(NitroPort_Render2DIfChanged(0, sTop) == 1);
@@ -143,6 +179,8 @@ static void test_unchanged_screen(void)
     CHECK(NitroPort_Render2DIfChanged(1, sBottom) == 1); /* engine B: its own */
     CHECK(NitroPort_Render2DIfChanged(1, sBottom) == 0);
     CHECK(NitroPort_Render2DIfChanged(0, sTop) == 0);
+    MI_CpuClearFast(NitroPort_LcdcVram + 0x80000, 0x10000);
+    GX_SetBankForTexPltt(GX_VRAM_TEXPLTT_NONE);
 }
 
 /* DISP3DCNT's acknowledge bits (the game writes them every frame) don't

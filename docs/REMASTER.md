@@ -1508,14 +1508,33 @@ sprites, scroll, colours) can't get mixed into a picture that takes long
 to draw (sprites showed in the wrong places for a frame). The VRAM is read
 as it is: before its next V-blank work the game waits for a drawer still
 reading it. Working out whether a screen changed compares the small parts
-first, and the VRAM (864 KB for engine A) only when they're the same.
+first, and the VRAM only when they're the same: since 2026-10-30 only the
+VRAM the screen shows (`EngineShownVramSignature`): for each BG on, its
+whole map, the tiles the map uses and their palettes; the OBJs' VRAM while
+an OBJ is shown; the VRAM display's bank. All of it (864 KB for engine A)
+was read each frame nothing changed, about 15 ms of every 33 on the 3D's
+core, half of engine A's drawer's time, and the 3D's own VRAM was in it
+(bank E, its textures' palettes, in the field): the upper screen's 2D was
+drawn again 5-11 times a second in the towns with nothing of it changed.
+All of it still with an H-blank effect or a bitmap BG. When the small
+parts change, the VRAM it shows is noted with the picture (when that's
+quick: no OBJ shown, no bitmap), not on the next frame with a second
+drawing. The `[perf] game` line says why each drawer drew (`upper 29.9/s
+(6.0/s new: 4.0 for registers, palettes or sprites, 2.0 for VRAM), 16.2
+ms, 4.6 of it handing over (core 2)`: handing over is the remaster's
+upscaling into the compositor's textures, `ShowScreen`).
 
 Where things run on a New 3DS: the game, the display thread and engine B's
 drawer on core 0 (the game first); engine A's drawer and the geometry on
 core 2, the geometry first (it has a scene to finish every 2 V-blanks or
 it's left out; with the drawer first, the upper screen's 2D changing every
 frame, text or the HM cut-in, left out 6-10 scenes a second and the field
-dropped to 48-52 frames a second, 2026-10-30). Core 1 is the system's; a
+dropped to 48-52 frames a second, 2026-10-30), but for the drawer's
+reading of the game's display state (and drawing from it), which the game
+waits for before its next frame's display work: behind the geometry (25
+ms at a stretch where the maps change) the game waited for it and stepped
+unevenly, Eterna to Route 205 (2026-10-30). Handing the picture over (the
+upscaling) is below the geometry. Core 1 is the system's; a
 program gets 30% of it, and there the
 geometry took 18-30 ms a scene and left scenes out (the intro's flyover
 jumped), and engine B's screen drew 14-25 frames a second
@@ -1692,7 +1711,15 @@ The display thread draws a new scene's in-between scene first, shown a
 V-blank before the scene (the scene's lag less one; `ComposeFrame`'s
 `mid`: it doesn't count as the scene shown, and is prepared apart from
 it), then the scene, both built while the GPU draws the frame before (see
-Timing): a frame each V-blank, the game's 30 steps and 30 in between. A
+Timing): a frame each V-blank, the game's 30 steps and 30 in between. The
+in-between scene goes with the 2D the DS showed halfway, no newer than its
+scene's own V-blank (`pick_set`'s `mid`: the scene before's, there
+already), and doesn't wait for its scene's 2D as the scene does. Waiting
+for it (until 2026-10-30), it went out with its scene or not at all while
+the upper screen's 2D took long (a sign sliding in, a text box, the 2D
+drawn again for nothing in the towns): an in-between frame left out for
+each new 2D picture, 5-15 a second, and the 3D stepped at 30 by turns
+(the people in Eterna seemed to shake as the player walked). A
 frame then has 16.7 ms of the GPU, not 33. On a New 3DS (PR #132's build,
 2026-10-20, the field): with the slider up (smooth, no outlines) 9-11 ms
 a frame, 14-16.5 in the busiest places; with it down (smooth and

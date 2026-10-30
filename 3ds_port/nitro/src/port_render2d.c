@@ -5219,15 +5219,128 @@ static u32 EngineVramSignature(int engine, const u8 *io)
     return h;
 }
 
+/* What of an engine's VRAM its picture can show, hashed: each BG it shows
+ * (its whole map, the tiles the map uses and their palettes: BgKeyT's quick
+ * hash; where they are is in the registers, EngineSmallSignature), the
+ * OBJs' VRAM and their extended palettes while an OBJ is shown, and the
+ * VRAM display's bank. Not the rest: all of it (EngineVramSignature, 864
+ * KB for engine A) read each frame nothing changed took engine A's drawer
+ * about 15 ms of every 33 on the 3D's core, half of it, and the 3D's own
+ * VRAM was in it, its textures' palettes (bank E in the field): a 3D
+ * change drew the 2D again, and in-between frames were left out waiting
+ * for it (2026-10-30). All of it still with an H-blank effect (registers
+ * that change line by line) or a bitmap BG. cheapOnly: only if that's a
+ * BG's map and tiles, no more (no OBJ shown, no bitmap, no H-blank effect,
+ * no VRAM display); whether it was worked out (into *out). */
+static int ShownVramSignature(int engine, int snapshot, int cheapOnly, u32 *out)
+{
+    static Engine engines[2];   /* (an engine's: one drawer each) */
+    Engine *e = &engines[engine ? 1 : 0];
+    const State2D *st = &sState[engine ? 1 : 0];
+    const u8 *ioAll = snapshot ? st->io : NitroPort_IoReg;
+    const u8 *io = ioAll + (engine ? 0x1000 : 0);
+    const u8 *oam = (snapshot ? st->oam : NitroPort_Oam) + (engine ? 0x400 : 0);
+    u32 dispcnt = Rd32(io, 0);
+    u64 h = KEY_START;
+    int bg, i, bitmap = 0, objs;
+
+    if (snapshot ? st->lines : NitroPort_LineRegs.active) {
+        if (cheapOnly) {
+            return 0;
+        }
+        *out = EngineVramSignature(engine, io);
+        return 1;
+    }
+    switch ((dispcnt >> 16) & 3) {
+    case 1:
+        break;
+    case 2:   /* VRAM display (engine A): a bank, nothing else */
+        if (cheapOnly) {
+            return 0;
+        }
+        *out = engine == 0 ? HashWords(NitroPort_LcdcVram + ((dispcnt >> 18) & 3) * 0x20000, 0x20000, 2166136261u)
+                           : 1u;
+        return 1;
+    default:  /* off (white), or main memory display (not drawn) */
+        *out = 1u;
+        return 1;
+    }
+    e->isA = engine == 0;
+    e->ioAll = ioAll;
+    e->io = io;
+    e->bgPltt = (snapshot ? st->pltt : NitroPort_Pltt) + (e->isA ? 0 : 0x400);
+    e->bgVram = e->isA ? NitroPort_BgVram : NitroPort_DbBgVram;
+    e->bgMask = e->isA ? 0x7FFFF : 0x1FFFF;
+    FindExtPalettes(e);
+    for (bg = 0; bg < 4; bg++) {
+        u16 bgcnt = Rd16(io, 8 + bg * 2);
+        int kind;
+
+        if (!(dispcnt & (0x100u << bg))) {
+            continue;
+        }
+        kind = BgKind(e, bg, dispcnt);
+        if (kind == BG_TEXT || kind == BG_AFFINE || (kind == BG_EXTENDED && !(bgcnt & 0x80))) {
+            u64 key = BgKeyT(e, bg, kind, bgcnt, dispcnt, 1);
+
+            h = QuickAdd(QuickAdd(h, (u32)bg), (u32)key);
+            h = QuickAdd(h, (u32)(key >> 32));
+        } else if (kind != BG_3D && kind != BG_NONE) {
+            bitmap = 1;
+        }
+    }
+    for (i = 0; i < 128 && (dispcnt & 0x9000u); i++) {   /* (the OBJs, or the OBJ window) */
+        if ((Rd16(oam, (u32)i * 8u) & 0x300) != 0x200) {
+            break;   /* (one not hidden: affine, or not disabled) */
+        }
+    }
+    objs = (dispcnt & 0x9000u) && i < 128;
+    if (cheapOnly && (bitmap || objs)) {
+        return 0;
+    }
+    if (bitmap) {
+        h = QuickAdd(h, HashWords(e->bgVram, e->bgMask + 1u, 2166136261u));
+    }
+    if (objs) {
+        h = QuickAdd(h, HashWords(e->isA ? NitroPort_ObjVram : NitroPort_DbObjVram, e->isA ? 0x40000 : 0x20000,
+                                  2166136261u));
+        if ((dispcnt & 0x80000000u) && e->objExt != NULL) {
+            h = QuickAdd(h, HashWords(e->objExt, 0x2000, 2166136261u));
+        }
+    }
+    *out = (u32)h ^ (u32)(h >> 32);
+    return 1;
+}
+
+static u32 EngineShownVramSignature(int engine, int snapshot)
+{
+    u32 h = 0;
+
+    (void)ShownVramSignature(engine, snapshot, 0, &h);
+    return h;
+}
+
+/* (each engine's pictures drawn again by Render2D*IfChanged, and why:
+ * NitroPort_Render2DChangeStats) */
+static volatile unsigned sChangedSmall[2], sChangedVram[2];
+
+void NitroPort_Render2DChangeStats(int engine, unsigned *registers, unsigned *vram)
+{
+    int e = engine ? 1 : 0;
+
+    *registers = __atomic_exchange_n(&sChangedSmall[e], 0u, __ATOMIC_ACQ_REL);
+    *vram = __atomic_exchange_n(&sChangedVram[e], 0u, __ATOMIC_ACQ_REL);
+}
+
 static u32 EngineSignature(int engine)
 {
-    return (EngineSmallSignature(engine, 0, -1) * 31u) ^
-           EngineVramSignature(engine, NitroPort_IoReg + (engine ? 0x1000 : 0));
+    return (EngineSmallSignature(engine, 0, -1) * 31u) ^ EngineShownVramSignature(engine, 0);
 }
 
 /* NitroPort_Render2D, unless nothing it draws from changed since the last
  * time for this engine (then out is left as it is, and 0 returned). Working
- * that out reads the engine's VRAM once: far less than drawing it. A 3D
+ * that out reads what of the engine's VRAM it shows, once (its BGs' maps
+ * and tiles: EngineShownVramSignature): far less than drawing it. A 3D
  * layer counts as changed whenever a new 3D image is out. While the 3D
  * keeps changing, the screen is drawn for each new 3D image only, nothing
  * hashed: in step with the 3D (a moving camera moves evenly), and no
@@ -5241,7 +5354,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     /* (a BG the compositor would draw itself now: GpuBgOf, as drawing
      * would find; drawn when that changes) */
     int gpuBg = -1;
-    u32 small, vram;
+    u32 small, vram = 0;
 
     if (e == 0 && split->gpuBgs) {
         const State2D *st = &sState[0];
@@ -5282,14 +5395,19 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     if (!last[e].valid || small != last[e].small) {
         last[e].small = small;
         last[e].valid = 1;
-        last[e].vramValid = 0;
+        /* (the VRAM noted now, as it's drawn, when that's quick: else the
+         * next time, and drawn again then, to be sure) */
+        last[e].vramValid = ShownVramSignature(e, split->snapshot, 1, &vram);
+        last[e].vram = vram;
+        __atomic_fetch_add(&sChangedSmall[e], 1u, __ATOMIC_RELAXED);
         Render(engine, under, split);
         return 1;
     }
-    vram = EngineVramSignature(e, (split->snapshot ? sState[e].io : NitroPort_IoReg) + (e ? 0x1000 : 0));
+    vram = EngineShownVramSignature(e, split->snapshot);
     if (last[e].vramValid && vram == last[e].vram) {
         return 0;
     }
+    __atomic_fetch_add(last[e].vramValid ? &sChangedVram[e] : &sChangedSmall[e], 1u, __ATOMIC_RELAXED);
     last[e].vram = vram;
     last[e].vramValid = 1;
     Render(engine, under, split);
