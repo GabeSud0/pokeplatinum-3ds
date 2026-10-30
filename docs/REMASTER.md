@@ -670,17 +670,12 @@ screen's 320 x 192 at 1.25 times, as above.
   pixel corner, its edges not moved out: each texel whole pixels, sharp
   with the smooth 3D or without; the 3D (buildings, signs) as smooth as
   before. One scaled on purpose (a Pokémon growing out of its ball) is
-  left as it is; the 1.25x field too (a texel 1.25 pixels there). Moving
-  on the screen (the camera going along, a person walking) a sprite keeps
-  the fraction of a pixel it was moved by when it stood (`snap_offset`:
-  each scene's sprites told from the scene before's, or the in-between
-  scene's, by their texture's kind and palette, nearest within 12
-  pixels), so it slides with the ground under it, and is on its nearest
-  pixel corner again once it stands still: put on its own nearest pixel
-  each scene, it stepped a whole pixel or none while the ground slid
-  smoothly and seemed to wobble on it, the more so at 60 FPS
-  (2026-10-29). The player and the follower, still on the screen as the
-  camera follows them, stay on their pixels.
+  left as it is; the 1.25x field too (a texel 1.25 pixels there). Each
+  is on its own nearest pixel every scene, so one moving on the screen
+  steps a whole pixel or none while the ground under it slides smoothly
+  (a slight wobble against it). Keeping the fraction instead (sliding with
+  the ground) was tried and taken back: it can't be sharp off the pixel
+  grid, and the softness while moving looked worse (2026-10-29).
 - **The game** reads `NitroPort_WideScreenExtra` as 72 there: the people the
   scripts bring on from the sides come from beyond the 400 pixels.
 - **The game's windows** go to the picture's top or bottom

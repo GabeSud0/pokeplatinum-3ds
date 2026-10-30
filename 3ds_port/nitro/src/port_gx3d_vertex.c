@@ -191,91 +191,13 @@ void NitroPort_Gx3dExpandTriangle(const float sx[3],const float sy[3],float dx[3
  * texel covers whole pixels and stays sharp, smooth 3D or not. Only quads
  * near their texels' size (a sprite scaled on purpose, a Pokémon growing
  * out of its ball, is left as it is), not mirrored differently each way.
- * sx/sy: the triangle's corners in the DS's units, changed if so.
- *
- * Moving on the screen (the camera going along, a person walking), a
- * sprite keeps the fraction of a pixel it was moved by when it stood
- * (snap_offset): each put on its own nearest pixel, a scene at a time,
- * they stepped a whole pixel or none while the ground under them slid
- * smoothly, and wobbled on it (2026-10-29). Standing still again, on its
- * nearest pixel. */
-typedef struct SnapMark {
-    uint32_t key;      /* the texture's format, size and palette */
-    float x,y;         /* its feet, where the scene has them (screen pixels) */
-    float rx,ry;       /* moved by */
-} SnapMark;
-#define SNAP_MARKS 256u
-#define SNAP_NEAR 12.0f    /* (pixels: the same sprite, a scene later) */
-#define SNAP_SCENES 4u     /* (scenes on: one or two the display didn't draw) */
-static SnapMark sSnapBefore[SNAP_MARKS],sSnapNow[SNAP_MARKS];
-static unsigned sSnapBeforeCount,sSnapNowCount;
-static const NitroGx3dScene *sSnapScene;
-static uint32_t sSnapSerial;
-static int sSnapValid,sSnapCarry,sSnapKeep;
-
-/* Before a scene's batches: whether its sprites can be told from the scene
- * before's (a scene on, or the in-between scene before it), and kept
- * for the next (not the same scene made again). */
-static void snap_begin(const NitroGx3dScene *scene)
-{
-    int same=sSnapValid && scene==sSnapScene && scene->serial==sSnapSerial;
-    sSnapKeep=!same;
-    sSnapCarry=!same && sSnapValid && (uint32_t)(scene->serial-sSnapSerial)<=SNAP_SCENES;
-    sSnapNowCount=0;
-}
-static void snap_end(const NitroGx3dScene *scene)
-{
-    if(!sSnapKeep)return;
-    memcpy(sSnapBefore,sSnapNow,sSnapNowCount*sizeof(SnapMark));
-    sSnapBeforeCount=sSnapNowCount;
-    sSnapScene=scene;sSnapSerial=scene->serial;sSnapValid=1;
-}
-/* What a sprite whose feet are at (x, y) is moved by: as a triangle of
- * its quad was; as it was the scene before, if it moved since (still: the
- * pixel corner nearest to where that put it); else to its nearest pixel
- * corner. */
-static void snap_offset(uint32_t key,float x,float y,float *rx,float *ry)
-{
-    unsigned i;
-    const SnapMark *best=NULL;
-    float bestD=SNAP_NEAR*SNAP_NEAR;
-    for(i=0;i<sSnapNowCount;i++){
-        const SnapMark *m=&sSnapNow[i];
-        if(m->key==key && fabsf(m->x-x)<1e-3f && fabsf(m->y-y)<1e-3f){*rx=m->rx;*ry=m->ry;return;}
-    }
-    if(!sSnapKeep){
-        /* (the same scene made again: as it was made) */
-        for(i=0;i<sSnapBeforeCount;i++){
-            const SnapMark *m=&sSnapBefore[i];
-            if(m->key==key && fabsf(m->x-x)<1e-3f && fabsf(m->y-y)<1e-3f){*rx=m->rx;*ry=m->ry;return;}
-        }
-    }
-    if(sSnapCarry){
-        for(i=0;i<sSnapBeforeCount;i++){
-            const SnapMark *m=&sSnapBefore[i];
-            float d=(m->x-x)*(m->x-x)+(m->y-y)*(m->y-y);
-            if(m->key==key && d<bestD){bestD=d;best=m;}
-        }
-    }
-    if(best && (fabsf(best->x-x)>0.02f || fabsf(best->y-y)>0.02f)){
-        *rx=best->rx;*ry=best->ry;
-    }else if(best){
-        *rx=floorf(x+best->rx+0.5f)-x;*ry=floorf(y+best->ry+0.5f)-y;
-    }else{
-        *rx=floorf(x+0.5f)-x;*ry=floorf(y+0.5f)-y;
-    }
-    if(sSnapNowCount<SNAP_MARKS){
-        SnapMark *m=&sSnapNow[sSnapNowCount++];
-        m->key=key;m->x=x;m->y=y;m->rx=*rx;m->ry=*ry;
-    }
-}
-
+ * sx/sy: the triangle's corners in the DS's units, changed if so. */
 static int sprite_texel_a_pixel(const NitroGx3dScene *scene,const NitroGx3dTriangle *tri,
                                 float tw,float th,float *sx,float *sy)
 {
     const NitroGx3dVertex *v=tri->v;
     float fx,fy,px[3],py[3],ds1,dt1,ds2,dt2,det,a,b,e,f,x0,y0,ax,ay,ar,anchor_t;
-    float sa,sf,rx,ry;
+    float sa,sf;
     int k;
     if(!scene || scene->screen_height!=240u || ((tri->texture_param>>26)&7u)==0u)return 0;
     if(v[0].clip[3]!=v[1].clip[3] || v[0].clip[3]!=v[2].clip[3] || v[0].clip[3]<=0)return 0;
@@ -300,10 +222,8 @@ static int sprite_texel_a_pixel(const NitroGx3dScene *scene,const NitroGx3dTrian
     y0=py[0]-e*v[0].s-f*v[0].t;
     /* the texture's bottom middle: its feet */
     anchor_t=f>0?th:0.0f;
-    ax=x0+a*(tw*0.5f);
-    ay=y0+f*anchor_t;
-    snap_offset((tri->texture_param>>16)^(tri->palette_base*2654435761u),ax,ay,&rx,&ry);
-    ax+=rx;ay+=ry;
+    ax=floorf(x0+a*(tw*0.5f)+0.5f);
+    ay=floorf(y0+f*anchor_t+0.5f);
     for(k=0;k<3;k++){
         sx[k]=(ax+sa*(v[k].s-tw*0.5f))/fx;
         sy[k]=(ay+sf*(v[k].t-anchor_t))/fy;
@@ -357,7 +277,6 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
         capacity=NITRO_GX3D_PICA_MAX_VERTICES;
     static uint16_t order[NITRO_GX3D_MAX_TRIANGLES],scratch[NITRO_GX3D_MAX_TRIANGLES];
     size_t n=NitroPort_Gx3dDrawOrder(scene,order,scratch),j;
-    snap_begin(scene);
     for(j=0;j<n;j++){
         const NitroGx3dTriangle *tri=&scene->triangles[order[j]];
         unsigned alpha=(tri->polygon_attr>>16)&31u;
@@ -402,7 +321,6 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
         }
         batch->count+=3;
     }
-    snap_end(scene);
     /* A batch opened for a triangle that then didn't fit stays empty. */
     while(nb && batches[nb-1].count==0)nb--;
     if(batch_count)*batch_count=nb;
