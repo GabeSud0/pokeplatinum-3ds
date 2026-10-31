@@ -709,6 +709,47 @@ static void test_interpolation_swaying(void)
     }else CHECK(0);
     NitroPort_Gx3dSetInterpolation(0);
 }
+/* PIXEL PERFECT's sprites (the 400 x 240 view): a textured quad, every
+ * corner at one depth, moving by a fraction of a pixel a frame across is
+ * soft that way (NitroGx3dTriangle.soft), in its scene and its in-between
+ * scene; by a whole number of pixels a frame, or untextured, it isn't. */
+static void textured_quad_at(int x)
+{
+    NitroPort_GxDirectWrite(0x2a,(3u<<26)|(2u<<20)|(2u<<23));   /* 16 colours, 32 x 32 */
+    quad_at(x,(3u<<6)|(31u<<16));
+    NitroPort_GxDirectWrite(0x2a,0);
+}
+static void test_soft_sprites(void)
+{
+    const NitroGx3dScene *scene,*mid;
+    int i;
+    reset_geometry();
+    NitroPort_Gx3dSetView(400,240);
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    textured_quad_at(-3000);
+    swap_done();
+    /* 89 units a scene: about 2.2 pixels a frame across */
+    textured_quad_at(-3000+89);
+    quad_at(-3000+89,(3u<<6)|(31u<<16));                        /* (untextured) */
+    swap_done();
+    scene=NitroPort_Gx3dScene();
+    mid=NitroPort_Gx3dMidScene(NULL,NULL);
+    CHECK(scene && scene->count==4 && mid && mid->count==4);
+    if(scene && scene->count==4 && mid && mid->count==4){
+        for(i=0;i<2;i++)CHECK(scene->triangles[i].soft==NITRO_GX3D_SOFT_X && mid->triangles[i].soft==NITRO_GX3D_SOFT_X);
+        for(i=2;i<4;i++)CHECK(scene->triangles[i].soft==0 && mid->triangles[i].soft==0);
+    }
+    /* still: not */
+    textured_quad_at(-3000+89);
+    quad_at(-3000+89,(3u<<6)|(31u<<16));
+    swap_done();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene && scene->count==4 && scene->triangles[0].soft==0 && scene->triangles[1].soft==0);
+    NitroPort_Gx3dSetInterpolation(0);
+    NitroPort_Gx3dSetView(256,192);
+    swap_done();
+}
 /* PIXEL PERFECT's sprites a texel a pixel (port_gx3d_vertex.c,
  * sprite_texel_a_pixel): a person's quad (32 x 32 texels) drawn by the
  * camera at 35.7 pixels and a fraction of a pixel off comes out 32 pixels
@@ -796,6 +837,20 @@ static void test_sprite_texel_a_pixel(void)
     sprite_corners(sc,&x0,&x1,&y0,&y1);
     CHECK(fabsf(x0-floorf(x0+0.5f))>0.05f || fabsf((x1-x0)-32.0f)>0.5f);
     sc->projection[15]=0;
+    /* moving by a fraction of a pixel a frame across (soft, the in-between
+     * scenes' finding): on half a pixel across (a 64th on), still whole
+     * down; and the other way round */
+    sprite_quad(sc,180.55f,150.4f,35.7f,2481011);   /* (feet at 198.4: on 198.5) */
+    sc->triangles[0].soft=sc->triangles[1].soft=NITRO_GX3D_SOFT_X;
+    sprite_corners(sc,&x0,&x1,&y0,&y1);
+    CHECK(fabsf((x1-x0)-32.0f)<0.01f && fabsf((y1-y0)-32.0f)<0.01f);
+    CHECK(fabsf(x0-1.0f/64.0f-floorf(x0*2.0f+0.5f)*0.5f)<0.01f && fabsf(x0-floorf(x0+0.5f))>0.3f);
+    CHECK(fabsf(y0-floorf(y0+0.5f))<0.01f);
+    sprite_quad(sc,180.3f,150.4f,35.7f,2481011);
+    sc->triangles[0].soft=sc->triangles[1].soft=NITRO_GX3D_SOFT_Y;
+    sprite_corners(sc,&x0,&x1,&y0,&y1);
+    CHECK(fabsf(x0-floorf(x0+0.5f))<0.01f);
+    CHECK(fabsf(y0-1.0f/64.0f-floorf(y0*2.0f+0.5f)*0.5f)<0.01f);
     /* the 1.25x field (192 lines): as it was */
     sprite_quad(sc,180.3f,150.4f,35.7f,2481011);
     sc->screen_height=192;
@@ -1795,6 +1850,7 @@ static void run_all(void)
     test_culling();
     test_shadow_triangles();
     test_sprite_texel_a_pixel();
+    test_soft_sprites();
     test_interpolation();
     test_interpolation_followed();
     test_interpolation_one_each();
