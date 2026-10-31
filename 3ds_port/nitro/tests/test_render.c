@@ -2453,6 +2453,16 @@ static void test_window_rows(void)
     CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split) == 0);
     SetBandLines(32, 160);
     CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split) == 0);   /* (taller: not a change) */
+    /* (the VRAM it doesn't show not read: the quick check, not all of it,
+     * though there's an H-blank effect: its lines differ in the windows
+     * alone) */
+    {
+        extern u8 NitroPort_ObjVram[];
+
+        NitroPort_ObjVram[0x1000] ^= 0x5A;
+        CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split) == 0);
+        NitroPort_ObjVram[0x1000] ^= 0x5A;
+    }
     CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 2 && y == 24 + 32 && r == 24 + 160);
     /* the whole screen: to the canvas's edges; none: an empty band in the middle */
     SetBandLines(0, 192);

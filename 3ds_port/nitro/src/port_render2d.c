@@ -5872,7 +5872,7 @@ static u32 EngineVramSignature(int engine, const u8 *io)
  * that change line by line) or a bitmap BG. cheapOnly: only if that's a
  * BG's map and tiles, no more (no OBJ shown, no bitmap, no H-blank effect,
  * no VRAM display); whether it was worked out (into *out). */
-static int ShownVramSignature(int engine, int snapshot, int cheapOnly, u32 *out)
+static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int linesOnlyWindows, u32 *out)
 {
     static Engine engines[2];   /* (an engine's: one drawer each) */
     Engine *e = &engines[engine ? 1 : 0];
@@ -5884,7 +5884,13 @@ static int ShownVramSignature(int engine, int snapshot, int cheapOnly, u32 *out)
     u64 h = KEY_START;
     int bg, i, bitmap = 0, objs;
 
-    if (snapshot ? st->lines : NitroPort_LineRegs.active) {
+    /* (an H-blank effect: all of it, unless its lines differ in the windows
+     * alone, a circle or band of lines the compositor draws: each line
+     * shows the BGs as the frame's registers have them. Hashed all through
+     * every frame of the building exit's band, 15 ms on the 3D's core, the
+     * game's steps held for it: 24 a second for 2 seconds, a log of
+     * 2026-10-31) */
+    if ((snapshot ? st->lines : NitroPort_LineRegs.active) && !linesOnlyWindows) {
         if (cheapOnly) {
             return 0;
         }
@@ -5952,11 +5958,11 @@ static int ShownVramSignature(int engine, int snapshot, int cheapOnly, u32 *out)
     return 1;
 }
 
-static u32 EngineShownVramSignature(int engine, int snapshot)
+static u32 EngineShownVramSignature(int engine, int snapshot, int linesOnlyWindows)
 {
     u32 h = 0;
 
-    (void)ShownVramSignature(engine, snapshot, 0, &h);
+    (void)ShownVramSignature(engine, snapshot, 0, linesOnlyWindows, &h);
     return h;
 }
 
@@ -5974,7 +5980,7 @@ void NitroPort_Render2DChangeStats(int engine, unsigned *registers, unsigned *vr
 
 static u32 EngineSignature(int engine)
 {
-    return (EngineSmallSignature(engine, 0, -1, 0, 0) * 31u) ^ EngineShownVramSignature(engine, 0);
+    return (EngineSmallSignature(engine, 0, -1, 0, 0) * 31u) ^ EngineShownVramSignature(engine, 0, 0);
 }
 
 /* NitroPort_Render2D, unless nothing it draws from changed since the last
@@ -6076,13 +6082,13 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
         last[e].valid = 1;
         /* (the VRAM noted now, as it's drawn, when that's quick: else the
          * next time, and drawn again then, to be sure) */
-        last[e].vramValid = ShownVramSignature(e, split->snapshot, 1, &vram);
+        last[e].vramValid = ShownVramSignature(e, split->snapshot, 1, gpuCircle != 0, &vram);
         last[e].vram = vram;
         __atomic_fetch_add(&sChangedSmall[e], 1u, __ATOMIC_RELAXED);
         Render(engine, under, split);
         return 1;
     }
-    vram = EngineShownVramSignature(e, split->snapshot);
+    vram = EngineShownVramSignature(e, split->snapshot, gpuCircle != 0);
     if (last[e].vramValid && vram == last[e].vram) {
         return 0;
     }

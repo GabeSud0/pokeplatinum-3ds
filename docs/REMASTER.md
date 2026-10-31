@@ -1829,6 +1829,15 @@ each step held two frames or more), the scene's own 3D is drawn a V-blank
 before it with the brightness and the circle or band halfway from the
 last scene shown's frame, when one of them changed.
 
+With an H-blank effect the 2D's change check reads all of the engine's
+VRAM (864 KB for engine A, about 15 ms on the 3D's core); not when the
+lines differ in the windows alone, a circle or band the compositor draws
+(`ShownVramSignature`'s linesOnlyWindows): the BGs are as the frame's
+registers have them on every line. A log of 2026-10-31: for 2 seconds
+after each walk out of a building the game made 24 scenes a second instead
+of 30, the upper screen's drawer at 15 ms a frame through the band, the
+game's steps held for it (some 3 frames, the band with them).
+
 On the 3DS (`fps60`, on by default since PR #132): each mailbox slot has
 an in-between scene of its own, made before the slot's scene is
 published (`NitroPort_Gx3dMidOf`: as stable as the scene while it's
