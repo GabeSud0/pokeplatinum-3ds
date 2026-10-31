@@ -1254,8 +1254,9 @@ static int circle_of(uint32_t seq, uint32_t stamp, int *x, int *y, int *r, uint3
 
 /* Engine A's master brightness as the DS shows it with a scene, as a
  * signed factor (+ brighter, - darker, 0-16): whether it's known; the
- * V-blank it was noted in (noted). */
-static int bright_of(uint32_t seq, uint32_t stamp, int *v, uint32_t *noted)
+ * V-blank it was noted in (noted), and its circle or band (kind: 0 none,
+ * 1 a circle, 2 a band of lines). */
+static int bright_of(uint32_t seq, uint32_t stamp, int *v, uint32_t *noted, int *kind)
 {
     int found;
 
@@ -1266,6 +1267,7 @@ static int bright_of(uint32_t seq, uint32_t stamp, int *v, uint32_t *noted)
 
         *v = mode == 1 ? (f > 16 ? 16 : f) : mode == 2 ? -(f > 16 ? 16 : f) : 0;
         *noted = sCircleNotes[found].stamp;
+        *kind = sCircleNotes[found].on > 0 ? sCircleNotes[found].on : 0;
     }
     LightLock_Unlock(&sObjPlacesLock);
     return found >= 0;
@@ -1276,11 +1278,57 @@ static int bright_of(uint32_t seq, uint32_t stamp, int *v, uint32_t *noted)
  * picture older than that (the 2D's drawer behind, a map's first frames)
  * keeps its own: walking out of a building, the outside showed whole at
  * full brightness before the opening band came (the picture from before
- * the band, with the band's frames' brightness), 2026-10-31. (A V-blank's
- * slack: the frame's note and its 2D's stamp are read a moment apart.) */
+ * the band, with the band's frames' brightness), 2026-10-31. (The note is
+ * made before the 2D's stamp is read, in the same V-blank work: a picture
+ * of the frame has its stamp or a later one. A V-blank's slack let the
+ * picture from just before the band through, the band's halfway brightness
+ * on the whole outside: a dim flash of it, a video of 2026-10-31.) */
 static int picture_of_frame(uint32_t set, uint32_t noted)
 {
-    return (int32_t)(set - noted) >= -1;
+    return (int32_t)(set - noted) >= 0;
+}
+
+/* (an in-between frame drawn for the 2D's fades alone, the 3D the scene's:
+ * no in-between scene, NitroPort_ComposeFrame's mid 2) This frame's, and
+ * the frame of the last scene shown (its SWAP_BUFFERS count and stamp),
+ * which the fades are halfway from. */
+static int sEffectsMid;
+static int sLastMainValid;
+static uint32_t sLastMainSeq, sLastMainStamp;
+
+/* Whether the 2D's fades (the master brightness, a circle or band) are
+ * other in a scene's frame than in the last scene shown's. */
+static int fades_changed(const NitroGx3dScene *scene)
+{
+    int a = 0, b = 0, ka = 0, kb = 0, ax = 0, ay = 0, ar = 0, bx = 0, by = 0, br = 0, ca, cb;
+    uint32_t noted;
+
+    if (!sLastMainValid) {
+        return 0;
+    }
+    if (!bright_of(scene->swap_seq, scene->stamp, &a, &noted, &ka) ||
+        !bright_of(sLastMainSeq, sLastMainStamp, &b, &noted, &kb)) {
+        return 0;
+    }
+    ca = circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted);
+    cb = circle_of(sLastMainSeq, sLastMainStamp, &bx, &by, &br, &noted);
+    return a != b || ca != cb || (ca && (ax != bx || ay != by || ar != br));
+}
+
+/* A scene's frame before (as an in-between scene has it: the frame the
+ * scene before it is shown in) and whether it has one: an in-between
+ * scene's own, or, in an in-between frame for the fades alone, the last
+ * scene shown's. */
+static int frame_before(const NitroGx3dScene *scene, uint32_t *seq, uint32_t *stamp)
+{
+    if (sEffectsMid) {
+        *seq = sLastMainSeq;
+        *stamp = sLastMainStamp;
+        return sLastMainValid && (sLastMainSeq != scene->swap_seq || sLastMainStamp != scene->stamp);
+    }
+    *seq = scene->swap_seq_before;
+    *stamp = scene->stamp_before;
+    return scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq;
 }
 
 /* Engine A's sprites as the DS shows them with a scene (its swap_seq and
@@ -2245,20 +2293,22 @@ static void master_brightness_of(const Screen *scr, const ComposeLayers *info, c
     int mode = (info->masterBright >> 14) & 3, factor = info->masterBright & 31, a, b;
     int v32;   /* (32nds: + brighter, - darker) */
     uint32_t at = 0, bt = 0;
+    int ak = 0, bk = 0;
 
     if (factor > 16) {
         factor = 16;
     }
     v32 = mode == 1 ? 2 * factor : mode == 2 ? -2 * factor : 0;
-    if (scene != NULL && bright_of(scene->swap_seq, scene->stamp, &a, &at)) {
-        uint32_t from = at;
-        int both = (scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) &&
-                   bright_of(scene->swap_seq_before, scene->stamp_before, &b, &bt);
+    if (scene != NULL && bright_of(scene->swap_seq, scene->stamp, &a, &at, &ak)) {
+        uint32_t from = at, seqB, stampB;
+        int both = frame_before(scene, &seqB, &stampB) && bright_of(seqB, stampB, &b, &bt, &bk);
 
         if (both) {
             from = bt;   /* (an in-between scene: its picture is the frame before's) */
         }
-        if (picture_of_frame(info->stamp, from)) {
+        /* (and the picture as that frame has its window: a circle's or a
+         * band's picture is drawn whole, another frame's not) */
+        if (picture_of_frame(info->stamp, from) && ak == info->gpuCircle && (!both || bk == info->gpuCircle)) {
             v32 = both ? a + b : 2 * a;
         }
     }
@@ -2737,9 +2787,11 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
     /* (any picture of the circle fade goes with any circle: drawn as inside
      * the circle all over, it isn't drawn again as the circle changes) */
     if (scene != NULL && circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted) == info->gpuCircle) {
+        uint32_t seqB, stampB;
+
         x = ax, y = ay, r = ar;
-        if ((scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) &&
-            circle_of(scene->swap_seq_before, scene->stamp_before, &bx, &by, &br, &noted) == info->gpuCircle) {
+        if (frame_before(scene, &seqB, &stampB) &&
+            circle_of(seqB, stampB, &bx, &by, &br, &noted) == info->gpuCircle) {
             x = (bx + ax) / 2, y = (by + ay) / 2, r = (br + ar) / 2;
         }
     }
@@ -3490,8 +3542,27 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     u32 current2d[2];
     u64 start = svcGetSystemTick(), gpuStart, prepareTicks = 0, texTicksBefore, texTicksAfter, texels;
 
+    sEffectsMid = 0;
     if (!sReady) {
         return 0;
+    }
+    /* An in-between frame for the 2D's fades alone (mid 2: no in-between
+     * scene, the scene's own 3D): once the scene's frame is noted, and
+     * only if a fade, circle or band changed since the last scene shown;
+     * else nothing (as late: its scene next). */
+    if (mid == 2) {
+        if (scene == NULL) {
+            return COMPOSE_MID_LATE;
+        }
+        if (frame_note_due(scene->swap_seq)) {
+            sSceneWaiting = 1;
+            sSceneWaitingSerial = sceneSerial;
+            return 0;
+        }
+        if (!fades_changed(scene)) {
+            return COMPOSE_MID_LATE;
+        }
+        sEffectsMid = 1;
     }
     flight_finish(0);   /* (the frame before, if it's drawn: its 2D let go) */
     {
@@ -3882,6 +3953,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         if (screen3d && !mid) {   /* (an in-between scene: its scene's still to come) */
             scr->shownScene = sceneSerial;
             sSceneWaiting = 0;
+            if (scene != NULL) {
+                sLastMainSeq = scene->swap_seq;
+                sLastMainStamp = scene->stamp;
+                sLastMainValid = 1;
+            }
             sLast3D = sc != NULL && sets[s]->info.has3d && !sets[s]->info.displayOff;
             if (sc != NULL) {
                 sShownSerial = sceneSerial;

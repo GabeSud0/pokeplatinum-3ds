@@ -635,6 +635,7 @@ static void GpuClassicLoop(void)
 static void GpuComposeLoop(void)
 {
     const NitroGx3dScene *scene=NULL,*mid=NULL;
+    bool fadesMid=false;   /* (mid is the scene: NitroPort_ComposeFrame's mid 2) */
     uint32_t seen=0;
     /* The scene's own frame is done with: drawn on the 3D's screen, or
      * nothing to draw (no 3D shown); else (waiting for its 2D, or for an
@@ -683,6 +684,12 @@ static void GpuComposeLoop(void)
                 /* 60 frames a second: its in-between scene first, a V-blank
                  * before it (while frames fit: NitroPort_ComposeWantsMid). */
                 if(sFps60)mid=NitroPort_Gx3dMidOf(scene);
+                /* (none: an in-between frame for the 2D's fades alone, with
+                 * the scene's 3D, if one changed: walking out of a
+                 * building, the map's first scenes have none, and its band
+                 * opened 30 times a second) */
+                fadesMid=sFps60 && mid==NULL;
+                if(fadesMid)mid=scene;
                 __atomic_fetch_add(&sGpuScenes,1u,__ATOMIC_RELAXED);
                 __atomic_fetch_add(&sGpuTriangles,scene->count,__ATOMIC_RELAXED);
                 __atomic_fetch_add(&sGpuDroppedTriangles,scene->dropped,__ATOMIC_RELAXED);
@@ -708,7 +715,7 @@ static void GpuComposeLoop(void)
                      * V-blank, still before its scene, unless its V-blank
                      * has come; not drawn otherwise (no 3D shown): left
                      * out) */
-                    int r=NitroPort_ComposeFrame(mid,seen,aOnTop,osGet3DSliderState(),false,0,1);
+                    int r=NitroPort_ComposeFrame(mid,seen,aOnTop,osGet3DSliderState(),false,0,fadesMid?2:1);
                     if((r&bit) || (r&COMPOSE_MID_LATE) ||
                        (!(r&noBuf) && !NitroPort_ComposeSceneWaiting(seen)))mid=NULL;
                 }

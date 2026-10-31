@@ -1815,7 +1815,19 @@ is halfway in them too, in 32nds; as noted only with a picture of that
 frame or newer (`picture_of_frame`), the picture's own with an older one
 (the 2D's drawer behind): walking out of a building, the outside showed
 whole for a moment at full brightness before the opening band, the
-picture from before the band with the band's frames' brightness.
+picture from before the band with the band's frames' brightness. Strictly
+(a picture of that frame or newer, no V-blank's slack) and only when the
+picture has the frame's circle or band (a circle's or band's picture is
+drawn whole, another frame's isn't): with a V-blank's slack, the picture
+from just before the band got the band's halfway brightness, a dim flash
+of the whole outside (a video of 2026-10-31).
+
+An in-between frame for the 2D's fades alone (`NitroPort_ComposeFrame`'s
+mid 2, `fades_changed`): with no in-between scene (a map's first scenes
+have none: walking out of a building, the band opened 30 times a second,
+each step held two frames or more), the scene's own 3D is drawn a V-blank
+before it with the brightness and the circle or band halfway from the
+last scene shown's frame, when one of them changed.
 
 On the 3DS (`fps60`, on by default since PR #132): each mailbox slot has
 an in-between scene of its own, made before the slot's scene is
