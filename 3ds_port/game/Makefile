@@ -251,7 +251,7 @@ GAME_CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) $(NNS_INCLUDES) \
                $(GCC14_ERRORS)
 
 
-.PHONY: all lib test program cia clean libnitro libnitrosystem FORCE
+.PHONY: all lib test program cia forwarder clean libnitro libnitrosystem FORCE
 
 ifeq ($(IS_HOST),yes)
 all: test
@@ -504,7 +504,23 @@ $(PROGRAM): $(PROGRAM_ELF) $(OUT)/pokeplatinum.smdh
 	@$(DEVKITPRO)/tools/bin/3dsxtool $< $@ --smdh=$(OUT)/pokeplatinum.smdh
 	@echo "built $@"
 
-# The HOME Menu version: the same program installed as a title of its own
+# The HOME Menu version's program: a forwarder (forwarder/main.c) that opens
+# the .3dsx (sd:/3ds/pokeplatinum.3dsx) through Luma3DS's homebrew loader,
+# as the Homebrew Launcher does: one program, so an update is the new .3dsx
+# alone and the .cia (its icon, its banner from the player's ROM) stays. No
+# game code in it: libctru only, built quickly on its own.
+FORWARDER_ELF := $(OUT)/forwarder.elf
+FORWARDER_CFLAGS := $(filter -march=% -mtune=% -mfloat-abi=% -mfpu=% -mtp=%,$(PORT_CFLAGS)) -mword-relocations \
+                    -ffunction-sections -D__3DS__ -O2 -g -Wall -I$(DEVKITPRO)/libctru/include
+
+$(FORWARDER_ELF): forwarder/main.c
+	@mkdir -p $(dir $@)
+	@echo "  CC forwarder/main.c"
+	@$(CC) $(FORWARDER_CFLAGS) -specs=3dsx.specs -Wl,--gc-sections -L$(DEVKITPRO)/libctru/lib $< -lctru -o $@
+
+forwarder: $(FORWARDER_ELF)
+
+# The HOME Menu version: the forwarder installed as a title of its own
 # (opens and closes from the HOME Menu). Needs makerom and bannertool
 # (tools/build_cia_tools.sh: CIA_TOOLS is where it put them) and the art.
 CIA_TOOLS ?= $(ROOT)/build/cia-tools
@@ -533,8 +549,8 @@ $(OUT)/pokeplatinum.bnr: $(HOME_ART)/banner.png $(BANNER_WAV) FORCE
 	@$(BANNERTOOL) makebanner -i $(HOME_ART)/banner.png -a $(BANNER_WAV) -o $@ >/dev/null
 endif
 
-$(PROGRAM_CIA): $(PROGRAM_ELF) $(OUT)/pokeplatinum.smdh $(OUT)/pokeplatinum.bnr cia/pokeplatinum.rsf
-	@$(MAKEROM) -f cia -o $@ -target t -exefslogo -rsf cia/pokeplatinum.rsf -elf $(PROGRAM_ELF) \
+$(PROGRAM_CIA): $(FORWARDER_ELF) $(OUT)/pokeplatinum.smdh $(OUT)/pokeplatinum.bnr cia/pokeplatinum.rsf
+	@$(MAKEROM) -f cia -o $@ -target t -exefslogo -rsf cia/pokeplatinum.rsf -elf $(FORWARDER_ELF) \
 	    -icon $(OUT)/pokeplatinum.smdh -banner $(OUT)/pokeplatinum.bnr
 	@echo "built $@ (its banner is made from your ROM: for your own use, never share it)"
 

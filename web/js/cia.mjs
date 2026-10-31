@@ -49,9 +49,9 @@ export async function makeCia({ bannertool, makerom, elf, icon, rsf, chime, cgfx
   const { bnr, banner, log } = await makeBanner({ bannertool, chime, cgfx, flatBanner });
   const out = `/pokeplatinum.${format}`;
   const r = await run(makerom, ["makerom", "-f", format, "-o", out, "-target", "t", "-exefslogo",
-                                "-rsf", "/pokeplatinum.rsf", "-elf", "/pokeplatinum.elf",
+                                "-rsf", "/pokeplatinum.rsf", "-elf", "/forwarder.elf",
                                 "-icon", "/pokeplatinum.smdh", "-banner", "/pokeplatinum.bnr"],
-                      { "/pokeplatinum.rsf": rsf, "/pokeplatinum.elf": elf, "/pokeplatinum.smdh": icon,
+                      { "/pokeplatinum.rsf": rsf, "/forwarder.elf": elf, "/pokeplatinum.smdh": icon,
                         "/pokeplatinum.bnr": bnr });
   if (r.code !== 0 || !r.files.has(out)) throw new Error(`makerom failed:\n${log}${r.log}`);
   return { cia: r.files.get(out), bnr, banner, log: log + r.log };

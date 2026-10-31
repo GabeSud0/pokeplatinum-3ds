@@ -17,7 +17,7 @@ open("build/web/made-up.nds", "wb").write(synthetic_nds_with_banner())
 PY
 OUT=3ds_port/game/build/3ds
 python3 tools/build_web_payload.py --synthetic --synthetic-rom build/web/made-up.nds \
-    --program "$OUT/pokeplatinum.3dsx" --elf build/web/pokeplatinum.elf \
+    --program "$OUT/pokeplatinum.3dsx" --elf build/web/forwarder.elf \
     --smdh "$OUT/pokeplatinum.smdh" --cia-tools build/cia-tools-wasm --pycgfx build/pycgfx \
     --out build/web/test-release
 python3 tools/build_site.py --out build/web/test-site --release-dir build/web/test-release

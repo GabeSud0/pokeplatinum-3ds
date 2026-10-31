@@ -65,7 +65,7 @@ On a New 3DS:
 | **Enhancements and cheats** | Optional, from OPTIONS: SPEED up to 4x (menus and battle choices stay at 1x), Exp. Share for the whole party, experience for catches, trade evolutions at level 40, HMs without teaching the moves, auto-run, your first Pokémon following you (FOLLOWER: HeartGold/SoulSilver's sprites, downloaded by the builder; it comes out of the ball it was caught in, and you can talk to it: it reacts, and now and then finds you an item); and cheats (always catch, instant victory, fast eggs, infinite money, wild encounter rate, shiny odds, give items). |
 | **Small conveniences** | Catch a Pokémon with a full party and you can swap it for one in your party right there in the battle. A new game saves over the old save without erasing it first. L + R + START + SELECT restarts the game from the opening. |
 | **Crisp pixels** | Even, crisp pixels for the 2D, and optional xBRZ smoothing for the 3D's textures. |
-| **On the HOME Menu** | Installs as a `.cia`, with your cartridge's icon and an animated 3D banner. |
+| **On the HOME Menu** | Installs as a `.cia`, with your cartridge's icon and an animated 3D banner. It opens the `.3dsx`, so updating the game updates it too. |
 | **Built from your own cartridge** | The builder makes the game's data on your own computer, from your own dump. No game content is distributed. |
 
 ## Status
@@ -186,7 +186,7 @@ the root of the SD card.
 sdmc:/3ds/pokeplatinum/platinum3ds.pak
 sdmc:/3ds/pokeplatinum/manifest.json      (from data_pack/)
 sdmc:/3ds/pokeplatinum.3dsx               (for the Homebrew Launcher)
-sdmc:/cia/pokeplatinum.cia                (for the HOME Menu, optional)
+sdmc:/cia/pokeplatinum.cia                (for the HOME Menu, optional: it opens the .3dsx)
 ```
 
 In Azahar, these go in its emulated SD card folder.
@@ -195,8 +195,10 @@ In Azahar, these go in its emulated SD card folder.
 
 - **Homebrew Launcher:** run `pokeplatinum.3dsx`, or open it in Azahar.
 - **HOME Menu:** in FBI, go to **SD → cia → pokeplatinum.cia → Install CIA**.
-  The game then opens and closes from the HOME Menu like any other title. To
-  update it, install the new `.cia` the same way; your save stays.
+  It opens `sdmc:/3ds/pokeplatinum.3dsx` the way the Homebrew Launcher does
+  (it needs Luma3DS and the Homebrew Launcher Loader, both from the hacking
+  guide's setup), so keep the `.3dsx` there: updating it updates the HOME
+  Menu version too. It closes from the HOME Menu like any other title.
 - **Updating:** build the new version with the web builder and copy its files
   over the old ones. When a version reads its data the same way, its page
   says so: then copying the new `pokeplatinum.3dsx` is enough.

@@ -1,7 +1,10 @@
 # makerom's settings for the HOME Menu version of the program
 # (build/3ds/pokeplatinum.cia: `make game-cia`, see 3ds_port/game/README.md).
-# The same program as the .3dsx, installed as a title of its own: it opens
-# and closes from the HOME Menu like any other.
+# Its program is the forwarder (forwarder/main.c), which opens the .3dsx
+# (sd:/3ds/pokeplatinum.3dsx) through Luma3DS's homebrew loader: the game
+# then runs in the homebrew title, as from the Homebrew Launcher. The title
+# keeps the settings it had when the whole game was in it (the forwarder
+# needs few of them), and its ID: installing it replaces that older .cia.
 #
 # Title ID 000400000B1A7000 (unique ID 0xB1A70, in the range kept for
 # homebrew). Like any homebrew title it needs custom firmware (Luma3DS) to

@@ -5,9 +5,11 @@ compiled with GCC, and the programs that run it:
 
 - **`pokeplatinum.3dsx`**: the game on a 3DS (or in Azahar), from the
   Homebrew Launcher.
-- **`pokeplatinum.cia`**: the same program, installed on the HOME Menu (it
-  opens and closes from there like any other title), with your
-  cartridge's icon.
+- **`pokeplatinum.cia`**: the HOME Menu's way in, with the port's icon and
+  your cartridge's banner. It's a forwarder ([`forwarder/main.c`](forwarder/main.c)):
+  it opens `sd:/3ds/pokeplatinum.3dsx` the way the Homebrew Launcher does
+  (Luma3DS's homebrew loader), so the two are one program and an update is
+  the new `.3dsx` alone.
 - **`pokeplatinum-pc`**: the same game code on a PC, without a screen, for
   finding out quickly how far it gets and where it stops.
 
@@ -88,14 +90,19 @@ ported.
 
 4. **Run it** from the Homebrew Launcher, or open the `.3dsx` in Azahar.
 
-   **Or install it on the HOME Menu** (needs custom firmware, Luma3DS): copy
+   **Or install it on the HOME Menu** (needs Luma3DS and the Homebrew
+   Launcher Loader, both from 3ds.hacks.guide's setup): copy
    `pokeplatinum.cia` anywhere on the SD card (`sdmc:/cia/`, say), open
    **FBI**, go to **SD → cia → pokeplatinum.cia → Install CIA**, then go
-   back to the HOME Menu: the game is there with its icon. It opens and
-   closes like any other title (HOME → Close). It reads the same files in
-   `sdmc:/3ds/pokeplatinum/`. To update it, install the new `.cia` the same
-   way (it replaces the old one; the save stays: it's on the SD card).
-   Azahar installs a `.cia` too (File → Install CIA...).
+   back to the HOME Menu: the game is there with its icon and banner. It
+   opens `sd:/3ds/pokeplatinum.3dsx` (the `.3dsx` must be there) through
+   Luma3DS's homebrew loader, in the Homebrew Launcher Loader's title, as
+   the Homebrew Launcher does: while it runs, the HOME Menu shows that
+   title's icon, and it closes like any other (HOME → Close). To update the
+   game, copy the new `.3dsx` over the old one; the `.cia` stays (install a
+   new one only for new art). An older `.cia` (the whole game in it, before
+   the forwarder) is replaced by installing this one. In Azahar, open the
+   `.3dsx` (the forwarder needs Luma3DS).
 
 What you'll see: on a New 3DS, the game at the 3DS's size: both screens
 filled, the upper screen's 2D and 3D laid out for its full width, the 3D at

@@ -15,8 +15,8 @@
 # with the distrobox, so the files it makes are in your own folders.
 #
 # Clones the port into ~/pokeplatinum-3ds (or updates it), builds
-# pokeplatinum.3dsx and pokeplatinum.cia (the same program for the HOME
-# Menu, with its animated 3D banner made from your ROM), makes the data pack,
+# pokeplatinum.3dsx and pokeplatinum.cia (for the HOME Menu, with its
+# animated 3D banner made from your ROM: it opens the .3dsx), makes the data pack,
 # and puts the SD card files in ~/pokeplatinum-sd (and in Azahar's SD folder,
 # if there is one). Nothing is uploaded. The program and the pack contain
 # game code and data: keep them to yourself.
@@ -143,7 +143,7 @@ fi
 # between builds. If this part fails, the .3dsx above is still fine.
 CIA_TOOLS="$HOME/pokeplatinum-cia-tools"
 CIA=""
-step "Building pokeplatinum.cia (the HOME Menu version)"
+step "Building pokeplatinum.cia (the HOME Menu version: it opens sd:/3ds/pokeplatinum.3dsx)"
 # Its banner: the animated 3D one, made from your ROM (tools/banner3d), or
 # the flat picture if that can't be made.
 BANNER3D="$PWD/build/home-menu-art/banner3d.bnr"
