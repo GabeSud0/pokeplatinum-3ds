@@ -84,6 +84,12 @@ int NitroPort_WideCells(void);
  * (the HM cut-in's wind), so its cells there are placed there too while it
  * plays (NitroPort_WideCells). */
 void NitroPort_SetFieldCells(int on);
+/* While such an effect plays (in the field), engine A's sprites may be
+ * drawn by the remaster's compositor itself, each where it is in the frame
+ * shown and halfway in the in-between frames: the cut-in's wind and its
+ * Pokemon moving at 60 frames a second, as the field around them does,
+ * where the game moves them 30 times (NitroRender2DSplit.gpuObjs). */
+int NitroPort_GpuSprites(void);
 /* (tests, the PC runner) 1: pictures, 0: the UI, -1: as the overlays say. */
 void NitroPort_WideForcePictures(int mode);
 /* Changes whenever a window is added or removed. */

@@ -1677,6 +1677,17 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             if (engine == 0 && !inPanel && NitroPort_ComposeDrawsBgs()) {
                 split.gpuBgs = NitroPort_RepeatingBgs();
             }
+            /* (the HM cut-in: its sprites drawn by the compositor, each
+             * where it is in the frame shown, halfway in the in-between
+             * frames, the picture not drawn again as they move) */
+            if (engine == 0 && !inPanel && NitroPort_ComposeDrawsObjs() && NitroPort_GpuSprites()) {
+                static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
+                static uint16_t atlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H];
+
+                split.gpuObjs = 1;
+                split.gpuObj = objs;
+                split.gpuObjAtlas = atlas;
+            }
             if (__atomic_exchange_n(&shownInPanel, inPanel, __ATOMIC_ACQ_REL) != inPanel) {
                 sMustDraw[0] = true;
             }
@@ -1739,6 +1750,9 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             }
             layers->gpuBgPicture = pictureValid ? picture : NULL;
         }
+        layers->gpuObjCount = split.gpuObjsLeftOut ? split.gpuObjCount : -1;
+        layers->gpuObj = split.gpuObj;
+        layers->gpuObjAtlas = split.gpuObjAtlas;
         layers->evy = split.evy;
         layers->masterBright = split.masterBright;
         layers->backdrop = split.backdrop;
@@ -2162,6 +2176,19 @@ static bool DrawFrame(bool new3dOnly)
             continue;
         }
         any |= !__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE);
+    }
+    /* (the HM cut-in's sprites drawn by the compositor: where they are
+     * in this frame, whether a drawer takes it or not, once a V-blank) */
+    if (sRemaster && NitroPort_GpuSprites() && NitroPort_ComposeDrawsObjs()) {
+        static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
+        static u32 notedStamp;
+        u32 stamp = NitroPort_ComposeVBlanks();
+        int n;
+
+        if (stamp != notedStamp && (n = NitroPort_Render2DObjPlaces(0, objs, NITRO_GPU_OBJ_MAX)) >= 0) {
+            NitroPort_ComposeNoteObjs(stamp, objs, n);
+            notedStamp = stamp;
+        }
     }
     if (!any) {
         return false;

@@ -262,6 +262,12 @@ void NitroPort_SetFieldCells(int on)
     __atomic_store_n(&sFieldCells, on != 0, __ATOMIC_RELEASE);
 }
 
+int NitroPort_GpuSprites(void)
+{
+    return __atomic_load_n(&sFieldCells, __ATOMIC_ACQUIRE) && NitroPort_OverlayLoadedNamed("overlay5") &&
+           !NitroPort_OverlayLoadedNamed("battle");
+}
+
 void NitroPort_WideForcePictures(int mode)
 {
     sForcePictures = mode;

@@ -10,6 +10,7 @@
 #include <citro3d.h>
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_vertex.h>
+#include <nitro_port_render2d.h>
 
 /* ---------------------------------------------------- the polygon drawer */
 
@@ -265,6 +266,15 @@ typedef struct ComposeLayers {
     /* (the drawer's) its picture (NitroPort_Render2DBgPicture: 256 x 256
      * RGBA5551), made as the game's state was read, when the key changed */
     const uint16_t *gpuBgPicture;
+    /* Engine A's sprites left out of the picture for the compositor to draw
+     * itself (NitroRender2DSplit.gpuObjsLeftOut: the HM cut-in's), or -1:
+     * how many, and (the drawer's, as the game's state was read) what they
+     * show and their pixels (NITRO_GPU_OBJ_ATLAS_W x _H RGBA5551). Drawn in
+     * front of it all where the game had them in the frame shown
+     * (NitroPort_ComposeNoteObjs), halfway in an in-between frame. */
+    int gpuObjCount;
+    const NitroGpuObj *gpuObj;
+    const uint16_t *gpuObjAtlas;
 } ComposeLayers;
 /* Whether the compositor can draw a BG itself (its picture's textures
  * made: NitroRender2DSplit.gpuBgs). Any thread. */
@@ -274,6 +284,14 @@ int NitroPort_ComposeDrawsBgs(void);
  * compositor draws itself is scrolled by with the 3D shown in it (a scene
  * of stamp S: the frame S + 1's, as the DS has it). */
 void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, const uint16_t ofs[8]);
+/* Whether the compositor can draw engine A's sprites itself (their
+ * textures made: NitroRender2DSplit.gpuObjs). Any thread. */
+int NitroPort_ComposeDrawsObjs(void);
+/* (the game's thread, each frame it hands over, while its sprites are
+ * drawn by the compositor) Engine A's sprites in the frame of this V-blank
+ * count (NitroPort_Render2DObjPlaces): where they're drawn with a scene of
+ * that stamp, and halfway to them in the in-between frame before. */
+void NitroPort_ComposeNoteObjs(uint32_t stamp, const NitroGpuObj *objs, int count);
 ComposeLayers *NitroPort_ComposeLayersOf(int engine);
 /* Into the textures of the screen (0 upper, 1 lower) the engine is on. */
 /* 0: no set free to publish into (one the GPU's drawing, one the frame

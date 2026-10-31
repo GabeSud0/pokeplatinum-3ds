@@ -597,7 +597,14 @@ stretched:
     each side, fading in two darker shades), made from the game's own band
     as the cut-in starts (its middle ring's shape stamped behind the
     band's rings; BG3's map made 512 wide, the sides in its second half;
-    `CutIn_PortWideBand`, patch 0058);
+    `CutIn_PortWideBand`, patch 0058); BG3 hidden for one of the game's
+    frames before the band's VRAM is written as it starts, and again
+    before it's put back as it ends (patch 0059: the picture of the frame
+    before is drawn while the game goes on, the VRAM read as it is, and
+    the band showed in it white and red, the text box's palette, no
+    window: 2026-10-30, most often with A speeding the text up); its
+    sprites drawn by the compositor at 60 frames a second (see GPU
+    sprites, below);
   - the gym leaders' battle intro (patch 0058): the leader's picture, its
     art ending at the DS screen's right edge, slides to the wider screen's
     right edge, not the DS's (it looked cut off, the band going on beside
@@ -1326,7 +1333,10 @@ screens) the lower screen is the DS's, filling the screen as before.
     field's units about a pixel), only when the field heap and the 3D VRAM
     have room for it; it goes along with the Pokémon (its emitters and
     their particles moved as it moves) if the player walks on as it
-    comes out. The Pokémon has
+    comes out, from where the Pokémon is as its ball opens (patch 0059:
+    on the player's tile the ball opens once the player has stepped off,
+    the Pokémon already walking after them, and the burst from the ball
+    went along a tile behind it, 2026-10-30). The Pokémon has
     no shadow while it's smaller than itself. Out and standing it steps
     in place, as HeartGold's do (the walk at a slow walk's pace). Talked
     to (A facing it, out): it turns to the player, its cry, a bubble over
@@ -1702,6 +1712,28 @@ PATH` draws the newest in-between scene as gpusim draws a scene. Walking
 and running in Jubilife and on Route 202, the in-between scenes are
 halfway (the scene 2 to 4 pixels on from the one before, the in-between
 1 to 2), with nothing out of place.
+
+GPU sprites (2026-10-30): the game moves its sprites 30 times a second
+in the field, as it does everything, and the HM cut-in is nearly all
+sprites (its wind's streaks, 24 pixels a step; its Pokémon sliding up to
+64): at 30 next to the field's 60 it looked choppy. While the cut-in
+plays (`NitroPort_SetFieldCells`, `NitroPort_GpuSprites`), engine A's
+sprites are drawn by the compositor itself when they're all in front of
+everything (`NitroRender2DSplit.gpuObjs`: normal ones, none behind a BG,
+shown inside and outside the windows, no colour effect on them, no
+H-blank effect): left out of the picture, their pictures in an atlas
+(256 x 128, each picture once: `gpuObjAtlas`, the set's `objTex`), what
+each sprite shows and where in it (`NitroGpuObj`). Where they are comes
+from the game's thread, each frame it hands over
+(`NitroPort_Render2DObjPlaces` into `NitroPort_ComposeNoteObjs`, as the
+weather BG's scrolls): with a scene, the frame the DS shows it in; in an
+in-between scene, halfway from the frame before
+(`NitroPort_GpuObjsBetween`: each found again as the nearest of its kind,
+each the other's nearest; one going off or just come on moved half as
+far as most of its kind). Their places don't count as a change: the
+picture isn't drawn again as they move, only when what they show does.
+The band's window still opens and closes 30 times a second. In the PC
+runner the picture draws them where it had them.
 
 On the 3DS (`fps60`, on by default since PR #132): each mailbox slot has
 an in-between scene of its own, made before the slot's scene is

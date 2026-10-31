@@ -134,6 +134,13 @@ typedef struct LayerSet {
     void *bgTex;
     uint64_t bgKey;
     int bgValid;
+    /* (the upper screen's) Engine A's sprites drawn here (ComposeLayers.
+     * gpuObjCount; -1: in the picture): their pixels, 2x2 texels a pixel
+     * (OBJ_TEX_W x OBJ_TEX_H RGBA5551, tiled), and what each sprite shows
+     * and where in it (as the picture was drawn). */
+    void *objTex;
+    int objCount;
+    NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
 } LayerSet;
 
 /* BG pictures: 2x2 texels a pixel of a 256 x 256 map (and a row of tiles
@@ -143,6 +150,24 @@ typedef struct LayerSet {
 #define BG_TEX_ALLOC (BG_TEX_BYTES + BG_TEX_W * 8 * 2)
 static int sBgsAvailable;   /* (the upper screen's sets have their bgTex) */
 static C3D_Tex sBgTex;
+/* Sprites' pictures: 2x2 texels a pixel of the atlas (and a row of tiles
+ * more, as BG_TEX_ALLOC). */
+#define OBJ_TEX_W (NITRO_GPU_OBJ_ATLAS_W * 2)
+#define OBJ_TEX_H (NITRO_GPU_OBJ_ATLAS_H * 2)
+#define OBJ_TEX_BYTES (OBJ_TEX_W * OBJ_TEX_H * 2)
+#define OBJ_TEX_ALLOC (OBJ_TEX_BYTES + OBJ_TEX_W * 8 * 2)
+static int sObjsAvailable;  /* (the upper screen's sets have their objTex) */
+static C3D_Tex sObjTex;
+/* Engine A's sprites by frame (NitroPort_ComposeNoteObjs): the last
+ * OBJ_PLACES_KEPT frames the game noted. */
+#define OBJ_PLACES_KEPT 8
+static struct {
+    uint32_t stamp;
+    int count, valid;
+    NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
+} sObjPlaces[OBJ_PLACES_KEPT];
+static unsigned sObjPlacesNext;
+static LightLock sObjPlacesLock;
 /* Engine A's BG scrolls by frame (NitroPort_ComposeNoteBgOffsets): the
  * last BG_OFS_KEPT frames the game handed over. */
 #define BG_OFS_KEPT 16
@@ -302,8 +327,8 @@ static int sQuadVertices;
 /* (a frame's quads: 32, an H-blank effect's runs' rear planes and
  * tints, 2 x 24 at most: LINE_RUNS_MAX, LINE_RUNS_STEREO a side; the
  * menu's panel put together, 96 at most: PANEL_PIECES_MAX, their sides and
- * brightness) */
-#define MAX_QUAD_VERTICES (6 * (32 + 2 * 24 + 96))
+ * brightness; engine A's sprites drawn here, each eye's: draw_gpu_objs) */
+#define MAX_QUAD_VERTICES (6 * (32 + 2 * 24 + 96 + 2 * NITRO_GPU_OBJ_MAX))
 /* ------------------------------------------------- frames in flight
  * A frame's commands are built while the GPU draws the frame before
  * (NitroPort_PicaFrameOpen): its GPU operations (fills, command lists,
@@ -650,10 +675,13 @@ static void free_sets(Screen *scr)
         if (scr->set[i].under) linearFree(scr->set[i].under);
         if (scr->set[i].over) linearFree(scr->set[i].over);
         if (scr->set[i].bgTex) linearFree(scr->set[i].bgTex);
+        if (scr->set[i].objTex) linearFree(scr->set[i].objTex);
         scr->set[i].under = NULL;
         scr->set[i].over = NULL;
         scr->set[i].bgTex = NULL;
         scr->set[i].bgValid = 0;
+        scr->set[i].objTex = NULL;
+        scr->set[i].objCount = -1;
     }
 }
 
@@ -679,6 +707,7 @@ static void free_all(void)
         free_sets(&sScreens[s]);
     }
     sBgsAvailable = 0;
+    sObjsAvailable = 0;
     NitroPort_LowerMenuSetAvailable(0);
     for (i = 0; i < 2; i++) {
         if (sMenuTexData[i]) {
@@ -839,6 +868,8 @@ static int compose_init(const ComposeConfig *config, int small)
     LightLock_Init(&sSetLock);
     LightLock_Init(&sBgOfsLock);
     memset(sBgOfs, 0, sizeof(sBgOfs));
+    LightLock_Init(&sObjPlacesLock);
+    memset(sObjPlaces, 0, sizeof(sObjPlaces));
     LightLock_Init(&sPresentLock);
     sHeld = 0;
     for (c = 0; c < 32768; c++) {
@@ -1026,6 +1057,24 @@ static int compose_init(const ComposeConfig *config, int small)
         }
         NitroPort_Log("[compose] not enough memory for the weather's BG on the GPU: drawn with the 2D");
     }
+    /* (as well: the sprites drawn by the GPU, NitroPort_ComposeDrawsObjs) */
+    sObjsAvailable = 1;
+    for (i = 0; i < SETS && sObjsAvailable; i++) {
+        sScreens[0].set[i].objTex = linearAlloc(OBJ_TEX_ALLOC);
+        sScreens[0].set[i].objCount = -1;
+        if (!sScreens[0].set[i].objTex) {
+            sObjsAvailable = 0;
+        }
+    }
+    if (!sObjsAvailable) {
+        for (i = 0; i < SETS; i++) {
+            if (sScreens[0].set[i].objTex) {
+                linearFree(sScreens[0].set[i].objTex);
+                sScreens[0].set[i].objTex = NULL;
+            }
+        }
+        NitroPort_Log("[compose] not enough memory for sprites on the GPU: drawn with the 2D");
+    }
     NitroPort_LowerMenuSetClock(NitroPort_ComposeVBlanks);   /* (the panel's fades) */
     NitroPort_LowerMenuSetAvailable(sMenuTexData[0] != NULL);
     sGxRecording = 0;
@@ -1081,6 +1130,49 @@ ComposeLayers *NitroPort_ComposeLayersOf(int engine)
 int NitroPort_ComposeDrawsBgs(void)
 {
     return sReady && sBgsAvailable;
+}
+
+int NitroPort_ComposeDrawsObjs(void)
+{
+    return sReady && sObjsAvailable;
+}
+
+void NitroPort_ComposeNoteObjs(uint32_t stamp, const NitroGpuObj *objs, int count)
+{
+    if (count < 0 || count > NITRO_GPU_OBJ_MAX) {
+        return;
+    }
+    LightLock_Lock(&sObjPlacesLock);
+    sObjPlaces[sObjPlacesNext].stamp = stamp;
+    sObjPlaces[sObjPlacesNext].count = count;
+    memcpy(sObjPlaces[sObjPlacesNext].objs, objs, (size_t)count * sizeof(objs[0]));
+    sObjPlaces[sObjPlacesNext].valid = 1;
+    sObjPlacesNext = (sObjPlacesNext + 1u) % OBJ_PLACES_KEPT;
+    LightLock_Unlock(&sObjPlacesLock);
+}
+
+/* Engine A's sprites as the DS shows them with a scene of this stamp: the
+ * first frame noted after it (as bg_offsets_after). How many, or -1. */
+static int objs_after(uint32_t stamp, NitroGpuObj *out)
+{
+    int i, found = -1, n = -1;
+    uint32_t best = 0;
+
+    LightLock_Lock(&sObjPlacesLock);
+    for (i = 0; i < OBJ_PLACES_KEPT; i++) {
+        uint32_t d = sObjPlaces[i].stamp - stamp;
+
+        if (sObjPlaces[i].valid && d >= 1u && d <= 4u && (found < 0 || d < best)) {
+            found = i;
+            best = d;
+        }
+    }
+    if (found >= 0) {
+        n = sObjPlaces[found].count;
+        memcpy(out, sObjPlaces[found].objs, (size_t)n * sizeof(out[0]));
+    }
+    LightLock_Unlock(&sObjPlacesLock);
+    return n;
 }
 
 
@@ -1319,6 +1411,8 @@ int NitroPort_ComposePublish(int engine, int screen)
     set->info.over = NULL;
     set->info.overAlpha = NULL;
     set->info.gpuBgPicture = NULL;   /* (the drawer's: the set has its own, bgTex) */
+    set->info.gpuObj = NULL;         /* (the same: objs, objTex) */
+    set->info.gpuObjAtlas = NULL;
     set->overEmpty = 1;
     set->info.height = h;
     set->underColor = l->displayOff ? -1 : uniform_color(l->under, w * h);
@@ -1343,6 +1437,14 @@ int NitroPort_ComposePublish(int engine, int screen)
         GSPGPU_FlushDataCache(set->bgTex, BG_TEX_BYTES);
         set->bgKey = l->gpuBgKey;
         set->bgValid = 1;
+    }
+    /* Engine A's sprites drawn here: their pixels, and what each shows. */
+    set->objCount = -1;
+    if (!l->displayOff && l->gpuObjCount >= 0 && set->objTex && l->gpuObj && l->gpuObjAtlas) {
+        NitroPort_Double2xTiled16(l->gpuObjAtlas, NITRO_GPU_OBJ_ATLAS_W, NITRO_GPU_OBJ_ATLAS_H, set->objTex, OBJ_TEX_W);
+        GSPGPU_FlushDataCache(set->objTex, OBJ_TEX_BYTES);
+        memcpy(set->objs, l->gpuObj, (size_t)l->gpuObjCount * sizeof(set->objs[0]));
+        set->objCount = l->gpuObjCount;
     }
     LightLock_Lock(&sSetLock);
     set->writing = 0;
@@ -2429,6 +2531,87 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
 }
 
 /* One screen (one eye of it), into its render target. */
+/* Engine A's sprites the compositor draws (LayerSet.objs, objTex), in front
+ * of the rest of the picture (pic: its rectangle on the screen, sx and sy
+ * its pixels' size): each where the game had it in the frame the DS shows
+ * the scene in (objs_after), halfway to that from the frame before in an
+ * in-between scene (NitroPort_GpuObjsBetween: the cut-in's wind blowing on
+ * at 60 frames a second, as the field does, where the game moves it 30
+ * times); as the set has them where that isn't known. Each with the set's
+ * picture of what it shows (one the set has no picture of isn't drawn: the
+ * next set has it). Back to front, cut at the picture's edges. */
+static void draw_gpu_objs(const LayerSet *set, const NitroGx3dScene *scene, const PicaRect *pic, float sx, float sy,
+                          int linear)
+{
+    static NitroGpuObj before[NITRO_GPU_OBJ_MAX], after[NITRO_GPU_OBJ_MAX], shown[2 * NITRO_GPU_OBJ_MAX];
+    const NitroGpuObj *list = set->objs;
+    int n = set->objCount, nb = -1, na = -1, k;
+
+    if (scene != NULL) {
+        na = objs_after(scene->stamp, after);
+        if (scene->stamp_before != scene->stamp && na >= 0) {
+            nb = objs_after(scene->stamp_before, before);
+        }
+    }
+    if (na >= 0) {
+        n = NitroPort_GpuObjsBetween(before, nb, after, na, shown, 2 * NITRO_GPU_OBJ_MAX);
+        list = shown;
+    }
+    make_texture(&sObjTex, set->objTex, GPU_RGBA5551, OBJ_TEX_W, OBJ_TEX_H, linear, GPU_CLAMP_TO_EDGE);
+    C3D_TexBind(0, &sObjTex);
+    quad_combiner(1);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+    for (k = 0; k < n; k++) {
+        const NitroGpuObj *o = &list[k], *g = NULL;
+        float x0, y0, x1, y1, u0, u1, vT, vB, t;
+        int i;
+
+        for (i = 0; i < set->objCount && g == NULL; i++) {
+            if (set->objs[i].key == o->key) {
+                g = &set->objs[i];
+            }
+        }
+        if (g == NULL) {
+            continue;
+        }
+        x0 = pic->x0 + (float)o->x * sx;
+        y0 = pic->y0 + (float)o->y * sy;
+        x1 = x0 + (float)o->w * sx;
+        y1 = y0 + (float)o->h * sy;
+        u0 = (float)(g->ax * 2) / (float)OBJ_TEX_W;
+        u1 = (float)((g->ax + o->w) * 2) / (float)OBJ_TEX_W;
+        vT = 1.0f - (float)(g->ay * 2) / (float)OBJ_TEX_H;
+        vB = 1.0f - (float)((g->ay + o->h) * 2) / (float)OBJ_TEX_H;
+        if (o->hflip) {
+            t = u0, u0 = u1, u1 = t;
+        }
+        if (o->vflip != (sConfig.flipV != 0)) {
+            t = vT, vT = vB, vB = t;
+        }
+        /* (cut at the picture's edges, its texture with it) */
+        if (x0 < pic->x0) {
+            u0 += (u1 - u0) * (pic->x0 - x0) / (x1 - x0);
+            x0 = pic->x0;
+        }
+        if (x1 > pic->x1) {
+            u1 -= (u1 - u0) * (x1 - pic->x1) / (x1 - x0);
+            x1 = pic->x1;
+        }
+        if (y0 < pic->y0) {
+            vT += (vB - vT) * (pic->y0 - y0) / (y1 - y0);
+            y0 = pic->y0;
+        }
+        if (y1 > pic->y1) {
+            vB -= (vB - vT) * (y1 - pic->y1) / (y1 - y0);
+            y1 = pic->y1;
+        }
+        if (x0 < x1 && y0 < y1) {
+            quad(x0, y0, x1, y1, 0.0f, u0, vT, u1, vB, 0xFFFFFFFFu);
+        }
+    }
+    NitroPort_PicaProfileMark("the sprites");
+}
+
 static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx3dScene *scene, float stereo,
                         int edges, int underCleared)
 {
@@ -2719,6 +2902,11 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
                            GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
             quad(pic.x0, y0, pic.x1, y1, 0.0f, 0, v0, u1, v1, 0xFFFFFFFFu);
+        }
+        /* 5b. Engine A's sprites drawn here (ComposeLayers.gpuObjCount: the
+         * HM cut-in's), in front of it all. */
+        if (info->gpuObjCount >= 0 && set->objTex && set->objCount > 0) {
+            draw_gpu_objs(set, scene, &pic, scale, (pic.y1 - pic.y0) / (float)rows, linear);
         }
     }
     /* 6. The master brightness. */
