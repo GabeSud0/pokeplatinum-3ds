@@ -280,18 +280,19 @@ typedef struct ComposeLayers {
  * made: NitroRender2DSplit.gpuBgs). Any thread. */
 int NitroPort_ComposeDrawsBgs(void);
 /* (the game's thread, each frame it hands over: after its V-blank work)
- * Engine A's BG scrolls in the frame of this V-blank count: what a BG the
- * compositor draws itself is scrolled by with the 3D shown in it (a scene
- * of stamp S: the frame S + 1's, as the DS has it). */
-void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, const uint16_t ofs[8]);
+ * Engine A's BG scrolls in the frame of this V-blank count, with this many
+ * SWAP_BUFFERS made (NitroPort_Gx3dSwapsMade): what a BG the compositor
+ * draws itself is scrolled by with the 3D shown in it (a scene whose
+ * swap_seq is that: the first frame after it, as the DS has it). */
+void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const uint16_t ofs[8]);
 /* Whether the compositor can draw engine A's sprites itself (their
  * textures made: NitroRender2DSplit.gpuObjs). Any thread. */
 int NitroPort_ComposeDrawsObjs(void);
 /* (the game's thread, each frame it hands over, while its sprites are
  * drawn by the compositor) Engine A's sprites in the frame of this V-blank
- * count (NitroPort_Render2DObjPlaces): where they're drawn with a scene of
+ * count, with this many SWAP_BUFFERS made (NitroPort_Render2DObjPlaces): where they're drawn with a scene of
  * that stamp, and halfway to them in the in-between frame before. */
-void NitroPort_ComposeNoteObjs(uint32_t stamp, const NitroGpuObj *objs, int count);
+void NitroPort_ComposeNoteObjs(uint32_t stamp, uint32_t swaps, const NitroGpuObj *objs, int count);
 ComposeLayers *NitroPort_ComposeLayersOf(int engine);
 /* Into the textures of the screen (0 upper, 1 lower) the engine is on. */
 /* 0: no set free to publish into (one the GPU's drawing, one the frame

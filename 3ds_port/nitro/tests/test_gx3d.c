@@ -436,6 +436,9 @@ static void test_interpolation(void)
     mid=NitroPort_Gx3dMidScene(&matched,&polygons);
     CHECK(mid!=NULL);
     CHECK(matched==1 && polygons==1);
+    /* (which of the game's SWAP_BUFFERS: its scene's, and the one before's
+     * for the scrolls halfway) */
+    CHECK(mid && mid->swap_seq==NitroPort_Gx3dSwapsMade() && mid->swap_seq_before+1u==mid->swap_seq);
     CHECK(mid && mid->count==2);
     if(mid && mid->count==2){
         CHECK(mid->triangles[0].v[0].clip[0]==-2900);   /* halfway: (-3000 + -2800) / 2 */

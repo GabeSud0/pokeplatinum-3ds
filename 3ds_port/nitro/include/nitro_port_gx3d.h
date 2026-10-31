@@ -93,6 +93,13 @@ typedef struct NitroGx3dScene {
     /* The stamp of the scene before an in-between scene's (its own stamp
      * is the newer scene's); a scene's own: its stamp. */
     uint32_t stamp_before;
+    /* Which of the game's SWAP_BUFFERS it is (NitroPort_Gx3dSwapsMade then,
+     * counting it), and for an in-between scene the scene before's: what
+     * the game set as it made this scene shows from the next V-blank's
+     * work, when NitroPort_Gx3dSwapsMade is this; that, not the V-blank
+     * clock (stamp), says which frame's scrolls go with it (the game's
+     * frames don't keep step with the 3DS's V-blanks). */
+    uint32_t swap_seq, swap_seq_before;
     NitroGx3dTriangle triangles[NITRO_GX3D_MAX_TRIANGLES];
     /* With the sun shadows on (NitroPort_SunShadows), the opaque triangles
      * that aren't drawn but can still cast a shadow into the view: those
@@ -159,6 +166,10 @@ unsigned NitroPort_Gx3dNewerScenes(uint32_t serial);
 /* The clock scenes are stamped with (NitroGx3dScene.stamp): weak, 0 unless
  * the platform has one. Called on the game's thread. */
 uint32_t NitroPort_Gx3dStamp(void);
+/* (the game's thread) How many SWAP_BUFFERS the game has made: a frame's
+ * display state handed over with this many made goes with the scene whose
+ * NitroGx3dScene.swap_seq it is. */
+uint32_t NitroPort_Gx3dSwapsMade(void);
 
 /* Every 2D BG0 drawer uses this RGB555|coverage interface. The PC fills it
  * via the software rasterizer; the 3DS GPU worker publishes its latest

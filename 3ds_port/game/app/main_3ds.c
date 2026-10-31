@@ -2177,6 +2177,14 @@ static bool DrawFrame(bool new3dOnly)
         }
         any |= !__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE);
     }
+    if (sRemaster && NitroPort_ComposeDrawsBgs()) {
+        /* (the scrolls of this frame, whether a drawer takes it or not:
+         * the weather's BG drawn by the compositor goes with them) */
+        uint16_t ofs[8];
+
+        NitroPort_Render2DBgOffsets(ofs);
+        NitroPort_ComposeNoteBgOffsets(NitroPort_ComposeVBlanks(), NitroPort_Gx3dSwapsMade(), ofs);
+    }
     /* (the HM cut-in's sprites drawn by the compositor: where they are
      * in this frame, whether a drawer takes it or not, once a V-blank) */
     if (sRemaster && NitroPort_GpuSprites() && NitroPort_ComposeDrawsObjs()) {
@@ -2186,7 +2194,7 @@ static bool DrawFrame(bool new3dOnly)
         int n;
 
         if (stamp != notedStamp && (n = NitroPort_Render2DObjPlaces(0, objs, NITRO_GPU_OBJ_MAX)) >= 0) {
-            NitroPort_ComposeNoteObjs(stamp, objs, n);
+            NitroPort_ComposeNoteObjs(stamp, NitroPort_Gx3dSwapsMade(), objs, n);
             notedStamp = stamp;
         }
     }
@@ -2207,14 +2215,6 @@ static bool DrawFrame(bool new3dOnly)
         (void)NitroPort_HBlankLinesOnce();
     }
     sAOnTop = NitroPort_EngineAOnTop() != 0;
-    if (sRemaster && NitroPort_ComposeDrawsBgs()) {
-        /* (the scrolls of this frame, whether a drawer takes it or not:
-         * the weather's BG drawn by the compositor goes with them) */
-        uint16_t ofs[8];
-
-        NitroPort_Render2DBgOffsets(ofs);
-        NitroPort_ComposeNoteBgOffsets(NitroPort_ComposeVBlanks(), ofs);
-    }
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
 

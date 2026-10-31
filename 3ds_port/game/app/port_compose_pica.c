@@ -162,7 +162,7 @@ static C3D_Tex sObjTex;
  * OBJ_PLACES_KEPT frames the game noted. */
 #define OBJ_PLACES_KEPT 8
 static struct {
-    uint32_t stamp;
+    uint32_t stamp, swaps;
     int count, valid;
     NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
 } sObjPlaces[OBJ_PLACES_KEPT];
@@ -172,7 +172,7 @@ static LightLock sObjPlacesLock;
  * last BG_OFS_KEPT frames the game handed over. */
 #define BG_OFS_KEPT 16
 static struct {
-    uint32_t stamp;
+    uint32_t stamp, swaps;
     uint16_t ofs[8];
     int valid;
 } sBgOfs[BG_OFS_KEPT];
@@ -1137,13 +1137,14 @@ int NitroPort_ComposeDrawsObjs(void)
     return sReady && sObjsAvailable;
 }
 
-void NitroPort_ComposeNoteObjs(uint32_t stamp, const NitroGpuObj *objs, int count)
+void NitroPort_ComposeNoteObjs(uint32_t stamp, uint32_t swaps, const NitroGpuObj *objs, int count)
 {
     if (count < 0 || count > NITRO_GPU_OBJ_MAX) {
         return;
     }
     LightLock_Lock(&sObjPlacesLock);
     sObjPlaces[sObjPlacesNext].stamp = stamp;
+    sObjPlaces[sObjPlacesNext].swaps = swaps;
     sObjPlaces[sObjPlacesNext].count = count;
     memcpy(sObjPlaces[sObjPlacesNext].objs, objs, (size_t)count * sizeof(objs[0]));
     sObjPlaces[sObjPlacesNext].valid = 1;
@@ -1151,20 +1152,30 @@ void NitroPort_ComposeNoteObjs(uint32_t stamp, const NitroGpuObj *objs, int coun
     LightLock_Unlock(&sObjPlacesLock);
 }
 
-/* Engine A's sprites as the DS shows them with a scene of this stamp: the
- * first frame noted after it (as bg_offsets_after). How many, or -1. */
-static int objs_after(uint32_t stamp, NitroGpuObj *out)
+/* Engine A's sprites as the DS shows them with a scene (its swap_seq and
+ * stamp): the first frame noted after its SWAP_BUFFERS (as bg_offsets_of).
+ * How many, or -1. */
+static int objs_of(uint32_t seq, uint32_t stamp, NitroGpuObj *out)
 {
     int i, found = -1, n = -1;
     uint32_t best = 0;
 
     LightLock_Lock(&sObjPlacesLock);
     for (i = 0; i < OBJ_PLACES_KEPT; i++) {
-        uint32_t d = sObjPlaces[i].stamp - stamp;
-
-        if (sObjPlaces[i].valid && d >= 1u && d <= 4u && (found < 0 || d < best)) {
+        if (sObjPlaces[i].valid && sObjPlaces[i].swaps == seq &&
+            (found < 0 || (int32_t)(sObjPlaces[i].stamp - best) < 0)) {
             found = i;
-            best = d;
+            best = sObjPlaces[i].stamp;
+        }
+    }
+    if (found < 0) {
+        for (i = 0; i < OBJ_PLACES_KEPT; i++) {
+            uint32_t d = sObjPlaces[i].stamp - stamp;
+
+            if (sObjPlaces[i].valid && d >= 1u && d <= 4u && (found < 0 || d < best)) {
+                found = i;
+                best = d;
+            }
         }
     }
     if (found >= 0) {
@@ -1176,30 +1187,46 @@ static int objs_after(uint32_t stamp, NitroGpuObj *out)
 }
 
 
-void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, const uint16_t ofs[8])
+void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const uint16_t ofs[8])
 {
     LightLock_Lock(&sBgOfsLock);
     sBgOfs[sBgOfsNext].stamp = stamp;
+    sBgOfs[sBgOfsNext].swaps = swaps;
     memcpy(sBgOfs[sBgOfsNext].ofs, ofs, sizeof(sBgOfs[0].ofs));
     sBgOfs[sBgOfsNext].valid = 1;
     sBgOfsNext = (sBgOfsNext + 1u) % BG_OFS_KEPT;
     LightLock_Unlock(&sBgOfsLock);
 }
 
-/* The scrolls the DS shows a scene of this stamp with: the first frame
- * handed over after it (its V-blank set them). Whether they're known. */
-static int bg_offsets_after(uint32_t stamp, uint16_t out[8])
+/* The scrolls the DS shows a scene with: the first frame handed over
+ * after its SWAP_BUFFERS (its V-blank set them), the game's count of them
+ * then the scene's (swap_seq). Not by the V-blank clock alone: the game's
+ * frames don't keep step with the 3DS's V-blanks, and a frame handed over
+ * in the same V-blank as the scene was made was taken for the one before
+ * it, or the one after it for it, now and then: the field's weather (Eterna
+ * Forest's light) went back and forth as the player walked, 2026-10-30.
+ * That only when none was noted so (the nearest within 4 V-blanks after
+ * its stamp). Whether they're known. */
+static int bg_offsets_of(uint32_t seq, uint32_t stamp, uint16_t out[8])
 {
     int i, found = -1;
     uint32_t best = 0;
 
     LightLock_Lock(&sBgOfsLock);
     for (i = 0; i < BG_OFS_KEPT; i++) {
-        uint32_t d = sBgOfs[i].stamp - stamp;
-
-        if (sBgOfs[i].valid && d >= 1u && d <= 4u && (found < 0 || d < best)) {
+        if (sBgOfs[i].valid && sBgOfs[i].swaps == seq && (found < 0 || (int32_t)(sBgOfs[i].stamp - best) < 0)) {
             found = i;
-            best = d;
+            best = sBgOfs[i].stamp;
+        }
+    }
+    if (found < 0) {
+        for (i = 0; i < BG_OFS_KEPT; i++) {
+            uint32_t d = sBgOfs[i].stamp - stamp;
+
+            if (sBgOfs[i].valid && d >= 1u && d <= 4u && (found < 0 || d < best)) {
+                found = i;
+                best = d;
+            }
         }
     }
     if (found >= 0) {
@@ -2534,7 +2561,7 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
 /* Engine A's sprites the compositor draws (LayerSet.objs, objTex), in front
  * of the rest of the picture (pic: its rectangle on the screen, sx and sy
  * its pixels' size): each where the game had it in the frame the DS shows
- * the scene in (objs_after), halfway to that from the frame before in an
+ * the scene in (objs_of), halfway to that from the frame before in an
  * in-between scene (NitroPort_GpuObjsBetween: the cut-in's wind blowing on
  * at 60 frames a second, as the field does, where the game moves it 30
  * times); as the set has them where that isn't known. Each with the set's
@@ -2548,9 +2575,9 @@ static void draw_gpu_objs(const LayerSet *set, const NitroGx3dScene *scene, cons
     int n = set->objCount, nb = -1, na = -1, k;
 
     if (scene != NULL) {
-        na = objs_after(scene->stamp, after);
-        if (scene->stamp_before != scene->stamp && na >= 0) {
-            nb = objs_after(scene->stamp_before, before);
+        na = objs_of(scene->swap_seq, scene->stamp, after);
+        if ((scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) && na >= 0) {
+            nb = objs_of(scene->swap_seq_before, scene->stamp_before, before);
         }
     }
     if (na >= 0) {
@@ -2866,10 +2893,11 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             /* (the scrolls of the frame the DS shows the scene in; an
              * in-between scene's halfway from the scene before's; the
              * scene's own, a frame behind, when they aren't known) */
-            if (bg_offsets_after(scene->stamp, now)) {
+            if (bg_offsets_of(scene->swap_seq, scene->stamp, now)) {
                 hofs = now[info->gpuBg * 2];
                 vofs = now[info->gpuBg * 2 + 1];
-                if (scene->stamp_before != scene->stamp && bg_offsets_after(scene->stamp_before, before)) {
+                if ((scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) &&
+                    bg_offsets_of(scene->swap_seq_before, scene->stamp_before, before)) {
                     hofs = bg_offset_halfway(before[info->gpuBg * 2], hofs);
                     vofs = bg_offset_halfway(before[info->gpuBg * 2 + 1], vofs);
                 }
