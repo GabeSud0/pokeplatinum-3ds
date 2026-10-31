@@ -2376,6 +2376,114 @@ static void test_wide_window_edges(void)
  * bands and a tall field's lines above and below the DS's included,
  * whatever the game's windows on each line say (theirs stop at the DS's
  * columns: the lines it covers whole reached the screen's edges). */
+/* The screen opening as a band of lines (walking out of a building): the
+ * window empty, each line's WINOUT showing all or nothing (an H-blank
+ * effect). Drawn in the picture; drawn by the compositor with gpuCircle
+ * (gpuCircleOn 2): the picture whole, the band's lines on the canvas, the
+ * band growing not a change. */
+static void SetBandLines(int top, int bottom)
+{
+    int y;
+
+    for (y = 0; y < 192; y++) {
+        memcpy(NitroPort_LineRegs.regs[0][y], NitroPort_IoReg, NITRO_LINE_REGS);
+        memcpy(NitroPort_LineRegs.regs[1][y], NitroPort_IoReg + 0x1000, NITRO_LINE_REGS);
+        /* (DISPSTAT and VCOUNT: 0 in a line's copy, as the port makes them;
+         * the frame's say V-blank) */
+        memset(NitroPort_LineRegs.regs[0][y] + 4, 0, 4);
+        if (y >= top && y < bottom) {
+            NitroPort_LineRegs.regs[0][y][0x48] = 0x20;   /* WININ: nothing */
+            NitroPort_LineRegs.regs[0][y][0x4A] = 0x3F;   /* WINOUT: all */
+        }
+    }
+    NitroPort_LineRegs.active = 1;
+    NitroPort_LineRegs.serial++;
+}
+
+static void test_window_rows(void)
+{
+    static u16 wide[400 * 240], over[400 * 240];
+    static u8 overAlpha[400 * 240];
+    static u8 tiles[64];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED };
+    NitroRender2DSplit split;
+    int i, x = 0, y = 0, r = 0;
+
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = 1;
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    G2_SetWnd0Position(0, 0, 0, 0);   /* (empty) */
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG1, TRUE);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_NONE, TRUE);
+    GX_SetVisibleWnd(GX_WNDMASK_W0);
+    NitroPort_IoReg[4] = 0x18;      /* (DISPSTAT: in the V-blank) */
+    NitroPort_IoReg[6] = 192;       /* (VCOUNT) */
+    SetBandLines(64, 128);
+    memset(&split, 0, sizeof(split));
+    split.width = 400;
+    split.origin = 72;
+    split.top = 24;
+    split.height = 240;
+    split.windowsToEdge = 1;
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[(24 + 100) * 400 + 210] == RED);       /* in the band */
+    CHECK(wide[(24 + 100) * 400 + 3] == RED);         /* in it, beside the DS's screen */
+    CHECK(wide[(24 + 30) * 400 + 210] == GREY);       /* above it */
+    CHECK(wide[(24 + 150) * 400 + 210] == GREY);      /* below it */
+    CHECK(split.gpuCircleOn == 0);
+    split.gpuCircle = 1;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 2 && split.gpuCircleY == 24 + 64 && split.gpuCircleR == 24 + 128);
+    CHECK(split.gpuCircleColor == GREY);
+    CHECK(wide[(24 + 30) * 400 + 210] == RED);        /* drawn whole */
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 2 && y == 24 + 64 && r == 24 + 128);
+    NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split) == 0);
+    SetBandLines(32, 160);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split) == 0);   /* (taller: not a change) */
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 2 && y == 24 + 32 && r == 24 + 160);
+    /* the whole screen: to the canvas's edges; none: an empty band in the middle */
+    SetBandLines(0, 192);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 2 && split.gpuCircleY == 0 && split.gpuCircleR == 240);
+    SetBandLines(0, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 2 && split.gpuCircleY == 24 + 96 && split.gpuCircleR == 24 + 96);
+    /* two bands, or a line showing only some: drawn in the picture */
+    SetBandLines(32, 64);
+    for (i = 100; i < 120; i++) {
+        NitroPort_LineRegs.regs[0][i][0x48] = 0x20;
+        NitroPort_LineRegs.regs[0][i][0x4A] = 0x3F;
+    }
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 0);
+    SetBandLines(32, 64);
+    NitroPort_LineRegs.regs[0][40][0x4A] = 0x01;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 0);
+    /* the window not empty: not a band */
+    SetBandLines(32, 64);
+    for (i = 0; i < 192; i++) {
+        NitroPort_LineRegs.regs[0][i][0x40] = 200;   /* (WIN0H: 0 to 200) */
+    }
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 0);
+    NitroPort_LineRegs.active = 0;
+    GX_SetVisibleWnd(GX_WNDMASK_NONE);
+}
+
 static void test_window_circle(void)
 {
     static u16 wide[400 * 240], over[400 * 240];
@@ -2420,6 +2528,42 @@ static void test_window_circle(void)
     CHECK(wide[0 * 400 + 200 + 100] == GREY);         /* (sqrt(150^2 - 120^2) = 90) */
     CHECK(wide[0 * 400 + 200 + 89] == RED);
     CHECK(wide[239 * 400 + 210] == RED);              /* below them */
+    /* drawn by the compositor (gpuCircle): left out, the picture as
+     * inside it everywhere, its middle and radius on the canvas; its
+     * radius alone not a change */
+    {
+        int x = 0, y = 0, r = 0;
+
+        split.gpuCircle = 1;
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(split.gpuCircleOn == 1 && split.gpuCircleX == 200 && split.gpuCircleY == 120 && split.gpuCircleR == 150);
+        CHECK(split.gpuCircleColor == GREY);
+        CHECK(wide[120 * 400 + 399] == RED);          /* outside it: drawn as inside */
+        CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 1 && x == 200 && y == 120 && r == 150);
+        NitroPort_Render2DSplitIfChanged(0, wide, &split);
+        NitroPort_Render2DSplitIfChanged(0, wide, &split);
+        CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split) == 0);
+        NitroPort_SetWindowCircle(0, 0, 128, 96, 120);
+        CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split) == 0);
+        CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 1 && r == 120);
+        /* something shown outside it: drawn in the picture */
+        G2_SetWndOutsidePlane(GX_WND_PLANEMASK_BG1, FALSE);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(split.gpuCircleOn == 0);
+        G2_SetWndOutsidePlane(GX_WND_PLANEMASK_NONE, FALSE);
+        /* not everything shown inside it: drawn in the picture */
+        G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_NONE, TRUE);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(split.gpuCircleOn == 0);
+        G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG1, TRUE);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(split.gpuCircleOn == 1);
+        G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG1, FALSE);
+        NitroPort_SetWindowCircle(0, 0, 128, 96, 150);
+        split.gpuCircle = 0;
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(split.gpuCircleOn == 0 && NitroPort_Render2DCircleNow(0, &x, &y, &r) == -1);
+    }
     /* closed: nothing inside */
     NitroPort_SetWindowCircle(0, 0, 128, 96, 0);
     NitroPort_Render2DSplit(0, wide, &split);
@@ -2608,6 +2752,210 @@ static void test_gpu_bg(void)
     CHECK(split.gpuBgLeftOut == 0);
 }
 
+/* (the remaster's compositor) Engine A's sprites drawn by the compositor
+ * itself (NitroRender2DSplit.gpuObjs: the HM cut-in): left out of the
+ * picture when they're all in front of everything, each with its place,
+ * size and flips, back to front, its pixels in the atlas once for the
+ * sprites showing the same; their places then no reason to draw the
+ * picture again. Found again in the next frame's OAM
+ * (NitroPort_Render2DObjPlaces) for the in-between frames' halfway
+ * places (NitroPort_GpuObjHalfway). */
+static void test_gpu_objs(void)
+{
+    static u8 tiles[2 * 32], bgTiles[2 * 32];
+    static u16 map[32 * 32];
+    static u16 bgPltt[16] = { GREY, RED };
+    static u16 objPltt[16] = { 0, BLUE, GREEN };
+    static uint32_t rgba[256 * 192];
+    static u16 under[256 * 192], over[256 * 192], atlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H];
+    static u8 overAlpha[256 * 192];
+    static GXOamAttr oam[128];
+    static NitroGpuObj objs[NITRO_GPU_OBJ_MAX], places[NITRO_GPU_OBJ_MAX];
+    NitroRender2DSplit split;
+    const u16 blue = (u16)((31 << 1) | 1), green = (u16)((31 << 6) | 1);
+    int i, x, y;
+
+    Reset();
+    GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_1D_32K);
+    MakeTile4(tiles, 1);                /* OBJ tile 0: blue (green top-left) */
+    MakeTile4(tiles + 32, 2);           /* OBJ tile 1: green */
+    GX_LoadOBJ(tiles, 0, sizeof(tiles));
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    MakeTile4(bgTiles + 32, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = 1;
+    }
+    G2_SetBG2ControlText(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0800,
+                         GX_BG_CHARBASE_0x04000);
+    GX_LoadBG2Char(bgTiles, 0, sizeof(bgTiles));
+    GX_LoadBG2Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(bgPltt, 0, sizeof(bgPltt));
+    G2_SetBG0Priority(2);
+    G2_SetBG2Priority(1);
+    for (i = 0; i < 256 * 192; i++) {
+        rgba[i] = 0x404040FFu;
+    }
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));   /* all hidden */
+    G2_SetOBJAttr(&oam[0], 40, 30, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_16x8, GX_OAM_COLORMODE_16, 0, 0, 0);
+    G2_SetOBJAttr(&oam[1], 100, 50, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_FLIP_H,
+                  GX_OAM_SHAPE_16x8, GX_OAM_COLORMODE_16, 0, 0, 0);
+    G2_SetOBJAttr(&oam[2], 500, 70, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 1, 0, 0);   /* x -12: off the picture */
+    G2_SetOBJAttr(&oam[3], 508, 90, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 1, 0, 0);   /* x -4: half of it shows */
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG2 | GX_PLANEMASK_OBJ);
+
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuObjsLeftOut == 0);   /* not asked for: drawn */
+    CHECK(over[32 * 256 + 42] == (BLUE | 0x8000));
+
+    split.gpuObjs = 1;
+    split.gpuObj = objs;
+    split.gpuObjAtlas = atlas;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuObjsLeftOut == 1);
+    CHECK(over[32 * 256 + 42] == (RED | 0x8000));   /* the BG there, not the sprite */
+    CHECK(split.gpuObjCount == 4);      /* (the one off the picture too: its picture for later) */
+    /* back to front: OAM's last first */
+    CHECK(objs[0].x == -4 && objs[0].y == 90 && objs[0].w == 8 && objs[0].h == 8 && objs[0].rawX == 508);
+    CHECK(objs[1].x == -12 && objs[1].y == 70);
+    CHECK(objs[2].x == 100 && objs[2].y == 50 && objs[2].hflip == 1 && objs[2].vflip == 0);
+    CHECK(objs[3].x == 40 && objs[3].y == 30 && objs[3].w == 16 && objs[3].h == 8 && objs[3].hflip == 0);
+    CHECK(objs[2].ax == objs[3].ax && objs[2].ay == objs[3].ay);   /* the same picture, once */
+    CHECK(objs[0].ax != objs[3].ax || objs[0].ay != objs[3].ay);
+    CHECK(objs[0].ax == objs[1].ax && objs[0].ay == objs[1].ay);
+    CHECK(objs[3].key != objs[2].key);                               /* (flipped) */
+    x = objs[3].ax;
+    y = objs[3].ay;
+    CHECK(atlas[y * NITRO_GPU_OBJ_ATLAS_W + x] == green);             /* tile 0's top left */
+    CHECK(atlas[(y + 2) * NITRO_GPU_OBJ_ATLAS_W + x + 2] == blue);
+    CHECK(atlas[(y + 2) * NITRO_GPU_OBJ_ATLAS_W + x + 10] == green);  /* tile 1 */
+    CHECK(atlas[(y + 2) * NITRO_GPU_OBJ_ATLAS_W + x + 16] == 0);      /* a clear pixel after it */
+
+    /* their places alone: not drawn again; what they show: drawn */
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    G2_SetOBJPosition(&oam[0], 64, 31);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    CHECK(NitroPort_Render2DObjPlaces(0, places, NITRO_GPU_OBJ_MAX) == 3);
+    CHECK(places[0].x == 64 && places[0].y == 31 && places[0].key == objs[3].key && places[2].x == -4);
+    G2_SetOBJCharName(&oam[0], 1);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    G2_SetOBJCharName(&oam[0], 0);
+    G2_SetOBJPosition(&oam[0], 40, 30);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    NitroPort_Render2DSplit(0, under, &split);
+
+    /* the frame between two: each where it is halfway (the nearest of its
+     * kind, each the other's nearest); one going off or come on moved as
+     * most of its kind; back to front */
+    {
+        NitroGpuObj before[4], after[4], out[8];
+        int n;
+
+        memset(before, 0, sizeof(before));
+        memset(after, 0, sizeof(after));
+        before[0] = objs[3];                                     /* (40, 30) */
+        before[1] = objs[3];
+        before[1].x = 200, before[1].rawX = 200;                 /* another of its kind */
+        before[2] = objs[3];
+        before[2].x = 300, before[2].rawX = 300;                 /* a third, going off */
+        after[0] = objs[3];
+        after[0].x = 64, after[0].rawX = 64;
+        after[1] = before[1];
+        after[1].x = 224, after[1].rawX = 224;
+        after[2] = before[1];
+        after[2].x = -30, after[2].rawX = 482;                   /* a fourth, come on */
+        n = NitroPort_GpuObjsBetween(before, 3, after, 3, out, 8);
+        CHECK(n == 4);
+        /* (OAM's last first: the one come on behind, then before's) */
+        CHECK(out[0].x == -42 && out[0].y == 30);                /* come on: half of 24 back */
+        CHECK(out[1].x == 312 && out[1].y == 30);                /* going off: half of 24 on */
+        CHECK(out[2].x == 212 && out[2].y == 30);
+        CHECK(out[3].x == 52 && out[3].y == 30);
+        /* none before: after's as they are, back to front */
+        n = NitroPort_GpuObjsBetween(before, -1, after, 3, out, 8);
+        CHECK(n == 3 && out[0].x == -30 && out[2].x == 64 && out[2].y == 30);
+        /* round OAM's 512: 504 to 16 is 24 to the right */
+        before[3] = objs[3];
+        before[3].rawX = 504, before[3].x = -8;
+        after[3] = before[3];
+        after[3].rawX = 16, after[3].x = 16, after[3].rawY = 40, after[3].y = 40;   /* and 10 down */
+        n = NitroPort_GpuObjsBetween(&before[3], 1, &after[3], 1, out, 8);
+        CHECK(n == 1 && out[0].x == 4 && out[0].y == 35);
+        after[3].rawX = 120;                                     /* too far: not it, and nothing moves */
+        n = NitroPort_GpuObjsBetween(&before[3], 1, &after[3], 1, out, 8);
+        CHECK(n == 1 && out[0].x == -8);
+        /* one leaving, another of its kind coming on nearer to a third:
+         * each the other's nearest, or not one moving */
+        before[0].rawX = before[0].x = 100;
+        after[0] = before[0];
+        after[0].rawX = after[0].x = 190;                        /* 90 from before[0], 10 from before[1] (200) */
+        n = NitroPort_GpuObjsBetween(before, 2, after, 1, out, 8);
+        CHECK(n == 2 && out[0].x == 195 && out[1].x == 95);   /* (the other, on its own, as its kind) */
+        /* another picture, one of its size near: its next frame (the
+         * newer picture, halfway); another size: not it */
+        after[0].key ^= 1;
+        after[0].rawX = after[0].x = 120;
+        n = NitroPort_GpuObjsBetween(before, 1, after, 1, out, 8);
+        CHECK(n == 1 && out[0].x == 110 && out[0].key == after[0].key);
+        after[0].w = 32;
+        n = NitroPort_GpuObjsBetween(before, 1, after, 1, out, 8);
+        CHECK(n == 1 && out[0].x == 100 && out[0].key == before[0].key);
+    }
+
+    /* not all in front of everything: drawn in the picture */
+    G2_SetOBJPriority(&oam[1], 2);      /* behind BG2 */
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuObjsLeftOut == 0);
+    G2_SetOBJPriority(&oam[1], 0);
+    G2_SetOBJMode(&oam[1], GX_OAM_MODE_XLU, GX_OAM_COLORMODE_16);   /* semi-transparent */
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuObjsLeftOut == 0);
+    G2_SetOBJMode(&oam[1], GX_OAM_MODE_NORMAL, GX_OAM_COLORMODE_16);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuObjsLeftOut == 1);
+    /* a window: shown inside and outside it, fine; hidden outside: drawn */
+    GX_SetVisibleWnd(GX_WNDMASK_W0);
+    G2_SetWnd0Position(0, 40, 128, 100);
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG2 | GX_WND_PLANEMASK_OBJ, FALSE);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_BG0 | GX_WND_PLANEMASK_OBJ, TRUE);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuObjsLeftOut == 1);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_BG0, TRUE);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuObjsLeftOut == 0);
+    GX_SetVisibleWnd(GX_WNDMASK_NONE);
+    /* a colour effect on them: drawn */
+    G2_SetBlendBrightness(GX_BLEND_PLANEMASK_OBJ, 8);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuObjsLeftOut == 0);
+    G2_BlendNone();
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuObjsLeftOut == 1);
+    /* the sprites' layer off: none to draw */
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG2);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuObjsLeftOut == 1 && split.gpuObjCount == 0);
+    CHECK(NitroPort_Render2DObjPlaces(0, places, NITRO_GPU_OBJ_MAX) == 0);
+    MI_CpuClearFast(NitroPort_Oam, 0x800);
+}
+
 /* The field at the DS's pixel size (NitroRender2DSplit.top): a 400 x 240
  * picture, the DS's in its middle (line 0 at 24, x 0 at 72). A clipped
  * BG's map past the DS's lines isn't shown (its leftover tiles), but a
@@ -2791,6 +3139,19 @@ static void test_tall_field(void)
         }
         GX_LoadOBJ(objTile, 0, sizeof(objTile));
     }
+
+    /* an empty window (the HM cut-in's to begin with: x 0-1, lines
+     * 192-192, nothing but BG3 inside) stays empty below the DS's lines:
+     * BG2's green goes on there at the DS's x 0 (it was a black block
+     * there and on to the picture's left edge) */
+    GX_SetVisibleWnd(GX_WNDMASK_W0);
+    G2_SetWnd0Position(0, 192, 1, 192);
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG3, FALSE);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_BG0 | GX_WND_PLANEMASK_BG1 | GX_WND_PLANEMASK_BG2, FALSE);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(TALL_PX(over, OX, TH - 4) == GREEN && (over[(TH - 4) * TW + OX] & 0x8000));
+    CHECK(TALL_PX(over, OX + 50, TH - 1) == GREEN);
+    GX_SetVisibleWnd(GX_WNDMASK_NONE);
 
     /* unclipped, BG1's map goes on above: its row 31 at the picture's 16-23 */
     split.clip[1] = 0;
@@ -3860,8 +4221,10 @@ int main(int argc, char **argv)
     test_wide_art_sliding();
     test_wide_window_edges();
     test_window_circle();
+    test_window_rows();
     test_wide_map_past_edges();
     test_gpu_bg();
+    test_gpu_objs();
     test_tall_field();
     test_stretch_squeeze();
     test_wide_framed_windows();

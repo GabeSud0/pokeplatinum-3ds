@@ -1677,6 +1677,23 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             if (engine == 0 && !inPanel && NitroPort_ComposeDrawsBgs()) {
                 split.gpuBgs = NitroPort_RepeatingBgs();
             }
+            /* (the HM cut-in: its sprites drawn by the compositor, each
+             * where it is in the frame shown, halfway in the in-between
+             * frames, the picture not drawn again as they move) */
+            /* (a circle fade: drawn by the compositor, its radius halfway in
+             * the in-between frames, the picture not drawn again as it
+             * closes or opens) */
+            if (engine == 0 && !inPanel) {
+                split.gpuCircle = 1;
+            }
+            if (engine == 0 && !inPanel && NitroPort_ComposeDrawsObjs() && NitroPort_GpuSprites()) {
+                static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
+                static uint16_t atlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H];
+
+                split.gpuObjs = 1;
+                split.gpuObj = objs;
+                split.gpuObjAtlas = atlas;
+            }
             if (__atomic_exchange_n(&shownInPanel, inPanel, __ATOMIC_ACQ_REL) != inPanel) {
                 sMustDraw[0] = true;
             }
@@ -1739,6 +1756,14 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             }
             layers->gpuBgPicture = pictureValid ? picture : NULL;
         }
+        layers->gpuObjCount = split.gpuObjsLeftOut ? split.gpuObjCount : -1;
+        layers->gpuCircle = split.gpuCircleOn;
+        layers->gpuCircleX = split.gpuCircleX;
+        layers->gpuCircleY = split.gpuCircleY;
+        layers->gpuCircleR = split.gpuCircleR;
+        layers->gpuCircleColor = split.gpuCircleColor;
+        layers->gpuObj = split.gpuObj;
+        layers->gpuObjAtlas = split.gpuObjAtlas;
         layers->evy = split.evy;
         layers->masterBright = split.masterBright;
         layers->backdrop = split.backdrop;
@@ -2163,6 +2188,42 @@ static bool DrawFrame(bool new3dOnly)
         }
         any |= !__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE);
     }
+    if (sRemaster && NitroPort_ComposeDrawsBgs()) {
+        /* (the scrolls of this frame, whether a drawer takes it or not:
+         * the weather's BG drawn by the compositor goes with them) */
+        uint16_t ofs[8];
+
+        NitroPort_Render2DBgOffsets(ofs);
+        NitroPort_ComposeNoteBgOffsets(NitroPort_ComposeVBlanks(), NitroPort_Gx3dSwapsMade(), ofs);
+    }
+    /* (the HM cut-in's sprites drawn by the compositor: where they are
+     * in this frame, whether a drawer takes it or not, once a V-blank) */
+    if (sRemaster && NitroPort_GpuSprites() && NitroPort_ComposeDrawsObjs()) {
+        static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
+        static u32 notedStamp;
+        u32 stamp = NitroPort_ComposeVBlanks();
+        int n;
+
+        if (stamp != notedStamp && (n = NitroPort_Render2DObjPlaces(0, objs, NITRO_GPU_OBJ_MAX)) >= 0) {
+            NitroPort_ComposeNoteObjs(stamp, NitroPort_Gx3dSwapsMade(), objs, n);
+            notedStamp = stamp;
+        }
+    }
+    /* (engine A's master brightness and a circle fade drawn by the
+     * compositor, in this frame: halfway in the in-between frames) */
+    if (sRemaster) {
+        static u32 notedStamp;
+        u32 stamp = NitroPort_ComposeVBlanks();
+        int x = 0, y = 0, r = 0;
+
+        if (stamp != notedStamp) {
+            int on = NitroPort_Render2DCircleNow(0, &x, &y, &r);
+
+            NitroPort_ComposeNoteFrame(stamp, NitroPort_Gx3dSwapsMade(), (int)NitroPort_Render2DMasterBright(0, 0), on,
+                                       x, y, r);
+            notedStamp = stamp;
+        }
+    }
     if (!any) {
         return false;
     }
@@ -2180,14 +2241,6 @@ static bool DrawFrame(bool new3dOnly)
         (void)NitroPort_HBlankLinesOnce();
     }
     sAOnTop = NitroPort_EngineAOnTop() != 0;
-    if (sRemaster && NitroPort_ComposeDrawsBgs()) {
-        /* (the scrolls of this frame, whether a drawer takes it or not:
-         * the weather's BG drawn by the compositor goes with them) */
-        uint16_t ofs[8];
-
-        NitroPort_Render2DBgOffsets(ofs);
-        NitroPort_ComposeNoteBgOffsets(NitroPort_ComposeVBlanks(), ofs);
-    }
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
 

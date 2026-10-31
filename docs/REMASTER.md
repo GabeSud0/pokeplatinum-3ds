@@ -597,7 +597,14 @@ stretched:
     each side, fading in two darker shades), made from the game's own band
     as the cut-in starts (its middle ring's shape stamped behind the
     band's rings; BG3's map made 512 wide, the sides in its second half;
-    `CutIn_PortWideBand`, patch 0058);
+    `CutIn_PortWideBand`, patch 0058); BG3 hidden for one of the game's
+    frames before the band's VRAM is written as it starts, and again
+    before it's put back as it ends (patch 0059: the picture of the frame
+    before is drawn while the game goes on, the VRAM read as it is, and
+    the band showed in it white and red, the text box's palette, no
+    window: 2026-10-30, most often with A speeding the text up); its
+    sprites drawn by the compositor at 60 frames a second (see GPU
+    sprites, below);
   - the gym leaders' battle intro (patch 0058): the leader's picture, its
     art ending at the DS screen's right edge, slides to the wider screen's
     right edge, not the DS's (it looked cut off, the band going on beside
@@ -696,11 +703,31 @@ screen's 320 x 192 at 1.25 times, as above.
   (`sprite_whole`; the rooms' own polygons are never lit, in every
   interior looked at: the gym, a Pokémon Center, the Mart, the Cycle Shop,
   houses). Each
-  is on its own nearest pixel every scene, so one moving on the screen
-  steps a whole pixel or none while the ground under it slides smoothly
-  (a slight wobble against it). Keeping the fraction instead (sliding with
-  the ground) was tried and taken back: it can't be sharp off the pixel
-  grid, and the softness while moving looked worse (2026-10-29).
+  is on the nearest pixel corner while it's still on the screen or moves
+  a whole number of pixels a frame (the player, whom the camera follows;
+  the people on the player's row). One moving by a fraction of a pixel
+  a frame goes on the nearest half pixel that way instead (and a 64th
+  on, so drawn as it is no pixel's middle falls on a texel's edge): the
+  camera's perspective moves each row of the ground by its own amount
+  (running in Eterna: 1.94 pixels a frame at the screen's top, 2 at the
+  player's row, 2.2 at the bottom), and on whole pixels a person there
+  fell behind its ground and caught up a pixel at a time, about 10 times
+  a second near the bottom (the jiggle, seen in a video at 120 frames a
+  second, 2026-10-30). On half pixels it moves with its ground; drawn
+  2x2 its texels are still whole pixels there, and scaled down a person
+  is sharp or half a pixel soft that way only, while it moves; and on the
+  half pixel only while it's within a sixth of a pixel of it, the nearest
+  whole one the rest (`soft_place`): soft a third of the time as it goes
+  by, not half, and a third of a pixel off its ground at most (asked a
+  little more subtle, 2026-10-30). Which way
+  each moves is the in-between scenes' finding (`port_gx3d.c`,
+  `soft_of`: half its move since the scene before, off a whole number by
+  more than 0.02 of a pixel), kept with its triangles
+  (`NitroGx3dTriangle.soft`) in the scene and its in-between scene. (All
+  of them on their exact fraction, every way, was tried first and taken
+  back, 2026-10-29: everything soft, still or not.) The flatter camera
+  that keeps every row moving alike (sharp and locked, but the buildings
+  standing straight) was shown and not chosen (2026-10-30).
 - **The game** reads `NitroPort_WideScreenExtra` as 72 there: the people the
   scripts bring on from the sides come from beyond the 400 pixels.
 - **The game's windows** go to the picture's top or bottom
@@ -708,6 +735,17 @@ screen's 320 x 192 at 1.25 times, as above.
   (a text box at the screen's bottom, YES/NO with it), those wholly in its
   upper half 24 up (the place name sign at the top), the OBJs over them
   with them; the lines they leave are drawn from nowhere.
+- **Past a forest's edge** (patch 0060): by Eterna Forest's east edge
+  (its way out to Route 205) the 400 pixels went past the last of its
+  maps, where there's no map, and showed black. With the player in the
+  half of a map by its matrix's left or right edge, the maps of that
+  column are drawn again past it, mirrored left to right about the edge,
+  props too (`Port_RenderMirroredEdges` in land_data.c,
+  `MapPropManager_RenderMirrored`): the trees by the edge go on past it.
+  A mirrored model's faces turn the other way, so its materials' culled
+  side is swapped while it's drawn (`Port_SwapModelCulling`). Only for the
+  matrices in `sPortMirroredEdgeMatrices` (Eterna Forest's, 7): past a
+  town's edge, mirrored houses would look wrong.
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they
@@ -1326,7 +1364,10 @@ screens) the lower screen is the DS's, filling the screen as before.
     field's units about a pixel), only when the field heap and the 3D VRAM
     have room for it; it goes along with the Pokémon (its emitters and
     their particles moved as it moves) if the player walks on as it
-    comes out. The Pokémon has
+    comes out, from where the Pokémon is as its ball opens (patch 0059:
+    on the player's tile the ball opens once the player has stepped off,
+    the Pokémon already walking after them, and the burst from the ball
+    went along a tile behind it, 2026-10-30). The Pokémon has
     no shadow while it's smaller than itself. Out and standing it steps
     in place, as HeartGold's do (the walk at a slow walk's pace). Talked
     to (A facing it, out): it turns to the player, its cry, a bubble over
@@ -1702,6 +1743,79 @@ PATH` draws the newest in-between scene as gpusim draws a scene. Walking
 and running in Jubilife and on Route 202, the in-between scenes are
 halfway (the scene 2 to 4 pixels on from the one before, the in-between
 1 to 2), with nothing out of place.
+
+GPU sprites (2026-10-30): the game moves its sprites 30 times a second
+in the field, as it does everything, and the HM cut-in is nearly all
+sprites (its wind's streaks, 24 pixels a step; its Pokémon sliding up to
+64): at 30 next to the field's 60 it looked choppy. While the cut-in
+plays (`NitroPort_SetFieldCells`, `NitroPort_GpuSprites`), engine A's
+sprites are drawn by the compositor itself when they're all in front of
+everything (`NitroRender2DSplit.gpuObjs`: normal ones, none behind a BG,
+shown inside and outside the windows, no colour effect on them, no
+H-blank effect): left out of the picture, their pictures in an atlas
+(256 x 128, each picture once: `gpuObjAtlas`, the set's `objTex`), what
+each sprite shows and where in it (`NitroGpuObj`). Where they are comes
+from the game's thread, each frame it hands over
+(`NitroPort_Render2DObjPlaces` into `NitroPort_ComposeNoteObjs`, as the
+weather BG's scrolls): with a scene, the frame the DS shows it in; in an
+in-between scene, halfway from the frame before
+(`NitroPort_GpuObjsBetween`: each found again as the nearest of its kind,
+each the other's nearest; one going off or just come on moved half as
+far as most of its kind). Their places don't count as a change: the
+picture isn't drawn again as they move, only when what they show does.
+The band's window still opens and closes 30 times a second. In the PC
+runner the picture draws them where it had them.
+
+Which frame goes with a scene (2026-10-30): the weather BG's scrolls, the
+GPU sprites' places, the circle fade and the master brightness are noted
+each frame the game hands over, with the count of SWAP_BUFFERS the game has
+made then (`NitroPort_Gx3dSwapsMade`); a scene carries its own
+(`NitroGx3dScene.swap_seq`, an in-between scene the one before's too) and
+takes the last noted with it. By the V-blank clock alone (the first frame
+1-4 V-blanks after the scene's stamp), the frame handed over in the same
+V-blank as the scene was made was left out now and then (the game's frames
+don't keep step with the 3DS's V-blanks) and the next step's taken: Eterna
+Forest's light went back and forth about a pixel at 30 a second as the
+player walked. The clock still where nothing was noted with the count.
+
+A scene and its in-between scene wait for their frame to be noted
+(`frame_note_due`, 2026-10-31): the game notes a frame in its V-blank work,
+a V-blank after the scene's SWAP_BUFFERS, while the display thread has the
+scene as soon as the 3D's made it, and drew the in-between scene at once.
+That had no note of its own frame yet and took the frame before's (or the
+picture's own, older still): videos at 120 frames a second showed Eterna
+Forest's light shaking every other frame, the HM cut-in's streaks jumping
+back a whole step now and then, and the circle closing into the forest
+opening up again in its in-between frames. (Not when a later frame's
+noted already: that scene's frame was left out, there's nothing to wait
+for.) A GPU sprite whose picture isn't in the 2D's atlas yet (a frame of
+its animation newer than the 2D drawn) is drawn with the nearest of its
+size there instead of left out: the cut-in's trainer went out for a frame
+as it swung.
+
+The circle fades (walking into Eterna Forest) are drawn by the compositor
+too (`NitroRender2DSplit.gpuCircle`): when the circle's window is the only
+one, nothing shows outside it and all that's shown shows inside it, the
+picture is drawn as inside it everywhere (with the inside's colour
+effects), and a ring of 96 pieces in the backdrop's colour covers the rest,
+its radius halfway in the in-between frames; the picture isn't drawn again
+as it closes. The screen opening as a band of lines (walking out of a
+building: the window empty, each line's WINOUT showing all or nothing, the
+band 32 lines taller every other frame) goes the same way
+(`GpuRowsOf`, `gpuCircleOn` 2): the picture drawn whole, the backdrop above
+and below the band drawn by the compositor, its edges halfway in the
+in-between frames (16 lines a frame). Until 2026-10-31 neither was ever
+left to the compositor with an H-blank effect: a line's copy of the
+registers has DISPSTAT and VCOUNT at 0, the frame's the V-blank's, and the
+lines were taken for differing in more than the windows (`LineLikeFrame`
+leaves those two out); the circle into Eterna Forest stayed in the picture
+at 30 a second, and walking out of a building showed the outside whole
+for a moment, then the band at 30. Engine A's master brightness (the fades to white or black)
+is halfway in them too, in 32nds; as noted only with a picture of that
+frame or newer (`picture_of_frame`), the picture's own with an older one
+(the 2D's drawer behind): walking out of a building, the outside showed
+whole for a moment at full brightness before the opening band, the
+picture from before the band with the band's frames' brightness.
 
 On the 3DS (`fps60`, on by default since PR #132): each mailbox slot has
 an in-between scene of its own, made before the slot's scene is

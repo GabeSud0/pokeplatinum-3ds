@@ -468,6 +468,10 @@ static void RemasterRender(uint16_t *out)
     static uint16_t under[400 * 240], over[400 * 240], full[400 * 240];
     static uint8_t overAlpha[400 * 240], alpha3d[256 * 192];
     static uint16_t image3d[256 * 192], bgPicture[256 * 256], sim3d[400 * 240];
+    /* (the HM cut-in's sprites drawn by the 3DS's compositor: drawn over
+     * the rest here, where the picture had them) */
+    static NitroGpuObj gpuObj[NITRO_GPU_OBJ_MAX];
+    static uint16_t gpuObjAtlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H], sprites[400 * 240];
     int aOnTop = NitroPort_EngineAOnTop() ? 1 : 0;
     int screen, gpuBg;
 
@@ -487,6 +491,12 @@ static void RemasterRender(uint16_t *out)
             /* (the field's weather's BG drawn by the compositor, as the
              * 3DS has it: below) */
             split.gpuBgs = NitroPort_RepeatingBgs();
+            split.gpuCircle = 1;   /* (a circle fade: drawn over the rest below) */
+            if (NitroPort_GpuSprites()) {
+                split.gpuObjs = 1;
+                split.gpuObj = gpuObj;
+                split.gpuObjAtlas = gpuObjAtlas;
+            }
         }
         NitroPort_Render2DSplit(engine, under, &split);
         width = split.width > 256 ? split.width : 256;
@@ -494,6 +504,30 @@ static void RemasterRender(uint16_t *out)
         gpuBg = split.gpuBgLeftOut ? __builtin_ctz((unsigned)split.gpuBgLeftOut) : -1;
         if (gpuBg >= 0 && !NitroPort_Render2DBgPicture(gpuBg, split.snapshot, bgPicture)) {
             gpuBg = -1;
+        }
+        if (split.gpuObjsLeftOut) {
+            /* (the sprites, back to front, onto a layer of their own:
+             * colour | 0x8000 where they show) */
+            int k, w = split.width > 256 ? split.width : 256, h = split.top > 0 && split.height > 192 ? split.height : 192;
+
+            memset(sprites, 0, sizeof(sprites));
+            for (k = 0; k < split.gpuObjCount; k++) {
+                const NitroGpuObj *o = &gpuObj[k];
+                int tx, ty;
+
+                for (ty = 0; ty < o->h; ty++) {
+                    for (tx = 0; tx < o->w; tx++) {
+                        int px = o->x + tx, py = o->y + ty;
+                        uint16_t t = gpuObjAtlas[(o->ay + (o->vflip ? o->h - 1 - ty : ty)) * NITRO_GPU_OBJ_ATLAS_W + o->ax +
+                                                 (o->hflip ? o->w - 1 - tx : tx)];
+
+                        if ((t & 1) && px >= 0 && px < w && py >= 0 && py < h) {
+                            sprites[py * w + px] =
+                                (uint16_t)(0x8000 | ((t >> 11) & 31) | (((t >> 6) & 31) << 5) | (((t >> 1) & 31) << 10));
+                        }
+                    }
+                }
+            }
         }
         /* (a battle's start on the wider field: the DS's picture stretched
          * over the screen, the 3D at the screen's size: NitroRender2DSplit.
@@ -531,6 +565,30 @@ static void RemasterRender(uint16_t *out)
             }
         }
         for (y = 0; y < outH; y++) {
+            /* (a circle fade the 3DS's compositor draws: this line's part
+             * inside it, as the 2D renderer's own circle has it) */
+            int circleLo = 0, circleHi = outW;
+
+            if (split.gpuCircleOn == 2) {
+                /* (a band of lines: these lines all, the rest none) */
+                if (y < split.gpuCircleY || y >= split.gpuCircleR) {
+                    circleLo = circleHi = 0;
+                }
+            } else if (split.gpuCircleOn) {
+                int dy = y - split.gpuCircleY, half = -1;
+
+                if (dy < 0) {
+                    dy = -dy;
+                }
+                if (dy < split.gpuCircleR) {
+                    long q = (long)split.gpuCircleR * split.gpuCircleR - (long)dy * dy;
+
+                    for (half = 0; (long)(half + 1) * (half + 1) <= q; half++) {
+                    }
+                }
+                circleLo = half < 0 ? 0 : split.gpuCircleX - half;
+                circleHi = half < 0 ? 0 : split.gpuCircleX + half;
+            }
             for (x = 0; x < outW; x++) {
                 int cx = split.stretch ? x * width / outW : x, cy = split.stretch ? y * height / outH : y;
                 uint16_t c = under[cy * width + cx];
@@ -610,6 +668,12 @@ static void RemasterRender(uint16_t *out)
                         m |= (uint16_t)(((((o >> k) & 31) * a + ((c >> k) & 31) * (16 - a)) / 16) << k);
                     }
                     c = m;
+                }
+                if (split.gpuObjsLeftOut && (sprites[cy * width + cx] & 0x8000)) {
+                    c = sprites[cy * width + cx] & 0x7FFF;
+                }
+                if (split.gpuCircleOn && (x < circleLo || x >= circleHi)) {
+                    c = (uint16_t)split.gpuCircleColor;
                 }
                 {
                     int mode = (split.masterBright >> 14) & 3, f = split.masterBright & 31, k;

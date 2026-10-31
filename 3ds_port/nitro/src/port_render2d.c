@@ -211,6 +211,9 @@ typedef struct Engine {
      * stretch) each OBJ drawn 4/5 as wide round its middle: stretched 1.5625
      * across and 1.25 down by the compositor, its own shape on the screen */
     u8 squeeze;
+    /* (NitroRender2DSplit.gpuCircle) the windows left out: the picture as
+     * inside the circle everywhere (what shows there, insideWindow) */
+    u8 noWindows, insideWindow;
     const State2D *taken;  /* (drawn from the display state taken: its windows) */
     u8 pictures;
     /* (wider canvas, worked out each frame) a BG's hand-drawn picture
@@ -2777,6 +2780,397 @@ static u16 ObjPixel(const Engine *e, const Obj *obj, u32 dispcnt, int tx, int ty
     }
 }
 
+/* ------------------------------------- the sprites the compositor draws */
+
+/* (NitroRender2DSplit.gpuObjs) Whether engine A's sprites can be left out
+ * of the picture, from its registers and OAM: all in front of everything,
+ * as the compositor draws them over the picture. Without sprites shown,
+ * they can (nothing to draw). */
+static int GpuObjsOf(const u8 *io, const u8 *oam, int lines)
+{
+    u32 dispcnt = Rd32(io, 0);
+    u16 bldcnt = Rd16(io, 0x50), winin = Rd16(io, 0x48), winout = Rd16(io, 0x4A);
+    int bg, i, front = 3;
+
+    if (lines || (dispcnt & 0x8000) || ((dispcnt >> 16) & 3) != 1 || (dispcnt & 0x108) != 0x108) {
+        return 0;   /* (an H-blank effect, the OBJ window, not the normal display, no 3D) */
+    }
+    if (!(dispcnt & 0x1000)) {
+        return 1;
+    }
+    if (((bldcnt >> 6) & 3) != 0 && (bldcnt & 0x10)) {
+        return 0;   /* (a colour effect on them) */
+    }
+    if (dispcnt & 0xE000) {
+        if (!(winout & 0x10) || ((dispcnt & 0x2000) && !(winin & 0x10)) || ((dispcnt & 0x4000) && !(winin & 0x1000))) {
+            return 0;   /* (a window hides them somewhere) */
+        }
+    }
+    for (bg = 0; bg < 4; bg++) {
+        if ((dispcnt & (0x100u << bg)) && (int)(Rd16(io, 8 + bg * 2) & 3) < front) {
+            front = Rd16(io, 8 + bg * 2) & 3;
+        }
+    }
+    for (i = 0; i < 128; i++) {
+        u16 a0 = Rd16(oam, (u32)i * 8), a2 = Rd16(oam, (u32)i * 8 + 4);
+
+        if ((!(a0 & 0x100) && (a0 & 0x200)) || (a0 >> 14) == 3) {
+            continue;   /* (hidden) */
+        }
+        if ((a0 & 0x100) || (a0 & 0x1000) || ((a0 >> 10) & 3) != 0 || (int)((a2 >> 10) & 3) > front) {
+            return 0;   /* (affine, mosaic, not a normal one, or behind a BG) */
+        }
+    }
+    return 1;
+}
+
+/* (a sprite's OAM, but where it is: which it is, to find it again) */
+static u32 GpuObjKey(const u8 *o)
+{
+    return ((u32)(Rd16(o, 0) & 0xFF00) << 16) | ((u32)(Rd16(o, 2) & 0xF000) << 4) | Rd16(o, 4);
+}
+
+/* OAM entry i as a sprite the compositor draws (its atlas place not set):
+ * FALSE if it's hidden, or (onPicture) off the picture. */
+static BOOL GpuObjPlace(const Engine *e, int i, Obj *obj, NitroGpuObj *out, BOOL onPicture)
+{
+    const u8 *o = e->oam + i * 8;
+    int y;
+
+    if (!ReadObj(e, i, obj) || (onPicture && (obj->ox >= e->width || obj->ox + obj->boxW <= 0))) {
+        return FALSE;
+    }
+    if (e->top) {
+        y = obj->oyTall;
+    } else {
+        y = obj->oy + obj->boxH > 256 ? obj->oy - 256 : obj->oy;   /* (the DS's lines wrap round 256) */
+    }
+    if (onPicture && (y >= e->height || y + obj->boxH <= 0)) {
+        return FALSE;
+    }
+    memset(out, 0, sizeof(*out));
+    out->key = GpuObjKey(o);
+    out->x = obj->ox;
+    out->y = (short)y;
+    out->rawX = (short)(Rd16(o, 2) & 0x1FF);
+    out->rawY = (short)(Rd16(o, 0) & 0xFF);
+    out->w = obj->w;
+    out->h = obj->h;
+    out->hflip = obj->hflip;
+    out->vflip = obj->vflip;
+    return TRUE;
+}
+
+/* (the canvas the last picture that left the sprites out had: for
+ * NitroPort_Render2DObjPlaces, on the game's thread) */
+static struct {
+    volatile int valid;
+    int width, origin, top, height;
+} sGpuObjCanvas;
+/* (a picture couldn't leave them out after all, as the registers said it
+ * could: their places count as a change again, till they're not asked for) */
+static int sGpuObjsRefused;
+
+/* The sprites into split->gpuObj, back to front, their pixels into the
+ * atlas (each picture once, a pixel apart, in shelves): FALSE if they
+ * don't fit. Those off the picture too (one sliding on from beyond it
+ * shows where it is in a later frame, the picture not drawn again for
+ * that); none with the sprites' layer off. */
+static BOOL MakeGpuObjs(const Engine *e, u32 dispcnt, NitroRender2DSplit *split)
+{
+    struct {
+        u32 art;
+        u16 ax, ay;
+    } seen[NITRO_GPU_OBJ_MAX];
+    u8 prioOf[NITRO_GPU_OBJ_MAX];
+    int nSeen = 0, n = 0, i, j, shelfX = 0, shelfY = 0, shelfH = 0;
+    u16 *atlas = split->gpuObjAtlas;
+
+    memset(atlas, 0, (size_t)NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H * sizeof(u16));
+    for (i = 0; i < 128 && (dispcnt & 0x1000); i++) {
+        NitroGpuObj *g = &split->gpuObj[n];
+        Obj obj;
+        u32 art;
+        int k, tx, ty;
+
+        if (!GpuObjPlace(e, i, &obj, g, FALSE)) {
+            continue;
+        }
+        art = (u32)obj.tile | ((u32)obj.pal << 10) | ((u32)obj.bpp8 << 14) | ((u32)(obj.w / 8) << 15) |
+              ((u32)(obj.h / 8) << 19);
+        for (k = 0; k < nSeen && seen[k].art != art; k++) {
+        }
+        if (k == nSeen) {
+            if (shelfX + obj.w > NITRO_GPU_OBJ_ATLAS_W) {
+                shelfX = 0;
+                shelfY += shelfH + 1;
+                shelfH = 0;
+            }
+            if (shelfY + obj.h > NITRO_GPU_OBJ_ATLAS_H) {
+                return FALSE;
+            }
+            seen[k].art = art;
+            seen[k].ax = (u16)shelfX;
+            seen[k].ay = (u16)shelfY;
+            for (ty = 0; ty < obj.h; ty++) {
+                u16 *row = atlas + (shelfY + ty) * NITRO_GPU_OBJ_ATLAS_W + shelfX;
+
+                for (tx = 0; tx < obj.w; tx++) {
+                    int alpha;
+                    u16 c = ObjPixel(e, &obj, dispcnt, tx, ty, &alpha);
+
+                    row[tx] = c ? (u16)(((c & 31) << 11) | (((c >> 5) & 31) << 6) | (((c >> 10) & 31) << 1) | 1) : 0;
+                }
+            }
+            shelfX += obj.w + 1;
+            if (obj.h > shelfH) {
+                shelfH = obj.h;
+            }
+            nSeen++;
+        }
+        g->ax = seen[k].ax;
+        g->ay = seen[k].ay;
+        prioOf[n] = obj.prio;
+        n++;
+    }
+    /* back to front: the DS's lower priorities in front, and of one
+     * priority the first in OAM (an insertion sort: of one priority, the
+     * last in OAM first) */
+    for (i = 1; i < n; i++) {
+        NitroGpuObj g = split->gpuObj[i];
+        u8 p = prioOf[i];
+
+        for (j = i; j > 0 && prioOf[j - 1] <= p; j--) {
+            split->gpuObj[j] = split->gpuObj[j - 1];
+            prioOf[j] = prioOf[j - 1];
+        }
+        split->gpuObj[j] = g;
+        prioOf[j] = p;
+    }
+    split->gpuObjCount = n;
+    return TRUE;
+}
+
+/* (drawing a picture: NitroRender2DSplit.gpuObjs) The sprites left out of
+ * it, when they can be: TRUE then, with them in split. */
+static BOOL GpuObjsLeaveOut(const Engine *e, const ObjFrame *f, u32 dispcnt, NitroRender2DSplit *split)
+{
+    if (e->isA && !split->gpuObjs) {
+        __atomic_store_n(&sGpuObjCanvas.valid, 0, __ATOMIC_RELEASE);   /* (not asked for: no places) */
+    }
+    if (!split->gpuObjs || split->gpuObj == NULL || split->gpuObjAtlas == NULL || !e->isA || !split->has3d ||
+        e->squeeze || sGpuObjsRefused || !GpuObjsOf(e->io, e->oam, e->lines != NULL)) {
+        return FALSE;
+    }
+    if (e->nObjMove > 0 || f->artCount > 0 || !MakeGpuObjs(e, dispcnt, split)) {
+        sGpuObjsRefused = 1;
+        split->gpuObjCount = 0;
+        return FALSE;
+    }
+    split->gpuObjsLeftOut = 1;
+    sGpuObjCanvas.width = e->width;
+    sGpuObjCanvas.origin = e->origin;
+    sGpuObjCanvas.top = e->top;
+    sGpuObjCanvas.height = e->height;
+    __atomic_store_n(&sGpuObjCanvas.valid, 1, __ATOMIC_RELEASE);
+    return TRUE;
+}
+
+int NitroPort_Render2DObjPlaces(int engine, NitroGpuObj *out, int max)
+{
+    Engine e;
+    Obj obj;
+    int i, n = 0;
+
+    if (engine != 0 || !__atomic_load_n(&sGpuObjCanvas.valid, __ATOMIC_ACQUIRE)) {
+        return -1;
+    }
+    if (!(Rd32(NitroPort_IoReg, 0) & 0x1000)) {
+        return 0;   /* (the sprites' layer off) */
+    }
+    memset(&e, 0, sizeof(e));
+    e.oam = NitroPort_Oam;
+    e.isA = TRUE;
+    e.width = sGpuObjCanvas.width;
+    e.origin = sGpuObjCanvas.origin;
+    e.top = sGpuObjCanvas.top;
+    e.height = sGpuObjCanvas.height;
+    for (i = 0; i < 128 && n < max; i++) {
+        if (GpuObjPlace(&e, i, &obj, &out[n], TRUE)) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* (NitroPort_GpuObjsBetween) The nearest sprite of o's key in a list (at
+ * most 96 pixels across, 32 down: OAM's x round 512, its y round 256),
+ * and how far from o: -1 if none. */
+static int NearestGpuObj(const NitroGpuObj *o, const NitroGpuObj *list, int n, int *dx, int *dy, int *cost)
+{
+    int i, best = -1;
+
+    for (i = 0; i < n; i++) {
+        int ddx = ((list[i].rawX - o->rawX + 256) & 511) - 256, ddy = ((list[i].rawY - o->rawY + 128) & 255) - 128;
+        int c = (ddx < 0 ? -ddx : ddx) + 4 * (ddy < 0 ? -ddy : ddy);
+
+        if (list[i].key != o->key || ddx > 96 || ddx < -96 || ddy > 32 || ddy < -32 || (best >= 0 && c >= *cost)) {
+            continue;
+        }
+        best = i;
+        *cost = c;
+        *dx = ddx;
+        *dy = ddy;
+    }
+    return best;
+}
+
+int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const NitroGpuObj *after, int nAfter,
+                             NitroGpuObj *out, int max)
+{
+    /* each sprite's partner in the other frame (-1: none), and each kind's
+     * usual move (the wind's streaks all blow one way) */
+    short partnerOf[NITRO_GPU_OBJ_MAX], partnerIn[NITRO_GPU_OBJ_MAX];
+    struct {
+        u32 key;
+        short dx, dy;
+        int votes;
+    } moves[NITRO_GPU_OBJ_MAX];
+    int nMoves = 0, i, j, k, p, n = 0;
+
+    if (nAfter > NITRO_GPU_OBJ_MAX) {
+        nAfter = NITRO_GPU_OBJ_MAX;
+    }
+    if (nBefore > NITRO_GPU_OBJ_MAX) {
+        nBefore = NITRO_GPU_OBJ_MAX;
+    }
+    for (j = 0; j < nAfter; j++) {
+        partnerIn[j] = -1;
+    }
+    for (i = 0; i < nBefore; i++) {
+        int dx = 0, dy = 0, cost = 0, back, bdx, bdy, bcost = 0;
+
+        partnerOf[i] = -1;
+        j = NearestGpuObj(&before[i], after, nAfter, &dx, &dy, &cost);
+        if (j < 0) {
+            continue;
+        }
+        /* (each the other's nearest: one leaving, another of its kind
+         * coming on, aren't one moving) */
+        back = NearestGpuObj(&after[j], before, nBefore, &bdx, &bdy, &bcost);
+        if (back != i && bcost < cost) {
+            continue;
+        }
+        partnerOf[i] = (short)j;
+        partnerIn[j] = (short)i;
+        for (k = 0; k < nMoves && !(moves[k].key == before[i].key && moves[k].dx == dx && moves[k].dy == dy); k++) {
+        }
+        if (k == nMoves) {
+            moves[k].key = before[i].key;
+            moves[k].dx = (short)dx;
+            moves[k].dy = (short)dy;
+            moves[k].votes = 0;
+            nMoves++;
+        }
+        moves[k].votes++;
+    }
+    /* (one whose picture changed between them, an animation's next frame:
+     * the nearest of its size left over in after, at most 32 pixels across
+     * and 16 down, its picture then, each the other's nearest of those) */
+    for (i = 0; i < nBefore; i++) {
+        int best = -1, bestCost = 0, dx, dy, c;
+
+        if (partnerOf[i] >= 0) {
+            continue;
+        }
+        for (j = 0; j < nAfter; j++) {
+            dx = ((after[j].rawX - before[i].rawX + 256) & 511) - 256;
+            dy = ((after[j].rawY - before[i].rawY + 128) & 255) - 128;
+            c = (dx < 0 ? -dx : dx) + 4 * (dy < 0 ? -dy : dy);
+            if (partnerIn[j] >= 0 || after[j].w != before[i].w || after[j].h != before[i].h || dx > 32 || dx < -32 ||
+                dy > 16 || dy < -16 || (best >= 0 && c >= bestCost)) {
+                continue;
+            }
+            best = j;
+            bestCost = c;
+        }
+        if (best < 0) {
+            continue;
+        }
+        for (k = 0; k < nBefore; k++) {
+            if (k == i || partnerOf[k] >= 0 || before[k].w != before[i].w || before[k].h != before[i].h) {
+                continue;
+            }
+            dx = ((after[best].rawX - before[k].rawX + 256) & 511) - 256;
+            dy = ((after[best].rawY - before[k].rawY + 128) & 255) - 128;
+            if (dx <= 32 && dx >= -32 && dy <= 16 && dy >= -16 && (dx < 0 ? -dx : dx) + 4 * (dy < 0 ? -dy : dy) < bestCost) {
+                break;
+            }
+        }
+        if (k == nBefore) {
+            partnerOf[i] = (short)best;
+            partnerIn[best] = (short)i;
+        }
+    }
+    /* back to front: of each priority (the DS's lowest first), the last in
+     * OAM first; those coming on behind those already there */
+    for (p = 3; p >= 0; p--) {
+        for (k = 0; k < 2; k++) {
+            const NitroGpuObj *list = k == 0 ? after : before;
+            int count = k == 0 ? nAfter : nBefore;
+
+            for (i = count - 1; i >= 0 && n < max; i--) {
+                const NitroGpuObj *o = &list[i];
+                int dx = 0, dy = 0, m, best = -1;
+
+                if ((int)((o->key >> 10) & 3) != p || (k == 0 && nBefore >= 0 && partnerIn[i] >= 0)) {
+                    continue;
+                }
+                if (k == 0 && nBefore < 0) {
+                    out[n++] = *o;   /* (no frame before: as it is) */
+                    continue;
+                }
+                if (k == 1 && partnerOf[i] >= 0) {
+                    const NitroGpuObj *a = &after[partnerOf[i]];
+
+                    dx = ((a->rawX - o->rawX + 256) & 511) - 256;
+                    dy = ((a->rawY - o->rawY + 128) & 255) - 128;
+                    if (a->key != o->key) {
+                        /* (its picture changed: the newer one, as the
+                         * picture shown with it has) */
+                        out[n] = *a;
+                        out[n].x = (short)(o->x + dx / 2);
+                        out[n].y = (short)(o->y + dy / 2);
+                        n++;
+                        continue;
+                    }
+                } else {
+                    /* (on its own: going off, or just come on; moved as
+                     * most of its kind, if they move, half of that) */
+                    for (m = 0; m < nMoves; m++) {
+                        if (moves[m].key == o->key && (best < 0 || moves[m].votes > moves[best].votes)) {
+                            best = m;
+                        }
+                    }
+                    if (best < 0) {
+                        if (k == 0) {
+                            continue;   /* (just come on: not yet) */
+                        }
+                    } else {
+                        dx = k == 0 ? -moves[best].dx : moves[best].dx;
+                        dy = k == 0 ? -moves[best].dy : moves[best].dy;
+                    }
+                }
+                out[n] = *o;
+                out[n].x = (short)(o->x + dx / 2);
+                out[n].y = (short)(o->y + dy / 2);
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
 /* ---------------------------------------------- OBJ groups' hand-drawn art */
 
 /* The OBJs are put in groups for wide art (nitro_port_wideart.h): those of
@@ -3891,6 +4285,14 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         if (fixedWidth == 0) {
             LookUpObjArt(e, objFrame, dispcnt, -1);
         }
+    } else {
+        objFrame->count = 0;
+    }
+    /* The sprites the compositor draws itself (NitroRender2DSplit.gpuObjs):
+     * left out, when they can be. */
+    if (split != NULL && GpuObjsLeaveOut(e, objFrame, dispcnt, split)) {
+        objFrame->count = 0;
+        memset(objFrame->lineCount, 0, sizeof(objFrame->lineCount));
     }
     if (!anyWindow) {
         memset(enableLine, 0x3F, (size_t)width);
@@ -4001,7 +4403,9 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
 
         /* Which layers and effects each pixel shows (the windows): window
          * 0 over window 1 over the OBJ window over the outside. */
-        if (anyWindow) {
+        if (anyWindow && e->noWindows) {
+            memset(enableLine, e->insideWindow, (size_t)width);   /* (a circle the compositor draws: all inside it) */
+        } else if (anyWindow) {
             memset(enableLine, winout & 0x3F, (size_t)width);
             if ((dispcnt & 0x8000) && objs) {
                 for (x = objLine->x0; x < objLine->x1; x++) {
@@ -4338,10 +4742,168 @@ static void ShiftDown(const struct Engine *e, u8 *regs)
         u16 v = Rd16(regs, 0x44 + k * 2);
         int v0 = v >> 8, v1 = v & 0xFF;
 
+        /* (an empty one, top = bottom, stays empty: the HM cut-in starts
+         * its window at 192-192, a black block below the DS's lines when it
+         * went on to the picture's bottom, 2026-10-30) */
+        if (v0 == v1) {
+            Wr16(regs, 0x44 + k * 2, 0);
+            continue;
+        }
         v0 = v0 == 0 ? 0 : v0 + e->top;
         v1 = v1 >= H || v1 == 0 ? e->height : v1 + e->top;
         Wr16(regs, 0x44 + k * 2, (u16)(((v0 > 255 ? 255 : v0) << 8) | (v1 > 255 ? 255 : v1)));
     }
+}
+
+/* Whether a line's registers (an H-blank effect's) are the frame's below
+ * the windows' (0x40) and from DISP3DCNT (0x60, but its acknowledge bits),
+ * DISPSTAT and VCOUNT aside (0x04-0x07: a line's copy has them 0, the
+ * frame's the V-blank's; counted, no H-blank circle or band was ever left
+ * to the compositor, 2026-10-31). From 0x40 to 0x60 is the caller's. */
+static BOOL LineLikeFrame(const u8 *line, const u8 *io)
+{
+    return memcmp(line, io, 0x04) == 0 && memcmp(line + 0x08, io + 0x08, 0x40 - 0x08) == 0 &&
+           ((Rd32(line, 0x60) ^ Rd32(io, 0x60)) & ~0x3000u) == 0 &&
+           memcmp(line + 0x64, io + 0x64, NITRO_LINE_REGS - 0x64) == 0;
+}
+
+/* (NitroRender2DSplit.gpuCircle) The window of engine A's circle fade
+ * the compositor can draw itself, from its registers (not a tall field's
+ * shifted copy), lines and circles: the only window on, its circle on, no
+ * layer outside it (and no colour effect on the backdrop there), all that's
+ * shown shown inside it; with an H-blank effect, the lines differing only in
+ * the windows' registers (and DISP3DCNT's acknowledge bits). Else -1. */
+static int GpuCircleOf(const u8 *io, const u8 (*lines)[NITRO_LINE_REGS], const WindowCircle *circles)
+{
+    u32 dispcnt = Rd32(io, 0);
+    u16 winin = Rd16(io, 0x48), winout = Rd16(io, 0x4A);
+    int w, inside, y;
+
+    if ((dispcnt & 0xE000) == 0x2000) {
+        w = 0;
+    } else if ((dispcnt & 0xE000) == 0x4000) {
+        w = 1;
+    } else {
+        return -1;
+    }
+    if (!circles[w].on || ((dispcnt >> 16) & 3) != 1 || (winout & 0x1F) != 0) {
+        return -1;
+    }
+    if ((winout & 0x20) && ((Rd16(io, 0x50) >> 6) & 3) != 0 && (Rd16(io, 0x50) & 0x20)) {
+        return -1;   /* (the backdrop outside it brightened, darkened or blended) */
+    }
+    inside = (winin >> (w * 8)) & 0x3F;
+    if ((((dispcnt >> 8) & 0x1F) & ~(u32)inside) != 0) {
+        return -1;
+    }
+    for (y = 0; lines != NULL && y < H; y++) {
+        if (!LineLikeFrame(lines[y], io) || memcmp(lines[y] + 0x48, io + 0x48, 0x60 - 0x48) != 0) {
+            return -1;
+        }
+    }
+    return w;
+}
+
+/* (NitroRender2DSplit.gpuCircle, gpuCircleOn 2) Engine A's screen opening
+ * or closing as a band of whole lines (walking out of a building: the
+ * band in the middle 32 lines taller each step, every other frame), which
+ * the compositor can draw itself: the only window on and empty on every
+ * line, so each line shows what's outside it; the lines differing only in
+ * the windows' registers and WININ/WINOUT (and DISP3DCNT's acknowledge
+ * bits); a line shows all that's shown (the band) or no layer (and no
+ * colour effect on the backdrop: black, or the backdrop's colour), the
+ * band's lines together. Its window, its lines top to bottom - 1 (the
+ * DS's; top = bottom = 96 with none) and what its lines show (*shown);
+ * else -1. */
+static int GpuRowsOf(const u8 *io, const u8 (*lines)[NITRO_LINE_REGS], int *top, int *bottom, u8 *shown)
+{
+    u32 dispcnt = Rd32(io, 0), layers = (dispcnt >> 8) & 0x1F;
+    int w, y, first = -1, last = -1;
+    int shownMask = -1;
+
+    if ((dispcnt & 0xE000) == 0x2000) {
+        w = 0;
+    } else if ((dispcnt & 0xE000) == 0x4000) {
+        w = 1;
+    } else {
+        return -1;
+    }
+    if (((dispcnt >> 16) & 3) != 1) {
+        return -1;
+    }
+    for (y = 0; y < H; y++) {
+        const u8 *r = lines != NULL ? lines[y] : io;
+        u16 winh = Rd16(r, 0x40 + w * 2), winout = Rd16(r, 0x4A) & 0x3F;
+
+        if (lines != NULL && (!LineLikeFrame(r, io) || memcmp(r + 0x4C, io + 0x4C, 0x60 - 0x4C) != 0)) {
+            return -1;
+        }
+        if ((winh >> 8) != (winh & 0xFF)) {
+            return -1;   /* (the window not empty on this line) */
+        }
+        if ((winout & 0x1F) == 0) {
+            if ((winout & 0x20) && ((Rd16(r, 0x50) >> 6) & 3) != 0 && (Rd16(r, 0x50) & 0x20)) {
+                return -1;   /* (the backdrop there brightened, darkened or blended) */
+            }
+            continue;   /* (a line showing nothing) */
+        }
+        if ((layers & ~(u32)winout) != 0 || (shownMask >= 0 && winout != shownMask) || (last >= 0 && last != y - 1)) {
+            return -1;   /* (some shown, not all; or not one band) */
+        }
+        shownMask = winout;
+        if (first < 0) {
+            first = y;
+        }
+        last = y;
+    }
+    *top = first < 0 ? H / 2 : first;
+    *bottom = first < 0 ? H / 2 : last + 1;
+    *shown = (u8)(shownMask < 0 ? 0x3F : shownMask);
+    return w;
+}
+
+/* (the canvas and the window of the last picture that left the circle
+ * out: for NitroPort_Render2DCircleNow, on the game's thread) */
+static struct {
+    volatile int valid;
+    int window, origin, top, height;
+} sGpuCircleCanvas;
+
+/* A band's line (the DS's, 0-192) on the canvas: its first and last lines
+ * go on to the canvas's edges (a tall field's lines above and below the
+ * DS's), as the DS's own lines show nothing beyond them. */
+static int GpuRowsLine(int line, int top, int height)
+{
+    return line <= 0 ? 0 : line >= H ? height : line + top;
+}
+
+int NitroPort_Render2DCircleNow(int engine, int *x, int *y, int *r)
+{
+    const WindowCircle *c;
+    int top, bottom;
+    u8 shown;
+
+    if (engine != 0 || !__atomic_load_n(&sGpuCircleCanvas.valid, __ATOMIC_ACQUIRE)) {
+        return -1;
+    }
+    c = &sCircles[0][sGpuCircleCanvas.window];
+    if (c->on) {
+        *x = sGpuCircleCanvas.origin + c->cx;
+        *y = sGpuCircleCanvas.top + c->cy;
+        *r = c->r;
+        return 1;
+    }
+    /* (a band of lines, as the game has it now: NitroPort_LineRegs is the
+     * frame being handed over) */
+    if (GpuRowsOf(NitroPort_IoReg,
+                  NitroPort_LineRegs.active ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0] : NULL, &top,
+                  &bottom, &shown) >= 0) {
+        *x = 0;
+        *y = GpuRowsLine(top, sGpuCircleCanvas.top, sGpuCircleCanvas.height);
+        *r = GpuRowsLine(bottom, sGpuCircleCanvas.top, sGpuCircleCanvas.height);
+        return 2;
+    }
+    return 0;
 }
 
 /* An engine's registers and memory, and the canvas (split's: width,
@@ -4437,6 +4999,56 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
     if (split != NULL) {
         memset(split, 0, offsetof(NitroRender2DSplit, over));
         split->masterBright = Rd16(e.io, 0x6C);
+    }
+    /* A circle fade the compositor draws itself (NitroRender2DSplit.
+     * gpuCircle): the picture as inside it everywhere. */
+    if (split != NULL && e.isA && !split->gpuCircle) {
+        __atomic_store_n(&sGpuCircleCanvas.valid, 0, __ATOMIC_RELEASE);
+    }
+    if (split != NULL && e.isA && split->gpuCircle && !split->stretch) {
+        const State2D *st = &sState[0];
+        int w = split->snapshot
+                    ? GpuCircleOf(st->io, st->lines ? (const u8(*)[NITRO_LINE_REGS])st->lineRegs : NULL, st->circles)
+                    : GpuCircleOf(NitroPort_IoReg,
+                                  NitroPort_LineRegs.active ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0] : NULL,
+                                  sCircles[0]);
+
+        int top = 0, bottom = 0;
+        u8 shown = 0;
+
+        if (w >= 0) {
+            e.noWindows = 1;
+            e.insideWindow = (u8)((Rd16(e.io, 0x48) >> (w * 8)) & 0x3F);
+            split->gpuCircleOn = 1;
+            split->gpuCircleX = e.origin + e.circles[w].cx;
+            split->gpuCircleY = e.top + e.circles[w].cy;
+            split->gpuCircleR = e.circles[w].r;
+            split->gpuCircleColor = PlttColor(e.bgPltt, 0);
+            sGpuCircleCanvas.window = w;
+            sGpuCircleCanvas.origin = e.origin;
+            sGpuCircleCanvas.top = e.top;
+            sGpuCircleCanvas.height = e.height;
+            __atomic_store_n(&sGpuCircleCanvas.valid, 1, __ATOMIC_RELEASE);
+        } else if ((split->snapshot ? GpuRowsOf(st->io, st->lines ? (const u8(*)[NITRO_LINE_REGS])st->lineRegs : NULL,
+                                                &top, &bottom, &shown)
+                                    : GpuRowsOf(NitroPort_IoReg,
+                                                NitroPort_LineRegs.active
+                                                    ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0]
+                                                    : NULL,
+                                                &top, &bottom, &shown)) >= 0) {
+            /* (a band of lines: the picture as the band shows it, all of
+             * it; gpuCircleY to gpuCircleR - 1 its lines on the canvas) */
+            e.noWindows = 1;
+            e.insideWindow = shown;
+            split->gpuCircleOn = 2;
+            split->gpuCircleY = GpuRowsLine(top, e.top, e.height);
+            split->gpuCircleR = GpuRowsLine(bottom, e.top, e.height);
+            split->gpuCircleColor = PlttColor(e.bgPltt, 0);
+            sGpuCircleCanvas.origin = e.origin;
+            sGpuCircleCanvas.top = e.top;
+            sGpuCircleCanvas.height = e.height;
+            __atomic_store_n(&sGpuCircleCanvas.valid, 1, __ATOMIC_RELEASE);
+        }
     }
     powcnt = Rd16(e.ioAll, 0x304);
     dispcnt = Rd32(e.io, 0);
@@ -5154,7 +5766,7 @@ void NitroPort_Render2DTakeState(int engine)
 /* What an engine's picture is drawn from, in two parts: the small ones
  * (registers, palettes, OAM) and its VRAM (the most part: 864 KB for
  * engine A, read in full to work it out). */
-static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg)
+static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg, int gpuObjs, int gpuCircle)
 {
     BOOL isA = engine == 0;
     const State2D *st = &sState[isA ? 0 : 1];
@@ -5178,11 +5790,33 @@ static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg)
     if (isA && gpuBg >= 0) {
         regs[(0x10 + gpuBg * 4) / 4] = 0;
     }
+    /* (a circle fade the compositor draws itself: its windows aren't in
+     * the picture) */
+    if (isA && gpuCircle) {
+        regs[0x40 / 4] = regs[0x44 / 4] = 0;
+    }
+    if (isA && gpuCircle >= 3) {
+        regs[0x48 / 4] = 0;   /* (a band of lines: which lines show is in WININ/WINOUT) */
+    }
     h = HashWords((const u8 *)regs, 0x70, h);
     h = HashWords(ioAll + 0x240, 0x10, h);              /* VRAMCNT */
     h = (h ^ Rd16(ioAll, 0x304)) * 16777619u;           /* POWCNT1 */
     h = HashWords((snapshot ? st->pltt : NitroPort_Pltt) + (isA ? 0 : 0x400), 0x400, h);
-    h = HashWords((snapshot ? st->oam : NitroPort_Oam) + (isA ? 0 : 0x400), 0x400, h);
+    if (isA && gpuObjs) {
+        /* (the sprites the compositor draws itself: where they are isn't in
+         * the picture, which needn't be drawn again as they move) */
+        u8 oam[0x400];
+        int i;
+
+        memcpy(oam, snapshot ? st->oam : NitroPort_Oam, sizeof(oam));
+        for (i = 0; i < 128; i++) {
+            Wr16(oam, (u32)i * 8, (u16)(Rd16(oam, (u32)i * 8) & 0xFF00));
+            Wr16(oam, (u32)i * 8 + 2, (u16)(Rd16(oam, (u32)i * 8 + 2) & 0xFE00));
+        }
+        h = HashWords(oam, 0x400, h);
+    } else {
+        h = HashWords((snapshot ? st->oam : NitroPort_Oam) + (isA ? 0 : 0x400), 0x400, h);
+    }
     /* (an H-blank effect: each line's registers, but those two bits) */
     if (snapshot ? st->lines : NitroPort_LineRegs.active) {
         const u8(*lines)[NITRO_LINE_REGS] = snapshot ? st->lineRegs : NitroPort_LineRegs.regs[isA ? 0 : 1];
@@ -5193,6 +5827,12 @@ static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg)
             memcpy(regs, lines[y], sizeof(regs));
             if (isA) {
                 regs[0x60 / 4] &= ~0x3000u;
+            }
+            if (isA && gpuCircle) {
+                regs[0x40 / 4] = regs[0x44 / 4] = 0;
+            }
+            if (isA && gpuCircle >= 3) {
+                regs[0x48 / 4] = 0;
             }
             h = HashWords((const u8 *)regs, 0x70, h);
         }
@@ -5334,7 +5974,7 @@ void NitroPort_Render2DChangeStats(int engine, unsigned *registers, unsigned *vr
 
 static u32 EngineSignature(int engine)
 {
-    return (EngineSmallSignature(engine, 0, -1) * 31u) ^ EngineShownVramSignature(engine, 0);
+    return (EngineSmallSignature(engine, 0, -1, 0, 0) * 31u) ^ EngineShownVramSignature(engine, 0);
 }
 
 /* NitroPort_Render2D, unless nothing it draws from changed since the last
@@ -5354,6 +5994,13 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     /* (a BG the compositor would draw itself now: GpuBgOf, as drawing
      * would find; drawn when that changes) */
     int gpuBg = -1;
+    /* (the sprites the compositor would draw itself now: GpuObjsOf, as
+     * drawing would find, unless a picture couldn't leave them out) */
+    int gpuObjs = 0;
+    /* (a circle fade the compositor would draw: 1 + its window; a band of
+     * lines: 3 + its window; or 0) */
+    int gpuCircle = 0;
+    u8 rowsShown = 0;
     u32 small, vram = 0;
 
     if (e == 0 && split->gpuBgs) {
@@ -5362,8 +6009,36 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
         gpuBg = GpuBgOf(split->snapshot ? st->io : NitroPort_IoReg, split->snapshot ? st->oam : NitroPort_Oam,
                         split->snapshot ? st->lines : NitroPort_LineRegs.active, split->gpuBgs);
     }
-    small = EngineSmallSignature(e, split->snapshot, gpuBg);
-    small = (small ^ (u32)(gpuBg + 1) ^ ((u32)split->gpuBgs << 4)) * 16777619u;
+    if (e == 0 && !split->gpuObjs) {
+        sGpuObjsRefused = 0;
+    }
+    if (e == 0 && split->gpuObjs && split->gpuObj != NULL && split->gpuObjAtlas != NULL && !split->stretch &&
+        !sGpuObjsRefused) {
+        const State2D *st = &sState[0];
+
+        gpuObjs = GpuObjsOf(split->snapshot ? st->io : NitroPort_IoReg, split->snapshot ? st->oam : NitroPort_Oam,
+                            split->snapshot ? st->lines : NitroPort_LineRegs.active);
+    }
+    if (e == 0 && split->gpuCircle && !split->stretch) {
+        const State2D *st = &sState[0];
+
+        const u8 *io = split->snapshot ? st->io : NitroPort_IoReg;
+        const u8(*lines)[NITRO_LINE_REGS] =
+            split->snapshot ? (st->lines ? (const u8(*)[NITRO_LINE_REGS])st->lineRegs : NULL)
+                            : (NitroPort_LineRegs.active ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0] : NULL);
+        int top, bottom, w;
+        u8 shown;
+
+        gpuCircle = 1 + GpuCircleOf(io, lines, split->snapshot ? st->circles : sCircles[0]);
+        if (gpuCircle == 0 && (w = GpuRowsOf(io, lines, &top, &bottom, &shown)) >= 0) {
+            gpuCircle = 3 + w;   /* (a band of lines: 3 + its window) */
+            rowsShown = shown;   /* (what its lines show: in the picture) */
+        }
+    }
+    small = EngineSmallSignature(e, split->snapshot, gpuBg, gpuObjs, gpuCircle);
+    small = (small ^ (u32)(gpuBg + 1) ^ ((u32)split->gpuBgs << 4) ^ ((u32)gpuObjs << 8) ^ ((u32)gpuCircle << 9) ^
+             ((u32)rowsShown << 12)) *
+            16777619u;
 
     /* the canvas, and where the windows are */
     small = (small ^ (u32)split->width ^ ((u32)split->origin << 9) ^
@@ -5377,6 +6052,10 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
         int w;
 
         for (w = 0; w < 2; w++) {
+            if (gpuCircle == w + 1) {
+                small = (small ^ (u32)(c[w].on != 0)) * 16777619u;   /* (where it is and how big: not in the picture) */
+                continue;
+            }
             small = (small ^ (u32)(c[w].on ? 1 + c[w].cx * 7 + c[w].cy * 131 + c[w].r * 4099 : 0)) * 16777619u;
         }
     }

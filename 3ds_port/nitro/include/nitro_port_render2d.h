@@ -24,6 +24,24 @@ extern "C" {
  * 3D, or the display mode isn't the normal one), under is the whole
  * picture and over isn't touched. The caller provides over and overAlpha
  * and the canvas (below); the rest is filled in. */
+/* (the remaster's compositor drawing engine A's sprites itself:
+ * NitroRender2DSplit.gpuObjs) A sprite, one OAM entry, as the picture would
+ * have it: its top left on the canvas (x; y on the picture's lines, the
+ * tall field's), its size and flips, and its pixels' top left in the atlas
+ * (NITRO_GPU_OBJ_ATLAS_W x _H, RGBA5551: red in the top bits, 0 where
+ * it's clear; unflipped). What it is (key: OAM's attributes but its place)
+ * and where OAM has it (rawX 0-511, rawY 0-255) find it again in another
+ * frame's OAM (NitroPort_GpuObjHalfway). */
+typedef struct NitroGpuObj {
+    uint32_t key;
+    short x, y, rawX, rawY;
+    uint8_t w, h, hflip, vflip;
+    uint16_t ax, ay;
+} NitroGpuObj;
+#define NITRO_GPU_OBJ_MAX 128
+#define NITRO_GPU_OBJ_ATLAS_W 256
+#define NITRO_GPU_OBJ_ATLAS_H 128
+
 typedef struct NitroRender2DSplit {
     int has3d;         /* BG0 is the 3D, drawn between under and over */
     int prio3d;        /* its priority, 0-3 */
@@ -47,6 +65,22 @@ typedef struct NitroRender2DSplit {
     int gpuBgLeftOut;
     int gpuBgEva, gpuBgEvb, gpuBgHofs, gpuBgVofs;
     uint64_t gpuBgKey;
+    /* (asked for with gpuObjs, below) Engine A's sprites left out of the
+     * picture for the compositor to draw itself, in front of it all (1),
+     * or drawn in it (0); and those sprites, back to front, into gpuObj
+     * (their pixels into gpuObjAtlas). */
+    int gpuObjsLeftOut;
+    int gpuObjCount;
+    /* (asked for with gpuCircle, below) A circle fade's window left out
+     * of the picture for the compositor to draw (1): the picture drawn as
+     * inside it everywhere; outside it the backdrop (gpuCircleColor,
+     * RGB555); its middle on the canvas (the picture's lines) and radius.
+     * Or (2) a band of lines (the screen opening walking out of a
+     * building): the picture drawn as the band shows it everywhere; the
+     * band's lines gpuCircleY to gpuCircleR - 1 on the canvas, the backdrop
+     * above and below. */
+    int gpuCircleOn;
+    int gpuCircleX, gpuCircleY, gpuCircleR, gpuCircleColor;
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
     int backdrop;      /* the backdrop colour (RGB555): what shows where no layer does */
     uint16_t *over;    /* width x 192 (x height with top) */
@@ -105,6 +139,36 @@ typedef struct NitroRender2DSplit {
      * (NitroPort_Render2DSplitIfChanged): the picture isn't drawn again
      * as it scrolls. The caller's choice, kept by the call. */
     int gpuBgs;
+    /* (the remaster's compositor, which can draw engine A's sprites
+     * itself, each where OAM has it in the frame it shows, halfway in the
+     * in-between frames: the HM cut-in's wind and its Pokemon smooth at 60
+     * frames a second, NitroPort_GpuSprites) Whether it may (1), and the
+     * caller's NITRO_GPU_OBJ_MAX sprites and atlas for them. They're left
+     * out of the picture (gpuObjsLeftOut) when they're all in front of
+     * everything, as the DS draws them anyway: normal sprites (not
+     * affine, semi-transparent, a window's or a bitmap; no mosaic), none
+     * behind a BG, all shown inside and outside the windows, no colour
+     * effect on them, no H-blank effect, their pixels fitting the atlas.
+     * Their places then don't count as a change
+     * (NitroPort_Render2DSplitIfChanged): the picture isn't drawn again as
+     * they move. The caller's choice, kept by the call. */
+    int gpuObjs;
+    NitroGpuObj *gpuObj;
+    uint16_t *gpuObjAtlas;
+    /* (the remaster's compositor, which can draw a circle fade itself:
+     * the screen closing or opening round the player, walking into Eterna
+     * Forest, at 60 frames a second, its radius halfway in the in-between
+     * frames) Whether it may (1). Engine A's circle (NitroPort_SetWindowCircle)
+     * is left out (gpuCircleOn) when it's the only window, nothing shows
+     * outside it (no layer, no effect) and everything shown shows inside it,
+     * with the colour effects; with an H-blank effect, only the windows'
+     * registers differing from line to line. Its radius and middle then don't
+     * count as a change. So is a band of lines (gpuCircleOn 2): the only
+     * window on and empty on every line, each line showing all that's
+     * shown or nothing, the lines differing only in the windows' registers
+     * and WININ/WINOUT; which lines it has doesn't count as a change. The
+     * caller's choice, kept by the call. */
+    int gpuCircle;
 } NitroRender2DSplit;
 #define NITRO_RENDER2D_MAX_H 256
 /* (the game's thread, when it hands a frame to a drawing thread) Take the
@@ -139,6 +203,32 @@ unsigned NitroPort_Render2DMasterBright(int engine, int snapshot);
 int NitroPort_Render2DBgPicture(int bg, int snapshot, uint16_t *out);
 /* Engine A's BG scrolls now (BG0-3's HOFS and VOFS, 9 bits each). */
 void NitroPort_Render2DBgOffsets(uint16_t out[8]);
+
+/* (the game's thread, as it hands a frame over) Engine A's sprites as OAM
+ * has them now, placed as the last picture that left them out had them
+ * (NitroRender2DSplit.gpuObjsLeftOut: its canvas; their atlas fields 0),
+ * in OAM order: how many (at most max), or -1 when no picture has left
+ * them out since they were last drawn in one. */
+int NitroPort_Render2DObjPlaces(int engine, NitroGpuObj *out, int max);
+/* The sprites to draw in the frame between two frames (before and after:
+ * NitroPort_Render2DObjPlaces), each where it is halfway: each sprite of
+ * before found in after (the nearest of its kind, at most 96 pixels across
+ * and 32 down away, OAM's x going round 512 and its y 256; the nearest of
+ * its kind in before as well; else, its picture changed, the nearest of its
+ * size within 32 across and 16 down, with after's picture); one going off or just come on moved half as
+ * far as most of its kind, back or on (or, where its kind doesn't move, one
+ * going off where it is, one come on not yet). Back to front (the DS's
+ * lowest priority first, of each the last in OAM first), into out (at most
+ * max): how many. nBefore < 0: after's, as they are. */
+int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const NitroGpuObj *after, int nAfter,
+                             NitroGpuObj *out, int max);
+
+/* (the game's thread, as it hands a frame over) Engine A's circle fade as
+ * it is now, on the canvas of the last picture that left it out
+ * (gpuCircleOn): 1 with its middle and radius, 2 a band of lines (y to
+ * r - 1, x 0), 0 when it's off, -1 when no picture has left one out since
+ * one was last drawn in a picture. */
+int NitroPort_Render2DCircleNow(int engine, int *x, int *y, int *r);
 
 /* One BG of an engine alone (for capturing it: nitro_port_wideart.h), on
  * the canvas layout gives (width, origin, clip, anchorWindows; NULL: the

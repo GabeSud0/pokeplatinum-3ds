@@ -134,6 +134,13 @@ typedef struct LayerSet {
     void *bgTex;
     uint64_t bgKey;
     int bgValid;
+    /* (the upper screen's) Engine A's sprites drawn here (ComposeLayers.
+     * gpuObjCount; -1: in the picture): their pixels, 2x2 texels a pixel
+     * (OBJ_TEX_W x OBJ_TEX_H RGBA5551, tiled), and what each sprite shows
+     * and where in it (as the picture was drawn). */
+    void *objTex;
+    int objCount;
+    NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
 } LayerSet;
 
 /* BG pictures: 2x2 texels a pixel of a 256 x 256 map (and a row of tiles
@@ -143,11 +150,36 @@ typedef struct LayerSet {
 #define BG_TEX_ALLOC (BG_TEX_BYTES + BG_TEX_W * 8 * 2)
 static int sBgsAvailable;   /* (the upper screen's sets have their bgTex) */
 static C3D_Tex sBgTex;
+/* Sprites' pictures: 2x2 texels a pixel of the atlas (and a row of tiles
+ * more, as BG_TEX_ALLOC). */
+#define OBJ_TEX_W (NITRO_GPU_OBJ_ATLAS_W * 2)
+#define OBJ_TEX_H (NITRO_GPU_OBJ_ATLAS_H * 2)
+#define OBJ_TEX_BYTES (OBJ_TEX_W * OBJ_TEX_H * 2)
+#define OBJ_TEX_ALLOC (OBJ_TEX_BYTES + OBJ_TEX_W * 8 * 2)
+static int sObjsAvailable;  /* (the upper screen's sets have their objTex) */
+static C3D_Tex sObjTex;
+/* Engine A's sprites by frame (NitroPort_ComposeNoteObjs): the last
+ * OBJ_PLACES_KEPT frames the game noted. */
+#define OBJ_PLACES_KEPT 8
+static struct {
+    uint32_t stamp, swaps;
+    int count, valid;
+    NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
+} sObjPlaces[OBJ_PLACES_KEPT];
+static unsigned sObjPlacesNext;
+static LightLock sObjPlacesLock;
+/* Engine A's master brightness and circle fade by frame
+ * (NitroPort_ComposeNoteFrame). */
+static struct {
+    uint32_t stamp, swaps;
+    int valid, bright, on, x, y, r;
+} sCircleNotes[OBJ_PLACES_KEPT];
+static unsigned sCircleNotesNext;
 /* Engine A's BG scrolls by frame (NitroPort_ComposeNoteBgOffsets): the
  * last BG_OFS_KEPT frames the game handed over. */
 #define BG_OFS_KEPT 16
 static struct {
-    uint32_t stamp;
+    uint32_t stamp, swaps;
     uint16_t ofs[8];
     int valid;
 } sBgOfs[BG_OFS_KEPT];
@@ -302,8 +334,9 @@ static int sQuadVertices;
 /* (a frame's quads: 32, an H-blank effect's runs' rear planes and
  * tints, 2 x 24 at most: LINE_RUNS_MAX, LINE_RUNS_STEREO a side; the
  * menu's panel put together, 96 at most: PANEL_PIECES_MAX, their sides and
- * brightness) */
-#define MAX_QUAD_VERTICES (6 * (32 + 2 * 24 + 96))
+ * brightness; engine A's sprites drawn here, each eye's: draw_gpu_objs) */
+#define CIRCLE_SEGMENTS 96
+#define MAX_QUAD_VERTICES (6 * (32 + 2 * 24 + 96 + 2 * 2 * NITRO_GPU_OBJ_MAX + 2 * CIRCLE_SEGMENTS))
 /* ------------------------------------------------- frames in flight
  * A frame's commands are built while the GPU draws the frame before
  * (NitroPort_PicaFrameOpen): its GPU operations (fills, command lists,
@@ -650,10 +683,13 @@ static void free_sets(Screen *scr)
         if (scr->set[i].under) linearFree(scr->set[i].under);
         if (scr->set[i].over) linearFree(scr->set[i].over);
         if (scr->set[i].bgTex) linearFree(scr->set[i].bgTex);
+        if (scr->set[i].objTex) linearFree(scr->set[i].objTex);
         scr->set[i].under = NULL;
         scr->set[i].over = NULL;
         scr->set[i].bgTex = NULL;
         scr->set[i].bgValid = 0;
+        scr->set[i].objTex = NULL;
+        scr->set[i].objCount = -1;
     }
 }
 
@@ -679,6 +715,7 @@ static void free_all(void)
         free_sets(&sScreens[s]);
     }
     sBgsAvailable = 0;
+    sObjsAvailable = 0;
     NitroPort_LowerMenuSetAvailable(0);
     for (i = 0; i < 2; i++) {
         if (sMenuTexData[i]) {
@@ -839,6 +876,9 @@ static int compose_init(const ComposeConfig *config, int small)
     LightLock_Init(&sSetLock);
     LightLock_Init(&sBgOfsLock);
     memset(sBgOfs, 0, sizeof(sBgOfs));
+    LightLock_Init(&sObjPlacesLock);
+    memset(sObjPlaces, 0, sizeof(sObjPlaces));
+    memset(sCircleNotes, 0, sizeof(sCircleNotes));
     LightLock_Init(&sPresentLock);
     sHeld = 0;
     for (c = 0; c < 32768; c++) {
@@ -1026,6 +1066,24 @@ static int compose_init(const ComposeConfig *config, int small)
         }
         NitroPort_Log("[compose] not enough memory for the weather's BG on the GPU: drawn with the 2D");
     }
+    /* (as well: the sprites drawn by the GPU, NitroPort_ComposeDrawsObjs) */
+    sObjsAvailable = 1;
+    for (i = 0; i < SETS && sObjsAvailable; i++) {
+        sScreens[0].set[i].objTex = linearAlloc(OBJ_TEX_ALLOC);
+        sScreens[0].set[i].objCount = -1;
+        if (!sScreens[0].set[i].objTex) {
+            sObjsAvailable = 0;
+        }
+    }
+    if (!sObjsAvailable) {
+        for (i = 0; i < SETS; i++) {
+            if (sScreens[0].set[i].objTex) {
+                linearFree(sScreens[0].set[i].objTex);
+                sScreens[0].set[i].objTex = NULL;
+            }
+        }
+        NitroPort_Log("[compose] not enough memory for sprites on the GPU: drawn with the 2D");
+    }
     NitroPort_LowerMenuSetClock(NitroPort_ComposeVBlanks);   /* (the panel's fades) */
     NitroPort_LowerMenuSetAvailable(sMenuTexData[0] != NULL);
     sGxRecording = 0;
@@ -1083,31 +1141,224 @@ int NitroPort_ComposeDrawsBgs(void)
     return sReady && sBgsAvailable;
 }
 
+int NitroPort_ComposeDrawsObjs(void)
+{
+    return sReady && sObjsAvailable;
+}
 
-void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, const uint16_t ofs[8])
+void NitroPort_ComposeNoteObjs(uint32_t stamp, uint32_t swaps, const NitroGpuObj *objs, int count)
+{
+    if (count < 0 || count > NITRO_GPU_OBJ_MAX) {
+        return;
+    }
+    LightLock_Lock(&sObjPlacesLock);
+    sObjPlaces[sObjPlacesNext].stamp = stamp;
+    sObjPlaces[sObjPlacesNext].swaps = swaps;
+    sObjPlaces[sObjPlacesNext].count = count;
+    memcpy(sObjPlaces[sObjPlacesNext].objs, objs, (size_t)count * sizeof(objs[0]));
+    sObjPlaces[sObjPlacesNext].valid = 1;
+    sObjPlacesNext = (sObjPlacesNext + 1u) % OBJ_PLACES_KEPT;
+    LightLock_Unlock(&sObjPlacesLock);
+}
+
+void NitroPort_ComposeNoteFrame(uint32_t stamp, uint32_t swaps, int bright, int on, int x, int y, int r)
+{
+    LightLock_Lock(&sObjPlacesLock);
+    sCircleNotes[sCircleNotesNext].stamp = stamp;
+    sCircleNotes[sCircleNotesNext].swaps = swaps;
+    sCircleNotes[sCircleNotesNext].bright = bright;
+    sCircleNotes[sCircleNotesNext].on = on;
+    sCircleNotes[sCircleNotesNext].x = x;
+    sCircleNotes[sCircleNotesNext].y = y;
+    sCircleNotes[sCircleNotesNext].r = r;
+    sCircleNotes[sCircleNotesNext].valid = 1;
+    sCircleNotesNext = (sCircleNotesNext + 1u) % OBJ_PLACES_KEPT;
+    LightLock_Unlock(&sObjPlacesLock);
+}
+
+/* The frame the DS shows a scene in, as noted (NitroPort_ComposeNoteFrame;
+ * found as objs_of): its index in sCircleNotes, or -1. Under
+ * sObjPlacesLock. */
+static int frame_note_of(uint32_t seq, uint32_t stamp)
+{
+    int i, found = -1;
+    uint32_t best = 0;
+
+    for (i = 0; i < OBJ_PLACES_KEPT; i++) {
+        if (sCircleNotes[i].valid && sCircleNotes[i].swaps == seq &&
+            (found < 0 || (int32_t)(sCircleNotes[i].stamp - best) > 0)) {
+            found = i;
+            best = sCircleNotes[i].stamp;
+        }
+    }
+    if (found < 0) {
+        for (i = 0; i < OBJ_PLACES_KEPT; i++) {
+            uint32_t d = sCircleNotes[i].stamp - stamp;
+
+            if (sCircleNotes[i].valid && d >= 1u && d <= 4u && (found < 0 || d < best)) {
+                found = i;
+                best = d;
+            }
+        }
+    }
+    return found;
+}
+
+/* Whether the frame the DS shows a scene in (its SWAP_BUFFERS count) is
+ * still to be noted: the game notes a frame in its V-blank work, a V-blank
+ * after the scene's SWAP_BUFFERS, and the display thread has the scene as
+ * soon as the 3D's made it. An in-between scene drawn before then had no
+ * scrolls, sprites, circle or brightness of its own frame and took those
+ * of the frame before (or the picture's, older still): Eterna Forest's
+ * light shaking as the player walked, the HM cut-in's streaks jumping
+ * back a step and the circle fade's in-between frames standing still
+ * (videos at 120 frames a second, 2026-10-31). Not when a newer frame's
+ * been noted already (that scene's frame left out: nothing to wait for). */
+static int frame_note_due(uint32_t seq)
+{
+    int i, any = 0, due = 1;
+
+    LightLock_Lock(&sObjPlacesLock);
+    for (i = 0; i < OBJ_PLACES_KEPT; i++) {
+        if (sCircleNotes[i].valid) {
+            any = 1;
+            if ((int32_t)(sCircleNotes[i].swaps - seq) >= 0) {
+                due = 0;
+            }
+        }
+    }
+    LightLock_Unlock(&sObjPlacesLock);
+    return any && due;
+}
+
+/* Engine A's circle fade as the DS shows it with a scene: whether it's
+ * known and on (1, or 2 for a band of lines: NitroPort_Render2DCircleNow),
+ * its middle and radius (a band's first line and the line after its last);
+ * the V-blank it was noted in (noted). */
+static int circle_of(uint32_t seq, uint32_t stamp, int *x, int *y, int *r, uint32_t *noted)
+{
+    int found, on = 0;
+
+    LightLock_Lock(&sObjPlacesLock);
+    found = frame_note_of(seq, stamp);
+    if (found >= 0 && sCircleNotes[found].on > 0) {
+        on = sCircleNotes[found].on;   /* (1 a circle, 2 a band of lines) */
+        *x = sCircleNotes[found].x;
+        *y = sCircleNotes[found].y;
+        *r = sCircleNotes[found].r;
+        *noted = sCircleNotes[found].stamp;
+    }
+    LightLock_Unlock(&sObjPlacesLock);
+    return on;
+}
+
+/* Engine A's master brightness as the DS shows it with a scene, as a
+ * signed factor (+ brighter, - darker, 0-16): whether it's known; the
+ * V-blank it was noted in (noted). */
+static int bright_of(uint32_t seq, uint32_t stamp, int *v, uint32_t *noted)
+{
+    int found;
+
+    LightLock_Lock(&sObjPlacesLock);
+    found = frame_note_of(seq, stamp);
+    if (found >= 0) {
+        int b = sCircleNotes[found].bright, mode = (b >> 14) & 3, f = b & 31;
+
+        *v = mode == 1 ? (f > 16 ? 16 : f) : mode == 2 ? -(f > 16 ? 16 : f) : 0;
+        *noted = sCircleNotes[found].stamp;
+    }
+    LightLock_Unlock(&sObjPlacesLock);
+    return found >= 0;
+}
+
+/* Whether a picture (its 2D's V-blank, set) is of the frame noted in a
+ * V-blank or newer: the frame's brightness or circle goes with it. A
+ * picture older than that (the 2D's drawer behind, a map's first frames)
+ * keeps its own: walking out of a building, the outside showed whole at
+ * full brightness before the opening band came (the picture from before
+ * the band, with the band's frames' brightness), 2026-10-31. (A V-blank's
+ * slack: the frame's note and its 2D's stamp are read a moment apart.) */
+static int picture_of_frame(uint32_t set, uint32_t noted)
+{
+    return (int32_t)(set - noted) >= -1;
+}
+
+/* Engine A's sprites as the DS shows them with a scene (its swap_seq and
+ * stamp): the last frame noted with its SWAP_BUFFERS made (as bg_offsets_of).
+ * How many, or -1. */
+static int objs_of(uint32_t seq, uint32_t stamp, NitroGpuObj *out)
+{
+    int i, found = -1, n = -1;
+    uint32_t best = 0;
+
+    LightLock_Lock(&sObjPlacesLock);
+    for (i = 0; i < OBJ_PLACES_KEPT; i++) {
+        if (sObjPlaces[i].valid && sObjPlaces[i].swaps == seq &&
+            (found < 0 || (int32_t)(sObjPlaces[i].stamp - best) > 0)) {
+            found = i;
+            best = sObjPlaces[i].stamp;
+        }
+    }
+    if (found < 0) {
+        for (i = 0; i < OBJ_PLACES_KEPT; i++) {
+            uint32_t d = sObjPlaces[i].stamp - stamp;
+
+            if (sObjPlaces[i].valid && d >= 1u && d <= 4u && (found < 0 || d < best)) {
+                found = i;
+                best = d;
+            }
+        }
+    }
+    if (found >= 0) {
+        n = sObjPlaces[found].count;
+        memcpy(out, sObjPlaces[found].objs, (size_t)n * sizeof(out[0]));
+    }
+    LightLock_Unlock(&sObjPlacesLock);
+    return n;
+}
+
+
+void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const uint16_t ofs[8])
 {
     LightLock_Lock(&sBgOfsLock);
     sBgOfs[sBgOfsNext].stamp = stamp;
+    sBgOfs[sBgOfsNext].swaps = swaps;
     memcpy(sBgOfs[sBgOfsNext].ofs, ofs, sizeof(sBgOfs[0].ofs));
     sBgOfs[sBgOfsNext].valid = 1;
     sBgOfsNext = (sBgOfsNext + 1u) % BG_OFS_KEPT;
     LightLock_Unlock(&sBgOfsLock);
 }
 
-/* The scrolls the DS shows a scene of this stamp with: the first frame
- * handed over after it (its V-blank set them). Whether they're known. */
-static int bg_offsets_after(uint32_t stamp, uint16_t out[8])
+/* The scrolls the DS shows a scene with: a frame handed over after its
+ * SWAP_BUFFERS (its V-blank set them), the game's count of them then the
+ * scene's (swap_seq); the last such (the game making no new scene for a
+ * while, a map's change: the frames since, as they go on). Not by the V-blank clock alone: the game's
+ * frames don't keep step with the 3DS's V-blanks, and a frame handed over
+ * in the same V-blank as the scene was made was taken for the one before
+ * it, or the one after it for it, now and then: the field's weather (Eterna
+ * Forest's light) went back and forth as the player walked, 2026-10-30.
+ * That only when none was noted so (the nearest within 4 V-blanks after
+ * its stamp). Whether they're known. */
+static int bg_offsets_of(uint32_t seq, uint32_t stamp, uint16_t out[8])
 {
     int i, found = -1;
     uint32_t best = 0;
 
     LightLock_Lock(&sBgOfsLock);
     for (i = 0; i < BG_OFS_KEPT; i++) {
-        uint32_t d = sBgOfs[i].stamp - stamp;
-
-        if (sBgOfs[i].valid && d >= 1u && d <= 4u && (found < 0 || d < best)) {
+        if (sBgOfs[i].valid && sBgOfs[i].swaps == seq && (found < 0 || (int32_t)(sBgOfs[i].stamp - best) > 0)) {
             found = i;
-            best = d;
+            best = sBgOfs[i].stamp;
+        }
+    }
+    if (found < 0) {
+        for (i = 0; i < BG_OFS_KEPT; i++) {
+            uint32_t d = sBgOfs[i].stamp - stamp;
+
+            if (sBgOfs[i].valid && d >= 1u && d <= 4u && (found < 0 || d < best)) {
+                found = i;
+                best = d;
+            }
         }
     }
     if (found >= 0) {
@@ -1319,6 +1570,8 @@ int NitroPort_ComposePublish(int engine, int screen)
     set->info.over = NULL;
     set->info.overAlpha = NULL;
     set->info.gpuBgPicture = NULL;   /* (the drawer's: the set has its own, bgTex) */
+    set->info.gpuObj = NULL;         /* (the same: objs, objTex) */
+    set->info.gpuObjAtlas = NULL;
     set->overEmpty = 1;
     set->info.height = h;
     set->underColor = l->displayOff ? -1 : uniform_color(l->under, w * h);
@@ -1343,6 +1596,14 @@ int NitroPort_ComposePublish(int engine, int screen)
         GSPGPU_FlushDataCache(set->bgTex, BG_TEX_BYTES);
         set->bgKey = l->gpuBgKey;
         set->bgValid = 1;
+    }
+    /* Engine A's sprites drawn here: their pixels, and what each shows. */
+    set->objCount = -1;
+    if (!l->displayOff && l->gpuObjCount >= 0 && set->objTex && l->gpuObj && l->gpuObjAtlas) {
+        NitroPort_Double2xTiled16(l->gpuObjAtlas, NITRO_GPU_OBJ_ATLAS_W, NITRO_GPU_OBJ_ATLAS_H, set->objTex, OBJ_TEX_W);
+        GSPGPU_FlushDataCache(set->objTex, OBJ_TEX_BYTES);
+        memcpy(set->objs, l->gpuObj, (size_t)l->gpuObjCount * sizeof(set->objs[0]));
+        set->objCount = l->gpuObjCount;
     }
     LightLock_Lock(&sSetLock);
     set->writing = 0;
@@ -1973,19 +2234,45 @@ static void tint_3d(const ComposeLayers *info, const PicaRect *rect)
 /* The master brightness: the whole screen towards white or black by
  * factor / 16 (the menu's frame too, on the lower screen: it fades with
  * the game's). */
-static void master_brightness(const Screen *scr, const ComposeLayers *info)
+/* The master brightness over a screen. scene: (engine A's, with its 3D)
+ * as the game had it in the frame the DS shows the scene in, halfway to
+ * that from the frame before in an in-between scene (the field fading to
+ * white or black, walking out of Eterna Forest, at 60 frames a second where
+ * the game changes it 30 times: in 32nds, the DS's 16ths each halved); as
+ * the picture had it where that isn't known, or without one. */
+static void master_brightness_of(const Screen *scr, const ComposeLayers *info, const NitroGx3dScene *scene)
 {
-    int mode = (info->masterBright >> 14) & 3, factor = info->masterBright & 31;
+    int mode = (info->masterBright >> 14) & 3, factor = info->masterBright & 31, a, b;
+    int v32;   /* (32nds: + brighter, - darker) */
+    uint32_t at = 0, bt = 0;
 
     if (factor > 16) {
         factor = 16;
     }
-    if (factor && (mode == 1 || mode == 2)) {
+    v32 = mode == 1 ? 2 * factor : mode == 2 ? -2 * factor : 0;
+    if (scene != NULL && bright_of(scene->swap_seq, scene->stamp, &a, &at)) {
+        uint32_t from = at;
+        int both = (scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) &&
+                   bright_of(scene->swap_seq_before, scene->stamp_before, &b, &bt);
+
+        if (both) {
+            from = bt;   /* (an in-between scene: its picture is the frame before's) */
+        }
+        if (picture_of_frame(info->stamp, from)) {
+            v32 = both ? a + b : 2 * a;
+        }
+    }
+    if (v32 != 0) {
         quad_combiner(0);
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ZERO);
         quad(0, 0, (float)scr->width, SCREEN_H, 0.0f, 0, 0, 0, 0,
-             (mode == 1 ? 0xFFFFFF00u : 0x00000000u) | ((u32)factor * 255u / 16u));
+             (v32 > 0 ? 0xFFFFFF00u : 0x00000000u) | ((u32)(v32 > 0 ? v32 : -v32) * 255u / 32u));
     }
+}
+
+static void master_brightness(const Screen *scr, const ComposeLayers *info)
+{
+    master_brightness_of(scr, info, NULL);
 }
 
 int NitroPort_ComposeLowerMenuShown(void)
@@ -2429,6 +2716,208 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
 }
 
 /* One screen (one eye of it), into its render target. */
+/* A circle fade the compositor draws (ComposeLayers.gpuCircle): outside the
+ * circle its colour, over everything (pic: the picture's rectangle on the
+ * screen, sx and sy its pixels' size). The circle where the game had it in
+ * the frame the DS shows the scene in, halfway to that from the frame
+ * before in an in-between scene (walking into Eterna Forest: the screen
+ * closing round the player at 60 frames a second, as the field does, where
+ * the game changes it 30 times); as the picture had it where that isn't
+ * known. A ring of CIRCLE_SEGMENTS pieces, from the circle to past the
+ * screen's corners. */
+static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *scene, const PicaRect *pic, float sx,
+                             float sy)
+{
+    int x = info->gpuCircleX, y = info->gpuCircleY, r = info->gpuCircleR, ax, ay, ar, bx, by, br, i, k;
+    uint32_t noted;
+    float cx, cy, inner, outer;
+    u32 rgba = rgba_of((uint16_t)info->gpuCircleColor, 255);
+    extern u32 gpuCmdBufSize, gpuCmdBufOffset;
+
+    /* (any picture of the circle fade goes with any circle: drawn as inside
+     * the circle all over, it isn't drawn again as the circle changes) */
+    if (scene != NULL && circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted) == info->gpuCircle) {
+        x = ax, y = ay, r = ar;
+        if ((scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) &&
+            circle_of(scene->swap_seq_before, scene->stamp_before, &bx, &by, &br, &noted) == info->gpuCircle) {
+            x = (bx + ax) / 2, y = (by + ay) / 2, r = (br + ar) / 2;
+        }
+    }
+    if (info->gpuCircle == 2) {
+        /* A band of lines (walking out of a building): the backdrop above
+         * and below it, its edges halfway in the in-between frames (the
+         * game's band 32 lines taller every other frame: 16 each frame). */
+        float top = pic->y0 + (float)y * sy, bottom = pic->y0 + (float)r * sy, t;
+
+        if (sConfig.flipV) {
+            t = top;
+            top = pic->y0 + pic->y1 - bottom;
+            bottom = pic->y0 + pic->y1 - t;
+        }
+        if (sQuadVertices + 12 > MAX_QUAD_VERTICES) {
+            return;
+        }
+        quad_combiner(0);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+        if (top > pic->y0) {
+            quad(pic->x0, pic->y0, pic->x1, top, 0.0f, 0, 0, 0, 0, rgba);
+        }
+        if (bottom < pic->y1) {
+            quad(pic->x0, bottom > pic->y0 ? bottom : pic->y0, pic->x1, pic->y1, 0.0f, 0, 0, 0, 0, rgba);
+        }
+        NitroPort_PicaProfileMark("the band of lines");
+        return;
+    }
+    if (sQuadVertices + 6 * CIRCLE_SEGMENTS > MAX_QUAD_VERTICES || gpuCmdBufSize - gpuCmdBufOffset < 1024u) {
+        return;
+    }
+    cx = pic->x0 + (float)x * sx;
+    cy = pic->y0 + (float)y * sy;
+    if (sConfig.flipV) {
+        cy = pic->y0 + pic->y1 - cy;
+    }
+    inner = (float)(r < 0 ? 0 : r) * sx;
+    outer = inner + 2000.0f;
+    for (i = 0; i < CIRCLE_SEGMENTS; i++) {
+        static const int corner[6] = { 0, 1, 2, 2, 1, 3 };   /* (inner a, outer a, inner b; inner b, outer a, outer b) */
+        float a0 = (float)i * (2.0f * 3.14159265f / CIRCLE_SEGMENTS), a1 = (float)(i + 1) * (2.0f * 3.14159265f / CIRCLE_SEGMENTS);
+        float px[4], py[4];
+
+        px[0] = cx + inner * cosf(a0), py[0] = cy + inner * sinf(a0) * (sy / sx);
+        px[1] = cx + outer * cosf(a0), py[1] = cy + outer * sinf(a0);
+        px[2] = cx + inner * cosf(a1), py[2] = cy + inner * sinf(a1) * (sy / sx);
+        px[3] = cx + outer * cosf(a1), py[3] = cy + outer * sinf(a1);
+        for (k = 0; k < 6; k++) {
+            NitroGx3dGpuVertex *v = &sQuads[sQuadVertices + i * 6 + k];
+
+            v->position[0] = px[corner[k]];
+            v->position[1] = py[corner[k]];
+            v->position[2] = 0.0f;
+            v->position[3] = 1.0f;
+            v->color[0] = (uint8_t)(rgba >> 24);
+            v->color[1] = (uint8_t)(rgba >> 16);
+            v->color[2] = (uint8_t)(rgba >> 8);
+            v->color[3] = (uint8_t)rgba;
+            v->uv[0] = 0.0f;
+            v->uv[1] = 0.0f;
+        }
+    }
+    quad_combiner(0);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+    NitroPort_PicaBindVertices(sQuads);
+    C3D_DrawArrays(GPU_TRIANGLES, sQuadVertices, 6 * CIRCLE_SEGMENTS);
+    sQuadVertices += 6 * CIRCLE_SEGMENTS;
+    NitroPort_PicaProfileMark("the circle fade");
+}
+
+/* Engine A's sprites the compositor draws (LayerSet.objs, objTex), in front
+ * of the rest of the picture (pic: its rectangle on the screen, sx and sy
+ * its pixels' size): each where the game had it in the frame the DS shows
+ * the scene in (objs_of), halfway to that from the frame before in an
+ * in-between scene (NitroPort_GpuObjsBetween: the cut-in's wind blowing on
+ * at 60 frames a second, as the field does, where the game moves it 30
+ * times); as the set has them where that isn't known. Each with the set's
+ * picture of what it shows (one the set has no picture of isn't drawn: the
+ * next set has it). Back to front, cut at the picture's edges. */
+static void draw_gpu_objs(const LayerSet *set, const NitroGx3dScene *scene, const PicaRect *pic, float sx, float sy,
+                          int linear)
+{
+    static NitroGpuObj before[NITRO_GPU_OBJ_MAX], after[NITRO_GPU_OBJ_MAX], shown[2 * NITRO_GPU_OBJ_MAX];
+    const NitroGpuObj *list = set->objs;
+    int n = set->objCount, nb = -1, na = -1, k;
+
+    if (scene != NULL) {
+        na = objs_of(scene->swap_seq, scene->stamp, after);
+        if ((scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) && na >= 0) {
+            nb = objs_of(scene->swap_seq_before, scene->stamp_before, before);
+        }
+    }
+    if (na >= 0) {
+        n = NitroPort_GpuObjsBetween(before, nb, after, na, shown, 2 * NITRO_GPU_OBJ_MAX);
+        list = shown;
+    }
+    make_texture(&sObjTex, set->objTex, GPU_RGBA5551, OBJ_TEX_W, OBJ_TEX_H, linear, GPU_CLAMP_TO_EDGE);
+    C3D_TexBind(0, &sObjTex);
+    quad_combiner(1);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+    for (k = 0; k < n; k++) {
+        const NitroGpuObj *o = &list[k], *g = NULL;
+        float x0, y0, x1, y1, u0, u1, vT, vB, t;
+        int i;
+
+        for (i = 0; i < set->objCount && g == NULL; i++) {
+            if (set->objs[i].key == o->key) {
+                g = &set->objs[i];
+            }
+        }
+        if (g == NULL) {
+            /* (its picture not in the picture's atlas: a frame of its
+             * animation newer than the 2D drawn yet; the nearest of its size
+             * there instead, its picture before: the HM cut-in's trainer went
+             * out for a frame as it swung, 2026-10-31) */
+            int bestD = 0;
+
+            for (i = 0; i < set->objCount; i++) {
+                const NitroGpuObj *c = &set->objs[i];
+                int dx = c->x - o->x, dy = c->y - o->y, d;
+
+                if (c->w != o->w || c->h != o->h || dx < -32 || dx > 32 || dy < -16 || dy > 16) {
+                    continue;
+                }
+                d = dx * dx + dy * dy;
+                if (g == NULL || d < bestD) {
+                    g = c;
+                    bestD = d;
+                }
+            }
+        }
+        if (g == NULL) {
+            continue;
+        }
+        x0 = pic->x0 + (float)o->x * sx;
+        y0 = pic->y0 + (float)o->y * sy;
+        x1 = x0 + (float)o->w * sx;
+        y1 = y0 + (float)o->h * sy;
+        u0 = (float)(g->ax * 2) / (float)OBJ_TEX_W;
+        u1 = (float)((g->ax + o->w) * 2) / (float)OBJ_TEX_W;
+        vT = 1.0f - (float)(g->ay * 2) / (float)OBJ_TEX_H;
+        vB = 1.0f - (float)((g->ay + o->h) * 2) / (float)OBJ_TEX_H;
+        if (o->hflip) {
+            t = u0, u0 = u1, u1 = t;
+        }
+        if (o->vflip != (sConfig.flipV != 0)) {
+            t = vT, vT = vB, vB = t;
+        }
+        if (sConfig.flipV) {
+            /* (the picture flipped as a whole: the sprite's place too) */
+            t = y0;
+            y0 = pic->y0 + pic->y1 - y1;
+            y1 = pic->y0 + pic->y1 - t;
+        }
+        /* (cut at the picture's edges, its texture with it) */
+        if (x0 < pic->x0) {
+            u0 += (u1 - u0) * (pic->x0 - x0) / (x1 - x0);
+            x0 = pic->x0;
+        }
+        if (x1 > pic->x1) {
+            u1 -= (u1 - u0) * (x1 - pic->x1) / (x1 - x0);
+            x1 = pic->x1;
+        }
+        if (y0 < pic->y0) {
+            vT += (vB - vT) * (pic->y0 - y0) / (y1 - y0);
+            y0 = pic->y0;
+        }
+        if (y1 > pic->y1) {
+            vB -= (vB - vT) * (y1 - pic->y1) / (y1 - y0);
+            y1 = pic->y1;
+        }
+        if (x0 < x1 && y0 < y1) {
+            quad(x0, y0, x1, y1, 0.0f, u0, vT, u1, vB, 0xFFFFFFFFu);
+        }
+    }
+    NitroPort_PicaProfileMark("the sprites");
+}
+
 static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx3dScene *scene, float stereo,
                         int edges, int underCleared)
 {
@@ -2677,10 +3166,11 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             /* (the scrolls of the frame the DS shows the scene in; an
              * in-between scene's halfway from the scene before's; the
              * scene's own, a frame behind, when they aren't known) */
-            if (bg_offsets_after(scene->stamp, now)) {
+            if (bg_offsets_of(scene->swap_seq, scene->stamp, now)) {
                 hofs = now[info->gpuBg * 2];
                 vofs = now[info->gpuBg * 2 + 1];
-                if (scene->stamp_before != scene->stamp && bg_offsets_after(scene->stamp_before, before)) {
+                if ((scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) &&
+                    bg_offsets_of(scene->swap_seq_before, scene->stamp_before, before)) {
                     hofs = bg_offset_halfway(before[info->gpuBg * 2], hofs);
                     vofs = bg_offset_halfway(before[info->gpuBg * 2 + 1], vofs);
                 }
@@ -2720,9 +3210,18 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
                            GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
             quad(pic.x0, y0, pic.x1, y1, 0.0f, 0, v0, u1, v1, 0xFFFFFFFFu);
         }
+        /* 5b. Engine A's sprites drawn here (ComposeLayers.gpuObjCount: the
+         * HM cut-in's), in front of it all. */
+        if (info->gpuObjCount >= 0 && set->objTex && set->objCount > 0) {
+            draw_gpu_objs(set, scene, &pic, scale, (pic.y1 - pic.y0) / (float)rows, linear);
+        }
     }
-    /* 6. The master brightness. */
-    master_brightness(scr, info);
+    /* 5c. A circle fade drawn here (ComposeLayers.gpuCircle). */
+    if (info->gpuCircle) {
+        draw_circle_mask(info, has3d ? scene : NULL, &pic, scale, (pic.y1 - pic.y0) / (float)rows);
+    }
+    /* 6. The master brightness (with the 3D: engine A's, by frame). */
+    master_brightness_of(scr, info, has3d && scr == &sScreens[0] ? scene : NULL);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
     NitroPort_PicaProfileMark(has3d ? "the 2D in front" : "the 2D");
 }
@@ -3174,6 +3673,15 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
          * seemed to shake as the player walked). */
         if (need[s] && has3d && !forced && !flush && !mid && sceneSerial != scr->shownScene &&
             !paired_2d_ready(scene->stamp)) {
+            need[s] = 0;
+            sSceneWaiting = 1;
+            sSceneWaitingSerial = sceneSerial;
+        }
+        /* A scene or its in-between scene: once the game has noted the
+         * frame the DS shows the scene in (frame_note_due), its scrolls,
+         * sprites, circle and brightness. */
+        if (need[s] && has3d && !forced && !flush && scene != NULL && sceneSerial != scr->shownScene &&
+            frame_note_due(scene->swap_seq)) {
             need[s] = 0;
             sSceneWaiting = 1;
             sSceneWaitingSerial = sceneSerial;
