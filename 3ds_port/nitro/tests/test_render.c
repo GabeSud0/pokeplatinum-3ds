@@ -2376,6 +2376,114 @@ static void test_wide_window_edges(void)
  * bands and a tall field's lines above and below the DS's included,
  * whatever the game's windows on each line say (theirs stop at the DS's
  * columns: the lines it covers whole reached the screen's edges). */
+/* The screen opening as a band of lines (walking out of a building): the
+ * window empty, each line's WINOUT showing all or nothing (an H-blank
+ * effect). Drawn in the picture; drawn by the compositor with gpuCircle
+ * (gpuCircleOn 2): the picture whole, the band's lines on the canvas, the
+ * band growing not a change. */
+static void SetBandLines(int top, int bottom)
+{
+    int y;
+
+    for (y = 0; y < 192; y++) {
+        memcpy(NitroPort_LineRegs.regs[0][y], NitroPort_IoReg, NITRO_LINE_REGS);
+        memcpy(NitroPort_LineRegs.regs[1][y], NitroPort_IoReg + 0x1000, NITRO_LINE_REGS);
+        /* (DISPSTAT and VCOUNT: 0 in a line's copy, as the port makes them;
+         * the frame's say V-blank) */
+        memset(NitroPort_LineRegs.regs[0][y] + 4, 0, 4);
+        if (y >= top && y < bottom) {
+            NitroPort_LineRegs.regs[0][y][0x48] = 0x20;   /* WININ: nothing */
+            NitroPort_LineRegs.regs[0][y][0x4A] = 0x3F;   /* WINOUT: all */
+        }
+    }
+    NitroPort_LineRegs.active = 1;
+    NitroPort_LineRegs.serial++;
+}
+
+static void test_window_rows(void)
+{
+    static u16 wide[400 * 240], over[400 * 240];
+    static u8 overAlpha[400 * 240];
+    static u8 tiles[64];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED };
+    NitroRender2DSplit split;
+    int i, x = 0, y = 0, r = 0;
+
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = 1;
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    G2_SetWnd0Position(0, 0, 0, 0);   /* (empty) */
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG1, TRUE);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_NONE, TRUE);
+    GX_SetVisibleWnd(GX_WNDMASK_W0);
+    NitroPort_IoReg[4] = 0x18;      /* (DISPSTAT: in the V-blank) */
+    NitroPort_IoReg[6] = 192;       /* (VCOUNT) */
+    SetBandLines(64, 128);
+    memset(&split, 0, sizeof(split));
+    split.width = 400;
+    split.origin = 72;
+    split.top = 24;
+    split.height = 240;
+    split.windowsToEdge = 1;
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[(24 + 100) * 400 + 210] == RED);       /* in the band */
+    CHECK(wide[(24 + 100) * 400 + 3] == RED);         /* in it, beside the DS's screen */
+    CHECK(wide[(24 + 30) * 400 + 210] == GREY);       /* above it */
+    CHECK(wide[(24 + 150) * 400 + 210] == GREY);      /* below it */
+    CHECK(split.gpuCircleOn == 0);
+    split.gpuCircle = 1;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 2 && split.gpuCircleY == 24 + 64 && split.gpuCircleR == 24 + 128);
+    CHECK(split.gpuCircleColor == GREY);
+    CHECK(wide[(24 + 30) * 400 + 210] == RED);        /* drawn whole */
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 2 && y == 24 + 64 && r == 24 + 128);
+    NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split) == 0);
+    SetBandLines(32, 160);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split) == 0);   /* (taller: not a change) */
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 2 && y == 24 + 32 && r == 24 + 160);
+    /* the whole screen: to the canvas's edges; none: an empty band in the middle */
+    SetBandLines(0, 192);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 2 && split.gpuCircleY == 0 && split.gpuCircleR == 240);
+    SetBandLines(0, 0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 2 && split.gpuCircleY == 24 + 96 && split.gpuCircleR == 24 + 96);
+    /* two bands, or a line showing only some: drawn in the picture */
+    SetBandLines(32, 64);
+    for (i = 100; i < 120; i++) {
+        NitroPort_LineRegs.regs[0][i][0x48] = 0x20;
+        NitroPort_LineRegs.regs[0][i][0x4A] = 0x3F;
+    }
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 0);
+    SetBandLines(32, 64);
+    NitroPort_LineRegs.regs[0][40][0x4A] = 0x01;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 0);
+    /* the window not empty: not a band */
+    SetBandLines(32, 64);
+    for (i = 0; i < 192; i++) {
+        NitroPort_LineRegs.regs[0][i][0x40] = 200;   /* (WIN0H: 0 to 200) */
+    }
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 0);
+    NitroPort_LineRegs.active = 0;
+    GX_SetVisibleWnd(GX_WNDMASK_NONE);
+}
+
 static void test_window_circle(void)
 {
     static u16 wide[400 * 240], over[400 * 240];
@@ -4113,6 +4221,7 @@ int main(int argc, char **argv)
     test_wide_art_sliding();
     test_wide_window_edges();
     test_window_circle();
+    test_window_rows();
     test_wide_map_past_edges();
     test_gpu_bg();
     test_gpu_objs();

@@ -1232,8 +1232,9 @@ static int frame_note_due(uint32_t seq)
 }
 
 /* Engine A's circle fade as the DS shows it with a scene: whether it's
- * known and on (> 0), its middle and radius; the V-blank it was noted in
- * (noted). */
+ * known and on (1, or 2 for a band of lines: NitroPort_Render2DCircleNow),
+ * its middle and radius (a band's first line and the line after its last);
+ * the V-blank it was noted in (noted). */
 static int circle_of(uint32_t seq, uint32_t stamp, int *x, int *y, int *r, uint32_t *noted)
 {
     int found, on = 0;
@@ -1241,7 +1242,7 @@ static int circle_of(uint32_t seq, uint32_t stamp, int *x, int *y, int *r, uint3
     LightLock_Lock(&sObjPlacesLock);
     found = frame_note_of(seq, stamp);
     if (found >= 0 && sCircleNotes[found].on > 0) {
-        on = 1;
+        on = sCircleNotes[found].on;   /* (1 a circle, 2 a band of lines) */
         *x = sCircleNotes[found].x;
         *y = sCircleNotes[found].y;
         *r = sCircleNotes[found].r;
@@ -2735,12 +2736,37 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
 
     /* (any picture of the circle fade goes with any circle: drawn as inside
      * the circle all over, it isn't drawn again as the circle changes) */
-    if (scene != NULL && circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted)) {
+    if (scene != NULL && circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted) == info->gpuCircle) {
         x = ax, y = ay, r = ar;
         if ((scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) &&
-            circle_of(scene->swap_seq_before, scene->stamp_before, &bx, &by, &br, &noted)) {
+            circle_of(scene->swap_seq_before, scene->stamp_before, &bx, &by, &br, &noted) == info->gpuCircle) {
             x = (bx + ax) / 2, y = (by + ay) / 2, r = (br + ar) / 2;
         }
+    }
+    if (info->gpuCircle == 2) {
+        /* A band of lines (walking out of a building): the backdrop above
+         * and below it, its edges halfway in the in-between frames (the
+         * game's band 32 lines taller every other frame: 16 each frame). */
+        float top = pic->y0 + (float)y * sy, bottom = pic->y0 + (float)r * sy, t;
+
+        if (sConfig.flipV) {
+            t = top;
+            top = pic->y0 + pic->y1 - bottom;
+            bottom = pic->y0 + pic->y1 - t;
+        }
+        if (sQuadVertices + 12 > MAX_QUAD_VERTICES) {
+            return;
+        }
+        quad_combiner(0);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+        if (top > pic->y0) {
+            quad(pic->x0, pic->y0, pic->x1, top, 0.0f, 0, 0, 0, 0, rgba);
+        }
+        if (bottom < pic->y1) {
+            quad(pic->x0, bottom > pic->y0 ? bottom : pic->y0, pic->x1, pic->y1, 0.0f, 0, 0, 0, 0, rgba);
+        }
+        NitroPort_PicaProfileMark("the band of lines");
+        return;
     }
     if (sQuadVertices + 6 * CIRCLE_SEGMENTS > MAX_QUAD_VERTICES || gpuCmdBufSize - gpuCmdBufOffset < 1024u) {
         return;

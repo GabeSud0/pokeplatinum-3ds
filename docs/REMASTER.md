@@ -1799,7 +1799,18 @@ one, nothing shows outside it and all that's shown shows inside it, the
 picture is drawn as inside it everywhere (with the inside's colour
 effects), and a ring of 96 pieces in the backdrop's colour covers the rest,
 its radius halfway in the in-between frames; the picture isn't drawn again
-as it closes. Engine A's master brightness (the fades to white or black)
+as it closes. The screen opening as a band of lines (walking out of a
+building: the window empty, each line's WINOUT showing all or nothing, the
+band 32 lines taller every other frame) goes the same way
+(`GpuRowsOf`, `gpuCircleOn` 2): the picture drawn whole, the backdrop above
+and below the band drawn by the compositor, its edges halfway in the
+in-between frames (16 lines a frame). Until 2026-10-31 neither was ever
+left to the compositor with an H-blank effect: a line's copy of the
+registers has DISPSTAT and VCOUNT at 0, the frame's the V-blank's, and the
+lines were taken for differing in more than the windows (`LineLikeFrame`
+leaves those two out); the circle into Eterna Forest stayed in the picture
+at 30 a second, and walking out of a building showed the outside whole
+for a moment, then the band at 30. Engine A's master brightness (the fades to white or black)
 is halfway in them too, in 32nds; as noted only with a picture of that
 frame or newer (`picture_of_frame`), the picture's own with an older one
 (the 2D's drawer behind): walking out of a building, the outside showed

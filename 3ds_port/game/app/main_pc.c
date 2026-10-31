@@ -569,7 +569,12 @@ static void RemasterRender(uint16_t *out)
              * inside it, as the 2D renderer's own circle has it) */
             int circleLo = 0, circleHi = outW;
 
-            if (split.gpuCircleOn) {
+            if (split.gpuCircleOn == 2) {
+                /* (a band of lines: these lines all, the rest none) */
+                if (y < split.gpuCircleY || y >= split.gpuCircleR) {
+                    circleLo = circleHi = 0;
+                }
+            } else if (split.gpuCircleOn) {
                 int dy = y - split.gpuCircleY, half = -1;
 
                 if (dy < 0) {

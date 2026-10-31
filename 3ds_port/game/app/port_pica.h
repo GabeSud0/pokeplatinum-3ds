@@ -279,7 +279,8 @@ typedef struct ComposeLayers {
      * (NitroRender2DSplit.gpuCircleOn): its middle on the canvas, radius and
      * the colour outside it (RGB555), as the picture was drawn; drawn where
      * the game had it in the frame shown (NitroPort_ComposeNoteFrame),
-     * halfway in an in-between frame. */
+     * halfway in an in-between frame. gpuCircle 2: a band of lines instead
+     * (gpuCircleY to gpuCircleR - 1), the colour above and below it. */
     int gpuCircle, gpuCircleX, gpuCircleY, gpuCircleR, gpuCircleColor;
 } ComposeLayers;
 /* Whether the compositor can draw a BG itself (its picture's textures

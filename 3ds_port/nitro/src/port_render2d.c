@@ -4755,6 +4755,18 @@ static void ShiftDown(const struct Engine *e, u8 *regs)
     }
 }
 
+/* Whether a line's registers (an H-blank effect's) are the frame's below
+ * the windows' (0x40) and from DISP3DCNT (0x60, but its acknowledge bits),
+ * DISPSTAT and VCOUNT aside (0x04-0x07: a line's copy has them 0, the
+ * frame's the V-blank's; counted, no H-blank circle or band was ever left
+ * to the compositor, 2026-10-31). From 0x40 to 0x60 is the caller's. */
+static BOOL LineLikeFrame(const u8 *line, const u8 *io)
+{
+    return memcmp(line, io, 0x04) == 0 && memcmp(line + 0x08, io + 0x08, 0x40 - 0x08) == 0 &&
+           ((Rd32(line, 0x60) ^ Rd32(io, 0x60)) & ~0x3000u) == 0 &&
+           memcmp(line + 0x64, io + 0x64, NITRO_LINE_REGS - 0x64) == 0;
+}
+
 /* (NitroRender2DSplit.gpuCircle) The window of engine A's circle fade
  * the compositor can draw itself, from its registers (not a tall field's
  * shifted copy), lines and circles: the only window on, its circle on, no
@@ -4785,12 +4797,68 @@ static int GpuCircleOf(const u8 *io, const u8 (*lines)[NITRO_LINE_REGS], const W
         return -1;
     }
     for (y = 0; lines != NULL && y < H; y++) {
-        if (memcmp(lines[y], io, 0x40) != 0 || memcmp(lines[y] + 0x48, io + 0x48, 0x60 - 0x48) != 0 ||
-            ((Rd32(lines[y], 0x60) ^ Rd32(io, 0x60)) & ~0x3000u) != 0 ||
-            memcmp(lines[y] + 0x64, io + 0x64, NITRO_LINE_REGS - 0x64) != 0) {
+        if (!LineLikeFrame(lines[y], io) || memcmp(lines[y] + 0x48, io + 0x48, 0x60 - 0x48) != 0) {
             return -1;
         }
     }
+    return w;
+}
+
+/* (NitroRender2DSplit.gpuCircle, gpuCircleOn 2) Engine A's screen opening
+ * or closing as a band of whole lines (walking out of a building: the
+ * band in the middle 32 lines taller each step, every other frame), which
+ * the compositor can draw itself: the only window on and empty on every
+ * line, so each line shows what's outside it; the lines differing only in
+ * the windows' registers and WININ/WINOUT (and DISP3DCNT's acknowledge
+ * bits); a line shows all that's shown (the band) or no layer (and no
+ * colour effect on the backdrop: black, or the backdrop's colour), the
+ * band's lines together. Its window, its lines top to bottom - 1 (the
+ * DS's; top = bottom = 96 with none) and what its lines show (*shown);
+ * else -1. */
+static int GpuRowsOf(const u8 *io, const u8 (*lines)[NITRO_LINE_REGS], int *top, int *bottom, u8 *shown)
+{
+    u32 dispcnt = Rd32(io, 0), layers = (dispcnt >> 8) & 0x1F;
+    int w, y, first = -1, last = -1;
+    int shownMask = -1;
+
+    if ((dispcnt & 0xE000) == 0x2000) {
+        w = 0;
+    } else if ((dispcnt & 0xE000) == 0x4000) {
+        w = 1;
+    } else {
+        return -1;
+    }
+    if (((dispcnt >> 16) & 3) != 1) {
+        return -1;
+    }
+    for (y = 0; y < H; y++) {
+        const u8 *r = lines != NULL ? lines[y] : io;
+        u16 winh = Rd16(r, 0x40 + w * 2), winout = Rd16(r, 0x4A) & 0x3F;
+
+        if (lines != NULL && (!LineLikeFrame(r, io) || memcmp(r + 0x4C, io + 0x4C, 0x60 - 0x4C) != 0)) {
+            return -1;
+        }
+        if ((winh >> 8) != (winh & 0xFF)) {
+            return -1;   /* (the window not empty on this line) */
+        }
+        if ((winout & 0x1F) == 0) {
+            if ((winout & 0x20) && ((Rd16(r, 0x50) >> 6) & 3) != 0 && (Rd16(r, 0x50) & 0x20)) {
+                return -1;   /* (the backdrop there brightened, darkened or blended) */
+            }
+            continue;   /* (a line showing nothing) */
+        }
+        if ((layers & ~(u32)winout) != 0 || (shownMask >= 0 && winout != shownMask) || (last >= 0 && last != y - 1)) {
+            return -1;   /* (some shown, not all; or not one band) */
+        }
+        shownMask = winout;
+        if (first < 0) {
+            first = y;
+        }
+        last = y;
+    }
+    *top = first < 0 ? H / 2 : first;
+    *bottom = first < 0 ? H / 2 : last + 1;
+    *shown = (u8)(shownMask < 0 ? 0x3F : shownMask);
     return w;
 }
 
@@ -4798,24 +4866,44 @@ static int GpuCircleOf(const u8 *io, const u8 (*lines)[NITRO_LINE_REGS], const W
  * out: for NitroPort_Render2DCircleNow, on the game's thread) */
 static struct {
     volatile int valid;
-    int window, origin, top;
+    int window, origin, top, height;
 } sGpuCircleCanvas;
+
+/* A band's line (the DS's, 0-192) on the canvas: its first and last lines
+ * go on to the canvas's edges (a tall field's lines above and below the
+ * DS's), as the DS's own lines show nothing beyond them. */
+static int GpuRowsLine(int line, int top, int height)
+{
+    return line <= 0 ? 0 : line >= H ? height : line + top;
+}
 
 int NitroPort_Render2DCircleNow(int engine, int *x, int *y, int *r)
 {
     const WindowCircle *c;
+    int top, bottom;
+    u8 shown;
 
     if (engine != 0 || !__atomic_load_n(&sGpuCircleCanvas.valid, __ATOMIC_ACQUIRE)) {
         return -1;
     }
     c = &sCircles[0][sGpuCircleCanvas.window];
-    if (!c->on) {
-        return 0;
+    if (c->on) {
+        *x = sGpuCircleCanvas.origin + c->cx;
+        *y = sGpuCircleCanvas.top + c->cy;
+        *r = c->r;
+        return 1;
     }
-    *x = sGpuCircleCanvas.origin + c->cx;
-    *y = sGpuCircleCanvas.top + c->cy;
-    *r = c->r;
-    return 1;
+    /* (a band of lines, as the game has it now: NitroPort_LineRegs is the
+     * frame being handed over) */
+    if (GpuRowsOf(NitroPort_IoReg,
+                  NitroPort_LineRegs.active ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0] : NULL, &top,
+                  &bottom, &shown) >= 0) {
+        *x = 0;
+        *y = GpuRowsLine(top, sGpuCircleCanvas.top, sGpuCircleCanvas.height);
+        *r = GpuRowsLine(bottom, sGpuCircleCanvas.top, sGpuCircleCanvas.height);
+        return 2;
+    }
+    return 0;
 }
 
 /* An engine's registers and memory, and the canvas (split's: width,
@@ -4925,6 +5013,9 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
                                   NitroPort_LineRegs.active ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0] : NULL,
                                   sCircles[0]);
 
+        int top = 0, bottom = 0;
+        u8 shown = 0;
+
         if (w >= 0) {
             e.noWindows = 1;
             e.insideWindow = (u8)((Rd16(e.io, 0x48) >> (w * 8)) & 0x3F);
@@ -4936,6 +5027,26 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
             sGpuCircleCanvas.window = w;
             sGpuCircleCanvas.origin = e.origin;
             sGpuCircleCanvas.top = e.top;
+            sGpuCircleCanvas.height = e.height;
+            __atomic_store_n(&sGpuCircleCanvas.valid, 1, __ATOMIC_RELEASE);
+        } else if ((split->snapshot ? GpuRowsOf(st->io, st->lines ? (const u8(*)[NITRO_LINE_REGS])st->lineRegs : NULL,
+                                                &top, &bottom, &shown)
+                                    : GpuRowsOf(NitroPort_IoReg,
+                                                NitroPort_LineRegs.active
+                                                    ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0]
+                                                    : NULL,
+                                                &top, &bottom, &shown)) >= 0) {
+            /* (a band of lines: the picture as the band shows it, all of
+             * it; gpuCircleY to gpuCircleR - 1 its lines on the canvas) */
+            e.noWindows = 1;
+            e.insideWindow = shown;
+            split->gpuCircleOn = 2;
+            split->gpuCircleY = GpuRowsLine(top, e.top, e.height);
+            split->gpuCircleR = GpuRowsLine(bottom, e.top, e.height);
+            split->gpuCircleColor = PlttColor(e.bgPltt, 0);
+            sGpuCircleCanvas.origin = e.origin;
+            sGpuCircleCanvas.top = e.top;
+            sGpuCircleCanvas.height = e.height;
             __atomic_store_n(&sGpuCircleCanvas.valid, 1, __ATOMIC_RELEASE);
         }
     }
@@ -5684,6 +5795,9 @@ static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg, int gpuObjs
     if (isA && gpuCircle) {
         regs[0x40 / 4] = regs[0x44 / 4] = 0;
     }
+    if (isA && gpuCircle >= 3) {
+        regs[0x48 / 4] = 0;   /* (a band of lines: which lines show is in WININ/WINOUT) */
+    }
     h = HashWords((const u8 *)regs, 0x70, h);
     h = HashWords(ioAll + 0x240, 0x10, h);              /* VRAMCNT */
     h = (h ^ Rd16(ioAll, 0x304)) * 16777619u;           /* POWCNT1 */
@@ -5716,6 +5830,9 @@ static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg, int gpuObjs
             }
             if (isA && gpuCircle) {
                 regs[0x40 / 4] = regs[0x44 / 4] = 0;
+            }
+            if (isA && gpuCircle >= 3) {
+                regs[0x48 / 4] = 0;
             }
             h = HashWords((const u8 *)regs, 0x70, h);
         }
@@ -5880,8 +5997,10 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     /* (the sprites the compositor would draw itself now: GpuObjsOf, as
      * drawing would find, unless a picture couldn't leave them out) */
     int gpuObjs = 0;
-    /* (a circle fade the compositor would draw: 1 + its window, or 0) */
+    /* (a circle fade the compositor would draw: 1 + its window; a band of
+     * lines: 3 + its window; or 0) */
     int gpuCircle = 0;
+    u8 rowsShown = 0;
     u32 small, vram = 0;
 
     if (e == 0 && split->gpuBgs) {
@@ -5903,17 +6022,22 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     if (e == 0 && split->gpuCircle && !split->stretch) {
         const State2D *st = &sState[0];
 
-        gpuCircle = 1 + (split->snapshot
-                             ? GpuCircleOf(st->io, st->lines ? (const u8(*)[NITRO_LINE_REGS])st->lineRegs : NULL,
-                                           st->circles)
-                             : GpuCircleOf(NitroPort_IoReg,
-                                           NitroPort_LineRegs.active
-                                               ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0]
-                                               : NULL,
-                                           sCircles[0]));
+        const u8 *io = split->snapshot ? st->io : NitroPort_IoReg;
+        const u8(*lines)[NITRO_LINE_REGS] =
+            split->snapshot ? (st->lines ? (const u8(*)[NITRO_LINE_REGS])st->lineRegs : NULL)
+                            : (NitroPort_LineRegs.active ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0] : NULL);
+        int top, bottom, w;
+        u8 shown;
+
+        gpuCircle = 1 + GpuCircleOf(io, lines, split->snapshot ? st->circles : sCircles[0]);
+        if (gpuCircle == 0 && (w = GpuRowsOf(io, lines, &top, &bottom, &shown)) >= 0) {
+            gpuCircle = 3 + w;   /* (a band of lines: 3 + its window) */
+            rowsShown = shown;   /* (what its lines show: in the picture) */
+        }
     }
     small = EngineSmallSignature(e, split->snapshot, gpuBg, gpuObjs, gpuCircle);
-    small = (small ^ (u32)(gpuBg + 1) ^ ((u32)split->gpuBgs << 4) ^ ((u32)gpuObjs << 8) ^ ((u32)gpuCircle << 9)) *
+    small = (small ^ (u32)(gpuBg + 1) ^ ((u32)split->gpuBgs << 4) ^ ((u32)gpuObjs << 8) ^ ((u32)gpuCircle << 9) ^
+             ((u32)rowsShown << 12)) *
             16777619u;
 
     /* the canvas, and where the windows are */
