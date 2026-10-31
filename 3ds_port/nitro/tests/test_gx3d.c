@@ -854,6 +854,27 @@ static void test_sprite_texel_a_pixel(void)
     sprite_corners(sc,&x0,&x1,&y0,&y1);
     CHECK(fabsf(x0-floorf(x0+0.5f))<0.01f);
     CHECK(fabsf(y0-1.0f/64.0f-floorf(y0*2.0f+0.5f)*0.5f)<0.01f);
+    /* the half pixel only within a sixth of a pixel of it (soft_place): as
+     * a sprite goes by, on half pixels a third of the time (not half),
+     * and never more than a third of a pixel from where it is */
+    {
+        int f,halves=0,steps=60,ok=1;
+        for(f=0;f<steps;f++){
+            float at=180.0f+(float)f/(float)steps*1.6f,x0b,x1b,y0b,y1b,part;
+            sprite_quad(sc,at,150.4f,35.7f,2481011);
+            sc->triangles[0].soft=sc->triangles[1].soft=NITRO_GX3D_SOFT_X;
+            sprite_corners(sc,&x0,&x1,&y0,&y1);
+            part=x0-floorf(x0);
+            if(fabsf(part-0.5f-1.0f/64.0f)<0.01f)halves++;
+            else if(part>0.01f && part<0.99f)ok=0;
+            sprite_quad(sc,at,150.4f,35.7f,2481011);
+            sc->triangles[0].soft=sc->triangles[1].soft=0;
+            sprite_corners(sc,&x0b,&x1b,&y0b,&y1b);
+            if(fabsf(x0-x0b)>0.5f+1.0f/64.0f+0.01f)ok=0;
+        }
+        CHECK(ok);
+        CHECK(halves>=steps/4 && halves<=steps*5/12);
+    }
     /* the 1.25x field (192 lines): as it was */
     sprite_quad(sc,180.3f,150.4f,35.7f,2481011);
     sc->screen_height=192;

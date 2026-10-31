@@ -715,7 +715,11 @@ screen's 320 x 192 at 1.25 times, as above.
   a second near the bottom (the jiggle, seen in a video at 120 frames a
   second, 2026-10-30). On half pixels it moves with its ground; drawn
   2x2 its texels are still whole pixels there, and scaled down a person
-  is sharp or half a pixel soft that way only, while it moves. Which way
+  is sharp or half a pixel soft that way only, while it moves; and on the
+  half pixel only while it's within a sixth of a pixel of it, the nearest
+  whole one the rest (`soft_place`): soft a third of the time as it goes
+  by, not half, and a third of a pixel off its ground at most (asked a
+  little more subtle, 2026-10-30). Which way
   each moves is the in-between scenes' finding (`port_gx3d.c`,
   `soft_of`: half its move since the scene before, off a whole number by
   more than 0.02 of a pixel), kept with its triangles
@@ -731,6 +735,17 @@ screen's 320 x 192 at 1.25 times, as above.
   (a text box at the screen's bottom, YES/NO with it), those wholly in its
   upper half 24 up (the place name sign at the top), the OBJs over them
   with them; the lines they leave are drawn from nowhere.
+- **Past a forest's edge** (patch 0060): by Eterna Forest's east edge
+  (its way out to Route 205) the 400 pixels went past the last of its
+  maps, where there's no map, and showed black. With the player in the
+  half of a map by its matrix's left or right edge, the maps of that
+  column are drawn again past it, mirrored left to right about the edge,
+  props too (`Port_RenderMirroredEdges` in land_data.c,
+  `MapPropManager_RenderMirrored`): the trees by the edge go on past it.
+  A mirrored model's faces turn the other way, so its materials' culled
+  side is swapped while it's drawn (`Port_SwapModelCulling`). Only for the
+  matrices in `sPortMirroredEdgeMatrices` (Eterna Forest's, 7): past a
+  town's edge, mirrored houses would look wrong.
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they

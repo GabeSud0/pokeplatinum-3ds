@@ -221,6 +221,20 @@ static int orthographic(const NitroGx3dScene *scene)
     return scene->projection[3]==0 && scene->projection[7]==0 && scene->projection[11]==0 &&
            scene->projection[15]!=0;
 }
+/* (PIXEL PERFECT's sprites) Where a sprite moving by a fraction of a pixel
+ * a frame goes that way: on the half pixel only while it's within a sixth
+ * of a pixel of it (a third of the time as it goes by), on the nearest
+ * whole pixel the rest. A third of a pixel off its ground at most (whole
+ * pixels alone: half a pixel, the jiggle), and soft a third of the time
+ * instead of half (2026-10-30: the half pixels' softness asked a little
+ * less). A 64th on: drawn as it is, the pixels' middles on half a pixel's
+ * would fall on the texels' edges exactly. */
+static float soft_place(float at)
+{
+    float whole=floorf(at), part=at-whole;
+    if(part>=1.0f/3.0f && part<2.0f/3.0f)return whole+0.5f+1.0f/64.0f;
+    return floorf(at+0.5f);
+}
 static int sprite_texel_a_pixel(const NitroGx3dScene *scene,const NitroGx3dTriangle *tri,
                                 float tw,float th,float *sx,float *sy)
 {
@@ -252,16 +266,14 @@ static int sprite_texel_a_pixel(const NitroGx3dScene *scene,const NitroGx3dTrian
     y0=py[0]-e*v[0].s-f*v[0].t;
     /* the texture's bottom middle: its feet, on a pixel's corner; moving
      * with the ground by a fraction of a pixel a frame (soft, port_gx3d.c's
-     * soft_of), on half a pixel's that way: drawn 2x2 (the remaster's
-     * smooth 3D), a texel is then still two by two of those pixels, and
-     * scaled down, sharp or half a pixel soft. (A 64th of a pixel on: drawn
-     * as it is, the pixels' middles on half a pixel's would fall on the
-     * texels' edges exactly, and which texel each took was a toss-up.) */
+     * soft_of), by half pixels that way (soft_place): drawn 2x2 (the
+     * remaster's smooth 3D), a texel is then still two by two of those
+     * pixels, and scaled down, sharp or half a pixel soft. */
     anchor_t=f>0?th:0.0f;
     ax=x0+a*(tw*0.5f);
     ay=y0+f*anchor_t;
-    ax=(tri->soft&NITRO_GX3D_SOFT_X)?floorf(ax*2.0f+0.5f)*0.5f+1.0f/64.0f:floorf(ax+0.5f);
-    ay=(tri->soft&NITRO_GX3D_SOFT_Y)?floorf(ay*2.0f+0.5f)*0.5f+1.0f/64.0f:floorf(ay+0.5f);
+    ax=(tri->soft&NITRO_GX3D_SOFT_X)?soft_place(ax):floorf(ax+0.5f);
+    ay=(tri->soft&NITRO_GX3D_SOFT_Y)?soft_place(ay):floorf(ay+0.5f);
     for(k=0;k<3;k++){
         sx[k]=(ax+sa*(v[k].s-tw*0.5f))/fx;
         sy[k]=(ay+sf*(v[k].t-anchor_t))/fy;
