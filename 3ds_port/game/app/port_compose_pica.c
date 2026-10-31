@@ -1204,9 +1204,37 @@ static int frame_note_of(uint32_t seq, uint32_t stamp)
     return found;
 }
 
+/* Whether the frame the DS shows a scene in (its SWAP_BUFFERS count) is
+ * still to be noted: the game notes a frame in its V-blank work, a V-blank
+ * after the scene's SWAP_BUFFERS, and the display thread has the scene as
+ * soon as the 3D's made it. An in-between scene drawn before then had no
+ * scrolls, sprites, circle or brightness of its own frame and took those
+ * of the frame before (or the picture's, older still): Eterna Forest's
+ * light shaking as the player walked, the HM cut-in's streaks jumping
+ * back a step and the circle fade's in-between frames standing still
+ * (videos at 120 frames a second, 2026-10-31). Not when a newer frame's
+ * been noted already (that scene's frame left out: nothing to wait for). */
+static int frame_note_due(uint32_t seq)
+{
+    int i, any = 0, due = 1;
+
+    LightLock_Lock(&sObjPlacesLock);
+    for (i = 0; i < OBJ_PLACES_KEPT; i++) {
+        if (sCircleNotes[i].valid) {
+            any = 1;
+            if ((int32_t)(sCircleNotes[i].swaps - seq) >= 0) {
+                due = 0;
+            }
+        }
+    }
+    LightLock_Unlock(&sObjPlacesLock);
+    return any && due;
+}
+
 /* Engine A's circle fade as the DS shows it with a scene: whether it's
- * known and on (> 0), its middle and radius. */
-static int circle_of(uint32_t seq, uint32_t stamp, int *x, int *y, int *r)
+ * known and on (> 0), its middle and radius; the V-blank it was noted in
+ * (noted). */
+static int circle_of(uint32_t seq, uint32_t stamp, int *x, int *y, int *r, uint32_t *noted)
 {
     int found, on = 0;
 
@@ -1217,14 +1245,16 @@ static int circle_of(uint32_t seq, uint32_t stamp, int *x, int *y, int *r)
         *x = sCircleNotes[found].x;
         *y = sCircleNotes[found].y;
         *r = sCircleNotes[found].r;
+        *noted = sCircleNotes[found].stamp;
     }
     LightLock_Unlock(&sObjPlacesLock);
     return on;
 }
 
 /* Engine A's master brightness as the DS shows it with a scene, as a
- * signed factor (+ brighter, - darker, 0-16): whether it's known. */
-static int bright_of(uint32_t seq, uint32_t stamp, int *v)
+ * signed factor (+ brighter, - darker, 0-16): whether it's known; the
+ * V-blank it was noted in (noted). */
+static int bright_of(uint32_t seq, uint32_t stamp, int *v, uint32_t *noted)
 {
     int found;
 
@@ -1234,9 +1264,22 @@ static int bright_of(uint32_t seq, uint32_t stamp, int *v)
         int b = sCircleNotes[found].bright, mode = (b >> 14) & 3, f = b & 31;
 
         *v = mode == 1 ? (f > 16 ? 16 : f) : mode == 2 ? -(f > 16 ? 16 : f) : 0;
+        *noted = sCircleNotes[found].stamp;
     }
     LightLock_Unlock(&sObjPlacesLock);
     return found >= 0;
+}
+
+/* Whether a picture (its 2D's V-blank, set) is of the frame noted in a
+ * V-blank or newer: the frame's brightness or circle goes with it. A
+ * picture older than that (the 2D's drawer behind, a map's first frames)
+ * keeps its own: walking out of a building, the outside showed whole at
+ * full brightness before the opening band came (the picture from before
+ * the band, with the band's frames' brightness), 2026-10-31. (A V-blank's
+ * slack: the frame's note and its 2D's stamp are read a moment apart.) */
+static int picture_of_frame(uint32_t set, uint32_t noted)
+{
+    return (int32_t)(set - noted) >= -1;
 }
 
 /* Engine A's sprites as the DS shows them with a scene (its swap_seq and
@@ -2200,16 +2243,22 @@ static void master_brightness_of(const Screen *scr, const ComposeLayers *info, c
 {
     int mode = (info->masterBright >> 14) & 3, factor = info->masterBright & 31, a, b;
     int v32;   /* (32nds: + brighter, - darker) */
+    uint32_t at = 0, bt = 0;
 
     if (factor > 16) {
         factor = 16;
     }
     v32 = mode == 1 ? 2 * factor : mode == 2 ? -2 * factor : 0;
-    if (scene != NULL && bright_of(scene->swap_seq, scene->stamp, &a)) {
-        v32 = 2 * a;
-        if ((scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) &&
-            bright_of(scene->swap_seq_before, scene->stamp_before, &b)) {
-            v32 = a + b;
+    if (scene != NULL && bright_of(scene->swap_seq, scene->stamp, &a, &at)) {
+        uint32_t from = at;
+        int both = (scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) &&
+                   bright_of(scene->swap_seq_before, scene->stamp_before, &b, &bt);
+
+        if (both) {
+            from = bt;   /* (an in-between scene: its picture is the frame before's) */
+        }
+        if (picture_of_frame(info->stamp, from)) {
+            v32 = both ? a + b : 2 * a;
         }
     }
     if (v32 != 0) {
@@ -2679,14 +2728,17 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
                              float sy)
 {
     int x = info->gpuCircleX, y = info->gpuCircleY, r = info->gpuCircleR, ax, ay, ar, bx, by, br, i, k;
+    uint32_t noted;
     float cx, cy, inner, outer;
     u32 rgba = rgba_of((uint16_t)info->gpuCircleColor, 255);
     extern u32 gpuCmdBufSize, gpuCmdBufOffset;
 
-    if (scene != NULL && circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar)) {
+    /* (any picture of the circle fade goes with any circle: drawn as inside
+     * the circle all over, it isn't drawn again as the circle changes) */
+    if (scene != NULL && circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted)) {
         x = ax, y = ay, r = ar;
         if ((scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) &&
-            circle_of(scene->swap_seq_before, scene->stamp_before, &bx, &by, &br)) {
+            circle_of(scene->swap_seq_before, scene->stamp_before, &bx, &by, &br, &noted)) {
             x = (bx + ax) / 2, y = (by + ay) / 2, r = (br + ar) / 2;
         }
     }
@@ -2770,6 +2822,27 @@ static void draw_gpu_objs(const LayerSet *set, const NitroGx3dScene *scene, cons
         for (i = 0; i < set->objCount && g == NULL; i++) {
             if (set->objs[i].key == o->key) {
                 g = &set->objs[i];
+            }
+        }
+        if (g == NULL) {
+            /* (its picture not in the picture's atlas: a frame of its
+             * animation newer than the 2D drawn yet; the nearest of its size
+             * there instead, its picture before: the HM cut-in's trainer went
+             * out for a frame as it swung, 2026-10-31) */
+            int bestD = 0;
+
+            for (i = 0; i < set->objCount; i++) {
+                const NitroGpuObj *c = &set->objs[i];
+                int dx = c->x - o->x, dy = c->y - o->y, d;
+
+                if (c->w != o->w || c->h != o->h || dx < -32 || dx > 32 || dy < -16 || dy > 16) {
+                    continue;
+                }
+                d = dx * dx + dy * dy;
+                if (g == NULL || d < bestD) {
+                    g = c;
+                    bestD = d;
+                }
             }
         }
         if (g == NULL) {
@@ -3574,6 +3647,15 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
          * seemed to shake as the player walked). */
         if (need[s] && has3d && !forced && !flush && !mid && sceneSerial != scr->shownScene &&
             !paired_2d_ready(scene->stamp)) {
+            need[s] = 0;
+            sSceneWaiting = 1;
+            sSceneWaitingSerial = sceneSerial;
+        }
+        /* A scene or its in-between scene: once the game has noted the
+         * frame the DS shows the scene in (frame_note_due), its scrolls,
+         * sprites, circle and brightness. */
+        if (need[s] && has3d && !forced && !flush && scene != NULL && sceneSerial != scr->shownScene &&
+            frame_note_due(scene->swap_seq)) {
             need[s] = 0;
             sSceneWaiting = 1;
             sSceneWaitingSerial = sceneSerial;

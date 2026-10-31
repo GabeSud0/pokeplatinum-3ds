@@ -1778,6 +1778,21 @@ don't keep step with the 3DS's V-blanks) and the next step's taken: Eterna
 Forest's light went back and forth about a pixel at 30 a second as the
 player walked. The clock still where nothing was noted with the count.
 
+A scene and its in-between scene wait for their frame to be noted
+(`frame_note_due`, 2026-10-31): the game notes a frame in its V-blank work,
+a V-blank after the scene's SWAP_BUFFERS, while the display thread has the
+scene as soon as the 3D's made it, and drew the in-between scene at once.
+That had no note of its own frame yet and took the frame before's (or the
+picture's own, older still): videos at 120 frames a second showed Eterna
+Forest's light shaking every other frame, the HM cut-in's streaks jumping
+back a whole step now and then, and the circle closing into the forest
+opening up again in its in-between frames. (Not when a later frame's
+noted already: that scene's frame was left out, there's nothing to wait
+for.) A GPU sprite whose picture isn't in the 2D's atlas yet (a frame of
+its animation newer than the 2D drawn) is drawn with the nearest of its
+size there instead of left out: the cut-in's trainer went out for a frame
+as it swung.
+
 The circle fades (walking into Eterna Forest) are drawn by the compositor
 too (`NitroRender2DSplit.gpuCircle`): when the circle's window is the only
 one, nothing shows outside it and all that's shown shows inside it, the
@@ -1785,7 +1800,11 @@ picture is drawn as inside it everywhere (with the inside's colour
 effects), and a ring of 96 pieces in the backdrop's colour covers the rest,
 its radius halfway in the in-between frames; the picture isn't drawn again
 as it closes. Engine A's master brightness (the fades to white or black)
-is halfway in them too, in 32nds.
+is halfway in them too, in 32nds; as noted only with a picture of that
+frame or newer (`picture_of_frame`), the picture's own with an older one
+(the 2D's drawer behind): walking out of a building, the outside showed
+whole for a moment at full brightness before the opening band, the
+picture from before the band with the band's frames' brightness.
 
 On the 3DS (`fps60`, on by default since PR #132): each mailbox slot has
 an in-between scene of its own, made before the slot's scene is
