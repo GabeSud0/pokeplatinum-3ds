@@ -17,9 +17,9 @@ cd "$(dirname "$0")/.."
 PORT="${PORT:-8000}"
 OUT=3ds_port/game/build/3ds
 WASM="${WASM:-$HOME/pokeplatinum-cia-tools-wasm}"
-for f in "$OUT/pokeplatinum.3dsx" "$OUT/pokeplatinum.elf" "$OUT/pokeplatinum.smdh"; do
+for f in "$OUT/pokeplatinum.3dsx" "$OUT/forwarder.elf" "$OUT/pokeplatinum.smdh"; do
     if [ ! -f "$f" ]; then
-        echo "$f isn't there: build the program first (bash build_linux.sh your.nds, or make game)."
+        echo "$f isn't there: build the program first (bash build_linux.sh your.nds, or make game and make game-cia)."
         exit 1
     fi
 done
@@ -35,7 +35,7 @@ python3 tools/banner3d/make_banner.py --fetch-pycgfx-only
 echo "==> A release's files from your build"
 rm -rf build/site-preview build/release-preview
 python3 tools/build_web_payload.py --version 0.0.0-preview --commit "$(git rev-parse HEAD)" \
-    --program "$OUT/pokeplatinum.3dsx" --elf "$OUT/pokeplatinum.elf" --smdh "$OUT/pokeplatinum.smdh" \
+    --program "$OUT/pokeplatinum.3dsx" --elf "$OUT/forwarder.elf" --smdh "$OUT/pokeplatinum.smdh" \
     --cia-tools "$WASM" --pycgfx build/pycgfx --out build/release-preview
 python3 tools/build_site.py --out build/site-preview --release-dir build/release-preview
 

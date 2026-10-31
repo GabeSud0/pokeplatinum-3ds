@@ -984,8 +984,18 @@ static void EnableSpeedup(void)
     }
 }
 
+/* Opened by the HOME Menu version (the forwarder, forwarder/main.c, which
+ * passes "--home-menu=<its title ID>"): that title's ID, else 0
+ * (NoteForwarder). */
+#define FORWARDED_ARG "--home-menu="
+static u64 sForwarder;
+
 static void LogSpeedup(bool new3ds)
 {
+    if (sForwarder != 0) {
+        NitroPort_Log("[platinum] opened by the HOME Menu version (%016llX), in the homebrew title",
+                      (unsigned long long)sForwarder);
+    }
     /* (how much memory the system gave the program: the .cia on a New 3DS
      * should have the 124 MB mode, issue #188) */
     NitroPort_Log("[memory] the program's region %lu MB (%s), the program itself %lu KB; heap %lu KB, linear heap %lu KB",
@@ -1419,16 +1429,31 @@ void NitroPort_Terminate(void)
 }
 
 static volatile bool sRestarting;   /* (NitroPort_ResetSystem: started again as the program closes) */
+static void NoteForwarder(int argc, char **argv)
+{
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (argv[i] != NULL && strncmp(argv[i], FORWARDED_ARG, strlen(FORWARDED_ARG)) == 0) {
+            sForwarder = strtoull(argv[i] + strlen(FORWARDED_ARG), NULL, 16);
+        }
+    }
+}
 
 /* The game's soft reset (L + R + START + SELECT, or after a link error):
  * the program closes as from the HOME menu (the save's file written) and
  * the system starts it again (libctru's chainload to itself: the HOME
- * menu jumps back to this title). Started from the Homebrew Launcher (a
- * .3dsx) there's no jumping back: it closes to the launcher. */
+ * menu jumps back to this title). Opened by the HOME Menu version's
+ * forwarder: a jump back to that, which opens the game again. Started from
+ * the Homebrew Launcher (a .3dsx) there's no jumping back: it closes to the
+ * launcher. */
 void NitroPort_ResetSystem(uint32_t parameter)
 {
     NitroPort_Log("The game asked to restart (OS_ResetSystem %lu): restarting", (unsigned long)parameter);
-    if (envIsHomebrew()) {
+    if (envIsHomebrew() && sForwarder != 0) {
+        aptSetChainloader(sForwarder, MEDIATYPE_SD);
+        sRestarting = true;
+    } else if (envIsHomebrew()) {
         NitroPort_Log("(started from the Homebrew Launcher: it closes to the launcher instead)");
     } else {
         aptSetChainloaderToSelf();
@@ -2881,8 +2906,7 @@ int main(int argc, char **argv)
     const char *error;
     s32 priority = 0x30;
 
-    (void)argc;
-    (void)argv;
+    NoteForwarder(argc, argv);
     LightLock_Init(&sLogLock);
     EnableSpeedup();            /* New 3DS: 804 MHz and the L2 cache */
     gfxInitDefault();

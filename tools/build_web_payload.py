@@ -3,7 +3,7 @@
 in the player's browser, from their own ROM):
 
     python3 tools/build_web_payload.py --version 0.1.0 --commit SHA \\
-        --program pokeplatinum.3dsx --elf pokeplatinum.elf --smdh pokeplatinum.smdh \\
+        --program pokeplatinum.3dsx --elf forwarder.elf --smdh pokeplatinum.smdh \\
         --cia-tools build/cia-tools-wasm --pycgfx build/pycgfx --out dist
 
 writes, in dist/ (the release's assets):
@@ -14,7 +14,8 @@ writes, in dist/ (the release's assets):
     SHA256SUMS.txt                     the three files' SHA-256
 
 The ZIP holds the program; what the HOME Menu version (.cia) is made of: the
-program's ELF, its icon (SMDH), the game's RSF and the banner's chime, and
+forwarder's ELF (3ds_port/game/forwarder: it opens the .3dsx, so the .cia
+holds no game code), its icon (SMDH), the game's RSF and the banner's chime, and
 bannertool and makerom compiled for the browser (tools/build_cia_tools_wasm.sh,
 run by web/js/cia.mjs); the builder's Python (builder/web.py and what it
 imports); and the licences. No game data: everything from the ROM is made in the
@@ -170,7 +171,7 @@ def make_manifest(files: dict[str, bytes], *, version: str, commit: str, pycgfx:
             web.MANIFEST: web.MANIFEST,
             "cia": "cia/pokeplatinum.cia",
         },
-        "cia": {"elf": "cia/pokeplatinum.elf", "icon": "cia/pokeplatinum.smdh",
+        "cia": {"elf": "cia/forwarder.elf", "icon": "cia/pokeplatinum.smdh",
                 "rsf": "cia/pokeplatinum.rsf", "chime": "cia/chime.wav",
                 "bannertool": CIA_TOOLS["bannertool.wasm"], "makerom": CIA_TOOLS["makerom.wasm"]},
         "pycgfx": {"repository": PYCGFX_REPOSITORY, "commit": PYCGFX_COMMIT,
@@ -197,7 +198,7 @@ def write_zip(path: Path, files: dict[str, bytes]) -> None:
 
 def build(out: Path, *, program: bytes, elf: bytes, smdh: bytes, cia_tools: dict[str, bytes], version: str,
           commit: str, pycgfx: list[dict], synthetic: bool = False, extra_roms: list[dict] = ()) -> dict:
-    files = {"program/" + PROGRAM_NAME: program, "cia/pokeplatinum.elf": elf, "cia/pokeplatinum.smdh": smdh}
+    files = {"program/" + PROGRAM_NAME: program, "cia/forwarder.elf": elf, "cia/pokeplatinum.smdh": smdh}
     files.update(cia_tools)
     files.update({dst: (ROOT / src).read_bytes() for dst, src in CIA.items()})
     files.update({dst: (ROOT / src).read_bytes() for dst, src in LICENSES.items()})
@@ -228,7 +229,8 @@ def main() -> int:
     ap.add_argument("--version", help="the release's version (0.1.0: its tag is v0.1.0)")
     ap.add_argument("--commit", help="the commit it's built from")
     ap.add_argument("--program", type=Path, help="pokeplatinum.3dsx")
-    ap.add_argument("--elf", type=Path, help="the program's ELF (for makerom; its debug info can be stripped)")
+    ap.add_argument("--elf", type=Path, help="the HOME Menu version's forwarder's ELF (for makerom; its debug info "
+                                             "can be stripped)")
     ap.add_argument("--smdh", type=Path, help="the program's icon (pokeplatinum.smdh)")
     ap.add_argument("--cia-tools", type=Path, help="bannertool.wasm and makerom.wasm (tools/build_cia_tools_wasm.sh)")
     ap.add_argument("--pycgfx", type=Path, help="pycgfx, fetched at the pinned commit")

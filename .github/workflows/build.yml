@@ -88,9 +88,10 @@ jobs:
           3ds_port/game/build/3ds/pokeplatinum.elf
 
       # The HOME Menu version: makerom, bannertool and the game's RSF make
-      # a .cia of the program, with blank art (no ROM here). Not uploaded:
-      # the web builder makes it in the player's browser, with the banner
-      # made from their ROM.
+      # a .cia of the forwarder (3ds_port/game/forwarder: it opens the
+      # .3dsx), with blank art (no ROM here). Not uploaded: the web builder
+      # makes it in the player's browser, with the banner made from their
+      # ROM.
       - name: Make the HOME Menu .cia (blank art)
         shell: bash
         run: |
@@ -99,9 +100,9 @@ jobs:
           python3 tools/home_menu_art.py --blank build/home-menu-art
           make -C 3ds_port/game TARGET=3ds HOME_ART="$PWD/build/home-menu-art" \
               CIA_TOOLS="$PWD/build/cia-tools" cia
-          ls -l 3ds_port/game/build/3ds/pokeplatinum.cia
+          ls -l 3ds_port/game/build/3ds/forwarder.elf 3ds_port/game/build/3ds/pokeplatinum.cia
 
-      # The web builder's .cia is made from the program's ELF without its
+      # The web builder's .cia is made from the forwarder's ELF without its
       # debug information (a smaller download): it must make the same title.
       # (makerom's .cia has a random ticket and content ID, so the titles
       # themselves, .cxi, are compared.)
@@ -111,15 +112,15 @@ jobs:
           ROOT="$PWD"
           OUT="$ROOT/3ds_port/game/build/3ds"
           mkdir -p build/web
-          "$DEVKITARM/bin/arm-none-eabi-strip" --strip-debug -o build/web/pokeplatinum.elf "$OUT/pokeplatinum.elf"
-          ls -l "$OUT/pokeplatinum.elf" build/web/pokeplatinum.elf
-          for elf in "$OUT/pokeplatinum.elf" "$ROOT/build/web/pokeplatinum.elf"; do
+          "$DEVKITARM/bin/arm-none-eabi-strip" --strip-debug -o build/web/forwarder.elf "$OUT/forwarder.elf"
+          ls -l "$OUT/forwarder.elf" build/web/forwarder.elf
+          for elf in "$OUT/forwarder.elf" "$ROOT/build/web/forwarder.elf"; do
             (cd 3ds_port/game && "$ROOT/build/cia-tools/bin/makerom" -f cxi -o "$elf.cxi" -target t \
                 -exefslogo -rsf cia/pokeplatinum.rsf -elf "$elf" \
                 -icon "$OUT/pokeplatinum.smdh" -banner "$OUT/pokeplatinum.bnr")
           done
-          cmp "$OUT/pokeplatinum.elf.cxi" build/web/pokeplatinum.elf.cxi
-          rm -f "$OUT/pokeplatinum.elf.cxi" build/web/pokeplatinum.elf.cxi
+          cmp "$OUT/forwarder.elf.cxi" build/web/forwarder.elf.cxi
+          rm -f "$OUT/forwarder.elf.cxi" build/web/forwarder.elf.cxi
 
       # The web builder makes the .cia in the browser: bannertool and makerom
       # compiled to WebAssembly (WASI), run by web/js/cia.mjs. Checked here
@@ -142,7 +143,7 @@ jobs:
           esac
           OUT=3ds_port/game/build/3ds
           python3 tools/build_web_payload.py --version "$VERSION" --commit "$GITHUB_SHA" \
-              --program "$OUT/pokeplatinum.3dsx" --elf build/web/pokeplatinum.elf \
+              --program "$OUT/pokeplatinum.3dsx" --elf build/web/forwarder.elf \
               --smdh "$OUT/pokeplatinum.smdh" --cia-tools build/cia-tools-wasm \
               --pycgfx build/pycgfx --out dist/release
           ls -l dist/release

@@ -17,6 +17,6 @@ with tempfile.TemporaryDirectory() as d:
 PY
 OUT=3ds_port/game/build/3ds
 node tools/test_cia_wasm.mjs --wasm build/cia-tools-wasm --native build/cia-tools/bin \
-    --elf build/web/pokeplatinum.elf --icon "$OUT/pokeplatinum.smdh" \
+    --elf build/web/forwarder.elf --icon "$OUT/pokeplatinum.smdh" \
     --rsf 3ds_port/game/cia/pokeplatinum.rsf --chime 3ds_port/game/cia/chime.wav \
     --flat build/home-menu-art/banner.png --cgfx build/web/synthetic.cgfx
