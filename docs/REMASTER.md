@@ -1766,6 +1766,20 @@ picture isn't drawn again as they move, only when what they show does.
 The band's window still opens and closes 30 times a second. In the PC
 runner the picture draws them where it had them.
 
+Eterna Forest's light finer than a pixel (patch 0061, 2026-10-31): the
+game keeps the clouds' place finer than a pixel as they follow the camera,
+and sways them slowly (a table, a pixel every 8 frames); the register has
+whole pixels, 1, 2 or 3 a step as the player walks, and halved in the
+in-between frames to whole pixels again, the light moved 1, 1, 0, 1... a
+frame against the ground's steady 2. The game hands the place over
+(`NitroPort_SetBgFineScroll`, the sway eased between the table's entries);
+it's noted with the frame (`NitroPort_Render2DBgOffsetsFine`: within 3
+pixels of the register's, set in the frame before, else the register's)
+and drawn there, halfway between two (as floats) in the in-between frames:
+about 1.9 to 2.1 pixels a step, changing slowly. Halfway goes the shorter
+way round 256 (the picture repeats every 256: a register gone from 202 to
+459 is a pixel on).
+
 Which frame goes with a scene (2026-10-30): the weather BG's scrolls, the
 GPU sprites' places, the circle fade and the master brightness are noted
 each frame the game hands over, with the count of SWAP_BUFFERS the game has
@@ -1799,7 +1813,12 @@ one, nothing shows outside it and all that's shown shows inside it, the
 picture is drawn as inside it everywhere (with the inside's colour
 effects), and a ring of 96 pieces in the backdrop's colour covers the rest,
 its radius halfway in the in-between frames; the picture isn't drawn again
-as it closes. The screen opening as a band of lines (walking out of a
+as it closes. Where a frame's note has no circle (the game's last step of
+the fade turns it off, its window still on), the frame before's is drawn,
+else the last one noted: never the picture's own, which is steps behind
+(the picture isn't drawn again as the circle closes): the in-between frame
+after the last step went back to a circle twice the size for a frame (the
+PC runner's local sim60, 2026-10-31). The screen opening as a band of lines (walking out of a
 building: the window empty, each line's WINOUT showing all or nothing, the
 band 32 lines taller every other frame) goes the same way
 (`GpuRowsOf`, `gpuCircleOn` 2): the picture drawn whole, the backdrop above

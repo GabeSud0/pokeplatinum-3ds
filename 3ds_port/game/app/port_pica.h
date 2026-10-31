@@ -291,7 +291,7 @@ int NitroPort_ComposeDrawsBgs(void);
  * SWAP_BUFFERS made (NitroPort_Gx3dSwapsMade): what a BG the compositor
  * draws itself is scrolled by with the 3D shown in it (a scene whose
  * swap_seq is that: the first frame after it, as the DS has it). */
-void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const uint16_t ofs[8]);
+void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const int32_t fine[8]);
 /* Whether the compositor can draw engine A's sprites itself (their
  * textures made: NitroRender2DSplit.gpuObjs). Any thread. */
 int NitroPort_ComposeDrawsObjs(void);

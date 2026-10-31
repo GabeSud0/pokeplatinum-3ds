@@ -2494,6 +2494,33 @@ static void test_window_rows(void)
     GX_SetVisibleWnd(GX_WNDMASK_NONE);
 }
 
+/* A BG's scroll finer than a pixel (NitroPort_SetBgFineScroll): taken
+ * near the register's (the picture repeating every 256), not far from it,
+ * nor once the game stops setting it. */
+static void test_bg_fine_scroll(void)
+{
+    uint16_t ofs[8];
+    int32_t fine[8];
+    int i;
+
+    Reset();
+    G2_SetBG2Offset(464, 49);
+    NitroPort_SetBgFineScroll(2, (208 << 12) + 0x800, (49 << 12) + 0x100);
+    NitroPort_Render2DBgOffsetsFine(ofs, fine);
+    CHECK(ofs[4] == 464 && ofs[5] == 49);
+    CHECK(fine[4] == (208 << 12) + 0x800 && fine[5] == (49 << 12) + 0x100);   /* (464 is 208 on the picture) */
+    CHECK(fine[0] == ofs[0] << 12);                                             /* (another BG: its register) */
+    NitroPort_SetBgFineScroll(2, 300 << 12, 49 << 12);                          /* (far from it: the register) */
+    NitroPort_Render2DBgOffsetsFine(ofs, fine);
+    CHECK(fine[4] == 464 << 12 && fine[5] == 49 << 12);
+    NitroPort_SetBgFineScroll(2, (465 << 12) + 0x400, 49 << 12);
+    for (i = 0; i < 4; i++) {
+        NitroPort_Render2DBgOffsetsFine(ofs, fine);
+    }
+    CHECK(fine[4] == 464 << 12);                                                /* (not set for a while: the register) */
+    G2_SetBG2Offset(0, 0);
+}
+
 static void test_window_circle(void)
 {
     static u16 wide[400 * 240], over[400 * 240];
@@ -4230,6 +4257,7 @@ int main(int argc, char **argv)
     test_wide_art_places();
     test_wide_art_sliding();
     test_wide_window_edges();
+    test_bg_fine_scroll();
     test_window_circle();
     test_window_rows();
     test_wide_map_past_edges();

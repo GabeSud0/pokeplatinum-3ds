@@ -203,6 +203,17 @@ unsigned NitroPort_Render2DMasterBright(int engine, int snapshot);
 int NitroPort_Render2DBgPicture(int bg, int snapshot, uint16_t *out);
 /* Engine A's BG scrolls now (BG0-3's HOFS and VOFS, 9 bits each). */
 void NitroPort_Render2DBgOffsets(uint16_t out[8]);
+/* The same, and each as fx32 (fine: 12 bits under the pixel, 0 to 512):
+ * where the game has a BG's scroll finer than a pixel
+ * (NitroPort_SetBgFineScroll, set in the frame before, within 3 pixels of
+ * the register's), that; else the register's. Once a frame. */
+void NitroPort_Render2DBgOffsetsFine(uint16_t out[8], int32_t fine[8]);
+/* (the game, as it sets a BG's scroll from a place it keeps finer than a
+ * pixel: Eterna Forest's light following the camera) Engine A's BG's
+ * scroll as fx32 (12 bits under the pixel), as it would be drawn: the
+ * compositor can draw it there, and halfway between two in the in-between
+ * frames, where the whole pixels go 1, 2 or 3 a step. */
+void NitroPort_SetBgFineScroll(int bg, int32_t hofs, int32_t vofs);
 
 /* (the game's thread, as it hands a frame over) Engine A's sprites as OAM
  * has them now, placed as the last picture that left them out had them

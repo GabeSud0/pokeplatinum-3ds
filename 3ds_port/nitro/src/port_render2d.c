@@ -5097,12 +5097,64 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
     }
 }
 
+/* (NitroPort_SetBgFineScroll) Engine A's BGs' scrolls as the game has
+ * them, finer than a pixel (fx32: 12 bits under the pixel), and how many
+ * NitroPort_Render2DBgOffsets calls ago they were set. */
+static struct {
+    int32_t ofs[2];
+    int age, valid;
+} sBgFine[4];
+
+void NitroPort_SetBgFineScroll(int bg, int32_t hofs, int32_t vofs)
+{
+    if (bg < 0 || bg > 3) {
+        return;
+    }
+    sBgFine[bg].ofs[0] = hofs;
+    sBgFine[bg].ofs[1] = vofs;
+    sBgFine[bg].age = 0;
+    sBgFine[bg].valid = 1;
+}
+
 void NitroPort_Render2DBgOffsets(uint16_t out[8])
+{
+    NitroPort_Render2DBgOffsetsFine(out, NULL);
+}
+
+void NitroPort_Render2DBgOffsetsFine(uint16_t out[8], int32_t fine[8])
 {
     int i;
 
     for (i = 0; i < 8; i++) {
         out[i] = (uint16_t)(Rd16(NitroPort_IoReg, 0x10 + 2 * i) & 0x1FF);
+        if (fine != NULL) {
+            fine[i] = (int32_t)out[i] << 12;
+        }
+    }
+    for (i = 0; i < 4; i++) {
+        int k;
+
+        if (!sBgFine[i].valid) {
+            continue;
+        }
+        /* (only while the game sets it, each frame, and near what the
+         * register has: the scroll shown is the one set in the frame before;
+         * the game's place may be smoothed a pixel or two from its own whole
+         * pixels, the BG's picture repeating every 256) */
+        for (k = 0; k < 2 && fine != NULL && sBgFine[i].age <= 2; k++) {
+            int32_t v = sBgFine[i].ofs[k] & ((512 << 12) - 1);
+            int32_t d = (v - ((int32_t)out[i * 2 + k] << 12)) & ((256 << 12) - 1);
+
+            if (d >= (128 << 12)) {
+                d -= 256 << 12;
+            }
+            if (d > -(3 << 12) && d < (3 << 12)) {
+                fine[i * 2 + k] = v;
+            }
+        }
+        if (sBgFine[i].age < 1000) {
+            sBgFine[i].age++;
+        }
     }
 }
 

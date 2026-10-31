@@ -2199,9 +2199,10 @@ static bool DrawFrame(bool new3dOnly)
         /* (the scrolls of this frame, whether a drawer takes it or not:
          * the weather's BG drawn by the compositor goes with them) */
         uint16_t ofs[8];
+        int32_t fine[8];
 
-        NitroPort_Render2DBgOffsets(ofs);
-        NitroPort_ComposeNoteBgOffsets(NitroPort_ComposeVBlanks(), NitroPort_Gx3dSwapsMade(), ofs);
+        NitroPort_Render2DBgOffsetsFine(ofs, fine);
+        NitroPort_ComposeNoteBgOffsets(NitroPort_ComposeVBlanks(), NitroPort_Gx3dSwapsMade(), fine);
     }
     /* (the HM cut-in's sprites drawn by the compositor: where they are
      * in this frame, whether a drawer takes it or not, once a V-blank) */

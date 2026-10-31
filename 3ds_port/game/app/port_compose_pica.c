@@ -180,7 +180,7 @@ static unsigned sCircleNotesNext;
 #define BG_OFS_KEPT 16
 static struct {
     uint32_t stamp, swaps;
-    uint16_t ofs[8];
+    int32_t ofs[8];   /* (fx32, finer than a pixel where the game has it: NitroPort_Render2DBgOffsetsFine) */
     int valid;
 } sBgOfs[BG_OFS_KEPT];
 static unsigned sBgOfsNext;
@@ -1366,12 +1366,12 @@ static int objs_of(uint32_t seq, uint32_t stamp, NitroGpuObj *out)
 }
 
 
-void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const uint16_t ofs[8])
+void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const int32_t fine[8])
 {
     LightLock_Lock(&sBgOfsLock);
     sBgOfs[sBgOfsNext].stamp = stamp;
     sBgOfs[sBgOfsNext].swaps = swaps;
-    memcpy(sBgOfs[sBgOfsNext].ofs, ofs, sizeof(sBgOfs[0].ofs));
+    memcpy(sBgOfs[sBgOfsNext].ofs, fine, sizeof(sBgOfs[0].ofs));
     sBgOfs[sBgOfsNext].valid = 1;
     sBgOfsNext = (sBgOfsNext + 1u) % BG_OFS_KEPT;
     LightLock_Unlock(&sBgOfsLock);
@@ -1387,7 +1387,7 @@ void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const uint16
  * Forest's light) went back and forth as the player walked, 2026-10-30.
  * That only when none was noted so (the nearest within 4 V-blanks after
  * its stamp). Whether they're known. */
-static int bg_offsets_of(uint32_t seq, uint32_t stamp, uint16_t out[8])
+static int bg_offsets_of(uint32_t seq, uint32_t stamp, float out[8])
 {
     int i, found = -1;
     uint32_t best = 0;
@@ -1410,22 +1410,30 @@ static int bg_offsets_of(uint32_t seq, uint32_t stamp, uint16_t out[8])
         }
     }
     if (found >= 0) {
-        memcpy(out, sBgOfs[found].ofs, sizeof(sBgOfs[0].ofs));
+        for (i = 0; i < 8; i++) {
+            out[i] = (float)sBgOfs[found].ofs[i] / 4096.0f;
+        }
     }
     LightLock_Unlock(&sBgOfsLock);
     return found >= 0;
 }
 
-/* Halfway from a to b (9-bit scrolls), the shorter way round a 512 map; a
+/* Halfway from a to b (9-bit scrolls, finer than a pixel where the game
+ * has them so), the shorter way round the BG's picture, which repeats every
+ * 256 pixels (the compositor draws only a 256 x 256 one: Eterna Forest's
+ * light scrolled from 202 to 459 is a pixel on, not half the map back); a
  * jump of more than a quarter of it: b. */
-static int bg_offset_halfway(int a, int b)
+static float bg_offset_halfway(float a, float b)
 {
-    int d = (b - a) & 0x1FF;
+    float d = fmodf(b - a, 256.0f);
 
-    if (d >= 256) {
-        d -= 512;
+    if (d < 0.0f) {
+        d += 256.0f;
     }
-    return d > 128 || d < -128 ? b : (a + d / 2) & 0x1FF;
+    if (d >= 128.0f) {
+        d -= 256.0f;
+    }
+    return d > 64.0f || d < -64.0f ? b : b - d * 0.5f;
 }
 
 uint32_t NitroPort_ComposePublished(int engine)
@@ -2775,6 +2783,10 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
  * the game changes it 30 times); as the picture had it where that isn't
  * known. A ring of CIRCLE_SEGMENTS pieces, from the circle to past the
  * screen's corners. */
+/* (draw_circle_mask) The last circle or band noted for a frame drawn: its
+ * kind (1 a circle, 2 a band of lines), middle and radius. */
+static int sLastCircle, sLastCircleX, sLastCircleY, sLastCircleR;
+
 static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *scene, const PicaRect *pic, float sx,
                              float sy)
 {
@@ -2785,14 +2797,29 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
     extern u32 gpuCmdBufSize, gpuCmdBufOffset;
 
     /* (any picture of the circle fade goes with any circle: drawn as inside
-     * the circle all over, it isn't drawn again as the circle changes) */
-    if (scene != NULL && circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted) == info->gpuCircle) {
+     * the circle all over, it isn't drawn again as the circle changes; so
+     * the picture's own circle is the one it had when it was last drawn,
+     * steps behind. Where the frame's isn't noted as one (the game's last
+     * step of a circle fade turns it off, its window still on: the
+     * in-between frame after it went back to the picture's, twice the
+     * size for a frame, a simulation of 2026-10-31), the frame before's,
+     * else the last one noted.) */
+    {
         uint32_t seqB, stampB;
+        int ka = scene != NULL ? circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted) : 0;
+        int kb = scene != NULL && frame_before(scene, &seqB, &stampB) ? circle_of(seqB, stampB, &bx, &by, &br, &noted)
+                                                                      : 0;
 
-        x = ax, y = ay, r = ar;
-        if (frame_before(scene, &seqB, &stampB) &&
-            circle_of(seqB, stampB, &bx, &by, &br, &noted) == info->gpuCircle) {
-            x = (bx + ax) / 2, y = (by + ay) / 2, r = (br + ar) / 2;
+        if (ka == info->gpuCircle) {
+            x = ax, y = ay, r = ar;
+            if (kb == info->gpuCircle) {
+                x = (bx + ax) / 2, y = (by + ay) / 2, r = (br + ar) / 2;
+            }
+            sLastCircle = ka, sLastCircleX = ax, sLastCircleY = ay, sLastCircleR = ar;
+        } else if (kb == info->gpuCircle) {
+            x = bx, y = by, r = br;
+        } else if (sLastCircle == info->gpuCircle) {
+            x = sLastCircleX, y = sLastCircleY, r = sLastCircleR;
         }
     }
     if (info->gpuCircle == 2) {
@@ -3212,8 +3239,8 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
          * DS does: its colour x eva / 16 + the 3D's x evb / 16 where it isn't
          * clear (the texture's colours are 0 there: what's under stays). */
         if (info->gpuBg >= 0 && set->bgTex && set->bgValid && set->bgKey == info->gpuBgKey) {
-            int hofs = scene->bg_ofs[info->gpuBg * 2], vofs = scene->bg_ofs[info->gpuBg * 2 + 1];
-            uint16_t now[8], before[8];
+            float hofs = scene->bg_ofs[info->gpuBg * 2], vofs = scene->bg_ofs[info->gpuBg * 2 + 1];
+            float now[8], before[8];
 
             /* (the scrolls of the frame the DS shows the scene in; an
              * in-between scene's halfway from the scene before's; the
@@ -3228,8 +3255,8 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
                 }
             }
             int origin = (canvasW - DS_W) / 2;
-            float bu0 = (float)(hofs - origin) / 256.0f, bu1 = bu0 + (float)canvasW / 256.0f;
-            float bvTop = 1.0f - (float)(vofs - top) / 256.0f, bvBottom = bvTop - (float)rows / 256.0f;
+            float bu0 = (hofs - (float)origin) / 256.0f, bu1 = bu0 + (float)canvasW / 256.0f;
+            float bvTop = 1.0f - (vofs - (float)top) / 256.0f, bvBottom = bvTop - (float)rows / 256.0f;
             u32 a = (u32)(info->gpuBgEva * 255 / 16), b = (u32)((16 - info->gpuBgEvb) * 255 / 16);
 
             if (sConfig.flipV) {
