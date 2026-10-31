@@ -41,7 +41,17 @@ typedef struct NitroGx3dTriangle {
      * for a translucent polygon, then its bottom and top screen lines
      * ((bottom << 8) | top). See NitroPort_Gx3dDrawOrder. */
     uint32_t sort_key;
+    /* (PIXEL PERFECT's sprites, port_gx3d_vertex.c) Which way the polygon
+     * moves on the screen by a fraction of a pixel a frame, as the
+     * in-between scenes found it (NITRO_GX3D_SOFT_X across, _Y down; 0:
+     * still, a whole number of pixels, or not known): a sprite is placed on
+     * half pixels that way, moving with the ground under it, instead of on
+     * whole ones (where it fell behind the ground and caught up a pixel at
+     * a time, a jiggle). */
+    uint32_t soft;
 } NitroGx3dTriangle;
+#define NITRO_GX3D_SOFT_X 1u
+#define NITRO_GX3D_SOFT_Y 2u
 
 #define NITRO_GX3D_REGS_AT 0x320u
 #define NITRO_GX3D_REGS_SIZE 0xA0u

@@ -250,10 +250,18 @@ static int sprite_texel_a_pixel(const NitroGx3dScene *scene,const NitroGx3dTrian
     sa=a<0?-1.0f:1.0f; sf=f<0?-1.0f:1.0f;
     x0=px[0]-a*v[0].s-b*v[0].t;
     y0=py[0]-e*v[0].s-f*v[0].t;
-    /* the texture's bottom middle: its feet */
+    /* the texture's bottom middle: its feet, on a pixel's corner; moving
+     * with the ground by a fraction of a pixel a frame (soft, port_gx3d.c's
+     * soft_of), on half a pixel's that way: drawn 2x2 (the remaster's
+     * smooth 3D), a texel is then still two by two of those pixels, and
+     * scaled down, sharp or half a pixel soft. (A 64th of a pixel on: drawn
+     * as it is, the pixels' middles on half a pixel's would fall on the
+     * texels' edges exactly, and which texel each took was a toss-up.) */
     anchor_t=f>0?th:0.0f;
-    ax=floorf(x0+a*(tw*0.5f)+0.5f);
-    ay=floorf(y0+f*anchor_t+0.5f);
+    ax=x0+a*(tw*0.5f);
+    ay=y0+f*anchor_t;
+    ax=(tri->soft&NITRO_GX3D_SOFT_X)?floorf(ax*2.0f+0.5f)*0.5f+1.0f/64.0f:floorf(ax+0.5f);
+    ay=(tri->soft&NITRO_GX3D_SOFT_Y)?floorf(ay*2.0f+0.5f)*0.5f+1.0f/64.0f:floorf(ay+0.5f);
     for(k=0;k<3;k++){
         sx[k]=(ax+sa*(v[k].s-tw*0.5f))/fx;
         sy[k]=(ay+sf*(v[k].t-anchor_t))/fy;

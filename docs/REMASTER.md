@@ -696,11 +696,27 @@ screen's 320 x 192 at 1.25 times, as above.
   (`sprite_whole`; the rooms' own polygons are never lit, in every
   interior looked at: the gym, a Pokémon Center, the Mart, the Cycle Shop,
   houses). Each
-  is on its own nearest pixel every scene, so one moving on the screen
-  steps a whole pixel or none while the ground under it slides smoothly
-  (a slight wobble against it). Keeping the fraction instead (sliding with
-  the ground) was tried and taken back: it can't be sharp off the pixel
-  grid, and the softness while moving looked worse (2026-10-29).
+  is on the nearest pixel corner while it's still on the screen or moves
+  a whole number of pixels a frame (the player, whom the camera follows;
+  the people on the player's row). One moving by a fraction of a pixel
+  a frame goes on the nearest half pixel that way instead (and a 64th
+  on, so drawn as it is no pixel's middle falls on a texel's edge): the
+  camera's perspective moves each row of the ground by its own amount
+  (running in Eterna: 1.94 pixels a frame at the screen's top, 2 at the
+  player's row, 2.2 at the bottom), and on whole pixels a person there
+  fell behind its ground and caught up a pixel at a time, about 10 times
+  a second near the bottom (the jiggle, seen in a video at 120 frames a
+  second, 2026-10-30). On half pixels it moves with its ground; drawn
+  2x2 its texels are still whole pixels there, and scaled down a person
+  is sharp or half a pixel soft that way only, while it moves. Which way
+  each moves is the in-between scenes' finding (`port_gx3d.c`,
+  `soft_of`: half its move since the scene before, off a whole number by
+  more than 0.02 of a pixel), kept with its triangles
+  (`NitroGx3dTriangle.soft`) in the scene and its in-between scene. (All
+  of them on their exact fraction, every way, was tried first and taken
+  back, 2026-10-29: everything soft, still or not.) The flatter camera
+  that keeps every row moving alike (sharp and locked, but the buildings
+  standing straight) was shown and not chosen (2026-10-30).
 - **The game** reads `NitroPort_WideScreenExtra` as 72 there: the people the
   scripts bring on from the sides come from beyond the 400 pixels.
 - **The game's windows** go to the picture's top or bottom
