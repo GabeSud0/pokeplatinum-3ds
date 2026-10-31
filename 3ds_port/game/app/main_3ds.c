@@ -1680,6 +1680,12 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             /* (the HM cut-in: its sprites drawn by the compositor, each
              * where it is in the frame shown, halfway in the in-between
              * frames, the picture not drawn again as they move) */
+            /* (a circle fade: drawn by the compositor, its radius halfway in
+             * the in-between frames, the picture not drawn again as it
+             * closes or opens) */
+            if (engine == 0 && !inPanel) {
+                split.gpuCircle = 1;
+            }
             if (engine == 0 && !inPanel && NitroPort_ComposeDrawsObjs() && NitroPort_GpuSprites()) {
                 static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
                 static uint16_t atlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H];
@@ -1751,6 +1757,11 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             layers->gpuBgPicture = pictureValid ? picture : NULL;
         }
         layers->gpuObjCount = split.gpuObjsLeftOut ? split.gpuObjCount : -1;
+        layers->gpuCircle = split.gpuCircleOn;
+        layers->gpuCircleX = split.gpuCircleX;
+        layers->gpuCircleY = split.gpuCircleY;
+        layers->gpuCircleR = split.gpuCircleR;
+        layers->gpuCircleColor = split.gpuCircleColor;
         layers->gpuObj = split.gpuObj;
         layers->gpuObjAtlas = split.gpuObjAtlas;
         layers->evy = split.evy;
@@ -2195,6 +2206,21 @@ static bool DrawFrame(bool new3dOnly)
 
         if (stamp != notedStamp && (n = NitroPort_Render2DObjPlaces(0, objs, NITRO_GPU_OBJ_MAX)) >= 0) {
             NitroPort_ComposeNoteObjs(stamp, NitroPort_Gx3dSwapsMade(), objs, n);
+            notedStamp = stamp;
+        }
+    }
+    /* (engine A's master brightness and a circle fade drawn by the
+     * compositor, in this frame: halfway in the in-between frames) */
+    if (sRemaster) {
+        static u32 notedStamp;
+        u32 stamp = NitroPort_ComposeVBlanks();
+        int x = 0, y = 0, r = 0;
+
+        if (stamp != notedStamp) {
+            int on = NitroPort_Render2DCircleNow(0, &x, &y, &r);
+
+            NitroPort_ComposeNoteFrame(stamp, NitroPort_Gx3dSwapsMade(), (int)NitroPort_Render2DMasterBright(0, 0), on,
+                                       x, y, r);
             notedStamp = stamp;
         }
     }

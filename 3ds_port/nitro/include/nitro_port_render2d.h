@@ -71,6 +71,12 @@ typedef struct NitroRender2DSplit {
      * (their pixels into gpuObjAtlas). */
     int gpuObjsLeftOut;
     int gpuObjCount;
+    /* (asked for with gpuCircle, below) A circle fade's window left out
+     * of the picture for the compositor to draw (1): the picture drawn as
+     * inside it everywhere; outside it the backdrop (gpuCircleColor,
+     * RGB555); its middle on the canvas (the picture's lines) and radius. */
+    int gpuCircleOn;
+    int gpuCircleX, gpuCircleY, gpuCircleR, gpuCircleColor;
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
     int backdrop;      /* the backdrop colour (RGB555): what shows where no layer does */
     uint16_t *over;    /* width x 192 (x height with top) */
@@ -145,6 +151,16 @@ typedef struct NitroRender2DSplit {
     int gpuObjs;
     NitroGpuObj *gpuObj;
     uint16_t *gpuObjAtlas;
+    /* (the remaster's compositor, which can draw a circle fade itself:
+     * the screen closing or opening round the player, walking into Eterna
+     * Forest, at 60 frames a second, its radius halfway in the in-between
+     * frames) Whether it may (1). Engine A's circle (NitroPort_SetWindowCircle)
+     * is left out (gpuCircleOn) when it's the only window, nothing shows
+     * outside it (no layer, no effect) and everything shown shows inside it,
+     * with the colour effects; with an H-blank effect, only the windows'
+     * registers differing from line to line. Its radius and middle then don't
+     * count as a change. The caller's choice, kept by the call. */
+    int gpuCircle;
 } NitroRender2DSplit;
 #define NITRO_RENDER2D_MAX_H 256
 /* (the game's thread, when it hands a frame to a drawing thread) Take the
@@ -198,6 +214,12 @@ int NitroPort_Render2DObjPlaces(int engine, NitroGpuObj *out, int max);
  * max): how many. nBefore < 0: after's, as they are. */
 int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const NitroGpuObj *after, int nAfter,
                              NitroGpuObj *out, int max);
+
+/* (the game's thread, as it hands a frame over) Engine A's circle fade as
+ * it is now, on the canvas of the last picture that left it out
+ * (gpuCircleOn): 1 with its middle and radius, 0 when it's off, -1 when no
+ * picture has left one out since one was last drawn in a picture. */
+int NitroPort_Render2DCircleNow(int engine, int *x, int *y, int *r);
 
 /* One BG of an engine alone (for capturing it: nitro_port_wideart.h), on
  * the canvas layout gives (width, origin, clip, anchorWindows; NULL: the

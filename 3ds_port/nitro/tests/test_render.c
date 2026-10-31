@@ -2420,6 +2420,42 @@ static void test_window_circle(void)
     CHECK(wide[0 * 400 + 200 + 100] == GREY);         /* (sqrt(150^2 - 120^2) = 90) */
     CHECK(wide[0 * 400 + 200 + 89] == RED);
     CHECK(wide[239 * 400 + 210] == RED);              /* below them */
+    /* drawn by the compositor (gpuCircle): left out, the picture as
+     * inside it everywhere, its middle and radius on the canvas; its
+     * radius alone not a change */
+    {
+        int x = 0, y = 0, r = 0;
+
+        split.gpuCircle = 1;
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(split.gpuCircleOn == 1 && split.gpuCircleX == 200 && split.gpuCircleY == 120 && split.gpuCircleR == 150);
+        CHECK(split.gpuCircleColor == GREY);
+        CHECK(wide[120 * 400 + 399] == RED);          /* outside it: drawn as inside */
+        CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 1 && x == 200 && y == 120 && r == 150);
+        NitroPort_Render2DSplitIfChanged(0, wide, &split);
+        NitroPort_Render2DSplitIfChanged(0, wide, &split);
+        CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split) == 0);
+        NitroPort_SetWindowCircle(0, 0, 128, 96, 120);
+        CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split) == 0);
+        CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 1 && r == 120);
+        /* something shown outside it: drawn in the picture */
+        G2_SetWndOutsidePlane(GX_WND_PLANEMASK_BG1, FALSE);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(split.gpuCircleOn == 0);
+        G2_SetWndOutsidePlane(GX_WND_PLANEMASK_NONE, FALSE);
+        /* not everything shown inside it: drawn in the picture */
+        G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_NONE, TRUE);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(split.gpuCircleOn == 0);
+        G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG1, TRUE);
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(split.gpuCircleOn == 1);
+        G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG1, FALSE);
+        NitroPort_SetWindowCircle(0, 0, 128, 96, 150);
+        split.gpuCircle = 0;
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(split.gpuCircleOn == 0 && NitroPort_Render2DCircleNow(0, &x, &y, &r) == -1);
+    }
     /* closed: nothing inside */
     NitroPort_SetWindowCircle(0, 0, 128, 96, 0);
     NitroPort_Render2DSplit(0, wide, &split);

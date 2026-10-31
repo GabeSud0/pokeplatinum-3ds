@@ -211,6 +211,9 @@ typedef struct Engine {
      * stretch) each OBJ drawn 4/5 as wide round its middle: stretched 1.5625
      * across and 1.25 down by the compositor, its own shape on the screen */
     u8 squeeze;
+    /* (NitroRender2DSplit.gpuCircle) the windows left out: the picture as
+     * inside the circle everywhere (what shows there, insideWindow) */
+    u8 noWindows, insideWindow;
     const State2D *taken;  /* (drawn from the display state taken: its windows) */
     u8 pictures;
     /* (wider canvas, worked out each frame) a BG's hand-drawn picture
@@ -4400,7 +4403,9 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
 
         /* Which layers and effects each pixel shows (the windows): window
          * 0 over window 1 over the OBJ window over the outside. */
-        if (anyWindow) {
+        if (anyWindow && e->noWindows) {
+            memset(enableLine, e->insideWindow, (size_t)width);   /* (a circle the compositor draws: all inside it) */
+        } else if (anyWindow) {
             memset(enableLine, winout & 0x3F, (size_t)width);
             if ((dispcnt & 0x8000) && objs) {
                 for (x = objLine->x0; x < objLine->x1; x++) {
@@ -4750,6 +4755,69 @@ static void ShiftDown(const struct Engine *e, u8 *regs)
     }
 }
 
+/* (NitroRender2DSplit.gpuCircle) The window of engine A's circle fade
+ * the compositor can draw itself, from its registers (not a tall field's
+ * shifted copy), lines and circles: the only window on, its circle on, no
+ * layer outside it (and no colour effect on the backdrop there), all that's
+ * shown shown inside it; with an H-blank effect, the lines differing only in
+ * the windows' registers (and DISP3DCNT's acknowledge bits). Else -1. */
+static int GpuCircleOf(const u8 *io, const u8 (*lines)[NITRO_LINE_REGS], const WindowCircle *circles)
+{
+    u32 dispcnt = Rd32(io, 0);
+    u16 winin = Rd16(io, 0x48), winout = Rd16(io, 0x4A);
+    int w, inside, y;
+
+    if ((dispcnt & 0xE000) == 0x2000) {
+        w = 0;
+    } else if ((dispcnt & 0xE000) == 0x4000) {
+        w = 1;
+    } else {
+        return -1;
+    }
+    if (!circles[w].on || ((dispcnt >> 16) & 3) != 1 || (winout & 0x1F) != 0) {
+        return -1;
+    }
+    if ((winout & 0x20) && ((Rd16(io, 0x50) >> 6) & 3) != 0 && (Rd16(io, 0x50) & 0x20)) {
+        return -1;   /* (the backdrop outside it brightened, darkened or blended) */
+    }
+    inside = (winin >> (w * 8)) & 0x3F;
+    if ((((dispcnt >> 8) & 0x1F) & ~(u32)inside) != 0) {
+        return -1;
+    }
+    for (y = 0; lines != NULL && y < H; y++) {
+        if (memcmp(lines[y], io, 0x40) != 0 || memcmp(lines[y] + 0x48, io + 0x48, 0x60 - 0x48) != 0 ||
+            ((Rd32(lines[y], 0x60) ^ Rd32(io, 0x60)) & ~0x3000u) != 0 ||
+            memcmp(lines[y] + 0x64, io + 0x64, NITRO_LINE_REGS - 0x64) != 0) {
+            return -1;
+        }
+    }
+    return w;
+}
+
+/* (the canvas and the window of the last picture that left the circle
+ * out: for NitroPort_Render2DCircleNow, on the game's thread) */
+static struct {
+    volatile int valid;
+    int window, origin, top;
+} sGpuCircleCanvas;
+
+int NitroPort_Render2DCircleNow(int engine, int *x, int *y, int *r)
+{
+    const WindowCircle *c;
+
+    if (engine != 0 || !__atomic_load_n(&sGpuCircleCanvas.valid, __ATOMIC_ACQUIRE)) {
+        return -1;
+    }
+    c = &sCircles[0][sGpuCircleCanvas.window];
+    if (!c->on) {
+        return 0;
+    }
+    *x = sGpuCircleCanvas.origin + c->cx;
+    *y = sGpuCircleCanvas.top + c->cy;
+    *r = c->r;
+    return 1;
+}
+
 /* An engine's registers and memory, and the canvas (split's: width,
  * origin, clip; NULL: the DS's). */
 static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
@@ -4843,6 +4911,33 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
     if (split != NULL) {
         memset(split, 0, offsetof(NitroRender2DSplit, over));
         split->masterBright = Rd16(e.io, 0x6C);
+    }
+    /* A circle fade the compositor draws itself (NitroRender2DSplit.
+     * gpuCircle): the picture as inside it everywhere. */
+    if (split != NULL && e.isA && !split->gpuCircle) {
+        __atomic_store_n(&sGpuCircleCanvas.valid, 0, __ATOMIC_RELEASE);
+    }
+    if (split != NULL && e.isA && split->gpuCircle && !split->stretch) {
+        const State2D *st = &sState[0];
+        int w = split->snapshot
+                    ? GpuCircleOf(st->io, st->lines ? (const u8(*)[NITRO_LINE_REGS])st->lineRegs : NULL, st->circles)
+                    : GpuCircleOf(NitroPort_IoReg,
+                                  NitroPort_LineRegs.active ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0] : NULL,
+                                  sCircles[0]);
+
+        if (w >= 0) {
+            e.noWindows = 1;
+            e.insideWindow = (u8)((Rd16(e.io, 0x48) >> (w * 8)) & 0x3F);
+            split->gpuCircleOn = 1;
+            split->gpuCircleX = e.origin + e.circles[w].cx;
+            split->gpuCircleY = e.top + e.circles[w].cy;
+            split->gpuCircleR = e.circles[w].r;
+            split->gpuCircleColor = PlttColor(e.bgPltt, 0);
+            sGpuCircleCanvas.window = w;
+            sGpuCircleCanvas.origin = e.origin;
+            sGpuCircleCanvas.top = e.top;
+            __atomic_store_n(&sGpuCircleCanvas.valid, 1, __ATOMIC_RELEASE);
+        }
     }
     powcnt = Rd16(e.ioAll, 0x304);
     dispcnt = Rd32(e.io, 0);
@@ -5560,7 +5655,7 @@ void NitroPort_Render2DTakeState(int engine)
 /* What an engine's picture is drawn from, in two parts: the small ones
  * (registers, palettes, OAM) and its VRAM (the most part: 864 KB for
  * engine A, read in full to work it out). */
-static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg, int gpuObjs)
+static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg, int gpuObjs, int gpuCircle)
 {
     BOOL isA = engine == 0;
     const State2D *st = &sState[isA ? 0 : 1];
@@ -5583,6 +5678,11 @@ static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg, int gpuObjs
      * which needn't be drawn again as it scrolls) */
     if (isA && gpuBg >= 0) {
         regs[(0x10 + gpuBg * 4) / 4] = 0;
+    }
+    /* (a circle fade the compositor draws itself: its windows aren't in
+     * the picture) */
+    if (isA && gpuCircle) {
+        regs[0x40 / 4] = regs[0x44 / 4] = 0;
     }
     h = HashWords((const u8 *)regs, 0x70, h);
     h = HashWords(ioAll + 0x240, 0x10, h);              /* VRAMCNT */
@@ -5613,6 +5713,9 @@ static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg, int gpuObjs
             memcpy(regs, lines[y], sizeof(regs));
             if (isA) {
                 regs[0x60 / 4] &= ~0x3000u;
+            }
+            if (isA && gpuCircle) {
+                regs[0x40 / 4] = regs[0x44 / 4] = 0;
             }
             h = HashWords((const u8 *)regs, 0x70, h);
         }
@@ -5754,7 +5857,7 @@ void NitroPort_Render2DChangeStats(int engine, unsigned *registers, unsigned *vr
 
 static u32 EngineSignature(int engine)
 {
-    return (EngineSmallSignature(engine, 0, -1, 0) * 31u) ^ EngineShownVramSignature(engine, 0);
+    return (EngineSmallSignature(engine, 0, -1, 0, 0) * 31u) ^ EngineShownVramSignature(engine, 0);
 }
 
 /* NitroPort_Render2D, unless nothing it draws from changed since the last
@@ -5777,6 +5880,8 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     /* (the sprites the compositor would draw itself now: GpuObjsOf, as
      * drawing would find, unless a picture couldn't leave them out) */
     int gpuObjs = 0;
+    /* (a circle fade the compositor would draw: 1 + its window, or 0) */
+    int gpuCircle = 0;
     u32 small, vram = 0;
 
     if (e == 0 && split->gpuBgs) {
@@ -5795,8 +5900,21 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
         gpuObjs = GpuObjsOf(split->snapshot ? st->io : NitroPort_IoReg, split->snapshot ? st->oam : NitroPort_Oam,
                             split->snapshot ? st->lines : NitroPort_LineRegs.active);
     }
-    small = EngineSmallSignature(e, split->snapshot, gpuBg, gpuObjs);
-    small = (small ^ (u32)(gpuBg + 1) ^ ((u32)split->gpuBgs << 4) ^ ((u32)gpuObjs << 8)) * 16777619u;
+    if (e == 0 && split->gpuCircle && !split->stretch) {
+        const State2D *st = &sState[0];
+
+        gpuCircle = 1 + (split->snapshot
+                             ? GpuCircleOf(st->io, st->lines ? (const u8(*)[NITRO_LINE_REGS])st->lineRegs : NULL,
+                                           st->circles)
+                             : GpuCircleOf(NitroPort_IoReg,
+                                           NitroPort_LineRegs.active
+                                               ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0]
+                                               : NULL,
+                                           sCircles[0]));
+    }
+    small = EngineSmallSignature(e, split->snapshot, gpuBg, gpuObjs, gpuCircle);
+    small = (small ^ (u32)(gpuBg + 1) ^ ((u32)split->gpuBgs << 4) ^ ((u32)gpuObjs << 8) ^ ((u32)gpuCircle << 9)) *
+            16777619u;
 
     /* the canvas, and where the windows are */
     small = (small ^ (u32)split->width ^ ((u32)split->origin << 9) ^
@@ -5810,6 +5928,10 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
         int w;
 
         for (w = 0; w < 2; w++) {
+            if (gpuCircle == w + 1) {
+                small = (small ^ (u32)(c[w].on != 0)) * 16777619u;   /* (where it is and how big: not in the picture) */
+                continue;
+            }
             small = (small ^ (u32)(c[w].on ? 1 + c[w].cx * 7 + c[w].cy * 131 + c[w].r * 4099 : 0)) * 16777619u;
         }
     }

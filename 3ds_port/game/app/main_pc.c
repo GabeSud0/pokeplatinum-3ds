@@ -491,6 +491,7 @@ static void RemasterRender(uint16_t *out)
             /* (the field's weather's BG drawn by the compositor, as the
              * 3DS has it: below) */
             split.gpuBgs = NitroPort_RepeatingBgs();
+            split.gpuCircle = 1;   /* (a circle fade: drawn over the rest below) */
             if (NitroPort_GpuSprites()) {
                 split.gpuObjs = 1;
                 split.gpuObj = gpuObj;
@@ -564,6 +565,25 @@ static void RemasterRender(uint16_t *out)
             }
         }
         for (y = 0; y < outH; y++) {
+            /* (a circle fade the 3DS's compositor draws: this line's part
+             * inside it, as the 2D renderer's own circle has it) */
+            int circleLo = 0, circleHi = outW;
+
+            if (split.gpuCircleOn) {
+                int dy = y - split.gpuCircleY, half = -1;
+
+                if (dy < 0) {
+                    dy = -dy;
+                }
+                if (dy < split.gpuCircleR) {
+                    long q = (long)split.gpuCircleR * split.gpuCircleR - (long)dy * dy;
+
+                    for (half = 0; (long)(half + 1) * (half + 1) <= q; half++) {
+                    }
+                }
+                circleLo = half < 0 ? 0 : split.gpuCircleX - half;
+                circleHi = half < 0 ? 0 : split.gpuCircleX + half;
+            }
             for (x = 0; x < outW; x++) {
                 int cx = split.stretch ? x * width / outW : x, cy = split.stretch ? y * height / outH : y;
                 uint16_t c = under[cy * width + cx];
@@ -646,6 +666,9 @@ static void RemasterRender(uint16_t *out)
                 }
                 if (split.gpuObjsLeftOut && (sprites[cy * width + cx] & 0x8000)) {
                     c = sprites[cy * width + cx] & 0x7FFF;
+                }
+                if (split.gpuCircleOn && (x < circleLo || x >= circleHi)) {
+                    c = (uint16_t)split.gpuCircleColor;
                 }
                 {
                     int mode = (split.masterBright >> 14) & 3, f = split.masterBright & 31, k;

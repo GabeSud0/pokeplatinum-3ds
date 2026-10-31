@@ -275,6 +275,12 @@ typedef struct ComposeLayers {
     int gpuObjCount;
     const NitroGpuObj *gpuObj;
     const uint16_t *gpuObjAtlas;
+    /* A circle fade left out of the picture for the compositor to draw
+     * (NitroRender2DSplit.gpuCircleOn): its middle on the canvas, radius and
+     * the colour outside it (RGB555), as the picture was drawn; drawn where
+     * the game had it in the frame shown (NitroPort_ComposeNoteFrame),
+     * halfway in an in-between frame. */
+    int gpuCircle, gpuCircleX, gpuCircleY, gpuCircleR, gpuCircleColor;
 } ComposeLayers;
 /* Whether the compositor can draw a BG itself (its picture's textures
  * made: NitroRender2DSplit.gpuBgs). Any thread. */
@@ -293,6 +299,11 @@ int NitroPort_ComposeDrawsObjs(void);
  * count, with this many SWAP_BUFFERS made (NitroPort_Render2DObjPlaces): where they're drawn with a scene of
  * that stamp, and halfway to them in the in-between frame before. */
 void NitroPort_ComposeNoteObjs(uint32_t stamp, uint32_t swaps, const NitroGpuObj *objs, int count);
+/* (the game's thread, each frame it hands over) Engine A's master
+ * brightness (its MASTER_BRIGHT register) and circle fade then
+ * (NitroPort_Render2DCircleNow: on, or -1 when not drawn by the compositor;
+ * its middle and radius), as NitroPort_ComposeNoteObjs. */
+void NitroPort_ComposeNoteFrame(uint32_t stamp, uint32_t swaps, int bright, int on, int x, int y, int r);
 ComposeLayers *NitroPort_ComposeLayersOf(int engine);
 /* Into the textures of the screen (0 upper, 1 lower) the engine is on. */
 /* 0: no set free to publish into (one the GPU's drawing, one the frame

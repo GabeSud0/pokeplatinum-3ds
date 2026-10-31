@@ -1751,6 +1751,27 @@ picture isn't drawn again as they move, only when what they show does.
 The band's window still opens and closes 30 times a second. In the PC
 runner the picture draws them where it had them.
 
+Which frame goes with a scene (2026-10-30): the weather BG's scrolls, the
+GPU sprites' places, the circle fade and the master brightness are noted
+each frame the game hands over, with the count of SWAP_BUFFERS the game has
+made then (`NitroPort_Gx3dSwapsMade`); a scene carries its own
+(`NitroGx3dScene.swap_seq`, an in-between scene the one before's too) and
+takes the last noted with it. By the V-blank clock alone (the first frame
+1-4 V-blanks after the scene's stamp), the frame handed over in the same
+V-blank as the scene was made was left out now and then (the game's frames
+don't keep step with the 3DS's V-blanks) and the next step's taken: Eterna
+Forest's light went back and forth about a pixel at 30 a second as the
+player walked. The clock still where nothing was noted with the count.
+
+The circle fades (walking into Eterna Forest) are drawn by the compositor
+too (`NitroRender2DSplit.gpuCircle`): when the circle's window is the only
+one, nothing shows outside it and all that's shown shows inside it, the
+picture is drawn as inside it everywhere (with the inside's colour
+effects), and a ring of 96 pieces in the backdrop's colour covers the rest,
+its radius halfway in the in-between frames; the picture isn't drawn again
+as it closes. Engine A's master brightness (the fades to white or black)
+is halfway in them too, in 32nds.
+
 On the 3DS (`fps60`, on by default since PR #132): each mailbox slot has
 an in-between scene of its own, made before the slot's scene is
 published (`NitroPort_Gx3dMidOf`: as stable as the scene while it's
