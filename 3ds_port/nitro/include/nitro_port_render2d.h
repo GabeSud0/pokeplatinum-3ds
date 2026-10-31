@@ -121,6 +121,10 @@ void NitroPort_Render2DSplit(int engine, uint16_t *under, NitroRender2DSplit *sp
 /* The same, unless nothing it draws from changed since the last call for
  * that engine (returns 0 then, 1 when drawn). */
 int NitroPort_Render2DSplitIfChanged(int engine, uint16_t *under, NitroRender2DSplit *split);
+/* (for the log) How many times NitroPort_Render2DSplitIfChanged drew an
+ * engine's picture since the last call: for a change to its registers,
+ * palettes or OAM (registers), or to the VRAM it shows (vram). */
+void NitroPort_Render2DChangeStats(int engine, unsigned *registers, unsigned *vram);
 /* An engine's master brightness (its MASTER_BRIGHT register), from the
  * state taken when the frame was handed over (snapshot: 1) or as it is: for
  * a screen not drawn (the lower menu's panel showing the map) whose

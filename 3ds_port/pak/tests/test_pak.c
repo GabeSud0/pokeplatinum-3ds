@@ -117,6 +117,17 @@ static int test_c_fixtures(void)
     CHECK(pak_find(pak, 3, &size) == PAK_ERR_NOT_FOUND && size == 5);
     CHECK(pak_read(pak, 3, 0, bytes, 1) == PAK_ERR_NOT_FOUND);
     CHECK(pak_find(pak, 2, NULL) == PAK_ERR_ARGUMENT);
+    {
+        /* the file read once (the small pack in a block), then kept */
+        uint32_t reads, again;
+        uint64_t read_bytes;
+        pak_set_cache_blocks(pak, 4096);   /* (capped at the most) */
+        pak_stats(pak, &reads, &read_bytes);
+        CHECK(reads >= 1 && read_bytes >= 3);
+        CHECK(pak_read(pak, 2, 0, bytes, 3) == PAK_OK && memcmp(bytes, "abc", 3) == 0);
+        pak_stats(pak, &again, NULL);
+        CHECK(again == reads);
+    }
     pak_close(pak);
 
     CHECK(fixture());

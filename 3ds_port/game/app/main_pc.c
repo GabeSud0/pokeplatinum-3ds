@@ -2159,6 +2159,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "%s: %s\n", argv[1], error);
         return 2;
     }
+    {
+        /* (as a New 3DS: main_3ds.c) */
+        extern void NitroPort_PakCacheBlocks(uint32_t blocks);
+        extern uint32_t NitroPort_PakWarmField(void);
+
+        NitroPort_PakCacheBlocks(2048);
+        NitroPort_Log("[perf] data pack: the field's small files read ahead (%lu KB)", (unsigned long)NitroPort_PakWarmField());
+    }
 
     if (savePath == NULL) {
         /* platinum.sav in the data pack's folder */

@@ -143,6 +143,9 @@ void NitroPort_SoundRender(int16_t *stereo, size_t frames);
 void NitroPort_SoundPumpReplies(void);
 /* (nitro_port_fs.h, which needs the SDK's headers) */
 void NitroPort_FsReadStats(uint32_t *reads, uint64_t *bytes, uint64_t *micros);
+void NitroPort_PakDiskStats(uint32_t *reads, uint64_t *bytes);
+void NitroPort_PakCacheBlocks(uint32_t blocks);
+uint32_t NitroPort_PakWarmField(void);
 /* (nitro_port.h) the save's changes waiting, into its file */
 void NitroPort_CardFlush(void);
 
@@ -899,7 +902,8 @@ static void GeometryOps(void)
  * changing every frame (text, the HM cut-in: 11-14 ms a picture), the
  * geometry left out 6-10 scenes a second and the field dropped to 48-52
  * frames a second (a log of 2026-10-30); together they take about 3/4 of
- * the core. */
+ * the core. But for the drawer's reading of the game's display state
+ * (StartDrawers), which the game waits for: that's above it. */
 static void StartGeometryOn(s32 priority, int core)
 {
     GeometryOps();
@@ -1581,6 +1585,7 @@ typedef struct Drawer {
     volatile bool quit;
     u32 images;              /* 3D images out when it was handed its last frame */
     volatile u64 ticks;      /* time spent drawing, for [perf] */
+    volatile u64 showTicks;  /* of it, handing pictures over (the remaster: upscaled, ShowScreen) */
     volatile unsigned count; /* frames handled */
     volatile unsigned drawn; /* screens drawn (not unchanged) */
     volatile u64 convertTicks;   /* converting 3D images between frames */
@@ -1764,7 +1769,7 @@ static void DrawerMain(void *arg)
 
     CatchCrashes();
     for (;;) {
-        u64 start;
+        u64 start, showStart;
         bool drawA = false, drawB = false;
 
         LightEvent_Wait(&d->go);
@@ -1799,6 +1804,7 @@ static void DrawerMain(void *arg)
         if (d->readPriority != d->priority && (drawA || drawB)) {
             svcSetThreadPriority(CUR_THREAD_HANDLE, d->priority);
         }
+        showStart = svcGetSystemTick();
         if (d->screens & ENGINE_A) {
             /* (its screen's newest picture the game's as of this frame:
              * published now, or unchanged; not if no set was free) */
@@ -1819,6 +1825,7 @@ static void DrawerMain(void *arg)
             }
         }
         d->drawn += (unsigned)drawA + (unsigned)drawB;
+        d->showTicks += svcGetSystemTick() - showStart;
         d->ticks += svcGetSystemTick() - start;
         d->count++;
         /* Back up before it can be handed the next frame: it wakes up
@@ -1881,10 +1888,16 @@ static bool StartDrawer(int screens, s32 priority, s32 readPriority, int core)
  * core 1, the system's, the program gets 30% of the core: engine B's
  * screen drew 14-25 frames a second there, the intro's lower screen moved
  * in uneven steps, and it took time from the geometry (geometry.txt "core
- * 1" puts both back there). Otherwise both on core 0. */
+ * 1" puts both back there). Otherwise both on core 0. Engine A's drawer
+ * reads the game's display state (and draws from it) above the geometry
+ * there, and hands its picture over below it: the game waits for the
+ * reading before its next frame's display work, and behind the geometry
+ * (a stretch of up to 25 ms where the maps change) the game waited for it
+ * and stepped unevenly (a log of 2026-10-30, Eterna to Route 205); the
+ * reading's short when nothing changed (a few of the VRAM's KB). */
 static void StartDrawers(s32 priority, bool isNew3ds)
 {
-    if (isNew3ds && StartDrawer(ENGINE_A, priority, priority, 2)) {
+    if (isNew3ds && StartDrawer(ENGINE_A, priority, priority - 2, 2)) {
         if (sGeoCore != 1 || !StartDrawer(ENGINE_B, priority + 1, priority - 2, 1)) {
             StartDrawer(ENGINE_B, priority + 2, priority + 2, 0);
         }
@@ -2289,7 +2302,7 @@ static void PerfFrame(u64 enter)
     double seconds, perFrame;
     u64 soundTicks, soundSamples, gpuTicks;
     unsigned gpuScenes, gpuTriangles, gpuDroppedTriangles;
-    char drawing[192];
+    char drawing[400];
     int i, used = 0;
 
     if (sPerfStart == 0) {
@@ -2303,6 +2316,7 @@ static void PerfFrame(u64 enter)
         sPerfGpuDroppedTriangles = __atomic_load_n(&sGpuDroppedTriangles,__ATOMIC_RELAXED);
         for (i = 0; i < sDrawerCount; i++) {
             sDrawers[i].ticks = 0;
+            sDrawers[i].showTicks = 0;
             sDrawers[i].count = 0;
         }
         return;
@@ -2320,18 +2334,36 @@ static void PerfFrame(u64 enter)
     drawing[0] = 0;
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
-        unsigned count = d->count;
+        unsigned count = d->count, registers = 0, vram = 0, r, v;
+        char why[96] = "";
 
-        used += snprintf(drawing + used, sizeof(drawing) - (size_t)used, "%s%s %.1f/s (%.1f/s new), %.1f ms (core %d)",
-                         i ? "; " : "",
+        /* (the remaster: why its pictures were drawn again) */
+        if (sRemaster && (d->screens & ENGINE_A)) {
+            NitroPort_Render2DChangeStats(0, &r, &v);
+            registers += r;
+            vram += v;
+        }
+        if (sRemaster && (d->screens & ENGINE_B)) {
+            NitroPort_Render2DChangeStats(1, &r, &v);
+            registers += r;
+            vram += v;
+        }
+        if (registers + vram) {
+            snprintf(why, sizeof(why), ": %.1f for registers, palettes or sprites, %.1f for VRAM", registers / seconds,
+                     vram / seconds);
+        }
+        used += snprintf(drawing + used, sizeof(drawing) - (size_t)used,
+                         "%s%s %.1f/s (%.1f/s new%s), %.1f ms, %.1f of it handing over (core %d)", i ? "; " : "",
                          d->screens == (ENGINE_A | ENGINE_B) ? "both screens"
                          : (d->screens == ENGINE_A) == sAOnTop ? "upper" : "lower",
-                         count / seconds, d->drawn / seconds,
-                         count ? (double)d->ticks * 1000.0 / SYSCLOCK_ARM11 / count : 0.0, d->core);
+                         count / seconds, d->drawn / seconds, why,
+                         count ? (double)d->ticks * 1000.0 / SYSCLOCK_ARM11 / count : 0.0,
+                         count ? (double)d->showTicks * 1000.0 / SYSCLOCK_ARM11 / count : 0.0, d->core);
         if (used >= (int)sizeof(drawing)) {
             break;
         }
         d->ticks = 0;
+        d->showTicks = 0;
         d->count = 0;
         d->drawn = 0;
     }
@@ -2509,7 +2541,7 @@ static void PerfFrame(u64 enter)
  * own work (of which its file reads, and its waits for the geometry
  * thread), or the port's between frames. For the stalls the [perf] lines
  * only average over two seconds (going between a route and a town). */
-#define STALL_GAME_MS 100.0
+#define STALL_GAME_MS 34.0   /* (more than a scene's time at 30 a second: a scene missed) */
 #define STALL_PORT_MS 50.0
 static double TicksMs(u64 ticks)
 {
@@ -2518,21 +2550,25 @@ static double TicksMs(u64 ticks)
 
 static void NoteGameStall(u64 enter)
 {
-    static uint32_t lastReads;
-    static uint64_t lastBytes, lastFsMicros, lastGeoMicros;
-    uint32_t reads;
-    uint64_t bytes, fsMicros, geoMicros = NitroPort_Gx3dProducerWaitMicros();
+    static uint32_t lastReads, lastDiskReads;
+    static uint64_t lastBytes, lastDiskBytes, lastFsMicros, lastGeoMicros;
+    uint32_t reads, diskReads;
+    uint64_t bytes, diskBytes, fsMicros, geoMicros = NitroPort_Gx3dProducerWaitMicros();
 
     NitroPort_FsReadStats(&reads, &bytes, &fsMicros);
+    NitroPort_PakDiskStats(&diskReads, &diskBytes);
     if (sFrameExit != 0 && TicksMs(enter - sFrameExit) > STALL_GAME_MS) {
-        NitroPort_Log("[stall] frame %lu: %.0f ms in the game (file reads: %lu, %llu KB, %.0f ms; "
+        NitroPort_Log("[stall] frame %lu: %.0f ms in the game (file reads: %lu, %llu KB, %.0f ms, of them from the SD card %lu, %llu KB; "
                       "waiting for the geometry thread: %.0f ms)",
                       sFrame, TicksMs(enter - sFrameExit), (unsigned long)(reads - lastReads),
                       (unsigned long long)((bytes - lastBytes) / 1024u),
-                      (double)(fsMicros - lastFsMicros) / 1000.0, (double)(geoMicros - lastGeoMicros) / 1000.0);
+                      (double)(fsMicros - lastFsMicros) / 1000.0, (unsigned long)(diskReads - lastDiskReads),
+                      (unsigned long long)((diskBytes - lastDiskBytes) / 1024u), (double)(geoMicros - lastGeoMicros) / 1000.0);
     }
     lastReads = reads;
     lastBytes = bytes;
+    lastDiskReads = diskReads;
+    lastDiskBytes = diskBytes;
     lastFsMicros = fsMicros;
     lastGeoMicros = geoMicros;
 }
@@ -2881,6 +2917,21 @@ int main(int argc, char **argv)
             bool isNew3ds = false;
 
             APT_CheckNew3DS(&isNew3ds);
+            {
+                /* More of the data pack kept in memory on a New 3DS (its
+                 * larger memory), and the field's small files read into
+                 * it now: going between a route and a town reads 120-240
+                 * small pieces in a frame (2026-10-30). */
+                u64 warmStart = svcGetSystemTick();
+                uint32_t kb;
+
+                if (isNew3ds) {
+                    NitroPort_PakCacheBlocks(2048);
+                }
+                kb = NitroPort_PakWarmField();
+                NitroPort_Log("[perf] data pack: %u MB kept in memory at most; the field's small files read ahead (%lu KB, %.0f ms)",
+                              isNew3ds ? 16u : 4u, (unsigned long)kb, TicksMs(svcGetSystemTick() - warmStart));
+            }
             ReadRemasterConfig(isNew3ds);
             ReadOptions();
             StartGpu(priority, isNew3ds);

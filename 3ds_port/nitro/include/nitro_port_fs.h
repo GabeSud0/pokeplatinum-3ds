@@ -37,6 +37,17 @@ void NitroPort_FileMissing(const char *path);
 /* The game's file reads since the start (for the log: a long frame's
  * reads): how many, their bytes, and the time they took in microseconds. */
 void NitroPort_FsReadStats(uint32_t *reads, uint64_t *bytes, uint64_t *micros);
+/* Of those, the reads of the pack file itself (not from what's kept in
+ * memory of it): how many, their bytes. */
+void NitroPort_PakDiskStats(uint32_t *reads, uint64_t *bytes);
+
+/* More of the pack kept in memory (8 KB blocks, 2048 at most: a New
+ * 3DS's 16 MB), and the small files the field reads at every turn read
+ * into it now (NitroPort_PakWarmField: before the game starts, so a
+ * route's first crossing doesn't go to the SD card for them). The
+ * kilobytes read. */
+void NitroPort_PakCacheBlocks(uint32_t blocks);
+uint32_t NitroPort_PakWarmField(void);
 
 /* NitroSDK ROM archive command processor (SDK_PORT_3DS only). */
 FSResult NitroPort_PakArchiveProc(FSFile *file, FSCommandType command);

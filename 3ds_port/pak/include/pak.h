@@ -44,6 +44,14 @@ PakResult pak_find(const Pak *pak, uint32_t file_id, uint32_t *out_size);
 PakResult pak_read(Pak *pak, uint32_t file_id, uint32_t offset,
                    void *buf, size_t len);
 
+/* The most of the pack kept in memory, in 8 KB blocks (512 to start,
+ * 2048 at most); only raised. The memory comes as the blocks are used. */
+void pak_set_cache_blocks(Pak *pak, uint32_t blocks);
+
+/* How many reads of the file itself (not from the blocks kept) there have
+ * been, and their bytes. */
+void pak_stats(const Pak *pak, uint32_t *disk_reads, uint64_t *disk_bytes);
+
 /* Accepts NULL. */
 void pak_close(Pak *pak);
 

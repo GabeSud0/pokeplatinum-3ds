@@ -32,6 +32,12 @@ struct PakEntry {
  * KB was; 2 MB kept too little, the battle's own data pushing it out). */
 #define PAK_BLOCK_BYTES 8192u
 #define PAK_BLOCKS 512u
+/* At most (pak_set_cache_blocks: a New 3DS's 16 MB, 2026-10-30: crossing
+ * between a route and a town, 120-240 small reads in a frame, the place
+ * name's font, the zone's events, encounters, scripts and people; the
+ * field's streaming reads, its map blocks, buildings and music, pushed
+ * them out of 4 MB). */
+#define PAK_BLOCKS_MAX 2048u
 /* The most read at once through a buffer of its own (a bigger read goes
  * straight to the caller's memory, its edge blocks not kept). */
 #define PAK_SCRATCH_MAX (256u * 1024u)
@@ -47,8 +53,10 @@ struct Pak {
     struct PakEntry *entries;
     uint32_t count;
     uint64_t size;
-    struct PakBlock blocks[PAK_BLOCKS];
+    struct PakBlock blocks[PAK_BLOCKS_MAX];
     uint32_t clock;
+    uint32_t disk_reads;   /* (pak_stats) */
+    uint64_t disk_bytes;
     uint16_t *slot_of;     /* each block of the file: its slot + 1, or 0 (not here) */
     uint32_t nblocks;
     uint32_t slots;        /* the slots in use: PAK_BLOCKS, fewer if memory ran out */
@@ -329,6 +337,8 @@ static unsigned char *scratch(Pak *pak, size_t size)
 
 static PakResult read_file(Pak *pak, uint64_t at, unsigned char *out, size_t len)
 {
+    pak->disk_reads++;
+    pak->disk_bytes += len;
     if (at > LONG_MAX || fseek(pak->file, (long)at, SEEK_SET) != 0 ||
         !read_exact(pak->file, out, len))
         return PAK_ERR_IO;
@@ -409,11 +419,25 @@ PakResult pak_read(Pak *pak, uint32_t file_id, uint32_t offset,
     return read_cached(pak, absolute, (unsigned char *)buf, len);
 }
 
+void pak_set_cache_blocks(Pak *pak, uint32_t blocks)
+{
+    if (pak == NULL) return;
+    if (blocks > PAK_BLOCKS_MAX) blocks = PAK_BLOCKS_MAX;
+    /* (only more: the slots in use stay; memory comes as they're used) */
+    if (blocks > pak->slots) pak->slots = blocks;
+}
+
+void pak_stats(const Pak *pak, uint32_t *disk_reads, uint64_t *disk_bytes)
+{
+    if (disk_reads) *disk_reads = pak != NULL ? pak->disk_reads : 0;
+    if (disk_bytes) *disk_bytes = pak != NULL ? pak->disk_bytes : 0;
+}
+
 void pak_close(Pak *pak)
 {
     uint32_t i;
     if (pak == NULL) return;
-    for (i = 0; i < PAK_BLOCKS; ++i) free(pak->blocks[i].data);
+    for (i = 0; i < PAK_BLOCKS_MAX; ++i) free(pak->blocks[i].data);
     if (pak->file != NULL) fclose(pak->file);
     free(pak->scratch);
     free(pak->slot_of);

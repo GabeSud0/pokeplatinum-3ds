@@ -337,6 +337,65 @@ BOOL NitroPort_PakOwnFileRead(uint32_t id, uint32_t offset, void *dest, uint32_t
     return pak_read(sPak, id, offset, dest, size) == PAK_OK ? TRUE : FALSE;
 }
 
+void NitroPort_PakDiskStats(uint32_t *reads, uint64_t *bytes)
+{
+    pak_stats(sPak, reads, bytes);
+}
+
+void NitroPort_PakCacheBlocks(uint32_t blocks)
+{
+    pak_set_cache_blocks(sPak, blocks);
+}
+
+/* The field's small files read at every turn: going between a route and a
+ * town (the place name's font and frame, the zone's events, encounters and
+ * scripts, the people's list), walking (the field effects, the berries,
+ * the weather, the animated tiles and lights, the map's matrix). About 1.4
+ * MB in all. */
+static const char *const sFieldWarm[] = {
+    "graphic/pl_font.narc",
+    "graphic/pl_winframe.narc",
+    "arc/area_win_gra.narc",
+    "fielddata/eventdata/zone_event.narc",
+    "fielddata/encountdata/pl_enc_data.narc",
+    "fielddata/script/scr_seq.narc",
+    "fielddata/mm_list/move_model_list.narc",
+    "fielddata/mapmatrix/map_matrix.narc",
+    "fielddata/areadata/area_data.narc",
+    "fielddata/areadata/area_build_model/area_build.narc",
+    "data/mmodel/fldeff.narc",
+    "data/weather_sys.narc",
+    "data/fldtanime.narc",
+    "data/arealight.narc",
+    "arc/bm_anime_list.narc",
+    "itemtool/itemdata/nuts_data.narc",
+    "itemtool/itemdata/pl_item_data.narc",
+};
+
+uint32_t NitroPort_PakWarmField(void)
+{
+    static unsigned char buf[64 * 1024];
+    uint64_t total = 0;
+    size_t i, j;
+
+    if (!sPak) return 0;
+    for (i = 0; i < sizeof(sFieldWarm) / sizeof(sFieldWarm[0]); ++i) {
+        for (j = 0; j < sPathCount; ++j) {
+            uint32_t size, at;
+            if (strcmp(sPaths[j].path, sFieldWarm[i]) != 0) continue;
+            if (pak_find(sPak, sPaths[j].id, &size) != PAK_OK) break;
+            /* (in pieces: each kept as it's read) */
+            for (at = 0; at < size; at += (uint32_t)sizeof(buf)) {
+                uint32_t n = size - at < sizeof(buf) ? size - at : (uint32_t)sizeof(buf);
+                if (pak_read(sPak, sPaths[j].id, at, buf, n) != PAK_OK) break;
+            }
+            total += size;
+            break;
+        }
+    }
+    return (uint32_t)(total / 1024u);
+}
+
 /* (NitroPort_FsReadStats; the game's thread only) */
 static uint32_t sStatReads;
 static uint64_t sStatBytes, sStatNanos;
