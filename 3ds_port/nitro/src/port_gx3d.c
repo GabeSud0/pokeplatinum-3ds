@@ -615,6 +615,13 @@ static void diag_log(void)
 /* One polygon's triangles, held until the polygon is known to be stored. */
 static NitroGx3dTriangle sStaged[16];
 static unsigned sStagedCount, sStagedVertices, sStagedClipped;
+/* (the in-between scenes, below) The scene's triangles end_polygon added
+ * for the polygon just made (record_polygon keeps them with its record),
+ * and, while a polygon is replayed into an in-between scene, its soft
+ * flags (NitroGx3dTriangle.soft). */
+static unsigned sLastTriFirst, sLastTriAdded;
+static uint32_t sReplaySoft;
+static int sReplaying;
 
 /* Clip a triangle of the polygon being built to the view volume, cull it,
  * and stage what's left. */
@@ -699,6 +706,7 @@ static void keep_for_shadow(const GeoVertex *a,const GeoVertex *b,const GeoVerte
     tri->texture_param=s.texparam;
     tri->palette_base=s.plttbase;
     tri->sort_key=0;
+    tri->soft=0;
     if(NitroPort_Gx3dTriangleTranslucent(tri))return;
     tri->v[0]=to_screen(a);tri->v[1]=to_screen(b);tri->v[2]=to_screen(c);
     scene->shadow_count++;
@@ -728,6 +736,7 @@ static int add_screen_triangle(const NitroGx3dVertex *aa,const NitroGx3dVertex *
     tri->polygon_attr=s.attr;
     tri->texture_param=s.texparam;
     tri->palette_base=s.plttbase;
+    tri->soft=sReplaying?sReplaySoft:0u;
     return 0;
 }
 static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
@@ -811,6 +820,7 @@ static void end_polygon(unsigned newVertices)
 {
     NitroGx3dScene *scene=dest_scene();
     unsigned i, vertices;
+    sLastTriFirst=scene->count;sLastTriAdded=0;
     if(!sStagedCount)return;
     vertices=sStagedClipped?sStagedVertices:newVertices;
     if(s.framePolygons>=2048u || s.frameVertices+vertices>6144u){
@@ -844,6 +854,7 @@ static void end_polygon(unsigned newVertices)
         else sDiag.alphaTranslucent++;
         if(scene->count>=NITRO_GX3D_MAX_TRIANGLES){scene->dropped++;continue;}
         scene->triangles[scene->count++]=sStaged[i];
+        sLastTriAdded++;
     }
 }
 
@@ -869,6 +880,8 @@ typedef struct PolyRecord {
     uint32_t attr, texparam, plttbase, sig;
     uint8_t count;           /* 3, or 4: triangles (0, 1, 2) and (0, 2, 3) */
     uint8_t onScreen;        /* all its vertices in front of the camera (w > 0) */
+    uint16_t ntri;           /* its triangles in its scene: ntri from tri0 */
+    uint32_t tri0;
 } PolyRecord;
 #define MAX_RECORDS 4096u
 #define MATCH_LOOKAHEAD 48u
@@ -884,7 +897,6 @@ static int sInterpWanted, sInterp;
 static PolyRecord *sRec[2];              /* [sRecBuild]: this scene's; the other: the scene before's */
 static unsigned sRecCount[2], sRecBuild;
 static int sRecBeforeValid;
-static int sReplaying;
 /* Each mailbox slot's in-between scene (the one between its scene and the
  * scene before), made before the slot is published: with the scene, the
  * display has its in-between scene too (NitroPort_Gx3dMidOf). */
@@ -919,6 +931,7 @@ static void record_polygon(GeoVertex *a,GeoVertex *b,GeoVertex *c,GeoVertex *d)
     r->count=(uint8_t)n;
     r->attr=s.attr;r->texparam=s.texparam;r->plttbase=s.plttbase;
     r->sig=record_signature(n);
+    r->tri0=sLastTriFirst;r->ntri=(uint16_t)sLastTriAdded;
     r->onScreen=1;
     for(k=0;k<n;k++){
         if(r->clip[k][3]<=0){r->onScreen=0;break;}
@@ -1189,7 +1202,36 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
 /* The in-between scene of the scene just finished (`now', its records
  * sRec[sRecBuild]) and the one before (sRec[sRecBuild ^ 1]), into sMid.
  * Whether there is one. */
-static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
+/* (PIXEL PERFECT's sprites) A polygon's soft flags (NitroGx3dTriangle.
+ * soft): the ways it moved on the screen by other than a whole number of
+ * pixels a frame since the scene before (half the scene's move: the
+ * in-between scene shows it halfway). Only what can be a sprite there
+ * (sprite_texel_a_pixel): textured, every vertex at one depth, in the
+ * 240 lines' view. The camera's perspective moves each row of the ground
+ * by its own amount (running: 1.94 pixels a frame at the top of Eterna's
+ * screen, 2.2 at the bottom, 2 at the player's row): a sprite snapped to
+ * whole pixels there fell behind its ground and caught up a pixel at a
+ * time, about 10 times a second near the bottom (a video at 120 frames a
+ * second, 2026-10-30), the people's jiggle; on half pixels it moves with
+ * its ground, a little soft that way while it moves. Still (the player,
+ * whom the camera follows) or a whole number of pixels a frame (the
+ * player's row), snapped as before. */
+#define SOFT_NEAR 0.02f   /* (pixels a frame off a whole number: under it, a pixel's catching up every 50 frames or rarer) */
+static uint32_t soft_of(const PolyRecord *p,const PolyRecord *c,const NitroGx3dScene *now)
+{
+    float dx,dy;
+    unsigned k;
+    uint32_t soft=0;
+    if(now->screen_height!=240u || !((c->texparam>>26)&7u) || !p->onScreen || !c->onScreen || p->count!=c->count)
+        return 0;
+    for(k=1;k<c->count;k++)if(c->clip[k][3]!=c->clip[0][3])return 0;
+    dx=0.5f*(c->px[0]-p->px[0])*((float)now->screen_width/256.0f);
+    dy=0.5f*(c->py[0]-p->py[0])*(240.0f/192.0f);
+    if(fabsf(dx-floorf(dx+0.5f))>SOFT_NEAR)soft|=NITRO_GX3D_SOFT_X;
+    if(fabsf(dy-floorf(dy+0.5f))>SOFT_NEAR)soft|=NITRO_GX3D_SOFT_Y;
+    return soft;
+}
+static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
 {
     const PolyRecord *P=sRec[sRecBuild^1u],*C=sRec[sRecBuild];
     unsigned m=sRecCount[sRecBuild^1u],n=sRecCount[sRecBuild],j,k,used=0;
@@ -1234,6 +1276,7 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
             int32_t clip[4][4];
             const PolyRecord *c=&C[j];
             int mid=0;
+            uint32_t soft=0;
             if(sMatch[j]>=0){
                 const PolyRecord *p=&P[sMatch[j]];
                 double x0,y0,x1,y1;
@@ -1248,8 +1291,12 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
                         for(q=0;q<4;q++)clip[k][q]=(int32_t)(((int64_t)p->clip[k][q]+c->clip[k][q])/2);
                     }
                     used++;
+                    soft=soft_of(p,c,now);
                 }
             }
+            /* (the scene's own triangles of it, and the in-between one's) */
+            for(k=0;k<c->ntri && c->tri0+k<now->count;k++)now->triangles[c->tri0+k].soft=soft;
+            sReplaySoft=soft;
             if(!mid)memcpy(clip,c->clip,sizeof(clip));
             if(sMatch[j]<0 && c->onScreen && sMotionValid && (sMotionX!=0.0f || sMotionY!=0.0f)){
                 /* (one with no match: the scene's new ones, mostly, as a
@@ -1264,6 +1311,7 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
                 }
             }
             replay_polygon(c,clip);
+            sReplaySoft=0;
         }
         if(sMotionValid && (sMotionX!=0.0f || sMotionY!=0.0f) && sPUsed){
             /* The scene before's that the scene's motion takes out of the
@@ -1303,7 +1351,7 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
 }
 /* At a SWAP_BUFFERS, before its scene (the building slot) is published:
  * its in-between scene. */
-static void interp_mid(const NitroGx3dScene *now)
+static void interp_mid(NitroGx3dScene *now)
 {
     sMidOk[sBuilding]=sInterp && make_mid_scene(now,sMids[sBuilding]);
 }
