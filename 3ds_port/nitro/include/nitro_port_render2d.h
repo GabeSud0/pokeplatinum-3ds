@@ -190,7 +190,8 @@ int NitroPort_Render2DObjPlaces(int engine, NitroGpuObj *out, int max);
  * NitroPort_Render2DObjPlaces), each where it is halfway: each sprite of
  * before found in after (the nearest of its kind, at most 96 pixels across
  * and 32 down away, OAM's x going round 512 and its y 256; the nearest of
- * its kind in before as well); one going off or just come on moved half as
+ * its kind in before as well; else, its picture changed, the nearest of its
+ * size within 32 across and 16 down, with after's picture); one going off or just come on moved half as
  * far as most of its kind, back or on (or, where its kind doesn't move, one
  * going off where it is, one come on not yet). Back to front (the DS's
  * lowest priority first, of each the last in OAM first), into out (at most

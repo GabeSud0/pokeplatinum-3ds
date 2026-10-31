@@ -328,7 +328,7 @@ static int sQuadVertices;
  * tints, 2 x 24 at most: LINE_RUNS_MAX, LINE_RUNS_STEREO a side; the
  * menu's panel put together, 96 at most: PANEL_PIECES_MAX, their sides and
  * brightness; engine A's sprites drawn here, each eye's: draw_gpu_objs) */
-#define MAX_QUAD_VERTICES (6 * (32 + 2 * 24 + 96 + 2 * NITRO_GPU_OBJ_MAX))
+#define MAX_QUAD_VERTICES (6 * (32 + 2 * 24 + 96 + 2 * 2 * NITRO_GPU_OBJ_MAX))
 /* ------------------------------------------------- frames in flight
  * A frame's commands are built while the GPU draws the frame before
  * (NitroPort_PicaFrameOpen): its GPU operations (fills, command lists,
@@ -2587,6 +2587,12 @@ static void draw_gpu_objs(const LayerSet *set, const NitroGx3dScene *scene, cons
         }
         if (o->vflip != (sConfig.flipV != 0)) {
             t = vT, vT = vB, vB = t;
+        }
+        if (sConfig.flipV) {
+            /* (the picture flipped as a whole: the sprite's place too) */
+            t = y0;
+            y0 = pic->y0 + pic->y1 - y1;
+            y1 = pic->y0 + pic->y1 - t;
         }
         /* (cut at the picture's edges, its texture with it) */
         if (x0 < pic->x0) {

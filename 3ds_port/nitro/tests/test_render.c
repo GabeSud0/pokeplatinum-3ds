@@ -2680,16 +2680,18 @@ static void test_gpu_objs(void)
     NitroPort_Render2DSplit(0, under, &split);
     CHECK(split.gpuObjsLeftOut == 1);
     CHECK(over[32 * 256 + 42] == (RED | 0x8000));   /* the BG there, not the sprite */
-    CHECK(split.gpuObjCount == 3);
+    CHECK(split.gpuObjCount == 4);      /* (the one off the picture too: its picture for later) */
     /* back to front: OAM's last first */
     CHECK(objs[0].x == -4 && objs[0].y == 90 && objs[0].w == 8 && objs[0].h == 8 && objs[0].rawX == 508);
-    CHECK(objs[1].x == 100 && objs[1].y == 50 && objs[1].hflip == 1 && objs[1].vflip == 0);
-    CHECK(objs[2].x == 40 && objs[2].y == 30 && objs[2].w == 16 && objs[2].h == 8 && objs[2].hflip == 0);
-    CHECK(objs[1].ax == objs[2].ax && objs[1].ay == objs[2].ay);   /* the same picture, once */
-    CHECK(objs[0].ax != objs[2].ax || objs[0].ay != objs[2].ay);
-    CHECK(objs[2].key != objs[1].key);                               /* (flipped) */
-    x = objs[2].ax;
-    y = objs[2].ay;
+    CHECK(objs[1].x == -12 && objs[1].y == 70);
+    CHECK(objs[2].x == 100 && objs[2].y == 50 && objs[2].hflip == 1 && objs[2].vflip == 0);
+    CHECK(objs[3].x == 40 && objs[3].y == 30 && objs[3].w == 16 && objs[3].h == 8 && objs[3].hflip == 0);
+    CHECK(objs[2].ax == objs[3].ax && objs[2].ay == objs[3].ay);   /* the same picture, once */
+    CHECK(objs[0].ax != objs[3].ax || objs[0].ay != objs[3].ay);
+    CHECK(objs[0].ax == objs[1].ax && objs[0].ay == objs[1].ay);
+    CHECK(objs[3].key != objs[2].key);                               /* (flipped) */
+    x = objs[3].ax;
+    y = objs[3].ay;
     CHECK(atlas[y * NITRO_GPU_OBJ_ATLAS_W + x] == green);             /* tile 0's top left */
     CHECK(atlas[(y + 2) * NITRO_GPU_OBJ_ATLAS_W + x + 2] == blue);
     CHECK(atlas[(y + 2) * NITRO_GPU_OBJ_ATLAS_W + x + 10] == green);  /* tile 1 */
@@ -2703,7 +2705,7 @@ static void test_gpu_objs(void)
     GX_LoadOAM(oam, 0, sizeof(oam));
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
     CHECK(NitroPort_Render2DObjPlaces(0, places, NITRO_GPU_OBJ_MAX) == 3);
-    CHECK(places[0].x == 64 && places[0].y == 31 && places[0].key == objs[2].key && places[2].x == -4);
+    CHECK(places[0].x == 64 && places[0].y == 31 && places[0].key == objs[3].key && places[2].x == -4);
     G2_SetOBJCharName(&oam[0], 1);
     GX_LoadOAM(oam, 0, sizeof(oam));
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
@@ -2721,12 +2723,12 @@ static void test_gpu_objs(void)
 
         memset(before, 0, sizeof(before));
         memset(after, 0, sizeof(after));
-        before[0] = objs[2];                                     /* (40, 30) */
-        before[1] = objs[2];
+        before[0] = objs[3];                                     /* (40, 30) */
+        before[1] = objs[3];
         before[1].x = 200, before[1].rawX = 200;                 /* another of its kind */
-        before[2] = objs[2];
+        before[2] = objs[3];
         before[2].x = 300, before[2].rawX = 300;                 /* a third, going off */
-        after[0] = objs[2];
+        after[0] = objs[3];
         after[0].x = 64, after[0].rawX = 64;
         after[1] = before[1];
         after[1].x = 224, after[1].rawX = 224;
@@ -2743,7 +2745,7 @@ static void test_gpu_objs(void)
         n = NitroPort_GpuObjsBetween(before, -1, after, 3, out, 8);
         CHECK(n == 3 && out[0].x == -30 && out[2].x == 64 && out[2].y == 30);
         /* round OAM's 512: 504 to 16 is 24 to the right */
-        before[3] = objs[2];
+        before[3] = objs[3];
         before[3].rawX = 504, before[3].x = -8;
         after[3] = before[3];
         after[3].rawX = 16, after[3].x = 16, after[3].rawY = 40, after[3].y = 40;   /* and 10 down */
@@ -2759,10 +2761,15 @@ static void test_gpu_objs(void)
         after[0].rawX = after[0].x = 190;                        /* 90 from before[0], 10 from before[1] (200) */
         n = NitroPort_GpuObjsBetween(before, 2, after, 1, out, 8);
         CHECK(n == 2 && out[0].x == 195 && out[1].x == 95);   /* (the other, on its own, as its kind) */
-        /* other kinds don't match */
+        /* another picture, one of its size near: its next frame (the
+         * newer picture, halfway); another size: not it */
         after[0].key ^= 1;
+        after[0].rawX = after[0].x = 120;
         n = NitroPort_GpuObjsBetween(before, 1, after, 1, out, 8);
-        CHECK(n == 1 && out[0].x == 100);
+        CHECK(n == 1 && out[0].x == 110 && out[0].key == after[0].key);
+        after[0].w = 32;
+        n = NitroPort_GpuObjsBetween(before, 1, after, 1, out, 8);
+        CHECK(n == 1 && out[0].x == 100 && out[0].key == before[0].key);
     }
 
     /* not all in front of everything: drawn in the picture */
@@ -2797,6 +2804,11 @@ static void test_gpu_objs(void)
     G2_BlendNone();
     NitroPort_Render2DSplit(0, under, &split);
     CHECK(split.gpuObjsLeftOut == 1);
+    /* the sprites' layer off: none to draw */
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG2);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuObjsLeftOut == 1 && split.gpuObjCount == 0);
+    CHECK(NitroPort_Render2DObjPlaces(0, places, NITRO_GPU_OBJ_MAX) == 0);
     MI_CpuClearFast(NitroPort_Oam, 0x800);
 }
 

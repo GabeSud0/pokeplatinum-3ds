@@ -2828,13 +2828,13 @@ static u32 GpuObjKey(const u8 *o)
 }
 
 /* OAM entry i as a sprite the compositor draws (its atlas place not set):
- * FALSE if it doesn't show (hidden, or off the picture). */
-static BOOL GpuObjPlace(const Engine *e, int i, Obj *obj, NitroGpuObj *out)
+ * FALSE if it's hidden, or (onPicture) off the picture. */
+static BOOL GpuObjPlace(const Engine *e, int i, Obj *obj, NitroGpuObj *out, BOOL onPicture)
 {
     const u8 *o = e->oam + i * 8;
     int y;
 
-    if (!ReadObj(e, i, obj) || obj->ox >= e->width || obj->ox + obj->boxW <= 0) {
+    if (!ReadObj(e, i, obj) || (onPicture && (obj->ox >= e->width || obj->ox + obj->boxW <= 0))) {
         return FALSE;
     }
     if (e->top) {
@@ -2842,7 +2842,7 @@ static BOOL GpuObjPlace(const Engine *e, int i, Obj *obj, NitroGpuObj *out)
     } else {
         y = obj->oy + obj->boxH > 256 ? obj->oy - 256 : obj->oy;   /* (the DS's lines wrap round 256) */
     }
-    if (y >= e->height || y + obj->boxH <= 0) {
+    if (onPicture && (y >= e->height || y + obj->boxH <= 0)) {
         return FALSE;
     }
     memset(out, 0, sizeof(*out));
@@ -2870,7 +2870,9 @@ static int sGpuObjsRefused;
 
 /* The sprites into split->gpuObj, back to front, their pixels into the
  * atlas (each picture once, a pixel apart, in shelves): FALSE if they
- * don't fit. */
+ * don't fit. Those off the picture too (one sliding on from beyond it
+ * shows where it is in a later frame, the picture not drawn again for
+ * that); none with the sprites' layer off. */
 static BOOL MakeGpuObjs(const Engine *e, u32 dispcnt, NitroRender2DSplit *split)
 {
     struct {
@@ -2882,13 +2884,13 @@ static BOOL MakeGpuObjs(const Engine *e, u32 dispcnt, NitroRender2DSplit *split)
     u16 *atlas = split->gpuObjAtlas;
 
     memset(atlas, 0, (size_t)NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H * sizeof(u16));
-    for (i = 0; i < 128; i++) {
+    for (i = 0; i < 128 && (dispcnt & 0x1000); i++) {
         NitroGpuObj *g = &split->gpuObj[n];
         Obj obj;
         u32 art;
         int k, tx, ty;
 
-        if (!GpuObjPlace(e, i, &obj, g)) {
+        if (!GpuObjPlace(e, i, &obj, g, FALSE)) {
             continue;
         }
         art = (u32)obj.tile | ((u32)obj.pal << 10) | ((u32)obj.bpp8 << 14) | ((u32)(obj.w / 8) << 15) |
@@ -2929,7 +2931,8 @@ static BOOL MakeGpuObjs(const Engine *e, u32 dispcnt, NitroRender2DSplit *split)
         n++;
     }
     /* back to front: the DS's lower priorities in front, and of one
-     * priority the first in OAM (an insertion sort: OAM order kept) */
+     * priority the first in OAM (an insertion sort: of one priority, the
+     * last in OAM first) */
     for (i = 1; i < n; i++) {
         NitroGpuObj g = split->gpuObj[i];
         u8 p = prioOf[i];
@@ -2979,6 +2982,9 @@ int NitroPort_Render2DObjPlaces(int engine, NitroGpuObj *out, int max)
     if (engine != 0 || !__atomic_load_n(&sGpuObjCanvas.valid, __ATOMIC_ACQUIRE)) {
         return -1;
     }
+    if (!(Rd32(NitroPort_IoReg, 0) & 0x1000)) {
+        return 0;   /* (the sprites' layer off) */
+    }
     memset(&e, 0, sizeof(e));
     e.oam = NitroPort_Oam;
     e.isA = TRUE;
@@ -2987,7 +2993,7 @@ int NitroPort_Render2DObjPlaces(int engine, NitroGpuObj *out, int max)
     e.top = sGpuObjCanvas.top;
     e.height = sGpuObjCanvas.height;
     for (i = 0; i < 128 && n < max; i++) {
-        if (GpuObjPlace(&e, i, &obj, &out[n])) {
+        if (GpuObjPlace(&e, i, &obj, &out[n], TRUE)) {
             n++;
         }
     }
@@ -3065,6 +3071,44 @@ int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const Nitro
         }
         moves[k].votes++;
     }
+    /* (one whose picture changed between them, an animation's next frame:
+     * the nearest of its size left over in after, at most 32 pixels across
+     * and 16 down, its picture then, each the other's nearest of those) */
+    for (i = 0; i < nBefore; i++) {
+        int best = -1, bestCost = 0, dx, dy, c;
+
+        if (partnerOf[i] >= 0) {
+            continue;
+        }
+        for (j = 0; j < nAfter; j++) {
+            dx = ((after[j].rawX - before[i].rawX + 256) & 511) - 256;
+            dy = ((after[j].rawY - before[i].rawY + 128) & 255) - 128;
+            c = (dx < 0 ? -dx : dx) + 4 * (dy < 0 ? -dy : dy);
+            if (partnerIn[j] >= 0 || after[j].w != before[i].w || after[j].h != before[i].h || dx > 32 || dx < -32 ||
+                dy > 16 || dy < -16 || (best >= 0 && c >= bestCost)) {
+                continue;
+            }
+            best = j;
+            bestCost = c;
+        }
+        if (best < 0) {
+            continue;
+        }
+        for (k = 0; k < nBefore; k++) {
+            if (k == i || partnerOf[k] >= 0 || before[k].w != before[i].w || before[k].h != before[i].h) {
+                continue;
+            }
+            dx = ((after[best].rawX - before[k].rawX + 256) & 511) - 256;
+            dy = ((after[best].rawY - before[k].rawY + 128) & 255) - 128;
+            if (dx <= 32 && dx >= -32 && dy <= 16 && dy >= -16 && (dx < 0 ? -dx : dx) + 4 * (dy < 0 ? -dy : dy) < bestCost) {
+                break;
+            }
+        }
+        if (k == nBefore) {
+            partnerOf[i] = (short)best;
+            partnerIn[best] = (short)i;
+        }
+    }
     /* back to front: of each priority (the DS's lowest first), the last in
      * OAM first; those coming on behind those already there */
     for (p = 3; p >= 0; p--) {
@@ -3088,6 +3132,15 @@ int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const Nitro
 
                     dx = ((a->rawX - o->rawX + 256) & 511) - 256;
                     dy = ((a->rawY - o->rawY + 128) & 255) - 128;
+                    if (a->key != o->key) {
+                        /* (its picture changed: the newer one, as the
+                         * picture shown with it has) */
+                        out[n] = *a;
+                        out[n].x = (short)(o->x + dx / 2);
+                        out[n].y = (short)(o->y + dy / 2);
+                        n++;
+                        continue;
+                    }
                 } else {
                     /* (on its own: going off, or just come on; moved as
                      * most of its kind, if they move, half of that) */
