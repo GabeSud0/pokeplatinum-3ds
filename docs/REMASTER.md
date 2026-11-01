@@ -1855,11 +1855,11 @@ for five frames, then the band from two thirds open (a video of
 the lines every other frame shows the same). A band's picture with no band
 drawn lately and none noted yet starts from the picture's own lines. A
 band within a second of a circle drawn is the circle fade's end (going
-into Eterna Forest: the circle off, its window's lines left over), not a
-band: the circle as last drawn instead (once noted in the log, "a band of
-lines ... as a circle fade ended"); taken for a band, a strip of the forest
-showed across the screen for the fade's last frame (a screenshot of
-2026-10-31, after the lines were taken every V-blank). Until 2026-10-31 neither was ever
+into Eterna Forest: the circle closed, an empty band, 120-120 of 240), drawn
+as the picture has it, all black, not eased as an opening band: eased, a
+strip of the forest showed across the screen for the fade's last frame;
+drawn as the circle last drawn instead, the circle stood still at its end
+(a screenshot of 2026-10-31 and a log of 2026-11-01). Until 2026-10-31 neither was ever
 left to the compositor with an H-blank effect: a line's copy of the
 registers has DISPSTAT and VCOUNT at 0, the frame's the V-blank's, and the
 lines were taken for differing in more than the windows (`LineLikeFrame`

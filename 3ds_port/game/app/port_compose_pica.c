@@ -2960,22 +2960,16 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
      * in-between frame after it went back to the picture's, twice the
      * size for a frame, a simulation of 2026-10-31), the frame before's,
      * else the last one noted.) */
-    /* (a band's lines as a circle fade ends (going into Eterna Forest: the
-     * circle off, its window's lines left as they were), within a second
-     * of a circle drawn, are the circle's end, not a band: the circle as
-     * last drawn. Taken for a band, a strip of the forest showed across
-     * the screen for the fade's last frame, 2026-10-31.) */
+    /* (a band of lines within a second of a circle drawn is the circle
+     * fade's end (going into Eterna Forest: the circle closed, an empty
+     * band, 120-120): as the picture has it, all black, not eased as an
+     * opening band. Eased, a strip of the forest showed across the screen
+     * for the fade's last frame; drawn as the circle last drawn instead,
+     * the circle stood still at its end rather than closing, 2026-11-01.) */
     if (kind == 2 && sCircleDrawnValid &&
         (int32_t)(__atomic_load_n(&sVBlanks, __ATOMIC_RELAXED) - sCircleDrawnAt) <= 60) {
-        static u32 loggedAt;
-
-        kind = 1;
-        x = sCircleDrawnX, y = sCircleDrawnY, r = sCircleDrawnR;
-        if (loggedAt != sCircleDrawnAt) {   /* (once a circle fade) */
-            loggedAt = sCircleDrawnAt;
-            NitroPort_Log("[compose] a band of lines (%d-%d) as a circle fade ended: the circle as last drawn instead",
-                          info->gpuCircleY, info->gpuCircleR);
-        }
+        draw_band(pic, sy, info->gpuCircleY, info->gpuCircleR, rgba);
+        return;
     } else {
         uint32_t seqB, stampB;
         int ka = scene != NULL ? circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted) : 0;
@@ -3077,7 +3071,7 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
     NitroPort_PicaBindVertices(sQuads);
     C3D_DrawArrays(GPU_TRIANGLES, sQuadVertices, 6 * CIRCLE_SEGMENTS);
     sQuadVertices += 6 * CIRCLE_SEGMENTS;
-    if (kind == info->gpuCircle) {   /* (not the circle's end drawn again: it ends) */
+    {
         sCircleDrawnValid = 1;
         sCircleDrawnAt = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
         sCircleDrawnX = x, sCircleDrawnY = y, sCircleDrawnR = r;
