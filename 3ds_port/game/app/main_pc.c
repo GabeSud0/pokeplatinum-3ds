@@ -462,6 +462,7 @@ static int RemasterShot(const char *path)
  * size as the 3DS's GPU does (gpusim): sPixelShot set, into it. */
 static uint16_t *sPixelShot;
 static int sPixelShotW, sPixelShotH;
+static int sPixelShotScreen;   /* (0 pshot: the upper screen; 1 lpshot: the lower) */
 
 static void RemasterRender(uint16_t *out)
 {
@@ -497,6 +498,11 @@ static void RemasterRender(uint16_t *out)
                 split.gpuObj = gpuObj;
                 split.gpuObjAtlas = gpuObjAtlas;
             }
+        }
+        if (screen == 1 && sPixelShot != NULL && sPixelShotScreen == 1) {
+            /* (the field on the lower screen, the Underground, at the DS's
+             * pixel size: its 320 x 240, as the 3DS has it) */
+            NitroPort_WideLayoutLower(engine, &split);
         }
         NitroPort_Render2DSplit(engine, under, &split);
         width = split.width > 256 ? split.width : 256;
@@ -535,8 +541,8 @@ static void RemasterRender(uint16_t *out)
         outW = width;
         outH = height;
         if (split.stretch) {
-            outW = sPixelShot != NULL && screen == 0 ? 400 : 320;
-            outH = sPixelShot != NULL && screen == 0 ? 240 : 192;
+            outW = sPixelShot != NULL && screen == 0 && sPixelShotScreen == 0 ? 400 : 320;
+            outH = sPixelShot != NULL && screen == 0 && sPixelShotScreen == 0 ? 240 : 192;
         }
         left = (320 - outW) / 2;
         if (split.has3d) {
@@ -554,7 +560,7 @@ static void RemasterRender(uint16_t *out)
                 }
                 NitroPort_Gx3dReleaseImage(img);
             }
-            if (screen == 0 && sPixelShot != NULL) {
+            if (screen == sPixelShotScreen && sPixelShot != NULL) {
                 /* (the 3D at the picture's size, as the 3DS's GPU draws it) */
                 const NitroGx3dScene *scene = NitroPort_Gx3dScene();
 
@@ -695,7 +701,7 @@ static void RemasterRender(uint16_t *out)
                 full[y * outW + x] = c;
             }
         }
-        if (screen == 0 && sPixelShot != NULL) {
+        if (screen == sPixelShotScreen && sPixelShot != NULL) {
             memcpy(sPixelShot, full, (size_t)outW * (size_t)outH * sizeof(full[0]));
             sPixelShotW = outW;
             sPixelShotH = outH;
@@ -1497,8 +1503,23 @@ static void ControlWait(void)
 
                 sPixelShot = shot;
                 sPixelShotW = 0;
+                sPixelShotScreen = 0;
                 RemasterRender(both);
                 sPixelShot = NULL;
+                if (sPixelShotW == 0 || WritePng(arg, shot, sPixelShotW, sPixelShotH) != 0) {
+                    NitroPort_Log("[pc] control: can't write %s", arg);
+                }
+            } else if (sscanf(line, "lpshot %1023s", arg) == 1) {
+                /* the same of the lower screen (320 x 240: the Underground at
+                 * the DS's pixel size, NitroPort_PixelFieldLower) */
+                static uint16_t both[320 * 384], shot[400 * 240];
+
+                sPixelShot = shot;
+                sPixelShotW = 0;
+                sPixelShotScreen = 1;
+                RemasterRender(both);
+                sPixelShot = NULL;
+                sPixelShotScreen = 0;
                 if (sPixelShotW == 0 || WritePng(arg, shot, sPixelShotW, sPixelShotH) != 0) {
                     NitroPort_Log("[pc] control: can't write %s", arg);
                 }
@@ -1776,6 +1797,8 @@ void NitroPort_OnFrame(void)
     if (NitroPort_WideScreenExtra()) {
         if (NitroPort_EngineAOnTop() && NitroPort_PixelField()) {
             NitroPort_Gx3dSetView(NITRO_PIXEL_FIELD_W, NITRO_PIXEL_FIELD_H);
+        } else if (!NitroPort_EngineAOnTop() && NitroPort_PixelFieldLower()) {
+            NitroPort_Gx3dSetView(NITRO_PIXEL_LOWER_W, NITRO_PIXEL_FIELD_H);
         } else if (NitroPort_EngineAOnTop()) {
             NitroPort_Gx3dSetView(sViewW, sViewH);
         } else {

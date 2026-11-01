@@ -1733,6 +1733,11 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
                 sMustDraw[0] = true;
             }
         }
+        /* (the field on the lower screen, the Underground, at the DS's
+         * pixel size: its 320 x 240, the DS's picture in the middle) */
+        if (!top && sCompose.wide) {
+            NitroPort_WideLayoutLower(engine, &split);
+        }
         /* The lower screen as the menu's tall panel: drawn on below the
          * DS's 192 rows (nitro_port_lowermenu.h). */
         if (!top && NitroPort_LowerMenuOn() && NitroPort_LowerMenuTall()) {
@@ -2731,6 +2736,10 @@ void NitroPort_OnFrame(void)
         if (NitroPort_EngineAOnTop() && NitroPort_PixelField()) {
             /* (the field at the DS's pixel size: the whole 400 x 240) */
             NitroPort_Gx3dSetView(NITRO_PIXEL_FIELD_W, NITRO_PIXEL_FIELD_H);
+        } else if (!NitroPort_EngineAOnTop() && NitroPort_PixelFieldLower()) {
+            /* (the Underground at the DS's pixel size: the lower screen's
+             * whole 320 x 240) */
+            NitroPort_Gx3dSetView(NITRO_PIXEL_LOWER_W, NITRO_PIXEL_FIELD_H);
         } else {
             NitroPort_Gx3dSetWideView(NitroPort_EngineAOnTop() ? 320 : 256);
         }

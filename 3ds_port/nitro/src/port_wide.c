@@ -495,6 +495,8 @@ void NitroPort_SetWideScreen(int extra)
 }
 
 static int sPixelFieldOn;   /* (NitroPort_SetPixelField) */
+int NitroPort_EngineAOnTop(void);   /* (port_render2d.c: POWCNT1) */
+static int NitroPort_PixelFieldAnywhere(void);
 
 void NitroPort_SetPixelField(int on)
 {
@@ -502,6 +504,13 @@ void NitroPort_SetPixelField(int on)
 }
 
 int NitroPort_PixelField(void)
+{
+    /* (the upper screen's: the field there) */
+    return NitroPort_EngineAOnTop() && NitroPort_PixelFieldAnywhere();
+}
+
+/* The option on and the field showing (on either screen). */
+static int NitroPort_PixelFieldAnywhere(void)
 {
     /* (the overlays' part kept by their serial: the game's code reads this
      * for every cell it draws, NitroPort_WideScreenExtra) */
@@ -527,6 +536,13 @@ int NitroPort_PixelField(void)
     laidOut = sPartCount[0] > 0;
     unlock();
     return !laidOut;
+}
+
+int NitroPort_PixelFieldLower(void)
+{
+    /* (the field, as NitroPort_PixelField has it, with engine A, the 3D,
+     * on the lower screen: the Underground) */
+    return !NitroPort_EngineAOnTop() && NitroPort_PixelFieldAnywhere();
 }
 
 int NitroPort_WideScreenExtra(void)
@@ -629,4 +645,26 @@ void NitroPort_WideLayout(int engine, struct NitroRender2DSplit *split)
         }
     }
     split->anchorWindows = sWideExtra > 0;
+}
+
+void NitroPort_WideLayoutLower(int engine, struct NitroRender2DSplit *split)
+{
+    int bg;
+
+    split->top = 0;
+    split->stretch = 0;
+    if (engine != 0 || !NitroPort_PixelFieldLower()) {
+        return;   /* (as the DS's: NitroRender2DSplit's 256 x 192) */
+    }
+    /* (the Underground at the DS's pixel size on the lower screen's whole
+     * 320 x 240, the DS's picture in its middle; its BGs only there, the
+     * 3D all over, the menus by the DS's edges at the screen's) */
+    split->width = NITRO_PIXEL_LOWER_W;
+    split->origin = NITRO_PIXEL_LOWER_EXTRA;
+    split->top = NITRO_PIXEL_FIELD_TOP;
+    split->height = NITRO_PIXEL_FIELD_H;
+    for (bg = 0; bg < 4; bg++) {
+        split->clip[bg] = 1;
+    }
+    split->anchorWindows = 1;
 }

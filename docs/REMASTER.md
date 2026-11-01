@@ -1353,16 +1353,20 @@ screens) the lower screen is the DS's, filling the screen as before.
     their own; a 64 x 64 one indoors), behind the player or, where that
     tile isn't free (out of a door), on the player's tile hidden till they
     step off it (the tile behind checked as the player's step would be:
-    no water, ledge or ramp). Through a door, up or down stairs and into
+    no water, ledge or ramp). Up or down stairs or an escalator and into
     a cave or a forest it goes with the player, as HeartGold's does
     (patch 0064: during a warp's way in or out, the task
-    `sub_02056BDC`/`sub_02056C18` start, `FieldSystem_PortInWarp`): out
+    `sub_02056BDC`/`sub_02056C18` start, `FieldSystem_PortWarpKind`): out
     at once on the other side, without its ball, behind the player or on
-    their tile (a door's, the stairs') shown once they've stepped off it
-    and stand, or it sets off after them. (It went into its ball at every
-    door and on the stairs, and came out only once the player stood
-    still: walking on through a building and up its stairs it stayed in,
-    2026-11-01.) Back in its ball whenever the game moves
+    their tile (the stairs') shown once they've stepped off it and stand,
+    or it sets off after them. Through a building's door (in by it,
+    transition 1, or out onto it) it goes into its ball and comes out of
+    it, as before (Gabriel's choice, 2026-11-01). (It went into its ball
+    on the stairs too, and came out only once the player stood still:
+    walking on up a building's stairs it stayed in, 2026-11-01.) Going
+    into its ball it waits up to 20 frames for room for its ball's
+    picture (handing the party to the nurse the player's own picture
+    changes in that frame, and it went in with no ball). Back in its ball whenever the game moves
     the player (a script's walk; out again when the player is theirs
     again: scenes where it stays out may come later), when someone walks
     onto its tile in a script (a person coming up behind the player: the
@@ -1581,6 +1585,18 @@ changes; a picture is drawn along a line without a division a pixel (the
 ARM11 has no divide instruction: tens of thousands a frame in the
 opening); the pictures are read at the start (`[wide art] N read ahead in
 X ms`), not as each first shows.
+
+The Underground has the field on the lower screen (engine A, the 3D,
+there). With the pixel-perfect field option it's at the DS's pixel size
+there too (`NitroPort_PixelFieldLower`, `NitroPort_WideLayoutLower`): the
+3D's view 320 x 240, the 2D's picture 320 x 240 with the DS's in its
+middle, a pixel a pixel on the lower screen's 320 x 240, more of the
+tunnels around the player, the text box at the bottom across the
+screen. The lower screen's layer textures are made for 2 texels a pixel
+of the DS's 256; a picture too wide for that is published at a texel a
+pixel (`LayerSet.texScale`), which is what a pixel a pixel needs anyway
+(no room in the linear heap for textures twice as wide). `NitroPort_
+PixelField` is now the upper screen's only (engine A on top).
 
 The drawing threads draw from the display state as it was when the game
 handed them the frame: its registers, palettes and OAM are copied then
