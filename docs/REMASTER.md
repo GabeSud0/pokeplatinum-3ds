@@ -573,6 +573,15 @@ stretched:
     still loaded: its BG3 is left unclipped (its own map beside the DS's
     screen) only without a screen laid out in parts, so the evolution's
     picture is looked up (`NitroPort_WideLayout`);
+  - the egg hatching (patch 0063, 2026-11-01): its background is the
+    evolution's (a 256-wide map), with the evolution's hand-drawn bands
+    (`wideart/49fbb4dbe2cd6dcb_0_0.png`, a copy of
+    `6570e913eaa0988b_0_0.png`, while its palette is the teal) and else
+    its edge columns carried on; its black bars above and below the egg
+    (sprites across the DS's screen, sliding off as it hatches) reach the
+    wider screen's edges (`WIDE_OBJS_STRETCH`: the ones at the DS's sides
+    moved out, their edge column drawn back), over the widened text box
+    (beside the DS's bars it showed, broken off);
   - the battle's trainers slide off (the player after throwing the ball,
     the opponent) till they're past the wider screen's edges, not the
     DS's (they vanished in the sides); since 2026-10-26 (patch 0043) till

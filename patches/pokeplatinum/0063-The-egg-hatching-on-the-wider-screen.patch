@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 10:45:00 -0700
+Subject: [PATCH] The egg hatching on the wider screen (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The egg hatching's black bars above and below the egg are sprites across
+the DS's screen (sliding off as it hatches): on the 3DS remaster's wider
+upper screen they stopped at the DS's edges, and beside them showed the
+background's other columns and the ends of the widened text box under
+the lower bar. Laid out for the wider screen (as the evolution is): the
+background's edge columns carried on beside the DS's screen, and the bars
+at the DS's sides moved to the wider screen's edges, their edge column
+drawn back, so the bars reach across it.
+---
+  src/cutscenes/egg_hatch/graphics.c | 26 ++++++++++++++++++++++++++
+  1 file changed, 26 insertions(+)
+
+diff --git a/src/cutscenes/egg_hatch/graphics.c b/src/cutscenes/egg_hatch/graphics.c
+index a57967b9..2876cc34 100644
+--- a/src/cutscenes/egg_hatch/graphics.c
++++ b/src/cutscenes/egg_hatch/graphics.c
+@@ -36,6 +36,26 @@
+ #include "res/graphics/poketch/poketch.naix"
+ #include "res/text/bank/egg_hatch.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_wide_layout.h"
++
++// The hatching on the wider upper screen: its background (BG3, as the
++// evolution's) with its edge columns carried on beside the DS's screen;
++// the black bars above and below the egg (sprites across the DS's screen,
++// sliding off as it hatches) taken to the wider screen's edges, the ones
++// at the DS's sides moved out and their edge column drawn back (the text
++// box under the lower bar is widened across the screen, as the game's
++// are: beside the bars it showed, broken off).
++static const short sEggHatchWideLayout[][8] = {
++    WIDE_FILL(WIDE_BG(3), 0, 192, -32, 0, 0),
++    WIDE_FILL(WIDE_BG(3), 0, 192, 256, 288, 255),
++    WIDE_OBJS_STRETCH(0, 40, 0, 34, -32),
++    WIDE_OBJS_STRETCH(0, 40, 222, 256, 32),
++    WIDE_OBJS_STRETCH(150, 256, 0, 34, -32),
++    WIDE_OBJS_STRETCH(150, 256, 222, 256, 32),
++};
++#endif
++
+ #define ID_EGG_CHAR 20000
+ #define ID_EGG_PLTT 20001
+ #define ID_EGG_CELL 20002
+@@ -495,6 +515,9 @@ void EggHatch_CreateSprites(EggHatchCutscene *eggHatch)
+ 
+     eggHatch->bottomBarSprite = SpriteSystem_NewSprite(eggHatch->graphics.spriteSys, eggHatch->graphics.spriteMan, &spriteTemplate);
+     ManagedSprite_TickFrame(eggHatch->bottomBarSprite);
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT(WIDE_ENGINE_MAIN, sEggHatchWideLayout);
++#endif
+ }
+ 
+ static const s16 sXOffsets[][10] = {
+@@ -594,6 +617,9 @@ int EggHatch_ShakeEgg(EggHatchCutscene *eggHatch, enum EggHatchShakeAnimID idx)
+ 
+ void EggHatch_DeleteSprites(EggHatchCutscene *eggHatch)
+ {
++#ifdef SDK_PORT_3DS
++    WIDE_LAYOUT_NONE(WIDE_ENGINE_MAIN);
++#endif
+     Sprite_DeleteAndFreeResources(eggHatch->eggSprite);
+     Sprite_DeleteAndFreeResources(eggHatch->topBarSprite);
+     Sprite_DeleteAndFreeResources(eggHatch->bottomBarSprite);
