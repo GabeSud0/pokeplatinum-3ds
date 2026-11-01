@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 15:30:00 -0700
+Subject: [PATCH] Eterna Forest's light finer than a pixel (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The clouds' light over Eterna Forest follows the camera from a place the
+game keeps finer than a pixel, and sways slowly from side to side (a
+table, a pixel every 8 frames); the BG's scroll register has it in whole
+pixels, 1, 2 or 3 a step as the player walks. The 3DS remaster's
+compositor draws that BG itself: the place is handed to it as it's kept
+(NitroPort_SetBgFineScroll), the sway eased from one entry of the table
+to the next, so it's drawn there and halfway between two in the
+in-between frames.
+---
+  src/overlay005/ov5_021D5EB8.c | 16 ++++++++++++++++
+  1 file changed, 16 insertions(+)
+
+diff --git a/src/overlay005/ov5_021D5EB8.c b/src/overlay005/ov5_021D5EB8.c
+index 65595a1b..5dc5606d 100644
+--- a/src/overlay005/ov5_021D5EB8.c
++++ b/src/overlay005/ov5_021D5EB8.c
+@@ -5249,6 +5249,22 @@ static void ov5_021DB144(SysTask *param0, void *param1)
+ 
+         Bg_ScheduleScroll(v0->unk_00->fieldSystem->bgConfig, 2, 0, (v1->unk_AC >> FX32_SHIFT) + v5);
+         Bg_ScheduleScroll(v0->unk_00->fieldSystem->bgConfig, 2, 3, (v1->unk_B0 >> FX32_SHIFT));
++#ifdef SDK_PORT_3DS
++        {
++            // (the 3DS remaster: the clouds' place finer than a pixel, as
++            // it's kept: drawn there, and halfway between two in the
++            // in-between frames, where the whole pixels went 1, 2 or 3 a
++            // step as the camera moved; their slow sway from side to side
++            // (the table, a pixel every 8 frames) eased from one entry to
++            // the next instead of a pixel's jump)
++            extern void NitroPort_SetBgFineScroll(int bg, s32 hofs, s32 vofs);
++            int entry = v1->unk_B4 / 8, part = v1->unk_B4 % 8;
++            s32 from = (s8)Unk_ov5_02201D38[entry], to = (s8)Unk_ov5_02201D38[(entry + 1) % 64];
++            s32 sway = from * FX32_ONE + (to - from) * FX32_ONE * part / 8;
++
++            NitroPort_SetBgFineScroll(2, v1->unk_AC + sway, v1->unk_B0);
++        }
++#endif
+     }
+ }
+ 

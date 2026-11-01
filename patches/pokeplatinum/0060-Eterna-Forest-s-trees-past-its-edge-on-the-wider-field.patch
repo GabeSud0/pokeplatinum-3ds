@@ -1,0 +1,245 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 23:59:00 -0700
+Subject: [PATCH] Eterna Forest's trees past its edge on the wider field
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The wider field sees about 12 tiles each side of the player, the DS's 8.
+By the forest's east edge (its way out to Route 205) the view went past
+the last of its maps, where there is no map, and showed black. With the
+player in the half of a map by the matrix's left or right edge, the maps
+of that column are drawn again past it, mirrored left to right about the
+edge (their props too), so the trees by the edge go on past it. A
+mirrored model's faces turn the other way, so its materials' culled side
+is swapped while it's drawn. Only for the matrices listed (Eterna
+Forest's): past a town's edge, mirrored houses would look wrong.
+---
+  include/overlay005/map_prop.h |   9 ++++
+  src/overlay005/land_data.c    | 102 ++++++++++++++++++++++++++++++++++++++++++
+  src/overlay005/map_prop.c     |  63 ++++++++++++++++++++++++++
+  3 files changed, 174 insertions(+)
+
+diff --git a/include/overlay005/map_prop.h b/include/overlay005/map_prop.h
+index dc6db530..dd6667c1 100644
+--- a/include/overlay005/map_prop.h
++++ b/include/overlay005/map_prop.h
+@@ -36,6 +36,15 @@ void MapPropManager_Init(MapPropManager *mapPropManager);
+ void MapPropManager_ClearOne(int index, MapPropManager *mapPropManager);
+ void MapPropManager_Load(NARC *landDataNARC, const int mapPropFilesSize, AreaDataManager *const areaDataManager, MapPropManager *mapPropManager, MapPropAnimationManager *mapPropAnimMan);
+ void MapPropManager_Render(const VecFx32 *positionOffset, const AreaDataManager *areaDataManager, const BOOL applyAttrsToModel, ModelAttributes *const modelAttrs, MapPropManager *mapPropManager);
++#ifdef SDK_PORT_3DS
++// The map's props mirrored left to right about the map's middle, the
++// middle at mirrorCentre (the wider field's view past a forest's edge,
++// land_data.c). Each model's culled side is swapped while it's drawn.
++void MapPropManager_RenderMirrored(const VecFx32 *mirrorCentre, const AreaDataManager *areaDataManager, const BOOL applyAttrsToModel, ModelAttributes *const modelAttrs, MapPropManager *mapPropManager);
++// A model's materials' culled side swapped (front for back): for a model
++// drawn mirrored, its faces turn the other way. Done twice, as it was.
++void Port_SwapModelCulling(NNSG3dResMdl *model);
++#endif
+ VecFx32 *MapProp_GetRotation(MapProp *mapProp);
+ VecFx32 MapProp_GetPosition(const MapProp *mapProp);
+ void MapProp_SetPosition(MapProp *mapProp, const VecFx32 *position);
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index e2f9db16..d833a692 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -27,6 +27,11 @@
+ #include "sys_task_manager.h"
+ #include "system.h"
+ 
++#ifdef SDK_PORT_3DS
++#include <nnsys/g3d/gecom.h>
++extern int NitroPort_WideScreenExtra(void);
++#endif
++
+ #define MAP_LAZY_LOADER_SLOT_COUNT            2
+ #define MAP_LAZY_LOADER_MANAGER_COUNT         2
+ #define MAP_MODEL_LAZY_LOADER_DATA_CHUNK_SIZE 0xE000
+@@ -1634,6 +1639,100 @@ void LandDataManager_CheckLazyLoadNextMapPair(const u8 trackedTargetDirection, L
+     }
+ }
+ 
++#ifdef SDK_PORT_3DS
++// The wider field (400 pixels across, 3ds_port) sees about 12 tiles each
++// side of the player, the DS's 8: by a map matrix's left or right edge the
++// view goes past the last map, where there is no map to draw, and shows
++// black. In these places the map by the edge is drawn again past it,
++// mirrored left to right about the edge: what's beside the edge on the
++// map (a forest's trees) goes on past it. Only for the matrices listed:
++// past a town's edge, mirrored houses would look wrong.
++static const u8 sPortMirroredEdgeMatrices[] = {
++    7, // Eterna Forest (m_dun0301)
++};
++
++static BOOL Port_MirrorsEdges(const LandDataManager *landDataMan)
++{
++    if (landDataMan->inDistortionWorld) {
++        return FALSE;
++    }
++
++    u8 matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++
++    for (int i = 0; i < (int)NELEMS(sPortMirroredEdgeMatrices); i++) {
++        if (sPortMirroredEdgeMatrices[i] == matrixID) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++// The loaded map i drawn again a map's width to the side (dir: 1 right,
++// -1 left), mirrored about its edge on that side.
++static void Port_RenderLoadedMapMirrored(const u8 index, const int dir, const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
++{
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++
++    if (loadedMap->valid != TRUE) {
++        return;
++    }
++
++    VecFx32 position = { 0, 0, 0 };
++
++    LandDataManager_CalculateRenderingPosition(loadedMap->mapMatrixIndex, landDataMan->mapMatrixWidth, landDataMan->mapMatrix, &position);
++
++    position.x += landDataMan->offset.x + dir * MAP_TILES_COUNT_X * MAP_OBJECT_TILE_SIZE;
++    position.y += landDataMan->offset.y;
++    position.z += landDataMan->offset.z;
++
++    VecFx32 scale = { -FX32_ONE, FX32_ONE, FX32_ONE };
++    MtxFx33 rotationMatrix = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++    NNSG3dResMdl *model = loadedMap->mapRenderObj.resMdl;
++
++    Port_SwapModelCulling(model);
++    Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &position, &rotationMatrix, &scale);
++    NNS_G3dGeFlushBuffer();
++    Port_SwapModelCulling(model);
++
++    if (loadedMap->mapPropManager != NULL) {
++        MapPropManager_RenderMirrored(&position, landDataMan->areaDataMan, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, loadedMap->mapPropManager);
++    }
++}
++
++// With the player in the half of a map by the matrix's left or right
++// edge that's nearer it, the loaded maps in that column drawn past it.
++static void Port_RenderMirroredEdges(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
++{
++    if (NitroPort_WideScreenExtra() == 0 || !Port_MirrorsEdges(landDataMan)
++        || landDataMan->trackedTargetMapMatrixIndex == INVALID_MAP_MATRIX_INDEX) {
++        return;
++    }
++
++    int width = landDataMan->mapMatrixWidth;
++    int column = (int)landDataMan->trackedTargetMapMatrixIndex % width;
++    u8 quadrant = landDataMan->trackedTargetMapQuadrant;
++    BOOL rightHalf = quadrant == QUADRANT_TOP_RIGHT || quadrant == QUADRANT_BOTTOM_RIGHT;
++    int dir;
++
++    if (column == width - 1 && rightHalf) {
++        dir = 1;
++    } else if (column == 0 && !rightHalf) {
++        dir = -1;
++    } else {
++        return;
++    }
++
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        int index = landDataMan->loadedMaps[i]->mapMatrixIndex;
++
++        if (index != INVALID_MAP_MATRIX_INDEX && index % width == column) {
++            Port_RenderLoadedMapMirrored(i, dir, landDataMan, modelAttrs);
++        }
++    }
++}
++#endif
++
+ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
+ {
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+@@ -1641,6 +1740,9 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+             LandDataManager_RenderLoadedMap(i, landDataMan, modelAttrs);
+         }
+     }
++#ifdef SDK_PORT_3DS
++    Port_RenderMirroredEdges(landDataMan, modelAttrs);
++#endif
+ }
+ 
+ void LandData_ObjectPosToTilePos(fx32 objectPositionX, fx32 objectPositionZ, int *tileX, int *tileZ)
+diff --git a/src/overlay005/map_prop.c b/src/overlay005/map_prop.c
+index 9044be19..e617c2e4 100644
+--- a/src/overlay005/map_prop.c
++++ b/src/overlay005/map_prop.c
+@@ -170,6 +170,69 @@ void MapPropManager_Render(const VecFx32 *positionOffset, const AreaDataManager
+     }
+ }
+ 
++#ifdef SDK_PORT_3DS
++#include <nnsys/g3d/model.h>
++
++void Port_SwapModelCulling(NNSG3dResMdl *model)
++{
++    for (u32 i = 0; i < model->info.numMat; i++) {
++        GXCull cull = NNS_G3dMdlGetMdlCullMode(model, i);
++
++        if (cull == GX_CULL_BACK) {
++            NNS_G3dMdlSetMdlCullMode(model, i, GX_CULL_FRONT);
++        } else if (cull == GX_CULL_FRONT) {
++            NNS_G3dMdlSetMdlCullMode(model, i, GX_CULL_BACK);
++        }
++    }
++}
++
++void MapPropManager_RenderMirrored(const VecFx32 *mirrorCentre, const AreaDataManager *areaDataManager, const BOOL applyAttrsToModel, ModelAttributes *const modelAttrs, MapPropManager *mapPropManager)
++{
++    MtxFx33 rotationMatrix = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++
++    for (int i = 0; i < MAX_LOADED_MAP_PROPS; i++) {
++        MapProp *loadedProp = &mapPropManager->loadedProps[i];
++
++        if (loadedProp->loaded == FALSE || loadedProp->hidden) {
++            continue;
++        }
++
++        VecFx32 position = loadedProp->position;
++        VecFx32 scale = loadedProp->scale;
++
++        position.x = mirrorCentre->x - position.x;
++        position.z += mirrorCentre->z;
++        scale.x = -scale.x;
++
++        if (!GFXBoxTest_IsModelInView(loadedProp->model, &position, &rotationMatrix, &scale)) {
++            continue;
++        }
++
++        const MapPropMaterialShape *propMatShp = AreaDataManager_GetMapPropMaterialShape(areaDataManager);
++        u16 propMatShpIDsCount;
++
++        if (applyAttrsToModel == TRUE) {
++            ModelAttributes_ApplyToModel(
++                modelAttrs,
++                loadedProp->model,
++                MODEL_LIGHT_VECTOR_1 | MODEL_LIGHT_VECTOR_2 | MODEL_LIGHT_COLOR_1 | MODEL_LIGHT_COLOR_2 | MODEL_DIFFUSE_REFLECT_COLOR | MODEL_AMBIENT_REFLECT_COLOR | MODEL_SPECULAR_REFLECT_COLOR | MODEL_EMISSION_COLOR);
++        }
++
++        MapProp_GetMaterialShapeIDsCount(loadedProp->modelID, propMatShp, &propMatShpIDsCount);
++        Port_SwapModelCulling(loadedProp->model);
++
++        if (propMatShpIDsCount == 0) {
++            Easy3D_DrawRenderObj(&loadedProp->renderObj, &position, &rotationMatrix, &scale);
++        } else {
++            MapPropManager_RenderUsing1Mat1Shp(loadedProp->model, &position, &rotationMatrix, &scale, propMatShp, loadedProp->modelID);
++        }
++
++        NNS_G3dGeFlushBuffer();
++        Port_SwapModelCulling(loadedProp->model);
++    }
++}
++#endif
++
+ VecFx32 *MapProp_GetRotation(MapProp *mapProp)
+ {
+     return &mapProp->rotation;

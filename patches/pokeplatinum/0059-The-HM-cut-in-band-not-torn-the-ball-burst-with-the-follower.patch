@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 20:00:00 -0700
+Subject: [PATCH] The HM cut-in's band not torn as it starts and ends; the
+ ball's burst with the follower Pokemon (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The HM cut-in hides BG3 for one of the game's frames before it writes its
+band's tiles and map into the VRAM, as it starts and again before it puts
+them back as it ends. The 3DS draws a frame's picture from the display
+state the game handed over (registers, palettes, sprites) while the game
+goes on to its next frame, and the VRAM is read as it is: the band written
+then showed up in the frame before, with the text box's palette and no
+window, the whole band white and red for a frame (most often with the A
+button speeding the text up); at the end, the band's rings went before its
+sprites did.
+
+The follower Pokemon's ball burst starts where the Pokemon is as its ball
+opens, not at the ball: on the player's tile, the ball opens once the
+player has stepped off it, and the Pokemon is already walking after them.
+The burst then went along with it a tile behind it.
+---
+  src/overlay006/hm_cut_in.c | 35 +++++++++++++++++++++++++++++++++++
+  src/port_follower.c        | 11 +++++++----
+  2 files changed, 42 insertions(+), 4 deletions(-)
+
+diff --git a/src/overlay006/hm_cut_in.c b/src/overlay006/hm_cut_in.c
+index b071f6f9..2e28ba40 100644
+--- a/src/overlay006/hm_cut_in.c
++++ b/src/overlay006/hm_cut_in.c
+@@ -1117,8 +1117,38 @@ static void SysTask_CutIn(SysTask *cutInTask, void *hmCutInPtr)
+     }
+ }
+ 
++#ifdef SDK_PORT_3DS
++// BG3 (the text box's, then the band's) hidden for one of the game's frames
++// before the cut-in writes its VRAM, as it starts and as it ends: the 3DS
++// draws a frame's picture from the display state as the game handed it
++// over (its registers, palettes and sprites) while the game goes on to its
++// next frame, and the VRAM is read as it is. The band's tiles and map
++// written then showed in the frame before, with that frame's palette and
++// no window: the whole band white and red, the text box's colours (the A
++// button speeding the text up made it likely, 2026-10-30). Hidden in the
++// frame before, BG3 isn't drawn in it.
++static BOOL sPortBg3Hidden;
++
++static BOOL CutIn_PortHideBg3First(void)
++{
++    if (!sPortBg3Hidden) {
++        sPortBg3Hidden = TRUE;
++        GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG3, FALSE);
++        return TRUE;
++    }
++
++    sPortBg3Hidden = FALSE;
++    return FALSE;
++}
++#endif
++
+ static BOOL CutIn_Init(HMCutIn *cutIn)
+ {
++#ifdef SDK_PORT_3DS
++    if (CutIn_PortHideBg3First()) {
++        return FALSE;
++    }
++#endif
+     CutIn_InitSpriteResources(cutIn);
+     CutIn_CreateResourceTransferTask(cutIn);
+     cutIn->state++;
+@@ -1333,6 +1363,11 @@ static BOOL HMCutIn_WindowShrinkY(HMCutIn *cutIn)
+ 
+ static BOOL HMCutIn_DeleteSprites(HMCutIn *cutIn)
+ {
++#ifdef SDK_PORT_3DS
++    if (CutIn_PortHideBg3First()) {
++        return FALSE; // (the band's VRAM put back in the next frame)
++    }
++#endif
+     CutIn_DeleteSprites(cutIn);
+     cutIn->updateSprites = FALSE;
+     cutIn->state++;
+diff --git a/src/port_follower.c b/src/port_follower.c
+index 02118995..5503bdcf 100644
+--- a/src/port_follower.c
++++ b/src/port_follower.c
+@@ -821,7 +821,7 @@ static void PortFollower_BurstEmitter(SPLEmitter *emitter)
+     emitter->baseScale = FX_Mul(emitter->baseScale, BURST_SCALE);
+ }
+ 
+-static void PortFollower_StartBurst(FieldSystem *fieldSystem, MapObject *ball)
++static void PortFollower_StartBurst(FieldSystem *fieldSystem, MapObject *ball, MapObject *mon)
+ {
+     int kind = (sBallKind >= 1 && sBallKind <= 17 ? sBallKind : 4) - 1;
+     VecFx32 pos;
+@@ -882,8 +882,11 @@ static void PortFollower_StartBurst(FieldSystem *fieldSystem, MapObject *ball)
+ 
+     ParticleSystem_SetResource(sBurst, resource, VRAM_AUTO_RELEASE_TEXTURE_LNK | VRAM_AUTO_RELEASE_PALETTE_LNK, TRUE);
+ 
+-    // (from the ball's middle, in front of the Pokémon coming out)
+-    MapObject_GetPosPtr(ball, &pos);
++    // (from the Pokémon's middle, in front of it: where it is as its ball
++    // opens, not the ball's tile, as it may be walking on already, after the
++    // player who stepped off its ball: the burst goes with it from there,
++    // PortFollower_BurstFollows, not a tile behind it)
++    MapObject_GetPosPtr(mon != NULL ? mon : ball, &pos);
+     pos.y += FX32_ONE * 30;
+     pos.z += FX32_ONE * 16;
+ 
+@@ -1095,7 +1098,7 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+                 MapObject_SetHidden(mapObj, FALSE);
+                 sOut = 0;
+                 PortFollower_SwapBall(fieldSystem, TRUE); // (it opens)
+-                PortFollower_StartBurst(fieldSystem, PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_BALL_LOCAL_ID));
++                PortFollower_StartBurst(fieldSystem, PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_BALL_LOCAL_ID), mapObj);
+                 sBurstGoesAlong = FALSE; // (from where it is now)
+                 PortFollower_Sound(SEQ_SE_DP_SLOT01_sseq_1); // (SEQ_SE_DP_BOWA2: the battle's send-out)
+             }

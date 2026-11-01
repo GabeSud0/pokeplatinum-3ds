@@ -635,6 +635,7 @@ static void GpuClassicLoop(void)
 static void GpuComposeLoop(void)
 {
     const NitroGx3dScene *scene=NULL,*mid=NULL;
+    bool fadesMid=false;   /* (mid is the scene: NitroPort_ComposeFrame's mid 2) */
     uint32_t seen=0;
     /* The scene's own frame is done with: drawn on the 3D's screen, or
      * nothing to draw (no 3D shown); else (waiting for its 2D, or for an
@@ -683,6 +684,12 @@ static void GpuComposeLoop(void)
                 /* 60 frames a second: its in-between scene first, a V-blank
                  * before it (while frames fit: NitroPort_ComposeWantsMid). */
                 if(sFps60)mid=NitroPort_Gx3dMidOf(scene);
+                /* (none: an in-between frame for the 2D's fades alone, with
+                 * the scene's 3D, if one changed: walking out of a
+                 * building, the map's first scenes have none, and its band
+                 * opened 30 times a second) */
+                fadesMid=sFps60 && mid==NULL;
+                if(fadesMid)mid=scene;
                 __atomic_fetch_add(&sGpuScenes,1u,__ATOMIC_RELAXED);
                 __atomic_fetch_add(&sGpuTriangles,scene->count,__ATOMIC_RELAXED);
                 __atomic_fetch_add(&sGpuDroppedTriangles,scene->dropped,__ATOMIC_RELAXED);
@@ -708,7 +715,7 @@ static void GpuComposeLoop(void)
                      * V-blank, still before its scene, unless its V-blank
                      * has come; not drawn otherwise (no 3D shown): left
                      * out) */
-                    int r=NitroPort_ComposeFrame(mid,seen,aOnTop,osGet3DSliderState(),false,0,1);
+                    int r=NitroPort_ComposeFrame(mid,seen,aOnTop,osGet3DSliderState(),false,0,fadesMid?2:1);
                     if((r&bit) || (r&COMPOSE_MID_LATE) ||
                        (!(r&noBuf) && !NitroPort_ComposeSceneWaiting(seen)))mid=NULL;
                 }
@@ -1677,6 +1684,26 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             if (engine == 0 && !inPanel && NitroPort_ComposeDrawsBgs()) {
                 split.gpuBgs = NitroPort_RepeatingBgs();
             }
+            /* (the HM cut-in: its sprites drawn by the compositor, each
+             * where it is in the frame shown, halfway in the in-between
+             * frames, the picture not drawn again as they move) */
+            /* (a circle fade: drawn by the compositor, its radius halfway in
+             * the in-between frames, the picture not drawn again as it
+             * closes or opens) */
+            /* (and one BG in a band of lines: the HM cut-in's band, opening
+             * and closing at 60 frames a second, drawn by the compositor
+             * from the BG's picture) */
+            if (engine == 0 && !inPanel) {
+                split.gpuCircle = NitroPort_ComposeDrawsBgs() ? 3 : 1;
+            }
+            if (engine == 0 && !inPanel && NitroPort_ComposeDrawsObjs() && NitroPort_GpuSprites()) {
+                static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
+                static uint16_t atlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H];
+
+                split.gpuObjs = 1;
+                split.gpuObj = objs;
+                split.gpuObjAtlas = atlas;
+            }
             if (__atomic_exchange_n(&shownInPanel, inPanel, __ATOMIC_ACQ_REL) != inPanel) {
                 sMustDraw[0] = true;
             }
@@ -1739,6 +1766,14 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             }
             layers->gpuBgPicture = pictureValid ? picture : NULL;
         }
+        layers->gpuObjCount = split.gpuObjsLeftOut ? split.gpuObjCount : -1;
+        layers->gpuCircle = split.gpuCircleOn;
+        layers->gpuCircleX = split.gpuCircleX;
+        layers->gpuCircleY = split.gpuCircleY;
+        layers->gpuCircleR = split.gpuCircleR;
+        layers->gpuCircleColor = split.gpuCircleColor;
+        layers->gpuObj = split.gpuObj;
+        layers->gpuObjAtlas = split.gpuObjAtlas;
         layers->evy = split.evy;
         layers->masterBright = split.masterBright;
         layers->backdrop = split.backdrop;
@@ -2152,7 +2187,17 @@ static bool DrawFrame(bool new3dOnly)
     if (__atomic_load_n(&sSuspended, __ATOMIC_SEQ_CST)) {
         return false;   /* (the HOME menu has the screens) */
     }
+    /* (the remaster: the frame's lines each V-blank, whether a drawer takes
+     * the frame or not, before the frame's notes below (its band of lines),
+     * as the DS's H-blank effects run every frame; the drawers draw from
+     * their own copies. Taken only when a drawer took the frame, the upper
+     * one busy every other frame after a map change, a band's lines were
+     * noted a frame or more late, the first of them as no band: walking out
+     * of a building, the band's picture showed whole at full brightness for
+     * five frames, then the band from two thirds open, a video of
+     * 2026-10-31. The PC runner takes them every frame.) */
     if (sRemaster) {
+        (void)NitroPort_HBlankLinesOnce();
         NitroPort_Compose2DOffered(NitroPort_ComposeVBlanks());
     }
     for (i = 0; i < sDrawerCount; i++) {
@@ -2162,6 +2207,43 @@ static bool DrawFrame(bool new3dOnly)
             continue;
         }
         any |= !__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE);
+    }
+    if (sRemaster && NitroPort_ComposeDrawsBgs()) {
+        /* (the scrolls of this frame, whether a drawer takes it or not:
+         * the weather's BG drawn by the compositor goes with them) */
+        uint16_t ofs[8];
+        int32_t fine[8];
+
+        NitroPort_Render2DBgOffsetsFine(ofs, fine);
+        NitroPort_ComposeNoteBgOffsets(NitroPort_ComposeVBlanks(), NitroPort_Gx3dSwapsMade(), fine);
+    }
+    /* (the HM cut-in's sprites drawn by the compositor: where they are
+     * in this frame, whether a drawer takes it or not, once a V-blank) */
+    if (sRemaster && NitroPort_GpuSprites() && NitroPort_ComposeDrawsObjs()) {
+        static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
+        static u32 notedStamp;
+        u32 stamp = NitroPort_ComposeVBlanks();
+        int n;
+
+        if (stamp != notedStamp && (n = NitroPort_Render2DObjPlaces(0, objs, NITRO_GPU_OBJ_MAX)) >= 0) {
+            NitroPort_ComposeNoteObjs(stamp, NitroPort_Gx3dSwapsMade(), objs, n);
+            notedStamp = stamp;
+        }
+    }
+    /* (engine A's master brightness and a circle fade drawn by the
+     * compositor, in this frame: halfway in the in-between frames) */
+    if (sRemaster) {
+        static u32 notedStamp;
+        u32 stamp = NitroPort_ComposeVBlanks();
+        int x = 0, y = 0, r = 0;
+
+        if (stamp != notedStamp) {
+            int on = NitroPort_Render2DCircleNow(0, &x, &y, &r);
+
+            NitroPort_ComposeNoteFrame(stamp, NitroPort_Gx3dSwapsMade(), (int)NitroPort_Render2DMasterBright(0, 0), on,
+                                       x, y, r);
+            notedStamp = stamp;
+        }
     }
     if (!any) {
         return false;
@@ -2180,14 +2262,6 @@ static bool DrawFrame(bool new3dOnly)
         (void)NitroPort_HBlankLinesOnce();
     }
     sAOnTop = NitroPort_EngineAOnTop() != 0;
-    if (sRemaster && NitroPort_ComposeDrawsBgs()) {
-        /* (the scrolls of this frame, whether a drawer takes it or not:
-         * the weather's BG drawn by the compositor goes with them) */
-        uint16_t ofs[8];
-
-        NitroPort_Render2DBgOffsets(ofs);
-        NitroPort_ComposeNoteBgOffsets(NitroPort_ComposeVBlanks(), ofs);
-    }
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
 
