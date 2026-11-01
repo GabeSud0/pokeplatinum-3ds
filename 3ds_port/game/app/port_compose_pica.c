@@ -3079,6 +3079,36 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
     NitroPort_PicaProfileMark("the circle fade");
 }
 
+/* (draw_screen, 5) One BG in a band of lines (ComposeLayers.gpuCircle 3:
+ * the HM cut-in's band, BG3, opening and closing 5 to 13 lines each side a
+ * step, every other frame; drawn in the picture, it opened and closed 30
+ * times a second): the picture has it all over, alone in front of the 3D,
+ * and it's shown in the band's lines only, as the game had them in the
+ * frame the DS shows the scene in, halfway to that from the frame before
+ * in an in-between frame (as the picture has them where they aren't
+ * noted): its first line and the line after its last (*y, *r). */
+static void bg_band_rows(const ComposeLayers *info, const NitroGx3dScene *scene, int *y, int *r)
+{
+    int ax, ay, ar, bx, by, br, ka, kb;
+    uint32_t noted, seqB, stampB;
+
+    *y = info->gpuCircleY;
+    *r = info->gpuCircleR;
+    if (scene == NULL) {
+        return;
+    }
+    ka = circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted);
+    kb = frame_before(scene, &seqB, &stampB) ? circle_of(seqB, stampB, &bx, &by, &br, &noted) : 0;
+    if (ka == 3) {
+        *y = ay, *r = ar;
+        if (kb == 3) {
+            *y = (by + ay) / 2, *r = (br + ar) / 2;
+        }
+    } else if (kb == 3) {
+        *y = by, *r = br;
+    }
+}
+
 /* Engine A's sprites the compositor draws (LayerSet.objs, objTex), in front
  * of the rest of the picture (pic: its rectangle on the screen, sx and sy
  * its pixels' size): each where the game had it in the frame the DS shows
@@ -3463,10 +3493,32 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, bu0, bvTop, bu1, bvBottom, (a << 24) | (a << 16) | (a << 8) | b);
             NitroPort_PicaProfileMark("the weather's BG");
         }
-        /* 5. The layers in front, with their alpha (multiplied in). */
-        if (!set->overEmpty && set->overTop < set->overBottom) {
+        /* 5. The layers in front, with their alpha (multiplied in). One BG
+         * in a band of lines (ComposeLayers.gpuCircle 3): those layers are
+         * that BG alone, shown in the band's lines over the backdrop. */
+        int bandY = 0, bandR = rows;
+
+        if (info->gpuCircle == 3) {
+            bg_band_rows(info, scene, &bandY, &bandR);
+            bandY = bandY < 0 ? 0 : bandY > rows ? rows : bandY;
+            bandR = bandR < bandY ? bandY : bandR > rows ? rows : bandR;
+            if (bandR > bandY && sQuadVertices + 6 <= MAX_QUAD_VERTICES) {
+                float by0 = pic.y0 + (float)(sConfig.flipV ? rows - bandR : bandY) * scale;
+                float by1 = pic.y0 + (float)(sConfig.flipV ? rows - bandY : bandR) * scale;
+
+                quad_combiner(0);
+                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+                quad(pic.x0, by0, pic.x1, by1, 0.0f, 0, 0, 0, 0, rgba_of((uint16_t)info->gpuCircleColor, 255));
+            }
+        }
+        if (!set->overEmpty && set->overTop < set->overBottom && bandR > bandY) {
             /* (only the rows with anything in them; all of them flipped) */
             int first = sConfig.flipV ? 0 : set->overTop, bottom = sConfig.flipV ? rows : set->overBottom;
+
+            if (info->gpuCircle == 3) {
+                first = sConfig.flipV ? rows - bandR : (first > bandY ? first : bandY);
+                bottom = sConfig.flipV ? rows - bandY : (bottom < bandR ? bottom : bandR);
+            }
             float y0 = pic.y0 + (float)first * scale, y1 = pic.y0 + (float)bottom * scale;
             float v0 = vTop + (vBottom - vTop) * (float)first / (float)rows;
             float v1 = vTop + (vBottom - vTop) * (float)bottom / (float)rows;
@@ -3477,7 +3529,9 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             quad_combiner(1);
             C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
                            GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
-            quad(pic.x0, y0, pic.x1, y1, 0.0f, 0, v0, u1, v1, 0xFFFFFFFFu);
+            if (bottom > first) {
+                quad(pic.x0, y0, pic.x1, y1, 0.0f, 0, v0, u1, v1, 0xFFFFFFFFu);
+            }
         }
         /* 5b. Engine A's sprites drawn here (ComposeLayers.gpuObjCount: the
          * HM cut-in's), in front of it all. */
@@ -3486,7 +3540,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         }
     }
     /* 5c. A circle fade drawn here (ComposeLayers.gpuCircle). */
-    if (info->gpuCircle) {
+    if (info->gpuCircle == 1 || info->gpuCircle == 2) {
         draw_circle_mask(info, has3d ? scene : NULL, &pic, scale, (pic.y1 - pic.y0) / (float)rows);
     } else if (has3d && sBand.on) {
         draw_band_tail(&pic, (pic.y1 - pic.y0) / (float)rows);

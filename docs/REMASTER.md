@@ -1775,8 +1775,23 @@ in-between scene, halfway from the frame before
 each the other's nearest; one going off or just come on moved half as
 far as most of its kind). Their places don't count as a change: the
 picture isn't drawn again as they move, only when what they show does.
-The band's window still opens and closes 30 times a second. In the PC
-runner the picture draws them where it had them.
+In the PC runner the picture draws them where it had them.
+
+The cut-in's band opening and closing (2026-11-01): a window, window 0
+alone across the DS's screen, its lines (WIN0V) 5 to 13 further each side
+a step, every other frame; inside it BG3 alone of the BGs (the band, a
+512 x 256 map), outside it everything else. Drawn in the picture, it
+opened and closed 30 times a second. Now the compositor shows it
+(`NitroRender2DSplit.gpuCircle` 3, `gpuCircleOn` 3, `GpuBgRowsOf`): when
+that BG is alone in front of the 3D (the other BGs behind it, the sprites
+behind it or drawn by the compositor) and there's no H-blank effect, the
+picture is drawn as outside the window everywhere with that BG too, so
+the layer in front of the 3D is that BG alone; the compositor fills the
+band's lines with the backdrop and shows that layer in them only, the
+lines as the game had them in the frame shown, halfway in the in-between
+frames (`bg_band_rows`, noted as `NitroPort_Render2DCircleNow`'s 3). Its
+lines don't count as a change. Test: `test_bg_rows`. In the PC runner
+(and on a 3DS without the compositor's BGs) the window is in the picture.
 
 Eterna Forest's light finer than a pixel (patch 0061, 2026-10-31): the
 game keeps the clouds' place finer than a pixel as they follow the camera,

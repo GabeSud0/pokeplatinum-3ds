@@ -2512,6 +2512,88 @@ static void test_window_rows(void)
     GX_SetVisibleWnd(GX_WNDMASK_NONE);
 }
 
+/* One BG in a band of lines, the rest outside it (the HM cut-in's band,
+ * gpuCircleOn 3): left to the compositor, the picture as outside the window
+ * everywhere with that BG too, alone in front of the 3D; its lines noted
+ * each frame and not a change. */
+static void test_bg_rows(void)
+{
+    static u8 tiles[64];
+    static u16 map1[32 * 32], map2[32 * 32];
+    static u16 pltt[16] = { GREY, RED };
+    static u16 pltt1[16] = { 0, GREEN };
+    static uint32_t rgba[256 * 192];
+    static u16 under[256 * 192], over[256 * 192];
+    static u8 overAlpha[256 * 192];
+    NitroRender2DSplit split;
+    int i, x = 0, y = 0, r = 0;
+
+    Reset();
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    MakeTile4(tiles + 32, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map1[i] = 1;                  /* (BG1: red everywhere) */
+        map2[i] = 1 | (1 << 12);      /* (BG2: palette 1, green everywhere) */
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    G2_SetBG2ControlText(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0800,
+                         GX_BG_CHARBASE_0x04000);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map1, 0, sizeof(map1));
+    GX_LoadBG2Scr(map2, 0, sizeof(map2));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_LoadBGPltt(pltt1, 32, sizeof(pltt1));
+    G2_SetBG0Priority(2);
+    G2_SetBG1Priority(3);             /* (behind the 3D) */
+    G2_SetBG2Priority(1);             /* (in front of it: the band) */
+    for (i = 0; i < 256 * 192; i++) {
+        rgba[i] = 0x404040FFu;
+    }
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1 | GX_PLANEMASK_BG2);
+    G2_SetWnd0Position(0, 64, 255, 128);
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG2 | GX_WND_PLANEMASK_OBJ, FALSE);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_BG0 | GX_WND_PLANEMASK_BG1 | GX_WND_PLANEMASK_OBJ, TRUE);
+    GX_SetVisibleWnd(GX_WNDMASK_W0);
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.gpuCircle = 1;   /* (not asked for: the DS's window in the picture) */
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 0);
+    CHECK(over[100 * 256 + 128] == (GREEN | 0x8000));   /* in the band: BG2 */
+    CHECK(!(over[30 * 256 + 128] & 0x8000));            /* above it: none in front */
+    split.gpuCircle = 3;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 3 && split.gpuCircleY == 64 && split.gpuCircleR == 128);
+    CHECK(split.gpuCircleColor == GREY);
+    CHECK(over[30 * 256 + 128] == (GREEN | 0x8000));    /* the BG all over, in front */
+    CHECK(under[30 * 256 + 128] == RED);                 /* the rest as outside */
+    CHECK(under[100 * 256 + 128] == RED);
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 3 && y == 64 && r == 128);
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    G2_SetWnd0Position(0, 80, 255, 112);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);   /* (its lines: not a change) */
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 3 && y == 80 && r == 112);
+    /* not: another BG in front of the 3D; another BG inside too; not across
+     * the whole screen */
+    G2_SetBG1Priority(0);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn != 3);
+    G2_SetBG1Priority(3);
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG1 | GX_WND_PLANEMASK_BG2, FALSE);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn != 3);
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG2, FALSE);
+    G2_SetWnd0Position(10, 64, 255, 128);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn != 3);
+    GX_SetVisibleWnd(GX_WNDMASK_NONE);
+}
+
 /* A BG's scroll finer than a pixel (NitroPort_SetBgFineScroll): taken
  * near the register's (the picture repeating every 256), not far from it,
  * nor once the game stops setting it. */
@@ -4278,6 +4360,7 @@ int main(int argc, char **argv)
     test_bg_fine_scroll();
     test_window_circle();
     test_window_rows();
+    test_bg_rows();
     test_wide_map_past_edges();
     test_gpu_bg();
     test_gpu_objs();

@@ -78,7 +78,12 @@ typedef struct NitroRender2DSplit {
      * Or (2) a band of lines (the screen opening walking out of a
      * building): the picture drawn as the band shows it everywhere; the
      * band's lines gpuCircleY to gpuCircleR - 1 on the canvas, the backdrop
-     * above and below. */
+     * above and below. Or (3, asked for with gpuCircle's 2) one BG shown
+     * in a band of lines and the rest outside it (the HM cut-in's band):
+     * the picture drawn as outside the window everywhere, with that BG too,
+     * alone in front of the 3D (over), for the compositor to show in the
+     * band's lines only, gpuCircleY to gpuCircleR - 1, the backdrop
+     * (gpuCircleColor) behind it there. */
     int gpuCircleOn;
     int gpuCircleX, gpuCircleY, gpuCircleR, gpuCircleColor;
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
@@ -166,8 +171,12 @@ typedef struct NitroRender2DSplit {
      * count as a change. So is a band of lines (gpuCircleOn 2): the only
      * window on and empty on every line, each line showing all that's
      * shown or nothing, the lines differing only in the windows' registers
-     * and WININ/WINOUT; which lines it has doesn't count as a change. The
-     * caller's choice, kept by the call. */
+     * and WININ/WINOUT; which lines it has doesn't count as a change. With
+     * 2 too (3), one BG in a band of lines (gpuCircleOn 3: window 0 alone
+     * across the DS's screen, no H-blank effect, inside it that BG alone of
+     * the BGs, outside it everything else; the BG alone in front of the 3D,
+     * the sprites behind it or drawn by the compositor); its lines aren't
+     * a change. The caller's choice, kept by the call. */
     int gpuCircle;
 } NitroRender2DSplit;
 #define NITRO_RENDER2D_MAX_H 256
@@ -237,8 +246,8 @@ int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const Nitro
 /* (the game's thread, as it hands a frame over) Engine A's circle fade as
  * it is now, on the canvas of the last picture that left it out
  * (gpuCircleOn): 1 with its middle and radius, 2 a band of lines (y to
- * r - 1, x 0), 0 when it's off, -1 when no picture has left one out since
- * one was last drawn in a picture. */
+ * r - 1, x 0), 3 one BG's band of lines (y to r - 1), 0 when it's off, -1
+ * when no picture has left one out since one was last drawn in a picture. */
 int NitroPort_Render2DCircleNow(int engine, int *x, int *y, int *r);
 
 /* One BG of an engine alone (for capturing it: nitro_port_wideart.h), on

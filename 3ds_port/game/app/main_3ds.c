@@ -1690,8 +1690,11 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             /* (a circle fade: drawn by the compositor, its radius halfway in
              * the in-between frames, the picture not drawn again as it
              * closes or opens) */
+            /* (and one BG in a band of lines: the HM cut-in's band, opening
+             * and closing at 60 frames a second, drawn by the compositor
+             * from the BG's picture) */
             if (engine == 0 && !inPanel) {
-                split.gpuCircle = 1;
+                split.gpuCircle = NitroPort_ComposeDrawsBgs() ? 3 : 1;
             }
             if (engine == 0 && !inPanel && NitroPort_ComposeDrawsObjs() && NitroPort_GpuSprites()) {
                 static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
