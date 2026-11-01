@@ -573,6 +573,15 @@ stretched:
     still loaded: its BG3 is left unclipped (its own map beside the DS's
     screen) only without a screen laid out in parts, so the evolution's
     picture is looked up (`NitroPort_WideLayout`);
+  - the egg hatching (patch 0063, 2026-11-01): its background is the
+    evolution's (a 256-wide map), with the evolution's hand-drawn bands
+    (`wideart/49fbb4dbe2cd6dcb_0_0.png`, a copy of
+    `6570e913eaa0988b_0_0.png`, while its palette is the teal) and else
+    its edge columns carried on; its black bars above and below the egg
+    (sprites across the DS's screen, sliding off as it hatches) reach the
+    wider screen's edges (`WIDE_OBJS_STRETCH`: the ones at the DS's sides
+    moved out, their edge column drawn back), over the widened text box
+    (beside the DS's bars it showed, broken off);
   - the battle's trainers slide off (the player after throwing the ball,
     the opponent) till they're past the wider screen's edges, not the
     DS's (they vanished in the sides); since 2026-10-26 (patch 0043) till
@@ -799,6 +808,14 @@ screen's 320 x 192 at 1.25 times, as above.
   down they keep their shape. Not the cut-ins with a trainer's picture
   (the leaders, the Elite Four, the Champion) nor the legendaries' (the
   camera only).
+  Their end (2026-11-01): the master brightness to black and the effect's
+  BG cleared in the same frame (the Galactic boss's). The drawer takes the
+  registers as the frame is handed over but reads the VRAM as it is when
+  it draws; a frame later, the BG cleared and the brightness not yet,
+  the field showed whole for a frame. A picture drawn with the master
+  brightness at full black or white now but not in the registers taken
+  isn't published (`RenderScreen`): the one before stays, and the next
+  frame's has the brightness.
 - **The circle fades** (patch 0054, also with the 320-wide screen): the
   screen closing round the middle (walking into Eterna Forest) is a window
   the game shapes line by line for the DS's 256 x 192. It was cut flat at
@@ -1797,7 +1814,11 @@ then its BG off: the band the backdrop alone, `GpuBgRowsOf`'s 4, still
 the compositor's) before it goes; after the steady close that looked like
 a stop (a video of 2026-11-01). Held after closing, the band goes on
 closing at its last speed (2 lines a frame each side), never opening again
-while the game holds it: closed in 4 frames, by the V-blank (`sBgBand`).
+while the game holds it: closed in 4 frames, by the V-blank (`sBgBand`). The
+compositor's sprites (the cut-in's wind and Pokémon) are cut to the band's
+lines while it closes, and while it's closed further than the game's
+(`sObjClip`): the game still shows them for two steps, and over the field
+the dots and the Pokémon's parts showed for a few frames after it closed.
 
 Eterna Forest's light finer than a pixel (patch 0061, 2026-10-31): the
 game keeps the clouds' place finer than a pixel as they follow the camera,

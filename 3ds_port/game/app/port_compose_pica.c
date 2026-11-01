@@ -3154,6 +3154,12 @@ static void bg_band_rows(const ComposeLayers *info, const NitroGx3dScene *scene,
     *r = (int)(sBgBand.r + 0.5f);
 }
 
+/* (draw_gpu_objs) The screen's lines the sprites are cut to, when on. */
+static struct {
+    int on;
+    float y0, y1;
+} sObjClip;
+
 /* Engine A's sprites the compositor draws (LayerSet.objs, objTex), in front
  * of the rest of the picture (pic: its rectangle on the screen, sx and sy
  * its pixels' size): each where the game had it in the frame the DS shows
@@ -3166,6 +3172,11 @@ static void bg_band_rows(const ComposeLayers *info, const NitroGx3dScene *scene,
 static void draw_gpu_objs(const LayerSet *set, const NitroGx3dScene *scene, const PicaRect *pic, float sx, float sy,
                           int linear)
 {
+    /* (cut to sObjClip's lines, the screen's: a BG's band closed further
+     * than the game's, its sprites only in it) */
+    float clipY0 = sObjClip.on && sObjClip.y0 > pic->y0 ? sObjClip.y0 : pic->y0;
+    float clipY1 = sObjClip.on && sObjClip.y1 < pic->y1 ? sObjClip.y1 : pic->y1;
+
     static NitroGpuObj before[NITRO_GPU_OBJ_MAX], after[NITRO_GPU_OBJ_MAX], shown[2 * NITRO_GPU_OBJ_MAX];
     const NitroGpuObj *list = set->objs;
     int n = set->objCount, nb = -1, na = -1, k;
@@ -3247,13 +3258,13 @@ static void draw_gpu_objs(const LayerSet *set, const NitroGx3dScene *scene, cons
             u1 -= (u1 - u0) * (x1 - pic->x1) / (x1 - x0);
             x1 = pic->x1;
         }
-        if (y0 < pic->y0) {
-            vT += (vB - vT) * (pic->y0 - y0) / (y1 - y0);
-            y0 = pic->y0;
+        if (y0 < clipY0) {
+            vT += (vB - vT) * (clipY0 - y0) / (y1 - y0);
+            y0 = clipY0;
         }
-        if (y1 > pic->y1) {
-            vB -= (vB - vT) * (y1 - pic->y1) / (y1 - y0);
-            y1 = pic->y1;
+        if (y1 > clipY1) {
+            vB -= (vB - vT) * (y1 - clipY1) / (y1 - y0);
+            y1 = clipY1;
         }
         if (x0 < x1 && y0 < y1) {
             quad(x0, y0, x1, y1, 0.0f, u0, vT, u1, vB, 0xFFFFFFFFu);
@@ -3581,7 +3592,22 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         /* 5b. Engine A's sprites drawn here (ComposeLayers.gpuObjCount: the
          * HM cut-in's), in front of it all. */
         if (info->gpuObjCount >= 0 && set->objTex && set->objCount > 0) {
-            draw_gpu_objs(set, scene, &pic, scale, (pic.y1 - pic.y0) / (float)rows, linear);
+            /* (a BG's band closing, or closed further than the game has it
+             * (bg_band_rows: going on closing as the game holds it): the
+             * sprites in it only, the cut-in's wind and Pokemon closed away
+             * with it; over the field the dots and the Pokemon's parts
+             * showed for a few frames after it closed, 2026-11-01) */
+            sObjClip.on = info->gpuCircle == 3 &&
+                          (sBgBand.vTop > 0.0f || sBgBand.vBottom > 0.0f || sBgBand.y > (float)sBgBand.wantY + 0.5f ||
+                           sBgBand.r < (float)sBgBand.wantR - 0.5f);
+            if (sObjClip.on) {
+                sObjClip.y0 = pic.y0 + (float)(sConfig.flipV ? rows - bandR : bandY) * scale;
+                sObjClip.y1 = pic.y0 + (float)(sConfig.flipV ? rows - bandY : bandR) * scale;
+            }
+            if (!sObjClip.on || sObjClip.y1 > sObjClip.y0) {
+                draw_gpu_objs(set, scene, &pic, scale, (pic.y1 - pic.y0) / (float)rows, linear);
+            }
+            sObjClip.on = 0;
         }
     }
     /* 5c. A circle fade drawn here (ComposeLayers.gpuCircle). */
