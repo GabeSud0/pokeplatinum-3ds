@@ -1806,7 +1806,11 @@ then its BG off: the band the backdrop alone, `GpuBgRowsOf`'s 4, still
 the compositor's) before it goes; after the steady close that looked like
 a stop (a video of 2026-11-01). Held after closing, the band goes on
 closing at its last speed (2 lines a frame each side), never opening again
-while the game holds it: closed in 4 frames, by the V-blank (`sBgBand`).
+while the game holds it: closed in 4 frames, by the V-blank (`sBgBand`). The
+compositor's sprites (the cut-in's wind and Pokémon) are cut to the band's
+lines while it closes, and while it's closed further than the game's
+(`sObjClip`): the game still shows them for two steps, and over the field
+the dots and the Pokémon's parts showed for a few frames after it closed.
 
 Eterna Forest's light finer than a pixel (patch 0061, 2026-10-31): the
 game keeps the clouds' place finer than a pixel as they follow the camera,
