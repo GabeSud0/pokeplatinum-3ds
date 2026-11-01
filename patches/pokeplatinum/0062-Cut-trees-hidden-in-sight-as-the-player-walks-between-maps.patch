@@ -1,0 +1,170 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 01:30:00 -0700
+Subject: [PATCH] Cut trees hidden in sight as the player walks between maps
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Walking from one map into another clears the map's local flags, among
+them the ones Cut sets on the trees it cuts. On the DS that's unseen:
+the map's people go as the player leaves it, and a cut tree comes back
+only as the player walks back in, off the DS's narrower screen. On the
+3DS's wider field the maps beside the player's have their people
+brought, their local flags taken as clear, and the two Cut trees on
+Eterna Forest's east side came back in sight as soon as the player
+stepped onto Route 205, and again as they walked back into the forest's
+zone.
+
+A map's local flags are now remembered as the player leaves it, till
+they walk back in: what they hid isn't brought from beside, and walking
+back in, what they hid in sight on the 3DS's screen stays hidden, its
+flag set again before the map's people are made. Further away, it comes
+back as on the DS, unseen.
+---
+  src/overlay005/fieldmap.c | 103 +++++++++++++++++++++++++++++++++++++++++++++-
+  1 file changed, 102 insertions(+), 1 deletion(-)
+
+diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
+index ce648848..7c6e7d1e 100644
+--- a/src/overlay005/fieldmap.c
++++ b/src/overlay005/fieldmap.c
+@@ -137,6 +137,7 @@ static enum FieldExtensionOverlay FieldMap_GetExtOverlayForActiveDynMapFeatures(
+ static BOOL FieldMap_InDistortionWorld(FieldSystem *fieldSystem);
+ #ifdef SDK_PORT_3DS
+ static void FieldMap_PortNeighbours(FieldSystem *fieldSystem);
++static void FieldMap_PortKeepHiddenInSight(FieldSystem *fieldSystem, enum MapHeaderID mapHeaderID, int objEventCount, const ObjectEvent *objEventList);
+ #endif
+ static MapObjectsToPreload *FetchMapObjectsToPreload(enum HeapID heapID, int memberID);
+ static const int *MapObjectsToPreload_GetIDs(const MapObjectsToPreload *mapObjectsToPreload);
+@@ -465,6 +466,9 @@ static BOOL FieldMap_ChangeZone(FieldSystem *fieldSystem)
+     const ObjectEvent *objEventList = MapHeaderData_GetObjectEvents(fieldSystem);
+ 
+     sub_0206184C(fieldSystem->mapObjMan, oldMapHeaderID, newMapHeaderID, objEventCount, objEventList);
++#ifdef SDK_PORT_3DS
++    FieldMap_PortKeepHiddenInSight(fieldSystem, newMapHeaderID, objEventCount, objEventList);
++#endif
+ 
+     RadarChain_Clear(fieldSystem->chain);
+     FieldBGM_TryFadeOut(fieldSystem, FieldBGM_GetEffective(fieldSystem, fieldSystem->location->mapHeaderID), 1);
+@@ -1061,6 +1065,101 @@ static BOOL FieldMap_PortNeighbourEvent(FieldSystem *fieldSystem, ObjectEvent *e
+     return TRUE;
+ }
+ 
++// A map's local flags as the player left it (the flags are cleared as the
++// player walks into the next map): what was hidden there then (a Cut tree
++// cut, its flag set) stays so beside it till the player walks back in, as
++// on the DS, where the map's people go as the player leaves it and come
++// back from their events only then. Brought from the map's events with
++// its flags taken as clear, the two Cut trees on Eterna Forest's east side
++// were back as soon as the player stepped onto Route 205 (2026-11-01).
++#define PORT_LEFT_MAPS 4
++#define PORT_LOCAL_FLAG_BYTES ((MAP_LOCAL_FLAGS_END - MAP_LOCAL_FLAGS_START + 1) / 8)
++
++static struct {
++    int mapHeaderID; // (+ 1: 0 none)
++    u8 flags[PORT_LOCAL_FLAG_BYTES];
++} sPortLeft[PORT_LEFT_MAPS];
++static int sPortLeftNext;
++
++// (each frame: the player's map's local flags kept; walking into another
++// map, the one left's remembered and the one entered forgotten)
++static void FieldMap_PortNoteLocalFlags(FieldSystem *fieldSystem, enum MapHeaderID here)
++{
++    static int sHere = -1;
++    static u8 sFlags[PORT_LOCAL_FLAG_BYTES];
++    const u8 *now = VarsFlags_GetFlagChunk(SaveData_GetVarsFlags(fieldSystem->saveData), MAP_LOCAL_FLAGS_START);
++    int i;
++
++    if ((int)here != sHere) {
++        for (i = 0; i < PORT_LEFT_MAPS; i++) {
++            if (sPortLeft[i].mapHeaderID == (int)here + 1 || sPortLeft[i].mapHeaderID == sHere + 1) {
++                sPortLeft[i].mapHeaderID = 0;
++            }
++        }
++
++        if (sHere >= 0) {
++            sPortLeft[sPortLeftNext].mapHeaderID = sHere + 1;
++            memcpy(sPortLeft[sPortLeftNext].flags, sFlags, sizeof(sFlags));
++            sPortLeftNext = (sPortLeftNext + 1) % PORT_LEFT_MAPS;
++        }
++
++        sHere = here;
++    }
++
++    memcpy(sFlags, now, sizeof(sFlags));
++}
++
++// Whether a map's local flag was set as the player left it.
++static BOOL FieldMap_PortLeftHidden(enum MapHeaderID mapHeaderID, int flag)
++{
++    // (the chunk is the bytes from the one with MAP_LOCAL_FLAGS_START's bit:
++    // flag 1 is the byte's bit 1, as FieldSystem_ClearLocalFlags clears it)
++    int i, bit = flag - (MAP_LOCAL_FLAGS_START & ~7);
++
++    if (flag < MAP_LOCAL_FLAGS_START || flag > MAP_LOCAL_FLAGS_END || bit / 8 >= PORT_LOCAL_FLAG_BYTES) {
++        return FALSE;
++    }
++
++    for (i = 0; i < PORT_LEFT_MAPS; i++) {
++        if (sPortLeft[i].mapHeaderID == (int)mapHeaderID + 1) {
++            return (sPortLeft[i].flags[bit / 8] >> (bit % 8)) & 1;
++        }
++    }
++
++    return FALSE;
++}
++
++// Walking back into a map left a moment ago (its local flags cleared, as
++// on every walk into a map): what was hidden there as the player left it
++// (a Cut tree cut) and is in sight on the 3DS's wider screen stays hidden,
++// its flag set again before the map's people are made. On the DS, Eterna
++// Forest's two Cut trees on its east side come back off its narrower
++// screen as the player walks back in from Route 205; here they came back
++// in sight, 9 tiles away (2026-11-01). Further away, they come back as on
++// the DS, unseen.
++static void FieldMap_PortKeepHiddenInSight(FieldSystem *fieldSystem, enum MapHeaderID mapHeaderID, int objEventCount, const ObjectEvent *objEventList)
++{
++    int playerX, playerZ, i;
++
++    if (NitroPort_WideScreenExtra() <= 0 || fieldSystem->playerAvatar == NULL || objEventList == NULL) {
++        return;
++    }
++
++    playerX = PlayerAvatar_GetXPos(fieldSystem->playerAvatar);
++    playerZ = PlayerAvatar_GetZPos(fieldSystem->playerAvatar);
++
++    for (i = 0; i < objEventCount; i++) {
++        const ObjectEvent *e = &objEventList[i];
++        int flag = ObjectEvent_GetHiddenFlag(e);
++
++        if (ObjectEvent_GetScript(e) != 0xffff // (not a hand-on: its flag field is a map's)
++            && FieldMap_PortLeftHidden(mapHeaderID, flag)
++            && MapObject_PortInReach(ObjectEvent_GetX(e), ObjectEvent_GetZ(e), playerX, playerZ, 0)) {
++            FieldSystem_SetFlag(fieldSystem, flag);
++        }
++    }
++}
++
+ // The people of the maps beside the player's, on the 3DS's wider field
+ // (map_object.h, MAP_OBJ_STATUS_PORT_NEIGHBOUR): every frame, the ones out
+ // of reach dropped, and one more of those in reach brought from their map's
+@@ -1087,6 +1186,7 @@ static void FieldMap_PortNeighbours(FieldSystem *fieldSystem)
+     MapObjectMan_PortSetNeighboursOn(on);
+ 
+     here = fieldSystem->location->mapHeaderID;
++    FieldMap_PortNoteLocalFlags(fieldSystem, here);
+     playerX = PlayerAvatar_GetXPos(fieldSystem->playerAvatar);
+     playerZ = PlayerAvatar_GetZPos(fieldSystem->playerAvatar);
+ 
+@@ -1204,7 +1304,8 @@ static void FieldMap_PortNeighbours(FieldSystem *fieldSystem)
+                 || ObjectEvent_GetGraphicsID(e) == OBJ_EVENT_GFX_INVISIBLE // (nothing to see)
+                 || (hiddenFlag != 0 && !(hiddenFlag >= MAP_LOCAL_FLAGS_START && hiddenFlag <= MAP_LOCAL_FLAGS_END)
+                     && FieldSystem_CheckFlag(fieldSystem, hiddenFlag))
+-                || !MapObject_PortInReach(ObjectEvent_GetX(e), ObjectEvent_GetZ(e), playerX, playerZ, 0)) {
++                || !MapObject_PortInReach(ObjectEvent_GetX(e), ObjectEvent_GetZ(e), playerX, playerZ, 0)
++                || FieldMap_PortLeftHidden(beside[k], hiddenFlag)) { // (hidden as the player left their map)
+                 continue;
+             }
+ 

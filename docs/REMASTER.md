@@ -775,6 +775,18 @@ screen's 320 x 192 at 1.25 times, as above.
     of the story's states she's placed the same way
     (`sPortCounterpartPlaces`: Sandgem, Route 202, Jubilife, Veilstone,
     Canalave). The other variables' (only indoors) aren't brought.
+  - What a map hid as the player left it (patch 0062): walking into a map
+    clears the local flags, among them Cut's on the trees it cut. A map's
+    local flags are remembered as the player leaves it, till they walk
+    back in: what they hid isn't brought from beside, and walking back in,
+    what they hid within reach of the screen stays hidden (its flag set
+    again before the map's people are made, `FieldMap_PortKeepHiddenInSight`);
+    further out it comes back as on the DS, unseen. The two Cut trees on
+    Eterna Forest's east side (the forest's zone, flags 32 and 33) came
+    back in sight as soon as the player stepped onto Route 205, and again
+    walking back, 9 tiles away (2026-11-01). The flags' bytes start at the
+    one with `MAP_LOCAL_FLAGS_START`'s bit (flag 1 is bit 1), as
+    `FieldSystem_ClearLocalFlags` clears them.
 - **A battle's start** (patch 0051): the encounter effects are made for the
   DS's screen (windows and H-blank slices across its columns and lines,
   wipes drawn into a 256 x 192 BG). While one plays (`NitroPort_SetFieldEffect`)
