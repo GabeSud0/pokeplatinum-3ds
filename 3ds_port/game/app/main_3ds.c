@@ -1738,6 +1738,26 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         if (!drawn) {
             return false;
         }
+        /* A picture drawn as the screen is blanked: the registers are the
+         * frame's, taken as it was handed over, but the VRAM is read as it
+         * is now, and the game may have moved on. A battle's start (the
+         * Galactic boss's) ends with the master brightness to black and
+         * its BG cleared in the same frame: drawn a frame later, the BG
+         * cleared and the brightness not yet, the field showed whole for a
+         * frame, 2026-11-01. With the master brightness at full black or
+         * white now but not in the frame taken, the picture isn't
+         * published: the one before stays, and the next frame's has the
+         * brightness. */
+        if (top && engine == 0) {
+            unsigned now = NitroPort_Render2DMasterBright(engine, 0), taken = (unsigned)split.masterBright;
+            bool blankNow = ((now >> 14) & 3) != 0 && (now & 0x1F) >= 16;
+            bool blankTaken = ((taken >> 14) & 3) != 0 && (taken & 0x1F) >= 16;
+
+            if (blankNow && !blankTaken) {
+                sMustDraw[0] = true;
+                return false;
+            }
+        }
         layers->has3d = split.has3d && layers->over != NULL;
         layers->scroll3d = split.scroll3d;
         layers->scroll3dLines = split.scroll3dLines;

@@ -808,6 +808,14 @@ screen's 320 x 192 at 1.25 times, as above.
   down they keep their shape. Not the cut-ins with a trainer's picture
   (the leaders, the Elite Four, the Champion) nor the legendaries' (the
   camera only).
+  Their end (2026-11-01): the master brightness to black and the effect's
+  BG cleared in the same frame (the Galactic boss's). The drawer takes the
+  registers as the frame is handed over but reads the VRAM as it is when
+  it draws; a frame later, the BG cleared and the brightness not yet,
+  the field showed whole for a frame. A picture drawn with the master
+  brightness at full black or white now but not in the registers taken
+  isn't published (`RenderScreen`): the one before stays, and the next
+  frame's has the brightness.
 - **The circle fades** (patch 0054, also with the 320-wide screen): the
   screen closing round the middle (walking into Eterna Forest) is a window
   the game shapes line by line for the DS's 256 x 192. It was cut flat at
