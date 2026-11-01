@@ -1841,7 +1841,19 @@ noted with no band, the window off as it ends, shows the picture whole
 does a picture without the band while it's open still (`draw_band_tail`):
 before, the 2D's drawer still on the band's picture, the band stood at its
 last noted lines (40 to 200 of 240) for a sixth of a second, the outside
-framed in black, then the frame gone at once. Until 2026-10-31 neither was ever
+framed in black, then the frame gone at once. A band is noted from its first
+frame: on the 3DS the frame's lines (`NitroPort_HBlankLinesOnce`) are
+taken each V-blank before the frame's notes, not only when a drawer takes
+the frame, and `NitroPort_Render2DCircleNow` finds a band on the canvas
+engine A was last drawn on for the compositor, whether that picture had a
+band or not (`sGpuBandCanvas`). Before, with the upper drawer busy every
+other frame after a map change, the band's first frames were noted as
+none, and its picture, when it came, was taken for a band that was over:
+the outside showed whole at full brightness (the place name's sign in it)
+for five frames, then the band from two thirds open (a video of
+2026-10-31; the PC runner's sim60 with the notes taken the 3DS's way and
+the lines every other frame shows the same). A band's picture with no band
+drawn lately and none noted yet starts from the picture's own lines. Until 2026-10-31 neither was ever
 left to the compositor with an H-blank effect: a line's copy of the
 registers has DISPSTAT and VCOUNT at 0, the frame's the V-blank's, and the
 lines were taken for differing in more than the windows (`LineLikeFrame`

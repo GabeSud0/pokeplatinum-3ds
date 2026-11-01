@@ -2974,16 +2974,27 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
              * once each side) */
             int rowsAll = (int)((pic->y1 - pic->y0) / sy + 0.5f);
             u32 now = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
+            int recent = sBand.on && (int32_t)(now - sBand.vblank) <= 30;
 
-            if (!sBand.on || (int32_t)(now - sBand.vblank) > 30 ||
-                (sBand.top <= 0.5f && sBand.bottom >= (float)rowsAll - 0.5f)) {
-                sBand.on = 0;
-                return;
+            if (recent && !band_open()) {
+                return;   /* (over, and opened all the way) */
             }
-            ka = kb = 2;
-            ax = bx = 0;
-            ay = by = 0;
-            ar = br = rowsAll;
+            if (!recent) {
+                /* (no band drawn lately, none in the frame before: a band
+                 * starting, its picture here before a note of it (the
+                 * lines noted late): as the picture has it, rather than
+                 * the whole picture at once) */
+                ka = 2;
+                kb = 0;
+                ax = 0;
+                ay = info->gpuCircleY;
+                ar = info->gpuCircleR;
+            } else {
+                ka = kb = 2;
+                ax = bx = 0;
+                ay = by = 0;
+                ar = br = rowsAll;
+            }
         }
         if (ka == info->gpuCircle) {
             x = ax, y = ay, r = ar;

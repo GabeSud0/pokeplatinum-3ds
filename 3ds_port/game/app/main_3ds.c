@@ -2184,7 +2184,17 @@ static bool DrawFrame(bool new3dOnly)
     if (__atomic_load_n(&sSuspended, __ATOMIC_SEQ_CST)) {
         return false;   /* (the HOME menu has the screens) */
     }
+    /* (the remaster: the frame's lines each V-blank, whether a drawer takes
+     * the frame or not, before the frame's notes below (its band of lines),
+     * as the DS's H-blank effects run every frame; the drawers draw from
+     * their own copies. Taken only when a drawer took the frame, the upper
+     * one busy every other frame after a map change, a band's lines were
+     * noted a frame or more late, the first of them as no band: walking out
+     * of a building, the band's picture showed whole at full brightness for
+     * five frames, then the band from two thirds open, a video of
+     * 2026-10-31. The PC runner takes them every frame.) */
     if (sRemaster) {
+        (void)NitroPort_HBlankLinesOnce();
         NitroPort_Compose2DOffered(NitroPort_ComposeVBlanks());
     }
     for (i = 0; i < sDrawerCount; i++) {

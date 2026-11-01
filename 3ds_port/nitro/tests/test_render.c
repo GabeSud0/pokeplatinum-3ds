@@ -2490,6 +2490,24 @@ static void test_window_rows(void)
     }
     NitroPort_Render2DSplit(0, wide, &split);
     CHECK(split.gpuCircleOn == 0);
+    /* a band starting after pictures drawn without one (one not for the
+     * compositor's circles, then one for them with none): noted from its
+     * first frame, before a picture with it is drawn (the drawer behind:
+     * walking out of a building) */
+    GX_SetVisibleWnd(GX_WNDMASK_NONE);
+    NitroPort_LineRegs.active = 0;
+    split.gpuCircle = 0;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == -1);
+    split.gpuCircle = 1;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 0);
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == -1);
+    GX_SetVisibleWnd(GX_WNDMASK_W0);
+    SetBandLines(80, 112);
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 2 && y == 24 + 80 && r == 24 + 112);
+    SetBandLines(0, 0);
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 2 && y == 24 + 96 && r == 24 + 96);
     NitroPort_LineRegs.active = 0;
     GX_SetVisibleWnd(GX_WNDMASK_NONE);
 }

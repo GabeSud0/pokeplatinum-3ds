@@ -4868,6 +4868,16 @@ static struct {
     volatile int valid;
     int window, origin, top, height;
 } sGpuCircleCanvas;
+/* (engine A's canvas as last drawn for the compositor's circles and bands,
+ * whatever the picture had: a band's lines are noted from the frame it
+ * starts in, not from the frame the drawer first drew it in. Walking out of
+ * a building, with the drawer behind, the band's first frames were noted
+ * as none; its picture, when it came, showed whole at full brightness for
+ * five frames, then the band from two thirds open: a video of 2026-10-31.) */
+static struct {
+    volatile int valid;
+    int top, height;
+} sGpuBandCanvas;
 
 /* A band's line (the DS's, 0-192) on the canvas: its first and last lines
  * go on to the canvas's edges (a tall field's lines above and below the
@@ -4883,27 +4893,34 @@ int NitroPort_Render2DCircleNow(int engine, int *x, int *y, int *r)
     int top, bottom;
     u8 shown;
 
-    if (engine != 0 || !__atomic_load_n(&sGpuCircleCanvas.valid, __ATOMIC_ACQUIRE)) {
+    int circles;
+
+    if (engine != 0) {
         return -1;
     }
-    c = &sCircles[0][sGpuCircleCanvas.window];
-    if (c->on) {
-        *x = sGpuCircleCanvas.origin + c->cx;
-        *y = sGpuCircleCanvas.top + c->cy;
-        *r = c->r;
-        return 1;
+    circles = __atomic_load_n(&sGpuCircleCanvas.valid, __ATOMIC_ACQUIRE);
+    if (circles) {
+        c = &sCircles[0][sGpuCircleCanvas.window];
+        if (c->on) {
+            *x = sGpuCircleCanvas.origin + c->cx;
+            *y = sGpuCircleCanvas.top + c->cy;
+            *r = c->r;
+            return 1;
+        }
     }
     /* (a band of lines, as the game has it now: NitroPort_LineRegs is the
-     * frame being handed over) */
-    if (GpuRowsOf(NitroPort_IoReg,
+     * frame being handed over; on the canvas engine A was last drawn on for
+     * the compositor, its picture with a band or not: sGpuBandCanvas) */
+    if (__atomic_load_n(&sGpuBandCanvas.valid, __ATOMIC_ACQUIRE) &&
+        GpuRowsOf(NitroPort_IoReg,
                   NitroPort_LineRegs.active ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0] : NULL, &top,
                   &bottom, &shown) >= 0) {
         *x = 0;
-        *y = GpuRowsLine(top, sGpuCircleCanvas.top, sGpuCircleCanvas.height);
-        *r = GpuRowsLine(bottom, sGpuCircleCanvas.top, sGpuCircleCanvas.height);
+        *y = GpuRowsLine(top, sGpuBandCanvas.top, sGpuBandCanvas.height);
+        *r = GpuRowsLine(bottom, sGpuBandCanvas.top, sGpuBandCanvas.height);
         return 2;
     }
-    return 0;
+    return circles ? 0 : -1;
 }
 
 /* An engine's registers and memory, and the canvas (split's: width,
@@ -5005,8 +5022,15 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
     if (split != NULL && e.isA && !split->gpuCircle) {
         __atomic_store_n(&sGpuCircleCanvas.valid, 0, __ATOMIC_RELEASE);
     }
+    if (split != NULL && e.isA && (!split->gpuCircle || split->stretch)) {
+        __atomic_store_n(&sGpuBandCanvas.valid, 0, __ATOMIC_RELEASE);
+    }
     if (split != NULL && e.isA && split->gpuCircle && !split->stretch) {
         const State2D *st = &sState[0];
+
+        sGpuBandCanvas.top = e.top;
+        sGpuBandCanvas.height = e.height;
+        __atomic_store_n(&sGpuBandCanvas.valid, 1, __ATOMIC_RELEASE);
         int w = split->snapshot
                     ? GpuCircleOf(st->io, st->lines ? (const u8(*)[NITRO_LINE_REGS])st->lineRegs : NULL, st->circles)
                     : GpuCircleOf(NitroPort_IoReg,
