@@ -1,0 +1,220 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 14:30:00 -0700
+Subject: [PATCH] The follower through doors and stairs with the player (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The follower went into its ball whenever the player went through a door,
+up or down stairs or into a cave or a forest (the game walks the player
+in: "the game moves the player"), and came out again only once the
+player stood still, its ball first. Now it goes with them, as
+HeartGold's does: during a warp's way in or out (the task sub_02056BDC
+and sub_02056C18 start: FieldSystem_PortInWarp) it isn't put away, and
+on the other side it's out at once without its ball, behind the player
+or, on their tile (a door's, the stairs'), shown once they've stepped
+off it. And when it is in its ball and the player sets off walking, it
+comes out behind them as they go, growing out of nothing, instead of
+waiting for them to stop (its ball, as before, when they stand).
+---
+  include/unk_02056B30.h |  4 +++
+  src/port_follower.c    | 71 +++++++++++++++++++++++++++++++++++++++++++-------
+  src/unk_02056B30.c     | 18 +++++++++++++
+  3 files changed, 83 insertions(+), 10 deletions(-)
+
+diff --git a/include/unk_02056B30.h b/include/unk_02056B30.h
+index 30054dd0..028ab02b 100644
+--- a/include/unk_02056B30.h
++++ b/include/unk_02056B30.h
+@@ -9,4 +9,8 @@ void sub_02056B30(FieldTask *param0, int param1, int param2, int param3, u16 par
+ void sub_02056BDC(FieldSystem *fieldSystem, const int param1, const int param2, const int param3, const int param4, const int param5, const int param6);
+ void sub_02056C18(FieldSystem *fieldSystem, const int param1, const int param2, const int param3, const int param4, const int param5);
+ 
++#ifdef SDK_PORT_3DS
++BOOL FieldSystem_PortInWarp(FieldSystem *fieldSystem);
++#endif
++
+ #endif // POKEPLATINUM_UNK_02056B30_H
+diff --git a/src/port_follower.c b/src/port_follower.c
+index 5503bdcf..b1d9fc36 100644
+--- a/src/port_follower.c
++++ b/src/port_follower.c
+@@ -42,6 +42,7 @@
+ #include "persisted_map_features.h"
+ #include "player_avatar.h"
+ #include "player_move.h"
++#include "unk_02056B30.h"
+ #include "pokemon.h"
+ #include "port_options.h"
+ #include "savedata_misc.h"
+@@ -690,11 +691,18 @@ static void PortFollower_UpdateBall(FieldSystem *fieldSystem, BOOL dropIn)
+ }
+ 
+ // (coming out: frames of it so far, -1 not yet begun: its picture or, -2,
+-// the player's step off its tile awaited; going in: frames left)
++// the player's step off its tile awaited; -4 and -5: without its ball;
++// going in: frames left)
+ static int sOut, sIn;
+ 
+ static int sOpenIn; // (coming out, sOut -3: the ball's steps before it opens)
+ 
++// Out when the player goes through a door, up or down stairs or into a
++// cave or a forest: it goes with them, out at once on the other side
++// (sOut -4, without its ball), as HeartGold's does.
++static BOOL sCarry;
++static BOOL sWaitsOff; // (-4, -5: added on the player's tile, hidden till they step off it)
++
+ static void PortFollower_HideShadow(MapObject *mapObj)
+ {
+     if (!sShadowForced) {
+@@ -995,7 +1003,7 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+     static MapObject *sLast;
+     MapObject *mapObj, *player;
+     int graphicsID = 0, x, z, dx, dz;
+-    BOOL big = FALSE, scripted;
++    BOOL big = FALSE, scripted, inWarp;
+ 
+     if (fieldSystem == NULL || fieldSystem->mapObjMan == NULL || fieldSystem->playerAvatar == NULL
+         || fieldSystem->location == NULL || fieldSystem->saveData == NULL) {
+@@ -1029,6 +1037,8 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+     // (the options' page in the lower menu's panel: a task, but the field
+     // going on behind it, the player still: it comes and goes as there set)
+     scripted = FieldSystem_IsRunningTask(fieldSystem) && !OptionsPanel_IsOpen();
++    // (a door, stairs, a cave's or a forest's way: it goes with the player)
++    inWarp = FieldSystem_PortInWarp(fieldSystem);
+ 
+     if (PortOption_On(PORT_OPT_FOLLOWER)) {
+         graphicsID = PortFollower_PartyGfx(fieldSystem, &big);
+@@ -1064,9 +1074,9 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+         // script, a ledge, or left behind (a warp within the map).
+         if (graphicsID != MapObject_GetGraphicsID(mapObj)) {
+             why = graphicsID ? "another Pokémon" : "not to be out";
+-        } else if (scripted && (x != sPlayerX || z != sPlayerZ)) {
++        } else if (scripted && !inWarp && (x != sPlayerX || z != sPlayerZ)) {
+             why = "the game moves the player";
+-        } else if (scripted && sOut >= 0 && PortFollower_SomeoneComes(fieldSystem, mapObj)) {
++        } else if (scripted && !inWarp && sOut >= 0 && PortFollower_SomeoneComes(fieldSystem, mapObj)) {
+             why = "someone comes to its spot";
+         } else if (PortFollower_PlayerJumping(fieldSystem, player)) {
+             why = "a ledge";
+@@ -1076,6 +1086,7 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+ 
+         if (why != NULL) {
+             NitroPort_Log("[follower] in its ball (%s)", why);
++            sCarry = FALSE;
+ 
+             if (sOut < 0 || MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE)) {
+                 PortFollower_Remove(fieldSystem, mapObj); // (never seen: its ball, if it was there, goes)
+@@ -1090,6 +1101,27 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+                 PortFollower_ShowBall(fieldSystem, mapObj, sIn + BALL_AFTER + BALL_POP, TRUE); // (open as it goes in)
+                 PortFollower_Sound(SEQ_SE_DP_SLOT02_sseq_1); // (SEQ_SE_DP_SUIKOMU: the battle's recall)
+             }
++        } else if (sOut == -4 || sOut == -5) {
++            // Coming out without its ball: through a door or up the stairs
++            // with the player (-4: at its size), or as they set off walking
++            // (-5: growing to it). On the player's tile (a door's, the
++            // stairs'), hidden till they've stepped off it: shown once they
++            // stand or it sets off after them (not in them as they go).
++            BOOL onTile = dx == 0 && dz == 0;
++            BOOL playerGoing = PortFollower_PlayerStepping(fieldSystem) || MapObject_IsMoving(player);
++
++            if ((!sWaitsOff || (!onTile && (!playerGoing || MapObject_IsMoving(mapObj))))
++                && PortFollower_SetScale(mapObj, sOut == -4 ? POP_FRAMES : 0)) {
++                MapObject_SetHidden(mapObj, FALSE);
++
++                if (sOut == -4) {
++                    sOut = POP_FRAMES;
++                    PortFollower_ShowShadow(mapObj);
++                } else {
++                    sOut = 0;
++                    PortFollower_Sound(SEQ_SE_DP_SLOT01_sseq_1); // (SEQ_SE_DP_BOWA2: the battle's send-out)
++                }
++            }
+         } else if (sOut == -3) {
+             // Coming out: its ball there, then open.
+             if (sOpenIn > 0) {
+@@ -1126,6 +1158,12 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+             sub_02062A0C(mapObj, 1);
+         }
+ 
++        // (out as the player goes through a door: it goes with them; out on
++        // the other side: with them as before)
++        if (mapObj != NULL && sIn == 0 && sOut == POP_FRAMES) {
++            sCarry = inWarp;
++        }
++
+         // (no shadow under it while it's smaller than itself)
+         if (mapObj != NULL && (sIn > 0 || sOut < POP_FRAMES)) {
+             PortFollower_HideShadow(mapObj);
+@@ -1137,11 +1175,21 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+     sPlayerX = x;
+     sPlayerZ = z;
+ 
+-    // Out (not during a script's or a menu's task: when it ends).
+-    if (mapObj == NULL && graphicsID != 0 && !scripted && !PortFollower_PlayerStepping(fieldSystem)) {
+-        if (sWait > 0) {
+-            sWait--;
+-        } else if (MapObjectMan_PortFreeSlots(fieldSystem->mapObjMan) > 1
++    if (mapObj == NULL && graphicsID == 0 && !inWarp) {
++        sCarry = FALSE; // (not to be out where the player went)
++    }
++
++    // Out (not during a script's or a menu's task: when it ends). Through a
++    // warp with the player: at once on the other side, without its ball.
++    // The player setting off walking (out of its ball a moment ago, not
++    // stopping): behind them, growing out of nothing; standing, out of its
++    // ball (which would be left behind by someone walking on).
++    if (mapObj == NULL && sWait > 0 && !sCarry) {
++        sWait--;
++    } else if (mapObj == NULL && graphicsID != 0 && (sCarry || (!scripted && !PortFollower_PlayerJumping(fieldSystem, player)))) {
++        BOOL walking = !sCarry && PortFollower_PlayerStepping(fieldSystem);
++
++        if (MapObjectMan_PortFreeSlots(fieldSystem->mapObjMan) > 1
+             && (!PortFollower_IsGfx(graphicsID) || Bundle_Ready()) && MapObjectGfx_PortHasRoom(fieldSystem->mapObjMan, graphicsID)) {
+             BOOL onPlayer;
+ 
+@@ -1155,10 +1203,13 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+             if (mapObj != NULL) {
+                 MapObject_SetHidden(mapObj, TRUE); // (shown as it comes out of its ball)
+                 PortFollower_SetScale(mapObj, 0);  // (its picture made with it, before it was the follower)
+-                sOut = onPlayer ? -2 : -1;
++                sOut = sCarry ? -4 : walking ? -5 : onPlayer ? -2 : -1;
++                sWaitsOff = onPlayer;
+                 sIn = 0;
+             }
+ 
++            sCarry = FALSE;
++
+             sNoRoom = 0;
+         } else {
+             sWait = 4;
+diff --git a/src/unk_02056B30.c b/src/unk_02056B30.c
+index 83db0919..a232c6e3 100644
+--- a/src/unk_02056B30.c
++++ b/src/unk_02056B30.c
+@@ -116,6 +116,24 @@ void sub_02056B30(FieldTask *taskMan, int param1, int param2, int param3, u16 pa
+     FieldTask_InitCall(taskMan, sub_02056B70, v0);
+ }
+ 
++#ifdef SDK_PORT_3DS
++// (the port's follower, port_follower.c) Whether the field is in a warp's
++// way in or out: a door, stairs, a cave's or a forest's entrance (the task
++// sub_02056BDC and sub_02056C18 start), before or after the map changes.
++BOOL FieldSystem_PortInWarp(FieldSystem *fieldSystem)
++{
++    FieldTask *task;
++
++    for (task = fieldSystem->task; task != NULL; task = task->prev) {
++        if (task->func == sub_02056CFC) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++#endif
++
+ static BOOL sub_02056B70(FieldTask *taskMan)
+ {
+     FieldSystem *fieldSystem = FieldTask_GetFieldSystem(taskMan);

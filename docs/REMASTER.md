@@ -1353,14 +1353,25 @@ screens) the lower screen is the DS's, filling the screen as before.
     their own; a 64 x 64 one indoors), behind the player or, where that
     tile isn't free (out of a door), on the player's tile hidden till they
     step off it (the tile behind checked as the player's step would be:
-    no water, ledge or ramp). Back in its ball whenever the game moves
+    no water, ledge or ramp). Through a door, up or down stairs and into
+    a cave or a forest it goes with the player, as HeartGold's does
+    (patch 0064: during a warp's way in or out, the task
+    `sub_02056BDC`/`sub_02056C18` start, `FieldSystem_PortInWarp`): out
+    at once on the other side, without its ball, behind the player or on
+    their tile (a door's, the stairs') shown once they've stepped off it
+    and stand, or it sets off after them. (It went into its ball at every
+    door and on the stairs, and came out only once the player stood
+    still: walking on through a building and up its stairs it stayed in,
+    2026-11-01.) Back in its ball whenever the game moves
     the player (a script's walk; out again when the player is theirs
     again: scenes where it stays out may come later), when someone walks
     onto its tile in a script (a person coming up behind the player: the
     two stood in each other, 2026-10-29), and while the
     player jumps down a ledge (the
     follow code moves a tile a step behind and can't keep up with the
-    jump): out again where they stop. Its graphics IDs from 0x4000, past
+    jump): out again where they stop, or, the player walking on, behind
+    them as they go, growing out of nothing without its ball (which would
+    be left behind), not waiting for them to stop. Its graphics IDs from 0x4000, past
     the berry trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000). Its
     Poké Ball: coming out it grows from nothing (its picture made at no
     size, so it never shows whole first), going in it shrinks away where
