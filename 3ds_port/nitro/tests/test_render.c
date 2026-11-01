@@ -3318,8 +3318,8 @@ static void SolidTile4(u8 *tile, int index)
  * carried on beside it. */
 static void test_wide_framed_windows(void)
 {
-    static u16 wide[320 * 192], over[320 * 192];
-    static u8 overAlpha[320 * 192];
+    static u16 wide[320 * 240], over[320 * 240];
+    static u8 overAlpha[320 * 240];
     static u8 tiles[8 * 32], objTile[32];
     static u16 map[32 * 32];
     static u16 pltt[16] = { GREY, RED, BLUE, WHITE, GREEN };
@@ -3382,6 +3382,23 @@ static void test_wide_framed_windows(void)
     CHECK(wide[26 * 320 + 274] == BLUE);          /* its sprite with it: 208 + 32 + 32 */
     CHECK(wide[26 * 320 + 242] == GREY);          /* (not where it was) */
     CHECK(wide[26 * 320 + 134] == BLUE);          /* the other sprite where it was: 100 + 32 */
+    /* The field at the DS's pixel size on the lower screen (the
+     * Underground): a taller picture, the DS's 24 lines down, its BGs
+     * scrolled up by as much. The sprites go with the menu there too
+     * (2026-11-01: the window was taken 488 lines above them, and they
+     * stayed where the DS has them). */
+    split.top = 24;
+    split.height = 240;
+    NitroPort_Render2DSplit(0, wide, &split);
+    /* (a window in the DS's upper half goes to the picture's top: 24 up) */
+    CHECK(wide[20 * 320 + 264] == RED);           /* the menu at the right edge */
+    CHECK(wide[20 * 320 + 240] == GREY);
+    CHECK(wide[26 * 320 + 274] == BLUE);          /* its sprite with it, both ways */
+    CHECK(wide[26 * 320 + 242] == GREY);
+    CHECK(wide[(24 + 26) * 320 + 274] == RED);    /* (the menu there, not its sprite) */
+    CHECK(wide[(24 + 26) * 320 + 134] == BLUE);   /* the other where it was */
+    split.top = 0;
+    split.height = 0;
     /* Drawn from the display state taken (the 3DS's drawing threads):
      * the windows as they were then too. The game takes the menu's frame
      * off before its tiles leave the VRAM (at its next V-blank): the menu

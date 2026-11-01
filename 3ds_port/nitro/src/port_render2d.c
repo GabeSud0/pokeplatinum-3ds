@@ -5103,13 +5103,21 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
                 int hofs = Rd16(e->io, 0x10 + bg * 4) & 0x1FF, vofs = Rd16(e->io, 0x12 + bg * 4) & 0x1FF;
 
                 for (i = 0; i < n && e->nObjMove < OBJ_MOVES_MAX; i++) {
+                    /* (where the map's window is on the canvas: its scroll
+                     * taken round the map's 512, as the drawing has it; a
+                     * tall field's BGs are scrolled up by its top, so the
+                     * window came out 488 lines above the sprites over it,
+                     * and they stayed where the DS has them, 2026-11-01) */
+                    int x0 = ((wins[i].left * 8 - hofs) & 0x1FF) - (((wins[i].left * 8 - hofs) & 0x100) ? 512 : 0);
+                    int y0 = ((wins[i].top * 8 - vofs) & 0x1FF) - (((wins[i].top * 8 - vofs) & 0x100) ? 512 : 0);
+
                     if (wins[i].anchor == 0) {
                         continue;
                     }
-                    e->objMove[e->nObjMove].x0 = (short)(wins[i].left * 8 - hofs);
-                    e->objMove[e->nObjMove].x1 = (short)((wins[i].left + wins[i].width) * 8 - hofs);
-                    e->objMove[e->nObjMove].y0 = (short)(wins[i].top * 8 - vofs);
-                    e->objMove[e->nObjMove].y1 = (short)((wins[i].top + wins[i].height) * 8 - vofs);
+                    e->objMove[e->nObjMove].x0 = (short)x0;
+                    e->objMove[e->nObjMove].x1 = (short)(x0 + wins[i].width * 8);
+                    e->objMove[e->nObjMove].y0 = (short)y0;
+                    e->objMove[e->nObjMove].y1 = (short)(y0 + wins[i].height * 8);
                     e->objMove[e->nObjMove].shift =
                         (short)(wins[i].anchor < 0 ? -e->origin : e->width - W - e->origin);
                     e->objMove[e->nObjMove].stretch = 0;
@@ -5117,6 +5125,7 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
                 }
             }
         }
+
     }
 }
 

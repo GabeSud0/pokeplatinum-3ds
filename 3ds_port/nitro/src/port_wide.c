@@ -545,6 +545,28 @@ int NitroPort_PixelFieldLower(void)
     return !NitroPort_EngineAOnTop() && NitroPort_PixelFieldAnywhere();
 }
 
+void NitroPort_EngineABeside(int *x, int *top)
+{
+    *x = 0;
+    *top = 0;
+    if (sWideExtra <= 0) {
+        return;
+    }
+    if (NitroPort_EngineAOnTop()) {
+        if (NitroPort_PixelField()) {
+            *x = NITRO_PIXEL_FIELD_EXTRA;
+            *top = NITRO_PIXEL_FIELD_TOP;
+        } else if (!NitroPort_LowerMenuPanelShowsUpper() &&
+                   !(NitroPort_FieldEffect() && NitroPort_OverlayLoadedNamed("overlay5") &&
+                     !NitroPort_OverlayLoadedNamed("battle"))) {
+            *x = sWideExtra;   /* (not a battle's start: stretched, NitroPort_WideLayout) */
+        }
+    } else if (NitroPort_PixelFieldLower()) {
+        *x = NITRO_PIXEL_LOWER_EXTRA;
+        *top = NITRO_PIXEL_FIELD_TOP;
+    }
+}
+
 int NitroPort_WideScreenExtra(void)
 {
     /* (the field at the DS's pixel size: the 3DS's whole 400 pixels) */

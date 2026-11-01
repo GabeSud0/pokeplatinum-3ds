@@ -1329,7 +1329,10 @@ screens) the lower screen is the DS's, filling the screen as before.
     needed): the scripts' checks (Cut, Surf, Strength, Rock Smash...) and
     the party menu's Fly and Defog (Flash is a TM in Platinum).
   - AUTO-RUN: running unless B is held (once the player has the running
-    shoes).
+    shoes). The Underground too (patch 0065, `comm_player_manager.c`):
+    the speed it moves the player at is sent to its server, and that was
+    B's alone, so with AUTO-RUN the player's picture ran a tile and stood
+    for the rest of a walk's tile.
   - FOLLOWER (patch 0056, `port_follower.c`; off by default): the party's
     first Pokémon (not an egg, not fainted) walks behind the player, on
     HeartGold and SoulSilver's sprites when the data pack has them
@@ -1596,7 +1599,14 @@ screen. The lower screen's layer textures are made for 2 texels a pixel
 of the DS's 256; a picture too wide for that is published at a texel a
 pixel (`LayerSet.texScale`), which is what a pixel a pixel needs anyway
 (no room in the linear heap for textures twice as wide). `NitroPort_
-PixelField` is now the upper screen's only (engine A on top).
+PixelField` is now the upper screen's only (engine A on top). The
+wireless signal icon, at the DS screen's top right, is moved with engine
+A's picture (`NitroPort_EngineABeside`, patch 0065) to the 3DS screen's
+corner. The sprites over a window moved to the screen's edge (the
+Underground's menu: its icons and cursor) go with it: the window's place
+is taken round the BG map's 512 as the BG's drawing has it, since a
+pixel-perfect field's BGs are scrolled by its top (the window came out
+hundreds of lines away from the sprites over it, and they stayed behind).
 
 The drawing threads draw from the display state as it was when the game
 handed them the frame: its registers, palettes and OAM are copied then

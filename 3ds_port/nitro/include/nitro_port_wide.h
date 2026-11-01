@@ -241,6 +241,12 @@ int NitroPort_PixelField(void);
 #define NITRO_PIXEL_LOWER_W     320
 #define NITRO_PIXEL_LOWER_EXTRA ((NITRO_PIXEL_LOWER_W - 256) / 2)
 int NitroPort_PixelFieldLower(void);
+/* How far engine A's picture goes on beside the DS's screen now, in DS
+ * pixels: each side (x) and above (top): the upper screen's wider canvas,
+ * the field at the DS's pixel size on either screen; 0 and 0 on the DS's.
+ * For the game's things that belong in a corner of the screen (the
+ * wireless signal icon, patch 0065). Any thread. */
+void NitroPort_EngineABeside(int *x, int *top);
 
 /* The battle's start in the field (the game's encounter effects: patch
  * 0051, encounter_effect.c), on while it plays. Its effects are made for
