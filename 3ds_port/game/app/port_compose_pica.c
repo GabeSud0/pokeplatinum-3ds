@@ -2938,11 +2938,15 @@ static void draw_band_tail(const PicaRect *pic, float sy)
 /* (draw_circle_mask) The last circle or band noted for a frame drawn: its
  * kind (1 a circle, 2 a band of lines), middle and radius. */
 static int sLastCircle, sLastCircleX, sLastCircleY, sLastCircleR;
+/* (draw_circle_mask) The circle last drawn: when (a V-blank), where. */
+static int sCircleDrawnValid, sCircleDrawnX, sCircleDrawnY, sCircleDrawnR;
+static u32 sCircleDrawnAt;
 
 static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *scene, const PicaRect *pic, float sx,
                              float sy)
 {
     int x = info->gpuCircleX, y = info->gpuCircleY, r = info->gpuCircleR, ax, ay, ar, bx, by, br, i, k;
+    int kind = info->gpuCircle;   /* (1 a circle, 2 a band of lines) */
     uint32_t noted;
     float cx, cy, inner, outer;
     u32 rgba = rgba_of((uint16_t)info->gpuCircleColor, 255);
@@ -2956,7 +2960,23 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
      * in-between frame after it went back to the picture's, twice the
      * size for a frame, a simulation of 2026-10-31), the frame before's,
      * else the last one noted.) */
-    {
+    /* (a band's lines as a circle fade ends (going into Eterna Forest: the
+     * circle off, its window's lines left as they were), within a second
+     * of a circle drawn, are the circle's end, not a band: the circle as
+     * last drawn. Taken for a band, a strip of the forest showed across
+     * the screen for the fade's last frame, 2026-10-31.) */
+    if (kind == 2 && sCircleDrawnValid &&
+        (int32_t)(__atomic_load_n(&sVBlanks, __ATOMIC_RELAXED) - sCircleDrawnAt) <= 60) {
+        static u32 loggedAt;
+
+        kind = 1;
+        x = sCircleDrawnX, y = sCircleDrawnY, r = sCircleDrawnR;
+        if (loggedAt != sCircleDrawnAt) {   /* (once a circle fade) */
+            loggedAt = sCircleDrawnAt;
+            NitroPort_Log("[compose] a band of lines (%d-%d) as a circle fade ended: the circle as last drawn instead",
+                          info->gpuCircleY, info->gpuCircleR);
+        }
+    } else {
         uint32_t seqB, stampB;
         int ka = scene != NULL ? circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted) : 0;
         int kb = scene != NULL && frame_before(scene, &seqB, &stampB) ? circle_of(seqB, stampB, &bx, &by, &br, &noted)
@@ -3008,7 +3028,7 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
             x = sLastCircleX, y = sLastCircleY, r = sLastCircleR;
         }
     }
-    if (info->gpuCircle == 2) {
+    if (kind == 2) {
         /* A band of lines (walking out of a building): the backdrop above
          * and below it, its edges halfway in the in-between frames (the
          * game's band 32 lines taller every other frame: 16 each frame),
@@ -3057,6 +3077,11 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
     NitroPort_PicaBindVertices(sQuads);
     C3D_DrawArrays(GPU_TRIANGLES, sQuadVertices, 6 * CIRCLE_SEGMENTS);
     sQuadVertices += 6 * CIRCLE_SEGMENTS;
+    if (kind == info->gpuCircle) {   /* (not the circle's end drawn again: it ends) */
+        sCircleDrawnValid = 1;
+        sCircleDrawnAt = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
+        sCircleDrawnX = x, sCircleDrawnY = y, sCircleDrawnR = r;
+    }
     NitroPort_PicaProfileMark("the circle fade");
 }
 
