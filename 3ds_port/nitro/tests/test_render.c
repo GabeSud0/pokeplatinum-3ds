@@ -2578,6 +2578,13 @@ static void test_bg_rows(void)
     G2_SetWnd0Position(0, 80, 255, 112);
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);   /* (its lines: not a change) */
     CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 3 && y == 80 && r == 112);
+    /* its BG off as it ends: the band the backdrop alone, still the compositor's */
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 3 && split.gpuCircleY == 80 && split.gpuCircleR == 112);
+    CHECK(!(over[30 * 256 + 128] & 0x8000));            /* (nothing in front) */
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 3 && y == 80 && r == 112);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1 | GX_PLANEMASK_BG2);
     /* not: another BG in front of the 3D; another BG inside too; not across
      * the whole screen */
     G2_SetBG1Priority(0);

@@ -4881,7 +4881,8 @@ static int GpuRowsOf(const u8 *io, const u8 (*lines)[NITRO_LINE_REGS], int *top,
  * behind it; no sprite in front of it, unless the compositor draws the
  * sprites: objsOut). The picture can then have the BG all over, alone in
  * front of the 3D, for the compositor to show in the band's lines only.
- * The BG, its lines (*top, *bottom: the DS's); else -1. */
+ * The BG (4: none, the band the backdrop alone), its lines (*top, *bottom:
+ * the DS's); else -1. */
 static int GpuBgRowsOf(const u8 *io, const u8 (*lines)[NITRO_LINE_REGS], const u8 *oam, int objsOut, int *top,
                        int *bottom)
 {
@@ -4899,15 +4900,20 @@ static int GpuBgRowsOf(const u8 *io, const u8 (*lines)[NITRO_LINE_REGS], const u
             return -1;
         }
     }
-    if ((in & 0x20) || (in & 0x0F & out) != 0) {
+    if ((in & 0x20) || (in & 0x0F & out & layers) != 0) {
         return -1;   /* (inside it a colour effect, or a BG of outside's) */
     }
-    for (bg = 1; bg < 4 && !((in >> bg) & 1); bg++) {
+    /* (the BG shown inside it; or none (0): the band the backdrop alone, as
+     * the cut-in's band is as it ends, its BG off for a few frames) */
+    for (bg = 1; bg < 4 && !((in & layers) >> bg & 1); bg++) {
     }
-    if (bg > 3 || (in & 0x0F) != (1u << bg) || !(layers & (1u << bg)) || ((layers & 0x0F) & ~(u32)out & ~(1u << bg)) != 0) {
-        return -1;   /* (not one BG inside, shown; something shown neither inside nor out) */
+    if (bg > 3) {
+        bg = 0;
     }
-    key = (Rd16(io, 8 + bg * 2) & 3) * 4 + bg;
+    if ((in & layers & 0x0F) != (bg ? 1u << bg : 0u) || ((layers & 0x0F) & ~(u32)out & ~(bg ? 1u << bg : 0u)) != 0) {
+        return -1;   /* (more than one BG inside; something shown neither inside nor out) */
+    }
+    key = bg ? (Rd16(io, 8 + bg * 2) & 3) * 4 + bg : -1;
     if (key >= key3d) {
         return -1;   /* (behind the 3D) */
     }
@@ -4916,7 +4922,10 @@ static int GpuBgRowsOf(const u8 *io, const u8 (*lines)[NITRO_LINE_REGS], const u
             return -1;   /* (another BG in front of the 3D) */
         }
     }
-    if (((Rd16(io, 0x50) >> 6) & 3) != 0 && (Rd16(io, 0x50) & ((1u << bg) | (1u << (bg + 8))))) {
+    if (bg == 0) {
+        bg = 4;   /* (none: told apart from -1) */
+    }
+    if (bg < 4 && ((Rd16(io, 0x50) >> 6) & 3) != 0 && (Rd16(io, 0x50) & ((1u << bg) | (1u << (bg + 8))))) {
         return -1;   /* (a colour effect on that BG outside the band: the picture has it all over) */
     }
     if ((dispcnt & 0x1000) && !objsOut) {
@@ -5175,7 +5184,7 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
              * the compositor to show in the band's lines, gpuCircleY to
              * gpuCircleR - 1 on the canvas, the backdrop behind it there) */
             e.noWindows = 1;
-            e.insideWindow = (u8)((Rd16(e.io, 0x4A) | (1u << w)) & 0x3F);
+            e.insideWindow = (u8)((Rd16(e.io, 0x4A) | (w < 4 ? 1u << w : 0u)) & 0x3F);
             split->gpuCircleOn = 3;
             split->gpuCircleY = GpuRowsLine(top, e.top, e.height);
             split->gpuCircleR = GpuRowsLine(bottom, e.top, e.height);

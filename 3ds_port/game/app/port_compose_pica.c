@@ -3087,26 +3087,71 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
  * frame the DS shows the scene in, halfway to that from the frame before
  * in an in-between frame (as the picture has them where they aren't
  * noted): its first line and the line after its last (*y, *r). */
+/* (bg_band_rows) The band as drawn: its lines (in fractions of a line),
+ * each edge's speed closing (lines a V-blank), the game's lines it was last
+ * drawn for, and the V-blank that frame shows at. */
+static struct {
+    int on, wantY, wantR;
+    float y, r, vTop, vBottom;
+    uint32_t vblank;
+} sBgBand;
+
 static void bg_band_rows(const ComposeLayers *info, const NitroGx3dScene *scene, int *y, int *r)
 {
-    int ax, ay, ar, bx, by, br, ka, kb;
+    int ax, ay, ar, bx, by, br, ka, kb, ty, tr;
     uint32_t noted, seqB, stampB;
+    int32_t frames;
 
-    *y = info->gpuCircleY;
-    *r = info->gpuCircleR;
-    if (scene == NULL) {
-        return;
-    }
-    ka = circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted);
-    kb = frame_before(scene, &seqB, &stampB) ? circle_of(seqB, stampB, &bx, &by, &br, &noted) : 0;
-    if (ka == 3) {
-        *y = ay, *r = ar;
-        if (kb == 3) {
-            *y = (by + ay) / 2, *r = (br + ar) / 2;
+    ty = info->gpuCircleY;
+    tr = info->gpuCircleR;
+    if (scene != NULL) {
+        ka = circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted);
+        kb = frame_before(scene, &seqB, &stampB) ? circle_of(seqB, stampB, &bx, &by, &br, &noted) : 0;
+        if (ka == 3) {
+            ty = ay, tr = ar;
+            if (kb == 3) {
+                ty = (by + ay) / 2, tr = (br + ar) / 2;
+            }
+        } else if (kb == 3) {
+            ty = by, tr = br;
         }
-    } else if (kb == 3) {
-        *y = by, *r = br;
     }
+    /* (closing, then held: the cut-in's band stops 16 lines tall and the
+     * game keeps it so 4 steps, its rings then the backdrop alone, before
+     * it goes; after the steady close it looked like a stop, a video of
+     * 2026-11-01. Held after closing, it goes on closing at its last
+     * speed, never opening again while the game holds it; moved, it's as
+     * the game has it) */
+    frames = (int32_t)(sDrawTarget - sBgBand.vblank);
+    if (!sBgBand.on || frames > 30 || frames < -30) {
+        sBgBand.on = 1;
+        sBgBand.y = (float)ty, sBgBand.r = (float)tr;
+        sBgBand.vTop = sBgBand.vBottom = 0.0f;
+        frames = 1;   /* (noted below) */
+    } else if (frames > 0) {
+        if (ty != sBgBand.wantY || tr != sBgBand.wantR) {
+            sBgBand.vTop = (float)(ty - sBgBand.wantY) / (float)frames;
+            sBgBand.vBottom = (float)(sBgBand.wantR - tr) / (float)frames;
+            sBgBand.y = (float)ty, sBgBand.r = (float)tr;
+        } else if (sBgBand.vTop > 0.0f || sBgBand.vBottom > 0.0f) {
+            float mid = (sBgBand.y + sBgBand.r) * 0.5f;
+
+            sBgBand.y += (sBgBand.vTop > 0.5f ? sBgBand.vTop : 0.5f) * (float)frames;
+            sBgBand.r -= (sBgBand.vBottom > 0.5f ? sBgBand.vBottom : 0.5f) * (float)frames;
+            if (sBgBand.y > mid) {
+                sBgBand.y = mid;
+            }
+            if (sBgBand.r < mid) {
+                sBgBand.r = mid;
+            }
+        }
+    }
+    if (frames > 0) {
+        sBgBand.wantY = ty, sBgBand.wantR = tr;
+        sBgBand.vblank = sDrawTarget;
+    }
+    *y = (int)(sBgBand.y + 0.5f);
+    *r = (int)(sBgBand.r + 0.5f);
 }
 
 /* Engine A's sprites the compositor draws (LayerSet.objs, objTex), in front

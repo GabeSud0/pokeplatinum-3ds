@@ -1792,6 +1792,12 @@ lines as the game had them in the frame shown, halfway in the in-between
 frames (`bg_band_rows`, noted as `NitroPort_Render2DCircleNow`'s 3). Its
 lines don't count as a change. Test: `test_bg_rows`. In the PC runner
 (and on a 3DS without the compositor's BGs) the window is in the picture.
+As it ends the game holds the band 16 lines tall for 4 steps (its rings,
+then its BG off: the band the backdrop alone, `GpuBgRowsOf`'s 4, still
+the compositor's) before it goes; after the steady close that looked like
+a stop (a video of 2026-11-01). Held after closing, the band goes on
+closing at its last speed (2 lines a frame each side), never opening again
+while the game holds it: closed in 4 frames, by the V-blank (`sBgBand`).
 
 Eterna Forest's light finer than a pixel (patch 0061, 2026-10-31): the
 game keeps the clouds' place finer than a pixel as they follow the camera,
