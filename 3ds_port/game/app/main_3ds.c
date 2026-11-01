@@ -996,12 +996,21 @@ static void EnableSpeedup(void)
  * (NoteForwarder). */
 #define FORWARDED_ARG "--home-menu="
 static u64 sForwarder;
+/* (and, when it made its own title Luma3DS's homebrew title to open the
+ * game in its place, so the HOME Menu shows its icon: the homebrew title to
+ * put back, which the forwarder's next start then runs as itself) */
+#define HB_TITLE_ARG "--hb-title="
+static u64 sHbTitleRestored;   /* (NoteForwarder: logged later) */
 
 static void LogSpeedup(bool new3ds)
 {
     if (sForwarder != 0) {
-        NitroPort_Log("[platinum] opened by the HOME Menu version (%016llX), in the homebrew title",
-                      (unsigned long long)sForwarder);
+        NitroPort_Log("[platinum] opened by the HOME Menu version (%016llX), %s", (unsigned long long)sForwarder,
+                      sHbTitleRestored ? "in its own title" : "in the homebrew title");
+        if (sHbTitleRestored) {
+            NitroPort_Log("[platinum] the homebrew title %016llX put back for next time",
+                          (unsigned long long)sHbTitleRestored);
+        }
     }
     /* (how much memory the system gave the program: the .cia on a New 3DS
      * should have the 124 MB mode, issue #188) */
@@ -1443,6 +1452,22 @@ static void NoteForwarder(int argc, char **argv)
     for (i = 1; i < argc; i++) {
         if (argv[i] != NULL && strncmp(argv[i], FORWARDED_ARG, strlen(FORWARDED_ARG)) == 0) {
             sForwarder = strtoull(argv[i] + strlen(FORWARDED_ARG), NULL, 16);
+        }
+    }
+    for (i = 1; i < argc; i++) {
+        if (argv[i] != NULL && strncmp(argv[i], HB_TITLE_ARG, strlen(HB_TITLE_ARG)) == 0) {
+            /* Luma3DS's shared page (forwarder/main.c): the title selected
+             * becomes the homebrew title as this program closes. Only with
+             * this title the homebrew title now (the page as known). */
+            volatile u64 *hbldr = (volatile u64 *)(OS_SHAREDCFG_VADDR + 0x800);
+            u64 restore = strtoull(argv[i] + strlen(HB_TITLE_ARG), NULL, 16), self = 0;
+            s64 luma = 0;
+
+            if (restore != 0 && R_SUCCEEDED(svcGetSystemInfo(&luma, 0x10000, 0)) &&
+                R_SUCCEEDED(APT_GetProgramID(&self)) && hbldr[0] == self) {
+                hbldr[1] = restore;
+                sHbTitleRestored = restore;
+            }
         }
     }
 }

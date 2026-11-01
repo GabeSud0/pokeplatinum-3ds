@@ -96,9 +96,13 @@ ported.
    **FBI**, go to **SD → cia → pokeplatinum.cia → Install CIA**, then go
    back to the HOME Menu: the game is there with its icon and banner. It
    opens `sd:/3ds/pokeplatinum.3dsx` (the `.3dsx` must be there) through
-   Luma3DS's homebrew loader, in the Homebrew Launcher Loader's title, as
-   the Homebrew Launcher does: while it runs, the HOME Menu shows that
-   title's icon, and it closes like any other (HOME → Close). To update the
+   Luma3DS's homebrew loader, as the Homebrew Launcher does, but in its
+   own title (it makes itself Luma3DS's homebrew title for that one start,
+   and the game puts the old one back as it starts, as Emerald 3DS's
+   forwarder does): while it runs, the HOME Menu shows its icon, and it
+   closes like any other (HOME → Close). (With a Luma3DS whose shared page
+   it doesn't recognise, it opens the game in the Homebrew Launcher Loader's
+   title instead, and the HOME Menu shows that title's icon.) To update the
    game, copy the new `.3dsx` over the old one; the `.cia` stays (install a
    new one only for new art). An older `.cia` (the whole game in it, before
    the forwarder) is replaced by installing this one. In Azahar, open the
