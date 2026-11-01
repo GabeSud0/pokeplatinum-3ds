@@ -33,7 +33,16 @@ static NitroPortArm7Handler sArm7Handlers[PXI_MAX_FIFO_TAG];
  * burst of answers is never dropped. */
 #define RECV_FIFO_SIZE 256
 
-static PXIFifoMessage sRecvFifo[RECV_FIFO_SIZE];
+/* Each answer's whole 32-bit word: the DS's FIFO carries 26 bits, enough
+ * for its main memory addresses, which the wireless library sends as they
+ * are (port_wm.c); the port's memory is elsewhere. */
+typedef struct RecvMessage {
+    int tag;
+    BOOL err;
+    u32 data;
+} RecvMessage;
+
+static RecvMessage sRecvFifo[RECV_FIFO_SIZE];
 static u32 sRecvHead;
 static u32 sRecvCount;
 
@@ -134,7 +143,7 @@ void PXIi_HandlerRecvFifoNotEmpty(void)
     /* The FIFO-receive interrupt: hand every waiting message to its tag's
      * callback, in arrival order. */
     for (;;) {
-        PXIFifoMessage msg;
+        RecvMessage msg;
         OSIntrMode enabled = OS_DisableInterrupts();
         int tag;
 
@@ -147,9 +156,9 @@ void PXIi_HandlerRecvFifoNotEmpty(void)
         sRecvCount--;
         (void)OS_RestoreInterrupts(enabled);
 
-        tag = (int)msg.e.tag;
+        tag = msg.tag;
         if (tag > 0 && tag < PXI_MAX_FIFO_TAG && sRecvCallbacks[tag]) {
-            sRecvCallbacks[tag]((PXIFifoTag)tag, msg.e.data, (BOOL)msg.e.err);
+            sRecvCallbacks[tag]((PXIFifoTag)tag, msg.data, msg.err);
         }
     }
 }
@@ -165,16 +174,15 @@ void NitroPort_SetArm7Handler(int tag, NitroPortArm7Handler handler)
 
 void NitroPort_Arm7Reply(int tag, u32 data, BOOL err)
 {
-    PXIFifoMessage msg;
+    RecvMessage msg;
     OSIntrMode enabled;
 
     if (tag <= 0 || tag >= PXI_MAX_FIFO_TAG) {
         return;
     }
-    msg.raw = 0;
-    msg.e.tag = (PXIFifoTag)tag;
-    msg.e.err = (u32)(err ? 1 : 0);
-    msg.e.data = data;
+    msg.tag = tag;
+    msg.err = err ? TRUE : FALSE;
+    msg.data = data;
 
     enabled = OS_DisableInterrupts();
     if (sRecvCount == RECV_FIFO_SIZE) {

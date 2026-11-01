@@ -6,9 +6,10 @@ Usage:
         --output wifi_stubs.c OBJECT [OBJECT ...]
 
 The original game links Nintendo's Wi-Fi libraries: NitroDWC (DWC_), the
-Pokemon Wi-Fi lobby (PPW_), voice chat (VCT_), NitroWiFi (SOC_, WCM_ ...) and
-wireless voice (WVR_). Online play isn't part of the port, so it doesn't
-link them. This lists every such symbol the given game objects use and none
+Pokemon Wi-Fi lobby (PPW_), voice chat (VCT_) and NitroWiFi (SOC_, WCM_ ...).
+Online play isn't part of the port, so it doesn't link them. (The local
+wireless libraries, WM and WVR, are in libnitro: the port's virtual ARM7
+plays a radio with nobody around, 3ds_port/nitro/src/port_wm.c.) This lists every such symbol the given game objects use and none
 of them defines (from `nm`), by prefix or because the SDKs' own sources
 define it, and writes a C file with one stand-in each. A
 stand-in logs "not implemented: <name>" once (NitroPort_Unimplemented) and
@@ -28,7 +29,7 @@ import re
 import subprocess
 from pathlib import Path
 
-WIFI = re.compile(r"(DWC|DWCi|PPW|VCT|WVR|SOC|SOCL|WCM|CPS|NHTTP)_\w+\Z")
+WIFI = re.compile(r"(DWC|DWCi|PPW|VCT|SOC|SOCL|WCM|CPS|NHTTP)_\w+\Z")
 WIDE_RETURN = re.compile(r"\b(u64|s64|OSTick|unsigned\s+long\s+long|long\s+long)\b")
 
 

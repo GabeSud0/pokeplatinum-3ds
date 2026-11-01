@@ -345,8 +345,11 @@ make -C 3ds_port/game TARGET=host program   # pokeplatinum-pc
 - **RC4** (Mystery Gift): `lib/crypto` keeps its encrypt functions in
   assembly; patch `0006` adds C versions, checked against the published
   test vectors.
-- **Nintendo's Wi-Fi libraries** (DWC, PPW lobby, VCT voice chat, WVR):
-  online play isn't part of the port. After compiling,
+- **Nintendo's Wi-Fi libraries** (DWC, PPW lobby, VCT voice chat):
+  online play isn't part of the port. (Local wireless is: the WM and WVR
+  libraries are built as they are, and the port's virtual ARM7 plays a
+  radio with nobody around, `3ds_port/nitro/src/port_wm.c`, so the
+  Underground plays alone.) After compiling,
   `tools/make_game_wifi_stubs.py` writes a stand-in for every such function
   the game objects call: each logs "not implemented" once and returns 0, so
   online menus see a failure.
