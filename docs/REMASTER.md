@@ -1575,8 +1575,16 @@ The drawing threads draw from the display state as it was when the game
 handed them the frame: its registers, palettes and OAM are copied then
 (`NitroPort_Render2DTakeState`, a few KB), so the game's next frame (its
 sprites, scroll, colours) can't get mixed into a picture that takes long
-to draw (sprites showed in the wrong places for a frame). The VRAM is read
-as it is: before its next V-blank work the game waits for a drawer still
+to draw (sprites showed in the wrong places for a frame). The BGs' maps
+are copied with them (`TakeMaps`, the screen blocks the BGs on show: 2-8
+KB each): the game writes them in its next frame's work too, before that
+frame's V-blank (a window it opens is copied to the VRAM at once,
+`Window_CopyToVRAM`), and drawn with the windows, registers and palettes
+taken before it, a YES/NO box showed for a frame where the DS has it, its
+frame black, then snapped to the wider screen's edge; a text box showed
+first in the middle with its frame black (2026-11-01). The window's tiles
+are new ones its old map doesn't show. The rest of the VRAM is read as it
+is: before its next V-blank work the game waits for a drawer still
 reading it. Working out whether a screen changed compares the small parts
 first, and the VRAM only when they're the same: since 2026-10-30 only the
 VRAM the screen shows (`EngineShownVramSignature`): for each BG on, its

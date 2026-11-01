@@ -150,8 +150,20 @@ typedef struct State2D {
     int nparts;
     uint32_t winSerial;
     WindowCircle circles[2];   /* (NitroPort_SetWindowCircle) */
+    u32 mapHash;               /* (TakeMaps) the BGs' maps taken */
 } State2D;
 static State2D sState[2];
+
+/* The BGs' maps (their screen blocks) when the display state was taken,
+ * at the addresses they have in the VRAM (NitroPort_Render2DTakeState).
+ * The game writes them in its next frame's work too, before that frame's
+ * V-blank: a window it opens is copied to the VRAM at once
+ * (Window_CopyToVRAM). Drawn from the VRAM as it is, the window showed a
+ * frame early with the windows, registers and palettes taken before it
+ * was there: a YES/NO box where the DS has it, its frame black, then at
+ * the wider screen's edge (2026-11-01). Its tiles are new ones, which the
+ * map taken doesn't show; so only the maps are kept. */
+static u8 sMapShadowA[0x80000], sMapShadowB[0x20000];
 
 /* ----------------------------------------------------------- one engine */
 
@@ -169,6 +181,9 @@ typedef struct Engine {
     const u8 *objPltt;
     const u8 *oam;         /* 0x400 bytes */
     const u8 *bgVram;
+    /* The BGs' maps: bgVram's, or (the display state taken) as they were
+     * then (TakeMaps), at the same addresses. Their tiles are bgVram's. */
+    const u8 *mapVram;
     u32 bgMask;
     const u8 *objVram;
     u32 objMask;
@@ -617,7 +632,7 @@ static u16 TextBgPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int mapx
     u32 charBase = CharBase(e, bgcnt, dispcnt);
     int tx = mapx & (mapW - 1);
     u32 rowAddr = screenBase + (u32)((ty >> 8) * (mapW >> 8)) * 0x800 + (u32)((ty & 255) >> 3) * 64;
-    u32 entry = Rd16(vram, (rowAddr + (u32)(tx >> 8) * 0x800 + (u32)((tx & 255) >> 3) * 2) & mask);
+    u32 entry = Rd16(e->mapVram, (rowAddr + (u32)(tx >> 8) * 0x800 + (u32)((tx & 255) >> 3) * 2) & mask);
     u32 tile = entry & 0x3FF;
     int py = (entry & 0x800) ? 7 - (ty & 7) : (ty & 7);
     int px = (entry & 0x400) ? 7 - (tx & 7) : (tx & 7);
@@ -720,7 +735,7 @@ static BOOL TextBgTileMirrored(const Engine *e, u16 bgcnt, u32 dispcnt, int mapx
     u32 screenBase = ScreenBase(e, bgcnt, dispcnt);
     int tx = mapx & (mapW - 1);
     u32 rowAddr = screenBase + (u32)((ty >> 8) * (mapW >> 8)) * 0x800 + (u32)((ty & 255) >> 3) * 64;
-    u32 entry = Rd16(e->bgVram, (rowAddr + (u32)(tx >> 8) * 0x800 + (u32)((tx & 255) >> 3) * 2) & e->bgMask);
+    u32 entry = Rd16(e->mapVram, (rowAddr + (u32)(tx >> 8) * 0x800 + (u32)((tx & 255) >> 3) * 2) & e->bgMask);
 
     return (entry & 0x400) != 0;
 }
@@ -1757,7 +1772,7 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
         int px0 = tx & 7;
         int n = 8 - px0;
         u32 entryAddr = rowAddr + (u32)(tx >> 8) * 0x800 + (u32)((tx & 255) >> 3) * 2;
-        u32 entry = Rd16(vram, entryAddr & mask);
+        u32 entry = Rd16(e->mapVram, entryAddr & mask);
         u32 tile = entry & 0x3FF;
         int py = (entry & 0x800) ? 7 - (ty & 7) : (ty & 7);
         int flip = (entry & 0x400) ? 7 : 0;   /* pixel px of the tile is at px ^ flip */
@@ -2049,12 +2064,12 @@ static inline u16 AffineSample(const Engine *e, int mode, const u8 *ext, u32 cha
     case 2:
         return e->bgPal8[vram[(screenBase + (u32)ty * (u32)mapW + (u32)tx) & mask]];
     case 0: {
-        u32 tile = vram[(screenBase + (u32)(ty >> 3) * (u32)(mapW >> 3) + (u32)(tx >> 3)) & mask];
+        u32 tile = e->mapVram[(screenBase + (u32)(ty >> 3) * (u32)(mapW >> 3) + (u32)(tx >> 3)) & mask];
 
         return e->bgPal8[vram[(charBase + tile * 64 + (u32)(ty & 7) * 8 + (u32)(tx & 7)) & mask]];
     }
     default: {
-        u32 entry = Rd16(vram, (screenBase + ((u32)(ty >> 3) * (u32)(mapW >> 3) + (u32)(tx >> 3)) * 2) & mask);
+        u32 entry = Rd16(e->mapVram, (screenBase + ((u32)(ty >> 3) * (u32)(mapW >> 3) + (u32)(tx >> 3)) * 2) & mask);
         int px = tx & 7;
         int py = ty & 7;
         u32 index;
@@ -2302,7 +2317,7 @@ static inline __attribute__((always_inline)) u64 BgKeyT(const Engine *e, int bg,
     memset(used, 0, sizeof(used));
     /* the map (a text BG's in its 2 KB blocks, in order: the same bytes) */
     for (i = 0; i < entries; i++) {
-        u32 entry = wide16 ? Rd16(vram, (screenBase + i * 2) & mask) : vram[(screenBase + i) & mask];
+        u32 entry = wide16 ? Rd16(e->mapVram, (screenBase + i * 2) & mask) : e->mapVram[(screenBase + i) & mask];
         u32 tile = wide16 ? entry & 0x3FF : entry;
 
         h = ADD(h, entry);
@@ -5041,6 +5056,7 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
     e->objPltt = e->bgPltt + 0x200;
     e->oam = (taken ? st->oam : NitroPort_Oam) + (e->isA ? 0 : 0x400);
     e->bgVram = e->isA ? NitroPort_BgVram : NitroPort_DbBgVram;
+    e->mapVram = taken ? (e->isA ? sMapShadowA : sMapShadowB) : e->bgVram;
     e->bgMask = e->isA ? 0x7FFFF : 0x1FFFF;
     e->objVram = e->isA ? NitroPort_ObjVram : NitroPort_DbObjVram;
     e->objMask = e->isA ? 0x3FFFF : 0x1FFFF;
@@ -5323,7 +5339,7 @@ int NitroPort_Render2DBgPicture(int bg, int snapshot, uint16_t *out)
     screenBase = ScreenBase(&e, bgcnt, dispcnt);
     for (ty = 0; ty < 32; ty++) {
         for (tx = 0; tx < 32; tx++) {
-            u16 entry = Rd16(e.bgVram, (screenBase + (u32)(ty * 32 + tx) * 2) & e.bgMask);
+            u16 entry = Rd16(e.mapVram, (screenBase + (u32)(ty * 32 + tx) * 2) & e.bgMask);
             u32 tile = entry & 0x3FF, pal = (u32)(entry >> 12) * 16;
             int hflip = (entry >> 10) & 1, vflip = (entry >> 11) & 1;
 
@@ -5929,6 +5945,76 @@ static u32 HashWords(const u8 *p, u32 bytes, u32 h)
     return (h ^ (h2 * 31u)) * 16777619u;
 }
 
+/* The bytes of a BG's map: a text BG's 2 KB blocks, an affine one's byte
+ * a tile, an extended one's 2 bytes a tile; 0 for none (a bitmap, the 3D). */
+static u32 MapBytes(int kind, u16 bgcnt)
+{
+    u32 tiles = (u32)(128 << (bgcnt >> 14)) / 8;
+
+    switch (kind) {
+    case BG_TEXT:
+        return (u32)(sTextSizes[bgcnt >> 14][0] / 8) * (u32)(sTextSizes[bgcnt >> 14][1] / 8) * 2;
+    case BG_AFFINE:
+        return tiles * tiles;
+    case BG_EXTENDED:
+        return (bgcnt & 0x80) ? 0 : tiles * tiles * 2;
+    default:
+        return 0;
+    }
+}
+
+/* The maps of the BGs a taken state shows (on any of its lines, with an
+ * H-blank effect) copied to the engine's sMapShadow, and their hash. */
+static u32 TakeMaps(int engine, const State2D *st)
+{
+    u8 *shadow = engine ? sMapShadowB : sMapShadowA;
+    const u8 *vram = engine ? NitroPort_DbBgVram : NitroPort_BgVram;
+    u32 mask = engine ? 0x1FFFFu : 0x7FFFFu;
+    u32 bases[16], sizes[16];
+    int n = 0, line, bg, i;
+    u32 h = 2166136261u;
+    Engine e;
+
+    memset(&e, 0, sizeof(e));
+    e.isA = engine == 0;
+    for (line = 0; line < (st->lines ? H : 1); line++) {
+        const u8 *io = st->lines ? st->lineRegs[line] : st->io + (engine ? 0x1000 : 0);
+        u32 dispcnt = Rd32(io, 0);
+
+        for (bg = 0; bg < 4; bg++) {
+            u16 bgcnt = Rd16(io, 8 + (u32)bg * 2);
+            u32 base, size, off;
+
+            if (!(dispcnt & (0x100u << bg)) || (size = MapBytes(BgKind(&e, bg, dispcnt), bgcnt)) == 0) {
+                continue;
+            }
+            base = ScreenBase(&e, bgcnt, dispcnt);
+            for (i = 0; i < n && !(bases[i] == base && sizes[i] >= size); i++) {
+            }
+            if (i < n) {
+                continue;   /* (taken already) */
+            }
+            if (n < 16) {
+                bases[n] = base;
+                sizes[n] = size;
+                n++;
+            }
+            /* (round the VRAM's end, as the drawing reads it) */
+            for (off = 0; off < size;) {
+                u32 at = (base + off) & mask, run = mask + 1 - at;
+
+                if (run > size - off) {
+                    run = size - off;
+                }
+                memcpy(shadow + at, vram + at, run);
+                h = HashWords(shadow + at, run & ~7u, h);
+                off += run;
+            }
+        }
+    }
+    return h;
+}
+
 /* Everything an engine's picture comes from: its registers, palettes, OAM,
  * VRAM (as the CPU sees it, and the LCDC banks it may use as extended
  * palettes or for VRAM display), the VRAM bank settings and POWCNT1. */
@@ -5954,6 +6040,7 @@ void NitroPort_Render2DTakeState(int engine)
         st->nsplits = NitroPort_WideSplits(engine ? 1 : 0, st->splits);
         st->nparts = NitroPort_WideParts(engine ? 1 : 0, st->parts);
     }
+    st->mapHash = TakeMaps(engine ? 1 : 0, st);
 }
 
 /* What an engine's picture is drawn from, in two parts: the small ones
@@ -5995,6 +6082,9 @@ static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg, int gpuObjs
     h = HashWords(ioAll + 0x240, 0x10, h);              /* VRAMCNT */
     h = (h ^ Rd16(ioAll, 0x304)) * 16777619u;           /* POWCNT1 */
     h = HashWords((snapshot ? st->pltt : NitroPort_Pltt) + (isA ? 0 : 0x400), 0x400, h);
+    if (snapshot) {
+        h = (h ^ st->mapHash) * 16777619u;   /* (the maps drawn: the ones taken) */
+    }
     if (isA && gpuObjs) {
         /* (the sprites the compositor draws itself: where they are isn't in
          * the picture, which needn't be drawn again as they move) */
@@ -6109,6 +6199,7 @@ static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int lines
     e->io = io;
     e->bgPltt = (snapshot ? st->pltt : NitroPort_Pltt) + (e->isA ? 0 : 0x400);
     e->bgVram = e->isA ? NitroPort_BgVram : NitroPort_DbBgVram;
+    e->mapVram = snapshot ? (e->isA ? sMapShadowA : sMapShadowB) : e->bgVram;
     e->bgMask = e->isA ? 0x7FFFF : 0x1FFFF;
     FindExtPalettes(e);
     for (bg = 0; bg < 4; bg++) {

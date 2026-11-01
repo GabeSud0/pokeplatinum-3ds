@@ -3400,6 +3400,48 @@ static void test_wide_framed_windows(void)
     CHECK(wide[20 * 320 + 240] == RED);
     CHECK(wide[26 * 320 + 242] == BLUE);
     NitroPort_WindowRemoved(&menu);
+
+    /* A menu opened after the state was taken: the game copies its map to
+     * the VRAM at once, in its next frame's work. Drawn from the state
+     * taken, the maps are the ones taken with it (nothing there yet), not
+     * the menu where the DS has it with nothing saying where it goes
+     * (2026-11-01: a YES/NO box showed a frame there, its frame black);
+     * taken again, there it is, at the screen's edge. */
+    memset(map, 0, sizeof(map));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    NitroPort_Render2DTakeState(0);
+    split.snapshot = 1;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 240] == GREY && wide[20 * 320 + 264] == GREY);
+    for (y = 2; y <= 6; y++) {
+        for (x = 25; x <= 30; x++) {
+            map[y * 32 + x] = 1;
+        }
+    }
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    NitroPort_WindowAdded(&menu, 1, 26, 3, 4, 3);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 240] == GREY && wide[20 * 320 + 264] == GREY);
+    NitroPort_WindowFramed(&menu, 1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 240] == GREY && wide[20 * 320 + 264] == GREY);
+    NitroPort_Render2DTakeState(0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 264] == RED && wide[20 * 320 + 240] == GREY);
+    /* (a map changed alone is a new picture: drawn again once taken,
+     * however it was drawn meanwhile) */
+    (void)NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    (void)NitroPort_Render2DSplitIfChanged(0, wide, &split);   /* (its VRAM noted) */
+    CHECK(!NitroPort_Render2DSplitIfChanged(0, wide, &split));
+    map[4 * 32 + 27] = 2;
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    (void)NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    CHECK(wide[36 * 320 + 284] == RED);   /* (DS x 216: tile 27, row 4) */
+    NitroPort_Render2DTakeState(0);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split));
+    CHECK(wide[36 * 320 + 284] == BLUE);
+    split.snapshot = 0;
+    NitroPort_WindowRemoved(&menu);
     GX_SetVisiblePlane(GX_PLANEMASK_BG1);
 
     /* By the left edge (tiles 0-5 with its frame): to the screen's left
