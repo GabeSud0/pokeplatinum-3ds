@@ -1332,7 +1332,11 @@ screens) the lower screen is the DS's, filling the screen as before.
     shoes). The Underground too (patch 0065, `comm_player_manager.c`):
     the speed it moves the player at is sent to its server, and that was
     B's alone, so with AUTO-RUN the player's picture ran a tile and stood
-    for the rest of a walk's tile.
+    for the rest of a walk's tile. And each player's picture is chosen
+    from its speed with B standing for "runs" (`CommPlayer_MoveClient`):
+    `PlayerAvatar_IsRunButtonHeld` took that as the button and AUTO-RUN
+    turned it round (a run's speed under a walking picture), so it's
+    turned round for it too.
   - FOLLOWER (patch 0056, `port_follower.c`; off by default): the party's
     first Pokémon (not an egg, not fainted) walks behind the player, on
     HeartGold and SoulSilver's sprites when the data pack has them
@@ -1619,10 +1623,14 @@ frame's V-blank (a window it opens is copied to the VRAM at once,
 `Window_CopyToVRAM`), and drawn with the windows, registers and palettes
 taken before it, a YES/NO box showed for a frame where the DS has it, its
 frame black, then snapped to the wider screen's edge; a text box showed
-first in the middle with its frame black (2026-11-01). The window's tiles
-are new ones its old map doesn't show. The rest of the VRAM is read as it
-is: before its next V-blank work the game waits for a drawer still
-reading it. Working out whether a screen changed compares the small parts
+first in the middle with its frame black (2026-11-01). The tiles those
+maps show are taken with them (each once), and a bitmap BG's picture: the
+options page is drawn whole again when anything on it changes, its alike
+tiles shared, so a tile's number goes to another picture each time, and
+its new tiles showed through the map taken for a frame, mixed up. The
+rest of the VRAM (the OBJs', the extended palettes) is read as it is:
+before its next V-blank work the game waits for a drawer still reading
+it. Working out whether a screen changed compares the small parts
 first, and the VRAM only when they're the same: since 2026-10-30 only the
 VRAM the screen shows (`EngineShownVramSignature`): for each BG on, its
 whole map, the tiles the map uses and their palettes; the OBJs' VRAM while

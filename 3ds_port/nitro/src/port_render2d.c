@@ -154,15 +154,19 @@ typedef struct State2D {
 } State2D;
 static State2D sState[2];
 
-/* The BGs' maps (their screen blocks) when the display state was taken,
- * at the addresses they have in the VRAM (NitroPort_Render2DTakeState).
+/* The BGs as they were when the display state was taken, at the addresses
+ * they have in the VRAM (NitroPort_Render2DTakeState): their maps (screen
+ * blocks), the tiles those show, a bitmap BG's picture.
  * The game writes them in its next frame's work too, before that frame's
  * V-blank: a window it opens is copied to the VRAM at once
  * (Window_CopyToVRAM). Drawn from the VRAM as it is, the window showed a
  * frame early with the windows, registers and palettes taken before it
  * was there: a YES/NO box where the DS has it, its frame black, then at
- * the wider screen's edge (2026-11-01). Its tiles are new ones, which the
- * map taken doesn't show; so only the maps are kept. */
+ * the wider screen's edge (2026-11-01). And the tiles: a page drawn
+ * whole again (the options page: alike tiles shared, so a tile's number
+ * goes to another picture each time) showed its new tiles through the map
+ * taken for a frame, mixed up (2026-11-01). The rest of the VRAM there is
+ * whatever was taken before (nothing shows it). */
 static u8 sMapShadowA[0x80000], sMapShadowB[0x20000];
 
 /* ----------------------------------------------------------- one engine */
@@ -180,10 +184,10 @@ typedef struct Engine {
     const u8 *bgPltt;      /* 0x200 bytes */
     const u8 *objPltt;
     const u8 *oam;         /* 0x400 bytes */
+    /* The BGs' VRAM: as it is, or (the display state taken) as it was then
+     * (TakeMaps: what the BGs show, at the same addresses) */
     const u8 *bgVram;
-    /* The BGs' maps: bgVram's, or (the display state taken) as they were
-     * then (TakeMaps), at the same addresses. Their tiles are bgVram's. */
-    const u8 *mapVram;
+    const u8 *mapVram;     /* (the same) */
     u32 bgMask;
     const u8 *objVram;
     u32 objMask;
@@ -5055,8 +5059,8 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
     e->bgPltt = (taken ? st->pltt : NitroPort_Pltt) + (e->isA ? 0 : 0x400);
     e->objPltt = e->bgPltt + 0x200;
     e->oam = (taken ? st->oam : NitroPort_Oam) + (e->isA ? 0 : 0x400);
-    e->bgVram = e->isA ? NitroPort_BgVram : NitroPort_DbBgVram;
-    e->mapVram = taken ? (e->isA ? sMapShadowA : sMapShadowB) : e->bgVram;
+    e->bgVram = taken ? (e->isA ? sMapShadowA : sMapShadowB) : e->isA ? NitroPort_BgVram : NitroPort_DbBgVram;
+    e->mapVram = e->bgVram;
     e->bgMask = e->isA ? 0x7FFFF : 0x1FFFF;
     e->objVram = e->isA ? NitroPort_ObjVram : NitroPort_DbObjVram;
     e->objMask = e->isA ? 0x3FFFF : 0x1FFFF;
@@ -5972,19 +5976,41 @@ static u32 MapBytes(int kind, u16 bgcnt)
     }
 }
 
-/* The maps of the BGs a taken state shows (on any of its lines, with an
- * H-blank effect) copied to the engine's sMapShadow, and their hash. */
+/* (TakeMaps) VRAM bytes copied to the shadow, round the VRAM's end, and
+ * hashed into h. */
+static u32 TakeBytes(u8 *shadow, const u8 *vram, u32 mask, u32 base, u32 size, u32 h)
+{
+    u32 off;
+
+    for (off = 0; off < size;) {
+        u32 at = (base + off) & mask, run = mask + 1 - at;
+
+        if (run > size - off) {
+            run = size - off;
+        }
+        memcpy(shadow + at, vram + at, run);
+        h = HashWords(shadow + at, run & ~7u, h);
+        off += run;
+    }
+    return h;
+}
+
+/* The BGs a taken state shows (on any of its lines, with an H-blank
+ * effect) copied to the engine's sMapShadow, and their hash: their maps,
+ * the tiles on them (each once), a bitmap BG's picture. */
 static u32 TakeMaps(int engine, const State2D *st)
 {
     u8 *shadow = engine ? sMapShadowB : sMapShadowA;
     const u8 *vram = engine ? NitroPort_DbBgVram : NitroPort_BgVram;
     u32 mask = engine ? 0x1FFFFu : 0x7FFFFu;
-    u32 bases[16], sizes[16];
+    u32 bases[16], sizes[16], chars[16];
+    static u32 tileTaken[0x80000 / 32 / 32];   /* (32 bytes a bit) */
     int n = 0, line, bg, i;
     u32 h = 2166136261u;
     Engine e;
 
     memset(&e, 0, sizeof(e));
+    memset(tileTaken, 0, sizeof(tileTaken));
     e.isA = engine == 0;
     for (line = 0; line < (st->lines ? H : 1); line++) {
         const u8 *io = st->lines ? st->lineRegs[line] : st->io + (engine ? 0x1000 : 0);
@@ -5992,13 +6018,28 @@ static u32 TakeMaps(int engine, const State2D *st)
 
         for (bg = 0; bg < 4; bg++) {
             u16 bgcnt = Rd16(io, 8 + (u32)bg * 2);
-            u32 base, size, off;
+            int kind;
+            u32 base, size, charBase, tileBytes, entries, k;
+            int wide16;
 
-            if (!(dispcnt & (0x100u << bg)) || (size = MapBytes(BgKind(&e, bg, dispcnt), bgcnt)) == 0) {
+            if (!(dispcnt & (0x100u << bg))) {
+                continue;
+            }
+            kind = BgKind(&e, bg, dispcnt);
+            if (kind == BG_EXTENDED && (bgcnt & 0x80)) {
+                /* a bitmap: its picture (8 or 16 bits a pixel) */
+                static const u32 bmp[4] = { 128 * 128, 256 * 256, 512 * 256, 512 * 512 };
+
+                h = TakeBytes(shadow, vram, mask, ((bgcnt >> 8) & 0x1F) * 0x4000u,
+                              bmp[bgcnt >> 14] * ((bgcnt & 0x4) ? 2u : 1u), h);
+                continue;
+            }
+            if ((size = MapBytes(kind, bgcnt)) == 0) {
                 continue;
             }
             base = ScreenBase(&e, bgcnt, dispcnt);
-            for (i = 0; i < n && !(bases[i] == base && sizes[i] >= size); i++) {
+            charBase = CharBase(&e, bgcnt, dispcnt);
+            for (i = 0; i < n && !(bases[i] == base && sizes[i] >= size && chars[i] == (charBase | (bgcnt & 0x80u) | (u32)kind)); i++) {
             }
             if (i < n) {
                 continue;   /* (taken already) */
@@ -6006,18 +6047,28 @@ static u32 TakeMaps(int engine, const State2D *st)
             if (n < 16) {
                 bases[n] = base;
                 sizes[n] = size;
+                chars[n] = charBase | (bgcnt & 0x80u) | (u32)kind;
                 n++;
             }
-            /* (round the VRAM's end, as the drawing reads it) */
-            for (off = 0; off < size;) {
-                u32 at = (base + off) & mask, run = mask + 1 - at;
+            h = TakeBytes(shadow, vram, mask, base, size, h);
+            /* the tiles it shows (a text BG's 16 or 256 colours; an affine
+             * one's byte a tile, an extended one's 2 bytes: 256 colours) */
+            wide16 = kind != BG_AFFINE;
+            tileBytes = (kind == BG_TEXT && !(bgcnt & 0x80)) ? 32u : 64u;
+            entries = wide16 ? size / 2 : size;
+            for (k = 0; k < entries; k++) {
+                u32 tile = wide16 ? (Rd16(shadow, (base + k * 2) & mask) & 0x3FFu) : shadow[(base + k) & mask];
+                u32 at = (charBase + tile * tileBytes) & mask, blk = at >> 5;
 
-                if (run > size - off) {
-                    run = size - off;
+                if (tileTaken[blk >> 5] & (1u << (blk & 31))) {
+                    continue;
                 }
-                memcpy(shadow + at, vram + at, run);
-                h = HashWords(shadow + at, run & ~7u, h);
-                off += run;
+                tileTaken[blk >> 5] |= 1u << (blk & 31);
+                if (tileBytes == 64) {
+                    blk = ((at + 32) & mask) >> 5;
+                    tileTaken[blk >> 5] |= 1u << (blk & 31);
+                }
+                h = TakeBytes(shadow, vram, mask, at, tileBytes, h);
             }
         }
     }
@@ -6207,8 +6258,8 @@ static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int lines
     e->ioAll = ioAll;
     e->io = io;
     e->bgPltt = (snapshot ? st->pltt : NitroPort_Pltt) + (e->isA ? 0 : 0x400);
-    e->bgVram = e->isA ? NitroPort_BgVram : NitroPort_DbBgVram;
-    e->mapVram = snapshot ? (e->isA ? sMapShadowA : sMapShadowB) : e->bgVram;
+    e->bgVram = snapshot ? (e->isA ? sMapShadowA : sMapShadowB) : e->isA ? NitroPort_BgVram : NitroPort_DbBgVram;
+    e->mapVram = e->bgVram;
     e->bgMask = e->isA ? 0x7FFFF : 0x1FFFF;
     FindExtPalettes(e);
     for (bg = 0; bg < 4; bg++) {

@@ -11,7 +11,10 @@ options page's AUTO-RUN, PlayerAvatar_IsRunButtonHeld), but the speed sent
 to the Underground's server was B's alone: walking speed while the
 picture ran, so the player ran a tile, stood, and ran the next. Held B
 gave the reverse (a run's speed under a walking picture). The speed sent
-now follows AUTO-RUN the same way.
+now follows AUTO-RUN the same way. And each player's picture is chosen
+from its speed with B standing for "runs" (CommPlayer_MoveClient), which
+PlayerAvatar_IsRunButtonHeld took as the button and AUTO-RUN turned
+round: that B is turned round for it too.
 
 The wireless signal icon is drawn at the DS screen's top right (240, 0).
 On the 3DS's wider screens engine A's picture is placed beside the DS's
@@ -19,7 +22,7 @@ On the 3DS's wider screens engine A's picture is placed beside the DS's
 the 3DS screen's corner.
 ---
 diff --git a/src/comm_player_manager.c b/src/comm_player_manager.c
-index 92b101e0..a354d5dc 100644
+index 92b101e0..6f232fda 100644
 --- a/src/comm_player_manager.c
 +++ b/src/comm_player_manager.c
 @@ -1,5 +1,9 @@
@@ -52,6 +55,40 @@ index 92b101e0..a354d5dc 100644
  
      CommSys_SetSendSpeed(moveSpeed);
  }
+@@ -1047,10 +1061,23 @@ static void CommPlayer_MoveClient(int netId)
+             break;
+         }
+ 
++        u16 animPad = pad;
++
++#ifdef SDK_PORT_3DS
++        // (B here says "this player runs" (its speed 1), not the button: the
++        // animation's PlayerAvatar_IsRunButtonHeld takes it as the button,
++        // which the options page's AUTO-RUN turns round. Turned round for it
++        // too, so the picture runs at a run's speed and walks at a walk's,
++        // 2026-11-01)
++        if (PortOption_On(PORT_OPT_AUTO_RUN)) {
++            animPad ^= PAD_BUTTON_B;
++        }
++#endif
++
+         if (sCommPlayerManager->forceDirTimer && (netId == CommSys_CurNetId())) {
+             sCommPlayerManager->forceDirTimer--;
+         } else if (!CommSys_IsSendingMovementData() && sCommPlayerManager->isUnderground && (netId == CommSys_CurNetId())) {
+-            animCode = PlayerAvatar_GetMovementActionAnimCode(playerAvatar, pad, pad, v10, 1, 0);
++            animCode = PlayerAvatar_GetMovementActionAnimCode(playerAvatar, animPad, animPad, v10, 1, 0);
+         } else if (((pad & ~PAD_BUTTON_B) == 0) && (playerLocation->collisionFlag)) {
+             moveSpeed = 3;
+ 
+@@ -1072,7 +1099,7 @@ static void CommPlayer_MoveClient(int netId)
+         } else if (((pad & ~PAD_BUTTON_B) == 0) && (playerLocation->dir != dir)) {
+             animCode = MovementAction_TurnActionTowardsDir(playerLocation->dir, MOVEMENT_ACTION_WALK_ON_SPOT_FAST_NORTH);
+         } else {
+-            animCode = PlayerAvatar_GetMovementActionAnimCode(playerAvatar, pad, pad, v10, 1, 0);
++            animCode = PlayerAvatar_GetMovementActionAnimCode(playerAvatar, animPad, animPad, v10, 1, 0);
+         }
+ 
+         if (PlayerAvatar_IsMapObjectAnimationSet(playerAvatar) == 0) {
 diff --git a/src/network_icon.c b/src/network_icon.c
 index f3f886b1..372d75dd 100644
 --- a/src/network_icon.c

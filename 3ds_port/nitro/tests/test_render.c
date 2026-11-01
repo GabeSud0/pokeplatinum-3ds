@@ -3457,6 +3457,37 @@ static void test_wide_framed_windows(void)
     NitroPort_Render2DTakeState(0);
     CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split));
     CHECK(wide[36 * 320 + 284] == BLUE);
+    /* A page drawn whole again in the next frame's work, its tiles and map
+     * both (the options page: alike tiles shared, a tile's number another
+     * picture each time): here tiles 1 and 2 swapped, and the map with
+     * them. Drawn from the state taken, the tiles are the ones taken with
+     * it (2026-11-01: the new tiles through the old map, mixed up). */
+    SolidTile4(tiles + 1 * 32, 2);
+    SolidTile4(tiles + 2 * 32, 1);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 264] == RED && wide[36 * 320 + 284] == BLUE);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = (u16)(map[i] == 1 ? 2 : map[i] == 2 ? 1 : map[i]);
+    }
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    NitroPort_Render2DTakeState(0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 264] == RED && wide[36 * 320 + 284] == BLUE);
+    /* (tiles changed alone: a new picture once taken) */
+    (void)NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    (void)NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    CHECK(!NitroPort_Render2DSplitIfChanged(0, wide, &split));
+    SolidTile4(tiles + 1 * 32, 3);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    (void)NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    CHECK(wide[36 * 320 + 284] == BLUE);
+    NitroPort_Render2DTakeState(0);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split));
+    CHECK(wide[36 * 320 + 284] == WHITE && wide[20 * 320 + 264] == RED);
+    SolidTile4(tiles + 1 * 32, 1);
+    SolidTile4(tiles + 2 * 32, 2);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
     split.snapshot = 0;
     NitroPort_WindowRemoved(&menu);
     GX_SetVisiblePlane(GX_PLANEMASK_BG1);
