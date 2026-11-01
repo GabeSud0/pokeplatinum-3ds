@@ -2784,40 +2784,103 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
  * known. A ring of CIRCLE_SEGMENTS pieces, from the circle to past the
  * screen's corners. */
 /* (draw_circle_mask) A band of lines as drawn: its first line and the line
- * after its last on the canvas, and the frame it was drawn for (once a
- * frame: both eyes have it as it is). */
+ * after its last on the canvas (in fractions of a line), each edge's speed
+ * (lines a V-blank), the canvas's lines, and the V-blank the frame it was
+ * last drawn for shows at (once a frame: both eyes have it as it is). */
 static struct {
-    int on, top, bottom;
-    uint32_t frame, vblank;
+    int on, rows;
+    float top, bottom, vTop, vBottom;
+    int wantTop, wantBottom;   /* (the game's lines, as last drawn) */
+    uint32_t vblank;
+    u32 rgba;   /* (its colour) */
 } sBand;
-static uint32_t sComposedFrames;   /* (NitroPort_ComposeFrame's calls: band_ease's frame) */
+static uint32_t sComposedFrames;   /* (NitroPort_ComposeFrame's calls) */
+static uint32_t sDrawTarget;       /* (the V-blank the frame being drawn shows at, as far as known) */
 
-/* A band's lines as drawn this frame (*top, *bottom: where the game has
- * them in; drawn: eased): opening, each edge on towards the game's by at
- * least 8 lines, at most half the way when further (never past it);
- * closing or new, as the game has it. */
-static void band_ease(int *top, int *bottom)
+#define BAND_TRAIL 20.0f   /* (lines: how far behind the game's edge an edge goes) */
+#define BAND_SPEED 6.0f    /* (lines a V-blank: the game's own, about, as the map's first steps come) */
+
+/* One edge, a V-blank on: towards the game's (want, always further out:
+ * the band opening) at about the game's speed, a little faster when
+ * further behind than BAND_TRAIL, slower when nearer; never past it, never
+ * back. (out: -1 the top edge, going up; 1 the bottom one.) */
+static void band_edge_step(float *at, float *v, float want, int out)
 {
-    int t = *top, b = *bottom;
+    float behind = (want - *at) * (float)out, step;
 
-    if (sBand.on && sBand.frame == sComposedFrames) {
-        *top = sBand.top;
-        *bottom = sBand.bottom;
+    *v = *v * 0.75f + (BAND_SPEED + (behind - BAND_TRAIL) / 8.0f) * 0.25f;
+    step = *v < 1.0f ? 1.0f : *v > 16.0f ? 16.0f : *v;
+    if (step > behind) {
+        step = behind > 0.0f ? behind : 0.0f;
+    }
+    *at += step * (float)out;
+}
+
+/* A band's lines as drawn in a frame (*top, *bottom: where the game has
+ * them in; drawn: eased). Opening, driven by the V-blanks rather than the
+ * game's steps: right after the map changes the game's steps come
+ * unevenly (19 to 26 a second, 2 or 3 V-blanks each, a log of 2026-10-31),
+ * and a band eased once a step, each step 16 lines on, jumped. So each
+ * edge goes on every V-blank at about the game's speed, trailing its edge
+ * by about BAND_TRAIL lines (a step and a bit): a step that comes late
+ * doesn't stop it. (The upper screen is drawn again each V-blank for it
+ * while it moves: band_moving.) New, or closing: as the game has it. */
+static void band_ease(int *top, int *bottom, int rows)
+{
+    float t = (float)*top, b = (float)*bottom;
+    int32_t frames = (int32_t)(sDrawTarget - sBand.vblank);
+    int fresh = !sBand.on || frames > 30 || frames < -30;
+
+    if (!fresh && frames <= 0) {
+        *top = (int)(sBand.top + 0.5f);   /* (the same V-blank's, or one before: as it is) */
+        *bottom = (int)(sBand.bottom + 0.5f);
         return;
     }
-    if (sBand.on && t <= sBand.top && b >= sBand.bottom) {
-        int dt = sBand.top - t, db = b - sBand.bottom;
+    if (fresh || t > sBand.top + 0.5f || b < sBand.bottom - 0.5f) {
+        float mid = (t + b) * 0.5f;
 
-        t = sBand.top - (dt > 16 ? dt / 2 : dt < 8 ? dt : 8);
-        b = sBand.bottom + (db > 16 ? db / 2 : db < 8 ? db : 8);
+        /* (new: opening from a narrow band (less than half the picture),
+         * from a little more closed than the game's, its speed the game's;
+         * else, or closing, as the game has it: a band standing still (the
+         * picture framed) isn't eased) */
+        int trail = fresh && b - t < (float)rows * 0.5f;
+
+        sBand.top = trail ? (t + BAND_TRAIL < mid ? t + BAND_TRAIL : mid) : t;
+        sBand.bottom = trail ? (b - BAND_TRAIL > mid ? b - BAND_TRAIL : mid) : b;
+        sBand.vTop = sBand.vBottom = BAND_SPEED;
+    } else {
+        for (; frames > 0; frames--) {
+            band_edge_step(&sBand.top, &sBand.vTop, t, -1);
+            band_edge_step(&sBand.bottom, &sBand.vBottom, b, 1);
+        }
     }
     sBand.on = 1;
-    sBand.top = t;
-    sBand.bottom = b;
-    sBand.frame = sComposedFrames;
-    sBand.vblank = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
-    *top = t;
-    *bottom = b;
+    sBand.rows = rows;
+    sBand.wantTop = *top;
+    sBand.wantBottom = *bottom;
+    sBand.vblank = sDrawTarget;
+    *top = (int)(sBand.top + 0.5f);
+    *bottom = (int)(sBand.bottom + 0.5f);
+}
+
+/* Whether a band was drawn in the last half second, short of the whole
+ * picture. */
+static int band_open(void)
+{
+    u32 now = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
+
+    return sBand.on && (int32_t)(now - sBand.vblank) <= 30 &&
+           (sBand.top > 0.5f || sBand.bottom < (float)sBand.rows - 0.5f);
+}
+
+/* Whether a band is opening still (band_open, and behind the game's: as
+ * the game had it when last drawn, or the whole picture where the game's
+ * band is over): the upper screen's drawn again each V-blank. (A band
+ * standing still, caught up: not.) */
+static int band_moving(void)
+{
+    return band_open() &&
+           (sBand.top > (float)sBand.wantTop + 0.5f || sBand.bottom < (float)sBand.wantBottom - 0.5f);
 }
 
 /* Whether the frame the DS shows a scene in is noted at all. */
@@ -2829,6 +2892,47 @@ static int frame_noted(uint32_t seq, uint32_t stamp)
     found = frame_note_of(seq, stamp);
     LightLock_Unlock(&sObjPlacesLock);
     return found >= 0;
+}
+
+/* A band drawn: the backdrop above its first line (y) and from the line
+ * after its last (r) on, over the picture (pic, sy its lines' height). */
+static void draw_band(const PicaRect *pic, float sy, int y, int r, u32 rgba)
+{
+    float top = pic->y0 + (float)y * sy, bottom = pic->y0 + (float)r * sy, t;
+
+    if (sConfig.flipV) {
+        t = top;
+        top = pic->y0 + pic->y1 - bottom;
+        bottom = pic->y0 + pic->y1 - t;
+    }
+    if (sQuadVertices + 12 > MAX_QUAD_VERTICES) {
+        return;
+    }
+    quad_combiner(0);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+    if (top > pic->y0) {
+        quad(pic->x0, pic->y0, pic->x1, top, 0.0f, 0, 0, 0, 0, rgba);
+    }
+    if (bottom < pic->y1) {
+        quad(pic->x0, bottom > pic->y0 ? bottom : pic->y0, pic->x1, pic->y1, 0.0f, 0, 0, 0, 0, rgba);
+    }
+    NitroPort_PicaProfileMark("the band of lines");
+}
+
+/* A band still opening (band_open) where the picture has none: the
+ * game's band done and its windows off, the 2D's drawer with a picture
+ * without them already, the band drawn trailing behind the game's still
+ * goes on to the whole picture (else the last lines of it went at once). */
+static void draw_band_tail(const PicaRect *pic, float sy)
+{
+    int rows = (int)((pic->y1 - pic->y0) / sy + 0.5f), y = 0, r = rows;
+
+    if (!band_open() || rows != sBand.rows) {
+        sBand.on = 0;
+        return;
+    }
+    band_ease(&y, &r, rows);
+    draw_band(pic, sy, y, r, sBand.rgba);
 }
 
 /* (draw_circle_mask) The last circle or band noted for a frame drawn: its
@@ -2871,7 +2975,8 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
             int rowsAll = (int)((pic->y1 - pic->y0) / sy + 0.5f);
             u32 now = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
 
-            if (!sBand.on || now - sBand.vblank > 30u || (sBand.top <= 0 && sBand.bottom >= rowsAll)) {
+            if (!sBand.on || (int32_t)(now - sBand.vblank) > 30 ||
+                (sBand.top <= 0.5f && sBand.bottom >= (float)rowsAll - 0.5f)) {
                 sBand.on = 0;
                 return;
             }
@@ -2895,34 +3000,11 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
     if (info->gpuCircle == 2) {
         /* A band of lines (walking out of a building): the backdrop above
          * and below it, its edges halfway in the in-between frames (the
-         * game's band 32 lines taller every other frame: 16 each frame).
-         * Opening, each edge goes on to where the game has it at 8 lines a
-         * frame at least, half the way there at most: right after the map
-         * changes the game's steps come unevenly (6 in 8 frames, a video of
-         * 2026-10-31), its band 25 lines on in a frame and 5 in another. */
-        float top, bottom, t;
-
-        band_ease(&y, &r);
-        top = pic->y0 + (float)y * sy;
-        bottom = pic->y0 + (float)r * sy;
-
-        if (sConfig.flipV) {
-            t = top;
-            top = pic->y0 + pic->y1 - bottom;
-            bottom = pic->y0 + pic->y1 - t;
-        }
-        if (sQuadVertices + 12 > MAX_QUAD_VERTICES) {
-            return;
-        }
-        quad_combiner(0);
-        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
-        if (top > pic->y0) {
-            quad(pic->x0, pic->y0, pic->x1, top, 0.0f, 0, 0, 0, 0, rgba);
-        }
-        if (bottom < pic->y1) {
-            quad(pic->x0, bottom > pic->y0 ? bottom : pic->y0, pic->x1, pic->y1, 0.0f, 0, 0, 0, 0, rgba);
-        }
-        NitroPort_PicaProfileMark("the band of lines");
+         * game's band 32 lines taller every other frame: 16 each frame),
+         * and opening, eased by the V-blank (band_ease). */
+        band_ease(&y, &r, (int)((pic->y1 - pic->y0) / sy + 0.5f));
+        sBand.rgba = rgba;
+        draw_band(pic, sy, y, r, rgba);
         return;
     }
     if (sQuadVertices + 6 * CIRCLE_SEGMENTS > MAX_QUAD_VERTICES || gpuCmdBufSize - gpuCmdBufOffset < 1024u) {
@@ -3376,6 +3458,8 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
     /* 5c. A circle fade drawn here (ComposeLayers.gpuCircle). */
     if (info->gpuCircle) {
         draw_circle_mask(info, has3d ? scene : NULL, &pic, scale, (pic.y1 - pic.y0) / (float)rows);
+    } else if (has3d && sBand.on) {
+        draw_band_tail(&pic, (pic.y1 - pic.y0) / (float)rows);
     }
     /* 6. The master brightness (with the 3D: engine A's, by frame). */
     master_brightness_of(scr, info, has3d && scr == &sScreens[0] ? scene : NULL);
@@ -3839,7 +3923,12 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                   (menu[s] && sMenuPanel != NITRO_LOWERMENU_PANEL_MAP &&
                    (runSerial != scr->shownRunSerial || (panelUp != NULL ? panelUp->seq : 0u) != scr->shownUpSeq)) ||
                   (s == 0 && has3d && (stereoNow != scr->shownStereo ||
-                                        (stereoNow && slider != scr->shownSlider)));
+                                        (stereoNow && slider != scr->shownSlider))) ||
+                  (has3d && !mid && sceneSerial == scr->shownScene && scr->npending == 0 && band_moving());
+        /* (the last: a band opening, the scene shown already and nothing
+         * of the screen's waiting for its V-blank, drawn again for the next
+         * V-blank, its band on; queued after a frame still to show, it
+         * would have shown before it, the scene early) */
         /* A new scene: once the 2D it's shown with is here (or the next
          * scene has come: flush). Not its in-between scene, which has its
          * 2D (pick_set): waiting for the scene's, the in-between scene
@@ -3905,6 +3994,15 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     LightLock_Unlock(&sSetLock);
     if (!need[0] && !need[1]) {
         return drawn;   /* (nothing drawn: why, if a frame was wanted) */
+    }
+    /* (when it will show, as far as known now: band_ease's time) */
+    {
+        u32 soonest = startVBlank + 1u, at = soonest;
+
+        if (timed && scene != NULL) {
+            at = scene->stamp + (u32)sLag + (mid ? 0u : 1u);
+        }
+        sDrawTarget = (int32_t)(at - soonest) < 0 ? soonest : at;
     }
     NitroPort_PicaTextureStats(&texBefore, &texels, &texTicksBefore);
     /* (an in-between scene has its scene's serial: told apart) */

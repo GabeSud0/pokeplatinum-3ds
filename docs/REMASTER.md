@@ -1823,12 +1823,22 @@ building: the window empty, each line's WINOUT showing all or nothing, the
 band 32 lines taller every other frame) goes the same way
 (`GpuRowsOf`, `gpuCircleOn` 2): the picture drawn whole, the backdrop above
 and below the band drawn by the compositor, its edges halfway in the
-in-between frames (16 lines a frame). Opening, each edge goes on towards
-the game's at 8 lines a frame at least, half the way at most (`band_ease`):
-right after the map changes the game's steps come unevenly (6 in 8 frames,
-an edge 25 lines on in one frame and 5 in another, a video of 2026-10-31).
-A frame noted with no band, the window off as it ends, shows the picture
-whole (drawn so already), the band's last lines eased out to the edges:
+in-between frames (16 lines a frame). Opening, the band's edges are
+driven by the V-blank, not the game's steps (`band_ease`): right after the
+map changes the game makes 19 to 26 steps a second, 2 or 3 V-blanks each
+(a log of 2026-10-31: the upper 2D's drawer and the city's geometry on the
+same core), and a band eased once a step jumped (16 lines on, then
+nothing for a V-blank). Each edge goes on every V-blank at about the game's
+speed (6 lines), trailing the game's edge by about 20 lines (a step and a
+bit), a little faster when further behind, slower when nearer, never past
+it; a step that comes late doesn't stop it. While it moves the upper
+screen is drawn again each V-blank (`band_moving`: the scene shown and
+nothing waiting for its V-blank, so it never shows before a frame still
+to come). It starts so from a band that's narrow (less than half the
+picture); a wider one, or one closing, is as the game has it. A frame
+noted with no band, the window off as it ends, shows the picture whole
+(drawn so already), the band's last lines eased out to the edges, and so
+does a picture without the band while it's open still (`draw_band_tail`):
 before, the 2D's drawer still on the band's picture, the band stood at its
 last noted lines (40 to 200 of 240) for a sixth of a second, the outside
 framed in black, then the frame gone at once. Until 2026-10-31 neither was ever
