@@ -1823,7 +1823,15 @@ building: the window empty, each line's WINOUT showing all or nothing, the
 band 32 lines taller every other frame) goes the same way
 (`GpuRowsOf`, `gpuCircleOn` 2): the picture drawn whole, the backdrop above
 and below the band drawn by the compositor, its edges halfway in the
-in-between frames (16 lines a frame). Until 2026-10-31 neither was ever
+in-between frames (16 lines a frame). Opening, each edge goes on towards
+the game's at 8 lines a frame at least, half the way at most (`band_ease`):
+right after the map changes the game's steps come unevenly (6 in 8 frames,
+an edge 25 lines on in one frame and 5 in another, a video of 2026-10-31).
+A frame noted with no band, the window off as it ends, shows the picture
+whole (drawn so already), the band's last lines eased out to the edges:
+before, the 2D's drawer still on the band's picture, the band stood at its
+last noted lines (40 to 200 of 240) for a sixth of a second, the outside
+framed in black, then the frame gone at once. Until 2026-10-31 neither was ever
 left to the compositor with an H-blank effect: a line's copy of the
 registers has DISPSTAT and VCOUNT at 0, the frame's the V-blank's, and the
 lines were taken for differing in more than the windows (`LineLikeFrame`

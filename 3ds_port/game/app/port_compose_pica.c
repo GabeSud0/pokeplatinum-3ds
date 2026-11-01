@@ -2783,6 +2783,54 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
  * the game changes it 30 times); as the picture had it where that isn't
  * known. A ring of CIRCLE_SEGMENTS pieces, from the circle to past the
  * screen's corners. */
+/* (draw_circle_mask) A band of lines as drawn: its first line and the line
+ * after its last on the canvas, and the frame it was drawn for (once a
+ * frame: both eyes have it as it is). */
+static struct {
+    int on, top, bottom;
+    uint32_t frame, vblank;
+} sBand;
+static uint32_t sComposedFrames;   /* (NitroPort_ComposeFrame's calls: band_ease's frame) */
+
+/* A band's lines as drawn this frame (*top, *bottom: where the game has
+ * them in; drawn: eased): opening, each edge on towards the game's by at
+ * least 8 lines, at most half the way when further (never past it);
+ * closing or new, as the game has it. */
+static void band_ease(int *top, int *bottom)
+{
+    int t = *top, b = *bottom;
+
+    if (sBand.on && sBand.frame == sComposedFrames) {
+        *top = sBand.top;
+        *bottom = sBand.bottom;
+        return;
+    }
+    if (sBand.on && t <= sBand.top && b >= sBand.bottom) {
+        int dt = sBand.top - t, db = b - sBand.bottom;
+
+        t = sBand.top - (dt > 16 ? dt / 2 : dt < 8 ? dt : 8);
+        b = sBand.bottom + (db > 16 ? db / 2 : db < 8 ? db : 8);
+    }
+    sBand.on = 1;
+    sBand.top = t;
+    sBand.bottom = b;
+    sBand.frame = sComposedFrames;
+    sBand.vblank = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
+    *top = t;
+    *bottom = b;
+}
+
+/* Whether the frame the DS shows a scene in is noted at all. */
+static int frame_noted(uint32_t seq, uint32_t stamp)
+{
+    int found;
+
+    LightLock_Lock(&sObjPlacesLock);
+    found = frame_note_of(seq, stamp);
+    LightLock_Unlock(&sObjPlacesLock);
+    return found >= 0;
+}
+
 /* (draw_circle_mask) The last circle or band noted for a frame drawn: its
  * kind (1 a circle, 2 a band of lines), middle and radius. */
 static int sLastCircle, sLastCircleX, sLastCircleY, sLastCircleR;
@@ -2810,6 +2858,28 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
         int kb = scene != NULL && frame_before(scene, &seqB, &stampB) ? circle_of(seqB, stampB, &bx, &by, &br, &noted)
                                                                       : 0;
 
+        /* (a band's picture is drawn whole: the frame noted with no band,
+         * the window off as the band ends, it's the picture as it is. Else,
+         * the 2D's drawer still on the last band's picture, the band stood
+         * at its last noted lines till the next picture: the outside framed
+         * in black for a sixth of a second after the door's band opened,
+         * then the frame gone at once, a video of 2026-10-31) */
+        if (info->gpuCircle == 2 && ka != 2 && scene != NULL && frame_noted(scene->swap_seq, scene->stamp)) {
+            /* (a band just drawn going on to the whole picture, its last
+             * steps eased as the rest: the game's own went 40 lines at
+             * once each side) */
+            int rowsAll = (int)((pic->y1 - pic->y0) / sy + 0.5f);
+            u32 now = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
+
+            if (!sBand.on || now - sBand.vblank > 30u || (sBand.top <= 0 && sBand.bottom >= rowsAll)) {
+                sBand.on = 0;
+                return;
+            }
+            ka = kb = 2;
+            ax = bx = 0;
+            ay = by = 0;
+            ar = br = rowsAll;
+        }
         if (ka == info->gpuCircle) {
             x = ax, y = ay, r = ar;
             if (kb == info->gpuCircle) {
@@ -2825,8 +2895,16 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
     if (info->gpuCircle == 2) {
         /* A band of lines (walking out of a building): the backdrop above
          * and below it, its edges halfway in the in-between frames (the
-         * game's band 32 lines taller every other frame: 16 each frame). */
-        float top = pic->y0 + (float)y * sy, bottom = pic->y0 + (float)r * sy, t;
+         * game's band 32 lines taller every other frame: 16 each frame).
+         * Opening, each edge goes on to where the game has it at 8 lines a
+         * frame at least, half the way there at most: right after the map
+         * changes the game's steps come unevenly (6 in 8 frames, a video of
+         * 2026-10-31), its band 25 lines on in a frame and 5 in another. */
+        float top, bottom, t;
+
+        band_ease(&y, &r);
+        top = pic->y0 + (float)y * sy;
+        bottom = pic->y0 + (float)r * sy;
 
         if (sConfig.flipV) {
             t = top;
@@ -3570,6 +3648,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     u64 start = svcGetSystemTick(), gpuStart, prepareTicks = 0, texTicksBefore, texTicksAfter, texels;
 
     sEffectsMid = 0;
+    sComposedFrames++;
     if (!sReady) {
         return 0;
     }
