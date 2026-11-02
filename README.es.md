@@ -62,7 +62,6 @@ En una New 3DS:
 | **Las dos pantallas llenas** | Las imágenes de la DS se dibujan 1,25 veces más grandes: la pantalla inferior llena sus 320×240, y la superior se reparte a lo largo de sus 400 píxeles de ancho (menús, cuadros de texto y combates incluidos). Nunca se estira ni se refleja nada para llenar el espacio extra. |
 | **Un menú en la pantalla inferior** | En el mapa, la pantalla inferior es un menú junto al Pokéreloj: MAP, POKéMON, BAG, TRAINER, POKéDEX, POKéTCH, SAVE y OPTIONS, a un toque (o con X y la cruceta). La mochila, el equipo, los datos del Pokémon, la ficha de entrenador, el guardado, las opciones y el Mapa Pueblo se abren dentro de su panel mientras el mapa sigue en la pantalla superior. Dos casillas guardan tus objetos registrados: toca una para usarlo. |
 | **3D más nítido** | El mundo y los combates los dibuja la GPU de la 3DS a la resolución de la propia pantalla, con bordes suavizados (antialiasing), la niebla del juego y una vista más amplia del mundo a los lados. Los contornos de la DS alrededor del 3D vienen apagados; `edges on` en `remaster.txt` los dibuja. |
-| **3D estereoscópico** | Con el deslizador 3D. |
 | **60 imágenes por segundo** | El juego mueve el mapa a 30; el port dibuja una imagen intermedia entre cada par, y vuelve a 30 donde la GPU no da abasto (nuevo, todavía en ajuste). |
 | **Mejoras y trucos** | Opcionales, desde OPTIONS: SPEED hasta 4x (los menús y las decisiones en combate siguen a 1x), Repartir Experiencia para todo el equipo, experiencia al capturar, evoluciones por intercambio al nivel 40, MO sin enseñar los movimientos, correr siempre, tu primer Pokémon siguiéndote (FOLLOWER: los sprites de HeartGold/SoulSilver, que descarga el creador; sale de la Poké Ball en la que lo capturaste y puedes hablarle: reacciona y a veces te encuentra un objeto); y trucos (captura segura, victoria instantánea, huevos rápidos, dinero infinito, frecuencia de Pokémon salvajes, probabilidad de shiny, dar objetos). |
 | **Pequeñas comodidades** | Si capturas un Pokémon con el equipo lleno, puedes cambiarlo por uno de tu equipo ahí mismo, en el combate. Una partida nueva guarda encima de la anterior sin tener que borrarla antes. L + R + START + SELECT reinicia el juego desde la intro. |
@@ -78,7 +77,7 @@ En una New 3DS:
 | Una interfaz nueva para la pantalla superior: menús, cuadros de texto y combates a lo largo de todo su ancho | Un Pokémon que te sigue | Mejor iluminación |
 | Una interfaz nueva para la pantalla inferior: un menú junto al Pokéreloj, con la mochila, el equipo, los datos del Pokémon, la ficha de entrenador, el guardado, las opciones y el Mapa Pueblo en su panel | 60 FPS y mejor calidad en el 3D | Batallas a 60 FPS |
 | Mejoras y trucos desde las opciones (SPEED, Repartir Experiencia para el equipo y más) |Resolución de Pixel Exacta |Resolución de Pixel Exacta en batallas |
-| La resolución de la New 3DS XL: las dos pantallas llenas, el 3D dibujado a la resolución de la pantalla | | |
+| La resolución de la New 3DS XL: las dos pantallas llenas, el 3D dibujado a la resolución de la pantalla ||3D estereoscópico|
 | Animaciones actualizadas para la intro, y animaciones nuevas para parte de la interfaz | | |
 
 
