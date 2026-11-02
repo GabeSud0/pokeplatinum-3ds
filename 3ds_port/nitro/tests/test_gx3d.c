@@ -1779,6 +1779,49 @@ static void test_thread_behind(void)
     NitroPort_Gx3dThreadStats(NULL,NULL,&skipped);
     CHECK(skipped-skippedBefore==3);
 }
+/* A battle's start in the field (NitroPort_FieldEffect): a scene the same
+ * as the one before, word for word, has the next left out (the field
+ * stands still: its 3D made again and again on the core that draws the
+ * effect). Moving after all, it's on the screen a scene late. Not outside
+ * one: identical scenes are all drawn. */
+static void test_same_scenes_left_out(void)
+{
+    const NitroGx3dScene *scene;
+    uint32_t same0, skipped0, skipped;
+    reset_geometry();
+    NitroPort_Gx3dScene();
+    NitroPort_Gx3dThreadStats(NULL,NULL,&skipped0);
+    same0=NitroPort_Gx3dSameScenesLeftOut();
+    triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();
+    triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();
+    triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();
+    CHECK(NitroPort_Gx3dSameScenesLeftOut()==same0);
+    NitroPort_SetFieldEffect(1);
+    triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();   /* A (looked at from its end) */
+    triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();   /* B */
+    triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();   /* C, the same as B: D left out */
+    CHECK(NitroPort_Gx3dSameScenesLeftOut()==same0+1u);
+    triangle(0,RGB(0,31,0));swap();                        /* D: moved after all */
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(31,0,0));   /* (C's still) */
+    triangle(0,RGB(31,31,0));swap();                       /* E: drawn (D wasn't C) */
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(31,31,0));
+    CHECK(NitroPort_Gx3dSameScenesLeftOut()==same0+1u);
+    NitroPort_SetFieldEffect(0);
+    triangle(0,RGB(31,31,0));swap();NitroPort_Gx3dScene(); /* F (still looked at), the same as E: G left out */
+    triangle(0,RGB(31,31,0));swap();NitroPort_Gx3dScene(); /* G */
+    triangle(0,RGB(31,31,0));swap();NitroPort_Gx3dScene(); /* H, the same as G: drawn (no effect now) */
+    triangle(0,RGB(0,0,31));swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(0,0,31));
+    NitroPort_Gx3dThreadStats(NULL,NULL,&skipped);
+    CHECK(skipped-skipped0==NitroPort_Gx3dSameScenesLeftOut()-same0);
+    CHECK(NitroPort_Gx3dSameScenesLeftOut()==same0+2u);
+}
 /* Whether a scene from before the game's newest SWAP_BUFFERS may still be
  * read (OS_Halt does the texture transfers queued for the V-blank early
  * only when none may): the thread hasn't got to it, or a consumer is
@@ -1857,6 +1900,7 @@ int main(void)
     pthread_create(&thread, NULL, geometry_thread, NULL);
     run_all();
     test_thread_behind();
+    test_same_scenes_left_out();
     test_earlier_scene_unread();
     test_scene_registers();
     sRunning = 0;

@@ -283,6 +283,10 @@ uint64_t NitroPort_Gx3dProducerWaitMicros(void);
  * done all it was handed), and its longest stretch of work, in ticks (both
  * for the [perf] line; the longest is reset when read). */
 void NitroPort_Gx3dThreadWakeups(uint32_t *wakeups, uint64_t *longest);
+/* Scenes left out as the same as the one before, word for word, while a
+ * battle's start plays in the field (NitroPort_FieldEffect): counted on the
+ * game's thread. */
+uint32_t NitroPort_Gx3dSameScenesLeftOut(void);
 /* Whether a scene the game ended before its newest SWAP_BUFFERS may still
  * be read (the 3DS's GPU thread reads the texture VRAM as it draws one):
  * the geometry thread hasn't finished it, or the consumer is reading it or

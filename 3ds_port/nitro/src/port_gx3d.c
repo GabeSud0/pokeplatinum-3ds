@@ -19,6 +19,7 @@
 #include <nitro_port_gx3d_mailbox.h>
 #include <nitro_port_gx3d_vertex.h>
 #include <nitro_port_shadow.h>
+#include <nitro_port_wide.h>
 #include "port_platform.h"
 #include <limits.h>
 #include <stdlib.h>
@@ -1826,6 +1827,24 @@ static NitroGx3dThreadOps sOps;
 /* Scenes (SWAP_BUFFERS) handed on / finished, and left out. */
 static uint32_t sSwapsQueued, sSwapsDone, sSwapsSkipped;
 static int sSkipScene;
+/* A scene the same as the one before, word for word (the 3D registers
+ * too, not its time), while a battle's start plays in the field
+ * (NitroPort_FieldEffect): the field stands still, its 3D made again and
+ * again on the core that draws the effect's 2D. The next scene is left out
+ * then, as one the thread can't keep up with (the one before stays on the
+ * screen): if it moved after all, it's on the screen a scene later. Not
+ * otherwise: the first step after standing still would be a scene late.
+ * sSceneHash: FNV-1a of the scene's words so far (on the game's thread,
+ * while sHashScenes). */
+static uint32_t sSceneHash=2166136261u, sLastSceneHash;
+static int sHashScenes, sSameScene;
+static uint32_t sSameLeftOut;   /* scenes left out as the same (for the [gx3d] line) */
+static inline void hash_words(const uint32_t *p,uint32_t n)
+{
+    uint32_t h=sSceneHash,i;
+    for(i=0;i<n;i++)h=(h^p[i])*16777619u;
+    sSceneHash=h;
+}
 static uint64_t sWorkerBusy;
 static uint32_t sWorkerWakeups;      /* stretches of work (each after a sleep) */
 static uint64_t sWorkerLongest;      /* the longest of them since last read */
@@ -1880,6 +1899,7 @@ static void enqueue(unsigned op,const uint32_t *p,unsigned n,uint32_t flags)
         pos=0;
     }
     wait_for_room(need);
+    if(sHashScenes && op!=OP_SCENE_REGS){uint32_t h=op|(n<<8);hash_words(&h,1);hash_words(p,n);}
     sRing[pos]=op|(n<<8)|flags;
     {
         uint32_t *out=&sRing[pos+1];
@@ -1903,6 +1923,7 @@ static void enqueue_packets(const uint32_t *words,uint32_t count,uint32_t flags)
         pos=0;
     }
     wait_for_room(need);
+    if(sHashScenes)hash_words(words,count);
     sRing[pos]=OP_PACKETS|flags;
     sRing[pos+1]=count;
     memcpy(&sRing[pos+2],words,count*sizeof(*words));
@@ -1920,6 +1941,7 @@ static void swap_noted(void)
     memcpy(&w[2],NitroPort_IoReg+NITRO_GX3D_REGS_AT,NITRO_GX3D_REGS_SIZE);
     io_bg_ofs((uint16_t *)&w[2+NITRO_GX3D_REGS_SIZE/4]);
     w[2+NITRO_GX3D_REGS_SIZE/4+4]=__atomic_add_fetch(&sSwapsMade,1u,__ATOMIC_RELEASE);
+    if(sHashScenes)hash_words(&w[1],1u+NITRO_GX3D_REGS_SIZE/4u);   /* (not its time, nor the BGs' scroll) */
     enqueue(OP_SCENE_REGS,w,SCENE_REGS_WORDS,0);
 }
 /* After a SWAP_BUFFERS is handed on: hand it over now, and whether the
@@ -1932,6 +1954,15 @@ static void swap_queued(void)
     behind=sSwapsQueued-__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE);
     /* Still working on the scene before this one: leave out the next. */
     sSkipScene=behind>=2u && !sOps.keep_every_scene;
+    /* The same as the one before, in a battle's start: the next too. */
+    sSameScene=sHashScenes && sSceneHash==sLastSceneHash;
+    if(sSameScene && !sSkipScene && !sOps.keep_every_scene){
+        sSkipScene=1;
+        sSameLeftOut++;
+    }
+    sLastSceneHash=sSceneHash;
+    sSceneHash=2166136261u;
+    sHashScenes=NitroPort_FieldEffect();
 }
 /* What the game's thread does with a command (the rest is the thread's):
  * bit 0 matrices, 1 tests, 2 SWAP_BUFFERS. */
@@ -2496,6 +2527,10 @@ void NitroPort_Gx3dThreadWakeups(uint32_t *wakeups,uint64_t *longest)
 {
     if(wakeups)*wakeups=__atomic_load_n(&sWorkerWakeups,__ATOMIC_RELAXED);
     if(longest)*longest=__atomic_exchange_n(&sWorkerLongest,0,__ATOMIC_RELAXED);
+}
+uint32_t NitroPort_Gx3dSameScenesLeftOut(void)
+{
+    return sSameLeftOut;   /* (the game's thread's own) */
 }
 void NitroPort_Gx3dThreadStats(uint64_t *busy,uint32_t *scenes,uint32_t *skipped)
 {

@@ -2539,12 +2539,15 @@ static void PerfFrame(u64 enter)
         NitroPort_Gx3dThreadWakeups(&geoWakeups, &geoLongest);
         if (sGeoThread && geoScenes != lastGeoScenes) {
             double busy = (double)(geoBusy - lastGeoBusy) / SYSCLOCK_ARM11;
-            NitroPort_Log("[perf] geometry (core %d): %.1f scenes/s, %.1f left out/s; %.1f ms/scene, busy %.0f%% of the time; woken %.0f times/scene, longest stretch %.1f ms",
+            static uint32_t lastGeoSame;
+            uint32_t geoSame = NitroPort_Gx3dSameScenesLeftOut();
+            NitroPort_Log("[perf] geometry (core %d): %.1f scenes/s, %.1f left out/s (%.1f as the same); %.1f ms/scene, busy %.0f%% of the time; woken %.0f times/scene, longest stretch %.1f ms",
                           sGeoCore, (geoScenes - lastGeoScenes) / seconds,
-                          (geoSkipped - lastGeoSkipped) / seconds,
+                          (geoSkipped - lastGeoSkipped) / seconds, (geoSame - lastGeoSame) / seconds,
                           busy * 1000.0 / (geoScenes - lastGeoScenes), 100.0 * busy / seconds,
                           (double)(geoWakeups - lastGeoWakeups) / (geoScenes - lastGeoScenes),
                           (double)geoLongest * 1000.0 / SYSCLOCK_ARM11);
+            lastGeoSame = geoSame;
         }
         lastGeoWakeups = geoWakeups;
         lastGeoBusy = geoBusy;

@@ -755,6 +755,20 @@ screen's 320 x 192 at 1.25 times, as above.
   side is swapped while it's drawn (`Port_SwapModelCulling`). Only for the
   matrices in `sPortMirroredEdgeMatrices` (Eterna Forest's, 7): past a
   town's edge, mirrored houses would look wrong.
+- **Maps out of view, and the scenery's seams** (patch 0068): a loaded
+  map wholly out of the view (the box test, as the game's props have it:
+  it passes what the wider view shows and what the sun shadows reach) isn't
+  sent to the 3D; its polygons were all thrown away, but its vertices were
+  worked out first (at the top of the Cycling Road, Eterna City's south
+  part behind the camera: a third of the scene's vertices). And the
+  overworld's scenery maps (the map header "everywhere", the mountains
+  beside a route) sit at their own height in the matrix, nothing joining
+  their edges where one is higher than the map beside it: a slit down the
+  border, the backdrop's white through it, which the DS's narrower view
+  never reaches from the player's ways (the Cycling Road's left: its
+  mountains looked cut). Such a map is drawn again below itself, from the
+  lowest map beside it up, 2 tiles apart (16 polygons each), the copies
+  filling the slit as a wall would (`Port_RenderSceneryMapsLowered`).
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they
@@ -1676,7 +1690,19 @@ reading of the game's display state (and drawing from it), which the game
 waits for before its next frame's display work: behind the geometry (25
 ms at a stretch where the maps change) the game waited for it and stepped
 unevenly, Eterna to Route 205 (2026-10-30). Handing the picture over (the
-upscaling) is below the geometry. Core 1 is the system's; a
+upscaling) is below the geometry. While a battle's start plays in the
+field (`NitroPort_FieldEffect`: the Poké Ball splitting in two and the
+like) the field stands still, but its 3D was made again every scene, on
+the core that draws the effect's 2D: on the Cycling Road the geometry
+took 21-29 ms a scene and engine A's drawer got 8-15 pictures a second
+(50-87 ms each), the effect at a third of its speed (2026-11-01). Then a
+scene the same as the one before, word for word (the 3D registers too,
+not its time; hashed on the game's thread as the commands go into the
+ring), has the next left out, as one the thread can't keep up with: the
+one before stays on the screen. If it moved after all, it's there a scene
+later. Not outside such an effect: the first step after standing still
+would be a scene late. The `[perf] geometry` line counts them (`left out/s
+(n as the same)`). Core 1 is the system's; a
 program gets 30% of it, and there the
 geometry took 18-30 ms a scene and left scenes out (the intro's flyover
 jumped), and engine B's screen drew 14-25 frames a second
