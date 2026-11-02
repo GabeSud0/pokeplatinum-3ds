@@ -1392,10 +1392,32 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
     return 1;
 }
 /* At a SWAP_BUFFERS, before its scene (the building slot) is published:
- * its in-between scene. */
+ * its in-between scene. With the thread behind, ending the scene a V-blank
+ * or more after the game did, none: the game ends the next one at the
+ * second V-blank, and leaves out the one after that when the thread is
+ * still on this one then (a jump); without the in-between scene (a third
+ * of the time on the Cycling Road) it catches up, and the frame between
+ * shows the scene twice. Not when every scene is kept (comparing). */
+static NitroGx3dThreadOps sOps;   /* (NitroPort_Gx3dStartThread) */
+static uint32_t sMidsLeftOut;
+static uint64_t sMidTicks;
 static void interp_mid(NitroGx3dScene *now)
 {
+    uint64_t t0;
+    if(sInterp && sThreaded && !sOps.keep_every_scene &&
+       (int32_t)(NitroPort_Gx3dStamp()-now->stamp)>=1){
+        sMidOk[sBuilding]=0;
+        __atomic_store_n(&sMidsLeftOut,sMidsLeftOut+1u,__ATOMIC_RELAXED);
+        return;
+    }
+    t0=sOps.ticks?sOps.ticks(sOps.context):0;
     sMidOk[sBuilding]=sInterp && make_mid_scene(now,sMids[sBuilding]);
+    if(sOps.ticks && sInterp)__atomic_store_n(&sMidTicks,sMidTicks+(sOps.ticks(sOps.context)-t0),__ATOMIC_RELAXED);
+}
+void NitroPort_Gx3dMidWork(uint64_t *ticks,uint32_t *leftOut)
+{
+    if(ticks)*ticks=__atomic_load_n(&sMidTicks,__ATOMIC_RELAXED);
+    if(leftOut)*leftOut=__atomic_load_n(&sMidsLeftOut,__ATOMIC_RELAXED);
 }
 /* At a SWAP_BUFFERS, after its scene is published: this scene's records
  * become the scene before's. */
@@ -2023,8 +2045,6 @@ static size_t scan_packets(const uint32_t *words,size_t count,int *swapped)
                     if(op>=0x11u && op<=0x14u)refresh_status(&sShadow);
                 }else if(what&2u){
                     test_command(&sShadow,op,p);
-                }else if(what&16u){
-                    sShadow.texparam=p[0];   /* (NitroPort_Gx3dSendList: its texture coordinates' mode) */
                 }else if(what&8u){
                     set_viewport(&sShadow,p[0]);
                 }else if(what&4u){
@@ -2051,8 +2071,6 @@ static void produce(unsigned op,const uint32_t *p)
     if(op>=0x10u && op<=0x1cu){
         matrix_command(&sShadow,op,p);
         if(op>=0x11u && op<=0x14u)refresh_status(&sShadow);
-    }else if(op==0x2au){
-        sShadow.texparam=p[0];
     }else if(!n && op!=0x41u){
         return; /* NOP, or not a command */
     }
@@ -2549,7 +2567,6 @@ void NitroPort_Gx3dStartThread(const NitroGx3dThreadOps *ops)
         for(op=0x10u;op<=0x1cu;op++)sShadowOps[op]=1u;
         for(op=0x70u;op<=0x72u;op++)sShadowOps[op]=2u;
         sShadowOps[0x60]=8u;   /* the viewport: its width (a wide view) */
-        sShadowOps[0x2a]=16u;  /* TEXIMAGE_PARAM (NitroPort_Gx3dSendList) */
         sShadowOps[0x50]=4u;
     }
     sShadow=s;
@@ -2753,30 +2770,20 @@ void NitroPort_GxFifoWords(const uint32_t *words,size_t count)
         }
     }
 }
-/* ---------------------------- shapes' polygons out of the view, game side
+/* ------------------------------------------- a display list cut to a slab
  *
- * A map's model has a shape for each of its materials, each spanning the
- * whole map: one display list (NNS_G3dGeSendDL, patches/NitroSystem/0006)
- * with a few long lists of triangles or quads. The geometry thread passes
- * over a list of vertices all outside one plane of the view, but these are
- * never all outside: it worked out every vertex of a map, though on the
- * Cycling Road a fifth to a tenth of its polygons are on the screen (and
- * next to none of the river mirrored past the matrix's edge). Here each
- * such display list is looked through once (by its words' hash: a map
- * loaded at the same place is another list), its lists of triangles and
- * quads cut into groups of DL_GROUP polygons (a strip is one group), each
- * with its bounding box. Sending it, a group all outside one plane of the
- * view as it is then (the shadow's matrices: the game's box tests'), or
- * with the sun shadows on, outside the near or far plane or past their
- * reach beside the view (SHADOW_GUARD), is left out: every one of its
- * polygons would have been thrown away. What it leaves behind goes
- * instead: its last TEXCOORD, NORMAL and COLOR, in their order, before the
- * next command sent; the next vertex sent, if it's one relative to the
- * one before, as its own coordinates (VTX_16); and before the list's
- * BEGIN_VTXS or END_VTXS, its last coordinates as a vertex alone (no
- * polygon: the list's polygons are whole). The scene is the same, bit for
- * bit; the thread has a fraction of the commands. With the thread only. */
-#define DL_GROUP 8u
+ * NitroPort_Gx3dTrimList: a model's shape's display list with only the
+ * polygons that reach into a slab of its coordinates (lo <= x, y or z <=
+ * hi), made once (Route 206's river, mirrored past the scenery: a strip of
+ * the map by the border, not the whole map, each scene). Its lists of
+ * triangles and quads are looked through polygon by polygon (a strip
+ * whole): one with no vertex in the slab is left out, and what it leaves
+ * behind goes instead: its last TEXCOORD, NORMAL and COLOR, in their order,
+ * before the next command kept; the next vertex kept, if it's one relative
+ * to the one before, as its own coordinates (VTX_16); and before the
+ * list's BEGIN_VTXS or END_VTXS, its last coordinates as a vertex alone
+ * (no polygon: the list's polygons are whole). The polygons kept are drawn
+ * the same, bit for bit. */
 typedef struct DlGroup {
     uint32_t begin, end;          /* its commands: ops[begin..end) */
     int32_t lo[3], hi[3];
@@ -2784,31 +2791,15 @@ typedef struct DlGroup {
     uint8_t haveTexcoord, haveNormal, haveColor, normalLast;
 } DlGroup;
 typedef struct DlInfo {
-    uint64_t hash;
-    uint32_t words, nops, ngroups;
-    uint8_t plain;                /* no matrix, viewport or TEXIMAGE_PARAM among its commands */
+    uint32_t nops, ngroups;
     uint32_t *ops;                /* op | (its parameters' word index << 8) */
     int32_t (*xyz)[3];            /* the coordinates after each command */
     DlGroup *groups;
 } DlInfo;
-#define DL_CACHE 1024u            /* (a power of 2: open addressing) */
-#define DL_OUT_WORDS 0x8000u
-static DlInfo *sDl[DL_CACHE];
-static unsigned sDlCount;
-static uint32_t sDlOut[DL_OUT_WORDS];
-static uint32_t sDlLeftOut;       /* vertices left out here (for the [perf] line) */
-static uint64_t sDlTicks;         /* and the time it takes (NitroGx3dThreadOps.ticks) */
-static int sDlOff = -1;           /* (NITRO_PORT_NO_LIST_CULL in the environment: off; tests and comparing) */
 
 static void dl_free(DlInfo *info)
 {
     if(info){free(info->ops);free(info->xyz);free(info->groups);free(info);}
-}
-static void dl_free_all(void)
-{
-    unsigned i;
-    for(i=0;i<DL_CACHE;i++){dl_free(sDl[i]);sDl[i]=NULL;}
-    sDlCount=0;
 }
 static int dl_s16(const int32_t xyz[3])
 {
@@ -2825,16 +2816,15 @@ static int dl_add_group(DlInfo *info,uint32_t *cap,const DlGroup *g)
     info->groups[info->ngroups++]=*g;
     return 1;
 }
-/* A list's commands and its groups of polygons; NULL if it isn't whole
- * packets, or there's no room. */
-static DlInfo *dl_survey(const uint32_t *w,uint32_t n,uint64_t hash)
+/* A list's commands and its groups of polygons (perGroup polygons each);
+ * NULL if it isn't whole packets, or there's no room. */
+static DlInfo *dl_survey(const uint32_t *w,uint32_t n,uint32_t perGroup)
 {
     DlInfo *info=calloc(1,sizeof(*info));
     uint32_t i=0,cap=n+4u,k,o,groupCap=16;
     int32_t xyz[3]={0,0,0};
     int known=0;
     if(!info)return NULL;
-    info->hash=hash;info->words=n;info->plain=1;
     info->ops=malloc(cap*sizeof(*info->ops));
     info->groups=malloc(groupCap*sizeof(*info->groups));
     if(!info->ops || !info->groups){dl_free(info);return NULL;}
@@ -2844,7 +2834,6 @@ static DlInfo *dl_survey(const uint32_t *w,uint32_t n,uint64_t hash)
             unsigned op=(word>>(k*8))&255u;
             if(!op)continue;
             if(params+sParamCount[op]>n || info->nops>=cap){dl_free(info);return NULL;}
-            if((sShadowOps[op]&9u) || op==0x2Au)info->plain=0;
             info->ops[info->nops++]=op|(params<<8);
             params+=sParamCount[op];
         }
@@ -2880,7 +2869,7 @@ static DlInfo *dl_survey(const uint32_t *w,uint32_t n,uint64_t hash)
         }
         if(ok && count && e<info->nops && ((info->ops[e]&255u)==0x40u || (info->ops[e]&255u)==0x41u)){
             DlGroup g;
-            uint32_t q,inGroup=0,limit=per?per*DL_GROUP:0xFFFFFFFFu;
+            uint32_t q,inGroup=0,limit=per?per*perGroup:0xFFFFFFFFu;
             memset(&g,0,sizeof(g));
             g.begin=o+1;
             for(q=o+1;q<e;q++){
@@ -2910,103 +2899,33 @@ static DlInfo *dl_survey(const uint32_t *w,uint32_t n,uint64_t hash)
                 g.end=e;
                 if(!dl_add_group(info,&groupCap,&g)){dl_free(info);return NULL;}
             }
-            /* (commands after the last vertex: sent, before the list's end) */
         }
         o=e-1;
     }
     return info;
 }
-static DlInfo *dl_info(const uint32_t *w,uint32_t n)
-{
-    /* (FNV-1a and a rotating checksum: 64 bits, one 32-bit multiply a word) */
-    uint32_t h1=2166136261u^n,h2=n,i,slot;
-    uint64_t h;
-    for(i=0;i<n;i++){
-        h1=(h1^w[i])*16777619u;
-        h2=((h2<<5)|(h2>>27))^w[i];
-    }
-    h=((uint64_t)h2<<32)|h1;
-    for(slot=h1&(DL_CACHE-1u);sDl[slot];slot=(slot+1u)&(DL_CACHE-1u)){
-        if(sDl[slot]->hash==h && sDl[slot]->words==n)return sDl[slot];
-    }
-    if(sDlCount>=DL_CACHE*3u/4u){
-        dl_free_all();
-        slot=h1&(DL_CACHE-1u);
-    }
-    sDl[slot]=dl_survey(w,n,h);
-    if(sDl[slot])sDlCount++;
-    return sDl[slot];
-}
-/* (as skip_hidden_vertices) the box all outside one plane of the view, not
- * partly behind the camera; with the sun shadows, past their reach beside
- * it (as test_command's guard, with a margin for the rounding) or outside
- * the near or far plane */
-static int dl_group_hidden(const DlGroup *g,int shadows)
-{
-    int64_t base[4],edge[3][4];
-    unsigned outside=0x3fu,behind=0,front=0;
-    int j,k;
-    const int64_t margin=(int64_t)4096*8;
-    ensure_clip(&sShadow);
-    for(j=0;j<4;j++){
-        base[j]=(int64_t)g->lo[0]*sShadow.xf.a[j]+(int64_t)g->lo[1]*sShadow.xf.a[4+j]+
-                (int64_t)g->lo[2]*sShadow.xf.a[8+j]+sShadow.xfTrans[j];
-        for(k=0;k<3;k++)edge[k][j]=((int64_t)g->hi[k]-g->lo[k])*sShadow.xf.a[k*4+j];
-    }
-    for(k=0;k<8;k++){
-        int64_t c[4];
-        for(j=0;j<4;j++){
-            c[j]=base[j]+((k&1)?edge[0][j]:0)+((k&2)?edge[1][j]:0)+((k&4)?edge[2][j]:0);
-            if(c[j]>=((int64_t)1<<42)||c[j]<=-((int64_t)1<<42))return 0;
-        }
-        if(shadows){
-            if(!(c[0]+SHADOW_GUARD*c[3]<-margin))outside&=~1u;
-            if(!(c[0]-SHADOW_GUARD*c[3]>=margin))outside&=~2u;
-            if(!(c[1]+SHADOW_GUARD*c[3]<-margin))outside&=~4u;
-            if(!(c[1]-SHADOW_GUARD*c[3]>=margin))outside&=~8u;
-        }else{
-            if(!(c[0]+c[3]<0))outside&=~1u;
-            if(!(c[0]-c[3]>=4096))outside&=~2u;
-            if(!(c[1]+c[3]<0))outside&=~4u;
-            if(!(c[1]-c[3]>=4096))outside&=~8u;
-        }
-        if(!(c[2]+c[3]<0))outside&=~16u;
-        if(!(c[2]-c[3]>=4096))outside&=~32u;
-        if(c[3]<4096)behind++;else front++;
-        if(!outside)return 0;
-    }
-    return !(behind&&front);
-}
-/* Commands into sDlOut, packed as the DS has them (up to four to a word). */
+/* Commands into a buffer, packed as the DS has them (up to four to a word). */
 typedef struct DlWriter {
-    uint32_t n, header;   /* words written; the packed word being filled (index) */
-    unsigned slots;       /* commands in it */
+    uint32_t *out;
+    uint32_t cap, n, header;   /* room, words written, the packed word being filled (index) */
+    unsigned slots;            /* commands in it */
+    int full;
 } DlWriter;
-static int dl_put(DlWriter *wr,unsigned op,const uint32_t *p)
+static void dl_put(DlWriter *wr,unsigned op,const uint32_t *p)
 {
     unsigned k,np=sParamCount[op];
     if(wr->slots==0 || wr->slots==4){
-        if(wr->n+1u+np>DL_OUT_WORDS)return 0;
+        if(wr->n+1u+np>wr->cap){wr->full=1;return;}
         wr->header=wr->n++;
-        sDlOut[wr->header]=0;
+        wr->out[wr->header]=0;
         wr->slots=0;
-    }else if(wr->n+np>DL_OUT_WORDS){
-        return 0;
+    }else if(wr->n+np>wr->cap){
+        wr->full=1;
+        return;
     }
-    sDlOut[wr->header]|=(uint32_t)op<<(wr->slots*8);
+    wr->out[wr->header]|=(uint32_t)op<<(wr->slots*8);
     wr->slots++;
-    for(k=0;k<np;k++)sDlOut[wr->n++]=p[k];
-    return 1;
-}
-static void dl_flush(DlWriter *wr)
-{
-    if(wr->n)NitroPort_GxFifoWords(sDlOut,wr->n);
-    wr->n=0;wr->slots=0;
-}
-/* (out of room: what's there is sent first) */
-static void dl_emit(DlWriter *wr,unsigned op,const uint32_t *p)
-{
-    if(!dl_put(wr,op,p)){dl_flush(wr);dl_put(wr,op,p);}
+    for(k=0;k<np;k++)wr->out[wr->n++]=p[k];
 }
 /* What left-out groups leave behind, still to send. */
 typedef struct DlOwed {
@@ -3027,14 +2946,14 @@ static void dl_owe(DlOwed *ow,const DlGroup *g,const int32_t last[3])
 }
 static void dl_pay_state(DlWriter *wr,DlOwed *ow)
 {
-    if(ow->texcoordOwed)dl_emit(wr,0x22u,&ow->texcoord);
+    if(ow->texcoordOwed)dl_put(wr,0x22u,&ow->texcoord);
     if(ow->normalOwed && ow->colorOwed){
-        if(ow->normalLast){dl_emit(wr,0x20u,&ow->color);dl_emit(wr,0x21u,&ow->normal);}
-        else{dl_emit(wr,0x21u,&ow->normal);dl_emit(wr,0x20u,&ow->color);}
+        if(ow->normalLast){dl_put(wr,0x20u,&ow->color);dl_put(wr,0x21u,&ow->normal);}
+        else{dl_put(wr,0x21u,&ow->normal);dl_put(wr,0x20u,&ow->color);}
     }else if(ow->normalOwed){
-        dl_emit(wr,0x21u,&ow->normal);
+        dl_put(wr,0x21u,&ow->normal);
     }else if(ow->colorOwed){
-        dl_emit(wr,0x20u,&ow->color);
+        dl_put(wr,0x20u,&ow->color);
     }
     ow->texcoordOwed=ow->normalOwed=ow->colorOwed=0;
 }
@@ -3043,47 +2962,30 @@ static void dl_vtx16(DlWriter *wr,const int32_t xyz[3])
     uint32_t v[2];
     v[0]=((uint32_t)xyz[0]&0xFFFFu)|((uint32_t)xyz[1]<<16);
     v[1]=(uint32_t)xyz[2]&0xFFFFu;
-    dl_emit(wr,0x23u,v);
+    dl_put(wr,0x23u,v);
 }
-int NitroPort_Gx3dSendList(const void *src,uint32_t bytes)
+uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
+                                int axis,int32_t lo,int32_t hi)
 {
     const uint32_t *w=src;
-    uint32_t n=bytes/4u,o,g=0,left=0;
+    uint32_t n=bytes/4u,o,g=0;
     DlInfo *info;
-    DlWriter wr={0,0,0};
+    DlWriter wr;
     DlOwed ow;
-    int pending=0,shadows;
-    unsigned mode=(sShadow.texparam>>30)&3u;
-    uint64_t t0;
-    if(sDlOff<0){
-        const char *e=getenv("NITRO_PORT_NO_LIST_CULL");
-        sDlOff=e!=NULL && *e && *e!='0';
-    }
-    if(sDlOff || !sThreaded || sRecorder || (bytes&3u) || n<4u || sDec.need>0)return 0;
-    t0=sOps.ticks?sOps.ticks(sOps.context):0;
-    shadows=NitroPort_SunShadows();
-    info=dl_info(w,n);
-    if(info && info->ngroups && info->plain && mode<2u){
-        /* (the view the same all through it: none out of it, sent as it is) */
-        for(o=0;o<info->ngroups && !dl_group_hidden(&info->groups[o],shadows);o++){}
-        if(o==info->ngroups)info=NULL;
-    }
-    if(!info || !info->ngroups){
-        if(sOps.ticks)sDlTicks+=sOps.ticks(sOps.context)-t0;
-        return 0;
-    }
+    if((bytes&3u) || axis<0 || axis>2 || !dst)return 0;
+    info=dl_survey(w,n,1u);
+    if(!info)return 0;
+    memset(&wr,0,sizeof(wr));
+    wr.out=dst;wr.cap=dstBytes/4u;
     memset(&ow,0,sizeof(ow));
-    for(o=0;o<info->nops;){
+    for(o=0;o<info->nops && !wr.full;){
         unsigned op=info->ops[o]&255u;
         const uint32_t *p=&w[info->ops[o]>>8];
         while(g<info->ngroups && info->groups[g].begin<o)g++;
-        if(g<info->ngroups && info->groups[g].begin==o && mode<2u){
+        if(g<info->ngroups && info->groups[g].begin==o){
             const DlGroup *grp=&info->groups[g];
-            /* (the shadow as the commands before it leave it) */
-            if(pending){dl_flush(&wr);pending=0;}
-            if(dl_group_hidden(grp,shadows)){
+            if(grp->hi[axis]<lo || grp->lo[axis]>hi){
                 dl_owe(&ow,grp,info->xyz[grp->end-1u]);
-                left+=grp->vertices;
                 o=grp->end;
                 g++;
                 continue;
@@ -3103,23 +3005,13 @@ int NitroPort_Gx3dSendList(const void *src,uint32_t bytes)
                 }
             }
         }
-        dl_emit(&wr,op,p);
-        if(sShadowOps[op]&9u)pending=1;            /* (matrices, the viewport) */
-        if(op==0x2Au)mode=(p[0]>>30)&3u;           /* (TEXIMAGE_PARAM: the thread's texcoord mode) */
+        dl_put(&wr,op,p);
         o++;
     }
     dl_pay_state(&wr,&ow);
     if(ow.coordOwed)dl_vtx16(&wr,ow.xyz);          /* (not reached: groups end before a BEGIN or END) */
-    dl_flush(&wr);
-    if(left)__atomic_add_fetch(&sSkippedVertices,left,__ATOMIC_RELAXED);
-    __atomic_add_fetch(&sDlLeftOut,left,__ATOMIC_RELAXED);
-    if(sOps.ticks)sDlTicks+=sOps.ticks(sOps.context)-t0;
-    return 1;
-}
-void NitroPort_Gx3dListsLeftOut(uint64_t *ticks,uint32_t *vertices)
-{
-    if(ticks)*ticks=sDlTicks;                       /* (the game's thread's own) */
-    if(vertices)*vertices=__atomic_load_n(&sDlLeftOut,__ATOMIC_RELAXED);
+    dl_free(info);
+    return wr.full?0:wr.n*4u;
 }
 void NitroPort_GxFifoWord(uint32_t word)
 {

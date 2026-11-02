@@ -1898,10 +1898,11 @@ static void test_same_scenes_left_out(void)
     CHECK(skipped-skipped0==NitroPort_Gx3dSameScenesLeftOut()-same0);
     CHECK(NitroPort_Gx3dSameScenesLeftOut()==same0+2u);
 }
-/* A shape's display list sent whole (NitroPort_Gx3dSendList, from
- * NNS_G3dGeSendDL): its groups of polygons out of the view are left out on
- * the game's side, and the scene is the one the list itself makes, the sun
- * shadows' triangles too. */
+/* A shape's display list cut to a slab of its coordinates
+ * (NitroPort_Gx3dTrimList: Route 206's river mirrored past the scenery,
+ * the strip of the map that can be seen): cut to the view's width, the
+ * scene is the one the whole list makes. And with the sun shadows on, the
+ * geometry thread doesn't pass over lists out of the view that they keep. */
 static unsigned dl_pack(uint32_t *out,const uint32_t *cmds,unsigned nwords)
 {
     static const unsigned params[256]={
@@ -1922,7 +1923,7 @@ typedef struct ListScene {
     unsigned count, shadows;
     NitroGx3dTriangle tris[LIST_MAX], shadow[LIST_MAX];
 } ListScene;
-static void list_scene(const uint32_t *w,unsigned n,int whole,ListScene *out)
+static void list_scene(const uint32_t *w,unsigned n,ListScene *out)
 {
     const NitroGx3dScene *scene;
     reset_geometry();
@@ -1932,11 +1933,7 @@ static void list_scene(const uint32_t *w,unsigned n,int whole,ListScene *out)
     NitroPort_GxDirectWrite(0x30,RGB(31,0,0));              /* diffuse red */
     NitroPort_GxDirectWrite(0x33,RGB(31,31,31));
     NitroPort_GxDirectWrite(0x32,511u<<20);
-    if(whole){
-        CHECK(NitroPort_Gx3dSendList(w,n*4u)==1);
-    }else{
-        NitroPort_GxFifoWords(w,n);
-    }
+    NitroPort_GxFifoWords(w,n);
     swap();
     scene=NitroPort_Gx3dScene();
     out->count=scene->count<LIST_MAX?scene->count:LIST_MAX;
@@ -1966,10 +1963,10 @@ static unsigned list_quad(uint32_t *c,int x,int z)
     c[n++]=0x28;c[n++]=(uint32_t)(1u<<20);                  /* (VTX_DIFF: z + 1) */
     return n;
 }
-static void test_list_culled(void)
+static void test_list_trimmed(void)
 {
     const uint32_t lit=0x200u<<20;
-    uint32_t cmds[600], w[600];
+    uint32_t cmds[600], w[600]={0};
     unsigned c=0,i,n,shadows;
     ListScene *raw=malloc(sizeof(*raw)), *culled=malloc(sizeof(*culled));
     if(!raw||!culled){CHECK(0);free(raw);free(culled);return;}
@@ -2001,12 +1998,6 @@ static void test_list_culled(void)
     cmds[c++]=0x25;cmds[c++]=word2(0,0);
     cmds[c++]=0x25;cmds[c++]=word2(2000,0);
     cmds[c++]=0x25;cmds[c++]=word2(1000,2000);
-    /* D: moved into the view by a translation in the list. */
-    cmds[c++]=0x11;cmds[c++]=0x1C;cmds[c++]=(uint32_t)-8000;cmds[c++]=0;cmds[c++]=0;
-    cmds[c++]=0x40;cmds[c++]=1;
-    cmds[c++]=0x20;cmds[c++]=RGB(31,31,0);
-    c+=list_quad(&cmds[c],6000,55);
-    cmds[c++]=0x12;cmds[c++]=1;
     /* E: a strip out of the view, END, a triangle in it with its Z. */
     cmds[c++]=0x40;cmds[c++]=2;
     cmds[c++]=0x23;cmds[c++]=word2(6000,-2000);cmds[c++]=66;
@@ -2024,32 +2015,76 @@ static void test_list_culled(void)
     cmds[c++]=0x41;
     CHECK(c<=sizeof(cmds)/sizeof(cmds[0]));
     n=dl_pack(w,cmds,c);
-    for(shadows=0;shadows<2;shadows++){
-        uint32_t left0,left;
-        NitroPort_SetSunShadows((int)shadows);
-        list_scene(w,n,0,raw);
-        NitroPort_Gx3dListsLeftOut(NULL,&left0);
-        list_scene(w,n,1,culled);
-        NitroPort_Gx3dListsLeftOut(NULL,&left);
-        /* off: A's 8 quads, C's 8 triangles, E's strip, F; on: F alone */
-        CHECK(left-left0==(shadows?4u:32u+24u+3u+4u));
-        CHECK(raw->count==5);
+    {
+        uint32_t cut[600];
+        uint32_t bytes=NitroPort_Gx3dTrimList(w,n*4u,cut,sizeof(cut),0,-4096,4096);
+        CHECK(bytes>0 && bytes<n*4u);              /* (smaller: A's 8 quads, C's 8, E's strip, F gone) */
+        list_scene(w,n,raw);
+        list_scene(cut,bytes/4u,culled);
+        CHECK(raw->count==4);
         CHECK(culled->count==raw->count);
-        CHECK(culled->shadows==raw->shadows);
-        if(culled->count==raw->count && raw->count<=LIST_MAX)CHECK(same_triangles(raw->tris,culled->tris,raw->count));
-        if(culled->shadows==raw->shadows && raw->shadows<=LIST_MAX)CHECK(same_triangles(raw->shadow,culled->shadow,raw->shadows));
-        /* (with the shadows: A's 8 quads, C's 8 triangles, E's, all in
-         * their reach beside the view, kept for them; on the thread too,
-         * which passes over lists out of the view) */
-        if(shadows)CHECK(raw->shadows>=25u);
+        if(culled->count==raw->count)CHECK(same_triangles(raw->tris,culled->tris,raw->count));
+        /* (no room: 0, the whole list drawn) */
+        CHECK(NitroPort_Gx3dTrimList(w,n*4u,cut,16u,0,-4096,4096)==0);
+        /* the other way: what's left out is what's in the view */
+        bytes=NitroPort_Gx3dTrimList(w,n*4u,cut,sizeof(cut),0,5000,30000);
+        CHECK(bytes>0);
+        list_scene(cut,bytes/4u,culled);
+        CHECK(culled->count==0);
     }
+    /* With the shadows: A's 8 quads, C's 8 triangles, E's, all in their
+     * reach beside the view, kept for them; on the thread too, which
+     * passes over lists out of the view. */
+    NitroPort_SetSunShadows(1);
+    list_scene(w,n,raw);
+    CHECK(raw->shadows>=25u);
     NitroPort_SetSunShadows(0);
     /* (what the in-view polygons carry from those left out) */
-    if(raw->count==5){
+    if(raw->count==4){
         CHECK(raw->tris[0].v[0].clip[2]==108);              /* A's last Z */
         CHECK(raw->tris[0].v[0].color!=RGB(0,31,0));        /* (lit) */
     }
     free(raw);free(culled);
+}
+/* The clock scenes are stamped with (the platform's: the 3DS counts
+ * V-blanks; 0 here unless a test sets it). */
+static uint32_t sTestStamp;
+uint32_t NitroPort_Gx3dStamp(void){return sTestStamp;}
+/* The thread behind, ending a scene a V-blank or more after the game did:
+ * no in-between scene for it (counted), rather than the scene after the
+ * next left out. Caught up: one. */
+static void test_mid_left_out_behind(void)
+{
+    const NitroGx3dScene *scene;
+    uint32_t left0,left;
+    const uint32_t opaque=(3u<<6)|(31u<<16);
+    reset_geometry();
+    NitroPort_Gx3dSetInterpolation(1);
+    sTestStamp=10;
+    swap_done();
+    quad_at(-3000,opaque);
+    swap_done();
+    quad_at(-2800,opaque);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(NitroPort_Gx3dMidOf(scene)!=NULL);          /* (caught up) */
+    NitroPort_Gx3dMidWork(NULL,&left0);
+    sHold=1;                                          /* the thread stops... */
+    quad_at(-2600,opaque);
+    swap();                                           /* (ended at V-blank 10) */
+    sTestStamp=11;                                    /* ...and gets to it a V-blank later */
+    sHold=0;sem_post(&sGate);
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==2);
+    CHECK(NitroPort_Gx3dMidOf(scene)==NULL);
+    NitroPort_Gx3dMidWork(NULL,&left);
+    CHECK(left==left0+1u);
+    quad_at(-2400,opaque);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(NitroPort_Gx3dMidOf(scene)!=NULL);          /* (caught up again) */
+    sTestStamp=0;
+    NitroPort_Gx3dSetInterpolation(0);
 }
 /* Whether a scene from before the game's newest SWAP_BUFFERS may still be
  * read (OS_Halt does the texture transfers queued for the V-blank early
@@ -2130,7 +2165,8 @@ int main(void)
     run_all();
     test_thread_behind();
     test_same_scenes_left_out();
-    test_list_culled();
+    test_list_trimmed();
+    test_mid_left_out_behind();
     test_earlier_scene_unread();
     test_scene_registers();
     sRunning = 0;

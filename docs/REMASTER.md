@@ -786,8 +786,17 @@ screen's 320 x 192 at 1.25 times, as above.
   border. With the player in the half of the route's map by that border,
   the map is drawn again past it, mirrored about it, and the scenery map
   isn't (`Port_RenderMirroredBesideScenery`, `sPortMirroredBesideScenery`:
-  Route 206 only): the river and ledges go on, level. Most of the copy
-  is out of the view and left out before the geometry (above).
+  Route 206 only): the river and ledges go on, level. Not the whole map:
+  a copy of its model with its shapes' display lists cut to the strip by
+  the border (`NitroPort_Gx3dTrimList`, the polygons kept drawn the same),
+  made once for 4, 8, 12, 16 and 24 tiles; each scene the box test of the
+  strips past the border picks the narrowest with all the camera sees
+  (the whole map again was a fifth more work for the 3D, nearly all of it
+  off the screen; this is 3%). In the copy the river's texture, one to a
+  tile, ran the other way, its waves facing back at the border: water
+  materials (named `sea_...`) have their S coordinates turned round again
+  through the texture matrix (`Port_MirroredWaterShape`, a shape
+  callback).
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they
@@ -1731,30 +1740,26 @@ Where the geometry's time goes was measured on recordings of the Cycling
 Road ridden end to end, replayed as the 3DS has it (`gx3d_replay --view
 400 240 --interp --shadows`: the pixel field's view, the in-between
 scenes, the sun shadows; callgrind, 2026-11-01): placing vertices on the
-screen, decoding the commands, the in-between scenes, transforming and
-lighting, about evenly. A map's model has a shape per material, each
-spanning the whole map, so its lists of vertices are never all out of the
-view, and every vertex was worked out: on the road a fifth to a tenth of
-the polygons are on the screen. Now a shape's display list (sent whole,
-`NNS_G3dGeSendDL`, NitroSystem patch 0006) is looked through once on the
-game's side (`NitroPort_Gx3dSendList`, cached by its words' hash), its
-triangles and quads in groups of 8 polygons with their bounding boxes;
-each scene a group wholly outside the view (with the sun shadows, past
-their reach beside it) is left out before the ring, what it leaves behind
-sent instead (its last texture coordinates, normal and colour; the next
-vertex's own coordinates). The scenes are the same, bit for bit
-(`test_list_culled`; the replays' hashes, in-between scenes and shadow
-triangles included). On the road: 9% less geometry work, and Route 206's
-river mirrored (below) costs 3% where it cost 19%. On the PC it takes the
-game 0.06-0.18 ms a frame. Also: lighting keeps 64 normals' colours,
-forgotten together when the vector matrix, the lights, the material or
-the polygon's lights change (it was the last normal's, forgotten at every
-matrix command: 12% less lighting work); the sun shadows' triangles take
-their vertices' screen positions with the drawn ones' (`screen_of`) rather
-than working them out again. With the sun shadows on, the thread passed
+screen, decoding the commands, the in-between scenes (a third), and
+transforming and lighting. On the 3DS (log fcde80ee, 2026-11-02) ending
+scenes was 10-16 ms of the road's 25-29 ms a scene. Leaving out each
+shape's polygons out of the view on the game's side, every scene (cutting
+its display lists in groups by their bounding boxes), cost the PC 0.1 ms
+a frame and the 3DS 4 ms: the game's 2-3 ms a frame became 6-7, and the
+display, on its core, dropped to 48-56 frames a second; not done. Now:
+with the thread behind, ending a scene a V-blank or more after the game
+did, it makes no in-between scene for it (`interp_mid`; the frame between
+shows the scene twice) rather than have the scene after the next left
+out (a jump); the `[perf] geometry's work` line has the in-between
+scenes' share of ending scenes, and how many it left out. Lighting keeps
+64 normals' colours, forgotten together when the vector matrix, the
+lights, the material or the polygon's lights change (it was the last
+normal's, forgotten at every matrix command: 12% less lighting work); the
+sun shadows' triangles take their vertices' screen positions with the
+drawn ones' (`screen_of`). With the sun shadows on, the thread passed
 over lists out of the view that they keep (beside it, within their
 reach: a building just off the screen lost its shadow on the 3DS, not on
-one core) and in-between scenes matched polygons out of the view only
+one core), and in-between scenes matched polygons out of the view only
 then: now both as on one core, and the same with the shadows on or off. Core 1 is the system's; a
 program gets 30% of it, and there the
 geometry took 18-30 ms a scene and left scenes out (the intro's flyover

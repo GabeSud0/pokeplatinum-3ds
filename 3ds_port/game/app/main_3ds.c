@@ -2556,26 +2556,21 @@ static void PerfFrame(u64 enter)
                 uint64_t swapTicks;
                 uint32_t vertices, polygons, skippedVertices, n = geoScenes - lastGeoScenes;
                 NitroPort_Gx3dThreadWork(&swapTicks, &vertices, &polygons, &skippedVertices);
-                NitroPort_Log("[perf] geometry's work: %.1f ms/scene ending scenes; %u vertices a scene sent, %u of them out of the view (not worked out), %u polygons",
+                static uint64_t lastMidTicks;
+                static uint32_t lastMidsLeftOut;
+                uint64_t midTicks;
+                uint32_t midsLeftOut;
+                NitroPort_Gx3dMidWork(&midTicks, &midsLeftOut);
+                NitroPort_Log("[perf] geometry's work: %.1f ms/scene ending scenes (%.1f of it the in-between scene; %.1f in-between scenes left out/s, behind); %u vertices a scene sent, %u of them out of the view (not worked out), %u polygons",
                               (double)(swapTicks - lastSwapTicks) * 1000.0 / SYSCLOCK_ARM11 / n,
+                              (double)(midTicks - lastMidTicks) * 1000.0 / SYSCLOCK_ARM11 / n, (midsLeftOut - lastMidsLeftOut) / seconds,
                               (vertices - lastVertices) / n, (skippedVertices - lastSkipped) / n, (polygons - lastPolygons) / n);
+                lastMidTicks = midTicks;
+                lastMidsLeftOut = midsLeftOut;
                 lastSwapTicks = swapTicks;
                 lastVertices = vertices;
                 lastPolygons = polygons;
                 lastSkipped = skippedVertices;
-                {
-                    // (the shapes' lists of vertices out of the view, left
-                    // out on the game's side: what it costs the game)
-                    static uint64_t lastListTicks;
-                    static uint32_t lastListLeftOut;
-                    uint64_t listTicks;
-                    uint32_t listLeftOut;
-                    NitroPort_Gx3dListsLeftOut(&listTicks, &listLeftOut);
-                    NitroPort_Log("[perf] shapes' lists: %u vertices a scene left out on the game's side, %.2f ms/scene looking through them",
-                                  (listLeftOut - lastListLeftOut) / n, (double)(listTicks - lastListTicks) * 1000.0 / SYSCLOCK_ARM11 / n);
-                    lastListTicks = listTicks;
-                    lastListLeftOut = listLeftOut;
-                }
             }
         }
         lastGeoWakeups = geoWakeups;

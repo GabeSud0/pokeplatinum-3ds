@@ -1,0 +1,450 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 10:00:00 -0700
+Subject: [PATCH] Route 206's river past the scenery: a strip of the map mirrored (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Beside Route 206's Cycling Road the 3DS's wider field sees into the
+scenery map next to it (the header "everywhere"), made for nobody to see
+its edge: a flat ledge at its own height, the route's river and ledges
+stopping at the border. With the player in the half of a listed map by
+such a border, that map is drawn again past it, mirrored about it, and
+the scenery map and its lowered copies aren't drawn: the river and the
+ledges go on, level. Only for the maps in sPortMirroredBesideScenery
+(Route 206).
+
+Not the whole map: a copy of its model whose shapes' display lists are
+cut to the strip by the border (NitroPort_Gx3dTrimList: the polygons
+kept are drawn the same), made once for 4, 8, 12, 16 and 24 tiles; each
+scene the box test of the strips past the border picks the narrowest
+with all the camera sees, none if it sees none (the whole map again was
+a fifth more work for the 3D, nearly all of it off the screen; this is
+3%). The box tests with the base rotation and scale reset (the copy's
+mirroring left in them turned the strips round: a hole at the screen's
+bottom left).
+
+The river's texture, one to a tile, ran the other way in the copy, its
+waves facing back at the border: in the copy, water materials ("sea_")
+have their S coordinates turned round again through the texture matrix
+(a shape callback; they still meet the map's own at the border).
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index ffe2fae0..9f147dcf 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -1815,6 +1815,8 @@ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *
+     }
+ }
+ 
++static BOOL Port_SceneryMirroredOver(const LandDataManager *landDataMan, u8 index);
++
+ static void Port_RenderSceneryMapsLowered(const LandDataManager *landDataMan)
+ {
+     if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld) {
+@@ -1824,7 +1826,375 @@ static void Port_RenderSceneryMapsLowered(const LandDataManager *landDataMan)
+ 
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         if (landDataMan->loadedMaps[i]->mapMatrixIndex != INVALID_MAP_MATRIX_INDEX && landDataMan->loadedMaps[i]->valid == TRUE) {
+-            Port_RenderSceneryMapLowered(i, landDataMan);
++            if (!Port_SceneryMirroredOver(landDataMan, i)) {
++                Port_RenderSceneryMapLowered(i, landDataMan);
++            }
++        }
++    }
++}
++#endif
++
++#ifdef SDK_PORT_3DS
++// Beside some maps the wider field sees into the scenery map next to them
++// (the mountains beside Route 206's Cycling Road), which was made for
++// nobody to see its edge: a flat ledge at its own height, and the map's
++// river and ledges stopping at the border. Past the border on the
++// player's side, the map is drawn again mirrored about it instead (as
++// past Eterna Forest's edge): its river and ledges go on, level, and the
++// scenery map isn't drawn. Only for the maps listed: drawing one again is
++// a whole map sent (most of it out of the view, skipped as such).
++static const u16 sPortMirroredBesideScenery[] = {
++    MAP_HEADER_ROUTE_206,
++};
++
++static BOOL Port_MirrorsBesideScenery(const LandDataManager *landDataMan, u8 index)
++{
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++
++    if (loadedMap->mapMatrixIndex == INVALID_MAP_MATRIX_INDEX || loadedMap->valid != TRUE) {
++        return FALSE;
++    }
++
++    u16 header = MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, loadedMap->mapMatrixIndex);
++
++    for (int i = 0; i < (int)NELEMS(sPortMirroredBesideScenery); i++) {
++        if (sPortMirroredBesideScenery[i] == header) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++// The side (-1 left, 1 right) the loaded map is mirrored to, past a scenery
++// map: the player in its column, in the half by that side; 0 for none.
++static int Port_MirrorSideBesideScenery(const LandDataManager *landDataMan, u8 index)
++{
++    int width = landDataMan->mapMatrixWidth, mapMatrixIndex = landDataMan->loadedMaps[index]->mapMatrixIndex, dir;
++
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld
++        || landDataMan->trackedTargetMapMatrixIndex == INVALID_MAP_MATRIX_INDEX || !Port_MirrorsBesideScenery(landDataMan, index)
++        || (int)landDataMan->trackedTargetMapMatrixIndex % width != mapMatrixIndex % width) {
++        return 0;
++    }
++
++    u8 quadrant = landDataMan->trackedTargetMapQuadrant;
++    dir = quadrant == QUADRANT_TOP_RIGHT || quadrant == QUADRANT_BOTTOM_RIGHT ? 1 : -1;
++
++    if (mapMatrixIndex % width + dir < 0 || mapMatrixIndex % width + dir >= width
++        || MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex + dir) != MAP_HEADER_EVERYWHERE) {
++        return 0;
++    }
++
++    return dir;
++}
++
++// Whether the loaded map is a scenery map with a mirrored map drawn in its
++// place.
++static BOOL Port_SceneryMirroredOver(const LandDataManager *landDataMan, u8 index)
++{
++    int mapMatrixIndex = landDataMan->loadedMaps[index]->mapMatrixIndex;
++
++    if (mapMatrixIndex == INVALID_MAP_MATRIX_INDEX) {
++        return FALSE;
++    }
++
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        int dir = i == index ? 0 : Port_MirrorSideBesideScenery(landDataMan, i);
++
++        if (dir != 0 && landDataMan->loadedMaps[i]->mapMatrixIndex + dir == mapMatrixIndex) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++// The map drawn mirrored past the scenery is a copy of its model whose
++// shapes' display lists are cut to the strip by the border the copy is
++// mirrored about (NitroPort_Gx3dTrimList: the polygons kept are drawn the
++// same), made once for each width in sPortMirrorWidths; each scene the
++// box test of the strips past the border picks the narrowest that has all
++// the camera sees (none seen: not drawn). Drawing the whole map again was
++// a fifth more work for the 3D on the Cycling Road, nearly all of it off
++// the screen. The copy's materials have their culled side swapped for
++// good (Port_SwapModelCulling).
++#include <stdlib.h>
++extern u32 NitroPort_Gx3dTrimList(const void *src, u32 bytes, void *dst, u32 dstBytes, int axis, s32 lo, s32 hi);
++
++#define PORT_MIRROR_WIDTHS 5
++static const u8 sPortMirrorWidths[PORT_MIRROR_WIDTHS] = { 4, 8, 12, 16, 24 }; // (tiles past the border; beyond the last: the whole map)
++
++typedef struct PortMirrorCopy {
++    const NNSG3dResFileHeader *source; // (the map's model file it was made from, where, and which side)
++    int mapMatrixIndex;
++    int dir;
++    u8 *block; // the model file copied, then the cut lists
++    NNSG3dResMdl *model;
++    u32 *cutOfs; // [width * numShp + shape]: each cut list's place in block (0: the whole list)
++    u32 *cutSize;
++    u32 *wholeOfs; // the shapes' own lists (their ofsDL, sizeDL)
++    u32 *wholeSize;
++} PortMirrorCopy;
++
++static PortMirrorCopy sPortMirrorCopies[QUADRANT_COUNT];
++
++static void Port_FreeMirrorCopy(PortMirrorCopy *copy)
++{
++    free(copy->block);
++    free(copy->cutOfs);
++    free(copy->cutSize);
++    free(copy->wholeOfs);
++    free(copy->wholeSize);
++    memset(copy, 0, sizeof(*copy));
++}
++
++static void Port_FreeMirrorCopies(void)
++{
++    for (int i = 0; i < QUADRANT_COUNT; i++) {
++        Port_FreeMirrorCopy(&sPortMirrorCopies[i]);
++    }
++}
++
++static PortMirrorCopy *Port_MirrorCopyOf(const LandDataManager *landDataMan, u8 index, int dir)
++{
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++    PortMirrorCopy *copy = &sPortMirrorCopies[index];
++
++    if (copy->block != NULL && copy->source == loadedMap->mapModelFile
++        && copy->mapMatrixIndex == loadedMap->mapMatrixIndex && copy->dir == dir) {
++        return copy;
++    }
++
++    Port_FreeMirrorCopy(copy);
++
++    const NNSG3dResFileHeader *file = loadedMap->mapModelFile;
++    NNSG3dResMdl *model = loadedMap->mapRenderObj.resMdl;
++    NNSG3dResShp *shapes = NNS_G3dGetShp(model);
++    NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(model);
++    int numShp = shapes->dict.numEntry, total = PORT_MIRROR_WIDTHS * numShp;
++    u32 fileSize = (file->fileSize + 3) & ~3u, cutBytes = 0;
++    void **cuts = calloc(total, sizeof(void *));
++
++    copy->cutOfs = calloc(total, sizeof(u32));
++    copy->cutSize = calloc(total, sizeof(u32));
++    copy->wholeOfs = calloc(numShp, sizeof(u32));
++    copy->wholeSize = calloc(numShp, sizeof(u32));
++
++    if (cuts == NULL || copy->cutOfs == NULL || copy->cutSize == NULL || copy->wholeOfs == NULL || copy->wholeSize == NULL || info->posScale <= 0) {
++        free(cuts);
++        Port_FreeMirrorCopy(copy);
++        return NULL;
++    }
++
++    // The strip's x in the lists' own coordinates (the model's, before its
++    // posScale): the map's half width from its middle, by the border
++    // mirrored about (left: dir -1).
++    s32 tile = (s32)(((s64)MAP_OBJECT_TILE_SIZE << FX32_SHIFT) / info->posScale);
++    s32 half = tile * MAP_TILES_COUNT_X / 2;
++
++    for (int w = 0; w < PORT_MIRROR_WIDTHS; w++) {
++        s32 lo = dir < 0 ? -half - tile : half - (sPortMirrorWidths[w] + 1) * tile;
++        s32 hi = dir < 0 ? -half + (sPortMirrorWidths[w] + 1) * tile : half + tile;
++
++        for (int i = 0; i < numShp; i++) {
++            NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, i);
++            u32 size = NNS_G3dGetShpDLSize(shp), room = size + size / 2 + 64;
++            void *cut = malloc(room);
++            u32 bytes = cut != NULL ? NitroPort_Gx3dTrimList(NNS_G3dGetShpDLPtr(shp), size, cut, room, 0, lo, hi) : 0;
++
++            if (bytes == 0 || bytes >= size) {
++                free(cut);
++                continue; // (the whole list)
++            }
++
++            cuts[w * numShp + i] = cut;
++            copy->cutSize[w * numShp + i] = bytes;
++            cutBytes += bytes;
++        }
++    }
++
++    copy->block = malloc(fileSize + cutBytes);
++
++    if (copy->block == NULL) {
++        for (int i = 0; i < total; i++) {
++            free(cuts[i]);
++        }
++
++        free(cuts);
++        Port_FreeMirrorCopy(copy);
++        return NULL;
++    }
++
++    memcpy(copy->block, file, file->fileSize);
++
++    u32 at = fileSize;
++
++    for (int i = 0; i < total; i++) {
++        if (cuts[i] != NULL) {
++            memcpy(copy->block + at, cuts[i], copy->cutSize[i]);
++            copy->cutOfs[i] = at;
++            at += copy->cutSize[i];
++            free(cuts[i]);
++        }
++    }
++
++    free(cuts);
++
++    copy->model = NNS_G3dGetMdlByIdx(NNS_G3dGetMdlSet((NNSG3dResFileHeader *)copy->block), 0);
++    shapes = NNS_G3dGetShp(copy->model);
++
++    for (int i = 0; i < numShp; i++) {
++        NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, i);
++
++        copy->wholeOfs[i] = shp->ofsDL;
++        copy->wholeSize[i] = shp->sizeDL;
++    }
++
++    Port_SwapModelCulling(copy->model);
++    copy->source = file;
++    copy->mapMatrixIndex = loadedMap->mapMatrixIndex;
++    copy->dir = dir;
++    return copy;
++}
++
++// Which of the copy's widths has all the camera sees past the border: the
++// farthest strip past it the box test passes (it passes what the wider
++// view shows, and what the sun shadows reach); -1 for none.
++static int Port_MirrorWidthSeen(const VecFx32 *mapPosition, const NNSG3dResMdl *model, int dir)
++{
++    const NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(model);
++    fx32 border = mapPosition->x + dir * (MAP_TILES_COUNT_X / 2) * MAP_OBJECT_TILE_SIZE;
++    fx32 bottom = mapPosition->y + FX_Mul((fx32)info->boxY, info->boxPosScale);
++    fx32 height = FX_Mul((fx32)info->boxH, info->boxPosScale);
++    int seen = -1, from = 0;
++    VecFx32 one = { FX32_ONE, FX32_ONE, FX32_ONE };
++    MtxFx33 identity = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++
++    // (the box test sets the base translation only: the rotation and scale
++    // the draw before left, the mirrored copy's -1 across, would turn the
++    // strips round)
++    NNS_G3dGlbSetBaseRot(&identity);
++    NNS_G3dGlbSetBaseScale(&one);
++
++    // (and higher: the scenery map it's drawn instead of may have taller
++    // mountains, seen where the route's own height isn't)
++    height += 8 * MAP_OBJECT_TILE_SIZE;
++
++    for (int w = 0; w <= PORT_MIRROR_WIDTHS; w++) {
++        int to = w < PORT_MIRROR_WIDTHS ? sPortMirrorWidths[w] : MAP_TILES_COUNT_X;
++        fx32 nearX = border + dir * from * MAP_OBJECT_TILE_SIZE, farX = border + dir * to * MAP_OBJECT_TILE_SIZE;
++        VecFx32 corner = { nearX < farX ? nearX : farX, bottom, mapPosition->z - (MAP_TILES_COUNT_Z / 2) * MAP_OBJECT_TILE_SIZE };
++        GFXTestBox box;
++
++        GFXBoxTest_MakeBox((to - from) * MAP_OBJECT_TILE_SIZE, height, MAP_TILES_COUNT_Z * MAP_OBJECT_TILE_SIZE, &box);
++
++        if (GFXBoxTest_IsBoxAtPositionInView(&corner, &box)) {
++            seen = w;
++        }
++
++        from = to;
++    }
++
++    return seen;
++}
++
++// The river in a copy mirrored past the scenery: its texture (one to a
++// tile, repeated) would run the other way, its waves facing back. Its S
++// coordinates are turned round again (texture coordinates through the
++// texture matrix, S scaled by -1; one to a tile, they still meet the
++// map's own at the border): materials named "sea_...".
++static BOOL Port_MaterialIsWater(const NNSG3dResMat *mat, u32 idx)
++{
++    const NNSG3dResName *name = NNS_G3dGetResNameByIdx(&mat->dict, idx);
++
++    return name != NULL && name->name[0] == 's' && name->name[1] == 'e' && name->name[2] == 'a' && name->name[3] == '_';
++}
++
++static void Port_MirroredWaterShape(NNSG3dRS *rs)
++{
++    if (!Port_MaterialIsWater(rs->pResMat, rs->currentMat)) {
++        return;
++    }
++
++    const NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(rs->pResShp, *(rs->c + 1));
++    u32 param = NNS_G3dGetMatDataByIdx(rs->pResMat, rs->currentMat)->texImageParam;
++    u32 flipped = (param & ~(3u << 30)) | ((u32)GX_TEXGEN_TEXCOORD << 30);
++
++    NNS_G3dGeMtxMode(GX_MTXMODE_TEXTURE);
++    NNS_G3dGeIdentity();
++    NNS_G3dGeScale(-FX32_ONE, FX32_ONE, FX32_ONE);
++    NNS_G3dGeMtxMode(GX_MTXMODE_POSITION_VECTOR);
++    NNS_G3dGeBufferOP_N(G3OP_TEXIMAGE_PARAM, &flipped, G3OP_TEXIMAGE_PARAM_NPARAMS);
++    NNS_G3dGeSendDL(NNS_G3dGetShpDLPtr(shp), NNS_G3dGetShpDLSize(shp));
++    NNS_G3dGeBufferOP_N(G3OP_TEXIMAGE_PARAM, &param, G3OP_TEXIMAGE_PARAM_NPARAMS);
++    NNS_G3dGeMtxMode(GX_MTXMODE_TEXTURE);
++    NNS_G3dGeIdentity();
++    NNS_G3dGeMtxMode(GX_MTXMODE_POSITION_VECTOR);
++    NNS_G3dRSSetFlag(rs, NNS_G3D_RSFLAG_SKIP);
++}
++
++static void Port_RenderMirroredBesideScenery(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
++{
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        int dir = Port_MirrorSideBesideScenery(landDataMan, i);
++
++        if (dir == 0) {
++            continue;
++        }
++
++        LoadedMap *loadedMap = landDataMan->loadedMaps[i];
++        VecFx32 position = { 0, 0, 0 };
++
++        LandDataManager_CalculateRenderingPosition(loadedMap->mapMatrixIndex, landDataMan->mapMatrixWidth, landDataMan->mapMatrix, &position);
++        position.x += landDataMan->offset.x;
++        position.y += landDataMan->offset.y;
++        position.z += landDataMan->offset.z;
++
++        int seen = Port_MirrorWidthSeen(&position, loadedMap->mapRenderObj.resMdl, dir);
++
++        if (seen < 0) {
++            continue;
++        }
++
++        PortMirrorCopy *copy = Port_MirrorCopyOf(landDataMan, i, dir);
++
++        if (copy == NULL) {
++            Port_RenderLoadedMapMirrored(i, dir, landDataMan, modelAttrs);
++            continue;
++        }
++
++        NNSG3dResShp *shapes = NNS_G3dGetShp(copy->model);
++        int numShp = shapes->dict.numEntry;
++
++        for (int s = 0; s < numShp; s++) {
++            NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, s);
++            int k = seen * numShp + s;
++
++            if (seen < PORT_MIRROR_WIDTHS && copy->cutOfs[k] != 0) {
++                shp->ofsDL = (u32)(copy->block + copy->cutOfs[k] - (u8 *)shp);
++                shp->sizeDL = copy->cutSize[k];
++            } else {
++                shp->ofsDL = copy->wholeOfs[s];
++                shp->sizeDL = copy->wholeSize[s];
++            }
++        }
++
++        VecFx32 mirrored = position;
++        VecFx32 scale = { -FX32_ONE, FX32_ONE, FX32_ONE };
++        MtxFx33 rotationMatrix = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++        NNSG3dResMdl *own = loadedMap->mapRenderObj.resMdl;
++
++        mirrored.x += dir * MAP_TILES_COUNT_X * MAP_OBJECT_TILE_SIZE;
++        loadedMap->mapRenderObj.resMdl = copy->model;
++        NNS_G3dRenderObjSetCallBack(&loadedMap->mapRenderObj, Port_MirroredWaterShape, NULL, NNS_G3D_SBC_SHP, NNS_G3D_SBC_CALLBACK_TIMING_A);
++        Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &mirrored, &rotationMatrix, &scale);
++        NNS_G3dGeFlushBuffer();
++        NNS_G3dRenderObjResetCallBack(&loadedMap->mapRenderObj);
++        loadedMap->mapRenderObj.resMdl = own;
++
++        if (loadedMap->mapPropManager != NULL) {
++            MapPropManager_RenderMirrored(&mirrored, landDataMan->areaDataMan, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, loadedMap->mapPropManager);
+         }
+     }
+ }
+@@ -1834,11 +2204,17 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+ {
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         if (landDataMan->loadedMaps[i]->mapMatrixIndex != INVALID_MAP_MATRIX_INDEX) {
++#ifdef SDK_PORT_3DS
++            if (Port_SceneryMirroredOver(landDataMan, i)) {
++                continue;
++            }
++#endif
+             LandDataManager_RenderLoadedMap(i, landDataMan, modelAttrs);
+         }
+     }
+ #ifdef SDK_PORT_3DS
+     Port_RenderMirroredEdges(landDataMan, modelAttrs);
++    Port_RenderMirroredBesideScenery(landDataMan, modelAttrs);
+     Port_RenderSceneryMapsLowered(landDataMan);
+ #endif
+ }
+@@ -1851,6 +2227,9 @@ void LandData_ObjectPosToTilePos(fx32 objectPositionX, fx32 objectPositionZ, int
+ 
+ void LandDataManager_End(LandDataManager *landDataMan)
+ {
++#ifdef SDK_PORT_3DS
++    Port_FreeMirrorCopies();
++#endif
+     ClearUnusedSystemCache();
+ 
+     NNS_GfdResetLnkTexVramState();

@@ -1801,26 +1801,6 @@ static void StartGeometryThread(int keepEveryScene)
 
 void NitroPort_OnFrame(void)
 {
-    /* (with the geometry thread, every 600 frames: the shapes' lists of
-     * vertices left out on the game's side, and what it costs, as the 3DS's
-     * [perf] line has it) */
-    {
-        static unsigned frames;
-        static uint64_t lastTicks;
-        static uint32_t lastLeftOut;
-        if (++frames == 600) {
-            uint64_t ticks;
-            uint32_t leftOut;
-            NitroPort_Gx3dListsLeftOut(&ticks, &leftOut);
-            if (leftOut != lastLeftOut) {
-                NitroPort_Log("[perf] shapes' lists: %u vertices a frame left out on the game's side, %.3f ms/frame looking through them",
-                              (leftOut - lastLeftOut) / frames, (double)(ticks - lastTicks) / 1e6 / frames);
-            }
-            lastTicks = ticks;
-            lastLeftOut = leftOut;
-            frames = 0;
-        }
-    }
     /* (--wide) the wider view only while the 3D is on the upper screen */
     if (NitroPort_WideScreenExtra()) {
         if (NitroPort_EngineAOnTop() && NitroPort_PixelField()) {

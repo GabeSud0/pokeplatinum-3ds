@@ -287,18 +287,21 @@ void NitroPort_Gx3dThreadWakeups(uint32_t *wakeups, uint64_t *longest);
  * battle's start plays in the field (NitroPort_FieldEffect): counted on the
  * game's thread. */
 uint32_t NitroPort_Gx3dSameScenesLeftOut(void);
-/* A display list the game sends whole (NNS_G3dGeSendDL: a model's shape),
- * with the geometry thread: looked through once (by its words' hash), its
- * lists of triangles and quads in groups of 8 polygons (a strip whole), a
- * group all outside the view as it is now left out (with the sun shadows,
- * past their reach; what it leaves behind sent instead), the rest sent as
- * usual: the same scene. 1 if it sent the list; 0 to send it as usual.
- * NITRO_PORT_NO_LIST_CULL in the environment (non-empty, not 0) turns it
- * off. */
-int NitroPort_Gx3dSendList(const void *src, uint32_t bytes);
-/* NitroPort_Gx3dSendList's own time on the game's thread (in the ticks of
- * NitroGx3dThreadOps.ticks) and the vertices it has left out, so far. */
-void NitroPort_Gx3dListsLeftOut(uint64_t *ticks, uint32_t *vertices);
+/* A model's shape's display list (src, bytes) with only the polygons that
+ * reach into a slab of its coordinates, lo <= x (axis 0), y (1) or z (2)
+ * <= hi, into dst (dstBytes of room); the polygons kept are drawn the same,
+ * bit for bit (what those left out leave behind is sent in their place).
+ * Made once, not every scene (a map drawn again mirrored past the
+ * scenery: the strip of it that can be seen). Its size in bytes; 0 if the
+ * list can't be cut (or doesn't fit): draw the whole of it. */
+uint32_t NitroPort_Gx3dTrimList(const void *src, uint32_t bytes, void *dst, uint32_t dstBytes,
+                                int axis, int32_t lo, int32_t hi);
+/* (for the [perf] geometry's work line) The time the thread has spent
+ * making in-between scenes (NitroPort_Gx3dSetInterpolation), in the ticks
+ * of NitroGx3dThreadOps.ticks, and how many it left out, behind (ending a
+ * scene a V-blank or more after the game did: rather than a scene left
+ * out later), so far. */
+void NitroPort_Gx3dMidWork(uint64_t *ticks, uint32_t *leftOut);
 /* Where the thread's time goes (for the [perf] geometry line): the time
  * spent ending scenes (the clock of NitroGx3dThreadOps.ticks), the
  * vertices and polygons sent, and of the vertices those in lists wholly out
