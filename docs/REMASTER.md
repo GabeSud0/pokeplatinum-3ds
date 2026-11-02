@@ -775,6 +775,15 @@ screen's 320 x 192 at 1.25 times, as above.
   ones (nothing to see). Their pictures' places are given back as they go,
   and walking into a map the people beside are given up (the furthest
   first) while the new map's pictures wouldn't fit.
+  - The textures nobody uses are freed (`ov5_021EDA38`) as the people
+    beside go, and as the follower or its ball does, where the DS does it
+    only as a map loads. A berry patch said which texture it uses from its
+    growth stage as its movement last saw it, and one at the far end of
+    the wider field (Route 206's, by the Cycling Road) hadn't moved yet:
+    its textures were freed while its picture showed them, and the game
+    crashed once the memory was used again (patch 0066,
+    `BerryPatchGraphics_GetCurrentGraphicsResourceID`: a patch showing a
+    picture says that picture's texture).
   - The player's counterpart (patch 0055): her graphics are a variable's
     (`OBJ_EVENT_GFX_VAR_0`), set by her map's script as the player walks
     in, so she was never brought and popped in at the zone change (Dawn
