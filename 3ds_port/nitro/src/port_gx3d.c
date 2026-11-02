@@ -308,17 +308,35 @@ static void update_light_cache(void)
  * Shininess entries are 128 unsigned 0.8 values, not 32 32-bit values.
  * The sum is worked out per component and clamped once at the end: every
  * term is positive, so that's the same as clamping after each addition. */
-/* The last normal's colour: flat surfaces repeat the same normal, vertex
- * after vertex. Forgotten when anything it depends on changes (matrices,
- * lights, materials, the polygon's lights at BEGIN_VTXS). */
-static struct { int valid; uint32_t value; uint16_t rgb; } sNormalCache;
+/* Normals' colours: a map's ground repeats its normals, and the game sets
+ * its matrices for every shape (a map's materials, the props), most not
+ * the vector matrix. 64 of them (by the normal's bits), forgotten together
+ * when anything a colour depends on changes: the vector matrix, the
+ * lights, the material, the polygon's lights at BEGIN_VTXS. (Before, the
+ * last normal's alone, forgotten at every matrix command: on the Cycling
+ * Road 12% less lighting work, 2026-11-01.) */
+#define NORMAL_CACHE 64u
+static struct { uint32_t value, age; uint16_t rgb; } sNormalCache[NORMAL_CACHE];
+static uint32_t sNormalAge = 1;   /* (an entry of another age is forgotten; never 0) */
+static void forget_normals(void)
+{
+    if(++sNormalAge==0){
+        memset(sNormalCache,0,sizeof(sNormalCache));
+        sNormalAge=1;
+    }
+}
+static unsigned normal_slot(uint32_t value)
+{
+    return (value^(value>>10)^(value>>20))&(NORMAL_CACHE-1u);
+}
 static uint16_t shade(uint32_t value)
 {
     int32_t normal[3], transformed[3];
     unsigned r=s.emission&31u,g=(s.emission>>5)&31u,b=(s.emission>>10)&31u;
     int i,j;
     uint16_t rgb;
-    if(sNormalCache.valid && sNormalCache.value==value)return sNormalCache.rgb;
+    unsigned slot=normal_slot(value);
+    if(sNormalCache[slot].age==sNormalAge && sNormalCache[slot].value==value)return sNormalCache[slot].rgb;
     for(j=0;j<3;j++)normal[j]=signbits(value>>(j*10),10)*8;
     transform_vector(normal,&s.vec,transformed);
     if(sLightCache.dirty)update_light_cache();
@@ -350,9 +368,9 @@ static uint16_t shade(uint32_t value)
            ((sLightCache.specular[i][2]*specIntensity+2048u)>>12);
     }
     rgb=(uint16_t)((r>31u?31u:r)|((g>31u?31u:g)<<5)|((b>31u?31u:b)<<10));
-    sNormalCache.valid=1;
-    sNormalCache.value=value;
-    sNormalCache.rgb=rgb;
+    sNormalCache[slot].age=sNormalAge;
+    sNormalCache[slot].value=value;
+    sNormalCache[slot].rgb=rgb;
     return rgb;
 }
 /* A vertex's colour from its normal, worked out when its polygon is drawn:
@@ -1682,7 +1700,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         /* The vector matrix (lighting's) changes: colours owed first. */
         if((s.mode==1||s.mode==2) && op!=0x10u && op!=0x11u && op!=0x13u)settle_lighting();
         matrix_command(&s,op,p);
-        sNormalCache.valid=0;
+        if((s.mode==1||s.mode==2) && op!=0x10u && op!=0x11u && op!=0x13u)forget_normals();   /* (the vector matrix) */
         if(s.stackError&&!before)sDiag.stackErrors++;
         /* Stack commands change GXSTAT (the shadow's, with a thread). */
         if(op>=0x11u && op<=0x14u && sResults==&s)refresh_status(&s);
@@ -1712,11 +1730,11 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
     case 0x2a:s.texparam=p[0];break;
     case 0x2b:s.plttbase=p[0];break;
     case 0x30:settle_lighting();
-        s.diffuse=p[0]&0x7FFF;s.ambient=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;
+        s.diffuse=p[0]&0x7FFF;s.ambient=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;forget_normals();
         if(p[0]&(1u<<15))s.rgb=s.diffuse;
         break;
     case 0x31:settle_lighting();
-        s.specular=p[0]&0x7FFF;s.emission=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;
+        s.specular=p[0]&0x7FFF;s.emission=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;forget_normals();
         s.useShininess=(p[0]&(1u<<15))!=0;break;
     case 0x32:{
         int id=(p[0]>>30)&3;
@@ -1730,13 +1748,15 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
             s.lightDir[id][i]=transformed[i];
             s.lightHalf[id][i]=(transformed[i]+(i==2?-4096:0))/2;
         }
-        sNormalCache.valid=0;
+        forget_normals();
         break;
     }
-    case 0x33:settle_lighting();s.lightColor[(p[0]>>30)&3]=p[0]&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;break;
-    case 0x34:settle_lighting();memcpy(s.shininess,p,sizeof(s.shininess));sNormalCache.valid=0;break;
-    case 0x40:settle_lighting();s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;s.stripStarted=0;s.attr=s.pendingAttr;
-        sNormalCache.valid=0;break;
+    case 0x33:settle_lighting();s.lightColor[(p[0]>>30)&3]=p[0]&0x7FFF;sLightCache.dirty=1;forget_normals();break;
+    case 0x34:settle_lighting();memcpy(s.shininess,p,sizeof(s.shininess));forget_normals();break;
+    case 0x40:settle_lighting();s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;s.stripStarted=0;
+        if((s.attr^s.pendingAttr)&15u)forget_normals();   /* (its lights) */
+        s.attr=s.pendingAttr;
+        break;
     case 0x41:s.inBegin=0;s.nverts=0;break;
     case 0x50:{
         int next=-1;
@@ -2610,7 +2630,7 @@ void NitroPort_Gx3dReset(void)
     shadow_store_attach();
     memset(&sDec,0,sizeof(sDec));
     sLightCache.dirty=1;
-    sNormalCache.valid=0;
+    forget_normals();
     make_products();
     NitroPort_MailboxInit(&sMailbox);
     sBuilding=0;sDisplayed=1;sSerial=0;

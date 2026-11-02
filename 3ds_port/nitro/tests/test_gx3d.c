@@ -8,6 +8,7 @@
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_vertex.h>
 #include <nitro_port_shadow.h>
+#include <nitro_port_wide.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -1090,6 +1091,81 @@ static void emit_normal_triangle(uint32_t normal)
     swap();
 }
 
+/* The normals' colours kept (64 of them): a normal seen before in the
+ * scene has the colour it would have alone, but not past what changes it
+ * (the polygon's lights at BEGIN_VTXS, the vector matrix); a projection
+ * matrix command keeps them. */
+static void lit_setup(int flipped)
+{
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x30,RGB(31,31,31)|((u32)RGB(4,0,0)<<16));
+    NitroPort_GxDirectWrite(0x31,(u32)RGB(0,0,3)<<16);
+    NitroPort_GxDirectWrite(0x33,RGB(31,31,31));
+    NitroPort_GxDirectWrite(0x32,(0x3E0u<<10)|(0x1C0u<<20));   /* y -32, z -64 (of 512) */
+    if(flipped){
+        static const int32_t flip[9]={ONE,0,0, 0,-ONE,0, 0,0,-ONE};
+        unsigned i;
+        NitroPort_GxDirectWrite(0x10,2);
+        for(i=0;i<9;i++)NitroPort_GxDirectWrite(0x1a,(u32)flip[i]);
+    }
+}
+static void lit_triangle(uint32_t normal,uint32_t attr,int x)
+{
+    NitroPort_GxDirectWrite(0x29,attr);
+    NitroPort_GxDirectWrite(0x40,0);
+    NitroPort_GxDirectWrite(0x21,normal);
+    vertex(x-500,-500,0);
+    vertex(x+500,-500,0);
+    vertex(x,500,0);
+    NitroPort_GxDirectWrite(0x41,0);
+}
+static uint16_t lit_alone(uint32_t normal,uint32_t attr,int flipped)
+{
+    const NitroGx3dScene *scene;
+    lit_setup(flipped);
+    lit_triangle(normal,attr,0);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    return scene->count==1?scene->triangles[0].v[0].color:0xFFFFu;
+}
+static void test_normals_kept(void)
+{
+    const u32 on=1u|(3u<<6)|(31u<<16), off=(3u<<6)|(31u<<16);
+    const uint32_t n1=(0x0C0u<<10)|(0x220u<<20), n2=(0x220u<<20), n3=(0x090u)|(0x260u<<20);   /* (towards the light) */
+    const uint16_t a=lit_alone(n1,on,0), b=lit_alone(n2,on,0), c=lit_alone(n3,on,0);
+    const uint16_t e=lit_alone(n1,off,0), f=lit_alone(n1,on,1);
+    const uint16_t want[7]={a,b,c,a,e,a,f};
+    const NitroGx3dScene *scene;
+    unsigned i;
+    CHECK(a!=b && a!=c && a!=e && a!=f);     /* (each is something else) */
+    lit_setup(0);
+    lit_triangle(n1,on,-3000);
+    lit_triangle(n2,on,-2000);
+    lit_triangle(n3,on,-1000);
+    lit_triangle(n1,on,0);                   /* seen before */
+    lit_triangle(n1,off,1000);               /* its lights off */
+    NitroPort_GxDirectWrite(0x10,0);         /* a projection command: kept */
+    NitroPort_GxDirectWrite(0x15,0);
+    NitroPort_GxDirectWrite(0x10,2);
+    lit_triangle(n1,on,2000);
+    {
+        static const int32_t flip[9]={ONE,0,0, 0,-ONE,0, 0,0,-ONE};
+        for(i=0;i<9;i++)NitroPort_GxDirectWrite(0x1a,(u32)flip[i]);
+    }
+    lit_triangle(n1,on,3000);                /* the vector matrix turned */
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==7);
+    /* (in the scene's order: by x, left to right) */
+    for(i=0;i<scene->count && i<7;i++){
+        int32_t x=scene->triangles[i].v[0].clip[0];
+        unsigned j,k;
+        for(j=1;j<3;j++)if(scene->triangles[i].v[j].clip[0]<x)x=scene->triangles[i].v[j].clip[0];
+        k=(unsigned)((x+3500)/1000);
+        if(k<7)CHECK(scene->triangles[i].v[0].color==want[k]);
+        else CHECK(0);
+    }
+}
 static void test_light_material_and_vectors(void)
 {
     const NitroGx3dScene *scene;
@@ -1934,6 +2010,7 @@ static void run_all(void)
     test_bg0_composition();
     test_cpu_fifo_writes();
     test_light_material_and_vectors();
+    test_normals_kept();
     test_texture_matrix_modes();
     test_latched_polygon_attributes();
     test_viewport_and_immediate_texture_state();

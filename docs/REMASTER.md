@@ -1716,7 +1716,15 @@ would be a scene late. The `[perf] geometry` line counts them (`left out/s
 (n as the same)`), and a `[perf] geometry's work` line says where its time
 goes: ending scenes (the SWAP: sorting, matching, publishing), and the
 vertices a scene sends, of them those in lists wholly out of the view (not
-worked out), and polygons. Core 1 is the system's; a
+worked out), and polygons. Measured on a recording of the Cycling Road
+(callgrind, 2026-11-01), its time is the vertices it draws: decoding
+(a quarter), transforming, lighting and placing them on the screen; the
+lists out of the view it passes over are 2% (leaving them out on the
+game's side before they reach it saved no more, so it isn't done).
+Lighting keeps 64 normals' colours, forgotten together when the vector
+matrix, the lights, the material or the polygon's lights change (it was
+the last normal's, forgotten at every matrix command: 12% less lighting
+work there, the scenes the same bit for bit). Core 1 is the system's; a
 program gets 30% of it, and there the
 geometry took 18-30 ms a scene and left scenes out (the intro's flyover
 jumped), and engine B's screen drew 14-25 frames a second
