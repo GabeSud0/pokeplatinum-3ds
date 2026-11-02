@@ -931,6 +931,24 @@ typedef struct PolyRecord {
 #define ORDER_SLACK 3.0f   /* (match_records: the order's pair, if no further than this from the nearest's) */
 static int sInterpWanted, sInterp;
 static PolyRecord *sRec[2];              /* [sRecBuild]: this scene's; the other: the scene before's */
+/* What matching looks at of each record (match_records), apart: the
+ * window's search (up to MATCH_WINDOW either side, for every polygon the
+ * order doesn't pair where the scene's motion puts it: on the Cycling Road
+ * at a ride, the ground's rows each moving their own way, many) read a
+ * whole record for each, 160 bytes, a cache line or two apiece on the 3DS:
+ * half the in-between scene's time, 3-9 ms a scene (2026-11-02). Here 8
+ * and 32 bytes, filled as the records are (the same bytes: the same
+ * pairs, bit for bit). */
+typedef struct RecTag {
+    uint32_t sig;
+    uint8_t count, onScreen;
+    uint16_t unused;
+} RecTag;
+typedef struct RecPos {
+    float px[4], py[4];
+} RecPos;
+static RecTag *sTag[2];
+static RecPos *sPos[2];
 static unsigned sRecCount[2], sRecBuild;
 static int sRecBeforeValid;
 /* Each mailbox slot's in-between scene (the one between its scene and the
@@ -977,6 +995,13 @@ static void record_polygon(GeoVertex *a,GeoVertex *b,GeoVertex *c,GeoVertex *d)
         if(r->clip[k][3]<=0){r->onScreen=0;break;}
         r->px[k]=(float)r->clip[k][0]/(float)r->clip[k][3]*128.0f;
         r->py[k]=(float)r->clip[k][1]/(float)r->clip[k][3]*96.0f;
+    }
+    {
+        size_t at=(size_t)(r-sRec[sRecBuild]);
+        RecTag *tag=&sTag[sRecBuild][at];
+        tag->sig=r->sig;tag->count=r->count;tag->onScreen=r->onScreen;tag->unused=0;
+        memcpy(sPos[sRecBuild][at].px,r->px,sizeof(r->px));
+        memcpy(sPos[sRecBuild][at].py,r->py,sizeof(r->py));
     }
 }
 /* A polygon as the game would have drawn it with these vertices (clip),
@@ -1046,15 +1071,15 @@ static float median_of(float *v,unsigned n)
 }
 /* (limit: the average past which the caller doesn't care; it stops
  * there, returning at least the limit) */
-static float poly_distance(const PolyRecord *p,const PolyRecord *c,float dx,float dy,float limit)
+static float poly_distance(const RecPos *p,const RecPos *c,unsigned count,float dx,float dy,float limit)
 {
-    float d=0.0f,stop=limit*(float)c->count;
+    float d=0.0f,stop=limit*(float)count;
     unsigned k;
-    for(k=0;k<c->count;k++){
+    for(k=0;k<count;k++){
         d+=fabsf(c->px[k]-(p->px[k]+dx))+fabsf(c->py[k]-(p->py[k]+dy));
         if(d>=stop)return limit;
     }
-    return d/(float)c->count;
+    return d/(float)count;
 }
 /* The scene's motion as match_records last worked it out (DS pixels, as
  * PolyRecord.px/py: x / w * 128, y / w * 96); valid with 8 pairs or more. */
@@ -1070,7 +1095,7 @@ static float sPrevMotionX, sPrevMotionY;
  * it) have one of their kind in the scene before, near where the order
  * pairs them, where the motion (dx, dy) puts it (2 DS pixels, a vertex on
  * average). */
-static unsigned motion_support(const PolyRecord *P,unsigned m,const PolyRecord *C,unsigned n,
+static unsigned motion_support(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *C,const RecPos *CP,unsigned n,
                                const int32_t *out,float dx,float dy)
 {
     unsigned j,found=0,step=n/64u+1u;
@@ -1081,15 +1106,36 @@ static unsigned motion_support(const PolyRecord *P,unsigned m,const PolyRecord *
         if(hi>(int)m-1)hi=(int)m-1;
         for(q=lo;q<=hi;q++){
             if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)continue;
-            if(poly_distance(&P[q],&C[j],dx,dy,2.0f*MATCH_SURE)<2.0f*MATCH_SURE){found++;break;}
+            if(poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,2.0f*MATCH_SURE)<2.0f*MATCH_SURE){found++;break;}
         }
     }
     return found;
 }
-static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C,unsigned n,int32_t *out)
+static NitroGx3dThreadOps sOps;   /* (NitroPort_Gx3dStartThread) */
+/* (the [perf] in-between matching line, NitroPort_Gx3dMatchWork) Its
+ * time in its four parts: the order's pairs, the scene's motion, each
+ * again by where it is (the window's search among them), one each; the
+ * polygons, those searched for, the window's places looked at. Only the
+ * geometry thread writes them. */
+static uint64_t sMatchPart[4];
+static uint32_t sMatchPolygons, sMatchSearched, sMatchScanned;
+static uint64_t match_ticks(void)
+{
+    return sOps.ticks?sOps.ticks(sOps.context):0;
+}
+void NitroPort_Gx3dMatchWork(uint64_t part[4],uint32_t *polygons,uint32_t *searched,uint32_t *scanned)
+{
+    unsigned k;
+    for(k=0;k<4;k++)part[k]=*(volatile uint64_t *)&sMatchPart[k];
+    if(polygons)*polygons=*(volatile uint32_t *)&sMatchPolygons;
+    if(searched)*searched=*(volatile uint32_t *)&sMatchSearched;
+    if(scanned)*scanned=*(volatile uint32_t *)&sMatchScanned;
+}
+static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *C,const RecPos *CP,unsigned n,int32_t *out)
 {
     unsigned i=0,j=0,matched=0,moves=0;
     float dx=0.0f,dy=0.0f,near;
+    uint64_t t0=match_ticks(),t1,t2,t3;
     static float mx[256],my[256];
     int offset=0;
     /* in order */
@@ -1108,11 +1154,12 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
         out[j++]=-1;
         if(i<m)i++;
     }
+    t1=match_ticks();
     /* the scene's motion: the middle of the pairs' moves (some of them) */
     for(j=0;j<n && moves<256u;j+=1u+n/256u){
         if(out[j]<0 || !P[out[j]].onScreen || !C[j].onScreen)continue;
-        mx[moves]=C[j].px[0]-P[out[j]].px[0];
-        my[moves]=C[j].py[0]-P[out[j]].py[0];
+        mx[moves]=CP[j].px[0]-PP[out[j]].px[0];
+        my[moves]=CP[j].py[0]-PP[out[j]].py[0];
         moves++;
     }
     if(moves>=8u){dx=median_of(mx,moves);dy=median_of(my,moves);}
@@ -1135,7 +1182,7 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
            (!c || sPrevMotionX!=dx || sPrevMotionY!=dy)){cx[c]=sPrevMotionX;cy[c]=sPrevMotionY;c++;}
         if(!c){cx[c]=0.0f;cy[c]=0.0f;c++;}
         for(k=0;k<c;k++){
-            unsigned support=motion_support(P,m,C,n,out,cx[k],cy[k]);
+            unsigned support=motion_support(P,PP,m,C,CP,n,out,cx[k],cy[k]);
             if(support>bestSupport){bestSupport=support;best=k;}
         }
         if(bestSupport>0){
@@ -1151,6 +1198,7 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
      * motion: as far again as the scene moves) */
     near=MATCH_NEAR+1.5f*(fabsf(dx)+fabsf(dy));
     memcpy(sOrderOut,out,n*sizeof(*out));
+    t2=match_ticks();
     /* each again, by where it is */
     for(j=0;j<n;j++){
         int center=out[j]>=0?out[j]:(int)j+offset,order=out[j],lo,hi,q,best=-1;
@@ -1168,17 +1216,19 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
          * where a model is many polygons of one kind, the starters'
          * briefcase: 2026-10-26.) */
         if(out[j]>=0 && P[out[j]].onScreen && P[out[j]].count==C[j].count &&
-           poly_distance(&P[out[j]],&C[j],dx,dy,MATCH_SURE)<MATCH_SURE){
+           poly_distance(&PP[out[j]],&CP[j],C[j].count,dx,dy,MATCH_SURE)<MATCH_SURE){
             offset=out[j]-(int)j;matched++;
             continue;
         }
         lo=center-MATCH_WINDOW;hi=center+MATCH_WINDOW;
         if(lo<0)lo=0;
         if(hi>(int)m-1)hi=(int)m-1;
+        sMatchSearched++;
+        sMatchScanned+=(uint32_t)(hi-lo+1);
         for(q=lo;q<=hi;q++){
             float d;
             if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)continue;
-            d=poly_distance(&P[q],&C[j],dx,dy,bestD);
+            d=poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,bestD);
             if(d<bestD){bestD=d;best=q;}
         }
         /* The order's pair when it's nearly as near as the nearest: a model
@@ -1191,7 +1241,7 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
          * a cliff's tile paired a little off left a crack). */
         if(order>=0 && order!=best && fabsf(dx)+fabsf(dy)<MATCH_SURE &&
            P[order].onScreen && P[order].count==C[j].count){
-            float d=poly_distance(&P[order],&C[j],dx,dy,near);
+            float d=poly_distance(&PP[order],&CP[j],C[j].count,dx,dy,near);
             if(d<near && (best<0 || d<=bestD+ORDER_SLACK)){best=order;bestD=d;}
         }
         /* What the camera follows stays where it was on the screen as the
@@ -1207,7 +1257,7 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
              * of its kind, paired by an order that shifted, can be where
              * it is now when the scene moved by a tile) */
             float clearly=fmaxf(4.0f*MATCH_SURE,0.5f*(fabsf(dx)+fabsf(dy)));
-            float still=poly_distance(&P[order],&C[j],0.0f,0.0f,MATCH_SURE);
+            float still=poly_distance(&PP[order],&CP[j],C[j].count,0.0f,0.0f,MATCH_SURE);
             if(still<MATCH_SURE && (best<0 || bestD>clearly))best=order;
         }
         out[j]=best;
@@ -1221,6 +1271,7 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
      * made again beside the player as it closed, 2026-10-29) took the
      * player's pair, by the order and by nearness: the in-between scene
      * drew it halfway to the player, a flicker to the side. */
+    t3=match_ticks();
     for(j=0;j<m;j++)sOwner[j]=-1;
     for(j=0;j<n;j++){
         int q=out[j],o;
@@ -1228,8 +1279,8 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
         if(q<0)continue;
         o=sOwner[q];
         if(o<0){sOwner[q]=(int32_t)j;continue;}
-        dj=fminf(poly_distance(&P[q],&C[j],dx,dy,1e9f),poly_distance(&P[q],&C[j],0.0f,0.0f,1e9f));
-        doo=fminf(poly_distance(&P[q],&C[o],dx,dy,1e9f),poly_distance(&P[q],&C[o],0.0f,0.0f,1e9f));
+        dj=fminf(poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,1e9f),poly_distance(&PP[q],&CP[j],C[j].count,0.0f,0.0f,1e9f));
+        doo=fminf(poly_distance(&PP[q],&CP[o],C[o].count,dx,dy,1e9f),poly_distance(&PP[q],&CP[o],C[o].count,0.0f,0.0f,1e9f));
         if(dj<doo || (dj==doo && sOrderOut[j]==q && sOrderOut[o]!=q)){
             out[o]=-1;sOwner[q]=(int32_t)j;
         }else{
@@ -1237,6 +1288,11 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
         }
         matched--;
     }
+    if(sOps.ticks){
+        uint64_t t4=match_ticks();
+        sMatchPart[0]+=t1-t0;sMatchPart[1]+=t2-t1;sMatchPart[2]+=t3-t2;sMatchPart[3]+=t4-t3;
+    }
+    sMatchPolygons+=n;
     return matched;
 }
 /* The in-between scene of the scene just finished (`now', its records
@@ -1273,7 +1329,6 @@ static uint32_t soft_of(const PolyRecord *p,const PolyRecord *c,const NitroGx3dS
 }
 /* (the [perf] geometry's work line: the in-between scenes' matching of
  * polygons with the scene before's, NitroPort_Gx3dMidWork) */
-static NitroGx3dThreadOps sOps;
 static uint64_t sMidMatchTicks;
 static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
 {
@@ -1287,7 +1342,7 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
     }
     {
         uint64_t t0=sOps.ticks?sOps.ticks(sOps.context):0;
-        sMidMatched=match_records(P,m,C,n,sMatch);
+        sMidMatched=match_records(sTag[sRecBuild^1u],sPos[sRecBuild^1u],m,sTag[sRecBuild],sPos[sRecBuild],n,sMatch);
         if(sOps.ticks)__atomic_store_n(&sMidMatchTicks,sMidMatchTicks+(sOps.ticks(sOps.context)-t0),__ATOMIC_RELAXED);
     }
     sMidPolygons=n;
@@ -1432,13 +1487,17 @@ void NitroPort_Gx3dMidWork(uint64_t *ticks,uint64_t *matchTicks,uint32_t *leftOu
 static void interp_swap(void)
 {
     int wanted=__atomic_load_n(&sInterpWanted,__ATOMIC_ACQUIRE),i;
-    if(wanted && (!sRec[0] || !sMids[2])){
+    if(wanted && (!sRec[0] || !sPos[1] || !sMids[2])){
         if(!sRec[0])sRec[0]=malloc(MAX_RECORDS*sizeof(PolyRecord));
         if(!sRec[1])sRec[1]=malloc(MAX_RECORDS*sizeof(PolyRecord));
+        for(i=0;i<2;i++){
+            if(!sTag[i])sTag[i]=malloc(MAX_RECORDS*sizeof(RecTag));
+            if(!sPos[i])sPos[i]=malloc(MAX_RECORDS*sizeof(RecPos));
+        }
         if(!sMatch)sMatch=malloc(MAX_RECORDS*sizeof(int32_t));
         if(!sPUsed)sPUsed=malloc(MAX_RECORDS);
         for(i=0;i<3;i++)if(!sMids[i])sMids[i]=malloc(sizeof(NitroGx3dScene));
-        if(!sRec[0]||!sRec[1]||!sMatch||!sMids[0]||!sMids[1]||!sMids[2]){
+        if(!sRec[0]||!sRec[1]||!sTag[0]||!sTag[1]||!sPos[0]||!sPos[1]||!sMatch||!sMids[0]||!sMids[1]||!sMids[2]){
             static int told;
             if(!told){told=1;NitroPort_Log("[gx3d] no memory for the in-between scenes");}
             __atomic_store_n(&sInterpWanted,0,__ATOMIC_RELEASE);

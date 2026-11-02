@@ -1758,8 +1758,17 @@ shows the scene twice) rather than have the scene after the next left
 out (a jump); the `[perf] geometry's work` line has the in-between
 scenes' share of ending scenes (on the road, 2026-11-02: 9-15 ms of the
 25-30 a scene, nearly all of ending scenes), of that the matching of
-their polygons with the scene before's, and how many it left out.
-Lighting keeps
+their polygons with the scene before's, and how many it left out (on
+the road, 2026-11-02: matching was 3-9 ms of a 8-15 ms in-between scene;
+standing, under 1). Matching reads what it compares of each record (its
+kind, its corners' count, in front of the camera, its corners on the
+screen) from tables of their own, 8 and 32 bytes a record, rather than
+the 160-byte records (`RecTag`, `RecPos`): the window's search looked at
+up to 129 records for a polygon, a cache line or two each (in a 3DS-like
+cache, 28% fewer misses in the in-between scenes; the same pairs, bit
+for bit). A `[perf] in-between matching` line has its parts: the order's
+pairs, the scene's motion, each by where it is, one each, and how many
+polygons the window searched for. Lighting keeps
 64 normals' colours, forgotten together when the vector matrix, the
 lights, the material or the polygon's lights change (it was the last
 normal's, forgotten at every matrix command: 12% less lighting work); the

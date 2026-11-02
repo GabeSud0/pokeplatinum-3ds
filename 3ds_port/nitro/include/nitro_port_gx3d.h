@@ -303,6 +303,12 @@ uint32_t NitroPort_Gx3dTrimList(const void *src, uint32_t bytes, void *dst, uint
  * V-blank or more after the game did: rather than a scene left out
  * later), so far. */
 void NitroPort_Gx3dMidWork(uint64_t *ticks, uint64_t *matchTicks, uint32_t *leftOut);
+/* (the [perf] in-between matching line) The matching's time so far, in
+ * its four parts (the order's pairs, the scene's motion, each polygon
+ * again by where it is, one each), in NitroGx3dThreadOps.ticks; the
+ * polygons matched, those searched for in the window, and the window's
+ * places looked at. */
+void NitroPort_Gx3dMatchWork(uint64_t part[4], uint32_t *polygons, uint32_t *searched, uint32_t *scanned);
 /* Where the thread's time goes (for the [perf] geometry line): the time
  * spent ending scenes (the clock of NitroGx3dThreadOps.ticks), the
  * vertices and polygons sent, and of the vertices those in lists wholly out

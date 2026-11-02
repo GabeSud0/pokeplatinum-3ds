@@ -2569,6 +2569,25 @@ static void PerfFrame(u64 enter)
                 lastMidTicks = midTicks;
                 lastMatchTicks = matchTicks;
                 lastMidsLeftOut = midsLeftOut;
+                {
+                    // (the in-between scenes' matching, in its parts)
+                    static uint64_t lastPart[4];
+                    static uint32_t lastPolys, lastSearched, lastScanned;
+                    uint64_t part[4];
+                    uint32_t polys, searched, scanned;
+                    double ms[4];
+                    int k;
+                    NitroPort_Gx3dMatchWork(part, &polys, &searched, &scanned);
+                    for (k = 0; k < 4; k++) {
+                        ms[k] = (double)(part[k] - lastPart[k]) * 1000.0 / SYSCLOCK_ARM11 / n;
+                        lastPart[k] = part[k];
+                    }
+                    NitroPort_Log("[perf] in-between matching: %.1f ms/scene in order, %.1f the motion, %.1f by where they are, %.1f one each; %u polygons a scene, %u searched for (%u places looked at)",
+                                  ms[0], ms[1], ms[2], ms[3], (polys - lastPolys) / n, (searched - lastSearched) / n, (scanned - lastScanned) / n);
+                    lastPolys = polys;
+                    lastSearched = searched;
+                    lastScanned = scanned;
+                }
                 lastSwapTicks = swapTicks;
                 lastVertices = vertices;
                 lastPolygons = polygons;
