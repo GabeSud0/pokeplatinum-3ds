@@ -1753,9 +1753,13 @@ its display lists in groups by their bounding boxes), cost the PC 0.1 ms
 a frame and the 3DS 4 ms: the game's 2-3 ms a frame became 6-7, and the
 display, on its core, dropped to 48-56 frames a second; not done. Now:
 with the thread behind, ending a scene a V-blank or more after the game
-did, it makes no in-between scene for it (`interp_mid`; the frame between
+did, it made no in-between scene for it (`interp_mid`; the frame between
 shows the scene twice) rather than have the scene after the next left
-out (a jump); the `[perf] geometry's work` line has the in-between
+out (a jump). That left out 10-13 a second while the HM cut-in or a
+battle's start played (log 24186035: the 2D's drawing, 30-60 ms a
+picture on the same core, held the thread up a V-blank or two, and it
+caught up): now only with the thread a whole scene behind, the game
+having ended the next one already; the `[perf] geometry's work` line has the in-between
 scenes' share of ending scenes (on the road, 2026-11-02: 9-15 ms of the
 25-30 a scene, nearly all of ending scenes), of that the matching of
 their polygons with the scene before's, and how many it left out (on
@@ -1791,7 +1795,9 @@ W1)`, the same for y and depth; one division a vertex,
 triangles; x and y the same but for 0.3% of them, those 1/256 pixel
 off; depth at most 3 of 16 million off. In callgrind, the in-between scenes' work 22%
 less. Those near the screen's edges,
-behind the camera, or with no pair are redrawn as before. Lighting keeps
+behind the camera, or with no pair are redrawn as before. On the 3DS (log
+24186035, the road's median against 33073953): the in-between's own part
+6.2 → 4.7 ms a scene, the geometry 23.9 → 20.0. Lighting keeps
 64 normals' colours, forgotten together when the vector matrix, the
 lights, the material or the polygon's lights change (it was the last
 normal's, forgotten at every matrix command: 12% less lighting work); the

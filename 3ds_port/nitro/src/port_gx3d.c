@@ -111,6 +111,7 @@ static NitroGx3dScene *sDest;
 static inline NitroGx3dScene *dest_scene(void){return sDest?sDest:&sScenes[sBuilding];}
 static uint32_t sSerial;
 static uint32_t sSwapsDone;   /* (the geometry thread's; see below) */
+static uint32_t sSwapsQueued; /* (the game's thread's; see below) */
 
 static inline int32_t saturation(int64_t n)
 {
@@ -1598,19 +1599,25 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
     return 1;
 }
 /* At a SWAP_BUFFERS, before its scene (the building slot) is published:
- * its in-between scene. With the thread behind, ending the scene a V-blank
- * or more after the game did, none: the game ends the next one at the
- * second V-blank, and leaves out the one after that when the thread is
- * still on this one then (a jump); without the in-between scene (a third
- * of the time on the Cycling Road) it catches up, and the frame between
- * shows the scene twice. Not when every scene is kept (comparing). */
+ * its in-between scene. With the thread a scene behind (the game has
+ * ended the next one already), none: the game leaves out the one after
+ * that when the thread is still on this one then (a jump); without the
+ * in-between scene (a third of the time on the Cycling Road) it catches
+ * up, and the frame between shows the scene twice. Not when every scene
+ * is kept (comparing). */
 static uint32_t sMidsLeftOut;
 static uint64_t sMidTicks;
 static void interp_mid(NitroGx3dScene *now)
 {
     uint64_t t0;
+    /* (a scene behind: the game has ended the next one already. Not just
+     * ended late: the thread shares its core with the 2D's drawing, which
+     * holds it up a V-blank or two while the HM cut-in or a battle's start
+     * plays, and it caught up again; leaving the in-between scenes out
+     * then put the field at 30 frames a second, 10-13 a second left out,
+     * log 24186035) */
     if(sInterp && sThreaded && !sOps.keep_every_scene &&
-       (int32_t)(NitroPort_Gx3dStamp()-now->stamp)>=1){
+       (int32_t)(__atomic_load_n(&sSwapsQueued,__ATOMIC_RELAXED)-sSwapsDone)>=2){
         sMidOk[sBuilding]=0;
         __atomic_store_n(&sMidsLeftOut,sMidsLeftOut+1u,__ATOMIC_RELAXED);
         return;

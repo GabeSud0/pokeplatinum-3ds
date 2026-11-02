@@ -2131,9 +2131,10 @@ static void test_list_trimmed(void)
  * V-blanks; 0 here unless a test sets it). */
 static uint32_t sTestStamp;
 uint32_t NitroPort_Gx3dStamp(void){return sTestStamp;}
-/* The thread behind, ending a scene a V-blank or more after the game did:
- * no in-between scene for it (counted), rather than the scene after the
- * next left out. Caught up: one. */
+/* The thread a scene behind (the game has ended the next one already): no
+ * in-between scene for it (counted), rather than the scene after the next
+ * left out. Only late (the 2D's drawing on its core held it up), or caught
+ * up: one. */
 static void test_mid_left_out_behind(void)
 {
     const NitroGx3dScene *scene;
@@ -2157,10 +2158,21 @@ static void test_mid_left_out_behind(void)
     sHold=0;sem_post(&sGate);
     scene=NitroPort_Gx3dScene();
     CHECK(scene->count==2);
-    CHECK(NitroPort_Gx3dMidOf(scene)==NULL);
+    CHECK(NitroPort_Gx3dMidOf(scene)!=NULL);          /* (late, but nothing after it yet: kept) */
     NitroPort_Gx3dMidWork(NULL,NULL,&left);
-    CHECK(left==left0+1u);
+    CHECK(left==left0);
+    sHold=1;                                          /* the thread stops... */
     quad_at(-2400,opaque);
+    swap();
+    quad_at(-2200,opaque);
+    swap();                                           /* ...and the game ends the next one too */
+    sTestStamp=14;
+    sHold=0;sem_post(&sGate);
+    scene=NitroPort_Gx3dScene();
+    NitroPort_Gx3dMidWork(NULL,NULL,&left);
+    CHECK(left==left0+1u);                            /* (the first: a scene behind) */
+    CHECK(scene->count==2 && NitroPort_Gx3dMidOf(scene)!=NULL);   /* (the second: caught up) */
+    quad_at(-2000,opaque);
     swap();
     scene=NitroPort_Gx3dScene();
     CHECK(NitroPort_Gx3dMidOf(scene)!=NULL);          /* (caught up again) */
