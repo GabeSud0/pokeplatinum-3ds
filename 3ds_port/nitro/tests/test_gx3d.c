@@ -628,14 +628,23 @@ static void test_interpolation_order_shift(void)
     reset_geometry();
     NitroPort_Gx3dSetInterpolation(1);
     swap_done();
+    uint64_t part[4];
+    uint32_t searched0=0,searched=0;
     /* 16 tiles, 256 (8 DS pixels) to the left each scene */
     for(scene=0;scene<3;scene++){
-        if(scene==2)small_quad_at(3200-256*scene,1000,opaque);   /* (the new one, first) */
+        if(scene==2){
+            small_quad_at(3200-256*scene,1000,opaque);   /* (the new one, first) */
+            NitroPort_Gx3dMatchWork(part,NULL,&searched0,NULL);
+        }
         for(i=0;i<16;i++)small_quad_at(-3600+450*i+70*(i%3)-256*scene,-3000,opaque);
         swap_done();
     }
     mid=NitroPort_Gx3dMidScene(&matched,&polygons);
     CHECK(mid && polygons==17 && matched>=16);
+    /* (one off the order after the new one: looked for in the window, the
+     * new one and the first after it alone, the rest at that shift) */
+    NitroPort_Gx3dMatchWork(part,NULL,&searched,NULL);
+    CHECK(searched-searched0<=2u);
     if(mid && mid->count>=34){
         int ok=1;
         for(i=0;i<16;i++){

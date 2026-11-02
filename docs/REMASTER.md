@@ -1768,7 +1768,18 @@ up to 129 records for a polygon, a cache line or two each (in a 3DS-like
 cache, 28% fewer misses in the in-between scenes; the same pairs, bit
 for bit). A `[perf] in-between matching` line has its parts: the order's
 pairs, the scene's motion, each by where it is, one each, and how many
-polygons the window searched for. Lighting keeps
+polygons the window searched for: on the road (3DS log 10c1917f) each by
+where it is was 3-7 ms of it, 400-500 of a scene's 700-900 polygons
+searched for, 60,000 places looked at. Polygons going out of the view at
+one side and coming in at the other shift the order by a few, and every
+pair after it was the order's neighbour of its kind; and the ground's
+rows move their own ways in the perspective, a pixel or two off the
+scene's motion. Before the window's search now: the place one off the
+order as the last pair was, and where the pair before moved (when it's
+within MATCH_LOCAL, 2 pixels, of the scene's motion), each a pixel at
+most from where it puts it (`match_fits`). The road's recordings: a
+quarter of the searches; 47 of 1.2 million pairs different, 36 of them a
+pair where there was none, none further than 0.3 pixels. Lighting keeps
 64 normals' colours, forgotten together when the vector matrix, the
 lights, the material or the polygon's lights change (it was the last
 normal's, forgotten at every matrix command: 12% less lighting work); the

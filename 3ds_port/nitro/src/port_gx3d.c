@@ -943,6 +943,7 @@ typedef struct RecTag {
     uint32_t sig;
     uint8_t count, onScreen;
     uint16_t unused;
+    float px0, py0;           /* (its first corner: most of the window's are far, told by it alone) */
 } RecTag;
 typedef struct RecPos {
     float px[4], py[4];
@@ -1000,6 +1001,8 @@ static void record_polygon(GeoVertex *a,GeoVertex *b,GeoVertex *c,GeoVertex *d)
         size_t at=(size_t)(r-sRec[sRecBuild]);
         RecTag *tag=&sTag[sRecBuild][at];
         tag->sig=r->sig;tag->count=r->count;tag->onScreen=r->onScreen;tag->unused=0;
+        memcpy(&tag->px0,&r->px[0],sizeof(tag->px0));
+        memcpy(&tag->py0,&r->py[0],sizeof(tag->py0));
         memcpy(sPos[sRecBuild][at].px,r->px,sizeof(r->px));
         memcpy(sPos[sRecBuild][at].py,r->py,sizeof(r->py));
     }
@@ -1081,6 +1084,16 @@ static float poly_distance(const RecPos *p,const RecPos *c,unsigned count,float 
     }
     return d/(float)count;
 }
+/* Whether poly_distance would stop at the first corner (its first step
+ * alone at the limit or past it: the limit), from the tags alone: the
+ * window's search, most of whose polygons of a kind are far, without
+ * their corners' table. The same sums, the same answer. */
+static int first_far(const RecTag *p,const RecTag *c,float dx,float dy,float limit)
+{
+    float d=0.0f,stop=limit*(float)c->count;
+    d+=fabsf(c->px0-(p->px0+dx))+fabsf(c->py0-(p->py0+dy));
+    return d>=stop;
+}
 /* The scene's motion as match_records last worked it out (DS pixels, as
  * PolyRecord.px/py: x / w * 128, y / w * 96); valid with 8 pairs or more. */
 static int sMotionValid;
@@ -1106,6 +1119,7 @@ static unsigned motion_support(const RecTag *P,const RecPos *PP,unsigned m,const
         if(hi>(int)m-1)hi=(int)m-1;
         for(q=lo;q<=hi;q++){
             if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)continue;
+            if(first_far(&P[q],&C[j],dx,dy,2.0f*MATCH_SURE))continue;
             if(poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,2.0f*MATCH_SURE)<2.0f*MATCH_SURE){found++;break;}
         }
     }
@@ -1118,7 +1132,7 @@ static NitroGx3dThreadOps sOps;   /* (NitroPort_Gx3dStartThread) */
  * polygons, those searched for, the window's places looked at. Only the
  * geometry thread writes them. */
 static uint64_t sMatchPart[4];
-static uint32_t sMatchPolygons, sMatchSearched, sMatchScanned;
+static uint32_t sMatchPolygons, sMatchSearched, sMatchScanned, sMatchQuick;
 static uint64_t match_ticks(void)
 {
     return sOps.ticks?sOps.ticks(sOps.context):0;
@@ -1131,11 +1145,24 @@ void NitroPort_Gx3dMatchWork(uint64_t part[4],uint32_t *polygons,uint32_t *searc
     if(searched)*searched=*(volatile uint32_t *)&sMatchSearched;
     if(scanned)*scanned=*(volatile uint32_t *)&sMatchScanned;
 }
+/* (match_records) The scene before's polygon q for this one's j, one of
+ * its kind, in front of the camera, a pixel at most from where the motion
+ * (dx, dy) puts it; not `not' (one already looked at). */
+#define MATCH_LOCAL 2.0f
+static int match_fits(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *C,const RecPos *CP,
+                      unsigned j,int q,int not,float dx,float dy)
+{
+    if(q<0 || q>=(int)m || q==not)return 0;
+    if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)return 0;
+    return poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,MATCH_SURE)<MATCH_SURE;
+}
 static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *C,const RecPos *CP,unsigned n,int32_t *out)
 {
     unsigned i=0,j=0,matched=0,moves=0;
     float dx=0.0f,dy=0.0f,near;
     uint64_t t0=match_ticks(),t1,t2,t3;
+    float ldx=0.0f,ldy=0.0f;   /* (where the last pair moved) */
+    int haveLocal=0;
     static float mx[256],my[256];
     int offset=0;
     /* in order */
@@ -1203,6 +1230,7 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const 
     for(j=0;j<n;j++){
         int center=out[j]>=0?out[j]:(int)j+offset,order=out[j],lo,hi,q,best=-1;
         float bestD=near;
+        int shifted=(int)j+offset;
         if(!C[j].onScreen){
             /* (behind the camera in part: in order, or not at all) */
             if(out[j]>=0 && P[out[j]].onScreen)out[j]=-1;
@@ -1218,7 +1246,33 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const 
         if(out[j]>=0 && P[out[j]].onScreen && P[out[j]].count==C[j].count &&
            poly_distance(&PP[out[j]],&CP[j],C[j].count,dx,dy,MATCH_SURE)<MATCH_SURE){
             offset=out[j]-(int)j;matched++;
+            ldx=C[j].px0-P[out[j]].px0;ldy=C[j].py0-P[out[j]].py0;haveLocal=1;
             continue;
+        }
+        /* The same, one off the order as the last pair was: polygons going
+         * out of the view at one side and coming in at the other shift the
+         * order by a few, and every pair after it is the order's
+         * neighbour of its kind (on the Cycling Road at a ride, two in five
+         * of the order's pairs, each searched for in the window: 60,000
+         * places a scene, 3-7 ms on the 3DS, 2026-11-02). Then where the
+         * pair before moved (the ground's rows each move their own way in
+         * the perspective: a pixel or two off the scene's motion, near the
+         * screen's bottom or top), if it's no more than MATCH_LOCAL from the
+         * scene's. Either a pixel at most from where it puts it. */
+        if(match_fits(P,PP,m,C,CP,j,shifted,out[j],dx,dy)){
+            out[j]=shifted;offset=shifted-(int)j;matched++;sMatchQuick++;
+            ldx=C[j].px0-P[shifted].px0;ldy=C[j].py0-P[shifted].py0;haveLocal=1;
+            continue;
+        }
+        if(haveLocal && fabsf(ldx-dx)+fabsf(ldy-dy)<=MATCH_LOCAL){
+            int pick=-1;
+            if(match_fits(P,PP,m,C,CP,j,out[j],-1,ldx,ldy))pick=out[j];
+            else if(match_fits(P,PP,m,C,CP,j,shifted,out[j],ldx,ldy))pick=shifted;
+            if(pick>=0){
+                out[j]=pick;offset=pick-(int)j;matched++;sMatchQuick++;
+                ldx=C[j].px0-P[pick].px0;ldy=C[j].py0-P[pick].py0;
+                continue;
+            }
         }
         lo=center-MATCH_WINDOW;hi=center+MATCH_WINDOW;
         if(lo<0)lo=0;
@@ -1228,6 +1282,7 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const 
         for(q=lo;q<=hi;q++){
             float d;
             if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)continue;
+            if(first_far(&P[q],&C[j],dx,dy,bestD))continue;
             d=poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,bestD);
             if(d<bestD){bestD=d;best=q;}
         }
@@ -1261,7 +1316,10 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const 
             if(still<MATCH_SURE && (best<0 || bestD>clearly))best=order;
         }
         out[j]=best;
-        if(best>=0){offset=best-(int)j;matched++;}
+        if(best>=0){
+            offset=best-(int)j;matched++;
+            ldx=C[j].px0-P[best].px0;ldy=C[j].py0-P[best].py0;haveLocal=1;
+        }
     }
     /* One each: a polygon of the scene before paired with two of this
      * one's goes to the nearer (where the scene's motion puts it, or where
