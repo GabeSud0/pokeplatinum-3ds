@@ -1779,7 +1779,19 @@ order as the last pair was, and where the pair before moved (when it's
 within MATCH_LOCAL, 2 pixels, of the scene's motion), each a pixel at
 most from where it puts it (`match_fits`). The road's recordings: a
 quarter of the searches; 47 of 1.2 million pairs different, 36 of them a
-pair where there was none, none further than 0.3 pixels. Lighting keeps
+pair where there was none, none further than 0.3 pixels. The in-between
+scene's polygons wholly inside the view in both scenes (most of them;
+`PolyRecord.screenOk`, the same viewport) aren't clipped and projected
+again (`replay_polygon`: three divisions a vertex, the clipping's
+copies): halfway in clip space is inside the view too, and its place on
+the screen is between the two scenes' (the corners matching has, the
+depths `to_screen` gave) weighed by their w (`x = (X0 + X1) / (W0 +
+W1)`, the same for y and depth; one division a vertex,
+`replay_blended`). The road's recordings, against the redraw: the same
+triangles; x and y the same but for 0.3% of them, those 1/256 pixel
+off; depth at most 3 of 16 million off. In callgrind, the in-between scenes' work 22%
+less. Those near the screen's edges,
+behind the camera, or with no pair are redrawn as before. Lighting keeps
 64 normals' colours, forgotten together when the vector matrix, the
 lights, the material or the polygon's lights change (it was the last
 normal's, forgotten at every matrix command: 12% less lighting work); the

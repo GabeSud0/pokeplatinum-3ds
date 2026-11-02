@@ -575,6 +575,12 @@ static inline int32_t floor_int(double v)
     n=(int32_t)v;
     return n-(v<(double)n);
 }
+/* (floor, of a float well inside an int32: a place on the screen) */
+static inline int32_t floor_small(float v)
+{
+    int32_t n=(int32_t)v;
+    return n-(v<(float)n);
+}
 static NitroGx3dVertex to_screen(const GeoVertex *v)
 {
     NitroGx3dVertex out;
@@ -665,13 +671,17 @@ static int sReplaying;
  * In clip space (x, y, w), front means det > 0 (the screen's y points
  * down); this works for vertices behind the camera too. */
 static int sPolygonFront;
-static int polygon_front(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
+static int clip_front(const int32_t *a,const int32_t *b,const int32_t *c)
 {
-    double x0=a->clip[0],y0=a->clip[1],w0=a->clip[3];
-    double x1=b->clip[0],y1=b->clip[1],w1=b->clip[3];
-    double x2=c->clip[0],y2=c->clip[1],w2=c->clip[3];
+    double x0=a[0],y0=a[1],w0=a[3];
+    double x1=b[0],y1=b[1],w1=b[3];
+    double x2=c[0],y2=c[1],w2=c[3];
     double det=x0*(y1*w2-w1*y2)-y0*(x1*w2-w1*x2)+w0*(x1*y2-y1*x2);
     return det>0;
+}
+static int polygon_front(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
+{
+    return clip_front(a->clip,b->clip,c->clip);
 }
 /* The vertex's screen position, worked out once: strips and quads share
  * vertices between their triangles. */
@@ -918,6 +928,11 @@ typedef struct PolyRecord {
     uint8_t onScreen;        /* all its vertices in front of the camera (w > 0) */
     uint16_t ntri;           /* its triangles in its scene: ntri from tri0 */
     uint32_t tri0;
+    /* (screenOk: all its vertices inside the view, with the viewport
+     * then; their depths as to_screen had them; replay_blended) */
+    uint32_t sdepth[4];
+    uint32_t viewport;
+    uint8_t screenOk, pad[3];
 } PolyRecord;
 #define MAX_RECORDS 4096u
 #define MATCH_LOOKAHEAD 48u
@@ -960,6 +975,11 @@ static int sMidOk[3];
 static int32_t *sMatch;                  /* for each of this scene's polygons, the one before's, or -1 */
 static unsigned sMidMatched, sMidPolygons;
 
+static uint32_t viewport_key(void)
+{
+    return (uint32_t)(s.viewport[0]&255)|((uint32_t)(s.viewport[1]&255)<<8)|
+           ((uint32_t)(s.viewport[2]&255)<<16)|((uint32_t)(s.viewport[3]&255)<<24);
+}
 static uint32_t record_signature(unsigned n)
 {
     /* Its kind: the attributes but its alpha (fades), the texture's
@@ -991,12 +1011,19 @@ static void record_polygon(GeoVertex *a,GeoVertex *b,GeoVertex *c,GeoVertex *d)
     r->attr=s.attr;r->texparam=s.texparam;r->plttbase=s.plttbase;
     r->sig=record_signature(n);
     r->tri0=sLastTriFirst;r->ntri=(uint16_t)sLastTriAdded;
+    r->viewport=viewport_key();
+    r->screenOk=!(a->outside|b->outside|c->outside|(d?d->outside:0u));
+    for(k=0;k<n && r->screenOk;k++){
+        if(!v[k]->hasScreen){r->screenOk=0;break;}
+        r->sdepth[k]=v[k]->screen.depth;
+    }
     r->onScreen=1;
     for(k=0;k<n;k++){
         if(r->clip[k][3]<=0){r->onScreen=0;break;}
         r->px[k]=(float)r->clip[k][0]/(float)r->clip[k][3]*128.0f;
         r->py[k]=(float)r->clip[k][1]/(float)r->clip[k][3]*96.0f;
     }
+    if(!r->onScreen)r->screenOk=0;   /* (w = 0, all of it at 0: inside, but no place on the screen) */
     {
         size_t at=(size_t)(r-sRec[sRecBuild]);
         RecTag *tag=&sTag[sRecBuild][at];
@@ -1030,6 +1057,59 @@ static void replay_polygon(const PolyRecord *r,int32_t clip[4][4])
         if(r->count==4)stage_triangle(&v[0],&v[2],&v[3]);
         end_polygon(1);   /* (the DS's vertex RAM: as the scene's own, roughly) */
     }
+    s.attr=attr;s.texparam=texparam;s.plttbase=plttbase;
+}
+/* to_screen's viewport transform, from px and py (DS pixels from the
+ * middle): x = (X / W + 1) * width / 2 + x0, y = (1 - Y / W) * height / 2
+ * + top, in 1/256 pixel; worked out once a scene (blend_viewport). */
+typedef struct BlendView { float ax, bx, ay, by; } BlendView;
+static BlendView blend_viewport(void)
+{
+    BlendView b;
+    float width=(float)((s.viewport[2]-s.viewport[0]+1)&0x1FF);
+    float height=(float)((s.viewport[3]-s.viewport[1]+1)&0xFF);
+    b.ax=width;
+    b.bx=width*128.0f+(float)(s.viewport[0]&255)*256.0f+0.5f;
+    b.ay=-height*(4.0f/3.0f);
+    b.by=height*128.0f+(float)((191-(s.viewport[3]&255))&255)*256.0f+0.5f;
+    return b;
+}
+/* The same, for a polygon wholly inside the view in both scenes (p's and
+ * c's screenOk, the same viewport), without clipping it or projecting it
+ * again: halfway between in clip space is inside the view too (it's
+ * convex), and on the screen it's between where the two scenes have it
+ * (px, py, as matching has them; the depths to_screen gave), weighed by
+ * their w: the projection of the halfway point, x = (X0 + X1) / (W0 +
+ * W1), the same for y and depth, to the rounding. Most of a scene's
+ * polygons, and most of the in-between scene's time (two thirds on the
+ * Cycling Road at a ride, 5.5-7.5 ms a scene, 2026-11-02): one division a
+ * vertex here rather than three, and none of the clipping's copies.
+ * clip: halfway, as replay_polygon has it. */
+static void replay_blended(const PolyRecord *p,const PolyRecord *c,int32_t clip[4][4],const BlendView *bv)
+{
+    NitroGx3dVertex v[4];
+    unsigned k;
+    uint32_t attr=s.attr,texparam=s.texparam,plttbase=s.plttbase;
+    s.attr=c->attr;s.texparam=c->texparam;s.plttbase=c->plttbase;
+    for(k=0;k<c->count;k++){
+        float w0=(float)p->clip[k][3],w1=(float)c->clip[k][3];
+        float r=1.0f/(w0+w1),t=w1*r,dz;
+        float px=p->px[k]+(c->px[k]-p->px[k])*t,py=p->py[k]+(c->py[k]-p->py[k])*t;
+        memset(&v[k],0,sizeof(v[k]));
+        memcpy(v[k].clip,clip[k],sizeof(v[k].clip));
+        dz=(float)((int32_t)c->sdepth[k]-(int32_t)p->sdepth[k])*t;
+        v[k].x=floor_small(px*bv->ax+bv->bx);
+        v[k].y=floor_small(py*bv->ay+bv->by);
+        v[k].depth=(uint32_t)((int32_t)p->sdepth[k]+(int32_t)(dz+(dz>=0?0.5f:-0.5f)));
+        v[k].inv_w=2.0f*r;
+        v[k].s=c->st[k][0]/16.0f;v[k].t=c->st[k][1]/16.0f;
+        v[k].color=c->color[k];
+    }
+    begin_polygon();
+    sPolygonFront=clip_front(clip[0],clip[1],clip[2]);
+    add_screen_triangle(&v[0],&v[1],&v[2]);
+    if(c->count==4)add_screen_triangle(&v[0],&v[2],&v[3]);
+    end_polygon(1);
     s.attr=attr;s.texparam=texparam;s.plttbase=plttbase;
 }
 /* Where a vertex is on the screen, -1..1 (w > 0). */
@@ -1433,6 +1513,8 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
         /* (replaying: no shadow triangles, no counts in the [gx3d] lines,
          * the DS's limits counted afresh) */
         __typeof__(sDiag) diag=sDiag;
+        const BlendView view=blend_viewport();
+        const uint32_t viewport=viewport_key();
         sDest=sMid;sReplaying=1;sShadowCapture=0;
         s.framePolygons=0;s.frameVertices=0;
         for(j=0;j<n;j++){
@@ -1473,7 +1555,10 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
                     clip[k][1]+=(int32_t)floor(hy*(double)clip[k][3]+0.5);
                 }
             }
-            replay_polygon(c,clip);
+            if(mid && c->screenOk && P[sMatch[j]].screenOk &&
+               c->viewport==viewport && P[sMatch[j]].viewport==viewport)
+                replay_blended(&P[sMatch[j]],c,clip,&view);
+            else replay_polygon(c,clip);
             sReplaySoft=0;
         }
         if(sMotionValid && (sMotionX!=0.0f || sMotionY!=0.0f) && sPUsed){

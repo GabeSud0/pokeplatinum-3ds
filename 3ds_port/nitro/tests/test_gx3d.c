@@ -535,6 +535,58 @@ static void test_interpolation(void)
     CHECK(!NitroPort_Gx3dInterpolation());
     CHECK(NitroPort_Gx3dMidScene(NULL,NULL)==NULL);
 }
+/* A polygon wholly inside the view in both scenes: its in-between made
+ * from the two scenes' screen positions (not clipped, nor projected
+ * again), and still where the halfway point projects to, to 1/256 pixel:
+ * weighed by w, not halfway on the screen (here w changes by an eighth). */
+static void deep_quad_at(int x,int z)
+{
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(31u<<16));
+    NitroPort_GxDirectWrite(0x20,0x7fff);
+    NitroPort_GxDirectWrite(0x40,1);
+    vertex(x,-1000,z);
+    vertex(x+2000,-1000,z);
+    vertex(x+2000,1000,z);
+    vertex(x,1000,z);
+    NitroPort_GxDirectWrite(0x41,0);
+}
+static void test_interpolation_blended(void)
+{
+    static const uint32_t proj[16]={ONE,0,0,0, 0,ONE,0,0, 0,0,ONE,ONE, 0,0,0,2*ONE};
+    const NitroGx3dScene *mid;
+    unsigned k,matched=0,polygons=0;
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x10,0);
+    for(k=0;k<16;k++)NitroPort_GxDirectWrite(0x16,proj[k]);
+    NitroPort_GxDirectWrite(0x10,2);
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    deep_quad_at(-3000,0);                 /* (w 2) */
+    swap_done();
+    deep_quad_at(-2400,-1024);             /* (w 1.75, and 600 to the right) */
+    swap_done();
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && matched==1 && polygons==1 && mid->count==2);
+    if(mid && mid->count==2){
+        int worst=0,off=0;
+        unsigned t;
+        for(t=0;t<2;t++)for(k=0;k<3;k++){
+            const NitroGx3dVertex *v=&mid->triangles[t].v[k];
+            double w=v->clip[3];
+            int x=(int)floor((v->clip[0]+w)*256.0/(2*w)*256+0.5);
+            int y=(int)floor((w-v->clip[1])*192.0/(2*w)*256+0.5);
+            int dx=abs(v->x-x),dy=abs(v->y-y);
+            if(dx>worst)worst=dx;
+            if(dy>worst)worst=dy;
+            if(fabs(v->inv_w*w-1.0)>1e-5)off=1;
+        }
+        CHECK(mid->triangles[0].v[0].clip[3]==(8192+7168)/2);
+        CHECK(worst<=1);
+        CHECK(!off);
+    }
+    NitroPort_Gx3dSetInterpolation(0);
+    reset_geometry();
+}
 /* (a small quad, its corner at x, y) */
 static void small_quad_at(int x,int y,uint32_t attr)
 {
@@ -2220,6 +2272,7 @@ static void run_all(void)
     test_interpolation_order_shift();
     test_interpolation_tile_a_scene();
     test_interpolation_swaying();
+    test_interpolation_blended();
     test_triangle_strip();
     test_hidden_vertices();
     test_textures();
