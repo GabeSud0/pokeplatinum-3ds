@@ -68,6 +68,9 @@ void NitroPort_BootFirmware(const NitroPortFirmware *fw)
     nvram->ncd.tp.raw_x2 = 224 * NITRO_PORT_TP_RAW_SCALE;
     nvram->ncd.tp.raw_y2 = 168 * NITRO_PORT_TP_RAW_SCALE;
     memcpy(mac, fw->macAddress, 6);
+    /* After it, the wireless channels allowed (what WM_GetAllowedChannel
+     * reads: 0 would mean no wireless at all). */
+    *(u16 *)(mac + 6) = NITRO_PORT_WM_CHANNELS;
 
     /* No buttons held, lid open. */
     NitroPort_SetButtons(0, FALSE);

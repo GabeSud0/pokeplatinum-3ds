@@ -372,6 +372,157 @@ static void test_sound(void)
     CHECK(info.lockedChannels == 0 && info.chCtrl[0] == 0);
 }
 
+/* ----------------------------------------------------------- wireless */
+
+static int sWvrDone;
+static WVRResult sWvrResult;
+static void wvr_done(void *arg, WVRResult result)
+{
+    ++*(int *)arg;
+    sWvrResult = result;
+}
+
+/* The last answer each WM callback got (copied: the records are reused). */
+static int sWmCalls[WM_APIID_ASYNC_KIND_MAX];
+static u16 sWmErr[WM_APIID_ASYNC_KIND_MAX];
+static u16 sWmState[WM_APIID_ASYNC_KIND_MAX];
+static int sBeacons;
+static int sScanCalls;
+static u16 sScanChannel;
+static void wm_done(void *arg)
+{
+    WMCallback *cb = arg;
+    u16 id = cb->apiid;
+
+    if (id >= WM_APIID_ASYNC_KIND_MAX) {
+        return;
+    }
+    sWmCalls[id]++;
+    sWmErr[id] = cb->errcode;
+    if (id == WM_APIID_START_PARENT) {
+        sWmState[id] = ((WMStartParentCallback *)arg)->state;
+        if (sWmState[id] == WM_STATECODE_BEACON_SENT) {
+            sBeacons++;
+        }
+    } else if (id == WM_APIID_START_SCAN) {
+        sWmState[id] = ((WMStartScanCallback *)arg)->state;
+        sScanChannel = ((WMStartScanCallback *)arg)->channel;
+        sScanCalls++;
+    } else if (id == WM_APIID_START_MP) {
+        sWmState[id] = ((WMStartMPCallback *)arg)->state;
+    } else if (id == WM_APIID_MEASURE_CHANNEL) {
+        sWmState[id] = ((WMMeasureChannelCallback *)arg)->ccaBusyRatio;
+    }
+}
+
+static void vblanks(int n)
+{
+    while (n-- > 0) {
+        NitroPort_WmVBlank();
+    }
+}
+
+static u32 sWmBuf[WM_SYSTEM_BUF_SIZE / sizeof(u32)] ATTRIBUTE_ALIGN(32);
+static u16 sMpRecv[2048] ATTRIBUTE_ALIGN(32);
+static u16 sMpSend[512] ATTRIBUTE_ALIGN(32);
+static WMParentParam sParent ATTRIBUTE_ALIGN(32);
+static WMBssDesc sBss ATTRIBUTE_ALIGN(32);
+
+static void test_wireless(void)
+{
+    WMScanParam scan;
+    const WMStatus *status;
+    u16 data[8] ATTRIBUTE_ALIGN(32);
+
+    /* The wireless driver starts (the Underground stops the game if not),
+     * and its answer comes at a V-blank, not inside the request. */
+    CHECK(WVR_StartUpAsync(GX_VRAM_ARM7_128_D, wvr_done, &sWvrDone) == WVR_RESULT_OPERATING);
+    CHECK(sWvrDone == 0);
+    vblanks(3);
+    CHECK(sWvrDone == 1);
+    CHECK(sWvrResult == WVR_RESULT_SUCCESS);
+
+    /* The WM library hands the ARM7 its buffers by address: only where
+     * addresses are 32 bits, as on the DS and the 3DS (host32). */
+    if (sizeof(void *) == 4) {
+        CHECK(WM_Initialize(sWmBuf, wm_done, 2) == WM_ERRCODE_OPERATING);
+        CHECK(sWmCalls[WM_APIID_INITIALIZE] == 0);
+        vblanks(1);
+        CHECK(sWmCalls[WM_APIID_INITIALIZE] == 1);
+        CHECK(sWmErr[WM_APIID_INITIALIZE] == WM_ERRCODE_SUCCESS);
+        status = WMi_GetStatusAddress();
+        CHECK(status != NULL && status->state == WM_STATE_IDLE);
+        CHECK(WM_GetAllowedChannel() == NITRO_PORT_WM_CHANNELS);
+
+        /* Every channel is quiet. */
+        CHECK(WM_MeasureChannel(wm_done, 3, 17, 1, 30) == WM_ERRCODE_OPERATING);
+        vblanks(2);
+        CHECK(sWmCalls[WM_APIID_MEASURE_CHANNEL] == 1 && sWmState[WM_APIID_MEASURE_CHANNEL] == 0);
+
+        /* A parent starts, starts MP and sends its beacons; nobody joins. */
+        memset(&sParent, 0, sizeof(sParent));
+        sParent.ggid = 0x12345;
+        sParent.tgid = 1;
+        sParent.channel = 7;
+        sParent.maxEntry = 4;
+        sParent.beaconPeriod = 200;
+        sParent.parentMaxSize = 192;
+        sParent.childMaxSize = 38;
+        sParent.entryFlag = 1;
+        CHECK(WM_SetParentParameter(wm_done, &sParent) == WM_ERRCODE_OPERATING);
+        CHECK(WM_StartParent(wm_done) == WM_ERRCODE_OPERATING);
+        vblanks(1);
+        CHECK(sWmCalls[WM_APIID_SET_P_PARAM] == 1);
+        CHECK(sWmCalls[WM_APIID_START_PARENT] == 1 && sWmState[WM_APIID_START_PARENT] == WM_STATECODE_PARENT_START);
+        CHECK(WM_GetMPSendBufferSize() == WM_SIZE_MP_PARENT_SEND_BUFFER(192, 0));
+        CHECK(WM_GetMPReceiveBufferSize() == WM_SIZE_MP_PARENT_RECEIVE_BUFFER(38, 4, 0));
+        CHECK(WM_StartMP(wm_done, sMpRecv, (u16)WM_GetMPReceiveBufferSize(), sMpSend,
+                         (u16)WM_GetMPSendBufferSize(), 1) == WM_ERRCODE_OPERATING);
+        vblanks(1);
+        CHECK(sWmState[WM_APIID_START_MP] == WM_STATECODE_MP_START && WMi_IsMP());
+        vblanks(60);
+        CHECK(sBeacons >= 4 && sBeacons <= 6);
+        CHECK(WM_GetConnectedAIDs() == 0);
+        CHECK(WM_GetLinkLevel() == WM_LINK_LEVEL_0);
+        /* (no child: the library itself says so) */
+        CHECK(WM_SetMPDataToPortEx(wm_done, NULL, data, 8, 0xffff, 14, WM_PRIORITY_NORMAL) == WM_ERRCODE_NO_CHILD);
+        CHECK(WM_EndMP(wm_done) == WM_ERRCODE_OPERATING);
+        vblanks(1);
+        CHECK(WM_EndParent(wm_done) == WM_ERRCODE_OPERATING);
+        vblanks(1);
+        CHECK(sWmCalls[WM_APIID_END_PARENT] == 1 && status->state == WM_STATE_IDLE);
+        sBeacons = 0;
+        vblanks(30);
+        CHECK(sBeacons == 0);
+
+        /* A scan finds no parent, after its channel time. */
+        memset(&scan, 0, sizeof(scan));
+        scan.scanBuf = &sBss;
+        scan.channel = 13;
+        scan.maxChannelTime = 100;
+        memset(scan.bssid, 0xff, sizeof(scan.bssid));
+        CHECK(WM_StartScan(wm_done, &scan) == WM_ERRCODE_OPERATING);
+        vblanks(5);
+        CHECK(sScanCalls == 0);
+        vblanks(1);
+        CHECK(sScanCalls == 1 && sWmState[WM_APIID_START_SCAN] == WM_STATECODE_PARENT_NOT_FOUND);
+        CHECK(sScanChannel == 13);
+        CHECK(WM_EndScan(wm_done) == WM_ERRCODE_OPERATING);
+        vblanks(1);
+        CHECK(sWmCalls[WM_APIID_END_SCAN] == 1);
+
+        /* And the radio closes: the library lets go of its buffers. */
+        CHECK(WM_End(wm_done) == WM_ERRCODE_OPERATING);
+        vblanks(1);
+        CHECK(sWmCalls[WM_APIID_END] == 1 && sWmErr[WM_APIID_END] == WM_ERRCODE_SUCCESS);
+        CHECK(WMi_GetStatusAddress() == NULL);
+    }
+
+    CHECK(WVR_TerminateAsync(wvr_done, &sWvrDone) == WVR_RESULT_OPERATING);
+    vblanks(3);
+    CHECK(sWvrDone == 2 && sWvrResult == WVR_RESULT_SUCCESS);
+}
+
 int main(void)
 {
     NitroPortFirmware firmware;
@@ -389,6 +540,7 @@ int main(void)
     test_power();
     test_touch();
     test_sound();
+    test_wireless();
     printf("virtual ARM7 services: %d checks, %d failures\n", sChecks, sFailed);
     return sFailed ? 1 : 0;
 }

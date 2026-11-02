@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 18:00:00 -0700
+Subject: [PATCH] A berry patch's texture kept while it shows it (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The game frees the people's textures nobody uses (ov5_021EDA38) as a map
+loads. The port does it too when its follower or its ball goes, and when
+the people of the maps beside the player's go. A berry patch said which
+texture it uses from its growth stage as its movement last saw it; a
+patch at the far end of the 3DS's wider field (Route 206's, by the
+Cycling Road) hadn't moved yet, so it said none, and the textures its
+picture showed were freed. The game crashed seconds later, once the
+memory was used again (a data abort in UpdateModelPlttAddresses).
+
+A berry patch showing a picture now says that picture's texture.
+---
+diff --git a/src/berry_patch_graphics.c b/src/berry_patch_graphics.c
+index aa9bb023..abbbd864 100644
+--- a/src/berry_patch_graphics.c
++++ b/src/berry_patch_graphics.c
+@@ -45,6 +45,24 @@ int BerryPatchGraphics_GetCurrentGraphicsResourceID(const MapObject *mapObject)
+ {
+     BerryPatchData *patchData = sub_02062A78((MapObject *)mapObject);
+ 
++#ifdef SDK_PORT_3DS
++    // (the 3DS port) Its picture's texture while it shows one. The growth
++    // stage here is its movement's, which may not have run yet (a patch at
++    // the far end of the 3DS's wider field), and with none, the textures it
++    // was drawn with were taken as nobody's and freed while it showed them:
++    // the port frees the unused ones as its follower or the people of the
++    // maps beside go (ov5_021EDA38), not only as a map loads. On Route 206,
++    // the berry patches by the Cycling Road: the game crashed a few seconds
++    // later (2026-11-01).
++    if (sub_02062DFC(mapObject) == 1) {
++        BerryPatchGraphics *graphicsData = sub_02062AF0((MapObject *)mapObject);
++
++        if (graphicsData->graphicsObject != NULL) {
++            return graphicsData->graphicsResourceID;
++        }
++    }
++#endif
++
+     if (patchData->growthStage == BERRY_GROWTH_STAGE_NONE) {
+         return 0xffff;
+     }

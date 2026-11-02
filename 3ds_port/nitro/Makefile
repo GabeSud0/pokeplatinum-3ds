@@ -139,11 +139,12 @@ SDK_SRCS := \
 	wm/src/wm_dcf.c \
 	wm/src/wm_ds.c \
 	wm/src/wm_ks.c \
-	wm/src/wm_etc.c
+	wm/src/wm_etc.c \
+	wvr/src/wvr.c
 
 # Not built, because the game doesn't use them: mb (download play),
 # ctrdg (GBA slot, answered by src/ctrdg.c instead), prc (gesture recognition),
-# wvr, env, ext, os/src/os_china.c (China-edition boot screen) and
+# env, ext, os/src/os_china.c (China-edition boot screen) and
 # math/src/qsort.c. pad and exi are ARM7-only. utest is built because the
 # SDK's own self-tests (in os_thread.c) refer to it.
 #

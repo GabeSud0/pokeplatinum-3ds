@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 16:00:00 -0700
+Subject: [PATCH] The Underground's AUTO-RUN, its wireless icon in the corner (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+In the Underground, the player's own picture runs unless B is held (the
+options page's AUTO-RUN, PlayerAvatar_IsRunButtonHeld), but the speed sent
+to the Underground's server was B's alone: walking speed while the
+picture ran, so the player ran a tile, stood, and ran the next. Held B
+gave the reverse (a run's speed under a walking picture). The speed sent
+now follows AUTO-RUN the same way. And each player's picture is chosen
+from its speed with B standing for "runs" (CommPlayer_MoveClient), which
+PlayerAvatar_IsRunButtonHeld took as the button and AUTO-RUN turned
+round: that B is turned round for it too.
+
+The wireless signal icon is drawn at the DS screen's top right (240, 0).
+On the 3DS's wider screens engine A's picture is placed beside the DS's
+(NitroPort_EngineABeside), so the icon is moved by as much and sits in
+the 3DS screen's corner.
+---
+diff --git a/src/comm_player_manager.c b/src/comm_player_manager.c
+index 92b101e0..6f232fda 100644
+--- a/src/comm_player_manager.c
++++ b/src/comm_player_manager.c
+@@ -1,5 +1,9 @@
+ #include "comm_player_manager.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_options.h"
++#endif
++
+ #include <nitro.h>
+ #include <nitro/os.h>
+ #include <nnsys/g3d/glbstate.h>
+@@ -466,9 +470,19 @@ static void CommPlayer_SendMoveSpeed()
+ {
+     u8 moveSpeed = 2;
+ 
++#ifdef SDK_PORT_3DS
++    // (the options page's AUTO-RUN, as the field's own player has it
++    // (PlayerAvatar_IsRunButtonHeld): running unless B is held. The player's
++    // picture ran a tile at a time while the Underground moved them a
++    // walk's tile, and stood between, 2026-11-01)
++    if (PortOption_On(PORT_OPT_AUTO_RUN) ? !(PAD_BUTTON_B & gSystem.heldKeys) : (PAD_BUTTON_B & gSystem.heldKeys) != 0) {
++        moveSpeed = 1;
++    }
++#else
+     if (PAD_BUTTON_B & gSystem.heldKeys) {
+         moveSpeed = 1;
+     }
++#endif
+ 
+     CommSys_SetSendSpeed(moveSpeed);
+ }
+@@ -1047,10 +1061,23 @@ static void CommPlayer_MoveClient(int netId)
+             break;
+         }
+ 
++        u16 animPad = pad;
++
++#ifdef SDK_PORT_3DS
++        // (B here says "this player runs" (its speed 1), not the button: the
++        // animation's PlayerAvatar_IsRunButtonHeld takes it as the button,
++        // which the options page's AUTO-RUN turns round. Turned round for it
++        // too, so the picture runs at a run's speed and walks at a walk's,
++        // 2026-11-01)
++        if (PortOption_On(PORT_OPT_AUTO_RUN)) {
++            animPad ^= PAD_BUTTON_B;
++        }
++#endif
++
+         if (sCommPlayerManager->forceDirTimer && (netId == CommSys_CurNetId())) {
+             sCommPlayerManager->forceDirTimer--;
+         } else if (!CommSys_IsSendingMovementData() && sCommPlayerManager->isUnderground && (netId == CommSys_CurNetId())) {
+-            animCode = PlayerAvatar_GetMovementActionAnimCode(playerAvatar, pad, pad, v10, 1, 0);
++            animCode = PlayerAvatar_GetMovementActionAnimCode(playerAvatar, animPad, animPad, v10, 1, 0);
+         } else if (((pad & ~PAD_BUTTON_B) == 0) && (playerLocation->collisionFlag)) {
+             moveSpeed = 3;
+ 
+@@ -1072,7 +1099,7 @@ static void CommPlayer_MoveClient(int netId)
+         } else if (((pad & ~PAD_BUTTON_B) == 0) && (playerLocation->dir != dir)) {
+             animCode = MovementAction_TurnActionTowardsDir(playerLocation->dir, MOVEMENT_ACTION_WALK_ON_SPOT_FAST_NORTH);
+         } else {
+-            animCode = PlayerAvatar_GetMovementActionAnimCode(playerAvatar, pad, pad, v10, 1, 0);
++            animCode = PlayerAvatar_GetMovementActionAnimCode(playerAvatar, animPad, animPad, v10, 1, 0);
+         }
+ 
+         if (PlayerAvatar_IsMapObjectAnimationSet(playerAvatar) == 0) {
+diff --git a/src/network_icon.c b/src/network_icon.c
+index f3f886b1..372d75dd 100644
+--- a/src/network_icon.c
++++ b/src/network_icon.c
+@@ -237,7 +237,24 @@ static void UpdateOAM(NetworkIcon *icon)
+     int oamOffset = GetStrengthOAMOffset(vramType, icon->strength);
+     GXOamAttr *oam = vramType == NNS_G2D_VRAM_TYPE_2DMAIN ? (GXOamAttr *)HW_OAM : (GXOamAttr *)HW_OAM_END;
+ 
++#ifdef SDK_PORT_3DS
++    {
++        // (the 3DS remaster: in the corner of the 3DS's screen, as the DS
++        // has it in its own: on a wider screen, engine A's sprites are
++        // placed beside the DS's picture (NitroPort_EngineABeside), so the
++        // icon is moved by as much, 2026-11-01)
++        extern void NitroPort_EngineABeside(int *x, int *top);
++        int besideX = 0, besideTop = 0;
++
++        if (vramType == NNS_G2D_VRAM_TYPE_2DMAIN) {
++            NitroPort_EngineABeside(&besideX, &besideTop);
++        }
++
++        G2_SetOBJAttr(oam, icon->x + besideX, (icon->y - besideTop) & 0xFF, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_16x16, GX_OAM_COLORMODE_16, oamOffset, 14, 0);
++    }
++#else
+     G2_SetOBJAttr(oam, icon->x, icon->y, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE, GX_OAM_SHAPE_16x16, GX_OAM_COLORMODE_16, oamOffset, 14, 0);
++#endif
+ 
+     if (oam != icon->oam) {
+         G2_SetOBJAttr(icon->oam, 0, 0, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NODISPLAY, GX_OAM_SHAPE_16x16, GX_OAM_COLORMODE_16, 0, 0, 0);

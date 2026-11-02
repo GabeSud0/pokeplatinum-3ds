@@ -7,11 +7,23 @@
  * How: Luma3DS's loader runs a .3dsx in place of one title, its homebrew
  * title (the Homebrew Launcher Loader's, 000400000D921E00, unless Rosalina
  * was told another). Its service hb:ldr is told which .3dsx (SetTarget) and
- * the program's arguments (SetArgv); then this program closes with a jump
- * to that title (libctru's chainloader), and the game runs there exactly as
- * it does from the Homebrew Launcher. Its arguments say it came from here
- * (argv[1], FORWARDED_ARG plus this title's ID), so the game's soft reset
- * comes back through here rather than to the Homebrew Launcher.
+ * the program's arguments (SetArgv). Then this title is made the homebrew
+ * title for one start (Luma3DS's shared page: the title "selected", which
+ * Luma's process manager makes the homebrew title as this program closes,
+ * as Rosalina's "Switch the hb. title to the current app" does) and this
+ * program closes with a jump to itself (libctru's chainloader): Luma3DS
+ * loads the game in this title's place, so the HOME Menu shows this title
+ * as the one running (with a jump to the Homebrew Launcher Loader's title
+ * instead, the HOME button showed that one's icon: 2026-11-01). The game
+ * puts the title selected before back as soon as it starts (main_3ds.c,
+ * HB_TITLE_ARG), so the next start runs this program again. Emerald 3DS's
+ * forwarder does the same (github.com/ZallaxDev/emerald-3ds). Where the
+ * shared page isn't laid out as known (another Luma3DS), the jump to the
+ * homebrew title, as before.
+ *
+ * Its arguments say it came from here (argv[1], FORWARDED_ARG plus this
+ * title's ID), so the game's soft reset comes back through here rather than
+ * to the Homebrew Launcher.
  *
  * Anything missing (the .3dsx, Luma3DS, the homebrew title): a message on
  * the upper screen and a button to close. */
@@ -22,7 +34,18 @@
 
 #define HOMEBREW_TITLE 0x000400000D921E00ULL   /* (Luma3DS's default) */
 #define FORWARDED_ARG "--home-menu="           /* (+ this title's ID in hex: main_3ds.c) */
+#define HB_TITLE_ARG "--hb-title="              /* (+ the homebrew title to put back: main_3ds.c) */
 #define ARGV_BYTES 0x400                       /* (Luma3DS's loader's argument buffer) */
+
+/* Luma3DS's shared page, its config part (Luma3DS's own layout, the same
+ * since v10): the homebrew title now, and the one it becomes when the
+ * running program closes. */
+typedef struct LumaSharedConfig {
+    u64 hbldr3dsxTid;
+    u64 selectedHbldr3dsxTid;
+    bool useHbldr;
+} LumaSharedConfig;
+#define LUMA_SHARED_CONFIG ((volatile LumaSharedConfig *)(OS_SHAREDCFG_VADDR + 0x800))
 
 /* Where the .3dsx may be: the web builder's place, then a folder of its own. */
 static const char *const sPrograms[] = {
@@ -85,9 +108,21 @@ static bool HomebrewTitle(u64 *title, FS_MediaType *media)
     return found;
 }
 
-/* argv: the .3dsx's path (as the Homebrew Launcher gives it), then where
- * it came from. */
-static void MakeArgv(const char *program)
+/* Whether this title can be made the homebrew title for the game's start:
+ * Luma3DS, its loader on, its shared page laid out as known (its homebrew
+ * title there the one it says). */
+static bool CanTakeOver(void)
+{
+    s64 version = 0, hbTitle = 0;
+
+    return R_SUCCEEDED(svcGetSystemInfo(&version, 0x10000, 0)) &&
+           R_SUCCEEDED(svcGetSystemInfo(&hbTitle, 0x10000, 0x100)) && LUMA_SHARED_CONFIG->useHbldr &&
+           LUMA_SHARED_CONFIG->hbldr3dsxTid == (u64)hbTitle;
+}
+
+/* argv: the .3dsx's path (as the Homebrew Launcher gives it), where it came
+ * from, and (taken over) the homebrew title to put back (0: none). */
+static void MakeArgv(const char *program, u64 restore)
 {
     char *p = (char *)&sArgv[1];
     char *end = (char *)sArgv + sizeof(sArgv);
@@ -95,9 +130,12 @@ static void MakeArgv(const char *program)
 
     memset(sArgv, 0, sizeof(sArgv));
     APT_GetProgramID(&self);
-    sArgv[0] = 2;
+    sArgv[0] = restore != 0 ? 3 : 2;
     p += snprintf(p, (size_t)(end - p), "%s", program) + 1;
-    snprintf(p, (size_t)(end - p), "%s%016llX", FORWARDED_ARG, (unsigned long long)self);
+    p += snprintf(p, (size_t)(end - p), "%s%016llX", FORWARDED_ARG, (unsigned long long)self) + 1;
+    if (restore != 0) {
+        snprintf(p, (size_t)(end - p), "%s%016llX", HB_TITLE_ARG, (unsigned long long)restore);
+    }
 }
 
 static void ShowProblem(const char *what, const char *help)
@@ -148,6 +186,20 @@ int main(void)
                     "  Homebrew Launcher.");
         return 0;
     }
+    if (CanTakeOver()) {
+        /* The game in this title's place (see the top) */
+        u64 self = 0, previous = LUMA_SHARED_CONFIG->selectedHbldr3dsxTid;
+
+        if (R_SUCCEEDED(APT_GetProgramID(&self)) && self != 0) {
+            MakeArgv(program, previous != 0 ? previous : LUMA_SHARED_CONFIG->hbldr3dsxTid);
+            if (R_SUCCEEDED(HbldrSetTarget(program + 5)) && R_SUCCEEDED(HbldrSetArgv(sArgv, sizeof(sArgv)))) {
+                svcCloseHandle(sHbldr);
+                LUMA_SHARED_CONFIG->selectedHbldr3dsxTid = self;
+                aptSetChainloader(self, MEDIATYPE_SD);
+                return 0;
+            }
+        }
+    }
     if (!HomebrewTitle(&title, &media)) {
         svcCloseHandle(sHbldr);
         ShowProblem("The Homebrew Launcher isn't installed.",
@@ -160,7 +212,7 @@ int main(void)
                     "  Homebrew Launcher.");
         return 0;
     }
-    MakeArgv(program);
+    MakeArgv(program, 0);
     if (R_FAILED(HbldrSetTarget(program + 5)) || R_FAILED(HbldrSetArgv(sArgv, sizeof(sArgv)))) {
         svcCloseHandle(sHbldr);
         ShowProblem("Luma3DS didn't take the game.",

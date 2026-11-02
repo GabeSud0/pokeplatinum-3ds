@@ -48,13 +48,14 @@ SDK still builds the original game with Metrowerks.
 | GBA slot | reports "no cartridge", which is correct on a 3DS (no Pal Park) | `src/ctrdg.c` |
 | The ARM7 link (PXI) | message routing between the game's libraries and port handlers; answers arrive through the receive FIFO's interrupt, as on the DS | `src/pxi.c` |
 | Virtual ARM7: card backup, RTC, PM and touch | save-card SPI requests, BCD local clock, PMIC replies, shared touch samples and autosampling | `src/port_arm7.c`, `port_card.c`, `port_rtc.c`, `port_pm.c`, `port_tp.c` |
+| Virtual ARM7: wireless (WVR, WM) | a radio with nobody else around: the driver starts, a parent starts and sends its beacons, scans find no parent, every channel is quiet; answers come at the V-blanks they're due, in order. So the Underground plays alone | `src/port_wm.c` |
 
 **Not yet: hooks are in place, the behaviour comes in later steps**
 
 | Area | Today | Comes with |
 |---|---|---|
 | ARM7 services: sound | second, prefixed build of the original ARM7 sound sequencer; plain-C 16-channel PCM/ADPCM/PSG/noise and capture mixer; audio-clock timers, PXI commands and alarms (`src/port_snd.c`, `port_sound_chip.c`) | live NDSP test and remaining chip accuracy |
-| ARM7 services: microphone, wireless | not yet emulated | one service per PXI tag |
+| ARM7 services: microphone; wireless with other consoles | not emulated (the radio is there, with nobody around: `src/port_wm.c`) | one service per PXI tag |
 | 3D | the 3D engine reads as idle with an empty command FIFO, and the GXFIFO interrupt fires while its condition holds, so display lists sent by DMA complete (`src/port_gx.c`); nothing is drawn | the 3D command translator |
 | H-blank DMA (the game's wavy-screen effects), synchronous `MI_VBlankDmaCopy*` | reported as not implemented; the transfer stays pending | the 2D renderer (per-line timing) and the 3DS main loop |
 | VRAM banking | each CPU view of VRAM is its own block; the renderer reads BG/OBJ data from the views and extended palettes from the bank the VRAM registers name. A bank moved from one view to another doesn't take its contents along | if a game needs it |
@@ -68,7 +69,7 @@ they're accepted and ignored. Timing delays (`OS_SpinWait`, `SVC_WaitByLoop`)
 return straight away.
 
 **Not built**, because the game doesn't use them: download play (mb), gesture
-recognition (prc), wireless voice (wvr), the China-edition boot screen,
+recognition (prc), the China-edition boot screen,
 streaming decompression, and a few debug libraries. See the `Makefile`.
 
 ## Stage 1: DS 3D geometry capture and PC reference renderer
@@ -258,10 +259,14 @@ interrupt, so a reply is taken as soon as the game has interrupts enabled
 (at once if it has, otherwise when it re-enables them). The card library runs
 its tasks on its own thread, as on the DS. The PMIC returns battery OK and
 tracks backlight/sound state but does **not** physically power off the console.
-Other ARM7 tags (including wireless) remain unimplemented.
+The wireless tags (WVR and WM) are a radio with nobody around
+(`src/port_wm.c`); its answers wait for the V-blank they're due at, since
+the game asks for its next scan from inside the last one's callback. The
+microphone tag remains unimplemented.
 
 Host and host32 `make test` execute `tests/test_arm7.c` using the original
-`CARD_*`, `RTC_*`, `PM_*` and `TP_*` SDK entry points and a removable
+`CARD_*`, `RTC_*`, `PM_*`, `TP_*`, `WVR_*` and `WM_*` (host32 only: the
+WM library passes addresses as 32 bits) SDK entry points and a removable
 temporary save, never ROM or actual user data. The SDK's ARM9 side of these
 libraries is unchanged.
 

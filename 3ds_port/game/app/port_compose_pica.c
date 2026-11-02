@@ -128,6 +128,10 @@ typedef struct LayerSet {
     int writing, held;    /* (held: by frames being built, a count) */
     u32 flightSerial;     /* the last frame drawn with it (busy until sGpuDone reaches it) */
     NitroPublishTarget pub;   /* what its textures hold (publishing only what changed) */
+    /* texels a DS pixel in its textures: the screen's texScale, or 1 for a
+     * picture too wide for 2 (the Underground at the DS's pixel size on the
+     * lower screen, 320 x 240, drawn a pixel a pixel) */
+    int texScale;
     /* (the upper screen's) A BG the compositor draws itself (the field's
      * weather: ComposeLayers.gpuBg): its whole map, 2x2 texels a pixel
      * (512 x 512 RGBA5551, tiled), and its key (bgValid: written). */
@@ -797,6 +801,7 @@ static int alloc_sets(Screen *scr, int canvasW, int scale)
         memset(scr->set[i].under, 0, (size_t)scr->texW * scr->texH * 2u);
         memset(scr->set[i].over, 0, (size_t)scr->texW * scr->texH * 4u);
         memset(&scr->set[i].pub, 0, sizeof(scr->set[i].pub));   /* (holding nothing known) */
+        scr->set[i].texScale = scale;
         /* (the layers in front 16 bits a texel while none of them is
          * partly see-through: in the field a text box's quad took the GPU
          * 2-3.7 ms with RGBA8 texels, 2026-10-20) */
@@ -1449,19 +1454,19 @@ static u32 widen5(u32 v)
 
 /* The picture into a set's textures whole: the filters other than sharp
  * (or a texel a pixel). */
-static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *set, int w, int h)
+static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *set, int w, int h, int texScale)
 {
     uint16_t *c16 = sConverted16[e];
     int i, n = w * h;
     /* (the texture's rows the picture uses: tile rows, whole) */
-    u32 rowsUsed = ((u32)h * scr->texScale + 8u + 7u) & ~7u;
+    u32 rowsUsed = ((u32)h * texScale + 8u + 7u) & ~7u;
 
     set->pub.heldBy = NULL;   /* (not tracked this way) */
     set->pub.over16 = 0;      /* (RGBA8 here) */
     for (i = 0; i < n; i++) {
         c16[i] = sToRgb565[l->under[i] & 0x7FFF];
     }
-    if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+    if (sConfig.filter == COMPOSE_FILTER_SCALE2X && texScale == 2) {
         NitroPort_Scale2xTiled16(c16, w, h, set->under, scr->texW);
     } else {
         NitroPort_Tile16(c16, w, h, set->under, scr->texW);
@@ -1473,7 +1478,7 @@ static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *
         uint32_t *c32 = sConverted[e];
 
         if (NitroPort_PremultiplyOver(l->over, l->overAlpha, sAlpha16, c32, 0, w * OVER_ROWS(l))) {
-            if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+            if (sConfig.filter == COMPOSE_FILTER_SCALE2X && texScale == 2) {
                 NitroPort_Scale2xTiled32(c32, w, OVER_ROWS(l), set->over, scr->texW);
             } else {
                 NitroPort_Tile32(c32, w, OVER_ROWS(l), set->over, scr->texW);
@@ -1581,9 +1586,11 @@ int NitroPort_ComposePublish(int engine, int screen)
     u64 start = svcGetSystemTick();
     int w = l->width > 0 ? l->width : DS_W;
     int h = l->height > DS_H ? l->height : DS_H;
+    /* (a picture too wide for the screen's textures at 2 texels a pixel: 1,
+     * drawn a pixel a pixel) */
+    int texScale = w * scr->texScale > scr->texW || h * scr->texScale + 8 > scr->texH ? 1 : scr->texScale;
 
-    if (!sReady || w > CANVAS_MAX || w * scr->texScale > scr->texW || w * h > WORK_PIXELS ||
-        h * scr->texScale + 8 > scr->texH) {
+    if (!sReady || w > CANVAS_MAX || w * texScale > scr->texW || w * h > WORK_PIXELS || h * texScale + 8 > scr->texH) {
         return 1;
     }
     /* The oldest set not held by the compositor, not the newest, and not
@@ -1636,12 +1643,13 @@ int NitroPort_ComposePublish(int engine, int screen)
     if (!l->displayOff && l->has3d && l->over) {
         over_rows(l->over, w, OVER_ROWS(l), &set->overTop, &set->overBottom);
     }
-    if (!l->displayOff && sConfig.filter != COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+    set->texScale = texScale;
+    if (!l->displayOff && sConfig.filter != COMPOSE_FILTER_SCALE2X && texScale == 2) {
         set->overEmpty = !NitroPort_PublishDoubledOver(&sShadow[e], &set->pub, l->under, l->over, l->overAlpha,
                                                        l->has3d, w, h, OVER_ROWS(l), set->under, set->over,
                                                        scr->texW, sToRgb565, sAlpha16, flush_texture);
     } else if (!l->displayOff) {
-        publish_whole(e, l, scr, set, w, h);
+        publish_whole(e, l, scr, set, w, h, texScale);
     }
     /* A BG drawn here (the field's weather): its picture, when the set
      * doesn't hold it yet (made by the drawer as it read the game's state:
@@ -3327,9 +3335,9 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
     }
     /* The texture coordinates of the picture's corners: its top row is
      * texture row 0, at v = 1 (the PICA reads row height - 1 - t). */
-    u1 = (float)(canvasW * scr->texScale) / (float)scr->texW;
+    u1 = (float)(canvasW * set->texScale) / (float)scr->texW;
     vTop = 1.0f;
-    vBottom = 1.0f - (float)(rows * scr->texScale) / (float)scr->texH;
+    vBottom = 1.0f - (float)(rows * set->texScale) / (float)scr->texH;
     if (sConfig.flipV) {
         float t = vTop;
 

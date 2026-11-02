@@ -775,6 +775,15 @@ screen's 320 x 192 at 1.25 times, as above.
   ones (nothing to see). Their pictures' places are given back as they go,
   and walking into a map the people beside are given up (the furthest
   first) while the new map's pictures wouldn't fit.
+  - The textures nobody uses are freed (`ov5_021EDA38`) as the people
+    beside go, and as the follower or its ball does, where the DS does it
+    only as a map loads. A berry patch said which texture it uses from its
+    growth stage as its movement last saw it, and one at the far end of
+    the wider field (Route 206's, by the Cycling Road) hadn't moved yet:
+    its textures were freed while its picture showed them, and the game
+    crashed once the memory was used again (patch 0066,
+    `BerryPatchGraphics_GetCurrentGraphicsResourceID`: a patch showing a
+    picture says that picture's texture).
   - The player's counterpart (patch 0055): her graphics are a variable's
     (`OBJ_EVENT_GFX_VAR_0`), set by her map's script as the player walks
     in, so she was never brought and popped in at the zone change (Dawn
@@ -1329,7 +1338,24 @@ screens) the lower screen is the DS's, filling the screen as before.
     needed): the scripts' checks (Cut, Surf, Strength, Rock Smash...) and
     the party menu's Fly and Defog (Flash is a TM in Platinum).
   - AUTO-RUN: running unless B is held (once the player has the running
-    shoes).
+    shoes). The Underground too (patch 0065, `comm_player_manager.c`):
+    the speed it moves the player at is sent to its server, and that was
+    B's alone, so with AUTO-RUN the player's picture ran a tile and stood
+    for the rest of a walk's tile. And each player's picture is chosen
+    from its speed with B standing for "runs" (`CommPlayer_MoveClient`):
+    `PlayerAvatar_IsRunButtonHeld` took that as the button and AUTO-RUN
+    turned it round (a run's speed under a walking picture), so it's
+    turned round for it too.
+  - The Underground's answers (patch 0067): the player is moved by the
+    comm system's server (the 3DS itself, the wireless having nobody
+    around), and their picture followed the place it sent back through
+    the comm system's buffers, 4 frames later; turning stood them still 4
+    frames, at the slower turn, and a turn while walking stopped them.
+    With nobody else there, the place is put on the picture as the server
+    sends it (the same packets coming round after are left alone), a turn
+    while walking takes its step at once, and a turn from standing is the
+    field's, its step 2 frames after. From the press to the screen moving:
+    10 frames to 6; turning, 21 to 13 (the field's 11).
   - FOLLOWER (patch 0056, `port_follower.c`; off by default): the party's
     first Pokémon (not an egg, not fainted) walks behind the player, on
     HeartGold and SoulSilver's sprites when the data pack has them
@@ -1353,14 +1379,29 @@ screens) the lower screen is the DS's, filling the screen as before.
     their own; a 64 x 64 one indoors), behind the player or, where that
     tile isn't free (out of a door), on the player's tile hidden till they
     step off it (the tile behind checked as the player's step would be:
-    no water, ledge or ramp). Back in its ball whenever the game moves
+    no water, ledge or ramp). Up or down stairs or an escalator and into
+    a cave or a forest it goes with the player, as HeartGold's does
+    (patch 0064: during a warp's way in or out, the task
+    `sub_02056BDC`/`sub_02056C18` start, `FieldSystem_PortWarpKind`): out
+    at once on the other side, without its ball, behind the player or on
+    their tile (the stairs') shown once they've stepped off it and stand,
+    or it sets off after them. Through a building's door (in by it,
+    transition 1, or out onto it) it goes into its ball and comes out of
+    it, as before (Gabriel's choice, 2026-11-01). (It went into its ball
+    on the stairs too, and came out only once the player stood still:
+    walking on up a building's stairs it stayed in, 2026-11-01.) Going
+    into its ball it waits up to 20 frames for room for its ball's
+    picture (handing the party to the nurse the player's own picture
+    changes in that frame, and it went in with no ball). Back in its ball whenever the game moves
     the player (a script's walk; out again when the player is theirs
     again: scenes where it stays out may come later), when someone walks
     onto its tile in a script (a person coming up behind the player: the
     two stood in each other, 2026-10-29), and while the
     player jumps down a ledge (the
     follow code moves a tile a step behind and can't keep up with the
-    jump): out again where they stop. Its graphics IDs from 0x4000, past
+    jump): out again where they stop, or, the player walking on, behind
+    them as they go, growing out of nothing without its ball (which would
+    be left behind), not waiting for them to stop. Its graphics IDs from 0x4000, past
     the berry trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000). Its
     Poké Ball: coming out it grows from nothing (its picture made at no
     size, so it never shows whole first), going in it shrinks away where
@@ -1571,13 +1612,44 @@ ARM11 has no divide instruction: tens of thousands a frame in the
 opening); the pictures are read at the start (`[wide art] N read ahead in
 X ms`), not as each first shows.
 
+The Underground has the field on the lower screen (engine A, the 3D,
+there). With the pixel-perfect field option it's at the DS's pixel size
+there too (`NitroPort_PixelFieldLower`, `NitroPort_WideLayoutLower`): the
+3D's view 320 x 240, the 2D's picture 320 x 240 with the DS's in its
+middle, a pixel a pixel on the lower screen's 320 x 240, more of the
+tunnels around the player, the text box at the bottom across the
+screen. The lower screen's layer textures are made for 2 texels a pixel
+of the DS's 256; a picture too wide for that is published at a texel a
+pixel (`LayerSet.texScale`), which is what a pixel a pixel needs anyway
+(no room in the linear heap for textures twice as wide). `NitroPort_
+PixelField` is now the upper screen's only (engine A on top). The
+wireless signal icon, at the DS screen's top right, is moved with engine
+A's picture (`NitroPort_EngineABeside`, patch 0065) to the 3DS screen's
+corner. The sprites over a window moved to the screen's edge (the
+Underground's menu: its icons and cursor) go with it: the window's place
+is taken round the BG map's 512 as the BG's drawing has it, since a
+pixel-perfect field's BGs are scrolled by its top (the window came out
+hundreds of lines away from the sprites over it, and they stayed behind).
+
 The drawing threads draw from the display state as it was when the game
 handed them the frame: its registers, palettes and OAM are copied then
 (`NitroPort_Render2DTakeState`, a few KB), so the game's next frame (its
 sprites, scroll, colours) can't get mixed into a picture that takes long
-to draw (sprites showed in the wrong places for a frame). The VRAM is read
-as it is: before its next V-blank work the game waits for a drawer still
-reading it. Working out whether a screen changed compares the small parts
+to draw (sprites showed in the wrong places for a frame). The BGs' maps
+are copied with them (`TakeMaps`, the screen blocks the BGs on show: 2-8
+KB each): the game writes them in its next frame's work too, before that
+frame's V-blank (a window it opens is copied to the VRAM at once,
+`Window_CopyToVRAM`), and drawn with the windows, registers and palettes
+taken before it, a YES/NO box showed for a frame where the DS has it, its
+frame black, then snapped to the wider screen's edge; a text box showed
+first in the middle with its frame black (2026-11-01). The tiles those
+maps show are taken with them (each once), and a bitmap BG's picture: the
+options page is drawn whole again when anything on it changes, its alike
+tiles shared, so a tile's number goes to another picture each time, and
+its new tiles showed through the map taken for a frame, mixed up. The
+rest of the VRAM (the OBJs', the extended palettes) is read as it is:
+before its next V-blank work the game waits for a drawer still reading
+it. Working out whether a screen changed compares the small parts
 first, and the VRAM only when they're the same: since 2026-10-30 only the
 VRAM the screen shows (`EngineShownVramSignature`): for each BG on, its
 whole map, the tiles the map uses and their palettes; the OBJs' VRAM while

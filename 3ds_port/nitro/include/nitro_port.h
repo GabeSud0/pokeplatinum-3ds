@@ -268,10 +268,19 @@ void NitroPort_SetArm7Handler(int tag, NitroPortArm7Handler handler);
 /* Send a message from the "ARM7" back to the game's callback for `tag`. */
 void NitroPort_Arm7Reply(int tag, u32 data, BOOL err);
 
-/* Register the emulated save-card, RTC, power and touch services.
- * Call before CARD/RTC/PM/TP initialization; registration is idempotent.
- * No DS ARM7 thread or libctru is required. */
+/* Register the emulated save-card, RTC, power, touch, sound and wireless
+ * services. Call before CARD/RTC/PM/TP initialization; registration is
+ * idempotent. No DS ARM7 thread or libctru is required. */
 void NitroPort_InitArm7Services(void);
+
+/* The wireless channels the virtual radio allows (src/port_wm.c), as
+ * WM_GetAllowedChannel gives them (bit n: channel n + 1): 1, 7 and 13.
+ * The ARM7 leaves them after the MAC address in the user settings it
+ * reads from the firmware (NitroPort_BootFirmware). */
+#define NITRO_PORT_WM_CHANNELS 0x1041
+
+/* Each V-blank: the wireless answers now due (src/port_wm.c). */
+void NitroPort_WmVBlank(void);
 
 /* Save-card backing store: raw 512 KiB FLASH image, emulator .sav layout.
  * Set before CARD_IdentifyBackup. A missing file is created filled with 0xFF.

@@ -3318,8 +3318,8 @@ static void SolidTile4(u8 *tile, int index)
  * carried on beside it. */
 static void test_wide_framed_windows(void)
 {
-    static u16 wide[320 * 192], over[320 * 192];
-    static u8 overAlpha[320 * 192];
+    static u16 wide[320 * 240], over[320 * 240];
+    static u8 overAlpha[320 * 240];
     static u8 tiles[8 * 32], objTile[32];
     static u16 map[32 * 32];
     static u16 pltt[16] = { GREY, RED, BLUE, WHITE, GREEN };
@@ -3382,6 +3382,23 @@ static void test_wide_framed_windows(void)
     CHECK(wide[26 * 320 + 274] == BLUE);          /* its sprite with it: 208 + 32 + 32 */
     CHECK(wide[26 * 320 + 242] == GREY);          /* (not where it was) */
     CHECK(wide[26 * 320 + 134] == BLUE);          /* the other sprite where it was: 100 + 32 */
+    /* The field at the DS's pixel size on the lower screen (the
+     * Underground): a taller picture, the DS's 24 lines down, its BGs
+     * scrolled up by as much. The sprites go with the menu there too
+     * (2026-11-01: the window was taken 488 lines above them, and they
+     * stayed where the DS has them). */
+    split.top = 24;
+    split.height = 240;
+    NitroPort_Render2DSplit(0, wide, &split);
+    /* (a window in the DS's upper half goes to the picture's top: 24 up) */
+    CHECK(wide[20 * 320 + 264] == RED);           /* the menu at the right edge */
+    CHECK(wide[20 * 320 + 240] == GREY);
+    CHECK(wide[26 * 320 + 274] == BLUE);          /* its sprite with it, both ways */
+    CHECK(wide[26 * 320 + 242] == GREY);
+    CHECK(wide[(24 + 26) * 320 + 274] == RED);    /* (the menu there, not its sprite) */
+    CHECK(wide[(24 + 26) * 320 + 134] == BLUE);   /* the other where it was */
+    split.top = 0;
+    split.height = 0;
     /* Drawn from the display state taken (the 3DS's drawing threads):
      * the windows as they were then too. The game takes the menu's frame
      * off before its tiles leave the VRAM (at its next V-blank): the menu
@@ -3399,6 +3416,79 @@ static void test_wide_framed_windows(void)
     NitroPort_Render2DSplit(0, wide, &split);     /* the frame taken off: back */
     CHECK(wide[20 * 320 + 240] == RED);
     CHECK(wide[26 * 320 + 242] == BLUE);
+    NitroPort_WindowRemoved(&menu);
+
+    /* A menu opened after the state was taken: the game copies its map to
+     * the VRAM at once, in its next frame's work. Drawn from the state
+     * taken, the maps are the ones taken with it (nothing there yet), not
+     * the menu where the DS has it with nothing saying where it goes
+     * (2026-11-01: a YES/NO box showed a frame there, its frame black);
+     * taken again, there it is, at the screen's edge. */
+    memset(map, 0, sizeof(map));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    NitroPort_Render2DTakeState(0);
+    split.snapshot = 1;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 240] == GREY && wide[20 * 320 + 264] == GREY);
+    for (y = 2; y <= 6; y++) {
+        for (x = 25; x <= 30; x++) {
+            map[y * 32 + x] = 1;
+        }
+    }
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    NitroPort_WindowAdded(&menu, 1, 26, 3, 4, 3);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 240] == GREY && wide[20 * 320 + 264] == GREY);
+    NitroPort_WindowFramed(&menu, 1);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 240] == GREY && wide[20 * 320 + 264] == GREY);
+    NitroPort_Render2DTakeState(0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 264] == RED && wide[20 * 320 + 240] == GREY);
+    /* (a map changed alone is a new picture: drawn again once taken,
+     * however it was drawn meanwhile) */
+    (void)NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    (void)NitroPort_Render2DSplitIfChanged(0, wide, &split);   /* (its VRAM noted) */
+    CHECK(!NitroPort_Render2DSplitIfChanged(0, wide, &split));
+    map[4 * 32 + 27] = 2;
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    (void)NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    CHECK(wide[36 * 320 + 284] == RED);   /* (DS x 216: tile 27, row 4) */
+    NitroPort_Render2DTakeState(0);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split));
+    CHECK(wide[36 * 320 + 284] == BLUE);
+    /* A page drawn whole again in the next frame's work, its tiles and map
+     * both (the options page: alike tiles shared, a tile's number another
+     * picture each time): here tiles 1 and 2 swapped, and the map with
+     * them. Drawn from the state taken, the tiles are the ones taken with
+     * it (2026-11-01: the new tiles through the old map, mixed up). */
+    SolidTile4(tiles + 1 * 32, 2);
+    SolidTile4(tiles + 2 * 32, 1);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 264] == RED && wide[36 * 320 + 284] == BLUE);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = (u16)(map[i] == 1 ? 2 : map[i] == 2 ? 1 : map[i]);
+    }
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    NitroPort_Render2DTakeState(0);
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(wide[20 * 320 + 264] == RED && wide[36 * 320 + 284] == BLUE);
+    /* (tiles changed alone: a new picture once taken) */
+    (void)NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    (void)NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    CHECK(!NitroPort_Render2DSplitIfChanged(0, wide, &split));
+    SolidTile4(tiles + 1 * 32, 3);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    (void)NitroPort_Render2DSplitIfChanged(0, wide, &split);
+    CHECK(wide[36 * 320 + 284] == BLUE);
+    NitroPort_Render2DTakeState(0);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, wide, &split));
+    CHECK(wide[36 * 320 + 284] == WHITE && wide[20 * 320 + 264] == RED);
+    SolidTile4(tiles + 1 * 32, 1);
+    SolidTile4(tiles + 2 * 32, 2);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    split.snapshot = 0;
     NitroPort_WindowRemoved(&menu);
     GX_SetVisiblePlane(GX_PLANEMASK_BG1);
 

@@ -233,6 +233,20 @@ int NitroPort_WideScreenExtra(void);
 #define NITRO_PIXEL_FIELD_TOP   ((NITRO_PIXEL_FIELD_H - 192) / 2)
 void NitroPort_SetPixelField(int on);
 int NitroPort_PixelField(void);
+/* The same option where the field is on the lower screen (the
+ * Underground: engine A, the 3D, there): its 320 x 240 pixels each a DS
+ * pixel, the 3D's view 320 x 240 and the DS's picture in its middle
+ * (NitroPort_WideLayoutLower: NITRO_PIXEL_LOWER_EXTRA each side, TOP
+ * above). NitroPort_PixelField is the upper screen's only. Any thread. */
+#define NITRO_PIXEL_LOWER_W     320
+#define NITRO_PIXEL_LOWER_EXTRA ((NITRO_PIXEL_LOWER_W - 256) / 2)
+int NitroPort_PixelFieldLower(void);
+/* How far engine A's picture goes on beside the DS's screen now, in DS
+ * pixels: each side (x) and above (top): the upper screen's wider canvas,
+ * the field at the DS's pixel size on either screen; 0 and 0 on the DS's.
+ * For the game's things that belong in a corner of the screen (the
+ * wireless signal icon, patch 0065). Any thread. */
+void NitroPort_EngineABeside(int *x, int *top);
 
 /* The battle's start in the field (the game's encounter effects: patch
  * 0051, encounter_effect.c), on while it plays. Its effects are made for
@@ -271,6 +285,9 @@ void NitroPort_SetWindowCircle(int engine, int window, int cx, int cy, int r);
  * anchorWindows; declared in nitro_port_render2d.h). */
 struct NitroRender2DSplit;
 void NitroPort_WideLayout(int engine, struct NitroRender2DSplit *split);
+/* (NitroPort_PixelFieldLower) engine A's picture on the lower screen,
+ * 320 x 240 at the DS's pixel size; else as the DS's (256 x 192). */
+void NitroPort_WideLayoutLower(int engine, struct NitroRender2DSplit *split);
 
 /* (port_overlay.c) Whether the overlay of that name is loaded. */
 int NitroPort_OverlayLoadedNamed(const char *name);

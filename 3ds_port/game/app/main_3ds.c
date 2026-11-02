@@ -996,12 +996,21 @@ static void EnableSpeedup(void)
  * (NoteForwarder). */
 #define FORWARDED_ARG "--home-menu="
 static u64 sForwarder;
+/* (and, when it made its own title Luma3DS's homebrew title to open the
+ * game in its place, so the HOME Menu shows its icon: the homebrew title to
+ * put back, which the forwarder's next start then runs as itself) */
+#define HB_TITLE_ARG "--hb-title="
+static u64 sHbTitleRestored;   /* (NoteForwarder: logged later) */
 
 static void LogSpeedup(bool new3ds)
 {
     if (sForwarder != 0) {
-        NitroPort_Log("[platinum] opened by the HOME Menu version (%016llX), in the homebrew title",
-                      (unsigned long long)sForwarder);
+        NitroPort_Log("[platinum] opened by the HOME Menu version (%016llX), %s", (unsigned long long)sForwarder,
+                      sHbTitleRestored ? "in its own title" : "in the homebrew title");
+        if (sHbTitleRestored) {
+            NitroPort_Log("[platinum] the homebrew title %016llX put back for next time",
+                          (unsigned long long)sHbTitleRestored);
+        }
     }
     /* (how much memory the system gave the program: the .cia on a New 3DS
      * should have the 124 MB mode, issue #188) */
@@ -1445,6 +1454,22 @@ static void NoteForwarder(int argc, char **argv)
             sForwarder = strtoull(argv[i] + strlen(FORWARDED_ARG), NULL, 16);
         }
     }
+    for (i = 1; i < argc; i++) {
+        if (argv[i] != NULL && strncmp(argv[i], HB_TITLE_ARG, strlen(HB_TITLE_ARG)) == 0) {
+            /* Luma3DS's shared page (forwarder/main.c): the title selected
+             * becomes the homebrew title as this program closes. Only with
+             * this title the homebrew title now (the page as known). */
+            volatile u64 *hbldr = (volatile u64 *)(OS_SHAREDCFG_VADDR + 0x800);
+            u64 restore = strtoull(argv[i] + strlen(HB_TITLE_ARG), NULL, 16), self = 0;
+            s64 luma = 0;
+
+            if (restore != 0 && R_SUCCEEDED(svcGetSystemInfo(&luma, 0x10000, 0)) &&
+                R_SUCCEEDED(APT_GetProgramID(&self)) && hbldr[0] == self) {
+                hbldr[1] = restore;
+                sHbTitleRestored = restore;
+            }
+        }
+    }
 }
 
 /* The game's soft reset (L + R + START + SELECT, or after a link error):
@@ -1707,6 +1732,11 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             if (__atomic_exchange_n(&shownInPanel, inPanel, __ATOMIC_ACQ_REL) != inPanel) {
                 sMustDraw[0] = true;
             }
+        }
+        /* (the field on the lower screen, the Underground, at the DS's
+         * pixel size: its 320 x 240, the DS's picture in the middle) */
+        if (!top && sCompose.wide) {
+            NitroPort_WideLayoutLower(engine, &split);
         }
         /* The lower screen as the menu's tall panel: drawn on below the
          * DS's 192 rows (nitro_port_lowermenu.h). */
@@ -2706,6 +2736,10 @@ void NitroPort_OnFrame(void)
         if (NitroPort_EngineAOnTop() && NitroPort_PixelField()) {
             /* (the field at the DS's pixel size: the whole 400 x 240) */
             NitroPort_Gx3dSetView(NITRO_PIXEL_FIELD_W, NITRO_PIXEL_FIELD_H);
+        } else if (!NitroPort_EngineAOnTop() && NitroPort_PixelFieldLower()) {
+            /* (the Underground at the DS's pixel size: the lower screen's
+             * whole 320 x 240) */
+            NitroPort_Gx3dSetView(NITRO_PIXEL_LOWER_W, NITRO_PIXEL_FIELD_H);
         } else {
             NitroPort_Gx3dSetWideView(NitroPort_EngineAOnTop() ? 320 : 256);
         }

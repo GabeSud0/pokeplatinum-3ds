@@ -178,6 +178,7 @@ static void StartVBlank(void)
     NitroPort_GxRefresh();
     reg_OS_IF |= OS_IE_V_BLANK;
     NitroPort_DmaVBlank();
+    NitroPort_WmVBlank();   /* the wireless answers now due (port_wm.c) */
     OSi_PortCpsr = saved;
     NitroPort_RaiseIrq(0);
 }

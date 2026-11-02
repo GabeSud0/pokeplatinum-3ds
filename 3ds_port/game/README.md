@@ -96,9 +96,13 @@ ported.
    **FBI**, go to **SD → cia → pokeplatinum.cia → Install CIA**, then go
    back to the HOME Menu: the game is there with its icon and banner. It
    opens `sd:/3ds/pokeplatinum.3dsx` (the `.3dsx` must be there) through
-   Luma3DS's homebrew loader, in the Homebrew Launcher Loader's title, as
-   the Homebrew Launcher does: while it runs, the HOME Menu shows that
-   title's icon, and it closes like any other (HOME → Close). To update the
+   Luma3DS's homebrew loader, as the Homebrew Launcher does, but in its
+   own title (it makes itself Luma3DS's homebrew title for that one start,
+   and the game puts the old one back as it starts, as Emerald 3DS's
+   forwarder does): while it runs, the HOME Menu shows its icon, and it
+   closes like any other (HOME → Close). (With a Luma3DS whose shared page
+   it doesn't recognise, it opens the game in the Homebrew Launcher Loader's
+   title instead, and the HOME Menu shows that title's icon.) To update the
    game, copy the new `.3dsx` over the old one; the `.cia` stays (install a
    new one only for new art). An older `.cia` (the whole game in it, before
    the forwarder) is replaced by installing this one. In Azahar, open the
@@ -345,8 +349,11 @@ make -C 3ds_port/game TARGET=host program   # pokeplatinum-pc
 - **RC4** (Mystery Gift): `lib/crypto` keeps its encrypt functions in
   assembly; patch `0006` adds C versions, checked against the published
   test vectors.
-- **Nintendo's Wi-Fi libraries** (DWC, PPW lobby, VCT voice chat, WVR):
-  online play isn't part of the port. After compiling,
+- **Nintendo's Wi-Fi libraries** (DWC, PPW lobby, VCT voice chat):
+  online play isn't part of the port. (Local wireless is: the WM and WVR
+  libraries are built as they are, and the port's virtual ARM7 plays a
+  radio with nobody around, `3ds_port/nitro/src/port_wm.c`, so the
+  Underground plays alone.) After compiling,
   `tools/make_game_wifi_stubs.py` writes a stand-in for every such function
   the game objects call: each logs "not implemented" once and returns 0, so
   online menus see a failure.
