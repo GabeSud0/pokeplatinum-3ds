@@ -46,7 +46,8 @@ ported.
    g++ and make) and makes the HOME Menu's icon and banner from your ROM's
    icon ([`tools/home_menu_art.py`](../../tools/home_menu_art.py)), in
    `build/`. The icon is the port's own ([`cia/icon.png`](cia/icon.png), 48 x 48,
-   original art) when it's there. The banner is an animated 3D one made from
+   original art; [`cia/icon-source.png`](cia/icon-source.png) is the same art at
+   512 x 512, to remake it from) when it's there. The banner is an animated 3D one made from
    your ROM: Platinum's title-screen Giratina in front of a portal glow, under
    the logo ([`tools/banner3d`](../../tools/banner3d): needs Python 3.12+; if
    it can't be made, or with `BANNER=flat`, the banner is a flat picture). It
