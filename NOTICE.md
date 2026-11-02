@@ -68,8 +68,9 @@ is a C version of the 2x scaler of xBRZ by Zenju, from the HqMAME project
 (the copy in PPSSPP's `ext/xbrz`), which is distributed under the GNU General
 Public License. This version is GPL-3.0 like the rest of the project.
 
-`3ds_port/game/cia/icon.png` (the HOME Menu icon) is original art made for
-this project, licensed with it.
+`3ds_port/game/cia/icon.png` (the HOME Menu icon) and its full-size source
+`3ds_port/game/cia/icon-source.png` are original art made for this project,
+licensed with it.
 
 The HOME Menu's 3D banner (`tools/banner3d`) is made at build time from the
 player's own ROM: its Giratina model, textures and animation are the game's
