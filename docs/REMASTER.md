@@ -1346,6 +1346,16 @@ screens) the lower screen is the DS's, filling the screen as before.
     `PlayerAvatar_IsRunButtonHeld` took that as the button and AUTO-RUN
     turned it round (a run's speed under a walking picture), so it's
     turned round for it too.
+  - The Underground's answers (patch 0067): the player is moved by the
+    comm system's server (the 3DS itself, the wireless having nobody
+    around), and their picture followed the place it sent back through
+    the comm system's buffers, 4 frames later; turning stood them still 4
+    frames, at the slower turn, and a turn while walking stopped them.
+    With nobody else there, the place is put on the picture as the server
+    sends it (the same packets coming round after are left alone), a turn
+    while walking takes its step at once, and a turn from standing is the
+    field's, its step 2 frames after. From the press to the screen moving:
+    10 frames to 6; turning, 21 to 13 (the field's 11).
   - FOLLOWER (patch 0056, `port_follower.c`; off by default): the party's
     first Pokémon (not an egg, not fainted) walks behind the player, on
     HeartGold and SoulSilver's sprites when the data pack has them

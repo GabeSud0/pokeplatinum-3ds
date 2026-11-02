@@ -1,0 +1,171 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 19:00:00 -0700
+Subject: [PATCH] The Underground answers at once with nobody else there (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+In the Underground the player is moved by the comm system's server (the
+3DS itself: the port's wireless has nobody else around), and their own
+picture follows the place it sends back, which went round through the
+comm system's buffers first: 4 frames. Turning, the server stood the
+player still 4 frames before the step, and the picture turned at the
+slower of the two speeds; a turn while walking stopped them to turn.
+
+With nobody else there (CommSys_IsAlone):
+- the player's place is put on their picture as the server sends it
+  (CommPlayer_SendPosNetId), and the same packets, coming round after,
+  are left alone (kept in order to tell them; any other, and they're
+  forgotten);
+- a turn while walking takes the step that way at once, as in the field;
+  from standing, a tap still only turns;
+- the turn on the picture is the field's own (WALK_ON_SPOT_FASTER), and
+  the server's step after it 2 frames later instead of 4.
+
+The PC runner, frames from the press to the screen moving: straight 10
+to 6; turning from standing 21 to 13 (the field: 11); reversing while
+walking or running, no stop.
+---
+diff --git a/src/comm_player_manager.c b/src/comm_player_manager.c
+index 6f232fda..73508c79 100644
+--- a/src/comm_player_manager.c
++++ b/src/comm_player_manager.c
+@@ -63,6 +63,25 @@ static void sub_020591A8(void);
+ 
+ static CommPlayerManager *sCommPlayerManager = NULL;
+ 
++#ifdef SDK_PORT_3DS
++// (the 3DS port) The Underground with nobody else there: the player's own
++// place, as the server moves them, put on their picture at once (it went
++// round through the comm system's buffers first: 4 frames later); the
++// same packets, coming round after, are left alone (kept in order here to
++// tell them: any other, and these are forgotten). And a turn while
++// walking a step with it, as in the field (it stood to turn, 4 frames).
++#define PORT_DIRECT_MAX 8
++static u8 sPortDirect[PORT_DIRECT_MAX][COMM_PACKET_SIZE_POS_NETID];
++static int sPortDirectCount;
++static BOOL sPortApplying;
++static BOOL sPortStepped[MAX_CONNECTED_PLAYERS];
++
++static BOOL CommPlayer_PortAlone(void)
++{
++    return sCommPlayerManager != NULL && sCommPlayerManager->isUnderground && CommSys_IsAlone();
++}
++#endif
++
+ CommPlayerManager *CommPlayerMan_Get(void)
+ {
+     return sCommPlayerManager;
+@@ -79,6 +98,11 @@ BOOL CommPlayerMan_Init(void *dest, FieldSystem *fieldSystem, BOOL isUnderground
+         MI_CpuFill8(sCommPlayerManager, 0, sizeof(CommPlayerManager));
+     }
+ 
++#ifdef SDK_PORT_3DS
++    sPortDirectCount = 0;
++    memset(sPortStepped, 0, sizeof(sPortStepped));
++#endif
++
+     sCommPlayerManager->isUnderground = isUnderground;
+     sCommPlayerManager->playerStatuses = NULL;
+ 
+@@ -334,6 +358,25 @@ static void CommPlayer_SendPosNetId(int netId, const CommPlayerLocation *playerL
+     data[0] += ((playerLocation->dir % 4) << 4);
+     data[0] += (playerLocation->moveSpeed << 6);
+ 
++#ifdef SDK_PORT_3DS
++    if (CommPlayer_PortAlone() && netId == CommSys_CurNetId()) {
++        if (!CommSys_SendDataServer(23, data, 0)) {
++            return;
++        }
++
++        if (sPortDirectCount == PORT_DIRECT_MAX) {
++            memmove(sPortDirect[0], sPortDirect[1], sizeof(sPortDirect[0]) * (PORT_DIRECT_MAX - 1));
++            sPortDirectCount--;
++        }
++
++        memcpy(sPortDirect[sPortDirectCount++], data, COMM_PACKET_SIZE_POS_NETID);
++        sPortApplying = TRUE;
++        CommPlayer_RecvLocationAndInit(CommSys_CurNetId(), COMM_PACKET_SIZE_POS_NETID, data, NULL);
++        sPortApplying = FALSE;
++        return;
++    }
++#endif
++
+     CommSys_SendDataServer(23, data, 0);
+ }
+ 
+@@ -779,11 +822,30 @@ static void CommPlayer_Move(SysTask *unused0, void *unused1)
+             x = CommPlayer_GetXInFrontOfPlayerServer(netId);
+             z = CommPlayer_GetZInFrontOfPlayerServer(netId);
+ 
++#ifdef SDK_PORT_3DS
++            if ((x != 0xffff) && (z != 0xffff) && (dir != -1) && playerLocation->dir != dir && sPortStepped[netId]
++                && sCommPlayerManager->holeMovementsLeft[netId] == 0 && CommPlayer_PortAlone()) {
++                // (turned while walking: the step that way too, now)
++                playerLocation->dir = dir;
++                sCommPlayerManager->movementChanged[netId] = 1;
++                x = CommPlayer_GetXInFrontOfPlayerServer(netId);
++                z = CommPlayer_GetZInFrontOfPlayerServer(netId);
++            }
++
++            sPortStepped[netId] = FALSE;
++#endif
++
+             if ((x != 0xffff) && (z != 0xffff) && (dir != -1)) {
+                 if (playerLocation->dir != dir) {
+                     playerLocation->dir = dir;
+                     sCommPlayerManager->moveTimerServer[netId] = 4;
+                     sCommPlayerManager->movementChanged[netId] = 1;
++#ifdef SDK_PORT_3DS
++                    if (CommPlayer_PortAlone()) {
++                        // (the field's quicker turn on the picture: the step after it as soon)
++                        sCommPlayerManager->moveTimerServer[netId] = 2;
++                    }
++#endif
+ 
+                     if (sCommPlayerManager->holeMovementsLeft[netId] > 2) {
+                         sCommPlayerManager->holeMovementsLeft[netId]--;
+@@ -802,6 +864,9 @@ static void CommPlayer_Move(SysTask *unused0, void *unused1)
+                     playerLocation->x = x;
+                     playerLocation->z = z;
+                     playerLocation->dir = dir;
++#ifdef SDK_PORT_3DS
++                    sPortStepped[netId] = TRUE;
++#endif
+ 
+                     sCommPlayerManager->moveTimerServer[netId] = sub_020581E0(playerLocation->moveSpeed);
+ 
+@@ -903,6 +968,19 @@ void CommPlayer_RecvLocationAndInit(int netId, int size, void *src, void *unused
+         return;
+     }
+ 
++#ifdef SDK_PORT_3DS
++    if (!sPortApplying && sPortDirectCount > 0) {
++        if (memcmp(sPortDirect[0], buffer, COMM_PACKET_SIZE_POS_NETID) == 0) {
++            // (put on the picture already, as the server sent it)
++            sPortDirectCount--;
++            memmove(sPortDirect[0], sPortDirect[1], sizeof(sPortDirect[0]) * (size_t)sPortDirectCount);
++            return;
++        }
++
++        sPortDirectCount = 0;
++    }
++#endif
++
+     playerLocation = &sCommPlayerManager->playerLocation[netJd];
+ 
+     if (buffer[2] & 0x80) {
+@@ -1098,6 +1176,12 @@ static void CommPlayer_MoveClient(int netId)
+             }
+         } else if (((pad & ~PAD_BUTTON_B) == 0) && (playerLocation->dir != dir)) {
+             animCode = MovementAction_TurnActionTowardsDir(playerLocation->dir, MOVEMENT_ACTION_WALK_ON_SPOT_FAST_NORTH);
++#ifdef SDK_PORT_3DS
++            if (CommPlayer_PortAlone() && netId == CommSys_CurNetId()) {
++                // (the field's own turn, as PlayerAvatar_GetMovementActionAnimCode has it: half the time)
++                animCode = MovementAction_TurnActionTowardsDir(playerLocation->dir, MOVEMENT_ACTION_WALK_ON_SPOT_FASTER_NORTH);
++            }
++#endif
+         } else {
+             animCode = PlayerAvatar_GetMovementActionAnimCode(playerAvatar, animPad, animPad, v10, 1, 0);
+         }
