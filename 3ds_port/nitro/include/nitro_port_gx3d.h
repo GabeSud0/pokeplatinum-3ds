@@ -287,6 +287,11 @@ void NitroPort_Gx3dThreadWakeups(uint32_t *wakeups, uint64_t *longest);
  * battle's start plays in the field (NitroPort_FieldEffect): counted on the
  * game's thread. */
 uint32_t NitroPort_Gx3dSameScenesLeftOut(void);
+/* Where the thread's time goes (for the [perf] geometry line): the time
+ * spent ending scenes (the clock of NitroGx3dThreadOps.ticks), the
+ * vertices and polygons sent, and of the vertices those in lists wholly out
+ * of the view (not worked out). Counts as they are: for a log. */
+void NitroPort_Gx3dThreadWork(uint64_t *swapTicks, uint32_t *vertices, uint32_t *polygons, uint32_t *skipped);
 /* Whether a scene the game ended before its newest SWAP_BUFFERS may still
  * be read (the 3DS's GPU thread reads the texture VRAM as it draws one):
  * the geometry thread hasn't finished it, or the consumer is reading it or

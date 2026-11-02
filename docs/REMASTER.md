@@ -285,6 +285,17 @@ The intro's forest uses it (white fog, a linear table). The table goes
 to the GPU once per scene's draw (citro3d sends all 128 entries whenever
 it's bound; it was bound for each batch).
 
+The field at the DS's pixel size sees 24 lines more above the DS's top
+row, further away than the DS ever shows, and the fog (made for the DS's
+view) went on thickening there: the mountains and buildings at the top of
+the screen washed out to the fog's colour, as if cut off (Route 206's
+Cycling Road, 2026-11-01). With a view taller than the DS's, the fog is
+held at the DS's top row's: the farthest depth within its 192 rows (the
+scene's vertices there, and where their triangles' edges cross the rows'
+top and bottom: `ds_rows_farthest`), the table's entries beyond it as at
+it, the rear plane no thicker. Logged now and then: `[compose] the taller
+view's fog held at the DS's top row's`.
+
 A scene is drawn with the 3D registers the game had at its SWAP_BUFFERS
 (DISP3DCNT and 0x320-0x3BF: the clear colour, the fog, the outlines'
 colours; noted on the game's thread with the swap:
@@ -1702,7 +1713,10 @@ ring), has the next left out, as one the thread can't keep up with: the
 one before stays on the screen. If it moved after all, it's there a scene
 later. Not outside such an effect: the first step after standing still
 would be a scene late. The `[perf] geometry` line counts them (`left out/s
-(n as the same)`). Core 1 is the system's; a
+(n as the same)`), and a `[perf] geometry's work` line says where its time
+goes: ending scenes (the SWAP: sorting, matching, publishing), and the
+vertices a scene sends, of them those in lists wholly out of the view (not
+worked out), and polygons. Core 1 is the system's; a
 program gets 30% of it, and there the
 geometry took 18-30 ms a scene and left scenes out (the intro's flyover
 jumped), and engine B's screen drew 14-25 frames a second

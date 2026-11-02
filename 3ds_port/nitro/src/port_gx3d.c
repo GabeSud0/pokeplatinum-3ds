@@ -597,6 +597,12 @@ static struct {
     unsigned alphaOpaque, alphaTranslucent, alphaWire;
     uint32_t lastAttr;
 } sDiag;
+/* (for the [perf] geometry line, on the thread's side) vertices and
+ * polygons worked out, added up as each [gx3d] line's are cleared; the
+ * time spent ending scenes (SWAP_BUFFERS: the scene's triangles sorted,
+ * matched with the one before, published). */
+static uint32_t sTotalVertices, sTotalPolygons, sSkippedVertices; /* (those in lists wholly out of the view: not worked out) */
+static uint64_t sSwapTicks;
 
 static void diag_log(void)
 {
@@ -617,6 +623,8 @@ static void diag_log(void)
                   (unsigned long)sDiag.lastAttr,
                   (long)s.vertices[0].clip[0], (long)s.vertices[0].clip[1],
                   (long)s.vertices[0].clip[2], (long)s.vertices[0].clip[3]);
+    __atomic_store_n(&sTotalVertices,sTotalVertices+sDiag.vertices,__ATOMIC_RELAXED);
+    __atomic_store_n(&sTotalPolygons,sTotalPolygons+sDiag.polygons,__ATOMIC_RELAXED);
     memset(&sDiag, 0, sizeof(sDiag));
 }
 
@@ -2051,7 +2059,13 @@ static inline __attribute__((always_inline)) void work_op(unsigned op,const uint
             return;
         }
     }
-    execute(op,p);
+    if(op==0x50u && sOps.ticks){
+        uint64_t t=sOps.ticks(sOps.context);
+        execute(op,p);
+        __atomic_store_n(&sSwapTicks,sSwapTicks+(sOps.ticks(sOps.context)-t),__ATOMIC_RELAXED);
+    }else{
+        execute(op,p);
+    }
     if(op==0x50u)__atomic_store_n(&sSwapsDone,sSwapsDone+1u,__ATOMIC_RELEASE);
 }
 /* ------------------------------------------- polygons out of the view
@@ -2301,6 +2315,7 @@ found:
     if(v.haveNormal||v.haveColor)s.rgbPending=v.normalLast;
     polys=polygons_of(s.primitive,n);
     sDiag.vertices+=n;
+    __atomic_store_n(&sSkippedVertices,sSkippedVertices+n,__ATOMIC_RELAXED);
     if(behind)sDiag.behind+=n;
     sDiag.polygons+=polys;
     sDiag.clipped+=polys;
@@ -2527,6 +2542,14 @@ void NitroPort_Gx3dThreadWakeups(uint32_t *wakeups,uint64_t *longest)
 {
     if(wakeups)*wakeups=__atomic_load_n(&sWorkerWakeups,__ATOMIC_RELAXED);
     if(longest)*longest=__atomic_exchange_n(&sWorkerLongest,0,__ATOMIC_RELAXED);
+}
+void NitroPort_Gx3dThreadWork(uint64_t *swapTicks,uint32_t *vertices,uint32_t *polygons,uint32_t *skipped)
+{
+    if(skipped)*skipped=__atomic_load_n(&sSkippedVertices,__ATOMIC_RELAXED);
+    if(swapTicks)*swapTicks=__atomic_load_n(&sSwapTicks,__ATOMIC_RELAXED);
+    /* (the [gx3d] line's counts so far too: read as they are, for a log) */
+    if(vertices)*vertices=__atomic_load_n(&sTotalVertices,__ATOMIC_RELAXED)+*(volatile unsigned *)&sDiag.vertices;
+    if(polygons)*polygons=__atomic_load_n(&sTotalPolygons,__ATOMIC_RELAXED)+*(volatile unsigned *)&sDiag.polygons;
 }
 uint32_t NitroPort_Gx3dSameScenesLeftOut(void)
 {

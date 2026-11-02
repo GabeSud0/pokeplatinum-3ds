@@ -2548,6 +2548,22 @@ static void PerfFrame(u64 enter)
                           (double)(geoWakeups - lastGeoWakeups) / (geoScenes - lastGeoScenes),
                           (double)geoLongest * 1000.0 / SYSCLOCK_ARM11);
             lastGeoSame = geoSame;
+            {
+                // (where the geometry's time goes: ending scenes, and the
+                // vertices it worked out a scene)
+                static uint64_t lastSwapTicks;
+                static uint32_t lastVertices, lastPolygons, lastSkipped;
+                uint64_t swapTicks;
+                uint32_t vertices, polygons, skippedVertices, n = geoScenes - lastGeoScenes;
+                NitroPort_Gx3dThreadWork(&swapTicks, &vertices, &polygons, &skippedVertices);
+                NitroPort_Log("[perf] geometry's work: %.1f ms/scene ending scenes; %u vertices a scene sent, %u of them out of the view (not worked out), %u polygons",
+                              (double)(swapTicks - lastSwapTicks) * 1000.0 / SYSCLOCK_ARM11 / n,
+                              (vertices - lastVertices) / n, (skippedVertices - lastSkipped) / n, (polygons - lastPolygons) / n);
+                lastSwapTicks = swapTicks;
+                lastVertices = vertices;
+                lastPolygons = polygons;
+                lastSkipped = skippedVertices;
+            }
         }
         lastGeoWakeups = geoWakeups;
         lastGeoBusy = geoBusy;
