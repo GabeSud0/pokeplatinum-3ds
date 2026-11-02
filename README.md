@@ -60,7 +60,6 @@ On a New 3DS:
 | **Both screens filled** | The DS's pictures are drawn 1.25 times bigger: the lower screen fills its 320×240, and the upper screen is laid out across its full 400-pixel width (menus, text boxes and battles included). Nothing is ever stretched or mirrored to fill the extra space. |
 | **A menu on the bottom screen** | In the field, the bottom screen is a menu beside the Pokétch: MAP, POKéMON, BAG, TRAINER, POKéDEX, POKéTCH, SAVE and OPTIONS, a tap away (or X and the D-pad). The bag, the party, the summary, the trainer card, the save, the options and the Town Map open right in its panel while the field stays on the top screen. Two squares hold your registered items: tap one to use it. |
 | **Sharper 3D** | The overworld and battles are drawn by the 3DS's GPU at the screen's own resolution with smooth (anti-aliased) edges, the game's fog, and a wider view of the world at the sides. The DS's outlines round the 3D are off by default; `edges on` in `remaster.txt` draws them. |
-| **Stereoscopic 3D** | From the 3D slider. |
 | **60 frames a second** | The game runs its field at 30; the port draws a frame in between each pair, and drops back to 30 where the GPU can't keep up (new, still being tuned). |
 | **Enhancements and cheats** | Optional, from OPTIONS: SPEED up to 4x (menus and battle choices stay at 1x), Exp. Share for the whole party, experience for catches, trade evolutions at level 40, HMs without teaching the moves, auto-run, your first Pokémon following you (FOLLOWER: HeartGold/SoulSilver's sprites, downloaded by the builder; it comes out of the ball it was caught in, and you can talk to it: it reacts, and now and then finds you an item); and cheats (always catch, instant victory, fast eggs, infinite money, wild encounter rate, shiny odds, give items). |
 | **Small conveniences** | Catch a Pokémon with a full party and you can swap it for one in your party right there in the battle. A new game saves over the old save without erasing it first. L + R + START + SELECT restarts the game from the opening. |
@@ -76,7 +75,7 @@ On a New 3DS:
 | A new UI for the top screen: menus, text boxes and battles across its full width | A Pokémon follower | Better lighting |
 | A new UI for the bottom screen: a menu beside the Pokétch, with the bag, party, summary, trainer card, save, options and Town Map in its panel | 60 frames a second and better 3D quality | 60 FPS Battles |
 | Enhancements and cheats from the options (SPEED, Exp. Share for the party, and more) |Pixel Perfect Overworld | Pixel Perfect Battles |
-| The New 3DS XL's resolution: both screens filled, the 3D drawn at the screen's resolution | | |
+| The New 3DS XL's resolution: both screens filled, the 3D drawn at the screen's resolution | |Stereoscopic 3D |
 | Updated animations for the intro, and new animations for some of the UI | | |
 
 
