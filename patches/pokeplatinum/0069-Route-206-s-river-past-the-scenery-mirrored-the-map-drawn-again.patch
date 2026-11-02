@@ -1,0 +1,149 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 23:00:00 -0700
+Subject: [PATCH] Route 206's river past the scenery: the map drawn again mirrored (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Beside Route 206's Cycling Road the 3DS's wider field sees into the
+scenery map next to it (the header "everywhere"), made for nobody to see
+its edge: a flat ledge at its own height, the route's river and ledges
+stopping at the border. With the player in the half of a listed map by
+such a border, that map is drawn again past it, mirrored about it (as
+past Eterna Forest's edge, Port_RenderLoadedMapMirrored), and the
+scenery map and its lowered copies aren't drawn: the river and the
+ledges go on, level. Only for the maps in sPortMirroredBesideScenery
+(Route 206). Most of the copy is out of the view; the 3DS port leaves
+those polygons out before the geometry (NitroPort_Gx3dSendList).
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index ffe2fae0..4b9c2249 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -1815,6 +1815,8 @@ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *
+     }
+ }
+ 
++static BOOL Port_SceneryMirroredOver(const LandDataManager *landDataMan, u8 index);
++
+ static void Port_RenderSceneryMapsLowered(const LandDataManager *landDataMan)
+ {
+     if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld) {
+@@ -1824,7 +1826,97 @@ static void Port_RenderSceneryMapsLowered(const LandDataManager *landDataMan)
+ 
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         if (landDataMan->loadedMaps[i]->mapMatrixIndex != INVALID_MAP_MATRIX_INDEX && landDataMan->loadedMaps[i]->valid == TRUE) {
+-            Port_RenderSceneryMapLowered(i, landDataMan);
++            if (!Port_SceneryMirroredOver(landDataMan, i)) {
++                Port_RenderSceneryMapLowered(i, landDataMan);
++            }
++        }
++    }
++}
++#endif
++
++#ifdef SDK_PORT_3DS
++// Beside some maps the wider field sees into the scenery map next to them
++// (the mountains beside Route 206's Cycling Road), which was made for
++// nobody to see its edge: a flat ledge at its own height, and the map's
++// river and ledges stopping at the border. Past the border on the
++// player's side, the map is drawn again mirrored about it instead (as
++// past Eterna Forest's edge): its river and ledges go on, level, and the
++// scenery map isn't drawn. Only for the maps listed: drawing one again is
++// a whole map sent (most of it out of the view, skipped as such).
++static const u16 sPortMirroredBesideScenery[] = {
++    MAP_HEADER_ROUTE_206,
++};
++
++static BOOL Port_MirrorsBesideScenery(const LandDataManager *landDataMan, u8 index)
++{
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++
++    if (loadedMap->mapMatrixIndex == INVALID_MAP_MATRIX_INDEX || loadedMap->valid != TRUE) {
++        return FALSE;
++    }
++
++    u16 header = MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, loadedMap->mapMatrixIndex);
++
++    for (int i = 0; i < (int)NELEMS(sPortMirroredBesideScenery); i++) {
++        if (sPortMirroredBesideScenery[i] == header) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++// The side (-1 left, 1 right) the loaded map is mirrored to, past a scenery
++// map: the player in its column, in the half by that side; 0 for none.
++static int Port_MirrorSideBesideScenery(const LandDataManager *landDataMan, u8 index)
++{
++    int width = landDataMan->mapMatrixWidth, mapMatrixIndex = landDataMan->loadedMaps[index]->mapMatrixIndex, dir;
++
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld
++        || landDataMan->trackedTargetMapMatrixIndex == INVALID_MAP_MATRIX_INDEX || !Port_MirrorsBesideScenery(landDataMan, index)
++        || (int)landDataMan->trackedTargetMapMatrixIndex % width != mapMatrixIndex % width) {
++        return 0;
++    }
++
++    u8 quadrant = landDataMan->trackedTargetMapQuadrant;
++    dir = quadrant == QUADRANT_TOP_RIGHT || quadrant == QUADRANT_BOTTOM_RIGHT ? 1 : -1;
++
++    if (mapMatrixIndex % width + dir < 0 || mapMatrixIndex % width + dir >= width
++        || MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex + dir) != MAP_HEADER_EVERYWHERE) {
++        return 0;
++    }
++
++    return dir;
++}
++
++// Whether the loaded map is a scenery map with a mirrored map drawn in its
++// place.
++static BOOL Port_SceneryMirroredOver(const LandDataManager *landDataMan, u8 index)
++{
++    int mapMatrixIndex = landDataMan->loadedMaps[index]->mapMatrixIndex;
++
++    if (mapMatrixIndex == INVALID_MAP_MATRIX_INDEX) {
++        return FALSE;
++    }
++
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        int dir = i == index ? 0 : Port_MirrorSideBesideScenery(landDataMan, i);
++
++        if (dir != 0 && landDataMan->loadedMaps[i]->mapMatrixIndex + dir == mapMatrixIndex) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++static void Port_RenderMirroredBesideScenery(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
++{
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        int dir = Port_MirrorSideBesideScenery(landDataMan, i);
++
++        if (dir != 0) {
++            Port_RenderLoadedMapMirrored(i, dir, landDataMan, modelAttrs);
+         }
+     }
+ }
+@@ -1834,11 +1926,17 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+ {
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         if (landDataMan->loadedMaps[i]->mapMatrixIndex != INVALID_MAP_MATRIX_INDEX) {
++#ifdef SDK_PORT_3DS
++            if (Port_SceneryMirroredOver(landDataMan, i)) {
++                continue;
++            }
++#endif
+             LandDataManager_RenderLoadedMap(i, landDataMan, modelAttrs);
+         }
+     }
+ #ifdef SDK_PORT_3DS
+     Port_RenderMirroredEdges(landDataMan, modelAttrs);
++    Port_RenderMirroredBesideScenery(landDataMan, modelAttrs);
+     Port_RenderSceneryMapsLowered(landDataMan);
+ #endif
+ }

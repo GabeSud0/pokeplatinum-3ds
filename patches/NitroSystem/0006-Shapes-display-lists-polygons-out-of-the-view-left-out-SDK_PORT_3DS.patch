@@ -1,0 +1,42 @@
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Subject: [PATCH] Shapes' display lists: polygons out of the view left out
+ (SDK_PORT_3DS)
+
+NNS_G3dGeSendDL sends a model's shape whole. With the 3DS port's geometry
+engine on its own core, a list of 256 bytes or more goes through
+NitroPort_Gx3dSendList first (after what's in the geometry buffer): its
+triangles and quads in groups, a group wholly out of the view left out
+on the game's side, before the geometry thread has to work its vertices
+out (a map's shape spans the whole map; on Route 206's Cycling Road most
+of it is off the screen). The scene is the same. It sends the list
+itself and returns 1, or returns 0 and the list is sent as before.
+
+---
+diff --git a/libraries/g3d/src/gecom.c b/libraries/g3d/src/gecom.c
+index b624632..3f6b94c 100644
+--- a/libraries/g3d/src/gecom.c
++++ b/libraries/g3d/src/gecom.c
+@@ -96,6 +96,23 @@ void NNS_G3dGeSendDL (const void * src, u32 szByte)
+     NNS_G3D_NULL_ASSERT(src);
+     NNS_G3D_ASSERT(szByte >= 4);
+ 
++#if defined(SDK_PORT_3DS)
++    /* (the 3DS port) A shape's display list, sent whole: its lists of
++     * vertices out of the view left out before the geometry thread sees
++     * them (NitroPort_Gx3dSendList), after what's in the buffer. */
++    if (szByte >= 256) {
++        extern int NitroPort_Gx3dSendList(const void *src, u32 bytes);
++
++        NNS_G3dGeFlushBuffer();
++        if (NNS_G3dFlagGXDmaAsync) {
++            NNS_G3dGeWaitSendDL();
++        }
++        if (NitroPort_Gx3dSendList(src, szByte)) {
++            return;
++        }
++    }
++#endif
++
+     if (szByte < 256 || GX_DMAID == GX_DMA_NOT_USE) {
+         NNS_G3dGeBufferOP_N(*(const u32 *)src,
+                             (const u32 *)src + 1,

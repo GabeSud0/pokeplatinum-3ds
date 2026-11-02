@@ -2563,6 +2563,19 @@ static void PerfFrame(u64 enter)
                 lastVertices = vertices;
                 lastPolygons = polygons;
                 lastSkipped = skippedVertices;
+                {
+                    // (the shapes' lists of vertices out of the view, left
+                    // out on the game's side: what it costs the game)
+                    static uint64_t lastListTicks;
+                    static uint32_t lastListLeftOut;
+                    uint64_t listTicks;
+                    uint32_t listLeftOut;
+                    NitroPort_Gx3dListsLeftOut(&listTicks, &listLeftOut);
+                    NitroPort_Log("[perf] shapes' lists: %u vertices a scene left out on the game's side, %.2f ms/scene looking through them",
+                                  (listLeftOut - lastListLeftOut) / n, (double)(listTicks - lastListTicks) * 1000.0 / SYSCLOCK_ARM11 / n);
+                    lastListTicks = listTicks;
+                    lastListLeftOut = listLeftOut;
+                }
             }
         }
         lastGeoWakeups = geoWakeups;

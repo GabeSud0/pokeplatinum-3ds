@@ -287,6 +287,18 @@ void NitroPort_Gx3dThreadWakeups(uint32_t *wakeups, uint64_t *longest);
  * battle's start plays in the field (NitroPort_FieldEffect): counted on the
  * game's thread. */
 uint32_t NitroPort_Gx3dSameScenesLeftOut(void);
+/* A display list the game sends whole (NNS_G3dGeSendDL: a model's shape),
+ * with the geometry thread: looked through once (by its words' hash), its
+ * lists of triangles and quads in groups of 8 polygons (a strip whole), a
+ * group all outside the view as it is now left out (with the sun shadows,
+ * past their reach; what it leaves behind sent instead), the rest sent as
+ * usual: the same scene. 1 if it sent the list; 0 to send it as usual.
+ * NITRO_PORT_NO_LIST_CULL in the environment (non-empty, not 0) turns it
+ * off. */
+int NitroPort_Gx3dSendList(const void *src, uint32_t bytes);
+/* NitroPort_Gx3dSendList's own time on the game's thread (in the ticks of
+ * NitroGx3dThreadOps.ticks) and the vertices it has left out, so far. */
+void NitroPort_Gx3dListsLeftOut(uint64_t *ticks, uint32_t *vertices);
 /* Where the thread's time goes (for the [perf] geometry line): the time
  * spent ending scenes (the clock of NitroGx3dThreadOps.ticks), the
  * vertices and polygons sent, and of the vertices those in lists wholly out

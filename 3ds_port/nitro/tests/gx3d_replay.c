@@ -10,6 +10,7 @@
  * machine that made them (they're the game's data).
  */
 #include <nitro_port_gx3d.h>
+#include <nitro_port_shadow.h>
 #include <pthread.h>
 #include <semaphore.h>
 #include <stdio.h>
@@ -60,6 +61,34 @@ static void add_hash(uint32_t kind, uint32_t h)
 }
 
 /* Each scene as it's published (on whichever thread publishes it). */
+/* A list of triangles into a scene's hash. */
+static uint32_t hash_triangles(uint32_t h, const NitroGx3dTriangle *tris, uint32_t count)
+{
+    uint32_t i;
+
+    for (i = 0; i < count; i++) {
+        const NitroGx3dTriangle *tri = &tris[i];
+        int k;
+
+        for (k = 0; k < 3; k++) {
+            const NitroGx3dVertex *v = &tri->v[k];
+
+            h = hash_bytes(h, v->clip, sizeof(v->clip));
+            h = hash_bytes(h, &v->x, sizeof(v->x));
+            h = hash_bytes(h, &v->y, sizeof(v->y));
+            h = hash_bytes(h, &v->depth, sizeof(v->depth));
+            h = hash_bytes(h, &v->inv_w, sizeof(v->inv_w));
+            h = hash_bytes(h, &v->s, sizeof(v->s));
+            h = hash_bytes(h, &v->t, sizeof(v->t));
+            h = hash_bytes(h, &v->color, sizeof(v->color));
+        }
+        h = hash_bytes(h, &tri->polygon_attr, sizeof(tri->polygon_attr));
+        h = hash_bytes(h, &tri->texture_param, sizeof(tri->texture_param));
+        h = hash_bytes(h, &tri->palette_base, sizeof(tri->palette_base));
+        h = hash_bytes(h, &tri->sort_key, sizeof(tri->sort_key));
+    }
+    return h;
+}
 void NitroPort_Gx3dScenePublished(void)
 {
     const NitroGx3dScene *scene = NitroPort_Gx3dAcquireScene(&sSeen);
@@ -93,14 +122,34 @@ void NitroPort_Gx3dScenePublished(void)
         h = hash_bytes(h, &tri->palette_base, sizeof(tri->palette_base));
         h = hash_bytes(h, &tri->sort_key, sizeof(tri->sort_key));
     }
+    /* The sun shadows' triangles, and the in-between scene (--shadows,
+     * --interp): the same in both passes too. */
+    h = hash_bytes(h, &scene->shadow_count, sizeof(scene->shadow_count));
+    if (scene->shadow_triangles) {
+        h = hash_triangles(h, scene->shadow_triangles, scene->shadow_count);
+    }
+    {
+        const NitroGx3dScene *mid = NitroPort_Gx3dMidOf(scene);
+
+        if (mid) {
+            h = hash_bytes(h, &mid->count, sizeof(mid->count));
+            h = hash_triangles(h, mid->triangles, mid->count);
+        }
+    }
     {
         /* GX3D_REPLAY_SHOW=N: what scene N has, in each pass. */
         static size_t number[2];
         const char *show = getenv("GX3D_REPLAY_SHOW");
 
         if (show && (size_t)atol(show) == number[sPass]) {
-            printf("pass %d scene %zu: %u triangles, %u dropped, swap %08x\n", sPass,
-                   number[sPass], scene->count, scene->dropped, scene->swap_param);
+            {
+                const NitroGx3dScene *mid = NitroPort_Gx3dMidOf(scene);
+                printf("pass %d scene %zu: %u triangles (%08x), %u dropped, swap %08x, %u shadow triangles (%08x), in-between %d (%08x)\n", sPass,
+                       number[sPass], scene->count, hash_triangles(2166136261u, scene->triangles, scene->count),
+                       scene->dropped, scene->swap_param, scene->shadow_count,
+                       scene->shadow_triangles ? hash_triangles(2166136261u, scene->shadow_triangles, scene->shadow_count) : 0u,
+                       mid ? (int)mid->count : -1, mid ? hash_triangles(2166136261u, mid->triangles, mid->count) : 0u);
+            }
             for (i = 0; i < scene->count && i < 400; i++) {
                 const NitroGx3dTriangle *tri = &scene->triangles[i];
                 printf("  %u: attr %08x tex %08x key %05x v0 %d,%d c%04x clip %d %d %d %d\n", i,
@@ -232,16 +281,26 @@ int main(int argc, char **argv)
             sSeed = (uint32_t)strtoul(argv[++a], NULL, 10);
         } else if (strcmp(argv[a], "--wide") == 0) {
             NitroPort_Gx3dSetWideView(320);
+        } else if (strcmp(argv[a], "--view") == 0 && a + 2 < argc - 1) {
+            int w = atoi(argv[++a]);
+            NitroPort_Gx3dSetView(w, atoi(argv[++a]));
+        } else if (strcmp(argv[a], "--interp") == 0) {
+            NitroPort_Gx3dSetInterpolation(1);
+        } else if (strcmp(argv[a], "--shadows") == 0) {
+            NitroPort_SetSunShadows(1);
         } else {
             argc = 0;
             break;
         }
     }
     if (argc < 2) {
-        fprintf(stderr, "usage: %s [--hashes] [--pieces N] [--seed S] [--wide] RECORDING\n"
+        fprintf(stderr, "usage: %s [--hashes] [--pieces N] [--seed S] [--wide] [--view W H] [--interp] [--shadows] RECORDING\n"
                 "  --hashes: each scene's hash, without the thread (to compare versions)\n"
                 "  --pieces N: feed the FIFO in pieces of 1..N words (the thread must not mind)\n"
-                "  --wide: the 3DS remaster's wider view\n", argv[0]);
+                "  --wide: the 3DS remaster's wider view\n"
+                "  --view W H: a view W x H (the pixel field's: 400 240)\n"
+                "  --interp: in-between scenes made too (the 3DS at 60)\n"
+                "  --shadows: the sun shadows' triangles kept too\n", argv[0]);
         return 2;
     }
     f = fopen(path, "rb");
