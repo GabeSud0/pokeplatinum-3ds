@@ -348,6 +348,16 @@ static unsigned sRearAlpha;
  * own depths spread over the whole 0..1: the fog table (128 steps over
  * 0..1) has its steps where the scene is (normalize_depth). */
 static float sDepthA=0.0f,sDepthK=1.0f;
+/* The field at the DS's pixel size sees 24 lines more above the DS's top
+ * row, further away than the DS ever shows: its fog (made for the DS's
+ * view) went on thickening there, the mountains and buildings at the top
+ * washed out to the fog's colour as if cut off (Route 206, 2026-11-01). The
+ * fog is held there at what the DS's top row has: sFogCap, the farthest d
+ * (as normalize_depth has it) within the DS's 192 rows; sFogCapOn when the
+ * view is taller and the scene goes further than that. */
+static float sFogCap;
+static int sFogCapOn;
+static unsigned sFogCapScenes;
 /* The DS's fog (DISP3DCNT bit 7) for the prepared scene: the PICA's fog
  * table worked out from the DS's (sFogLut), its colour, and whether the
  * rear plane is fogged. */
@@ -960,7 +970,41 @@ static u32 widen5(u32 v)
  * -z (W-buffer scenes) or -z / w (Z-buffer ones); the new z keeps that
  * form. W-buffer scenes keep d' <= w (the GPU clips z at -w): d is w /
  * 4096 there, so a scale up to 4096 keeps it. */
-static void normalize_depth(NitroGx3dGpuVertex *v,size_t count,uint32_t swap)
+/* (sFogCap) The farthest d of the triangles (in threes) within the DS's
+ * rows, |y| <= b w: their vertices there, and where their edges cross
+ * those rows' top and bottom (clip space is linear along an edge). -1 for
+ * none. */
+static float ds_rows_farthest(const NitroGx3dGpuVertex *v,size_t count,int wbuffer,float b)
+{
+    float farthest=-1.0f;
+    size_t t;
+    int i,side;
+    for(t=0;t+2<count;t+=3){
+        for(i=0;i<3;i++){
+            const float *p=v[t+i].position,*q=v[t+(i+1)%3].position;
+            if(p[3]>0.0f && p[1]<=b*p[3] && p[1]>=-b*p[3]){
+                float d=wbuffer? -p[2] : -p[2]/p[3];
+                if(d>farthest)farthest=d;
+            }
+            for(side=-1;side<=1;side+=2){
+                /* where y - side b w changes sign along p..q */
+                float fp=p[1]-side*b*p[3],fq=q[1]-side*b*q[3],u,z,w;
+                if((fp<0.0f)==(fq<0.0f) || fp==fq)continue;
+                u=fp/(fp-fq);
+                z=p[2]+u*(q[2]-p[2]);
+                w=p[3]+u*(q[3]-p[3]);
+                if(w<=0.0f)continue;
+                {
+                    float d=wbuffer? -z : -z/w;
+                    if(d>farthest)farthest=d;
+                }
+            }
+        }
+    }
+    return farthest;
+}
+
+static void normalize_depth(NitroGx3dGpuVertex *v,size_t count,uint32_t swap,uint32_t screenHeight)
 {
     int wbuffer=(swap&2u)!=0;
     float lo=1.0f,hi=0.0f,k;
@@ -970,6 +1014,17 @@ static void normalize_depth(NitroGx3dGpuVertex *v,size_t count,uint32_t swap)
         float d=wbuffer? -v[i].position[2] : (w>0.0f? -v[i].position[2]/w : 0.0f);
         if(d<lo)lo=d;
         if(d>hi)hi=d;
+    }
+    sFogCapOn=0;
+    if(screenHeight>192u && count){
+        float cap=ds_rows_farthest(v,count,wbuffer,192.0f/(float)screenHeight);
+        if(cap>=0.0f && cap<hi){
+            sFogCap=cap;
+            sFogCapOn=1;
+            if(sFogCapScenes++%1800u==0u)
+                NitroPort_Log("[compose] the taller view's fog held at the DS's top row's (depth %.3f of %.3f; %u scenes so far)",
+                              cap,hi,sFogCapScenes);
+        }
     }
     if(!count || hi<=lo){sDepthA=0.0f;sDepthK=1.0f;return;}
     k=1.0f/(hi-lo);
@@ -1049,7 +1104,9 @@ static void setup_fog(void)
     table[33]=table[32];
     for(i=0;i<=128;i++){
         float d=sDepthA+((float)i/128.0f)/sDepthK;
-        u32 depth=d<=0.0f?0u:d>=1.0f?0xFFFFFFu:(u32)(d*16777215.0f);
+        u32 depth;
+        if(sFogCapOn && d>sFogCap)d=sFogCap;   /* (no thicker than the DS's top row's) */
+        depth=d<=0.0f?0u:d>=1.0f?0xFFFFFFu:(u32)(d*16777215.0f);
         /* The PICA's table: 1 keeps the colour, 0 is all fog. */
         f[i]=1.0f-(float)fog_density(depth,offset,shift,table)/128.0f;
     }
@@ -1059,6 +1116,11 @@ static void setup_fog(void)
     /* CLEAR_COLOR bit 15: the rear plane is fogged too, at CLEAR_DEPTH. */
     sFogRear=(clear>>15)&1u;
     sFogDensityRear=(uint8_t)fog_density((io32(0x354)&0x7FFFu)*0x200u+0x1FFu,offset,shift,table);
+    if(sFogCapOn){
+        u32 cap=sFogCap<=0.0f?0u:sFogCap>=1.0f?0xFFFFFFu:(u32)(sFogCap*16777215.0f);
+        unsigned d=fog_density(cap,offset,shift,table);
+        if(d<sFogDensityRear)sFogDensityRear=(uint8_t)d;
+    }
 }
 
 /* The fog mode as last set here; -1 when not known (something else may
@@ -1151,7 +1213,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
                                      NITRO_GX3D_PICA_MAX_VERTICES,
                                      sBatches,MAX_BATCHES,&nbatches,&lost);
     if(dropped)*dropped+=lost;
-    normalize_depth(sVertices[slot],count,scene->swap_param);
+    normalize_depth(sVertices[slot],count,scene->swap_param,scene->screen_height);
     setup_fog();
     NitroPort_Gx3dMapTextureBanks(&sBanks);
     /* CLEAR_COLOR: RGB555, alpha in bits 16-20 (alpha 0 leaves BG0
@@ -1449,7 +1511,7 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
                                               NITRO_GX3D_PICA_MAX_VERTICES,
                                               sBatches,MAX_BATCHES,&sPreparedBatches,&lost);
     if(dropped)*dropped+=lost;
-    normalize_depth(sVertices[slot],sPreparedCount,scene->swap_param);
+    normalize_depth(sVertices[slot],sPreparedCount,scene->swap_param,scene->screen_height);
     if(sPreparedCount){
         GSPGPU_FlushDataCache(sVertices[slot],
                         (u32)(sPreparedCount*sizeof(NitroGx3dGpuVertex)));

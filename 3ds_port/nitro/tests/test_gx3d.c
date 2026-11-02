@@ -8,6 +8,7 @@
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_vertex.h>
 #include <nitro_port_shadow.h>
+#include <nitro_port_wide.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -627,14 +628,23 @@ static void test_interpolation_order_shift(void)
     reset_geometry();
     NitroPort_Gx3dSetInterpolation(1);
     swap_done();
+    uint64_t part[4];
+    uint32_t searched0=0,searched=0;
     /* 16 tiles, 256 (8 DS pixels) to the left each scene */
     for(scene=0;scene<3;scene++){
-        if(scene==2)small_quad_at(3200-256*scene,1000,opaque);   /* (the new one, first) */
+        if(scene==2){
+            small_quad_at(3200-256*scene,1000,opaque);   /* (the new one, first) */
+            NitroPort_Gx3dMatchWork(part,NULL,&searched0,NULL);
+        }
         for(i=0;i<16;i++)small_quad_at(-3600+450*i+70*(i%3)-256*scene,-3000,opaque);
         swap_done();
     }
     mid=NitroPort_Gx3dMidScene(&matched,&polygons);
     CHECK(mid && polygons==17 && matched>=16);
+    /* (one off the order after the new one: looked for in the window, the
+     * new one and the first after it alone, the rest at that shift) */
+    NitroPort_Gx3dMatchWork(part,NULL,&searched,NULL);
+    CHECK(searched-searched0<=2u);
     if(mid && mid->count>=34){
         int ok=1;
         for(i=0;i<16;i++){
@@ -813,6 +823,26 @@ static void test_sprite_texel_a_pixel(void)
     CHECK(fabsf(x0-floorf(x0+0.5f))<0.01f && fabsf(y0-floorf(y0+0.5f))<0.01f);
     CHECK(fabsf((x0+x1)*0.5f-(180.3f+35.7f*0.5f))<=0.5f);
     CHECK(fabsf(y1-150.4f)<=0.5f);
+    /* Further from the camera (under Route 206's bridge, 0.85 of a texel a
+     * pixel): eased between its own size and a texel a pixel, no jump at
+     * either end, never smaller nearer the camera. */
+    {
+        static const float own[]={0.70f,0.749f,0.751f,0.80f,0.85f,0.899f,0.901f,1.0f,1.199f,1.201f,1.3f,1.399f,1.401f,1.5f};
+        float widths[sizeof(own)/sizeof(own[0])];
+        unsigned i;
+        for(i=0;i<sizeof(own)/sizeof(own[0]);i++){
+            sprite_quad(sc,180.3f,150.4f,32.0f*own[i],2481011);
+            sprite_corners(sc,&x0,&x1,&y0,&y1);
+            widths[i]=x1-x0;
+            if(i)CHECK(widths[i]>=widths[i-1]-0.7f);                /* (nearer: never smaller, but for the edges moved out) */
+        }
+        CHECK(fabsf(widths[1]-widths[2])<1.0f);                       /* 0.75: from its own size */
+        CHECK(fabsf(widths[5]-widths[6])<0.3f);                       /* 0.9: to a texel a pixel */
+        CHECK(fabsf(widths[6]-32.0f)<0.01f && fabsf(widths[8]-32.0f)<0.01f);
+        CHECK(fabsf(widths[8]-widths[9])<0.3f);                       /* 1.2 */
+        CHECK(fabsf(widths[11]-widths[12])<1.0f);                     /* 1.4: to its own size */
+        CHECK(fabsf(widths[4]-32.0f*(0.75f+0.10f*(0.25f/0.15f)))<0.05f);   /* 0.85: between */
+    }
     /* growing out of its ball: half its size, as it was (its edges moved
      * out a little, as every polygon's) */
     sprite_quad(sc,180.3f,150.4f,16.0f,2481011);
@@ -1090,6 +1120,81 @@ static void emit_normal_triangle(uint32_t normal)
     swap();
 }
 
+/* The normals' colours kept (64 of them): a normal seen before in the
+ * scene has the colour it would have alone, but not past what changes it
+ * (the polygon's lights at BEGIN_VTXS, the vector matrix); a projection
+ * matrix command keeps them. */
+static void lit_setup(int flipped)
+{
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x30,RGB(31,31,31)|((u32)RGB(4,0,0)<<16));
+    NitroPort_GxDirectWrite(0x31,(u32)RGB(0,0,3)<<16);
+    NitroPort_GxDirectWrite(0x33,RGB(31,31,31));
+    NitroPort_GxDirectWrite(0x32,(0x3E0u<<10)|(0x1C0u<<20));   /* y -32, z -64 (of 512) */
+    if(flipped){
+        static const int32_t flip[9]={ONE,0,0, 0,-ONE,0, 0,0,-ONE};
+        unsigned i;
+        NitroPort_GxDirectWrite(0x10,2);
+        for(i=0;i<9;i++)NitroPort_GxDirectWrite(0x1a,(u32)flip[i]);
+    }
+}
+static void lit_triangle(uint32_t normal,uint32_t attr,int x)
+{
+    NitroPort_GxDirectWrite(0x29,attr);
+    NitroPort_GxDirectWrite(0x40,0);
+    NitroPort_GxDirectWrite(0x21,normal);
+    vertex(x-500,-500,0);
+    vertex(x+500,-500,0);
+    vertex(x,500,0);
+    NitroPort_GxDirectWrite(0x41,0);
+}
+static uint16_t lit_alone(uint32_t normal,uint32_t attr,int flipped)
+{
+    const NitroGx3dScene *scene;
+    lit_setup(flipped);
+    lit_triangle(normal,attr,0);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    return scene->count==1?scene->triangles[0].v[0].color:0xFFFFu;
+}
+static void test_normals_kept(void)
+{
+    const u32 on=1u|(3u<<6)|(31u<<16), off=(3u<<6)|(31u<<16);
+    const uint32_t n1=(0x0C0u<<10)|(0x220u<<20), n2=(0x220u<<20), n3=(0x090u)|(0x260u<<20);   /* (towards the light) */
+    const uint16_t a=lit_alone(n1,on,0), b=lit_alone(n2,on,0), c=lit_alone(n3,on,0);
+    const uint16_t e=lit_alone(n1,off,0), f=lit_alone(n1,on,1);
+    const uint16_t want[7]={a,b,c,a,e,a,f};
+    const NitroGx3dScene *scene;
+    unsigned i;
+    CHECK(a!=b && a!=c && a!=e && a!=f);     /* (each is something else) */
+    lit_setup(0);
+    lit_triangle(n1,on,-3000);
+    lit_triangle(n2,on,-2000);
+    lit_triangle(n3,on,-1000);
+    lit_triangle(n1,on,0);                   /* seen before */
+    lit_triangle(n1,off,1000);               /* its lights off */
+    NitroPort_GxDirectWrite(0x10,0);         /* a projection command: kept */
+    NitroPort_GxDirectWrite(0x15,0);
+    NitroPort_GxDirectWrite(0x10,2);
+    lit_triangle(n1,on,2000);
+    {
+        static const int32_t flip[9]={ONE,0,0, 0,-ONE,0, 0,0,-ONE};
+        for(i=0;i<9;i++)NitroPort_GxDirectWrite(0x1a,(u32)flip[i]);
+    }
+    lit_triangle(n1,on,3000);                /* the vector matrix turned */
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==7);
+    /* (in the scene's order: by x, left to right) */
+    for(i=0;i<scene->count && i<7;i++){
+        int32_t x=scene->triangles[i].v[0].clip[0];
+        unsigned j,k;
+        for(j=1;j<3;j++)if(scene->triangles[i].v[j].clip[0]<x)x=scene->triangles[i].v[j].clip[0];
+        k=(unsigned)((x+3500)/1000);
+        if(k<7)CHECK(scene->triangles[i].v[0].color==want[k]);
+        else CHECK(0);
+    }
+}
 static void test_light_material_and_vectors(void)
 {
     const NitroGx3dScene *scene;
@@ -1779,6 +1884,237 @@ static void test_thread_behind(void)
     NitroPort_Gx3dThreadStats(NULL,NULL,&skipped);
     CHECK(skipped-skippedBefore==3);
 }
+/* A battle's start in the field (NitroPort_FieldEffect): a scene the same
+ * as the one before, word for word, has the next left out (the field
+ * stands still: its 3D made again and again on the core that draws the
+ * effect). Moving after all, it's on the screen a scene late. Not outside
+ * one: identical scenes are all drawn. */
+static void test_same_scenes_left_out(void)
+{
+    const NitroGx3dScene *scene;
+    uint32_t same0, skipped0, skipped;
+    reset_geometry();
+    NitroPort_Gx3dScene();
+    NitroPort_Gx3dThreadStats(NULL,NULL,&skipped0);
+    same0=NitroPort_Gx3dSameScenesLeftOut();
+    triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();
+    triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();
+    triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();
+    CHECK(NitroPort_Gx3dSameScenesLeftOut()==same0);
+    NitroPort_SetFieldEffect(1);
+    triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();   /* A (looked at from its end) */
+    triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();   /* B */
+    triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();   /* C, the same as B: D left out */
+    CHECK(NitroPort_Gx3dSameScenesLeftOut()==same0+1u);
+    triangle(0,RGB(0,31,0));swap();                        /* D: moved after all */
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(31,0,0));   /* (C's still) */
+    triangle(0,RGB(31,31,0));swap();                       /* E: drawn (D wasn't C) */
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(31,31,0));
+    CHECK(NitroPort_Gx3dSameScenesLeftOut()==same0+1u);
+    NitroPort_SetFieldEffect(0);
+    triangle(0,RGB(31,31,0));swap();NitroPort_Gx3dScene(); /* F (still looked at), the same as E: G left out */
+    triangle(0,RGB(31,31,0));swap();NitroPort_Gx3dScene(); /* G */
+    triangle(0,RGB(31,31,0));swap();NitroPort_Gx3dScene(); /* H, the same as G: drawn (no effect now) */
+    triangle(0,RGB(0,0,31));swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(0,0,31));
+    NitroPort_Gx3dThreadStats(NULL,NULL,&skipped);
+    CHECK(skipped-skipped0==NitroPort_Gx3dSameScenesLeftOut()-same0);
+    CHECK(NitroPort_Gx3dSameScenesLeftOut()==same0+2u);
+}
+/* A shape's display list cut to a slab of its coordinates
+ * (NitroPort_Gx3dTrimList: Route 206's river mirrored past the scenery,
+ * the strip of the map that can be seen): cut to the view's width, the
+ * scene is the one the whole list makes. And with the sun shadows on, the
+ * geometry thread doesn't pass over lists out of the view that they keep. */
+static unsigned dl_pack(uint32_t *out,const uint32_t *cmds,unsigned nwords)
+{
+    static const unsigned params[256]={
+        [0x11]=0,[0x12]=1,[0x1C]=3,[0x20]=1,[0x21]=1,[0x22]=1,[0x23]=2,[0x25]=1,
+        [0x28]=1,[0x40]=1,[0x41]=0,
+    };
+    unsigned n=0,header=0,slots=4,i=0;
+    while(i<nwords){
+        unsigned op=cmds[i++],k;
+        if(slots==4){header=n++;out[header]=0;slots=0;}
+        out[header]|=op<<(slots++*8);
+        for(k=0;k<params[op];k++)out[n++]=cmds[i++];
+    }
+    return n;
+}
+#define LIST_MAX 64u
+typedef struct ListScene {
+    unsigned count, shadows;
+    NitroGx3dTriangle tris[LIST_MAX], shadow[LIST_MAX];
+} ListScene;
+static void list_scene(const uint32_t *w,unsigned n,ListScene *out)
+{
+    const NitroGx3dScene *scene;
+    reset_geometry();
+    swap();
+    NitroPort_Gx3dScene();
+    NitroPort_GxDirectWrite(0x29,1u|(3u<<6)|(31u<<16));   /* light 0, both sides */
+    NitroPort_GxDirectWrite(0x30,RGB(31,0,0));              /* diffuse red */
+    NitroPort_GxDirectWrite(0x33,RGB(31,31,31));
+    NitroPort_GxDirectWrite(0x32,511u<<20);
+    NitroPort_GxFifoWords(w,n);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    out->count=scene->count<LIST_MAX?scene->count:LIST_MAX;
+    out->shadows=scene->shadow_count<LIST_MAX?scene->shadow_count:LIST_MAX;
+    memcpy(out->tris,scene->triangles,sizeof(out->tris[0])*out->count);
+    if(out->shadows)memcpy(out->shadow,scene->shadow_triangles,sizeof(out->shadow[0])*out->shadows);
+}
+static int same_triangles(const NitroGx3dTriangle *a,const NitroGx3dTriangle *b,unsigned count)
+{
+    unsigned i,k;
+    for(i=0;i<count;i++){
+        if(a[i].polygon_attr!=b[i].polygon_attr)return 0;
+        for(k=0;k<3;k++){
+            const NitroGx3dVertex *x=&a[i].v[k],*y=&b[i].v[k];
+            if(memcmp(x->clip,y->clip,sizeof(x->clip)) || x->x!=y->x || x->y!=y->y ||
+               x->depth!=y->depth || x->s!=y->s || x->t!=y->t || x->color!=y->color)return 0;
+        }
+    }
+    return 1;
+}
+static unsigned list_quad(uint32_t *c,int x,int z)
+{
+    unsigned n=0;
+    c[n++]=0x23;c[n++]=word2((int16_t)x,-3000);c[n++]=(uint16_t)z;
+    c[n++]=0x25;c[n++]=word2((int16_t)(x+3000),-3000);
+    c[n++]=0x25;c[n++]=word2((int16_t)(x+3000),3000);
+    c[n++]=0x28;c[n++]=(uint32_t)(1u<<20);                  /* (VTX_DIFF: z + 1) */
+    return n;
+}
+static void test_list_trimmed(void)
+{
+    const uint32_t lit=0x200u<<20;
+    uint32_t cmds[600], w[600]={0};
+    unsigned c=0,i,n,shadows;
+    ListScene *raw=malloc(sizeof(*raw)), *culled=malloc(sizeof(*culled));
+    if(!raw||!culled){CHECK(0);free(raw);free(culled);return;}
+    /* A: 8 quads out of the view to the right (a texcoord, a colour, a
+     * normal: lit), then one in it, its first vertex X/Y only (the Z of
+     * the last one left out), without a colour of its own. */
+    cmds[c++]=0x40;cmds[c++]=1;
+    cmds[c++]=0x22;cmds[c++]=(16u<<16)|32u;
+    cmds[c++]=0x20;cmds[c++]=RGB(0,31,0);
+    for(i=0;i<8;i++){
+        if(i==5){cmds[c++]=0x21;cmds[c++]=lit;}
+        c+=list_quad(&cmds[c],6000+(int)i*100,100+(int)i);
+    }
+    cmds[c++]=0x25;cmds[c++]=word2(-3000,-3000);
+    cmds[c++]=0x25;cmds[c++]=word2(-1000,-3000);
+    cmds[c++]=0x25;cmds[c++]=word2(-1000,-1000);
+    cmds[c++]=0x25;cmds[c++]=word2(-3000,-1000);
+    cmds[c++]=0x41;
+    /* C: 8 triangles out of the view (one group, the whole list), then a
+     * list of one in it, X/Y only: the left-out ones' last Z. */
+    cmds[c++]=0x40;cmds[c++]=0;
+    cmds[c++]=0x20;cmds[c++]=RGB(0,0,31);
+    for(i=0;i<8;i++){
+        cmds[c++]=0x23;cmds[c++]=word2(6000,-3000);cmds[c++]=300;
+        cmds[c++]=0x23;cmds[c++]=word2(9000,-3000);cmds[c++]=300;
+        cmds[c++]=0x23;cmds[c++]=word2(7000,3000);cmds[c++]=301+i;
+    }
+    cmds[c++]=0x40;cmds[c++]=0;
+    cmds[c++]=0x25;cmds[c++]=word2(0,0);
+    cmds[c++]=0x25;cmds[c++]=word2(2000,0);
+    cmds[c++]=0x25;cmds[c++]=word2(1000,2000);
+    /* E: a strip out of the view, END, a triangle in it with its Z. */
+    cmds[c++]=0x40;cmds[c++]=2;
+    cmds[c++]=0x23;cmds[c++]=word2(6000,-2000);cmds[c++]=66;
+    cmds[c++]=0x23;cmds[c++]=word2(6000,2000);cmds[c++]=66;
+    cmds[c++]=0x23;cmds[c++]=word2(8000,0);cmds[c++]=77;
+    cmds[c++]=0x41;
+    cmds[c++]=0x40;cmds[c++]=0;
+    cmds[c++]=0x25;cmds[c++]=word2(-3000,1000);
+    cmds[c++]=0x25;cmds[c++]=word2(-1000,1000);
+    cmds[c++]=0x25;cmds[c++]=word2(-2000,3000);
+    cmds[c++]=0x41;
+    /* F: a quad far beyond the right side (past the sun shadows' reach). */
+    cmds[c++]=0x40;cmds[c++]=1;
+    c+=list_quad(&cmds[c],20000,9);
+    cmds[c++]=0x41;
+    CHECK(c<=sizeof(cmds)/sizeof(cmds[0]));
+    n=dl_pack(w,cmds,c);
+    {
+        uint32_t cut[600];
+        uint32_t bytes=NitroPort_Gx3dTrimList(w,n*4u,cut,sizeof(cut),0,-4096,4096);
+        CHECK(bytes>0 && bytes<n*4u);              /* (smaller: A's 8 quads, C's 8, E's strip, F gone) */
+        list_scene(w,n,raw);
+        list_scene(cut,bytes/4u,culled);
+        CHECK(raw->count==4);
+        CHECK(culled->count==raw->count);
+        if(culled->count==raw->count)CHECK(same_triangles(raw->tris,culled->tris,raw->count));
+        /* (no room: 0, the whole list drawn) */
+        CHECK(NitroPort_Gx3dTrimList(w,n*4u,cut,16u,0,-4096,4096)==0);
+        /* the other way: what's left out is what's in the view */
+        bytes=NitroPort_Gx3dTrimList(w,n*4u,cut,sizeof(cut),0,5000,30000);
+        CHECK(bytes>0);
+        list_scene(cut,bytes/4u,culled);
+        CHECK(culled->count==0);
+    }
+    /* With the shadows: A's 8 quads, C's 8 triangles, E's, all in their
+     * reach beside the view, kept for them; on the thread too, which
+     * passes over lists out of the view. */
+    NitroPort_SetSunShadows(1);
+    list_scene(w,n,raw);
+    CHECK(raw->shadows>=25u);
+    NitroPort_SetSunShadows(0);
+    /* (what the in-view polygons carry from those left out) */
+    if(raw->count==4){
+        CHECK(raw->tris[0].v[0].clip[2]==108);              /* A's last Z */
+        CHECK(raw->tris[0].v[0].color!=RGB(0,31,0));        /* (lit) */
+    }
+    free(raw);free(culled);
+}
+/* The clock scenes are stamped with (the platform's: the 3DS counts
+ * V-blanks; 0 here unless a test sets it). */
+static uint32_t sTestStamp;
+uint32_t NitroPort_Gx3dStamp(void){return sTestStamp;}
+/* The thread behind, ending a scene a V-blank or more after the game did:
+ * no in-between scene for it (counted), rather than the scene after the
+ * next left out. Caught up: one. */
+static void test_mid_left_out_behind(void)
+{
+    const NitroGx3dScene *scene;
+    uint32_t left0,left;
+    const uint32_t opaque=(3u<<6)|(31u<<16);
+    reset_geometry();
+    NitroPort_Gx3dSetInterpolation(1);
+    sTestStamp=10;
+    swap_done();
+    quad_at(-3000,opaque);
+    swap_done();
+    quad_at(-2800,opaque);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(NitroPort_Gx3dMidOf(scene)!=NULL);          /* (caught up) */
+    NitroPort_Gx3dMidWork(NULL,NULL,&left0);
+    sHold=1;                                          /* the thread stops... */
+    quad_at(-2600,opaque);
+    swap();                                           /* (ended at V-blank 10) */
+    sTestStamp=11;                                    /* ...and gets to it a V-blank later */
+    sHold=0;sem_post(&sGate);
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==2);
+    CHECK(NitroPort_Gx3dMidOf(scene)==NULL);
+    NitroPort_Gx3dMidWork(NULL,NULL,&left);
+    CHECK(left==left0+1u);
+    quad_at(-2400,opaque);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(NitroPort_Gx3dMidOf(scene)!=NULL);          /* (caught up again) */
+    sTestStamp=0;
+    NitroPort_Gx3dSetInterpolation(0);
+}
 /* Whether a scene from before the game's newest SWAP_BUFFERS may still be
  * read (OS_Halt does the texture transfers queued for the V-blank early
  * only when none may): the thread hasn't got to it, or a consumer is
@@ -1857,6 +2193,9 @@ int main(void)
     pthread_create(&thread, NULL, geometry_thread, NULL);
     run_all();
     test_thread_behind();
+    test_same_scenes_left_out();
+    test_list_trimmed();
+    test_mid_left_out_behind();
     test_earlier_scene_unread();
     test_scene_registers();
     sRunning = 0;
@@ -1890,6 +2229,7 @@ static void run_all(void)
     test_bg0_composition();
     test_cpu_fifo_writes();
     test_light_material_and_vectors();
+    test_normals_kept();
     test_texture_matrix_modes();
     test_latched_polygon_attributes();
     test_viewport_and_immediate_texture_state();

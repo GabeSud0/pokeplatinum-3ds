@@ -285,6 +285,17 @@ The intro's forest uses it (white fog, a linear table). The table goes
 to the GPU once per scene's draw (citro3d sends all 128 entries whenever
 it's bound; it was bound for each batch).
 
+The field at the DS's pixel size sees 24 lines more above the DS's top
+row, further away than the DS ever shows, and the fog (made for the DS's
+view) went on thickening there: the mountains and buildings at the top of
+the screen washed out to the fog's colour, as if cut off (Route 206's
+Cycling Road, 2026-11-01). With a view taller than the DS's, the fog is
+held at the DS's top row's: the farthest depth within its 192 rows (the
+scene's vertices there, and where their triangles' edges cross the rows'
+top and bottom: `ds_rows_farthest`), the table's entries beyond it as at
+it, the rear plane no thicker. Logged now and then: `[compose] the taller
+view's fog held at the DS's top row's`.
+
 A scene is drawn with the 3D registers the game had at its SWAP_BUFFERS
 (DISP3DCNT and 0x320-0x3BF: the clear colour, the fog, the outlines'
 colours; noted on the game's thread with the swap:
@@ -698,12 +709,17 @@ screen's 320 x 192 at 1.25 times, as above.
   here and there, and the smooth 3D (drawn 2x2 and averaged) blended the
   texels' edges into the pixels beside them, blurring the pixel art
   (2026-10-29). Here a textured triangle with its three corners at one
-  depth, upright and within 0.85-1.25 of a pixel a texel, is laid out at
+  depth, upright and within 0.9-1.2 of a pixel a texel, is laid out at
   a texel a pixel, the texture's bottom middle (the feet) on the nearest
   pixel corner, its edges not moved out: each texel whole pixels, sharp
   with the smooth 3D or without; the 3D (buildings, signs) as smooth as
-  before. One scaled on purpose (a Pokémon growing out of its ball) is
-  left as it is; the 1.25x field too (a texel 1.25 pixels there), and
+  before. From 0.75 to 0.9 and 1.2 to 1.4 its size eases from its own to
+  a texel a pixel (`sprite_scale`): with 0.85 the line, the people and
+  berry trees under Route 206's bridge, further from the camera than the
+  road's (about 0.85; the road's own at the screen's top are 0.89),
+  jumped by a seventh between the two sizes as they went up and down the
+  screen (2026-11-02). One scaled on purpose (a Pokémon growing out of
+  its ball, below 0.75) is left as it is; the 1.25x field too (a texel 1.25 pixels there), and
   with an orthographic camera (the interiors: Pokémon Centers, shops,
   Eterna's gym) every polygon is at one depth and about a texel a pixel,
   the room's own floor, fences and paths as much as its people: each laid
@@ -755,6 +771,37 @@ screen's 320 x 192 at 1.25 times, as above.
   side is swapped while it's drawn (`Port_SwapModelCulling`). Only for the
   matrices in `sPortMirroredEdgeMatrices` (Eterna Forest's, 7): past a
   town's edge, mirrored houses would look wrong.
+- **Maps out of view, and the scenery's seams** (patch 0068): a loaded
+  map wholly out of the view (the box test, as the game's props have it:
+  it passes what the wider view shows and what the sun shadows reach) isn't
+  sent to the 3D; its polygons were all thrown away, but its vertices were
+  worked out first (at the top of the Cycling Road, Eterna City's south
+  part behind the camera: a third of the scene's vertices). And the
+  overworld's scenery maps (the map header "everywhere", the mountains
+  beside a route) sit at their own height in the matrix, nothing joining
+  their edges where one is higher than the map beside it: a slit down the
+  border, the backdrop's white through it, which the DS's narrower view
+  never reaches from the player's ways (the Cycling Road's left: its
+  mountains looked cut). Such a map is drawn again below itself, from the
+  lowest map beside it up, 2 tiles apart (16 polygons each), the copies
+  filling the slit as a wall would (`Port_RenderSceneryMapsLowered`).
+- **Route 206's river past the scenery** (patch 0069): beside the Cycling
+  Road the wider field sees into the scenery map next to it, a flat ledge
+  at its own height with the route's river and ledges stopping at the
+  border. With the player in the half of the route's map by that border,
+  the map is drawn again past it, mirrored about it, and the scenery map
+  isn't (`Port_RenderMirroredBesideScenery`, `sPortMirroredBesideScenery`:
+  Route 206 only): the river and ledges go on, level. Not the whole map:
+  a copy of its model with its shapes' display lists cut to the strip by
+  the border (`NitroPort_Gx3dTrimList`, the polygons kept drawn the same),
+  made once for 4, 8, 12, 16 and 24 tiles; each scene the box test of the
+  strips past the border picks the narrowest with all the camera sees
+  (the whole map again was a fifth more work for the 3D, nearly all of it
+  off the screen; this is 3%). In the copy the river's texture, one to a
+  tile, ran the other way, its waves facing back at the border: water
+  materials (named `sea_...`) have their S coordinates turned round again
+  through the texture matrix (`Port_MirroredWaterShape`, a shape
+  callback).
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they
@@ -1676,7 +1723,72 @@ reading of the game's display state (and drawing from it), which the game
 waits for before its next frame's display work: behind the geometry (25
 ms at a stretch where the maps change) the game waited for it and stepped
 unevenly, Eterna to Route 205 (2026-10-30). Handing the picture over (the
-upscaling) is below the geometry. Core 1 is the system's; a
+upscaling) is below the geometry. While a battle's start plays in the
+field (`NitroPort_FieldEffect`: the Poké Ball splitting in two and the
+like) the field stands still, but its 3D was made again every scene, on
+the core that draws the effect's 2D: on the Cycling Road the geometry
+took 21-29 ms a scene and engine A's drawer got 8-15 pictures a second
+(50-87 ms each), the effect at a third of its speed (2026-11-01). Then a
+scene the same as the one before, word for word (the 3D registers too,
+not its time; hashed on the game's thread as the commands go into the
+ring), has the next left out, as one the thread can't keep up with: the
+one before stays on the screen. If it moved after all, it's there a scene
+later. Not outside such an effect: the first step after standing still
+would be a scene late. The `[perf] geometry` line counts them (`left out/s
+(n as the same)`), and a `[perf] geometry's work` line says where its time
+goes: ending scenes (the SWAP: sorting, matching, publishing), and the
+vertices a scene sends, of them those in lists wholly out of the view (not
+worked out), and polygons; and a `[perf] shapes' lists` line, what the
+game's side leaves out (below) and the time it takes.
+
+Where the geometry's time goes was measured on recordings of the Cycling
+Road ridden end to end, replayed as the 3DS has it (`gx3d_replay --view
+400 240 --interp --shadows`: the pixel field's view, the in-between
+scenes, the sun shadows; callgrind, 2026-11-01): placing vertices on the
+screen, decoding the commands, the in-between scenes (a third), and
+transforming and lighting. On the 3DS (log fcde80ee, 2026-11-02) ending
+scenes was 10-16 ms of the road's 25-29 ms a scene. Leaving out each
+shape's polygons out of the view on the game's side, every scene (cutting
+its display lists in groups by their bounding boxes), cost the PC 0.1 ms
+a frame and the 3DS 4 ms: the game's 2-3 ms a frame became 6-7, and the
+display, on its core, dropped to 48-56 frames a second; not done. Now:
+with the thread behind, ending a scene a V-blank or more after the game
+did, it makes no in-between scene for it (`interp_mid`; the frame between
+shows the scene twice) rather than have the scene after the next left
+out (a jump); the `[perf] geometry's work` line has the in-between
+scenes' share of ending scenes (on the road, 2026-11-02: 9-15 ms of the
+25-30 a scene, nearly all of ending scenes), of that the matching of
+their polygons with the scene before's, and how many it left out (on
+the road, 2026-11-02: matching was 3-9 ms of a 8-15 ms in-between scene;
+standing, under 1). Matching reads what it compares of each record (its
+kind, its corners' count, in front of the camera, its corners on the
+screen) from tables of their own, 8 and 32 bytes a record, rather than
+the 160-byte records (`RecTag`, `RecPos`): the window's search looked at
+up to 129 records for a polygon, a cache line or two each (in a 3DS-like
+cache, 28% fewer misses in the in-between scenes; the same pairs, bit
+for bit). A `[perf] in-between matching` line has its parts: the order's
+pairs, the scene's motion, each by where it is, one each, and how many
+polygons the window searched for: on the road (3DS log 10c1917f) each by
+where it is was 3-7 ms of it, 400-500 of a scene's 700-900 polygons
+searched for, 60,000 places looked at. Polygons going out of the view at
+one side and coming in at the other shift the order by a few, and every
+pair after it was the order's neighbour of its kind; and the ground's
+rows move their own ways in the perspective, a pixel or two off the
+scene's motion. Before the window's search now: the place one off the
+order as the last pair was, and where the pair before moved (when it's
+within MATCH_LOCAL, 2 pixels, of the scene's motion), each a pixel at
+most from where it puts it (`match_fits`). The road's recordings: a
+quarter of the searches; 47 of 1.2 million pairs different, 36 of them a
+pair where there was none, none further than 0.3 pixels. Lighting keeps
+64 normals' colours, forgotten together when the vector matrix, the
+lights, the material or the polygon's lights change (it was the last
+normal's, forgotten at every matrix command: 12% less lighting work); the
+sun shadows' triangles take their vertices' screen positions with the
+drawn ones' (`screen_of`). With the sun shadows on, the thread passed
+over lists out of the view that they keep (beside it, within their
+reach: a building just off the screen lost its shadow on the 3DS, not on
+one core), and in-between scenes matched polygons out of the view only
+then: now both as on one core, and the same with the shadows on or off. Core 1 is the system's; a
 program gets 30% of it, and there the
 geometry took 18-30 ms a scene and left scenes out (the intro's flyover
 jumped), and engine B's screen drew 14-25 frames a second

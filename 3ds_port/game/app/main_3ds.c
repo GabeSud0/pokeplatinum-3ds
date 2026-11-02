@@ -2539,12 +2539,60 @@ static void PerfFrame(u64 enter)
         NitroPort_Gx3dThreadWakeups(&geoWakeups, &geoLongest);
         if (sGeoThread && geoScenes != lastGeoScenes) {
             double busy = (double)(geoBusy - lastGeoBusy) / SYSCLOCK_ARM11;
-            NitroPort_Log("[perf] geometry (core %d): %.1f scenes/s, %.1f left out/s; %.1f ms/scene, busy %.0f%% of the time; woken %.0f times/scene, longest stretch %.1f ms",
+            static uint32_t lastGeoSame;
+            uint32_t geoSame = NitroPort_Gx3dSameScenesLeftOut();
+            NitroPort_Log("[perf] geometry (core %d): %.1f scenes/s, %.1f left out/s (%.1f as the same); %.1f ms/scene, busy %.0f%% of the time; woken %.0f times/scene, longest stretch %.1f ms",
                           sGeoCore, (geoScenes - lastGeoScenes) / seconds,
-                          (geoSkipped - lastGeoSkipped) / seconds,
+                          (geoSkipped - lastGeoSkipped) / seconds, (geoSame - lastGeoSame) / seconds,
                           busy * 1000.0 / (geoScenes - lastGeoScenes), 100.0 * busy / seconds,
                           (double)(geoWakeups - lastGeoWakeups) / (geoScenes - lastGeoScenes),
                           (double)geoLongest * 1000.0 / SYSCLOCK_ARM11);
+            lastGeoSame = geoSame;
+            {
+                // (where the geometry's time goes: ending scenes, and the
+                // vertices it worked out a scene)
+                static uint64_t lastSwapTicks;
+                static uint32_t lastVertices, lastPolygons, lastSkipped;
+                uint64_t swapTicks;
+                uint32_t vertices, polygons, skippedVertices, n = geoScenes - lastGeoScenes;
+                NitroPort_Gx3dThreadWork(&swapTicks, &vertices, &polygons, &skippedVertices);
+                static uint64_t lastMidTicks, lastMatchTicks;
+                static uint32_t lastMidsLeftOut;
+                uint64_t midTicks, matchTicks;
+                uint32_t midsLeftOut;
+                NitroPort_Gx3dMidWork(&midTicks, &matchTicks, &midsLeftOut);
+                NitroPort_Log("[perf] geometry's work: %.1f ms/scene ending scenes (%.1f of it the in-between scene, %.1f of that matching; %.1f in-between scenes left out/s, behind); %u vertices a scene sent, %u of them out of the view (not worked out), %u polygons",
+                              (double)(swapTicks - lastSwapTicks) * 1000.0 / SYSCLOCK_ARM11 / n,
+                              (double)(midTicks - lastMidTicks) * 1000.0 / SYSCLOCK_ARM11 / n,
+                              (double)(matchTicks - lastMatchTicks) * 1000.0 / SYSCLOCK_ARM11 / n, (midsLeftOut - lastMidsLeftOut) / seconds,
+                              (vertices - lastVertices) / n, (skippedVertices - lastSkipped) / n, (polygons - lastPolygons) / n);
+                lastMidTicks = midTicks;
+                lastMatchTicks = matchTicks;
+                lastMidsLeftOut = midsLeftOut;
+                {
+                    // (the in-between scenes' matching, in its parts)
+                    static uint64_t lastPart[4];
+                    static uint32_t lastPolys, lastSearched, lastScanned;
+                    uint64_t part[4];
+                    uint32_t polys, searched, scanned;
+                    double ms[4];
+                    int k;
+                    NitroPort_Gx3dMatchWork(part, &polys, &searched, &scanned);
+                    for (k = 0; k < 4; k++) {
+                        ms[k] = (double)(part[k] - lastPart[k]) * 1000.0 / SYSCLOCK_ARM11 / n;
+                        lastPart[k] = part[k];
+                    }
+                    NitroPort_Log("[perf] in-between matching: %.1f ms/scene in order, %.1f the motion, %.1f by where they are, %.1f one each; %u polygons a scene, %u searched for (%u places looked at)",
+                                  ms[0], ms[1], ms[2], ms[3], (polys - lastPolys) / n, (searched - lastSearched) / n, (scanned - lastScanned) / n);
+                    lastPolys = polys;
+                    lastSearched = searched;
+                    lastScanned = scanned;
+                }
+                lastSwapTicks = swapTicks;
+                lastVertices = vertices;
+                lastPolygons = polygons;
+                lastSkipped = skippedVertices;
+            }
         }
         lastGeoWakeups = geoWakeups;
         lastGeoBusy = geoBusy;

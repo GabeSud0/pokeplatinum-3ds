@@ -1,0 +1,154 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 20:00:00 -0700
+Subject: [PATCH] The field's maps out of view not sent, the scenery seams closed (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A loaded map wholly out of the view (the camera's box test, as the
+game's props have it: it passes what the wider view shows, and what the
+sun shadows reach) isn't sent to the 3D. Every one of its polygons was
+thrown away, but its vertices were worked out first, on the 3D's core:
+at the top of Route 206's Cycling Road, Eterna City's south part behind
+the camera, a third of the scene's vertices.
+
+The overworld's scenery maps (the header "everywhere": the mountains
+beside a route) sit at their own height in the map matrix, and where one
+is higher than the map beside it nothing joins their edges: a slit down
+the border, the backdrop's white through it. The DS's narrower view
+never reaches those borders from where the player goes; the 3DS's wider
+one does (the Cycling Road's left: its mountains looked cut). Such a map
+is drawn again below itself, from the lowest map beside it up, 2 tiles
+apart (16 polygons each): the copies fill the slit as a wall would.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index d833a692..ffe2fae0 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -29,6 +29,10 @@
+ 
+ #ifdef SDK_PORT_3DS
+ #include <nnsys/g3d/gecom.h>
++
++#include "generated/map_headers.h"
++
++#include "gfx_box_test.h"
+ extern int NitroPort_WideScreenExtra(void);
+ #endif
+ 
+@@ -1221,6 +1225,15 @@ static void LandDataManager_RenderLoadedMap(const u8 index, const LandDataManage
+         VecFx32 scale = { FX32_ONE, FX32_ONE, FX32_ONE };
+         MtxFx33 rotationMatrix = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
+ 
++#ifdef SDK_PORT_3DS
++        // (the 3DS port) A map wholly out of the view isn't sent: every one
++        // of its polygons would be thrown away, but its vertices were
++        // worked out first, on the 3D's core (the map behind the camera,
++        // up to a third of a scene's). The DS's own box test, as its props
++        // have it (it passes what the wider view shows, and what the sun
++        // shadows reach).
++        if (GFXBoxTest_IsModelInView(landDataMan->loadedMaps[index]->mapRenderObj.resMdl, &position, &rotationMatrix, &scale))
++#endif
+         Easy3D_DrawRenderObj(&landDataMan->loadedMaps[index]->mapRenderObj, &position, &rotationMatrix, &scale);
+     }
+ 
+@@ -1733,6 +1746,90 @@ static void Port_RenderMirroredEdges(const LandDataManager *landDataMan, ModelAt
+ }
+ #endif
+ 
++#ifdef SDK_PORT_3DS
++// The overworld's scenery maps (the map header "everywhere": mountains
++// beside a route) sit at their own height in the map matrix, and where one
++// is higher than the map beside it nothing joins their edges: a slit down
++// the border, the 3D's clear colour (the backdrop's white) through it. The
++// DS's narrower view never reaches those borders from where the player
++// goes (Route 206's Cycling Road: the wider field sees the one on its left,
++// x 288, its mountains looking cut). Such a map is drawn again below
++// itself, from the height of the lowest map beside it up, 2 tiles apart:
++// those copies fill the slit as a wall would, under the map itself
++// everywhere else (they're small: 16 polygons each).
++static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *landDataMan)
++{
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++    int width = landDataMan->mapMatrixWidth, mapMatrixIndex = loadedMap->mapMatrixIndex, lowest = 0x7fffffff;
++    u16 matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++    int matrixWidth = MapMatrix_GetWidth(landDataMan->mapMatrix);
++    int altitude = MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, mapMatrixIndex % width, mapMatrixIndex / width, matrixWidth);
++
++    if (MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex) != MAP_HEADER_EVERYWHERE) {
++        return;
++    }
++
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        int other = landDataMan->loadedMaps[i]->mapMatrixIndex, dx, dz, otherAltitude;
++
++        if (i == index || other == INVALID_MAP_MATRIX_INDEX || landDataMan->loadedMaps[i]->valid != TRUE) {
++            continue;
++        }
++
++        dx = other % width - mapMatrixIndex % width;
++        dz = other / width - mapMatrixIndex / width;
++
++        if (dx * dx + dz * dz != 1) {
++            continue; // (not beside it)
++        }
++
++        otherAltitude = MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, other % width, other / width, matrixWidth);
++
++        if (otherAltitude < altitude && otherAltitude < lowest) {
++            lowest = otherAltitude;
++        }
++    }
++
++    if (lowest == 0x7fffffff) {
++        return;
++    }
++
++    VecFx32 position = { 0, 0, 0 };
++    VecFx32 scale = { FX32_ONE, FX32_ONE, FX32_ONE };
++    MtxFx33 rotationMatrix = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++
++    LandDataManager_CalculateRenderingPosition(mapMatrixIndex, width, landDataMan->mapMatrix, &position);
++    position.x += landDataMan->offset.x;
++    position.z += landDataMan->offset.z;
++
++    // (at heights 2 tiles apart, from the lowest beside it up: the map
++    // beside has its own hills at its edge, and seen from the side the
++    // slit is between this map and those; each copy shows below the one
++    // above it, as a wall would)
++    for (int a = lowest; a < altitude; a += 4) {
++        position.y = a * (MAP_OBJECT_TILE_SIZE / 2) + landDataMan->offset.y;
++
++        if (GFXBoxTest_IsModelInView(loadedMap->mapRenderObj.resMdl, &position, &rotationMatrix, &scale)) {
++            Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &position, &rotationMatrix, &scale);
++        }
++    }
++}
++
++static void Port_RenderSceneryMapsLowered(const LandDataManager *landDataMan)
++{
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld) {
++        return;
++    }
++
++
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        if (landDataMan->loadedMaps[i]->mapMatrixIndex != INVALID_MAP_MATRIX_INDEX && landDataMan->loadedMaps[i]->valid == TRUE) {
++            Port_RenderSceneryMapLowered(i, landDataMan);
++        }
++    }
++}
++#endif
++
+ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
+ {
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+@@ -1742,6 +1839,7 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+     }
+ #ifdef SDK_PORT_3DS
+     Port_RenderMirroredEdges(landDataMan, modelAttrs);
++    Port_RenderSceneryMapsLowered(landDataMan);
+ #endif
+ }
+ 

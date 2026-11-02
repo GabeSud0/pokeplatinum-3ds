@@ -283,6 +283,37 @@ uint64_t NitroPort_Gx3dProducerWaitMicros(void);
  * done all it was handed), and its longest stretch of work, in ticks (both
  * for the [perf] line; the longest is reset when read). */
 void NitroPort_Gx3dThreadWakeups(uint32_t *wakeups, uint64_t *longest);
+/* Scenes left out as the same as the one before, word for word, while a
+ * battle's start plays in the field (NitroPort_FieldEffect): counted on the
+ * game's thread. */
+uint32_t NitroPort_Gx3dSameScenesLeftOut(void);
+/* A model's shape's display list (src, bytes) with only the polygons that
+ * reach into a slab of its coordinates, lo <= x (axis 0), y (1) or z (2)
+ * <= hi, into dst (dstBytes of room); the polygons kept are drawn the same,
+ * bit for bit (what those left out leave behind is sent in their place).
+ * Made once, not every scene (a map drawn again mirrored past the
+ * scenery: the strip of it that can be seen). Its size in bytes; 0 if the
+ * list can't be cut (or doesn't fit): draw the whole of it. */
+uint32_t NitroPort_Gx3dTrimList(const void *src, uint32_t bytes, void *dst, uint32_t dstBytes,
+                                int axis, int32_t lo, int32_t hi);
+/* (for the [perf] geometry's work line) The time the thread has spent
+ * making in-between scenes (NitroPort_Gx3dSetInterpolation), in the ticks
+ * of NitroGx3dThreadOps.ticks, of it matching their polygons with the
+ * scene before's, and how many it left out, behind (ending a scene a
+ * V-blank or more after the game did: rather than a scene left out
+ * later), so far. */
+void NitroPort_Gx3dMidWork(uint64_t *ticks, uint64_t *matchTicks, uint32_t *leftOut);
+/* (the [perf] in-between matching line) The matching's time so far, in
+ * its four parts (the order's pairs, the scene's motion, each polygon
+ * again by where it is, one each), in NitroGx3dThreadOps.ticks; the
+ * polygons matched, those searched for in the window, and the window's
+ * places looked at. */
+void NitroPort_Gx3dMatchWork(uint64_t part[4], uint32_t *polygons, uint32_t *searched, uint32_t *scanned);
+/* Where the thread's time goes (for the [perf] geometry line): the time
+ * spent ending scenes (the clock of NitroGx3dThreadOps.ticks), the
+ * vertices and polygons sent, and of the vertices those in lists wholly out
+ * of the view (not worked out). Counts as they are: for a log. */
+void NitroPort_Gx3dThreadWork(uint64_t *swapTicks, uint32_t *vertices, uint32_t *polygons, uint32_t *skipped);
 /* Whether a scene the game ended before its newest SWAP_BUFFERS may still
  * be read (the 3DS's GPU thread reads the texture VRAM as it draws one):
  * the geometry thread hasn't finished it, or the consumer is reading it or

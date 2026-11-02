@@ -1769,6 +1769,13 @@ static void *GeometryThread(void *unused)
     NitroPort_Gx3dThreadMain(&sGxRunning);
     return NULL;
 }
+static uint64_t GxTicks(void *c)
+{
+    struct timespec ts;
+    (void)c;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+}
 static void StartGeometryThread(int keepEveryScene)
 {
     NitroGx3dThreadOps ops;
@@ -1779,6 +1786,7 @@ static void StartGeometryThread(int keepEveryScene)
     ops.wake_worker = GxWakeWorker;
     ops.wait_producer = GxWaitProducer;
     ops.wake_producer = GxWakeProducer;
+    ops.ticks = GxTicks;
     ops.keep_every_scene = keepEveryScene;
     sem_init(&sGxWorkerSem, 0, 0);
     sem_init(&sGxProducerSem, 0, 0);

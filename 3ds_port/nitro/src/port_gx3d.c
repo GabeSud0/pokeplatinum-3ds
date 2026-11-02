@@ -19,6 +19,7 @@
 #include <nitro_port_gx3d_mailbox.h>
 #include <nitro_port_gx3d_vertex.h>
 #include <nitro_port_shadow.h>
+#include <nitro_port_wide.h>
 #include "port_platform.h"
 #include <limits.h>
 #include <stdlib.h>
@@ -307,17 +308,35 @@ static void update_light_cache(void)
  * Shininess entries are 128 unsigned 0.8 values, not 32 32-bit values.
  * The sum is worked out per component and clamped once at the end: every
  * term is positive, so that's the same as clamping after each addition. */
-/* The last normal's colour: flat surfaces repeat the same normal, vertex
- * after vertex. Forgotten when anything it depends on changes (matrices,
- * lights, materials, the polygon's lights at BEGIN_VTXS). */
-static struct { int valid; uint32_t value; uint16_t rgb; } sNormalCache;
+/* Normals' colours: a map's ground repeats its normals, and the game sets
+ * its matrices for every shape (a map's materials, the props), most not
+ * the vector matrix. 64 of them (by the normal's bits), forgotten together
+ * when anything a colour depends on changes: the vector matrix, the
+ * lights, the material, the polygon's lights at BEGIN_VTXS. (Before, the
+ * last normal's alone, forgotten at every matrix command: on the Cycling
+ * Road 12% less lighting work, 2026-11-01.) */
+#define NORMAL_CACHE 64u
+static struct { uint32_t value, age; uint16_t rgb; } sNormalCache[NORMAL_CACHE];
+static uint32_t sNormalAge = 1;   /* (an entry of another age is forgotten; never 0) */
+static void forget_normals(void)
+{
+    if(++sNormalAge==0){
+        memset(sNormalCache,0,sizeof(sNormalCache));
+        sNormalAge=1;
+    }
+}
+static unsigned normal_slot(uint32_t value)
+{
+    return (value^(value>>10)^(value>>20))&(NORMAL_CACHE-1u);
+}
 static uint16_t shade(uint32_t value)
 {
     int32_t normal[3], transformed[3];
     unsigned r=s.emission&31u,g=(s.emission>>5)&31u,b=(s.emission>>10)&31u;
     int i,j;
     uint16_t rgb;
-    if(sNormalCache.valid && sNormalCache.value==value)return sNormalCache.rgb;
+    unsigned slot=normal_slot(value);
+    if(sNormalCache[slot].age==sNormalAge && sNormalCache[slot].value==value)return sNormalCache[slot].rgb;
     for(j=0;j<3;j++)normal[j]=signbits(value>>(j*10),10)*8;
     transform_vector(normal,&s.vec,transformed);
     if(sLightCache.dirty)update_light_cache();
@@ -349,9 +368,9 @@ static uint16_t shade(uint32_t value)
            ((sLightCache.specular[i][2]*specIntensity+2048u)>>12);
     }
     rgb=(uint16_t)((r>31u?31u:r)|((g>31u?31u:g)<<5)|((b>31u?31u:b)<<10));
-    sNormalCache.valid=1;
-    sNormalCache.value=value;
-    sNormalCache.rgb=rgb;
+    sNormalCache[slot].age=sNormalAge;
+    sNormalCache[slot].value=value;
+    sNormalCache[slot].rgb=rgb;
     return rgb;
 }
 /* A vertex's colour from its normal, worked out when its polygon is drawn:
@@ -596,6 +615,12 @@ static struct {
     unsigned alphaOpaque, alphaTranslucent, alphaWire;
     uint32_t lastAttr;
 } sDiag;
+/* (for the [perf] geometry line, on the thread's side) vertices and
+ * polygons worked out, added up as each [gx3d] line's are cleared; the
+ * time spent ending scenes (SWAP_BUFFERS: the scene's triangles sorted,
+ * matched with the one before, published). */
+static uint32_t sTotalVertices, sTotalPolygons, sSkippedVertices; /* (those in lists wholly out of the view: not worked out) */
+static uint64_t sSwapTicks;
 
 static void diag_log(void)
 {
@@ -616,6 +641,8 @@ static void diag_log(void)
                   (unsigned long)sDiag.lastAttr,
                   (long)s.vertices[0].clip[0], (long)s.vertices[0].clip[1],
                   (long)s.vertices[0].clip[2], (long)s.vertices[0].clip[3]);
+    __atomic_store_n(&sTotalVertices,sTotalVertices+sDiag.vertices,__ATOMIC_RELAXED);
+    __atomic_store_n(&sTotalPolygons,sTotalPolygons+sDiag.polygons,__ATOMIC_RELAXED);
     memset(&sDiag, 0, sizeof(sDiag));
 }
 
@@ -651,6 +678,7 @@ static int polygon_front(const GeoVertex *a,const GeoVertex *b,const GeoVertex *
 static const NitroGx3dVertex *screen_of(GeoVertex *v)
 {
     if(!v->hasScreen){v->screen=to_screen(v);v->hasScreen=1;}
+    v->screen.color=v->color;   /* (lit since, maybe: the sun shadows' took it first) */
     return &v->screen;
 }
 /* The sun shadows' own triangles (NitroGx3dScene.shadow_triangles), kept
@@ -698,9 +726,10 @@ static int shadow_reach(const GeoVertex *v)
 }
 /* Keep a whole triangle of the polygon being built for the shadows only:
  * opaque, drawn on some side (not a shadow volume's, mode 3). Its screen
- * positions worked out apart from screen_of's (a strip's vertex may yet
- * be drawn, lit, by a later triangle). */
-static void keep_for_shadow(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
+ * positions are screen_of's, kept with the vertex (a strip's vertex may yet
+ * be drawn, lit, by a later triangle: screen_of gives the colour as it is
+ * then). */
+static void keep_for_shadow(GeoVertex *a,GeoVertex *b,GeoVertex *c)
 {
     NitroGx3dScene *scene=dest_scene();
     NitroGx3dTriangle *tri;
@@ -715,7 +744,7 @@ static void keep_for_shadow(const GeoVertex *a,const GeoVertex *b,const GeoVerte
     tri->sort_key=0;
     tri->soft=0;
     if(NitroPort_Gx3dTriangleTranslucent(tri))return;
-    tri->v[0]=to_screen(a);tri->v[1]=to_screen(b);tri->v[2]=to_screen(c);
+    tri->v[0]=*screen_of(a);tri->v[1]=*screen_of(b);tri->v[2]=*screen_of(c);
     scene->shadow_count++;
 }
 /* Whether the polygon being built is culled: facing the side not drawn. */
@@ -902,6 +931,25 @@ typedef struct PolyRecord {
 #define ORDER_SLACK 3.0f   /* (match_records: the order's pair, if no further than this from the nearest's) */
 static int sInterpWanted, sInterp;
 static PolyRecord *sRec[2];              /* [sRecBuild]: this scene's; the other: the scene before's */
+/* What matching looks at of each record (match_records), apart: the
+ * window's search (up to MATCH_WINDOW either side, for every polygon the
+ * order doesn't pair where the scene's motion puts it: on the Cycling Road
+ * at a ride, the ground's rows each moving their own way, many) read a
+ * whole record for each, 160 bytes, a cache line or two apiece on the 3DS:
+ * half the in-between scene's time, 3-9 ms a scene (2026-11-02). Here 8
+ * and 32 bytes, filled as the records are (the same bytes: the same
+ * pairs, bit for bit). */
+typedef struct RecTag {
+    uint32_t sig;
+    uint8_t count, onScreen;
+    uint16_t unused;
+    float px0, py0;           /* (its first corner: most of the window's are far, told by it alone) */
+} RecTag;
+typedef struct RecPos {
+    float px[4], py[4];
+} RecPos;
+static RecTag *sTag[2];
+static RecPos *sPos[2];
 static unsigned sRecCount[2], sRecBuild;
 static int sRecBeforeValid;
 /* Each mailbox slot's in-between scene (the one between its scene and the
@@ -928,6 +976,10 @@ static void record_polygon(GeoVertex *a,GeoVertex *b,GeoVertex *c,GeoVertex *d)
     PolyRecord *r;
     unsigned k,n=d?4u:3u;
     if(!sInterp || sReplaying || !sRec[sRecBuild] || sRecCount[sRecBuild]>=MAX_RECORDS)return;
+    /* All outside one plane: not drawn, as without the sun shadows (they
+     * keep it, outside only the view's sides; the geometry thread passes
+     * over lists of them): the in-between scenes are the same either way. */
+    if(a->outside & b->outside & c->outside & (d?d->outside:0x3Fu))return;
     v[0]=a;v[1]=b;v[2]=c;v[3]=d;
     r=&sRec[sRecBuild][sRecCount[sRecBuild]++];
     for(k=0;k<n;k++){
@@ -944,6 +996,15 @@ static void record_polygon(GeoVertex *a,GeoVertex *b,GeoVertex *c,GeoVertex *d)
         if(r->clip[k][3]<=0){r->onScreen=0;break;}
         r->px[k]=(float)r->clip[k][0]/(float)r->clip[k][3]*128.0f;
         r->py[k]=(float)r->clip[k][1]/(float)r->clip[k][3]*96.0f;
+    }
+    {
+        size_t at=(size_t)(r-sRec[sRecBuild]);
+        RecTag *tag=&sTag[sRecBuild][at];
+        tag->sig=r->sig;tag->count=r->count;tag->onScreen=r->onScreen;tag->unused=0;
+        memcpy(&tag->px0,&r->px[0],sizeof(tag->px0));
+        memcpy(&tag->py0,&r->py[0],sizeof(tag->py0));
+        memcpy(sPos[sRecBuild][at].px,r->px,sizeof(r->px));
+        memcpy(sPos[sRecBuild][at].py,r->py,sizeof(r->py));
     }
 }
 /* A polygon as the game would have drawn it with these vertices (clip),
@@ -1013,15 +1074,25 @@ static float median_of(float *v,unsigned n)
 }
 /* (limit: the average past which the caller doesn't care; it stops
  * there, returning at least the limit) */
-static float poly_distance(const PolyRecord *p,const PolyRecord *c,float dx,float dy,float limit)
+static float poly_distance(const RecPos *p,const RecPos *c,unsigned count,float dx,float dy,float limit)
 {
-    float d=0.0f,stop=limit*(float)c->count;
+    float d=0.0f,stop=limit*(float)count;
     unsigned k;
-    for(k=0;k<c->count;k++){
+    for(k=0;k<count;k++){
         d+=fabsf(c->px[k]-(p->px[k]+dx))+fabsf(c->py[k]-(p->py[k]+dy));
         if(d>=stop)return limit;
     }
-    return d/(float)c->count;
+    return d/(float)count;
+}
+/* Whether poly_distance would stop at the first corner (its first step
+ * alone at the limit or past it: the limit), from the tags alone: the
+ * window's search, most of whose polygons of a kind are far, without
+ * their corners' table. The same sums, the same answer. */
+static int first_far(const RecTag *p,const RecTag *c,float dx,float dy,float limit)
+{
+    float d=0.0f,stop=limit*(float)c->count;
+    d+=fabsf(c->px0-(p->px0+dx))+fabsf(c->py0-(p->py0+dy));
+    return d>=stop;
 }
 /* The scene's motion as match_records last worked it out (DS pixels, as
  * PolyRecord.px/py: x / w * 128, y / w * 96); valid with 8 pairs or more. */
@@ -1037,7 +1108,7 @@ static float sPrevMotionX, sPrevMotionY;
  * it) have one of their kind in the scene before, near where the order
  * pairs them, where the motion (dx, dy) puts it (2 DS pixels, a vertex on
  * average). */
-static unsigned motion_support(const PolyRecord *P,unsigned m,const PolyRecord *C,unsigned n,
+static unsigned motion_support(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *C,const RecPos *CP,unsigned n,
                                const int32_t *out,float dx,float dy)
 {
     unsigned j,found=0,step=n/64u+1u;
@@ -1048,15 +1119,50 @@ static unsigned motion_support(const PolyRecord *P,unsigned m,const PolyRecord *
         if(hi>(int)m-1)hi=(int)m-1;
         for(q=lo;q<=hi;q++){
             if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)continue;
-            if(poly_distance(&P[q],&C[j],dx,dy,2.0f*MATCH_SURE)<2.0f*MATCH_SURE){found++;break;}
+            if(first_far(&P[q],&C[j],dx,dy,2.0f*MATCH_SURE))continue;
+            if(poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,2.0f*MATCH_SURE)<2.0f*MATCH_SURE){found++;break;}
         }
     }
     return found;
 }
-static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C,unsigned n,int32_t *out)
+static NitroGx3dThreadOps sOps;   /* (NitroPort_Gx3dStartThread) */
+/* (the [perf] in-between matching line, NitroPort_Gx3dMatchWork) Its
+ * time in its four parts: the order's pairs, the scene's motion, each
+ * again by where it is (the window's search among them), one each; the
+ * polygons, those searched for, the window's places looked at. Only the
+ * geometry thread writes them. */
+static uint64_t sMatchPart[4];
+static uint32_t sMatchPolygons, sMatchSearched, sMatchScanned, sMatchQuick;
+static uint64_t match_ticks(void)
+{
+    return sOps.ticks?sOps.ticks(sOps.context):0;
+}
+void NitroPort_Gx3dMatchWork(uint64_t part[4],uint32_t *polygons,uint32_t *searched,uint32_t *scanned)
+{
+    unsigned k;
+    for(k=0;k<4;k++)part[k]=*(volatile uint64_t *)&sMatchPart[k];
+    if(polygons)*polygons=*(volatile uint32_t *)&sMatchPolygons;
+    if(searched)*searched=*(volatile uint32_t *)&sMatchSearched;
+    if(scanned)*scanned=*(volatile uint32_t *)&sMatchScanned;
+}
+/* (match_records) The scene before's polygon q for this one's j, one of
+ * its kind, in front of the camera, a pixel at most from where the motion
+ * (dx, dy) puts it; not `not' (one already looked at). */
+#define MATCH_LOCAL 2.0f
+static int match_fits(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *C,const RecPos *CP,
+                      unsigned j,int q,int not,float dx,float dy)
+{
+    if(q<0 || q>=(int)m || q==not)return 0;
+    if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)return 0;
+    return poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,MATCH_SURE)<MATCH_SURE;
+}
+static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *C,const RecPos *CP,unsigned n,int32_t *out)
 {
     unsigned i=0,j=0,matched=0,moves=0;
     float dx=0.0f,dy=0.0f,near;
+    uint64_t t0=match_ticks(),t1,t2,t3;
+    float ldx=0.0f,ldy=0.0f;   /* (where the last pair moved) */
+    int haveLocal=0;
     static float mx[256],my[256];
     int offset=0;
     /* in order */
@@ -1075,11 +1181,12 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
         out[j++]=-1;
         if(i<m)i++;
     }
+    t1=match_ticks();
     /* the scene's motion: the middle of the pairs' moves (some of them) */
     for(j=0;j<n && moves<256u;j+=1u+n/256u){
         if(out[j]<0 || !P[out[j]].onScreen || !C[j].onScreen)continue;
-        mx[moves]=C[j].px[0]-P[out[j]].px[0];
-        my[moves]=C[j].py[0]-P[out[j]].py[0];
+        mx[moves]=CP[j].px[0]-PP[out[j]].px[0];
+        my[moves]=CP[j].py[0]-PP[out[j]].py[0];
         moves++;
     }
     if(moves>=8u){dx=median_of(mx,moves);dy=median_of(my,moves);}
@@ -1102,7 +1209,7 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
            (!c || sPrevMotionX!=dx || sPrevMotionY!=dy)){cx[c]=sPrevMotionX;cy[c]=sPrevMotionY;c++;}
         if(!c){cx[c]=0.0f;cy[c]=0.0f;c++;}
         for(k=0;k<c;k++){
-            unsigned support=motion_support(P,m,C,n,out,cx[k],cy[k]);
+            unsigned support=motion_support(P,PP,m,C,CP,n,out,cx[k],cy[k]);
             if(support>bestSupport){bestSupport=support;best=k;}
         }
         if(bestSupport>0){
@@ -1118,10 +1225,12 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
      * motion: as far again as the scene moves) */
     near=MATCH_NEAR+1.5f*(fabsf(dx)+fabsf(dy));
     memcpy(sOrderOut,out,n*sizeof(*out));
+    t2=match_ticks();
     /* each again, by where it is */
     for(j=0;j<n;j++){
         int center=out[j]>=0?out[j]:(int)j+offset,order=out[j],lo,hi,q,best=-1;
         float bestD=near;
+        int shifted=(int)j+offset;
         if(!C[j].onScreen){
             /* (behind the camera in part: in order, or not at all) */
             if(out[j]>=0 && P[out[j]].onScreen)out[j]=-1;
@@ -1135,17 +1244,46 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
          * where a model is many polygons of one kind, the starters'
          * briefcase: 2026-10-26.) */
         if(out[j]>=0 && P[out[j]].onScreen && P[out[j]].count==C[j].count &&
-           poly_distance(&P[out[j]],&C[j],dx,dy,MATCH_SURE)<MATCH_SURE){
+           poly_distance(&PP[out[j]],&CP[j],C[j].count,dx,dy,MATCH_SURE)<MATCH_SURE){
             offset=out[j]-(int)j;matched++;
+            ldx=C[j].px0-P[out[j]].px0;ldy=C[j].py0-P[out[j]].py0;haveLocal=1;
             continue;
+        }
+        /* The same, one off the order as the last pair was: polygons going
+         * out of the view at one side and coming in at the other shift the
+         * order by a few, and every pair after it is the order's
+         * neighbour of its kind (on the Cycling Road at a ride, two in five
+         * of the order's pairs, each searched for in the window: 60,000
+         * places a scene, 3-7 ms on the 3DS, 2026-11-02). Then where the
+         * pair before moved (the ground's rows each move their own way in
+         * the perspective: a pixel or two off the scene's motion, near the
+         * screen's bottom or top), if it's no more than MATCH_LOCAL from the
+         * scene's. Either a pixel at most from where it puts it. */
+        if(match_fits(P,PP,m,C,CP,j,shifted,out[j],dx,dy)){
+            out[j]=shifted;offset=shifted-(int)j;matched++;sMatchQuick++;
+            ldx=C[j].px0-P[shifted].px0;ldy=C[j].py0-P[shifted].py0;haveLocal=1;
+            continue;
+        }
+        if(haveLocal && fabsf(ldx-dx)+fabsf(ldy-dy)<=MATCH_LOCAL){
+            int pick=-1;
+            if(match_fits(P,PP,m,C,CP,j,out[j],-1,ldx,ldy))pick=out[j];
+            else if(match_fits(P,PP,m,C,CP,j,shifted,out[j],ldx,ldy))pick=shifted;
+            if(pick>=0){
+                out[j]=pick;offset=pick-(int)j;matched++;sMatchQuick++;
+                ldx=C[j].px0-P[pick].px0;ldy=C[j].py0-P[pick].py0;
+                continue;
+            }
         }
         lo=center-MATCH_WINDOW;hi=center+MATCH_WINDOW;
         if(lo<0)lo=0;
         if(hi>(int)m-1)hi=(int)m-1;
+        sMatchSearched++;
+        sMatchScanned+=(uint32_t)(hi-lo+1);
         for(q=lo;q<=hi;q++){
             float d;
             if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)continue;
-            d=poly_distance(&P[q],&C[j],dx,dy,bestD);
+            if(first_far(&P[q],&C[j],dx,dy,bestD))continue;
+            d=poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,bestD);
             if(d<bestD){bestD=d;best=q;}
         }
         /* The order's pair when it's nearly as near as the nearest: a model
@@ -1158,7 +1296,7 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
          * a cliff's tile paired a little off left a crack). */
         if(order>=0 && order!=best && fabsf(dx)+fabsf(dy)<MATCH_SURE &&
            P[order].onScreen && P[order].count==C[j].count){
-            float d=poly_distance(&P[order],&C[j],dx,dy,near);
+            float d=poly_distance(&PP[order],&CP[j],C[j].count,dx,dy,near);
             if(d<near && (best<0 || d<=bestD+ORDER_SLACK)){best=order;bestD=d;}
         }
         /* What the camera follows stays where it was on the screen as the
@@ -1174,11 +1312,14 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
              * of its kind, paired by an order that shifted, can be where
              * it is now when the scene moved by a tile) */
             float clearly=fmaxf(4.0f*MATCH_SURE,0.5f*(fabsf(dx)+fabsf(dy)));
-            float still=poly_distance(&P[order],&C[j],0.0f,0.0f,MATCH_SURE);
+            float still=poly_distance(&PP[order],&CP[j],C[j].count,0.0f,0.0f,MATCH_SURE);
             if(still<MATCH_SURE && (best<0 || bestD>clearly))best=order;
         }
         out[j]=best;
-        if(best>=0){offset=best-(int)j;matched++;}
+        if(best>=0){
+            offset=best-(int)j;matched++;
+            ldx=C[j].px0-P[best].px0;ldy=C[j].py0-P[best].py0;haveLocal=1;
+        }
     }
     /* One each: a polygon of the scene before paired with two of this
      * one's goes to the nearer (where the scene's motion puts it, or where
@@ -1188,6 +1329,7 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
      * made again beside the player as it closed, 2026-10-29) took the
      * player's pair, by the order and by nearness: the in-between scene
      * drew it halfway to the player, a flicker to the side. */
+    t3=match_ticks();
     for(j=0;j<m;j++)sOwner[j]=-1;
     for(j=0;j<n;j++){
         int q=out[j],o;
@@ -1195,8 +1337,8 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
         if(q<0)continue;
         o=sOwner[q];
         if(o<0){sOwner[q]=(int32_t)j;continue;}
-        dj=fminf(poly_distance(&P[q],&C[j],dx,dy,1e9f),poly_distance(&P[q],&C[j],0.0f,0.0f,1e9f));
-        doo=fminf(poly_distance(&P[q],&C[o],dx,dy,1e9f),poly_distance(&P[q],&C[o],0.0f,0.0f,1e9f));
+        dj=fminf(poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,1e9f),poly_distance(&PP[q],&CP[j],C[j].count,0.0f,0.0f,1e9f));
+        doo=fminf(poly_distance(&PP[q],&CP[o],C[o].count,dx,dy,1e9f),poly_distance(&PP[q],&CP[o],C[o].count,0.0f,0.0f,1e9f));
         if(dj<doo || (dj==doo && sOrderOut[j]==q && sOrderOut[o]!=q)){
             out[o]=-1;sOwner[q]=(int32_t)j;
         }else{
@@ -1204,6 +1346,11 @@ static unsigned match_records(const PolyRecord *P,unsigned m,const PolyRecord *C
         }
         matched--;
     }
+    if(sOps.ticks){
+        uint64_t t4=match_ticks();
+        sMatchPart[0]+=t1-t0;sMatchPart[1]+=t2-t1;sMatchPart[2]+=t3-t2;sMatchPart[3]+=t4-t3;
+    }
+    sMatchPolygons+=n;
     return matched;
 }
 /* The in-between scene of the scene just finished (`now', its records
@@ -1238,6 +1385,9 @@ static uint32_t soft_of(const PolyRecord *p,const PolyRecord *c,const NitroGx3dS
     if(fabsf(dy-floorf(dy+0.5f))>SOFT_NEAR)soft|=NITRO_GX3D_SOFT_Y;
     return soft;
 }
+/* (the [perf] geometry's work line: the in-between scenes' matching of
+ * polygons with the scene before's, NitroPort_Gx3dMidWork) */
+static uint64_t sMidMatchTicks;
 static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
 {
     const PolyRecord *P=sRec[sRecBuild^1u],*C=sRec[sRecBuild];
@@ -1248,7 +1398,11 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
         sMidMatched=0;sMidPolygons=n;sPrevMotionValid=0;
         return 0;
     }
-    sMidMatched=match_records(P,m,C,n,sMatch);
+    {
+        uint64_t t0=sOps.ticks?sOps.ticks(sOps.context):0;
+        sMidMatched=match_records(sTag[sRecBuild^1u],sPos[sRecBuild^1u],m,sTag[sRecBuild],sPos[sRecBuild],n,sMatch);
+        if(sOps.ticks)__atomic_store_n(&sMidMatchTicks,sMidMatchTicks+(sOps.ticks(sOps.context)-t0),__ATOMIC_RELAXED);
+    }
     sMidPolygons=n;
     if(n>=16u && sMidMatched*2u<n){sPrevMotionValid=0;return 0;}   /* (a cut: too little in common) */
     /* (the view's size changed between them: no in-between, its clip
@@ -1359,23 +1513,49 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
     return 1;
 }
 /* At a SWAP_BUFFERS, before its scene (the building slot) is published:
- * its in-between scene. */
+ * its in-between scene. With the thread behind, ending the scene a V-blank
+ * or more after the game did, none: the game ends the next one at the
+ * second V-blank, and leaves out the one after that when the thread is
+ * still on this one then (a jump); without the in-between scene (a third
+ * of the time on the Cycling Road) it catches up, and the frame between
+ * shows the scene twice. Not when every scene is kept (comparing). */
+static uint32_t sMidsLeftOut;
+static uint64_t sMidTicks;
 static void interp_mid(NitroGx3dScene *now)
 {
+    uint64_t t0;
+    if(sInterp && sThreaded && !sOps.keep_every_scene &&
+       (int32_t)(NitroPort_Gx3dStamp()-now->stamp)>=1){
+        sMidOk[sBuilding]=0;
+        __atomic_store_n(&sMidsLeftOut,sMidsLeftOut+1u,__ATOMIC_RELAXED);
+        return;
+    }
+    t0=sOps.ticks?sOps.ticks(sOps.context):0;
     sMidOk[sBuilding]=sInterp && make_mid_scene(now,sMids[sBuilding]);
+    if(sOps.ticks && sInterp)__atomic_store_n(&sMidTicks,sMidTicks+(sOps.ticks(sOps.context)-t0),__ATOMIC_RELAXED);
+}
+void NitroPort_Gx3dMidWork(uint64_t *ticks,uint64_t *matchTicks,uint32_t *leftOut)
+{
+    if(ticks)*ticks=__atomic_load_n(&sMidTicks,__ATOMIC_RELAXED);
+    if(matchTicks)*matchTicks=__atomic_load_n(&sMidMatchTicks,__ATOMIC_RELAXED);
+    if(leftOut)*leftOut=__atomic_load_n(&sMidsLeftOut,__ATOMIC_RELAXED);
 }
 /* At a SWAP_BUFFERS, after its scene is published: this scene's records
  * become the scene before's. */
 static void interp_swap(void)
 {
     int wanted=__atomic_load_n(&sInterpWanted,__ATOMIC_ACQUIRE),i;
-    if(wanted && (!sRec[0] || !sMids[2])){
+    if(wanted && (!sRec[0] || !sPos[1] || !sMids[2])){
         if(!sRec[0])sRec[0]=malloc(MAX_RECORDS*sizeof(PolyRecord));
         if(!sRec[1])sRec[1]=malloc(MAX_RECORDS*sizeof(PolyRecord));
+        for(i=0;i<2;i++){
+            if(!sTag[i])sTag[i]=malloc(MAX_RECORDS*sizeof(RecTag));
+            if(!sPos[i])sPos[i]=malloc(MAX_RECORDS*sizeof(RecPos));
+        }
         if(!sMatch)sMatch=malloc(MAX_RECORDS*sizeof(int32_t));
         if(!sPUsed)sPUsed=malloc(MAX_RECORDS);
         for(i=0;i<3;i++)if(!sMids[i])sMids[i]=malloc(sizeof(NitroGx3dScene));
-        if(!sRec[0]||!sRec[1]||!sMatch||!sMids[0]||!sMids[1]||!sMids[2]){
+        if(!sRec[0]||!sRec[1]||!sTag[0]||!sTag[1]||!sPos[0]||!sPos[1]||!sMatch||!sMids[0]||!sMids[1]||!sMids[2]){
             static int told;
             if(!told){told=1;NitroPort_Log("[gx3d] no memory for the in-between scenes");}
             __atomic_store_n(&sInterpWanted,0,__ATOMIC_RELEASE);
@@ -1673,7 +1853,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         /* The vector matrix (lighting's) changes: colours owed first. */
         if((s.mode==1||s.mode==2) && op!=0x10u && op!=0x11u && op!=0x13u)settle_lighting();
         matrix_command(&s,op,p);
-        sNormalCache.valid=0;
+        if((s.mode==1||s.mode==2) && op!=0x10u && op!=0x11u && op!=0x13u)forget_normals();   /* (the vector matrix) */
         if(s.stackError&&!before)sDiag.stackErrors++;
         /* Stack commands change GXSTAT (the shadow's, with a thread). */
         if(op>=0x11u && op<=0x14u && sResults==&s)refresh_status(&s);
@@ -1703,11 +1883,11 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
     case 0x2a:s.texparam=p[0];break;
     case 0x2b:s.plttbase=p[0];break;
     case 0x30:settle_lighting();
-        s.diffuse=p[0]&0x7FFF;s.ambient=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;
+        s.diffuse=p[0]&0x7FFF;s.ambient=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;forget_normals();
         if(p[0]&(1u<<15))s.rgb=s.diffuse;
         break;
     case 0x31:settle_lighting();
-        s.specular=p[0]&0x7FFF;s.emission=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;
+        s.specular=p[0]&0x7FFF;s.emission=(p[0]>>16)&0x7FFF;sLightCache.dirty=1;forget_normals();
         s.useShininess=(p[0]&(1u<<15))!=0;break;
     case 0x32:{
         int id=(p[0]>>30)&3;
@@ -1721,13 +1901,15 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
             s.lightDir[id][i]=transformed[i];
             s.lightHalf[id][i]=(transformed[i]+(i==2?-4096:0))/2;
         }
-        sNormalCache.valid=0;
+        forget_normals();
         break;
     }
-    case 0x33:settle_lighting();s.lightColor[(p[0]>>30)&3]=p[0]&0x7FFF;sLightCache.dirty=1;sNormalCache.valid=0;break;
-    case 0x34:settle_lighting();memcpy(s.shininess,p,sizeof(s.shininess));sNormalCache.valid=0;break;
-    case 0x40:settle_lighting();s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;s.stripStarted=0;s.attr=s.pendingAttr;
-        sNormalCache.valid=0;break;
+    case 0x33:settle_lighting();s.lightColor[(p[0]>>30)&3]=p[0]&0x7FFF;sLightCache.dirty=1;forget_normals();break;
+    case 0x34:settle_lighting();memcpy(s.shininess,p,sizeof(s.shininess));forget_normals();break;
+    case 0x40:settle_lighting();s.primitive=p[0]&3;s.nverts=0;s.inBegin=1;s.stripStarted=0;
+        if((s.attr^s.pendingAttr)&15u)forget_normals();   /* (its lights) */
+        s.attr=s.pendingAttr;
+        break;
     case 0x41:s.inBegin=0;s.nverts=0;break;
     case 0x50:{
         int next=-1;
@@ -1826,6 +2008,24 @@ static NitroGx3dThreadOps sOps;
 /* Scenes (SWAP_BUFFERS) handed on / finished, and left out. */
 static uint32_t sSwapsQueued, sSwapsDone, sSwapsSkipped;
 static int sSkipScene;
+/* A scene the same as the one before, word for word (the 3D registers
+ * too, not its time), while a battle's start plays in the field
+ * (NitroPort_FieldEffect): the field stands still, its 3D made again and
+ * again on the core that draws the effect's 2D. The next scene is left out
+ * then, as one the thread can't keep up with (the one before stays on the
+ * screen): if it moved after all, it's on the screen a scene later. Not
+ * otherwise: the first step after standing still would be a scene late.
+ * sSceneHash: FNV-1a of the scene's words so far (on the game's thread,
+ * while sHashScenes). */
+static uint32_t sSceneHash=2166136261u, sLastSceneHash;
+static int sHashScenes, sSameScene;
+static uint32_t sSameLeftOut;   /* scenes left out as the same (for the [gx3d] line) */
+static inline void hash_words(const uint32_t *p,uint32_t n)
+{
+    uint32_t h=sSceneHash,i;
+    for(i=0;i<n;i++)h=(h^p[i])*16777619u;
+    sSceneHash=h;
+}
 static uint64_t sWorkerBusy;
 static uint32_t sWorkerWakeups;      /* stretches of work (each after a sleep) */
 static uint64_t sWorkerLongest;      /* the longest of them since last read */
@@ -1880,6 +2080,7 @@ static void enqueue(unsigned op,const uint32_t *p,unsigned n,uint32_t flags)
         pos=0;
     }
     wait_for_room(need);
+    if(sHashScenes && op!=OP_SCENE_REGS){uint32_t h=op|(n<<8);hash_words(&h,1);hash_words(p,n);}
     sRing[pos]=op|(n<<8)|flags;
     {
         uint32_t *out=&sRing[pos+1];
@@ -1903,6 +2104,7 @@ static void enqueue_packets(const uint32_t *words,uint32_t count,uint32_t flags)
         pos=0;
     }
     wait_for_room(need);
+    if(sHashScenes)hash_words(words,count);
     sRing[pos]=OP_PACKETS|flags;
     sRing[pos+1]=count;
     memcpy(&sRing[pos+2],words,count*sizeof(*words));
@@ -1920,6 +2122,7 @@ static void swap_noted(void)
     memcpy(&w[2],NitroPort_IoReg+NITRO_GX3D_REGS_AT,NITRO_GX3D_REGS_SIZE);
     io_bg_ofs((uint16_t *)&w[2+NITRO_GX3D_REGS_SIZE/4]);
     w[2+NITRO_GX3D_REGS_SIZE/4+4]=__atomic_add_fetch(&sSwapsMade,1u,__ATOMIC_RELEASE);
+    if(sHashScenes)hash_words(&w[1],1u+NITRO_GX3D_REGS_SIZE/4u);   /* (not its time, nor the BGs' scroll) */
     enqueue(OP_SCENE_REGS,w,SCENE_REGS_WORDS,0);
 }
 /* After a SWAP_BUFFERS is handed on: hand it over now, and whether the
@@ -1932,6 +2135,15 @@ static void swap_queued(void)
     behind=sSwapsQueued-__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE);
     /* Still working on the scene before this one: leave out the next. */
     sSkipScene=behind>=2u && !sOps.keep_every_scene;
+    /* The same as the one before, in a battle's start: the next too. */
+    sSameScene=sHashScenes && sSceneHash==sLastSceneHash;
+    if(sSameScene && !sSkipScene && !sOps.keep_every_scene){
+        sSkipScene=1;
+        sSameLeftOut++;
+    }
+    sLastSceneHash=sSceneHash;
+    sSceneHash=2166136261u;
+    sHashScenes=NitroPort_FieldEffect();
 }
 /* What the game's thread does with a command (the rest is the thread's):
  * bit 0 matrices, 1 tests, 2 SWAP_BUFFERS. */
@@ -2020,7 +2232,13 @@ static inline __attribute__((always_inline)) void work_op(unsigned op,const uint
             return;
         }
     }
-    execute(op,p);
+    if(op==0x50u && sOps.ticks){
+        uint64_t t=sOps.ticks(sOps.context);
+        execute(op,p);
+        __atomic_store_n(&sSwapTicks,sSwapTicks+(sOps.ticks(sOps.context)-t),__ATOMIC_RELAXED);
+    }else{
+        execute(op,p);
+    }
     if(op==0x50u)__atomic_store_n(&sSwapsDone,sSwapsDone+1u,__ATOMIC_RELEASE);
 }
 /* ------------------------------------------- polygons out of the view
@@ -2237,10 +2455,21 @@ found:
                 /* Far from saturation() for every point of the box. */
                 if(c[j]>=((int64_t)1<<42)||c[j]<=-((int64_t)1<<42))return 0;
             }
-            if(!(c[0]+c[3]<0))outside&=~1u;
-            if(!(c[0]-c[3]>=4096))outside&=~2u;
-            if(!(c[1]+c[3]<0))outside&=~4u;
-            if(!(c[1]-c[3]>=4096))outside&=~8u;
+            if(sShadowCapture){
+                /* (the sun shadows keep what's beside the view up to their
+                 * reach, keep_for_shadow: past it, with a margin for the
+                 * rounding) */
+                const int64_t margin=(int64_t)4096*8;
+                if(!(c[0]+SHADOW_GUARD*c[3]<-margin))outside&=~1u;
+                if(!(c[0]-SHADOW_GUARD*c[3]>=margin))outside&=~2u;
+                if(!(c[1]+SHADOW_GUARD*c[3]<-margin))outside&=~4u;
+                if(!(c[1]-SHADOW_GUARD*c[3]>=margin))outside&=~8u;
+            }else{
+                if(!(c[0]+c[3]<0))outside&=~1u;
+                if(!(c[0]-c[3]>=4096))outside&=~2u;
+                if(!(c[1]+c[3]<0))outside&=~4u;
+                if(!(c[1]-c[3]>=4096))outside&=~8u;
+            }
             if(!(c[2]+c[3]<0))outside&=~16u;
             if(!(c[2]-c[3]>=4096))outside&=~32u;
             /* w <= 0 (behind the camera; a [gx3d] count): all or none. */
@@ -2270,6 +2499,7 @@ found:
     if(v.haveNormal||v.haveColor)s.rgbPending=v.normalLast;
     polys=polygons_of(s.primitive,n);
     sDiag.vertices+=n;
+    __atomic_add_fetch(&sSkippedVertices,n,__ATOMIC_RELAXED);
     if(behind)sDiag.behind+=n;
     sDiag.polygons+=polys;
     sDiag.clipped+=polys;
@@ -2497,6 +2727,18 @@ void NitroPort_Gx3dThreadWakeups(uint32_t *wakeups,uint64_t *longest)
     if(wakeups)*wakeups=__atomic_load_n(&sWorkerWakeups,__ATOMIC_RELAXED);
     if(longest)*longest=__atomic_exchange_n(&sWorkerLongest,0,__ATOMIC_RELAXED);
 }
+void NitroPort_Gx3dThreadWork(uint64_t *swapTicks,uint32_t *vertices,uint32_t *polygons,uint32_t *skipped)
+{
+    if(skipped)*skipped=__atomic_load_n(&sSkippedVertices,__ATOMIC_RELAXED);
+    if(swapTicks)*swapTicks=__atomic_load_n(&sSwapTicks,__ATOMIC_RELAXED);
+    /* (the [gx3d] line's counts so far too: read as they are, for a log) */
+    if(vertices)*vertices=__atomic_load_n(&sTotalVertices,__ATOMIC_RELAXED)+*(volatile unsigned *)&sDiag.vertices;
+    if(polygons)*polygons=__atomic_load_n(&sTotalPolygons,__ATOMIC_RELAXED)+*(volatile unsigned *)&sDiag.polygons;
+}
+uint32_t NitroPort_Gx3dSameScenesLeftOut(void)
+{
+    return sSameLeftOut;   /* (the game's thread's own) */
+}
 void NitroPort_Gx3dThreadStats(uint64_t *busy,uint32_t *scenes,uint32_t *skipped)
 {
     if(busy)*busy=__atomic_load_n(&sWorkerBusy,__ATOMIC_RELAXED);
@@ -2552,7 +2794,7 @@ void NitroPort_Gx3dReset(void)
     shadow_store_attach();
     memset(&sDec,0,sizeof(sDec));
     sLightCache.dirty=1;
-    sNormalCache.valid=0;
+    forget_normals();
     make_products();
     NitroPort_MailboxInit(&sMailbox);
     sBuilding=0;sDisplayed=1;sSerial=0;
@@ -2652,6 +2894,249 @@ void NitroPort_GxFifoWords(const uint32_t *words,size_t count)
             next_packed();
         }
     }
+}
+/* ------------------------------------------- a display list cut to a slab
+ *
+ * NitroPort_Gx3dTrimList: a model's shape's display list with only the
+ * polygons that reach into a slab of its coordinates (lo <= x, y or z <=
+ * hi), made once (Route 206's river, mirrored past the scenery: a strip of
+ * the map by the border, not the whole map, each scene). Its lists of
+ * triangles and quads are looked through polygon by polygon (a strip
+ * whole): one with no vertex in the slab is left out, and what it leaves
+ * behind goes instead: its last TEXCOORD, NORMAL and COLOR, in their order,
+ * before the next command kept; the next vertex kept, if it's one relative
+ * to the one before, as its own coordinates (VTX_16); and before the
+ * list's BEGIN_VTXS or END_VTXS, its last coordinates as a vertex alone
+ * (no polygon: the list's polygons are whole). The polygons kept are drawn
+ * the same, bit for bit. */
+typedef struct DlGroup {
+    uint32_t begin, end;          /* its commands: ops[begin..end) */
+    int32_t lo[3], hi[3];
+    uint32_t texcoord, normal, color, vertices;
+    uint8_t haveTexcoord, haveNormal, haveColor, normalLast;
+} DlGroup;
+typedef struct DlInfo {
+    uint32_t nops, ngroups;
+    uint32_t *ops;                /* op | (its parameters' word index << 8) */
+    int32_t (*xyz)[3];            /* the coordinates after each command */
+    DlGroup *groups;
+} DlInfo;
+
+static void dl_free(DlInfo *info)
+{
+    if(info){free(info->ops);free(info->xyz);free(info->groups);free(info);}
+}
+static int dl_s16(const int32_t xyz[3])
+{
+    return xyz[0]>=-32768 && xyz[0]<=32767 && xyz[1]>=-32768 && xyz[1]<=32767 &&
+           xyz[2]>=-32768 && xyz[2]<=32767;
+}
+static int dl_add_group(DlInfo *info,uint32_t *cap,const DlGroup *g)
+{
+    if(info->ngroups>=*cap){
+        DlGroup *more=realloc(info->groups,(*cap*=2)*sizeof(*more));
+        if(!more)return 0;
+        info->groups=more;
+    }
+    info->groups[info->ngroups++]=*g;
+    return 1;
+}
+/* A list's commands and its groups of polygons (perGroup polygons each);
+ * NULL if it isn't whole packets, or there's no room. */
+static DlInfo *dl_survey(const uint32_t *w,uint32_t n,uint32_t perGroup)
+{
+    DlInfo *info=calloc(1,sizeof(*info));
+    uint32_t i=0,cap=n+4u,k,o,groupCap=16;
+    int32_t xyz[3]={0,0,0};
+    int known=0;
+    if(!info)return NULL;
+    info->ops=malloc(cap*sizeof(*info->ops));
+    info->groups=malloc(groupCap*sizeof(*info->groups));
+    if(!info->ops || !info->groups){dl_free(info);return NULL;}
+    while(i<n){
+        uint32_t word=w[i++],params=i;
+        for(k=0;k<4;k++){
+            unsigned op=(word>>(k*8))&255u;
+            if(!op)continue;
+            if(params+sParamCount[op]>n || info->nops>=cap){dl_free(info);return NULL;}
+            info->ops[info->nops++]=op|(params<<8);
+            params+=sParamCount[op];
+        }
+        i=params;
+    }
+    info->xyz=malloc((info->nops?info->nops:1u)*sizeof(*info->xyz));
+    if(!info->xyz){dl_free(info);return NULL;}
+    /* The coordinates after each command. */
+    for(o=0;o<info->nops;o++){
+        unsigned op=info->ops[o]&255u;
+        if(op>=0x23u && op<=0x28u)vertex_coords(op,&w[info->ops[o]>>8],xyz);
+        info->xyz[o][0]=xyz[0];info->xyz[o][1]=xyz[1];info->xyz[o][2]=xyz[2];
+    }
+    /* Its lists of vertices (after a BEGIN_VTXS: nothing but vertices,
+     * TEXCOORD, NORMAL, COLOR, then BEGIN_VTXS or END_VTXS in this list),
+     * in groups. */
+    for(o=0;o<info->nops;o++){
+        unsigned op=info->ops[o]&255u;
+        uint32_t e,per,count=0,ok=1;
+        if(op>=0x23u && op<=0x24u)known=1;
+        if(op!=0x40u)continue;
+        per=(w[info->ops[o]>>8]&3u)==0?3u:(w[info->ops[o]>>8]&3u)==1?4u:0u;
+        for(e=o+1;e<info->nops;e++){
+            unsigned q=info->ops[e]&255u;
+            if(q>=0x23u && q<=0x28u){
+                if(q<=0x24u)known=1;
+                else if(!known)ok=0;
+                if(!dl_s16(info->xyz[e]))ok=0;
+                count++;
+            }else if(q<0x20u || q>0x22u){
+                break;
+            }
+        }
+        if(ok && count && e<info->nops && ((info->ops[e]&255u)==0x40u || (info->ops[e]&255u)==0x41u)){
+            DlGroup g;
+            uint32_t q,inGroup=0,limit=per?per*perGroup:0xFFFFFFFFu;
+            memset(&g,0,sizeof(g));
+            g.begin=o+1;
+            for(q=o+1;q<e;q++){
+                unsigned c=info->ops[q]&255u;
+                const uint32_t *pp=&w[info->ops[q]>>8];
+                if(c>=0x23u && c<=0x28u){
+                    const int32_t *v=info->xyz[q];
+                    int j;
+                    if(!g.vertices){
+                        for(j=0;j<3;j++)g.lo[j]=g.hi[j]=v[j];
+                    }else{
+                        for(j=0;j<3;j++){if(v[j]<g.lo[j])g.lo[j]=v[j];if(v[j]>g.hi[j])g.hi[j]=v[j];}
+                    }
+                    g.vertices++;
+                    if(++inGroup==limit){
+                        g.end=q+1;
+                        if(!dl_add_group(info,&groupCap,&g)){dl_free(info);return NULL;}
+                        memset(&g,0,sizeof(g));
+                        g.begin=q+1;
+                        inGroup=0;
+                    }
+                }else if(c==0x22u){g.texcoord=pp[0];g.haveTexcoord=1;}
+                else if(c==0x21u){g.normal=pp[0];g.haveNormal=1;g.normalLast=1;}
+                else{g.color=pp[0];g.haveColor=1;g.normalLast=0;}
+            }
+            if(g.vertices){
+                g.end=e;
+                if(!dl_add_group(info,&groupCap,&g)){dl_free(info);return NULL;}
+            }
+        }
+        o=e-1;
+    }
+    return info;
+}
+/* Commands into a buffer, packed as the DS has them (up to four to a word). */
+typedef struct DlWriter {
+    uint32_t *out;
+    uint32_t cap, n, header;   /* room, words written, the packed word being filled (index) */
+    unsigned slots;            /* commands in it */
+    int full;
+} DlWriter;
+static void dl_put(DlWriter *wr,unsigned op,const uint32_t *p)
+{
+    unsigned k,np=sParamCount[op];
+    if(wr->slots==0 || wr->slots==4){
+        if(wr->n+1u+np>wr->cap){wr->full=1;return;}
+        wr->header=wr->n++;
+        wr->out[wr->header]=0;
+        wr->slots=0;
+    }else if(wr->n+np>wr->cap){
+        wr->full=1;
+        return;
+    }
+    wr->out[wr->header]|=(uint32_t)op<<(wr->slots*8);
+    wr->slots++;
+    for(k=0;k<np;k++)wr->out[wr->n++]=p[k];
+}
+/* What left-out groups leave behind, still to send. */
+typedef struct DlOwed {
+    uint32_t texcoord, normal, color;
+    uint8_t texcoordOwed, normalOwed, colorOwed, normalLast, coordOwed;
+    int32_t xyz[3];
+} DlOwed;
+static void dl_owe(DlOwed *ow,const DlGroup *g,const int32_t last[3])
+{
+    if(g->haveTexcoord){ow->texcoord=g->texcoord;ow->texcoordOwed=1;}
+    if(g->haveNormal){ow->normal=g->normal;ow->normalOwed=1;}
+    if(g->haveColor){ow->color=g->color;ow->colorOwed=1;}
+    if(g->haveNormal && g->haveColor)ow->normalLast=g->normalLast;
+    else if(g->haveNormal)ow->normalLast=1;
+    else if(g->haveColor)ow->normalLast=0;
+    ow->coordOwed=1;
+    ow->xyz[0]=last[0];ow->xyz[1]=last[1];ow->xyz[2]=last[2];
+}
+static void dl_pay_state(DlWriter *wr,DlOwed *ow)
+{
+    if(ow->texcoordOwed)dl_put(wr,0x22u,&ow->texcoord);
+    if(ow->normalOwed && ow->colorOwed){
+        if(ow->normalLast){dl_put(wr,0x20u,&ow->color);dl_put(wr,0x21u,&ow->normal);}
+        else{dl_put(wr,0x21u,&ow->normal);dl_put(wr,0x20u,&ow->color);}
+    }else if(ow->normalOwed){
+        dl_put(wr,0x21u,&ow->normal);
+    }else if(ow->colorOwed){
+        dl_put(wr,0x20u,&ow->color);
+    }
+    ow->texcoordOwed=ow->normalOwed=ow->colorOwed=0;
+}
+static void dl_vtx16(DlWriter *wr,const int32_t xyz[3])
+{
+    uint32_t v[2];
+    v[0]=((uint32_t)xyz[0]&0xFFFFu)|((uint32_t)xyz[1]<<16);
+    v[1]=(uint32_t)xyz[2]&0xFFFFu;
+    dl_put(wr,0x23u,v);
+}
+uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
+                                int axis,int32_t lo,int32_t hi)
+{
+    const uint32_t *w=src;
+    uint32_t n=bytes/4u,o,g=0;
+    DlInfo *info;
+    DlWriter wr;
+    DlOwed ow;
+    if((bytes&3u) || axis<0 || axis>2 || !dst)return 0;
+    info=dl_survey(w,n,1u);
+    if(!info)return 0;
+    memset(&wr,0,sizeof(wr));
+    wr.out=dst;wr.cap=dstBytes/4u;
+    memset(&ow,0,sizeof(ow));
+    for(o=0;o<info->nops && !wr.full;){
+        unsigned op=info->ops[o]&255u;
+        const uint32_t *p=&w[info->ops[o]>>8];
+        while(g<info->ngroups && info->groups[g].begin<o)g++;
+        if(g<info->ngroups && info->groups[g].begin==o){
+            const DlGroup *grp=&info->groups[g];
+            if(grp->hi[axis]<lo || grp->lo[axis]>hi){
+                dl_owe(&ow,grp,info->xyz[grp->end-1u]);
+                o=grp->end;
+                g++;
+                continue;
+            }
+        }
+        dl_pay_state(&wr,&ow);
+        if(ow.coordOwed){
+            if(op==0x40u || op==0x41u){
+                dl_vtx16(&wr,ow.xyz);              /* (a vertex alone: no polygon) */
+                ow.coordOwed=0;
+            }else if(op>=0x23u && op<=0x28u){
+                ow.coordOwed=0;
+                if(op>=0x25u){
+                    dl_vtx16(&wr,info->xyz[o]);    /* (relative to one left out: its own coordinates) */
+                    o++;
+                    continue;
+                }
+            }
+        }
+        dl_put(&wr,op,p);
+        o++;
+    }
+    dl_pay_state(&wr,&ow);
+    if(ow.coordOwed)dl_vtx16(&wr,ow.xyz);          /* (not reached: groups end before a BEGIN or END) */
+    dl_free(info);
+    return wr.full?0:wr.n*4u;
 }
 void NitroPort_GxFifoWord(uint32_t word)
 {
