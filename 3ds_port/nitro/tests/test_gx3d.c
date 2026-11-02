@@ -814,6 +814,26 @@ static void test_sprite_texel_a_pixel(void)
     CHECK(fabsf(x0-floorf(x0+0.5f))<0.01f && fabsf(y0-floorf(y0+0.5f))<0.01f);
     CHECK(fabsf((x0+x1)*0.5f-(180.3f+35.7f*0.5f))<=0.5f);
     CHECK(fabsf(y1-150.4f)<=0.5f);
+    /* Further from the camera (under Route 206's bridge, 0.85 of a texel a
+     * pixel): eased between its own size and a texel a pixel, no jump at
+     * either end, never smaller nearer the camera. */
+    {
+        static const float own[]={0.70f,0.749f,0.751f,0.80f,0.85f,0.899f,0.901f,1.0f,1.199f,1.201f,1.3f,1.399f,1.401f,1.5f};
+        float widths[sizeof(own)/sizeof(own[0])];
+        unsigned i;
+        for(i=0;i<sizeof(own)/sizeof(own[0]);i++){
+            sprite_quad(sc,180.3f,150.4f,32.0f*own[i],2481011);
+            sprite_corners(sc,&x0,&x1,&y0,&y1);
+            widths[i]=x1-x0;
+            if(i)CHECK(widths[i]>=widths[i-1]-0.7f);                /* (nearer: never smaller, but for the edges moved out) */
+        }
+        CHECK(fabsf(widths[1]-widths[2])<1.0f);                       /* 0.75: from its own size */
+        CHECK(fabsf(widths[5]-widths[6])<0.3f);                       /* 0.9: to a texel a pixel */
+        CHECK(fabsf(widths[6]-32.0f)<0.01f && fabsf(widths[8]-32.0f)<0.01f);
+        CHECK(fabsf(widths[8]-widths[9])<0.3f);                       /* 1.2 */
+        CHECK(fabsf(widths[11]-widths[12])<1.0f);                     /* 1.4: to its own size */
+        CHECK(fabsf(widths[4]-32.0f*(0.75f+0.10f*(0.25f/0.15f)))<0.05f);   /* 0.85: between */
+    }
     /* growing out of its ball: half its size, as it was (its edges moved
      * out a little, as every polygon's) */
     sprite_quad(sc,180.3f,150.4f,16.0f,2481011);
@@ -2068,7 +2088,7 @@ static void test_mid_left_out_behind(void)
     swap();
     scene=NitroPort_Gx3dScene();
     CHECK(NitroPort_Gx3dMidOf(scene)!=NULL);          /* (caught up) */
-    NitroPort_Gx3dMidWork(NULL,&left0);
+    NitroPort_Gx3dMidWork(NULL,NULL,&left0);
     sHold=1;                                          /* the thread stops... */
     quad_at(-2600,opaque);
     swap();                                           /* (ended at V-blank 10) */
@@ -2077,7 +2097,7 @@ static void test_mid_left_out_behind(void)
     scene=NitroPort_Gx3dScene();
     CHECK(scene->count==2);
     CHECK(NitroPort_Gx3dMidOf(scene)==NULL);
-    NitroPort_Gx3dMidWork(NULL,&left);
+    NitroPort_Gx3dMidWork(NULL,NULL,&left);
     CHECK(left==left0+1u);
     quad_at(-2400,opaque);
     swap();

@@ -1271,6 +1271,10 @@ static uint32_t soft_of(const PolyRecord *p,const PolyRecord *c,const NitroGx3dS
     if(fabsf(dy-floorf(dy+0.5f))>SOFT_NEAR)soft|=NITRO_GX3D_SOFT_Y;
     return soft;
 }
+/* (the [perf] geometry's work line: the in-between scenes' matching of
+ * polygons with the scene before's, NitroPort_Gx3dMidWork) */
+static NitroGx3dThreadOps sOps;
+static uint64_t sMidMatchTicks;
 static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
 {
     const PolyRecord *P=sRec[sRecBuild^1u],*C=sRec[sRecBuild];
@@ -1281,7 +1285,11 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
         sMidMatched=0;sMidPolygons=n;sPrevMotionValid=0;
         return 0;
     }
-    sMidMatched=match_records(P,m,C,n,sMatch);
+    {
+        uint64_t t0=sOps.ticks?sOps.ticks(sOps.context):0;
+        sMidMatched=match_records(P,m,C,n,sMatch);
+        if(sOps.ticks)__atomic_store_n(&sMidMatchTicks,sMidMatchTicks+(sOps.ticks(sOps.context)-t0),__ATOMIC_RELAXED);
+    }
     sMidPolygons=n;
     if(n>=16u && sMidMatched*2u<n){sPrevMotionValid=0;return 0;}   /* (a cut: too little in common) */
     /* (the view's size changed between them: no in-between, its clip
@@ -1398,7 +1406,6 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
  * still on this one then (a jump); without the in-between scene (a third
  * of the time on the Cycling Road) it catches up, and the frame between
  * shows the scene twice. Not when every scene is kept (comparing). */
-static NitroGx3dThreadOps sOps;   /* (NitroPort_Gx3dStartThread) */
 static uint32_t sMidsLeftOut;
 static uint64_t sMidTicks;
 static void interp_mid(NitroGx3dScene *now)
@@ -1414,9 +1421,10 @@ static void interp_mid(NitroGx3dScene *now)
     sMidOk[sBuilding]=sInterp && make_mid_scene(now,sMids[sBuilding]);
     if(sOps.ticks && sInterp)__atomic_store_n(&sMidTicks,sMidTicks+(sOps.ticks(sOps.context)-t0),__ATOMIC_RELAXED);
 }
-void NitroPort_Gx3dMidWork(uint64_t *ticks,uint32_t *leftOut)
+void NitroPort_Gx3dMidWork(uint64_t *ticks,uint64_t *matchTicks,uint32_t *leftOut)
 {
     if(ticks)*ticks=__atomic_load_n(&sMidTicks,__ATOMIC_RELAXED);
+    if(matchTicks)*matchTicks=__atomic_load_n(&sMidMatchTicks,__ATOMIC_RELAXED);
     if(leftOut)*leftOut=__atomic_load_n(&sMidsLeftOut,__ATOMIC_RELAXED);
 }
 /* At a SWAP_BUFFERS, after its scene is published: this scene's records

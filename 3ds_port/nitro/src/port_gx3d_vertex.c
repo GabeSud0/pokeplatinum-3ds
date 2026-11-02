@@ -235,12 +235,33 @@ static float soft_place(float at)
     if(part>=1.0f/3.0f && part<2.0f/3.0f)return whole+0.5f+1.0f/64.0f;
     return floorf(at+0.5f);
 }
+/* (PIXEL PERFECT's sprites) The scale a sprite is laid out at, from its
+ * own (its texels' size in pixels, the camera's perspective): a texel a
+ * pixel from 0.9 to 1.2, its own below 0.75 or above 1.4 (scaled on
+ * purpose: a Pokémon growing out of its ball), and in between eased from
+ * one to the other. Not a texel a pixel from 0.85 and its own below: the
+ * people and berry trees under Route 206's bridge, further from the camera
+ * than the road's, are around 0.85, and jumped by a seventh between their
+ * own size and a texel a pixel as they went up and down the screen
+ * (2026-11-02); the road's own at the screen's top are 0.89. */
+#define SPRITE_OWN_BELOW 0.75f
+#define SPRITE_TEXEL_FROM 0.9f
+#define SPRITE_TEXEL_TO 1.2f
+#define SPRITE_OWN_ABOVE 1.4f
+static float sprite_scale(float own)
+{
+    if(own<SPRITE_TEXEL_FROM)
+        return SPRITE_OWN_BELOW+(own-SPRITE_OWN_BELOW)*((1.0f-SPRITE_OWN_BELOW)/(SPRITE_TEXEL_FROM-SPRITE_OWN_BELOW));
+    if(own>SPRITE_TEXEL_TO)
+        return 1.0f+(own-SPRITE_TEXEL_TO)*((SPRITE_OWN_ABOVE-1.0f)/(SPRITE_OWN_ABOVE-SPRITE_TEXEL_TO));
+    return 1.0f;
+}
 static int sprite_texel_a_pixel(const NitroGx3dScene *scene,const NitroGx3dTriangle *tri,
                                 float tw,float th,float *sx,float *sy)
 {
     const NitroGx3dVertex *v=tri->v;
     float fx,fy,px[3],py[3],ds1,dt1,ds2,dt2,det,a,b,e,f,x0,y0,ax,ay,ar,anchor_t;
-    float sa,sf;
+    float sa,sf,scale;
     int k;
     if(!scene || scene->screen_height!=240u || ((tri->texture_param>>26)&7u)==0u)return 0;
     if(orthographic(scene) && !sprite_whole(tri,tw,th))return 0;
@@ -258,10 +279,11 @@ static int sprite_texel_a_pixel(const NitroGx3dScene *scene,const NitroGx3dTrian
     e=((py[1]-py[0])*dt2-(py[2]-py[0])*dt1)/det;
     f=((py[2]-py[0])*ds1-(py[1]-py[0])*ds2)/det;
     ax=a<0?-a:a; ay=f<0?-f:f;
-    if(ax<0.85f || ax>1.25f || ay<0.85f || ay>1.25f)return 0;      /* (scaled on purpose) */
+    if(ax<SPRITE_OWN_BELOW || ax>SPRITE_OWN_ABOVE || ay<SPRITE_OWN_BELOW || ay>SPRITE_OWN_ABOVE)return 0;   /* (scaled on purpose) */
     if((b<0?-b:b)>0.02f*ax || (e<0?-e:e)>0.02f*ay)return 0;           /* (not upright) */
     ar=ax-ay; if(ar<0)ar=-ar; if(ar>0.1f)return 0;
-    sa=a<0?-1.0f:1.0f; sf=f<0?-1.0f:1.0f;
+    scale=sprite_scale(0.5f*(ax+ay));
+    sa=a<0?-scale:scale; sf=f<0?-scale:scale;
     x0=px[0]-a*v[0].s-b*v[0].t;
     y0=py[0]-e*v[0].s-f*v[0].t;
     /* the texture's bottom middle: its feet, on a pixel's corner; moving

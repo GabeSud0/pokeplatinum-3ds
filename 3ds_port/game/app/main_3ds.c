@@ -2556,16 +2556,18 @@ static void PerfFrame(u64 enter)
                 uint64_t swapTicks;
                 uint32_t vertices, polygons, skippedVertices, n = geoScenes - lastGeoScenes;
                 NitroPort_Gx3dThreadWork(&swapTicks, &vertices, &polygons, &skippedVertices);
-                static uint64_t lastMidTicks;
+                static uint64_t lastMidTicks, lastMatchTicks;
                 static uint32_t lastMidsLeftOut;
-                uint64_t midTicks;
+                uint64_t midTicks, matchTicks;
                 uint32_t midsLeftOut;
-                NitroPort_Gx3dMidWork(&midTicks, &midsLeftOut);
-                NitroPort_Log("[perf] geometry's work: %.1f ms/scene ending scenes (%.1f of it the in-between scene; %.1f in-between scenes left out/s, behind); %u vertices a scene sent, %u of them out of the view (not worked out), %u polygons",
+                NitroPort_Gx3dMidWork(&midTicks, &matchTicks, &midsLeftOut);
+                NitroPort_Log("[perf] geometry's work: %.1f ms/scene ending scenes (%.1f of it the in-between scene, %.1f of that matching; %.1f in-between scenes left out/s, behind); %u vertices a scene sent, %u of them out of the view (not worked out), %u polygons",
                               (double)(swapTicks - lastSwapTicks) * 1000.0 / SYSCLOCK_ARM11 / n,
-                              (double)(midTicks - lastMidTicks) * 1000.0 / SYSCLOCK_ARM11 / n, (midsLeftOut - lastMidsLeftOut) / seconds,
+                              (double)(midTicks - lastMidTicks) * 1000.0 / SYSCLOCK_ARM11 / n,
+                              (double)(matchTicks - lastMatchTicks) * 1000.0 / SYSCLOCK_ARM11 / n, (midsLeftOut - lastMidsLeftOut) / seconds,
                               (vertices - lastVertices) / n, (skippedVertices - lastSkipped) / n, (polygons - lastPolygons) / n);
                 lastMidTicks = midTicks;
+                lastMatchTicks = matchTicks;
                 lastMidsLeftOut = midsLeftOut;
                 lastSwapTicks = swapTicks;
                 lastVertices = vertices;

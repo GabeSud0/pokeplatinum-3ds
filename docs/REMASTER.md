@@ -709,12 +709,17 @@ screen's 320 x 192 at 1.25 times, as above.
   here and there, and the smooth 3D (drawn 2x2 and averaged) blended the
   texels' edges into the pixels beside them, blurring the pixel art
   (2026-10-29). Here a textured triangle with its three corners at one
-  depth, upright and within 0.85-1.25 of a pixel a texel, is laid out at
+  depth, upright and within 0.9-1.2 of a pixel a texel, is laid out at
   a texel a pixel, the texture's bottom middle (the feet) on the nearest
   pixel corner, its edges not moved out: each texel whole pixels, sharp
   with the smooth 3D or without; the 3D (buildings, signs) as smooth as
-  before. One scaled on purpose (a Pokémon growing out of its ball) is
-  left as it is; the 1.25x field too (a texel 1.25 pixels there), and
+  before. From 0.75 to 0.9 and 1.2 to 1.4 its size eases from its own to
+  a texel a pixel (`sprite_scale`): with 0.85 the line, the people and
+  berry trees under Route 206's bridge, further from the camera than the
+  road's (about 0.85; the road's own at the screen's top are 0.89),
+  jumped by a seventh between the two sizes as they went up and down the
+  screen (2026-11-02). One scaled on purpose (a Pokémon growing out of
+  its ball, below 0.75) is left as it is; the 1.25x field too (a texel 1.25 pixels there), and
   with an orthographic camera (the interiors: Pokémon Centers, shops,
   Eterna's gym) every polygon is at one depth and about a texel a pixel,
   the room's own floor, fences and paths as much as its people: each laid
@@ -1751,7 +1756,10 @@ with the thread behind, ending a scene a V-blank or more after the game
 did, it makes no in-between scene for it (`interp_mid`; the frame between
 shows the scene twice) rather than have the scene after the next left
 out (a jump); the `[perf] geometry's work` line has the in-between
-scenes' share of ending scenes, and how many it left out. Lighting keeps
+scenes' share of ending scenes (on the road, 2026-11-02: 9-15 ms of the
+25-30 a scene, nearly all of ending scenes), of that the matching of
+their polygons with the scene before's, and how many it left out.
+Lighting keeps
 64 normals' colours, forgotten together when the vector matrix, the
 lights, the material or the polygon's lights change (it was the last
 normal's, forgotten at every matrix command: 12% less lighting work); the

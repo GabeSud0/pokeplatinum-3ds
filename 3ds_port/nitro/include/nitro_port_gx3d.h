@@ -298,10 +298,11 @@ uint32_t NitroPort_Gx3dTrimList(const void *src, uint32_t bytes, void *dst, uint
                                 int axis, int32_t lo, int32_t hi);
 /* (for the [perf] geometry's work line) The time the thread has spent
  * making in-between scenes (NitroPort_Gx3dSetInterpolation), in the ticks
- * of NitroGx3dThreadOps.ticks, and how many it left out, behind (ending a
- * scene a V-blank or more after the game did: rather than a scene left
- * out later), so far. */
-void NitroPort_Gx3dMidWork(uint64_t *ticks, uint32_t *leftOut);
+ * of NitroGx3dThreadOps.ticks, of it matching their polygons with the
+ * scene before's, and how many it left out, behind (ending a scene a
+ * V-blank or more after the game did: rather than a scene left out
+ * later), so far. */
+void NitroPort_Gx3dMidWork(uint64_t *ticks, uint64_t *matchTicks, uint32_t *leftOut);
 /* Where the thread's time goes (for the [perf] geometry line): the time
  * spent ending scenes (the clock of NitroGx3dThreadOps.ticks), the
  * vertices and polygons sent, and of the vertices those in lists wholly out
