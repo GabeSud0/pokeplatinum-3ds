@@ -2036,6 +2036,18 @@ of 78), and each frame the same as drawn whole (layers, sprites, atlas).
 The `[perf]` game line says how many a second were the sprites only. In
 `test_render.c`: `test_gpu_objs`.
 
+Handed over as they are (2026-11-03): a picture of the sprites alone is a
+few ms of work (checking, the sprites, the hand-over: ~4-5), but below
+the geometry thread, sharing its core, it waited ~22 ms behind it to be
+handed over: 19.5-21 cut-in pictures a second on Route 206, the cut-in
+not smooth (log 7051f850). Engine A's drawer now hands such a picture
+over at the priority it read it at, above the geometry thread
+(`NitroPort_Render2DLastSpritesOnly`, `DrawerMain`), and it doesn't make
+the in-between scenes give way (`NitroPort_Gx3dSharedCoreDrew`, for
+pictures drawn whole). A picture drawn whole goes below the geometry as
+before: handed over above it, the cut-in's whole pictures held the 3D up
+140-275 ms (log b1334782).
+
 The cut-in's band opening and closing (2026-11-01): a window, window 0
 alone across the DS's screen, its lines (WIN0V) 5 to 13 further each side
 a step, every other frame; inside it BG3 alone of the BGs (the band, a
