@@ -2979,6 +2979,18 @@ static BOOL MakeGpuObjs(const Engine *e, u32 dispcnt, NitroRender2DSplit *split)
 
 static uint64_t sObjTicks[2];   /* (NitroPort_Render2DTimes, below) */
 static uint64_t ClockNow(void);
+/* (DrawChanged, below: Render asked for the sprites alone, DrawEngineT
+ * stopping once they're left out, and whether it did) */
+static int sObjsOnly[2], sObjsOnlyDone[2];
+/* (DrawChanged) The last picture drawn whole with its sprites left out: its
+ * layers, what it was drawn from but the sprites, its lines' 3D scrolls */
+static struct {
+    int valid;
+    u16 *under, *over;
+    u32 small, vram;
+    int scroll3dLines;
+    short scroll3dLine[192];
+} sPicture[2];
 /* (drawing a picture: NitroRender2DSplit.gpuObjs) The sprites left out of
  * it, when they can be: TRUE then, with them in split. */
 static BOOL GpuObjsLeaveOut(const Engine *e, const ObjFrame *f, u32 dispcnt, NitroRender2DSplit *split)
@@ -4325,6 +4337,11 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     if (split != NULL && GpuObjsLeaveOut(e, objFrame, dispcnt, split)) {
         objFrame->count = 0;
         memset(objFrame->lineCount, 0, sizeof(objFrame->lineCount));
+        /* (the sprites only, DrawChanged: the layers as they are) */
+        if (sObjsOnly[e->isA ? 0 : 1]) {
+            sObjsOnlyDone[e->isA ? 0 : 1] = 1;
+            return;
+        }
     }
     if (!anyWindow) {
         memset(enableLine, 0x3F, (size_t)width);
@@ -5925,13 +5942,28 @@ int NitroPort_Render2DShareArt(int engine)
     return shared;
 }
 
+/* (DrawChanged) Layers drawn into otherwise: their picture whole again the
+ * next time, whichever engine's they were. */
+static void LayersDrawnInto(const u16 *a, const u16 *b)
+{
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        if (sPicture[i].under == a || sPicture[i].over == a || (b != NULL && (sPicture[i].under == b || sPicture[i].over == b))) {
+            sPicture[i].valid = 0;
+        }
+    }
+}
+
 void NitroPort_Render2D(int engine, u16 *out)
 {
+    LayersDrawnInto(out, NULL);
     Render(engine, out, NULL);
 }
 
 void NitroPort_Render2DSplit(int engine, u16 *under, NitroRender2DSplit *split)
 {
+    LayersDrawnInto(under, split != NULL ? split->over : NULL);
     Render(engine, under, split);
 }
 
@@ -6112,7 +6144,7 @@ void NitroPort_Render2DTakeState(int engine)
 /* What an engine's picture is drawn from, in two parts: the small ones
  * (registers, palettes, OAM) and its VRAM (the most part: 864 KB for
  * engine A, read in full to work it out). */
-static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg, int gpuObjs, int gpuCircle)
+static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg, int gpuObjs, int gpuCircle, int noObjs)
 {
     BOOL isA = engine == 0;
     const State2D *st = &sState[isA ? 0 : 1];
@@ -6147,11 +6179,15 @@ static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg, int gpuObjs
     h = HashWords((const u8 *)regs, 0x70, h);
     h = HashWords(ioAll + 0x240, 0x10, h);              /* VRAMCNT */
     h = (h ^ Rd16(ioAll, 0x304)) * 16777619u;           /* POWCNT1 */
-    h = HashWords((snapshot ? st->pltt : NitroPort_Pltt) + (isA ? 0 : 0x400), 0x400, h);
+    /* (noObjs: the BGs' palette alone, no OAM: what a picture with no sprite
+     * in it is drawn from, NitroPort_Render2DSplitIfChanged's sprites alone) */
+    h = HashWords((snapshot ? st->pltt : NitroPort_Pltt) + (isA ? 0 : 0x400), noObjs ? 0x200 : 0x400, h);
     if (snapshot) {
         h = (h ^ st->mapHash) * 16777619u;   /* (the maps drawn: the ones taken) */
     }
-    if (isA && gpuObjs) {
+    if (noObjs) {
+        /* (no OAM) */
+    } else if (isA && gpuObjs) {
         /* (the sprites the compositor draws itself: where they are isn't in
          * the picture, which needn't be drawn again as they move) */
         u8 oam[0x400];
@@ -6221,7 +6257,7 @@ static u32 EngineVramSignature(int engine, const u8 *io)
  * that change line by line) or a bitmap BG. cheapOnly: only if that's a
  * BG's map and tiles, no more (no OBJ shown, no bitmap, no H-blank effect,
  * no VRAM display); whether it was worked out (into *out). */
-static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int linesOnlyWindows, u32 *out)
+static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int linesOnlyWindows, int noObjs, u32 *out)
 {
     static Engine engines[2];   /* (an engine's: one drawer each) */
     Engine *e = &engines[engine ? 1 : 0];
@@ -6290,7 +6326,7 @@ static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int lines
             break;   /* (one not hidden: affine, or not disabled) */
         }
     }
-    objs = (dispcnt & 0x9000u) && i < 128;
+    objs = (dispcnt & 0x9000u) && i < 128 && !noObjs;   /* (noObjs: a picture without them) */
     if (cheapOnly && (bitmap || objs)) {
         return 0;
     }
@@ -6312,7 +6348,7 @@ static u32 EngineShownVramSignature(int engine, int snapshot, int linesOnlyWindo
 {
     u32 h = 0;
 
-    (void)ShownVramSignature(engine, snapshot, 0, linesOnlyWindows, &h);
+    (void)ShownVramSignature(engine, snapshot, 0, linesOnlyWindows, 0, &h);
     return h;
 }
 
@@ -6362,7 +6398,112 @@ void NitroPort_Render2DChangeStats(int engine, unsigned *registers, unsigned *vr
 
 static u32 EngineSignature(int engine)
 {
-    return (EngineSmallSignature(engine, 0, -1, 0, 0) * 31u) ^ EngineShownVramSignature(engine, 0, 0);
+    return (EngineSmallSignature(engine, 0, -1, 0, 0, 0) * 31u) ^ EngineShownVramSignature(engine, 0, 0);
+}
+
+/* (NitroPort_Render2DSplitIfChanged) What its picture is drawn from but
+ * the VRAM, hashed; noObjs: but the sprites (OAM, their palette) too. */
+static u32 SmallSignatureOf(int e, const NitroRender2DSplit *split, int gpuBg, int gpuObjs, int gpuCircle, u8 rowsShown,
+                            int noObjs)
+{
+    u32 small = EngineSmallSignature(e, split->snapshot, gpuBg, gpuObjs, gpuCircle, noObjs);
+    small = (small ^ (u32)(gpuBg + 1) ^ ((u32)split->gpuBgs << 4) ^ ((u32)gpuObjs << 8) ^ ((u32)gpuCircle << 9) ^
+             ((u32)rowsShown << 12)) *
+            16777619u;
+
+    /* the canvas, and where the windows are */
+    small = (small ^ (u32)split->width ^ ((u32)split->origin << 9) ^
+             ((u32)split->anchorWindows << 18) ^ ((u32)(split->windowsToEdge != 0) << 19) ^ ((u32)split->clip[0] << 20) ^
+             ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
+             ((u32)split->clip[3] << 23)) * 16777619u;
+    small = (small ^ (u32)split->height ^ ((u32)split->top << 12)) * 16777619u;   /* (a tall picture) */
+    {
+        /* (a circle fade's windows) */
+        const WindowCircle *c = split->snapshot ? sState[e].circles : sCircles[e];
+        int w;
+
+        for (w = 0; w < 2; w++) {
+            if (gpuCircle == w + 1) {
+                small = (small ^ (u32)(c[w].on != 0)) * 16777619u;   /* (where it is and how big: not in the picture) */
+                continue;
+            }
+            small = (small ^ (u32)(c[w].on ? 1 + c[w].cx * 7 + c[w].cy * 131 + c[w].r * 4099 : 0)) * 16777619u;
+        }
+    }
+    small = (small ^ (u32)__atomic_load_n(&sSmoothObjs[e], __ATOMIC_ACQUIRE)) * 16777619u;
+    if (split->width > W) {
+        /* (the windows decide the edges' look, and where the anchored ones
+         * are; hand-drawn pictures loaded again) */
+        small = (small ^ (split->snapshot ? sState[e].winSerial : NitroPort_WideWindowsSerial())) * 16777619u;
+        small = (small ^ NitroPort_WideArtSerial()) * 16777619u;
+    }
+    return small;
+}
+
+/* The sprites alone changed. Engine A's sprites drawn by the compositor
+ * (NitroRender2DSplit.gpuObjs) aren't in the picture: when nothing else it
+ * is drawn from changed since the last one (sPicture: drawn into the same
+ * layers, nothing drawn into them since), only the sprites are made again
+ * (their places and the atlas: Render, as far as that, sObjsOnly), the
+ * layers left as they are. The HM cut-in changes its sprites every game
+ * step and nothing else (its band's lines are the compositor's): its
+ * picture was drawn whole each time, 12-25 ms on the geometry's core on
+ * Route 206, 10-14 pictures a second, and the in-between scenes gave way
+ * (log c090eb75, 2026-11-03). */
+static volatile unsigned sSpritesOnly[2];   /* (NitroPort_Render2DSpritesOnly) */
+
+unsigned NitroPort_Render2DSpritesOnly(int engine)
+{
+    return __atomic_exchange_n(&sSpritesOnly[engine ? 1 : 0], 0u, __ATOMIC_ACQ_REL);
+}
+
+/* (NitroPort_Render2DSplitIfChanged) A picture that changed: its sprites
+ * alone when they're all that did (sPicture), else drawn whole (and noted
+ * for the next time, when its sprites were left out). */
+static void DrawChanged(int engine, u16 *under, NitroRender2DSplit *split, int gpuBg, int gpuObjs, int gpuCircle,
+                        u8 rowsShown)
+{
+    int e = engine ? 1 : 0, known = 0;
+    u32 small = 0, vram = 0;
+    uint64_t start;
+
+    /* (its VRAM but the sprites' as quick to work out as the check's: its
+     * BGs' maps and tiles; not a bitmap BG, an H-blank effect: drawn whole) */
+    if (e == 0 && gpuObjs && split->over != NULL) {
+        small = SmallSignatureOf(e, split, gpuBg, gpuObjs, gpuCircle, rowsShown, 1);
+        known = ShownVramSignature(e, split->snapshot, 1, gpuCircle != 0, 1, &vram);
+    }
+    if (known && sPicture[e].valid && sPicture[e].under == under && sPicture[e].over == split->over &&
+        sPicture[e].small == small && sPicture[e].vram == vram) {
+        start = ClockNow();
+        sObjsOnly[e] = 1;
+        sObjsOnlyDone[e] = 0;
+        Render(engine, under, split);
+        sObjsOnly[e] = 0;
+        __atomic_fetch_add(&sDrawTicks[e], ClockNow() - start, __ATOMIC_RELAXED);
+        if (sObjsOnlyDone[e]) {
+            /* (the lines' 3D scrolls, the line by line part not gone through:
+             * the picture's, as nothing they come from changed) */
+            split->scroll3dLines = sPicture[e].scroll3dLines;
+            memcpy(split->scroll3dLine, sPicture[e].scroll3dLine, sizeof(split->scroll3dLine));
+            __atomic_fetch_add(&sSpritesOnly[e], 1u, __ATOMIC_RELAXED);
+            return;
+        }
+        /* (not left out after all: drawn whole, as below) */
+        LayersDrawnInto(under, split->over);
+    } else {
+        LayersDrawnInto(under, split->over);
+        RenderTimed(engine, under, split);
+    }
+    sPicture[e].valid = known && split->gpuObjsLeftOut;
+    if (sPicture[e].valid) {
+        sPicture[e].under = under;
+        sPicture[e].over = split->over;
+        sPicture[e].small = small;
+        sPicture[e].vram = vram;
+        sPicture[e].scroll3dLines = split->scroll3dLines;
+        memcpy(sPicture[e].scroll3dLine, split->scroll3dLine, sizeof(sPicture[e].scroll3dLine));
+    }
 }
 
 /* NitroPort_Render2D, unless nothing it draws from changed since the last
@@ -6428,37 +6569,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
             gpuCircle = 5;   /* (a BG's band: its window's lines not in the picture) */
         }
     }
-    small = EngineSmallSignature(e, split->snapshot, gpuBg, gpuObjs, gpuCircle);
-    small = (small ^ (u32)(gpuBg + 1) ^ ((u32)split->gpuBgs << 4) ^ ((u32)gpuObjs << 8) ^ ((u32)gpuCircle << 9) ^
-             ((u32)rowsShown << 12)) *
-            16777619u;
-
-    /* the canvas, and where the windows are */
-    small = (small ^ (u32)split->width ^ ((u32)split->origin << 9) ^
-             ((u32)split->anchorWindows << 18) ^ ((u32)(split->windowsToEdge != 0) << 19) ^ ((u32)split->clip[0] << 20) ^
-             ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
-             ((u32)split->clip[3] << 23)) * 16777619u;
-    small = (small ^ (u32)split->height ^ ((u32)split->top << 12)) * 16777619u;   /* (a tall picture) */
-    {
-        /* (a circle fade's windows) */
-        const WindowCircle *c = split->snapshot ? sState[e].circles : sCircles[e];
-        int w;
-
-        for (w = 0; w < 2; w++) {
-            if (gpuCircle == w + 1) {
-                small = (small ^ (u32)(c[w].on != 0)) * 16777619u;   /* (where it is and how big: not in the picture) */
-                continue;
-            }
-            small = (small ^ (u32)(c[w].on ? 1 + c[w].cx * 7 + c[w].cy * 131 + c[w].r * 4099 : 0)) * 16777619u;
-        }
-    }
-    small = (small ^ (u32)__atomic_load_n(&sSmoothObjs[e], __ATOMIC_ACQUIRE)) * 16777619u;
-    if (split->width > W) {
-        /* (the windows decide the edges' look, and where the anchored ones
-         * are; hand-drawn pictures loaded again) */
-        small = (small ^ (split->snapshot ? sState[e].winSerial : NitroPort_WideWindowsSerial())) * 16777619u;
-        small = (small ^ NitroPort_WideArtSerial()) * 16777619u;
-    }
+    small = SmallSignatureOf(e, split, gpuBg, gpuObjs, gpuCircle, rowsShown, 0);
     /* The small parts changed (a scroll, a sprite, a colour: most frames of
      * anything moving): drawn, without reading the VRAM through to find
      * out about that as well. Only when they're the same is the VRAM
@@ -6469,11 +6580,11 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
         last[e].valid = 1;
         /* (the VRAM noted now, as it's drawn, when that's quick: else the
          * next time, and drawn again then, to be sure) */
-        last[e].vramValid = ShownVramSignature(e, split->snapshot, 1, gpuCircle != 0, &vram);
+        last[e].vramValid = ShownVramSignature(e, split->snapshot, 1, gpuCircle != 0, 0, &vram);
         last[e].vram = vram;
         __atomic_fetch_add(&sChangedSmall[e], 1u, __ATOMIC_RELAXED);
         __atomic_fetch_add(&sCheckTicks[e], ClockNow() - checkStart, __ATOMIC_RELAXED);
-        RenderTimed(engine, under, split);
+        DrawChanged(engine, under, split, gpuBg, gpuObjs, gpuCircle, rowsShown);
         return 1;
     }
     vram = EngineShownVramSignature(e, split->snapshot, gpuCircle != 0);
@@ -6484,7 +6595,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     __atomic_fetch_add(last[e].vramValid ? &sChangedVram[e] : &sChangedSmall[e], 1u, __ATOMIC_RELAXED);
     last[e].vram = vram;
     last[e].vramValid = 1;
-    RenderTimed(engine, under, split);
+    DrawChanged(engine, under, split, gpuBg, gpuObjs, gpuCircle, rowsShown);
     return 1;
 }
 

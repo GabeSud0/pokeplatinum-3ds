@@ -2018,6 +2018,24 @@ far as most of its kind). Their places don't count as a change: the
 picture isn't drawn again as they move, only when what they show does.
 In the PC runner the picture draws them where it had them.
 
+What they show changing (2026-11-03): the picture has none of them in it,
+so when nothing else it's drawn from changed (its registers, the BGs'
+palette, its maps and tiles: hashed without the OAM and the sprites'
+palette and VRAM; with a bitmap BG or an H-blank effect besides the
+windows' it's always drawn whole), only the sprites are made again, their places and the
+atlas, and the layers are left as they were (`DrawChanged`, `sPicture`;
+the picture drawn as far as the sprites, `sObjsOnly`). Drawn into the same
+layers otherwise since (whole, when no set was free to hand it over in),
+it's drawn whole the next time. The HM cut-in changes its sprites every
+game step and nothing else, its band's lines being the compositor's: its
+picture was drawn whole each time, 12-25 ms on the geometry's core on
+Route 206 (10-14 pictures a second, the in-between scenes giving way,
+50-55 frames a second: log c090eb75). On the PC, through a real Cut:
+after the band's first picture, every one of them its sprites alone (77
+of 78), and each frame the same as drawn whole (layers, sprites, atlas).
+The `[perf]` game line says how many a second were the sprites only. In
+`test_render.c`: `test_gpu_objs`.
+
 The cut-in's band opening and closing (2026-11-01): a window, window 0
 alone across the DS's screen, its lines (WIN0V) 5 to 13 further each side
 a step, every other frame; inside it BG3 alone of the BGs (the band, a
