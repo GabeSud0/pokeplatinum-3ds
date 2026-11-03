@@ -2036,6 +2036,17 @@ of 78), and each frame the same as drawn whole (layers, sprites, atlas).
 The `[perf]` game line says how many a second were the sprites only. In
 `test_render.c`: `test_gpu_objs`.
 
+Their in-between frames without an in-between scene (2026-11-03): the
+compositor's sprites are halfway in an in-between frame, but with the 3D
+behind (its core shared with the 2D's drawing) its in-between scenes are
+left out, 4-11 a second through the HM cut-in on Route 206 (log
+8532faaf), and those frames were the frame before shown again: the
+cut-in's wind and Pokémon not smooth, though the field stands still
+behind them. The in-between frame for the 2D alone (`NitroPort_ComposeFrame`'s
+mid 2, the scene's own 3D, as for a fade or a band: `fades_changed`) is
+now drawn when the sprites moved too (`objs_moved`), them halfway from the
+last scene shown's frame (`draw_gpu_objs` by `frame_before`).
+
 The cut-in's band opening and closing (2026-11-01): a window, window 0
 alone across the DS's screen, its lines (WIN0V) 5 to 13 further each side
 a step, every other frame; inside it BG3 alone of the BGs (the band, a

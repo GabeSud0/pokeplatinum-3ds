@@ -1301,8 +1301,38 @@ static int sEffectsMid;
 static int sLastMainValid;
 static uint32_t sLastMainSeq, sLastMainStamp;
 
+static int objs_of(uint32_t seq, uint32_t stamp, NitroGpuObj *out);
+
+/* Whether the compositor's sprites (the HM cut-in's) are other in a scene's
+ * frame than in the last scene shown's: how many, which, or where. */
+static int objs_moved(const NitroGx3dScene *scene)
+{
+    static NitroGpuObj now[NITRO_GPU_OBJ_MAX], before[NITRO_GPU_OBJ_MAX];
+    int n = objs_of(scene->swap_seq, scene->stamp, now), nb, k;
+
+    if (n < 0 || (nb = objs_of(sLastMainSeq, sLastMainStamp, before)) < 0) {
+        return 0;   /* (not noted: not drawn by the compositor) */
+    }
+    if (n != nb) {
+        return 1;
+    }
+    for (k = 0; k < n; k++) {
+        if (now[k].key != before[k].key || now[k].x != before[k].x || now[k].y != before[k].y) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Whether the 2D's fades (the master brightness, a circle or band) are
- * other in a scene's frame than in the last scene shown's. */
+ * other in a scene's frame than in the last scene shown's; or the
+ * compositor's sprites. (The HM cut-in's sprites move every game step:
+ * halfway in the in-between frames. With an in-between scene left out
+ * (the 3D behind, its core shared with the 2D's drawing: 4-11 a second
+ * on Route 206, log 8532faaf) there was no in-between frame for them, the
+ * frame before shown twice: the cut-in not smooth, the 3D still behind
+ * it. Now that in-between frame is drawn with the scene's 3D, the sprites
+ * halfway.) */
 static int fades_changed(const NitroGx3dScene *scene)
 {
     int a = 0, b = 0, ka = 0, kb = 0, ax = 0, ay = 0, ar = 0, bx = 0, by = 0, br = 0, ca, cb;
@@ -1317,7 +1347,7 @@ static int fades_changed(const NitroGx3dScene *scene)
     }
     ca = circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted);
     cb = circle_of(sLastMainSeq, sLastMainStamp, &bx, &by, &br, &noted);
-    return a != b || ca != cb || (ca && (ax != bx || ay != by || ar != br));
+    return a != b || ca != cb || (ca && (ax != bx || ay != by || ar != br)) || objs_moved(scene);
 }
 
 /* A scene's frame before (as an in-between scene has it: the frame the
@@ -3190,9 +3220,13 @@ static void draw_gpu_objs(const LayerSet *set, const NitroGx3dScene *scene, cons
     int n = set->objCount, nb = -1, na = -1, k;
 
     if (scene != NULL) {
+        uint32_t seqB, stampB;
+
+        /* (halfway from the frame before: an in-between scene's, or in an
+         * in-between frame without one the last scene shown's) */
         na = objs_of(scene->swap_seq, scene->stamp, after);
-        if ((scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) && na >= 0) {
-            nb = objs_of(scene->swap_seq_before, scene->stamp_before, before);
+        if (na >= 0 && frame_before(scene, &seqB, &stampB)) {
+            nb = objs_of(seqB, stampB, before);
         }
     }
     if (na >= 0) {
