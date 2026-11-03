@@ -2982,7 +2982,6 @@ static uint64_t ClockNow(void);
 /* (DrawChanged, below: Render asked for the sprites alone, DrawEngineT
  * stopping once they're left out, and whether it did) */
 static int sObjsOnly[2], sObjsOnlyDone[2];
-static volatile int sLastSpritesOnly[2];   /* (NitroPort_Render2DLastSpritesOnly) */
 /* (DrawChanged) The last picture drawn whole with its sprites left out: its
  * layers, what it was drawn from but the sprites, its lines' 3D scrolls */
 static struct {
@@ -5964,7 +5963,6 @@ void NitroPort_Render2D(int engine, u16 *out)
 
 void NitroPort_Render2DSplit(int engine, u16 *under, NitroRender2DSplit *split)
 {
-    __atomic_store_n(&sLastSpritesOnly[engine ? 1 : 0], 0, __ATOMIC_RELEASE);
     LayersDrawnInto(under, split != NULL ? split->over : NULL);
     Render(engine, under, split);
 }
@@ -6459,11 +6457,6 @@ unsigned NitroPort_Render2DSpritesOnly(int engine)
     return __atomic_exchange_n(&sSpritesOnly[engine ? 1 : 0], 0u, __ATOMIC_ACQ_REL);
 }
 
-int NitroPort_Render2DLastSpritesOnly(int engine)
-{
-    return __atomic_load_n(&sLastSpritesOnly[engine ? 1 : 0], __ATOMIC_ACQUIRE);
-}
-
 /* (NitroPort_Render2DSplitIfChanged) A picture that changed: its sprites
  * alone when they're all that did (sPicture), else drawn whole (and noted
  * for the next time, when its sprites were left out). */
@@ -6473,8 +6466,6 @@ static void DrawChanged(int engine, u16 *under, NitroRender2DSplit *split, int g
     int e = engine ? 1 : 0, known = 0;
     u32 small = 0, vram = 0;
     uint64_t start;
-
-    __atomic_store_n(&sLastSpritesOnly[e], 0, __ATOMIC_RELEASE);
 
     /* (its VRAM but the sprites' as quick to work out as the check's: its
      * BGs' maps and tiles; not a bitmap BG, an H-blank effect: drawn whole) */
@@ -6496,7 +6487,6 @@ static void DrawChanged(int engine, u16 *under, NitroRender2DSplit *split, int g
             split->scroll3dLines = sPicture[e].scroll3dLines;
             memcpy(split->scroll3dLine, sPicture[e].scroll3dLine, sizeof(split->scroll3dLine));
             __atomic_fetch_add(&sSpritesOnly[e], 1u, __ATOMIC_RELAXED);
-            __atomic_store_n(&sLastSpritesOnly[e], 1, __ATOMIC_RELEASE);
             return;
         }
         /* (not left out after all: drawn whole, as below) */

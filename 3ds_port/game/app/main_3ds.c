@@ -1881,9 +1881,6 @@ static void DrawerMain(void *arg)
     for (;;) {
         u64 start, showStart;
         bool drawA = false, drawB = false;
-        /* (engine A's picture its sprites alone made again, the rest kept:
-         * a few ms, NitroPort_Render2DLastSpritesOnly) */
-        bool spritesOnlyA = false, lowered = false;
 
         LightEvent_Wait(&d->go);
         if (d->quit) {
@@ -1906,11 +1903,9 @@ static void DrawerMain(void *arg)
          * rest: the game waits for the reading only (NitroPort_OnFrame). */
         if (d->screens & ENGINE_A) {
             drawA = RenderScreen(0, d->aOnTop, d->stamp);
-            spritesOnlyA = drawA && sRemaster && NitroPort_Render2DLastSpritesOnly(0);
             /* (drawn on the geometry thread's core: its in-between scenes
-             * give way for a few V-blanks. Not for the sprites alone: the
-             * HM cut-in's, a few ms, every frame it plays) */
-            if (drawA && !spritesOnlyA && d->core == sGeoCore) {
+             * give way for a few V-blanks) */
+            if (drawA && d->core == sGeoCore) {
                 NitroPort_Gx3dSharedCoreDrew();
             }
         }
@@ -1920,16 +1915,8 @@ static void DrawerMain(void *arg)
         __atomic_store_n(&d->reading, false, __ATOMIC_RELEASE);
         /* Below the threads it was above while reading, to show what it
          * drew; nothing to show (an unchanged screen): no need, and it
-         * would only wait behind them to come back up. Engine A's sprites
-         * alone (the rest of the picture kept, its layers converted
-         * already): handed over as it is, a few ms. Below the geometry
-         * thread, sharing its core, the HM cut-in's pictures waited ~22 ms
-         * each behind it (~4 of work): 19.5-21 a second, the cut-in not
-         * smooth (log 7051f850, 2026-11-03). A picture drawn whole still
-         * goes below it: handed over above it, the cut-in's whole pictures
-         * held the 3D up 140-275 ms (log b1334782). */
-        lowered = d->readPriority != d->priority && ((drawA && !spritesOnlyA) || drawB);
-        if (lowered) {
+         * would only wait behind them to come back up. */
+        if (d->readPriority != d->priority && (drawA || drawB)) {
             svcSetThreadPriority(CUR_THREAD_HANDLE, d->priority);
         }
         showStart = svcGetSystemTick();
@@ -1958,7 +1945,7 @@ static void DrawerMain(void *arg)
         d->count++;
         /* Back up before it can be handed the next frame: it wakes up
          * reading. */
-        if (lowered) {
+        if (d->readPriority != d->priority && (drawA || drawB)) {
             svcSetThreadPriority(CUR_THREAD_HANDLE, d->readPriority);
         }
         __atomic_store_n(&d->busy, false, __ATOMIC_RELEASE);

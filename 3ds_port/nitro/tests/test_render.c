@@ -3023,7 +3023,6 @@ static void test_gpu_objs(void)
         GX_LoadOAM(oam, 0, sizeof(oam));
         CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
         CHECK(NitroPort_Render2DSpritesOnly(0) == 1);
-        CHECK(NitroPort_Render2DLastSpritesOnly(0) == 1);   /* (handed over above the 3D's thread: main_3ds.c) */
         CHECK(memcmp(under, saved, sizeof(saved)) == 0 && memcmp(over, savedOver, sizeof(savedOver)) == 0);
         CHECK(split.gpuObjsLeftOut == 1 && split.gpuObjCount == 4 && split.has3d == 1);
         memset(&whole, 0, sizeof(whole));
@@ -3033,7 +3032,6 @@ static void test_gpu_objs(void)
         whole.gpuObj = objs2;
         whole.gpuObjAtlas = atlas2;
         NitroPort_Render2DSplit(0, under2, &whole);
-        CHECK(NitroPort_Render2DLastSpritesOnly(0) == 0);   /* (drawn whole) */
         CHECK(memcmp(under2, under, sizeof(under2)) == 0 && memcmp(over2, over, sizeof(over2)) == 0);
         CHECK(memcmp(overAlpha2, overAlpha, sizeof(overAlpha2)) == 0);
         CHECK(memcmp(&whole, &split, offsetof(NitroRender2DSplit, over)) == 0);   /* (all it says of the picture) */
@@ -3051,7 +3049,6 @@ static void test_gpu_objs(void)
         GX_LoadOAM(oam, 0, sizeof(oam));
         CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
         CHECK(NitroPort_Render2DSpritesOnly(0) == 0);
-        CHECK(NitroPort_Render2DLastSpritesOnly(0) == 0);
         memset(&whole, 0, sizeof(whole));
         whole.over = over2;
         whole.overAlpha = overAlpha2;
