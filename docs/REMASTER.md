@@ -2083,6 +2083,21 @@ had them drawn in, not a band the compositor draws: the band jumped back
 open to 16 lines (the DS's), its close not seen through (2026-11-03,
 noticed once the cut-in's pictures came quicker). Patch 0071 keeps them
 the compositor's till the window goes (`CutIn_PortFieldCellsOff`).
+In Eterna Forest (2026-11-03) the band was never the compositor's: the
+3D is behind the forest's fog there (BG2, blended onto it), and the field
+message box's BG (BG1, empty once the box has closed) is in front of the
+3D too. So the band was in the picture, drawn whole at every step of its
+opening and closing and every move of the fog, and the fog was the 2D's
+in whole pixels, not the compositor's. Now a BG the compositor draws
+itself (the fog) can be left out with the band's window on, when it shows
+outside the band only (`GpuBgOutsideBandOf`: window 0 alone across the
+screen, the BG outside it with the colour effect, not inside; judged by
+the layers outside), and the band is the compositor's with it (skipped by
+`GpuBgRowsOf`; the band's lines are filled over it, as inside them the DS
+shows the band's BG alone); and a text BG showing nothing (its map all one
+tile, that tile blank: `BgTextBlank`) doesn't count as in front of the 3D.
+In `test_render.c`: `test_bg_rows`. On the PC through a real Cut at the
+Old Chateau's tree: the band the compositor's from its first frame.
 
 Eterna Forest's light finer than a pixel (patch 0061, 2026-10-31): the
 game keeps the clouds' place finer than a pixel as they follow the camera,

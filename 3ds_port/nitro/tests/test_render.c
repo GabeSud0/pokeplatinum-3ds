@@ -2590,6 +2590,16 @@ static void test_bg_rows(void)
     G2_SetBG1Priority(0);
     NitroPort_Render2DSplit(0, under, &split);
     CHECK(split.gpuCircleOn != 3);
+    {
+        /* (one showing nothing: its map all one tile, that tile's pixels 0,
+         * as the message box's BG once closed) */
+        static u16 blank[32 * 32];
+
+        GX_LoadBG1Scr(blank, 0, sizeof(blank));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuCircleOn == 3);
+        GX_LoadBG1Scr(map1, 0, sizeof(map1));
+    }
     G2_SetBG1Priority(3);
     G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG1 | GX_WND_PLANEMASK_BG2, FALSE);
     NitroPort_Render2DSplit(0, under, &split);
@@ -2598,6 +2608,54 @@ static void test_bg_rows(void)
     G2_SetWnd0Position(10, 64, 255, 128);
     NitroPort_Render2DSplit(0, under, &split);
     CHECK(split.gpuCircleOn != 3);
+    G2_SetWnd0Position(0, 64, 255, 128);
+    /* a fog in front of the 3D outside the band (Eterna Forest's: BG3
+     * here), blended onto it, the compositor's (gpuBgs): left out, and the
+     * band the compositor's too, its lines filled over the fog */
+    {
+        static u16 map3[32 * 32];
+        static u16 pltt2[16] = { 0, BLUE };
+
+        for (i = 0; i < 32 * 32; i++) {
+            map3[i] = 1 | (2 << 12);   /* (palette 2, blue everywhere) */
+        }
+        G2_SetBG3ControlText(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x1000,
+                             GX_BG_CHARBASE_0x04000);
+        GX_LoadBG3Scr(map3, 0, sizeof(map3));
+        GX_LoadBGPltt(pltt2, 64, sizeof(pltt2));
+        G2_SetBG3Priority(0);
+        G2_SetBlendAlpha(GX_BLEND_PLANEMASK_BG3, GX_BLEND_PLANEMASK_BG0, 8, 8);
+        GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1 | GX_PLANEMASK_BG2 | GX_PLANEMASK_BG3);
+        G2_SetWndOutsidePlane(GX_WND_PLANEMASK_BG0 | GX_WND_PLANEMASK_BG1 | GX_WND_PLANEMASK_BG3 | GX_WND_PLANEMASK_OBJ,
+                              TRUE);
+        split.gpuBgs = 0;   /* (not the compositor's: the band can't be either) */
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuCircleOn != 3 && split.gpuBgLeftOut == 0);
+        split.gpuBgs = 1 << 3;
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuCircleOn == 3 && split.gpuCircleY == 64 && split.gpuCircleR == 128);
+        CHECK(split.gpuBgLeftOut == 1 << 3 && split.gpuBgEva == 8 && split.gpuBgEvb == 8);
+        CHECK(over[30 * 256 + 128] == (GREEN | 0x8000));    /* (the band's BG alone in front: no fog) */
+        CHECK(under[30 * 256 + 128] == RED);
+        CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 3 && y == 64 && r == 128);
+        NitroPort_Render2DSplitIfChanged(0, under, &split);
+        NitroPort_Render2DSplitIfChanged(0, under, &split);
+        CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+        G2_SetBG3Offset(5, 3);   /* (the fog moved: the compositor's, not a change) */
+        CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+        G2_SetWnd0Position(0, 80, 255, 112);
+        CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+        CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 3 && y == 80 && r == 112);
+        /* (the fog inside the band too: not left out, the band not the compositor's) */
+        G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG2 | GX_WND_PLANEMASK_BG3, FALSE);
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuCircleOn != 3 && split.gpuBgLeftOut == 0);
+        G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG2 | GX_WND_PLANEMASK_OBJ, FALSE);
+        G2_SetBG3Offset(0, 0);
+        G2_SetBlendAlpha(GX_BLEND_PLANEMASK_NONE, GX_BLEND_PLANEMASK_NONE, 0, 0);
+        GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1 | GX_PLANEMASK_BG2);
+        split.gpuBgs = 0;
+    }
     GX_SetVisibleWnd(GX_WNDMASK_NONE);
 }
 
