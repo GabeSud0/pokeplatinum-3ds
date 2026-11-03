@@ -2238,6 +2238,36 @@ grey blocks. In `test_gx3d.c`: `test_interpolation_order_shift`,
 `test_interpolation_tile_a_scene`, `test_interpolation_swaying`. The PC runner's `midview FILE` draws the
 in-between scene at the view's size (as `viewsim`).
 
+The camera's move (2026-11-03): riding the Cycling Road, the in-between
+frames had white lines along the rocks' ledges (video IMG_2955). The
+ground near the screen's bottom moves further than the scene's motion
+(the perspective: 6 DS pixels a scene against 4), so a ledge's steps, a
+row of one kind every two pixels, were paired a step off, sure as the
+order's pairs are, and met their neighbours a pixel apart. But the
+field's camera keeps its angle: everything that stays where it is in the
+world moves by the same 4 numbers in clip space between two scenes, the
+far and the near alike. So after the matching, the middle of the pairs'
+moves in clip space (`clip_motion`); when at least half the pairs fit it
+on every corner (on the Cycling Road they fit it to a clip unit or two:
+the tolerance is w / 16384, 1/128 of a pixel), each polygon whose pair
+doesn't fit it takes the one of its kind that does (`static_rematch`),
+and one with none is put halfway as the camera moved, not as the screen
+moved. What the camera follows (the player and his shadow: where its
+pair was on the screen, as far from the camera) keeps its pair: the
+player's shadow is 4 quads, each the size of the bike's move in a scene,
+and the quad below fitted the move to the one above it exactly. The
+camera still, or turning or zooming (the pairs don't fit one move), the
+matching is as it was. On five recordings of the Cycling Road the pixels
+left uncovered in the in-between scenes that both scenes either side
+covered went from 30,451 to 1,348 (to none on three; what's left on the
+other two was there the same before, at a map's edge), and 1-8% of the
+in-between scenes differ at all. In
+`test_gx3d.c`: `test_interpolation_camera_move`. (An earlier try that
+welded shared corners and re-matched by rows, 56abffc, was undone with the
+HM cut-in change of the same commit: log b1334782 had the geometry thread
+held up 140-275 ms at a time while the cut-in's pictures were handed over
+above its priority.)
+
 ## Known
 
 - In the Azahar emulator, the field's 3D sometimes flashes black for a

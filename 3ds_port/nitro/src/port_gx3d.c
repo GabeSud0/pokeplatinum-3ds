@@ -960,6 +960,8 @@ typedef struct RecTag {
     uint8_t count, onScreen;
     uint16_t unused;
     float px0, py0;           /* (its first corner: most of the window's are far, told by it alone) */
+    float w0;                 /* (and its w: static_rematch's first look, by the camera's move) */
+    float px2, py2, w2;       /* (and its third: a polygon's own, not a neighbour's sharing a corner) */
 } RecTag;
 typedef struct RecPos {
     float px[4], py[4];
@@ -1031,6 +1033,10 @@ static void record_polygon(GeoVertex *a,GeoVertex *b,GeoVertex *c,GeoVertex *d)
         tag->sig=r->sig;tag->count=r->count;tag->onScreen=r->onScreen;tag->unused=0;
         memcpy(&tag->px0,&r->px[0],sizeof(tag->px0));
         memcpy(&tag->py0,&r->py[0],sizeof(tag->py0));
+        tag->w0=(float)r->clip[0][3];
+        memcpy(&tag->px2,&r->px[2],sizeof(tag->px2));
+        memcpy(&tag->py2,&r->py[2],sizeof(tag->py2));
+        tag->w2=(float)r->clip[2][3];
         memcpy(sPos[sRecBuild][at].px,r->px,sizeof(r->px));
         memcpy(sPos[sRecBuild][at].py,r->py,sizeof(r->py));
     }
@@ -1466,6 +1472,215 @@ static uint32_t soft_of(const PolyRecord *p,const PolyRecord *c,const NitroGx3dS
     if(fabsf(dy-floorf(dy+0.5f))>SOFT_NEAR)soft|=NITRO_GX3D_SOFT_Y;
     return soft;
 }
+/* The camera's move in clip space. The field's camera keeps its angle and
+ * only moves: every vertex of what stays where it is in the world (the
+ * map, its props, the people standing) moves by the same 4 numbers in
+ * clip space between two scenes, the far and the near alike, while on the
+ * screen the near ground moves further (the perspective). Matching by
+ * the screen's motion alone paired a ledge's steps (a row of one kind
+ * every two DS pixels near the screen's bottom, moving 6 pixels a scene
+ * against the scene's 4) one step off, and the in-between frames had
+ * white lines along the rocks riding the Cycling Road (videos of
+ * 2026-11-02, IMG_2955). sClipMotion: the middle of the pairs' moves
+ * (their first corners), valid when at least half of them fit it on every
+ * corner. On the Cycling Road they fit it exactly, to a clip unit or two
+ * (rec_river: 99.6% of the corners); STATIC_FIT allows w / 16384 (1/128
+ * of a DS pixel) and STATIC_SLACK clip units. Anything looser let things
+ * that only happen to be where the move would put them in: the player's
+ * shadow, 4 quads each as tall as the bike's move in a scene, paired a
+ * quad off. Not valid (the camera turning or zooming: a battle's start, a
+ * cut-scene): matching as it was. */
+#define STATIC_FIT 14
+#define STATIC_SLACK 8
+#define STATIC_NEAR 0.0625f   /* (DS pixels: static_rematch's first look in the window, a corner's, well over STATIC_FIT's) */
+#define STATIC_SAMPLES 256u
+static int sClipMotionValid;
+static int32_t sClipMotion[4];
+static int32_t sStaticPair[MAX_RECORDS], sStaticOwner[MAX_RECORDS];
+/* How far (clip units, summed) the scene before's p is from where the
+ * camera's move mo puts c then, on every corner; -1 not within STATIC_FIT
+ * on every one. */
+static float static_misfit(const PolyRecord *p,const PolyRecord *c,const int32_t mo[4])
+{
+    unsigned k,i;
+    int64_t e=0;
+    if(p->count!=c->count || !p->onScreen || !c->onScreen)return -1.0f;
+    for(k=0;k<c->count;k++){
+        int64_t tol=((int64_t)c->clip[k][3]>>STATIC_FIT)+STATIC_SLACK;
+        for(i=0;i<4;i++){
+            int64_t d=(int64_t)c->clip[k][i]-mo[i]-p->clip[k][i];
+            if(d<0)d=-d;
+            if(d>tol)return -1.0f;
+            e+=d;
+        }
+    }
+    return (float)e;
+}
+/* The same from the tags alone (the first and third corners, their x, y
+ * and w, as floats: a clip unit or two off): every pair's look, without
+ * reading the records (a cache line or three each on the 3DS, after the
+ * matching read the tags). Two corners: a neighbour of its kind shares
+ * one with it (on the PC's rides, 2 of 5 in-between frames with holes left
+ * with the first alone). */
+static float static_corner_misfit(float pw,float px,float py,float cw,float cx,float cy,const int32_t mo[4])
+{
+    float tol=cw*(1.0f/(float)(1<<STATIC_FIT))+(float)STATIC_SLACK+2.0f,d,e;
+    d=fabsf(cw-(float)mo[3]-pw);
+    if(d>tol)return -1.0f;
+    e=d;
+    d=fabsf((cx*cw-px*pw)*(1.0f/128.0f)-(float)mo[0]);
+    if(d>tol)return -1.0f;
+    e+=d;
+    d=fabsf((cy*cw-py*pw)*(1.0f/96.0f)-(float)mo[1]);
+    if(d>tol)return -1.0f;
+    return e+d;
+}
+static float static_tag_misfit(const RecTag *p,const RecTag *c,const int32_t mo[4])
+{
+    float e0,e2;
+    if(p->count!=c->count || !p->onScreen || !c->onScreen)return -1.0f;
+    e0=static_corner_misfit(p->w0,p->px0,p->py0,c->w0,c->px0,c->py0,mo);
+    if(e0<0.0f)return -1.0f;
+    e2=static_corner_misfit(p->w2,p->px2,p->py2,c->w2,c->px2,c->py2,mo);
+    if(e2<0.0f)return -1.0f;
+    return e0+e2;
+}
+static int clip_motion(const RecTag *PT,const RecTag *CT,unsigned n,const int32_t *out,int32_t mo[4])
+{
+    static float sample[3][STATIC_SAMPLES];
+    static uint16_t at[STATIC_SAMPLES];
+    unsigned j,i,count=0,fit=0,step=n/STATIC_SAMPLES+1u;
+    for(j=0;j<n && count<STATIC_SAMPLES;j+=step){
+        int q=out[j];
+        if(q<0 || !CT[j].onScreen || !PT[q].onScreen || PT[q].count!=CT[j].count)continue;
+        sample[0][count]=(CT[j].px0*CT[j].w0-PT[q].px0*PT[q].w0)*(1.0f/128.0f);
+        sample[1][count]=(CT[j].py0*CT[j].w0-PT[q].py0*PT[q].w0)*(1.0f/96.0f);
+        sample[2][count]=CT[j].w0-PT[q].w0;
+        at[count++]=(uint16_t)j;
+    }
+    if(count<16u)return 0;
+    for(i=0;i<3;i++){
+        float v=median_of(sample[i],count);
+        if(v>2.0e9f || v<-2.0e9f)return 0;
+        mo[i==2?3:i]=(int32_t)floorf(v+0.5f);
+    }
+    /* (z, not in the tags: as w for now, clip_motion_z finds it) */
+    mo[2]=mo[3];
+    /* (the camera still: matching as it was, the scene's own motion none) */
+    if(!mo[0] && !mo[1] && !mo[3])return 0;
+    for(i=0;i<count;i++){
+        j=at[i];
+        if(static_tag_misfit(&PT[out[j]],&CT[j],mo)>=0.0f)fit++;
+    }
+    return fit*2u>=count;
+}
+/* (clip_motion's z: the middle of the fitting pairs' z moves, from 16 of
+ * their records at most) */
+static void clip_motion_z(const PolyRecord *P,const PolyRecord *C,const RecTag *PT,const RecTag *CT,
+                          unsigned n,const int32_t *out,int32_t mo[4])
+{
+    static float zs[16];
+    unsigned j,count=0,step=n/16u+1u;
+    for(j=0;j<n && count<16u;j+=step){
+        int q=out[j];
+        if(q<0 || static_tag_misfit(&PT[q],&CT[j],mo)<0.0f)continue;
+        zs[count++]=(float)((int64_t)C[j].clip[0][2]-P[q].clip[0][2]);
+    }
+    if(count)mo[2]=(int32_t)floorf(median_of(zs,count)+0.5f);
+}
+/* (static_rematch) What the camera follows: where it was on the screen, a
+ * pixel at most (on average, a corner, as match_records has it), and as
+ * far from the camera (w) to a half of the camera's own move that way
+ * (the move mo); a row of one kind in the perspective, a row where its
+ * neighbour was, is nearer or further. */
+static int near_still(const PolyRecord *p,const PolyRecord *c,const int32_t mo[4])
+{
+    unsigned k;
+    float d=0.0f;
+    int64_t mw=mo[3]<0?-(int64_t)mo[3]:(int64_t)mo[3];
+    if(p->count!=c->count || !p->onScreen || !c->onScreen)return 0;
+    for(k=0;k<c->count;k++){
+        int64_t dw=(int64_t)c->clip[k][3]-p->clip[k][3];
+        if(dw<0)dw=-dw;
+        if(dw>mw/2+((int64_t)c->clip[k][3]>>STATIC_FIT)+STATIC_SLACK)return 0;
+        d+=fabsf(c->px[k]-p->px[k])+fabsf(c->py[k]-p->py[k]);
+    }
+    return d<MATCH_SURE*(float)c->count;
+}
+/* With the camera's move (mo): each polygon whose pair isn't where the
+ * move puts it, paired with the one of its kind that is (MATCH_WINDOW
+ * either side of its pair, or of where the pairs before it were), the
+ * nearest; one taken that way is no other's. What the camera follows (the
+ * player: where its pair was on the screen) keeps its pair, and what the
+ * move doesn't fit (the people moving) the pair it had, unless that one
+ * is another's exactly. Each pair's misfit (sStaticErr) decides who has a
+ * polygon wanted twice (the same polygon drawn twice over: the one after
+ * takes the other). Its own pair's fit, from the tags (two corners);
+ * another's, on every corner. */
+static float sStaticErr[MAX_RECORDS];
+static void static_rematch(const PolyRecord *P,unsigned m,const PolyRecord *C,unsigned n,int32_t *out,const int32_t mo[4])
+{
+    const RecTag *PT=sTag[sRecBuild^1u],*CT=sTag[sRecBuild];
+    unsigned j;
+    int offset=0;
+    for(j=0;j<m;j++)sStaticOwner[j]=-1;
+    for(j=0;j<n;j++){
+        int q=out[j],center,lo,hi,k,best=-1,o;
+        float bestE=0.0f,e;
+        sStaticPair[j]=-1;
+        if(!CT[j].onScreen)continue;
+        /* (taken: by one before it that fits it no worse) */
+#define STATIC_TAKEN(k,e) (sStaticOwner[k]>=0 && sStaticErr[sStaticOwner[k]]<=(e))
+        if(q>=0 && (e=static_tag_misfit(&PT[q],&CT[j],mo))>=0.0f && !STATIC_TAKEN(q,e)){best=q;bestE=e;}
+        else if(q>=0 && near_still(&P[q],&C[j],mo)){
+            /* (what the camera follows: its own pair, no other, and none
+             * takes it from it; as it was paired. The player's shadow is
+             * 4 quads, and at a ride its quad below fitted the move to the
+             * one above it the scene before exactly, the bike's move a
+             * scene being the quad's size: it was torn in the in-between
+             * frames. The camera lags the player a little: a pixel.) */
+            if(!STATIC_TAKEN(q,-1.0f)){best=q;bestE=-1.0f;}
+        }else{
+            /* (where the move puts its first corner on the screen then: the
+             * window's polygons told by their tags alone, most of them) */
+            float wq=CT[j].w0-(float)mo[3],fx,fy;
+            if(wq<=0.0f)continue;
+            fx=(CT[j].px0*CT[j].w0*(1.0f/128.0f)-(float)mo[0])/wq*128.0f;
+            fy=(CT[j].py0*CT[j].w0*(1.0f/96.0f)-(float)mo[1])/wq*96.0f;
+            center=q>=0?q:(int)j+offset;
+            lo=center-MATCH_WINDOW;hi=center+MATCH_WINDOW;
+            if(lo<0)lo=0;
+            if(hi>(int)m-1)hi=(int)m-1;
+            for(k=lo;k<=hi;k++){
+                if(k==q || PT[k].sig!=CT[j].sig || !PT[k].onScreen || PT[k].count!=CT[j].count)continue;
+                if(fabsf(PT[k].px0-fx)+fabsf(PT[k].py0-fy)>STATIC_NEAR)continue;
+                e=static_misfit(&P[k],&C[j],mo);
+                if(e>=0.0f && (best<0 || e<bestE) && !STATIC_TAKEN(k,e)){best=k;bestE=e;}
+            }
+        }
+#undef STATIC_TAKEN
+        if(best<0)continue;
+        o=sStaticOwner[best];
+        if(o>=0)sStaticPair[o]=-1;   /* (it fitted worse: what it had, as below) */
+        sStaticOwner[best]=(int32_t)j;
+        sStaticPair[j]=best;sStaticErr[j]=bestE;offset=best-(int)j;
+    }
+    for(j=0;j<n;j++){
+        int k=sStaticPair[j],was=out[j];
+        if(k>=0)out[j]=k;
+        else if(was>=0 && sStaticOwner[was]>=0)out[j]=-1;   /* (another's, exactly) */
+    }
+}
+/* Where the camera's move puts a clip-space vertex halfway: as a pair's
+ * halfway is made (make_mid_scene), the other of the pair where the move
+ * puts it (sign -1: this scene's, the scene before's less the move; 1: the
+ * scene before's, the next one's plus it); the same to the unit as its
+ * neighbours paired. */
+static int32_t static_halfway(int32_t v,int32_t mo,int sign)
+{
+    int64_t other=sign>0?(int64_t)v+mo:(int64_t)v-mo;
+    return (int32_t)(((int64_t)v+other)/2);
+}
 /* (the [perf] geometry's work line: the in-between scenes' matching of
  * polygons with the scene before's, NitroPort_Gx3dMidWork) */
 static uint64_t sMidMatchTicks;
@@ -1482,6 +1697,11 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
     {
         uint64_t t0=sOps.ticks?sOps.ticks(sOps.context):0;
         sMidMatched=match_records(sTag[sRecBuild^1u],sPos[sRecBuild^1u],m,sTag[sRecBuild],sPos[sRecBuild],n,sMatch);
+        sClipMotionValid=sMidMatched*2u>=n && clip_motion(sTag[sRecBuild^1u],sTag[sRecBuild],n,sMatch,sClipMotion);
+        if(sClipMotionValid){
+            clip_motion_z(P,C,sTag[sRecBuild^1u],sTag[sRecBuild],n,sMatch,sClipMotion);
+            static_rematch(P,m,C,n,sMatch,sClipMotion);
+        }
         if(sOps.ticks)__atomic_store_n(&sMidMatchTicks,sMidMatchTicks+(sOps.ticks(sOps.context)-t0),__ATOMIC_RELAXED);
     }
     sMidPolygons=n;
@@ -1544,7 +1764,14 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
             for(k=0;k<c->ntri && c->tri0+k<now->count;k++)now->triangles[c->tri0+k].soft=soft;
             sReplaySoft=soft;
             if(!mid)memcpy(clip,c->clip,sizeof(clip));
-            if(sMatch[j]<0 && c->onScreen && sMotionValid && (sMotionX!=0.0f || sMotionY!=0.0f)){
+            if(sMatch[j]<0 && c->onScreen && sClipMotionValid){
+                /* (with the camera's move: halfway as it puts it, the near
+                 * ground further than the far, as the rest around it) */
+                for(k=0;k<c->count;k++){
+                    unsigned q;
+                    for(q=0;q<4;q++)clip[k][q]=static_halfway(c->clip[k][q],sClipMotion[q],-1);
+                }
+            }else if(sMatch[j]<0 && c->onScreen && sMotionValid && (sMotionX!=0.0f || sMotionY!=0.0f)){
                 /* (one with no match: the scene's new ones, mostly, as a
                  * model comes into the view whole: where the scene's
                  * motion puts it halfway, not where it is now, half a
@@ -1577,16 +1804,24 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
                 unsigned all=0x3Fu;
                 if(sPUsed[i] || !p->onScreen)continue;
                 for(k=0;k<p->count;k++){
+                    unsigned q;
                     memcpy(full,p->clip[k],sizeof(full));
-                    full[0]+=(int32_t)floor(fx*(double)full[3]+0.5);
-                    full[1]+=(int32_t)floor(fy*(double)full[3]+0.5);
+                    if(sClipMotionValid)for(q=0;q<4;q++)full[q]=(int32_t)((int64_t)full[q]+sClipMotion[q]);
+                    else{
+                        full[0]+=(int32_t)floor(fx*(double)full[3]+0.5);
+                        full[1]+=(int32_t)floor(fy*(double)full[3]+0.5);
+                    }
                     all&=outcode(full);
                 }
                 if(!all)continue;   /* (not leaving the view: gone, as this scene has it) */
                 for(k=0;k<p->count;k++){
+                    unsigned q;
                     memcpy(clip[k],p->clip[k],sizeof(clip[k]));
-                    clip[k][0]+=(int32_t)floor(0.5*fx*(double)clip[k][3]+0.5);
-                    clip[k][1]+=(int32_t)floor(0.5*fy*(double)clip[k][3]+0.5);
+                    if(sClipMotionValid)for(q=0;q<4;q++)clip[k][q]=static_halfway(p->clip[k][q],sClipMotion[q],1);
+                    else{
+                        clip[k][0]+=(int32_t)floor(0.5*fx*(double)clip[k][3]+0.5);
+                        clip[k][1]+=(int32_t)floor(0.5*fy*(double)clip[k][3]+0.5);
+                    }
                 }
                 replay_polygon(p,clip);
             }

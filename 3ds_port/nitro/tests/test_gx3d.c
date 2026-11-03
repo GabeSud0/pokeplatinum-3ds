@@ -587,6 +587,57 @@ static void test_interpolation_blended(void)
     NitroPort_Gx3dSetInterpolation(0);
     reset_geometry();
 }
+/* The camera's move, in clip space (the field's camera keeps its angle):
+ * a column of rows of one kind, touching, the camera coming nearer (w
+ * from 2 to 1.8), so each row moves on the screen by its own amount, the
+ * outer ones further than the gap between rows (a ledge's steps near the
+ * screen's bottom riding the Cycling Road, white lines between them in the
+ * in-between frames, 2026-11-02). Each row halfway to its own place, and
+ * a new row at the column's end (none before) halfway as the camera
+ * moved, not as the screen's motion: no gap. */
+static void row_at(int y,int z)
+{
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(31u<<16));
+    NitroPort_GxDirectWrite(0x20,0x7fff);
+    NitroPort_GxDirectWrite(0x40,1);
+    vertex(-200,y,z);
+    vertex(200,y,z);
+    vertex(200,y+400,z);
+    vertex(-200,y+400,z);
+    NitroPort_GxDirectWrite(0x41,0);
+}
+static void test_interpolation_camera_move(void)
+{
+    static const uint32_t proj[16]={ONE,0,0,0, 0,ONE,0,0, 0,0,ONE,ONE, 0,0,0,2*ONE};
+    const NitroGx3dScene *mid;
+    unsigned k,matched=0,polygons=0;
+    int r,scene,bad=0,badNew=0;
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x10,0);
+    for(k=0;k<16;k++)NitroPort_GxDirectWrite(0x16,proj[k]);
+    NitroPort_GxDirectWrite(0x10,2);
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    for(scene=0;scene<2;scene++){
+        int z=scene?-820:0;   /* (w 2, then 1.8) */
+        for(r=-12;r<12;r++)row_at(400*r,z);
+        if(scene)row_at(400*12,z);   /* (new, at the end) */
+        swap_done();
+    }
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && polygons==25 && matched>=24);
+    if(mid && mid->count==50){
+        for(r=0;r<25;r++){
+            const NitroGx3dVertex *v=&mid->triangles[2*r].v[0];
+            if(r<24 && (v->clip[1]!=400*(r-12) || v->clip[3]!=(8192+(8192-820))/2))bad++;
+            if(r==24 && (abs(v->clip[1]-400*12)>2 || abs(v->clip[3]-(8192+(8192-820))/2)>2))badNew++;
+        }
+        CHECK(bad==0);
+        CHECK(badNew==0);
+    }else CHECK(0);
+    NitroPort_Gx3dSetInterpolation(0);
+    reset_geometry();
+}
 /* (a small quad, its corner at x, y) */
 static void small_quad_at(int x,int y,uint32_t attr)
 {
@@ -2351,6 +2402,7 @@ static void run_all(void)
     test_interpolation_tile_a_scene();
     test_interpolation_swaying();
     test_interpolation_blended();
+    test_interpolation_camera_move();
     test_triangle_strip();
     test_hidden_vertices();
     test_textures();
