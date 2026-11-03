@@ -974,7 +974,6 @@ static int sRecBeforeValid;
 static NitroGx3dScene *sMids[3];
 static int sMidOk[3];
 static int32_t *sMatch;                  /* for each of this scene's polygons, the one before's, or -1 */
-static uint8_t sSure[MAX_RECORDS];       /* (its pair where the order or the pair before put it: corners_weld) */
 static unsigned sMidMatched, sMidPolygons;
 
 static uint32_t viewport_key(void)
@@ -1238,65 +1237,6 @@ static int match_fits(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *
     if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)return 0;
     return poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,MATCH_SURE)<MATCH_SURE;
 }
-/* The rows' own motion: a polygon paired by the window's search (not
- * where the order or the pair before put it) paired again where its row
- * of the screen moved, if one of its kind is nearer there. The ground's
- * rows near the screen's bottom move faster than the scene's motion in
- * the perspective (riding down the Cycling Road, 6.2 pixels a scene where
- * the scene moved 4), and of a ledge's steps, a row of the same kind
- * every two pixels, the step above was nearer to where the scene's
- * motion put it than its own: paired a step off, the ledge and the
- * ground below a pixel apart in the in-between frames, a white line
- * along the step (a video of 2026-11-02). A row's motion: the middle of
- * the sure pairs' moves in it (ROW_BAND DS pixels of the screen), with
- * ROW_SAMPLES of them at least. */
-#define ROW_BAND 8.0f
-#define ROW_BANDS 26
-#define ROW_SAMPLES 3
-#define ROW_KEEP 32
-#define ROW_WINDOW 24
-static void rows_rematch(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *C,const RecPos *CP,unsigned n,
-                         int32_t *out,float dx,float dy)
-{
-    static float bx[ROW_BANDS][ROW_KEEP],by[ROW_BANDS][ROW_KEEP];
-    unsigned cnt[ROW_BANDS],j,b;
-    float mxb[ROW_BANDS],myb[ROW_BANDS];
-    int valid[ROW_BANDS];
-    memset(cnt,0,sizeof(cnt));
-    for(j=0;j<n && j<MAX_RECORDS;j++){
-        int q=out[j];
-        if(q<0 || !sSure[j] || !C[j].onScreen || !P[q].onScreen)continue;
-        b=(unsigned)fmaxf(0.0f,fminf((float)(ROW_BANDS-1),(C[j].py0+104.0f)/ROW_BAND));
-        if(cnt[b]<ROW_KEEP){bx[b][cnt[b]]=C[j].px0-P[q].px0;by[b][cnt[b]]=C[j].py0-P[q].py0;cnt[b]++;}
-    }
-    for(b=0;b<ROW_BANDS;b++){
-        valid[b]=cnt[b]>=ROW_SAMPLES;
-        if(valid[b]){mxb[b]=median_of(bx[b],cnt[b]);myb[b]=median_of(by[b],cnt[b]);}
-    }
-    for(j=0;j<n && j<MAX_RECORDS;j++){
-        int q=out[j],lo,hi,k,best=-1;
-        float rx,ry,cur,bestD;
-        if(q<0 || sSure[j] || !C[j].onScreen || !P[q].onScreen)continue;
-        b=(unsigned)fmaxf(0.0f,fminf((float)(ROW_BANDS-1),(C[j].py0+104.0f)/ROW_BAND));
-        if(!valid[b])continue;
-        rx=mxb[b];ry=myb[b];
-        if(fabsf(rx-dx)+fabsf(ry-dy)<0.5f)continue;   /* (the row moves as the scene: as paired) */
-        cur=poly_distance(&PP[q],&CP[j],C[j].count,rx,ry,1e9f);
-        bestD=cur-0.25f;
-        lo=q-ROW_WINDOW;hi=q+ROW_WINDOW;
-        if(lo<0)lo=0;
-        if(hi>(int)m-1)hi=(int)m-1;
-        for(k=lo;k<=hi;k++){
-            float d;
-            if(k==q || P[k].sig!=C[j].sig || !P[k].onScreen || P[k].count!=C[j].count || sOwner[k]>=0)continue;
-            d=poly_distance(&PP[k],&CP[j],C[j].count,rx,ry,bestD);
-            if(d<bestD){bestD=d;best=k;}
-        }
-        if(best>=0){
-            sOwner[q]=-1;sOwner[best]=(int32_t)j;out[j]=best;
-        }
-    }
-}
 static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *C,const RecPos *CP,unsigned n,int32_t *out)
 {
     unsigned i=0,j=0,matched=0,moves=0;
@@ -1368,7 +1308,6 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const 
     memcpy(sOrderOut,out,n*sizeof(*out));
     t2=match_ticks();
     /* each again, by where it is */
-    memset(sSure,0,n<MAX_RECORDS?n:MAX_RECORDS);
     for(j=0;j<n;j++){
         int center=out[j]>=0?out[j]:(int)j+offset,order=out[j],lo,hi,q,best=-1;
         float bestD=near;
@@ -1387,7 +1326,7 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const 
          * briefcase: 2026-10-26.) */
         if(out[j]>=0 && P[out[j]].onScreen && P[out[j]].count==C[j].count &&
            poly_distance(&PP[out[j]],&CP[j],C[j].count,dx,dy,MATCH_SURE)<MATCH_SURE){
-            offset=out[j]-(int)j;matched++;sSure[j]=1;
+            offset=out[j]-(int)j;matched++;
             ldx=C[j].px0-P[out[j]].px0;ldy=C[j].py0-P[out[j]].py0;haveLocal=1;
             continue;
         }
@@ -1402,7 +1341,7 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const 
          * screen's bottom or top), if it's no more than MATCH_LOCAL from the
          * scene's. Either a pixel at most from where it puts it. */
         if(match_fits(P,PP,m,C,CP,j,shifted,out[j],dx,dy)){
-            out[j]=shifted;offset=shifted-(int)j;matched++;sMatchQuick++;sSure[j]=1;
+            out[j]=shifted;offset=shifted-(int)j;matched++;sMatchQuick++;
             ldx=C[j].px0-P[shifted].px0;ldy=C[j].py0-P[shifted].py0;haveLocal=1;
             continue;
         }
@@ -1411,7 +1350,7 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const 
             if(match_fits(P,PP,m,C,CP,j,out[j],-1,ldx,ldy))pick=out[j];
             else if(match_fits(P,PP,m,C,CP,j,shifted,out[j],ldx,ldy))pick=shifted;
             if(pick>=0){
-                out[j]=pick;offset=pick-(int)j;matched++;sMatchQuick++;sSure[j]=1;
+                out[j]=pick;offset=pick-(int)j;matched++;sMatchQuick++;
                 ldx=C[j].px0-P[pick].px0;ldy=C[j].py0-P[pick].py0;
                 continue;
             }
@@ -1488,7 +1427,6 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const 
         }
         matched--;
     }
-    rows_rematch(P,PP,m,C,CP,n,out,dx,dy);
     if(sOps.ticks){
         uint64_t t4=match_ticks();
         sMatchPart[0]+=t1-t0;sMatchPart[1]+=t2-t1;sMatchPart[2]+=t3-t2;sMatchPart[3]+=t4-t3;
@@ -1527,106 +1465,6 @@ static uint32_t soft_of(const PolyRecord *p,const PolyRecord *c,const NitroGx3dS
     if(fabsf(dx-floorf(dx+0.5f))>SOFT_NEAR)soft|=NITRO_GX3D_SOFT_X;
     if(fabsf(dy-floorf(dy+0.5f))>SOFT_NEAR)soft|=NITRO_GX3D_SOFT_Y;
     return soft;
-}
-/* The in-between scene's corners welded: a corner several polygons have
- * on the screen now (the same point, of one model or the next map's),
- * where the surest of them has it halfway. Each polygon is halfway on its
- * own, by its pair; where two that meet were paired differently, they
- * came apart. A ledge's steps, a row of the same kind every two pixels,
- * paired a step off by the window's search, and the ground below paired
- * by its order, met a pixel apart; a map coming into the view whole (the
- * next map at the screen's bottom, out of the view the scene before), all
- * its polygons new, moved as the scene moved where the map before it
- * moved faster in the perspective: white lines along the seams in the
- * in-between frames, riding down the Cycling Road (a video of
- * 2026-11-02). Surest: paired where the order or the pair before put it
- * (sSure), then paired by the search, then none (no pair: moved as the
- * corner it shares moved, else as the scene moved). Corners looked up by
- * where they are, in quarter pixels (a hash). */
-#define CORNER_HASH 4096u
-static int32_t sCornerHead[CORNER_HASH];
-static int32_t sCornerNext[MAX_RECORDS*4u];
-static int32_t sWeld[MAX_RECORDS*4u];    /* (the corner whose halfway place it takes, or -1) */
-static uint8_t sCornerRank[MAX_RECORDS];  /* 2 sure, 1 searched, 0 none */
-static uint16_t sCornerKey[MAX_RECORDS*4u];
-static int32_t floor_fast(float f){int32_t i=(int32_t)f;return i-((float)i>f);}   /* (no library call: the 3DS's ARM11 has no rounding instruction) */
-static unsigned corner_key(float px,float py)
-{
-    int32_t x=floor_fast(px*4.0f+0.5f),y=floor_fast(py*4.0f+0.5f);
-    return ((uint32_t)x*73856093u^(uint32_t)y*19349663u)&(CORNER_HASH-1u);
-}
-/* Which corners take another's place halfway (sWeld). halfway: whether
- * each polygon's pair makes one (mid: matched, not a jump); 0 else. Only
- * a surer polygon's corner is taken, so the hash holds only those with a
- * pair, and the sure ones look for none. */
-static void corners_weld(const PolyRecord *P,const PolyRecord *C,unsigned n,const uint8_t *halfway)
-{
-    unsigned j,b;
-    (void)P;
-    if(n>MAX_RECORDS)n=MAX_RECORDS;
-    memset(sCornerHead,0xFF,sizeof(sCornerHead));
-    for(j=0;j<n;j++){
-        const PolyRecord *c=&C[j];
-        sCornerRank[j]=halfway[j]?(uint8_t)(1+sSure[j]):0;
-        for(b=0;b<4;b++)sWeld[j*4u+b]=-1;
-        if(!c->onScreen)continue;
-        for(b=0;b<c->count;b++){
-            unsigned key=corner_key(c->px[b],c->py[b]);
-            sCornerKey[j*4u+b]=(uint16_t)key;
-            if(!sCornerRank[j])continue;
-            sCornerNext[j*4u+b]=sCornerHead[key];
-            sCornerHead[key]=(int32_t)(j*4u+b);
-        }
-    }
-    for(j=0;j<n;j++){
-        const PolyRecord *c=&C[j];
-        if(!c->onScreen || sCornerRank[j]>=2u || (sMatch[j]>=0 && !halfway[j]))continue;   /* (a jump: where it is now) */
-        for(b=0;b<c->count;b++){
-            int32_t e,best=-1;
-            unsigned rank=sCornerRank[j];
-            for(e=sCornerHead[sCornerKey[j*4u+b]];e>=0;e=sCornerNext[e]){
-                const PolyRecord *ck=&C[e>>2];
-                unsigned bk=(unsigned)e&3u;
-                if(sCornerRank[e>>2]<=rank)continue;
-                if(fabsf(c->px[b]-ck->px[bk])>0.02f || fabsf(c->py[b]-ck->py[bk])>0.02f)continue;
-                rank=sCornerRank[e>>2];best=e;
-                if(rank>=2u)break;
-            }
-            sWeld[j*4u+b]=best;
-        }
-    }
-}
-/* A corner welded (sWeld): where its polygon's corner is halfway. */
-static void corner_welded(const PolyRecord *P,const PolyRecord *C,int32_t e,int32_t out[4])
-{
-    const PolyRecord *ck=&C[e>>2],*pk=&P[sMatch[e>>2]];
-    unsigned bk=(unsigned)e&3u;
-    int q;
-    for(q=0;q<4;q++)out[q]=(int32_t)(((int64_t)pk->clip[bk][q]+ck->clip[bk][q])/2);
-}
-/* A polygon with no pair, halfway: as its welded corners moved (the
- * first of them), else as the scene moved (mx, my); the welded ones
- * where those are. */
-static void unpaired_halfway(const PolyRecord *P,const PolyRecord *C,unsigned j,
-                             float mx,float my,int32_t clip[4][4])
-{
-    const PolyRecord *c=&C[j];
-    unsigned a;
-    double hx,hy;
-    for(a=0;a<c->count && j<MAX_RECORDS;a++){
-        int32_t e=sWeld[j*4u+a];
-        if(e>=0){
-            mx=C[e>>2].px[e&3]-P[sMatch[e>>2]].px[e&3];
-            my=C[e>>2].py[e&3]-P[sMatch[e>>2]].py[e&3];
-            break;
-        }
-    }
-    hx=-0.5*(double)mx/128.0;hy=-0.5*(double)my/96.0;
-    for(a=0;a<c->count;a++){
-        clip[a][0]=c->clip[a][0]+(int32_t)floor(hx*(double)c->clip[a][3]+0.5);
-        clip[a][1]=c->clip[a][1]+(int32_t)floor(hy*(double)c->clip[a][3]+0.5);
-        if(j<MAX_RECORDS && sWeld[j*4u+a]>=0)corner_welded(P,C,sWeld[j*4u+a],clip[a]);
-    }
 }
 /* (the [perf] geometry's work line: the in-between scenes' matching of
  * polygons with the scene before's, NitroPort_Gx3dMidWork) */
@@ -1678,19 +1516,6 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
         __typeof__(sDiag) diag=sDiag;
         const BlendView view=blend_viewport();
         const uint32_t viewport=viewport_key();
-        static uint8_t halfway[MAX_RECORDS];
-        /* (whether each one's pair makes it halfway: the same, not a jump
-         * of more than a quarter of the screen, where it is now) */
-        for(j=0;j<n && j<MAX_RECORDS;j++){
-            const PolyRecord *c=&C[j],*p;
-            double x0,y0,x1,y1;
-            halfway[j]=0;
-            if(sMatch[j]<0)continue;
-            p=&P[sMatch[j]];
-            halfway[j]=p->count==c->count &&
-                !(ndc_of(p->clip[0],&x0,&y0) && ndc_of(c->clip[0],&x1,&y1) && (fabs(x1-x0)>0.5 || fabs(y1-y0)>0.5));
-        }
-        corners_weld(P,C,n,halfway);
         sDest=sMid;sReplaying=1;sShadowCapture=0;
         s.framePolygons=0;s.frameVertices=0;
         for(j=0;j<n;j++){
@@ -1698,15 +1523,18 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
             const PolyRecord *c=&C[j];
             int mid=0;
             uint32_t soft=0;
-            int welded=0;
             if(sMatch[j]>=0){
                 const PolyRecord *p=&P[sMatch[j]];
-                mid=j<MAX_RECORDS && halfway[j];
+                double x0,y0,x1,y1;
+                mid=p->count==c->count;
+                /* (moved more than a quarter of the screen: not the same
+                 * thing, or a jump; where it is now) */
+                if(mid && ndc_of(p->clip[0],&x0,&y0) && ndc_of(c->clip[0],&x1,&y1) &&
+                   (fabs(x1-x0)>0.5 || fabs(y1-y0)>0.5))mid=0;
                 if(mid){
                     for(k=0;k<c->count;k++){
                         int q;
                         for(q=0;q<4;q++)clip[k][q]=(int32_t)(((int64_t)p->clip[k][q]+c->clip[k][q])/2);
-                        if(sWeld[j*4u+k]>=0){corner_welded(P,C,sWeld[j*4u+k],clip[k]);welded=1;}
                     }
                     used++;
                     soft=soft_of(p,c,now);
@@ -1722,9 +1550,13 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
                  * motion puts it halfway, not where it is now, half a
                  * step ahead of the rest: a building's roof coming in at
                  * the top jumped for a frame, 2026-10-21) */
-                unpaired_halfway(P,C,j,sMotionX,sMotionY,clip);
+                double hx=-0.5*(double)sMotionX/128.0,hy=-0.5*(double)sMotionY/96.0;
+                for(k=0;k<c->count;k++){
+                    clip[k][0]+=(int32_t)floor(hx*(double)clip[k][3]+0.5);
+                    clip[k][1]+=(int32_t)floor(hy*(double)clip[k][3]+0.5);
+                }
             }
-            if(mid && !welded && c->screenOk && P[sMatch[j]].screenOk &&
+            if(mid && c->screenOk && P[sMatch[j]].screenOk &&
                c->viewport==viewport && P[sMatch[j]].viewport==viewport)
                 replay_blended(&P[sMatch[j]],c,clip,&view);
             else replay_polygon(c,clip);

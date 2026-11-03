@@ -1673,16 +1673,6 @@ static bool OnTop(int engine, bool aOnTop)
     return (engine == 0) == aOnTop;
 }
 
-/* (for the [perf] game line) The time each engine's picture was drawn
- * whole again (sMustDraw: the one before not handed over, no set free),
- * and how many weren't handed over. */
-static u64 sWholeTicks[2];
-static unsigned sNotPublished[2];
-/* Whether the picture just drawn is the HM cut-in's (its sprites, or a
- * band of lines, drawn by the compositor): handed over at the drawer's
- * reading priority, above the geometry (DrawerMain). */
-static volatile bool sCutInPicture;
-
 /* What an engine shows, from the game's display state, into its screen's
  * picture. False if it didn't change: that screen keeps showing what it
  * does (not drawn, not swapped). */
@@ -1769,14 +1759,9 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             sMustDraw[1] = true;
         }
         if (sMustDraw[top ? 0 : 1]) {
-            u64 wholeStart = svcGetSystemTick();
-
             sMustDraw[top ? 0 : 1] = false;
             NitroPort_Render2DSplit(engine, layers->under, &split);
             drawn = 1;
-            /* (for the [perf] game line: drawn whole again, the last one not
-             * handed over, no set free) */
-            __atomic_fetch_add(&sWholeTicks[engine ? 1 : 0], svcGetSystemTick() - wholeStart, __ATOMIC_RELAXED);
         } else {
             drawn = NitroPort_Render2DSplitIfChanged(engine, layers->under, &split);
         }
@@ -1840,9 +1825,6 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         layers->gpuObj = split.gpuObj;
         layers->gpuObjAtlas = split.gpuObjAtlas;
         layers->evy = split.evy;
-        if (engine == 0) {
-            sCutInPicture = split.gpuObjsLeftOut || split.gpuCircleOn >= 3;
-        }
         layers->masterBright = split.masterBright;
         layers->backdrop = split.backdrop;
         layers->width = split.width > 256 ? split.width : 256;
@@ -1878,7 +1860,6 @@ static bool ShowScreen(int engine, bool aOnTop)
 
         if (!published) {
             sMustDraw[top ? 0 : 1] = true;
-            __atomic_fetch_add(&sNotPublished[engine ? 1 : 0], 1u, __ATOMIC_RELAXED);
         }
         if (__atomic_load_n(&sGpuWakeReady, __ATOMIC_ACQUIRE)) {
             LightEvent_Signal(&sGpuWake);
@@ -1934,13 +1915,8 @@ static void DrawerMain(void *arg)
         __atomic_store_n(&d->reading, false, __ATOMIC_RELEASE);
         /* Below the threads it was above while reading, to show what it
          * drew; nothing to show (an unchanged screen): no need, and it
-         * would only wait behind them to come back up. Not the HM cut-in's
-         * pictures: handed over behind the geometry, 29 ms each where it
-         * was 4-9 (log aaf1f75e); the cut-in is what's watched then, the
-         * in-between scenes give way (NitroPort_Gx3dSharedCoreDrew). */
-        bool lowered = d->readPriority != d->priority && (drawA || drawB) && !(drawA && sCutInPicture);
-
-        if (lowered) {
+         * would only wait behind them to come back up. */
+        if (d->readPriority != d->priority && (drawA || drawB)) {
             svcSetThreadPriority(CUR_THREAD_HANDLE, d->priority);
         }
         showStart = svcGetSystemTick();
@@ -1969,7 +1945,7 @@ static void DrawerMain(void *arg)
         d->count++;
         /* Back up before it can be handed the next frame: it wakes up
          * reading. */
-        if (lowered) {
+        if (d->readPriority != d->priority && (drawA || drawB)) {
             svcSetThreadPriority(CUR_THREAD_HANDLE, d->readPriority);
         }
         __atomic_store_n(&d->busy, false, __ATOMIC_RELEASE);
@@ -2543,11 +2519,9 @@ static void PerfFrame(u64 enter)
             size_t len = strlen(why);
 
             NitroPort_Render2DTimes(0, &checking, &drawingTicks, &sprites);
-            snprintf(why + len, sizeof(why) - len, "; a frame %.1f ms checking, %.1f drawing (%.1f sprites), %.1f drawing whole again (%u not handed over)",
+            snprintf(why + len, sizeof(why) - len, "; a frame %.1f ms checking, %.1f drawing (%.1f sprites)",
                      (double)checking * 1000.0 / SYSCLOCK_ARM11 / count, (double)drawingTicks * 1000.0 / SYSCLOCK_ARM11 / count,
-                     (double)sprites * 1000.0 / SYSCLOCK_ARM11 / count,
-                     (double)__atomic_exchange_n(&sWholeTicks[0], 0, __ATOMIC_RELAXED) * 1000.0 / SYSCLOCK_ARM11 / count,
-                     __atomic_exchange_n(&sNotPublished[0], 0u, __ATOMIC_RELAXED));
+                     (double)sprites * 1000.0 / SYSCLOCK_ARM11 / count);
         }
         used += snprintf(drawing + used, sizeof(drawing) - (size_t)used,
                          "%s%s %.1f/s (%.1f/s new%s), %.1f ms, %.1f of it handing over (core %d)", i ? "; " : "",

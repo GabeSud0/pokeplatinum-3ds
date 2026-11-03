@@ -2238,34 +2238,6 @@ grey blocks. In `test_gx3d.c`: `test_interpolation_order_shift`,
 `test_interpolation_tile_a_scene`, `test_interpolation_swaying`. The PC runner's `midview FILE` draws the
 in-between scene at the view's size (as `viewsim`).
 
-Seams (2026-11-02): riding the Cycling Road down, the in-between frames
-had white lines along the rocks' ledges. The ground near the screen's
-bottom moves faster than the scene's motion (6 DS pixels a scene against
-4, the perspective), so the window's search paired a ledge's steps (a row
-of one kind every two pixels) a step off, and their neighbours, paired by
-the order, met them a pixel apart. Two fixes. Each band of 8 DS pixels
-down the screen takes the median motion of its sure pairs (the order's,
-or the pair before's); a searched pair whose band moves at least half a
-pixel differently from the scene looks again around where its band puts
-it, and takes a free polygon of its kind nearer by a quarter pixel or more
-(`rows_rematch`). And polygons sharing a corner on the screen (within
-0.02 px, found by a hash of quarter pixels) put it where the surest of
-them puts it halfway: sure, then searched, then no pair; a polygon with no
-pair moves as the corner it shares moved, else as the scene moved
-(`corners_weld`). On a recording of that ride (`rec_river`, the PC's
-replay) the pixels left uncovered in the in-between scenes that both
-scenes either side covered went from 4841 to 1187, and the ledges' lines
-are gone; the matching costs 10% more on the PC. In `test_gx3d.c`:
-`test_interpolation_welded`.
-
-The HM's cut-in (the Pokémon's picture across the screen) took up to 94
-ms a frame: engine A's 2D drawer, sharing the geometry's core, handed the
-picture over below the geometry's priority and waited behind it. Pictures
-with the cut-in's sprites or circle now hand over at the drawer's own
-priority. The `[perf]` line also says how many pictures were drawn whole
-again (`drawing whole again`) and how many of those weren't handed over in
-time.
-
 ## Known
 
 - In the Azahar emulator, the field's 3D sometimes flashes black for a

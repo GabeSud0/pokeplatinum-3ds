@@ -741,33 +741,6 @@ static void test_interpolation_tile_a_scene(void)
     }else CHECK(0);
     NitroPort_Gx3dSetInterpolation(0);
 }
-/* A ledge moving faster than the scene (nearer the camera, the Cycling
- * Road's rocks at the screen's bottom), and beside it a polygon new in the
- * scene sharing its corners: the new one halfway as the ledge it touches
- * moved, not as the scene moved (a pixel's crack, white, between them). */
-static void test_interpolation_welded(void)
-{
-    const NitroGx3dScene *mid;
-    unsigned matched=0,polygons=0;
-    int i,scene;
-    const uint32_t opaque=(3u<<6)|(31u<<16);
-    reset_geometry();
-    NitroPort_Gx3dSetInterpolation(1);
-    swap_done();
-    for(scene=0;scene<2;scene++){
-        for(i=0;i<16;i++)small_quad_at(-3600+450*i-256*scene,-3000,opaque);
-        for(i=0;i<4;i++)small_quad_at(-1000+450*i-384*scene,1000,opaque|(1u<<24));
-        if(scene==1)small_quad_at(-1000-384+400,1000,opaque|(2u<<24));   /* (new: the first step's right side) */
-        swap_done();
-    }
-    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
-    CHECK(mid && polygons==21 && matched==20);
-    if(mid && mid->count==42){
-        CHECK(mid->triangles[32].v[1].clip[0]==-1000-192+400);   /* the step: halfway */
-        CHECK(mid->triangles[40].v[0].clip[0]==-1000-192+400);   /* the new one: there with it */
-    }else CHECK(0);
-    NitroPort_Gx3dSetInterpolation(0);
-}
 /* A model that sways where it is (the starters' Poké Balls in their
  * briefcase): its parts a few pixels from where they were, some nearer a
  * neighbour of their kind than their own place. The scene still: each
@@ -2378,7 +2351,6 @@ static void run_all(void)
     test_interpolation_tile_a_scene();
     test_interpolation_swaying();
     test_interpolation_blended();
-    test_interpolation_welded();
     test_triangle_strip();
     test_hidden_vertices();
     test_textures();
