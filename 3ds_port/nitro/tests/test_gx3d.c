@@ -2044,6 +2044,49 @@ static unsigned list_quad(uint32_t *c,int x,int z)
     c[n++]=0x28;c[n++]=(uint32_t)(1u<<20);                  /* (VTX_DIFF: z + 1) */
     return n;
 }
+/* NitroPort_Gx3dTrimListRows: one list cut into rows by where each
+ * polygon starts in z: the two lists together are the whole, each polygon
+ * in one (rows of a map drawn again two ways, side by side). */
+static void test_list_rows(void)
+{
+    uint32_t cmds[200], w[200]={0}, a[200], b[200];
+    unsigned c=0,i,n;
+    uint32_t na,nb;
+    ListScene *raw=malloc(sizeof(*raw)), *one=malloc(sizeof(*one)), *two=malloc(sizeof(*two));
+    if(!raw||!one||!two){CHECK(0);free(raw);free(one);free(two);return;}
+    cmds[c++]=0x40;cmds[c++]=1;
+    cmds[c++]=0x20;cmds[c++]=RGB(0,31,0);
+    for(i=0;i<6;i++)c+=list_quad(&cmds[c],-1500,10+(int)i*10);   /* (z 10..11, 20..21, ...) */
+    cmds[c++]=0x41;
+    n=dl_pack(w,cmds,c);
+    na=NitroPort_Gx3dTrimListRows(w,n*4u,a,sizeof(a),INT32_MIN,INT32_MAX,INT32_MIN,30,1);
+    nb=NitroPort_Gx3dTrimListRows(w,n*4u,b,sizeof(b),INT32_MIN,INT32_MAX,INT32_MIN,30,0);   /* (the rest) */
+    CHECK(na>0 && nb>0);
+    list_scene(w,n,raw);
+    list_scene(a,na/4u,one);
+    list_scene(b,nb/4u,two);
+    CHECK(raw->count==6);                         /* (a triangle each: list_quad's last vertex on its third) */
+    CHECK(one->count==2 && two->count==4);        /* (z 10, 20 | 30, 40, 50, 60: a quad's start in one) */
+    if(raw->count==6 && one->count==2 && two->count==4){
+        CHECK(same_triangles(raw->tris,one->tris,2));
+        CHECK(same_triangles(raw->tris+2,two->tris,4));
+    }
+    /* (rows in the middle, and the rest: those before and after) */
+    na=NitroPort_Gx3dTrimListRows(w,n*4u,a,sizeof(a),INT32_MIN,INT32_MAX,20,45,1);
+    nb=NitroPort_Gx3dTrimListRows(w,n*4u,b,sizeof(b),INT32_MIN,INT32_MAX,20,45,0);
+    list_scene(a,na/4u,one);
+    list_scene(b,nb/4u,two);
+    CHECK(one->count==3 && two->count==3);        /* (20, 30, 40 | 10, 50, 60) */
+    if(one->count==3 && two->count==3){
+        CHECK(same_triangles(raw->tris+1,one->tris,3));
+        CHECK(same_triangles(raw->tris,two->tris,1) && same_triangles(raw->tris+4,two->tris+1,2));
+    }
+    /* (and an x slab as NitroPort_Gx3dTrimList's: none reaching x 2000) */
+    CHECK(NitroPort_Gx3dTrimListRows(w,n*4u,a,sizeof(a),2000,INT32_MAX,INT32_MIN,INT32_MAX,1)>0);
+    list_scene(a,NitroPort_Gx3dTrimListRows(w,n*4u,a,sizeof(a),2000,INT32_MAX,INT32_MIN,INT32_MAX,1)/4u,one);
+    CHECK(one->count==0);
+    free(raw);free(one);free(two);
+}
 static void test_list_trimmed(void)
 {
     const uint32_t lit=0x200u<<20;
@@ -2176,6 +2219,28 @@ static void test_mid_left_out_behind(void)
     swap();
     scene=NitroPort_Gx3dScene();
     CHECK(NitroPort_Gx3dMidOf(scene)!=NULL);          /* (caught up again) */
+    /* the core's 2D drawn just now: a V-blank late is enough (the 2D's
+     * pictures first), for a few V-blanks */
+    NitroPort_Gx3dMidWork(NULL,NULL,&left0);
+    sTestStamp=20;
+    NitroPort_Gx3dSharedCoreDrew();
+    sHold=1;
+    quad_at(-1800,opaque);
+    swap();                                           /* (ended at V-blank 20) */
+    sTestStamp=21;
+    sHold=0;sem_post(&sGate);
+    scene=NitroPort_Gx3dScene();
+    CHECK(NitroPort_Gx3dMidOf(scene)==NULL);
+    NitroPort_Gx3dMidWork(NULL,NULL,&left);
+    CHECK(left==left0+1u);
+    sTestStamp=30;                                    /* (long after: as before) */
+    sHold=1;
+    quad_at(-1600,opaque);
+    swap();
+    sTestStamp=31;
+    sHold=0;sem_post(&sGate);
+    scene=NitroPort_Gx3dScene();
+    CHECK(NitroPort_Gx3dMidOf(scene)!=NULL);
     sTestStamp=0;
     NitroPort_Gx3dSetInterpolation(0);
 }
@@ -2259,6 +2324,7 @@ int main(void)
     test_thread_behind();
     test_same_scenes_left_out();
     test_list_trimmed();
+    test_list_rows();
     test_mid_left_out_behind();
     test_earlier_scene_unread();
     test_scene_registers();

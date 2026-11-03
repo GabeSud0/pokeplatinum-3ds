@@ -1607,9 +1607,27 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
  * is kept (comparing). */
 static uint32_t sMidsLeftOut;
 static uint64_t sMidTicks;
+/* (NitroPort_Gx3dSharedCoreDrew) When the thread's core last drew a 2D
+ * picture, in V-blanks (NitroPort_Gx3dStamp); valid once it has. */
+static uint32_t sSharedDrewAt;
+static int sSharedDrew;
+void NitroPort_Gx3dSharedCoreDrew(void)
+{
+    __atomic_store_n(&sSharedDrewAt,NitroPort_Gx3dStamp(),__ATOMIC_RELAXED);
+    __atomic_store_n(&sSharedDrew,1,__ATOMIC_RELEASE);
+}
+#define SHARED_RECENT 4u
 static void interp_mid(NitroGx3dScene *now)
 {
     uint64_t t0;
+    uint32_t stampNow=NitroPort_Gx3dStamp();
+    /* (or a V-blank late while the 2D's drawing shares the thread's core,
+     * a picture drawn there in the last SHARED_RECENT V-blanks: the HM
+     * cut-in's pictures took 37-77 ms there with every in-between scene
+     * made, 28-62 without those of the late scenes (logs 31a6ea6d,
+     * 24186035); its pictures are what's watched then) */
+    int sharing=__atomic_load_n(&sSharedDrew,__ATOMIC_ACQUIRE) &&
+                stampNow-__atomic_load_n(&sSharedDrewAt,__ATOMIC_RELAXED)<=SHARED_RECENT;
     /* (a scene behind: the game has ended the next one already. Not just
      * ended late: the thread shares its core with the 2D's drawing, which
      * holds it up a V-blank or two while the HM cut-in or a battle's start
@@ -1617,7 +1635,8 @@ static void interp_mid(NitroGx3dScene *now)
      * then put the field at 30 frames a second, 10-13 a second left out,
      * log 24186035) */
     if(sInterp && sThreaded && !sOps.keep_every_scene &&
-       (int32_t)(__atomic_load_n(&sSwapsQueued,__ATOMIC_RELAXED)-sSwapsDone)>=2){
+       ((int32_t)(__atomic_load_n(&sSwapsQueued,__ATOMIC_RELAXED)-sSwapsDone)>=2 ||
+        (sharing && (int32_t)(stampNow-now->stamp)>=1))){
         sMidOk[sBuilding]=0;
         __atomic_store_n(&sMidsLeftOut,sMidsLeftOut+1u,__ATOMIC_RELAXED);
         return;
@@ -2890,7 +2909,7 @@ void NitroPort_Gx3dReset(void)
     make_products();
     NitroPort_MailboxInit(&sMailbox);
     sBuilding=0;sDisplayed=1;sSerial=0;
-    sRecCount[0]=sRecCount[1]=0;sRecBeforeValid=0;sMidOk[0]=sMidOk[1]=sMidOk[2]=0;sDest=NULL;sReplaying=0;
+    sRecCount[0]=sRecCount[1]=0;sRecBeforeValid=0;sSharedDrew=0;sMidOk[0]=sMidOk[1]=sMidOk[2]=0;sDest=NULL;sReplaying=0;
     sPrevMotionValid=0;
     identity(&s.proj);identity(&s.pos);identity(&s.vec);identity(&s.tex);
     set_wide_view(&s,sWideWidth,sWideHeight);   /* (kept across resets) */
@@ -3181,15 +3200,30 @@ static void dl_vtx16(DlWriter *wr,const int32_t xyz[3])
     v[1]=(uint32_t)xyz[2]&0xFFFFu;
     dl_put(wr,0x23u,v);
 }
-uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
-                                int axis,int32_t lo,int32_t hi)
+/* (a group kept: reaching into lo..hi on each axis, or for those in
+ * `starts`, starting there, lo <= its lowest < hi (each polygon in one of
+ * two lists cut side by side); for those in `outside` too, starting
+ * anywhere but there) */
+static int dl_group_kept(const DlGroup *grp,const int32_t lo[3],const int32_t hi[3],unsigned starts,unsigned outside)
+{
+    int a;
+    for(a=0;a<3;a++){
+        if(starts&(1u<<a)){
+            int in=grp->lo[a]>=lo[a] && grp->lo[a]<hi[a];
+            if(in==!!(outside&(1u<<a)))return 0;
+        }else if(grp->hi[a]<lo[a] || grp->lo[a]>hi[a])return 0;
+    }
+    return 1;
+}
+static uint32_t dl_trim(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
+                        const int32_t lo[3],const int32_t hi[3],unsigned starts,unsigned outside)
 {
     const uint32_t *w=src;
     uint32_t n=bytes/4u,o,g=0;
     DlInfo *info;
     DlWriter wr;
     DlOwed ow;
-    if((bytes&3u) || axis<0 || axis>2 || !dst)return 0;
+    if((bytes&3u) || !dst)return 0;
     info=dl_survey(w,n,1u);
     if(!info)return 0;
     memset(&wr,0,sizeof(wr));
@@ -3201,7 +3235,7 @@ uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_
         while(g<info->ngroups && info->groups[g].begin<o)g++;
         if(g<info->ngroups && info->groups[g].begin==o){
             const DlGroup *grp=&info->groups[g];
-            if(grp->hi[axis]<lo || grp->lo[axis]>hi){
+            if(!dl_group_kept(grp,lo,hi,starts,outside)){
                 dl_owe(&ow,grp,info->xyz[grp->end-1u]);
                 o=grp->end;
                 g++;
@@ -3229,6 +3263,20 @@ uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_
     if(ow.coordOwed)dl_vtx16(&wr,ow.xyz);          /* (not reached: groups end before a BEGIN or END) */
     dl_free(info);
     return wr.full?0:wr.n*4u;
+}
+uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
+                                int axis,int32_t lo,int32_t hi)
+{
+    int32_t l[3]={INT32_MIN,INT32_MIN,INT32_MIN},h[3]={INT32_MAX,INT32_MAX,INT32_MAX};
+    if(axis<0 || axis>2)return 0;
+    l[axis]=lo;h[axis]=hi;
+    return dl_trim(src,bytes,dst,dstBytes,l,h,0u,0u);
+}
+uint32_t NitroPort_Gx3dTrimListRows(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
+                                    int32_t xlo,int32_t xhi,int32_t zlo,int32_t zhi,int inside)
+{
+    int32_t l[3]={xlo,INT32_MIN,zlo},h[3]={xhi,INT32_MAX,zhi};
+    return dl_trim(src,bytes,dst,dstBytes,l,h,4u,inside?0u:4u);
 }
 void NitroPort_GxFifoWord(uint32_t word)
 {

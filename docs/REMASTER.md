@@ -802,6 +802,21 @@ screen's 320 x 192 at 1.25 times, as above.
   materials (named `sea_...`) have their S coordinates turned round again
   through the texture matrix (`Port_MirroredWaterShape`, a shape
   callback).
+- **Route 206 under the bridge, past the scenery** (patch 0070): there a
+  ridge and the grass either side of it cross both of the map's borders,
+  and mirrored, the ridge's half and its mounds and trees showed twice,
+  the same either side of the border. In those rows (`sPortMovedRows`:
+  tiles 617-661 of z on the left, 624-661 on the right) the map goes on
+  as its own other side, moved over instead, the two borders' halves of
+  the ridge meeting; the river, its ledges and the plateau north of the
+  ridge stay mirrored. The copy's lists are cut by rows as well
+  (`NitroPort_Gx3dTrimListRows`: each polygon by where it starts, so the
+  two ways share none), a second copy has the moved rows (cut to the
+  strip by the other border, its culling as it is), and the props go by
+  the same rows (`MapPropManager_RenderRows`). The rows were picked a side
+  at a time, on the PC, where no gap opens where the two ways meet past
+  the border (a cliff ending in the open, the white behind showing); on
+  the right one row of the mirror is kept under the moved ones' first.
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they
@@ -1711,7 +1726,11 @@ quick: no OBJ shown, no bitmap), not on the next frame with a second
 drawing. The `[perf] game` line says why each drawer drew (`upper 29.9/s
 (6.0/s new: 4.0 for registers, palettes or sprites, 2.0 for VRAM), 16.2
 ms, 4.6 of it handing over (core 2)`: handing over is the remaster's
-upscaling into the compositor's textures, `ShowScreen`).
+upscaling into the compositor's textures, `ShowScreen`), and for engine A
+the parts of its time a frame: finding out whether the picture changed,
+drawing it, and of that the HM cut-in's sprites
+(`NitroPort_Render2DTimes`; the cut-in's pictures took 37-77 ms a frame
+under Route 206's bridge, log 31a6ea6d, 15-32 in Eterna before).
 
 Where things run on a New 3DS: the game, the display thread and engine B's
 drawer on core 0 (the game first); engine A's drawer and the geometry on
@@ -1759,7 +1778,10 @@ out (a jump). That left out 10-13 a second while the HM cut-in or a
 battle's start played (log 24186035: the 2D's drawing, 30-60 ms a
 picture on the same core, held the thread up a V-blank or two, and it
 caught up): now only with the thread a whole scene behind, the game
-having ended the next one already; the `[perf] geometry's work` line has the in-between
+having ended the next one already, or a V-blank late while the 2D's
+drawing shares its core, a picture drawn there in the last 4 V-blanks
+(`NitroPort_Gx3dSharedCoreDrew`: the cut-in's pictures took 37-77 ms
+with every in-between scene made, 28-62 without those of the late ones); the `[perf] geometry's work` line has the in-between
 scenes' share of ending scenes (on the road, 2026-11-02: 9-15 ms of the
 25-30 a scene, nearly all of ending scenes), of that the matching of
 their polygons with the scene before's, and how many it left out (on

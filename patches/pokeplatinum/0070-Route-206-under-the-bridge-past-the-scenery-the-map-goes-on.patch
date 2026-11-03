@@ -1,0 +1,486 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 20:00:00 -0700
+Subject: [PATCH] Route 206 under the bridge: past the scenery the map goes on, not mirrored (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Past the scenery beside Route 206 the map is drawn again mirrored about
+its border (0069). Under the bridge, a ridge and the grass either side of
+it cross both borders: mirrored, the ridge's half and its mounds and
+trees showed twice, the same either side of the border, too plainly a
+mirror. There (sPortMovedRows: tiles 617 to 661 of the matrix's z on the
+left, 624 to 661 on the right) the map goes on as its own other side
+instead, moved over: the two borders' halves of the ridge meet. The
+river, its ledges and the plateau north of the ridge stay mirrored.
+
+The copy's lists are cut by rows too (NitroPort_Gx3dTrimListRows: each
+polygon in the rows by where it starts, so the two ways share none), and
+a second copy of the model, its culling as it is, has the moved rows,
+cut to the strip by the other border. The props go by the same rows
+(MapPropManager_RenderRows). The rows were picked a side at a time where
+no gap opens where the two ways meet past the border (a cliff ending in
+the open, the white behind it showing); on the right one row of the
+mirror is kept under the moved ones' first for that.
+
+---
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -1921,6 +1921,63 @@
+ // good (Port_SwapModelCulling).
+ #include <stdlib.h>
+ extern u32 NitroPort_Gx3dTrimList(const void *src, u32 bytes, void *dst, u32 dstBytes, int axis, s32 lo, s32 hi);
++extern u32 NitroPort_Gx3dTrimListRows(const void *src, u32 bytes, void *dst, u32 dstBytes, s32 xlo, s32 xhi, s32 zlo, s32 zhi, int inside);
++
++// Rows of a listed map where, past the scenery, it isn't mirrored but
++// goes on as its own other side, moved over (the map again beside it, as
++// if it were repeated): under Route 206's bridge, a ridge and the grass
++// either side of it cross both borders, and their two halves meet, while
++// mirrored the ridge's half and its mounds and trees showed twice, the
++// same either side of the border (screenshots of 2026-11-02). Elsewhere
++// (the river, the ledges by it, the plateau north of the ridge) mirrored
++// as before. Tiles, in the matrix's z (the player's): fromZ <= z < toZ,
++// past the border on that side (-1 left, 1 right). Where the two ways
++// meet past the border, their ridges and cliffs don't line up; the rows
++// were picked, a side at a time, where no gap opens between them (a cliff
++// ending in the open: the white behind showed through); kept: rows of the
++// mirrored way drawn on past fromZ, under the moved ones' first (the
++// right side's: its ridge's cliff ended in a small white triangle).
++typedef struct PortMovedRows {
++    u16 header;
++    s8 side;
++    u8 kept;
++    u16 fromZ, toZ;
++} PortMovedRows;
++
++static const PortMovedRows sPortMovedRows[] = {
++    { MAP_HEADER_ROUTE_206, -1, 0, 617, 662 },
++    { MAP_HEADER_ROUTE_206, 1, 1, 624, 662 },
++};
++
++// The loaded map's own rows (0 to MAP_TILES_COUNT_Z) drawn moved over past
++// the scenery on side dir: from <= row < to (the mirrored way's left out
++// from *kept rows on); FALSE for none.
++static BOOL Port_MovedRowsOf(const LandDataManager *landDataMan, u8 index, int dir, int *from, int *to, int *kept)
++{
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++    u16 header = MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, loadedMap->mapMatrixIndex);
++    int top = loadedMap->mapMatrixIndex / landDataMan->mapMatrixWidth * MAP_TILES_COUNT_Z;
++
++    for (int i = 0; i < (int)NELEMS(sPortMovedRows); i++) {
++        int f = sPortMovedRows[i].fromZ - top, t = sPortMovedRows[i].toZ - top;
++
++        if (sPortMovedRows[i].header != header || sPortMovedRows[i].side != dir) {
++            continue;
++        }
++
++        f = f < 0 ? 0 : f;
++        t = t > MAP_TILES_COUNT_Z ? MAP_TILES_COUNT_Z : t;
++
++        if (f < t) {
++            *from = f;
++            *to = t;
++            *kept = sPortMovedRows[i].fromZ - top >= 0 ? sPortMovedRows[i].kept : 0;
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
+ 
+ #define PORT_MIRROR_WIDTHS 5
+ static const u8 sPortMirrorWidths[PORT_MIRROR_WIDTHS] = { 4, 8, 12, 16, 24 }; // (tiles past the border; beyond the last: the whole map)
+@@ -1929,12 +1986,17 @@
+     const NNSG3dResFileHeader *source; // (the map's model file it was made from, where, and which side)
+     int mapMatrixIndex;
+     int dir;
++    int rowsFrom, rowsTo; // (the rows moved over, not mirrored: from <= row < to; none if equal)
+     u8 *block; // the model file copied, then the cut lists
+     NNSG3dResMdl *model;
+     u32 *cutOfs; // [width * numShp + shape]: each cut list's place in block (0: the whole list)
+     u32 *cutSize;
+     u32 *wholeOfs; // the shapes' own lists (their ofsDL, sizeDL)
+     u32 *wholeSize;
++    u8 *movedBlock; // (with rows moved over) the same for them: the map's other side, its culling as it is
++    NNSG3dResMdl *movedModel;
++    u32 *movedOfs; // [width * numShp + shape]
++    u32 *movedSize;
+ } PortMirrorCopy;
+ 
+ static PortMirrorCopy sPortMirrorCopies[QUADRANT_COUNT];
+@@ -1946,9 +2008,43 @@
+     free(copy->cutSize);
+     free(copy->wholeOfs);
+     free(copy->wholeSize);
++    free(copy->movedBlock);
++    free(copy->movedOfs);
++    free(copy->movedSize);
+     memset(copy, 0, sizeof(*copy));
+ }
+ 
++// The model file copied with the cut lists after it (cuts[i], sizes[i]
++// bytes; ofs[i] set to each one's place in the block), or NULL.
++static u8 *Port_CopyWithCuts(const NNSG3dResFileHeader *file, void **cuts, const u32 *sizes, u32 *ofs, int total)
++{
++    u32 fileSize = (file->fileSize + 3) & ~3u, cutBytes = 0;
++
++    for (int i = 0; i < total; i++) {
++        cutBytes += cuts[i] != NULL ? sizes[i] : 0;
++    }
++
++    u8 *block = malloc(fileSize + cutBytes);
++
++    if (block == NULL) {
++        return NULL;
++    }
++
++    memcpy(block, file, file->fileSize);
++
++    u32 at = fileSize;
++
++    for (int i = 0; i < total; i++) {
++        if (cuts[i] != NULL) {
++            memcpy(block + at, cuts[i], sizes[i]);
++            ofs[i] = at;
++            at += sizes[i];
++        }
++    }
++
++    return block;
++}
++
+ static void Port_FreeMirrorCopies(void)
+ {
+     for (int i = 0; i < QUADRANT_COUNT; i++) {
+@@ -1960,9 +2056,12 @@
+ {
+     LoadedMap *loadedMap = landDataMan->loadedMaps[index];
+     PortMirrorCopy *copy = &sPortMirrorCopies[index];
++    int rowsFrom = 0, rowsTo = 0, kept = 0;
++    BOOL rows = Port_MovedRowsOf(landDataMan, index, dir, &rowsFrom, &rowsTo, &kept);
+ 
+     if (copy->block != NULL && copy->source == loadedMap->mapModelFile
+-        && copy->mapMatrixIndex == loadedMap->mapMatrixIndex && copy->dir == dir) {
++        && copy->mapMatrixIndex == loadedMap->mapMatrixIndex && copy->dir == dir
++        && copy->rowsFrom == rowsFrom && copy->rowsTo == rowsTo) {
+         return copy;
+     }
+ 
+@@ -1972,74 +2071,124 @@
+     NNSG3dResMdl *model = loadedMap->mapRenderObj.resMdl;
+     NNSG3dResShp *shapes = NNS_G3dGetShp(model);
+     NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(model);
+-    int numShp = shapes->dict.numEntry, total = PORT_MIRROR_WIDTHS * numShp;
+-    u32 fileSize = (file->fileSize + 3) & ~3u, cutBytes = 0;
++    // (with rows moved over, the whole map's width too: its lists cut by
++    // the rows alone, never drawn whole)
++    int widths = rows ? PORT_MIRROR_WIDTHS + 1 : PORT_MIRROR_WIDTHS;
++    int numShp = shapes->dict.numEntry, total = widths * numShp;
+     void **cuts = calloc(total, sizeof(void *));
++    void **moved = rows ? calloc(total, sizeof(void *)) : NULL;
++    BOOL failed = FALSE;
+ 
+     copy->cutOfs = calloc(total, sizeof(u32));
+     copy->cutSize = calloc(total, sizeof(u32));
+     copy->wholeOfs = calloc(numShp, sizeof(u32));
+     copy->wholeSize = calloc(numShp, sizeof(u32));
+ 
+-    if (cuts == NULL || copy->cutOfs == NULL || copy->cutSize == NULL || copy->wholeOfs == NULL || copy->wholeSize == NULL || info->posScale <= 0) {
++    if (rows) {
++        copy->movedOfs = calloc(total, sizeof(u32));
++        copy->movedSize = calloc(total, sizeof(u32));
++    }
++
++    if (cuts == NULL || copy->cutOfs == NULL || copy->cutSize == NULL || copy->wholeOfs == NULL || copy->wholeSize == NULL || info->posScale <= 0
++        || (rows && (moved == NULL || copy->movedOfs == NULL || copy->movedSize == NULL))) {
+         free(cuts);
++        free(moved);
+         Port_FreeMirrorCopy(copy);
+         return NULL;
+     }
+ 
+     // The strip's x in the lists' own coordinates (the model's, before its
+     // posScale): the map's half width from its middle, by the border
+-    // mirrored about (left: dir -1).
++    // mirrored about (left: dir -1). Moved over, the strip by the other
++    // border is what's seen past this one. The rows' z, likewise.
+     s32 tile = (s32)(((s64)MAP_OBJECT_TILE_SIZE << FX32_SHIFT) / info->posScale);
+     s32 half = tile * MAP_TILES_COUNT_X / 2;
++    s32 zFrom = -tile * MAP_TILES_COUNT_Z / 2 + rowsFrom * tile, zTo = -tile * MAP_TILES_COUNT_Z / 2 + rowsTo * tile;
++    s32 zKept = zFrom + kept * tile;
++
++    for (int w = 0; w < widths && !failed; w++) {
++        s32 lo, hi, movedLo, movedHi;
+ 
+-    for (int w = 0; w < PORT_MIRROR_WIDTHS; w++) {
+-        s32 lo = dir < 0 ? -half - tile : half - (sPortMirrorWidths[w] + 1) * tile;
+-        s32 hi = dir < 0 ? -half + (sPortMirrorWidths[w] + 1) * tile : half + tile;
++        if (w < PORT_MIRROR_WIDTHS) {
++            lo = dir < 0 ? -half - tile : half - (sPortMirrorWidths[w] + 1) * tile;
++            hi = dir < 0 ? -half + (sPortMirrorWidths[w] + 1) * tile : half + tile;
++            movedLo = dir > 0 ? -half - tile : half - (sPortMirrorWidths[w] + 1) * tile;
++            movedHi = dir > 0 ? -half + (sPortMirrorWidths[w] + 1) * tile : half + tile;
++        } else {
++            lo = movedLo = -0x7FFFFFFF - 1;
++            hi = movedHi = 0x7FFFFFFF;
++        }
+ 
+-        for (int i = 0; i < numShp; i++) {
++        for (int i = 0; i < numShp && !failed; i++) {
+             NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, i);
++            const void *list = NNS_G3dGetShpDLPtr(shp);
+             u32 size = NNS_G3dGetShpDLSize(shp), room = size + size / 2 + 64;
+             void *cut = malloc(room);
+-            u32 bytes = cut != NULL ? NitroPort_Gx3dTrimList(NNS_G3dGetShpDLPtr(shp), size, cut, room, 0, lo, hi) : 0;
++            u32 bytes;
++
++            if (!rows) {
++                bytes = cut != NULL ? NitroPort_Gx3dTrimList(list, size, cut, room, 0, lo, hi) : 0;
+ 
+-            if (bytes == 0 || bytes >= size) {
+-                free(cut);
+-                continue; // (the whole list)
++                if (bytes == 0 || bytes >= size) {
++                    free(cut);
++                    continue; // (the whole list)
++                }
++            } else {
++                // (cut by the rows, never the whole list: what's left out
++                // is drawn the other way; none can be cut: not done)
++                bytes = cut != NULL ? NitroPort_Gx3dTrimListRows(list, size, cut, room, lo, hi, zKept, zTo, FALSE) : 0;
++
++                if (bytes == 0) {
++                    free(cut);
++                    failed = TRUE;
++                    break;
++                }
+             }
+ 
+             cuts[w * numShp + i] = cut;
+             copy->cutSize[w * numShp + i] = bytes;
+-            cutBytes += bytes;
+-        }
+-    }
+ 
+-    copy->block = malloc(fileSize + cutBytes);
++            if (rows) {
++                void *other = malloc(room);
++                u32 otherBytes = other != NULL ? NitroPort_Gx3dTrimListRows(list, size, other, room, movedLo, movedHi, zFrom, zTo, TRUE) : 0;
++
++                if (otherBytes == 0) {
++                    free(other);
++                    failed = TRUE;
++                    break;
++                }
+ 
+-    if (copy->block == NULL) {
+-        for (int i = 0; i < total; i++) {
+-            free(cuts[i]);
++                moved[w * numShp + i] = other;
++                copy->movedSize[w * numShp + i] = otherBytes;
++            }
+         }
+-
+-        free(cuts);
+-        Port_FreeMirrorCopy(copy);
+-        return NULL;
+     }
+ 
+-    memcpy(copy->block, file, file->fileSize);
++    if (!failed) {
++        copy->block = Port_CopyWithCuts(file, cuts, copy->cutSize, copy->cutOfs, total);
++        failed = copy->block == NULL;
++    }
+ 
+-    u32 at = fileSize;
++    if (!failed && rows) {
++        copy->movedBlock = Port_CopyWithCuts(file, moved, copy->movedSize, copy->movedOfs, total);
++        failed = copy->movedBlock == NULL;
++    }
+ 
+     for (int i = 0; i < total; i++) {
+-        if (cuts[i] != NULL) {
+-            memcpy(copy->block + at, cuts[i], copy->cutSize[i]);
+-            copy->cutOfs[i] = at;
+-            at += copy->cutSize[i];
+-            free(cuts[i]);
++        free(cuts[i]);
++
++        if (moved != NULL) {
++            free(moved[i]);
+         }
+     }
+ 
+     free(cuts);
++    free(moved);
++
++    if (failed) {
++        Port_FreeMirrorCopy(copy);
++        return NULL;
++    }
+ 
+     copy->model = NNS_G3dGetMdlByIdx(NNS_G3dGetMdlSet((NNSG3dResFileHeader *)copy->block), 0);
+     shapes = NNS_G3dGetShp(copy->model);
+@@ -2052,9 +2201,16 @@
+     }
+ 
+     Port_SwapModelCulling(copy->model);
++
++    if (rows) {
++        copy->movedModel = NNS_G3dGetMdlByIdx(NNS_G3dGetMdlSet((NNSG3dResFileHeader *)copy->movedBlock), 0);
++    }
++
+     copy->source = file;
+     copy->mapMatrixIndex = loadedMap->mapMatrixIndex;
+     copy->dir = dir;
++    copy->rowsFrom = rowsFrom;
++    copy->rowsTo = rowsTo;
+     return copy;
+ }
+ 
+@@ -2166,12 +2322,13 @@
+ 
+         NNSG3dResShp *shapes = NNS_G3dGetShp(copy->model);
+         int numShp = shapes->dict.numEntry;
++        BOOL rows = copy->movedBlock != NULL;
+ 
+         for (int s = 0; s < numShp; s++) {
+             NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, s);
+             int k = seen * numShp + s;
+ 
+-            if (seen < PORT_MIRROR_WIDTHS && copy->cutOfs[k] != 0) {
++            if ((rows || seen < PORT_MIRROR_WIDTHS) && copy->cutOfs[k] != 0) {
+                 shp->ofsDL = (u32)(copy->block + copy->cutOfs[k] - (u8 *)shp);
+                 shp->sizeDL = copy->cutSize[k];
+             } else {
+@@ -2193,8 +2350,37 @@
+         NNS_G3dRenderObjResetCallBack(&loadedMap->mapRenderObj);
+         loadedMap->mapRenderObj.resMdl = own;
+ 
++        // (the props by the rows too: their own place's z)
++        fx32 zFrom = (copy->rowsFrom - MAP_TILES_COUNT_Z / 2) * MAP_OBJECT_TILE_SIZE, zTo = (copy->rowsTo - MAP_TILES_COUNT_Z / 2) * MAP_OBJECT_TILE_SIZE;
++
++        if (loadedMap->mapPropManager != NULL) {
++            MapPropManager_RenderRows(&mirrored, TRUE, zFrom, zTo, FALSE, landDataMan->areaDataMan, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, loadedMap->mapPropManager);
++        }
++
++        if (!rows) {
++            continue;
++        }
++
++        // The rows moved over: the map's other side, as it is.
++        shapes = NNS_G3dGetShp(copy->movedModel);
++
++        for (int s = 0; s < numShp; s++) {
++            NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, s);
++            int k = seen * numShp + s;
++
++            shp->ofsDL = (u32)(copy->movedBlock + copy->movedOfs[k] - (u8 *)shp);
++            shp->sizeDL = copy->movedSize[k];
++        }
++
++        VecFx32 one = { FX32_ONE, FX32_ONE, FX32_ONE };
++
++        loadedMap->mapRenderObj.resMdl = copy->movedModel;
++        Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &mirrored, &rotationMatrix, &one);
++        NNS_G3dGeFlushBuffer();
++        loadedMap->mapRenderObj.resMdl = own;
++
+         if (loadedMap->mapPropManager != NULL) {
+-            MapPropManager_RenderMirrored(&mirrored, landDataMan->areaDataMan, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, loadedMap->mapPropManager);
++            MapPropManager_RenderRows(&mirrored, FALSE, zFrom, zTo, TRUE, landDataMan->areaDataMan, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, loadedMap->mapPropManager);
+         }
+     }
+ }
+--- a/src/overlay005/map_prop.c
++++ b/src/overlay005/map_prop.c
+@@ -186,7 +186,9 @@
+     }
+ }
+ 
+-void MapPropManager_RenderMirrored(const VecFx32 *mirrorCentre, const AreaDataManager *areaDataManager, const BOOL applyAttrsToModel, ModelAttributes *const modelAttrs, MapPropManager *mapPropManager)
++// The props drawn mirrored about x = centre (mirrored) or moved by it,
++// those whose z is in zFrom <= z < zTo (inside) or not (!inside).
++static void MapPropManager_RenderOver(const VecFx32 *centre, const BOOL mirrored, const fx32 zFrom, const fx32 zTo, const BOOL inside, const AreaDataManager *areaDataManager, const BOOL applyAttrsToModel, ModelAttributes *const modelAttrs, MapPropManager *mapPropManager)
+ {
+     MtxFx33 rotationMatrix = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
+ 
+@@ -197,11 +199,44 @@
+             continue;
+         }
+ 
++        if ((loadedProp->position.z >= zFrom && loadedProp->position.z < zTo) != inside) {
++            continue;
++        }
++
+         VecFx32 position = loadedProp->position;
+         VecFx32 scale = loadedProp->scale;
+ 
+-        position.x = mirrorCentre->x - position.x;
+-        position.z += mirrorCentre->z;
++        position.z += centre->z;
++
++        if (!mirrored) {
++            position.x += centre->x;
++
++            if (!GFXBoxTest_IsModelInView(loadedProp->model, &position, &rotationMatrix, &scale)) {
++                continue;
++            }
++
++            const MapPropMaterialShape *propMatShp = AreaDataManager_GetMapPropMaterialShape(areaDataManager);
++            u16 propMatShpIDsCount;
++
++            if (applyAttrsToModel == TRUE) {
++                ModelAttributes_ApplyToModel(
++                    modelAttrs,
++                    loadedProp->model,
++                    MODEL_LIGHT_VECTOR_1 | MODEL_LIGHT_VECTOR_2 | MODEL_LIGHT_COLOR_1 | MODEL_LIGHT_COLOR_2 | MODEL_DIFFUSE_REFLECT_COLOR | MODEL_AMBIENT_REFLECT_COLOR | MODEL_SPECULAR_REFLECT_COLOR | MODEL_EMISSION_COLOR);
++            }
++
++            MapProp_GetMaterialShapeIDsCount(loadedProp->modelID, propMatShp, &propMatShpIDsCount);
++
++            if (propMatShpIDsCount == 0) {
++                Easy3D_DrawRenderObj(&loadedProp->renderObj, &position, &rotationMatrix, &scale);
++            } else {
++                MapPropManager_RenderUsing1Mat1Shp(loadedProp->model, &position, &rotationMatrix, &scale, propMatShp, loadedProp->modelID);
++            }
++
++            continue;
++        }
++
++        position.x = centre->x - position.x;
+         scale.x = -scale.x;
+ 
+         if (!GFXBoxTest_IsModelInView(loadedProp->model, &position, &rotationMatrix, &scale)) {
+@@ -231,6 +266,16 @@
+         Port_SwapModelCulling(loadedProp->model);
+     }
+ }
++
++void MapPropManager_RenderMirrored(const VecFx32 *mirrorCentre, const AreaDataManager *areaDataManager, const BOOL applyAttrsToModel, ModelAttributes *const modelAttrs, MapPropManager *mapPropManager)
++{
++    MapPropManager_RenderOver(mirrorCentre, TRUE, 0, 0, FALSE, areaDataManager, applyAttrsToModel, modelAttrs, mapPropManager);
++}
++
++void MapPropManager_RenderRows(const VecFx32 *centre, const BOOL mirrored, const fx32 zFrom, const fx32 zTo, const BOOL inside, const AreaDataManager *areaDataManager, const BOOL applyAttrsToModel, ModelAttributes *const modelAttrs, MapPropManager *mapPropManager)
++{
++    MapPropManager_RenderOver(centre, mirrored, zFrom, zTo, inside, areaDataManager, applyAttrsToModel, modelAttrs, mapPropManager);
++}
+ #endif
+ 
+ VecFx32 *MapProp_GetRotation(MapProp *mapProp)
+--- a/include/overlay005/map_prop.h
++++ b/include/overlay005/map_prop.h
+@@ -41,6 +41,9 @@
+ // middle at mirrorCentre (the wider field's view past a forest's edge,
+ // land_data.c). Each model's culled side is swapped while it's drawn.
+ void MapPropManager_RenderMirrored(const VecFx32 *mirrorCentre, const AreaDataManager *areaDataManager, const BOOL applyAttrsToModel, ModelAttributes *const modelAttrs, MapPropManager *mapPropManager);
++// (the 3DS port) The props whose z is in zFrom <= z < zTo (inside) or not
++// (!inside), drawn mirrored about x = centre (mirrored) or moved by it.
++void MapPropManager_RenderRows(const VecFx32 *centre, const BOOL mirrored, const fx32 zFrom, const fx32 zTo, const BOOL inside, const AreaDataManager *areaDataManager, const BOOL applyAttrsToModel, ModelAttributes *const modelAttrs, MapPropManager *mapPropManager);
+ // A model's materials' culled side swapped (front for back): for a model
+ // drawn mirrored, its faces turn the other way. Done twice, as it was.
+ void Port_SwapModelCulling(NNSG3dResMdl *model);
+-- 
+2.43.0

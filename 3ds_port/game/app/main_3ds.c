@@ -1903,6 +1903,11 @@ static void DrawerMain(void *arg)
          * rest: the game waits for the reading only (NitroPort_OnFrame). */
         if (d->screens & ENGINE_A) {
             drawA = RenderScreen(0, d->aOnTop, d->stamp);
+            /* (drawn on the geometry thread's core: its in-between scenes
+             * give way for a few V-blanks) */
+            if (drawA && d->core == sGeoCore) {
+                NitroPort_Gx3dSharedCoreDrew();
+            }
         }
         if (d->screens & ENGINE_B) {
             drawB = RenderScreen(1, d->aOnTop, d->stamp);
@@ -1969,6 +1974,11 @@ static void DrawersImageHandedOver(void)
     }
 }
 
+static uint64_t SystemTick(void)
+{
+    return svcGetSystemTick();
+}
+
 static bool StartDrawer(int screens, s32 priority, s32 readPriority, int core)
 {
     Drawer *d = &sDrawers[sDrawerCount];
@@ -2014,6 +2024,7 @@ static void StartDrawers(s32 priority, bool isNew3ds)
     } else {
         StartDrawer(ENGINE_A | ENGINE_B, priority + 1, priority + 1, 0);
     }
+    NitroPort_Render2DSetClock(SystemTick);   /* (the [perf] game line's drawing parts) */
     __atomic_store_n(&sDrawersStarted, true, __ATOMIC_RELEASE);
 }
 
@@ -2451,7 +2462,7 @@ static void PerfFrame(u64 enter)
     double seconds, perFrame;
     u64 soundTicks, soundSamples, gpuTicks;
     unsigned gpuScenes, gpuTriangles, gpuDroppedTriangles;
-    char drawing[400];
+    char drawing[640];
     int i, used = 0;
 
     if (sPerfStart == 0) {
@@ -2484,7 +2495,7 @@ static void PerfFrame(u64 enter)
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
         unsigned count = d->count, registers = 0, vram = 0, r, v;
-        char why[96] = "";
+        char why[192] = "";
 
         /* (the remaster: why its pictures were drawn again) */
         if (sRemaster && (d->screens & ENGINE_A)) {
@@ -2500,6 +2511,17 @@ static void PerfFrame(u64 enter)
         if (registers + vram) {
             snprintf(why, sizeof(why), ": %.1f for registers, palettes or sprites, %.1f for VRAM", registers / seconds,
                      vram / seconds);
+        }
+        /* (the remaster's engine A: of its time a frame, finding out if the
+         * picture changed, drawing it, and of that the HM cut-in's sprites) */
+        if (sRemaster && (d->screens & ENGINE_A) && count) {
+            uint64_t checking, drawingTicks, sprites;
+            size_t len = strlen(why);
+
+            NitroPort_Render2DTimes(0, &checking, &drawingTicks, &sprites);
+            snprintf(why + len, sizeof(why) - len, "; a frame %.1f ms checking, %.1f drawing (%.1f sprites)",
+                     (double)checking * 1000.0 / SYSCLOCK_ARM11 / count, (double)drawingTicks * 1000.0 / SYSCLOCK_ARM11 / count,
+                     (double)sprites * 1000.0 / SYSCLOCK_ARM11 / count);
         }
         used += snprintf(drawing + used, sizeof(drawing) - (size_t)used,
                          "%s%s %.1f/s (%.1f/s new%s), %.1f ms, %.1f of it handing over (core %d)", i ? "; " : "",

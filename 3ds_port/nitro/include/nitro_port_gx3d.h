@@ -296,6 +296,13 @@ uint32_t NitroPort_Gx3dSameScenesLeftOut(void);
  * list can't be cut (or doesn't fit): draw the whole of it. */
 uint32_t NitroPort_Gx3dTrimList(const void *src, uint32_t bytes, void *dst, uint32_t dstBytes,
                                 int axis, int32_t lo, int32_t hi);
+/* The same, with only the polygons that reach into xlo <= x <= xhi and
+ * start (their lowest z) in zlo <= z < zhi (inside), or anywhere but
+ * there (!inside): the two lists share no polygon, and have them all
+ * between them (rows of a map drawn again two ways). 0 if it can't be cut
+ * (or doesn't fit). */
+uint32_t NitroPort_Gx3dTrimListRows(const void *src, uint32_t bytes, void *dst, uint32_t dstBytes,
+                                    int32_t xlo, int32_t xhi, int32_t zlo, int32_t zhi, int inside);
 /* (for the [perf] geometry's work line) The time the thread has spent
  * making in-between scenes (NitroPort_Gx3dSetInterpolation), in the ticks
  * of NitroGx3dThreadOps.ticks, of it matching their polygons with the
@@ -303,6 +310,11 @@ uint32_t NitroPort_Gx3dTrimList(const void *src, uint32_t bytes, void *dst, uint
  * V-blank or more after the game did: rather than a scene left out
  * later), so far. */
 void NitroPort_Gx3dMidWork(uint64_t *ticks, uint64_t *matchTicks, uint32_t *leftOut);
+/* The geometry thread's core has just drawn a 2D picture (the platform's
+ * drawing thread there, sharing it): for a few V-blanks, an in-between
+ * scene is left out when the thread ends its scene a V-blank late (else
+ * only when it's a whole scene behind), so the 2D's pictures come first. */
+void NitroPort_Gx3dSharedCoreDrew(void);
 /* (the [perf] in-between matching line) The matching's time so far, in
  * its four parts (the order's pairs, the scene's motion, each polygon
  * again by where it is, one each), in NitroGx3dThreadOps.ticks; the

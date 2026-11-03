@@ -2977,6 +2977,8 @@ static BOOL MakeGpuObjs(const Engine *e, u32 dispcnt, NitroRender2DSplit *split)
     return TRUE;
 }
 
+static uint64_t sObjTicks[2];   /* (NitroPort_Render2DTimes, below) */
+static uint64_t ClockNow(void);
 /* (drawing a picture: NitroRender2DSplit.gpuObjs) The sprites left out of
  * it, when they can be: TRUE then, with them in split. */
 static BOOL GpuObjsLeaveOut(const Engine *e, const ObjFrame *f, u32 dispcnt, NitroRender2DSplit *split)
@@ -2988,7 +2990,11 @@ static BOOL GpuObjsLeaveOut(const Engine *e, const ObjFrame *f, u32 dispcnt, Nit
         e->squeeze || sGpuObjsRefused || !GpuObjsOf(e->io, e->oam, e->lines != NULL)) {
         return FALSE;
     }
-    if (e->nObjMove > 0 || f->artCount > 0 || !MakeGpuObjs(e, dispcnt, split)) {
+    uint64_t objStart = ClockNow();
+    BOOL made = e->nObjMove == 0 && f->artCount == 0 && MakeGpuObjs(e, dispcnt, split);
+
+    __atomic_fetch_add(&sObjTicks[0], ClockNow() - objStart, __ATOMIC_RELAXED);
+    if (!made) {
         sGpuObjsRefused = 1;
         split->gpuObjCount = 0;
         return FALSE;
@@ -6313,6 +6319,38 @@ static u32 EngineShownVramSignature(int engine, int snapshot, int linesOnlyWindo
 /* (each engine's pictures drawn again by Render2D*IfChanged, and why:
  * NitroPort_Render2DChangeStats) */
 static volatile unsigned sChangedSmall[2], sChangedVram[2];
+/* (and where NitroPort_Render2DSplitIfChanged's time goes, with a clock:
+ * NitroPort_Render2DSetClock, NitroPort_Render2DTimes) */
+static uint64_t (*sClock)(void);
+static uint64_t sCheckTicks[2], sDrawTicks[2], sObjTicks[2];
+
+void NitroPort_Render2DSetClock(uint64_t (*clock)(void))
+{
+    sClock = clock;
+}
+
+void NitroPort_Render2DTimes(int engine, uint64_t *checking, uint64_t *drawing, uint64_t *sprites)
+{
+    int e = engine ? 1 : 0;
+
+    *checking = __atomic_exchange_n(&sCheckTicks[e], 0u, __ATOMIC_ACQ_REL);
+    *drawing = __atomic_exchange_n(&sDrawTicks[e], 0u, __ATOMIC_ACQ_REL);
+    *sprites = __atomic_exchange_n(&sObjTicks[e], 0u, __ATOMIC_ACQ_REL);
+}
+
+static uint64_t ClockNow(void)
+{
+    return sClock ? sClock() : 0;
+}
+
+/* Drawn by NitroPort_Render2DSplitIfChanged, timed. */
+static void RenderTimed(int engine, u16 *out, NitroRender2DSplit *split)
+{
+    uint64_t start = ClockNow();
+
+    Render(engine, out, split);
+    __atomic_fetch_add(&sDrawTicks[engine ? 1 : 0], ClockNow() - start, __ATOMIC_RELAXED);
+}
 
 void NitroPort_Render2DChangeStats(int engine, unsigned *registers, unsigned *vram)
 {
@@ -6352,6 +6390,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     int gpuCircle = 0;
     u8 rowsShown = 0;
     u32 small, vram = 0;
+    uint64_t checkStart = ClockNow();
 
     if (e == 0 && split->gpuBgs) {
         const State2D *st = &sState[0];
@@ -6433,17 +6472,19 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
         last[e].vramValid = ShownVramSignature(e, split->snapshot, 1, gpuCircle != 0, &vram);
         last[e].vram = vram;
         __atomic_fetch_add(&sChangedSmall[e], 1u, __ATOMIC_RELAXED);
-        Render(engine, under, split);
+        __atomic_fetch_add(&sCheckTicks[e], ClockNow() - checkStart, __ATOMIC_RELAXED);
+        RenderTimed(engine, under, split);
         return 1;
     }
     vram = EngineShownVramSignature(e, split->snapshot, gpuCircle != 0);
+    __atomic_fetch_add(&sCheckTicks[e], ClockNow() - checkStart, __ATOMIC_RELAXED);
     if (last[e].vramValid && vram == last[e].vram) {
         return 0;
     }
     __atomic_fetch_add(last[e].vramValid ? &sChangedVram[e] : &sChangedSmall[e], 1u, __ATOMIC_RELAXED);
     last[e].vram = vram;
     last[e].vramValid = 1;
-    Render(engine, under, split);
+    RenderTimed(engine, under, split);
     return 1;
 }
 

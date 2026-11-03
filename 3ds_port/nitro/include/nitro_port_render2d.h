@@ -198,6 +198,12 @@ int NitroPort_Render2DSplitIfChanged(int engine, uint16_t *under, NitroRender2DS
  * engine's picture since the last call: for a change to its registers,
  * palettes or OAM (registers), or to the VRAM it shows (vram). */
 void NitroPort_Render2DChangeStats(int engine, unsigned *registers, unsigned *vram);
+/* (for the log) The time NitroPort_Render2DSplitIfChanged has spent on an
+ * engine since the last call, in the clock's ticks: finding out whether
+ * the picture changed (checking), drawing it (drawing), and of that the
+ * HM cut-in's sprites' atlas (sprites). With a clock set (0 without). */
+void NitroPort_Render2DSetClock(uint64_t (*clock)(void));
+void NitroPort_Render2DTimes(int engine, uint64_t *checking, uint64_t *drawing, uint64_t *sprites);
 /* An engine's master brightness (its MASTER_BRIGHT register), from the
  * state taken when the frame was handed over (snapshot: 1) or as it is: for
  * a screen not drawn (the lower menu's panel showing the map) whose
