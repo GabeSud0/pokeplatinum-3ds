@@ -1842,36 +1842,20 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
  * is kept (comparing). */
 static uint32_t sMidsLeftOut;
 static uint64_t sMidTicks;
-/* (NitroPort_Gx3dSharedCoreDrew) When the thread's core last drew a 2D
- * picture, in V-blanks (NitroPort_Gx3dStamp); valid once it has. */
-static uint32_t sSharedDrewAt;
-static int sSharedDrew;
-void NitroPort_Gx3dSharedCoreDrew(void)
-{
-    __atomic_store_n(&sSharedDrewAt,NitroPort_Gx3dStamp(),__ATOMIC_RELAXED);
-    __atomic_store_n(&sSharedDrew,1,__ATOMIC_RELEASE);
-}
-#define SHARED_RECENT 4u
 static void interp_mid(NitroGx3dScene *now)
 {
     uint64_t t0;
-    uint32_t stampNow=NitroPort_Gx3dStamp();
-    /* (or a V-blank late while the 2D's drawing shares the thread's core,
-     * a picture drawn there in the last SHARED_RECENT V-blanks: the HM
-     * cut-in's pictures took 37-77 ms there with every in-between scene
-     * made, 28-62 without those of the late scenes (logs 31a6ea6d,
-     * 24186035); its pictures are what's watched then) */
-    int sharing=__atomic_load_n(&sSharedDrew,__ATOMIC_ACQUIRE) &&
-                stampNow-__atomic_load_n(&sSharedDrewAt,__ATOMIC_RELAXED)<=SHARED_RECENT;
     /* (a scene behind: the game has ended the next one already. Not just
      * ended late: the thread shares its core with the 2D's drawing, which
      * holds it up a V-blank or two while the HM cut-in or a battle's start
      * plays, and it caught up again; leaving the in-between scenes out
      * then put the field at 30 frames a second, 10-13 a second left out,
-     * log 24186035) */
+     * log 24186035. Nor a V-blank late just after a 2D picture drawn on
+     * its core: so left out, 6-11 a second through the HM cut-in's text
+     * and start and the place names' signs, the field stuttered, log
+     * 6fb7c4a4; before that rule 0-0.5, log 31a6ea6d) */
     if(sInterp && sThreaded && !sOps.keep_every_scene &&
-       ((int32_t)(__atomic_load_n(&sSwapsQueued,__ATOMIC_RELAXED)-sSwapsDone)>=2 ||
-        (sharing && (int32_t)(stampNow-now->stamp)>=1))){
+       (int32_t)(__atomic_load_n(&sSwapsQueued,__ATOMIC_RELAXED)-sSwapsDone)>=2){
         sMidOk[sBuilding]=0;
         __atomic_store_n(&sMidsLeftOut,sMidsLeftOut+1u,__ATOMIC_RELAXED);
         return;
@@ -3144,7 +3128,7 @@ void NitroPort_Gx3dReset(void)
     make_products();
     NitroPort_MailboxInit(&sMailbox);
     sBuilding=0;sDisplayed=1;sSerial=0;
-    sRecCount[0]=sRecCount[1]=0;sRecBeforeValid=0;sSharedDrew=0;sMidOk[0]=sMidOk[1]=sMidOk[2]=0;sDest=NULL;sReplaying=0;
+    sRecCount[0]=sRecCount[1]=0;sRecBeforeValid=0;sMidOk[0]=sMidOk[1]=sMidOk[2]=0;sDest=NULL;sReplaying=0;
     sPrevMotionValid=0;
     identity(&s.proj);identity(&s.pos);identity(&s.vec);identity(&s.tex);
     set_wide_view(&s,sWideWidth,sWideHeight);   /* (kept across resets) */

@@ -2270,28 +2270,6 @@ static void test_mid_left_out_behind(void)
     swap();
     scene=NitroPort_Gx3dScene();
     CHECK(NitroPort_Gx3dMidOf(scene)!=NULL);          /* (caught up again) */
-    /* the core's 2D drawn just now: a V-blank late is enough (the 2D's
-     * pictures first), for a few V-blanks */
-    NitroPort_Gx3dMidWork(NULL,NULL,&left0);
-    sTestStamp=20;
-    NitroPort_Gx3dSharedCoreDrew();
-    sHold=1;
-    quad_at(-1800,opaque);
-    swap();                                           /* (ended at V-blank 20) */
-    sTestStamp=21;
-    sHold=0;sem_post(&sGate);
-    scene=NitroPort_Gx3dScene();
-    CHECK(NitroPort_Gx3dMidOf(scene)==NULL);
-    NitroPort_Gx3dMidWork(NULL,NULL,&left);
-    CHECK(left==left0+1u);
-    sTestStamp=30;                                    /* (long after: as before) */
-    sHold=1;
-    quad_at(-1600,opaque);
-    swap();
-    sTestStamp=31;
-    sHold=0;sem_post(&sGate);
-    scene=NitroPort_Gx3dScene();
-    CHECK(NitroPort_Gx3dMidOf(scene)!=NULL);
     sTestStamp=0;
     NitroPort_Gx3dSetInterpolation(0);
 }

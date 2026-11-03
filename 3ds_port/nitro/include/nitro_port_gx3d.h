@@ -310,11 +310,6 @@ uint32_t NitroPort_Gx3dTrimListRows(const void *src, uint32_t bytes, void *dst, 
  * V-blank or more after the game did: rather than a scene left out
  * later), so far. */
 void NitroPort_Gx3dMidWork(uint64_t *ticks, uint64_t *matchTicks, uint32_t *leftOut);
-/* The geometry thread's core has just drawn a 2D picture (the platform's
- * drawing thread there, sharing it): for a few V-blanks, an in-between
- * scene is left out when the thread ends its scene a V-blank late (else
- * only when it's a whole scene behind), so the 2D's pictures come first. */
-void NitroPort_Gx3dSharedCoreDrew(void);
 /* (the [perf] in-between matching line) The matching's time so far, in
  * its four parts (the order's pairs, the scene's motion, each polygon
  * again by where it is, one each), in NitroGx3dThreadOps.ticks; the

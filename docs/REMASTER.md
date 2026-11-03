@@ -1778,10 +1778,13 @@ out (a jump). That left out 10-13 a second while the HM cut-in or a
 battle's start played (log 24186035: the 2D's drawing, 30-60 ms a
 picture on the same core, held the thread up a V-blank or two, and it
 caught up): now only with the thread a whole scene behind, the game
-having ended the next one already, or a V-blank late while the 2D's
-drawing shares its core, a picture drawn there in the last 4 V-blanks
-(`NitroPort_Gx3dSharedCoreDrew`: the cut-in's pictures took 37-77 ms
-with every in-between scene made, 28-62 without those of the late ones); the `[perf] geometry's work` line has the in-between
+having ended the next one already. (For a day they were left out a
+V-blank late too while the 2D's drawing shared the thread's core, a
+picture drawn there in the last 4 V-blanks, to get the HM cut-in's
+pictures out sooner: 6-11 a second were left out through the cut-in's
+text and start and as the place names' signs slid in, the field
+stuttering, log 6fb7c4a4, against 0-0.5 before, log 31a6ea6d. Taken out
+again, 2026-11-03.) The `[perf] geometry's work` line has the in-between
 scenes' share of ending scenes (on the road, 2026-11-02: 9-15 ms of the
 25-30 a scene, nearly all of ending scenes), of that the matching of
 their polygons with the scene before's, and how many it left out (on

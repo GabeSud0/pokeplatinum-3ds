@@ -1903,11 +1903,6 @@ static void DrawerMain(void *arg)
          * rest: the game waits for the reading only (NitroPort_OnFrame). */
         if (d->screens & ENGINE_A) {
             drawA = RenderScreen(0, d->aOnTop, d->stamp);
-            /* (drawn on the geometry thread's core: its in-between scenes
-             * give way for a few V-blanks) */
-            if (drawA && d->core == sGeoCore) {
-                NitroPort_Gx3dSharedCoreDrew();
-            }
         }
         if (d->screens & ENGINE_B) {
             drawB = RenderScreen(1, d->aOnTop, d->stamp);
