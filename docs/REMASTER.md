@@ -2061,6 +2061,14 @@ compositor's sprites (the cut-in's wind and Pokémon) are cut to the band's
 lines while it closes, and while it's closed further than the game's
 (`sObjClip`): the game still shows them for two steps, and over the field
 the dots and the Pokémon's parts showed for a few frames after it closed.
+Then the game deletes its sprites, puts BG3 back (cleared, its own size
+again) and a game frame later takes the window away; the DS shows the
+last of the sprites in the band's 16 lines till then. With the
+compositor's sprites ended as they were deleted, those frames' pictures
+had them drawn in, not a band the compositor draws: the band jumped back
+open to 16 lines (the DS's), its close not seen through (2026-11-03,
+noticed once the cut-in's pictures came quicker). Patch 0071 keeps them
+the compositor's till the window goes (`CutIn_PortFieldCellsOff`).
 
 Eterna Forest's light finer than a pixel (patch 0061, 2026-10-31): the
 game keeps the clouds' place finer than a pixel as they follow the camera,
