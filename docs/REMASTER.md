@@ -2037,7 +2037,10 @@ Route 206 (10-14 pictures a second, the in-between scenes giving way,
 after the band's first picture, every one of them its sprites alone (77
 of 78), and each frame the same as drawn whole (layers, sprites, atlas).
 The `[perf]` game line says how many a second were the sprites only. In
-`test_render.c`: `test_gpu_objs`.
+`test_render.c`: `test_gpu_objs`. Their pixels (the atlas, made 512 x 256
+texels and flushed for each picture) are made again for a set only when
+they changed, and only the rows in use (`atlas_rows`, `atlas_key`): through
+the cut-in its sprites mostly move, their pictures the same.
 
 Their in-between frames without an in-between scene (2026-11-03): the
 compositor's sprites are halfway in an in-between frame, but with the 3D

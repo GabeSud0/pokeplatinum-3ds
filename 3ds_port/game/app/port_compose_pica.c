@@ -145,6 +145,10 @@ typedef struct LayerSet {
     void *objTex;
     int objCount;
     NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
+    /* (what objTex holds: the atlas's first objRows rows, their key;
+     * objValid: written) */
+    uint64_t objKey;
+    int objRows, objValid;
 } LayerSet;
 
 /* BG pictures: 2x2 texels a pixel of a 256 x 256 map (and a row of tiles
@@ -694,6 +698,7 @@ static void free_sets(Screen *scr)
         scr->set[i].bgValid = 0;
         scr->set[i].objTex = NULL;
         scr->set[i].objCount = -1;
+        scr->set[i].objValid = 0;
     }
 }
 
@@ -1076,6 +1081,7 @@ static int compose_init(const ComposeConfig *config, int small)
     for (i = 0; i < SETS && sObjsAvailable; i++) {
         sScreens[0].set[i].objTex = linearAlloc(OBJ_TEX_ALLOC);
         sScreens[0].set[i].objCount = -1;
+        sScreens[0].set[i].objValid = 0;
         if (!sScreens[0].set[i].objTex) {
             sObjsAvailable = 0;
         }
@@ -1607,6 +1613,39 @@ static void flush_texture(void *data, uint32_t bytes)
     GSPGPU_FlushDataCache(data, bytes);
 }
 
+/* (NitroPort_ComposePublish) The sprites' atlas rows in use: down to the
+ * row below the lowest of their pictures, 4 at a time (a tile's 8 texels
+ * doubled). */
+static int atlas_rows(const NitroGpuObj *objs, int n)
+{
+    int k, rows = 0;
+
+    for (k = 0; k < n; k++) {
+        int bottom = (int)objs[k].ay + (int)objs[k].h + 1;
+
+        if (bottom > rows) {
+            rows = bottom;
+        }
+    }
+    rows = (rows + 3) & ~3;
+    return rows > NITRO_GPU_OBJ_ATLAS_H ? NITRO_GPU_OBJ_ATLAS_H : rows;
+}
+
+/* (and) A key of what those rows hold: two hashes of their words. */
+static uint64_t atlas_key(const uint16_t *atlas, int rows)
+{
+    const uint32_t *w = (const uint32_t *)(const void *)atlas;
+    uint32_t a = 2166136261u, b = 0x9E3779B9u;
+    int i, n = rows * NITRO_GPU_OBJ_ATLAS_W / 2;
+
+    for (i = 0; i < n; i++) {
+        a = (a ^ w[i]) * 16777619u;
+        b = (b + w[i]) * 2654435761u;
+        b ^= b >> 15;
+    }
+    return (((uint64_t)a << 32) | b) ^ (uint64_t)rows;
+}
+
 int NitroPort_ComposePublish(int engine, int screen)
 {
     int e = engine ? 1 : 0, i, buf = -1;
@@ -1694,8 +1733,22 @@ int NitroPort_ComposePublish(int engine, int screen)
     /* Engine A's sprites drawn here: their pixels, and what each shows. */
     set->objCount = -1;
     if (!l->displayOff && l->gpuObjCount >= 0 && set->objTex && l->gpuObj && l->gpuObjAtlas) {
-        NitroPort_Double2xTiled16(l->gpuObjAtlas, NITRO_GPU_OBJ_ATLAS_W, NITRO_GPU_OBJ_ATLAS_H, set->objTex, OBJ_TEX_W);
-        GSPGPU_FlushDataCache(set->objTex, OBJ_TEX_BYTES);
+        /* (their pixels: the rows in use, and only if the set doesn't hold
+         * them already. Through the HM cut-in its sprites mostly move, their
+         * pictures the same: the atlas, 512 x 256 texels made and flushed
+         * for each of its pictures, was much of the hand-over's ~7 ms on
+         * the 3D's core, 2026-11-03) */
+        int rows = atlas_rows(l->gpuObj, l->gpuObjCount);
+        uint64_t key = rows > 0 ? atlas_key(l->gpuObjAtlas, rows) : 0;
+
+        if (rows > 0 && (!set->objValid || set->objKey != key)) {
+            NitroPort_Double2xTiled16Rows(l->gpuObjAtlas, NITRO_GPU_OBJ_ATLAS_W, NITRO_GPU_OBJ_ATLAS_H, 0, rows,
+                                          set->objTex, OBJ_TEX_W);
+            GSPGPU_FlushDataCache(set->objTex, (u32)rows * OBJ_TEX_W * 4u);
+            set->objKey = key;
+            set->objRows = rows;
+            set->objValid = 1;
+        }
         memcpy(set->objs, l->gpuObj, (size_t)l->gpuObjCount * sizeof(set->objs[0]));
         set->objCount = l->gpuObjCount;
     }
