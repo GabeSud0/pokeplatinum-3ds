@@ -2139,6 +2139,42 @@ about 1.9 to 2.1 pixels a step, changing slowly. Halfway goes the shorter
 way round 256 (the picture repeats every 256: a register gone from 202 to
 459 is a pixel on).
 
+The place name sign (2026-11-03): it slides in and out by its BG's
+vertical scroll (BG3, 4 lines a game step, every other frame: 38 to 0,
+then back), and every step drew the picture whole and handed it over
+again: 30 steps a second at most, and on the 3D's core, the in-between
+scenes giving way (the field stuttered as a route's or a city's sign came
+and went). Now the compositor draws it (`NitroRender2DSplit.gpuSigns`,
+`GpuSignOf`): when that BG is in front of everything (every other BG and
+the 3D behind it, no sprite on the picture, no windows, no H-blank effect,
+no colour effect on it as a first target), all it shows is in at most 7
+rows of tiles of its 256 x 256 map (`BgTextRowsShown`), no other copy of
+them comes on the picture as it scrolls round its map, and on the tall
+field they're in the BG's one window, moved to the picture's top or
+bottom the same way at the scroll 0 and now (`GpuSignTallMove`), the
+picture is drawn without it (`gpuSignLeftOut`) and the band of its lines
+is drawn on its own as it would be at the scroll 0
+(`NitroPort_Render2DSignPicture`: the canvas's width, the anchored sign at
+its left edge; made again only when its key changes: the BG's map, tiles,
+colours, its other scroll, the canvas and the windows). The compositor
+draws that over the picture moved up by the BG's scroll in the frame shown
+(the frame's noted scrolls, as the weather's), halfway in the in-between
+frames (2 lines a frame), in an in-between frame of its own when only it
+moved (`sign_moved`, as the GPU sprites), a texel a pixel (the set's
+`signTex`, 512 x 64: 64 KB a set; at 2x2 texels a pixel, as the over
+layer, the three sets would take 768 KB of the linear heap): on the field
+at the DS's pixel size only (`NitroPort_PixelField`, the default), drawn
+a pixel a pixel; elsewhere the picture draws it, as before. A frame's
+scroll is taken only within 8 lines of the picture's own (the game puts
+the sign up scrolled 38, the frame before 0, and takes it away scrolled 0
+again: a picture of one frame with the scene of the next or the one
+before showed it whole for a frame). Its vertical scroll
+isn't a change once a picture has left it out (`sSignDrawn`): the picture
+isn't drawn again as it slides. In `test_render.c`: `test_gpu_sign` (on
+the DS's canvas, the wider one and the tall field's, each scroll of the
+slide the same, pixel for pixel, as the picture drawn with it). The PC
+runner draws it over its picture the same way.
+
 Which frame goes with a scene (2026-10-30): the weather BG's scrolls, the
 GPU sprites' places, the circle fade and the master brightness are noted
 each frame the game hands over, with the count of SWAP_BUFFERS the game has

@@ -138,6 +138,13 @@ typedef struct LayerSet {
     void *bgTex;
     uint64_t bgKey;
     int bgValid;
+    /* (the upper screen's) A band of a BG drawn here as it scrolls (the
+     * place name sign: ComposeLayers.gpuSign): its picture, a texel a pixel
+     * (SIGN_TEX_W x SIGN_TEX_H RGBA5551, tiled), and its key (signValid:
+     * written). */
+    void *signTex;
+    uint64_t signKey;
+    int signValid;
     /* (the upper screen's) Engine A's sprites drawn here (ComposeLayers.
      * gpuObjCount; -1: in the picture): their pixels, 2x2 texels a pixel
      * (OBJ_TEX_W x OBJ_TEX_H RGBA5551, tiled), and what each sprite shows
@@ -158,6 +165,19 @@ typedef struct LayerSet {
 #define BG_TEX_ALLOC (BG_TEX_BYTES + BG_TEX_W * 8 * 2)
 static int sBgsAvailable;   /* (the upper screen's sets have their bgTex) */
 static C3D_Tex sBgTex;
+/* A band of a BG's pictures: a texel a pixel of the canvas's width (400 at
+ * most) and NITRO_SIGN_MAX_ROWS lines: drawn on the field at the DS's pixel
+ * size, a pixel a pixel (2x2 texels a pixel would take four times the
+ * memory, 768 KB for the three sets). */
+#define SIGN_TEX_W 512
+#define SIGN_TEX_H 64
+#define SIGN_TEX_BYTES (SIGN_TEX_W * SIGN_TEX_H * 2)
+#define SIGN_TEX_ALLOC SIGN_TEX_BYTES
+static int sSignsAvailable;  /* (the upper screen's sets have their signTex) */
+static C3D_Tex sSignTex;
+/* (the upper screen's picture drawn last: its sign's BG, or -1; whether
+ * the sign moves is a reason for an in-between frame, fades_changed) */
+static int sSignShown = -1;
 /* Sprites' pictures: 2x2 texels a pixel of the atlas (and a row of tiles
  * more, as BG_TEX_ALLOC). */
 #define OBJ_TEX_W (NITRO_GPU_OBJ_ATLAS_W * 2)
@@ -692,11 +712,14 @@ static void free_sets(Screen *scr)
         if (scr->set[i].over) linearFree(scr->set[i].over);
         if (scr->set[i].bgTex) linearFree(scr->set[i].bgTex);
         if (scr->set[i].objTex) linearFree(scr->set[i].objTex);
+        if (scr->set[i].signTex) linearFree(scr->set[i].signTex);
         scr->set[i].under = NULL;
         scr->set[i].over = NULL;
         scr->set[i].bgTex = NULL;
         scr->set[i].bgValid = 0;
         scr->set[i].objTex = NULL;
+        scr->set[i].signTex = NULL;
+        scr->set[i].signValid = 0;
         scr->set[i].objCount = -1;
         scr->set[i].objValid = 0;
     }
@@ -1095,6 +1118,24 @@ static int compose_init(const ComposeConfig *config, int small)
         }
         NitroPort_Log("[compose] not enough memory for sprites on the GPU: drawn with the 2D");
     }
+    /* (and the place name sign's band, NitroPort_ComposeDrawsSigns) */
+    sSignsAvailable = 1;
+    for (i = 0; i < SETS && sSignsAvailable; i++) {
+        sScreens[0].set[i].signTex = linearAlloc(SIGN_TEX_ALLOC);
+        sScreens[0].set[i].signValid = 0;
+        if (!sScreens[0].set[i].signTex) {
+            sSignsAvailable = 0;
+        }
+    }
+    if (!sSignsAvailable) {
+        for (i = 0; i < SETS; i++) {
+            if (sScreens[0].set[i].signTex) {
+                linearFree(sScreens[0].set[i].signTex);
+                sScreens[0].set[i].signTex = NULL;
+            }
+        }
+        NitroPort_Log("[compose] not enough memory for the place name sign on the GPU: drawn with the 2D");
+    }
     NitroPort_LowerMenuSetClock(NitroPort_ComposeVBlanks);   /* (the panel's fades) */
     NitroPort_LowerMenuSetAvailable(sMenuTexData[0] != NULL);
     sGxRecording = 0;
@@ -1150,6 +1191,11 @@ ComposeLayers *NitroPort_ComposeLayersOf(int engine)
 int NitroPort_ComposeDrawsBgs(void)
 {
     return sReady && sBgsAvailable;
+}
+
+int NitroPort_ComposeDrawsSigns(void)
+{
+    return sReady && sSignsAvailable;
 }
 
 int NitroPort_ComposeDrawsObjs(void)
@@ -1330,9 +1376,43 @@ static int objs_moved(const NitroGx3dScene *scene)
     return 0;
 }
 
+static int bg_offsets_of(uint32_t seq, uint32_t stamp, float out[8]);
+
+/* (the place name sign's band) A frame's vertical scroll of its BG (noted),
+ * when it's within 2 of the game's steps (8 lines) of the picture's
+ * (drawn); else the picture's. */
+static float sign_scroll_near(float noted, int drawn)
+{
+    float d = fmodf(noted - (float)drawn, 256.0f);
+
+    if (d < 0.0f) {
+        d += 256.0f;
+    }
+    if (d >= 128.0f) {
+        d -= 256.0f;
+    }
+    return d > 8.0f || d < -8.0f ? (float)drawn : noted;
+}
+
+/* Whether the band of a BG the compositor draws as it scrolls (the place
+ * name sign, as the upper screen's last picture has it) is scrolled other
+ * in a scene's frame than in the last scene shown's: it slides on in an
+ * in-between frame drawn for it, as the sprites do. */
+static int sign_moved(const NitroGx3dScene *scene)
+{
+    float now[8], before[8];
+    int bg = sSignShown;
+
+    if (bg <= 0 || bg > 3 || !bg_offsets_of(scene->swap_seq, scene->stamp, now) ||
+        !bg_offsets_of(sLastMainSeq, sLastMainStamp, before)) {
+        return 0;
+    }
+    return now[bg * 2 + 1] != before[bg * 2 + 1];
+}
+
 /* Whether the 2D's fades (the master brightness, a circle or band) are
  * other in a scene's frame than in the last scene shown's; or the
- * compositor's sprites. (The HM cut-in's sprites move every game step:
+ * compositor's sprites, or its sign. (The HM cut-in's sprites move every game step:
  * halfway in the in-between frames. With an in-between scene left out
  * (the 3D behind, its core shared with the 2D's drawing: 4-11 a second
  * on Route 206, log 8532faaf) there was no in-between frame for them, the
@@ -1353,7 +1433,7 @@ static int fades_changed(const NitroGx3dScene *scene)
     }
     ca = circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted);
     cb = circle_of(sLastMainSeq, sLastMainStamp, &bx, &by, &br, &noted);
-    return a != b || ca != cb || (ca && (ax != bx || ay != by || ar != br)) || objs_moved(scene);
+    return a != b || ca != cb || (ca && (ax != bx || ay != by || ar != br)) || objs_moved(scene) || sign_moved(scene);
 }
 
 /* A scene's frame before (as an in-between scene has it: the frame the
@@ -1702,6 +1782,7 @@ int NitroPort_ComposePublish(int engine, int screen)
     set->info.over = NULL;
     set->info.overAlpha = NULL;
     set->info.gpuBgPicture = NULL;   /* (the drawer's: the set has its own, bgTex) */
+    set->info.gpuSignPicture = NULL; /* (the same: signTex) */
     set->info.gpuObj = NULL;         /* (the same: objs, objTex) */
     set->info.gpuObjAtlas = NULL;
     set->overEmpty = 1;
@@ -1729,6 +1810,16 @@ int NitroPort_ComposePublish(int engine, int screen)
         GSPGPU_FlushDataCache(set->bgTex, BG_TEX_BYTES);
         set->bgKey = l->gpuBgKey;
         set->bgValid = 1;
+    }
+    /* A band of a BG drawn here as it scrolls (the place name sign): its
+     * picture, when the set doesn't hold it yet. */
+    if (!l->displayOff && l->gpuSign > 0 && set->signTex && l->gpuSignPicture && l->gpuSignRows > 0 &&
+        l->gpuSignRows <= NITRO_SIGN_MAX_ROWS && (l->gpuSignRows & 7) == 0 && w <= SIGN_TEX_W && (w & 7) == 0 &&
+        (!set->signValid || set->signKey != l->gpuSignKey)) {
+        NitroPort_Tile16(l->gpuSignPicture, w, l->gpuSignRows, set->signTex, SIGN_TEX_W);
+        GSPGPU_FlushDataCache(set->signTex, SIGN_TEX_BYTES);
+        set->signKey = l->gpuSignKey;
+        set->signValid = 1;
     }
     /* Engine A's sprites drawn here: their pixels, and what each shows. */
     set->objCount = -1;
@@ -3700,6 +3791,68 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
                            GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
             if (bottom > first) {
                 quad(bx0, y0, bx1, y1, 0.0f, bu0, v0, bu1, v1, 0xFFFFFFFFu);
+            }
+        }
+        /* 5a. A band of a BG drawn here, in front of the rest (the place
+         * name sign: ComposeLayers.gpuSign), moved up by the BG's vertical
+         * scroll in the frame the DS shows the scene in, halfway from the
+         * frame before's in an in-between frame (the sign slides 4 lines a
+         * game step: 2 a frame at 60 frames a second, as the picture can't
+         * be drawn again at that rate: drawn whole for every step, it was
+         * 30 a second at most and the in-between scenes gave way). */
+        if (scr == &sScreens[0]) {
+            sSignShown = info->gpuSign;
+        }
+        if (info->gpuSign > 0 && info->gpuCircle == 0 && !info->stretch && set->signTex && set->signValid &&
+            set->signKey == info->gpuSignKey && sQuadVertices + 6 <= MAX_QUAD_VERTICES) {
+            float v = (float)info->gpuSignVofs, now[8], before[8];
+            uint32_t seqB, stampB;
+
+            /* (a frame's scroll only near the picture's: the game puts the
+             * sign up scrolled 38 (the frame before 0) and takes it away
+             * scrolled 0 again; with the picture of a frame and the scene of
+             * the one before or after, it showed whole for a frame) */
+            if (bg_offsets_of(scene->swap_seq, scene->stamp, now)) {
+                v = sign_scroll_near(now[info->gpuSign * 2 + 1], info->gpuSignVofs);
+                if (frame_before(scene, &seqB, &stampB) && bg_offsets_of(seqB, stampB, before)) {
+                    v = bg_offset_halfway(sign_scroll_near(before[info->gpuSign * 2 + 1], info->gpuSignVofs), v);
+                }
+            }
+            /* (the scroll as the map's 256 lines go round: -128 to 127) */
+            v = fmodf(v, 256.0f);
+            if (v < 0.0f) {
+                v += 256.0f;
+            }
+            if (v >= 128.0f) {
+                v -= 256.0f;
+            }
+            {
+                float sy0 = (float)info->gpuSignY - v, sy1 = sy0 + (float)info->gpuSignRows;
+                float c0 = sy0 < 0.0f ? 0.0f : sy0, c1 = sy1 > (float)rows ? (float)rows : sy1;
+
+                if (c1 > c0) {
+                    /* (its texture's rows: a texel a line, row 0 at v = 1) */
+                    float t0 = 1.0f - (c0 - sy0) / (float)SIGN_TEX_H;
+                    float t1 = 1.0f - (c1 - sy0) / (float)SIGN_TEX_H;
+                    float y0 = pic.y0 + (sConfig.flipV ? (float)rows - c1 : c0) * scale;
+                    float y1 = pic.y0 + (sConfig.flipV ? (float)rows - c0 : c1) * scale;
+
+                    if (sConfig.flipV) {
+                        float t = t0;
+
+                        t0 = t1;
+                        t1 = t;
+                    }
+                    /* (a texel a pixel: as it is, unless the picture's scaled) */
+                    make_texture(&sSignTex, set->signTex, GPU_RGBA5551, SIGN_TEX_W, SIGN_TEX_H,
+                                 scale != 1.0f && linear, GPU_CLAMP_TO_EDGE);
+                    C3D_TexBind(0, &sSignTex);
+                    quad_combiner(1);
+                    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE,
+                                   GPU_ONE_MINUS_SRC_ALPHA);
+                    quad(pic.x0, y0, pic.x1, y1, 0.0f, 0.0f, t0, (float)canvasW / (float)SIGN_TEX_W, t1, 0xFFFFFFFFu);
+                    NitroPort_PicaProfileMark("the place name sign");
+                }
             }
         }
         /* 5b. Engine A's sprites drawn here (ComposeLayers.gpuObjCount: the

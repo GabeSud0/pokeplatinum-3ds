@@ -1709,6 +1709,13 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             if (engine == 0 && !inPanel && NitroPort_ComposeDrawsBgs()) {
                 split.gpuBgs = NitroPort_RepeatingBgs();
             }
+            /* (the place name sign: its band drawn by the compositor, where
+             * the BG's scroll has it in the frame shown, halfway in the
+             * in-between frames, the picture not drawn again as it slides;
+             * on the field at the DS's pixel size, a pixel a pixel) */
+            if (engine == 0 && !inPanel && NitroPort_ComposeDrawsSigns() && NitroPort_PixelField()) {
+                split.gpuSigns = 0x0E;
+            }
             /* (the HM cut-in: its sprites drawn by the compositor, each
              * where it is in the frame shown, halfway in the in-between
              * frames, the picture not drawn again as they move) */
@@ -1815,6 +1822,25 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
                 pictureKey = split.gpuBgKey;
             }
             layers->gpuBgPicture = pictureValid ? picture : NULL;
+        }
+        layers->gpuSign = split.gpuSignLeftOut ? __builtin_ctz((unsigned)split.gpuSignLeftOut) : -1;
+        layers->gpuSignY = split.gpuSignY;
+        layers->gpuSignRows = split.gpuSignRows;
+        layers->gpuSignVofs = split.gpuSignVofs;
+        layers->gpuSignKey = split.gpuSignKey;
+        layers->gpuSignPicture = NULL;
+        if (layers->gpuSign > 0) {
+            /* (its band's picture, made again only when it changed: from the
+             * state taken, as the rest was) */
+            static uint16_t signPicture[400 * NITRO_SIGN_MAX_ROWS];
+            static uint64_t signKey;
+            static int signValid;
+
+            if (!signValid || signKey != split.gpuSignKey) {
+                signValid = split.width <= 400 && NitroPort_Render2DSignPicture(&split, layers->gpuSign, signPicture);
+                signKey = split.gpuSignKey;
+            }
+            layers->gpuSignPicture = signValid ? signPicture : NULL;
         }
         layers->gpuObjCount = split.gpuObjsLeftOut ? split.gpuObjCount : -1;
         layers->gpuCircle = split.gpuCircleOn;

@@ -88,6 +88,16 @@ typedef struct NitroRender2DSplit {
      * as the cut-in's stripe first slides on from the right). */
     int gpuCircleOn;
     int gpuCircleX, gpuCircleY, gpuCircleR, gpuCircleColor, gpuCircleRight;
+    /* (asked for with gpuSigns, below) A BG left out of the picture for the
+     * compositor to draw itself over it, a band of the BG's lines moved up
+     * or down as the BG scrolls (a bit, or 0 none): the place name sign as
+     * it slides in and out. Where its band is on the canvas (its top line
+     * with the BG's vertical scroll 0, gpuSignY; gpuSignRows lines), its
+     * vertical scroll as the picture was drawn (0-511), and its picture's
+     * key (NitroPort_Render2DSignPicture made again when it changes). */
+    int gpuSignLeftOut;
+    int gpuSignY, gpuSignRows, gpuSignVofs;
+    uint64_t gpuSignKey;
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
     int backdrop;      /* the backdrop colour (RGB555): what shows where no layer does */
     uint16_t *over;    /* width x 192 (x height with top) */
@@ -180,6 +190,22 @@ typedef struct NitroRender2DSplit {
      * the sprites behind it or drawn by the compositor); its lines aren't
      * a change. The caller's choice, kept by the call. */
     int gpuCircle;
+    /* (the remaster's compositor, which can draw a band of a BG's lines
+     * itself over the picture, where the BG's vertical scroll has it in the
+     * frame it shows and halfway in the in-between frames: the place name
+     * sign sliding in and out at 60 frames a second) The BGs it may draw so
+     * (a bit each; 0 none). One is left out of the picture (gpuSignLeftOut,
+     * above) when it's in front of everything (every other BG and the 3D
+     * behind it, no sprite shown, no colour effect on it as a first target,
+     * no windows, no H-blank effect, the 3D on), a text BG of 256 x 256 with
+     * all it shows in at most 7 rows of tiles (the rest of its map clear),
+     * no other copy of them on the picture as it scrolls round its map, and
+     * on a tall field (top) all of them in one of the game's windows moved
+     * as the picture's top or bottom (NitroPort_WideWindows), alone on the
+     * BG. Its vertical scroll then doesn't count as a change
+     * (NitroPort_Render2DSplitIfChanged): the picture isn't drawn again as
+     * it slides. The caller's choice, kept by the call. */
+    int gpuSigns;
 } NitroRender2DSplit;
 #define NITRO_RENDER2D_MAX_H 256
 /* (the game's thread, when it hands a frame to a drawing thread) Take the
@@ -222,6 +248,17 @@ unsigned NitroPort_Render2DMasterBright(int engine, int snapshot);
  * compositor draws a BG left out of the picture from (gpuBgLeftOut). From
  * the state taken (snapshot: 1) or the live one; the VRAM as it is. */
 int NitroPort_Render2DBgPicture(int bg, int snapshot, uint16_t *out);
+/* The band of engine A's BG a picture left out (gpuSignLeftOut, its band
+ * gpuSignY to gpuSignY + gpuSignRows - 1), as the picture would have it
+ * were the BG's vertical scroll 0: on the canvas the picture had (layout:
+ * that split, its width, origin, clip, windows, top and height, from the
+ * state it was drawn from), each of the band's lines the canvas's width,
+ * into out (width x rows) as RGBA5551 (red in the top bits; 0 where the BG
+ * is clear). What the compositor draws it from, moved up by the scroll. 1
+ * if drawn, else 0 (nothing written). */
+int NitroPort_Render2DSignPicture(const NitroRender2DSplit *layout, int bg, uint16_t *out);
+/* The most lines of a band NitroPort_Render2DSignPicture draws. */
+#define NITRO_SIGN_MAX_ROWS 56
 /* Engine A's BG scrolls now (BG0-3's HOFS and VOFS, 9 bits each). */
 void NitroPort_Render2DBgOffsets(uint16_t out[8]);
 /* The same, and each as fx32 (fine: 12 bits under the pixel, 0 to 512):

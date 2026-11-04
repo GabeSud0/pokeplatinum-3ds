@@ -266,6 +266,17 @@ typedef struct ComposeLayers {
     /* (the drawer's) its picture (NitroPort_Render2DBgPicture: 256 x 256
      * RGBA5551), made as the game's state was read, when the key changed */
     const uint16_t *gpuBgPicture;
+    /* A band of a BG's lines left out of the picture for the compositor to
+     * draw itself over it (NitroRender2DSplit.gpuSignLeftOut: the place
+     * name sign sliding in and out), or -1: its band's top line on the
+     * canvas with its vertical scroll 0, its lines, its vertical scroll when
+     * the picture was drawn (the frame's are noted: drawn moved up by that
+     * of the frame shown, halfway in an in-between frame), its picture's
+     * key, and (the drawer's) its picture (NitroPort_Render2DSignPicture:
+     * width x gpuSignRows RGBA5551), made when the key changed. */
+    int gpuSign, gpuSignY, gpuSignRows, gpuSignVofs;
+    uint64_t gpuSignKey;
+    const uint16_t *gpuSignPicture;
     /* Engine A's sprites left out of the picture for the compositor to draw
      * itself (NitroRender2DSplit.gpuObjsLeftOut: the HM cut-in's), or -1:
      * how many, and (the drawer's, as the game's state was read) what they
@@ -288,6 +299,9 @@ typedef struct ComposeLayers {
 /* Whether the compositor can draw a BG itself (its picture's textures
  * made: NitroRender2DSplit.gpuBgs). Any thread. */
 int NitroPort_ComposeDrawsBgs(void);
+/* Whether the compositor can draw a band of a BG itself as it scrolls (its
+ * picture's textures made: NitroRender2DSplit.gpuSigns). Any thread. */
+int NitroPort_ComposeDrawsSigns(void);
 /* (the game's thread, each frame it hands over: after its V-blank work)
  * Engine A's BG scrolls in the frame of this V-blank count, with this many
  * SWAP_BUFFERS made (NitroPort_Gx3dSwapsMade): what a BG the compositor

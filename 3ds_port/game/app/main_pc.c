@@ -469,12 +469,15 @@ static void RemasterRender(uint16_t *out)
     static uint16_t under[400 * 240], over[400 * 240], full[400 * 240];
     static uint8_t overAlpha[400 * 240], alpha3d[256 * 192];
     static uint16_t image3d[256 * 192], bgPicture[256 * 256], sim3d[400 * 240];
+    /* (the place name sign's band drawn by the 3DS's compositor: drawn over
+     * the picture here, moved up by its scroll) */
+    static uint16_t signPicture[400 * NITRO_SIGN_MAX_ROWS];
     /* (the HM cut-in's sprites drawn by the 3DS's compositor: drawn over
      * the rest here, where the picture had them) */
     static NitroGpuObj gpuObj[NITRO_GPU_OBJ_MAX];
     static uint16_t gpuObjAtlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H], sprites[400 * 240];
     int aOnTop = NitroPort_EngineAOnTop() ? 1 : 0;
-    int screen, gpuBg;
+    int screen, gpuBg, gpuSign;
 
     memset(out, 0, 320 * 384 * sizeof(out[0]));
     for (screen = 0; screen < 2; screen++) {
@@ -492,6 +495,9 @@ static void RemasterRender(uint16_t *out)
             /* (the field's weather's BG drawn by the compositor, as the
              * 3DS has it: below) */
             split.gpuBgs = NitroPort_RepeatingBgs();
+            /* (the place name sign, on the field at the DS's pixel size:
+             * drawn over the rest below, as the 3DS has it) */
+            split.gpuSigns = NitroPort_PixelField() ? 0x0E : 0;
             split.gpuCircle = 1;   /* (a circle fade: drawn over the rest below) */
             if (NitroPort_GpuSprites()) {
                 split.gpuObjs = 1;
@@ -510,6 +516,10 @@ static void RemasterRender(uint16_t *out)
         gpuBg = split.gpuBgLeftOut ? __builtin_ctz((unsigned)split.gpuBgLeftOut) : -1;
         if (gpuBg >= 0 && !NitroPort_Render2DBgPicture(gpuBg, split.snapshot, bgPicture)) {
             gpuBg = -1;
+        }
+        gpuSign = split.gpuSignLeftOut ? __builtin_ctz((unsigned)split.gpuSignLeftOut) : -1;
+        if (gpuSign >= 0 && (split.width > 400 || !NitroPort_Render2DSignPicture(&split, gpuSign, signPicture))) {
+            gpuSign = -1;
         }
         if (split.gpuObjsLeftOut) {
             /* (the sprites, back to front, onto a layer of their own:
@@ -674,6 +684,19 @@ static void RemasterRender(uint16_t *out)
                         m |= (uint16_t)(((((o >> k) & 31) * a + ((c >> k) & 31) * (16 - a)) / 16) << k);
                     }
                     c = m;
+                }
+                if (gpuSign >= 0) {
+                    /* (the 3DS's compositor: the sign's band, its picture's
+                     * line moved up by the BG's scroll: RGBA5551) */
+                    int v = split.gpuSignVofs & 0xFF, sy;
+
+                    v = v >= 128 ? v - 256 : v;
+                    sy = cy - (split.gpuSignY - v);
+                    if (sy >= 0 && sy < split.gpuSignRows && (signPicture[sy * width + cx] & 1)) {
+                        uint16_t b = signPicture[sy * width + cx];
+
+                        c = (uint16_t)(((b >> 11) & 31) | (((b >> 6) & 31) << 5) | (((b >> 1) & 31) << 10));
+                    }
                 }
                 if (split.gpuObjsLeftOut && (sprites[cy * width + cx] & 0x8000)) {
                     c = sprites[cy * width + cx] & 0x7FFF;
