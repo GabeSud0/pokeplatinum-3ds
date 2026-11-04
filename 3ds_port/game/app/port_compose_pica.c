@@ -3074,18 +3074,51 @@ static int frame_noted(uint32_t seq, uint32_t stamp)
     return found >= 0;
 }
 
+/* (a band of lines, ComposeLayers.gpuCircle 2) Its columns, as noted
+ * (gpuCircleX: left | right << 16, 0 all of them), on a canvas columns
+ * wide. */
+static void band_columns(int packed, int columns, int *left, int *right)
+{
+    *left = packed == 0 ? 0 : packed & 0xFFFF;
+    *right = packed == 0 ? columns : (packed >> 16) & 0xFFFF;
+}
+
+/* (a band of lines) Halfway between two bands' columns (packed as noted).
+ * One of them empty (aEmpty, bEmpty: its lines none, the screen shown
+ * nowhere, as the gate's wipe starts, black): as none of the other's
+ * columns, from the edge the other's are from (else the first step went
+ * from all the columns, the screen shown halfway across at once). */
+static int band_columns_halfway(int a, int aEmpty, int b, int bEmpty, int columns)
+{
+    int la, ra, lb, rb, l, r;
+
+    band_columns(a, columns, &la, &ra);
+    band_columns(b, columns, &lb, &rb);
+    if (aEmpty && !bEmpty) {
+        la = ra = lb == 0 ? 0 : columns;
+    } else if (bEmpty && !aEmpty) {
+        lb = rb = la == 0 ? 0 : columns;
+    }
+    l = (la + lb) / 2;
+    r = (ra + rb + 1) / 2;
+    return l <= 0 && r >= columns ? 0 : l | (r << 16);
+}
+
 /* A band drawn: the backdrop above its first line (y) and from the line
- * after its last (r) on, over the picture (pic, sy its lines' height). */
-static void draw_band(const PicaRect *pic, float sy, int y, int r, u32 rgba)
+ * after its last (r) on, over the picture (pic, sx its columns' width, sy
+ * its lines' height); and beside its columns (columns: gpuCircleX's, packed
+ * as noted; 0 all of them: the gate's wipe from one side). */
+static void draw_band(const PicaRect *pic, float sx, float sy, int y, int r, int columns, u32 rgba)
 {
     float top = pic->y0 + (float)y * sy, bottom = pic->y0 + (float)r * sy, t;
+    int cols = (int)((pic->x1 - pic->x0) / sx + 0.5f), left, right;
 
     if (sConfig.flipV) {
         t = top;
         top = pic->y0 + pic->y1 - bottom;
         bottom = pic->y0 + pic->y1 - t;
     }
-    if (sQuadVertices + 12 > MAX_QUAD_VERTICES) {
+    if (sQuadVertices + 24 > MAX_QUAD_VERTICES) {
         return;
     }
     quad_combiner(0);
@@ -3095,6 +3128,21 @@ static void draw_band(const PicaRect *pic, float sy, int y, int r, u32 rgba)
     }
     if (bottom < pic->y1) {
         quad(pic->x0, bottom > pic->y0 ? bottom : pic->y0, pic->x1, pic->y1, 0.0f, 0, 0, 0, 0, rgba);
+    }
+    band_columns(columns, cols, &left, &right);
+    if (bottom > top && (left > 0 || right < cols)) {
+        float x0 = pic->x0 + (float)left * sx, x1 = pic->x0 + (float)right * sx;
+        float t0 = top > pic->y0 ? top : pic->y0, t1 = bottom < pic->y1 ? bottom : pic->y1;
+
+        if (x1 < x0) {
+            x1 = x0;
+        }
+        if (x0 > pic->x0) {
+            quad(pic->x0, t0, x0 < pic->x1 ? x0 : pic->x1, t1, 0.0f, 0, 0, 0, 0, rgba);
+        }
+        if (x1 < pic->x1) {
+            quad(x1 > pic->x0 ? x1 : pic->x0, t0, pic->x1, t1, 0.0f, 0, 0, 0, 0, rgba);
+        }
     }
     NitroPort_PicaProfileMark("the band of lines");
 }
@@ -3112,7 +3160,37 @@ static void draw_band_tail(const PicaRect *pic, float sy)
         return;
     }
     band_ease(&y, &r, rows);
-    draw_band(pic, sy, y, r, sBand.rgba);
+    draw_band(pic, 1.0f, sy, y, r, 0, sBand.rgba);
+}
+
+/* Whether a frame (its SWAP_BUFFERS count and stamp) is noted with engine
+ * A's master brightness all black. */
+static int frame_black(uint32_t seq, uint32_t stamp)
+{
+    uint32_t noted;
+    int v = 0, kind = 0;
+
+    return bright_of(seq, stamp, &v, &noted, &kind) && v <= -16;
+}
+
+/* A band of columns over (the gate's wipe: its window off, the picture
+ * already without it): in the in-between frame after its last step, its
+ * columns halfway to all of them, as its other steps are halfway (else
+ * its last 42 of the DS's columns showed at once). Only from the frames'
+ * notes, so both eyes alike. */
+static void draw_columns_tail(const NitroGx3dScene *scene, const PicaRect *pic, float sx, float sy)
+{
+    uint32_t seqB, stampB, noted;
+    int ax = 0, ay = 0, ar = 0, bx = 0, by = 0, br = 0;
+
+    if (scene == NULL || !frame_before(scene, &seqB, &stampB) ||
+        circle_of(seqB, stampB, &bx, &by, &br, &noted) != 2 || bx == 0 || by >= br ||
+        circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted) != 0 ||
+        !frame_noted(scene->swap_seq, scene->stamp)) {
+        return;
+    }
+    draw_band(pic, sx, sy, by, br, band_columns_halfway(0, 0, bx, 0, (int)((pic->x1 - pic->x0) / sx + 0.5f)),
+              sBand.rgba);
 }
 
 /* (draw_circle_mask) The last circle or band noted for a frame drawn: its
@@ -3148,13 +3226,13 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
      * the circle stood still at its end rather than closing, 2026-11-01.) */
     if (kind == 2 && sCircleDrawnValid &&
         (int32_t)(__atomic_load_n(&sVBlanks, __ATOMIC_RELAXED) - sCircleDrawnAt) <= 60) {
-        draw_band(pic, sy, info->gpuCircleY, info->gpuCircleR, rgba);
+        draw_band(pic, sx, sy, info->gpuCircleY, info->gpuCircleR, info->gpuCircleX, rgba);
         return;
     } else {
         uint32_t seqB, stampB;
         int ka = scene != NULL ? circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted) : 0;
-        int kb = scene != NULL && frame_before(scene, &seqB, &stampB) ? circle_of(seqB, stampB, &bx, &by, &br, &noted)
-                                                                      : 0;
+        int before = scene != NULL && frame_before(scene, &seqB, &stampB);
+        int kb = before ? circle_of(seqB, stampB, &bx, &by, &br, &noted) : 0;
 
         /* (a band's picture is drawn whole: the frame noted with no band,
          * the window off as the band ends, it's the picture as it is. Else,
@@ -3171,29 +3249,54 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
             int recent = sBand.on && (int32_t)(now - sBand.vblank) <= 30;
 
             if (recent && !band_open()) {
-                return;   /* (over, and opened all the way) */
+                /* (over, and opened all the way; but for a wipe from one
+                 * side, whose last step is halfway in an in-between frame
+                 * as the others are) */
+                if (kb == 2 && bx != 0 && by < br) {
+                    draw_band(pic, sx, sy, by, br,
+                              band_columns_halfway(0, 0, bx, 0, (int)((pic->x1 - pic->x0) / sx + 0.5f)), rgba);
+                }
+                return;
             }
             if (!recent) {
                 /* (no band drawn lately, none in the frame before: a band
                  * starting, its picture here before a note of it (the
                  * lines noted late): as the picture has it, rather than
-                 * the whole picture at once) */
+                 * the whole picture at once; its columns too, the gate's
+                 * wipe's first step) */
                 ka = 2;
                 kb = 0;
-                ax = 0;
+                ax = info->gpuCircleX;
                 ay = info->gpuCircleY;
                 ar = info->gpuCircleR;
             } else {
+                /* (its columns too: from the frame before's, where that had
+                 * the band, to all of them; the gate's wipe's last step) */
+                bx = kb == 2 ? bx : 0;
                 ka = kb = 2;
-                ax = bx = 0;
+                ax = 0;
                 ay = by = 0;
                 ar = br = rowsAll;
             }
         }
         if (ka == info->gpuCircle) {
             x = ax, y = ay, r = ar;
-            if (kb == info->gpuCircle) {
+            if (kb == info->gpuCircle && kind == 2 && ((ax != 0 && ay < ar) || (bx != 0 && by < br))) {
+                /* (a band of columns, the gate's wipe: on every line, so
+                 * its lines the one with columns'; an empty band before
+                 * it (the screen black as the wipe starts) as none of its
+                 * columns, not the lines in the middle opening) */
+                x = band_columns_halfway(ax, ay >= ar, bx, by >= br, (int)((pic->x1 - pic->x0) / sx + 0.5f));
+                y = ax != 0 && ay < ar ? ay : by;
+                r = ax != 0 && ay < ar ? ar : br;
+            } else if (kb == info->gpuCircle) {
                 x = (bx + ax) / 2, y = (by + ay) / 2, r = (br + ar) / 2;
+            } else if (kind == 2 && kb == 0 && before && ax != 0 && ay < ar && frame_black(seqB, stampB)) {
+                /* (the frame before no band but black, its brightness:
+                 * the gate's wipe starting, its first step's window on
+                 * with the screen still black. As an empty band before it:
+                 * its first step halfway too, not its columns at once) */
+                x = band_columns_halfway(ax, 0, 0, 1, (int)((pic->x1 - pic->x0) / sx + 0.5f));
             }
             sLastCircle = ka, sLastCircleX = ax, sLastCircleY = ay, sLastCircleR = ar;
         } else if (kb == info->gpuCircle) {
@@ -3206,10 +3309,15 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
         /* A band of lines (walking out of a building): the backdrop above
          * and below it, its edges halfway in the in-between frames (the
          * game's band 32 lines taller every other frame: 16 each frame),
-         * and opening, eased by the V-blank (band_ease). */
+         * and opening, eased by the V-blank (band_ease). A band of columns
+         * (the gate's wipe) isn't: its lines, every line, as they are (and
+         * the band after it, the window off, not a band opening still). */
+        if (x != 0) {
+            sBand.on = 0;
+        }
         band_ease(&y, &r, (int)((pic->y1 - pic->y0) / sy + 0.5f));
         sBand.rgba = rgba;
-        draw_band(pic, sy, y, r, rgba);
+        draw_band(pic, sx, sy, y, r, x, rgba);
         return;
     }
     if (sQuadVertices + 6 * CIRCLE_SEGMENTS > MAX_QUAD_VERTICES || gpuCmdBufSize - gpuCmdBufOffset < 1024u) {
@@ -3804,7 +3912,9 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         if (scr == &sScreens[0]) {
             sSignShown = info->gpuSign;
         }
-        if (info->gpuSign > 0 && info->gpuCircle == 0 && !info->stretch && set->signTex && set->signValid &&
+        /* (with a band of lines or columns too, drawn over it below: 5c) */
+        if (info->gpuSign > 0 && (info->gpuCircle == 0 || info->gpuCircle == 2) && !info->stretch && set->signTex &&
+            set->signValid &&
             set->signKey == info->gpuSignKey && sQuadVertices + 6 <= MAX_QUAD_VERTICES) {
             float v = (float)info->gpuSignVofs, now[8], before[8];
             uint32_t seqB, stampB, content = 0;
@@ -3886,6 +3996,9 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         draw_circle_mask(info, has3d ? scene : NULL, &pic, scale, (pic.y1 - pic.y0) / (float)rows);
     } else if (has3d && sBand.on) {
         draw_band_tail(&pic, (pic.y1 - pic.y0) / (float)rows);
+    }
+    if (info->gpuCircle == 0 && has3d) {
+        draw_columns_tail(scene, &pic, scale, (pic.y1 - pic.y0) / (float)rows);
     }
     /* 6. The master brightness (with the 3D: engine A's, by frame). */
     master_brightness_of(scr, info, has3d && scr == &sScreens[0] ? scene : NULL);

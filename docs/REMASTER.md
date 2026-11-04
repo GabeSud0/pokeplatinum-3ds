@@ -2280,6 +2280,43 @@ drawn whole, another frame's isn't): with a V-blank's slack, the picture
 from just before the band got the band's halfway brightness, a dim flash
 of the whole outside (a video of 2026-10-31).
 
+The screen shown from one side (2026-11-04, leaving the gate between
+Route 208 and Hearthome City: window 0 over columns 0 to 212, 170, 127,
+85, 42 of every line, every other frame, nothing inside it and all outside
+it into the city; all inside and nothing outside it, 42 to 212, onto the
+route) is a band too (`GpuRowsOf`: each line's part inside the window and
+outside it showing all or nothing, the same columns of every line from an
+edge, the 3D on; `gpuCircleX` its columns, left | right << 16, 0 for all of
+them, `GpuRowsColumns`), drawn by the compositor beside its columns (and
+halfway in the in-between frames, the last step's too: `draw_band`,
+`band_columns_halfway`). Its columns go across the canvas as they do
+across the DS's 256 (400 / 256 a column): with the DS's columns moved to
+the canvas as the 2D draws a window (`FillRange`), the wipe went 42
+columns a step, then 114 at once as the window went off, and the place
+name sign, at the canvas's left edge, came with them all at once (a video
+of 2026-11-04). Before, it was drawn in the picture, whole each step: 30 a
+second at most, and the frames noted without a band, so the city showed
+whole at full brightness for a frame before the wipe (a picture from before
+it with the wipe's first frame's brightness). The sign slides in under it
+(`GpuSignOf`'s `bandShown`: with a band the compositor draws and that shows
+the sign's BG, the window on, the picture drawn with none then).
+
+In the compositor a band of columns is on every line, so its lines aren't
+eased (`band_ease` is for a band of lines opening from the middle): the
+frame before the wipe's first step is black (the master brightness) with
+no band noted, or an empty one, and eased from there, each step's columns
+would have opened from the middle of the screen up and down. Halfway, an
+empty band or a black frame before it (`frame_black`) counts as none of
+its columns, from the edge they're from: its first step halfway too. Its
+last step is halfway with the picture already without the band
+(`draw_columns_tail`, from the frames' notes alone, so both eyes alike) or
+with it still. A picture with the band before the frame's note of it is
+drawn with its own columns, not whole. Simulated on the PC (sim60, the
+compositor's rules copied, each in-between frame with the picture before
+or the new one), the wipe goes 33 of the canvas's columns every frame each
+way, 65 at once at its first step only when the in-between frame has the
+picture from before the band (black there).
+
 An in-between frame for the 2D's fades alone (`NitroPort_ComposeFrame`'s
 mid 2, `fades_changed`): with no in-between scene (a map's first scenes
 have none: walking out of a building, the band opened 30 times a second,

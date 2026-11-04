@@ -586,9 +586,14 @@ static void RemasterRender(uint16_t *out)
             int circleLo = 0, circleHi = outW;
 
             if (split.gpuCircleOn == 2) {
-                /* (a band of lines: these lines all, the rest none) */
+                /* (a band of lines: these lines all, the rest none; and of
+                 * its columns only (gpuCircleX: left | right << 16, 0 all),
+                 * a wipe from one side) */
                 if (y < split.gpuCircleY || y >= split.gpuCircleR) {
                     circleLo = circleHi = 0;
+                } else if (split.gpuCircleX != 0) {
+                    circleLo = (split.gpuCircleX & 0xFFFF) * outW / width;
+                    circleHi = ((split.gpuCircleX >> 16) & 0xFFFF) * outW / width;
                 }
             } else if (split.gpuCircleOn) {
                 int dy = y - split.gpuCircleY, half = -1;
