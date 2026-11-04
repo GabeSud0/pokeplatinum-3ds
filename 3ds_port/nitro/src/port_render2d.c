@@ -543,8 +543,8 @@ static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted)
 
 /* (GpuBgOf, with a band's window) The BG the compositor would draw itself
  * (wanted) when a band of lines' window hides it there only, the HM
- * cut-in's in Eterna Forest, its fog in front of the 3D: window 0 alone,
- * the whole width (WIN0H 0 to 255), the BG outside it with the colour
+ * cut-in's in Eterna Forest, its fog in front of the 3D: window 0 alone
+ * (its columns as GpuBgRowsOf has them), the BG outside it with the colour
  * effect, not inside. Else -1. The band must then be the compositor's too
  * (GpuBgRowsOf with this BG skipped), its lines filled over the BG: inside
  * them the DS shows the band's BG alone. As the band was drawn in the
@@ -558,7 +558,7 @@ static int GpuBgOutsideBandOf(const u8 *io, const u8 *oam, int lines, int wanted
     u8 in = Rd16(io, 0x48) & 0x3F, out = Rd16(io, 0x4A) & 0x3F;
     int bg;
 
-    if (wanted == 0 || (dispcnt & 0xE000) != 0x2000 || Rd16(io, 0x40) != 0x00FF) {
+    if (wanted == 0 || (dispcnt & 0xE000) != 0x2000) {
         return -1;
     }
     memcpy(noWindows, io, sizeof(noWindows));
@@ -571,6 +571,19 @@ static int GpuBgOutsideBandOf(const u8 *io, const u8 *oam, int lines, int wanted
         return -1;
     }
     return bg;
+}
+
+/* (GpuBgOf) The same with window 0 alone on but showing nothing, its
+ * lines or columns none (the HM cut-in's first frame with it: lines 192 to
+ * 192, the message box still on): everything as outside it, everywhere. */
+static int GpuBgEmptyWindowOf(const u8 *io, const u8 *oam, int lines, int wanted)
+{
+    u16 winh = Rd16(io, 0x40), winv = Rd16(io, 0x44);
+
+    if ((winv >> 8) < (winv & 0xFF) && (winh >> 8) < (winh & 0xFF)) {
+        return -1;   /* (some of it shows; or it wraps round) */
+    }
+    return GpuBgOutsideBandOf(io, oam, lines, wanted);
 }
 
 /* The extended palette slot a BG uses: its own number, or BG0/BG1 can
@@ -4336,6 +4349,10 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         if (split->has3d && split->gpuBgs && (split->gpuCircleOn != 3 || e->bandBg >= 0)) {
             int gb = split->gpuCircleOn == 3 ? e->bandBg : GpuBgOf(io, e->oam, e->lines != NULL, split->gpuBgs);
 
+            if (gb < 0 && split->gpuCircleOn != 3) {
+                gb = GpuBgEmptyWindowOf(io, e->oam, e->lines != NULL, split->gpuBgs);
+            }
+
             if (gb >= 0 && kind[gb] == BG_TEXT) {
                 u64 key = BgKeyCached(e, gb, BG_TEXT, bgcnt[gb], dispcnt);
                 u32 i;
@@ -4993,15 +5010,17 @@ static int BgTextBlank(const u8 *io, const u8 *vram, int bg)
  * The BG (4: none, the band the backdrop alone), its lines (*top, *bottom:
  * the DS's); else -1. */
 static int GpuBgRowsOf(const u8 *io, const u8 (*lines)[NITRO_LINE_REGS], const u8 *oam, const u8 *vram, int objsOut,
-                       int skipBg, int *top, int *bottom)
+                       int skipBg, int *top, int *bottom, int *lo, int *hi)
 {
     u32 dispcnt = Rd32(io, 0), layers = (dispcnt >> 8) & 0x1F;
     u16 winh = Rd16(io, 0x40), winv = Rd16(io, 0x44);
     u8 in = Rd16(io, 0x48) & 0x3F, out = Rd16(io, 0x4A) & 0x3F;
     int bg, k, y, key, key3d = (Rd16(io, 8) & 3) * 4;
 
-    if ((dispcnt & 0xE000) != 0x2000 || ((dispcnt >> 16) & 3) != 1 || (dispcnt & 0x108) != 0x108 || winh != 0x00FF ||
-        (winv >> 8) > (winv & 0xFF)) {
+    /* (its columns WIN0H's, not wrapping round: the cut-in's stripe slides
+     * on from the right first, 64 of the DS's columns a step, 2026-11-03) */
+    if ((dispcnt & 0xE000) != 0x2000 || ((dispcnt >> 16) & 3) != 1 || (dispcnt & 0x108) != 0x108 ||
+        (winh >> 8) > (winh & 0xFF) || (winv >> 8) > (winv & 0xFF)) {
         return -1;
     }
     for (y = 0; lines != NULL && y < H; y++) {
@@ -5055,7 +5074,22 @@ static int GpuBgRowsOf(const u8 *io, const u8 (*lines)[NITRO_LINE_REGS], const u
     if (*bottom < *top) {
         *bottom = *top;
     }
+    *lo = winh >> 8;
+    *hi = winh & 0xFF;
     return bg;
+}
+
+/* (a BG's band) Its columns lo to hi - 1 (the DS's: WIN0H) on the canvas, as
+ * FillRange has a window's: one a column short of an edge, or at it, goes
+ * on to the canvas's edge (the stripe's right end, 255, the screen's). */
+static void GpuBandColumns(int lo, int hi, int origin, int width, int *left, int *right)
+{
+    if (lo >= hi) {
+        *left = *right = origin + lo;   /* (none) */
+        return;
+    }
+    *left = lo <= 1 ? 0 : origin + lo;
+    *right = hi >= 255 ? width : origin + hi;
 }
 
 /* (the canvas and the window of the last picture that left the circle
@@ -5076,6 +5110,7 @@ static struct {
     int bgRows;   /* (a BG's band asked for too: NitroRender2DSplit.gpuCircle & 2) */
     int objsOut;  /* (and the sprites drawn by the compositor, if they can be) */
     int gpuBgs;   /* (and the BGs it may draw itself: GpuBgOutsideBandOf) */
+    int origin, width;   /* (and across: a BG's band's columns) */
 } sGpuBandCanvas;
 
 /* A band's line (the DS's, 0-192) on the canvas: its first and last lines
@@ -5089,7 +5124,7 @@ static int GpuRowsLine(int line, int top, int height)
 int NitroPort_Render2DCircleNow(int engine, int *x, int *y, int *r)
 {
     const WindowCircle *c;
-    int top, bottom;
+    int top, bottom, lo, hi;
     u8 shown;
 
     int circles;
@@ -5125,8 +5160,11 @@ int NitroPort_Render2DCircleNow(int engine, int *x, int *y, int *r)
                     NitroPort_LineRegs.active ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0] : NULL,
                     NitroPort_Oam, NitroPort_BgVram, sGpuBandCanvas.objsOut,
                     GpuBgOutsideBandOf(NitroPort_IoReg, NitroPort_Oam, NitroPort_LineRegs.active, sGpuBandCanvas.gpuBgs),
-                    &top, &bottom) >= 0) {
-        *x = 0;
+                    &top, &bottom, &lo, &hi) >= 0) {
+        int left, right;
+
+        GpuBandColumns(lo, hi, sGpuBandCanvas.origin, sGpuBandCanvas.width, &left, &right);
+        *x = left | (right << 16);   /* (its columns) */
         *y = GpuRowsLine(top, sGpuBandCanvas.top, sGpuBandCanvas.height);
         *r = GpuRowsLine(bottom, sGpuBandCanvas.top, sGpuBandCanvas.height);
         return 3;
@@ -5252,6 +5290,8 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
 
         sGpuBandCanvas.top = e.top;
         sGpuBandCanvas.height = e.height;
+        sGpuBandCanvas.origin = e.origin;
+        sGpuBandCanvas.width = e.width;
         sGpuBandCanvas.bgRows = (split->gpuCircle & 2) != 0;
         sGpuBandCanvas.objsOut = GpuBandObjsOut(split);
         sGpuBandCanvas.gpuBgs = split->gpuBgs;
@@ -5262,7 +5302,7 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
                                   NitroPort_LineRegs.active ? (const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0] : NULL,
                                   sCircles[0]);
 
-        int top = 0, bottom = 0, bandBg = -1;
+        int top = 0, bottom = 0, bandBg = -1, lo = 0, hi = 0;
         u8 shown = 0;
 
         if (w >= 0) {
@@ -5305,7 +5345,7 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
                                                            : NULL),
                                     split->snapshot ? st->oam : NitroPort_Oam, e.bgVram, GpuBandObjsOut(split),
                                     (bandBg = GpuBgOutsideBandOf(e.io, e.oam, e.lines != NULL, split->gpuBgs)),
-                                    &top, &bottom)) >= 0) {
+                                    &top, &bottom, &lo, &hi)) >= 0) {
             /* (one BG in a band of lines: the picture as outside it
              * everywhere, with that BG too, alone in front of the 3D, for
              * the compositor to show in the band's lines, gpuCircleY to
@@ -5317,6 +5357,7 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
             split->gpuCircleY = GpuRowsLine(top, e.top, e.height);
             split->gpuCircleR = GpuRowsLine(bottom, e.top, e.height);
             split->gpuCircleColor = PlttColor(e.bgPltt, 0);
+            GpuBandColumns(lo, hi, e.origin, e.width, &split->gpuCircleX, &split->gpuCircleRight);
         }
     }
     powcnt = Rd16(e.ioAll, 0x304);
@@ -6614,6 +6655,10 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
 
         gpuBg = GpuBgOf(split->snapshot ? st->io : NitroPort_IoReg, split->snapshot ? st->oam : NitroPort_Oam,
                         split->snapshot ? st->lines : NitroPort_LineRegs.active, split->gpuBgs);
+        if (gpuBg < 0) {
+            gpuBg = GpuBgEmptyWindowOf(split->snapshot ? st->io : NitroPort_IoReg, split->snapshot ? st->oam : NitroPort_Oam,
+                                       split->snapshot ? st->lines : NitroPort_LineRegs.active, split->gpuBgs);
+        }
     }
     if (e == 0 && !split->gpuObjs) {
         sGpuObjsRefused = 0;
@@ -6644,8 +6689,10 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
             const u8 *oam = split->snapshot ? st->oam : NitroPort_Oam;
             int bandBg = GpuBgOutsideBandOf(io, oam, lines != NULL, split->gpuBgs);
 
+            int lo, hi;
+
             if (GpuBgRowsOf(io, lines, oam, split->snapshot ? sMapShadowA : NitroPort_BgVram, GpuBandObjsOut(split), bandBg,
-                            &top, &bottom) >= 0) {
+                            &top, &bottom, &lo, &hi) >= 0) {
                 gpuCircle = 5;   /* (a BG's band: its window's lines not in the picture) */
                 if (bandBg >= 0) {
                     gpuBg = bandBg;   /* (and the BG the compositor draws under it, as drawing finds) */

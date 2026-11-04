@@ -83,9 +83,11 @@ typedef struct NitroRender2DSplit {
      * the picture drawn as outside the window everywhere, with that BG too,
      * alone in front of the 3D (over), for the compositor to show in the
      * band's lines only, gpuCircleY to gpuCircleR - 1, the backdrop
-     * (gpuCircleColor) behind it there. */
+     * (gpuCircleColor) behind it there; and in its columns only,
+     * gpuCircleX to gpuCircleRight - 1 on the canvas (the whole width but
+     * as the cut-in's stripe first slides on from the right). */
     int gpuCircleOn;
-    int gpuCircleX, gpuCircleY, gpuCircleR, gpuCircleColor;
+    int gpuCircleX, gpuCircleY, gpuCircleR, gpuCircleColor, gpuCircleRight;
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
     int backdrop;      /* the backdrop colour (RGB555): what shows where no layer does */
     uint16_t *over;    /* width x 192 (x height with top) */
@@ -256,8 +258,9 @@ int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const Nitro
 /* (the game's thread, as it hands a frame over) Engine A's circle fade as
  * it is now, on the canvas of the last picture that left it out
  * (gpuCircleOn): 1 with its middle and radius, 2 a band of lines (y to
- * r - 1, x 0), 3 one BG's band of lines (y to r - 1), 0 when it's off, -1
- * when no picture has left one out since one was last drawn in a picture. */
+ * r - 1, x 0), 3 one BG's band of lines (y to r - 1, its columns x & 0xFFFF
+ * to x >> 16, less 1), 0 when it's off, -1 when no picture has left one out
+ * since one was last drawn in a picture. */
 int NitroPort_Render2DCircleNow(int engine, int *x, int *y, int *r);
 
 /* One BG of an engine alone (for capturing it: nitro_port_wideart.h), on

@@ -2101,6 +2101,19 @@ shows the band's BG alone); and a text BG showing nothing (its map all one
 tile, that tile blank: `BgTextBlank`) doesn't count as in front of the 3D.
 In `test_render.c`: `test_bg_rows`. On the PC through a real Cut at the
 Old Chateau's tree: the band the compositor's from its first frame.
+Before the band opens, its stripe (2 lines) slides on from the right, 64
+of the DS's columns a step, every other frame (WIN0H 254-255, 190-255,
+126-255, 62-255, then 0-255): not across the screen, so drawn in the
+picture, whole each step, and in the forest the fog the 2D's then (the
+squares on it before the cut-in, a test of 2026-11-03). The band's
+columns are now the compositor's too: `GpuBgRowsOf` takes any WIN0H that
+doesn't wrap round, `gpuCircleX` to `gpuCircleRight` on the canvas (to
+its edge from the DS's, as `FillRange` has a window), noted as
+`NitroPort_Render2DCircleNow`'s x (the two halves), halfway in the
+in-between frames, the band's backdrop and BG drawn in them only
+(`bg_band_rows`). And the frame the window comes on in, showing nothing
+yet (lines 192 to 192) with the message box still up, keeps the fog the
+compositor's (`GpuBgEmptyWindowOf`: everything as outside the window).
 
 Eterna Forest's light finer than a pixel (patch 0061, 2026-10-31): the
 game keeps the clouds' place finer than a pixel as they follow the camera,

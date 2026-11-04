@@ -3187,7 +3187,8 @@ static struct {
     uint32_t vblank;
 } sBgBand;
 
-static void bg_band_rows(const ComposeLayers *info, const NitroGx3dScene *scene, int *y, int *r)
+static void bg_band_rows(const ComposeLayers *info, const NitroGx3dScene *scene, int *y, int *r, int *left,
+                         int *right)
 {
     int ax, ay, ar, bx, by, br, ka, kb, ty, tr;
     uint32_t noted, seqB, stampB;
@@ -3195,16 +3196,25 @@ static void bg_band_rows(const ComposeLayers *info, const NitroGx3dScene *scene,
 
     ty = info->gpuCircleY;
     tr = info->gpuCircleR;
+    /* (its columns: the noted x's two halves, NitroPort_Render2DCircleNow;
+     * halfway too. The cut-in's stripe slides on from the right, 64 of the
+     * DS's columns a step, before it opens: in the picture, it went whole
+     * every step, the forest's fog the 2D's then, 2026-11-03) */
+    *left = info->gpuCircleX;
+    *right = info->gpuCircleRight;
     if (scene != NULL) {
         ka = circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted);
         kb = frame_before(scene, &seqB, &stampB) ? circle_of(seqB, stampB, &bx, &by, &br, &noted) : 0;
         if (ka == 3) {
             ty = ay, tr = ar;
+            *left = ax & 0xFFFF, *right = (int)((unsigned)ax >> 16);
             if (kb == 3) {
                 ty = (by + ay) / 2, tr = (br + ar) / 2;
+                *left = ((bx & 0xFFFF) + *left) / 2, *right = ((int)((unsigned)bx >> 16) + *right) / 2;
             }
         } else if (kb == 3) {
             ty = by, tr = br;
+            *left = bx & 0xFFFF, *right = (int)((unsigned)bx >> 16);
         }
     }
     /* (closing, then held: the cut-in's band stops 16 lines tall and the
@@ -3647,22 +3657,30 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         /* 5. The layers in front, with their alpha (multiplied in). One BG
          * in a band of lines (ComposeLayers.gpuCircle 3): those layers are
          * that BG alone, shown in the band's lines over the backdrop. */
-        int bandY = 0, bandR = rows;
+        int bandY = 0, bandR = rows, bandL = 0, bandRt = canvasW;
+        float bx0 = pic.x0, bx1 = pic.x1, bu0 = 0.0f, bu1 = u1;
 
         if (info->gpuCircle == 3) {
-            bg_band_rows(info, scene, &bandY, &bandR);
+            bg_band_rows(info, scene, &bandY, &bandR, &bandL, &bandRt);
             bandY = bandY < 0 ? 0 : bandY > rows ? rows : bandY;
             bandR = bandR < bandY ? bandY : bandR > rows ? rows : bandR;
-            if (bandR > bandY && sQuadVertices + 6 <= MAX_QUAD_VERTICES) {
+            bandL = bandL < 0 ? 0 : bandL > canvasW ? canvasW : bandL;
+            bandRt = bandRt < bandL ? bandL : bandRt > canvasW ? canvasW : bandRt;
+            /* (its columns on the screen, and in the picture's texture) */
+            bx0 = pic.x0 + (pic.x1 - pic.x0) * (float)bandL / (float)canvasW;
+            bx1 = pic.x0 + (pic.x1 - pic.x0) * (float)bandRt / (float)canvasW;
+            bu0 = u1 * (float)bandL / (float)canvasW;
+            bu1 = u1 * (float)bandRt / (float)canvasW;
+            if (bandR > bandY && bandRt > bandL && sQuadVertices + 6 <= MAX_QUAD_VERTICES) {
                 float by0 = pic.y0 + (float)(sConfig.flipV ? rows - bandR : bandY) * scale;
                 float by1 = pic.y0 + (float)(sConfig.flipV ? rows - bandY : bandR) * scale;
 
                 quad_combiner(0);
                 C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
-                quad(pic.x0, by0, pic.x1, by1, 0.0f, 0, 0, 0, 0, rgba_of((uint16_t)info->gpuCircleColor, 255));
+                quad(bx0, by0, bx1, by1, 0.0f, 0, 0, 0, 0, rgba_of((uint16_t)info->gpuCircleColor, 255));
             }
         }
-        if (!set->overEmpty && set->overTop < set->overBottom && bandR > bandY) {
+        if (!set->overEmpty && set->overTop < set->overBottom && bandR > bandY && bandRt > bandL) {
             /* (only the rows with anything in them; all of them flipped) */
             int first = sConfig.flipV ? 0 : set->overTop, bottom = sConfig.flipV ? rows : set->overBottom;
 
@@ -3681,7 +3699,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
                            GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
             if (bottom > first) {
-                quad(pic.x0, y0, pic.x1, y1, 0.0f, 0, v0, u1, v1, 0xFFFFFFFFu);
+                quad(bx0, y0, bx1, y1, 0.0f, bu0, v0, bu1, v1, 0xFFFFFFFFu);
             }
         }
         /* 5b. Engine A's sprites drawn here (ComposeLayers.gpuObjCount: the

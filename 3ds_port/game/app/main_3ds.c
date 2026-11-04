@@ -1819,6 +1819,7 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         layers->gpuObjCount = split.gpuObjsLeftOut ? split.gpuObjCount : -1;
         layers->gpuCircle = split.gpuCircleOn;
         layers->gpuCircleX = split.gpuCircleX;
+        layers->gpuCircleRight = split.gpuCircleRight;
         layers->gpuCircleY = split.gpuCircleY;
         layers->gpuCircleR = split.gpuCircleR;
         layers->gpuCircleColor = split.gpuCircleColor;

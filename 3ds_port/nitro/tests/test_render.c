@@ -2605,10 +2605,18 @@ static void test_bg_rows(void)
     NitroPort_Render2DSplit(0, under, &split);
     CHECK(split.gpuCircleOn != 3);
     G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG2, FALSE);
+    /* not across the whole screen (the cut-in's stripe sliding on from
+     * the right): its columns too, to the canvas's edge from 255 */
     G2_SetWnd0Position(10, 64, 255, 128);
     NitroPort_Render2DSplit(0, under, &split);
-    CHECK(split.gpuCircleOn != 3);
+    CHECK(split.gpuCircleOn == 3 && split.gpuCircleX == 10 && split.gpuCircleRight == 256);
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 3 && x == (10 | (256 << 16)) && y == 64 && r == 128);
+    G2_SetWnd0Position(100, 64, 200, 128);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 3 && split.gpuCircleX == 100 && split.gpuCircleRight == 200);
     G2_SetWnd0Position(0, 64, 255, 128);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 3 && split.gpuCircleX == 0 && split.gpuCircleRight == 256);
     /* a fog in front of the 3D outside the band (Eterna Forest's: BG3
      * here), blended onto it, the compositor's (gpuBgs): left out, and the
      * band the compositor's too, its lines filled over the fog */
@@ -2646,6 +2654,17 @@ static void test_bg_rows(void)
         G2_SetWnd0Position(0, 80, 255, 112);
         CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
         CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 3 && y == 80 && r == 112);
+        /* (the band not the compositor's, a BG in front of the 3D: the fog
+         * the 2D's; but the compositor's again while the window shows
+         * nothing, its lines none) */
+        G2_SetBG1Priority(0);
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuCircleOn != 3 && split.gpuBgLeftOut == 0);
+        G2_SetWnd0Position(0, 192, 255, 192);
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuCircleOn != 3 && split.gpuBgLeftOut == 1 << 3);
+        G2_SetBG1Priority(3);
+        G2_SetWnd0Position(0, 80, 255, 112);
         /* (the fog inside the band too: not left out, the band not the compositor's) */
         G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG2 | GX_WND_PLANEMASK_BG3, FALSE);
         NitroPort_Render2DSplit(0, under, &split);
