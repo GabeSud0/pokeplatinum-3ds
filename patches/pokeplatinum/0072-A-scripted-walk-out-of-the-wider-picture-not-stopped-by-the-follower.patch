@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 12:00:00 -0700
+Subject: [PATCH] A scripted walk out of the wider picture not stopped by the player's follower (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A walk that ends near the DS's screen edge is made longer on the wider
+screen, so the walker goes out of sight before it's taken away. The
+check for someone in the way counted the player's follower Pokémon (or
+its Poké Ball), which the DS doesn't have. In Mt. Coronet, as Cyrus
+left, the follower stood behind the player, so his walk was left as the
+DS has it and he vanished in the middle of the wider screen. The
+follower and its ball are no longer counted: he now walks on toward
+the cave's exit and out of sight.
+
+---
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+index f23c8588..eee8584d 100644
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -2408,8 +2408,14 @@ static void ScrCmd_PortWideNoteWalkers(ScriptContext *ctx, MapObject *mapObj, in
+     }
+ }
+ 
++#include "port_follower.h"
++
+ // Someone standing on (x, z), not walking a script's way (they walk out
+-// together), nor the walker or the player.
++// together), nor the walker or the player, nor the player's follower (no
++// one the DS has: it goes with the player. Standing behind the player in
++// Mt. Coronet as Cyrus left, the one step west of him the DS's picture
++// shows, his walk out was taken as blocked there and left as the DS has
++// it: he went 3 tiles inside the wider picture's edge, 2026-11-03).
+ static BOOL ScrCmd_PortWideSomeoneThere(FieldSystem *fieldSystem, MapObject *walker, int x, int z)
+ {
+     MapObject *other;
+@@ -2418,7 +2424,7 @@ static BOOL ScrCmd_PortWideSomeoneThere(FieldSystem *fieldSystem, MapObject *wal
+ 
+     while (MapObjectMan_FindObjectWithStatus(fieldSystem->mapObjMan, &other, &i, MAP_OBJ_STATUS_0) == TRUE) {
+         if (other == walker || other == player || MapObject_CheckStatus(other, MAP_OBJ_STATUS_4)
+-            || ScrCmd_PortWideIsWalker(other)) {
++            || ScrCmd_PortWideIsWalker(other) || MapObject_PortIsFollower(other)) {
+             continue;
+         }
+ 
+-- 
+2.43.0
+

@@ -1709,6 +1709,13 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             if (engine == 0 && !inPanel && NitroPort_ComposeDrawsBgs()) {
                 split.gpuBgs = NitroPort_RepeatingBgs();
             }
+            /* (the place name sign: its band drawn by the compositor, where
+             * the BG's scroll has it in the frame shown, halfway in the
+             * in-between frames, the picture not drawn again as it slides;
+             * on the field at the DS's pixel size, a pixel a pixel) */
+            if (engine == 0 && !inPanel && NitroPort_ComposeDrawsSigns() && split.top > 0 && split.height > 192) {
+                split.gpuSigns = 1 << 3;
+            }
             /* (the HM cut-in: its sprites drawn by the compositor, each
              * where it is in the frame shown, halfway in the in-between
              * frames, the picture not drawn again as they move) */
@@ -1815,6 +1822,26 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
                 pictureKey = split.gpuBgKey;
             }
             layers->gpuBgPicture = pictureValid ? picture : NULL;
+        }
+        layers->gpuSign = split.gpuSignLeftOut ? __builtin_ctz((unsigned)split.gpuSignLeftOut) : -1;
+        layers->gpuSignY = split.gpuSignY;
+        layers->gpuSignRows = split.gpuSignRows;
+        layers->gpuSignVofs = split.gpuSignVofs;
+        layers->gpuSignKey = split.gpuSignKey;
+        layers->gpuSignContent = split.gpuSignContent;
+        layers->gpuSignPicture = NULL;
+        if (layers->gpuSign > 0) {
+            /* (its band's picture, made again only when it changed: from the
+             * state taken, as the rest was) */
+            static uint16_t signPicture[400 * NITRO_SIGN_MAX_ROWS];
+            static uint64_t signKey;
+            static int signValid;
+
+            if (!signValid || signKey != split.gpuSignKey) {
+                signValid = split.width <= 400 && NitroPort_Render2DSignPicture(&split, layers->gpuSign, signPicture);
+                signKey = split.gpuSignKey;
+            }
+            layers->gpuSignPicture = signValid ? signPicture : NULL;
         }
         layers->gpuObjCount = split.gpuObjsLeftOut ? split.gpuObjCount : -1;
         layers->gpuCircle = split.gpuCircleOn;
@@ -2265,14 +2292,17 @@ static bool DrawFrame(bool new3dOnly)
         }
         any |= !__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE);
     }
-    if (sRemaster && NitroPort_ComposeDrawsBgs()) {
+    if (sRemaster && (NitroPort_ComposeDrawsBgs() || NitroPort_ComposeDrawsSigns())) {
         /* (the scrolls of this frame, whether a drawer takes it or not:
-         * the weather's BG drawn by the compositor goes with them) */
+         * the weather's BG drawn by the compositor goes with them, and the
+         * place name sign, with what it shows in this frame) */
         uint16_t ofs[8];
         int32_t fine[8];
+        uint32_t signContent = 0;
+        int sign = NitroPort_ComposeDrawsSigns() ? NitroPort_Render2DSignNow(&signContent) : -1;
 
         NitroPort_Render2DBgOffsetsFine(ofs, fine);
-        NitroPort_ComposeNoteBgOffsets(NitroPort_ComposeVBlanks(), NitroPort_Gx3dSwapsMade(), fine);
+        NitroPort_ComposeNoteBgOffsets(NitroPort_ComposeVBlanks(), NitroPort_Gx3dSwapsMade(), fine, sign, signContent);
     }
     /* (the HM cut-in's sprites drawn by the compositor: where they are
      * in this frame, whether a drawer takes it or not, once a V-blank) */

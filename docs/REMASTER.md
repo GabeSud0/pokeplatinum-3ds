@@ -648,7 +648,12 @@ stretched:
     before it's drawn, so it isn't seen standing where the script put it
     first; the way round something also goes round the people standing
     there (not the ones the script sets walking with it: its
-    ApplyMovement commands before the WaitMovement);
+    ApplyMovement commands before the WaitMovement). Since 2026-11-03
+    (patch 0072): nor the player's follower Pokémon or its Poké Ball,
+    which the DS doesn't have (behind the player in Mt. Coronet as Cyrus
+    left, it had his walk left as the DS has it: he vanished in the middle
+    of the wider screen; now he walks on toward the exit and out of
+    sight);
   - Route 201's Pokémon Breeder (who stands just past the DS's left
     edge, on the way Rowan and Dawn come in from Twinleaf Town) stands 5
     tiles further right (`map_header_data.c`, `sPortWideMoves`): in the
@@ -867,6 +872,17 @@ screen's 320 x 192 at 1.25 times, as above.
     walking back, 9 tiles away (2026-11-01). The flags' bytes start at the
     one with `MAP_LOCAL_FLAGS_START`'s bit (flag 1 is bit 1), as
     `FieldSystem_ClearLocalFlags` clears them.
+  - Brought during a map change too (patch 0074): none are brought during
+    a field task (a script, a menu, a battle's start), and walking out of
+    a door or a gate is one. Out of the gate between Route 208 and
+    Hearthome City, Route 208's arrow sign beside it, at the screen's left
+    edge in the city, came in 17 frames after the gate's wipe had shown
+    that part of the screen (a video of 2026-11-04). They're now also
+    brought during a task that has taken the player into another map
+    (the map with no task running last isn't the player's) with no script
+    in any of the field's tasks (`FieldSystem_PortRunningScript`): as its
+    screen fades in, as the map's own people are made as it loads. On the
+    PC the sign is there as the wipe's last step shows its columns.
 - **A battle's start** (patch 0051): the encounter effects are made for the
   DS's screen (windows and H-blank slices across its columns and lines,
   wipes drawn into a 256 x 192 BG). While one plays (`NitroPort_SetFieldEffect`)
@@ -1524,7 +1540,12 @@ screens) the lower screen is the DS's, filling the screen as before.
     it goes back, and what it waits for when it can't come out ("no map
     object free", "no sprites", "no room for its picture yet"), and when
     the first Pokémon has no sprite (a data pack made without the
-    follower sprites: only Platinum's 24).
+    follower sprites: only Platinum's 24). The map objects this code adds
+    (the Pokémon, its ball, its bubble) start at the height of the one
+    they're made for (patch 0073): at height 0, as a new map object is,
+    the ground's height taken nearest it put them on the lower ground
+    under a bridge (Route 208's wooden ones): the bubble showed at the
+    Pokémon's feet, 2026-11-03.
   - ALWAYS CATCH (every ball catches), INSTANT VICTORY (the player's
     attacks knock the opponent out, Endure and a Focus Band or Sash no
     help; a Substitute still takes the hit), FAST EGGS (the day care's chance at
@@ -2129,6 +2150,50 @@ about 1.9 to 2.1 pixels a step, changing slowly. Halfway goes the shorter
 way round 256 (the picture repeats every 256: a register gone from 202 to
 459 is a pixel on).
 
+The place name sign (2026-11-03): it slides in and out by its BG's
+vertical scroll (BG3, 4 lines a game step, every other frame: 38 to 0,
+then back), and every step drew the picture whole and handed it over
+again: 30 steps a second at most, and on the 3D's core, the in-between
+scenes giving way (the field stuttered as a route's or a city's sign came
+and went). Now the compositor draws it (`NitroRender2DSplit.gpuSigns`,
+`GpuSignOf`): when that BG is in front of everything (every other BG and
+the 3D behind it, no sprite on the picture, no windows, no H-blank effect,
+no colour effect on it as a first target), all it shows is in at most 7
+rows of tiles of its 256 x 256 map's upper half (`BgTextRowsShown`: a band
+at the screen's top, not a text box), no other copy of them comes on the
+picture as it scrolls round its map, and on the tall field they're in the
+BG's one window, moved up to the picture's top at the scroll 0 and now
+(`GpuSignTallMove`), the
+picture is drawn without it (`gpuSignLeftOut`) and the band of its lines
+is drawn on its own as it would be at the scroll 0
+(`NitroPort_Render2DSignPicture`: the canvas's width, the anchored sign at
+its left edge; made again only when its key changes: the BG's map, tiles,
+colours, its other scroll, the canvas and the windows). The compositor
+draws that over the picture moved up by the BG's scroll in the frame shown
+(the frame's noted scrolls, as the weather's), halfway in the in-between
+frames (2 lines a frame), in an in-between frame of its own when only it
+moved (`sign_moved`, as the GPU sprites), a texel a pixel (the set's
+`signTex`, 512 x 64: 64 KB a set; at 2x2 texels a pixel, as the over
+layer, the three sets would take 768 KB of the linear heap): on the field
+at the DS's pixel size only (`NitroPort_PixelField`, the default), drawn
+a pixel a pixel (BG3 alone, the sign's); elsewhere the picture draws it,
+as before. As the picture isn't drawn again while the sign slides, it may
+be of a frame before or after the one shown: each frame the game hands
+over notes the sign then with its scrolls (`NitroPort_Render2DSignNow`:
+the same test on the live state, on the last picture's canvas, and what
+its band shows, hashed: `SignContentOf`), and the compositor draws it only
+in a frame with the same sign up (the game puts it up scrolled 38, the
+frame before having none, and takes it away cleared, scrolled 0: drawn
+from the picture's own scroll, or the frame's 0, it showed whole for a
+frame). A review of the first version found it took a frame's scroll only
+within 8 lines of the picture's own, which is stale while it slides: on
+the 3DS the sign would have stayed 38 up, 2 lines shown. Its vertical scroll
+isn't a change once a picture has left it out (`sSignDrawn`): the picture
+isn't drawn again as it slides. In `test_render.c`: `test_gpu_sign` (on
+the DS's canvas, the wider one and the tall field's, each scroll of the
+slide the same, pixel for pixel, as the picture drawn with it). The PC
+runner draws it over its picture the same way.
+
 Which frame goes with a scene (2026-10-30): the weather BG's scrolls, the
 GPU sprites' places, the circle fade and the master brightness are noted
 each frame the game hands over, with the count of SWAP_BUFFERS the game has
@@ -2225,6 +2290,51 @@ picture has the frame's circle or band (a circle's or band's picture is
 drawn whole, another frame's isn't): with a V-blank's slack, the picture
 from just before the band got the band's halfway brightness, a dim flash
 of the whole outside (a video of 2026-10-31).
+
+The screen shown from one side (2026-11-04, leaving the gate between
+Route 208 and Hearthome City: window 0 over columns 0 to 212, 170, 127,
+85, 42 of every line, every other frame, nothing inside it and all outside
+it into the city; all inside and nothing outside it, 42 to 212, onto the
+route) is a band too (`GpuRowsOf`: each line's part inside the window and
+outside it showing all or nothing, the same columns of every line from an
+edge, the 3D on; `gpuCircleX` its columns, left | right << 16, 0 for all of
+them, `GpuRowsColumns`), drawn by the compositor beside its columns (and
+halfway in the in-between frames, the last step's too: `draw_band`,
+`band_columns_halfway`). Its columns go across the canvas as they do
+across the DS's 256 (400 / 256 a column): with the DS's columns moved to
+the canvas as the 2D draws a window (`FillRange`), the wipe went 42
+columns a step, then 114 at once as the window went off, and the place
+name sign, at the canvas's left edge, came with them all at once (a video
+of 2026-11-04). Before, it was drawn in the picture, whole each step: 30 a
+second at most, and the frames noted without a band, so the city showed
+whole at full brightness for a frame before the wipe (a picture from before
+it with the wipe's first frame's brightness). The sign slides in under it
+(`GpuSignOf`'s `bandShown`: with a band the compositor draws and that shows
+the sign's BG, the window on, the picture drawn with none then).
+
+In the compositor a band of columns is on every line, so its lines aren't
+eased (`band_ease` is for a band of lines opening from the middle): the
+frame before the wipe's first step is black (the master brightness) with
+no band noted, or an empty one, and eased from there, each step's columns
+would have opened from the middle of the screen up and down. Halfway, an
+empty band or a black frame before it (`frame_black`) counts as none of
+its columns, from the edge they're from: its first step halfway too. Its
+last step is halfway with the picture already without the band
+(`draw_columns_tail`, from the frames' notes alone, so both eyes alike) or
+with it still; a frame noted with the band, the picture already without it
+(ahead), gets the frame's columns there too, not the whole screen. A
+picture with the band before the frame's note of it is drawn with its own
+columns, not whole, and all black where the frame's noted black (the
+picture's first step ahead of the black frame before it). A band with
+columns, once drawn in a frame, is drawn the same for the other eye
+(`sColsDrawn`): drawing it changes the band's state, which took the other
+eye another way (a review of 2026-11-04). The sign goes to the compositor
+under a band of columns only: under a building door's band of lines it
+stays in the picture, as before. Simulated on the PC (sim60, the
+compositor's rules copied, each in-between frame with the picture before
+or the new one), the wipe goes 33 of the canvas's columns every frame each
+way, 65 at once at its first step only when the in-between frame has the
+picture from before the band (black there).
 
 An in-between frame for the 2D's fades alone (`NitroPort_ComposeFrame`'s
 mid 2, `fades_changed`): with no in-between scene (a map's first scenes

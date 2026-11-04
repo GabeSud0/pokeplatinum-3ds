@@ -2483,11 +2483,87 @@ static void test_window_rows(void)
     NitroPort_LineRegs.regs[0][40][0x4A] = 0x01;
     NitroPort_Render2DSplit(0, wide, &split);
     CHECK(split.gpuCircleOn == 0);
-    /* the window not empty: not a band */
+    /* the window not empty on the band's lines, which show then the columns
+     * outside it, only some lines: not a band */
     SetBandLines(32, 64);
     for (i = 0; i < 192; i++) {
         NitroPort_LineRegs.regs[0][i][0x40] = 200;   /* (WIN0H: 0 to 200) */
+        NitroPort_LineRegs.regs[0][i][0x44] = 192;   /* (WIN0V: 0 to 192) */
     }
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 0);
+    /* not on any line (WIN0V empty): the window is no window, a band */
+    SetBandLines(32, 64);
+    for (i = 0; i < 192; i++) {
+        NitroPort_LineRegs.regs[0][i][0x40] = 200;
+    }
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 2 && split.gpuCircleX == 0 && split.gpuCircleY == 24 + 32 &&
+          split.gpuCircleR == 24 + 64);
+    /* a wipe from one side (leaving the gate between Route 208 and
+     * Hearthome City): every line shows the columns outside the window
+     * (from 0 to 212), or inside it (from 0 to 42): its columns across the
+     * canvas as across the DS's screen, every line on the canvas; only with
+     * the 3D on, as on the field */
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1);
+    for (i = 0; i < 192; i++) {
+        memcpy(NitroPort_LineRegs.regs[0][i], NitroPort_IoReg, NITRO_LINE_REGS);
+        memset(NitroPort_LineRegs.regs[0][i] + 4, 0, 4);
+        NitroPort_LineRegs.regs[0][i][0x40] = 212;   /* (WIN0H: 0 to 212) */
+        NitroPort_LineRegs.regs[0][i][0x41] = 0;
+        NitroPort_LineRegs.regs[0][i][0x44] = 192;   /* (WIN0V: 0 to 192) */
+        NitroPort_LineRegs.regs[0][i][0x45] = 0;
+        NitroPort_LineRegs.regs[0][i][0x48] = 0x20;  /* WININ: nothing */
+        NitroPort_LineRegs.regs[0][i][0x4A] = 0x3F;  /* WINOUT: all */
+    }
+    NitroPort_LineRegs.serial++;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 2 && split.gpuCircleY == 0 && split.gpuCircleR == 240);
+    CHECK(split.gpuCircleX == ((212 * 400 / 256) | (400 << 16)));
+    {
+        int x = 0, y = 0, r = 0;
+
+        CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 2 && x == split.gpuCircleX && y == 0 && r == 240);
+    }
+    for (i = 0; i < 192; i++) {
+        NitroPort_LineRegs.regs[0][i][0x40] = 42;
+        NitroPort_LineRegs.regs[0][i][0x48] = 0x3F;  /* WININ: all */
+        NitroPort_LineRegs.regs[0][i][0x4A] = 0x20;  /* WINOUT: nothing */
+    }
+    NitroPort_LineRegs.serial++;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 2 && split.gpuCircleY == 0 && split.gpuCircleR == 240);
+    CHECK(split.gpuCircleX == (0 | ((42 * 400 / 256) << 16)));
+    /* columns in the middle (shown either side, or a window from 20 to 42
+     * showing inside it): not a band */
+    for (i = 0; i < 192; i++) {
+        NitroPort_LineRegs.regs[0][i][0x41] = 20;
+    }
+    NitroPort_LineRegs.serial++;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 0);
+    for (i = 0; i < 192; i++) {
+        NitroPort_LineRegs.regs[0][i][0x48] = 0x20;
+        NitroPort_LineRegs.regs[0][i][0x4A] = 0x3F;
+    }
+    NitroPort_LineRegs.serial++;
+    NitroPort_Render2DSplit(0, wide, &split);
+    CHECK(split.gpuCircleOn == 0);
+    /* (the columns without the 3D, the screen of a menu: in the picture) */
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_2D);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    for (i = 0; i < 192; i++) {
+        memcpy(NitroPort_LineRegs.regs[0][i], NitroPort_IoReg, NITRO_LINE_REGS);
+        memset(NitroPort_LineRegs.regs[0][i] + 4, 0, 4);
+        NitroPort_LineRegs.regs[0][i][0x40] = 212;
+        NitroPort_LineRegs.regs[0][i][0x41] = 0;
+        NitroPort_LineRegs.regs[0][i][0x44] = 192;
+        NitroPort_LineRegs.regs[0][i][0x45] = 0;
+        NitroPort_LineRegs.regs[0][i][0x48] = 0x20;
+        NitroPort_LineRegs.regs[0][i][0x4A] = 0x3F;
+    }
+    NitroPort_LineRegs.serial++;
     NitroPort_Render2DSplit(0, wide, &split);
     CHECK(split.gpuCircleOn == 0);
     /* a band starting after pictures drawn without one (one not for the
@@ -2971,6 +3047,274 @@ static void test_gpu_bg(void)
     G2_SetBG2Priority(3);
     NitroPort_Render2DSplit(0, under, &split);
     CHECK(split.gpuBgLeftOut == 0);
+}
+
+/* (the remaster's compositor) A band of a BG it draws itself as the BG
+ * scrolls (NitroRender2DSplit.gpuSigns: the place name sign sliding in and
+ * out, BG3 in front of everything, its window's 5 rows of tiles anchored to
+ * the canvas's left edge): left out of the picture, and the picture with
+ * its band (NitroPort_Render2DSignPicture) moved up by the scroll the same,
+ * pixel for pixel, as the picture drawn with it, on the DS's canvas, the
+ * wider one and the tall field's; its scroll then no reason to draw the
+ * picture again. Not with a sprite shown, a BG in front of it, a colour
+ * effect on it, or more of its map shown than 7 rows of tiles. */
+static void test_gpu_sign(void)
+{
+    static u8 tiles[3 * 32];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED, GREEN, BLUE };
+    static uint32_t rgba[256 * 192];
+    static u16 under[400 * 240], over[400 * 240], plainUnder[400 * 240], plainOver[400 * 240];
+    static u16 picture[400 * NITRO_SIGN_MAX_ROWS];
+    static u8 overAlpha[400 * 240], plainAlpha[400 * 240];
+    static struct { void *config; u8 layer, left, top, width, height; } window = { NULL, 3, 0, 0, 32, 5 };
+    static const int scrolls[] = { 38, 34, 30, 18, 2, 0 };
+    NitroRender2DSplit split, plain;
+    int layout, s, i, x, y;
+
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    MakeTile4(tiles + 64, 3);
+    memset(map, 0, sizeof(map));
+    for (y = 0; y < 5; y++) {
+        for (x = 0; x < 17; x++) {
+            map[y * 32 + x] = (u16)((x + y) & 1 ? 1 : 2);   /* the sign: 17 x 5 tiles, red and blue */
+        }
+    }
+    map[2 * 32 + 3] |= 0x400;               /* (one flipped) */
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    G2_SetBG3ControlText(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0800,
+                         GX_BG_CHARBASE_0x04000);
+    GX_LoadBG3Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG3Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    G2_SetBG0Priority(1);
+    G2_SetBG3Priority(0);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG3);
+    for (i = 0; i < 256 * 192; i++) {
+        rgba[i] = 0x404040FFu;
+    }
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+    NitroPort_WindowAdded(&window, 3, 0, 0, 32, 5);
+    NitroPort_WindowAnchor(&window, -1, 17);
+
+    /* the DS's canvas; the wider one (the sign at its left edge); the tall
+     * field's (the sign at its top), its BG clipped or not */
+    for (layout = 0; layout < 4; layout++) {
+        int w = layout == 0 ? 256 : layout == 1 ? 320 : 400, h = layout >= 2 ? 240 : 192;
+
+        memset(&split, 0, sizeof(split));
+        split.over = over;
+        split.overAlpha = overAlpha;
+        if (layout >= 1) {
+            split.width = w;
+            split.origin = (w - 256) / 2;
+            split.anchorWindows = 1;
+        }
+        if (layout >= 2) {
+            split.top = 24;
+            split.height = 240;
+            split.clip[3] = (u8)(layout == 3);
+        }
+        split.gpuSigns = 1 << 3;
+        plain = split;
+        plain.over = plainOver;
+        plain.overAlpha = plainAlpha;
+        plain.gpuSigns = 0;
+        for (s = 0; s < (int)(sizeof(scrolls) / sizeof(scrolls[0])); s++) {
+            int v = scrolls[s], bad = 0, signShown = 0;
+
+            G2_SetBG3Offset(0, v);
+            NitroPort_Render2DSplit(0, plainUnder, &plain);
+            NitroPort_Render2DSplit(0, under, &split);
+            CHECK(plain.gpuSignLeftOut == 0);
+            CHECK(split.gpuSignLeftOut == 1 << 3);
+            CHECK(split.gpuSignY == 0 && split.gpuSignRows == 40 && split.gpuSignVofs == v);
+            CHECK(NitroPort_Render2DSignPicture(&split, 3, picture));
+            for (y = 0; y < h; y++) {
+                for (x = 0; x < w; x++) {
+                    int sy = y - (split.gpuSignY - v), k = y * w + x;
+                    u16 c = over[k];
+                    u8 a = overAlpha[k];
+
+                    if (sy >= 0 && sy < split.gpuSignRows && (picture[sy * w + x] & 1)) {
+                        u16 b = picture[sy * w + x];
+
+                        c = (u16)(0x8000 | ((b >> 11) & 31) | (((b >> 6) & 31) << 5) | (((b >> 1) & 31) << 10));
+                        a = 16;
+                        signShown++;
+                    }
+                    bad += under[k] != plainUnder[k] || c != plainOver[k] || ((c & 0x8000) && a != plainAlpha[k]);
+                }
+            }
+            CHECK(bad == 0);
+            CHECK(signShown > 0 || v >= 40);
+            if (bad) {
+                printf("  (layout %d, scroll %d: %d pixels not as drawn with it)\n", layout, v, bad);
+            }
+        }
+    }
+    /* on the wider canvas, the sign's first tiles at its left edge */
+    CHECK(picture[0 * 400 + 0] != 0 && picture[39 * 400 + 135] != 0 && picture[20 * 400 + 136] == 0);
+
+    /* with a wipe the compositor draws (leaving the gate between Route 208
+     * and Hearthome City: the window over columns 0 to 212 of every line,
+     * nothing inside it, all outside): left out still, the picture with no
+     * windows the same as with it (the band drawn over both) */
+    G2_SetWnd0Position(0, 0, 212, 192);
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_NONE, TRUE);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_BG0 | GX_WND_PLANEMASK_BG3, TRUE);
+    GX_SetVisibleWnd(GX_WNDMASK_W0);
+    split.gpuCircle = plain.gpuCircle = 1;
+    for (s = 0; s < (int)(sizeof(scrolls) / sizeof(scrolls[0])); s++) {
+        int v = scrolls[s], bad = 0;
+
+        G2_SetBG3Offset(0, v);
+        NitroPort_Render2DSplit(0, plainUnder, &plain);
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(plain.gpuCircleOn == 2 && split.gpuCircleOn == 2 && split.gpuCircleX == plain.gpuCircleX &&
+              split.gpuCircleX == ((212 * 400 / 256) | (400 << 16)));
+        CHECK(plain.gpuSignLeftOut == 0 && split.gpuSignLeftOut == 1 << 3);
+        CHECK(NitroPort_Render2DSignPicture(&split, 3, picture));
+        for (y = 0; y < 240; y++) {
+            for (x = 0; x < 400; x++) {
+                int sy = y - (split.gpuSignY - v), k = y * 400 + x;
+                u16 c = over[k];
+
+                if (sy >= 0 && sy < split.gpuSignRows && (picture[sy * 400 + x] & 1)) {
+                    u16 b = picture[sy * 400 + x];
+
+                    c = (u16)(0x8000 | ((b >> 11) & 31) | (((b >> 6) & 31) << 5) | (((b >> 1) & 31) << 10));
+                }
+                bad += under[k] != plainUnder[k] || c != plainOver[k];
+            }
+        }
+        CHECK(bad == 0);
+    }
+    {
+        uint32_t content = 0;
+
+        CHECK(NitroPort_Render2DSignNow(&content) == 3 && content == split.gpuSignContent);
+    }
+    /* (a window that isn't such a band: the sign in the picture) */
+    G2_SetWnd0Position(20, 0, 212, 192);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 0 && split.gpuSignLeftOut == 0);
+    /* (a band of lines, a building's door: the compositor's band, the sign
+     * in the picture as before) */
+    G2_SetWnd0Position(0, 64, 255, 128);
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG0 | GX_WND_PLANEMASK_BG3, TRUE);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_NONE, TRUE);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 2 && split.gpuCircleX == 0 && split.gpuSignLeftOut == 0);
+    {
+        uint32_t content = 0;
+
+        CHECK(NitroPort_Render2DSignNow(&content) == -1);
+    }
+    GX_SetVisibleWnd(GX_WNDMASK_NONE);
+    split.gpuCircle = plain.gpuCircle = 0;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuSignLeftOut == 1 << 3);
+
+    /* the frame's own (NitroPort_Render2DSignNow, the live state): the same
+     * sign as the picture's; another once its pixels change; none once
+     * they're cleared (the game taking it away) */
+    {
+        uint32_t content = 0;
+        static u8 other[32];
+
+        CHECK(NitroPort_Render2DSignNow(&content) == 3 && content == split.gpuSignContent);
+        MakeTile4(other, 2);
+        GX_LoadBG3Char(other, 32, sizeof(other));
+        CHECK(NitroPort_Render2DSignNow(&content) == 3 && content != split.gpuSignContent);
+        memset(other, 0, sizeof(other));
+        GX_LoadBG3Char(other, 32, sizeof(other));
+        GX_LoadBG3Char(other, 64, sizeof(other));
+        CHECK(NitroPort_Render2DSignNow(&content) == -1 && content == 0);
+        GX_LoadBG3Char(tiles, 0, sizeof(tiles));
+        CHECK(NitroPort_Render2DSignNow(&content) == 3 && content == split.gpuSignContent);
+    }
+
+    /* its scroll alone: not drawn again (the first two times: drawn, then
+     * the VRAM noted; the next, the picture having left it out) */
+    G2_SetBG3Offset(0, 38);
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    G2_SetBG3Offset(0, 34);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    G2_SetBG3Offset(0, 30);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    G2_SetBG3Offset(1, 30);                 /* (its other scroll is in the picture's key: drawn) */
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    G2_SetBG3Offset(0, 30);
+    split.gpuSigns = 0;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    G2_SetBG3Offset(0, 26);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    split.gpuSigns = 1 << 3;
+
+    /* not left out: a sprite shown (one hidden, or off the picture, is
+     * fine); a BG in front of it; a colour effect on it; its map shown
+     * further down too; the 3D off */
+    {
+        u16 obj[4] = { 0, 0, 0, 0 };
+
+        GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG3 | GX_PLANEMASK_OBJ);
+        for (i = 0; i < 128; i++) {
+            obj[0] = 0x200;                 /* hidden */
+            memcpy(NitroPort_Oam + i * 8, obj, sizeof(obj));
+        }
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuSignLeftOut == 1 << 3);
+        obj[0] = 0;
+        memcpy(NitroPort_Oam, obj, sizeof(obj));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuSignLeftOut == 0);
+        obj[0] = 220;                       /* y 220: below the tall field's lines (from its 216) */
+        memcpy(NitroPort_Oam, obj, sizeof(obj));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuSignLeftOut == 1 << 3);
+        obj[0] = 0x200;
+        memcpy(NitroPort_Oam, obj, sizeof(obj));
+        GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG3);
+    }
+    G2_SetBG3Priority(1);                   /* the 3D in front of it */
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuSignLeftOut == 0);
+    G2_SetBG3Priority(0);
+    G2_SetBlendBrightness(GX_BLEND_PLANEMASK_BG3, 4);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuSignLeftOut == 0);
+    G2_BlendNone();
+    map[20 * 32 + 5] = 1;
+    GX_LoadBG3Scr(map, 0, sizeof(map));
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuSignLeftOut == 0);
+    map[20 * 32 + 5] = 0;
+    GX_LoadBG3Scr(map, 0, sizeof(map));
+    /* a band in the lower half (a text box at the screen's bottom): not a sign */
+    {
+        static u16 low[32 * 32];
+
+        memset(low, 0, sizeof(low));
+        for (i = 0; i < 17 * 5; i++) {
+            low[(19 + i / 17) * 32 + i % 17] = 1;
+        }
+        GX_LoadBG3Scr(low, 0, sizeof(low));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuSignLeftOut == 0);
+        GX_LoadBG3Scr(map, 0, sizeof(map));
+    }
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuSignLeftOut == 1 << 3);
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_2D);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuSignLeftOut == 0);
+    NitroPort_WindowRemoved(&window);
+    G2_SetBG3Offset(0, 0);
 }
 
 /* (the remaster's compositor) Engine A's sprites drawn by the compositor
@@ -4632,6 +4976,7 @@ int main(int argc, char **argv)
     test_bg_rows();
     test_wide_map_past_edges();
     test_gpu_bg();
+    test_gpu_sign();
     test_gpu_objs();
     test_tall_field();
     test_stretch_squeeze();

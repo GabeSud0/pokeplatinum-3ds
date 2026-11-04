@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 12:00:00 -0700
+Subject: [PATCH] The follower's bubble, ball and itself on a bridge, not under it (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A map object the follower code adds (the bubble over the Pokémon when
+it's talked to, its Poké Ball, the Pokémon itself) started at height 0,
+and the game takes the ground's height nearest the height an object
+has. On a bridge with lower ground under it (Route 208's wooden
+bridges) the bubble went down to that ground, so it showed at the
+Pokémon's feet instead of over its head. They now start at the height
+of the one they're made for.
+
+---
+diff --git a/src/port_follower.c b/src/port_follower.c
+index 1a8ac889..7747c985 100644
+--- a/src/port_follower.c
++++ b/src/port_follower.c
+@@ -473,6 +473,23 @@ static void PortFollower_Remove(FieldSystem *fieldSystem, MapObject *mapObj)
+     ov5_021EDA38(fieldSystem->mapObjMan, sub_0206285C(fieldSystem->mapObjMan));
+ }
+ 
++// A map object this file adds, at the height of the one it's made by: a new
++// one starts at height 0, and the ground's height is taken nearest the
++// height it has, so on a bridge with lower ground under it (Route 208's
++// wooden bridges) it went down there, under the bridge: its bubble showed
++// below the Pokémon talked to, 2026-11-03.
++static void PortFollower_HeightOf(MapObject *mapObj, MapObject *at)
++{
++    VecFx32 pos, atPos;
++
++    MapObject_GetPosPtr(mapObj, &pos);
++    MapObject_GetPosPtr(at, &atPos);
++    pos.y = atPos.y;
++    MapObject_SetPos(mapObj, &pos);
++    MapObject_SetYPrev(mapObj, MapObject_GetY(at));
++    MapObject_SetY(mapObj, MapObject_GetY(at));
++}
++
+ // Out behind the player when the tile behind is free, else on the player's
+ // tile, hidden till the player steps off it (walking out of a door: it
+ // comes out after them).
+@@ -510,6 +527,8 @@ static MapObject *PortFollower_Add(FieldSystem *fieldSystem, int graphicsID)
+         MapObject_SetStatusFlagOn(mapObj, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE);
+     }
+ 
++    PortFollower_HeightOf(mapObj, player);
++
+     if (!behind) {
+         MapObject_SetHidden(mapObj, TRUE);
+     }
+@@ -621,6 +640,8 @@ static BOOL PortFollower_ShowBall(FieldSystem *fieldSystem, MapObject *at, int s
+         MapObject_SetStatusFlagOn(ball, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE);
+     }
+ 
++    PortFollower_HeightOf(ball, at);
++
+     // (no shadow: not made at all, as the movement code would on its first
+     // frame, nor shown)
+     MapObject_SetStatusFlagOn(ball, MAP_OBJ_STATUS_SHOW_SHADOW | MAP_OBJ_STATUS_HIDE_SHADOW);
+@@ -1318,6 +1339,7 @@ static void PortFollower_ShowEmote(FieldSystem *fieldSystem, MapObject *at, int
+         MapObject_SetStatusFlagOn(bubble, MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE);
+     }
+ 
++    PortFollower_HeightOf(bubble, at);
+     MapObject_SetSpritePosOffset(bubble, &front);
+     MapObject_SetSpriteJumpOffset(bubble, &above);
+     PortFollower_ScaleOf(bubble, 0, EMOTE_POP);
+-- 
+2.43.0
+

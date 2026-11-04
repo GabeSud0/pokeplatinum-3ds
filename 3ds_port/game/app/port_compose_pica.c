@@ -138,6 +138,13 @@ typedef struct LayerSet {
     void *bgTex;
     uint64_t bgKey;
     int bgValid;
+    /* (the upper screen's) A band of a BG drawn here as it scrolls (the
+     * place name sign: ComposeLayers.gpuSign): its picture, a texel a pixel
+     * (SIGN_TEX_W x SIGN_TEX_H RGBA5551, tiled), and its key (signValid:
+     * written). */
+    void *signTex;
+    uint64_t signKey;
+    int signValid;
     /* (the upper screen's) Engine A's sprites drawn here (ComposeLayers.
      * gpuObjCount; -1: in the picture): their pixels, 2x2 texels a pixel
      * (OBJ_TEX_W x OBJ_TEX_H RGBA5551, tiled), and what each sprite shows
@@ -158,6 +165,19 @@ typedef struct LayerSet {
 #define BG_TEX_ALLOC (BG_TEX_BYTES + BG_TEX_W * 8 * 2)
 static int sBgsAvailable;   /* (the upper screen's sets have their bgTex) */
 static C3D_Tex sBgTex;
+/* A band of a BG's pictures: a texel a pixel of the canvas's width (400 at
+ * most) and NITRO_SIGN_MAX_ROWS lines: drawn on the field at the DS's pixel
+ * size, a pixel a pixel (2x2 texels a pixel would take four times the
+ * memory, 768 KB for the three sets). */
+#define SIGN_TEX_W 512
+#define SIGN_TEX_H 64
+#define SIGN_TEX_BYTES (SIGN_TEX_W * SIGN_TEX_H * 2)
+#define SIGN_TEX_ALLOC SIGN_TEX_BYTES
+static int sSignsAvailable;  /* (the upper screen's sets have their signTex) */
+static C3D_Tex sSignTex;
+/* (the upper screen's picture drawn last: its sign's BG, or -1; whether
+ * the sign moves is a reason for an in-between frame, fades_changed) */
+static int sSignShown = -1;
 /* Sprites' pictures: 2x2 texels a pixel of the atlas (and a row of tiles
  * more, as BG_TEX_ALLOC). */
 #define OBJ_TEX_W (NITRO_GPU_OBJ_ATLAS_W * 2)
@@ -190,6 +210,10 @@ static struct {
     uint32_t stamp, swaps;
     int32_t ofs[8];   /* (fx32, finer than a pixel where the game has it: NitroPort_Render2DBgOffsetsFine) */
     int valid;
+    /* (the place name sign in that frame, NitroPort_Render2DSignNow: its BG
+     * or -1, and what its band shows, hashed) */
+    int sign;
+    uint32_t signContent;
 } sBgOfs[BG_OFS_KEPT];
 static unsigned sBgOfsNext;
 static LightLock sBgOfsLock;   /* (LightLock_Init: the display's setting up) */
@@ -692,11 +716,14 @@ static void free_sets(Screen *scr)
         if (scr->set[i].over) linearFree(scr->set[i].over);
         if (scr->set[i].bgTex) linearFree(scr->set[i].bgTex);
         if (scr->set[i].objTex) linearFree(scr->set[i].objTex);
+        if (scr->set[i].signTex) linearFree(scr->set[i].signTex);
         scr->set[i].under = NULL;
         scr->set[i].over = NULL;
         scr->set[i].bgTex = NULL;
         scr->set[i].bgValid = 0;
         scr->set[i].objTex = NULL;
+        scr->set[i].signTex = NULL;
+        scr->set[i].signValid = 0;
         scr->set[i].objCount = -1;
         scr->set[i].objValid = 0;
     }
@@ -1095,6 +1122,24 @@ static int compose_init(const ComposeConfig *config, int small)
         }
         NitroPort_Log("[compose] not enough memory for sprites on the GPU: drawn with the 2D");
     }
+    /* (and the place name sign's band, NitroPort_ComposeDrawsSigns) */
+    sSignsAvailable = 1;
+    for (i = 0; i < SETS && sSignsAvailable; i++) {
+        sScreens[0].set[i].signTex = linearAlloc(SIGN_TEX_ALLOC);
+        sScreens[0].set[i].signValid = 0;
+        if (!sScreens[0].set[i].signTex) {
+            sSignsAvailable = 0;
+        }
+    }
+    if (!sSignsAvailable) {
+        for (i = 0; i < SETS; i++) {
+            if (sScreens[0].set[i].signTex) {
+                linearFree(sScreens[0].set[i].signTex);
+                sScreens[0].set[i].signTex = NULL;
+            }
+        }
+        NitroPort_Log("[compose] not enough memory for the place name sign on the GPU: drawn with the 2D");
+    }
     NitroPort_LowerMenuSetClock(NitroPort_ComposeVBlanks);   /* (the panel's fades) */
     NitroPort_LowerMenuSetAvailable(sMenuTexData[0] != NULL);
     sGxRecording = 0;
@@ -1150,6 +1195,11 @@ ComposeLayers *NitroPort_ComposeLayersOf(int engine)
 int NitroPort_ComposeDrawsBgs(void)
 {
     return sReady && sBgsAvailable;
+}
+
+int NitroPort_ComposeDrawsSigns(void)
+{
+    return sReady && sSignsAvailable;
 }
 
 int NitroPort_ComposeDrawsObjs(void)
@@ -1330,9 +1380,27 @@ static int objs_moved(const NitroGx3dScene *scene)
     return 0;
 }
 
+static int bg_offsets_of(uint32_t seq, uint32_t stamp, float out[8], int *sign, uint32_t *signContent);
+
+/* Whether the band of a BG the compositor draws as it scrolls (the place
+ * name sign, as the upper screen's last picture has it) is scrolled other
+ * in a scene's frame than in the last scene shown's: it slides on in an
+ * in-between frame drawn for it, as the sprites do. */
+static int sign_moved(const NitroGx3dScene *scene)
+{
+    float now[8], before[8];
+    int bg = sSignShown;
+
+    if (bg <= 0 || bg > 3 || !bg_offsets_of(scene->swap_seq, scene->stamp, now, NULL, NULL) ||
+        !bg_offsets_of(sLastMainSeq, sLastMainStamp, before, NULL, NULL)) {
+        return 0;
+    }
+    return now[bg * 2 + 1] != before[bg * 2 + 1];
+}
+
 /* Whether the 2D's fades (the master brightness, a circle or band) are
  * other in a scene's frame than in the last scene shown's; or the
- * compositor's sprites. (The HM cut-in's sprites move every game step:
+ * compositor's sprites, or its sign. (The HM cut-in's sprites move every game step:
  * halfway in the in-between frames. With an in-between scene left out
  * (the 3D behind, its core shared with the 2D's drawing: 4-11 a second
  * on Route 206, log 8532faaf) there was no in-between frame for them, the
@@ -1353,7 +1421,7 @@ static int fades_changed(const NitroGx3dScene *scene)
     }
     ca = circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted);
     cb = circle_of(sLastMainSeq, sLastMainStamp, &bx, &by, &br, &noted);
-    return a != b || ca != cb || (ca && (ax != bx || ay != by || ar != br)) || objs_moved(scene);
+    return a != b || ca != cb || (ca && (ax != bx || ay != by || ar != br)) || objs_moved(scene) || sign_moved(scene);
 }
 
 /* A scene's frame before (as an in-between scene has it: the frame the
@@ -1407,12 +1475,15 @@ static int objs_of(uint32_t seq, uint32_t stamp, NitroGpuObj *out)
 }
 
 
-void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const int32_t fine[8])
+void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const int32_t fine[8], int sign,
+                                    uint32_t signContent)
 {
     LightLock_Lock(&sBgOfsLock);
     sBgOfs[sBgOfsNext].stamp = stamp;
     sBgOfs[sBgOfsNext].swaps = swaps;
     memcpy(sBgOfs[sBgOfsNext].ofs, fine, sizeof(sBgOfs[0].ofs));
+    sBgOfs[sBgOfsNext].sign = sign;
+    sBgOfs[sBgOfsNext].signContent = signContent;
     sBgOfs[sBgOfsNext].valid = 1;
     sBgOfsNext = (sBgOfsNext + 1u) % BG_OFS_KEPT;
     LightLock_Unlock(&sBgOfsLock);
@@ -1427,8 +1498,9 @@ void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const int32_
  * it, or the one after it for it, now and then: the field's weather (Eterna
  * Forest's light) went back and forth as the player walked, 2026-10-30.
  * That only when none was noted so (the nearest within 4 V-blanks after
- * its stamp). Whether they're known. */
-static int bg_offsets_of(uint32_t seq, uint32_t stamp, float out[8])
+ * its stamp). Whether they're known; and (sign, signContent: NULL for none)
+ * the place name sign then. */
+static int bg_offsets_of(uint32_t seq, uint32_t stamp, float out[8], int *sign, uint32_t *signContent)
 {
     int i, found = -1;
     uint32_t best = 0;
@@ -1453,6 +1525,12 @@ static int bg_offsets_of(uint32_t seq, uint32_t stamp, float out[8])
     if (found >= 0) {
         for (i = 0; i < 8; i++) {
             out[i] = (float)sBgOfs[found].ofs[i] / 4096.0f;
+        }
+        if (sign != NULL) {
+            *sign = sBgOfs[found].sign;
+        }
+        if (signContent != NULL) {
+            *signContent = sBgOfs[found].signContent;
         }
     }
     LightLock_Unlock(&sBgOfsLock);
@@ -1702,6 +1780,7 @@ int NitroPort_ComposePublish(int engine, int screen)
     set->info.over = NULL;
     set->info.overAlpha = NULL;
     set->info.gpuBgPicture = NULL;   /* (the drawer's: the set has its own, bgTex) */
+    set->info.gpuSignPicture = NULL; /* (the same: signTex) */
     set->info.gpuObj = NULL;         /* (the same: objs, objTex) */
     set->info.gpuObjAtlas = NULL;
     set->overEmpty = 1;
@@ -1729,6 +1808,16 @@ int NitroPort_ComposePublish(int engine, int screen)
         GSPGPU_FlushDataCache(set->bgTex, BG_TEX_BYTES);
         set->bgKey = l->gpuBgKey;
         set->bgValid = 1;
+    }
+    /* A band of a BG drawn here as it scrolls (the place name sign): its
+     * picture, when the set doesn't hold it yet. */
+    if (!l->displayOff && l->gpuSign > 0 && set->signTex && l->gpuSignPicture && l->gpuSignRows > 0 &&
+        l->gpuSignRows <= NITRO_SIGN_MAX_ROWS && (l->gpuSignRows & 7) == 0 && w <= SIGN_TEX_W && (w & 7) == 0 &&
+        (!set->signValid || set->signKey != l->gpuSignKey)) {
+        NitroPort_Tile16(l->gpuSignPicture, w, l->gpuSignRows, set->signTex, SIGN_TEX_W);
+        GSPGPU_FlushDataCache(set->signTex, SIGN_TEX_BYTES);
+        set->signKey = l->gpuSignKey;
+        set->signValid = 1;
     }
     /* Engine A's sprites drawn here: their pixels, and what each shows. */
     set->objCount = -1;
@@ -2985,18 +3074,51 @@ static int frame_noted(uint32_t seq, uint32_t stamp)
     return found >= 0;
 }
 
+/* (a band of lines, ComposeLayers.gpuCircle 2) Its columns, as noted
+ * (gpuCircleX: left | right << 16, 0 all of them), on a canvas columns
+ * wide. */
+static void band_columns(int packed, int columns, int *left, int *right)
+{
+    *left = packed == 0 ? 0 : packed & 0xFFFF;
+    *right = packed == 0 ? columns : (packed >> 16) & 0xFFFF;
+}
+
+/* (a band of lines) Halfway between two bands' columns (packed as noted).
+ * One of them empty (aEmpty, bEmpty: its lines none, the screen shown
+ * nowhere, as the gate's wipe starts, black): as none of the other's
+ * columns, from the edge the other's are from (else the first step went
+ * from all the columns, the screen shown halfway across at once). */
+static int band_columns_halfway(int a, int aEmpty, int b, int bEmpty, int columns)
+{
+    int la, ra, lb, rb, l, r;
+
+    band_columns(a, columns, &la, &ra);
+    band_columns(b, columns, &lb, &rb);
+    if (aEmpty && !bEmpty) {
+        la = ra = lb == 0 ? 0 : columns;
+    } else if (bEmpty && !aEmpty) {
+        lb = rb = la == 0 ? 0 : columns;
+    }
+    l = (la + lb) / 2;
+    r = (ra + rb + 1) / 2;
+    return l <= 0 && r >= columns ? 0 : l | (r << 16);
+}
+
 /* A band drawn: the backdrop above its first line (y) and from the line
- * after its last (r) on, over the picture (pic, sy its lines' height). */
-static void draw_band(const PicaRect *pic, float sy, int y, int r, u32 rgba)
+ * after its last (r) on, over the picture (pic, sx its columns' width, sy
+ * its lines' height); and beside its columns (columns: gpuCircleX's, packed
+ * as noted; 0 all of them: the gate's wipe from one side). */
+static void draw_band(const PicaRect *pic, float sx, float sy, int y, int r, int columns, u32 rgba)
 {
     float top = pic->y0 + (float)y * sy, bottom = pic->y0 + (float)r * sy, t;
+    int cols = (int)((pic->x1 - pic->x0) / sx + 0.5f), left, right;
 
     if (sConfig.flipV) {
         t = top;
         top = pic->y0 + pic->y1 - bottom;
         bottom = pic->y0 + pic->y1 - t;
     }
-    if (sQuadVertices + 12 > MAX_QUAD_VERTICES) {
+    if (sQuadVertices + 24 > MAX_QUAD_VERTICES) {
         return;
     }
     quad_combiner(0);
@@ -3006,6 +3128,21 @@ static void draw_band(const PicaRect *pic, float sy, int y, int r, u32 rgba)
     }
     if (bottom < pic->y1) {
         quad(pic->x0, bottom > pic->y0 ? bottom : pic->y0, pic->x1, pic->y1, 0.0f, 0, 0, 0, 0, rgba);
+    }
+    band_columns(columns, cols, &left, &right);
+    if (bottom > top && (left > 0 || right < cols)) {
+        float x0 = pic->x0 + (float)left * sx, x1 = pic->x0 + (float)right * sx;
+        float t0 = top > pic->y0 ? top : pic->y0, t1 = bottom < pic->y1 ? bottom : pic->y1;
+
+        if (x1 < x0) {
+            x1 = x0;
+        }
+        if (x0 > pic->x0) {
+            quad(pic->x0, t0, x0 < pic->x1 ? x0 : pic->x1, t1, 0.0f, 0, 0, 0, 0, rgba);
+        }
+        if (x1 < pic->x1) {
+            quad(x1 > pic->x0 ? x1 : pic->x0, t0, pic->x1, t1, 0.0f, 0, 0, 0, 0, rgba);
+        }
     }
     NitroPort_PicaProfileMark("the band of lines");
 }
@@ -3023,7 +3160,48 @@ static void draw_band_tail(const PicaRect *pic, float sy)
         return;
     }
     band_ease(&y, &r, rows);
-    draw_band(pic, sy, y, r, sBand.rgba);
+    draw_band(pic, 1.0f, sy, y, r, 0, sBand.rgba);
+}
+
+/* Whether a frame (its SWAP_BUFFERS count and stamp) is noted with engine
+ * A's master brightness all black. */
+static int frame_black(uint32_t seq, uint32_t stamp)
+{
+    uint32_t noted;
+    int v = 0, kind = 0;
+
+    return bright_of(seq, stamp, &v, &noted, &kind) && v <= -16;
+}
+
+/* A band of columns where the picture has none (the gate's wipe: its
+ * window off, the picture already without it): in the in-between frame
+ * after its last step, its columns halfway to all of them, as its other
+ * steps are halfway (else its last 42 of the DS's columns showed at once).
+ * And a frame noted with one, the picture ahead of it (its window off
+ * already): the frame's columns, halfway from the frame before's as
+ * draw_circle_mask has them (else the whole screen for a frame, then the
+ * band again). Only from the frames' notes, so both eyes alike. */
+static void draw_columns_tail(const NitroGx3dScene *scene, const PicaRect *pic, float sx, float sy)
+{
+    uint32_t seqB = 0, stampB = 0, noted;
+    int ax = 0, ay = 0, ar = 0, bx = 0, by = 0, br = 0, ka, kb, before;
+    int cols = (int)((pic->x1 - pic->x0) / sx + 0.5f);
+
+    if (scene == NULL) {
+        return;
+    }
+    ka = circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted);
+    before = frame_before(scene, &seqB, &stampB);
+    kb = before ? circle_of(seqB, stampB, &bx, &by, &br, &noted) : 0;
+    if (ka == 2 && ax != 0 && ay < ar) {
+        int x = kb == 2                                          ? band_columns_halfway(ax, 0, bx, by >= br, cols)
+                : kb == 0 && before && frame_black(seqB, stampB) ? band_columns_halfway(ax, 0, 0, 1, cols)
+                                                                 : ax;
+
+        draw_band(pic, sx, sy, ay, ar, x, sBand.rgba);
+    } else if (ka == 0 && kb == 2 && bx != 0 && by < br && frame_noted(scene->swap_seq, scene->stamp)) {
+        draw_band(pic, sx, sy, by, br, band_columns_halfway(0, 0, bx, 0, cols), sBand.rgba);
+    }
 }
 
 /* (draw_circle_mask) The last circle or band noted for a frame drawn: its
@@ -3032,6 +3210,26 @@ static int sLastCircle, sLastCircleX, sLastCircleY, sLastCircleR;
 /* (draw_circle_mask) The circle last drawn: when (a V-blank), where. */
 static int sCircleDrawnValid, sCircleDrawnX, sCircleDrawnY, sCircleDrawnR;
 static u32 sCircleDrawnAt;
+/* (draw_circle_mask) A band with columns (the gate's wipe) as drawn in a
+ * frame: the compose it was drawn in (NitroPort_ComposeFrame's call: both
+ * eyes, and only them; a frame composed again, a picture published, works
+ * it out anew) and the scene (its frame and the frame before), its lines,
+ * columns and colour. The other eye draws it as it is: drawing it changes
+ * the band's state (sBand), which would take the other eye another way. */
+static struct {
+    int valid, y, r, x;
+    uint32_t compose, seq, stamp, seqBefore, stampBefore;
+    u32 rgba;
+} sColsDrawn;
+
+static int cols_drawn_key(const NitroGx3dScene *scene)
+{
+    return sColsDrawn.valid && sColsDrawn.compose == sComposedFrames &&
+           sColsDrawn.seq == (scene != NULL ? scene->swap_seq : 0u) &&
+           sColsDrawn.stamp == (scene != NULL ? scene->stamp : 0u) &&
+           sColsDrawn.seqBefore == (scene != NULL ? scene->swap_seq_before : 0u) &&
+           sColsDrawn.stampBefore == (scene != NULL ? scene->stamp_before : 0u);
+}
 
 static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *scene, const PicaRect *pic, float sx,
                              float sy)
@@ -3042,6 +3240,11 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
     float cx, cy, inner, outer;
     u32 rgba = rgba_of((uint16_t)info->gpuCircleColor, 255);
     extern u32 gpuCmdBufSize, gpuCmdBufOffset;
+
+    if (kind == 2 && cols_drawn_key(scene)) {
+        draw_band(pic, sx, sy, sColsDrawn.y, sColsDrawn.r, sColsDrawn.x, sColsDrawn.rgba);   /* (the other eye) */
+        return;
+    }
 
     /* (any picture of the circle fade goes with any circle: drawn as inside
      * the circle all over, it isn't drawn again as the circle changes; so
@@ -3059,13 +3262,13 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
      * the circle stood still at its end rather than closing, 2026-11-01.) */
     if (kind == 2 && sCircleDrawnValid &&
         (int32_t)(__atomic_load_n(&sVBlanks, __ATOMIC_RELAXED) - sCircleDrawnAt) <= 60) {
-        draw_band(pic, sy, info->gpuCircleY, info->gpuCircleR, rgba);
+        draw_band(pic, sx, sy, info->gpuCircleY, info->gpuCircleR, info->gpuCircleX, rgba);
         return;
     } else {
         uint32_t seqB, stampB;
         int ka = scene != NULL ? circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted) : 0;
-        int kb = scene != NULL && frame_before(scene, &seqB, &stampB) ? circle_of(seqB, stampB, &bx, &by, &br, &noted)
-                                                                      : 0;
+        int before = scene != NULL && frame_before(scene, &seqB, &stampB);
+        int kb = before ? circle_of(seqB, stampB, &bx, &by, &br, &noted) : 0;
 
         /* (a band's picture is drawn whole: the frame noted with no band,
          * the window off as the band ends, it's the picture as it is. Else,
@@ -3082,34 +3285,74 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
             int recent = sBand.on && (int32_t)(now - sBand.vblank) <= 30;
 
             if (recent && !band_open()) {
-                return;   /* (over, and opened all the way) */
+                /* (over, and opened all the way; but for a wipe from one
+                 * side, whose last step is halfway in an in-between frame
+                 * as the others are) */
+                if (kb == 2 && bx != 0 && by < br) {
+                    draw_band(pic, sx, sy, by, br,
+                              band_columns_halfway(0, 0, bx, 0, (int)((pic->x1 - pic->x0) / sx + 0.5f)), rgba);
+                }
+                return;
             }
             if (!recent) {
                 /* (no band drawn lately, none in the frame before: a band
                  * starting, its picture here before a note of it (the
                  * lines noted late): as the picture has it, rather than
-                 * the whole picture at once) */
+                 * the whole picture at once; its columns too, the gate's
+                 * wipe's first step) */
+                if (info->gpuCircleX != 0 && frame_black(scene->swap_seq, scene->stamp)) {
+                    /* (the frame black, the picture ahead of it with the
+                     * wipe's first step: none of it shown yet, black; not
+                     * its columns at the picture's brightness, then
+                     * halfway back in the in-between frame after. As it
+                     * is, the band's state left alone: not a band of lines
+                     * opening from the middle) */
+                    int mid = (info->gpuCircleY + info->gpuCircleR) / 2;
+
+                    draw_band(pic, sx, sy, mid, mid, 0, rgba_of(0, 255));
+                    return;
+                }
                 ka = 2;
                 kb = 0;
-                ax = 0;
+                ax = info->gpuCircleX;
                 ay = info->gpuCircleY;
                 ar = info->gpuCircleR;
             } else {
+                /* (its columns too: from the frame before's, where that had
+                 * the band, to all of them; the gate's wipe's last step) */
+                bx = kb == 2 ? bx : 0;
                 ka = kb = 2;
-                ax = bx = 0;
+                ax = 0;
                 ay = by = 0;
                 ar = br = rowsAll;
             }
         }
         if (ka == info->gpuCircle) {
             x = ax, y = ay, r = ar;
-            if (kb == info->gpuCircle) {
+            if (kb == info->gpuCircle && kind == 2 && ((ax != 0 && ay < ar) || (bx != 0 && by < br))) {
+                /* (a band of columns, the gate's wipe: on every line, so
+                 * its lines the one with columns'; an empty band before
+                 * it (the screen black as the wipe starts) as none of its
+                 * columns, not the lines in the middle opening) */
+                x = band_columns_halfway(ax, ay >= ar, bx, by >= br, (int)((pic->x1 - pic->x0) / sx + 0.5f));
+                y = ax != 0 && ay < ar ? ay : by;
+                r = ax != 0 && ay < ar ? ar : br;
+            } else if (kb == info->gpuCircle) {
                 x = (bx + ax) / 2, y = (by + ay) / 2, r = (br + ar) / 2;
+            } else if (kind == 2 && kb == 0 && before && ax != 0 && ay < ar && frame_black(seqB, stampB)) {
+                /* (the frame before no band but black, its brightness:
+                 * the gate's wipe starting, its first step's window on
+                 * with the screen still black. As an empty band before it:
+                 * its first step halfway too, not its columns at once) */
+                x = band_columns_halfway(ax, 0, 0, 1, (int)((pic->x1 - pic->x0) / sx + 0.5f));
             }
             sLastCircle = ka, sLastCircleX = ax, sLastCircleY = ay, sLastCircleR = ar;
         } else if (kb == info->gpuCircle) {
             x = bx, y = by, r = br;
-        } else if (sLastCircle == info->gpuCircle) {
+        } else if (sLastCircle == info->gpuCircle && (kind != 2 || (sLastCircleX == 0 && info->gpuCircleX == 0))) {
+            /* (a band's: of lines only; one of columns, the gate's wipe,
+             * as the picture has it: not one kept from before, a wipe the
+             * other way, nor for a building's door) */
             x = sLastCircleX, y = sLastCircleY, r = sLastCircleR;
         }
     }
@@ -3117,10 +3360,24 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
         /* A band of lines (walking out of a building): the backdrop above
          * and below it, its edges halfway in the in-between frames (the
          * game's band 32 lines taller every other frame: 16 each frame),
-         * and opening, eased by the V-blank (band_ease). */
+         * and opening, eased by the V-blank (band_ease). A band of columns
+         * (the gate's wipe) isn't: its lines, every line, as they are (and
+         * the band after it, the window off, not a band opening still). */
+        if (x != 0) {
+            sBand.on = 0;
+        }
         band_ease(&y, &r, (int)((pic->y1 - pic->y0) / sy + 0.5f));
         sBand.rgba = rgba;
-        draw_band(pic, sy, y, r, rgba);
+        draw_band(pic, sx, sy, y, r, x, rgba);
+        if (x != 0 || info->gpuCircleX != 0) {
+            sColsDrawn.valid = 1;
+            sColsDrawn.compose = sComposedFrames;
+            sColsDrawn.seq = scene != NULL ? scene->swap_seq : 0u;
+            sColsDrawn.stamp = scene != NULL ? scene->stamp : 0u;
+            sColsDrawn.seqBefore = scene != NULL ? scene->swap_seq_before : 0u;
+            sColsDrawn.stampBefore = scene != NULL ? scene->stamp_before : 0u;
+            sColsDrawn.y = y, sColsDrawn.r = r, sColsDrawn.x = x, sColsDrawn.rgba = rgba;
+        }
         return;
     }
     if (sQuadVertices + 6 * CIRCLE_SEGMENTS > MAX_QUAD_VERTICES || gpuCmdBufSize - gpuCmdBufOffset < 1024u) {
@@ -3463,6 +3720,9 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         quad_combiner(1);
         quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, 0, vTop, u1, vBottom, 0xFFFFFFFFu);
     }
+    if (scr == &sScreens[0]) {
+        sSignShown = -1;   /* (the sign's BG, drawn below: step 5a) */
+    }
     if (has3d) {
         uint16_t rearColor;
         unsigned rearAlpha;
@@ -3626,11 +3886,11 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             /* (the scrolls of the frame the DS shows the scene in; an
              * in-between scene's halfway from the scene before's; the
              * scene's own, a frame behind, when they aren't known) */
-            if (bg_offsets_of(scene->swap_seq, scene->stamp, now)) {
+            if (bg_offsets_of(scene->swap_seq, scene->stamp, now, NULL, NULL)) {
                 hofs = now[info->gpuBg * 2];
                 vofs = now[info->gpuBg * 2 + 1];
                 if ((scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) &&
-                    bg_offsets_of(scene->swap_seq_before, scene->stamp_before, before)) {
+                    bg_offsets_of(scene->swap_seq_before, scene->stamp_before, before, NULL, NULL)) {
                     hofs = bg_offset_halfway(before[info->gpuBg * 2], hofs);
                     vofs = bg_offset_halfway(before[info->gpuBg * 2 + 1], vofs);
                 }
@@ -3702,6 +3962,76 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
                 quad(bx0, y0, bx1, y1, 0.0f, bu0, v0, bu1, v1, 0xFFFFFFFFu);
             }
         }
+        /* 5a. A band of a BG drawn here, in front of the rest (the place
+         * name sign: ComposeLayers.gpuSign), moved up by the BG's vertical
+         * scroll in the frame the DS shows the scene in, halfway from the
+         * frame before's in an in-between frame (the sign slides 4 lines a
+         * game step: 2 a frame at 60 frames a second, as the picture can't
+         * be drawn again at that rate: drawn whole for every step, it was
+         * 30 a second at most and the in-between scenes gave way). */
+        if (scr == &sScreens[0]) {
+            sSignShown = info->gpuSign;
+        }
+        /* (with a band of columns too, the gate's wipe, drawn over it below:
+         * 5c; not a band of lines, a building's door) */
+        if (info->gpuSign > 0 && (info->gpuCircle == 0 || (info->gpuCircle == 2 && info->gpuCircleX != 0)) &&
+            !info->stretch && set->signTex &&
+            set->signValid &&
+            set->signKey == info->gpuSignKey && sQuadVertices + 6 <= MAX_QUAD_VERTICES) {
+            float v = (float)info->gpuSignVofs, now[8], before[8];
+            uint32_t seqB, stampB, content = 0;
+            int sign = -1, up = 1;
+
+            /* (only while the frame shown has this sign up, the same: the
+             * game puts it up scrolled 38 (the frame before, none) and takes
+             * it away cleared, scrolled 0; the picture isn't drawn again as
+             * it slides, so it may be of a frame before or after the one
+             * shown) */
+            if (bg_offsets_of(scene->swap_seq, scene->stamp, now, &sign, &content)) {
+                up = sign == info->gpuSign && content == info->gpuSignContent;
+                v = now[info->gpuSign * 2 + 1];
+                if (frame_before(scene, &seqB, &stampB) && bg_offsets_of(seqB, stampB, before, &sign, &content) &&
+                    sign == info->gpuSign && content == info->gpuSignContent) {
+                    v = bg_offset_halfway(before[info->gpuSign * 2 + 1], v);
+                }
+            }
+            /* (the scroll as the map's 256 lines go round: -128 to 127) */
+            v = fmodf(v, 256.0f);
+            if (v < 0.0f) {
+                v += 256.0f;
+            }
+            if (v >= 128.0f) {
+                v -= 256.0f;
+            }
+            if (up) {
+                float sy0 = (float)info->gpuSignY - v, sy1 = sy0 + (float)info->gpuSignRows;
+                float c0 = sy0 < 0.0f ? 0.0f : sy0, c1 = sy1 > (float)rows ? (float)rows : sy1;
+
+                if (c1 > c0) {
+                    /* (its texture's rows: a texel a line, row 0 at v = 1) */
+                    float t0 = 1.0f - (c0 - sy0) / (float)SIGN_TEX_H;
+                    float t1 = 1.0f - (c1 - sy0) / (float)SIGN_TEX_H;
+                    float y0 = pic.y0 + (sConfig.flipV ? (float)rows - c1 : c0) * scale;
+                    float y1 = pic.y0 + (sConfig.flipV ? (float)rows - c0 : c1) * scale;
+
+                    if (sConfig.flipV) {
+                        float t = t0;
+
+                        t0 = t1;
+                        t1 = t;
+                    }
+                    /* (a texel a pixel: as it is, unless the picture's scaled) */
+                    make_texture(&sSignTex, set->signTex, GPU_RGBA5551, SIGN_TEX_W, SIGN_TEX_H,
+                                 scale != 1.0f && linear, GPU_CLAMP_TO_EDGE);
+                    C3D_TexBind(0, &sSignTex);
+                    quad_combiner(1);
+                    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE,
+                                   GPU_ONE_MINUS_SRC_ALPHA);
+                    quad(pic.x0, y0, pic.x1, y1, 0.0f, 0.0f, t0, (float)canvasW / (float)SIGN_TEX_W, t1, 0xFFFFFFFFu);
+                    NitroPort_PicaProfileMark("the place name sign");
+                }
+            }
+        }
         /* 5b. Engine A's sprites drawn here (ComposeLayers.gpuObjCount: the
          * HM cut-in's), in front of it all. */
         if (info->gpuObjCount >= 0 && set->objTex && set->objCount > 0) {
@@ -3728,6 +4058,9 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         draw_circle_mask(info, has3d ? scene : NULL, &pic, scale, (pic.y1 - pic.y0) / (float)rows);
     } else if (has3d && sBand.on) {
         draw_band_tail(&pic, (pic.y1 - pic.y0) / (float)rows);
+    }
+    if (info->gpuCircle == 0 && has3d) {
+        draw_columns_tail(scene, &pic, scale, (pic.y1 - pic.y0) / (float)rows);
     }
     /* 6. The master brightness (with the 3D: engine A's, by frame). */
     master_brightness_of(scr, info, has3d && scr == &sScreens[0] ? scene : NULL);
