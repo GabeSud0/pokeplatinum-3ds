@@ -3173,24 +3173,35 @@ static int frame_black(uint32_t seq, uint32_t stamp)
     return bright_of(seq, stamp, &v, &noted, &kind) && v <= -16;
 }
 
-/* A band of columns over (the gate's wipe: its window off, the picture
- * already without it): in the in-between frame after its last step, its
- * columns halfway to all of them, as its other steps are halfway (else
- * its last 42 of the DS's columns showed at once). Only from the frames'
- * notes, so both eyes alike. */
+/* A band of columns where the picture has none (the gate's wipe: its
+ * window off, the picture already without it): in the in-between frame
+ * after its last step, its columns halfway to all of them, as its other
+ * steps are halfway (else its last 42 of the DS's columns showed at once).
+ * And a frame noted with one, the picture ahead of it (its window off
+ * already): the frame's columns, halfway from the frame before's as
+ * draw_circle_mask has them (else the whole screen for a frame, then the
+ * band again). Only from the frames' notes, so both eyes alike. */
 static void draw_columns_tail(const NitroGx3dScene *scene, const PicaRect *pic, float sx, float sy)
 {
-    uint32_t seqB, stampB, noted;
-    int ax = 0, ay = 0, ar = 0, bx = 0, by = 0, br = 0;
+    uint32_t seqB = 0, stampB = 0, noted;
+    int ax = 0, ay = 0, ar = 0, bx = 0, by = 0, br = 0, ka, kb, before;
+    int cols = (int)((pic->x1 - pic->x0) / sx + 0.5f);
 
-    if (scene == NULL || !frame_before(scene, &seqB, &stampB) ||
-        circle_of(seqB, stampB, &bx, &by, &br, &noted) != 2 || bx == 0 || by >= br ||
-        circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted) != 0 ||
-        !frame_noted(scene->swap_seq, scene->stamp)) {
+    if (scene == NULL) {
         return;
     }
-    draw_band(pic, sx, sy, by, br, band_columns_halfway(0, 0, bx, 0, (int)((pic->x1 - pic->x0) / sx + 0.5f)),
-              sBand.rgba);
+    ka = circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted);
+    before = frame_before(scene, &seqB, &stampB);
+    kb = before ? circle_of(seqB, stampB, &bx, &by, &br, &noted) : 0;
+    if (ka == 2 && ax != 0 && ay < ar) {
+        int x = kb == 2                                          ? band_columns_halfway(ax, 0, bx, by >= br, cols)
+                : kb == 0 && before && frame_black(seqB, stampB) ? band_columns_halfway(ax, 0, 0, 1, cols)
+                                                                 : ax;
+
+        draw_band(pic, sx, sy, ay, ar, x, sBand.rgba);
+    } else if (ka == 0 && kb == 2 && bx != 0 && by < br && frame_noted(scene->swap_seq, scene->stamp)) {
+        draw_band(pic, sx, sy, by, br, band_columns_halfway(0, 0, bx, 0, cols), sBand.rgba);
+    }
 }
 
 /* (draw_circle_mask) The last circle or band noted for a frame drawn: its
@@ -3199,6 +3210,25 @@ static int sLastCircle, sLastCircleX, sLastCircleY, sLastCircleR;
 /* (draw_circle_mask) The circle last drawn: when (a V-blank), where. */
 static int sCircleDrawnValid, sCircleDrawnX, sCircleDrawnY, sCircleDrawnR;
 static u32 sCircleDrawnAt;
+/* (draw_circle_mask) A band with columns (the gate's wipe) as drawn in a
+ * frame: the V-blank it shows at and the scene (its frame and the frame
+ * before, whether an in-between frame for the fades alone), its lines,
+ * columns and colour. The other eye draws it as it is: drawing it changes
+ * the band's state (sBand), which would take the other eye another way. */
+static struct {
+    int valid, mid, y, r, x;
+    uint32_t vblank, seq, stamp, seqBefore, stampBefore;
+    u32 rgba;
+} sColsDrawn;
+
+static int cols_drawn_key(const NitroGx3dScene *scene)
+{
+    return sColsDrawn.valid && sColsDrawn.vblank == sDrawTarget && sColsDrawn.mid == sEffectsMid &&
+           sColsDrawn.seq == (scene != NULL ? scene->swap_seq : 0u) &&
+           sColsDrawn.stamp == (scene != NULL ? scene->stamp : 0u) &&
+           sColsDrawn.seqBefore == (scene != NULL ? scene->swap_seq_before : 0u) &&
+           sColsDrawn.stampBefore == (scene != NULL ? scene->stamp_before : 0u);
+}
 
 static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *scene, const PicaRect *pic, float sx,
                              float sy)
@@ -3209,6 +3239,11 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
     float cx, cy, inner, outer;
     u32 rgba = rgba_of((uint16_t)info->gpuCircleColor, 255);
     extern u32 gpuCmdBufSize, gpuCmdBufOffset;
+
+    if (kind == 2 && cols_drawn_key(scene)) {
+        draw_band(pic, sx, sy, sColsDrawn.y, sColsDrawn.r, sColsDrawn.x, sColsDrawn.rgba);   /* (the other eye) */
+        return;
+    }
 
     /* (any picture of the circle fade goes with any circle: drawn as inside
      * the circle all over, it isn't drawn again as the circle changes; so
@@ -3269,6 +3304,15 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
                 ax = info->gpuCircleX;
                 ay = info->gpuCircleY;
                 ar = info->gpuCircleR;
+                if (ax != 0 && scene != NULL && frame_black(scene->swap_seq, scene->stamp)) {
+                    /* (the frame black, the picture ahead of it with the
+                     * wipe's first step: none of it shown yet, black; not
+                     * its columns at the picture's brightness, then
+                     * halfway back in the in-between frame after) */
+                    ax = 0;
+                    ay = ar = (ay + ar) / 2;
+                    rgba = rgba_of(0, 255);
+                }
             } else {
                 /* (its columns too: from the frame before's, where that had
                  * the band, to all of them; the gate's wipe's last step) */
@@ -3301,7 +3345,10 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
             sLastCircle = ka, sLastCircleX = ax, sLastCircleY = ay, sLastCircleR = ar;
         } else if (kb == info->gpuCircle) {
             x = bx, y = by, r = br;
-        } else if (sLastCircle == info->gpuCircle) {
+        } else if (sLastCircle == info->gpuCircle &&
+                   (kind != 2 || (sLastCircleX != 0) == (info->gpuCircleX != 0))) {
+            /* (a band's: of lines or of columns as the picture's, the
+             * gate's wipe's not kept for a building's door) */
             x = sLastCircleX, y = sLastCircleY, r = sLastCircleR;
         }
     }
@@ -3318,6 +3365,16 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
         band_ease(&y, &r, (int)((pic->y1 - pic->y0) / sy + 0.5f));
         sBand.rgba = rgba;
         draw_band(pic, sx, sy, y, r, x, rgba);
+        if (x != 0 || info->gpuCircleX != 0) {
+            sColsDrawn.valid = 1;
+            sColsDrawn.vblank = sDrawTarget;
+            sColsDrawn.mid = sEffectsMid;
+            sColsDrawn.seq = scene != NULL ? scene->swap_seq : 0u;
+            sColsDrawn.stamp = scene != NULL ? scene->stamp : 0u;
+            sColsDrawn.seqBefore = scene != NULL ? scene->swap_seq_before : 0u;
+            sColsDrawn.stampBefore = scene != NULL ? scene->stamp_before : 0u;
+            sColsDrawn.y = y, sColsDrawn.r = r, sColsDrawn.x = x, sColsDrawn.rgba = rgba;
+        }
         return;
     }
     if (sQuadVertices + 6 * CIRCLE_SEGMENTS > MAX_QUAD_VERTICES || gpuCmdBufSize - gpuCmdBufOffset < 1024u) {
@@ -3912,8 +3969,10 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         if (scr == &sScreens[0]) {
             sSignShown = info->gpuSign;
         }
-        /* (with a band of lines or columns too, drawn over it below: 5c) */
-        if (info->gpuSign > 0 && (info->gpuCircle == 0 || info->gpuCircle == 2) && !info->stretch && set->signTex &&
+        /* (with a band of columns too, the gate's wipe, drawn over it below:
+         * 5c; not a band of lines, a building's door) */
+        if (info->gpuSign > 0 && (info->gpuCircle == 0 || (info->gpuCircle == 2 && info->gpuCircleX != 0)) &&
+            !info->stretch && set->signTex &&
             set->signValid &&
             set->signKey == info->gpuSignKey && sQuadVertices + 6 <= MAX_QUAD_VERTICES) {
             float v = (float)info->gpuSignVofs, now[8], before[8];

@@ -3200,6 +3200,18 @@ static void test_gpu_sign(void)
     G2_SetWnd0Position(20, 0, 212, 192);
     NitroPort_Render2DSplit(0, under, &split);
     CHECK(split.gpuCircleOn == 0 && split.gpuSignLeftOut == 0);
+    /* (a band of lines, a building's door: the compositor's band, the sign
+     * in the picture as before) */
+    G2_SetWnd0Position(0, 64, 255, 128);
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG0 | GX_WND_PLANEMASK_BG3, TRUE);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_NONE, TRUE);
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 2 && split.gpuCircleX == 0 && split.gpuSignLeftOut == 0);
+    {
+        uint32_t content = 0;
+
+        CHECK(NitroPort_Render2DSignNow(&content) == -1);
+    }
     GX_SetVisibleWnd(GX_WNDMASK_NONE);
     split.gpuCircle = plain.gpuCircle = 0;
     NitroPort_Render2DSplit(0, under, &split);

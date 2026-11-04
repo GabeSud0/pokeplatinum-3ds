@@ -2310,8 +2310,16 @@ empty band or a black frame before it (`frame_black`) counts as none of
 its columns, from the edge they're from: its first step halfway too. Its
 last step is halfway with the picture already without the band
 (`draw_columns_tail`, from the frames' notes alone, so both eyes alike) or
-with it still. A picture with the band before the frame's note of it is
-drawn with its own columns, not whole. Simulated on the PC (sim60, the
+with it still; a frame noted with the band, the picture already without it
+(ahead), gets the frame's columns there too, not the whole screen. A
+picture with the band before the frame's note of it is drawn with its own
+columns, not whole, and all black where the frame's noted black (the
+picture's first step ahead of the black frame before it). A band with
+columns, once drawn in a frame, is drawn the same for the other eye
+(`sColsDrawn`): drawing it changes the band's state, which took the other
+eye another way (a review of 2026-11-04). The sign goes to the compositor
+under a band of columns only: under a building door's band of lines it
+stays in the picture, as before. Simulated on the PC (sim60, the
 compositor's rules copied, each in-between frame with the picture before
 or the new one), the wipe goes 33 of the canvas's columns every frame each
 way, 65 at once at its first step only when the in-between frame has the

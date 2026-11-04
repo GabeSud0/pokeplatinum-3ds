@@ -648,8 +648,9 @@ static int GpuSignObjShown(u16 a0, u16 a1, int top, int picH);
  * given (the state taken, or the live one) and the split's canvas. As the
  * picture is drawn without the BG, its scroll doesn't change it: nothing
  * else is drawn from it (no sprite is moved with its windows, none shown).
- * With a band of lines or columns the compositor draws (bandShown: what it
- * shows, GpuRowsOf's; else -1), the window on, when the band shows the BG:
+ * With a band of columns the compositor draws (bandShown: what it shows,
+ * GpuRowsOf's; else -1; a band of lines, a building's door, not), the
+ * window on, when the band shows the BG:
  * the picture is drawn with no windows then, the band drawn over the sign
  * (leaving the gate between Route 208 and Hearthome City, the sign slides
  * in as the screen's shown from one side). */
@@ -806,11 +807,13 @@ int NitroPort_Render2DSignNow(uint32_t *content)
         return -1;
     }
     {
-        /* (a band of lines or columns the compositor draws: what it shows) */
+        /* (a band of columns the compositor draws, the gate's wipe: what
+         * it shows; not a band of lines, a building's door) */
         int t, b, l, r;
         u8 shown;
         int band = (Rd32(NitroPort_IoReg, 0) & 0xE000) && !NitroPort_LineRegs.active &&
-                           GpuRowsOf(NitroPort_IoReg, NULL, sCircles[0], &t, &b, &l, &r, &shown) >= 0
+                           GpuRowsOf(NitroPort_IoReg, NULL, sCircles[0], &t, &b, &l, &r, &shown) >= 0 &&
+                           (l != 0 || r != W)
                        ? shown
                        : -1;
 
@@ -4648,7 +4651,10 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 sSignCanvas.valid = 1;
                 __atomic_clear(&sSignCanvas.lock, __ATOMIC_RELEASE);
             }
-            if (split->has3d && split->gpuSigns && (split->gpuCircleOn == 0 || split->gpuCircleOn == 2)) {
+            /* (with a band of columns too, the gate's wipe; not a band of
+             * lines, a building's door: as before 2026-11-04 there) */
+            if (split->has3d && split->gpuSigns &&
+                (split->gpuCircleOn == 0 || (split->gpuCircleOn == 2 && split->gpuCircleX != 0))) {
                 sb = GpuSignOf(split, e->taken ? e->taken->io : NitroPort_IoReg, e->oam, e->lines != NULL, e->bgVram,
                                split->gpuCircleOn == 2 ? e->insideWindow : -1, &sy, &srows, &srow0);
             }
@@ -7114,6 +7120,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
      * that BG when the last picture left it out) */
     int gpuSign = -1, signMasked = -1;
     u8 rowsShown = 0;
+    int rowsColumns = 0;   /* (the band of lines a band of columns: the gate's wipe) */
     u32 small, vram = 0;
     uint64_t checkStart = ClockNow();
 
@@ -7153,6 +7160,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
                 0) {
             gpuCircle = 3 + w;   /* (a band of lines: 3 + its window) */
             rowsShown = shown;   /* (what its lines show: in the picture) */
+            rowsColumns = lo != 0 || hi != W;
         }
         if (gpuCircle == 0 && (split->gpuCircle & 2)) {
             const u8 *oam = split->snapshot ? st->oam : NitroPort_Oam;
@@ -7173,7 +7181,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
      * GpuSignOf, as drawing would find, unless a circle or a band is the
      * compositor's; its scroll not a change once a picture has left it out:
      * a hand-drawn picture of it keeps it in) */
-    if (e == 0 && split->gpuSigns && (gpuCircle == 0 || gpuCircle == 3 || gpuCircle == 4)) {
+    if (e == 0 && split->gpuSigns && (gpuCircle == 0 || ((gpuCircle == 3 || gpuCircle == 4) && rowsColumns))) {
         const State2D *st = &sState[0];
         int sy, srows, srow0;
 
