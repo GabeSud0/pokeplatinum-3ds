@@ -648,7 +648,12 @@ stretched:
     before it's drawn, so it isn't seen standing where the script put it
     first; the way round something also goes round the people standing
     there (not the ones the script sets walking with it: its
-    ApplyMovement commands before the WaitMovement);
+    ApplyMovement commands before the WaitMovement). Since 2026-11-03
+    (patch 0072): nor the player's follower Pokémon or its Poké Ball,
+    which the DS doesn't have (behind the player in Mt. Coronet as Cyrus
+    left, it had his walk left as the DS has it: he vanished in the middle
+    of the wider screen; now he walks on toward the exit and out of
+    sight);
   - Route 201's Pokémon Breeder (who stands just past the DS's left
     edge, on the way Rowan and Dawn come in from Twinleaf Town) stands 5
     tiles further right (`map_header_data.c`, `sPortWideMoves`): in the
@@ -1524,7 +1529,12 @@ screens) the lower screen is the DS's, filling the screen as before.
     it goes back, and what it waits for when it can't come out ("no map
     object free", "no sprites", "no room for its picture yet"), and when
     the first Pokémon has no sprite (a data pack made without the
-    follower sprites: only Platinum's 24).
+    follower sprites: only Platinum's 24). The map objects this code adds
+    (the Pokémon, its ball, its bubble) start at the height of the one
+    they're made for (patch 0073): at height 0, as a new map object is,
+    the ground's height taken nearest it put them on the lower ground
+    under a bridge (Route 208's wooden ones): the bubble showed at the
+    Pokémon's feet, 2026-11-03.
   - ALWAYS CATCH (every ball catches), INSTANT VICTORY (the player's
     attacks knock the opponent out, Endure and a Focus Band or Sash no
     help; a Substitute still takes the hit), FAST EGGS (the day care's chance at
