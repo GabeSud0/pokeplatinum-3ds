@@ -281,8 +281,9 @@ typedef struct ComposeLayers {
      * the game had it in the frame shown (NitroPort_ComposeNoteFrame),
      * halfway in an in-between frame. gpuCircle 2: a band of lines instead
      * (gpuCircleY to gpuCircleR - 1), the colour above and below it. 3: one
-     * BG (gpuBg) in a band of lines, over the rest, the colour behind it. */
-    int gpuCircle, gpuCircleX, gpuCircleY, gpuCircleR, gpuCircleColor;
+     * BG (gpuBg) in a band of lines, over the rest, the colour behind it;
+     * in its columns gpuCircleX to gpuCircleRight - 1 only. */
+    int gpuCircle, gpuCircleX, gpuCircleY, gpuCircleR, gpuCircleColor, gpuCircleRight;
 } ComposeLayers;
 /* Whether the compositor can draw a BG itself (its picture's textures
  * made: NitroRender2DSplit.gpuBgs). Any thread. */

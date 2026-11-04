@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 12:00:00 -0700
+Subject: [PATCH] The HM cut-in's sprites drawn by the 3DS till its band's window goes (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+As the cut-in ends it deletes its sprites, puts BG3 back (cleared) and,
+a game frame later, takes its window away. The DS shows the last of the
+sprites in the band's 16 lines till then. The 3DS's compositor stopped
+drawing the sprites (NitroPort_SetFieldCells FALSE) as they were
+deleted, so those two frames' pictures had them drawn in, which isn't
+a band the compositor can draw: the band jumped back open to 16 lines,
+the DS's own, and its close at 60 frames a second wasn't seen through.
+The compositor now draws them till the window goes (and, if the cut-in
+is ended before that, as it's freed).
+
+---
+diff --git a/src/overlay006/hm_cut_in.c b/src/overlay006/hm_cut_in.c
+index 2e28ba40..28828307 100644
+--- a/src/overlay006/hm_cut_in.c
++++ b/src/overlay006/hm_cut_in.c
+@@ -295,6 +295,9 @@ static void CutIn_UnloadPokemonSpriteResources(HMCutIn *cutIn);
+ static void CutIn_ClearTileMapBG3(BgConfig *bgConfig);
+ static void CutIn_DeleteSpriteResources(HMCutIn *cutIn);
+ static void CutIn_UpdateSpriteList(HMCutIn *cutIn);
++#ifdef SDK_PORT_3DS
++static void CutIn_PortFieldCellsOff(void);
++#endif
+ 
+ // Cut-In window
+ static void CutIn_InitWindow(HMCutIn *cutIn);
+@@ -1096,6 +1099,9 @@ static HMCutIn *CreateHMCutIn(FieldSystem *fieldSystem)
+ 
+ static void FreeHMCutIn(HMCutIn *cutIn)
+ {
++#ifdef SDK_PORT_3DS
++    CutIn_PortFieldCellsOff(); // (if it ended before its window did)
++#endif
+     Heap_Free(cutIn);
+ }
+ 
+@@ -1376,6 +1382,9 @@ static BOOL HMCutIn_DeleteSprites(HMCutIn *cutIn)
+ 
+ static BOOL HMCutIn_WindowTaskDone(HMCutIn *cutIn)
+ {
++#ifdef SDK_PORT_3DS
++    CutIn_PortFieldCellsOff();
++#endif
+     CutIn_DeleteWindowTask(cutIn);
+     cutIn->state++;
+     return FALSE;
+@@ -1743,6 +1752,17 @@ extern void NitroPort_RepeatingBg(int bg, int on);
+ // the DS's sprites' x does (past 256 + its band, on the left side).
+ extern void NitroPort_SetFieldCells(int on);
+ 
++// The sprites still drawn by the 3DS's compositor (NitroPort_SetFieldCells
++// FALSE ends that too) until the band's window goes, a game frame after its
++// sprites are deleted: the DS shows the last of them in the band's 16 lines
++// till then. Ended with the sprites, those frames were the 2D's own band,
++// drawn in the picture: the band jumped back open to 16 lines and stopped
++// there, its close at 60 frames a second not seen through (2026-11-03).
++static void CutIn_PortFieldCellsOff(void)
++{
++    NitroPort_SetFieldCells(FALSE);
++}
++
+ // The band beside the DS's screen: three more rings each side, fading on
+ // (two darker shades of the band's colour), as drawn for the wider screen
+ // (2026-10-30). Made here from the game's own band: its middle ring's
+@@ -2048,7 +2068,6 @@ static void CutIn_DeleteSprites(HMCutIn *cutIn)
+     CutIn_ClearTileMapBG3(cutIn->fieldSystem->bgConfig);
+ #ifdef SDK_PORT_3DS
+     NitroPort_RepeatingBg(3, FALSE);
+-    NitroPort_SetFieldCells(FALSE);
+ #endif
+     CutIn_DeleteSpriteResources(cutIn);
+ 
+-- 
+2.43.0
+

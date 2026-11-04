@@ -535,6 +535,109 @@ static void test_interpolation(void)
     CHECK(!NitroPort_Gx3dInterpolation());
     CHECK(NitroPort_Gx3dMidScene(NULL,NULL)==NULL);
 }
+/* A polygon wholly inside the view in both scenes: its in-between made
+ * from the two scenes' screen positions (not clipped, nor projected
+ * again), and still where the halfway point projects to, to 1/256 pixel:
+ * weighed by w, not halfway on the screen (here w changes by an eighth). */
+static void deep_quad_at(int x,int z)
+{
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(31u<<16));
+    NitroPort_GxDirectWrite(0x20,0x7fff);
+    NitroPort_GxDirectWrite(0x40,1);
+    vertex(x,-1000,z);
+    vertex(x+2000,-1000,z);
+    vertex(x+2000,1000,z);
+    vertex(x,1000,z);
+    NitroPort_GxDirectWrite(0x41,0);
+}
+static void test_interpolation_blended(void)
+{
+    static const uint32_t proj[16]={ONE,0,0,0, 0,ONE,0,0, 0,0,ONE,ONE, 0,0,0,2*ONE};
+    const NitroGx3dScene *mid;
+    unsigned k,matched=0,polygons=0;
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x10,0);
+    for(k=0;k<16;k++)NitroPort_GxDirectWrite(0x16,proj[k]);
+    NitroPort_GxDirectWrite(0x10,2);
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    deep_quad_at(-3000,0);                 /* (w 2) */
+    swap_done();
+    deep_quad_at(-2400,-1024);             /* (w 1.75, and 600 to the right) */
+    swap_done();
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && matched==1 && polygons==1 && mid->count==2);
+    if(mid && mid->count==2){
+        int worst=0,off=0;
+        unsigned t;
+        for(t=0;t<2;t++)for(k=0;k<3;k++){
+            const NitroGx3dVertex *v=&mid->triangles[t].v[k];
+            double w=v->clip[3];
+            int x=(int)floor((v->clip[0]+w)*256.0/(2*w)*256+0.5);
+            int y=(int)floor((w-v->clip[1])*192.0/(2*w)*256+0.5);
+            int dx=abs(v->x-x),dy=abs(v->y-y);
+            if(dx>worst)worst=dx;
+            if(dy>worst)worst=dy;
+            if(fabs(v->inv_w*w-1.0)>1e-5)off=1;
+        }
+        CHECK(mid->triangles[0].v[0].clip[3]==(8192+7168)/2);
+        CHECK(worst<=1);
+        CHECK(!off);
+    }
+    NitroPort_Gx3dSetInterpolation(0);
+    reset_geometry();
+}
+/* The camera's move, in clip space (the field's camera keeps its angle):
+ * a column of rows of one kind, touching, the camera coming nearer (w
+ * from 2 to 1.8), so each row moves on the screen by its own amount, the
+ * outer ones further than the gap between rows (a ledge's steps near the
+ * screen's bottom riding the Cycling Road, white lines between them in the
+ * in-between frames, 2026-11-02). Each row halfway to its own place, and
+ * a new row at the column's end (none before) halfway as the camera
+ * moved, not as the screen's motion: no gap. */
+static void row_at(int y,int z)
+{
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(31u<<16));
+    NitroPort_GxDirectWrite(0x20,0x7fff);
+    NitroPort_GxDirectWrite(0x40,1);
+    vertex(-200,y,z);
+    vertex(200,y,z);
+    vertex(200,y+400,z);
+    vertex(-200,y+400,z);
+    NitroPort_GxDirectWrite(0x41,0);
+}
+static void test_interpolation_camera_move(void)
+{
+    static const uint32_t proj[16]={ONE,0,0,0, 0,ONE,0,0, 0,0,ONE,ONE, 0,0,0,2*ONE};
+    const NitroGx3dScene *mid;
+    unsigned k,matched=0,polygons=0;
+    int r,scene,bad=0,badNew=0;
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x10,0);
+    for(k=0;k<16;k++)NitroPort_GxDirectWrite(0x16,proj[k]);
+    NitroPort_GxDirectWrite(0x10,2);
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    for(scene=0;scene<2;scene++){
+        int z=scene?-820:0;   /* (w 2, then 1.8) */
+        for(r=-12;r<12;r++)row_at(400*r,z);
+        if(scene)row_at(400*12,z);   /* (new, at the end) */
+        swap_done();
+    }
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && polygons==25 && matched>=24);
+    if(mid && mid->count==50){
+        for(r=0;r<25;r++){
+            const NitroGx3dVertex *v=&mid->triangles[2*r].v[0];
+            if(r<24 && (v->clip[1]!=400*(r-12) || v->clip[3]!=(8192+(8192-820))/2))bad++;
+            if(r==24 && (abs(v->clip[1]-400*12)>2 || abs(v->clip[3]-(8192+(8192-820))/2)>2))badNew++;
+        }
+        CHECK(bad==0);
+        CHECK(badNew==0);
+    }else CHECK(0);
+    NitroPort_Gx3dSetInterpolation(0);
+    reset_geometry();
+}
 /* (a small quad, its corner at x, y) */
 static void small_quad_at(int x,int y,uint32_t attr)
 {
@@ -1992,6 +2095,49 @@ static unsigned list_quad(uint32_t *c,int x,int z)
     c[n++]=0x28;c[n++]=(uint32_t)(1u<<20);                  /* (VTX_DIFF: z + 1) */
     return n;
 }
+/* NitroPort_Gx3dTrimListRows: one list cut into rows by where each
+ * polygon starts in z: the two lists together are the whole, each polygon
+ * in one (rows of a map drawn again two ways, side by side). */
+static void test_list_rows(void)
+{
+    uint32_t cmds[200], w[200]={0}, a[200], b[200];
+    unsigned c=0,i,n;
+    uint32_t na,nb;
+    ListScene *raw=malloc(sizeof(*raw)), *one=malloc(sizeof(*one)), *two=malloc(sizeof(*two));
+    if(!raw||!one||!two){CHECK(0);free(raw);free(one);free(two);return;}
+    cmds[c++]=0x40;cmds[c++]=1;
+    cmds[c++]=0x20;cmds[c++]=RGB(0,31,0);
+    for(i=0;i<6;i++)c+=list_quad(&cmds[c],-1500,10+(int)i*10);   /* (z 10..11, 20..21, ...) */
+    cmds[c++]=0x41;
+    n=dl_pack(w,cmds,c);
+    na=NitroPort_Gx3dTrimListRows(w,n*4u,a,sizeof(a),INT32_MIN,INT32_MAX,INT32_MIN,30,1);
+    nb=NitroPort_Gx3dTrimListRows(w,n*4u,b,sizeof(b),INT32_MIN,INT32_MAX,INT32_MIN,30,0);   /* (the rest) */
+    CHECK(na>0 && nb>0);
+    list_scene(w,n,raw);
+    list_scene(a,na/4u,one);
+    list_scene(b,nb/4u,two);
+    CHECK(raw->count==6);                         /* (a triangle each: list_quad's last vertex on its third) */
+    CHECK(one->count==2 && two->count==4);        /* (z 10, 20 | 30, 40, 50, 60: a quad's start in one) */
+    if(raw->count==6 && one->count==2 && two->count==4){
+        CHECK(same_triangles(raw->tris,one->tris,2));
+        CHECK(same_triangles(raw->tris+2,two->tris,4));
+    }
+    /* (rows in the middle, and the rest: those before and after) */
+    na=NitroPort_Gx3dTrimListRows(w,n*4u,a,sizeof(a),INT32_MIN,INT32_MAX,20,45,1);
+    nb=NitroPort_Gx3dTrimListRows(w,n*4u,b,sizeof(b),INT32_MIN,INT32_MAX,20,45,0);
+    list_scene(a,na/4u,one);
+    list_scene(b,nb/4u,two);
+    CHECK(one->count==3 && two->count==3);        /* (20, 30, 40 | 10, 50, 60) */
+    if(one->count==3 && two->count==3){
+        CHECK(same_triangles(raw->tris+1,one->tris,3));
+        CHECK(same_triangles(raw->tris,two->tris,1) && same_triangles(raw->tris+4,two->tris+1,2));
+    }
+    /* (and an x slab as NitroPort_Gx3dTrimList's: none reaching x 2000) */
+    CHECK(NitroPort_Gx3dTrimListRows(w,n*4u,a,sizeof(a),2000,INT32_MAX,INT32_MIN,INT32_MAX,1)>0);
+    list_scene(a,NitroPort_Gx3dTrimListRows(w,n*4u,a,sizeof(a),2000,INT32_MAX,INT32_MIN,INT32_MAX,1)/4u,one);
+    CHECK(one->count==0);
+    free(raw);free(one);free(two);
+}
 static void test_list_trimmed(void)
 {
     const uint32_t lit=0x200u<<20;
@@ -2079,9 +2225,10 @@ static void test_list_trimmed(void)
  * V-blanks; 0 here unless a test sets it). */
 static uint32_t sTestStamp;
 uint32_t NitroPort_Gx3dStamp(void){return sTestStamp;}
-/* The thread behind, ending a scene a V-blank or more after the game did:
- * no in-between scene for it (counted), rather than the scene after the
- * next left out. Caught up: one. */
+/* The thread a scene behind (the game has ended the next one already): no
+ * in-between scene for it (counted), rather than the scene after the next
+ * left out. Only late (the 2D's drawing on its core held it up), or caught
+ * up: one. */
 static void test_mid_left_out_behind(void)
 {
     const NitroGx3dScene *scene;
@@ -2105,10 +2252,21 @@ static void test_mid_left_out_behind(void)
     sHold=0;sem_post(&sGate);
     scene=NitroPort_Gx3dScene();
     CHECK(scene->count==2);
-    CHECK(NitroPort_Gx3dMidOf(scene)==NULL);
+    CHECK(NitroPort_Gx3dMidOf(scene)!=NULL);          /* (late, but nothing after it yet: kept) */
     NitroPort_Gx3dMidWork(NULL,NULL,&left);
-    CHECK(left==left0+1u);
+    CHECK(left==left0);
+    sHold=1;                                          /* the thread stops... */
     quad_at(-2400,opaque);
+    swap();
+    quad_at(-2200,opaque);
+    swap();                                           /* ...and the game ends the next one too */
+    sTestStamp=14;
+    sHold=0;sem_post(&sGate);
+    scene=NitroPort_Gx3dScene();
+    NitroPort_Gx3dMidWork(NULL,NULL,&left);
+    CHECK(left==left0+1u);                            /* (the first: a scene behind) */
+    CHECK(scene->count==2 && NitroPort_Gx3dMidOf(scene)!=NULL);   /* (the second: caught up) */
+    quad_at(-2000,opaque);
     swap();
     scene=NitroPort_Gx3dScene();
     CHECK(NitroPort_Gx3dMidOf(scene)!=NULL);          /* (caught up again) */
@@ -2195,6 +2353,7 @@ int main(void)
     test_thread_behind();
     test_same_scenes_left_out();
     test_list_trimmed();
+    test_list_rows();
     test_mid_left_out_behind();
     test_earlier_scene_unread();
     test_scene_registers();
@@ -2220,6 +2379,8 @@ static void run_all(void)
     test_interpolation_order_shift();
     test_interpolation_tile_a_scene();
     test_interpolation_swaying();
+    test_interpolation_blended();
+    test_interpolation_camera_move();
     test_triangle_strip();
     test_hidden_vertices();
     test_textures();

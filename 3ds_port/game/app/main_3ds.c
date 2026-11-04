@@ -1819,6 +1819,7 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         layers->gpuObjCount = split.gpuObjsLeftOut ? split.gpuObjCount : -1;
         layers->gpuCircle = split.gpuCircleOn;
         layers->gpuCircleX = split.gpuCircleX;
+        layers->gpuCircleRight = split.gpuCircleRight;
         layers->gpuCircleY = split.gpuCircleY;
         layers->gpuCircleR = split.gpuCircleR;
         layers->gpuCircleColor = split.gpuCircleColor;
@@ -1969,6 +1970,11 @@ static void DrawersImageHandedOver(void)
     }
 }
 
+static uint64_t SystemTick(void)
+{
+    return svcGetSystemTick();
+}
+
 static bool StartDrawer(int screens, s32 priority, s32 readPriority, int core)
 {
     Drawer *d = &sDrawers[sDrawerCount];
@@ -2014,6 +2020,7 @@ static void StartDrawers(s32 priority, bool isNew3ds)
     } else {
         StartDrawer(ENGINE_A | ENGINE_B, priority + 1, priority + 1, 0);
     }
+    NitroPort_Render2DSetClock(SystemTick);   /* (the [perf] game line's drawing parts) */
     __atomic_store_n(&sDrawersStarted, true, __ATOMIC_RELEASE);
 }
 
@@ -2451,7 +2458,7 @@ static void PerfFrame(u64 enter)
     double seconds, perFrame;
     u64 soundTicks, soundSamples, gpuTicks;
     unsigned gpuScenes, gpuTriangles, gpuDroppedTriangles;
-    char drawing[400];
+    char drawing[640];
     int i, used = 0;
 
     if (sPerfStart == 0) {
@@ -2483,14 +2490,15 @@ static void PerfFrame(u64 enter)
     drawing[0] = 0;
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
-        unsigned count = d->count, registers = 0, vram = 0, r, v;
-        char why[96] = "";
+        unsigned count = d->count, registers = 0, vram = 0, spritesOnly = 0, r, v;
+        char why[192] = "";
 
         /* (the remaster: why its pictures were drawn again) */
         if (sRemaster && (d->screens & ENGINE_A)) {
             NitroPort_Render2DChangeStats(0, &r, &v);
             registers += r;
             vram += v;
+            spritesOnly += NitroPort_Render2DSpritesOnly(0);
         }
         if (sRemaster && (d->screens & ENGINE_B)) {
             NitroPort_Render2DChangeStats(1, &r, &v);
@@ -2498,8 +2506,20 @@ static void PerfFrame(u64 enter)
             vram += v;
         }
         if (registers + vram) {
-            snprintf(why, sizeof(why), ": %.1f for registers, palettes or sprites, %.1f for VRAM", registers / seconds,
-                     vram / seconds);
+            /* (and of those, the sprites alone made again: the picture kept) */
+            snprintf(why, sizeof(why), ": %.1f for registers, palettes or sprites, %.1f for VRAM; %.1f the sprites only",
+                     registers / seconds, vram / seconds, spritesOnly / seconds);
+        }
+        /* (the remaster's engine A: of its time a frame, finding out if the
+         * picture changed, drawing it, and of that the HM cut-in's sprites) */
+        if (sRemaster && (d->screens & ENGINE_A) && count) {
+            uint64_t checking, drawingTicks, sprites;
+            size_t len = strlen(why);
+
+            NitroPort_Render2DTimes(0, &checking, &drawingTicks, &sprites);
+            snprintf(why + len, sizeof(why) - len, "; a frame %.1f ms checking, %.1f drawing (%.1f sprites)",
+                     (double)checking * 1000.0 / SYSCLOCK_ARM11 / count, (double)drawingTicks * 1000.0 / SYSCLOCK_ARM11 / count,
+                     (double)sprites * 1000.0 / SYSCLOCK_ARM11 / count);
         }
         used += snprintf(drawing + used, sizeof(drawing) - (size_t)used,
                          "%s%s %.1f/s (%.1f/s new%s), %.1f ms, %.1f of it handing over (core %d)", i ? "; " : "",

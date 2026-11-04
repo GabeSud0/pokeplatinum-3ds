@@ -145,6 +145,10 @@ typedef struct LayerSet {
     void *objTex;
     int objCount;
     NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
+    /* (what objTex holds: the atlas's first objRows rows, their key;
+     * objValid: written) */
+    uint64_t objKey;
+    int objRows, objValid;
 } LayerSet;
 
 /* BG pictures: 2x2 texels a pixel of a 256 x 256 map (and a row of tiles
@@ -694,6 +698,7 @@ static void free_sets(Screen *scr)
         scr->set[i].bgValid = 0;
         scr->set[i].objTex = NULL;
         scr->set[i].objCount = -1;
+        scr->set[i].objValid = 0;
     }
 }
 
@@ -1076,6 +1081,7 @@ static int compose_init(const ComposeConfig *config, int small)
     for (i = 0; i < SETS && sObjsAvailable; i++) {
         sScreens[0].set[i].objTex = linearAlloc(OBJ_TEX_ALLOC);
         sScreens[0].set[i].objCount = -1;
+        sScreens[0].set[i].objValid = 0;
         if (!sScreens[0].set[i].objTex) {
             sObjsAvailable = 0;
         }
@@ -1301,8 +1307,38 @@ static int sEffectsMid;
 static int sLastMainValid;
 static uint32_t sLastMainSeq, sLastMainStamp;
 
+static int objs_of(uint32_t seq, uint32_t stamp, NitroGpuObj *out);
+
+/* Whether the compositor's sprites (the HM cut-in's) are other in a scene's
+ * frame than in the last scene shown's: how many, which, or where. */
+static int objs_moved(const NitroGx3dScene *scene)
+{
+    static NitroGpuObj now[NITRO_GPU_OBJ_MAX], before[NITRO_GPU_OBJ_MAX];
+    int n = objs_of(scene->swap_seq, scene->stamp, now), nb, k;
+
+    if (n < 0 || (nb = objs_of(sLastMainSeq, sLastMainStamp, before)) < 0) {
+        return 0;   /* (not noted: not drawn by the compositor) */
+    }
+    if (n != nb) {
+        return 1;
+    }
+    for (k = 0; k < n; k++) {
+        if (now[k].key != before[k].key || now[k].x != before[k].x || now[k].y != before[k].y) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Whether the 2D's fades (the master brightness, a circle or band) are
- * other in a scene's frame than in the last scene shown's. */
+ * other in a scene's frame than in the last scene shown's; or the
+ * compositor's sprites. (The HM cut-in's sprites move every game step:
+ * halfway in the in-between frames. With an in-between scene left out
+ * (the 3D behind, its core shared with the 2D's drawing: 4-11 a second
+ * on Route 206, log 8532faaf) there was no in-between frame for them, the
+ * frame before shown twice: the cut-in not smooth, the 3D still behind
+ * it. Now that in-between frame is drawn with the scene's 3D, the sprites
+ * halfway.) */
 static int fades_changed(const NitroGx3dScene *scene)
 {
     int a = 0, b = 0, ka = 0, kb = 0, ax = 0, ay = 0, ar = 0, bx = 0, by = 0, br = 0, ca, cb;
@@ -1317,7 +1353,7 @@ static int fades_changed(const NitroGx3dScene *scene)
     }
     ca = circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted);
     cb = circle_of(sLastMainSeq, sLastMainStamp, &bx, &by, &br, &noted);
-    return a != b || ca != cb || (ca && (ax != bx || ay != by || ar != br));
+    return a != b || ca != cb || (ca && (ax != bx || ay != by || ar != br)) || objs_moved(scene);
 }
 
 /* A scene's frame before (as an in-between scene has it: the frame the
@@ -1577,6 +1613,39 @@ static void flush_texture(void *data, uint32_t bytes)
     GSPGPU_FlushDataCache(data, bytes);
 }
 
+/* (NitroPort_ComposePublish) The sprites' atlas rows in use: down to the
+ * row below the lowest of their pictures, 4 at a time (a tile's 8 texels
+ * doubled). */
+static int atlas_rows(const NitroGpuObj *objs, int n)
+{
+    int k, rows = 0;
+
+    for (k = 0; k < n; k++) {
+        int bottom = (int)objs[k].ay + (int)objs[k].h + 1;
+
+        if (bottom > rows) {
+            rows = bottom;
+        }
+    }
+    rows = (rows + 3) & ~3;
+    return rows > NITRO_GPU_OBJ_ATLAS_H ? NITRO_GPU_OBJ_ATLAS_H : rows;
+}
+
+/* (and) A key of what those rows hold: two hashes of their words. */
+static uint64_t atlas_key(const uint16_t *atlas, int rows)
+{
+    const uint32_t *w = (const uint32_t *)(const void *)atlas;
+    uint32_t a = 2166136261u, b = 0x9E3779B9u;
+    int i, n = rows * NITRO_GPU_OBJ_ATLAS_W / 2;
+
+    for (i = 0; i < n; i++) {
+        a = (a ^ w[i]) * 16777619u;
+        b = (b + w[i]) * 2654435761u;
+        b ^= b >> 15;
+    }
+    return (((uint64_t)a << 32) | b) ^ (uint64_t)rows;
+}
+
 int NitroPort_ComposePublish(int engine, int screen)
 {
     int e = engine ? 1 : 0, i, buf = -1;
@@ -1664,8 +1733,22 @@ int NitroPort_ComposePublish(int engine, int screen)
     /* Engine A's sprites drawn here: their pixels, and what each shows. */
     set->objCount = -1;
     if (!l->displayOff && l->gpuObjCount >= 0 && set->objTex && l->gpuObj && l->gpuObjAtlas) {
-        NitroPort_Double2xTiled16(l->gpuObjAtlas, NITRO_GPU_OBJ_ATLAS_W, NITRO_GPU_OBJ_ATLAS_H, set->objTex, OBJ_TEX_W);
-        GSPGPU_FlushDataCache(set->objTex, OBJ_TEX_BYTES);
+        /* (their pixels: the rows in use, and only if the set doesn't hold
+         * them already. Through the HM cut-in its sprites mostly move, their
+         * pictures the same: the atlas, 512 x 256 texels made and flushed
+         * for each of its pictures, was much of the hand-over's ~7 ms on
+         * the 3D's core, 2026-11-03) */
+        int rows = atlas_rows(l->gpuObj, l->gpuObjCount);
+        uint64_t key = rows > 0 ? atlas_key(l->gpuObjAtlas, rows) : 0;
+
+        if (rows > 0 && (!set->objValid || set->objKey != key)) {
+            NitroPort_Double2xTiled16Rows(l->gpuObjAtlas, NITRO_GPU_OBJ_ATLAS_W, NITRO_GPU_OBJ_ATLAS_H, 0, rows,
+                                          set->objTex, OBJ_TEX_W);
+            GSPGPU_FlushDataCache(set->objTex, (u32)rows * OBJ_TEX_W * 4u);
+            set->objKey = key;
+            set->objRows = rows;
+            set->objValid = 1;
+        }
         memcpy(set->objs, l->gpuObj, (size_t)l->gpuObjCount * sizeof(set->objs[0]));
         set->objCount = l->gpuObjCount;
     }
@@ -3104,7 +3187,8 @@ static struct {
     uint32_t vblank;
 } sBgBand;
 
-static void bg_band_rows(const ComposeLayers *info, const NitroGx3dScene *scene, int *y, int *r)
+static void bg_band_rows(const ComposeLayers *info, const NitroGx3dScene *scene, int *y, int *r, int *left,
+                         int *right)
 {
     int ax, ay, ar, bx, by, br, ka, kb, ty, tr;
     uint32_t noted, seqB, stampB;
@@ -3112,16 +3196,25 @@ static void bg_band_rows(const ComposeLayers *info, const NitroGx3dScene *scene,
 
     ty = info->gpuCircleY;
     tr = info->gpuCircleR;
+    /* (its columns: the noted x's two halves, NitroPort_Render2DCircleNow;
+     * halfway too. The cut-in's stripe slides on from the right, 64 of the
+     * DS's columns a step, before it opens: in the picture, it went whole
+     * every step, the forest's fog the 2D's then, 2026-11-03) */
+    *left = info->gpuCircleX;
+    *right = info->gpuCircleRight;
     if (scene != NULL) {
         ka = circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted);
         kb = frame_before(scene, &seqB, &stampB) ? circle_of(seqB, stampB, &bx, &by, &br, &noted) : 0;
         if (ka == 3) {
             ty = ay, tr = ar;
+            *left = ax & 0xFFFF, *right = (int)((unsigned)ax >> 16);
             if (kb == 3) {
                 ty = (by + ay) / 2, tr = (br + ar) / 2;
+                *left = ((bx & 0xFFFF) + *left) / 2, *right = ((int)((unsigned)bx >> 16) + *right) / 2;
             }
         } else if (kb == 3) {
             ty = by, tr = br;
+            *left = bx & 0xFFFF, *right = (int)((unsigned)bx >> 16);
         }
     }
     /* (closing, then held: the cut-in's band stops 16 lines tall and the
@@ -3190,9 +3283,13 @@ static void draw_gpu_objs(const LayerSet *set, const NitroGx3dScene *scene, cons
     int n = set->objCount, nb = -1, na = -1, k;
 
     if (scene != NULL) {
+        uint32_t seqB, stampB;
+
+        /* (halfway from the frame before: an in-between scene's, or in an
+         * in-between frame without one the last scene shown's) */
         na = objs_of(scene->swap_seq, scene->stamp, after);
-        if ((scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) && na >= 0) {
-            nb = objs_of(scene->swap_seq_before, scene->stamp_before, before);
+        if (na >= 0 && frame_before(scene, &seqB, &stampB)) {
+            nb = objs_of(seqB, stampB, before);
         }
     }
     if (na >= 0) {
@@ -3560,22 +3657,30 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         /* 5. The layers in front, with their alpha (multiplied in). One BG
          * in a band of lines (ComposeLayers.gpuCircle 3): those layers are
          * that BG alone, shown in the band's lines over the backdrop. */
-        int bandY = 0, bandR = rows;
+        int bandY = 0, bandR = rows, bandL = 0, bandRt = canvasW;
+        float bx0 = pic.x0, bx1 = pic.x1, bu0 = 0.0f, bu1 = u1;
 
         if (info->gpuCircle == 3) {
-            bg_band_rows(info, scene, &bandY, &bandR);
+            bg_band_rows(info, scene, &bandY, &bandR, &bandL, &bandRt);
             bandY = bandY < 0 ? 0 : bandY > rows ? rows : bandY;
             bandR = bandR < bandY ? bandY : bandR > rows ? rows : bandR;
-            if (bandR > bandY && sQuadVertices + 6 <= MAX_QUAD_VERTICES) {
+            bandL = bandL < 0 ? 0 : bandL > canvasW ? canvasW : bandL;
+            bandRt = bandRt < bandL ? bandL : bandRt > canvasW ? canvasW : bandRt;
+            /* (its columns on the screen, and in the picture's texture) */
+            bx0 = pic.x0 + (pic.x1 - pic.x0) * (float)bandL / (float)canvasW;
+            bx1 = pic.x0 + (pic.x1 - pic.x0) * (float)bandRt / (float)canvasW;
+            bu0 = u1 * (float)bandL / (float)canvasW;
+            bu1 = u1 * (float)bandRt / (float)canvasW;
+            if (bandR > bandY && bandRt > bandL && sQuadVertices + 6 <= MAX_QUAD_VERTICES) {
                 float by0 = pic.y0 + (float)(sConfig.flipV ? rows - bandR : bandY) * scale;
                 float by1 = pic.y0 + (float)(sConfig.flipV ? rows - bandY : bandR) * scale;
 
                 quad_combiner(0);
                 C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
-                quad(pic.x0, by0, pic.x1, by1, 0.0f, 0, 0, 0, 0, rgba_of((uint16_t)info->gpuCircleColor, 255));
+                quad(bx0, by0, bx1, by1, 0.0f, 0, 0, 0, 0, rgba_of((uint16_t)info->gpuCircleColor, 255));
             }
         }
-        if (!set->overEmpty && set->overTop < set->overBottom && bandR > bandY) {
+        if (!set->overEmpty && set->overTop < set->overBottom && bandR > bandY && bandRt > bandL) {
             /* (only the rows with anything in them; all of them flipped) */
             int first = sConfig.flipV ? 0 : set->overTop, bottom = sConfig.flipV ? rows : set->overBottom;
 
@@ -3594,7 +3699,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
                            GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
             if (bottom > first) {
-                quad(pic.x0, y0, pic.x1, y1, 0.0f, 0, v0, u1, v1, 0xFFFFFFFFu);
+                quad(bx0, y0, bx1, y1, 0.0f, bu0, v0, bu1, v1, 0xFFFFFFFFu);
             }
         }
         /* 5b. Engine A's sprites drawn here (ComposeLayers.gpuObjCount: the

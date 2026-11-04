@@ -83,9 +83,11 @@ typedef struct NitroRender2DSplit {
      * the picture drawn as outside the window everywhere, with that BG too,
      * alone in front of the 3D (over), for the compositor to show in the
      * band's lines only, gpuCircleY to gpuCircleR - 1, the backdrop
-     * (gpuCircleColor) behind it there. */
+     * (gpuCircleColor) behind it there; and in its columns only,
+     * gpuCircleX to gpuCircleRight - 1 on the canvas (the whole width but
+     * as the cut-in's stripe first slides on from the right). */
     int gpuCircleOn;
-    int gpuCircleX, gpuCircleY, gpuCircleR, gpuCircleColor;
+    int gpuCircleX, gpuCircleY, gpuCircleR, gpuCircleColor, gpuCircleRight;
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
     int backdrop;      /* the backdrop colour (RGB555): what shows where no layer does */
     uint16_t *over;    /* width x 192 (x height with top) */
@@ -198,6 +200,16 @@ int NitroPort_Render2DSplitIfChanged(int engine, uint16_t *under, NitroRender2DS
  * engine's picture since the last call: for a change to its registers,
  * palettes or OAM (registers), or to the VRAM it shows (vram). */
 void NitroPort_Render2DChangeStats(int engine, unsigned *registers, unsigned *vram);
+/* (for the log) Of those, how many times only its sprites were made again
+ * since the last call: the compositor's (NitroRender2DSplit.gpuObjs), the
+ * picture otherwise the same, its layers left as they were. */
+unsigned NitroPort_Render2DSpritesOnly(int engine);
+/* (for the log) The time NitroPort_Render2DSplitIfChanged has spent on an
+ * engine since the last call, in the clock's ticks: finding out whether
+ * the picture changed (checking), drawing it (drawing), and of that the
+ * HM cut-in's sprites' atlas (sprites). With a clock set (0 without). */
+void NitroPort_Render2DSetClock(uint64_t (*clock)(void));
+void NitroPort_Render2DTimes(int engine, uint64_t *checking, uint64_t *drawing, uint64_t *sprites);
 /* An engine's master brightness (its MASTER_BRIGHT register), from the
  * state taken when the frame was handed over (snapshot: 1) or as it is: for
  * a screen not drawn (the lower menu's panel showing the map) whose
@@ -246,8 +258,9 @@ int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const Nitro
 /* (the game's thread, as it hands a frame over) Engine A's circle fade as
  * it is now, on the canvas of the last picture that left it out
  * (gpuCircleOn): 1 with its middle and radius, 2 a band of lines (y to
- * r - 1, x 0), 3 one BG's band of lines (y to r - 1), 0 when it's off, -1
- * when no picture has left one out since one was last drawn in a picture. */
+ * r - 1, x 0), 3 one BG's band of lines (y to r - 1, its columns x & 0xFFFF
+ * to x >> 16, less 1), 0 when it's off, -1 when no picture has left one out
+ * since one was last drawn in a picture. */
 int NitroPort_Render2DCircleNow(int engine, int *x, int *y, int *r);
 
 /* One BG of an engine alone (for capturing it: nitro_port_wideart.h), on

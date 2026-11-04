@@ -802,6 +802,21 @@ screen's 320 x 192 at 1.25 times, as above.
   materials (named `sea_...`) have their S coordinates turned round again
   through the texture matrix (`Port_MirroredWaterShape`, a shape
   callback).
+- **Route 206 under the bridge, past the scenery** (patch 0070): there a
+  ridge and the grass either side of it cross both of the map's borders,
+  and mirrored, the ridge's half and its mounds and trees showed twice,
+  the same either side of the border. In those rows (`sPortMovedRows`:
+  tiles 617-661 of z on the left, 624-661 on the right) the map goes on
+  as its own other side, moved over instead, the two borders' halves of
+  the ridge meeting; the river, its ledges and the plateau north of the
+  ridge stay mirrored. The copy's lists are cut by rows as well
+  (`NitroPort_Gx3dTrimListRows`: each polygon by where it starts, so the
+  two ways share none), a second copy has the moved rows (cut to the
+  strip by the other border, its culling as it is), and the props go by
+  the same rows (`MapPropManager_RenderRows`). The rows were picked a side
+  at a time, on the PC, where no gap opens where the two ways meet past
+  the border (a cliff ending in the open, the white behind showing); on
+  the right one row of the mirror is kept under the moved ones' first.
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they
@@ -1711,7 +1726,11 @@ quick: no OBJ shown, no bitmap), not on the next frame with a second
 drawing. The `[perf] game` line says why each drawer drew (`upper 29.9/s
 (6.0/s new: 4.0 for registers, palettes or sprites, 2.0 for VRAM), 16.2
 ms, 4.6 of it handing over (core 2)`: handing over is the remaster's
-upscaling into the compositor's textures, `ShowScreen`).
+upscaling into the compositor's textures, `ShowScreen`), and for engine A
+the parts of its time a frame: finding out whether the picture changed,
+drawing it, and of that the HM cut-in's sprites
+(`NitroPort_Render2DTimes`; the cut-in's pictures took 37-77 ms a frame
+under Route 206's bridge, log 31a6ea6d, 15-32 in Eterna before).
 
 Where things run on a New 3DS: the game, the display thread and engine B's
 drawer on core 0 (the game first); engine A's drawer and the geometry on
@@ -1753,9 +1772,19 @@ its display lists in groups by their bounding boxes), cost the PC 0.1 ms
 a frame and the 3DS 4 ms: the game's 2-3 ms a frame became 6-7, and the
 display, on its core, dropped to 48-56 frames a second; not done. Now:
 with the thread behind, ending a scene a V-blank or more after the game
-did, it makes no in-between scene for it (`interp_mid`; the frame between
+did, it made no in-between scene for it (`interp_mid`; the frame between
 shows the scene twice) rather than have the scene after the next left
-out (a jump); the `[perf] geometry's work` line has the in-between
+out (a jump). That left out 10-13 a second while the HM cut-in or a
+battle's start played (log 24186035: the 2D's drawing, 30-60 ms a
+picture on the same core, held the thread up a V-blank or two, and it
+caught up): now only with the thread a whole scene behind, the game
+having ended the next one already. (For a day they were left out a
+V-blank late too while the 2D's drawing shared the thread's core, a
+picture drawn there in the last 4 V-blanks, to get the HM cut-in's
+pictures out sooner: 6-11 a second were left out through the cut-in's
+text and start and as the place names' signs slid in, the field
+stuttering, log 6fb7c4a4, against 0-0.5 before, log 31a6ea6d. Taken out
+again, 2026-11-03.) The `[perf] geometry's work` line has the in-between
 scenes' share of ending scenes (on the road, 2026-11-02: 9-15 ms of the
 25-30 a scene, nearly all of ending scenes), of that the matching of
 their polygons with the scene before's, and how many it left out (on
@@ -1779,7 +1808,21 @@ order as the last pair was, and where the pair before moved (when it's
 within MATCH_LOCAL, 2 pixels, of the scene's motion), each a pixel at
 most from where it puts it (`match_fits`). The road's recordings: a
 quarter of the searches; 47 of 1.2 million pairs different, 36 of them a
-pair where there was none, none further than 0.3 pixels. Lighting keeps
+pair where there was none, none further than 0.3 pixels. The in-between
+scene's polygons wholly inside the view in both scenes (most of them;
+`PolyRecord.screenOk`, the same viewport) aren't clipped and projected
+again (`replay_polygon`: three divisions a vertex, the clipping's
+copies): halfway in clip space is inside the view too, and its place on
+the screen is between the two scenes' (the corners matching has, the
+depths `to_screen` gave) weighed by their w (`x = (X0 + X1) / (W0 +
+W1)`, the same for y and depth; one division a vertex,
+`replay_blended`). The road's recordings, against the redraw: the same
+triangles; x and y the same but for 0.3% of them, those 1/256 pixel
+off; depth at most 3 of 16 million off. In callgrind, the in-between scenes' work 22%
+less. Those near the screen's edges,
+behind the camera, or with no pair are redrawn as before. On the 3DS (log
+24186035, the road's median against 33073953): the in-between's own part
+6.2 → 4.7 ms a scene, the geometry 23.9 → 20.0. Lighting keeps
 64 normals' colours, forgotten together when the vector matrix, the
 lights, the material or the polygon's lights change (it was the last
 normal's, forgotten at every matrix command: 12% less lighting work); the
@@ -1978,6 +2021,38 @@ far as most of its kind). Their places don't count as a change: the
 picture isn't drawn again as they move, only when what they show does.
 In the PC runner the picture draws them where it had them.
 
+What they show changing (2026-11-03): the picture has none of them in it,
+so when nothing else it's drawn from changed (its registers, the BGs'
+palette, its maps and tiles: hashed without the OAM and the sprites'
+palette and VRAM; with a bitmap BG or an H-blank effect besides the
+windows' it's always drawn whole), only the sprites are made again, their places and the
+atlas, and the layers are left as they were (`DrawChanged`, `sPicture`;
+the picture drawn as far as the sprites, `sObjsOnly`). Drawn into the same
+layers otherwise since (whole, when no set was free to hand it over in),
+it's drawn whole the next time. The HM cut-in changes its sprites every
+game step and nothing else, its band's lines being the compositor's: its
+picture was drawn whole each time, 12-25 ms on the geometry's core on
+Route 206 (10-14 pictures a second, the in-between scenes giving way,
+50-55 frames a second: log c090eb75). On the PC, through a real Cut:
+after the band's first picture, every one of them its sprites alone (77
+of 78), and each frame the same as drawn whole (layers, sprites, atlas).
+The `[perf]` game line says how many a second were the sprites only. In
+`test_render.c`: `test_gpu_objs`. Their pixels (the atlas, made 512 x 256
+texels and flushed for each picture) are made again for a set only when
+they changed, and only the rows in use (`atlas_rows`, `atlas_key`): through
+the cut-in its sprites mostly move, their pictures the same.
+
+Their in-between frames without an in-between scene (2026-11-03): the
+compositor's sprites are halfway in an in-between frame, but with the 3D
+behind (its core shared with the 2D's drawing) its in-between scenes are
+left out, 4-11 a second through the HM cut-in on Route 206 (log
+8532faaf), and those frames were the frame before shown again: the
+cut-in's wind and Pokémon not smooth, though the field stands still
+behind them. The in-between frame for the 2D alone (`NitroPort_ComposeFrame`'s
+mid 2, the scene's own 3D, as for a fade or a band: `fades_changed`) is
+now drawn when the sprites moved too (`objs_moved`), them halfway from the
+last scene shown's frame (`draw_gpu_objs` by `frame_before`).
+
 The cut-in's band opening and closing (2026-11-01): a window, window 0
 alone across the DS's screen, its lines (WIN0V) 5 to 13 further each side
 a step, every other frame; inside it BG3 alone of the BGs (the band, a
@@ -2003,6 +2078,42 @@ compositor's sprites (the cut-in's wind and Pokémon) are cut to the band's
 lines while it closes, and while it's closed further than the game's
 (`sObjClip`): the game still shows them for two steps, and over the field
 the dots and the Pokémon's parts showed for a few frames after it closed.
+Then the game deletes its sprites, puts BG3 back (cleared, its own size
+again) and a game frame later takes the window away; the DS shows the
+last of the sprites in the band's 16 lines till then. With the
+compositor's sprites ended as they were deleted, those frames' pictures
+had them drawn in, not a band the compositor draws: the band jumped back
+open to 16 lines (the DS's), its close not seen through (2026-11-03,
+noticed once the cut-in's pictures came quicker). Patch 0071 keeps them
+the compositor's till the window goes (`CutIn_PortFieldCellsOff`).
+In Eterna Forest (2026-11-03) the band was never the compositor's: the
+3D is behind the forest's fog there (BG2, blended onto it), and the field
+message box's BG (BG1, empty once the box has closed) is in front of the
+3D too. So the band was in the picture, drawn whole at every step of its
+opening and closing and every move of the fog, and the fog was the 2D's
+in whole pixels, not the compositor's. Now a BG the compositor draws
+itself (the fog) can be left out with the band's window on, when it shows
+outside the band only (`GpuBgOutsideBandOf`: window 0 alone across the
+screen, the BG outside it with the colour effect, not inside; judged by
+the layers outside), and the band is the compositor's with it (skipped by
+`GpuBgRowsOf`; the band's lines are filled over it, as inside them the DS
+shows the band's BG alone); and a text BG showing nothing (its map all one
+tile, that tile blank: `BgTextBlank`) doesn't count as in front of the 3D.
+In `test_render.c`: `test_bg_rows`. On the PC through a real Cut at the
+Old Chateau's tree: the band the compositor's from its first frame.
+Before the band opens, its stripe (2 lines) slides on from the right, 64
+of the DS's columns a step, every other frame (WIN0H 254-255, 190-255,
+126-255, 62-255, then 0-255): not across the screen, so drawn in the
+picture, whole each step, and in the forest the fog the 2D's then (the
+squares on it before the cut-in, a test of 2026-11-03). The band's
+columns are now the compositor's too: `GpuBgRowsOf` takes any WIN0H that
+doesn't wrap round, `gpuCircleX` to `gpuCircleRight` on the canvas (to
+its edge from the DS's, as `FillRange` has a window), noted as
+`NitroPort_Render2DCircleNow`'s x (the two halves), halfway in the
+in-between frames, the band's backdrop and BG drawn in them only
+(`bg_band_rows`). And the frame the window comes on in, showing nothing
+yet (lines 192 to 192) with the message box still up, keeps the fog the
+compositor's (`GpuBgEmptyWindowOf`: everything as outside the window).
 
 Eterna Forest's light finer than a pixel (patch 0061, 2026-10-31): the
 game keeps the clouds' place finer than a pixel as they follow the camera,
@@ -2197,6 +2308,36 @@ with the next face or the next ball, and the in-between scenes showed
 grey blocks. In `test_gx3d.c`: `test_interpolation_order_shift`,
 `test_interpolation_tile_a_scene`, `test_interpolation_swaying`. The PC runner's `midview FILE` draws the
 in-between scene at the view's size (as `viewsim`).
+
+The camera's move (2026-11-03): riding the Cycling Road, the in-between
+frames had white lines along the rocks' ledges (video IMG_2955). The
+ground near the screen's bottom moves further than the scene's motion
+(the perspective: 6 DS pixels a scene against 4), so a ledge's steps, a
+row of one kind every two pixels, were paired a step off, sure as the
+order's pairs are, and met their neighbours a pixel apart. But the
+field's camera keeps its angle: everything that stays where it is in the
+world moves by the same 4 numbers in clip space between two scenes, the
+far and the near alike. So after the matching, the middle of the pairs'
+moves in clip space (`clip_motion`); when at least half the pairs fit it
+on every corner (on the Cycling Road they fit it to a clip unit or two:
+the tolerance is w / 16384, 1/128 of a pixel), each polygon whose pair
+doesn't fit it takes the one of its kind that does (`static_rematch`),
+and one with none is put halfway as the camera moved, not as the screen
+moved. What the camera follows (the player and his shadow: where its
+pair was on the screen, as far from the camera) keeps its pair: the
+player's shadow is 4 quads, each the size of the bike's move in a scene,
+and the quad below fitted the move to the one above it exactly. The
+camera still, or turning or zooming (the pairs don't fit one move), the
+matching is as it was. On five recordings of the Cycling Road the pixels
+left uncovered in the in-between scenes that both scenes either side
+covered went from 30,451 to 1,348 (to none on three; what's left on the
+other two was there the same before, at a map's edge), and 1-8% of the
+in-between scenes differ at all. In
+`test_gx3d.c`: `test_interpolation_camera_move`. (An earlier try that
+welded shared corners and re-matched by rows, 56abffc, was undone with the
+HM cut-in change of the same commit: log b1334782 had the geometry thread
+held up 140-275 ms at a time while the cut-in's pictures were handed over
+above its priority.)
 
 ## Known
 

@@ -111,6 +111,7 @@ static NitroGx3dScene *sDest;
 static inline NitroGx3dScene *dest_scene(void){return sDest?sDest:&sScenes[sBuilding];}
 static uint32_t sSerial;
 static uint32_t sSwapsDone;   /* (the geometry thread's; see below) */
+static uint32_t sSwapsQueued; /* (the game's thread's; see below) */
 
 static inline int32_t saturation(int64_t n)
 {
@@ -575,6 +576,12 @@ static inline int32_t floor_int(double v)
     n=(int32_t)v;
     return n-(v<(double)n);
 }
+/* (floor, of a float well inside an int32: a place on the screen) */
+static inline int32_t floor_small(float v)
+{
+    int32_t n=(int32_t)v;
+    return n-(v<(float)n);
+}
 static NitroGx3dVertex to_screen(const GeoVertex *v)
 {
     NitroGx3dVertex out;
@@ -665,13 +672,17 @@ static int sReplaying;
  * In clip space (x, y, w), front means det > 0 (the screen's y points
  * down); this works for vertices behind the camera too. */
 static int sPolygonFront;
-static int polygon_front(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
+static int clip_front(const int32_t *a,const int32_t *b,const int32_t *c)
 {
-    double x0=a->clip[0],y0=a->clip[1],w0=a->clip[3];
-    double x1=b->clip[0],y1=b->clip[1],w1=b->clip[3];
-    double x2=c->clip[0],y2=c->clip[1],w2=c->clip[3];
+    double x0=a[0],y0=a[1],w0=a[3];
+    double x1=b[0],y1=b[1],w1=b[3];
+    double x2=c[0],y2=c[1],w2=c[3];
     double det=x0*(y1*w2-w1*y2)-y0*(x1*w2-w1*x2)+w0*(x1*y2-y1*x2);
     return det>0;
+}
+static int polygon_front(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
+{
+    return clip_front(a->clip,b->clip,c->clip);
 }
 /* The vertex's screen position, worked out once: strips and quads share
  * vertices between their triangles. */
@@ -918,6 +929,11 @@ typedef struct PolyRecord {
     uint8_t onScreen;        /* all its vertices in front of the camera (w > 0) */
     uint16_t ntri;           /* its triangles in its scene: ntri from tri0 */
     uint32_t tri0;
+    /* (screenOk: all its vertices inside the view, with the viewport
+     * then; their depths as to_screen had them; replay_blended) */
+    uint32_t sdepth[4];
+    uint32_t viewport;
+    uint8_t screenOk, pad[3];
 } PolyRecord;
 #define MAX_RECORDS 4096u
 #define MATCH_LOOKAHEAD 48u
@@ -944,6 +960,8 @@ typedef struct RecTag {
     uint8_t count, onScreen;
     uint16_t unused;
     float px0, py0;           /* (its first corner: most of the window's are far, told by it alone) */
+    float w0;                 /* (and its w: static_rematch's first look, by the camera's move) */
+    float px2, py2, w2;       /* (and its third: a polygon's own, not a neighbour's sharing a corner) */
 } RecTag;
 typedef struct RecPos {
     float px[4], py[4];
@@ -960,6 +978,11 @@ static int sMidOk[3];
 static int32_t *sMatch;                  /* for each of this scene's polygons, the one before's, or -1 */
 static unsigned sMidMatched, sMidPolygons;
 
+static uint32_t viewport_key(void)
+{
+    return (uint32_t)(s.viewport[0]&255)|((uint32_t)(s.viewport[1]&255)<<8)|
+           ((uint32_t)(s.viewport[2]&255)<<16)|((uint32_t)(s.viewport[3]&255)<<24);
+}
 static uint32_t record_signature(unsigned n)
 {
     /* Its kind: the attributes but its alpha (fades), the texture's
@@ -991,18 +1014,29 @@ static void record_polygon(GeoVertex *a,GeoVertex *b,GeoVertex *c,GeoVertex *d)
     r->attr=s.attr;r->texparam=s.texparam;r->plttbase=s.plttbase;
     r->sig=record_signature(n);
     r->tri0=sLastTriFirst;r->ntri=(uint16_t)sLastTriAdded;
+    r->viewport=viewport_key();
+    r->screenOk=!(a->outside|b->outside|c->outside|(d?d->outside:0u));
+    for(k=0;k<n && r->screenOk;k++){
+        if(!v[k]->hasScreen){r->screenOk=0;break;}
+        r->sdepth[k]=v[k]->screen.depth;
+    }
     r->onScreen=1;
     for(k=0;k<n;k++){
         if(r->clip[k][3]<=0){r->onScreen=0;break;}
         r->px[k]=(float)r->clip[k][0]/(float)r->clip[k][3]*128.0f;
         r->py[k]=(float)r->clip[k][1]/(float)r->clip[k][3]*96.0f;
     }
+    if(!r->onScreen)r->screenOk=0;   /* (w = 0, all of it at 0: inside, but no place on the screen) */
     {
         size_t at=(size_t)(r-sRec[sRecBuild]);
         RecTag *tag=&sTag[sRecBuild][at];
         tag->sig=r->sig;tag->count=r->count;tag->onScreen=r->onScreen;tag->unused=0;
         memcpy(&tag->px0,&r->px[0],sizeof(tag->px0));
         memcpy(&tag->py0,&r->py[0],sizeof(tag->py0));
+        tag->w0=(float)r->clip[0][3];
+        memcpy(&tag->px2,&r->px[2],sizeof(tag->px2));
+        memcpy(&tag->py2,&r->py[2],sizeof(tag->py2));
+        tag->w2=(float)r->clip[2][3];
         memcpy(sPos[sRecBuild][at].px,r->px,sizeof(r->px));
         memcpy(sPos[sRecBuild][at].py,r->py,sizeof(r->py));
     }
@@ -1030,6 +1064,59 @@ static void replay_polygon(const PolyRecord *r,int32_t clip[4][4])
         if(r->count==4)stage_triangle(&v[0],&v[2],&v[3]);
         end_polygon(1);   /* (the DS's vertex RAM: as the scene's own, roughly) */
     }
+    s.attr=attr;s.texparam=texparam;s.plttbase=plttbase;
+}
+/* to_screen's viewport transform, from px and py (DS pixels from the
+ * middle): x = (X / W + 1) * width / 2 + x0, y = (1 - Y / W) * height / 2
+ * + top, in 1/256 pixel; worked out once a scene (blend_viewport). */
+typedef struct BlendView { float ax, bx, ay, by; } BlendView;
+static BlendView blend_viewport(void)
+{
+    BlendView b;
+    float width=(float)((s.viewport[2]-s.viewport[0]+1)&0x1FF);
+    float height=(float)((s.viewport[3]-s.viewport[1]+1)&0xFF);
+    b.ax=width;
+    b.bx=width*128.0f+(float)(s.viewport[0]&255)*256.0f+0.5f;
+    b.ay=-height*(4.0f/3.0f);
+    b.by=height*128.0f+(float)((191-(s.viewport[3]&255))&255)*256.0f+0.5f;
+    return b;
+}
+/* The same, for a polygon wholly inside the view in both scenes (p's and
+ * c's screenOk, the same viewport), without clipping it or projecting it
+ * again: halfway between in clip space is inside the view too (it's
+ * convex), and on the screen it's between where the two scenes have it
+ * (px, py, as matching has them; the depths to_screen gave), weighed by
+ * their w: the projection of the halfway point, x = (X0 + X1) / (W0 +
+ * W1), the same for y and depth, to the rounding. Most of a scene's
+ * polygons, and most of the in-between scene's time (two thirds on the
+ * Cycling Road at a ride, 5.5-7.5 ms a scene, 2026-11-02): one division a
+ * vertex here rather than three, and none of the clipping's copies.
+ * clip: halfway, as replay_polygon has it. */
+static void replay_blended(const PolyRecord *p,const PolyRecord *c,int32_t clip[4][4],const BlendView *bv)
+{
+    NitroGx3dVertex v[4];
+    unsigned k;
+    uint32_t attr=s.attr,texparam=s.texparam,plttbase=s.plttbase;
+    s.attr=c->attr;s.texparam=c->texparam;s.plttbase=c->plttbase;
+    for(k=0;k<c->count;k++){
+        float w0=(float)p->clip[k][3],w1=(float)c->clip[k][3];
+        float r=1.0f/(w0+w1),t=w1*r,dz;
+        float px=p->px[k]+(c->px[k]-p->px[k])*t,py=p->py[k]+(c->py[k]-p->py[k])*t;
+        memset(&v[k],0,sizeof(v[k]));
+        memcpy(v[k].clip,clip[k],sizeof(v[k].clip));
+        dz=(float)((int32_t)c->sdepth[k]-(int32_t)p->sdepth[k])*t;
+        v[k].x=floor_small(px*bv->ax+bv->bx);
+        v[k].y=floor_small(py*bv->ay+bv->by);
+        v[k].depth=(uint32_t)((int32_t)p->sdepth[k]+(int32_t)(dz+(dz>=0?0.5f:-0.5f)));
+        v[k].inv_w=2.0f*r;
+        v[k].s=c->st[k][0]/16.0f;v[k].t=c->st[k][1]/16.0f;
+        v[k].color=c->color[k];
+    }
+    begin_polygon();
+    sPolygonFront=clip_front(clip[0],clip[1],clip[2]);
+    add_screen_triangle(&v[0],&v[1],&v[2]);
+    if(c->count==4)add_screen_triangle(&v[0],&v[2],&v[3]);
+    end_polygon(1);
     s.attr=attr;s.texparam=texparam;s.plttbase=plttbase;
 }
 /* Where a vertex is on the screen, -1..1 (w > 0). */
@@ -1385,6 +1472,215 @@ static uint32_t soft_of(const PolyRecord *p,const PolyRecord *c,const NitroGx3dS
     if(fabsf(dy-floorf(dy+0.5f))>SOFT_NEAR)soft|=NITRO_GX3D_SOFT_Y;
     return soft;
 }
+/* The camera's move in clip space. The field's camera keeps its angle and
+ * only moves: every vertex of what stays where it is in the world (the
+ * map, its props, the people standing) moves by the same 4 numbers in
+ * clip space between two scenes, the far and the near alike, while on the
+ * screen the near ground moves further (the perspective). Matching by
+ * the screen's motion alone paired a ledge's steps (a row of one kind
+ * every two DS pixels near the screen's bottom, moving 6 pixels a scene
+ * against the scene's 4) one step off, and the in-between frames had
+ * white lines along the rocks riding the Cycling Road (videos of
+ * 2026-11-02, IMG_2955). sClipMotion: the middle of the pairs' moves
+ * (their first corners), valid when at least half of them fit it on every
+ * corner. On the Cycling Road they fit it exactly, to a clip unit or two
+ * (rec_river: 99.6% of the corners); STATIC_FIT allows w / 16384 (1/128
+ * of a DS pixel) and STATIC_SLACK clip units. Anything looser let things
+ * that only happen to be where the move would put them in: the player's
+ * shadow, 4 quads each as tall as the bike's move in a scene, paired a
+ * quad off. Not valid (the camera turning or zooming: a battle's start, a
+ * cut-scene): matching as it was. */
+#define STATIC_FIT 14
+#define STATIC_SLACK 8
+#define STATIC_NEAR 0.0625f   /* (DS pixels: static_rematch's first look in the window, a corner's, well over STATIC_FIT's) */
+#define STATIC_SAMPLES 256u
+static int sClipMotionValid;
+static int32_t sClipMotion[4];
+static int32_t sStaticPair[MAX_RECORDS], sStaticOwner[MAX_RECORDS];
+/* How far (clip units, summed) the scene before's p is from where the
+ * camera's move mo puts c then, on every corner; -1 not within STATIC_FIT
+ * on every one. */
+static float static_misfit(const PolyRecord *p,const PolyRecord *c,const int32_t mo[4])
+{
+    unsigned k,i;
+    int64_t e=0;
+    if(p->count!=c->count || !p->onScreen || !c->onScreen)return -1.0f;
+    for(k=0;k<c->count;k++){
+        int64_t tol=((int64_t)c->clip[k][3]>>STATIC_FIT)+STATIC_SLACK;
+        for(i=0;i<4;i++){
+            int64_t d=(int64_t)c->clip[k][i]-mo[i]-p->clip[k][i];
+            if(d<0)d=-d;
+            if(d>tol)return -1.0f;
+            e+=d;
+        }
+    }
+    return (float)e;
+}
+/* The same from the tags alone (the first and third corners, their x, y
+ * and w, as floats: a clip unit or two off): every pair's look, without
+ * reading the records (a cache line or three each on the 3DS, after the
+ * matching read the tags). Two corners: a neighbour of its kind shares
+ * one with it (on the PC's rides, 2 of 5 in-between frames with holes left
+ * with the first alone). */
+static float static_corner_misfit(float pw,float px,float py,float cw,float cx,float cy,const int32_t mo[4])
+{
+    float tol=cw*(1.0f/(float)(1<<STATIC_FIT))+(float)STATIC_SLACK+2.0f,d,e;
+    d=fabsf(cw-(float)mo[3]-pw);
+    if(d>tol)return -1.0f;
+    e=d;
+    d=fabsf((cx*cw-px*pw)*(1.0f/128.0f)-(float)mo[0]);
+    if(d>tol)return -1.0f;
+    e+=d;
+    d=fabsf((cy*cw-py*pw)*(1.0f/96.0f)-(float)mo[1]);
+    if(d>tol)return -1.0f;
+    return e+d;
+}
+static float static_tag_misfit(const RecTag *p,const RecTag *c,const int32_t mo[4])
+{
+    float e0,e2;
+    if(p->count!=c->count || !p->onScreen || !c->onScreen)return -1.0f;
+    e0=static_corner_misfit(p->w0,p->px0,p->py0,c->w0,c->px0,c->py0,mo);
+    if(e0<0.0f)return -1.0f;
+    e2=static_corner_misfit(p->w2,p->px2,p->py2,c->w2,c->px2,c->py2,mo);
+    if(e2<0.0f)return -1.0f;
+    return e0+e2;
+}
+static int clip_motion(const RecTag *PT,const RecTag *CT,unsigned n,const int32_t *out,int32_t mo[4])
+{
+    static float sample[3][STATIC_SAMPLES];
+    static uint16_t at[STATIC_SAMPLES];
+    unsigned j,i,count=0,fit=0,step=n/STATIC_SAMPLES+1u;
+    for(j=0;j<n && count<STATIC_SAMPLES;j+=step){
+        int q=out[j];
+        if(q<0 || !CT[j].onScreen || !PT[q].onScreen || PT[q].count!=CT[j].count)continue;
+        sample[0][count]=(CT[j].px0*CT[j].w0-PT[q].px0*PT[q].w0)*(1.0f/128.0f);
+        sample[1][count]=(CT[j].py0*CT[j].w0-PT[q].py0*PT[q].w0)*(1.0f/96.0f);
+        sample[2][count]=CT[j].w0-PT[q].w0;
+        at[count++]=(uint16_t)j;
+    }
+    if(count<16u)return 0;
+    for(i=0;i<3;i++){
+        float v=median_of(sample[i],count);
+        if(v>2.0e9f || v<-2.0e9f)return 0;
+        mo[i==2?3:i]=(int32_t)floorf(v+0.5f);
+    }
+    /* (z, not in the tags: as w for now, clip_motion_z finds it) */
+    mo[2]=mo[3];
+    /* (the camera still: matching as it was, the scene's own motion none) */
+    if(!mo[0] && !mo[1] && !mo[3])return 0;
+    for(i=0;i<count;i++){
+        j=at[i];
+        if(static_tag_misfit(&PT[out[j]],&CT[j],mo)>=0.0f)fit++;
+    }
+    return fit*2u>=count;
+}
+/* (clip_motion's z: the middle of the fitting pairs' z moves, from 16 of
+ * their records at most) */
+static void clip_motion_z(const PolyRecord *P,const PolyRecord *C,const RecTag *PT,const RecTag *CT,
+                          unsigned n,const int32_t *out,int32_t mo[4])
+{
+    static float zs[16];
+    unsigned j,count=0,step=n/16u+1u;
+    for(j=0;j<n && count<16u;j+=step){
+        int q=out[j];
+        if(q<0 || static_tag_misfit(&PT[q],&CT[j],mo)<0.0f)continue;
+        zs[count++]=(float)((int64_t)C[j].clip[0][2]-P[q].clip[0][2]);
+    }
+    if(count)mo[2]=(int32_t)floorf(median_of(zs,count)+0.5f);
+}
+/* (static_rematch) What the camera follows: where it was on the screen, a
+ * pixel at most (on average, a corner, as match_records has it), and as
+ * far from the camera (w) to a half of the camera's own move that way
+ * (the move mo); a row of one kind in the perspective, a row where its
+ * neighbour was, is nearer or further. */
+static int near_still(const PolyRecord *p,const PolyRecord *c,const int32_t mo[4])
+{
+    unsigned k;
+    float d=0.0f;
+    int64_t mw=mo[3]<0?-(int64_t)mo[3]:(int64_t)mo[3];
+    if(p->count!=c->count || !p->onScreen || !c->onScreen)return 0;
+    for(k=0;k<c->count;k++){
+        int64_t dw=(int64_t)c->clip[k][3]-p->clip[k][3];
+        if(dw<0)dw=-dw;
+        if(dw>mw/2+((int64_t)c->clip[k][3]>>STATIC_FIT)+STATIC_SLACK)return 0;
+        d+=fabsf(c->px[k]-p->px[k])+fabsf(c->py[k]-p->py[k]);
+    }
+    return d<MATCH_SURE*(float)c->count;
+}
+/* With the camera's move (mo): each polygon whose pair isn't where the
+ * move puts it, paired with the one of its kind that is (MATCH_WINDOW
+ * either side of its pair, or of where the pairs before it were), the
+ * nearest; one taken that way is no other's. What the camera follows (the
+ * player: where its pair was on the screen) keeps its pair, and what the
+ * move doesn't fit (the people moving) the pair it had, unless that one
+ * is another's exactly. Each pair's misfit (sStaticErr) decides who has a
+ * polygon wanted twice (the same polygon drawn twice over: the one after
+ * takes the other). Its own pair's fit, from the tags (two corners);
+ * another's, on every corner. */
+static float sStaticErr[MAX_RECORDS];
+static void static_rematch(const PolyRecord *P,unsigned m,const PolyRecord *C,unsigned n,int32_t *out,const int32_t mo[4])
+{
+    const RecTag *PT=sTag[sRecBuild^1u],*CT=sTag[sRecBuild];
+    unsigned j;
+    int offset=0;
+    for(j=0;j<m;j++)sStaticOwner[j]=-1;
+    for(j=0;j<n;j++){
+        int q=out[j],center,lo,hi,k,best=-1,o;
+        float bestE=0.0f,e;
+        sStaticPair[j]=-1;
+        if(!CT[j].onScreen)continue;
+        /* (taken: by one before it that fits it no worse) */
+#define STATIC_TAKEN(k,e) (sStaticOwner[k]>=0 && sStaticErr[sStaticOwner[k]]<=(e))
+        if(q>=0 && (e=static_tag_misfit(&PT[q],&CT[j],mo))>=0.0f && !STATIC_TAKEN(q,e)){best=q;bestE=e;}
+        else if(q>=0 && near_still(&P[q],&C[j],mo)){
+            /* (what the camera follows: its own pair, no other, and none
+             * takes it from it; as it was paired. The player's shadow is
+             * 4 quads, and at a ride its quad below fitted the move to the
+             * one above it the scene before exactly, the bike's move a
+             * scene being the quad's size: it was torn in the in-between
+             * frames. The camera lags the player a little: a pixel.) */
+            if(!STATIC_TAKEN(q,-1.0f)){best=q;bestE=-1.0f;}
+        }else{
+            /* (where the move puts its first corner on the screen then: the
+             * window's polygons told by their tags alone, most of them) */
+            float wq=CT[j].w0-(float)mo[3],fx,fy;
+            if(wq<=0.0f)continue;
+            fx=(CT[j].px0*CT[j].w0*(1.0f/128.0f)-(float)mo[0])/wq*128.0f;
+            fy=(CT[j].py0*CT[j].w0*(1.0f/96.0f)-(float)mo[1])/wq*96.0f;
+            center=q>=0?q:(int)j+offset;
+            lo=center-MATCH_WINDOW;hi=center+MATCH_WINDOW;
+            if(lo<0)lo=0;
+            if(hi>(int)m-1)hi=(int)m-1;
+            for(k=lo;k<=hi;k++){
+                if(k==q || PT[k].sig!=CT[j].sig || !PT[k].onScreen || PT[k].count!=CT[j].count)continue;
+                if(fabsf(PT[k].px0-fx)+fabsf(PT[k].py0-fy)>STATIC_NEAR)continue;
+                e=static_misfit(&P[k],&C[j],mo);
+                if(e>=0.0f && (best<0 || e<bestE) && !STATIC_TAKEN(k,e)){best=k;bestE=e;}
+            }
+        }
+#undef STATIC_TAKEN
+        if(best<0)continue;
+        o=sStaticOwner[best];
+        if(o>=0)sStaticPair[o]=-1;   /* (it fitted worse: what it had, as below) */
+        sStaticOwner[best]=(int32_t)j;
+        sStaticPair[j]=best;sStaticErr[j]=bestE;offset=best-(int)j;
+    }
+    for(j=0;j<n;j++){
+        int k=sStaticPair[j],was=out[j];
+        if(k>=0)out[j]=k;
+        else if(was>=0 && sStaticOwner[was]>=0)out[j]=-1;   /* (another's, exactly) */
+    }
+}
+/* Where the camera's move puts a clip-space vertex halfway: as a pair's
+ * halfway is made (make_mid_scene), the other of the pair where the move
+ * puts it (sign -1: this scene's, the scene before's less the move; 1: the
+ * scene before's, the next one's plus it); the same to the unit as its
+ * neighbours paired. */
+static int32_t static_halfway(int32_t v,int32_t mo,int sign)
+{
+    int64_t other=sign>0?(int64_t)v+mo:(int64_t)v-mo;
+    return (int32_t)(((int64_t)v+other)/2);
+}
 /* (the [perf] geometry's work line: the in-between scenes' matching of
  * polygons with the scene before's, NitroPort_Gx3dMidWork) */
 static uint64_t sMidMatchTicks;
@@ -1401,6 +1697,11 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
     {
         uint64_t t0=sOps.ticks?sOps.ticks(sOps.context):0;
         sMidMatched=match_records(sTag[sRecBuild^1u],sPos[sRecBuild^1u],m,sTag[sRecBuild],sPos[sRecBuild],n,sMatch);
+        sClipMotionValid=sMidMatched*2u>=n && clip_motion(sTag[sRecBuild^1u],sTag[sRecBuild],n,sMatch,sClipMotion);
+        if(sClipMotionValid){
+            clip_motion_z(P,C,sTag[sRecBuild^1u],sTag[sRecBuild],n,sMatch,sClipMotion);
+            static_rematch(P,m,C,n,sMatch,sClipMotion);
+        }
         if(sOps.ticks)__atomic_store_n(&sMidMatchTicks,sMidMatchTicks+(sOps.ticks(sOps.context)-t0),__ATOMIC_RELAXED);
     }
     sMidPolygons=n;
@@ -1433,6 +1734,8 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
         /* (replaying: no shadow triangles, no counts in the [gx3d] lines,
          * the DS's limits counted afresh) */
         __typeof__(sDiag) diag=sDiag;
+        const BlendView view=blend_viewport();
+        const uint32_t viewport=viewport_key();
         sDest=sMid;sReplaying=1;sShadowCapture=0;
         s.framePolygons=0;s.frameVertices=0;
         for(j=0;j<n;j++){
@@ -1461,7 +1764,14 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
             for(k=0;k<c->ntri && c->tri0+k<now->count;k++)now->triangles[c->tri0+k].soft=soft;
             sReplaySoft=soft;
             if(!mid)memcpy(clip,c->clip,sizeof(clip));
-            if(sMatch[j]<0 && c->onScreen && sMotionValid && (sMotionX!=0.0f || sMotionY!=0.0f)){
+            if(sMatch[j]<0 && c->onScreen && sClipMotionValid){
+                /* (with the camera's move: halfway as it puts it, the near
+                 * ground further than the far, as the rest around it) */
+                for(k=0;k<c->count;k++){
+                    unsigned q;
+                    for(q=0;q<4;q++)clip[k][q]=static_halfway(c->clip[k][q],sClipMotion[q],-1);
+                }
+            }else if(sMatch[j]<0 && c->onScreen && sMotionValid && (sMotionX!=0.0f || sMotionY!=0.0f)){
                 /* (one with no match: the scene's new ones, mostly, as a
                  * model comes into the view whole: where the scene's
                  * motion puts it halfway, not where it is now, half a
@@ -1473,7 +1783,10 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
                     clip[k][1]+=(int32_t)floor(hy*(double)clip[k][3]+0.5);
                 }
             }
-            replay_polygon(c,clip);
+            if(mid && c->screenOk && P[sMatch[j]].screenOk &&
+               c->viewport==viewport && P[sMatch[j]].viewport==viewport)
+                replay_blended(&P[sMatch[j]],c,clip,&view);
+            else replay_polygon(c,clip);
             sReplaySoft=0;
         }
         if(sMotionValid && (sMotionX!=0.0f || sMotionY!=0.0f) && sPUsed){
@@ -1491,16 +1804,24 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
                 unsigned all=0x3Fu;
                 if(sPUsed[i] || !p->onScreen)continue;
                 for(k=0;k<p->count;k++){
+                    unsigned q;
                     memcpy(full,p->clip[k],sizeof(full));
-                    full[0]+=(int32_t)floor(fx*(double)full[3]+0.5);
-                    full[1]+=(int32_t)floor(fy*(double)full[3]+0.5);
+                    if(sClipMotionValid)for(q=0;q<4;q++)full[q]=(int32_t)((int64_t)full[q]+sClipMotion[q]);
+                    else{
+                        full[0]+=(int32_t)floor(fx*(double)full[3]+0.5);
+                        full[1]+=(int32_t)floor(fy*(double)full[3]+0.5);
+                    }
                     all&=outcode(full);
                 }
                 if(!all)continue;   /* (not leaving the view: gone, as this scene has it) */
                 for(k=0;k<p->count;k++){
+                    unsigned q;
                     memcpy(clip[k],p->clip[k],sizeof(clip[k]));
-                    clip[k][0]+=(int32_t)floor(0.5*fx*(double)clip[k][3]+0.5);
-                    clip[k][1]+=(int32_t)floor(0.5*fy*(double)clip[k][3]+0.5);
+                    if(sClipMotionValid)for(q=0;q<4;q++)clip[k][q]=static_halfway(p->clip[k][q],sClipMotion[q],1);
+                    else{
+                        clip[k][0]+=(int32_t)floor(0.5*fx*(double)clip[k][3]+0.5);
+                        clip[k][1]+=(int32_t)floor(0.5*fy*(double)clip[k][3]+0.5);
+                    }
                 }
                 replay_polygon(p,clip);
             }
@@ -1513,19 +1834,28 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
     return 1;
 }
 /* At a SWAP_BUFFERS, before its scene (the building slot) is published:
- * its in-between scene. With the thread behind, ending the scene a V-blank
- * or more after the game did, none: the game ends the next one at the
- * second V-blank, and leaves out the one after that when the thread is
- * still on this one then (a jump); without the in-between scene (a third
- * of the time on the Cycling Road) it catches up, and the frame between
- * shows the scene twice. Not when every scene is kept (comparing). */
+ * its in-between scene. With the thread a scene behind (the game has
+ * ended the next one already), none: the game leaves out the one after
+ * that when the thread is still on this one then (a jump); without the
+ * in-between scene (a third of the time on the Cycling Road) it catches
+ * up, and the frame between shows the scene twice. Not when every scene
+ * is kept (comparing). */
 static uint32_t sMidsLeftOut;
 static uint64_t sMidTicks;
 static void interp_mid(NitroGx3dScene *now)
 {
     uint64_t t0;
+    /* (a scene behind: the game has ended the next one already. Not just
+     * ended late: the thread shares its core with the 2D's drawing, which
+     * holds it up a V-blank or two while the HM cut-in or a battle's start
+     * plays, and it caught up again; leaving the in-between scenes out
+     * then put the field at 30 frames a second, 10-13 a second left out,
+     * log 24186035. Nor a V-blank late just after a 2D picture drawn on
+     * its core: so left out, 6-11 a second through the HM cut-in's text
+     * and start and the place names' signs, the field stuttered, log
+     * 6fb7c4a4; before that rule 0-0.5, log 31a6ea6d) */
     if(sInterp && sThreaded && !sOps.keep_every_scene &&
-       (int32_t)(NitroPort_Gx3dStamp()-now->stamp)>=1){
+       (int32_t)(__atomic_load_n(&sSwapsQueued,__ATOMIC_RELAXED)-sSwapsDone)>=2){
         sMidOk[sBuilding]=0;
         __atomic_store_n(&sMidsLeftOut,sMidsLeftOut+1u,__ATOMIC_RELAXED);
         return;
@@ -3089,15 +3419,30 @@ static void dl_vtx16(DlWriter *wr,const int32_t xyz[3])
     v[1]=(uint32_t)xyz[2]&0xFFFFu;
     dl_put(wr,0x23u,v);
 }
-uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
-                                int axis,int32_t lo,int32_t hi)
+/* (a group kept: reaching into lo..hi on each axis, or for those in
+ * `starts`, starting there, lo <= its lowest < hi (each polygon in one of
+ * two lists cut side by side); for those in `outside` too, starting
+ * anywhere but there) */
+static int dl_group_kept(const DlGroup *grp,const int32_t lo[3],const int32_t hi[3],unsigned starts,unsigned outside)
+{
+    int a;
+    for(a=0;a<3;a++){
+        if(starts&(1u<<a)){
+            int in=grp->lo[a]>=lo[a] && grp->lo[a]<hi[a];
+            if(in==!!(outside&(1u<<a)))return 0;
+        }else if(grp->hi[a]<lo[a] || grp->lo[a]>hi[a])return 0;
+    }
+    return 1;
+}
+static uint32_t dl_trim(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
+                        const int32_t lo[3],const int32_t hi[3],unsigned starts,unsigned outside)
 {
     const uint32_t *w=src;
     uint32_t n=bytes/4u,o,g=0;
     DlInfo *info;
     DlWriter wr;
     DlOwed ow;
-    if((bytes&3u) || axis<0 || axis>2 || !dst)return 0;
+    if((bytes&3u) || !dst)return 0;
     info=dl_survey(w,n,1u);
     if(!info)return 0;
     memset(&wr,0,sizeof(wr));
@@ -3109,7 +3454,7 @@ uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_
         while(g<info->ngroups && info->groups[g].begin<o)g++;
         if(g<info->ngroups && info->groups[g].begin==o){
             const DlGroup *grp=&info->groups[g];
-            if(grp->hi[axis]<lo || grp->lo[axis]>hi){
+            if(!dl_group_kept(grp,lo,hi,starts,outside)){
                 dl_owe(&ow,grp,info->xyz[grp->end-1u]);
                 o=grp->end;
                 g++;
@@ -3137,6 +3482,20 @@ uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_
     if(ow.coordOwed)dl_vtx16(&wr,ow.xyz);          /* (not reached: groups end before a BEGIN or END) */
     dl_free(info);
     return wr.full?0:wr.n*4u;
+}
+uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
+                                int axis,int32_t lo,int32_t hi)
+{
+    int32_t l[3]={INT32_MIN,INT32_MIN,INT32_MIN},h[3]={INT32_MAX,INT32_MAX,INT32_MAX};
+    if(axis<0 || axis>2)return 0;
+    l[axis]=lo;h[axis]=hi;
+    return dl_trim(src,bytes,dst,dstBytes,l,h,0u,0u);
+}
+uint32_t NitroPort_Gx3dTrimListRows(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
+                                    int32_t xlo,int32_t xhi,int32_t zlo,int32_t zhi,int inside)
+{
+    int32_t l[3]={xlo,INT32_MIN,zlo},h[3]={xhi,INT32_MAX,zhi};
+    return dl_trim(src,bytes,dst,dstBytes,l,h,4u,inside?0u:4u);
 }
 void NitroPort_GxFifoWord(uint32_t word)
 {
