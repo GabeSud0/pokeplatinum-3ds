@@ -3832,7 +3832,9 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
                 u32 before = gpuCmdBufSize - gpuCmdBufOffset;
 
                 NitroPort_PicaDrawScene(&view);
-                if (!view.again && view.part == PICA_DRAW_ALL && before > gpuCmdBufSize - gpuCmdBufOffset) {
+                /* (the whole scene's: a run draws only its rows' triangles) */
+                if (!view.again && !view.band && view.part == PICA_DRAW_ALL &&
+                    before > gpuCmdBufSize - gpuCmdBufOffset) {
                     sSceneWords = before - (gpuCmdBufSize - gpuCmdBufOffset);
                 }
             }

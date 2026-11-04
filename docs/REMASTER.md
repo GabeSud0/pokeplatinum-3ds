@@ -375,7 +375,20 @@ at most 24 runs (12 an eye with the slider up), and no more than the GPU's
 command list has room for (each run is the scene's commands again); more
 lines are put together by an odd number of runs (lines sliding apart by
 turns stay apart by turns). Frames with runs aren't counted by the 60
-frames a second steps. The colour effects and OAM are the frame's (no
+frames a second steps. Each run draws only the scene's triangles that can
+reach its rows (`NitroPort_Gx3dTriangleRows`, once a scene: each
+triangle's rows as -y / w of its corners; `NitroPort_Gx3dBandRanges`:
+each batch's parts with them, the run 2 rows more each side; a corner not
+in front of the camera, every run): the GPU clipped the others away, but
+went through all of them in every run, the whole scene's vertices and
+state 24 times a frame. The grass's slices took the GPU 17.1 ms a frame
+and the display thread 14.3 ms building it (a log of 2026-11-04: 40
+frames a second at the wild Pokémon's battle start, less with the slider
+up); on the PC's scenes of it each run now has about a tenth of the
+triangles and a quarter of the batches. `test_band_ranges`: a run's
+pixels (depth and polygon ID, drawn as the GPU puts them) the same as
+with every triangle, the slider up or down, the 3D moved past the edge.
+The colour effects and OAM are the frame's (no
 effect of the game's changes those by line). Without an H-blank interrupt
 or DMA nothing of this runs; in the field the game keeps its H-blank
 interrupt on, so its handler runs 193 times a frame there (with nothing to

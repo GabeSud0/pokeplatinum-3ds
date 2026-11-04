@@ -1945,6 +1945,132 @@ static void test_edge_pruning(void)
     }
     NitroPort_Gx3dPruneFree();
 }
+/* --- A band of rows drawn by itself (NitroPort_Gx3dBandRanges) ---
+ * An H-blank effect's run of lines (the grass's slices) draws the 3D again
+ * in the run's rows alone: only the triangles that reach them. The run's
+ * pixels (depth and polygon ID, drawn as the GPU does: pm_draw, the run's
+ * rows as the scissor) must come out the same from the parts it gives as
+ * from every triangle, at the upper screen's places for the 3D, with the
+ * slider up or down; 2 rows more each side, as port_gx3d_pica.c asks. */
+static void band_draw(const float rect[4],float stereo,int top,int bottom,const float *lo,const float *hi,int culled,
+                      unsigned *kept,int *ok)
+{
+    unsigned sc[4];
+    size_t b,t;
+    float h=(rect[3]-rect[1])*0.5f,c=(rect[1]+rect[3])*0.5f;
+    float bl=((float)(top-2)-c)/h,bh=((float)(bottom+2)-c)/h;
+    /* (target pixel (i, j) is the screen's (W - 1 - j, H - 1 - i): rows top
+     * .. bottom - 1 are i from H - bottom to H - top) */
+    sc[0]=(unsigned)(PM_H-bottom);sc[1]=0;sc[2]=(unsigned)(PM_H-top);sc[3]=(unsigned)sPmScreenW;
+    for(t=0;t<(size_t)PM_W*PM_H;t++){sPmDepth[t]=1e30f;sPmId[t]=63;}
+    for(b=0;b<sPm.nb;b++){
+        NitroGx3dRange r[8];
+        size_t n,i;
+        uint32_t prev=sPm.b[b].first;
+        if(!culled){
+            for(t=0;t<sPm.b[b].count;t+=3)pm_draw(0,sPm.b[b].first+t,rect,0,0,stereo,2.5f,sc,0);
+            continue;
+        }
+        n=NitroPort_Gx3dBandRanges(lo,hi,&sPm.b[b],bl,bh,r,sizeof(r)/sizeof(r[0]));
+        for(i=0;i<n;i++){
+            /* (in the batch, in order, whole triangles) */
+            if(r[i].first<prev||r[i].first%3u||r[i].count%3u||!r[i].count||
+               r[i].first+r[i].count>sPm.b[b].first+sPm.b[b].count)*ok=0;
+            prev=r[i].first+r[i].count;
+            for(t=0;t<r[i].count;t+=3)pm_draw(0,r[i].first+t,rect,0,0,stereo,2.5f,sc,0);
+            *kept+=r[i].count/3u;
+        }
+    }
+}
+static void test_band_ranges(void)
+{
+    static const float rects[][4]={
+        {40,0,360,240},        /* the DS's 3D on the upper screen */
+        {0,0,400,240},         /* a battle's start: stretched over it */
+        {-12.5f,0,307.5f,240}, /* (moved by a run's scroll, past the edge) */
+        {27,0,347,240},
+    };
+    static const float stereos[]={0.0f,0.01f,-0.03f};
+    static float lo[PM_MAXV/3],hi[PM_MAXV/3],refDepth[PM_W*PM_H];
+    static uint8_t refId[PM_W*PM_H];
+    unsigned scene,kept=0,all=0;
+    size_t k,e,p;
+    int runs,ok=1;
+    sPmScreenW=PM_W;
+    for(scene=0;scene<4;scene++){
+        pm_scene((int)scene,0x2468u+scene*331u);
+        NitroPort_Gx3dTriangleRows(sPm.v,sPm.nv/3,lo,hi);
+        for(k=0;k<sizeof(rects)/sizeof(rects[0]);k++)for(e=0;e<sizeof(stereos)/sizeof(stereos[0]);e++){
+            for(runs=1;runs<=96;runs=runs==1?12:runs==12?24:runs*4){
+                int r;
+                for(r=0;r<runs;r++){
+                    int top=r*PM_H/runs,bottom=(r+1)*PM_H/runs,diff=0;
+                    unsigned kb=0;
+                    band_draw(rects[k],stereos[e],top,bottom,lo,hi,0,&kb,&ok);
+                    memcpy(refDepth,sPmDepth,sizeof(refDepth));
+                    memcpy(refId,sPmId,sizeof(refId));
+                    band_draw(rects[k],stereos[e],top,bottom,lo,hi,1,&kb,&ok);
+                    for(p=0;p<(size_t)PM_W*PM_H;p++)diff+=refDepth[p]!=sPmDepth[p]||refId[p]!=sPmId[p];
+                    if(diff)printf("band ranges: scene %u rect %u eye %u rows %d-%d: %d pixels differ\n",scene,(unsigned)k,(unsigned)e,top,bottom,diff);
+                    CHECK(diff==0);
+                    kept+=kb;
+                    all+=(unsigned)(sPm.nv/3);
+                }
+            }
+        }
+    }
+    CHECK(ok);
+    /* (24 runs of 10 rows: each run far fewer than all) */
+    CHECK(kept*3u<all);
+    printf("band ranges: %u of %u triangles drawn in the runs\n",kept,all);
+    {
+        /* a corner at w 0, behind, or not a number: in every band */
+        NitroGx3dGpuVertex v[9];
+        NitroGx3dBatch b;
+        NitroGx3dRange r[4];
+        float l[3],h[3];
+        memset(v,0,sizeof(v));
+        for(p=0;p<9;p++){v[p].position[1]=0.9f;v[p].position[3]=1.0f;}   /* (near the top) */
+        v[1].position[3]=0.0f;
+        v[5].position[3]=-2.0f;
+        v[7].position[1]=NAN;
+        NitroPort_Gx3dTriangleRows(v,3,l,h);
+        CHECK(l[0]==-INFINITY&&h[0]==INFINITY);
+        CHECK(l[1]==-INFINITY&&h[1]==INFINITY);
+        CHECK(l[2]==-INFINITY&&h[2]==INFINITY);
+        memset(&b,0,sizeof(b));
+        b.first=0;b.count=9;
+        CHECK(NitroPort_Gx3dBandRanges(l,h,&b,0.5f,0.6f,r,4)==1&&r[0].first==0&&r[0].count==9);
+        /* none reaching it: nothing; an empty batch: nothing */
+        for(p=0;p<9;p++){v[p].position[1]=0.9f;v[p].position[3]=1.0f;}
+        NitroPort_Gx3dTriangleRows(v,3,l,h);
+        CHECK(l[0]==-0.9f&&h[0]==-0.9f);
+        CHECK(NitroPort_Gx3dBandRanges(l,h,&b,0.5f,0.6f,r,4)==0);
+        CHECK(NitroPort_Gx3dBandRanges(l,h,&b,-0.95f,-0.85f,r,4)==1&&r[0].first==0&&r[0].count==9);
+        b.count=0;
+        CHECK(NitroPort_Gx3dBandRanges(l,h,&b,-1.0f,1.0f,r,4)==0);
+    }
+    {
+        /* parts far apart, more than there's room for: the last goes on */
+        static float l[64],h[64];
+        NitroGx3dBatch b;
+        NitroGx3dRange r[2];
+        size_t n;
+        for(p=0;p<64;p++){l[p]=h[p]=(p%20u)==0u?0.0f:5.0f;}   /* (triangles 0, 20, 40, 60 reach it) */
+        memset(&b,0,sizeof(b));
+        b.first=0;b.count=64*3;
+        n=NitroPort_Gx3dBandRanges(l,h,&b,-0.1f,0.1f,r,2);
+        CHECK(n==2&&r[0].first==0&&r[0].count==3&&r[1].first==20*3&&r[1].first+r[1].count==61*3);
+        /* a few apart: one part */
+        for(p=0;p<64;p++){l[p]=h[p]=(p%4u)==0u?0.0f:5.0f;}
+        n=NitroPort_Gx3dBandRanges(l,h,&b,-0.1f,0.1f,r,2);
+        CHECK(n==1&&r[0].first==0&&r[0].first+r[0].count==61*3);
+        /* a batch from triangle 10 on: its own triangles' numbers */
+        b.first=10*3;b.count=20*3;
+        n=NitroPort_Gx3dBandRanges(l,h,&b,-0.1f,0.1f,r,2);
+        CHECK(n==1&&r[0].first==12*3&&r[0].first+r[0].count==29*3);
+    }
+}
 static void run_all(void);
 /* A thread that falls behind: the game doesn't wait, the scene after the
  * one it's on is left out (nothing drawn, the last scene stays), and what
@@ -2340,6 +2466,7 @@ int main(void)
 
     run_all();
     test_edge_pruning();
+    test_band_ranges();
     swap();
     CHECK(!NitroPort_Gx3dEarlierSceneUnread()); /* without the thread: never */
     synchronous = checks;

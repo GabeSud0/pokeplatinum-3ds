@@ -436,3 +436,53 @@ size_t NitroPort_Gx3dBuildShadowBatches(const NitroGx3dScene *scene, size_t firs
     if(batch_count)*batch_count=nb;
     return count;
 }
+
+void NitroPort_Gx3dTriangleRows(const NitroGx3dGpuVertex *vertices, size_t triangles, float *lo, float *hi)
+{
+    size_t t;
+    int k;
+
+    for(t=0;t<triangles;t++){
+        float a=INFINITY,b=-INFINITY;
+        for(k=0;k<3;k++){
+            const float *p=vertices[t*3+(size_t)k].position;
+            float n;
+            if(!(p[3]>0.0f)){a=-INFINITY;b=INFINITY;break;}   /* (w not above 0, or NaN) */
+            n=-p[1]/p[3];
+            if(!(n==n) || n==INFINITY || n==-INFINITY){a=-INFINITY;b=INFINITY;break;}
+            if(n<a)a=n;
+            if(n>b)b=n;
+        }
+        lo[t]=a;
+        hi[t]=b;
+    }
+}
+
+size_t NitroPort_Gx3dBandRanges(const float *triLo, const float *triHi, const NitroGx3dBatch *batch, float lo, float hi,
+                                NitroGx3dRange *out, size_t max)
+{
+    uint32_t t, t0, t1, last=0;
+    size_t n=0;
+    int open=0;
+
+    if(!batch || batch->count<3u || max==0)return 0;
+    t0=batch->first/3u;
+    t1=(batch->first+batch->count)/3u;
+    for(t=t0;t<t1;t++){
+        /* (left out only when all above or all below: a NaN reaches it) */
+        if(triHi[t]<lo || triLo[t]>hi)continue;
+        if(open && t-last<=(uint32_t)NITRO_GX3D_BAND_GAP){
+            out[n-1].count=(t+1u)*3u-out[n-1].first;   /* (the gap drawn too) */
+        }else if(n<max){
+            out[n].first=t*3u;
+            out[n].count=3u;
+            n++;
+        }else{
+            out[n-1].count=(t+1u)*3u-out[n-1].first;   /* (no more parts: the last goes on) */
+        }
+        open=1;
+        last=t;
+    }
+    return n;
+}
+
