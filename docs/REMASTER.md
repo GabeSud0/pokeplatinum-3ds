@@ -872,6 +872,17 @@ screen's 320 x 192 at 1.25 times, as above.
     walking back, 9 tiles away (2026-11-01). The flags' bytes start at the
     one with `MAP_LOCAL_FLAGS_START`'s bit (flag 1 is bit 1), as
     `FieldSystem_ClearLocalFlags` clears them.
+  - Brought during a map change too (patch 0074): none are brought during
+    a field task (a script, a menu, a battle's start), and walking out of
+    a door or a gate is one. Out of the gate between Route 208 and
+    Hearthome City, Route 208's arrow sign beside it, at the screen's left
+    edge in the city, came in 17 frames after the gate's wipe had shown
+    that part of the screen (a video of 2026-11-04). They're now also
+    brought during a task that has taken the player into another map
+    (the map with no task running last isn't the player's) with no script
+    in any of the field's tasks (`FieldSystem_PortRunningScript`): as its
+    screen fades in, as the map's own people are made as it loads. On the
+    PC the sign is there as the wipe's last step shows its columns.
 - **A battle's start** (patch 0051): the encounter effects are made for the
   DS's screen (windows and H-blank slices across its columns and lines,
   wipes drawn into a 256 x 192 BG). While one plays (`NitroPort_SetFieldEffect`)

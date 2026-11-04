@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 12:00:00 -0700
+Subject: [PATCH] The people beside brought as a map change fades in, not after (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+On the wider screen the people and signs of the maps beside the
+player's are brought in (FieldMap_PortNeighbours), but none during a
+field task. Walking out of the gate between Route 208 and Hearthome
+City is one: Route 208's arrow sign beside the gate, at the left edge
+of the screen in the city, came in 17 frames after the gate's wipe had
+shown that part of the screen. They're now also brought during a task
+that has taken the player into another map with no script in it (a
+door, a gate, stairs, a warp), as its screen fades in, as the map's
+own people are made as it loads. Still none during a script
+(FieldSystem_PortRunningScript: any of the field's tasks a script's),
+a menu, or a battle's start.
+
+---
+diff --git a/include/script_manager.h b/include/script_manager.h
+index fce580a6..a7187bef 100644
+--- a/include/script_manager.h
++++ b/include/script_manager.h
+@@ -204,4 +204,8 @@ void FieldSystem_InitNewGameState(FieldSystem *fieldSystem);
+ void FieldSystem_RunScript(FieldSystem *fieldSystem, u16 scriptID);
+ BOOL FieldSystem_RunInitScript(FieldSystem *fieldSystem, u8 param1);
+ 
++#ifdef SDK_PORT_3DS
++BOOL FieldSystem_PortRunningScript(FieldSystem *fieldSystem);
++#endif
++
+ #endif // POKEPLATINUM_SCRIPT_MANAGER_H
+diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
+index 7c6e7d1e..6edac13f 100644
+--- a/src/overlay005/fieldmap.c
++++ b/src/overlay005/fieldmap.c
+@@ -1165,12 +1165,20 @@ static void FieldMap_PortKeepHiddenInSight(FieldSystem *fieldSystem, enum MapHea
+ // of reach dropped, and one more of those in reach brought from their map's
+ // events (one a frame: their pictures load as the field's own do, a few
+ // places at a time; they're brought before the screen gets to them).
++// Not during a field task (a script's, a menu's, a battle's start: as they
++// are), but for one that's taken the player into another map, no script
++// in it (a door, a gate, stairs, a warp): its map's own are made as it
++// loads, and these come in as its screen fades in. Brought only once the
++// task was over, Route 208's arrow sign beside the gate into Hearthome City
++// came in sight 17 frames after the gate's wipe, at the screen's left edge
++// (a video of 2026-11-04).
+ static void FieldMap_PortNeighbours(FieldSystem *fieldSystem)
+ {
+     static ObjectEvent sEvents[PORT_NEIGHBOUR_MAPS][PORT_NEIGHBOUR_EVENTS];
+     static int sEventsHeader[PORT_NEIGHBOUR_MAPS] = { -1, -1, -1, -1 };
+     static int sNumEvents[PORT_NEIGHBOUR_MAPS];
+     static int sLastX = -1, sLastZ = -1, sLastHere = -1, sMore, sWait;
++    static int sIdleHere = -1; // (the player's map with no task running, last)
+     MapObjectManager *mapObjMan = fieldSystem->mapObjMan;
+     MapObject *mapObj;
+     enum MapHeaderID here, beside[PORT_NEIGHBOUR_MAPS];
+@@ -1215,8 +1223,12 @@ static void FieldMap_PortNeighbours(FieldSystem *fieldSystem)
+         ov5_021EDA38(mapObjMan, sub_0206285C(mapObjMan));
+     }
+ 
+-    if (!on || FieldSystem_IsRunningTask(fieldSystem)) {
+-        return; // (none brought during a script's: as they are)
++    if (!FieldSystem_IsRunningTask(fieldSystem)) {
++        sIdleHere = here;
++    }
++
++    if (!on || (FieldSystem_IsRunningTask(fieldSystem) && ((int)here == sIdleHere || FieldSystem_PortRunningScript(fieldSystem)))) {
++        return; // (none brought during a task, but one into another map with no script: as they are)
+     }
+ 
+     // The maps in reach.
+diff --git a/src/script_manager.c b/src/script_manager.c
+index 998c1ced..683a8344 100644
+--- a/src/script_manager.c
++++ b/src/script_manager.c
+@@ -84,6 +84,25 @@ static BOOL ScriptManager_SetHiddenItem(ScriptManager *scriptManager, u16 script
+ static u16 FieldSystem_GetFixedInitScriptID(const u8 *initScriptBytes, u8 initScriptType);
+ static u16 FieldSystem_GetFrameTableInitScriptID(FieldSystem *fieldSystem, const u8 *initScriptBytes, u8 initScriptType);
+ 
++#ifdef SDK_PORT_3DS
++// Whether a script runs, anywhere in the field's tasks (one task calls
++// another: a script's warp, a map change in a script's). The people of the
++// maps beside the player's aren't brought during one (fieldmap.c's
++// FieldMap_PortNeighbours).
++BOOL FieldSystem_PortRunningScript(FieldSystem *fieldSystem)
++{
++    const FieldTask *task;
++
++    for (task = fieldSystem->task; task != NULL; task = task->prev) {
++        if (task->func == FieldTask_RunScript) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++#endif
++
+ void ScriptManager_Set(FieldSystem *fieldSystem, u16 scriptID, MapObject *object)
+ {
+     ScriptManager *scriptManager = ScriptManager_New();
