@@ -638,17 +638,18 @@ static int GpuSignObjShown(u16 a0, u16 a1, int top, int picH);
  * sprite shown, no windows, no H-blank effect; no colour effect with it as
  * a first target), a text BG of 256 x 256 (no mosaic, no extended
  * palettes) whose rows of tiles with anything in them are at most 7 rows
- * apart, no other copy of them on the picture where it's scrolled now
+ * apart and in the map's upper half (a band at the screen's top: not a
+ * text box), no other copy of them on the picture where it's scrolled now
  * (its map going round every 256 lines); on a tall field all of them in
  * the BG's one window (NitroPort_WideWindows, the wider canvas's) that the
- * picture moves to its top or bottom, the same way with the scroll 0 and
- * now. Its band's top line on the canvas with the scroll 0 (*y) and its
- * lines (*rows). From the registers, OAM and VRAM given (the state taken,
- * or the live one) and the split's canvas. As the picture is drawn without
- * the BG, its scroll doesn't change it: nothing else is drawn from it (no
- * sprite is moved with its windows, none shown). */
+ * picture moves up to its top, with the scroll 0 and now. Its band's top
+ * line on the canvas with the scroll 0 (*y), its lines (*rows), and its
+ * first row of tiles in the map (*row0). From the registers, OAM and VRAM
+ * given (the state taken, or the live one) and the split's canvas. As the
+ * picture is drawn without the BG, its scroll doesn't change it: nothing
+ * else is drawn from it (no sprite is moved with its windows, none shown). */
 static int GpuSignOf(const NitroRender2DSplit *split, const u8 *io, const u8 *oam, int lines, const u8 *vram, int *y,
-                     int *rows)
+                     int *rows, int *row0)
 {
     u32 dispcnt = Rd32(io, 0);
     u16 bldcnt = Rd16(io, 0x50);
@@ -698,7 +699,7 @@ static int GpuSignOf(const NitroRender2DSplit *split, const u8 *io, const u8 *oa
         }
         t0 = __builtin_ctz(shown);
         t1 = 32 - __builtin_clz(shown);
-        if ((t1 - t0) * 8 > NITRO_SIGN_MAX_ROWS) {
+        if ((t1 - t0) * 8 > NITRO_SIGN_MAX_ROWS || t1 * 8 > H / 2) {
             continue;
         }
         /* (its other copies, a map's height up and down: off the picture) */
@@ -716,6 +717,7 @@ static int GpuSignOf(const NitroRender2DSplit *split, const u8 *io, const u8 *oa
         }
         *y = t0 * 8 + top;
         *rows = (t1 - t0) * 8;
+        *row0 = t0;
         if (tall) {
             NitroWideWindow wins[NITRO_WIDE_MAX_WINDOWS];
             int n = 0, dy;
@@ -732,7 +734,7 @@ static int GpuSignOf(const NitroRender2DSplit *split, const u8 *io, const u8 *oa
                 continue;
             }
             dy = GpuSignTallMove(wins[0].top, wins[0].height, 0, top);
-            if (dy == 0 || dy != GpuSignTallMove(wins[0].top, wins[0].height, Rd16(io, 0x12 + bg * 4) & 0x1FF, top)) {
+            if (dy != -top || dy != GpuSignTallMove(wins[0].top, wins[0].height, Rd16(io, 0x12 + bg * 4) & 0x1FF, top)) {
                 continue;
             }
             *y += dy;
@@ -745,6 +747,62 @@ static int GpuSignOf(const NitroRender2DSplit *split, const u8 *io, const u8 *oa
 /* (GpuSignOf) The BG engine A's last picture left out so, or -1: only then
  * is its vertical scroll not a change (NitroPort_Render2DSplitIfChanged). */
 static int sSignDrawn = -1;
+
+/* (GpuSignOf) What a band of a BG shows (its rows of tiles row0 to row0 +
+ * rows / 8 - 1: their map entries and their tiles' pixels), hashed: the
+ * sign as a picture has it, or another (a new place's name; cleared, as
+ * the game takes it away). vram: its maps and tiles. */
+static u32 SignContentOf(const u8 *io, const u8 *vram, int bg, int row0, int rows)
+{
+    u32 dispcnt = Rd32(io, 0);
+    u16 bgcnt = Rd16(io, 8 + bg * 2);
+    u32 map = ((bgcnt >> 8) & 0x1F) * 0x800 + ((dispcnt >> 27) & 7) * 0x10000;
+    u32 chr = ((bgcnt >> 2) & 0xF) * 0x4000 + ((dispcnt >> 24) & 7) * 0x10000;
+    u32 bytes = (bgcnt & 0x80) ? 64 : 32, h = 2166136261u ^ (u32)bgcnt, last = 0x400, i, k;
+
+    for (i = (u32)row0 * 32; i < (u32)(row0 + rows / 8) * 32 && i < 1024; i++) {
+        u32 entry = Rd16(vram, (map + i * 2) & 0x7FFFF), tile = entry & 0x3FF;
+
+        h = (h ^ entry) * 16777619u;
+        if (tile != last) {
+            last = tile;
+            for (k = 0; k < bytes; k += 4) {
+                h = (h ^ Rd32(vram, (chr + tile * bytes + k) & 0x7FFFF)) * 16777619u;
+            }
+        }
+    }
+    return h == 0 ? 1 : h;
+}
+
+/* (NitroPort_Render2DSignNow) The canvas of the last picture asked to leave
+ * a sign out (its gpuSigns, width, origin, anchorWindows, top, height,
+ * stretch), for working it out on the live state; valid once one was. */
+static struct {
+    volatile int lock, valid;
+    NitroRender2DSplit layout;
+} sSignCanvas;
+
+int NitroPort_Render2DSignNow(uint32_t *content)
+{
+    NitroRender2DSplit layout;
+    int bg, y, rows, row0;
+
+    *content = 0;
+    while (__atomic_test_and_set(&sSignCanvas.lock, __ATOMIC_ACQUIRE)) {
+    }
+    layout = sSignCanvas.layout;
+    bg = sSignCanvas.valid;
+    __atomic_clear(&sSignCanvas.lock, __ATOMIC_RELEASE);
+    if (!bg) {
+        return -1;
+    }
+    bg = GpuSignOf(&layout, NitroPort_IoReg, NitroPort_Oam, NitroPort_LineRegs.active, NitroPort_BgVram, &y, &rows,
+                   &row0);
+    if (bg >= 0) {
+        *content = SignContentOf(NitroPort_IoReg, NitroPort_BgVram, bg, row0, rows);
+    }
+    return bg;
+}
 
 /* The extended palette slot a BG uses: its own number, or BG0/BG1 can
  * take slot 2/3 (BGxCNT bit 13). */
@@ -4554,11 +4612,26 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
          * where it is and its picture's key. (Not with a hand-drawn picture
          * of it: that's looked up by its scroll.) */
         if (e->isA) {
-            int sb = -1, sy = 0, srows = 0;
+            int sb = -1, sy = 0, srows = 0, srow0 = 0;
 
+            if (split->gpuSigns) {
+                /* (the canvas, for the frames' notes: NitroPort_Render2DSignNow) */
+                while (__atomic_test_and_set(&sSignCanvas.lock, __ATOMIC_ACQUIRE)) {
+                }
+                memset(&sSignCanvas.layout, 0, sizeof(sSignCanvas.layout));
+                sSignCanvas.layout.gpuSigns = split->gpuSigns;
+                sSignCanvas.layout.width = split->width;
+                sSignCanvas.layout.origin = split->origin;
+                sSignCanvas.layout.anchorWindows = split->anchorWindows;
+                sSignCanvas.layout.top = split->top;
+                sSignCanvas.layout.height = split->height;
+                sSignCanvas.layout.stretch = split->stretch;
+                sSignCanvas.valid = 1;
+                __atomic_clear(&sSignCanvas.lock, __ATOMIC_RELEASE);
+            }
             if (split->has3d && split->gpuSigns && split->gpuCircleOn == 0) {
                 sb = GpuSignOf(split, e->taken ? e->taken->io : NitroPort_IoReg, e->oam, e->lines != NULL, e->bgVram,
-                               &sy, &srows);
+                               &sy, &srows, &srow0);
             }
             if (sb >= 0 && (kind[sb] != BG_TEXT || e->art[sb] != NULL)) {
                 sb = -1;
@@ -4582,6 +4655,8 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 split->gpuSignRows = srows;
                 split->gpuSignVofs = Rd16(e->taken ? e->taken->io : NitroPort_IoReg, 0x12 + sb * 4) & 0x1FF;
                 split->gpuSignKey = key;
+                split->gpuSignContent =
+                    SignContentOf(e->taken ? e->taken->io : NitroPort_IoReg, e->bgVram, sb, srow0, srows);
                 kind[sb] = BG_NONE;
             }
             __atomic_store_n(&sSignDrawn, sb, __ATOMIC_RELEASE);
@@ -7010,11 +7085,11 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
      * a hand-drawn picture of it keeps it in) */
     if (e == 0 && split->gpuSigns && gpuCircle == 0) {
         const State2D *st = &sState[0];
-        int sy, srows;
+        int sy, srows, srow0;
 
         gpuSign = GpuSignOf(split, split->snapshot ? st->io : NitroPort_IoReg, split->snapshot ? st->oam : NitroPort_Oam,
                             split->snapshot ? st->lines : NitroPort_LineRegs.active,
-                            split->snapshot ? sMapShadowA : NitroPort_BgVram, &sy, &srows);
+                            split->snapshot ? sMapShadowA : NitroPort_BgVram, &sy, &srows, &srow0);
         if (gpuSign >= 0 && gpuSign == __atomic_load_n(&sSignDrawn, __ATOMIC_ACQUIRE)) {
             signMasked = gpuSign;
         }

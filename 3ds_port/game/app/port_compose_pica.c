@@ -210,6 +210,10 @@ static struct {
     uint32_t stamp, swaps;
     int32_t ofs[8];   /* (fx32, finer than a pixel where the game has it: NitroPort_Render2DBgOffsetsFine) */
     int valid;
+    /* (the place name sign in that frame, NitroPort_Render2DSignNow: its BG
+     * or -1, and what its band shows, hashed) */
+    int sign;
+    uint32_t signContent;
 } sBgOfs[BG_OFS_KEPT];
 static unsigned sBgOfsNext;
 static LightLock sBgOfsLock;   /* (LightLock_Init: the display's setting up) */
@@ -1376,23 +1380,7 @@ static int objs_moved(const NitroGx3dScene *scene)
     return 0;
 }
 
-static int bg_offsets_of(uint32_t seq, uint32_t stamp, float out[8]);
-
-/* (the place name sign's band) A frame's vertical scroll of its BG (noted),
- * when it's within 2 of the game's steps (8 lines) of the picture's
- * (drawn); else the picture's. */
-static float sign_scroll_near(float noted, int drawn)
-{
-    float d = fmodf(noted - (float)drawn, 256.0f);
-
-    if (d < 0.0f) {
-        d += 256.0f;
-    }
-    if (d >= 128.0f) {
-        d -= 256.0f;
-    }
-    return d > 8.0f || d < -8.0f ? (float)drawn : noted;
-}
+static int bg_offsets_of(uint32_t seq, uint32_t stamp, float out[8], int *sign, uint32_t *signContent);
 
 /* Whether the band of a BG the compositor draws as it scrolls (the place
  * name sign, as the upper screen's last picture has it) is scrolled other
@@ -1403,8 +1391,8 @@ static int sign_moved(const NitroGx3dScene *scene)
     float now[8], before[8];
     int bg = sSignShown;
 
-    if (bg <= 0 || bg > 3 || !bg_offsets_of(scene->swap_seq, scene->stamp, now) ||
-        !bg_offsets_of(sLastMainSeq, sLastMainStamp, before)) {
+    if (bg <= 0 || bg > 3 || !bg_offsets_of(scene->swap_seq, scene->stamp, now, NULL, NULL) ||
+        !bg_offsets_of(sLastMainSeq, sLastMainStamp, before, NULL, NULL)) {
         return 0;
     }
     return now[bg * 2 + 1] != before[bg * 2 + 1];
@@ -1487,12 +1475,15 @@ static int objs_of(uint32_t seq, uint32_t stamp, NitroGpuObj *out)
 }
 
 
-void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const int32_t fine[8])
+void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const int32_t fine[8], int sign,
+                                    uint32_t signContent)
 {
     LightLock_Lock(&sBgOfsLock);
     sBgOfs[sBgOfsNext].stamp = stamp;
     sBgOfs[sBgOfsNext].swaps = swaps;
     memcpy(sBgOfs[sBgOfsNext].ofs, fine, sizeof(sBgOfs[0].ofs));
+    sBgOfs[sBgOfsNext].sign = sign;
+    sBgOfs[sBgOfsNext].signContent = signContent;
     sBgOfs[sBgOfsNext].valid = 1;
     sBgOfsNext = (sBgOfsNext + 1u) % BG_OFS_KEPT;
     LightLock_Unlock(&sBgOfsLock);
@@ -1507,8 +1498,9 @@ void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const int32_
  * it, or the one after it for it, now and then: the field's weather (Eterna
  * Forest's light) went back and forth as the player walked, 2026-10-30.
  * That only when none was noted so (the nearest within 4 V-blanks after
- * its stamp). Whether they're known. */
-static int bg_offsets_of(uint32_t seq, uint32_t stamp, float out[8])
+ * its stamp). Whether they're known; and (sign, signContent: NULL for none)
+ * the place name sign then. */
+static int bg_offsets_of(uint32_t seq, uint32_t stamp, float out[8], int *sign, uint32_t *signContent)
 {
     int i, found = -1;
     uint32_t best = 0;
@@ -1533,6 +1525,12 @@ static int bg_offsets_of(uint32_t seq, uint32_t stamp, float out[8])
     if (found >= 0) {
         for (i = 0; i < 8; i++) {
             out[i] = (float)sBgOfs[found].ofs[i] / 4096.0f;
+        }
+        if (sign != NULL) {
+            *sign = sBgOfs[found].sign;
+        }
+        if (signContent != NULL) {
+            *signContent = sBgOfs[found].signContent;
         }
     }
     LightLock_Unlock(&sBgOfsLock);
@@ -3554,6 +3552,9 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         quad_combiner(1);
         quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, 0, vTop, u1, vBottom, 0xFFFFFFFFu);
     }
+    if (scr == &sScreens[0]) {
+        sSignShown = -1;   /* (the sign's BG, drawn below: step 5a) */
+    }
     if (has3d) {
         uint16_t rearColor;
         unsigned rearAlpha;
@@ -3717,11 +3718,11 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             /* (the scrolls of the frame the DS shows the scene in; an
              * in-between scene's halfway from the scene before's; the
              * scene's own, a frame behind, when they aren't known) */
-            if (bg_offsets_of(scene->swap_seq, scene->stamp, now)) {
+            if (bg_offsets_of(scene->swap_seq, scene->stamp, now, NULL, NULL)) {
                 hofs = now[info->gpuBg * 2];
                 vofs = now[info->gpuBg * 2 + 1];
                 if ((scene->stamp_before != scene->stamp || scene->swap_seq_before != scene->swap_seq) &&
-                    bg_offsets_of(scene->swap_seq_before, scene->stamp_before, before)) {
+                    bg_offsets_of(scene->swap_seq_before, scene->stamp_before, before, NULL, NULL)) {
                     hofs = bg_offset_halfway(before[info->gpuBg * 2], hofs);
                     vofs = bg_offset_halfway(before[info->gpuBg * 2 + 1], vofs);
                 }
@@ -3806,16 +3807,20 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         if (info->gpuSign > 0 && info->gpuCircle == 0 && !info->stretch && set->signTex && set->signValid &&
             set->signKey == info->gpuSignKey && sQuadVertices + 6 <= MAX_QUAD_VERTICES) {
             float v = (float)info->gpuSignVofs, now[8], before[8];
-            uint32_t seqB, stampB;
+            uint32_t seqB, stampB, content = 0;
+            int sign = -1, up = 1;
 
-            /* (a frame's scroll only near the picture's: the game puts the
-             * sign up scrolled 38 (the frame before 0) and takes it away
-             * scrolled 0 again; with the picture of a frame and the scene of
-             * the one before or after, it showed whole for a frame) */
-            if (bg_offsets_of(scene->swap_seq, scene->stamp, now)) {
-                v = sign_scroll_near(now[info->gpuSign * 2 + 1], info->gpuSignVofs);
-                if (frame_before(scene, &seqB, &stampB) && bg_offsets_of(seqB, stampB, before)) {
-                    v = bg_offset_halfway(sign_scroll_near(before[info->gpuSign * 2 + 1], info->gpuSignVofs), v);
+            /* (only while the frame shown has this sign up, the same: the
+             * game puts it up scrolled 38 (the frame before, none) and takes
+             * it away cleared, scrolled 0; the picture isn't drawn again as
+             * it slides, so it may be of a frame before or after the one
+             * shown) */
+            if (bg_offsets_of(scene->swap_seq, scene->stamp, now, &sign, &content)) {
+                up = sign == info->gpuSign && content == info->gpuSignContent;
+                v = now[info->gpuSign * 2 + 1];
+                if (frame_before(scene, &seqB, &stampB) && bg_offsets_of(seqB, stampB, before, &sign, &content) &&
+                    sign == info->gpuSign && content == info->gpuSignContent) {
+                    v = bg_offset_halfway(before[info->gpuSign * 2 + 1], v);
                 }
             }
             /* (the scroll as the map's 256 lines go round: -128 to 127) */
@@ -3826,7 +3831,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             if (v >= 128.0f) {
                 v -= 256.0f;
             }
-            {
+            if (up) {
                 float sy0 = (float)info->gpuSignY - v, sy1 = sy0 + (float)info->gpuSignRows;
                 float c0 = sy0 < 0.0f ? 0.0f : sy0, c1 = sy1 > (float)rows ? (float)rows : sy1;
 

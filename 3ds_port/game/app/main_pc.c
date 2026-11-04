@@ -497,7 +497,7 @@ static void RemasterRender(uint16_t *out)
             split.gpuBgs = NitroPort_RepeatingBgs();
             /* (the place name sign, on the field at the DS's pixel size:
              * drawn over the rest below, as the 3DS has it) */
-            split.gpuSigns = NitroPort_PixelField() ? 0x0E : 0;
+            split.gpuSigns = split.top > 0 && split.height > 192 ? 1 << 3 : 0;
             split.gpuCircle = 1;   /* (a circle fade: drawn over the rest below) */
             if (NitroPort_GpuSprites()) {
                 split.gpuObjs = 1;

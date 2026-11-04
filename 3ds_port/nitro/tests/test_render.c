@@ -3081,6 +3081,25 @@ static void test_gpu_sign(void)
     /* on the wider canvas, the sign's first tiles at its left edge */
     CHECK(picture[0 * 400 + 0] != 0 && picture[39 * 400 + 135] != 0 && picture[20 * 400 + 136] == 0);
 
+    /* the frame's own (NitroPort_Render2DSignNow, the live state): the same
+     * sign as the picture's; another once its pixels change; none once
+     * they're cleared (the game taking it away) */
+    {
+        uint32_t content = 0;
+        static u8 other[32];
+
+        CHECK(NitroPort_Render2DSignNow(&content) == 3 && content == split.gpuSignContent);
+        MakeTile4(other, 2);
+        GX_LoadBG3Char(other, 32, sizeof(other));
+        CHECK(NitroPort_Render2DSignNow(&content) == 3 && content != split.gpuSignContent);
+        memset(other, 0, sizeof(other));
+        GX_LoadBG3Char(other, 32, sizeof(other));
+        GX_LoadBG3Char(other, 64, sizeof(other));
+        CHECK(NitroPort_Render2DSignNow(&content) == -1 && content == 0);
+        GX_LoadBG3Char(tiles, 0, sizeof(tiles));
+        CHECK(NitroPort_Render2DSignNow(&content) == 3 && content == split.gpuSignContent);
+    }
+
     /* its scroll alone: not drawn again (the first two times: drawn, then
      * the VRAM noted; the next, the picture having left it out) */
     G2_SetBG3Offset(0, 38);
@@ -3140,6 +3159,19 @@ static void test_gpu_sign(void)
     CHECK(split.gpuSignLeftOut == 0);
     map[20 * 32 + 5] = 0;
     GX_LoadBG3Scr(map, 0, sizeof(map));
+    /* a band in the lower half (a text box at the screen's bottom): not a sign */
+    {
+        static u16 low[32 * 32];
+
+        memset(low, 0, sizeof(low));
+        for (i = 0; i < 17 * 5; i++) {
+            low[(19 + i / 17) * 32 + i % 17] = 1;
+        }
+        GX_LoadBG3Scr(low, 0, sizeof(low));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuSignLeftOut == 0);
+        GX_LoadBG3Scr(map, 0, sizeof(map));
+    }
     NitroPort_Render2DSplit(0, under, &split);
     CHECK(split.gpuSignLeftOut == 1 << 3);
     GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_2D);

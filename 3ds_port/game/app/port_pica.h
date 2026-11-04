@@ -272,10 +272,13 @@ typedef struct ComposeLayers {
      * canvas with its vertical scroll 0, its lines, its vertical scroll when
      * the picture was drawn (the frame's are noted: drawn moved up by that
      * of the frame shown, halfway in an in-between frame), its picture's
-     * key, and (the drawer's) its picture (NitroPort_Render2DSignPicture:
-     * width x gpuSignRows RGBA5551), made when the key changed. */
+     * key, what its band shows (drawn only in a frame noted with the same:
+     * NitroPort_Render2DSignNow), and (the drawer's) its picture
+     * (NitroPort_Render2DSignPicture: width x gpuSignRows RGBA5551), made
+     * when the key changed. */
     int gpuSign, gpuSignY, gpuSignRows, gpuSignVofs;
     uint64_t gpuSignKey;
+    uint32_t gpuSignContent;
     const uint16_t *gpuSignPicture;
     /* Engine A's sprites left out of the picture for the compositor to draw
      * itself (NitroRender2DSplit.gpuObjsLeftOut: the HM cut-in's), or -1:
@@ -307,7 +310,8 @@ int NitroPort_ComposeDrawsSigns(void);
  * SWAP_BUFFERS made (NitroPort_Gx3dSwapsMade): what a BG the compositor
  * draws itself is scrolled by with the 3D shown in it (a scene whose
  * swap_seq is that: the first frame after it, as the DS has it). */
-void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const int32_t fine[8]);
+void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, uint32_t swaps, const int32_t fine[8], int sign,
+                                    uint32_t signContent);
 /* Whether the compositor can draw engine A's sprites itself (their
  * textures made: NitroRender2DSplit.gpuObjs). Any thread. */
 int NitroPort_ComposeDrawsObjs(void);

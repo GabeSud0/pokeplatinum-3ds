@@ -93,11 +93,14 @@ typedef struct NitroRender2DSplit {
      * or down as the BG scrolls (a bit, or 0 none): the place name sign as
      * it slides in and out. Where its band is on the canvas (its top line
      * with the BG's vertical scroll 0, gpuSignY; gpuSignRows lines), its
-     * vertical scroll as the picture was drawn (0-511), and its picture's
-     * key (NitroPort_Render2DSignPicture made again when it changes). */
+     * vertical scroll as the picture was drawn (0-511), its picture's key
+     * (NitroPort_Render2DSignPicture made again when it changes), and what
+     * the band shows, hashed (as NitroPort_Render2DSignNow has it: a frame
+     * shows this sign only when its own is the same). */
     int gpuSignLeftOut;
     int gpuSignY, gpuSignRows, gpuSignVofs;
     uint64_t gpuSignKey;
+    uint32_t gpuSignContent;
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
     int backdrop;      /* the backdrop colour (RGB555): what shows where no layer does */
     uint16_t *over;    /* width x 192 (x height with top) */
@@ -198,11 +201,11 @@ typedef struct NitroRender2DSplit {
      * above) when it's in front of everything (every other BG and the 3D
      * behind it, no sprite shown, no colour effect on it as a first target,
      * no windows, no H-blank effect, the 3D on), a text BG of 256 x 256 with
-     * all it shows in at most 7 rows of tiles (the rest of its map clear),
-     * no other copy of them on the picture as it scrolls round its map, and
-     * on a tall field (top) all of them in one of the game's windows moved
-     * as the picture's top or bottom (NitroPort_WideWindows), alone on the
-     * BG. Its vertical scroll then doesn't count as a change
+     * all it shows in at most 7 rows of tiles of its map's upper half (the
+     * rest of its map clear: a band at the screen's top), no other copy of
+     * them on the picture as it scrolls round its map, and on a tall field
+     * (top) all of them in one of the game's windows moved up to the
+     * picture's top (NitroPort_WideWindows), alone on the BG. Its vertical scroll then doesn't count as a change
      * (NitroPort_Render2DSplitIfChanged): the picture isn't drawn again as
      * it slides. The caller's choice, kept by the call. */
     int gpuSigns;
@@ -259,6 +262,11 @@ int NitroPort_Render2DBgPicture(int bg, int snapshot, uint16_t *out);
 int NitroPort_Render2DSignPicture(const NitroRender2DSplit *layout, int bg, uint16_t *out);
 /* The most lines of a band NitroPort_Render2DSignPicture draws. */
 #define NITRO_SIGN_MAX_ROWS 56
+/* (the game's thread, each frame it hands over) The BG that would be left
+ * out as a sign now (gpuSignLeftOut's), on the canvas of the last picture
+ * asked to (its gpuSigns), from the live state, and what its band shows,
+ * hashed (*content: gpuSignContent's); else -1 (*content 0). */
+int NitroPort_Render2DSignNow(uint32_t *content);
 /* Engine A's BG scrolls now (BG0-3's HOFS and VOFS, 9 bits each). */
 void NitroPort_Render2DBgOffsets(uint16_t out[8]);
 /* The same, and each as fx32 (fine: 12 bits under the pixel, 0 to 512):

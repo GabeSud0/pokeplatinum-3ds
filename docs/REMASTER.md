@@ -2148,10 +2148,11 @@ and went). Now the compositor draws it (`NitroRender2DSplit.gpuSigns`,
 `GpuSignOf`): when that BG is in front of everything (every other BG and
 the 3D behind it, no sprite on the picture, no windows, no H-blank effect,
 no colour effect on it as a first target), all it shows is in at most 7
-rows of tiles of its 256 x 256 map (`BgTextRowsShown`), no other copy of
-them comes on the picture as it scrolls round its map, and on the tall
-field they're in the BG's one window, moved to the picture's top or
-bottom the same way at the scroll 0 and now (`GpuSignTallMove`), the
+rows of tiles of its 256 x 256 map's upper half (`BgTextRowsShown`: a band
+at the screen's top, not a text box), no other copy of them comes on the
+picture as it scrolls round its map, and on the tall field they're in the
+BG's one window, moved up to the picture's top at the scroll 0 and now
+(`GpuSignTallMove`), the
 picture is drawn without it (`gpuSignLeftOut`) and the band of its lines
 is drawn on its own as it would be at the scroll 0
 (`NitroPort_Render2DSignPicture`: the canvas's width, the anchored sign at
@@ -2164,11 +2165,18 @@ moved (`sign_moved`, as the GPU sprites), a texel a pixel (the set's
 `signTex`, 512 x 64: 64 KB a set; at 2x2 texels a pixel, as the over
 layer, the three sets would take 768 KB of the linear heap): on the field
 at the DS's pixel size only (`NitroPort_PixelField`, the default), drawn
-a pixel a pixel; elsewhere the picture draws it, as before. A frame's
-scroll is taken only within 8 lines of the picture's own (the game puts
-the sign up scrolled 38, the frame before 0, and takes it away scrolled 0
-again: a picture of one frame with the scene of the next or the one
-before showed it whole for a frame). Its vertical scroll
+a pixel a pixel (BG3 alone, the sign's); elsewhere the picture draws it,
+as before. As the picture isn't drawn again while the sign slides, it may
+be of a frame before or after the one shown: each frame the game hands
+over notes the sign then with its scrolls (`NitroPort_Render2DSignNow`:
+the same test on the live state, on the last picture's canvas, and what
+its band shows, hashed: `SignContentOf`), and the compositor draws it only
+in a frame with the same sign up (the game puts it up scrolled 38, the
+frame before having none, and takes it away cleared, scrolled 0: drawn
+from the picture's own scroll, or the frame's 0, it showed whole for a
+frame). A review of the first version found it took a frame's scroll only
+within 8 lines of the picture's own, which is stale while it slides: on
+the 3DS the sign would have stayed 38 up, 2 lines shown. Its vertical scroll
 isn't a change once a picture has left it out (`sSignDrawn`): the picture
 isn't drawn again as it slides. In `test_render.c`: `test_gpu_sign` (on
 the DS's canvas, the wider one and the tall field's, each scroll of the
