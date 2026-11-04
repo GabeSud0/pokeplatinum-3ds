@@ -3349,10 +3349,10 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
             sLastCircle = ka, sLastCircleX = ax, sLastCircleY = ay, sLastCircleR = ar;
         } else if (kb == info->gpuCircle) {
             x = bx, y = by, r = br;
-        } else if (sLastCircle == info->gpuCircle &&
-                   (kind != 2 || (sLastCircleX != 0) == (info->gpuCircleX != 0))) {
-            /* (a band's: of lines or of columns as the picture's, the
-             * gate's wipe's not kept for a building's door) */
+        } else if (sLastCircle == info->gpuCircle && (kind != 2 || (sLastCircleX == 0 && info->gpuCircleX == 0))) {
+            /* (a band's: of lines only; one of columns, the gate's wipe,
+             * as the picture has it: not one kept from before, a wipe the
+             * other way, nor for a building's door) */
             x = sLastCircleX, y = sLastCircleY, r = sLastCircleR;
         }
     }
