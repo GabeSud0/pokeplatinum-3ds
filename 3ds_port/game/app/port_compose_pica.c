@@ -3211,19 +3211,20 @@ static int sLastCircle, sLastCircleX, sLastCircleY, sLastCircleR;
 static int sCircleDrawnValid, sCircleDrawnX, sCircleDrawnY, sCircleDrawnR;
 static u32 sCircleDrawnAt;
 /* (draw_circle_mask) A band with columns (the gate's wipe) as drawn in a
- * frame: the V-blank it shows at and the scene (its frame and the frame
- * before, whether an in-between frame for the fades alone), its lines,
+ * frame: the compose it was drawn in (NitroPort_ComposeFrame's call: both
+ * eyes, and only them; a frame composed again, a picture published, works
+ * it out anew) and the scene (its frame and the frame before), its lines,
  * columns and colour. The other eye draws it as it is: drawing it changes
  * the band's state (sBand), which would take the other eye another way. */
 static struct {
-    int valid, mid, y, r, x;
-    uint32_t vblank, seq, stamp, seqBefore, stampBefore;
+    int valid, y, r, x;
+    uint32_t compose, seq, stamp, seqBefore, stampBefore;
     u32 rgba;
 } sColsDrawn;
 
 static int cols_drawn_key(const NitroGx3dScene *scene)
 {
-    return sColsDrawn.valid && sColsDrawn.vblank == sDrawTarget && sColsDrawn.mid == sEffectsMid &&
+    return sColsDrawn.valid && sColsDrawn.compose == sComposedFrames &&
            sColsDrawn.seq == (scene != NULL ? scene->swap_seq : 0u) &&
            sColsDrawn.stamp == (scene != NULL ? scene->stamp : 0u) &&
            sColsDrawn.seqBefore == (scene != NULL ? scene->swap_seq_before : 0u) &&
@@ -3299,20 +3300,23 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
                  * lines noted late): as the picture has it, rather than
                  * the whole picture at once; its columns too, the gate's
                  * wipe's first step) */
+                if (info->gpuCircleX != 0 && frame_black(scene->swap_seq, scene->stamp)) {
+                    /* (the frame black, the picture ahead of it with the
+                     * wipe's first step: none of it shown yet, black; not
+                     * its columns at the picture's brightness, then
+                     * halfway back in the in-between frame after. As it
+                     * is, the band's state left alone: not a band of lines
+                     * opening from the middle) */
+                    int mid = (info->gpuCircleY + info->gpuCircleR) / 2;
+
+                    draw_band(pic, sx, sy, mid, mid, 0, rgba_of(0, 255));
+                    return;
+                }
                 ka = 2;
                 kb = 0;
                 ax = info->gpuCircleX;
                 ay = info->gpuCircleY;
                 ar = info->gpuCircleR;
-                if (ax != 0 && scene != NULL && frame_black(scene->swap_seq, scene->stamp)) {
-                    /* (the frame black, the picture ahead of it with the
-                     * wipe's first step: none of it shown yet, black; not
-                     * its columns at the picture's brightness, then
-                     * halfway back in the in-between frame after) */
-                    ax = 0;
-                    ay = ar = (ay + ar) / 2;
-                    rgba = rgba_of(0, 255);
-                }
             } else {
                 /* (its columns too: from the frame before's, where that had
                  * the band, to all of them; the gate's wipe's last step) */
@@ -3367,8 +3371,7 @@ static void draw_circle_mask(const ComposeLayers *info, const NitroGx3dScene *sc
         draw_band(pic, sx, sy, y, r, x, rgba);
         if (x != 0 || info->gpuCircleX != 0) {
             sColsDrawn.valid = 1;
-            sColsDrawn.vblank = sDrawTarget;
-            sColsDrawn.mid = sEffectsMid;
+            sColsDrawn.compose = sComposedFrames;
             sColsDrawn.seq = scene != NULL ? scene->swap_seq : 0u;
             sColsDrawn.stamp = scene != NULL ? scene->stamp : 0u;
             sColsDrawn.seqBefore = scene != NULL ? scene->swap_seq_before : 0u;
