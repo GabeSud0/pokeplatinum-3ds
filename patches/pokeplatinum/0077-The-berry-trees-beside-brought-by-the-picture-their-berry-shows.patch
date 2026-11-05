@@ -1,0 +1,271 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 09:30:00 -0700
+Subject: [PATCH] The berry trees beside brought by the picture their berry shows (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The people of the maps beside the player's (patch 0050) are brought
+while there's room for their pictures with places left for the game's
+own. A berry patch's picture is its berry's at its growth stage, which
+the room check didn't know, so it kept room for any: six places free.
+Walking up Route 209 into Solaceon Town there were five, so the town's
+four berry trees by its south entrance were never brought: they popped
+in at the zone change, in sight at the top of the taller field.
+
+Now a berry patch beside is brought by the picture its berry shows
+(BerryPatchGraphics_PortPictureOf, from its patch in the save): at once
+if that's in already or there's none (nothing planted yet), else with
+room for it and places left for the pictures the player's map's own
+people may still need (its events' that aren't in: the ones its scripts
+bring on) and two more (MapObjectGfx_PortHasRoomForBerry). Everyone
+else as before.
+
+---
+diff --git a/include/berry_patch_graphics.h b/include/berry_patch_graphics.h
+index f272d1c4..533e3fe4 100644
+--- a/include/berry_patch_graphics.h
++++ b/include/berry_patch_graphics.h
+@@ -17,5 +17,10 @@ void BerryPatchGraphics_FreeGraphics(MapObject *mapObject);
+ void BerryPatchGraphics_PauseGraphics(MapObject *mapObject);
+ void BerryPatchGraphics_ResumeGraphics(MapObject *mapObject);
+ Billboard *BerryPatchGraphics_GetGraphicsObject(MapObject *mapObject);
++#ifdef SDK_PORT_3DS
++#include "berry_patches.h"
++
++int BerryPatchGraphics_PortPictureOf(int berryID, enum BerryGrowthStage growthStage);
++#endif
+ 
+ #endif // POKEPLATINUM_BERRY_PATCH_GRAPHICS_H
+diff --git a/include/overlay005/ov5_021ECE40.h b/include/overlay005/ov5_021ECE40.h
+index ed67646b..9c98a3b6 100644
+--- a/include/overlay005/ov5_021ECE40.h
++++ b/include/overlay005/ov5_021ECE40.h
+@@ -44,6 +44,7 @@ Billboard *ov5_021EE3FC(MapObject *param0, int param1, UnkFuncPtr_ov5_021EE454 p
+ #include "map_header_data.h"
+ 
+ BOOL MapObjectGfx_PortHasRoom(const MapObjectManager *mapObjMan, int graphicsID);
++BOOL MapObjectGfx_PortHasRoomForBerry(const MapObjectManager *mapObjMan, int pictureID, int ownCount, const ObjectEvent *own);
+ BOOL MapObjectGfx_PortRoomFor(const MapObjectManager *mapObjMan, int objEventCount, const ObjectEvent *objectEvent);
+ #endif
+ 
+diff --git a/src/berry_patch_graphics.c b/src/berry_patch_graphics.c
+index abbbd864..c957022a 100644
+--- a/src/berry_patch_graphics.c
++++ b/src/berry_patch_graphics.c
+@@ -230,6 +230,23 @@ static int BerryPatchGraphics_GetGraphicsResourceID(int berryID, enum BerryGrowt
+     return 0xffff;
+ }
+ 
++#ifdef SDK_PORT_3DS
++#include "constants/items.h"
++
++// (the 3DS port) The picture a berry patch shows with this berry at this
++// stage (0xffff: none), for one of a map beside the player's before it's
++// made (MapObjectGfx_PortHasRoomForBerry).
++int BerryPatchGraphics_PortPictureOf(int berryID, enum BerryGrowthStage growthStage)
++{
++    if (growthStage != BERRY_GROWTH_STAGE_NONE && growthStage != BERRY_GROWTH_STAGE_PLANTED
++        && (berryID < 1 || berryID > NUM_BERRIES)) {
++        return 0xffff;
++    }
++
++    return BerryPatchGraphics_GetGraphicsResourceID(berryID, growthStage);
++}
++#endif
++
+ Billboard *BerryPatchGraphics_GetGraphicsObject(MapObject *mapObject)
+ {
+     Billboard *graphicsObject = NULL;
+diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
+index 6edac13f..9c96f2de 100644
+--- a/src/overlay005/fieldmap.c
++++ b/src/overlay005/fieldmap.c
+@@ -995,6 +995,9 @@ static BOOL FieldMap_InDistortionWorld(FieldSystem *fieldSystem)
+ }
+ 
+ #ifdef SDK_PORT_3DS
++#include "berry_patch_graphics.h"
++#include "berry_patches.h"
++
+ extern int NitroPort_WideScreenExtra(void);
+ 
+ #define PORT_NEIGHBOUR_MAPS   4
+@@ -1160,6 +1163,25 @@ static void FieldMap_PortKeepHiddenInSight(FieldSystem *fieldSystem, enum MapHea
+     }
+ }
+ 
++// Room for the picture of someone beside: a berry patch's is the one its
++// berry shows now (its patch's in the save, by its event's data), with
++// room kept for what the player's map's own may still need.
++static BOOL FieldMap_PortHasRoom(FieldSystem *fieldSystem, const ObjectEvent *e)
++{
++    int graphicsID = ObjectEvent_GetGraphicsID(e);
++
++    if (BerryPatchGraphics_IsBerryPatch(graphicsID) == TRUE) {
++        const BerryPatch *patches = MiscSaveBlock_GetBerryPatches(fieldSystem->saveData);
++        int patchID = ObjectEvent_GetDataAt(e, 0);
++
++        return MapObjectGfx_PortHasRoomForBerry(fieldSystem->mapObjMan,
++            BerryPatchGraphics_PortPictureOf(BerryPatches_GetPatchBerryID(patches, patchID), BerryPatches_GetPatchGrowthStage(patches, patchID)),
++            MapHeaderData_GetNumObjectEvents(fieldSystem), MapHeaderData_GetObjectEvents(fieldSystem));
++    }
++
++    return MapObjectGfx_PortHasRoom(fieldSystem->mapObjMan, graphicsID);
++}
++
+ // The people of the maps beside the player's, on the 3DS's wider field
+ // (map_object.h, MAP_OBJ_STATUS_PORT_NEIGHBOUR): every frame, the ones out
+ // of reach dropped, and one more of those in reach brought from their map's
+@@ -1335,7 +1357,7 @@ static void FieldMap_PortNeighbours(FieldSystem *fieldSystem)
+                 continue;
+             }
+ 
+-            if (!MapObjectGfx_PortHasRoom(mapObjMan, ObjectEvent_GetGraphicsID(e))) {
++            if (!FieldMap_PortHasRoom(fieldSystem, e)) {
+                 sWait = 4; // (pictures loading, or no room: soon again)
+                 continue;
+             }
+diff --git a/src/overlay005/ov5_021ECE40.c b/src/overlay005/ov5_021ECE40.c
+index 04528579..594ef00a 100644
+--- a/src/overlay005/ov5_021ECE40.c
++++ b/src/overlay005/ov5_021ECE40.c
+@@ -2101,6 +2101,48 @@ static int ov5_PortFreeOf(const int *list, int count)
+     return n;
+ }
+ 
++// Pictures loading now.
++static BOOL ov5_PortLoading(UnkStruct_ov5_021ED0A4 *gfx)
++{
++    UnkStruct_ov5_021EDF3C *loading = gfx->unk_100;
++    int i;
++
++    for (i = 0; i < loading->unk_00; i++) {
++        if (loading->unk_08[i].unk_04 != NULL || loading->unk_0C[i].unk_0C != NULL) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++// Room for a billboard picture (graphicsID's: its texture, model and
++// frames): each in already, or a place for it with places left for the
++// game's own (a new texture: texFree of them free at least).
++static BOOL ov5_PortRoomForPicture(UnkStruct_ov5_021ED0A4 *gfx, int graphicsID, int texFree)
++{
++    if (ov5_021ED810(gfx, graphicsID) == 0 && ov5_021ED924(gfx, graphicsID) == 0
++        && ov5_PortFreeOf(&ov5_021EDCB8(gfx)[ov5_021EDCE8(gfx)], ov5_021EDCF0(gfx)) < texFree) {
++        return FALSE;
++    }
++
++    {
++        int model = ov5_021EDD2C(graphicsID), frames = ov5_021EDD38(graphicsID);
++
++        if (ov5_021ED598(gfx, model) == 0 && ov5_021ED5E8(gfx, model) == 0
++            && ov5_PortFreeOf(&ov5_021EDCBC(gfx)[ov5_021EDCC8(gfx)], ov5_021EDCD0(gfx)) < 2) {
++            return FALSE;
++        }
++
++        if (ov5_021ED6D4(gfx, frames) == 0 && ov5_021ED724(gfx, frames) == 0
++            && ov5_PortFreeOf(&ov5_021EDCC0(gfx)[ov5_021EDCD8(gfx)], ov5_021EDCE0(gfx)) < 2) {
++            return FALSE;
++        }
++    }
++
++    return TRUE;
++}
++
+ // Room for someone of a map beside the player's, on the 3DS's wider field
+ // (map_object.h, MAP_OBJ_STATUS_PORT_NEIGHBOUR): their pictures in already,
+ // or room for them with places left for the game's own (this field's places
+@@ -2110,13 +2152,9 @@ BOOL MapObjectGfx_PortHasRoom(const MapObjectManager *mapObjMan, int graphicsID)
+ {
+     UnkStruct_ov5_021ED0A4 *gfx = sub_0206285C(mapObjMan);
+     const ObjectEventGfxRenderDetailsEntry *details = gObjectEventGfxRenderDetailsTable;
+-    UnkStruct_ov5_021EDF3C *loading = gfx->unk_100;
+-    int i;
+ 
+-    for (i = 0; i < loading->unk_00; i++) {
+-        if (loading->unk_08[i].unk_04 != NULL || loading->unk_0C[i].unk_0C != NULL) {
+-            return FALSE;
+-        }
++    if (ov5_PortLoading(gfx)) {
++        return FALSE;
+     }
+ 
+     while (details->graphicsID != 0xffff && details->graphicsID != PortFollower_DetailsGfx(graphicsID)) {
+@@ -2138,26 +2176,61 @@ BOOL MapObjectGfx_PortHasRoom(const MapObjectManager *mapObjMan, int graphicsID)
+             && ov5_PortFreeOf(&ov5_021EDCC0(gfx)[ov5_021EDCD8(gfx)], ov5_021EDCE0(gfx)) >= 2;
+     }
+ 
+-    if (ov5_021ED810(gfx, graphicsID) == 0 && ov5_021ED924(gfx, graphicsID) == 0
+-        && ov5_PortFreeOf(&ov5_021EDCB8(gfx)[ov5_021EDCE8(gfx)], ov5_021EDCF0(gfx)) < 6) {
++    return ov5_PortRoomForPicture(gfx, graphicsID, 6);
++}
++
++// Room for a berry patch beside the player's map (map_object.h,
++// MAP_OBJ_STATUS_PORT_NEIGHBOUR) by the picture its berry shows now
++// (BerryPatchGraphics_PortPictureOf; 0xffff: none, nothing planted or only
++// just): that picture in already, or a place for it with places left for
++// the pictures the player's map's own people may still need (its events'
++// not in now: the ones its scripts bring on) and two more. Nothing
++// loading. With five places kept for any berry's picture instead
++// (MapObjectGfx_PortHasRoom), the four in Solaceon Town by its south
++// entrance were never brought from Route 209 (five places free, three
++// pictures new): they popped in at the zone change, in sight (2026-11-05).
++BOOL MapObjectGfx_PortHasRoomForBerry(const MapObjectManager *mapObjMan, int pictureID, int ownCount, const ObjectEvent *own)
++{
++    UnkStruct_ov5_021ED0A4 *gfx = sub_0206285C(mapObjMan);
++    u16 seen[64];
++    int i, j, need = 0, nSeen = 0;
++
++    if (ov5_PortLoading(gfx)) {
+         return FALSE;
+     }
+ 
+-    {
+-        int model = ov5_021EDD2C(graphicsID), frames = ov5_021EDD38(graphicsID);
++    if (pictureID == 0xffff) {
++        return TRUE;
++    }
+ 
+-        if (ov5_021ED598(gfx, model) == 0 && ov5_021ED5E8(gfx, model) == 0
+-            && ov5_PortFreeOf(&ov5_021EDCBC(gfx)[ov5_021EDCC8(gfx)], ov5_021EDCD0(gfx)) < 2) {
+-            return FALSE;
++    for (i = 0; i < ownCount && own != NULL; i++) {
++        int graphicsID = ObjectEvent_GetGraphicsID(&own[i]);
++        const ObjectEventGfxRenderDetailsEntry *details = gObjectEventGfxRenderDetailsTable;
++
++        while (details->graphicsID != 0xffff && details->graphicsID != graphicsID) {
++            details++;
+         }
+ 
+-        if (ov5_021ED6D4(gfx, frames) == 0 && ov5_021ED724(gfx, frames) == 0
+-            && ov5_PortFreeOf(&ov5_021EDCC0(gfx)[ov5_021EDCD8(gfx)], ov5_021EDCE0(gfx)) < 2) {
+-            return FALSE;
++        // (berry patches aside: theirs are made with their map, and a new
++        // one as a berry grows takes the old one's place)
++        if (details->graphicsID == 0xffff || details->modelType != MODEL_TYPE_BILLBOARD
++            || BerryPatchGraphics_IsBerryPatch(graphicsID) == TRUE
++            || ov5_021ED810(gfx, graphicsID) != 0 || ov5_021ED924(gfx, graphicsID) != 0) {
++            continue;
++        }
++
++        for (j = 0; j < nSeen && seen[j] != graphicsID; j++) { }
++
++        if (j == nSeen) {
++            if (nSeen < (int)NELEMS(seen)) {
++                seen[nSeen++] = (u16)graphicsID;
++            }
++
++            need++;
+         }
+     }
+ 
+-    return TRUE;
++    return ov5_PortRoomForPicture(gfx, pictureID, 1 + need + 2);
+ }
+ 
+ // Room for the pictures of a map's people about to be made (all at once,

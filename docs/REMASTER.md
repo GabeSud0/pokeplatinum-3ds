@@ -931,6 +931,16 @@ screen's 320 x 192 at 1.25 times, as above.
     crashed once the memory was used again (patch 0066,
     `BerryPatchGraphics_GetCurrentGraphicsResourceID`: a patch showing a
     picture says that picture's texture).
+  - A berry patch beside (patch 0077) is brought by the picture its berry
+    shows now (`BerryPatchGraphics_PortPictureOf`, from its patch in the
+    save): at once if that's in already or there's none, else with room for
+    it, places left for the pictures the player's map's own people may
+    still need (its events' not in now: the ones its scripts bring on) and
+    two more (`MapObjectGfx_PortHasRoomForBerry`). It kept room for any
+    berry's picture before (six places free), and walking up Route 209 into
+    Solaceon Town there were five: the town's four berry trees by its south
+    entrance popped in at the zone change, in sight at the top of the
+    taller field (2026-11-05).
   - The player's counterpart (patch 0055): her graphics are a variable's
     (`OBJ_EVENT_GFX_VAR_0`), set by her map's script as the player walks
     in, so she was never brought and popped in at the zone change (Dawn
@@ -999,9 +1009,23 @@ screen's 320 x 192 at 1.25 times, as above.
   the lab after the Pokédex walked 10 steps south beside the door, into
   the wall, where the DS's screen had ended. With no door near, the
   script's walk as it is.
-- Still to do: the people scripts bring on from above or below (they show
-  the last few tiles of their walk in); weather sprites (rain, snow) only
-  on the DS's lines.
+- **A walk on or off past the DS's top or bottom** (patch 0076): the
+  scripts add the ones who walk on from above or below just past the DS's
+  top or bottom, and take away the ones who walk off up or down just past
+  it; the taller field showed them pop in at its top and vanish there (the
+  rival in Solaceon Town, added 8 tiles above the player, half of him in
+  sight, and taken away the same way as he ran off). As beside the wider
+  picture: one added there is put out of the taller picture (if the tiles
+  between are clear) and walks them in with its first walk; one whose walk
+  straight up or down ends there walks the tiles out (if clear) before the
+  script takes it away. Whether a sprite shows comes from the camera's
+  projection (`ScrCmd_PortTallRows`: its feet at its tile's middle, 32
+  units tall, 4 rows' margin), at most 4 tiles more. One just added goes
+  back where the script put it if it doesn't walk in first or the camera
+  moves (the player or a free camera set walking, `MoveCamera`). On the
+  PC the rival comes in from beyond the top and runs off past it (3 tiles
+  more each way).
+- Still to do: weather sprites (rain, snow) only on the DS's lines.
 
 ## The soft reset
 
