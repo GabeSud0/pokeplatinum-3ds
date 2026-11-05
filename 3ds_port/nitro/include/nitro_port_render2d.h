@@ -101,6 +101,13 @@ typedef struct NitroRender2DSplit {
     int gpuSignY, gpuSignRows, gpuSignVofs;
     uint64_t gpuSignKey;
     uint32_t gpuSignContent;
+    /* (asked for with gpuSpans, below) An H-blank effect's windows left out
+     * of the picture for the compositor to draw itself (1): each line's
+     * part they show, spanLo to spanHi - 1 (the DS's x; spanLo == spanHi:
+     * none), the backdrop (backdrop) to be drawn in front of it all on the
+     * rest of the line. Or 0: the windows in the picture, as without. */
+    int gpuSpansOn;
+    short spanLo[192], spanHi[192];
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
     int backdrop;      /* the backdrop colour (RGB555): what shows where no layer does */
     uint16_t *over;    /* width x 192 (x height with top) */
@@ -209,6 +216,19 @@ typedef struct NitroRender2DSplit {
      * (NitroPort_Render2DSplitIfChanged): the picture isn't drawn again as
      * it slides. The caller's choice, kept by the call. */
     int gpuSigns;
+    /* (the remaster's compositor, which can draw an H-blank effect's
+     * windows itself along with the 3D's lines: the slices of a battle's
+     * start in grass and their black edges moving together at 60 frames a
+     * second, halfway in the in-between frames, where the game moves them
+     * 30 times) Whether it may (1). They're left out of the picture
+     * (gpuSpansOn) on a battle's start (stretch), with the 3D, its lines
+     * scrolled apart (not all the same), and on every line windows that
+     * show everything (the colour effects too) or nothing, in one part at
+     * most (no OBJ window, no circle), hiding something on some line. Where
+     * a window hides the 3D, over then shows nothing (not what's behind
+     * it): the compositor draws the backdrop there. The caller's choice,
+     * kept by the call. */
+    int gpuSpans;
 } NitroRender2DSplit;
 #define NITRO_RENDER2D_MAX_H 256
 /* (the game's thread, when it hands a frame to a drawing thread) Take the
@@ -299,6 +319,32 @@ int NitroPort_Render2DObjPlaces(int engine, NitroGpuObj *out, int max);
  * max): how many. nBefore < 0: after's, as they are. */
 int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const NitroGpuObj *after, int nAfter,
                              NitroGpuObj *out, int max);
+
+/* (the game's thread, each frame it hands over: NitroRender2DSplit.gpuSpans)
+ * Engine A's lines as the compositor draws them itself in this frame: each
+ * line's 3D scroll (BG0HOFS, 0-511: the 3D moved left by it) and the part
+ * its windows show (lo to hi - 1, the DS's x; lo == hi: none). on: an
+ * H-blank effect's lines (NitroPort_LineRegs), each line's windows showing
+ * everything or nothing as gpuSpans has it (toEdge as windowsToEdge); else
+ * 0, the rest not filled in. slices: and a picture would leave them out
+ * (gpuSpansOn: something hidden, the 3D's lines scrolled apart; a battle's
+ * start's first frame of them has neither, all of each line shown). */
+typedef struct NitroLineSpans {
+    int on, slices;
+    short scroll[192], lo[192], hi[192];
+} NitroLineSpans;
+void NitroPort_Render2DLineSpansNow(int toEdge, NitroLineSpans *out);
+/* The lines halfway from one frame's to the next's (before and after, both
+ * on: NitroPort_Render2DLineSpansNow; else after's as they are), for an
+ * in-between frame: each line's 3D scroll (-256 to 255, finer than a pixel)
+ * and shown part (lo to hi, the DS's x; lo == hi: none). A line's scroll
+ * halfway the shorter way round (more than 128 pixels: after's, and its
+ * part); its part's edges halfway, a part shrunk away to nothing going
+ * towards the side it touches; a side hidden in one of the two frames
+ * only as far as the line's 3D, moved halfway, leaves it uncovered (the
+ * battle's start's slices change sides as they start going apart). */
+void NitroPort_LineSpansHalfway(const NitroLineSpans *before, const NitroLineSpans *after, float scroll[192],
+                                float lo[192], float hi[192]);
 
 /* (the game's thread, as it hands a frame over) Engine A's circle fade as
  * it is now, on the canvas of the last picture that left it out

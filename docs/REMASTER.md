@@ -419,6 +419,37 @@ cases) and 512 KB more (the outlines' copies come later), its quads in linear
 memory of their own (126 KB); the log says which (`[compose] an H-blank
 effect's 3D drawn once into a texture`, or `no room for the H-blank
 effects' texture`: the runs as above).
+The game moves the slices 30 times a second (once a game step). At 60
+frames a second they move each frame, halfway in the in-between frames, as
+the 3D's camera does; their black edges go with them. Those edges are the
+game's windows (window 0 the part a slice moved one way shows, window 1 the
+part of one moved the other way it hides), so they're left out of the
+picture for the compositor to draw (`NitroRender2DSplit.gpuSpans`): on a
+battle's start stretched over the screen, with the 3D's lines scrolled
+apart, where every line's windows show everything (the colour effects too)
+or nothing, in one part at most, no OBJ window or circle, and something is
+hidden (`gpuSpansOn`, each line's shown part `spanLo` to `spanHi`). The
+picture's `over` then shows nothing where the windows hide the 3D, rather
+than what's behind it, and the compositor draws the backdrop there after
+the layers in front (`draw_window_edges`), on the lines the 3D was drawn
+with. The game's thread notes each frame's lines (each line's 3D scroll and
+shown part, `NitroPort_Render2DLineSpansNow`, while a battle's start plays:
+`NitroPort_ComposeNoteLines`), found by the scene's frame as the BGs'
+scrolls are; the slices from the texture and their edges are those of the
+frame shown, and in an in-between frame halfway from the frame before's
+(`NitroPort_LineSpansHalfway`: each line's scroll the shorter way round,
+its scroll finer than a pixel, more than 128 pixels after's; a part's
+edges halfway, a part shrinking away to nothing going towards the side it
+touched; a side hidden in one frame only no further than the line's 3D,
+moved halfway, leaves uncovered: the grass's slices change sides as they
+start going apart, from 3 pixels one way to 29 the other, and the 4
+columns hidden on the left before would have covered 2 of the 3D moved 13
+the other way). A new scene without an in-between one gets an in-between
+frame of its own when the lines moved (`lines_moved`, as the sprites).
+Drawn a run at a time (no texture, the outlines), the slices and their
+edges are the picture's, as before. The PC runner's `pshot` draws the
+edges as the 3DS does, the same pictures as with them in `over`;
+`test_gpu_spans` has the grass's lines as the game sets them.
 The colour effects and OAM are the frame's (no
 effect of the game's changes those by line). Without an H-blank interrupt
 or DMA nothing of this runs; in the field the game keeps its H-blank

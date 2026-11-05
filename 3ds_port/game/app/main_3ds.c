@@ -1748,6 +1748,12 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             if (engine == 0 && !inPanel) {
                 split.gpuCircle = NitroPort_ComposeDrawsBgs() ? 3 : 1;
             }
+            /* (a battle's start: its windows' black edges drawn by the
+             * compositor with the 3D's slices, both halfway in the
+             * in-between frames) */
+            if (engine == 0 && !inPanel) {
+                split.gpuSpans = 1;
+            }
             if (engine == 0 && !inPanel && NitroPort_ComposeDrawsObjs() && NitroPort_GpuSprites()) {
                 static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
                 static uint16_t atlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H];
@@ -1820,6 +1826,11 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         layers->scroll3dLines = split.scroll3dLines;
         if (split.scroll3dLines) {
             memcpy(layers->scroll3dLine, split.scroll3dLine, sizeof(layers->scroll3dLine));
+        }
+        layers->gpuSpansOn = split.gpuSpansOn;
+        if (split.gpuSpansOn) {
+            memcpy(layers->spanLo, split.spanLo, sizeof(layers->spanLo));
+            memcpy(layers->spanHi, split.spanHi, sizeof(layers->spanHi));
         }
         layers->tint3d = split.tint3d;
         layers->eva = split.eva;
@@ -2303,6 +2314,21 @@ static bool DrawFrame(bool new3dOnly)
     if (sRemaster) {
         (void)NitroPort_HBlankLinesOnce();
         NitroPort_Compose2DOffered(NitroPort_ComposeVBlanks());
+    }
+    /* (a battle's start in the field: each line's 3D scroll and windows in
+     * this frame, whether a drawer takes it or not, once a V-blank: its
+     * slices and their edges drawn by the compositor go with them; before
+     * the frame's note below, which the compositor waits for) */
+    if (sRemaster && NitroPort_FieldEffect()) {
+        static NitroLineSpans lines;
+        static u32 notedStamp;
+        u32 stamp = NitroPort_ComposeVBlanks();
+
+        if (stamp != notedStamp) {
+            NitroPort_Render2DLineSpansNow(1, &lines);
+            NitroPort_ComposeNoteLines(stamp, NitroPort_Gx3dSwapsMade(), &lines);
+            notedStamp = stamp;
+        }
     }
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];

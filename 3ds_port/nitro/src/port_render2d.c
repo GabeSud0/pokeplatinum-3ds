@@ -4199,6 +4199,82 @@ static void CircleRange(u8 *enable, const WindowCircle *c, int dsY, u8 value, in
     }
 }
 
+/* (NitroRender2DSplit.gpuSpans) The part of a line its windows show, on
+ * the DS's 256 pixels (line y, regs its registers, toEdge as windowsToEdge:
+ * as DrawEngineT works the windows out on a canvas of the DS's width): 1
+ * when each pixel of it shows everything, the colour effects too, or
+ * nothing, in one part at most (lo to hi - 1; lo == hi: none), without an
+ * OBJ window; else 0. */
+static int LineSpanOf(const u8 *regs, int y, BOOL toEdge, short *lo, short *hi)
+{
+    u8 enable[W];
+    u32 dispcnt = Rd32(regs, 0);
+    u16 win0h = Rd16(regs, 0x40), win1h = Rd16(regs, 0x42);
+    u16 win0v = Rd16(regs, 0x44), win1v = Rd16(regs, 0x46);
+    u16 winin = Rd16(regs, 0x48), winout = Rd16(regs, 0x4A);
+    int x, first = -1, end = -1;
+
+    if (!(dispcnt & 0xE000)) {
+        *lo = 0;   /* (no window: all of it) */
+        *hi = W;
+        return 1;
+    }
+    if (dispcnt & 0x8000) {
+        return 0;
+    }
+    memset(enable, winout & 0x3F, sizeof(enable));
+    if ((dispcnt & 0x4000) && InRange(y, win1v >> 8, win1v & 0xFF)) {
+        FillRange(enable, win1h >> 8, win1h & 0xFF, (winin >> 8) & 0x3F, 0, W, toEdge);
+    }
+    if ((dispcnt & 0x2000) && InRange(y, win0v >> 8, win0v & 0xFF)) {
+        FillRange(enable, win0h >> 8, win0h & 0xFF, winin & 0x3F, 0, W, toEdge);
+    }
+    for (x = 0; x < W; x++) {
+        if (enable[x] == 0x3F) {
+            if (first < 0) {
+                first = x;
+            } else if (end != x) {
+                return 0;   /* (a second part) */
+            }
+            end = x + 1;
+        } else if (enable[x] != 0) {
+            return 0;
+        }
+    }
+    *lo = (short)(first < 0 ? 0 : first);
+    *hi = (short)(first < 0 ? 0 : end);
+    return 1;
+}
+
+/* (NitroRender2DSplit.gpuSpans) A frame's lines (an H-blank effect's
+ * registers, line 0 the DS's) as the compositor would draw their windows
+ * itself: each line's shown part (LineSpanOf) into lo and hi, and (scroll:
+ * NULL for none) its 3D's scroll (BG0HOFS, 0-511). Whether it can: every
+ * line as LineSpanOf has it; and (*slices) whether they're left out of the
+ * picture so: something hidden on some line, and the 3D's lines scrolled
+ * apart (not all the same: the slices, not a wipe). */
+static int LinesSpans(const u8 (*lines)[NITRO_LINE_REGS], BOOL toEdge, short *lo, short *hi, short *scroll,
+                      int *slices)
+{
+    int y, hidden = 0, apart = 0, first = Rd16(lines[0], 0x10) & 0x1FF;
+
+    *slices = 0;
+    for (y = 0; y < H; y++) {
+        int s = Rd16(lines[y], 0x10) & 0x1FF;
+
+        if (!LineSpanOf(lines[y], y, toEdge, &lo[y], &hi[y])) {
+            return 0;
+        }
+        hidden |= lo[y] > 0 || hi[y] < W;
+        apart |= s != first;
+        if (scroll != NULL) {
+            scroll[y] = (short)s;
+        }
+    }
+    *slices = hidden && apart;
+    return 1;
+}
+
 /* The layers of a line, front to back: the OBJs of priority 0, the BGs of
  * priority 0 (by number), the OBJs of priority 1, and so on. */
 #define SLOT_OBJ 4
@@ -4776,6 +4852,18 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     }
     if (split != NULL) {
         split->scroll3dLines = 0;
+        /* The windows the compositor draws itself (NitroRender2DSplit.
+         * gpuSpans): each line's part they show, when they can be left out
+         * (a battle's start stretched: the DS's canvas, its lines). */
+        split->gpuSpansOn = 0;
+        if (split->gpuSpans && split->stretch && split->has3d && e->isA && e->lines != NULL && e->top == 0 &&
+            e->height == H && e->h3d == H && width == W && e->origin == 0 && e->shift3d == 0 && !e->noWindows &&
+            !e->circles[0].on && !e->circles[1].on) {
+            int slices;
+
+            split->gpuSpansOn =
+                LinesSpans(e->lines, split->windowsToEdge != 0, split->spanLo, split->spanHi, NULL, &slices) && slices;
+        }
     }
 
     for (y = 0; y < e->height; y++) {
@@ -4983,8 +5071,10 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             blendState.nlist = nlist;
             BlendLine(&blendState, row, enableLine, layer1, anyWindow);
         }
-        if (split != NULL && split->has3d && anyWindow && y < e->h3d) {
-            /* Where a window hides the 3D, what's behind it shows. */
+        if (split != NULL && split->has3d && anyWindow && y < e->h3d && !split->gpuSpansOn) {
+            /* Where a window hides the 3D, what's behind it shows. (Not
+             * with the windows left out: the compositor draws the backdrop
+             * there, with the 3D's lines as they move.) */
             u16 *over = split->over + y * width;
             u8 *alpha = split->overAlpha + y * width;
 
@@ -7018,6 +7108,9 @@ static u32 SmallSignatureOf(int e, const NitroRender2DSplit *split, int gpuBg, i
         }
     }
     small = (small ^ (u32)__atomic_load_n(&sSmoothObjs[e], __ATOMIC_ACQUIRE)) * 16777619u;
+    if (split->gpuSpans) {
+        small = (small ^ 0x5350414Eu) * 16777619u;   /* (the windows perhaps left out: over without them) */
+    }
     if (split->width > W) {
         /* (the windows decide the edges' look, and where the anchored ones
          * are; hand-drawn pictures loaded again) */
@@ -7228,6 +7321,99 @@ unsigned NitroPort_Render2DMasterBright(int engine, int snapshot)
     const u8 *io = (snapshot ? sState[engine ? 1 : 0].io : NitroPort_IoReg) + (engine ? 0x1000 : 0);
 
     return Rd16(io, 0x6C);
+}
+
+void NitroPort_Render2DLineSpansNow(int toEdge, NitroLineSpans *out)
+{
+    int slices;
+
+    out->on = 0;
+    out->slices = 0;
+    if (!NitroPort_LineRegs.active || sCircles[0][0].on || sCircles[0][1].on) {
+        return;
+    }
+    out->on = LinesSpans((const u8(*)[NITRO_LINE_REGS])NitroPort_LineRegs.regs[0], toEdge != 0, out->lo, out->hi,
+                         out->scroll, &slices);
+    out->slices = out->on && slices;
+}
+
+/* (NitroPort_LineSpansHalfway) A frame's line's shown part as its hidden
+ * widths, left and right: when it shows none, as hidden from the side
+ * where the other frame's part doesn't reach the edge (shrunk away towards
+ * the side it touches). 0 when that can't be told (the other frame's part
+ * touching neither side). */
+static int SpanSides(int lo, int hi, int otherLo, int otherHi, float *left, float *right)
+{
+    if (lo < hi) {
+        *left = (float)lo;
+        *right = (float)(W - hi);
+        return 1;
+    }
+    if (otherLo >= otherHi || otherLo == 0) {
+        *left = 0.0f;   /* (none either: all of it hidden) */
+        *right = (float)W;
+        return 1;
+    }
+    if (otherHi == W) {
+        *left = (float)W;
+        *right = 0.0f;
+        return 1;
+    }
+    return 0;
+}
+
+#define SPANS_JUMP 128   /* (NitroPort_LineSpansHalfway: a line's scroll moved further, after's) */
+
+void NitroPort_LineSpansHalfway(const NitroLineSpans *before, const NitroLineSpans *after, float scroll[192],
+                                float lo[192], float hi[192])
+{
+    int y;
+
+    for (y = 0; y < H; y++) {
+        int sa = after->scroll[y] & 0x1FF, la = after->lo[y], ha = after->hi[y];
+
+        scroll[y] = (float)(sa >= 256 ? sa - 512 : sa);
+        lo[y] = (float)la;
+        hi[y] = (float)ha;
+        if (before == NULL || !before->on || !after->on) {
+            continue;
+        }
+        {
+            int sb = before->scroll[y] & 0x1FF, lb = before->lo[y], hb = before->hi[y];
+            int d = ((sa - sb + 256) & 0x1FF) - 256;   /* (after's less before's, the shorter way round) */
+            float mid, leftB, rightB, leftA, rightA, left, right;
+
+            if (d > SPANS_JUMP || d < -SPANS_JUMP || !SpanSides(lb, hb, la, ha, &leftB, &rightB) ||
+                !SpanSides(la, ha, lb, hb, &leftA, &rightA)) {
+                continue;
+            }
+            mid = (float)(sb >= 256 ? sb - 512 : sb) + (float)d * 0.5f;
+            if (mid >= 256.0f) {
+                mid -= 512.0f;
+            } else if (mid < -256.0f) {
+                mid += 512.0f;
+            }
+            left = (leftB + leftA) * 0.5f;
+            right = (rightB + rightA) * 0.5f;
+            /* (a side hidden in one frame only: no further than the 3D,
+             * moved halfway, leaves it uncovered. The grass's slices going
+             * from 3 pixels one way to 29 the other: their 4 hidden on the
+             * left halfway to none, 2 of them over the 3D moved 13 left.) */
+            if (leftB == 0.0f || leftA == 0.0f) {
+                float uncovered = mid < 0.0f ? -mid : 0.0f;
+
+                left = left < uncovered ? left : uncovered;
+            }
+            if (rightB == 0.0f || rightA == 0.0f) {
+                float uncovered = mid > 0.0f ? mid : 0.0f;
+
+                right = right < uncovered ? right : uncovered;
+            }
+            scroll[y] = mid;
+            lo[y] = left;
+            hi[y] = (float)W - right > left ? (float)W - right : left;
+        }
+    }
 }
 
 int NitroPort_Render2DIfChanged(int engine, u16 *out)

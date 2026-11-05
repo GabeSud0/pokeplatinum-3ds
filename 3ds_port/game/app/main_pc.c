@@ -499,6 +499,7 @@ static void RemasterRender(uint16_t *out)
              * drawn over the rest below, as the 3DS has it) */
             split.gpuSigns = split.top > 0 && split.height > 192 ? 1 << 3 : 0;
             split.gpuCircle = 1;   /* (a circle fade: drawn over the rest below) */
+            split.gpuSpans = 1;    /* (a battle's start's windows: drawn over the rest below) */
             if (NitroPort_GpuSprites()) {
                 split.gpuObjs = 1;
                 split.gpuObj = gpuObj;
@@ -705,6 +706,11 @@ static void RemasterRender(uint16_t *out)
                 }
                 if (split.gpuObjsLeftOut && (sprites[cy * width + cx] & 0x8000)) {
                     c = sprites[cy * width + cx] & 0x7FFF;
+                }
+                if (split.gpuSpansOn && (cx < split.spanLo[cy] || cx >= split.spanHi[cy])) {
+                    /* (the 3DS's compositor: the backdrop where an H-blank
+                     * effect's windows show nothing, in front of it all) */
+                    c = (uint16_t)split.backdrop;
                 }
                 if (split.gpuCircleOn && (x < circleLo || x >= circleHi)) {
                     c = (uint16_t)split.gpuCircleColor;

@@ -258,6 +258,14 @@ typedef struct ComposeLayers {
      * apart; a wavy screen) */
     int scroll3dLines;
     short scroll3dLine[192];
+    /* (a battle's start: NitroRender2DSplit.gpuSpansOn) The H-blank effect's
+     * windows left out of the picture: each line's part they show (spanLo to
+     * spanHi - 1, the DS's x), the backdrop drawn by the compositor on the
+     * rest of it, in front of the layers, with the 3D's lines as the frame
+     * shown has them (NitroPort_ComposeNoteLines), halfway in an in-between
+     * frame; else 0. */
+    int gpuSpansOn;
+    short spanLo[192], spanHi[192];
     int displayOff;          /* nothing drawn (the engine is off) */
     uint32_t stamp;          /* the V-blank count when the game's display state was read */
     /* A BG left out of the picture for the compositor to draw itself
@@ -330,6 +338,13 @@ void NitroPort_ComposeNoteObjs(uint32_t stamp, uint32_t swaps, const NitroGpuObj
  * (NitroPort_Render2DCircleNow: on, or -1 when not drawn by the compositor;
  * its middle and radius), as NitroPort_ComposeNoteObjs. */
 void NitroPort_ComposeNoteFrame(uint32_t stamp, uint32_t swaps, int bright, int on, int x, int y, int r);
+/* (the game's thread, each frame it hands over, while a battle's start
+ * plays in the field) Engine A's lines then (NitroPort_Render2DLineSpansNow:
+ * the 3D's scroll and the windows' part on each), as NitroPort_ComposeNoteObjs:
+ * an H-blank effect whose windows the compositor draws (ComposeLayers.
+ * gpuSpansOn) is drawn so with a scene of that frame, halfway to them in
+ * the in-between frame before it. */
+void NitroPort_ComposeNoteLines(uint32_t stamp, uint32_t swaps, const NitroLineSpans *lines);
 ComposeLayers *NitroPort_ComposeLayersOf(int engine);
 /* Into the textures of the screen (0 upper, 1 lower) the engine is on. */
 /* 0: no set free to publish into (one the GPU's drawing, one the frame

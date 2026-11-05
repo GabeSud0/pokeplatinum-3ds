@@ -3697,6 +3697,233 @@ static void test_stretch_squeeze(void)
     CHECK(first == 104 && last == 128);
 }
 
+/* The grass's battle start (encounter_effect.c's ScreenSlice) on each
+ * line, as its V-blank and H-blank set it for the value v (fx32): slices of
+ * pps lines, each other one scrolled the other way; window 0 the part a
+ * slice scrolled right shows (everything), window 1 the part of one
+ * scrolled left it hides (nothing), outside the one on, the other. */
+static void SetSliceLines(fx32 v, int pps)
+{
+    int y, x = v >> FX32_SHIFT;
+
+    if (x >= 0) {
+        G2_SetWnd0Position(0, 0, 255 - x, 192);
+        G2_SetWnd1Position(0, 0, 1 + x, 192);
+    } else {
+        G2_SetWnd0Position(0, 0, 255 + x, 192);
+        G2_SetWnd1Position(0, 0, 1 - x, 192);
+    }
+    for (y = 0; y < 192; y++) {
+        int cur = ((y / pps) % 2) == 0 ? v >> FX32_SHIFT : -v >> FX32_SHIFT, bg;
+        u8 *l = NitroPort_LineRegs.regs[0][y];
+
+        memcpy(l, NitroPort_IoReg, NITRO_LINE_REGS);
+        memcpy(NitroPort_LineRegs.regs[1][y], NitroPort_IoReg + 0x1000, NITRO_LINE_REGS);
+        for (bg = 0; bg < 4; bg++) {
+            l[0x10 + bg * 4] = (u8)cur;
+            l[0x11 + bg * 4] = (u8)((cur >> 8) & 1);
+        }
+        l[1] = (u8)((l[1] & 0x1F) | (cur >= 0 ? 0x20 : 0x40));   /* (DISPCNT: window 0, or 1) */
+        l[0x4A] = cur >= 0 ? 0x00 : 0x3F;                       /* (WINOUT) */
+    }
+    NitroPort_LineRegs.active = 1;
+    NitroPort_LineRegs.serial++;
+}
+
+/* The windows of an H-blank effect left out of the picture for the
+ * compositor (NitroRender2DSplit.gpuSpans): the grass's slices, each
+ * line's shown part; the picture the same but where the windows hide the
+ * 3D (over shows nothing there: the backdrop's the compositor's), and
+ * NitroPort_Render2DLineSpansNow the same; not where it can't be. And the
+ * lines halfway from one frame to the next. */
+static void test_gpu_spans(void)
+{
+    static u8 tiles[3 * 32];
+    static u16 map1[32 * 32], map2[32 * 32], pltt[16] = { GREY, WHITE, RED };
+    static uint32_t rgba[256 * 192];
+    static u16 under0[256 * 192], over0[256 * 192], under1[256 * 192], over1[256 * 192];
+    static u8 alpha0[256 * 192], alpha1[256 * 192];
+    static NitroRender2DSplit split0, split1;
+    static NitroLineSpans now, before, after;
+    static float scroll[192], lo[192], hi[192];
+    int i, x, y, same = 1, edges = 1, spansOk = 1;
+
+    Reset();
+    memset(tiles + 32, 0x11, 32);   /* tile 1: white */
+    memset(tiles + 64, 0x22, 32);   /* tile 2: red */
+    for (i = 0; i < 32 * 32; i++) {
+        map1[i] = 1;
+        map2[i] = (i / 32 >= 10 && i / 32 < 12 && i % 32 < 16) ? 2 : 0;   /* (red on lines 80-95, x 0-127) */
+    }
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    G2_SetBG0Priority(1);
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    G2_SetBG2ControlText(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0800,
+                         GX_BG_CHARBASE_0x04000);
+    G2_SetBG1Priority(3);
+    G2_SetBG2Priority(0);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map1, 0, sizeof(map1));
+    GX_LoadBG2Scr(map2, 0, sizeof(map2));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1 | GX_PLANEMASK_BG2);
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG0 | GX_WND_PLANEMASK_BG1 | GX_WND_PLANEMASK_BG2 | GX_WND_PLANEMASK_BG3 |
+                              GX_WND_PLANEMASK_OBJ,
+                          TRUE);
+    G2_SetWnd1InsidePlane(GX_WND_PLANEMASK_NONE, FALSE);
+    for (i = 0; i < 256 * 192; i++) {
+        rgba[i] = 0x404040FFu;
+    }
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+
+    /* the first step out: 10.3 pixels (slices of 2 lines: the first two
+     * lines scrolled 11 right, their 12 on the left hidden; the next two
+     * 10 left, their 12 on the right) */
+    SetSliceLines(-FX32_CONST(10.3), 2);
+    memset(&split0, 0, sizeof(split0));
+    split0.over = over0;
+    split0.overAlpha = alpha0;
+    split0.stretch = 1;
+    split0.windowsToEdge = 1;
+    split1 = split0;
+    split1.over = over1;
+    split1.overAlpha = alpha1;
+    split1.gpuSpans = 1;
+    NitroPort_Render2DSplit(0, under0, &split0);
+    NitroPort_Render2DSplit(0, under1, &split1);
+    CHECK(split0.has3d && split0.scroll3dLines && !split0.gpuSpansOn);
+    CHECK(split1.gpuSpansOn);
+    CHECK(split1.spanLo[0] == 12 && split1.spanHi[0] == 256 && split1.spanLo[1] == 12);
+    CHECK(split1.spanLo[2] == 0 && split1.spanHi[2] == 244 && split1.spanHi[3] == 244);
+    CHECK(split1.spanLo[4] == 12 && split1.spanLo[191] == 0);
+    for (y = 0; y < 192; y++) {
+        for (x = 0; x < 256; x++) {
+            int k = y * 256 + x, hidden = x < split1.spanLo[y] || x >= split1.spanHi[y];
+
+            same &= under0[k] == under1[k];
+            if (hidden) {
+                /* (the picture's own: the backdrop in front of it all) */
+                edges &= over0[k] == (GREY | 0x8000) && alpha0[k] == 16 && !(over1[k] & 0x8000);
+            } else {
+                same &= over0[k] == over1[k] && (!(over0[k] & 0x8000) || alpha0[k] == alpha1[k]);
+            }
+        }
+    }
+    CHECK(same);
+    CHECK(edges);
+    /* (in front of the 3D on lines 80-95: BG2, there in both) */
+    CHECK((over1[80 * 256 + 50] & 0x7FFF) == RED && (over1[82 * 256 + 50] & 0x7FFF) == RED);
+    /* the frame's lines, as the picture has them */
+    NitroPort_Render2DLineSpansNow(1, &now);
+    CHECK(now.on && now.slices);
+    for (y = 0; y < 192; y++) {
+        spansOk &= now.lo[y] == split1.spanLo[y] && now.hi[y] == split1.spanHi[y] &&
+                   now.scroll[y] == split1.scroll3dLine[y];
+    }
+    CHECK(spansOk);
+    CHECK(now.scroll[0] == 512 - 11 && now.scroll[2] == 10);
+
+    /* not stretched: the windows in the picture */
+    split1.stretch = 0;
+    NitroPort_Render2DSplit(0, under1, &split1);
+    CHECK(!split1.gpuSpansOn);
+    split1.stretch = 1;
+    /* a line with a window showing some layers only: in the picture */
+    NitroPort_LineRegs.regs[0][50][0x4A] = 0x02;
+    NitroPort_Render2DSplit(0, under1, &split1);
+    CHECK(!split1.gpuSpansOn && split1.scroll3dLines);
+    CHECK(over1[51 * 256 + 250] == (GREY | 0x8000));   /* (line 51's right: hidden, the backdrop in it) */
+    NitroPort_Render2DLineSpansNow(1, &now);
+    CHECK(!now.on);
+    NitroPort_LineRegs.regs[0][50][0x4A] = 0x3F;
+    /* an OBJ window on a line: the same */
+    NitroPort_LineRegs.regs[0][60][1] |= 0x80;
+    NitroPort_Render2DSplit(0, under1, &split1);
+    CHECK(!split1.gpuSpansOn);
+    NitroPort_LineRegs.regs[0][60][1] &= 0x7F;
+    /* every line scrolled the same (a wipe, not slices): the same */
+    for (y = 0; y < 192; y++) {
+        NitroPort_LineRegs.regs[0][y][0x10] = 5;
+        NitroPort_LineRegs.regs[0][y][0x11] = 0;
+    }
+    NitroPort_Render2DSplit(0, under1, &split1);
+    CHECK(!split1.gpuSpansOn);
+    NitroPort_Render2DLineSpansNow(1, &now);
+    CHECK(now.on && !now.slices && now.scroll[0] == 5 && now.scroll[2] == 5);   /* (its lines known all the same) */
+    /* no H-blank effect: none */
+    NitroPort_LineRegs.active = 0;
+    NitroPort_Render2DSplit(0, under1, &split1);
+    CHECK(!split1.gpuSpansOn);
+    NitroPort_Render2DLineSpansNow(1, &now);
+    CHECK(!now.on && !now.slices);
+
+    /* halfway from the effect's first frame (nothing moved, all shown:
+     * known, not slices) to its first step out: the first two lines 5.5
+     * right, as much hidden on the left; the next two 5 left, as much on
+     * the right */
+    SetSliceLines(0, 2);
+    NitroPort_Render2DLineSpansNow(1, &before);
+    CHECK(before.on && !before.slices && before.lo[0] == 0 && before.hi[0] == 256 && before.hi[2] == 256);
+    NitroPort_Render2DSplit(0, under1, &split1);
+    CHECK(!split1.gpuSpansOn);
+    SetSliceLines(-FX32_CONST(10.3), 2);
+    NitroPort_Render2DLineSpansNow(1, &after);
+    NitroPort_LineSpansHalfway(&before, &after, scroll, lo, hi);
+    CHECK(scroll[0] == -5.5f && lo[0] == 5.5f && hi[0] == 256.0f);
+    CHECK(scroll[2] == 5.0f && lo[2] == 0.0f && hi[2] == 251.0f);
+
+    /* halfway: the slices from 3 pixels one way to 29 the other (as they
+     * start going apart): the first two lines from 3 right (4 hidden on the
+     * left) to 29 left (30 on the right): 13 left, none hidden on the left,
+     * 13 on the right; the next two from 3 left to 30 right (30 hidden on
+     * the left): 13.5 right, 13.5 hidden on the left, none on the right */
+    SetSliceLines(-FX32_CONST(3), 2);
+    NitroPort_Render2DLineSpansNow(1, &before);
+    SetSliceLines(FX32_CONST(29.2), 2);
+    NitroPort_Render2DLineSpansNow(1, &after);
+    CHECK(before.on && after.on);
+    CHECK(before.lo[0] == 4 && before.hi[0] == 256 && after.lo[0] == 0 && after.hi[0] == 226);
+    CHECK(before.lo[2] == 0 && before.hi[2] == 252 && after.lo[2] == 30 && after.hi[2] == 256);
+    NitroPort_LineSpansHalfway(&before, &after, scroll, lo, hi);
+    CHECK(scroll[0] == 13.0f && lo[0] == 0.0f && hi[0] == 243.0f);
+    CHECK(scroll[2] == -13.5f && lo[2] == 13.5f && hi[2] == 256.0f);
+    /* going on the same way: each edge halfway (the DS's column more
+     * hidden than the 3D moved, both frames: kept) */
+    SetSliceLines(FX32_CONST(65.7), 2);
+    NitroPort_Render2DLineSpansNow(1, &before);
+    SetSliceLines(FX32_CONST(106.5), 2);
+    NitroPort_Render2DLineSpansNow(1, &after);
+    NitroPort_LineSpansHalfway(&before, &after, scroll, lo, hi);
+    CHECK(scroll[0] == 85.5f && lo[0] == 0.0f && hi[0] == 169.5f);   /* (190 and 149 shown) */
+    CHECK(scroll[2] == -86.5f && lo[2] == 86.5f && hi[2] == 256.0f); /* (from -66 and -107; 66 and 107 hidden) */
+    /* the same frame twice: as it is; without the frame before: after's */
+    NitroPort_LineSpansHalfway(&after, &after, scroll, lo, hi);
+    CHECK(scroll[0] == 106.0f && lo[0] == 0.0f && hi[0] == 149.0f && scroll[2] == -107.0f && lo[2] == 107.0f);
+    NitroPort_LineSpansHalfway(NULL, &after, scroll, lo, hi);
+    CHECK(scroll[0] == 106.0f && hi[0] == 149.0f);
+    before.on = 0;
+    NitroPort_LineSpansHalfway(&before, &after, scroll, lo, hi);
+    CHECK(scroll[0] == 106.0f && hi[0] == 149.0f);
+    /* a line moved more than 128 pixels: after's */
+    NitroPort_Render2DLineSpansNow(1, &before);
+    before.scroll[0] = 512 - 40;
+    NitroPort_LineSpansHalfway(&before, &after, scroll, lo, hi);
+    CHECK(scroll[0] == 106.0f && lo[0] == 0.0f && hi[0] == 149.0f);
+    CHECK(scroll[2] == -107.0f && lo[2] == 107.0f);   /* (the next line: the same frame) */
+    /* a part shrunk away to nothing: towards the side it touched */
+    before.scroll[0] = 200;
+    before.lo[0] = 0;
+    before.hi[0] = 50;
+    after.scroll[0] = 250;
+    after.lo[0] = after.hi[0] = 0;
+    NitroPort_LineSpansHalfway(&before, &after, scroll, lo, hi);
+    CHECK(scroll[0] == 225.0f && lo[0] == 0.0f && hi[0] == 25.0f);
+    NitroPort_LineRegs.active = 0;
+    GX_SetVisibleWnd(GX_WNDMASK_NONE);
+    GX_SetVisiblePlane(0);
+}
+
 static void test_tall_field(void)
 {
     enum { TW = 400, TH = 240, TOP = 24, OX = 72 };
@@ -4980,6 +5207,7 @@ int main(int argc, char **argv)
     test_gpu_objs();
     test_tall_field();
     test_stretch_squeeze();
+    test_gpu_spans();
     test_wide_framed_windows();
     test_wide_splits();
     test_wide_parts();

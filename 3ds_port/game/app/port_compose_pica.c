@@ -217,6 +217,17 @@ static struct {
 } sBgOfs[BG_OFS_KEPT];
 static unsigned sBgOfsNext;
 static LightLock sBgOfsLock;   /* (LightLock_Init: the display's setting up) */
+/* Engine A's lines by frame, while a battle's start plays in the field
+ * (NitroPort_ComposeNoteLines): the last LINES_KEPT frames the game handed
+ * over. */
+#define LINES_KEPT 16
+static struct {
+    uint32_t stamp, swaps;
+    int valid;
+    NitroLineSpans lines;
+} sLineNotes[LINES_KEPT];
+static unsigned sLineNotesNext;
+static LightLock sLineNotesLock;   /* (LightLock_Init: the display's setting up) */
 
 /* A drawn frame in an LCD framebuffer, waiting for its V-blank. */
 typedef struct Pending {
@@ -1012,6 +1023,7 @@ static int compose_init(const ComposeConfig *config, int small)
     memset(sScreens, 0, sizeof(sScreens));
     LightLock_Init(&sSetLock);
     LightLock_Init(&sBgOfsLock);
+    LightLock_Init(&sLineNotesLock);
     memset(sBgOfs, 0, sizeof(sBgOfs));
     LightLock_Init(&sObjPlacesLock);
     memset(sObjPlaces, 0, sizeof(sObjPlaces));
@@ -1498,6 +1510,22 @@ static int sign_moved(const NitroGx3dScene *scene)
     return now[bg * 2 + 1] != before[bg * 2 + 1];
 }
 
+static int lines_note_of(uint32_t seq, uint32_t stamp, NitroLineSpans *out);
+
+/* Whether a battle's start's lines (its slices, their windows: the
+ * compositor's, NitroPort_ComposeNoteLines) are other in a scene's frame
+ * than in the last scene shown's: they move on in an in-between frame
+ * drawn for them, as the sprites do. */
+static int lines_moved(const NitroGx3dScene *scene)
+{
+    static NitroLineSpans now, before;
+
+    return lines_note_of(scene->swap_seq, scene->stamp, &now) && now.on &&
+           lines_note_of(sLastMainSeq, sLastMainStamp, &before) && before.on &&
+           (memcmp(now.scroll, before.scroll, sizeof(now.scroll)) != 0 ||
+            memcmp(now.lo, before.lo, sizeof(now.lo)) != 0 || memcmp(now.hi, before.hi, sizeof(now.hi)) != 0);
+}
+
 /* Whether the 2D's fades (the master brightness, a circle or band) are
  * other in a scene's frame than in the last scene shown's; or the
  * compositor's sprites, or its sign. (The HM cut-in's sprites move every game step:
@@ -1521,7 +1549,8 @@ static int fades_changed(const NitroGx3dScene *scene)
     }
     ca = circle_of(scene->swap_seq, scene->stamp, &ax, &ay, &ar, &noted);
     cb = circle_of(sLastMainSeq, sLastMainStamp, &bx, &by, &br, &noted);
-    return a != b || ca != cb || (ca && (ax != bx || ay != by || ar != br)) || objs_moved(scene) || sign_moved(scene);
+    return a != b || ca != cb || (ca && (ax != bx || ay != by || ar != br)) || objs_moved(scene) || sign_moved(scene) ||
+           lines_moved(scene);
 }
 
 /* A scene's frame before (as an in-between scene has it: the frame the
@@ -1634,6 +1663,49 @@ static int bg_offsets_of(uint32_t seq, uint32_t stamp, float out[8], int *sign, 
         }
     }
     LightLock_Unlock(&sBgOfsLock);
+    return found >= 0;
+}
+
+void NitroPort_ComposeNoteLines(uint32_t stamp, uint32_t swaps, const NitroLineSpans *lines)
+{
+    LightLock_Lock(&sLineNotesLock);
+    sLineNotes[sLineNotesNext].stamp = stamp;
+    sLineNotes[sLineNotesNext].swaps = swaps;
+    sLineNotes[sLineNotesNext].lines = *lines;
+    sLineNotes[sLineNotesNext].valid = 1;
+    sLineNotesNext = (sLineNotesNext + 1u) % LINES_KEPT;
+    LightLock_Unlock(&sLineNotesLock);
+}
+
+/* Engine A's lines as the DS shows them with a scene (its swap_seq and
+ * stamp: the frame bg_offsets_of finds), into out; whether they're known. */
+static int lines_note_of(uint32_t seq, uint32_t stamp, NitroLineSpans *out)
+{
+    int i, found = -1;
+    uint32_t best = 0;
+
+    LightLock_Lock(&sLineNotesLock);
+    for (i = 0; i < LINES_KEPT; i++) {
+        if (sLineNotes[i].valid && sLineNotes[i].swaps == seq &&
+            (found < 0 || (int32_t)(sLineNotes[i].stamp - best) > 0)) {
+            found = i;
+            best = sLineNotes[i].stamp;
+        }
+    }
+    if (found < 0) {
+        for (i = 0; i < LINES_KEPT; i++) {
+            uint32_t d = sLineNotes[i].stamp - stamp;
+
+            if (sLineNotes[i].valid && d >= 1u && d <= 4u && (found < 0 || d < best)) {
+                found = i;
+                best = d;
+            }
+        }
+    }
+    if (found >= 0) {
+        *out = sLineNotes[found].lines;
+    }
+    LightLock_Unlock(&sLineNotesLock);
     return found >= 0;
 }
 
@@ -3773,6 +3845,133 @@ static void slices_why(int why, int runs)
     sSliceWhy = why;
 }
 
+/* An H-blank effect's lines as they're drawn: each line's 3D scroll (DS
+ * pixels, the 3D moved left by it; finer than a pixel halfway between two
+ * frames) and (ComposeLayers.gpuSpansOn) the part its windows show (lo to
+ * hi, the DS's x), the backdrop on the rest. */
+typedef struct SliceLines {
+    float scroll[DS_H], lo[DS_H], hi[DS_H];
+} SliceLines;
+static SliceLines sLinesPicture, sLinesShown;   /* (draw_screen's: the picture's own, and as shown) */
+
+/* The picture's own lines (its scrolls, its windows: all of each line
+ * without them left out). */
+static void lines_of_picture(const ComposeLayers *info, SliceLines *out)
+{
+    int y;
+
+    for (y = 0; y < DS_H; y++) {
+        out->scroll[y] = (float)scroll_signed(info->scroll3dLine[y] & 0x1FF);
+        out->lo[y] = info->gpuSpansOn ? (float)info->spanLo[y] : 0.0f;
+        out->hi[y] = info->gpuSpansOn ? (float)info->spanHi[y] : (float)DS_W;
+    }
+}
+
+/* The lines an H-blank effect whose windows the compositor draws
+ * (ComposeLayers.gpuSpansOn: a battle's start's slices) is drawn with:
+ * those of the frame the DS shows the scene in, halfway from the frame
+ * before's in an in-between frame (the game moves them 30 times a second:
+ * at 60 the slices and their edges move each frame, as the 3D does);
+ * the picture's own when they aren't known. Whether from the frames'. */
+static int lines_shown(const ComposeLayers *info, const NitroGx3dScene *scene, SliceLines *out)
+{
+    static NitroLineSpans before, after;
+    uint32_t seqB, stampB;
+
+    if (!info->gpuSpansOn || !info->scroll3dLines || scene == NULL ||
+        !lines_note_of(scene->swap_seq, scene->stamp, &after) || !after.on) {
+        lines_of_picture(info, out);
+        return 0;
+    }
+    NitroPort_LineSpansHalfway(frame_before(scene, &seqB, &stampB) && lines_note_of(seqB, stampB, &before) ? &before
+                                                                                                        : NULL,
+                               &after, out->scroll, out->lo, out->hi);
+    return 1;
+}
+
+/* (draw_screen, 5d) An H-blank effect's windows left out of the picture
+ * (ComposeLayers.gpuSpansOn): the backdrop over each line where they show
+ * nothing, in front of the layers, on the lines its 3D is drawn with (the
+ * slices': their edges move with them), lines of the same edge together.
+ * The compositor's own view. */
+static void draw_window_edges(const ComposeLayers *info, const SliceLines *sl, const PicaRect *pic, int top,
+                              float scale, int canvasW)
+{
+    extern u32 gpuCmdBufSize, gpuCmdBufOffset;
+    static const int corner[6][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 0 }, { 1, 1 }, { 0, 1 } };
+    u32 rgba = rgba_of((uint16_t)info->backdrop, 255);
+    float sx = (pic->x1 - pic->x0) / (float)canvasW;
+    int side, y, end, k, vertices = 0;
+
+    if (gpuCmdBufSize - gpuCmdBufOffset < 1024u) {
+        return;
+    }
+    for (side = 0; side < 2; side++) {
+        for (y = 0; y < DS_H; y = end) {
+            /* (the edge's screen pixels: whole ones, as the slices move) */
+            float e = side == 0 ? floorf(sl->lo[y] * sx + 0.5f) : floorf(sl->hi[y] * sx + 0.5f);
+            float x0 = side == 0 ? pic->x0 : pic->x0 + e, x1 = side == 0 ? pic->x0 + e : pic->x1, y0, y1;
+
+            if (sl->hi[y] <= sl->lo[y]) {
+                x0 = pic->x0;   /* (nothing shown: the whole line, once) */
+                x1 = side == 0 ? pic->x1 : pic->x0;
+            }
+            for (end = y + 1; end < DS_H; end++) {
+                int emptyY = sl->hi[y] <= sl->lo[y], emptyE = sl->hi[end] <= sl->lo[end];
+
+                if (emptyY != emptyE ||
+                    (!emptyY && (side == 0 ? sl->lo[end] != sl->lo[y] : sl->hi[end] != sl->hi[y]))) {
+                    break;
+                }
+            }
+            if (x1 <= x0) {
+                continue;
+            }
+            if (sQuadVertices + vertices + 6 > MAX_QUAD_VERTICES) {
+                break;   /* (no room left in the frame's quads) */
+            }
+            /* (the DS's lines on the screen, as the slices have them) */
+            y0 = y == 0 ? 0.0f : (float)(u32)((float)(y + top) * scale + 0.5f);
+            y1 = end >= DS_H ? (float)SCREEN_H : (float)(u32)((float)(end + top) * scale + 0.5f);
+            if (y1 > (float)SCREEN_H) {
+                y1 = (float)SCREEN_H;
+            }
+            if (sConfig.flipV) {
+                float t = y0;
+
+                y0 = pic->y0 + pic->y1 - y1;
+                y1 = pic->y0 + pic->y1 - t;
+            }
+            if (y1 <= y0) {
+                continue;
+            }
+            for (k = 0; k < 6; k++) {
+                NitroGx3dGpuVertex *v = &sQuads[sQuadVertices + vertices + k];
+
+                v->position[0] = corner[k][0] ? x1 : x0;
+                v->position[1] = corner[k][1] ? y1 : y0;
+                v->position[2] = 0.0f;
+                v->position[3] = 1.0f;
+                v->color[0] = (uint8_t)(rgba >> 24);
+                v->color[1] = (uint8_t)(rgba >> 16);
+                v->color[2] = (uint8_t)(rgba >> 8);
+                v->color[3] = (uint8_t)rgba;
+                v->uv[0] = 0.0f;
+                v->uv[1] = 0.0f;
+            }
+            vertices += 6;
+        }
+    }
+    if (vertices > 0) {
+        quad_combiner(0);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+        NitroPort_PicaBindVertices(sQuads);
+        C3D_DrawArrays(GPU_TRIANGLES, sQuadVertices, vertices);
+        sQuadVertices += vertices;
+    }
+    NitroPort_PicaProfileMark("the H-blank effect's windows");
+}
+
 /* An H-blank effect's 3D (its lines scrolled apart: the grass's 96 slices
  * of 2 lines going apart at a battle's start, the water's waves), drawn
  * once into sSliceTex as the screen would have it unscrolled (on the
@@ -3791,17 +3990,21 @@ static void slices_why(int why, int runs)
  * than the runs: rare); the 3D inside the screen. Drawn at the screen's own pixels (the smooth
  * 3D's 2x2 too: its texels doubled). Whether it was drawn so (else
  * nothing was). */
-static int draw_slices_eye(const Screen *scr, const LayerSet *set, const PicaView *screenView, const PicaRect *pic,
-                           const PicaRect *base, float sx3, int top, float scale, C3D_FrameBuf *fb,
-                           const C3D_Mtx *pixels, uint16_t rearColor, unsigned rearAlpha)
+static int draw_slices_eye(const Screen *scr, const LayerSet *set, const SliceLines *sl, const PicaView *screenView,
+                           const PicaRect *pic, const PicaRect *base, float sx3, int top, float scale,
+                           C3D_FrameBuf *fb, const C3D_Mtx *pixels, uint16_t rearColor, unsigned rearAlpha)
 {
-    static LineRun lines[DS_H];
+    /* (the DS's runs of lines of the same scroll: sl's) */
+    static struct {
+        short y0, y1;
+        float scroll;
+    } lines[DS_H];
     extern u32 gpuCmdBufSize, gpuCmdBufOffset;
     const ComposeLayers *info = &set->info;
     C3D_FrameBuf *tfb = (C3D_FrameBuf *)sSliceFb;
     PicaView view = *screenView;
     float W = (float)scr->width;
-    int n, r, k, vertices = 0, dir, see;
+    int n = 0, r, k, y, vertices = 0, dir, see;
     u32 fill;
 
     /* (behind the 3D, the picture all one colour where the 3D goes) */
@@ -3809,7 +4012,16 @@ static int draw_slices_eye(const Screen *scr, const LayerSet *set, const PicaVie
                 ((pic->x0 <= 0.5f && pic->x1 >= W - 0.5f) ||
                  sToRgb565[info->backdrop & 0x7FFF] == (uint16_t)set->underColor);
 
-    n = line_runs(info, lines, DS_H);
+    for (y = 0; y < DS_H; y++) {
+        if (n > 0 && lines[n - 1].scroll == sl->scroll[y]) {
+            lines[n - 1].y1 = (short)(y + 1);
+        } else {
+            lines[n].y0 = (short)y;
+            lines[n].y1 = (short)(y + 1);
+            lines[n].scroll = sl->scroll[y];
+            n++;
+        }
+    }
     if (n < 2) {
         return 0;   /* (no runs: not an effect) */
     }
@@ -3853,7 +4065,7 @@ static int draw_slices_eye(const Screen *scr, const LayerSet *set, const PicaVie
         static const int corner[6][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 0 }, { 1, 1 }, { 0, 1 } };
         /* (moved by whole pixels: each pixel's middle a texel's, never
          * between two, where the GPU's nearest could take either) */
-        float dx = floorf(-(float)lines[r].scroll * sx3 + 0.5f);
+        float dx = floorf(-lines[r].scroll * sx3 + 0.5f);
         float x0 = base->x0 + dx, x1 = base->x1 + dx, y0, y1;
 
         y0 = lines[r].y0 == 0 ? 0.0f : (float)(u32)((float)(lines[r].y0 + top) * scale + 0.5f);
@@ -3967,7 +4179,7 @@ static int draw_slices_eye(const Screen *scr, const LayerSet *set, const PicaVie
 
 /* (draw_slices_eye, the right eye the left's way: both from the texture,
  * or both a run at a time) */
-static int draw_slices(const Screen *scr, int eye, const LayerSet *set, const PicaView *screenView,
+static int draw_slices(const Screen *scr, int eye, const LayerSet *set, const SliceLines *sl, const PicaView *screenView,
                        const PicaRect *pic, const PicaRect *base, float sx3, int top, float scale, C3D_FrameBuf *fb,
                        const C3D_Mtx *pixels, uint16_t rearColor, unsigned rearAlpha)
 {
@@ -3976,7 +4188,7 @@ static int draw_slices(const Screen *scr, int eye, const LayerSet *set, const Pi
     if (eye == 1 && sSliceLeft == 0) {
         return 0;
     }
-    drawn = draw_slices_eye(scr, set, screenView, pic, base, sx3, top, scale, fb, pixels, rearColor, rearAlpha);
+    drawn = draw_slices_eye(scr, set, sl, screenView, pic, base, sx3, top, scale, fb, pixels, rearColor, rearAlpha);
     if (eye == 0) {
         sSliceLeft = drawn;
     }
@@ -4129,10 +4341,17 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         view.viewWidth = 0;
         view.viewHeight = 0;
         /* (the runs from the 3D drawn once, when they can be: draw_slices;
-         * else each run's own, below) */
+         * else each run's own, below. With the windows left out of the
+         * picture, the lines of the frame shown, halfway in an in-between
+         * frame: lines_shown; the right eye the left's) */
+        if (info->scroll3dLines && eye == 0) {
+            lines_of_picture(info, &sLinesPicture);
+            (void)lines_shown(info, scene, &sLinesShown);
+        }
         sliced = info->scroll3dLines && !edges &&
-                 draw_slices(scr, eye, set, &view, &pic, &base, info->stretch ? (float)scr->width / (float)DS_W : s3,
-                             top, scale, fb, &pixels, rearColor, rearAlpha);
+                 draw_slices(scr, eye, set, &sLinesShown, &view, &pic, &base,
+                             info->stretch ? (float)scr->width / (float)DS_W : s3, top, scale, fb, &pixels, rearColor,
+                             rearAlpha);
         if (!sliced) {
             NitroPort_PicaProfileMark("the 2D behind");
         }
@@ -4320,6 +4539,14 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             if (bottom > first) {
                 quad(bx0, y0, bx1, y1, 0.0f, bu0, v0, bu1, v1, 0xFFFFFFFFu);
             }
+        }
+        /* 5d. An H-blank effect's windows (ComposeLayers.gpuSpansOn: a
+         * battle's start's slices): the backdrop where they show nothing,
+         * on the lines the 3D was drawn with (from its texture: the frame
+         * shown's, halfway in an in-between frame; a run at a time: the
+         * picture's). */
+        if (info->gpuSpansOn && info->scroll3dLines) {
+            draw_window_edges(info, sliced ? &sLinesShown : &sLinesPicture, &pic, top, scale, canvasW);
         }
         /* 5a. A band of a BG drawn here, in front of the rest (the place
          * name sign: ComposeLayers.gpuSign), moved up by the BG's vertical
