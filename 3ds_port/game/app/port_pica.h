@@ -159,6 +159,11 @@ typedef struct PicaView {
      * still had each run's polygons gone through everywhere: a battle's
      * start took 62 ms of the GPU a frame, 2026-10-21) */
     int band, bandTop, bandBottom;
+    /* the viewport only the framebuffer's first viewWidth x viewHeight
+     * pixels, from its corner (a framebuffer that's a texture too, its
+     * sides powers of two, bigger than the screen: an H-blank effect's 3D
+     * drawn into it once, port_compose_pica.c's slices); 0: all of it */
+    int viewWidth, viewHeight;
 } PicaView;
 /* What NitroPort_PicaDrawScene draws: all of it; or, for the smooth 3D
  * with the outlines (port_compose_pica.c), first the opaque polygons alone

@@ -1610,6 +1610,21 @@ static void scissor_off(void)
     }
 }
 
+/* The view's framebuffer's size as the viewport has it: all of it, or
+ * (PicaView.viewWidth) its first viewWidth x viewHeight pixels. */
+static u32 view_width(const PicaView *view)
+{
+    return view->viewWidth>0&&view->viewHeight>0?(u32)view->viewWidth:view->fb->width;
+}
+static u32 view_height(const PicaView *view)
+{
+    return view->viewWidth>0&&view->viewHeight>0?(u32)view->viewHeight:view->fb->height;
+}
+static void view_viewport(const PicaView *view)
+{
+    C3D_SetViewport(0,0,view_width(view),view_height(view));
+}
+
 /* The state every pass needs: the shader, its view, the vertices; the
  * view's scissor. */
 static void begin_pass(const PicaView *view,const PicaRect *rect)
@@ -1619,11 +1634,11 @@ static void begin_pass(const PicaView *view,const PicaRect *rect)
         /* (PicaView.band) the viewport the run's rows alone, the view
          * moved to match: the screen's row y is the band's y - bandTop */
         PicaRect r=*rect;
-        u32 sy=(u32)view->fb->width/(u32)view->screenHeight;
+        u32 sy=view_width(view)/(u32)view->screenHeight;
         r.y0-=(float)view->bandTop;
         r.y1-=(float)view->bandTop;
         C3D_SetViewport((u32)(view->screenHeight-view->bandBottom)*sy,0,
-                        (u32)(view->bandBottom-view->bandTop)*sy,view->fb->height);
+                        (u32)(view->bandBottom-view->bandTop)*sy,view_height(view));
         NitroPort_PicaViewMatrix(&m,view->screenWidth,view->bandBottom-view->bandTop,&r);
     }else{
         NitroPort_PicaViewMatrix(&m,view->screenWidth,view->screenHeight,rect);
@@ -2119,7 +2134,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
     /* back to the screen's own depth/stencil */
     fog_mode(0);
     C3D_SetFrameBuf(view->fb);
-    C3D_SetViewport(0,0,view->fb->width,view->fb->height);
+    view_viewport(view);
     begin_pass(view,&view->rect);
 }
 
@@ -2356,7 +2371,7 @@ static void draw_shadow_receivers(const PicaView *view)
     int q;
     stage("the direct sun shadow receivers");
     C3D_SetFrameBuf(view->fb);
-    C3D_SetViewport(0,0,view->fb->width,view->fb->height);
+    view_viewport(view);
     C3D_BindProgram(&sProgram);
     begin_pass(view,&view->rect);
     C3D_BindProgram(&sRecvProgram);
@@ -2492,7 +2507,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     sBoundTexKnown=0;
     NitroPort_PicaBindVertices(sVertices[sPrepared]);
     C3D_SetFrameBuf(view->fb);
-    C3D_SetViewport(0,0,view->fb->width,view->fb->height);
+    view_viewport(view);
     begin_pass(view,&view->rect);
     C3D_CullFace(GPU_CULL_NONE);
     C3D_DepthMap(!(sPreparedSwap&2u),-1.0f,0.0f);
