@@ -397,10 +397,16 @@ viewport only those: `PicaView.viewWidth`), unscrolled, as the screen
 would have it (on the colour behind it, its rear plane, its polygons, its
 tint), then every one of the DS's runs from it at its own scroll, a
 textured quad each, in one draw: the grass's 96 slices of 2 lines
-exactly. Only where the texture can stand for the screen: on the upper
+exactly (each moved by whole pixels, so every pixel takes one texel's
+middle). Only where the texture can stand for the screen: on the upper
 screen, the 3D inside it, what's behind the 3D all one colour where it
 goes (the field's backdrop) or a rear plane that hides it, no outlines;
-else the runs as above. The 3D is at the screen's own pixels then (the
+else the runs as above. It's taken even where the command list had room
+for only one run (that run would have drawn the effect unsliced). With
+the slider up the right eye goes the left eye's way. The
+log says the way each time it changes (`[compose] an H-blank effect's 3D
+(96 runs of lines) drawn from its texture`, or why not), 24 times at
+most. The 3D is at the screen's own pixels then (the
 2x2 smooth 3D's texels doubled) for the moment of the effect. The texture
 is made the first time it's needed, when VRAM has room for it (768 KB)
 and 512 KB more (the outlines' copies come later), its quads in linear

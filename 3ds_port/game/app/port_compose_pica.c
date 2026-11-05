@@ -385,6 +385,8 @@ static void *sSliceColor, *sSliceDepth;
 static NitroGx3dGpuVertex *sSliceVertsAll, *sSliceVerts;
 static int sSliceVertices;
 static int sSliceState;   /* (0: not made yet; 1: made; -1: no room for it) */
+static int sSliceWhy = -1, sSliceTold;   /* (the last decision logged: slices_why) */
+static int sSliceLeft = -1;   /* (the frame's left eye: from the texture 1, a run at a time 0, not yet -1) */
 /* ------------------------------------------------- frames in flight
  * A frame's commands are built while the GPU draws the frame before
  * (NitroPort_PicaFrameOpen): its GPU operations (fills, command lists,
@@ -3715,6 +3717,29 @@ static void draw_gpu_objs(const LayerSet *set, const NitroGx3dScene *scene, cons
     NitroPort_PicaProfileMark("the sprites");
 }
 
+/* An H-blank effect's 3D drawn from the texture (why 0) or a run at a
+ * time, and why: in the log when it changes, SLICE_TOLD_MAX times at most
+ * (a battle's start comes and goes: a line or two each). */
+#define SLICE_TOLD_MAX 24
+static void slices_why(int why, int runs)
+{
+    static const char *const text[] = {
+        "from its texture",
+        "a run of lines at a time: not the upper screen",
+        "a run of lines at a time: what's behind the 3D isn't one colour (and no rear plane hides it)",
+        "a run of lines at a time: the 3D goes past the screen's edges",
+        "a run of lines at a time: the 3D drawn in parts (the smooth 3D with outlines)",
+        "a run of lines at a time: no texture for it (memory)",
+        "a run of lines at a time: no room in the frame's quads or commands",
+    };
+
+    if (why != sSliceWhy && sSliceTold < SLICE_TOLD_MAX) {
+        sSliceTold++;
+        NitroPort_Log("[compose] an H-blank effect's 3D (%d runs of lines) drawn %s", runs, text[why]);
+    }
+    sSliceWhy = why;
+}
+
 /* An H-blank effect's 3D (its lines scrolled apart: the grass's 96 slices
  * of 2 lines going apart at a battle's start, the water's waves), drawn
  * once into sSliceTex as the screen would have it unscrolled (on the
@@ -3730,9 +3755,9 @@ static void draw_gpu_objs(const LayerSet *set, const NitroGx3dScene *scene, cons
  * the 3D inside the screen. Drawn at the screen's own pixels (the smooth
  * 3D's 2x2 too: its texels doubled). Whether it was drawn so (else
  * nothing was). */
-static int draw_slices(const Screen *scr, const LayerSet *set, const PicaView *screenView, const PicaRect *pic,
-                       const PicaRect *base, float sx3, int top, float scale, C3D_FrameBuf *fb, const C3D_Mtx *pixels,
-                       uint16_t rearColor, unsigned rearAlpha)
+static int draw_slices_eye(const Screen *scr, const LayerSet *set, const PicaView *screenView, const PicaRect *pic,
+                           const PicaRect *base, float sx3, int top, float scale, C3D_FrameBuf *fb,
+                           const C3D_Mtx *pixels, uint16_t rearColor, unsigned rearAlpha)
 {
     static LineRun lines[DS_H];
     extern u32 gpuCmdBufSize, gpuCmdBufOffset;
@@ -3743,17 +3768,40 @@ static int draw_slices(const Screen *scr, const LayerSet *set, const PicaView *s
     int n, r, k, vertices = 0, dir;
 
     /* (behind the 3D, the picture all one colour where the 3D goes) */
-    int plain = set->underColor >= 0 && base->x0 >= pic->x0 - 0.5f && base->x1 <= pic->x1 + 0.5f;
+    int plain = set->underColor >= 0 && base->x0 >= pic->x0 - 0.5f && base->x1 <= pic->x1 + 0.5f &&
+                ((pic->x0 <= 0.5f && pic->x1 >= W - 0.5f) ||
+                 sToRgb565[info->backdrop & 0x7FFF] == (uint16_t)set->underColor);
 
-    if (scr != &sScreens[0] || (rearAlpha < 31 && !plain) || base->x0 < -0.5f || base->x1 > W + 0.5f ||
-        scr->width > SLICE_TEX_H || view.part != PICA_DRAW_ALL || !slices_ready()) {
-        return 0;
-    }
     n = line_runs(info, lines, DS_H);
-    if (n < 2 || sSliceVertices + 6 * n > SLICE_VERTICES || sQuadVertices + 6 * 2 > MAX_QUAD_VERTICES ||
-        gpuCmdBufSize - gpuCmdBufOffset < 4096u) {
+    if (n < 2) {
+        return 0;   /* (no runs: not an effect) */
+    }
+    if (scr != &sScreens[0] || scr->width > SLICE_TEX_H) {
+        slices_why(1, n);
         return 0;
     }
+    if (rearAlpha < 31 && !plain) {
+        slices_why(2, n);
+        return 0;
+    }
+    if (base->x0 < -0.5f || base->x1 > W + 0.5f) {
+        slices_why(3, n);
+        return 0;
+    }
+    if (view.part != PICA_DRAW_ALL) {
+        slices_why(4, n);
+        return 0;
+    }
+    if (!slices_ready()) {
+        slices_why(5, n);
+        return 0;
+    }
+    if (sSliceVertices + 6 * n > SLICE_VERTICES || sQuadVertices + 6 * 2 > MAX_QUAD_VERTICES ||
+        gpuCmdBufSize - gpuCmdBufOffset < 4096u) {
+        slices_why(6, n);
+        return 0;
+    }
+    slices_why(0, n);
     /* The runs' quads: run r's rows (the DS's lines on the screen, as the
      * runs below have them), its place moved by its scroll; each pixel
      * from the texture where it was unscrolled. Screen pixel (x, y) is the
@@ -3761,7 +3809,9 @@ static int draw_slices(const Screen *scr, const LayerSet *set, const PicaView *s
      * (its row t at v = (t + 0.5) / 512: see draw_screen's picture). */
     for (r = 0; r < n; r++) {
         static const int corner[6][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 0 }, { 1, 1 }, { 0, 1 } };
-        float dx = -(float)lines[r].scroll * sx3;
+        /* (moved by whole pixels: each pixel's middle a texel's, never
+         * between two, where the GPU's nearest could take either) */
+        float dx = floorf(-(float)lines[r].scroll * sx3 + 0.5f);
         float x0 = base->x0 + dx, x1 = base->x1 + dx, y0, y1;
 
         y0 = lines[r].y0 == 0 ? 0.0f : (float)(u32)((float)(lines[r].y0 + top) * scale + 0.5f);
@@ -3850,12 +3900,31 @@ static int draw_slices(const Screen *scr, const LayerSet *set, const PicaView *s
         NitroPort_PicaBindVertices(sSliceVerts);
         C3D_DrawArrays(GPU_TRIANGLES, sSliceVertices, vertices);
         sSliceVertices += vertices;
+        C3D_TexBind(0, NULL);   /* (not left on while the next eye draws into it) */
     }
     if (n > sFrameLineRuns) {
         sFrameLineRuns = n;
     }
     NitroPort_PicaProfileMark("the 3D's slices");
     return 1;
+}
+
+/* (draw_slices_eye, the right eye the left's way: both from the texture,
+ * or both a run at a time) */
+static int draw_slices(const Screen *scr, int eye, const LayerSet *set, const PicaView *screenView,
+                       const PicaRect *pic, const PicaRect *base, float sx3, int top, float scale, C3D_FrameBuf *fb,
+                       const C3D_Mtx *pixels, uint16_t rearColor, unsigned rearAlpha)
+{
+    int drawn;
+
+    if (eye == 1 && sSliceLeft == 0) {
+        return 0;
+    }
+    drawn = draw_slices_eye(scr, set, screenView, pic, base, sx3, top, scale, fb, pixels, rearColor, rearAlpha);
+    if (eye == 0) {
+        sSliceLeft = drawn;
+    }
+    return drawn;
 }
 
 static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx3dScene *scene, float stereo,
@@ -4005,8 +4074,9 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         view.viewHeight = 0;
         /* (the runs from the 3D drawn once, when they can be: draw_slices;
          * else each run's own, below) */
-        sliced = nruns > 1 && draw_slices(scr, set, &view, &pic, &base, info->stretch ? (float)scr->width / (float)DS_W : s3,
-                                          top, scale, fb, &pixels, rearColor, rearAlpha);
+        sliced = info->scroll3dLines && !edges &&
+                 draw_slices(scr, eye, set, &view, &pic, &base, info->stretch ? (float)scr->width / (float)DS_W : s3,
+                             top, scale, fb, &pixels, rearColor, rearAlpha);
         if (!sliced) {
             NitroPort_PicaProfileMark("the 2D behind");
         }
@@ -4104,8 +4174,8 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
         /* 4. A brightness effect on the 3D (with an H-blank effect's runs:
          * each run's, done above). */
-        if (nruns == 1) {
-            tint_3d(info, &rect3d);
+        if (nruns == 1 && !sliced) {
+            tint_3d(info, &rect3d);   /* (draw_slices': in its texture) */
         }
         /* 4b. A BG drawn here, in front of the 3D and behind the rest (the
          * field's weather: ComposeLayers.gpuBg), from its picture, repeated
@@ -4858,6 +4928,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sSliceVerts = sSliceVertsAll + (sQuadHalf ? SLICE_VERTICES : 0);
     }
     sSliceVertices = 0;
+    sSliceLeft = -1;
     NitroPort_PicaStage("the frame's clears");
     sProfOn = 0;
     if (scene != NULL && ++sProfFrames >= PROF_EVERY) {
