@@ -277,6 +277,21 @@ $(LIBNNS): libnitrosystem
 $(NNS_INLINE_SYMS): | libnitrosystem
 	@test -f $@
 
+# The port's version, on the title screen (patch 0081): git's name for the
+# commit built (a release's tag; else the tag before it, the commits since
+# and the commit), or PORT_VERSION given (the CI's, which has no git
+# history). In a header written only when it changes, for the one file that
+# shows it: a new commit compiles that file alone again.
+PORT_VERSION ?= $(shell git -C $(ROOT) describe --tags --always --dirty 2>/dev/null)
+PORT_VERSION_H := $(OUT)/gen/port_version.h
+
+$(PORT_VERSION_H): FORCE
+	@mkdir -p $(dir $@)
+	@v='#define PORT_VERSION "$(PORT_VERSION)"'; [ -f $@ ] && [ "$$(cat $@)" = "$$v" ] || echo "$$v" > $@
+
+$(OUT)/src/applications/title_screen.o: $(PORT_VERSION_H)
+$(OUT)/src/applications/title_screen.o: GAME_CFLAGS += -include $(PORT_VERSION_H)
+
 # The NitroSystem inline functions in included game headers have external
 # definitions under GCC's gnu89 semantics; match the SDK's weak-symbol fix.
 $(OUT)/src/%.o: $(GAME)/src/%.c $(NNS_INLINE_SYMS) $(GAME_GENERATED) | libnitrosystem
