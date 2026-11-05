@@ -224,7 +224,9 @@ typedef struct NitroRender2DSplit {
      * (gpuSpansOn) on a battle's start (stretch), with the 3D, its lines
      * scrolled apart (not all the same), and on every line windows that
      * show everything (the colour effects too) or nothing, in one part at
-     * most (no OBJ window, no circle), hiding something on some line. Where
+     * most (no OBJ window, no circle), hiding something on some line, and
+     * nothing in front of the 3D (a trainer's battle start's Poke Ball
+     * halves, sprites going with the screen's halves, keep them in). Where
      * a window hides the 3D, over then shows nothing (not what's behind
      * it): the compositor draws the backdrop there. The caller's choice,
      * kept by the call. */

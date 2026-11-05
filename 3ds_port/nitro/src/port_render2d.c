@@ -5093,6 +5093,29 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             }
         }
     }
+    /* (the windows left out) Only with nothing in front of the 3D, so all
+     * that moves at 60 frames a second is the compositor's: else (a
+     * trainer's battle start, its Poké Ball's halves sprites going with the
+     * screen's) the windows go back in, as above (where they hide the 3D,
+     * over shows nothing yet: what's behind it). */
+    if (split != NULL && split->gpuSpansOn) {
+        int k, front = 0;
+
+        for (k = 0; k < width * H && !front; k++) {
+            front = (split->over[k] & OPAQUE) != 0;
+        }
+        if (front) {
+            for (y = 0; y < H; y++) {
+                for (x = 0; x < width; x++) {
+                    if (x < split->spanLo[y] || x >= split->spanHi[y]) {
+                        split->over[y * width + x] = (u16)(out[y * width + x] | OPAQUE);
+                        split->overAlpha[y * width + x] = 16;
+                    }
+                }
+            }
+            split->gpuSpansOn = 0;
+        }
+    }
     /* Release only after every scanline has been composited. */
     if(gx3dPixels)NitroPort_Gx3dReleaseImage(gx3dPixels);
 }

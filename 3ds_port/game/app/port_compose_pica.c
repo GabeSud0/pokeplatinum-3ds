@@ -1024,6 +1024,8 @@ static int compose_init(const ComposeConfig *config, int small)
     LightLock_Init(&sSetLock);
     LightLock_Init(&sBgOfsLock);
     LightLock_Init(&sLineNotesLock);
+    memset(sLineNotes, 0, sizeof(sLineNotes));
+    sLineNotesNext = 0;
     memset(sBgOfs, 0, sizeof(sBgOfs));
     LightLock_Init(&sObjPlacesLock);
     memset(sObjPlaces, 0, sizeof(sObjPlaces));
@@ -1512,16 +1514,16 @@ static int sign_moved(const NitroGx3dScene *scene)
 
 static int lines_note_of(uint32_t seq, uint32_t stamp, NitroLineSpans *out);
 
-/* Whether a battle's start's lines (its slices, their windows: the
- * compositor's, NitroPort_ComposeNoteLines) are other in a scene's frame
- * than in the last scene shown's: they move on in an in-between frame
+/* Whether a battle's start's slices (their windows the compositor's,
+ * NitroPort_ComposeNoteLines: slices in both frames) are other in a scene's
+ * frame than in the last scene shown's: they move on in an in-between frame
  * drawn for them, as the sprites do. */
 static int lines_moved(const NitroGx3dScene *scene)
 {
     static NitroLineSpans now, before;
 
-    return lines_note_of(scene->swap_seq, scene->stamp, &now) && now.on &&
-           lines_note_of(sLastMainSeq, sLastMainStamp, &before) && before.on &&
+    return lines_note_of(scene->swap_seq, scene->stamp, &now) && now.slices &&
+           lines_note_of(sLastMainSeq, sLastMainStamp, &before) && before.slices &&
            (memcmp(now.scroll, before.scroll, sizeof(now.scroll)) != 0 ||
             memcmp(now.lo, before.lo, sizeof(now.lo)) != 0 || memcmp(now.hi, before.hi, sizeof(now.hi)) != 0);
 }

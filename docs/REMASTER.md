@@ -427,8 +427,11 @@ part of one moved the other way it hides), so they're left out of the
 picture for the compositor to draw (`NitroRender2DSplit.gpuSpans`): on a
 battle's start stretched over the screen, with the 3D's lines scrolled
 apart, where every line's windows show everything (the colour effects too)
-or nothing, in one part at most, no OBJ window or circle, and something is
-hidden (`gpuSpansOn`, each line's shown part `spanLo` to `spanHi`). The
+or nothing, in one part at most, no OBJ window or circle, something is
+hidden, and nothing is in front of the 3D (a trainer's battle start slides
+two halves with the halves of a Poké Ball, sprites the picture draws: the
+windows stay in the picture then, all of it at 30 as before) (`gpuSpansOn`,
+each line's shown part `spanLo` to `spanHi`). The
 picture's `over` then shows nothing where the windows hide the 3D, rather
 than what's behind it, and the compositor draws the backdrop there after
 the layers in front (`draw_window_edges`), on the lines the 3D was drawn
@@ -445,7 +448,9 @@ moved halfway, leaves uncovered: the grass's slices change sides as they
 start going apart, from 3 pixels one way to 29 the other, and the 4
 columns hidden on the left before would have covered 2 of the 3D moved 13
 the other way). A new scene without an in-between one gets an in-between
-frame of its own when the lines moved (`lines_moved`, as the sprites).
+frame of its own when the slices moved (`lines_moved`: slices in both
+frames, as the sprites). The lines are noted only while the upper
+screen's picture is a battle's start stretched.
 Drawn a run at a time (no texture, the outlines), the slices and their
 edges are the picture's, as before. The PC runner's `pshot` draws the
 edges as the 3DS does, the same pictures as with them in `over`;

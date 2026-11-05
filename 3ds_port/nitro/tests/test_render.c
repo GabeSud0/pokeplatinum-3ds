@@ -3767,7 +3767,7 @@ static void test_gpu_spans(void)
     GX_LoadBG1Scr(map1, 0, sizeof(map1));
     GX_LoadBG2Scr(map2, 0, sizeof(map2));
     GX_LoadBGPltt(pltt, 0, sizeof(pltt));
-    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1 | GX_PLANEMASK_BG2);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1);   /* (BG2, in front of the 3D, below) */
     G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG0 | GX_WND_PLANEMASK_BG1 | GX_WND_PLANEMASK_BG2 | GX_WND_PLANEMASK_BG3 |
                               GX_WND_PLANEMASK_OBJ,
                           TRUE);
@@ -3812,8 +3812,11 @@ static void test_gpu_spans(void)
     }
     CHECK(same);
     CHECK(edges);
-    /* (in front of the 3D on lines 80-95: BG2, there in both) */
-    CHECK((over1[80 * 256 + 50] & 0x7FFF) == RED && (over1[82 * 256 + 50] & 0x7FFF) == RED);
+    /* (nothing in front of the 3D) */
+    for (i = 0, x = 0; i < 256 * 192; i++) {
+        x |= over1[i] & 0x8000;
+    }
+    CHECK(x == 0);
     /* the frame's lines, as the picture has them */
     NitroPort_Render2DLineSpansNow(1, &now);
     CHECK(now.on && now.slices);
@@ -3823,6 +3826,18 @@ static void test_gpu_spans(void)
     }
     CHECK(spansOk);
     CHECK(now.scroll[0] == 512 - 11 && now.scroll[2] == 10);
+
+    /* something in front of the 3D (BG2 on lines 80-95; a trainer's battle
+     * start's Poke Ball halves, sprites, moving with the screen's halves):
+     * the windows in the picture, all of it as without */
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1 | GX_PLANEMASK_BG2);
+    NitroPort_Render2DSplit(0, under0, &split0);
+    NitroPort_Render2DSplit(0, under1, &split1);
+    CHECK(!split1.gpuSpansOn && split1.scroll3dLines);
+    CHECK((over1[80 * 256 + 50] & 0x7FFF) == RED && (over1[82 * 256 + 50] & 0x7FFF) == RED);
+    CHECK(memcmp(under0, under1, sizeof(under0)) == 0 && memcmp(over0, over1, sizeof(over0)) == 0 &&
+          memcmp(alpha0, alpha1, sizeof(alpha0)) == 0);
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1);
 
     /* not stretched: the windows in the picture */
     split1.stretch = 0;

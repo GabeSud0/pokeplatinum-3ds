@@ -1693,6 +1693,11 @@ static bool OnTop(int engine, bool aOnTop)
     return (engine == 0) == aOnTop;
 }
 
+/* (the remaster) The upper screen's last picture of engine A a battle's
+ * start stretched over it (NitroRender2DSplit.stretch): its lines noted
+ * each frame then (DrawFrame), for the compositor's slices. */
+static volatile bool sStretchShown;
+
 /* What an engine shows, from the game's display state, into its screen's
  * picture. False if it didn't change: that screen keeps showing what it
  * does (not drawn, not swapped). */
@@ -1891,6 +1896,9 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         layers->height = split.height > 192 ? split.height : 192;
         layers->top = split.top;
         layers->stretch = split.stretch;
+        if (top && engine == 0) {
+            __atomic_store_n(&sStretchShown, split.stretch != 0, __ATOMIC_RELEASE);
+        }
         layers->stamp = stamp;
         layers->displayOff = 0;
         return true;
@@ -2319,7 +2327,7 @@ static bool DrawFrame(bool new3dOnly)
      * this frame, whether a drawer takes it or not, once a V-blank: its
      * slices and their edges drawn by the compositor go with them; before
      * the frame's note below, which the compositor waits for) */
-    if (sRemaster && NitroPort_FieldEffect()) {
+    if (sRemaster && NitroPort_FieldEffect() && __atomic_load_n(&sStretchShown, __ATOMIC_ACQUIRE)) {
         static NitroLineSpans lines;
         static u32 notedStamp;
         u32 stamp = NitroPort_ComposeVBlanks();
