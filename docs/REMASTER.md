@@ -1818,7 +1818,15 @@ not its time; hashed on the game's thread as the commands go into the
 ring), has the next left out, as one the thread can't keep up with: the
 one before stays on the screen. If it moved after all, it's there a scene
 later. Not outside such an effect: the first step after standing still
-would be a scene late. The `[perf] geometry` line counts them (`left out/s
+would be a scene late. The scene that stays stands for the frames of those
+left out (`NitroPort_Gx3dSameAs`: the newest one's time and SWAP_BUFFERS
+count; the display thread gives the scene on the screen those): the 2D of
+their frames goes with it, and their brightness and scrolls. Before that
+(2026-11-04) the screen kept the 2D of the frame the scene was made in
+while the field stood still: the battle start's first flash to black
+stuck dark for three times as long and the second was missed (videos
+against a DS's), and the slices stood still between the camera's steps.
+The next in-between scene starts from the newest of them too. The `[perf] geometry` line counts them (`left out/s
 (n as the same)`), and a `[perf] geometry's work` line says where its time
 goes: ending scenes (the SWAP: sorting, matching, publishing), and the
 vertices a scene sends, of them those in lists wholly out of the view (not

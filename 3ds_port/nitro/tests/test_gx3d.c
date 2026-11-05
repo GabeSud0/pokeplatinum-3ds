@@ -2139,10 +2139,24 @@ static void test_same_scenes_left_out(void)
     scene=NitroPort_Gx3dScene();
     CHECK(scene->count==1);
     if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(31,0,0));   /* (C's still) */
+    {
+        /* C stands for D's frame too (NitroPort_Gx3dSameAs): D's SWAP_BUFFERS
+         * count, the next after C's; for no other scene */
+        uint32_t st=0,sq=0;
+        CHECK(NitroPort_Gx3dSameAs(scene->serial,&st,&sq)==1);
+        CHECK(sq==scene->swap_seq+1u);
+        CHECK(NitroPort_Gx3dSameAs(scene->serial+1u,&st,&sq)==0);
+    }
     triangle(0,RGB(31,31,0));swap();                       /* E: drawn (D wasn't C) */
     scene=NitroPort_Gx3dScene();
     CHECK(scene->count==1);
     if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(31,31,0));
+    CHECK(NitroPort_Gx3dSameAs(scene->serial,NULL,NULL)==0);   /* (E: left out after it, none) */
+    /* (E's stamp_before: D's frame, the last C stood for) */
+    {
+        const NitroGx3dScene *m=NitroPort_Gx3dMidOf(scene);
+        if(m)CHECK(m->swap_seq_before==scene->swap_seq-1u);
+    }
     CHECK(NitroPort_Gx3dSameScenesLeftOut()==same0+1u);
     NitroPort_SetFieldEffect(0);
     triangle(0,RGB(31,31,0));swap();NitroPort_Gx3dScene(); /* F (still looked at), the same as E: G left out */

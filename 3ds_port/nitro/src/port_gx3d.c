@@ -2327,6 +2327,9 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
 /* Flag: the command belongs to a scene left out (see produce): only the
  * state it leaves behind is kept, no vertices are made. */
 #define RING_SKIP  (1u<<16)
+/* And (with RING_SKIP) left out as the same as the scene before: the one
+ * on the screen stands for it (NitroPort_Gx3dSameAs). */
+#define RING_SAME  (1u<<17)
 /* Words written before the thread is told: fewer, larger hand-overs. */
 #define RING_PUBLISH_WORDS 256u
 static uint32_t sRing[RING_WORDS];
@@ -2350,6 +2353,11 @@ static int sSkipScene;
 static uint32_t sSceneHash=2166136261u, sLastSceneHash;
 static int sHashScenes, sSameScene;
 static uint32_t sSameLeftOut;   /* scenes left out as the same (for the [gx3d] line) */
+static int sSkipSame;           /* (the next scene left out as the same: RING_SAME) */
+/* The newest scene left out as the same, on the thread: the serial of the
+ * scene on the screen it's the same as, its own time and SWAP_BUFFERS
+ * count (NitroPort_Gx3dSameAs; sSameGen odd while written). */
+static uint32_t sSameGen, sSameSerial, sSameStamp, sSameSeq;
 static inline void hash_words(const uint32_t *p,uint32_t n)
 {
     uint32_t h=sSceneHash,i;
@@ -2471,6 +2479,8 @@ static void swap_queued(void)
         sSkipScene=1;
         sSameLeftOut++;
     }
+    /* (left out, and the same as the one before: whatever the reason) */
+    sSkipSame=sSkipScene && sSameScene;
     sLastSceneHash=sSceneHash;
     sSceneHash=2166136261u;
     sHashScenes=NitroPort_FieldEffect();
@@ -2533,12 +2543,13 @@ static void produce(unsigned op,const uint32_t *p)
      * normals aren't worked out, and it isn't shown): the game keeps its
      * speed, and the sound its time, whatever the 3D costs. */
     if(sSkipScene && ((op>=0x21u && op<=0x28u && op!=0x22u) || op==0x50u))
-        flags=RING_SKIP;
+        flags=RING_SKIP|(sSkipSame?RING_SAME:0u);
     if(op==0x50u)swap_noted();
     enqueue(op,p,n,flags);
     if(op==0x50u)swap_queued();
 }
-/* A command on the thread; skip: its scene is left out. */
+/* A command on the thread; skip: its scene is left out (2: as the same
+ * as the one before). */
 static inline __attribute__((always_inline)) void work_op(unsigned op,const uint32_t *p,int skip)
 {
     if(skip){
@@ -2552,6 +2563,24 @@ static inline __attribute__((always_inline)) void work_op(unsigned op,const uint
             return;
         }
         if(op==0x50u){
+            if(skip==2 && sThreaded){
+                /* The same as the scene on the screen: that one stands for
+                 * this frame too (its time and SWAP_BUFFERS count, for what
+                 * the 2D shows with it: NitroPort_Gx3dSameAs), and the next
+                 * in-between scene starts from this frame. */
+                uint32_t g=sSameGen;
+                __atomic_store_n(&sSameGen,g+1u,__ATOMIC_RELEASE);
+                __atomic_thread_fence(__ATOMIC_SEQ_CST);
+                __atomic_store_n(&sSameSerial,sSerial,__ATOMIC_RELAXED);
+                __atomic_store_n(&sSameStamp,sPendingStamp,__ATOMIC_RELAXED);
+                __atomic_store_n(&sSameSeq,sPendingSeq,__ATOMIC_RELAXED);
+                __atomic_store_n(&sSameGen,g+2u,__ATOMIC_RELEASE);
+                if(sLastBgOfsValid){
+                    memcpy(sLastBgOfs,sPendingBgOfs,sizeof(sLastBgOfs));
+                    sLastStamp=sPendingStamp;
+                    sLastSeq=sPendingSeq;
+                }
+            }
             /* Nothing published: the scene being built starts again. */
             sScenes[sBuilding].count=0;
             sScenes[sBuilding].shadow_count=0;
@@ -2945,7 +2974,7 @@ static uint32_t work(uint32_t r,uint32_t end)
     const uint32_t *entry=&sRing[r&RING_MASK];
     uint32_t header=entry[0];
     unsigned op=header&255u;
-    int skip=(header&RING_SKIP)!=0;
+    int skip=(header&RING_SKIP)?((header&RING_SAME)?2:1):0;
     if(op==OP_PACKETS && !skip){
         uint32_t i=0,word=0;
         if(sResume){i=sResumeI;word=sResumeWord;sResume=0;}
@@ -3068,6 +3097,24 @@ void NitroPort_Gx3dThreadWork(uint64_t *swapTicks,uint32_t *vertices,uint32_t *p
 uint32_t NitroPort_Gx3dSameScenesLeftOut(void)
 {
     return sSameLeftOut;   /* (the game's thread's own) */
+}
+int NitroPort_Gx3dSameAs(uint32_t serial,uint32_t *stamp,uint32_t *swapSeq)
+{
+    int tries;
+    for(tries=0;tries<8;tries++){
+        uint32_t g=__atomic_load_n(&sSameGen,__ATOMIC_ACQUIRE),sr,st,sq;
+        if(g==0u || (g&1u))continue;
+        sr=__atomic_load_n(&sSameSerial,__ATOMIC_RELAXED);
+        st=__atomic_load_n(&sSameStamp,__ATOMIC_RELAXED);
+        sq=__atomic_load_n(&sSameSeq,__ATOMIC_RELAXED);
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        if(__atomic_load_n(&sSameGen,__ATOMIC_ACQUIRE)!=g)continue;
+        if(sr!=serial)return 0;
+        if(stamp)*stamp=st;
+        if(swapSeq)*swapSeq=sq;
+        return 1;
+    }
+    return 0;
 }
 void NitroPort_Gx3dThreadStats(uint64_t *busy,uint32_t *scenes,uint32_t *skipped)
 {
@@ -3210,7 +3257,7 @@ void NitroPort_GxFifoWords(const uint32_t *words,size_t count)
                 size_t n=scan_packets(words,count,&swapped);
                 if(n){
                     if(swapped)swap_noted();
-                    enqueue_packets(words,(uint32_t)n,sSkipScene?RING_SKIP:0u);
+                    enqueue_packets(words,(uint32_t)n,sSkipScene?RING_SKIP|(sSkipSame?RING_SAME:0u):0u);
                     words+=n;count-=n;
                     if(swapped)swap_queued();
                     continue;

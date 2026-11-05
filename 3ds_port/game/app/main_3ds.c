@@ -723,6 +723,23 @@ static void GpuComposeLoop(void)
             if(mid==NULL || force){
                 int r;
                 mid=NULL;
+                if(scene){
+                    /* (a battle's start: the scenes after it left out as the
+                     * same, this one stands for the newest of them: their
+                     * frame's 2D, brightness and scrolls go with it, not the
+                     * frame it was made in. Else the screen kept that
+                     * frame's picture while the field stood still: the
+                     * flashes before the slices stuck dark or were missed,
+                     * and the slices stood still, a log of 2026-11-04) */
+                    uint32_t st,sq;
+                    if(NitroPort_Gx3dSameAs(seen,&st,&sq) && (int32_t)(sq-scene->swap_seq)>0){
+                        NitroGx3dScene *same=(NitroGx3dScene *)scene;
+                        same->stamp=st;
+                        same->swap_seq=sq;
+                        same->stamp_before=st;
+                        same->swap_seq_before=sq;
+                    }
+                }
                 r=NitroPort_ComposeFrame(scene,seen,aOnTop,osGet3DSliderState(),force,0,0);
                 sceneDone=scene==NULL || (r&bit) || (!(r&noBuf) && !NitroPort_ComposeSceneWaiting(seen));
             }
