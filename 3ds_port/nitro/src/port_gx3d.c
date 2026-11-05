@@ -492,6 +492,10 @@ static uint16_t sPendingBgOfs[8];
 /* (the scene before's BG scrolls: an in-between scene's are halfway) */
 static uint16_t sLastBgOfs[8];
 static int sLastBgOfsValid;
+/* (on the thread: the SWAP_BUFFERS before was published, or left out as
+ * the same as one that was: the scene on the screen is what the next one
+ * left out as the same stands for) */
+static int sSameChain;
 static uint32_t sLastStamp, sLastSeq, sLastWidth, sLastHeight;   /* (the scene before's) */
 static void io_bg_ofs(uint16_t out[8])
 {
@@ -2278,7 +2282,9 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         sLastSeq=scene->swap_seq;
         sLastWidth=scene->screen_width;sLastHeight=scene->screen_height;
         sLastBgOfsValid=1;
+        sSameChain=0;
         if(NitroPort_MailboxPublish(&sMailbox,&next,&serial)){
+            sSameChain=1;
             sDisplayed=sBuilding;
             sBuilding=(unsigned)next;
             sSerial=serial;
@@ -2563,7 +2569,7 @@ static inline __attribute__((always_inline)) void work_op(unsigned op,const uint
             return;
         }
         if(op==0x50u){
-            if(skip==2 && sThreaded){
+            if(skip==2 && sThreaded && sSameChain){
                 /* The same as the scene on the screen: that one stands for
                  * this frame too (its time and SWAP_BUFFERS count, for what
                  * the 2D shows with it: NitroPort_Gx3dSameAs), and the next
@@ -2581,6 +2587,9 @@ static inline __attribute__((always_inline)) void work_op(unsigned op,const uint
                     sLastSeq=sPendingSeq;
                 }
             }
+            /* (left out for the thread's time: the scene on the screen is
+             * older than the one before this) */
+            if(skip!=2)sSameChain=0;
             /* Nothing published: the scene being built starts again. */
             sScenes[sBuilding].count=0;
             sScenes[sBuilding].shadow_count=0;
@@ -3103,7 +3112,8 @@ int NitroPort_Gx3dSameAs(uint32_t serial,uint32_t *stamp,uint32_t *swapSeq)
     int tries;
     for(tries=0;tries<8;tries++){
         uint32_t g=__atomic_load_n(&sSameGen,__ATOMIC_ACQUIRE),sr,st,sq;
-        if(g==0u || (g&1u))continue;
+        if(g==0u)return 0;   /* (none yet) */
+        if(g&1u)continue;
         sr=__atomic_load_n(&sSameSerial,__ATOMIC_RELAXED);
         st=__atomic_load_n(&sSameStamp,__ATOMIC_RELAXED);
         sq=__atomic_load_n(&sSameSeq,__ATOMIC_RELAXED);

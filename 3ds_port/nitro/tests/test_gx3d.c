@@ -2126,6 +2126,7 @@ static void test_same_scenes_left_out(void)
     NitroPort_Gx3dScene();
     NitroPort_Gx3dThreadStats(NULL,NULL,&skipped0);
     same0=NitroPort_Gx3dSameScenesLeftOut();
+    NitroPort_Gx3dSetInterpolation(1);     /* (for E's in-between scene below) */
     triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();
     triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();
     triangle(0,RGB(31,0,0));swap();NitroPort_Gx3dScene();
@@ -2152,11 +2153,13 @@ static void test_same_scenes_left_out(void)
     CHECK(scene->count==1);
     if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(31,31,0));
     CHECK(NitroPort_Gx3dSameAs(scene->serial,NULL,NULL)==0);   /* (E: left out after it, none) */
-    /* (E's stamp_before: D's frame, the last C stood for) */
+    /* (E's in-between scene from D's frame, the last C stood for) */
     {
         const NitroGx3dScene *m=NitroPort_Gx3dMidOf(scene);
+        CHECK(m!=NULL);
         if(m)CHECK(m->swap_seq_before==scene->swap_seq-1u);
     }
+    NitroPort_Gx3dSetInterpolation(0);
     CHECK(NitroPort_Gx3dSameScenesLeftOut()==same0+1u);
     NitroPort_SetFieldEffect(0);
     triangle(0,RGB(31,31,0));swap();NitroPort_Gx3dScene(); /* F (still looked at), the same as E: G left out */

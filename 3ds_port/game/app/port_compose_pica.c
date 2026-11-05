@@ -237,6 +237,9 @@ typedef struct Screen {
     int texScale;                  /* texels a DS pixel: 2 (sharp, scale2x) or 1 */
     /* What's drawn last: to see whether anything changed. */
     uint32_t shownSeq, shownScene;
+    /* (and that scene's SWAP_BUFFERS count: a scene on the screen standing
+     * for a later frame, NitroPort_Gx3dSameAs, is that frame's) */
+    uint32_t shownSwap3d;
     float shownSlider;
     int shownStereo;
     /* The LCD framebuffers (left and, for the upper screen, right eye),
@@ -4758,7 +4761,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         Screen *scr = &sScreens[s];
         int screen3d = (s == 0) == (aOnTop != 0);   /* engine A's screen: the 3D's */
         LayerSet *set = pick_set(scr, scene, screen3d, mid);
-        int has3d;
+        int has3d, newFrame3d;
 
         if (set == NULL) {
             continue;   /* nothing to show yet */
@@ -4873,7 +4876,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             }
             NitroPort_LowerMenuPanelShown(shownStamp);
         }
-        need[s] = forced || set->seq != scr->shownSeq || (has3d && sceneSerial != scr->shownScene) || (mid && has3d) ||
+        /* (a new 3D frame: a new scene, or the scene on the screen standing
+         * for a later frame, a battle's start's scenes left out as the same:
+         * main_3ds.c) */
+        newFrame3d = sceneSerial != scr->shownScene || (scene != NULL && scene->swap_seq != scr->shownSwap3d);
+        need[s] = forced || set->seq != scr->shownSeq || (has3d && newFrame3d) || (mid && has3d) ||
                   menu[s] != scr->shownMenu || (menu[s] && menuSerial != scr->shownMenuSerial) ||
                   (menu[s] && sMenuFade != scr->shownFade) ||
                   (menu[s] && sMenuPanel == NITRO_LOWERMENU_PANEL_MAP && mapSerial != scr->shownMapSerial) ||
@@ -4881,7 +4888,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                    (runSerial != scr->shownRunSerial || (panelUp != NULL ? panelUp->seq : 0u) != scr->shownUpSeq)) ||
                   (s == 0 && has3d && (stereoNow != scr->shownStereo ||
                                         (stereoNow && slider != scr->shownSlider))) ||
-                  (has3d && !mid && sceneSerial == scr->shownScene && scr->npending == 0 && band_moving());
+                  (has3d && !mid && !newFrame3d && scr->npending == 0 && band_moving());
         /* (the last: a band opening, the scene shown already and nothing
          * of the screen's waiting for its V-blank, drawn again for the next
          * V-blank, its band on; queued after a frame still to show, it
@@ -4894,8 +4901,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
          * by turns, an in-between frame left out for each new picture, 5
          * to 15 a second (a log of 2026-10-30: the people in Eterna
          * seemed to shake as the player walked). */
-        if (need[s] && has3d && !forced && !flush && !mid && sceneSerial != scr->shownScene &&
-            !paired_2d_ready(scene->stamp)) {
+        if (need[s] && has3d && !forced && !flush && !mid && newFrame3d && !paired_2d_ready(scene->stamp)) {
             need[s] = 0;
             sSceneWaiting = 1;
             sSceneWaitingSerial = sceneSerial;
@@ -4903,8 +4909,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         /* A scene or its in-between scene: once the game has noted the
          * frame the DS shows the scene in (frame_note_due), its scrolls,
          * sprites, circle and brightness. */
-        if (need[s] && has3d && !forced && !flush && scene != NULL && sceneSerial != scr->shownScene &&
-            frame_note_due(scene->swap_seq)) {
+        if (need[s] && has3d && !forced && !flush && scene != NULL && newFrame3d && frame_note_due(scene->swap_seq)) {
             need[s] = 0;
             sSceneWaiting = 1;
             sSceneWaitingSerial = sceneSerial;
@@ -4937,7 +4942,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         if (s == 0 && !keptBlack) {
             sUpperShownBright = set->info.displayOff ? -16 : NitroPort_LowerMenuBrightness(set->info.masterBright);
         }
-        if (has3d && sceneSerial != scr->shownScene) {
+        if (has3d && newFrame3d) {
             timed = 1;   /* a new 3D frame: shown at its time */
         }
         if (s == 0 && !has3d) {
@@ -5118,6 +5123,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         scr->shownUpSeq = s == 1 && panelUp != NULL ? panelUp->seq : 0u;
         if (screen3d && !mid) {   /* (an in-between scene: its scene's still to come) */
             scr->shownScene = sceneSerial;
+            scr->shownSwap3d = scene != NULL ? scene->swap_seq : 0u;
             sSceneWaiting = 0;
             if (scene != NULL) {
                 sLastMainSeq = scene->swap_seq;
@@ -5316,7 +5322,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                                   "preparing, %.1f ms building (%lu textures converted: %.1f ms), %.1f ms GPU (the frame "
                                   "before)%s%s",
                                   (int)-slack, slack == -1 ? "" : "s", sLag, (unsigned long)scene->stamp,
-                                  (unsigned long)(sSeenAt - scene->stamp),
+                                  (unsigned long)((int32_t)(sSeenAt - scene->stamp) > 0 ? sSeenAt - scene->stamp : 0u),
                                   (unsigned long)(startVBlank - scene->stamp),
                                   (double)prepareTicks * ms, (double)(gpuStart - start) * ms,
                                   (unsigned long)(texAfter - texBefore),

@@ -1826,7 +1826,12 @@ their frames goes with it, and their brightness and scrolls. Before that
 while the field stood still: the battle start's first flash to black
 stuck dark for three times as long and the second was missed (videos
 against a DS's), and the slices stood still between the camera's steps.
-The next in-between scene starts from the newest of them too. The `[perf] geometry` line counts them (`left out/s
+The next in-between scene starts from the newest of them too. To the
+compositor that's a new 3D frame (the scene's SWAP_BUFFERS count changed:
+`Screen.shownSwap3d`), shown at its time once its 2D and its note are there,
+each in turn after the scene's own frame; only where the scene on the
+screen is the one before those left out (not one left out for the
+thread's time). The `[perf] geometry` line counts them (`left out/s
 (n as the same)`), and a `[perf] geometry's work` line says where its time
 goes: ending scenes (the SWAP: sorting, matching, publishing), and the
 vertices a scene sends, of them those in lists wholly out of the view (not
