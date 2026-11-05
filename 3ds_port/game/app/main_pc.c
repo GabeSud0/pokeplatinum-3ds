@@ -477,7 +477,7 @@ static void RemasterRender(uint16_t *out)
     static NitroGpuObj gpuObj[NITRO_GPU_OBJ_MAX];
     static uint16_t gpuObjAtlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H], sprites[400 * 240];
     int aOnTop = NitroPort_EngineAOnTop() ? 1 : 0;
-    int screen, gpuBg, gpuSign;
+    int screen, gpuBg, gpuSign, objsUnderSign;
 
     memset(out, 0, 320 * 384 * sizeof(out[0]));
     for (screen = 0; screen < 2; screen++) {
@@ -501,7 +501,7 @@ static void RemasterRender(uint16_t *out)
             split.gpuCircle = 1;   /* (a circle fade: drawn over the rest below) */
             split.gpuSpans = 1;    /* (a battle's start's windows: drawn over the rest below) */
             if (NitroPort_GpuSprites()) {
-                split.gpuObjs = 1;
+                split.gpuObjs = NitroPort_GpuSprites();   /* (2: a weather's, behind the sign) */
                 split.gpuObj = gpuObj;
                 split.gpuObjAtlas = gpuObjAtlas;
             }
@@ -522,6 +522,7 @@ static void RemasterRender(uint16_t *out)
         if (gpuSign >= 0 && (split.width > 400 || !NitroPort_Render2DSignPicture(&split, gpuSign, signPicture))) {
             gpuSign = -1;
         }
+        objsUnderSign = split.gpuObjsLeftOut && split.gpuSignLeftOut && split.gpuObjs == 2;
         if (split.gpuObjsLeftOut) {
             /* (the sprites, back to front, onto a layer of their own:
              * colour | 0x8000 where they show) */
@@ -691,6 +692,11 @@ static void RemasterRender(uint16_t *out)
                     }
                     c = m;
                 }
+                /* (a weather's sprites behind the sign: under it, as the
+                 * 3DS's compositor draws them) */
+                if (split.gpuObjsLeftOut && objsUnderSign && (sprites[cy * width + cx] & 0x8000)) {
+                    c = sprites[cy * width + cx] & 0x7FFF;
+                }
                 if (gpuSign >= 0) {
                     /* (the 3DS's compositor: the sign's band, its picture's
                      * line moved up by the BG's scroll: RGBA5551) */
@@ -704,7 +710,7 @@ static void RemasterRender(uint16_t *out)
                         c = (uint16_t)(((b >> 11) & 31) | (((b >> 6) & 31) << 5) | (((b >> 1) & 31) << 10));
                     }
                 }
-                if (split.gpuObjsLeftOut && (sprites[cy * width + cx] & 0x8000)) {
+                if (split.gpuObjsLeftOut && !objsUnderSign && (sprites[cy * width + cx] & 0x8000)) {
                     c = sprites[cy * width + cx] & 0x7FFF;
                 }
                 if (split.gpuSpansOn && (cx < split.spanLo[cy] || cx >= split.spanHi[cy])) {

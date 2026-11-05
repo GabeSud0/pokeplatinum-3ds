@@ -3273,6 +3273,18 @@ static void test_gpu_sign(void)
         memcpy(NitroPort_Oam, obj, sizeof(obj));
         NitroPort_Render2DSplit(0, under, &split);
         CHECK(split.gpuSignLeftOut == 0);
+        /* (a weather's behind it: drawn under it, fine; one in front not) */
+        split.gpuObjs = 2;
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuSignLeftOut == 0);
+        obj[2] = 1 << 10;                   /* priority 1, the 3D's: behind BG3's 0 */
+        memcpy(NitroPort_Oam, obj, sizeof(obj));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuSignLeftOut == 1 << 3);
+        split.gpuObjs = 0;
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuSignLeftOut == 0);
+        obj[2] = 0;
         obj[0] = 220;                       /* y 220: below the tall field's lines (from its 216) */
         memcpy(NitroPort_Oam, obj, sizeof(obj));
         NitroPort_Render2DSplit(0, under, &split);
@@ -3315,6 +3327,133 @@ static void test_gpu_sign(void)
     CHECK(split.gpuSignLeftOut == 0);
     NitroPort_WindowRemoved(&window);
     G2_SetBG3Offset(0, 0);
+}
+
+/* The HM cut-in's band (gpuCircleOn 3) in the rain: the cut-in's sprites in
+ * front of the band's BG and a drop behind it, all left out for the
+ * compositor (the drop under the band: gpuObjsUnderBand); a sprite that
+ * can't be (semi-transparent here) keeps the band and the sprites in the
+ * picture, as the DS has them (in the picture with the band the
+ * compositor's, the drops showed in the band's lines only, 2026-11-05). */
+static void test_band_objs(void)
+{
+    static u8 tiles[64], objTiles[32];
+    static u16 map1[32 * 32], map2[32 * 32];
+    static u16 pltt[16] = { GREY, RED };
+    static u16 pltt1[16] = { 0, GREEN };
+    static u16 objPltt[16] = { 0, BLUE };
+    static uint32_t rgba[256 * 192];
+    static u16 under[256 * 192], over[256 * 192], atlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H];
+    static u8 overAlpha[256 * 192];
+    static GXOamAttr oam[128];
+    static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
+    NitroRender2DSplit split;
+    int i, x = 0, y = 0, r = 0;
+
+    Reset();
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_1D_32K);
+    MakeTile4(tiles + 32, 1);
+    MakeTile4(objTiles, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map1[i] = 1;                  /* (BG1: red everywhere) */
+        map2[i] = 1 | (1 << 12);      /* (BG2: palette 1, green everywhere) */
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    G2_SetBG2ControlText(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0800,
+                         GX_BG_CHARBASE_0x04000);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map1, 0, sizeof(map1));
+    GX_LoadBG2Scr(map2, 0, sizeof(map2));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_LoadBGPltt(pltt1, 32, sizeof(pltt1));
+    GX_LoadOBJ(objTiles, 0, sizeof(objTiles));
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    G2_SetBG0Priority(2);
+    G2_SetBG1Priority(3);             /* (behind the 3D) */
+    G2_SetBG2Priority(1);             /* (in front of it: the band) */
+    for (i = 0; i < 256 * 192; i++) {
+        rgba[i] = 0x404040FFu;
+    }
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));   /* all hidden */
+    G2_SetOBJAttr(&oam[0], 40, 90, 1, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 0, 0);   /* (the cut-in's: in front of the band) */
+    G2_SetOBJAttr(&oam[1], 100, 20, 2, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 0, 0);   /* (a drop: behind its BG) */
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1 | GX_PLANEMASK_BG2 | GX_PLANEMASK_OBJ);
+    G2_SetWnd0Position(0, 64, 255, 128);
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG2 | GX_WND_PLANEMASK_OBJ, FALSE);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_BG0 | GX_WND_PLANEMASK_BG1 | GX_WND_PLANEMASK_OBJ, TRUE);
+    GX_SetVisibleWnd(GX_WNDMASK_W0);
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.gpuObjs = 1;
+    split.gpuObj = objs;
+    split.gpuObjAtlas = atlas;
+    /* (no band the compositor's: the drop behind a BG, all in the picture, as before) */
+    split.gpuCircle = 1;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 0 && split.gpuObjsLeftOut == 0 && split.gpuObjsUnderBand == 0);
+    CHECK(over[22 * 256 + 102] == (BLUE | 0x8000));      /* the drop over the field */
+    /* the band the compositor's: all the sprites left out, the drop under the band */
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.gpuObjs = 1;
+    split.gpuObj = objs;
+    split.gpuObjAtlas = atlas;
+    split.gpuCircle = 3;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 3 && split.gpuCircleY == 64 && split.gpuCircleR == 128);
+    CHECK(split.gpuObjsLeftOut == 1 && split.gpuObjCount == 2);
+    CHECK(split.gpuObjsUnderBand == 1 + 1);              /* (BG2's priority, 1) */
+    CHECK(over[22 * 256 + 102] == (GREEN | 0x8000));     /* (the band's BG all over, not the drop) */
+    CHECK(over[92 * 256 + 42] == (GREEN | 0x8000));      /* (nor the cut-in's) */
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 3 && y == 64 && r == 128);
+    /* their places not a change */
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    G2_SetOBJPosition(&oam[1], 104, 30);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    /* the cut-in's alone (no rain): none under the band, as before */
+    G2_SetOBJAttr(&oam[1], 100, 20, 2, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 0, 0);
+    oam[1].attr0 = (u16)((oam[1].attr0 & ~0x0300) | 0x0200);   /* (hidden) */
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.gpuObjs = 1;
+    split.gpuObj = objs;
+    split.gpuObjAtlas = atlas;
+    split.gpuCircle = 3;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 3 && split.gpuObjsLeftOut == 1 && split.gpuObjsUnderBand == 0);
+    /* a drop that can't be left out (semi-transparent): the band and the
+     * sprites the picture's, the drop over the field */
+    G2_SetOBJAttr(&oam[1], 100, 20, 2, GX_OAM_MODE_XLU, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 0, 0);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.gpuObjs = 1;
+    split.gpuObj = objs;
+    split.gpuObjAtlas = atlas;
+    split.gpuCircle = 3;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn != 3 && split.gpuObjsLeftOut == 0);
+    CHECK(over[22 * 256 + 102] & 0x8000);                /* the drop, in the picture */
+    CHECK(over[92 * 256 + 42] == (BLUE | 0x8000));       /* the cut-in's, in the band */
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) != 3);
+    GX_SetVisibleWnd(GX_WNDMASK_NONE);
 }
 
 /* (the remaster's compositor) Engine A's sprites drawn by the compositor
@@ -3415,6 +3554,21 @@ static void test_gpu_objs(void)
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
     CHECK(NitroPort_Render2DObjPlaces(0, places, NITRO_GPU_OBJ_MAX) == 3);
     CHECK(places[0].x == 64 && places[0].y == 31 && places[0].key == objs[3].key && places[2].x == -4);
+    CHECK(places[0].moved == 0 && places[1].moved == 0);
+    /* (what the game told of each entry: with its place) */
+    {
+        uint8_t told[128] = { 0 };
+        int16_t mx[128] = { 0 }, my[128] = { 0 };
+
+        told[0] = 1, mx[0] = -3, my[0] = 7;
+        told[1] = 2, mx[1] = 5;
+        NitroPort_SetOamMoves(told, mx, my);
+        CHECK(NitroPort_Render2DObjPlaces(0, places, NITRO_GPU_OBJ_MAX) == 3);
+        CHECK(places[0].moved == 1 && places[0].mdx == -3 && places[0].mdy == 7);
+        CHECK(places[1].moved == 2 && places[1].mdx == 0 && places[2].moved == 0);
+        told[0] = told[1] = 0;
+        NitroPort_SetOamMoves(told, mx, my);
+    }
     G2_SetOBJCharName(&oam[0], 1);
     GX_LoadOAM(oam, 0, sizeof(oam));
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
@@ -3574,6 +3728,37 @@ static void test_gpu_objs(void)
         after[0].w = 32;
         n = NitroPort_GpuObjsBetween(before, 1, after, 1, out, 8);
         CHECK(n == 1 && out[0].x == 100 && out[0].key == before[0].key);
+        /* told of by the game (a weather's drops, NitroGpuObj.moved: further
+         * a step than one's found): after's half its move back, one just
+         * come on half the middle move of its kind's; before's not drawn */
+        {
+            NitroGpuObj b2[2], a2[3];
+
+            b2[0] = objs[3];
+            b2[0].x = b2[0].rawX = 100, b2[0].y = b2[0].rawY = 20, b2[0].moved = 1;
+            b2[1] = objs[3];
+            b2[1].x = b2[1].rawX = 300, b2[1].moved = 2;
+            a2[0] = b2[0];
+            a2[0].x = a2[0].rawX = 90, a2[0].y = a2[0].rawY = 80, a2[0].mdx = -10, a2[0].mdy = 60;
+            a2[1] = b2[1];
+            a2[1].x = a2[1].rawX = 292, a2[1].y = a2[1].rawY = 70, a2[1].moved = 1, a2[1].mdx = -8, a2[1].mdy = 40;
+            a2[2] = objs[3];
+            a2[2].x = a2[2].rawX = 50, a2[2].y = a2[2].rawY = 10, a2[2].moved = 2;   /* (come on) */
+            n = NitroPort_GpuObjsBetween(b2, 2, a2, 3, out, 8);
+            CHECK(n == 3);
+            CHECK(out[0].x == 54 && out[0].y == -20);    /* (-8, 60: the middle of -10, -8 and of 40, 60) */
+            CHECK(out[1].x == 296 && out[1].y == 50);
+            CHECK(out[2].x == 95 && out[2].y == 50);
+            /* none before: as they are */
+            n = NitroPort_GpuObjsBetween(b2, -1, a2, 3, out, 8);
+            CHECK(n == 3 && out[0].x == 50 && out[2].x == 90 && out[2].y == 80);
+            /* one not told of isn't found among those told of */
+            b2[0].moved = 0;
+            a2[0].moved = 1;
+            a2[0].x = a2[0].rawX = 104, a2[0].y = a2[0].rawY = 20, a2[0].mdx = 30, a2[0].mdy = 0;
+            n = NitroPort_GpuObjsBetween(b2, 1, a2, 1, out, 8);
+            CHECK(n == 2 && out[0].x == 89 && out[1].x == 100);   /* (after's 15 back; before's, on its own, where it is) */
+        }
     }
 
     /* not all in front of everything: drawn in the picture */
@@ -3590,6 +3775,29 @@ static void test_gpu_objs(void)
     GX_LoadOAM(oam, 0, sizeof(oam));
     NitroPort_Render2DSplit(0, under, &split);
     CHECK(split.gpuObjsLeftOut == 1);
+    /* a weather's (gpuObjs 2): a BG in front of them showing nothing doesn't
+     * count (the message box's, closed); one showing something does */
+    {
+        static u16 blank[32 * 32];
+
+        G2_SetOBJPriority(&oam[1], 2);      /* behind BG2 */
+        GX_LoadOAM(oam, 0, sizeof(oam));
+        split.gpuObjs = 2;
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuObjsLeftOut == 0);
+        memset(blank, 0, sizeof(blank));
+        GX_LoadBG2Scr(blank, 0, sizeof(blank));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuObjsLeftOut == 1 && split.gpuObjCount == 4);
+        split.gpuObjs = 1;
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuObjsLeftOut == 0);   /* (the cut-in's as before) */
+        GX_LoadBG2Scr(map, 0, sizeof(map));
+        G2_SetOBJPriority(&oam[1], 0);
+        GX_LoadOAM(oam, 0, sizeof(oam));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuObjsLeftOut == 1);
+    }
     /* a window: shown inside and outside it, fine; hidden outside: drawn */
     GX_SetVisibleWnd(GX_WNDMASK_W0);
     G2_SetWnd0Position(0, 40, 128, 100);
@@ -5216,6 +5424,7 @@ int main(int argc, char **argv)
     test_window_circle();
     test_window_rows();
     test_bg_rows();
+    test_band_objs();
     test_wide_map_past_edges();
     test_gpu_bg();
     test_gpu_sign();

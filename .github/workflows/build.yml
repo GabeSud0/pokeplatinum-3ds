@@ -17,6 +17,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The port's version on the title screen (3ds_port/game/Makefile's
+      # PORT_VERSION; there's no git history here to name the commit): a
+      # release's tag, else dev- and the commit (a pull request's own).
+      - name: The port's version
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="$GITHUB_REF_NAME"; else v="dev-${HEAD_SHA::7}"; fi
+          echo "PORT_VERSION=$v" >> "$GITHUB_ENV"
+          echo "The port's version: $v"
+
       - name: Install Python and Git
         run: |
           command -v python3 >/dev/null && command -v git >/dev/null || {

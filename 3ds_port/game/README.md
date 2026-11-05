@@ -54,7 +54,8 @@ ported.
    plays the port's own chime when the game is highlighted
    ([`cia/chime.wav`](cia/chime.wav): original music, 2.95 s, under the HOME
    Menu's 3-second limit); `CHIME=path/to/other.wav` uses another one with
-   the flat banner.
+   the flat banner. As it starts it shows the 3DS's own splash ("Nintendo
+   3DS": [`cia/pokeplatinum.rsf`](cia/pokeplatinum.rsf)'s `Logo`, makerom's).
 
    **On Windows**, use devkitPro's MSYS2 terminal (Start menu → devkitPro →
    MSYS2). [`tools/build_windows_msys2.sh`](../../tools/build_windows_msys2.sh)
@@ -309,6 +310,14 @@ generated the same way, into `build/` (never committed):
   addresses that low).
 - Like Meson, the folders of generated headers are on the include path
   (some files include `"ending.naix"` by bare name).
+- **The port's version** (`build/<target>/gen/port_version.h`), written
+  where the title screen has "Developed by GAME FREAK inc." on the DS (patch
+  `0081`): `git describe --tags --always --dirty` of the port (a release's
+  tag alone, as `v0.1.1`; else the tag before, the commits since and the
+  commit, as `v0.1.0-alpha.1-154-g4f7152a`), or
+  `PORT_VERSION=...` given to `make` (the CI gives a release's tag, else
+  `dev-` and the commit: it has no git history). Written only when it
+  changes, for `title_screen.c` alone.
 
 ## How it's built
 

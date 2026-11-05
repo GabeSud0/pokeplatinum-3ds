@@ -31,12 +31,16 @@ extern "C" {
  * (NITRO_GPU_OBJ_ATLAS_W x _H, RGBA5551: red in the top bits, 0 where
  * it's clear; unflipped). What it is (key: OAM's attributes but its place)
  * and where OAM has it (rawX 0-511, rawY 0-255) find it again in another
- * frame's OAM (NitroPort_GpuObjHalfway). */
+ * frame's OAM (NitroPort_GpuObjHalfway). What the game told of what it's of
+ * (moved, NitroPort_SetOamMoves: 1 moved mdx, mdy pixels since the frame
+ * before; 2 just come on; 0 nothing). */
 typedef struct NitroGpuObj {
     uint32_t key;
     short x, y, rawX, rawY;
     uint8_t w, h, hflip, vflip;
     uint16_t ax, ay;
+    short mdx, mdy;
+    uint8_t moved;
 } NitroGpuObj;
 #define NITRO_GPU_OBJ_MAX 128
 #define NITRO_GPU_OBJ_ATLAS_W 256
@@ -71,6 +75,12 @@ typedef struct NitroRender2DSplit {
      * (their pixels into gpuObjAtlas). */
     int gpuObjsLeftOut;
     int gpuObjCount;
+    /* (with gpuCircleOn 3, the sprites left out) Those behind the band's BG
+     * (their OAM priority above the BG's: a weather's drops under the HM
+     * cut-in's band, which hides them where it isn't clear): 1 + the BG's
+     * priority, the compositor drawing them before the band, over the rest,
+     * and the others after it; 0 none behind it (all in front of it all). */
+    int gpuObjsUnderBand;
     /* (asked for with gpuCircle, below) A circle fade's window left out
      * of the picture for the compositor to draw (1): the picture drawn as
      * inside it everywhere; outside it the backdrop (gpuCircleColor,
@@ -174,8 +184,10 @@ typedef struct NitroRender2DSplit {
      * out of the picture (gpuObjsLeftOut) when they're all in front of
      * everything, as the DS draws them anyway: normal sprites (not
      * affine, semi-transparent, a window's or a bitmap; no mosaic), none
-     * behind a BG, all shown inside and outside the windows, no colour
-     * effect on them, no H-blank effect, their pixels fitting the atlas.
+     * behind a BG (but the BG of a band the compositor draws, gpuCircleOn
+     * 3: gpuObjsUnderBand), all shown inside and outside the windows, no
+     * colour effect on them, no H-blank effect, their pixels fitting the
+     * atlas.
      * Their places then don't count as a change
      * (NitroPort_Render2DSplitIfChanged): the picture isn't drawn again as
      * they move. The caller's choice, kept by the call. */
@@ -309,8 +321,17 @@ void NitroPort_SetBgFineScroll(int bg, int32_t hofs, int32_t vofs);
  * in OAM order: how many (at most max), or -1 when no picture has left
  * them out since they were last drawn in one. */
 int NitroPort_Render2DObjPlaces(int engine, NitroGpuObj *out, int max);
+/* (the game's thread, as it hands engine A's OAM over: render_oam.c) Each
+ * OAM entry's move since the frame before, as the game moved what it's of
+ * (a weather's drop: told[i] 1, dx[i] and dy[i] pixels; 2 just come on; 0
+ * nothing told), for the places (NitroPort_Render2DObjPlaces:
+ * NitroGpuObj.moved). */
+void NitroPort_SetOamMoves(const uint8_t told[128], const int16_t dx[128], const int16_t dy[128]);
 /* The sprites to draw in the frame between two frames (before and after:
- * NitroPort_Render2DObjPlaces), each where it is halfway: each sprite of
+ * NitroPort_Render2DObjPlaces), each where it is halfway: one the game told
+ * of (NitroGpuObj.moved: a weather's drop) after's half its move back (just
+ * come on, half the usual move of its kind's), before's not drawn; each
+ * other sprite of
  * before found in after (the nearest of its kind, at most 96 pixels across
  * and 32 down away, OAM's x going round 512 and its y 256; the nearest of
  * its kind in before as well; else, its picture changed, the nearest of its

@@ -1025,7 +1025,26 @@ screen's 320 x 192 at 1.25 times, as above.
   moves (the player or a free camera set walking, `MoveCamera`). On the
   PC the rival comes in from beyond the top and runs off past it (3 tiles
   more each way).
-- Still to do: weather sprites (rain, snow) only on the DS's lines.
+- The weather's sprites (patch 0080, 2026-11-05): the rain's drops, the
+  snow's flakes, the sand live on the DS's screen with 64 pixels round it
+  (they come on there, go off one side and on at the other:
+  `ov5_021D630C`), and the weather's sprite surface showed only those on
+  the DS's 256 x 192, so on the taller field the weather was in the DS's
+  part of it alone. With the screen wider or taller
+  (`NitroPort_EngineABeside`; 0 and 0 on the DS's, all as before): the
+  surface shows its cells on the whole picture
+  (`RenderOam_PortInitSurfaceBeside`); they go round the wider screen with
+  64 pixels round it (`ov5_PortPlaceWide`); each comes on where the game
+  puts it on the DS's screen stretched onto the wider one, or as far
+  beside it as the game has it beside the DS's (its first place after
+  `ov5_021D6F00`); more come on for the wider screen's area, width or
+  height, as each weather brings them on all over, along the top or down
+  the side (`ov5_PortWeatherCount`; the pool of 48 as before); and they're
+  taken away as far below or above it as below or above the DS's. On the
+  PC on Route 215 (`dbgweather`, local), every sprite weather over the
+  whole 400 x 240, as many to a part of it as on the DS's (rain about 35
+  OAM entries, heavy rain 61 at most, of 124); the BG weathers (clouds,
+  fog, Flash's dark) already were.
 
 ## The soft reset
 
@@ -1578,10 +1597,16 @@ screens) the lower screen is the DS's, filling the screen as before.
     the player (a script's walk; out again when the player is theirs
     again: scenes where it stays out may come later), when someone walks
     onto its tile in a script (a person coming up behind the player: the
-    two stood in each other, 2026-10-29), and while the
-    player jumps down a ledge (the
-    follow code moves a tile a step behind and can't keep up with the
-    jump): out again where they stop, or, the player walking on, behind
+    two stood in each other, 2026-10-29). Down a ledge it jumps after the
+    player (patch 0078, 2026-11-05): its way is the player's tiles as
+    they go, the ledge's left out (`PortFollower_NoteTrail`; the follow
+    code took it to the tile the player left, the ledge's own halfway
+    through their jump), so as they jump it walks to where they jumped
+    from, and as they go on it jumps down after them, 2 tiles in their
+    step's time (8 frames walking, 4 running: `PortFollower_JumpFrames`),
+    behind them as before. Where it can't (not by that tile as they jump,
+    or a 3 tiles' jump) it goes into its ball while they jump: out again
+    where they stop, or, the player walking on, behind
     them as they go, growing out of nothing without its ball (which would
     be left behind), not waiting for them to stop. Its graphics IDs from 0x4000, past
     the berry trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000). Its
@@ -2191,6 +2216,46 @@ mid 2, the scene's own 3D, as for a fade or a band: `fades_changed`) is
 now drawn when the sprites moved too (`objs_moved`), them halfway from the
 last scene shown's frame (`draw_gpu_objs` by `frame_before`).
 
+The weather's drops (2026-11-05, patch 0079): the rain's drops are
+sprites the game moves every step, so the upper screen's picture was drawn
+whole for each, about 9 ms on the geometry's core on Route 215: 15 pictures
+a second at most (each taking ~60 ms to show), the rain going at 15 and the
+field held up as it began (log da31452d). While a weather with sprites
+plays (`ov5_021D676C` starts it, `ov5_021D69B8` and `ov5_021D68B8` end it:
+`NitroPort_SetWeatherSprites`), `NitroPort_GpuSprites` is 2 and its
+sprites are drawn by the compositor as the cut-in's are, with two
+differences in `GpuObjsOf`: a BG showing nothing doesn't count as in front
+of them (the message box's BG3, closed, `BgTextBlank`), nor the place name
+sign the compositor draws (`signBg`): each drop behind the sign then, and
+the sign drawn over them (`ComposeLayers.gpuObjsUnderSign`: step 5b before
+5a). With a text box up they're in the picture, as before. They don't go
+with the windows (`Engine.objsStay`: the sign's window moved to the tall
+field's top, the drops over it went too), and a refusal (`sGpuObjsRefused`)
+is tried again each picture, as the rain goes on for minutes.
+
+So that they fall at 60 frames a second, where the game moves them 30
+times: the drops live a step or two and fall 20 to 118 pixels a step, no
+sprite found again as the cut-in's are. So the game tells each one's move:
+the weather's sprite list (`SpriteList_PortNoteMoves`) notes in
+`SpriteList_Update` each sprite's place against where it was drawn in the
+list's step before, `RenderOam_PortSetMove` ties it to the main screen's
+OAM entries it adds, handed over with OAM (`RenderOam_Transfer`:
+`NitroPort_SetOamMoves`, then `NitroGpuObj.moved` with the places). In an
+in-between frame each is drawn half its move back, one just come on half
+the middle move of its kind's, the frame before's not drawn
+(`NitroPort_GpuObjsBetween`). On the PC, in the rain on Route 215: every
+drop left out and told of, each told move the place it had in the frame
+before (`[raindbg]`, local).
+
+The place name sign in the rain (2026-11-05): the sign is drawn by the
+compositor only with no sprite shown (`GpuSignOf`), and that's worked out
+both for the picture and for each frame's notes
+(`NitroPort_Render2DSignNow`). As the rain began the drops came and went,
+so the sign was drawn in the picture in one frame and by the compositor in
+the next, out of step with each other. Now a weather's sprites behind the
+sign don't keep it in the picture (`gpuObjs` 2, the sprite's priority
+below the BG's): the sign stays the compositor's, over the drops.
+
 The cut-in's band opening and closing (2026-11-01): a window, window 0
 alone across the DS's screen, its lines (WIN0V) 5 to 13 further each side
 a step, every other frame; inside it BG3 alone of the BGs (the band, a
@@ -2252,6 +2317,29 @@ in-between frames, the band's backdrop and BG drawn in them only
 (`bg_band_rows`). And the frame the window comes on in, showing nothing
 yet (lines 192 to 192) with the message box still up, keeps the fog the
 compositor's (`GpuBgEmptyWindowOf`: everything as outside the window).
+
+The band in the rain (2026-11-05): the drops are sprites behind the
+band's BG (priority 1 to its 0), so `GpuObjsOf` said the sprites couldn't
+be left out, while `GpuBgRowsOf` had already taken the band as the
+compositor's on the promise that they would be (`GpuBandObjsOut`). So the
+sprites were in the picture, in the layer in front of the 3D, and the
+compositor shows that layer in the band's lines only: over the field the
+drops were gone, and in the band they were drawn into the band's layer,
+where the DS's band hides them (a report of 2026-11-05: the drops went
+dark through the cut-in). Now the band's BG doesn't count as in front of
+the sprites (`GpuObjsOf`'s `bandBg`, the BG `GpuBgRowsOf` found:
+`Engine.rowsBg`), so they're left out with the band, and those behind its
+BG (`NitroRender2DSplit.gpuObjsUnderBand`: 1 + its priority) are drawn by
+the compositor before the band (over the field and the band's backdrop,
+under its BG, which hides them where it isn't clear, as the DS has them;
+not cut as the band closes), the cut-in's after it, as before. And the
+band is the compositor's with the sprites drawn by it only when they can
+be left out with it (`GpuBandRowsOf`, for the picture, its change check
+and `NitroPort_Render2DCircleNow` alike); else the band and the sprites
+are the picture's, as the DS has them. Without rain the cut-in is as it
+was (on the PC through a real Cut in Eterna City: the band's and sprites'
+choices the same frame by frame, old and new). In `test_render.c`:
+`test_band_objs`.
 
 Eterna Forest's light finer than a pixel (patch 0061, 2026-10-31): the
 game keeps the clouds' place finer than a pixel as they follow the camera,

@@ -10,10 +10,12 @@
 # homebrew). Like any homebrew title it needs custom firmware (Luma3DS) to
 # install and run.
 
+# Logo: the splash as the title starts, the 3DS's own ("Nintendo 3DS"; it
+# was makerom's homebrew one).
 BasicInfo:
   Title                   : "PokePlatinum"
   ProductCode             : "CTR-H-PPLT"
-  Logo                    : Homebrew
+  Logo                    : Nintendo
 
 TitleInfo:
   Category                : Application

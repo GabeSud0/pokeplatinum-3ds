@@ -1763,7 +1763,8 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
                 static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
                 static uint16_t atlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H];
 
-                split.gpuObjs = 1;
+                /* (and a weather's drops: 2, behind the place name sign) */
+                split.gpuObjs = NitroPort_GpuSprites();
                 split.gpuObj = objs;
                 split.gpuObjAtlas = atlas;
             }
@@ -1880,6 +1881,8 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             layers->gpuSignPicture = signValid ? signPicture : NULL;
         }
         layers->gpuObjCount = split.gpuObjsLeftOut ? split.gpuObjCount : -1;
+        layers->gpuObjsUnderSign = split.gpuObjsLeftOut && split.gpuSignLeftOut && split.gpuObjs == 2;
+        layers->gpuObjsUnderBand = split.gpuObjsLeftOut && split.gpuCircleOn == 3 ? split.gpuObjsUnderBand : 0;
         layers->gpuCircle = split.gpuCircleOn;
         layers->gpuCircleX = split.gpuCircleX;
         layers->gpuCircleRight = split.gpuCircleRight;
