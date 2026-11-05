@@ -1,0 +1,314 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 12:30:00 -0700
+Subject: [PATCH] The weather's drops drawn by the compositor, at 60 frames a second (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The rain's drops are sprites the game moves every step, so the upper
+screen's picture was drawn whole for each: about 9 ms on the geometry's
+core on Route 215, 15 pictures a second at most, the rain going at 15
+and the field held up as it began.
+
+While a weather with sprites plays (ov5_021D676C starts it, ov5_021D69B8
+and ov5_021D68B8 end it) the port is told (NitroPort_SetWeatherSprites),
+and the remaster's compositor draws them itself over the picture, which
+isn't drawn again as they fall (NitroPort_GpuSprites 2).
+
+So that they fall at 60 frames a second too, where the game moves them
+30 times, the weather's sprite list tells each sprite's move since its
+last step with its OAM entries (SpriteList_PortNoteMoves: in
+SpriteList_Update, each sprite's place against where it was drawn in the
+list's step before; RenderOam_PortSetMove ties it to the main screen's
+entries it adds, handed over with OAM in RenderOam_Transfer:
+NitroPort_SetOamMoves). In the in-between frames each drop is drawn half
+its move back. Every other sprite list as before.
+
+---
+diff --git a/include/render_oam.h b/include/render_oam.h
+index a633190c..a757907f 100644
+--- a/include/render_oam.h
++++ b/include/render_oam.h
+@@ -27,6 +27,13 @@ void RenderOam_Init(int mainOamStart,
+     int subAffineOamCount,
+     enum HeapID heapID);
+ void RenderOam_InitSurface(NNSG2dRenderSurface *surface, NNSG2dViewRect *viewRect, NNSG2dSurfaceType surfaceType, NNSG2dRendererInstance *renderer);
++#ifdef SDK_PORT_3DS
++// (the 3DS remaster: SpriteList_PortNoteMoves) The main screen's OAM entries
++// added from now on are of what moved dx, dy pixels since the frame before
++// (told 1), or of what's just come on (2), or nothing's told of them (0):
++// told the compositor as OAM is handed over (RenderOam_Transfer).
++void RenderOam_PortSetMove(int told, int dx, int dy);
++#endif
+ 
+ void RenderOam_Transfer(void);
+ void RenderOam_Free(void);
+diff --git a/include/sprite.h b/include/sprite.h
+index 77f95a4d..3133151d 100644
+--- a/include/sprite.h
++++ b/include/sprite.h
+@@ -75,6 +75,12 @@ typedef struct Sprite {
+     enum NNS_G2D_VRAM_TYPE vramType;
+     struct Sprite *prev;
+     struct Sprite *next;
++#ifdef SDK_PORT_3DS
++    // (the 3DS remaster: SpriteList_PortNoteMoves) Where it was drawn last,
++    // in pixels, and in which of its list's steps (0: not yet).
++    int portX, portY;
++    u32 portStep;
++#endif
+ } Sprite;
+ 
+ struct SpriteList {
+@@ -87,6 +93,10 @@ struct SpriteList {
+     void *rawAnimData;
+     NNSG2dCellAnimBankData *defaultAnimBank;
+     BOOL active;
++#ifdef SDK_PORT_3DS
++    BOOL portMoves; // (SpriteList_PortNoteMoves)
++    u32 portStep;   // (its steps drawn, SpriteList_Update)
++#endif
+ };
+ 
+ typedef struct SpriteListParams {
+@@ -145,6 +155,13 @@ BOOL SpriteList_Delete(SpriteList *collection);
+ BOOL SpriteList_SetActive(SpriteList *collection, u8 active);
+ BOOL SpriteList_DeleteAll(SpriteList *collection);
+ void SpriteList_Update(const SpriteList *collection);
++#ifdef SDK_PORT_3DS
++// (the 3DS remaster) The list's sprites' moves since its last step told with
++// their OAM entries (RenderOam_PortSetMove): the compositor draws them
++// halfway along it in the in-between frames, at 60 frames a second (the
++// weather's drops, moved 30 times).
++void SpriteList_PortNoteMoves(SpriteList *list);
++#endif
+ void Sprite_Reset(Sprite *sprite);
+ Sprite *SpriteList_AddAffine(const AffineSpriteListTemplate *template);
+ Sprite *SpriteList_Add(const SpriteListTemplate *template);
+diff --git a/src/overlay005/ov5_021D5EB8.c b/src/overlay005/ov5_021D5EB8.c
+index 5dc5606d..dad67ed7 100644
+--- a/src/overlay005/ov5_021D5EB8.c
++++ b/src/overlay005/ov5_021D5EB8.c
+@@ -2,6 +2,7 @@
+ 
+ #ifdef SDK_PORT_3DS
+ extern void NitroPort_RepeatingBg(int bg, int on);
++extern void NitroPort_SetWeatherSprites(int on);
+ #endif
+ 
+ #include <nitro.h>
+@@ -768,6 +769,29 @@ static UnkStruct_ov5_021D69B8 Unk_ov5_02201D78[31] = {
+     { 0xffff, 0xffff, sizeof(UnkStruct_ov5_021D84D4), NULL, NULL, 0x0, 0x0, NULL, ov5_021DB48C }
+ };
+ 
++#ifdef SDK_PORT_3DS
++// (the 3DS remaster: while a weather with sprites plays, the rain's drops,
++// the snow's flakes, the compositor draws them itself, the picture not drawn
++// again as they fall: NitroPort_GpuSprites) The weathers playing so, a bit
++// each.
++static u32 sPortWeatherSprites;
++
++static void ov5_PortWeatherSprites(int weather, BOOL on)
++{
++    if (weather < 0 || weather >= 31) {
++        return;
++    }
++
++    if (on) {
++        sPortWeatherSprites |= 1u << weather;
++    } else {
++        sPortWeatherSprites &= ~(1u << weather);
++    }
++
++    NitroPort_SetWeatherSprites(sPortWeatherSprites != 0);
++}
++#endif
++
+ static void ov5_021D61D0(UnkStruct_ov5_021D61D0 *param0)
+ {
+     NNSG2dViewRect v0;
+@@ -803,6 +827,11 @@ static void ov5_021D61D0(UnkStruct_ov5_021D61D0 *param0)
+         v3.heapID = HEAP_ID_FIELD1;
+ 
+         param0->unk_130 = SpriteList_New(&v3);
++#ifdef SDK_PORT_3DS
++        // (the 3DS remaster: the drops' moves told with them, the rain at 60
++        // frames a second in the compositor's in-between frames)
++        SpriteList_PortNoteMoves(param0->unk_130);
++#endif
+         param0->unk_134 = SysTask_Start(ov5_021D6284, param0, 10);
+     }
+ }
+@@ -1161,6 +1190,11 @@ static BOOL ov5_021D676C(UnkStruct_ov5_021D6594 *param0, int param1, int param2,
+     }
+ 
+     v0->unk_10 = 3;
++#ifdef SDK_PORT_3DS
++    if (v0->unk_00 != 0xffff) {
++        ov5_PortWeatherSprites(param1, TRUE);
++    }
++#endif
+     v0->unk_08->unk_BA2 = param2;
+     v0->unk_08->unk_BA6 = 0;
+     v0->unk_08->unk_0C.unk_34 = &v0->unk_08->unk_0C;
+@@ -1216,6 +1250,10 @@ static void ov5_021D68B8(UnkStruct_ov5_021D6594 *param0, int param1)
+ {
+     UnkStruct_ov5_021D69B8 *v0 = param0->unk_00 + param1;
+ 
++#ifdef SDK_PORT_3DS
++    ov5_PortWeatherSprites(param1, FALSE);
++#endif
++
+     if (v0->unk_02 != 0xffff) {
+         GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG2, 0);
+ 
+@@ -1294,6 +1332,9 @@ static void ov5_021D69B8(UnkStruct_ov5_021D69B8 *param0)
+         if (param0->unk_10 == 3) {
+             SysTask_Done(param0->unk_08->unk_B88);
+             param0->unk_10 = 2;
++#ifdef SDK_PORT_3DS
++            ov5_PortWeatherSprites((int)(param0 - Unk_ov5_02201D78), FALSE);
++#endif
+         }
+     }
+ }
+diff --git a/src/render_oam.c b/src/render_oam.c
+index b8ce2f45..9b9d81ff 100644
+--- a/src/render_oam.c
++++ b/src/render_oam.c
+@@ -10,7 +10,11 @@
+ #include "sprite.h"
+ 
+ #ifdef SDK_PORT_3DS
++#include <string.h>
++
+ #include "port_wide_layout.h"
++
++extern void NitroPort_SetOamMoves(const u8 *told, const s16 *dx, const s16 *dy);
+ #endif
+ 
+ #define NUM_HW_OAM_ATTR            128
+@@ -116,10 +120,31 @@ static void InitOamManager(int mainOamStart, int mainOamCount, int mainAffineOam
+     GF_ASSERT(NNS_G2dGetNewOamManagerInstance(&sOamManager->subScreenOam, subOamStart, subOamCount, subAffineOamStart, subAffineOamCount, NNS_G2D_OAMTYPE_SUB));
+ }
+ 
++#ifdef SDK_PORT_3DS
++// (RenderOam_PortSetMove) The move of what the main screen's entries added
++// now are of, and each entry's of this frame (none: not told).
++static u8 sPortMoveTold;
++static s16 sPortMoveX, sPortMoveY;
++static u8 sPortMovesTold[NUM_HW_OAM_ATTR];
++static s16 sPortMovesX[NUM_HW_OAM_ATTR], sPortMovesY[NUM_HW_OAM_ATTR];
++
++void RenderOam_PortSetMove(int told, int dx, int dy)
++{
++    sPortMoveTold = (u8)told;
++    sPortMoveX = (s16)dx;
++    sPortMoveY = (s16)dy;
++}
++#endif
++
+ void RenderOam_Transfer(void)
+ {
+     if (sOamManager) {
+         NNS_G2dApplyAndResetOamManagerBuffer(&sOamManager->mainScreenOam);
++#ifdef SDK_PORT_3DS
++        // (with the entries, what each is of moved: the compositor's)
++        NitroPort_SetOamMoves(sPortMovesTold, sPortMovesX, sPortMovesY);
++        memset(sPortMovesTold, 0, sizeof(sPortMovesTold));
++#endif
+         NNS_G2dApplyAndResetOamManagerBuffer(&sOamManager->subScreenOam);
+     }
+ }
+@@ -171,6 +196,17 @@ static BOOL AddToMainOamManager(const GXOamAttr *oam, u16 affineIdx, BOOL unused
+ {
+     BOOL result = NNS_G2dEntryOamManagerOamWithAffineIdx(&sOamManager->mainScreenOam, oam, affineIdx);
+     GF_ASSERT(result);
++#ifdef SDK_PORT_3DS
++    if (result) {
++        u16 idx = sOamManager->mainScreenOam.managedAttrArea.currentIdx - 1;
++
++        if (idx < NUM_HW_OAM_ATTR) {
++            sPortMovesTold[idx] = sPortMoveTold;
++            sPortMovesX[idx] = sPortMoveX;
++            sPortMovesY[idx] = sPortMoveY;
++        }
++    }
++#endif
+     return result;
+ }
+ 
+diff --git a/src/sprite.c b/src/sprite.c
+index 7c2b16bb..b8708970 100644
+--- a/src/sprite.c
++++ b/src/sprite.c
+@@ -6,6 +6,10 @@
+ #include "heap.h"
+ #include "system.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "render_oam.h"
++#endif
++
+ typedef void (*SpriteDrawFunc)(const SpriteList *, Sprite *);
+ typedef void (*SpriteAnimUpdateFunc)(Sprite *);
+ 
+@@ -142,13 +146,46 @@ void SpriteList_Update(const SpriteList *list)
+ 
+     Sprite *sprite = list->sentinelData.next;
+ 
++#ifdef SDK_PORT_3DS
++    if (list->portMoves) {
++        ((SpriteList *)list)->portStep++;
++    }
++#endif
++
+     while (sprite != &list->sentinelData) {
++#ifdef SDK_PORT_3DS
++        // (each sprite's move since the list's last step, drawn in that one
++        // too, with its OAM entries; one not drawn then, just come on: 2)
++        if (list->portMoves && sprite->draw) {
++            int x = sprite->position.x >> FX32_SHIFT, y = sprite->position.y >> FX32_SHIFT;
++            int dx = x - sprite->portX, dy = y - sprite->portY;
++            BOOL known = sprite->portStep != 0 && sprite->portStep + 1 == list->portStep && dx >= -128 && dx <= 128
++                && dy >= -128 && dy <= 128;
++
++            RenderOam_PortSetMove(known ? 1 : 2, dx, dy);
++            sprite->portX = x;
++            sprite->portY = y;
++            sprite->portStep = list->portStep;
++        }
++#endif
+         sDrawFuncs[sprite->draw](list, sprite);
++#ifdef SDK_PORT_3DS
++        if (list->portMoves) {
++            RenderOam_PortSetMove(0, 0, 0);
++        }
++#endif
+         sAnimUpdateFuncs[sprite->animate](sprite);
+         sprite = sprite->next;
+     }
+ }
+ 
++#ifdef SDK_PORT_3DS
++void SpriteList_PortNoteMoves(SpriteList *list)
++{
++    list->portMoves = TRUE;
++}
++#endif
++
+ static void SpriteList_Reset(SpriteList *list)
+ {
+     list->sprites = NULL;
+@@ -159,6 +196,10 @@ static void SpriteList_Reset(SpriteList *list)
+ 
+     Sprite_Reset(&list->sentinelData);
+     list->active = FALSE;
++#ifdef SDK_PORT_3DS
++    list->portMoves = FALSE;
++    list->portStep = 0;
++#endif
+ }
+ 
+ void Sprite_Reset(Sprite *sprite)

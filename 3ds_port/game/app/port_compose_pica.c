@@ -4205,6 +4205,32 @@ static int draw_slices(const Screen *scr, int eye, const LayerSet *set, const Sl
     return drawn;
 }
 
+/* (draw_screen's step 5b) Engine A's sprites the compositor draws
+ * (ComposeLayers.gpuObjCount), when there are: cut to a BG's band where
+ * one's closing (its lines bandY to bandR - 1, of rows). */
+static void draw_gpu_objs_step(const ComposeLayers *info, const LayerSet *set, const NitroGx3dScene *scene,
+                               const PicaRect *pic, float scale, int rows, int bandY, int bandR, int linear)
+{
+    if (info->gpuObjCount >= 0 && set->objTex && set->objCount > 0) {
+        /* (a BG's band closing, or closed further than the game has it
+         * (bg_band_rows: going on closing as the game holds it): the
+         * sprites in it only, the cut-in's wind and Pokemon closed away
+         * with it; over the field the dots and the Pokemon's parts
+         * showed for a few frames after it closed, 2026-11-01) */
+        sObjClip.on = info->gpuCircle == 3 &&
+                      (sBgBand.vTop > 0.0f || sBgBand.vBottom > 0.0f || sBgBand.y > (float)sBgBand.wantY + 0.5f ||
+                       sBgBand.r < (float)sBgBand.wantR - 0.5f);
+        if (sObjClip.on) {
+            sObjClip.y0 = pic->y0 + (float)(sConfig.flipV ? rows - bandR : bandY) * scale;
+            sObjClip.y1 = pic->y0 + (float)(sConfig.flipV ? rows - bandY : bandR) * scale;
+        }
+        if (!sObjClip.on || sObjClip.y1 > sObjClip.y0) {
+            draw_gpu_objs(set, scene, pic, scale, (pic->y1 - pic->y0) / (float)rows, linear);
+        }
+        sObjClip.on = 0;
+    }
+}
+
 static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx3dScene *scene, float stereo,
                         int edges, int underCleared)
 {
@@ -4558,6 +4584,11 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         if (info->gpuSpansOn && info->scroll3dLines) {
             draw_window_edges(info, sliced ? &sLinesShown : &sLinesPicture, &pic, top, scale, canvasW);
         }
+        /* (a weather's sprites behind the place name sign: drawn under it,
+         * as the DS has them; 5b) */
+        if (info->gpuObjsUnderSign) {
+            draw_gpu_objs_step(info, set, scene, &pic, scale, rows, bandY, bandR, linear);
+        }
         /* 5a. A band of a BG drawn here, in front of the rest (the place
          * name sign: ComposeLayers.gpuSign), moved up by the BG's vertical
          * scroll in the frame the DS shows the scene in, halfway from the
@@ -4629,24 +4660,10 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             }
         }
         /* 5b. Engine A's sprites drawn here (ComposeLayers.gpuObjCount: the
-         * HM cut-in's), in front of it all. */
-        if (info->gpuObjCount >= 0 && set->objTex && set->objCount > 0) {
-            /* (a BG's band closing, or closed further than the game has it
-             * (bg_band_rows: going on closing as the game holds it): the
-             * sprites in it only, the cut-in's wind and Pokemon closed away
-             * with it; over the field the dots and the Pokemon's parts
-             * showed for a few frames after it closed, 2026-11-01) */
-            sObjClip.on = info->gpuCircle == 3 &&
-                          (sBgBand.vTop > 0.0f || sBgBand.vBottom > 0.0f || sBgBand.y > (float)sBgBand.wantY + 0.5f ||
-                           sBgBand.r < (float)sBgBand.wantR - 0.5f);
-            if (sObjClip.on) {
-                sObjClip.y0 = pic.y0 + (float)(sConfig.flipV ? rows - bandR : bandY) * scale;
-                sObjClip.y1 = pic.y0 + (float)(sConfig.flipV ? rows - bandY : bandR) * scale;
-            }
-            if (!sObjClip.on || sObjClip.y1 > sObjClip.y0) {
-                draw_gpu_objs(set, scene, &pic, scale, (pic.y1 - pic.y0) / (float)rows, linear);
-            }
-            sObjClip.on = 0;
+         * HM cut-in's), in front of it all; a weather's behind the sign
+         * (gpuObjsUnderSign) before it, above. */
+        if (!info->gpuObjsUnderSign) {
+            draw_gpu_objs_step(info, set, scene, &pic, scale, rows, bandY, bandR, linear);
         }
     }
     /* 5c. A circle fade drawn here (ComposeLayers.gpuCircle). */

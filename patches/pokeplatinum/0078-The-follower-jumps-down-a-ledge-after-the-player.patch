@@ -1,0 +1,406 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 12:00:00 -0700
+Subject: [PATCH] The follower jumps down a ledge after the player (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The follower Pokemon (patch 0056) went into its ball as the player
+jumped down a ledge and came out behind them where they stopped: the
+follow code takes it to the tile the player left, and in a jump the
+player's tile changes twice (over the ledge, then below it), so the tile
+left was the ledge's own halfway through.
+
+Now its way is the player's tiles as they go, the ledge's left out (the
+trail, PortFollower_NoteTrail, noted every frame of the field and as the
+follow code asks: PortFollower_NextStep from unk_02069BE0.c). As the
+player jumps it walks to where they jumped from; as they go on it jumps
+down after them, 2 tiles in the player's step's time (8 frames walking,
+4 running: PortFollower_JumpFrames, the jump's own 16 frames otherwise,
+in unk_020655F4.c), so it's behind them as before. Where it can't (not by
+that tile as they jump, or a 3 tiles' jump) it goes into its ball as
+before.
+
+---
+diff --git a/include/port_follower.h b/include/port_follower.h
+index f6c00006..763c8a4f 100644
+--- a/include/port_follower.h
++++ b/include/port_follower.h
+@@ -60,6 +60,15 @@ void PortFollower_FieldEnds(void);
+ // Every frame of the field (fieldmap.c): out, in its ball or swapped as the
+ // party, the option and the field are.
+ void PortFollower_Update(FieldSystem *fieldSystem);
++// Its next step after the player (unk_02069BE0.c, the follow code, as the
++// player moves): FALSE if it's where it should be, else the movement action
++// for it (the player's own step's, `playerAction`, the run as a fast walk;
++// a jump down the ledge the player jumped; a walk to where they jumped from).
++BOOL PortFollower_NextStep(MapObject *mapObj, u32 playerAction, u32 *action);
++// The frames of its jump down a ledge (unk_020655F4.c, the jump's start),
++// once for the jump PortFollower_NextStep gave: the player's step's (8
++// walking, 4 running), or 0 for the game's own 16.
++int PortFollower_JumpFrames(MapObject *mapObj);
+ #endif
+ 
+ #endif // POKEPLATINUM_PORT_FOLLOWER_H
+diff --git a/src/port_follower.c b/src/port_follower.c
+index 7747c985..941248eb 100644
+--- a/src/port_follower.c
++++ b/src/port_follower.c
+@@ -36,6 +36,7 @@
+ #include "map_header.h"
+ #include "map_object.h"
+ #include "map_object_move.h"
++#include "map_tile_behavior.h"
+ #include "math_util.h"
+ #include "particle_system.h"
+ #include "party.h"
+@@ -53,6 +54,7 @@
+ #include "string_gf.h"
+ #include "system.h"
+ #include "system_flags.h"
++#include "terrain_collision_manager.h"
+ #include "unk_020655F4.h"
+ #include "vars_flags.h"
+ 
+@@ -369,9 +371,11 @@ BOOL MapObject_PortIsFollower(const MapObject *mapObj)
+     return MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_PORT_FOLLOWER) != 0;
+ }
+ 
+-// The player jumping down a ledge (2 tiles, or 3): the follower can't keep
+-// up with the jump (the follow code goes a tile a step behind), so it waits
+-// in its ball and comes out behind them where they stop.
++// The player jumping down a ledge (2 tiles, or 3). The follower walks to
++// where they jumped from as they jump, and jumps down after them as they go
++// on (PortFollower_NextStep); where it can't (not by that tile as they jump,
++// or the 3 tiles' jump), it waits in its ball and comes out behind them
++// where they stop.
+ // (the player's steps aren't map object movements: MapObject_IsMoving is 0)
+ static BOOL PortFollower_PlayerStepping(FieldSystem *fieldSystem)
+ {
+@@ -388,6 +392,176 @@ static BOOL PortFollower_PlayerJumping(FieldSystem *fieldSystem, MapObject *play
+             || action == MOVEMENT_ACTION_JUMP_FARTHER_WEST || action == MOVEMENT_ACTION_JUMP_FARTHER_EAST);
+ }
+ 
++// ----- Its way after the player: the follow code (unk_02069BE0.c) takes it
++// to the tile the player left, with the player's own step. Jumping down a
++// ledge, the player's tile changes twice in the jump (over the ledge, then
++// below it), so the tile left was the ledge's own halfway through: it went
++// there, or onto the player as they landed. Its way is the player's tiles as
++// they go instead, the ledge's left out (the trail: noted every frame of the
++// field and as the follow code asks).
++static BOOL sTrailOn;
++static int sTrailX, sTrailZ, sSeenX, sSeenZ;
++static int sJumpFrames; // (its next jump down a ledge: in the player's step's time; 0 the game's own)
++
++static BOOL PortFollower_LedgeAt(FieldSystem *fieldSystem, int x, int z, int dir)
++{
++    u8 behavior = TerrainCollisionManager_GetTileBehavior(fieldSystem, x, z);
++
++    switch (dir) {
++    case DIR_NORTH:
++        return TileBehavior_IsJumpNorth(behavior);
++    case DIR_SOUTH:
++        return TileBehavior_IsJumpSouth(behavior);
++    case DIR_WEST:
++        return TileBehavior_IsJumpWest(behavior);
++    case DIR_EAST:
++        return TileBehavior_IsJumpEast(behavior);
++    }
++
++    return FALSE;
++}
++
++static BOOL PortFollower_AnyLedgeAt(FieldSystem *fieldSystem, int x, int z)
++{
++    return PortFollower_LedgeAt(fieldSystem, x, z, DIR_NORTH) || PortFollower_LedgeAt(fieldSystem, x, z, DIR_SOUTH)
++        || PortFollower_LedgeAt(fieldSystem, x, z, DIR_WEST) || PortFollower_LedgeAt(fieldSystem, x, z, DIR_EAST);
++}
++
++// From (x, z) by (dx, dz): 2 tiles straight, over a ledge that jumps that way.
++static BOOL PortFollower_LedgeBetween(FieldSystem *fieldSystem, int x, int z, int dx, int dz)
++{
++    int dir;
++
++    if (dx == 0 && (dz == 2 || dz == -2)) {
++        dir = dz > 0 ? DIR_SOUTH : DIR_NORTH;
++    } else if (dz == 0 && (dx == 2 || dx == -2)) {
++        dir = dx > 0 ? DIR_EAST : DIR_WEST;
++    } else {
++        return FALSE;
++    }
++
++    return PortFollower_LedgeAt(fieldSystem, x + dx / 2, z + dz / 2, dir);
++}
++
++static void PortFollower_NoteTrail(FieldSystem *fieldSystem)
++{
++    PlayerAvatar *playerAvatar = fieldSystem->playerAvatar;
++    int x = PlayerAvatar_GetXPos(playerAvatar), z = PlayerAvatar_GetZPos(playerAvatar), dx, dz;
++
++    if (!sTrailOn) {
++        sTrailOn = TRUE;
++        sSeenX = x;
++        sSeenZ = z;
++        sTrailX = PlayerAvatar_XPosPrev(playerAvatar);
++        sTrailZ = PlayerAvatar_ZPosPrev(playerAvatar);
++        return;
++    }
++
++    if (x == sSeenX && z == sSeenZ) {
++        return;
++    }
++
++    dx = x - sSeenX;
++    dz = z - sSeenZ;
++
++    if (dx * dx + dz * dz == 1 && PortFollower_AnyLedgeAt(fieldSystem, sSeenX, sSeenZ)) {
++        // (from over the ledge to below it: the tile before it stays)
++    } else if (dx * dx + dz * dz == 1 || PortFollower_LedgeBetween(fieldSystem, sSeenX, sSeenZ, dx, dz)) {
++        sTrailX = sSeenX;
++        sTrailZ = sSeenZ;
++    } else {
++        // (a warp, or moved by a script: the tile left as the game has it)
++        sTrailX = PlayerAvatar_XPosPrev(playerAvatar);
++        sTrailZ = PlayerAvatar_ZPosPrev(playerAvatar);
++    }
++
++    sSeenX = x;
++    sSeenZ = z;
++}
++
++// (the frames of a step at the speed of this movement action, for a jump of
++// 2 tiles in that time: a walk 8, running 4 (the faster ones too); 0 for
++// the rest, the jump's own 16, as slow as the walk's and the player's own)
++static int PortFollower_StepFrames(u32 action)
++{
++    if ((action >= MOVEMENT_ACTION_WALK_FAST_NORTH && action <= MOVEMENT_ACTION_WALK_FASTER_EAST)
++        || (action >= MOVEMENT_ACTION_WALK_FASTEST_NORTH && action <= MOVEMENT_ACTION_WALK_FASTEST_EAST)) {
++        return 4;
++    }
++
++    if (action >= MOVEMENT_ACTION_WALK_NORMAL_NORTH && action <= MOVEMENT_ACTION_WALK_NORMAL_EAST) {
++        return 8;
++    }
++
++    return 0;
++}
++
++static BOOL PortFollower_LedgeJump(u32 action)
++{
++    return action >= MOVEMENT_ACTION_JUMP_FAR_NORTH && action <= MOVEMENT_ACTION_JUMP_FAR_EAST;
++}
++
++BOOL PortFollower_NextStep(MapObject *mapObj, u32 playerAction, u32 *action)
++{
++    FieldSystem *fieldSystem = MapObject_FieldSystem(mapObj);
++    int x = MapObject_GetX(mapObj), z = MapObject_GetZ(mapObj), dir;
++
++    PortFollower_NoteTrail(fieldSystem);
++
++    if (x == sTrailX && z == sTrailZ) {
++        return FALSE;
++    }
++
++    dir = GetDirectionBetweenPoints(x, z, sTrailX, sTrailZ);
++    sJumpFrames = 0;
++
++    if (PortFollower_LedgeBetween(fieldSystem, x, z, sTrailX - x, sTrailZ - z)) {
++        // Down the ledge the player jumped, as they go on: 2 tiles in their
++        // step's time (the game's jump takes two walking steps' time), so
++        // it's behind them as they go on.
++        sJumpFrames = PortFollower_StepFrames(playerAction);
++        *action = MovementAction_TurnActionTowardsDir(dir, MOVEMENT_ACTION_JUMP_FAR_NORTH);
++    } else if (PortFollower_LedgeJump(playerAction)) {
++        // To where the player jumped from, as they jump (a walking step: it
++        // waits there for them to land).
++        *action = MovementAction_TurnActionTowardsDir(dir, MOVEMENT_ACTION_WALK_NORMAL_NORTH);
++    } else {
++        *action = MovementAction_TurnActionTowardsDir(dir, playerAction);
++    }
++
++    return TRUE;
++}
++
++int PortFollower_JumpFrames(MapObject *mapObj)
++{
++    int frames;
++
++    if (!MapObject_PortIsFollower(mapObj) || MapObject_GetLocalID(mapObj) != PORT_FOLLOWER_LOCAL_ID) {
++        return 0;
++    }
++
++    frames = sJumpFrames;
++    sJumpFrames = 0;
++    return frames;
++}
++
++// (it jumps down after them: by the tile they jumped from as they jump)
++static BOOL PortFollower_JumpsAfter(FieldSystem *fieldSystem, MapObject *mapObj, MapObject *player)
++{
++    int dx = MapObject_GetX(mapObj) - sTrailX, dz = MapObject_GetZ(mapObj) - sTrailZ;
++
++    return PortFollower_LedgeJump(MapObject_GetMovementAction(player)) && dx * dx + dz * dz <= 1;
++}
++
++// (where the player jumped from, standing, the player beyond the ledge)
++static BOOL PortFollower_AboveLedge(FieldSystem *fieldSystem, MapObject *mapObj)
++{
++    int x = MapObject_GetX(mapObj), z = MapObject_GetZ(mapObj);
++
++    return x == sTrailX && z == sTrailZ
++        && PortFollower_LedgeBetween(fieldSystem, x, z, PlayerAvatar_GetXPos(fieldSystem->playerAvatar) - x, PlayerAvatar_GetZPos(fieldSystem->playerAvatar) - z);
++}
++
+ // (the Pokémon: PORT_FOLLOWER_LOCAL_ID; its ball: PORT_FOLLOWER_BALL_LOCAL_ID)
+ static MapObject *PortFollower_FindID(const MapObjectManager *mapObjMan, u32 localID)
+ {
+@@ -1010,6 +1184,8 @@ void PortFollower_Draw(void)
+ void PortFollower_FieldEnds(void)
+ {
+     PortFollower_EndBurst();
++    sTrailOn = FALSE;
++    sJumpFrames = 0;
+ }
+ 
+ static void PortFollower_UpdateEmote(FieldSystem *fieldSystem);
+@@ -1046,6 +1222,7 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+         return;
+     }
+ 
++    PortFollower_NoteTrail(fieldSystem);
+     PortFollower_UpdateBall(fieldSystem, sDropIn);
+     PortFollower_UpdateBurst();
+     PortFollower_UpdateEmote(fieldSystem);
+@@ -1115,9 +1292,10 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+             why = "the game moves the player";
+         } else if (scripted && !inWarp && sOut >= 0 && PortFollower_SomeoneComes(fieldSystem, mapObj)) {
+             why = "someone comes to its spot";
+-        } else if (PortFollower_PlayerJumping(fieldSystem, player)) {
++        } else if (PortFollower_PlayerJumping(fieldSystem, player) && !PortFollower_JumpsAfter(fieldSystem, mapObj, player)) {
+             why = "a ledge";
+-        } else if (!scripted && !MapObject_IsMoving(mapObj) && !PortFollower_PlayerStepping(fieldSystem) && dx * dx + dz * dz > 1) {
++        } else if (!scripted && !MapObject_IsMoving(mapObj) && !PortFollower_PlayerStepping(fieldSystem) && dx * dx + dz * dz > 1
++            && !PortFollower_AboveLedge(fieldSystem, mapObj)) {
+             why = "left behind";
+         }
+ 
+diff --git a/src/unk_020655F4.c b/src/unk_020655F4.c
+index f9c6ec5c..cb6b68e5 100644
+--- a/src/unk_020655F4.c
++++ b/src/unk_020655F4.c
+@@ -24,6 +24,10 @@
+ #include "unk_02069BE0.h"
+ #include "unk_020EDBAC.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_follower.h"
++#endif
++
+ #include "res/sound/pl_sound_data.naix"
+ 
+ typedef struct MoveAnimData {
+@@ -950,20 +954,54 @@ static BOOL MovementAction_JumpNearFastEast_Step0(MapObject *mapObj)
+     return TRUE;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// The follower Pokémon down a ledge after the player (port_follower.c): the
++// 2 tiles in the player's step's time.
++static BOOL MovementAction_PortFollowerJump(MapObject *mapObj, int dir)
++{
++    int frames = PortFollower_JumpFrames(mapObj);
++
++    if (frames <= 0) {
++        return FALSE;
++    }
++
++    MovementAction_InitJump(mapObj, dir, FX32_CONST(32) / frames, frames, MAP_OBJ_UNK_A0_03, JUMP_HEIGHT_HIGH, 0x1000 / frames);
++    return TRUE;
++}
++#endif
++
+ static BOOL MovementAction_JumpFarNorth_Step0(MapObject *mapObj)
+ {
++#ifdef SDK_PORT_3DS
++    if (MovementAction_PortFollowerJump(mapObj, DIR_NORTH)) {
++        return TRUE;
++    }
++#endif
++
+     MovementAction_InitJump(mapObj, DIR_NORTH, FX32_CONST(2), 8 * 2, MAP_OBJ_UNK_A0_03, JUMP_HEIGHT_HIGH, 0x100);
+     return TRUE;
+ }
+ 
+ static BOOL MovementAction_JumpFarSouth_Step0(MapObject *mapObj)
+ {
++#ifdef SDK_PORT_3DS
++    if (MovementAction_PortFollowerJump(mapObj, DIR_SOUTH)) {
++        return TRUE;
++    }
++#endif
++
+     MovementAction_InitJump(mapObj, DIR_SOUTH, FX32_CONST(2), 16, MAP_OBJ_UNK_A0_03, JUMP_HEIGHT_HIGH, 0x100);
+     return TRUE;
+ }
+ 
+ static BOOL MovementAction_JumpFarWest_Step0(MapObject *mapObj)
+ {
++#ifdef SDK_PORT_3DS
++    if (MovementAction_PortFollowerJump(mapObj, DIR_WEST)) {
++        return TRUE;
++    }
++#endif
++
+     MovementAction_InitJump(mapObj, DIR_WEST, FX32_CONST(2), 16, MAP_OBJ_UNK_A0_03, JUMP_HEIGHT_HIGH, 0x100);
+ 
+     return TRUE;
+@@ -971,6 +1009,12 @@ static BOOL MovementAction_JumpFarWest_Step0(MapObject *mapObj)
+ 
+ static BOOL MovementAction_JumpFarEast_Step0(MapObject *mapObj)
+ {
++#ifdef SDK_PORT_3DS
++    if (MovementAction_PortFollowerJump(mapObj, DIR_EAST)) {
++        return TRUE;
++    }
++#endif
++
+     MovementAction_InitJump(mapObj, DIR_EAST, FX32_CONST(2), 16, MAP_OBJ_UNK_A0_03, JUMP_HEIGHT_HIGH, 0x100);
+     return TRUE;
+ }
+diff --git a/src/unk_02069BE0.c b/src/unk_02069BE0.c
+index 437a7e17..2270aaee 100644
+--- a/src/unk_02069BE0.c
++++ b/src/unk_02069BE0.c
+@@ -21,6 +21,10 @@
+ #include "trainer_encounter.h"
+ #include "unk_020655F4.h"
+ 
++#ifdef SDK_PORT_3DS
++#include "port_follower.h"
++#endif
++
+ typedef struct {
+     u8 unk_00;
+     u8 unk_01;
+@@ -232,6 +236,20 @@ static int sub_02069D8C(MapObject *mapObj)
+     int xPrev = PlayerAvatar_XPosPrev(playerAvatar);
+     int zPrev = PlayerAvatar_ZPosPrev(playerAvatar);
+ 
++#ifdef SDK_PORT_3DS
++    // (the follower Pokémon: its own way after the player, down ledges too)
++    if (MapObject_PortIsFollower(mapObj)) {
++        u32 action;
++
++        if (!PortFollower_NextStep(mapObj, sub_02069D50(mapObj), &action)) {
++            return 0;
++        }
++
++        sub_02065668(mapObj, action);
++        return 1;
++    }
++#endif
++
+     if (xCur != xPrev || zCur != zPrev) {
+         u32 v6 = sub_02069D50(mapObj);
+         int dir = GetDirectionBetweenPoints(xCur, zCur, xPrev, zPrev);

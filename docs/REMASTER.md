@@ -1578,10 +1578,16 @@ screens) the lower screen is the DS's, filling the screen as before.
     the player (a script's walk; out again when the player is theirs
     again: scenes where it stays out may come later), when someone walks
     onto its tile in a script (a person coming up behind the player: the
-    two stood in each other, 2026-10-29), and while the
-    player jumps down a ledge (the
-    follow code moves a tile a step behind and can't keep up with the
-    jump): out again where they stop, or, the player walking on, behind
+    two stood in each other, 2026-10-29). Down a ledge it jumps after the
+    player (patch 0078, 2026-11-05): its way is the player's tiles as
+    they go, the ledge's left out (`PortFollower_NoteTrail`; the follow
+    code took it to the tile the player left, the ledge's own halfway
+    through their jump), so as they jump it walks to where they jumped
+    from, and as they go on it jumps down after them, 2 tiles in their
+    step's time (8 frames walking, 4 running: `PortFollower_JumpFrames`),
+    behind them as before. Where it can't (not by that tile as they jump,
+    or a 3 tiles' jump) it goes into its ball while they jump: out again
+    where they stop, or, the player walking on, behind
     them as they go, growing out of nothing without its ball (which would
     be left behind), not waiting for them to stop. Its graphics IDs from 0x4000, past
     the berry trees' (0x1000) and OBJ_EVENT_GFX_INVISIBLE (0x2000). Its
@@ -2190,6 +2196,46 @@ behind them. The in-between frame for the 2D alone (`NitroPort_ComposeFrame`'s
 mid 2, the scene's own 3D, as for a fade or a band: `fades_changed`) is
 now drawn when the sprites moved too (`objs_moved`), them halfway from the
 last scene shown's frame (`draw_gpu_objs` by `frame_before`).
+
+The weather's drops (2026-11-05, patch 0079): the rain's drops are
+sprites the game moves every step, so the upper screen's picture was drawn
+whole for each, about 9 ms on the geometry's core on Route 215: 15 pictures
+a second at most (each taking ~60 ms to show), the rain going at 15 and the
+field held up as it began (log da31452d). While a weather with sprites
+plays (`ov5_021D676C` starts it, `ov5_021D69B8` and `ov5_021D68B8` end it:
+`NitroPort_SetWeatherSprites`), `NitroPort_GpuSprites` is 2 and its
+sprites are drawn by the compositor as the cut-in's are, with two
+differences in `GpuObjsOf`: a BG showing nothing doesn't count as in front
+of them (the message box's BG3, closed, `BgTextBlank`), nor the place name
+sign the compositor draws (`signBg`): each drop behind the sign then, and
+the sign drawn over them (`ComposeLayers.gpuObjsUnderSign`: step 5b before
+5a). With a text box up they're in the picture, as before. They don't go
+with the windows (`Engine.objsStay`: the sign's window moved to the tall
+field's top, the drops over it went too), and a refusal (`sGpuObjsRefused`)
+is tried again each picture, as the rain goes on for minutes.
+
+So that they fall at 60 frames a second, where the game moves them 30
+times: the drops live a step or two and fall 20 to 118 pixels a step, no
+sprite found again as the cut-in's are. So the game tells each one's move:
+the weather's sprite list (`SpriteList_PortNoteMoves`) notes in
+`SpriteList_Update` each sprite's place against where it was drawn in the
+list's step before, `RenderOam_PortSetMove` ties it to the main screen's
+OAM entries it adds, handed over with OAM (`RenderOam_Transfer`:
+`NitroPort_SetOamMoves`, then `NitroGpuObj.moved` with the places). In an
+in-between frame each is drawn half its move back, one just come on half
+the middle move of its kind's, the frame before's not drawn
+(`NitroPort_GpuObjsBetween`). On the PC, in the rain on Route 215: every
+drop left out and told of, each told move the place it had in the frame
+before (`[raindbg]`, local).
+
+The place name sign in the rain (2026-11-05): the sign is drawn by the
+compositor only with no sprite shown (`GpuSignOf`), and that's worked out
+both for the picture and for each frame's notes
+(`NitroPort_Render2DSignNow`). As the rain began the drops came and went,
+so the sign was drawn in the picture in one frame and by the compositor in
+the next, out of step with each other. Now a weather's sprites behind the
+sign don't keep it in the picture (`gpuObjs` 2, the sprite's priority
+below the BG's): the sign stays the compositor's, over the drops.
 
 The cut-in's band opening and closing (2026-11-01): a window, window 0
 alone across the DS's screen, its lines (WIN0V) 5 to 13 further each side

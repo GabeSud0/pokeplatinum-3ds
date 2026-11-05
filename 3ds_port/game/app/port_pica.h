@@ -302,6 +302,9 @@ typedef struct ComposeLayers {
     int gpuObjCount;
     const NitroGpuObj *gpuObj;
     const uint16_t *gpuObjAtlas;
+    /* (a weather's: NitroPort_GpuSprites 2) Those sprites behind the place
+     * name sign left out with them (gpuSign): drawn before it. */
+    int gpuObjsUnderSign;
     /* A circle fade left out of the picture for the compositor to draw
      * (NitroRender2DSplit.gpuCircleOn): its middle on the canvas, radius and
      * the colour outside it (RGB555), as the picture was drawn; drawn where

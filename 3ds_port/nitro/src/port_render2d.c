@@ -274,6 +274,10 @@ typedef struct Engine {
      * go with them (a menu's icons). */
     struct { short x0, y0, x1, y1, shift, stretch, dy; } objMove[OBJ_MOVES_MAX];
     int nObjMove;
+    /* (a weather's sprites: NitroRender2DSplit.gpuObjs 2) None go with the
+     * windows: the rain's drops aren't a menu's (the place name sign's
+     * window moved to the canvas's top, the drops over it went too). */
+    u8 objsStay;
     /* (wider canvas, the game's: NitroPort_WideSplitScreen,
      * NitroPort_WideScreenParts) a screen laid out anew in parts: the BGs'
      * MOVE and FILL parts (the splits made into parts first), the BGs they
@@ -635,7 +639,8 @@ static int GpuSignObjShown(u16 a0, u16 a1, int top, int picH);
  * sliding in and out: BG3 in front of everything, its window's 5 rows of
  * tiles, the rest of its map clear), or -1: of the BGs asked for, one in
  * front of everything (every other BG and the 3D behind it: the 3D on, no
- * sprite shown, no windows, no H-blank effect; no colour effect with it as
+ * sprite shown but a weather's behind it (gpuObjs 2: the rain's drops,
+ * drawn under it), no windows, no H-blank effect; no colour effect with it as
  * a first target), a text BG of 256 x 256 (no mosaic, no extended
  * palettes) whose rows of tiles with anything in them are at most 7 rows
  * apart and in the map's upper half (a band at the screen's top: not a
@@ -663,6 +668,7 @@ static int GpuSignOf(const NitroRender2DSplit *split, const u8 *io, const u8 *oa
     int tall = split->top > 0 && split->height > H && split->height <= HMAX && split->top + H <= split->height;
     int top = tall ? split->top : 0, picH = tall ? split->height : H;
     int anchors = split->width > W && split->width <= WMAX && split->anchorWindows;
+    int objFront = 4;   /* (a weather's sprites shown: the frontmost one's priority) */
 
     if (split->gpuSigns == 0 || lines || split->stretch || ((dispcnt & 0xE000) && bandShown < 0) ||
         (dispcnt & 0x108) != 0x108 || ((dispcnt >> 16) & 3) != 1 || vram == NULL) {
@@ -671,7 +677,17 @@ static int GpuSignOf(const NitroRender2DSplit *split, const u8 *io, const u8 *oa
     if (dispcnt & 0x1000) {
         for (k = 0; k < 128; k++) {
             if (GpuSignObjShown(Rd16(oam, (u32)k * 8), Rd16(oam, (u32)k * 8 + 2), top, picH)) {
-                return -1;   /* (a sprite shown) */
+                /* (a sprite shown; a weather's behind the sign are drawn
+                 * under it, by the compositor or in the picture: the rain's
+                 * drops came and went as the sign slid in, the sign drawn
+                 * in the picture in one frame and by the compositor in the
+                 * next, 2026-11-05) */
+                if (split->gpuObjs != 2) {
+                    return -1;
+                }
+                if ((int)((Rd16(oam, (u32)k * 8 + 4) >> 10) & 3) < objFront) {
+                    objFront = (Rd16(oam, (u32)k * 8 + 4) >> 10) & 3;
+                }
             }
         }
     }
@@ -691,6 +707,9 @@ static int GpuSignOf(const NitroRender2DSplit *split, const u8 *io, const u8 *oa
         }
         if (effect != 0 && (bldcnt & (1u << bg))) {
             continue;   /* (a colour effect on it) */
+        }
+        if (objFront <= (bgcnt & 3)) {
+            continue;   /* (a weather's sprite in front of it) */
         }
         for (k = 0; k < 4; k++) {
             if (k != bg && (dispcnt & (0x100u << k)) && (Rd16(io, 8 + k * 2) & 3) * 4 + k < key) {
@@ -2927,7 +2946,7 @@ static BOOL ReadObj(const Engine *e, int i, Obj *obj)
     if (obj->ox >= 256 + (e->width - W - e->origin)) {
         obj->ox -= 512;
     }
-    if (e->nObjMove) {
+    if (e->nObjMove && !e->objsStay) {
         /* (over a window moved to an edge: with it) */
         int cx = obj->ox + obj->boxW / 2, cy = e->top ? obj->oyTall + obj->boxH / 2 : (obj->oy + obj->boxH / 2) & 255, k;
 
@@ -3109,15 +3128,21 @@ static u16 ObjPixel(const Engine *e, const Obj *obj, u32 dispcnt, int tx, int ty
 
 /* ------------------------------------- the sprites the compositor draws */
 
+static int BgTextBlank(const u8 *io, const u8 *vram, int bg);
+
 /* (NitroRender2DSplit.gpuObjs) Whether engine A's sprites can be left out
  * of the picture, from its registers and OAM: all in front of everything,
  * as the compositor draws them over the picture. Without sprites shown,
- * they can (nothing to draw). */
-static int GpuObjsOf(const u8 *io, const u8 *oam, int lines)
+ * they can (nothing to draw). A weather's (mode 2: NitroPort_GpuSprites):
+ * a BG showing nothing doesn't count (the message box's once it's closed,
+ * in front of the rain's drops), nor the BG left out as the place name
+ * sign (signBg: drawn over them by the compositor, each sprite behind it
+ * then). vram: the BGs' maps and tiles. */
+static int GpuObjsOf(const u8 *io, const u8 *oam, int lines, const u8 *vram, int mode, int signBg)
 {
     u32 dispcnt = Rd32(io, 0);
     u16 bldcnt = Rd16(io, 0x50), winin = Rd16(io, 0x48), winout = Rd16(io, 0x4A);
-    int bg, i, front = 3;
+    int bg, i, front = 3, behind = -1;
 
     if (lines || (dispcnt & 0x8000) || ((dispcnt >> 16) & 3) != 1 || (dispcnt & 0x108) != 0x108) {
         return 0;   /* (an H-blank effect, the OBJ window, not the normal display, no 3D) */
@@ -3133,7 +3158,13 @@ static int GpuObjsOf(const u8 *io, const u8 *oam, int lines)
             return 0;   /* (a window hides them somewhere) */
         }
     }
+    if (mode == 2 && signBg >= 1 && signBg <= 3 && (dispcnt & (0x100u << signBg))) {
+        behind = Rd16(io, 8 + signBg * 2) & 3;   /* (each sprite behind the sign) */
+    }
     for (bg = 0; bg < 4; bg++) {
+        if (mode == 2 && bg > 0 && (bg == signBg || BgTextBlank(io, vram, bg))) {
+            continue;   /* (a weather's: the sign, or a BG showing nothing) */
+        }
         if ((dispcnt & (0x100u << bg)) && (int)(Rd16(io, 8 + bg * 2) & 3) < front) {
             front = Rd16(io, 8 + bg * 2) & 3;
         }
@@ -3144,8 +3175,9 @@ static int GpuObjsOf(const u8 *io, const u8 *oam, int lines)
         if ((!(a0 & 0x100) && (a0 & 0x200)) || (a0 >> 14) == 3) {
             continue;   /* (hidden) */
         }
-        if ((a0 & 0x100) || (a0 & 0x1000) || ((a0 >> 10) & 3) != 0 || (int)((a2 >> 10) & 3) > front) {
-            return 0;   /* (affine, mosaic, not a normal one, or behind a BG) */
+        if ((a0 & 0x100) || (a0 & 0x1000) || ((a0 >> 10) & 3) != 0 || (int)((a2 >> 10) & 3) > front ||
+            (behind >= 0 && (int)((a2 >> 10) & 3) <= behind)) {
+            return 0;   /* (affine, mosaic, not a normal one, behind a BG; or in front of the sign) */
         }
     }
     return 1;
@@ -3306,18 +3338,25 @@ static BOOL GpuObjsLeaveOut(const Engine *e, const ObjFrame *f, u32 dispcnt, Nit
     if (e->isA && !split->gpuObjs) {
         __atomic_store_n(&sGpuObjCanvas.valid, 0, __ATOMIC_RELEASE);   /* (not asked for: no places) */
     }
+    /* (a weather's tried again each picture: it goes on for minutes, one
+     * that couldn't be left out a while ago may be now) */
     if (!split->gpuObjs || split->gpuObj == NULL || split->gpuObjAtlas == NULL || !e->isA || !split->has3d ||
-        e->squeeze || sGpuObjsRefused || !GpuObjsOf(e->io, e->oam, e->lines != NULL)) {
+        e->squeeze || (sGpuObjsRefused && split->gpuObjs != 2) ||
+        !GpuObjsOf(e->io, e->oam, e->lines != NULL, e->bgVram, split->gpuObjs,
+                   split->gpuSignLeftOut ? __builtin_ctz((unsigned)split->gpuSignLeftOut) : -1)) {
         return FALSE;
     }
     uint64_t objStart = ClockNow();
-    BOOL made = e->nObjMove == 0 && f->artCount == 0 && MakeGpuObjs(e, dispcnt, split);
+    BOOL made = (e->nObjMove == 0 || e->objsStay) && f->artCount == 0 && MakeGpuObjs(e, dispcnt, split);
 
     __atomic_fetch_add(&sObjTicks[0], ClockNow() - objStart, __ATOMIC_RELAXED);
     if (!made) {
         sGpuObjsRefused = 1;
         split->gpuObjCount = 0;
         return FALSE;
+    }
+    if (split->gpuObjs == 2) {
+        sGpuObjsRefused = 0;   /* (a weather's left out again: their places not a change again) */
     }
     split->gpuObjsLeftOut = 1;
     sGpuObjCanvas.width = e->width;
@@ -3326,6 +3365,18 @@ static BOOL GpuObjsLeaveOut(const Engine *e, const ObjFrame *f, u32 dispcnt, Nit
     sGpuObjCanvas.height = e->height;
     __atomic_store_n(&sGpuObjCanvas.valid, 1, __ATOMIC_RELEASE);
     return TRUE;
+}
+
+/* (NitroPort_SetOamMoves) What the game told of each OAM entry, as it last
+ * handed OAM over. */
+static uint8_t sOamMoveTold[128];
+static int16_t sOamMoveX[128], sOamMoveY[128];
+
+void NitroPort_SetOamMoves(const uint8_t told[128], const int16_t dx[128], const int16_t dy[128])
+{
+    memcpy(sOamMoveTold, told, sizeof(sOamMoveTold));
+    memcpy(sOamMoveX, dx, sizeof(sOamMoveX));
+    memcpy(sOamMoveY, dy, sizeof(sOamMoveY));
 }
 
 int NitroPort_Render2DObjPlaces(int engine, NitroGpuObj *out, int max)
@@ -3349,6 +3400,11 @@ int NitroPort_Render2DObjPlaces(int engine, NitroGpuObj *out, int max)
     e.height = sGpuObjCanvas.height;
     for (i = 0; i < 128 && n < max; i++) {
         if (GpuObjPlace(&e, i, &obj, &out[n], TRUE)) {
+            if (sOamMoveTold[i] == 1 || sOamMoveTold[i] == 2) {
+                out[n].moved = sOamMoveTold[i];
+                out[n].mdx = sOamMoveTold[i] == 1 ? sOamMoveX[i] : 0;
+                out[n].mdy = sOamMoveTold[i] == 1 ? sOamMoveY[i] : 0;
+            }
             n++;
         }
     }
@@ -3366,7 +3422,8 @@ static int NearestGpuObj(const NitroGpuObj *o, const NitroGpuObj *list, int n, i
         int ddx = ((list[i].rawX - o->rawX + 256) & 511) - 256, ddy = ((list[i].rawY - o->rawY + 128) & 255) - 128;
         int c = (ddx < 0 ? -ddx : ddx) + 4 * (ddy < 0 ? -ddy : ddy);
 
-        if (list[i].key != o->key || ddx > 96 || ddx < -96 || ddy > 32 || ddy < -32 || (best >= 0 && c >= *cost)) {
+        if (list[i].key != o->key || list[i].moved != o->moved || ddx > 96 || ddx < -96 || ddy > 32 || ddy < -32 ||
+            (best >= 0 && c >= *cost)) {
             continue;
         }
         best = i;
@@ -3375,6 +3432,32 @@ static int NearestGpuObj(const NitroGpuObj *o, const NitroGpuObj *list, int n, i
         *dy = ddy;
     }
     return best;
+}
+
+/* (NitroPort_GpuObjsBetween) The usual move of a list's sprites of a key
+ * whose moves the game told (NitroGpuObj.moved 1: their middle one, each
+ * way): 0, 0 when none was. */
+static void TypicalToldMove(const NitroGpuObj *list, int n, uint32_t key, int *mx, int *my)
+{
+    short xs[NITRO_GPU_OBJ_MAX], ys[NITRO_GPU_OBJ_MAX];
+    int i, j, c = 0;
+
+    for (i = 0; i < n && c < NITRO_GPU_OBJ_MAX; i++) {
+        if (list[i].moved == 1 && list[i].key == key) {
+            /* (in order as they come: an insertion each way) */
+            for (j = c; j > 0 && xs[j - 1] > list[i].mdx; j--) {
+                xs[j] = xs[j - 1];
+            }
+            xs[j] = list[i].mdx;
+            for (j = c; j > 0 && ys[j - 1] > list[i].mdy; j--) {
+                ys[j] = ys[j - 1];
+            }
+            ys[j] = list[i].mdy;
+            c++;
+        }
+    }
+    *mx = c ? xs[c / 2] : 0;
+    *my = c ? ys[c / 2] : 0;
 }
 
 int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const NitroGpuObj *after, int nAfter,
@@ -3403,6 +3486,9 @@ int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const Nitro
         int dx = 0, dy = 0, cost = 0, back, bdx, bdy, bcost = 0;
 
         partnerOf[i] = -1;
+        if (before[i].moved) {
+            continue;   /* (its move told: drawn from after's, below) */
+        }
         j = NearestGpuObj(&before[i], after, nAfter, &dx, &dy, &cost);
         if (j < 0) {
             continue;
@@ -3432,14 +3518,14 @@ int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const Nitro
     for (i = 0; i < nBefore; i++) {
         int best = -1, bestCost = 0, dx, dy, c;
 
-        if (partnerOf[i] >= 0) {
+        if (partnerOf[i] >= 0 || before[i].moved) {
             continue;
         }
         for (j = 0; j < nAfter; j++) {
             dx = ((after[j].rawX - before[i].rawX + 256) & 511) - 256;
             dy = ((after[j].rawY - before[i].rawY + 128) & 255) - 128;
             c = (dx < 0 ? -dx : dx) + 4 * (dy < 0 ? -dy : dy);
-            if (partnerIn[j] >= 0 || after[j].w != before[i].w || after[j].h != before[i].h || dx > 32 || dx < -32 ||
+            if (partnerIn[j] >= 0 || after[j].moved || after[j].w != before[i].w || after[j].h != before[i].h || dx > 32 || dx < -32 ||
                 dy > 16 || dy < -16 || (best >= 0 && c >= bestCost)) {
                 continue;
             }
@@ -3450,7 +3536,7 @@ int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const Nitro
             continue;
         }
         for (k = 0; k < nBefore; k++) {
-            if (k == i || partnerOf[k] >= 0 || before[k].w != before[i].w || before[k].h != before[i].h) {
+            if (k == i || partnerOf[k] >= 0 || before[k].moved || before[k].w != before[i].w || before[k].h != before[i].h) {
                 continue;
             }
             dx = ((after[best].rawX - before[k].rawX + 256) & 511) - 256;
@@ -3480,6 +3566,23 @@ int NitroPort_GpuObjsBetween(const NitroGpuObj *before, int nBefore, const Nitro
                 }
                 if (k == 0 && nBefore < 0) {
                     out[n++] = *o;   /* (no frame before: as it is) */
+                    continue;
+                }
+                if (o->moved) {
+                    /* (told of, a weather's drop: half its move back, one
+                     * just come on half its kind's usual move; the frame
+                     * before's not drawn, each its own move on in after's) */
+                    if (k == 0) {
+                        int mx = o->mdx, my = o->mdy;
+
+                        if (o->moved == 2) {
+                            TypicalToldMove(after, nAfter, o->key, &mx, &my);
+                        }
+                        out[n] = *o;
+                        out[n].x = (short)(o->x - mx / 2);
+                        out[n].y = (short)(o->y - my / 2);
+                        n++;
+                    }
                     continue;
                 }
                 if (k == 1 && partnerOf[i] >= 0) {
@@ -4724,6 +4827,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 sSignCanvas.layout.top = split->top;
                 sSignCanvas.layout.height = split->height;
                 sSignCanvas.layout.stretch = split->stretch;
+                sSignCanvas.layout.gpuObjs = split->gpuObjs;   /* (a weather's sprites under it) */
                 sSignCanvas.valid = 1;
                 __atomic_clear(&sSignCanvas.lock, __ATOMIC_RELEASE);
             }
@@ -5679,6 +5783,7 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
     memset(e, 0, sizeof(*e));
     e->bandBg = -1;
     e->isA = engine == 0;
+    e->objsStay = e->isA && split != NULL && split->gpuObjs == 2;
     e->taken = taken ? st : NULL;
     e->ioAll = taken ? st->io : NitroPort_IoReg;
     e->io = e->ioAll + (e->isA ? 0 : 0x1000);
@@ -7253,13 +7358,6 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     if (e == 0 && !split->gpuObjs) {
         sGpuObjsRefused = 0;
     }
-    if (e == 0 && split->gpuObjs && split->gpuObj != NULL && split->gpuObjAtlas != NULL && !split->stretch &&
-        !sGpuObjsRefused) {
-        const State2D *st = &sState[0];
-
-        gpuObjs = GpuObjsOf(split->snapshot ? st->io : NitroPort_IoReg, split->snapshot ? st->oam : NitroPort_Oam,
-                            split->snapshot ? st->lines : NitroPort_LineRegs.active);
-    }
     if (e == 0 && split->gpuCircle && !split->stretch) {
         const State2D *st = &sState[0];
 
@@ -7308,6 +7406,15 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
         if (gpuSign >= 0 && gpuSign == __atomic_load_n(&sSignDrawn, __ATOMIC_ACQUIRE)) {
             signMasked = gpuSign;
         }
+    }
+    /* (with the sign as drawing would find: a weather's sprites behind it) */
+    if (e == 0 && split->gpuObjs && split->gpuObj != NULL && split->gpuObjAtlas != NULL && !split->stretch &&
+        !sGpuObjsRefused) {
+        const State2D *st = &sState[0];
+
+        gpuObjs = GpuObjsOf(split->snapshot ? st->io : NitroPort_IoReg, split->snapshot ? st->oam : NitroPort_Oam,
+                            split->snapshot ? st->lines : NitroPort_LineRegs.active,
+                            split->snapshot ? sMapShadowA : NitroPort_BgVram, split->gpuObjs, gpuSign);
     }
     small = SmallSignatureOf(e, split, gpuBg, gpuObjs, gpuCircle, rowsShown, 0, gpuSign, signMasked);
     /* The small parts changed (a scroll, a sprite, a colour: most frames of

@@ -255,17 +255,26 @@ int NitroPort_WideWindows(int engine, int bg, NitroWideWindow *out, int max)
 }
 
 static int sForcePictures = -1;
-static volatile int sFieldCells;   /* (NitroPort_SetFieldCells) */
+static volatile int sFieldCells;      /* (NitroPort_SetFieldCells) */
+static volatile int sWeatherSprites;  /* (NitroPort_SetWeatherSprites) */
 
 void NitroPort_SetFieldCells(int on)
 {
     __atomic_store_n(&sFieldCells, on != 0, __ATOMIC_RELEASE);
 }
 
+void NitroPort_SetWeatherSprites(int on)
+{
+    __atomic_store_n(&sWeatherSprites, on != 0, __ATOMIC_RELEASE);
+}
+
 int NitroPort_GpuSprites(void)
 {
-    return __atomic_load_n(&sFieldCells, __ATOMIC_ACQUIRE) && NitroPort_OverlayLoadedNamed("overlay5") &&
-           !NitroPort_OverlayLoadedNamed("battle");
+    int mode = __atomic_load_n(&sFieldCells, __ATOMIC_ACQUIRE)       ? 1
+               : __atomic_load_n(&sWeatherSprites, __ATOMIC_ACQUIRE) ? 2
+                                                                     : 0;
+
+    return mode && NitroPort_OverlayLoadedNamed("overlay5") && !NitroPort_OverlayLoadedNamed("battle") ? mode : 0;
 }
 
 void NitroPort_WideForcePictures(int mode)

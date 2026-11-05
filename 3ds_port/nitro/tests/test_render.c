@@ -3273,6 +3273,18 @@ static void test_gpu_sign(void)
         memcpy(NitroPort_Oam, obj, sizeof(obj));
         NitroPort_Render2DSplit(0, under, &split);
         CHECK(split.gpuSignLeftOut == 0);
+        /* (a weather's behind it: drawn under it, fine; one in front not) */
+        split.gpuObjs = 2;
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuSignLeftOut == 0);
+        obj[2] = 1 << 10;                   /* priority 1, the 3D's: behind BG3's 0 */
+        memcpy(NitroPort_Oam, obj, sizeof(obj));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuSignLeftOut == 1 << 3);
+        split.gpuObjs = 0;
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuSignLeftOut == 0);
+        obj[2] = 0;
         obj[0] = 220;                       /* y 220: below the tall field's lines (from its 216) */
         memcpy(NitroPort_Oam, obj, sizeof(obj));
         NitroPort_Render2DSplit(0, under, &split);
@@ -3415,6 +3427,21 @@ static void test_gpu_objs(void)
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
     CHECK(NitroPort_Render2DObjPlaces(0, places, NITRO_GPU_OBJ_MAX) == 3);
     CHECK(places[0].x == 64 && places[0].y == 31 && places[0].key == objs[3].key && places[2].x == -4);
+    CHECK(places[0].moved == 0 && places[1].moved == 0);
+    /* (what the game told of each entry: with its place) */
+    {
+        uint8_t told[128] = { 0 };
+        int16_t mx[128] = { 0 }, my[128] = { 0 };
+
+        told[0] = 1, mx[0] = -3, my[0] = 7;
+        told[1] = 2, mx[1] = 5;
+        NitroPort_SetOamMoves(told, mx, my);
+        CHECK(NitroPort_Render2DObjPlaces(0, places, NITRO_GPU_OBJ_MAX) == 3);
+        CHECK(places[0].moved == 1 && places[0].mdx == -3 && places[0].mdy == 7);
+        CHECK(places[1].moved == 2 && places[1].mdx == 0 && places[2].moved == 0);
+        told[0] = told[1] = 0;
+        NitroPort_SetOamMoves(told, mx, my);
+    }
     G2_SetOBJCharName(&oam[0], 1);
     GX_LoadOAM(oam, 0, sizeof(oam));
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
@@ -3574,6 +3601,37 @@ static void test_gpu_objs(void)
         after[0].w = 32;
         n = NitroPort_GpuObjsBetween(before, 1, after, 1, out, 8);
         CHECK(n == 1 && out[0].x == 100 && out[0].key == before[0].key);
+        /* told of by the game (a weather's drops, NitroGpuObj.moved: further
+         * a step than one's found): after's half its move back, one just
+         * come on half the middle move of its kind's; before's not drawn */
+        {
+            NitroGpuObj b2[2], a2[3];
+
+            b2[0] = objs[3];
+            b2[0].x = b2[0].rawX = 100, b2[0].y = b2[0].rawY = 20, b2[0].moved = 1;
+            b2[1] = objs[3];
+            b2[1].x = b2[1].rawX = 300, b2[1].moved = 2;
+            a2[0] = b2[0];
+            a2[0].x = a2[0].rawX = 90, a2[0].y = a2[0].rawY = 80, a2[0].mdx = -10, a2[0].mdy = 60;
+            a2[1] = b2[1];
+            a2[1].x = a2[1].rawX = 292, a2[1].y = a2[1].rawY = 70, a2[1].moved = 1, a2[1].mdx = -8, a2[1].mdy = 40;
+            a2[2] = objs[3];
+            a2[2].x = a2[2].rawX = 50, a2[2].y = a2[2].rawY = 10, a2[2].moved = 2;   /* (come on) */
+            n = NitroPort_GpuObjsBetween(b2, 2, a2, 3, out, 8);
+            CHECK(n == 3);
+            CHECK(out[0].x == 54 && out[0].y == -20);    /* (-8, 60: the middle of -10, -8 and of 40, 60) */
+            CHECK(out[1].x == 296 && out[1].y == 50);
+            CHECK(out[2].x == 95 && out[2].y == 50);
+            /* none before: as they are */
+            n = NitroPort_GpuObjsBetween(b2, -1, a2, 3, out, 8);
+            CHECK(n == 3 && out[0].x == 50 && out[2].x == 90 && out[2].y == 80);
+            /* one not told of isn't found among those told of */
+            b2[0].moved = 0;
+            a2[0].moved = 1;
+            a2[0].x = a2[0].rawX = 104, a2[0].y = a2[0].rawY = 20, a2[0].mdx = 30, a2[0].mdy = 0;
+            n = NitroPort_GpuObjsBetween(b2, 1, a2, 1, out, 8);
+            CHECK(n == 2 && out[0].x == 89 && out[1].x == 100);   /* (after's 15 back; before's, on its own, where it is) */
+        }
     }
 
     /* not all in front of everything: drawn in the picture */
@@ -3590,6 +3648,29 @@ static void test_gpu_objs(void)
     GX_LoadOAM(oam, 0, sizeof(oam));
     NitroPort_Render2DSplit(0, under, &split);
     CHECK(split.gpuObjsLeftOut == 1);
+    /* a weather's (gpuObjs 2): a BG in front of them showing nothing doesn't
+     * count (the message box's, closed); one showing something does */
+    {
+        static u16 blank[32 * 32];
+
+        G2_SetOBJPriority(&oam[1], 2);      /* behind BG2 */
+        GX_LoadOAM(oam, 0, sizeof(oam));
+        split.gpuObjs = 2;
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuObjsLeftOut == 0);
+        memset(blank, 0, sizeof(blank));
+        GX_LoadBG2Scr(blank, 0, sizeof(blank));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuObjsLeftOut == 1 && split.gpuObjCount == 4);
+        split.gpuObjs = 1;
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuObjsLeftOut == 0);   /* (the cut-in's as before) */
+        GX_LoadBG2Scr(map, 0, sizeof(map));
+        G2_SetOBJPriority(&oam[1], 0);
+        GX_LoadOAM(oam, 0, sizeof(oam));
+        NitroPort_Render2DSplit(0, under, &split);
+        CHECK(split.gpuObjsLeftOut == 1);
+    }
     /* a window: shown inside and outside it, fine; hidden outside: drawn */
     GX_SetVisibleWnd(GX_WNDMASK_W0);
     G2_SetWnd0Position(0, 40, 128, 100);
