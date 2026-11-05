@@ -10,14 +10,14 @@ The title screen's lower screen has "Developed by GAME FREAK inc." in
 its corner, on a layer of its own (the copyright layer, BG1: rows 22 and
 23 of its map). Now that line is taken away, and the port's version is
 written there in its white (palette 1, index 15, the grey round the
-letters 13), in the game's font: "3DS port " and PORT_VERSION (the
-Makefile's: git's name for the commit built, a release's tag), or the
-version alone where both don't fit. With no version known, the line is
-taken away alone.
+letters 13), in the game's font: PORT_VERSION (the Makefile's: git's
+name for the commit built, as v0.1.0-alpha.1-154-g4f7152a; a release's
+tag alone, as v0.1.1). With no version known, the line is taken away
+alone.
 
 ---
 diff --git a/src/applications/title_screen.c b/src/applications/title_screen.c
-index ee5774cb..b6776e86 100644
+index ee5774cb..3d18ade4 100644
 --- a/src/applications/title_screen.c
 +++ b/src/applications/title_screen.c
 @@ -175,6 +175,10 @@ typedef struct TitleScreen {
@@ -31,21 +31,19 @@ index ee5774cb..b6776e86 100644
      VecFx32 titleCamTarget;
      VecFx32 titleCamPos;
      BOOL enableInputs;
-@@ -1283,6 +1287,95 @@ static BOOL TitleScreen_ReleaseGfx(TitleScreen *titleScreen, BgConfig *bgConfig,
+@@ -1283,6 +1287,88 @@ static BOOL TitleScreen_ReleaseGfx(TitleScreen *titleScreen, BgConfig *bgConfig,
      return TRUE;
  }
  
 +#ifdef SDK_PORT_3DS
 +// (the 3DS remaster) The port's version (PORT_VERSION, the Makefile's: git's
-+// name for the commit built, a release's tag) where the DS's title screen has
-+// "Developed by GAME FREAK inc.": that line taken away from its layer, and
-+// the version written there in the line's white, at its corner of the lower
-+// screen. With no version known, the line taken away alone.
++// name for the commit built, a release's tag alone) where the DS's title
++// screen has "Developed by GAME FREAK inc.": that line taken away from its
++// layer, and the version written there in the line's white, at its corner of
++// the lower screen. With no version known, the line taken away alone.
 +#ifndef PORT_VERSION
 +#define PORT_VERSION ""
 +#endif
-+
-+#define PORT_VERSION_PREFIX "3DS port "
 +
 +static void TitleScreen_PortLetters(String *string, const char *letters)
 +{
@@ -112,12 +110,7 @@ index ee5774cb..b6776e86 100644
 +    titleScreen->portVersionShown = TRUE;
 +
 +    text = String_Init(64, heapID);
-+    TitleScreen_PortLetters(text, PORT_VERSION_PREFIX PORT_VERSION);
-+
-+    if (Font_CalcStringWidth(FONT_SYSTEM, text, 0) > TILES_TO_PIXELS(32) - 8) {
-+        TitleScreen_PortLetters(text, PORT_VERSION);
-+    }
-+
++    TitleScreen_PortLetters(text, PORT_VERSION);
 +    Text_AddPrinterWithParamsAndColor(&titleScreen->portVersionWindow, FONT_SYSTEM, text, 4, 0, TEXT_SPEED_NO_TRANSFER, TEXT_COLOR(15, 13, 0), NULL);
 +    Window_CopyToVRAM(&titleScreen->portVersionWindow);
 +    String_Free(text);
@@ -127,7 +120,7 @@ index ee5774cb..b6776e86 100644
  static void TitleScreen_Load2DGfx(BgConfig *bgConfig, enum HeapID heapID, TitleScreen *titleScreen)
  {
      // Borders
-@@ -1307,6 +1400,9 @@ static void TitleScreen_Load2DGfx(BgConfig *bgConfig, enum HeapID heapID, TitleS
+@@ -1307,6 +1393,9 @@ static void TitleScreen_Load2DGfx(BgConfig *bgConfig, enum HeapID heapID, TitleS
      Graphics_LoadTilesToBgLayer(NARC_INDEX_DEMO__TITLE__TITLEDEMO, gf_presents_NCGR, bgConfig, TITLE_SCREEN_LAYER_COPYRIGHT, 0, 0, FALSE, heapID);
      Graphics_LoadTilemapToBgLayer(NARC_INDEX_DEMO__TITLE__TITLEDEMO, gf_presents_NSCR, bgConfig, TITLE_SCREEN_LAYER_COPYRIGHT, 0, 0, FALSE, heapID);
      Graphics_LoadPalette(NARC_INDEX_DEMO__TITLE__TITLEDEMO, gf_presents_NCLR, PAL_LOAD_MAIN_BG, PLTT_OFFSET(1), 3 * PALETTE_SIZE_BYTES, heapID);
@@ -137,7 +130,7 @@ index ee5774cb..b6776e86 100644
  
      Bg_MaskPalette(TITLE_SCREEN_LAYER_GIRATINA, COLOR_BLACK);
      Bg_MaskPalette(TITLE_SCREEN_LAYER_PRESS_START, COLOR_BLACK);
-@@ -1351,6 +1447,12 @@ static void TitleScreen_Load2DGfx(BgConfig *bgConfig, enum HeapID heapID, TitleS
+@@ -1351,6 +1440,12 @@ static void TitleScreen_Load2DGfx(BgConfig *bgConfig, enum HeapID heapID, TitleS
  static void TitleScreen_Release2DGfx(BgConfig *bgConfig, enum HeapID heapID, TitleScreen *titleScreen)
  {
      Window_Remove(&titleScreen->pressStartWindow);

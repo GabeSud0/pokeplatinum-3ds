@@ -313,7 +313,8 @@ generated the same way, into `build/` (never committed):
 - **The port's version** (`build/<target>/gen/port_version.h`), written
   where the title screen has "Developed by GAME FREAK inc." on the DS (patch
   `0081`): `git describe --tags --always --dirty` of the port (a release's
-  tag, or the tag before, the commits since and the commit), or
+  tag alone, as `v0.1.1`; else the tag before, the commits since and the
+  commit, as `v0.1.0-alpha.1-154-g4f7152a`), or
   `PORT_VERSION=...` given to `make` (the CI gives a release's tag, else
   `dev-` and the commit: it has no git history). Written only when it
   changes, for `title_screen.c` alone.
