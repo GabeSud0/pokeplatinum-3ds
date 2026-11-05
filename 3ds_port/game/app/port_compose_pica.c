@@ -793,6 +793,12 @@ static int slices_ready(void)
                 if (!sSliceColor) {
                     sSliceColor = vramAlloc(colorSize);
                 }
+                if (!sSliceColor && rgba) {
+                    /* (the free VRAM not in one piece that big: RGB565) */
+                    rgba = 0;
+                    colorSize = C3D_CalcColorBufSize(SLICE_TEX_W, SLICE_TEX_H, GPU_RB_RGB565);
+                    sSliceColor = vramAlloc(colorSize);
+                }
             }
             if (sSliceColor) {
                 sSliceVertsAll = linearAlloc(2u * SLICE_VERTICES * sizeof(NitroGx3dGpuVertex));
@@ -1885,11 +1891,12 @@ int NitroPort_ComposePublish(int engine, int screen)
 
         for (k = 1; !told && k < w * h; k++) {
             if ((l->under[k] & 0x7FFF) != (l->under[0] & 0x7FFF)) {
-                told = 1;
                 NitroPort_Log("[compose] a battle's start: behind the 3D %04x at the top left, %04x at %d,%d (%dx%d)",
                               l->under[0] & 0x7FFF, l->under[k] & 0x7FFF, k % w, k / w, w, h);
+                break;
             }
         }
+        told = 1;
     }
     set->overTop = 0;
     set->overBottom = OVER_ROWS(l);
@@ -3766,7 +3773,7 @@ static void slices_why(int why, int runs)
 /* An H-blank effect's 3D (its lines scrolled apart: the grass's 96 slices
  * of 2 lines going apart at a battle's start, the water's waves), drawn
  * once into sSliceTex as the screen would have it unscrolled (on the
- * colour behind it, its rear plane, its polygons, its tint), then each of
+ * colour behind it, or alpha 0: its rear plane, its polygons), then each of
  * the DS's runs of lines from that at its own scroll: a textured quad a
  * run, all in one draw, then the tint over them. The scene drawn again for each run (the way below,
  * still for what this can't do) cost the GPU about 0.3 ms a run on top of
@@ -3776,7 +3783,9 @@ static void slices_why(int why, int runs)
  * where the texture can stand for the screen: what's behind the 3D all
  * one colour, or a rear plane that hides it, or (an RGBA8 texture, no
  * rear plane: the field's) the screen's own showing where the 3D drew
- * nothing; the 3D inside the screen. Drawn at the screen's own pixels (the smooth
+ * nothing (its translucent pixels over nothing then drawn as they are,
+ * over the screen's black backdrop the same; over anything else darker
+ * than the runs: rare); the 3D inside the screen. Drawn at the screen's own pixels (the smooth
  * 3D's 2x2 too: its texels doubled). Whether it was drawn so (else
  * nothing was). */
 static int draw_slices_eye(const Screen *scr, const LayerSet *set, const PicaView *screenView, const PicaRect *pic,
@@ -3942,6 +3951,7 @@ static int draw_slices_eye(const Screen *scr, const LayerSet *set, const PicaVie
             C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
             C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ZERO);
             C3D_DrawArrays(GPU_TRIANGLES, sSliceVertices, vertices);
+            quad_combiner(0);
         }
         sSliceVertices += vertices;
     }
@@ -4218,7 +4228,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         /* 4. A brightness effect on the 3D (with an H-blank effect's runs:
          * each run's, done above). */
         if (nruns == 1 && !sliced) {
-            tint_3d(info, &rect3d);   /* (draw_slices': in its texture) */
+            tint_3d(info, &rect3d);   /* (draw_slices': over its quads) */
         }
         /* 4b. A BG drawn here, in front of the 3D and behind the rest (the
          * field's weather: ComposeLayers.gpuBg), from its picture, repeated
