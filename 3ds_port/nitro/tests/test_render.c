@@ -3329,6 +3329,133 @@ static void test_gpu_sign(void)
     G2_SetBG3Offset(0, 0);
 }
 
+/* The HM cut-in's band (gpuCircleOn 3) in the rain: the cut-in's sprites in
+ * front of the band's BG and a drop behind it, all left out for the
+ * compositor (the drop under the band: gpuObjsUnderBand); a sprite that
+ * can't be (semi-transparent here) keeps the band and the sprites in the
+ * picture, as the DS has them (in the picture with the band the
+ * compositor's, the drops showed in the band's lines only, 2026-11-05). */
+static void test_band_objs(void)
+{
+    static u8 tiles[64], objTiles[32];
+    static u16 map1[32 * 32], map2[32 * 32];
+    static u16 pltt[16] = { GREY, RED };
+    static u16 pltt1[16] = { 0, GREEN };
+    static u16 objPltt[16] = { 0, BLUE };
+    static uint32_t rgba[256 * 192];
+    static u16 under[256 * 192], over[256 * 192], atlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H];
+    static u8 overAlpha[256 * 192];
+    static GXOamAttr oam[128];
+    static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
+    NitroRender2DSplit split;
+    int i, x = 0, y = 0, r = 0;
+
+    Reset();
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_1D_32K);
+    MakeTile4(tiles + 32, 1);
+    MakeTile4(objTiles, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map1[i] = 1;                  /* (BG1: red everywhere) */
+        map2[i] = 1 | (1 << 12);      /* (BG2: palette 1, green everywhere) */
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    G2_SetBG2ControlText(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0800,
+                         GX_BG_CHARBASE_0x04000);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map1, 0, sizeof(map1));
+    GX_LoadBG2Scr(map2, 0, sizeof(map2));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_LoadBGPltt(pltt1, 32, sizeof(pltt1));
+    GX_LoadOBJ(objTiles, 0, sizeof(objTiles));
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    G2_SetBG0Priority(2);
+    G2_SetBG1Priority(3);             /* (behind the 3D) */
+    G2_SetBG2Priority(1);             /* (in front of it: the band) */
+    for (i = 0; i < 256 * 192; i++) {
+        rgba[i] = 0x404040FFu;
+    }
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));   /* all hidden */
+    G2_SetOBJAttr(&oam[0], 40, 90, 1, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 0, 0);   /* (the cut-in's: in front of the band) */
+    G2_SetOBJAttr(&oam[1], 100, 20, 2, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 0, 0);   /* (a drop: behind its BG) */
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_BG1 | GX_PLANEMASK_BG2 | GX_PLANEMASK_OBJ);
+    G2_SetWnd0Position(0, 64, 255, 128);
+    G2_SetWnd0InsidePlane(GX_WND_PLANEMASK_BG2 | GX_WND_PLANEMASK_OBJ, FALSE);
+    G2_SetWndOutsidePlane(GX_WND_PLANEMASK_BG0 | GX_WND_PLANEMASK_BG1 | GX_WND_PLANEMASK_OBJ, TRUE);
+    GX_SetVisibleWnd(GX_WNDMASK_W0);
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.gpuObjs = 1;
+    split.gpuObj = objs;
+    split.gpuObjAtlas = atlas;
+    /* (no band the compositor's: the drop behind a BG, all in the picture, as before) */
+    split.gpuCircle = 1;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 0 && split.gpuObjsLeftOut == 0 && split.gpuObjsUnderBand == 0);
+    CHECK(over[22 * 256 + 102] == (BLUE | 0x8000));      /* the drop over the field */
+    /* the band the compositor's: all the sprites left out, the drop under the band */
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.gpuObjs = 1;
+    split.gpuObj = objs;
+    split.gpuObjAtlas = atlas;
+    split.gpuCircle = 3;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 3 && split.gpuCircleY == 64 && split.gpuCircleR == 128);
+    CHECK(split.gpuObjsLeftOut == 1 && split.gpuObjCount == 2);
+    CHECK(split.gpuObjsUnderBand == 1 + 1);              /* (BG2's priority, 1) */
+    CHECK(over[22 * 256 + 102] == (GREEN | 0x8000));     /* (the band's BG all over, not the drop) */
+    CHECK(over[92 * 256 + 42] == (GREEN | 0x8000));      /* (nor the cut-in's) */
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) == 3 && y == 64 && r == 128);
+    /* their places not a change */
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    G2_SetOBJPosition(&oam[1], 104, 30);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    /* the cut-in's alone (no rain): none under the band, as before */
+    G2_SetOBJAttr(&oam[1], 100, 20, 2, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 0, 0);
+    oam[1].attr0 = (u16)((oam[1].attr0 & ~0x0300) | 0x0200);   /* (hidden) */
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.gpuObjs = 1;
+    split.gpuObj = objs;
+    split.gpuObjAtlas = atlas;
+    split.gpuCircle = 3;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn == 3 && split.gpuObjsLeftOut == 1 && split.gpuObjsUnderBand == 0);
+    /* a drop that can't be left out (semi-transparent): the band and the
+     * sprites the picture's, the drop over the field */
+    G2_SetOBJAttr(&oam[1], 100, 20, 2, GX_OAM_MODE_XLU, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 0, 0);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.gpuObjs = 1;
+    split.gpuObj = objs;
+    split.gpuObjAtlas = atlas;
+    split.gpuCircle = 3;
+    NitroPort_Render2DSplit(0, under, &split);
+    CHECK(split.gpuCircleOn != 3 && split.gpuObjsLeftOut == 0);
+    CHECK(over[22 * 256 + 102] & 0x8000);                /* the drop, in the picture */
+    CHECK(over[92 * 256 + 42] == (BLUE | 0x8000));       /* the cut-in's, in the band */
+    CHECK(NitroPort_Render2DCircleNow(0, &x, &y, &r) != 3);
+    GX_SetVisibleWnd(GX_WNDMASK_NONE);
+}
+
 /* (the remaster's compositor) Engine A's sprites drawn by the compositor
  * itself (NitroRender2DSplit.gpuObjs: the HM cut-in): left out of the
  * picture when they're all in front of everything, each with its place,
@@ -5297,6 +5424,7 @@ int main(int argc, char **argv)
     test_window_circle();
     test_window_rows();
     test_bg_rows();
+    test_band_objs();
     test_wide_map_past_edges();
     test_gpu_bg();
     test_gpu_sign();

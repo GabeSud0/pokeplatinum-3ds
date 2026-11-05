@@ -2318,6 +2318,29 @@ in-between frames, the band's backdrop and BG drawn in them only
 yet (lines 192 to 192) with the message box still up, keeps the fog the
 compositor's (`GpuBgEmptyWindowOf`: everything as outside the window).
 
+The band in the rain (2026-11-05): the drops are sprites behind the
+band's BG (priority 1 to its 0), so `GpuObjsOf` said the sprites couldn't
+be left out, while `GpuBgRowsOf` had already taken the band as the
+compositor's on the promise that they would be (`GpuBandObjsOut`). So the
+sprites were in the picture, in the layer in front of the 3D, and the
+compositor shows that layer in the band's lines only: over the field the
+drops were gone, and in the band they were drawn into the band's layer,
+where the DS's band hides them (a report of 2026-11-05: the drops went
+dark through the cut-in). Now the band's BG doesn't count as in front of
+the sprites (`GpuObjsOf`'s `bandBg`, the BG `GpuBgRowsOf` found:
+`Engine.rowsBg`), so they're left out with the band, and those behind its
+BG (`NitroRender2DSplit.gpuObjsUnderBand`: 1 + its priority) are drawn by
+the compositor before the band (over the field and the band's backdrop,
+under its BG, which hides them where it isn't clear, as the DS has them;
+not cut as the band closes), the cut-in's after it, as before. And the
+band is the compositor's with the sprites drawn by it only when they can
+be left out with it (`GpuBandRowsOf`, for the picture, its change check
+and `NitroPort_Render2DCircleNow` alike); else the band and the sprites
+are the picture's, as the DS has them. Without rain the cut-in is as it
+was (on the PC through a real Cut in Eterna City: the band's and sprites'
+choices the same frame by frame, old and new). In `test_render.c`:
+`test_band_objs`.
+
 Eterna Forest's light finer than a pixel (patch 0061, 2026-10-31): the
 game keeps the clouds' place finer than a pixel as they follow the camera,
 and sways them slowly (a table, a pixel every 8 frames); the register has
