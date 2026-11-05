@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 15:00:00 -0700
+Subject: [PATCH] The forest past a lower map's south edge on the taller field
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Route 215's maps sit at height 0 in the map matrix, and the scenery map
+south of them (the forest, MAP_HEADER_EVERYWHERE) at 4, two tiles
+higher. Below the route's ledges its cliffs come down to the route's
+south edge (z 608), but not down to the forest's edge, higher up: the
+field at the DS's pixel size, with 24 lines more below the DS's, sees
+between them there, and the 3D's clear colour showed as a black strip
+under the cliff. The DS's view never reaches it from where the player
+goes.
+
+A scenery map south of a lower map is drawn once more, 8 tiles north
+and 4 tiles below that map (Port_RenderSceneryMapLowered, after its
+lowered copies): under that map everywhere, so it isn't seen, and past
+that map's edge the forest is seen going on behind and below. It's 16
+polygons, sent only when in view; only on the wider field, as the
+lowered copies.
+
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 46ebb161..cfccff9a 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -1757,10 +1757,17 @@ static void Port_RenderMirroredEdges(const LandDataManager *landDataMan, ModelAt
+ // itself, from the height of the lowest map beside it up, 2 tiles apart:
+ // those copies fill the slit as a wall would, under the map itself
+ // everywhere else (they're small: 16 polygons each).
++// South of a lower map, the wider field's bottom lines see past that map's
++// south edge, where its cliffs don't come down to this map's edge, higher
++// up: the 3D's clear colour between them (Route 215 below its ledges, z
++// 608, a black strip under the cliff). It's drawn once more, 8 tiles north
++// and 4 tiles below that map: under that map everywhere, and past its edge
++// the forest seen going on behind and below.
+ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *landDataMan)
+ {
+     LoadedMap *loadedMap = landDataMan->loadedMaps[index];
+     int width = landDataMan->mapMatrixWidth, mapMatrixIndex = loadedMap->mapMatrixIndex, lowest = 0x7fffffff;
++    int north = 0x7fffffff;   // (the height of the map north of it, if lower)
+     u16 matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
+     int matrixWidth = MapMatrix_GetWidth(landDataMan->mapMatrix);
+     int altitude = MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, mapMatrixIndex % width, mapMatrixIndex / width, matrixWidth);
+@@ -1788,6 +1795,10 @@ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *
+         if (otherAltitude < altitude && otherAltitude < lowest) {
+             lowest = otherAltitude;
+         }
++
++        if (dz == -1 && otherAltitude < altitude) {
++            north = otherAltitude;
++        }
+     }
+ 
+     if (lowest == 0x7fffffff) {
+@@ -1813,6 +1824,17 @@ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *
+             Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &position, &rotationMatrix, &scale);
+         }
+     }
++
++    // (behind the edge of the lower map north of it: 8 tiles north, 4
++    // tiles below that map)
++    if (north != 0x7fffffff) {
++        position.y = (north - 8) * (MAP_OBJECT_TILE_SIZE / 2) + landDataMan->offset.y;
++        position.z -= 8 * MAP_OBJECT_TILE_SIZE;
++
++        if (GFXBoxTest_IsModelInView(loadedMap->mapRenderObj.resMdl, &position, &rotationMatrix, &scale)) {
++            Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &position, &rotationMatrix, &scale);
++        }
++    }
+ }
+ 
+ static BOOL Port_SceneryMirroredOver(const LandDataManager *landDataMan, u8 index);

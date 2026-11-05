@@ -476,6 +476,8 @@ static void RemasterRender(uint16_t *out)
      * the rest here, where the picture had them) */
     static NitroGpuObj gpuObj[NITRO_GPU_OBJ_MAX];
     static uint16_t gpuObjAtlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H], sprites[400 * 240];
+    /* (those behind the layer in front of the 3D: split.gpuObjsUnder) */
+    static uint16_t spritesUnder[400 * 240];
     int aOnTop = NitroPort_EngineAOnTop() ? 1 : 0;
     int screen, gpuBg, gpuSign, objsUnderSign;
 
@@ -529,8 +531,11 @@ static void RemasterRender(uint16_t *out)
             int k, w = split.width > 256 ? split.width : 256, h = split.top > 0 && split.height > 192 ? split.height : 192;
 
             memset(sprites, 0, sizeof(sprites));
+            memset(spritesUnder, 0, sizeof(spritesUnder));
             for (k = 0; k < split.gpuObjCount; k++) {
                 const NitroGpuObj *o = &gpuObj[k];
+                uint16_t *layer = split.gpuObjsUnder && (int)((o->key >> 10) & 3) > split.gpuObjsUnder - 1 ? spritesUnder
+                                                                                                          : sprites;
                 int tx, ty;
 
                 for (ty = 0; ty < o->h; ty++) {
@@ -540,7 +545,7 @@ static void RemasterRender(uint16_t *out)
                                                  (o->hflip ? o->w - 1 - tx : tx)];
 
                         if ((t & 1) && px >= 0 && px < w && py >= 0 && py < h) {
-                            sprites[py * w + px] =
+                            layer[py * w + px] =
                                 (uint16_t)(0x8000 | ((t >> 11) & 31) | (((t >> 6) & 31) << 5) | (((t >> 1) & 31) << 10));
                         }
                     }
@@ -682,6 +687,11 @@ static void RemasterRender(uint16_t *out)
                         }
                         c = m;
                     }
+                }
+                /* (the sprites behind the layer in front of the 3D: under
+                 * it, as the 3DS's compositor draws them) */
+                if (split.gpuObjsLeftOut && split.gpuObjsUnder && (spritesUnder[cy * width + cx] & 0x8000)) {
+                    c = spritesUnder[cy * width + cx] & 0x7FFF;
                 }
                 if (split.has3d && (over[cy * width + cx] & 0x8000)) {
                     int a = overAlpha[cy * width + cx], k;

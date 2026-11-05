@@ -75,12 +75,15 @@ typedef struct NitroRender2DSplit {
      * (their pixels into gpuObjAtlas). */
     int gpuObjsLeftOut;
     int gpuObjCount;
-    /* (with gpuCircleOn 3, the sprites left out) Those behind the band's BG
-     * (their OAM priority above the BG's: a weather's drops under the HM
-     * cut-in's band, which hides them where it isn't clear): 1 + the BG's
-     * priority, the compositor drawing them before the band, over the rest,
-     * and the others after it; 0 none behind it (all in front of it all). */
-    int gpuObjsUnderBand;
+    /* (the sprites left out) Those behind the layer in front of the 3D
+     * (over): behind the BG of a band the compositor draws (gpuCircleOn 3:
+     * a weather's drops under the HM cut-in's band, which hides them where
+     * it isn't clear), or behind every BG in front of the 3D (the text
+     * box's, over the rain), in front of the 3D. 1 + the priority they're
+     * behind (their OAM priority above it), the compositor drawing them
+     * before that layer, over the rest, and the others after it; 0 none
+     * (all in front of it all). */
+    int gpuObjsUnder;
     /* (asked for with gpuCircle, below) A circle fade's window left out
      * of the picture for the compositor to draw (1): the picture drawn as
      * inside it everywhere; outside it the backdrop (gpuCircleColor,
@@ -185,7 +188,8 @@ typedef struct NitroRender2DSplit {
      * everything, as the DS draws them anyway: normal sprites (not
      * affine, semi-transparent, a window's or a bitmap; no mosaic), none
      * behind a BG (but the BG of a band the compositor draws, gpuCircleOn
-     * 3: gpuObjsUnderBand), all shown inside and outside the windows, no
+     * 3, or all of those in front of the 3D at once, none of them alpha
+     * blended: gpuObjsUnder), all shown inside and outside the windows, no
      * colour effect on them, no H-blank effect, their pixels fitting the
      * atlas.
      * Their places then don't count as a change

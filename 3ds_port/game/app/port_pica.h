@@ -305,11 +305,12 @@ typedef struct ComposeLayers {
     /* (a weather's: NitroPort_GpuSprites 2) Those sprites behind the place
      * name sign left out with them (gpuSign): drawn before it. */
     int gpuObjsUnderSign;
-    /* (gpuCircle 3: NitroRender2DSplit.gpuObjsUnderBand) Those sprites
-     * behind the band's BG (a weather's drops under the HM cut-in's band):
-     * 1 + the BG's priority, those of a priority above it drawn before the
-     * band (over the rest), the others after it; 0 all after it. */
-    int gpuObjsUnderBand;
+    /* (NitroRender2DSplit.gpuObjsUnder) Those sprites behind the layer in
+     * front of the 3D (a weather's drops under the HM cut-in's band, or
+     * under the text box): 1 + the priority they're behind, those of a
+     * priority above it drawn before that layer (over the rest), the
+     * others after it; 0 all after it. */
+    int gpuObjsUnder;
     /* A circle fade left out of the picture for the compositor to draw
      * (NitroRender2DSplit.gpuCircleOn): its middle on the canvas, radius and
      * the colour outside it (RGB555), as the picture was drawn; drawn where

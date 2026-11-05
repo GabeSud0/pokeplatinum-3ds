@@ -3143,13 +3143,24 @@ static int BgTextBlank(const u8 *io, const u8 *vram, int bg);
  * then). Nor the BG of a band the compositor draws (bandBg, gpuCircleOn 3:
  * the HM cut-in's; -1 none), shown inside the band alone: the sprites
  * behind it (a weather's drops) drawn by the compositor under the band,
- * those in front of it over it (NitroRender2DSplit.gpuObjsUnderBand).
+ * those in front of it over it. A weather's, without the sign: sprites
+ * behind every BG in front of the 3D (the text box's, over the rain's
+ * drops) and in front of the 3D can be left out too, drawn under that
+ * layer (the picture's over), when no alpha blending is on any of those
+ * BGs (the DS would blend them with the sprites). *under (if not NULL):
+ * 1 + the priority some are behind (NitroRender2DSplit.gpuObjsUnder), or
+ * 0.
  * vram: the BGs' maps and tiles. */
-static int GpuObjsOf(const u8 *io, const u8 *oam, int lines, const u8 *vram, int mode, int signBg, int bandBg)
+static int GpuObjsOf(const u8 *io, const u8 *oam, int lines, const u8 *vram, int mode, int signBg, int bandBg,
+                     int *under)
 {
     u32 dispcnt = Rd32(io, 0);
     u16 bldcnt = Rd16(io, 0x50), winin = Rd16(io, 0x48), winout = Rd16(io, 0x4A);
-    int bg, i, front = 3, behind = -1;
+    int bg, i, front = 3, behind = -1, prio3d = Rd16(io, 8) & 3, overMax = -1, overBlended = 0, anyUnder = 0;
+
+    if (under != NULL) {
+        *under = 0;
+    }
 
     if (lines || (dispcnt & 0x8000) || ((dispcnt >> 16) & 3) != 1 || (dispcnt & 0x108) != 0x108) {
         return 0;   /* (an H-blank effect, the OBJ window, not the normal display, no 3D) */
@@ -3169,26 +3180,49 @@ static int GpuObjsOf(const u8 *io, const u8 *oam, int lines, const u8 *vram, int
         behind = Rd16(io, 8 + signBg * 2) & 3;   /* (each sprite behind the sign) */
     }
     for (bg = 0; bg < 4; bg++) {
+        int prio = Rd16(io, 8 + bg * 2) & 3;
+
         if (mode == 2 && bg > 0 && (bg == signBg || BgTextBlank(io, vram, bg))) {
             continue;   /* (a weather's: the sign, or a BG showing nothing) */
         }
         if (bg > 0 && bg == bandBg) {
+            overMax = prio > overMax ? prio : overMax;
             continue;   /* (the band's: the compositor draws them under it or over it) */
         }
-        if ((dispcnt & (0x100u << bg)) && (int)(Rd16(io, 8 + bg * 2) & 3) < front) {
-            front = Rd16(io, 8 + bg * 2) & 3;
+        if (!(dispcnt & (0x100u << bg))) {
+            continue;
+        }
+        if (prio < front) {
+            front = prio;
+        }
+        if (bg > 0 && prio * 4 + bg < prio3d * 4) {
+            /* (in front of the 3D: in the picture's over) */
+            overMax = prio > overMax ? prio : overMax;
+            if (((bldcnt >> 6) & 3) == 1 && (bldcnt & (1u << bg))) {
+                overBlended = 1;
+            }
         }
     }
     for (i = 0; i < 128; i++) {
         u16 a0 = Rd16(oam, (u32)i * 8), a2 = Rd16(oam, (u32)i * 8 + 4);
+        int prio = (a2 >> 10) & 3;
 
         if ((!(a0 & 0x100) && (a0 & 0x200)) || (a0 >> 14) == 3) {
             continue;   /* (hidden) */
         }
-        if ((a0 & 0x100) || (a0 & 0x1000) || ((a0 >> 10) & 3) != 0 || (int)((a2 >> 10) & 3) > front ||
-            (behind >= 0 && (int)((a2 >> 10) & 3) <= behind)) {
-            return 0;   /* (affine, mosaic, not a normal one, behind a BG; or in front of the sign) */
+        if ((a0 & 0x100) || (a0 & 0x1000) || ((a0 >> 10) & 3) != 0 || (behind >= 0 && prio <= behind)) {
+            return 0;   /* (affine, mosaic, not a normal one; or in front of the sign) */
         }
+        if (prio > front && (mode != 2 || behind >= 0 || overBlended || bandBg >= 0 || overMax < 0 ||
+                             prio <= overMax || prio > prio3d)) {
+            return 0;   /* (behind a BG: not a weather's behind all those in front of the 3D alone, and in front of it) */
+        }
+        if (overMax >= 0 && prio > overMax) {
+            anyUnder = 1;
+        }
+    }
+    if (under != NULL && anyUnder) {
+        *under = 1 + overMax;
     }
     return 1;
 }
@@ -3198,6 +3232,41 @@ static u32 GpuObjKey(const u8 *o)
 {
     return ((u32)(Rd16(o, 0) & 0xFF00) << 16) | ((u32)(Rd16(o, 2) & 0xF000) << 4) | Rd16(o, 4);
 }
+
+/* (EngineSmallSignature, MakeGpuObjs) A key into keys, sorted, each once:
+ * the count after. */
+static int AddObjKey(u32 *keys, int n, u32 key)
+{
+    int j;
+
+    for (j = n; j > 0 && keys[j - 1] > key; j--) {
+    }
+    if (j > 0 && keys[j - 1] == key) {
+        return n;
+    }
+    memmove(&keys[j + 1], &keys[j], (size_t)(n - j) * sizeof(keys[0]));
+    keys[j] = key;
+    return n + 1;
+}
+
+static u32 ObjKeysHash(const u32 *keys, int n)
+{
+    u32 h = 0x0B15u;
+    int i;
+
+    for (i = 0; i < n; i++) {
+        h = (h ^ keys[i]) * 16777619u;
+    }
+    return h;
+}
+
+/* (MakeGpuObjs) What the sprites engine A's last picture left out show:
+ * their keys, sorted (the compositor has a picture of each), hashed. */
+static struct {
+    int valid, n;
+    u32 keys[128];
+    u32 hash;
+} sObjKeysMade;
 
 /* OAM entry i as a sprite the compositor draws (its atlas place not set):
  * FALSE if it's hidden, or (onPicture) off the picture. */
@@ -3324,6 +3393,13 @@ static BOOL MakeGpuObjs(const Engine *e, u32 dispcnt, NitroRender2DSplit *split)
         prioOf[j] = p;
     }
     split->gpuObjCount = n;
+    /* (what they show, for the change check: EngineSmallSignature) */
+    sObjKeysMade.n = 0;
+    for (i = 0; i < n; i++) {
+        sObjKeysMade.n = AddObjKey(sObjKeysMade.keys, sObjKeysMade.n, split->gpuObj[i].key);
+    }
+    sObjKeysMade.hash = ObjKeysHash(sObjKeysMade.keys, sObjKeysMade.n);
+    sObjKeysMade.valid = 1;
     return TRUE;
 }
 
@@ -3345,15 +3421,20 @@ static struct {
  * it, when they can be: TRUE then, with them in split. */
 static BOOL GpuObjsLeaveOut(const Engine *e, const ObjFrame *f, u32 dispcnt, NitroRender2DSplit *split)
 {
+    int under = 0;
+
     if (e->isA && !split->gpuObjs) {
         __atomic_store_n(&sGpuObjCanvas.valid, 0, __ATOMIC_RELEASE);   /* (not asked for: no places) */
+    }
+    if (e->isA) {
+        sObjKeysMade.valid = 0;   /* (made again below, if they're left out) */
     }
     /* (a weather's tried again each picture: it goes on for minutes, one
      * that couldn't be left out a while ago may be now) */
     if (!split->gpuObjs || split->gpuObj == NULL || split->gpuObjAtlas == NULL || !e->isA || !split->has3d ||
         e->squeeze || (sGpuObjsRefused && split->gpuObjs != 2) ||
         !GpuObjsOf(e->io, e->oam, e->lines != NULL, e->bgVram, split->gpuObjs,
-                   split->gpuSignLeftOut ? __builtin_ctz((unsigned)split->gpuSignLeftOut) : -1, e->rowsBg)) {
+                   split->gpuSignLeftOut ? __builtin_ctz((unsigned)split->gpuSignLeftOut) : -1, e->rowsBg, &under)) {
         return FALSE;
     }
     uint64_t objStart = ClockNow();
@@ -3368,18 +3449,9 @@ static BOOL GpuObjsLeaveOut(const Engine *e, const ObjFrame *f, u32 dispcnt, Nit
     if (split->gpuObjs == 2) {
         sGpuObjsRefused = 0;   /* (a weather's left out again: their places not a change again) */
     }
-    if (e->rowsBg >= 0) {
-        /* (a band's BG the compositor draws: any sprite behind it, its
-         * priority above the BG's, under the band) */
-        int bandPrio = Rd16(e->io, 8 + e->rowsBg * 2) & 3, k;
-
-        for (k = 0; k < split->gpuObjCount; k++) {
-            if ((int)((split->gpuObj[k].key >> 10) & 3) > bandPrio) {
-                split->gpuObjsUnderBand = 1 + bandPrio;
-                break;
-            }
-        }
-    }
+    /* (any behind a band's BG the compositor draws, or behind the BGs in
+     * front of the 3D: under that layer) */
+    split->gpuObjsUnder = under;
     split->gpuObjsLeftOut = 1;
     sGpuObjCanvas.width = e->width;
     sGpuObjCanvas.origin = e->origin;
@@ -5713,7 +5785,7 @@ static int GpuBandRowsOf(const u8 *io, const u8 (*lines)[NITRO_LINE_REGS], const
 {
     int bg = GpuBgRowsOf(io, lines, oam, vram, objsMode != 0, skipBg, top, bottom, lo, hi);
 
-    if (bg >= 0 && objsMode != 0 && !GpuObjsOf(io, oam, lines != NULL, vram, objsMode, -1, bg < 4 ? bg : -1)) {
+    if (bg >= 0 && objsMode != 0 && !GpuObjsOf(io, oam, lines != NULL, vram, objsMode, -1, bg < 4 ? bg : -1, NULL)) {
         bg = GpuBgRowsOf(io, lines, oam, vram, 0, skipBg, top, bottom, lo, hi);
     }
     return bg;
@@ -7035,16 +7107,36 @@ static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg, int gpuObjs
         /* (no OAM) */
     } else if (isA && gpuObjs) {
         /* (the sprites the compositor draws itself: where they are isn't in
-         * the picture, which needn't be drawn again as they move) */
-        u8 oam[0x400];
-        int i;
+         * the picture, which needn't be drawn again as they move; nor which
+         * OAM entry shows which of them, so long as the same ones show: the
+         * compositor finds each one's picture by what it shows, GpuObjKey,
+         * where the game has it in the frame it shows. The rain's drops
+         * come and go every step, OAM's entries taken in turn: hashed entry
+         * by entry, the upper screen's picture was made again (its sprites
+         * alone) and handed over 30 times a second in the rain, ~10 ms each
+         * on the geometry's core, 2026-11-05) */
+        /* Nor when some of them go: while all that show are of those the
+         * last picture left out (sObjKeysMade), it's as that picture had
+         * them (each kind of drop isn't shown every step). */
+        const u8 *oam = snapshot ? st->oam : NitroPort_Oam;
+        u32 keys[128];
+        int i, j, n = 0, made = sObjKeysMade.valid;
 
-        memcpy(oam, snapshot ? st->oam : NitroPort_Oam, sizeof(oam));
         for (i = 0; i < 128; i++) {
-            Wr16(oam, (u32)i * 8, (u16)(Rd16(oam, (u32)i * 8) & 0xFF00));
-            Wr16(oam, (u32)i * 8 + 2, (u16)(Rd16(oam, (u32)i * 8 + 2) & 0xFE00));
+            u16 a0 = Rd16(oam, (u32)i * 8);
+
+            if ((!(a0 & 0x100) && (a0 & 0x200)) || (a0 >> 14) == 3) {
+                continue;   /* (hidden) */
+            }
+            n = AddObjKey(keys, n, GpuObjKey(oam + (u32)i * 8));
         }
-        h = HashWords(oam, 0x400, h);
+        for (i = 0, j = 0; made && i < n; i++) {
+            while (j < sObjKeysMade.n && sObjKeysMade.keys[j] < keys[i]) {
+                j++;
+            }
+            made = j < sObjKeysMade.n && sObjKeysMade.keys[j] == keys[i];
+        }
+        h = (h ^ (made ? sObjKeysMade.hash : ObjKeysHash(keys, n))) * 16777619u;
     } else {
         h = HashWords((snapshot ? st->oam : NitroPort_Oam) + (isA ? 0 : 0x400), 0x400, h);
     }
@@ -7458,7 +7550,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
         gpuObjs = GpuObjsOf(split->snapshot ? st->io : NitroPort_IoReg, split->snapshot ? st->oam : NitroPort_Oam,
                             split->snapshot ? st->lines : NitroPort_LineRegs.active,
                             split->snapshot ? sMapShadowA : NitroPort_BgVram, split->gpuObjs, gpuSign,
-                            gpuCircle == 5 && rowsBg < 4 ? rowsBg : -1);
+                            gpuCircle == 5 && rowsBg < 4 ? rowsBg : -1, NULL);
     }
     small = SmallSignatureOf(e, split, gpuBg, gpuObjs, gpuCircle, rowsShown, 0, gpuSign, signMasked);
     /* The small parts changed (a scroll, a sprite, a colour: most frames of

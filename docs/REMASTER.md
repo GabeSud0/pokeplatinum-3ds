@@ -870,6 +870,17 @@ screen's 320 x 192 at 1.25 times, as above.
   mountains looked cut). Such a map is drawn again below itself, from the
   lowest map beside it up, 2 tiles apart (16 polygons each), the copies
   filling the slit as a wall would (`Port_RenderSceneryMapsLowered`).
+- **Route 215's forest below its ledges** (patch 0082): the route's maps
+  are at height 0, the forest's scenery map south of them at 4. Below the
+  ledges the route's cliffs come down to its south edge (z 608) but not to
+  the forest's edge, higher up, and the pixel field's 24 lines below the
+  DS's saw between them: a black strip under the cliff (a photo of
+  2026-11-05, standing at 606,600). A scenery map south of a lower map is
+  drawn once more, 8 tiles north and 4 tiles below that map: under it
+  everywhere, and past its edge the forest goes on behind and below (16
+  polygons, when in view). On the PC with the rain off, at 606,600,
+  600,604 and 590,600: the pictures change only in the strip's rows, the
+  forest there.
 - **Route 206's river past the scenery** (patch 0069): beside the Cycling
   Road the wider field sees into the scenery map next to it, a flat ledge
   at its own height with the route's river and ledges stopping at the
@@ -2256,6 +2267,45 @@ the next, out of step with each other. Now a weather's sprites behind the
 sign don't keep it in the picture (`gpuObjs` 2, the sprite's priority
 below the BG's): the sign stays the compositor's, over the drops.
 
+The rain's cost, second round (2026-11-05, log ced77ee5): with the drops
+the compositor's, the upper screen's picture was still made again about
+28 times a second in the rain (its sprites alone, `sObjsOnly`), and
+handed over each time: ~30 ms a picture on the geometry's core, 10-15 ms
+of it handing over, next to the geometry's 20-28 ms a scene on Route 215.
+At four times the speed the game made 80-100 frames a second in the rain
+and 150-216 without it, and with a text box up only 7-10 pictures a
+second came through (each drawn whole, below). The change check hashed
+the sprites' OAM entry by entry, their places taken out: the drops come
+and go every step, OAM's entries taken in turn, so it changed every step.
+Now it's what they show, as a set (`GpuObjKey`, sorted, each once:
+`AddObjKey`, `ObjKeysHash`), and while all that show are of those the last
+picture left out (`sObjKeysMade`, made by `MakeGpuObjs`; not kept by a
+picture that didn't leave them out), it's that picture's: each kind of
+drop isn't shown every step. The compositor draws each where the game had
+it in the frame shown and finds its picture by what it shows, so the
+picture needn't be made again for it. On the PC (the 3DS's check run each
+other frame, local `drawcount`), standing in Route 215's rain for 600
+frames: 300 pictures before, 0 now (116 with the set alone); walking: 80,
+0. In `test_render.c`: `test_gpu_objs` (entries swapped, some hidden: no
+change; a picture the last didn't have: drawn).
+
+A text box in the rain (2026-11-05): the box's BG is in front of the 3D
+and of the drops (priority 0; the drops 1, the 3D 1), so the drops were
+put back in the picture and it was drawn whole for every step they took
+(on the PC, the Cut tree's question up in Eterna's rain: 150 pictures in
+300 frames; with the cost above, 7-10 a second on the 3DS, the text
+coming slowly). Now a weather's sprites behind every BG in front of the 3D
+and in front of the 3D can be left out too (`GpuObjsOf`, `gpuObjs` 2,
+without the sign), when none of those BGs is alpha blended (the DS would
+blend it with the drops): they're drawn by the compositor before the
+layer in front of the 3D (`NitroRender2DSplit.gpuObjsUnder`: 1 + the
+priority they're behind, as `ComposeLayers.gpuObjsUnder`; draw_screen's
+step 5, the others at 5b), which hides them where it isn't clear, as the
+DS has them. The PC's picture draws them so too (`spritesUnder`). The
+cut-in's own (`gpuObjs` 1) are as before. On the PC, the same box: 0
+pictures in 300 frames, the drops over the field and under the box. In
+`test_render.c`: `test_text_box_objs`.
+
 The cut-in's band opening and closing (2026-11-01): a window, window 0
 alone across the DS's screen, its lines (WIN0V) 5 to 13 further each side
 a step, every other frame; inside it BG3 alone of the BGs (the band, a
@@ -2329,7 +2379,7 @@ where the DS's band hides them (a report of 2026-11-05: the drops went
 dark through the cut-in). Now the band's BG doesn't count as in front of
 the sprites (`GpuObjsOf`'s `bandBg`, the BG `GpuBgRowsOf` found:
 `Engine.rowsBg`), so they're left out with the band, and those behind its
-BG (`NitroRender2DSplit.gpuObjsUnderBand`: 1 + its priority) are drawn by
+BG (`NitroRender2DSplit.gpuObjsUnder`: 1 + its priority) are drawn by
 the compositor before the band (over the field and the band's backdrop,
 under its BG, which hides them where it isn't clear, as the DS has them;
 not cut as the band closes), the cut-in's after it, as before. And the
