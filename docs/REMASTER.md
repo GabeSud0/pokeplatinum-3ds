@@ -394,22 +394,28 @@ or 18 lines high instead of 2). So where it can, the compositor draws the
 3D once an eye into a texture of its own (`draw_slices`: 256 x 512, the
 screen's 240 x 400 at its corner, the GPU's framebuffer there too, the
 viewport only those: `PicaView.viewWidth`), unscrolled, as the screen
-would have it (on the colour behind it, its rear plane, its polygons, its
-tint), then every one of the DS's runs from it at its own scroll, a
-textured quad each, in one draw: the grass's 96 slices of 2 lines
+would have it (its rear plane, its polygons), then every one of the DS's
+runs from it at its own scroll, a textured quad each, in one draw, and
+the 3D's tint over the same quads: the grass's 96 slices of 2 lines
 exactly (each moved by whole pixels, so every pixel takes one texel's
-middle). Only where the texture can stand for the screen: on the upper
-screen, the 3D inside it, what's behind the 3D all one colour where it
-goes (the field's backdrop) or a rear plane that hides it, no outlines;
-else the runs as above. It's taken even where the command list had room
+middle). What's behind the 3D: with a rear plane that hides it, or all
+one colour (the texture filled with it), the texture is all there is;
+else, the texture RGBA8 (filled with alpha 0) and no rear plane (the
+field's: its clear colour's alpha is 0), the 3D's empty pixels are left
+out of the quads (the alpha test) and the screen's own picture shows
+there. Only on the upper screen, the 3D inside it, no outlines; else the
+runs as above. The first log (2026-11-04) had a battle's start with
+what's behind the 3D not one colour: the stretched picture's (the log
+now says where, once: `[compose] a battle's start: behind the 3D`). It's taken even where the command list had room
 for only one run (that run would have drawn the effect unsliced). With
 the slider up the right eye goes the left eye's way. The
 log says the way each time it changes (`[compose] an H-blank effect's 3D
 (96 runs of lines) drawn from its texture`, or why not), 24 times at
 most. The 3D is at the screen's own pixels then (the
 2x2 smooth 3D's texels doubled) for the moment of the effect. The texture
-is made the first time it's needed, when VRAM has room for it (768 KB)
-and 512 KB more (the outlines' copies come later), its quads in linear
+is made the first time it's needed, when VRAM has room for it (RGBA8, 1
+MB with its depth/stencil; else RGB565, 768 KB, only for the first two
+cases) and 512 KB more (the outlines' copies come later), its quads in linear
 memory of their own (126 KB); the log says which (`[compose] an H-blank
 effect's 3D drawn once into a texture`, or `no room for the H-blank
 effects' texture`: the runs as above).
