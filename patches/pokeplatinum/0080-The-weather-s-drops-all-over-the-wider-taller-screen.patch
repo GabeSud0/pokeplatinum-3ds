@@ -1,0 +1,485 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 15:00:00 -0700
+Subject: [PATCH] The weather's drops all over the wider, taller screen (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A weather's sprites (the rain's drops, the snow's flakes, the sand) live
+on the DS's screen with 64 pixels round it: they come on there, go off
+one side and on at the other (ov5_021D630C), and the weather's sprite
+surface shows only those on the DS's 256 x 192. On the 3DS's wider upper
+screen, and the field at the DS's pixel size (400 x 240), the weather
+showed in the DS's part of it alone.
+
+Now, with the screen wider or taller (NitroPort_EngineABeside: ex
+columns each side, et lines above and below; 0 and 0 on the DS's, all as
+before):
+- the weather's surface shows its cells on the whole picture
+  (RenderOam_PortInitSurfaceBeside);
+- the drops go round the wider screen with 64 pixels round it
+  (ov5_PortPlaceWide);
+- each comes on where the game puts it on the DS's screen, stretched
+  onto the wider one, or as far beside the wider one as the game has it
+  beside the DS's (its first place after ov5_021D6F00, where the DS has
+  it going round);
+- more of them come on for the wider screen's area, width or height, as
+  each weather brings them on all over it, along its top or down its
+  side (ov5_PortWeatherCount; the pool of 48 as before), and the ones a
+  weather brings on at once as it starts are moved on as far as their
+  place among them has it (ov5_021D7568);
+- they're taken away as far below or above the wider screen as the
+  game has them below or above the DS's (the snow's, the ash's, the
+  spirits').
+
+---
+diff --git a/include/render_oam.h b/include/render_oam.h
+index a757907f..ee2fcf87 100644
+--- a/include/render_oam.h
++++ b/include/render_oam.h
+@@ -33,6 +33,10 @@ void RenderOam_InitSurface(NNSG2dRenderSurface *surface, NNSG2dViewRect *viewRec
+ // (told 1), or of what's just come on (2), or nothing's told of them (0):
+ // told the compositor as OAM is handed over (RenderOam_Transfer).
+ void RenderOam_PortSetMove(int told, int dx, int dy);
++// (the 3DS remaster) A main screen surface whose cells show anywhere on the
++// upper screen's picture, beside the DS's screen and above and below it
++// (the field's weather on the wider, taller screen).
++void RenderOam_PortInitSurfaceBeside(NNSG2dRenderSurface *surface, NNSG2dViewRect *viewRect, NNSG2dRendererInstance *renderer);
+ #endif
+ 
+ void RenderOam_Transfer(void);
+diff --git a/src/overlay005/ov5_021D5EB8.c b/src/overlay005/ov5_021D5EB8.c
+index dad67ed7..bddd8b07 100644
+--- a/src/overlay005/ov5_021D5EB8.c
++++ b/src/overlay005/ov5_021D5EB8.c
+@@ -3,6 +3,7 @@
+ #ifdef SDK_PORT_3DS
+ extern void NitroPort_RepeatingBg(int bg, int on);
+ extern void NitroPort_SetWeatherSprites(int on);
++extern void NitroPort_EngineABeside(int *x, int *top);
+ #endif
+ 
+ #include <nitro.h>
+@@ -790,6 +791,126 @@ static void ov5_PortWeatherSprites(int weather, BOOL on)
+ 
+     NitroPort_SetWeatherSprites(sPortWeatherSprites != 0);
+ }
++
++// (the 3DS remaster) A weather's sprites on the wider, taller upper screen:
++// the DS's 256 x 192 with ex columns beside it each side and et lines above
++// and below it (NitroPort_EngineABeside; 0 and 0 on the DS's screen, all as
++// before). The drops live on the DS's screen with 64 pixels round it, going
++// off one side and on at the other (ov5_021D630C); round the wider screen
++// instead. Each comes on where the game puts it on the DS's screen
++// stretched onto the wider one, or as far beside the wider one as the game
++// has it beside the DS's (the first place the game gives it, after
++// ov5_021D6F00: ov5_PortPlaceWide), more of them for the wider screen
++// (ov5_PortWeatherCount); and they're taken away as far below or above the
++// wider screen as the game has them below or above the DS's.
++static Sprite *sPortComingOn;
++static u32 sPortCountCarry;
++
++static void ov5_PortBeside(int *ex, int *et)
++{
++    NitroPort_EngineABeside(ex, et);
++
++    if (*ex < 0 || *ex > 128) {
++        *ex = 0;
++    }
++
++    if (*et < 0 || *et > 64) {
++        *et = 0;
++    }
++}
++
++// (the lines above and below the DS's screen: ov5_PortBeside's et)
++static int ov5_PortTop(void)
++{
++    int ex, et;
++
++    ov5_PortBeside(&ex, &et);
++    return et;
++}
++
++enum {
++    PORT_WEATHER_SPREAD_AREA, // (they come on all over the screen)
++    PORT_WEATHER_SPREAD_WIDTH, // (along its top)
++    PORT_WEATHER_SPREAD_HEIGHT, // (down its side)
++};
++
++// How many to bring on for count on the DS's screen: as many again for each
++// part of the wider screen as the DS's has (its area, width or height, as
++// they come on), the parts of one left over kept for the next time.
++static int ov5_PortWeatherCount(int count, int spread)
++{
++    int ex, et;
++    u32 w, h, ratio, n;
++
++    ov5_PortBeside(&ex, &et);
++
++    if (count <= 0 || (ex == 0 && et == 0)) {
++        return count;
++    }
++
++    w = ((u32)(256 + 2 * ex) << 12) / 256;
++    h = ((u32)(192 + 2 * et) << 12) / 192;
++    ratio = spread == PORT_WEATHER_SPREAD_AREA ? (w * h) >> 12 : spread == PORT_WEATHER_SPREAD_WIDTH ? w : h;
++    n = (u32)count * ratio + sPortCountCarry;
++    sPortCountCarry = n & 0xfff;
++
++    return (int)(n >> 12);
++}
++
++// (ov5_PortPlaceWide) A place on the DS's screen stretched onto the wider
++// one (span: the DS's last pixel, 255 or 191); beside it, as far beside the
++// wider one.
++static fx32 ov5_PortStretch(fx32 v, int span, int extra)
++{
++    if (v < 0) {
++        return v - extra * FX32_ONE;
++    }
++
++    if (v > span * FX32_ONE) {
++        return v + extra * FX32_ONE;
++    }
++
++    return (fx32)(((s64)v * (span + 2 * extra)) / span) - extra * FX32_ONE;
++}
++
++// (ov5_021D630C on the wider screen) Where a drop goes now: one just come on
++// where the game put it on the DS's (round it as the DS has it), stretched;
++// round the wider screen with 64 pixels round it as the DS's is.
++static void ov5_PortPlaceWide(Sprite *sprite, VecFx32 *pos, int ex, int et)
++{
++    fx32 w = (255 + 64 + 2 * ex) * FX32_ONE, h = (192 + 64 + 2 * et) * FX32_ONE;
++
++    if (sprite == sPortComingOn) {
++        sPortComingOn = NULL;
++
++        if (pos->x > ((255 << FX32_SHIFT) + 64 * FX32_ONE)) {
++            pos->x %= ((255 << FX32_SHIFT) + 64 * FX32_ONE);
++        } else if (pos->x < (-64 * FX32_ONE)) {
++            pos->x += ((255 << FX32_SHIFT) + 64 * FX32_ONE);
++        }
++
++        if (pos->y > ((192 << FX32_SHIFT) + 64 * FX32_ONE)) {
++            pos->y %= ((192 << FX32_SHIFT) + 64 * FX32_ONE);
++        } else if (pos->y < (-64 * FX32_ONE)) {
++            pos->y += ((192 << FX32_SHIFT) + 64 * FX32_ONE);
++        }
++
++        pos->x = ov5_PortStretch(pos->x, 255, ex);
++        pos->y = ov5_PortStretch(pos->y, 191, et);
++    }
++
++    if (pos->x > (255 + 64 + ex) * FX32_ONE) {
++        pos->x = (pos->x + ex * FX32_ONE) % w - ex * FX32_ONE;
++    } else if (pos->x < (-64 - ex) * FX32_ONE) {
++        pos->x += w;
++    }
++
++    if (pos->y > (192 + 64 + et) * FX32_ONE) {
++        pos->y = (pos->y + et * FX32_ONE) % h - et * FX32_ONE;
++    } else if (pos->y < (-64 - et) * FX32_ONE) {
++        pos->y += h;
++    }
++}
+ #endif
+ 
+ static void ov5_021D61D0(UnkStruct_ov5_021D61D0 *param0)
+@@ -805,7 +926,13 @@ static void ov5_021D61D0(UnkStruct_ov5_021D61D0 *param0)
+     v0.sizeView.x = (255 << FX32_SHIFT);
+     v0.sizeView.y = (192 << FX32_SHIFT);
+ 
++#ifdef SDK_PORT_3DS
++    // (the 3DS remaster: shown beside the DS's screen and above and below
++    // it too, the wider, taller screen's)
++    RenderOam_PortInitSurfaceBeside(&param0->unk_C0, &v0, &param0->unk_14);
++#else
+     RenderOam_InitSurface(&param0->unk_C0, &v0, NNS_G2D_SURFACETYPE_MAIN2D, &param0->unk_14);
++#endif
+ 
+     for (v1 = 0; v1 < 4; v1++) {
+         param0->unk_00[v1] = SpriteResourceCollection_New(31, v1, HEAP_ID_FIELD1);
+@@ -875,6 +1002,22 @@ static void ov5_021D62BC(UnkStruct_ov5_021D61D0 *param0)
+ 
+ static void ov5_021D630C(Sprite *param0, VecFx32 *param1)
+ {
++#ifdef SDK_PORT_3DS
++    int ex, et;
++
++    ov5_PortBeside(&ex, &et);
++
++    if (ex > 0 || et > 0) {
++        ov5_PortPlaceWide(param0, param1, ex, et);
++        Sprite_SetPosition(param0, param1);
++        return;
++    }
++
++    if (param0 == sPortComingOn) {
++        sPortComingOn = NULL;
++    }
++#endif
++
+     if (param1->x > ((255 << FX32_SHIFT) + 64 * FX32_ONE)) {
+         param1->x %= ((255 << FX32_SHIFT) + 64 * FX32_ONE);
+     } else {
+@@ -1632,6 +1775,9 @@ static UnkStruct_ov5_021D6FA8 *ov5_021D6F00(UnkStruct_ov5_021DB4B8 *param0, int
+ 
+     GF_ASSERT(v0->unk_04);
+     Sprite_SetDrawFlag(v0->unk_04, TRUE);
++#ifdef SDK_PORT_3DS
++    sPortComingOn = v0->unk_04; // (its first place, ov5_021D630C: stretched)
++#endif
+ 
+     return v0;
+ }
+@@ -1656,6 +1802,11 @@ static void ov5_021D6FA8(UnkStruct_ov5_021D6FA8 *param0)
+     param0->unk_34->unk_38 = param0->unk_38;
+ 
+     Sprite_SetDrawFlag(param0->unk_04, FALSE);
++#ifdef SDK_PORT_3DS
++    if (sPortComingOn == param0->unk_04) {
++        sPortComingOn = NULL;
++    }
++#endif
+     ov5_021D6EF0(param0);
+ 
+     v0 = param0->unk_04;
+@@ -2072,6 +2223,51 @@ static void ov5_021D7568(UnkStruct_ov5_021DB4B8 *param0, UnkFuncPtr_ov5_021D7210
+     UnkStruct_ov5_021D6FA8 *v3;
+     UnkStruct_ov5_021D6FA8 *v4;
+ 
++#ifdef SDK_PORT_3DS
++    {
++        // (the wider screen: more of them come on, ov5_PortWeatherCount;
++        // each moved on as far as its place among them has it of the DS's
++        // param2)
++        int ex, et, n = 0;
++
++        ov5_PortBeside(&ex, &et);
++
++        if (ex > 0 || et > 0) {
++            param1(param0, param2);
++
++            for (v3 = param0->unk_0C.unk_34; v3 != &param0->unk_0C; v3 = v3->unk_34) {
++                n++;
++            }
++
++            v3 = param0->unk_0C.unk_34;
++            v4 = v3->unk_34;
++
++            for (v0 = 0; v0 < n; v0++) {
++                int i = n > param2 ? v0 * param2 / n : v0;
++
++                if (v3 == &param0->unk_0C) {
++                    break;
++                }
++
++                v2 = i >= 1 ? param4 * ((i - 1) / param3) : 0;
++
++                for (v1 = 0; v1 < v2; v1++) {
++                    param5(v3);
++
++                    if (v3->unk_08 == NULL) {
++                        break;
++                    }
++                }
++
++                v3 = v4;
++                v4 = v3->unk_34;
++            }
++
++            return;
++        }
++    }
++#endif
++
+     param1(param0, param2);
+ 
+     v2 = 0;
+@@ -2262,6 +2458,10 @@ static void ov5_021D78A4(UnkStruct_ov5_021DB4B8 *param0, int param1)
+     VecFx32 v5;
+     u32 v6;
+ 
++#ifdef SDK_PORT_3DS
++    param1 = ov5_PortWeatherCount(param1, PORT_WEATHER_SPREAD_AREA); // (they come on all over the screen)
++#endif
++
+     for (v0 = 0; v0 < param1; v0++) {
+         v1 = ov5_021D6F00(param0, sizeof(s32) * 8);
+ 
+@@ -2458,6 +2658,10 @@ static void ov5_021D7C40(UnkStruct_ov5_021DB4B8 *param0, int param1)
+     int v5;
+     VecFx32 v6;
+ 
++#ifdef SDK_PORT_3DS
++    param1 = ov5_PortWeatherCount(param1, PORT_WEATHER_SPREAD_WIDTH); // (they come on along its top)
++#endif
++
+     v3 = (UnkStruct_ov5_021D9984 *)param0->unk_B98;
+ 
+     if (v3->unk_B4[1] == 1) {
+@@ -2547,6 +2751,11 @@ static void ov5_021D7D54(UnkStruct_ov5_021D6FA8 *param0, s32 *param1)
+     param1[5]++;
+     param1[5] += 0x10000;
+ 
++#ifdef SDK_PORT_3DS
++    // (as far below or above the wider screen as the DS's)
++    v0.y += v0.y > 0 ? -ov5_PortTop() : ov5_PortTop();
++#endif
++
+     if (((v0.y < -284) && (v0.y > -296)) || ((v0.y > 212) && (v0.y < 232))) {
+         v1 = (s32 *)(param1[0]);
+         *v1 = 1;
+@@ -2692,6 +2901,10 @@ static void ov5_021D8098(UnkStruct_ov5_021DB4B8 *param0, int param1)
+     int v6[4] = { 2, 2, 2, 2 };
+     int v7;
+ 
++#ifdef SDK_PORT_3DS
++    param1 = ov5_PortWeatherCount(param1, PORT_WEATHER_SPREAD_WIDTH); // (they come on along its top)
++#endif
++
+     v3 = (UnkStruct_ov5_021D9984 *)param0->unk_B98;
+ 
+     for (v0 = 0; v0 < param1; v0++) {
+@@ -3230,6 +3443,10 @@ static void ov5_021D8B88(UnkStruct_ov5_021DB4B8 *param0, int param1)
+     static const int v7[8] = { -3, -5, -5, -4, -5, -6, -10, -6 };
+     static const int v8[8] = { 2, 2, 2, 4, 4, 2, 2, 2 };
+ 
++#ifdef SDK_PORT_3DS
++    param1 = ov5_PortWeatherCount(param1, PORT_WEATHER_SPREAD_HEIGHT); // (they come on down its right side)
++#endif
++
+     v4 = (UnkStruct_ov5_021D9984 *)param0->unk_B98;
+     v4->unk_B4[1] = (v4->unk_B4[1] + 1) % (40 * 8);
+     v2 = v4->unk_B4[1] / 40;
+@@ -3556,6 +3773,10 @@ static void ov5_021D92C4(UnkStruct_ov5_021DB4B8 *param0, int param1)
+     s32 *v4;
+     int v5;
+ 
++#ifdef SDK_PORT_3DS
++    param1 = ov5_PortWeatherCount(param1, PORT_WEATHER_SPREAD_HEIGHT); // (they come on down its right side)
++#endif
++
+     v3 = (UnkStruct_ov5_021D9984 *)param0->unk_B98;
+     v3->unk_B4[1]++;
+ 
+@@ -3742,6 +3963,10 @@ static void ov5_021D9690(UnkStruct_ov5_021DB4B8 *param0, int param1)
+     VecFx32 v6;
+     s32 *v7;
+ 
++#ifdef SDK_PORT_3DS
++    param1 = ov5_PortWeatherCount(param1, PORT_WEATHER_SPREAD_AREA); // (they come on all over the screen)
++#endif
++
+     for (v0 = 0; v0 < param1; v0++) {
+         v1 = ov5_021D6F00(param0, sizeof(s32) * 8);
+ 
+@@ -4295,6 +4520,10 @@ static void ov5_021DA0A8(UnkStruct_ov5_021DB4B8 *param0, int param1)
+     static const int v7[5] = { 1, 1, 2, 1, 3 };
+     u32 v8;
+ 
++#ifdef SDK_PORT_3DS
++    param1 = ov5_PortWeatherCount(param1, PORT_WEATHER_SPREAD_AREA); // (they come on all over the screen)
++#endif
++
+     v4 = (UnkStruct_ov5_021D9984 *)param0->unk_B98;
+ 
+     for (v0 = 0; v0 < param1; v0++) {
+@@ -4530,6 +4759,10 @@ static void ov5_021DA5A0(UnkStruct_ov5_021DB4B8 *param0, int param1)
+     int v4;
+     s32 *v5;
+ 
++#ifdef SDK_PORT_3DS
++    param1 = ov5_PortWeatherCount(param1, PORT_WEATHER_SPREAD_WIDTH); // (they come on along its top)
++#endif
++
+     v3 = param0->unk_B98;
+ 
+     if (v3->unk_B4[1] == 1) {
+@@ -4601,6 +4834,11 @@ static void ov5_021DA6BC(UnkStruct_ov5_021D6FA8 *param0)
+     v1[5]++;
+     v2.y >>= FX32_SHIFT;
+ 
++#ifdef SDK_PORT_3DS
++    // (as far below or above the wider screen as the DS's)
++    v2.y += v2.y > 0 ? -ov5_PortTop() : ov5_PortTop();
++#endif
++
+     if (*((s32 *)v1[6]) == 1) {
+         v1[7]--;
+ 
+@@ -4778,6 +5016,10 @@ static void ov5_021DA9DC(UnkStruct_ov5_021DB4B8 *param0, int param1)
+     int v4;
+     VecFx32 v5;
+ 
++#ifdef SDK_PORT_3DS
++    param1 = ov5_PortWeatherCount(param1, PORT_WEATHER_SPREAD_AREA); // (they come on all over the screen)
++#endif
++
+     for (v0 = 0; v0 < param1; v0++) {
+         v1 = ov5_021D6F00(param0, sizeof(s32) * 8);
+ 
+@@ -4855,9 +5097,16 @@ static void ov5_021DAADC(UnkStruct_ov5_021D6FA8 *param0)
+ 
+     ov5_021D630C(v0->unk_04, &v2);
+ 
++#ifdef SDK_PORT_3DS
++    // (as far above the wider screen as the DS's)
++    if ((v2.y >> FX32_SHIFT) <= -16 - ov5_PortTop()) {
++        ov5_021D6FA8(v0);
++    }
++#else
+     if ((v2.y >> FX32_SHIFT) <= -16) {
+         ov5_021D6FA8(v0);
+     }
++#endif
+ }
+ 
+ static void ov5_021DAB78(SysTask *param0, void *param1)
+diff --git a/src/render_oam.c b/src/render_oam.c
+index 9b9d81ff..4c4ed048 100644
+--- a/src/render_oam.c
++++ b/src/render_oam.c
+@@ -59,6 +59,25 @@ static BOOL IsObjectInWideView(const NNSG2dCellData *cellData, const MtxFx32 *ob
+     return IsObjectInView(cellData, objectCoords, &view);
+ }
+ #define CELL_IN_VIEW IsObjectInWideView
++
++extern void NitroPort_EngineABeside(int *x, int *top);
++
++// (RenderOam_PortInitSurfaceBeside) In view anywhere on the upper screen's
++// picture, beside the DS's screen and above and below it too
++// (NitroPort_EngineABeside: the wider screen, the field at the DS's pixel
++// size), whatever's shown there.
++static BOOL IsObjectInViewBeside(const NNSG2dCellData *cellData, const MtxFx32 *objectCoords, const NNSG2dViewRect *viewRect)
++{
++    NNSG2dViewRect view = *viewRect;
++    int x, top;
++
++    NitroPort_EngineABeside(&x, &top);
++    view.posTopLeft.x -= x << FX32_SHIFT;
++    view.sizeView.x += (2 * x) << FX32_SHIFT;
++    view.posTopLeft.y -= top << FX32_SHIFT;
++    view.sizeView.y += (2 * top) << FX32_SHIFT;
++    return IsObjectInView(cellData, objectCoords, &view);
++}
+ #else
+ #define CELL_IN_VIEW IsObjectInView
+ #endif
+@@ -168,6 +187,13 @@ void RenderOam_InitSurface(NNSG2dRenderSurface *surface, NNSG2dViewRect *viewRec
+     }
+ }
+ 
++#ifdef SDK_PORT_3DS
++void RenderOam_PortInitSurfaceBeside(NNSG2dRenderSurface *surface, NNSG2dViewRect *viewRect, NNSG2dRendererInstance *renderer)
++{
++    InitRenderSurface(surface, viewRect, AddToMainOamManager, AddAffineToMainOamManager, IsObjectInViewBeside, NNS_G2D_SURFACETYPE_MAIN2D, renderer);
++}
++#endif
++
+ NNSG2dOamManagerInstance *RenderOam_GetScreenOam(enum DSScreen screen)
+ {
+     GF_ASSERT(sOamManager);

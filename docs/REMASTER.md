@@ -1025,7 +1025,26 @@ screen's 320 x 192 at 1.25 times, as above.
   moves (the player or a free camera set walking, `MoveCamera`). On the
   PC the rival comes in from beyond the top and runs off past it (3 tiles
   more each way).
-- Still to do: weather sprites (rain, snow) only on the DS's lines.
+- The weather's sprites (patch 0080, 2026-11-05): the rain's drops, the
+  snow's flakes, the sand live on the DS's screen with 64 pixels round it
+  (they come on there, go off one side and on at the other:
+  `ov5_021D630C`), and the weather's sprite surface showed only those on
+  the DS's 256 x 192, so on the taller field the weather was in the DS's
+  part of it alone. With the screen wider or taller
+  (`NitroPort_EngineABeside`; 0 and 0 on the DS's, all as before): the
+  surface shows its cells on the whole picture
+  (`RenderOam_PortInitSurfaceBeside`); they go round the wider screen with
+  64 pixels round it (`ov5_PortPlaceWide`); each comes on where the game
+  puts it on the DS's screen stretched onto the wider one, or as far
+  beside it as the game has it beside the DS's (its first place after
+  `ov5_021D6F00`); more come on for the wider screen's area, width or
+  height, as each weather brings them on all over, along the top or down
+  the side (`ov5_PortWeatherCount`; the pool of 48 as before); and they're
+  taken away as far below or above it as below or above the DS's. On the
+  PC on Route 215 (`dbgweather`, local), every sprite weather over the
+  whole 400 x 240, as many to a part of it as on the DS's (rain about 35
+  OAM entries, heavy rain 61 at most, of 124); the BG weathers (clouds,
+  fog, Flash's dark) already were.
 
 ## The soft reset
 
