@@ -135,6 +135,28 @@ void NitroPort_Gx3dPruneFree(void);
  * NitroPort_PicaViewMatrix). */
 void NitroPort_Gx3dPruneScissor(const int zone[4], int width, int height, unsigned out[4]);
 
+/* A band of the screen's rows drawn by itself (an H-blank effect's run of
+ * lines, port_compose_pica.c: the 3D drawn again for each, moved by its
+ * scroll; PicaView.band): only the triangles that can reach its rows need
+ * drawing, the GPU clipping the rest away anyway. Each triangle's rows as
+ * -y / w of its corners, lowest and highest (the screen's row is that
+ * times half the view's height, plus its middle: NitroPort_PicaViewMatrix);
+ * with a corner's w not above 0, or not a number, all of them (-inf, inf). */
+void NitroPort_Gx3dTriangleRows(const NitroGx3dGpuVertex *vertices, size_t triangles, float *lo, float *hi);
+/* A part of a batch drawn: its vertices. */
+typedef struct NitroGx3dRange {
+    uint32_t first, count;
+} NitroGx3dRange;
+#define NITRO_GX3D_BAND_GAP 8   /* (triangles left out between two parts: fewer, drawn too) */
+/* The parts of a batch whose triangles reach a band (rows lo .. hi, as
+ * NitroPort_Gx3dTriangleRows has them: triLo, triHi, a triangle each of
+ * the vertex buffer), in order: a triangle is left out only if its rows
+ * all come before lo or all after hi. Parts at most NITRO_GX3D_BAND_GAP
+ * triangles apart are one; with more than max, the last goes on to the
+ * batch's last triangle that reaches it. How many (0: none of it). */
+size_t NitroPort_Gx3dBandRanges(const float *triLo, const float *triHi, const NitroGx3dBatch *batch, float lo, float hi,
+                                NitroGx3dRange *out, size_t max);
+
 /* PC only, for checking the GPU path without a 3DS: draws the scene in
  * software the way port_gx3d_pica.c asks the PICA to (port_gx3d_gpusim.c),
  * into RGB555|coverage pixels like the reference rasterizer's. */

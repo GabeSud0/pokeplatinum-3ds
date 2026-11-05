@@ -1,0 +1,394 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 09:00:00 -0700
+Subject: [PATCH] A scripted walk on or off past the DS's top or bottom on the taller field (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The field at the DS's pixel size shows 24 rows more above and below the
+DS's picture. The scripts add the ones who walk on from above or below
+just past the DS's top or bottom, and take away the ones who walk off up
+or down just past it, where nobody saw them on the DS. In the taller
+picture they popped in at its top and vanished there before reaching
+its edge: the rival in Solaceon Town, added 8 tiles above the player
+with half of him in sight, and taken away the same way as he ran off.
+
+As beside the wider picture (patch 0042's ScrCmd_PortWide*), only
+with the field at the DS's pixel size: one added past the DS's top or
+bottom but in the taller picture is put out of it, if the tiles between
+are clear, and walks those tiles in with its first walk (the waits and
+turns before it as the script has them); one whose walk straight up or
+down ends there walks the tiles out, if they're clear, before the
+script takes it away. Where a sprite shows comes from the camera's
+projection (ScrCmd_PortTallRows), at most 4 tiles more. As before, one
+that stays goes back where the script put it, and so does one just
+added as the camera moves (the player or a free camera set walking,
+MoveCamera), as it would come into view there.
+
+---
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+index eee8584d..e9de0ae5 100644
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -2103,6 +2103,8 @@ extern int NitroPort_PixelField(void);
+ enum PortWideScriptedKind {
+     PORT_WIDE_ADDED = 1, // put further out: walks in further
+     PORT_WIDE_SENT,      // walked further out, or round
++    PORT_WIDE_TALL_ADDED, // the same, up or down (the field at the DS's pixel size)
++    PORT_WIDE_TALL_SENT,
+ };
+ 
+ typedef struct PortWideScripted {
+@@ -2168,6 +2170,18 @@ static int ScrCmd_PortWalkDx(u16 action)
+     return dir == DIR_EAST ? 1 : dir == DIR_WEST ? -1 : 0;
+ }
+ 
++// A step south (1) or north (-1), else 0.
++static int ScrCmd_PortWalkDz(u16 action)
++{
++    int speed, dir;
++
++    if (!ScrCmd_PortWalk(action, &speed, &dir)) {
++        return 0;
++    }
++
++    return dir == DIR_SOUTH ? 1 : dir == DIR_NORTH ? -1 : 0;
++}
++
+ // Beyond the wider picture's edge, the sprite's width and the view's
+ // perspective (more shows at the top) counted: in tiles from its middle.
+ // 0 on the DS's screen.
+@@ -2263,6 +2277,7 @@ static BOOL ScrCmd_PortWideRemember(FieldSystem *fieldSystem, MapObject *mapObj,
+ }
+ 
+ static void ScrCmd_PortWideRemoved(MapObject *mapObj);
++static int ScrCmd_PortTallAddedShift(FieldSystem *fieldSystem, MapObject *mapObj);
+ 
+ static void ScrCmd_PortWideAdded(FieldSystem *fieldSystem, MapObject *mapObj)
+ {
+@@ -2283,6 +2298,14 @@ static void ScrCmd_PortWideAdded(FieldSystem *fieldSystem, MapObject *mapObj)
+     } else if (-dx >= PORT_WIDE_DS_TILES && -dx < out) {
+         shift = -(out + dx);
+     } else {
++        // (past the DS's top or bottom instead: the field at the DS's pixel
++        // size)
++        shift = ScrCmd_PortTallAddedShift(fieldSystem, mapObj);
++
++        if (shift != 0 && ScrCmd_PortWideRemember(fieldSystem, mapObj, 0, shift, PORT_WIDE_TALL_ADDED)) {
++            ScrCmd_PortWideNudge(mapObj, 0, shift);
++        }
++
+         return;
+     }
+ 
+@@ -2649,6 +2672,204 @@ static MapObjectAnimCmd *ScrCmd_PortTallMovement(FieldSystem *fieldSystem, MapOb
+     return copy;
+ }
+ 
++// The field at the DS's pixel size shows PORT_TALL_ROWS rows more above
++// and below the DS's picture too. The scripts add the ones who walk on
++// from above or below (the rival in Solaceon Town) just past the DS's top
++// or bottom, and take away the ones who walk off up or down just past it,
++// where nobody saw them: in the taller picture they popped into view at
++// its top, and vanished there. So, as beside the wider picture:
++//   one added past the DS's top or bottom, but in the taller picture, is
++//     put out of it (if the way in is clear) and walks the extra tiles in
++//     with its first steps;
++//   one whose walk straight up or down ends there walks the extra tiles
++//     out (if they're clear) before the script takes it away.
++#define PORT_TALL_ROWS      24 // (NITRO_PIXEL_FIELD_TOP: (240 - 192) / 2)
++#define PORT_TALL_EXTRA_MAX 4  // tiles a walk in or out is made longer by, at most
++#define PORT_TALL_HEAD      32 // a sprite's height, in units (it stands facing the camera)
++#define PORT_TALL_MARGIN    4  // rows it may show past its feet and its head's top (its shadow)
++
++// The rows (the DS screen's: 0 its top, 192 its bottom; the taller picture
++// goes on PORT_TALL_ROWS more each way) a map object's sprite at tile
++// (x, z), height y, shows in: from *top to *bottom, the margin counted.
++// The camera's projection. FALSE if it's behind the camera.
++static BOOL ScrCmd_PortTallRows(FieldSystem *fieldSystem, int x, int z, fx32 y, int *top, int *bottom)
++{
++    const Camera *camera = fieldSystem->camera;
++    VecFx32 forward, right, up, v, p;
++    s64 height, depth;
++
++    if (camera == NULL || camera->perspective.sinFovY <= 0) {
++        return FALSE;
++    }
++
++    VEC_Subtract(&camera->lookAt.target, &camera->lookAt.position, &forward);
++
++    if (forward.x == 0 && forward.y == 0 && forward.z == 0) {
++        return FALSE;
++    }
++
++    VEC_Normalize(&forward, &forward);
++    VEC_CrossProduct(&forward, &camera->lookAt.up, &right);
++
++    if (right.x == 0 && right.y == 0 && right.z == 0) {
++        return FALSE; // (looking straight along its up)
++    }
++
++    VEC_Normalize(&right, &right);
++    VEC_CrossProduct(&right, &forward, &up);
++
++    p.x = MAP_OBJECT_COORD_CENTER_TO_FX32(x);
++    p.y = y;
++    p.z = MAP_OBJECT_COORD_CENTER_TO_FX32(z);
++    VEC_Subtract(&p, &camera->lookAt.position, &v);
++    height = VEC_DotProduct(&v, &up);
++    depth = camera->projection == CAMERA_PROJECTION_PERSPECTIVE ? VEC_DotProduct(&v, &forward) : camera->distance;
++
++    if (depth <= 0) {
++        return FALSE;
++    }
++
++    // (half the DS's 192 rows is depth * tan(fovY) up from its middle)
++    depth *= camera->perspective.sinFovY;
++    *bottom = 96 - (int)(96 * height * camera->perspective.cosFovY / depth) + PORT_TALL_MARGIN;
++    *top = 96 - (int)(96 * (height + PORT_TALL_HEAD * FX32_ONE) * camera->perspective.cosFovY / depth) - PORT_TALL_MARGIN;
++    return TRUE;
++}
++
++// Out of sight past the top (dir DIR_NORTH) or the bottom (DIR_SOUTH) of a
++// picture going on `beyond` rows past the DS's (0: the DS's own).
++static BOOL ScrCmd_PortTallOut(FieldSystem *fieldSystem, int x, int z, fx32 y, int dir, int beyond)
++{
++    int top, bottom;
++
++    if (!ScrCmd_PortTallRows(fieldSystem, x, z, y, &top, &bottom)) {
++        return FALSE;
++    }
++
++    return dir == DIR_NORTH ? bottom <= -beyond : top >= 192 + beyond;
++}
++
++// From tile (x, z), height *y, past the DS's picture's top or bottom (dir)
++// but in the taller one: the tiles on that way to out of the taller one,
++// all clear (nothing in the way, nobody there); 0 if not so (in the DS's
++// picture, out of the taller one already, not clear, too far).
++static int ScrCmd_PortTallTilesOut(FieldSystem *fieldSystem, MapObject *mapObj, int x, int z, fx32 *y, int dir)
++{
++    int n, dz = MapObject_GetDzFromDir(dir);
++
++    if (!ScrCmd_PortTallOut(fieldSystem, x, z, *y, dir, 0) || ScrCmd_PortTallOut(fieldSystem, x, z, *y, dir, PORT_TALL_ROWS)) {
++        return 0;
++    }
++
++    for (n = 0; n < PORT_TALL_EXTRA_MAX; n++) {
++        if (ScrCmd_PortWideBlocked(fieldSystem, x, z + dz * n, y, dir) || ScrCmd_PortWideSomeoneThere(fieldSystem, mapObj, x, z + dz * (n + 1))) {
++            return 0;
++        }
++
++        if (ScrCmd_PortTallOut(fieldSystem, x, z + dz * (n + 1), *y, dir, PORT_TALL_ROWS)) {
++            return n + 1;
++        }
++    }
++
++    return 0;
++}
++
++// Beside the wider picture (out of sight anyway).
++static BOOL ScrCmd_PortTallBeside(FieldSystem *fieldSystem, int x)
++{
++    int midX, midZ, dx;
++
++    ScrCmd_PortWideMiddle(fieldSystem, &midX, &midZ);
++    dx = x - midX;
++
++    return (dx < 0 ? -dx : dx) >= ScrCmd_PortWideOutTiles();
++}
++
++// One just added past the DS's top or bottom, in the taller picture: the
++// tiles to put it further out by (north -, south +), else 0.
++static int ScrCmd_PortTallAddedShift(FieldSystem *fieldSystem, MapObject *mapObj)
++{
++    int x = MapObject_GetX(mapObj), z = MapObject_GetZ(mapObj), n;
++    VecFx32 pos;
++    fx32 y;
++
++    if (!NitroPort_PixelField() || ScrCmd_PortTallBeside(fieldSystem, x)) {
++        return 0;
++    }
++
++    MapObject_GetPosPtr(mapObj, &pos);
++    y = pos.y;
++    n = ScrCmd_PortTallTilesOut(fieldSystem, mapObj, x, z, &y, DIR_NORTH);
++
++    if (n != 0) {
++        return -n;
++    }
++
++    y = pos.y;
++    return ScrCmd_PortTallTilesOut(fieldSystem, mapObj, x, z, &y, DIR_SOUTH);
++}
++
++// A walk straight up or down (the waits and turns before it as the script
++// has them) ending past the DS's top or bottom, in the taller picture: the
++// extra tiles out added, if they're clear; else NULL.
++static MapObjectAnimCmd *ScrCmd_PortTallWalkOut(FieldSystem *fieldSystem, MapObject *mapObj, const MapObjectAnimCmd *cmds, int count)
++{
++    int i, lead = -1, dir = -1, steps = 0, x, z, extra;
++    MapObjectAnimCmd *copy;
++    VecFx32 pos;
++    fx32 y;
++
++    for (i = 0; i < count; i++) {
++        int stepSpeed, stepDir;
++
++        if (ScrCmd_PortWalk(cmds[i].movementAction, &stepSpeed, &stepDir)) {
++            if ((stepDir != DIR_NORTH && stepDir != DIR_SOUTH) || (dir >= 0 && stepDir != dir)) {
++                return NULL;
++            }
++
++            if (lead < 0) {
++                lead = i;
++            }
++
++            dir = stepDir;
++            steps += cmds[i].count;
++        } else if (lead >= 0 || !ScrCmd_PortWideStill(cmds[i].movementAction)) {
++            return NULL;
++        }
++    }
++
++    if (dir < 0 || steps == 0 || cmds[count - 1].count == 0) {
++        return NULL;
++    }
++
++    x = MapObject_GetX(mapObj);
++    z = MapObject_GetZ(mapObj);
++
++    if (ScrCmd_PortTallBeside(fieldSystem, x)) {
++        return NULL;
++    }
++
++    // (the height along the walk, where the ground says)
++    MapObject_GetPosPtr(mapObj, &pos);
++    y = pos.y;
++
++    for (i = 0; i < steps; i++) {
++        (void)ScrCmd_PortWideBlocked(fieldSystem, x, z + MapObject_GetDzFromDir(dir) * i, &y, dir);
++    }
++
++    z += MapObject_GetDzFromDir(dir) * steps;
++    extra = ScrCmd_PortTallTilesOut(fieldSystem, mapObj, x, z, &y, dir);
++
++    if (extra == 0 || !ScrCmd_PortWideRemember(fieldSystem, mapObj, 0, MapObject_GetDzFromDir(dir) * extra, PORT_WIDE_TALL_SENT)) {
++        return NULL;
++    }
++
++    copy = Heap_Alloc(HEAP_ID_FIELD1, sizeof(MapObjectAnimCmd) * (count + 1));
++    memcpy(copy, cmds, sizeof(MapObjectAnimCmd) * (count + 1));
++    copy[count - 1].count += extra;
++    return copy;
++}
++
+ // The movement the script gave, changed for the wider screen (a heap copy,
+ // freed with the movement: sub_02040F28), or NULL to use the script's.
+ static MapObjectAnimCmd *ScrCmd_PortWideMovement(FieldSystem *fieldSystem, MapObject *mapObj, const MapObjectAnimCmd *cmds)
+@@ -2673,7 +2894,7 @@ static MapObjectAnimCmd *ScrCmd_PortWideMovement(FieldSystem *fieldSystem, MapOb
+     e = ScrCmd_PortWideFind(fieldSystem, mapObj);
+ 
+     if (e != NULL) {
+-        int shiftX = e->shiftX, shiftZ = e->shiftZ;
++        int shiftX = e->shiftX, shiftZ = e->shiftZ, kind = e->kind;
+ 
+         e->kind = 0;
+ 
+@@ -2686,6 +2907,23 @@ static MapObjectAnimCmd *ScrCmd_PortWideMovement(FieldSystem *fieldSystem, MapOb
+             return copy;
+         }
+ 
++        // (the same up or down: the field at the DS's pixel size; the waits
++        // and turns before the walk as the script has them, out of sight)
++        if ((kind == PORT_WIDE_TALL_ADDED || kind == PORT_WIDE_TALL_SENT) && shiftZ != 0) {
++            for (lead = 0; lead < count && ScrCmd_PortWideStill(cmds[lead].movementAction); lead++) { }
++
++            if (lead < count && cmds[lead].count > 0 && ScrCmd_PortWalkDz(cmds[lead].movementAction) == (shiftZ > 0 ? -1 : 1)) {
++                copy = Heap_Alloc(HEAP_ID_FIELD1, sizeof(MapObjectAnimCmd) * (count + 2));
++                memcpy(copy, cmds, sizeof(MapObjectAnimCmd) * lead);
++                copy[lead].movementAction = cmds[lead].movementAction;
++                copy[lead].count = shiftZ > 0 ? shiftZ : -shiftZ;
++                memcpy(&copy[lead + 1], &cmds[lead], sizeof(MapObjectAnimCmd) * (count + 1 - lead));
++                return copy;
++            }
++
++            lead = -1;
++        }
++
+         // Else (or sent further out before, and moving again): from where
+         // the script put it.
+         ScrCmd_PortWideNudge(mapObj, -shiftX, -shiftZ);
+@@ -2694,6 +2932,10 @@ static MapObjectAnimCmd *ScrCmd_PortWideMovement(FieldSystem *fieldSystem, MapOb
+     if (NitroPort_PixelField()) {
+         copy = ScrCmd_PortTallMovement(fieldSystem, mapObj, cmds, count);
+ 
++        if (copy == NULL) {
++            copy = ScrCmd_PortTallWalkOut(fieldSystem, mapObj, cmds, count);
++        }
++
+         if (copy != NULL) {
+             return copy;
+         }
+@@ -2878,6 +3120,42 @@ void ScrCmd_PortWideScriptEnd(FieldSystem *fieldSystem)
+         e->kind = 0;
+     }
+ }
++
++// The camera moving while some just added are further up or down than the
++// script put them (the field at the DS's pixel size), not walking in yet:
++// back there, where it'll show them. (Not the ones walked out further:
++// they may be walking still, and they're taken away next.)
++static void ScrCmd_PortTallPutBack(FieldSystem *fieldSystem)
++{
++    int i;
++
++    for (i = 0; i < PORT_WIDE_SCRIPTED_MAX; i++) {
++        PortWideScripted *e = &sPortWideScripted[i];
++
++        if (e->kind == PORT_WIDE_TALL_ADDED && ScrCmd_PortWideFind(fieldSystem, e->mapObj) == e) {
++            ScrCmd_PortWideNudge(e->mapObj, -e->shiftX, -e->shiftZ);
++            e->kind = 0;
++        }
++    }
++}
++
++// A movement for the one the camera follows (the player, a free camera)
++// that takes a step (anything but waits and turns): the camera moves.
++static void ScrCmd_PortTallCameraMoving(FieldSystem *fieldSystem, MapObject *mapObj, const MapObjectAnimCmd *cmds)
++{
++    int i;
++
++    if (mapObj == NULL || fieldSystem->camera == NULL || fieldSystem->camera->targetPos != MapObject_GetPos(mapObj)) {
++        return;
++    }
++
++    for (i = 0; i < 255 && cmds[i].movementAction != MOVEMENT_ACTION_END; i++) {
++        if (!ScrCmd_PortWideStill(cmds[i].movementAction)) {
++            ScrCmd_PortTallPutBack(fieldSystem);
++            return;
++        }
++    }
++}
+ #endif
+ 
+ static BOOL ScrCmd_ApplyMovement(ScriptContext *ctx)
+@@ -2893,6 +3171,7 @@ static BOOL ScrCmd_ApplyMovement(ScriptContext *ctx)
+ #ifdef SDK_PORT_3DS
+     u8 *movementCount = FieldSystem_GetScriptMemberPtr(ctx->fieldSystem, SCRIPT_MANAGER_MOVEMENT_COUNT);
+     ScrCmd_PortWideNoteWalkers(ctx, object, *movementCount);
++    ScrCmd_PortTallCameraMoving(ctx->fieldSystem, object, (MapObjectAnimCmd *)(ctx->scriptPtr + movementOffset));
+     MapObjectAnimCmd *portMovement = ScrCmd_PortWideMovement(ctx->fieldSystem, object, (MapObjectAnimCmd *)(ctx->scriptPtr + movementOffset));
+     SysTask *task = MapObject_StartAnimation(object, portMovement != NULL ? portMovement : (MapObjectAnimCmd *)(ctx->scriptPtr + movementOffset));
+     (*movementCount)++;
+@@ -3367,6 +3646,9 @@ static BOOL ScrCmd_MoveCamera(ScriptContext *ctx)
+ 
+     MapObject_SetSpritePosOffset(PlayerAvatar_GetMapObject(ctx->fieldSystem->playerAvatar), &pos);
+     Camera_Move(&pos, ctx->fieldSystem->camera);
++#ifdef SDK_PORT_3DS
++    ScrCmd_PortTallPutBack(fieldSystem);
++#endif
+ 
+     return FALSE;
+ }

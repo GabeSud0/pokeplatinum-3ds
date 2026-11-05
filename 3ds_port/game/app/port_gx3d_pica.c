@@ -1610,6 +1610,21 @@ static void scissor_off(void)
     }
 }
 
+/* The view's framebuffer's size as the viewport has it: all of it, or
+ * (PicaView.viewWidth) its first viewWidth x viewHeight pixels. */
+static u32 view_width(const PicaView *view)
+{
+    return view->viewWidth>0&&view->viewHeight>0?(u32)view->viewWidth:view->fb->width;
+}
+static u32 view_height(const PicaView *view)
+{
+    return view->viewWidth>0&&view->viewHeight>0?(u32)view->viewHeight:view->fb->height;
+}
+static void view_viewport(const PicaView *view)
+{
+    C3D_SetViewport(0,0,view_width(view),view_height(view));
+}
+
 /* The state every pass needs: the shader, its view, the vertices; the
  * view's scissor. */
 static void begin_pass(const PicaView *view,const PicaRect *rect)
@@ -1619,11 +1634,11 @@ static void begin_pass(const PicaView *view,const PicaRect *rect)
         /* (PicaView.band) the viewport the run's rows alone, the view
          * moved to match: the screen's row y is the band's y - bandTop */
         PicaRect r=*rect;
-        u32 sy=(u32)view->fb->width/(u32)view->screenHeight;
+        u32 sy=view_width(view)/(u32)view->screenHeight;
         r.y0-=(float)view->bandTop;
         r.y1-=(float)view->bandTop;
         C3D_SetViewport((u32)(view->screenHeight-view->bandBottom)*sy,0,
-                        (u32)(view->bandBottom-view->bandTop)*sy,view->fb->height);
+                        (u32)(view->bandBottom-view->bandTop)*sy,view_height(view));
         NitroPort_PicaViewMatrix(&m,view->screenWidth,view->bandBottom-view->bandTop,&r);
     }else{
         NitroPort_PicaViewMatrix(&m,view->screenWidth,view->screenHeight,rect);
@@ -2119,7 +2134,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
     /* back to the screen's own depth/stencil */
     fog_mode(0);
     C3D_SetFrameBuf(view->fb);
-    C3D_SetViewport(0,0,view->fb->width,view->fb->height);
+    view_viewport(view);
     begin_pass(view,&view->rect);
 }
 
@@ -2356,7 +2371,7 @@ static void draw_shadow_receivers(const PicaView *view)
     int q;
     stage("the direct sun shadow receivers");
     C3D_SetFrameBuf(view->fb);
-    C3D_SetViewport(0,0,view->fb->width,view->fb->height);
+    view_viewport(view);
     C3D_BindProgram(&sProgram);
     begin_pass(view,&view->rect);
     C3D_BindProgram(&sRecvProgram);
@@ -2403,9 +2418,60 @@ static void draw_shadow_receivers(const PicaView *view)
     C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
 }
 
+/* (PicaView.band: an H-blank effect's run of lines, the grass's slices)
+ * Only the triangles that can reach the band's rows: each batch's parts
+ * (NitroPort_Gx3dBandRanges), the triangles' rows worked out once a
+ * prepared scene, the band 2 rows more each side (pixel centres, the
+ * GPU's rounding). The GPU clipped the others away, but went through all
+ * of them each run: 24 runs a frame in a battle's start, each the whole
+ * scene's vertices and state (17.1 ms of the GPU and 14.3 of building a
+ * frame, a log of 2026-11-04). tests/test_gx3d.c (test_band_ranges): a
+ * run's pixels the same as with every triangle. */
+#define BAND_MARGIN 2
+#define BAND_PARTS 16
+static float sRowLo[NITRO_GX3D_MAX_TRIANGLES],sRowHi[NITRO_GX3D_MAX_TRIANGLES];
+static unsigned sRowsSerial;
+static int sRowsValid,sBanded;
+static float sBandLo,sBandHi;
+static NitroGx3dRange sParts[BAND_PARTS];
+static void band_begin(const PicaView *view)
+{
+    float h=(view->rect.y1-view->rect.y0)*0.5f,c=(view->rect.y0+view->rect.y1)*0.5f;
+    size_t tris=sPreparedCount/3u;
+    sBanded=0;
+    if(!view->band || view->bandBottom<=view->bandTop || !(h>0.0f) || !tris || tris>NITRO_GX3D_MAX_TRIANGLES)return;
+    if(!sRowsValid || sRowsSerial!=sPreparedSerial){
+        NitroPort_Gx3dTriangleRows(sVertices[sPrepared],tris,sRowLo,sRowHi);
+        sRowsSerial=sPreparedSerial;
+        sRowsValid=1;
+    }
+    sBandLo=((float)(view->bandTop-BAND_MARGIN)-c)/h;
+    sBandHi=((float)(view->bandBottom+BAND_MARGIN)-c)/h;
+    sBanded=1;
+}
+/* A batch's parts to draw (sParts): all of it, or in a band its triangles
+ * that reach it. How many (0: nothing of it there). */
+static size_t batch_parts(const NitroGx3dBatch *batch)
+{
+    if(!sBanded){
+        sParts[0].first=batch->first;
+        sParts[0].count=batch->count;
+        return 1;
+    }
+    return NitroPort_Gx3dBandRanges(sRowLo,sRowHi,batch,sBandLo,sBandHi,sParts,BAND_PARTS);
+}
+static void draw_parts(size_t n)
+{
+    size_t i;
+    for(i=0;i<n;i++){
+        if(i>0 && !room_for_draw())return;
+        draw_arrays((int)sParts[i].first,(int)sParts[i].count);
+    }
+}
+
 void NitroPort_PicaDrawScene(const PicaView *view)
 {
-    size_t b;
+    size_t b,parts;
     int blend,edging,copying,part,depthOnly;
     NitroGx3dEdgeSetup edges;
     if(sPrepared<0||!view||!view->fb)return;
@@ -2414,6 +2480,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
      * colour already there, scaled down from the 2x2 framebuffer) */
     depthOnly=part==PICA_DRAW_AFTER;
     if(!depthOnly && !view->again)sFrame++;   /* (once a frame) */
+    band_begin(view);
     NitroPort_Gx3dMapTextureBanks(&sBanks);
     if(!sXbrzWorked){
         sXbrzWorked=1;   /* (once a scene: its first draw) */
@@ -2440,7 +2507,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     sBoundTexKnown=0;
     NitroPort_PicaBindVertices(sVertices[sPrepared]);
     C3D_SetFrameBuf(view->fb);
-    C3D_SetViewport(0,0,view->fb->width,view->fb->height);
+    view_viewport(view);
     begin_pass(view,&view->rect);
     C3D_CullFace(GPU_CULL_NONE);
     C3D_DepthMap(!(sPreparedSwap&2u),-1.0f,0.0f);
@@ -2464,6 +2531,8 @@ void NitroPort_PicaDrawScene(const PicaView *view)
             draw_arrays((int)batch->first,(int)batch->count);
             continue;
         }
+        parts=batch_parts(batch);
+        if(!parts)continue;
         bind_batch(batch);
         batch_fog(attr);
         C3D_StencilTest(true,GPU_ALWAYS,copying?(int)((attr>>24)&63u):0xFF,0xFF,0xFF);
@@ -2471,7 +2540,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         C3D_AlphaTest(true,GPU_GREATER,sBoundCut);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
-        draw_arrays((int)batch->first,(int)batch->count);
+        draw_parts(parts);
     }
     if(sShadowReady && !depthOnly){
         shadow_checkpoint("waiting for the opaque scene before sun shadows");
@@ -2496,13 +2565,15 @@ void NitroPort_PicaDrawScene(const PicaView *view)
             draw_arrays((int)batch->first,(int)batch->count);
             continue;
         }
+        parts=batch_parts(batch);
+        if(!parts)continue;
         bind_batch(batch);
         batch_fog(attr);
         C3D_StencilTest(true,GPU_ALWAYS,copying?(int)((attr>>24)&63u):0xFF,0xFF,0xFF);
         C3D_AlphaTest(true,GPU_GREATER,254);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
-        draw_arrays((int)batch->first,(int)batch->count);
+        draw_parts(parts);
     }
     if(part==PICA_DRAW_OPAQUE){
         /* (the rest after the caller has scaled it down) */
@@ -2529,6 +2600,8 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         if(!batch->translucent)continue;
         if(sShadowReady && sDecal[b])continue;
         if(!room_for_draw())break;
+        parts=batch_parts(batch);
+        if(!parts)continue;
         bind_batch(batch);
         batch_fog(attr);
         C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
@@ -2544,7 +2617,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         }
         C3D_DepthTest(true,depthFunc,
                       (attr&(1u<<11))?GPU_WRITE_ALL:GPU_WRITE_COLOR);
-        draw_arrays((int)batch->first,(int)batch->count);
+        draw_parts(parts);
     }
     /* Leave the GPU state plain for the compositor's quads. */
     fog_mode(0);

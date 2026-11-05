@@ -375,7 +375,87 @@ at most 24 runs (12 an eye with the slider up), and no more than the GPU's
 command list has room for (each run is the scene's commands again); more
 lines are put together by an odd number of runs (lines sliding apart by
 turns stay apart by turns). Frames with runs aren't counted by the 60
-frames a second steps. The colour effects and OAM are the frame's (no
+frames a second steps. Each run draws only the scene's triangles that can
+reach its rows (`NitroPort_Gx3dTriangleRows`, once a scene: each
+triangle's rows as -y / w of its corners; `NitroPort_Gx3dBandRanges`:
+each batch's parts with them, the run 2 rows more each side; a corner not
+in front of the camera, every run): the GPU clipped the others away, but
+went through all of them in every run, the whole scene's vertices and
+state 24 times a frame. The grass's slices took the GPU 17.1 ms a frame
+and the display thread 14.3 ms building it (a log of 2026-11-04: 40
+frames a second at the wild Pokémon's battle start, less with the slider
+up); on the PC's scenes of it each run now has about a tenth of the
+triangles and a quarter of the batches. `test_band_ranges`: a run's
+pixels (depth and polygon ID, drawn as the GPU puts them) the same as
+with every triangle, the slider up or down, the 3D moved past the edge.
+That still left each run about 0.3 ms of the GPU beyond its pixels (the
+next log: 15.1 ms a frame, the slices moving 15 to 30 times a second, 10
+or 18 lines high instead of 2). So where it can, the compositor draws the
+3D once an eye into a texture of its own (`draw_slices`: 256 x 512, the
+screen's 240 x 400 at its corner, the GPU's framebuffer there too, the
+viewport only those: `PicaView.viewWidth`), unscrolled, as the screen
+would have it (its rear plane, its polygons), then every one of the DS's
+runs from it at its own scroll, a textured quad each, in one draw, and
+the 3D's tint over the same quads: the grass's 96 slices of 2 lines
+exactly (each moved by whole pixels, so every pixel takes one texel's
+middle). What's behind the 3D: with a rear plane that hides it, or all
+one colour (the texture filled with it), the texture is all there is;
+else, the texture RGBA8 (filled with alpha 0) and no rear plane (the
+field's: its clear colour's alpha is 0), the 3D's empty pixels are left
+out of the quads (the alpha test) and the screen's own picture shows
+there. Only on the upper screen, the 3D inside it, no outlines; else the
+runs as above. The first log (2026-11-04) had a battle's start with
+what's behind the 3D not one colour: the stretched picture's (the log
+now says where, once: `[compose] a battle's start: behind the 3D`). It's taken even where the command list had room
+for only one run (that run would have drawn the effect unsliced). With
+the slider up the right eye goes the left eye's way. The
+log says the way each time it changes (`[compose] an H-blank effect's 3D
+(96 runs of lines) drawn from its texture`, or why not), 24 times at
+most. The 3D is at the screen's own pixels then (the
+2x2 smooth 3D's texels doubled) for the moment of the effect. The texture
+is made the first time it's needed, when VRAM has room for it (RGBA8, 1
+MB with its depth/stencil; else RGB565, 768 KB, only for the first two
+cases) and 512 KB more (the outlines' copies come later), its quads in linear
+memory of their own (126 KB); the log says which (`[compose] an H-blank
+effect's 3D drawn once into a texture`, or `no room for the H-blank
+effects' texture`: the runs as above).
+The game moves the slices 30 times a second (once a game step). At 60
+frames a second they move each frame, halfway in the in-between frames, as
+the 3D's camera does; their black edges go with them. Those edges are the
+game's windows (window 0 the part a slice moved one way shows, window 1 the
+part of one moved the other way it hides), so they're left out of the
+picture for the compositor to draw (`NitroRender2DSplit.gpuSpans`): on a
+battle's start stretched over the screen, with the 3D's lines scrolled
+apart, where every line's windows show everything (the colour effects too)
+or nothing, in one part at most, no OBJ window or circle, something is
+hidden, and nothing is in front of the 3D (a trainer's battle start slides
+two halves with the halves of a Poké Ball, sprites the picture draws: the
+windows stay in the picture then, all of it at 30 as before) (`gpuSpansOn`,
+each line's shown part `spanLo` to `spanHi`). The
+picture's `over` then shows nothing where the windows hide the 3D, rather
+than what's behind it, and the compositor draws the backdrop there after
+the layers in front (`draw_window_edges`), on the lines the 3D was drawn
+with. The game's thread notes each frame's lines (each line's 3D scroll and
+shown part, `NitroPort_Render2DLineSpansNow`, while a battle's start plays:
+`NitroPort_ComposeNoteLines`), found by the scene's frame as the BGs'
+scrolls are; the slices from the texture and their edges are those of the
+frame shown, and in an in-between frame halfway from the frame before's
+(`NitroPort_LineSpansHalfway`: each line's scroll the shorter way round,
+its scroll finer than a pixel, more than 128 pixels after's; a part's
+edges halfway, a part shrinking away to nothing going towards the side it
+touched; a side hidden in one frame only no further than the line's 3D,
+moved halfway, leaves uncovered: the grass's slices change sides as they
+start going apart, from 3 pixels one way to 29 the other, and the 4
+columns hidden on the left before would have covered 2 of the 3D moved 13
+the other way). A new scene without an in-between one gets an in-between
+frame of its own when the slices moved (`lines_moved`: slices in both
+frames, as the sprites). The lines are noted only while the upper
+screen's picture is a battle's start stretched.
+Drawn a run at a time (no texture, the outlines), the slices and their
+edges are the picture's, as before. The PC runner's `pshot` draws the
+edges as the 3DS does, the same pictures as with them in `over`;
+`test_gpu_spans` has the grass's lines as the game sets them.
+The colour effects and OAM are the frame's (no
 effect of the game's changes those by line). Without an H-blank interrupt
 or DMA nothing of this runs; in the field the game keeps its H-blank
 interrupt on, so its handler runs 193 times a frame there (with nothing to
@@ -851,6 +931,16 @@ screen's 320 x 192 at 1.25 times, as above.
     crashed once the memory was used again (patch 0066,
     `BerryPatchGraphics_GetCurrentGraphicsResourceID`: a patch showing a
     picture says that picture's texture).
+  - A berry patch beside (patch 0077) is brought by the picture its berry
+    shows now (`BerryPatchGraphics_PortPictureOf`, from its patch in the
+    save): at once if that's in already or there's none, else with room for
+    it, places left for the pictures the player's map's own people may
+    still need (its events' not in now: the ones its scripts bring on) and
+    two more (`MapObjectGfx_PortHasRoomForBerry`). It kept room for any
+    berry's picture before (six places free), and walking up Route 209 into
+    Solaceon Town there were five: the town's four berry trees by its south
+    entrance popped in at the zone change, in sight at the top of the
+    taller field (2026-11-05).
   - The player's counterpart (patch 0055): her graphics are a variable's
     (`OBJ_EVENT_GFX_VAR_0`), set by her map's script as the player walks
     in, so she was never brought and popped in at the zone change (Dawn
@@ -919,9 +1009,23 @@ screen's 320 x 192 at 1.25 times, as above.
   the lab after the Pokédex walked 10 steps south beside the door, into
   the wall, where the DS's screen had ended. With no door near, the
   script's walk as it is.
-- Still to do: the people scripts bring on from above or below (they show
-  the last few tiles of their walk in); weather sprites (rain, snow) only
-  on the DS's lines.
+- **A walk on or off past the DS's top or bottom** (patch 0076): the
+  scripts add the ones who walk on from above or below just past the DS's
+  top or bottom, and take away the ones who walk off up or down just past
+  it; the taller field showed them pop in at its top and vanish there (the
+  rival in Solaceon Town, added 8 tiles above the player, half of him in
+  sight, and taken away the same way as he ran off). As beside the wider
+  picture: one added there is put out of the taller picture (if the tiles
+  between are clear) and walks them in with its first walk; one whose walk
+  straight up or down ends there walks the tiles out (if clear) before the
+  script takes it away. Whether a sprite shows comes from the camera's
+  projection (`ScrCmd_PortTallRows`: its feet at its tile's middle, 32
+  units tall, 4 rows' margin), at most 4 tiles more. One just added goes
+  back where the script put it if it doesn't walk in first or the camera
+  moves (the player or a free camera set walking, `MoveCamera`). On the
+  PC the rival comes in from beyond the top and runs off past it (3 tiles
+  more each way).
+- Still to do: weather sprites (rain, snow) only on the DS's lines.
 
 ## The soft reset
 
@@ -1774,7 +1878,20 @@ not its time; hashed on the game's thread as the commands go into the
 ring), has the next left out, as one the thread can't keep up with: the
 one before stays on the screen. If it moved after all, it's there a scene
 later. Not outside such an effect: the first step after standing still
-would be a scene late. The `[perf] geometry` line counts them (`left out/s
+would be a scene late. The scene that stays stands for the frames of those
+left out (`NitroPort_Gx3dSameAs`: the newest one's time and SWAP_BUFFERS
+count; the display thread gives the scene on the screen those): the 2D of
+their frames goes with it, and their brightness and scrolls. Before that
+(2026-11-04) the screen kept the 2D of the frame the scene was made in
+while the field stood still: the battle start's first flash to black
+stuck dark for three times as long and the second was missed (videos
+against a DS's), and the slices stood still between the camera's steps.
+The next in-between scene starts from the newest of them too. To the
+compositor that's a new 3D frame (the scene's SWAP_BUFFERS count changed:
+`Screen.shownSwap3d`), shown at its time once its 2D and its note are there,
+each in turn after the scene's own frame; only where the scene on the
+screen is the one before those left out (not one left out for the
+thread's time). The `[perf] geometry` line counts them (`left out/s
 (n as the same)`), and a `[perf] geometry's work` line says where its time
 goes: ending scenes (the SWAP: sorting, matching, publishing), and the
 vertices a scene sends, of them those in lists wholly out of the view (not

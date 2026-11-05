@@ -287,6 +287,12 @@ void NitroPort_Gx3dThreadWakeups(uint32_t *wakeups, uint64_t *longest);
  * battle's start plays in the field (NitroPort_FieldEffect): counted on the
  * game's thread. */
 uint32_t NitroPort_Gx3dSameScenesLeftOut(void);
+/* The scene of mailbox serial `serial` (on the screen) stands for a later
+ * frame too: the newest scene left out as the same as it (with the
+ * geometry thread). Then 1, that scene's time (NitroGx3dScene.stamp) and
+ * SWAP_BUFFERS count (swap_seq): the 2D the DS shows with that frame goes
+ * with it, and that frame's brightness and scrolls. 0: none. */
+int NitroPort_Gx3dSameAs(uint32_t serial, uint32_t *stamp, uint32_t *swapSeq);
 /* A model's shape's display list (src, bytes) with only the polygons that
  * reach into a slab of its coordinates, lo <= x (axis 0), y (1) or z (2)
  * <= hi, into dst (dstBytes of room); the polygons kept are drawn the same,

@@ -723,6 +723,26 @@ static void GpuComposeLoop(void)
             if(mid==NULL || force){
                 int r;
                 mid=NULL;
+                if(scene && sceneDone){
+                    /* (a battle's start: the scenes after it left out as the
+                     * same, this one stands for the newest of them: their
+                     * frame's 2D, brightness and scrolls go with it, not the
+                     * frame it was made in. Else the screen kept that
+                     * frame's picture while the field stood still: the
+                     * flashes before the slices stuck dark or were missed,
+                     * and the slices stood still, a log of 2026-11-04. Once
+                     * the frame it stands for now is drawn: each in turn,
+                     * its own frame first; then a new 3D frame to the
+                     * compositor, at its time, with its 2D and its note) */
+                    uint32_t st,sq;
+                    if(NitroPort_Gx3dSameAs(seen,&st,&sq) && (int32_t)(sq-scene->swap_seq)>0){
+                        NitroGx3dScene *same=(NitroGx3dScene *)scene;
+                        same->stamp=st;
+                        same->swap_seq=sq;
+                        same->stamp_before=st;
+                        same->swap_seq_before=sq;
+                    }
+                }
                 r=NitroPort_ComposeFrame(scene,seen,aOnTop,osGet3DSliderState(),force,0,0);
                 sceneDone=scene==NULL || (r&bit) || (!(r&noBuf) && !NitroPort_ComposeSceneWaiting(seen));
             }
@@ -1673,6 +1693,11 @@ static bool OnTop(int engine, bool aOnTop)
     return (engine == 0) == aOnTop;
 }
 
+/* (the remaster) The upper screen's last picture of engine A a battle's
+ * start stretched over it (NitroRender2DSplit.stretch): its lines noted
+ * each frame then (DrawFrame), for the compositor's slices. */
+static volatile bool sStretchShown;
+
 /* What an engine shows, from the game's display state, into its screen's
  * picture. False if it didn't change: that screen keeps showing what it
  * does (not drawn, not swapped). */
@@ -1727,6 +1752,12 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
              * from the BG's picture) */
             if (engine == 0 && !inPanel) {
                 split.gpuCircle = NitroPort_ComposeDrawsBgs() ? 3 : 1;
+            }
+            /* (a battle's start: its windows' black edges drawn by the
+             * compositor with the 3D's slices, both halfway in the
+             * in-between frames) */
+            if (engine == 0 && !inPanel) {
+                split.gpuSpans = 1;
             }
             if (engine == 0 && !inPanel && NitroPort_ComposeDrawsObjs() && NitroPort_GpuSprites()) {
                 static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
@@ -1801,6 +1832,11 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         if (split.scroll3dLines) {
             memcpy(layers->scroll3dLine, split.scroll3dLine, sizeof(layers->scroll3dLine));
         }
+        layers->gpuSpansOn = split.gpuSpansOn;
+        if (split.gpuSpansOn) {
+            memcpy(layers->spanLo, split.spanLo, sizeof(layers->spanLo));
+            memcpy(layers->spanHi, split.spanHi, sizeof(layers->spanHi));
+        }
         layers->tint3d = split.tint3d;
         layers->eva = split.eva;
         layers->evb = split.evb;
@@ -1860,6 +1896,9 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
         layers->height = split.height > 192 ? split.height : 192;
         layers->top = split.top;
         layers->stretch = split.stretch;
+        if (top && engine == 0) {
+            __atomic_store_n(&sStretchShown, split.stretch != 0, __ATOMIC_RELEASE);
+        }
         layers->stamp = stamp;
         layers->displayOff = 0;
         return true;
@@ -2283,6 +2322,21 @@ static bool DrawFrame(bool new3dOnly)
     if (sRemaster) {
         (void)NitroPort_HBlankLinesOnce();
         NitroPort_Compose2DOffered(NitroPort_ComposeVBlanks());
+    }
+    /* (a battle's start in the field: each line's 3D scroll and windows in
+     * this frame, whether a drawer takes it or not, once a V-blank: its
+     * slices and their edges drawn by the compositor go with them; before
+     * the frame's note below, which the compositor waits for) */
+    if (sRemaster && NitroPort_FieldEffect() && __atomic_load_n(&sStretchShown, __ATOMIC_ACQUIRE)) {
+        static NitroLineSpans lines;
+        static u32 notedStamp;
+        u32 stamp = NitroPort_ComposeVBlanks();
+
+        if (stamp != notedStamp) {
+            NitroPort_Render2DLineSpansNow(1, &lines);
+            NitroPort_ComposeNoteLines(stamp, NitroPort_Gx3dSwapsMade(), &lines);
+            notedStamp = stamp;
+        }
     }
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];

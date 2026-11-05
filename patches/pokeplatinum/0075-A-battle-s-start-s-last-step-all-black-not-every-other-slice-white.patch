@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 01:45:00 -0700
+Subject: [PATCH] A battle's start's last step all black, not every other slice white (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The slices of a battle's start (ScreenSlice) end with them moved 255
+pixels. Window 1, which hides the part of a slice moved right, then has
+its right edge at 256, which the register's 8 bits keep as 0: the window
+hid nothing, so for that step every other slice showed what's behind the
+3D, white on the field, before the screen went black. On the DS that
+step lasts a 30th of a second and its screen hardly shows it; on the 3DS
+it was plain to see. The edge is now at most 255, which on the 3DS
+reaches the screen's edge (windowsToEdge): those slices black too.
+
+---
+diff --git a/src/overlay005/encounter_effect.c b/src/overlay005/encounter_effect.c
+index b0f995eb..56de5baa 100644
+--- a/src/overlay005/encounter_effect.c
++++ b/src/overlay005/encounter_effect.c
+@@ -494,6 +494,28 @@ static void ScreenSliceSystem_VBlankCallback(SysTask *task, void *param)
+ 
+         s32 currentX = screenSliceEfx->interpolationTask.currentValue >> FX32_SHIFT;
+ 
++#ifdef SDK_PORT_3DS
++        /* (window 1's right edge, the part of a slice moved right it
++         * hides: at the last step, slices moved 255, it's 256, which the
++         * register's 8 bits keep as 0, and window 1 then hid nothing: for
++         * that step every other slice showed what's behind the 3D, white
++         * on the field. At most 255, which on the 3DS reaches the screen's
++         * edge (windowsToEdge): those slices black too, as the effect means
++         * them to go) */
++        {
++            s32 win1Right = currentX >= 0 ? 1 + currentX : 1 - currentX;
++
++            if (win1Right > 255) {
++                win1Right = 255;
++            }
++            if (currentX >= 0) {
++                G2_SetWnd0Position(0, 0, 255 - currentX, 192);
++            } else {
++                G2_SetWnd0Position(0, 0, 255 + currentX, 192);
++            }
++            G2_SetWnd1Position(0, 0, win1Right, 192);
++        }
++#else
+         if (currentX >= 0) {
+             G2_SetWnd0Position(0, 0, 255 - currentX, 192);
+             G2_SetWnd1Position(0, 0, 1 + currentX, 192);
+@@ -501,6 +523,7 @@ static void ScreenSliceSystem_VBlankCallback(SysTask *task, void *param)
+             G2_SetWnd0Position(0, 0, 255 + currentX, 192);
+             G2_SetWnd1Position(0, 0, 1 - currentX, 192);
+         }
++#endif
+         break;
+     case SCREENSLICE_STATE_FINISH:
+         ScreenSliceEffect_Finish(param);
