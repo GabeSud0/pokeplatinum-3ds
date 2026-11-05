@@ -1513,16 +1513,21 @@ static int sign_moved(const NitroGx3dScene *scene)
 }
 
 static int lines_note_of(uint32_t seq, uint32_t stamp, NitroLineSpans *out);
+/* (the upper screen's newest picture published: its windows left out for
+ * the compositor, ComposeLayers.gpuSpansOn) */
+static int sSpansPublished;
 
 /* Whether a battle's start's slices (their windows the compositor's,
- * NitroPort_ComposeNoteLines: slices in both frames) are other in a scene's
- * frame than in the last scene shown's: they move on in an in-between frame
- * drawn for them, as the sprites do. */
+ * NitroPort_ComposeNoteLines: slices in both frames, the upper screen's
+ * newest picture leaving them out) are other in a scene's frame than in the
+ * last scene shown's: they move on in an in-between frame drawn for them, as
+ * the sprites do. */
 static int lines_moved(const NitroGx3dScene *scene)
 {
     static NitroLineSpans now, before;
 
-    return lines_note_of(scene->swap_seq, scene->stamp, &now) && now.slices &&
+    return __atomic_load_n(&sSpansPublished, __ATOMIC_ACQUIRE) &&
+           lines_note_of(scene->swap_seq, scene->stamp, &now) && now.slices &&
            lines_note_of(sLastMainSeq, sLastMainStamp, &before) && before.slices &&
            (memcmp(now.scroll, before.scroll, sizeof(now.scroll)) != 0 ||
             memcmp(now.lo, before.lo, sizeof(now.lo)) != 0 || memcmp(now.hi, before.hi, sizeof(now.hi)) != 0);
@@ -1950,6 +1955,9 @@ int NitroPort_ComposePublish(int engine, int screen)
     }
     set = &scr->set[buf];
     set->info = *l;
+    if (!screen) {
+        __atomic_store_n(&sSpansPublished, l->gpuSpansOn && l->stretch, __ATOMIC_RELEASE);
+    }
     set->info.under = NULL;
     set->info.over = NULL;
     set->info.overAlpha = NULL;
