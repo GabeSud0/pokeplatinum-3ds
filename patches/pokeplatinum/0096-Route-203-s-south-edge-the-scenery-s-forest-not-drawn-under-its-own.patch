@@ -1,0 +1,290 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 13:30:00 -0700
+Subject: [PATCH] Route 203's south edge: the scenery's forest not drawn under its
+ own (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+By the route's west map the scenery's forest south of it overlapped the
+route's last trees and the copies of patch 0095: trees inside each other,
+with a light line between (a photo of 2026-11-06 at 228,763). The copies
+now go over both of the route's maps west of the plateau (x 192-248), 4 of
+them (8 tiles), and the scenery map south of the route isn't drawn there:
+only its columns past those (the polygons reaching into them), its copies
+under itself not at all.
+
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index fe3372ce..20eeb353 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -1829,6 +1829,7 @@ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *
+ }
+ 
+ static BOOL Port_SceneryMirroredOver(const LandDataManager *landDataMan, u8 index);
++static BOOL Port_SceneryForestOver(const LandDataManager *landDataMan, u8 index, int *keepFrom);
+ 
+ static void Port_RenderSceneryMapsLowered(const LandDataManager *landDataMan)
+ {
+@@ -1839,7 +1840,9 @@ static void Port_RenderSceneryMapsLowered(const LandDataManager *landDataMan)
+ 
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         if (landDataMan->loadedMaps[i]->mapMatrixIndex != INVALID_MAP_MATRIX_INDEX && landDataMan->loadedMaps[i]->valid == TRUE) {
+-            if (!Port_SceneryMirroredOver(landDataMan, i)) {
++            int keepFrom;
++
++            if (!Port_SceneryMirroredOver(landDataMan, i) && !Port_SceneryForestOver(landDataMan, i, &keepFrom)) {
+                 Port_RenderSceneryMapLowered(i, landDataMan);
+             }
+         }
+@@ -2457,17 +2460,20 @@ static const u16 sPortEdgeAboveScenery[] = {
+ // going on behind them. An eighth of a tile lower each, under the route's
+ // own ground where its big polygons reach back. Only over the columns
+ // listed (xFrom <= x < xTo, the world's tiles): east of x 248 the strip's
+-// end of the rocky plateau's cliff, drawn again, made steps down it.
++// end of the rocky plateau's cliff, drawn again, made steps down it. And
++// the scenery map south of it isn't drawn: by the route's west map its
++// forest overlapped the route's last trees and the copies, trees in each
++// other with a light line between (a photo of 2026-11-06 at 228,763).
+ typedef struct PortForestOnSouth {
+     u16 header;
+     u16 xFrom, xTo;
+ } PortForestOnSouth;
+ 
+ static const PortForestOnSouth sPortForestOnSouth[] = {
+-    { MAP_HEADER_ROUTE_203, 224, 248 },
++    { MAP_HEADER_ROUTE_203, 192, 248 }, // (both its maps: west of the plateau)
+ };
+ 
+-#define PORT_FOREST_ON_COPIES 3 // (2, 4 and 6 tiles south)
++#define PORT_FOREST_ON_COPIES 4 // (2, 4, 6 and 8 tiles south)
+ 
+ // North of Route 203 the scenery maps are higher too (the forest a tile and
+ // 4 tiles up), and the pixel field's top lines see past the route's north
+@@ -2513,11 +2519,13 @@ enum {
+     PORT_STRIP_SOUTH,      // (the map's last 2 tiles by its south edge)
+     PORT_STRIP_NORTH,      // (its first PORT_NORTH_STRIP_TILES by its north edge)
+     PORT_STRIP_SOUTH_PART, // (its last 2 tiles, over some of its columns)
++    PORT_MAP_COLUMNS,      // (all of it, over some of its columns)
+ };
+ 
+ static PortEdgeCopy sPortEdgeCopies[QUADRANT_COUNT];
+ static PortEdgeCopy sPortNorthEdgeCopies[QUADRANT_COUNT]; // (the strips by the north edge)
+ static PortEdgeCopy sPortSouthPartCopies[QUADRANT_COUNT]; // (by the south edge, over some columns: sPortForestOnSouth)
++static PortEdgeCopy sPortSceneryPartCopies[QUADRANT_COUNT]; // (a scenery map past those columns: sPortForestOnSouth)
+ 
+ static void Port_FreeEdgeCopy(PortEdgeCopy *copy)
+ {
+@@ -2533,22 +2541,25 @@ static void Port_FreeEdgeCopies(void)
+         Port_FreeEdgeCopy(&sPortEdgeCopies[i]);
+         Port_FreeEdgeCopy(&sPortNorthEdgeCopies[i]);
+         Port_FreeEdgeCopy(&sPortSouthPartCopies[i]);
++        Port_FreeEdgeCopy(&sPortSceneryPartCopies[i]);
+     }
+ }
+ 
+ // The loaded map's strip by its south edge (its last 2 tiles), or by its
+ // north edge (its first PORT_NORTH_STRIP_TILES), made once; kind
+ // PORT_STRIP_SOUTH_PART: by its south edge, only the polygons reaching into
+-// its columns xFrom <= x < xTo (tiles from its west edge).
++// its columns xFrom <= x < xTo (tiles from its west edge); PORT_MAP_COLUMNS:
++// all the polygons reaching into those columns.
+ static PortEdgeCopy *Port_EdgeCopyOf(const LandDataManager *landDataMan, u8 index, int kind, int xFrom, int xTo)
+ {
+     LoadedMap *loadedMap = landDataMan->loadedMaps[index];
+     PortEdgeCopy *copy = kind == PORT_STRIP_NORTH ? &sPortNorthEdgeCopies[index]
+         : kind == PORT_STRIP_SOUTH_PART           ? &sPortSouthPartCopies[index]
++        : kind == PORT_MAP_COLUMNS                ? &sPortSceneryPartCopies[index]
+                                                   : &sPortEdgeCopies[index];
+ 
+     if (copy->block != NULL && copy->source == loadedMap->mapModelFile && copy->mapMatrixIndex == loadedMap->mapMatrixIndex
+-        && (kind != PORT_STRIP_SOUTH_PART || (copy->xFrom == xFrom && copy->xTo == xTo))) {
++        && ((kind != PORT_STRIP_SOUTH_PART && kind != PORT_MAP_COLUMNS) || (copy->xFrom == xFrom && copy->xTo == xTo))) {
+         return copy;
+     }
+ 
+@@ -2582,14 +2593,15 @@ static PortEdgeCopy *Port_EdgeCopyOf(const LandDataManager *landDataMan, u8 inde
+         const void *list = NNS_G3dGetShpDLPtr(shp);
+         u32 size = NNS_G3dGetShpDLSize(shp), room = size + size / 2 + 64;
+         void *cut = malloc(room);
++        s32 west = -tile * MAP_TILES_COUNT_X / 2;
+         u32 bytes = cut == NULL                ? 0
+             : kind == PORT_STRIP_NORTH ? NitroPort_Gx3dTrimList(list, size, cut, room, 2, -half - tile, -half + PORT_NORTH_STRIP_TILES * tile)
++            : kind == PORT_MAP_COLUMNS ? NitroPort_Gx3dTrimList(list, size, cut, room, 0, west + xFrom * tile, west + (xTo + 1) * tile)
+                                        : NitroPort_Gx3dTrimList(list, size, cut, room, 2, half - 2 * tile, half + tile);
+ 
+         if (bytes != 0 && kind == PORT_STRIP_SOUTH_PART) {
+             // (then its columns: the strip cut again, across)
+             void *part = malloc(room);
+-            s32 west = -tile * MAP_TILES_COUNT_X / 2;
+ 
+             bytes = part != NULL ? NitroPort_Gx3dTrimList(cut, bytes, part, room, 0, west + (xFrom > 0 ? xFrom : -1) * tile, west + xTo * tile) : 0;
+             free(cut);
+@@ -2736,53 +2748,115 @@ static void Port_RenderEdgeAboveScenery(const LandDataManager *landDataMan)
+     }
+ }
+ 
+-static void Port_RenderForestOnSouth(const LandDataManager *landDataMan)
++// Whether the loaded map i has its forest drawn on past its south edge
++// (sPortForestOnSouth): its columns from <= x < to (tiles from its west
++// edge), and *below the scenery map's index there.
++static BOOL Port_ForestOnSouthOf(const LandDataManager *landDataMan, u8 i, int *from, int *to, int *below)
+ {
+-    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld) {
+-        return;
+-    }
+-
++    LoadedMap *loadedMap = landDataMan->loadedMaps[i];
+     int width = landDataMan->mapMatrixWidth, matrixWidth = MapMatrix_GetWidth(landDataMan->mapMatrix);
++    int index = loadedMap->mapMatrixIndex;
+     u16 matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
+ 
+-    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+-        LoadedMap *loadedMap = landDataMan->loadedMaps[i];
+-        int index = loadedMap->mapMatrixIndex, below = -1, from = 0, to = 0;
++    *from = *to = 0;
++    *below = -1;
+ 
+-        if (index == INVALID_MAP_MATRIX_INDEX || loadedMap->valid != TRUE) {
+-            continue;
+-        }
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld || index == INVALID_MAP_MATRIX_INDEX || loadedMap->valid != TRUE) {
++        return FALSE;
++    }
+ 
+-        // (its columns listed: tiles from its west edge)
+-        for (int k = 0; k < (int)NELEMS(sPortForestOnSouth); k++) {
+-            int west = (index % width) * MAP_TILES_COUNT_X;
++    for (int k = 0; k < (int)NELEMS(sPortForestOnSouth); k++) {
++        int west = (index % width) * MAP_TILES_COUNT_X;
+ 
+-            if (sPortForestOnSouth[k].header == MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, index)) {
+-                from = sPortForestOnSouth[k].xFrom - west;
+-                to = sPortForestOnSouth[k].xTo - west;
+-                from = from < 0 ? 0 : from;
+-                to = to > MAP_TILES_COUNT_X ? MAP_TILES_COUNT_X : to;
+-            }
++        if (sPortForestOnSouth[k].header == MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, index)) {
++            *from = sPortForestOnSouth[k].xFrom - west;
++            *to = sPortForestOnSouth[k].xTo - west;
++            *from = *from < 0 ? 0 : *from;
++            *to = *to > MAP_TILES_COUNT_X ? MAP_TILES_COUNT_X : *to;
+         }
++    }
+ 
+-        if (from >= to) {
+-            continue;
++    if (*from >= *to) {
++        return FALSE;
++    }
++
++    // (the scenery map south of it, loaded, higher)
++    for (u8 j = 0; j < QUADRANT_COUNT; j++) {
++        int other = landDataMan->loadedMaps[j]->mapMatrixIndex;
++
++        if (j != i && other != INVALID_MAP_MATRIX_INDEX && landDataMan->loadedMaps[j]->valid == TRUE
++            && other % width == index % width && other / width == index / width + 1
++            && MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, other) == MAP_HEADER_EVERYWHERE) {
++            *below = other;
+         }
++    }
+ 
+-        // (the scenery map south of it, loaded, higher)
+-        for (u8 j = 0; j < QUADRANT_COUNT; j++) {
+-            int other = landDataMan->loadedMaps[j]->mapMatrixIndex;
++    return *below >= 0
++        && MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, *below % width, *below / width, matrixWidth)
++        > MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, index % width, index / width, matrixWidth);
++}
+ 
+-            if (j != i && other != INVALID_MAP_MATRIX_INDEX && landDataMan->loadedMaps[j]->valid == TRUE
+-                && other % width == index % width && other / width == index / width + 1
+-                && MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, other) == MAP_HEADER_EVERYWHERE) {
+-                below = other;
+-            }
++// Whether the loaded map is the scenery map south of one whose forest is
++// drawn on over it: then it's drawn only past those columns, from
++// *keepFrom (tiles from its west edge; MAP_TILES_COUNT_X: not at all).
++static BOOL Port_SceneryForestOver(const LandDataManager *landDataMan, u8 index, int *keepFrom)
++{
++    int from, to, below;
++
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        if (i != index && Port_ForestOnSouthOf(landDataMan, i, &from, &to, &below)
++            && below == landDataMan->loadedMaps[index]->mapMatrixIndex) {
++            *keepFrom = to;
++            return TRUE;
+         }
++    }
+ 
+-        if (below < 0
+-            || MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, below % width, below / width, matrixWidth)
+-                <= MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, index % width, index / width, matrixWidth)) {
++    return FALSE;
++}
++
++// The scenery map index drawn only over its columns from keepFrom on (the
++// polygons reaching into them).
++static void Port_RenderSceneryPart(const LandDataManager *landDataMan, u8 index, int keepFrom)
++{
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++
++    if (keepFrom >= MAP_TILES_COUNT_X || loadedMap->valid != TRUE) {
++        return;
++    }
++
++    PortEdgeCopy *copy = Port_EdgeCopyOf(landDataMan, index, PORT_MAP_COLUMNS, keepFrom, MAP_TILES_COUNT_X);
++
++    if (copy == NULL) {
++        return;
++    }
++
++    VecFx32 position = { 0, 0, 0 };
++    VecFx32 scale = { FX32_ONE, FX32_ONE, FX32_ONE };
++    MtxFx33 rotationMatrix = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++    NNSG3dResMdl *own = loadedMap->mapRenderObj.resMdl;
++
++    LandDataManager_CalculateRenderingPosition(loadedMap->mapMatrixIndex, landDataMan->mapMatrixWidth, landDataMan->mapMatrix, &position);
++    position.x += landDataMan->offset.x;
++    position.y += landDataMan->offset.y;
++    position.z += landDataMan->offset.z;
++
++    if (GFXBoxTest_IsModelInView(own, &position, &rotationMatrix, &scale)) {
++        loadedMap->mapRenderObj.resMdl = copy->model;
++        Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &position, &rotationMatrix, &scale);
++        NNS_G3dGeFlushBuffer();
++        loadedMap->mapRenderObj.resMdl = own;
++    }
++}
++
++static void Port_RenderForestOnSouth(const LandDataManager *landDataMan)
++{
++    int width = landDataMan->mapMatrixWidth;
++
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        LoadedMap *loadedMap = landDataMan->loadedMaps[i];
++        int index = loadedMap->mapMatrixIndex, below, from, to;
++
++        if (!Port_ForestOnSouthOf(landDataMan, i, &from, &to, &below)) {
+             continue;
+         }
+ 
+@@ -3305,9 +3379,16 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         if (landDataMan->loadedMaps[i]->mapMatrixIndex != INVALID_MAP_MATRIX_INDEX) {
+ #ifdef SDK_PORT_3DS
++            int keepFrom;
++
+             if (Port_SceneryMirroredOver(landDataMan, i)) {
+                 continue;
+             }
++
++            if (Port_SceneryForestOver(landDataMan, i, &keepFrom)) {
++                Port_RenderSceneryPart(landDataMan, i, keepFrom);
++                continue;
++            }
+ #endif
+             LandDataManager_RenderLoadedMap(i, landDataMan, modelAttrs);
+         }
