@@ -3568,6 +3568,74 @@ static void test_text_box_objs(void)
  * picture again. Found again in the next frame's OAM
  * (NitroPort_Render2DObjPlaces) for the in-between frames' halfway
  * places (NitroPort_GpuObjHalfway). */
+/* (test_vram_written_while_drawing) The clock the 2D renderer times its
+ * parts with, writing to a shown BG's tiles at its nth call: the game
+ * writing the VRAM on its own core while the drawer draws a picture. */
+static int sWriteAtCall, sClockCalls;
+static u8 *sWriteAt;
+
+static uint64_t WritingClock(void)
+{
+    if (++sClockCalls == sWriteAtCall && sWriteAt != NULL) {
+        *sWriteAt ^= 0x11;
+    }
+    return (uint64_t)sClockCalls;
+}
+
+/* The VRAM a picture is drawn from is noted before it's drawn, never
+ * after: what the game writes while it's drawn (after the picture read it)
+ * is a change the next time. Noted after the drawing, such a write was in
+ * the note and not in the picture, never drawn (the Underground's lower
+ * screen black, the battle's bars moving in jumps). */
+static void test_vram_written_while_drawing(void)
+{
+    static u8 tiles[64];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED, BLUE };
+    static u16 under[256 * 192], over[256 * 192];
+    static u8 overAlpha[256 * 192];
+    extern u8 NitroPort_BgVram[];
+    NitroRender2DSplit split;
+    int i, calls;
+
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = 1;
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    /* (how many times a picture drawn whole asks the clock: the write goes
+     * at the last, after the picture's drawn) */
+    sClockCalls = 0;
+    sWriteAt = NULL;
+    NitroPort_Render2DSetClock(WritingClock);
+    G2_SetBG1Offset(1, 0);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    calls = sClockCalls;
+    CHECK(calls >= 2);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    /* a register changed, and the tile the BG shows written as it's drawn */
+    sClockCalls = 0;
+    sWriteAtCall = calls;
+    sWriteAt = NitroPort_BgVram + 0x4000 + 32 + 5;   /* (tile 1, at the BG's characters) */
+    G2_SetBG1Offset(2, 0);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    sWriteAt = NULL;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);   /* (the write: drawn again) */
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    NitroPort_Render2DSetClock(NULL);
+}
+
 /* The change check's OBJ VRAM: only the tiles the OBJs shown use (each
  * once), all of it with a bitmap OBJ; noted as the picture's drawn, so a
  * sprite moved is drawn once, not again the next time to be sure. */
@@ -5646,6 +5714,7 @@ int main(int argc, char **argv)
     test_gpu_bg();
     test_gpu_sign();
     test_obj_vram_check();
+    test_vram_written_while_drawing();
     test_gpu_objs();
     test_tall_field();
     test_stretch_squeeze();

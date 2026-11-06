@@ -2337,6 +2337,19 @@ difference the old check didn't have too. In `test_render.c`:
 `test_obj_vram_check` (a tile no sprite shows: not a change; one that
 shows, the 8-bit one's last half, 2D mapping, a bitmap OBJ).
 
+That round also moved the VRAM's note after the picture's drawing (so the
+sprites it had just left out would count), and that broke two things on
+the 3DS: the Underground's lower screen stayed black, and a battle's HP
+and EXP bars moved in jumps. The game goes on writing the VRAM on its own
+core while the drawer draws: what it wrote after the picture read the VRAM
+but before the note was in the note and not in the picture, so it was
+never drawn (the bars' tiles are written every frame as they move). The
+note is taken before the drawing again, as it always was: a write after it
+is a change the next time. The PC runner never showed it (its check runs
+between the game's frames). In `test_render.c`:
+`test_vram_written_while_drawing` (a tile written at the drawing's last
+clock call: drawn again the next time; it fails with the note after).
+
 Cut in a heavy scene (the same log): at the top of Route 215 in the rain,
 the geometry busy 80% of the time, the upper screen's drawer took 55-60 ms
 to hand over each picture, below the geometry: the cut-in's steps came 3

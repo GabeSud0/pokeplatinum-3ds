@@ -7659,15 +7659,19 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     if (!last[e].valid || small != last[e].small) {
         last[e].small = small;
         last[e].valid = 1;
+        /* (the VRAM noted now, as it's drawn, when that's quick: else the
+         * next time, and drawn again then, to be sure. Before the drawing,
+         * never after: the game goes on writing the VRAM on its own core
+         * while the picture's drawn here, and what it writes after the
+         * picture read it but before a note would be in the note and not
+         * in the picture, never drawn. Noted after it for 2026-11-05's
+         * rain check, the Underground's lower screen stayed black and the
+         * battle's HP and EXP bars moved in jumps, on the 3DS) */
+        last[e].vramValid = ShownVramSignature(e, split->snapshot, 1, gpuCircle != 0, 0, &vram);
+        last[e].vram = vram;
         __atomic_fetch_add(&sChangedSmall[e], 1u, __ATOMIC_RELAXED);
         __atomic_fetch_add(&sCheckTicks[e], ClockNow() - checkStart, __ATOMIC_RELAXED);
         DrawChanged(engine, under, split, gpuBg, gpuObjs, gpuCircle, rowsShown, gpuSign, signMasked);
-        /* (the VRAM noted now, as it's drawn, when that's quick: else the
-         * next time, and drawn again then, to be sure. After the drawing:
-         * the sprites it left out are those whose tiles count, and the
-         * VRAM's the same) */
-        last[e].vramValid = ShownVramSignature(e, split->snapshot, 1, gpuCircle != 0, 0, &vram);
-        last[e].vram = vram;
         return 1;
     }
     vram = EngineShownVramSignature(e, split->snapshot, gpuCircle != 0);
