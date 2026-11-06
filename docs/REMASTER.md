@@ -952,7 +952,7 @@ screen's 320 x 192 at 1.25 times, as above.
   Route 215's forest (altitudes are half tiles: 3 copies and 5; Route
   215's 2 as before). On the PC at 222,663, 221,664 and 218,664 the black
   band gone (the black pixels left are the player's outline).
-- **Route 203's south edge** (patches 0093, 0095, 0096): south of the route's
+- **Route 203's south edge** (patches 0093, 0095, 0096, 0097): south of the route's
   east map the scenery is a tile up, and the pixel field's bottom lines saw
   a black band past the route's edge, the ridge cut short above it (a
   photo of 2026-11-06 at 230,762): the scenery's own forest there has no
@@ -983,6 +983,20 @@ screen's 320 x 192 at 1.25 times, as above.
   shots at 228,763, 236,764, 230,762, 226,761, 216,764, 204,763, 210,762
   and 220,763, and Jubilife's east side (188,764, 186,760, 190,766): the
   forest goes on, no stripe, no trees in each other.
+  That went by what was loaded: from Jubilife City (the scenery map is east
+  of it) the route's map is let go as the player walks south, and the
+  forest east of the TV tower changed, trees gone and back, black past the
+  copies' 8 tiles (a test run of 2026-11-06). Since patch 0097 it goes by
+  the scenery map alone (`Port_ForestOverOf`): while it's loaded the
+  route's strip is read for it from the land data, as the maps beside the
+  loaded ones are (`Port_ForestCopyOf`: its own copy and render object, 2
+  kept), and drawn again over the scenery map's whole depth (16 copies,
+  each only while its box is in the view), whether the route's map is
+  loaded or not. PC shots at Jubilife 185,778, 182,776, 188,784, 186,772,
+  186,796, 190,798 and 188,790: forest, no black; at 186,783 and 190,783
+  the same picture with and without the route's own lowered copies (so
+  nothing changes as its map is let go); on the route at 216-252,763 the
+  same pictures as with 0096.
 - **Route 203's north edge** (patch 0093): north of the route the scenery
   is higher too (a tile up over its west map, 4 over its east), and the
   pixel field's top lines see past the route's last trees into the gap
