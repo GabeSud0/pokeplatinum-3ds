@@ -2449,8 +2449,8 @@ in 300 checks as before, each check 0.025 ms (0.063 before); Cut in
 Eterna's rain all through, 63 pictures in 270 checks (76 before). Each check that found
 no change compared with the picture drawn whole (local `dcverify`): no
 difference the old check didn't have too. In `test_render.c`:
-`test_obj_vram_check` (a tile no sprite shows: not a change; one that
-shows, the 8-bit one's last half, 2D mapping, a bitmap OBJ).
+`test_obj_vram_check_tiles` (a tile no sprite shows: not a change; one
+that shows, 2D mapping); now only with the compositor's sprites (below).
 
 That round also moved the VRAM's note after the picture's drawing (so the
 sprites it had just left out would count). The game goes on writing the
@@ -2464,6 +2464,33 @@ display's instead: see the Underground above.) The PC runner never showed it (it
 between the game's frames). In `test_render.c`:
 `test_vram_written_while_drawing` (a tile written at the drawing's last
 clock call: drawn again the next time; it fails with the note after).
+
+The bars still moved in jumps after that (a video of 2026-11-05: a wild
+Bibarel's HP bar held for 0.25 to 0.8 seconds at a time and then jumped,
+four or five steps in a 2-second drain, while the "It's not very
+effective..." printed straight after it came a few letters every 2
+V-blanks, as it should). The text is a BG, in the state taken as the frame
+is handed over; the bars are sprite tiles, in the OBJ VRAM the check
+hashes. So the tiles-only check is now used only where it was made for:
+with the sprites drawn by the compositor (`gpuObjs`: the rain's drops, the
+HM cut-in's). Everywhere else (a battle, the menus, the Underground) the
+whole OBJ VRAM is hashed again, as before the rain's round, but noted as
+the picture's drawn like the tiles were, so a picture with sprites still
+isn't drawn twice (`ShownVramSignature`'s `objTilesOnly`). It's hashed 32
+bytes at a time (`ObjVramParts`), each part's hash kept: a change only in
+parts no sprite shown has its tiles in (what the tiles alone would have
+missed) is counted in the log's `[perf] game` line ("for VRAM (N outside
+the shown sprites' tiles)"), and in a battle, when that happens 4 checks
+running (a bar's tiles written again and again, not the sprites loaded at
+its start), the first 6 times are logged with the parts that changed and
+where the sprites shown have their tiles (`[2d] engine A's OBJ VRAM
+changed only where no sprite shown has its tiles`). On the PC the bar's
+tiles are in the sprites' (no such line through a drain), so the next 3DS
+log says which it was. In `test_render.c`: `test_obj_vram_check` (with
+the sprites in the picture: any of the OBJ VRAM a change, counted when it's
+outside the sprites' tiles; a sprite moved drawn once) and
+`test_obj_vram_check_tiles` (with the compositor's sprites: a tile no
+sprite shows not a change).
 
 Cut in a heavy scene (the same log): at the top of Route 215 in the rain,
 the geometry busy 80% of the time, the upper screen's drawer took 55-60 ms

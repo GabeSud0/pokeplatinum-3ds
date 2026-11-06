@@ -2624,8 +2624,8 @@ static void PerfFrame(u64 enter)
     drawing[0] = 0;
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
-        unsigned count = d->count, registers = 0, vram = 0, spritesOnly = 0, r, v;
-        char why[192] = "";
+        unsigned count = d->count, registers = 0, vram = 0, spritesOnly = 0, unseen = 0, r, v;
+        char why[256] = "";
 
         /* (the remaster: why its pictures were drawn again) */
         if (sRemaster && (d->screens & ENGINE_A)) {
@@ -2633,16 +2633,22 @@ static void PerfFrame(u64 enter)
             registers += r;
             vram += v;
             spritesOnly += NitroPort_Render2DSpritesOnly(0);
+            unseen += NitroPort_Render2DObjTilesUnseen(0);
         }
         if (sRemaster && (d->screens & ENGINE_B)) {
             NitroPort_Render2DChangeStats(1, &r, &v);
             registers += r;
             vram += v;
+            unseen += NitroPort_Render2DObjTilesUnseen(1);
         }
         if (registers + vram) {
-            /* (and of those, the sprites alone made again: the picture kept) */
-            snprintf(why, sizeof(why), ": %.1f for registers, palettes or sprites, %.1f for VRAM; %.1f the sprites only",
-                     registers / seconds, vram / seconds, spritesOnly / seconds);
+            /* (and of those, the sprites alone made again: the picture kept;
+             * and the OBJ VRAM changed only outside the tiles of the sprites
+             * shown, which the check used to leave out) */
+            snprintf(why, sizeof(why),
+                     ": %.1f for registers, palettes or sprites, %.1f for VRAM (%.1f outside the shown sprites' "
+                     "tiles); %.1f the sprites only",
+                     registers / seconds, vram / seconds, unseen / seconds, spritesOnly / seconds);
         }
         /* (the remaster's engine A: of its time a frame, finding out if the
          * picture changed, drawing it, and of that the HM cut-in's sprites) */
