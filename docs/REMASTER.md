@@ -2952,6 +2952,30 @@ grey blocks. In `test_gx3d.c`: `test_interpolation_order_shift`,
 `test_interpolation_tile_a_scene`, `test_interpolation_swaying`. The PC runner's `midview FILE` draws the
 in-between scene at the view's size (as `viewsim`).
 
+The same polygon (2026-11-06): as the balls jump out of the briefcase,
+spinning, the camera closing in, each face of a ball was nearer another
+face's place in the scene before than its own, and was paired with it
+(or with the case's): the in-between scenes showed grey specks on the
+balls' white and the case's handle torn (a video of 2026-11-06; on the PC
+with the local `dbgstarter`, every in-between scene of the case opening
+and the balls landing, the same). The order's pair is the same polygon of
+the same model when its texture coordinates are the same at every corner
+(`same_st`); another part of its kind mostly has its own (a ball's other
+faces), while a map's repeated tiles share theirs and tell nothing. So
+the order's pair is taken when it's the same polygon and the nearest of
+its kind isn't, as far as twice the usual reach (`ORDER_SAME_FAR`); of two
+polygons paired with one of the scene before's, the one that's the same
+polygon as it keeps it when only one is (two copies of a model, by where
+they are, as before); and the camera's move (`static_rematch`) doesn't
+give such a polygon another that isn't the same too. On the PC the
+briefcase's in-between scenes came out as clean as with the order's pairs
+alone. Geometry recordings of the Cycling Road, Eterna at a run and Route
+203 (`gx3d_replay --hashes --interp --view 400 240`): every scene and
+in-between scene the same as before but the dozen as the follower's ball
+bursts open (its sparks, many of one kind), as good as before; and in
+Jubilife a man by the road, whose in-between pictures had his body dark
+and muddled, now drawn as himself. `test_interpolation_fast_model`.
+
 The camera's move (2026-11-03): riding the Cycling Road, the in-between
 frames had white lines along the rocks' ledges (video IMG_2955). The
 ground near the screen's bottom moves further than the scene's motion

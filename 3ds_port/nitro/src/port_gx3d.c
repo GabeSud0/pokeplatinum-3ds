@@ -1247,7 +1247,21 @@ static int match_fits(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *
     if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)return 0;
     return poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,MATCH_SURE)<MATCH_SURE;
 }
-static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *C,const RecPos *CP,unsigned n,int32_t *out)
+/* Whether two records are the same polygon of a model, by its texture's
+ * place on it: every corner's texture coordinates the same (a model drawn
+ * again, its parts in its order: the same; another part of its kind,
+ * another face of a ball, mostly not; a map's tiles of one kind often all
+ * the same, telling nothing). */
+static int same_st(const PolyRecord *a,const PolyRecord *b)
+{
+    unsigned k;
+    if(a->count!=b->count)return 0;
+    for(k=0;k<a->count;k++)if(a->st[k][0]!=b->st[k][0] || a->st[k][1]!=b->st[k][1])return 0;
+    return 1;
+}
+#define ORDER_SAME_FAR 2.0f   /* (match_records: the order's pair, the same polygon, if no further than this many times near) */
+static unsigned match_records(const RecTag *P,const RecPos *PP,const PolyRecord *PR,unsigned m,
+                              const RecTag *C,const RecPos *CP,const PolyRecord *CR,unsigned n,int32_t *out)
 {
     unsigned i=0,j=0,matched=0,moves=0;
     float dx=0.0f,dy=0.0f,near;
@@ -1390,6 +1404,19 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const 
             float d=poly_distance(&PP[order],&CP[j],C[j].count,dx,dy,near);
             if(d<near && (best<0 || d<=bestD+ORDER_SLACK)){best=order;bestD=d;}
         }
+        /* The order's pair when it's the same polygon (same_st) and the
+         * nearest of its kind isn't: a model moving or turning fast, its
+         * parts of one kind each nearer another's place in the scene
+         * before than its own (the starters' Poké Balls jumping out of
+         * the briefcase, spinning, as the camera closed in: their faces
+         * paired with each other's, and with the case's, and the
+         * in-between scenes showed grey specks on the balls and the case's
+         * handle torn, a video of 2026-11-06). As far as twice near. */
+        if(order>=0 && order!=best && P[order].onScreen && P[order].count==C[j].count &&
+           same_st(&PR[order],&CR[j]) && (best<0 || !same_st(&PR[best],&CR[j]))){
+            float d=poly_distance(&PP[order],&CP[j],C[j].count,dx,dy,ORDER_SAME_FAR*near);
+            if(d<ORDER_SAME_FAR*near){best=order;bestD=d;}
+        }
         /* What the camera follows stays where it was on the screen as the
          * scene moves: the player, and one who follows him. The order's
          * pair where it was (a pixel at most), when that fits better than
@@ -1430,6 +1457,13 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const 
         if(o<0){sOwner[q]=(int32_t)j;continue;}
         dj=fminf(poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,1e9f),poly_distance(&PP[q],&CP[j],C[j].count,0.0f,0.0f,1e9f));
         doo=fminf(poly_distance(&PP[q],&CP[o],C[o].count,dx,dy,1e9f),poly_distance(&PP[q],&CP[o],C[o].count,0.0f,0.0f,1e9f));
+        {
+            /* (the one that's the same polygon as it, same_st, if only one
+             * is: as above; two the same, two copies of a model, by where
+             * they are) */
+            int sj=same_st(&PR[q],&CR[j]),so=same_st(&PR[q],&CR[o]);
+            if(sj!=so){dj=sj?0.0f:1.0f;doo=so?0.0f:1.0f;}
+        }
         if(dj<doo || (dj==doo && sOrderOut[j]==q && sOrderOut[o]!=q)){
             out[o]=-1;sOwner[q]=(int32_t)j;
         }else{
@@ -1655,9 +1689,14 @@ static void static_rematch(const PolyRecord *P,unsigned m,const PolyRecord *C,un
             lo=center-MATCH_WINDOW;hi=center+MATCH_WINDOW;
             if(lo<0)lo=0;
             if(hi>(int)m-1)hi=(int)m-1;
+            /* (its pair the order's and the same polygon, same_st: only
+             * another as much the same takes its place; a map's repeated
+             * rows, the same as each other, as before) */
+            int same=q>=0 && q==sOrderOut[j] && same_st(&P[q],&C[j]);
             for(k=lo;k<=hi;k++){
                 if(k==q || PT[k].sig!=CT[j].sig || !PT[k].onScreen || PT[k].count!=CT[j].count)continue;
                 if(fabsf(PT[k].px0-fx)+fabsf(PT[k].py0-fy)>STATIC_NEAR)continue;
+                if(same && !same_st(&P[k],&C[j]))continue;
                 e=static_misfit(&P[k],&C[j],mo);
                 if(e>=0.0f && (best<0 || e<bestE) && !STATIC_TAKEN(k,e)){best=k;bestE=e;}
             }
@@ -1700,7 +1739,7 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
     }
     {
         uint64_t t0=sOps.ticks?sOps.ticks(sOps.context):0;
-        sMidMatched=match_records(sTag[sRecBuild^1u],sPos[sRecBuild^1u],m,sTag[sRecBuild],sPos[sRecBuild],n,sMatch);
+        sMidMatched=match_records(sTag[sRecBuild^1u],sPos[sRecBuild^1u],P,m,sTag[sRecBuild],sPos[sRecBuild],C,n,sMatch);
         sClipMotionValid=sMidMatched*2u>=n && clip_motion(sTag[sRecBuild^1u],sTag[sRecBuild],n,sMatch,sClipMotion);
         if(sClipMotionValid){
             clip_motion_z(P,C,sTag[sRecBuild^1u],sTag[sRecBuild],n,sMatch,sClipMotion);
