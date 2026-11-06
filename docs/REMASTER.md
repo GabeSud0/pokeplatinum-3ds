@@ -733,7 +733,13 @@ stretched:
     which the DS doesn't have (behind the player in Mt. Coronet as Cyrus
     left, it had his walk left as the DS has it: he vanished in the middle
     of the wider screen; now he walks on toward the exit and out of
-    sight);
+    sight). Since patch 0089 a way round that runs outwards, then up or
+    down with something in the way beside it every step, out past the
+    picture's top or bottom, turns a tile sooner and walks a tile in from
+    it, if that's clear: Cyrus went 11 west to the cave's west wall and
+    north along it (2026-11-05: "just move him one space to the right so
+    he walks in the middle"); on the PC he now goes north at x 5, between
+    the wall and the pool, not 4;
   - Route 201's Pokémon Breeder (who stands just past the DS's left
     edge, on the way Rowan and Dawn come in from Twinleaf Town) stands 5
     tiles further right (`map_header_data.c`, `sPortWideMoves`): in the
