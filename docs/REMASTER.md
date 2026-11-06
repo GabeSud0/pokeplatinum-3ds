@@ -1094,7 +1094,22 @@ screen's 320 x 192 at 1.25 times, as above.
   back where the script put it if it doesn't walk in first or the camera
   moves (the player or a free camera set walking, `MoveCamera`). On the
   PC the rival comes in from beyond the top and runs off past it (3 tiles
-  more each way).
+  more each way). Since patch 0086 (photos and notes of 2026-11-05): a walk
+  whose last steps go up or down after other steps is made longer as well
+  (Dawn leaving Sandgem Town after the tour: a step south, 5 west, 10
+  north; Dawn leaving Jubilife after the Galactic battle; Looker's way out
+  of Jubilife), and where the way on isn't clear the walker goes round,
+  after the script's walk (that way first, else east, else west, to out of
+  the taller picture or beside the wider one: Dawn's 10 steps out of
+  Sandgem end under a row of trees, and she stopped at the top and was
+  taken away in sight; on the PC she now goes a step east and on north,
+  out of sight). A walk blocked by a wall where the DS's picture ended,
+  with a door in reach (Dawn leaving the lab beside the player), first
+  tries a step that way, across to the door's column and straight on to
+  it, down the middle of the room (the search for a way to the door as
+  before if that isn't clear). `SetPosition` forgets what was done to a
+  walker's walk, so Looker, put in the road for later after his walk, is
+  left there when the script ends.
 - The weather's sprites (patch 0080, 2026-11-05): the rain's drops, the
   snow's flakes, the sand live on the DS's screen with 64 pixels round it
   (they come on there, go off one side and on at the other:
