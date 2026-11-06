@@ -1068,6 +1068,15 @@ screen's 320 x 192 at 1.25 times, as above.
   at a time, on the PC, where no gap opens where the two ways meet past
   the border (a cliff ending in the open, the white behind showing); on
   the right one row of the mirror is kept under the moved ones' first.
+- **Someone hidden for want of ground** (patch 0099, a log line only): the
+  game hides someone with no ground found under them (their tile's height
+  not in the loaded maps' collision) till it's found; on the DS that's out
+  of the picture. A hiker on Route 207 below the player was seen only now
+  and then at the screen's bottom, a frame at a time (a video of
+  2026-11-06), but on the PC at the same place he's there in every frame,
+  scenes and in-between ones. The log says each such change for someone in
+  the 3DS's picture (`[field] someone's ground not found at X,Z ...`,
+  `found again`), at most 64 lines, so the next log tells whether it's that.
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they
