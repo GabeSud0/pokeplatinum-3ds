@@ -810,6 +810,16 @@ static void test_extra_texture_slots(void)
     NitroPort_SetExtraTexSlots(0);
     NitroPort_Gx3dMapTextureBanks(&b);
     CHECK(b.texture[3]==NULL);
+    /* palettes written into bank E (slots 0-3) as mapped; none where no bank is */
+    {
+        static const unsigned char pal[4]={1,2,3,4};
+        NitroPort_IoReg[0x244]=0x83;
+        CHECK(NitroPort_WriteTexPltt(0x3ffe,pal,4)==1);
+        CHECK(NitroPort_LcdcVram[0x80000+0x3ffe]==1 && NitroPort_LcdcVram[0x80000+0x4001]==4);
+        CHECK(NitroPort_WriteTexPltt(0x10000,pal,4)==0);   /* slot 4: no bank */
+        NitroPort_IoReg[0x244]=0;
+        CHECK(NitroPort_WriteTexPltt(0x100,pal,4)==0);
+    }
     memcpy(NitroPort_IoReg+0x240,saved,7);
 }
 static void test_texture_hash(void)

@@ -54,6 +54,28 @@ void NitroPort_Gx3dMapTextureBanks(NitroGx3dTexBanks *banks)
     }
 }
 
+int NitroPort_WriteTexPltt(uint32_t addr, const void *src, uint32_t size)
+{
+    NitroGx3dTexBanks banks;
+    uint32_t done = 0;
+
+    NitroPort_Gx3dMapTextureBanks(&banks);
+
+    /* (every slot it covers mapped, else none of it written) */
+    for (done = addr & ~0x3fffu; done < addr + size; done += 0x4000) {
+        if ((done >> 14) >= 6 || !banks.palette[done >> 14]) return 0;
+    }
+
+    for (done = 0; done < size;) {
+        uint32_t at = addr + done, n = 0x4000 - (at & 0x3fff);
+        if (n > size - done) n = size - done;
+        memcpy((unsigned char *)banks.palette[at >> 14] + (at & 0x3fff), (const unsigned char *)src + done, n);
+        done += n;
+    }
+
+    return 1;
+}
+
 static int restrict_int(int x, int lo, int hi)
 {
     return x < lo ? lo : x > hi ? hi : x;

@@ -45,6 +45,12 @@ void NitroPort_Gx3dMapTextureBanks(NitroGx3dTexBanks *banks);
 extern unsigned char NitroPort_ExtraTexVram[];
 void NitroPort_SetExtraTexSlots(int on);
 
+/* Texture palette data written straight into the banks mapped at palette
+ * address addr (size bytes), with no remapping (GX_BeginLoadTexPltt takes
+ * the banks off the 3D while it loads; the 3D's thread reads them on its
+ * own). 0 if a slot it covers has no bank: nothing written. */
+int NitroPort_WriteTexPltt(uint32_t addr, const void *src, uint32_t size);
+
 /* TEXIMAGE_PARAM fields. */
 static inline unsigned NitroPort_Gx3dTexFormat(uint32_t param) { return (param >> 26) & 7u; }
 static inline unsigned NitroPort_Gx3dTexWidth(uint32_t param) { return 8u << ((param >> 20) & 7u); }
