@@ -896,7 +896,7 @@ screen's 320 x 192 at 1.25 times, as above.
   mountains looked cut). Such a map is drawn again below itself, from the
   lowest map beside it up, 2 tiles apart (16 polygons each), the copies
   filling the slit as a wall would (`Port_RenderSceneryMapsLowered`).
-- **Another area's maps** (patch 0100, with the port's texture slots 2
+- **Another area's maps** (patches 0100, 0102, with the port's texture slots 2
   and 3): each map's textures and props are its area's (its map header's
   area data), and the game loads only the player's area's: a map of
   another area is behind a gate on the DS's screen. The wider field sees
@@ -914,6 +914,10 @@ screen's 320 x 192 at 1.25 times, as above.
   516,706, 513,721, 505,706) Hearthome's paving, house, lamps and hedges as
   from Hearthome itself; from Route 203's east end Oreburgh City's ground
   where it was white; nothing read at Jubilife, Veilstone or Route 207.
+  Their palettes are written straight into the palette bank as it's mapped
+  (`NitroPort_WriteTexPltt`, patch 0102): NNS_G3dPlttLoad takes the bank off
+  the 3D while it copies, and these load in play, the 3D's thread reading
+  the banks on its own.
 - **The maps beside the loaded ones** (patches 0083, 0084, 0098): the game keeps 4 maps
   loaded, 2 by 2 round the player (theirs and the ones beside the quarter
   of it they're in), always enough on the DS. The pixel field sees about
