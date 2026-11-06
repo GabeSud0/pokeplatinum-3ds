@@ -2474,9 +2474,11 @@ is handed over; the bars are sprite tiles, in the OBJ VRAM the check
 hashes. So the tiles-only check is now used only where it was made for:
 with the sprites drawn by the compositor (`gpuObjs`: the rain's drops, the
 HM cut-in's). Everywhere else (a battle, the menus, the Underground) the
-whole OBJ VRAM is hashed again, as before the rain's round, but noted as
-the picture's drawn like the tiles were, so a picture with sprites still
-isn't drawn twice (`ShownVramSignature`'s `objTilesOnly`). It's hashed 32
+whole OBJ VRAM is hashed again, as before the rain's round: not worked
+out when something else changed too (a picture with sprites is drawn
+again the next time, to be sure), so a screen whose registers change
+every frame, a battle's lower screen, doesn't hash it each time
+(`ShownVramSignature`'s `objTilesOnly`). It's hashed 32
 bytes at a time (`ObjVramParts`), each part's hash kept: a change only in
 parts no sprite shown has its tiles in (what the tiles alone would have
 missed) is counted in the log's `[perf] game` line ("for VRAM (N outside
@@ -2488,7 +2490,7 @@ changed only where no sprite shown has its tiles`). On the PC the bar's
 tiles are in the sprites' (no such line through a drain), so the next 3DS
 log says which it was. In `test_render.c`: `test_obj_vram_check` (with
 the sprites in the picture: any of the OBJ VRAM a change, counted when it's
-outside the sprites' tiles; a sprite moved drawn once) and
+outside the sprites' tiles; a sprite moved drawn twice, as before) and
 `test_obj_vram_check_tiles` (with the compositor's sprites: a tile no
 sprite shows not a change).
 

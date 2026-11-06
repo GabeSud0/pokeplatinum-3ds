@@ -3639,9 +3639,9 @@ static void test_vram_written_while_drawing(void)
 /* The change check's OBJ VRAM, with the sprites in the picture: all of
  * it, as before the rain's check (a battle's HP and EXP bars, written every
  * frame, moved in jumps on the 3DS with the tiles alone); a change only
- * outside the tiles of the sprites shown counted for the log. Noted as the
- * picture's drawn, so a sprite moved is drawn once, not again the next
- * time to be sure. */
+ * outside the tiles of the sprites shown counted for the log. As before,
+ * not worked out with a change to the rest: a sprite moved is drawn again
+ * the next time, to be sure. */
 static void test_obj_vram_check(void)
 {
     static u8 tiles[16 * 64];
@@ -3672,6 +3672,7 @@ static void test_obj_vram_check(void)
     split.over = over;
     split.overAlpha = overAlpha;
     NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);   /* (to be sure) */
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
     (void)NitroPort_Render2DObjTilesUnseen(0);
     /* a tile no OBJ shows: a change too, and counted */
@@ -3694,15 +3695,17 @@ static void test_obj_vram_check(void)
     NitroPort_ObjVram[256 + 3 * 64 + 40] ^= 0x22;
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
     CHECK(NitroPort_Render2DObjTilesUnseen(0) == 0);
-    /* a sprite moved: drawn once, its VRAM noted as it's drawn */
+    /* a sprite moved: drawn, and again the next time to be sure */
     G2_SetOBJPosition(&oam[0], 44, 30);
     GX_LoadOAM(oam, 0, sizeof(oam));
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
-    /* a sprite moved and its tiles written in the same frame: once */
+    /* moved again with its tiles written in the same frame: the same */
     G2_SetOBJPosition(&oam[0], 48, 30);
     GX_LoadOAM(oam, 0, sizeof(oam));
     NitroPort_ObjVram[2 * 32 + 6] ^= 0x11;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
     NitroPort_ObjVram[2 * 32 + 6] ^= 0x11;

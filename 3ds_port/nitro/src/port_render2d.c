@@ -7384,12 +7384,14 @@ static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int lines
      * sprites shown are of those engine A's last picture left out
      * (sObjKeysMade, as EngineSmallSignature has it), the tiles of all of
      * those: the rain's drops come and go, each kind not shown every step,
-     * and the tiles shown with them. Otherwise all of it, as before that:
-     * with the tiles alone everywhere, a battle's HP and EXP bars (their
-     * tiles written every frame as they move) moved in jumps on the 3DS,
-     * a few times a second (a video of 2026-11-05), the text printed just
-     * after them smoothly. Either way it's noted as the picture's drawn,
-     * as the BGs' are: not drawn again the next time to be sure) */
+     * and the tiles shown with them; quick, it's noted as the picture's
+     * drawn, as the BGs' are: not drawn again the next time to be sure.
+     * Otherwise all of it, as before that (not worked out with a change to
+     * the rest: the picture's drawn again the next time, to be sure): with
+     * the tiles alone everywhere, a battle's HP and EXP bars (their tiles
+     * written every frame as they move) moved in jumps on the 3DS, a few
+     * times a second (a video of 2026-11-05), the text printed just after
+     * them smoothly) */
     if (objs) {
         const u8 *objVram = e->isA ? NitroPort_ObjVram : NitroPort_DbObjVram;
         u32 objMask = e->isA ? 0x3FFFFu : 0x1FFFFu, units = (objMask + 1u) / 32u, u;
@@ -7433,6 +7435,9 @@ static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int lines
         } else {
             u32 t = 2166136261u;
 
+            if (cheapOnly && !objTilesOnly) {
+                return 0;   /* (all of it: not with a change to the rest, as before) */
+            }
             memset(mark, 0, units / 8u);
             for (k = 0; k < n; k++) {
                 /* (a key's tiles: its shape, size, colours and first tile,
