@@ -4616,6 +4616,24 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             float bu0 = (hofs - (float)origin) / 256.0f, bu1 = bu0 + (float)canvasW / 256.0f;
             float bvTop = 1.0f - (vofs - (float)top) / 256.0f, bvBottom = bvTop - (float)rows / 256.0f;
             u32 a = (u32)(info->gpuBgEva * 255 / 16), b = (u32)((16 - info->gpuBgEvb) * 255 / 16);
+            PicaRect bgRect = pic;
+
+            if (info->stretch) {
+                /* (a battle's start on the wider field: the DS's picture
+                 * stretched over the screen, the 3D at its own size. The
+                 * weather's BG as the field had it, a pixel a pixel, the
+                 * DS's screen in the middle: stretched with the picture,
+                 * Eterna Forest's patches of light grew half as big again
+                 * as each battle started, 2026-11-05) */
+                bgRect.x0 = 0.0f;
+                bgRect.x1 = (float)scr->width;
+                bgRect.y0 = 0.0f;
+                bgRect.y1 = SCREEN_H;
+                bu0 = (hofs - (float)(scr->width - DS_W) / 2.0f) / 256.0f;
+                bu1 = bu0 + (float)scr->width / 256.0f;
+                bvTop = 1.0f - (vofs - (float)(SCREEN_H - DS_H) / 2.0f) / 256.0f;
+                bvBottom = bvTop - (float)SCREEN_H / 256.0f;
+            }
 
             if (sConfig.flipV) {
                 float t = bvTop;
@@ -4628,7 +4646,8 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             quad_combiner_modulate();
             C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
                            GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
-            quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, bu0, bvTop, bu1, bvBottom, (a << 24) | (a << 16) | (a << 8) | b);
+            quad(bgRect.x0, bgRect.y0, bgRect.x1, bgRect.y1, 0.0f, bu0, bvTop, bu1, bvBottom,
+                 (a << 24) | (a << 16) | (a << 8) | b);
             NitroPort_PicaProfileMark("the weather's BG");
         }
         /* 5. The layers in front, with their alpha (multiplied in). One BG

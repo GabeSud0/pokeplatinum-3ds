@@ -964,7 +964,9 @@ screen's 320 x 192 at 1.25 times, as above.
   popped in and out (the berry trees and people at Floaroma's edge). Now
   the people of the maps beside the player's are there ahead
   (`MAP_OBJ_STATUS_PORT_NEIGHBOUR`): `FieldMap_PortNeighbours` brings those
-  within 17 tiles left or right, 13 up, 11 down (one a frame, read from
+  within 20 tiles left or right (17 before patch 0085: the field at the
+  DS's pixel size sees about 18 at its top corners, and the people there
+  came in in sight), 13 up, 11 down (one a frame, read from
   their map's events, while there's room for their pictures and 12 places
   left for the game's own), and drops those 4 tiles further out; walking
   into a map, the map left's in reach stay beside, and the new map's are
@@ -1047,7 +1049,12 @@ screen's 320 x 192 at 1.25 times, as above.
   touching, round its whole middle), so stretched 1.5625 across and 1.25
   down they keep their shape. Not the cut-ins with a trainer's picture
   (the leaders, the Elite Four, the Champion) nor the legendaries' (the
-  camera only).
+  camera only). The field's weather BG the compositor draws itself
+  (`ComposeLayers.gpuBg`: Eterna Forest's patches of light, say) is
+  drawn as the field had it, a pixel a pixel with the DS's screen in the
+  middle, not stretched with the picture: it grew half as big again as
+  each battle started (2026-11-05). (Not yet the dark of a cave's Flash
+  circle, which is the picture's own BG: it's still stretched.)
   Their end (2026-11-01): the master brightness to black and the effect's
   BG cleared in the same frame (the Galactic boss's). The drawer takes the
   registers as the frame is handed over but reads the VRAM as it is when
@@ -1576,6 +1583,15 @@ screens) the lower screen is the DS's, filling the screen as before.
     without V-blank work, so nothing was drawn at all, the screens left
     as they were while the game went on (black rooms, no text boxes, the
     battles' health bars and animations stopped; 2026-10-26).
+    Faster than 1x a frame composed after one that took long (7 ms, 14)
+    is composed 2 (3) V-blanks after it, not the next one
+    (`ComposeWaits`, main_3ds.c): the display thread is on the game's
+    core, below it, and at 4x the game makes a 3D scene for every
+    V-blank; outdoors each frame composed was 9-10 ms of building there,
+    which with the game's 4 frames a V-blank was more than a V-blank, so
+    the game waited for it and went between 4x and about 2x as the scenes
+    did (82 to 240 frames a second in a log of 2026-11-05). Indoors,
+    quick, still every V-blank; at 1x as before.
     SPEED above 1x turns 60 FPS off (when it's on), 1x on again
     unless the player has set 60 FPS since (`fps60_held` in
     `options.txt`). Every start is at 1x (since 2026-10-26): SPEED is
@@ -1640,7 +1656,11 @@ screens) the lower screen is the DS's, filling the screen as before.
     nurse for healing (the player's picture holding out the Poké Balls),
     with Cheryl and the other partners or Amity Square's
     Pokémon, in the Underground, the Union Room and maps with features of
-    their own; a 64 x 64 one indoors), behind the player or, where that
+    their own; a 64 x 64 one indoors; and, since patch 0085, till the
+    player walks out of their house after the first battle with the
+    rival, `VAR_PLAYER_HOUSE_STATE` 5: on Route 201 the Pokémon just
+    chosen came out between the battles and in the cutscenes there and at
+    home), behind the player or, where that
     tile isn't free (out of a door), on the player's tile hidden till they
     step off it (the tile behind checked as the player's step would be:
     no water, ledge or ramp). Up or down stairs or an escalator and into
