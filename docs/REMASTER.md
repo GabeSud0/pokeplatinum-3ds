@@ -896,7 +896,7 @@ screen's 320 x 192 at 1.25 times, as above.
   mountains looked cut). Such a map is drawn again below itself, from the
   lowest map beside it up, 2 tiles apart (16 polygons each), the copies
   filling the slit as a wall would (`Port_RenderSceneryMapsLowered`).
-- **The maps beside the loaded ones** (patch 0083): the game keeps 4 maps
+- **The maps beside the loaded ones** (patches 0083, 0084, 0098): the game keeps 4 maps
   loaded, 2 by 2 round the player (theirs and the ones beside the quarter
   of it they're in), always enough on the DS. The pixel field sees about
   18 tiles each side at its top corners (a map is 32), so standing in the
@@ -925,6 +925,19 @@ screen's 320 x 192 at 1.25 times, as above.
   read for this (after a warp all four are being read). On the PC, running
   east across Veilstone's middle from 681,632, a shot every 2 frames: 3
   shots with 107-209 black pixels at the right edge before, none after.
+  Since patch 0098, on the bike: the player rides on several tiles while
+  the game reads the new column (the second map 10 scenes after the
+  first), and the view's top corner reached past the kept strip, or into a
+  map with no strip kept (a black square at the top left by Veilstone's
+  Pokémon Center, a photo of 2026-11-06). A loaded map still being read,
+  in the view past its strip or with none kept, is now read whole (its
+  lists not cut, with its props) and drawn till the game has it; its strip
+  is still used while the view stays in it, and for a scene if another map
+  was read in that one (not two reads more at once); not after a warp. 8
+  kept (the strips of up to 4 maps beside, 2 whole). On the PC riding west
+  at 726,617 and back: the square there before (the same place as the
+  photo), none after, 2 maps read whole each way; running and walking at
+  Veilstone's 687,632, none read whole.
 - **Route 215's cliffs down to the forest** (patch 0082): the route's maps
   are at height 0, the forest's scenery map south of them at 4. Below the
   ledges the route's cliffs come down to its south edge (z 608) and stop
