@@ -1427,6 +1427,22 @@ static int circle_of(uint32_t seq, uint32_t stamp, int *x, int *y, int *r, uint3
     return on;
 }
 
+/* What the frame the DS shows a scene in was noted with: 0 none, 1 a
+ * circle, 2 a band of lines, 3 a BG's band; -1 not known (no note, or
+ * noted unknown). */
+static int frame_band_kind(uint32_t seq, uint32_t stamp)
+{
+    int found, kind = -1;
+
+    LightLock_Lock(&sObjPlacesLock);
+    found = frame_note_of(seq, stamp);
+    if (found >= 0) {
+        kind = sCircleNotes[found].on >= 0 ? sCircleNotes[found].on : -1;
+    }
+    LightLock_Unlock(&sObjPlacesLock);
+    return kind;
+}
+
 /* Engine A's master brightness as the DS shows it with a scene, as a
  * signed factor (+ brighter, - darker, 0-16): whether it's known; the
  * V-blank it was noted in (noted), and its circle or band (kind: 0 none,
@@ -3669,6 +3685,18 @@ static void bg_band_rows(const ComposeLayers *info, const NitroGx3dScene *scene,
         } else if (kb == 3) {
             ty = by, tr = br;
             *left = bx & 0xFFFF, *right = (int)((unsigned)bx >> 16);
+        } else if (sBgBand.on && (int32_t)(sDrawTarget - sBgBand.vblank) <= 30 && sBgBand.r - sBgBand.y < (float)(tr - ty) &&
+                   frame_band_kind(scene->swap_seq, scene->stamp) == 0) {
+            /* (the frame noted with no band, the cut-in over, and the
+             * picture older, its band wider than the one last drawn (the
+             * 2D's drawer behind in a heavy scene: Route 215's top, in the
+             * rain; the sprites handed over alone keep the picture's
+             * lines): none of it, closed where it was closing. Else the
+             * cut-in opened all the way again for its last frames,
+             * 2026-11-05) */
+            int mid = (int)((sBgBand.y + sBgBand.r) * 0.5f + 0.5f);
+
+            ty = tr = mid;
         }
     }
     /* (closing, then held: the cut-in's band stops 16 lines tall and the
@@ -3723,11 +3751,11 @@ static struct {
  * at 60 frames a second, as the field does, where the game moves it 30
  * times); as the set has them where that isn't known. Each with the set's
  * picture of what it shows (one the set has no picture of isn't drawn: the
- * next set has it). Back to front, cut at the picture's edges. With a
- * band's BG some are behind (underBand: ComposeLayers.gpuObjsUnderBand, 0
- * none): those (behind) or the others only. */
+ * next set has it). Back to front, cut at the picture's edges. With some
+ * behind the layer in front of the 3D (under: ComposeLayers.gpuObjsUnder,
+ * 0 none): those (behind) or the others only. */
 static void draw_gpu_objs(const LayerSet *set, const NitroGx3dScene *scene, const PicaRect *pic, float sx, float sy,
-                          int linear, int underBand, int behind)
+                          int linear, int under, int behind)
 {
     /* (cut to sObjClip's lines, the screen's: a BG's band closed further
      * than the game's, its sprites only in it) */
@@ -3762,7 +3790,7 @@ static void draw_gpu_objs(const LayerSet *set, const NitroGx3dScene *scene, cons
         int i;
 
         /* (its priority, OAM's: in its key) */
-        if (underBand && ((int)((o->key >> 10) & 3) > underBand - 1) != (behind != 0)) {
+        if (under && ((int)((o->key >> 10) & 3) > under - 1) != (behind != 0)) {
             continue;
         }
         for (i = 0; i < set->objCount && g == NULL; i++) {
@@ -4214,16 +4242,16 @@ static int draw_slices(const Screen *scr, int eye, const LayerSet *set, const Sl
 /* (draw_screen's step 5b) Engine A's sprites the compositor draws
  * (ComposeLayers.gpuObjCount), when there are: cut to a BG's band where
  * one's closing (its lines bandY to bandR - 1, of rows). With some behind
- * the band's BG (ComposeLayers.gpuObjsUnderBand): those (behind, step 5,
- * before the band; not cut: a weather's drops over the field) or the
- * others only. */
+ * the layer in front of the 3D (ComposeLayers.gpuObjsUnder: a band's BG,
+ * or the text box): those (behind, step 5, before that layer; not cut: a
+ * weather's drops over the field) or the others only. */
 static void draw_gpu_objs_step(const ComposeLayers *info, const LayerSet *set, const NitroGx3dScene *scene,
                                const PicaRect *pic, float scale, int rows, int bandY, int bandR, int linear,
                                int behind)
 {
-    int underBand = info->gpuCircle == 3 ? info->gpuObjsUnderBand : 0;
+    int under = info->gpuObjsUnder;
 
-    if (behind && !underBand) {
+    if (behind && !under) {
         return;
     }
     if (info->gpuObjCount >= 0 && set->objTex && set->objCount > 0) {
@@ -4240,7 +4268,7 @@ static void draw_gpu_objs_step(const ComposeLayers *info, const LayerSet *set, c
             sObjClip.y1 = pic->y0 + (float)(sConfig.flipV ? rows - bandY : bandR) * scale;
         }
         if (!sObjClip.on || sObjClip.y1 > sObjClip.y0) {
-            draw_gpu_objs(set, scene, pic, scale, (pic->y1 - pic->y0) / (float)rows, linear, underBand, behind);
+            draw_gpu_objs(set, scene, pic, scale, (pic->y1 - pic->y0) / (float)rows, linear, under, behind);
         }
         sObjClip.on = 0;
     }
@@ -4568,12 +4596,14 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
                 C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
                 quad(bx0, by0, bx1, by1, 0.0f, 0, 0, 0, 0, rgba_of((uint16_t)info->gpuCircleColor, 255));
             }
-            /* (the sprites behind its BG: a weather's drops, over the field
-             * and the band's backdrop, under its BG, which hides them where
-             * it isn't clear, as the DS has them; in the picture they showed
-             * in the band's lines only, 2026-11-05) */
-            draw_gpu_objs_step(info, set, scene, &pic, scale, rows, bandY, bandR, linear, 1);
         }
+        /* (the sprites behind the layer in front of the 3D: a weather's
+         * drops, over the field (and a band's backdrop), under the band's BG
+         * or the text box, which hide them where they aren't clear, as the
+         * DS has them; in the picture they showed in the band's lines only,
+         * and with a text box up the picture was drawn again for every step
+         * the drops took, 2026-11-05) */
+        draw_gpu_objs_step(info, set, scene, &pic, scale, rows, bandY, bandR, linear, 1);
         if (!set->overEmpty && set->overTop < set->overBottom && bandR > bandY && bandRt > bandL) {
             /* (only the rows with anything in them; all of them flipped) */
             int first = sConfig.flipV ? 0 : set->overTop, bottom = sConfig.flipV ? rows : set->overBottom;
@@ -4681,8 +4711,8 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         }
         /* 5b. Engine A's sprites drawn here (ComposeLayers.gpuObjCount: the
          * HM cut-in's), in front of it all; a weather's behind the sign
-         * (gpuObjsUnderSign) before it, above, and behind a band's BG
-         * (gpuObjsUnderBand) before the band, in 5. */
+         * (gpuObjsUnderSign) before it, above, and behind the layer in
+         * front of the 3D (gpuObjsUnder) before that layer, in 5. */
         if (!info->gpuObjsUnderSign) {
             draw_gpu_objs_step(info, set, scene, &pic, scale, rows, bandY, bandR, linear, 0);
         }
