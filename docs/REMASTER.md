@@ -942,7 +942,13 @@ screen's 320 x 192 at 1.25 times, as above.
   tile, ran the other way, its waves facing back at the border: water
   materials (named `sea_...`) have their S coordinates turned round again
   through the texture matrix (`Port_MirroredWaterShape`, a shape
-  callback).
+  callback). Since patch 0088 also Valley Windworks, whose river runs east
+  along its north edge and stopped against the scenery map's flat ledge
+  (a photo of 2026-11-05), drawn there without its props
+  (`sPortMirroredGroundOnly`: the windmills by the border not drawn
+  again): the river and its banks go on east, and so do its plateau's
+  terraces, where the ledge was flat (PC shots before and after at
+  250,648, 246,652, 250,660).
 - **Route 206 under the bridge, past the scenery** (patch 0070): there a
   ridge and the grass either side of it cross both of the map's borders,
   and mirrored, the ridge's half and its mounds and trees showed twice,
