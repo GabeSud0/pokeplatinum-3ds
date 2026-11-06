@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 02:30:00 -0700
+Subject: [PATCH] Walks ending half past the DS's top or bottom made longer too
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Rowan and Dawn leaving Jubilife after the Galactic battle walk 9 steps
+south. Their walk's end was taken for one on the DS's own picture (out of
+it wholly, with the rows' margins, they weren't), so it wasn't made
+longer, and they were taken away at the taller screen's bottom, in sight.
+A walk now counts as going out past the DS's top or bottom when the
+middle of the one walking is past that edge at its end (more of them out
+than on it); they walk on until they're out of the taller screen.
+
+---
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+index 5906b89d..60ecd89b 100644
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -2944,6 +2944,23 @@ static BOOL ScrCmd_PortTallOut(FieldSystem *fieldSystem, int x, int z, fx32 y, i
+     return dir == DIR_NORTH ? bottom <= -beyond : top >= 192 + beyond;
+ }
+ 
++// Past the DS's picture's top (dir DIR_NORTH) or bottom (DIR_SOUTH): the
++// middle of one standing there beyond its edge, more of it out than on it.
++// (Out of sight wholly, with the rows' margins, Rowan and Dawn leaving
++// Jubilife after the Galactic battle, 9 steps south, weren't: the walk
++// was taken for one ending on the DS's picture, not made longer, and they
++// were taken away at the taller screen's bottom, in sight, 2026-11-06.)
++static BOOL ScrCmd_PortTallPastDs(FieldSystem *fieldSystem, int x, int z, fx32 y, int dir)
++{
++    int top, bottom;
++
++    if (!ScrCmd_PortTallRows(fieldSystem, x, z, y, &top, &bottom)) {
++        return FALSE;
++    }
++
++    return dir == DIR_NORTH ? top + bottom <= 0 : top + bottom >= 2 * 192;
++}
++
+ // From tile (x, z), height *y, past the DS's picture's top or bottom (dir)
+ // but in the taller one: the tiles on that way to out of the taller one,
+ // all clear (nothing in the way, nobody there); 0 if not so (in the DS's
+@@ -2952,7 +2969,7 @@ static int ScrCmd_PortTallTilesOut(FieldSystem *fieldSystem, MapObject *mapObj,
+ {
+     int n, dz = MapObject_GetDzFromDir(dir);
+ 
+-    if (!ScrCmd_PortTallOut(fieldSystem, x, z, *y, dir, 0) || ScrCmd_PortTallOut(fieldSystem, x, z, *y, dir, PORT_TALL_ROWS)) {
++    if (!ScrCmd_PortTallPastDs(fieldSystem, x, z, *y, dir) || ScrCmd_PortTallOut(fieldSystem, x, z, *y, dir, PORT_TALL_ROWS)) {
+         return 0;
+     }
+ 
+@@ -3159,7 +3176,7 @@ static MapObjectAnimCmd *ScrCmd_PortTallWalkOut(FieldSystem *fieldSystem, MapObj
+         // north out of Sandgem Town end under a row of trees: she walked on
+         // towards Route 202 instead of being taken away under them in
+         // sight, 2026-11-05)
+-        if (extra == 0 && ScrCmd_PortTallOut(fieldSystem, x, z, endY, dir, 0)
++        if (extra == 0 && ScrCmd_PortTallPastDs(fieldSystem, x, z, endY, dir)
+             && !ScrCmd_PortTallOut(fieldSystem, x, z, endY, dir, PORT_TALL_ROWS)) {
+             return ScrCmd_PortTallWayRound(fieldSystem, mapObj, cmds, count, x, z, endY, dir, lastSpeed);
+         }

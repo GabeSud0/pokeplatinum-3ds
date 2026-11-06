@@ -1,0 +1,234 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 02:00:00 -0700
+Subject: [PATCH] Walks out past the top go out of the camera's sight; a tile
+ in from the wall after a turn (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Roark leaving Oreburgh Mine's B2F walks east to a crate, a step north
+round it, 2 east to the mine's wall, then north along it out of the wider
+picture. He was taken away 9 rows above the middle, his feet still on
+the taller screen. A way round past the top or bottom now goes on until
+the walker is out of the camera's sight there (its feet and shadow above
+the taller field's top, its head below its bottom), when there's a way
+that far; else as far as before.
+
+The turn a tile sooner along a wall (the way round ending outwards, then
+up or down beside it) now also applies after earlier turns: Roark goes a
+step east past the crate and up the middle of the passage.
+
+---
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+index d2f6aa71..5906b89d 100644
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -2096,6 +2096,7 @@ extern int NitroPort_PixelField(void);
+ #define PORT_WIDE_SENT_TILES    9  // a walk out ending here or further: off the DS's picture
+ #define PORT_WIDE_TOP_TILES     9  // above the middle, beyond the top of the picture
+ #define PORT_WIDE_BOTTOM_TILES  8  // below it, beyond the bottom
++#define PORT_WIDE_TALL_ROWS     24 // the taller field's rows past the DS's top and bottom (PORT_TALL_ROWS)
+ #define PORT_WIDE_SCRIPTED_MAX  8
+ #define PORT_WIDE_PATH_MAX      48 // steps of a way round
+ #define PORT_WIDE_SEARCH_MAX    512
+@@ -2364,6 +2365,7 @@ typedef struct PortWidePathSearch {
+     u8 path[PORT_WIDE_PATH_MAX];
+     u16 seen[PORT_WIDE_SEARCH_MAX];
+     int seenCount;
++    BOOL outOfSight; // (ScrCmd_PortWidePastEdge: past the top or bottom as the camera has it too)
+ } PortWidePathSearch;
+ 
+ // The people the script sets walking together (its ApplyMovement commands
+@@ -2486,6 +2488,29 @@ static void ScrCmd_PortWideSee(PortWidePathSearch *search, int x, int z)
+     }
+ }
+ 
++static BOOL ScrCmd_PortTallRows(FieldSystem *fieldSystem, int x, int z, fx32 y, int *top, int *bottom);
++
++// (ScrCmd_PortWideFindWay) Past the picture's top or bottom from the middle
++// (dz tiles): far enough for the DS's rows; and with search->outOfSight, on
++// the taller field, out of its sight as the camera has it (its feet and
++// shadow above the top, its head below the bottom). Roark leaving Oreburgh
++// Mine's B2F up its east passage went 9 rows up, and was taken away with
++// his feet still on the screen (2026-11-06).
++static BOOL ScrCmd_PortWidePastEdge(PortWidePathSearch *search, int x, int z, fx32 y, int dz)
++{
++    int top, bottom;
++
++    if (dz > -PORT_WIDE_TOP_TILES && dz < PORT_WIDE_BOTTOM_TILES) {
++        return FALSE;
++    }
++
++    if (!search->outOfSight || !NitroPort_PixelField() || !ScrCmd_PortTallRows(search->fieldSystem, x, z, y, &top, &bottom)) {
++        return TRUE;
++    }
++
++    return dz < 0 ? bottom <= -PORT_WIDE_TALL_ROWS : top >= 192 + PORT_WIDE_TALL_ROWS;
++}
++
+ // A way out of the wider picture from (x, z), depth steps taken: outwards
+ // first, else up, else down (never back), as far as it goes before
+ // turning.
+@@ -2494,7 +2519,7 @@ static BOOL ScrCmd_PortWideFindWay(PortWidePathSearch *search, int x, int z, fx3
+     const int dirs[3] = { search->outDir, DIR_NORTH, DIR_SOUTH };
+     int dx = x - search->midX, dz = z - search->midZ, i;
+ 
+-    if ((search->outDir == DIR_EAST ? dx : -dx) >= search->out || dz <= -PORT_WIDE_TOP_TILES || dz >= PORT_WIDE_BOTTOM_TILES) {
++    if ((search->outDir == DIR_EAST ? dx : -dx) >= search->out || ScrCmd_PortWidePastEdge(search, x, z, y, dz)) {
+         search->path[depth] = 0xFF;
+         return TRUE;
+     }
+@@ -2525,35 +2550,56 @@ static BOOL ScrCmd_PortWideFindWay(PortWidePathSearch *search, int x, int z, fx3
+     return FALSE;
+ }
+ 
+-// A way round (search->path, from (x, z) at height y) that goes outwards to
+-// something in the way, then up or down along it, every step beside it,
+-// out of the wider picture past its top or bottom: its turn a tile sooner,
+-// so it walks a tile in from what's in the way, if all of that is clear.
+-// Cyrus leaving Mt. Coronet goes 11 west to the cave's west wall, then
+-// north along it out of sight; Gabriel, 2026-11-05: "just move him one
+-// space to the right so he walks in the middle".
++// A way round (search->path, from (x, z) at height y) that ends going
++// outwards to something in the way, then up or down along it, every step
++// beside it, out of the wider picture past its top or bottom: its last turn
++// a tile sooner, so it walks a tile in from what's in the way, if all of
++// that is clear. Cyrus leaving Mt. Coronet goes 11 west to the cave's west
++// wall, then north along it out of sight: asked for, 2026-11-05, "just move
++// him one space to the right so he walks in the middle". Roark leaving
++// Oreburgh Mine's B2F goes east to a crate, a step north round it, 2 east to
++// the mine's wall, then north along it: now a step east, then north up the
++// middle of the passage (2026-11-06).
+ static void ScrCmd_PortWideOffTheWall(PortWidePathSearch *search, int x, int z, fx32 y)
+ {
+-    int a, b, n, k, perp, cx, cz, endZ;
+-    fx32 cy, ty;
++    int a, b, n, p, k, perp, cx, cz, endZ, px, pz;
++    fx32 cy, ty, py;
+ 
+-    for (a = 0; a < PORT_WIDE_PATH_MAX && search->path[a] == search->outDir; a++) { }
++    for (n = 0; n < PORT_WIDE_PATH_MAX && search->path[n] != 0xFF; n++) { }
+ 
+-    perp = a < PORT_WIDE_PATH_MAX ? search->path[a] : 0xFF;
++    if (n < 5 || n >= PORT_WIDE_PATH_MAX) {
++        return;
++    }
++
++    // (the last run, up or down; the one before it, outwards; the rest
++    // before them as found)
++    perp = search->path[n - 1];
+ 
+-    if (a < 2 || (perp != DIR_NORTH && perp != DIR_SOUTH)) {
++    if (perp != DIR_NORTH && perp != DIR_SOUTH) {
+         return;
+     }
+ 
+-    for (n = a; n < PORT_WIDE_PATH_MAX && search->path[n] == perp; n++) { }
++    for (b = 0; b < n && search->path[n - 1 - b] == perp; b++) { }
++    for (a = 0; a < n - b && search->path[n - b - 1 - a] == search->outDir; a++) { }
+ 
+-    b = n - a;
++    p = n - b - a;
+ 
+-    if (n >= PORT_WIDE_PATH_MAX || search->path[n] != 0xFF || b < 3) {
++    if (a < 2 || b < 3) {
+         return;
+     }
+ 
+-    endZ = z + MapObject_GetDzFromDir(perp) * b;
++    // (where the outward run starts, and its height)
++    px = x;
++    pz = z;
++    py = y;
++
++    for (k = 0; k < p; k++) {
++        (void)ScrCmd_PortWideBlocked(search->fieldSystem, px, pz, &py, search->path[k]);
++        px += MapObject_GetDxFromDir(search->path[k]);
++        pz += MapObject_GetDzFromDir(search->path[k]);
++    }
++
++    endZ = pz + MapObject_GetDzFromDir(perp) * b;
+ 
+     if (endZ - search->midZ > -PORT_WIDE_TOP_TILES && endZ - search->midZ < PORT_WIDE_BOTTOM_TILES) {
+         return; // (out beside the picture, not past its top or bottom: a tile in, maybe not)
+@@ -2561,28 +2607,32 @@ static void ScrCmd_PortWideOffTheWall(PortWidePathSearch *search, int x, int z,
+ 
+     // (the way as found: each of its tiles along the wall with the wall
+     // beside it, that way out)
+-    cx = x;
+-    cz = z;
+-    cy = y;
++    cx = px;
++    cz = pz;
++    cy = py;
+ 
+-    for (k = 0; k < n; k++) {
++    for (k = p; k < n; k++) {
+         (void)ScrCmd_PortWideBlocked(search->fieldSystem, cx, cz, &cy, search->path[k]);
+         cx += MapObject_GetDxFromDir(search->path[k]);
+         cz += MapObject_GetDzFromDir(search->path[k]);
+         ty = cy;
+ 
+-        if (k >= a - 1 && !ScrCmd_PortWideBlocked(search->fieldSystem, cx, cz, &ty, search->outDir)) {
++        if (k >= p + a - 1 && !ScrCmd_PortWideBlocked(search->fieldSystem, cx, cz, &ty, search->outDir)) {
+             return; // (not beside something all the way)
+         }
+     }
+ 
+     // (a tile in from it: clear?)
+-    cx = x + MapObject_GetDxFromDir(search->outDir) * (a - 1);
+-    cz = z;
+-    cy = y;
++    cx = px;
++    cz = pz;
++    cy = py;
+ 
+     for (k = 0; k < a - 1; k++) {
+-        (void)ScrCmd_PortWideBlocked(search->fieldSystem, x + MapObject_GetDxFromDir(search->outDir) * k, z, &cy, search->outDir);
++        if (ScrCmd_PortWideBlocked(search->fieldSystem, cx, cz, &cy, search->outDir)) {
++            return;
++        }
++
++        cx += MapObject_GetDxFromDir(search->outDir);
+     }
+ 
+     for (k = 0; k < b; k++) {
+@@ -2595,14 +2645,14 @@ static void ScrCmd_PortWideOffTheWall(PortWidePathSearch *search, int x, int z,
+     }
+ 
+     for (k = 0; k < a - 1; k++) {
+-        search->path[k] = (u8)search->outDir;
++        search->path[p + k] = (u8)search->outDir;
+     }
+ 
+     for (k = 0; k < b; k++) {
+-        search->path[a - 1 + k] = (u8)perp;
++        search->path[p + a - 1 + k] = (u8)perp;
+     }
+ 
+-    search->path[a - 1 + b] = 0xFF;
++    search->path[p + a - 1 + b] = 0xFF;
+ }
+ 
+ // A way to a door (a warp's tile) from (x, z), depth steps taken: on the
+@@ -3286,9 +3336,18 @@ static MapObjectAnimCmd *ScrCmd_PortWideMovement(FieldSystem *fieldSystem, MapOb
+             search->midZ = midZ;
+             search->out = out;
+             search->outDir = dir;
++            search->outOfSight = TRUE;
+             ScrCmd_PortWideSee(search, startX, startZ);
+ 
+-            if (ScrCmd_PortWideFindWay(search, startX, startZ, pos.y, 0)) {
++            if (!ScrCmd_PortWideFindWay(search, startX, startZ, pos.y, 0)) {
++                // (none that far: as far as the DS's rows, as before)
++                search->outOfSight = FALSE;
++                search->nodes = 0;
++                search->seenCount = 0;
++                ScrCmd_PortWideSee(search, startX, startZ);
++            }
++
++            if (search->outOfSight || ScrCmd_PortWideFindWay(search, startX, startZ, pos.y, 0)) {
+                 ScrCmd_PortWideOffTheWall(search, startX, startZ, pos.y);
+ 
+                 for (steps = 0, runs = 0; search->path[steps] != 0xFF; steps++) {
