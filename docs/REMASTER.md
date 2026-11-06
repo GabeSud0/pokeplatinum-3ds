@@ -870,6 +870,26 @@ screen's 320 x 192 at 1.25 times, as above.
   mountains looked cut). Such a map is drawn again below itself, from the
   lowest map beside it up, 2 tiles apart (16 polygons each), the copies
   filling the slit as a wall would (`Port_RenderSceneryMapsLowered`).
+- **The maps beside the loaded ones** (patch 0083): the game keeps 4 maps
+  loaded, 2 by 2 round the player (theirs and the ones beside the quarter
+  of it they're in), always enough on the DS. The pixel field sees about
+  18 tiles each side at its top corners (a map is 32), so standing in the
+  middle of a map the far corner reached the map beside, not loaded: the
+  clear colour showed (Veilstone City at 687,632, a photo of 2026-11-05: a
+  black square at the right edge, gone a step east). That map (beside the
+  loaded ones, in their rows, on the side they leave out) is read too once
+  its strip by them is in the view (`Port_RenderBesideMaps`): its model with
+  its lists cut to those 3 tiles (`NitroPort_Gx3dTrimList`), and its props
+  without their animations (`MapPropManager_PortLoadStill`), each
+  box-tested as the game's. Its own NARC (the lazy loader reads the game's
+  in steps), 2 kept, let go with the loaded maps; a map the game has
+  loaded and read is the game's alone. The strip is a fifth to two fifths
+  of a map's lists (big polygons cross it), sent only while it's in the
+  view: in a map's middle 4 columns. On the PC with the 3D's clear colour
+  made magenta (local `clearmag`): Veilstone's square gone, the pixels
+  filled as the map shows them a step later; walking across Veilstone's
+  middle and back, no hole, each map read once; with and without it in
+  the same build, other towns differ only where people walked.
 - **Route 215's cliffs down to the forest** (patch 0082): the route's maps
   are at height 0, the forest's scenery map south of them at 4. Below the
   ledges the route's cliffs come down to its south edge (z 608) and stop

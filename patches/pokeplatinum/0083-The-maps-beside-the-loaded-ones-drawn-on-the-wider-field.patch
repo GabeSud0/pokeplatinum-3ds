@@ -1,0 +1,474 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 19:00:00 -0700
+Subject: [PATCH] The maps beside the loaded ones drawn on the wider field
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The game keeps 4 maps loaded, 2 by 2 round the player: the map they're
+on and the ones beside the quarter of it they're in. On the DS that's
+always enough. The field at the DS's pixel size sees further, most at
+its top corners (about 18 tiles each side of the player there, a map
+being 32): standing in the middle of a map, the corner on the far side
+from the player's quarter reaches past the loaded maps into the map
+beside, which isn't loaded, and the 3D's clear colour showed through
+(Veilstone City at 687,632: a black square at the screen's right edge,
+gone a step east, where that map gets loaded).
+
+Such a map (beside the loaded ones, in their rows, on the side they
+leave out) is read too, once its strip by the loaded maps is in the
+view (Port_RenderBesideMaps):
+- its model, its shapes' display lists cut to that strip (3 tiles by the
+  loaded maps, with NitroPort_Gx3dTrimList, as the mirrored copies'
+  are), bound to the area's textures and lit as the loaded maps are;
+- its props, without their animations (MapPropManager_PortLoadStill in
+  map_prop.c: the animation manager keeps the render objects of some,
+  the bicycle slopes', and these are let go on their own), each drawn
+  when its box test passes, as the game's are.
+It's read with a NARC of its own (the game's lazy loader reads its maps
+in steps from the game's handle), kept for 2 maps, and let go with the
+loaded maps. A map the game has loaded and read is drawn by the game
+alone; while the game is still reading it, its strip from here. Only on
+the wider field, not in the Distortion World. The log says each read:
+`[field] the map beside the loaded ones ... read for the wider view`.
+
+---
+diff --git a/include/overlay005/map_prop.h b/include/overlay005/map_prop.h
+index 18bb05a6..c38dc603 100644
+--- a/include/overlay005/map_prop.h
++++ b/include/overlay005/map_prop.h
+@@ -37,6 +37,12 @@ void MapPropManager_ClearOne(int index, MapPropManager *mapPropManager);
+ void MapPropManager_Load(NARC *landDataNARC, const int mapPropFilesSize, AreaDataManager *const areaDataManager, MapPropManager *mapPropManager, MapPropAnimationManager *mapPropAnimMan);
+ void MapPropManager_Render(const VecFx32 *positionOffset, const AreaDataManager *areaDataManager, const BOOL applyAttrsToModel, ModelAttributes *const modelAttrs, MapPropManager *mapPropManager);
+ #ifdef SDK_PORT_3DS
++// (the 3DS port) A map's props from its land data's props part, already
++// read (mapPropFiles, mapPropFilesSize bytes), as MapPropManager_Load has
++// them but without their animations: the animation manager keeps some of
++// the render objects it's given (the bicycle slopes'), and these are let go
++// on their own (land_data.c's maps beside the loaded ones).
++void MapPropManager_PortLoadStill(const void *mapPropFiles, const int mapPropFilesSize, AreaDataManager *const areaDataManager, MapPropManager *mapPropManager);
+ // The map's props mirrored left to right about the map's middle, the
+ // middle at mirrorCentre (the wider field's view past a forest's edge,
+ // land_data.c). Each model's culled side is swapped while it's drawn.
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 8c3e18da..85ab937f 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -2605,6 +2605,363 @@ static void Port_RenderEdgeAboveScenery(const LandDataManager *landDataMan)
+ }
+ #endif
+ 
++#ifdef SDK_PORT_3DS
++// The maps beside the loaded ones. The game keeps 4 maps loaded, 2 by 2
++// round the player (the map they're on, and the ones beside the quarter of
++// it they're in): on the DS that's always enough. The pixel field sees
++// further, most at its top corners (about 18 tiles each side of the
++// player there, a map being 32): standing in the middle of a map, the
++// corner on the far side from the quarter reaches past the loaded maps,
++// into the map beside, not loaded: the 3D's clear colour showed through
++// there (Veilstone City at 687,632, a photo of 2026-11-05: a black square
++// at the screen's right edge, gone a step east, where that map's loaded).
++// Such a map (beside the loaded ones, in their rows, on the side they leave
++// out) is read here too, once its strip by the loaded maps is in the view:
++// its model, its shapes' lists cut to that strip (its 3 tiles by them, as the
++// mirrored copies' are: a strip, not a whole map, sent to the 3D), and its
++// props, without their animations (MapPropManager_PortLoadStill), each
++// drawn when in the view as the game's are. Read with a NARC of its own (the
++// game's lazy loader reads its maps in steps from the game's), kept for 2
++// maps, let go with the loaded maps.
++#define PORT_BESIDE_SLOTS 2
++#define PORT_BESIDE_STRIP 3   // (tiles of the map beside drawn, from the loaded maps)
++
++typedef struct PortBesideMap {
++    int mapMatrixIndex; // (INVALID_MAP_MATRIX_INDEX: none)
++    int matrixID;
++    int landDataID;
++    int dir;            // (which side of the loaded maps: -1 left, 1 right)
++    BOOL failed;        // (couldn't be read: not tried again)
++    u32 used;           // (the frame it was last drawn in)
++    u8 *block;          // its model file, then its strip's cut lists
++    NNSG3dRenderObj renderObj;
++    MapPropManager *props;
++} PortBesideMap;
++
++static PortBesideMap sPortBesideMaps[PORT_BESIDE_SLOTS];
++static NARC *sPortBesideNARC;
++static u32 sPortBesideFrame;
++
++static void Port_FreeBesideMap(PortBesideMap *map)
++{
++    free(map->block);
++    free(map->props);
++    memset(map, 0, sizeof(*map));
++    map->mapMatrixIndex = INVALID_MAP_MATRIX_INDEX;
++}
++
++static void Port_FreeBesideMaps(void)
++{
++    for (int i = 0; i < PORT_BESIDE_SLOTS; i++) {
++        Port_FreeBesideMap(&sPortBesideMaps[i]);
++    }
++
++    if (sPortBesideNARC != NULL) {
++        NARC_dtor(sPortBesideNARC);
++        sPortBesideNARC = NULL;
++    }
++}
++
++// The map at mapMatrixIndex, read for the side dir of the loaded maps (its
++// strip on the other side from dir), or NULL.
++static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int mapMatrixIndex, int dir)
++{
++    extern void NitroPort_Log(const char *fmt, ...);
++    int landDataID = MapMatrix_GetLandDataIDByIndex(mapMatrixIndex, landDataMan->mapMatrix);
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++    PortBesideMap *map = NULL;
++
++    if (landDataID == INVALID_LAND_DATA_ID) {
++        return NULL;
++    }
++
++    for (int i = 0; i < PORT_BESIDE_SLOTS; i++) {
++        PortBesideMap *m = &sPortBesideMaps[i];
++
++        if ((m->block != NULL || m->failed) && m->mapMatrixIndex == mapMatrixIndex && m->matrixID == matrixID
++            && m->landDataID == landDataID && m->dir == dir) {
++            return m->failed ? NULL : m;
++        }
++    }
++
++    // (a slot free, else the one drawn longest ago)
++    for (int i = 0; i < PORT_BESIDE_SLOTS; i++) {
++        PortBesideMap *m = &sPortBesideMaps[i];
++
++        if (m->block == NULL && !m->failed) {
++            map = m;
++            break;
++        }
++
++        if (map == NULL || (int)(m->used - map->used) < 0) {
++            map = m;
++        }
++    }
++
++    Port_FreeBesideMap(map);
++    map->mapMatrixIndex = mapMatrixIndex;
++    map->matrixID = matrixID;
++    map->landDataID = landDataID;
++    map->dir = dir;
++    map->used = sPortBesideFrame;
++    map->failed = TRUE;   // (till it's read)
++
++    if (sPortBesideNARC == NULL) {
++        sPortBesideNARC = NARC_ctor(NARC_INDEX_FIELDDATA__LAND_DATA__LAND_DATA, HEAP_ID_FIELD1);
++    }
++
++    int *header = malloc(sizeof(int) * 4);
++    void *propFiles = NULL;
++    u8 *file = NULL;
++
++    if (header == NULL || sPortBesideNARC == NULL) {
++        free(header);
++        return NULL;
++    }
++
++    NARC_ReadFromMember(sPortBesideNARC, landDataID, 0, sizeof(int) * 4, header);
++
++    int attributesSize = header[0], propsSize = header[1], modelSize = header[2];
++
++    free(header);
++
++    if (modelSize <= 0 || propsSize < 0 || attributesSize < 0) {
++        return NULL;
++    }
++
++    file = malloc(modelSize);
++
++    if (file == NULL) {
++        return NULL;
++    }
++
++    NARC_ReadFromMember(sPortBesideNARC, landDataID, sizeof(int) * 4 + attributesSize + propsSize, modelSize, file);
++
++    NNSG3dResFileHeader *fileHeader = (NNSG3dResFileHeader *)file;
++    NNSG3dResMdlSet *mdlSet = NNS_G3dGetMdlSet(fileHeader);
++
++    if (mdlSet == NULL || mdlSet->dict.numEntry != 1) {
++        free(file);
++        return NULL;
++    }
++
++    // Its strip by the loaded maps: the lists of its shapes cut to it (x in
++    // the lists' own coordinates; a list that can't be cut, whole).
++    NNSG3dResMdl *model = NNS_G3dGetMdlByIdx(mdlSet, 0);
++    NNSG3dResShp *shapes = NNS_G3dGetShp(model);
++    NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(model);
++    int numShp = shapes->dict.numEntry;
++    void **cuts = calloc(numShp > 0 ? numShp : 1, sizeof(void *));
++    u32 *cutSize = calloc(numShp > 0 ? numShp : 1, sizeof(u32)), *cutOfs = calloc(numShp > 0 ? numShp : 1, sizeof(u32));
++
++    if (cuts == NULL || cutSize == NULL || cutOfs == NULL || info->posScale <= 0) {
++        free(cuts);
++        free(cutSize);
++        free(cutOfs);
++        free(file);
++        return NULL;
++    }
++
++    s32 tile = (s32)(((s64)MAP_OBJECT_TILE_SIZE << FX32_SHIFT) / info->posScale);
++    s32 half = tile * MAP_TILES_COUNT_X / 2;
++    u32 listsAll = 0, listsKept = 0;
++    s32 lo = dir > 0 ? -half - tile : half - (PORT_BESIDE_STRIP + 1) * tile;
++    s32 hi = dir > 0 ? -half + (PORT_BESIDE_STRIP + 1) * tile : half + tile;
++
++    for (int i = 0; i < numShp; i++) {
++        NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, i);
++        const void *list = NNS_G3dGetShpDLPtr(shp);
++        u32 size = NNS_G3dGetShpDLSize(shp), room = size + size / 2 + 64;
++        void *cut = malloc(room);
++        u32 bytes = cut != NULL ? NitroPort_Gx3dTrimList(list, size, cut, room, 0, lo, hi) : 0;
++
++        listsAll += size;
++
++        if (bytes == 0 || bytes >= size) {
++            free(cut);
++            listsKept += size;
++            continue;   // (the whole list)
++        }
++
++        cuts[i] = cut;
++        cutSize[i] = bytes;
++        listsKept += bytes;
++    }
++
++    u8 *block = Port_CopyWithCuts(fileHeader, cuts, cutSize, cutOfs, numShp);
++
++    for (int i = 0; i < numShp; i++) {
++        free(cuts[i]);
++    }
++
++    free(cuts);
++    free(file);
++
++    if (block == NULL) {
++        free(cutSize);
++        free(cutOfs);
++        return NULL;
++    }
++
++    model = NNS_G3dGetMdlByIdx(NNS_G3dGetMdlSet((NNSG3dResFileHeader *)block), 0);
++    shapes = NNS_G3dGetShp(model);
++
++    for (int i = 0; i < numShp; i++) {
++        if (cutOfs[i] != 0) {
++            NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, i);
++
++            shp->ofsDL = (u32)(block + cutOfs[i] - (u8 *)shp);
++            shp->sizeDL = cutSize[i];
++        }
++    }
++
++    free(cutSize);
++    free(cutOfs);
++
++    // (its textures: the area's, as the loaded maps' are)
++    NNSG3dResTex *mapTexture = AreaDataManager_GetMapTexture(landDataMan->areaDataMan);
++
++    if (mapTexture != NULL && Easy3D_IsTextureUploadedToVRAM(mapTexture) == TRUE) {
++        if (!Easy3D_BindTextureToResource((NNSG3dResFileHeader *)block, mapTexture)) {
++            free(block);
++            return NULL;
++        }
++    }
++
++    NNS_G3dRenderObjInit(&map->renderObj, model);
++
++    if (AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan) == TRUE) {
++        AreaLight_UseGlobalModelAttributes(model);
++    }
++
++    map->block = block;
++
++    // Its props.
++    if (!landDataMan->skipMapProps && propsSize > 0 && (propFiles = malloc(propsSize)) != NULL) {
++        map->props = malloc(sizeof(MapPropManager));
++
++        if (map->props != NULL) {
++            NARC_ReadFromMember(sPortBesideNARC, landDataID, sizeof(int) * 4 + attributesSize, propsSize, propFiles);
++            MapPropManager_PortLoadStill(propFiles, propsSize, landDataMan->areaDataMan, map->props);
++        }
++
++        free(propFiles);
++    }
++
++    map->failed = FALSE;
++    NitroPort_Log("[field] the map beside the loaded ones (matrix %d, land data %d) read for the wider view: %d KB, its strip %u of %u KB of lists",
++                  mapMatrixIndex, landDataID, (modelSize + propsSize + 1023) / 1024, (listsKept + 1023) / 1024, (listsAll + 1023) / 1024);
++    return map;
++}
++
++static void Port_RenderBesideMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
++{
++    sPortBesideFrame++;
++
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld || landDataMan->mapMatrix == NULL
++        || landDataMan->trackedTargetMapMatrixIndex == INVALID_MAP_MATRIX_INDEX) {
++        return;
++    }
++
++    int width = landDataMan->mapMatrixWidth, height = landDataMan->mapMatrixHeight;
++    int columnLo = 0x7fffffff, columnHi = -1, rows[QUADRANT_COUNT], numRows = 0;
++
++    // (the loaded maps' columns and rows)
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        int index = landDataMan->loadedMaps[i]->mapMatrixIndex, k;
++
++        if (index == INVALID_MAP_MATRIX_INDEX) {
++            continue;
++        }
++
++        columnLo = index % width < columnLo ? index % width : columnLo;
++        columnHi = index % width > columnHi ? index % width : columnHi;
++
++        for (k = 0; k < numRows && rows[k] != index / width; k++) {
++        }
++
++        if (k == numRows) {
++            rows[numRows++] = index / width;
++        }
++    }
++
++    if (columnHi < 0 || columnHi - columnLo != 1) {
++        return;   // (not two columns loaded: a map one wide, or the window at the matrix's edge)
++    }
++
++    VecFx32 one = { FX32_ONE, FX32_ONE, FX32_ONE };
++    MtxFx33 identity = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++
++    for (int side = -1; side <= 1; side += 2) {
++        int column = side < 0 ? columnLo - 1 : columnHi + 1;
++
++        if (column < 0 || column >= width) {
++            continue;
++        }
++
++        for (int r = 0; r < numRows; r++) {
++            int index = rows[r] * width + column;
++            BOOL loaded = FALSE;
++
++            if (rows[r] < 0 || rows[r] >= height) {
++                continue;
++            }
++
++            // (loaded: drawn by the game, once it's read; while it's still
++            // being read, its strip from here)
++            for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++                loaded |= landDataMan->loadedMaps[i]->mapMatrixIndex == index && landDataMan->loadedMaps[i]->valid == TRUE;
++            }
++
++            if (loaded || MapMatrix_GetLandDataIDByIndex(index, landDataMan->mapMatrix) == INVALID_LAND_DATA_ID) {
++                continue;
++            }
++
++            VecFx32 position = { 0, 0, 0 };
++
++            LandDataManager_CalculateRenderingPosition(index, width, landDataMan->mapMatrix, &position);
++            position.x += landDataMan->offset.x;
++            position.y += landDataMan->offset.y;
++            position.z += landDataMan->offset.z;
++
++            // (its strip's box in the view: the strip by the loaded maps, from
++            // 4 tiles below the map's height to 16 above)
++            fx32 border = position.x - side * (MAP_TILES_COUNT_X / 2) * MAP_OBJECT_TILE_SIZE;
++            VecFx32 corner = {
++                side > 0 ? border - MAP_OBJECT_TILE_SIZE : border - (PORT_BESIDE_STRIP + 1) * MAP_OBJECT_TILE_SIZE,
++                position.y - 4 * MAP_OBJECT_TILE_SIZE,
++                position.z - (MAP_TILES_COUNT_Z / 2) * MAP_OBJECT_TILE_SIZE,
++            };
++            GFXTestBox box;
++
++            NNS_G3dGlbSetBaseRot(&identity);
++            NNS_G3dGlbSetBaseScale(&one);
++            GFXBoxTest_MakeBox((PORT_BESIDE_STRIP + 2) * MAP_OBJECT_TILE_SIZE, 20 * MAP_OBJECT_TILE_SIZE, MAP_TILES_COUNT_Z * MAP_OBJECT_TILE_SIZE, &box);
++
++            if (!GFXBoxTest_IsBoxAtPositionInView(&corner, &box)) {
++                continue;
++            }
++
++            PortBesideMap *map = Port_BesideMapOf(landDataMan, index, side);
++
++            if (map == NULL) {
++                continue;
++            }
++
++            map->used = sPortBesideFrame;
++
++            if (GFXBoxTest_IsModelInView(map->renderObj.resMdl, &position, &identity, &one)) {
++                Easy3D_DrawRenderObj(&map->renderObj, &position, &identity, &one);
++            }
++
++            if (map->props != NULL) {
++                MapPropManager_Render(&position, landDataMan->areaDataMan, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, map->props);
++            }
++        }
++    }
++}
++#endif
++
+ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
+ {
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+@@ -2622,6 +2979,7 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+     Port_RenderMirroredBesideScenery(landDataMan, modelAttrs);
+     Port_RenderSceneryMapsLowered(landDataMan);
+     Port_RenderEdgeAboveScenery(landDataMan);
++    Port_RenderBesideMaps(landDataMan, modelAttrs);
+ #endif
+ }
+ 
+@@ -2636,6 +2994,7 @@ void LandDataManager_End(LandDataManager *landDataMan)
+ #ifdef SDK_PORT_3DS
+     Port_FreeMirrorCopies();
+     Port_FreeEdgeCopies();
++    Port_FreeBesideMaps();
+ #endif
+     ClearUnusedSystemCache();
+ 
+diff --git a/src/overlay005/map_prop.c b/src/overlay005/map_prop.c
+index 7a6924bf..ab319d69 100644
+--- a/src/overlay005/map_prop.c
++++ b/src/overlay005/map_prop.c
+@@ -173,6 +173,31 @@ void MapPropManager_Render(const VecFx32 *positionOffset, const AreaDataManager
+ #ifdef SDK_PORT_3DS
+ #include <nnsys/g3d/model.h>
+ 
++void MapPropManager_PortLoadStill(const void *mapPropFiles, const int mapPropFilesSize, AreaDataManager *const areaDataManager, MapPropManager *mapPropManager)
++{
++    const MapPropFile *files = mapPropFiles;
++    int count = mapPropFiles != NULL && mapPropFilesSize > 0 ? mapPropFilesSize / (int)sizeof(MapPropFile) : 0;
++
++    MapPropManager_Init(mapPropManager);
++
++    for (int i = 0; i < MAX_LOADED_MAP_PROPS && i < count; i++) {
++        MapProp *loadedProp = &mapPropManager->loadedProps[i];
++
++        loadedProp->modelID = files[i].modelID;
++        loadedProp->loaded = TRUE;
++        loadedProp->applyRotation = FALSE;
++        loadedProp->position = files[i].position;
++        loadedProp->rotation = files[i].rotation;
++        loadedProp->scale = files[i].scale;
++
++        MapPropManager_InitRenderObj(loadedProp->modelID, areaDataManager, &loadedProp->renderObj, &loadedProp->model);
++
++        if (AreaDataManager_HasMapPropModelFile(areaDataManager, loadedProp->modelID) == FALSE) {
++            loadedProp->modelID = 0;
++        }
++    }
++}
++
+ void Port_SwapModelCulling(NNSG3dResMdl *model)
+ {
+     for (u32 i = 0; i < model->info.numMat; i++) {
