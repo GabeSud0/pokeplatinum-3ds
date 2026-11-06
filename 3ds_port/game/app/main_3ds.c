@@ -1701,6 +1701,11 @@ static volatile bool sStretchShown;
 /* What an engine shows, from the game's display state, into its screen's
  * picture. False if it didn't change: that screen keeps showing what it
  * does (not drawn, not swapped). */
+/* (RenderScreen) Whether an engine's picture just drawn was its sprites
+ * made again and nothing else (NitroPort_Render2DLastSpritesOnly): quick
+ * to hand over, its layers as they were. */
+static bool sSpritesOnlyDrawn[2];
+
 static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
 {
     bool top = OnTop(engine, aOnTop);
@@ -1801,8 +1806,10 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
             sMustDraw[top ? 0 : 1] = false;
             NitroPort_Render2DSplit(engine, layers->under, &split);
             drawn = 1;
+            sSpritesOnlyDrawn[engine ? 1 : 0] = false;
         } else {
             drawn = NitroPort_Render2DSplitIfChanged(engine, layers->under, &split);
+            sSpritesOnlyDrawn[engine ? 1 : 0] = drawn && NitroPort_Render2DLastSpritesOnly(engine);
         }
         if (!drawn) {
             return false;
@@ -1950,7 +1957,7 @@ static void DrawerMain(void *arg)
     CatchCrashes();
     for (;;) {
         u64 start, showStart;
-        bool drawA = false, drawB = false;
+        bool drawA = false, drawB = false, lowered;
 
         LightEvent_Wait(&d->go);
         if (d->quit) {
@@ -1980,8 +1987,19 @@ static void DrawerMain(void *arg)
         __atomic_store_n(&d->reading, false, __ATOMIC_RELEASE);
         /* Below the threads it was above while reading, to show what it
          * drew; nothing to show (an unchanged screen): no need, and it
-         * would only wait behind them to come back up. */
-        if (d->readPriority != d->priority && (drawA || drawB)) {
+         * would only wait behind them to come back up. Nor for engine A's
+         * sprites made again and nothing else (sSpritesOnlyDrawn: the HM
+         * cut-in's, every game step): its layers as they were, handing it
+         * over is little more than finding them the same (a memcmp of
+         * each and the sprites' atlas copied), and below the geometry it
+         * waited behind it: in a heavy scene (Cut at the top of Route 215,
+         * in the rain, the geometry busy 80% of the time) each picture
+         * took 55-60 ms to hand over, the cut-in's steps came 3 to 7 times
+         * a second, a log of 2026-11-05. A picture drawn whole still goes
+         * below the geometry, as before. */
+        lowered = d->readPriority != d->priority && (drawA || drawB) &&
+                  !(drawA && !drawB && sSpritesOnlyDrawn[0]);
+        if (lowered) {
             svcSetThreadPriority(CUR_THREAD_HANDLE, d->priority);
         }
         showStart = svcGetSystemTick();
@@ -2010,7 +2028,7 @@ static void DrawerMain(void *arg)
         d->count++;
         /* Back up before it can be handed the next frame: it wakes up
          * reading. */
-        if (d->readPriority != d->priority && (drawA || drawB)) {
+        if (lowered) {
             svcSetThreadPriority(CUR_THREAD_HANDLE, d->readPriority);
         }
         __atomic_store_n(&d->busy, false, __ATOMIC_RELEASE);

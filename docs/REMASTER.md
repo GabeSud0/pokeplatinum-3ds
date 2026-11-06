@@ -870,17 +870,27 @@ screen's 320 x 192 at 1.25 times, as above.
   mountains looked cut). Such a map is drawn again below itself, from the
   lowest map beside it up, 2 tiles apart (16 polygons each), the copies
   filling the slit as a wall would (`Port_RenderSceneryMapsLowered`).
-- **Route 215's forest below its ledges** (patch 0082): the route's maps
+- **Route 215's cliffs down to the forest** (patch 0082): the route's maps
   are at height 0, the forest's scenery map south of them at 4. Below the
-  ledges the route's cliffs come down to its south edge (z 608) but not to
-  the forest's edge, higher up, and the pixel field's 24 lines below the
-  DS's saw between them: a black strip under the cliff (a photo of
-  2026-11-05, standing at 606,600). A scenery map south of a lower map is
-  drawn once more, 8 tiles north and 4 tiles below that map: under it
-  everywhere, and past its edge the forest goes on behind and below (16
-  polygons, when in view). On the PC with the rain off, at 606,600,
-  600,604 and 590,600: the pictures change only in the strip's rows, the
-  forest there.
+  ledges the route's cliffs come down to its south edge (z 608) and stop
+  there, and the pixel field's 24 lines below the DS's saw past them: a
+  black strip between the cliff and the forest's trees (a photo of
+  2026-11-05, standing at 606,600). The cliffs are drawn on down to the
+  trees (`Port_RenderEdgeAboveScenery`, only for the maps in
+  `sPortEdgeAboveScenery`: elsewhere a copy under a map could show through
+  its water): the route map's strip by its south edge (its last 2 tiles,
+  its shapes' lists cut to it with `NitroPort_Gx3dTrimList` as the mirrored
+  copies' are, made once and kept till the maps are let go) drawn again 2
+  tiles lower and an eighth of a tile north, behind the map's own cliff
+  face, and 4 tiles lower and a quarter north for the few dots still seen
+  between the trees' tops (one copy 3 tiles down showed its top's edge, a
+  step in a cliff's dark side). Each is sent only while the strip's own box
+  is in the view (about an eighth of a map's lists). On the PC with the
+  rain off, at 606,600, 600,604, 590,600, 620,604 and 632,602: the pictures
+  with and without the copies differ only in pixels that were black. (A
+  first try drew the forest's map again behind and below the route's edge:
+  it filled the strip with a forest where the cliff should go on, and was
+  replaced.)
 - **Route 206's river past the scenery** (patch 0069): beside the Cycling
   Road the wider field sees into the scenery map next to it, a flat ledge
   at its own height with the route's river and ledges stopping at the
@@ -2305,6 +2315,42 @@ DS has them. The PC's picture draws them so too (`spritesUnder`). The
 cut-in's own (`gpuObjs` 1) are as before. On the PC, the same box: 0
 pictures in 300 frames, the drops over the field and under the box. In
 `test_render.c`: `test_text_box_objs`.
+
+The rain's cost, third round (2026-11-05, log ac25aa6b): standing in the
+rain the picture wasn't made again any more, but finding that out took the
+upper screen's drawer 1.8 ms each time on the geometry's core (0.3 without
+the rain), above the geometry, up to 60 times a second at four times the
+speed, where the geometry is what holds the game back: four times the
+speed went slower in the rain. With any sprite shown the check hashed all
+of the OBJs' VRAM, 256 KB. Now only the tiles the sprites shown use, each
+once, where they are and what's in them (`ShownVramSignature`, worked out
+from each sprite's key, `GpuObjKey`, as `ObjCharAddr` finds its tiles); all
+of it still with a bitmap OBJ. While all the sprites shown are of those the
+last picture left out (`sObjKeysMade`), the tiles of all of those, so the
+drops coming and going don't change it. Quick, it's noted as the picture's
+drawn, as the BGs' are, so a picture with sprites isn't drawn again the
+next time to be sure. On the PC, standing in Route 215's rain: 0 pictures
+in 300 checks as before, each check 0.025 ms (0.063 before); Cut in
+Eterna's rain all through, 63 pictures in 270 checks (76 before). Each check that found
+no change compared with the picture drawn whole (local `dcverify`): no
+difference the old check didn't have too. In `test_render.c`:
+`test_obj_vram_check` (a tile no sprite shows: not a change; one that
+shows, the 8-bit one's last half, 2D mapping, a bitmap OBJ).
+
+Cut in a heavy scene (the same log): at the top of Route 215 in the rain,
+the geometry busy 80% of the time, the upper screen's drawer took 55-60 ms
+to hand over each picture, below the geometry: the cut-in's steps came 3
+to 7 times a second. A picture that's its sprites alone made again (the
+cut-in's, every step: `NitroPort_Render2DLastSpritesOnly`) is now handed
+over at the reading's priority, above the geometry: its layers are as they
+were, little more than a memcmp of each and the sprites' atlas (`DrawerMain`,
+`sSpritesOnlyDrawn`). A picture drawn whole still goes below the geometry.
+And at its end the band opened all the way again for its last frames: the
+frame noted with no band, the cut-in over, but the picture older, its band
+wider (the drawer behind), so the band was drawn with the picture's lines.
+Now, with the band drawn lately and narrower than the picture's, a frame
+noted with none closes it where it was closing (`bg_band_rows`,
+`frame_band_kind`); not noted, or noted unknown, as before.
 
 The cut-in's band opening and closing (2026-11-01): a window, window 0
 alone across the DS's screen, its lines (WIN0V) 5 to 13 further each side

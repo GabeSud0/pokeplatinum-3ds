@@ -3568,6 +3568,91 @@ static void test_text_box_objs(void)
  * picture again. Found again in the next frame's OAM
  * (NitroPort_Render2DObjPlaces) for the in-between frames' halfway
  * places (NitroPort_GpuObjHalfway). */
+/* The change check's OBJ VRAM: only the tiles the OBJs shown use (each
+ * once), all of it with a bitmap OBJ; noted as the picture's drawn, so a
+ * sprite moved is drawn once, not again the next time to be sure. */
+static void test_obj_vram_check(void)
+{
+    static u8 tiles[16 * 64];
+    static u16 objPltt[256] = { 0, BLUE, GREEN };
+    static u16 under[256 * 192], over[256 * 192];
+    static u8 overAlpha[256 * 192];
+    static GXOamAttr oam[128];
+    extern u8 NitroPort_ObjVram[];
+    NitroRender2DSplit split;
+    int i;
+
+    Reset();
+    GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_1D_32K);
+    for (i = 0; i < 16; i++) {
+        MakeTile4(tiles + i * 32, 1 + (i & 1));
+    }
+    GX_LoadOBJ(tiles, 0, sizeof(tiles));
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));   /* all hidden */
+    G2_SetOBJAttr(&oam[0], 40, 30, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 2, 0, 0);    /* tile 2: bytes 64-95 */
+    G2_SetOBJAttr(&oam[1], 100, 50, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_16x16, GX_OAM_COLORMODE_256, 8, 0, 0); /* tile 8: bytes 256-511 */
+    G2_SetOBJAttr(&oam[2], 120, 70, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 2, 0, 0);    /* (tile 2 again) */
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    GX_SetVisiblePlane(GX_PLANEMASK_OBJ);
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    /* a tile no OBJ shows: not a change */
+    NitroPort_ObjVram[40 * 32 + 4] ^= 0x5A;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    NitroPort_ObjVram[600] ^= 0x5A;   /* (just past the 8-bit OBJ's) */
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    /* one that shows: a change, then the same */
+    NitroPort_ObjVram[2 * 32 + 5] ^= 0x11;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    NitroPort_ObjVram[2 * 32 + 5] ^= 0x11;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    /* the 8-bit OBJ's last tile's second half */
+    NitroPort_ObjVram[256 + 3 * 64 + 40] ^= 0x22;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    NitroPort_ObjVram[256 + 3 * 64 + 40] ^= 0x22;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    /* a sprite moved: drawn once, its VRAM noted as it's drawn */
+    G2_SetOBJPosition(&oam[0], 44, 30);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    /* 2D mapping, 32 tiles a row: a 16x16 OBJ at tile 4 is tiles 4, 5, 36, 37 */
+    GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_2D);
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));
+    G2_SetOBJAttr(&oam[0], 40, 30, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_16x16, GX_OAM_COLORMODE_16, 4, 0, 0);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    NitroPort_ObjVram[6 * 32] ^= 0x33;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    NitroPort_ObjVram[37 * 32 + 31] ^= 0x33;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    /* a bitmap OBJ: all of the OBJs' VRAM */
+    G2_SetOBJAttr(&oam[1], 100, 50, 0, GX_OAM_MODE_BITMAPOBJ, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 15, 0);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    NitroPort_ObjVram[0x30000] ^= 0x44;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    NitroPort_ObjVram[0x30000] ^= 0x44;
+    NitroPort_ObjVram[40 * 32 + 4] ^= 0x5A;
+    NitroPort_ObjVram[600] ^= 0x5A;
+    NitroPort_ObjVram[6 * 32] ^= 0x33;
+    NitroPort_ObjVram[37 * 32 + 31] ^= 0x33;
+}
+
 static void test_gpu_objs(void)
 {
     static u8 tiles[2 * 32], bgTiles[2 * 32];
@@ -3756,8 +3841,10 @@ static void test_gpu_objs(void)
         NitroPort_Render2DSplit(0, under2, &whole);
         CHECK(memcmp(under2, under, sizeof(under2)) == 0 && memcmp(over2, over, sizeof(over2)) == 0);
         /* (a sprite and a BG's scroll together: whole) */
-        NitroPort_Render2DSplitIfChanged(0, under, &split);   /* (the VRAM noted: drawn again to be sure, the sprites only) */
-        CHECK(NitroPort_Render2DSpritesOnly(0) == 1);
+        /* (the VRAM noted as it was drawn, the sprites' tiles too: not
+         * drawn again to be sure) */
+        CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+        CHECK(NitroPort_Render2DSpritesOnly(0) == 0);
         CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
         G2_SetOBJCharName(&oam[0], 1);
         GX_LoadOAM(oam, 0, sizeof(oam));
@@ -3767,7 +3854,7 @@ static void test_gpu_objs(void)
         NitroPort_Render2DSplit(0, under2, &whole);
         CHECK(memcmp(under2, under, sizeof(under2)) == 0 && memcmp(over2, over, sizeof(over2)) == 0);
         /* (the sprites' colours alone: theirs only) */
-        CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);   /* (the VRAM noted) */
+        CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);   /* (the VRAM noted as it was drawn) */
         (void)NitroPort_Render2DSpritesOnly(0);
         {
             static u16 objPltt2[16] = { 0, RED, GREEN };
@@ -5558,6 +5645,7 @@ int main(int argc, char **argv)
     test_wide_map_past_edges();
     test_gpu_bg();
     test_gpu_sign();
+    test_obj_vram_check();
     test_gpu_objs();
     test_tall_field();
     test_stretch_squeeze();

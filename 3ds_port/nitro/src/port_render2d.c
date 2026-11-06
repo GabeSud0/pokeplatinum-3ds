@@ -7265,18 +7265,108 @@ static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int lines
         }
     }
     objs = (dispcnt & 0x9000u) && i < 128 && !noObjs;   /* (noObjs: a picture without them) */
-    if (cheapOnly && (bitmap || objs)) {
+    /* (the OBJs' VRAM: the tiles the OBJs shown use, each once, where
+     * they are and what's in them; all of it with a bitmap OBJ. All of it,
+     * 256 KB for engine A, hashed while any OBJ showed, was most of the
+     * check's time in the field with the rain's drops: 1.8 ms each time,
+     * 0.3 without them, and up to 60 times a second at 4x speed, on the
+     * geometry's core above it (a log of 2026-11-05). While all the
+     * sprites shown are of those engine A's last picture left out
+     * (sObjKeysMade, as EngineSmallSignature has it), the tiles of all of
+     * those: the rain's drops come and go, each kind not shown every step,
+     * and the tiles shown with them. Quick, it's noted as the picture's
+     * drawn, as the BGs' are: not drawn again the next time to be sure) */
+    if (objs) {
+        const u8 *objVram = e->isA ? NitroPort_ObjVram : NitroPort_DbObjVram;
+        u32 objMask = e->isA ? 0x3FFFFu : 0x1FFFFu, units = (objMask + 1u) / 32u, u;
+        static u32 used[2][0x40000 / 32 / 32], shownKeys[2][128];
+        u32 *mark = used[engine ? 1 : 0], *keys = shownKeys[engine ? 1 : 0];
+        const u32 *from;
+        int n = 0, k, bitmapObj = 0;
+
+        for (i = 0; i < 128; i++) {
+            u16 a0 = Rd16(oam, (u32)i * 8u);
+
+            if ((!(a0 & 0x100) && (a0 & 0x200)) || (a0 >> 14) == 3) {
+                continue;   /* (hidden, as ReadObj has it) */
+            }
+            if (((a0 >> 10) & 3) == 3) {
+                bitmapObj = 1;   /* (a bitmap OBJ: all of it) */
+                break;
+            }
+            n = AddObjKey(keys, n, GpuObjKey(oam + (u32)i * 8u));
+        }
+        from = keys;
+        if (!bitmapObj && e->isA && sObjKeysMade.valid) {
+            int j = 0, made = 1;
+
+            for (k = 0; made && k < n; k++) {
+                while (j < sObjKeysMade.n && sObjKeysMade.keys[j] < keys[k]) {
+                    j++;
+                }
+                made = j < sObjKeysMade.n && sObjKeysMade.keys[j] == keys[k];
+            }
+            if (made) {
+                from = sObjKeysMade.keys;
+                n = sObjKeysMade.n;
+            }
+        }
+        if (bitmapObj) {
+            if (cheapOnly) {
+                return 0;
+            }
+            h = QuickAdd(h, HashWords(objVram, objMask + 1u, 2166136261u));
+        } else {
+            u32 t = 2166136261u;
+
+            memset(mark, 0, units / 8u);
+            for (k = 0; k < n; k++) {
+                /* (a key's tiles: its shape, size, colours and first tile,
+                 * GpuObjKey's attribute bits) */
+                u32 key = from[k];
+                int shape = (int)(key >> 30) & 3, tx, ty;
+                Obj obj;
+
+                if (shape == 3) {
+                    continue;
+                }
+                obj.mode = (u8)((key >> 26) & 3);
+                obj.bpp8 = (key >> 29) & 1;
+                obj.w = sObjSize[shape][(key >> 18) & 3][0];
+                obj.h = sObjSize[shape][(key >> 18) & 3][1];
+                obj.tile = (u16)(key & 0x3FF);
+                for (ty = 0; ty < obj.h; ty += 8) {
+                    for (tx = 0; tx < obj.w; tx += 8) {
+                        u = (ObjCharAddr(&obj, dispcnt, tx, ty) & objMask) >> 5;
+                        mark[u >> 5] |= 1u << (u & 31);
+                        if (obj.bpp8 && u + 1 < units) {
+                            mark[(u + 1) >> 5] |= 1u << ((u + 1) & 31);
+                        }
+                    }
+                }
+            }
+            for (u = 0; u < units; u += 32) {
+                u32 bits = mark[u >> 5];
+
+                while (bits) {
+                    u32 c = u + (u32)__builtin_ctz(bits);
+
+                    bits &= bits - 1u;
+                    t = (t ^ c) * 16777619u;
+                    t = HashWords(objVram + c * 32u, 32, t);
+                }
+            }
+            h = QuickAdd(h, t);
+        }
+        if ((dispcnt & 0x80000000u) && e->objExt != NULL) {
+            h = QuickAdd(h, HashWords(e->objExt, 0x2000, 2166136261u));
+        }
+    }
+    if (cheapOnly && bitmap) {
         return 0;
     }
     if (bitmap) {
         h = QuickAdd(h, HashWords(e->bgVram, e->bgMask + 1u, 2166136261u));
-    }
-    if (objs) {
-        h = QuickAdd(h, HashWords(e->isA ? NitroPort_ObjVram : NitroPort_DbObjVram, e->isA ? 0x40000 : 0x20000,
-                                  2166136261u));
-        if ((dispcnt & 0x80000000u) && e->objExt != NULL) {
-            h = QuickAdd(h, HashWords(e->objExt, 0x2000, 2166136261u));
-        }
     }
     *out = (u32)h ^ (u32)(h >> 32);
     return 1;
@@ -7393,10 +7483,16 @@ static u32 SmallSignatureOf(int e, const NitroRender2DSplit *split, int gpuBg, i
  * Route 206, 10-14 pictures a second, and the in-between scenes gave way
  * (log c090eb75, 2026-11-03). */
 static volatile unsigned sSpritesOnly[2];   /* (NitroPort_Render2DSpritesOnly) */
+static volatile int sLastSpritesOnly[2];    /* (NitroPort_Render2DLastSpritesOnly) */
 
 unsigned NitroPort_Render2DSpritesOnly(int engine)
 {
     return __atomic_exchange_n(&sSpritesOnly[engine ? 1 : 0], 0u, __ATOMIC_ACQ_REL);
+}
+
+int NitroPort_Render2DLastSpritesOnly(int engine)
+{
+    return __atomic_load_n(&sLastSpritesOnly[engine ? 1 : 0], __ATOMIC_ACQUIRE);
 }
 
 /* (NitroPort_Render2DSplitIfChanged) A picture that changed: its sprites
@@ -7429,6 +7525,7 @@ static void DrawChanged(int engine, u16 *under, NitroRender2DSplit *split, int g
             split->scroll3dLines = sPicture[e].scroll3dLines;
             memcpy(split->scroll3dLine, sPicture[e].scroll3dLine, sizeof(split->scroll3dLine));
             __atomic_fetch_add(&sSpritesOnly[e], 1u, __ATOMIC_RELAXED);
+            __atomic_store_n(&sLastSpritesOnly[e], 1, __ATOMIC_RELEASE);
             return;
         }
         /* (not left out after all: drawn whole, as below) */
@@ -7480,6 +7577,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     u32 small, vram = 0;
     uint64_t checkStart = ClockNow();
 
+    __atomic_store_n(&sLastSpritesOnly[e], 0, __ATOMIC_RELEASE);
     if (e == 0 && split->gpuBgs) {
         const State2D *st = &sState[0];
 
@@ -7561,13 +7659,15 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     if (!last[e].valid || small != last[e].small) {
         last[e].small = small;
         last[e].valid = 1;
-        /* (the VRAM noted now, as it's drawn, when that's quick: else the
-         * next time, and drawn again then, to be sure) */
-        last[e].vramValid = ShownVramSignature(e, split->snapshot, 1, gpuCircle != 0, 0, &vram);
-        last[e].vram = vram;
         __atomic_fetch_add(&sChangedSmall[e], 1u, __ATOMIC_RELAXED);
         __atomic_fetch_add(&sCheckTicks[e], ClockNow() - checkStart, __ATOMIC_RELAXED);
         DrawChanged(engine, under, split, gpuBg, gpuObjs, gpuCircle, rowsShown, gpuSign, signMasked);
+        /* (the VRAM noted now, as it's drawn, when that's quick: else the
+         * next time, and drawn again then, to be sure. After the drawing:
+         * the sprites it left out are those whose tiles count, and the
+         * VRAM's the same) */
+        last[e].vramValid = ShownVramSignature(e, split->snapshot, 1, gpuCircle != 0, 0, &vram);
+        last[e].vram = vram;
         return 1;
     }
     vram = EngineShownVramSignature(e, split->snapshot, gpuCircle != 0);

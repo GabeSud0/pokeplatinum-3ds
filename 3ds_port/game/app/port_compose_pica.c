@@ -1427,6 +1427,22 @@ static int circle_of(uint32_t seq, uint32_t stamp, int *x, int *y, int *r, uint3
     return on;
 }
 
+/* What the frame the DS shows a scene in was noted with: 0 none, 1 a
+ * circle, 2 a band of lines, 3 a BG's band; -1 not known (no note, or
+ * noted unknown). */
+static int frame_band_kind(uint32_t seq, uint32_t stamp)
+{
+    int found, kind = -1;
+
+    LightLock_Lock(&sObjPlacesLock);
+    found = frame_note_of(seq, stamp);
+    if (found >= 0) {
+        kind = sCircleNotes[found].on >= 0 ? sCircleNotes[found].on : -1;
+    }
+    LightLock_Unlock(&sObjPlacesLock);
+    return kind;
+}
+
 /* Engine A's master brightness as the DS shows it with a scene, as a
  * signed factor (+ brighter, - darker, 0-16): whether it's known; the
  * V-blank it was noted in (noted), and its circle or band (kind: 0 none,
@@ -3669,6 +3685,18 @@ static void bg_band_rows(const ComposeLayers *info, const NitroGx3dScene *scene,
         } else if (kb == 3) {
             ty = by, tr = br;
             *left = bx & 0xFFFF, *right = (int)((unsigned)bx >> 16);
+        } else if (sBgBand.on && (int32_t)(sDrawTarget - sBgBand.vblank) <= 30 && sBgBand.r - sBgBand.y < (float)(tr - ty) &&
+                   frame_band_kind(scene->swap_seq, scene->stamp) == 0) {
+            /* (the frame noted with no band, the cut-in over, and the
+             * picture older, its band wider than the one last drawn (the
+             * 2D's drawer behind in a heavy scene: Route 215's top, in the
+             * rain; the sprites handed over alone keep the picture's
+             * lines): none of it, closed where it was closing. Else the
+             * cut-in opened all the way again for its last frames,
+             * 2026-11-05) */
+            int mid = (int)((sBgBand.y + sBgBand.r) * 0.5f + 0.5f);
+
+            ty = tr = mid;
         }
     }
     /* (closing, then held: the cut-in's band stops 16 lines tall and the
