@@ -789,6 +789,29 @@ static void test_palette_banks(void)
     CHECK(b.palette[0]==NULL);
     memcpy(NitroPort_IoReg+0x240,saved,7);
 }
+static void test_extra_texture_slots(void)
+{
+    /* The port's own slots 2 and 3: only while on, only where no bank is. */
+    NitroGx3dTexBanks b;
+    unsigned char saved[7];
+    memcpy(saved,NitroPort_IoReg+0x240,7);
+    memset(NitroPort_IoReg+0x240,0,7);
+    NitroPort_IoReg[0x240]=0x83;            /* A at slot 0 */
+    NitroPort_IoReg[0x241]=0x83|(1u<<3);    /* B at slot 1 */
+    NitroPort_Gx3dMapTextureBanks(&b);
+    CHECK(b.texture[2]==NULL && b.texture[3]==NULL);
+    NitroPort_SetExtraTexSlots(1);
+    NitroPort_Gx3dMapTextureBanks(&b);
+    CHECK(b.texture[0]==NitroPort_LcdcVram && b.texture[1]==NitroPort_LcdcVram+0x20000);
+    CHECK(b.texture[2]==NitroPort_ExtraTexVram && b.texture[3]==NitroPort_ExtraTexVram+0x20000);
+    NitroPort_IoReg[0x242]=0x83|(2u<<3);    /* C at slot 2: the bank, not the port's */
+    NitroPort_Gx3dMapTextureBanks(&b);
+    CHECK(b.texture[2]==NitroPort_LcdcVram+0x40000 && b.texture[3]==NitroPort_ExtraTexVram+0x20000);
+    NitroPort_SetExtraTexSlots(0);
+    NitroPort_Gx3dMapTextureBanks(&b);
+    CHECK(b.texture[3]==NULL);
+    memcpy(NitroPort_IoReg+0x240,saved,7);
+}
 static void test_texture_hash(void)
 {
     NitroGx3dTexBanks banks=test_banks();
@@ -923,6 +946,7 @@ int main(void) {
     test_texture_hash();
     test_texture_hash_bytes();
     test_palette_banks();
+    test_extra_texture_slots();
     test_batches();
     printf("GX3D plumbing: %d checks, %d failures\n",nchecks,nfail);
     return nfail?1:0;

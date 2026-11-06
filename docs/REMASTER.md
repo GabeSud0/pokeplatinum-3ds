@@ -896,6 +896,24 @@ screen's 320 x 192 at 1.25 times, as above.
   mountains looked cut). Such a map is drawn again below itself, from the
   lowest map beside it up, 2 tiles apart (16 polygons each), the copies
   filling the slit as a wall would (`Port_RenderSceneryMapsLowered`).
+- **Another area's maps** (patch 0100, with the port's texture slots 2
+  and 3): each map's textures and props are its area's (its map header's
+  area data), and the game loads only the player's area's: a map of
+  another area is behind a gate on the DS's screen. The wider field sees
+  past the gates: from Route 209 by its gate Hearthome City was white, its
+  ground's textures not in Route 209's set and its houses' models not
+  Route 209's (two photos of 2026-11-06). A map, loaded or beside the
+  loaded ones, with textures the field's set hasn't is now drawn from a
+  copy bound to its own area's (`Port_OtherAreaOf`): that area's map and
+  prop texture sets read, their texels in texture slots 2 and 3 of the
+  port's own (`NitroPort_SetExtraTexSlots`: mapped only while on and only
+  where no bank is, the field's VRAM being A and B in slots 0 and 1; in
+  play it has about 45 KB left, an area needs 80-90 KB), their palettes in
+  the field's palette VRAM, its props' models read as they're needed. Two
+  areas kept, let go with the loaded maps. On the PC from Route 209 (520,712,
+  516,706, 513,721, 505,706) Hearthome's paving, house, lamps and hedges as
+  from Hearthome itself; from Route 203's east end Oreburgh City's ground
+  where it was white; nothing read at Jubilife, Veilstone or Route 207.
 - **The maps beside the loaded ones** (patches 0083, 0084, 0098): the game keeps 4 maps
   loaded, 2 by 2 round the player (theirs and the ones beside the quarter
   of it they're in), always enough on the DS. The pixel field sees about
@@ -1030,7 +1048,7 @@ screen's 320 x 192 at 1.25 times, as above.
   differ; the thin line left at 230,745's very top is the route's own
   shadow at the foot of its next trees, whose tops are just above the
   screen.
-- **Route 206's river past the scenery** (patch 0069): beside the Cycling
+- **Route 206's river past the scenery** (patches 0069, 0101): beside the Cycling
   Road the wider field sees into the scenery map next to it, a flat ledge
   at its own height with the route's river and ledges stopping at the
   border. With the player in the half of the route's map by that border,
@@ -1052,7 +1070,14 @@ screen's 320 x 192 at 1.25 times, as above.
   (`sPortMirroredGroundOnly`: the windmills by the border not drawn
   again): the river and its banks go on east, and so do its plateau's
   terraces, where the ledge was flat (PC shots before and after at
-  250,648, 246,652, 250,660).
+  250,648, 246,652, 250,660). The copy was made at once as its strip first
+  came into the view, every width's lists cut (and the moved rows', patch
+  0070): 3.8 ms on the PC as a new part of the Cycling Road came in, a
+  stutter on the 3DS (2026-11-06). Since patch 0101 it's made in the
+  scenes between the map's loading and its being seen, 48 KB of its lists
+  a scene (`PORT_MIRROR_STEP_BYTES`), the rest at once if it's seen first:
+  on the PC riding south from 300,590, 7 scenes of 0.5-0.7 ms before it was
+  seen; the same pictures frame by frame.
 - **Route 206 under the bridge, past the scenery** (patch 0070): there a
   ridge and the grass either side of it cross both of the map's borders,
   and mirrored, the ridge's half and its mounds and trees showed twice,
