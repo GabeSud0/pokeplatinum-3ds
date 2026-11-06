@@ -951,7 +951,31 @@ screen's 320 x 192 at 1.25 times, as above.
   copy 2 tiles lower more for each 2 tiles the scenery is higher than
   Route 215's forest (altitudes are half tiles: 3 copies and 5; Route
   215's 2 as before). On the PC at 222,663, 221,664 and 218,664 the black
-  band gone (the black pixels left are the player's outline).
+  band gone (the black pixels left are the player's outline). Since patch
+  0093 also Route 203 (the scenery a tile up south of it: its ridge cut
+  short above a black band at z 768, a photo of 2026-11-06 at 230,762). On
+  the PC at 228,763 and 236,764: 2108 and 3241 black pixels before, 146
+  and 103 after (the outlines).
+- **Route 203's north edge** (patch 0093): north of the route the scenery
+  is higher too (a tile up over its west map, 4 over its east), and the
+  pixel field's top lines see past the route's last trees into the gap
+  under the scenery, which the scenery's copies under itself
+  (`Port_RenderSceneryMapsLowered`) filled with their flat ground: a green
+  edge along the screen's top, the ridge ending in it (a photo of
+  2026-11-06 at 230,745). The route's strip by its north edge (its first 3
+  tiles, its shapes' lists cut to them, and its props there: the trees) is
+  drawn again 3 and 6 tiles further north (`Port_RenderEdgeBelowScenery`,
+  for the maps in `sPortEdgeBelowScenery`): the forest and the ridge go on.
+  The strip's big polygons reach back into the route's own rows, so the
+  copies are an eighth of a tile lower each (the further one lower still)
+  and stay under the route's ground there; the scenery's copy at the
+  route's height is half a tile lower (`PORT_NORTH_SCENERY_DROP`), under
+  them past the edge. Each copy is sent only while its box is in the view
+  (on the PC at 230,745, 170 more triangles of about 1000). PC shots at
+  230,745, 226,744, 214,744, 240,744 and 250,746: only the top lines
+  differ; the thin line left at 230,745's very top is the route's own
+  shadow at the foot of its next trees, whose tops are just above the
+  screen.
 - **Route 206's river past the scenery** (patch 0069): beside the Cycling
   Road the wider field sees into the scenery map next to it, a flat ledge
   at its own height with the route's river and ledges stopping at the
@@ -1736,7 +1760,18 @@ screens) the lower screen is the DS's, filling the screen as before.
     trainer walking up from behind). On the PC, Route 202's Youngster
     Tristan (his flag cleared): stepping east into his sight it stays out
     beside the player as he comes over (before: "in its ball (the game
-    moves the player)"). Up or down stairs or an escalator and into
+    moves the player)"). That script's lock pauses every map object's
+    movement, and the follower had set off on its own step after the
+    player in the same frame: its tile was the one beside the player, but
+    its picture stayed on the tile it set off from, two from the player,
+    while the trainer came over (Route 204's Aroma Lady Taylor, a photo of
+    2026-11-06). Since patch 0094 a step it's paused in is finished first,
+    as the game does for the partner who walks with the player
+    (`ScrCmd_LockAll`): unpaused till it stands, then paused again while
+    the player is (`[follower] stopped by the game in a step: the step
+    finished first`). On the PC, Taylor's flag cleared, walking east along
+    z 694 into her sight: it stands beside the player as she comes over
+    (before: a tile further back). Up or down stairs or an escalator and into
     a cave or a forest it goes with the player, as HeartGold's does
     (patch 0064: during a warp's way in or out, the task
     `sub_02056BDC`/`sub_02056C18` start, `FieldSystem_PortWarpKind`): out
