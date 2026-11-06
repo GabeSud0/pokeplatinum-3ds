@@ -951,11 +951,29 @@ screen's 320 x 192 at 1.25 times, as above.
   copy 2 tiles lower more for each 2 tiles the scenery is higher than
   Route 215's forest (altitudes are half tiles: 3 copies and 5; Route
   215's 2 as before). On the PC at 222,663, 221,664 and 218,664 the black
-  band gone (the black pixels left are the player's outline). Since patch
-  0093 also Route 203 (the scenery a tile up south of it: its ridge cut
-  short above a black band at z 768, a photo of 2026-11-06 at 230,762). On
-  the PC at 228,763 and 236,764: 2108 and 3241 black pixels before, 146
-  and 103 after (the outlines).
+  band gone (the black pixels left are the player's outline).
+- **Route 203's south edge** (patches 0093, 0095): south of the route's
+  east map the scenery is a tile up, and the pixel field's bottom lines saw
+  a black band past the route's edge, the ridge cut short above it (a
+  photo of 2026-11-06 at 230,762): the scenery's own forest there has no
+  ground between its rows. Patch 0093 put the route in
+  `sPortEdgeAboveScenery`: its strip drawn again lower showed the trees'
+  feet in the band, a light stripe across the forest, and the ridge running
+  on over the trees ("even more broken", 2026-11-06). Since patch 0095 the
+  strip (its last 2 tiles, its trees' tops with them, the model's: the
+  route has no props) is drawn again 2, 4 and 6 tiles further south
+  (`Port_RenderForestOnSouth`, `sPortForestOnSouth`), a row of trees each,
+  the forest's own spacing: the band filled with trees, the ridge going on
+  behind them, each copy an eighth of a tile lower (under the route's own
+  ground where its big polygons reach back). Only west of x 248: east of it
+  the strip has the end of the rocky plateau's cliff, which drawn again
+  made steps down it (the black under the plateau's corner left there is
+  seen only from inside the trees). Tried on the PC and left: the props
+  (none), the strip mirrored about the edge (the trees, seen from behind,
+  stumps), only the polygons starting in the last 2 rows (the trees' tops
+  start further north: stumps), copies a tile apart (rows too close). PC
+  shots at 228,763, 236,764, 230,762, 226,761 and 216,764: the forest goes
+  on, no stripe.
 - **Route 203's north edge** (patch 0093): north of the route the scenery
   is higher too (a tile up over its west map, 4 over its east), and the
   pixel field's top lines see past the route's last trees into the gap
