@@ -1678,7 +1678,13 @@ screens) the lower screen is the DS's, filling the screen as before.
     home), behind the player or, where that
     tile isn't free (out of a door), on the player's tile hidden till they
     step off it (the tile behind checked as the player's step would be:
-    no water, ledge or ramp). Up or down stairs or an escalator and into
+    no water, ledge or ramp). After a battle (patch 0087: its start noted
+    by `EncounterEffect_Start`, `PortFollower_BattleStarts`) it's out at
+    once as the field comes back, at its size, without its ball, behind
+    the player, even while the field's task or the trainer's script runs;
+    where that tile isn't free, out of its ball once the player steps off
+    theirs (before, it came out of its ball a moment after the field was
+    back, or after the trainer's words: 2026-11-05). Up or down stairs or an escalator and into
     a cave or a forest it goes with the player, as HeartGold's does
     (patch 0064: during a warp's way in or out, the task
     `sub_02056BDC`/`sub_02056C18` start, `FieldSystem_PortWarpKind`): out
