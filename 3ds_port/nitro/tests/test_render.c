@@ -4886,6 +4886,36 @@ static void test_wide_framed_windows(void)
     CHECK(wide[164 * 320 + 280] == WHITE);        /* drawn on: the inside's */
     CHECK(wide[164 * 320 + 295] == WHITE);
     CHECK(wide[164 * 320 + 299] == RED);          /* the right part's first tile: DS 232-239 at 296-303 */
+    /* A line of text reaching the inside's last column (a letter's red
+     * column there, its lines 160-167; and on line 163 the rest of the
+     * inside's last 24 columns red too, as a row of letters' shadows):
+     * drawn on is the inside's white, as the lines with nothing on them
+     * have it, not the letter (Camper Jacob's "before", 2026-11-06). */
+    {
+        static u8 letter[32], row[32];
+
+        for (i = 0; i < 32; i++) {
+            letter[i] = (u8)((i % 4) == 3 ? 0x13 : 0x33);   /* white, column 7 red */
+            row[i] = (u8)((i / 4) == 3 ? 0x11 : (i % 4) == 3 ? 0x13 : 0x33);   /* and all of row 3 */
+        }
+        memcpy(tiles + 7 * 32, letter, 32);
+        memcpy(tiles + 6 * 32, row, 32);
+        GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+        map[20 * 32 + 28] = 7;
+        map[20 * 32 + 27] = 6;
+        map[20 * 32 + 26] = 6;
+        map[20 * 32 + 25] = 6;
+        for (y = 18; y <= 23; y++) {
+            map[y * 32 + 29] = 3;
+        }
+        GX_LoadBG1Scr(map, 0, sizeof(map));
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[164 * 320 + 280] == WHITE);    /* drawn on: white, not the letter's red */
+        CHECK(wide[163 * 320 + 280] == WHITE);    /* (its line red all along the last 24 too) */
+        CHECK(wide[156 * 320 + 280] == WHITE);    /* a line with nothing on it: as before */
+        map[20 * 32 + 25] = map[20 * 32 + 26] = map[20 * 32 + 27] = map[20 * 32 + 28] = 3;
+        GX_LoadBG1Scr(map, 0, sizeof(map));
+    }
     NitroPort_WindowRemoved(&box);
 
     /* The UI's band beside a panel: a background of stripes (lines red,

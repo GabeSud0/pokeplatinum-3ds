@@ -556,6 +556,15 @@ stretched:
   frame (2026-10-25): it was the frame's right part's first column, which
   in many of the 20 frames is the frame's own drawing, a red or dark band
   across the box (the battle's text box after the frame was changed).
+  On a line of text that reaches that last column it's the inside's plain
+  colour instead, from the nearest column left of the letters that has it
+  (the colour of the nearest line above or below with nothing on it in
+  the window's last 24 columns, 16 lines at most: `WidenLinePlain`):
+  Camper Jacob's "Hey, how about you and me battle before" on Route 205
+  ends in the last column, and its e was drawn on to the box's right as a
+  grey line (2026-11-06). On the PC that box now has nothing past the e.
+  In `test_render.c`: `test_wide_framed_windows` (a letter's column there,
+  and a line red all along the last 24 columns: white drawn on).
 - **Screens redrawn for the wider screen.** For a screen with a reference
   drawn for the wider screen, the game lays the screen out in parts that
   move apart (`NitroPort_WideSplitScreen`): on given lines of given BGs,
@@ -739,7 +748,18 @@ stretched:
     it, if that's clear: Cyrus went 11 west to the cave's west wall and
     north along it (2026-11-05: "just move him one space to the right so
     he walks in the middle"); on the PC he now goes north at x 5, between
-    the wall and the pool, not 4;
+    the wall and the pool, not 4. Since patch 0091 that also goes for a
+    way round that turns before its last run outwards: Roark leaving
+    Oreburgh Mine's B2F after his Rock Smash went east to a crate, a step
+    north round it, 2 east to the mine's wall and north along it; on the
+    PC he now goes 1 east past the crate and north up the middle of the
+    passage, x 28, not 29 (asked for with a photo of the spot, 2026-11-06).
+    And a way round that ends past the top or bottom goes on until the one
+    walking is out of the camera's sight there (`ScrCmd_PortWidePastEdge`:
+    `ScrCmd_PortTallRows`' feet and shadow above the taller field's top, its
+    head below its bottom), when there's a way that far, else as far as
+    before: Roark was taken away 9 rows above the middle with his feet on
+    the screen; on the PC he now walks a row further, to 28,19, and off;
   - Route 201's Pokémon Breeder (who stands just past the DS's left
     edge, on the way Rowan and Dawn come in from Twinleaf Town) stands 5
     tiles further right (`map_header_data.c`, `sPortWideMoves`): in the
@@ -1121,7 +1141,16 @@ screen's 320 x 192 at 1.25 times, as above.
   it, down the middle of the room (the search for a way to the door as
   before if that isn't clear). `SetPosition` forgets what was done to a
   walker's walk, so Looker, put in the road for later after his walk, is
-  left there when the script ends.
+  left there when the script ends. Since patch 0092 (2026-11-06) a walk
+  counts as ending past the DS's top or bottom when the middle of the one
+  walking is past that edge (`ScrCmd_PortTallPastDs`: more of them out of
+  the DS's picture than on it), not only when they're out of it wholly:
+  Rowan and Dawn leaving Jubilife after the Galactic battle walk 9 south
+  and end just past the DS's bottom (out of it wholly, with the rows'
+  margins, they weren't), so their walk wasn't made longer and they were
+  taken away at the taller screen's bottom, in sight. On the PC (the tag
+  battle skipped with a local debug build) they now walk 3 tiles more, to
+  175,752, off the screen; Dawn leaving Sandgem still ends at 184,833.
 - The weather's sprites (patch 0080, 2026-11-05): the rain's drops, the
   snow's flakes, the sand live on the DS's screen with 64 pixels round it
   (they come on there, go off one side and on at the other:
@@ -1696,7 +1725,18 @@ screens) the lower screen is the DS's, filling the screen as before.
     the player, even while the field's task or the trainer's script runs;
     where that tile isn't free, out of its ball once the player steps off
     theirs (before, it came out of its ball a moment after the field was
-    back, or after the trainer's words: 2026-11-05). Up or down stairs or an escalator and into
+    back, or after the trainer's words: 2026-11-05). As a trainer sees the
+    player it stays out (patch 0090, 2026-11-06): the trainer's script
+    starts on the step that brought the player into its sight, and that
+    step was taken for the game moving the player, so it went into its
+    ball before every trainer's battle (33 times in a log). The player's
+    tile as a script starts, and through the rest of a step under way then
+    (16 frames at most), is where they are; a script's own walk of the
+    player still sends it in, as does someone coming to its tile (the
+    trainer walking up from behind). On the PC, Route 202's Youngster
+    Tristan (his flag cleared): stepping east into his sight it stays out
+    beside the player as he comes over (before: "in its ball (the game
+    moves the player)"). Up or down stairs or an escalator and into
     a cave or a forest it goes with the player, as HeartGold's does
     (patch 0064: during a warp's way in or out, the task
     `sub_02056BDC`/`sub_02056C18` start, `FieldSystem_PortWarpKind`): out

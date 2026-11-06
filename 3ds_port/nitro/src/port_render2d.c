@@ -966,6 +966,27 @@ static u16 TextBgPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int mapx
     }
 }
 
+/* (TextBgSegments) How many of a widened text box's last columns a line
+ * with nothing on it there is one colour in; and how many lines up or down
+ * from a line of text that reaches its last column one is looked for. */
+#define WIDEN_PLAIN_LOOK 24
+#define WIDEN_PLAIN_ROWS 16
+
+/* (TextBgSegments) Whether a text BG's line (map row ty) is one colour
+ * from map column x to WIDEN_PLAIN_LOOK columns left of it. */
+static BOOL WidenLinePlain(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int x, int ty, int mapW)
+{
+    u16 c = TextBgPixel(e, bg, bgcnt, dispcnt, x & (mapW - 1), ty);
+    int k;
+
+    for (k = 1; k < WIDEN_PLAIN_LOOK; k++) {
+        if (TextBgPixel(e, bg, bgcnt, dispcnt, (x - k) & (mapW - 1), ty) != c) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
 /* A pixel of a run of a BG's line as the run draws it (not a hand-drawn
  * picture's): the map's, its colour, or nothing. */
 static u16 SegmentPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, const Segment *s, int x, int ty, int mapW)
@@ -1694,10 +1715,40 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
             segs[n].fixed = -1;
             n++;
             if (in1 < width - fr) {
+                /* (a line of text reaching the window's last column: the
+                 * inside's plain colour, as the nearest line above or below
+                 * it with nothing on it there has it, from the nearest
+                 * column left of the letters that has it. Camper Jacob's
+                 * "battle before" on Route 205 ends in the last column:
+                 * its e was drawn on to the box's right, 2026-11-06) */
+                int fill = m1 - fr - ind - 1, d, k;
+                u16 c0 = TextBgPixel(e, bg, bgcnt, dispcnt, fill & (mapW - 1), ty);
+
+                if (fill - WIDEN_PLAIN_LOOK > m0 + fl && !WidenLinePlain(e, bg, bgcnt, dispcnt, fill, ty, mapW)) {
+                    int plainRow = -1;
+
+                    for (d = 1; d <= WIDEN_PLAIN_ROWS && plainRow < 0; d++) {
+                        if (ty - d >= top && WidenLinePlain(e, bg, bgcnt, dispcnt, fill, ty - d, mapW)) {
+                            plainRow = ty - d;
+                        } else if (ty + d < bottom && WidenLinePlain(e, bg, bgcnt, dispcnt, fill, ty + d, mapW)) {
+                            plainRow = ty + d;
+                        }
+                    }
+                    if (plainRow >= 0) {
+                        u16 plain = TextBgPixel(e, bg, bgcnt, dispcnt, fill & (mapW - 1), plainRow);
+
+                        for (k = 1; plain != c0 && fill - k >= m0 + fl; k++) {
+                            if (TextBgPixel(e, bg, bgcnt, dispcnt, (fill - k) & (mapW - 1), ty) == plain) {
+                                fill -= k;
+                                break;
+                            }
+                        }
+                    }
+                }
                 segs[n].x0 = (short)(in1 - ind);
                 segs[n].x1 = (short)(width - fr - ind);
                 segs[n].off = 0;
-                segs[n].fixed = (short)((m1 - fr - ind - 1) & (mapW - 1));
+                segs[n].fixed = (short)(fill & (mapW - 1));
                 n++;
             }
             segs[n].x0 = (short)(width - fr - ind);
