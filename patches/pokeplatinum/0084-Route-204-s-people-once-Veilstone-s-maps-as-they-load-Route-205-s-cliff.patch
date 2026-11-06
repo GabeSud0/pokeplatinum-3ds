@@ -1,0 +1,201 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 22:00:00 -0700
+Subject: [PATCH] Route 204's people once, Veilstone's maps as they load,
+ Route 205's cliff (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Three things the wider field showed:
+
+- Someone standing at the edge between two maps is in both maps' events,
+  at the same place, so as to show from either: Route 204's two
+  youngsters by the Ravaged Path and its sign are in the north's events
+  and the south's. The people of the map beside were brought as well,
+  so they showed twice, side by side as they turned and stepped about.
+  Someone beside with the same picture at the same place as one of the
+  player's map's own events isn't brought.
+
+- Walking across a map's middle, the loaded maps move a column on, and
+  the map now loaded at that side is read over several frames: nothing
+  of it was drawn where the wider view reaches into it, a black square
+  for a moment at the screen's edge as the player ran east in Veilstone
+  City. Its strip by the other column, drawn while it was beside the
+  loaded maps and still kept, is drawn till it's read (never read for
+  this: after a warp all four maps are being read).
+
+- Route 205's south end and Valley Windworks have their scenery maps
+  south of them 5 and 9 tiles up, and the wider field's bottom lines saw
+  past their cliffs there: a black band under the cliff. They're listed
+  with Route 215 for the cliffs drawn on down, with a copy 2 tiles lower
+  more for each 2 tiles the scenery is higher (Route 215's as before).
+
+---
+diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
+index 9c96f2de..49053926 100644
+--- a/src/overlay005/fieldmap.c
++++ b/src/overlay005/fieldmap.c
+@@ -1163,6 +1163,29 @@ static void FieldMap_PortKeepHiddenInSight(FieldSystem *fieldSystem, enum MapHea
+     }
+ }
+ 
++// Whether someone of a map beside is in the player's map's own events too:
++// the same picture at the same place. Someone standing at the edge between
++// two maps is in both maps' events so as to show from either (Route 204's
++// two youngsters by the Ravaged Path, and its sign, in the north's events
++// and the south's: in each, its own one to talk to and the other's to be
++// seen). Brought from beside as well, they showed twice, side by side as
++// they turned and stepped about (2026-11-05).
++static BOOL FieldMap_PortInPlayersMap(FieldSystem *fieldSystem, const ObjectEvent *e)
++{
++    const ObjectEvent *own = MapHeaderData_GetObjectEvents(fieldSystem);
++    int i, n = (int)MapHeaderData_GetNumObjectEvents(fieldSystem);
++
++    for (i = 0; own != NULL && i < n; i++) {
++        if (ObjectEvent_GetGraphicsID(&own[i]) == ObjectEvent_GetGraphicsID(e)
++            && ObjectEvent_GetX(&own[i]) == ObjectEvent_GetX(e)
++            && ObjectEvent_GetZ(&own[i]) == ObjectEvent_GetZ(e)) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
+ // Room for the picture of someone beside: a berry patch's is the one its
+ // berry shows now (its patch's in the save, by its event's data), with
+ // room kept for what the player's map's own may still need.
+@@ -1339,7 +1362,8 @@ static void FieldMap_PortNeighbours(FieldSystem *fieldSystem)
+                 || (hiddenFlag != 0 && !(hiddenFlag >= MAP_LOCAL_FLAGS_START && hiddenFlag <= MAP_LOCAL_FLAGS_END)
+                     && FieldSystem_CheckFlag(fieldSystem, hiddenFlag))
+                 || !MapObject_PortInReach(ObjectEvent_GetX(e), ObjectEvent_GetZ(e), playerX, playerZ, 0)
+-                || FieldMap_PortLeftHidden(beside[k], hiddenFlag)) { // (hidden as the player left their map)
++                || FieldMap_PortLeftHidden(beside[k], hiddenFlag) // (hidden as the player left their map)
++                || FieldMap_PortInPlayersMap(fieldSystem, e)) { // (the player's map's own copy of them)
+                 continue;
+             }
+ 
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 85ab937f..abfdfa40 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -2402,6 +2402,8 @@ static void Port_RenderMirroredBesideScenery(const LandDataManager *landDataMan,
+ // elsewhere a copy under the map could show through its water.
+ static const u16 sPortEdgeAboveScenery[] = {
+     MAP_HEADER_ROUTE_215,
++    MAP_HEADER_ROUTE_205_SOUTH, // (its south end's cliff by Valley Windworks, the forest 5 tiles up: a photo of 2026-11-05)
++    MAP_HEADER_VALLEY_WINDWORKS_OUTSIDE, // (and the windworks' beside it, its scenery 9 tiles up)
+ };
+ 
+ typedef struct PortEdgeCopy {
+@@ -2548,9 +2550,11 @@ static void Port_RenderEdgeAboveScenery(const LandDataManager *landDataMan)
+             }
+         }
+ 
+-        if (below < 0
+-            || MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, below % width, below / width, matrixWidth)
+-                <= MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, index % width, index / width, matrixWidth)) {
++        int higher = below < 0 ? 0
++                              : MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, below % width, below / width, matrixWidth)
++                - MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, index % width, index / width, matrixWidth);
++
++        if (higher <= 0) {
+             continue;
+         }
+ 
+@@ -2567,8 +2571,10 @@ static void Port_RenderEdgeAboveScenery(const LandDataManager *landDataMan)
+         NNSG3dResMdl *own = loadedMap->mapRenderObj.resMdl;
+         const NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(own);
+ 
+-        // (2 tiles lower, then 4: each farther north, behind the one above)
+-        for (int k = 1; k <= 2; k++) {
++        // (2 tiles lower, then 4: each farther north, behind the one above;
++        // and so on, 2 tiles more each, for a scenery map higher than
++        // Route 215's forest, two tiles up: altitudes are half tiles)
++        for (int k = 1; k <= 2 || k <= higher / 4 + 1; k++) {
+             VecFx32 lowered = position;
+             GFXTestBox box;
+ 
+@@ -2663,8 +2669,9 @@ static void Port_FreeBesideMaps(void)
+ }
+ 
+ // The map at mapMatrixIndex, read for the side dir of the loaded maps (its
+-// strip on the other side from dir), or NULL.
+-static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int mapMatrixIndex, int dir)
++// strip on the other side from dir), or NULL (or, kept only, NULL if it
++// isn't read already).
++static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int mapMatrixIndex, int dir, BOOL keptOnly)
+ {
+     extern void NitroPort_Log(const char *fmt, ...);
+     int landDataID = MapMatrix_GetLandDataIDByIndex(mapMatrixIndex, landDataMan->mapMatrix);
+@@ -2684,6 +2691,10 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+         }
+     }
+ 
++    if (keptOnly) {
++        return NULL;
++    }
++
+     // (a slot free, else the one drawn longest ago)
+     for (int i = 0; i < PORT_BESIDE_SLOTS; i++) {
+         PortBesideMap *m = &sPortBesideMaps[i];
+@@ -2892,8 +2903,17 @@ static void Port_RenderBesideMaps(const LandDataManager *landDataMan, ModelAttri
+     VecFx32 one = { FX32_ONE, FX32_ONE, FX32_ONE };
+     MtxFx33 identity = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
+ 
+-    for (int side = -1; side <= 1; side += 2) {
+-        int column = side < 0 ? columnLo - 1 : columnHi + 1;
++    // (each side: the column beside the loaded maps; and the loaded maps'
++    // own column there, for a map of it still being read. Walking across a
++    // map's middle, the loaded maps move a column on: the one now loaded at
++    // that side is read over several frames, and till then nothing of it was
++    // drawn where the wider view reaches into it, the black square shown a
++    // moment as the player ran towards Veilstone's spot, 2026-11-05. Its
++    // strip by the other column is the one drawn while it was beside them,
++    // still kept: drawn till it's read)
++    for (int pass = 0; pass < 4; pass++) {
++        int side = pass & 1 ? 1 : -1, inside = pass >= 2;
++        int column = inside ? (side < 0 ? columnLo : columnHi) : side < 0 ? columnLo - 1 : columnHi + 1;
+ 
+         if (column < 0 || column >= width) {
+             continue;
+@@ -2901,7 +2921,7 @@ static void Port_RenderBesideMaps(const LandDataManager *landDataMan, ModelAttri
+ 
+         for (int r = 0; r < numRows; r++) {
+             int index = rows[r] * width + column;
+-            BOOL loaded = FALSE;
++            BOOL loaded = FALSE, reading = FALSE;
+ 
+             if (rows[r] < 0 || rows[r] >= height) {
+                 continue;
+@@ -2910,10 +2930,13 @@ static void Port_RenderBesideMaps(const LandDataManager *landDataMan, ModelAttri
+             // (loaded: drawn by the game, once it's read; while it's still
+             // being read, its strip from here)
+             for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+-                loaded |= landDataMan->loadedMaps[i]->mapMatrixIndex == index && landDataMan->loadedMaps[i]->valid == TRUE;
++                if (landDataMan->loadedMaps[i]->mapMatrixIndex == index) {
++                    loaded |= landDataMan->loadedMaps[i]->valid == TRUE;
++                    reading |= landDataMan->loadedMaps[i]->valid != TRUE;
++                }
+             }
+ 
+-            if (loaded || MapMatrix_GetLandDataIDByIndex(index, landDataMan->mapMatrix) == INVALID_LAND_DATA_ID) {
++            if (loaded || (inside && !reading) || MapMatrix_GetLandDataIDByIndex(index, landDataMan->mapMatrix) == INVALID_LAND_DATA_ID) {
+                 continue;
+             }
+ 
+@@ -2942,7 +2965,9 @@ static void Port_RenderBesideMaps(const LandDataManager *landDataMan, ModelAttri
+                 continue;
+             }
+ 
+-            PortBesideMap *map = Port_BesideMapOf(landDataMan, index, side);
++            // (one still being read: only if its strip's kept, not read again
++            // with it: all four maps are read so after a warp)
++            PortBesideMap *map = Port_BesideMapOf(landDataMan, index, side, inside);
+ 
+             if (map == NULL) {
+                 continue;
+-- 
+2.43.0
+

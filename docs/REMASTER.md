@@ -890,6 +890,15 @@ screen's 320 x 192 at 1.25 times, as above.
   filled as the map shows them a step later; walking across Veilstone's
   middle and back, no hole, each map read once; with and without it in
   the same build, other towns differ only where people walked.
+  Since patch 0084, while a map of the loaded ones' own column at that
+  side is still being read: walking across a map's middle the loaded maps
+  move a column on, the one now loaded is read over several frames, and
+  till then nothing of it was drawn (the square for a moment as the player
+  ran east towards Veilstone's spot, 2026-11-05). Its strip as it was
+  beside them, still kept, is drawn till it's read; one not kept isn't
+  read for this (after a warp all four are being read). On the PC, running
+  east across Veilstone's middle from 681,632, a shot every 2 frames: 3
+  shots with 107-209 black pixels at the right edge before, none after.
 - **Route 215's cliffs down to the forest** (patch 0082): the route's maps
   are at height 0, the forest's scenery map south of them at 4. Below the
   ledges the route's cliffs come down to its south edge (z 608) and stop
@@ -910,7 +919,13 @@ screen's 320 x 192 at 1.25 times, as above.
   with and without the copies differ only in pixels that were black. (A
   first try drew the forest's map again behind and below the route's edge:
   it filled the strip with a forest where the cliff should go on, and was
-  replaced.)
+  replaced.) Since patch 0084 also Route 205's south end and Valley
+  Windworks beside it, their scenery maps south of them 5 and 9 tiles up
+  (a black band under the cliff at 222,663 in a photo of 2026-11-05): a
+  copy 2 tiles lower more for each 2 tiles the scenery is higher than
+  Route 215's forest (altitudes are half tiles: 3 copies and 5; Route
+  215's 2 as before). On the PC at 222,663, 221,664 and 218,664 the black
+  band gone (the black pixels left are the player's outline).
 - **Route 206's river past the scenery** (patch 0069): beside the Cycling
   Road the wider field sees into the scenery map next to it, a flat ledge
   at its own height with the route's river and ledges stopping at the
@@ -962,7 +977,14 @@ screen's 320 x 192 at 1.25 times, as above.
   Seeker's spin, a script's hiding: made again from it); not the invisible
   ones (nothing to see). Their pictures' places are given back as they go,
   and walking into a map the people beside are given up (the furthest
-  first) while the new map's pictures wouldn't fit.
+  first) while the new map's pictures wouldn't fit. Nor someone with the
+  same picture at the same place as one of the player's map's own events
+  (patch 0084): someone at the edge between two maps is in both maps'
+  events so as to show from either (Route 204's two youngsters by the
+  Ravaged Path and its sign, in the north's and the south's), and brought
+  from beside as well they showed twice, side by side as they turned
+  (photos of 2026-11-05; on the PC at 173,703 and 174,712, two pairs
+  before, one each after).
   - The textures nobody uses are freed (`ov5_021EDA38`) as the people
     beside go, and as the follower or its ball does, where the DS does it
     only as a map loads. A berry patch said which texture it uses from its
@@ -1874,7 +1896,27 @@ tunnels around the player, the text box at the bottom across the
 screen. The lower screen's layer textures are made for 2 texels a pixel
 of the DS's 256; a picture too wide for that is published at a texel a
 pixel (`LayerSet.texScale`), which is what a pixel a pixel needs anyway
-(no room in the linear heap for textures twice as wide). `NitroPort_
+(no room in the linear heap for textures twice as wide). With the display
+made smaller for the memory (the 2D a texel a pixel, `NitroPort_
+ComposeInit`) the lower screen's textures were the DS's 256 wide: the
+Underground's 320 didn't fit, its picture was never published, and its
+lower screen stayed black. That smaller display is for the 64 MB memory
+mode (issue #188), but it's taken when less than `COMPOSE_TEXTURE_ROOM`
+of linear memory is left for the 3D's textures, and from the place name
+sign's textures on (192 KB, 2026-11-04) the New 3DS had 4069 KB left, 27
+under the 4 MB it was then: every log of its since says "the display made
+smaller for the memory". The room is 3 MB now (the 3D's texture cache
+lets older textures go when there's no memory; the New 3DS's logs before
+the sign had 4253 KB left after the title screen, 2571 at the fewest
+through a run), the lower screen's textures are at least 320 wide on the
+wider field whatever the display (`alloc_sets`' `leastW`: 512 already at
+2 texels a pixel), a picture too big for its screen's textures says so in
+the log once (`[compose] a W x H picture too big ...`), and a picture
+published a texel a pixel has its right column and bottom row repeated
+past it (`repeat_edges16/32`), as the doubled ones have: drawn bilinear,
+its edge pixels were mixed with what a taller picture left there (the
+lower screen as the tall menu, 248 rows), a line of another colour along
+the bottom. `NitroPort_
 PixelField` is now the upper screen's only (engine A on top). The
 wireless signal icon, at the DS screen's top right, is moved with engine
 A's picture (`NitroPort_EngineABeside`, patch 0065) to the 3DS screen's
@@ -2358,14 +2400,14 @@ difference the old check didn't have too. In `test_render.c`:
 shows, the 8-bit one's last half, 2D mapping, a bitmap OBJ).
 
 That round also moved the VRAM's note after the picture's drawing (so the
-sprites it had just left out would count), and that broke two things on
-the 3DS: the Underground's lower screen stayed black, and a battle's HP
-and EXP bars moved in jumps. The game goes on writing the VRAM on its own
-core while the drawer draws: what it wrote after the picture read the VRAM
-but before the note was in the note and not in the picture, so it was
-never drawn (the bars' tiles are written every frame as they move). The
-note is taken before the drawing again, as it always was: a write after it
-is a change the next time. The PC runner never showed it (its check runs
+sprites it had just left out would count). The game goes on writing the
+VRAM on its own core while the drawer draws: what it wrote after the
+picture read the VRAM but before the note was in the note and not in the
+picture, so it was never drawn (a battle's bars' tiles are written every
+frame as they move). The note is taken before the drawing again, as it
+always was: a write after it is a change the next time. (The
+Underground's black lower screen, reported with it, was the smaller
+display's instead: see the Underground above.) The PC runner never showed it (its check runs
 between the game's frames). In `test_render.c`:
 `test_vram_written_while_drawing` (a tile written at the drawing's last
 clock call: drawn again the next time; it fails with the note after).
