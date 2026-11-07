@@ -1148,6 +1148,17 @@ screen's 320 x 192 at 1.25 times, as above.
   everything as before (the same scene: no vertex in front of the plane,
   the 2568 vertices in the same order). The PC's simulation of the GPU
   has no near plane, so it drew him all along.
+- **People beside the loaded maps** (patch 0106). The game finds the ground
+  under people only in the loaded maps' collision and hides those it finds
+  none for, till their map's loaded: on the 3DS (its loading slower than
+  the PC's) people at the wider screen's sides were seen to come in late,
+  one by Solaceon 10 tiles from the player. Someone in the 3DS's picture in
+  a map not loaded now gets their ground from that map's own collision,
+  read from its land data (`LandDataManager_PortBesideBDHC`, 4 kept, one
+  read a scene; `TerrainCollisionManager_PortBesideHeight`, the game's
+  height lookup for a map not loaded), the height the game finds once it's
+  loaded. Their tile's behaviour still waits for the map, and that keeps
+  them from moving, as before.
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they

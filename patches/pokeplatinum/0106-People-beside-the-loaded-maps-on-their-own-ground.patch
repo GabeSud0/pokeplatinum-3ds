@@ -1,0 +1,295 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 01:30:00 -0700
+Subject: [PATCH] People beside the loaded maps on their own ground
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The game hides someone it finds no ground under (MAP_OBJ_STATUS_12), and
+it finds the ground only in the loaded maps' collision. On the DS that's
+off the screen; the wider field shows people in the maps beside the
+loaded ones, and they were hidden till their map was loaded. Patch 0104's
+lines in the 3DS's logs (2026-11-06 and 07): four people 17-19 tiles to
+the side, hidden for a third of a second to a second; one, at 607,584 by
+Solaceon, drawn again only with the player at 617,590, 10 tiles from him
+and in the picture. On the PC the maps load at once, so it's drawn by the
+time it's in the picture.
+
+Now, when the game finds no ground under someone in the 3DS's picture
+(MapObject_PortInReach) in a map that isn't loaded, their ground is
+found in that map's own collision (TerrainCollisionManager_PortBesideHeight,
+the game's GetHeight for a map not loaded), read from its land data and
+kept (LandDataManager_PortBesideBDHC: 4 kept, one read a scene, let go
+with the beside maps), as the game finds it once the map's loaded. Not on
+a moving height's tile, nor in a field with the simple collisions.
+
+Nothing else changes for them: their tile's behaviour is still not found
+till their map's loaded (MAP_OBJ_STATUS_11), and that is what keeps them
+from moving (sub_02063478, unk_02069BE0.c), as before.
+
+On the PC (status and height logged): by Solaceon, warped to 626,583 and
+walking west, the man at 607,584 (graphics 51) gets his height,
+4, by 624,583, where the game gave him 4 once his map was loaded; walking
+down from Route 206's gate onto Route 207, the two people at 320,710 and
+320,716 get 10 at 303,702, the game's 10 later. Nothing logged by patch
+0104 in either. The pictures the same at Veilstone 719,617 and 690,632
+and Route 207 317,712 and 330,713; at Jubilife 175,760 and 185,778 the
+same but for people walking about, as between any two runs.
+
+---
+diff --git a/include/overlay005/land_data.h b/include/overlay005/land_data.h
+index 752dba5c..ac53e60b 100644
+--- a/include/overlay005/land_data.h
++++ b/include/overlay005/land_data.h
+@@ -35,6 +35,9 @@ u8 LandDataManager_GetRelativeLoadedMapsQuadrant(const int mapMatrixIndex, const
+ int LandDataManager_GetLoadedMapMatrixIndex(const LandDataManager *landDataMan, const u8 loadedMapIndex);
+ BOOL LandDataManager_GetRelativeLoadedMapsQuadrantOfTile(const LandDataManager *landDataMan, const int tileX, const int tileZ, u8 *result);
+ const BDHC *LandDataManager_GetLoadedMapBDHC(const LandDataManager *landDataMan, const u8 loadedMapIndex);
++#ifdef SDK_PORT_3DS
++const BDHC *LandDataManager_PortBesideBDHC(const LandDataManager *landDataMan, int mapMatrixIndex);
++#endif
+ u16 const *LandDataManager_GetLoadedMapTerrainAttributes(const LandDataManager *landDataMan, const u8 loadedMapIndex);
+ void LandDataManager_SetMapLoadedCallback(LandDataManager *landDataMan, MapLoadedCallback mapLoadedCb, void *cbUserData);
+ NARC *LandDataManager_GetLandDataNARC(LandDataManager *landDataMan);
+diff --git a/include/terrain_collision_manager.h b/include/terrain_collision_manager.h
+index 87838cf3..1879459b 100644
+--- a/include/terrain_collision_manager.h
++++ b/include/terrain_collision_manager.h
+@@ -35,6 +35,9 @@ const fx32 TerrainCollisionManager_GetHeight(const FieldSystem *fieldSystem, con
+ BOOL TerrainCollisionManager_WillMapObjectCollide(const FieldSystem *fieldSystem, const VecFx32 *objectPosition, const int tileX, const int tileZ, s8 *verticalDirection);
+ BOOL TerrainCollisionManager_WillPlayerCollide(FieldSystem *fieldSystem, const VecFx32 *objectPosition, const int tileX, const int tileZ, s8 *verticalDirection);
+ void TerrainCollisionManager_GetMapAbsoluteOrigin(const int mapMatrixIndex, const int mapMatrixWidth, VecFx32 *mapAbsoluteOrigin);
++#ifdef SDK_PORT_3DS
++BOOL TerrainCollisionManager_PortBesideHeight(const FieldSystem *fieldSystem, const fx32 objectHeight, const fx32 objectX, const fx32 objectZ, fx32 *height);
++#endif
+ 
+ void TerrainCollisionHitbox_Init(const int tileX, const int tileZ, const int offsetTileX, const int offsetTileZ, const u32 sizeX, const u32 sizeZ, TerrainCollisionHitbox *hitbox);
+ BOOL TerrainCollisionHitbox_CollidesWithMapProp(const MapProp *mapProp, const TerrainCollisionHitbox *hitbox, const VecFx32 *mapAbsoluteOrigin);
+diff --git a/src/map_object_move.c b/src/map_object_move.c
+index cdd02394..3aee2480 100644
+--- a/src/map_object_move.c
++++ b/src/map_object_move.c
+@@ -974,6 +974,15 @@ int MapObject_RecalculateObjectHeight(MapObject *mapObj)
+     int heightUpdated = MapObject_RecalculatePositionHeightEx(fieldSystem, &updatedPos, dynamicHeightCalculationEnabled);
+ 
+ #ifdef SDK_PORT_3DS
++    // (someone the wider field shows in a map that isn't loaded: their
++    // ground from that map's collision, read for it, as the game finds it
++    // once the map's loaded; not hidden meanwhile)
++    if (heightUpdated != TRUE && fieldSystem != NULL && fieldSystem->playerAvatar != NULL
++        && MapObject_PortInReach(MapObject_GetX(mapObj), MapObject_GetZ(mapObj), PlayerAvatar_GetXPos(fieldSystem->playerAvatar), PlayerAvatar_GetZPos(fieldSystem->playerAvatar), 0)
++        && TerrainCollisionManager_PortBesideHeight(fieldSystem, updatedPos.y, updatedPos.x, updatedPos.z, &updatedPos.y)) {
++        heightUpdated = TRUE;
++    }
++
+     Port_LogGround(mapObj, heightUpdated == TRUE);
+ #endif
+ 
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index efceef4a..67f49628 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -30,6 +30,7 @@
+ #ifdef SDK_PORT_3DS
+ #include <nnsys/g3d/gecom.h>
+ 
++#include "constants/field/bdhc.h"
+ #include "generated/map_headers.h"
+ 
+ #include "gfx_box_test.h"
+@@ -3168,12 +3169,119 @@ static void Port_FreeBesideMap(PortBesideMap *map)
+     map->mapMatrixIndex = INVALID_MAP_MATRIX_INDEX;
+ }
+ 
++// The collision of a map beside the loaded ones, read from its land data
++// and kept, for the ground under the people the wider field shows there
++// (TerrainCollisionManager_PortBesideHeight): the game finds none for them
++// till their map's loaded, and hides them. On the 3DS people at the
++// screen's corners, 17-19 tiles to the side, came into the picture a third
++// of a second to a second after they were in view (logs of 2026-11-06 and
++// 07, patch 0104's lines). 4 kept (the one asked for longest ago let go),
++// let go with the beside maps; at most one read a scene.
++#define PORT_BESIDE_BDHCS 4
++
++typedef struct PortBesideBDHC {
++    int mapMatrixIndex, matrixID, landDataID;
++    BOOL failed;
++    u32 used;
++    u8 *buffer;
++    BDHC bdhc;
++} PortBesideBDHC;
++
++static PortBesideBDHC sPortBesideBDHCs[PORT_BESIDE_BDHCS];
++static u32 sPortBesideBDHCCalls, sPortBesideBDHCReadFrame = (u32)-1;
++
++static void Port_FreeBesideBDHCs(void)
++{
++    for (int i = 0; i < PORT_BESIDE_BDHCS; i++) {
++        free(sPortBesideBDHCs[i].buffer);
++        memset(&sPortBesideBDHCs[i], 0, sizeof(sPortBesideBDHCs[i]));
++    }
++
++    sPortBesideBDHCReadFrame = (u32)-1;
++}
++
++// The collision of the map at mapMatrixIndex (for a map not loaded: the
++// caller's to tell), NULL if it has none or can't be read (yet: one read a
++// scene).
++const BDHC *LandDataManager_PortBesideBDHC(const LandDataManager *landDataMan, int mapMatrixIndex)
++{
++    if (landDataMan == NULL || landDataMan->mapMatrix == NULL || mapMatrixIndex < 0
++        || mapMatrixIndex >= landDataMan->mapMatrixWidth * landDataMan->mapMatrixHeight) {
++        return NULL;
++    }
++
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++    int landDataID = MapMatrix_GetLandDataIDByIndex(mapMatrixIndex, landDataMan->mapMatrix);
++    PortBesideBDHC *entry = NULL;
++
++    sPortBesideBDHCCalls++;
++
++    for (int i = 0; i < PORT_BESIDE_BDHCS; i++) {
++        PortBesideBDHC *e = &sPortBesideBDHCs[i];
++
++        if ((e->buffer != NULL || e->failed) && e->mapMatrixIndex == mapMatrixIndex && e->matrixID == matrixID && e->landDataID == landDataID) {
++            e->used = sPortBesideBDHCCalls;
++            return e->failed ? NULL : &e->bdhc;
++        }
++    }
++
++    if (sPortBesideBDHCReadFrame == sPortBesideFrame) {
++        return NULL; // (one read a scene: the rest the next)
++    }
++
++    for (int i = 0; i < PORT_BESIDE_BDHCS; i++) {
++        PortBesideBDHC *e = &sPortBesideBDHCs[i];
++
++        if (entry == NULL || (int)(e->used - entry->used) < 0) {
++            entry = e;
++        }
++    }
++
++    free(entry->buffer);
++    memset(entry, 0, sizeof(*entry));
++    entry->mapMatrixIndex = mapMatrixIndex;
++    entry->matrixID = matrixID;
++    entry->landDataID = landDataID;
++    entry->used = sPortBesideBDHCCalls;
++    entry->failed = TRUE; // (till it's read)
++    sPortBesideBDHCReadFrame = sPortBesideFrame;
++
++    if (sPortBesideNARC == NULL) {
++        sPortBesideNARC = NARC_ctor(NARC_INDEX_FIELDDATA__LAND_DATA__LAND_DATA, HEAP_ID_FIELD1);
++    }
++
++    if (sPortBesideNARC == NULL) {
++        return NULL;
++    }
++
++    LandDataHeader header;
++
++    LandDataHeader_Load(sPortBesideNARC, landDataID, &header);
++
++    if (header.bdhcSize <= 0 || header.terrainAttributesSize < 0 || header.mapPropsSize < 0 || header.mapModelSize < 0) {
++        return NULL;
++    }
++
++    entry->buffer = malloc(BDHC_BUFFER_SIZE); // (as the game's own: its arrays fit)
++
++    if (entry->buffer == NULL) {
++        return NULL;
++    }
++
++    NARC_Seek(sPortBesideNARC, header.terrainAttributesSize + header.mapPropsSize + header.mapModelSize);
++    BDHC_Load(sPortBesideNARC, header.bdhcSize, &entry->bdhc, entry->buffer);
++    entry->failed = FALSE;
++    return &entry->bdhc;
++}
++
+ static void Port_FreeBesideMaps(void)
+ {
+     for (int i = 0; i < PORT_BESIDE_SLOTS; i++) {
+         Port_FreeBesideMap(&sPortBesideMaps[i]);
+     }
+ 
++    Port_FreeBesideBDHCs();
++
+     if (sPortBesideNARC != NULL) {
+         NARC_dtor(sPortBesideNARC);
+         sPortBesideNARC = NULL;
+diff --git a/src/terrain_collision_manager.c b/src/terrain_collision_manager.c
+index 362b1227..e43d3117 100644
+--- a/src/terrain_collision_manager.c
++++ b/src/terrain_collision_manager.c
+@@ -136,6 +136,69 @@ static const fx32 GetHeight(const FieldSystem *fieldSystem, const fx32 objectHei
+     return newObjectHeight;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// (the 3DS port) The ground's height at a place in a map not loaded, from
++// its collision read for the wider field (LandDataManager_PortBesideBDHC),
++// as GetHeight finds it once the map's loaded: for the people the wider
++// field shows beside the loaded maps, whom the game hides while it finds
++// no ground under them (MapObject_RecalculateObjectHeight). FALSE in a
++// loaded map, on a moving height's tile (DynamicTerrainHeightManager), in
++// a field with the simple collisions, or with none found.
++BOOL TerrainCollisionManager_PortBesideHeight(const FieldSystem *fieldSystem, const fx32 objectHeight, const fx32 objectX, const fx32 objectZ, fx32 *height)
++{
++    if (fieldSystem->terrainCollisionMan != &sTerrainCollisionManagerFuncs || fieldSystem->landDataMan == NULL || fieldSystem->mapMatrix == NULL) {
++        return FALSE;
++    }
++
++    const LandDataManager *landDataMan = fieldSystem->landDataMan;
++    VecFx32 offset;
++    LandDataManager_GetOffset(landDataMan, &offset);
++
++    if (objectX - offset.x < 0 || objectZ - offset.z < 0) {
++        return FALSE;
++    }
++
++    int mapMatrixWidth = MapMatrix_GetWidth(fieldSystem->mapMatrix);
++    int mapMatrixHeight = MapMatrix_GetHeight(fieldSystem->mapMatrix);
++    int mapMatrixWidthTiles = mapMatrixWidth * MAP_TILES_COUNT_X;
++    u32 tileX = (objectX - offset.x) / MAP_OBJECT_TILE_SIZE;
++    u32 tileZ = (objectZ - offset.z) / MAP_OBJECT_TILE_SIZE;
++    u32 mapMatrixX = tileX / MAP_TILES_COUNT_X;
++    u32 mapMatrixZ = tileZ / MAP_TILES_COUNT_Z;
++
++    if (mapMatrixX >= (u32)mapMatrixWidth || mapMatrixZ >= (u32)mapMatrixHeight) {
++        return FALSE;
++    }
++
++    u32 mapMatrixIndex = mapMatrixX + mapMatrixZ * mapMatrixWidth;
++    u32 tileIndex = tileX + tileZ * mapMatrixWidthTiles;
++    u8 tileMapQuadrant = LandDataManager_CalculateMapQuadrantOfTile(tileIndex, mapMatrixWidthTiles);
++    u8 dynHeightPlateIndex;
++
++    if (LandDataManager_GetRelativeLoadedMapsQuadrant(mapMatrixIndex, tileMapQuadrant, landDataMan) <= QUADRANT_COUNT - 1
++        || DynamicTerrainHeightManager_GetPlateIndexOfTile(tileX, tileZ, fieldSystem->dynamicTerrainHeightMan, &dynHeightPlateIndex)) {
++        return FALSE;
++    }
++
++    const BDHC *bdhc = LandDataManager_PortBesideBDHC(landDataMan, mapMatrixIndex);
++
++    if (bdhc == NULL) {
++        return FALSE;
++    }
++
++    fx32 currentMapOriginX = (mapMatrixX * MAP_TILES_COUNT_X + MAP_TILES_COUNT_X / 2) * MAP_OBJECT_TILE_SIZE;
++    fx32 currentMapOriginZ = (mapMatrixZ * MAP_TILES_COUNT_Z + MAP_TILES_COUNT_Z / 2) * MAP_OBJECT_TILE_SIZE;
++    fx32 y = 0;
++
++    if (!CalculateObjectHeight(objectHeight - offset.y, objectX - currentMapOriginX - offset.x, objectZ - currentMapOriginZ - offset.z, bdhc, &y)) {
++        return FALSE;
++    }
++
++    *height = y + offset.y;
++    return TRUE;
++}
++#endif
++
+ static const fx32 GetSimpleHeight(const FieldSystem *fieldSystem, const fx32 objectHeight, const fx32 objectX, const fx32 objectZ, u8 *newObjectHeightSourceOut)
+ {
+     int tileX = objectX / MAP_OBJECT_TILE_SIZE;
