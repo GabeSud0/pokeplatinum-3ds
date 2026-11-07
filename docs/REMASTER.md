@@ -1095,7 +1095,13 @@ screen's 320 x 192 at 1.25 times, as above.
   (`Port_RenderMirroredWhole`: the same picture). The copies get the area
   lighting's global colours as the game's maps do (one made the scene its
   map came in had been a shade off). On the PC riding north: nothing made
-  again, at most 1.6 ms in a scene.
+  again, at most 1.6 ms in a scene. Changing lanes under the bridge still
+  made the new side's copy at once (a map with rows moved over has no
+  stand-in: 4.9 ms on the PC, a 48 ms frame on the 3DS); since patch 0105
+  a map's copy for its other side is made a little a scene once its own is
+  (`Port_MirrorOtherSideAhead`, when nothing else is cut in the scene), and
+  a copy made at once in view is logged (`[field] a mirrored copy made at
+  once ...`).
 - **Route 206 under the bridge, past the scenery** (patch 0070): there a
   ridge and the grass either side of it cross both of the map's borders,
   and mirrored, the ridge's half and its mounds and trees showed twice,
