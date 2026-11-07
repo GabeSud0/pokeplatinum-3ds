@@ -302,6 +302,16 @@ int NitroPort_Gx3dSameAs(uint32_t serial, uint32_t *stamp, uint32_t *swapSeq);
  * list can't be cut (or doesn't fit): draw the whole of it. */
 uint32_t NitroPort_Gx3dTrimList(const void *src, uint32_t bytes, void *dst, uint32_t dstBytes,
                                 int axis, int32_t lo, int32_t hi);
+/* A shape's display list's polygons (a strip of them whole: a group), in
+ * the list's order: each one's lowest and highest coordinates (x, y, z,
+ * then x, y, z) into box, up to max of them; the count (0 if it can't be
+ * read). */
+uint32_t NitroPort_Gx3dListGroups(const void *src, uint32_t bytes, int32_t (*box)[6], uint32_t max);
+/* The list with only the groups keep[] says, by NitroPort_Gx3dListGroups's
+ * numbering (those past nkeep left out), drawn the same: 0 if it can't be
+ * cut (or doesn't fit). */
+uint32_t NitroPort_Gx3dTrimListGroups(const void *src, uint32_t bytes, void *dst, uint32_t dstBytes,
+                                      const uint8_t *keep, uint32_t nkeep);
 /* The same, with only the polygons that reach into xlo <= x <= xhi and
  * start (their lowest z) in zlo <= z < zhi (inside), or anywhere but
  * there (!inside): the two lists share no polygon, and have them all

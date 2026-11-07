@@ -3531,13 +3531,14 @@ static int dl_group_kept(const DlGroup *grp,const int32_t lo[3],const int32_t hi
     return 1;
 }
 static uint32_t dl_trim(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
-                        const int32_t lo[3],const int32_t hi[3],unsigned starts,unsigned outside)
+                        const int32_t lo[3],const int32_t hi[3],unsigned starts,unsigned outside,const uint8_t *keep,uint32_t nkeep)
 {
     const uint32_t *w=src;
     uint32_t n=bytes/4u,o,g=0;
     DlInfo *info;
     DlWriter wr;
     DlOwed ow;
+    int open=0;                    /* (with keep: a BEGIN_VTXS sent, its END not yet) */
     if((bytes&3u) || !dst)return 0;
     info=dl_survey(w,n,1u);
     if(!info)return 0;
@@ -3550,18 +3551,39 @@ static uint32_t dl_trim(const void *src,uint32_t bytes,void *dst,uint32_t dstByt
         while(g<info->ngroups && info->groups[g].begin<o)g++;
         if(g<info->ngroups && info->groups[g].begin==o){
             const DlGroup *grp=&info->groups[g];
-            if(!dl_group_kept(grp,lo,hi,starts,outside)){
+            if(keep ? (g>=nkeep || !keep[g]) : !dl_group_kept(grp,lo,hi,starts,outside)){
                 dl_owe(&ow,grp,info->xyz[grp->end-1u]);
                 o=grp->end;
                 g++;
                 continue;
             }
         }
+        if(keep && op==0x40u){
+            /* (groups chosen one by one: a BEGIN_VTXS whose commands are
+             * all in groups left out, left out with them, and an END_VTXS
+             * after nothing sent; the coordinates they leave owed sent only
+             * for a vertex relative to them, as its own) */
+            uint32_t e,h=g,at=o+1u;
+            int any=0;
+            for(e=o+1u;e<info->nops;e++){
+                unsigned q=info->ops[e]&255u;
+                if(q==0x40u || q==0x41u)break;
+            }
+            while(h<info->ngroups && info->groups[h].begin==at && info->groups[h].end<=e){
+                if(h<nkeep && keep[h])any=1;
+                at=info->groups[h].end;
+                h++;
+            }
+            if(at==e && !any){o++;continue;}
+        }
+        if(keep && op==0x41u && !open){o++;continue;}
         dl_pay_state(&wr,&ow);
         if(ow.coordOwed){
             if(op==0x40u || op==0x41u){
-                dl_vtx16(&wr,ow.xyz);              /* (a vertex alone: no polygon) */
-                ow.coordOwed=0;
+                if(!keep){
+                    dl_vtx16(&wr,ow.xyz);          /* (a vertex alone: no polygon) */
+                    ow.coordOwed=0;
+                }
             }else if(op>=0x23u && op<=0x28u){
                 ow.coordOwed=0;
                 if(op>=0x25u){
@@ -3571,11 +3593,17 @@ static uint32_t dl_trim(const void *src,uint32_t bytes,void *dst,uint32_t dstByt
                 }
             }
         }
+        if(op==0x40u)open=1;
+        else if(op==0x41u)open=0;
         dl_put(&wr,op,p);
         o++;
     }
-    dl_pay_state(&wr,&ow);
-    if(ow.coordOwed)dl_vtx16(&wr,ow.xyz);          /* (not reached: groups end before a BEGIN or END) */
+    if(!keep){
+        dl_pay_state(&wr,&ow);
+        if(ow.coordOwed)dl_vtx16(&wr,ow.xyz);      /* (not reached: groups end before a BEGIN or END) */
+    }else if(wr.n==0u && wr.cap>0u){
+        wr.out[wr.n++]=0u;                         /* (nothing kept: a word of NOPs) */
+    }
     dl_free(info);
     return wr.full?0:wr.n*4u;
 }
@@ -3585,13 +3613,34 @@ uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_
     int32_t l[3]={INT32_MIN,INT32_MIN,INT32_MIN},h[3]={INT32_MAX,INT32_MAX,INT32_MAX};
     if(axis<0 || axis>2)return 0;
     l[axis]=lo;h[axis]=hi;
-    return dl_trim(src,bytes,dst,dstBytes,l,h,0u,0u);
+    return dl_trim(src,bytes,dst,dstBytes,l,h,0u,0u,NULL,0u);
+}
+uint32_t NitroPort_Gx3dListGroups(const void *src,uint32_t bytes,int32_t (*box)[6],uint32_t max)
+{
+    DlInfo *info;
+    uint32_t g,n;
+    int a;
+    if((bytes&3u) || !src)return 0;
+    info=dl_survey(src,bytes/4u,1u);
+    if(!info)return 0;
+    n=info->ngroups;
+    for(g=0;g<n && g<max;g++){
+        for(a=0;a<3;a++){box[g][a]=info->groups[g].lo[a];box[g][3+a]=info->groups[g].hi[a];}
+    }
+    dl_free(info);
+    return n;
+}
+uint32_t NitroPort_Gx3dTrimListGroups(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
+                                      const uint8_t *keep,uint32_t nkeep)
+{
+    int32_t l[3]={INT32_MIN,INT32_MIN,INT32_MIN},h[3]={INT32_MAX,INT32_MAX,INT32_MAX};
+    return dl_trim(src,bytes,dst,dstBytes,l,h,0u,0u,keep,nkeep);
 }
 uint32_t NitroPort_Gx3dTrimListRows(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
                                     int32_t xlo,int32_t xhi,int32_t zlo,int32_t zhi,int inside)
 {
     int32_t l[3]={xlo,INT32_MIN,zlo},h[3]={xhi,INT32_MAX,zhi};
-    return dl_trim(src,bytes,dst,dstBytes,l,h,4u,inside?0u:4u);
+    return dl_trim(src,bytes,dst,dstBytes,l,h,4u,inside?0u:4u,NULL,0u);
 }
 void NitroPort_GxFifoWord(uint32_t word)
 {
