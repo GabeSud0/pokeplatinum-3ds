@@ -1,0 +1,218 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 19:10:00 -0700
+Subject: [PATCH] A log line when someone in the wider picture isn't drawn
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A hiker on Route 207, at the bottom of the 3DS's screen 9 tiles south of
+the player, is seen only for a moment as the player steps (videos of
+2026-11-06), while the PC draws him in every frame, walked in the same way
+from Route 206's gate. The log line of patch 0099 said nothing: it's only
+for someone whose ground was found and lost.
+
+Each frame (FieldMap_PortLogUnseen), for the people the 3DS's screen shows
+past the DS's (in reach, more than 8 tiles to the side, 6 up or 5 down)
+with a picture to draw: the game's reason for not drawing them, once it's
+held 8 frames: `[field] someone in the wider picture not drawn at X,Z
+(graphics G, local L; movement on/paused), the player at X,Z: ...` with no
+picture made for them yet, hidden by the game, no ground found under them
+since they were made, their picture's own flag off, or their picture left
+elsewhere (its place); and `... drawn again`. Berry patches aside (no
+berry: nothing to draw). At most 24 lines a map. If the hiker is gone with
+none of these, it's the 3DS's drawing.
+
+On the PC walking down from the gate to 318,712: two people at 320,710
+and 320,716 not drawn (no ground under them: their map not loaded yet,
+the player at 303,699-705, 17 tiles west), drawn again as their map's
+loaded; nothing for the hiker.
+
+---
+diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
+index 49053926..0cb6f218 100644
+--- a/src/overlay005/fieldmap.c
++++ b/src/overlay005/fieldmap.c
+@@ -33,6 +33,9 @@
+ #include "overlay005/ov5_021D5BC0.h"
+ #include "overlay005/ov5_021D5EB8.h"
+ #include "overlay005/ov5_021EA714.h"
++#ifdef SDK_PORT_3DS
++#include "overlay005/ov5_021EB1A0.h"
++#endif
+ #include "overlay005/ov5_021ECC20.h"
+ #include "overlay005/ov5_021ECE40.h"
+ #include "overlay005/ov5_021EE75C.h"
+@@ -137,6 +140,7 @@ static enum FieldExtensionOverlay FieldMap_GetExtOverlayForActiveDynMapFeatures(
+ static BOOL FieldMap_InDistortionWorld(FieldSystem *fieldSystem);
+ #ifdef SDK_PORT_3DS
+ static void FieldMap_PortNeighbours(FieldSystem *fieldSystem);
++static void FieldMap_PortLogUnseen(FieldSystem *fieldSystem);
+ static void FieldMap_PortKeepHiddenInSight(FieldSystem *fieldSystem, enum MapHeaderID mapHeaderID, int objEventCount, const ObjectEvent *objEventList);
+ #endif
+ static MapObjectsToPreload *FetchMapObjectsToPreload(enum HeapID heapID, int memberID);
+@@ -295,6 +299,7 @@ static BOOL FieldMap_Main(ApplicationManager *appMan, int *param1)
+ #ifdef SDK_PORT_3DS
+     FieldMap_PortNeighbours(fieldSystem);
+     PortFollower_Update(fieldSystem);
++    FieldMap_PortLogUnseen(fieldSystem);
+ #endif
+ 
+     ov5_021D134C(fieldSystem, fieldSystem->unk_C0);
+@@ -1397,4 +1402,155 @@ static void FieldMap_PortNeighbours(FieldSystem *fieldSystem)
+         }
+     }
+ }
++
++// Someone the 3DS's screen shows past the DS's that the game doesn't draw,
++// in the log with the game's reason: `[field] someone in the wider picture
++// not drawn at X,Z (graphics G, local L): ...`, and `... drawn again`. A
++// hiker on Route 207 at the screen's bottom (9 tiles south of the player)
++// was seen on the 3DS only for a moment as the player stepped (videos of
++// 2026-11-06), and on the PC in every frame; the log said nothing of his
++// ground (map_object_move.c, Port_LogGround: only for someone who had it
++// and lost it). This tells which of the game's reasons it is: no picture
++// made for them yet, hidden, no ground found since they were made, their
++// picture's own flag off, or their picture left somewhere else (its place
++// not kept up: their movement paused); or none, if they're drawn: then it's
++// the 3DS's drawing. A state is logged once it's held 8 frames (pictures
++// load over a few). At most 24 lines a map the player's in. (On the PC,
++// walking down from Route 206's gate onto Route 207: two people beside the
++// loaded maps, in the wider picture's corner, not drawn till their map's
++// loaded, no ground under them till then; the hiker drawn.)
++#define PORT_UNSEEN_PEOPLE 32
++#define PORT_UNSEEN_LINES  24
++
++static void FieldMap_PortLogUnseen(FieldSystem *fieldSystem)
++{
++    extern void NitroPort_Log(const char *fmt, ...);
++    static const char *const sWhy[] = {
++        "drawn again",
++        "not drawn: no picture made for them yet",
++        "not drawn: hidden by the game",
++        "not drawn: no ground found under them since they were made",
++        "not drawn: their picture's own flag off",
++        "not drawn where they are: their picture left elsewhere",
++    };
++    static struct {
++        const MapObject *mapObj;
++        int localID, graphicsID, why, frames, logged;
++        u32 frame;
++    } sPeople[PORT_UNSEEN_PEOPLE];
++    static int sLines, sLinesHere = -1;
++    static u32 sFrame;
++    MapObjectManager *mapObjMan = fieldSystem->mapObjMan;
++    MapObject *mapObj, *player;
++    int i = 0, k, playerX, playerZ;
++
++    sFrame++;
++
++    if (fieldSystem->location != NULL && (int)fieldSystem->location->mapHeaderID != sLinesHere) {
++        sLinesHere = fieldSystem->location->mapHeaderID;
++        sLines = 0;
++    }
++
++    if (sLines >= PORT_UNSEEN_LINES || mapObjMan == NULL || fieldSystem->playerAvatar == NULL || NitroPort_WideScreenExtra() <= 0
++        || !MapObjectMan_IsDrawInitialized(mapObjMan)) {
++        return;
++    }
++
++    player = PlayerAvatar_GetMapObject(fieldSystem->playerAvatar);
++    playerX = PlayerAvatar_GetXPos(fieldSystem->playerAvatar);
++    playerZ = PlayerAvatar_GetZPos(fieldSystem->playerAvatar);
++
++    while (MapObjectMan_FindObjectWithStatus(mapObjMan, &mapObj, &i, MAP_OBJ_STATUS_0) == TRUE) {
++        int x = MapObject_GetX(mapObj), z = MapObject_GetZ(mapObj), dx = x - playerX, dz = z - playerZ, why = 0;
++        int graphicsID = MapObject_GetGraphicsID(mapObj), localID = MapObject_GetLocalID(mapObj);
++
++        // (past the DS's screen, in the 3DS's; someone with a picture to draw)
++        if (mapObj == player || MapObject_PortIsFollower(mapObj) || graphicsID == OBJ_EVENT_GFX_INVISIBLE || graphicsID == 0xffff
++            || BerryPatchGraphics_IsBerryPatch(graphicsID) == TRUE // (a patch with no berry: nothing to draw)
++            || !MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_14) || !MapObject_PortInReach(x, z, playerX, playerZ, 0)
++            || (dx >= -8 && dx <= 8 && dz >= -6 && dz <= 5) || ov5_021ECD04(mapObj)->modelType != 1) {
++            continue;
++        }
++
++        Billboard *billboard = ov5_021EB1A0(mapObj);
++
++        if (billboard == NULL) {
++            why = 1;
++        } else if (MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_HIDE)) {
++            why = 2;
++        } else if (MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_12) && !MapObject_CheckStatus(mapObj, MAP_OBJ_STATUS_13)) {
++            why = 3;
++        } else if (!Billboard_GetDrawFlag(billboard)) {
++            why = 4;
++        } else {
++            VecFx32 pos;
++            const VecFx32 *drawn = Billboard_GetPos(billboard);
++
++            MapObject_GetPosPtr(mapObj, &pos);
++
++            if (drawn->x - pos.x > 2 * MAP_OBJECT_TILE_SIZE || pos.x - drawn->x > 2 * MAP_OBJECT_TILE_SIZE
++                || drawn->z - pos.z > 2 * MAP_OBJECT_TILE_SIZE || pos.z - drawn->z > 2 * MAP_OBJECT_TILE_SIZE) {
++                why = 5;
++            }
++        }
++
++        // (their place in the list: theirs, else a free one or the oldest)
++        for (k = 0; k < PORT_UNSEEN_PEOPLE; k++) {
++            if (sPeople[k].mapObj == mapObj && sPeople[k].localID == localID && sPeople[k].graphicsID == graphicsID) {
++                break;
++            }
++        }
++
++        if (k == PORT_UNSEEN_PEOPLE) {
++            int oldest = 0;
++
++            for (k = 0; k < PORT_UNSEEN_PEOPLE; k++) {
++                if (sPeople[k].mapObj == NULL || sFrame - sPeople[k].frame > 2) {
++                    break;
++                }
++
++                if ((int)(sPeople[k].frame - sPeople[oldest].frame) < 0) {
++                    oldest = k;
++                }
++            }
++
++            if (k == PORT_UNSEEN_PEOPLE) {
++                k = oldest;
++            }
++
++            sPeople[k].mapObj = mapObj;
++            sPeople[k].localID = localID;
++            sPeople[k].graphicsID = graphicsID;
++            sPeople[k].why = why;
++            sPeople[k].frames = 0;
++            sPeople[k].logged = 0; // (as drawn: nothing said till they're not)
++        }
++
++        sPeople[k].frame = sFrame;
++
++        if (sPeople[k].why != why) {
++            sPeople[k].why = why;
++            sPeople[k].frames = 0;
++        }
++
++        if (++sPeople[k].frames == 8 && sPeople[k].logged != why && sLines < PORT_UNSEEN_LINES) {
++            VecFx32 pos = { 0, 0, 0 };
++
++            if (billboard != NULL) {
++                pos = *Billboard_GetPos(billboard);
++            }
++
++            sPeople[k].logged = why;
++            sLines++;
++
++            if (why == 5) {
++                NitroPort_Log("[field] someone in the wider picture %s at %d,%d (graphics %d, local %d): at %d,%d, the player at %d,%d",
++                    sWhy[why], x, z, graphicsID, localID, (int)(pos.x / MAP_OBJECT_TILE_SIZE), (int)(pos.z / MAP_OBJECT_TILE_SIZE), playerX, playerZ);
++            } else {
++                NitroPort_Log("[field] someone in the wider picture %s at %d,%d (graphics %d, local %d; movement %s), the player at %d,%d",
++                    sWhy[why], x, z, graphicsID, localID, MapObject_IsMovementPaused(mapObj) ? "paused" : "on", playerX, playerZ);
++            }
++        }
++    }
++}
+ #endif
