@@ -1,0 +1,373 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 19:00:00 -0700
+Subject: [PATCH] The mirrored copies go with their map, begun while the game
+ reads it (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Riding north on the Cycling Road the game still stuttered (a log of
+2026-11-06): game frames of 47 to 63 ms as each new row of maps came in,
+the 3DS's screen held a moment and the player seen to jump. On the PC
+(riding north from 299,676, Route 206's trainers taken away):
+
+- A map's mirrored copy (patch 0069) was kept in the slot of the quadrant
+  its map had. When the game moved its maps to the other quadrants (the
+  player across a map's middle) the copy didn't match its slot and was made
+  again, all at once, the map being in the view: 4.4 to 4.8 ms.
+- The new row's map came into the view as soon as the game had it (it's
+  read whole for the wider view while the game reads it, patch 0098), and
+  its copy was made all at once then: 3.6 to 6.5 ms.
+
+Now:
+
+- The copies are kept in 8 places, found by their map (where, its matrix,
+  its land data), side and rows, whatever quadrant the map is in: a copy
+  goes with its map, and a map's both sides are kept (the player crossing
+  its middle, on the Cycling Road from one lane to the other).
+- While the game still reads a map that's read whole for the wider view,
+  its copy is begun from that whole copy (the same land data, bound to the
+  field's own textures), a little a scene, and carried on from the game's
+  own model once it has it.
+- A copy with no rows moved over that isn't made when it's seen goes on
+  being made a little a scene, and meanwhile the whole map is drawn
+  mirrored (Port_RenderMirroredWhole, with the river's waves turned round
+  as the copy's are): the same picture, more for the 3D to throw away for
+  a few scenes. One with rows moved over is still finished at once.
+- A copy's model gets the area lighting's global colours (outdoors), as the
+  game's own maps do once it has them: a copy made the scene its map came
+  in had been made before the game set them, its mirrored side a shade off
+  from the rest till the next time it was made.
+
+On the PC riding north: no copy is made again as the maps move; 579's
+begun from its whole copy and finished in 1.6 ms the scene it's first
+seen (rows moved over; 3.6 ms before), 549's made before it's seen (6.5
+ms before). The ride's pictures are the same but for the mirrored strip by
+the left edge from 299,646 north, now the same as a warp there shows (the
+lighting). Riding across the middle at 299-306,598 (both sides' copies
+made while seen, the whole map drawn mirrored meanwhile), riding south from
+300,590, and Valley Windworks at 250,648, 246,652, 250,660 and 236,650:
+the same pictures.
+
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 15a28ffb..e11923ec 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -2027,8 +2027,7 @@ static BOOL Port_MovedRowsOf(const LandDataManager *landDataMan, u8 index, int d
+ static const u8 sPortMirrorWidths[PORT_MIRROR_WIDTHS] = { 4, 8, 12, 16, 24 }; // (tiles past the border; beyond the last: the whole map)
+ 
+ typedef struct PortMirrorCopy {
+-    const NNSG3dResFileHeader *source; // (the map's model file it was made from, where, and which side)
+-    int mapMatrixIndex;
++    int mapMatrixIndex, matrixID, landDataID; // (the map it's made from: where, of which matrix, its land data; and which side)
+     int dir;
+     int rowsFrom, rowsTo; // (the rows moved over, not mirrored: from <= row < to; none if equal)
+     u8 *block; // the model file copied, then the cut lists
+@@ -2047,6 +2046,7 @@ typedef struct PortMirrorCopy {
+     int next, total, widths, numShp;
+     BOOL rows;
+     s32 tile, half, zFrom, zTo, zKept;
++    u32 used; // (the scene it was last asked for in)
+ } PortMirrorCopy;
+ 
+ // The lists cut for a copy not seen yet, a scene (PORT_MIRROR_STEP_BYTES
+@@ -2055,9 +2055,29 @@ typedef struct PortMirrorCopy {
+ // moved over, 4 ms on the PC (a frame and more on the 3DS). The map's
+ // loaded before it's seen, and its copies are made in the scenes between,
+ // finished at once if it's seen first.
++//
++// Riding north it still stuttered (a log of 2026-11-06: 47 to 63 ms game
++// frames as each row came in, the 3DS's screen held a moment, the player
++// seen to jump): a copy was kept in the slot of the quadrant its map had,
++// and when the game moved its maps to the other quadrants (the player
++// across a map's middle) it was made again, all at once, the map being in
++// the view (the PC: 4.4 to 4.8 ms); and the new row's map came in the view
++// as soon as the game had it (it's read whole for the wider view while the
++// game reads it, Port_RenderBesideMaps), its copy made all at once then
++// (3.6 to 6.5 ms). Now a copy goes with its map to its new quadrant; it's
++// begun from the whole copy read for the wider view while the game still
++// reads the map; and a copy with no rows moved over that isn't made yet
++// when it's seen goes on being made a little a scene, the whole map drawn
++// mirrored meanwhile (Port_RenderMirroredWhole: the same picture, more for
++// the 3D to throw away). One with rows moved over is still finished at once
++// if it's seen first. Kept for up to 8 (a map's both sides: the player
++// crossing its middle, on the Cycling Road from one lane to the other, and
++// back), the one asked for longest ago let go first.
+ #define PORT_MIRROR_STEP_BYTES (48 * 1024)
++#define PORT_MIRROR_COPIES     8
+ 
+-static PortMirrorCopy sPortMirrorCopies[QUADRANT_COUNT];
++static PortMirrorCopy sPortMirrorCopies[PORT_MIRROR_COPIES];
++static u32 sPortMirrorScene; // (Port_RenderMirroredBesideScenery's scenes)
+ 
+ static void Port_FreeMirrorCopy(PortMirrorCopy *copy)
+ {
+@@ -2117,35 +2137,82 @@ static u8 *Port_CopyWithCuts(const NNSG3dResFileHeader *file, void **cuts, const
+ 
+ static void Port_FreeMirrorCopies(void)
+ {
+-    for (int i = 0; i < QUADRANT_COUNT; i++) {
++    for (int i = 0; i < PORT_MIRROR_COPIES; i++) {
+         Port_FreeMirrorCopy(&sPortMirrorCopies[i]);
+     }
+ }
+ 
++// Whether the copy (made, or begun) is the one for that map and side.
++static BOOL Port_MirrorCopyIs(const PortMirrorCopy *copy, int mapMatrixIndex, int matrixID, int landDataID, int dir, int rowsFrom, int rowsTo)
++{
++    return (copy->block != NULL || copy->cuts != NULL) && copy->mapMatrixIndex == mapMatrixIndex && copy->matrixID == matrixID
++        && copy->landDataID == landDataID && copy->dir == dir && copy->rowsFrom == rowsFrom && copy->rowsTo == rowsTo;
++}
++
+ // The map's mirrored copy (dir: the side it's mirrored to), made as far as
+ // PORT_MIRROR_STEP_BYTES go this scene (now: all of it): NULL till it's made
+-// (or if it can't be).
+-static PortMirrorCopy *Port_MirrorCopyOf(const LandDataManager *landDataMan, u8 index, int dir, BOOL now)
++// (or if it can't be). Made from the loaded map's own model (file NULL: once
++// the game has it), or from file's (model: its model), the same map's
++// model file read for the wider view while the game reads it.
++static PortMirrorCopy *Port_MirrorCopyOf(const LandDataManager *landDataMan, u8 index, int dir, BOOL now, const NNSG3dResFileHeader *file, NNSG3dResMdl *model)
+ {
+     LoadedMap *loadedMap = landDataMan->loadedMaps[index];
+-    PortMirrorCopy *copy = &sPortMirrorCopies[index];
++    PortMirrorCopy *copy = NULL;
+     int rowsFrom = 0, rowsTo = 0, kept = 0;
+     BOOL rows = Port_MovedRowsOf(landDataMan, index, dir, &rowsFrom, &rowsTo, &kept);
+-    BOOL same = copy->source == loadedMap->mapModelFile && copy->mapMatrixIndex == loadedMap->mapMatrixIndex && copy->dir == dir
+-        && copy->rowsFrom == rowsFrom && copy->rowsTo == rowsTo;
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++    int landDataID = MapMatrix_GetLandDataIDByIndex(loadedMap->mapMatrixIndex, landDataMan->mapMatrix);
+ 
+-    if (loadedMap->valid != TRUE) {
+-        return NULL;
++    if (file == NULL) {
++        if (loadedMap->valid != TRUE) {
++            return NULL;
++        }
++
++        file = loadedMap->mapModelFile;
++        model = loadedMap->mapRenderObj.resMdl;
++    }
++
++    // (its copy, made or begun: whatever quadrant the map's in, the game
++    // moving the maps it keeps to the other quadrants as the player crosses
++    // a map's middle; else a place for it: a free one, or the one asked for
++    // longest ago, not in this scene)
++    for (int k = 0; k < PORT_MIRROR_COPIES && copy == NULL; k++) {
++        if (Port_MirrorCopyIs(&sPortMirrorCopies[k], loadedMap->mapMatrixIndex, matrixID, landDataID, dir, rowsFrom, rowsTo)) {
++            copy = &sPortMirrorCopies[k];
++        }
++    }
++
++    for (int k = 0; k < PORT_MIRROR_COPIES && copy == NULL; k++) {
++        if (sPortMirrorCopies[k].block == NULL && sPortMirrorCopies[k].cuts == NULL) {
++            copy = &sPortMirrorCopies[k];
++        }
++    }
++
++    if (copy == NULL) {
++        for (int k = 0; k < PORT_MIRROR_COPIES; k++) {
++            PortMirrorCopy *c = &sPortMirrorCopies[k];
++
++            if (c->used != sPortMirrorScene && (copy == NULL || (int)(c->used - copy->used) < 0)) {
++                copy = c;
++            }
++        }
++    }
++
++    if (copy == NULL) {
++        return NULL; // (all asked for in this scene: never more than the 4 quadrants')
+     }
+ 
++    copy->used = sPortMirrorScene;
++
++    BOOL same = Port_MirrorCopyIs(copy, loadedMap->mapMatrixIndex, matrixID, landDataID, dir, rowsFrom, rowsTo);
++
+     if (copy->block != NULL && same) {
+         return copy;
+     }
+ 
+-    NNSG3dResMdl *model = loadedMap->mapRenderObj.resMdl;
+     NNSG3dResShp *shapes = NNS_G3dGetShp(model);
+ 
+-    if (copy->cuts == NULL || !same) {
++    if (copy->cuts == NULL || !same || copy->numShp != shapes->dict.numEntry) {
+         // (begun: the places for its lists)
+         Port_FreeMirrorCopy(copy);
+ 
+@@ -2173,8 +2240,10 @@ static PortMirrorCopy *Port_MirrorCopyOf(const LandDataManager *landDataMan, u8
+             return NULL;
+         }
+ 
+-        copy->source = loadedMap->mapModelFile;
++        copy->used = sPortMirrorScene;
+         copy->mapMatrixIndex = loadedMap->mapMatrixIndex;
++        copy->matrixID = matrixID;
++        copy->landDataID = landDataID;
+         copy->dir = dir;
+         copy->rowsFrom = rowsFrom;
+         copy->rowsTo = rowsTo;
+@@ -2270,7 +2339,6 @@ static PortMirrorCopy *Port_MirrorCopyOf(const LandDataManager *landDataMan, u8
+     }
+ 
+     // (all cut: the copy made)
+-    const NNSG3dResFileHeader *file = loadedMap->mapModelFile;
+     int total = copy->total;
+ 
+     copy->block = Port_CopyWithCuts(file, copy->cuts, copy->cutSize, copy->cutOfs, total);
+@@ -2315,6 +2383,17 @@ static PortMirrorCopy *Port_MirrorCopyOf(const LandDataManager *landDataMan, u8
+         copy->movedModel = NNS_G3dGetMdlByIdx(NNS_G3dGetMdlSet((NNSG3dResFileHeader *)copy->movedBlock), 0);
+     }
+ 
++    // (lit as the game's own maps are once it has them all, whenever it's
++    // made: the game sets that on a map it's read only after its collision's
++    // read too, a scene or two after the map's drawn)
++    if (AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan) == TRUE) {
++        AreaLight_UseGlobalModelAttributes(copy->model);
++
++        if (copy->rows) {
++            AreaLight_UseGlobalModelAttributes(copy->movedModel);
++        }
++    }
++
+     return copy;
+ }
+ 
+@@ -2394,12 +2473,84 @@ static void Port_MirroredWaterShape(NNSG3dRS *rs)
+     NNS_G3dRSSetFlag(rs, NNS_G3D_RSFLAG_SKIP);
+ }
+ 
++// The side a loaded map the game's still reading will be mirrored to once
++// it's read (Port_MirrorSideBesideScenery's, the map not read yet), 0 for
++// none.
++static int Port_MirrorSideWhileRead(const LandDataManager *landDataMan, u8 index)
++{
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++    int width = landDataMan->mapMatrixWidth, mapMatrixIndex = loadedMap->mapMatrixIndex, dir, i;
++
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld || mapMatrixIndex == INVALID_MAP_MATRIX_INDEX
++        || loadedMap->valid == TRUE || landDataMan->trackedTargetMapMatrixIndex == INVALID_MAP_MATRIX_INDEX
++        || (int)landDataMan->trackedTargetMapMatrixIndex % width != mapMatrixIndex % width) {
++        return 0;
++    }
++
++    u16 header = MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex);
++
++    for (i = 0; i < (int)NELEMS(sPortMirroredBesideScenery) && sPortMirroredBesideScenery[i] != header; i++) { }
++
++    if (i == (int)NELEMS(sPortMirroredBesideScenery)) {
++        return 0;
++    }
++
++    u8 quadrant = landDataMan->trackedTargetMapQuadrant;
++    dir = quadrant == QUADRANT_TOP_RIGHT || quadrant == QUADRANT_BOTTOM_RIGHT ? 1 : -1;
++
++    if (mapMatrixIndex % width + dir < 0 || mapMatrixIndex % width + dir >= width
++        || MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex + dir) != MAP_HEADER_EVERYWHERE) {
++        return 0;
++    }
++
++    return dir;
++}
++
++static BOOL Port_WholeCopyOf(const LandDataManager *landDataMan, int mapMatrixIndex, const NNSG3dResFileHeader **file, NNSG3dResMdl **model);
++
++// The loaded map drawn mirrored past the scenery whole, as its copy is
++// (Port_MirroredWaterShape too), while that copy's being made: the
++// polygons the copy leaves out are past what's seen, thrown away by the 3D.
++static void Port_RenderMirroredWhole(const u8 index, const int dir, const VecFx32 *position, const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
++{
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++    VecFx32 mirrored = *position;
++    VecFx32 scale = { -FX32_ONE, FX32_ONE, FX32_ONE };
++    MtxFx33 rotationMatrix = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++    NNSG3dResMdl *model = loadedMap->mapRenderObj.resMdl;
++
++    mirrored.x += dir * MAP_TILES_COUNT_X * MAP_OBJECT_TILE_SIZE;
++    Port_SwapModelCulling(model);
++    NNS_G3dRenderObjSetCallBack(&loadedMap->mapRenderObj, Port_MirroredWaterShape, NULL, NNS_G3D_SBC_SHP, NNS_G3D_SBC_CALLBACK_TIMING_A);
++    Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &mirrored, &rotationMatrix, &scale);
++    NNS_G3dGeFlushBuffer();
++    NNS_G3dRenderObjResetCallBack(&loadedMap->mapRenderObj);
++    Port_SwapModelCulling(model);
++
++    if (loadedMap->mapPropManager != NULL && Port_MirrorsPropsToo(landDataMan, index)) {
++        MapPropManager_RenderMirrored(&mirrored, landDataMan->areaDataMan, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, loadedMap->mapPropManager);
++    }
++}
++
+ static void Port_RenderMirroredBesideScenery(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
+ {
++    sPortMirrorScene++;
++
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         int dir = Port_MirrorSideBesideScenery(landDataMan, i);
+ 
+         if (dir == 0) {
++            // (a map the game's still reading, read whole for the wider view
++            // too: its copy begun from that, a little a scene)
++            const NNSG3dResFileHeader *file;
++            NNSG3dResMdl *model;
++
++            dir = Port_MirrorSideWhileRead(landDataMan, i);
++
++            if (dir != 0 && Port_WholeCopyOf(landDataMan, landDataMan->loadedMaps[i]->mapMatrixIndex, &file, &model)) {
++                Port_MirrorCopyOf(landDataMan, i, dir, FALSE, file, model);
++            }
++
+             continue;
+         }
+ 
+@@ -2414,14 +2565,23 @@ static void Port_RenderMirroredBesideScenery(const LandDataManager *landDataMan,
+         int seen = Port_MirrorWidthSeen(&position, loadedMap->mapRenderObj.resMdl, dir);
+ 
+         if (seen < 0) {
+-            Port_MirrorCopyOf(landDataMan, i, dir, FALSE); // (not seen yet: made a little a scene)
++            Port_MirrorCopyOf(landDataMan, i, dir, FALSE, NULL, NULL); // (not seen yet: made a little a scene)
+             continue;
+         }
+ 
+-        PortMirrorCopy *copy = Port_MirrorCopyOf(landDataMan, i, dir, TRUE);
++        // (seen: with rows moved over, made now if it isn't yet; else made
++        // on a little a scene, the whole map drawn mirrored meanwhile)
++        int rowsFrom, rowsTo, kept;
++        BOOL movedRows = Port_MovedRowsOf(landDataMan, i, dir, &rowsFrom, &rowsTo, &kept);
++        PortMirrorCopy *copy = Port_MirrorCopyOf(landDataMan, i, dir, movedRows, NULL, NULL);
+ 
+         if (copy == NULL) {
+-            Port_RenderLoadedMapMirrored(i, dir, landDataMan, modelAttrs);
++            if (movedRows) {
++                Port_RenderLoadedMapMirrored(i, dir, landDataMan, modelAttrs);
++            } else {
++                Port_RenderMirroredWhole(i, dir, &position, landDataMan, modelAttrs);
++            }
++
+             continue;
+         }
+ 
+@@ -3531,6 +3691,23 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+     return map;
+ }
+ 
++// The whole copy of the map at mapMatrixIndex read for the wider view while
++// the game reads it (Port_RenderBesideMaps), if it's kept and has the
++// field's own textures: its model file and its model (its mirrored copy
++// begun from it, Port_RenderMirroredBesideScenery).
++static BOOL Port_WholeCopyOf(const LandDataManager *landDataMan, int mapMatrixIndex, const NNSG3dResFileHeader **file, NNSG3dResMdl **model)
++{
++    PortBesideMap *map = Port_BesideMapOf(landDataMan, mapMatrixIndex, 0, TRUE);
++
++    if (map == NULL || map->block == NULL || map->area != landDataMan->areaDataMan) {
++        return FALSE;
++    }
++
++    *file = (const NNSG3dResFileHeader *)map->block;
++    *model = map->renderObj.resMdl;
++    return TRUE;
++}
++
+ static void Port_RenderBesideMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
+ {
+     sPortBesideFrame++;
