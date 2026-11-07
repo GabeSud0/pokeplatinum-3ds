@@ -1081,7 +1081,21 @@ screen's 320 x 192 at 1.25 times, as above.
   scenes between the map's loading and its being seen, 48 KB of its lists
   a scene (`PORT_MIRROR_STEP_BYTES`), the rest at once if it's seen first:
   on the PC riding south from 300,590, 7 scenes of 0.5-0.7 ms before it was
-  seen; the same pictures frame by frame.
+  seen; the same pictures frame by frame. Riding north it still stuttered
+  (game frames of 47-63 ms in a log of 2026-11-06, the player seen to
+  jump): a copy was kept by its map's quadrant and made again, at once,
+  when the game moved its maps to the other quadrants (4.4-4.8 ms on the
+  PC), and the new row's map came into the view as soon as the game had
+  it (3.6-6.5 ms). Since patch 0103 the copies are kept in 8 places by
+  their map, side and rows, whatever quadrant it's in (both sides of a
+  map: the Cycling Road's two lanes); one's begun while the game still
+  reads its map, from the whole copy read for the wider view (patch 0098);
+  and one with no rows moved over, seen before it's made, goes on being
+  made a little a scene while the whole map is drawn mirrored
+  (`Port_RenderMirroredWhole`: the same picture). The copies get the area
+  lighting's global colours as the game's maps do (one made the scene its
+  map came in had been a shade off). On the PC riding north: nothing made
+  again, at most 1.6 ms in a scene.
 - **Route 206 under the bridge, past the scenery** (patch 0070): there a
   ridge and the grass either side of it cross both of the map's borders,
   and mirrored, the ridge's half and its mounds and trees showed twice,
@@ -1106,6 +1120,14 @@ screen's 320 x 192 at 1.25 times, as above.
   scenes and in-between ones. The log says each such change for someone in
   the 3DS's picture (`[field] someone's ground not found at X,Z ...`,
   `found again`), at most 64 lines, so the next log tells whether it's that.
+  It said nothing (a log of 2026-11-06); that line is only for someone
+  whose ground was found and lost. Since patch 0104 the game's reason for
+  not drawing someone the 3DS shows past the DS's screen is logged once
+  it's held 8 frames (`FieldMap_PortLogUnseen`: no picture made yet,
+  hidden, no ground since they were made, their picture's flag off, or
+  their picture left elsewhere; `drawn again`), at most 24 lines a map. On
+  the PC walking down from Route 206's gate: two people beside the loaded
+  maps not drawn till their map's loaded; nothing for the hiker.
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they
