@@ -864,6 +864,11 @@ static void StopGpu(void)
 #define PAK_PATH      DATA_DIR "/platinum3ds.pak"
 #define MANIFEST_PATH DATA_DIR "/manifest.json"
 #define LOG_PATH      DATA_DIR "/log.txt"
+/* The session before's log, kept as the game starts again: a log asked for
+ * after a test is often sent once the game's been started again, and
+ * log.txt then holds only the new start (2026-11-06: the Cycling Road ride's
+ * and Route 207's log written over by a 46-second session). */
+#define LOG_PREV_PATH DATA_DIR "/log_prev.txt"
 #define SAVE_PATH     DATA_DIR "/platinum.sav"
 /* The options page's settings (nitro_port_options.h). */
 #define OPTIONS_PATH  DATA_DIR "/options.txt"
@@ -1391,7 +1396,7 @@ static void DrawLogScreens(void)
     consoleSelect(&sTop);
     printf("\n  Pokemon Platinum - 3DS port\n");
     printf("  The game's own code, running natively.\n\n");
-    printf("  Log: " LOG_PATH "\n");
+    printf("  Log: " LOG_PATH " (the one before: log_prev.txt)\n");
     DrawStatus();
     consoleSelect(&sBottom);
     for (i = first; i < sLineCount; i++) {
@@ -3259,6 +3264,8 @@ int main(int argc, char **argv)
 
     mkdir("sdmc:/3ds", 0777);
     mkdir(DATA_DIR, 0777);
+    remove(LOG_PREV_PATH);
+    rename(LOG_PATH, LOG_PREV_PATH);
     sLog = fopen(LOG_PATH, "w");
     StartLogThread();
 

@@ -211,7 +211,9 @@ Every button is the game's; in the field, the bottom screen is a menu you can
 tap. L + R + START + SELECT (the game's own soft reset) restarts the game
 from the opening. The port writes a log to
 `sdmc:/3ds/pokeplatinum/log.txt` (send it along when you report a
-problem); it comes up on screen by itself if something goes wrong.
+problem; the session before's is kept as `log_prev.txt`, for when the game's
+been started again since); it comes up on screen by itself if something goes
+wrong.
 
 The game's options, 60 FPS, smooth 3D, and the enhancements and cheats are
 on the bottom screen's **OPTIONS** page; the port keeps its own in
