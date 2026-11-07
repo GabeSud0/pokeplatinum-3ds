@@ -969,7 +969,21 @@ static u32 widen5(u32 v)
 /* The scene's depths spread over 0..1 (sDepthA, sDepthK). A vertex's d is
  * -z (W-buffer scenes) or -z / w (Z-buffer ones); the new z keeps that
  * form. W-buffer scenes keep d' <= w (the GPU clips z at -w): d is w /
- * 4096 there, so a scale up to 4096 keeps it. */
+ * 4096 there, so a scale up to 4096 keeps it.
+ *
+ * Z-buffer scenes start at DEPTH_NEAR (d' of the nearest vertices) rather
+ * than 0. At 0 the nearest vertices were on the GPU's near plane (z = 0),
+ * and z' = k z + lo k w came out a rounding either side of it: a polygon
+ * all at the nearest depth, its corners at the one depth (a sprite, at the
+ * bottom of the field at the DS's pixel size the nearest thing in the
+ * scene), was a hair in front of the plane, and clipped away whole. A
+ * hiker on Route 207 at the screen's bottom edge was seen only as the
+ * player stepped, the depths changing (videos and logs of 2026-11-06; the
+ * PC, whose simulation has no near plane, drew him; his corners there came
+ * to z' +0.0005, w 562). Now z' = -(DEPTH_NEAR + (d - lo) k) w: for the
+ * nearest, d - lo is 0 exactly (lo is their own d), so z' is -DEPTH_NEAR w,
+ * and the order of everything is as before. */
+#define DEPTH_NEAR (1.0f/1024.0f)
 /* (sFogCap) The farthest d of the triangles (in threes) within the DS's
  * rows, |y| <= b w: their vertices there, and where their edges cross
  * those rows' top and bottom (clip space is linear along an edge). -1 for
@@ -1031,15 +1045,25 @@ static void normalize_depth(NitroGx3dGpuVertex *v,size_t count,uint32_t swap,uin
     if(wbuffer && k>4096.0f)k=4096.0f;
     /* Not past 1 (rounding): a hair's margin at the far end. */
     k*=0.999f;
-    sDepthA=lo;sDepthK=k;
-    for(i=0;i<count;i++){
-        float w=v[i].position[3];
-        if(wbuffer){
+    if(wbuffer){
+        sDepthA=lo;sDepthK=k;
+        for(i=0;i<count;i++){
             float d=-v[i].position[2];
             v[i].position[2]=-(d-lo)*k;
+        }
+        return;
+    }
+    /* (and DEPTH_NEAR at the near end: d' = DEPTH_NEAR + (d - lo) k) */
+    k*=1.0f-DEPTH_NEAR;
+    sDepthA=lo-DEPTH_NEAR/k;sDepthK=k;
+    for(i=0;i<count;i++){
+        float w=v[i].position[3];
+        if(w>0.0f){
+            /* z = -d w  ->  -(DEPTH_NEAR + (d - lo) k) w, d as above */
+            float d=-v[i].position[2]/w;
+            v[i].position[2]=-(DEPTH_NEAR+(d-lo)*k)*w;
         }else{
-            /* z = -d w  ->  -(d - lo) k w = k z + lo k w */
-            v[i].position[2]=k*v[i].position[2]+lo*k*w;
+            v[i].position[2]=k*v[i].position[2]+sDepthA*k*w;
         }
     }
 }

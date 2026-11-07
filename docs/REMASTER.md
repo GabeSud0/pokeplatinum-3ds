@@ -1128,6 +1128,20 @@ screen's 320 x 192 at 1.25 times, as above.
   their picture left elsewhere; `drawn again`), at most 24 lines a map. On
   the PC walking down from Route 206's gate: two people beside the loaded
   maps not drawn till their map's loaded; nothing for the hiker.
+  The 3DS's next log had him not drawn only while his map wasn't loaded,
+  then drawn: the game drew him, the GPU lost him. The 3DS's 3D spreads a
+  scene's depths over the depth buffer's whole range (`normalize_depth`,
+  port_gx3d_pica.c), the nearest vertices at 0: on the GPU's near plane,
+  and the rounding of z' = k z + lo k w put them either side of it. A
+  sprite at the field's bottom edge is the nearest thing in the scene, all
+  its corners at the one depth, so it was a hair in front of the plane and
+  clipped away whole (from the PC's scene there, the hiker's corners came
+  to z' +0.0005 at w 562), and only now and then, as the depths changed
+  with a step, behind it. Z-buffer scenes now start at 1/1024
+  (`DEPTH_NEAR`), computed so the nearest are exactly there; the order of
+  everything as before (the same scene: no vertex in front of the plane,
+  the 2568 vertices in the same order). The PC's simulation of the GPU
+  has no near plane, so it drew him all along.
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they
