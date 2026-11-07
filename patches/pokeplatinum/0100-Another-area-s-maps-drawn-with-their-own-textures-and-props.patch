@@ -1,0 +1,596 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 18:00:00 -0700
+Subject: [PATCH] Another area's maps drawn with their own textures and props
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+From Route 209 by its gate, Hearthome City past the trees was white, its
+houses missing (two photos of 2026-11-06). Each map's textures and props
+are its area's (its map header's area data); the game loads the player's
+area's. A map of another one is behind a gate on the DS's screen, but the
+wider field sees past the gates: Hearthome's ground textures aren't in
+Route 209's set, and its houses' models aren't Route 209's props.
+
+A map (loaded, or beside the loaded ones) with textures not in the field's
+set is now drawn from a copy bound to its own area's (Port_OtherAreaOf):
+that area's map and prop texture sets are read, their texels put in
+texture slots 2 and 3 of the port's own (the field's VRAM is slots 0 and 1,
+256 KB, and in play has about 45 KB left; an area needs 80-90 KB), their
+palettes in the field's palette VRAM; its props' models are read as
+they're needed and bound to its prop textures (MapPropManager_PortModelIDs
+gives them from a map's props part). Two areas kept (the one used longest
+ago let go, with the copies bound to it; not one used this scene), let go
+with the loaded maps. Only while the field's textures are in slots 0 and 1
+(A and B); the scenery maps ("everywhere") and maps whose textures are all
+the field's as before. The log says each: `[field] another area's textures
+...` and `the map at matrix M ... drawn with its own area's textures and
+props`.
+
+On the PC from Route 209 (520,712, 516,706, 513,721, 505,706): Hearthome's
+brown paving, its house, lamps and hedges, as from Hearthome itself, where
+it was white. From Hearthome looking east nothing read. From Route 203's
+east end (252,763, 258,763) Oreburgh City's ground in place of white. No
+other area read at Jubilife (185,778), Veilstone (719,617, 687,632) or
+Route 207 (317,712).
+
+---
+diff --git a/include/overlay005/map_prop.h b/include/overlay005/map_prop.h
+index c38dc603..3c7ad272 100644
+--- a/include/overlay005/map_prop.h
++++ b/include/overlay005/map_prop.h
+@@ -43,6 +43,9 @@ void MapPropManager_Render(const VecFx32 *positionOffset, const AreaDataManager
+ // the render objects it's given (the bicycle slopes'), and these are let go
+ // on their own (land_data.c's maps beside the loaded ones).
+ void MapPropManager_PortLoadStill(const void *mapPropFiles, const int mapPropFilesSize, AreaDataManager *const areaDataManager, MapPropManager *mapPropManager);
++// The model of each of the props in a land data's props part (as
++// MapPropManager_PortLoadStill has them), at most max; how many.
++int MapPropManager_PortModelIDs(const void *mapPropFiles, const int mapPropFilesSize, int *modelIDs, const int max);
+ // The map's props mirrored left to right about the map's middle, the
+ // middle at mirrorCentre (the wider field's view past a forest's edge,
+ // land_data.c). Each model's culled side is swapped while it's drawn.
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 88e216ac..29725fed 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -1961,6 +1961,9 @@ static BOOL Port_SceneryMirroredOver(const LandDataManager *landDataMan, u8 inde
+ // the screen. The copy's materials have their culled side swapped for
+ // good (Port_SwapModelCulling).
+ #include <stdlib.h>
++
++#include "map_header.h"
++
+ extern u32 NitroPort_Gx3dTrimList(const void *src, u32 bytes, void *dst, u32 dstBytes, int axis, s32 lo, s32 hi);
+ extern u32 NitroPort_Gx3dTrimListRows(const void *src, u32 bytes, void *dst, u32 dstBytes, s32 xlo, s32 xhi, s32 zlo, s32 zhi, int inside);
+ 
+@@ -2875,6 +2878,7 @@ typedef struct PortBesideMap {
+     u8 *block;          // its model file, then its strip's cut lists
+     NNSG3dRenderObj renderObj;
+     MapPropManager *props;
++    AreaDataManager *area; // (its textures' and props': the field's, or another area's, below)
+ } PortBesideMap;
+ 
+ static PortBesideMap sPortBesideMaps[PORT_BESIDE_SLOTS];
+@@ -2902,6 +2906,327 @@ static void Port_FreeBesideMaps(void)
+     }
+ }
+ 
++// Another area's maps. Each map's textures and props are its area's (the
++// area data of its map header): the game loads the player's area's, and a
++// map of another one, behind a gate on the DS's screen, isn't seen from
++// here. The wider field sees past the gates: Hearthome City from Route 209
++// by its gate was white, its ground's textures not in Route 209's set, its
++// houses not drawn, their models not Route 209's (a photo of 2026-11-06).
++// A map (loaded or beside) with textures not in the field's set is drawn
++// from a copy bound to its own area's: that area's map and prop textures
++// read, put in texture slots 2 and 3 of the port's own (the field's VRAM
++// is slots 0 and 1, NitroPort_SetExtraTexSlots: 128 KB each, an area each;
++// in play the field's VRAM has about 45 KB left, an area needs 80-90),
++// their palettes in the field's palette VRAM, and the models of its props
++// read as they're needed. Two kept (the least recently used let go, with
++// the copies bound to it; not one used this scene), let go with the loaded
++// maps. Not if the field's textures are in more than slots 0 and 1. The
++// log says each: `[field] another area's textures ...`.
++#define PORT_OTHER_AREAS 2
++
++typedef struct PortOtherArea {
++    int areaID;         // (-1: none)
++    BOOL failed;        // (couldn't be read: not tried again)
++    u32 used;           // (the scene it was last used in)
++    AreaDataManager *area;
++    NNSG3dPlttKey plttKeys[2];
++} PortOtherArea;
++
++static PortOtherArea sPortOtherAreas[PORT_OTHER_AREAS] = { { -1 }, { -1 } };
++
++extern unsigned char NitroPort_ExtraTexVram[];
++extern void NitroPort_SetExtraTexSlots(int on);
++
++static void Port_FreeOtherArea(PortOtherArea *other)
++{
++    if (other->area != NULL) {
++        // (its copies first: bound to its textures)
++        for (int i = 0; i < PORT_BESIDE_SLOTS; i++) {
++            if (sPortBesideMaps[i].area == other->area) {
++                Port_FreeBesideMap(&sPortBesideMaps[i]);
++            }
++        }
++
++        for (int i = 1; i < MAX_MAP_PROP_MODEL_FILES; i++) {
++            free(other->area->mapPropModelFiles[i]); // ([0], the dummy box, is the field's)
++        }
++
++        free(other->area->mapPropModelIDs);
++        free(other->area->mapTextureFile);
++        free(other->area->mapPropTextureFile);
++        free(other->area);
++    }
++
++    for (int i = 0; i < 2; i++) {
++        if (other->plttKeys[i] != 0) {
++            NNS_GfdFreePlttVram(other->plttKeys[i]);
++        }
++    }
++
++    memset(other, 0, sizeof(*other));
++    other->areaID = -1;
++
++    BOOL any = FALSE;
++
++    for (int i = 0; i < PORT_OTHER_AREAS; i++) {
++        any |= sPortOtherAreas[i].area != NULL;
++    }
++
++    NitroPort_SetExtraTexSlots(any);
++}
++
++static void Port_FreeOtherAreas(void)
++{
++    for (int i = 0; i < PORT_OTHER_AREAS; i++) {
++        Port_FreeOtherArea(&sPortOtherAreas[i]);
++    }
++}
++
++// Whether a copy bound to the area can be drawn now (its textures shown:
++// the field's are in slots 0 and 1 only, as when it was read), the area
++// marked as used this scene.
++static BOOL Port_AreaShown(const LandDataManager *landDataMan, const AreaDataManager *area)
++{
++    if (area == landDataMan->areaDataMan) {
++        return TRUE;
++    }
++
++    for (int i = 0; i < PORT_OTHER_AREAS; i++) {
++        if (sPortOtherAreas[i].area == area) {
++            sPortOtherAreas[i].used = sPortBesideFrame;
++        }
++    }
++
++    return (GX_GetBankForTex() & ~(GX_VRAM_A | GX_VRAM_B)) == 0;
++}
++
++// Whether any of the textures the model file's model uses isn't in tex.
++static BOOL Port_TexturesMissing(const NNSG3dResFileHeader *file, const NNSG3dResTex *tex)
++{
++    NNSG3dResMdlSet *mdlSet = NNS_G3dGetMdlSet((NNSG3dResFileHeader *)file);
++
++    if (tex == NULL || mdlSet == NULL || mdlSet->dict.numEntry == 0) {
++        return FALSE;
++    }
++
++    NNSG3dResMat *mat = NNS_G3dGetMat(NNS_G3dGetMdlByIdx(mdlSet, 0));
++    NNSG3dResDict *dictTex = (NNSG3dResDict *)((u8 *)mat + mat->ofsDictTexToMatList);
++
++    for (u32 i = 0; i < dictTex->numEntry; i++) {
++        if (NNS_G3dGetTexDataByName(tex, NNS_G3dGetResNameByIdx(dictTex, i)) == NULL) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++// A texture set's texels into the port's texture slot (base: its offset in
++// NitroPort_ExtraTexVram; *at: the bytes used of the slot), its palettes into
++// the field's palette VRAM (*plttKey); bound models then draw from there.
++static BOOL Port_LoadExtraTextures(NNSG3dResTex *tex, u32 base, u32 *at, NNSG3dPlttKey *plttKey)
++{
++    u32 size = NNS_G3dTexGetRequiredSize(tex), plttSize = NNS_G3dPlttGetRequiredSize(tex);
++    u32 rounded = (size + 15) & ~15u;
++
++    *plttKey = 0;
++
++    if (NNS_G3dTex4x4GetRequiredSize(tex) != 0 || *at + rounded > 0x20000) {
++        return FALSE; // (a 4x4-compressed one's texels and indexes go in two slots: none here)
++    }
++
++    if (plttSize > 0) {
++        *plttKey = NNS_GfdAllocPlttVram(plttSize, tex->tex4x4Info.flag & NNS_G3D_RESPLTT_USEPLTT4, 0);
++
++        if (*plttKey == NNS_GFD_ALLOC_ERROR_PLTTKEY) {
++            *plttKey = 0;
++            return FALSE;
++        }
++    }
++
++    if (size > 0) {
++        memcpy(NitroPort_ExtraTexVram + base + *at, (const u8 *)tex + tex->texInfo.ofsTex, size);
++        NNS_G3dTexSetTexKey(tex, NNS_GfdMakeTexKey(0x40000 + base + *at, rounded, FALSE), 0);
++        tex->texInfo.flag |= NNS_G3D_RESTEX_LOADED;
++        *at += rounded;
++    }
++
++    if (plttSize > 0) {
++        NNS_G3dPlttSetPlttKey(tex, *plttKey);
++        DC_FlushRange(tex, tex->header.size);
++        NNS_G3dPlttLoad(tex, TRUE);
++    }
++
++    return TRUE;
++}
++
++// A NARC member read whole into memory of its own (NULL if it can't be).
++static void *Port_ReadMember(NARC *narc, int memberIndex)
++{
++    u32 size = narc != NULL ? NARC_GetMemberSize(narc, memberIndex) : 0;
++    void *data = size > 0 ? malloc(size) : NULL;
++
++    if (data != NULL) {
++        NARC_ReadWholeMember(narc, memberIndex, data);
++    }
++
++    return data;
++}
++
++// The area of the map at mapMatrixIndex when it isn't the field's (its
++// textures and its props' models as they're needed): NULL if it's the
++// field's, or can't be read.
++static AreaDataManager *Port_OtherAreaOf(const LandDataManager *landDataMan, int mapMatrixIndex)
++{
++    extern void NitroPort_Log(const char *fmt, ...);
++    enum MapHeaderID header = MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex);
++    const AreaDataManager *own = landDataMan->areaDataMan;
++    PortOtherArea *other = NULL;
++    int areaID;
++
++    if (own == NULL || header == MAP_HEADER_EVERYWHERE || header == 0 || GX_GetBankForTex() & ~(GX_VRAM_A | GX_VRAM_B)) {
++        return NULL;
++    }
++
++    areaID = MapHeader_GetAreaDataArchiveID(header);
++
++    for (int i = 0; i < PORT_OTHER_AREAS; i++) {
++        if (sPortOtherAreas[i].areaID == areaID) {
++            sPortOtherAreas[i].used = sPortBesideFrame;
++            return sPortOtherAreas[i].failed ? NULL : sPortOtherAreas[i].area;
++        }
++    }
++
++    // (a slot free, else the one used longest ago, not this scene)
++    for (int i = 0; i < PORT_OTHER_AREAS; i++) {
++        PortOtherArea *o = &sPortOtherAreas[i];
++
++        if (o->areaID < 0) {
++            other = o;
++            break;
++        }
++
++        if (o->used != sPortBesideFrame && (other == NULL || (int)(o->used - other->used) < 0)) {
++            other = o;
++        }
++    }
++
++    if (other == NULL) {
++        return NULL;
++    }
++
++    Port_FreeOtherArea(other);
++    other->areaID = areaID;
++    other->used = sPortBesideFrame;
++    other->failed = TRUE; // (till it's read)
++
++    AreaDataFile file;
++
++    NARC_ReadWholeMemberByIndexPair(&file, NARC_INDEX_FIELDDATA__AREADATA__AREA_DATA, areaID);
++
++    if (file.mapTextureArchiveID == own->areaData.mapTextureArchiveID && file.mapPropArchivesID == own->areaData.mapPropArchivesID) {
++        return NULL; // (the field's own)
++    }
++
++    AreaDataManager *area = calloc(1, sizeof(AreaDataManager));
++    NARC *narc = NARC_ctor(NARC_INDEX_FIELDDATA__AREADATA__AREA_MAP_TEX__MAP_TEX_SET, HEAP_ID_FIELD1);
++
++    if (area == NULL) {
++        if (narc != NULL) {
++            NARC_dtor(narc);
++        }
++
++        return NULL;
++    }
++
++    other->area = area;
++    area->areaData = file;
++    area->mapTextureFile = Port_ReadMember(narc, file.mapTextureArchiveID);
++
++    if (narc != NULL) {
++        NARC_dtor(narc);
++    }
++
++    narc = NARC_ctor(NARC_INDEX_FIELDDATA__AREADATA__AREA_BUILD_MODEL__AREABM_TEXSET, HEAP_ID_FIELD1);
++    area->mapPropTextureFile = Port_ReadMember(narc, file.mapPropArchivesID);
++
++    if (narc != NULL) {
++        NARC_dtor(narc);
++    }
++
++    narc = NARC_ctor(NARC_INDEX_FIELDDATA__AREADATA__AREA_BUILD_MODEL__AREA_BUILD, HEAP_ID_FIELD1);
++    area->mapPropModelIDs = Port_ReadMember(narc, file.mapPropArchivesID);
++
++    if (narc != NULL) {
++        NARC_dtor(narc);
++    }
++
++    area->mapTexture = area->mapTextureFile != NULL ? NNS_G3dGetTex((NNSG3dResFileHeader *)area->mapTextureFile) : NULL;
++    area->mapPropTexture = area->mapPropTextureFile != NULL ? NNS_G3dGetTex((NNSG3dResFileHeader *)area->mapPropTextureFile) : NULL;
++    area->mapPropMatShp = own->mapPropMatShp;   // (one file for all)
++    area->mapPropModelFiles[0] = own->mapPropModelFiles[0]; // (the dummy box)
++
++    u32 base = (u32)(other - sPortOtherAreas) * 0x20000, at = 0;
++
++    if (area->mapTexture == NULL || area->mapPropModelIDs == NULL
++        || !Port_LoadExtraTextures(area->mapTexture, base, &at, &other->plttKeys[0])
++        || (area->mapPropTexture != NULL && !Port_LoadExtraTextures(area->mapPropTexture, base, &at, &other->plttKeys[1]))) {
++        NitroPort_Log("[field] another area's textures (area %d) not read for the wider view: no room", areaID);
++        Port_FreeOtherArea(other);
++        other->areaID = areaID;
++        other->used = sPortBesideFrame;
++        other->failed = TRUE;
++        return NULL;
++    }
++
++    other->failed = FALSE;
++    NitroPort_SetExtraTexSlots(TRUE);
++    NitroPort_Log("[field] another area's textures (area %d, for map header %d) read for the wider view: %u KB in the port's texture slot %d",
++                  areaID, header, (at + 1023) / 1024, 2 + (int)(other - sPortOtherAreas));
++    return area;
++}
++
++// The models of a map's props (its land data's props part) that are the
++// other area's, read and bound to its prop textures, as they're needed.
++static void Port_LoadOtherAreaModels(AreaDataManager *area, const void *propFiles, int propsSize)
++{
++    int modelIDs[MAX_LOADED_MAP_PROPS], n = MapPropManager_PortModelIDs(propFiles, propsSize, modelIDs, MAX_LOADED_MAP_PROPS);
++    NARC *narc = NULL;
++
++    for (int i = 0; i < n; i++) {
++        int modelID = modelIDs[i];
++        BOOL listed = FALSE;
++
++        if (modelID <= 0 || modelID >= MAX_MAP_PROP_MODEL_FILES || area->mapPropModelFiles[modelID] != NULL) {
++            continue;
++        }
++
++        for (int k = 0; k < area->mapPropModelIDs[0] && !listed; k++) {
++            listed = area->mapPropModelIDs[k + 1] == modelID;
++        }
++
++        if (!listed) {
++            continue;
++        }
++
++        if (narc == NULL && (narc = NARC_ctor(NARC_INDEX_FIELDDATA__BUILD_MODEL__BUILD_MODEL, HEAP_ID_FIELD1)) == NULL) {
++            return;
++        }
++
++        NNSG3dResFileHeader *file = Port_ReadMember(narc, modelID);
++
++        if (file != NULL && area->mapPropTexture != NULL) {
++            Easy3D_BindTextureToResource(file, area->mapPropTexture);
++        }
++
++        area->mapPropModelFiles[modelID] = file;
++    }
++
++    if (narc != NULL) {
++        NARC_dtor(narc);
++    }
++}
++
+ // The map at mapMatrixIndex, read for the side dir of the loaded maps (its
+ // strip on the other side from dir), or NULL (or, kept only, NULL if it
+ // isn't read already).
+@@ -2997,6 +3322,18 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+         return NULL;
+     }
+ 
++    // (its textures and props: the field's, or, with textures the field
++    // hasn't, its own area's if those are all there)
++    AreaDataManager *area = landDataMan->areaDataMan;
++
++    if (Port_TexturesMissing(fileHeader, AreaDataManager_GetMapTexture(area))) {
++        AreaDataManager *other = Port_OtherAreaOf(landDataMan, mapMatrixIndex);
++
++        if (other != NULL && !Port_TexturesMissing(fileHeader, other->mapTexture)) {
++            area = other;
++        }
++    }
++
+     // Its strip by the loaded maps: the lists of its shapes cut to it (x in
+     // the lists' own coordinates; a list that can't be cut, whole).
+     NNSG3dResMdl *model = NNS_G3dGetMdlByIdx(mdlSet, 0);
+@@ -3071,7 +3408,7 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+     free(cutOfs);
+ 
+     // (its textures: the area's, as the loaded maps' are)
+-    NNSG3dResTex *mapTexture = AreaDataManager_GetMapTexture(landDataMan->areaDataMan);
++    NNSG3dResTex *mapTexture = AreaDataManager_GetMapTexture(area);
+ 
+     if (mapTexture != NULL && Easy3D_IsTextureUploadedToVRAM(mapTexture) == TRUE) {
+         if (!Easy3D_BindTextureToResource((NNSG3dResFileHeader *)block, mapTexture)) {
+@@ -3087,6 +3424,7 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+     }
+ 
+     map->block = block;
++    map->area = area;
+ 
+     // Its props.
+     if (!landDataMan->skipMapProps && propsSize > 0 && (propFiles = malloc(propsSize)) != NULL) {
+@@ -3094,7 +3432,12 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+ 
+         if (map->props != NULL) {
+             NARC_ReadFromMember(sPortBesideNARC, landDataID, sizeof(int) * 4 + attributesSize, propsSize, propFiles);
+-            MapPropManager_PortLoadStill(propFiles, propsSize, landDataMan->areaDataMan, map->props);
++
++            if (area != landDataMan->areaDataMan) {
++                Port_LoadOtherAreaModels(area, propFiles, propsSize);
++            }
++
++            MapPropManager_PortLoadStill(propFiles, propsSize, area, map->props);
+         }
+ 
+         free(propFiles);
+@@ -3102,6 +3445,10 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+ 
+     map->failed = FALSE;
+ 
++    if (area != landDataMan->areaDataMan) {
++        NitroPort_Log("[field] the map at matrix %d (land data %d) drawn with its own area's textures and props", mapMatrixIndex, landDataID);
++    }
++
+     if (dir == 0) {
+         NitroPort_Log("[field] a map the game is still reading (matrix %d, land data %d) read whole for the wider view: %d KB",
+                       mapMatrixIndex, landDataID, (modelSize + propsSize + 1023) / 1024);
+@@ -3263,17 +3610,87 @@ static void Port_RenderBesideMaps(const LandDataManager *landDataMan, ModelAttri
+ 
+             map->used = sPortBesideFrame;
+ 
++            if (!Port_AreaShown(landDataMan, map->area)) {
++                continue;
++            }
++
+             if (GFXBoxTest_IsModelInView(map->renderObj.resMdl, &position, &identity, &one)) {
+                 Easy3D_DrawRenderObj(&map->renderObj, &position, &identity, &one);
+             }
+ 
+             if (map->props != NULL) {
+-                MapPropManager_Render(&position, landDataMan->areaDataMan, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, map->props);
++                MapPropManager_Render(&position, map->area, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, map->props);
+             }
+         }
+     }
+ }
+ 
++// A loaded map with textures the field hasn't (another area's: Hearthome
++// City's beside Route 209's gate): drawn from a whole copy bound to its
++// own area's textures (Port_BesideMapOf, Port_OtherAreaOf), its props with
++// it. FALSE: drawn as the game has it (the field's own, or its area not had).
++static BOOL Port_RenderOtherAreaMap(const LandDataManager *landDataMan, u8 index, ModelAttributes *const modelAttrs)
++{
++    static struct {
++        const void *file;
++        int mapMatrixIndex;
++        BOOL other;
++    } sSeen[QUADRANT_COUNT];
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld || loadedMap->valid != TRUE
++        || loadedMap->mapMatrixIndex == INVALID_MAP_MATRIX_INDEX) {
++        return FALSE;
++    }
++
++    // (looked at once for each map the quadrant has)
++    if (sSeen[index].file != loadedMap->mapModelFile || sSeen[index].mapMatrixIndex != loadedMap->mapMatrixIndex) {
++        sSeen[index].file = loadedMap->mapModelFile;
++        sSeen[index].mapMatrixIndex = loadedMap->mapMatrixIndex;
++        sSeen[index].other = Port_TexturesMissing(loadedMap->mapModelFile, AreaDataManager_GetMapTexture(landDataMan->areaDataMan));
++    }
++
++    if (!sSeen[index].other) {
++        return FALSE;
++    }
++
++    VecFx32 position = { 0, 0, 0 };
++    VecFx32 one = { FX32_ONE, FX32_ONE, FX32_ONE };
++    MtxFx33 identity = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++
++    LandDataManager_CalculateRenderingPosition(loadedMap->mapMatrixIndex, landDataMan->mapMatrixWidth, landDataMan->mapMatrix, &position);
++    position.x += landDataMan->offset.x;
++    position.y += landDataMan->offset.y;
++    position.z += landDataMan->offset.z;
++
++    // (read only once it's in the view)
++    NNS_G3dGlbSetBaseRot(&identity);
++    NNS_G3dGlbSetBaseScale(&one);
++
++    if (!GFXBoxTest_IsModelInView(loadedMap->mapRenderObj.resMdl, &position, &identity, &one)
++        && Port_BesideMapOf(landDataMan, loadedMap->mapMatrixIndex, 0, TRUE) == NULL) {
++        return FALSE; // (as the game has it: nothing of it in the view, its props box-tested)
++    }
++
++    PortBesideMap *map = Port_BesideMapOf(landDataMan, loadedMap->mapMatrixIndex, 0, FALSE);
++
++    if (map == NULL || map->area == landDataMan->areaDataMan || !Port_AreaShown(landDataMan, map->area)) {
++        return FALSE;
++    }
++
++    map->used = sPortBesideFrame;
++
++    if (GFXBoxTest_IsModelInView(map->renderObj.resMdl, &position, &identity, &one)) {
++        Easy3D_DrawRenderObj(&map->renderObj, &position, &identity, &one);
++    }
++
++    if (map->props != NULL) {
++        MapPropManager_Render(&position, map->area, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, map->props);
++    }
++
++    return TRUE;
++}
++
+ // The forest south of a map in sPortForestOnSouth (Route 203): that map's
+ // strip by its south edge, read for it (as the maps beside the loaded ones
+ // are: its own copy, its own render object), whether that map is loaded or
+@@ -3641,6 +4058,10 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+                 Port_RenderSceneryPart(landDataMan, i, keepFrom);
+                 continue;
+             }
++
++            if (Port_RenderOtherAreaMap(landDataMan, i, modelAttrs)) {
++                continue;
++            }
+ #endif
+             LandDataManager_RenderLoadedMap(i, landDataMan, modelAttrs);
+         }
+@@ -3668,6 +4089,7 @@ void LandDataManager_End(LandDataManager *landDataMan)
+     Port_FreeMirrorCopies();
+     Port_FreeEdgeCopies();
+     Port_FreeBesideMaps();
++    Port_FreeOtherAreas();
+     Port_FreeForestCopies();
+ #endif
+     ClearUnusedSystemCache();
+diff --git a/src/overlay005/map_prop.c b/src/overlay005/map_prop.c
+index ab319d69..f0fe6948 100644
+--- a/src/overlay005/map_prop.c
++++ b/src/overlay005/map_prop.c
+@@ -198,6 +198,19 @@ void MapPropManager_PortLoadStill(const void *mapPropFiles, const int mapPropFil
+     }
+ }
+ 
++int MapPropManager_PortModelIDs(const void *mapPropFiles, const int mapPropFilesSize, int *modelIDs, const int max)
++{
++    const MapPropFile *files = mapPropFiles;
++    int count = mapPropFiles != NULL && mapPropFilesSize > 0 ? mapPropFilesSize / (int)sizeof(MapPropFile) : 0;
++    int i;
++
++    for (i = 0; i < MAX_LOADED_MAP_PROPS && i < count && i < max; i++) {
++        modelIDs[i] = files[i].modelID;
++    }
++
++    return i;
++}
++
+ void Port_SwapModelCulling(NNSG3dResMdl *model)
+ {
+     for (u32 i = 0; i < model->info.numMat; i++) {

@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 23:55:00 -0700
+Subject: [PATCH] Valley Windworks' river on past the scenery, without its
+ windmills (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Valley Windworks' river runs east along the map's north edge, and the
+wider field sees past the map's east border into the scenery map there,
+a flat ledge at its own height: the river stopped against it. The map is
+listed with Route 206 for being drawn again past the border, mirrored
+about it, with the player in its east half (the river and its banks go
+on east, the waves facing the way they flow), and drawn there without
+its props: the windmills by the border aren't drawn again.
+
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index abfdfa40..b516d268 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -1681,6 +1681,8 @@ static BOOL Port_MirrorsEdges(const LandDataManager *landDataMan)
+     return FALSE;
+ }
+ 
++static BOOL Port_MirrorsPropsToo(const LandDataManager *landDataMan, u8 index);
++
+ // The loaded map i drawn again a map's width to the side (dir: 1 right,
+ // -1 left), mirrored about its edge on that side.
+ static void Port_RenderLoadedMapMirrored(const u8 index, const int dir, const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
+@@ -1708,7 +1710,7 @@ static void Port_RenderLoadedMapMirrored(const u8 index, const int dir, const La
+     NNS_G3dGeFlushBuffer();
+     Port_SwapModelCulling(model);
+ 
+-    if (loadedMap->mapPropManager != NULL) {
++    if (loadedMap->mapPropManager != NULL && Port_MirrorsPropsToo(landDataMan, index)) {
+         MapPropManager_RenderMirrored(&position, landDataMan->areaDataMan, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, loadedMap->mapPropManager);
+     }
+ }
+@@ -1845,8 +1847,33 @@ static void Port_RenderSceneryMapsLowered(const LandDataManager *landDataMan)
+ // a whole map sent (most of it out of the view, skipped as such).
+ static const u16 sPortMirroredBesideScenery[] = {
+     MAP_HEADER_ROUTE_206,
++    MAP_HEADER_VALLEY_WINDWORKS_OUTSIDE,
++};
++
++// Of those, the ones drawn past the scenery without their props: their
++// ground only. Valley Windworks' river runs east along the map's north edge
++// and stopped at the scenery map's flat ledge (a photo of 2026-11-05;
++// Gabriel: "extend river and only the river, make sure the extension follows
++// water direction"): mirrored, the river and its banks go on east (its waves
++// facing the right way: Port_MirroredWaterShape), the windmills by the
++// border not drawn again.
++static const u16 sPortMirroredGroundOnly[] = {
++    MAP_HEADER_VALLEY_WINDWORKS_OUTSIDE,
+ };
+ 
++static BOOL Port_MirrorsPropsToo(const LandDataManager *landDataMan, u8 index)
++{
++    u16 header = MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, landDataMan->loadedMaps[index]->mapMatrixIndex);
++
++    for (int i = 0; i < (int)NELEMS(sPortMirroredGroundOnly); i++) {
++        if (sPortMirroredGroundOnly[i] == header) {
++            return FALSE;
++        }
++    }
++
++    return TRUE;
++}
++
+ static BOOL Port_MirrorsBesideScenery(const LandDataManager *landDataMan, u8 index)
+ {
+     LoadedMap *loadedMap = landDataMan->loadedMaps[index];
+@@ -2353,7 +2380,7 @@ static void Port_RenderMirroredBesideScenery(const LandDataManager *landDataMan,
+         // (the props by the rows too: their own place's z)
+         fx32 zFrom = (copy->rowsFrom - MAP_TILES_COUNT_Z / 2) * MAP_OBJECT_TILE_SIZE, zTo = (copy->rowsTo - MAP_TILES_COUNT_Z / 2) * MAP_OBJECT_TILE_SIZE;
+ 
+-        if (loadedMap->mapPropManager != NULL) {
++        if (loadedMap->mapPropManager != NULL && Port_MirrorsPropsToo(landDataMan, i)) {
+             MapPropManager_RenderRows(&mirrored, TRUE, zFrom, zTo, FALSE, landDataMan->areaDataMan, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, loadedMap->mapPropManager);
+         }
+ 
+@@ -2379,7 +2406,7 @@ static void Port_RenderMirroredBesideScenery(const LandDataManager *landDataMan,
+         NNS_G3dGeFlushBuffer();
+         loadedMap->mapRenderObj.resMdl = own;
+ 
+-        if (loadedMap->mapPropManager != NULL) {
++        if (loadedMap->mapPropManager != NULL && Port_MirrorsPropsToo(landDataMan, i)) {
+             MapPropManager_RenderRows(&mirrored, FALSE, zFrom, zTo, TRUE, landDataMan->areaDataMan, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, loadedMap->mapPropManager);
+         }
+     }
+-- 
+2.43.0
+

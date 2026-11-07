@@ -1,0 +1,242 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 06:00:00 -0700
+Subject: [PATCH] Rock Smash and Rock Climb asked once a map (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Asked for on 2026-11-07, as later games do it: the first rock in a map
+asks "Would you like to use Rock Smash?" and plays the HM cut-in, as
+before; after that, A at another rock in the same map smashes it at once,
+with no question, no "used Rock Smash!" message and no cut-in. Rock Climb
+the same at rocky walls. In the next map it asks again.
+
+The field move scripts are the ROM's own, run as they are, so the steps
+are left out in the script commands, only while the running script is
+FieldMoves_Rock (SCRIPT_ID(FIELD_MOVES, 1)) or FieldMoves_RockyWall (3)
+and that move was used in this map: Message leaves out the question and
+the "used" message (FieldMoves_Text_WouldYouLikeToUse* and *PokemonUsed*
+of those two moves only; "may be able to smash" and the rest are shown),
+ShowYesNoMenu answers YES, CloseMessage has no box to close, PlayHMCutIn
+is left out, and UseRockClimb climbs without its cut-in
+(FieldTask_PortStartUseRockClimbNoCutIn: MonRideTask.playCutIn FALSE,
+SubTask_RockClimb_PlayCutIn on to the climb).
+
+What's used in a map is two of the map's own flags that no script uses,
+FLAG_MAP_LOCAL_0x3E (Rock Smash) and 0x3F (Rock Climb), set as the cut-in
+plays (PlayHMCutIn in scripts 1 and 9, Rock Smash from the field or from
+the party menu) or the climb starts (UseRockClimb in 3 and 11).
+FieldSystem_ClearLocalFlags clears them as the player leaves the map
+(local flags 0 to 63; 0x40 isn't cleared, so not that one).
+
+On the PC: in the Ravaged Path, from 24,44 the rock at 23,44 asked, YES,
+the message, the cut-in, smashed; then from 23,43 the rock at 22,43
+smashed at once on A, the player free to walk on. At Route 207's rocky
+wall (344-346,725), Rock Climb taught locally: 343 to 347 asked, with the
+cut-in; back to 343 and on to 347 again at once.
+---
+diff --git a/include/overlay005/ov5_021DFB54.h b/include/overlay005/ov5_021DFB54.h
+index f0b59833..8fd7a0ea 100644
+--- a/include/overlay005/ov5_021DFB54.h
++++ b/include/overlay005/ov5_021DFB54.h
+@@ -14,6 +14,9 @@ int ov5_021DFDE0(FieldSystem *fieldSystem, PlayerAvatar *playerAvatar, enum Face
+ void FieldTask_StartUseSurf(FieldTask *task, int direction, int partySlot);
+ BOOL PlayerAvatar_CanUseSurf(PlayerAvatar *playerAvatar, u32 currTileBehavior, u32 nextTileBehavior);
+ void FieldTask_StartUseRockClimb(FieldTask *task, int direction, int partySlot);
++#ifdef SDK_PORT_3DS
++void FieldTask_PortStartUseRockClimbNoCutIn(FieldTask *task, int direction, int partySlot);
++#endif
+ BOOL PlayerAvatar_CanUseRockClimb(u32 metatileBehavior, int facingDir);
+ void ov5_021E097C(FieldSystem *fieldSystem, int param1);
+ void FieldTask_StartUseWaterfall(FieldTask *task, int direction, int partySlot);
+diff --git a/src/overlay005/ov5_021DFB54.c b/src/overlay005/ov5_021DFB54.c
+index 85afac38..e1af14b0 100644
+--- a/src/overlay005/ov5_021DFB54.c
++++ b/src/overlay005/ov5_021DFB54.c
+@@ -1022,6 +1022,21 @@ void FieldTask_StartUseRockClimb(FieldTask *task, int direction, int partySlot)
+     RockClimbTask_Start(fieldSystem, direction, &monRideTask);
+ }
+ 
++#ifdef SDK_PORT_3DS
++// Rock Climb without its cut-in: the move used in this map already
++// (ScrCmd_UseRockClimb).
++void FieldTask_PortStartUseRockClimbNoCutIn(FieldTask *task, int direction, int partySlot)
++{
++    MonRideTask monRideTask;
++    FieldSystem *fieldSystem = FieldTask_GetFieldSystem(task);
++    Pokemon *partyMon = GetPokemonByIndex(fieldSystem, partySlot);
++
++    MonRideTask_Init(fieldSystem, partyMon, &monRideTask);
++    monRideTask.playCutIn = FALSE;
++    RockClimbTask_Start(fieldSystem, direction, &monRideTask);
++}
++#endif
++
+ BOOL PlayerAvatar_CanUseRockClimb(u32 metatileBehavior, int facingDir)
+ {
+     switch (facingDir) {
+@@ -1060,6 +1075,12 @@ static BOOL FieldTask_UseRockClimb(FieldTask *task)
+ 
+ static int SubTask_RockClimb_PlayCutIn(RockClimbTaskEnv *taskEnv)
+ {
++#ifdef SDK_PORT_3DS
++    if (taskEnv->monRideTask.playCutIn == FALSE) {
++        taskEnv->state += 2; // (none: on to the climb, this frame)
++        return 2;
++    }
++#endif
+     NewMonRideCutIn(taskEnv->fieldSystem, &taskEnv->monRideTask);
+ 
+     taskEnv->state++;
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+index 60ecd89b..98097f13 100644
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -223,6 +223,9 @@
+ 
+ #include "res/text/bank/mystery_gift_phrase.h"
+ #include "res/text/bank/tough_words.h"
++#ifdef SDK_PORT_3DS
++#include "res/text/bank/field_moves.h"
++#endif
+ 
+ typedef struct {
+     SysTask *unk_00;
+@@ -1318,10 +1321,69 @@ static BOOL ScrCmd_MessageUnown(ScriptContext *ctx)
+     return TRUE;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// Rock Smash and Rock Climb asked about once a map, as in later games: once
++// one has been used in a map (asked, its cut-in played), A at the next rock
++// or rocky wall there smashes or climbs it at once, with no question, no
++// "used" message and no cut-in. Two of the map's own flags that no script
++// uses remember it; the game clears those as the player leaves the map
++// (FieldSystem_ClearLocalFlags: flags 0x01 to 0x3F), so the next map asks
++// again. The scripts (the ROM's own, as all of them) run as they are: the
++// steps left out are those commands, in those two scripts only.
++#define PORT_FLAG_ROCK_SMASH_USED_HERE FLAG_MAP_LOCAL_0x3E
++#define PORT_FLAG_ROCK_CLIMB_USED_HERE FLAG_MAP_LOCAL_0x3F
++
++enum {
++    PORT_QUICK_NONE,
++    PORT_QUICK_ROCK_SMASH,
++    PORT_QUICK_ROCK_CLIMB,
++};
++
++static u16 ScrCmd_PortScriptID(FieldSystem *fieldSystem)
++{
++    return *(u16 *)FieldSystem_GetScriptMemberPtr(fieldSystem, SCRIPT_MANAGER_SCRIPT_ID);
++}
++
++// The field move the running script (A at a rock or a rocky wall) does
++// without asking: its move used in this map already.
++static int ScrCmd_PortQuickFieldMove(ScriptContext *ctx)
++{
++    u16 scriptID = ScrCmd_PortScriptID(ctx->fieldSystem);
++
++    if (scriptID == SCRIPT_ID(FIELD_MOVES, 1) && FieldSystem_CheckFlag(ctx->fieldSystem, PORT_FLAG_ROCK_SMASH_USED_HERE)) {
++        return PORT_QUICK_ROCK_SMASH;
++    }
++
++    if (scriptID == SCRIPT_ID(FIELD_MOVES, 3) && FieldSystem_CheckFlag(ctx->fieldSystem, PORT_FLAG_ROCK_CLIMB_USED_HERE)) {
++        return PORT_QUICK_ROCK_CLIMB;
++    }
++
++    return PORT_QUICK_NONE;
++}
++
++// (the question and the "used" message, left out)
++static BOOL ScrCmd_PortQuickSkipsMessage(ScriptContext *ctx, u16 messageID)
++{
++    switch (ScrCmd_PortQuickFieldMove(ctx)) {
++    case PORT_QUICK_ROCK_SMASH:
++        return messageID == FieldMoves_Text_WouldYouLikeToUseRockSmash || messageID == FieldMoves_Text_PokemonUsedRockSmash;
++    case PORT_QUICK_ROCK_CLIMB:
++        return messageID == FieldMoves_Text_WouldYouLikeToUseRockClimb || messageID == FieldMoves_Text_PokemonUsedRockClimb;
++    default:
++        return FALSE;
++    }
++}
++#endif
++
+ static BOOL ScrCmd_Message(ScriptContext *ctx)
+ {
+     u8 messageID = ScriptContext_ReadByte(ctx);
+ 
++#ifdef SDK_PORT_3DS
++    if (ScrCmd_PortQuickSkipsMessage(ctx, messageID)) {
++        return FALSE;
++    }
++#endif
+     ScriptMessage_Show(ctx, ctx->loader, messageID, TRUE, NULL);
+     ScriptContext_Pause(ctx, ScriptContext_WaitForFinishedPrinting);
+ 
+@@ -1495,6 +1557,11 @@ static BOOL ScrCmd_CloseMessage(ScriptContext *ctx)
+     Window *window = FieldSystem_GetScriptMemberPtr(fieldSystem, SCRIPT_MANAGER_WINDOW);
+     u8 *isMsgBoxOpen = FieldSystem_GetScriptMemberPtr(fieldSystem, SCRIPT_MANAGER_IS_MSG_BOX_OPEN);
+ 
++#ifdef SDK_PORT_3DS
++    if (*isMsgBoxOpen == FALSE && ScrCmd_PortQuickFieldMove(ctx) != PORT_QUICK_NONE) {
++        return FALSE; // (its message left out: no box to close)
++    }
++#endif
+     Window_EraseMessageBox(window, FALSE);
+     Window_Remove(window);
+ 
+@@ -1772,6 +1839,11 @@ static BOOL ScrCmd_ShowYesNoMenu(ScriptContext *ctx)
+     u16 destVarID = ScriptContext_ReadHalfWord(ctx);
+ 
+ #ifdef SDK_PORT_3DS
++    if (ScrCmd_PortQuickFieldMove(ctx) != PORT_QUICK_NONE) {
++        *FieldSystem_GetVarPointer(fieldSystem, destVarID) = MENU_YES; // (not asked again in this map)
++        return FALSE;
++    }
++
+     // (the save in the lower menu's panel: its YES / NO buttons)
+     if (SavePanel_IsOpen()) {
+         SavePanel_StartYesNo();
+@@ -5104,7 +5176,23 @@ static BOOL ScrCmd_GetCurrentMapID(ScriptContext *ctx)
+ 
+ static BOOL ScrCmd_UseRockClimb(ScriptContext *ctx)
+ {
++#ifdef SDK_PORT_3DS
++    u16 scriptID = ScrCmd_PortScriptID(ctx->fieldSystem);
++    u16 partySlot = ScriptContext_GetVar(ctx);
++
++    if (ScrCmd_PortQuickFieldMove(ctx) == PORT_QUICK_ROCK_CLIMB) {
++        FieldTask_PortStartUseRockClimbNoCutIn(ctx->task, PlayerAvatar_GetFacingDir(ctx->fieldSystem->playerAvatar), partySlot);
++        return TRUE;
++    }
++
++    if (scriptID == SCRIPT_ID(FIELD_MOVES, 3) || scriptID == SCRIPT_ID(FIELD_MOVES, 11)) {
++        FieldSystem_SetFlag(ctx->fieldSystem, PORT_FLAG_ROCK_CLIMB_USED_HERE); // (asked, or from the party menu: used here)
++    }
++
++    FieldTask_StartUseRockClimb(ctx->task, PlayerAvatar_GetFacingDir(ctx->fieldSystem->playerAvatar), partySlot);
++#else
+     FieldTask_StartUseRockClimb(ctx->task, PlayerAvatar_GetFacingDir(ctx->fieldSystem->playerAvatar), ScriptContext_GetVar(ctx));
++#endif
+     return TRUE;
+ }
+ 
+@@ -5166,6 +5254,18 @@ static BOOL ScrCmd_PlayHMCutIn(ScriptContext *ctx)
+     void **dataPtr = FieldSystem_GetScriptMemberPtr(ctx->fieldSystem, SCRIPT_MANAGER_DATA_PTR);
+     u16 slot = ScriptContext_GetVar(ctx);
+ 
++#ifdef SDK_PORT_3DS
++    u16 scriptID = ScrCmd_PortScriptID(ctx->fieldSystem);
++
++    if (ScrCmd_PortQuickFieldMove(ctx) == PORT_QUICK_ROCK_SMASH) {
++        return FALSE;
++    }
++
++    if (scriptID == SCRIPT_ID(FIELD_MOVES, 1) || scriptID == SCRIPT_ID(FIELD_MOVES, 9)) {
++        FieldSystem_SetFlag(ctx->fieldSystem, PORT_FLAG_ROCK_SMASH_USED_HERE); // (asked, or from the party menu: used here)
++    }
++#endif
++
+     Pokemon *mon = Party_GetPokemonBySlotIndex(SaveData_GetParty(ctx->fieldSystem->saveData), slot);
+     *dataPtr = HMCutIn_StartTask(ctx->fieldSystem, FALSE, mon, PlayerAvatar_GetGender(ctx->fieldSystem->playerAvatar));
+ 

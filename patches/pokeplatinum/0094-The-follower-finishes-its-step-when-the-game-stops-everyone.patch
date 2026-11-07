@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 14:30:00 -0700
+Subject: [PATCH] The follower finishes its step when the game stops everyone
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A trainer who sees the player as they step into its sight starts its
+script on that step, and the script's lock pauses every map object's
+movement. The follower had set off on its own step after the player in
+the same frame: its tile was the one beside the player, but paused, its
+picture stayed on the tile it set off from, two tiles from the player,
+while the trainer came over and through the battle's start. The step is
+now finished first, as the game does for the partner who walks with the
+player (ScrCmd_LockAll): unpaused till it stands, then paused as the rest
+while the player is.
+
+---
+diff --git a/src/port_follower.c b/src/port_follower.c
+index dba2a49b..6c2addae 100644
+--- a/src/port_follower.c
++++ b/src/port_follower.c
+@@ -1236,7 +1236,7 @@ static void PortFollower_TakeBallKind(FieldSystem *fieldSystem)
+ void PortFollower_Update(FieldSystem *fieldSystem)
+ {
+     static int sWait, sPlayerX, sPlayerZ, sNoRoom, sOwnStep;
+-    static BOOL sScriptStarted;
++    static BOOL sScriptStarted, sEndsStep;
+     static MapObject *sLast;
+     MapObject *mapObj, *player;
+     int graphicsID = 0, x, z, dx, dz;
+@@ -1322,6 +1322,27 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+         }
+     }
+ 
++    // Stopped by the game (a script's lock: everyone's movement paused) as
++    // it set off on a step after the player, it stood where it set off
++    // from, a tile further back, two from the player, while the trainer who
++    // had seen them came over (Route 204, Aroma Lady Taylor, a photo of
++    // 2026-11-06: on the PC its tile was the one by the player, its picture
++    // a tile behind it). That step is finished first, as the game does for
++    // the partner who walks with the player (ScrCmd_LockAll): it goes on
++    // till it stands, then stops as the rest.
++    if (mapObj != NULL && sIn == 0 && sInWhy == NULL && sOut == POP_FRAMES && !sEndsStep
++        && MapObject_IsMoving(mapObj) && MapObject_IsMovementPaused(mapObj)) {
++        MapObject_SetPauseMovementOff(mapObj);
++        sEndsStep = TRUE;
++        NitroPort_Log("[follower] stopped by the game in a step: the step finished first");
++    } else if (sEndsStep && (mapObj == NULL || !MapObject_IsMoving(mapObj))) {
++        if (mapObj != NULL && MapObject_IsMovementPaused(player)) {
++            MapObject_SetPauseMovementOn(mapObj); // (as the rest, while they're stopped)
++        }
++
++        sEndsStep = FALSE;
++    }
++
+     if (mapObj != NULL && sIn > 0) {
+         // Going in: smaller each frame, then gone.
+         sIn--;

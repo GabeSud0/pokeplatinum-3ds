@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 23:00:00 -0700
+Subject: [PATCH] The follower in its ball till the player leaves home; people
+ brought further out (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- The player's follower Pokémon stays in its ball till the player walks
+  out of their house after the first battle with the rival (Mom's
+  running shoes: VAR_PLAYER_HOUSE_STATE 5, set as Twinleaf Town is
+  walked into from the house). The Pokémon just chosen came out on
+  Route 201 between the battles and in the cutscenes there and at home.
+
+- The people of the maps beside are brought from 20 tiles left or right
+  of the player, not 17: the field at the DS's pixel size sees about 18
+  either side at its top corners, and the ones there came in in sight.
+
+---
+diff --git a/include/map_object.h b/include/map_object.h
+index 49353aab..2ead2ccf 100644
+--- a/include/map_object.h
++++ b/include/map_object.h
+@@ -319,9 +319,12 @@ void sub_020633FC(MapObject *mapObj);
+ // ID, not saved (as on the DS, where they weren't there yet). Walking into
+ // their map, the game takes them as its own (MapObjectMan_AddMapObjectFromHeader).
+ // fieldmap.c brings them (FieldMap_PortNeighbours).
+-#define MAP_OBJ_PORT_NEAR_X 17 // (tiles from the player: brought; the 3DS's screen
++#define MAP_OBJ_PORT_NEAR_X 20 // (tiles from the player: brought; the 3DS's screen
+ #define MAP_OBJ_PORT_NEAR_N 13 // shows about 13 either side, 8 up, 7 down, more
+-#define MAP_OBJ_PORT_NEAR_S 11 // at the top: the camera looks down at the field)
++#define MAP_OBJ_PORT_NEAR_S 11 // at the top: the camera looks down at the field.
++                               // The field at the DS's pixel size sees about 18
++                               // either side at its top corners: with 17 the
++                               // people there came in in sight, 2026-11-05)
+ #define MAP_OBJ_PORT_FAR    4  // (and kept till this much further)
+ 
+ BOOL MapObject_PortIsNeighbour(const MapObject *mapObj);
+diff --git a/src/port_follower.c b/src/port_follower.c
+index 941248eb..77f6a895 100644
+--- a/src/port_follower.c
++++ b/src/port_follower.c
+@@ -7,6 +7,7 @@
+ #include "constants/overworld_weather.h"
+ #include "constants/map_object.h"
+ #include "constants/player_avatar.h"
++#include "constants/savedata/vars_flags.h"
+ #include "generated/genders.h"
+ #include "generated/items.h"
+ #include "generated/map_headers.h"
+@@ -595,6 +596,15 @@ static BOOL PortFollower_MayBeOut(FieldSystem *fieldSystem, BOOL big)
+         return FALSE;
+     }
+ 
++    // (not till the player walks out of their house after the first battle
++    // with the rival, Mom's running shoes on: VAR_PLAYER_HOUSE_STATE 5 as
++    // Twinleaf Town is walked into from it. On Route 201 the Pokémon just
++    // chosen came out between the battles and in the cutscenes there and
++    // at home, 2026-11-05)
++    if (*VarsFlags_GetVarAddress(SaveData_GetVarsFlags(fieldSystem->saveData), VAR_PLAYER_HOUSE_STATE) < 5) {
++        return FALSE;
++    }
++
+     if (PlayerAvatar_GetPlayerState(fieldSystem->playerAvatar) != PLAYER_AVATAR_WALKING
+         || SystemFlag_CheckHasPartner(SaveData_GetVarsFlags(fieldSystem->saveData))
+         || MapObjMan_GetLocalMapObjByMovementType(fieldSystem->mapObjMan, MOVEMENT_TYPE_FOLLOW_PLAYER) != NULL
+-- 
+2.43.0
+

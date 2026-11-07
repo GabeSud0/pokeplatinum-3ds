@@ -556,6 +556,15 @@ stretched:
   frame (2026-10-25): it was the frame's right part's first column, which
   in many of the 20 frames is the frame's own drawing, a red or dark band
   across the box (the battle's text box after the frame was changed).
+  On a line of text that reaches that last column it's the inside's plain
+  colour instead, from the nearest column left of the letters that has it
+  (the colour of the nearest line above or below with nothing on it in
+  the window's last 24 columns, 16 lines at most: `WidenLinePlain`):
+  Camper Jacob's "Hey, how about you and me battle before" on Route 205
+  ends in the last column, and its e was drawn on to the box's right as a
+  grey line (2026-11-06). On the PC that box now has nothing past the e.
+  In `test_render.c`: `test_wide_framed_windows` (a letter's column there,
+  and a line red all along the last 24 columns: white drawn on).
 - **Screens redrawn for the wider screen.** For a screen with a reference
   drawn for the wider screen, the game lays the screen out in parts that
   move apart (`NitroPort_WideSplitScreen`): on given lines of given BGs,
@@ -733,7 +742,24 @@ stretched:
     which the DS doesn't have (behind the player in Mt. Coronet as Cyrus
     left, it had his walk left as the DS has it: he vanished in the middle
     of the wider screen; now he walks on toward the exit and out of
-    sight);
+    sight). Since patch 0089 a way round that runs outwards, then up or
+    down with something in the way beside it every step, out past the
+    picture's top or bottom, turns a tile sooner and walks a tile in from
+    it, if that's clear: Cyrus went 11 west to the cave's west wall and
+    north along it (2026-11-05: "just move him one space to the right so
+    he walks in the middle"); on the PC he now goes north at x 5, between
+    the wall and the pool, not 4. Since patch 0091 that also goes for a
+    way round that turns before its last run outwards: Roark leaving
+    Oreburgh Mine's B2F after his Rock Smash went east to a crate, a step
+    north round it, 2 east to the mine's wall and north along it; on the
+    PC he now goes 1 east past the crate and north up the middle of the
+    passage, x 28, not 29 (asked for with a photo of the spot, 2026-11-06).
+    And a way round that ends past the top or bottom goes on until the one
+    walking is out of the camera's sight there (`ScrCmd_PortWidePastEdge`:
+    `ScrCmd_PortTallRows`' feet and shadow above the taller field's top, its
+    head below its bottom), when there's a way that far, else as far as
+    before: Roark was taken away 9 rows above the middle with his feet on
+    the screen; on the PC he now walks a row further, to 28,19, and off;
   - Route 201's Pokémon Breeder (who stands just past the DS's left
     edge, on the way Rowan and Dawn come in from Twinleaf Town) stands 5
     tiles further right (`map_header_data.c`, `sPortWideMoves`): in the
@@ -870,6 +896,70 @@ screen's 320 x 192 at 1.25 times, as above.
   mountains looked cut). Such a map is drawn again below itself, from the
   lowest map beside it up, 2 tiles apart (16 polygons each), the copies
   filling the slit as a wall would (`Port_RenderSceneryMapsLowered`).
+- **Another area's maps** (patches 0100, 0102, with the port's texture slots 2
+  and 3): each map's textures and props are its area's (its map header's
+  area data), and the game loads only the player's area's: a map of
+  another area is behind a gate on the DS's screen. The wider field sees
+  past the gates: from Route 209 by its gate Hearthome City was white, its
+  ground's textures not in Route 209's set and its houses' models not
+  Route 209's (two photos of 2026-11-06). A map, loaded or beside the
+  loaded ones, with textures the field's set hasn't is now drawn from a
+  copy bound to its own area's (`Port_OtherAreaOf`): that area's map and
+  prop texture sets read, their texels in texture slots 2 and 3 of the
+  port's own (`NitroPort_SetExtraTexSlots`: mapped only while on and only
+  where no bank is, the field's VRAM being A and B in slots 0 and 1; in
+  play it has about 45 KB left, an area needs 80-90 KB), their palettes in
+  the field's palette VRAM, its props' models read as they're needed. Two
+  areas kept, let go with the loaded maps. On the PC from Route 209 (520,712,
+  516,706, 513,721, 505,706) Hearthome's paving, house, lamps and hedges as
+  from Hearthome itself; from Route 203's east end Oreburgh City's ground
+  where it was white; nothing read at Jubilife, Veilstone or Route 207.
+  Their palettes are written straight into the palette bank as it's mapped
+  (`NitroPort_WriteTexPltt`, patch 0102): NNS_G3dPlttLoad takes the bank off
+  the 3D while it copies, and these load in play, the 3D's thread reading
+  the banks on its own.
+- **The maps beside the loaded ones** (patches 0083, 0084, 0098): the game keeps 4 maps
+  loaded, 2 by 2 round the player (theirs and the ones beside the quarter
+  of it they're in), always enough on the DS. The pixel field sees about
+  18 tiles each side at its top corners (a map is 32), so standing in the
+  middle of a map the far corner reached the map beside, not loaded: the
+  clear colour showed (Veilstone City at 687,632, a photo of 2026-11-05: a
+  black square at the right edge, gone a step east). That map (beside the
+  loaded ones, in their rows, on the side they leave out) is read too once
+  its strip by them is in the view (`Port_RenderBesideMaps`): its model with
+  its lists cut to those 3 tiles (`NitroPort_Gx3dTrimList`), and its props
+  without their animations (`MapPropManager_PortLoadStill`), each
+  box-tested as the game's. Its own NARC (the lazy loader reads the game's
+  in steps), 2 kept, let go with the loaded maps; a map the game has
+  loaded and read is the game's alone. The strip is a fifth to two fifths
+  of a map's lists (big polygons cross it), sent only while it's in the
+  view: in a map's middle 4 columns. On the PC with the 3D's clear colour
+  made magenta (local `clearmag`): Veilstone's square gone, the pixels
+  filled as the map shows them a step later; walking across Veilstone's
+  middle and back, no hole, each map read once; with and without it in
+  the same build, other towns differ only where people walked.
+  Since patch 0084, while a map of the loaded ones' own column at that
+  side is still being read: walking across a map's middle the loaded maps
+  move a column on, the one now loaded is read over several frames, and
+  till then nothing of it was drawn (the square for a moment as the player
+  ran east towards Veilstone's spot, 2026-11-05). Its strip as it was
+  beside them, still kept, is drawn till it's read; one not kept isn't
+  read for this (after a warp all four are being read). On the PC, running
+  east across Veilstone's middle from 681,632, a shot every 2 frames: 3
+  shots with 107-209 black pixels at the right edge before, none after.
+  Since patch 0098, on the bike: the player rides on several tiles while
+  the game reads the new column (the second map 10 scenes after the
+  first), and the view's top corner reached past the kept strip, or into a
+  map with no strip kept (a black square at the top left by Veilstone's
+  Pokémon Center, a photo of 2026-11-06). A loaded map still being read,
+  in the view past its strip or with none kept, is now read whole (its
+  lists not cut, with its props) and drawn till the game has it; its strip
+  is still used while the view stays in it, and for a scene if another map
+  was read in that one (not two reads more at once); not after a warp. 8
+  kept (the strips of up to 4 maps beside, 2 whole). On the PC riding west
+  at 726,617 and back: the square there before (the same place as the
+  photo), none after, 2 maps read whole each way; running and walking at
+  Veilstone's 687,632, none read whole.
 - **Route 215's cliffs down to the forest** (patch 0082): the route's maps
   are at height 0, the forest's scenery map south of them at 4. Below the
   ledges the route's cliffs come down to its south edge (z 608) and stop
@@ -890,8 +980,79 @@ screen's 320 x 192 at 1.25 times, as above.
   with and without the copies differ only in pixels that were black. (A
   first try drew the forest's map again behind and below the route's edge:
   it filled the strip with a forest where the cliff should go on, and was
-  replaced.)
-- **Route 206's river past the scenery** (patch 0069): beside the Cycling
+  replaced.) Since patch 0084 also Route 205's south end and Valley
+  Windworks beside it, their scenery maps south of them 5 and 9 tiles up
+  (a black band under the cliff at 222,663 in a photo of 2026-11-05): a
+  copy 2 tiles lower more for each 2 tiles the scenery is higher than
+  Route 215's forest (altitudes are half tiles: 3 copies and 5; Route
+  215's 2 as before). On the PC at 222,663, 221,664 and 218,664 the black
+  band gone (the black pixels left are the player's outline).
+- **Route 203's south edge** (patches 0093, 0095, 0096, 0097): south of the route's
+  east map the scenery is a tile up, and the pixel field's bottom lines saw
+  a black band past the route's edge, the ridge cut short above it (a
+  photo of 2026-11-06 at 230,762): the scenery's own forest there has no
+  ground between its rows. Patch 0093 put the route in
+  `sPortEdgeAboveScenery`: its strip drawn again lower showed the trees'
+  feet in the band, a light stripe across the forest, and the ridge running
+  on over the trees ("even more broken", 2026-11-06). Since patch 0095 the
+  strip (its last 2 tiles, its trees' tops with them, the model's: the
+  route has no props) is drawn again 2, 4 and 6 tiles further south
+  (`Port_RenderForestOnSouth`, `sPortForestOnSouth`), a row of trees each,
+  the forest's own spacing: the band filled with trees, the ridge going on
+  behind them, each copy an eighth of a tile lower (under the route's own
+  ground where its big polygons reach back). Only west of x 248: east of it
+  the strip has the end of the rocky plateau's cliff, which drawn again
+  made steps down it (the black under the plateau's corner left there is
+  seen only from inside the trees). By the route's west map the scenery's
+  forest there overlapped the route's last trees and the copies, trees in
+  each other with a light line between (a photo of 2026-11-06 at
+  228,763): since patch 0096 the copies go over both of the route's maps
+  west of the plateau (x 192-248), 4 of them (8 tiles), and the scenery
+  map south of the route isn't drawn under them
+  (`Port_SceneryForestOver`): only its columns past them, the polygons
+  reaching into those (`Port_RenderSceneryPart`, its copies under itself
+  not at all). Tried on the PC and left: the props
+  (none), the strip mirrored about the edge (the trees, seen from behind,
+  stumps), only the polygons starting in the last 2 rows (the trees' tops
+  start further north: stumps), copies a tile apart (rows too close). PC
+  shots at 228,763, 236,764, 230,762, 226,761, 216,764, 204,763, 210,762
+  and 220,763, and Jubilife's east side (188,764, 186,760, 190,766): the
+  forest goes on, no stripe, no trees in each other.
+  That went by what was loaded: from Jubilife City (the scenery map is east
+  of it) the route's map is let go as the player walks south, and the
+  forest east of the TV tower changed, trees gone and back, black past the
+  copies' 8 tiles (a test run of 2026-11-06). Since patch 0097 it goes by
+  the scenery map alone (`Port_ForestOverOf`): while it's loaded the
+  route's strip is read for it from the land data, as the maps beside the
+  loaded ones are (`Port_ForestCopyOf`: its own copy and render object, 2
+  kept), and drawn again over the scenery map's whole depth (16 copies,
+  each only while its box is in the view), whether the route's map is
+  loaded or not. PC shots at Jubilife 185,778, 182,776, 188,784, 186,772,
+  186,796, 190,798 and 188,790: forest, no black; at 186,783 and 190,783
+  the same picture with and without the route's own lowered copies (so
+  nothing changes as its map is let go); on the route at 216-252,763 the
+  same pictures as with 0096.
+- **Route 203's north edge** (patch 0093): north of the route the scenery
+  is higher too (a tile up over its west map, 4 over its east), and the
+  pixel field's top lines see past the route's last trees into the gap
+  under the scenery, which the scenery's copies under itself
+  (`Port_RenderSceneryMapsLowered`) filled with their flat ground: a green
+  edge along the screen's top, the ridge ending in it (a photo of
+  2026-11-06 at 230,745). The route's strip by its north edge (its first 3
+  tiles, its shapes' lists cut to them, and its props there: the trees) is
+  drawn again 3 and 6 tiles further north (`Port_RenderEdgeBelowScenery`,
+  for the maps in `sPortEdgeBelowScenery`): the forest and the ridge go on.
+  The strip's big polygons reach back into the route's own rows, so the
+  copies are an eighth of a tile lower each (the further one lower still)
+  and stay under the route's ground there; the scenery's copy at the
+  route's height is half a tile lower (`PORT_NORTH_SCENERY_DROP`), under
+  them past the edge. Each copy is sent only while its box is in the view
+  (on the PC at 230,745, 170 more triangles of about 1000). PC shots at
+  230,745, 226,744, 214,744, 240,744 and 250,746: only the top lines
+  differ; the thin line left at 230,745's very top is the route's own
+  shadow at the foot of its next trees, whose tops are just above the
+  screen.
+- **Route 206's river past the scenery** (patches 0069, 0101): beside the Cycling
   Road the wider field sees into the scenery map next to it, a flat ledge
   at its own height with the route's river and ledges stopping at the
   border. With the player in the half of the route's map by that border,
@@ -907,7 +1068,40 @@ screen's 320 x 192 at 1.25 times, as above.
   tile, ran the other way, its waves facing back at the border: water
   materials (named `sea_...`) have their S coordinates turned round again
   through the texture matrix (`Port_MirroredWaterShape`, a shape
-  callback).
+  callback). Since patch 0088 also Valley Windworks, whose river runs east
+  along its north edge and stopped against the scenery map's flat ledge
+  (a photo of 2026-11-05), drawn there without its props
+  (`sPortMirroredGroundOnly`: the windmills by the border not drawn
+  again): the river and its banks go on east, and so do its plateau's
+  terraces, where the ledge was flat (PC shots before and after at
+  250,648, 246,652, 250,660). The copy was made at once as its strip first
+  came into the view, every width's lists cut (and the moved rows', patch
+  0070): 3.8 ms on the PC as a new part of the Cycling Road came in, a
+  stutter on the 3DS (2026-11-06). Since patch 0101 it's made in the
+  scenes between the map's loading and its being seen, 48 KB of its lists
+  a scene (`PORT_MIRROR_STEP_BYTES`), the rest at once if it's seen first:
+  on the PC riding south from 300,590, 7 scenes of 0.5-0.7 ms before it was
+  seen; the same pictures frame by frame. Riding north it still stuttered
+  (game frames of 47-63 ms in a log of 2026-11-06, the player seen to
+  jump): a copy was kept by its map's quadrant and made again, at once,
+  when the game moved its maps to the other quadrants (4.4-4.8 ms on the
+  PC), and the new row's map came into the view as soon as the game had
+  it (3.6-6.5 ms). Since patch 0103 the copies are kept in 8 places by
+  their map, side and rows, whatever quadrant it's in (both sides of a
+  map: the Cycling Road's two lanes); one's begun while the game still
+  reads its map, from the whole copy read for the wider view (patch 0098);
+  and one with no rows moved over, seen before it's made, goes on being
+  made a little a scene while the whole map is drawn mirrored
+  (`Port_RenderMirroredWhole`: the same picture). The copies get the area
+  lighting's global colours as the game's maps do (one made the scene its
+  map came in had been a shade off). On the PC riding north: nothing made
+  again, at most 1.6 ms in a scene. Changing lanes under the bridge still
+  made the new side's copy at once (a map with rows moved over has no
+  stand-in: 4.9 ms on the PC, a 48 ms frame on the 3DS); since patch 0105
+  a map's copy for its other side is made a little a scene once its own is
+  (`Port_MirrorOtherSideAhead`, when nothing else is cut in the scene), and
+  a copy made at once in view is logged (`[field] a mirrored copy made at
+  once ...`).
 - **Route 206 under the bridge, past the scenery** (patch 0070): there a
   ridge and the grass either side of it cross both of the map's borders,
   and mirrored, the ridge's half and its mounds and trees showed twice,
@@ -923,13 +1117,88 @@ screen's 320 x 192 at 1.25 times, as above.
   at a time, on the PC, where no gap opens where the two ways meet past
   the border (a cliff ending in the open, the white behind showing); on
   the right one row of the mirror is kept under the moved ones' first.
+- **Someone hidden for want of ground** (patch 0099, a log line only): the
+  game hides someone with no ground found under them (their tile's height
+  not in the loaded maps' collision) till it's found; on the DS that's out
+  of the picture. A hiker on Route 207 below the player was seen only now
+  and then at the screen's bottom, a frame at a time (a video of
+  2026-11-06), but on the PC at the same place he's there in every frame,
+  scenes and in-between ones. The log says each such change for someone in
+  the 3DS's picture (`[field] someone's ground not found at X,Z ...`,
+  `found again`), at most 64 lines, so the next log tells whether it's that.
+  It said nothing (a log of 2026-11-06); that line is only for someone
+  whose ground was found and lost. Since patch 0104 the game's reason for
+  not drawing someone the 3DS shows past the DS's screen is logged once
+  it's held 8 frames (`FieldMap_PortLogUnseen`: no picture made yet,
+  hidden, no ground since they were made, their picture's flag off, or
+  their picture left elsewhere; `drawn again`), at most 24 lines a map. On
+  the PC walking down from Route 206's gate: two people beside the loaded
+  maps not drawn till their map's loaded; nothing for the hiker.
+  The 3DS's next log had him not drawn only while his map wasn't loaded,
+  then drawn: the game drew him, the GPU lost him. The 3DS's 3D spreads a
+  scene's depths over the depth buffer's whole range (`normalize_depth`,
+  port_gx3d_pica.c), the nearest vertices at 0: on the GPU's near plane,
+  and the rounding of z' = k z + lo k w put them either side of it. A
+  sprite at the field's bottom edge is the nearest thing in the scene, all
+  its corners at the one depth, so it was a hair in front of the plane and
+  clipped away whole (from the PC's scene there, the hiker's corners came
+  to z' +0.0005 at w 562), and only now and then, as the depths changed
+  with a step, behind it. Z-buffer scenes now start at 1/1024
+  (`DEPTH_NEAR`), computed so the nearest are exactly there; the order of
+  everything as before (the same scene: no vertex in front of the plane,
+  the 2568 vertices in the same order). The PC's simulation of the GPU
+  has no near plane, so it drew him all along.
+- **People beside the loaded maps** (patch 0106). The game finds the ground
+  under people only in the loaded maps' collision and hides those it finds
+  none for, till their map's loaded: on the 3DS (its loading slower than
+  the PC's) people at the wider screen's sides were seen to come in late,
+  one by Solaceon 10 tiles from the player. Someone in the 3DS's picture in
+  a map not loaded now gets their ground from that map's own collision,
+  read from its land data (`LandDataManager_PortBesideBDHC`, 4 kept, one
+  read a scene; `TerrainCollisionManager_PortBesideHeight`, the game's
+  height lookup for a map not loaded), the height the game finds once it's
+  loaded. Their tile's behaviour still waits for the map, and that keeps
+  them from moving, as before.
+- **Route 204, Floaroma Meadow and Valley Windworks past their edges**
+  (patch 0107, photos of 2026-11-07). Route 204's north map has forest
+  scenery maps either side at the height of its north part (`MAP_173`,
+  altitude 10), above its lower south rows: the scenery's trees stood over
+  the route's own by the border and its cliffs were cut off there. Route
+  204 is now mirrored past the scenery on the player's side, as Route 206
+  and Valley Windworks are (`sPortMirroredBesideScenery`, each with the
+  side it's mirrored to: the south map to the right only, where its rows
+  meet the mirrored north map's; on its left its ponds by the border would
+  show again). Floaroma Meadow (its own 2x2 matrix) was black past its
+  left and right edges, seen in the picture's top corners: mirrored past
+  them now, as Eterna Forest (`sPortMirroredEdgeMatrices`). Past Valley
+  Windworks' right edge a black strip ran along the mirrored map's south
+  edge: the scenery beside the mountains south of it (14) was 2 tiles
+  lower than the mirrored map's edge, which meets those mountains (18), the
+  step between them facing the camera with nothing on it. A loaded scenery
+  map south of a mirrored map is now mirrored with it, over the scenery
+  beside it (`Port_MirrorSideBelowMirrored`).
+- **The forests' lowered copies as strips** (patch 0108). The copies of a
+  scenery map drawn below itself to fill the slit by a lower map (patch
+  0068) were made for the mountains' (`MAP_175`, 16 polygons). The
+  forests' (`MAP_173` by Route 204, Floaroma, Valley Windworks and Eterna;
+  `MAP_176` by Route 215, Veilstone, Solaceon and Hearthome; 21 KB) drawn
+  whole were a quarter of the vertices a scene by Valley Windworks' south
+  side (the 3DS's geometry at 30 ms a scene there, busy 90% of the time,
+  in a log of 2026-11-07). Each copy of such a map is now drawn as its
+  strips by the sides with a lower map, 4 tiles deep, while each strip's
+  box is in the view (`Port_LoweredStripOf`, cut a side a scene), and
+  whole as before if the strips in the view are as many lists as all of
+  it. The same pictures on the PC; Floaroma's west side 17.5k vertices a
+  scene to 11.1k, Valley Windworks' south 13.0k to 10.1k.
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they
   popped in and out (the berry trees and people at Floaroma's edge). Now
   the people of the maps beside the player's are there ahead
   (`MAP_OBJ_STATUS_PORT_NEIGHBOUR`): `FieldMap_PortNeighbours` brings those
-  within 17 tiles left or right, 13 up, 11 down (one a frame, read from
+  within 20 tiles left or right (17 before patch 0085: the field at the
+  DS's pixel size sees about 18 at its top corners, and the people there
+  came in in sight), 13 up, 11 down (one a frame, read from
   their map's events, while there's room for their pictures and 12 places
   left for the game's own), and drops those 4 tiles further out; walking
   into a map, the map left's in reach stay beside, and the new map's are
@@ -942,7 +1211,14 @@ screen's 320 x 192 at 1.25 times, as above.
   Seeker's spin, a script's hiding: made again from it); not the invisible
   ones (nothing to see). Their pictures' places are given back as they go,
   and walking into a map the people beside are given up (the furthest
-  first) while the new map's pictures wouldn't fit.
+  first) while the new map's pictures wouldn't fit. Nor someone with the
+  same picture at the same place as one of the player's map's own events
+  (patch 0084): someone at the edge between two maps is in both maps'
+  events so as to show from either (Route 204's two youngsters by the
+  Ravaged Path and its sign, in the north's and the south's), and brought
+  from beside as well they showed twice, side by side as they turned
+  (photos of 2026-11-05; on the PC at 173,703 and 174,712, two pairs
+  before, one each after).
   - The textures nobody uses are freed (`ov5_021EDA38`) as the people
     beside go, and as the follower or its ball does, where the DS does it
     only as a map loads. A berry patch said which texture it uses from its
@@ -1005,7 +1281,12 @@ screen's 320 x 192 at 1.25 times, as above.
   touching, round its whole middle), so stretched 1.5625 across and 1.25
   down they keep their shape. Not the cut-ins with a trainer's picture
   (the leaders, the Elite Four, the Champion) nor the legendaries' (the
-  camera only).
+  camera only). The field's weather BG the compositor draws itself
+  (`ComposeLayers.gpuBg`: Eterna Forest's patches of light, say) is
+  drawn as the field had it, a pixel a pixel with the DS's screen in the
+  middle, not stretched with the picture: it grew half as big again as
+  each battle started (2026-11-05). (Not yet the dark of a cave's Flash
+  circle, which is the picture's own BG: it's still stretched.)
   Their end (2026-11-01): the master brightness to black and the effect's
   BG cleared in the same frame (the Galactic boss's). The drawer takes the
   registers as the frame is handed over but reads the VRAM as it is when
@@ -1045,7 +1326,31 @@ screen's 320 x 192 at 1.25 times, as above.
   back where the script put it if it doesn't walk in first or the camera
   moves (the player or a free camera set walking, `MoveCamera`). On the
   PC the rival comes in from beyond the top and runs off past it (3 tiles
-  more each way).
+  more each way). Since patch 0086 (photos and notes of 2026-11-05): a walk
+  whose last steps go up or down after other steps is made longer as well
+  (Dawn leaving Sandgem Town after the tour: a step south, 5 west, 10
+  north; Dawn leaving Jubilife after the Galactic battle; Looker's way out
+  of Jubilife), and where the way on isn't clear the walker goes round,
+  after the script's walk (that way first, else east, else west, to out of
+  the taller picture or beside the wider one: Dawn's 10 steps out of
+  Sandgem end under a row of trees, and she stopped at the top and was
+  taken away in sight; on the PC she now goes a step east and on north,
+  out of sight). A walk blocked by a wall where the DS's picture ended,
+  with a door in reach (Dawn leaving the lab beside the player), first
+  tries a step that way, across to the door's column and straight on to
+  it, down the middle of the room (the search for a way to the door as
+  before if that isn't clear). `SetPosition` forgets what was done to a
+  walker's walk, so Looker, put in the road for later after his walk, is
+  left there when the script ends. Since patch 0092 (2026-11-06) a walk
+  counts as ending past the DS's top or bottom when the middle of the one
+  walking is past that edge (`ScrCmd_PortTallPastDs`: more of them out of
+  the DS's picture than on it), not only when they're out of it wholly:
+  Rowan and Dawn leaving Jubilife after the Galactic battle walk 9 south
+  and end just past the DS's bottom (out of it wholly, with the rows'
+  margins, they weren't), so their walk wasn't made longer and they were
+  taken away at the taller screen's bottom, in sight. On the PC (the tag
+  battle skipped with a local debug build) they now walk 3 tiles more, to
+  175,752, off the screen; Dawn leaving Sandgem still ends at 184,833.
 - The weather's sprites (patch 0080, 2026-11-05): the rain's drops, the
   snow's flakes, the sand live on the DS's screen with 64 pixels round it
   (they come on there, go off one side and on at the other:
@@ -1099,6 +1404,22 @@ over their party slots, so not before. The caught one takes the picked
 one's slot, healed (as from the PC). Not in the Safari Zone, Pal Park or
 the catching tutorial. The texts are English (the game has none of its
 own for it).
+
+## Rock Smash and Rock Climb asked once a map
+
+As later games do it: the first rock in a map asks "Would you like to use
+Rock Smash?" and plays the HM cut-in, as ever; then A at another rock in
+the same map smashes it at once, with no question, no "used Rock Smash!"
+and no cut-in. Rock Climb the same at rocky walls. The next map asks again
+(patch 0109, `scrcmd.c`). The field move scripts are the ROM's, run as
+they are: while the script is the rock's (`FieldMoves_Rock`) or the rocky
+wall's (`FieldMoves_RockyWall`) and that move was used in this map, the
+question and the "used" message are left out, the YES/NO answers YES, the
+cut-in is left out, and Rock Climb climbs without its own
+(`FieldTask_PortStartUseRockClimbNoCutIn`). The map remembers it in two of
+its own flags no script uses (`FLAG_MAP_LOCAL_0x3E`, `0x3F`), set as the
+cut-in plays or the climb starts (from the field or the party menu) and
+cleared by the game as the player leaves the map.
 
 ## The lower screen as a menu
 
@@ -1534,6 +1855,15 @@ screens) the lower screen is the DS's, filling the screen as before.
     without V-blank work, so nothing was drawn at all, the screens left
     as they were while the game went on (black rooms, no text boxes, the
     battles' health bars and animations stopped; 2026-10-26).
+    Faster than 1x a frame composed after one that took long (7 ms, 14)
+    is composed 2 (3) V-blanks after it, not the next one
+    (`ComposeWaits`, main_3ds.c): the display thread is on the game's
+    core, below it, and at 4x the game makes a 3D scene for every
+    V-blank; outdoors each frame composed was 9-10 ms of building there,
+    which with the game's 4 frames a V-blank was more than a V-blank, so
+    the game waited for it and went between 4x and about 2x as the scenes
+    did (82 to 240 frames a second in a log of 2026-11-05). Indoors,
+    quick, still every V-blank; at 1x as before.
     SPEED above 1x turns 60 FPS off (when it's on), 1x on again
     unless the player has set 60 FPS since (`fps60_held` in
     `options.txt`). Every start is at 1x (since 2026-10-26): SPEED is
@@ -1598,10 +1928,42 @@ screens) the lower screen is the DS's, filling the screen as before.
     nurse for healing (the player's picture holding out the Poké Balls),
     with Cheryl and the other partners or Amity Square's
     Pokémon, in the Underground, the Union Room and maps with features of
-    their own; a 64 x 64 one indoors), behind the player or, where that
+    their own; a 64 x 64 one indoors; and, since patch 0085, till the
+    player walks out of their house after the first battle with the
+    rival, `VAR_PLAYER_HOUSE_STATE` 5: on Route 201 the Pokémon just
+    chosen came out between the battles and in the cutscenes there and at
+    home), behind the player or, where that
     tile isn't free (out of a door), on the player's tile hidden till they
     step off it (the tile behind checked as the player's step would be:
-    no water, ledge or ramp). Up or down stairs or an escalator and into
+    no water, ledge or ramp). After a battle (patch 0087: its start noted
+    by `EncounterEffect_Start`, `PortFollower_BattleStarts`) it's out at
+    once as the field comes back, at its size, without its ball, behind
+    the player, even while the field's task or the trainer's script runs;
+    where that tile isn't free, out of its ball once the player steps off
+    theirs (before, it came out of its ball a moment after the field was
+    back, or after the trainer's words: 2026-11-05). As a trainer sees the
+    player it stays out (patch 0090, 2026-11-06): the trainer's script
+    starts on the step that brought the player into its sight, and that
+    step was taken for the game moving the player, so it went into its
+    ball before every trainer's battle (33 times in a log). The player's
+    tile as a script starts, and through the rest of a step under way then
+    (16 frames at most), is where they are; a script's own walk of the
+    player still sends it in, as does someone coming to its tile (the
+    trainer walking up from behind). On the PC, Route 202's Youngster
+    Tristan (his flag cleared): stepping east into his sight it stays out
+    beside the player as he comes over (before: "in its ball (the game
+    moves the player)"). That script's lock pauses every map object's
+    movement, and the follower had set off on its own step after the
+    player in the same frame: its tile was the one beside the player, but
+    its picture stayed on the tile it set off from, two from the player,
+    while the trainer came over (Route 204's Aroma Lady Taylor, a photo of
+    2026-11-06). Since patch 0094 a step it's paused in is finished first,
+    as the game does for the partner who walks with the player
+    (`ScrCmd_LockAll`): unpaused till it stands, then paused again while
+    the player is (`[follower] stopped by the game in a step: the step
+    finished first`). On the PC, Taylor's flag cleared, walking east along
+    z 694 into her sight: it stands beside the player as she comes over
+    (before: a tile further back). Up or down stairs or an escalator and into
     a cave or a forest it goes with the player, as HeartGold's does
     (patch 0064: during a warp's way in or out, the task
     `sub_02056BDC`/`sub_02056C18` start, `FieldSystem_PortWarpKind`): out
@@ -1854,7 +2216,27 @@ tunnels around the player, the text box at the bottom across the
 screen. The lower screen's layer textures are made for 2 texels a pixel
 of the DS's 256; a picture too wide for that is published at a texel a
 pixel (`LayerSet.texScale`), which is what a pixel a pixel needs anyway
-(no room in the linear heap for textures twice as wide). `NitroPort_
+(no room in the linear heap for textures twice as wide). With the display
+made smaller for the memory (the 2D a texel a pixel, `NitroPort_
+ComposeInit`) the lower screen's textures were the DS's 256 wide: the
+Underground's 320 didn't fit, its picture was never published, and its
+lower screen stayed black. That smaller display is for the 64 MB memory
+mode (issue #188), but it's taken when less than `COMPOSE_TEXTURE_ROOM`
+of linear memory is left for the 3D's textures, and from the place name
+sign's textures on (192 KB, 2026-11-04) the New 3DS had 4069 KB left, 27
+under the 4 MB it was then: every log of its since says "the display made
+smaller for the memory". The room is 3 MB now (the 3D's texture cache
+lets older textures go when there's no memory; the New 3DS's logs before
+the sign had 4253 KB left after the title screen, 2571 at the fewest
+through a run), the lower screen's textures are at least 320 wide on the
+wider field whatever the display (`alloc_sets`' `leastW`: 512 already at
+2 texels a pixel), a picture too big for its screen's textures says so in
+the log once (`[compose] a W x H picture too big ...`), and a picture
+published a texel a pixel has its right column and bottom row repeated
+past it (`repeat_edges16/32`), as the doubled ones have: drawn bilinear,
+its edge pixels were mixed with what a taller picture left there (the
+lower screen as the tall menu, 248 rows), a line of another colour along
+the bottom. `NitroPort_
 PixelField` is now the upper screen's only (engine A on top). The
 wireless signal icon, at the DS screen's top right, is moved with engine
 A's picture (`NitroPort_EngineABeside`, patch 0065) to the 3DS screen's
@@ -2334,8 +2716,50 @@ in 300 checks as before, each check 0.025 ms (0.063 before); Cut in
 Eterna's rain all through, 63 pictures in 270 checks (76 before). Each check that found
 no change compared with the picture drawn whole (local `dcverify`): no
 difference the old check didn't have too. In `test_render.c`:
-`test_obj_vram_check` (a tile no sprite shows: not a change; one that
-shows, the 8-bit one's last half, 2D mapping, a bitmap OBJ).
+`test_obj_vram_check_tiles` (a tile no sprite shows: not a change; one
+that shows, 2D mapping); now only with the compositor's sprites (below).
+
+That round also moved the VRAM's note after the picture's drawing (so the
+sprites it had just left out would count). The game goes on writing the
+VRAM on its own core while the drawer draws: what it wrote after the
+picture read the VRAM but before the note was in the note and not in the
+picture, so it was never drawn (a battle's bars' tiles are written every
+frame as they move). The note is taken before the drawing again, as it
+always was: a write after it is a change the next time. (The
+Underground's black lower screen, reported with it, was the smaller
+display's instead: see the Underground above.) The PC runner never showed it (its check runs
+between the game's frames). In `test_render.c`:
+`test_vram_written_while_drawing` (a tile written at the drawing's last
+clock call: drawn again the next time; it fails with the note after).
+
+The bars still moved in jumps after that (a video of 2026-11-05: a wild
+Bibarel's HP bar held for 0.25 to 0.8 seconds at a time and then jumped,
+four or five steps in a 2-second drain, while the "It's not very
+effective..." printed straight after it came a few letters every 2
+V-blanks, as it should). The text is a BG, in the state taken as the frame
+is handed over; the bars are sprite tiles, in the OBJ VRAM the check
+hashes. So the tiles-only check is now used only where it was made for:
+with the sprites drawn by the compositor (`gpuObjs`: the rain's drops, the
+HM cut-in's). Everywhere else (a battle, the menus, the Underground) the
+whole OBJ VRAM is hashed again, as before the rain's round: not worked
+out when something else changed too (a picture with sprites is drawn
+again the next time, to be sure), so a screen whose registers change
+every frame, a battle's lower screen, doesn't hash it each time
+(`ShownVramSignature`'s `objTilesOnly`). It's hashed 32
+bytes at a time (`ObjVramParts`), each part's hash kept: a change only in
+parts no sprite shown has its tiles in (what the tiles alone would have
+missed) is counted in the log's `[perf] game` line ("for VRAM (N outside
+the shown sprites' tiles)"), and in a battle, when that happens 4 checks
+running (a bar's tiles written again and again, not the sprites loaded at
+its start), the first 6 times are logged with the parts that changed and
+where the sprites shown have their tiles (`[2d] engine A's OBJ VRAM
+changed only where no sprite shown has its tiles`). On the PC the bar's
+tiles are in the sprites' (no such line through a drain), so the next 3DS
+log says which it was. In `test_render.c`: `test_obj_vram_check` (with
+the sprites in the picture: any of the OBJ VRAM a change, counted when it's
+outside the sprites' tiles; a sprite moved drawn twice, as before) and
+`test_obj_vram_check_tiles` (with the compositor's sprites: a tile no
+sprite shows not a change).
 
 Cut in a heavy scene (the same log): at the top of Route 215 in the rain,
 the geometry busy 80% of the time, the upper screen's drawer took 55-60 ms
@@ -2719,6 +3143,30 @@ with the next face or the next ball, and the in-between scenes showed
 grey blocks. In `test_gx3d.c`: `test_interpolation_order_shift`,
 `test_interpolation_tile_a_scene`, `test_interpolation_swaying`. The PC runner's `midview FILE` draws the
 in-between scene at the view's size (as `viewsim`).
+
+The same polygon (2026-11-06): as the balls jump out of the briefcase,
+spinning, the camera closing in, each face of a ball was nearer another
+face's place in the scene before than its own, and was paired with it
+(or with the case's): the in-between scenes showed grey specks on the
+balls' white and the case's handle torn (a video of 2026-11-06; on the PC
+with the local `dbgstarter`, every in-between scene of the case opening
+and the balls landing, the same). The order's pair is the same polygon of
+the same model when its texture coordinates are the same at every corner
+(`same_st`); another part of its kind mostly has its own (a ball's other
+faces), while a map's repeated tiles share theirs and tell nothing. So
+the order's pair is taken when it's the same polygon and the nearest of
+its kind isn't, as far as twice the usual reach (`ORDER_SAME_FAR`); of two
+polygons paired with one of the scene before's, the one that's the same
+polygon as it keeps it when only one is (two copies of a model, by where
+they are, as before); and the camera's move (`static_rematch`) doesn't
+give such a polygon another that isn't the same too. On the PC the
+briefcase's in-between scenes came out as clean as with the order's pairs
+alone. Geometry recordings of the Cycling Road, Eterna at a run and Route
+203 (`gx3d_replay --hashes --interp --view 400 240`): every scene and
+in-between scene the same as before but the dozen as the follower's ball
+bursts open (its sparks, many of one kind), as good as before; and in
+Jubilife a man by the road, whose in-between pictures had his body dark
+and muddled, now drawn as himself. `test_interpolation_fast_model`.
 
 The camera's move (2026-11-03): riding the Cycling Road, the in-between
 frames had white lines along the rocks' ledges (video IMG_2955). The

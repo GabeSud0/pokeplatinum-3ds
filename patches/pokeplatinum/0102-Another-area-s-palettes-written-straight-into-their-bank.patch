@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 19:00:00 -0700
+Subject: [PATCH] Another area's palettes written straight into their bank
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Patch 0100 loaded another area's texture palettes with NNS_G3dPlttLoad,
+which takes the palette bank off the 3D while it copies (GX_BeginLoadTexPltt)
+and puts it back: the game does that at its map changes, but these are
+loaded in play, as a map of the other area first comes into the view, and
+the 3D's thread reads the banks on its own, so a scene could be drawn with
+no palettes for a moment. They're now written straight into the bank as
+it's mapped (NitroPort_WriteTexPltt), NNS_G3dPlttLoad only where a slot has
+no bank. On the PC from Route 209 the same pictures.
+
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 3fa8d31f..15a28ffb 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -3113,9 +3113,19 @@ static BOOL Port_LoadExtraTextures(NNSG3dResTex *tex, u32 base, u32 *at, NNSG3dP
+     }
+ 
+     if (plttSize > 0) {
++        // (straight into the palette bank as mapped: NNS_G3dPlttLoad takes
++        // the bank off the 3D while it loads, and the 3D's thread reads it
++        // on its own; the game's own loads are at its map changes)
++        extern int NitroPort_WriteTexPltt(u32 addr, const void *src, u32 size);
++
+         NNS_G3dPlttSetPlttKey(tex, *plttKey);
+-        DC_FlushRange(tex, tex->header.size);
+-        NNS_G3dPlttLoad(tex, TRUE);
++
++        if (NitroPort_WriteTexPltt(NNS_GfdGetPlttKeyAddr(*plttKey), NNS_G3dGetPlttData(tex), (u32)tex->plttInfo.sizePltt << 3)) {
++            tex->plttInfo.flag |= NNS_G3D_RESPLTT_LOADED;
++        } else {
++            DC_FlushRange(tex, tex->header.size);
++            NNS_G3dPlttLoad(tex, TRUE);
++        }
+     }
+ 
+     return TRUE;

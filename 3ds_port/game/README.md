@@ -117,7 +117,8 @@ and the 2D's pixels as they are, evenly sized (the remaster display, [docs/REMAS
 settings in `sdmc:/3ds/pokeplatinum/remaster.txt`); on an Old 3DS, the
 DS's two screens in the middle of the 3DS's. It starts straight into the
 game: the screens stay black until the game's first frame. Every button is
-the game's. The log is written to `sdmc:/3ds/pokeplatinum/log.txt`, and
+the game's. The log is written to `sdmc:/3ds/pokeplatinum/log.txt` (the
+session before's kept as `log_prev.txt`), and
 comes up on screen only when something goes wrong (no data pack, the game
 stuck, a crash: the program's status above, the log below).
 When the game stops at something the port doesn't do yet, the log says

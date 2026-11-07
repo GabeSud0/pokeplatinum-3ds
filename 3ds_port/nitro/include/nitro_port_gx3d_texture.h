@@ -32,8 +32,24 @@ typedef struct NitroGx3dTexel {
     uint8_t alpha;
 } NitroGx3dTexel;
 
-/* Read VRAMCNT A-G and point the slots at the port's DS VRAM. */
+/* Read VRAMCNT A-G and point the slots at the port's DS VRAM (and slots 2
+ * and 3, where no bank is mapped, at the port's own while they're on). */
 void NitroPort_Gx3dMapTextureBanks(NitroGx3dTexBanks *banks);
+
+/* Texture slots 2 and 3 of the port's own, NITRO_GX3D_EXTRA_TEX_SIZE bytes
+ * from slot address NITRO_GX3D_EXTRA_TEX_SLOT (the field's other areas'
+ * textures, land_data.c): written directly, mapped where no bank is while
+ * on. */
+#define NITRO_GX3D_EXTRA_TEX_SLOT 0x40000u
+#define NITRO_GX3D_EXTRA_TEX_SIZE 0x40000u
+extern unsigned char NitroPort_ExtraTexVram[];
+void NitroPort_SetExtraTexSlots(int on);
+
+/* Texture palette data written straight into the banks mapped at palette
+ * address addr (size bytes), with no remapping (GX_BeginLoadTexPltt takes
+ * the banks off the 3D while it loads; the 3D's thread reads them on its
+ * own). 0 if a slot it covers has no bank: nothing written. */
+int NitroPort_WriteTexPltt(uint32_t addr, const void *src, uint32_t size);
 
 /* TEXIMAGE_PARAM fields. */
 static inline unsigned NitroPort_Gx3dTexFormat(uint32_t param) { return (param >> 26) & 7u; }

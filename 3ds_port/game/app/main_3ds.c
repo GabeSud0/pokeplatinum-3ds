@@ -629,6 +629,32 @@ static void GpuClassicLoop(void)
         }
     }
 }
+/* Faster than 1x (the options page's SPEED), a frame composed after one
+ * that took long is composed 2 or 3 V-blanks after it, not the next one.
+ * The display thread is on the game's core, below it: at 4x the game
+ * makes a 3D scene for every V-blank, and each frame composed with a new
+ * one was 9-10 ms of building there in the field outdoors (3-4 indoors).
+ * With the game's own frames, 4 a V-blank, that was more than a V-blank,
+ * the game waited for it, and its speed went up and down between 4x and
+ * about 2x as the scenes did (82 to 240 frames a second in a log of
+ * 2026-11-05: "fast, then slow, then fast"). Composed at 30 (20) frames a
+ * second there instead, the game keeps its speed; indoors, quick, still
+ * every V-blank. At 1x as before. */
+static int SpeedHalves(void);
+static uint32_t sComposedAt;      /* (the V-blank count when the last frame was composed) */
+static int sComposeEvery = 1;     /* (V-blanks from it to the next, faster than 1x) */
+#define COMPOSE_SLOW_TICKS (SYSCLOCK_ARM11 / 1000u * 7u)   /* (7 ms: every other V-blank) */
+#define COMPOSE_SLOWER_TICKS (SYSCLOCK_ARM11 / 1000u * 14u) /* (14: every third) */
+static void NoteComposed(u64 ticks)
+{
+    sComposedAt=NitroPort_ComposeVBlanks();
+    sComposeEvery=ticks>COMPOSE_SLOWER_TICKS?3:ticks>COMPOSE_SLOW_TICKS?2:1;
+}
+static bool ComposeWaits(void)
+{
+    return SpeedHalves()>2 && !__atomic_load_n(&sComposeForce,__ATOMIC_ACQUIRE) &&
+           (int32_t)(NitroPort_ComposeVBlanks()-sComposedAt)<sComposeEvery;
+}
 /* The remaster: the newest scene is kept (drawn again whenever the
  * screen is composed again) until a newer one is out; a frame is composed
  * when something changed and the framebuffer is free. */
@@ -654,6 +680,7 @@ static void GpuComposeLoop(void)
         aOnTop=sAOnTop;
         bit=aOnTop?COMPOSE_DRAWN_UPPER:COMPOSE_DRAWN_LOWER;
         noBuf=aOnTop?COMPOSE_NO_BUFFER_UPPER:COMPOSE_NO_BUFFER_LOWER;
+        if(ComposeWaits())continue;   /* (faster than 1x, after a long one: ComposeWaits) */
         if(scene==NULL || NitroPort_Gx3dNewerScene(seen)){
             const NitroGx3dScene *next;
             if(scene && !sceneDone){
@@ -668,6 +695,7 @@ static void GpuComposeLoop(void)
                     u64 start=svcGetSystemTick();
                     r=NitroPort_ComposeFrame(scene,seen,aOnTop,osGet3DSliderState(),false,1,0);
                     sGpuTicks+=svcGetSystemTick()-start;
+                    if(r&(COMPOSE_DRAWN_UPPER|COMPOSE_DRAWN_LOWER))NoteComposed(svcGetSystemTick()-start);
                 }
                 __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
                 if(!(r&bit) && (r&noBuf) && NitroPort_Gx3dNewerScenes(seen)<2u){
@@ -745,6 +773,7 @@ static void GpuComposeLoop(void)
                 }
                 r=NitroPort_ComposeFrame(scene,seen,aOnTop,osGet3DSliderState(),force,0,0);
                 sceneDone=scene==NULL || (r&bit) || (!(r&noBuf) && !NitroPort_ComposeSceneWaiting(seen));
+                if(r&(COMPOSE_DRAWN_UPPER|COMPOSE_DRAWN_LOWER))NoteComposed(svcGetSystemTick()-start);
             }
             __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
             sGpuTicks+=svcGetSystemTick()-start;
@@ -835,6 +864,11 @@ static void StopGpu(void)
 #define PAK_PATH      DATA_DIR "/platinum3ds.pak"
 #define MANIFEST_PATH DATA_DIR "/manifest.json"
 #define LOG_PATH      DATA_DIR "/log.txt"
+/* The session before's log, kept as the game starts again: a log asked for
+ * after a test is often sent once the game's been started again, and
+ * log.txt then holds only the new start (2026-11-06: the Cycling Road ride's
+ * and Route 207's log written over by a 46-second session). */
+#define LOG_PREV_PATH DATA_DIR "/log_prev.txt"
 #define SAVE_PATH     DATA_DIR "/platinum.sav"
 /* The options page's settings (nitro_port_options.h). */
 #define OPTIONS_PATH  DATA_DIR "/options.txt"
@@ -1362,7 +1396,7 @@ static void DrawLogScreens(void)
     consoleSelect(&sTop);
     printf("\n  Pokemon Platinum - 3DS port\n");
     printf("  The game's own code, running natively.\n\n");
-    printf("  Log: " LOG_PATH "\n");
+    printf("  Log: " LOG_PATH " (the one before: log_prev.txt)\n");
     DrawStatus();
     consoleSelect(&sBottom);
     for (i = first; i < sLineCount; i++) {
@@ -2595,8 +2629,8 @@ static void PerfFrame(u64 enter)
     drawing[0] = 0;
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
-        unsigned count = d->count, registers = 0, vram = 0, spritesOnly = 0, r, v;
-        char why[192] = "";
+        unsigned count = d->count, registers = 0, vram = 0, spritesOnly = 0, unseen = 0, r, v;
+        char why[256] = "";
 
         /* (the remaster: why its pictures were drawn again) */
         if (sRemaster && (d->screens & ENGINE_A)) {
@@ -2604,16 +2638,22 @@ static void PerfFrame(u64 enter)
             registers += r;
             vram += v;
             spritesOnly += NitroPort_Render2DSpritesOnly(0);
+            unseen += NitroPort_Render2DObjTilesUnseen(0);
         }
         if (sRemaster && (d->screens & ENGINE_B)) {
             NitroPort_Render2DChangeStats(1, &r, &v);
             registers += r;
             vram += v;
+            unseen += NitroPort_Render2DObjTilesUnseen(1);
         }
         if (registers + vram) {
-            /* (and of those, the sprites alone made again: the picture kept) */
-            snprintf(why, sizeof(why), ": %.1f for registers, palettes or sprites, %.1f for VRAM; %.1f the sprites only",
-                     registers / seconds, vram / seconds, spritesOnly / seconds);
+            /* (and of those, the sprites alone made again: the picture kept;
+             * and the OBJ VRAM changed only outside the tiles of the sprites
+             * shown, which the check used to leave out) */
+            snprintf(why, sizeof(why),
+                     ": %.1f for registers, palettes or sprites, %.1f for VRAM (%.1f outside the shown sprites' "
+                     "tiles); %.1f the sprites only",
+                     registers / seconds, vram / seconds, unseen / seconds, spritesOnly / seconds);
         }
         /* (the remaster's engine A: of its time a frame, finding out if the
          * picture changed, drawing it, and of that the HM cut-in's sprites) */
@@ -3224,6 +3264,8 @@ int main(int argc, char **argv)
 
     mkdir("sdmc:/3ds", 0777);
     mkdir(DATA_DIR, 0777);
+    remove(LOG_PREV_PATH);
+    rename(LOG_PATH, LOG_PREV_PATH);
     sLog = fopen(LOG_PATH, "w");
     StartLogThread();
 

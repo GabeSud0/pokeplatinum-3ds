@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 17:00:00 -0700
+Subject: [PATCH] A log line when the game hides someone for want of ground
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+On Route 207 a hiker below the player was seen only now and then at the
+screen's bottom, a frame at a time (a video of 2026-11-06); on the PC at
+the same place (317,712) he's there in every frame, scenes and in-between
+ones alike. The game hides someone with no ground found under them
+(MAP_OBJ_STATUS_12: their tile's height not in the loaded maps' collision)
+and draws them again once it's found; on the DS that's out of the picture.
+The log now says each such change for someone in the 3DS's picture:
+`[field] someone's ground not found at X,Z ...: hidden by the game`, and
+`found again`. At most 64 lines. No change to what's drawn.
+
+---
+diff --git a/src/map_object_move.c b/src/map_object_move.c
+index 8ad4ed34..cdd02394 100644
+--- a/src/map_object_move.c
++++ b/src/map_object_move.c
+@@ -911,6 +911,52 @@ void MapObject_MovePosInDir(MapObject *mapObj, int dir, fx32 distance)
+     MapObject_SetPos(mapObj, &pos);
+ }
+ 
++#ifdef SDK_PORT_3DS
++#include "player_avatar.h"
++
++// (the 3DS port) The game hides someone with no ground found under them
++// (MAP_OBJ_STATUS_12: their tile's height not in the loaded maps'
++// collision), drawn again once it's found. On the DS that's out of the
++// picture; the wider field sees further. The log says each such change for
++// someone in the 3DS's picture (a hiker on Route 207 seen only now and then
++// at the screen's bottom, 2026-11-06, not seen on the PC): `[field]
++// someone's ground ...`. At most 64 lines.
++static void Port_LogGround(MapObject *mapObj, BOOL found)
++{
++    extern void NitroPort_Log(const char *fmt, ...);
++    static MapObject *sLost[16];
++    static int sLines;
++    FieldSystem *fieldSystem = MapObject_FieldSystem(mapObj);
++    BOOL was = MapObject_CheckStatusFlag(mapObj, MAP_OBJ_STATUS_12) != 0;
++    int i, x = MapObject_GetX(mapObj), z = MapObject_GetZ(mapObj);
++
++    if (found == !was || fieldSystem == NULL || fieldSystem->playerAvatar == NULL || sLines >= 64
++        || !MapObject_PortInReach(x, z, PlayerAvatar_GetXPos(fieldSystem->playerAvatar), PlayerAvatar_GetZPos(fieldSystem->playerAvatar), 0)) {
++        return;
++    }
++
++    for (i = 0; i < (int)NELEMS(sLost) && sLost[i] != mapObj; i++) { }
++
++    if (!found) {
++        if (i == (int)NELEMS(sLost)) {
++            for (i = 0; i < (int)NELEMS(sLost) && sLost[i] != NULL; i++) { }
++
++            if (i < (int)NELEMS(sLost)) {
++                sLost[i] = mapObj;
++            }
++        }
++    } else if (i == (int)NELEMS(sLost)) {
++        return; // (found as they're made: not lost before)
++    } else {
++        sLost[i] = NULL;
++    }
++
++    sLines++;
++    NitroPort_Log("[field] someone's ground %s at %d,%d (graphics %d, local %d): %s", found ? "found again" : "not found", x, z,
++        MapObject_GetGraphicsID(mapObj), MapObject_GetLocalID(mapObj), found ? "drawn" : "hidden by the game");
++}
++#endif
++
+ int MapObject_RecalculateObjectHeight(MapObject *mapObj)
+ {
+     VecFx32 pos, updatedPos;
+@@ -927,6 +973,10 @@ int MapObject_RecalculateObjectHeight(MapObject *mapObj)
+     FieldSystem *fieldSystem = MapObject_FieldSystem(mapObj);
+     int heightUpdated = MapObject_RecalculatePositionHeightEx(fieldSystem, &updatedPos, dynamicHeightCalculationEnabled);
+ 
++#ifdef SDK_PORT_3DS
++    Port_LogGround(mapObj, heightUpdated == TRUE);
++#endif
++
+     if (heightUpdated == TRUE) {
+         pos.y = updatedPos.y;
+         MapObject_SetPos(mapObj, &pos);

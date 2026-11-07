@@ -1,0 +1,265 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 14:00:00 -0700
+Subject: [PATCH] Route 203's edges by its scenery drawn on (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The scenery maps north and south of Route 203 are higher than the route,
+and the pixel field's top and bottom lines see past its edges. At its
+south edge the ridge was cut short above a black band, under the trees:
+the route is now in the list of maps whose south strip is drawn again
+lower (as Route 215's). At its north edge the scenery's copies under
+itself showed their flat ground between the trees' tops, and the ridge
+ended in it: the route's strip by its north edge (3 tiles, their trees
+too) is drawn again 3 and 6 tiles further north, a little lower than the
+route (its big polygons that reach back into the route stay under it),
+and the scenery's copy at the route's height lower still.
+
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index b516d268..8a4ce147 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -1749,6 +1749,12 @@ static void Port_RenderMirroredEdges(const LandDataManager *landDataMan, ModelAt
+ #endif
+ 
+ #ifdef SDK_PORT_3DS
++#define PORT_NORTH_STRIP_TILES 3                          // (a map's strip by its north edge, drawn this far north again)
++#define PORT_NORTH_STRIP_COPIES 2                         // (and how many times: 3 tiles north, then 6)
++#define PORT_NORTH_SCENERY_DROP (MAP_OBJECT_TILE_SIZE / 2) // (the scenery's copy at that map's height, this much lower: under the strips)
++
++static BOOL Port_HasNorthStrip(const LandDataManager *landDataMan, int mapMatrixIndex);
++
+ // The overworld's scenery maps (the map header "everywhere": mountains
+ // beside a route) sit at their own height in the map matrix, and where one
+ // is higher than the map beside it nothing joins their edges: a slit down
+@@ -1766,6 +1772,7 @@ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *
+     u16 matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
+     int matrixWidth = MapMatrix_GetWidth(landDataMan->mapMatrix);
+     int altitude = MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, mapMatrixIndex % width, mapMatrixIndex / width, matrixWidth);
++    int stripsBelow = -1; // (the height of the map south of it whose strips are drawn on north into it: Port_RenderEdgeBelowScenery)
+ 
+     if (MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex) != MAP_HEADER_EVERYWHERE) {
+         return;
+@@ -1790,6 +1797,10 @@ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *
+         if (otherAltitude < altitude && otherAltitude < lowest) {
+             lowest = otherAltitude;
+         }
++
++        if (dx == 0 && dz == 1 && otherAltitude < altitude && Port_HasNorthStrip(landDataMan, other)) {
++            stripsBelow = otherAltitude;
++        }
+     }
+ 
+     if (lowest == 0x7fffffff) {
+@@ -1809,7 +1820,7 @@ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *
+     // slit is between this map and those; each copy shows below the one
+     // above it, as a wall would)
+     for (int a = lowest; a < altitude; a += 4) {
+-        position.y = a * (MAP_OBJECT_TILE_SIZE / 2) + landDataMan->offset.y;
++        position.y = a * (MAP_OBJECT_TILE_SIZE / 2) + landDataMan->offset.y - (a == stripsBelow ? PORT_NORTH_SCENERY_DROP : 0);
+ 
+         if (GFXBoxTest_IsModelInView(loadedMap->mapRenderObj.resMdl, &position, &rotationMatrix, &scale)) {
+             Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &position, &rotationMatrix, &scale);
+@@ -2431,8 +2442,39 @@ static const u16 sPortEdgeAboveScenery[] = {
+     MAP_HEADER_ROUTE_215,
+     MAP_HEADER_ROUTE_205_SOUTH, // (its south end's cliff by Valley Windworks, the forest 5 tiles up: a photo of 2026-11-05)
+     MAP_HEADER_VALLEY_WINDWORKS_OUTSIDE, // (and the windworks' beside it, its scenery 9 tiles up)
++    MAP_HEADER_ROUTE_203, // (its ridge cut short above a black band along its south edge, z 768, the forest a tile up: a photo of 2026-11-06 at 230,762)
++};
++
++// North of Route 203 the scenery maps are higher too (the forest a tile and
++// 4 tiles up), and the pixel field's top lines see past the route's north
++// edge, between its last trees' tops and the scenery's: there the copies of
++// the scenery under itself (Port_RenderSceneryMapsLowered) showed their
++// flat ground, a green edge along the screen's top, and the ridge ended in
++// it (a photo of 2026-11-06 at 230,745). The route's strip by that edge
++// (its first 3 tiles, their trees too) is drawn again 3 tiles further
++// north, and again 6: its forest and its ridge go on. A strip's big
++// polygons reach on into the route's own rows: there the copies, an eighth
++// of a tile lower each (the further one lower still), stay under the
++// route's own ground; and the scenery's copy at the route's height goes
++// lower than both (PORT_NORTH_SCENERY_DROP), so they're over it past the
++// edge. Each drawn only while its box is in the view.
++static const u16 sPortEdgeBelowScenery[] = {
++    MAP_HEADER_ROUTE_203,
+ };
+ 
++static BOOL Port_HasNorthStrip(const LandDataManager *landDataMan, int mapMatrixIndex)
++{
++    u16 header = MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex);
++
++    for (int k = 0; k < (int)NELEMS(sPortEdgeBelowScenery); k++) {
++        if (sPortEdgeBelowScenery[k] == header) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
+ typedef struct PortEdgeCopy {
+     const NNSG3dResFileHeader *source; // (the map's model file it was made from, and where)
+     int mapMatrixIndex;
+@@ -2443,6 +2485,7 @@ typedef struct PortEdgeCopy {
+ } PortEdgeCopy;
+ 
+ static PortEdgeCopy sPortEdgeCopies[QUADRANT_COUNT];
++static PortEdgeCopy sPortNorthEdgeCopies[QUADRANT_COUNT]; // (the strips by the north edge)
+ 
+ static void Port_FreeEdgeCopy(PortEdgeCopy *copy)
+ {
+@@ -2456,13 +2499,16 @@ static void Port_FreeEdgeCopies(void)
+ {
+     for (int i = 0; i < QUADRANT_COUNT; i++) {
+         Port_FreeEdgeCopy(&sPortEdgeCopies[i]);
++        Port_FreeEdgeCopy(&sPortNorthEdgeCopies[i]);
+     }
+ }
+ 
+-static PortEdgeCopy *Port_EdgeCopyOf(const LandDataManager *landDataMan, u8 index)
++// The loaded map's strip by its south edge (its last 2 tiles), or by its
++// north edge (north: its first PORT_NORTH_STRIP_TILES), made once.
++static PortEdgeCopy *Port_EdgeCopyOf(const LandDataManager *landDataMan, u8 index, BOOL north)
+ {
+     LoadedMap *loadedMap = landDataMan->loadedMaps[index];
+-    PortEdgeCopy *copy = &sPortEdgeCopies[index];
++    PortEdgeCopy *copy = north ? &sPortNorthEdgeCopies[index] : &sPortEdgeCopies[index];
+ 
+     if (copy->block != NULL && copy->source == loadedMap->mapModelFile && copy->mapMatrixIndex == loadedMap->mapMatrixIndex) {
+         return copy;
+@@ -2488,7 +2534,8 @@ static PortEdgeCopy *Port_EdgeCopyOf(const LandDataManager *landDataMan, u8 inde
+     }
+ 
+     // (the strip's z in the lists' own coordinates: the map's last 2 tiles
+-    // by its south edge, half its depth from its middle)
++    // by its south edge, or its first ones by its north edge, half its
++    // depth from its middle)
+     s32 tile = (s32)(((s64)MAP_OBJECT_TILE_SIZE << FX32_SHIFT) / info->posScale);
+     s32 half = tile * MAP_TILES_COUNT_Z / 2;
+ 
+@@ -2497,7 +2544,9 @@ static PortEdgeCopy *Port_EdgeCopyOf(const LandDataManager *landDataMan, u8 inde
+         const void *list = NNS_G3dGetShpDLPtr(shp);
+         u32 size = NNS_G3dGetShpDLSize(shp), room = size + size / 2 + 64;
+         void *cut = malloc(room);
+-        u32 bytes = cut != NULL ? NitroPort_Gx3dTrimList(list, size, cut, room, 2, half - 2 * tile, half + tile) : 0;
++        u32 bytes = cut == NULL ? 0
++            : north             ? NitroPort_Gx3dTrimList(list, size, cut, room, 2, -half - tile, -half + PORT_NORTH_STRIP_TILES * tile)
++                                : NitroPort_Gx3dTrimList(list, size, cut, room, 2, half - 2 * tile, half + tile);
+ 
+         if (bytes == 0) {
+             free(cut);
+@@ -2624,7 +2673,7 @@ static void Port_RenderEdgeAboveScenery(const LandDataManager *landDataMan)
+                 continue;
+             }
+ 
+-            if (copy == NULL && (copy = Port_EdgeCopyOf(landDataMan, i)) == NULL) {
++            if (copy == NULL && (copy = Port_EdgeCopyOf(landDataMan, i, FALSE)) == NULL) {
+                 break;
+             }
+ 
+@@ -2636,6 +2685,94 @@ static void Port_RenderEdgeAboveScenery(const LandDataManager *landDataMan)
+         loadedMap->mapRenderObj.resMdl = own;
+     }
+ }
++
++static void Port_RenderEdgeBelowScenery(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
++{
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld) {
++        return;
++    }
++
++    int width = landDataMan->mapMatrixWidth, matrixWidth = MapMatrix_GetWidth(landDataMan->mapMatrix);
++    u16 matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        LoadedMap *loadedMap = landDataMan->loadedMaps[i];
++        int index = loadedMap->mapMatrixIndex, above = -1;
++
++        if (index == INVALID_MAP_MATRIX_INDEX || loadedMap->valid != TRUE || !Port_HasNorthStrip(landDataMan, index)) {
++            continue;
++        }
++
++        // (the scenery map north of it, loaded, higher)
++        for (u8 j = 0; j < QUADRANT_COUNT; j++) {
++            int other = landDataMan->loadedMaps[j]->mapMatrixIndex;
++
++            if (j != i && other != INVALID_MAP_MATRIX_INDEX && landDataMan->loadedMaps[j]->valid == TRUE
++                && other % width == index % width && other / width == index / width - 1
++                && MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, other) == MAP_HEADER_EVERYWHERE) {
++                above = other;
++            }
++        }
++
++        if (above < 0
++            || MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, above % width, above / width, matrixWidth)
++                <= MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, index % width, index / width, matrixWidth)) {
++            continue;
++        }
++
++        VecFx32 position = { 0, 0, 0 };
++        VecFx32 scale = { FX32_ONE, FX32_ONE, FX32_ONE };
++        MtxFx33 rotationMatrix = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++
++        LandDataManager_CalculateRenderingPosition(index, width, landDataMan->mapMatrix, &position);
++        position.x += landDataMan->offset.x;
++        position.y += landDataMan->offset.y;
++        position.z += landDataMan->offset.z;
++
++        NNSG3dResMdl *own = loadedMap->mapRenderObj.resMdl;
++        const NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(own);
++        PortEdgeCopy *copy = NULL;
++
++        for (int k = 1; k <= PORT_NORTH_STRIP_COPIES; k++) {
++            VecFx32 moved = position;
++            GFXTestBox box;
++
++            moved.y -= k * (MAP_OBJECT_TILE_SIZE / 8);
++            moved.z -= k * PORT_NORTH_STRIP_TILES * MAP_OBJECT_TILE_SIZE;
++
++            // (the strip's box alone, moved, its trees' height above it)
++            VecFx32 corner = {
++                moved.x - (MAP_TILES_COUNT_X / 2) * MAP_OBJECT_TILE_SIZE,
++                moved.y + FX_Mul((fx32)info->boxY, info->boxPosScale),
++                moved.z - (MAP_TILES_COUNT_Z / 2 + 1) * MAP_OBJECT_TILE_SIZE,
++            };
++
++            NNS_G3dGlbSetBaseRot(&rotationMatrix);
++            NNS_G3dGlbSetBaseScale(&scale);
++            GFXBoxTest_MakeBox(MAP_TILES_COUNT_X * MAP_OBJECT_TILE_SIZE, FX_Mul((fx32)info->boxH, info->boxPosScale) + 4 * MAP_OBJECT_TILE_SIZE,
++                               (PORT_NORTH_STRIP_TILES + 1) * MAP_OBJECT_TILE_SIZE, &box);
++
++            if (!GFXBoxTest_IsBoxAtPositionInView(&corner, &box)) {
++                continue;
++            }
++
++            if (copy == NULL && (copy = Port_EdgeCopyOf(landDataMan, i, TRUE)) == NULL) {
++                break;
++            }
++
++            loadedMap->mapRenderObj.resMdl = copy->model;
++            Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &moved, &rotationMatrix, &scale);
++            NNS_G3dGeFlushBuffer();
++            loadedMap->mapRenderObj.resMdl = own;
++
++            if (loadedMap->mapPropManager != NULL) {
++                fx32 zFrom = -(MAP_TILES_COUNT_Z / 2) * MAP_OBJECT_TILE_SIZE, zTo = zFrom + PORT_NORTH_STRIP_TILES * MAP_OBJECT_TILE_SIZE;
++
++                MapPropManager_RenderRows(&moved, FALSE, zFrom, zTo, TRUE, landDataMan->areaDataMan, AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan), modelAttrs, loadedMap->mapPropManager);
++            }
++        }
++    }
++}
+ #endif
+ 
+ #ifdef SDK_PORT_3DS
+@@ -3031,6 +3168,7 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+     Port_RenderMirroredBesideScenery(landDataMan, modelAttrs);
+     Port_RenderSceneryMapsLowered(landDataMan);
+     Port_RenderEdgeAboveScenery(landDataMan);
++    Port_RenderEdgeBelowScenery(landDataMan, modelAttrs);
+     Port_RenderBesideMaps(landDataMan, modelAttrs);
+ #endif
+ }

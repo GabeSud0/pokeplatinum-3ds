@@ -1,0 +1,245 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 04:30:00 -0700
+Subject: [PATCH] Route 204, Floaroma Meadow and Valley Windworks past their
+ edges (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Three places where the wider field sees past what the DS shows (photos of
+2026-11-07):
+
+Route 204. The forest scenery maps either side of its north map (MAP_173
+at altitude 10, the height of the route's north part) stood above its
+lower south rows: their trees over the route's own by the border, its
+cliffs cut off there. Route 204's north map is now mirrored past the
+scenery on the player's side (sPortMirroredBesideScenery, as Route 206 and
+Valley Windworks), the scenery not drawn there. Its south map too, on its
+right only: with the scenery there, south of the mirrored north map, the
+step between the two was open (a black strip past the border at 181,701
+to 188,701 on the PC). On its left the scenery (2 above it) meets it as
+before, and its ponds by the border would show again, mirrored. So each
+listed map now has the side it's mirrored to (PortMirroredScenery.side).
+
+Floaroma Meadow (matrix 52, a 2x2 of its own). Black past its left and
+right edges, in the picture's top corners. It's added to
+sPortMirroredEdgeMatrices, as Eterna Forest: the map by the edge drawn
+again past it, mirrored. The meadow's houses are 20 tiles in from either
+edge, never in the view past it.
+
+Valley Windworks. A black strip past the border along the mirrored map's
+south edge (the photo's bottom-right corner; on the PC from 246,668). The
+mountains south of Valley Windworks (MAP_175 at 18) meet it, but past the
+border the scenery beside those (at 14) was drawn, 2 tiles below the
+mirrored map's edge, and the step between them faced the camera with
+nothing drawn on it. Now a loaded scenery map south of a mirrored map is
+mirrored with it, over the scenery beside it, when that is scenery too
+(Port_MirrorSideBelowMirrored).
+
+On the PC: Route 204 north walked east and west by the Ravaged Path
+(178,701), 84 frames, no black; 15 spots either side of both maps, no
+black, the cliffs and trees going on past the border; Route 204 south's
+left side as before. Floaroma Meadow, 63 spots: black left only in the top
+and bottom rows (z 6, z 58), as the DS's view has it there. Valley
+Windworks, 30 spots: no black; the pictures the same as before where it
+doesn't apply (its north half).
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 67f4962..c8f11ba 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -1663,6 +1663,7 @@ void LandDataManager_CheckLazyLoadNextMapPair(const u8 trackedTargetDirection, L
+ // past a town's edge, mirrored houses would look wrong.
+ static const u8 sPortMirroredEdgeMatrices[] = {
+     7, // Eterna Forest (m_dun0301)
++    52, // Floaroma Meadow
+ };
+ 
+ static BOOL Port_MirrorsEdges(const LandDataManager *landDataMan)
+@@ -1860,11 +1861,40 @@ static void Port_RenderSceneryMapsLowered(const LandDataManager *landDataMan)
+ // past Eterna Forest's edge): its river and ledges go on, level, and the
+ // scenery map isn't drawn. Only for the maps listed: drawing one again is
+ // a whole map sent (most of it out of the view, skipped as such).
+-static const u16 sPortMirroredBesideScenery[] = {
+-    MAP_HEADER_ROUTE_206,
+-    MAP_HEADER_VALLEY_WINDWORKS_OUTSIDE,
++//
++// Route 204's north map has forest scenery maps either side at the height
++// of its north part (altitude 10), above its lower south rows: the wider
++// field saw the scenery's trees standing over the map's cliffs and its own
++// trees by the border, the cliffs cut off there (screenshots of
++// 2026-11-07). The south map is mirrored to the right only: there its rows
++// by the north map meet the north map's mirrored ones (with the scenery map
++// instead, a slit open between the two, black). On its left its ponds by
++// the border would show again past it, and the scenery map there (only 2
++// above it) meets it as before.
++typedef struct PortMirroredScenery {
++    u16 header;
++    s8 side; // (the side it's mirrored to: 0 either, -1 the left only, 1 the right only)
++} PortMirroredScenery;
++
++static const PortMirroredScenery sPortMirroredBesideScenery[] = {
++    { MAP_HEADER_ROUTE_206, 0 },
++    { MAP_HEADER_VALLEY_WINDWORKS_OUTSIDE, 0 },
++    { MAP_HEADER_ROUTE_204_NORTH, 0 },
++    { MAP_HEADER_ROUTE_204_SOUTH, 1 },
+ };
+ 
++static BOOL Port_MirroredBesideSceneryTo(u16 header, int dir)
++{
++    for (int i = 0; i < (int)NELEMS(sPortMirroredBesideScenery); i++) {
++        if (sPortMirroredBesideScenery[i].header == header
++            && (sPortMirroredBesideScenery[i].side == 0 || sPortMirroredBesideScenery[i].side == dir)) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
+ // Of those, the ones drawn past the scenery without their props: their
+ // ground only. Valley Windworks' river runs east along the map's north edge
+ // and stopped at the scenery map's flat ledge (a photo of 2026-11-05;
+@@ -1889,7 +1919,7 @@ static BOOL Port_MirrorsPropsToo(const LandDataManager *landDataMan, u8 index)
+     return TRUE;
+ }
+ 
+-static BOOL Port_MirrorsBesideScenery(const LandDataManager *landDataMan, u8 index)
++static BOOL Port_MirrorsBesideScenery(const LandDataManager *landDataMan, u8 index, int dir)
+ {
+     LoadedMap *loadedMap = landDataMan->loadedMaps[index];
+ 
+@@ -1897,15 +1927,7 @@ static BOOL Port_MirrorsBesideScenery(const LandDataManager *landDataMan, u8 ind
+         return FALSE;
+     }
+ 
+-    u16 header = MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, loadedMap->mapMatrixIndex);
+-
+-    for (int i = 0; i < (int)NELEMS(sPortMirroredBesideScenery); i++) {
+-        if (sPortMirroredBesideScenery[i] == header) {
+-            return TRUE;
+-        }
+-    }
+-
+-    return FALSE;
++    return Port_MirroredBesideSceneryTo(MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, loadedMap->mapMatrixIndex), dir);
+ }
+ 
+ // The side (-1 left, 1 right) the loaded map is mirrored to, past a scenery
+@@ -1915,7 +1937,7 @@ static int Port_MirrorSideBesideScenery(const LandDataManager *landDataMan, u8 i
+     int width = landDataMan->mapMatrixWidth, mapMatrixIndex = landDataMan->loadedMaps[index]->mapMatrixIndex, dir;
+ 
+     if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld
+-        || landDataMan->trackedTargetMapMatrixIndex == INVALID_MAP_MATRIX_INDEX || !Port_MirrorsBesideScenery(landDataMan, index)
++        || landDataMan->trackedTargetMapMatrixIndex == INVALID_MAP_MATRIX_INDEX
+         || (int)landDataMan->trackedTargetMapMatrixIndex % width != mapMatrixIndex % width) {
+         return 0;
+     }
+@@ -1923,7 +1945,8 @@ static int Port_MirrorSideBesideScenery(const LandDataManager *landDataMan, u8 i
+     u8 quadrant = landDataMan->trackedTargetMapQuadrant;
+     dir = quadrant == QUADRANT_TOP_RIGHT || quadrant == QUADRANT_BOTTOM_RIGHT ? 1 : -1;
+ 
+-    if (mapMatrixIndex % width + dir < 0 || mapMatrixIndex % width + dir >= width
++    if (!Port_MirrorsBesideScenery(landDataMan, index, dir)
++        || mapMatrixIndex % width + dir < 0 || mapMatrixIndex % width + dir >= width
+         || MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex + dir) != MAP_HEADER_EVERYWHERE) {
+         return 0;
+     }
+@@ -1931,6 +1954,37 @@ static int Port_MirrorSideBesideScenery(const LandDataManager *landDataMan, u8 i
+     return dir;
+ }
+ 
++// The side (-1 left, 1 right) a loaded scenery map south of a map mirrored
++// past the scenery is mirrored to as well, 0 for none: the map beside it on
++// that side scenery too (Valley Windworks: the mountains south of it at
++// altitude 18, the scenery beside those at 14). The two mirrored then meet
++// as the maps themselves do. With the scenery beside it drawn instead, 2
++// tiles below the mirrored map's south edge, the step between the two faced
++// the camera with nothing drawn on it: a black strip along the mirrored
++// map's south edge (a photo of 2026-11-07: the view's corner past the
++// windmills; on the PC too, from 246,668).
++static int Port_MirrorSideBelowMirrored(const LandDataManager *landDataMan, u8 index)
++{
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++    int width = landDataMan->mapMatrixWidth, mapMatrixIndex = loadedMap->mapMatrixIndex;
++
++    if (mapMatrixIndex == INVALID_MAP_MATRIX_INDEX || loadedMap->valid != TRUE || mapMatrixIndex < width
++        || MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex) != MAP_HEADER_EVERYWHERE) {
++        return 0;
++    }
++
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        int dir = i == index || landDataMan->loadedMaps[i]->mapMatrixIndex != mapMatrixIndex - width ? 0 : Port_MirrorSideBesideScenery(landDataMan, i);
++
++        if (dir != 0) {
++            // (Port_MirrorSideBesideScenery has the column by it on the matrix)
++            return MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex + dir) == MAP_HEADER_EVERYWHERE ? dir : 0;
++        }
++    }
++
++    return 0;
++}
++
+ // Whether the loaded map is a scenery map with a mirrored map drawn in its
+ // place.
+ static BOOL Port_SceneryMirroredOver(const LandDataManager *landDataMan, u8 index)
+@@ -1947,6 +2001,12 @@ static BOOL Port_SceneryMirroredOver(const LandDataManager *landDataMan, u8 inde
+         if (dir != 0 && landDataMan->loadedMaps[i]->mapMatrixIndex + dir == mapMatrixIndex) {
+             return TRUE;
+         }
++
++        dir = i == index ? 0 : Port_MirrorSideBelowMirrored(landDataMan, i);
++
++        if (dir != 0 && landDataMan->loadedMaps[i]->mapMatrixIndex + dir == mapMatrixIndex) {
++            return TRUE;
++        }
+     }
+ 
+     return FALSE;
+@@ -2495,7 +2555,7 @@ static void Port_MirroredWaterShape(NNSG3dRS *rs)
+ static int Port_MirrorSideWhileRead(const LandDataManager *landDataMan, u8 index)
+ {
+     LoadedMap *loadedMap = landDataMan->loadedMaps[index];
+-    int width = landDataMan->mapMatrixWidth, mapMatrixIndex = loadedMap->mapMatrixIndex, dir, i;
++    int width = landDataMan->mapMatrixWidth, mapMatrixIndex = loadedMap->mapMatrixIndex, dir;
+ 
+     if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld || mapMatrixIndex == INVALID_MAP_MATRIX_INDEX
+         || loadedMap->valid == TRUE || landDataMan->trackedTargetMapMatrixIndex == INVALID_MAP_MATRIX_INDEX
+@@ -2504,16 +2564,13 @@ static int Port_MirrorSideWhileRead(const LandDataManager *landDataMan, u8 index
+     }
+ 
+     u16 header = MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex);
++    u8 quadrant = landDataMan->trackedTargetMapQuadrant;
++    dir = quadrant == QUADRANT_TOP_RIGHT || quadrant == QUADRANT_BOTTOM_RIGHT ? 1 : -1;
+ 
+-    for (i = 0; i < (int)NELEMS(sPortMirroredBesideScenery) && sPortMirroredBesideScenery[i] != header; i++) { }
+-
+-    if (i == (int)NELEMS(sPortMirroredBesideScenery)) {
++    if (!Port_MirroredBesideSceneryTo(header, dir)) {
+         return 0;
+     }
+ 
+-    u8 quadrant = landDataMan->trackedTargetMapQuadrant;
+-    dir = quadrant == QUADRANT_TOP_RIGHT || quadrant == QUADRANT_BOTTOM_RIGHT ? 1 : -1;
+-
+     if (mapMatrixIndex % width + dir < 0 || mapMatrixIndex % width + dir >= width
+         || MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex + dir) != MAP_HEADER_EVERYWHERE) {
+         return 0;
+@@ -2577,6 +2634,16 @@ static void Port_RenderMirroredBesideScenery(const LandDataManager *landDataMan,
+ 
+     Port_RenderMirroredBesideSceneryMaps(landDataMan, modelAttrs);
+ 
++    // (the scenery south of them, mirrored with them: a scenery map is
++    // small, drawn whole)
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        int dir = Port_MirrorSideBelowMirrored(landDataMan, i);
++
++        if (dir != 0) {
++            Port_RenderLoadedMapMirrored(i, dir, landDataMan, modelAttrs);
++        }
++    }
++
+     // (then, if nothing else was cut: a little of a copy for the other side)
+     for (u8 i = 0; i < QUADRANT_COUNT && sPortMirrorSceneWork == 0; i++) {
+         int dir = Port_MirrorSideBesideScenery(landDataMan, i);

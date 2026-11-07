@@ -1,0 +1,192 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 16:00:00 -0700
+Subject: [PATCH] A map the game is still reading drawn whole on the wider
+ field (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Riding the bike west through Veilstone City by the Pokémon Center a black
+square showed at the screen's top left (a photo of 2026-11-06). As the
+player crosses a map's middle the game loads the next column of maps and
+reads them over several scenes (the second of the two 10 scenes later);
+till then patch 0083 drew the strip of each kept from when it was beside
+the loaded ones (3 tiles). On the bike the player rides on several tiles
+meanwhile, and the view's top corner reached past that strip, or into a
+map with no strip kept (it wasn't in the view before). On the PC riding
+west at 726,617 the same square at the same place.
+
+Now a loaded map still being read, in the view past its strip (or with no
+strip kept), is read whole here (dir 0: its lists not cut) as the maps
+beside are, and drawn, with its props, till the game has it. Its strip is
+still used when the view stays in it, and for the first scene if another
+map's been read in that scene (not two reads more in one). Not after a
+warp (all four maps being read: the strips kept only, as before). Kept for
+8 maps now (the strips of up to 4 beside, 2 whole ones). The log says
+each: `[field] a map the game is still reading ... read whole`. On the PC
+the ride west and back: no black, 2 maps read whole each way; running east
+at Veilstone's 687,632 and walking there: none read whole.
+
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 274ab489..88e216ac 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -2847,16 +2847,29 @@ static void Port_RenderEdgeBelowScenery(const LandDataManager *landDataMan, Mode
+ // mirrored copies' are: a strip, not a whole map, sent to the 3D), and its
+ // props, without their animations (MapPropManager_PortLoadStill), each
+ // drawn when in the view as the game's are. Read with a NARC of its own (the
+-// game's lazy loader reads its maps in steps from the game's), kept for 2
+-// maps, let go with the loaded maps.
+-#define PORT_BESIDE_SLOTS 2
++// game's lazy loader reads its maps in steps from the game's), kept (for
++// 2 maps till 2026-11-06, now 8: below), let go with the loaded maps.
++//
++// And a map the game has just loaded, while it's still reading it (a column
++// or a row on, as the player walks across a map's middle): its strip kept
++// from when it was beside them is drawn, but on the bike the player rides on
++// several tiles while the game reads it (10 scenes for the second of the
++// two), and the view's top corner reached past the strip, or into a map
++// that had no strip kept (its strip not in the view before): a black
++// square at the screen's top left in Veilstone City by the Pokémon Center
++// (a photo of 2026-11-06; on the PC riding west at 726,617, the same
++// square). Then the whole map is read here (dir 0: its lists not cut), as
++// the maps beside are, and drawn till the game has it; not after a warp
++// (all four being read then: the strips kept only, as before). Kept for 8
++// maps (the strips of up to 4 beside, 2 whole ones being read).
++#define PORT_BESIDE_SLOTS 8
+ #define PORT_BESIDE_STRIP 3   // (tiles of the map beside drawn, from the loaded maps)
+ 
+ typedef struct PortBesideMap {
+     int mapMatrixIndex; // (INVALID_MAP_MATRIX_INDEX: none)
+     int matrixID;
+     int landDataID;
+-    int dir;            // (which side of the loaded maps: -1 left, 1 right)
++    int dir;            // (which side of the loaded maps: -1 left, 1 right; 0: the whole map)
+     BOOL failed;        // (couldn't be read: not tried again)
+     u32 used;           // (the frame it was last drawn in)
+     u8 *block;          // its model file, then its strip's cut lists
+@@ -2867,6 +2880,7 @@ typedef struct PortBesideMap {
+ static PortBesideMap sPortBesideMaps[PORT_BESIDE_SLOTS];
+ static NARC *sPortBesideNARC;
+ static u32 sPortBesideFrame;
++static u32 sPortBesideReadFrame, sPortBesideReads; // (the maps read in the frame)
+ 
+ static void Port_FreeBesideMap(PortBesideMap *map)
+ {
+@@ -2937,6 +2951,13 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+     map->used = sPortBesideFrame;
+     map->failed = TRUE;   // (till it's read)
+ 
++    if (sPortBesideReadFrame != sPortBesideFrame) {
++        sPortBesideReadFrame = sPortBesideFrame;
++        sPortBesideReads = 0;
++    }
++
++    sPortBesideReads++;
++
+     if (sPortBesideNARC == NULL) {
+         sPortBesideNARC = NARC_ctor(NARC_INDEX_FIELDDATA__LAND_DATA__LAND_DATA, HEAP_ID_FIELD1);
+     }
+@@ -3003,7 +3024,7 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+         NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, i);
+         const void *list = NNS_G3dGetShpDLPtr(shp);
+         u32 size = NNS_G3dGetShpDLSize(shp), room = size + size / 2 + 64;
+-        void *cut = malloc(room);
++        void *cut = dir != 0 ? malloc(room) : NULL;
+         u32 bytes = cut != NULL ? NitroPort_Gx3dTrimList(list, size, cut, room, 0, lo, hi) : 0;
+ 
+         listsAll += size;
+@@ -3080,8 +3101,15 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+     }
+ 
+     map->failed = FALSE;
+-    NitroPort_Log("[field] the map beside the loaded ones (matrix %d, land data %d) read for the wider view: %d KB, its strip %u of %u KB of lists",
+-                  mapMatrixIndex, landDataID, (modelSize + propsSize + 1023) / 1024, (listsKept + 1023) / 1024, (listsAll + 1023) / 1024);
++
++    if (dir == 0) {
++        NitroPort_Log("[field] a map the game is still reading (matrix %d, land data %d) read whole for the wider view: %d KB",
++                      mapMatrixIndex, landDataID, (modelSize + propsSize + 1023) / 1024);
++    } else {
++        NitroPort_Log("[field] the map beside the loaded ones (matrix %d, land data %d) read for the wider view: %d KB, its strip %u of %u KB of lists",
++                      mapMatrixIndex, landDataID, (modelSize + propsSize + 1023) / 1024, (listsKept + 1023) / 1024, (listsAll + 1023) / 1024);
++    }
++
+     return map;
+ }
+ 
+@@ -3095,7 +3123,7 @@ static void Port_RenderBesideMaps(const LandDataManager *landDataMan, ModelAttri
+     }
+ 
+     int width = landDataMan->mapMatrixWidth, height = landDataMan->mapMatrixHeight;
+-    int columnLo = 0x7fffffff, columnHi = -1, rows[QUADRANT_COUNT], numRows = 0;
++    int columnLo = 0x7fffffff, columnHi = -1, rows[QUADRANT_COUNT], numRows = 0, numReading = 0;
+ 
+     // (the loaded maps' columns and rows)
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+@@ -3105,6 +3133,8 @@ static void Port_RenderBesideMaps(const LandDataManager *landDataMan, ModelAttri
+             continue;
+         }
+ 
++        numReading += landDataMan->loadedMaps[i]->valid != TRUE;
++
+         columnLo = index % width < columnLo ? index % width : columnLo;
+         columnHi = index % width > columnHi ? index % width : columnHi;
+ 
+@@ -3181,13 +3211,51 @@ static void Port_RenderBesideMaps(const LandDataManager *landDataMan, ModelAttri
+             NNS_G3dGlbSetBaseScale(&one);
+             GFXBoxTest_MakeBox((PORT_BESIDE_STRIP + 2) * MAP_OBJECT_TILE_SIZE, 20 * MAP_OBJECT_TILE_SIZE, MAP_TILES_COUNT_Z * MAP_OBJECT_TILE_SIZE, &box);
+ 
+-            if (!GFXBoxTest_IsBoxAtPositionInView(&corner, &box)) {
++            BOOL stripSeen = GFXBoxTest_IsBoxAtPositionInView(&corner, &box), farSeen = FALSE;
++            BOOL whole = inside && reading && numReading <= 2; // (not after a warp)
++
++            if (whole) {
++                // (the rest of it, past the strip)
++                VecFx32 farCorner = {
++                    side > 0 ? position.x - (MAP_TILES_COUNT_X / 2 - PORT_BESIDE_STRIP) * MAP_OBJECT_TILE_SIZE : position.x - (MAP_TILES_COUNT_X / 2) * MAP_OBJECT_TILE_SIZE,
++                    position.y - 4 * MAP_OBJECT_TILE_SIZE,
++                    position.z - (MAP_TILES_COUNT_Z / 2) * MAP_OBJECT_TILE_SIZE,
++                };
++                GFXTestBox farBox;
++
++                GFXBoxTest_MakeBox((MAP_TILES_COUNT_X - PORT_BESIDE_STRIP) * MAP_OBJECT_TILE_SIZE, 20 * MAP_OBJECT_TILE_SIZE, MAP_TILES_COUNT_Z * MAP_OBJECT_TILE_SIZE, &farBox);
++                farSeen = GFXBoxTest_IsBoxAtPositionInView(&farCorner, &farBox);
++            }
++
++            if (!stripSeen && !farSeen) {
+                 continue;
+             }
+ 
+-            // (one still being read: only if its strip's kept, not read again
+-            // with it: all four maps are read so after a warp)
+-            PortBesideMap *map = Port_BesideMapOf(landDataMan, index, side, inside);
++            // (one still being read: its whole copy if it's kept; its strip
++            // if that's kept and the view stays in it, or another map's been
++            // read in this frame already (the whole one the next: not two
++            // reads more in one frame); else the whole map read now. After a
++            // warp, all four maps being read: only if its strip's kept, not
++            // read again with it)
++            PortBesideMap *map = NULL;
++
++            if (whole) {
++                map = Port_BesideMapOf(landDataMan, index, 0, TRUE);
++
++                if (map == NULL && (!farSeen || (sPortBesideReadFrame == sPortBesideFrame && sPortBesideReads > 0))) {
++                    map = Port_BesideMapOf(landDataMan, index, side, TRUE);
++                }
++
++                if (map == NULL) {
++                    map = Port_BesideMapOf(landDataMan, index, 0, FALSE);
++                }
++
++                if (map == NULL) {
++                    map = Port_BesideMapOf(landDataMan, index, side, TRUE);
++                }
++            } else {
++                map = Port_BesideMapOf(landDataMan, index, side, inside);
++            }
+ 
+             if (map == NULL) {
+                 continue;
