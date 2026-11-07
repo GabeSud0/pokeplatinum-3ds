@@ -1,0 +1,166 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 17:00:00 -0700
+Subject: [PATCH] Tree rows short of the border drawn on past it
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Route 204's north part has a corridor between the trees along its top,
+a trainer standing at its end by the map's east border. Drawn on past
+the border (patch 0110), the place she stands on (its last column: the
+ground, the row's last tree a tile further in) went on as a corridor to
+nowhere.
+
+A row listed (sPortExtrudeTreeRows: matrix, map, side, its rows, and a
+shift along the border) has its last tree drawn on past the border too:
+every 2 tiles from its second place on (Port_ExtrudeListRepeat's firstX),
+so the trainer's place stays as it is, moved one tile north onto the
+rows of the trees drawn on beside it (the forest is staggered: the last
+column's trees stand a tile off the one before's; at the row's own place
+the new trees stood in the others, 2026-11-07). Approved from the PC's
+pictures, 2026-11-07.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index cb0c3534..3f61bc9f 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -3633,17 +3633,17 @@ static BOOL Port_ExtrudeListMoveTo(PortExtrudeList *list, s32 x, s32 z)
+ // along the border, step sixteenths of a tile apart; for the copy of a
+ // forest band, all of those again north of it).
+ static BOOL Port_ExtrudeListRepeat(const PortExtrudeCopy *copy, PortExtrudeList *list, const void *cut, u32 size,
+-    int pitchX, int pitchZ, int fillDir, int fillCount, int fillStep)
++    int pitchX, int pitchZ, int fillDir, int fillCount, int fillStep, int firstX, int shiftZ16)
+ {
+     int stepsX = pitchX > 0 ? (PORT_EXTRUDE_REACH_X + pitchX - 1) / pitchX : 0;
+     int stepsZ = pitchZ > 0 ? (PORT_EXTRUDE_REACH_Z + pitchZ - 1) / pitchZ : 0;
+     BOOL ok = TRUE;
+ 
+     for (int b = copy->band > 0 ? 1 : 0; b <= (copy->band > 0 ? copy->bandCopies : 0) && ok; b++) {
+-        for (int i = pitchX > 0 ? 1 : 0; i <= stepsX && ok; i++) {
++        for (int i = pitchX > 0 ? firstX : 0; i <= stepsX + firstX - 1 && ok; i++) {
+             for (int j = pitchZ > 0 ? 1 : 0; j <= stepsZ && ok; j++) {
+                 for (int m = fillDir != 0 ? 1 : 0; m <= fillCount && ok; m++) {
+-                    s32 x16 = copy->dirX * i * pitchX * 16, z16 = copy->dirZ * j * pitchZ * 16 - b * (copy->bandHi - copy->bandLo) * 16;
++                    s32 x16 = copy->dirX * i * pitchX * 16, z16 = copy->dirZ * j * pitchZ * 16 - b * (copy->bandHi - copy->bandLo) * 16 + shiftZ16;
+ 
+                     if (copy->dirX != 0) {
+                         z16 += fillDir * m * fillStep;
+@@ -3747,6 +3747,43 @@ static u8 sPortExtrudeSlopes[PORT_EXTRUDE_GROUPS];
+ static u8 sPortExtrudePitchX[PORT_EXTRUDE_GROUPS];
+ static u8 sPortExtrudePitchZ[PORT_EXTRUDE_GROUPS];
+ static u8 sPortExtrudeMark[PORT_EXTRUDE_GROUPS];
++static u8 sPortExtrudeLate[PORT_EXTRUDE_GROUPS]; // (a tree row's last tree short of the border: PortExtrudeTreeRow)
++
++// Rows of trees short of the border (their last tree a tile or more in,
++// the place by the border open: a corridor's end, someone standing there),
++// drawn on past it all the same: the last tree again past the border every
++// PORT_EXTRUDE_TREE_PITCH tiles, from its second place on, so the place by
++// the border stays as it is, moved along the border onto the rows of the
++// trees drawn on beside it (a staggered forest: the last column's trees
++// a tile off the one before's). Route 204's north part: along its top a
++// corridor between the trees, a trainer at its end by the border; past it
++// the corridor went on as a path to nowhere (2026-11-07: its trees to
++// start right behind her, spaced as the rest: at a tile's offset they
++// stood in the trees beside them).
++typedef struct PortExtrudeTreeRow {
++    u8 matrixID;
++    u16 mapMatrixIndex;
++    s8 dirX;
++    s8 rowLo, rowHi; // (the rows its trees stand in, their middles: tiles from the map's middle)
++    s8 shiftZ;       // (tiles along the border, onto the rows beside)
++} PortExtrudeTreeRow;
++
++static const PortExtrudeTreeRow sPortExtrudeTreeRows[] = {
++    { 0, 635, 1, -12, -9, -1 }, // (Route 204's north part, east of the corridor's end)
++};
++
++static const PortExtrudeTreeRow *Port_ExtrudeTreeRowOf(const PortExtrudeCopy *copy)
++{
++    for (int k = 0; k < (int)NELEMS(sPortExtrudeTreeRows); k++) {
++        const PortExtrudeTreeRow *r = &sPortExtrudeTreeRows[k];
++
++        if (r->matrixID == copy->matrixID && r->mapMatrixIndex == copy->mapMatrixIndex && r->dirX == copy->dirX && copy->dirZ == 0) {
++            return r;
++        }
++    }
++
++    return NULL;
++}
+ 
+ // The cut list of shape i of the model with the marked groups (into a new
+ // buffer), and whether it can be sent again right after itself.
+@@ -3791,6 +3828,7 @@ static BOOL Port_ExtrudeShape(PortExtrudeCopy *copy, NNSG3dResMdl *model, int i)
+     int a = copy->dirX != 0 ? 0 : 2, b = 2 - a, side = (copy->dirX != 0) != (copy->dirZ != 0);
+     u32 count, canopies = 0;
+     BOOL ok = survey != NULL;
++    const PortExtrudeTreeRow *treeRow = Port_ExtrudeTreeRowOf(copy);
+ 
+     count = ok ? NitroPort_Gx3dSurveyGroups(survey, sPortExtrudeBox, sPortExtrudeSlopes, PORT_EXTRUDE_GROUPS) : 0;
+     count = count > PORT_EXTRUDE_GROUPS ? PORT_EXTRUDE_GROUPS : count;
+@@ -3816,6 +3854,18 @@ static BOOL Port_ExtrudeShape(PortExtrudeCopy *copy, NNSG3dResMdl *model, int i)
+ 
+             *px = copy->dirX != 0 ? (u8)Port_ExtrudePitch(lo, hi, 0, copy->dirX, trees) : 0;
+             *pz = copy->dirZ != 0 ? (u8)Port_ExtrudePitch(lo, hi, 2, copy->dirZ, trees || Port_IsLeaningLayer(lo, hi)) : 0;
++            sPortExtrudeLate[g] = 0;
++
++            // (a tree row's last tree short of the border, its row listed)
++            if (treeRow != NULL && trees && *px == 0) {
++                s32 cx = (lo[0] + hi[0]) / 2, cz = (lo[2] + hi[2]) / 2, half = MAP_TILES_COUNT_X / 2 * 16;
++                s32 reach = 2 * PORT_EXTRUDE_TREE_PITCH * 16;
++
++                if (cz >= treeRow->rowLo * 16 && cz < treeRow->rowHi * 16 && (copy->dirX > 0 ? cx > half - reach : cx < -half + reach)) {
++                    *px = PORT_EXTRUDE_TREE_PITCH;
++                    sPortExtrudeLate[g] = 1;
++                }
++            }
+ 
+             // (into the corner only what goes on both ways)
+             if (copy->dirX != 0 && copy->dirZ != 0 && (*px == 0 || *pz == 0)) {
+@@ -3852,14 +3902,16 @@ static BOOL Port_ExtrudeShape(PortExtrudeCopy *copy, NNSG3dResMdl *model, int i)
+         }
+     }
+ 
+-    // (the polygons at each pair of pitches, at every place)
++    // (the polygons at each pair of pitches, at every place; a tree row's
++    // last trees from their second place)
+     while (ok) {
+-        int pitchX = -1, pitchZ = -1;
++        int pitchX = -1, pitchZ = -1, late = 0;
+ 
+         for (u32 g = 0; g < count && pitchX < 0; g++) {
+             if (sPortExtrudePitchX[g] != 0 || sPortExtrudePitchZ[g] != 0) {
+                 pitchX = sPortExtrudePitchX[g];
+                 pitchZ = sPortExtrudePitchZ[g];
++                late = sPortExtrudeLate[g];
+             }
+         }
+ 
+@@ -3869,7 +3921,7 @@ static BOOL Port_ExtrudeShape(PortExtrudeCopy *copy, NNSG3dResMdl *model, int i)
+ 
+         for (u32 g = 0; g < count; g++) {
+             sPortExtrudeMark[g] = (sPortExtrudePitchX[g] != 0 || sPortExtrudePitchZ[g] != 0)
+-                && sPortExtrudePitchX[g] == pitchX && sPortExtrudePitchZ[g] == pitchZ;
++                && sPortExtrudePitchX[g] == pitchX && sPortExtrudePitchZ[g] == pitchZ && sPortExtrudeLate[g] == late;
+ 
+             if (sPortExtrudeMark[g]) {
+                 sPortExtrudePitchX[g] = sPortExtrudePitchZ[g] = 0;
+@@ -3881,7 +3933,7 @@ static BOOL Port_ExtrudeShape(PortExtrudeCopy *copy, NNSG3dResMdl *model, int i)
+         void *cut = Port_ExtrudeCut(survey, shp, count, &size, &repeatable);
+ 
+         Port_NoteNotRepeatable(copy, i, cut != NULL && !repeatable);
+-        ok = cut != NULL && Port_ExtrudeListRepeat(copy, list, cut, size, pitchX, pitchZ, 0, 0, 0);
++        ok = cut != NULL && Port_ExtrudeListRepeat(copy, list, cut, size, pitchX, pitchZ, 0, 0, 0, late ? 2 : 1, late && treeRow != NULL ? treeRow->shiftZ * 16 : 0);
+         free(cut);
+     }
+ 
+@@ -3914,7 +3966,7 @@ static BOOL Port_FinishExtrudeCopy(PortExtrudeCopy *copy, const NNSG3dResFileHea
+         Port_NoteNotRepeatable(copy, fills[f].shape, cut != NULL && !repeatable);
+         ok = cut != NULL
+             && Port_ExtrudeListRepeat(copy, &copy->lists[fills[f].shape], cut, size,
+-                copy->dirX != 0 ? 1 : 0, copy->dirX != 0 ? 0 : 1, fills[f].dir, fills[f].count, fills[f].step);
++                copy->dirX != 0 ? 1 : 0, copy->dirX != 0 ? 0 : 1, fills[f].dir, fills[f].count, fills[f].step, 1, 0);
+         free(cut);
+         NitroPort_Gx3dFreeSurvey(survey);
+     }

@@ -1,0 +1,302 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 17:05:00 -0700
+Subject: [PATCH] Amity Square's plateau corner by the east edge rounded
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The plateau by Amity Square's east edge: its upper cliff along the south
+(one strip of quads, 8 tiles long) runs a tile past the plateau's east
+cliff to the map's border and ends square, a fin sticking out over the
+forest drawn on past the border (2026-11-07: to be a rounded corner,
+shaped as the cliff's own).
+
+Pieces of a map sent by cells (sPortCellPieces): its polygons of one
+shape wholly in a box of tiles, left out where they are and/or drawn
+again moved (NitroPort_Gx3dSurveyMoved: x squeezed about a point, then
+moved; each vertex sent as its own coordinates), only if the box holds
+just the polygons it should. The upper cliff is drawn squeezed by 7/8 to
+end where the plateau does, and the corner made of the same cliff's
+rounded corner 9 tiles west and 7 north, facing the same way (its
+ground, lip, curves and top: none mirrored). The pieces go in their
+shape's list before what it leaves set (0112), in the cell they're in.
+Approved from the PC's pictures, 2026-11-07.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 3f61bc9f..06d8c495 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -2252,6 +2252,7 @@ extern void NitroPort_Gx3dFreeSurvey(NitroGx3dListSurvey *survey);
+ extern u32 NitroPort_Gx3dSurveyGroups(const NitroGx3dListSurvey *survey, s32 (*box)[6], u8 *slopes, u32 max);
+ extern int NitroPort_Gx3dSurveyAllGrouped(const NitroGx3dListSurvey *survey);
+ extern u32 NitroPort_Gx3dSurveyRuns(const NitroGx3dListSurvey *survey, const u8 *mark, u32 nmark, void *dst, u32 dstBytes, u32 *sizes, u8 *runMark, u32 maxRuns);
++extern u32 NitroPort_Gx3dSurveyMoved(const NitroGx3dListSurvey *survey, void *dst, u32 dstBytes, const u8 *keep, u32 nkeep, s32 originX, s32 num, s32 den, s32 dx, s32 dy, s32 dz);
+ extern u32 NitroPort_Gx3dSurveyTrim(const NitroGx3dListSurvey *survey, void *dst, u32 dstBytes, const u8 *keep, u32 nkeep, int *repeatable);
+ extern u32 NitroPort_Gx3dTranslateCommand(void *dst, u32 dstBytes, s32 x, s32 y, s32 z);
+ extern u32 NitroPort_Gx3dTrimListRows(const void *src, u32 bytes, void *dst, u32 dstBytes, s32 xlo, s32 xhi, s32 zlo, s32 zhi, int inside);
+@@ -4341,6 +4342,39 @@ static void Port_ExtrudeAhead(const LandDataManager *landDataMan)
+ #define PORT_CELL_COPIES 6
+ #define PORT_CELLS       4   // (a side's)
+ #define PORT_CELL_ALWAYS 0xFF
++#define PORT_CELL_NEVER  0xFE
++#define PORT_CELL_PIECES 4   // (a shape's, at most)
++
++// Pieces of a map sent by cells changed: its polygons of one shape wholly in
++// a box (tiles from the map's corner) left out where they are (hide), and/or
++// drawn again moved (draw): x squeezed num/den about originX, then moved dx,
++// dz tiles (NitroPort_Gx3dSurveyMoved); only if the box has just the
++// polygons it should (groups), else left as they are. Amity Square's
++// plateau by the east edge: its upper cliff along the south ran on a tile
++// past the plateau's east cliff to the border and ended square (2026-11-07:
++// to be a rounded corner, as the cliff's own). It's squeezed to end where
++// the plateau does, and the plateau's corner made of the same cliff's
++// rounded corner 9 tiles west and 7 north, facing the same way (its
++// ground, lip and curves, and its top).
++typedef struct PortCellPiece {
++    u8 matrixID;
++    u8 mapMatrixIndex;
++    u8 shape;
++    s8 box[4]; // (x lo, x hi, z lo, z hi)
++    u8 groups;
++    BOOL hide, draw;
++    s8 originX, num, den;
++    s8 dx, dz;
++} PortCellPiece;
++
++static const PortCellPiece sPortCellPieces[] = {
++    { 50, 3, 5, { 24, 32, 0, 1 }, 1, TRUE, TRUE, 24, 7, 8, 0, 0 },     // (the upper cliff, ending a tile sooner)
++    { 50, 1, 0, { 22, 23, 25, 26 }, 1, FALSE, TRUE, 0, 1, 1, 9, 7 },   // (the corner's ground,)
++    { 50, 1, 1, { 22, 23, 25, 26 }, 3, FALSE, TRUE, 0, 1, 1, 9, 7 },   // (its lip and curves,)
++    { 50, 1, 2, { 22, 23, 25, 26 }, 2, FALSE, TRUE, 0, 1, 1, 9, 7 },   // (and its top)
++};
++
++static u8 sPortPieceKeep[PORT_EXTRUDE_GROUPS];
+ 
+ static const u8 sPortCelledMatrices[] = {
+     50, // Amity Square
+@@ -4424,13 +4458,97 @@ static int Port_CellOf(const PortCellCopy *copy, s32 twice)
+     return cell < 0 ? 0 : cell >= PORT_CELLS ? PORT_CELLS - 1 : (int)cell;
+ }
+ 
+-// Shape i of the loaded map's model cut into its runs (none: sent whole);
+-// FALSE if there's no room.
++// The pieces of the copy's shape i (PortCellPiece): its polygons hidden
++// marked PORT_CELL_NEVER, those drawn again moved cut into lists (each
++// its bytes, cell, and bounds in the model's coordinates); how many.
++typedef struct PortPieceList {
++    u8 *bytes;
++    u32 size;
++    u8 cell;
++    s32 box[6];
++} PortPieceList;
++
++static int Port_CellPieces(PortCellCopy *copy, NitroGx3dListSurvey *survey, NNSG3dResShpData *shp, int i, u32 count, PortPieceList *out)
++{
++    int found = 0;
++
++    for (int k = 0; k < (int)NELEMS(sPortCellPieces) && found < PORT_CELL_PIECES; k++) {
++        const PortCellPiece *piece = &sPortCellPieces[k];
++        s32 lo[3] = { INT32_MAX, INT32_MAX, INT32_MAX }, hi[3] = { INT32_MIN, INT32_MIN, INT32_MIN };
++        s32 spare = copy->tile / 16;
++        u32 kept = 0;
++
++        if (piece->matrixID != copy->matrixID || piece->mapMatrixIndex != copy->mapMatrixIndex || piece->shape != i) {
++            continue;
++        }
++
++        for (u32 g = 0; g < count; g++) {
++            const s32 *b = sPortExtrudeBox[g];
++
++            sPortPieceKeep[g] = b[0] >= (piece->box[0] - 16) * copy->tile - spare && b[3] <= (piece->box[1] - 16) * copy->tile + spare
++                && b[2] >= (piece->box[2] - 16) * copy->tile - spare && b[5] <= (piece->box[3] - 16) * copy->tile + spare;
++
++            if (sPortPieceKeep[g]) {
++                kept++;
++
++                for (int a = 0; a < 3; a++) {
++                    lo[a] = b[a] < lo[a] ? b[a] : lo[a];
++                    hi[a] = b[3 + a] > hi[a] ? b[3 + a] : hi[a];
++                }
++            }
++        }
++
++        // (not the polygons it should be: left as they are)
++        if (kept != piece->groups) {
++            continue;
++        }
++
++        if (piece->draw) {
++            s32 origin = (piece->originX - 16) * copy->tile, dx = piece->dx * copy->tile, dz = piece->dz * copy->tile;
++            u32 room = NNS_G3dGetShpDLSize(shp) * 2 + 64;
++            u8 *bytes = malloc(room);
++            u32 size = bytes != NULL ? NitroPort_Gx3dSurveyMoved(survey, bytes, room, sPortPieceKeep, count, origin, piece->num, piece->den, dx, 0, dz) : 0;
++
++            if (size == 0) {
++                free(bytes);
++                continue;
++            }
++
++            PortPieceList *list = &out[found++];
++
++            list->bytes = bytes;
++            list->size = size;
++            list->box[0] = origin + (s32)((s64)(lo[0] - origin) * piece->num / piece->den) + dx;
++            list->box[3] = origin + (s32)((s64)(hi[0] - origin) * piece->num / piece->den) + dx;
++            list->box[1] = lo[1];
++            list->box[4] = hi[1];
++            list->box[2] = lo[2] + dz;
++            list->box[5] = hi[2] + dz;
++            list->cell = (u8)(Port_CellOf(copy, list->box[2] + list->box[5]) * PORT_CELLS + Port_CellOf(copy, list->box[0] + list->box[3]));
++        }
++
++        if (piece->hide) {
++            for (u32 g = 0; g < count; g++) {
++                if (sPortPieceKeep[g]) {
++                    sPortExtrudeMark[g] = PORT_CELL_NEVER;
++                }
++            }
++        }
++    }
++
++    return found;
++}
++
++// Shape i of the loaded map's model cut into its runs (none: sent whole),
++// its pieces drawn again moved before what the list leaves set; FALSE if
++// there's no room.
+ static BOOL Port_CellShape(PortCellCopy *copy, NNSG3dResMdl *model, int i)
+ {
+     NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(NNS_G3dGetShp(model), i);
+     NitroGx3dListSurvey *survey = NitroPort_Gx3dSurveyList(NNS_G3dGetShpDLPtr(shp), NNS_G3dGetShpDLSize(shp));
+-    u32 count = survey != NULL ? NitroPort_Gx3dSurveyGroups(survey, sPortExtrudeBox, NULL, PORT_EXTRUDE_GROUPS) : 0, runs = 0;
++    u32 count = survey != NULL ? NitroPort_Gx3dSurveyGroups(survey, sPortExtrudeBox, NULL, PORT_EXTRUDE_GROUPS) : 0, runs = 0, piecesSize = 0;
++    PortPieceList pieces[PORT_CELL_PIECES];
++    int numPieces;
+ 
+     copy->firstRun[i] = copy->firstRun[i + 1] = copy->runs;
+ 
+@@ -4439,16 +4557,27 @@ static BOOL Port_CellShape(PortCellCopy *copy, NNSG3dResMdl *model, int i)
+         return TRUE;
+     }
+ 
+-    // (each polygon's cell; the runs of them)
++    // (each polygon's cell; its pieces; the runs of them)
+     for (u32 g = 0; g < count; g++) {
+         int cx = Port_CellOf(copy, sPortExtrudeBox[g][0] + sPortExtrudeBox[g][3]);
+         int cz = Port_CellOf(copy, sPortExtrudeBox[g][2] + sPortExtrudeBox[g][5]);
+ 
+         sPortExtrudeMark[g] = (u8)(cz * PORT_CELLS + cx);
++    }
++
++    numPieces = Port_CellPieces(copy, survey, shp, i, count, pieces);
++
++    for (u32 g = 0; g < count; g++) {
+         runs += g == 0 || sPortExtrudeMark[g] != sPortExtrudeMark[g - 1];
+     }
+ 
+-    runs++; // (what the list leaves set, sent after the rest: PORT_CELL_ALWAYS)
++    for (int k = 0; k < numPieces; k++) {
++        piecesSize += pieces[k].size;
++    }
++
++    runs += 1 + numPieces; // (what the list leaves set, sent after the rest: PORT_CELL_ALWAYS; the pieces)
++
++    BOOL ok = TRUE;
+ 
+     if (copy->runs + runs > copy->runRoom) {
+         u32 room = copy->runRoom * 2 > copy->runs + runs ? copy->runRoom * 2 : copy->runs + runs + 256;
+@@ -4460,33 +4589,69 @@ static BOOL Port_CellShape(PortCellCopy *copy, NNSG3dResMdl *model, int i)
+         }
+ 
+         cells = bytes != NULL ? realloc(copy->runCell, room) : NULL;
++        ok = cells != NULL;
+ 
+-        if (cells == NULL) {
+-            NitroPort_Gx3dFreeSurvey(survey);
+-            return FALSE;
++        if (ok) {
++            copy->runCell = cells;
++            copy->runRoom = room;
+         }
+-
+-        copy->runCell = cells;
+-        copy->runRoom = room;
+     }
+ 
+     // (each run's list: its polygons, a few commands more)
+-    u32 room = NNS_G3dGetShpDLSize(shp) + runs * 64 + 64;
+-    u8 *bytes = malloc(room);
+-    u32 made = bytes != NULL ? NitroPort_Gx3dSurveyRuns(survey, sPortExtrudeMark, count, bytes, room, copy->runBytes + copy->runs, copy->runCell + copy->runs, runs) : 0;
++    u32 room = NNS_G3dGetShpDLSize(shp) + runs * 64 + 64 + piecesSize;
++    u8 *bytes = ok ? malloc(room) : NULL;
++    u32 made = bytes != NULL ? NitroPort_Gx3dSurveyRuns(survey, sPortExtrudeMark, count, bytes, room, copy->runBytes + copy->runs, copy->runCell + copy->runs, runs - numPieces) : 0;
+ 
+     NitroPort_Gx3dFreeSurvey(survey);
+ 
+-    if (bytes == NULL) {
+-        return FALSE;
+-    }
++    if (bytes == NULL || made == 0) {
++        BOOL whole = bytes != NULL; // (not cut into runs: sent whole; else no room)
++
++        for (int k = 0; k < numPieces; k++) {
++            free(pieces[k].bytes);
++        }
+ 
+-    if (made == 0) {
+         free(bytes);
+-        return TRUE;
++        return whole;
+     }
+ 
++    // (the pieces before what the list leaves set, if it's there)
++    u32 *runBytes = copy->runBytes + copy->runs;
++    u8 *runCell = copy->runCell + copy->runs;
++    u32 tail = runCell[made - 1] == PORT_CELL_ALWAYS ? 1 : 0, at = 0;
++
++    for (u32 r = 0; r < made - tail; r++) {
++        at += runBytes[r];
++    }
++
++    if (tail) {
++        memmove(bytes + at + piecesSize, bytes + at, runBytes[made - 1]);
++        runBytes[made - 1 + numPieces] = runBytes[made - 1];
++        runCell[made - 1 + numPieces] = PORT_CELL_ALWAYS;
++    }
++
++    for (int k = 0; k < numPieces; k++) {
++        memcpy(bytes + at, pieces[k].bytes, pieces[k].size);
++        at += pieces[k].size;
++        runBytes[made - tail + k] = pieces[k].size;
++        runCell[made - tail + k] = pieces[k].cell;
++        free(pieces[k].bytes);
++
++        s32 *box = copy->box[pieces[k].cell];
++
++        for (int a = 0; a < 3; a++) {
++            box[a] = pieces[k].box[a] < box[a] ? pieces[k].box[a] : box[a];
++            box[3 + a] = pieces[k].box[3 + a] > box[3 + a] ? pieces[k].box[3 + a] : box[3 + a];
++        }
++    }
++
++    made += numPieces;
++
+     for (u32 g = 0; g < count; g++) {
++        if (sPortExtrudeMark[g] == PORT_CELL_NEVER) {
++            continue;
++        }
++
+         s32 *box = copy->box[sPortExtrudeMark[g]];
+ 
+         for (int k = 0; k < 3; k++) {
+@@ -4756,7 +4921,7 @@ static BOOL Port_RenderMapCells(const LandDataManager *landDataMan, u8 index, co
+             u32 size = 0;
+ 
+             for (u32 r = copy->firstRun[i]; r < copy->firstRun[i + 1]; r++) {
+-                if (copy->runCell[r] == PORT_CELL_ALWAYS || (cells & (1u << copy->runCell[r]))) {
++                if (copy->runCell[r] == PORT_CELL_ALWAYS || (copy->runCell[r] != PORT_CELL_NEVER && (cells & (1u << copy->runCell[r])))) {
+                     memcpy(list + size, copy->block + copy->ofs[r], copy->sizes[r]);
+                     size += copy->sizes[r];
+                 }

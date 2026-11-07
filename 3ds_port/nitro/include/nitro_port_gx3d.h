@@ -350,6 +350,15 @@ uint32_t NitroPort_Gx3dSurveyTrim(const NitroGx3dListSurvey *survey, void *dst, 
  * in no group. */
 uint32_t NitroPort_Gx3dSurveyRuns(const NitroGx3dListSurvey *survey, const uint8_t *mark, uint32_t nmark,
                                   void *dst, uint32_t dstBytes, uint32_t *sizes, uint8_t *runMark, uint32_t maxRuns);
+/* The list with only the groups keep[] says (as NitroPort_Gx3dSurveyTrim
+ * has them), each vertex sent as its own coordinates (VTX_16) moved: x
+ * scaled by num/den about originX, then all moved by dx, dy, dz (the
+ * list's units); the COLOR, NORMAL and TEXCOORD a trim sends before a
+ * BEGIN_VTXS sent after it instead (a NORMAL lit with the polygon's own
+ * lights). Its bytes; 0 if it doesn't fit, nothing is kept, or a vertex
+ * lands outside 16 bits. (A piece of a map drawn elsewhere, or squeezed.) */
+uint32_t NitroPort_Gx3dSurveyMoved(const NitroGx3dListSurvey *survey, void *dst, uint32_t dstBytes, const uint8_t *keep, uint32_t nkeep,
+                                   int32_t originX, int32_t num, int32_t den, int32_t dx, int32_t dy, int32_t dz);
 /* An MTX_TRANS (x, y, z: as its parameters, fx32) packed for a display
  * list, into dst: its bytes (16), 0 if it doesn't fit. */
 uint32_t NitroPort_Gx3dTranslateCommand(void *dst, uint32_t dstBytes, int32_t x, int32_t y, int32_t z);

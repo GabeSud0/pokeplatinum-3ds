@@ -3806,6 +3806,61 @@ uint32_t NitroPort_Gx3dSurveyRuns(const NitroGx3dListSurvey *sv,const uint8_t *m
     }
     return runs;
 }
+uint32_t NitroPort_Gx3dSurveyMoved(const NitroGx3dListSurvey *sv,void *dst,uint32_t dstBytes,const uint8_t *keep,uint32_t nkeep,
+                                   int32_t originX,int32_t num,int32_t den,int32_t dx,int32_t dy,int32_t dz)
+{
+    uint32_t n,o,room;
+    uint32_t *tmp;
+    DlInfo *info;
+    DlWriter wr;
+    uint32_t held[3]={0,0,0},heldWhen[3]={0,0,0};
+    unsigned k,s;
+    int inside=0;
+    if(!sv || !keep || !dst || den<=0)return 0;
+    /* (the groups kept, as a trim has them: every vertex's coordinates
+     * known from the list itself) */
+    room=sv->info->nops*3u+16u;
+    tmp=malloc(room*4u);
+    if(!tmp)return 0;
+    n=dl_trim_surveyed(sv->info,sv->w,tmp,room*4u,NULL,NULL,0u,0u,keep,nkeep);
+    info=n?dl_survey(tmp,n/4u,1u):NULL;
+    if(!info){free(tmp);return 0;}
+    memset(&wr,0,sizeof(wr));
+    wr.out=dst;wr.cap=dstBytes/4u;
+    for(o=0;o<info->nops && !wr.full;o++){
+        unsigned op=info->ops[o]&255u;
+        const uint32_t *p=&tmp[info->ops[o]>>8];
+        if(op>=0x23u && op<=0x28u){
+            int32_t xyz[3];
+            int64_t x=(int64_t)info->xyz[o][0]-originX;
+            xyz[0]=(int32_t)(originX+(x*num+(x>=0?den/2:-den/2))/den+dx);
+            xyz[1]=info->xyz[o][1]+dy;
+            xyz[2]=info->xyz[o][2]+dz;
+            if(!dl_s16(xyz)){dl_free(info);free(tmp);return 0;}
+            dl_vtx16(&wr,xyz);
+        }else if(op>=0x20u && op<=0x22u && !inside){
+            /* (outside a BEGIN_VTXS: sent after the next one, a NORMAL lit
+             * with the polygon's own lights) */
+            held[op-0x20u]=p[0];
+            heldWhen[op-0x20u]=o+1u;
+        }else{
+            dl_put(&wr,op,p);
+            if(op==0x40u){
+                unsigned order[3]={0,1,2};
+                inside=1;
+                for(k=0;k<3;k++)for(s=k+1u;s<3;s++)if(heldWhen[order[s]]<heldWhen[order[k]]){unsigned t=order[k];order[k]=order[s];order[s]=t;}
+                for(k=0;k<3;k++)if(heldWhen[order[k]])dl_put(&wr,0x20u+order[k],&held[order[k]]);
+                heldWhen[0]=heldWhen[1]=heldWhen[2]=0;
+            }else if(op==0x41u){
+                inside=0;
+            }
+        }
+    }
+    dl_free(info);
+    free(tmp);
+    if(wr.full || wr.n==0u)return 0;
+    return wr.n*4u;
+}
 uint32_t NitroPort_Gx3dTranslateCommand(void *dst,uint32_t dstBytes,int32_t x,int32_t y,int32_t z)
 {
     uint32_t *w=dst;

@@ -1262,6 +1262,23 @@ screen's 320 x 192 at 1.25 times, as above.
   scene or two after loading it, and a copy made before kept the model's
   own colours, darker (Amity Square's trees past its east edge and its
   rocks past its west one, on the 3DS).
+- **Tree rows short of the border** (patch 0115): Route 204's north part
+  has a corridor between the trees along its top, a trainer at its end by
+  the east border; drawn on past the border (0110) her place went on as a
+  corridor to nowhere. A row listed (`sPortExtrudeTreeRows`) has its last
+  tree drawn on past the border too, every 2 tiles from its second place
+  (her place stays as it is), moved a tile north onto the rows of the
+  trees drawn on beside it (the forest is staggered; at the row's own
+  place they stood in the others).
+- **Pieces of a map sent by cells** (patch 0116, `sPortCellPieces`): a
+  shape's polygons wholly in a box of tiles left out and/or drawn again
+  moved (`NitroPort_Gx3dSurveyMoved`: x squeezed about a point, then
+  moved, each vertex its own coordinates), only if the box holds just
+  the polygons it should. Amity Square's plateau by the east edge: its
+  upper cliff ran a tile past the plateau's east cliff to the border and
+  ended square; it's drawn squeezed by 7/8 to end where the plateau does,
+  and the corner made of the same cliff's rounded corner 9 tiles west and
+  7 north, facing the same way (not mirrored).
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
