@@ -5700,15 +5700,20 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                  * second at most; the others counted in the next). */
                 if (sFrames - sHitchFrame >= 15u || sHitchFrame == 0u) {
                     const double ms = 1000.0 / SYSCLOCK_ARM11;
+                    u64 split[3];
+                    unsigned splitTris, splitBatches;
 
+                    NitroPort_PicaPrepareSplit(split, &splitTris, &splitBatches);
                     NitroPort_Log("[hitch] a 3D frame %d V-blank%s late (lag now %d): made at V-blank %lu, "
                                   "reached the display thread %lu V-blanks later, drawn from %lu after; %.1f ms "
-                                  "preparing, %.1f ms building (%lu textures converted: %.1f ms), %.1f ms GPU (the frame "
-                                  "before)%s%s",
+                                  "preparing (%.1f the triangles into batches, %.1f their depths, %.1f the cache; "
+                                  "%u triangles, %u batches), %.1f ms building (%lu textures converted: %.1f ms), "
+                                  "%.1f ms GPU (the frame before)%s%s",
                                   (int)-slack, slack == -1 ? "" : "s", sLag, (unsigned long)scene->stamp,
                                   (unsigned long)((int32_t)(sSeenAt - scene->stamp) > 0 ? sSeenAt - scene->stamp : 0u),
                                   (unsigned long)(startVBlank - scene->stamp),
-                                  (double)prepareTicks * ms, (double)(gpuStart - start) * ms,
+                                  (double)prepareTicks * ms, (double)split[0] * ms, (double)split[1] * ms,
+                                  (double)split[2] * ms, splitTris, splitBatches, (double)(gpuStart - start) * ms,
                                   (unsigned long)(texAfter - texBefore),
                                   (double)(texTicksAfter - texTicksBefore) * ms,
                                   (double)sLastGpuTicks * ms,

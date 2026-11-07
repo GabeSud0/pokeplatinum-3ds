@@ -1241,10 +1241,33 @@ screen's 320 x 192 at 1.25 times, as above.
   few shapes a scene, the whole map sent meanwhile); a cell is in the view
   if its column and its row are (the DS's box test with the model's box
   set to theirs), each shape's list made of those cells' parts when they
-  change, the model drawn once. A shape whose parts take the colour,
-  normal or texture coordinates from one another is sent whole (none in
-  Amity Square). On the PC the same pictures; by the lake 15.0-16.0k
-  vertices a scene to 7.7-10.0k.
+  change, the model drawn once. By the lake 15.0-16.0k vertices a scene
+  to 7.7-10.0k. Patch 0112: sent cell after cell, the lamp posts' bulbs
+  came out grey or lavender instead of white, "on" and "off" as the
+  player walked by: two polygons in one place in two cells were drawn the
+  other way round, and a lamp's quad strips start with a vertex without a
+  normal of its own (it takes the last one's colour), the one before it
+  often another lamp's, in a cell not sent. Each shape's list is now cut
+  once into runs (its polygons one after another in one cell:
+  `NitroPort_Gx3dSurveyRuns`, one pass), each its own list: its
+  BEGIN_VTXS, then the colour, normal and texture coordinates set before
+  it (after the BEGIN_VTXS: a NORMAL is lit with the lights the polygon
+  attributes latch at the BEGIN before it; before it, the shape before's
+  were still on), its first vertex as its own coordinates. Each scene's
+  list is the runs in the view in the list's order, then what the whole
+  list leaves set (in a BEGIN_VTXS of its own). On the PC every place
+  looked at draws as with the maps sent whole. The copies past the edges (0110) and the cells' (0111) are
+  lit by the time of day as they're made
+  (`AreaLight_UseGlobalModelAttributes`): the game does that to a map a
+  scene or two after loading it, and a copy made before kept the model's
+  own colours, darker (Amity Square's trees past its east edge and its
+  rocks past its west one, on the 3DS).
+- **The wider view's map reads timed** (patch 0114): a map beside the
+  loaded ones read for the wider view, or one the game is still reading
+  read whole for it, is read in the game's frame; their log lines give
+  the time each took (`..., 2.3 ms`), to tell whether one is a hiccup
+  (Route 208 from Hearthome: three in 50 frames, 59, 25 and 34 KB, and a
+  hiccup by its first bridge, 2026-11-07).
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they
@@ -2112,7 +2135,14 @@ screens) the lower screen is the DS's, filling the screen as before.
     they're made for (patch 0073): at height 0, as a new map object is,
     the ground's height taken nearest it put them on the lower ground
     under a bridge (Route 208's wooden ones): the bubble showed at the
-    Pokémon's feet, 2026-11-03.
+    Pokémon's feet, 2026-11-03. Amity Square's gates (patch 0113): with
+    the follower out (`PortFollower_IsOut`), the step in from either gate
+    doesn't start the square's script (coordinate events 2 and 4: a walk
+    with one of the party's Pokémon asked for, then a fade to black): the
+    player walks in with the follower, nothing asked. The square's own
+    Pokémon isn't out then, so its step out by the gate (events 3 and 5)
+    isn't started either, and a step south onto the gate's tile (the way
+    out) never asks. With the follower off, as the game has it.
   - ALWAYS CATCH (every ball catches), INSTANT VICTORY (the player's
     attacks knock the opponent out, Endure and a Focus Band or Sash no
     help; a Substitute still takes the hit), FAST EGGS (the day care's chance at
@@ -2554,10 +2584,14 @@ under 33 ms for that.
 
 A hitch is in the log with where its time went: `[hitch] a 3D frame N
 V-blanks late (lag now N): made at V-blank S, reached the display thread
-N V-blanks later, drawn from N after; X ms preparing, X ms building (N
-textures converted: X ms), X ms GPU`, or `[hitch] a frame took the
-display thread X ms: ...` (over two V-blanks: the scenes made meanwhile
-may never show). At most one every 15 frames drawn.
+N V-blanks later, drawn from N after; X ms preparing (X the triangles
+into batches, X their depths, X the cache; N triangles, N batches), X ms
+building (N textures converted: X ms), X ms GPU`, or `[hitch] a frame
+took the display thread X ms: ...` (over two V-blanks: the scenes made
+meanwhile may never show). At most one every 15 frames drawn. (The
+preparing split since 2026-11-07: by Amity Square's lake, at 2,000 to
+2,200 triangles, 13 to 20 ms preparing of 22 to 26 building, 7 µs a
+triangle, more than its code suggests.)
 
 Where the GPU's time goes: one frame with a 3D scene every 150 (about
 five seconds) is cut into parts, and each part timed by the GPU's own

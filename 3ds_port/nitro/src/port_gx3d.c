@@ -3712,26 +3712,6 @@ static int dl_repeatable(const uint32_t *w,uint32_t n)
     (void)seen;
     return 1;
 }
-void NitroPort_Gx3dListState(const void *list,uint32_t bytes,unsigned *setFirst,unsigned *uses)
-{
-    const uint32_t *w=list;
-    uint32_t i=0,k,n=bytes/4u;
-    int vertex=0;
-    *setFirst=*uses=0;
-    while(i<n){
-        uint32_t word=w[i++],params=i;
-        for(k=0;k<4;k++){
-            unsigned op=(word>>(k*8))&255u;
-            if(!op)continue;
-            params+=sParamCount[op];
-            if(op>=0x23u && op<=0x28u){vertex=1;continue;}
-            if(op<0x20u || op>0x22u)continue;
-            if(!vertex)*setFirst|=1u<<(op-0x20u);
-            *uses|=1u<<(op-0x20u);
-        }
-        i=params;
-    }
-}
 uint32_t NitroPort_Gx3dSurveyTrim(const NitroGx3dListSurvey *sv,void *dst,uint32_t dstBytes,const uint8_t *keep,uint32_t nkeep,int *repeatable)
 {
     int32_t l[3]={INT32_MIN,INT32_MIN,INT32_MIN},h[3]={INT32_MAX,INT32_MAX,INT32_MAX};
@@ -3740,6 +3720,91 @@ uint32_t NitroPort_Gx3dSurveyTrim(const NitroGx3dListSurvey *sv,void *dst,uint32
     r=dl_trim_surveyed(sv->info,sv->w,dst,dstBytes,l,h,0u,0u,keep,nkeep);
     if(repeatable)*repeatable=r?dl_repeatable(dst,r/4u):0;
     return r;
+}
+uint32_t NitroPort_Gx3dSurveyRuns(const NitroGx3dListSurvey *sv,const uint8_t *mark,uint32_t nmark,
+                                  void *dst,uint32_t dstBytes,uint32_t *sizes,uint8_t *runMark,uint32_t maxRuns)
+{
+    const DlInfo *info;
+    uint32_t o,g,runs=0,at=0,begin=0;
+    uint32_t value[3]={0,0,0},when[3]={0,0,0};  /* (COLOR, NORMAL, TEXCOORD: last set, and at which command, +1) */
+    if(!sv || !mark || !dst || !sizes || !runMark)return 0;
+    info=sv->info;
+    if(!info->ngroups || nmark<info->ngroups || !NitroPort_Gx3dSurveyAllGrouped(sv))return 0;
+    for(o=0;o<info->nops;o++){
+        unsigned op=info->ops[o]&255u;
+        if(!(op>=0x20u && op<=0x28u) && op!=0x40u && op!=0x41u)return 0;
+    }
+    for(g=0,o=0;g<info->ngroups;){
+        const DlGroup *first=&info->groups[g];
+        uint32_t last=g,k,s;
+        DlWriter wr;
+        unsigned order[3]={0,1,2};
+        /* (its groups: up to the next with another mark) */
+        while(last+1u<info->ngroups && mark[last+1u]==mark[g])last++;
+        if(runs>=maxRuns)return 0;
+        /* (the state set before it, and the BEGIN_VTXS it starts in) */
+        for(;o<first->begin;o++){
+            unsigned op=info->ops[o]&255u;
+            if(op>=0x20u && op<=0x22u){value[op-0x20u]=sv->w[info->ops[o]>>8];when[op-0x20u]=o+1u;}
+            else if(op==0x40u)begin=o;
+        }
+        memset(&wr,0,sizeof(wr));
+        wr.out=(uint32_t *)((uint8_t *)dst+at);
+        wr.cap=(dstBytes-at)/4u;
+        /* (after its BEGIN_VTXS: a NORMAL's colour is worked out with the
+         * lights the polygon attributes give at the BEGIN before it, and
+         * before this one the shape's own aren't yet) */
+        dl_put(&wr,0x40u,&sv->w[info->ops[begin]>>8]);
+        for(k=0;k<3;k++)for(s=k+1u;s<3;s++)if(when[order[s]]<when[order[k]]){unsigned t=order[k];order[k]=order[s];order[s]=t;}
+        for(k=0;k<3;k++)if(when[order[k]])dl_put(&wr,0x20u+order[k],&value[order[k]]);
+        /* (its commands, the first vertex its own coordinates) */
+        {
+            int vertex=0;
+            for(;o<info->groups[last].end;o++){
+                unsigned op=info->ops[o]&255u;
+                const uint32_t *p=&sv->w[info->ops[o]>>8];
+                if(op>=0x20u && op<=0x22u){value[op-0x20u]=p[0];when[op-0x20u]=o+1u;}
+                else if(op==0x40u)begin=o;
+                if(op>=0x23u && op<=0x28u && !vertex){
+                    vertex=1;
+                    if(op>=0x25u){dl_vtx16(&wr,info->xyz[o]);continue;}
+                }
+                dl_put(&wr,op,p);
+            }
+        }
+        dl_put(&wr,0x41u,NULL);
+        if(wr.full)return 0;
+        sizes[runs]=wr.n*4u;
+        runMark[runs]=mark[g];
+        at+=wr.n*4u;
+        runs++;
+        g=last+1u;
+    }
+    /* (and what it leaves set, after its last vertex too: what's sent after
+     * it takes that, whichever runs were sent) */
+    for(;o<info->nops;o++){
+        unsigned op=info->ops[o]&255u;
+        if(op>=0x20u && op<=0x22u){value[op-0x20u]=sv->w[info->ops[o]>>8];when[op-0x20u]=o+1u;}
+    }
+    if(when[0] || when[1] || when[2]){
+        DlWriter wr;
+        unsigned order[3]={0,1,2},k,s;
+        if(runs>=maxRuns)return 0;
+        memset(&wr,0,sizeof(wr));
+        wr.out=(uint32_t *)((uint8_t *)dst+at);
+        wr.cap=(dstBytes-at)/4u;
+        /* (in a BEGIN_VTXS of its own, no vertex: its NORMAL lit with the
+         * shape's lights, whether or not any of its runs were sent) */
+        dl_put(&wr,0x40u,&sv->w[info->ops[begin]>>8]);
+        for(k=0;k<3;k++)for(s=k+1u;s<3;s++)if(when[order[s]]<when[order[k]]){unsigned t=order[k];order[k]=order[s];order[s]=t;}
+        for(k=0;k<3;k++)if(when[order[k]])dl_put(&wr,0x20u+order[k],&value[order[k]]);
+        dl_put(&wr,0x41u,NULL);
+        if(wr.full)return 0;
+        sizes[runs]=wr.n*4u;
+        runMark[runs]=0xFFu;
+        runs++;
+    }
+    return runs;
 }
 uint32_t NitroPort_Gx3dTranslateCommand(void *dst,uint32_t dstBytes,int32_t x,int32_t y,int32_t z)
 {

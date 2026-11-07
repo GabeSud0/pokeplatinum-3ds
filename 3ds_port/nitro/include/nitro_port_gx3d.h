@@ -331,9 +331,25 @@ int NitroPort_Gx3dSurveyAllGrouped(const NitroGx3dListSurvey *survey);
  * each either not in it or set before its first vertex). */
 uint32_t NitroPort_Gx3dSurveyTrim(const NitroGx3dListSurvey *survey, void *dst, uint32_t dstBytes,
                                   const uint8_t *keep, uint32_t nkeep, int *repeatable);
-/* Of COLOR, NORMAL and TEXCOORD (bits 0, 1, 2): those a list sets before
- * its first vertex, and those it has at all. */
-void NitroPort_Gx3dListState(const void *list, uint32_t bytes, unsigned *setFirst, unsigned *uses);
+/* The list cut into runs, all of them in one pass: a run each stretch of
+ * its groups one after another whose mark[] is the same (with the commands
+ * between them), its own list drawing those groups as the whole list does
+ * whichever of the runs before it were sent before it: its BEGIN_VTXS
+ * (again, if it starts inside one), the COLOR, NORMAL and TEXCOORD set
+ * before it (in the order they were last set: after the BEGIN_VTXS, a
+ * NORMAL lit with the polygon's own lights), its first vertex as its own
+ * coordinates if it's relative to one before, an END_VTXS after it. Then,
+ * if the list sets any, a last run marked 0xFF, to be sent after whichever
+ * were: the COLOR, NORMAL and TEXCOORD the whole list leaves set, in a
+ * BEGIN_VTXS and END_VTXS of their own without a vertex (what's
+ * sent after it takes them: a shape's list without its own colour takes
+ * the one before's last). The runs' lists one after another in dst, each
+ * one's bytes in sizes[] and its mark in runMark[]; the number of runs, 0
+ * if they don't fit (dst, or more than maxRuns) or the list has commands
+ * besides its lists of vertices, COLOR, NORMAL and TEXCOORD, or a vertex
+ * in no group. */
+uint32_t NitroPort_Gx3dSurveyRuns(const NitroGx3dListSurvey *survey, const uint8_t *mark, uint32_t nmark,
+                                  void *dst, uint32_t dstBytes, uint32_t *sizes, uint8_t *runMark, uint32_t maxRuns);
 /* An MTX_TRANS (x, y, z: as its parameters, fx32) packed for a display
  * list, into dst: its bytes (16), 0 if it doesn't fit. */
 uint32_t NitroPort_Gx3dTranslateCommand(void *dst, uint32_t dstBytes, int32_t x, int32_t y, int32_t z);

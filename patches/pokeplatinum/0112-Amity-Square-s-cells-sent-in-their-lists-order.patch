@@ -1,0 +1,417 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 14:20:00 -0700
+Subject: [PATCH] Amity Square's cells sent in their lists' order; copies lit
+ as the maps (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Patch 0111 sent each shape's list made of its cells' parts one cell after
+another, and the lamp posts' bulbs came out grey or lavender instead of
+white, turning "on" and "off" as the player walked by (as the cells in
+the view changed). Two things: two polygons in one place in two cells
+were drawn the other way round, and a lamp's quad strips start with a
+vertex without a normal of its own (it takes the last one's colour),
+the one before it often another lamp's, in another cell, not sent.
+
+Each shape's list is now cut once into runs (its polygons one after
+another in one cell: NitroPort_Gx3dSurveyRuns, all in one pass), each
+run its own list drawing them as the whole list does at that point: its
+BEGIN_VTXS, then the colour, normal and texture coordinates set before
+it (after the BEGIN_VTXS: a NORMAL's colour is worked out with the
+lights of the polygon attributes latched at the BEGIN before it, so
+before it the shape's own lights weren't on yet and the bulbs were lit
+as the shape before), its first vertex as its own coordinates. Each
+scene's list is made of the runs in the view in the list's order, then
+what the whole list leaves set, in a BEGIN_VTXS of its own (a shape
+after it without a colour of its own takes it). On the PC every place
+looked at in Amity Square draws as with the maps sent whole (the lamps
+white), with 7.0 to 7.7k vertices a scene by the lake as before (15k
+sent whole).
+
+The copies drawn past a map's edge (0110) and the cells' copies (0111)
+were copies of the loaded map's model file, and the game sets a map's
+model to the time of day's light (AreaLight_UseGlobalModelAttributes) a
+scene or two after it's loaded: a copy made before that kept the model's
+own colours, darker (Amity Square's trees past its east edge, and its
+rocks' rows past the west one, a different colour from the map beside
+them on the 3DS, 2026-11-07). The copies made outdoors are set to it too
+now, as they're made.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 968350c1..aaffdfda 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -2251,7 +2251,7 @@ extern NitroGx3dListSurvey *NitroPort_Gx3dSurveyList(const void *src, u32 bytes)
+ extern void NitroPort_Gx3dFreeSurvey(NitroGx3dListSurvey *survey);
+ extern u32 NitroPort_Gx3dSurveyGroups(const NitroGx3dListSurvey *survey, s32 (*box)[6], u8 *slopes, u32 max);
+ extern int NitroPort_Gx3dSurveyAllGrouped(const NitroGx3dListSurvey *survey);
+-extern void NitroPort_Gx3dListState(const void *list, u32 bytes, unsigned *setFirst, unsigned *uses);
++extern u32 NitroPort_Gx3dSurveyRuns(const NitroGx3dListSurvey *survey, const u8 *mark, u32 nmark, void *dst, u32 dstBytes, u32 *sizes, u8 *runMark, u32 maxRuns);
+ extern u32 NitroPort_Gx3dSurveyTrim(const NitroGx3dListSurvey *survey, void *dst, u32 dstBytes, const u8 *keep, u32 nkeep, int *repeatable);
+ extern u32 NitroPort_Gx3dTranslateCommand(void *dst, u32 dstBytes, s32 x, s32 y, s32 z);
+ extern u32 NitroPort_Gx3dTrimListRows(const void *src, u32 bytes, void *dst, u32 dstBytes, s32 xlo, s32 xhi, s32 zlo, s32 zhi, int inside);
+@@ -3504,6 +3504,7 @@ typedef struct PortExtrudeCopy {
+     u32 wanted;         // (the last scene it was asked for, or looked ahead to)
+     s8 bandLo, bandHi;  // (the band's rows; drawn again bandCopies times north, every their depth)
+     u8 bandCopies;
++    BOOL outdoors;      // (lit by the time of day, as the area's maps are)
+     int numShp, nextShape;
+     s32 tile;           // (a tile in the model's coordinates)
+     PortExtrudeList *lists;
+@@ -3940,6 +3941,14 @@ static BOOL Port_FinishExtrudeCopy(PortExtrudeCopy *copy, const NNSG3dResFileHea
+     if (ok) {
+         copy->model = NNS_G3dGetMdlByIdx(NNS_G3dGetMdlSet((NNSG3dResFileHeader *)copy->block), 0);
+ 
++        // (lit as the game's own maps are once it has them all, whenever
++        // it's made: the game sets that on a map it's read a scene or two
++        // after it's drawn, and copied before, the copy kept the model's own
++        // colours, not the time of day's)
++        if (copy->outdoors) {
++            AreaLight_UseGlobalModelAttributes(copy->model);
++        }
++
+         NNSG3dResShp *shapes = NNS_G3dGetShp(copy->model);
+ 
+         for (int i = 0; i < copy->numShp; i++) {
+@@ -4130,6 +4139,7 @@ static PortExtrudeCopy *Port_ExtrudeCopyFor(const LandDataManager *landDataMan,
+     copy->band = (s8)band;
+     copy->state = PORT_EXTRUDE_MAKING;
+     copy->wanted = sPortExtrudeScene;
++    copy->outdoors = AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan) == TRUE;
+ 
+     const PortExtrudeForest *forest = band != 0 ? Port_ExtrudeForestOf(landDataMan, from, dirX) : NULL;
+ 
+@@ -4267,16 +4277,18 @@ static void Port_ExtrudeAhead(const LandDataManager *landDataMan)
+ // whole, every vertex worked out, the 3D's core took 33 ms a scene there
+ // (45 frames a second; a log of 2026-11-07). In the matrices listed, a
+ // loaded map's model is sent with only its cells (8 by 8 tiles) in the
+-// view instead: its polygons by the cell their middle is in, each cell's
+-// part of each shape's list cut out once; each scene, a cell in the view if
+-// both its column and its row are (the DS's box test, theirs and the
+-// map's), each shape's list made of its cells in the view (again only when
+-// those change), the model drawn once. A shape whose cells' parts can't be
+-// sent in any order (one taking the colour, normal or texture coordinates
+-// another set) is sent whole. Made a few shapes a scene, the model drawn
+-// whole meanwhile.
++// view instead: its polygons by the cell their middle is in, each shape's
++// list cut once into runs (its polygons one after another in one cell);
++// each scene, a cell in the view if both its column and its row are (the
++// DS's box test, theirs and the map's), each shape's list made of its runs
++// in the view, in the list's order (again only when those change), the
++// model drawn once. (In the list's order: two polygons in one place, a
++// lamp's bulb and its glow, drawn the other way round look different.) A
++// shape whose list can't be cut so is sent whole. Made a few shapes a
++// scene, the model drawn whole meanwhile.
+ #define PORT_CELL_COPIES 6
+ #define PORT_CELLS       4   // (a side's)
++#define PORT_CELL_ALWAYS 0xFF
+ 
+ static const u8 sPortCelledMatrices[] = {
+     50, // Amity Square
+@@ -4288,33 +4300,40 @@ typedef struct PortCellCopy {
+     u32 wanted;
+     int numShp, nextShape;
+     s32 tile;
+-    PortExtrudeList *lists; // ([cell * numShp + shape], being made)
+-    u8 *whole;              // ([shape]: sent whole)
++    u8 **shapeRuns;         // ([shape] its runs' lists one after another, being made)
++    u32 *firstRun;          // ([shape] its first run; [numShp] the runs' count. None: the shape sent whole)
++    u32 runs, runRoom;
++    u32 *runBytes;          // ([run] its list's bytes)
++    u8 *runCell;            // ([run] the cell its polygons are in; PORT_CELL_ALWAYS: sent whatever's in the view)
+     s32 box[PORT_CELLS * PORT_CELLS][6]; // (each cell's polygons' bounds, the model's coordinates; none: lo above hi)
+-    u32 *ofs, *sizes;       // ([cell * numShp + shape] its part in the block; [cells * numShp + shape] the shape's list made of them)
++    u32 *ofs, *sizes;       // ([run] its list in the block; [runs + shape] the shape's list made of them)
+     u8 *block;
+     NNSG3dResMdl *model;
+     u32 cellsSent;          // (the cells the shapes' lists are made of now; ~0: none made yet)
++    BOOL outdoors;          // (lit by the time of day, as the area's maps are)
+ } PortCellCopy;
+ 
+ static PortCellCopy sPortCellCopies[PORT_CELL_COPIES];
+ 
+ static void Port_FreeCellLists(PortCellCopy *copy)
+ {
+-    if (copy->lists != NULL) {
+-        for (int i = 0; i < PORT_CELLS * PORT_CELLS * copy->numShp; i++) {
+-            free(copy->lists[i].bytes);
++    if (copy->shapeRuns != NULL) {
++        for (int i = 0; i < copy->numShp; i++) {
++            free(copy->shapeRuns[i]);
+         }
+     }
+ 
+-    free(copy->lists);
+-    copy->lists = NULL;
++    free(copy->shapeRuns);
++    free(copy->runBytes);
++    copy->shapeRuns = NULL;
++    copy->runBytes = NULL;
+ }
+ 
+ static void Port_FreeCellCopy(PortCellCopy *copy)
+ {
+     Port_FreeCellLists(copy);
+-    free(copy->whole);
++    free(copy->firstRun);
++    free(copy->runCell);
+     free(copy->ofs);
+     free(copy->sizes);
+     free(copy->block);
+@@ -4353,78 +4372,88 @@ static int Port_CellOf(const PortCellCopy *copy, s32 twice)
+     return cell < 0 ? 0 : cell >= PORT_CELLS ? PORT_CELLS - 1 : (int)cell;
+ }
+ 
+-// Shape i of the loaded map's model cut into its cells' parts.
++// Shape i of the loaded map's model cut into its runs (none: sent whole);
++// FALSE if there's no room.
+ static BOOL Port_CellShape(PortCellCopy *copy, NNSG3dResMdl *model, int i)
+ {
+     NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(NNS_G3dGetShp(model), i);
+     NitroGx3dListSurvey *survey = NitroPort_Gx3dSurveyList(NNS_G3dGetShpDLPtr(shp), NNS_G3dGetShpDLSize(shp));
+-    u32 count = survey != NULL ? NitroPort_Gx3dSurveyGroups(survey, sPortExtrudeBox, NULL, PORT_EXTRUDE_GROUPS) : 0;
+-    unsigned uses = 0, unset = 0;
++    u32 count = survey != NULL ? NitroPort_Gx3dSurveyGroups(survey, sPortExtrudeBox, NULL, PORT_EXTRUDE_GROUPS) : 0, runs = 0;
+ 
+-    if (survey == NULL || count > PORT_EXTRUDE_GROUPS || !NitroPort_Gx3dSurveyAllGrouped(survey)) {
++    copy->firstRun[i] = copy->firstRun[i + 1] = copy->runs;
++
++    if (count == 0 || count > PORT_EXTRUDE_GROUPS) {
+         NitroPort_Gx3dFreeSurvey(survey);
+-        copy->whole[i] = TRUE;
+         return TRUE;
+     }
+ 
+-    for (int c = 0; c < PORT_CELLS * PORT_CELLS; c++) {
+-        BOOL any = FALSE;
+-        s32 box[6] = { INT32_MAX, INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN, INT32_MIN };
++    // (each polygon's cell; the runs of them)
++    for (u32 g = 0; g < count; g++) {
++        int cx = Port_CellOf(copy, sPortExtrudeBox[g][0] + sPortExtrudeBox[g][3]);
++        int cz = Port_CellOf(copy, sPortExtrudeBox[g][2] + sPortExtrudeBox[g][5]);
+ 
+-        for (u32 g = 0; g < count; g++) {
+-            int cx = Port_CellOf(copy, sPortExtrudeBox[g][0] + sPortExtrudeBox[g][3]);
+-            int cz = Port_CellOf(copy, sPortExtrudeBox[g][2] + sPortExtrudeBox[g][5]);
++        sPortExtrudeMark[g] = (u8)(cz * PORT_CELLS + cx);
++        runs += g == 0 || sPortExtrudeMark[g] != sPortExtrudeMark[g - 1];
++    }
+ 
+-            sPortExtrudeMark[g] = cz * PORT_CELLS + cx == c;
++    runs++; // (what the list leaves set, sent after the rest: PORT_CELL_ALWAYS)
+ 
+-            if (sPortExtrudeMark[g]) {
+-                for (int k = 0; k < 3; k++) {
+-                    box[k] = sPortExtrudeBox[g][k] < box[k] ? sPortExtrudeBox[g][k] : box[k];
+-                    box[3 + k] = sPortExtrudeBox[g][3 + k] > box[3 + k] ? sPortExtrudeBox[g][3 + k] : box[3 + k];
+-                }
++    if (copy->runs + runs > copy->runRoom) {
++        u32 room = copy->runRoom * 2 > copy->runs + runs ? copy->runRoom * 2 : copy->runs + runs + 256;
++        u32 *bytes = realloc(copy->runBytes, room * sizeof(u32));
++        u8 *cells;
+ 
+-                any = TRUE;
+-            }
++        if (bytes != NULL) {
++            copy->runBytes = bytes;
+         }
+ 
+-        if (!any) {
+-            continue;
+-        }
+-
+-        u32 size;
+-        int repeatable;
+-        unsigned setFirst, used;
+-        void *cut = Port_ExtrudeCut(survey, shp, count, &size, &repeatable);
++        cells = bytes != NULL ? realloc(copy->runCell, room) : NULL;
+ 
+-        if (cut == NULL || !Port_ExtrudeListPut(&copy->lists[c * copy->numShp + i], cut, size)) {
+-            free(cut);
++        if (cells == NULL) {
+             NitroPort_Gx3dFreeSurvey(survey);
+             return FALSE;
+         }
+ 
+-        NitroPort_Gx3dListState(cut, size, &setFirst, &used);
+-        uses |= used;
+-        unset |= ~setFirst;
+-        free(cut);
++        copy->runCell = cells;
++        copy->runRoom = room;
++    }
++
++    // (each run's list: its polygons, a few commands more)
++    u32 room = NNS_G3dGetShpDLSize(shp) + runs * 64 + 64;
++    u8 *bytes = malloc(room);
++    u32 made = bytes != NULL ? NitroPort_Gx3dSurveyRuns(survey, sPortExtrudeMark, count, bytes, room, copy->runBytes + copy->runs, copy->runCell + copy->runs, runs) : 0;
++
++    NitroPort_Gx3dFreeSurvey(survey);
++
++    if (bytes == NULL) {
++        return FALSE;
++    }
++
++    if (made == 0) {
++        free(bytes);
++        return TRUE;
++    }
++
++    for (u32 g = 0; g < count; g++) {
++        s32 *box = copy->box[sPortExtrudeMark[g]];
+ 
+         for (int k = 0; k < 3; k++) {
+-            copy->box[c][k] = box[k] < copy->box[c][k] ? box[k] : copy->box[c][k];
+-            copy->box[c][3 + k] = box[3 + k] > copy->box[c][3 + k] ? box[3 + k] : copy->box[c][3 + k];
++            box[k] = sPortExtrudeBox[g][k] < box[k] ? sPortExtrudeBox[g][k] : box[k];
++            box[3 + k] = sPortExtrudeBox[g][3 + k] > box[3 + k] ? sPortExtrudeBox[g][3 + k] : box[3 + k];
+         }
+     }
+ 
+-    // (a state the shape's list sets that a part doesn't before its first
+-    // vertex: that part took it from the one before, as cut)
+-    copy->whole[i] = (uses & unset & 7u) != 0;
+-    NitroPort_Gx3dFreeSurvey(survey);
++    copy->shapeRuns[i] = bytes;
++    copy->runs += made;
++    copy->firstRun[i + 1] = copy->runs;
+     return TRUE;
+ }
+ 
+-// The model copied with the cells' parts after it, and room for each
++// The model copied with the runs' lists after it, and room for each
+ // shape's list made of them: made.
+ static BOOL Port_FinishCellCopy(PortCellCopy *copy, const NNSG3dResFileHeader *file)
+ {
+-    int parts = PORT_CELLS * PORT_CELLS * copy->numShp, total = parts + copy->numShp;
++    int total = copy->runs + copy->numShp;
+     void **cuts = calloc(total, sizeof(void *));
+     BOOL ok;
+ 
+@@ -4432,24 +4461,24 @@ static BOOL Port_FinishCellCopy(PortCellCopy *copy, const NNSG3dResFileHeader *f
+     copy->sizes = calloc(total, sizeof(u32));
+     ok = cuts != NULL && copy->ofs != NULL && copy->sizes != NULL;
+ 
+-    // (the room: the parts' together, a word more)
++    // (each run's list in its shape's; the room: the shape's runs' together,
++    // a word more)
+     for (int i = 0; i < copy->numShp && ok; i++) {
+-        u32 room = 4;
++        u32 at = 0;
+ 
+-        for (int c = 0; c < PORT_CELLS * PORT_CELLS && !copy->whole[i]; c++) {
+-            room += copy->lists[c * copy->numShp + i].size;
++        if (copy->firstRun[i] == copy->firstRun[i + 1]) {
++            continue;
+         }
+ 
+-        copy->sizes[parts + i] = room;
+-        cuts[parts + i] = calloc(1, room);
+-        ok = cuts[parts + i] != NULL;
+-    }
+-
+-    for (int i = 0; i < parts && ok; i++) {
+-        static const u32 sNops = 0;
++        for (u32 r = copy->firstRun[i]; r < copy->firstRun[i + 1]; r++) {
++            cuts[r] = copy->shapeRuns[i] + at;
++            copy->sizes[r] = copy->runBytes[r];
++            at += copy->runBytes[r];
++        }
+ 
+-        cuts[i] = copy->lists[i].size > 0 ? (void *)copy->lists[i].bytes : (void *)&sNops;
+-        copy->sizes[i] = copy->lists[i].size > 0 ? copy->lists[i].size : sizeof(sNops);
++        copy->sizes[copy->runs + i] = at + 4;
++        cuts[copy->runs + i] = calloc(1, at + 4);
++        ok = cuts[copy->runs + i] != NULL;
+     }
+ 
+     if (ok) {
+@@ -4460,9 +4489,14 @@ static BOOL Port_FinishCellCopy(PortCellCopy *copy, const NNSG3dResFileHeader *f
+     if (ok) {
+         copy->model = NNS_G3dGetMdlByIdx(NNS_G3dGetMdlSet((NNSG3dResFileHeader *)copy->block), 0);
+         copy->cellsSent = ~0u;
++
++        // (lit as the game's own maps are, as an extruded copy is)
++        if (copy->outdoors) {
++            AreaLight_UseGlobalModelAttributes(copy->model);
++        }
+     }
+ 
+-    for (int i = parts; i < total && cuts != NULL; i++) {
++    for (int i = copy->runs; i < total && cuts != NULL; i++) {
+         free(cuts[i]);
+     }
+ 
+@@ -4482,13 +4516,14 @@ static void Port_CellWork(const LandDataManager *landDataMan, PortCellCopy *copy
+         return;
+     }
+ 
+-    if (copy->lists == NULL) {
++    if (copy->shapeRuns == NULL) {
+         NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(model);
+ 
+         copy->numShp = NNS_G3dGetShp(model)->dict.numEntry;
+         copy->tile = info->posScale > 0 ? (s32)(((s64)MAP_OBJECT_TILE_SIZE << FX32_SHIFT) / info->posScale) : 0;
+-        copy->lists = calloc(copy->numShp > 0 ? PORT_CELLS * PORT_CELLS * copy->numShp : 1, sizeof(PortExtrudeList));
+-        copy->whole = calloc(copy->numShp > 0 ? copy->numShp : 1, 1);
++        copy->shapeRuns = calloc(copy->numShp > 0 ? copy->numShp : 1, sizeof(u8 *));
++        copy->firstRun = calloc(copy->numShp + 1, sizeof(u32));
++        copy->runs = copy->runRoom = 0;
+         copy->nextShape = 0;
+ 
+         for (int c = 0; c < PORT_CELLS * PORT_CELLS; c++) {
+@@ -4496,7 +4531,7 @@ static void Port_CellWork(const LandDataManager *landDataMan, PortCellCopy *copy
+             copy->box[c][3] = copy->box[c][4] = copy->box[c][5] = INT32_MIN;
+         }
+ 
+-        if (copy->lists == NULL || copy->whole == NULL || copy->tile <= 0 || loadedMap->mapModelFile == NULL) {
++        if (copy->shapeRuns == NULL || copy->firstRun == NULL || copy->tile <= 0 || loadedMap->mapModelFile == NULL) {
+             Port_FreeCellLists(copy);
+             copy->state = PORT_EXTRUDE_FAILED;
+             return;
+@@ -4557,6 +4592,7 @@ static PortCellCopy *Port_CellCopyOf(const LandDataManager *landDataMan, const L
+     copy->landDataID = landDataID;
+     copy->state = PORT_EXTRUDE_MAKING;
+     copy->wanted = sPortExtrudeScene;
++    copy->outdoors = AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan) == TRUE;
+     return copy;
+ }
+ 
+@@ -4652,27 +4688,25 @@ static BOOL Port_RenderMapCells(const LandDataManager *landDataMan, u8 index, co
+         }
+     }
+ 
+-    // (the shapes' lists made of those cells' parts, if they've changed)
++    // (the shapes' lists made of those cells' runs, in order, if they've
++    // changed)
+     if (cells != copy->cellsSent) {
+         NNSG3dResShp *shapes = NNS_G3dGetShp(copy->model);
+-        int parts = PORT_CELLS * PORT_CELLS * copy->numShp;
+ 
+         for (int i = 0; i < copy->numShp; i++) {
+             NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, i);
+ 
+-            if (copy->whole[i]) {
++            if (copy->firstRun[i] == copy->firstRun[i + 1]) {
+                 continue;
+             }
+ 
+-            u8 *list = copy->block + copy->ofs[parts + i];
++            u8 *list = copy->block + copy->ofs[copy->runs + i];
+             u32 size = 0;
+ 
+-            for (int c = 0; c < PORT_CELLS * PORT_CELLS; c++) {
+-                u32 part = c * copy->numShp + i;
+-
+-                if ((cells & (1u << c)) && copy->sizes[part] > 4) {
+-                    memcpy(list + size, copy->block + copy->ofs[part], copy->sizes[part]);
+-                    size += copy->sizes[part];
++            for (u32 r = copy->firstRun[i]; r < copy->firstRun[i + 1]; r++) {
++                if (copy->runCell[r] == PORT_CELL_ALWAYS || (cells & (1u << copy->runCell[r]))) {
++                    memcpy(list + size, copy->block + copy->ofs[r], copy->sizes[r]);
++                    size += copy->sizes[r];
+                 }
+             }
+ 

@@ -1520,9 +1520,19 @@ static int shadow_finite(void)
     }
     return isfinite(sShadow.bias)!=0;
 }
+/* (the last prepared scene's time, for the [hitch] lines: the triangles
+ * into batches, their depths, the cache flushed; its triangles, batches) */
+static u64 sPrepTicks[3];
+static unsigned sPrepTriangles,sPrepBatches;
+void NitroPort_PicaPrepareSplit(u64 ticks[3],unsigned *triangles,unsigned *batches)
+{
+    ticks[0]=sPrepTicks[0];ticks[1]=sPrepTicks[1];ticks[2]=sPrepTicks[2];
+    *triangles=sPrepTriangles;
+    *batches=sPrepBatches;
+}
 int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
 {
-    u64 t0=svcGetSystemTick();
+    u64 t0=svcGetSystemTick(),tb,td;
     unsigned lost=0;
     u32 clear;
     int slot;
@@ -1531,15 +1541,23 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
     scene_registers(scene);
     slot=sBuffer;
     sBuffer^=1;
+    tb=svcGetSystemTick();
     sPreparedCount=NitroPort_Gx3dBuildBatches(scene,sVertices[slot],
                                               NITRO_GX3D_PICA_MAX_VERTICES,
                                               sBatches,MAX_BATCHES,&sPreparedBatches,&lost);
     if(dropped)*dropped+=lost;
+    td=svcGetSystemTick();
     normalize_depth(sVertices[slot],sPreparedCount,scene->swap_param,scene->screen_height);
+    sPrepTicks[0]=td-tb;
+    sPrepTicks[1]=svcGetSystemTick()-td;
+    td=svcGetSystemTick();
     if(sPreparedCount){
         GSPGPU_FlushDataCache(sVertices[slot],
                         (u32)(sPreparedCount*sizeof(NitroGx3dGpuVertex)));
     }
+    sPrepTicks[2]=svcGetSystemTick()-td;
+    sPrepTriangles=(unsigned)(sPreparedCount/3u);
+    sPrepBatches=(unsigned)sPreparedBatches;
     sPrepared=slot;
     sPreparedSerial++;   /* (the outline passes' lists are for another) */
     sPreparedSwap=scene->swap_param;
