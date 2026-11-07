@@ -1159,6 +1159,37 @@ screen's 320 x 192 at 1.25 times, as above.
   height lookup for a map not loaded), the height the game finds once it's
   loaded. Their tile's behaviour still waits for the map, and that keeps
   them from moving, as before.
+- **Route 204, Floaroma Meadow and Valley Windworks past their edges**
+  (patch 0107, photos of 2026-11-07). Route 204's north map has forest
+  scenery maps either side at the height of its north part (`MAP_173`,
+  altitude 10), above its lower south rows: the scenery's trees stood over
+  the route's own by the border and its cliffs were cut off there. Route
+  204 is now mirrored past the scenery on the player's side, as Route 206
+  and Valley Windworks are (`sPortMirroredBesideScenery`, each with the
+  side it's mirrored to: the south map to the right only, where its rows
+  meet the mirrored north map's; on its left its ponds by the border would
+  show again). Floaroma Meadow (its own 2x2 matrix) was black past its
+  left and right edges, seen in the picture's top corners: mirrored past
+  them now, as Eterna Forest (`sPortMirroredEdgeMatrices`). Past Valley
+  Windworks' right edge a black strip ran along the mirrored map's south
+  edge: the scenery beside the mountains south of it (14) was 2 tiles
+  lower than the mirrored map's edge, which meets those mountains (18), the
+  step between them facing the camera with nothing on it. A loaded scenery
+  map south of a mirrored map is now mirrored with it, over the scenery
+  beside it (`Port_MirrorSideBelowMirrored`).
+- **The forests' lowered copies as strips** (patch 0108). The copies of a
+  scenery map drawn below itself to fill the slit by a lower map (patch
+  0068) were made for the mountains' (`MAP_175`, 16 polygons). The
+  forests' (`MAP_173` by Route 204, Floaroma, Valley Windworks and Eterna;
+  `MAP_176` by Route 215, Veilstone, Solaceon and Hearthome; 21 KB) drawn
+  whole were a quarter of the vertices a scene by Valley Windworks' south
+  side (the 3DS's geometry at 30 ms a scene there, busy 90% of the time,
+  in a log of 2026-11-07). Each copy of such a map is now drawn as its
+  strips by the sides with a lower map, 4 tiles deep, while each strip's
+  box is in the view (`Port_LoweredStripOf`, cut a side a scene), and
+  whole as before if the strips in the view are as many lists as all of
+  it. The same pictures on the PC; Floaroma's west side 17.5k vertices a
+  scene to 11.1k, Valley Windworks' south 13.0k to 10.1k.
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they
@@ -1373,6 +1404,22 @@ over their party slots, so not before. The caught one takes the picked
 one's slot, healed (as from the PC). Not in the Safari Zone, Pal Park or
 the catching tutorial. The texts are English (the game has none of its
 own for it).
+
+## Rock Smash and Rock Climb asked once a map
+
+As later games do it: the first rock in a map asks "Would you like to use
+Rock Smash?" and plays the HM cut-in, as ever; then A at another rock in
+the same map smashes it at once, with no question, no "used Rock Smash!"
+and no cut-in. Rock Climb the same at rocky walls. The next map asks again
+(patch 0109, `scrcmd.c`). The field move scripts are the ROM's, run as
+they are: while the script is the rock's (`FieldMoves_Rock`) or the rocky
+wall's (`FieldMoves_RockyWall`) and that move was used in this map, the
+question and the "used" message are left out, the YES/NO answers YES, the
+cut-in is left out, and Rock Climb climbs without its own
+(`FieldTask_PortStartUseRockClimbNoCutIn`). The map remembers it in two of
+its own flags no script uses (`FLAG_MAP_LOCAL_0x3E`, `0x3F`), set as the
+cut-in plays or the climb starts (from the field or the party menu) and
+cleared by the game as the player leaves the map.
 
 ## The lower screen as a menu
 
