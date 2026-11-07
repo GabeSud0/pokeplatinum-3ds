@@ -3530,18 +3530,14 @@ static int dl_group_kept(const DlGroup *grp,const int32_t lo[3],const int32_t hi
     }
     return 1;
 }
-static uint32_t dl_trim(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
-                        const int32_t lo[3],const int32_t hi[3],unsigned starts,unsigned outside,const uint8_t *keep,uint32_t nkeep)
+static uint32_t dl_trim_surveyed(const DlInfo *info,const uint32_t *w,void *dst,uint32_t dstBytes,
+                                 const int32_t lo[3],const int32_t hi[3],unsigned starts,unsigned outside,const uint8_t *keep,uint32_t nkeep)
 {
-    const uint32_t *w=src;
-    uint32_t n=bytes/4u,o,g=0;
-    DlInfo *info;
+    uint32_t o,g=0;
     DlWriter wr;
     DlOwed ow;
     int open=0;                    /* (with keep: a BEGIN_VTXS sent, its END not yet) */
-    if((bytes&3u) || !dst)return 0;
-    info=dl_survey(w,n,1u);
-    if(!info)return 0;
+    if(!dst)return 0;
     memset(&wr,0,sizeof(wr));
     wr.out=dst;wr.cap=dstBytes/4u;
     memset(&ow,0,sizeof(ow));
@@ -3604,8 +3600,19 @@ static uint32_t dl_trim(const void *src,uint32_t bytes,void *dst,uint32_t dstByt
     }else if(wr.n==0u && wr.cap>0u){
         wr.out[wr.n++]=0u;                         /* (nothing kept: a word of NOPs) */
     }
-    dl_free(info);
     return wr.full?0:wr.n*4u;
+}
+static uint32_t dl_trim(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
+                        const int32_t lo[3],const int32_t hi[3],unsigned starts,unsigned outside,const uint8_t *keep,uint32_t nkeep)
+{
+    DlInfo *info;
+    uint32_t r;
+    if((bytes&3u) || !dst)return 0;
+    info=dl_survey(src,bytes/4u,1u);
+    if(!info)return 0;
+    r=dl_trim_surveyed(info,src,dst,dstBytes,lo,hi,starts,outside,keep,nkeep);
+    dl_free(info);
+    return r;
 }
 uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
                                 int axis,int32_t lo,int32_t hi)
@@ -3615,26 +3622,132 @@ uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_
     l[axis]=lo;h[axis]=hi;
     return dl_trim(src,bytes,dst,dstBytes,l,h,0u,0u,NULL,0u);
 }
-uint32_t NitroPort_Gx3dListGroups(const void *src,uint32_t bytes,int32_t (*box)[6],uint32_t max)
-{
+struct NitroGx3dListSurvey {
+    const uint32_t *w;
     DlInfo *info;
-    uint32_t g,n;
+};
+NitroGx3dListSurvey *NitroPort_Gx3dSurveyList(const void *src,uint32_t bytes)
+{
+    NitroGx3dListSurvey *sv;
+    if((bytes&3u) || !src)return NULL;
+    sv=malloc(sizeof(*sv));
+    if(!sv)return NULL;
+    sv->w=src;
+    sv->info=dl_survey(src,bytes/4u,1u);
+    if(!sv->info){free(sv);return NULL;}
+    return sv;
+}
+void NitroPort_Gx3dFreeSurvey(NitroGx3dListSurvey *sv)
+{
+    if(!sv)return;
+    dl_free(sv->info);
+    free(sv);
+}
+uint32_t NitroPort_Gx3dSurveyGroups(const NitroGx3dListSurvey *sv,int32_t (*box)[6],uint8_t *slopes,uint32_t max)
+{
+    const DlInfo *info;
+    uint32_t g,n,q;
     int a;
-    if((bytes&3u) || !src)return 0;
-    info=dl_survey(src,bytes/4u,1u);
-    if(!info)return 0;
+    if(!sv)return 0;
+    info=sv->info;
     n=info->ngroups;
     for(g=0;g<n && g<max;g++){
-        for(a=0;a<3;a++){box[g][a]=info->groups[g].lo[a];box[g][3+a]=info->groups[g].hi[a];}
+        const DlGroup *grp=&info->groups[g];
+        for(a=0;a<3;a++){box[g][a]=grp->lo[a];box[g][3+a]=grp->hi[a];}
+        if(slopes){
+            /* (along x, then z: its vertices at the lowest and at the
+             * highest each at one height, the two different) */
+            uint8_t sl=0;
+            for(a=0;a<3;a+=2){
+                int32_t y0=0,y1=0;
+                int have0=0,have1=0,one=1;
+                if(grp->lo[a]==grp->hi[a])continue;
+                for(q=grp->begin;q<grp->end && one;q++){
+                    unsigned c=info->ops[q]&255u;
+                    const int32_t *v=info->xyz[q];
+                    if(c<0x23u || c>0x28u)continue;
+                    if(v[a]==grp->lo[a]){if(!have0){y0=v[1];have0=1;}else if(v[1]!=y0)one=0;}
+                    else if(v[a]==grp->hi[a]){if(!have1){y1=v[1];have1=1;}else if(v[1]!=y1)one=0;}
+                }
+                if(one && have0 && have1 && y0!=y1)sl|=(uint8_t)(a==0?1u:2u);
+            }
+            slopes[g]=sl;
+        }
     }
-    dl_free(info);
     return n;
 }
-uint32_t NitroPort_Gx3dTrimListGroups(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
-                                      const uint8_t *keep,uint32_t nkeep)
+int NitroPort_Gx3dSurveyAllGrouped(const NitroGx3dListSurvey *sv)
+{
+    uint32_t o,g,vertices=0,grouped=0;
+    if(!sv)return 0;
+    for(o=0;o<sv->info->nops;o++){
+        unsigned op=sv->info->ops[o]&255u;
+        if(op>=0x23u && op<=0x28u)vertices++;
+    }
+    for(g=0;g<sv->info->ngroups;g++)grouped+=sv->info->groups[g].vertices;
+    return vertices==grouped;
+}
+/* (a list sent twice in a row drawing the same twice: TEXCOORD, NORMAL and
+ * COLOR each either not in it or set before its first vertex) */
+static int dl_repeatable(const uint32_t *w,uint32_t n)
+{
+    uint32_t i=0,k;
+    unsigned set=0,seen=0;
+    int vertex=0;
+    while(i<n){
+        uint32_t word=w[i++],params=i;
+        for(k=0;k<4;k++){
+            unsigned op=(word>>(k*8))&255u,bit;
+            if(!op)continue;
+            params+=sParamCount[op];
+            if(op>=0x23u && op<=0x28u){vertex=1;continue;}
+            if(op<0x20u || op>0x22u)continue;
+            bit=1u<<(op-0x20u);
+            if(!vertex)set|=bit;
+            else if(!(set&bit))return 0;
+            seen|=bit;
+        }
+        i=params;
+    }
+    (void)seen;
+    return 1;
+}
+void NitroPort_Gx3dListState(const void *list,uint32_t bytes,unsigned *setFirst,unsigned *uses)
+{
+    const uint32_t *w=list;
+    uint32_t i=0,k,n=bytes/4u;
+    int vertex=0;
+    *setFirst=*uses=0;
+    while(i<n){
+        uint32_t word=w[i++],params=i;
+        for(k=0;k<4;k++){
+            unsigned op=(word>>(k*8))&255u;
+            if(!op)continue;
+            params+=sParamCount[op];
+            if(op>=0x23u && op<=0x28u){vertex=1;continue;}
+            if(op<0x20u || op>0x22u)continue;
+            if(!vertex)*setFirst|=1u<<(op-0x20u);
+            *uses|=1u<<(op-0x20u);
+        }
+        i=params;
+    }
+}
+uint32_t NitroPort_Gx3dSurveyTrim(const NitroGx3dListSurvey *sv,void *dst,uint32_t dstBytes,const uint8_t *keep,uint32_t nkeep,int *repeatable)
 {
     int32_t l[3]={INT32_MIN,INT32_MIN,INT32_MIN},h[3]={INT32_MAX,INT32_MAX,INT32_MAX};
-    return dl_trim(src,bytes,dst,dstBytes,l,h,0u,0u,keep,nkeep);
+    uint32_t r;
+    if(!sv || !keep)return 0;
+    r=dl_trim_surveyed(sv->info,sv->w,dst,dstBytes,l,h,0u,0u,keep,nkeep);
+    if(repeatable)*repeatable=r?dl_repeatable(dst,r/4u):0;
+    return r;
+}
+uint32_t NitroPort_Gx3dTranslateCommand(void *dst,uint32_t dstBytes,int32_t x,int32_t y,int32_t z)
+{
+    uint32_t *w=dst;
+    if(!dst || dstBytes<16u)return 0;
+    w[0]=0x1Cu;                                    /* (MTX_TRANS, then three NOPs) */
+    w[1]=(uint32_t)x;w[2]=(uint32_t)y;w[3]=(uint32_t)z;
+    return 16u;
 }
 uint32_t NitroPort_Gx3dTrimListRows(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
                                     int32_t xlo,int32_t xhi,int32_t zlo,int32_t zhi,int inside)

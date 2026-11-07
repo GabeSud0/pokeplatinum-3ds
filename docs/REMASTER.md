@@ -1176,7 +1176,8 @@ screen's 320 x 192 at 1.25 times, as above.
   lower than the mirrored map's edge, which meets those mountains (18), the
   step between them facing the camera with nothing on it. A loaded scenery
   map south of a mirrored map is now mirrored with it, over the scenery
-  beside it (`Port_MirrorSideBelowMirrored`).
+  beside it (`Port_MirrorSideBelowMirrored`). Replaced by drawing the
+  edges on straight (patch 0110): mirroring was rejected.
 - **The forests' lowered copies as strips** (patch 0108). The copies of a
   scenery map drawn below itself to fill the slit by a lower map (patch
   0068) were made for the mountains' (`MAP_175`, 16 polygons). The
@@ -1190,6 +1191,60 @@ screen's 320 x 192 at 1.25 times, as above.
   whole as before if the strips in the view are as many lists as all of
   it. The same pictures on the PC; Floaroma's west side 17.5k vertices a
   scene to 11.1k, Valley Windworks' south 13.0k to 10.1k.
+- **Map edges drawn on straight, not mirrored** (patch 0110, each place's
+  picture approved before it was made, 2026-11-07). Mirrored, a map showed
+  its own houses, ponds, paths and cliffs again backwards past its edge.
+  Past an edge now the map's strip by it goes on straight
+  (`Port_RenderExtrudedPart`): each polygon that reaches the border again
+  and again, moved on by its own width (a cliff's face, the ground by it, a
+  row of trees drawn as one long quad), what starts in the last column
+  every tile, the trees in the last two columns (or rows) whole every 2
+  tiles (a tree: 4 quads of 1 3/8 to 2 1/2 tiles over one place; past the
+  top or bottom, a row of them drawn as one long leaning quad counts as
+  trees too), into the corner what goes on both ways. A slope or wall along
+  the border in its last column (its face toward the border, not across
+  it) isn't drawn on (side by side, its faces made teeth): the flat
+  polygon at its top next to it along the border is drawn again over the
+  slope's length instead (`Port_MakeExtrudeFills`). Places: Route 204 (both
+  maps, past the forest scenery), Floaroma Meadow and Eterna Forest (every
+  edge and corner; the forest was black past its top and bottom),
+  Hearthome's west (the mountain scenery beside its north half, a purple
+  plain, replaced by its own west forest), the Cycling Road and Valley
+  Windworks past their scenery (its river goes on, and the mountains south
+  of it with it, `Port_BelowExtruded`), and Amity Square
+  (`sPortExtrudedEdgeMatrices`). There the top-right map ends at its right
+  in the plateau's last cliff sloping down to the border: past it, the bottom-right map's upper terrace of trees
+  goes on north (`sPortExtrudeForests`, read whole for it if that map
+  isn't loaded), the cliff going down into it. Each part is one copy of
+  the map's model whose lists hold each polygon again at every place
+  (`NitroPort_Gx3dTranslateCommand` between), drawn once: on the PC 43
+  draws a scene to 2 at Amity Square's west edge. The copies are made two
+  shapes a scene ahead, for the loaded maps by an edge in either half of
+  them (`Port_ExtrudeAhead`), and at once if one's needed before (after a
+  warp), each shape's list read once (`NitroPort_Gx3dSurveyList`; 2.1 ms
+  to 0.6 ms for a copy on the PC). Trimmed by chosen groups, a BEGIN_VTXS
+  whose groups are all left out goes with them (before, 101 of them left a
+  lone vertex each: 13k vertices a scene more past Amity Square's edge). A
+  list repeated must set its vertex colour, normal and texture coordinates
+  before its first vertex if it sets them at all (`[field] ... not the
+  same sent again` is logged otherwise; none in these maps). On the PC the
+  same pictures as the approved ones; nothing mirrored is left
+  (`sPortMirroredEdgeMatrices` has none, the mirroring kept for a case that
+  needs it).
+- **Amity Square's maps sent by cells** (patch 0111, a log of 2026-11-07).
+  Its four maps' models are big (14,000 vertices between them) and by the
+  lake all four are partly in the view: sent whole, the 3D's core took 33
+  ms a scene there (45 frames a second). In the matrices listed
+  (`sPortCelledMatrices`) a loaded map is sent with only its cells (8 by 8
+  tiles) in the view (`Port_RenderMapCells`): its polygons by the cell
+  their middle is in, each cell's part of each shape's list cut out once (a
+  few shapes a scene, the whole map sent meanwhile); a cell is in the view
+  if its column and its row are (the DS's box test with the model's box
+  set to theirs), each shape's list made of those cells' parts when they
+  change, the model drawn once. A shape whose parts take the colour,
+  normal or texture coordinates from one another is sent whole (none in
+  Amity Square). On the PC the same pictures; by the lake 15.0-16.0k
+  vertices a scene to 7.7-10.0k.
 - **The people of the maps beside** (patch 0050, also with the 320-wide
   field): the DS makes a map's people as the player walks into it and drops
   those of the map left, all out of its screen; on the wider one they

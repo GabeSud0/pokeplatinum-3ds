@@ -302,16 +302,6 @@ int NitroPort_Gx3dSameAs(uint32_t serial, uint32_t *stamp, uint32_t *swapSeq);
  * list can't be cut (or doesn't fit): draw the whole of it. */
 uint32_t NitroPort_Gx3dTrimList(const void *src, uint32_t bytes, void *dst, uint32_t dstBytes,
                                 int axis, int32_t lo, int32_t hi);
-/* A shape's display list's polygons (a strip of them whole: a group), in
- * the list's order: each one's lowest and highest coordinates (x, y, z,
- * then x, y, z) into box, up to max of them; the count (0 if it can't be
- * read). */
-uint32_t NitroPort_Gx3dListGroups(const void *src, uint32_t bytes, int32_t (*box)[6], uint32_t max);
-/* The list with only the groups keep[] says, by NitroPort_Gx3dListGroups's
- * numbering (those past nkeep left out), drawn the same: 0 if it can't be
- * cut (or doesn't fit). */
-uint32_t NitroPort_Gx3dTrimListGroups(const void *src, uint32_t bytes, void *dst, uint32_t dstBytes,
-                                      const uint8_t *keep, uint32_t nkeep);
 /* The same, with only the polygons that reach into xlo <= x <= xhi and
  * start (their lowest z) in zlo <= z < zhi (inside), or anywhere but
  * there (!inside): the two lists share no polygon, and have them all
@@ -319,6 +309,34 @@ uint32_t NitroPort_Gx3dTrimListGroups(const void *src, uint32_t bytes, void *dst
  * (or doesn't fit). */
 uint32_t NitroPort_Gx3dTrimListRows(const void *src, uint32_t bytes, void *dst, uint32_t dstBytes,
                                     int32_t xlo, int32_t xhi, int32_t zlo, int32_t zhi, int inside);
+/* A shape's display list read once (NULL if it can't be), for: */
+typedef struct NitroGx3dListSurvey NitroGx3dListSurvey;
+NitroGx3dListSurvey *NitroPort_Gx3dSurveyList(const void *src, uint32_t bytes);
+void NitroPort_Gx3dFreeSurvey(NitroGx3dListSurvey *survey);
+/* its polygons (a strip of them whole: a group), in the list's order: each
+ * one's lowest and highest coordinates (x, y, z, then x, y, z) into box, up
+ * to max of them; the count. With slopes, each one's way up too: bit 0 if
+ * it slopes along x (its vertices at its lowest x all at one height, those
+ * at its highest x all at another), bit 1 along z. */
+uint32_t NitroPort_Gx3dSurveyGroups(const NitroGx3dListSurvey *survey, int32_t (*box)[6], uint8_t *slopes, uint32_t max);
+/* Whether every vertex in it is in one of those groups (a list that isn't
+ * read as such, its first vertex relative to one before it, isn't). */
+int NitroPort_Gx3dSurveyAllGrouped(const NitroGx3dListSurvey *survey);
+/* The list with only the groups keep[] says, by that numbering (those past
+ * nkeep left out), drawn the same: a BEGIN_VTXS whose groups are all left
+ * out goes with them, and the coordinates left-out ones leave owed are
+ * sent only for a vertex relative to them, as its own. 0 if it doesn't fit
+ * (nothing kept: one word of NOPs). With repeatable, whether the cut list
+ * sent twice in a row draws the same twice (TEXCOORD, NORMAL and COLOR
+ * each either not in it or set before its first vertex). */
+uint32_t NitroPort_Gx3dSurveyTrim(const NitroGx3dListSurvey *survey, void *dst, uint32_t dstBytes,
+                                  const uint8_t *keep, uint32_t nkeep, int *repeatable);
+/* Of COLOR, NORMAL and TEXCOORD (bits 0, 1, 2): those a list sets before
+ * its first vertex, and those it has at all. */
+void NitroPort_Gx3dListState(const void *list, uint32_t bytes, unsigned *setFirst, unsigned *uses);
+/* An MTX_TRANS (x, y, z: as its parameters, fx32) packed for a display
+ * list, into dst: its bytes (16), 0 if it doesn't fit. */
+uint32_t NitroPort_Gx3dTranslateCommand(void *dst, uint32_t dstBytes, int32_t x, int32_t y, int32_t z);
 /* (for the [perf] geometry's work line) The time the thread has spent
  * making in-between scenes (NitroPort_Gx3dSetInterpolation), in the ticks
  * of NitroGx3dThreadOps.ticks, of it matching their polygons with the
