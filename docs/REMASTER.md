@@ -1279,6 +1279,15 @@ screen's 320 x 192 at 1.25 times, as above.
   ended square; it's drawn squeezed by 7/8 to end where the plateau does,
   and the corner made of the same cliff's rounded corner 9 tiles west and
   7 north, facing the same way (not mirrored).
+- **The sea filler north of Veilstone** (patch 0117,
+  `sPortSceneryExtruded`): seen from Route 215's north-east corner, the
+  forest's filler north of the route stopped in a straight line at the
+  sea's filler north of Veilstone, and on the 3DS nothing was drawn over
+  the sea's at all. Scenery maps listed aren't drawn while the map south
+  of them is loaded: its strip by its north border is drawn on north over
+  them instead (`Port_RenderExtrudedPart`), from the loaded maps and the
+  maps beside alike, made ahead. Veilstone's forest goes on north in the
+  west, its own sea in the east, the coast between them straight north.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give

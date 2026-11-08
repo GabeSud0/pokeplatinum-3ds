@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 18:00:00 -0700
+Subject: [PATCH] The sea filler north of Veilstone drawn as its north edge
+ carried on (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+North of Veilstone City the overworld has the sea's filler map (land data
+174), north of Route 215 the forest's (176): seen from Route 215's
+north-east corner with the wider view, the forest stopped in a straight
+line at the sea, and on the 3DS nothing was drawn there at all (the
+sky's colour, 2026-11-07: the forest to carry on).
+
+Scenery maps listed (sPortSceneryExtruded: the two north of Veilstone)
+aren't drawn while the map south of them is loaded (it is wherever they
+can be seen from): that map's strip by its north border is drawn on
+north over them instead (Port_RenderExtrudedPart, patch 0110), from the
+loaded maps' drawing and the wider view's maps beside them alike, its
+copy made ahead as the others are. Veilstone's north edge is its forest
+in the west and its own sea in the east: each goes on north, the coast
+between them on straight north. (A whole forest filler drawn there
+instead cut Veilstone's sea off in a straight line.) Approved from the
+PC's pictures, 2026-11-07.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 06d8c495..20b852a6 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -4251,6 +4251,7 @@ static void Port_RenderExtrudedEdge(const LandDataManager *landDataMan, u8 index
+ 
+ static BOOL Port_MirroredBesideSceneryTo(u16 header, int dir);
+ static BOOL Port_ExtrudedBesideScenery(u16 header);
++static int Port_SceneryExtrudedFrom(const LandDataManager *landDataMan, int mapMatrixIndex);
+ 
+ // The copies the loaded maps may be drawn on past their borders with, in
+ // either half of them, asked for (each scene: kept), and a little more of
+@@ -4288,6 +4289,11 @@ static void Port_ExtrudeAhead(const LandDataManager *landDataMan)
+         } else {
+             u16 header = MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, index);
+ 
++            // (drawn on north over the scenery north of it)
++            if (index >= width && Port_SceneryExtrudedFrom(landDataMan, index - width) == i) {
++                dirsZ[numZ++] = -1;
++            }
++
+             for (int dir = -1; dir <= 1 && Port_ExtrudedBesideScenery(header); dir += 2) {
+                 if (Port_MirroredBesideSceneryTo(header, dir) && index % width + dir >= 0 && index % width + dir < width
+                     && MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, index + dir) == MAP_HEADER_EVERYWHERE) {
+@@ -5993,6 +5999,17 @@ static void Port_RenderBesideMaps(const LandDataManager *landDataMan, ModelAttri
+                 continue;
+             }
+ 
++            // (scenery with the map south of it drawn on over it instead)
++            int from = Port_SceneryExtrudedFrom(landDataMan, index);
++
++            if (from >= 0) {
++                if (!inside) {
++                    Port_RenderExtrudedPart(landDataMan, (u8)from, 0, -1);
++                }
++
++                continue;
++            }
++
+             VecFx32 position = { 0, 0, 0 };
+ 
+             LandDataManager_CalculateRenderingPosition(index, width, landDataMan->mapMatrix, &position);
+@@ -6081,6 +6098,52 @@ static void Port_RenderBesideMaps(const LandDataManager *landDataMan, ModelAttri
+     }
+ }
+ 
++// Scenery maps with the map south of them drawn on north over them instead
++// (its strip by its north border, Port_RenderExtrudedPart), while that map
++// is loaded (it is wherever the scenery's seen from); the game's filler
++// maps, never seen on the DS, seen past a place's edge. North of
++// Veilstone's west half the sea's filler met the forest's filler north of
++// Route 215 in a straight line, and on the 3DS nothing was drawn there at
++// all (the sky's colour, 2026-11-07: the forest to carry on). Veilstone's
++// own north edge is that forest in the west and the sea in the east: drawn
++// on north, each goes on.
++typedef struct PortSceneryExtruded {
++    u8 matrixID;
++    u16 mapMatrixIndex, from;
++} PortSceneryExtruded;
++
++static const PortSceneryExtruded sPortSceneryExtruded[] = {
++    { 0, 531, 561 }, // (north of Veilstone's west half)
++    { 0, 532, 562 }, // (and its east half)
++};
++
++static void Port_RenderExtrudedPart(const LandDataManager *landDataMan, u8 index, int dirX, int dirZ);
++
++// The loaded quadrant of the map drawn on north over the scenery map at
++// mapMatrixIndex, -1 if none (not listed, or that map not loaded).
++static int Port_SceneryExtrudedFrom(const LandDataManager *landDataMan, int mapMatrixIndex)
++{
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld || landDataMan->mapMatrix == NULL) {
++        return -1;
++    }
++
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++
++    for (int k = 0; k < (int)NELEMS(sPortSceneryExtruded); k++) {
++        if (sPortSceneryExtruded[k].matrixID != matrixID || sPortSceneryExtruded[k].mapMatrixIndex != mapMatrixIndex) {
++            continue;
++        }
++
++        for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++            if (landDataMan->loadedMaps[i]->mapMatrixIndex == sPortSceneryExtruded[k].from && landDataMan->loadedMaps[i]->valid == TRUE) {
++                return i;
++            }
++        }
++    }
++
++    return -1;
++}
++
+ // A loaded map with textures the field hasn't (another area's: Hearthome
+ // City's beside Route 209's gate): drawn from a whole copy bound to its
+ // own area's textures (Port_BesideMapOf, Port_OtherAreaOf), its props with
+@@ -6504,7 +6567,12 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         if (landDataMan->loadedMaps[i]->mapMatrixIndex != INVALID_MAP_MATRIX_INDEX) {
+ #ifdef SDK_PORT_3DS
+-            int keepFrom;
++            int keepFrom, from = Port_SceneryExtrudedFrom(landDataMan, landDataMan->loadedMaps[i]->mapMatrixIndex);
++
++            if (from >= 0) {
++                Port_RenderExtrudedPart(landDataMan, (u8)from, 0, -1);
++                continue;
++            }
+ 
+             if (Port_SceneryMirroredOver(landDataMan, i)) {
+                 continue;
