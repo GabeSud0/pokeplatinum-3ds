@@ -1333,6 +1333,14 @@ screen's 320 x 192 at 1.25 times, as above.
   tiles under Route 202's east forest and their trees stood in its first
   row. The first three copies step down as before; the rest stay as low
   as the third.
+- **Route 211 West's south side** (patch 0123): the river's canyon ran
+  into the mountain filler (flat at the canyon's top) at the map's south
+  edge, the river and every cliff line stopping on one straight line. The
+  filler's first two rows are left out (`sPortMapCuts`, its copies under
+  itself not drawn while they are) and the map's own last rows are drawn on
+  south in their place (`sPortMapPieces`), each polygon repeated at its own
+  depth. A piece moved past its display list's 16-bit coordinates, dropped
+  before, is drawn there with a translation around it.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
