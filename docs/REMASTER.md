@@ -1327,6 +1327,12 @@ screen's 320 x 192 at 1.25 times, as above.
   with no side, so a black notch showed past it from Route 207. Route
   207's own top row, at the same height, is drawn north over the filler
   between them.
+- **Route 202's north-east corner** (patch 0122): the forest east of
+  Jubilife is Route 203's south strip drawn again every 2 tiles south, each
+  an eighth of a tile lower than the one before, so the last ones were 2
+  tiles under Route 202's east forest and their trees stood in its first
+  row. The first three copies step down as before; the rest stay as low
+  as the third.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
