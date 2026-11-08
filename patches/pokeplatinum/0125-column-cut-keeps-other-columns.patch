@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 16:00:00 -0700
+Subject: [PATCH] A map cut by columns keeps its other columns (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A cut taking only some columns (sPortMapCuts' xFrom, xTo: Route 211
+West's north filler, over the canyon) kept only the polygons reaching
+into those columns, in every row: the filler west of the canyon was left
+out whole, a black hole seen from Eterna City's north-east corner. The
+cut now leaves out its rows as before, then adds back those rows'
+polygons west and east of its columns.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index e6a2b9fa..b6819bf3 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -7041,7 +7041,7 @@ typedef struct PortMapCut {
+     u8 zFrom, zTo; // (zFrom <= z < zTo)
+     u16 piecesBy;
+     u8 noLowered;  // (its copies under itself not drawn while it's cut: Port_RenderSceneryMapLowered)
+-    u8 xFrom, xTo; // (only polygons reaching into these columns, tiles from its west edge; 0, 0 all)
++    u8 xFrom, xTo; // (only these columns' polygons left out, tiles from its west edge; 0, 0 all)
+ } PortMapCut;
+ 
+ static const PortMapCut sPortMapCuts[] = {
+@@ -7144,14 +7144,24 @@ static PortPieceCopy *Port_CutCopyOf(const LandDataManager *landDataMan, u8 inde
+ 
+     for (int i = 0; i < numShp && ok; i++) {
+         NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, i);
+-        u32 room = NNS_G3dGetShpDLSize(shp) + 64;
++        const void *list = NNS_G3dGetShpDLPtr(shp);
++        u32 bytes = NNS_G3dGetShpDLSize(shp), room = 3 * (bytes + 64);
+ 
+         cuts[i] = malloc(room);
+-        sizes[i] = cuts[i] != NULL ? NitroPort_Gx3dTrimListRows(NNS_G3dGetShpDLPtr(shp), NNS_G3dGetShpDLSize(shp), cuts[i], room,
+-                                         cut->xTo == 0 ? INT32_MIN : west + cut->xFrom * tile + tile / 2, cut->xTo == 0 ? INT32_MAX : west + cut->xTo * tile - tile / 2,
+-                                         north + cut->zFrom * tile, north + cut->zTo * tile, FALSE)
+-                                     : 0;
++        sizes[i] = cuts[i] != NULL ? NitroPort_Gx3dTrimListRows(list, bytes, cuts[i], room, INT32_MIN, INT32_MAX, north + cut->zFrom * tile, north + cut->zTo * tile, FALSE) : 0;
+         ok = sizes[i] > 0;
++
++        // (only some columns: those rows' polygons west and east of them
++        // after the rest)
++        if (ok && cut->xTo != 0 && cut->xFrom > 0) {
++            sizes[i] += NitroPort_Gx3dTrimListRows(list, bytes, (u8 *)cuts[i] + sizes[i], room - sizes[i],
++                INT32_MIN, west + cut->xFrom * tile - tile / 2, north + cut->zFrom * tile, north + cut->zTo * tile, TRUE);
++        }
++
++        if (ok && cut->xTo != 0 && cut->xTo < MAP_TILES_COUNT_X) {
++            sizes[i] += NitroPort_Gx3dTrimListRows(list, bytes, (u8 *)cuts[i] + sizes[i], room - sizes[i],
++                west + cut->xTo * tile + tile / 2, INT32_MAX, north + cut->zFrom * tile, north + cut->zTo * tile, TRUE);
++        }
+     }
+ 
+     if (ok) {

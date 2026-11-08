@@ -843,10 +843,13 @@ static void begin_polygon(void)
 }
 /* POLYGON_ATTR bit 12 clear: a polygon that crosses the far plane isn't
  * drawn at all (rather than clipped there). Outcode bit 5 is the far
- * plane (w - z < 0). */
+ * plane (w - z < 0). In the wider or taller view it's clipped there
+ * instead: that view sees past the DS's edges, where a big ground polygon
+ * reaching past the far plane would leave a black hole (Route 211 West's
+ * river, from 378,532). */
 static int far_hidden(unsigned outside)
 {
-    if((outside & 0x20u) && !(s.attr & (1u<<12))){sDiag.clipped++;return 1;}
+    if((outside & 0x20u) && !(s.attr & (1u<<12)) && s.wideNum==s.wideDen && s.tallNum==s.tallDen){sDiag.clipped++;return 1;}
     return 0;
 }
 /* Nothing of the polygon is drawn: all its vertices outside the same clip

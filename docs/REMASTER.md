@@ -1346,6 +1346,17 @@ screen's 320 x 192 at 1.25 times, as above.
   the river. The north filler's last two rows are left out over the canyon
   only (a cut can now take some columns: `xFrom`, `xTo`) and the map's
   first rows are drawn on north in their place.
+- **A map cut by columns keeps its other columns** (patch 0125): 0124's
+  cut kept only the polygons reaching into its columns, in every row, so
+  the filler west of the canyon was left out whole (a black hole seen from
+  Eterna City's north-east corner). Its rows are left out as before, then
+  those rows' polygons west and east of its columns added back.
+- **Far-plane polygons clipped in the wider view** (`port_gx3d.c`,
+  `far_hidden`): a polygon crossing the far plane without POLYGON_ATTR bit
+  12 isn't drawn at all, as on the DS; the wider or taller view sees past
+  the DS's edges, where a big ground polygon reaching past the far plane
+  left a black hole (Route 211 West's river from 378,532). There it's
+  clipped at the far plane instead.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
