@@ -3861,6 +3861,73 @@ uint32_t NitroPort_Gx3dSurveyMoved(const NitroGx3dListSurvey *sv,void *dst,uint3
     if(wr.full || wr.n==0u)return 0;
     return wr.n*4u;
 }
+/* A NORMAL's x and z turned a quarter clockwise (seen from above, north up:
+ * east to south), turn times; y kept. 10-bit signed fields. */
+static uint32_t dl_normal_turned(uint32_t n,unsigned turn)
+{
+    int32_t x=(int32_t)(n<<22)>>22,y=(int32_t)(n<<12)>>22,z=(int32_t)(n<<2)>>22;
+    unsigned t;
+    for(t=0;t<(turn&3u);t++){int32_t nx=-z;z=x;x=nx>511?511:nx;}
+    return (uint32_t)(x&0x3FF)|((uint32_t)(y&0x3FF)<<10)|((uint32_t)(z&0x3FF)<<20);
+}
+uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *sv,void *dst,uint32_t dstBytes,const uint8_t *keep,uint32_t nkeep,
+                                    unsigned turn,int32_t pivotX,int32_t pivotZ,int32_t dx,int32_t dy,int32_t dz)
+{
+    uint32_t n,o,room;
+    uint32_t *tmp;
+    DlInfo *info;
+    DlWriter wr;
+    uint32_t held[3]={0,0,0},heldWhen[3]={0,0,0};
+    unsigned k,s,t;
+    int inside=0;
+    if(!sv || !keep || !dst)return 0;
+    /* (the groups kept, as NitroPort_Gx3dSurveyMoved has them) */
+    room=sv->info->nops*3u+16u;
+    tmp=malloc(room*4u);
+    if(!tmp)return 0;
+    n=dl_trim_surveyed(sv->info,sv->w,tmp,room*4u,NULL,NULL,0u,0u,keep,nkeep);
+    info=n?dl_survey(tmp,n/4u,1u):NULL;
+    if(!info){free(tmp);return 0;}
+    memset(&wr,0,sizeof(wr));
+    wr.out=dst;wr.cap=dstBytes/4u;
+    for(o=0;o<info->nops && !wr.full;o++){
+        unsigned op=info->ops[o]&255u;
+        const uint32_t *p=&tmp[info->ops[o]>>8];
+        uint32_t normal;
+        if(op>=0x23u && op<=0x28u){
+            int32_t xyz[3];
+            int64_t x=(int64_t)info->xyz[o][0]-pivotX,z=(int64_t)info->xyz[o][2]-pivotZ;
+            for(t=0;t<(turn&3u);t++){int64_t nx=-z;z=x;x=nx;}
+            xyz[0]=(int32_t)(pivotX+x+dx);
+            xyz[1]=info->xyz[o][1]+dy;
+            xyz[2]=(int32_t)(pivotZ+z+dz);
+            if(!dl_s16(xyz)){dl_free(info);free(tmp);return 0;}
+            dl_vtx16(&wr,xyz);
+            continue;
+        }
+        /* (a NORMAL turned with its polygon) */
+        if(op==0x21u){normal=dl_normal_turned(p[0],turn);p=&normal;}
+        if(op>=0x20u && op<=0x22u && !inside){
+            held[op-0x20u]=p[0];
+            heldWhen[op-0x20u]=o+1u;
+        }else{
+            dl_put(&wr,op,p);
+            if(op==0x40u){
+                unsigned order[3]={0,1,2};
+                inside=1;
+                for(k=0;k<3;k++)for(s=k+1u;s<3;s++)if(heldWhen[order[s]]<heldWhen[order[k]]){unsigned u=order[k];order[k]=order[s];order[s]=u;}
+                for(k=0;k<3;k++)if(heldWhen[order[k]])dl_put(&wr,0x20u+order[k],&held[order[k]]);
+                heldWhen[0]=heldWhen[1]=heldWhen[2]=0;
+            }else if(op==0x41u){
+                inside=0;
+            }
+        }
+    }
+    dl_free(info);
+    free(tmp);
+    if(wr.full || wr.n==0u)return 0;
+    return wr.n*4u;
+}
 uint32_t NitroPort_Gx3dTranslateCommand(void *dst,uint32_t dstBytes,int32_t x,int32_t y,int32_t z)
 {
     uint32_t *w=dst;

@@ -359,6 +359,14 @@ uint32_t NitroPort_Gx3dSurveyRuns(const NitroGx3dListSurvey *survey, const uint8
  * lands outside 16 bits. (A piece of a map drawn elsewhere, or squeezed.) */
 uint32_t NitroPort_Gx3dSurveyMoved(const NitroGx3dListSurvey *survey, void *dst, uint32_t dstBytes, const uint8_t *keep, uint32_t nkeep,
                                    int32_t originX, int32_t num, int32_t den, int32_t dx, int32_t dy, int32_t dz);
+/* As NitroPort_Gx3dSurveyMoved, the kept groups turned instead: x and z a
+ * quarter clockwise (seen from above, north up: east to south) turn times
+ * about pivotX, pivotZ (their NORMALs with them), then moved dx, dy, dz. A
+ * piece of a map placed where its own kind faces another way (a bank's
+ * corner turned to meet another bank; never mirrored). Its bytes; 0 as
+ * there. */
+uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *survey, void *dst, uint32_t dstBytes, const uint8_t *keep, uint32_t nkeep,
+                                    unsigned turn, int32_t pivotX, int32_t pivotZ, int32_t dx, int32_t dy, int32_t dz);
 /* An MTX_TRANS (x, y, z: as its parameters, fx32) packed for a display
  * list, into dst: its bytes (16), 0 if it doesn't fit. */
 uint32_t NitroPort_Gx3dTranslateCommand(void *dst, uint32_t dstBytes, int32_t x, int32_t y, int32_t z);

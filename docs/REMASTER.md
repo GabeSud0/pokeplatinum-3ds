@@ -1294,6 +1294,22 @@ screen's 320 x 192 at 1.25 times, as above.
   on straight past it on that side (`sPortMirroredBesideScenery`, as
   Hearthome's west side): its strip by the border goes on east. Its west
   side is left as it is (the mountain beside Route 210 South).
+- **Route 208's west end and Route 209's river** (patch 0119): the camera
+  is south of the player, so on a map's south edge it sees faces the DS's
+  192 lines never reached, and they were never made. Route 208's mountain
+  slopes are drawn on south in their columns only
+  (`sPortExtrudeColumns`), and the sea's filler past the edge is drawn at
+  the river's height (`sPortSceneryHeights`) so the waves carry on from the
+  river's. New `sPortMapPieces` draws a map's own polygons again, moved: a
+  copy of the loaded map's model whose shapes hold only the pieces, made
+  once and drawn with the map. Route 208 gets its lowest slope carried on,
+  the waterline trims from its north river beside it and by the forest,
+  and a rounded corner (the ledge's own, turned half round with the new
+  `NitroPort_Gx3dSurveyTurned`; pieces are turned, never mirrored). Route
+  209's river, which ran up to its map's north edge with no bank, is closed
+  with the map's own bank and rounded corners. Both were planned tile by
+  tile on a top-down picture (an orthographic camera pointed straight down
+  in a local debug build).
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
