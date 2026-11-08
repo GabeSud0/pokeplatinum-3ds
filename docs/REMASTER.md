@@ -1310,6 +1310,18 @@ screen's 320 x 192 at 1.25 times, as above.
   with the map's own bank and rounded corners. Both were planned tile by
   tile on a top-down picture (an orthographic camera pointed straight down
   in a local debug build).
+- **Route 207's edges** (patch 0120): its east map is drawn on past its
+  border in some columns both ways now (`sPortExtrudeColumns`): its east
+  cliffs north over the mountain's filler, its cliffs and plateau south,
+  where a black corner showed. Its west map's rim bent west at the map's
+  edge and ended there, the filler beside it a tile higher to its south
+  edge. New `sPortMapCuts` draws a loaded map with some rows left out (a
+  copy, only while the map whose pieces take their place is loaded): the
+  filler's last row, where the route's own rim and ground go on west
+  (`sPortMapPieces`, which repeat east too now, `stepX`). The east map's
+  lowest ground ended past its south edge with no rim; it goes on to
+  Oreburgh's rim with the map's own rim and corner a tile lower, turning
+  south by the cliffs. Planned in the fill planner.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
