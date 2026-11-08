@@ -1288,6 +1288,12 @@ screen's 320 x 192 at 1.25 times, as above.
   them instead (`Port_RenderExtrudedPart`), from the loaded maps and the
   maps beside alike, made ahead. Veilstone's forest goes on north in the
   west, its own sea in the east, the coast between them straight north.
+- **Solaceon's east side** (patch 0118): from the town's east side the
+  mountain filler's flat top showed past the border, the town's tree rows,
+  plateau and cliffs stopping on a straight line there. Solaceon is drawn
+  on straight past it on that side (`sPortMirroredBesideScenery`, as
+  Hearthome's west side): its strip by the border goes on east. Its west
+  side is left as it is (the mountain beside Route 210 South).
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
