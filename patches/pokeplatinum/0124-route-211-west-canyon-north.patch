@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 15:30:00 -0700
+Subject: [PATCH] Route 211 West's canyon and river go on north (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+At Route 211 West's north edge the mountain's filler, flat at the canyon's
+top, cut the canyon the same way as at its south edge: the river and every
+cliff line stopped on one straight line, and the holes left where they
+stopped showed black over the river. The filler's last two rows are left
+out over the canyon only (a cut can now take just some columns:
+sPortMapCuts' xFrom, xTo) and the map's first rows drawn on north in their
+place (sPortMapPieces).
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 1eb85b96..e6a2b9fa 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -6761,6 +6761,21 @@ static const PortMapPiece sPortMapPieces[] = {
+     { 0, 491, 4, { 178, 200, 232, 256 }, 2, 0, 1, 1, 0, 0, 0, 24, 6, 24 },
+     { 0, 491, 5, { 208, 240, 256, 288 }, 1, 0, 1, 1, 0, 0, 0, 32, 3, 32 },  // (the top past it, from z 548, x 378-381)
+     { 0, 491, 0, { 240, 256, 256, 288 }, 2, 0, 1, 1, 0, 0, 0, 32, 3, 32 },  // (the slope up to the east filler, x 382-383)
++    { 0, 491, 5, { 24, 56, 224, 256 }, 1, 24, 3, 4, 0, 40, 0, -256, 4, -32 }, // (north over its filler's last 2 rows, by the canyon: the top, x 360-362)
++    { 0, 491, 0, { 88, 104, 0, 32 }, 2, 0, 1, 1, 0, 0, 0, -32, 4, -32 },     // (the canyon's west slopes, x 363-364)
++    { 0, 491, 0, { 104, 120, 0, 64 }, 2, 0, 1, 1, 0, 0, 0, -64, 2, -64 },    // (x 365-366)
++    { 0, 491, 0, { 120, 128, 0, 16 }, 1, 0, 1, 1, 0, 0, 0, -40, 8, -16 },    // (x 367, past the map's own 3 rows past its edge)
++    { 0, 491, 4, { 128, 134, 0, 64 }, 1, 0, 1, 1, 0, 0, 0, -88, 2, -64 },    // (x 368: the river's bank)
++    { 0, 491, 0, { 134, 136, 0, 64 }, 1, 0, 1, 1, 0, 0, 0, -88, 2, -64 },
++    { 0, 491, 8, { 134, 138, 0, 20 }, 4, 0, 1, 1, 0, 0, 0, -44, 7, -20 },
++    { 0, 491, 7, { 136, 160, 0, 16 }, 3, 0, 1, 1, 0, 0, 0, -40, 8, -16 },    // (the river, x 369-371)
++    { 0, 491, 8, { 158, 162, 0, 28 }, 4, 0, 1, 1, 0, 0, 0, -52, 5, -28 },    // (its east bank)
++    { 0, 491, 0, { 160, 176, 0, 64 }, 2, 0, 1, 1, 0, 0, 0, -88, 2, -64 },    // (the canyon's east slopes, x 372-373)
++    { 0, 491, 5, { 176, 192, 0, 64 }, 2, 0, 1, 1, 0, 0, 0, -64, 2, -64 },    // (x 374-375: their foot)
++    { 0, 491, 0, { 192, 224, 0, 64 }, 4, 0, 1, 1, 0, 0, 0, -64, 2, -64 },    // (x 376-379)
++    { 0, 491, 4, { 210, 216, 0, 64 }, 1, 0, 1, 1, 0, 0, 0, -64, 2, -64 },
++    { 0, 491, 5, { 224, 240, 0, 24 }, 2, 0, 1, 1, 0, 0, 0, -24, 6, -24 },    // (the top past it, x 380-381)
++    { 0, 491, 0, { 240, 256, 0, 64 }, 2, 0, 1, 1, 0, 0, 0, -64, 2, -64 },    // (the slope up to the east, x 382-383)
+ };
+ 
+ #define PORT_PIECE_COPIES 3
+@@ -7026,11 +7041,13 @@ typedef struct PortMapCut {
+     u8 zFrom, zTo; // (zFrom <= z < zTo)
+     u16 piecesBy;
+     u8 noLowered;  // (its copies under itself not drawn while it's cut: Port_RenderSceneryMapLowered)
++    u8 xFrom, xTo; // (only polygons reaching into these columns, tiles from its west edge; 0, 0 all)
+ } PortMapCut;
+ 
+ static const PortMapCut sPortMapCuts[] = {
+     { 0, 668, 24, 32, 669 }, // (Route 207's west filler: its last row of ground, z 728-735)
+     { 0, 521, 0, 16, 491, TRUE }, // (Route 211's south filler: its first two rows, z 544-559; its copies under it over the canyon)
++    { 0, 461, 16, 32, 491, TRUE, 8, 32 }, // (and its north filler's last two, z 496-511, over the canyon: x 360-383)
+ };
+ 
+ #define PORT_CUT_COPIES 2
+@@ -7120,7 +7137,7 @@ static PortPieceCopy *Port_CutCopyOf(const LandDataManager *landDataMan, u8 inde
+         return NULL;
+     }
+ 
+-    s32 tile = (s32)(((s64)MAP_OBJECT_TILE_SIZE << FX32_SHIFT) / info->posScale), north = -MAP_TILES_COUNT_Z / 2 * tile;
++    s32 tile = (s32)(((s64)MAP_OBJECT_TILE_SIZE << FX32_SHIFT) / info->posScale), north = -MAP_TILES_COUNT_Z / 2 * tile, west = -MAP_TILES_COUNT_X / 2 * tile;
+     void **cuts = calloc(numShp, sizeof(void *));
+     u32 *sizes = calloc(numShp, sizeof(u32)), *ofs = calloc(numShp, sizeof(u32));
+     BOOL ok = cuts != NULL && sizes != NULL && ofs != NULL;
+@@ -7131,7 +7148,8 @@ static PortPieceCopy *Port_CutCopyOf(const LandDataManager *landDataMan, u8 inde
+ 
+         cuts[i] = malloc(room);
+         sizes[i] = cuts[i] != NULL ? NitroPort_Gx3dTrimListRows(NNS_G3dGetShpDLPtr(shp), NNS_G3dGetShpDLSize(shp), cuts[i], room,
+-                                         INT32_MIN, INT32_MAX, north + cut->zFrom * tile, north + cut->zTo * tile, FALSE)
++                                         cut->xTo == 0 ? INT32_MIN : west + cut->xFrom * tile + tile / 2, cut->xTo == 0 ? INT32_MAX : west + cut->xTo * tile - tile / 2,
++                                         north + cut->zFrom * tile, north + cut->zTo * tile, FALSE)
+                                      : 0;
+         ok = sizes[i] > 0;
+     }

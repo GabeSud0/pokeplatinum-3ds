@@ -1341,6 +1341,11 @@ screen's 320 x 192 at 1.25 times, as above.
   south in their place (`sPortMapPieces`), each polygon repeated at its own
   depth. A piece moved past its display list's 16-bit coordinates, dropped
   before, is drawn there with a translation around it.
+- **Route 211 West's north side** (patch 0124): the same at the map's
+  north edge, where the holes left by the cut canyon also showed black over
+  the river. The north filler's last two rows are left out over the canyon
+  only (a cut can now take some columns: `xFrom`, `xTo`) and the map's
+  first rows are drawn on north in their place.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
