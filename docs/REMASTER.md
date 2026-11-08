@@ -1322,6 +1322,11 @@ screen's 320 x 192 at 1.25 times, as above.
   lowest ground ended past its south edge with no rim; it goes on to
   Oreburgh's rim with the map's own rim and corner a tile lower, turning
   south by the cliffs. Planned in the fill planner.
+- **Route 206's corner past Route 207** (patch 0121): Route 206's
+  south-east ground is 2 tiles above the mountain's filler east of it,
+  with no side, so a black notch showed past it from Route 207. Route
+  207's own top row, at the same height, is drawn north over the filler
+  between them.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
