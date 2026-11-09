@@ -5067,6 +5067,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     uint32_t menuSerial = NitroPort_LowerMenuSerial(), mapSerial = NitroPort_LowerMenuMapSerial();
     unsigned copies;
     u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
+    u64 drawTicksBefore, drawTicksAfter;
+    unsigned drawCallsBefore, drawCallsAfter;
     LayerSet *sets[2] = { NULL, NULL };
     LayerSet *panelUp = NULL;          /* (the upper screen's picture, in the menu's panel put together) */
     uint32_t runSerial = 0;
@@ -5351,6 +5353,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sDrawTarget = (int32_t)(at - soonest) < 0 ? soonest : at;
     }
     NitroPort_PicaTextureStats(&texBefore, &texels, &texTicksBefore);
+    NitroPort_PicaDrawStats(&drawTicksBefore, &drawCallsBefore);
     /* (an in-between scene has its scene's serial: told apart) */
     if (scene != NULL && (!sScenePrepared || sceneSerial * 2u + (mid ? 1u : 0u) != sPreparedScene)) {
         prepareTicks = svcGetSystemTick();
@@ -5624,6 +5627,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         }
     }
     NitroPort_PicaTextureStats(&texAfter, &texels, &texTicksAfter);
+    NitroPort_PicaDrawStats(&drawTicksAfter, &drawCallsAfter);
     {
         /* A frame that took the display thread more than two V-blanks:
          * the scenes made meanwhile may never show (a jump). */
@@ -5707,7 +5711,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                     NitroPort_Log("[hitch] a 3D frame %d V-blank%s late (lag now %d): made at V-blank %lu, "
                                   "reached the display thread %lu V-blanks later, drawn from %lu after; %.1f ms "
                                   "preparing (%.1f the triangles into batches, %.1f their depths, %.1f the cache; "
-                                  "%u triangles, %u batches), %.1f ms building (%lu textures converted: %.1f ms), "
+                                  "%u triangles, %u batches), %.1f ms building (%lu textures converted: %.1f ms; "
+                                  "the scene's batches drawn %u times: %.1f ms), "
                                   "%.1f ms GPU (the frame before)%s%s",
                                   (int)-slack, slack == -1 ? "" : "s", sLag, (unsigned long)scene->stamp,
                                   (unsigned long)((int32_t)(sSeenAt - scene->stamp) > 0 ? sSeenAt - scene->stamp : 0u),
@@ -5716,6 +5721,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                                   (double)split[2] * ms, splitTris, splitBatches, (double)(gpuStart - start) * ms,
                                   (unsigned long)(texAfter - texBefore),
                                   (double)(texTicksAfter - texTicksBefore) * ms,
+                                  drawCallsAfter - drawCallsBefore, (double)(drawTicksAfter - drawTicksBefore) * ms,
                                   (double)sLastGpuTicks * ms,
                                   stereoNow ? "; stereo" : "",
                                   sHitchQuiet ? "; more since the last line" : "");

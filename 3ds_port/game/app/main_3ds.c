@@ -1246,6 +1246,9 @@ static LightEvent sLogWake;
 static Thread sLogThread;
 static volatile bool sLogThreadRunning;
 static volatile bool sLogDirect = true; /* (until the thread runs) */
+/* The time spent writing the log to the card (NoteGameStall: a stall with
+ * the game's reads of the card waiting on it). */
+static volatile u64 sLogWriteTicks;
 
 /* What's waiting, into the file. */
 static void LogWritePending(void)
@@ -1256,6 +1259,7 @@ static void LogWritePending(void)
     if (sLog == NULL) {
         return;
     }
+    u64 writeStart = svcGetSystemTick();
     LightLock_Lock(&sLogFileLock);
     for (;;) {
         size_t n, start, first;
@@ -1283,6 +1287,23 @@ static void LogWritePending(void)
      * get that far (a crash, closed from the HOME Menu, the power off). */
     fsync(fileno(sLog));
     LightLock_Unlock(&sLogFileLock);
+    __atomic_fetch_add(&sLogWriteTicks, svcGetSystemTick() - writeStart, __ATOMIC_RELAXED);
+}
+
+/* Whether the game read files lately: the log isn't written then (below). */
+static bool LogGameReading(void)
+{
+    static uint32_t lastReads, lastDiskReads;
+    uint32_t reads, diskReads;
+    uint64_t bytes, micros;
+    bool reading;
+
+    NitroPort_FsReadStats(&reads, &bytes, &micros);
+    NitroPort_PakDiskStats(&diskReads, &bytes);
+    reading = reads != lastReads || diskReads != lastDiskReads;
+    lastReads = reads;
+    lastDiskReads = diskReads;
+    return reading;
 }
 
 static void LogMain(void *unused)
@@ -1292,6 +1313,24 @@ static void LogMain(void *unused)
         LightEvent_Wait(&sLogWake);
         /* (lines come in bunches: written together) */
         svcSleepThread(50000000LL);
+        /* Not while the game reads files: the card does one thing at a
+         * time, and its reads waited on the log's writing (going into
+         * Oreburgh City, 2026-11-09: 377 small reads, 1 of them from the
+         * card, took 1.2 s). Written once it's been quiet for 0.3 s; at
+         * the latest after 10 s, or with the ring half full. */
+        LogGameReading();
+        for (int waited = 0, quiet = 0; waited < 100 && quiet < 3; waited++) {
+            size_t used;
+
+            svcSleepThread(100000000LL);
+            LightLock_Lock(&sLogLock);
+            used = sLogUsed;
+            LightLock_Unlock(&sLogLock);
+            if (used > LOG_BUF_BYTES / 2 || !__atomic_load_n(&sLogThreadRunning, __ATOMIC_ACQUIRE) || sLogDirect) {
+                break;
+            }
+            quiet = LogGameReading() ? 0 : quiet + 1;
+        }
         LogWritePending();
     }
     threadExit(0);
@@ -2916,17 +2955,21 @@ static void NoteGameStall(u64 enter)
     static uint64_t lastBytes, lastDiskBytes, lastFsMicros, lastGeoMicros;
     uint32_t reads, diskReads;
     uint64_t bytes, diskBytes, fsMicros, geoMicros = NitroPort_Gx3dProducerWaitMicros();
+    static u64 lastLogTicks;
+    u64 logTicks = __atomic_load_n(&sLogWriteTicks, __ATOMIC_RELAXED);
 
     NitroPort_FsReadStats(&reads, &bytes, &fsMicros);
     NitroPort_PakDiskStats(&diskReads, &diskBytes);
     if (sFrameExit != 0 && TicksMs(enter - sFrameExit) > STALL_GAME_MS) {
         NitroPort_Log("[stall] frame %lu: %.0f ms in the game (file reads: %lu, %llu KB, %.0f ms, of them from the SD card %lu, %llu KB; "
-                      "waiting for the geometry thread: %.0f ms)",
+                      "waiting for the geometry thread: %.0f ms; the log written meanwhile: %.0f ms)",
                       sFrame, TicksMs(enter - sFrameExit), (unsigned long)(reads - lastReads),
                       (unsigned long long)((bytes - lastBytes) / 1024u),
                       (double)(fsMicros - lastFsMicros) / 1000.0, (unsigned long)(diskReads - lastDiskReads),
-                      (unsigned long long)((diskBytes - lastDiskBytes) / 1024u), (double)(geoMicros - lastGeoMicros) / 1000.0);
+                      (unsigned long long)((diskBytes - lastDiskBytes) / 1024u), (double)(geoMicros - lastGeoMicros) / 1000.0,
+                      TicksMs(logTicks - lastLogTicks));
     }
+    lastLogTicks = logTicks;
     lastReads = reads;
     lastBytes = bytes;
     lastDiskReads = diskReads;

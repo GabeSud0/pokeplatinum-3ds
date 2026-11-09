@@ -303,8 +303,11 @@ static int sprite_texel_a_pixel(const NitroGx3dScene *scene,const NitroGx3dTrian
     return 1;
 }
 
+/* (itw, ith: one over the texture's size, a power of two: v->s / tw is
+ * v->s times that, exactly, worked out once a triangle instead of two
+ * divisions for each of its vertices) */
 static void put_vertex(NitroGx3dGpuVertex *dst,const NitroGx3dVertex *v,
-                       uint32_t swap_param,unsigned alpha,float tw,float th,
+                       uint32_t swap_param,unsigned alpha,float itw,float ith,
                        float sx,float sy)
 {
     float w=v->clip[3]/4096.0f;
@@ -320,8 +323,8 @@ static void put_vertex(NitroGx3dGpuVertex *dst,const NitroGx3dVertex *v,
     dst->color[3]=color8(alpha);
     /* Texels: (s / width, t / height) samples DS texel (s, t), see
      * NitroPort_Gx3dTileRGBA8. */
-    dst->uv[0]=v->s/tw;
-    dst->uv[1]=v->t/th;
+    dst->uv[0]=v->s*itw;
+    dst->uv[1]=v->t*ith;
 }
 
 /* What decides the GPU state of a batch. */
@@ -379,16 +382,16 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
         tw=(float)(8u<<((tri->texture_param>>20)&7u));
         th=(float)(8u<<((tri->texture_param>>23)&7u));
         {
-            float sx[3],sy[3],dx[3],dy[3];
+            float sx[3],sy[3],dx[3],dy[3],itw=1.0f/tw,ith=1.0f/th;
             if(sprite_texel_a_pixel(scene,tri,tw,th,sx,sy)){
                 /* (its edges on pixel corners: not moved out) */
                 for(k=0;k<3;k++)
-                    put_vertex(&out[count++],&tri->v[k],scene->swap_param,alpha,tw,th,sx[k],sy[k]);
+                    put_vertex(&out[count++],&tri->v[k],scene->swap_param,alpha,itw,ith,sx[k],sy[k]);
             }else{
                 for(k=0;k<3;k++){sx[k]=tri->v[k].x/256.0f;sy[k]=tri->v[k].y/256.0f;}
                 NitroPort_Gx3dExpandTriangle(sx,sy,dx,dy);
                 for(k=0;k<3;k++)
-                    put_vertex(&out[count++],&tri->v[k],scene->swap_param,alpha,tw,th,sx[k]+dx[k],sy[k]+dy[k]);
+                    put_vertex(&out[count++],&tri->v[k],scene->swap_param,alpha,itw,ith,sx[k]+dx[k],sy[k]+dy[k]);
             }
         }
         batch->count+=3;
@@ -430,7 +433,7 @@ size_t NitroPort_Gx3dBuildShadowBatches(const NitroGx3dScene *scene, size_t firs
         }
         tw=(float)(8u<<((tri->texture_param>>20)&7u));
         th=(float)(8u<<((tri->texture_param>>23)&7u));
-        for(k=0;k<3;k++)put_vertex(&out[count++],&tri->v[k],scene->swap_param,31u,tw,th,tri->v[k].x/256.0f,tri->v[k].y/256.0f);
+        for(k=0;k<3;k++)put_vertex(&out[count++],&tri->v[k],scene->swap_param,31u,1.0f/tw,1.0f/th,tri->v[k].x/256.0f,tri->v[k].y/256.0f);
         batch->count+=3;
     }
     if(batch_count)*batch_count=nb;

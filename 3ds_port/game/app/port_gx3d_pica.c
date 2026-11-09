@@ -988,6 +988,11 @@ static u32 widen5(u32 v)
  * rows, |y| <= b w: their vertices there, and where their edges cross
  * those rows' top and bottom (clip space is linear along an edge). -1 for
  * none. */
+/* Each vertex's depth (normalize_depth's first pass: -z / w, or -z in a
+ * W-buffer scene; w above 0), worked out once for its three passes: their
+ * divisions were most of the depths' time (Amity Square's lake, 4 ms a
+ * scene for 6,300 vertices, 2026-11-09). */
+static float sVertexDepth[NITRO_GX3D_PICA_MAX_VERTICES];
 static float ds_rows_farthest(const NitroGx3dGpuVertex *v,size_t count,int wbuffer,float b)
 {
     float farthest=-1.0f;
@@ -997,7 +1002,7 @@ static float ds_rows_farthest(const NitroGx3dGpuVertex *v,size_t count,int wbuff
         for(i=0;i<3;i++){
             const float *p=v[t+i].position,*q=v[t+(i+1)%3].position;
             if(p[3]>0.0f && p[1]<=b*p[3] && p[1]>=-b*p[3]){
-                float d=wbuffer? -p[2] : -p[2]/p[3];
+                float d=sVertexDepth[t+i];
                 if(d>farthest)farthest=d;
             }
             for(side=-1;side<=1;side+=2){
@@ -1023,9 +1028,11 @@ static void normalize_depth(NitroGx3dGpuVertex *v,size_t count,uint32_t swap,uin
     int wbuffer=(swap&2u)!=0;
     float lo=1.0f,hi=0.0f,k;
     size_t i;
+    if(count>NITRO_GX3D_PICA_MAX_VERTICES)count=NITRO_GX3D_PICA_MAX_VERTICES;
     for(i=0;i<count;i++){
         float w=v[i].position[3];
         float d=wbuffer? -v[i].position[2] : (w>0.0f? -v[i].position[2]/w : 0.0f);
+        sVertexDepth[i]=d;
         if(d<lo)lo=d;
         if(d>hi)hi=d;
     }
@@ -1060,7 +1067,7 @@ static void normalize_depth(NitroGx3dGpuVertex *v,size_t count,uint32_t swap,uin
         float w=v[i].position[3];
         if(w>0.0f){
             /* z = -d w  ->  -(DEPTH_NEAR + (d - lo) k) w, d as above */
-            float d=-v[i].position[2]/w;
+            float d=sVertexDepth[i];
             v[i].position[2]=-(DEPTH_NEAR+(d-lo)*k)*w;
         }else{
             v[i].position[2]=k*v[i].position[2]+sDepthA*k*w;
@@ -2511,7 +2518,24 @@ static void draw_parts(size_t n)
     }
 }
 
+static void draw_scene(const PicaView *view);
+/* (the [hitch] lines: the frame's time drawing the 3D scene's batches, of
+ * its building, and how many times it was) */
+static u64 sDrawSceneTicks;
+static unsigned sDrawSceneCalls;
+void NitroPort_PicaDrawStats(u64 *ticks,unsigned *calls)
+{
+    *ticks=sDrawSceneTicks;
+    *calls=sDrawSceneCalls;
+}
 void NitroPort_PicaDrawScene(const PicaView *view)
+{
+    u64 t0=svcGetSystemTick();
+    draw_scene(view);
+    sDrawSceneTicks+=svcGetSystemTick()-t0;
+    sDrawSceneCalls++;
+}
+static void draw_scene(const PicaView *view)
 {
     size_t b,parts;
     int blend,edging,copying,part,depthOnly;
