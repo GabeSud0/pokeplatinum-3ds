@@ -403,6 +403,59 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
     return count;
 }
 
+/* NitroPort_Gx3dBuildBatches's steps one at a time over the whole scene,
+ * each timed (ticks()): t[0] the draw order, t[1] the batches' states,
+ * t[2] PIXEL PERFECT's sprite test, t[3] the edges moved out, t[4] the
+ * vertices written to out (up to capacity). For finding where a heavy
+ * scene's preparing goes on the console (port_gx3d_pica.c). */
+void NitroPort_Gx3dProfileBatches(const NitroGx3dScene *scene,NitroGx3dGpuVertex *out,size_t capacity,
+                                  uint64_t (*ticks)(void),uint64_t t[5])
+{
+    static uint16_t order[NITRO_GX3D_MAX_TRIANGLES],scratch[NITRO_GX3D_MAX_TRIANGLES];
+    volatile uint32_t sink=0;
+    uint64_t a;
+    size_t n,j,count=0;
+    unsigned k;
+    if(!scene||!out||!ticks)return;
+    a=ticks();
+    n=NitroPort_Gx3dDrawOrder(scene,order,scratch);
+    t[0]=ticks()-a;
+    a=ticks();
+    for(j=0;j<n;j++){
+        const NitroGx3dTriangle *tri=&scene->triangles[order[j]];
+        uint32_t param,palette,attr;
+        batch_state(tri,&param,&palette,&attr);
+        sink^=param^palette^attr^(uint32_t)NitroPort_Gx3dTriangleTranslucent(tri);
+    }
+    t[1]=ticks()-a;
+    a=ticks();
+    for(j=0;j<n;j++){
+        const NitroGx3dTriangle *tri=&scene->triangles[order[j]];
+        float sx[3],sy[3];
+        float tw=(float)(8u<<((tri->texture_param>>20)&7u)),th=(float)(8u<<((tri->texture_param>>23)&7u));
+        sink+=(uint32_t)sprite_texel_a_pixel(scene,tri,tw,th,sx,sy);
+    }
+    t[2]=ticks()-a;
+    a=ticks();
+    for(j=0;j<n;j++){
+        const NitroGx3dTriangle *tri=&scene->triangles[order[j]];
+        float sx[3],sy[3],dx[3],dy[3];
+        for(k=0;k<3;k++){sx[k]=tri->v[k].x/256.0f;sy[k]=tri->v[k].y/256.0f;}
+        NitroPort_Gx3dExpandTriangle(sx,sy,dx,dy);
+        sink+=(uint32_t)(dx[0]*1000.0f);
+    }
+    t[3]=ticks()-a;
+    a=ticks();
+    for(j=0;j<n && count+3<=capacity;j++){
+        const NitroGx3dTriangle *tri=&scene->triangles[order[j]];
+        float itw=1.0f/(float)(8u<<((tri->texture_param>>20)&7u)),ith=1.0f/(float)(8u<<((tri->texture_param>>23)&7u));
+        for(k=0;k<3;k++)
+            put_vertex(&out[count++],&tri->v[k],scene->swap_param,31u,itw,ith,tri->v[k].x/256.0f,tri->v[k].y/256.0f);
+    }
+    t[4]=ticks()-a;
+    (void)sink;
+}
+
 size_t NitroPort_Gx3dBuildShadowBatches(const NitroGx3dScene *scene, size_t first,
                                         NitroGx3dGpuVertex *out, size_t capacity,
                                         NitroGx3dBatch *batches, size_t max_batches,

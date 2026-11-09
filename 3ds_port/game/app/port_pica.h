@@ -139,6 +139,8 @@ void NitroPort_PicaPrepareSplit(u64 ticks[3], unsigned *triangles, unsigned *bat
 /* The time spent drawing the 3D scene's batches (NitroPort_PicaDrawScene),
  * and how many times, since the program started. */
 void NitroPort_PicaDrawStats(u64 *ticks, unsigned *calls);
+/* The prepared scene's preparing timed step by step, into the log. */
+void NitroPort_PicaProfilePrepare(const NitroGx3dScene *scene);
 
 typedef struct PicaView {
     C3D_FrameBuf *fb;        /* the screen's render target (colour, depth/stencil) */

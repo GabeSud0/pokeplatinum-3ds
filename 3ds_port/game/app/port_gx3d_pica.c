@@ -1537,6 +1537,79 @@ void NitroPort_PicaPrepareSplit(u64 ticks[3],unsigned *triangles,unsigned *batch
     *triangles=sPrepTriangles;
     *batches=sPrepBatches;
 }
+/* A heavy scene's preparing, step by step, each the quickest of three
+ * runs (the display thread shares its core with the game and the sound:
+ * a run they stopped takes longer), into the log: where Amity Square's
+ * lake's 10-13 ms go (2026-11-09: a 60 FPS frame there needed 15 ms of
+ * building with 5 of the core the game's and the sound's). The batches'
+ * steps write to a copy (in the heap, then in linear memory as the real
+ * ones are); the depths' passes work on a copy of the prepared vertices. */
+static uint64_t profile_ticks(void){return svcGetSystemTick();}
+void NitroPort_PicaProfilePrepare(const NitroGx3dScene *scene)
+{
+    static NitroGx3dGpuVertex *heapCopy,*linearCopy;
+    const double ms=1000.0/SYSCLOCK_ARM11;
+    u64 best[12],t[5],a;
+    size_t count=sPreparedCount,i;
+    int run,j;
+    int wbuffer;
+    if(!scene||sPrepared<0||!count)return;
+    if(!heapCopy)heapCopy=malloc(NITRO_GX3D_PICA_MAX_VERTICES*sizeof(NitroGx3dGpuVertex));
+    if(!linearCopy)linearCopy=linearAlloc(NITRO_GX3D_PICA_MAX_VERTICES*sizeof(NitroGx3dGpuVertex));
+    if(!heapCopy||!linearCopy)return;
+    wbuffer=(scene->swap_param&2u)!=0;
+    for(j=0;j<12;j++)best[j]=~0ull;
+    for(run=0;run<3;run++){
+        NitroPort_Gx3dProfileBatches(scene,heapCopy,NITRO_GX3D_PICA_MAX_VERTICES,profile_ticks,t);
+        for(j=0;j<5;j++)if(t[j]<best[j])best[j]=t[j];
+        NitroPort_Gx3dProfileBatches(scene,linearCopy,NITRO_GX3D_PICA_MAX_VERTICES,profile_ticks,t);
+        if(t[4]<best[5])best[5]=t[4];
+        /* the prepared vertices copied: from linear memory, within the heap */
+        a=svcGetSystemTick();
+        memcpy(heapCopy,sVertices[sPrepared],count*sizeof(NitroGx3dGpuVertex));
+        a=svcGetSystemTick()-a;if(a<best[6])best[6]=a;
+        a=svcGetSystemTick();
+        memcpy(heapCopy+count,heapCopy,count*sizeof(NitroGx3dGpuVertex)<=(NITRO_GX3D_PICA_MAX_VERTICES-count)*sizeof(NitroGx3dGpuVertex)?count*sizeof(NitroGx3dGpuVertex):0);
+        a=svcGetSystemTick()-a;if(a<best[7])best[7]=a;
+        /* the depths' three passes, on the copy */
+        {
+            float lo=1.0f,hi=0.0f,k=1.0f,cap;
+            a=svcGetSystemTick();
+            for(i=0;i<count;i++){
+                float w=heapCopy[i].position[3];
+                float d=wbuffer? -heapCopy[i].position[2] : (w>0.0f? -heapCopy[i].position[2]/w : 0.0f);
+                sVertexDepth[i]=d;
+                if(d<lo)lo=d;
+                if(d>hi)hi=d;
+            }
+            a=svcGetSystemTick()-a;if(a<best[8])best[8]=a;
+            a=svcGetSystemTick();
+            cap=ds_rows_farthest(heapCopy,count,wbuffer,192.0f/(float)scene->screen_height);
+            a=svcGetSystemTick()-a;if(a<best[9])best[9]=a;
+            if(hi>lo)k=1.0f/(hi-lo);
+            a=svcGetSystemTick();
+            for(i=0;i<count;i++){
+                float w=heapCopy[i].position[3];
+                if(w>0.0f)heapCopy[i].position[2]=-(DEPTH_NEAR+(sVertexDepth[i]-lo)*k)*w;
+                else heapCopy[i].position[2]=k*heapCopy[i].position[2]+lo*k*w;
+            }
+            a=svcGetSystemTick()-a;if(a<best[10])best[10]=a;
+            (void)cap;
+        }
+        /* the vertices' cache flushed (as the real ones are) */
+        a=svcGetSystemTick();
+        GSPGPU_FlushDataCache(linearCopy,(u32)(count*sizeof(NitroGx3dGpuVertex)));
+        a=svcGetSystemTick()-a;if(a<best[11])best[11]=a;
+    }
+    NitroPort_Log("[prepare] a scene of %u triangles (%u batches), each step the quickest of 3 runs (ms): "
+                  "draw order %.2f, batches' states %.2f, sprite test %.2f, edges moved out %.2f, vertices written %.2f "
+                  "(%.2f to linear memory); depths: range %.2f, the DS rows' farthest %.2f, remap %.2f; "
+                  "the vertices copied from linear memory %.2f, within the heap %.2f; the cache flushed %.2f",
+                  (unsigned)(count/3u),(unsigned)sPreparedBatches,
+                  best[0]*ms,best[1]*ms,best[2]*ms,best[3]*ms,best[4]*ms,best[5]*ms,
+                  best[8]*ms,best[9]*ms,best[10]*ms,best[6]*ms,best[7]*ms,best[11]*ms);
+}
+
 int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
 {
     u64 t0=svcGetSystemTick(),tb,td;

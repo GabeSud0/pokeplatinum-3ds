@@ -482,6 +482,10 @@ static u32 sSeenSerial, sSeenAt, sShownSerial, sDropped, sStereoFrames;
 static u32 sUnderFills;   /* (screens drawn with the picture behind as the clear) */
 static int sSeenValid, sLast3D;
 static u32 sHitchFrame, sHitchQuiet;
+/* (NitroPort_PicaProfilePrepare: asked for by a late frame, done with the
+ * next prepared scene) */
+static int sProfilePrepareWanted, sProfilePrepares;
+static u32 sProfileAskedAt;
 
 /* A drawn frame onto the LCD (the V-blank thread; under sPresentLock). */
 static void present(int s, int buf, int stereo)
@@ -5359,6 +5363,13 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         prepareTicks = svcGetSystemTick();
         NitroPort_PicaPrepareScene(scene, NULL);
         prepareTicks = svcGetSystemTick() - prepareTicks;
+        /* (a heavy scene coming late: its preparing timed step by step,
+         * into the log, 3 times a session at most, 20 s apart) */
+        if (sProfilePrepareWanted && sProfilePrepares < 3 && scene->count >= 1000u) {
+            sProfilePrepareWanted = 0;
+            sProfilePrepares++;
+            NitroPort_PicaProfilePrepare(scene);
+        }
         sPreparedScene = sceneSerial * 2u + (mid ? 1u : 0u);
         sScenePrepared = 1;
         if (sConfig.stereo && sConfig.convergence <= 0.0f && !mid) {
@@ -5702,6 +5713,10 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                 sLoweredRecently = 0;
                 /* Where the time went, for the log (one line every half
                  * second at most; the others counted in the next). */
+                if (sProfilePrepares < 3 && sFrames - sProfileAskedAt >= 1200u) {
+                    sProfileAskedAt = sFrames;
+                    sProfilePrepareWanted = 1;
+                }
                 if (sFrames - sHitchFrame >= 15u || sHitchFrame == 0u) {
                     const double ms = 1000.0 / SYSCLOCK_ARM11;
                     u64 split[3];

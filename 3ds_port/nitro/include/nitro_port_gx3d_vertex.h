@@ -168,4 +168,7 @@ void NitroPort_Gx3dSimulateGpuSized(const NitroGx3dScene *scene, uint16_t *out55
  * (remaster.txt: shadows, grade, sun; NitroPort_PicaLook): sun shadows,
  * the colour grade, the sun fixed (degrees) or by the clock. */
 void NitroPort_Gx3dSimulateLook(int shadows, int grade, int fixedSun, float elevation, float azimuth);
+/* The batches' steps timed one at a time (port_gx3d_vertex.c). */
+void NitroPort_Gx3dProfileBatches(const NitroGx3dScene *scene, NitroGx3dGpuVertex *out, size_t capacity,
+                                  uint64_t (*ticks)(void), uint64_t t[5]);
 #endif
