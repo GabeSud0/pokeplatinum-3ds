@@ -59,6 +59,15 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
                                   NitroGx3dGpuVertex *out, size_t capacity,
                                   NitroGx3dBatch *batches, size_t max_batches,
                                   size_t *batch_count, unsigned *dropped);
+/* The same, and each vertex's depth into depth[] (as many as vertices;
+ * NULL for none): what -z / w of its clip-space position is (W-buffer
+ * scenes: -z), 0 near .. 1 far, without dividing again; 0 for a vertex
+ * with w <= 0 in a Z-buffer scene. */
+size_t NitroPort_Gx3dBuildBatchesDepths(const NitroGx3dScene *scene,
+                                        NitroGx3dGpuVertex *out, size_t capacity,
+                                        NitroGx3dBatch *batches, size_t max_batches,
+                                        size_t *batch_count, unsigned *dropped,
+                                        float *depth);
 
 /* The scene's shadow-only triangles (shadow_triangles) for the sun
  * shadows' map, as NitroPort_Gx3dBuildBatches has the opaque ones: into

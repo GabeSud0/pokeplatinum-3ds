@@ -10,7 +10,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <math.h>
 #include <string.h>
+#include <math.h>
 #define CHECK(x) do { nchecks++; if(!(x)){ nfail++; \
   printf("FAIL %s:%d: %s\n",__FILE__,__LINE__,#x); }} while(0)
 #define LOOPS 12000
@@ -899,6 +901,54 @@ static void test_batches(void)
     CHECK(nb==2 && dropped==3 && n==9);  /* tri 0, 2, 5 fit */
 }
 
+/* NitroPort_Gx3dBuildBatchesDepths: the same vertices and batches, and
+ * each vertex's depth as -z / w of its position (W-buffer: -z), 0 for w
+ * not above 0 in a Z-buffer scene. */
+static void test_batch_depths(void)
+{
+    static NitroGx3dScene scene;
+    static NitroGx3dGpuVertex a[NITRO_GX3D_PICA_MAX_VERTICES],b[NITRO_GX3D_PICA_MAX_VERTICES];
+    static NitroGx3dBatch ba[16],bb[16];
+    static float depth[NITRO_GX3D_PICA_MAX_VERTICES];
+    uint32_t texA=tex_param(4,32,16,0x2000,0);
+    size_t na,nb,ca=0,cb=0,i;
+    unsigned la,lb;
+    int wb;
+    for(wb=0;wb<2;wb++){
+        memset(&scene,0,sizeof(scene));
+        set_triangle(&scene.triangles[0],31,texA,1,0);
+        set_triangle(&scene.triangles[1],16,0,0,0);
+        set_triangle(&scene.triangles[2],31,texA,1,0);
+        for(i=0;i<3;i++){
+            scene.triangles[0].v[i].depth=0x123456u+(uint32_t)i*0x10000u;
+            scene.triangles[1].v[i].depth=0xFFFFFFu-(uint32_t)i;
+            scene.triangles[2].v[i].depth=(uint32_t)i*0x300000u;
+            scene.triangles[1].v[i].clip[3]=8192+(int32_t)i*1000;
+        }
+        scene.triangles[2].v[1].clip[3]=0;      /* w 0 */
+        scene.triangles[2].v[2].clip[3]=-4096;  /* behind */
+        scene.count=3;
+        scene.swap_param=wb?2u:0u;
+        for(i=0;i<NITRO_GX3D_PICA_MAX_VERTICES && i<64;i++)depth[i]=-7.0f;
+        ca=NitroPort_Gx3dBuildBatches(&scene,a,NITRO_GX3D_PICA_MAX_VERTICES,ba,16,&na,&la);
+        cb=NitroPort_Gx3dBuildBatchesDepths(&scene,b,NITRO_GX3D_PICA_MAX_VERTICES,bb,16,&nb,&lb,depth);
+        CHECK(ca==9 && cb==ca && na==nb && la==lb);
+        CHECK(memcmp(a,b,ca*sizeof(*a))==0);
+        CHECK(memcmp(ba,bb,na*sizeof(*ba))==0);
+        for(i=0;i<cb;i++){
+            float w=b[i].position[3];
+            float want=wb? -b[i].position[2] : (w>0.0f? -b[i].position[2]/w : 0.0f);
+            CHECK(fabsf(depth[i]-want)<=1e-6f);
+            CHECK(depth[i]>=0.0f && depth[i]<=1.0f);
+        }
+        /* triangle 2 (vertices 3-5, opaque ones first): w 0 and behind */
+        if(!wb)CHECK(depth[4]==0.0f && depth[5]==0.0f && depth[3]==0.0f);
+        else CHECK(depth[3]>0.0f && depth[4]==0.0f && depth[5]==0.0f);   /* (W 0 and below: 0) */
+        /* (no depths asked: nothing written) */
+        CHECK(NitroPort_Gx3dBuildBatchesDepths(&scene,b,NITRO_GX3D_PICA_MAX_VERTICES,bb,16,&nb,&lb,NULL)==ca);
+    }
+}
+
 /* Textures for the GPU's bilinear filter: each texel 2x2, and a
  * see-through texel coloured as an opaque one beside it (alpha 0 kept). */
 static void test_filter_texels(void)
@@ -958,6 +1008,7 @@ int main(void) {
     test_palette_banks();
     test_extra_texture_slots();
     test_batches();
+    test_batch_depths();
     printf("GX3D plumbing: %d checks, %d failures\n",nchecks,nfail);
     return nfail?1:0;
 }

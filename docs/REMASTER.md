@@ -2730,6 +2730,24 @@ preparing split since 2026-11-07: by Amity Square's lake, at 2,000 to
 2,200 triangles, 13 to 20 ms preparing of 22 to 26 building, 7 µs a
 triangle, more than its code suggests.)
 
+When such a scene comes late, its preparing is also timed step by step
+(at most 3 times a session, 20 s apart), each step the quickest of three
+runs: `[prepare] a scene of N triangles (N batches), ...: draw order X,
+batches' states X, sprite test X, edges moved out X, vertices written X
+(X to linear memory); depths: range X, the DS rows' farthest X (fog on:
+worked out | no fog: not worked out), remap X; ...`. The first one
+(2026-11-09, Amity Square's lake, 1,954 triangles) came to 10 ms: edges
+moved out 2.7, vertices written 2.3, the DS rows' farthest 2.1, draw
+order 0.8, range 0.7. Since then: the farthest depth within the DS's
+rows (the fog's cap on the taller view) looks only at triangles with a
+corner farther than the farthest found so far (the same answer; 20,000
+random scenes compared), and only with the fog on; the depths come from
+the batches' vertices as they're written (no division a vertex again);
+the edges moved out and the vertices written multiply by reciprocals
+(one over the texture's size from a table, exact); the draw order looks
+at each triangle once. The vertices come out the same to a ten-thousandth
+of a pixel (random scenes against the code before).
+
 Where the GPU's time goes: one frame with a 3D scene every 150 (about
 five seconds) is cut into parts, and each part timed by the GPU's own
 "done" interrupt: `[gpu] upper screen, left eye (stereo, outlines on):

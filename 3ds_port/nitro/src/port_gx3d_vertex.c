@@ -112,14 +112,19 @@ int NitroPort_Gx3dTriangleTranslucent(const NitroGx3dTriangle *tri)
  * tell the difference.) */
 size_t NitroPort_Gx3dDrawOrder(const NitroGx3dScene *scene,uint16_t *order,uint16_t *scratch)
 {
-    size_t i,n=0,first,count,width;
+    size_t i,n=0,first,count=0,width;
     if(!scene)return 0;
-    for(i=0;i<scene->count;i++)
-        if(!NitroPort_Gx3dTriangleTranslucent(&scene->triangles[i]))order[n++]=(uint16_t)i;
+    /* (each triangle looked at once: the opaque ones into order as they
+     * come, the translucent ones into scratch, then after them. Two looks,
+     * the scene's triangles read twice, were a tenth of a heavy scene's
+     * preparing on the console, Amity Square's lake, 2026-11-09.) */
+    for(i=0;i<scene->count;i++){
+        if(NitroPort_Gx3dTriangleTranslucent(&scene->triangles[i]))scratch[count++]=(uint16_t)i;
+        else order[n++]=(uint16_t)i;
+    }
     first=n;
-    for(i=0;i<scene->count;i++)
-        if(NitroPort_Gx3dTriangleTranslucent(&scene->triangles[i]))order[n++]=(uint16_t)i;
-    count=n-first;
+    memcpy(order+first,scratch,count*sizeof(*order));
+    n+=count;
     if(scene->swap_param&1u || count<2)return n;
     /* Bottom-up merge sort of order[first..n): stable. */
     for(width=1;width<count;width*=2){
@@ -150,26 +155,33 @@ size_t NitroPort_Gx3dDrawOrder(const NitroGx3dScene *scene,uint16_t *order,uint1
 #define EXPAND_PX 0.1f
 void NitroPort_Gx3dExpandTriangle(const float sx[3],const float sy[3],float dx[3],float dy[3])
 {
-    float nx[3],ny[3],area;
+    float nx[3],ny[3],area,side;
     int i;
     for(i=0;i<3;i++)dx[i]=dy[i]=0.0f;
     area=(sx[1]-sx[0])*(sy[2]-sy[0])-(sy[1]-sy[0])*(sx[2]-sx[0]);
     if(area>-1e-6f && area<1e-6f)return;
+    /* (one division an edge and one a corner, their results multiplied
+     * in: half the divisions, which were most of this on the console's
+     * VFP (a division ~19 cycles, the core waiting); the corners come out
+     * the same to a few millionths of a tenth of a pixel) */
+    side=area>0?1.0f:-1.0f;
     for(i=0;i<3;i++){
-        int j=(i+1)%3;
-        float ex=sx[j]-sx[i],ey=sy[j]-sy[i],len=sqrtf(ex*ex+ey*ey);
+        int j=i==2?0:i+1;
+        float ex=sx[j]-sx[i],ey=sy[j]-sy[i],len=sqrtf(ex*ex+ey*ey),inv;
         if(len<1e-6f)return;
         /* Outward normal: right of the edge for one winding, left for the other. */
-        nx[i]=(area>0? ey:-ey)/len;
-        ny[i]=(area>0?-ex: ex)/len;
+        inv=side/len;
+        nx[i]= ey*inv;
+        ny[i]=-ex*inv;
     }
     for(i=0;i<3;i++){
-        int p=(i+2)%3;   /* the edge ending at vertex i */
+        int p=i==0?2:i-1;   /* the edge ending at vertex i */
         float denom=1.0f+nx[p]*nx[i]+ny[p]*ny[i];
-        float mx,my,m2,limit=3.0f*EXPAND_PX;
+        float mx,my,m2,f,limit=3.0f*EXPAND_PX;
         if(denom<1e-3f)denom=1e-3f;
-        mx=EXPAND_PX*(nx[p]+nx[i])/denom;
-        my=EXPAND_PX*(ny[p]+ny[i])/denom;
+        f=EXPAND_PX/denom;
+        mx=(nx[p]+nx[i])*f;
+        my=(ny[p]+ny[i])*f;
         m2=mx*mx+my*my;
         if(m2>limit*limit){float k=limit/sqrtf(m2);mx*=k;my*=k;}
         dx[i]=mx;dy[i]=my;
@@ -306,16 +318,29 @@ static int sprite_texel_a_pixel(const NitroGx3dScene *scene,const NitroGx3dTrian
 /* (itw, ith: one over the texture's size, a power of two: v->s / tw is
  * v->s times that, exactly, worked out once a triangle instead of two
  * divisions for each of its vertices) */
-static void put_vertex(NitroGx3dGpuVertex *dst,const NitroGx3dVertex *v,
-                       uint32_t swap_param,unsigned alpha,float itw,float ith,
-                       float sx,float sy)
+/* (Returns the vertex's depth, as NitroPort_Gx3dBuildBatchesDepths gives
+ * it. The divisions by 96 and by the depth's 16777215 as multiplications
+ * by their reciprocals: the same to a part in ten million, in the same
+ * order, without the VFP's slow divisions, two a vertex.) */
+static float put_vertex(NitroGx3dGpuVertex *dst,const NitroGx3dVertex *v,
+                        uint32_t swap_param,unsigned alpha,float itw,float ith,
+                        float sx,float sy)
 {
     float w=v->clip[3]/4096.0f;
     float ndc_x=sx/128.0f-1.0f;
-    float ndc_y=1.0f-sy/96.0f;
+    float ndc_y=1.0f-sy*(1.0f/96.0f);
+    float d;
     dst->position[0]=ndc_x*w;
     dst->position[1]=ndc_y*w;
-    dst->position[2]=NitroPort_Gx3dClipZ(v,swap_param);
+    /* NitroPort_Gx3dClipZ's */
+    d=(swap_param&2u)? (float)v->clip[3]*(1.0f/16777215.0f) : (float)v->depth*(1.0f/16777215.0f);
+    d=d<0.0f?0.0f:d>1.0f?1.0f:d;
+    if(swap_param&2u){
+        dst->position[2]=-d;
+    }else{
+        dst->position[2]=-d*w;
+        if(!(w>0.0f))d=0.0f;
+    }
     dst->position[3]=w;
     dst->color[0]=color8(v->color&31u);
     dst->color[1]=color8((v->color>>5)&31u);
@@ -325,7 +350,14 @@ static void put_vertex(NitroGx3dGpuVertex *dst,const NitroGx3dVertex *v,
      * NitroPort_Gx3dTileRGBA8. */
     dst->uv[0]=v->s*itw;
     dst->uv[1]=v->t*ith;
+    return d;
 }
+
+/* One over a texture's size (8 << n texels, n 0-7): exactly what
+ * 1.0f / (8 << n) is, without dividing (two a triangle). */
+static const float sInverseSize[8]={
+    1.0f/8.0f,1.0f/16.0f,1.0f/32.0f,1.0f/64.0f,1.0f/128.0f,1.0f/256.0f,1.0f/512.0f,1.0f/1024.0f
+};
 
 /* What decides the GPU state of a batch. */
 static void batch_state(const NitroGx3dTriangle *tri,uint32_t *param,
@@ -342,6 +374,15 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
                                   NitroGx3dGpuVertex *out, size_t capacity,
                                   NitroGx3dBatch *batches, size_t max_batches,
                                   size_t *batch_count, unsigned *dropped)
+{
+    return NitroPort_Gx3dBuildBatchesDepths(scene,out,capacity,batches,max_batches,batch_count,dropped,NULL);
+}
+
+size_t NitroPort_Gx3dBuildBatchesDepths(const NitroGx3dScene *scene,
+                                        NitroGx3dGpuVertex *out, size_t capacity,
+                                        NitroGx3dBatch *batches, size_t max_batches,
+                                        size_t *batch_count, unsigned *dropped,
+                                        float *depth)
 {
     size_t i,count=0,nb=0;
     unsigned lost=0;
@@ -382,16 +423,23 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
         tw=(float)(8u<<((tri->texture_param>>20)&7u));
         th=(float)(8u<<((tri->texture_param>>23)&7u));
         {
-            float sx[3],sy[3],dx[3],dy[3],itw=1.0f/tw,ith=1.0f/th;
+            float sx[3],sy[3],dx[3],dy[3];
+            float itw=sInverseSize[(tri->texture_param>>20)&7u],ith=sInverseSize[(tri->texture_param>>23)&7u];
             if(sprite_texel_a_pixel(scene,tri,tw,th,sx,sy)){
                 /* (its edges on pixel corners: not moved out) */
-                for(k=0;k<3;k++)
-                    put_vertex(&out[count++],&tri->v[k],scene->swap_param,alpha,itw,ith,sx[k],sy[k]);
+                for(k=0;k<3;k++){
+                    float d=put_vertex(&out[count],&tri->v[k],scene->swap_param,alpha,itw,ith,sx[k],sy[k]);
+                    if(depth)depth[count]=d;
+                    count++;
+                }
             }else{
                 for(k=0;k<3;k++){sx[k]=tri->v[k].x/256.0f;sy[k]=tri->v[k].y/256.0f;}
                 NitroPort_Gx3dExpandTriangle(sx,sy,dx,dy);
-                for(k=0;k<3;k++)
-                    put_vertex(&out[count++],&tri->v[k],scene->swap_param,alpha,itw,ith,sx[k]+dx[k],sy[k]+dy[k]);
+                for(k=0;k<3;k++){
+                    float d=put_vertex(&out[count],&tri->v[k],scene->swap_param,alpha,itw,ith,sx[k]+dx[k],sy[k]+dy[k]);
+                    if(depth)depth[count]=d;
+                    count++;
+                }
             }
         }
         batch->count+=3;
@@ -448,9 +496,9 @@ void NitroPort_Gx3dProfileBatches(const NitroGx3dScene *scene,NitroGx3dGpuVertex
     a=ticks();
     for(j=0;j<n && count+3<=capacity;j++){
         const NitroGx3dTriangle *tri=&scene->triangles[order[j]];
-        float itw=1.0f/(float)(8u<<((tri->texture_param>>20)&7u)),ith=1.0f/(float)(8u<<((tri->texture_param>>23)&7u));
+        float itw=sInverseSize[(tri->texture_param>>20)&7u],ith=sInverseSize[(tri->texture_param>>23)&7u];
         for(k=0;k<3;k++)
-            put_vertex(&out[count++],&tri->v[k],scene->swap_param,31u,itw,ith,tri->v[k].x/256.0f,tri->v[k].y/256.0f);
+            (void)put_vertex(&out[count++],&tri->v[k],scene->swap_param,31u,itw,ith,tri->v[k].x/256.0f,tri->v[k].y/256.0f);
     }
     t[4]=ticks()-a;
     (void)sink;
