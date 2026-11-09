@@ -1374,6 +1374,10 @@ screen's 320 x 192 at 1.25 times, as above.
   forest's trees under them left out with its ground kept (`keepShapes`),
   the high snow's first rows left out. A cut's rows can start a tile
   north of its edge (`zFrom` -1): the tops of its first trees lean past it.
+- **Route 203's south-east corner** (patch 0130): its dirt and the
+  plateau's cliff (x 248-255) reached the south edge above the forest's
+  filler, black between them (seen from the route and from Oreburgh City).
+  They are drawn on south and the forest's first rows there left out.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
