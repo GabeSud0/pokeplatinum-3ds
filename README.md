@@ -10,6 +10,7 @@
 <p align="center">
   <a href="https://gabesud0.github.io/pokeplatinum-3ds/"><img src="https://img.shields.io/badge/Web_builder-Build_it_in_your_browser-9466FF?style=for-the-badge&amp;logo=googlechrome&amp;logoColor=white" alt="Build it in your browser with the web builder"></a>
   <a href="https://discord.gg/YjyA5ygpC"><img src="https://img.shields.io/badge/Discord-Join_the_server-5865F2?style=for-the-badge&amp;logo=discord&amp;logoColor=white" alt="Join the server on Discord"></a>
+  <a href="https://ko-fi.com/gabesud0"><img src="https://img.shields.io/badge/Ko--fi-Support_the_project-FF5E5B?style=for-the-badge&amp;logo=kofi&amp;logoColor=white" alt="Support the project on Ko-fi"></a>
   <a href="https://github.com/GabeSud0/pokeplatinum-3ds/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/GabeSud0/pokeplatinum-3ds/build.yml?branch=main&amp;style=for-the-badge&amp;label=Build&amp;logo=github" alt="Build status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-4B5563?style=for-the-badge" alt="GPL-3.0 licence"></a>
 </p>
@@ -60,7 +61,9 @@ On a New 3DS:
 | **Both screens filled** | The DS's pictures are drawn 1.25 times bigger: the lower screen fills its 320×240, and the upper screen is laid out across its full 400-pixel width (menus, text boxes and battles included). Nothing is ever stretched or mirrored to fill the extra space. |
 | **A menu on the bottom screen** | In the field, the bottom screen is a menu beside the Pokétch: MAP, POKéMON, BAG, TRAINER, POKéDEX, POKéTCH, SAVE and OPTIONS, a tap away (or X and the D-pad). The bag, the party, the summary, the trainer card, the save, the options and the Town Map open right in its panel while the field stays on the top screen. Two squares hold your registered items: tap one to use it. |
 | **Sharper 3D** | The overworld and battles are drawn by the 3DS's GPU at the screen's own resolution with smooth (anti-aliased) edges, the game's fog, and a wider view of the world at the sides. The DS's outlines round the 3D are off by default; `edges on` in `remaster.txt` draws them. |
-| **60 frames a second** | The game runs its field at 30; the port draws a frame in between each pair, and drops back to 30 where the GPU can't keep up (new, still being tuned). |
+| **PIXEL PERFECT** | The overworld at the DS's own pixel size across the whole upper screen, with the people moving smoothly over the ground. |
+| **The wider view filled in** | Past the edges of the maps, the trees, cliffs, rivers and coasts carry on instead of black, never mirrored (on most routes and towns; still a work in progress). |
+| **60 frames a second** | The game runs its field at 30; the port draws a frame in between each pair, for a steady 60 in towns, on routes, in the rain and in the HM animations, and drops back to 30 where the GPU can't keep up (still being tuned). |
 | **Enhancements and cheats** | Optional, from OPTIONS: SPEED up to 4x (menus and battle choices stay at 1x), Exp. Share for the whole party, experience for catches, trade evolutions at level 40, HMs without teaching the moves, auto-run, your first Pokémon following you (FOLLOWER: HeartGold/SoulSilver's sprites, downloaded by the builder; it comes out of the ball it was caught in, and you can talk to it: it reacts, and now and then finds you an item); and cheats (always catch, instant victory, fast eggs, infinite money, wild encounter rate, shiny odds, give items). |
 | **Small conveniences** | Catch a Pokémon with a full party and you can swap it for one in your party right there in the battle. A new game saves over the old save without erasing it first. L + R + START + SELECT restarts the game from the opening. |
 | **Crisp pixels** | Even, crisp pixels for the 2D, and optional xBRZ smoothing for the 3D's textures. |
@@ -71,11 +74,13 @@ On a New 3DS:
 
 | ✅ Works | 🛠️ Work in progress | 💭 Future wishlist |
 | :--- | :--- | :--- |
-| Playable on real hardware, from a new game or a save: exploring, battles, menus and saving (it still has some visual and gameplay bugs) | Polishing the bottom screen's UI (the learn-a-move screen) | Wi-Fi |
-| A new UI for the top screen: menus, text boxes and battles across its full width | A Pokémon follower | Better lighting |
-| A new UI for the bottom screen: a menu beside the Pokétch, with the bag, party, summary, trainer card, save, options and Town Map in its panel | 60 frames a second and better 3D quality | 60 FPS Battles |
-| Enhancements and cheats from the options (SPEED, Exp. Share for the party, and more) |Pixel Perfect Overworld | Pixel Perfect Battles |
-| The New 3DS XL's resolution: both screens filled, the 3D drawn at the screen's resolution | |Stereoscopic 3D |
+| Playable on real hardware, from a new game or a save: exploring, battles, menus, the Underground and saving (it still has some visual and gameplay bugs) | Polishing the bottom screen's UI (the learn-a-move screen) | Wi-Fi |
+| A new UI for the top screen: menus, text boxes and battles across its full width | Filling the wider view past the maps' edges | Better lighting |
+| A new UI for the bottom screen: a menu beside the Pokétch, with the bag, party, summary, trainer card, save, options and Town Map in its panel | Better 3D quality | 60 FPS Battles |
+| Enhancements and cheats from the options (SPEED, Exp. Share for the party, and more) | | Pixel Perfect Battles |
+| A Pokémon that follows you (FOLLOWER) | | Stereoscopic 3D |
+| 60 frames a second in the field, and the Pixel Perfect overworld | | |
+| The New 3DS XL's resolution: both screens filled, the 3D drawn at the screen's resolution | | |
 | Updated animations for the intro, and new animations for some of the UI | | |
 
 
@@ -200,7 +205,10 @@ In Azahar, these go in its emulated SD card folder.
   Menu version too. It closes from the HOME Menu like any other title.
 - **Updating:** build the new version with the web builder and copy its files
   over the old ones. When a version reads its data the same way, its page
-  says so: then copying the new `pokeplatinum.3dsx` is enough.
+  says so: then copying the new `pokeplatinum.3dsx` is enough. Coming from
+  the first alpha (v0.1.0-alpha.1), replace all three: the `.pak`, the
+  `.3dsx`, and install the new `.cia` once (from then on it opens the
+  `.3dsx`).
 
 The game saves to `sdmc:/3ds/pokeplatinum/platinum.sav`, a raw 512 KB save
 like emulators keep, so you can copy your cartridge's save there.
@@ -328,9 +336,10 @@ upstream.lock      the exact pret/pokeplatinum commit we build against
   screen; the bottom screen as a menu, with the bag, party, summary, trainer
   card, save, options and Town Map in its panel; enhancements and cheats; the
   New 3DS XL's resolution; updated intro and UI animations; the HOME Menu
-  version.
-- **Work in progress:** 60 frames a second, better 3D quality, polishing the
-  bottom screen's UI, better lighting, a Pokémon follower.
+  version; a Pokémon that follows you; 60 frames a second in the field; the
+  Pixel Perfect overworld; the Underground.
+- **Work in progress:** filling the wider view past the maps' edges, better
+  3D quality, polishing the bottom screen's UI, better lighting.
 - **Future wishlist:** Wi-Fi.
 - **Later:** SoulSilver / HeartGold on the same backend.
 
@@ -345,6 +354,10 @@ Join the **[Discord server](https://discord.gg/YjyA5ygpC)** to follow
 development, share screenshots and get help. Found a bug? Open an
 [issue](https://github.com/GabeSud0/pokeplatinum-3ds/issues) with your
 `log.txt`.
+
+Enjoying the port? You can support its development on
+**[Ko-fi](https://ko-fi.com/gabesud0)**. It's entirely optional: the port is and stays
+free.
 
 ## Credits and legal
 
