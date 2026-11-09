@@ -45,12 +45,12 @@ avanzada. Los dos son juegos de la Generación 4 que comparten casi todo el moto
 
 <table>
   <tr>
-    <td align="center"><img src="docs/images/screenshots/jubilife.png" alt="Ciudad Jubileo, con el mapa abajo" width="400"><br><sub>Ciudad Jubileo, con el mapa abajo</sub></td>
-    <td align="center"><img src="docs/images/screenshots/route.png" alt="En una ruta" width="400"><br><sub>En una ruta</sub></td>
+    <td align="center"><img src="docs/images/screenshots/hearthome.png" alt="Ciudad Corazón, con el mapa abajo" width="400"><br><sub>Ciudad Corazón, con el mapa abajo</sub></td>
+    <td align="center"><img src="docs/images/screenshots/route208.png" alt="Ruta 208, con tu Pokémon siguiéndote" width="400"><br><sub>Ruta 208, con tu Pokémon siguiéndote</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/images/screenshots/battle.png" alt="Un combate" width="400"><br><sub>Un combate</sub></td>
-    <td align="center"><img src="docs/images/screenshots/cave.png" alt="Bajo tierra, con la mochila" width="400"><br><sub>Bajo tierra, con la mochila</sub></td>
+    <td align="center"><img src="docs/images/screenshots/eterna.png" alt="Ciudad Vetusta: tu Pokémon encontró algo" width="400"><br><sub>Ciudad Vetusta: tu Pokémon encontró algo</sub></td>
+    <td align="center"><img src="docs/images/screenshots/options.png" alt="Los puentes de la Ruta 208, con las opciones abajo" width="400"><br><sub>Los puentes de la Ruta 208, con las opciones abajo</sub></td>
   </tr>
 </table>
 

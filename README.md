@@ -43,12 +43,12 @@ HeartGold**
 
 <table>
   <tr>
-    <td align="center"><img src="docs/images/screenshots/jubilife.png" alt="Jubilife City, with the map below" width="400"><br><sub>Jubilife City, with the map below</sub></td>
-    <td align="center"><img src="docs/images/screenshots/route.png" alt="Out on a route" width="400"><br><sub>Out on a route</sub></td>
+    <td align="center"><img src="docs/images/screenshots/hearthome.png" alt="Hearthome City, with the map below" width="400"><br><sub>Hearthome City, with the map below</sub></td>
+    <td align="center"><img src="docs/images/screenshots/route208.png" alt="Route 208, with your Pokémon following you" width="400"><br><sub>Route 208, with your Pokémon following you</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/images/screenshots/battle.png" alt="A battle" width="400"><br><sub>A battle</sub></td>
-    <td align="center"><img src="docs/images/screenshots/cave.png" alt="Underground, with the bag" width="400"><br><sub>Underground, with the bag</sub></td>
+    <td align="center"><img src="docs/images/screenshots/eterna.png" alt="Eterna City: your Pokémon found something" width="400"><br><sub>Eterna City: your Pokémon found something</sub></td>
+    <td align="center"><img src="docs/images/screenshots/options.png" alt="Route 208's bridges, with the options below" width="400"><br><sub>Route 208's bridges, with the options below</sub></td>
   </tr>
 </table>
 
