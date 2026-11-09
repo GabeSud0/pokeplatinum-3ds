@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 11:30:00 -0700
+Subject: [PATCH] Route 203's forest copies no lower past the third
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+East of Jubilife the forest is Route 203's strip by its south edge drawn
+again every 2 tiles south (Port_RenderForestOnSouth), each an eighth of a
+tile lower than the one before: the last were 2 tiles under the map south
+of the scenery, Route 202's east forest, their trees standing in its first
+row's. The first three copies step down as before; the rest stay as low
+as the third.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 86bfc2f5..d514341b 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -6602,8 +6602,13 @@ static void Port_RenderSceneryPart(const LandDataManager *landDataMan, u8 index,
+ 
+ // Over each such scenery map, the strip of the map north of it drawn
+ // again 2, 4, ... tiles further south, the whole of the scenery map's
+-// depth, each an eighth of a tile lower than the one before; each only while
+-// its box is in the view.
++// depth, the first three each an eighth of a tile lower than the one
++// before, the rest as low as the third; each only while its box is in the
++// view. (Each lower again, the last were 2 tiles under the map south of
++// the scenery, Route 202's east forest: their trees stood in its first
++// row's (2026-11-08, from 186,806). Past the third they're far from
++// the route's ground; side by side, they only meet along an edge.)
++#define PORT_FOREST_ON_LOWEST 3
+ static void Port_RenderForestOnSouth(const LandDataManager *landDataMan)
+ {
+     int width = landDataMan->mapMatrixWidth;
+@@ -6630,7 +6635,7 @@ static void Port_RenderForestOnSouth(const LandDataManager *landDataMan)
+             VecFx32 moved = position;
+             GFXTestBox box;
+ 
+-            moved.y -= k * (MAP_OBJECT_TILE_SIZE / 8);
++            moved.y -= (k < PORT_FOREST_ON_LOWEST ? k : PORT_FOREST_ON_LOWEST) * (MAP_OBJECT_TILE_SIZE / 8);
+             moved.z += k * 2 * MAP_OBJECT_TILE_SIZE;
+ 
+             // (the strip's box alone, moved: its columns, its trees' height)

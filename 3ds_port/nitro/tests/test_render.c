@@ -3568,9 +3568,80 @@ static void test_text_box_objs(void)
  * picture again. Found again in the next frame's OAM
  * (NitroPort_Render2DObjPlaces) for the in-between frames' halfway
  * places (NitroPort_GpuObjHalfway). */
-/* The change check's OBJ VRAM: only the tiles the OBJs shown use (each
- * once), all of it with a bitmap OBJ; noted as the picture's drawn, so a
- * sprite moved is drawn once, not again the next time to be sure. */
+/* (test_vram_written_while_drawing) The clock the 2D renderer times its
+ * parts with, writing to a shown BG's tiles at its nth call: the game
+ * writing the VRAM on its own core while the drawer draws a picture. */
+static int sWriteAtCall, sClockCalls;
+static u8 *sWriteAt;
+
+static uint64_t WritingClock(void)
+{
+    if (++sClockCalls == sWriteAtCall && sWriteAt != NULL) {
+        *sWriteAt ^= 0x11;
+    }
+    return (uint64_t)sClockCalls;
+}
+
+/* The VRAM a picture is drawn from is noted before it's drawn, never
+ * after: what the game writes while it's drawn (after the picture read it)
+ * is a change the next time. Noted after the drawing, such a write was in
+ * the note and not in the picture, never drawn (the Underground's lower
+ * screen black, the battle's bars moving in jumps). */
+static void test_vram_written_while_drawing(void)
+{
+    static u8 tiles[64];
+    static u16 map[32 * 32];
+    static u16 pltt[16] = { GREY, RED, BLUE };
+    static u16 under[256 * 192], over[256 * 192];
+    static u8 overAlpha[256 * 192];
+    extern u8 NitroPort_BgVram[];
+    NitroRender2DSplit split;
+    int i, calls;
+
+    Reset();
+    MakeTile4(tiles + 32, 1);
+    for (i = 0; i < 32 * 32; i++) {
+        map[i] = 1;
+    }
+    G2_SetBG1Control(GX_BG_SCRSIZE_TEXT_256x256, GX_BG_COLORMODE_16, GX_BG_SCRBASE_0x0000,
+                     GX_BG_CHARBASE_0x04000, GX_BG_EXTPLTT_01);
+    GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+    GX_LoadBG1Scr(map, 0, sizeof(map));
+    GX_LoadBGPltt(pltt, 0, sizeof(pltt));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG1);
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    /* (how many times a picture drawn whole asks the clock: the write goes
+     * at the last, after the picture's drawn) */
+    sClockCalls = 0;
+    sWriteAt = NULL;
+    NitroPort_Render2DSetClock(WritingClock);
+    G2_SetBG1Offset(1, 0);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    calls = sClockCalls;
+    CHECK(calls >= 2);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    /* a register changed, and the tile the BG shows written as it's drawn */
+    sClockCalls = 0;
+    sWriteAtCall = calls;
+    sWriteAt = NitroPort_BgVram + 0x4000 + 32 + 5;   /* (tile 1, at the BG's characters) */
+    G2_SetBG1Offset(2, 0);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    sWriteAt = NULL;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);   /* (the write: drawn again) */
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    NitroPort_Render2DSetClock(NULL);
+}
+
+/* The change check's OBJ VRAM, with the sprites in the picture: all of
+ * it, as before the rain's check (a battle's HP and EXP bars, written every
+ * frame, moved in jumps on the 3DS with the tiles alone); a change only
+ * outside the tiles of the sprites shown counted for the log. As before,
+ * not worked out with a change to the rest: a sprite moved is drawn again
+ * the next time, to be sure. */
 static void test_obj_vram_check(void)
 {
     static u8 tiles[16 * 64];
@@ -3594,8 +3665,6 @@ static void test_obj_vram_check(void)
                   GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 2, 0, 0);    /* tile 2: bytes 64-95 */
     G2_SetOBJAttr(&oam[1], 100, 50, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
                   GX_OAM_SHAPE_16x16, GX_OAM_COLORMODE_256, 8, 0, 0); /* tile 8: bytes 256-511 */
-    G2_SetOBJAttr(&oam[2], 120, 70, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
-                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 2, 0, 0);    /* (tile 2 again) */
     DC_FlushRange(oam, sizeof(oam));
     GX_LoadOAM(oam, 0, sizeof(oam));
     GX_SetVisiblePlane(GX_PLANEMASK_OBJ);
@@ -3603,28 +3672,115 @@ static void test_obj_vram_check(void)
     split.over = over;
     split.overAlpha = overAlpha;
     NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);   /* (to be sure) */
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
-    /* a tile no OBJ shows: not a change */
+    (void)NitroPort_Render2DObjTilesUnseen(0);
+    /* a tile no OBJ shows: a change too, and counted */
+    NitroPort_ObjVram[40 * 32 + 4] ^= 0x5A;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    CHECK(NitroPort_Render2DObjTilesUnseen(0) == 1);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    NitroPort_ObjVram[0x1F000] ^= 0x5A;   /* (far from any) */
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    CHECK(NitroPort_Render2DObjTilesUnseen(0) == 1);
+    /* one that shows: a change, not counted, then the same */
+    NitroPort_ObjVram[2 * 32 + 5] ^= 0x11;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    CHECK(NitroPort_Render2DObjTilesUnseen(0) == 0);
+    /* the 8-bit OBJ's last tile's second half; and back */
+    NitroPort_ObjVram[256 + 3 * 64 + 40] ^= 0x22;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    NitroPort_ObjVram[256 + 3 * 64 + 40] ^= 0x22;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    CHECK(NitroPort_Render2DObjTilesUnseen(0) == 0);
+    /* a sprite moved: drawn, and again the next time to be sure */
+    G2_SetOBJPosition(&oam[0], 44, 30);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    /* moved again with its tiles written in the same frame: the same */
+    G2_SetOBJPosition(&oam[0], 48, 30);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    NitroPort_ObjVram[2 * 32 + 6] ^= 0x11;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    NitroPort_ObjVram[2 * 32 + 6] ^= 0x11;
+    NitroPort_ObjVram[40 * 32 + 4] ^= 0x5A;
+    NitroPort_ObjVram[0x1F000] ^= 0x5A;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    /* a bitmap OBJ: all of the OBJs' VRAM */
+    G2_SetOBJAttr(&oam[1], 100, 50, 0, GX_OAM_MODE_BITMAPOBJ, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 15, 0);
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    NitroPort_ObjVram[0x30000] ^= 0x44;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
+    NitroPort_ObjVram[0x30000] ^= 0x44;
+    (void)NitroPort_Render2DObjTilesUnseen(0);
+}
+
+/* The same with the sprites drawn by the compositor (the rain's drops):
+ * only the tiles the OBJs shown use (each once). */
+static void test_obj_vram_check_tiles(void)
+{
+    static u8 tiles[16 * 64];
+    static u16 objPltt[256] = { 0, BLUE, GREEN };
+    static uint32_t rgba[256 * 192];
+    static u16 under[256 * 192], over[256 * 192], atlas[NITRO_GPU_OBJ_ATLAS_W * NITRO_GPU_OBJ_ATLAS_H];
+    static u8 overAlpha[256 * 192];
+    static GXOamAttr oam[128];
+    static NitroGpuObj objs[NITRO_GPU_OBJ_MAX];
+    extern u8 NitroPort_ObjVram[];
+    NitroRender2DSplit split;
+    int i;
+
+    Reset();
+    GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_1D_32K);
+    for (i = 0; i < 16; i++) {
+        MakeTile4(tiles + i * 32, 1 + (i & 1));
+    }
+    GX_LoadOBJ(tiles, 0, sizeof(tiles));
+    GX_LoadOBJPltt(objPltt, 0, sizeof(objPltt));
+    GX_SetGraphicsMode(GX_DISPMODE_GRAPHICS, GX_BGMODE_0, GX_BG0_AS_3D);
+    for (i = 0; i < 256 * 192; i++) {
+        rgba[i] = 0x404040FFu;
+    }
+    NitroPort_Gx3dPublishRGBA8(rgba, 256 * 192);
+    MI_CpuFillFast(oam, 0x0200, sizeof(oam));   /* all hidden */
+    G2_SetOBJAttr(&oam[0], 40, 30, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 2, 0, 0);    /* tile 2: bytes 64-95 */
+    G2_SetOBJAttr(&oam[1], 120, 70, 0, GX_OAM_MODE_NORMAL, FALSE, GX_OAM_EFFECT_NONE,
+                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 2, 0, 0);    /* (tile 2 again) */
+    DC_FlushRange(oam, sizeof(oam));
+    GX_LoadOAM(oam, 0, sizeof(oam));
+    GX_SetVisiblePlane(GX_PLANEMASK_BG0 | GX_PLANEMASK_OBJ);
+    memset(&split, 0, sizeof(split));
+    split.over = over;
+    split.overAlpha = overAlpha;
+    split.gpuObjs = 1;
+    split.gpuObj = objs;
+    split.gpuObjAtlas = atlas;
+    NitroPort_Render2DSplitIfChanged(0, under, &split);
+    CHECK(split.gpuObjsLeftOut == 1);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    (void)NitroPort_Render2DObjTilesUnseen(0);
+    /* a tile no OBJ shows: not a change, nor counted */
     NitroPort_ObjVram[40 * 32 + 4] ^= 0x5A;
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
-    NitroPort_ObjVram[600] ^= 0x5A;   /* (just past the 8-bit OBJ's) */
-    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
+    CHECK(NitroPort_Render2DObjTilesUnseen(0) == 0);
     /* one that shows: a change, then the same */
     NitroPort_ObjVram[2 * 32 + 5] ^= 0x11;
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
     NitroPort_ObjVram[2 * 32 + 5] ^= 0x11;
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
-    /* the 8-bit OBJ's last tile's second half */
-    NitroPort_ObjVram[256 + 3 * 64 + 40] ^= 0x22;
-    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
-    NitroPort_ObjVram[256 + 3 * 64 + 40] ^= 0x22;
-    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
-    /* a sprite moved: drawn once, its VRAM noted as it's drawn */
-    G2_SetOBJPosition(&oam[0], 44, 30);
-    GX_LoadOAM(oam, 0, sizeof(oam));
-    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
-    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
     /* 2D mapping, 32 tiles a row: a 16x16 OBJ at tile 4 is tiles 4, 5, 36, 37 */
     GX_SetOBJVRamModeChar(GX_OBJVRAMMODE_CHAR_2D);
     MI_CpuFillFast(oam, 0x0200, sizeof(oam));
@@ -3637,18 +3793,7 @@ static void test_obj_vram_check(void)
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
     NitroPort_ObjVram[37 * 32 + 31] ^= 0x33;
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
-    /* a bitmap OBJ: all of the OBJs' VRAM */
-    G2_SetOBJAttr(&oam[1], 100, 50, 0, GX_OAM_MODE_BITMAPOBJ, FALSE, GX_OAM_EFFECT_NONE,
-                  GX_OAM_SHAPE_8x8, GX_OAM_COLORMODE_16, 0, 15, 0);
-    GX_LoadOAM(oam, 0, sizeof(oam));
-    NitroPort_Render2DSplitIfChanged(0, under, &split);
-    NitroPort_Render2DSplitIfChanged(0, under, &split);
-    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 0);
-    NitroPort_ObjVram[0x30000] ^= 0x44;
-    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &split) == 1);
-    NitroPort_ObjVram[0x30000] ^= 0x44;
     NitroPort_ObjVram[40 * 32 + 4] ^= 0x5A;
-    NitroPort_ObjVram[600] ^= 0x5A;
     NitroPort_ObjVram[6 * 32] ^= 0x33;
     NitroPort_ObjVram[37 * 32 + 31] ^= 0x33;
 }
@@ -4741,6 +4886,36 @@ static void test_wide_framed_windows(void)
     CHECK(wide[164 * 320 + 280] == WHITE);        /* drawn on: the inside's */
     CHECK(wide[164 * 320 + 295] == WHITE);
     CHECK(wide[164 * 320 + 299] == RED);          /* the right part's first tile: DS 232-239 at 296-303 */
+    /* A line of text reaching the inside's last column (a letter's red
+     * column there, its lines 160-167; and on line 163 the rest of the
+     * inside's last 24 columns red too, as a row of letters' shadows):
+     * drawn on is the inside's white, as the lines with nothing on them
+     * have it, not the letter (Camper Jacob's "before", 2026-11-06). */
+    {
+        static u8 letter[32], row[32];
+
+        for (i = 0; i < 32; i++) {
+            letter[i] = (u8)((i % 4) == 3 ? 0x13 : 0x33);   /* white, column 7 red */
+            row[i] = (u8)((i / 4) == 3 ? 0x11 : (i % 4) == 3 ? 0x13 : 0x33);   /* and all of row 3 */
+        }
+        memcpy(tiles + 7 * 32, letter, 32);
+        memcpy(tiles + 6 * 32, row, 32);
+        GX_LoadBG1Char(tiles, 0, sizeof(tiles));
+        map[20 * 32 + 28] = 7;
+        map[20 * 32 + 27] = 6;
+        map[20 * 32 + 26] = 6;
+        map[20 * 32 + 25] = 6;
+        for (y = 18; y <= 23; y++) {
+            map[y * 32 + 29] = 3;
+        }
+        GX_LoadBG1Scr(map, 0, sizeof(map));
+        NitroPort_Render2DSplit(0, wide, &split);
+        CHECK(wide[164 * 320 + 280] == WHITE);    /* drawn on: white, not the letter's red */
+        CHECK(wide[163 * 320 + 280] == WHITE);    /* (its line red all along the last 24 too) */
+        CHECK(wide[156 * 320 + 280] == WHITE);    /* a line with nothing on it: as before */
+        map[20 * 32 + 25] = map[20 * 32 + 26] = map[20 * 32 + 27] = map[20 * 32 + 28] = 3;
+        GX_LoadBG1Scr(map, 0, sizeof(map));
+    }
     NitroPort_WindowRemoved(&box);
 
     /* The UI's band beside a panel: a background of stripes (lines red,
@@ -5646,6 +5821,8 @@ int main(int argc, char **argv)
     test_gpu_bg();
     test_gpu_sign();
     test_obj_vram_check();
+    test_obj_vram_check_tiles();
+    test_vram_written_while_drawing();
     test_gpu_objs();
     test_tall_field();
     test_stretch_squeeze();

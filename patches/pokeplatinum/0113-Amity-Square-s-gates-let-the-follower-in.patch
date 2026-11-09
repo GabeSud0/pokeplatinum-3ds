@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 14:25:00 -0700
+Subject: [PATCH] Amity Square's gates let the follower in (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A step into Amity Square from either gate starts its script asking for a
+walk with one of the party's Pokémon (coordinate events 2 and 4, while
+the square's own Pokémon isn't walking with the player), then a fade to
+black and that Pokémon out; the way out, a fade, it put away and a word.
+With the 3DS remaster's follower already out that was asked for nothing.
+
+With the follower out (PortFollower_IsOut: the option on, it out, not
+going into its ball) those two events aren't started: the player walks
+in with it, nothing asked, no fade, and the square's own Pokémon isn't
+out, so the step out by the gate (events 3 and 5, while it is) isn't
+started either. A step south onto the gate's tile is the way out, never
+asked then. With the follower off, as the game has it.
+---
+diff --git a/include/port_follower.h b/include/port_follower.h
+index 52361d75..cd03bec3 100644
+--- a/include/port_follower.h
++++ b/include/port_follower.h
+@@ -68,6 +68,9 @@ void PortFollower_Update(FieldSystem *fieldSystem);
+ // for it (the player's own step's, `playerAction`, the run as a fast walk;
+ // a jump down the ledge the player jumped; a walk to where they jumped from).
+ BOOL PortFollower_NextStep(MapObject *mapObj, u32 playerAction, u32 *action);
++// Out (not going into its ball): Amity Square's gates let the player in
++// with it, without asking for a walk with one of theirs (field_control.c).
++BOOL PortFollower_IsOut(FieldSystem *fieldSystem);
+ // The frames of its jump down a ledge (unk_020655F4.c, the jump's start),
+ // once for the jump PortFollower_NextStep gave: the player's step's (8
+ // walking, 4 running), or 0 for the game's own 16.
+diff --git a/src/overlay005/field_control.c b/src/overlay005/field_control.c
+index aa8fce7c..e0c632c8 100644
+--- a/src/overlay005/field_control.c
++++ b/src/overlay005/field_control.c
+@@ -840,10 +840,28 @@ static BOOL Field_ProcessStep(FieldSystem *fieldSystem)
+     return FALSE;
+ }
+ 
++// Amity Square's coordinate events by its gates: its scripts' 2 and 4, a
++// step in from the west and east gates (the walk with a Pokémon asked for,
++// then the fade to black), only while none is walking with the player.
++#define AMITY_SQUARE_WEST_GATE_IN 2
++#define AMITY_SQUARE_EAST_GATE_IN 4
++
+ static BOOL Field_CheckCoordEvent(FieldSystem *fieldSystem)
+ {
+     u16 event = sub_0203CC14(fieldSystem, MapHeaderData_GetCoordEvents(fieldSystem), MapHeaderData_GetNumCoordEvents(fieldSystem));
+ 
++#ifdef SDK_PORT_3DS
++    // The follower out: in with it, nothing asked, no fade (so none of the
++    // square's own walking with them, nor its step out by the gate later:
++    // that's for its own); a step south onto that tile then is the way out.
++    // With the follower off, as the game has it.
++    if ((event == AMITY_SQUARE_WEST_GATE_IN || event == AMITY_SQUARE_EAST_GATE_IN)
++        && MapHeader_IsAmitySquare(fieldSystem->location->mapHeaderID)
++        && (PortFollower_IsOut(fieldSystem) || PlayerAvatar_GetFacingDir(fieldSystem->playerAvatar) == DIR_SOUTH)) {
++        return FALSE;
++    }
++#endif
++
+     if (event != 0xffff) {
+         ScriptManager_Set(fieldSystem, event, NULL);
+         return TRUE;
+diff --git a/src/port_follower.c b/src/port_follower.c
+index 6c2addae..7384055c 100644
+--- a/src/port_follower.c
++++ b/src/port_follower.c
+@@ -1938,3 +1938,12 @@ BOOL PortFollower_TryTalk(FieldSystem *fieldSystem)
+     FieldSystem_CreateTask(fieldSystem, PortFollower_TalkTask, talk);
+     return TRUE;
+ }
++
++BOOL PortFollower_IsOut(FieldSystem *fieldSystem)
++{
++    if (fieldSystem == NULL || fieldSystem->mapObjMan == NULL || !PortOption_On(PORT_OPT_FOLLOWER)) {
++        return FALSE;
++    }
++
++    return PortFollower_FindID(fieldSystem->mapObjMan, PORT_FOLLOWER_LOCAL_ID) != NULL && sIn == 0;
++}

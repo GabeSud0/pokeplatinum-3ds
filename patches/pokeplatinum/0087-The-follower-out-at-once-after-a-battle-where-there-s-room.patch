@@ -1,0 +1,137 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 23:45:00 -0700
+Subject: [PATCH] The follower out at once after a battle, where there's room
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+After a battle the player's follower Pokémon came out of its ball again
+a moment after the field was back, or once the trainer's words were over.
+Now a battle's start (its encounter effect) is noted, and as the field
+comes back after it the follower is out at once, at its size, without its
+ball, behind the player (even while the field's task or the trainer's
+script runs, as through a cave's way). Where the tile behind the player
+isn't free it waits on the player's tile and comes out of its ball once
+they step off it, as before.
+
+---
+diff --git a/include/port_follower.h b/include/port_follower.h
+index 763c8a4f..52361d75 100644
+--- a/include/port_follower.h
++++ b/include/port_follower.h
+@@ -57,6 +57,9 @@ BOOL PortFollower_TryTalk(FieldSystem *fieldSystem);
+ // field ends (FieldMap_Exit).
+ void PortFollower_Draw(void);
+ void PortFollower_FieldEnds(void);
++// A battle starting (its encounter effect, encounter_effect.c): out at once,
++// without its ball, as the field comes back after it.
++void PortFollower_BattleStarts(void);
+ // Every frame of the field (fieldmap.c): out, in its ball or swapped as the
+ // party, the option and the field are.
+ void PortFollower_Update(FieldSystem *fieldSystem);
+diff --git a/src/overlay005/encounter_effect.c b/src/overlay005/encounter_effect.c
+index 56de5baa..66e4f26e 100644
+--- a/src/overlay005/encounter_effect.c
++++ b/src/overlay005/encounter_effect.c
+@@ -40,6 +40,9 @@
+ #include "sys_task_extensions.h"
+ #include "sys_task_manager.h"
+ #include "unk_02054884.h"
++#ifdef SDK_PORT_3DS
++#include "port_follower.h"
++#endif
+ 
+ enum ScreenFlashState {
+     SCREENFLASH_STATE_INIT_OTHER_SCREEN_FADE = 0,
+@@ -196,6 +199,7 @@ void EncounterEffect_Start(enum EncEffectCutIn effect, FieldSystem *fieldSystem,
+ {
+ #ifdef SDK_PORT_3DS
+     NitroPort_SetFieldEffect(EncounterEffect_PortStretches(effect));
++    PortFollower_BattleStarts(); // (out at once as the field comes back after it)
+ #endif
+     SysTask *effectTask = SysTask_StartAndAllocateParam(sEncounterEffectTaskFuncs[effect], sizeof(EncounterEffect), 5, HEAP_ID_FIELD1);
+     EncounterEffect *encEffect = SysTask_GetParam(effectTask);
+diff --git a/src/port_follower.c b/src/port_follower.c
+index 77f6a895..fe2d9391 100644
+--- a/src/port_follower.c
++++ b/src/port_follower.c
+@@ -909,6 +909,20 @@ static int sOpenIn; // (coming out, sOut -3: the ball's steps before it opens)
+ static BOOL sCarry;
+ static BOOL sWaitsOff; // (-4, -5: added on the player's tile, hidden till they step off it)
+ 
++// After a battle (its start: PortFollower_BattleStarts), out at once as the
++// field comes back, at its size, without its ball (sOut -4), behind the
++// player; where that tile isn't free, out of its ball once the player
++// steps off theirs, as before. Gabriel, 2026-11-05: after every trainer
++// battle it should be out of its ball, unless there's no room, then out of
++// it once there is. (It came out of its ball after each one, a moment after
++// the field was back, or after the trainer's words.)
++static int sAfterBattle; // (1: a battle's start, the field still on; 2: and the field gone since)
++
++void PortFollower_BattleStarts(void)
++{
++    sAfterBattle = 1;
++}
++
+ // Going in: the reason, kept while its ball waits for room for its picture
+ // (BALL_WAIT_MAX frames at most, then it goes in without).
+ #define BALL_WAIT_MAX 20
+@@ -1193,6 +1207,10 @@ void PortFollower_Draw(void)
+ 
+ void PortFollower_FieldEnds(void)
+ {
++    if (sAfterBattle == 1) {
++        sAfterBattle = 2;
++    }
++
+     PortFollower_EndBurst();
+     sTrailOn = FALSE;
+     sJumpFrames = 0;
+@@ -1426,15 +1444,21 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+         sCarry = FALSE; // (not to be out where the player went)
+     }
+ 
++    // (after a battle, once the field's running again with nothing to show
++    // for it, or it's out already: as usual from then on)
++    if (sAfterBattle == 2 && (mapObj != NULL || (graphicsID == 0 && !scripted))) {
++        sAfterBattle = 0;
++    }
++
+     // Out (not during a script's or a menu's task: when it ends). Through a
+     // warp with the player: at once on the other side, without its ball.
+     // The player setting off walking (out of its ball a moment ago, not
+     // stopping): behind them, growing out of nothing; standing, out of its
+     // ball (which would be left behind by someone walking on).
+-    if (mapObj == NULL && sWait > 0 && !sCarry) {
++    if (mapObj == NULL && sWait > 0 && !sCarry && sAfterBattle != 2) {
+         sWait--;
+-    } else if (mapObj == NULL && graphicsID != 0 && (sCarry || (!scripted && !PortFollower_PlayerJumping(fieldSystem, player)))) {
+-        BOOL walking = !sCarry && PortFollower_PlayerStepping(fieldSystem);
++    } else if (mapObj == NULL && graphicsID != 0 && (sCarry || sAfterBattle == 2 || (!scripted && !PortFollower_PlayerJumping(fieldSystem, player)))) {
++        BOOL walking = !sCarry && sAfterBattle != 2 && PortFollower_PlayerStepping(fieldSystem);
+ 
+         if (MapObjectMan_PortFreeSlots(fieldSystem->mapObjMan) > 1
+             && (!PortFollower_IsGfx(graphicsID) || Bundle_Ready()) && MapObjectGfx_PortHasRoom(fieldSystem->mapObjMan, graphicsID)) {
+@@ -1450,11 +1474,16 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+             if (mapObj != NULL) {
+                 MapObject_SetHidden(mapObj, TRUE); // (shown as it comes out of its ball)
+                 PortFollower_SetScale(mapObj, 0);  // (its picture made with it, before it was the follower)
+-                sOut = sCarry ? -4 : walking ? -5 : onPlayer ? -2 : -1;
++                sOut = sCarry || (sAfterBattle == 2 && !onPlayer) ? -4 : walking ? -5 : onPlayer ? -2 : -1;
+                 sWaitsOff = onPlayer;
+                 sIn = 0;
+             }
+ 
++            if (sAfterBattle == 2) {
++                NitroPort_Log("[follower] after a battle: %s", onPlayer ? "out of its ball once the player steps off" : "out at once");
++                sAfterBattle = 0;
++            }
++
+             sCarry = FALSE;
+ 
+             sNoRoom = 0;
+-- 
+2.43.0
+

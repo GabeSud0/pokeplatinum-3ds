@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 23:30:00 -0700
+Subject: [PATCH] A way round a tile in from the wall it walks beside
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A scripted walk out of the wider picture that is blocked goes round:
+outwards first, as far as it goes, then up or down. Leaving Mt. Coronet,
+Cyrus went 11 tiles west to the cave's west wall, then north along it,
+beside it the whole way, until he was out of sight. When the way round
+is a run outwards then a run up or down, every step of it beside
+something in the way and ending past the picture's top or bottom, it now
+turns a tile sooner and walks a tile in from the wall, if that is all
+clear. Cyrus now walks up between the wall and the pool.
+
+---
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+index fbe64c34..d2f6aa71 100644
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -2525,6 +2525,86 @@ static BOOL ScrCmd_PortWideFindWay(PortWidePathSearch *search, int x, int z, fx3
+     return FALSE;
+ }
+ 
++// A way round (search->path, from (x, z) at height y) that goes outwards to
++// something in the way, then up or down along it, every step beside it,
++// out of the wider picture past its top or bottom: its turn a tile sooner,
++// so it walks a tile in from what's in the way, if all of that is clear.
++// Cyrus leaving Mt. Coronet goes 11 west to the cave's west wall, then
++// north along it out of sight; Gabriel, 2026-11-05: "just move him one
++// space to the right so he walks in the middle".
++static void ScrCmd_PortWideOffTheWall(PortWidePathSearch *search, int x, int z, fx32 y)
++{
++    int a, b, n, k, perp, cx, cz, endZ;
++    fx32 cy, ty;
++
++    for (a = 0; a < PORT_WIDE_PATH_MAX && search->path[a] == search->outDir; a++) { }
++
++    perp = a < PORT_WIDE_PATH_MAX ? search->path[a] : 0xFF;
++
++    if (a < 2 || (perp != DIR_NORTH && perp != DIR_SOUTH)) {
++        return;
++    }
++
++    for (n = a; n < PORT_WIDE_PATH_MAX && search->path[n] == perp; n++) { }
++
++    b = n - a;
++
++    if (n >= PORT_WIDE_PATH_MAX || search->path[n] != 0xFF || b < 3) {
++        return;
++    }
++
++    endZ = z + MapObject_GetDzFromDir(perp) * b;
++
++    if (endZ - search->midZ > -PORT_WIDE_TOP_TILES && endZ - search->midZ < PORT_WIDE_BOTTOM_TILES) {
++        return; // (out beside the picture, not past its top or bottom: a tile in, maybe not)
++    }
++
++    // (the way as found: each of its tiles along the wall with the wall
++    // beside it, that way out)
++    cx = x;
++    cz = z;
++    cy = y;
++
++    for (k = 0; k < n; k++) {
++        (void)ScrCmd_PortWideBlocked(search->fieldSystem, cx, cz, &cy, search->path[k]);
++        cx += MapObject_GetDxFromDir(search->path[k]);
++        cz += MapObject_GetDzFromDir(search->path[k]);
++        ty = cy;
++
++        if (k >= a - 1 && !ScrCmd_PortWideBlocked(search->fieldSystem, cx, cz, &ty, search->outDir)) {
++            return; // (not beside something all the way)
++        }
++    }
++
++    // (a tile in from it: clear?)
++    cx = x + MapObject_GetDxFromDir(search->outDir) * (a - 1);
++    cz = z;
++    cy = y;
++
++    for (k = 0; k < a - 1; k++) {
++        (void)ScrCmd_PortWideBlocked(search->fieldSystem, x + MapObject_GetDxFromDir(search->outDir) * k, z, &cy, search->outDir);
++    }
++
++    for (k = 0; k < b; k++) {
++        if (ScrCmd_PortWideBlocked(search->fieldSystem, cx, cz, &cy, perp)
++            || ScrCmd_PortWideSomeoneThere(search->fieldSystem, search->mapObj, cx, cz + MapObject_GetDzFromDir(perp))) {
++            return;
++        }
++
++        cz += MapObject_GetDzFromDir(perp);
++    }
++
++    for (k = 0; k < a - 1; k++) {
++        search->path[k] = (u8)search->outDir;
++    }
++
++    for (k = 0; k < b; k++) {
++        search->path[a - 1 + k] = (u8)perp;
++    }
++
++    search->path[a - 1 + b] = 0xFF;
++}
++
+ // A way to a door (a warp's tile) from (x, z), depth steps taken: on the
+ // way the walk goes first, else west, else east (never back).
+ static BOOL ScrCmd_PortWideFindDoor(PortWidePathSearch *search, int x, int z, fx32 y, int depth)
+@@ -3209,6 +3289,8 @@ static MapObjectAnimCmd *ScrCmd_PortWideMovement(FieldSystem *fieldSystem, MapOb
+             ScrCmd_PortWideSee(search, startX, startZ);
+ 
+             if (ScrCmd_PortWideFindWay(search, startX, startZ, pos.y, 0)) {
++                ScrCmd_PortWideOffTheWall(search, startX, startZ, pos.y);
++
+                 for (steps = 0, runs = 0; search->path[steps] != 0xFF; steps++) {
+                     if (steps == 0 || search->path[steps] != search->path[steps - 1]) {
+                         runs++;
+-- 
+2.43.0
+

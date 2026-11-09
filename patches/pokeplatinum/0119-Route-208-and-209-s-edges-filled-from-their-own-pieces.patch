@@ -1,0 +1,504 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 23:40:00 -0700
+Subject: [PATCH] Route 208 and 209's edges filled from their own pieces (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Route 208's west map past its south edge: its mountain's slopes drawn on
+south in their columns only (sPortExtrudeColumns), the sea's filler there
+drawn at the river's height (sPortSceneryHeights) so its waves go on from
+the river's, and the map's own pieces drawn again moved (sPortMapPieces,
+new: a copy of the loaded map's model whose shapes hold only the pieces):
+the lowest slope on south, the waterline trims of its north river beside
+it and by the forest, the east one's top turned east with the ledge's own
+rounded corner (turned half round, NitroPort_Gx3dSurveyTurned). Route
+209's river, which ran up to its map's north edge with no bank, closed
+with the map's own bank and rounded corners from it and the map east.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index d9633576..ee85481c 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -1578,6 +1578,24 @@ static void LandDataManager_UpdateTrackedTargetValues(const int trackedTargetTil
+     landDataMan->trackedTargetMapMatrixIndex = LandData_CalculateMapMatrixIndexU32(landDataMan->trackedTargetTileIndex, landDataMan->mapMatrixWidth, landDataMan->mapMatrixWidthTiles);
+ }
+ 
++#ifdef SDK_PORT_3DS
++// Scenery maps drawn at another height than the matrix gives them. South of
++// Route 208's west map the sea's filler is half a tile above the route's
++// own ground and a tile below its river: past the border the river's water
++// stepped down to it, the waves cut along a line where they met (the wider
++// view's bottom lines, a screenshot of 2026-11-07). At the river's height
++// its water goes on as the river's does.
++typedef struct PortSceneryHeight {
++    u8 matrixID;
++    u16 mapMatrixIndex;
++    u8 altitude; // (half tiles, as the matrix's)
++} PortSceneryHeight;
++
++static const PortSceneryHeight sPortSceneryHeights[] = {
++    { 0, 702, 3 }, // (south of Route 208's west map: the river's height)
++};
++#endif
++
+ static void LandDataManager_CalculateRenderingPosition(const int mapMatrixIndex, const int mapMatrixWidth, const MapMatrix *mapMatrix, VecFx32 *position)
+ {
+     position->x = (MAP_TILES_COUNT_X / 2) * MAP_OBJECT_TILE_SIZE;
+@@ -1593,6 +1611,16 @@ static void LandDataManager_CalculateRenderingPosition(const int mapMatrixIndex,
+     int mapMatrixWidth2 = MapMatrix_GetWidth(mapMatrix);
+     u16 mapMatrixID = MapMatrix_GetMatrixID(mapMatrix);
+     int altitude = MapMatrix_GetAltitudeAtCoords(mapMatrix, mapMatrixID, mapMatrixX, mapMatrixZ, mapMatrixWidth2);
++
++#ifdef SDK_PORT_3DS
++    for (int k = 0; k < (int)NELEMS(sPortSceneryHeights); k++) {
++        if (sPortSceneryHeights[k].matrixID == mapMatrixID && sPortSceneryHeights[k].mapMatrixIndex == mapMatrixIndex
++            && NitroPort_WideScreenExtra() != 0) {
++            altitude = sPortSceneryHeights[k].altitude;
++        }
++    }
++#endif
++
+     position->y = altitude * (MAP_OBJECT_TILE_SIZE / 2);
+ 
+     position->x += mapMatrixX * MAP_TILES_COUNT_X * MAP_OBJECT_TILE_SIZE;
+@@ -2257,6 +2285,7 @@ extern u32 NitroPort_Gx3dSurveyGroups(const NitroGx3dListSurvey *survey, s32 (*b
+ extern int NitroPort_Gx3dSurveyAllGrouped(const NitroGx3dListSurvey *survey);
+ extern u32 NitroPort_Gx3dSurveyRuns(const NitroGx3dListSurvey *survey, const u8 *mark, u32 nmark, void *dst, u32 dstBytes, u32 *sizes, u8 *runMark, u32 maxRuns);
+ extern u32 NitroPort_Gx3dSurveyMoved(const NitroGx3dListSurvey *survey, void *dst, u32 dstBytes, const u8 *keep, u32 nkeep, s32 originX, s32 num, s32 den, s32 dx, s32 dy, s32 dz);
++extern u32 NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *survey, void *dst, u32 dstBytes, const u8 *keep, u32 nkeep, unsigned turn, s32 pivotX, s32 pivotZ, s32 dx, s32 dy, s32 dz);
+ extern u32 NitroPort_Gx3dSurveyTrim(const NitroGx3dListSurvey *survey, void *dst, u32 dstBytes, const u8 *keep, u32 nkeep, int *repeatable);
+ extern u32 NitroPort_Gx3dTranslateCommand(void *dst, u32 dstBytes, s32 x, s32 y, s32 z);
+ extern u32 NitroPort_Gx3dTrimListRows(const void *src, u32 bytes, void *dst, u32 dstBytes, s32 xlo, s32 xhi, s32 zlo, s32 zhi, int inside);
+@@ -3509,6 +3538,7 @@ typedef struct PortExtrudeCopy {
+     u32 wanted;         // (the last scene it was asked for, or looked ahead to)
+     s8 bandLo, bandHi;  // (the band's rows; drawn again bandCopies times north, every their depth)
+     u8 bandCopies;
++    s8 colLo, colHi;    // (drawn on north or south: only the polygons centred in these columns, tiles from the map's middle; -16 to 16 all)
+     BOOL outdoors;      // (lit by the time of day, as the area's maps are)
+     int numShp, nextShape;
+     s32 tile;           // (a tile in the model's coordinates)
+@@ -3886,6 +3916,15 @@ static BOOL Port_ExtrudeShape(PortExtrudeCopy *copy, NNSG3dResMdl *model, int i)
+                 }
+             }
+ 
++            // (its columns listed alone)
++            if (copy->colLo > -MAP_TILES_COUNT_X / 2 || copy->colHi < MAP_TILES_COUNT_X / 2) {
++                s32 centre = (lo[0] + hi[0]) / 2;
++
++                if (centre < copy->colLo * 16 || centre >= copy->colHi * 16) {
++                    *px = *pz = 0;
++                }
++            }
++
+             // (past a side: in the last column, a face along the border,
+             // and the flat ground)
+             u8 *p = a == 0 ? px : pz;
+@@ -4112,6 +4151,44 @@ static const PortExtrudeForest sPortExtrudeForests[] = {
+     { 50, 3, 1, -14, -2 }, // (Amity Square)
+ };
+ 
++// Maps drawn on past their south (or north) border in some of their
++// columns only, over the scenery map there, which is still drawn: the
++// polygons centred in those columns (tiles from the map's middle) only.
++// The camera is south of the player: on a map's south edge it sees the
++// faces that look south, which the DS's 192 lines never reached and so
++// were never made. Route 208's west map: its mountain's slopes by the west
++// edge, up to 13 tiles high, stopped there, the 3D's white behind them, a
++// triangle in the screen's bottom corner (a screenshot of 2026-11-07, by
++// the route's sign); drawn on south they go on past the screen's bottom.
++// (The slope by them, 1 tile lower, is drawn on south as a piece of the
++// map, sPortMapPieces: drawn on with these, its corner pieces repeated
++// left gaps the water showed through.)
++typedef struct PortExtrudeColumns {
++    u8 matrixID;
++    u16 mapMatrixIndex;
++    s8 dirZ;
++    s8 colLo, colHi;
++} PortExtrudeColumns;
++
++static const PortExtrudeColumns sPortExtrudeColumns[] = {
++    { 0, 672, 1, -16, -6 }, // (Route 208's west map: its mountain's slopes by the west edge)
++};
++
++static const PortExtrudeColumns *Port_ExtrudeColumnsOf(const LandDataManager *landDataMan, int mapMatrixIndex, int dirZ)
++{
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++
++    for (int k = 0; k < (int)NELEMS(sPortExtrudeColumns); k++) {
++        const PortExtrudeColumns *c = &sPortExtrudeColumns[k];
++
++        if (c->matrixID == matrixID && c->mapMatrixIndex == mapMatrixIndex && (dirZ == 0 || c->dirZ == dirZ)) {
++            return c;
++        }
++    }
++
++    return NULL;
++}
++
+ static const PortExtrudeForest *Port_ExtrudeForestOf(const LandDataManager *landDataMan, int mapMatrixIndex, int dirX)
+ {
+     int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
+@@ -4199,6 +4276,10 @@ static PortExtrudeCopy *Port_ExtrudeCopyFor(const LandDataManager *landDataMan,
+     copy->outdoors = AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan) == TRUE;
+ 
+     const PortExtrudeForest *forest = band != 0 ? Port_ExtrudeForestOf(landDataMan, from, dirX) : NULL;
++    const PortExtrudeColumns *columns = dirX == 0 && dirZ != 0 ? Port_ExtrudeColumnsOf(landDataMan, from, dirZ) : NULL;
++
++    copy->colLo = columns != NULL ? columns->colLo : -MAP_TILES_COUNT_X / 2;
++    copy->colHi = columns != NULL ? columns->colHi : MAP_TILES_COUNT_X / 2;
+ 
+     if (forest != NULL) {
+         copy->bandLo = forest->bandLo;
+@@ -4298,6 +4379,13 @@ static void Port_ExtrudeAhead(const LandDataManager *landDataMan)
+                 dirsZ[numZ++] = -1;
+             }
+ 
++            // (in some columns, over the scenery past it)
++            const PortExtrudeColumns *columns = Port_ExtrudeColumnsOf(landDataMan, index, 0);
++
++            if (columns != NULL && numZ < 2) {
++                dirsZ[numZ++] = columns->dirZ;
++            }
++
+             for (int dir = -1; dir <= 1 && Port_ExtrudedBesideScenery(header); dir += 2) {
+                 if (Port_MirroredBesideSceneryTo(header, dir) && index % width + dir >= 0 && index % width + dir < width
+                     && MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, index + dir) == MAP_HEADER_EVERYWHERE) {
+@@ -6566,6 +6654,319 @@ static void Port_RenderForestOnSouth(const LandDataManager *landDataMan)
+ }
+ #endif
+ 
++#ifdef SDK_PORT_3DS
++// Pieces of a map drawn again moved, from its own polygons (of one shape,
++// wholly in a box): where the DS's view never reached, a map has no edge
++// where it should, and past its border none at all. Each piece is the
++// polygons the box holds (only if they're as many as listed, else left
++// out), x stretched num/den about originX (NitroPort_Gx3dSurveyMoved) or
++// turned a quarter clockwise turn times about the box's middle
++// (NitroPort_Gx3dSurveyTurned: never mirrored), moved, drawn repeat times
++// each stepZ further south; all in eighths of a tile, from the map's
++// corner (a piece may be drawn past it: a map's pieces in the next one,
++// drawn while the map's loaded). One copy of the map's model with those
++// lists is made once and drawn with the map while it's loaded.
++//
++// Route 208's west map past its south edge (the fill planner, 2026-11-07):
++// the lowest of the mountain's slopes on south, beside it a waterline
++// trim facing east, and one facing west by the forest's filler, the water
++// between them; the trims are the map's own, from its north river's banks
++// (the same water height); the east one's top turned east along the
++// forest's edge to the cliff of the route's east map, its corner the
++// ledge's own rounded one turned half round. Route 209's west map: its
++// river ran up to the map's north edge with no bank (the DS's view never
++// reached that corner), the forest's grass on the water; closed with the
++// map's own bank where another of its waters ends 4 tiles west and 8
++// south (its rounded north-west corner and straight top), and the rounded
++// north-east corner of a water in the map east of it, 12 tiles east;
++// their tops a quarter tile past the map's edge, over the forest's grass,
++// so no water shows above them.
++typedef struct PortMapPiece {
++    u8 matrixID;
++    u16 mapMatrixIndex;
++    u8 shape;
++    u16 box[4];     // (x lo, x hi, z lo, z hi)
++    u8 groups;
++    u16 originX;
++    u8 num, den;
++    u8 turn;
++    s16 dx, dy, dz;
++    u8 repeat;
++    s16 stepZ;
++} PortMapPiece;
++
++static const PortMapPiece sPortMapPieces[] = {
++    { 0, 672, 0, { 80, 88, 256, 264 }, 1, 0, 1, 1, 0, 0, 0, 8, 8, 8 },        // (Route 208: the lowest slope, x 394, z 737-744)
++    { 0, 672, 8, { 214, 218, 52, 60 }, 2, 0, 1, 1, 0, -128, 0, 204, 9, 8 },  // (the trim facing east, x 395, z 736-744)
++    { 0, 672, 8, { 238, 242, 52, 60 }, 2, 0, 1, 1, 0, 16, 0, 204, 9, 8 },    // (the trim facing west, x 415, z 736-744)
++    { 0, 672, 8, { 204, 210, 252, 258 }, 4, 0, 1, 1, 2, 50, 0, 3, 1, 0 },    // (its top: the ledge's south-east corner turned half round)
++    { 0, 672, 8, { 116, 140, 254, 258 }, 2, 116, 2, 3, 0, 144, 0, 0, 1, 0 }, // (and on east along the forest, to x 418)
++    { 0, 676, 4, { 174, 204, 62, 68 }, 6, 0, 1, 1, 0, 32, 0, -64, 1, 0 },    // (Route 209: its river's top, x 538-541: the north-west corner and the top)
++    { 0, 677, 3, { 76, 82, 62, 68 }, 4, 0, 1, 1, 0, -96, 0, -64, 1, 0 },     // (the north-east corner, from the map east of it)
++};
++
++#define PORT_PIECE_COPIES 3
++
++typedef struct PortPieceCopy {
++    int mapMatrixIndex, matrixID, landDataID; // (INVALID_MAP_MATRIX_INDEX: free)
++    BOOL failed; // (couldn't be made: not tried again for that map)
++    u8 *block;
++    NNSG3dResMdl *model;
++} PortPieceCopy;
++
++static PortPieceCopy sPortPieceCopies[PORT_PIECE_COPIES] = {
++    { INVALID_MAP_MATRIX_INDEX },
++    { INVALID_MAP_MATRIX_INDEX },
++    { INVALID_MAP_MATRIX_INDEX },
++};
++
++static void Port_FreePieceCopy(PortPieceCopy *copy)
++{
++    free(copy->block);
++    memset(copy, 0, sizeof(*copy));
++    copy->mapMatrixIndex = INVALID_MAP_MATRIX_INDEX;
++}
++
++static void Port_FreePieceCopies(void)
++{
++    for (int k = 0; k < PORT_PIECE_COPIES; k++) {
++        Port_FreePieceCopy(&sPortPieceCopies[k]);
++    }
++}
++
++static BOOL Port_HasMapPieces(int matrixID, int mapMatrixIndex)
++{
++    for (int k = 0; k < (int)NELEMS(sPortMapPieces); k++) {
++        if (sPortMapPieces[k].matrixID == matrixID && sPortMapPieces[k].mapMatrixIndex == mapMatrixIndex) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++// (eighths of a tile from the map's corner, in the model's coordinates)
++static s32 Port_PieceAt(int eighths, s32 tile)
++{
++    return (s32)(((s64)eighths - MAP_TILES_COUNT_X / 2 * 8) * tile / 8);
++}
++
++// The loaded map's pieces copy: found, or made now; NULL if it has none or
++// it can't be.
++static PortPieceCopy *Port_PieceCopyOf(const LandDataManager *landDataMan, u8 index)
++{
++    extern void NitroPort_Log(const char *fmt, ...);
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix), mapMatrixIndex = loadedMap->mapMatrixIndex;
++
++    if (mapMatrixIndex == INVALID_MAP_MATRIX_INDEX || loadedMap->valid != TRUE || !Port_HasMapPieces(matrixID, mapMatrixIndex)) {
++        return NULL;
++    }
++
++    int landDataID = MapMatrix_GetLandDataIDByIndex(mapMatrixIndex, landDataMan->mapMatrix);
++    PortPieceCopy *copy = NULL;
++
++    for (int k = 0; k < PORT_PIECE_COPIES; k++) {
++        PortPieceCopy *c = &sPortPieceCopies[k];
++
++        if (c->mapMatrixIndex == mapMatrixIndex && c->matrixID == matrixID && c->landDataID == landDataID) {
++            return c->failed ? NULL : c;
++        }
++    }
++
++    // (a slot free, else one whose map isn't loaded now)
++    for (int k = 0; k < PORT_PIECE_COPIES && copy == NULL; k++) {
++        PortPieceCopy *c = &sPortPieceCopies[k];
++        BOOL loaded = FALSE;
++
++        for (u8 q = 0; q < QUADRANT_COUNT; q++) {
++            loaded |= landDataMan->loadedMaps[q]->mapMatrixIndex == c->mapMatrixIndex && landDataMan->loadedMaps[q]->valid == TRUE;
++        }
++
++        if (c->mapMatrixIndex == INVALID_MAP_MATRIX_INDEX || !loaded) {
++            copy = c;
++        }
++    }
++
++    if (copy == NULL) {
++        return NULL;
++    }
++
++    Port_FreePieceCopy(copy);
++    copy->mapMatrixIndex = mapMatrixIndex;
++    copy->matrixID = matrixID;
++    copy->landDataID = landDataID;
++    copy->failed = TRUE;
++
++    const NNSG3dResFileHeader *file = loadedMap->mapModelFile;
++    NNSG3dResMdl *model = loadedMap->mapRenderObj.resMdl;
++    NNSG3dResShp *shapes = model != NULL ? NNS_G3dGetShp(model) : NULL;
++    NNSG3dResMdlInfo *info = model != NULL ? NNS_G3dGetMdlInfo(model) : NULL;
++    int numShp = shapes != NULL ? shapes->dict.numEntry : 0;
++
++    if (file == NULL || info == NULL || info->posScale <= 0 || numShp <= 0) {
++        return NULL;
++    }
++
++    s32 tile = (s32)(((s64)MAP_OBJECT_TILE_SIZE << FX32_SHIFT) / info->posScale), spare = tile / 16;
++    void **cuts = calloc(numShp, sizeof(void *));
++    u8 **lists = calloc(numShp, sizeof(u8 *));
++    u32 *sizes = calloc(numShp, sizeof(u32)), *ofs = calloc(numShp, sizeof(u32));
++    static const u32 sNop = 0;
++    BOOL ok = cuts != NULL && lists != NULL && sizes != NULL && ofs != NULL;
++
++    for (int i = 0; i < numShp && ok; i++) {
++        NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, i);
++        NitroGx3dListSurvey *survey = NULL;
++        u32 count = 0;
++
++        for (int k = 0; k < (int)NELEMS(sPortMapPieces) && ok; k++) {
++            const PortMapPiece *piece = &sPortMapPieces[k];
++
++            if (piece->matrixID != matrixID || piece->mapMatrixIndex != mapMatrixIndex || piece->shape != i) {
++                continue;
++            }
++
++            if (survey == NULL) {
++                survey = NitroPort_Gx3dSurveyList(NNS_G3dGetShpDLPtr(shp), NNS_G3dGetShpDLSize(shp));
++                count = survey != NULL ? NitroPort_Gx3dSurveyGroups(survey, sPortExtrudeBox, NULL, PORT_EXTRUDE_GROUPS) : 0;
++                count = count > PORT_EXTRUDE_GROUPS ? 0 : count;
++            }
++
++            u32 kept = 0;
++
++            for (u32 g = 0; g < count; g++) {
++                const s32 *b = sPortExtrudeBox[g];
++
++                sPortPieceKeep[g] = b[0] >= Port_PieceAt(piece->box[0], tile) - spare && b[3] <= Port_PieceAt(piece->box[1], tile) + spare
++                    && b[2] >= Port_PieceAt(piece->box[2], tile) - spare && b[5] <= Port_PieceAt(piece->box[3], tile) + spare;
++                kept += sPortPieceKeep[g];
++            }
++
++            if (kept != piece->groups) {
++                NitroPort_Log("[field] matrix %d's map %d: a piece of shape %d holds %u polygon groups, not %u: left out", matrixID, mapMatrixIndex, i, kept, piece->groups);
++                continue;
++            }
++
++            for (int r = 0; r < piece->repeat && ok; r++) {
++                u32 room = NNS_G3dGetShpDLSize(shp) * 2 + 64;
++                u8 *grown = realloc(lists[i], sizes[i] + room);
++
++                ok = grown != NULL;
++
++                if (!ok) {
++                    break;
++                }
++
++                lists[i] = grown;
++
++                s32 dx = (s32)((s64)piece->dx * tile / 8), dy = (s32)((s64)piece->dy * tile / 8);
++                s32 dz = (s32)(((s64)piece->dz + (s64)r * piece->stepZ) * tile / 8);
++                u32 size = piece->turn != 0
++                    ? NitroPort_Gx3dSurveyTurned(survey, lists[i] + sizes[i], room, sPortPieceKeep, count, piece->turn,
++                          Port_PieceAt((piece->box[0] + piece->box[1]) / 2, tile), Port_PieceAt((piece->box[2] + piece->box[3]) / 2, tile), dx, dy, dz)
++                    : NitroPort_Gx3dSurveyMoved(survey, lists[i] + sizes[i], room, sPortPieceKeep, count, Port_PieceAt(piece->originX, tile),
++                          piece->num, piece->den, dx, dy, dz);
++
++                sizes[i] += size;
++            }
++        }
++
++        NitroPort_Gx3dFreeSurvey(survey);
++        cuts[i] = sizes[i] > 0 ? (void *)lists[i] : (void *)&sNop;
++        sizes[i] = sizes[i] > 0 ? sizes[i] : sizeof(sNop);
++    }
++
++    if (ok) {
++        copy->block = Port_CopyWithCuts(file, cuts, sizes, ofs, numShp);
++        ok = copy->block != NULL;
++    }
++
++    if (ok) {
++        copy->model = NNS_G3dGetMdlByIdx(NNS_G3dGetMdlSet((NNSG3dResFileHeader *)copy->block), 0);
++
++        NNSG3dResShp *copied = NNS_G3dGetShp(copy->model);
++
++        for (int i = 0; i < numShp; i++) {
++            NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(copied, i);
++
++            shp->ofsDL = (u32)(copy->block + ofs[i] - (u8 *)shp);
++            shp->sizeDL = sizes[i];
++        }
++
++        // (lit by the time of day, as the area's maps are)
++        if (AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan) == TRUE) {
++            AreaLight_UseGlobalModelAttributes(copy->model);
++        }
++
++        copy->failed = FALSE;
++    }
++
++    for (int i = 0; lists != NULL && i < numShp; i++) {
++        free(lists[i]);
++    }
++
++    free(lists);
++    free(cuts);
++    free(sizes);
++    free(ofs);
++    return copy->failed ? NULL : copy;
++}
++
++// The loaded maps' pieces drawn, each with its map.
++static void Port_RenderMapPieces(const LandDataManager *landDataMan)
++{
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld) {
++        return;
++    }
++
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        PortPieceCopy *copy = Port_PieceCopyOf(landDataMan, i);
++
++        if (copy == NULL) {
++            continue;
++        }
++
++        LoadedMap *loadedMap = landDataMan->loadedMaps[i];
++        VecFx32 position = { 0, 0, 0 };
++        VecFx32 scale = { FX32_ONE, FX32_ONE, FX32_ONE };
++        MtxFx33 rotationMatrix = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++        NNSG3dResMdl *own = loadedMap->mapRenderObj.resMdl;
++
++        LandDataManager_CalculateRenderingPosition(loadedMap->mapMatrixIndex, landDataMan->mapMatrixWidth, landDataMan->mapMatrix, &position);
++        position.x += landDataMan->offset.x;
++        position.y += landDataMan->offset.y;
++        position.z += landDataMan->offset.z;
++
++        loadedMap->mapRenderObj.resMdl = copy->model;
++        Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &position, &rotationMatrix, &scale);
++        NNS_G3dGeFlushBuffer();
++        loadedMap->mapRenderObj.resMdl = own;
++    }
++}
++
++// The maps listed in sPortExtrudeColumns drawn on past their border in
++// those columns, over the scenery map there.
++static void Port_RenderExtrudedColumns(const LandDataManager *landDataMan)
++{
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld) {
++        return;
++    }
++
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        const LoadedMap *loadedMap = landDataMan->loadedMaps[i];
++        const PortExtrudeColumns *columns;
++
++        if (loadedMap->mapMatrixIndex == INVALID_MAP_MATRIX_INDEX || loadedMap->valid != TRUE
++            || (columns = Port_ExtrudeColumnsOf(landDataMan, loadedMap->mapMatrixIndex, 0)) == NULL) {
++            continue;
++        }
++
++        Port_RenderExtrudedPart(landDataMan, i, 0, columns->dirZ);
++    }
++}
++#endif
++
+ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
+ {
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+@@ -6596,6 +6997,8 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+     }
+ #ifdef SDK_PORT_3DS
+     Port_RenderMirroredEdges(landDataMan, modelAttrs);
++    Port_RenderExtrudedColumns(landDataMan);
++    Port_RenderMapPieces(landDataMan);
+     Port_RenderMirroredBesideScenery(landDataMan, modelAttrs);
+     Port_ExtrudeAhead(landDataMan);
+     Port_RenderSceneryMapsLowered(landDataMan);
+@@ -6618,6 +7021,7 @@ void LandDataManager_End(LandDataManager *landDataMan)
+     Port_FreeMirrorCopies();
+     Port_FreeLoweredCopies();
+     Port_FreeExtrudeCopies();
++    Port_FreePieceCopies();
+     Port_FreeCellCopies();
+     Port_FreeEdgeCopies();
+     Port_FreeBesideMaps();

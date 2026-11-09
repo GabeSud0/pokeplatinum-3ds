@@ -1,0 +1,1148 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 12:00:00 -0700
+Subject: [PATCH] Map edges drawn on straight, not mirrored (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Mirrored past an edge, a map showed its own houses, ponds, paths, cliffs
+and windmills again backwards (rejected on 2026-11-07; each place below
+had its picture approved before this was made). Past an edge now the
+map's strip by it goes on straight (Port_RenderExtrudedPart): each
+polygon that reaches the border again and again, moved on by its own
+width (a cliff's face, the ground by it, a row of trees drawn as one long
+quad); what starts in the map's last column every tile; the trees in the
+last two columns (or rows) whole, every 2 tiles (a tree is 4 quads of
+1 3/8 to 2 1/2 tiles over one place; past the top or bottom a row of
+them drawn as long leaning quads counts too); into a corner what goes on
+both ways. A slope or wall along the border in its last column (facing
+the border, not across it) isn't drawn on, its faces side by side made
+teeth: the flat polygon at its top beside it along the border is drawn
+again over its length instead (Port_MakeExtrudeFills).
+
+Where: Route 204's two maps past their forest scenery; Floaroma Meadow
+and Eterna Forest past every edge and corner (the forest was black past
+its top and bottom); Hearthome's west, the mountain scenery beside its
+north half (a purple plain) replaced by its west forest; the Cycling
+Road and Valley Windworks past their scenery (the river goes on, and the
+mountains south of Valley Windworks with it, Port_BelowExtruded); and
+Amity Square. There the top-right map ends at the right in the plateau's
+last cliff, sloping down to the border: past it, the bottom-right map's
+upper terrace of trees goes on north instead (sPortExtrudeForests; that
+map's model read whole if it isn't loaded), the cliff going down into it.
+Nothing is mirrored now (sPortMirroredEdgeMatrices has no matrix; the
+code is kept).
+
+Each part is one copy of the map's model whose lists hold each polygon
+again at every place it's drawn at, an MTX_TRANS between, drawn once (on
+the PC 43 draws a scene to 2 at Amity Square's west edge). Copies are
+made two shapes a scene ahead for the loaded maps by an edge, in either
+half of them (Port_ExtrudeAhead), so they're made before the edge comes
+into the view; one needed before that (after a warp) is made at once.
+Each shape's list is read once for its cuts (NitroPort_Gx3dSurveyList;
+on the PC 2.1 to 0.6 ms a copy).
+
+On the PC the same pictures as the approved ones at every place, and the
+same as before at Veilstone, Route 215, Solaceon, Jubilife, Floaroma,
+Eterna, Route 210 and Hearthome's east side.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 5dbcdd11..96e4902e 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -1657,15 +1657,27 @@ void LandDataManager_CheckLazyLoadNextMapPair(const u8 trackedTargetDirection, L
+ // The wider field (400 pixels across, 3ds_port) sees about 12 tiles each
+ // side of the player, the DS's 8: by a map matrix's left or right edge the
+ // view goes past the last map, where there is no map to draw, and shows
+-// black. In these places the map by the edge is drawn again past it,
+-// mirrored left to right about the edge: what's beside the edge on the
+-// map (a forest's trees) goes on past it. Only for the matrices listed:
+-// past a town's edge, mirrored houses would look wrong.
++// black. In the matrices listed here the map by the edge was drawn again
++// past it, mirrored left to right about the edge: what's beside the edge on
++// the map (a forest's trees) went on past it, but so did its paths and
++// cliffs, backwards (mirroring was rejected, 2026-11-07: none now, 0xFF
++// is no matrix; kept for a case that needs it).
+ static const u8 sPortMirroredEdgeMatrices[] = {
+-    7, // Eterna Forest (m_dun0301)
++    0xFF,
++};
++
++// Those past whose edges (and corners) the map by the edge is drawn on
++// straight instead (Port_RenderExtrudedPart): its trees, cliffs and ground.
++static const u8 sPortExtrudedEdgeMatrices[] = {
+     52, // Floaroma Meadow
++    50, // Amity Square
++    7,  // Eterna Forest
+ };
+ 
++static void Port_RenderExtrudedPart(const LandDataManager *landDataMan, u8 index, int dirX, int dirZ);
++static void Port_RenderExtrudedEdge(const LandDataManager *landDataMan, u8 index, int dir);
++static void Port_ExtrudeAhead(const LandDataManager *landDataMan);
++
+ static BOOL Port_MirrorsEdges(const LandDataManager *landDataMan)
+ {
+     if (landDataMan->inDistortionWorld) {
+@@ -1680,6 +1692,25 @@ static BOOL Port_MirrorsEdges(const LandDataManager *landDataMan)
+         }
+     }
+ 
++    for (int i = 0; i < (int)NELEMS(sPortExtrudedEdgeMatrices); i++) {
++        if (sPortExtrudedEdgeMatrices[i] == matrixID) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++static BOOL Port_ExtrudesEdges(const LandDataManager *landDataMan)
++{
++    u8 matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++
++    for (int i = 0; i < (int)NELEMS(sPortExtrudedEdgeMatrices); i++) {
++        if (sPortExtrudedEdgeMatrices[i] == matrixID) {
++            return TRUE;
++        }
++    }
++
+     return FALSE;
+ }
+ 
+@@ -1732,6 +1763,37 @@ static void Port_RenderMirroredEdges(const LandDataManager *landDataMan, ModelAt
+     BOOL rightHalf = quadrant == QUADRANT_TOP_RIGHT || quadrant == QUADRANT_BOTTOM_RIGHT;
+     int dir;
+ 
++    if (Port_ExtrudesEdges(landDataMan)) {
++        // (the matrix's left or right edge in the player's half of the map,
++        // its top or bottom edge likewise, and the corner between)
++        int row = (int)landDataMan->trackedTargetMapMatrixIndex / width, height = landDataMan->mapMatrixHeight;
++        BOOL bottomHalf = quadrant == QUADRANT_BOTTOM_LEFT || quadrant == QUADRANT_BOTTOM_RIGHT;
++        int dirX = column == width - 1 && rightHalf ? 1 : column == 0 && !rightHalf ? -1 : 0;
++        int dirZ = row == height - 1 && bottomHalf ? 1 : row == 0 && !bottomHalf ? -1 : 0;
++
++        for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++            int index = landDataMan->loadedMaps[i]->mapMatrixIndex;
++
++            if (index == INVALID_MAP_MATRIX_INDEX) {
++                continue;
++            }
++
++            if (dirX != 0 && index % width == column) {
++                Port_RenderExtrudedPart(landDataMan, i, dirX, 0);
++            }
++
++            if (dirZ != 0 && index / width == row) {
++                Port_RenderExtrudedPart(landDataMan, i, 0, dirZ);
++            }
++
++            if (dirX != 0 && dirZ != 0 && index % width == column && index / width == row) {
++                Port_RenderExtrudedPart(landDataMan, i, dirX, dirZ);
++            }
++        }
++
++        return;
++    }
++
+     if (column == width - 1 && rightHalf) {
+         dir = 1;
+     } else if (column == 0 && !rightHalf) {
+@@ -1985,32 +2047,46 @@ static void Port_RenderSceneryMapsLowered(const LandDataManager *landDataMan)
+ // (the mountains beside Route 206's Cycling Road), which was made for
+ // nobody to see its edge: a flat ledge at its own height, and the map's
+ // river and ledges stopping at the border. Past the border on the
+-// player's side, the map is drawn again mirrored about it instead (as
+-// past Eterna Forest's edge): its river and ledges go on, level, and the
+-// scenery map isn't drawn. Only for the maps listed: drawing one again is
+-// a whole map sent (most of it out of the view, skipped as such).
++// player's side, the map was drawn again mirrored about it instead: its
++// river and ledges went on, level, and the scenery map wasn't drawn. Only
++// for the maps listed: drawing one again is a whole map sent (most of it
++// out of the view, skipped as such).
+ //
+ // Route 204's north map has forest scenery maps either side at the height
+ // of its north part (altitude 10), above its lower south rows: the wider
+ // field saw the scenery's trees standing over the map's cliffs and its own
+ // trees by the border, the cliffs cut off there (screenshots of
+-// 2026-11-07). The south map is mirrored to the right only: there its rows
+-// by the north map meet the north map's mirrored ones (with the scenery map
+-// instead, a slit open between the two, black). On its left its ponds by
+-// the border would show again past it, and the scenery map there (only 2
+-// above it) meets it as before.
++// 2026-11-07). Hearthome's west side by its north half saw the mountain
++// scenery's top, a purple plain (a screenshot of 2026-11-07). Mirrored,
++// the maps' own paths, cliffs and windmills showed again backwards
++// (rejected, 2026-11-07): each listed is now drawn on straight past the
++// scenery (extruded, Port_RenderExtrudedEdge), its forest, cliffs, river
++// and mountain going on.
+ typedef struct PortMirroredScenery {
+     u16 header;
+-    s8 side; // (the side it's mirrored to: 0 either, -1 the left only, 1 the right only)
++    s8 side;     // (the side it's drawn past the scenery on: 0 either, -1 the left only, 1 the right only)
++    u8 extruded; // (not mirrored: its strip by the border drawn again on past it, Port_RenderExtrudedEdge)
+ } PortMirroredScenery;
+ 
+ static const PortMirroredScenery sPortMirroredBesideScenery[] = {
+-    { MAP_HEADER_ROUTE_206, 0 },
+-    { MAP_HEADER_VALLEY_WINDWORKS_OUTSIDE, 0 },
+-    { MAP_HEADER_ROUTE_204_NORTH, 0 },
+-    { MAP_HEADER_ROUTE_204_SOUTH, 1 },
++    { MAP_HEADER_ROUTE_206, 0, TRUE },
++    { MAP_HEADER_VALLEY_WINDWORKS_OUTSIDE, 0, TRUE },
++    { MAP_HEADER_ROUTE_204_NORTH, 0, TRUE },
++    { MAP_HEADER_ROUTE_204_SOUTH, 0, TRUE },
++    { MAP_HEADER_HEARTHOME_CITY, -1, TRUE },
+ };
+ 
++static BOOL Port_ExtrudedBesideScenery(u16 header)
++{
++    for (int i = 0; i < (int)NELEMS(sPortMirroredBesideScenery); i++) {
++        if (sPortMirroredBesideScenery[i].header == header) {
++            return sPortMirroredBesideScenery[i].extruded;
++        }
++    }
++
++    return FALSE;
++}
++
+ static BOOL Port_MirroredBesideSceneryTo(u16 header, int dir)
+ {
+     for (int i = 0; i < (int)NELEMS(sPortMirroredBesideScenery); i++) {
+@@ -2113,6 +2189,16 @@ static int Port_MirrorSideBelowMirrored(const LandDataManager *landDataMan, u8 i
+     return 0;
+ }
+ 
++// Whether the map north of the loaded one (a scenery map drawn on past the
++// border with it, Port_MirrorSideBelowMirrored) is drawn on past it by
++// its strip by the border (not mirrored): then so is the scenery map.
++static BOOL Port_BelowExtruded(const LandDataManager *landDataMan, u8 index)
++{
++    int above = landDataMan->loadedMaps[index]->mapMatrixIndex - landDataMan->mapMatrixWidth;
++
++    return above >= 0 && Port_ExtrudedBesideScenery(MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, above));
++}
++
+ // Whether the loaded map is a scenery map with a mirrored map drawn in its
+ // place.
+ static BOOL Port_SceneryMirroredOver(const LandDataManager *landDataMan, u8 index)
+@@ -2154,6 +2240,12 @@ static BOOL Port_SceneryMirroredOver(const LandDataManager *landDataMan, u8 inde
+ #include "map_header.h"
+ 
+ extern u32 NitroPort_Gx3dTrimList(const void *src, u32 bytes, void *dst, u32 dstBytes, int axis, s32 lo, s32 hi);
++typedef struct NitroGx3dListSurvey NitroGx3dListSurvey;
++extern NitroGx3dListSurvey *NitroPort_Gx3dSurveyList(const void *src, u32 bytes);
++extern void NitroPort_Gx3dFreeSurvey(NitroGx3dListSurvey *survey);
++extern u32 NitroPort_Gx3dSurveyGroups(const NitroGx3dListSurvey *survey, s32 (*box)[6], u8 *slopes, u32 max);
++extern u32 NitroPort_Gx3dSurveyTrim(const NitroGx3dListSurvey *survey, void *dst, u32 dstBytes, const u8 *keep, u32 nkeep, int *repeatable);
++extern u32 NitroPort_Gx3dTranslateCommand(void *dst, u32 dstBytes, s32 x, s32 y, s32 z);
+ extern u32 NitroPort_Gx3dTrimListRows(const void *src, u32 bytes, void *dst, u32 dstBytes, s32 xlo, s32 xhi, s32 zlo, s32 zhi, int inside);
+ 
+ // Rows of a listed map where, past the scenery, it isn't mirrored but
+@@ -2916,7 +3008,7 @@ static int Port_MirrorSideWhileRead(const LandDataManager *landDataMan, u8 index
+     u8 quadrant = landDataMan->trackedTargetMapQuadrant;
+     dir = quadrant == QUADRANT_TOP_RIGHT || quadrant == QUADRANT_BOTTOM_RIGHT ? 1 : -1;
+ 
+-    if (!Port_MirroredBesideSceneryTo(header, dir)) {
++    if (!Port_MirroredBesideSceneryTo(header, dir) || Port_ExtrudedBesideScenery(header)) {
+         return 0;
+     }
+ 
+@@ -2955,6 +3047,7 @@ static void Port_RenderMirroredWhole(const u8 index, const int dir, const VecFx3
+ }
+ 
+ static void Port_RenderMirroredBesideSceneryMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs);
++static void Port_RenderExtrudedEdge(const LandDataManager *landDataMan, u8 index, int dir);
+ 
+ // A map with rows moved over on both sides (Route 206 under the bridge):
+ // its copy for the other side is made a little a scene once this side's
+@@ -2983,12 +3076,14 @@ static void Port_RenderMirroredBesideScenery(const LandDataManager *landDataMan,
+ 
+     Port_RenderMirroredBesideSceneryMaps(landDataMan, modelAttrs);
+ 
+-    // (the scenery south of them, mirrored with them: a scenery map is
+-    // small, drawn whole)
++    // (the scenery south of them, drawn on past the border with them, or
++    // mirrored with them: a scenery map is small)
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         int dir = Port_MirrorSideBelowMirrored(landDataMan, i);
+ 
+-        if (dir != 0) {
++        if (dir != 0 && Port_BelowExtruded(landDataMan, i)) {
++            Port_RenderExtrudedEdge(landDataMan, i, dir);
++        } else if (dir != 0) {
+             Port_RenderLoadedMapMirrored(i, dir, landDataMan, modelAttrs);
+         }
+     }
+@@ -3027,6 +3122,11 @@ static void Port_RenderMirroredBesideSceneryMaps(const LandDataManager *landData
+         LoadedMap *loadedMap = landDataMan->loadedMaps[i];
+         VecFx32 position = { 0, 0, 0 };
+ 
++        if (Port_ExtrudedBesideScenery(MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, loadedMap->mapMatrixIndex))) {
++            Port_RenderExtrudedEdge(landDataMan, i, dir);
++            continue;
++        }
++
+         LandDataManager_CalculateRenderingPosition(loadedMap->mapMatrixIndex, landDataMan->mapMatrixWidth, landDataMan->mapMatrix, &position);
+         position.x += landDataMan->offset.x;
+         position.y += landDataMan->offset.y;
+@@ -3339,6 +3439,821 @@ static PortEdgeCopy *Port_EdgeCopyOf(const LandDataManager *landDataMan, u8 inde
+     return copy;
+ }
+ 
++// A map's own edge drawn on past its border instead of what's beyond it
++// (a scenery map, or nothing past a matrix's edge), straight, as far as
++// the wider view sees: each polygon that reaches the border (a cliff's
++// face, the ground by it, a row of trees drawn as one long quad) again and
++// again, moved on by its own width each time; its trees in the last two
++// columns (or rows), whole, every 2 tiles (a tree is 4 quads of 1 3/8 to
++// 2 1/2 tiles over one place). Past the side (dirX: -1 left, 1 right),
++// past the top or bottom (dirZ: -1, 1), or past both into the corner (what
++// reaches both borders, on in both ways). Mirrored instead (as before),
++// the map's own houses, ponds and paths showed again backwards past it.
++//
++// One copy of the map's model for each: its lists with only those
++// polygons, each again at every place it's drawn on at (an MTX_TRANS
++// between), the copy drawn once. Made a few shapes a scene, ahead: for the
++// loaded maps by an edge while the player's still in their far half (by
++// the time the edge comes into the view, it's made); made at once if it's
++// needed before that (just come in).
++#define PORT_EXTRUDE_REACH_X       13   // (tiles past the border the copies reach: the wider view sees 12 and a half)
++#define PORT_EXTRUDE_REACH_Z       9    // (up the screen and down it: 7 and a half, the pixel field 9)
++#define PORT_EXTRUDE_TREE_PITCH    2
++#define PORT_EXTRUDE_COPIES        12   // (four maps by a corner: a side, the top or bottom, the corner, each)
++#define PORT_EXTRUDE_GROUPS        1024 // (a shape's polygons looked at, at most)
++#define PORT_EXTRUDE_SHAPES_AHEAD  2    // (shapes worked through a scene, ahead of need)
++#define PORT_EXTRUDE_FACES         32
++#define PORT_EXTRUDE_FLATS         64
++#define PORT_EXTRUDE_FILLS         8
++
++enum {
++    PORT_EXTRUDE_FREE,
++    PORT_EXTRUDE_MAKING,
++    PORT_EXTRUDE_MADE,
++    PORT_EXTRUDE_FAILED,
++};
++
++typedef struct PortExtrudeSpan {
++    s16 lo, hi; // (along the border, sixteenths of a tile from the map's middle)
++    s16 y;      // (a face's top; a flat's height)
++    u8 shape;
++    u16 group;
++} PortExtrudeSpan;
++
++// A shape's list being made, and where it's moved to by then (the model's
++// coordinates).
++typedef struct PortExtrudeList {
++    u8 *bytes;
++    u32 size, room;
++    s32 x, z;
++} PortExtrudeList;
++
++typedef struct PortExtrudeCopy {
++    int mapMatrixIndex, matrixID, landDataID;
++    s8 dirX, dirZ;
++    s8 band;            // (0 all; 1 only the polygons in its forest band, PortExtrudeForest; -1 not those north of it)
++    u8 state;
++    u32 wanted;         // (the last scene it was asked for, or looked ahead to)
++    s8 bandLo, bandHi;  // (the band's rows; drawn again bandCopies times north, every their depth)
++    u8 bandCopies;
++    int numShp, nextShape;
++    s32 tile;           // (a tile in the model's coordinates)
++    PortExtrudeList *lists;
++    PortExtrudeSpan *faces, *flats;
++    int numFaces, numFlats;
++    u8 *block;          // (the model file copied, the lists after it)
++    NNSG3dResMdl *model;
++} PortExtrudeCopy;
++
++static PortExtrudeCopy sPortExtrudeCopies[PORT_EXTRUDE_COPIES];
++static u32 sPortExtrudeScene = 1;
++
++static void Port_FreeExtrudeLists(PortExtrudeCopy *copy)
++{
++    if (copy->lists != NULL) {
++        for (int i = 0; i < copy->numShp; i++) {
++            free(copy->lists[i].bytes);
++        }
++    }
++
++    free(copy->lists);
++    free(copy->faces);
++    copy->lists = NULL;
++    copy->faces = copy->flats = NULL;
++}
++
++static void Port_FreeExtrudeCopy(PortExtrudeCopy *copy)
++{
++    Port_FreeExtrudeLists(copy);
++    free(copy->block);
++    memset(copy, 0, sizeof(*copy));
++}
++
++static void Port_FreeExtrudeCopies(void)
++{
++    for (int i = 0; i < PORT_EXTRUDE_COPIES; i++) {
++        Port_FreeExtrudeCopy(&sPortExtrudeCopies[i]);
++    }
++}
++
++// The pitch (tiles) a polygon is drawn on at past the border on side dir
++// of axis a (0 x, 2 z), 0 for none; bounds in sixteenths of a tile from
++// the map's middle. A tree's layers: the last 2 columns' trees, every 2
++// tiles. Else what starts in the map's last column, every tile (the
++// column's profile: a cliff's face, its foot, the ground); what's wider and
++// reaches the border (a row of trees, a long cliff), every its own width.
++// What ends before the border (a cliff's corner by it) isn't drawn on.
++static int Port_ExtrudePitch(const s32 *lo, const s32 *hi, int a, int dir, BOOL tree)
++{
++    s32 half = MAP_TILES_COUNT_X / 2 * 16, w = hi[a] - lo[a];
++
++    if (tree) {
++        s32 centre = (lo[a] + hi[a]) / 2;
++
++        return (dir > 0 ? centre > half - PORT_EXTRUDE_TREE_PITCH * 16 : centre < -half + PORT_EXTRUDE_TREE_PITCH * 16) ? PORT_EXTRUDE_TREE_PITCH : 0;
++    }
++
++    if (dir > 0 ? lo[a] >= half - 16 - 1 : hi[a] <= -half + 16 + 1) {
++        return 1;
++    }
++
++    if (dir > 0 ? hi[a] < half - 1 : lo[a] > -half + 1) {
++        return 0;
++    }
++
++    int pitch = (w + 8) / 16;
++    return pitch < 1 ? 1 : pitch;
++}
++
++// Whether a group is one of a tree's canopy layers: 1 3/8, 2 1/16 or 2 1/2
++// tiles across, standing (the field's trees, 4 quads over one place).
++static BOOL Port_IsCanopyLayer(const s32 *lo, const s32 *hi)
++{
++    s32 w = hi[0] - lo[0];
++
++    return hi[1] - lo[1] >= 8 && ((w >= 21 && w <= 23) || (w >= 32 && w <= 34) || (w >= 39 && w <= 41));
++}
++
++// Whether a group is a layer of a row of trees as drawn past the top or
++// bottom border: standing half a tile or more, leaning back 1 to 2 tiles
++// (the field's trees, a row of them drawn as one long quad a layer).
++static BOOL Port_IsLeaningLayer(const s32 *lo, const s32 *hi)
++{
++    s32 d = hi[2] - lo[2];
++
++    return hi[1] - lo[1] >= 8 && d >= 16 && d <= 32;
++}
++
++// The list's bytes added to the end of the shape's list being made.
++static BOOL Port_ExtrudeListPut(PortExtrudeList *list, const void *bytes, u32 size)
++{
++    if (list->size + size > list->room) {
++        u32 room = list->room * 2 > list->size + size + 256 ? list->room * 2 : list->size + size + 256;
++        u8 *grown = realloc(list->bytes, room);
++
++        if (grown == NULL) {
++            return FALSE;
++        }
++
++        list->bytes = grown;
++        list->room = room;
++    }
++
++    memcpy(list->bytes + list->size, bytes, size);
++    list->size += size;
++    return TRUE;
++}
++
++// What's sent after it moved to (x, z) (the model's coordinates).
++static BOOL Port_ExtrudeListMoveTo(PortExtrudeList *list, s32 x, s32 z)
++{
++    u32 command[4];
++
++    if (x == list->x && z == list->z) {
++        return TRUE;
++    }
++
++    NitroPort_Gx3dTranslateCommand(command, sizeof(command), x - list->x, 0, z - list->z);
++    list->x = x;
++    list->z = z;
++    return Port_ExtrudeListPut(list, command, sizeof(command));
++}
++
++// The cut list added again at each place a polygon pitchX, pitchZ tiles
++// apart is drawn on at (then for a fill, each of those again count times
++// along the border, step sixteenths of a tile apart; for the copy of a
++// forest band, all of those again north of it).
++static BOOL Port_ExtrudeListRepeat(const PortExtrudeCopy *copy, PortExtrudeList *list, const void *cut, u32 size,
++    int pitchX, int pitchZ, int fillDir, int fillCount, int fillStep)
++{
++    int stepsX = pitchX > 0 ? (PORT_EXTRUDE_REACH_X + pitchX - 1) / pitchX : 0;
++    int stepsZ = pitchZ > 0 ? (PORT_EXTRUDE_REACH_Z + pitchZ - 1) / pitchZ : 0;
++    BOOL ok = TRUE;
++
++    for (int b = copy->band > 0 ? 1 : 0; b <= (copy->band > 0 ? copy->bandCopies : 0) && ok; b++) {
++        for (int i = pitchX > 0 ? 1 : 0; i <= stepsX && ok; i++) {
++            for (int j = pitchZ > 0 ? 1 : 0; j <= stepsZ && ok; j++) {
++                for (int m = fillDir != 0 ? 1 : 0; m <= fillCount && ok; m++) {
++                    s32 x16 = copy->dirX * i * pitchX * 16, z16 = copy->dirZ * j * pitchZ * 16 - b * (copy->bandHi - copy->bandLo) * 16;
++
++                    if (copy->dirX != 0) {
++                        z16 += fillDir * m * fillStep;
++                    } else {
++                        x16 += fillDir * m * fillStep;
++                    }
++
++                    ok = Port_ExtrudeListMoveTo(list, (s32)((s64)x16 * copy->tile / 16), (s32)((s64)z16 * copy->tile / 16))
++                        && Port_ExtrudeListPut(list, cut, size);
++                }
++            }
++        }
++    }
++
++    return ok;
++}
++
++// A slope or wall along the border in its last column (its face toward
++// the border or away from it, not across it) isn't drawn on past it: side
++// by side every tile, the faces make teeth with nothing between (the
++// Cycling Road's mountains rising to the border). Past it instead, the
++// ground at its top: the flat polygon at that height in the last column
++// next to it along the border (where the slope ends), drawn on past the
++// border as the rest of the column is, and again along the border over the
++// slope's length, every its own length (a fill).
++typedef struct PortExtrudeFill {
++    u8 shape;
++    u16 group;
++    s8 dir;
++    u8 count;
++    s16 step;
++} PortExtrudeFill;
++
++// The fills for the faces (merged into runs along the border at one top),
++// up to max; their count.
++static int Port_MakeExtrudeFills(PortExtrudeSpan *faces, int numFaces, const PortExtrudeSpan *flats, int numFlats, PortExtrudeFill *fills, int max)
++{
++    int numFills = 0;
++
++    // (by where each starts)
++    for (int i = 1; i < numFaces; i++) {
++        for (int j = i; j > 0 && faces[j].lo < faces[j - 1].lo; j--) {
++            PortExtrudeSpan t = faces[j];
++
++            faces[j] = faces[j - 1];
++            faces[j - 1] = t;
++        }
++    }
++
++    for (int i = 0; i < numFaces && numFills < max;) {
++        PortExtrudeSpan run = faces[i++];
++
++        while (i < numFaces && faces[i].lo <= run.hi + 2 && faces[i].y >= run.y - 1 && faces[i].y <= run.y + 1) {
++            run.hi = faces[i].hi > run.hi ? faces[i].hi : run.hi;
++            i++;
++        }
++
++        const PortExtrudeSpan *best = NULL;
++        int dir = 0;
++
++        for (int k = 0; k < numFlats; k++) {
++            const PortExtrudeSpan *f = &flats[k];
++            int d = 0;
++
++            if (f->y < run.y - 1 || f->y > run.y + 1 || f->hi - f->lo < 16) {
++                continue;
++            }
++
++            if (f->lo >= run.hi - 16 && f->lo <= run.hi + 16) {
++                d = -1; // (after the run: drawn again back over it)
++            } else if (f->hi <= run.lo + 16 && f->hi >= run.lo - 16) {
++                d = 1;
++            }
++
++            if (d != 0 && (best == NULL || f->hi - f->lo > best->hi - best->lo)) {
++                best = f;
++                dir = d;
++            }
++        }
++
++        if (best != NULL) {
++            int step = best->hi - best->lo, reach = dir < 0 ? best->lo - run.lo : run.hi - best->hi;
++            int n = (reach + step - 1) / step;
++
++            fills[numFills].shape = best->shape;
++            fills[numFills].group = best->group;
++            fills[numFills].dir = (s8)dir;
++            fills[numFills].count = (u8)(n < 1 ? 1 : n > 8 ? 8 : n);
++            fills[numFills].step = (s16)step;
++            numFills++;
++        }
++    }
++
++    return numFills;
++}
++
++// (the work space for a shape: its groups' bounds and slopes, each one's
++// pitches, and which are cut out)
++static s32 sPortExtrudeBox[PORT_EXTRUDE_GROUPS][6];
++static u8 sPortExtrudeSlopes[PORT_EXTRUDE_GROUPS];
++static u8 sPortExtrudePitchX[PORT_EXTRUDE_GROUPS];
++static u8 sPortExtrudePitchZ[PORT_EXTRUDE_GROUPS];
++static u8 sPortExtrudeMark[PORT_EXTRUDE_GROUPS];
++
++// The cut list of shape i of the model with the marked groups (into a new
++// buffer), and whether it can be sent again right after itself.
++static void *Port_ExtrudeCut(NitroGx3dListSurvey *survey, NNSG3dResShpData *shp, u32 count, u32 *size, int *repeatable)
++{
++    u32 room = NNS_G3dGetShpDLSize(shp) + NNS_G3dGetShpDLSize(shp) / 2 + 64;
++    void *cut = malloc(room);
++
++    *size = cut == NULL ? 0 : NitroPort_Gx3dSurveyTrim(survey, cut, room, sPortExtrudeMark, count, repeatable);
++
++    if (*size == 0) {
++        free(cut);
++        return NULL;
++    }
++
++    return cut;
++}
++
++// (a cut list whose first vertices take the colour, normal or texture
++// coordinates from before it, set again later in it: sent again right after
++// itself, those vertices take what it set last instead. Not seen in the
++// maps drawn on; logged, in case)
++static void Port_NoteNotRepeatable(const PortExtrudeCopy *copy, int shape, BOOL notRepeatable)
++{
++    extern void NitroPort_Log(const char *fmt, ...);
++
++    if (notRepeatable) {
++        NitroPort_Log("[field] drawn on past the border (matrix %d, map %d, side %d,%d): shape %d's list not the same sent again",
++            copy->matrixID, copy->mapMatrixIndex, copy->dirX, copy->dirZ, shape);
++    }
++}
++
++// Shape i of the model worked through: each of its polygons' pitches, the
++// polygons at each pair of pitches cut out and added to its list at every
++// place they're drawn on at; the faces and flats in the last column noted
++// (Port_MakeExtrudeFills, once all are through).
++static BOOL Port_ExtrudeShape(PortExtrudeCopy *copy, NNSG3dResMdl *model, int i)
++{
++    NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(NNS_G3dGetShp(model), i);
++    NitroGx3dListSurvey *survey = NitroPort_Gx3dSurveyList(NNS_G3dGetShpDLPtr(shp), NNS_G3dGetShpDLSize(shp));
++    PortExtrudeList *list = &copy->lists[i];
++    int a = copy->dirX != 0 ? 0 : 2, b = 2 - a, side = (copy->dirX != 0) != (copy->dirZ != 0);
++    u32 count, canopies = 0;
++    BOOL ok = survey != NULL;
++
++    count = ok ? NitroPort_Gx3dSurveyGroups(survey, sPortExtrudeBox, sPortExtrudeSlopes, PORT_EXTRUDE_GROUPS) : 0;
++    count = count > PORT_EXTRUDE_GROUPS ? PORT_EXTRUDE_GROUPS : count;
++
++    // (each polygon's pitches; the trees' shape: a quarter of it or more
++    // canopy layers, the rest their shadows)
++    for (int pass = 0; pass < 2 && ok; pass++) {
++        BOOL trees = count >= 8 && canopies * 4 >= count;
++
++        for (u32 g = 0; g < count; g++) {
++            s32 lo[3], hi[3];
++            u8 *px = &sPortExtrudePitchX[g], *pz = &sPortExtrudePitchZ[g];
++
++            for (int k = 0; k < 3; k++) {
++                lo[k] = (s32)(((s64)sPortExtrudeBox[g][k] * 16) / copy->tile);
++                hi[k] = (s32)(((s64)sPortExtrudeBox[g][3 + k] * 16) / copy->tile);
++            }
++
++            if (pass == 0) {
++                canopies += Port_IsCanopyLayer(lo, hi);
++                continue;
++            }
++
++            *px = copy->dirX != 0 ? (u8)Port_ExtrudePitch(lo, hi, 0, copy->dirX, trees) : 0;
++            *pz = copy->dirZ != 0 ? (u8)Port_ExtrudePitch(lo, hi, 2, copy->dirZ, trees || Port_IsLeaningLayer(lo, hi)) : 0;
++
++            // (into the corner only what goes on both ways)
++            if (copy->dirX != 0 && copy->dirZ != 0 && (*px == 0 || *pz == 0)) {
++                *px = *pz = 0;
++            }
++
++            // (its forest band alone, or what's south of the band's top)
++            if (copy->band != 0) {
++                s32 centre = (lo[2] + hi[2]) / 2;
++
++                if (copy->band > 0 ? centre < copy->bandLo * 16 || centre >= copy->bandHi * 16 : centre < copy->bandLo * 16) {
++                    *px = *pz = 0;
++                }
++            }
++
++            // (past a side: in the last column, a face along the border,
++            // and the flat ground)
++            u8 *p = a == 0 ? px : pz;
++
++            if (side && !trees && *p == 1) {
++                BOOL face = (lo[a] == hi[a] && hi[1] > lo[1]) || (sPortExtrudeSlopes[g] & (a == 0 ? 1 : 2)) != 0;
++                PortExtrudeSpan span = { (s16)lo[b], (s16)hi[b], (s16)hi[1], (u8)i, (u16)g };
++
++                if (face) {
++                    *p = 0;
++
++                    if (copy->numFaces < PORT_EXTRUDE_FACES) {
++                        copy->faces[copy->numFaces++] = span;
++                    }
++                } else if (lo[1] == hi[1] && copy->numFlats < PORT_EXTRUDE_FLATS) {
++                    copy->flats[copy->numFlats++] = span;
++                }
++            }
++        }
++    }
++
++    // (the polygons at each pair of pitches, at every place)
++    while (ok) {
++        int pitchX = -1, pitchZ = -1;
++
++        for (u32 g = 0; g < count && pitchX < 0; g++) {
++            if (sPortExtrudePitchX[g] != 0 || sPortExtrudePitchZ[g] != 0) {
++                pitchX = sPortExtrudePitchX[g];
++                pitchZ = sPortExtrudePitchZ[g];
++            }
++        }
++
++        if (pitchX < 0) {
++            break;
++        }
++
++        for (u32 g = 0; g < count; g++) {
++            sPortExtrudeMark[g] = (sPortExtrudePitchX[g] != 0 || sPortExtrudePitchZ[g] != 0)
++                && sPortExtrudePitchX[g] == pitchX && sPortExtrudePitchZ[g] == pitchZ;
++
++            if (sPortExtrudeMark[g]) {
++                sPortExtrudePitchX[g] = sPortExtrudePitchZ[g] = 0;
++            }
++        }
++
++        u32 size;
++        int repeatable;
++        void *cut = Port_ExtrudeCut(survey, shp, count, &size, &repeatable);
++
++        Port_NoteNotRepeatable(copy, i, cut != NULL && !repeatable);
++        ok = cut != NULL && Port_ExtrudeListRepeat(copy, list, cut, size, pitchX, pitchZ, 0, 0, 0);
++        free(cut);
++    }
++
++    NitroPort_Gx3dFreeSurvey(survey);
++    return ok;
++}
++
++// The fills (shapes surveyed again for them), each shape's list moved back
++// where it began, and the model copied with them: made.
++static BOOL Port_FinishExtrudeCopy(PortExtrudeCopy *copy, const NNSG3dResFileHeader *file, NNSG3dResMdl *model)
++{
++    PortExtrudeFill fills[PORT_EXTRUDE_FILLS];
++    int numFills = Port_MakeExtrudeFills(copy->faces, copy->numFaces, copy->flats, copy->numFlats, fills, PORT_EXTRUDE_FILLS);
++    BOOL ok = TRUE;
++
++    for (int f = 0; f < numFills && ok; f++) {
++        NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(NNS_G3dGetShp(model), fills[f].shape);
++        NitroGx3dListSurvey *survey = NitroPort_Gx3dSurveyList(NNS_G3dGetShpDLPtr(shp), NNS_G3dGetShpDLSize(shp));
++        u32 count = survey != NULL ? NitroPort_Gx3dSurveyGroups(survey, sPortExtrudeBox, NULL, PORT_EXTRUDE_GROUPS) : 0, size;
++        int repeatable;
++
++        count = count > PORT_EXTRUDE_GROUPS ? PORT_EXTRUDE_GROUPS : count;
++
++        for (u32 g = 0; g < count; g++) {
++            sPortExtrudeMark[g] = g == fills[f].group;
++        }
++
++        void *cut = survey != NULL ? Port_ExtrudeCut(survey, shp, count, &size, &repeatable) : NULL;
++
++        Port_NoteNotRepeatable(copy, fills[f].shape, cut != NULL && !repeatable);
++        ok = cut != NULL
++            && Port_ExtrudeListRepeat(copy, &copy->lists[fills[f].shape], cut, size,
++                copy->dirX != 0 ? 1 : 0, copy->dirX != 0 ? 0 : 1, fills[f].dir, fills[f].count, fills[f].step);
++        free(cut);
++        NitroPort_Gx3dFreeSurvey(survey);
++    }
++
++    void **cuts = calloc(copy->numShp, sizeof(void *));
++    u32 *sizes = calloc(copy->numShp, sizeof(u32)), *ofs = calloc(copy->numShp, sizeof(u32));
++    static const u32 sNops = 0;
++
++    ok = ok && cuts != NULL && sizes != NULL && ofs != NULL;
++
++    for (int i = 0; i < copy->numShp && ok; i++) {
++        PortExtrudeList *list = &copy->lists[i];
++
++        ok = Port_ExtrudeListMoveTo(list, 0, 0);
++        cuts[i] = list->size > 0 ? (void *)list->bytes : (void *)&sNops;
++        sizes[i] = list->size > 0 ? list->size : sizeof(sNops);
++    }
++
++    if (ok) {
++        copy->block = Port_CopyWithCuts(file, cuts, sizes, ofs, copy->numShp);
++        ok = copy->block != NULL;
++    }
++
++    if (ok) {
++        copy->model = NNS_G3dGetMdlByIdx(NNS_G3dGetMdlSet((NNSG3dResFileHeader *)copy->block), 0);
++
++        NNSG3dResShp *shapes = NNS_G3dGetShp(copy->model);
++
++        for (int i = 0; i < copy->numShp; i++) {
++            NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, i);
++
++            shp->ofsDL = (u32)(copy->block + ofs[i] - (u8 *)shp);
++            shp->sizeDL = sizes[i];
++        }
++    }
++
++    free(cuts);
++    free(sizes);
++    free(ofs);
++    Port_FreeExtrudeLists(copy);
++    return ok;
++}
++
++static BOOL Port_ReadWholeCopyOf(const LandDataManager *landDataMan, int mapMatrixIndex, const NNSG3dResFileHeader **file, NNSG3dResMdl **model);
++
++// The copy's map's model: the loaded one's (the game done reading it, still
++// the same map), else (readWhole) its model read whole for it, a map of the
++// matrix not loaded now.
++static BOOL Port_ExtrudeSource(const LandDataManager *landDataMan, const PortExtrudeCopy *copy, BOOL readWhole,
++    const NNSG3dResFileHeader **file, NNSG3dResMdl **model)
++{
++    if (MapMatrix_GetMatrixID(landDataMan->mapMatrix) != copy->matrixID
++        || MapMatrix_GetLandDataIDByIndex(copy->mapMatrixIndex, landDataMan->mapMatrix) != copy->landDataID) {
++        return FALSE;
++    }
++
++    for (u8 i = 0; i < QUADRANT_COUNT; i++) {
++        const LoadedMap *m = landDataMan->loadedMaps[i];
++
++        if (m->mapMatrixIndex == copy->mapMatrixIndex && m->valid == TRUE) {
++            *file = m->mapModelFile;
++            *model = m->mapRenderObj.resMdl;
++            return TRUE;
++        }
++    }
++
++    return readWhole && Port_ReadWholeCopyOf(landDataMan, copy->mapMatrixIndex, file, model);
++}
++
++// Up to shapes more of the copy's shapes worked through (all of them for
++// shapes < 0), then the copy finished: made, or failed.
++static void Port_ExtrudeWork(const LandDataManager *landDataMan, PortExtrudeCopy *copy, int shapes, BOOL readWhole)
++{
++    const NNSG3dResFileHeader *file;
++    NNSG3dResMdl *model;
++
++    if (copy->state != PORT_EXTRUDE_MAKING || !Port_ExtrudeSource(landDataMan, copy, readWhole, &file, &model)) {
++        return;
++    }
++
++    if (copy->lists == NULL) {
++        NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(model);
++
++        copy->numShp = NNS_G3dGetShp(model)->dict.numEntry;
++        copy->tile = info->posScale > 0 ? (s32)(((s64)MAP_OBJECT_TILE_SIZE << FX32_SHIFT) / info->posScale) : 0;
++        copy->lists = calloc(copy->numShp > 0 ? copy->numShp : 1, sizeof(PortExtrudeList));
++        copy->faces = malloc(sizeof(PortExtrudeSpan) * (PORT_EXTRUDE_FACES + PORT_EXTRUDE_FLATS));
++        copy->flats = copy->faces != NULL ? copy->faces + PORT_EXTRUDE_FACES : NULL;
++        copy->nextShape = 0;
++
++        if (copy->lists == NULL || copy->faces == NULL || copy->tile <= 0 || file == NULL) {
++            Port_FreeExtrudeLists(copy);
++            copy->state = PORT_EXTRUDE_FAILED;
++            return;
++        }
++    }
++
++    for (int n = 0; copy->nextShape < copy->numShp && (shapes < 0 || n < shapes); n++) {
++        if (!Port_ExtrudeShape(copy, model, copy->nextShape++)) {
++            Port_FreeExtrudeLists(copy);
++            copy->state = PORT_EXTRUDE_FAILED;
++            return;
++        }
++    }
++
++    if (copy->nextShape >= copy->numShp) {
++        copy->state = Port_FinishExtrudeCopy(copy, file, model) ? PORT_EXTRUDE_MADE : PORT_EXTRUDE_FAILED;
++    }
++}
++
++// A side whose own strip by the border doesn't go on coherently, filled
++// instead with a forest band of the map below it: the band's polygons
++// (rows bandLo to bandHi, in tiles from the map's middle) drawn on past the
++// border as the rest of its strip is, and again every (bandHi - bandLo)
++// tiles further north, past the map above and the corner beyond; north of
++// the band, the lower map's own strip cut. Amity Square's top-right map
++// ends at the right in the plateau's last cliff, sloping down to the border
++// (drawn on, cliff faces side by side with nothing between, and the
++// plateau's south cliff on past the border, its top over nothing); past
++// it, the bottom-right map's upper terrace of trees, on north, the cliff
++// going down into it.
++typedef struct PortExtrudeForest {
++    u8 matrixID;
++    u8 mapMatrixIndex; // (the map whose band it is; the one above it, filled with it)
++    s8 dirX;
++    s8 bandLo, bandHi;
++} PortExtrudeForest;
++
++static const PortExtrudeForest sPortExtrudeForests[] = {
++    { 50, 3, 1, -14, -2 }, // (Amity Square)
++};
++
++static const PortExtrudeForest *Port_ExtrudeForestOf(const LandDataManager *landDataMan, int mapMatrixIndex, int dirX)
++{
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++
++    for (int k = 0; k < (int)NELEMS(sPortExtrudeForests); k++) {
++        const PortExtrudeForest *f = &sPortExtrudeForests[k];
++
++        if (f->matrixID == matrixID && f->mapMatrixIndex == mapMatrixIndex && f->dirX == dirX) {
++            return f;
++        }
++    }
++
++    return NULL;
++}
++
++// Which copy the loaded map at index is drawn on past its border with (its
++// own, or the forest band's of the map below it), FALSE for none: the
++// corner past a side filled with a band is (the band's copies reach it).
++static BOOL Port_ExtrudePartOf(const LandDataManager *landDataMan, u8 index, int dirX, int dirZ, int *from, int *band)
++{
++    int width = landDataMan->mapMatrixWidth;
++
++    *from = landDataMan->loadedMaps[index]->mapMatrixIndex;
++    *band = 0;
++
++    if (dirX != 0 && Port_ExtrudeForestOf(landDataMan, *from + width, dirX) != NULL) {
++        if (dirZ != 0) {
++            return FALSE;
++        }
++
++        *from += width;
++        *band = 1;
++    } else if (dirX != 0 && dirZ == 0 && Port_ExtrudeForestOf(landDataMan, *from, dirX) != NULL) {
++        *band = -1;
++    }
++
++    return TRUE;
++}
++
++// The copy for (from, dirX, dirZ, band), asked for this scene: found, or a
++// slot taken for it (one free, else the one wanted longest ago, not this
++// scene), then being made; NULL if there's no room.
++static PortExtrudeCopy *Port_ExtrudeCopyFor(const LandDataManager *landDataMan, int from, int dirX, int dirZ, int band)
++{
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++    int landDataID = MapMatrix_GetLandDataIDByIndex(from, landDataMan->mapMatrix);
++    PortExtrudeCopy *copy = NULL;
++
++    for (int k = 0; k < PORT_EXTRUDE_COPIES; k++) {
++        PortExtrudeCopy *c = &sPortExtrudeCopies[k];
++
++        if (c->state != PORT_EXTRUDE_FREE && c->mapMatrixIndex == from && c->matrixID == matrixID && c->landDataID == landDataID
++            && c->dirX == dirX && c->dirZ == dirZ && c->band == band) {
++            c->wanted = sPortExtrudeScene;
++            return c;
++        }
++    }
++
++    for (int k = 0; k < PORT_EXTRUDE_COPIES; k++) {
++        PortExtrudeCopy *c = &sPortExtrudeCopies[k];
++
++        if (c->state == PORT_EXTRUDE_FREE) {
++            copy = c;
++            break;
++        }
++
++        if (c->wanted != sPortExtrudeScene && (copy == NULL || (int)(c->wanted - copy->wanted) < 0)) {
++            copy = c;
++        }
++    }
++
++    if (copy == NULL) {
++        return NULL;
++    }
++
++    Port_FreeExtrudeCopy(copy);
++    copy->mapMatrixIndex = from;
++    copy->matrixID = matrixID;
++    copy->landDataID = landDataID;
++    copy->dirX = (s8)dirX;
++    copy->dirZ = (s8)dirZ;
++    copy->band = (s8)band;
++    copy->state = PORT_EXTRUDE_MAKING;
++    copy->wanted = sPortExtrudeScene;
++
++    const PortExtrudeForest *forest = band != 0 ? Port_ExtrudeForestOf(landDataMan, from, dirX) : NULL;
++
++    if (forest != NULL) {
++        copy->bandLo = forest->bandLo;
++        copy->bandHi = forest->bandHi;
++        copy->bandCopies = (u8)((forest->bandLo + MAP_TILES_COUNT_Z / 2 + MAP_TILES_COUNT_Z + PORT_EXTRUDE_REACH_Z + (forest->bandHi - forest->bandLo) - 1)
++            / (forest->bandHi - forest->bandLo));
++    }
++
++    return copy;
++}
++
++static void Port_RenderExtrudedPart(const LandDataManager *landDataMan, u8 index, int dirX, int dirZ)
++{
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++    int from, band;
++
++    if (loadedMap->valid != TRUE || !Port_ExtrudePartOf(landDataMan, index, dirX, dirZ, &from, &band)) {
++        return;
++    }
++
++    PortExtrudeCopy *copy = Port_ExtrudeCopyFor(landDataMan, from, dirX, dirZ, band);
++
++    if (copy == NULL) {
++        return;
++    }
++
++    // (needed now: made at once, if it isn't yet)
++    Port_ExtrudeWork(landDataMan, copy, -1, TRUE);
++
++    if (copy->state != PORT_EXTRUDE_MADE) {
++        return;
++    }
++
++    VecFx32 position = { 0, 0, 0 };
++    VecFx32 scale = { FX32_ONE, FX32_ONE, FX32_ONE };
++    MtxFx33 rotationMatrix = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++    NNSG3dResMdl *own = loadedMap->mapRenderObj.resMdl;
++
++    LandDataManager_CalculateRenderingPosition(from, landDataMan->mapMatrixWidth, landDataMan->mapMatrix, &position);
++    position.x += landDataMan->offset.x;
++    position.y += landDataMan->offset.y;
++    position.z += landDataMan->offset.z;
++
++    loadedMap->mapRenderObj.resMdl = copy->model;
++    Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &position, &rotationMatrix, &scale);
++    NNS_G3dGeFlushBuffer();
++    loadedMap->mapRenderObj.resMdl = own;
++}
++
++static void Port_RenderExtrudedEdge(const LandDataManager *landDataMan, u8 index, int dir)
++{
++    Port_RenderExtrudedPart(landDataMan, index, dir, 0);
++}
++
++static BOOL Port_MirroredBesideSceneryTo(u16 header, int dir);
++static BOOL Port_ExtrudedBesideScenery(u16 header);
++
++// The copies the loaded maps may be drawn on past their borders with, in
++// either half of them, asked for (each scene: kept), and a little more of
++// the first one not made yet made: by an extruded matrix's edges, and past
++// the scenery beside a map listed (Port_RenderMirroredBesideSceneryMaps).
++static void Port_ExtrudeAhead(const LandDataManager *landDataMan)
++{
++    PortExtrudeCopy *making = NULL;
++    int width = landDataMan->mapMatrixWidth, height = landDataMan->mapMatrixHeight;
++
++    for (u8 i = 0; i < QUADRANT_COUNT && NitroPort_WideScreenExtra() != 0 && !landDataMan->inDistortionWorld; i++) {
++        const LoadedMap *loadedMap = landDataMan->loadedMaps[i];
++        int index = loadedMap->mapMatrixIndex, dirsX[2] = { 0, 0 }, dirsZ[2] = { 0, 0 }, numX = 0, numZ = 0;
++
++        if (index == INVALID_MAP_MATRIX_INDEX || loadedMap->valid != TRUE) {
++            continue;
++        }
++
++        if (Port_ExtrudesEdges(landDataMan)) {
++            if (index % width == 0) {
++                dirsX[numX++] = -1;
++            }
++
++            if (index % width == width - 1) {
++                dirsX[numX++] = 1;
++            }
++
++            if (index / width == 0) {
++                dirsZ[numZ++] = -1;
++            }
++
++            if (index / width == height - 1) {
++                dirsZ[numZ++] = 1;
++            }
++        } else {
++            u16 header = MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, index);
++
++            for (int dir = -1; dir <= 1 && Port_ExtrudedBesideScenery(header); dir += 2) {
++                if (Port_MirroredBesideSceneryTo(header, dir) && index % width + dir >= 0 && index % width + dir < width
++                    && MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, index + dir) == MAP_HEADER_EVERYWHERE) {
++                    dirsX[numX++] = dir;
++                }
++            }
++        }
++
++        for (int x = -1; x < numX; x++) {
++            for (int z = -1; z < numZ; z++) {
++                int dirX = x < 0 ? 0 : dirsX[x], dirZ = z < 0 ? 0 : dirsZ[z], from, band;
++                PortExtrudeCopy *copy;
++
++                if ((dirX == 0 && dirZ == 0) || !Port_ExtrudePartOf(landDataMan, i, dirX, dirZ, &from, &band)) {
++                    continue;
++                }
++
++                const NNSG3dResFileHeader *file;
++                NNSG3dResMdl *model;
++
++                copy = Port_ExtrudeCopyFor(landDataMan, from, dirX, dirZ, band);
++
++                if (copy != NULL && copy->state == PORT_EXTRUDE_MAKING && making == NULL
++                    && Port_ExtrudeSource(landDataMan, copy, FALSE, &file, &model)) {
++                    making = copy;
++                }
++            }
++        }
++    }
++
++    if (making != NULL) {
++        Port_ExtrudeWork(landDataMan, making, PORT_EXTRUDE_SHAPES_AHEAD, FALSE);
++    }
++
++    sPortExtrudeScene++;
++}
++
+ static void Port_RenderEdgeAboveScenery(const LandDataManager *landDataMan)
+ {
+     if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld) {
+@@ -4285,6 +5200,21 @@ static BOOL Port_WholeCopyOf(const LandDataManager *landDataMan, int mapMatrixIn
+     return TRUE;
+ }
+ 
++// The same, read whole now if it isn't kept (a map of the matrix away from
++// the loaded ones, for the forest past another's border).
++static BOOL Port_ReadWholeCopyOf(const LandDataManager *landDataMan, int mapMatrixIndex, const NNSG3dResFileHeader **file, NNSG3dResMdl **model)
++{
++    PortBesideMap *map = Port_BesideMapOf(landDataMan, mapMatrixIndex, 0, FALSE);
++
++    if (map == NULL || map->block == NULL || map->area != landDataMan->areaDataMan) {
++        return FALSE;
++    }
++
++    *file = (const NNSG3dResFileHeader *)map->block;
++    *model = map->renderObj.resMdl;
++    return TRUE;
++}
++
+ static void Port_RenderBesideMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
+ {
+     sPortBesideFrame++;
+@@ -4894,6 +5824,7 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+ #ifdef SDK_PORT_3DS
+     Port_RenderMirroredEdges(landDataMan, modelAttrs);
+     Port_RenderMirroredBesideScenery(landDataMan, modelAttrs);
++    Port_ExtrudeAhead(landDataMan);
+     Port_RenderSceneryMapsLowered(landDataMan);
+     Port_RenderEdgeAboveScenery(landDataMan);
+     Port_RenderForestOnSouth(landDataMan);
+@@ -4913,6 +5844,7 @@ void LandDataManager_End(LandDataManager *landDataMan)
+ #ifdef SDK_PORT_3DS
+     Port_FreeMirrorCopies();
+     Port_FreeLoweredCopies();
++    Port_FreeExtrudeCopies();
+     Port_FreeEdgeCopies();
+     Port_FreeBesideMaps();
+     Port_FreeOtherAreas();

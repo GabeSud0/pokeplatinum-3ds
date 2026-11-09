@@ -267,6 +267,10 @@ int NitroPort_Render2DSplitIfChanged(int engine, uint16_t *under, NitroRender2DS
  * engine's picture since the last call: for a change to its registers,
  * palettes or OAM (registers), or to the VRAM it shows (vram). */
 void NitroPort_Render2DChangeStats(int engine, unsigned *registers, unsigned *vram);
+/* (for the log) How many times since the last call the change check found
+ * an engine's OBJ VRAM changed only where no sprite shown has its tiles
+ * (hashed whole: the compositor not drawing the sprites). */
+unsigned NitroPort_Render2DObjTilesUnseen(int engine);
 /* (for the log) Of those, how many times only its sprites were made again
  * since the last call: the compositor's (NitroRender2DSplit.gpuObjs), the
  * picture otherwise the same, its layers left as they were. */

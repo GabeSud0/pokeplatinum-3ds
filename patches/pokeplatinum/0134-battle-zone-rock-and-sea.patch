@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 09:55:00 -0700
+Subject: [PATCH] The Battle Zone's sea between Routes 226 and 230 (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Between Routes 226 and 230 the game put the mountain's filler (two cells,
+2 tiles high, 32 wide): a flat grey slab over the sea seen from both
+routes, where each route has only a narrow rock column on its east side.
+The slab's rows seen from either route are left out west of x 760
+(sPortMapCuts), the sea's filler beside it drawn under them (a cut's new
+`under`), and each route's rock drawn on to it (sPortExtrudeColumns:
+Route 226's west side 12 tiles south, Route 230's rock 16 tiles north).
+The slab's east strip stays under Route 228's cliffs; where it ends over
+Route 230's palms' ground its rock's south step is drawn
+(sPortMapPieces).
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 32391630..05ac9838 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -4188,6 +4188,8 @@ static const PortExtrudeColumns sPortExtrudeColumns[] = {
+     { 0, 370, 1, -16, 16 }, // (and its middle map's, south over the high snow's filler (left out there: sPortMapCuts))
+     { 0, 496, 1, 8, 16, 5 }, // (Route 210 North's south-west map: its terraces by the south-east corner, 5 tiles south over the low filler: past that seen only from where the map isn't loaded)
+     { 0, 221, 1, -16, -14 }, // (Snowpoint City's south-west map: the slope by its west edge and its bank, south over the sea's filler)
++    { 0, 323, 1, 4, 8, 12 },    // (Route 226's east map: its rock's west side by the south edge, x 756-759, 12 tiles south over the mountain's filler (left out there: sPortMapCuts), to the filler's rest)
++    { 0, 413, -1, 4, 11, 16 },  // (Route 230's east map: its rock by the north edge, x 756-762, 16 tiles north over the same)
+     { 0, 697, 1, 8, 16 },   // (Route 203's east map: its dirt and the plateau's cliff by the south-east corner, south over the forest's filler)
+ };
+ 
+@@ -6752,6 +6754,9 @@ static const PortMapPiece sPortMapPieces[] = {
+     { 0, 847, 1, { 172, 178, 142, 148 }, 4, 0, 1, 1, 0, 78, 0, 112, 1, 0 },   // (where it meets the forest's filler east of the sea: the map's own bank turning south there)
+     { 0, 847, 1, { 174, 178, 148, 156 }, 2, 0, 1, 1, 0, 78, 0, 112, 12, 8 },  // (and its bank facing west down the forest's edge, half a tile out from it over the forest's grass edge, x 255, z 928-939)
+     { 0, 847, 8, { 224, 256, 224, 256 }, 1, 224, 1, 4, 0, 30, -1, 32, 3, 32 }, // (and the map's grass under it, a tile wide, an eighth of a tile lower: the sea showed between its top and the forest's grass)
++    { 0, 413, 0, { 176, 208, 80, 88 }, 1, 0, 1, 1, 0, 40, -4, -80, 1, 0 },   // (Route 230's east map: the mountain's filler north of it, 2 tiles high, ends over its palms' ground (1 high) with no side: its rock's south step, a tile high, there, x 763-767)
++    { 0, 413, 0, { 176, 208, 80, 88 }, 1, 0, 1, 1, 0, 48, -4, -80, 1, 0 },
++    { 0, 413, 0, { 176, 208, 80, 88 }, 1, 0, 1, 1, 0, 34, -4, -80, 1, 0 },   // (and into the rock's side beside it, no sea showing between them)
+     { 0, 669, 2, { 32, 64, 0, 8 }, 1, 0, 1, 1, 0, -288, 0, 224, 8, 0, 32 },   // (Route 207's west map: the rim facing south, x 256-287, z 732)
+     { 0, 669, 4, { 24, 56, 192, 224 }, 1, 0, 1, 1, 0, -280, 8, 0, 8, 0, 32 }, // (the ground north of it, a tile higher, z 728-731)
+     { 0, 669, 4, { 24, 56, 224, 256 }, 1, 0, 1, 1, 0, -280, 0, 0, 8, 0, 32 }, // (and south of it, z 732-735: under the rim)
+@@ -7059,6 +7064,7 @@ typedef struct PortMapCut {
+     u8 noLowered;  // (its copies under itself not drawn while it's cut: Port_RenderSceneryMapLowered)
+     u8 xFrom, xTo; // (only these columns' polygons left out, tiles from its west edge; 0, 0 all)
+     u8 keepShapes; // (shapes left whole, a bit each: its ground under trees left out)
++    u16 under;     // (a map of the matrix drawn under it, moved to its place, while it's cut: the sea's filler beside it; 0 none)
+ } PortMapCut;
+ 
+ static const PortMapCut sPortMapCuts[] = {
+@@ -7067,6 +7073,8 @@ static const PortMapCut sPortMapCuts[] = {
+     { 0, 461, 16, 32, 491, TRUE, 8, 32 }, // (and its north filler's last two, z 496-511, over the canyon: x 360-383)
+     { 0, 399, -1, 12, 369, TRUE, 20, 32, 1 },
+     { 0, 400, -1, 12, 370, TRUE }, // (and the high snow's filler beside it, by Route 216's middle map: its first rows, a plain floating over the terraces drawn on south)
++    { 0, 353, 0, 12, 323, TRUE, 0, 24, 0, 352 },  // (the mountain's filler between Routes 226 and 230 (the Battle Zone), seen from Route 226: its first rows west of x 760, the sea's filler under them; Route 226's rock drawn on south to it)
++    { 0, 383, 16, 32, 413, TRUE, 0, 24, 0, 382 }, // (and seen from Route 230: its last rows west of x 760; Route 230's rock drawn on north)
+     { 0, 727, -1, 12, 697, TRUE, 24, 32 }, // (the forest's filler south of Route 203's east map: its first rows under the dirt drawn on south, x 248-255) // (Route 216's south filler: its trees under the west map's terraces drawn on south, x 308-319, z 416-427; its ground kept)
+ };
+ 
+@@ -7244,6 +7252,8 @@ static BOOL Port_CutHidesLowered(const LandDataManager *landDataMan, u8 index)
+ 
+ // A loaded map drawn with its rows left out (sPortMapCuts); FALSE if it
+ // isn't (drawn as before).
++static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int mapMatrixIndex, int dir, BOOL keptOnly);
++
+ static BOOL Port_RenderMapCut(const LandDataManager *landDataMan, u8 index, ModelAttributes *const modelAttrs)
+ {
+     PortPieceCopy *copy = Port_CutCopyOf(landDataMan, index);
+@@ -7259,6 +7269,38 @@ static BOOL Port_RenderMapCut(const LandDataManager *landDataMan, u8 index, Mode
+     LandDataManager_RenderLoadedMap(index, landDataMan, modelAttrs);
+     NNS_G3dGeFlushBuffer();
+     loadedMap->mapRenderObj.resMdl = own;
++
++    // (the map listed to be under it: read whole, kept, drawn at its own
++    // height moved to this one's place)
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix), width = landDataMan->mapMatrixWidth;
++
++    for (int k = 0; k < (int)NELEMS(sPortMapCuts); k++) {
++        const PortMapCut *cut = &sPortMapCuts[k];
++
++        if (cut->matrixID != matrixID || cut->mapMatrixIndex != loadedMap->mapMatrixIndex || cut->under == 0) {
++            continue;
++        }
++
++        PortBesideMap *under = Port_BesideMapOf(landDataMan, cut->under, 0, FALSE);
++
++        if (under == NULL || under->block == NULL || under->area != landDataMan->areaDataMan) {
++            break;
++        }
++
++        VecFx32 position = { 0, 0, 0 };
++        VecFx32 one = { FX32_ONE, FX32_ONE, FX32_ONE };
++        MtxFx33 identity = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++
++        LandDataManager_CalculateRenderingPosition(cut->under, width, landDataMan->mapMatrix, &position);
++        position.x += landDataMan->offset.x + (cut->mapMatrixIndex % width - cut->under % width) * MAP_TILES_COUNT_X * MAP_OBJECT_TILE_SIZE;
++        position.y += landDataMan->offset.y;
++        position.z += landDataMan->offset.z + (cut->mapMatrixIndex / width - cut->under / width) * MAP_TILES_COUNT_Z * MAP_OBJECT_TILE_SIZE;
++        under->used = sPortBesideFrame;
++        Easy3D_DrawRenderObj(&under->renderObj, &position, &identity, &one);
++        NNS_G3dGeFlushBuffer();
++        break;
++    }
++
+     return TRUE;
+ }
+ 

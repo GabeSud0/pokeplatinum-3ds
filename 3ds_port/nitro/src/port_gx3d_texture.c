@@ -12,6 +12,19 @@
 extern unsigned char NitroPort_IoReg[];
 extern unsigned char NitroPort_LcdcVram[];
 
+/* Texture slots 2 and 3 of the port's own (NitroPort_SetExtraTexSlots):
+ * the field keeps its textures in slots 0 and 1 (256 KiB, VRAM A and B);
+ * these hold another area's for the maps of it seen past a gate on the
+ * wider field (land_data.c). Used only while on, and only where no bank is
+ * mapped: what a game's own banks hold is as it was. */
+unsigned char NitroPort_ExtraTexVram[NITRO_GX3D_EXTRA_TEX_SIZE] __attribute__((aligned(16)));
+static volatile int sExtraTexSlots;
+
+void NitroPort_SetExtraTexSlots(int on)
+{
+    sExtraTexSlots = on;
+}
+
 void NitroPort_Gx3dMapTextureBanks(NitroGx3dTexBanks *banks)
 {
     unsigned i;
@@ -20,6 +33,11 @@ void NitroPort_Gx3dMapTextureBanks(NitroGx3dTexBanks *banks)
     for (i = 0; i < 4; i++) {
         unsigned v = NitroPort_IoReg[0x240 + i];
         if ((v & 0x87) == 0x83) banks->texture[(v >> 3) & 3] = NitroPort_LcdcVram + i * 0x20000;
+    }
+    if (sExtraTexSlots) {
+        for (i = 2; i < 4; i++) {
+            if (!banks->texture[i]) banks->texture[i] = NitroPort_ExtraTexVram + (i - 2) * 0x20000;
+        }
     }
     /* E is 64 KiB; F/G are 16 KiB each. Standard texture palette banks. */
     if ((NitroPort_IoReg[0x244] & 0x87) == 0x83) {
@@ -34,6 +52,28 @@ void NitroPort_Gx3dMapTextureBanks(NitroGx3dTexBanks *banks)
             banks->palette[(ofs & 1) + ((ofs >> 1) & 1) * 4] = NitroPort_LcdcVram + 0x90000 + i * 0x4000;
         }
     }
+}
+
+int NitroPort_WriteTexPltt(uint32_t addr, const void *src, uint32_t size)
+{
+    NitroGx3dTexBanks banks;
+    uint32_t done = 0;
+
+    NitroPort_Gx3dMapTextureBanks(&banks);
+
+    /* (every slot it covers mapped, else none of it written) */
+    for (done = addr & ~0x3fffu; done < addr + size; done += 0x4000) {
+        if ((done >> 14) >= 6 || !banks.palette[done >> 14]) return 0;
+    }
+
+    for (done = 0; done < size;) {
+        uint32_t at = addr + done, n = 0x4000 - (at & 0x3fff);
+        if (n > size - done) n = size - done;
+        memcpy((unsigned char *)banks.palette[at >> 14] + (at & 0x3fff), (const unsigned char *)src + done, n);
+        done += n;
+    }
+
+    return 1;
 }
 
 static int restrict_int(int x, int lo, int hi)

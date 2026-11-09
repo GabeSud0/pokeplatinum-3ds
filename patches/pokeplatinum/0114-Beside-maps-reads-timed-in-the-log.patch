@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 15:40:00 -0700
+Subject: [PATCH] The wider view's map reads timed in the log (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A map beside the loaded ones read for the wider view, or one the game is
+still reading read whole for it, is read in the game's frame. Walking
+west onto Route 208 from Hearthome three were read within 50 frames (59,
+25 and 34 KB, a log of 2026-11-07), and a hiccup was seen by its first
+bridge: their log lines now give the time each took ("..., 2.3 ms"), to
+tell whether they're the cause.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index aaffdfda..cb0c3534 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -5454,6 +5454,10 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+         return NULL;
+     }
+ 
++    // (its time, for the log: read in the game's frame, a hiccup if long)
++    extern u64 NitroPort_Cycles(void);
++    u64 readStart = NitroPort_Cycles();
++
+     // (a slot free, else the one drawn longest ago)
+     for (int i = 0; i < PORT_BESIDE_SLOTS; i++) {
+         PortBesideMap *m = &sPortBesideMaps[i];
+@@ -5649,12 +5653,15 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+         NitroPort_Log("[field] the map at matrix %d (land data %d) drawn with its own area's textures and props", mapMatrixIndex, landDataID);
+     }
+ 
++    // (DS bus cycles: 33,514 a millisecond; tenths of one)
++    int readTenths = (int)((NitroPort_Cycles() - readStart) * 10 / 33514);
++
+     if (dir == 0) {
+-        NitroPort_Log("[field] a map the game is still reading (matrix %d, land data %d) read whole for the wider view: %d KB",
+-                      mapMatrixIndex, landDataID, (modelSize + propsSize + 1023) / 1024);
++        NitroPort_Log("[field] a map the game is still reading (matrix %d, land data %d) read whole for the wider view: %d KB, %d.%d ms",
++                      mapMatrixIndex, landDataID, (modelSize + propsSize + 1023) / 1024, readTenths / 10, readTenths % 10);
+     } else {
+-        NitroPort_Log("[field] the map beside the loaded ones (matrix %d, land data %d) read for the wider view: %d KB, its strip %u of %u KB of lists",
+-                      mapMatrixIndex, landDataID, (modelSize + propsSize + 1023) / 1024, (listsKept + 1023) / 1024, (listsAll + 1023) / 1024);
++        NitroPort_Log("[field] the map beside the loaded ones (matrix %d, land data %d) read for the wider view: %d KB, its strip %u of %u KB of lists, %d.%d ms",
++                      mapMatrixIndex, landDataID, (modelSize + propsSize + 1023) / 1024, (listsKept + 1023) / 1024, (listsAll + 1023) / 1024, readTenths / 10, readTenths % 10);
+     }
+ 
+     return map;

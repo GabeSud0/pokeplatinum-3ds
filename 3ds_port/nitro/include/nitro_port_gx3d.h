@@ -309,6 +309,67 @@ uint32_t NitroPort_Gx3dTrimList(const void *src, uint32_t bytes, void *dst, uint
  * (or doesn't fit). */
 uint32_t NitroPort_Gx3dTrimListRows(const void *src, uint32_t bytes, void *dst, uint32_t dstBytes,
                                     int32_t xlo, int32_t xhi, int32_t zlo, int32_t zhi, int inside);
+/* A shape's display list read once (NULL if it can't be), for: */
+typedef struct NitroGx3dListSurvey NitroGx3dListSurvey;
+NitroGx3dListSurvey *NitroPort_Gx3dSurveyList(const void *src, uint32_t bytes);
+void NitroPort_Gx3dFreeSurvey(NitroGx3dListSurvey *survey);
+/* its polygons (a strip of them whole: a group), in the list's order: each
+ * one's lowest and highest coordinates (x, y, z, then x, y, z) into box, up
+ * to max of them; the count. With slopes, each one's way up too: bit 0 if
+ * it slopes along x (its vertices at its lowest x all at one height, those
+ * at its highest x all at another), bit 1 along z. */
+uint32_t NitroPort_Gx3dSurveyGroups(const NitroGx3dListSurvey *survey, int32_t (*box)[6], uint8_t *slopes, uint32_t max);
+/* Whether every vertex in it is in one of those groups (a list that isn't
+ * read as such, its first vertex relative to one before it, isn't). */
+int NitroPort_Gx3dSurveyAllGrouped(const NitroGx3dListSurvey *survey);
+/* The list with only the groups keep[] says, by that numbering (those past
+ * nkeep left out), drawn the same: a BEGIN_VTXS whose groups are all left
+ * out goes with them, and the coordinates left-out ones leave owed are
+ * sent only for a vertex relative to them, as its own. 0 if it doesn't fit
+ * (nothing kept: one word of NOPs). With repeatable, whether the cut list
+ * sent twice in a row draws the same twice (TEXCOORD, NORMAL and COLOR
+ * each either not in it or set before its first vertex). */
+uint32_t NitroPort_Gx3dSurveyTrim(const NitroGx3dListSurvey *survey, void *dst, uint32_t dstBytes,
+                                  const uint8_t *keep, uint32_t nkeep, int *repeatable);
+/* The list cut into runs, all of them in one pass: a run each stretch of
+ * its groups one after another whose mark[] is the same (with the commands
+ * between them), its own list drawing those groups as the whole list does
+ * whichever of the runs before it were sent before it: its BEGIN_VTXS
+ * (again, if it starts inside one), the COLOR, NORMAL and TEXCOORD set
+ * before it (in the order they were last set: after the BEGIN_VTXS, a
+ * NORMAL lit with the polygon's own lights), its first vertex as its own
+ * coordinates if it's relative to one before, an END_VTXS after it. Then,
+ * if the list sets any, a last run marked 0xFF, to be sent after whichever
+ * were: the COLOR, NORMAL and TEXCOORD the whole list leaves set, in a
+ * BEGIN_VTXS and END_VTXS of their own without a vertex (what's
+ * sent after it takes them: a shape's list without its own colour takes
+ * the one before's last). The runs' lists one after another in dst, each
+ * one's bytes in sizes[] and its mark in runMark[]; the number of runs, 0
+ * if they don't fit (dst, or more than maxRuns) or the list has commands
+ * besides its lists of vertices, COLOR, NORMAL and TEXCOORD, or a vertex
+ * in no group. */
+uint32_t NitroPort_Gx3dSurveyRuns(const NitroGx3dListSurvey *survey, const uint8_t *mark, uint32_t nmark,
+                                  void *dst, uint32_t dstBytes, uint32_t *sizes, uint8_t *runMark, uint32_t maxRuns);
+/* The list with only the groups keep[] says (as NitroPort_Gx3dSurveyTrim
+ * has them), each vertex sent as its own coordinates (VTX_16) moved: x
+ * scaled by num/den about originX, then all moved by dx, dy, dz (the
+ * list's units); the COLOR, NORMAL and TEXCOORD a trim sends before a
+ * BEGIN_VTXS sent after it instead (a NORMAL lit with the polygon's own
+ * lights). Its bytes; 0 if it doesn't fit, nothing is kept, or a vertex
+ * lands outside 16 bits. (A piece of a map drawn elsewhere, or squeezed.) */
+uint32_t NitroPort_Gx3dSurveyMoved(const NitroGx3dListSurvey *survey, void *dst, uint32_t dstBytes, const uint8_t *keep, uint32_t nkeep,
+                                   int32_t originX, int32_t num, int32_t den, int32_t dx, int32_t dy, int32_t dz);
+/* As NitroPort_Gx3dSurveyMoved, the kept groups turned instead: x and z a
+ * quarter clockwise (seen from above, north up: east to south) turn times
+ * about pivotX, pivotZ (their NORMALs with them), then moved dx, dy, dz. A
+ * piece of a map placed where its own kind faces another way (a bank's
+ * corner turned to meet another bank; never mirrored). Its bytes; 0 as
+ * there. */
+uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *survey, void *dst, uint32_t dstBytes, const uint8_t *keep, uint32_t nkeep,
+                                    unsigned turn, int32_t pivotX, int32_t pivotZ, int32_t dx, int32_t dy, int32_t dz);
+/* An MTX_TRANS (x, y, z: as its parameters, fx32) packed for a display
+ * list, into dst: its bytes (16), 0 if it doesn't fit. */
+uint32_t NitroPort_Gx3dTranslateCommand(void *dst, uint32_t dstBytes, int32_t x, int32_t y, int32_t z);
 /* (for the [perf] geometry's work line) The time the thread has spent
  * making in-between scenes (NitroPort_Gx3dSetInterpolation), in the ticks
  * of NitroGx3dThreadOps.ticks, of it matching their polygons with the

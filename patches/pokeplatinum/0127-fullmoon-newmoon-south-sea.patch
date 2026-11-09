@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 17:50:00 -0700
+Subject: [PATCH] The sea south of Fullmoon and Newmoon Islands (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The cells south of the two islands' docks have no map at all: a black
+band at the screen's bottom. Drawn as Canalave City's north harbour
+(sPortStandInMaps): the sea's filler, as either side of them.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 86cc0ed7..bf7a1f33 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -7270,6 +7270,8 @@ typedef struct PortStandInMap {
+ 
+ static const PortStandInMap sPortStandInMaps[] = {
+     { 0, 631, { 630, 632 } }, // (north of Canalave City: the sea's filler, as either side)
++    { 0, 271, { 270, 272 } }, // (south of Fullmoon Island's dock: the same)
++    { 0, 274, { 273, 275 } }, // (south of Newmoon Island's dock: the same)
+ };
+ 
+ static void Port_RenderStandInMaps(const LandDataManager *landDataMan)

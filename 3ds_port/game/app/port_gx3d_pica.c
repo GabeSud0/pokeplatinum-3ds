@@ -969,21 +969,51 @@ static u32 widen5(u32 v)
 /* The scene's depths spread over 0..1 (sDepthA, sDepthK). A vertex's d is
  * -z (W-buffer scenes) or -z / w (Z-buffer ones); the new z keeps that
  * form. W-buffer scenes keep d' <= w (the GPU clips z at -w): d is w /
- * 4096 there, so a scale up to 4096 keeps it. */
+ * 4096 there, so a scale up to 4096 keeps it.
+ *
+ * Z-buffer scenes start at DEPTH_NEAR (d' of the nearest vertices) rather
+ * than 0. At 0 the nearest vertices were on the GPU's near plane (z = 0),
+ * and z' = k z + lo k w came out a rounding either side of it: a polygon
+ * all at the nearest depth, its corners at the one depth (a sprite, at the
+ * bottom of the field at the DS's pixel size the nearest thing in the
+ * scene), was a hair in front of the plane, and clipped away whole. A
+ * hiker on Route 207 at the screen's bottom edge was seen only as the
+ * player stepped, the depths changing (videos and logs of 2026-11-06; the
+ * PC, whose simulation has no near plane, drew him; his corners there came
+ * to z' +0.0005, w 562). Now z' = -(DEPTH_NEAR + (d - lo) k) w: for the
+ * nearest, d - lo is 0 exactly (lo is their own d), so z' is -DEPTH_NEAR w,
+ * and the order of everything is as before. */
+#define DEPTH_NEAR (1.0f/1024.0f)
 /* (sFogCap) The farthest d of the triangles (in threes) within the DS's
  * rows, |y| <= b w: their vertices there, and where their edges cross
  * those rows' top and bottom (clip space is linear along an edge). -1 for
  * none. */
+/* Each vertex's depth (normalize_depth's first pass: -z / w, or -z in a
+ * W-buffer scene; w above 0), worked out once for its three passes: their
+ * divisions were most of the depths' time (Amity Square's lake, 4 ms a
+ * scene for 6,300 vertices, 2026-11-09). */
+static float sVertexDepth[NITRO_GX3D_PICA_MAX_VERTICES];
 static float ds_rows_farthest(const NitroGx3dGpuVertex *v,size_t count,int wbuffer,float b)
 {
     float farthest=-1.0f;
     size_t t;
     int i,side;
     for(t=0;t+2<count;t+=3){
+        /* Nothing of a triangle is farther than its farthest corner (w
+         * above 0 at all three: d along an edge goes from one corner's to
+         * the other's, -z / w of two straight lines' with w not 0 between,
+         * or -z itself): one with none farther than the farthest found so
+         * far can't change it, its edges not worked out. The same answer;
+         * the edges' crossings were most of the depths' time (Amity
+         * Square's lake, 2 ms a scene, 2026-11-09), and after a few
+         * triangles almost none is farther. */
+        if(v[t].position[3]>0.0f && v[t+1].position[3]>0.0f && v[t+2].position[3]>0.0f &&
+           sVertexDepth[t]<=farthest && sVertexDepth[t+1]<=farthest && sVertexDepth[t+2]<=farthest)
+            continue;
         for(i=0;i<3;i++){
             const float *p=v[t+i].position,*q=v[t+(i+1)%3].position;
             if(p[3]>0.0f && p[1]<=b*p[3] && p[1]>=-b*p[3]){
-                float d=wbuffer? -p[2] : -p[2]/p[3];
+                float d=sVertexDepth[t+i];
                 if(d>farthest)farthest=d;
             }
             for(side=-1;side<=1;side+=2){
@@ -1004,19 +1034,41 @@ static float ds_rows_farthest(const NitroGx3dGpuVertex *v,size_t count,int wbuff
     return farthest;
 }
 
-static void normalize_depth(NitroGx3dGpuVertex *v,size_t count,uint32_t swap,uint32_t screenHeight)
+/* The prepared scene's fog on (DISP3DCNT bit 7, not bit 6's alpha only:
+ * setup_fog's sFogOn, from the same registers, scene_registers). */
+static u32 sDisp3d;
+static int scene_fogged(void)
+{
+    return (sDisp3d&0x80u) && !(sDisp3d&0x40u);
+}
+
+/* known: sVertexDepth already has the vertices' depths
+ * (NitroPort_Gx3dBuildBatchesDepths), else worked out here from their
+ * positions. */
+static void normalize_depth(NitroGx3dGpuVertex *v,size_t count,uint32_t swap,uint32_t screenHeight,int known)
 {
     int wbuffer=(swap&2u)!=0;
     float lo=1.0f,hi=0.0f,k;
     size_t i;
-    for(i=0;i<count;i++){
-        float w=v[i].position[3];
-        float d=wbuffer? -v[i].position[2] : (w>0.0f? -v[i].position[2]/w : 0.0f);
-        if(d<lo)lo=d;
-        if(d>hi)hi=d;
+    if(count>NITRO_GX3D_PICA_MAX_VERTICES)count=NITRO_GX3D_PICA_MAX_VERTICES;
+    if(known){
+        for(i=0;i<count;i++){
+            float d=sVertexDepth[i];
+            if(d<lo)lo=d;
+            if(d>hi)hi=d;
+        }
+    }else{
+        for(i=0;i<count;i++){
+            float w=v[i].position[3];
+            float d=wbuffer? -v[i].position[2] : (w>0.0f? -v[i].position[2]/w : 0.0f);
+            sVertexDepth[i]=d;
+            if(d<lo)lo=d;
+            if(d>hi)hi=d;
+        }
     }
     sFogCapOn=0;
-    if(screenHeight>192u && count){
+    /* (only for the fog: without it the cap isn't used, setup_fog) */
+    if(screenHeight>192u && count && scene_fogged()){
         float cap=ds_rows_farthest(v,count,wbuffer,192.0f/(float)screenHeight);
         if(cap>=0.0f && cap<hi){
             sFogCap=cap;
@@ -1031,15 +1083,25 @@ static void normalize_depth(NitroGx3dGpuVertex *v,size_t count,uint32_t swap,uin
     if(wbuffer && k>4096.0f)k=4096.0f;
     /* Not past 1 (rounding): a hair's margin at the far end. */
     k*=0.999f;
-    sDepthA=lo;sDepthK=k;
-    for(i=0;i<count;i++){
-        float w=v[i].position[3];
-        if(wbuffer){
+    if(wbuffer){
+        sDepthA=lo;sDepthK=k;
+        for(i=0;i<count;i++){
             float d=-v[i].position[2];
             v[i].position[2]=-(d-lo)*k;
+        }
+        return;
+    }
+    /* (and DEPTH_NEAR at the near end: d' = DEPTH_NEAR + (d - lo) k) */
+    k*=1.0f-DEPTH_NEAR;
+    sDepthA=lo-DEPTH_NEAR/k;sDepthK=k;
+    for(i=0;i<count;i++){
+        float w=v[i].position[3];
+        if(w>0.0f){
+            /* z = -d w  ->  -(DEPTH_NEAR + (d - lo) k) w, d as above */
+            float d=sVertexDepth[i];
+            v[i].position[2]=-(DEPTH_NEAR+(d-lo)*k)*w;
         }else{
-            /* z = -d w  ->  -(d - lo) k w = k z + lo k w */
-            v[i].position[2]=k*v[i].position[2]+lo*k*w;
+            v[i].position[2]=k*v[i].position[2]+sDepthA*k*w;
         }
     }
 }
@@ -1209,11 +1271,11 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     slot=sBuffer;
     sBuffer^=1;
     sFrame++;
-    count=NitroPort_Gx3dBuildBatches(scene,sVertices[slot],
-                                     NITRO_GX3D_PICA_MAX_VERTICES,
-                                     sBatches,MAX_BATCHES,&nbatches,&lost);
+    count=NitroPort_Gx3dBuildBatchesDepths(scene,sVertices[slot],
+                                           NITRO_GX3D_PICA_MAX_VERTICES,
+                                           sBatches,MAX_BATCHES,&nbatches,&lost,sVertexDepth);
     if(dropped)*dropped+=lost;
-    normalize_depth(sVertices[slot],count,scene->swap_param,scene->screen_height);
+    normalize_depth(sVertices[slot],count,scene->swap_param,scene->screen_height,1);
     setup_fog();
     NitroPort_Gx3dMapTextureBanks(&sBanks);
     /* CLEAR_COLOR: RGB555, alpha in bits 16-20 (alpha 0 leaves BG0
@@ -1496,9 +1558,98 @@ static int shadow_finite(void)
     }
     return isfinite(sShadow.bias)!=0;
 }
+/* (the last prepared scene's time, for the [hitch] lines: the triangles
+ * into batches, their depths, the cache flushed; its triangles, batches) */
+static u64 sPrepTicks[3];
+static unsigned sPrepTriangles,sPrepBatches;
+void NitroPort_PicaPrepareSplit(u64 ticks[3],unsigned *triangles,unsigned *batches)
+{
+    ticks[0]=sPrepTicks[0];ticks[1]=sPrepTicks[1];ticks[2]=sPrepTicks[2];
+    *triangles=sPrepTriangles;
+    *batches=sPrepBatches;
+}
+/* A heavy scene's preparing, step by step, each the quickest of three
+ * runs (the display thread shares its core with the game and the sound:
+ * a run they stopped takes longer), into the log: where Amity Square's
+ * lake's 10-13 ms go (2026-11-09: a 60 FPS frame there needed 15 ms of
+ * building with 5 of the core the game's and the sound's). The batches'
+ * steps write to a copy (in the heap, then in linear memory as the real
+ * ones are); the depths' passes work on a copy of the prepared vertices. */
+static uint64_t profile_ticks(void){return svcGetSystemTick();}
+void NitroPort_PicaProfilePrepare(const NitroGx3dScene *scene)
+{
+    static NitroGx3dGpuVertex *heapCopy,*linearCopy;
+    const double ms=1000.0/SYSCLOCK_ARM11;
+    u64 best[12],t[5],a;
+    size_t count=sPreparedCount,i;
+    int run,j;
+    int wbuffer;
+    if(!scene||sPrepared<0||!count)return;
+    if(!heapCopy)heapCopy=malloc(NITRO_GX3D_PICA_MAX_VERTICES*sizeof(NitroGx3dGpuVertex));
+    if(!linearCopy)linearCopy=linearAlloc(NITRO_GX3D_PICA_MAX_VERTICES*sizeof(NitroGx3dGpuVertex));
+    if(!heapCopy||!linearCopy)return;
+    wbuffer=(scene->swap_param&2u)!=0;
+    for(j=0;j<12;j++)best[j]=~0ull;
+    for(run=0;run<3;run++){
+        NitroPort_Gx3dProfileBatches(scene,heapCopy,NITRO_GX3D_PICA_MAX_VERTICES,profile_ticks,t);
+        for(j=0;j<5;j++)if(t[j]<best[j])best[j]=t[j];
+        NitroPort_Gx3dProfileBatches(scene,linearCopy,NITRO_GX3D_PICA_MAX_VERTICES,profile_ticks,t);
+        if(t[4]<best[5])best[5]=t[4];
+        /* the prepared vertices copied: from linear memory, within the heap */
+        a=svcGetSystemTick();
+        memcpy(heapCopy,sVertices[sPrepared],count*sizeof(NitroGx3dGpuVertex));
+        a=svcGetSystemTick()-a;if(a<best[6])best[6]=a;
+        a=svcGetSystemTick();
+        memcpy(heapCopy+count,heapCopy,count*sizeof(NitroGx3dGpuVertex)<=(NITRO_GX3D_PICA_MAX_VERTICES-count)*sizeof(NitroGx3dGpuVertex)?count*sizeof(NitroGx3dGpuVertex):0);
+        a=svcGetSystemTick()-a;if(a<best[7])best[7]=a;
+        /* the depths' three passes, on the copy */
+        {
+            float lo=1.0f,hi=0.0f,k=1.0f,cap;
+            /* (the depths as the batches' vertices give them now, worked
+             * out here untimed; the range then from them, as
+             * normalize_depth has it) */
+            for(i=0;i<count;i++){
+                float w=heapCopy[i].position[3];
+                sVertexDepth[i]=wbuffer? -heapCopy[i].position[2] : (w>0.0f? -heapCopy[i].position[2]/w : 0.0f);
+            }
+            a=svcGetSystemTick();
+            for(i=0;i<count;i++){
+                float d=sVertexDepth[i];
+                if(d<lo)lo=d;
+                if(d>hi)hi=d;
+            }
+            a=svcGetSystemTick()-a;if(a<best[8])best[8]=a;
+            a=svcGetSystemTick();
+            cap=ds_rows_farthest(heapCopy,count,wbuffer,192.0f/(float)scene->screen_height);
+            a=svcGetSystemTick()-a;if(a<best[9])best[9]=a;
+            if(hi>lo)k=1.0f/(hi-lo);
+            a=svcGetSystemTick();
+            for(i=0;i<count;i++){
+                float w=heapCopy[i].position[3];
+                if(w>0.0f)heapCopy[i].position[2]=-(DEPTH_NEAR+(sVertexDepth[i]-lo)*k)*w;
+                else heapCopy[i].position[2]=k*heapCopy[i].position[2]+lo*k*w;
+            }
+            a=svcGetSystemTick()-a;if(a<best[10])best[10]=a;
+            (void)cap;
+        }
+        /* the vertices' cache flushed (as the real ones are) */
+        a=svcGetSystemTick();
+        GSPGPU_FlushDataCache(linearCopy,(u32)(count*sizeof(NitroGx3dGpuVertex)));
+        a=svcGetSystemTick()-a;if(a<best[11])best[11]=a;
+    }
+    NitroPort_Log("[prepare] a scene of %u triangles (%u batches), each step the quickest of 3 runs (ms): "
+                  "draw order %.2f, batches' states %.2f, sprite test %.2f, edges moved out %.2f, vertices written %.2f "
+                  "(%.2f to linear memory); depths: range %.2f, the DS rows' farthest %.2f (%s), remap %.2f; "
+                  "the vertices copied from linear memory %.2f, within the heap %.2f; the cache flushed %.2f",
+                  (unsigned)(count/3u),(unsigned)sPreparedBatches,
+                  best[0]*ms,best[1]*ms,best[2]*ms,best[3]*ms,best[4]*ms,best[5]*ms,
+                  best[8]*ms,best[9]*ms,scene_fogged()?"fog on: worked out":"no fog: not worked out",
+                  best[10]*ms,best[6]*ms,best[7]*ms,best[11]*ms);
+}
+
 int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
 {
-    u64 t0=svcGetSystemTick();
+    u64 t0=svcGetSystemTick(),tb,td;
     unsigned lost=0;
     u32 clear;
     int slot;
@@ -1507,15 +1658,24 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
     scene_registers(scene);
     slot=sBuffer;
     sBuffer^=1;
-    sPreparedCount=NitroPort_Gx3dBuildBatches(scene,sVertices[slot],
-                                              NITRO_GX3D_PICA_MAX_VERTICES,
-                                              sBatches,MAX_BATCHES,&sPreparedBatches,&lost);
+    tb=svcGetSystemTick();
+    sPreparedCount=NitroPort_Gx3dBuildBatchesDepths(scene,sVertices[slot],
+                                                    NITRO_GX3D_PICA_MAX_VERTICES,
+                                                    sBatches,MAX_BATCHES,&sPreparedBatches,&lost,
+                                                    sVertexDepth);
     if(dropped)*dropped+=lost;
-    normalize_depth(sVertices[slot],sPreparedCount,scene->swap_param,scene->screen_height);
+    td=svcGetSystemTick();
+    normalize_depth(sVertices[slot],sPreparedCount,scene->swap_param,scene->screen_height,1);
+    sPrepTicks[0]=td-tb;
+    sPrepTicks[1]=svcGetSystemTick()-td;
+    td=svcGetSystemTick();
     if(sPreparedCount){
         GSPGPU_FlushDataCache(sVertices[slot],
                         (u32)(sPreparedCount*sizeof(NitroGx3dGpuVertex)));
     }
+    sPrepTicks[2]=svcGetSystemTick()-td;
+    sPrepTriangles=(unsigned)(sPreparedCount/3u);
+    sPrepBatches=(unsigned)sPreparedBatches;
     sPrepared=slot;
     sPreparedSerial++;   /* (the outline passes' lists are for another) */
     sPreparedSwap=scene->swap_param;
@@ -2469,7 +2629,24 @@ static void draw_parts(size_t n)
     }
 }
 
+static void draw_scene(const PicaView *view);
+/* (the [hitch] lines: the frame's time drawing the 3D scene's batches, of
+ * its building, and how many times it was) */
+static u64 sDrawSceneTicks;
+static unsigned sDrawSceneCalls;
+void NitroPort_PicaDrawStats(u64 *ticks,unsigned *calls)
+{
+    *ticks=sDrawSceneTicks;
+    *calls=sDrawSceneCalls;
+}
 void NitroPort_PicaDrawScene(const PicaView *view)
+{
+    u64 t0=svcGetSystemTick();
+    draw_scene(view);
+    sDrawSceneTicks+=svcGetSystemTick()-t0;
+    sDrawSceneCalls++;
+}
+static void draw_scene(const PicaView *view)
 {
     size_t b,parts;
     int blend,edging,copying,part,depthOnly;

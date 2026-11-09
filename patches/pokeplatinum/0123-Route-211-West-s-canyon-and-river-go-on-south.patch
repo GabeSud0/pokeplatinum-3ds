@@ -1,0 +1,139 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 13:10:00 -0700
+Subject: [PATCH] Route 211 West's canyon and river go on south (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Route 211 West's river runs down a canyon, and at the map's south edge
+the mountain's filler, flat at the canyon's top, cut it: the river and
+every cliff line stopped on one straight line. The filler's first two
+rows are left out (sPortMapCuts, with its copies under itself not drawn
+while they are: they lay across the canyon) and the map's last rows drawn
+on south in their place (sPortMapPieces), each polygon at its own depth.
+A piece moved past its list's 16-bit coordinates, dropped till now, is
+drawn there with a translation before it and back after.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index d514341b..1eb85b96 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -1934,6 +1934,8 @@ static BOOL Port_LoweredStripInView(const NNSG3dResMdl *model, const VecFx32 *po
+     return GFXBoxTest_IsBoxAtPositionInView(&corner, &box);
+ }
+ 
++static BOOL Port_CutHidesLowered(const LandDataManager *landDataMan, u8 index);
++
+ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *landDataMan)
+ {
+     LoadedMap *loadedMap = landDataMan->loadedMaps[index];
+@@ -1976,6 +1978,12 @@ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *
+         return;
+     }
+ 
++    // (with rows left out, its copies under it would show there, if listed
++    // so: the map whose pieces fill them meets it)
++    if (Port_CutHidesLowered(landDataMan, index)) {
++        return;
++    }
++
+     VecFx32 position = { 0, 0, 0 };
+     VecFx32 scale = { FX32_ONE, FX32_ONE, FX32_ONE };
+     MtxFx33 rotationMatrix = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
+@@ -6738,6 +6746,21 @@ static const PortMapPiece sPortMapPieces[] = {
+     { 0, 670, 3, { 0, 64, 0, 8 }, 1, 0, 1, 1, 0, 0, 0, -88, 11, 8 },         // (its top row north over the filler: x 320-327, z 693-703)
+     { 0, 670, 3, { 64, 128, 0, 8 }, 1, 0, 1, 1, 0, 0, 0, -72, 9, 8 },        // (x 328-335, z 695-703: east of x 330 under its cliffs carried north)
+     { 0, 670, 3, { 192, 208, 0, 16 }, 1, 0, 1, 1, 0, -16, 0, -88, 1, 0 },    // (x 328-329, z 693-694)
++    { 0, 491, 5, { 24, 56, 224, 256 }, 1, 24, 3, 4, 0, -24, 0, 32, 4, 32 },  // (Route 211's west map, south over its filler's first 2 rows: the top, x 352-354)
++    { 0, 491, 5, { 24, 56, 224, 256 }, 1, 0, 1, 1, 0, 0, 0, 32, 4, 32 },     // (x 355-358)
++    { 0, 491, 5, { 56, 88, 224, 256 }, 1, 0, 1, 1, 0, 0, 0, 32, 4, 32 },     // (x 359-362)
++    { 0, 491, 0, { 88, 136, 232, 256 }, 3, 0, 1, 1, 0, 0, 0, 24, 6, 24 },   // (the canyon's west slopes, x 363-364 and 368)
++    { 0, 491, 0, { 104, 120, 192, 256 }, 2, 0, 1, 1, 0, 0, 0, 64, 2, 64 },   // (x 365-366)
++    { 0, 491, 5, { 120, 128, 232, 256 }, 1, 0, 1, 1, 0, 0, 0, 24, 6, 24 },  // (x 367: its foot)
++    { 0, 491, 4, { 136, 142, 192, 256 }, 1, 0, 1, 1, 0, 0, 0, 64, 2, 64 },   // (x 369: the river's bank)
++    { 0, 491, 0, { 140, 144, 192, 256 }, 1, 0, 1, 1, 0, 0, 0, 64, 2, 64 },
++    { 0, 491, 8, { 140, 146, 220, 256 }, 4, 0, 1, 1, 0, 0, 0, 36, 4, 36 },
++    { 0, 491, 7, { 144, 160, 192, 256 }, 2, 0, 1, 1, 0, 0, 0, 64, 2, 64 },   // (the river, x 370-371)
++    { 0, 491, 8, { 158, 162, 228, 256 }, 4, 0, 1, 1, 0, 0, 0, 28, 5, 28 },  // (its east bank)
++    { 0, 491, 0, { 160, 208, 232, 256 }, 6, 0, 1, 1, 0, 0, 0, 24, 6, 24 },  // (the canyon's east slopes, x 372-377)
++    { 0, 491, 4, { 178, 200, 232, 256 }, 2, 0, 1, 1, 0, 0, 0, 24, 6, 24 },
++    { 0, 491, 5, { 208, 240, 256, 288 }, 1, 0, 1, 1, 0, 0, 0, 32, 3, 32 },  // (the top past it, from z 548, x 378-381)
++    { 0, 491, 0, { 240, 256, 256, 288 }, 2, 0, 1, 1, 0, 0, 0, 32, 3, 32 },  // (the slope up to the east filler, x 382-383)
+ };
+ 
+ #define PORT_PIECE_COPIES 3
+@@ -6903,6 +6926,18 @@ static PortPieceCopy *Port_PieceCopyOf(const LandDataManager *landDataMan, u8 in
+                     : NitroPort_Gx3dSurveyMoved(survey, lists[i] + sizes[i], room, sPortPieceKeep, count, Port_PieceAt(piece->originX, tile),
+                           piece->num, piece->den, dx, dy, dz);
+ 
++                // (moved too far for the list's 16-bit coordinates: there
++                // north or south of it with an MTX_TRANS before, and back)
++                if (size == 0 && piece->turn == 0 && dz != 0 && room > 32) {
++                    u32 there = NitroPort_Gx3dTranslateCommand(lists[i] + sizes[i], room, 0, 0, dz);
++                    u32 moved = there != 0 ? NitroPort_Gx3dSurveyMoved(survey, lists[i] + sizes[i] + there, room - there - 16, sPortPieceKeep, count,
++                                                  Port_PieceAt(piece->originX, tile), piece->num, piece->den, dx, dy, 0)
++                                           : 0;
++                    u32 back = moved != 0 ? NitroPort_Gx3dTranslateCommand(lists[i] + sizes[i] + there + moved, 16, 0, 0, -dz) : 0;
++
++                    size = back != 0 ? there + moved + back : 0;
++                }
++
+                 sizes[i] += size;
+             }
+         }
+@@ -6982,17 +7017,20 @@ static void Port_RenderMapPieces(const LandDataManager *landDataMan)
+ 
+ // Maps drawn with some of their rows left out (whole polygons starting in
+ // them, tiles from the map's north edge), where another map's pieces
+-// (sPortMapPieces) take their place: only while that map's loaded and its
+-// pieces are made, else drawn whole as before.
++// (sPortMapPieces) or its edge drawn on (sPortExtrudeColumns) take their
++// place: only while that map's loaded (and its pieces made), else drawn
++// whole as before.
+ typedef struct PortMapCut {
+     u8 matrixID;
+     u16 mapMatrixIndex;
+     u8 zFrom, zTo; // (zFrom <= z < zTo)
+     u16 piecesBy;
++    u8 noLowered;  // (its copies under itself not drawn while it's cut: Port_RenderSceneryMapLowered)
+ } PortMapCut;
+ 
+ static const PortMapCut sPortMapCuts[] = {
+     { 0, 668, 24, 32, 669 }, // (Route 207's west filler: its last row of ground, z 728-735)
++    { 0, 521, 0, 16, 491, TRUE }, // (Route 211's south filler: its first two rows, z 544-559; its copies under it over the canyon)
+ };
+ 
+ #define PORT_CUT_COPIES 2
+@@ -7029,7 +7067,8 @@ static PortPieceCopy *Port_CutCopyOf(const LandDataManager *landDataMan, u8 inde
+     BOOL pieces = FALSE;
+ 
+     for (u8 q = 0; q < QUADRANT_COUNT && cut != NULL && !pieces; q++) {
+-        pieces = landDataMan->loadedMaps[q]->mapMatrixIndex == cut->piecesBy && Port_PieceCopyOf(landDataMan, q) != NULL;
++        pieces = landDataMan->loadedMaps[q]->mapMatrixIndex == cut->piecesBy && landDataMan->loadedMaps[q]->valid == TRUE
++            && (!Port_HasMapPieces(matrixID, cut->piecesBy) || Port_PieceCopyOf(landDataMan, q) != NULL);
+     }
+ 
+     if (!pieces) {
+@@ -7133,6 +7172,21 @@ static PortPieceCopy *Port_CutCopyOf(const LandDataManager *landDataMan, u8 inde
+     return copy->failed ? NULL : copy;
+ }
+ 
++// Whether the loaded map is drawn with its rows left out now and its copies
++// under itself not drawn then.
++static BOOL Port_CutHidesLowered(const LandDataManager *landDataMan, u8 index)
++{
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix), mapMatrixIndex = landDataMan->loadedMaps[index]->mapMatrixIndex;
++
++    for (int k = 0; k < (int)NELEMS(sPortMapCuts); k++) {
++        if (sPortMapCuts[k].matrixID == matrixID && sPortMapCuts[k].mapMatrixIndex == mapMatrixIndex) {
++            return sPortMapCuts[k].noLowered && Port_CutCopyOf(landDataMan, index) != NULL;
++        }
++    }
++
++    return FALSE;
++}
++
+ // A loaded map drawn with its rows left out (sPortMapCuts); FALSE if it
+ // isn't (drawn as before).
+ static BOOL Port_RenderMapCut(const LandDataManager *landDataMan, u8 index, ModelAttributes *const modelAttrs)

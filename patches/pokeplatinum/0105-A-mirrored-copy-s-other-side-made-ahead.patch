@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 20:30:00 -0700
+Subject: [PATCH] A mirrored copy's other side made ahead (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Changing lanes on the Cycling Road still gave a long frame (a log of
+2026-11-06: 48 ms in the game, then 72.6 ms on the display thread, as the
+lanes were changed under the bridge). Which side a map is mirrored to goes
+by the half of it the player's in; the two lanes are either side of the
+middle. A map with rows moved over (patch 0070: 609 and 579 under the
+bridge) has no stand-in to draw while its copy is made (patch 0103), so
+its copy for the new side was made at once, in view: 4.9 ms on the PC.
+
+Now, once a map's copy for its side is made, and no other copy's lists
+were cut in the scene, its copy for the other side is made a little a
+scene (Port_MirrorOtherSideAhead), for maps with rows moved over on that
+side too. Patch 0103 keeps both. And a copy made at once in view goes in
+the log (`[field] a mirrored copy made at once as it came into the view
+(matrix M, side S): N KB of lists`, at most 32 lines), so a long frame can
+be told for one.
+
+On the PC riding north from 299,676 and across the lanes at 299-306,664
+and back at 305,648: no copy made at once in either change (609's other
+side made 16 scenes after its own; 579's 7); 579 finished in 1.2 ms the
+scene it's first seen (149 KB), the warp's 609 at once as before. The
+pictures are the same frame by frame (that ride, riding north from 299,676,
+across the middle at 299-306,598 and back); riding south from 300,590 the
+same but for a hiker by the road facing another way, as between any two
+runs; Valley Windworks at 250,648, 246,652, 250,660 and 236,650 the same.
+
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index e11923ec..efceef4a 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -2078,6 +2078,7 @@ typedef struct PortMirrorCopy {
+ 
+ static PortMirrorCopy sPortMirrorCopies[PORT_MIRROR_COPIES];
+ static u32 sPortMirrorScene; // (Port_RenderMirroredBesideScenery's scenes)
++static u32 sPortMirrorSceneWork; // (bytes of lists cut in this scene)
+ 
+ static void Port_FreeMirrorCopy(PortMirrorCopy *copy)
+ {
+@@ -2329,6 +2330,8 @@ static PortMirrorCopy *Port_MirrorCopyOf(const LandDataManager *landDataMan, u8
+         }
+     }
+ 
++    sPortMirrorSceneWork += done;
++
+     if (failed) {
+         Port_FreeMirrorCopy(copy);
+         return NULL;
+@@ -2338,6 +2341,18 @@ static PortMirrorCopy *Port_MirrorCopyOf(const LandDataManager *landDataMan, u8
+         return NULL; // (more next scene)
+     }
+ 
++    // (made at once, in view: a long frame on the 3DS. In the log, so a
++    // stall there can be told for one)
++    if (now && done > PORT_MIRROR_STEP_BYTES) {
++        extern void NitroPort_Log(const char *fmt, ...);
++        static int sLines;
++
++        if (sLines++ < 32) {
++            NitroPort_Log("[field] a mirrored copy made at once as it came into the view (matrix %d, side %d): %u KB of lists",
++                loadedMap->mapMatrixIndex, dir, (unsigned)((done + 1023) / 1024));
++        }
++    }
++
+     // (all cut: the copy made)
+     int total = copy->total;
+ 
+@@ -2532,9 +2547,47 @@ static void Port_RenderMirroredWhole(const u8 index, const int dir, const VecFx3
+     }
+ }
+ 
++static void Port_RenderMirroredBesideSceneryMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs);
++
++// A map with rows moved over on both sides (Route 206 under the bridge):
++// its copy for the other side is made a little a scene once this side's
++// is made, when no other copy's being made in the scene. Crossing the map's
++// middle (the Cycling Road's other lane) then finds it made: it had been
++// made at once there, in view (4.9 ms on the PC, a 48 ms frame on the 3DS
++// in a log of 2026-11-06, as the lanes were changed). Those without rows
++// moved over are drawn whole meanwhile (Port_RenderMirroredWhole).
++static void Port_MirrorOtherSideAhead(const LandDataManager *landDataMan, u8 index, int dir)
++{
++    int width = landDataMan->mapMatrixWidth, mapMatrixIndex = landDataMan->loadedMaps[index]->mapMatrixIndex, rowsFrom, rowsTo, kept;
++
++    if (mapMatrixIndex % width - dir < 0 || mapMatrixIndex % width - dir >= width
++        || MapMatrix_GetMapHeaderIDAtIndex(landDataMan->mapMatrix, mapMatrixIndex - dir) != MAP_HEADER_EVERYWHERE
++        || !Port_MovedRowsOf(landDataMan, index, -dir, &rowsFrom, &rowsTo, &kept)) {
++        return;
++    }
++
++    Port_MirrorCopyOf(landDataMan, index, -dir, FALSE, NULL, NULL);
++}
++
+ static void Port_RenderMirroredBesideScenery(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
+ {
+     sPortMirrorScene++;
++    sPortMirrorSceneWork = 0;
++
++    Port_RenderMirroredBesideSceneryMaps(landDataMan, modelAttrs);
++
++    // (then, if nothing else was cut: a little of a copy for the other side)
++    for (u8 i = 0; i < QUADRANT_COUNT && sPortMirrorSceneWork == 0; i++) {
++        int dir = Port_MirrorSideBesideScenery(landDataMan, i);
++
++        if (dir != 0) {
++            Port_MirrorOtherSideAhead(landDataMan, i, dir);
++        }
++    }
++}
++
++static void Port_RenderMirroredBesideSceneryMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
++{
+ 
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         int dir = Port_MirrorSideBesideScenery(landDataMan, i);

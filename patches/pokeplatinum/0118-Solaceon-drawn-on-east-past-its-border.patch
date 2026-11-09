@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 19:00:00 -0700
+Subject: [PATCH] Solaceon drawn on east past its border (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+East of Solaceon Town the overworld has the mountain's filler map (land
+data 175): with the wider view, from the town's east side its tree rows,
+plateau and cliffs stopped on a straight line at the border, the
+filler's flat top past it. Solaceon joins the maps drawn on straight
+past the scenery beside them (sPortMirroredBesideScenery, extruded), on
+its east side only: its strip by the border goes on east.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 20b852a6..d9633576 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -2067,7 +2067,10 @@ static void Port_RenderSceneryMapsLowered(const LandDataManager *landDataMan)
+ // the maps' own paths, cliffs and windmills showed again backwards
+ // (rejected, 2026-11-07): each listed is now drawn on straight past the
+ // scenery (extruded, Port_RenderExtrudedEdge), its forest, cliffs, river
+-// and mountain going on.
++// and mountain going on. Solaceon's east side saw the mountain scenery's
++// flat top past its border, its own tree rows and cliffs stopping on a
++// straight line there (a screenshot of 2026-11-07, by a cave entrance):
++// drawn on east, they go on.
+ typedef struct PortMirroredScenery {
+     u16 header;
+     s8 side;     // (the side it's drawn past the scenery on: 0 either, -1 the left only, 1 the right only)
+@@ -2080,6 +2083,7 @@ static const PortMirroredScenery sPortMirroredBesideScenery[] = {
+     { MAP_HEADER_ROUTE_204_NORTH, 0, TRUE },
+     { MAP_HEADER_ROUTE_204_SOUTH, 0, TRUE },
+     { MAP_HEADER_HEARTHOME_CITY, -1, TRUE },
++    { MAP_HEADER_SOLACEON_TOWN, 1, TRUE },
+ };
+ 
+ static BOOL Port_ExtrudedBesideScenery(u16 header)

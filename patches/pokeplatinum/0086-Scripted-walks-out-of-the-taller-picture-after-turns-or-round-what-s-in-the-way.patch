@@ -1,0 +1,329 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 23:30:00 -0700
+Subject: [PATCH] Scripted walks out of the taller picture after turns, or
+ round what's in the way (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+On the field at the DS's pixel size, a scripted walk that ends past the
+DS's top or bottom but inside the taller picture was made longer only
+when it went straight up or down. Now:
+
+- A walk whose last steps go up or down, after other steps (Dawn leaving
+  Sandgem Town after the tour: a step south, 5 west, 10 north; Dawn
+  leaving Jubilife after the Galactic battle: a step east, 9 south;
+  Looker's way out of Jubilife), is made longer the same way.
+- Where the way on is not clear (Dawn's 10 steps north out of Sandgem end
+  under a row of trees), the walker goes round, after the script's walk:
+  on that way first, else east, else west, until it is out of the taller
+  picture or beside the wider one.
+- A walk that is blocked by a wall where the DS's picture ended, with a
+  door in reach (Dawn leaving the lab beside the player), first tries a
+  step that way, then across to the door's column, then straight on to
+  the door: down the middle of the room. The search for a way to the
+  door is the fallback, as before.
+- SetPosition forgets what the wider screen did to a walker's walk, so
+  someone the script puts somewhere afterwards (Looker, put in the road
+  for later) isn't moved back again when the script ends.
+
+---
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+index e9de0ae5..fbe64c34 100644
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -2617,6 +2617,71 @@ static MapObjectAnimCmd *ScrCmd_PortTallMovement(FieldSystem *fieldSystem, MapOb
+         return NULL;
+     }
+ 
++    // First, a door in reach that way: a step towards it, across to its
++    // column, then straight on to it, if all of that's clear (down the
++    // room's middle, as the player walks to a door). Found by the search
++    // below, Dawn leaving the lab beside the player went down beside the
++    // middle and stepped across onto the mat at the end; now a step south,
++    // one west behind the player, and down the middle to the mat
++    // (2026-11-05).
++    {
++        int dz = MapObject_GetDzFromDir(dir), doorX = 0, doorZ = 0, best = -1, k, j;
++
++        for (k = 1; k <= steps + 4; k++) {
++            for (j = -4; j <= 4; j++) {
++                if (MapHeaderData_GetIndexOfWarpEventAtPos(fieldSystem, x + j, z + dz * k) >= 0
++                    && (best < 0 || (j < 0 ? -j : j) < best)) {
++                    best = j < 0 ? -j : j;
++                    doorX = x + j;
++                    doorZ = z + dz * k;
++                }
++            }
++
++            if (best >= 0) {
++                break;
++            }
++        }
++
++        if (best >= 0) {
++            int legs[3][2] = { { dir, doorX != x ? 1 : 0 }, { doorX < x ? DIR_WEST : DIR_EAST, best },
++                { dir, (doorZ - z) * dz - (doorX != x ? 1 : 0) } };
++            int cx = x, cz = z, legCount = 0, n;
++            fx32 cy = pos.y;
++            BOOL clear = legs[2][1] >= 0;
++
++            for (k = 0; k < 3 && clear; k++) {
++                for (n = 0; n < legs[k][1] && clear; n++) {
++                    int toX = cx + MapObject_GetDxFromDir(legs[k][0]), toZ = cz + MapObject_GetDzFromDir(legs[k][0]);
++
++                    clear = !ScrCmd_PortWideBlocked(fieldSystem, cx, cz, &cy, legs[k][0])
++                        && !ScrCmd_PortWideSomeoneThere(fieldSystem, mapObj, toX, toZ);
++                    cx = toX;
++                    cz = toZ;
++                }
++
++                legCount += legs[k][1] > 0;
++            }
++
++            if (clear && cx == doorX && cz == doorZ
++                && ScrCmd_PortWideRemember(fieldSystem, mapObj, doorX - x, doorZ - (z + dz * steps), PORT_WIDE_SENT)) {
++                copy = Heap_Alloc(HEAP_ID_FIELD1, sizeof(MapObjectAnimCmd) * (lead + legCount + 1));
++                memcpy(copy, cmds, sizeof(MapObjectAnimCmd) * lead);
++
++                for (k = 0, n = lead; k < 3; k++) {
++                    if (legs[k][1] > 0) {
++                        copy[n].movementAction = sPortWideWalks[speed][legs[k][0]];
++                        copy[n].count = legs[k][1];
++                        n++;
++                    }
++                }
++
++                copy[n].movementAction = MOVEMENT_ACTION_END;
++                copy[n].count = 0;
++                return copy;
++            }
++        }
++    }
++
+     search = Heap_Alloc(HEAP_ID_FIELD1, sizeof(PortWidePathSearch));
+     memset(search, 0, sizeof(*search));
+     search->fieldSystem = fieldSystem;
+@@ -2809,57 +2874,167 @@ static int ScrCmd_PortTallAddedShift(FieldSystem *fieldSystem, MapObject *mapObj
+     return ScrCmd_PortTallTilesOut(fieldSystem, mapObj, x, z, &y, DIR_SOUTH);
+ }
+ 
+-// A walk straight up or down (the waits and turns before it as the script
+-// has them) ending past the DS's top or bottom, in the taller picture: the
+-// extra tiles out added, if they're clear; else NULL.
++// A way out of the taller picture from (x, z), depth steps taken: on the
++// way out (up or down) first, else east, else west (never back), as far as
++// it goes before turning; or out beside the wider picture.
++static BOOL ScrCmd_PortTallFindWay(PortWidePathSearch *search, int x, int z, fx32 y, int depth)
++{
++    const int dirs[3] = { search->outDir, DIR_EAST, DIR_WEST };
++    int i;
++
++    if (depth > 0 && (ScrCmd_PortTallOut(search->fieldSystem, x, z, y, search->outDir, PORT_TALL_ROWS) || ScrCmd_PortTallBeside(search->fieldSystem, x))) {
++        search->path[depth] = 0xFF;
++        return TRUE;
++    }
++
++    if (depth >= PORT_WIDE_PATH_MAX - 1 || ++search->nodes > PORT_WIDE_SEARCH_MAX) {
++        return FALSE;
++    }
++
++    for (i = 0; i < 3; i++) {
++        int toX = x + MapObject_GetDxFromDir(dirs[i]), toZ = z + MapObject_GetDzFromDir(dirs[i]);
++        fx32 toY = y;
++
++        if (ScrCmd_PortWideSeen(search, toX, toZ) || ScrCmd_PortWideBlocked(search->fieldSystem, x, z, &toY, dirs[i])
++            || ScrCmd_PortWideSomeoneThere(search->fieldSystem, search->mapObj, toX, toZ)) {
++            continue;
++        }
++
++        ScrCmd_PortWideSee(search, toX, toZ);
++        search->path[depth] = dirs[i];
++
++        if (ScrCmd_PortTallFindWay(search, toX, toZ, toY, depth + 1)) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++// The script's walk (count commands), then a way round from where it ends,
++// (x, z) at height y, out of the taller picture past its top or bottom
++// (dir), at the walk's last speed; else NULL.
++static MapObjectAnimCmd *ScrCmd_PortTallWayRound(FieldSystem *fieldSystem, MapObject *mapObj, const MapObjectAnimCmd *cmds, int count, int x, int z, fx32 y, int dir, int speed)
++{
++    PortWidePathSearch *search = Heap_Alloc(HEAP_ID_FIELD1, sizeof(PortWidePathSearch));
++    MapObjectAnimCmd *copy = NULL;
++    int steps, runs, i, wayX = x, wayZ = z, midX, midZ;
++
++    memset(search, 0, sizeof(*search));
++    ScrCmd_PortWideMiddle(fieldSystem, &midX, &midZ);
++    search->fieldSystem = fieldSystem;
++    search->mapObj = mapObj;
++    search->midX = midX;
++    search->midZ = midZ;
++    search->outDir = dir;
++    ScrCmd_PortWideSee(search, x, z);
++
++    if (!ScrCmd_PortTallFindWay(search, x, z, y, 0)) {
++        Heap_Free(search);
++        return NULL;
++    }
++
++    for (steps = 0, runs = 0; search->path[steps] != 0xFF; steps++) {
++        if (steps == 0 || search->path[steps] != search->path[steps - 1]) {
++            runs++;
++        }
++
++        wayX += MapObject_GetDxFromDir(search->path[steps]);
++        wayZ += MapObject_GetDzFromDir(search->path[steps]);
++    }
++
++    if (!ScrCmd_PortWideRemember(fieldSystem, mapObj, wayX - x, wayZ - z, PORT_WIDE_TALL_SENT)) {
++        Heap_Free(search);
++        return NULL;
++    }
++
++    copy = Heap_Alloc(HEAP_ID_FIELD1, sizeof(MapObjectAnimCmd) * (count + runs + 1));
++    memcpy(copy, cmds, sizeof(MapObjectAnimCmd) * count);
++
++    for (i = 0, runs = count; i < steps; i++) {
++        if (i == 0 || search->path[i] != search->path[i - 1]) {
++            copy[runs].movementAction = sPortWideWalks[speed][search->path[i]];
++            copy[runs].count = 0;
++            runs++;
++        }
++
++        copy[runs - 1].count++;
++    }
++
++    copy[runs].movementAction = MOVEMENT_ACTION_END;
++    copy[runs].count = 0;
++    Heap_Free(search);
++    return copy;
++}
++
++// A walk ending up or down (its last steps: the waits, turns and steps
++// before them as the script has them) past the DS's top or bottom, in the
++// taller picture: the extra tiles out added to its last steps, if they're
++// clear; else NULL. (Not only a walk straight up or down: Dawn leaving
++// Sandgem Town after showing the player round goes a step south, 5 west,
++// then 10 north, and stopped at the taller picture's top, taken away in
++// sight, 2026-11-05.)
+ static MapObjectAnimCmd *ScrCmd_PortTallWalkOut(FieldSystem *fieldSystem, MapObject *mapObj, const MapObjectAnimCmd *cmds, int count)
+ {
+-    int i, lead = -1, dir = -1, steps = 0, x, z, extra;
++    int i, k, dir = -1, x, z, extra, lastSpeed;
+     MapObjectAnimCmd *copy;
+     VecFx32 pos;
+     fx32 y;
+ 
++    if (count == 0 || cmds[count - 1].count == 0 || !ScrCmd_PortWalk(cmds[count - 1].movementAction, &lastSpeed, &dir)
++        || (dir != DIR_NORTH && dir != DIR_SOUTH)) {
++        return NULL;
++    }
++
++    // (the steps before it: walks, waits and turns only)
+     for (i = 0; i < count; i++) {
+         int stepSpeed, stepDir;
+ 
+-        if (ScrCmd_PortWalk(cmds[i].movementAction, &stepSpeed, &stepDir)) {
+-            if ((stepDir != DIR_NORTH && stepDir != DIR_SOUTH) || (dir >= 0 && stepDir != dir)) {
+-                return NULL;
+-            }
+-
+-            if (lead < 0) {
+-                lead = i;
+-            }
+-
+-            dir = stepDir;
+-            steps += cmds[i].count;
+-        } else if (lead >= 0 || !ScrCmd_PortWideStill(cmds[i].movementAction)) {
++        if (!ScrCmd_PortWalk(cmds[i].movementAction, &stepSpeed, &stepDir) && !ScrCmd_PortWideStill(cmds[i].movementAction)) {
+             return NULL;
+         }
+     }
+ 
+-    if (dir < 0 || steps == 0 || cmds[count - 1].count == 0) {
+-        return NULL;
+-    }
+-
++    // (where it ends, and the height along the way, where the ground says)
+     x = MapObject_GetX(mapObj);
+     z = MapObject_GetZ(mapObj);
++    MapObject_GetPosPtr(mapObj, &pos);
++    y = pos.y;
++
++    for (i = 0; i < count; i++) {
++        int stepSpeed, stepDir;
++
++        if (!ScrCmd_PortWalk(cmds[i].movementAction, &stepSpeed, &stepDir)) {
++            continue;
++        }
++
++        for (k = 0; k < cmds[i].count; k++) {
++            (void)ScrCmd_PortWideBlocked(fieldSystem, x, z, &y, stepDir);
++            x += MapObject_GetDxFromDir(stepDir);
++            z += MapObject_GetDzFromDir(stepDir);
++        }
++    }
+ 
+     if (ScrCmd_PortTallBeside(fieldSystem, x)) {
+         return NULL;
+     }
+ 
+-    // (the height along the walk, where the ground says)
+-    MapObject_GetPosPtr(mapObj, &pos);
+-    y = pos.y;
+-
+-    for (i = 0; i < steps; i++) {
+-        (void)ScrCmd_PortWideBlocked(fieldSystem, x, z + MapObject_GetDzFromDir(dir) * i, &y, dir);
++    {
++        fx32 endY = y;
++
++        extra = ScrCmd_PortTallTilesOut(fieldSystem, mapObj, x, z, &y, dir);
++
++        // (the way on that way not clear, past the DS's picture but in the
++        // taller one: a way round, after the script's walk. Dawn's 10 steps
++        // north out of Sandgem Town end under a row of trees: she walked on
++        // towards Route 202 instead of being taken away under them in
++        // sight, 2026-11-05)
++        if (extra == 0 && ScrCmd_PortTallOut(fieldSystem, x, z, endY, dir, 0)
++            && !ScrCmd_PortTallOut(fieldSystem, x, z, endY, dir, PORT_TALL_ROWS)) {
++            return ScrCmd_PortTallWayRound(fieldSystem, mapObj, cmds, count, x, z, endY, dir, lastSpeed);
++        }
+     }
+ 
+-    z += MapObject_GetDzFromDir(dir) * steps;
+-    extra = ScrCmd_PortTallTilesOut(fieldSystem, mapObj, x, z, &y, dir);
+-
+     if (extra == 0 || !ScrCmd_PortWideRemember(fieldSystem, mapObj, 0, MapObject_GetDzFromDir(dir) * extra, PORT_WIDE_TALL_SENT)) {
+         return NULL;
+     }
+@@ -2909,7 +3084,7 @@ static MapObjectAnimCmd *ScrCmd_PortWideMovement(FieldSystem *fieldSystem, MapOb
+ 
+         // (the same up or down: the field at the DS's pixel size; the waits
+         // and turns before the walk as the script has them, out of sight)
+-        if ((kind == PORT_WIDE_TALL_ADDED || kind == PORT_WIDE_TALL_SENT) && shiftZ != 0) {
++        if ((kind == PORT_WIDE_TALL_ADDED || kind == PORT_WIDE_TALL_SENT) && shiftZ != 0 && shiftX == 0) {
+             for (lead = 0; lead < count && ScrCmd_PortWideStill(cmds[lead].movementAction); lead++) { }
+ 
+             if (lead < count && cmds[lead].count > 0 && ScrCmd_PortWalkDz(cmds[lead].movementAction) == (shiftZ > 0 ? -1 : 1)) {
+@@ -5737,6 +5912,12 @@ static BOOL ScrCmd_SetPosition(ScriptContext *ctx)
+ 
+     MapObject *mapObject = MapObjMan_LocalMapObjByIndex(ctx->fieldSystem->mapObjMan, localID);
+ 
++#ifdef SDK_PORT_3DS
++    // (put somewhere by the script: not moved back by what the wider screen
++    // made its walk; Looker, sent off out of Jubilife's taller picture then
++    // put in the road for later, would have been moved off it again)
++    ScrCmd_PortWideRemoved(mapObject);
++#endif
+     MapObject_SetPosDirFromCoords(mapObject, x, y, z, dir);
+     MapObject_RecalculateObjectHeight(mapObject);
+ 
+-- 
+2.43.0
+

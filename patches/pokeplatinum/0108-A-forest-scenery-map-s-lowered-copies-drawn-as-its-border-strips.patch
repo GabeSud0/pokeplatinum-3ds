@@ -1,0 +1,441 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 05:30:00 -0700
+Subject: [PATCH] A forest scenery map's lowered copies drawn as its border
+ strips (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A scenery map higher than a loaded map beside it is drawn again below
+itself, from the lowest neighbour's height up, 2 tiles apart, to fill the
+slit along the border (Port_RenderSceneryMapLowered, patch 0068). That was
+made for the mountains' scenery map (MAP_175, 16 polygons). The forests'
+(MAP_173 beside Route 204, Floaroma, Valley Windworks' west and Eterna;
+MAP_176 beside Route 215, Veilstone, Solaceon and Hearthome) are 21 KB
+files, and drawn whole their copies were a quarter of the vertices sent a
+scene by Valley Windworks' south side (3.5k of 13k at 236,666 on the PC,
+62 of their triangles left after clipping). In a log of 2026-11-07
+the 3DS's geometry took 30 ms a scene there, busy 90% of the time, a few
+scenes left out a second while walking, the follower seen to jump in the
+tall grass.
+
+The copies are seen only through the slit: elsewhere they're under the
+scenery map itself. So for a model file over 8 KB, each copy is now drawn
+as its strips by the sides with a lower map beside it on the matrix
+(loaded or not): the polygons within PORT_LOWERED_STRIP (4) tiles of that
+border (NitroPort_Gx3dTrimList), each strip only while its box is in the
+view, and the copy whole as before when the strips in the view are as
+many lists as all of it (the forests' four strips are 102% of it, their
+north and south ones 14-18% each, east and west 35%). The strips are cut
+from the loaded map's model a side a scene (0.1 ms a side on the PC), the
+copies drawn whole meanwhile, and kept for 6 maps (Port_LoweredStripOf).
+MAP_175 is drawn as before.
+
+On the PC, the pictures the same, pixel for pixel, at Valley Windworks (10
+spots), Floaroma (5), Route 204 (9), Jubilife (4), Eterna (3), Route 205
+(4), Route 206 (8), Veilstone (4), Solaceon (3), Hearthome (3) and Route
+210 (2), but for people walking about (and Route 215's rain). Vertices a
+scene: Floaroma's west side 17.5k to 11.1k, Eterna 620,560 7.1k to 3.9k,
+Valley Windworks 236,666 13.0k to 10.1k and 226,668 15.7k to 11.7k, Route
+215 640,600 14.2k to 11.2k, Hearthome 480,680 12.9k to 10.6k; where no
+such map is in the view, the same as before.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index c8f11ba5..5dbcdd11 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -1767,6 +1767,77 @@ static BOOL Port_HasNorthStrip(const LandDataManager *landDataMan, int mapMatrix
+ // itself, from the height of the lowest map beside it up, 2 tiles apart:
+ // those copies fill the slit as a wall would, under the map itself
+ // everywhere else (they're small: 16 polygons each).
++//
++// The forests' scenery maps aren't small (MAP_173 beside Route 204,
++// Floaroma and Valley Windworks' west; MAP_176 beside Route 215,
++// Veilstone, Solaceon and Hearthome; 21 KB files): their copies, drawn
++// whole, were a quarter of the vertices sent a scene by Valley Windworks'
++// south side (3.5k of 13k at 236,666 on the PC, 62 of their triangles left
++// after clipping; in a log of 2026-11-07 the 3DS's geometry took 30 ms a
++// scene by Valley Windworks, busy 90% of the time). Seen only through the
++// slit, each copy of such a map is drawn as its strips by the borders with
++// a lower map
++// (Port_LoweredStripOf): the polygons within PORT_LOWERED_STRIP tiles of
++// that border, cut once. The same picture on the PC (Valley Windworks,
++// Floaroma, Route 204, Eterna, Jubilife, Route 215, Veilstone, Solaceon,
++// Hearthome); Floaroma's west side 17.5k vertices a scene to 11.1k, Route
++// 215 at 640,600 14.2k to 11.2k.
++#define PORT_LOWERED_STRIP       4           // (tiles from the border)
++#define PORT_LOWERED_WHOLE_BYTES (8 * 1024)  // (a model file this size or smaller drawn whole, as before)
++
++enum {
++    PORT_SIDE_NORTH,
++    PORT_SIDE_SOUTH,
++    PORT_SIDE_WEST,
++    PORT_SIDE_EAST,
++    PORT_SIDES,
++};
++
++static NNSG3dResMdl *Port_LoweredStripOf(const LandDataManager *landDataMan, u8 index, int side);
++static BOOL Port_LoweredStripsCheaper(const LandDataManager *landDataMan, u8 index, int sides);
++static u32 sPortLoweredScene, sPortLoweredCutScene; // (Port_RenderSceneryMapsLowered's scenes; the last one a side was cut in)
++
++// The box of the loaded map's strip by a side, at position (the map's
++// middle), in the view.
++static BOOL Port_LoweredStripInView(const NNSG3dResMdl *model, const VecFx32 *position, int side)
++{
++    const NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo((NNSG3dResMdl *)model);
++    VecFx32 scale = { FX32_ONE, FX32_ONE, FX32_ONE };
++    MtxFx33 rotationMatrix = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++    int across = PORT_LOWERED_STRIP + 1;
++    VecFx32 corner = {
++        position->x - (MAP_TILES_COUNT_X / 2) * MAP_OBJECT_TILE_SIZE,
++        position->y + FX_Mul((fx32)info->boxY, info->boxPosScale),
++        position->z - (MAP_TILES_COUNT_Z / 2) * MAP_OBJECT_TILE_SIZE,
++    };
++    fx32 width = MAP_TILES_COUNT_X * MAP_OBJECT_TILE_SIZE, depth = MAP_TILES_COUNT_Z * MAP_OBJECT_TILE_SIZE;
++    GFXTestBox box;
++
++    switch (side) {
++    case PORT_SIDE_NORTH:
++        corner.z -= MAP_OBJECT_TILE_SIZE;
++        depth = across * MAP_OBJECT_TILE_SIZE;
++        break;
++    case PORT_SIDE_SOUTH:
++        corner.z += (MAP_TILES_COUNT_Z - PORT_LOWERED_STRIP) * MAP_OBJECT_TILE_SIZE;
++        depth = across * MAP_OBJECT_TILE_SIZE;
++        break;
++    case PORT_SIDE_WEST:
++        corner.x -= MAP_OBJECT_TILE_SIZE;
++        width = across * MAP_OBJECT_TILE_SIZE;
++        break;
++    default:
++        corner.x += (MAP_TILES_COUNT_X - PORT_LOWERED_STRIP) * MAP_OBJECT_TILE_SIZE;
++        width = across * MAP_OBJECT_TILE_SIZE;
++        break;
++    }
++
++    NNS_G3dGlbSetBaseRot(&rotationMatrix);
++    NNS_G3dGlbSetBaseScale(&scale);
++    GFXBoxTest_MakeBox(width, FX_Mul((fx32)info->boxH, info->boxPosScale), depth, &box);
++    return GFXBoxTest_IsBoxAtPositionInView(&corner, &box);
++}
++
+ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *landDataMan)
+ {
+     LoadedMap *loadedMap = landDataMan->loadedMaps[index];
+@@ -1817,6 +1888,24 @@ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *
+     position.x += landDataMan->offset.x;
+     position.z += landDataMan->offset.z;
+ 
++    // (a big one: the sides with a lower map beside it on the matrix, loaded
++    // or not, as the whole copies covered them all)
++    int sides = 0;
++
++    if (loadedMap->mapModelFile != NULL && loadedMap->mapModelFile->fileSize > PORT_LOWERED_WHOLE_BYTES) {
++        int x = mapMatrixIndex % width, z = mapMatrixIndex / width, height = landDataMan->mapMatrixHeight;
++        static const s8 sSideDx[PORT_SIDES] = { 0, 0, -1, 1 }, sSideDz[PORT_SIDES] = { -1, 1, 0, 0 };
++
++        for (int side = 0; side < PORT_SIDES; side++) {
++            int nx = x + sSideDx[side], nz = z + sSideDz[side];
++
++            if (nx >= 0 && nx < width && nz >= 0 && nz < height
++                && MapMatrix_GetAltitudeAtCoords(landDataMan->mapMatrix, matrixID, nx, nz, matrixWidth) < altitude) {
++                sides |= 1 << side;
++            }
++        }
++    }
++
+     // (at heights 2 tiles apart, from the lowest beside it up: the map
+     // beside has its own hills at its edge, and seen from the side the
+     // slit is between this map and those; each copy shows below the one
+@@ -1824,7 +1913,45 @@ static void Port_RenderSceneryMapLowered(const u8 index, const LandDataManager *
+     for (int a = lowest; a < altitude; a += 4) {
+         position.y = a * (MAP_OBJECT_TILE_SIZE / 2) + landDataMan->offset.y - (a == stripsBelow ? PORT_NORTH_SCENERY_DROP : 0);
+ 
+-        if (GFXBoxTest_IsModelInView(loadedMap->mapRenderObj.resMdl, &position, &rotationMatrix, &scale)) {
++        if (!GFXBoxTest_IsModelInView(loadedMap->mapRenderObj.resMdl, &position, &rotationMatrix, &scale)) {
++            continue;
++        }
++
++        NNSG3dResMdl *own = loadedMap->mapRenderObj.resMdl;
++        int seen = 0;
++
++        for (int side = 0; side < PORT_SIDES; side++) {
++            if ((sides & (1 << side)) && Port_LoweredStripInView(own, &position, side)) {
++                seen |= 1 << side;
++            }
++        }
++
++        if (sides != 0 && seen == 0) {
++            continue; // (none of its strips in the view: nothing of it to see)
++        }
++
++        // (whole as before if those strips are as many lists as all of it)
++        BOOL whole = sides == 0 || !Port_LoweredStripsCheaper(landDataMan, index, seen);
++
++        for (int side = 0; side < PORT_SIDES && !whole; side++) {
++            if (!(seen & (1 << side))) {
++                continue;
++            }
++
++            NNSG3dResMdl *strip = Port_LoweredStripOf(landDataMan, index, side);
++
++            if (strip == NULL) {
++                whole = TRUE; // (couldn't be cut: drawn whole, as before)
++                break;
++            }
++
++            loadedMap->mapRenderObj.resMdl = strip;
++            Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &position, &rotationMatrix, &scale);
++            NNS_G3dGeFlushBuffer();
++            loadedMap->mapRenderObj.resMdl = own;
++        }
++
++        if (whole) {
+             Easy3D_DrawRenderObj(&loadedMap->mapRenderObj, &position, &rotationMatrix, &scale);
+         }
+     }
+@@ -1839,6 +1966,7 @@ static void Port_RenderSceneryMapsLowered(const LandDataManager *landDataMan)
+         return;
+     }
+ 
++    sPortLoweredScene++;
+ 
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         if (landDataMan->loadedMaps[i]->mapMatrixIndex != INVALID_MAP_MATRIX_INDEX && landDataMan->loadedMaps[i]->valid == TRUE) {
+@@ -2197,6 +2325,227 @@ static u8 *Port_CopyWithCuts(const NNSG3dResFileHeader *file, void **cuts, const
+     return block;
+ }
+ 
++// A big scenery map's strips by its four sides (Port_RenderSceneryMapLowered),
++// cut from the loaded map's model (the game done reading it) a side a
++// scene, the copies drawn whole meanwhile: cut at once, a forest's lists
++// four times over would be a stutter, as the mirrored copies made at once
++// were on the Cycling Road (4 to 6 ms). Kept for up to
++// PORT_LOWERED_COPIES maps, the one asked for longest
++// ago let go first: the game moves the maps it keeps to other quadrants
++// as the player crosses a map's middle.
++#define PORT_LOWERED_COPIES 6
++
++typedef struct PortLoweredCopy {
++    int mapMatrixIndex, matrixID, landDataID; // (whose)
++    BOOL failed;                              // (couldn't be cut: not tried again)
++    u32 used;                                 // (sPortLoweredCalls when last asked for)
++    int numShp, sidesCut;
++    void **cuts;                              // [side * numShp + shape] while being cut
++    u8 *block;                                // the model file copied, then the cut lists
++    NNSG3dResMdl *model;
++    u32 *cutOfs, *cutSize;                    // [side * numShp + shape]
++    u32 sideBytes[PORT_SIDES], wholeBytes;    // (each side's lists, and the model's own)
++} PortLoweredCopy;
++
++static PortLoweredCopy sPortLoweredCopies[PORT_LOWERED_COPIES];
++static u32 sPortLoweredCalls;
++
++static void Port_FreeLoweredCopy(PortLoweredCopy *copy)
++{
++    for (int i = 0; copy->cuts != NULL && i < PORT_SIDES * copy->numShp; i++) {
++        free(copy->cuts[i]);
++    }
++
++    free(copy->cuts);
++    free(copy->block);
++    free(copy->cutOfs);
++    free(copy->cutSize);
++    memset(copy, 0, sizeof(*copy));
++}
++
++static void Port_FreeLoweredCopies(void)
++{
++    for (int i = 0; i < PORT_LOWERED_COPIES; i++) {
++        Port_FreeLoweredCopy(&sPortLoweredCopies[i]);
++    }
++}
++
++static BOOL Port_LoweredCopyIs(const PortLoweredCopy *copy, int mapMatrixIndex, int matrixID, int landDataID)
++{
++    return (copy->block != NULL || copy->cuts != NULL || copy->failed) && copy->mapMatrixIndex == mapMatrixIndex
++        && copy->matrixID == matrixID && copy->landDataID == landDataID;
++}
++
++// The loaded map's model with its shapes' lists those of its strip by that
++// side: NULL while it isn't cut yet (a side a scene) or if it can't be.
++static NNSG3dResMdl *Port_LoweredStripOf(const LandDataManager *landDataMan, u8 index, int side)
++{
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++    int landDataID = MapMatrix_GetLandDataIDByIndex(loadedMap->mapMatrixIndex, landDataMan->mapMatrix);
++    PortLoweredCopy *copy = NULL;
++
++    if (loadedMap->valid != TRUE || loadedMap->mapModelFile == NULL) {
++        return NULL;
++    }
++
++    sPortLoweredCalls++;
++
++    for (int k = 0; k < PORT_LOWERED_COPIES && copy == NULL; k++) {
++        if (Port_LoweredCopyIs(&sPortLoweredCopies[k], loadedMap->mapMatrixIndex, matrixID, landDataID)) {
++            copy = &sPortLoweredCopies[k];
++        }
++    }
++
++    NNSG3dResMdl *model = loadedMap->mapRenderObj.resMdl;
++    NNSG3dResShp *shapes = NNS_G3dGetShp(model);
++    NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(model);
++
++    if (copy == NULL) {
++        // (a free place, or the one asked for longest ago)
++        for (int k = 0; k < PORT_LOWERED_COPIES; k++) {
++            PortLoweredCopy *c = &sPortLoweredCopies[k];
++
++            if (c->block == NULL && c->cuts == NULL && !c->failed) {
++                copy = c;
++                break;
++            }
++
++            if (copy == NULL || (int)(c->used - copy->used) < 0) {
++                copy = c;
++            }
++        }
++
++        Port_FreeLoweredCopy(copy);
++        copy->mapMatrixIndex = loadedMap->mapMatrixIndex;
++        copy->matrixID = matrixID;
++        copy->landDataID = landDataID;
++        copy->numShp = shapes->dict.numEntry;
++        copy->cuts = copy->numShp > 0 ? calloc(PORT_SIDES * copy->numShp, sizeof(void *)) : NULL;
++        copy->cutSize = copy->numShp > 0 ? calloc(PORT_SIDES * copy->numShp, sizeof(u32)) : NULL;
++        copy->cutOfs = copy->numShp > 0 ? calloc(PORT_SIDES * copy->numShp, sizeof(u32)) : NULL;
++
++        if (copy->cuts == NULL || copy->cutSize == NULL || copy->cutOfs == NULL || info->posScale <= 0) {
++            Port_FreeLoweredCopy(copy);
++            copy->mapMatrixIndex = loadedMap->mapMatrixIndex;
++            copy->matrixID = matrixID;
++            copy->landDataID = landDataID;
++            copy->failed = TRUE;
++        }
++    }
++
++    copy->used = sPortLoweredCalls;
++
++    if (copy->failed) {
++        return NULL;
++    }
++
++    if (copy->block == NULL) {
++        if (sPortLoweredCutScene == sPortLoweredScene || copy->numShp != shapes->dict.numEntry) {
++            return NULL; // (a side already cut in this scene: the next one in the next)
++        }
++
++        sPortLoweredCutScene = sPortLoweredScene;
++
++        // (the strip in the lists' own coordinates: the map's middle at 0,
++        // half its width either side; a tile more past the border, as the
++        // south strips of Port_EdgeCopyOf)
++        int cut = copy->sidesCut;
++        s32 tile = (s32)(((s64)MAP_OBJECT_TILE_SIZE << FX32_SHIFT) / info->posScale);
++        s32 half = tile * MAP_TILES_COUNT_X / 2;
++        int axis = cut == PORT_SIDE_NORTH || cut == PORT_SIDE_SOUTH ? 2 : 0;
++        s32 lo = cut == PORT_SIDE_NORTH || cut == PORT_SIDE_WEST ? -half - tile : half - PORT_LOWERED_STRIP * tile;
++        s32 hi = cut == PORT_SIDE_NORTH || cut == PORT_SIDE_WEST ? -half + PORT_LOWERED_STRIP * tile : half + tile;
++
++        for (int i = 0; i < copy->numShp && !copy->failed; i++) {
++            NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, i);
++            const void *list = NNS_G3dGetShpDLPtr(shp);
++            u32 size = NNS_G3dGetShpDLSize(shp), room = size + size / 2 + 64;
++            int k = cut * copy->numShp + i;
++
++            copy->cuts[k] = malloc(room);
++            copy->cutSize[k] = copy->cuts[k] == NULL ? 0 : NitroPort_Gx3dTrimList(list, size, copy->cuts[k], room, axis, lo, hi);
++            copy->failed = copy->cutSize[k] == 0; // (a list that can't be cut: not done)
++        }
++
++        if (!copy->failed && ++copy->sidesCut == PORT_SIDES) {
++            copy->block = Port_CopyWithCuts(loadedMap->mapModelFile, copy->cuts, copy->cutSize, copy->cutOfs, PORT_SIDES * copy->numShp);
++            copy->failed = copy->block == NULL;
++
++            if (!copy->failed) {
++                copy->model = NNS_G3dGetMdlByIdx(NNS_G3dGetMdlSet((NNSG3dResFileHeader *)copy->block), 0);
++
++                for (int i = 0; i < copy->numShp; i++) {
++                    copy->wholeBytes += NNS_G3dGetShpDLSize(NNS_G3dGetShpDataByIdx(shapes, i));
++
++                    for (int side = 0; side < PORT_SIDES; side++) {
++                        copy->sideBytes[side] += copy->cutSize[side * copy->numShp + i];
++                    }
++                }
++            }
++
++            for (int i = 0; i < PORT_SIDES * copy->numShp; i++) {
++                free(copy->cuts[i]);
++            }
++
++            free(copy->cuts);
++            copy->cuts = NULL;
++        }
++
++        if (copy->failed) {
++            int keep[3] = { copy->mapMatrixIndex, copy->matrixID, copy->landDataID };
++
++            Port_FreeLoweredCopy(copy);
++            copy->mapMatrixIndex = keep[0];
++            copy->matrixID = keep[1];
++            copy->landDataID = keep[2];
++            copy->failed = TRUE;
++            copy->used = sPortLoweredCalls;
++        }
++
++        return NULL;
++    }
++
++    NNSG3dResShp *cutShapes = NNS_G3dGetShp(copy->model);
++
++    for (int i = 0; i < copy->numShp; i++) {
++        NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(cutShapes, i);
++        int k = side * copy->numShp + i;
++
++        shp->ofsDL = (u32)(copy->block + copy->cutOfs[k] - (u8 *)shp);
++        shp->sizeDL = copy->cutSize[k];
++    }
++
++    return copy->model;
++}
++
++// Whether the loaded map's strips by those sides (a mask) are fewer lists
++// than its whole model: TRUE too while they aren't cut yet (or can't be:
++// Port_LoweredStripOf then has it drawn whole).
++static BOOL Port_LoweredStripsCheaper(const LandDataManager *landDataMan, u8 index, int sides)
++{
++    LoadedMap *loadedMap = landDataMan->loadedMaps[index];
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++    int landDataID = MapMatrix_GetLandDataIDByIndex(loadedMap->mapMatrixIndex, landDataMan->mapMatrix);
++
++    for (int k = 0; k < PORT_LOWERED_COPIES; k++) {
++        const PortLoweredCopy *copy = &sPortLoweredCopies[k];
++        u32 bytes = 0;
++
++        if (copy->block == NULL || !Port_LoweredCopyIs(copy, loadedMap->mapMatrixIndex, matrixID, landDataID)) {
++            continue;
++        }
++
++        for (int side = 0; side < PORT_SIDES; side++) {
++            bytes += (sides & (1 << side)) ? copy->sideBytes[side] : 0;
++        }
++
++        return bytes < copy->wholeBytes;
++    }
++
++    return TRUE;
++}
++
+ static void Port_FreeMirrorCopies(void)
+ {
+     for (int i = 0; i < PORT_MIRROR_COPIES; i++) {
+@@ -4563,6 +4912,7 @@ void LandDataManager_End(LandDataManager *landDataMan)
+ {
+ #ifdef SDK_PORT_3DS
+     Port_FreeMirrorCopies();
++    Port_FreeLoweredCopies();
+     Port_FreeEdgeCopies();
+     Port_FreeBesideMaps();
+     Port_FreeOtherAreas();

@@ -843,10 +843,13 @@ static void begin_polygon(void)
 }
 /* POLYGON_ATTR bit 12 clear: a polygon that crosses the far plane isn't
  * drawn at all (rather than clipped there). Outcode bit 5 is the far
- * plane (w - z < 0). */
+ * plane (w - z < 0). In the wider or taller view it's clipped there
+ * instead: that view sees past the DS's edges, where a big ground polygon
+ * reaching past the far plane would leave a black hole (Route 211 West's
+ * river, from 378,532). */
 static int far_hidden(unsigned outside)
 {
-    if((outside & 0x20u) && !(s.attr & (1u<<12))){sDiag.clipped++;return 1;}
+    if((outside & 0x20u) && !(s.attr & (1u<<12)) && s.wideNum==s.wideDen && s.tallNum==s.tallDen){sDiag.clipped++;return 1;}
     return 0;
 }
 /* Nothing of the polygon is drawn: all its vertices outside the same clip
@@ -1247,7 +1250,21 @@ static int match_fits(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *
     if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)return 0;
     return poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,MATCH_SURE)<MATCH_SURE;
 }
-static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *C,const RecPos *CP,unsigned n,int32_t *out)
+/* Whether two records are the same polygon of a model, by its texture's
+ * place on it: every corner's texture coordinates the same (a model drawn
+ * again, its parts in its order: the same; another part of its kind,
+ * another face of a ball, mostly not; a map's tiles of one kind often all
+ * the same, telling nothing). */
+static int same_st(const PolyRecord *a,const PolyRecord *b)
+{
+    unsigned k;
+    if(a->count!=b->count)return 0;
+    for(k=0;k<a->count;k++)if(a->st[k][0]!=b->st[k][0] || a->st[k][1]!=b->st[k][1])return 0;
+    return 1;
+}
+#define ORDER_SAME_FAR 2.0f   /* (match_records: the order's pair, the same polygon, if no further than this many times near) */
+static unsigned match_records(const RecTag *P,const RecPos *PP,const PolyRecord *PR,unsigned m,
+                              const RecTag *C,const RecPos *CP,const PolyRecord *CR,unsigned n,int32_t *out)
 {
     unsigned i=0,j=0,matched=0,moves=0;
     float dx=0.0f,dy=0.0f,near;
@@ -1390,6 +1407,19 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const 
             float d=poly_distance(&PP[order],&CP[j],C[j].count,dx,dy,near);
             if(d<near && (best<0 || d<=bestD+ORDER_SLACK)){best=order;bestD=d;}
         }
+        /* The order's pair when it's the same polygon (same_st) and the
+         * nearest of its kind isn't: a model moving or turning fast, its
+         * parts of one kind each nearer another's place in the scene
+         * before than its own (the starters' Poké Balls jumping out of
+         * the briefcase, spinning, as the camera closed in: their faces
+         * paired with each other's, and with the case's, and the
+         * in-between scenes showed grey specks on the balls and the case's
+         * handle torn, a video of 2026-11-06). As far as twice near. */
+        if(order>=0 && order!=best && P[order].onScreen && P[order].count==C[j].count &&
+           same_st(&PR[order],&CR[j]) && (best<0 || !same_st(&PR[best],&CR[j]))){
+            float d=poly_distance(&PP[order],&CP[j],C[j].count,dx,dy,ORDER_SAME_FAR*near);
+            if(d<ORDER_SAME_FAR*near){best=order;bestD=d;}
+        }
         /* What the camera follows stays where it was on the screen as the
          * scene moves: the player, and one who follows him. The order's
          * pair where it was (a pixel at most), when that fits better than
@@ -1430,6 +1460,13 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,unsigned m,const 
         if(o<0){sOwner[q]=(int32_t)j;continue;}
         dj=fminf(poly_distance(&PP[q],&CP[j],C[j].count,dx,dy,1e9f),poly_distance(&PP[q],&CP[j],C[j].count,0.0f,0.0f,1e9f));
         doo=fminf(poly_distance(&PP[q],&CP[o],C[o].count,dx,dy,1e9f),poly_distance(&PP[q],&CP[o],C[o].count,0.0f,0.0f,1e9f));
+        {
+            /* (the one that's the same polygon as it, same_st, if only one
+             * is: as above; two the same, two copies of a model, by where
+             * they are) */
+            int sj=same_st(&PR[q],&CR[j]),so=same_st(&PR[q],&CR[o]);
+            if(sj!=so){dj=sj?0.0f:1.0f;doo=so?0.0f:1.0f;}
+        }
         if(dj<doo || (dj==doo && sOrderOut[j]==q && sOrderOut[o]!=q)){
             out[o]=-1;sOwner[q]=(int32_t)j;
         }else{
@@ -1655,9 +1692,14 @@ static void static_rematch(const PolyRecord *P,unsigned m,const PolyRecord *C,un
             lo=center-MATCH_WINDOW;hi=center+MATCH_WINDOW;
             if(lo<0)lo=0;
             if(hi>(int)m-1)hi=(int)m-1;
+            /* (its pair the order's and the same polygon, same_st: only
+             * another as much the same takes its place; a map's repeated
+             * rows, the same as each other, as before) */
+            int same=q>=0 && q==sOrderOut[j] && same_st(&P[q],&C[j]);
             for(k=lo;k<=hi;k++){
                 if(k==q || PT[k].sig!=CT[j].sig || !PT[k].onScreen || PT[k].count!=CT[j].count)continue;
                 if(fabsf(PT[k].px0-fx)+fabsf(PT[k].py0-fy)>STATIC_NEAR)continue;
+                if(same && !same_st(&P[k],&C[j]))continue;
                 e=static_misfit(&P[k],&C[j],mo);
                 if(e>=0.0f && (best<0 || e<bestE) && !STATIC_TAKEN(k,e)){best=k;bestE=e;}
             }
@@ -1700,7 +1742,7 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
     }
     {
         uint64_t t0=sOps.ticks?sOps.ticks(sOps.context):0;
-        sMidMatched=match_records(sTag[sRecBuild^1u],sPos[sRecBuild^1u],m,sTag[sRecBuild],sPos[sRecBuild],n,sMatch);
+        sMidMatched=match_records(sTag[sRecBuild^1u],sPos[sRecBuild^1u],P,m,sTag[sRecBuild],sPos[sRecBuild],C,n,sMatch);
         sClipMotionValid=sMidMatched*2u>=n && clip_motion(sTag[sRecBuild^1u],sTag[sRecBuild],n,sMatch,sClipMotion);
         if(sClipMotionValid){
             clip_motion_z(P,C,sTag[sRecBuild^1u],sTag[sRecBuild],n,sMatch,sClipMotion);
@@ -3491,17 +3533,14 @@ static int dl_group_kept(const DlGroup *grp,const int32_t lo[3],const int32_t hi
     }
     return 1;
 }
-static uint32_t dl_trim(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
-                        const int32_t lo[3],const int32_t hi[3],unsigned starts,unsigned outside)
+static uint32_t dl_trim_surveyed(const DlInfo *info,const uint32_t *w,void *dst,uint32_t dstBytes,
+                                 const int32_t lo[3],const int32_t hi[3],unsigned starts,unsigned outside,const uint8_t *keep,uint32_t nkeep)
 {
-    const uint32_t *w=src;
-    uint32_t n=bytes/4u,o,g=0;
-    DlInfo *info;
+    uint32_t o,g=0;
     DlWriter wr;
     DlOwed ow;
-    if((bytes&3u) || !dst)return 0;
-    info=dl_survey(w,n,1u);
-    if(!info)return 0;
+    int open=0;                    /* (with keep: a BEGIN_VTXS sent, its END not yet) */
+    if(!dst)return 0;
     memset(&wr,0,sizeof(wr));
     wr.out=dst;wr.cap=dstBytes/4u;
     memset(&ow,0,sizeof(ow));
@@ -3511,18 +3550,39 @@ static uint32_t dl_trim(const void *src,uint32_t bytes,void *dst,uint32_t dstByt
         while(g<info->ngroups && info->groups[g].begin<o)g++;
         if(g<info->ngroups && info->groups[g].begin==o){
             const DlGroup *grp=&info->groups[g];
-            if(!dl_group_kept(grp,lo,hi,starts,outside)){
+            if(keep ? (g>=nkeep || !keep[g]) : !dl_group_kept(grp,lo,hi,starts,outside)){
                 dl_owe(&ow,grp,info->xyz[grp->end-1u]);
                 o=grp->end;
                 g++;
                 continue;
             }
         }
+        if(keep && op==0x40u){
+            /* (groups chosen one by one: a BEGIN_VTXS whose commands are
+             * all in groups left out, left out with them, and an END_VTXS
+             * after nothing sent; the coordinates they leave owed sent only
+             * for a vertex relative to them, as its own) */
+            uint32_t e,h=g,at=o+1u;
+            int any=0;
+            for(e=o+1u;e<info->nops;e++){
+                unsigned q=info->ops[e]&255u;
+                if(q==0x40u || q==0x41u)break;
+            }
+            while(h<info->ngroups && info->groups[h].begin==at && info->groups[h].end<=e){
+                if(h<nkeep && keep[h])any=1;
+                at=info->groups[h].end;
+                h++;
+            }
+            if(at==e && !any){o++;continue;}
+        }
+        if(keep && op==0x41u && !open){o++;continue;}
         dl_pay_state(&wr,&ow);
         if(ow.coordOwed){
             if(op==0x40u || op==0x41u){
-                dl_vtx16(&wr,ow.xyz);              /* (a vertex alone: no polygon) */
-                ow.coordOwed=0;
+                if(!keep){
+                    dl_vtx16(&wr,ow.xyz);          /* (a vertex alone: no polygon) */
+                    ow.coordOwed=0;
+                }
             }else if(op>=0x23u && op<=0x28u){
                 ow.coordOwed=0;
                 if(op>=0x25u){
@@ -3532,13 +3592,30 @@ static uint32_t dl_trim(const void *src,uint32_t bytes,void *dst,uint32_t dstByt
                 }
             }
         }
+        if(op==0x40u)open=1;
+        else if(op==0x41u)open=0;
         dl_put(&wr,op,p);
         o++;
     }
-    dl_pay_state(&wr,&ow);
-    if(ow.coordOwed)dl_vtx16(&wr,ow.xyz);          /* (not reached: groups end before a BEGIN or END) */
-    dl_free(info);
+    if(!keep){
+        dl_pay_state(&wr,&ow);
+        if(ow.coordOwed)dl_vtx16(&wr,ow.xyz);      /* (not reached: groups end before a BEGIN or END) */
+    }else if(wr.n==0u && wr.cap>0u){
+        wr.out[wr.n++]=0u;                         /* (nothing kept: a word of NOPs) */
+    }
     return wr.full?0:wr.n*4u;
+}
+static uint32_t dl_trim(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
+                        const int32_t lo[3],const int32_t hi[3],unsigned starts,unsigned outside,const uint8_t *keep,uint32_t nkeep)
+{
+    DlInfo *info;
+    uint32_t r;
+    if((bytes&3u) || !dst)return 0;
+    info=dl_survey(src,bytes/4u,1u);
+    if(!info)return 0;
+    r=dl_trim_surveyed(info,src,dst,dstBytes,lo,hi,starts,outside,keep,nkeep);
+    dl_free(info);
+    return r;
 }
 uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
                                 int axis,int32_t lo,int32_t hi)
@@ -3546,13 +3623,327 @@ uint32_t NitroPort_Gx3dTrimList(const void *src,uint32_t bytes,void *dst,uint32_
     int32_t l[3]={INT32_MIN,INT32_MIN,INT32_MIN},h[3]={INT32_MAX,INT32_MAX,INT32_MAX};
     if(axis<0 || axis>2)return 0;
     l[axis]=lo;h[axis]=hi;
-    return dl_trim(src,bytes,dst,dstBytes,l,h,0u,0u);
+    return dl_trim(src,bytes,dst,dstBytes,l,h,0u,0u,NULL,0u);
+}
+struct NitroGx3dListSurvey {
+    const uint32_t *w;
+    DlInfo *info;
+};
+NitroGx3dListSurvey *NitroPort_Gx3dSurveyList(const void *src,uint32_t bytes)
+{
+    NitroGx3dListSurvey *sv;
+    if((bytes&3u) || !src)return NULL;
+    sv=malloc(sizeof(*sv));
+    if(!sv)return NULL;
+    sv->w=src;
+    sv->info=dl_survey(src,bytes/4u,1u);
+    if(!sv->info){free(sv);return NULL;}
+    return sv;
+}
+void NitroPort_Gx3dFreeSurvey(NitroGx3dListSurvey *sv)
+{
+    if(!sv)return;
+    dl_free(sv->info);
+    free(sv);
+}
+uint32_t NitroPort_Gx3dSurveyGroups(const NitroGx3dListSurvey *sv,int32_t (*box)[6],uint8_t *slopes,uint32_t max)
+{
+    const DlInfo *info;
+    uint32_t g,n,q;
+    int a;
+    if(!sv)return 0;
+    info=sv->info;
+    n=info->ngroups;
+    for(g=0;g<n && g<max;g++){
+        const DlGroup *grp=&info->groups[g];
+        for(a=0;a<3;a++){box[g][a]=grp->lo[a];box[g][3+a]=grp->hi[a];}
+        if(slopes){
+            /* (along x, then z: its vertices at the lowest and at the
+             * highest each at one height, the two different) */
+            uint8_t sl=0;
+            for(a=0;a<3;a+=2){
+                int32_t y0=0,y1=0;
+                int have0=0,have1=0,one=1;
+                if(grp->lo[a]==grp->hi[a])continue;
+                for(q=grp->begin;q<grp->end && one;q++){
+                    unsigned c=info->ops[q]&255u;
+                    const int32_t *v=info->xyz[q];
+                    if(c<0x23u || c>0x28u)continue;
+                    if(v[a]==grp->lo[a]){if(!have0){y0=v[1];have0=1;}else if(v[1]!=y0)one=0;}
+                    else if(v[a]==grp->hi[a]){if(!have1){y1=v[1];have1=1;}else if(v[1]!=y1)one=0;}
+                }
+                if(one && have0 && have1 && y0!=y1)sl|=(uint8_t)(a==0?1u:2u);
+            }
+            slopes[g]=sl;
+        }
+    }
+    return n;
+}
+int NitroPort_Gx3dSurveyAllGrouped(const NitroGx3dListSurvey *sv)
+{
+    uint32_t o,g,vertices=0,grouped=0;
+    if(!sv)return 0;
+    for(o=0;o<sv->info->nops;o++){
+        unsigned op=sv->info->ops[o]&255u;
+        if(op>=0x23u && op<=0x28u)vertices++;
+    }
+    for(g=0;g<sv->info->ngroups;g++)grouped+=sv->info->groups[g].vertices;
+    return vertices==grouped;
+}
+/* (a list sent twice in a row drawing the same twice: TEXCOORD, NORMAL and
+ * COLOR each either not in it or set before its first vertex) */
+static int dl_repeatable(const uint32_t *w,uint32_t n)
+{
+    uint32_t i=0,k;
+    unsigned set=0,seen=0;
+    int vertex=0;
+    while(i<n){
+        uint32_t word=w[i++],params=i;
+        for(k=0;k<4;k++){
+            unsigned op=(word>>(k*8))&255u,bit;
+            if(!op)continue;
+            params+=sParamCount[op];
+            if(op>=0x23u && op<=0x28u){vertex=1;continue;}
+            if(op<0x20u || op>0x22u)continue;
+            bit=1u<<(op-0x20u);
+            if(!vertex)set|=bit;
+            else if(!(set&bit))return 0;
+            seen|=bit;
+        }
+        i=params;
+    }
+    (void)seen;
+    return 1;
+}
+uint32_t NitroPort_Gx3dSurveyTrim(const NitroGx3dListSurvey *sv,void *dst,uint32_t dstBytes,const uint8_t *keep,uint32_t nkeep,int *repeatable)
+{
+    int32_t l[3]={INT32_MIN,INT32_MIN,INT32_MIN},h[3]={INT32_MAX,INT32_MAX,INT32_MAX};
+    uint32_t r;
+    if(!sv || !keep)return 0;
+    r=dl_trim_surveyed(sv->info,sv->w,dst,dstBytes,l,h,0u,0u,keep,nkeep);
+    if(repeatable)*repeatable=r?dl_repeatable(dst,r/4u):0;
+    return r;
+}
+uint32_t NitroPort_Gx3dSurveyRuns(const NitroGx3dListSurvey *sv,const uint8_t *mark,uint32_t nmark,
+                                  void *dst,uint32_t dstBytes,uint32_t *sizes,uint8_t *runMark,uint32_t maxRuns)
+{
+    const DlInfo *info;
+    uint32_t o,g,runs=0,at=0,begin=0;
+    uint32_t value[3]={0,0,0},when[3]={0,0,0};  /* (COLOR, NORMAL, TEXCOORD: last set, and at which command, +1) */
+    if(!sv || !mark || !dst || !sizes || !runMark)return 0;
+    info=sv->info;
+    if(!info->ngroups || nmark<info->ngroups || !NitroPort_Gx3dSurveyAllGrouped(sv))return 0;
+    for(o=0;o<info->nops;o++){
+        unsigned op=info->ops[o]&255u;
+        if(!(op>=0x20u && op<=0x28u) && op!=0x40u && op!=0x41u)return 0;
+    }
+    for(g=0,o=0;g<info->ngroups;){
+        const DlGroup *first=&info->groups[g];
+        uint32_t last=g,k,s;
+        DlWriter wr;
+        unsigned order[3]={0,1,2};
+        /* (its groups: up to the next with another mark) */
+        while(last+1u<info->ngroups && mark[last+1u]==mark[g])last++;
+        if(runs>=maxRuns)return 0;
+        /* (the state set before it, and the BEGIN_VTXS it starts in) */
+        for(;o<first->begin;o++){
+            unsigned op=info->ops[o]&255u;
+            if(op>=0x20u && op<=0x22u){value[op-0x20u]=sv->w[info->ops[o]>>8];when[op-0x20u]=o+1u;}
+            else if(op==0x40u)begin=o;
+        }
+        memset(&wr,0,sizeof(wr));
+        wr.out=(uint32_t *)((uint8_t *)dst+at);
+        wr.cap=(dstBytes-at)/4u;
+        /* (after its BEGIN_VTXS: a NORMAL's colour is worked out with the
+         * lights the polygon attributes give at the BEGIN before it, and
+         * before this one the shape's own aren't yet) */
+        dl_put(&wr,0x40u,&sv->w[info->ops[begin]>>8]);
+        for(k=0;k<3;k++)for(s=k+1u;s<3;s++)if(when[order[s]]<when[order[k]]){unsigned t=order[k];order[k]=order[s];order[s]=t;}
+        for(k=0;k<3;k++)if(when[order[k]])dl_put(&wr,0x20u+order[k],&value[order[k]]);
+        /* (its commands, the first vertex its own coordinates) */
+        {
+            int vertex=0;
+            for(;o<info->groups[last].end;o++){
+                unsigned op=info->ops[o]&255u;
+                const uint32_t *p=&sv->w[info->ops[o]>>8];
+                if(op>=0x20u && op<=0x22u){value[op-0x20u]=p[0];when[op-0x20u]=o+1u;}
+                else if(op==0x40u)begin=o;
+                if(op>=0x23u && op<=0x28u && !vertex){
+                    vertex=1;
+                    if(op>=0x25u){dl_vtx16(&wr,info->xyz[o]);continue;}
+                }
+                dl_put(&wr,op,p);
+            }
+        }
+        dl_put(&wr,0x41u,NULL);
+        if(wr.full)return 0;
+        sizes[runs]=wr.n*4u;
+        runMark[runs]=mark[g];
+        at+=wr.n*4u;
+        runs++;
+        g=last+1u;
+    }
+    /* (and what it leaves set, after its last vertex too: what's sent after
+     * it takes that, whichever runs were sent) */
+    for(;o<info->nops;o++){
+        unsigned op=info->ops[o]&255u;
+        if(op>=0x20u && op<=0x22u){value[op-0x20u]=sv->w[info->ops[o]>>8];when[op-0x20u]=o+1u;}
+    }
+    if(when[0] || when[1] || when[2]){
+        DlWriter wr;
+        unsigned order[3]={0,1,2},k,s;
+        if(runs>=maxRuns)return 0;
+        memset(&wr,0,sizeof(wr));
+        wr.out=(uint32_t *)((uint8_t *)dst+at);
+        wr.cap=(dstBytes-at)/4u;
+        /* (in a BEGIN_VTXS of its own, no vertex: its NORMAL lit with the
+         * shape's lights, whether or not any of its runs were sent) */
+        dl_put(&wr,0x40u,&sv->w[info->ops[begin]>>8]);
+        for(k=0;k<3;k++)for(s=k+1u;s<3;s++)if(when[order[s]]<when[order[k]]){unsigned t=order[k];order[k]=order[s];order[s]=t;}
+        for(k=0;k<3;k++)if(when[order[k]])dl_put(&wr,0x20u+order[k],&value[order[k]]);
+        dl_put(&wr,0x41u,NULL);
+        if(wr.full)return 0;
+        sizes[runs]=wr.n*4u;
+        runMark[runs]=0xFFu;
+        runs++;
+    }
+    return runs;
+}
+uint32_t NitroPort_Gx3dSurveyMoved(const NitroGx3dListSurvey *sv,void *dst,uint32_t dstBytes,const uint8_t *keep,uint32_t nkeep,
+                                   int32_t originX,int32_t num,int32_t den,int32_t dx,int32_t dy,int32_t dz)
+{
+    uint32_t n,o,room;
+    uint32_t *tmp;
+    DlInfo *info;
+    DlWriter wr;
+    uint32_t held[3]={0,0,0},heldWhen[3]={0,0,0};
+    unsigned k,s;
+    int inside=0;
+    if(!sv || !keep || !dst || den<=0)return 0;
+    /* (the groups kept, as a trim has them: every vertex's coordinates
+     * known from the list itself) */
+    room=sv->info->nops*3u+16u;
+    tmp=malloc(room*4u);
+    if(!tmp)return 0;
+    n=dl_trim_surveyed(sv->info,sv->w,tmp,room*4u,NULL,NULL,0u,0u,keep,nkeep);
+    info=n?dl_survey(tmp,n/4u,1u):NULL;
+    if(!info){free(tmp);return 0;}
+    memset(&wr,0,sizeof(wr));
+    wr.out=dst;wr.cap=dstBytes/4u;
+    for(o=0;o<info->nops && !wr.full;o++){
+        unsigned op=info->ops[o]&255u;
+        const uint32_t *p=&tmp[info->ops[o]>>8];
+        if(op>=0x23u && op<=0x28u){
+            int32_t xyz[3];
+            int64_t x=(int64_t)info->xyz[o][0]-originX;
+            xyz[0]=(int32_t)(originX+(x*num+(x>=0?den/2:-den/2))/den+dx);
+            xyz[1]=info->xyz[o][1]+dy;
+            xyz[2]=info->xyz[o][2]+dz;
+            if(!dl_s16(xyz)){dl_free(info);free(tmp);return 0;}
+            dl_vtx16(&wr,xyz);
+        }else if(op>=0x20u && op<=0x22u && !inside){
+            /* (outside a BEGIN_VTXS: sent after the next one, a NORMAL lit
+             * with the polygon's own lights) */
+            held[op-0x20u]=p[0];
+            heldWhen[op-0x20u]=o+1u;
+        }else{
+            dl_put(&wr,op,p);
+            if(op==0x40u){
+                unsigned order[3]={0,1,2};
+                inside=1;
+                for(k=0;k<3;k++)for(s=k+1u;s<3;s++)if(heldWhen[order[s]]<heldWhen[order[k]]){unsigned t=order[k];order[k]=order[s];order[s]=t;}
+                for(k=0;k<3;k++)if(heldWhen[order[k]])dl_put(&wr,0x20u+order[k],&held[order[k]]);
+                heldWhen[0]=heldWhen[1]=heldWhen[2]=0;
+            }else if(op==0x41u){
+                inside=0;
+            }
+        }
+    }
+    dl_free(info);
+    free(tmp);
+    if(wr.full || wr.n==0u)return 0;
+    return wr.n*4u;
+}
+/* A NORMAL's x and z turned a quarter clockwise (seen from above, north up:
+ * east to south), turn times; y kept. 10-bit signed fields. */
+static uint32_t dl_normal_turned(uint32_t n,unsigned turn)
+{
+    int32_t x=(int32_t)(n<<22)>>22,y=(int32_t)(n<<12)>>22,z=(int32_t)(n<<2)>>22;
+    unsigned t;
+    for(t=0;t<(turn&3u);t++){int32_t nx=-z;z=x;x=nx>511?511:nx;}
+    return (uint32_t)(x&0x3FF)|((uint32_t)(y&0x3FF)<<10)|((uint32_t)(z&0x3FF)<<20);
+}
+uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *sv,void *dst,uint32_t dstBytes,const uint8_t *keep,uint32_t nkeep,
+                                    unsigned turn,int32_t pivotX,int32_t pivotZ,int32_t dx,int32_t dy,int32_t dz)
+{
+    uint32_t n,o,room;
+    uint32_t *tmp;
+    DlInfo *info;
+    DlWriter wr;
+    uint32_t held[3]={0,0,0},heldWhen[3]={0,0,0};
+    unsigned k,s,t;
+    int inside=0;
+    if(!sv || !keep || !dst)return 0;
+    /* (the groups kept, as NitroPort_Gx3dSurveyMoved has them) */
+    room=sv->info->nops*3u+16u;
+    tmp=malloc(room*4u);
+    if(!tmp)return 0;
+    n=dl_trim_surveyed(sv->info,sv->w,tmp,room*4u,NULL,NULL,0u,0u,keep,nkeep);
+    info=n?dl_survey(tmp,n/4u,1u):NULL;
+    if(!info){free(tmp);return 0;}
+    memset(&wr,0,sizeof(wr));
+    wr.out=dst;wr.cap=dstBytes/4u;
+    for(o=0;o<info->nops && !wr.full;o++){
+        unsigned op=info->ops[o]&255u;
+        const uint32_t *p=&tmp[info->ops[o]>>8];
+        uint32_t normal;
+        if(op>=0x23u && op<=0x28u){
+            int32_t xyz[3];
+            int64_t x=(int64_t)info->xyz[o][0]-pivotX,z=(int64_t)info->xyz[o][2]-pivotZ;
+            for(t=0;t<(turn&3u);t++){int64_t nx=-z;z=x;x=nx;}
+            xyz[0]=(int32_t)(pivotX+x+dx);
+            xyz[1]=info->xyz[o][1]+dy;
+            xyz[2]=(int32_t)(pivotZ+z+dz);
+            if(!dl_s16(xyz)){dl_free(info);free(tmp);return 0;}
+            dl_vtx16(&wr,xyz);
+            continue;
+        }
+        /* (a NORMAL turned with its polygon) */
+        if(op==0x21u){normal=dl_normal_turned(p[0],turn);p=&normal;}
+        if(op>=0x20u && op<=0x22u && !inside){
+            held[op-0x20u]=p[0];
+            heldWhen[op-0x20u]=o+1u;
+        }else{
+            dl_put(&wr,op,p);
+            if(op==0x40u){
+                unsigned order[3]={0,1,2};
+                inside=1;
+                for(k=0;k<3;k++)for(s=k+1u;s<3;s++)if(heldWhen[order[s]]<heldWhen[order[k]]){unsigned u=order[k];order[k]=order[s];order[s]=u;}
+                for(k=0;k<3;k++)if(heldWhen[order[k]])dl_put(&wr,0x20u+order[k],&held[order[k]]);
+                heldWhen[0]=heldWhen[1]=heldWhen[2]=0;
+            }else if(op==0x41u){
+                inside=0;
+            }
+        }
+    }
+    dl_free(info);
+    free(tmp);
+    if(wr.full || wr.n==0u)return 0;
+    return wr.n*4u;
+}
+uint32_t NitroPort_Gx3dTranslateCommand(void *dst,uint32_t dstBytes,int32_t x,int32_t y,int32_t z)
+{
+    uint32_t *w=dst;
+    if(!dst || dstBytes<16u)return 0;
+    w[0]=0x1Cu;                                    /* (MTX_TRANS, then three NOPs) */
+    w[1]=(uint32_t)x;w[2]=(uint32_t)y;w[3]=(uint32_t)z;
+    return 16u;
 }
 uint32_t NitroPort_Gx3dTrimListRows(const void *src,uint32_t bytes,void *dst,uint32_t dstBytes,
                                     int32_t xlo,int32_t xhi,int32_t zlo,int32_t zhi,int inside)
 {
     int32_t l[3]={xlo,INT32_MIN,zlo},h[3]={xhi,INT32_MAX,zhi};
-    return dl_trim(src,bytes,dst,dstBytes,l,h,4u,inside?0u:4u);
+    return dl_trim(src,bytes,dst,dstBytes,l,h,4u,inside?0u:4u,NULL,0u);
 }
 void NitroPort_GxFifoWord(uint32_t word)
 {

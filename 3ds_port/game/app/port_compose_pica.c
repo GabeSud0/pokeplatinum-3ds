@@ -482,6 +482,10 @@ static u32 sSeenSerial, sSeenAt, sShownSerial, sDropped, sStereoFrames;
 static u32 sUnderFills;   /* (screens drawn with the picture behind as the clear) */
 static int sSeenValid, sLast3D;
 static u32 sHitchFrame, sHitchQuiet;
+/* (NitroPort_PicaProfilePrepare: asked for by a late frame, done with the
+ * next prepared scene) */
+static int sProfilePrepareWanted, sProfilePrepares;
+static u32 sProfileAskedAt;
 
 /* A drawn frame onto the LCD (the V-blank thread; under sPresentLock). */
 static void present(int s, int buf, int stereo)
@@ -920,14 +924,14 @@ static void free_all(void)
 }
 
 /* The layer textures of a screen: big enough for its widest picture at
- * scale texels a pixel. */
-static int alloc_sets(Screen *scr, int canvasW, int scale)
+ * scale texels a pixel, and for one leastW wide at a texel a pixel. */
+static int alloc_sets(Screen *scr, int canvasW, int scale, int leastW)
 {
     int i;
 
     scr->texScale = scale;
     scr->texW = 256;
-    while (scr->texW < canvasW * scale) {
+    while (scr->texW < canvasW * scale || scr->texW < leastW) {
         scr->texW *= 2;
     }
     scr->texH = 256;
@@ -965,8 +969,13 @@ void NitroPort_ComposeSetSmooth3d(int smooth3d)
 }
 
 /* Linear memory the 3D's textures want left once the display is set up
- * (port_gx3d_pica.c's cache: up to 8 MB; the field's in a few MB). */
-#define COMPOSE_TEXTURE_ROOM (4u * 1024u * 1024u)
+ * (port_gx3d_pica.c's cache: up to 8 MB, older ones let go when there's
+ * no memory; the field's in a few MB). 3 MB: with 4 the New 3DS's display
+ * was the smaller one from the place name sign's textures on (192 KB,
+ * 4069 KB left, 2026-11-04): the 2D a texel a pixel, and the
+ * Underground's lower screen black. Its logs before then: 4253 KB left
+ * after the title screen, 2571 at the fewest through a run. */
+#define COMPOSE_TEXTURE_ROOM (3u * 1024u * 1024u)
 
 static int compose_init(const ComposeConfig *config, int small);
 
@@ -1050,6 +1059,13 @@ static int compose_init(const ComposeConfig *config, int small)
         Screen *scr = &sScreens[s];
         int canvasW = s == 0 && config->wide ? CANVAS_MAX : DS_W;
         int scale = !small && (config->filter == COMPOSE_FILTER_SHARP || config->filter == COMPOSE_FILTER_SCALE2X) ? 2 : 1;
+        /* (the lower screen on the wider field: the Underground at the DS's
+         * pixel size, 320 x 240, a texel a pixel. At 2 texels a pixel the
+         * DS's 256 make the textures 512 wide already; at 1 they were 256,
+         * and the Underground's picture, too wide for them, was never
+         * shown: its lower screen black on the New 3DS once its display
+         * was the smaller one, 2026-11-05) */
+        int leastW = s == 1 && config->wide ? BOTTOM_W : 0;
 
         scr->width = s == 0 ? TOP_W : BOTTOM_W;
         scr->onLcd = -1;
@@ -1081,10 +1097,10 @@ static int compose_init(const ComposeConfig *config, int small)
                 memset(scr->lcd[k][i], 0, (size_t)scr->width * SCREEN_H * 2u);
             }
         }
-        if (!alloc_sets(scr, canvasW, scale)) {
+        if (!alloc_sets(scr, canvasW, scale, leastW)) {
             /* Not enough memory at 2 texels a pixel: 1 (bilinear). */
             free_sets(scr);
-            if (scale == 1 || !alloc_sets(scr, canvasW, 1)) {
+            if (scale == 1 || !alloc_sets(scr, canvasW, 1, leastW)) {
                 NitroPort_Log("[compose] not enough memory for the 2D layer textures (%lu KB free)",
                               (unsigned long)(linearSpaceFree() / 1024u));
                 goto fail;
@@ -1761,6 +1777,40 @@ static u32 widen5(u32 v)
     return (v << 3) | (v >> 2);
 }
 
+/* A picture's right column and bottom row repeated once past it in its
+ * tiled texture (a texel a pixel): drawn bilinear, its edges' pixels
+ * would be mixed with what an older picture left there, a taller one's
+ * rows (the lower screen as the tall menu, 248 rows, then the DS's 192):
+ * a line of another colour along the screen's bottom. The doubled ones
+ * have it already (NitroPort_Double2xTiled16Rows). */
+static void repeat_edges16(uint16_t *tex, int w, int h, int texW, int texH)
+{
+    int x, y;
+
+    for (y = 0; y < h && w < texW; y++) {
+        tex[NitroPort_TiledIndex((unsigned)w, (unsigned)y, (unsigned)texW)] =
+            tex[NitroPort_TiledIndex((unsigned)(w - 1), (unsigned)y, (unsigned)texW)];
+    }
+    for (x = 0; x <= w && x < texW && h < texH; x++) {
+        tex[NitroPort_TiledIndex((unsigned)x, (unsigned)h, (unsigned)texW)] =
+            tex[NitroPort_TiledIndex((unsigned)x, (unsigned)(h - 1), (unsigned)texW)];
+    }
+}
+
+static void repeat_edges32(uint32_t *tex, int w, int h, int texW, int texH)
+{
+    int x, y;
+
+    for (y = 0; y < h && w < texW; y++) {
+        tex[NitroPort_TiledIndex((unsigned)w, (unsigned)y, (unsigned)texW)] =
+            tex[NitroPort_TiledIndex((unsigned)(w - 1), (unsigned)y, (unsigned)texW)];
+    }
+    for (x = 0; x <= w && x < texW && h < texH; x++) {
+        tex[NitroPort_TiledIndex((unsigned)x, (unsigned)h, (unsigned)texW)] =
+            tex[NitroPort_TiledIndex((unsigned)x, (unsigned)(h - 1), (unsigned)texW)];
+    }
+}
+
 /* The picture into a set's textures whole: the filters other than sharp
  * (or a texel a pixel). */
 static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *set, int w, int h, int texScale)
@@ -1779,6 +1829,9 @@ static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *
         NitroPort_Scale2xTiled16(c16, w, h, set->under, scr->texW);
     } else {
         NitroPort_Tile16(c16, w, h, set->under, scr->texW);
+        if (texScale == 1) {
+            repeat_edges16(set->under, w, h, scr->texW, scr->texH);
+        }
     }
     GSPGPU_FlushDataCache(set->under, (u32)scr->texW * rowsUsed * 2u);
     if (l->has3d) {
@@ -1791,6 +1844,9 @@ static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *
                 NitroPort_Scale2xTiled32(c32, w, OVER_ROWS(l), set->over, scr->texW);
             } else {
                 NitroPort_Tile32(c32, w, OVER_ROWS(l), set->over, scr->texW);
+                if (texScale == 1) {
+                    repeat_edges32(set->over, w, OVER_ROWS(l), scr->texW, scr->texH);
+                }
             }
             GSPGPU_FlushDataCache(set->over, (u32)scr->texW * rowsUsed * 4u);
             set->overEmpty = 0;
@@ -1933,6 +1989,14 @@ int NitroPort_ComposePublish(int engine, int screen)
     int texScale = w * scr->texScale > scr->texW || h * scr->texScale + 8 > scr->texH ? 1 : scr->texScale;
 
     if (!sReady || w > CANVAS_MAX || w * texScale > scr->texW || w * h > WORK_PIXELS || h * texScale + 8 > scr->texH) {
+        /* (not shown: in the log, once a screen) */
+        static int told[2];
+
+        if (sReady && !told[screen ? 1 : 0]) {
+            told[screen ? 1 : 0] = 1;
+            NitroPort_Log("[compose] a %d x %d picture too big for the %s screen's textures (%d x %d): not shown", w, h,
+                          screen ? "lower" : "upper", scr->texW, scr->texH);
+        }
         return 1;
     }
     /* The oldest set not held by the compositor, not the newest, and not
@@ -4556,6 +4620,24 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             float bu0 = (hofs - (float)origin) / 256.0f, bu1 = bu0 + (float)canvasW / 256.0f;
             float bvTop = 1.0f - (vofs - (float)top) / 256.0f, bvBottom = bvTop - (float)rows / 256.0f;
             u32 a = (u32)(info->gpuBgEva * 255 / 16), b = (u32)((16 - info->gpuBgEvb) * 255 / 16);
+            PicaRect bgRect = pic;
+
+            if (info->stretch) {
+                /* (a battle's start on the wider field: the DS's picture
+                 * stretched over the screen, the 3D at its own size. The
+                 * weather's BG as the field had it, a pixel a pixel, the
+                 * DS's screen in the middle: stretched with the picture,
+                 * Eterna Forest's patches of light grew half as big again
+                 * as each battle started, 2026-11-05) */
+                bgRect.x0 = 0.0f;
+                bgRect.x1 = (float)scr->width;
+                bgRect.y0 = 0.0f;
+                bgRect.y1 = SCREEN_H;
+                bu0 = (hofs - (float)(scr->width - DS_W) / 2.0f) / 256.0f;
+                bu1 = bu0 + (float)scr->width / 256.0f;
+                bvTop = 1.0f - (vofs - (float)(SCREEN_H - DS_H) / 2.0f) / 256.0f;
+                bvBottom = bvTop - (float)SCREEN_H / 256.0f;
+            }
 
             if (sConfig.flipV) {
                 float t = bvTop;
@@ -4568,7 +4650,8 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             quad_combiner_modulate();
             C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
                            GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
-            quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, bu0, bvTop, bu1, bvBottom, (a << 24) | (a << 16) | (a << 8) | b);
+            quad(bgRect.x0, bgRect.y0, bgRect.x1, bgRect.y1, 0.0f, bu0, bvTop, bu1, bvBottom,
+                 (a << 24) | (a << 16) | (a << 8) | b);
             NitroPort_PicaProfileMark("the weather's BG");
         }
         /* 5. The layers in front, with their alpha (multiplied in). One BG
@@ -4988,6 +5071,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     uint32_t menuSerial = NitroPort_LowerMenuSerial(), mapSerial = NitroPort_LowerMenuMapSerial();
     unsigned copies;
     u32 vblanks, edgeClear = 0, startVBlank, texBefore, texAfter;
+    u64 drawTicksBefore, drawTicksAfter;
+    unsigned drawCallsBefore, drawCallsAfter;
     LayerSet *sets[2] = { NULL, NULL };
     LayerSet *panelUp = NULL;          /* (the upper screen's picture, in the menu's panel put together) */
     uint32_t runSerial = 0;
@@ -5272,11 +5357,19 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         sDrawTarget = (int32_t)(at - soonest) < 0 ? soonest : at;
     }
     NitroPort_PicaTextureStats(&texBefore, &texels, &texTicksBefore);
+    NitroPort_PicaDrawStats(&drawTicksBefore, &drawCallsBefore);
     /* (an in-between scene has its scene's serial: told apart) */
     if (scene != NULL && (!sScenePrepared || sceneSerial * 2u + (mid ? 1u : 0u) != sPreparedScene)) {
         prepareTicks = svcGetSystemTick();
         NitroPort_PicaPrepareScene(scene, NULL);
         prepareTicks = svcGetSystemTick() - prepareTicks;
+        /* (a heavy scene coming late: its preparing timed step by step,
+         * into the log, 3 times a session at most, 20 s apart) */
+        if (sProfilePrepareWanted && sProfilePrepares < 3 && scene->count >= 1000u) {
+            sProfilePrepareWanted = 0;
+            sProfilePrepares++;
+            NitroPort_PicaProfilePrepare(scene);
+        }
         sPreparedScene = sceneSerial * 2u + (mid ? 1u : 0u);
         sScenePrepared = 1;
         if (sConfig.stereo && sConfig.convergence <= 0.0f && !mid) {
@@ -5545,6 +5638,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         }
     }
     NitroPort_PicaTextureStats(&texAfter, &texels, &texTicksAfter);
+    NitroPort_PicaDrawStats(&drawTicksAfter, &drawCallsAfter);
     {
         /* A frame that took the display thread more than two V-blanks:
          * the scenes made meanwhile may never show (a jump). */
@@ -5619,19 +5713,30 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                 sLoweredRecently = 0;
                 /* Where the time went, for the log (one line every half
                  * second at most; the others counted in the next). */
+                if (sProfilePrepares < 3 && sFrames - sProfileAskedAt >= 1200u) {
+                    sProfileAskedAt = sFrames;
+                    sProfilePrepareWanted = 1;
+                }
                 if (sFrames - sHitchFrame >= 15u || sHitchFrame == 0u) {
                     const double ms = 1000.0 / SYSCLOCK_ARM11;
+                    u64 split[3];
+                    unsigned splitTris, splitBatches;
 
+                    NitroPort_PicaPrepareSplit(split, &splitTris, &splitBatches);
                     NitroPort_Log("[hitch] a 3D frame %d V-blank%s late (lag now %d): made at V-blank %lu, "
                                   "reached the display thread %lu V-blanks later, drawn from %lu after; %.1f ms "
-                                  "preparing, %.1f ms building (%lu textures converted: %.1f ms), %.1f ms GPU (the frame "
-                                  "before)%s%s",
+                                  "preparing (%.1f the triangles into batches, %.1f their depths, %.1f the cache; "
+                                  "%u triangles, %u batches), %.1f ms building (%lu textures converted: %.1f ms; "
+                                  "the scene's batches drawn %u times: %.1f ms), "
+                                  "%.1f ms GPU (the frame before)%s%s",
                                   (int)-slack, slack == -1 ? "" : "s", sLag, (unsigned long)scene->stamp,
                                   (unsigned long)((int32_t)(sSeenAt - scene->stamp) > 0 ? sSeenAt - scene->stamp : 0u),
                                   (unsigned long)(startVBlank - scene->stamp),
-                                  (double)prepareTicks * ms, (double)(gpuStart - start) * ms,
+                                  (double)prepareTicks * ms, (double)split[0] * ms, (double)split[1] * ms,
+                                  (double)split[2] * ms, splitTris, splitBatches, (double)(gpuStart - start) * ms,
                                   (unsigned long)(texAfter - texBefore),
                                   (double)(texTicksAfter - texTicksBefore) * ms,
+                                  drawCallsAfter - drawCallsBefore, (double)(drawTicksAfter - drawTicksBefore) * ms,
                                   (double)sLastGpuTicks * ms,
                                   stereoNow ? "; stereo" : "",
                                   sHitchQuiet ? "; more since the last line" : "");

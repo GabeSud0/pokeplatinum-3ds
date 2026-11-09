@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 20:05:00 -0700
+Subject: [PATCH] Route 203's south-east corner goes on south (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Past Route 203's south-east corner (x 248-255) its dirt and the plateau's
+cliff reached the south edge above the forest's filler, black between
+them, seen from the route and from Oreburgh City's west side. They are
+drawn on south (sPortExtrudeColumns) and the forest's first rows there
+left out (sPortMapCuts): its edge goes on straight from the route's.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index e50ddf11..c5dfdafe 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -4184,6 +4184,7 @@ static const PortExtrudeColumns sPortExtrudeColumns[] = {
+     { 0, 670, 1, -3, 16 },  // (and its cliffs and plateau, south over the mountain's filler)
+     { 0, 369, 1, 4, 16 },   // (Route 216's west map: its terraces by the south edge, south over the snowy forest's filler (its trees there left out: sPortMapCuts))
+     { 0, 370, 1, -16, 16 }, // (and its middle map's, south over the high snow's filler (left out there: sPortMapCuts))
++    { 0, 697, 1, 8, 16 },   // (Route 203's east map: its dirt and the plateau's cliff by the south-east corner, south over the forest's filler)
+ };
+ 
+ static const PortExtrudeColumns *Port_ExtrudeColumnsOf(const LandDataManager *landDataMan, int mapMatrixIndex, int dirZ)
+@@ -7052,7 +7053,8 @@ static const PortMapCut sPortMapCuts[] = {
+     { 0, 521, 0, 16, 491, TRUE }, // (Route 211's south filler: its first two rows, z 544-559; its copies under it over the canyon)
+     { 0, 461, 16, 32, 491, TRUE, 8, 32 }, // (and its north filler's last two, z 496-511, over the canyon: x 360-383)
+     { 0, 399, -1, 12, 369, TRUE, 20, 32, 1 },
+-    { 0, 400, -1, 12, 370, TRUE }, // (and the high snow's filler beside it, by Route 216's middle map: its first rows, a plain floating over the terraces drawn on south) // (Route 216's south filler: its trees under the west map's terraces drawn on south, x 308-319, z 416-427; its ground kept)
++    { 0, 400, -1, 12, 370, TRUE }, // (and the high snow's filler beside it, by Route 216's middle map: its first rows, a plain floating over the terraces drawn on south)
++    { 0, 727, -1, 12, 697, TRUE, 24, 32 }, // (the forest's filler south of Route 203's east map: its first rows under the dirt drawn on south, x 248-255) // (Route 216's south filler: its trees under the west map's terraces drawn on south, x 308-319, z 416-427; its ground kept)
+ };
+ 
+ #define PORT_CUT_COPIES 2

@@ -21,7 +21,8 @@ if [ -f "$DEST/pyodide/pyodide.mjs" ] && [ "$(cat "$DEST/version" 2>/dev/null)" 
     exit 0
 fi
 mkdir -p "$DEST"
-curl -fsSL -o "$DEST/core.tar.bz2" \
+# (GitHub's release downloads sometimes answer 504 for a while: tried again)
+curl -fsSL --retry 6 --retry-all-errors --retry-delay 20 -o "$DEST/core.tar.bz2" \
     "https://github.com/pyodide/pyodide/releases/download/$VERSION/pyodide-core-$VERSION.tar.bz2"
 echo "$SHA256  $DEST/core.tar.bz2" | sha256sum -c --quiet
 rm -rf "$DEST/pyodide"

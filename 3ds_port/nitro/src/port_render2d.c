@@ -966,6 +966,27 @@ static u16 TextBgPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int mapx
     }
 }
 
+/* (TextBgSegments) How many of a widened text box's last columns a line
+ * with nothing on it there is one colour in; and how many lines up or down
+ * from a line of text that reaches its last column one is looked for. */
+#define WIDEN_PLAIN_LOOK 24
+#define WIDEN_PLAIN_ROWS 16
+
+/* (TextBgSegments) Whether a text BG's line (map row ty) is one colour
+ * from map column x to WIDEN_PLAIN_LOOK columns left of it. */
+static BOOL WidenLinePlain(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int x, int ty, int mapW)
+{
+    u16 c = TextBgPixel(e, bg, bgcnt, dispcnt, x & (mapW - 1), ty);
+    int k;
+
+    for (k = 1; k < WIDEN_PLAIN_LOOK; k++) {
+        if (TextBgPixel(e, bg, bgcnt, dispcnt, (x - k) & (mapW - 1), ty) != c) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
 /* A pixel of a run of a BG's line as the run draws it (not a hand-drawn
  * picture's): the map's, its colour, or nothing. */
 static u16 SegmentPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, const Segment *s, int x, int ty, int mapW)
@@ -1694,10 +1715,40 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
             segs[n].fixed = -1;
             n++;
             if (in1 < width - fr) {
+                /* (a line of text reaching the window's last column: the
+                 * inside's plain colour, as the nearest line above or below
+                 * it with nothing on it there has it, from the nearest
+                 * column left of the letters that has it. Camper Jacob's
+                 * "battle before" on Route 205 ends in the last column:
+                 * its e was drawn on to the box's right, 2026-11-06) */
+                int fill = m1 - fr - ind - 1, d, k;
+                u16 c0 = TextBgPixel(e, bg, bgcnt, dispcnt, fill & (mapW - 1), ty);
+
+                if (fill - WIDEN_PLAIN_LOOK > m0 + fl && !WidenLinePlain(e, bg, bgcnt, dispcnt, fill, ty, mapW)) {
+                    int plainRow = -1;
+
+                    for (d = 1; d <= WIDEN_PLAIN_ROWS && plainRow < 0; d++) {
+                        if (ty - d >= top && WidenLinePlain(e, bg, bgcnt, dispcnt, fill, ty - d, mapW)) {
+                            plainRow = ty - d;
+                        } else if (ty + d < bottom && WidenLinePlain(e, bg, bgcnt, dispcnt, fill, ty + d, mapW)) {
+                            plainRow = ty + d;
+                        }
+                    }
+                    if (plainRow >= 0) {
+                        u16 plain = TextBgPixel(e, bg, bgcnt, dispcnt, fill & (mapW - 1), plainRow);
+
+                        for (k = 1; plain != c0 && fill - k >= m0 + fl; k++) {
+                            if (TextBgPixel(e, bg, bgcnt, dispcnt, (fill - k) & (mapW - 1), ty) == plain) {
+                                fill -= k;
+                                break;
+                            }
+                        }
+                    }
+                }
                 segs[n].x0 = (short)(in1 - ind);
                 segs[n].x1 = (short)(width - fr - ind);
                 segs[n].off = 0;
-                segs[n].fixed = (short)((m1 - fr - ind - 1) & (mapW - 1));
+                segs[n].fixed = (short)(fill & (mapW - 1));
                 n++;
             }
             segs[n].x0 = (short)(width - fr - ind);
@@ -7182,6 +7233,112 @@ static u32 EngineVramSignature(int engine, const u8 *io)
     return h;
 }
 
+/* (ShownVramSignature) An OBJ as a GpuObjKey has it, as far as where its
+ * tiles are goes (its shape, size, colours and first tile): FALSE for no
+ * shape. */
+static BOOL ObjOfKey(u32 key, Obj *obj)
+{
+    int shape = (int)(key >> 30) & 3;
+
+    if (shape == 3) {
+        return FALSE;
+    }
+    obj->mode = (u8)((key >> 26) & 3);
+    obj->bpp8 = (key >> 29) & 1;
+    obj->w = sObjSize[shape][(key >> 18) & 3][0];
+    obj->h = sObjSize[shape][(key >> 18) & 3][1];
+    obj->tile = (u16)(key & 0x3FF);
+    return TRUE;
+}
+
+/* (ShownVramSignature) An engine's OBJ VRAM, all of it, hashed 32 bytes
+ * at a time, each part's hash kept to tell which changed since the last
+ * time. When some changed and none of those the sprites shown use (mark:
+ * a bit a part) did, the tiles alone would have missed it: counted
+ * (NitroPort_Render2DObjTilesUnseen); in a battle, when that's so a few
+ * checks running (not the sprites loaded as it starts: tiles written
+ * again and again, as a bar's are), in the log, with where the sprites
+ * shown have their tiles (keys, n), the first few times. */
+static u32 sObjPartHash[2][0x40000 / 32];
+static int sObjPartHashValid[2], sObjTilesUnseenRun[2];
+static volatile unsigned sObjTilesUnseen[2];
+static volatile int sObjTilesUnseenTold;
+#define OBJ_TILES_UNSEEN_TOLD 6
+#define OBJ_TILES_UNSEEN_RUN 4
+
+static u32 ObjVramParts(int e, const u8 *objVram, u32 units, u32 objMask, const u32 *mark, u32 dispcnt,
+                        const u32 *keys, int n)
+{
+    u32 *kept = sObjPartHash[e], whole = 2166136261u, u, first[8];
+    int valid = sObjPartHashValid[e], shownChanged = 0, otherChanged = 0, nFirst = 0, k;
+
+    for (u = 0; u < units; u++) {
+        const u32a *w = (const u32a *)(const void *)(objVram + u * 32u);
+        u32 ph = (2166136261u ^ u) * 16777619u;
+
+        for (k = 0; k < 8; k++) {
+            ph = (ph ^ w[k]) * 16777619u;
+        }
+        if (valid && ph != kept[u]) {
+            if (mark[u >> 5] & (1u << (u & 31))) {
+                shownChanged++;
+            } else {
+                if (nFirst < 8) {
+                    first[nFirst++] = u;
+                }
+                otherChanged++;
+            }
+        }
+        kept[u] = ph;
+        whole = (whole ^ ph) * 16777619u;
+    }
+    sObjPartHashValid[e] = 1;
+    if (!otherChanged || shownChanged) {
+        if (otherChanged || shownChanged) {
+            sObjTilesUnseenRun[e] = 0;
+        }
+    } else {
+        __atomic_fetch_add(&sObjTilesUnseen[e], 1u, __ATOMIC_RELAXED);
+        if (++sObjTilesUnseenRun[e] == OBJ_TILES_UNSEEN_RUN &&
+            __atomic_load_n(&sObjTilesUnseenTold, __ATOMIC_RELAXED) < OBJ_TILES_UNSEEN_TOLD &&
+            NitroPort_OverlayLoadedNamed("battle") &&
+            __atomic_fetch_add(&sObjTilesUnseenTold, 1, __ATOMIC_RELAXED) < OBJ_TILES_UNSEEN_TOLD) {
+            char line[600];
+            size_t len;
+            int j;
+
+            len = (size_t)snprintf(line, sizeof(line),
+                                   "[2d] engine %c's OBJ VRAM changed only where no sprite shown has its tiles, %d "
+                                   "checks running; this time %d parts of 32 bytes, at",
+                                   e ? 'B' : 'A', OBJ_TILES_UNSEEN_RUN, otherChanged);
+            for (j = 0; j < nFirst && len < sizeof(line); j++) {
+                len += (size_t)snprintf(line + len, sizeof(line) - len, " %05x", (unsigned)(first[j] * 32u));
+            }
+            if (len < sizeof(line)) {
+                len += (size_t)snprintf(line + len, sizeof(line) - len,
+                                        "; DISPCNT %08x; %d sprites shown (key: first byte + bytes):",
+                                        (unsigned)dispcnt, n);
+            }
+            for (j = 0; j < n && j < 20 && len < sizeof(line); j++) {
+                Obj obj;
+
+                if (ObjOfKey(keys[j], &obj)) {
+                    len += (size_t)snprintf(line + len, sizeof(line) - len, " %08x: %05x+%d", (unsigned)keys[j],
+                                            (unsigned)(ObjCharAddr(&obj, dispcnt, 0, 0) & objMask),
+                                            obj.w * obj.h / (obj.bpp8 ? 1 : 2));
+                }
+            }
+            NitroPort_Log("%s", line);
+        }
+    }
+    return whole;
+}
+
+unsigned NitroPort_Render2DObjTilesUnseen(int engine)
+{
+    return __atomic_exchange_n(&sObjTilesUnseen[engine ? 1 : 0], 0u, __ATOMIC_ACQ_REL);
+}
+
 /* What of an engine's VRAM its picture can show, hashed: each BG it shows
  * (its whole map, the tiles the map uses and their palettes: BgKeyT's quick
  * hash; where they are is in the registers, EngineSmallSignature), the
@@ -7194,8 +7351,11 @@ static u32 EngineVramSignature(int engine, const u8 *io)
  * for it (2026-10-30). All of it still with an H-blank effect (registers
  * that change line by line) or a bitmap BG. cheapOnly: only if that's a
  * BG's map and tiles, no more (no OBJ shown, no bitmap, no H-blank effect,
- * no VRAM display); whether it was worked out (into *out). */
-static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int linesOnlyWindows, int noObjs, u32 *out)
+ * no VRAM display); whether it was worked out (into *out). objTilesOnly:
+ * the compositor draws engine A's sprites (NitroRender2DSplit.gpuObjs):
+ * of the OBJs' VRAM, only the tiles the sprites shown use. */
+static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int linesOnlyWindows, int noObjs,
+                              int objTilesOnly, u32 *out)
 {
     static Engine engines[2];   /* (an engine's: one drawer each) */
     Engine *e = &engines[engine ? 1 : 0];
@@ -7265,17 +7425,24 @@ static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int lines
         }
     }
     objs = (dispcnt & 0x9000u) && i < 128 && !noObjs;   /* (noObjs: a picture without them) */
-    /* (the OBJs' VRAM: the tiles the OBJs shown use, each once, where
-     * they are and what's in them; all of it with a bitmap OBJ. All of it,
-     * 256 KB for engine A, hashed while any OBJ showed, was most of the
-     * check's time in the field with the rain's drops: 1.8 ms each time,
-     * 0.3 without them, and up to 60 times a second at 4x speed, on the
-     * geometry's core above it (a log of 2026-11-05). While all the
+    /* (the OBJs' VRAM. With the sprites drawn by the compositor (the
+     * rain's drops: objTilesOnly), the tiles the OBJs shown use, each
+     * once, where they are and what's in them; all of it with a bitmap
+     * OBJ. All of it, 256 KB for engine A, hashed while any OBJ showed, was
+     * most of the check's time in the field with the rain's drops: 1.8 ms
+     * each time, 0.3 without them, and up to 60 times a second at 4x speed,
+     * on the geometry's core above it (a log of 2026-11-05). While all the
      * sprites shown are of those engine A's last picture left out
      * (sObjKeysMade, as EngineSmallSignature has it), the tiles of all of
      * those: the rain's drops come and go, each kind not shown every step,
-     * and the tiles shown with them. Quick, it's noted as the picture's
-     * drawn, as the BGs' are: not drawn again the next time to be sure) */
+     * and the tiles shown with them; quick, it's noted as the picture's
+     * drawn, as the BGs' are: not drawn again the next time to be sure.
+     * Otherwise all of it, as before that (not worked out with a change to
+     * the rest: the picture's drawn again the next time, to be sure): with
+     * the tiles alone everywhere, a battle's HP and EXP bars (their tiles
+     * written every frame as they move) moved in jumps on the 3DS, a few
+     * times a second (a video of 2026-11-05), the text printed just after
+     * them smoothly) */
     if (objs) {
         const u8 *objVram = e->isA ? NitroPort_ObjVram : NitroPort_DbObjVram;
         u32 objMask = e->isA ? 0x3FFFFu : 0x1FFFFu, units = (objMask + 1u) / 32u, u;
@@ -7319,22 +7486,19 @@ static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int lines
         } else {
             u32 t = 2166136261u;
 
+            if (cheapOnly && !objTilesOnly) {
+                return 0;   /* (all of it: not with a change to the rest, as before) */
+            }
             memset(mark, 0, units / 8u);
             for (k = 0; k < n; k++) {
                 /* (a key's tiles: its shape, size, colours and first tile,
                  * GpuObjKey's attribute bits) */
-                u32 key = from[k];
-                int shape = (int)(key >> 30) & 3, tx, ty;
+                int tx, ty;
                 Obj obj;
 
-                if (shape == 3) {
+                if (!ObjOfKey(from[k], &obj)) {
                     continue;
                 }
-                obj.mode = (u8)((key >> 26) & 3);
-                obj.bpp8 = (key >> 29) & 1;
-                obj.w = sObjSize[shape][(key >> 18) & 3][0];
-                obj.h = sObjSize[shape][(key >> 18) & 3][1];
-                obj.tile = (u16)(key & 0x3FF);
                 for (ty = 0; ty < obj.h; ty += 8) {
                     for (tx = 0; tx < obj.w; tx += 8) {
                         u = (ObjCharAddr(&obj, dispcnt, tx, ty) & objMask) >> 5;
@@ -7345,16 +7509,20 @@ static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int lines
                     }
                 }
             }
-            for (u = 0; u < units; u += 32) {
-                u32 bits = mark[u >> 5];
+            if (objTilesOnly) {
+                for (u = 0; u < units; u += 32) {
+                    u32 bits = mark[u >> 5];
 
-                while (bits) {
-                    u32 c = u + (u32)__builtin_ctz(bits);
+                    while (bits) {
+                        u32 c = u + (u32)__builtin_ctz(bits);
 
-                    bits &= bits - 1u;
-                    t = (t ^ c) * 16777619u;
-                    t = HashWords(objVram + c * 32u, 32, t);
+                        bits &= bits - 1u;
+                        t = (t ^ c) * 16777619u;
+                        t = HashWords(objVram + c * 32u, 32, t);
+                    }
                 }
+            } else {
+                t = ObjVramParts(engine ? 1 : 0, objVram, units, objMask, mark, dispcnt, from, n);
             }
             h = QuickAdd(h, t);
         }
@@ -7372,11 +7540,11 @@ static int ShownVramSignature(int engine, int snapshot, int cheapOnly, int lines
     return 1;
 }
 
-static u32 EngineShownVramSignature(int engine, int snapshot, int linesOnlyWindows)
+static u32 EngineShownVramSignature(int engine, int snapshot, int linesOnlyWindows, int objTilesOnly)
 {
     u32 h = 0;
 
-    (void)ShownVramSignature(engine, snapshot, 0, linesOnlyWindows, 0, &h);
+    (void)ShownVramSignature(engine, snapshot, 0, linesOnlyWindows, 0, objTilesOnly, &h);
     return h;
 }
 
@@ -7426,7 +7594,7 @@ void NitroPort_Render2DChangeStats(int engine, unsigned *registers, unsigned *vr
 
 static u32 EngineSignature(int engine)
 {
-    return (EngineSmallSignature(engine, 0, -1, 0, 0, 0, -1) * 31u) ^ EngineShownVramSignature(engine, 0, 0);
+    return (EngineSmallSignature(engine, 0, -1, 0, 0, 0, -1) * 31u) ^ EngineShownVramSignature(engine, 0, 0, 0);
 }
 
 /* (NitroPort_Render2DSplitIfChanged) What its picture is drawn from but
@@ -7509,7 +7677,7 @@ static void DrawChanged(int engine, u16 *under, NitroRender2DSplit *split, int g
      * BGs' maps and tiles; not a bitmap BG, an H-blank effect: drawn whole) */
     if (e == 0 && gpuObjs && split->over != NULL) {
         small = SmallSignatureOf(e, split, gpuBg, gpuObjs, gpuCircle, rowsShown, 1, gpuSign, signMasked);
-        known = ShownVramSignature(e, split->snapshot, 1, gpuCircle != 0, 1, &vram);
+        known = ShownVramSignature(e, split->snapshot, 1, gpuCircle != 0, 1, gpuObjs != 0, &vram);
     }
     if (known && sPicture[e].valid && sPicture[e].under == under && sPicture[e].over == split->over &&
         sPicture[e].small == small && sPicture[e].vram == vram) {
@@ -7659,18 +7827,22 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     if (!last[e].valid || small != last[e].small) {
         last[e].small = small;
         last[e].valid = 1;
+        /* (the VRAM noted now, as it's drawn, when that's quick: else the
+         * next time, and drawn again then, to be sure. Before the drawing,
+         * never after: the game goes on writing the VRAM on its own core
+         * while the picture's drawn here, and what it writes after the
+         * picture read it but before a note would be in the note and not
+         * in the picture, never drawn. Noted after it for 2026-11-05's
+         * rain check, the Underground's lower screen stayed black and the
+         * battle's HP and EXP bars moved in jumps, on the 3DS) */
+        last[e].vramValid = ShownVramSignature(e, split->snapshot, 1, gpuCircle != 0, 0, gpuObjs != 0, &vram);
+        last[e].vram = vram;
         __atomic_fetch_add(&sChangedSmall[e], 1u, __ATOMIC_RELAXED);
         __atomic_fetch_add(&sCheckTicks[e], ClockNow() - checkStart, __ATOMIC_RELAXED);
         DrawChanged(engine, under, split, gpuBg, gpuObjs, gpuCircle, rowsShown, gpuSign, signMasked);
-        /* (the VRAM noted now, as it's drawn, when that's quick: else the
-         * next time, and drawn again then, to be sure. After the drawing:
-         * the sprites it left out are those whose tiles count, and the
-         * VRAM's the same) */
-        last[e].vramValid = ShownVramSignature(e, split->snapshot, 1, gpuCircle != 0, 0, &vram);
-        last[e].vram = vram;
         return 1;
     }
-    vram = EngineShownVramSignature(e, split->snapshot, gpuCircle != 0);
+    vram = EngineShownVramSignature(e, split->snapshot, gpuCircle != 0, gpuObjs != 0);
     __atomic_fetch_add(&sCheckTicks[e], ClockNow() - checkStart, __ATOMIC_RELAXED);
     if (last[e].vramValid && vram == last[e].vram) {
         return 0;

@@ -217,8 +217,9 @@ tu cartucho.
 Todos los botones son los del juego; en el mapa, la pantalla inferior es un
 menú que puedes tocar. L + R + START + SELECT (el reinicio del propio juego)
 reinicia el juego desde la intro. El port escribe un registro en
-`sdmc:/3ds/pokeplatinum/log.txt` (envíalo cuando reportes un problema); aparece
-solo en pantalla si algo sale mal.
+`sdmc:/3ds/pokeplatinum/log.txt` (envíalo cuando reportes un problema; el de
+la sesión anterior se guarda como `log_prev.txt`, por si has vuelto a abrir el
+juego desde entonces); aparece solo en pantalla si algo sale mal.
 
 Las opciones del juego, los 60 FPS, el 3D suavizado, y las mejoras y los
 trucos están en la página **OPTIONS** de la pantalla inferior; el port guarda

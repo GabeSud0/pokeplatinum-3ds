@@ -825,6 +825,55 @@ static void test_interpolation_swaying(void)
     }else CHECK(0);
     NitroPort_Gx3dSetInterpolation(0);
 }
+/* (a small quad of a model's, its corner at x, y, its part of the
+ * texture its own: texture coordinates from part) */
+static void part_quad_at(int x,int y,int part,uint32_t attr)
+{
+    static const int corner[4][2]={{0,0},{8,0},{8,8},{0,8}};
+    int k;
+    NitroPort_GxDirectWrite(0x29,attr);
+    NitroPort_GxDirectWrite(0x20,0x7fff);
+    NitroPort_GxDirectWrite(0x40,1);
+    for(k=0;k<4;k++){
+        NitroPort_GxDirectWrite(0x22,word2((int16_t)((part*8+corner[k][0])*16),(int16_t)(corner[k][1]*16)));
+        vertex(x+(k==1||k==2?400:0),y+(k>=2?400:0),0);
+    }
+    NitroPort_GxDirectWrite(0x41,0);
+}
+/* A model moving fast, its parts of one kind each nearer another part's
+ * place in the scene before than its own (the starters' Poké Balls
+ * jumping out of the briefcase, spinning, 2026-11-06: their faces paired
+ * with each other's, grey specks in the in-between scenes): each part is
+ * paired with itself, the order's pair, the same part of the texture
+ * (same_st), and is halfway along its own move. */
+static void test_interpolation_fast_model(void)
+{
+    const NitroGx3dScene *mid;
+    unsigned matched=0,polygons=0;
+    int i,scene;
+    const uint32_t opaque=(3u<<6)|(31u<<16);
+    reset_geometry();
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    for(scene=0;scene<2;scene++){
+        /* the still room around it: another kind */
+        for(i=0;i<12;i++)small_quad_at(-3600+600*i,-3000,opaque|(1u<<24));
+        /* the model: 4 parts 300 apart (9 DS pixels), all 270 right: each
+         * 30 from where the next one was */
+        for(i=0;i<4;i++)part_quad_at(-600+300*i+(scene?270:0),0,i,opaque);
+        swap_done();
+    }
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && polygons==16 && matched==16);
+    if(mid && mid->count==32){
+        int ok=1;
+        for(i=0;i<4;i++){
+            if(mid->triangles[24+2*i].v[0].clip[0]!=-600+300*i+135)ok=0;
+        }
+        CHECK(ok);
+    }else CHECK(0);
+    NitroPort_Gx3dSetInterpolation(0);
+}
 /* PIXEL PERFECT's sprites (the 400 x 240 view): a textured quad, every
  * corner at one depth, moving by a fraction of a pixel a frame across is
  * soft that way (NitroGx3dTriangle.soft), in its scene and its in-between
@@ -2523,6 +2572,7 @@ static void run_all(void)
     test_interpolation_order_shift();
     test_interpolation_tile_a_scene();
     test_interpolation_swaying();
+    test_interpolation_fast_model();
     test_interpolation_blended();
     test_interpolation_camera_move();
     test_triangle_strip();
