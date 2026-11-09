@@ -10,6 +10,7 @@
 <p align="center">
   <a href="https://gabesud0.github.io/pokeplatinum-3ds/?lang=es"><img src="https://img.shields.io/badge/Creador_web-Cr%C3%A9alo_en_tu_navegador-9466FF?style=for-the-badge&amp;logo=googlechrome&amp;logoColor=white" alt="Créalo en tu navegador con el creador web"></a>
   <a href="https://discord.gg/YjyA5ygpC"><img src="https://img.shields.io/badge/Discord-%C3%9Anete_al_servidor-5865F2?style=for-the-badge&amp;logo=discord&amp;logoColor=white" alt="Únete al servidor de Discord"></a>
+  <a href="https://ko-fi.com/gabesud0"><img src="https://img.shields.io/badge/Ko--fi-Apoya_el_proyecto-FF5E5B?style=for-the-badge&amp;logo=kofi&amp;logoColor=white" alt="Apoya el proyecto en Ko-fi"></a>
   <a href="https://github.com/GabeSud0/pokeplatinum-3ds/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/GabeSud0/pokeplatinum-3ds/build.yml?branch=main&amp;style=for-the-badge&amp;label=Build&amp;logo=github" alt="Estado de la compilación"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/Licencia-GPL--3.0-4B5563?style=for-the-badge" alt="Licencia GPL-3.0"></a>
 </p>
@@ -62,22 +63,26 @@ En una New 3DS:
 | **Las dos pantallas llenas** | Las imágenes de la DS se dibujan 1,25 veces más grandes: la pantalla inferior llena sus 320×240, y la superior se reparte a lo largo de sus 400 píxeles de ancho (menús, cuadros de texto y combates incluidos). Nunca se estira ni se refleja nada para llenar el espacio extra. |
 | **Un menú en la pantalla inferior** | En el mapa, la pantalla inferior es un menú junto al Pokéreloj: MAP, POKéMON, BAG, TRAINER, POKéDEX, POKéTCH, SAVE y OPTIONS, a un toque (o con X y la cruceta). La mochila, el equipo, los datos del Pokémon, la ficha de entrenador, el guardado, las opciones y el Mapa Pueblo se abren dentro de su panel mientras el mapa sigue en la pantalla superior. Dos casillas guardan tus objetos registrados: toca una para usarlo. |
 | **3D más nítido** | El mundo y los combates los dibuja la GPU de la 3DS a la resolución de la propia pantalla, con bordes suavizados (antialiasing), la niebla del juego y una vista más amplia del mundo a los lados. Los contornos de la DS alrededor del 3D vienen apagados; `edges on` en `remaster.txt` los dibuja. |
-| **60 imágenes por segundo** | El juego mueve el mapa a 30; el port dibuja una imagen intermedia entre cada par, y vuelve a 30 donde la GPU no da abasto (nuevo, todavía en ajuste). |
+| **PIXEL PERFECT** | El mundo al tamaño de píxel de la propia DS en toda la pantalla superior, con la gente moviéndose suavemente sobre el suelo. |
+| **La vista amplia completada** | Más allá de los bordes de los mapas, los árboles, acantilados, ríos y costas continúan en lugar de verse en negro, nunca reflejados (en la mayoría de rutas y ciudades; todavía en progreso). |
+| **60 imágenes por segundo** | El juego mueve el mapa a 30; el port dibuja una imagen intermedia entre cada par, para unos 60 estables en ciudades, rutas, con lluvia y en las animaciones de las MO, y vuelve a 30 donde la GPU no da abasto (todavía en ajuste). |
 | **Mejoras y trucos** | Opcionales, desde OPTIONS: SPEED hasta 4x (los menús y las decisiones en combate siguen a 1x), Repartir Experiencia para todo el equipo, experiencia al capturar, evoluciones por intercambio al nivel 40, MO sin enseñar los movimientos, correr siempre, tu primer Pokémon siguiéndote (FOLLOWER: los sprites de HeartGold/SoulSilver, que descarga el creador; sale de la Poké Ball en la que lo capturaste y puedes hablarle: reacciona y a veces te encuentra un objeto); y trucos (captura segura, victoria instantánea, huevos rápidos, dinero infinito, frecuencia de Pokémon salvajes, probabilidad de shiny, dar objetos). |
 | **Pequeñas comodidades** | Si capturas un Pokémon con el equipo lleno, puedes cambiarlo por uno de tu equipo ahí mismo, en el combate. Una partida nueva guarda encima de la anterior sin tener que borrarla antes. L + R + START + SELECT reinicia el juego desde la intro. |
 | **Píxeles nítidos** | Píxeles parejos y nítidos en el 2D, y suavizado xBRZ opcional para las texturas del 3D. |
-| **En el menú HOME** | Se instala como `.cia`, con el icono de tu cartucho y un banner 3D animado. |
+| **En el menú HOME** | Se instala como `.cia`, con el icono de tu cartucho y un banner 3D animado. Abre el `.3dsx`, así que al actualizar el juego se actualiza también. |
 | **Hecho con tu propio cartucho** | El builder crea los datos del juego en tu propia computadora, a partir de tu propio volcado. No se distribuye nada del juego. |
 
 ## Estado
 
 | ✅ Funciona | 🛠️ En progreso | 💭 Lista de deseos |
 | :--- | :--- | :--- |
-| Jugable en consola real, desde una partida nueva o una guardada: explorar, combates, menús y guardar (todavía tiene algunos errores visuales y de juego) | Pulir la interfaz de la pantalla inferior (la pantalla para aprender un movimiento) | Wi-Fi |
-| Una interfaz nueva para la pantalla superior: menús, cuadros de texto y combates a lo largo de todo su ancho | Un Pokémon que te sigue | Mejor iluminación |
-| Una interfaz nueva para la pantalla inferior: un menú junto al Pokéreloj, con la mochila, el equipo, los datos del Pokémon, la ficha de entrenador, el guardado, las opciones y el Mapa Pueblo en su panel | 60 FPS y mejor calidad en el 3D | Batallas a 60 FPS |
-| Mejoras y trucos desde las opciones (SPEED, Repartir Experiencia para el equipo y más) |Resolución de Pixel Exacta |Resolución de Pixel Exacta en batallas |
-| La resolución de la New 3DS XL: las dos pantallas llenas, el 3D dibujado a la resolución de la pantalla ||3D estereoscópico|
+| Jugable en consola real, desde una partida nueva o una guardada: explorar, combates, menús, el Subsuelo y guardar (todavía tiene algunos errores visuales y de juego) | Pulir la interfaz de la pantalla inferior (la pantalla para aprender un movimiento) | Wi-Fi |
+| Una interfaz nueva para la pantalla superior: menús, cuadros de texto y combates a lo largo de todo su ancho | Completar la vista amplia más allá de los bordes de los mapas | Mejor iluminación |
+| Una interfaz nueva para la pantalla inferior: un menú junto al Pokéreloj, con la mochila, el equipo, los datos del Pokémon, la ficha de entrenador, el guardado, las opciones y el Mapa Pueblo en su panel | Mejor calidad en el 3D | Batallas a 60 FPS |
+| Mejoras y trucos desde las opciones (SPEED, Repartir Experiencia para el equipo y más) | | Resolución de Pixel Exacta en batallas |
+| Un Pokémon que te sigue (FOLLOWER) | | 3D estereoscópico |
+| 60 FPS en el mapa, y la Resolución de Pixel Exacta en el mundo | | |
+| La resolución de la New 3DS XL: las dos pantallas llenas, el 3D dibujado a la resolución de la pantalla | | |
 | Animaciones actualizadas para la intro, y animaciones nuevas para parte de la interfaz | | |
 
 
@@ -200,13 +205,16 @@ En Azahar, van en la carpeta de su tarjeta SD emulada.
 
 - **Homebrew Launcher:** abre `pokeplatinum.3dsx`, o ábrelo en Azahar.
 - **Menú HOME:** en FBI, ve a **SD → cia → pokeplatinum.cia → Install CIA**.
-  Después el juego se abre y se cierra desde el menú HOME como cualquier otro.
-  Para actualizarlo, instala el `.cia` nuevo de la misma forma; tu partida se
-  conserva.
+  Abre `sdmc:/3ds/pokeplatinum.3dsx` como lo hace el Homebrew Launcher
+  (necesita Luma3DS y el Homebrew Launcher Loader, los dos de la guía), así
+  que deja el `.3dsx` ahí: al actualizarlo se actualiza también la versión del
+  menú HOME. Se cierra desde el menú HOME como cualquier otro juego.
 - **Actualizar:** crea la nueva versión con el creador web y copia sus archivos
   encima de los anteriores. Cuando una versión lee sus datos igual que la
   anterior, su página lo dice: entonces basta con copiar el nuevo
-  `pokeplatinum.3dsx`.
+  `pokeplatinum.3dsx`. Si vienes de la primera alfa (v0.1.0-alpha.1),
+  reemplaza los tres: el `.pak`, el `.3dsx`, e instala el `.cia` nuevo una vez
+  (desde entonces abre el `.3dsx`).
 
 El juego guarda en `sdmc:/3ds/pokeplatinum/platinum.sav`, un guardado de 512 KB
 en bruto como los de los emuladores, así que puedes copiar ahí el guardado de
@@ -339,9 +347,11 @@ upstream.lock      el commit exacto de pret/pokeplatinum sobre el que se compila
   Pokémon, la ficha de entrenador, el guardado, las opciones y el Mapa
   Pueblo en su panel; mejoras y trucos; la resolución de la New 3DS XL;
   animaciones actualizadas de la intro y la interfaz; la versión del menú
-  HOME.
-- **En progreso:** 60 imágenes por segundo, mejor calidad en el 3D, pulir la
-  interfaz de la pantalla inferior, mejor iluminación, un Pokémon que te sigue.
+  HOME; un Pokémon que te sigue; 60 imágenes por segundo en el mapa; la
+  Resolución de Pixel Exacta en el mundo; el Subsuelo.
+- **En progreso:** completar la vista amplia más allá de los bordes de los
+  mapas, mejor calidad en el 3D, pulir la interfaz de la pantalla inferior,
+  mejor iluminación.
 - **Lista de deseos:** Wi-Fi.
 - **Más adelante:** SoulSilver / HeartGold sobre la misma base.
 
@@ -356,6 +366,10 @@ ayuda de IA (los dos en inglés).
 Únete al **[servidor de Discord](https://discord.gg/YjyA5ygpC)** para seguir el
 desarrollo, compartir capturas y pedir ayuda. ¿Encontraste un error? Abre un
 [issue](https://github.com/GabeSud0/pokeplatinum-3ds/issues) con tu `log.txt`.
+
+¿Te gusta el port? Puedes apoyar su desarrollo en
+**[Ko-fi](https://ko-fi.com/gabesud0)**. Es totalmente opcional: el port es y seguirá
+siendo gratis.
 
 ## Créditos y aspectos legales
 
