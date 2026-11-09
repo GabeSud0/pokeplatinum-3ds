@@ -1367,6 +1367,13 @@ screen's 320 x 192 at 1.25 times, as above.
   map either, but its palms above and harbour below fit no one filler: a
   stand-in can now be a loaded place beside it drawn on straight into it
   (`dirX`), the Fight Area's west edge drawn on west.
+- **Route 216's terraces** (patch 0129): its snowy terraces step down to
+  its south edge above the snowy forest's filler, black under them, and
+  past its middle map the high snow's filler (altitude 22) floated over
+  them. The west and middle maps' terraces are drawn on south, the
+  forest's trees under them left out with its ground kept (`keepShapes`),
+  the high snow's first rows left out. A cut's rows can start a tile
+  north of its edge (`zFrom` -1): the tops of its first trees lean past it.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
