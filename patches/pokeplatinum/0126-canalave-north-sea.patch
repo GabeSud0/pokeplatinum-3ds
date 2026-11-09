@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 17:40:00 -0700
+Subject: [PATCH] The sea north of Canalave City's harbour (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The matrix cell north of Canalave City has no map at all (MAP_NONE), and
+the game doesn't keep one among its loaded maps: the wider view saw
+nothing past the harbour's north edge, a black band over the sea. Such
+cells (sPortStandInMaps) are drawn with a loaded neighbour's model
+instead: there the sea's filler, the same as either side of it.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index b6819bf3..86cc0ed7 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -7257,6 +7257,68 @@ static void Port_RenderExtrudedColumns(const LandDataManager *landDataMan)
+         }
+     }
+ }
++
++// Cells of the matrix with no map at all (MAP_NONE) beside a place, which
++// the DS never showed: the wider view saw nothing there, black (north of
++// Canalave City's harbour). Drawn with a loaded neighbour's model instead:
++// the same filler as the cells either side of it.
++typedef struct PortStandInMap {
++    u8 matrixID;
++    u16 mapMatrixIndex;
++    u16 from[2]; // (the first of these loaded)
++} PortStandInMap;
++
++static const PortStandInMap sPortStandInMaps[] = {
++    { 0, 631, { 630, 632 } }, // (north of Canalave City: the sea's filler, as either side)
++};
++
++static void Port_RenderStandInMaps(const LandDataManager *landDataMan)
++{
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld || landDataMan->mapMatrix == NULL) {
++        return;
++    }
++
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix), width = landDataMan->mapMatrixWidth;
++    VecFx32 one = { FX32_ONE, FX32_ONE, FX32_ONE };
++    MtxFx33 identity = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++
++    for (int k = 0; k < (int)NELEMS(sPortStandInMaps); k++) {
++        const PortStandInMap *m = &sPortStandInMaps[k];
++        LoadedMap *source = NULL;
++        int from = -1;
++
++        if (m->matrixID != matrixID || MapMatrix_GetLandDataIDByIndex(m->mapMatrixIndex, landDataMan->mapMatrix) != INVALID_LAND_DATA_ID) {
++            continue;
++        }
++
++        for (int f = 0; f < 2 && source == NULL; f++) {
++            for (u8 q = 0; q < QUADRANT_COUNT; q++) {
++                if (landDataMan->loadedMaps[q]->mapMatrixIndex == m->from[f] && landDataMan->loadedMaps[q]->valid == TRUE) {
++                    source = landDataMan->loadedMaps[q];
++                    from = m->from[f];
++                }
++            }
++        }
++
++        if (source == NULL || source->mapRenderObj.resMdl == NULL) {
++            continue;
++        }
++
++        VecFx32 position = { 0, 0, 0 };
++
++        LandDataManager_CalculateRenderingPosition(from, width, landDataMan->mapMatrix, &position);
++        position.x += landDataMan->offset.x + (m->mapMatrixIndex % width - from % width) * MAP_TILES_COUNT_X * MAP_OBJECT_TILE_SIZE;
++        position.y += landDataMan->offset.y;
++        position.z += landDataMan->offset.z + (m->mapMatrixIndex / width - from / width) * MAP_TILES_COUNT_Z * MAP_OBJECT_TILE_SIZE;
++
++        NNS_G3dGlbSetBaseRot(&identity);
++        NNS_G3dGlbSetBaseScale(&one);
++
++        if (GFXBoxTest_IsModelInView(source->mapRenderObj.resMdl, &position, &identity, &one)) {
++            Easy3D_DrawRenderObj(&source->mapRenderObj, &position, &identity, &one);
++        }
++    }
++}
+ #endif
+ 
+ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
+@@ -7294,6 +7356,7 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+ #ifdef SDK_PORT_3DS
+     Port_RenderMirroredEdges(landDataMan, modelAttrs);
+     Port_RenderExtrudedColumns(landDataMan);
++    Port_RenderStandInMaps(landDataMan);
+     Port_RenderMapPieces(landDataMan);
+     Port_RenderMirroredBesideScenery(landDataMan, modelAttrs);
+     Port_ExtrudeAhead(landDataMan);

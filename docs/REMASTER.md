@@ -1357,6 +1357,10 @@ screen's 320 x 192 at 1.25 times, as above.
   the DS's edges, where a big ground polygon reaching past the far plane
   left a black hole (Route 211 West's river from 378,532). There it's
   clipped at the far plane instead.
+- **Canalave City's north harbour** (patch 0126): the matrix cell north of
+  it has no map at all (MAP_NONE), so the wider view saw a black band over
+  the sea. Such cells (`sPortStandInMaps`) are drawn with a loaded
+  neighbour's model instead: the sea's filler, as either side of it.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
