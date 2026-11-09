@@ -1393,6 +1393,12 @@ screen's 320 x 192 at 1.25 times, as above.
   corner, the straight bank, the corner turning south and the bank down
   the forest filler's edge, with the map's grass under it so no sea shows
   behind. Snowpoint City's slope by its west edge is drawn on south.
+- **The Battle Zone's sea** (patch 0134): between Routes 226 and 230 the
+  mountain's filler made a flat grey slab over the sea, where each route
+  has only a narrow rock column. The slab's rows seen from either route
+  are left out west of x 760, the sea's filler drawn under them (a cut's
+  `under`), and each route's rock drawn on to it; its east strip stays
+  under Route 228's cliffs, with Route 230's rock step under its end.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
