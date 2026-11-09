@@ -1378,6 +1378,12 @@ screen's 320 x 192 at 1.25 times, as above.
   plateau's cliff (x 248-255) reached the south edge above the forest's
   filler, black between them (seen from the route and from Oreburgh City).
   They are drawn on south and the forest's first rows there left out.
+- **Route 210 South's north-west corner** (patch 0131): Route 210 North's
+  terraces (4 to 8 tiles high) end over the low mountain filler (3 high)
+  with no sides under them, black at the top of Route 210 South. They are
+  drawn on south 5 tiles (`reachZ`: further would be seen from where Route
+  210 North isn't loaded) and the filler's ground drawn on north under the
+  map's last rows, seen under their ends.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
