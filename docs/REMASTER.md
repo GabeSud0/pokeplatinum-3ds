@@ -1361,6 +1361,8 @@ screen's 320 x 192 at 1.25 times, as above.
   it has no map at all (MAP_NONE), so the wider view saw a black band over
   the sea. Such cells (`sPortStandInMaps`) are drawn with a loaded
   neighbour's model instead: the sea's filler, as either side of it.
+- **Fullmoon and Newmoon Islands' docks** (patch 0127): the same south of
+  the two islands, a black band at the screen's bottom.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
