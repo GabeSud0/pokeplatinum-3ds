@@ -3,7 +3,7 @@
 //   { type: "build", rom: ArrayBuffer, wantCia, releaseUrl, pyodideUrl, pycgfxUrl, followersUrl }
 //
 // and gets back { type: "progress", stage, fraction } as it goes, then
-// { type: "done", zip: Blob, fileName, banner, bannerWhy } or
+// { type: "done", zip: Blob, fileName, banner, bannerWhy, followersWhy } or
 // { type: "error", key, values, detail }.
 //
 // The steps: Pyodide (Python in WebAssembly) loads; this version's payload
@@ -41,15 +41,38 @@ async function sha256(data) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// url: one address, or several of the same file (tried in turn: the
+// first that answers). The error, if none does, says what each said.
 async function download(url, what) {
-  let response;
-  try {
-    response = await fetch(url, { cache: "no-cache" });   // (never last version's, just after a release)
-  } catch (e) {
-    throw new BuildError("error.network", { what }, `${url}: ${e.message}`);
+  const urls = Array.isArray(url) ? url : [url];
+  const failures = [];
+  for (const one of urls) {
+    let response;
+    try {
+      response = await fetch(one, { cache: "no-cache" });   // (never last version's, just after a release)
+    } catch (e) {
+      failures.push(`${one}: ${e.message}`);
+      continue;
+    }
+    if (!response.ok) {
+      failures.push(`${one}: HTTP ${response.status}`);
+      continue;
+    }
+    return new Uint8Array(await response.arrayBuffer());
   }
-  if (!response.ok) throw new BuildError("error.network", { what }, `${url}: HTTP ${response.status}`);
-  return new Uint8Array(await response.arrayBuffer());
+  throw new BuildError("error.network", { what }, failures.join("; "));
+}
+
+// A file of a GitHub repository at a commit: GitHub's own raw address, then
+// the same file through jsDelivr's copy of GitHub (where Pyodide comes from
+// too). raw.githubusercontent.com answered HTTP 501 to a player's browser
+// for pycgfx (2026-11-09); every file is checked against its SHA-256
+// either way. Other bases (the tests' own) are used as they are.
+const RAW_GITHUB = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/$/;
+function fromGitHub(base, path) {
+  const m = RAW_GITHUB.exec(base);
+  if (!m) return base + path;
+  return [base + path, `https://cdn.jsdelivr.net/gh/${m[1]}/${m[2]}@${m[3]}/${path}`];
 }
 
 let pyodidePromise = null;
@@ -161,7 +184,7 @@ del outer_manifest
       const base = pycgfxUrl || manifest.pycgfx.rawBase;
       for (const file of manifest.pycgfx.files) {
         if (!PAYLOAD_PATH.test(file.path)) throw new Error(`pycgfx's ${file.path}: not a file name`);
-        const data = await download(base + file.path, "pycgfx");
+        const data = await download(pycgfxUrl ? base + file.path : fromGitHub(base, file.path), "pycgfx");
         if ((await sha256(data)) !== file.sha256) throw new Error(`pycgfx's ${file.path} isn't the expected file`);
         const path = "/pycgfx/" + file.path;
         mkdirs(FS, path.slice(0, path.lastIndexOf("/")));
@@ -179,6 +202,7 @@ del outer_manifest
   // (builder/followers.py). Without them the game works the same, and
   // only Platinum's own Pokémon follow.
   let followersDir = null;
+  let followersWhy = "";
   if (manifest.followers) {
     progress("followers");
     try {
@@ -189,7 +213,8 @@ del outer_manifest
         while (next < list.length) {
           const file = list[next++];
           if (!PAYLOAD_PATH.test(file.path)) throw new Error(`${file.path}: not a file name`);
-          const data = await download((followersUrl || manifest.followers.rawBase) + file.path, "followers");
+          const data = await download(followersUrl ? followersUrl + file.path
+                                                     : fromGitHub(manifest.followers.rawBase, file.path), "followers");
           if (data.length !== file.size || (await sha256(data)) !== file.sha256) {
             throw new Error(`${file.path} isn't the expected file`);
           }
@@ -203,6 +228,7 @@ del outer_manifest
       followersDir = "/followers";
     } catch (e) {
       console.warn("No follower sprites:", e.detail || e.message);
+      followersWhy = e.detail || e.message || "?";
     }
     progress("followers", 1);
   }
@@ -279,7 +305,7 @@ json.dumps(_out)
   const zip = makeZip(files);
   progress("zip", 1);
   return { zip, fileName: `pokeplatinum-3ds-${manifest.releaseVersion}-sd.zip`, banner,
-           bannerWhy: banner === "flat" ? bannerWhy || "?" : "" };
+           bannerWhy: banner === "flat" ? bannerWhy || "?" : "", followersWhy };
 }
 
 self.onmessage = async ({ data }) => {

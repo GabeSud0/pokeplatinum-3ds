@@ -26,6 +26,8 @@ export const STRINGS = {
     "top.done.title": "Done.",
     "top.done.detail": "Unzip it and copy its folders to the root of your SD card.",
     "top.done.flat": "The HOME Menu version got the flat banner: the 3D one couldn't be made ({why}).",
+    "top.done.noFollowers": "The follower Pokémon's sprites couldn't be downloaded ({whyFollowers}): your Pokémon follow you with Platinum's own sprites. Build again later to add them.",
+    "top.done.flatNoFollowers": "The HOME Menu version got the flat banner: the 3D one couldn't be made ({why}). And the follower Pokémon's sprites couldn't be downloaded ({whyFollowers}): your Pokémon follow you with Platinum's own sprites. Build again later to add them.",
     "top.error.title": "The build stopped.",
     "top.error.detail": "{message}",
 
@@ -115,6 +117,8 @@ export const STRINGS = {
     "top.done.title": "Listo.",
     "top.done.detail": "Descomprímelo y copia sus carpetas a la raíz de tu tarjeta SD.",
     "top.done.flat": "La versión del menú HOME lleva el banner plano: no se pudo hacer el 3D ({why}).",
+    "top.done.noFollowers": "No se pudieron descargar los sprites del Pokémon que te sigue ({whyFollowers}): tus Pokémon te siguen con los sprites de Platinum. Vuelve a crearlo más tarde para añadirlos.",
+    "top.done.flatNoFollowers": "La versión del menú HOME lleva el banner plano: no se pudo hacer el 3D ({why}). Y no se pudieron descargar los sprites del Pokémon que te sigue ({whyFollowers}): tus Pokémon te siguen con los sprites de Platinum. Vuelve a crearlo más tarde para añadirlos.",
     "top.error.title": "La creación se detuvo.",
     "top.error.detail": "{message}",
 
