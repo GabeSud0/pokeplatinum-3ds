@@ -1384,6 +1384,9 @@ screen's 320 x 192 at 1.25 times, as above.
   drawn on south 5 tiles (`reachZ`: further would be seen from where Route
   210 North isn't loaded) and the filler's ground drawn on north under the
   map's last rows, seen under their ends.
+- **The Pokémon League's south ridge** (patch 0132): its east ridge stops
+  4 tiles above the ground east of it, a black slit seen from Route 224.
+  The north map's east wall is drawn again there, 13 tiles lower.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give
