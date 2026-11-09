@@ -1387,6 +1387,12 @@ screen's 320 x 192 at 1.25 times, as above.
 - **The Pokémon League's south ridge** (patch 0132): its east ridge stops
   4 tiles above the ground east of it, a black slit seen from Route 224.
   The north map's east wall is drawn again there, 13 tiles lower.
+- **Route 221's south bank and Snowpoint's harbour slope** (patch 0133):
+  Route 221's forest ground ended above the sea at its south edge with no
+  bank (a thin black line); the map's own banks are drawn there, a rounded
+  corner, the straight bank, the corner turning south and the bank down
+  the forest filler's edge, with the map's grass under it so no sea shows
+  behind. Snowpoint City's slope by its west edge is drawn on south.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give

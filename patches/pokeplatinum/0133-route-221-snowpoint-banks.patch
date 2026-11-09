@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 09:20:00 -0700
+Subject: [PATCH] Route 221's south bank and Snowpoint's harbour slope (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Route 221's west map: its forest's ground ends half a tile above the sea
+at its south edge (x 252-255) with no bank, a thin black line. The map's
+own banks are drawn there (sPortMapPieces): its rounded corner, its
+straight bank facing south stretched to the map's edge, its corner
+turning south and its bank facing west down the forest filler's edge
+(z 928-939), with the map's grass under that one (the sea showed between
+its top and the forest's grass). Snowpoint City's south-west map: the
+slope by its west edge and its bank are drawn on south over the sea's
+filler (sPortExtrudeColumns).
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 16be9569..32391630 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -4187,6 +4187,7 @@ static const PortExtrudeColumns sPortExtrudeColumns[] = {
+     { 0, 369, 1, 4, 16 },   // (Route 216's west map: its terraces by the south edge, south over the snowy forest's filler (its trees there left out: sPortMapCuts))
+     { 0, 370, 1, -16, 16 }, // (and its middle map's, south over the high snow's filler (left out there: sPortMapCuts))
+     { 0, 496, 1, 8, 16, 5 }, // (Route 210 North's south-west map: its terraces by the south-east corner, 5 tiles south over the low filler: past that seen only from where the map isn't loaded)
++    { 0, 221, 1, -16, -14 }, // (Snowpoint City's south-west map: the slope by its west edge and its bank, south over the sea's filler)
+     { 0, 697, 1, 8, 16 },   // (Route 203's east map: its dirt and the plateau's cliff by the south-east corner, south over the forest's filler)
+ };
+ 
+@@ -6746,6 +6747,11 @@ static const PortMapPiece sPortMapPieces[] = {
+     { 0, 526, 0, { 0, 256, 64, 128 }, 4, 0, 1, 1, 0, 0, 0, -128, 1, 0 },  // (Route 210 North's south-west map: the low filler's ground under its last rows, seen under its terraces' ends)
+     { 0, 536, 1, { 228, 236, 144, 208 }, 7, 0, 1, 1, 0, 0, -104, 112, 3, 64 }, // (the Pokemon League's south map: its east ridge, x 860, stops 4 tiles above the ground east of it, nothing between (seen from Route 224): the north map's east wall there, 13 tiles lower, z 576-599)
+     { 0, 536, 1, { 228, 236, 144, 208 }, 7, 0, 1, 1, 0, 0, -104, 280, 1, 0 },  // (and z 597-604)
++    { 0, 847, 1, { 142, 148, 140, 146 }, 4, 0, 1, 1, 0, 80, 0, 112, 1, 0 },   // (Route 221's west map: its forest's ground ends half a tile above the sea at its south edge, x 252-255, no bank: its own bank's rounded corner from x 226, z 897, there)
++    { 0, 847, 1, { 148, 172, 142, 146 }, 2, 148, 7, 6, 0, 80, 0, 112, 1, 0 },  // (and its straight bank facing south beside it, stretched to the map's edge)
++    { 0, 847, 1, { 172, 178, 142, 148 }, 4, 0, 1, 1, 0, 78, 0, 112, 1, 0 },   // (where it meets the forest's filler east of the sea: the map's own bank turning south there)
++    { 0, 847, 1, { 174, 178, 148, 156 }, 2, 0, 1, 1, 0, 78, 0, 112, 12, 8 },  // (and its bank facing west down the forest's edge, half a tile out from it over the forest's grass edge, x 255, z 928-939)
++    { 0, 847, 8, { 224, 256, 224, 256 }, 1, 224, 1, 4, 0, 30, -1, 32, 3, 32 }, // (and the map's grass under it, a tile wide, an eighth of a tile lower: the sea showed between its top and the forest's grass)
+     { 0, 669, 2, { 32, 64, 0, 8 }, 1, 0, 1, 1, 0, -288, 0, 224, 8, 0, 32 },   // (Route 207's west map: the rim facing south, x 256-287, z 732)
+     { 0, 669, 4, { 24, 56, 192, 224 }, 1, 0, 1, 1, 0, -280, 8, 0, 8, 0, 32 }, // (the ground north of it, a tile higher, z 728-731)
+     { 0, 669, 4, { 24, 56, 224, 256 }, 1, 0, 1, 1, 0, -280, 0, 0, 8, 0, 32 }, // (and south of it, z 732-735: under the rim)
