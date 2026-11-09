@@ -166,7 +166,11 @@ async function startBuild() {
       setBuilding(false);
       $("meter-fill").style.width = "100%";
       $("top").dataset.banner = data.banner || "none";
-      if (data.banner === "flat") setTop("done", "top.done.title", "top.done.flat", { why: data.bannerWhy });
+      // (the follower's sprites missing: built without them, said so)
+      if (data.banner === "flat" && data.followersWhy) {
+        setTop("done", "top.done.title", "top.done.flatNoFollowers", { why: data.bannerWhy, whyFollowers: data.followersWhy });
+      } else if (data.banner === "flat") setTop("done", "top.done.title", "top.done.flat", { why: data.bannerWhy });
+      else if (data.followersWhy) setTop("done", "top.done.title", "top.done.noFollowers", { whyFollowers: data.followersWhy });
       else setTop("done", "top.done.title", "top.done.detail");
       link.focus();
     } else if (data.type === "error") {
