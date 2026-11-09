@@ -1363,6 +1363,10 @@ screen's 320 x 192 at 1.25 times, as above.
   neighbour's model instead: the sea's filler, as either side of it.
 - **Fullmoon and Newmoon Islands' docks** (patch 0127): the same south of
   the two islands, a black band at the screen's bottom.
+- **The Fight Area's west side** (patch 0128): the cell west of it has no
+  map either, but its palms above and harbour below fit no one filler: a
+  stand-in can now be a loaded place beside it drawn on straight into it
+  (`dirX`), the Fight Area's west edge drawn on west.
 - **The wider view's map reads timed** (patch 0114): a map beside the
   loaded ones read for the wider view, or one the game is still reading
   read whole for it, is read in the game's frame; their log lines give

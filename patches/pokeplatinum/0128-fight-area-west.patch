@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 18:30:00 -0700
+Subject: [PATCH] The Fight Area's palms and harbour go on west (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The cell west of the Fight Area has no map at all: a black wedge on the
+screen's left. Its palm forest above and harbour water below fit no one
+filler, so a stand-in (sPortStandInMaps) can now be a loaded place beside
+it drawn on straight into it (dirX): the Fight Area's west edge, west.
+---
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index bf7a1f33..1cb98961 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -7261,17 +7261,20 @@ static void Port_RenderExtrudedColumns(const LandDataManager *landDataMan)
+ // Cells of the matrix with no map at all (MAP_NONE) beside a place, which
+ // the DS never showed: the wider view saw nothing there, black (north of
+ // Canalave City's harbour). Drawn with a loaded neighbour's model instead:
+-// the same filler as the cells either side of it.
++// the same filler as the cells either side of it; or with a loaded place
++// beside it drawn on straight into it (dirX: from[0]'s side it's on).
+ typedef struct PortStandInMap {
+     u8 matrixID;
+     u16 mapMatrixIndex;
+     u16 from[2]; // (the first of these loaded)
++    s8 dirX;
+ } PortStandInMap;
+ 
+ static const PortStandInMap sPortStandInMaps[] = {
+     { 0, 631, { 630, 632 } }, // (north of Canalave City: the sea's filler, as either side)
+     { 0, 271, { 270, 272 } }, // (south of Fullmoon Island's dock: the same)
+     { 0, 274, { 273, 275 } }, // (south of Newmoon Island's dock: the same)
++    { 0, 408, { 409, 409 }, -1 }, // (west of the Fight Area: its palms and harbour drawn on west)
+ };
+ 
+ static void Port_RenderStandInMaps(const LandDataManager *landDataMan)
+@@ -7298,10 +7301,18 @@ static void Port_RenderStandInMaps(const LandDataManager *landDataMan)
+                 if (landDataMan->loadedMaps[q]->mapMatrixIndex == m->from[f] && landDataMan->loadedMaps[q]->valid == TRUE) {
+                     source = landDataMan->loadedMaps[q];
+                     from = m->from[f];
++
++                    if (m->dirX != 0) {
++                        Port_RenderExtrudedPart(landDataMan, q, m->dirX, 0);
++                    }
+                 }
+             }
+         }
+ 
++        if (m->dirX != 0) {
++            continue;
++        }
++
+         if (source == NULL || source->mapRenderObj.resMdl == NULL) {
+             continue;
+         }
