@@ -109,10 +109,10 @@ int main(void)
     CHECK(NitroPort_Option(NITRO_OPT_SPEED) == 0);
     CHECK(NitroPort_Option(NITRO_OPT_ENCOUNTERS) == 4);
 
-    /* SUN SHADOWS (0-4) off again at every start, whatever the file says:
+    /* SUN SHADOWS (0-6) off again at every start, whatever the file says:
      * a test step that froze a 3DS mustn't freeze it again at the next. */
     NitroPort_OptionSet(NITRO_OPT_SUN_SHADOWS, 9);
-    CHECK(NitroPort_Option(NITRO_OPT_SUN_SHADOWS) == 4);
+    CHECK(NitroPort_Option(NITRO_OPT_SUN_SHADOWS) == 6);
     CHECK(NitroPort_OptionsSave() == 1);
     CHECK(NitroPort_OptionsLoad(path) == 1);
     CHECK(NitroPort_Option(NITRO_OPT_SUN_SHADOWS) == 0);

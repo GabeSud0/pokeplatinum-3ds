@@ -106,10 +106,12 @@ void NitroPort_PicaLook(int shadows, int grade, int fixedSun, float elevation, f
  * identify the outstanding GPU work, rather than the last CPU submission. */
 void NitroPort_PicaShadowDebug(int enabled);
 /* The parked sun shadows' hunt (the options page's SUN SHADOWS, through
- * NitroPort_ComposeSunShadows): 0 leaves them parked; 1 the map from the scene's own
- * triangles only, nothing received; 2 the whole map (what only casts, the
- * cards turned to the sun), nothing received; 3 received too, without
- * texture unit 1 (no cut-outs in the shade); 4 all of it, as designed. */
+ * NitroPort_ComposeSunShadows): 0 leaves them parked; 1 the map from the
+ * scene's own triangles only, nothing received; 2 the whole map (what only
+ * casts, the cards turned to the sun), nothing received; 3 the receivers'
+ * pass with no shadow map (a constant shade); 4 the shadow map bound but
+ * its result not used; 5 used: the shadows, without texture unit 1 (no
+ * cut-outs); 6 all of it, as designed. */
 void NitroPort_PicaShadowTest(int level);
 
 /* The compose path: the scene's polygons drawn straight into a screen's
@@ -399,7 +401,7 @@ int NitroPort_ComposeWantsMid(float slider, int aOnTop);
 /* The look (sun shadows and the colour grade, NitroPort_PicaLook) on or
  * off from the next frame drawn. Any thread (L + R + B). */
 void NitroPort_ComposeLook(int on);
-/* The options page's SUN SHADOWS (0 off, 1-3 a test step, 4 on), from the
+/* The options page's SUN SHADOWS (0 off, 1-5 a test step, 6 on), from the
  * next frame: NitroPort_PicaShadowTest and the look's shadows. Any thread. */
 void NitroPort_ComposeSunShadows(int level);
 
