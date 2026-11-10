@@ -2402,6 +2402,17 @@ static uint32_t sSceneHash=2166136261u, sLastSceneHash;
 static int sHashScenes, sSameScene;
 static uint32_t sSameLeftOut;   /* scenes left out as the same (for the [gx3d] line) */
 static int sSkipSame;           /* (the next scene left out as the same: RING_SAME) */
+/* The game's frame now is one that won't be shown (NitroPort_Gx3dLeaveOut:
+ * faster than 1x, the frames between the ones shown): its scene is left out
+ * as one the thread can't keep up with is, whatever the thread has time
+ * for. sSpeedLeftOut: those, counted at their SWAP_BUFFERS. */
+static int sLeaveOut;
+static uint32_t sSpeedLeftOut;
+/* (a command's flags in the ring: its scene left out, by either) */
+static inline uint32_t scene_flags(void)
+{
+    return (sSkipScene || sLeaveOut) ? RING_SKIP|(sSkipSame?RING_SAME:0u) : 0u;
+}
 /* The newest scene left out as the same, on the thread: the serial of the
  * scene on the screen it's the same as, its own time and SWAP_BUFFERS
  * count (NitroPort_Gx3dSameAs; sSameGen odd while written). */
@@ -2516,6 +2527,7 @@ static void swap_noted(void)
 static void swap_queued(void)
 {
     uint32_t behind;
+    if(sLeaveOut && !sSkipScene)sSpeedLeftOut++;
     sSwapsQueued++;
     publish();
     behind=sSwapsQueued-__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE);
@@ -2590,8 +2602,7 @@ static void produce(unsigned op,const uint32_t *p)
     /* A scene the thread can't keep up with is left out (its vertices and
      * normals aren't worked out, and it isn't shown): the game keeps its
      * speed, and the sound its time, whatever the 3D costs. */
-    if(sSkipScene && ((op>=0x21u && op<=0x28u && op!=0x22u) || op==0x50u))
-        flags=RING_SKIP|(sSkipSame?RING_SAME:0u);
+    if((op>=0x21u && op<=0x28u && op!=0x22u) || op==0x50u)flags=scene_flags();
     if(op==0x50u)swap_noted();
     enqueue(op,p,n,flags);
     if(op==0x50u)swap_queued();
@@ -3115,6 +3126,7 @@ void NitroPort_Gx3dStopThread(void)
     sThreaded=0;
     sResults=&s;    /* the same matrices as the shadow's */
     sSkipScene=0;
+    sLeaveOut=0;
     refresh_status(&s);
 }
 void NitroPort_Gx3dFlush(void)
@@ -3148,6 +3160,17 @@ void NitroPort_Gx3dThreadWork(uint64_t *swapTicks,uint32_t *vertices,uint32_t *p
 uint32_t NitroPort_Gx3dSameScenesLeftOut(void)
 {
     return sSameLeftOut;   /* (the game's thread's own) */
+}
+int NitroPort_Gx3dLeaveOut(int on)
+{
+    /* (without the thread a scene is worked out as its commands come: none
+     * is left out) */
+    sLeaveOut=on && sThreaded && !sOps.keep_every_scene;
+    return sLeaveOut==(on!=0);
+}
+uint32_t NitroPort_Gx3dSpeedScenesLeftOut(void)
+{
+    return sSpeedLeftOut;   /* (the game's thread's own) */
 }
 int NitroPort_Gx3dSameAs(uint32_t serial,uint32_t *stamp,uint32_t *swapSeq)
 {
@@ -3309,7 +3332,7 @@ void NitroPort_GxFifoWords(const uint32_t *words,size_t count)
                 size_t n=scan_packets(words,count,&swapped);
                 if(n){
                     if(swapped)swap_noted();
-                    enqueue_packets(words,(uint32_t)n,sSkipScene?RING_SKIP|(sSkipSame?RING_SAME:0u):0u);
+                    enqueue_packets(words,(uint32_t)n,scene_flags());
                     words+=n;count-=n;
                     if(swapped)swap_queued();
                     continue;
