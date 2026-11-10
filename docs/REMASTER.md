@@ -3570,13 +3570,16 @@ trees, signs and the scenery later.
   picture's feet: the first row with an opaque texel from the foot's side
   (foot_row, the texture as the DS samples it, kept for the scene); the
   clear rows below them fall behind the start.
-- Soft: drawn 5 times, the middle and 4 copies a little apart on the
-  ground (the sprite's height x 0.025, 0.5 to 2.25 units; down the screen as
-  much as across), each with the fifth root of the shade: where all five
-  meet, the whole shade; at the edges, less. The sprite's texture sampled
-  smoothly (linear). Fading from the feet to 0.35 of the shade at the
-  head. The shade is the hour's, 1.1 times as dark. (Length 1.25, blur
-  0.025 and 1.1 were picked on a preview of this in the chat, 2026-11-10.)
+- Soft, as a Gaussian blur near enough (asked for 2026-11-10: five
+  copies in a cross, all the same weight, showed as copies): drawn 9
+  times, three by three a step apart on the ground (the sprite's height
+  x 0.025, 0.5 to 2.25 units; down the screen as much as across), weighed
+  1 2 1 each way: the middle copy the shade to the power 4/16, the four
+  sides 2/16, the four corners 1/16; where all nine meet, the whole
+  shade. The sprite's texture sampled smoothly (linear). Fading from the
+  feet to 0.35 of the shade at the head. The shade is the hour's, 1.1
+  times as dark. (Length 1.25, blur 0.025 and 1.1 were picked on a
+  preview of this in the chat.)
 - Depth: NitroShadowSetup.zclip is the DS's clip z from a vertex's x, y, w
   (the projection's z column through the setup's back rows). The GPU
   path's z isn't that clip z: it's the DS's own depth, (z / w + 1) / 2,
@@ -3591,7 +3594,7 @@ trees, signs and the scenery later.
   round shadow).
 - Drawn (draw_ground_shadows) after the opaque polygons: the sprite's
   texture, colour = the copy's shade (its vertices' colour: the fade and
-  the fifth root, NitroPort_ShadowGroundCards) x alpha + (1 - alpha), the
+  the tap's weight, NitroPort_ShadowGroundCards) x alpha + (1 - alpha), the
   framebuffer multiplied by it; depth LEQUAL, not written; no stencil (a
   shadow's copies overlap). The shade is the sun's by the hour (look_now),
   as its way and length are.
@@ -3617,8 +3620,9 @@ trees, signs and the scenery later.
   place across the screen, along the shadows' way by its height up the
   screen x the same stretch. (A tree's layers lean back: laid as real
   slabs their shadows would fold to strips at midday.) Three copies
-  (NITRO_SHADOW_PROP_TAPS), each a cube root of the shade, a little apart
-  on the diagonal; fading to the tip at the top.
+  (NITRO_SHADOW_PROP_TAPS) a step apart on the diagonal, weighed 1 2 1
+  (the middle the shade's square root, the sides its fourth root);
+  fading to the tip at the top.
   Drawn (draw_ground_shadows) before the characters', a tap at a time,
   each tap darkening a pixel once: a stencil bit a tap (the opaque pass
   left 0xFF; a tap draws where its bit is set and clears it), since a

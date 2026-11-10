@@ -492,6 +492,15 @@ typedef struct {
 static Prop sProps[GROUND_PROPS];
 
 #define GROUND_VERTS 24    /* (a sprite's: two triangles, more when the view's edge cuts them) */
+/* The characters' taps: three by three, a step apart across and down the
+ * screen, weighed 1 2 1 each way (over 16: a Gaussian's shape, near
+ * enough): the middle first, the four sides, the four corners. A tap's
+ * colour is the shade to the power of its weight: where all nine are, the
+ * shade. */
+static const signed char sTapAcross[NITRO_SHADOW_GROUND_TAPS] = { 0, 1, -1, 0, 0, 1, -1, 1, -1 };
+static const signed char sTapDown[NITRO_SHADOW_GROUND_TAPS] = { 0, 0, 0, 1, -1, 1, -1, -1, 1 };
+#define TAP_CLASS(t) ((t) == 0 ? 0 : (t) < 5 ? 1 : 2)
+static const float sTapWeight[3] = { 4.0f / 16.0f, 2.0f / 16.0f, 1.0f / 16.0f };
 #define GROUND_ROUNDS 64   /* (round shadows looked at a scene) */
 
 size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batches,
@@ -563,7 +572,7 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
         V3 anchor = v3(0.0f, 0.0f, 0.0f), q[GROUND_VERTS], n = v3(0.0f, 0.0f, 0.0f), across, along;
         float alongOf[GROUND_VERTS], aMin = 1e30f, aMax = -1e30f, uMin = 1e30f, uMax = -1e30f, uMid;
         float feet, top, r, xyw[NITRO_SHADOW_GROUND_TAPS][GROUND_VERTS][3];
-        uint8_t col[GROUND_VERTS][3];
+        uint8_t col[3][GROUND_VERTS][3];   /* (a tap's weight's, the vertex's) */
         V3 tap[NITRO_SHADOW_GROUND_TAPS];
         size_t g, gEnd, i, count = 0;
         int t, ok = 1;
@@ -617,15 +626,12 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
         feet = card_feet(verts, g, gEnd, alongOf, aMin, aMax, batch->texture_param, batch->palette_base, footRow,
                          footCtx) * (aMax - aMin);
         top = aMax - aMin - feet;
-        /* the taps: the middle, and either side across and along the
+        /* the taps: three by three, a step apart across and along the
          * ground (down the screen by as much as across it) */
         r = NITRO_SHADOW_GROUND_BLUR * top;
         r = r < 0.5f ? 0.5f : r > 2.25f ? 2.25f : r;
-        tap[0] = v3(0.0f, 0.0f, 0.0f);
-        for (t = 1; t < NITRO_SHADOW_GROUND_TAPS; t++) {
-            V3 dir = (t - 1) / 2 ? scale(toward, 1.0f / s) : right;
-            tap[t] = scale(dir, (t & 1) ? r : -r);
-        }
+        for (t = 0; t < NITRO_SHADOW_GROUND_TAPS; t++)
+            tap[t] = add(scale(right, r * (float)sTapAcross[t]), scale(toward, r / s * (float)sTapDown[t]));
         for (i = 0; i < gEnd - g; i++) {
             V3 base;
             float h = alongOf[i] - aMin - feet, f, j;
@@ -639,14 +645,15 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
                 ok = unback(&b, gp, xyw[t][i]);
             }
             /* the colour: the shade (DARK times as dark), fading to TIP of
-             * it at the head; each tap a TAPS-th root of it */
+             * it at the head; each tap the shade to its weight's power */
             j = top > 0.0f ? h / top : 0.0f;
             j = j < 0.0f ? 0.0f : j > 1.0f ? 1.0f : j;
             f = 1.0f - (1.0f - NITRO_SHADOW_GROUND_TIP) * j;
             for (c3 = 0; c3 < 3; c3++) {
                 float full = 1.0f - (1.0f - shade[c3]) * NITRO_SHADOW_GROUND_DARK * f;
-                float each = powf(full > 0.0f ? full : 0.0f, 1.0f / (float)NITRO_SHADOW_GROUND_TAPS);
-                col[i][c3] = (uint8_t)(each * 255.0f + 0.5f);
+                int wc;
+                if (!(full > 0.0f)) full = 0.0f;
+                for (wc = 0; wc < 3; wc++) col[wc][i][c3] = (uint8_t)(powf(full, sTapWeight[wc]) * 255.0f + 0.5f);
             }
         }
         if (!ok) continue;
@@ -671,9 +678,9 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
                 dst->position[1] = p[1];
                 dst->position[3] = p[2];
                 dst->position[2] = depth[0] * p[0] + depth[1] * p[1] + depth[2] * p[2] + depth[3];
-                dst->color[0] = col[i - g][0];
-                dst->color[1] = col[i - g][1];
-                dst->color[2] = col[i - g][2];
+                dst->color[0] = col[TAP_CLASS(t)][i - g][0];
+                dst->color[1] = col[TAP_CLASS(t)][i - g][1];
+                dst->color[2] = col[TAP_CLASS(t)][i - g][2];
                 dst->color[3] = 255;
             }
         }
@@ -783,16 +790,19 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
                 for (i = batch->first; i < batch->first + batch->count; i++) {
                     V3 q = back(&b, verts[i].position), rel = sub(q, pr->base), spot;
                     float h = dot(rel, pictureUp), j, f;
-                    uint8_t col[3];
+                    uint8_t col[2][3];   /* (the middle tap's, the sides') */
                     int c3;
                     spot = add(add(pr->base, scale(right, dot(rel, right))), scale(way, h * stretch));
                     j = h / pr->top;
                     j = j < 0.0f ? 0.0f : j > 1.0f ? 1.0f : j;
                     f = 1.0f - (1.0f - NITRO_SHADOW_GROUND_TIP) * j;
+                    /* (the taps weighed 1 2 1: the middle the shade's square
+                     * root, each side its fourth root) */
                     for (c3 = 0; c3 < 3; c3++) {
                         float full = 1.0f - (1.0f - shade[c3]) * NITRO_SHADOW_GROUND_DARK * f;
-                        float each = powf(full > 0.0f ? full : 0.0f, 1.0f / (float)NITRO_SHADOW_PROP_TAPS);
-                        col[c3] = (uint8_t)(each * 255.0f + 0.5f);
+                        if (!(full > 0.0f)) full = 0.0f;
+                        col[0][c3] = (uint8_t)(sqrtf(full) * 255.0f + 0.5f);
+                        col[1][c3] = (uint8_t)(sqrtf(sqrtf(full)) * 255.0f + 0.5f);
                     }
                     for (t = 0; t < NITRO_SHADOW_PROP_TAPS; t++) {
                         NitroGx3dGpuVertex *dst = &out[written + (size_t)t * total + done];
@@ -809,9 +819,9 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
                         dst->position[1] = xyw[1];
                         dst->position[3] = xyw[2];
                         dst->position[2] = depth[0] * xyw[0] + depth[1] * xyw[1] + depth[2] * xyw[2] + depth[3];
-                        dst->color[0] = col[0];
-                        dst->color[1] = col[1];
-                        dst->color[2] = col[2];
+                        dst->color[0] = col[t != 0][0];
+                        dst->color[1] = col[t != 0][1];
+                        dst->color[2] = col[t != 0][2];
                         dst->color[3] = 255;
                     }
                     done++;

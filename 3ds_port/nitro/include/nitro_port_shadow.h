@@ -138,9 +138,11 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
  * sprite; 1.5 times it early and late. Never nearer the sprite's own line
  * than NITRO_SHADOW_GROUND_SIDE (it would be a sliver), never up the
  * screen. Across the sprite stays across (about its middle), so a sprite
- * seen from the back or the front casts the same shape. Soft: drawn
- * NITRO_SHADOW_GROUND_TAPS times, each a little apart on the ground and
- * each a TAPS-th root of the shade (where they all meet, the shade; the
+ * seen from the back or the front casts the same shape. Soft, as a
+ * Gaussian blur near enough: drawn NITRO_SHADOW_GROUND_TAPS times, three
+ * by three a step apart on the ground, weighed 1 2 1 each way (the middle
+ * copy first, 4/16; the four sides, 2/16; the four corners, 1/16), each
+ * the shade to its weight's power (where they all meet, the shade; the
  * edges between), and fading to NITRO_SHADOW_GROUND_TIP of it at the
  * head. The shade: the one given, its darkening NITRO_SHADOW_GROUND_DARK
  * times as much. Pulled towards the camera along its ray (where it is on the
@@ -171,8 +173,8 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
  * are only read. */
 #define NITRO_SHADOW_GROUND_SIDE 30.0f     /* (degrees, on the ground) */
 #define NITRO_SHADOW_GROUND_LENGTH 1.25f    /* (a little longer than the sun alone makes them) */
-#define NITRO_SHADOW_GROUND_TAPS 5
-#define NITRO_SHADOW_GROUND_BLUR 0.025f    /* (each tap's distance: the sprite's height times it, 0.5-2.25) */
+#define NITRO_SHADOW_GROUND_TAPS 9
+#define NITRO_SHADOW_GROUND_BLUR 0.025f    /* (the taps' step: the sprite's height times it, 0.5-2.25) */
 #define NITRO_SHADOW_GROUND_DARK 1.1f      /* (how much darker than the shade given: its darkening times this) */
 #define NITRO_SHADOW_GROUND_TIP 0.35f
 #define NITRO_SHADOW_GROUND_PULL 0.004f
@@ -192,8 +194,9 @@ void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned 
  * for a prop standing under NITRO_SHADOW_PROP_MIN above its ground (lying
  * flat) or with more than 512 triangles.
  *
- * Soft another way: NITRO_SHADOW_PROP_TAPS copies, each a TAPS-th root of
- * the shade, but each tap's vertices of all the props together, in
+ * Soft another way: NITRO_SHADOW_PROP_TAPS copies a step apart on the
+ * diagonal, weighed 1 2 1 (the middle first: the shade's square root; the
+ * sides its fourth root), but each tap's vertices of all the props together, in
  * batches of their own after the characters', their tag the tap's number
  * + 1 (the characters' batches' tag is 0): the renderer draws a tap's
  * batches darkening each pixel once (a tree's layers overlap, and trees

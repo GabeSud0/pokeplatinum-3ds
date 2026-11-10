@@ -629,16 +629,34 @@ static void test_ground_cards(void)
             int j;
             back_of(&s, out[6 * k].position, t);
             for (j = 0; j < 3; j++) { t[j] /= keep; dd += (t[j] - p0[j]) * (t[j] - p0[j]); }
-            CHECK(sqrt(dd) > 0.45 && sqrt(dd) < 2.25 / 0.35 + 0.01);
+            CHECK(sqrt(dd) > 0.45 && sqrt(dd) < 2.25 * 3.1);
         }
     }
-    /* the colours: each tap the TAPS-th root of the shade (DARK times as
-     * dark) at the feet, of TIP of it at the head */
+    /* the colours: each tap the shade (DARK times as dark) to its weight's
+     * power at the feet, TIP of it at the head */
     for (k = 0; k < 3; k++) {
-        double dark = (1.0 - shade[k]) * NITRO_SHADOW_GROUND_DARK;
-        double atFeet = pow(1.0 - dark, 1.0 / T), atHead = pow(1.0 - dark * NITRO_SHADOW_GROUND_TIP, 1.0 / T);
-        CHECK(NEAR(out[0].color[k], atFeet * 255.0, 1.0) && NEAR(out[6 * (T - 1)].color[k], atFeet * 255.0, 1.0));
-        CHECK(NEAR(out[2].color[k], atHead * 255.0, 1.0));
+        double dark = (1.0 - shade[k]) * NITRO_SHADOW_GROUND_DARK, all = 1.0;
+        /* (the middle copy 4/16 of it, a side 2/16, a corner 1/16: all
+         * nine together the shade) */
+        CHECK(NEAR(out[0].color[k], pow(1.0 - dark, 4.0 / 16.0) * 255.0, 1.0));
+        CHECK(NEAR(out[6 * 1].color[k], pow(1.0 - dark, 2.0 / 16.0) * 255.0, 1.0));
+        CHECK(NEAR(out[6 * 4].color[k], pow(1.0 - dark, 2.0 / 16.0) * 255.0, 1.0));
+        CHECK(NEAR(out[6 * 5].color[k], pow(1.0 - dark, 1.0 / 16.0) * 255.0, 1.0));
+        CHECK(NEAR(out[6 * (T - 1)].color[k], pow(1.0 - dark, 1.0 / 16.0) * 255.0, 1.0));
+        CHECK(NEAR(out[2].color[k], pow(1.0 - dark * NITRO_SHADOW_GROUND_TIP, 4.0 / 16.0) * 255.0, 1.0));
+        for (i = 0; i < (size_t)T; i++) all *= out[6 * i].color[k] / 255.0;
+        CHECK(T == 9 && NEAR(all, 1.0 - dark, 0.02));
+    }
+    /* the taps: three by three about the middle one (the same corner of
+     * each: the four sides and the four corners opposite in pairs) */
+    {
+        double c0[3], sum[3] = { 0, 0, 0 }, q[3];
+        back_of(&s, out[0].position, c0);
+        for (i = 1; i < (size_t)T; i++) {
+            back_of(&s, out[6 * i].position, q);
+            for (k = 0; k < 3; k++) sum[k] += q[k] - c0[k];
+        }
+        for (k = 0; k < 3; k++) CHECK(NEAR(sum[k], 0.0, 0.02));
     }
     /* the picture's feet a quarter up the card (its bottom 8 of 32 rows
      * clear): a quarter along the shadow is the round shadow's middle */
@@ -836,13 +854,15 @@ static void test_ground_props(void)
         back_of(&s, out[12].position, o);
         for (k = 0; k < 3; k++) CHECK(NEAR(o[k] / keep, q[k], 0.05));
     }
-    /* the colours: each tap the TAPS-th root of the shade (DARK times as
-     * dark) at the foot, of TIP of it at the top (the upper layer's top) */
+    /* the colours: the middle tap the square root of the shade (DARK times
+     * as dark) at the foot, of TIP of it at the top (the upper layer's
+     * top); the sides its fourth root */
     for (k = 0; k < 3; k++) {
         double dark = (1.0 - shade[k]) * NITRO_SHADOW_GROUND_DARK;
-        CHECK(NEAR(out[0].color[k], pow(1.0 - dark, 1.0 / T) * 255.0, 1.0));
-        CHECK(NEAR(out[6 + 2].color[k], pow(1.0 - dark * NITRO_SHADOW_GROUND_TIP, 1.0 / T) * 255.0, 1.0));
-        CHECK(out[18 * (T - 1)].color[k] == out[0].color[k]);
+        CHECK(NEAR(out[0].color[k], sqrt(1.0 - dark) * 255.0, 1.0));
+        CHECK(NEAR(out[6 + 2].color[k], sqrt(1.0 - dark * NITRO_SHADOW_GROUND_TIP) * 255.0, 1.0));
+        CHECK(NEAR(out[18].color[k], pow(1.0 - dark, 0.25) * 255.0, 1.0));
+        CHECK(T == 3 && out[18 * 2].color[k] == out[18].color[k]);
     }
     /* room for one tree's three copies but not both: the first alone */
     w = NitroPort_ShadowGroundCards(v, batches, 4, (size_t)n, out, 18 * T - 1, outBatches, 12, &nb, &s, s.zclip, NULL,
