@@ -2176,8 +2176,10 @@ static void test_thread_leave_out(void)
     CHECK(scene->count==1);
     NitroPort_Gx3dThreadStats(NULL,NULL,&skippedBefore);
     CHECK(NitroPort_Gx3dLeaveOut(1)==1);
-    /* B and C: left out. C's vertices' Z stays. */
+    /* B and C: left out (the thread caught up after each: not for being
+     * behind). C's vertices' Z stays. */
     triangle(0,RGB(0,31,0));swap();
+    NitroPort_Gx3dScene();
     NitroPort_GxDirectWrite(0x20,RGB(0,0,31));
     NitroPort_GxDirectWrite(0x40,0);
     vertex(-3000,-3000,2000);vertex(3000,-3000,2000);vertex(0,3000,2000);
