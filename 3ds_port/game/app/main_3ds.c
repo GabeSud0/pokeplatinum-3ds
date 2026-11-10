@@ -452,14 +452,25 @@ static void ReadRemasterConfig(bool new3ds)
     sCompose.sunFixed = 0;
     sCompose.sunElevation = 55.0f;
     sCompose.sunAzimuth = 32.0f;
+    char seen[160];   /* (what was read, for the log) */
+    size_t seenLen = 0;
+    unsigned settings = 0;
+
     if (f == NULL) {
+        NitroPort_Log("[remaster] no %s: the defaults", REMASTER_PATH);
         return;
     }
+    seen[0] = '\0';
     while (fgets(line, sizeof(line), f) != NULL) {
         char name[16], value[32];
 
         if (sscanf(line, "%15s %31s", name, value) != 2) {
             continue;
+        }
+        settings++;
+        if (seenLen < sizeof(seen)) {
+            int n = snprintf(seen + seenLen, sizeof(seen) - seenLen, "%s%s %s", seenLen ? ", " : "", name, value);
+            seenLen = n > 0 ? seenLen + (size_t)n : seenLen;
         }
         {
             bool on = strcmp(value, "on") == 0 || strcmp(value, "yes") == 0 || strcmp(value, "1") == 0;
@@ -528,6 +539,8 @@ static void ReadRemasterConfig(bool new3ds)
         }
     }
     fclose(f);
+    NitroPort_Log("[remaster] %u settings read from %s%s%s", settings, REMASTER_PATH, settings ? ": " : "",
+                  seen);
 }
 
 /* -------------------------------------------------------------- 3D worker */
