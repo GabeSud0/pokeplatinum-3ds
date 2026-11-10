@@ -912,6 +912,10 @@ static void ReadOptions(void)
     sCompose.smooth3d = NitroPort_Option(NITRO_OPT_SMOOTH3D);
     /* (the field at the DS's pixel size: with the remaster's wider screen) */
     NitroPort_SetPixelField(sRemaster && sCompose.wide && NitroPort_Option(NITRO_OPT_PIXEL_FIELD) != 0);
+    /* (the sun shadows as last set: from the first frame drawn) */
+    if (sRemaster && NitroPort_Option(NITRO_OPT_SUN_SHADOWS)) {
+        NitroPort_ComposeSunShadows(1);
+    }
     NitroPort_OptionsSetListener(OnOptionChanged);
 }
 

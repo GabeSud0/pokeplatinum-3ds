@@ -3507,40 +3507,59 @@ With that, every step ran on a New 3DS (log d3cc0e3f). But FULL was slow
 received shadows, the 2x2 3D dropped) and flickered (log 5fefdfd1): the
 map is drawn again each scene, fitted to the view, with what's just off
 the screen drawn too (the geometry's box tests widened,
-NitroPort_ShadowReachOn). FULL stays as it is for comparison while the
-scenery's shadows are reworked.
+NitroPort_ShadowReachOn). Since 2026-11-10 the options page has no FULL
+(nor test steps): SUN SHADOWS is OFF or ON, ON the shadows below, built
+up a part at a time; the shadow map's code stays parked, out of reach.
 
-### The sprites' sun shadows (SUN SHADOWS: SPRITES)
+### The sun shadows (SUN SHADOWS: ON)
 
-The idea from Emerald 3DS (its v0.5.0's characters' shadows; written
-afresh here, none of its code): each sprite's own picture laid on the
-ground away from the sun, as its shadow. No shadow map.
+The options page's ENHANCEMENTS card SUN SHADOWS: OFF or ON, kept in
+options.txt as any setting (it was off again at each start while it had
+test steps that could freeze a 3DS). The look is the Emerald 3DS
+remaster's (its Littleroot: long, soft shadows to the lower right; the
+idea only, written afresh here, none of its code): each character's own
+picture laid on the ground as its shadow. No shadow map. Built a part at
+a time: the characters first (the player, the follower, the people);
+trees, signs and the scenery later.
 
-- Which: the scene's cards facing the camera, as NitroPort_ShadowCards
-  finds them (a triangle facing the camera, and the next if it shares an
-  edge), opaque, at most 96 units (6 tiles) long and wide, with a texture
-  that has see-through texels (NitroPort_ShadowSpriteTexture: a palette's
-  colour 0 clear, or direct colour): characters, the follower, the routes'
-  trees. Without that last rule, Veilstone had 206 a scene (log
-  dc9659cd): pieces of walls and cliffs facing the camera, their shadows
-  stray dark shapes.
-- Where it starts: the picture's feet, not the card's bottom edge (a
-  sprite's bottom rows are often clear: the shadows started a few pixels
-  below the feet). The 3DS renderer finds the first row with an opaque
-  texel from the foot's side (foot_row, from the texture as the DS samples
-  it, kept for the scene); the shadow's base goes on the ground where the
-  camera sees those feet, the clear rows behind it under the sprite.
-- Soft: the shadow pass samples the sprite's texture smoothly (linear;
-  the texture's own filter back after each draw), so its edge isn't the
-  sprite's pixel steps.
-- Where (NitroPort_ShadowGroundCards, port_shadow.c): the foot (the middle
-  of the card's lowest corners) stays where it stands; across the card
-  becomes across the sun's way, the nearer way round (from the side the
-  card would be a sliver); up the card becomes along the ground away from
-  the sun, its length times the sun's cotangent (the sun never under 40
-  degrees: at most 1.2 times as long); 1/16 of a tile above the foot's
-  ground. The ground plane is the foot's: over a ledge or steps the
-  shadow stays at the foot's height.
+- Which: the characters, by the game's round shadow under each (the
+  field's own, ov5_021F134C.c, drawn as ever: patch 0027 leaves it, the
+  port never sets NitroPort_SetSunShadows now). The 3DS renderer finds the
+  scene's painted shadows (find_decals: see-through, lying flat, dark);
+  NitroPort_ShadowMarkers splits those batches into runs of triangles
+  sharing corners, each a marker: its middle, on the ground. Runs of more
+  than 8 triangles, or wider than 3/4 of a tile, are painted patches
+  beside buildings, not markers.
+- Who: the scene's cards facing the camera (a triangle facing it, and the
+  next if it shares an edge), opaque, at most 6 tiles long and wide, with
+  a texture that has see-through texels (a palette's colour 0 clear, or
+  direct colour). A card and a marker go together if each is the other's
+  nearest (the card's foot's middle to the marker's middle, within 5/8 of
+  a tile or 0.4 of the card's width; a taller card counts as nearer by a
+  tenth of its height, so the character beats the grass at its feet). A
+  tree or a sign stands on no round shadow: no shadow yet. The round
+  shadow of a character given one isn't drawn (its triangles moved to a
+  point in the scene's vertices); anyone without one (at dusk, when
+  there's no sun to cast them) keeps the round one.
+- Where (NitroPort_ShadowGroundCards, port_shadow.c): it starts at the
+  marker (under the feet, on the ground the character stands on, as the
+  game puts it: no guessing from the camera's ray, which threw far
+  people's shadows into long streaks, log dc60d496). Across the sprite
+  stays across (the screen's right on the ground), so a sprite seen from
+  the back or the front casts the same shape; up the sprite from its feet
+  goes along the ground towards the screen's lower right, 28 degrees
+  below the horizontal on the screen whichever way the camera looks (the
+  ground's way down the screen is foreshortened: allowed for), the
+  shadow 1.3 times as long on the screen as the sprite is tall. The
+  picture's feet: the first row with an opaque texel from the foot's side
+  (foot_row, the texture as the DS samples it, kept for the scene); the
+  clear rows below them fall behind the start.
+- Soft: drawn 5 times, the middle and 4 copies a little apart on the
+  ground (the sprite's height x 0.06, 0.75 to 3 units; down the screen as
+  much as across), each with the fifth root of the shade: where all five
+  meet, the whole shade; at the edges, less. The sprite's texture sampled
+  smoothly (linear). Fading from the feet to 0.35 of the shade at the
+  head.
 - Depth: NitroShadowSetup.zclip is the DS's clip z from a vertex's x, y, w
   (the projection's z column through the setup's back rows). The GPU
   path's z isn't that clip z: it's the DS's own depth, (z / w + 1) / 2,
@@ -3548,20 +3567,23 @@ ground away from the sun, as its shadow. No shadow map.
   (normalize_depth). NitroPort_ShadowDepthRow folds all of it into one
   row on x, y, w, so a new vertex's z is exactly as the scene's own would
   be. (The first try used clip z itself: every shadow failed the depth
-  test, none seen, log 93044840; the test now runs the path's steps.)
-- Drawn (draw_ground_shadows) after the opaque polygons: the card's
-  texture, colour shade x alpha + (1 - alpha) (the sun shadows' shade, by
-  the sun's strength at the hour), the framebuffer multiplied by it; depth
-  LEQUAL, not written; without outlines, stencil bit 1 marks a pixel
-  shaded, so shadows over each other darken once.
-- The game's round shadows (patch 0027) are left out only while a scene
-  has these (none indoors or at dusk: the round ones then); the box tests
-  aren't widened (NitroPort_SetShadowReach only with FULL).
-- The log, every 300 scenes: the cards a scene and the ms a scene laying
-  them. Tests: test_shadow (the depth row against every vertex's clip z;
-  on the ground, the foot's width, the length away from the sun, the
-  lift; none when there's no room, translucent, untextured, or the sun
-  low).
+  test, none seen, log 93044840.) Each point is then pulled 1% of its
+  distance towards the camera along its ray: where it is on the screen
+  doesn't change, and it stays in front of the ground at any distance (1/16
+  of a tile up, as before, wasn't enough far away).
+- Drawn (draw_ground_shadows) after the opaque polygons: the sprite's
+  texture, colour = the copy's shade (its vertices' colour: the fade and
+  the fifth root, NitroPort_ShadowGroundCards) x alpha + (1 - alpha), the
+  framebuffer multiplied by it; depth LEQUAL, not written; no stencil (a
+  shadow's copies overlap). The shade is the sun's by the hour (look_now);
+  the angle and length don't follow the clock.
+- The log, at 300 scenes: the round shadows found a scene, the characters
+  given a sun shadow a scene, and the ms a scene laying them. Tests:
+  test_shadow (the markers, the painted patch not one; the character's
+  alone, not the grass's or a sign's; on the marker's ground, its width,
+  the angle and length on the screen, the pull along the ray, the taps,
+  the colours; the picture's feet; none with no marker near, no room, or
+  a translucent, untextured or opaque-textured batch).
 
 The log says `[shadow] test step N: ...` when a step is chosen,
 `[shadow] the first sun shadow map sent to the GPU` and `[shadow] the

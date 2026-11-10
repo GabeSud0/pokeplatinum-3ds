@@ -105,17 +105,19 @@ void NitroPort_PicaLook(int shadows, int grade, int fixedSun, float elevation, f
 /* Debug only: submit and wait between shadow passes. Watchdog stages then
  * identify the outstanding GPU work, rather than the last CPU submission. */
 void NitroPort_PicaShadowDebug(int enabled);
-/* The parked sun shadows' hunt (the options page's SUN SHADOWS, through
- * NitroPort_ComposeSunShadows): 0 leaves them parked; 1 the map from the
+/* The parked sun shadow map's hunt (no longer on the options page: its
+ * SUN SHADOWS is the shadows from the sprites, NitroPort_PicaGroundShadows;
+ * the map stays parked): 0 leaves it parked; 1 the map from the
  * scene's own triangles only, nothing received; 2 the whole map (what only
  * casts, the cards turned to the sun), nothing received; 3 the receivers'
  * pass with the scene's own program (a constant shade); 4 with the
  * receivers' program; 5 the shadow map bound but its result not used; 6
  * used: the shadows, without texture unit 1 (no cut-outs); 7 all of it. */
 void NitroPort_PicaShadowTest(int level);
-/* The sprites' sun shadows (the options page's SUN SHADOWS: SPRITES): each
- * card facing the camera laid on the ground away from the sun, drawn with
- * its texture after the opaque polygons; no shadow map. The 3D thread. */
+/* The sun shadows (the options page's SUN SHADOWS: ON): each character
+ * (on the game's round shadow) laid on the ground from it, to the screen's
+ * lower right, drawn softly with its texture after the opaque polygons,
+ * and its round shadow left out; no shadow map. The 3D thread. */
 void NitroPort_PicaGroundShadows(int on);
 
 /* The compose path: the scene's polygons drawn straight into a screen's
@@ -405,8 +407,8 @@ int NitroPort_ComposeWantsMid(float slider, int aOnTop);
 /* The look (sun shadows and the colour grade, NitroPort_PicaLook) on or
  * off from the next frame drawn. Any thread (L + R + B). */
 void NitroPort_ComposeLook(int on);
-/* The options page's SUN SHADOWS (0 OFF, 1 SPRITES, 2 FULL), from the
- * next frame: NitroPort_PicaShadowTest and the look's shadows. Any thread. */
+/* The options page's SUN SHADOWS (0 OFF, 1 ON), from the next frame:
+ * NitroPort_PicaGroundShadows. Any thread. */
 void NitroPort_ComposeSunShadows(int level);
 
 /* Whether the lower screen was last drawn as the port's menu

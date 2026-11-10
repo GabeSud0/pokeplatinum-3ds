@@ -28,8 +28,7 @@ enum {
     NITRO_OPT_ITEM2,             /* (not on the page) the lower menu's second square's item (0 none) */
     NITRO_OPT_PIXEL_FIELD,       /* 0 off, 1 on: the field at the DS's pixel size (NitroPort_SetPixelField) */
     NITRO_OPT_FOLLOWER,          /* 0 off, 1 on: the party's first Pokémon walks behind the player (the game's port_follower.c) */
-    NITRO_OPT_SUN_SHADOWS,       /* 0 off, 1 the sprites' shadows (NitroPort_PicaGroundShadows), 2 the full shadow
-                                  * map (being reworked); off again each time the game starts */
+    NITRO_OPT_SUN_SHADOWS,       /* 0 off, 1 on: the characters' shadows from the sun (NitroPort_PicaGroundShadows) */
     NITRO_OPT_COUNT
 };
 

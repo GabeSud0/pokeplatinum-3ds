@@ -36,7 +36,7 @@ static const struct {
     [NITRO_OPT_ITEM2] = { "item2", 1024, 0 },
     [NITRO_OPT_PIXEL_FIELD] = { "pixel_field", 2, 1 },
     [NITRO_OPT_FOLLOWER] = { "follower", 2, 0 },
-    [NITRO_OPT_SUN_SHADOWS] = { "sun_shadows", 3, 0 },
+    [NITRO_OPT_SUN_SHADOWS] = { "sun_shadows", 2, 0 },
 };
 
 static int sValue[NITRO_OPT_COUNT];
@@ -165,12 +165,6 @@ int NitroPort_OptionsLoad(const char *path)
      * nothing else): 60 FPS back on if SPEED had turned it off. */
     if (sValue[NITRO_OPT_SPEED] != 0) {
         sValue[NITRO_OPT_SPEED] = 0;
-        sDirty = 1;
-    }
-    /* The sun shadows off at every start too: if a step froze the 3DS, the
-     * game mustn't freeze again as soon as it's started. */
-    if (sValue[NITRO_OPT_SUN_SHADOWS] != 0) {
-        sValue[NITRO_OPT_SUN_SHADOWS] = 0;
         sDirty = 1;
     }
     if (sValue[NITRO_OPT_FPS60_HELD]) {

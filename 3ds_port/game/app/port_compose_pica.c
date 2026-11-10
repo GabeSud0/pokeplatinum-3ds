@@ -279,11 +279,11 @@ void NitroPort_ComposeLook(int on)
     __atomic_store_n(&sLookRequest, on ? 1 : 0, __ATOMIC_RELEASE);
 }
 
-static int sShadowRequest = -1;   /* (NitroPort_ComposeSunShadows: 0-2, for the next frame) */
+static int sShadowRequest = -1;   /* (NitroPort_ComposeSunShadows: 0 or 1, for the next frame) */
 
 void NitroPort_ComposeSunShadows(int level)
 {
-    __atomic_store_n(&sShadowRequest, level < 0 ? 0 : level > 2 ? 2 : level, __ATOMIC_RELEASE);
+    __atomic_store_n(&sShadowRequest, level > 0 ? 1 : 0, __ATOMIC_RELEASE);
 }
 static Screen sScreens[2];        /* 0: upper, 1: lower */
 
@@ -5124,13 +5124,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                                sConfig.sunAzimuth);
         }
         if (shadows >= 0) {
-            /* (the options page's SUN SHADOWS: OFF; SPRITES, the sprites'
-             * shadows alone; FULL, the shadow map, as its test steps' ON) */
-            NitroPort_PicaShadowTest(shadows == 2 ? 7 : 0);
-            NitroPort_PicaGroundShadows(shadows == 1);
-            sConfig.shadows = shadows == 2;
-            NitroPort_PicaLook(sConfig.shadows, sConfig.grade, sConfig.sunFixed, sConfig.sunElevation,
-                               sConfig.sunAzimuth);
+            /* (the options page's SUN SHADOWS: OFF or ON) */
+            NitroPort_PicaGroundShadows(shadows);
         }
     }
     keptShown = NitroPort_LowerMenuKeptShown();
