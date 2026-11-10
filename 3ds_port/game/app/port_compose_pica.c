@@ -279,11 +279,11 @@ void NitroPort_ComposeLook(int on)
     __atomic_store_n(&sLookRequest, on ? 1 : 0, __ATOMIC_RELEASE);
 }
 
-static int sShadowRequest = -1;   /* (NitroPort_ComposeSunShadows: 0-6, for the next frame) */
+static int sShadowRequest = -1;   /* (NitroPort_ComposeSunShadows: 0-7, for the next frame) */
 
 void NitroPort_ComposeSunShadows(int level)
 {
-    __atomic_store_n(&sShadowRequest, level < 0 ? 0 : level > 6 ? 6 : level, __ATOMIC_RELEASE);
+    __atomic_store_n(&sShadowRequest, level < 0 ? 0 : level > 7 ? 7 : level, __ATOMIC_RELEASE);
 }
 static Screen sScreens[2];        /* 0: upper, 1: lower */
 

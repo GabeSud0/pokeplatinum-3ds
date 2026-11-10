@@ -3473,7 +3473,7 @@ between the shadow passes, so the two-second watchdog names the pass the
 GPU didn't come back from; it's slower, and only for that hunt.
 
 **The hunt, a step at a time (2026-11-09).** The options page's
-ENHANCEMENTS has a SUN SHADOWS card: OFF, TEST 1 to TEST 5, ON. Each step
+ENHANCEMENTS has a SUN SHADOWS card: OFF, TEST 1 to TEST 6, ON. Each step
 adds one part, so the first step that freezes a 3DS names the part. It's
 back to OFF each time the game starts (port_options.c), so a step that
 froze doesn't freeze the next start too. With it OFF the shadows stay
@@ -3483,15 +3483,26 @@ parked, as `shadows on` in remaster.txt and the look toggle leave them.
 |---|---|
 | TEST 1 | the shadow map from the scene's own triangles; nothing received (round shadows stay) |
 | TEST 2 | the whole map: what only casts (out of view, facing away) and the cards turned to the sun; nothing received |
-| TEST 3 | the receivers' pass (its program, depth EQUAL, stencil, blend) with no texture on unit 0: what receives a constant shade darker |
-| TEST 4 | as TEST 3 with the shadow map bound on unit 0 (sampled, its shadow parameters set), its result not used |
-| TEST 5 | its result used: the shadows, without texture unit 1 (no cut-outs); painted and round shadows left out |
+| TEST 3 | the receivers' pass (depth EQUAL, stencil, blend, fog) drawn with the scene's own program, no texture: what receives a constant shade darker |
+| TEST 4 | as TEST 3 with the receivers' program |
+| TEST 5 | as TEST 4 with the shadow map bound on unit 0 (sampled, its shadow parameters set), its result not used |
+| TEST 6 | its result used: the shadows, without texture unit 1 (no cut-outs); painted and round shadows left out |
 | ON | all of it, as designed |
 
-First run on a New 3DS (2026-11-09, log 7ec47860): TEST 1 and TEST 2 ran
-300 scenes each; the step that is TEST 5 now (then TEST 3) hung the GPU on
-its first frame: the display thread "stuck in waiting for the GPU (the
-frame before)", the game and its sound on, the HOME menu unable to draw.
+Runs on a New 3DS (2026-11-09): TEST 1 and TEST 2 ran 300 scenes each
+(log 7ec47860). The receivers hung the GPU on their first frame, with the
+shadow map read (7ec47860) and with no texture on unit 0 at all
+(c79a35be): the display thread "stuck in waiting for the GPU (the frame
+before)", the game and its sound on, the HOME menu unable to draw. So:
+the pass or its program, not the shadow map.
+
+The receivers' program wrote its texture coordinate 0 output in three
+parts (x, y; z = texcoord0w; w never): on the PICA each configured output
+component is to be written exactly once or it freezes (3dbrew,
+GPU/Pitfalls). The other two programs write every output whole. Now it
+builds the output in a temporary and writes it once, whole (w 1). (The
+#113 build had the same writes and drew shadows on a 3DS, so this may not
+be all: TEST 3 against TEST 4 tells the pass from the program.)
 
 The log says `[shadow] test step N: ...` when a step is chosen,
 `[shadow] the first sun shadow map sent to the GPU` and `[shadow] the

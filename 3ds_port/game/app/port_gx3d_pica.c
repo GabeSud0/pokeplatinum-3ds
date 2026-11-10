@@ -325,18 +325,20 @@ static void free_edge_copies(void);
 static int make_shadow_spare(void);
 static void free_shadow_spare(void);
 static NitroShadowSetup sShadow;
-/* The steps (2026-11-09: 1 and 2 ran on a New 3DS; the receivers, then
- * step 3, hung its GPU on their first frame, so they're in three now):
- * 1 the map from the scene's own triangles; 2 the whole map; 3 the
- * receivers' pass with its program and state, but no shadow map on unit 0
- * (the shade constant: what receives, darker); 4 the shadow map bound on
- * unit 0 (sampled, its shadow parameters set) but its result not used; 5
- * its result used: the shadows (the painted and round ones left out); 6
- * (ON) the cut-outs too, on texture unit 1. */
-#define SHADOW_STEP_PROGRAM 3
-#define SHADOW_STEP_BOUND   4
-#define SHADOW_STEP_READ    5
-#define SHADOW_STEP_ON      6
+/* The steps. 2026-11-09 on a New 3DS: 1 and 2 ran; the receivers hung
+ * its GPU on their first frame, even with no texture on unit 0 (logs
+ * 7ec47860, c79a35be). Now: 1 the map from the scene's own triangles; 2
+ * the whole map; 3 the receivers' pass (depth EQUAL, stencil, blend, fog)
+ * drawn with the scene's own program, no texture, a constant shade; 4 the
+ * same with the receivers' program (its outputs now written once and
+ * whole); 5 the shadow map bound on unit 0 (sampled, shadow parameters
+ * set), its result not used; 6 its result used: the shadows (the painted
+ * and round ones left out); 7 (ON) the cut-outs too, on texture unit 1. */
+#define SHADOW_STEP_PASS    3
+#define SHADOW_STEP_PROGRAM 4
+#define SHADOW_STEP_BOUND   5
+#define SHADOW_STEP_READ    6
+#define SHADOW_STEP_ON      7
 static int shadow_level(void);   /* (the hunt's step: sun shadows, below) */
 static int sShadowReady,sShadowDrawn;        /* (the prepared scene has a ground; its map is drawn) */
 static C3D_Tex *sRecvTex;                    /* (unit 1's texture, as bound) */
@@ -2402,7 +2404,8 @@ void NitroPort_PicaLook(int shadows,int grade,int fixedSun,float elevation,float
         static const char *const what[SHADOW_STEP_ON+1]={"",
             "the map from the scene's own triangles, nothing received",
             "the whole map (what only casts, the cards), nothing received",
-            "the whole map; the receivers' pass with no shadow map (a constant shade)",
+            "the whole map; the receivers' pass with the scene's own program, no shadow map (a constant shade)",
+            "the whole map; the receivers' pass with its own program, no shadow map (a constant shade)",
             "the whole map; the receivers' pass with the shadow map bound, not used",
             "the whole map, received without texture unit 1 (no cut-outs)",
             "all of it, as designed"};
@@ -2560,7 +2563,7 @@ static void bind_batch_shadow(const NitroGx3dBatch *batch)
                         GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
         C3D_TexEnvFunc(env,C3D_RGB,GPU_INTERPOLATE);
     }else{
-        /* (steps 3 and 4: the shade itself, the shadow map's result not
+        /* (steps 3 to 5: the shade itself, the shadow map's result not
          * read: what receives drawn darker all over) */
         C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,0,0);
         C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
@@ -2591,13 +2594,15 @@ static void draw_shadow_receivers(const PicaView *view)
     view_viewport(view);
     C3D_BindProgram(&sProgram);
     begin_pass(view,&view->rect);
-    C3D_BindProgram(&sRecvProgram);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,sUnifRecvMtx,&sViewMtx);
-    C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvStereo,sViewStereo,sViewConvergence,0.0f,0.0f);
-    for(q=0;q<4;q++){
-        C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvShadow+q,sShadow.receiver[q][0],sShadow.receiver[q][1],
-                      sShadow.receiver[q][2],sShadow.receiver[q][3]);
-    }
+    if(shadow_level()>=SHADOW_STEP_PROGRAM){
+        C3D_BindProgram(&sRecvProgram);
+        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,sUnifRecvMtx,&sViewMtx);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvStereo,sViewStereo,sViewConvergence,0.0f,0.0f);
+        for(q=0;q<4;q++){
+            C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvShadow+q,sShadow.receiver[q][0],sShadow.receiver[q][1],
+                          sShadow.receiver[q][2],sShadow.receiver[q][3]);
+        }
+    }   /* (step 3: the scene's own program, as begin_pass set it up) */
     NitroPort_PicaBindVertices(sVertices[sPrepared]);
     /* This is a different target from the map; binding flushes citro3d's
      * texture cache after the map's framebuffer writes. */
@@ -2605,7 +2610,7 @@ static void draw_shadow_receivers(const PicaView *view)
         C3D_TexBind(0,&sShadowTex);
         C3D_TexShadowParams(false,sShadow.bias*NITRO_SHADOW_BIAS_SCALE);
     }else{
-        C3D_TexBind(0,NULL);   /* (step 3: no texture at all on unit 0) */
+        C3D_TexBind(0,NULL);   /* (steps 3 and 4: no texture at all on unit 0) */
     }
     if(shadow_level()>=SHADOW_STEP_ON)C3D_TexBind(1,&sSpareTex);
     sBoundTexKnown=0;
@@ -2787,7 +2792,7 @@ static void draw_scene(const PicaView *view)
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
         draw_parts(parts);
     }
-    if(sShadowReady && !depthOnly && shadow_level()>=SHADOW_STEP_PROGRAM){
+    if(sShadowReady && !depthOnly && shadow_level()>=SHADOW_STEP_PASS){
         shadow_checkpoint("waiting for the opaque scene before sun shadows");
         draw_shadow_receivers(view);
         if(!sShadowToldRecv){
