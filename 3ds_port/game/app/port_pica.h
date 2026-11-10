@@ -105,8 +105,8 @@ void NitroPort_PicaLook(int shadows, int grade, int fixedSun, float elevation, f
 /* Debug only: submit and wait between shadow passes. Watchdog stages then
  * identify the outstanding GPU work, rather than the last CPU submission. */
 void NitroPort_PicaShadowDebug(int enabled);
-/* The parked sun shadows' hunt (remaster.txt: shadowtest 1-4, with
- * shadows on): 0 leaves them parked; 1 the map from the scene's own
+/* The parked sun shadows' hunt (the options page's SUN SHADOWS, through
+ * NitroPort_ComposeSunShadows): 0 leaves them parked; 1 the map from the scene's own
  * triangles only, nothing received; 2 the whole map (what only casts, the
  * cards turned to the sun), nothing received; 3 received too, without
  * texture unit 1 (no cut-outs in the shade); 4 all of it, as designed. */
@@ -235,7 +235,6 @@ typedef struct ComposeConfig {
                               * 3 xbrz (2x by xBRZ, nearest), 4 xbrz smooth (bilinear) */
     int shadows;             /* sun shadows on the 3D */
     int shadowDebug;         /* waits between passes to locate a hardware hang */
-    int shadowTest;          /* the parked sun shadows a step at a time (NitroPort_PicaShadowTest) */
     int grade;               /* the colour grade on the 3D's textures */
     int sunFixed;            /* the sun where sunElevation, sunAzimuth say, not by the clock */
     float sunElevation, sunAzimuth;   /* (degrees; NitroPort_PicaLook) */
@@ -400,6 +399,9 @@ int NitroPort_ComposeWantsMid(float slider, int aOnTop);
 /* The look (sun shadows and the colour grade, NitroPort_PicaLook) on or
  * off from the next frame drawn. Any thread (L + R + B). */
 void NitroPort_ComposeLook(int on);
+/* The options page's SUN SHADOWS (0 off, 1-3 a test step, 4 on), from the
+ * next frame: NitroPort_PicaShadowTest and the look's shadows. Any thread. */
+void NitroPort_ComposeSunShadows(int level);
 
 /* Whether the lower screen was last drawn as the port's menu
  * (nitro_port_lowermenu.h): its touches go through the menu then, else to

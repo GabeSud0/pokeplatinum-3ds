@@ -3472,22 +3472,26 @@ one at a time, each in a normal build that can be played.
 between the shadow passes, so the two-second watchdog names the pass the
 GPU didn't come back from; it's slower, and only for that hunt.
 
-**The hunt, a step at a time (2026-11-09).** `shadowtest N` in
-remaster.txt, with `shadows on`, unparks them for a test; without it
-(and from the in-game look toggle) they stay parked. Each step adds one
-part, so the first step that freezes a 3DS names the part:
+**The hunt, a step at a time (2026-11-09).** The options page's
+ENHANCEMENTS has a SUN SHADOWS card: OFF, TEST 1, TEST 2, TEST 3, ON.
+Each step adds one part, so the first step that freezes a 3DS names the
+part. It's back to OFF each time the game starts (port_options.c), so a
+step that froze doesn't freeze the next start too. With it OFF the
+shadows stay parked, as `shadows on` in remaster.txt and the look toggle
+leave them.
 
-| `shadowtest` | drawn |
+| SUN SHADOWS | drawn |
 |---|---|
-| 1 | the shadow map from the scene's own triangles; nothing received (round shadows stay) |
-| 2 | the whole map: what only casts (out of view, facing away) and the cards turned to the sun; nothing received |
-| 3 | received too, but without texture unit 1: the shade over whole polygons (no cut-outs); painted and round shadows left out |
-| 4 | all of it, as designed |
+| TEST 1 | the shadow map from the scene's own triangles; nothing received (round shadows stay) |
+| TEST 2 | the whole map: what only casts (out of view, facing away) and the cards turned to the sun; nothing received |
+| TEST 3 | received too, but without texture unit 1: the shade over whole polygons (no cut-outs); painted and round shadows left out |
+| ON | all of it, as designed |
 
-The log says `[shadow] test step N: ...` when they're turned on,
+The log says `[shadow] test step N: ...` when a step is chosen,
 `[shadow] the first sun shadow map sent to the GPU` and `[shadow] the
-first sun shadow receivers sent to the GPU` at their first draws, and
+first sun shadow receivers sent to the GPU` at their first draws,
 `[shadow] 300 scenes drawn with the sun shadows (step N): the GPU kept up`
-once a step has run for a while. A freeze leaves the watchdog's
-`stuck in ...` line after the last of them. Outdoors in daylight
-(`sun 55,30` fixes the sun if the clock says night).
+once a step has run for a while, and `[shadow] test step N: off again`.
+A freeze leaves the watchdog's `stuck in ...` line after the last of
+them. Outdoors; the sun follows the clock: about 19:50 to 20:10 and
+around 5:00 there are none to draw; at night the moon's, a third as dark.

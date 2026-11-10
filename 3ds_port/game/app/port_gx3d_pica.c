@@ -2314,15 +2314,23 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
 #define SUN_SHADOWS_PARKED 1
 #endif
 
-/* The hunt for the hang (remaster.txt: shadowtest 1-4, port_pica.h): the
- * shadows a step at a time, each step one test on a 3DS. 0 (none given)
- * keeps them parked; the in-game look toggle never unparks them. */
+/* The hunt for the hang (the options page's SUN SHADOWS: TEST 1-3, ON):
+ * the shadows a step at a time, each step one test on a 3DS. 0 (OFF)
+ * keeps them parked, as remaster.txt's `shadows on` and the look toggle
+ * do. */
 static int sShadowTest;
 static unsigned sShadowScenes;   /* (scenes drawn with them, for the log) */
 static int sShadowToldMap,sShadowToldRecv;
 void NitroPort_PicaShadowTest(int level)
 {
-    sShadowTest=level<0?0:level>4?4:level;
+    level=level<0?0:level>4?4:level;
+    if(level!=sShadowTest){
+        /* (each step's first map and receivers logged afresh) */
+        sShadowToldMap=sShadowToldRecv=0;
+        sShadowScenes=0;
+        if(!level && sShadowTest)NitroPort_Log("[shadow] test step %d: off again",sShadowTest);
+    }
+    sShadowTest=level;
 }
 /* The step drawn: 4 (all) when not parked at all. */
 static int shadow_level(void)

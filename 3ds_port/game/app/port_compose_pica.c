@@ -278,6 +278,13 @@ void NitroPort_ComposeLook(int on)
 {
     __atomic_store_n(&sLookRequest, on ? 1 : 0, __ATOMIC_RELEASE);
 }
+
+static int sShadowRequest = -1;   /* (NitroPort_ComposeSunShadows: 0-4, for the next frame) */
+
+void NitroPort_ComposeSunShadows(int level)
+{
+    __atomic_store_n(&sShadowRequest, level < 0 ? 0 : level > 4 ? 4 : level, __ATOMIC_RELEASE);
+}
 static Screen sScreens[2];        /* 0: upper, 1: lower */
 
 /* The lower screen as the menu (nitro_port_lowermenu.h): its picture in a
@@ -1027,7 +1034,6 @@ static int compose_init(const ComposeConfig *config, int small)
      * otherwise (filter3d: see main_3ds.c). */
     NitroPort_PicaTextureFilter(config->filter3d);
     NitroPort_PicaShadowDebug(config->shadowDebug);
-    NitroPort_PicaShadowTest(config->shadowTest);
     NitroPort_PicaLook(config->shadows, config->grade, config->sunFixed, config->sunElevation,
                        config->sunAzimuth);
     memset(sScreens, 0, sizeof(sScreens));
@@ -5109,9 +5115,18 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     {
         int look = __atomic_exchange_n(&sLookRequest, -1, __ATOMIC_ACQ_REL);
 
+        int shadows = __atomic_exchange_n(&sShadowRequest, -1, __ATOMIC_ACQ_REL);
+
         if (look >= 0) {
             sConfig.shadows = look;
             sConfig.grade = look;
+            NitroPort_PicaLook(sConfig.shadows, sConfig.grade, sConfig.sunFixed, sConfig.sunElevation,
+                               sConfig.sunAzimuth);
+        }
+        if (shadows >= 0) {
+            /* (the options page's SUN SHADOWS: the step, then the look with them on or off) */
+            NitroPort_PicaShadowTest(shadows);
+            sConfig.shadows = shadows > 0;
             NitroPort_PicaLook(sConfig.shadows, sConfig.grade, sConfig.sunFixed, sConfig.sunElevation,
                                sConfig.sunAzimuth);
         }

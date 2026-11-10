@@ -109,6 +109,14 @@ int main(void)
     CHECK(NitroPort_Option(NITRO_OPT_SPEED) == 0);
     CHECK(NitroPort_Option(NITRO_OPT_ENCOUNTERS) == 4);
 
+    /* SUN SHADOWS (0-4) off again at every start, whatever the file says:
+     * a test step that froze a 3DS mustn't freeze it again at the next. */
+    NitroPort_OptionSet(NITRO_OPT_SUN_SHADOWS, 9);
+    CHECK(NitroPort_Option(NITRO_OPT_SUN_SHADOWS) == 4);
+    CHECK(NitroPort_OptionsSave() == 1);
+    CHECK(NitroPort_OptionsLoad(path) == 1);
+    CHECK(NitroPort_Option(NITRO_OPT_SUN_SHADOWS) == 0);
+
     /* SPEED above 1x turns 60 FPS off, 1x on again; set by the player in
      * between, it stays as set (and with 60 FPS off to begin with, SPEED
      * leaves it). Kept in the file. */

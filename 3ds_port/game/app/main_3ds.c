@@ -409,8 +409,7 @@ static volatile bool sSuspended;
  * resolution and scaled down: always, the default; with the slider up
  * only; never), flip on/off, filter3d
  * nearest/smooth/sharp/xbrz/xbrz-smooth, shadows on/off, grade on/off,
- * sun clock/<elevation>,<azimuth> (degrees), shadowtest 0-4 (the parked
- * sun shadows a step at a time: NitroPort_PicaShadowTest). */
+ * sun clock/<elevation>,<azimuth> (degrees). */
 static void ReadRemasterConfig(bool new3ds)
 {
     FILE *f = fopen(REMASTER_PATH, "r");
@@ -517,9 +516,6 @@ static void ReadRemasterConfig(bool new3ds)
                 sCompose.shadows = on;
             } else if (strcmp(name, "shadowdebug") == 0) {
                 sCompose.shadowDebug = on;
-            } else if (strcmp(name, "shadowtest") == 0) {
-                /* (a number first: "1" also reads as on) */
-                sCompose.shadowTest = (value[0] >= '0' && value[0] <= '9') ? atoi(value) : on ? 4 : 0;
             } else if (strcmp(name, "grade") == 0) {
                 sCompose.grade = on;
             } else if (strcmp(name, "sun") == 0) {
@@ -900,6 +896,8 @@ static void OnOptionChanged(int id, int value)
         NitroPort_ComposeSetSmooth3d(value);
     } else if (id == NITRO_OPT_PIXEL_FIELD) {
         NitroPort_SetPixelField(sRemaster && sCompose.wide && value != 0);
+    } else if (id == NITRO_OPT_SUN_SHADOWS && sRemaster) {
+        NitroPort_ComposeSunShadows(value);
     }
 }
 
