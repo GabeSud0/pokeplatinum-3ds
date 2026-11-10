@@ -426,11 +426,58 @@ void NitroPort_ShadowDepthRow(const NitroShadowSetup *setup, int wbuffer, float 
     out[2] += depthA * depthK - 0.5f * depthK;
 }
 
+int NitroPort_ShadowSpriteTexture(uint32_t textureParam)
+{
+    unsigned fmt = (textureParam >> 26) & 7u;
+    /* a palette's colour 0 transparent (4, 16, 256 colours), or direct
+     * colour (its alpha bit) */
+    return ((fmt == 2u || fmt == 3u || fmt == 4u) && (textureParam & (1u << 29))) || fmt == 7u;
+}
+
+/* Where up the card (0 its foot .. 1 its top) the picture's feet are:
+ * footRow's first opaque row from the foot's side, over the card's
+ * texels. 0 if not known. */
+static float card_feet(const NitroGx3dGpuVertex *verts, size_t g, size_t gEnd, const float *alongOf,
+                       float aMin, float aMax, uint32_t param, uint32_t palette, NitroShadowFootRow footRow,
+                       void *ctx)
+{
+    float tw = (float)(8u << ((param >> 20) & 7u)), th = (float)(8u << ((param >> 23) & 7u));
+    float sLo = 1e30f, sHi = -1e30f, tFoot = 0.0f, tTop = 0.0f, f;
+    int nFoot = 0, nTop = 0, row, t0, t1;
+    size_t i;
+    if (!footRow || !(aMax - aMin > 0.0f)) return 0.0f;
+    for (i = g; i < gEnd; i++) {
+        float s = verts[i].uv[0] * tw, t = verts[i].uv[1] * th, a = (alongOf[i - g] - aMin) / (aMax - aMin);
+        if (s < sLo) sLo = s;
+        if (s > sHi) sHi = s;
+        if (a < 0.1f) { tFoot += t; nFoot++; }
+        if (a > 0.9f) { tTop += t; nTop++; }
+    }
+    if (!nFoot || !nTop) return 0.0f;
+    tFoot /= (float)nFoot;
+    tTop /= (float)nTop;
+    if (!(fabsf(tTop - tFoot) >= 1.0f) || !(sHi - sLo >= 1.0f)) return 0.0f;
+    /* the rows' texels: from the foot's edge (the row just inside it) to
+     * the top's */
+    if (tTop > tFoot) {
+        t0 = (int)floorf(tFoot + 0.5f);
+        t1 = (int)floorf(tTop - 0.5f);
+    } else {
+        t0 = (int)floorf(tFoot - 0.5f);
+        t1 = (int)floorf(tTop + 0.5f);
+    }
+    row = footRow(ctx, param, palette, (int)floorf(sLo + 0.5f), (int)floorf(sHi + 0.5f), t0, t1);
+    if (row < 0) return 0.0f;
+    /* the row's edge on the foot's side */
+    f = tTop > tFoot ? ((float)row - tFoot) / (tTop - tFoot) : (tFoot - (float)(row + 1)) / (tFoot - tTop);
+    return f < 0.0f ? 0.0f : f > 0.9f ? 0.9f : f;
+}
+
 size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batches,
                                    size_t batchCount, size_t first, NitroGx3dGpuVertex *out,
                                    size_t capacity, NitroGx3dBatch *outBatches, size_t maxBatches,
                                    size_t *outBatchCount, const NitroShadowSetup *setup, const float depth[4],
-                                   float lift)
+                                   float lift, NitroShadowFootRow footRow, void *footCtx)
 {
     Back b;
     V3 up = v3(setup->up[0], setup->up[1], setup->up[2]);
@@ -449,9 +496,10 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
     for (bi = 0; bi < batchCount; bi++) {
         const NitroGx3dBatch *batch = &batches[bi];
         size_t k = batch->first, end = batch->first + batch->count;
-        if (batch->translucent || !batch->texture_param) continue;
+        if (batch->translucent || !NitroPort_ShadowSpriteTexture(batch->texture_param)) continue;
         while (k + 2 < end) {
-            V3 n, c, across, along, tr;
+            V3 n, c, across, along, tr, anchor;
+            float alongOf[6], aMin = 1e30f, aMax = -1e30f, feet;
             size_t g = k, gEnd, i;
             int count = 0;
             float hmin = 1e30f, hmax = -1e30f, umin = 1e30f, umax = -1e30f;
@@ -512,6 +560,25 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
             if (!count) continue;
             c = scale(c, 1.0f / (float)count);
             tr = dot(turned, across) < 0.0f ? scale(turned, -1.0f) : turned;
+            /* the picture's feet: up the card by feet of its length; the
+             * shadow's base on the ground where the camera sees them (the
+             * camera at the origin: along its ray through them) */
+            for (i = g; i < gEnd; i++) {
+                alongOf[i - g] = dot(sub(back(&b, verts[i].position), c), along);
+                if (alongOf[i - g] < aMin) aMin = alongOf[i - g];
+                if (alongOf[i - g] > aMax) aMax = alongOf[i - g];
+            }
+            feet = card_feet(verts, g, gEnd, alongOf, aMin, aMax, batch->texture_param, batch->palette_base,
+                             footRow, footCtx) * (aMax - aMin);
+            anchor = c;
+            if (feet > 0.0f) {
+                V3 pf = add(c, scale(along, aMin + feet));
+                float hp = dot(pf, up);
+                if (fabsf(hp) > 1e-3f) {
+                    float sRay = dot(c, up) / hp;
+                    if (sRay > 0.5f && sRay < 2.0f) anchor = scale(pf, sRay);
+                }
+            }
             if (nb == 0 || outBatches[nb - 1].texture_param != batch->texture_param ||
                 outBatches[nb - 1].palette_base != batch->palette_base ||
                 outBatches[nb - 1].polygon_attr != batch->polygon_attr ||
@@ -530,8 +597,10 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
                 for (i = g; i < gEnd && ok; i++) {
                     V3 r = sub(back(&b, verts[i].position), c), gp;
                     /* across stays across (turned to the sun); up the card
-                     * becomes along the ground, away from the sun */
-                    gp = add(add(c, scale(tr, dot(r, across))), scale(lh, dot(r, along) * stretch));
+                     * from the feet becomes along the ground, away from the
+                     * sun (the clear rows below the feet behind the base) */
+                    gp = add(add(anchor, scale(tr, dot(r, across))),
+                             scale(lh, (alongOf[i - g] - aMin - feet) * stretch));
                     gp = add(gp, scale(up, lift));
                     ok = unback(&b, gp, xyw[i - g]);
                 }

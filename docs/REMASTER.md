@@ -3518,8 +3518,21 @@ ground away from the sun, as its shadow. No shadow map.
 
 - Which: the scene's cards facing the camera, as NitroPort_ShadowCards
   finds them (a triangle facing the camera, and the next if it shares an
-  edge), opaque and textured, at most 96 units (6 tiles) long and wide:
-  characters, the follower, the routes' trees, signs.
+  edge), opaque, at most 96 units (6 tiles) long and wide, with a texture
+  that has see-through texels (NitroPort_ShadowSpriteTexture: a palette's
+  colour 0 clear, or direct colour): characters, the follower, the routes'
+  trees. Without that last rule, Veilstone had 206 a scene (log
+  dc9659cd): pieces of walls and cliffs facing the camera, their shadows
+  stray dark shapes.
+- Where it starts: the picture's feet, not the card's bottom edge (a
+  sprite's bottom rows are often clear: the shadows started a few pixels
+  below the feet). The 3DS renderer finds the first row with an opaque
+  texel from the foot's side (foot_row, from the texture as the DS samples
+  it, kept for the scene); the shadow's base goes on the ground where the
+  camera sees those feet, the clear rows behind it under the sprite.
+- Soft: the shadow pass samples the sprite's texture smoothly (linear;
+  the texture's own filter back after each draw), so its edge isn't the
+  sprite's pixel steps.
 - Where (NitroPort_ShadowGroundCards, port_shadow.c): the foot (the middle
   of the card's lowest corners) stays where it stands; across the card
   becomes across the sun's way, the nearer way round (from the side the

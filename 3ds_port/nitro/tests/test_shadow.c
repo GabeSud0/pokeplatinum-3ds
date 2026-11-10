@@ -400,6 +400,17 @@ static void back_of(const NitroShadowSetup *s, const float *p, double out[3])
 }
 static double dot3(const double a[3], const float b[3]) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 
+#define SPRITE_PARAM ((3u << 26) | (1u << 29) | (2u << 20) | (2u << 23))
+static int sFeetAsked;
+/* (the card's texture: its bottom 8 rows of 32 clear, the rows from the
+ * foot's side t 31 down to t 0) */
+static int fake_feet(void *ctx, uint32_t param, uint32_t palette, int s0, int s1, int tFrom, int tTo)
+{
+    (void)ctx; (void)palette;
+    sFeetAsked = param == SPRITE_PARAM && s0 == 0 && s1 == 32 && tFrom == 31 && tTo == 0;
+    return 23;
+}
+
 /* The sprites' sun shadows: a card laid on the ground away from the sun,
  * its foot where it stands, as long as it is times cot(elevation); its z
  * by the depth row given (here the DS's clip z itself). */
@@ -426,15 +437,18 @@ static void test_ground_cards(void)
     }
     {
         static const int order[6] = { 0, 1, 2, 0, 2, 3 };
+        static const float uvs[4][2] = { { 0, 1 }, { 1, 1 }, { 1, 0 }, { 0, 0 } };   /* (the foot at t 32) */
         for (k = 0; k < 6; k++) {
             project(corner[order[k]][0], corner[order[k]][1], corner[order[k]][2], v[ground + k].position, NULL);
             v[ground + k].color[3] = 255;
+            v[ground + k].uv[0] = uvs[order[k]][0];
+            v[ground + k].uv[1] = uvs[order[k]][1];
         }
     }
     n = ground + 6;
     memset(&batch, 0, sizeof(batch));
     batch.count = (uint32_t)n;
-    batch.texture_param = 1;   /* (textured) */
+    batch.texture_param = SPRITE_PARAM;   /* (16 colours, colour 0 clear, 32 x 32) */
     CHECK(NitroPort_ShadowSetup(v[0].position, sizeof(v[0]), (size_t)n, sProj, WIDTH, 192, &side, 512, &s));
     /* the depth row: every vertex's own clip z from its x, y, w */
     for (i = 0; i < (size_t)n; i++) {
@@ -466,9 +480,9 @@ static void test_ground_cards(void)
         CHECK(worstZ < 1e-3);
         CHECK(worstW < 1e-4);
     }
-    w = NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s, s.zclip, 0.0f);
+    w = NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s, s.zclip, 0.0f, NULL, NULL);
     CHECK(w == 6 && nb == 1 && outBatches[0].first == (uint32_t)n && outBatches[0].count == 6);
-    CHECK(outBatches[0].texture_param == 1 && !outBatches[0].translucent);
+    CHECK(outBatches[0].texture_param == SPRITE_PARAM && !outBatches[0].translucent);
     /* the card itself untouched (verts are only read) */
     for (k = 0; k < 6; k++) CHECK(v[ground + k].color[3] == 255);
     /* all on the ground the foot stands on (camera space, along up) */
@@ -506,22 +520,52 @@ static void test_ground_cards(void)
         CHECK(NEAR(top, 16.0 * cotE, 0.2));
     }
     /* lifted: off the ground by the lift */
-    w = NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s, s.zclip, 1.0f);
+    w = NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s, s.zclip, 1.0f, NULL, NULL);
     {
         double q[3];
         back_of(&s, out[3].position, q);
         CHECK(w == 6 && NEAR(dot3(q, s.up), hFoot + 1.0, 0.05));
     }
     /* none: no room, a translucent or untextured batch, the sun low */
-    CHECK(NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 3, outBatches, 4, &nb, &s, s.zclip, 0.0f) == 0);
+    CHECK(NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 3, outBatches, 4, &nb, &s, s.zclip, 0.0f, NULL, NULL) == 0);
     batch.translucent = 1;
-    CHECK(NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s, s.zclip, 0.0f) == 0);
+    CHECK(NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s, s.zclip, 0.0f, NULL, NULL) == 0);
     batch.translucent = 0;
     batch.texture_param = 0;
-    CHECK(NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s, s.zclip, 0.0f) == 0);
-    batch.texture_param = 1;
+    CHECK(NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s, s.zclip, 0.0f, NULL, NULL) == 0);
+    /* a texture with no clear texels (a wall's): none */
+    batch.texture_param = SPRITE_PARAM & ~(1u << 29);
+    CHECK(NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s, s.zclip, 0.0f, NULL, NULL) == 0);
+    batch.texture_param = SPRITE_PARAM;
+    /* the picture's feet a quarter up the card (its bottom 8 of 32 rows
+     * clear): the shadow's middle a quarter along is where the camera sees
+     * the card's middle a quarter up; its length the same */
+    {
+        double a[3], bq[3], cq[3], d[3], sh[3], cd[3], xyw[3], m[3][3], det;
+        int r, cc;
+        w = NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s, s.zclip, 0.0f,
+                                        fake_feet, NULL);
+        CHECK(w == 6 && sFeetAsked);
+        back_of(&s, out[0].position, a);
+        back_of(&s, out[1].position, bq);
+        back_of(&s, out[2].position, cq);
+        back_of(&s, out[5].position, d);
+        for (k = 0; k < 3; k++) sh[k] = (a[k] + bq[k]) * 0.375 + (cq[k] + d[k]) * 0.125;
+        back_of(&s, v[ground].position, a);
+        back_of(&s, v[ground + 1].position, bq);
+        back_of(&s, v[ground + 2].position, cq);
+        back_of(&s, v[ground + 5].position, d);
+        for (k = 0; k < 3; k++) cd[k] = (a[k] + bq[k]) * 0.375 + (cq[k] + d[k]) * 0.125;
+        /* the same ray from the camera (at the origin): the same direction */
+        {
+            double ls = sqrt(sh[0] * sh[0] + sh[1] * sh[1] + sh[2] * sh[2]);
+            double lc = sqrt(cd[0] * cd[0] + cd[1] * cd[1] + cd[2] * cd[2]);
+            for (k = 0; k < 3; k++) CHECK(NEAR(sh[k] / ls, cd[k] / lc, 1e-3));
+        }
+        (void)xyw; (void)m; (void)det; (void)r; (void)cc;
+    }
     CHECK(NitroPort_ShadowSetup(v[0].position, sizeof(v[0]), (size_t)n, sProj, WIDTH, 192, &low, 512, &s));
-    CHECK(NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s, s.zclip, 0.0f) == 0 &&
+    CHECK(NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s, s.zclip, 0.0f, NULL, NULL) == 0 &&
           nb == 0);
     (void)foot;
 }

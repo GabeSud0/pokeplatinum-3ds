@@ -119,19 +119,34 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
                              size_t *outBatchCount, const NitroShadowSetup *setup);
 
 /* The sprites' sun shadows (the options page's SUN SHADOWS: SPRITES): each
- * card facing the camera (a character, the follower, a tree, a sign: as
- * NitroPort_ShadowCards finds them, opaque batches only, textured, up to
- * NITRO_SHADOW_GROUND_CARD_MAX long and wide) gets a copy of itself laid on
- * the ground away from the sun: its foot where it stands, turned about it
- * to face the sun the nearer way (so it's never a sliver), each point
- * moved along the sun's way by its height up the card times the sun's
- * cotangent; lift above the foot's ground, along the ground's normal. Drawn
- * with the card's texture, darkening by its alpha (no shadow map).
+ * card facing the camera (a character, the follower, a tree: as
+ * NitroPort_ShadowCards finds them, opaque batches only, up to
+ * NITRO_SHADOW_GROUND_CARD_MAX long and wide, with a texture that has see-
+ * through texels: a palette's colour 0 transparent, or direct colour;
+ * walls and cliffs facing the camera have none) gets a copy of itself laid
+ * on the ground away from the sun, turned to face the sun the nearer way
+ * (so it's never a sliver), each point moved along the sun's way by its
+ * height up the card times the sun's cotangent; lift above the ground,
+ * along its normal. Drawn with the card's texture, darkening by its alpha
+ * (no shadow map).
+ *
+ * Where the shadow starts: the picture's feet, not the card's edge (a
+ * sprite's bottom rows are often clear): footRow (if not NULL) gives the
+ * first texel row from tFrom towards tTo (tTo included) with any opaque
+ * texel in columns s0..s1 (s1 excluded), or -1 (texels as the DS samples
+ * them: repeat and flip as the parameter has them). The shadow's base is
+ * then on the ground where the camera sees those feet, and the clear rows
+ * fall behind it, under the sprite.
+ *
  * depth: the row on (x, y, w, 1) giving a vertex's z as the scene's
- * vertices have theirs (zclip through the port's remap). out, capacity
+ * vertices have theirs (NitroPort_ShadowDepthRow). out, capacity
  * vertices; outBatches, maxBatches (each one first counting from first);
  * returns the vertices written. verts are only read. */
 #define NITRO_SHADOW_GROUND_CARD_MAX 96.0f   /* (6 tiles: past it, not a sprite) */
+typedef int (*NitroShadowFootRow)(void *ctx, uint32_t textureParam, uint32_t paletteBase, int s0, int s1,
+                                  int tFrom, int tTo);
+/* Whether a texture (TEXIMAGE_PARAM) has see-through texels: a sprite's. */
+int NitroPort_ShadowSpriteTexture(uint32_t textureParam);
 /* The row on (x, y, w, 1) giving a new vertex's z as the GPU path's
  * vertices have theirs after the depth remap, for NitroPort_ShadowGroundCards.
  * The path's z isn't the DS's clip z: Z-buffer scenes, the DS's depth
@@ -145,7 +160,7 @@ size_t NitroPort_ShadowGroundCards(const struct NitroGx3dGpuVertex *verts, const
                                    size_t batchCount, size_t first, struct NitroGx3dGpuVertex *out,
                                    size_t capacity, struct NitroGx3dBatch *outBatches, size_t maxBatches,
                                    size_t *outBatchCount, const NitroShadowSetup *setup, const float depth[4],
-                                   float lift);
+                                   float lift, NitroShadowFootRow footRow, void *footCtx);
 
 /* Whether a translucent triangle is one of the game's own painted shadows
  * (lying flat, see-through, dark: the patches under buildings and on the

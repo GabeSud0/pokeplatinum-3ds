@@ -413,6 +413,38 @@ static TexEntry sTextures[TEX_CACHE_ENTRIES];
 static size_t sTextureBytes;
 static uint32_t sFrame;
 static NitroGx3dTexBanks sBanks;
+/* (NitroShadowFootRow: a sprite's first row with an opaque texel from its
+ * foot's side, from the texture as the DS samples it; kept for the scene:
+ * the same sprite's cards ask once) */
+#define FOOT_ROWS_KEPT 48
+static struct { uint32_t param,palette; int s0,s1,t0,t1,row; } sFootRows[FOOT_ROWS_KEPT];
+static unsigned sFootRowsKept;
+static int foot_row(void *ctx,uint32_t param,uint32_t palette,int s0,int s1,int tFrom,int tTo)
+{
+    unsigned i;
+    int t,s,step=tTo>=tFrom?1:-1,row=-1;
+    (void)ctx;
+    for(i=0;i<sFootRowsKept;i++){
+        if(sFootRows[i].param==param && sFootRows[i].palette==palette && sFootRows[i].s0==s0 &&
+           sFootRows[i].s1==s1 && sFootRows[i].t0==tFrom && sFootRows[i].t1==tTo)
+            return sFootRows[i].row;
+    }
+    if(s1-s0>128)s1=s0+128;
+    for(t=tFrom;row<0;t+=step){
+        for(s=s0;s<s1;s++){
+            if(NitroPort_Gx3dSampleTexel(&sBanks,param,palette,s,t).alpha){row=t;break;}
+        }
+        if(t==tTo)break;
+    }
+    if(sFootRowsKept<FOOT_ROWS_KEPT){
+        sFootRows[sFootRowsKept].param=param;sFootRows[sFootRowsKept].palette=palette;
+        sFootRows[sFootRowsKept].s0=s0;sFootRows[sFootRowsKept].s1=s1;
+        sFootRows[sFootRowsKept].t0=tFrom;sFootRows[sFootRowsKept].t1=tTo;
+        sFootRows[sFootRowsKept].row=row;
+        sFootRowsKept++;
+    }
+    return row;
+}
 /* Textures converted (new, or their bytes changed), their texels, and the
  * time it took, for the [perf] line. */
 static volatile u32 sTexConverted;
@@ -1802,9 +1834,11 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
             float depth[4];
             size_t nb=0,n;
             NitroPort_ShadowDepthRow(&sShadow,(scene->swap_param&2u)!=0,sDepthA,sDepthK,depth);
+            NitroPort_Gx3dMapTextureBanks(&sBanks);
+            sFootRowsKept=0;
             n=NitroPort_ShadowGroundCards(sVertices[slot],sBatches,sPreparedBatches,sPreparedCount,
                                           sVertices[slot]+sPreparedCount,sShadowRoom,sBatches+MAX_BATCHES,
-                                          SHADOW_BATCHES,&nb,&sShadow,depth,GROUND_LIFT);
+                                          SHADOW_BATCHES,&nb,&sShadow,depth,GROUND_LIFT,foot_row,NULL);
             if(n && nb){
                 GSPGPU_FlushDataCache(sVertices[slot]+sPreparedCount,(u32)(n*sizeof(NitroGx3dGpuVertex)));
                 sGroundBatchCount=nb;
@@ -2693,9 +2727,14 @@ static void draw_ground_shadows(int edging)
         const NitroGx3dBatch *batch=&sBatches[MAX_BATCHES+b];
         C3D_Tex *tex;
         C3D_TexEnv *env;
+        u32 param;
         if(!room_for_draw())break;
         tex=get_texture(batch->texture_param,batch->palette_base);
         if(!tex)continue;
+        /* (sampled smoothly: a soft edge, not the sprite's pixel steps; its
+         * own filter back after the draw, which has taken it already) */
+        param=tex->param;
+        C3D_TexSetFilter(tex,GPU_LINEAR,GPU_LINEAR);
         C3D_TexBind(0,tex);
         env=C3D_GetTexEnv(0);
         C3D_TexEnvInit(env);
@@ -2707,6 +2746,7 @@ static void draw_ground_shadows(int edging)
         C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,0,0);
         C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
         draw_arrays((int)batch->first,(int)batch->count);
+        tex->param=param;
     }
     sBoundTexKnown=0;
     C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
