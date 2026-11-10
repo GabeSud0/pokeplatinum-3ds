@@ -3561,9 +3561,9 @@ trees, signs and the scenery later.
   ground the way the sun's light does, by the console's clock
   (NitroPort_ShadowSunAt, the sun the shadow map had): to the lower left
   in the morning, down the screen late in the morning, to the lower right
-  from midday, the sprite's height x the sun's cotangent x 1.15 long: a
-  little over half the sprite at midday (the sun 65 degrees up), 1.4
-  times it early and late (40). Never nearer the sprite's own line than 30 degrees on the
+  from midday, the sprite's height x the sun's cotangent x 1.25 long:
+  0.6 of the sprite at midday (the sun 65 degrees up), 1.5 times it
+  early and late (40). Never nearer the sprite's own line than 30 degrees on the
   ground (beside it the shadow would be a sliver) and never up the
   screen. (Until f0367e4: always 28 degrees to the lower right and 1.3
   times the sprite on the screen, too long and slanted for midday.) The

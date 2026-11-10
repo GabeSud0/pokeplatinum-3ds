@@ -134,8 +134,8 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
  * light goes (the setup's sun: by the clock, NitroPort_ShadowSunAt; to
  * the left in the morning, down the screen about midday, to the right in
  * the evening), the sprite's height times the sun's cotangent
- * (x NITRO_SHADOW_GROUND_LENGTH) long: short at midday, a little over
- * half the sprite; 1.4 times it early and late. Never nearer the sprite's own line
+ * (x NITRO_SHADOW_GROUND_LENGTH) long: short at midday, 0.6 of the
+ * sprite; 1.5 times it early and late. Never nearer the sprite's own line
  * than NITRO_SHADOW_GROUND_SIDE (it would be a sliver), never up the
  * screen. Across the sprite stays across (about its middle), so a sprite
  * seen from the back or the front casts the same shape. Soft: drawn
@@ -169,7 +169,7 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
  * sun shadow (the others untouched). Returns the vertices written. verts
  * are only read. */
 #define NITRO_SHADOW_GROUND_SIDE 30.0f     /* (degrees, on the ground) */
-#define NITRO_SHADOW_GROUND_LENGTH 1.15f    /* (a little longer than the sun alone makes them) */
+#define NITRO_SHADOW_GROUND_LENGTH 1.25f    /* (a little longer than the sun alone makes them) */
 #define NITRO_SHADOW_GROUND_TAPS 5
 #define NITRO_SHADOW_GROUND_BLUR 0.04f     /* (each tap's distance: the sprite's height times it, 0.5-2.25) */
 #define NITRO_SHADOW_GROUND_TIP 0.35f
