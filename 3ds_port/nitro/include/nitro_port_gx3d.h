@@ -453,10 +453,27 @@ void NitroPort_Gx3dTag(uint32_t tag);
 /* The marks' kinds: a field sprite's is its Billboard's address (even,
  * below NITRO_GX3D_TAG_PROP on a 3DS); a character's round shadow's, its
  * sprite's | 1; a small standing map prop's (a tree, a sign, a lamp post),
- * NITRO_GX3D_TAG_PROP | (a number << 1). */
+ * NITRO_GX3D_TAG_PROP | (a number << 1); the land's own trees' (most
+ * trees are polygons of the land model, not props: the game marks the
+ * land's tree materials as it draws them), NITRO_GX3D_TAG_LAND.
+ *
+ * The land's are many (a forest), all still, and all with the one mark:
+ * kept whole only within NITRO_GX3D_LAND_REACH_NUM / _DEN of the view's
+ * half width and height (a tree's shadow is shorter than the tree's
+ * height and a half: no further than that beside the view does one reach
+ * it), no more than NITRO_GX3D_MAX_LAND_TAGGED of them in a scene (the
+ * rest of the room is the characters', drawn after the land); and an
+ * in-between scene's are the scene's own moved back half the camera's
+ * move, not paired with the scene before's (which trees are within reach
+ * changes as the camera moves: the n-th one isn't the same tree). */
 #define NITRO_GX3D_TAG_PROP 0xC0000000u
+#define NITRO_GX3D_TAG_LAND 0x80000000u
 #define NITRO_GX3D_TAG_IS_PROP(tag) (((tag)&0xC0000001u)==NITRO_GX3D_TAG_PROP)
-#define NITRO_GX3D_TAG_IS_ROUND(tag) (((tag)&1u) && ((tag)&0xC0000000u)!=NITRO_GX3D_TAG_PROP)
+#define NITRO_GX3D_TAG_IS_LAND(tag) (((tag)&0xC0000001u)==NITRO_GX3D_TAG_LAND)
+#define NITRO_GX3D_TAG_IS_ROUND(tag) (((tag)&1u) && !((tag)&0x80000000u))
+#define NITRO_GX3D_LAND_REACH_NUM 7
+#define NITRO_GX3D_LAND_REACH_DEN 4
+#define NITRO_GX3D_MAX_LAND_TAGGED 1536u
 
 /* PC reference output. Samples from virtual DS texture/palette VRAM banks.
  * Each pixel is RGB555|0x8000 when a 3D polygon covers it, otherwise zero.

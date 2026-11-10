@@ -3519,8 +3519,8 @@ test steps that could freeze a 3DS). The look is the Emerald 3DS
 remaster's (its Littleroot: long, soft shadows to the lower right; the
 idea only, written afresh here, none of its code): each character's own
 picture laid on the ground as its shadow. No shadow map. Built a part at
-a time: the characters first (the player, the follower, the people);
-trees, signs and the scenery later.
+a time: the characters first (the player, the follower, the people),
+then the small props and the land's trees; houses and the scenery later.
 
 - Which and who: the game says (patch 0136), nothing is guessed. Each
   field sprite's polygons are marked with a number of its own (its
@@ -3534,7 +3534,8 @@ trees, signs and the scenery later.
   not fading) gets the sun shadow; that round shadow isn't drawn (its
   triangles moved to a point in the scene's vertices). Anyone without one
   (when there's no sun to cast them, or a character fading in) keeps the
-  round one. Trees, signs and the grass have no round shadow: none yet.
+  round one. Trees and signs have no round shadow (theirs: below); the
+  grass casts none.
 - At the screen's edge: the marked polygons' triangles are also kept
   whole (NitroGx3dScene.tagged_triangles, keep_tagged in port_gx3d.c): as
   the game sent them, not clipped at the view's sides, and kept when
@@ -3568,17 +3569,27 @@ trees, signs and the scenery later.
   screen. (Until f0367e4: always 28 degrees to the lower right and 1.3
   times the sprite on the screen, too long and slanted for midday.) The
   picture's feet: the first row with an opaque texel from the foot's side
-  (foot_row, the texture as the DS samples it, kept for the scene); the
+  (foot_row, the texture as the DS samples it, kept from scene to scene
+  until the texture's bytes change, by the texture cache's hash); the
   clear rows below them fall behind the start.
-- Soft, as a Gaussian blur near enough (asked for 2026-11-10: five
-  copies in a cross, all the same weight, showed as copies): drawn 9
-  times, three by three a step apart on the ground (the sprite's height
-  x 0.015, 0.3 to 2.25 units; down the screen as much as across), weighed
-  1 2 1 each way: the middle copy the shade to the power 4/16, the four
-  sides 2/16, the four corners 1/16; where all nine meet, the whole
-  shade. The sprite's texture sampled smoothly (linear). Fading from the
-  feet to 0.35 of the shade at the head. The shade is the hour's, 1.1
-  times as dark. (Length 1.25, blur 0.015 and 1.1 were picked on a
+- One copy, one multiply a pixel (2026-11-10, after a 3DS's report that
+  the shadows "look multicoloured"). They were drawn 9 times, three by
+  three a step apart, weighed 1 2 1 each way as a Gaussian blur (asked for
+  that morning: the middle copy the shade to the power 4/16, the sides
+  2/16, the corners 1/16). But the upper screen's picture is 5-6-5 bits,
+  and each multiply rounds down to it: red and blue by up to 8/255, green
+  by up to 4/255, nine times over. On the grey paving (147, 142, 139) the
+  full shade came out (57, 73, 82) for (79, 80, 93), and along the fade
+  (99, 77, 99) then (107, 97, 132) then (140, 105, 132): purple, blue and
+  pink in one shadow (worked out, and the screenshot's pixels agree). One
+  multiply gives (74, 77, 90), (90, 89, 99), (107, 105, 115), (123, 121,
+  123): the picture's own rounding and no more. So: one copy, the sprite's
+  texture sampled smoothly (linear), which is the soft edge (the 9 copies'
+  step picked on the preview, 0.015 of the sprite's height, was 0.4 of a
+  texel: about what the sampling does by itself). A wider blur would need
+  the copies added up somewhere with 8 bits before the one multiply; not
+  done. Fading from the feet to 0.35 of the shade at the head. The shade
+  is the hour's, 1.1 times as dark. (Length 1.25 and 1.1 were picked on a
   preview of this in the chat.)
 - Depth: NitroShadowSetup.zclip is the DS's clip z from a vertex's x, y, w
   (the projection's z column through the setup's back rows). The GPU
@@ -3593,11 +3604,23 @@ trees, signs and the scenery later.
   sprite's own feet (which stand a few units nearer the camera than the
   round shadow).
 - Drawn (draw_ground_shadows) after the opaque polygons: the sprite's
-  texture, colour = the copy's shade (its vertices' colour: the fade and
-  the tap's weight, NitroPort_ShadowGroundCards) x alpha + (1 - alpha), the
-  framebuffer multiplied by it; depth LEQUAL, not written; no stencil (a
-  shadow's copies overlap). The shade is the sun's by the hour (look_now),
-  as its way and length are.
+  texture, colour = the shade (its vertices' colour, with the fade:
+  NitroPort_ShadowGroundCards) x alpha + (1 - alpha), the framebuffer
+  multiplied by it; depth LEQUAL, not written. The shade is the sun's by
+  the hour (look_now), as its way and length are.
+- What it costs. The setup (the camera's space back from the projection,
+  the ground's normal, the light's way) was the shadow map's
+  (NitroPort_ShadowSetup): every triangle of the scene for the ground's
+  normal, every vertex again for the map's extents, which nothing uses
+  now: most of the 4.2 to 5.5 ms a scene the log had (84182b8c), 60 times
+  a second on the display thread; by Veilstone's Galactic building (2000
+  triangles) the frames took 20 to 22 ms to build and 45 a second were
+  drawn. Now NitroPort_ShadowGroundSetup: the ground's normal from the
+  round shadows themselves (they lie on it: a few triangles), nothing of
+  the scene gone through; the whole setup only for a scene with marks and
+  no round shadow. Also: one copy's vertices, not nine's; the camera's
+  space inverted once a scene, not for every vertex (unback_make); the
+  sprites' foot rows kept between scenes.
 - The props (trees, signs, lamp posts, boards and other small standing
   things), the second part (2026-11-10). The game marks them as it draws
   them (patch 0138, map_prop.c: NITRO_GX3D_TAG_PROP | the prop's number
@@ -3619,42 +3642,98 @@ trees, signs and the scenery later.
   laid on the ground from there, as a sprite's: each vertex across by its
   place across the screen, along the shadows' way by its height up the
   screen x the same stretch. (A tree's layers lean back: laid as real
-  slabs their shadows would fold to strips at midday.) Three copies
-  (NITRO_SHADOW_PROP_TAPS) a step apart on the diagonal, weighed 1 2 1
-  (the middle the shade's square root, the sides its fourth root);
-  fading to the tip at the top.
-  Drawn (draw_ground_shadows) before the characters', a tap at a time,
-  each tap darkening a pixel once: a stencil bit a tap (the opaque pass
-  left 0xFF; a tap draws where its bit is set and clears it), since a
-  tree's layers overlap and trees each other; where a texel is over half
-  opaque, the tap's shade whole. The characters' shadows then only where
-  the props' first tap didn't darken (in a tree's shade a character casts
-  none), and as before when a scene has no props' shadows. With outlines
-  the stencil holds polygon IDs: no stencil then.
-  Not yet: caves and other roofed places drawn in perspective get them
-  too (as the characters'); the trees that are part of the land's own
-  model (a route's walls of trees) cast none.
-- The log, after 5 seconds and then every 30: the scenes with marked
-  round shadows, and in those the marked sprites, the round shadows and
-  the sun shadows laid a scene, the props marked and the props' shadows
-  laid, the scenes where the marked triangles' room was full, the ms a
-  scene laying them, and where the sun is. Tests:
+  slabs their shadows would fold to strips at midday.) Fading to the tip
+  at the top. One copy, as the characters'.
+  Drawn (draw_ground_shadows) before the characters', in batches marked
+  NITRO_SHADOW_ONCE, each pixel darkened once: a tree's layers overlap and
+  trees each other, and it's the shade just once (and one multiply). By a
+  stencil bit: bit 0 of the 0xFF the opaque pass left, cleared where a
+  shadow is drawn; with the outlines' copies the stencil holds the
+  polygons' IDs (0 to 63), so bit 7 instead, set where a shadow is drawn
+  and cleared again after the characters' (the same batches once more, no
+  colour), the IDs as they were. Where a texel is over half opaque, the
+  shade whole (a hard edge, the screen's own smoothing aside). The
+  characters' shadows then only where those didn't darken (in a tree's
+  shade a character casts none).
+- The land's trees, the third part (2026-11-10: "tree shadows didn't
+  work"). The props' shadows were right and almost nothing had them: the
+  log had 0 to 1.5 marked props a scene in Veilstone, full of trees. No
+  map places the tree prop at all (3476 props in the 666 maps, none
+  model 1): the trees are polygons of the land model itself, a material
+  for each kind with the kind's texture (tree01 in 75 maps, tree2_01 in
+  115, the rows along a forest's edge conttree_b/_t and conttree2_b/_t in
+  77 and 98, tree04_2, tree3_01, tree3_02, conttree3_2). A tree there is
+  three layers leaning back and a fourth polygon flat on the ground with
+  the stump and the dark patch round it (tree2_01: 40 wide, 41 tall, on
+  two tiles by two); a row is one wide polygon a layer, its tops and its
+  bottoms in two materials.
+  The game marks them (patch 0139, land_data.c): every land model the
+  file draws goes through Port_DrawLand, which sets NitroSystem's shape
+  callback for the draw; a shape whose material has a tree texture (by
+  the model's own list of its textures' materials: the materials' names
+  don't always say, "s", "lambert47", "file3Material"; kept a model at a
+  time until a land model is loaded) is sent between NitroPort_Gx3dTag(
+  NITRO_GX3D_TAG_LAND) and its end. Not with the sun shadows off (then
+  nothing changes at all), in the Distortion World (its trees stand on
+  walls), or for the copies drawn with a callback of their own (the
+  mirrored river's). Not the Battle Frontier's trees, a gym's or the
+  snow's yet.
+  The engine keeps their triangles whole as the others' (keep_tagged),
+  but there are many, all still and all with the one mark: kept only
+  within 7/4 of the view's half width and height (a tree's shadow is
+  under two tiles and a half long; any part of the triangle within it: a
+  row is one wide polygon), at most 1536 of the 2048 (the rest is the
+  characters', drawn after the land); the look-ahead that passes over
+  hidden vertices uses that reach for them too. An in-between scene's
+  are the scene's own moved back half the camera's move (sClipMotion, as
+  the land's polygons with no pair), not paired with the scene before's:
+  which trees are within reach changes as the camera moves, and the n-th
+  of the run isn't the same tree.
+  The shadow (NitroPort_ShadowGroundCards): a marked batch's triangles in
+  the order the game sent them, a new tree where a triangle's middle (of
+  its span across and in depth: a rectangle's two triangles have one) is
+  more than 12 units from the tree's first triangle's (a tree's layers
+  stand over one another, the next tree two tiles on: over all 666 land
+  models that splits tree01, tree2_01 and tree04_2 into 6269 trees of 8
+  triangles each and some 90 odd pieces, and the rows into rows). Where it
+  stands: the middle of its own flat triangles (the stump), which aren't
+  laid; with none (a row's tops), the flat triangles of any marked batch
+  its middle is over, under it; else its lowest vertices, as a prop (the
+  palm-like tree3's trunk stands on its own edge). Then as a prop: the
+  picture laid from there, once. One whose shadow can't reach the view
+  (its middle further off it than half its width and its picture's
+  height's stretch) is left out before any of its vertices is laid.
+  Not yet: caves and other roofed places drawn in perspective get the
+  characters' shadows too; the game's own painted patch under each tree
+  (tshadow) is still drawn as well.
+- The log, after 5 seconds and then every 30: the scenes with marks, and
+  in those the marked sprites, the round shadows and the sun shadows laid
+  a scene, the props marked and the props' shadows laid, the land's trees
+  within reach and their shadows laid, the marked triangles a scene (and
+  the scenes where their room was full, or set up from the whole scene),
+  the ms a scene laying them, and where the sun is. Tests:
   test_gx3d (the mark on the triangles after it, in batches of their own,
   on the in-between scene's; the whole triangles of one across the view's
   side and one past it, as vertices, and halfway in the in-between scene;
-  with and without the geometry thread);
+  the land's: kept across their reach's end, not past it, and in the
+  in-between scene half the camera's move back with a tree come within
+  reach before the others; with and without the geometry thread);
   test_shadow (the character's alone by its mark, 6 units from its round
   shadow, not the nearer unmarked grass, not a marked sign; from the
   round shadow's middle, also when its two triangles are two batches; its
   width, its way and length for a sun at the side (kept 30 degrees off),
-  over the top and in the morning, the pull along the ray, the taps, the
+  over the top and in the morning, the pull along the ray, the one copy's
   colours; the picture's feet; none with no room, the sprite fading or
-  gone, or no marks; a prop of two layers and the same mark again: each
-  from its own foot, vertex by vertex, the three taps' vertices and
-  batches, the colours, none for one lying flat, see-through or
-  untextured, what doesn't fit left out whole). test_gx3d also: no marks
-  with the sun shadows off; a box test beside the view passing only
-  with a mark set.
+  gone, or no marks; the setup from the round shadows the whole scene's,
+  whichever way round their triangles; a prop of two layers and the same
+  mark again: each from its own foot, vertex by vertex, in a batch marked
+  once, the colours, none for one lying flat, see-through or untextured,
+  what doesn't fit left out whole; the land's: two trees of one batch
+  each from its own stump and the stump not laid, a row's tops from the
+  stumps of a later batch, a tree far beside the view left out and laid
+  when it's near, a batch a texture, what doesn't fit left out whole).
+  test_gx3d also: no marks with the sun shadows off; a box test beside
+  the view passing only with a mark set.
 
 The log says `[shadow] test step N: ...` when a step is chosen,
 `[shadow] the first sun shadow map sent to the GPU` and `[shadow] the

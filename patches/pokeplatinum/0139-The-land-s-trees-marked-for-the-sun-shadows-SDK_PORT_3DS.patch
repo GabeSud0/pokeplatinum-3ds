@@ -1,0 +1,205 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 14:41:24 -0700
+Subject: [PATCH] The land's trees marked for the sun shadows (SDK_PORT_3DS)
+
+Most trees are polygons of the land model, not map props (no map places
+the tree prop). The land models' materials with a tree texture (by the
+model's own list of its textures' materials) have their shapes sent
+between a mark (NitroPort_Gx3dTag, NITRO_GX3D_TAG_LAND) and its end, by
+NitroSystem's shape callback, wherever this file draws a land model; the
+port lays each tree's picture on the ground as its shadow. Not with the
+sun shadows off, in the Distortion World, or where a callback is set
+already (the mirrored river's).
+---
+ src/overlay005/land_data.c | 139 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 139 insertions(+)
+
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 05ac9838..8230b836 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -35,6 +35,134 @@
+ 
+ #include "gfx_box_test.h"
+ extern int NitroPort_WideScreenExtra(void);
++
++// The 3DS remaster's sun shadows: the land's own trees. Most trees are
++// polygons of the land model, not map props (no map places the tree prop):
++// four layers leaning back over a stump painted on the ground, or rows of
++// them along a forest's edge, each kind a material of its own with the
++// kind's texture. Those materials' polygons are marked as they're drawn
++// (NitroPort_Gx3dTag, 0x80000000: NITRO_GX3D_TAG_LAND), and the port lays
++// each tree's picture on the ground as its shadow, as it does the props'.
++//
++// The tree textures (the model's own list of its textures' materials says
++// which materials have them: the materials' names don't always, "s",
++// "lambert47"). Not the Battle Frontier's, a gym's or the snow's yet.
++extern void NitroPort_Gx3dTag(u32 tag);
++extern int NitroPort_GroundShadowsOn(void);
++
++static const char *const sPortTreeTextures[] = {
++    "tree01", "tree2_01", "tree04_2", "tree3_01", "tree3_02",
++    "conttree_b", "conttree_t", "conttree2_b", "conttree2_t", "conttree3_2",
++};
++
++// Which of a model's materials (up to 64) are trees', kept by its material
++// block's address until a land model is loaded or made (Port_LandTreesForget:
++// the maps' buffers are used again, another model at the same address).
++#define PORT_LAND_TREE_MODELS 16
++
++static struct {
++    const NNSG3dResMat *mat;
++    u32 trees[2];
++} sPortLandTrees[PORT_LAND_TREE_MODELS];
++static u32 sPortLandTreesNext;
++// (no trees' shadows in the Distortion World: its trees stand on walls)
++static BOOL sPortLandTreesOff;
++
++static void Port_LandTreesForget(void)
++{
++    for (int i = 0; i < PORT_LAND_TREE_MODELS; i++) {
++        sPortLandTrees[i].mat = NULL;
++    }
++}
++
++static BOOL Port_MaterialIsTree(const NNSG3dResMat *mat, u32 idx)
++{
++    int i, slot = -1;
++
++    if (mat == NULL || idx >= 64) {
++        return FALSE;
++    }
++
++    for (i = 0; i < PORT_LAND_TREE_MODELS; i++) {
++        if (sPortLandTrees[i].mat == mat) {
++            slot = i;
++            break;
++        }
++    }
++
++    if (slot < 0) {
++        const NNSG3dResDict *textures = (const NNSG3dResDict *)((const u8 *)mat + mat->ofsDictTexToMatList);
++
++        slot = (int)(sPortLandTreesNext++ % PORT_LAND_TREE_MODELS);
++        sPortLandTrees[slot].mat = mat;
++        sPortLandTrees[slot].trees[0] = sPortLandTrees[slot].trees[1] = 0;
++
++        for (u32 t = 0; t < textures->numEntry; t++) {
++            const NNSG3dResName *name = NNS_G3dGetResNameByIdx(textures, t);
++            const NNSG3dResDictTexToMatIdxData *data = (const NNSG3dResDictTexToMatIdxData *)NNS_G3dGetResDataByIdx(textures, t);
++            BOOL tree = FALSE;
++
++            if (name == NULL || data == NULL) {
++                continue;
++            }
++
++            for (i = 0; i < (int)NELEMS(sPortTreeTextures) && !tree; i++) {
++                tree = strncmp(name->name, sPortTreeTextures[i], NNS_G3D_RESNAME_SIZE) == 0;
++            }
++
++            if (!tree) {
++                continue;
++            }
++
++            const u8 *materials = (const u8 *)mat + data->offset;
++
++            for (u32 m = 0; m < data->numIdx; m++) {
++                if (materials[m] < 64) {
++                    sPortLandTrees[slot].trees[materials[m] >> 5] |= 1u << (materials[m] & 31);
++                }
++            }
++        }
++    }
++
++    return (sPortLandTrees[slot].trees[idx >> 5] >> (idx & 31)) & 1;
++}
++
++// A land model's shape about to be drawn (NitroSystem's callback): a tree
++// material's is sent here instead, between the mark and its end, in the
++// commands' order (what NitroSystem still holds is sent first, each time).
++static void Port_LandTreeShape(NNSG3dRS *rs)
++{
++    if ((rs->flag & NNS_G3D_RSFLAG_OPT_NOGECMD) || !Port_MaterialIsTree(rs->pResMat, rs->currentMat)) {
++        return;
++    }
++
++    const NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(rs->pResShp, *(rs->c + 1));
++
++    NNS_G3dGeFlushBuffer();
++    NitroPort_Gx3dTag(0x80000000);
++    NNS_G3dGeSendDL(NNS_G3dGetShpDLPtr(shp), NNS_G3dGetShpDLSize(shp));
++    NNS_G3dGeFlushBuffer();
++    NitroPort_Gx3dTag(0);
++    NNS_G3dRSSetFlag(rs, NNS_G3D_RSFLAG_SKIP);
++}
++
++// Every land model this file draws goes through here (the define below):
++// drawn with the trees' callback, unless the sun shadows are off, it's the
++// Distortion World, or the caller has set a callback of its own (the
++// mirrored river's, Port_MirroredWaterShape: a copy past the scenery).
++static void Port_DrawLand(NNSG3dRenderObj *renderObj, const VecFx32 *pos, const MtxFx33 *rot, const VecFx32 *scale)
++{
++    if (renderObj->cbFunc != NULL || sPortLandTreesOff || !NitroPort_GroundShadowsOn()) {
++        Easy3D_DrawRenderObj(renderObj, pos, rot, scale);
++        return;
++    }
++
++    NNS_G3dRenderObjSetCallBack(renderObj, Port_LandTreeShape, NULL, NNS_G3D_SBC_SHP, NNS_G3D_SBC_CALLBACK_TIMING_A);
++    Easy3D_DrawRenderObj(renderObj, pos, rot, scale);
++    NNS_G3dRenderObjResetCallBack(renderObj);
++}
++
++#define Easy3D_DrawRenderObj Port_DrawLand
+ #endif
+ 
+ #define MAP_LAZY_LOADER_SLOT_COUNT            2
+@@ -5957,6 +6085,7 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+     }
+ 
+     NNS_G3dRenderObjInit(&map->renderObj, model);
++    Port_LandTreesForget();
+ 
+     if (AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan) == TRUE) {
+         AreaLight_UseGlobalModelAttributes(model);
+@@ -6518,6 +6647,7 @@ static PortForestCopy *Port_ForestCopyOf(const LandDataManager *landDataMan, int
+     }
+ 
+     NNS_G3dRenderObjInit(&copy->renderObj, model);
++    Port_LandTreesForget();
+ 
+     if (AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan) == TRUE) {
+         AreaLight_UseGlobalModelAttributes(model);
+@@ -7405,6 +7535,9 @@ static void Port_RenderStandInMaps(const LandDataManager *landDataMan)
+ 
+ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
+ {
++#ifdef SDK_PORT_3DS
++    sPortLandTreesOff = landDataMan->inDistortionWorld;
++#endif
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         if (landDataMan->loadedMaps[i]->mapMatrixIndex != INVALID_MAP_MATRIX_INDEX) {
+ #ifdef SDK_PORT_3DS
+@@ -7757,6 +7890,9 @@ static void LandDataManager_LazyLoadMapModelTask(SysTask *sysTask, void *sysTask
+         GF_ASSERT(mapModel);
+ 
+         NNS_G3dRenderObjInit(ctx->mapRenderObj, mapModel);
++#ifdef SDK_PORT_3DS
++        Port_LandTreesForget();
++#endif
+ 
+         *ctx->loadedMapValid = TRUE;
+         ctx->currentSubTask = MAP_MODEL_LOADER_SUBTASK_END_TASK;
+@@ -7810,6 +7946,9 @@ NNSG3dResMdl *LandDataManager_LoadMapModel(NARC *landDataNARC, const int mapMode
+ 
+     GF_ASSERT(mapModel);
+     NNS_G3dRenderObjInit(mapRenderObj, mapModel);
++#ifdef SDK_PORT_3DS
++    Port_LandTreesForget();
++#endif
+ 
+     return mapModel;
+ }
+-- 
+2.43.0
+

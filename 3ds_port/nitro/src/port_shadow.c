@@ -50,41 +50,75 @@ static void row(float *out, const Back *b, V3 axis, float k, float c)
 #define BINS 64
 typedef struct { int key[3]; float area; V3 sum; int used; } Bin;
 
-int NitroPort_ShadowSetup(const float *positions, size_t stride, size_t count,
-                          const int32_t projection[16], unsigned screenWidth, unsigned screenHeight,
-                          const NitroShadowSun *sun, unsigned mapSize, NitroShadowSetup *out)
+/* The camera's space back from the projection (p: it as floats). 0 if it
+ * isn't a camera's perspective: w from z alone (p[3] = p[7] = p[15] = 0,
+ * p[11] != 0), x and y not mixed. */
+static int camera_back(const int32_t projection[16], unsigned screenWidth, unsigned screenHeight, float p[16],
+                       Back *b)
 {
     const float k = 1.0f / 4096.0f;
-    float p[16];
-    Back b;
-    Bin bins[BINS];
-    float total = 0.0f, lo1 = 1e30f, hi1 = -1e30f, lo2 = 1e30f, hi2 = -1e30f, lod = 1e30f, hid = -1e30f;
-    float extent, texel, o1, o2, range, e, a;
-    V3 up, x, t, d, b1, b2;
-    size_t i;
-    int j, best = -1;
-    const unsigned char *base = (const unsigned char *)positions;
-
-    memset(out, 0, sizeof(*out));
-    if (count < 3 || mapSize == 0) return 0;
+    int j;
     for (j = 0; j < 16; j++) p[j] = (float)projection[j] * k;
-    /* A camera's perspective: w from z alone (p[3] = p[7] = p[15] = 0,
-     * p[11] != 0), x and y not mixed. */
     if (p[3] != 0.0f || p[7] != 0.0f || p[15] != 0.0f || p[11] == 0.0f) return 0;
     if (p[0] == 0.0f || p[5] == 0.0f || p[1] != 0.0f || p[4] != 0.0f) return 0;
     {
         /* z = w / p23; x = (x' * wide - z p20 - p30) / p00; y likewise */
         float wide = (float)(screenWidth ? screenWidth : 256u) / 256.0f;
         float tall = (float)(screenHeight ? screenHeight : 192u) / 192.0f;   /* (the field at the DS's pixel size) */
-        memset(&b, 0, sizeof(b));
-        b.m[2][2] = 1.0f / p[11];
-        b.m[0][0] = wide / p[0];
-        b.m[0][2] = -p[8] / (p[11] * p[0]);
-        b.m[0][3] = -p[12] / p[0];
-        b.m[1][1] = tall / p[5];
-        b.m[1][2] = -p[9] / (p[11] * p[5]);
-        b.m[1][3] = -p[13] / p[5];
+        memset(b, 0, sizeof(*b));
+        b->m[2][2] = 1.0f / p[11];
+        b->m[0][0] = wide / p[0];
+        b->m[0][2] = -p[8] / (p[11] * p[0]);
+        b->m[0][3] = -p[12] / p[0];
+        b->m[1][1] = tall / p[5];
+        b->m[1][2] = -p[9] / (p[11] * p[5]);
+        b->m[1][3] = -p[13] / p[5];
     }
+    return 1;
+}
+
+/* Where the sun's light goes, over ground with the normal up: along the
+ * ground, the screen's right (x) and towards the camera (t). */
+static V3 sun_light(V3 up, const NitroShadowSun *sun, float *elevation)
+{
+    V3 x = normalize(sub(v3(1.0f, 0.0f, 0.0f), scale(up, up.x)));
+    V3 t = cross(x, up);
+    float e = sun->elevation * 3.14159265f / 180.0f, a = sun->azimuth * 3.14159265f / 180.0f;
+    if (t.z < 0.0f) t = scale(t, -1.0f);
+    if (elevation) *elevation = e;
+    return normalize(add(scale(up, -sinf(e)), scale(add(scale(x, cosf(a)), scale(t, sinf(a))), cosf(e))));
+}
+
+/* (what both setups leave for the shadows laid on the ground) */
+static void setup_camera(NitroShadowSetup *out, const float p[16], const Back *b, V3 up, V3 d)
+{
+    int j;
+    out->up[0] = up.x; out->up[1] = up.y; out->up[2] = up.z;
+    out->light[0] = d.x; out->light[1] = d.y; out->light[2] = d.z;
+    memcpy(out->back, b->m, sizeof(out->back));
+    /* clip z = camera x p02 + y p12 + z p22 + p32 (the DS's rows), the
+     * camera's space through back */
+    for (j = 0; j < 4; j++) out->zclip[j] = p[2] * b->m[0][j] + p[6] * b->m[1][j] + p[10] * b->m[2][j];
+    out->zclip[3] += p[14];
+}
+
+int NitroPort_ShadowSetup(const float *positions, size_t stride, size_t count,
+                          const int32_t projection[16], unsigned screenWidth, unsigned screenHeight,
+                          const NitroShadowSun *sun, unsigned mapSize, NitroShadowSetup *out)
+{
+    float p[16];
+    Back b;
+    Bin bins[BINS];
+    float total = 0.0f, lo1 = 1e30f, hi1 = -1e30f, lo2 = 1e30f, hi2 = -1e30f, lod = 1e30f, hid = -1e30f;
+    float extent, texel, o1, o2, range, e;
+    V3 up, d, b1, b2;
+    size_t i;
+    int j, best = -1;
+    const unsigned char *base = (const unsigned char *)positions;
+
+    memset(out, 0, sizeof(*out));
+    if (count < 3 || mapSize == 0) return 0;
+    if (!camera_back(projection, screenWidth, screenHeight, p, &b)) return 0;
 
     /* the ground */
     memset(bins, 0, sizeof(bins));
@@ -126,12 +160,7 @@ int NitroPort_ShadowSetup(const float *positions, size_t stride, size_t count,
     if (up.y < 0.2f) return 0;
 
     /* along the ground: the screen's right, and towards the camera */
-    x = normalize(sub(v3(1.0f, 0.0f, 0.0f), scale(up, up.x)));
-    t = cross(x, up);
-    if (t.z < 0.0f) t = scale(t, -1.0f);
-    e = sun->elevation * 3.14159265f / 180.0f;
-    a = sun->azimuth * 3.14159265f / 180.0f;
-    d = normalize(add(scale(up, -sinf(e)), scale(add(scale(x, cosf(a)), scale(t, sinf(a))), cosf(e))));
+    d = sun_light(up, sun, &e);
     b1 = normalize(cross(d, up));
     b2 = cross(d, b1);
 
@@ -178,14 +207,38 @@ int NitroPort_ShadowSetup(const float *positions, size_t stride, size_t count,
     /* The ground's distance from the sun changes by texel / tan(elevation)
      * over a texel: two texels of that, and a half of one. */
     out->bias = texel * (2.0f / tanf(e > 0.1f ? e : 0.1f) + 0.5f) / range;
-    out->up[0] = up.x; out->up[1] = up.y; out->up[2] = up.z;
-    out->light[0] = d.x; out->light[1] = d.y; out->light[2] = d.z;
     out->extent = extent;
-    memcpy(out->back, b.m, sizeof(out->back));
-    /* clip z = camera x p02 + y p12 + z p22 + p32 (the DS's rows), the
-     * camera's space through back */
-    for (j = 0; j < 4; j++) out->zclip[j] = p[2] * b.m[0][j] + p[6] * b.m[1][j] + p[10] * b.m[2][j];
-    out->zclip[3] += p[14];
+    setup_camera(out, p, &b, up, d);
+    return 1;
+}
+
+int NitroPort_ShadowGroundSetup(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batches, size_t batchCount,
+                                const int32_t projection[16], unsigned screenWidth, unsigned screenHeight,
+                                const NitroShadowSun *sun, NitroShadowSetup *out)
+{
+    float p[16];
+    Back b;
+    V3 sum = v3(0.0f, 0.0f, 0.0f), up;
+    size_t bi, i;
+
+    memset(out, 0, sizeof(*out));
+    if (!camera_back(projection, screenWidth, screenHeight, p, &b)) return 0;
+    /* the ground: the round shadows lie on it (each triangle's normal,
+     * as long as twice its area) */
+    for (bi = 0; bi < batchCount; bi++) {
+        const NitroGx3dBatch *batch = &batches[bi];
+        if (!NITRO_GX3D_TAG_IS_ROUND(batch->tag)) continue;
+        for (i = batch->first; i + 2 < (size_t)batch->first + batch->count; i += 3) {
+            V3 a0 = back(&b, verts[i].position), a1 = back(&b, verts[i + 1].position);
+            V3 a2 = back(&b, verts[i + 2].position), n = cross(sub(a1, a0), sub(a2, a0));
+            if (n.y < 0.0f || (n.y == 0.0f && n.z < 0.0f)) n = scale(n, -1.0f);
+            sum = add(sum, n);
+        }
+    }
+    if (!(length(sum) > 1e-6f)) return 0;
+    up = normalize(sum);
+    if (!(up.y >= 0.2f)) return 0;
+    setup_camera(out, p, &b, up, sun_light(up, sun, NULL));
     return 1;
 }
 
@@ -465,7 +518,7 @@ static float card_feet(const NitroGx3dGpuVertex *verts, size_t g, size_t gEnd, c
     return f < 0.0f ? 0.0f : f > 0.9f ? 0.9f : f;
 }
 
-static unsigned sLastSprites, sLastShadows, sLastLaid, sLastProps, sLastPropsLaid;
+static unsigned sLastSprites, sLastShadows, sLastLaid, sLastProps, sLastPropsLaid, sLastTrees, sLastTreesLaid;
 
 void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned *laid)
 {
@@ -480,28 +533,110 @@ void NitroPort_ShadowPropStats(unsigned *props, unsigned *laid)
     if (laid) *laid = sLastPropsLaid;
 }
 
-/* A prop for its shadow: its batches (a run of one mark), its vertices,
+void NitroPort_ShadowLandStats(unsigned *trees, unsigned *laid)
+{
+    if (trees) *trees = sLastTrees;
+    if (laid) *laid = sLastTreesLaid;
+}
+
+/* The clip space's (x, y, w) of camera-space points: back's inverse, made
+ * once for all of a scene's (unback works it out again each time). */
+typedef struct { float m[3][3], t[3]; } Unback;
+static int unback_make(const Back *b, Unback *u)
+{
+    const float (*a)[4] = b->m;
+    float det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) -
+                a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) +
+                a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+    float inv;
+    if (!(fabsf(det) >= 1e-12f)) return 0;
+    inv = 1.0f / det;
+    u->m[0][0] = (a[1][1] * a[2][2] - a[1][2] * a[2][1]) * inv;
+    u->m[0][1] = (a[0][2] * a[2][1] - a[0][1] * a[2][2]) * inv;
+    u->m[0][2] = (a[0][1] * a[1][2] - a[0][2] * a[1][1]) * inv;
+    u->m[1][0] = (a[1][2] * a[2][0] - a[1][0] * a[2][2]) * inv;
+    u->m[1][1] = (a[0][0] * a[2][2] - a[0][2] * a[2][0]) * inv;
+    u->m[1][2] = (a[0][2] * a[1][0] - a[0][0] * a[1][2]) * inv;
+    u->m[2][0] = (a[1][0] * a[2][1] - a[1][1] * a[2][0]) * inv;
+    u->m[2][1] = (a[0][1] * a[2][0] - a[0][0] * a[2][1]) * inv;
+    u->m[2][2] = (a[0][0] * a[1][1] - a[0][1] * a[1][0]) * inv;
+    u->t[0] = a[0][3];
+    u->t[1] = a[1][3];
+    u->t[2] = a[2][3];
+    return 1;
+}
+static void unback_point(const Unback *u, V3 c, float out[3])
+{
+    float r0 = c.x - u->t[0], r1 = c.y - u->t[1], r2 = c.z - u->t[2];
+    out[0] = u->m[0][0] * r0 + u->m[0][1] * r1 + u->m[0][2] * r2;
+    out[1] = u->m[1][0] * r0 + u->m[1][1] * r1 + u->m[1][2] * r2;
+    out[2] = u->m[2][0] * r0 + u->m[2][1] * r1 + u->m[2][2] * r2;
+}
+
+/* A prop, or a tree of the land's, for its shadow: its batches (a prop's:
+ * a run of one mark; a tree's: the one it's in), its vertices in them,
  * where it stands and how tall its picture is. */
-#define GROUND_PROPS 256
+#define GROUND_PROPS 384
 #define PROP_VERTS 1536    /* (512 triangles: more is no small prop) */
 typedef struct {
     size_t b0, b1;         /* its batches: [b0, b1) */
+    size_t v0, v1;         /* its vertices: [v0, v1) */
     V3 base;
     float top;
+    uint8_t land;          /* (a tree of the land's: its flat triangles aren't laid) */
 } Prop;
 static Prop sProps[GROUND_PROPS];
+/* The land's trees as they're found (a batch's triangles in order): the
+ * span of each across, in depth and in height, its flat triangles' (the
+ * stump painted on the ground), the vertices to lay and their span up the
+ * picture. And every flat triangle's span, for the trees with none of
+ * their own. */
+#define GROUND_TREES 256
+#define LAND_FLATS 256
+#define LAND_FLAT 0.75f    /* (a triangle's height under this: lying on the ground) */
+#define LAND_OVER 8.0f     /* (a tree's middle this near a flat triangle's span is over it) */
+typedef struct {
+    size_t b, v0, v1, drawn;
+    float mr, mt;          /* (its first triangle's middle) */
+    float rLo, rHi, tLo, tHi, hLo, hHi, yLo, yHi;
+    float ftLo, ftHi, fh;
+    uint8_t flat;
+} Tree;
+typedef struct { float rLo, rHi, tLo, tHi, h; } Flat;
+static Tree sTrees[GROUND_TREES];
+static Flat sFlats[LAND_FLATS];
 
 #define GROUND_VERTS 24    /* (a sprite's: two triangles, more when the view's edge cuts them) */
-/* The characters' taps: three by three, a step apart across and down the
- * screen, weighed 1 2 1 each way (over 16: a Gaussian's shape, near
- * enough): the middle first, the four sides, the four corners. A tap's
- * colour is the shade to the power of its weight: where all nine are, the
- * shade. */
-static const signed char sTapAcross[NITRO_SHADOW_GROUND_TAPS] = { 0, 1, -1, 0, 0, 1, -1, 1, -1 };
-static const signed char sTapDown[NITRO_SHADOW_GROUND_TAPS] = { 0, 0, 0, 1, -1, 1, -1, -1, 1 };
-#define TAP_CLASS(t) ((t) == 0 ? 0 : (t) < 5 ? 1 : 2)
-static const float sTapWeight[3] = { 4.0f / 16.0f, 2.0f / 16.0f, 1.0f / 16.0f };
 #define GROUND_ROUNDS 64   /* (round shadows looked at a scene) */
+
+/* (a vertex of a shadow: v's own, where xyw puts it, the colour given) */
+static void lay_vertex(NitroGx3dGpuVertex *dst, const NitroGx3dGpuVertex *v, const float xyw[3], const float depth[4],
+                       const uint8_t col[3])
+{
+    *dst = *v;
+    dst->position[0] = xyw[0];
+    dst->position[1] = xyw[1];
+    dst->position[3] = xyw[2];
+    dst->position[2] = depth[0] * xyw[0] + depth[1] * xyw[1] + depth[2] * xyw[2] + depth[3];
+    dst->color[0] = col[0];
+    dst->color[1] = col[1];
+    dst->color[2] = col[2];
+    dst->color[3] = 255;
+}
+/* (the shade at j of the way up a picture, 0-1: DARK times as dark, fading
+ * to TIP of it at the top) */
+static void shade_at(const float shade[3], float j, uint8_t col[3])
+{
+    float f;
+    int c3;
+    j = j < 0.0f ? 0.0f : j > 1.0f ? 1.0f : j;
+    f = 1.0f - (1.0f - NITRO_SHADOW_GROUND_TIP) * j;
+    for (c3 = 0; c3 < 3; c3++) {
+        float full = 1.0f - (1.0f - shade[c3]) * NITRO_SHADOW_GROUND_DARK * f;
+        if (!(full > 0.0f)) full = 0.0f;
+        col[c3] = (uint8_t)(full * 255.0f + 0.5f);
+    }
+}
 
 size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batches,
                                    size_t batchCount, size_t first, NitroGx3dGpuVertex *out,
@@ -511,19 +646,25 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
                                    void *footCtx)
 {
     Back b;
+    Unback ub;
     V3 up = v3(setup->up[0], setup->up[1], setup->up[2]), right, toward, way;
     V3 light = v3(setup->light[0], setup->light[1], setup->light[2]), lh;
     float s, stretch, down, cr, ct;
     const float side = sinf(NITRO_SHADOW_GROUND_SIDE * 3.14159265f / 180.0f);
-    size_t written = 0, nb = 0, bi, rounds[GROUND_ROUNDS], nr = 0, ri, props = 0;
+    size_t written = 0, nb = 0, bi, rounds[GROUND_ROUNDS], nr = 0, ri, props = 0, lands = 0;
     if (outBatchCount) *outBatchCount = 0;
-    sLastSprites = sLastShadows = sLastLaid = sLastProps = sLastPropsLaid = 0;
-    /* the marked batches: the round shadows (each mark once), the props */
+    sLastSprites = sLastShadows = sLastLaid = sLastProps = sLastPropsLaid = sLastTrees = sLastTreesLaid = 0;
+    /* the marked batches: the round shadows (each mark once), the props,
+     * the land's trees */
     for (bi = 0; bi < batchCount; bi++) {
         uint32_t tag = batches[bi].tag;
         if (!tag || !batches[bi].count) continue;
         if (NITRO_GX3D_TAG_IS_PROP(tag)) {
             props++;
+            continue;
+        }
+        if (NITRO_GX3D_TAG_IS_LAND(tag)) {
+            lands++;
             continue;
         }
         if (!(tag & 1u)) {
@@ -535,8 +676,9 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
         if (ri == nr && nr < GROUND_ROUNDS) rounds[nr++] = bi;
     }
     sLastShadows = (unsigned)nr;
-    if (!nr && !props) return 0;
+    if (!nr && !props && !lands) return 0;
     memcpy(b.m, setup->back, sizeof(b.m));
+    if (!unback_make(&b, &ub)) return 0;
     /* The ground's two ways: the screen's right (the camera's x on the
      * ground) and down the screen (towards the camera), foreshortened
      * there by s. */
@@ -571,11 +713,8 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
         const NitroGx3dBatch *batch = NULL;
         V3 anchor = v3(0.0f, 0.0f, 0.0f), q[GROUND_VERTS], n = v3(0.0f, 0.0f, 0.0f), across, along;
         float alongOf[GROUND_VERTS], aMin = 1e30f, aMax = -1e30f, uMin = 1e30f, uMax = -1e30f, uMid;
-        float feet, top, r, xyw[NITRO_SHADOW_GROUND_TAPS][GROUND_VERTS][3];
-        uint8_t col[3][GROUND_VERTS][3];   /* (a tap's weight's, the vertex's) */
-        V3 tap[NITRO_SHADOW_GROUND_TAPS];
+        float feet, top;
         size_t g, gEnd, i, count = 0;
-        int t, ok = 1;
         /* its sprite: the batch with the mark less its bit 0, opaque */
         for (bi = 0; bi < batchCount; bi++) {
             if (batches[bi].tag == (tag & ~1u) && batches[bi].count >= 3 && batches[bi].count <= GROUND_VERTS &&
@@ -622,41 +761,10 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
             uMax - uMin > NITRO_SHADOW_GROUND_CARD_MAX)
             continue;
         uMid = 0.5f * (uMin + uMax);
-        if (written + (gEnd - g) * NITRO_SHADOW_GROUND_TAPS > capacity) break;
+        if (written + (gEnd - g) > capacity) break;
         feet = card_feet(verts, g, gEnd, alongOf, aMin, aMax, batch->texture_param, batch->palette_base, footRow,
                          footCtx) * (aMax - aMin);
         top = aMax - aMin - feet;
-        /* the taps: three by three, a step apart across and along the
-         * ground (down the screen by as much as across it) */
-        r = NITRO_SHADOW_GROUND_BLUR * top;
-        r = r < 0.3f ? 0.3f : r > 2.25f ? 2.25f : r;
-        for (t = 0; t < NITRO_SHADOW_GROUND_TAPS; t++)
-            tap[t] = add(scale(right, r * (float)sTapAcross[t]), scale(toward, r / s * (float)sTapDown[t]));
-        for (i = 0; i < gEnd - g; i++) {
-            V3 base;
-            float h = alongOf[i] - aMin - feet, f, j;
-            int c3;
-            /* across stays across, about the sprite's middle; up the
-             * sprite from its feet becomes along the shadows' way (the
-             * clear rows below the feet behind the start) */
-            base = add(add(anchor, scale(across, dot(q[i], across) - uMid)), scale(way, h * stretch));
-            for (t = 0; t < NITRO_SHADOW_GROUND_TAPS && ok; t++) {
-                V3 gp = scale(add(base, tap[t]), 1.0f - NITRO_SHADOW_GROUND_PULL);
-                ok = unback(&b, gp, xyw[t][i]);
-            }
-            /* the colour: the shade (DARK times as dark), fading to TIP of
-             * it at the head; each tap the shade to its weight's power */
-            j = top > 0.0f ? h / top : 0.0f;
-            j = j < 0.0f ? 0.0f : j > 1.0f ? 1.0f : j;
-            f = 1.0f - (1.0f - NITRO_SHADOW_GROUND_TIP) * j;
-            for (c3 = 0; c3 < 3; c3++) {
-                float full = 1.0f - (1.0f - shade[c3]) * NITRO_SHADOW_GROUND_DARK * f;
-                int wc;
-                if (!(full > 0.0f)) full = 0.0f;
-                for (wc = 0; wc < 3; wc++) col[wc][i][c3] = (uint8_t)(powf(full, sTapWeight[wc]) * 255.0f + 0.5f);
-            }
-        }
-        if (!ok) continue;
         if (nb == 0 || outBatches[nb - 1].texture_param != batch->texture_param ||
             outBatches[nb - 1].palette_base != batch->palette_base ||
             outBatches[nb - 1].polygon_attr != batch->polygon_attr ||
@@ -669,22 +777,20 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
             outBatches[nb].tag = 0;
             nb++;
         }
-        for (t = 0; t < NITRO_SHADOW_GROUND_TAPS; t++) {
-            for (i = g; i < gEnd; i++) {
-                NitroGx3dGpuVertex *dst = &out[written++];
-                const float *p = xyw[t][i - g];
-                *dst = verts[i];
-                dst->position[0] = p[0];
-                dst->position[1] = p[1];
-                dst->position[3] = p[2];
-                dst->position[2] = depth[0] * p[0] + depth[1] * p[1] + depth[2] * p[2] + depth[3];
-                dst->color[0] = col[TAP_CLASS(t)][i - g][0];
-                dst->color[1] = col[TAP_CLASS(t)][i - g][1];
-                dst->color[2] = col[TAP_CLASS(t)][i - g][2];
-                dst->color[3] = 255;
-            }
+        for (i = 0; i < gEnd - g; i++) {
+            V3 spot;
+            float h = alongOf[i] - aMin - feet, xyw[3];
+            uint8_t col[3];
+            /* across stays across, about the sprite's middle; up the
+             * sprite from its feet becomes along the shadows' way (the
+             * clear rows below the feet behind the start) */
+            spot = add(add(anchor, scale(across, dot(q[i], across) - uMid)), scale(way, h * stretch));
+            unback_point(&ub, scale(spot, 1.0f - NITRO_SHADOW_GROUND_PULL), xyw);
+            /* the colour: the shade, fading to the head */
+            shade_at(shade, top > 0.0f ? h / top : 0.0f, col);
+            lay_vertex(&out[written++], &verts[g + i], xyw, depth, col);
         }
-        outBatches[nb - 1].count += (uint32_t)((gEnd - g) * NITRO_SHADOW_GROUND_TAPS);
+        outBatches[nb - 1].count += (uint32_t)(gEnd - g);
         /* its round shadow: left out (the caller's) */
         if (roundUsed) {
             for (bi = rounds[ri]; bi < batchCount; bi++)
@@ -694,17 +800,150 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
     }
 
     /* The props (trees, signs, lamp posts: NITRO_GX3D_TAG_PROP marks, each
-     * run of one mark a prop): the prop's picture as the camera has it,
-     * laid on the ground from where it stands. Where: the middle of its
-     * lowest vertices (the ground it's on). Each vertex: across by its
+     * run of one mark a prop) and the land's trees (NITRO_GX3D_TAG_LAND
+     * marks, a tree at a time): the thing's picture as the camera has it,
+     * laid on the ground from where it stands. Each vertex: across by its
      * place across the screen from there, along the shadows' way by its
      * height up the screen from there (as a sprite's rows are). */
-    if (props) {
+    if (props || lands) {
         const V3 pictureUp = v3(0.0f, 1.0f, 0.0f);
-        size_t np = 0, total = 0, room = capacity > written ? (capacity - written) / NITRO_SHADOW_PROP_TAPS : 0;
-        size_t pi, nb0 = nb, nbTap, done = 0;
-        int t;
-        for (bi = 0; bi < batchCount && np < GROUND_PROPS;) {
+        /* (how far on the screen a length in the camera's space is, at
+         * most: for leaving out what can't reach the view) */
+        const float kx = 1.0f / fabsf(b.m[0][0]), ky = 1.0f / fabsf(b.m[1][1]), kw = 1.0f / fabsf(b.m[2][2]);
+        size_t np = 0, nt = 0, nf = 0, pi, ti, nb0 = nb;
+
+        /* the land's trees: a batch's triangles in order, a new tree
+         * where one's middle is far from the tree's first's */
+        for (bi = 0; bi < batchCount && lands; bi++) {
+            const NitroGx3dBatch *batch = &batches[bi];
+            Tree *tr = NULL;
+            size_t i;
+            if (!NITRO_GX3D_TAG_IS_LAND(batch->tag) || batch->translucent || !batch->texture_param) continue;
+            for (i = batch->first; i + 2 < (size_t)batch->first + batch->count; i += 3) {
+                float r[3], t[3], h[3], y[3], rLo, rHi, tLo, tHi, hLo, hHi, mr, mt;
+                int k, flat;
+                for (k = 0; k < 3; k++) {
+                    V3 q = back(&b, verts[i + (size_t)k].position);
+                    r[k] = dot(q, right);
+                    t[k] = dot(q, toward);
+                    h[k] = dot(q, up);
+                    y[k] = q.y;
+                }
+                rLo = r[0] < r[1] ? (r[0] < r[2] ? r[0] : r[2]) : (r[1] < r[2] ? r[1] : r[2]);
+                rHi = r[0] > r[1] ? (r[0] > r[2] ? r[0] : r[2]) : (r[1] > r[2] ? r[1] : r[2]);
+                tLo = t[0] < t[1] ? (t[0] < t[2] ? t[0] : t[2]) : (t[1] < t[2] ? t[1] : t[2]);
+                tHi = t[0] > t[1] ? (t[0] > t[2] ? t[0] : t[2]) : (t[1] > t[2] ? t[1] : t[2]);
+                hLo = h[0] < h[1] ? (h[0] < h[2] ? h[0] : h[2]) : (h[1] < h[2] ? h[1] : h[2]);
+                hHi = h[0] > h[1] ? (h[0] > h[2] ? h[0] : h[2]) : (h[1] > h[2] ? h[1] : h[2]);
+                /* (a rectangle's two triangles span the same: one middle) */
+                mr = 0.5f * (rLo + rHi);
+                mt = 0.5f * (tLo + tHi);
+                flat = hHi - hLo < LAND_FLAT;
+                if (flat && nf < LAND_FLATS &&
+                    !(nf && sFlats[nf - 1].rLo == rLo && sFlats[nf - 1].rHi == rHi && sFlats[nf - 1].tLo == tLo &&
+                      sFlats[nf - 1].tHi == tHi)) {
+                    sFlats[nf].rLo = rLo; sFlats[nf].rHi = rHi;
+                    sFlats[nf].tLo = tLo; sFlats[nf].tHi = tHi;
+                    sFlats[nf].h = hLo;
+                    nf++;
+                }
+                if (!tr || fabsf(mr - tr->mr) > NITRO_SHADOW_LAND_NEAR || fabsf(mt - tr->mt) > NITRO_SHADOW_LAND_NEAR) {
+                    if (nt >= GROUND_TREES) break;
+                    tr = &sTrees[nt++];
+                    memset(tr, 0, sizeof(*tr));
+                    tr->b = bi;
+                    tr->v0 = i;
+                    tr->mr = mr; tr->mt = mt;
+                    tr->rLo = tr->tLo = tr->hLo = tr->yLo = tr->ftLo = tr->fh = 1e30f;
+                    tr->rHi = tr->tHi = tr->hHi = tr->yHi = tr->ftHi = -1e30f;
+                }
+                tr->v1 = i + 3;
+                if (rLo < tr->rLo) tr->rLo = rLo;
+                if (rHi > tr->rHi) tr->rHi = rHi;
+                if (tLo < tr->tLo) tr->tLo = tLo;
+                if (tHi > tr->tHi) tr->tHi = tHi;
+                if (hLo < tr->hLo) tr->hLo = hLo;
+                if (hHi > tr->hHi) tr->hHi = hHi;
+                if (flat) {
+                    tr->flat = 1;
+                    if (tLo < tr->ftLo) tr->ftLo = tLo;
+                    if (tHi > tr->ftHi) tr->ftHi = tHi;
+                    if (hLo < tr->fh) tr->fh = hLo;
+                } else {
+                    tr->drawn += 3;
+                    for (k = 0; k < 3; k++) {
+                        if (y[k] < tr->yLo) tr->yLo = y[k];
+                        if (y[k] > tr->yHi) tr->yHi = y[k];
+                    }
+                }
+            }
+        }
+        sLastTrees = (unsigned)nt;
+        /* where each stands, and whether its shadow can reach the view */
+        for (ti = 0; ti < nt && np < GROUND_PROPS; ti++) {
+            const Tree *tr = &sTrees[ti];
+            float gr = 0.5f * (tr->rLo + tr->rHi), gt = 0.5f * (tr->tLo + tr->tHi), baseT, baseH, top, under, reach;
+            float xyw[3];
+            V3 base;
+            if (!tr->drawn) continue;
+            if (tr->flat) {
+                baseT = 0.5f * (tr->ftLo + tr->ftHi);
+                baseH = tr->fh;
+            } else {
+                const Flat *found = NULL;
+                size_t fi;
+                for (fi = 0; fi < nf; fi++) {
+                    const Flat *f = &sFlats[fi];
+                    if (gr < f->rLo - LAND_OVER || gr > f->rHi + LAND_OVER || gt < f->tLo - LAND_OVER ||
+                        gt > f->tHi + LAND_OVER || f->h > tr->hLo + 2.0f)
+                        continue;
+                    if (!found || f->h > found->h) found = f;
+                }
+                if (found) {
+                    baseT = 0.5f * (found->tLo + found->tHi);
+                    baseH = found->h;
+                } else {
+                    /* (as a prop: the middle of its lowest vertices) */
+                    float tLo = 1e30f, tHi = -1e30f, hSum = 0.0f;
+                    size_t i, low = 0;
+                    for (i = tr->v0; i < tr->v1; i++) {
+                        V3 q = back(&b, verts[i].position);
+                        float h = dot(q, up), t = dot(q, toward);
+                        if (h > tr->hLo + 1.5f) continue;
+                        if (t < tLo) tLo = t;
+                        if (t > tHi) tHi = t;
+                        hSum += h;
+                        low++;
+                    }
+                    baseT = 0.5f * (tLo + tHi);
+                    baseH = hSum / (float)low;
+                }
+            }
+            base = add(add(scale(right, gr), scale(toward, baseT)), scale(up, baseH));
+            top = tr->yHi - base.y;
+            under = base.y - tr->yLo;
+            /* (standing up, off the ground it's on) */
+            if (!(tr->hHi - baseH >= NITRO_SHADOW_PROP_MIN) || !(top > 1.0f) || top > NITRO_SHADOW_GROUND_CARD_MAX)
+                continue;
+            /* (its shadow no further from where it stands than half its
+             * width and its picture's height's stretch) */
+            reach = 0.5f * (tr->rHi - tr->rLo) + (under > top ? under : top) * stretch + 4.0f;
+            unback_point(&ub, base, xyw);
+            if (!(xyw[2] + reach * kw > 0.0f) || fabsf(xyw[0]) - reach * kx > xyw[2] + reach * kw ||
+                fabsf(xyw[1]) - reach * ky > xyw[2] + reach * kw)
+                continue;
+            sProps[np].b0 = tr->b;
+            sProps[np].b1 = tr->b + 1;
+            sProps[np].v0 = tr->v0;
+            sProps[np].v1 = tr->v1;
+            sProps[np].base = base;
+            sProps[np].top = top;
+            sProps[np].land = 1;
+            np++;
+        }
+
+        /* the props */
+        for (bi = 0; bi < batchCount && props && np < GROUND_PROPS;) {
             uint32_t tag = batches[bi].tag;
             size_t bj = bi + 1, i, g, gEnd, low = 0, drawn = 0;
             float hMin = 1e30f, hMax = -1e30f, top = -1e30f;
@@ -721,7 +960,7 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
             sLastProps++;
             for (i = bi; i < bj; i++)
                 if (!batches[i].translucent && batches[i].texture_param) drawn += batches[i].count;
-            if (gEnd - g >= 3 && gEnd - g <= PROP_VERTS && drawn && total + drawn <= room) {
+            if (gEnd - g >= 3 && gEnd - g <= PROP_VERTS && drawn) {
                 for (i = g; i < gEnd; i++) {
                     float h = dot(back(&b, verts[i].position), up);
                     if (h < hMin) hMin = h;
@@ -754,96 +993,82 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
                 if (hMax - hMin >= NITRO_SHADOW_PROP_MIN && top > 1.0f && top <= NITRO_SHADOW_GROUND_CARD_MAX) {
                     sProps[np].b0 = bi;
                     sProps[np].b1 = bj;
+                    sProps[np].v0 = g;
+                    sProps[np].v1 = gEnd;
                     sProps[np].base = base;
                     sProps[np].top = top;
+                    sProps[np].land = 0;
                     np++;
-                    total += drawn;
                 }
             }
             bi = bj;
         }
-        /* each tap's vertices together (the taps are drawn one after the
-         * other, each darkening a pixel once: the props' own layers and
-         * each other's overlap); tap t's batches marked t + 1 */
-        for (pi = 0; pi < np && total; pi++) {
+
+        /* their shadows, in batches of their own (NITRO_SHADOW_ONCE: the
+         * renderer darkens each pixel once under them, the props' own
+         * layers and each other's overlapping); one that doesn't fit
+         * whole isn't laid at all */
+        for (pi = 0; pi < np; pi++) {
             const Prop *pr = &sProps[pi];
-            float r = NITRO_SHADOW_GROUND_BLUR * pr->top;
-            V3 tapd;
-            r = r < 0.3f ? 0.3f : r > 2.25f ? 2.25f : r;
-            tapd = add(scale(right, r), scale(toward, r / s));
-            for (bi = pr->b0; bi < pr->b1; bi++) {
+            size_t at = written, nbAt = nb;
+            int fits = 1;
+            for (bi = pr->b0; bi < pr->b1 && fits; bi++) {
                 const NitroGx3dBatch *batch = &batches[bi];
-                size_t i;
+                size_t i = batch->first > pr->v0 ? batch->first : pr->v0;
+                size_t end = (size_t)batch->first + batch->count < pr->v1 ? (size_t)batch->first + batch->count : pr->v1;
                 if (batch->translucent || !batch->texture_param) continue;
-                if (nb == nb0 || outBatches[nb - 1].texture_param != batch->texture_param ||
-                    outBatches[nb - 1].palette_base != batch->palette_base ||
-                    outBatches[nb - 1].first + outBatches[nb - 1].count != first + written + done) {
-                    /* (room for this batch in every tap's list) */
-                    if (nb0 + (nb - nb0 + 1) * NITRO_SHADOW_PROP_TAPS > maxBatches) break;
-                    outBatches[nb] = *batch;
-                    outBatches[nb].first = (uint32_t)(first + written + done);
-                    outBatches[nb].count = 0;
-                    outBatches[nb].translucent = 0;
-                    outBatches[nb].tag = 1;
-                    nb++;
-                }
-                for (i = batch->first; i < batch->first + batch->count; i++) {
-                    V3 q = back(&b, verts[i].position), rel = sub(q, pr->base), spot;
-                    float h = dot(rel, pictureUp), j, f;
-                    uint8_t col[2][3];   /* (the middle tap's, the sides') */
-                    int c3;
-                    spot = add(add(pr->base, scale(right, dot(rel, right))), scale(way, h * stretch));
-                    j = h / pr->top;
-                    j = j < 0.0f ? 0.0f : j > 1.0f ? 1.0f : j;
-                    f = 1.0f - (1.0f - NITRO_SHADOW_GROUND_TIP) * j;
-                    /* (the taps weighed 1 2 1: the middle the shade's square
-                     * root, each side its fourth root) */
-                    for (c3 = 0; c3 < 3; c3++) {
-                        float full = 1.0f - (1.0f - shade[c3]) * NITRO_SHADOW_GROUND_DARK * f;
-                        if (!(full > 0.0f)) full = 0.0f;
-                        col[0][c3] = (uint8_t)(sqrtf(full) * 255.0f + 0.5f);
-                        col[1][c3] = (uint8_t)(sqrtf(sqrtf(full)) * 255.0f + 0.5f);
+                for (; i + 2 < end && fits; i += 3) {
+                    V3 q[3];
+                    int k;
+                    for (k = 0; k < 3; k++) q[k] = back(&b, verts[i + (size_t)k].position);
+                    if (pr->land) {
+                        float h0 = dot(q[0], up), h1 = dot(q[1], up), h2 = dot(q[2], up);
+                        float lo = h0 < h1 ? (h0 < h2 ? h0 : h2) : (h1 < h2 ? h1 : h2);
+                        float hi = h0 > h1 ? (h0 > h2 ? h0 : h2) : (h1 > h2 ? h1 : h2);
+                        if (hi - lo < LAND_FLAT) continue;   /* (the stump on the ground) */
                     }
-                    for (t = 0; t < NITRO_SHADOW_PROP_TAPS; t++) {
-                        NitroGx3dGpuVertex *dst = &out[written + (size_t)t * total + done];
-                        V3 gp = scale(add(spot, scale(tapd, t == 0 ? 0.0f : t == 1 ? 1.0f : -1.0f)),
-                                      1.0f - NITRO_SHADOW_GROUND_PULL);
-                        float xyw[3];
-                        *dst = verts[i];
-                        if (!unback(&b, gp, xyw)) {
-                            xyw[0] = verts[i].position[0];
-                            xyw[1] = verts[i].position[1];
-                            xyw[2] = verts[i].position[3];
+                    if (written + 3 > capacity) {
+                        fits = 0;
+                        break;
+                    }
+                    if (nb == nb0 || outBatches[nb - 1].texture_param != batch->texture_param ||
+                        outBatches[nb - 1].palette_base != batch->palette_base ||
+                        outBatches[nb - 1].first + outBatches[nb - 1].count != first + written) {
+                        if (nb >= maxBatches) {
+                            fits = 0;
+                            break;
                         }
-                        dst->position[0] = xyw[0];
-                        dst->position[1] = xyw[1];
-                        dst->position[3] = xyw[2];
-                        dst->position[2] = depth[0] * xyw[0] + depth[1] * xyw[1] + depth[2] * xyw[2] + depth[3];
-                        dst->color[0] = col[t != 0][0];
-                        dst->color[1] = col[t != 0][1];
-                        dst->color[2] = col[t != 0][2];
-                        dst->color[3] = 255;
+                        outBatches[nb] = *batch;
+                        outBatches[nb].first = (uint32_t)(first + written);
+                        outBatches[nb].count = 0;
+                        outBatches[nb].translucent = 0;
+                        outBatches[nb].tag = NITRO_SHADOW_ONCE;
+                        nb++;
                     }
-                    done++;
+                    for (k = 0; k < 3; k++) {
+                        V3 rel = sub(q[k], pr->base), spot;
+                        float h = dot(rel, pictureUp), xyw[3];
+                        uint8_t col[3];
+                        spot = add(add(pr->base, scale(right, dot(rel, right))), scale(way, h * stretch));
+                        unback_point(&ub, scale(spot, 1.0f - NITRO_SHADOW_GROUND_PULL), xyw);
+                        shade_at(shade, h / pr->top, col);
+                        lay_vertex(&out[written++], &verts[i + (size_t)k], xyw, depth, col);
+                    }
+                    outBatches[nb - 1].count += 3;
                 }
-                outBatches[nb - 1].count += batch->count;
             }
-            if (bi < pr->b1) break;   /* (no room for more batches) */
-            sLastPropsLaid++;
-        }
-        /* (a tap's vertices are `total` apart: if the batches ran out, the
-         * vertices not reached are just not drawn) */
-        nbTap = nb - nb0;
-        for (t = 1; t < NITRO_SHADOW_PROP_TAPS && nbTap; t++) {
-            size_t k;
-            for (k = 0; k < nbTap; k++) {
-                outBatches[nb] = outBatches[nb0 + k];
-                outBatches[nb].first += (uint32_t)((size_t)t * total);
-                outBatches[nb].tag = (uint32_t)t + 1u;
-                nb++;
+            if (!fits) {
+                /* (what was laid of it taken back: the batches begun for
+                 * it, and its vertices off the one before them) */
+                if (nbAt > nb0 && nbAt <= nb && outBatches[nbAt - 1].first + outBatches[nbAt - 1].count > first + at)
+                    outBatches[nbAt - 1].count = (uint32_t)(first + at - outBatches[nbAt - 1].first);
+                nb = nbAt;
+                written = at;
+                break;
             }
+            if (pr->land) sLastTreesLaid++;
+            else sLastPropsLaid++;
         }
-        if (nbTap) written += total * NITRO_SHADOW_PROP_TAPS;
     }
     if (outBatchCount) *outBatchCount = nb;
     return written;

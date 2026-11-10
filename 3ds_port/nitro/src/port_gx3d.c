@@ -695,6 +695,16 @@ static int polygon_front(const GeoVertex *a,const GeoVertex *b,const GeoVertex *
 }
 /* The vertex's screen position, worked out once: strips and quads share
  * vertices between their triangles. */
+/* (to_screen's x and y alone, of clip-space coordinates with w above 0) */
+static void screen_xy(const int32_t clip[4],int32_t *x,int32_t *y)
+{
+    double x0=s.viewport[0]&255,top=(191-(s.viewport[3]&255))&255;
+    double width=(s.viewport[2]-s.viewport[0]+1)&0x1FF;
+    double height=(s.viewport[3]-s.viewport[1]+1)&0xFF;
+    double w=(double)clip[3];
+    *x=floor_int(((double)clip[0]+w)*width/(2*w)*256+x0*256+0.5);
+    *y=floor_int((w-(double)clip[1])*height/(2*w)*256+top*256+0.5);
+}
 static const NitroGx3dVertex *screen_of(GeoVertex *v)
 {
     if(!v->hasScreen){v->screen=to_screen(v);v->hasScreen=1;}
@@ -772,12 +782,30 @@ static void keep_for_shadow(GeoVertex *a,GeoVertex *b,GeoVertex *c)
  * game sent it, wherever it is within the shadows' reach of the view
  * (NitroGx3dScene.tagged_triangles): not the in-between scenes' own
  * (theirs are made of the two scenes', tagged_halfway). */
+/* (the land's trees', NITRO_GX3D_TAG_LAND: how many the scene being built
+ * has; which sides of their nearer reach a vertex is outside of, 16 for
+ * one that can't be kept at all) */
+static uint32_t sTaggedLand;
+static unsigned land_outside(const GeoVertex *v)
+{
+    int64_t w=v->clip[3],x=v->clip[0],y=v->clip[1],r;
+    if(w<=0 || (v->outside & 0x30u))return 16u;
+    r=NITRO_GX3D_LAND_REACH_NUM*w;
+    return (unsigned)(NITRO_GX3D_LAND_REACH_DEN*x<-r)|((unsigned)(NITRO_GX3D_LAND_REACH_DEN*x>r)<<1)|
+           ((unsigned)(NITRO_GX3D_LAND_REACH_DEN*y<-r)<<2)|((unsigned)(NITRO_GX3D_LAND_REACH_DEN*y>r)<<3);
+}
 static void keep_tagged(GeoVertex *a,GeoVertex *b,GeoVertex *c)
 {
     NitroGx3dScene *scene=dest_scene();
     NitroGx3dTriangle *tri;
     if(sReplaying || scene->tagged_count>=NITRO_GX3D_MAX_TAGGED_TRIANGLES)return;
-    if(!shadow_reach(a)||!shadow_reach(b)||!shadow_reach(c))return;
+    if(NITRO_GX3D_TAG_IS_LAND(s.tag)){
+        /* (a row of trees is one wide polygon: kept if any of it is
+         * within the reach, not only all of it) */
+        unsigned oa=land_outside(a),ob=land_outside(b),oc=land_outside(c);
+        if(((oa|ob|oc)&16u) || (oa&ob&oc) || sTaggedLand>=NITRO_GX3D_MAX_LAND_TAGGED)return;
+        sTaggedLand++;
+    }else if(!shadow_reach(a)||!shadow_reach(b)||!shadow_reach(c))return;
     tri=&scene->tagged_triangles[scene->tagged_count++];
     tri->v[0]=*screen_of(a);tri->v[1]=*screen_of(b);tri->v[2]=*screen_of(c);
     tri->polygon_attr=s.attr;
@@ -1787,6 +1815,23 @@ static void tagged_halfway(const NitroGx3dScene *now,NitroGx3dScene *mid)
         unsigned k;
         int jumped=0;
         *out=*c;
+        if(NITRO_GX3D_TAG_IS_LAND(c->tag)){
+            /* (the land's trees: still, so halfway is where half the
+             * camera's move back puts them, as the land's own polygons
+             * with no pair, make_mid_scene; not paired by their place in
+             * the run, which changes as trees come within reach) */
+            tag=c->tag;have=0;
+            if(!sClipMotionValid)continue;
+            for(k=0;k<3;k++){
+                int32_t clip[4];
+                unsigned q;
+                for(q=0;q<4;q++)clip[q]=static_halfway(c->v[k].clip[q],sClipMotion[q],-1);
+                if(clip[3]<=0)continue;
+                for(q=0;q<4;q++)out->v[k].clip[q]=clip[q];
+                screen_xy(clip,&out->v[k].x,&out->v[k].y);
+            }
+            continue;
+        }
         if(!i || c->tag!=tag){
             uint32_t n;
             tag=c->tag;run=i;have=0;lenBefore=0;
@@ -2424,13 +2469,13 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
             sSerial=serial;
             sScenes[sBuilding].count=0;
             sScenes[sBuilding].shadow_count=0;
-            sScenes[sBuilding].tagged_count=0;
+            sScenes[sBuilding].tagged_count=0;sTaggedLand=0;
             sScenes[sBuilding].dropped=0;
             NitroPort_Gx3dScenePublished();
         }else{
             /* Keep the newest image and reuse this building slot on the
              * exceptionally slow consumer path; never stall the game. */
-            scene->count=0;scene->shadow_count=0;scene->tagged_count=0;scene->dropped++;
+            scene->count=0;scene->shadow_count=0;scene->tagged_count=0;sTaggedLand=0;scene->dropped++;
         }
         /* (what only casts: the shadow map's alone, FULL; not the sprites') */
         sShadowCapture=NitroPort_ShadowReachOn() && shadow_store();
@@ -2730,7 +2775,7 @@ static inline __attribute__((always_inline)) void work_op(unsigned op,const uint
             /* Nothing published: the scene being built starts again. */
             sScenes[sBuilding].count=0;
             sScenes[sBuilding].shadow_count=0;
-            sScenes[sBuilding].tagged_count=0;
+            sScenes[sBuilding].tagged_count=0;sTaggedLand=0;
             sScenes[sBuilding].dropped=0;
             s.frameVertices=0;s.framePolygons=0;
             __atomic_store_n(&sSwapsSkipped,sSwapsSkipped+1u,__ATOMIC_RELAXED);
@@ -2966,10 +3011,19 @@ found:
                  * reach, keep_for_shadow, and the marked polygons,
                  * keep_tagged: past it, with a margin for the rounding) */
                 const int64_t margin=(int64_t)4096*8;
+                if(!sShadowCapture && NITRO_GX3D_TAG_IS_LAND(s.tag)){
+                    /* (the land's trees: their nearer reach, keep_tagged) */
+                    const int64_t n=NITRO_GX3D_LAND_REACH_NUM,d=NITRO_GX3D_LAND_REACH_DEN;
+                    if(!(d*c[0]+n*c[3]<-margin*d))outside&=~1u;
+                    if(!(d*c[0]-n*c[3]>=margin*d))outside&=~2u;
+                    if(!(d*c[1]+n*c[3]<-margin*d))outside&=~4u;
+                    if(!(d*c[1]-n*c[3]>=margin*d))outside&=~8u;
+                }else{
                 if(!(c[0]+SHADOW_GUARD*c[3]<-margin))outside&=~1u;
                 if(!(c[0]-SHADOW_GUARD*c[3]>=margin))outside&=~2u;
                 if(!(c[1]+SHADOW_GUARD*c[3]<-margin))outside&=~4u;
                 if(!(c[1]-SHADOW_GUARD*c[3]>=margin))outside&=~8u;
+                }
             }else{
                 if(!(c[0]+c[3]<0))outside&=~1u;
                 if(!(c[0]-c[3]>=4096))outside&=~2u;

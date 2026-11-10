@@ -83,6 +83,21 @@ int NitroPort_ShadowSetup(const float *positions, size_t stride, size_t count,
                           const int32_t projection[16], unsigned screenWidth, unsigned screenHeight,
                           const NitroShadowSun *sun, unsigned mapSize, NitroShadowSetup *out);
 
+struct NitroGx3dGpuVertex;
+struct NitroGx3dBatch;
+/* The same for the sun shadows laid on the ground alone
+ * (NitroPort_ShadowGroundCards), from the marked polygons' batches
+ * (NitroPort_Gx3dBuildTaggedBatches) instead of the whole scene: the
+ * ground's normal is the round shadows' (they lie on it: every batch with
+ * a round shadow's mark, its triangles' normals weighed by their area), so
+ * none of the scene's thousands of vertices is gone through (the whole
+ * setup took most of the 5 ms a scene the shadows cost). Only up, light,
+ * back and zclip are set. 0 with no round shadow among them (the whole
+ * setup then), or as above. */
+int NitroPort_ShadowGroundSetup(const struct NitroGx3dGpuVertex *verts, const struct NitroGx3dBatch *batches,
+                                size_t batchCount, const int32_t projection[16], unsigned screenWidth,
+                                unsigned screenHeight, const NitroShadowSun *sun, NitroShadowSetup *out);
+
 /* A setup's distances reaching further towards the sun, for triangles that
  * only cast (the scene's shadow_triangles: outside the view, or facing
  * away from it; as for NitroPort_ShadowSetup, three vertices a triangle):
@@ -138,13 +153,13 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
  * sprite; 1.5 times it early and late. Never nearer the sprite's own line
  * than NITRO_SHADOW_GROUND_SIDE (it would be a sliver), never up the
  * screen. Across the sprite stays across (about its middle), so a sprite
- * seen from the back or the front casts the same shape. Soft, as a
- * Gaussian blur near enough: drawn NITRO_SHADOW_GROUND_TAPS times, three
- * by three a step apart on the ground, weighed 1 2 1 each way (the middle
- * copy first, 4/16; the four sides, 2/16; the four corners, 1/16), each
- * the shade to its weight's power (where they all meet, the shade; the
- * edges between), and fading to NITRO_SHADOW_GROUND_TIP of it at the
- * head. The shade: the one given, its darkening NITRO_SHADOW_GROUND_DARK
+ * seen from the back or the front casts the same shape. Drawn once: one
+ * copy, its edge as soft as the texture's own smooth sampling makes it
+ * (nine copies a step apart were a blur, but nine multiplies, each
+ * rounded to the upper screen's 5-6-5 bits: red and blue by 8/255 a step,
+ * green by 4, and the shadow came out purple here and blue there), and
+ * fading to NITRO_SHADOW_GROUND_TIP of it at the head. The shade: the one
+ * given, its darkening NITRO_SHADOW_GROUND_DARK
  * times as much. Pulled towards the camera along its ray (where it is on the
  * screen unchanged) by NITRO_SHADOW_GROUND_PULL of its distance: in front
  * of the ground, behind the sprite's own feet.
@@ -164,17 +179,15 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
  *
  * depth: the row on (x, y, w, 1) giving a vertex's z as the scene's
  * vertices have theirs (NitroPort_ShadowDepthRow). shade: the full shade
- * (0-1, red, green, blue), into the copies' vertex colours (each tap's,
- * with the fade): drawn as mix(white, vertex colour, texture alpha),
- * multiplying what's there. out, capacity vertices; outBatches,
+ * (0-1, red, green, blue), into the vertices' colours (with the fade):
+ * drawn as mix(white, vertex colour, texture alpha), multiplying what's
+ * there. out, capacity vertices; outBatches,
  * maxBatches (each one first counting from first); roundUsed (as many as
  * batches, or NULL): 1 for each round shadow's batch whose character got a
  * sun shadow (the others untouched). Returns the vertices written. verts
  * are only read. */
 #define NITRO_SHADOW_GROUND_SIDE 30.0f     /* (degrees, on the ground) */
 #define NITRO_SHADOW_GROUND_LENGTH 1.25f    /* (a little longer than the sun alone makes them) */
-#define NITRO_SHADOW_GROUND_TAPS 9
-#define NITRO_SHADOW_GROUND_BLUR 0.015f    /* (the taps' step: the sprite's height times it, 0.3-2.25) */
 #define NITRO_SHADOW_GROUND_DARK 1.1f      /* (how much darker than the shade given: its darkening times this) */
 #define NITRO_SHADOW_GROUND_TIP 0.35f
 #define NITRO_SHADOW_GROUND_PULL 0.004f
@@ -194,17 +207,31 @@ void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned 
  * for a prop standing under NITRO_SHADOW_PROP_MIN above its ground (lying
  * flat) or with more than 512 triangles.
  *
- * Soft another way: NITRO_SHADOW_PROP_TAPS copies a step apart on the
- * diagonal, weighed 1 2 1 (the middle first: the shade's square root; the
- * sides its fourth root), but each tap's vertices of all the props together, in
- * batches of their own after the characters', their tag the tap's number
- * + 1 (the characters' batches' tag is 0): the renderer draws a tap's
- * batches darkening each pixel once (a tree's layers overlap, and trees
- * each other), so where all the taps meet it's the shade, however many
- * layers. The last call's props and how many got a shadow: */
-#define NITRO_SHADOW_PROP_TAPS 3
+ * Drawn once too, in batches of their own after the characters', their
+ * tag NITRO_SHADOW_ONCE (the characters' batches' tag is 0): the renderer
+ * draws those darkening each pixel once (a tree's layers overlap, and
+ * trees each other: the shade, however many layers), where a texel is
+ * more than half opaque.
+ *
+ * The trees of the land itself (NITRO_GX3D_TAG_LAND marks: the game marks
+ * the land models' tree materials, most trees being the land's and no
+ * props) the same way, a tree at a time: a marked batch's triangles in the
+ * order the game sent them, a new tree where a triangle's middle (of its
+ * span across and in depth) is more than NITRO_SHADOW_LAND_NEAR from the
+ * tree's first one's (a tree's layers stand over one another, the next
+ * tree two tiles on). Where it stands: its own flat triangles' middle (the
+ * stump painted on the ground under it: not laid, it casts nothing);
+ * with none, the flat triangles of any marked batch its middle is over (a
+ * row of trees' tops, the stumps in another material), under it; else its
+ * own lowest vertices, as a prop. Trees whose shadow can't reach the view
+ * are left out.
+ *
+ * The last call's props and trees, and how many of each got a shadow: */
+#define NITRO_SHADOW_ONCE 1u
+#define NITRO_SHADOW_LAND_NEAR 12.0f
 #define NITRO_SHADOW_PROP_MIN 5.0f
 void NitroPort_ShadowPropStats(unsigned *props, unsigned *laid);
+void NitroPort_ShadowLandStats(unsigned *trees, unsigned *laid);
 
 #define NITRO_SHADOW_GROUND_CARD_MAX 96.0f   /* (6 tiles: past it, not a sprite) */
 typedef int (*NitroShadowFootRow)(void *ctx, uint32_t textureParam, uint32_t paletteBase, int s0, int s1,

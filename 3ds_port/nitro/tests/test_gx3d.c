@@ -405,6 +405,7 @@ static void flat_triangle(int x0,int x1,int y0,int y1)
  * of their own, and on the in-between scene's. Nothing else changes. */
 static void quad_at(int x,uint32_t attr);
 static void swap_done(void);
+static void row_at(int y,int z);
 static void tagged_quads(int dx)
 {
     const uint32_t opaque=(3u<<6)|(31u<<16);
@@ -606,6 +607,76 @@ static void test_tagged_whole(void)
     }
     NitroPort_Gx3dSetInterpolation(0);
     NitroPort_SetGroundShadows(0);
+}
+/* The land's trees' mark (NITRO_GX3D_TAG_LAND): a triangle kept whole
+ * when any of it is within their nearer reach of the view (7/4 of its
+ * half width: a row of trees is one wide polygon), not past it (another
+ * mark's is, up to 4 times). An in-between scene's are the scene's own,
+ * moved back half the camera's move: not paired with the scene before's
+ * by their place in the run (a tree come within reach before the others
+ * would pair each with its neighbour). */
+static void test_tagged_land(void)
+{
+    static const uint32_t proj[16]={ONE,0,0,0, 0,ONE,0,0, 0,0,ONE,ONE, 0,0,0,2*ONE};
+    const uint32_t opaque=(3u<<6)|(31u<<16);
+    const NitroGx3dScene *scene,*mid;
+    unsigned k;
+    int r,sc;
+    reset_geometry();
+    NitroPort_SetGroundShadows(1);
+    swap_done();
+    NitroPort_Gx3dTag(NITRO_GX3D_TAG_LAND);
+    quad_at(-1000,opaque);               /* (in the view) */
+    quad_at(6000,opaque);                /* (across the reach's end, 7168) */
+    quad_at(7300,opaque);                /* (past it) */
+    NitroPort_Gx3dTag(0x3000u);
+    quad_at(7300,opaque);                /* (another mark's: within its reach) */
+    NitroPort_Gx3dTag(0);
+    swap_done();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene && scene->tagged_count==6);
+    if(scene && scene->tagged_count==6){
+        const NitroGx3dTriangle *t=scene->tagged_triangles;
+        for(k=0;k<4;k++)CHECK(t[k].tag==NITRO_GX3D_TAG_LAND);
+        CHECK(t[0].v[0].clip[0]==-1000 && t[2].v[0].clip[0]==6000 && t[2].v[1].clip[0]==8000 && t[3].v[1].clip[0]==8000);
+        CHECK(t[4].tag==0x3000u && t[5].tag==0x3000u && t[4].v[0].clip[0]==7300);
+    }
+    /* the camera coming nearer (w from 2 to 1.8, as
+     * test_interpolation_camera_move): two trees, the first of them only
+     * in the second scene */
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x10,0);
+    for(k=0;k<16;k++)NitroPort_GxDirectWrite(0x16,proj[k]);
+    NitroPort_GxDirectWrite(0x10,2);
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    for(sc=0;sc<2;sc++){
+        int z=sc?-820:0;
+        for(r=-12;r<12;r++)row_at(400*r,z);
+        NitroPort_Gx3dTag(NITRO_GX3D_TAG_LAND);
+        if(sc)row_at(400*5,z);
+        row_at(400*2,z);
+        NitroPort_Gx3dTag(0);
+        swap_done();
+    }
+    scene=NitroPort_Gx3dScene();
+    mid=NitroPort_Gx3dMidScene(NULL,NULL);
+    CHECK(scene && scene->tagged_count==4 && mid && mid->tagged_count==4);
+    if(scene && scene->tagged_count==4 && mid && mid->tagged_count==4){
+        const int32_t w=(8192+(8192-820))/2;
+        for(k=0;k<4;k++){
+            const NitroGx3dVertex *n=&scene->tagged_triangles[k].v[0],*m=&mid->tagged_triangles[k].v[0];
+            int32_t y=(int32_t)floor(((double)w-n->clip[1])*192.0/(2.0*w)*256.0+0.5);
+            CHECK(mid->tagged_triangles[k].tag==NITRO_GX3D_TAG_LAND);
+            CHECK(n->clip[1]==(k<2?400*5:400*2) && n->clip[3]==8192-820);
+            /* (its own place, half the move back: further from the camera) */
+            CHECK(m->clip[1]==n->clip[1] && m->clip[0]==n->clip[0] && abs(m->clip[3]-w)<=1);
+            CHECK(abs(m->y-y)<=2 && m->y!=n->y);
+        }
+    }
+    NitroPort_Gx3dSetInterpolation(0);
+    NitroPort_SetGroundShadows(0);
+    reset_geometry();
 }
 /* A quad 2000 wide, its left side at x (attr: POLYGON_ATTR). */
 static void quad_at(int x,uint32_t attr)
@@ -2796,6 +2867,7 @@ static void run_all(void)
     test_tags();
     test_tag_rules();
     test_tagged_whole();
+    test_tagged_land();
     test_sprite_texel_a_pixel();
     test_soft_sprites();
     test_interpolation();
