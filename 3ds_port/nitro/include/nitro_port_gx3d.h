@@ -58,6 +58,7 @@ typedef struct NitroGx3dTriangle {
 
 #define NITRO_GX3D_REGS_AT 0x320u
 #define NITRO_GX3D_REGS_SIZE 0xA0u
+#define NITRO_GX3D_MAX_TAGGED_TRIANGLES 256u
 typedef struct NitroGx3dScene {
     uint32_t count, dropped, serial;
     /* W-buffer/Z-buffer mode belongs to the completed frame (SWAP_BUFFERS),
@@ -117,6 +118,17 @@ typedef struct NitroGx3dScene {
      * memory is tight). */
     uint32_t shadow_count;
     NitroGx3dTriangle *shadow_triangles;
+    /* The marked polygons' triangles (NitroPort_Gx3dTag), whole: as the
+     * game sent them, not clipped at the view's sides, and kept when they
+     * are beyond them or face away (up to one and a half views beyond, in
+     * front of the camera, inside the near and far planes). Their
+     * vertices' screen x and y are as to_screen gives them (off the screen
+     * for some); sort_key 0. A visible one is among triangles too, clipped.
+     * An in-between scene's: halfway between the two scenes', mark by mark.
+     * For the sun shadows: a character at the screen's edge, or just past
+     * it, casts its whole shadow. */
+    uint32_t tagged_count;
+    NitroGx3dTriangle tagged_triangles[NITRO_GX3D_MAX_TAGGED_TRIANGLES];
 } NitroGx3dScene;
 
 /* In-between scenes (60 frames a second in the field; port_gx3d.c): with
@@ -428,7 +440,8 @@ void NitroPort_Gx3dClearStackError(void);
  * the command stream's order: each triangle of them carries it
  * (NitroGx3dTriangle.tag, the in-between scenes' too), and they're drawn
  * in batches of their own (NitroGx3dBatch.tag). Nothing else changes: the
- * same picture. The field's sprites are marked with their Billboard's
+ * same picture. Their triangles are also kept whole, on the screen or
+ * beside it (NitroGx3dScene.tagged_triangles). The field's sprites are marked with their Billboard's
  * address, and a character's round shadow with its sprite's | 1 (the
  * game's patch; port_shadow.c pairs them). Not recorded
  * (NitroPort_Gx3dSetRecorder). */

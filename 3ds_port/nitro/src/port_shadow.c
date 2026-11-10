@@ -484,10 +484,11 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
                                    uint8_t *roundUsed, const float shade[3], NitroShadowFootRow footRow,
                                    void *footCtx)
 {
-    const float pi = 3.14159265f;
     Back b;
     V3 up = v3(setup->up[0], setup->up[1], setup->up[2]), right, toward, way;
-    float s, theta = NITRO_SHADOW_GROUND_ANGLE * pi / 180.0f, stretch;
+    V3 light = v3(setup->light[0], setup->light[1], setup->light[2]), lh;
+    float s, stretch, down, cr, ct;
+    const float side = sinf(NITRO_SHADOW_GROUND_SIDE * 3.14159265f / 180.0f);
     size_t written = 0, nb = 0, bi, rounds[GROUND_ROUNDS], nr = 0, ri;
     if (outBatchCount) *outBatchCount = 0;
     sLastSprites = sLastShadows = sLastLaid = 0;
@@ -506,11 +507,9 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
     sLastShadows = (unsigned)nr;
     if (!nr) return 0;
     memcpy(b.m, setup->back, sizeof(b.m));
-    /* The way the shadows lie, on the ground: the screen's right (the
-     * camera's x on the ground) and the ground's way down the screen
-     * (towards the camera), mixed so it's NITRO_SHADOW_GROUND_ANGLE below
-     * the horizontal on the screen: down the screen the ground is
-     * foreshortened by s. */
+    /* The ground's two ways: the screen's right (the camera's x on the
+     * ground) and down the screen (towards the camera), foreshortened
+     * there by s. */
     right = sub(v3(1.0f, 0.0f, 0.0f), scale(up, up.x));
     if (!(length(right) > 1e-3f)) return 0;
     right = normalize(right);
@@ -518,9 +517,24 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
     s = -toward.y;
     if (s < 0.35f) s = 0.35f;
     if (s > 1.0f) s = 1.0f;
-    way = normalize(add(scale(right, cosf(theta)), scale(toward, sinf(theta) / s)));
-    /* (its length on the screen: a card's height up it is as long there) */
-    stretch = NITRO_SHADOW_GROUND_LENGTH / sqrtf(way.x * way.x + way.y * way.y);
+    /* The way the shadows lie: the sun's light along the ground (the
+     * setup's: by the clock), but never nearer the sprite's own line
+     * (across: the screen's right) than NITRO_SHADOW_GROUND_SIDE, and
+     * never up the screen: beside it a sprite's shadow is a sliver, and
+     * behind it it's hidden. Its length: the sprite's height times the
+     * sun's cotangent (and NITRO_SHADOW_GROUND_LENGTH). */
+    down = -dot(light, up);
+    lh = sub(light, scale(up, dot(light, up)));
+    if (!(down > 0.05f) || !(length(lh) > 1e-4f)) return 0;
+    stretch = NITRO_SHADOW_GROUND_LENGTH * length(lh) / down;
+    lh = normalize(lh);
+    cr = dot(lh, right);
+    ct = dot(lh, toward);
+    if (ct < side) {
+        ct = side;
+        cr = (cr < 0.0f ? -1.0f : 1.0f) * sqrtf(1.0f - side * side);
+    }
+    way = normalize(add(scale(right, cr), scale(toward, ct)));
 
     for (ri = 0; ri < nr; ri++) {
         uint32_t tag = batches[rounds[ri]].tag;
@@ -585,7 +599,7 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
         /* the taps: the middle, and either side across and along the
          * ground (down the screen by as much as across it) */
         r = NITRO_SHADOW_GROUND_BLUR * top;
-        r = r < 0.75f ? 0.75f : r > 3.0f ? 3.0f : r;
+        r = r < 0.5f ? 0.5f : r > 2.25f ? 2.25f : r;
         tap[0] = v3(0.0f, 0.0f, 0.0f);
         for (t = 1; t < NITRO_SHADOW_GROUND_TAPS; t++) {
             V3 dir = (t - 1) / 2 ? scale(toward, 1.0f / s) : right;

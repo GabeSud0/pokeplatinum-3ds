@@ -432,6 +432,9 @@ static void test_tags(void)
     CHECK(scene && scene->count==6);
     if(scene && scene->count==6){
         for(i=0;i<6;i++)CHECK(scene->triangles[i].tag==want[i]);
+        /* (the marked ones' whole triangles, apart) */
+        CHECK(scene->tagged_count==4);
+        for(i=0;i<4 && i<scene->tagged_count;i++)CHECK(scene->tagged_triangles[i].tag==want[2+i]);
         n=NitroPort_Gx3dBuildBatches(scene,verts,64,batches,8,&nb,&dropped);
         CHECK(n==18 && nb==3 && !dropped);
         if(nb==3){
@@ -461,6 +464,95 @@ static void test_tags(void)
             NitroPort_Gx3dBuildBatches(scene,verts,64,batches,8,&nb,&dropped);
             CHECK(nb==1 && batches[0].tag==0);
         }
+    }
+    NitroPort_Gx3dSetInterpolation(0);
+}
+/* The marked polygons' triangles kept whole (NitroGx3dScene.
+ * tagged_triangles): one across the view's side not clipped there, one
+ * past it kept too (within reach: 4 w), unmarked ones and one out of
+ * reach not; the scene's own triangles as ever (clipped, or none). As
+ * vertices (NitroPort_Gx3dBuildTaggedBatches): a batch a mark. The
+ * in-between scene's: halfway. */
+static void whole_quads(int dx)
+{
+    const uint32_t opaque=(3u<<6)|(31u<<16);
+    quad_at(-1000+dx,opaque);            /* (unmarked, in the view) */
+    NitroPort_Gx3dTag(0x3000u);
+    quad_at(3000+dx,opaque);             /* (across the right side: the view ends at 4096) */
+    NitroPort_Gx3dTag(0x3001u);
+    quad_at(5000+dx,opaque);             /* (past it) */
+    NitroPort_Gx3dTag(0x3002u);
+    quad_at(20000,opaque);               /* (out of reach) */
+    NitroPort_Gx3dTag(0);
+    quad_at(6000,opaque);                /* (unmarked, past it) */
+    swap_done();
+}
+static void test_tagged_whole(void)
+{
+    static NitroGx3dGpuVertex verts[64];
+    NitroGx3dBatch batches[8];
+    const NitroGx3dScene *scene,*mid;
+    size_t nb=0,n,i;
+    int32_t x0=0,x1=0;
+    unsigned k;
+    reset_geometry();
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    whole_quads(0);
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene && scene->tagged_count==4);
+    if(scene && scene->tagged_count==4){
+        const NitroGx3dTriangle *t=scene->tagged_triangles;
+        unsigned marked=0;
+        CHECK(t[0].tag==0x3000u && t[1].tag==0x3000u && t[2].tag==0x3001u && t[3].tag==0x3001u);
+        /* whole: the game's own corners, past the view's side */
+        CHECK(t[0].v[0].clip[0]==3000 && t[0].v[1].clip[0]==5000 && t[0].v[2].clip[0]==5000);
+        CHECK(t[1].v[0].clip[0]==3000 && t[1].v[1].clip[0]==5000 && t[1].v[2].clip[0]==3000);
+        CHECK(t[2].v[0].clip[0]==5000 && t[2].v[1].clip[0]==7000);
+        CHECK(t[0].v[1].x>256*256 && t[0].v[0].x<256*256);   /* (off the screen's right; on it) */
+        x0=t[0].v[0].x;
+        /* the scene's own: the first clipped at the side, the second not
+         * there at all, the unmarked one as ever */
+        for(i=0;i<scene->count;i++){
+            const NitroGx3dTriangle *tri=&scene->triangles[i];
+            CHECK(tri->tag==0 || tri->tag==0x3000u);
+            if(tri->tag){
+                marked++;
+                for(k=0;k<3;k++)CHECK(tri->v[k].clip[0]<=4100);
+            }
+        }
+        CHECK(marked>=2);
+        n=NitroPort_Gx3dBuildTaggedBatches(scene,100,verts,64,batches,8,&nb);
+        CHECK(n==12 && nb==2);
+        if(nb==2){
+            CHECK(batches[0].tag==0x3000u && batches[0].first==100 && batches[0].count==6 && !batches[0].translucent);
+            CHECK(batches[1].tag==0x3001u && batches[1].first==106 && batches[1].count==6);
+            CHECK(verts[1].position[0]>verts[1].position[3]);   /* (x past w: beside the view) */
+            CHECK(verts[0].position[0]<verts[0].position[3] && verts[0].position[3]>0.0f);
+        }
+        /* (no room: what fits) */
+        CHECK(NitroPort_Gx3dBuildTaggedBatches(scene,0,verts,5,batches,8,&nb)==3 && nb==1);
+    }
+    whole_quads(200);
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene && scene->tagged_count==4);
+    if(scene && scene->tagged_count==4)x1=scene->tagged_triangles[0].v[0].x;
+    mid=NitroPort_Gx3dMidScene(NULL,NULL);
+    CHECK(mid && mid->tagged_count==4);
+    if(mid && mid->tagged_count==4){
+        int32_t xm=mid->tagged_triangles[0].v[0].x;
+        CHECK(x1>x0 && xm*2>=x0+x1-2 && xm*2<=x0+x1+2);
+        CHECK(mid->tagged_triangles[0].tag==0x3000u && mid->tagged_triangles[3].tag==0x3001u);
+        CHECK(mid->tagged_triangles[0].v[0].clip[3]==scene->tagged_triangles[0].v[0].clip[3]);
+    }
+    /* unmarked scenes: none */
+    {
+        const uint32_t opaque=(3u<<6)|(31u<<16);
+        quad_at(-1000,opaque);
+        quad_at(5000,opaque);
+        swap_done();
+        scene=NitroPort_Gx3dScene();
+        CHECK(scene && scene->tagged_count==0);
     }
     NitroPort_Gx3dSetInterpolation(0);
 }
@@ -2651,6 +2743,7 @@ static void run_all(void)
     test_culling();
     test_shadow_triangles();
     test_tags();
+    test_tagged_whole();
     test_sprite_texel_a_pixel();
     test_soft_sprites();
     test_interpolation();

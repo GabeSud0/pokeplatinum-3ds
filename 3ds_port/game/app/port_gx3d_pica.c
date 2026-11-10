@@ -347,12 +347,16 @@ static u64 sDecalTicks;          /* (looking for the painted shadows, for the lo
  * (NitroPort_ShadowGroundCards), after the scene's vertices, its batches at
  * sBatches[MAX_BATCHES]; drawn after the opaque polygons, darkening by the
  * sprite's texture's alpha, softly (NITRO_SHADOW_GROUND_TAPS copies). Its
- * round shadow then left out (sRoundUsed). No shadow map. */
+ * round shadow then left out (sRoundUsed). No shadow map. Worked out from
+ * the marked polygons' whole triangles (sTagBatches, their vertices after
+ * the scene's too, before the shadows': not drawn). */
 static int sGroundMode,sGroundReady;
 static size_t sGroundBatchCount,sGroundVertices;
 static u64 sGroundTicks;
 static unsigned sGroundScenes,sGroundCards,sGroundFound,sGroundSprites,sGroundMarked;
-static uint8_t sRoundUsed[MAX_BATCHES];
+#define TAG_BATCHES NITRO_GX3D_MAX_TAGGED_TRIANGLES
+static NitroGx3dBatch sTagBatches[TAG_BATCHES];   /* (the marked polygons' whole triangles' batches) */
+static uint8_t sRoundUsed[TAG_BATCHES];
 static unsigned sDecalDecoded;
 static int sShadowReady,sShadowDrawn;        /* (the prepared scene has a ground; its map is drawn) */
 static C3D_Tex *sRecvTex;                    /* (unit 1's texture, as bound) */
@@ -1832,14 +1836,18 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
     }
     /* The sun shadows (SUN SHADOWS: ON; not with the shadow map: it has its
      * own): the characters', each sprite the game marked (NitroPort_Gx3dTag)
-     * from the round shadow marked as its own */
+     * from the round shadow marked as its own. From the marked polygons'
+     * whole triangles (the scene's tagged_triangles: not clipped at the
+     * view's sides, kept beside it), so a character at the screen's edge
+     * or just off it casts the same shadow. */
     sGroundReady=0;
     sGroundBatchCount=0;
     if(sGroundMode && !sShadowMode && sPreparedCount && sShadowRoom){
         u64 g0=svcGetSystemTick();
         size_t b,marked=0;
+        uint32_t i;
         /* (most scenes of a menu or a building have no marks at all) */
-        for(b=0;b<sPreparedBatches && !marked;b++)marked=sBatches[b].tag&1u;
+        for(i=0;i<scene->tagged_count && !marked;i++)marked=scene->tagged_triangles[i].tag&1u;
         if(marked && look_now() &&
            NitroPort_ShadowSetup(sVertices[slot][0].position,sizeof(NitroGx3dGpuVertex),sPreparedCount,
                                  scene->projection,scene->screen_width,scene->screen_height,&sSun,SHADOW_SIZE,
@@ -1847,34 +1855,43 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
             /* a new vertex's z as the scene's have theirs: the DS's depth
              * through normalize_depth (NitroPort_ShadowDepthRow) */
             float depth[4],shade[3];
-            size_t nb=0,n;
+            size_t nb=0,n,nt,ntb=0;
+            NitroGx3dGpuVertex *extra=sVertices[slot]+sPreparedCount;
             NitroPort_ShadowDepthRow(&sShadow,(scene->swap_param&2u)!=0,sDepthA,sDepthK,depth);
             /* (the shade as the time of day has it: look_now) */
             shade[0]=(float)(sShadowColor&255u)/255.0f;
             shade[1]=(float)((sShadowColor>>8)&255u)/255.0f;
             shade[2]=(float)((sShadowColor>>16)&255u)/255.0f;
-            memset(sRoundUsed,0,sPreparedBatches);
+            /* the whole triangles as vertices (not drawn), then the
+             * shadows' after them */
+            nt=NitroPort_Gx3dBuildTaggedBatches(scene,sPreparedCount,extra,sShadowRoom,sTagBatches,TAG_BATCHES,&ntb);
+            memset(sRoundUsed,0,ntb);
             NitroPort_Gx3dMapTextureBanks(&sBanks);
             sFootRowsKept=0;
-            n=NitroPort_ShadowGroundCards(sVertices[slot],sBatches,sPreparedBatches,sPreparedCount,
-                                          sVertices[slot]+sPreparedCount,sShadowRoom,sBatches+MAX_BATCHES,
-                                          SHADOW_BATCHES,&nb,&sShadow,depth,sRoundUsed,shade,foot_row,NULL);
+            n=NitroPort_ShadowGroundCards(sVertices[slot],sTagBatches,ntb,sPreparedCount+nt,extra+nt,sShadowRoom-nt,
+                                          sBatches+MAX_BATCHES,SHADOW_BATCHES,&nb,&sShadow,depth,sRoundUsed,shade,
+                                          foot_row,NULL);
             {
                 unsigned sprites,rounds,laid;
                 NitroPort_ShadowGroundStats(&sprites,&rounds,&laid);
                 sGroundSprites+=sprites;sGroundFound+=rounds;sGroundCards+=laid;
             }
             if(n && nb){
-                GSPGPU_FlushDataCache(sVertices[slot]+sPreparedCount,(u32)(n*sizeof(NitroGx3dGpuVertex)));
-                /* the round shadows under them left out: their triangles
-                 * to a point (the others drawn as ever: someone with no
-                 * sun shadow keeps the round one) */
-                for(b=0;b<sPreparedBatches;b++){
-                    NitroGx3dGpuVertex *rv=sVertices[slot]+sBatches[b].first;
-                    uint32_t j;
-                    if(!sRoundUsed[b])continue;
-                    for(j=1;j<sBatches[b].count;j++)memcpy(rv[j].position,rv[0].position,sizeof(rv[0].position));
-                    GSPGPU_FlushDataCache(rv,(u32)(sBatches[b].count*sizeof(NitroGx3dGpuVertex)));
+                size_t t;
+                GSPGPU_FlushDataCache(extra+nt,(u32)(n*sizeof(NitroGx3dGpuVertex)));
+                /* the round shadows under them left out: the scene's own
+                 * batches with their marks, their triangles to a point
+                 * (the others drawn as ever: someone with no sun shadow
+                 * keeps the round one) */
+                for(t=0;t<ntb;t++){
+                    if(!sRoundUsed[t])continue;
+                    for(b=0;b<sPreparedBatches;b++){
+                        NitroGx3dGpuVertex *rv=sVertices[slot]+sBatches[b].first;
+                        uint32_t j;
+                        if(sBatches[b].tag!=sTagBatches[t].tag)continue;
+                        for(j=1;j<sBatches[b].count;j++)memcpy(rv[j].position,rv[0].position,sizeof(rv[0].position));
+                        GSPGPU_FlushDataCache(rv,(u32)(sBatches[b].count*sizeof(NitroGx3dGpuVertex)));
+                    }
                 }
                 sGroundBatchCount=nb;
                 sGroundVertices=n;
@@ -1888,9 +1905,11 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
             double per=sGroundMarked?1.0/sGroundMarked:0.0;
             NitroPort_Log("[shadow] %u scenes with the sun shadows, %u of them with round shadows marked: in those, "
                           "%.1f marked sprites a scene, %.1f round shadows, %.1f sun shadows laid; %.2f ms a scene "
-                          "laying them",sGroundScenes==300?300u:1800u,sGroundMarked,sGroundSprites*per,
+                          "laying them; the sun %.0f degrees up, %.0f round from the screen's left",
+                          sGroundScenes==300?300u:1800u,sGroundMarked,sGroundSprites*per,
                           sGroundFound*per,sGroundCards*per,
-                          (double)sGroundTicks*1000.0/SYSCLOCK_ARM11/(sGroundScenes==300?300.0:1800.0));
+                          (double)sGroundTicks*1000.0/SYSCLOCK_ARM11/(sGroundScenes==300?300.0:1800.0),
+                          (double)sSun.elevation,(double)sSun.azimuth);
             if(sGroundScenes==2100)sGroundScenes=300;
             sGroundTicks=0;sGroundCards=0;sGroundFound=0;sGroundSprites=0;sGroundMarked=0;
         }

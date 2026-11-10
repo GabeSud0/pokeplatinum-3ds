@@ -130,17 +130,26 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
  * (the caller's) the round ones stay.
  *
  * The shadow, as the Emerald remaster's lie: the picture on the ground,
- * starting at its feet, its rows slid towards the screen's lower right
- * (NITRO_SHADOW_GROUND_ANGLE below the horizontal, whichever way the
- * camera looks), NITRO_SHADOW_GROUND_LENGTH times the sprite's height
- * long on the screen; across the sprite stays across (about its middle),
- * so a sprite seen from the back or the front casts the same shape. Soft:
- * drawn NITRO_SHADOW_GROUND_TAPS times, each a little apart on the ground
- * and each a TAPS-th root of the shade (where they all meet, the shade;
- * the edges between), and fading to NITRO_SHADOW_GROUND_TIP of it at the
+ * starting at its feet, its rows slid along the ground the way the sun's
+ * light goes (the setup's sun: by the clock, NitroPort_ShadowSunAt; to
+ * the left in the morning, down the screen about midday, to the right in
+ * the evening), the sprite's height times the sun's cotangent
+ * (x NITRO_SHADOW_GROUND_LENGTH) long: short at midday, about half the
+ * sprite; 1.2 times it early and late. Never nearer the sprite's own line
+ * than NITRO_SHADOW_GROUND_SIDE (it would be a sliver), never up the
+ * screen. Across the sprite stays across (about its middle), so a sprite
+ * seen from the back or the front casts the same shape. Soft: drawn
+ * NITRO_SHADOW_GROUND_TAPS times, each a little apart on the ground and
+ * each a TAPS-th root of the shade (where they all meet, the shade; the
+ * edges between), and fading to NITRO_SHADOW_GROUND_TIP of it at the
  * head. Pulled towards the camera along its ray (where it is on the
  * screen unchanged) by NITRO_SHADOW_GROUND_PULL of its distance: in front
  * of the ground, behind the sprite's own feet.
+ *
+ * The batches given are the marked polygons' whole triangles
+ * (NitroPort_Gx3dBuildTaggedBatches: not clipped at the view's sides, kept
+ * beside it), so a character at the screen's edge or just off it casts
+ * the same shadow as in its middle.
  *
  * Where the shadow starts: the round shadow's middle (on the ground, under
  * the feet, as the game puts it: through a jump too). Which row of the
@@ -159,10 +168,10 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
  * batches, or NULL): 1 for each round shadow's batch whose character got a
  * sun shadow (the others untouched). Returns the vertices written. verts
  * are only read. */
-#define NITRO_SHADOW_GROUND_ANGLE 28.0f    /* (degrees: the Emerald remaster's Littleroot) */
-#define NITRO_SHADOW_GROUND_LENGTH 1.3f
+#define NITRO_SHADOW_GROUND_SIDE 30.0f     /* (degrees, on the ground) */
+#define NITRO_SHADOW_GROUND_LENGTH 1.0f
 #define NITRO_SHADOW_GROUND_TAPS 5
-#define NITRO_SHADOW_GROUND_BLUR 0.06f     /* (each tap's distance: the sprite's height times it, 0.75-3) */
+#define NITRO_SHADOW_GROUND_BLUR 0.04f     /* (each tap's distance: the sprite's height times it, 0.5-2.25) */
 #define NITRO_SHADOW_GROUND_TIP 0.35f
 #define NITRO_SHADOW_GROUND_PULL 0.004f
 

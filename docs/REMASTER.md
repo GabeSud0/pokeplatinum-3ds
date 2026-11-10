@@ -3535,6 +3535,18 @@ trees, signs and the scenery later.
   triangles moved to a point in the scene's vertices). Anyone without one
   (when there's no sun to cast them, or a character fading in) keeps the
   round one. Trees, signs and the grass have no round shadow: none yet.
+- At the screen's edge: the marked polygons' triangles are also kept
+  whole (NitroGx3dScene.tagged_triangles, keep_tagged in port_gx3d.c): as
+  the game sent them, not clipped at the view's sides, and kept when
+  they're past them (up to one and a half views, as the shadow map's
+  reach was; the geometry thread doesn't pass over their vertices). The
+  in-between scenes' are halfway between the two scenes', mark by mark
+  (tagged_halfway). The shadows are worked out from those
+  (NitroPort_Gx3dBuildTaggedBatches: vertices after the scene's, not
+  drawn), so a character crossing the screen's edge, or just off it,
+  casts the same shadow as in the middle. (From the scene's own, clipped
+  triangles the shadows shrank and slid as people neared the edge and
+  were gone with them: the report after f0367e4.)
   (The first try, 8ec0b6f, found the round shadows by their look and
   paired them with the nearest camera-facing card: on a 3DS about half the
   characters got a shadow, and it came and went, log a834e724: 8.5 round
@@ -3544,17 +3556,22 @@ trees, signs and the scenery later.
   stands on, as the game puts it, through a jump too: no guessing from
   the camera's ray, which threw far people's shadows into long streaks,
   log dc60d496). Across the sprite stays across, about its middle (the
-  screen's right on the ground), so a sprite seen from
-  the back or the front casts the same shape; up the sprite from its feet
-  goes along the ground towards the screen's lower right, 28 degrees
-  below the horizontal on the screen whichever way the camera looks (the
-  ground's way down the screen is foreshortened: allowed for), the
-  shadow 1.3 times as long on the screen as the sprite is tall. The
+  screen's right on the ground), so a sprite seen from the back or the
+  front casts the same shape; up the sprite from its feet goes along the
+  ground the way the sun's light does, by the console's clock
+  (NitroPort_ShadowSunAt, the sun the shadow map had): to the lower left
+  in the morning, down the screen late in the morning, to the lower right
+  from midday, the sprite's height x the sun's cotangent long: about half
+  the sprite at midday (the sun 65 degrees up), 1.2 times it early and
+  late (40). Never nearer the sprite's own line than 30 degrees on the
+  ground (beside it the shadow would be a sliver) and never up the
+  screen. (Until f0367e4: always 28 degrees to the lower right and 1.3
+  times the sprite on the screen, too long and slanted for midday.) The
   picture's feet: the first row with an opaque texel from the foot's side
   (foot_row, the texture as the DS samples it, kept for the scene); the
   clear rows below them fall behind the start.
 - Soft: drawn 5 times, the middle and 4 copies a little apart on the
-  ground (the sprite's height x 0.06, 0.75 to 3 units; down the screen as
+  ground (the sprite's height x 0.04, 0.5 to 2.25 units; down the screen as
   much as across), each with the fifth root of the shade: where all five
   meet, the whole shade; at the edges, less. The sprite's texture sampled
   smoothly (linear). Fading from the feet to 0.35 of the shade at the
@@ -3575,19 +3592,23 @@ trees, signs and the scenery later.
   texture, colour = the copy's shade (its vertices' colour: the fade and
   the fifth root, NitroPort_ShadowGroundCards) x alpha + (1 - alpha), the
   framebuffer multiplied by it; depth LEQUAL, not written; no stencil (a
-  shadow's copies overlap). The shade is the sun's by the hour (look_now);
-  the angle and length don't follow the clock.
+  shadow's copies overlap). The shade is the sun's by the hour (look_now),
+  as its way and length are.
 - The log, after 5 seconds and then every 30: the scenes with marked
   round shadows, and in those the marked sprites, the round shadows and
-  the sun shadows laid a scene, and the ms a scene laying them. Tests:
+  the sun shadows laid a scene, the ms a scene laying them, and where the
+  sun is. Tests:
   test_gx3d (the mark on the triangles after it, in batches of their own,
-  on the in-between scene's; with and without the geometry thread);
+  on the in-between scene's; the whole triangles of one across the view's
+  side and one past it, as vertices, and halfway in the in-between scene;
+  with and without the geometry thread);
   test_shadow (the character's alone by its mark, 6 units from its round
   shadow, not the nearer unmarked grass, not a marked sign; from the
   round shadow's middle, also when its two triangles are two batches; its
-  width, the angle and length on the screen, the pull along the ray, the
-  taps, the colours; the picture's feet; none with no room, the sprite
-  fading or gone, or no marks).
+  width, its way and length for a sun at the side (kept 30 degrees off),
+  over the top and in the morning, the pull along the ray, the taps, the
+  colours; the picture's feet; none with no room, the sprite fading or
+  gone, or no marks).
 
 The log says `[shadow] test step N: ...` when a step is chosen,
 `[shadow] the first sun shadow map sent to the GPU` and `[shadow] the

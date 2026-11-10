@@ -79,6 +79,15 @@ size_t NitroPort_Gx3dBuildShadowBatches(const NitroGx3dScene *scene, size_t firs
                                         NitroGx3dGpuVertex *out, size_t capacity,
                                         NitroGx3dBatch *batches, size_t max_batches,
                                         size_t *batch_count);
+/* The scene's marked polygons' whole triangles (tagged_triangles), the
+ * same way: a batch for each run of one mark and state (its tag; whether
+ * it's translucent). Their x and y as to_screen has them (no sprite placed
+ * on pixels, no edge moved out); z as the scene's before its depths'
+ * remap. Not to be drawn: the sun shadows work from them. */
+size_t NitroPort_Gx3dBuildTaggedBatches(const NitroGx3dScene *scene, size_t first,
+                                        NitroGx3dGpuVertex *out, size_t capacity,
+                                        NitroGx3dBatch *batches, size_t max_batches,
+                                        size_t *batch_count);
 
 /* Edge marking made cheaper (port_gx3d_prune.c). The GPU's outline
  * passes (port_gx3d_pica.c, mark_edges) draw the scene's opaque polygons 8

@@ -764,6 +764,25 @@ static void keep_for_shadow(GeoVertex *a,GeoVertex *b,GeoVertex *c)
     tri->v[0]=*screen_of(a);tri->v[1]=*screen_of(b);tri->v[2]=*screen_of(c);
     scene->shadow_count++;
 }
+/* Keep a whole triangle of a marked polygon (NitroPort_Gx3dTag) as the
+ * game sent it, wherever it is within the shadows' reach of the view
+ * (NitroGx3dScene.tagged_triangles): not the in-between scenes' own
+ * (theirs are made of the two scenes', tagged_halfway). */
+static void keep_tagged(GeoVertex *a,GeoVertex *b,GeoVertex *c)
+{
+    NitroGx3dScene *scene=dest_scene();
+    NitroGx3dTriangle *tri;
+    if(sReplaying || scene->tagged_count>=NITRO_GX3D_MAX_TAGGED_TRIANGLES)return;
+    if(!shadow_reach(a)||!shadow_reach(b)||!shadow_reach(c))return;
+    tri=&scene->tagged_triangles[scene->tagged_count++];
+    tri->v[0]=*screen_of(a);tri->v[1]=*screen_of(b);tri->v[2]=*screen_of(c);
+    tri->polygon_attr=s.attr;
+    tri->texture_param=s.texparam;
+    tri->palette_base=s.plttbase;
+    tri->sort_key=0;
+    tri->soft=0;
+    tri->tag=s.tag;
+}
 /* Whether the polygon being built is culled: facing the side not drawn. */
 static int polygon_culled(void)
 {
@@ -797,6 +816,7 @@ static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
 {
     GeoVertex v[12],tmp[12];
     unsigned i,p,n=3,clipped=0;
+    if(s.tag)keep_tagged(a,b,c);
     /* All three outside one plane: nothing is left (but for the shadows,
      * if it's only the view's sides). None outside any: no clipping
      * needed. Most of a map is one or the other. */
@@ -861,8 +881,8 @@ static int far_hidden(unsigned outside)
 static int polygon_hidden(unsigned any,unsigned all)
 {
     /* (With the sun shadows on, one outside only the view's sides goes on
-     * to stage_triangle, which keeps it for them.) */
-    if(all && !(sShadowCapture && !(all&0x30u))){sDiag.clipped++;return 1;}
+     * to stage_triangle, which keeps it for them; a marked one too.) */
+    if(all && !((sShadowCapture || s.tag) && !(all&0x30u))){sDiag.clipped++;return 1;}
     return far_hidden(any);
 }
 
@@ -1735,6 +1755,51 @@ static int32_t static_halfway(int32_t v,int32_t mo,int sign)
 /* (the [perf] geometry's work line: the in-between scenes' matching of
  * polygons with the scene before's, NitroPort_Gx3dMidWork) */
 static uint64_t sMidMatchTicks;
+/* The marked polygons' whole triangles (NitroGx3dScene.tagged_triangles)
+ * of the scene before, and an in-between scene's: each of the new scene's
+ * halfway from the one of the same mark and place among its mark's in the
+ * scene before (as replay_blended: on the screen where the halfway point
+ * of clip space is, weighed by w); one with none before, or that moved
+ * more than a quarter of the screen, where the new scene has it. */
+static NitroGx3dTriangle sTaggedBefore[NITRO_GX3D_MAX_TAGGED_TRIANGLES];
+static uint32_t sTaggedBeforeCount;
+static void tagged_keep(const NitroGx3dScene *now)
+{
+    sTaggedBeforeCount=now->tagged_count;
+    memcpy(sTaggedBefore,now->tagged_triangles,now->tagged_count*sizeof(sTaggedBefore[0]));
+}
+static void tagged_halfway(const NitroGx3dScene *now,NitroGx3dScene *mid)
+{
+    uint32_t i,j;
+    mid->tagged_count=now->tagged_count;
+    for(i=0;i<now->tagged_count;i++){
+        const NitroGx3dTriangle *c=&now->tagged_triangles[i],*p=NULL;
+        NitroGx3dTriangle *out=&mid->tagged_triangles[i];
+        uint32_t nth=0,seen=0;
+        unsigned k;
+        int jumped=0;
+        *out=*c;
+        for(j=0;j<i;j++)nth+=now->tagged_triangles[j].tag==c->tag;
+        for(j=0;j<sTaggedBeforeCount && !p;j++){
+            if(sTaggedBefore[j].tag!=c->tag)continue;
+            if(seen++==nth)p=&sTaggedBefore[j];
+        }
+        if(!p)continue;
+        for(k=0;k<3;k++){
+            int64_t dx=(int64_t)c->v[k].x-p->v[k].x,dy=(int64_t)c->v[k].y-p->v[k].y;
+            if(p->v[k].clip[3]<=0 || c->v[k].clip[3]<=0 || llabs((long long)dx)>64*256 || llabs((long long)dy)>48*256)jumped=1;
+        }
+        if(jumped)continue;
+        for(k=0;k<3;k++){
+            float w0=(float)p->v[k].clip[3],w1=(float)c->v[k].clip[3];
+            float t=w1/(w0+w1);
+            float dx=(float)(c->v[k].x-p->v[k].x)*t,dy=(float)(c->v[k].y-p->v[k].y)*t;
+            out->v[k].x=p->v[k].x+(int32_t)(dx+(dx>=0?0.5f:-0.5f));
+            out->v[k].y=p->v[k].y+(int32_t)(dy+(dy>=0?0.5f:-0.5f));
+            out->v[k].clip[3]=(int32_t)(((int64_t)p->v[k].clip[3]+c->v[k].clip[3])/2);
+        }
+    }
+}
 static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
 {
     const PolyRecord *P=sRec[sRecBuild^1u],*C=sRec[sRecBuild];
@@ -1761,6 +1826,7 @@ static int make_mid_scene(NitroGx3dScene *now,NitroGx3dScene *sMid)
      * spaces aren't the same) */
     if(sLastBgOfsValid && (now->screen_width!=sLastWidth || now->screen_height!=sLastHeight)){sPrevMotionValid=0;return 0;}
     sMid->count=0;sMid->dropped=0;sMid->shadow_count=0;sMid->shadow_triangles=NULL;
+    tagged_halfway(now,sMid);
     sMid->serial=now->serial;sMid->swap_param=now->swap_param;
     sMid->screen_width=now->screen_width;
     sMid->screen_height=now->screen_height;
@@ -1909,10 +1975,12 @@ static void interp_mid(NitroGx3dScene *now)
        (int32_t)(__atomic_load_n(&sSwapsQueued,__ATOMIC_RELAXED)-sSwapsDone)>=2){
         sMidOk[sBuilding]=0;
         __atomic_store_n(&sMidsLeftOut,sMidsLeftOut+1u,__ATOMIC_RELAXED);
+        tagged_keep(now);
         return;
     }
     t0=sOps.ticks?sOps.ticks(sOps.context):0;
     sMidOk[sBuilding]=sInterp && make_mid_scene(now,sMids[sBuilding]);
+    tagged_keep(now);
     if(sOps.ticks && sInterp)__atomic_store_n(&sMidTicks,sMidTicks+(sOps.ticks(sOps.context)-t0),__ATOMIC_RELAXED);
 }
 void NitroPort_Gx3dMidWork(uint64_t *ticks,uint64_t *matchTicks,uint32_t *leftOut)
@@ -2338,12 +2406,13 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
             sSerial=serial;
             sScenes[sBuilding].count=0;
             sScenes[sBuilding].shadow_count=0;
+            sScenes[sBuilding].tagged_count=0;
             sScenes[sBuilding].dropped=0;
             NitroPort_Gx3dScenePublished();
         }else{
             /* Keep the newest image and reuse this building slot on the
              * exceptionally slow consumer path; never stall the game. */
-            scene->count=0;scene->shadow_count=0;scene->dropped++;
+            scene->count=0;scene->shadow_count=0;scene->tagged_count=0;scene->dropped++;
         }
         /* (what only casts: the shadow map's alone, FULL; not the sprites') */
         sShadowCapture=NitroPort_ShadowReachOn() && shadow_store();
@@ -2643,6 +2712,7 @@ static inline __attribute__((always_inline)) void work_op(unsigned op,const uint
             /* Nothing published: the scene being built starts again. */
             sScenes[sBuilding].count=0;
             sScenes[sBuilding].shadow_count=0;
+            sScenes[sBuilding].tagged_count=0;
             sScenes[sBuilding].dropped=0;
             s.frameVertices=0;s.framePolygons=0;
             __atomic_store_n(&sSwapsSkipped,sSwapsSkipped+1u,__ATOMIC_RELAXED);
@@ -2873,10 +2943,10 @@ found:
                 /* Far from saturation() for every point of the box. */
                 if(c[j]>=((int64_t)1<<42)||c[j]<=-((int64_t)1<<42))return 0;
             }
-            if(sShadowCapture){
+            if(sShadowCapture || s.tag){
                 /* (the sun shadows keep what's beside the view up to their
-                 * reach, keep_for_shadow: past it, with a margin for the
-                 * rounding) */
+                 * reach, keep_for_shadow, and the marked polygons,
+                 * keep_tagged: past it, with a margin for the rounding) */
                 const int64_t margin=(int64_t)4096*8;
                 if(!(c[0]+SHADOW_GUARD*c[3]<-margin))outside&=~1u;
                 if(!(c[0]-SHADOW_GUARD*c[3]>=margin))outside&=~2u;

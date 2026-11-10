@@ -571,8 +571,8 @@ static void test_ground_cards(void)
     /* the card itself untouched (verts are only read) */
     for (k = 0; k < 6; k++) CHECK(v[hero + k].color[3] == 255);
     {
-        double q[3], p0[3], p1[3], p2[3], o1[3], o2[3], a[2], b2[2], hM = mk[0] * s.up[0] + mk[1] * s.up[1] + mk[2] * s.up[2];
-        double d = 0.0, ang, lenS, lenC;
+        double q[3], p0[3], p1[3], p2[3], a[2], b2[2], hM = mk[0] * s.up[0] + mk[1] * s.up[1] + mk[2] * s.up[2];
+        double d = 0.0;
         /* every copy: on the round shadow's ground once the pull's undone;
          * its z by the row given */
         for (i = 0; i < w; i++) {
@@ -591,20 +591,27 @@ static void test_ground_cards(void)
         for (k = 0; k < 3; k++) d += (p1[k] - p0[k]) * (p1[k] - p0[k]);
         CHECK(NEAR(sqrt(d), 16.0, 0.1));
         for (k = 0; k < 3; k++) CHECK(NEAR((p0[k] + p1[k]) * 0.5, mk[k], 0.05));
-        /* the head (corner 2) from the foot (1): to the screen's lower
-         * right at the angle, as long on the screen as the card's height
-         * times the length */
-        on_screen(p1, a);
-        on_screen(p2, b2);
-        ang = atan2(-(b2[1] - a[1]), b2[0] - a[0]) * 180.0 / 3.14159265;
-        CHECK(NEAR(ang, NITRO_SHADOW_GROUND_ANGLE, 2.0));
-        lenS = sqrt((b2[0] - a[0]) * (b2[0] - a[0]) + (b2[1] - a[1]) * (b2[1] - a[1]));
-        back_of(&s, v[hero + 1].position, o1);
-        back_of(&s, v[hero + 2].position, o2);
-        on_screen(o1, a);
-        on_screen(o2, b2);
-        lenC = sqrt((b2[0] - a[0]) * (b2[0] - a[0]) + (b2[1] - a[1]) * (b2[1] - a[1]));
-        CHECK(NEAR(lenS / lenC, NITRO_SHADOW_GROUND_LENGTH, 0.1));
+        /* the head (corner 2) from the foot (1): along the ground the
+         * way the sun's light goes, the card's height times the sun's
+         * cotangent long. This sun is at the screen's left (its light to
+         * the right, along the sprite's own line): the shadow's way is
+         * kept NITRO_SHADOW_GROUND_SIDE off that line, towards the camera */
+        {
+            double right[3], toward[3], n = 0.0, want, side = NITRO_SHADOW_GROUND_SIDE * 3.14159265 / 180.0;
+            right[0] = 1.0 - s.up[0] * s.up[0]; right[1] = -s.up[1] * s.up[0]; right[2] = -s.up[2] * s.up[0];
+            for (k = 0; k < 3; k++) n += right[k] * right[k];
+            for (k = 0; k < 3; k++) right[k] /= sqrt(n);
+            toward[0] = right[1] * s.up[2] - right[2] * s.up[1];
+            toward[1] = right[2] * s.up[0] - right[0] * s.up[2];
+            toward[2] = right[0] * s.up[1] - right[1] * s.up[0];
+            want = 16.0 * NITRO_SHADOW_GROUND_LENGTH / tan(40.0 * 3.14159265 / 180.0);
+            for (k = 0; k < 3; k++)
+                CHECK(NEAR(p2[k] - p1[k], (right[k] * cos(side) + toward[k] * sin(side)) * want, 0.1));
+            /* (down the screen and to its right) */
+            on_screen(p1, a);
+            on_screen(p2, b2);
+            CHECK(b2[0] > a[0] && b2[1] < a[1]);
+        }
         /* pulled along the ray: where it is on the screen unchanged */
         back_of(&s, out[0].position, q);
         on_screen(q, a);
@@ -612,13 +619,13 @@ static void test_ground_cards(void)
         CHECK(NEAR(a[0], b2[0], 1e-5) && NEAR(a[1], b2[1], 1e-5));
         CHECK(NEAR(q[2] / p0[2], keep, 1e-4));
         /* the other taps: the same corner, a little apart (the blur's
-         * radius, 0.75 to 3), still on the ground */
+         * radius, 0.5 to 2.25), still on the ground */
         for (k = 1; k < T; k++) {
             double t[3], dd = 0.0;
             int j;
             back_of(&s, out[6 * k].position, t);
             for (j = 0; j < 3; j++) { t[j] /= keep; dd += (t[j] - p0[j]) * (t[j] - p0[j]); }
-            CHECK(sqrt(dd) > 0.7 && sqrt(dd) < 3.0 / 0.35 + 0.01);
+            CHECK(sqrt(dd) > 0.45 && sqrt(dd) < 2.25 / 0.35 + 0.01);
         }
     }
     /* the colours: each tap the TAPS-th root of the shade at the feet, of
@@ -640,6 +647,34 @@ static void test_ground_cards(void)
         back_of(&s, out[2].position, cq);
         back_of(&s, out[5].position, d);
         for (k = 0; k < 3; k++) CHECK(NEAR(((a[k] + bq[k]) * 0.375 + (cq[k] + d[k]) * 0.125) / keep, mk[k], 0.05));
+    }
+    /* the sun over the top of the screen, 60 degrees up: the shadow
+     * straight down the screen, 16 cot(60) long; in the morning, on the
+     * right (150 degrees round: just at the limit), to the lower left */
+    {
+        static const NitroShadowSun top = { 60.0f, 90.0f }, morning = { 50.0f, 150.0f };
+        NitroShadowSetup s2;
+        double p1[3], p2[3], a[2], b2[2], len = 0.0;
+        CHECK(NitroPort_ShadowSetup(v[0].position, sizeof(v[0]), (size_t)ground, sProj, WIDTH, 192, &top, 512, &s2));
+        w = NitroPort_ShadowGroundCards(v, batches, 7, (size_t)n, out, 256, outBatches, 4, &nb, &s2, s2.zclip, NULL,
+                                        shade, NULL, NULL);
+        CHECK(w == (size_t)(6 * T));
+        back_of(&s2, out[1].position, p1);
+        back_of(&s2, out[2].position, p2);
+        for (k = 0; k < 3; k++) len += (p2[k] - p1[k]) * (p2[k] - p1[k]) / (keep * keep);
+        CHECK(NEAR(sqrt(len), 16.0 * NITRO_SHADOW_GROUND_LENGTH / tan(60.0 * 3.14159265 / 180.0), 0.1));
+        on_screen(p1, a);
+        on_screen(p2, b2);
+        CHECK(NEAR(b2[0], a[0], 1e-3) && b2[1] < a[1]);
+        CHECK(NitroPort_ShadowSetup(v[0].position, sizeof(v[0]), (size_t)ground, sProj, WIDTH, 192, &morning, 512, &s2));
+        w = NitroPort_ShadowGroundCards(v, batches, 7, (size_t)n, out, 256, outBatches, 4, &nb, &s2, s2.zclip, NULL,
+                                        shade, NULL, NULL);
+        CHECK(w == (size_t)(6 * T));
+        back_of(&s2, out[1].position, p1);
+        back_of(&s2, out[2].position, p2);
+        on_screen(p1, a);
+        on_screen(p2, b2);
+        CHECK(b2[0] < a[0] && b2[1] < a[1]);
     }
     /* the same from the two triangles in two batches of the round shadow
      * (its middle still the quad's) */
