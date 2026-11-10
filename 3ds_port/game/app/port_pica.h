@@ -105,6 +105,12 @@ void NitroPort_PicaLook(int shadows, int grade, int fixedSun, float elevation, f
 /* Debug only: submit and wait between shadow passes. Watchdog stages then
  * identify the outstanding GPU work, rather than the last CPU submission. */
 void NitroPort_PicaShadowDebug(int enabled);
+/* The parked sun shadows' hunt (remaster.txt: shadowtest 1-4, with
+ * shadows on): 0 leaves them parked; 1 the map from the scene's own
+ * triangles only, nothing received; 2 the whole map (what only casts, the
+ * cards turned to the sun), nothing received; 3 received too, without
+ * texture unit 1 (no cut-outs in the shade); 4 all of it, as designed. */
+void NitroPort_PicaShadowTest(int level);
 
 /* The compose path: the scene's polygons drawn straight into a screen's
  * render target, between the 2D layers. */
@@ -229,6 +235,7 @@ typedef struct ComposeConfig {
                               * 3 xbrz (2x by xBRZ, nearest), 4 xbrz smooth (bilinear) */
     int shadows;             /* sun shadows on the 3D */
     int shadowDebug;         /* waits between passes to locate a hardware hang */
+    int shadowTest;          /* the parked sun shadows a step at a time (NitroPort_PicaShadowTest) */
     int grade;               /* the colour grade on the 3D's textures */
     int sunFixed;            /* the sun where sunElevation, sunAzimuth say, not by the clock */
     float sunElevation, sunAzimuth;   /* (degrees; NitroPort_PicaLook) */

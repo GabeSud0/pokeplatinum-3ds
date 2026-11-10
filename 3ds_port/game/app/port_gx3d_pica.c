@@ -325,6 +325,7 @@ static void free_edge_copies(void);
 static int make_shadow_spare(void);
 static void free_shadow_spare(void);
 static NitroShadowSetup sShadow;
+static int shadow_level(void);   /* (the hunt's step: sun shadows, below) */
 static int sShadowReady,sShadowDrawn;        /* (the prepared scene has a ground; its map is drawn) */
 static C3D_Tex *sRecvTex;                    /* (unit 1's texture, as bound) */
 static int sRecvTexKnown;
@@ -1690,14 +1691,15 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
         /* what only casts (outside the view, or facing away), after the
          * scene's vertices */
         NitroGx3dGpuVertex *extra=sVertices[slot]+sPreparedCount;
-        size_t n=NitroPort_Gx3dBuildShadowBatches(scene,sPreparedCount,extra,sShadowRoom,
+        size_t n=shadow_level()<2?0:
+                 NitroPort_Gx3dBuildShadowBatches(scene,sPreparedCount,extra,sShadowRoom,
                                                   sBatches+MAX_BATCHES,SHADOW_BATCHES,&sShadowOnlyBatches);
         size_t cards=0,b;
         /* what casts and what receives (the vertex programs read it) */
         NitroPort_ShadowRoles(sVertices[slot][0].position,&sVertices[slot][0].color[3],
                               sizeof(NitroGx3dGpuVertex),sPreparedCount+n,&sShadow);
         /* characters' and trees' cards: their copies turned to the sun */
-        if(sShadowRoom>n){
+        if(shadow_level()>=2 && sShadowRoom>n){
             n+=NitroPort_ShadowCards(sVertices[slot],sBatches,sPreparedBatches,sPreparedCount+n,extra+n,
                                      sShadowRoom-n,sBatches+MAX_BATCHES+sShadowOnlyBatches,
                                      SHADOW_BATCHES-sShadowOnlyBatches,&cards,&sShadow);
@@ -1720,7 +1722,7 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
             unsigned fmt=NitroPort_Gx3dTexFormat(param);
             size_t texels=fmt?(size_t)NitroPort_Gx3dTexWidth(param)*NitroPort_Gx3dTexHeight(param):0;
             sDecal[b]=0;
-            if(!batch->translucent||!batch->count||texels>4096u)continue;
+            if(shadow_level()<3||!batch->translucent||!batch->count||texels>4096u)continue;
             if(fmt)NitroPort_Gx3dDecodeTexture(&sBanks,param,batch->palette_base,sDecalTexels);
             sDecal[b]=(uint8_t)NitroPort_ShadowDecal(sVertices[slot][batch->first].position,
                                                      sizeof(NitroGx3dGpuVertex),(batch->polygon_attr>>16)&31u,
@@ -2312,6 +2314,22 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
 #define SUN_SHADOWS_PARKED 1
 #endif
 
+/* The hunt for the hang (remaster.txt: shadowtest 1-4, port_pica.h): the
+ * shadows a step at a time, each step one test on a 3DS. 0 (none given)
+ * keeps them parked; the in-game look toggle never unparks them. */
+static int sShadowTest;
+static unsigned sShadowScenes;   /* (scenes drawn with them, for the log) */
+static int sShadowToldMap,sShadowToldRecv;
+void NitroPort_PicaShadowTest(int level)
+{
+    sShadowTest=level<0?0:level>4?4:level;
+}
+/* The step drawn: 4 (all) when not parked at all. */
+static int shadow_level(void)
+{
+    return SUN_SHADOWS_PARKED?sShadowTest:4;
+}
+
 /* (the 3D thread, between frames) The look: sun shadows, the colour
  * grade, the sun by the clock or fixed. The shadow map (512x512, in VRAM)
  * is made the first time the shadows are on. */
@@ -2325,7 +2343,7 @@ void NitroPort_PicaLook(int shadows,int grade,int fixedSun,float elevation,float
     sShadowMode=0;
     sShadowReady=0;
     NitroPort_SetSunShadows(0);
-    if(SUN_SHADOWS_PARKED && shadows){
+    if(SUN_SHADOWS_PARKED && shadows && !sShadowTest){
         static int told;
         if(!told){
             told=1;
@@ -2358,7 +2376,16 @@ void NitroPort_PicaLook(int shadows,int grade,int fixedSun,float elevation,float
         return;
     }
     sShadowMode=1;
-    NitroPort_SetSunShadows(1);
+    /* (the game's round shadows go only once the sun's are received) */
+    NitroPort_SetSunShadows(shadow_level()>=3);
+    if(SUN_SHADOWS_PARKED){
+        static const char *const what[5]={"",
+            "the map from the scene's own triangles, nothing received",
+            "the whole map (what only casts, the cards), nothing received",
+            "the whole map, received without texture unit 1 (no cut-outs)",
+            "all of it, as designed"};
+        NitroPort_Log("[shadow] test step %d: %s",sShadowTest,what[sShadowTest]);
+    }
 }
 
 /* For a scene: the time of day's sun (or the fixed one) and grade. 0 if
@@ -2487,7 +2514,8 @@ static void free_shadow_spare(void)
  * Alpha retains the cut-out test; destination alpha is never changed. */
 static void bind_batch_shadow(const NitroGx3dBatch *batch)
 {
-    int textured=batch->texture_param!=0;
+    /* (step 3: unit 1 left alone, the shade over the whole polygon) */
+    int textured=batch->texture_param!=0 && shadow_level()>=4;
     unsigned mode=(batch->polygon_attr>>4)&3u;
     C3D_Tex *tex=NULL;
     C3D_TexEnv *env;
@@ -2545,7 +2573,7 @@ static void draw_shadow_receivers(const PicaView *view)
     /* This is a different target from the map; binding flushes citro3d's
      * texture cache after the map's framebuffer writes. */
     C3D_TexBind(0,&sShadowTex);
-    C3D_TexBind(1,&sSpareTex);
+    if(shadow_level()>=4)C3D_TexBind(1,&sSpareTex);
     C3D_TexShadowParams(false,sShadow.bias*NITRO_SHADOW_BIAS_SCALE);
     sBoundTexKnown=0;
     sRecvTexKnown=0;
@@ -2566,7 +2594,7 @@ static void draw_shadow_receivers(const PicaView *view)
         C3D_AlphaTest(true,GPU_GREATER,sBoundCut);
         draw_arrays((int)batch->first,(int)batch->count);
     }
-    C3D_TexBind(1,&sSpareTex);
+    if(shadow_level()>=4)C3D_TexBind(1,&sSpareTex);
     sRecvTexKnown=0;
     C3D_TexBind(0,NULL);
     sBoundTexKnown=0;
@@ -2677,6 +2705,13 @@ static void draw_scene(const PicaView *view)
         shadow_checkpoint("waiting before the sun shadow map");
         draw_shadow_map();
         shadow_checkpoint("waiting for the sun shadow map");
+        if(!sShadowToldMap){
+            sShadowToldMap=1;
+            NitroPort_Log("[shadow] the first sun shadow map sent to the GPU (step %d, %u batches, %u of them only casting)",
+                          shadow_level(),(unsigned)(sPreparedBatches+sShadowOnlyBatches),(unsigned)sShadowOnlyBatches);
+        }
+        if(++sShadowScenes==300)
+            NitroPort_Log("[shadow] 300 scenes drawn with the sun shadows (step %d): the GPU kept up",shadow_level());
     }
     C3D_BindProgram(&sProgram);
     stage("the opaque polygons");
@@ -2719,9 +2754,13 @@ static void draw_scene(const PicaView *view)
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
         draw_parts(parts);
     }
-    if(sShadowReady && !depthOnly){
+    if(sShadowReady && !depthOnly && shadow_level()>=3){
         shadow_checkpoint("waiting for the opaque scene before sun shadows");
         draw_shadow_receivers(view);
+        if(!sShadowToldRecv){
+            sShadowToldRecv=1;
+            NitroPort_Log("[shadow] the first sun shadow receivers sent to the GPU (step %d)",shadow_level());
+        }
     }
     /* Their fully opaque texels of translucent polygons of alpha 31 are
      * opaque too (drawn here so the outlines go over them as well). */
@@ -2731,7 +2770,7 @@ static void draw_scene(const PicaView *view)
         uint32_t attr=batch->polygon_attr;
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(!batch->translucent || ((attr>>16)&31u)!=31u)continue;
-        if(sShadowReady && sDecal[b])continue;
+        if(sShadowReady && shadow_level()>=3 && sDecal[b])continue;
         if(!room_for_draw())break;
         if(depthOnly){
             int textured=bind_batch_shape(batch);
@@ -2775,7 +2814,7 @@ static void draw_scene(const PicaView *view)
         uint32_t attr=batch->polygon_attr;
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(!batch->translucent)continue;
-        if(sShadowReady && sDecal[b])continue;
+        if(sShadowReady && shadow_level()>=3 && sDecal[b])continue;
         if(!room_for_draw())break;
         parts=batch_parts(batch);
         if(!parts)continue;

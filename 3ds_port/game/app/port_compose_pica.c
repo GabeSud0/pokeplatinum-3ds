@@ -1027,6 +1027,7 @@ static int compose_init(const ComposeConfig *config, int small)
      * otherwise (filter3d: see main_3ds.c). */
     NitroPort_PicaTextureFilter(config->filter3d);
     NitroPort_PicaShadowDebug(config->shadowDebug);
+    NitroPort_PicaShadowTest(config->shadowTest);
     NitroPort_PicaLook(config->shadows, config->grade, config->sunFixed, config->sunElevation,
                        config->sunAzimuth);
     memset(sScreens, 0, sizeof(sScreens));
