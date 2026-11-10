@@ -182,6 +182,10 @@ int NitroPort_ShadowSetup(const float *positions, size_t stride, size_t count,
     out->light[0] = d.x; out->light[1] = d.y; out->light[2] = d.z;
     out->extent = extent;
     memcpy(out->back, b.m, sizeof(out->back));
+    /* clip z = camera x p02 + y p12 + z p22 + p32 (the DS's rows), the
+     * camera's space through back */
+    for (j = 0; j < 4; j++) out->zclip[j] = p[2] * b.m[0][j] + p[6] * b.m[1][j] + p[10] * b.m[2][j];
+    out->zclip[3] += p[14];
     return 1;
 }
 
@@ -405,6 +409,136 @@ size_t NitroPort_ShadowCards(NitroGx3dGpuVertex *verts, const NitroGx3dBatch *ba
     return written;
 }
 
+size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batches,
+                                   size_t batchCount, size_t first, NitroGx3dGpuVertex *out,
+                                   size_t capacity, NitroGx3dBatch *outBatches, size_t maxBatches,
+                                   size_t *outBatchCount, const NitroShadowSetup *setup, const float depth[4],
+                                   float lift)
+{
+    Back b;
+    V3 up = v3(setup->up[0], setup->up[1], setup->up[2]);
+    V3 light = v3(setup->light[0], setup->light[1], setup->light[2]);
+    V3 lh = sub(light, scale(up, dot(light, up))), turned;
+    float down = -dot(light, up), stretch;
+    size_t written = 0, nb = 0, bi;
+    if (outBatchCount) *outBatchCount = 0;
+    /* the sun at least ~12 degrees up, and not straight above (no way to
+     * lay them along) */
+    if (!(down > 0.2f) || !(length(lh) > 1e-4f)) return 0;
+    lh = normalize(lh);
+    stretch = length(sub(light, scale(up, dot(light, up)))) / down;   /* cot(elevation) */
+    turned = normalize(cross(up, lh));
+    memcpy(b.m, setup->back, sizeof(b.m));
+    for (bi = 0; bi < batchCount; bi++) {
+        const NitroGx3dBatch *batch = &batches[bi];
+        size_t k = batch->first, end = batch->first + batch->count;
+        if (batch->translucent || !batch->texture_param) continue;
+        while (k + 2 < end) {
+            V3 n, c, across, along, tr;
+            size_t g = k, gEnd, i;
+            int count = 0;
+            float hmin = 1e30f, hmax = -1e30f, umin = 1e30f, umax = -1e30f;
+            if (!card(back(&b, verts[k].position), back(&b, verts[k + 1].position),
+                      back(&b, verts[k + 2].position), up, &n)) {
+                k += 3;
+                continue;
+            }
+            /* the card: this triangle, and the next if it shares an edge
+             * with it (as NitroPort_ShadowCards) */
+            gEnd = k + 3;
+            while (gEnd + 2 < end && gEnd - g < 6) {
+                V3 n2;
+                int shared = 0;
+                size_t p, q;
+                if (!card(back(&b, verts[gEnd].position), back(&b, verts[gEnd + 1].position),
+                          back(&b, verts[gEnd + 2].position), up, &n2))
+                    break;
+                for (p = gEnd; p < gEnd + 3; p++) {
+                    int found = 0;
+                    for (q = g; q < gEnd && !found; q++) found = same_point(verts[p].position, verts[q].position);
+                    shared += found;
+                }
+                if (shared < 2) break;
+                gEnd += 3;
+            }
+            k = gEnd;
+            if (written + (gEnd - g) > capacity) break;
+            across = cross(n, up);
+            if (!(length(across) > 1e-4f)) continue;
+            across = normalize(across);
+            along = normalize(cross(across, n));
+            if (dot(along, up) < 0.0f) along = scale(along, -1.0f);
+            /* its foot: the middle of its lowest corners */
+            for (i = g; i < gEnd; i++) {
+                V3 q = back(&b, verts[i].position);
+                float h = dot(q, up), u = dot(q, across);
+                if (h < hmin) hmin = h;
+                if (h > hmax) hmax = h;
+                if (u < umin) umin = u;
+                if (u > umax) umax = u;
+            }
+            /* (a sprite: not a sliver, not a whole backdrop) */
+            if (!(hmax - hmin > 0.5f) || hmax - hmin > NITRO_SHADOW_GROUND_CARD_MAX ||
+                umax - umin > NITRO_SHADOW_GROUND_CARD_MAX)
+                continue;
+            c = v3(0.0f, 0.0f, 0.0f);
+            for (i = g; i < gEnd; i++) {
+                size_t j;
+                int dup = 0;
+                V3 q = back(&b, verts[i].position);
+                if (dot(q, up) > hmin + (hmax - hmin) * 0.1f) continue;
+                for (j = g; j < i && !dup; j++) dup = same_point(verts[j].position, verts[i].position);
+                if (dup) continue;
+                c = add(c, q);
+                count++;
+            }
+            if (!count) continue;
+            c = scale(c, 1.0f / (float)count);
+            tr = dot(turned, across) < 0.0f ? scale(turned, -1.0f) : turned;
+            if (nb == 0 || outBatches[nb - 1].texture_param != batch->texture_param ||
+                outBatches[nb - 1].palette_base != batch->palette_base ||
+                outBatches[nb - 1].polygon_attr != batch->polygon_attr ||
+                outBatches[nb - 1].first + outBatches[nb - 1].count != first + written) {
+                if (nb >= maxBatches) break;
+                outBatches[nb] = *batch;
+                outBatches[nb].first = (uint32_t)(first + written);
+                outBatches[nb].count = 0;
+                outBatches[nb].translucent = 0;
+                nb++;
+            }
+            {
+                /* the copy's corners (a quad at most), all or none */
+                float xyw[6][3];
+                int ok = 1;
+                for (i = g; i < gEnd && ok; i++) {
+                    V3 r = sub(back(&b, verts[i].position), c), gp;
+                    /* across stays across (turned to the sun); up the card
+                     * becomes along the ground, away from the sun */
+                    gp = add(add(c, scale(tr, dot(r, across))), scale(lh, dot(r, along) * stretch));
+                    gp = add(gp, scale(up, lift));
+                    ok = unback(&b, gp, xyw[i - g]);
+                }
+                if (!ok) {
+                    if (outBatches[nb - 1].count == 0) nb--;
+                    continue;
+                }
+                for (i = g; i < gEnd; i++) {
+                    NitroGx3dGpuVertex *dst = &out[written++];
+                    const float *q = xyw[i - g];
+                    *dst = verts[i];
+                    dst->position[0] = q[0];
+                    dst->position[1] = q[1];
+                    dst->position[3] = q[2];
+                    dst->position[2] = depth[0] * q[0] + depth[1] * q[1] + depth[2] * q[2] + depth[3];
+                }
+                outBatches[nb - 1].count += (uint32_t)(gEnd - g);
+            }
+        }
+    }
+    if (outBatchCount) *outBatchCount = nb;
+    return written;
+}
+
 int NitroPort_ShadowDecalShape(const float *tri, size_t stride, unsigned polygonAlpha, int translucentFormat,
                                const NitroShadowSetup *setup)
 {
@@ -557,4 +691,16 @@ void NitroPort_SetSunShadows(int on)
 int NitroPort_SunShadows(void)
 {
     return sSunShadows;
+}
+
+static volatile int sShadowReach;
+
+void NitroPort_SetShadowReach(int on)
+{
+    sShadowReach = on;
+}
+
+int NitroPort_ShadowReachOn(void)
+{
+    return sShadowReach;
 }

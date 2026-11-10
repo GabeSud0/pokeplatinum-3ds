@@ -3473,21 +3473,19 @@ between the shadow passes, so the two-second watchdog names the pass the
 GPU didn't come back from; it's slower, and only for that hunt.
 
 **The hunt, a step at a time (2026-11-09).** The options page's
-ENHANCEMENTS has a SUN SHADOWS card: OFF, TEST 1 to TEST 6, ON. Each step
-adds one part, so the first step that freezes a 3DS names the part. It's
-back to OFF each time the game starts (port_options.c), so a step that
-froze doesn't freeze the next start too. With it OFF the shadows stay
-parked, as `shadows on` in remaster.txt and the look toggle leave them.
+ENHANCEMENTS card SUN SHADOWS went through OFF, TEST 1 to TEST 6 and ON,
+each step one part more, so the first step that froze a 3DS named the
+part (its steps stay in port_gx3d_pica.c, shadow_level; FULL is ON):
 
-| SUN SHADOWS | drawn |
+| step | drawn |
 |---|---|
-| TEST 1 | the shadow map from the scene's own triangles; nothing received (round shadows stay) |
-| TEST 2 | the whole map: what only casts (out of view, facing away) and the cards turned to the sun; nothing received |
-| TEST 3 | the receivers' pass (depth EQUAL, stencil, blend, fog) drawn with the scene's own program, no texture: what receives a constant shade darker |
-| TEST 4 | as TEST 3 with the receivers' program |
-| TEST 5 | as TEST 4 with the shadow map bound on unit 0 (sampled, its shadow parameters set), its result not used |
-| TEST 6 | its result used: the shadows, without texture unit 1 (no cut-outs); painted and round shadows left out |
-| ON | all of it, as designed |
+| 1 | the shadow map from the scene's own triangles; nothing received (round shadows stay) |
+| 2 | the whole map: what only casts (out of view, facing away) and the cards turned to the sun; nothing received |
+| 3 | the receivers' pass (depth EQUAL, stencil, blend, fog) drawn with the scene's own program, no texture: what receives a constant shade darker |
+| 4 | as 3 with the receivers' program |
+| 5 | as 4 with the shadow map bound on unit 0 (sampled, its shadow parameters set), its result not used |
+| 6 | its result used: the shadows, without texture unit 1 (no cut-outs); painted and round shadows left out |
+| 7 (FULL) | all of it, as designed |
 
 Runs on a New 3DS (2026-11-09): TEST 1 and TEST 2 ran 300 scenes each
 (log 7ec47860). The receivers hung the GPU on their first frame, with the
@@ -3503,6 +3501,51 @@ GPU/Pitfalls). The other two programs write every output whole. Now it
 builds the output in a temporary and writes it once, whole (w 1). (The
 #113 build had the same writes and drew shadows on a 3DS, so this may not
 be all: TEST 3 against TEST 4 tells the pass from the program.)
+
+With that, every step ran on a New 3DS (log d3cc0e3f). But FULL was slow
+(23-55 frames a second, the 3D 35-60 ms a scene against ~20 without the
+received shadows, the 2x2 3D dropped) and flickered (log 5fefdfd1): the
+map is drawn again each scene, fitted to the view, with what's just off
+the screen drawn too (the geometry's box tests widened,
+NitroPort_ShadowReachOn). FULL stays as it is for comparison while the
+scenery's shadows are reworked.
+
+### The sprites' sun shadows (SUN SHADOWS: SPRITES)
+
+The idea from Emerald 3DS (its v0.5.0's characters' shadows; written
+afresh here, none of its code): each sprite's own picture laid on the
+ground away from the sun, as its shadow. No shadow map.
+
+- Which: the scene's cards facing the camera, as NitroPort_ShadowCards
+  finds them (a triangle facing the camera, and the next if it shares an
+  edge), opaque and textured, at most 96 units (6 tiles) long and wide:
+  characters, the follower, the routes' trees, signs.
+- Where (NitroPort_ShadowGroundCards, port_shadow.c): the foot (the middle
+  of the card's lowest corners) stays where it stands; across the card
+  becomes across the sun's way, the nearer way round (from the side the
+  card would be a sliver); up the card becomes along the ground away from
+  the sun, its length times the sun's cotangent (the sun never under 40
+  degrees: at most 1.2 times as long); 1/16 of a tile above the foot's
+  ground. The ground plane is the foot's: over a ledge or steps the
+  shadow stays at the foot's height.
+- Depth: NitroShadowSetup.zclip is the DS's clip z from a vertex's x, y, w
+  (the projection's z column through the setup's back rows); the port's
+  remap is a scale and an offset on it (normalize_depth: z' = sDepthK clip
+  z + sDepthA sDepthK w, or + sDepthA sDepthK in a W-buffer scene), so a
+  new vertex's z is exactly as the scene's own would be.
+- Drawn (draw_ground_shadows) after the opaque polygons: the card's
+  texture, colour shade x alpha + (1 - alpha) (the sun shadows' shade, by
+  the sun's strength at the hour), the framebuffer multiplied by it; depth
+  LEQUAL, not written; without outlines, stencil bit 1 marks a pixel
+  shaded, so shadows over each other darken once.
+- The game's round shadows (patch 0027) are left out only while a scene
+  has these (none indoors or at dusk: the round ones then); the box tests
+  aren't widened (NitroPort_SetShadowReach only with FULL).
+- The log, every 300 scenes: the cards a scene and the ms a scene laying
+  them. Tests: test_shadow (the depth row against every vertex's clip z;
+  on the ground, the foot's width, the length away from the sun, the
+  lift; none when there's no room, translucent, untextured, or the sun
+  low).
 
 The log says `[shadow] test step N: ...` when a step is chosen,
 `[shadow] the first sun shadow map sent to the GPU` and `[shadow] the

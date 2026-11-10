@@ -59,6 +59,9 @@ typedef struct NitroShadowSetup {
     float extent;
     /* the camera's space from (x, y, w, 1): rows for x, y, z */
     float back[3][4];
+    /* the DS's clip z from (x, y, w, 1) (the scene's projection's z column
+     * through back): a new vertex's depth, before the port's remap */
+    float zclip[4];
 } NitroShadowSetup;
 
 /* What a triangle does in the sun (NitroPort_ShadowRoles), kept in its
@@ -115,6 +118,26 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
                              size_t capacity, struct NitroGx3dBatch *outBatches, size_t maxBatches,
                              size_t *outBatchCount, const NitroShadowSetup *setup);
 
+/* The sprites' sun shadows (the options page's SUN SHADOWS: SPRITES): each
+ * card facing the camera (a character, the follower, a tree, a sign: as
+ * NitroPort_ShadowCards finds them, opaque batches only, textured, up to
+ * NITRO_SHADOW_GROUND_CARD_MAX long and wide) gets a copy of itself laid on
+ * the ground away from the sun: its foot where it stands, turned about it
+ * to face the sun the nearer way (so it's never a sliver), each point
+ * moved along the sun's way by its height up the card times the sun's
+ * cotangent; lift above the foot's ground, along the ground's normal. Drawn
+ * with the card's texture, darkening by its alpha (no shadow map).
+ * depth: the row on (x, y, w, 1) giving a vertex's z as the scene's
+ * vertices have theirs (zclip through the port's remap). out, capacity
+ * vertices; outBatches, maxBatches (each one first counting from first);
+ * returns the vertices written. verts are only read. */
+#define NITRO_SHADOW_GROUND_CARD_MAX 96.0f   /* (6 tiles: past it, not a sprite) */
+size_t NitroPort_ShadowGroundCards(const struct NitroGx3dGpuVertex *verts, const struct NitroGx3dBatch *batches,
+                                   size_t batchCount, size_t first, struct NitroGx3dGpuVertex *out,
+                                   size_t capacity, struct NitroGx3dBatch *outBatches, size_t maxBatches,
+                                   size_t *outBatchCount, const NitroShadowSetup *setup, const float depth[4],
+                                   float lift);
+
 /* Whether a translucent triangle is one of the game's own painted shadows
  * (lying flat, see-through, dark: the patches under buildings and on the
  * ground beside them), left out with the sun shadows on: the two together
@@ -158,6 +181,12 @@ void NitroPort_LookGradeTable(int period, uint32_t table[32768]);
  * out its round shadow model under objects then (patch 0027). Any thread. */
 void NitroPort_SetSunShadows(int on);
 int NitroPort_SunShadows(void);
+/* Whether the shadow map reaches past the view's sides (the GPU path sets
+ * it with the full shadow map, SUN SHADOWS: FULL): the geometry's box
+ * tests then pass objects just outside the view, for their shadows. Not
+ * with the sprites' shadows alone: they need nothing off the screen. */
+void NitroPort_SetShadowReach(int on);
+int NitroPort_ShadowReachOn(void);
 
 #ifdef __cplusplus
 }

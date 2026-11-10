@@ -113,6 +113,10 @@ void NitroPort_PicaShadowDebug(int enabled);
  * receivers' program; 5 the shadow map bound but its result not used; 6
  * used: the shadows, without texture unit 1 (no cut-outs); 7 all of it. */
 void NitroPort_PicaShadowTest(int level);
+/* The sprites' sun shadows (the options page's SUN SHADOWS: SPRITES): each
+ * card facing the camera laid on the ground away from the sun, drawn with
+ * its texture after the opaque polygons; no shadow map. The 3D thread. */
+void NitroPort_PicaGroundShadows(int on);
 
 /* The compose path: the scene's polygons drawn straight into a screen's
  * render target, between the 2D layers. */
@@ -401,7 +405,7 @@ int NitroPort_ComposeWantsMid(float slider, int aOnTop);
 /* The look (sun shadows and the colour grade, NitroPort_PicaLook) on or
  * off from the next frame drawn. Any thread (L + R + B). */
 void NitroPort_ComposeLook(int on);
-/* The options page's SUN SHADOWS (0 off, 1-6 a test step, 7 on), from the
+/* The options page's SUN SHADOWS (0 OFF, 1 SPRITES, 2 FULL), from the
  * next frame: NitroPort_PicaShadowTest and the look's shadows. Any thread. */
 void NitroPort_ComposeSunShadows(int level);
 

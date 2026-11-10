@@ -3,31 +3,30 @@ From: pokeplatinum-3ds <noreply@users.noreply.github.com>
 Date: Mon, 9 Nov 2026 21:32:59 -0700
 Subject: [PATCH] The options page's SUN SHADOWS (SDK_PORT_3DS)
 
-ENHANCEMENTS gets a SUN SHADOWS card: OFF, TEST 1 to TEST 6, ON. The
-port's sun shadows have been parked since they froze a 3DS; the card
-turns them on a step at a time (the port's NitroPort_PicaShadowTest), so
-the step that freezes names the part. Off again each time the game
-starts (the port's port_options.c), so a freeze doesn't come back at the
-next start.
+ENHANCEMENTS gets a SUN SHADOWS card: OFF, SPRITES, FULL. SPRITES: the
+port lays each sprite (characters, the follower, trees, signs) on the
+ground away from the sun as its shadow; FULL: the port's shadow map
+(being reworked). Off again each time the game starts (the port's
+port_options.c).
 ---
  include/port_options.h         | 1 +
  src/overlay005/options_panel.c | 5 +++++
  2 files changed, 6 insertions(+)
 
 diff --git a/include/port_options.h b/include/port_options.h
-index e74732cb..8c801406 100644
+index e74732cb..2693dc50 100644
 --- a/include/port_options.h
 +++ b/include/port_options.h
 @@ -22,6 +22,7 @@
  #define PORT_OPT_ITEM2           16 // (not on the page) the lower menu's second square's item
  #define PORT_OPT_PIXEL_FIELD     17 // 0 off, 1 on: the field at the DS's pixel size (the whole 400 x 240)
  #define PORT_OPT_FOLLOWER        18 // 0 off, 1 on: the party's first Pokémon walks behind the player (port_follower.h)
-+#define PORT_OPT_SUN_SHADOWS     19 // 0 off, 1-6 a test step, 7 on: the sun shadows (off again at each start)
++#define PORT_OPT_SUN_SHADOWS     19 // 0 off, 1 the sprites' shadows, 2 the full shadow map (off again at each start)
  
  int NitroPort_Option(int id);
  void NitroPort_OptionSet(int id, int value);
 diff --git a/src/overlay005/options_panel.c b/src/overlay005/options_panel.c
-index a7f7ab29..165b85b4 100644
+index a7f7ab29..244e5769 100644
 --- a/src/overlay005/options_panel.c
 +++ b/src/overlay005/options_panel.c
 @@ -184,6 +184,7 @@ static const OptionsCard sEnhancementCards[] = {
@@ -42,8 +41,8 @@ index a7f7ab29..165b85b4 100644
  static const char *const sSpeedValues[] = { "1x", "1.5x", "2x", "3x", "4x" };
  static const char *const sEncounterValues[] = { "NORMAL", "OFF", "1/4", "1/2", "2x" };
  static const char *const sShinyValues[] = { "1/8192", "1/4096", "1/1024", "1/256", "1/64", "ALWAYS" };
-+// (the sun shadows tried a step at a time on a 3DS: the port's NitroPort_PicaShadowTest)
-+static const char *const sSunShadowValues[] = { "OFF", "TEST 1", "TEST 2", "TEST 3", "TEST 4", "TEST 5", "TEST 6", "ON" };
++// (SPRITES: the sprites' shadows on the ground; FULL: the port's shadow map, being reworked)
++static const char *const sSunShadowValues[] = { "OFF", "SPRITES", "FULL" };
  
  // The game's six: their values' first entry and how many.
  static const u16 sGameValueEntry[6] = {

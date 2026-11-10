@@ -2157,7 +2157,7 @@ static void test_command(GeoState *g,unsigned op,const uint32_t *p)
                 all&=outcode(clip);
             }
         }
-        if(all && !(all&0x30u) && NitroPort_SunShadows()){
+        if(all && !(all&0x30u) && NitroPort_ShadowReachOn()){
             /* Outside only the view's sides: in reach of the shadows? The
              * box's corners against x and y of BOX_GUARD w instead. */
             int64_t base[4],edge[3][4];

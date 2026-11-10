@@ -94,6 +94,7 @@ void NitroPort_Gx3dSimulateLook(int shadows, int grade, int fixedSun, float elev
     sFixedSun.elevation = elevation;
     sFixedSun.azimuth = azimuth;
     NitroPort_SetSunShadows(shadows);
+    NitroPort_SetShadowReach(shadows);
 }
 
 static float row4(const float r[4], const float *p) { return r[0] * p[0] + r[1] * p[1] + r[2] * p[3] + r[3]; }
