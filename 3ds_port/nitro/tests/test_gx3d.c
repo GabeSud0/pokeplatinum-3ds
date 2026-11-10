@@ -1069,6 +1069,7 @@ static void test_shadow_triangles(void)
     const NitroGx3dScene *scene;
     int i,whole;
     NitroPort_SetSunShadows(1);
+    NitroPort_SetShadowReach(1);
     reset_geometry();
     swap();
     NitroPort_Gx3dScene();                             /* (done, and read) */
@@ -1110,6 +1111,7 @@ static void test_shadow_triangles(void)
     CHECK((read32(0x600)&2)==0);
     /* off: none kept, and a box just off the side doesn't pass */
     NitroPort_SetSunShadows(0);
+    NitroPort_SetShadowReach(0);
     swap();
     NitroPort_Gx3dScene();                             /* (done, and read) */
     NitroPort_GxDirectWrite(0x29,(1u<<6)|(31u<<16));
@@ -1123,6 +1125,24 @@ static void test_shadow_triangles(void)
     NitroPort_GxDirectWrite(0x70,word2(ONE/8,ONE/8));
     NitroPort_Gx3dRefreshStatus();
     CHECK((read32(0x600)&2)==0);
+    /* the sprites' shadows alone (the round shadows' flag, no reach): as
+     * off, none kept and no box passed for them (they need nothing off
+     * the screen) */
+    NitroPort_SetSunShadows(1);
+    swap();
+    NitroPort_Gx3dScene();
+    NitroPort_GxDirectWrite(0x29,(1u<<6)|(31u<<16));
+    flat_triangle(-3000,3000,-3000,3000);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==0);
+    CHECK(scene->shadow_count==0);
+    NitroPort_GxDirectWrite(0x70,word2(6000,0));
+    NitroPort_GxDirectWrite(0x70,word2(0,ONE/8));
+    NitroPort_GxDirectWrite(0x70,word2(ONE/8,ONE/8));
+    NitroPort_Gx3dRefreshStatus();
+    CHECK((read32(0x600)&2)==0);
+    NitroPort_SetSunShadows(0);
 }
 /* A wider view (NitroPort_Gx3dSetWideView): x scaled by 256/320, so a
  * vertex at x = 1.2 (out of view) is in view at 0.96, and one at 0.5 is
@@ -2403,9 +2423,11 @@ static void test_list_trimmed(void)
      * reach beside the view, kept for them; on the thread too, which
      * passes over lists out of the view. */
     NitroPort_SetSunShadows(1);
+    NitroPort_SetShadowReach(1);
     list_scene(w,n,raw);
     CHECK(raw->shadows>=25u);
     NitroPort_SetSunShadows(0);
+    NitroPort_SetShadowReach(0);
     /* (what the in-view polygons carry from those left out) */
     if(raw->count==4){
         CHECK(raw->tris[0].v[0].clip[2]==108);              /* A's last Z */

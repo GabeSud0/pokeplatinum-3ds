@@ -2339,7 +2339,8 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
              * exceptionally slow consumer path; never stall the game. */
             scene->count=0;scene->shadow_count=0;scene->dropped++;
         }
-        sShadowCapture=NitroPort_SunShadows() && shadow_store();
+        /* (what only casts: the shadow map's alone, FULL; not the sprites') */
+        sShadowCapture=NitroPort_ShadowReachOn() && shadow_store();
         interp_swap();
         s.frameVertices=0;s.framePolygons=0;
         if(++sDiag.scenes>=120)diag_log();

@@ -235,6 +235,11 @@ static void test_day(void)
     CHECK(NitroPort_SunShadows());
     NitroPort_SetSunShadows(0);
     CHECK(!NitroPort_SunShadows());
+    /* and the shadow map's reach, apart from it */
+    NitroPort_SetShadowReach(1);
+    CHECK(NitroPort_ShadowReachOn() && !NitroPort_SunShadows());
+    NitroPort_SetShadowReach(0);
+    CHECK(!NitroPort_ShadowReachOn());
 }
 
 /* What casts and receives; triangles that only cast reaching further
