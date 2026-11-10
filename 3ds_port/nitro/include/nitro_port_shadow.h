@@ -132,6 +132,15 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
  * vertices; outBatches, maxBatches (each one first counting from first);
  * returns the vertices written. verts are only read. */
 #define NITRO_SHADOW_GROUND_CARD_MAX 96.0f   /* (6 tiles: past it, not a sprite) */
+/* The row on (x, y, w, 1) giving a new vertex's z as the GPU path's
+ * vertices have theirs after the depth remap, for NitroPort_ShadowGroundCards.
+ * The path's z isn't the DS's clip z: Z-buffer scenes, the DS's depth
+ * (clip z / w + 1) / 2 (port_gx3d.c: (nz + 1) * 8388607.5 of 16777215)
+ * times -w; W-buffer, -(w 20.12 / 16777215). The GPU path's remap
+ * (normalize_depth) then gives z' = -(near + (d - lo) k) w, or -(d - lo) k,
+ * with depthA = lo - near / k (W-buffer: lo) and depthK = k. */
+void NitroPort_ShadowDepthRow(const NitroShadowSetup *setup, int wbuffer, float depthA, float depthK,
+                              float out[4]);
 size_t NitroPort_ShadowGroundCards(const struct NitroGx3dGpuVertex *verts, const struct NitroGx3dBatch *batches,
                                    size_t batchCount, size_t first, struct NitroGx3dGpuVertex *out,
                                    size_t capacity, struct NitroGx3dBatch *outBatches, size_t maxBatches,

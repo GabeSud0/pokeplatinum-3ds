@@ -3529,10 +3529,13 @@ ground away from the sun, as its shadow. No shadow map.
   ground. The ground plane is the foot's: over a ledge or steps the
   shadow stays at the foot's height.
 - Depth: NitroShadowSetup.zclip is the DS's clip z from a vertex's x, y, w
-  (the projection's z column through the setup's back rows); the port's
-  remap is a scale and an offset on it (normalize_depth: z' = sDepthK clip
-  z + sDepthA sDepthK w, or + sDepthA sDepthK in a W-buffer scene), so a
-  new vertex's z is exactly as the scene's own would be.
+  (the projection's z column through the setup's back rows). The GPU
+  path's z isn't that clip z: it's the DS's own depth, (z / w + 1) / 2,
+  times -w (W-buffer scenes: -(w 20.12) / 16777215), then remapped
+  (normalize_depth). NitroPort_ShadowDepthRow folds all of it into one
+  row on x, y, w, so a new vertex's z is exactly as the scene's own would
+  be. (The first try used clip z itself: every shadow failed the depth
+  test, none seen, log 93044840; the test now runs the path's steps.)
 - Drawn (draw_ground_shadows) after the opaque polygons: the card's
   texture, colour shade x alpha + (1 - alpha) (the sun shadows' shade, by
   the sun's strength at the hour), the framebuffer multiplied by it; depth

@@ -444,6 +444,28 @@ static void test_ground_cards(void)
         if (e > worst) worst = e;
     }
     CHECK(worst < 1e-4);
+    /* the GPU path's z, as the port makes it: the DS's depth from clip z
+     * and w (port_gx3d.c), then normalize_depth's remap (port_gx3d_pica.c),
+     * against NitroPort_ShadowDepthRow on x, y, w alone */
+    {
+        const float nearD = 1.0f / 1024.0f, lo = 0.31f, kz = 3.7f;
+        float row[4], rowW[4];
+        double worstZ = 0.0, worstW = 0.0;
+        NitroPort_ShadowDepthRow(&s, 0, lo - nearD / kz, kz, row);
+        NitroPort_ShadowDepthRow(&s, 1, 0.002f, 900.0f, rowW);
+        for (i = 0; i < (size_t)n; i++) {
+            const float *q = v[i].position;   /* (x, y, the DS's clip z, w) */
+            double nz = q[2] / q[3], d = (nz + 1.0) * 8388607.5 / 16777215.0;
+            double zPath = -(nearD + (d - lo) * kz) * q[3];
+            double dW = q[3] * 4096.0 / 16777215.0, wPath = -(dW - 0.002) * 900.0;
+            double zRow = row[0] * q[0] + row[1] * q[1] + row[2] * q[3] + row[3];
+            double wRow = rowW[0] * q[0] + rowW[1] * q[1] + rowW[2] * q[3] + rowW[3];
+            if (fabs(zRow - zPath) / (fabs(zPath) + 1e-3) > worstZ) worstZ = fabs(zRow - zPath) / (fabs(zPath) + 1e-3);
+            if (fabs(wRow - wPath) / (fabs(wPath) + 1e-3) > worstW) worstW = fabs(wRow - wPath) / (fabs(wPath) + 1e-3);
+        }
+        CHECK(worstZ < 1e-3);
+        CHECK(worstW < 1e-4);
+    }
     w = NitroPort_ShadowGroundCards(v, &batch, 1, (size_t)n, out, 64, outBatches, 4, &nb, &s, s.zclip, 0.0f);
     CHECK(w == 6 && nb == 1 && outBatches[0].first == (uint32_t)n && outBatches[0].count == 6);
     CHECK(outBatches[0].texture_param == 1 && !outBatches[0].translucent);

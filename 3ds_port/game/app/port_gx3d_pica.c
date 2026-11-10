@@ -1797,15 +1797,11 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
            NitroPort_ShadowSetup(sVertices[slot][0].position,sizeof(NitroGx3dGpuVertex),sPreparedCount,
                                  scene->projection,scene->screen_width,scene->screen_height,&sSun,SHADOW_SIZE,
                                  &sShadow)){
-            /* a new vertex's z as normalize_depth gives the scene's: d' =
-             * (d - sDepthA) sDepthK on the DS's depth, so z' = sDepthK clip z +
-             * sDepthA sDepthK w (Z-buffer) or + sDepthA sDepthK (W-buffer) */
+            /* a new vertex's z as the scene's have theirs: the DS's depth
+             * through normalize_depth (NitroPort_ShadowDepthRow) */
             float depth[4];
             size_t nb=0,n;
-            int j;
-            for(j=0;j<4;j++)depth[j]=sDepthK*sShadow.zclip[j];
-            if(scene->swap_param&2u)depth[3]+=sDepthA*sDepthK;
-            else depth[2]+=sDepthA*sDepthK;
+            NitroPort_ShadowDepthRow(&sShadow,(scene->swap_param&2u)!=0,sDepthA,sDepthK,depth);
             n=NitroPort_ShadowGroundCards(sVertices[slot],sBatches,sPreparedBatches,sPreparedCount,
                                           sVertices[slot]+sPreparedCount,sShadowRoom,sBatches+MAX_BATCHES,
                                           SHADOW_BATCHES,&nb,&sShadow,depth,GROUND_LIFT);

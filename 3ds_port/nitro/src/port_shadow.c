@@ -409,6 +409,23 @@ size_t NitroPort_ShadowCards(NitroGx3dGpuVertex *verts, const NitroGx3dBatch *ba
     return written;
 }
 
+void NitroPort_ShadowDepthRow(const NitroShadowSetup *setup, int wbuffer, float depthA, float depthK,
+                              float out[4])
+{
+    int j;
+    if (wbuffer) {
+        /* d = w 4096 / 16777215; z' = -(d - lo) k */
+        out[0] = out[1] = 0.0f;
+        out[2] = -depthK * 4096.0f / 16777215.0f;
+        out[3] = depthA * depthK;
+        return;
+    }
+    /* d = (z / w + 1) / 2; z' = -(near + (d - lo) k) w = -k d w + (lo k - near) w,
+     * and depthA depthK = lo k - near: z' = -k/2 z + (depthA depthK - k/2) w */
+    for (j = 0; j < 4; j++) out[j] = -0.5f * depthK * setup->zclip[j];
+    out[2] += depthA * depthK - 0.5f * depthK;
+}
+
 size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batches,
                                    size_t batchCount, size_t first, NitroGx3dGpuVertex *out,
                                    size_t capacity, NitroGx3dBatch *outBatches, size_t maxBatches,
