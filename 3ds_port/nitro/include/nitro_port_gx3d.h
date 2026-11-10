@@ -58,7 +58,7 @@ typedef struct NitroGx3dTriangle {
 
 #define NITRO_GX3D_REGS_AT 0x320u
 #define NITRO_GX3D_REGS_SIZE 0xA0u
-#define NITRO_GX3D_MAX_TAGGED_TRIANGLES 256u
+#define NITRO_GX3D_MAX_TAGGED_TRIANGLES 2048u
 typedef struct NitroGx3dScene {
     uint32_t count, dropped, serial;
     /* W-buffer/Z-buffer mode belongs to the completed frame (SWAP_BUFFERS),
@@ -441,11 +441,22 @@ void NitroPort_Gx3dClearStackError(void);
  * (NitroGx3dTriangle.tag, the in-between scenes' too), and they're drawn
  * in batches of their own (NitroGx3dBatch.tag). Nothing else changes: the
  * same picture. Their triangles are also kept whole, on the screen or
- * beside it (NitroGx3dScene.tagged_triangles). The field's sprites are marked with their Billboard's
+ * beside it (NitroGx3dScene.tagged_triangles), and the game's box tests
+ * made while a mark is set pass what's up to half a view beside the view
+ * (what's drawn there is then kept whole for its shadow). Only with the
+ * sun shadows on (NitroPort_GroundShadowsOn): off, a mark is no mark.
+ * A map prop's mark is NITRO_GX3D_TAG_PROP | (its number << 1). The field's sprites are marked with their Billboard's
  * address, and a character's round shadow with its sprite's | 1 (the
  * game's patch; port_shadow.c pairs them). Not recorded
  * (NitroPort_Gx3dSetRecorder). */
 void NitroPort_Gx3dTag(uint32_t tag);
+/* The marks' kinds: a field sprite's is its Billboard's address (even,
+ * below NITRO_GX3D_TAG_PROP on a 3DS); a character's round shadow's, its
+ * sprite's | 1; a small standing map prop's (a tree, a sign, a lamp post),
+ * NITRO_GX3D_TAG_PROP | (a number << 1). */
+#define NITRO_GX3D_TAG_PROP 0xC0000000u
+#define NITRO_GX3D_TAG_IS_PROP(tag) (((tag)&0xC0000001u)==NITRO_GX3D_TAG_PROP)
+#define NITRO_GX3D_TAG_IS_ROUND(tag) (((tag)&1u) && ((tag)&0xC0000000u)!=NITRO_GX3D_TAG_PROP)
 
 /* PC reference output. Samples from virtual DS texture/palette VRAM banks.
  * Each pixel is RGB555|0x8000 when a 3D polygon covers it, otherwise zero.

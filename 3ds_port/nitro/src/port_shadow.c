@@ -465,7 +465,7 @@ static float card_feet(const NitroGx3dGpuVertex *verts, size_t g, size_t gEnd, c
     return f < 0.0f ? 0.0f : f > 0.9f ? 0.9f : f;
 }
 
-static unsigned sLastSprites, sLastShadows, sLastLaid;
+static unsigned sLastSprites, sLastShadows, sLastLaid, sLastProps, sLastPropsLaid;
 
 void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned *laid)
 {
@@ -473,6 +473,23 @@ void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned 
     if (shadows) *shadows = sLastShadows;
     if (laid) *laid = sLastLaid;
 }
+
+void NitroPort_ShadowPropStats(unsigned *props, unsigned *laid)
+{
+    if (props) *props = sLastProps;
+    if (laid) *laid = sLastPropsLaid;
+}
+
+/* A prop for its shadow: its batches (a run of one mark), its vertices,
+ * where it stands and how tall its picture is. */
+#define GROUND_PROPS 256
+#define PROP_VERTS 1536    /* (512 triangles: more is no small prop) */
+typedef struct {
+    size_t b0, b1;         /* its batches: [b0, b1) */
+    V3 base;
+    float top;
+} Prop;
+static Prop sProps[GROUND_PROPS];
 
 #define GROUND_VERTS 24    /* (a sprite's: two triangles, more when the view's edge cuts them) */
 #define GROUND_ROUNDS 64   /* (round shadows looked at a scene) */
@@ -489,13 +506,17 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
     V3 light = v3(setup->light[0], setup->light[1], setup->light[2]), lh;
     float s, stretch, down, cr, ct;
     const float side = sinf(NITRO_SHADOW_GROUND_SIDE * 3.14159265f / 180.0f);
-    size_t written = 0, nb = 0, bi, rounds[GROUND_ROUNDS], nr = 0, ri;
+    size_t written = 0, nb = 0, bi, rounds[GROUND_ROUNDS], nr = 0, ri, props = 0;
     if (outBatchCount) *outBatchCount = 0;
-    sLastSprites = sLastShadows = sLastLaid = 0;
-    /* the marked batches: the round shadows (each mark once) */
+    sLastSprites = sLastShadows = sLastLaid = sLastProps = sLastPropsLaid = 0;
+    /* the marked batches: the round shadows (each mark once), the props */
     for (bi = 0; bi < batchCount; bi++) {
         uint32_t tag = batches[bi].tag;
         if (!tag || !batches[bi].count) continue;
+        if (NITRO_GX3D_TAG_IS_PROP(tag)) {
+            props++;
+            continue;
+        }
         if (!(tag & 1u)) {
             sLastSprites++;
             continue;
@@ -505,7 +526,7 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
         if (ri == nr && nr < GROUND_ROUNDS) rounds[nr++] = bi;
     }
     sLastShadows = (unsigned)nr;
-    if (!nr) return 0;
+    if (!nr && !props) return 0;
     memcpy(b.m, setup->back, sizeof(b.m));
     /* The ground's two ways: the screen's right (the camera's x on the
      * ground) and down the screen (towards the camera), foreshortened
@@ -664,6 +685,156 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
         }
         sLastLaid++;
     }
+
+    /* The props (trees, signs, lamp posts: NITRO_GX3D_TAG_PROP marks, each
+     * run of one mark a prop): the prop's picture as the camera has it,
+     * laid on the ground from where it stands. Where: the middle of its
+     * lowest vertices (the ground it's on). Each vertex: across by its
+     * place across the screen from there, along the shadows' way by its
+     * height up the screen from there (as a sprite's rows are). */
+    if (props) {
+        const V3 pictureUp = v3(0.0f, 1.0f, 0.0f);
+        size_t np = 0, total = 0, room = capacity > written ? (capacity - written) / NITRO_SHADOW_PROP_TAPS : 0;
+        size_t pi, nb0 = nb, nbTap, done = 0;
+        int t;
+        for (bi = 0; bi < batchCount && np < GROUND_PROPS;) {
+            uint32_t tag = batches[bi].tag;
+            size_t bj = bi + 1, i, g, gEnd, low = 0, drawn = 0;
+            float hMin = 1e30f, hMax = -1e30f, top = -1e30f;
+            V3 base;
+            if (!NITRO_GX3D_TAG_IS_PROP(tag)) {
+                bi++;
+                continue;
+            }
+            while (bj < batchCount && batches[bj].tag == tag &&
+                   batches[bj].first == batches[bj - 1].first + batches[bj - 1].count)
+                bj++;
+            g = batches[bi].first;
+            gEnd = batches[bj - 1].first + batches[bj - 1].count;
+            sLastProps++;
+            for (i = bi; i < bj; i++)
+                if (!batches[i].translucent && batches[i].texture_param) drawn += batches[i].count;
+            if (gEnd - g >= 3 && gEnd - g <= PROP_VERTS && drawn && total + drawn <= room) {
+                for (i = g; i < gEnd; i++) {
+                    float h = dot(back(&b, verts[i].position), up);
+                    if (h < hMin) hMin = h;
+                    if (h > hMax) hMax = h;
+                }
+                {
+                    /* (the middle of their span across and in depth: a
+                     * corner two triangles share isn't counted twice) */
+                    float rLo = 1e30f, rHi = -1e30f, tLo = 1e30f, tHi = -1e30f, hSum = 0.0f;
+                    for (i = g; i < gEnd; i++) {
+                        V3 q = back(&b, verts[i].position);
+                        float h = dot(q, up), cr2 = dot(q, right), ct2 = dot(q, toward);
+                        if (h > hMin + 1.5f) continue;
+                        if (cr2 < rLo) rLo = cr2;
+                        if (cr2 > rHi) rHi = cr2;
+                        if (ct2 < tLo) tLo = ct2;
+                        if (ct2 > tHi) tHi = ct2;
+                        hSum += h;
+                        low++;
+                    }
+                    base = add(add(scale(right, 0.5f * (rLo + rHi)), scale(toward, 0.5f * (tLo + tHi))),
+                               scale(up, hSum / (float)low));
+                }
+                for (i = g; i < gEnd; i++) {
+                    float h = dot(sub(back(&b, verts[i].position), base), pictureUp);
+                    if (h > top) top = h;
+                }
+                /* (standing up, off the ground it's on: a mat or a flower
+                 * bed lying flat casts none) */
+                if (hMax - hMin >= NITRO_SHADOW_PROP_MIN && top > 1.0f && top <= NITRO_SHADOW_GROUND_CARD_MAX) {
+                    sProps[np].b0 = bi;
+                    sProps[np].b1 = bj;
+                    sProps[np].base = base;
+                    sProps[np].top = top;
+                    np++;
+                    total += drawn;
+                }
+            }
+            bi = bj;
+        }
+        /* each tap's vertices together (the taps are drawn one after the
+         * other, each darkening a pixel once: the props' own layers and
+         * each other's overlap); tap t's batches marked t + 1 */
+        for (pi = 0; pi < np && total; pi++) {
+            const Prop *pr = &sProps[pi];
+            float r = NITRO_SHADOW_GROUND_BLUR * pr->top;
+            V3 tapd;
+            r = r < 0.5f ? 0.5f : r > 2.25f ? 2.25f : r;
+            tapd = add(scale(right, r), scale(toward, r / s));
+            for (bi = pr->b0; bi < pr->b1; bi++) {
+                const NitroGx3dBatch *batch = &batches[bi];
+                size_t i;
+                if (batch->translucent || !batch->texture_param) continue;
+                if (nb == nb0 || outBatches[nb - 1].texture_param != batch->texture_param ||
+                    outBatches[nb - 1].palette_base != batch->palette_base ||
+                    outBatches[nb - 1].first + outBatches[nb - 1].count != first + written + done) {
+                    /* (room for this batch in every tap's list) */
+                    if (nb0 + (nb - nb0 + 1) * NITRO_SHADOW_PROP_TAPS > maxBatches) break;
+                    outBatches[nb] = *batch;
+                    outBatches[nb].first = (uint32_t)(first + written + done);
+                    outBatches[nb].count = 0;
+                    outBatches[nb].translucent = 0;
+                    outBatches[nb].tag = 1;
+                    nb++;
+                }
+                for (i = batch->first; i < batch->first + batch->count; i++) {
+                    V3 q = back(&b, verts[i].position), rel = sub(q, pr->base), spot;
+                    float h = dot(rel, pictureUp), j, f;
+                    uint8_t col[3];
+                    int c3;
+                    spot = add(add(pr->base, scale(right, dot(rel, right))), scale(way, h * stretch));
+                    j = h / pr->top;
+                    j = j < 0.0f ? 0.0f : j > 1.0f ? 1.0f : j;
+                    f = 1.0f - (1.0f - NITRO_SHADOW_GROUND_TIP) * j;
+                    for (c3 = 0; c3 < 3; c3++) {
+                        float full = 1.0f - (1.0f - shade[c3]) * NITRO_SHADOW_GROUND_DARK * f;
+                        float each = powf(full > 0.0f ? full : 0.0f, 1.0f / (float)NITRO_SHADOW_PROP_TAPS);
+                        col[c3] = (uint8_t)(each * 255.0f + 0.5f);
+                    }
+                    for (t = 0; t < NITRO_SHADOW_PROP_TAPS; t++) {
+                        NitroGx3dGpuVertex *dst = &out[written + (size_t)t * total + done];
+                        V3 gp = scale(add(spot, scale(tapd, t == 0 ? 0.0f : t == 1 ? 1.0f : -1.0f)),
+                                      1.0f - NITRO_SHADOW_GROUND_PULL);
+                        float xyw[3];
+                        *dst = verts[i];
+                        if (!unback(&b, gp, xyw)) {
+                            xyw[0] = verts[i].position[0];
+                            xyw[1] = verts[i].position[1];
+                            xyw[2] = verts[i].position[3];
+                        }
+                        dst->position[0] = xyw[0];
+                        dst->position[1] = xyw[1];
+                        dst->position[3] = xyw[2];
+                        dst->position[2] = depth[0] * xyw[0] + depth[1] * xyw[1] + depth[2] * xyw[2] + depth[3];
+                        dst->color[0] = col[0];
+                        dst->color[1] = col[1];
+                        dst->color[2] = col[2];
+                        dst->color[3] = 255;
+                    }
+                    done++;
+                }
+                outBatches[nb - 1].count += batch->count;
+            }
+            if (bi < pr->b1) break;   /* (no room for more batches) */
+            sLastPropsLaid++;
+        }
+        /* (a tap's vertices are `total` apart: if the batches ran out, the
+         * vertices not reached are just not drawn) */
+        nbTap = nb - nb0;
+        for (t = 1; t < NITRO_SHADOW_PROP_TAPS && nbTap; t++) {
+            size_t k;
+            for (k = 0; k < nbTap; k++) {
+                outBatches[nb] = outBatches[nb0 + k];
+                outBatches[nb].first += (uint32_t)((size_t)t * total);
+                outBatches[nb].tag = (uint32_t)t + 1u;
+                nb++;
+            }
+        }
+        if (nbTap) written += total * NITRO_SHADOW_PROP_TAPS;
+    }
     if (outBatchCount) *outBatchCount = nb;
     return written;
 }
@@ -820,6 +991,18 @@ void NitroPort_SetSunShadows(int on)
 int NitroPort_SunShadows(void)
 {
     return sSunShadows;
+}
+
+static volatile int sGroundShadows;
+
+void NitroPort_SetGroundShadows(int on)
+{
+    sGroundShadows = on;
+}
+
+int NitroPort_GroundShadowsOn(void)
+{
+    return sGroundShadows;
 }
 
 static volatile int sShadowReach;

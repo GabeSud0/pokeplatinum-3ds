@@ -3595,10 +3595,46 @@ trees, signs and the scenery later.
   framebuffer multiplied by it; depth LEQUAL, not written; no stencil (a
   shadow's copies overlap). The shade is the sun's by the hour (look_now),
   as its way and length are.
+- The props (trees, signs, lamp posts, boards and other small standing
+  things), the second part (2026-11-10). The game marks them as it draws
+  them (patch 0138, map_prop.c: NITRO_GX3D_TAG_PROP | the prop's number
+  << 1), by their model's box: up to 50 wide and 45 deep, 6 or more tall,
+  not flat against a wall; not the dummy box, doors, the Cycling Road's
+  slopes, waterfalls or warp panels (by their models' numbers: the names
+  inside res/field/props/models say what each is; tree01 is four quads
+  leaning back to face the camera, kanban01 one). Houses and buildings
+  aren't marked yet. The mark is set before the prop's box test, which
+  then passes what's up to half a view beside the view (test_command:
+  sTagGame), and the engine keeps all a marked prop's triangles whole
+  (tagged_triangles, room for 2048), so its shadow doesn't go as the prop
+  leaves the screen. The marks are only taken with the sun shadows on
+  (NitroPort_GroundShadowsOn): off, nothing is marked, kept or tested
+  differently.
+  The shadow (NitroPort_ShadowGroundCards, the props' half): each run of
+  one mark's batches is a prop. Where it stands: the middle of its lowest
+  vertices (within 1.5 of the lowest). Its picture as the camera has it is
+  laid on the ground from there, as a sprite's: each vertex across by its
+  place across the screen, along the shadows' way by its height up the
+  screen x the same stretch. (A tree's layers lean back: laid as real
+  slabs their shadows would fold to strips at midday.) Three copies
+  (NITRO_SHADOW_PROP_TAPS), each a cube root of the shade, a little apart
+  on the diagonal; fading to the tip at the top.
+  Drawn (draw_ground_shadows) before the characters', a tap at a time,
+  each tap darkening a pixel once: a stencil bit a tap (the opaque pass
+  left 0xFF; a tap draws where its bit is set and clears it), since a
+  tree's layers overlap and trees each other; where a texel is over half
+  opaque, the tap's shade whole. The characters' shadows then only where
+  the props' first tap didn't darken (in a tree's shade a character casts
+  none), and as before when a scene has no props' shadows. With outlines
+  the stencil holds polygon IDs: no stencil then.
+  Not yet: caves and other roofed places drawn in perspective get them
+  too (as the characters'); the trees that are part of the land's own
+  model (a route's walls of trees) cast none.
 - The log, after 5 seconds and then every 30: the scenes with marked
   round shadows, and in those the marked sprites, the round shadows and
-  the sun shadows laid a scene, the ms a scene laying them, and where the
-  sun is. Tests:
+  the sun shadows laid a scene, the props marked and the props' shadows
+  laid, the scenes where the marked triangles' room was full, the ms a
+  scene laying them, and where the sun is. Tests:
   test_gx3d (the mark on the triangles after it, in batches of their own,
   on the in-between scene's; the whole triangles of one across the view's
   side and one past it, as vertices, and halfway in the in-between scene;
@@ -3609,7 +3645,12 @@ trees, signs and the scenery later.
   width, its way and length for a sun at the side (kept 30 degrees off),
   over the top and in the morning, the pull along the ray, the taps, the
   colours; the picture's feet; none with no room, the sprite fading or
-  gone, or no marks).
+  gone, or no marks; a prop of two layers and the same mark again: each
+  from its own foot, vertex by vertex, the three taps' vertices and
+  batches, the colours, none for one lying flat, see-through or
+  untextured, what doesn't fit left out whole). test_gx3d also: no marks
+  with the sun shadows off; a box test beside the view passing only
+  with a mark set.
 
 The log says `[shadow] test step N: ...` when a step is chosen,
 `[shadow] the first sun shadow map sent to the GPU` and `[shadow] the

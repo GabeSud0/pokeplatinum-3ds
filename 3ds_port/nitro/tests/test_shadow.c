@@ -413,7 +413,7 @@ static int fake_feet(void *ctx, uint32_t param, uint32_t palette, int s0, int s1
 
 /* a card 16 wide and tall long, leaning back to face the camera, its foot
  * at (x, 0, z), the foot at t 32; into v at k */
-static void stand_card(NitroGx3dGpuVertex *v, int at, double x, double z, double tall)
+static void stand_card_y(NitroGx3dGpuVertex *v, int at, double x, double y0, double z, double tall)
 {
     static const int order[6] = { 0, 1, 2, 0, 2, 3 };
     static const float uvs[4][2] = { { 0, 1 }, { 1, 1 }, { 1, 0 }, { 0, 0 } };
@@ -421,7 +421,7 @@ static void stand_card(NitroGx3dGpuVertex *v, int at, double x, double z, double
     int k;
     for (k = 0; k < 4; k++) {
         double u = (k == 1 || k == 2) ? 8.0 : -8.0, along = k >= 2 ? tall : 0.0;
-        corner[k][0] = x + u; corner[k][1] = along * c; corner[k][2] = z - along * sn;
+        corner[k][0] = x + u; corner[k][1] = y0 + along * c; corner[k][2] = z - along * sn;
     }
     for (k = 0; k < 6; k++) {
         project(corner[order[k]][0], corner[order[k]][1], corner[order[k]][2], v[at + k].position, NULL);
@@ -429,6 +429,10 @@ static void stand_card(NitroGx3dGpuVertex *v, int at, double x, double z, double
         v[at + k].uv[0] = uvs[order[k]][0];
         v[at + k].uv[1] = uvs[order[k]][1];
     }
+}
+static void stand_card(NitroGx3dGpuVertex *v, int at, double x, double z, double tall)
+{
+    stand_card_y(v, at, x, 0.0, z, tall);
 }
 /* a quad lying on the ground (y), hw by hd about (x, z), into v at k */
 static void lay_quad(NitroGx3dGpuVertex *v, int at, double x, double y, double z, double hw, double hd)
@@ -715,9 +719,152 @@ static void test_ground_cards(void)
     CHECK(sprites == 2 && shadows == 0 && laid == 0);
 }
 
+/* The props' sun shadows: each run of one prop mark's batches a prop; its
+ * picture as the camera has it laid on the ground from the middle of its
+ * lowest vertices; the taps' vertices each together, their batches marked
+ * with the tap; none for one lying flat; what doesn't fit left out whole. */
+static void test_ground_props(void)
+{
+    static NitroGx3dGpuVertex v[700], out[256];
+    NitroGx3dBatch batches[8], outBatches[12];
+    NitroShadowSetup s;
+    NitroShadowSun sun = { 40.0f, 0.0f };
+    const float shade[3] = { 0.58f, 0.60f, 0.70f };
+    const int T = NITRO_SHADOW_PROP_TAPS;
+    const double keep = 1.0 - NITRO_SHADOW_GROUND_PULL;
+    const uint32_t TREE = NITRO_GX3D_TAG_PROP | (3u << 1), MAT = NITRO_GX3D_TAG_PROP | (4u << 1);
+    size_t nb = 0, w, i;
+    int n, ground, tree, mat, tree2, k, t;
+    unsigned props = 9, laid = 9;
+    double right[3], toward[3], way[3], base[3], nn = 0.0, stretch, side = NITRO_SHADOW_GROUND_SIDE * 3.14159265 / 180.0;
+    build(1, 0);
+    ground = 8 * 6 * 6;
+    for (i = 0; i < (size_t)ground; i++) {
+        memcpy(v[i].position, sV[i].pos, sizeof(v[i].position));
+        v[i].color[3] = 255;
+    }
+    tree = ground;
+    stand_card_y(v, tree, -40.0, 0.0, 0.0, 16.0);          /* (a tree: its trunk's layer) */
+    stand_card_y(v, tree + 6, -40.0, 10.0, 0.0, 16.0);     /* (and one above it) */
+    mat = tree + 12;
+    lay_quad(v, mat, 0.0, 0.1, 0.0, 8.0, 8.0);             /* (a mat lying flat) */
+    tree2 = mat + 6;
+    stand_card(v, tree2, 40.0, 0.0, 16.0);                 /* (the first mark again: another prop) */
+    n = tree2 + 6;
+    memset(batches, 0, sizeof(batches));
+    batches[0].count = (uint32_t)ground;
+    batches[1].first = (uint32_t)tree;
+    batches[1].count = 12;
+    batches[1].texture_param = SPRITE_PARAM;
+    batches[1].tag = TREE;
+    batches[2].first = (uint32_t)mat;
+    batches[2].count = 6;
+    batches[2].texture_param = SPRITE_PARAM;
+    batches[2].tag = MAT;
+    batches[3].first = (uint32_t)tree2;
+    batches[3].count = 6;
+    batches[3].texture_param = SPRITE_PARAM;
+    batches[3].tag = TREE;
+    CHECK(NITRO_GX3D_TAG_IS_PROP(TREE) && !NITRO_GX3D_TAG_IS_ROUND(TREE) && NITRO_GX3D_TAG_IS_ROUND(0x2001u) &&
+          !NITRO_GX3D_TAG_IS_PROP(0x2000u));
+    CHECK(NitroPort_ShadowSetup(v[0].position, sizeof(v[0]), (size_t)ground, sProj, WIDTH, 192, &sun, 512, &s));
+    w = NitroPort_ShadowGroundCards(v, batches, 4, (size_t)n, out, 256, outBatches, 12, &nb, &s, s.zclip, NULL, shade,
+                                    NULL, NULL);
+    /* the two trees' 18 vertices, three times; a batch a tap (one texture) */
+    CHECK(w == (size_t)(18 * T) && nb == (size_t)T);
+    for (t = 0; t < T && (size_t)t < nb; t++) {
+        CHECK(outBatches[t].tag == (uint32_t)t + 1u && outBatches[t].first == (uint32_t)(n + 18 * t) &&
+              outBatches[t].count == 18 && outBatches[t].texture_param == SPRITE_PARAM && !outBatches[t].translucent);
+    }
+    NitroPort_ShadowPropStats(&props, &laid);
+    CHECK(props == 3 && laid == 2);
+    /* the ground's ways and the shadows' (this sun at the side: kept off
+     * the sprite's line), as NitroPort_ShadowGroundCards has them */
+    right[0] = 1.0 - s.up[0] * s.up[0]; right[1] = -s.up[1] * s.up[0]; right[2] = -s.up[2] * s.up[0];
+    for (k = 0; k < 3; k++) nn += right[k] * right[k];
+    for (k = 0; k < 3; k++) right[k] /= sqrt(nn);
+    toward[0] = right[1] * s.up[2] - right[2] * s.up[1];
+    toward[1] = right[2] * s.up[0] - right[0] * s.up[2];
+    toward[2] = right[0] * s.up[1] - right[1] * s.up[0];
+    for (k = 0; k < 3; k++) way[k] = right[k] * cos(side) + toward[k] * sin(side);
+    stretch = NITRO_SHADOW_GROUND_LENGTH / tan(40.0 * 3.14159265 / 180.0);
+    /* where the tree stands: the middle of its trunk's foot */
+    {
+        double a[3], b2[3];
+        back_of(&s, v[tree].position, a);
+        back_of(&s, v[tree + 1].position, b2);
+        for (k = 0; k < 3; k++) base[k] = (a[k] + b2[k]) * 0.5;
+    }
+    /* each of its vertices (the first tap): across by its place across the
+     * screen, along the way by its height up the screen x the stretch */
+    for (i = 0; i < 12; i++) {
+        double q[3], o[3], u = 0.0, h;
+        back_of(&s, v[tree + i].position, q);
+        back_of(&s, out[i].position, o);
+        for (k = 0; k < 3; k++) u += (q[k] - base[k]) * right[k];
+        h = q[1] - base[1];
+        for (k = 0; k < 3; k++) CHECK(NEAR(o[k] / keep, base[k] + right[k] * u + way[k] * h * stretch, 0.05));
+        CHECK(NEAR(out[i].position[2], s.zclip[0] * out[i].position[0] + s.zclip[1] * out[i].position[1] +
+                                           s.zclip[2] * out[i].position[3] + s.zclip[3], 1e-3));
+        CHECK(out[i].uv[0] == v[tree + i].uv[0] && out[i].uv[1] == v[tree + i].uv[1]);
+    }
+    /* its foot stays where it is; the layer above starts along the way */
+    {
+        double q[3], o[3], d = 0.0;
+        back_of(&s, v[tree].position, q);
+        back_of(&s, out[0].position, o);
+        for (k = 0; k < 3; k++) CHECK(NEAR(o[k] / keep, q[k], 0.05));
+        back_of(&s, v[tree + 6].position, q);
+        back_of(&s, out[6].position, o);
+        for (k = 0; k < 3; k++) d += (o[k] / keep - q[k]) * (o[k] / keep - q[k]);
+        CHECK(sqrt(d) > 3.0);
+    }
+    /* the other taps: the same vertex either side, a little apart, on the
+     * same ground */
+    for (t = 1; t < T; t++) {
+        double a[3], b2[3], d = 0.0;
+        back_of(&s, out[0].position, a);
+        back_of(&s, out[18 * t].position, b2);
+        for (k = 0; k < 3; k++) d += (a[k] - b2[k]) * (a[k] - b2[k]) / (keep * keep);
+        CHECK(sqrt(d) > 0.6 && sqrt(d) < 2.25 * 3.2);
+        CHECK(NEAR(dot3(a, s.up), dot3(b2, s.up), 0.05));
+    }
+    /* the second tree: from its own foot (its vertices after the first's) */
+    {
+        double q[3], o[3];
+        back_of(&s, v[tree2].position, q);
+        back_of(&s, out[12].position, o);
+        for (k = 0; k < 3; k++) CHECK(NEAR(o[k] / keep, q[k], 0.05));
+    }
+    /* the colours: each tap the TAPS-th root of the shade (DARK times as
+     * dark) at the foot, of TIP of it at the top (the upper layer's top) */
+    for (k = 0; k < 3; k++) {
+        double dark = (1.0 - shade[k]) * NITRO_SHADOW_GROUND_DARK;
+        CHECK(NEAR(out[0].color[k], pow(1.0 - dark, 1.0 / T) * 255.0, 1.0));
+        CHECK(NEAR(out[6 + 2].color[k], pow(1.0 - dark * NITRO_SHADOW_GROUND_TIP, 1.0 / T) * 255.0, 1.0));
+        CHECK(out[18 * (T - 1)].color[k] == out[0].color[k]);
+    }
+    /* room for one tree's three copies but not both: the first alone */
+    w = NitroPort_ShadowGroundCards(v, batches, 4, (size_t)n, out, 18 * T - 1, outBatches, 12, &nb, &s, s.zclip, NULL,
+                                    shade, NULL, NULL);
+    CHECK(w == (size_t)(12 * T) && nb == (size_t)T && outBatches[0].count == 12 &&
+          outBatches[1].first == (uint32_t)(n + 12));
+    /* batches for one tap only: none (a tap alone isn't the shade) */
+    w = NitroPort_ShadowGroundCards(v, batches, 4, (size_t)n, out, 256, outBatches, T - 1, &nb, &s, s.zclip, NULL, shade,
+                                    NULL, NULL);
+    CHECK(w == 0 && nb == 0);
+    /* a see-through or untextured prop: none */
+    batches[1].translucent = 1;
+    batches[3].texture_param = 0;
+    w = NitroPort_ShadowGroundCards(v, batches, 4, (size_t)n, out, 256, outBatches, 12, &nb, &s, s.zclip, NULL, shade,
+                                    NULL, NULL);
+    CHECK(w == 0 && nb == 0);
+}
+
 int main(void)
 {
     test_ground_cards();
+    test_ground_props();
     test_cards_decals();
     test_roles_reach();
     test_day();

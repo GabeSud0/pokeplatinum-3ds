@@ -181,6 +181,28 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
  * round shadows (marks), and the sun shadows laid. For the log. */
 void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned *laid);
 
+/* The props' sun shadows (trees, signs, lamp posts), in the same call:
+ * each run of batches with one NITRO_GX3D_TAG_PROP mark is a prop (the
+ * game marks the small standing ones). Its shadow is its picture as the
+ * camera has it, laid on the ground as a sprite's: from the middle of its
+ * lowest vertices (within 1.5 of the lowest: where it stands), each vertex
+ * across by its place across the screen from there and along the shadows'
+ * way by its height up the screen from there, times the same stretch;
+ * fading to the tip at its top. Its opaque, textured batches only; none
+ * for a prop standing under NITRO_SHADOW_PROP_MIN above its ground (lying
+ * flat) or with more than 512 triangles.
+ *
+ * Soft another way: NITRO_SHADOW_PROP_TAPS copies, each a TAPS-th root of
+ * the shade, but each tap's vertices of all the props together, in
+ * batches of their own after the characters', their tag the tap's number
+ * + 1 (the characters' batches' tag is 0): the renderer draws a tap's
+ * batches darkening each pixel once (a tree's layers overlap, and trees
+ * each other), so where all the taps meet it's the shade, however many
+ * layers. The last call's props and how many got a shadow: */
+#define NITRO_SHADOW_PROP_TAPS 3
+#define NITRO_SHADOW_PROP_MIN 5.0f
+void NitroPort_ShadowPropStats(unsigned *props, unsigned *laid);
+
 #define NITRO_SHADOW_GROUND_CARD_MAX 96.0f   /* (6 tiles: past it, not a sprite) */
 typedef int (*NitroShadowFootRow)(void *ctx, uint32_t textureParam, uint32_t paletteBase, int s0, int s1,
                                   int tFrom, int tTo);
@@ -249,6 +271,12 @@ int NitroPort_SunShadows(void);
  * with the sprites' shadows alone: they need nothing off the screen. */
 void NitroPort_SetShadowReach(int on);
 int NitroPort_ShadowReachOn(void);
+/* Whether the sun shadows (SUN SHADOWS: ON) are being drawn: the game's
+ * marks on its polygons are only taken then (NitroPort_Gx3dTag: with them
+ * off nothing is marked, kept or tested any differently). Set by the
+ * renderer; read on the game's thread. */
+void NitroPort_SetGroundShadows(int on);
+int NitroPort_GroundShadowsOn(void);
 
 #ifdef __cplusplus
 }

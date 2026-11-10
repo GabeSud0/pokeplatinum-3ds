@@ -425,6 +425,7 @@ static void test_tags(void)
     size_t nb=0,n,i;
     unsigned dropped=0,matched=0,polygons=0;
     reset_geometry();
+    NitroPort_SetGroundShadows(1);
     NitroPort_Gx3dSetInterpolation(1);
     swap_done();
     tagged_quads(0);
@@ -466,6 +467,54 @@ static void test_tags(void)
         }
     }
     NitroPort_Gx3dSetInterpolation(0);
+    NitroPort_SetGroundShadows(0);
+}
+/* The marks only with the sun shadows on (NitroPort_SetGroundShadows): off,
+ * nothing is marked or kept. With a mark set, the game's box tests pass
+ * what's up to half a view beside the view (drawn there for its shadow);
+ * not further, and not without a mark. */
+static void box_at(int x)
+{
+    NitroPort_GxDirectWrite(0x70,word2((int16_t)x,0));
+    NitroPort_GxDirectWrite(0x70,word2(0,ONE/4));
+    NitroPort_GxDirectWrite(0x70,word2(ONE/4,ONE/4));
+    NitroPort_Gx3dRefreshStatus();
+}
+static void test_tag_rules(void)
+{
+    const uint32_t opaque=(3u<<6)|(31u<<16);
+    const NitroGx3dScene *scene;
+    reset_geometry();
+    NitroPort_Gx3dTag(0x3000u);
+    box_at(ONE+ONE/2);
+    CHECK((read32(0x600)&2)==0);
+    quad_at(-1000,opaque);
+    NitroPort_Gx3dTag(0);
+    swap_done();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene && scene->count==2 && scene->tagged_count==0);
+    if(scene && scene->count==2)CHECK(scene->triangles[0].tag==0 && scene->triangles[1].tag==0);
+    NitroPort_SetGroundShadows(1);
+    box_at(ONE+ONE/2);
+    CHECK((read32(0x600)&2)==0);                 /* (no mark: as ever) */
+    NitroPort_Gx3dTag(NITRO_GX3D_TAG_PROP|2u);
+    box_at(ONE+ONE/2);
+    CHECK((read32(0x600)&2)!=0);                 /* (beside the view, in reach) */
+    box_at(3*ONE);
+    CHECK((read32(0x600)&2)==0);                 /* (too far) */
+    box_at(0);
+    CHECK((read32(0x600)&2)!=0);
+    quad_at(-1000,opaque);
+    NitroPort_Gx3dTag(0);
+    box_at(ONE+ONE/2);
+    CHECK((read32(0x600)&2)==0);
+    swap_done();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene && scene->count==2 && scene->tagged_count==2);
+    if(scene && scene->count==2)CHECK(scene->triangles[0].tag==(NITRO_GX3D_TAG_PROP|2u));
+    CHECK(NITRO_GX3D_TAG_IS_PROP(NITRO_GX3D_TAG_PROP|2u) && !NITRO_GX3D_TAG_IS_ROUND(NITRO_GX3D_TAG_PROP|2u));
+    CHECK(NITRO_GX3D_TAG_IS_ROUND(0x1001u) && !NITRO_GX3D_TAG_IS_PROP(0x1001u) && !NITRO_GX3D_TAG_IS_PROP(0x1000u));
+    NitroPort_SetGroundShadows(0);
 }
 /* The marked polygons' triangles kept whole (NitroGx3dScene.
  * tagged_triangles): one across the view's side not clipped there, one
@@ -496,6 +545,7 @@ static void test_tagged_whole(void)
     int32_t x0=0,x1=0;
     unsigned k;
     reset_geometry();
+    NitroPort_SetGroundShadows(1);
     NitroPort_Gx3dSetInterpolation(1);
     swap_done();
     whole_quads(0);
@@ -555,6 +605,7 @@ static void test_tagged_whole(void)
         CHECK(scene && scene->tagged_count==0);
     }
     NitroPort_Gx3dSetInterpolation(0);
+    NitroPort_SetGroundShadows(0);
 }
 /* A quad 2000 wide, its left side at x (attr: POLYGON_ATTR). */
 static void quad_at(int x,uint32_t attr)
@@ -2743,6 +2794,7 @@ static void run_all(void)
     test_culling();
     test_shadow_triangles();
     test_tags();
+    test_tag_rules();
     test_tagged_whole();
     test_sprite_texel_a_pixel();
     test_soft_sprites();

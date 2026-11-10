@@ -80,6 +80,10 @@ typedef struct GeoState {
  * box/position/vector tests) depends on nothing else, so the game never
  * waits for the vertices. sResults is the one the registers come from. */
 static GeoState s, sShadow;
+/* The mark the game has set now (NitroPort_Gx3dTag), on its own thread:
+ * what it's about to draw is for the sun shadows too, so its box tests
+ * pass a little beside the view (test_command). */
+static uint32_t sTagGame;
 static GeoState *sResults = &s;
 static int sThreaded;
 
@@ -1757,7 +1761,7 @@ static int32_t static_halfway(int32_t v,int32_t mo,int sign)
 static uint64_t sMidMatchTicks;
 /* The marked polygons' whole triangles (NitroGx3dScene.tagged_triangles)
  * of the scene before, and an in-between scene's: each of the new scene's
- * halfway from the one of the same mark and place among its mark's in the
+ * halfway from the one of the same mark's run and place in it in the
  * scene before (as replay_blended: on the screen where the halfway point
  * of clip space is, weighed by w); one with none before, or that moved
  * more than a quarter of the screen, where the new scene has it. */
@@ -1770,20 +1774,34 @@ static void tagged_keep(const NitroGx3dScene *now)
 }
 static void tagged_halfway(const NitroGx3dScene *now,NitroGx3dScene *mid)
 {
-    uint32_t i,j;
+    /* A mark's triangles come in a run, the runs in the same order from
+     * one scene to the next (the game draws the same things in the same
+     * order): each run's pair is looked for from where the last one's
+     * ended, round once. */
+    uint32_t i,j,hint=0,run=0,runBefore=0,lenBefore=0,tag=0;
+    int have=0;
     mid->tagged_count=now->tagged_count;
     for(i=0;i<now->tagged_count;i++){
         const NitroGx3dTriangle *c=&now->tagged_triangles[i],*p=NULL;
         NitroGx3dTriangle *out=&mid->tagged_triangles[i];
-        uint32_t nth=0,seen=0;
         unsigned k;
         int jumped=0;
         *out=*c;
-        for(j=0;j<i;j++)nth+=now->tagged_triangles[j].tag==c->tag;
-        for(j=0;j<sTaggedBeforeCount && !p;j++){
-            if(sTaggedBefore[j].tag!=c->tag)continue;
-            if(seen++==nth)p=&sTaggedBefore[j];
+        if(!i || c->tag!=tag){
+            uint32_t n;
+            tag=c->tag;run=i;have=0;lenBefore=0;
+            for(n=0;n<sTaggedBeforeCount;n++){
+                j=hint+n;
+                if(j>=sTaggedBeforeCount)j-=sTaggedBeforeCount;
+                if(sTaggedBefore[j].tag==tag && (!j || sTaggedBefore[j-1].tag!=tag)){have=1;runBefore=j;break;}
+            }
+            if(have){
+                for(j=runBefore;j<sTaggedBeforeCount && sTaggedBefore[j].tag==tag;j++)lenBefore++;
+                hint=runBefore+lenBefore;
+                if(hint>=sTaggedBeforeCount)hint=0;
+            }
         }
+        if(have && i-run<lenBefore)p=&sTaggedBefore[runBefore+(i-run)];
         if(!p)continue;
         for(k=0;k<3;k++){
             int64_t dx=(int64_t)c->v[k].x-p->v[k].x,dy=(int64_t)c->v[k].y-p->v[k].y;
@@ -2230,7 +2248,7 @@ static void test_command(GeoState *g,unsigned op,const uint32_t *p)
                 all&=outcode(clip);
             }
         }
-        if(all && !(all&0x30u) && NitroPort_ShadowReachOn()){
+        if(all && !(all&0x30u) && (NitroPort_ShadowReachOn() || sTagGame)){
             /* Outside only the view's sides: in reach of the shadows? The
              * box's corners against x and y of BOX_GUARD w instead. */
             int64_t base[4],edge[3][4];
@@ -3281,6 +3299,10 @@ void NitroPort_Gx3dSetWideView(int screenWidth)
 void NitroPort_Gx3dTag(uint32_t tag)
 {
     initialize();
+    /* (only with the sun shadows on: off, nothing is ever marked) */
+    if(!NitroPort_GroundShadowsOn())tag=0;
+    if(tag==sTagGame)return;
+    sTagGame=tag;
     if(sThreaded)enqueue(OP_TAG,&tag,1,0);
     else s.tag=tag;
 }
@@ -3304,6 +3326,7 @@ void NitroPort_Gx3dReset(void)
 {
     RECORD(7,NULL,0);
     drain();
+    sTagGame=0;
     memset(&s,0,sizeof(s));memset(sScenes,0,sizeof(sScenes));
     shadow_store_attach();
     memset(&sDec,0,sizeof(sDec));
