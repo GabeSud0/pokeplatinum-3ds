@@ -342,20 +342,17 @@ static NitroShadowSetup sShadow;
 static int shadow_level(void);   /* (the hunt's step: sun shadows, below) */
 static u64 sDecalTicks;          /* (looking for the painted shadows, for the log) */
 /* The sun shadows (SUN SHADOWS: ON, NitroPort_PicaGroundShadows): each
- * character standing on the game's round shadow (sMarkers: found among the
- * painted shadows, find_decals) laid on the ground from it
+ * character's sprite (the game's mark on its batch, NitroGx3dBatch.tag)
+ * laid on the ground from the round shadow marked as its own
  * (NitroPort_ShadowGroundCards), after the scene's vertices, its batches at
  * sBatches[MAX_BATCHES]; drawn after the opaque polygons, darkening by the
- * card's texture's alpha, softly (NITRO_SHADOW_GROUND_TAPS copies). Its
- * round shadow then left out. No shadow map. */
+ * sprite's texture's alpha, softly (NITRO_SHADOW_GROUND_TAPS copies). Its
+ * round shadow then left out (sRoundUsed). No shadow map. */
 static int sGroundMode,sGroundReady;
 static size_t sGroundBatchCount,sGroundVertices;
 static u64 sGroundTicks;
-static unsigned sGroundScenes,sGroundCards,sGroundFound,sGroundLooked,sGroundNearScenes;
-static double sGroundNear;
-#define GROUND_MARKERS 64
-static NitroShadowMarker sMarkers[GROUND_MARKERS];
-static uint8_t sMarkerUsed[GROUND_MARKERS];
+static unsigned sGroundScenes,sGroundCards,sGroundFound,sGroundSprites,sGroundMarked;
+static uint8_t sRoundUsed[MAX_BATCHES];
 static unsigned sDecalDecoded;
 static int sShadowReady,sShadowDrawn;        /* (the prepared scene has a ground; its map is drawn) */
 static C3D_Tex *sRecvTex;                    /* (unit 1's texture, as bound) */
@@ -1834,56 +1831,50 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
         else memset(sDecal,0,sizeof(sDecal));
     }
     /* The sun shadows (SUN SHADOWS: ON; not with the shadow map: it has its
-     * own): the characters', each from the game's round shadow under it */
+     * own): the characters', each sprite the game marked (NitroPort_Gx3dTag)
+     * from the round shadow marked as its own */
     sGroundReady=0;
     sGroundBatchCount=0;
     if(sGroundMode && !sShadowMode && sPreparedCount && sShadowRoom){
         u64 g0=svcGetSystemTick();
-        unsigned found=0,laid=0;
-        if(look_now() &&
+        size_t b,marked=0;
+        /* (most scenes of a menu or a building have no marks at all) */
+        for(b=0;b<sPreparedBatches && !marked;b++)marked=sBatches[b].tag&1u;
+        if(marked && look_now() &&
            NitroPort_ShadowSetup(sVertices[slot][0].position,sizeof(NitroGx3dGpuVertex),sPreparedCount,
                                  scene->projection,scene->screen_width,scene->screen_height,&sSun,SHADOW_SIZE,
                                  &sShadow)){
             /* a new vertex's z as the scene's have theirs: the DS's depth
              * through normalize_depth (NitroPort_ShadowDepthRow) */
             float depth[4],shade[3];
-            size_t nb=0,n=0,nm=0,m;
+            size_t nb=0,n;
             NitroPort_ShadowDepthRow(&sShadow,(scene->swap_param&2u)!=0,sDepthA,sDepthK,depth);
-            if(find_decals(slot))
-                nm=NitroPort_ShadowMarkers(sVertices[slot],sBatches,sPreparedBatches,sDecal,&sShadow,sMarkers,
-                                           GROUND_MARKERS);
-            found=(unsigned)nm;
-            if(nm){
-                /* (the shade as the time of day has it: look_now) */
-                shade[0]=(float)(sShadowColor&255u)/255.0f;
-                shade[1]=(float)((sShadowColor>>8)&255u)/255.0f;
-                shade[2]=(float)((sShadowColor>>16)&255u)/255.0f;
-                memset(sMarkerUsed,0,nm);
-                sFootRowsKept=0;
-                n=NitroPort_ShadowGroundCards(sVertices[slot],sBatches,sPreparedBatches,sPreparedCount,
-                                              sVertices[slot]+sPreparedCount,sShadowRoom,sBatches+MAX_BATCHES,
-                                              SHADOW_BATCHES,&nb,&sShadow,depth,sMarkers,nm,sMarkerUsed,shade,
-                                              foot_row,NULL);
-                {
-                    unsigned cards;
-                    float nearest;
-                    NitroPort_ShadowGroundStats(&cards,&nearest);
-                    sGroundLooked+=cards;
-                    if(nearest>=0.0f){sGroundNear+=nearest;sGroundNearScenes++;}
-                }
+            /* (the shade as the time of day has it: look_now) */
+            shade[0]=(float)(sShadowColor&255u)/255.0f;
+            shade[1]=(float)((sShadowColor>>8)&255u)/255.0f;
+            shade[2]=(float)((sShadowColor>>16)&255u)/255.0f;
+            memset(sRoundUsed,0,sPreparedBatches);
+            NitroPort_Gx3dMapTextureBanks(&sBanks);
+            sFootRowsKept=0;
+            n=NitroPort_ShadowGroundCards(sVertices[slot],sBatches,sPreparedBatches,sPreparedCount,
+                                          sVertices[slot]+sPreparedCount,sShadowRoom,sBatches+MAX_BATCHES,
+                                          SHADOW_BATCHES,&nb,&sShadow,depth,sRoundUsed,shade,foot_row,NULL);
+            {
+                unsigned sprites,rounds,laid;
+                NitroPort_ShadowGroundStats(&sprites,&rounds,&laid);
+                sGroundSprites+=sprites;sGroundFound+=rounds;sGroundCards+=laid;
             }
             if(n && nb){
                 GSPGPU_FlushDataCache(sVertices[slot]+sPreparedCount,(u32)(n*sizeof(NitroGx3dGpuVertex)));
                 /* the round shadows under them left out: their triangles
                  * to a point (the others drawn as ever: someone with no
                  * sun shadow keeps the round one) */
-                for(m=0;m<nm;m++){
-                    NitroGx3dGpuVertex *rv=sVertices[slot]+sMarkers[m].first;
+                for(b=0;b<sPreparedBatches;b++){
+                    NitroGx3dGpuVertex *rv=sVertices[slot]+sBatches[b].first;
                     uint32_t j;
-                    if(!sMarkerUsed[m])continue;
-                    for(j=1;j<sMarkers[m].count;j++)memcpy(rv[j].position,rv[0].position,sizeof(rv[0].position));
-                    GSPGPU_FlushDataCache(rv,(u32)(sMarkers[m].count*sizeof(NitroGx3dGpuVertex)));
-                    laid++;
+                    if(!sRoundUsed[b])continue;
+                    for(j=1;j<sBatches[b].count;j++)memcpy(rv[j].position,rv[0].position,sizeof(rv[0].position));
+                    GSPGPU_FlushDataCache(rv,(u32)(sBatches[b].count*sizeof(NitroGx3dGpuVertex)));
                 }
                 sGroundBatchCount=nb;
                 sGroundVertices=n;
@@ -1891,15 +1882,17 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
             }
         }
         sGroundTicks+=svcGetSystemTick()-g0;
-        sGroundFound+=found;
-        sGroundCards+=laid;
-        if(++sGroundScenes==300){
-            NitroPort_Log("[shadow] 300 scenes with the sun shadows: %.1f round shadows found a scene, %.1f cards "
-                          "facing the camera, %.1f characters given a sun shadow (a card's foot %.1f units from the "
-                          "nearest round shadow, on average), %.2f ms a scene laying them",sGroundFound/300.0,
-                          sGroundLooked/300.0,sGroundCards/300.0,
-                          sGroundNearScenes?sGroundNear/sGroundNearScenes:-1.0,
-                          (double)sGroundTicks*1000.0/SYSCLOCK_ARM11/300.0);
+        sGroundMarked+=marked!=0;
+        /* (after 5 seconds, then every 30) */
+        if(++sGroundScenes==300 || sGroundScenes==2100){
+            double per=sGroundMarked?1.0/sGroundMarked:0.0;
+            NitroPort_Log("[shadow] %u scenes with the sun shadows, %u of them with round shadows marked: in those, "
+                          "%.1f marked sprites a scene, %.1f round shadows, %.1f sun shadows laid; %.2f ms a scene "
+                          "laying them",sGroundScenes==300?300u:1800u,sGroundMarked,sGroundSprites*per,
+                          sGroundFound*per,sGroundCards*per,
+                          (double)sGroundTicks*1000.0/SYSCLOCK_ARM11/(sGroundScenes==300?300.0:1800.0));
+            if(sGroundScenes==2100)sGroundScenes=300;
+            sGroundTicks=0;sGroundCards=0;sGroundFound=0;sGroundSprites=0;sGroundMarked=0;
         }
     }
     setup_fog();
@@ -2510,7 +2503,7 @@ void NitroPort_PicaGroundShadows(int on)
     if(on!=sGroundMode){
         NitroPort_Log("[shadow] the sun shadows %s",on?"on":"off");
         sGroundScenes=0;sGroundTicks=0;sGroundCards=0;sGroundFound=0;
-        sGroundLooked=0;sGroundNearScenes=0;sGroundNear=0.0;
+        sGroundSprites=0;sGroundMarked=0;
     }
     sGroundMode=on;
     sGroundReady=0;

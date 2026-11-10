@@ -41,6 +41,7 @@ typedef struct NitroGx3dBatch {
     uint32_t texture_param;       /* 0 when untextured */
     uint32_t palette_base;        /* 0 when untextured or direct colour */
     uint32_t polygon_attr;        /* mode (bits 4-5), depth bits 11/14, fog (15), alpha, ID (24-29) */
+    uint32_t tag;                 /* the game's mark on its triangles (NitroPort_Gx3dTag), 0 none */
     uint8_t translucent;
 } NitroGx3dBatch;
 

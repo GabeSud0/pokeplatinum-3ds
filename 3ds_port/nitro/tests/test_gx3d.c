@@ -400,6 +400,70 @@ static void flat_triangle(int x0,int x1,int y0,int y1)
     vertex((x0+x1)/2,y1,0);
     NitroPort_GxDirectWrite(0x41,0);
 }
+/* NitroPort_Gx3dTag: the game's mark on the polygons after it, in the
+ * stream's order (0: none again): on each of their triangles, in batches
+ * of their own, and on the in-between scene's. Nothing else changes. */
+static void quad_at(int x,uint32_t attr);
+static void swap_done(void);
+static void tagged_quads(int dx)
+{
+    const uint32_t opaque=(3u<<6)|(31u<<16);
+    quad_at(-4000+dx,opaque);
+    NitroPort_Gx3dTag(0x1000u);
+    quad_at(-1500+dx,opaque);
+    NitroPort_Gx3dTag(0x1001u);
+    quad_at(1000+dx,opaque);
+    NitroPort_Gx3dTag(0);
+    swap_done();
+}
+static void test_tags(void)
+{
+    static NitroGx3dGpuVertex verts[64];
+    static const uint32_t want[6]={0,0,0x1000u,0x1000u,0x1001u,0x1001u};
+    NitroGx3dBatch batches[8];
+    const NitroGx3dScene *scene,*mid;
+    size_t nb=0,n,i;
+    unsigned dropped=0,matched=0,polygons=0;
+    reset_geometry();
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    tagged_quads(0);
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene && scene->count==6);
+    if(scene && scene->count==6){
+        for(i=0;i<6;i++)CHECK(scene->triangles[i].tag==want[i]);
+        n=NitroPort_Gx3dBuildBatches(scene,verts,64,batches,8,&nb,&dropped);
+        CHECK(n==18 && nb==3 && !dropped);
+        if(nb==3){
+            CHECK(batches[0].tag==0 && batches[0].first==0 && batches[0].count==6);
+            CHECK(batches[1].tag==0x1000u && batches[1].first==6 && batches[1].count==6);
+            CHECK(batches[2].tag==0x1001u && batches[2].first==12 && batches[2].count==6);
+        }
+    }
+    /* the in-between scene's polygons: halfway, with their marks */
+    tagged_quads(200);
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && matched==3 && polygons==3 && mid->count==6);
+    if(mid && mid->count==6){
+        for(i=0;i<6;i++)CHECK(mid->triangles[i].tag==want[i]);
+        CHECK(mid->triangles[2].v[0].clip[0]==-1400);
+    }
+    /* unmarked from here: one batch again */
+    {
+        const uint32_t opaque=(3u<<6)|(31u<<16);
+        quad_at(-4000,opaque);
+        quad_at(-1500,opaque);
+        swap_done();
+        scene=NitroPort_Gx3dScene();
+        CHECK(scene && scene->count==4);
+        if(scene && scene->count==4){
+            for(i=0;i<4;i++)CHECK(scene->triangles[i].tag==0);
+            NitroPort_Gx3dBuildBatches(scene,verts,64,batches,8,&nb,&dropped);
+            CHECK(nb==1 && batches[0].tag==0);
+        }
+    }
+    NitroPort_Gx3dSetInterpolation(0);
+}
 /* A quad 2000 wide, its left side at x (attr: POLYGON_ATTR). */
 static void quad_at(int x,uint32_t attr)
 {
@@ -2586,6 +2650,7 @@ static void run_all(void)
     test_triangles_and_depth();
     test_culling();
     test_shadow_triangles();
+    test_tags();
     test_sprite_texel_a_pixel();
     test_soft_sprites();
     test_interpolation();

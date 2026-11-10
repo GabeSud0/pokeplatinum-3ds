@@ -409,7 +409,7 @@ size_t NitroPort_Gx3dBuildBatchesDepths(const NitroGx3dScene *scene,
         attr|=tri->polygon_attr&(63u<<24);
         batch=nb?&batches[nb-1]:NULL;
         if(!batch || batch->texture_param!=param || batch->palette_base!=palette ||
-           batch->polygon_attr!=attr || batch->translucent!=pass){
+           batch->polygon_attr!=attr || batch->translucent!=pass || batch->tag!=tri->tag){
             if(nb>=max_batches){lost++;continue;}
             batch=&batches[nb++];
             batch->first=(uint32_t)count;
@@ -417,6 +417,7 @@ size_t NitroPort_Gx3dBuildBatchesDepths(const NitroGx3dScene *scene,
             batch->texture_param=param;
             batch->palette_base=palette;
             batch->polygon_attr=attr;
+            batch->tag=tri->tag;
             batch->translucent=(uint8_t)pass;
         }
         if(count+3>capacity){lost++;continue;}
@@ -530,6 +531,7 @@ size_t NitroPort_Gx3dBuildShadowBatches(const NitroGx3dScene *scene, size_t firs
             batch->texture_param=param;
             batch->palette_base=palette;
             batch->polygon_attr=attr;
+            batch->tag=0;
             batch->translucent=0;
         }
         tw=(float)(8u<<((tri->texture_param>>20)&7u));

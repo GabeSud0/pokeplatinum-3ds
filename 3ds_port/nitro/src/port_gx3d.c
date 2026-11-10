@@ -57,6 +57,7 @@ typedef struct GeoState {
     uint16_t rgb, diffuse, ambient, specular, emission;
     int32_t resolvedTexcoord[2];
     uint32_t attr, pendingAttr, texparam, plttbase, shininess[32];
+    uint32_t tag;            /* (the game's mark on the polygons now: NitroPort_Gx3dTag) */
     int useShininess;
     unsigned frameVertices, framePolygons;
     int32_t lightDir[4][3];
@@ -758,6 +759,7 @@ static void keep_for_shadow(GeoVertex *a,GeoVertex *b,GeoVertex *c)
     tri->palette_base=s.plttbase;
     tri->sort_key=0;
     tri->soft=0;
+    tri->tag=0;
     if(NitroPort_Gx3dTriangleTranslucent(tri))return;
     tri->v[0]=*screen_of(a);tri->v[1]=*screen_of(b);tri->v[2]=*screen_of(c);
     scene->shadow_count++;
@@ -788,6 +790,7 @@ static int add_screen_triangle(const NitroGx3dVertex *aa,const NitroGx3dVertex *
     tri->texture_param=s.texparam;
     tri->palette_base=s.plttbase;
     tri->soft=sReplaying?sReplaySoft:0u;
+    tri->tag=s.tag;
     return 0;
 }
 static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
@@ -932,6 +935,7 @@ typedef struct PolyRecord {
     float px[4], py[4];      /* where they are on the screen, in DS pixels (onScreen) */
     uint16_t color[4];       /* lit */
     uint32_t attr, texparam, plttbase, sig;
+    uint32_t tag;            /* (NitroPort_Gx3dTag's, as its triangles have it) */
     uint8_t count;           /* 3, or 4: triangles (0, 1, 2) and (0, 2, 3) */
     uint8_t onScreen;        /* all its vertices in front of the camera (w > 0) */
     uint16_t ntri;           /* its triangles in its scene: ntri from tri0 */
@@ -1019,6 +1023,7 @@ static void record_polygon(GeoVertex *a,GeoVertex *b,GeoVertex *c,GeoVertex *d)
     }
     r->count=(uint8_t)n;
     r->attr=s.attr;r->texparam=s.texparam;r->plttbase=s.plttbase;
+    r->tag=s.tag;
     r->sig=record_signature(n);
     r->tri0=sLastTriFirst;r->ntri=(uint16_t)sLastTriAdded;
     r->viewport=viewport_key();
@@ -1054,8 +1059,8 @@ static void replay_polygon(const PolyRecord *r,int32_t clip[4][4])
 {
     GeoVertex v[4];
     unsigned k,any=0,all=0x3Fu;
-    uint32_t attr=s.attr,texparam=s.texparam,plttbase=s.plttbase;
-    s.attr=r->attr;s.texparam=r->texparam;s.plttbase=r->plttbase;
+    uint32_t attr=s.attr,texparam=s.texparam,plttbase=s.plttbase,tag=s.tag;
+    s.attr=r->attr;s.texparam=r->texparam;s.plttbase=r->plttbase;s.tag=r->tag;
     for(k=0;k<r->count;k++){
         memset(&v[k],0,sizeof(v[k]));
         memcpy(v[k].clip,clip[k],sizeof(v[k].clip));
@@ -1071,7 +1076,7 @@ static void replay_polygon(const PolyRecord *r,int32_t clip[4][4])
         if(r->count==4)stage_triangle(&v[0],&v[2],&v[3]);
         end_polygon(1);   /* (the DS's vertex RAM: as the scene's own, roughly) */
     }
-    s.attr=attr;s.texparam=texparam;s.plttbase=plttbase;
+    s.attr=attr;s.texparam=texparam;s.plttbase=plttbase;s.tag=tag;
 }
 /* to_screen's viewport transform, from px and py (DS pixels from the
  * middle): x = (X / W + 1) * width / 2 + x0, y = (1 - Y / W) * height / 2
@@ -1103,8 +1108,8 @@ static void replay_blended(const PolyRecord *p,const PolyRecord *c,int32_t clip[
 {
     NitroGx3dVertex v[4];
     unsigned k;
-    uint32_t attr=s.attr,texparam=s.texparam,plttbase=s.plttbase;
-    s.attr=c->attr;s.texparam=c->texparam;s.plttbase=c->plttbase;
+    uint32_t attr=s.attr,texparam=s.texparam,plttbase=s.plttbase,tag=s.tag;
+    s.attr=c->attr;s.texparam=c->texparam;s.plttbase=c->plttbase;s.tag=c->tag;
     for(k=0;k<c->count;k++){
         float w0=(float)p->clip[k][3],w1=(float)c->clip[k][3];
         float r=1.0f/(w0+w1),t=w1*r,dz;
@@ -1124,7 +1129,7 @@ static void replay_blended(const PolyRecord *p,const PolyRecord *c,int32_t clip[
     add_screen_triangle(&v[0],&v[1],&v[2]);
     if(c->count==4)add_screen_triangle(&v[0],&v[2],&v[3]);
     end_polygon(1);
-    s.attr=attr;s.texparam=texparam;s.plttbase=plttbase;
+    s.attr=attr;s.texparam=texparam;s.plttbase=plttbase;s.tag=tag;
 }
 /* Where a vertex is on the screen, -1..1 (w > 0). */
 static int ndc_of(const int32_t clip[4],double *x,double *y)
@@ -2213,6 +2218,7 @@ static void test_command(GeoState *g,unsigned op,const uint32_t *p)
 #define OP_WIDE_VIEW 0xF2u   /* one parameter: the screen width (NitroPort_Gx3dSetWideView) */
 /* The next SWAP_BUFFERS's time, DISP3DCNT and 3D registers (swap_noted) */
 #define OP_SCENE_REGS 0xF3u
+#define OP_TAG 0xF4u         /* one parameter: the mark on the polygons from here on (NitroPort_Gx3dTag) */
 #define SCENE_REGS_WORDS (2u+NITRO_GX3D_REGS_SIZE/4u+4u+1u)
 
 /* The whole engine (s): one command and its parameters. */
@@ -2352,6 +2358,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
     case 0x70:case 0x71:case 0x72:test_command(&s,op,p);break;
     case OP_CLEAR_STACK_ERROR:s.stackError=0;s.pjLevel=0;break;
     case OP_WIDE_VIEW:set_wide_view(&s,(int)(p[0]&0xFFFFu),(int)(p[0]>>16));break;
+    case OP_TAG:s.tag=p[0];break;
     case OP_SCENE_REGS:
         sPendingStamp=p[0];
         sPendingDisp3d=p[1];
@@ -3199,6 +3206,13 @@ void NitroPort_Gx3dSetView(int screenWidth,int screenHeight)
 void NitroPort_Gx3dSetWideView(int screenWidth)
 {
     NitroPort_Gx3dSetView(screenWidth,192);
+}
+/* (the thread's, at this point of its stream; without one, now) */
+void NitroPort_Gx3dTag(uint32_t tag)
+{
+    initialize();
+    if(sThreaded)enqueue(OP_TAG,&tag,1,0);
+    else s.tag=tag;
 }
 #define RECORD(type,words,count) do{if(sRecorder)sRecorder((type),(words),(count));}while(0)
 /* A decoded command: done here, or handed to the geometry thread. */

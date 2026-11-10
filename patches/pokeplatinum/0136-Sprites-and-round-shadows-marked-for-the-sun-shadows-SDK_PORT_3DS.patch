@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 10:40:00 -0700
+Subject: [PATCH] Sprites and round shadows marked for the sun shadows
+ (SDK_PORT_3DS)
+
+The 3DS remaster's sun shadows lay a character's sprite on the ground
+from its round shadow. Which polygons are a sprite's, and which round
+shadow is whose, the port was guessing from shapes and places; now the
+game says: each billboard's polygons are marked with its address
+(NitroPort_Gx3dTag, billboard.c), and an object's round shadow with its
+sprite's mark | 1 (ov5_021F134C.c). The marks change nothing drawn.
+---
+ src/billboard.c               | 18 ++++++++++++++++++
+ src/overlay005/ov5_021F134C.c | 20 ++++++++++++++++++++
+ 2 files changed, 38 insertions(+)
+
+diff --git a/src/billboard.c b/src/billboard.c
+index 8cdadfd6..fc01e4cc 100644
+--- a/src/billboard.c
++++ b/src/billboard.c
+@@ -4,6 +4,10 @@
+ #include "easy3d.h"
+ #include "heap.h"
+ 
++#ifdef SDK_PORT_3DS
++extern void NitroPort_Gx3dTag(u32 tag);
++#endif
++
+ enum BillboardAnimStatus {
+     BILLBOARD_ANIM_STATUS_RUNNING = 0,
+     BILLBOARD_ANIM_STATUS_FINISHED,
+@@ -266,7 +270,21 @@ static void BillboardList_Draw(BillboardList *list)
+                 rotMatrix = &identityMatrix;
+             }
+ 
++#ifdef SDK_PORT_3DS
++            // The 3DS remaster's sun shadows: this sprite's polygons marked
++            // with its own address (a character's round shadow carries the
++            // same mark | 1, ov5_021F134C.c), so the port knows which
++            // polygons are whose and lays the sprite on the ground from
++            // that shadow. The marks go in the commands' order: what
++            // NitroSystem still holds is sent first.
++            NNS_G3dGeFlushBuffer();
++            NitroPort_Gx3dTag((u32)billboard);
++#endif
+             Easy3D_DrawRenderObj(&billboard->renderObj, &billboard->pos, rotMatrix, &billboard->scale);
++#ifdef SDK_PORT_3DS
++            NNS_G3dGeFlushBuffer();
++            NitroPort_Gx3dTag(0);
++#endif
+             ReleaseVRAMKeysAndModelSet(billboard);
+         }
+ 
+diff --git a/src/overlay005/ov5_021F134C.c b/src/overlay005/ov5_021F134C.c
+index 7b7bd09c..1e8c24ab 100644
+--- a/src/overlay005/ov5_021F134C.c
++++ b/src/overlay005/ov5_021F134C.c
+@@ -7,6 +7,9 @@
+ 
+ #include "field/field_system.h"
+ #include "overlay005/field_effect_manager.h"
++#ifdef SDK_PORT_3DS
++#include "overlay005/ov5_021EB1A0.h"
++#endif
+ 
+ #include "map_object.h"
+ #include "overworld_anim_manager.h"
+@@ -17,6 +20,7 @@
+ 
+ #ifdef SDK_PORT_3DS
+ extern int NitroPort_SunShadows(void);
++extern void NitroPort_Gx3dTag(u32 tag);
+ #endif
+ 
+ typedef struct {
+@@ -297,7 +301,23 @@ static void ov5_021F1670(OverworldAnimManager *param0, void *param1)
+         v1.y += (FX32_ONE * -4);
+         v1.z += (FX32_ONE * 1);
+ 
++#ifdef SDK_PORT_3DS
++        // The 3DS remaster's sun shadows: this round shadow's polygons
++        // marked as its object's sprite's own (the sprite's mark, its
++        // address, | 1: billboard.c). The port lays the sprite on the
++        // ground from here as its shadow, and leaves this one out then.
++        {
++            Billboard *sprite = ov5_021EB1A0(v0->unk_14.unk_08);
++
++            NNS_G3dGeFlushBuffer();
++            NitroPort_Gx3dTag(sprite != NULL ? ((u32)sprite | 1) : 0);
++        }
++#endif
+         Simple3D_DrawRenderObj(v4, &v1, &v2, &v3);
++#ifdef SDK_PORT_3DS
++        NNS_G3dGeFlushBuffer();
++        NitroPort_Gx3dTag(0);
++#endif
+     }
+ }
+ 
+-- 
+2.43.0
+

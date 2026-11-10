@@ -3522,30 +3522,29 @@ picture laid on the ground as its shadow. No shadow map. Built a part at
 a time: the characters first (the player, the follower, the people);
 trees, signs and the scenery later.
 
-- Which: the characters, by the game's round shadow under each (the
-  field's own, ov5_021F134C.c, drawn as ever: patch 0027 leaves it, the
-  port never sets NitroPort_SetSunShadows now). The 3DS renderer finds the
-  scene's painted shadows (find_decals: see-through, lying flat, dark);
-  NitroPort_ShadowMarkers splits those batches into runs of triangles
-  sharing corners, each a marker: its middle, on the ground. Runs of more
-  than 8 triangles, or wider than 3/4 of a tile, are painted patches
-  beside buildings, not markers.
-- Who: the scene's cards facing the camera (a triangle facing it, and the
-  next if it shares an edge), opaque, at most 6 tiles long and wide, with
-  a texture that has see-through texels (a palette's colour 0 clear, or
-  direct colour). A card and a marker go together if each is the other's
-  nearest (the card's foot's middle to the marker's middle, within 5/8 of
-  a tile or 0.4 of the card's width; a taller card counts as nearer by a
-  tenth of its height, so the character beats the grass at its feet). A
-  tree or a sign stands on no round shadow: no shadow yet. The round
-  shadow of a character given one isn't drawn (its triangles moved to a
-  point in the scene's vertices); anyone without one (at dusk, when
-  there's no sun to cast them) keeps the round one.
+- Which and who: the game says (patch 0136), nothing is guessed. Each
+  field sprite's polygons are marked with a number of its own (its
+  Billboard's address, billboard.c), and an object's round shadow
+  (ov5_021F134C.c, drawn as ever) with its sprite's number | 1.
+  NitroPort_Gx3dTag puts the mark in the 3D command stream (a command of
+  the port's own, in order, through the geometry thread); every triangle
+  made after it carries it (the in-between scenes' too), and marked
+  triangles get batches of their own (NitroGx3dBatch.tag). The picture
+  doesn't change. A round shadow whose sprite is in the scene (opaque:
+  not fading) gets the sun shadow; that round shadow isn't drawn (its
+  triangles moved to a point in the scene's vertices). Anyone without one
+  (when there's no sun to cast them, or a character fading in) keeps the
+  round one. Trees, signs and the grass have no round shadow: none yet.
+  (The first try, 8ec0b6f, found the round shadows by their look and
+  paired them with the nearest camera-facing card: on a 3DS about half the
+  characters got a shadow, and it came and went, log a834e724: 8.5 round
+  shadows a scene, 4.3 sun shadows.)
 - Where (NitroPort_ShadowGroundCards, port_shadow.c): it starts at the
-  marker (under the feet, on the ground the character stands on, as the
-  game puts it: no guessing from the camera's ray, which threw far
-  people's shadows into long streaks, log dc60d496). Across the sprite
-  stays across (the screen's right on the ground), so a sprite seen from
+  round shadow's middle (under the feet, on the ground the character
+  stands on, as the game puts it, through a jump too: no guessing from
+  the camera's ray, which threw far people's shadows into long streaks,
+  log dc60d496). Across the sprite stays across, about its middle (the
+  screen's right on the ground), so a sprite seen from
   the back or the front casts the same shape; up the sprite from its feet
   goes along the ground towards the screen's lower right, 28 degrees
   below the horizontal on the screen whichever way the camera looks (the
@@ -3567,23 +3566,28 @@ trees, signs and the scenery later.
   (normalize_depth). NitroPort_ShadowDepthRow folds all of it into one
   row on x, y, w, so a new vertex's z is exactly as the scene's own would
   be. (The first try used clip z itself: every shadow failed the depth
-  test, none seen, log 93044840.) Each point is then pulled 1% of its
+  test, none seen, log 93044840.) Each point is then pulled 0.4% of its
   distance towards the camera along its ray: where it is on the screen
-  doesn't change, and it stays in front of the ground at any distance (1/16
-  of a tile up, as before, wasn't enough far away).
+  doesn't change, it stays in front of the ground, and behind the
+  sprite's own feet (which stand a few units nearer the camera than the
+  round shadow).
 - Drawn (draw_ground_shadows) after the opaque polygons: the sprite's
   texture, colour = the copy's shade (its vertices' colour: the fade and
   the fifth root, NitroPort_ShadowGroundCards) x alpha + (1 - alpha), the
   framebuffer multiplied by it; depth LEQUAL, not written; no stencil (a
   shadow's copies overlap). The shade is the sun's by the hour (look_now);
   the angle and length don't follow the clock.
-- The log, at 300 scenes: the round shadows found a scene, the characters
-  given a sun shadow a scene, and the ms a scene laying them. Tests:
-  test_shadow (the markers, the painted patch not one; the character's
-  alone, not the grass's or a sign's; on the marker's ground, its width,
-  the angle and length on the screen, the pull along the ray, the taps,
-  the colours; the picture's feet; none with no marker near, no room, or
-  a translucent, untextured or opaque-textured batch).
+- The log, after 5 seconds and then every 30: the scenes with marked
+  round shadows, and in those the marked sprites, the round shadows and
+  the sun shadows laid a scene, and the ms a scene laying them. Tests:
+  test_gx3d (the mark on the triangles after it, in batches of their own,
+  on the in-between scene's; with and without the geometry thread);
+  test_shadow (the character's alone by its mark, 6 units from its round
+  shadow, not the nearer unmarked grass, not a marked sign; from the
+  round shadow's middle, also when its two triangles are two batches; its
+  width, the angle and length on the screen, the pull along the ray, the
+  taps, the colours; the picture's feet; none with no room, the sprite
+  fading or gone, or no marks).
 
 The log says `[shadow] test step N: ...` when a step is chosen,
 `[shadow] the first sun shadow map sent to the GPU` and `[shadow] the

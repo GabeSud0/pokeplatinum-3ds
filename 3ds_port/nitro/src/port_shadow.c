@@ -293,20 +293,6 @@ static int same_point(const float *a, const float *b)
     return a[0] == b[0] && a[1] == b[1] && a[3] == b[3];
 }
 
-/* The same corner as two triangles of the GPU path have it: each
- * triangle's edges are moved out a tenth of a pixel on its own
- * (NitroPort_Gx3dExpandTriangle, but for sprites drawn a texel a pixel),
- * so a shared corner can be ~0.3 pixels apart on the screen; its w the
- * same. Within 0.005 of the screen's half-width or half-height (~0.6 of a
- * DS pixel). */
-static int near_point(const float *a, const float *b)
-{
-    float w = a[3];
-    if (a[3] != b[3]) return 0;
-    if (!(fabsf(w) > 1e-6f)) return a[0] == b[0] && a[1] == b[1];
-    return fabsf(a[0] - b[0]) <= 0.005f * fabsf(w) && fabsf(a[1] - b[1]) <= 0.005f * fabsf(w);
-}
-
 size_t NitroPort_ShadowCards(NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batches,
                              size_t batchCount, size_t first, NitroGx3dGpuVertex *out,
                              size_t capacity, NitroGx3dBatch *outBatches, size_t maxBatches,
@@ -440,14 +426,6 @@ void NitroPort_ShadowDepthRow(const NitroShadowSetup *setup, int wbuffer, float 
     out[2] += depthA * depthK - 0.5f * depthK;
 }
 
-int NitroPort_ShadowSpriteTexture(uint32_t textureParam)
-{
-    unsigned fmt = (textureParam >> 26) & 7u;
-    /* a palette's colour 0 transparent (4, 16, 256 colours), or direct
-     * colour (its alpha bit) */
-    return ((fmt == 2u || fmt == 3u || fmt == 4u) && (textureParam & (1u << 29))) || fmt == 7u;
-}
-
 /* Where up the card (0 its foot .. 1 its top) the picture's feet are:
  * footRow's first opaque row from the foot's side, over the card's
  * texels. 0 if not known. */
@@ -487,147 +465,46 @@ static float card_feet(const NitroGx3dGpuVertex *verts, size_t g, size_t gEnd, c
     return f < 0.0f ? 0.0f : f > 0.9f ? 0.9f : f;
 }
 
-size_t NitroPort_ShadowMarkers(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batches,
-                               size_t batchCount, const uint8_t *flagged, const NitroShadowSetup *setup,
-                               NitroShadowMarker *out, size_t max)
+static unsigned sLastSprites, sLastShadows, sLastLaid;
+
+void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned *laid)
 {
-    Back b;
-    size_t n = 0, bi;
-    memcpy(b.m, setup->back, sizeof(b.m));
-    for (bi = 0; bi < batchCount && n < max; bi++) {
-        const NitroGx3dBatch *batch = &batches[bi];
-        size_t k = batch->first, end = batch->first + batch->count;
-        if (!flagged || !flagged[bi]) continue;
-        while (k + 2 < end && n < max) {
-            /* a run: the triangles after the first that share a corner
-             * with the run so far */
-            size_t g = k, gEnd = k + 3, i;
-            V3 mid = v3(0.0f, 0.0f, 0.0f);
-            float radius = 0.0f;
-            int unique = 0;
-            while (gEnd + 2 < end) {
-                int shared = 0;
-                size_t p, q;
-                for (p = gEnd; p < gEnd + 3 && !shared; p++)
-                    for (q = g; q < gEnd && !shared; q++) shared = near_point(verts[p].position, verts[q].position);
-                if (!shared) break;
-                gEnd += 3;
-            }
-            k = gEnd;
-            if ((gEnd - g) / 3 > NITRO_SHADOW_MARKER_TRIANGLES) continue;
-            for (i = g; i < gEnd; i++) {
-                size_t j;
-                int dup = 0;
-                for (j = g; j < i && !dup; j++) dup = near_point(verts[j].position, verts[i].position);
-                if (dup) continue;
-                mid = add(mid, back(&b, verts[i].position));
-                unique++;
-            }
-            mid = scale(mid, 1.0f / (float)unique);
-            for (i = g; i < gEnd; i++) {
-                float d = length(sub(back(&b, verts[i].position), mid));
-                if (d > radius) radius = d;
-            }
-            if (!(radius <= NITRO_SHADOW_MARKER_RADIUS)) continue;
-            out[n].ground[0] = mid.x;
-            out[n].ground[1] = mid.y;
-            out[n].ground[2] = mid.z;
-            out[n].radius = radius;
-            out[n].first = (uint32_t)g;
-            out[n].count = (uint32_t)(gEnd - g);
-            n++;
-        }
-    }
-    return n;
+    if (sprites) *sprites = sLastSprites;
+    if (shadows) *shadows = sLastShadows;
+    if (laid) *laid = sLastLaid;
 }
 
-/* A card's frame (camera space): across it (on the ground: it faces the
- * camera, upright), up it, the middle of its lowest corners, and each
- * vertex's distance up it from there (alongOf) and their least and most.
- * 0 if it's no sprite (a sliver, or a backdrop). */
-typedef struct {
-    size_t g, gEnd, bi;
-    V3 across, along, c;
-    float alongOf[6], aMin, aMax, width;
-    int marker;              /* (its nearest, or -1) */
-    float score;
-} Card;
-
-static int card_frame(const NitroGx3dGpuVertex *verts, const Back *b, V3 up, V3 n, Card *cd)
-{
-    float hmin = 1e30f, hmax = -1e30f, umin = 1e30f, umax = -1e30f;
-    size_t i;
-    int count = 0;
-    V3 c = v3(0.0f, 0.0f, 0.0f);
-    cd->across = cross(n, up);
-    if (!(length(cd->across) > 1e-4f)) return 0;
-    cd->across = normalize(cd->across);
-    /* (across the screen to its right: the picture as the camera sees it) */
-    if (cd->across.x < 0.0f) cd->across = scale(cd->across, -1.0f);
-    cd->along = normalize(cross(cd->across, n));
-    if (dot(cd->along, up) < 0.0f) cd->along = scale(cd->along, -1.0f);
-    for (i = cd->g; i < cd->gEnd; i++) {
-        V3 q = back(b, verts[i].position);
-        float h = dot(q, up), u = dot(q, cd->across);
-        if (h < hmin) hmin = h;
-        if (h > hmax) hmax = h;
-        if (u < umin) umin = u;
-        if (u > umax) umax = u;
-    }
-    /* (a sprite: not a sliver, not a whole backdrop) */
-    if (!(hmax - hmin > 0.5f) || hmax - hmin > NITRO_SHADOW_GROUND_CARD_MAX ||
-        umax - umin > NITRO_SHADOW_GROUND_CARD_MAX)
-        return 0;
-    for (i = cd->g; i < cd->gEnd; i++) {
-        size_t j;
-        int dup = 0;
-        V3 q = back(b, verts[i].position);
-        if (dot(q, up) > hmin + (hmax - hmin) * 0.1f) continue;
-        for (j = cd->g; j < i && !dup; j++) dup = near_point(verts[j].position, verts[i].position);
-        if (dup) continue;
-        c = add(c, q);
-        count++;
-    }
-    if (!count) return 0;
-    cd->c = scale(c, 1.0f / (float)count);
-    cd->aMin = 1e30f;
-    cd->aMax = -1e30f;
-    for (i = cd->g; i < cd->gEnd; i++) {
-        float a = dot(sub(back(b, verts[i].position), cd->c), cd->along);
-        cd->alongOf[i - cd->g] = a;
-        if (a < cd->aMin) cd->aMin = a;
-        if (a > cd->aMax) cd->aMax = a;
-    }
-    cd->width = umax - umin;
-    return 1;
-}
-
-static Card sCards[NITRO_SHADOW_GROUND_CARDS];
-static unsigned sLastCards;
-static float sLastNearest = -1.0f;
-
-void NitroPort_ShadowGroundStats(unsigned *cards, float *nearest)
-{
-    if (cards) *cards = sLastCards;
-    if (nearest) *nearest = sLastNearest;
-}
+#define GROUND_VERTS 24    /* (a sprite's: two triangles, more when the view's edge cuts them) */
+#define GROUND_ROUNDS 64   /* (round shadows looked at a scene) */
 
 size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batches,
                                    size_t batchCount, size_t first, NitroGx3dGpuVertex *out,
                                    size_t capacity, NitroGx3dBatch *outBatches, size_t maxBatches,
                                    size_t *outBatchCount, const NitroShadowSetup *setup, const float depth[4],
-                                   const NitroShadowMarker *markers, size_t markerCount, uint8_t *markerUsed,
-                                   const float shade[3], NitroShadowFootRow footRow, void *footCtx)
+                                   uint8_t *roundUsed, const float shade[3], NitroShadowFootRow footRow,
+                                   void *footCtx)
 {
     const float pi = 3.14159265f;
     Back b;
     V3 up = v3(setup->up[0], setup->up[1], setup->up[2]), right, toward, way;
     float s, theta = NITRO_SHADOW_GROUND_ANGLE * pi / 180.0f, stretch;
-    size_t written = 0, nb = 0, bi, nc = 0, ci, m;
+    size_t written = 0, nb = 0, bi, rounds[GROUND_ROUNDS], nr = 0, ri;
     if (outBatchCount) *outBatchCount = 0;
-    sLastCards = 0;
-    sLastNearest = -1.0f;
-    if (!markerCount || !markers) return 0;
+    sLastSprites = sLastShadows = sLastLaid = 0;
+    /* the marked batches: the round shadows (each mark once) */
+    for (bi = 0; bi < batchCount; bi++) {
+        uint32_t tag = batches[bi].tag;
+        if (!tag || !batches[bi].count) continue;
+        if (!(tag & 1u)) {
+            sLastSprites++;
+            continue;
+        }
+        for (ri = 0; ri < nr && batches[rounds[ri]].tag != tag; ri++) {
+        }
+        if (ri == nr && nr < GROUND_ROUNDS) rounds[nr++] = bi;
+    }
+    sLastShadows = (unsigned)nr;
+    if (!nr) return 0;
     memcpy(b.m, setup->back, sizeof(b.m));
     /* The way the shadows lie, on the ground: the screen's right (the
      * camera's x on the ground) and the ground's way down the screen
@@ -645,150 +522,133 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
     /* (its length on the screen: a card's height up it is as long there) */
     stretch = NITRO_SHADOW_GROUND_LENGTH / sqrtf(way.x * way.x + way.y * way.y);
 
-    /* the cards */
-    for (bi = 0; bi < batchCount && nc < NITRO_SHADOW_GROUND_CARDS; bi++) {
-        const NitroGx3dBatch *batch = &batches[bi];
-        size_t k = batch->first, end = batch->first + batch->count;
-        if (batch->translucent || !NitroPort_ShadowSpriteTexture(batch->texture_param)) continue;
-        while (k + 2 < end && nc < NITRO_SHADOW_GROUND_CARDS) {
-            V3 n;
-            size_t gEnd;
-            Card *cd = &sCards[nc];
-            if (!card(back(&b, verts[k].position), back(&b, verts[k + 1].position),
-                      back(&b, verts[k + 2].position), up, &n)) {
-                k += 3;
-                continue;
-            }
-            /* the card: this triangle, and the next if it shares an edge
-             * with it (as NitroPort_ShadowCards) */
-            gEnd = k + 3;
-            while (gEnd + 2 < end && gEnd - k < 6) {
-                V3 n2;
-                int shared = 0;
-                size_t p, q;
-                if (!card(back(&b, verts[gEnd].position), back(&b, verts[gEnd + 1].position),
-                          back(&b, verts[gEnd + 2].position), up, &n2))
-                    break;
-                for (p = gEnd; p < gEnd + 3; p++) {
-                    int found = 0;
-                    for (q = k; q < gEnd && !found; q++) found = near_point(verts[p].position, verts[q].position);
-                    shared += found;
-                }
-                if (shared < 2) break;
-                gEnd += 3;
-            }
-            cd->g = k;
-            cd->gEnd = gEnd;
-            cd->bi = bi;
-            k = gEnd;
-            if (!card_frame(verts, &b, up, n, cd)) continue;
-            cd->marker = -1;
-            cd->score = 1e30f;
-            nc++;
-        }
-    }
-    /* each card's nearest marker, and each marker's nearest card: the
-     * pairs that are each other's */
-    sLastCards = (unsigned)nc;
-    for (ci = 0; ci < nc; ci++) {
-        Card *cd = &sCards[ci];
-        float reach = cd->width * 0.4f > NITRO_SHADOW_GROUND_REACH ? cd->width * 0.4f : NITRO_SHADOW_GROUND_REACH;
-        for (m = 0; m < markerCount; m++) {
-            float d = length(sub(v3(markers[m].ground[0], markers[m].ground[1], markers[m].ground[2]), cd->c));
-            float score = d - 0.1f * (cd->aMax - cd->aMin);
-            if (sLastNearest < 0.0f || d < sLastNearest) sLastNearest = d;
-            if (d <= reach && score < cd->score) {
-                cd->score = score;
-                cd->marker = (int)m;
-            }
-        }
-    }
-    for (ci = 0; ci < nc; ci++) {
-        size_t cj;
-        Card *cd = &sCards[ci];
-        if (cd->marker < 0) continue;
-        for (cj = 0; cj < nc; cj++) {
-            if (cj != ci && sCards[cj].marker == cd->marker &&
-                (sCards[cj].score < cd->score || (sCards[cj].score == cd->score && cj < ci))) {
+    for (ri = 0; ri < nr; ri++) {
+        uint32_t tag = batches[rounds[ri]].tag;
+        const NitroGx3dBatch *batch = NULL;
+        V3 anchor = v3(0.0f, 0.0f, 0.0f), q[GROUND_VERTS], n = v3(0.0f, 0.0f, 0.0f), across, along;
+        float alongOf[GROUND_VERTS], aMin = 1e30f, aMax = -1e30f, uMin = 1e30f, uMax = -1e30f, uMid;
+        float feet, top, r, xyw[NITRO_SHADOW_GROUND_TAPS][GROUND_VERTS][3];
+        uint8_t col[GROUND_VERTS][3];
+        V3 tap[NITRO_SHADOW_GROUND_TAPS];
+        size_t g, gEnd, i, count = 0;
+        int t, ok = 1;
+        /* its sprite: the batch with the mark less its bit 0, opaque */
+        for (bi = 0; bi < batchCount; bi++) {
+            if (batches[bi].tag == (tag & ~1u) && batches[bi].count >= 3 && batches[bi].count <= GROUND_VERTS &&
+                !batches[bi].translucent && batches[bi].texture_param) {
+                batch = &batches[bi];
                 break;
             }
         }
-        if (cj < nc) continue;   /* (another card nearer it) */
-        {
-            const NitroGx3dBatch *batch = &batches[cd->bi];
-            const NitroShadowMarker *mk = &markers[cd->marker];
-            V3 anchor = v3(mk->ground[0], mk->ground[1], mk->ground[2]);
-            size_t g = cd->g, gEnd = cd->gEnd, i;
-            float feet, top, r, xyw[NITRO_SHADOW_GROUND_TAPS][6][3];
-            uint8_t col[6][3];
-            int t, ok = 1;
-            V3 tap[NITRO_SHADOW_GROUND_TAPS];
-            if (written + (gEnd - g) * NITRO_SHADOW_GROUND_TAPS > capacity) break;
-            feet = card_feet(verts, g, gEnd, cd->alongOf, cd->aMin, cd->aMax, batch->texture_param,
-                             batch->palette_base, footRow, footCtx) * (cd->aMax - cd->aMin);
-            top = cd->aMax - cd->aMin - feet;
-            /* the taps: the middle, and either side across and along the
-             * ground (down the screen by as much as across it) */
-            r = NITRO_SHADOW_GROUND_BLUR * top;
-            r = r < 0.75f ? 0.75f : r > 3.0f ? 3.0f : r;
-            tap[0] = v3(0.0f, 0.0f, 0.0f);
-            for (t = 1; t < NITRO_SHADOW_GROUND_TAPS; t++) {
-                V3 dir = (t - 1) / 2 ? scale(toward, 1.0f / s) : right;
-                tap[t] = scale(dir, (t & 1) ? r : -r);
+        if (!batch) continue;
+        /* where it starts: the round shadow's middle (all its vertices':
+         * a quad's two triangles have its corners evenly) */
+        for (bi = rounds[ri]; bi < batchCount; bi++) {
+            if (batches[bi].tag != tag) continue;
+            for (i = batches[bi].first; i < batches[bi].first + batches[bi].count; i++) {
+                anchor = add(anchor, back(&b, verts[i].position));
+                count++;
             }
-            for (i = g; i < gEnd; i++) {
-                V3 rel = sub(back(&b, verts[i].position), cd->c), base;
-                float h = cd->alongOf[i - g] - cd->aMin - feet, f, j;
-                int c3;
-                /* across stays across; up the card from the feet becomes
-                 * along the shadows' way (the clear rows below the feet
-                 * behind the start) */
-                base = add(add(anchor, scale(cd->across, dot(rel, cd->across))), scale(way, h * stretch));
-                for (t = 0; t < NITRO_SHADOW_GROUND_TAPS && ok; t++) {
-                    V3 gp = scale(add(base, tap[t]), 1.0f - NITRO_SHADOW_GROUND_PULL);
-                    ok = unback(&b, gp, xyw[t][i - g]);
-                }
-                /* the colour: the shade, fading to TIP of it at the head;
-                 * each tap a TAPS-th root of it */
-                j = top > 0.0f ? h / top : 0.0f;
-                j = j < 0.0f ? 0.0f : j > 1.0f ? 1.0f : j;
-                f = 1.0f - (1.0f - NITRO_SHADOW_GROUND_TIP) * j;
-                for (c3 = 0; c3 < 3; c3++) {
-                    float full = 1.0f - (1.0f - shade[c3]) * f;
-                    float each = powf(full > 0.0f ? full : 0.0f, 1.0f / (float)NITRO_SHADOW_GROUND_TAPS);
-                    col[i - g][c3] = (uint8_t)(each * 255.0f + 0.5f);
-                }
-            }
-            if (!ok) continue;
-            if (nb == 0 || outBatches[nb - 1].texture_param != batch->texture_param ||
-                outBatches[nb - 1].palette_base != batch->palette_base ||
-                outBatches[nb - 1].polygon_attr != batch->polygon_attr ||
-                outBatches[nb - 1].first + outBatches[nb - 1].count != first + written) {
-                if (nb >= maxBatches) break;
-                outBatches[nb] = *batch;
-                outBatches[nb].first = (uint32_t)(first + written);
-                outBatches[nb].count = 0;
-                outBatches[nb].translucent = 0;
-                nb++;
-            }
-            for (t = 0; t < NITRO_SHADOW_GROUND_TAPS; t++) {
-                for (i = g; i < gEnd; i++) {
-                    NitroGx3dGpuVertex *dst = &out[written++];
-                    const float *q = xyw[t][i - g];
-                    *dst = verts[i];
-                    dst->position[0] = q[0];
-                    dst->position[1] = q[1];
-                    dst->position[3] = q[2];
-                    dst->position[2] = depth[0] * q[0] + depth[1] * q[1] + depth[2] * q[2] + depth[3];
-                    dst->color[0] = col[i - g][0];
-                    dst->color[1] = col[i - g][1];
-                    dst->color[2] = col[i - g][2];
-                    dst->color[3] = 255;
-                }
-            }
-            outBatches[nb - 1].count += (uint32_t)((gEnd - g) * NITRO_SHADOW_GROUND_TAPS);
-            if (markerUsed) markerUsed[cd->marker] = 1;
         }
+        anchor = scale(anchor, 1.0f / (float)count);
+        /* the sprite's frame: across it (on the ground: it stands facing
+         * the camera; to the screen's right) and up it */
+        g = batch->first;
+        gEnd = g + batch->count;
+        for (i = g; i < gEnd; i++) q[i - g] = back(&b, verts[i].position);
+        for (i = 0; i + 2 < gEnd - g && !(length(n) > 1e-6f); i += 3) n = cross(sub(q[i + 1], q[i]), sub(q[i + 2], q[i]));
+        if (!(length(n) > 1e-6f)) continue;
+        n = normalize(n);
+        across = cross(n, up);
+        if (!(length(across) > 1e-3f)) continue;   /* (lying flat: no sprite) */
+        across = normalize(across);
+        if (across.x < 0.0f) across = scale(across, -1.0f);
+        along = normalize(cross(across, n));
+        if (dot(along, up) < 0.0f) along = scale(along, -1.0f);
+        for (i = 0; i < gEnd - g; i++) {
+            float u = dot(q[i], across), a = dot(q[i], along);
+            alongOf[i] = a;
+            if (a < aMin) aMin = a;
+            if (a > aMax) aMax = a;
+            if (u < uMin) uMin = u;
+            if (u > uMax) uMax = u;
+        }
+        /* (a sprite: not a sliver, not a whole backdrop) */
+        if (!(aMax - aMin > 0.5f) || aMax - aMin > NITRO_SHADOW_GROUND_CARD_MAX ||
+            uMax - uMin > NITRO_SHADOW_GROUND_CARD_MAX)
+            continue;
+        uMid = 0.5f * (uMin + uMax);
+        if (written + (gEnd - g) * NITRO_SHADOW_GROUND_TAPS > capacity) break;
+        feet = card_feet(verts, g, gEnd, alongOf, aMin, aMax, batch->texture_param, batch->palette_base, footRow,
+                         footCtx) * (aMax - aMin);
+        top = aMax - aMin - feet;
+        /* the taps: the middle, and either side across and along the
+         * ground (down the screen by as much as across it) */
+        r = NITRO_SHADOW_GROUND_BLUR * top;
+        r = r < 0.75f ? 0.75f : r > 3.0f ? 3.0f : r;
+        tap[0] = v3(0.0f, 0.0f, 0.0f);
+        for (t = 1; t < NITRO_SHADOW_GROUND_TAPS; t++) {
+            V3 dir = (t - 1) / 2 ? scale(toward, 1.0f / s) : right;
+            tap[t] = scale(dir, (t & 1) ? r : -r);
+        }
+        for (i = 0; i < gEnd - g; i++) {
+            V3 base;
+            float h = alongOf[i] - aMin - feet, f, j;
+            int c3;
+            /* across stays across, about the sprite's middle; up the
+             * sprite from its feet becomes along the shadows' way (the
+             * clear rows below the feet behind the start) */
+            base = add(add(anchor, scale(across, dot(q[i], across) - uMid)), scale(way, h * stretch));
+            for (t = 0; t < NITRO_SHADOW_GROUND_TAPS && ok; t++) {
+                V3 gp = scale(add(base, tap[t]), 1.0f - NITRO_SHADOW_GROUND_PULL);
+                ok = unback(&b, gp, xyw[t][i]);
+            }
+            /* the colour: the shade, fading to TIP of it at the head;
+             * each tap a TAPS-th root of it */
+            j = top > 0.0f ? h / top : 0.0f;
+            j = j < 0.0f ? 0.0f : j > 1.0f ? 1.0f : j;
+            f = 1.0f - (1.0f - NITRO_SHADOW_GROUND_TIP) * j;
+            for (c3 = 0; c3 < 3; c3++) {
+                float full = 1.0f - (1.0f - shade[c3]) * f;
+                float each = powf(full > 0.0f ? full : 0.0f, 1.0f / (float)NITRO_SHADOW_GROUND_TAPS);
+                col[i][c3] = (uint8_t)(each * 255.0f + 0.5f);
+            }
+        }
+        if (!ok) continue;
+        if (nb == 0 || outBatches[nb - 1].texture_param != batch->texture_param ||
+            outBatches[nb - 1].palette_base != batch->palette_base ||
+            outBatches[nb - 1].polygon_attr != batch->polygon_attr ||
+            outBatches[nb - 1].first + outBatches[nb - 1].count != first + written) {
+            if (nb >= maxBatches) break;
+            outBatches[nb] = *batch;
+            outBatches[nb].first = (uint32_t)(first + written);
+            outBatches[nb].count = 0;
+            outBatches[nb].translucent = 0;
+            outBatches[nb].tag = 0;
+            nb++;
+        }
+        for (t = 0; t < NITRO_SHADOW_GROUND_TAPS; t++) {
+            for (i = g; i < gEnd; i++) {
+                NitroGx3dGpuVertex *dst = &out[written++];
+                const float *p = xyw[t][i - g];
+                *dst = verts[i];
+                dst->position[0] = p[0];
+                dst->position[1] = p[1];
+                dst->position[3] = p[2];
+                dst->position[2] = depth[0] * p[0] + depth[1] * p[1] + depth[2] * p[2] + depth[3];
+                dst->color[0] = col[i - g][0];
+                dst->color[1] = col[i - g][1];
+                dst->color[2] = col[i - g][2];
+                dst->color[3] = 255;
+            }
+        }
+        outBatches[nb - 1].count += (uint32_t)((gEnd - g) * NITRO_SHADOW_GROUND_TAPS);
+        /* its round shadow: left out (the caller's) */
+        if (roundUsed) {
+            for (bi = rounds[ri]; bi < batchCount; bi++)
+                if (batches[bi].tag == tag) roundUsed[bi] = 1;
+        }
+        sLastLaid++;
     }
     if (outBatchCount) *outBatchCount = nb;
     return written;

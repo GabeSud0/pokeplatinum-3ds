@@ -49,6 +49,9 @@ typedef struct NitroGx3dTriangle {
      * whole ones (where it fell behind the ground and caught up a pixel at
      * a time, a jiggle). */
     uint32_t soft;
+    /* The game's mark on it (NitroPort_Gx3dTag: 0 none): whose polygon it
+     * is, for the sun shadows (a character's sprite, its round shadow). */
+    uint32_t tag;
 } NitroGx3dTriangle;
 #define NITRO_GX3D_SOFT_X 1u
 #define NITRO_GX3D_SOFT_Y 2u
@@ -421,6 +424,15 @@ void NitroPort_Gx3dSetView(int screenWidth, int screenHeight);
 /* GXSTAT's bit 15 is write-one-to-clear on the DS, and resetting it
  * also clears the single-entry projection stack pointer. */
 void NitroPort_Gx3dClearStackError(void);
+/* A mark on the polygons the game sends from here on (0: none again), in
+ * the command stream's order: each triangle of them carries it
+ * (NitroGx3dTriangle.tag, the in-between scenes' too), and they're drawn
+ * in batches of their own (NitroGx3dBatch.tag). Nothing else changes: the
+ * same picture. The field's sprites are marked with their Billboard's
+ * address, and a character's round shadow with its sprite's | 1 (the
+ * game's patch; port_shadow.c pairs them). Not recorded
+ * (NitroPort_Gx3dSetRecorder). */
+void NitroPort_Gx3dTag(uint32_t tag);
 
 /* PC reference output. Samples from virtual DS texture/palette VRAM banks.
  * Each pixel is RGB555|0x8000 when a 3D polygon covers it, otherwise zero.
