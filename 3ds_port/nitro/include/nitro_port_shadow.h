@@ -209,29 +209,29 @@ void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned 
  *
  * Drawn once too, in batches of their own after the characters', their
  * tag NITRO_SHADOW_ONCE (the characters' batches' tag is 0): the renderer
- * draws those darkening each pixel once (a tree's layers overlap, and
- * trees each other: the shade, however many layers), where a texel is
+ * draws those darkening each pixel once (a prop's layers overlap, and
+ * props each other: the shade, however many layers), where a texel is
  * more than half opaque.
- *
- * The trees of the land itself (NITRO_GX3D_TAG_LAND marks: the game marks
- * the land models' tree materials, most trees being the land's and no
- * props) the same way, a tree at a time: a marked batch's triangles in the
- * order the game sent them, a new tree where a triangle's middle (of its
- * span across and in depth) is more than NITRO_SHADOW_LAND_NEAR from the
- * tree's first one's (a tree's layers stand over one another, the next
- * tree two tiles on). Where it stands: its own flat triangles' middle (the
- * stump painted on the ground under it: not laid, it casts nothing);
- * with none, the flat triangles of any marked batch its middle is over (a
- * row of trees' tops, the stumps in another material), under it; else its
- * own lowest vertices, as a prop. Trees whose shadow can't reach the view
- * are left out.
- *
- * The last call's props and trees, and how many of each got a shadow: */
+ * The last call's props and how many got a shadow: */
 #define NITRO_SHADOW_ONCE 1u
-#define NITRO_SHADOW_LAND_NEAR 12.0f
+/* (the land's trees' shadows: one shade all over, this much of the
+ * characters' darkening at their feet; theirs fades to the head) */
+#define NITRO_SHADOW_TREE_DARK 0.75f
 #define NITRO_SHADOW_PROP_MIN 5.0f
 void NitroPort_ShadowPropStats(unsigned *props, unsigned *laid);
-void NitroPort_ShadowLandStats(unsigned *trees, unsigned *laid);
+
+/* The sun now, from the renderer to the game: the land's trees' shadows
+ * are polygons the game sends (NitroPort_Gx3dTreeLists), made for the way
+ * the light goes. NitroPort_SetSunNow: each scene the renderer looks at
+ * the clock (strength under 0.02: no shadows now). NitroPort_SunWayNow: 0
+ * with no sun set or the sun shadows off; else way[0], way[1] the way the
+ * light goes along the ground (to the screen's right, and towards the
+ * camera: never under sin NITRO_SHADOW_GROUND_SIDE) and way[2] a shadow's
+ * length for a height of 1 (the sun's cotangent times
+ * NITRO_SHADOW_GROUND_LENGTH), fx32 in steps of 1/256: the same way and
+ * length as NitroPort_ShadowGroundCards lays the characters' along. */
+void NitroPort_SetSunNow(const NitroShadowSun *sun, float strength);
+int NitroPort_SunWayNow(int32_t way[3]);
 
 #define NITRO_SHADOW_GROUND_CARD_MAX 96.0f   /* (6 tiles: past it, not a sprite) */
 typedef int (*NitroShadowFootRow)(void *ctx, uint32_t textureParam, uint32_t paletteBase, int s0, int s1,

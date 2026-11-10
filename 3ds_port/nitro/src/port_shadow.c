@@ -518,7 +518,7 @@ static float card_feet(const NitroGx3dGpuVertex *verts, size_t g, size_t gEnd, c
     return f < 0.0f ? 0.0f : f > 0.9f ? 0.9f : f;
 }
 
-static unsigned sLastSprites, sLastShadows, sLastLaid, sLastProps, sLastPropsLaid, sLastTrees, sLastTreesLaid;
+static unsigned sLastSprites, sLastShadows, sLastLaid, sLastProps, sLastPropsLaid;
 
 void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned *laid)
 {
@@ -531,12 +531,6 @@ void NitroPort_ShadowPropStats(unsigned *props, unsigned *laid)
 {
     if (props) *props = sLastProps;
     if (laid) *laid = sLastPropsLaid;
-}
-
-void NitroPort_ShadowLandStats(unsigned *trees, unsigned *laid)
-{
-    if (trees) *trees = sLastTrees;
-    if (laid) *laid = sLastTreesLaid;
 }
 
 /* The clip space's (x, y, w) of camera-space points: back's inverse, made
@@ -573,38 +567,16 @@ static void unback_point(const Unback *u, V3 c, float out[3])
     out[2] = u->m[2][0] * r0 + u->m[2][1] * r1 + u->m[2][2] * r2;
 }
 
-/* A prop, or a tree of the land's, for its shadow: its batches (a prop's:
- * a run of one mark; a tree's: the one it's in), its vertices in them,
+/* A prop for its shadow: its batches (a run of one mark), its vertices,
  * where it stands and how tall its picture is. */
-#define GROUND_PROPS 384
+#define GROUND_PROPS 256
 #define PROP_VERTS 1536    /* (512 triangles: more is no small prop) */
 typedef struct {
     size_t b0, b1;         /* its batches: [b0, b1) */
-    size_t v0, v1;         /* its vertices: [v0, v1) */
     V3 base;
     float top;
-    uint8_t land;          /* (a tree of the land's: its flat triangles aren't laid) */
 } Prop;
 static Prop sProps[GROUND_PROPS];
-/* The land's trees as they're found (a batch's triangles in order): the
- * span of each across, in depth and in height, its flat triangles' (the
- * stump painted on the ground), the vertices to lay and their span up the
- * picture. And every flat triangle's span, for the trees with none of
- * their own. */
-#define GROUND_TREES 256
-#define LAND_FLATS 256
-#define LAND_FLAT 0.75f    /* (a triangle's height under this: lying on the ground) */
-#define LAND_OVER 8.0f     /* (a tree's middle this near a flat triangle's span is over it) */
-typedef struct {
-    size_t b, v0, v1, drawn;
-    float mr, mt;          /* (its first triangle's middle) */
-    float rLo, rHi, tLo, tHi, hLo, hHi, yLo, yHi;
-    float ftLo, ftHi, fh;
-    uint8_t flat;
-} Tree;
-typedef struct { float rLo, rHi, tLo, tHi, h; } Flat;
-static Tree sTrees[GROUND_TREES];
-static Flat sFlats[LAND_FLATS];
 
 #define GROUND_VERTS 24    /* (a sprite's: two triangles, more when the view's edge cuts them) */
 #define GROUND_ROUNDS 64   /* (round shadows looked at a scene) */
@@ -651,11 +623,10 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
     V3 light = v3(setup->light[0], setup->light[1], setup->light[2]), lh;
     float s, stretch, down, cr, ct;
     const float side = sinf(NITRO_SHADOW_GROUND_SIDE * 3.14159265f / 180.0f);
-    size_t written = 0, nb = 0, bi, rounds[GROUND_ROUNDS], nr = 0, ri, props = 0, lands = 0;
+    size_t written = 0, nb = 0, bi, rounds[GROUND_ROUNDS], nr = 0, ri, props = 0;
     if (outBatchCount) *outBatchCount = 0;
-    sLastSprites = sLastShadows = sLastLaid = sLastProps = sLastPropsLaid = sLastTrees = sLastTreesLaid = 0;
-    /* the marked batches: the round shadows (each mark once), the props,
-     * the land's trees */
+    sLastSprites = sLastShadows = sLastLaid = sLastProps = sLastPropsLaid = 0;
+    /* the marked batches: the round shadows (each mark once), the props */
     for (bi = 0; bi < batchCount; bi++) {
         uint32_t tag = batches[bi].tag;
         if (!tag || !batches[bi].count) continue;
@@ -663,10 +634,7 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
             props++;
             continue;
         }
-        if (NITRO_GX3D_TAG_IS_LAND(tag)) {
-            lands++;
-            continue;
-        }
+        if (NITRO_GX3D_TAG_IS_DRAW(tag)) continue;
         if (!(tag & 1u)) {
             sLastSprites++;
             continue;
@@ -676,7 +644,7 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
         if (ri == nr && nr < GROUND_ROUNDS) rounds[nr++] = bi;
     }
     sLastShadows = (unsigned)nr;
-    if (!nr && !props && !lands) return 0;
+    if (!nr && !props) return 0;
     memcpy(b.m, setup->back, sizeof(b.m));
     if (!unback_make(&b, &ub)) return 0;
     /* The ground's two ways: the screen's right (the camera's x on the
@@ -799,151 +767,18 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
         sLastLaid++;
     }
 
-    /* The props (trees, signs, lamp posts: NITRO_GX3D_TAG_PROP marks, each
-     * run of one mark a prop) and the land's trees (NITRO_GX3D_TAG_LAND
-     * marks, a tree at a time): the thing's picture as the camera has it,
-     * laid on the ground from where it stands. Each vertex: across by its
+    /* The props (signs, lamp posts, boards: NITRO_GX3D_TAG_PROP marks, each
+     * run of one mark a prop): the prop's picture as the camera has it,
+     * laid on the ground from where it stands. Where: the middle of its
+     * lowest vertices (the ground it's on). Each vertex: across by its
      * place across the screen from there, along the shadows' way by its
      * height up the screen from there (as a sprite's rows are). */
-    if (props || lands) {
+    if (props) {
         const V3 pictureUp = v3(0.0f, 1.0f, 0.0f);
-        /* (how far on the screen a length in the camera's space is, at
-         * most: for leaving out what can't reach the view) */
-        const float kx = 1.0f / fabsf(b.m[0][0]), ky = 1.0f / fabsf(b.m[1][1]), kw = 1.0f / fabsf(b.m[2][2]);
-        size_t np = 0, nt = 0, nf = 0, pi, ti, nb0 = nb;
-
-        /* the land's trees: a batch's triangles in order, a new tree
-         * where one's middle is far from the tree's first's */
-        for (bi = 0; bi < batchCount && lands; bi++) {
-            const NitroGx3dBatch *batch = &batches[bi];
-            Tree *tr = NULL;
-            size_t i;
-            if (!NITRO_GX3D_TAG_IS_LAND(batch->tag) || batch->translucent || !batch->texture_param) continue;
-            for (i = batch->first; i + 2 < (size_t)batch->first + batch->count; i += 3) {
-                float r[3], t[3], h[3], y[3], rLo, rHi, tLo, tHi, hLo, hHi, mr, mt;
-                int k, flat;
-                for (k = 0; k < 3; k++) {
-                    V3 q = back(&b, verts[i + (size_t)k].position);
-                    r[k] = dot(q, right);
-                    t[k] = dot(q, toward);
-                    h[k] = dot(q, up);
-                    y[k] = q.y;
-                }
-                rLo = r[0] < r[1] ? (r[0] < r[2] ? r[0] : r[2]) : (r[1] < r[2] ? r[1] : r[2]);
-                rHi = r[0] > r[1] ? (r[0] > r[2] ? r[0] : r[2]) : (r[1] > r[2] ? r[1] : r[2]);
-                tLo = t[0] < t[1] ? (t[0] < t[2] ? t[0] : t[2]) : (t[1] < t[2] ? t[1] : t[2]);
-                tHi = t[0] > t[1] ? (t[0] > t[2] ? t[0] : t[2]) : (t[1] > t[2] ? t[1] : t[2]);
-                hLo = h[0] < h[1] ? (h[0] < h[2] ? h[0] : h[2]) : (h[1] < h[2] ? h[1] : h[2]);
-                hHi = h[0] > h[1] ? (h[0] > h[2] ? h[0] : h[2]) : (h[1] > h[2] ? h[1] : h[2]);
-                /* (a rectangle's two triangles span the same: one middle) */
-                mr = 0.5f * (rLo + rHi);
-                mt = 0.5f * (tLo + tHi);
-                flat = hHi - hLo < LAND_FLAT;
-                if (flat && nf < LAND_FLATS &&
-                    !(nf && sFlats[nf - 1].rLo == rLo && sFlats[nf - 1].rHi == rHi && sFlats[nf - 1].tLo == tLo &&
-                      sFlats[nf - 1].tHi == tHi)) {
-                    sFlats[nf].rLo = rLo; sFlats[nf].rHi = rHi;
-                    sFlats[nf].tLo = tLo; sFlats[nf].tHi = tHi;
-                    sFlats[nf].h = hLo;
-                    nf++;
-                }
-                if (!tr || fabsf(mr - tr->mr) > NITRO_SHADOW_LAND_NEAR || fabsf(mt - tr->mt) > NITRO_SHADOW_LAND_NEAR) {
-                    if (nt >= GROUND_TREES) break;
-                    tr = &sTrees[nt++];
-                    memset(tr, 0, sizeof(*tr));
-                    tr->b = bi;
-                    tr->v0 = i;
-                    tr->mr = mr; tr->mt = mt;
-                    tr->rLo = tr->tLo = tr->hLo = tr->yLo = tr->ftLo = tr->fh = 1e30f;
-                    tr->rHi = tr->tHi = tr->hHi = tr->yHi = tr->ftHi = -1e30f;
-                }
-                tr->v1 = i + 3;
-                if (rLo < tr->rLo) tr->rLo = rLo;
-                if (rHi > tr->rHi) tr->rHi = rHi;
-                if (tLo < tr->tLo) tr->tLo = tLo;
-                if (tHi > tr->tHi) tr->tHi = tHi;
-                if (hLo < tr->hLo) tr->hLo = hLo;
-                if (hHi > tr->hHi) tr->hHi = hHi;
-                if (flat) {
-                    tr->flat = 1;
-                    if (tLo < tr->ftLo) tr->ftLo = tLo;
-                    if (tHi > tr->ftHi) tr->ftHi = tHi;
-                    if (hLo < tr->fh) tr->fh = hLo;
-                } else {
-                    tr->drawn += 3;
-                    for (k = 0; k < 3; k++) {
-                        if (y[k] < tr->yLo) tr->yLo = y[k];
-                        if (y[k] > tr->yHi) tr->yHi = y[k];
-                    }
-                }
-            }
-        }
-        sLastTrees = (unsigned)nt;
-        /* where each stands, and whether its shadow can reach the view */
-        for (ti = 0; ti < nt && np < GROUND_PROPS; ti++) {
-            const Tree *tr = &sTrees[ti];
-            float gr = 0.5f * (tr->rLo + tr->rHi), gt = 0.5f * (tr->tLo + tr->tHi), baseT, baseH, top, under, reach;
-            float xyw[3];
-            V3 base;
-            if (!tr->drawn) continue;
-            if (tr->flat) {
-                baseT = 0.5f * (tr->ftLo + tr->ftHi);
-                baseH = tr->fh;
-            } else {
-                const Flat *found = NULL;
-                size_t fi;
-                for (fi = 0; fi < nf; fi++) {
-                    const Flat *f = &sFlats[fi];
-                    if (gr < f->rLo - LAND_OVER || gr > f->rHi + LAND_OVER || gt < f->tLo - LAND_OVER ||
-                        gt > f->tHi + LAND_OVER || f->h > tr->hLo + 2.0f)
-                        continue;
-                    if (!found || f->h > found->h) found = f;
-                }
-                if (found) {
-                    baseT = 0.5f * (found->tLo + found->tHi);
-                    baseH = found->h;
-                } else {
-                    /* (as a prop: the middle of its lowest vertices) */
-                    float tLo = 1e30f, tHi = -1e30f, hSum = 0.0f;
-                    size_t i, low = 0;
-                    for (i = tr->v0; i < tr->v1; i++) {
-                        V3 q = back(&b, verts[i].position);
-                        float h = dot(q, up), t = dot(q, toward);
-                        if (h > tr->hLo + 1.5f) continue;
-                        if (t < tLo) tLo = t;
-                        if (t > tHi) tHi = t;
-                        hSum += h;
-                        low++;
-                    }
-                    baseT = 0.5f * (tLo + tHi);
-                    baseH = hSum / (float)low;
-                }
-            }
-            base = add(add(scale(right, gr), scale(toward, baseT)), scale(up, baseH));
-            top = tr->yHi - base.y;
-            under = base.y - tr->yLo;
-            /* (standing up, off the ground it's on) */
-            if (!(tr->hHi - baseH >= NITRO_SHADOW_PROP_MIN) || !(top > 1.0f) || top > NITRO_SHADOW_GROUND_CARD_MAX)
-                continue;
-            /* (its shadow no further from where it stands than half its
-             * width and its picture's height's stretch) */
-            reach = 0.5f * (tr->rHi - tr->rLo) + (under > top ? under : top) * stretch + 4.0f;
-            unback_point(&ub, base, xyw);
-            if (!(xyw[2] + reach * kw > 0.0f) || fabsf(xyw[0]) - reach * kx > xyw[2] + reach * kw ||
-                fabsf(xyw[1]) - reach * ky > xyw[2] + reach * kw)
-                continue;
-            sProps[np].b0 = tr->b;
-            sProps[np].b1 = tr->b + 1;
-            sProps[np].v0 = tr->v0;
-            sProps[np].v1 = tr->v1;
-            sProps[np].base = base;
-            sProps[np].top = top;
-            sProps[np].land = 1;
-            np++;
-        }
+        size_t np = 0, pi, nb0 = nb;
 
         /* the props */
-        for (bi = 0; bi < batchCount && props && np < GROUND_PROPS;) {
+        for (bi = 0; bi < batchCount && np < GROUND_PROPS;) {
             uint32_t tag = batches[bi].tag;
             size_t bj = bi + 1, i, g, gEnd, low = 0, drawn = 0;
             float hMin = 1e30f, hMax = -1e30f, top = -1e30f;
@@ -993,11 +828,8 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
                 if (hMax - hMin >= NITRO_SHADOW_PROP_MIN && top > 1.0f && top <= NITRO_SHADOW_GROUND_CARD_MAX) {
                     sProps[np].b0 = bi;
                     sProps[np].b1 = bj;
-                    sProps[np].v0 = g;
-                    sProps[np].v1 = gEnd;
                     sProps[np].base = base;
                     sProps[np].top = top;
-                    sProps[np].land = 0;
                     np++;
                 }
             }
@@ -1014,19 +846,12 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
             int fits = 1;
             for (bi = pr->b0; bi < pr->b1 && fits; bi++) {
                 const NitroGx3dBatch *batch = &batches[bi];
-                size_t i = batch->first > pr->v0 ? batch->first : pr->v0;
-                size_t end = (size_t)batch->first + batch->count < pr->v1 ? (size_t)batch->first + batch->count : pr->v1;
+                size_t i = batch->first, end = (size_t)batch->first + batch->count;
                 if (batch->translucent || !batch->texture_param) continue;
                 for (; i + 2 < end && fits; i += 3) {
                     V3 q[3];
                     int k;
                     for (k = 0; k < 3; k++) q[k] = back(&b, verts[i + (size_t)k].position);
-                    if (pr->land) {
-                        float h0 = dot(q[0], up), h1 = dot(q[1], up), h2 = dot(q[2], up);
-                        float lo = h0 < h1 ? (h0 < h2 ? h0 : h2) : (h1 < h2 ? h1 : h2);
-                        float hi = h0 > h1 ? (h0 > h2 ? h0 : h2) : (h1 > h2 ? h1 : h2);
-                        if (hi - lo < LAND_FLAT) continue;   /* (the stump on the ground) */
-                    }
                     if (written + 3 > capacity) {
                         fits = 0;
                         break;
@@ -1066,8 +891,7 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
                 written = at;
                 break;
             }
-            if (pr->land) sLastTreesLaid++;
-            else sLastPropsLaid++;
+            sLastPropsLaid++;
         }
     }
     if (outBatchCount) *outBatchCount = nb;
@@ -1183,6 +1007,52 @@ void NitroPort_ShadowSunAt(int hour, int minute, NitroShadowSun *sun, float *str
     }
 }
 
+/* The sun as the renderer has it now, for the game's side (the land's
+ * trees' shadows are made there, as polygons): the way its light goes
+ * along the ground and the shadows' length for a height, as
+ * NitroPort_ShadowGroundCards has them, in 1/256ths (a step is a quarter
+ * of a degree or less: the shadows made again a few times a minute at
+ * most). Set by the renderer's thread, read by the game's: each a word. */
+static volatile int sGroundShadows;
+static volatile int32_t sSunWayNow[3];
+static volatile int sSunWaySet;
+
+void NitroPort_SetSunNow(const NitroShadowSun *sun, float strength)
+{
+    const float side = sinf(NITRO_SHADOW_GROUND_SIDE * 3.14159265f / 180.0f);
+    float a, e, cr, ct, stretch;
+    if (!sun || !(strength >= 0.02f)) {
+        sSunWaySet = 0;
+        return;
+    }
+    a = sun->azimuth * 3.14159265f / 180.0f;
+    e = sun->elevation * 3.14159265f / 180.0f;
+    cr = cosf(a);
+    ct = sinf(a);
+    if (ct < side) {
+        ct = side;
+        cr = (cr < 0.0f ? -1.0f : 1.0f) * sqrtf(1.0f - side * side);
+    }
+    if (!(sinf(e) > 0.05f)) {
+        sSunWaySet = 0;
+        return;
+    }
+    stretch = NITRO_SHADOW_GROUND_LENGTH * cosf(e) / sinf(e);
+    sSunWayNow[0] = (int32_t)floorf(cr * 256.0f + 0.5f) * 16;
+    sSunWayNow[1] = (int32_t)floorf(ct * 256.0f + 0.5f) * 16;
+    sSunWayNow[2] = (int32_t)floorf(stretch * 256.0f + 0.5f) * 16;
+    sSunWaySet = 1;
+}
+
+int NitroPort_SunWayNow(int32_t way[3])
+{
+    if (!sSunWaySet || !sGroundShadows) return 0;
+    way[0] = sSunWayNow[0];
+    way[1] = sSunWayNow[1];
+    way[2] = sSunWayNow[2];
+    return 1;
+}
+
 void NitroPort_LookGradeTable(int period, uint32_t table[32768])
 {
     /* white balance, saturation, gamma */
@@ -1228,7 +1098,6 @@ int NitroPort_SunShadows(void)
     return sSunShadows;
 }
 
-static volatile int sGroundShadows;
 
 void NitroPort_SetGroundShadows(int on)
 {

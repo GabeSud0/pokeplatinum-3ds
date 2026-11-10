@@ -382,6 +382,47 @@ uint32_t NitroPort_Gx3dSurveyMoved(const NitroGx3dListSurvey *survey, void *dst,
  * there. */
 uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *survey, void *dst, uint32_t dstBytes, const uint8_t *keep, uint32_t nkeep,
                                     unsigned turn, int32_t pivotX, int32_t pivotZ, int32_t dx, int32_t dy, int32_t dz);
+/* The land's trees, for the sun shadows: a land model's tree shapes'
+ * display lists (lists, bytes, count of them: the materials with a tree's
+ * texture; posScale: the model's, fx32: a world unit is 4096 * 4096 /
+ * posScale of a list's) read once, when the model is first drawn.
+ *
+ * A tree: a list's polygons in order, a new tree where a polygon's middle
+ * (across, x, and in depth, z) is more than 12 units from the tree's first
+ * one's (a tree is three layers leaning back over a polygon flat on the
+ * ground, the stump painted on it; the next tree stands two tiles on). It
+ * stands on its flat polygons' middle; with none (a row's tops, their
+ * stumps another material's), on the flat polygons of any of the lists its
+ * middle is over, under it; else on its lowest vertices. A polygon over 48
+ * units wide is a row of trees, 32 units each: cut into them.
+ *
+ * Each shape then has four lists (NULL, 0 bytes, for one that couldn't be
+ * read that way: draw the shape as it is):
+ * - its own without the flat polygons (Canopies) and the flat ones alone
+ *   (Stumps), each drawing its polygons as the shape's list does, the
+ *   canopies' sent first; and what the whole list leaves set after it
+ *   (Tail: its last COLOR, NORMAL and TEXCOORD), to send after all;
+ * - the trees' shadows for a sun (Shadows), made again when the sun given
+ *   isn't the last one's: each layer's polygon laid on the ground from
+ *   where its tree stands (a unit above it), as the tree seen from the sun
+ *   would fall: across the tree goes across the light's way (the tree's
+ *   right stays on the right), up it goes along the light's way, its
+ *   height above the ground times stretch; the same texture coordinates.
+ *   wayX, wayZ: the way the light goes along the ground (the model's x and
+ *   z; fx32, a unit long), stretch fx32. To send between the Stumps and
+ *   the Tail, marked NITRO_GX3D_TAG_SHADE, with the shape's material still
+ *   set (its texture is the shadow's shape). */
+typedef struct NitroGx3dTreeLists NitroGx3dTreeLists;
+NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists, const uint32_t *bytes, uint32_t count,
+                                            int32_t posScale);
+void NitroPort_Gx3dFreeTreeLists(NitroGx3dTreeLists *trees);
+const void *NitroPort_Gx3dTreeCanopies(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
+const void *NitroPort_Gx3dTreeStumps(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
+const void *NitroPort_Gx3dTreeTail(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
+const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *trees, uint32_t shape, int32_t wayX, int32_t wayZ,
+                                      int32_t stretch, uint32_t *bytes);
+/* (how many trees the shape's shadows are of: rows counted a tree each 32 units) */
+uint32_t NitroPort_Gx3dTreeCount(const NitroGx3dTreeLists *trees, uint32_t shape);
 /* An MTX_TRANS (x, y, z: as its parameters, fx32) packed for a display
  * list, into dst: its bytes (16), 0 if it doesn't fit. */
 uint32_t NitroPort_Gx3dTranslateCommand(void *dst, uint32_t dstBytes, int32_t x, int32_t y, int32_t z);
@@ -453,27 +494,23 @@ void NitroPort_Gx3dTag(uint32_t tag);
 /* The marks' kinds: a field sprite's is its Billboard's address (even,
  * below NITRO_GX3D_TAG_PROP on a 3DS); a character's round shadow's, its
  * sprite's | 1; a small standing map prop's (a tree, a sign, a lamp post),
- * NITRO_GX3D_TAG_PROP | (a number << 1); the land's own trees' (most
- * trees are polygons of the land model, not props: the game marks the
- * land's tree materials as it draws them), NITRO_GX3D_TAG_LAND.
+ * NITRO_GX3D_TAG_PROP | (a number << 1).
  *
- * The land's are many (a forest), all still, and all with the one mark:
- * kept whole only within NITRO_GX3D_LAND_REACH_NUM / _DEN of the view's
- * half width and height (a tree's shadow is shorter than the tree's
- * height and a half: no further than that beside the view does one reach
- * it), no more than NITRO_GX3D_MAX_LAND_TAGGED of them in a scene (the
- * rest of the room is the characters', drawn after the land); and an
- * in-between scene's are the scene's own moved back half the camera's
- * move, not paired with the scene before's (which trees are within reach
- * changes as the camera moves: the n-th one isn't the same tree). */
+ * Two more only say how their polygons are drawn (NITRO_GX3D_TAG_IS_DRAW):
+ * they aren't kept whole or reached for beside the view, the engine treats
+ * them as any polygon. NITRO_GX3D_TAG_SHADE: not a thing but a shadow lying
+ * on the ground (the land's trees': NitroPort_Gx3dTreeLists), drawn by the
+ * renderer as the sun shadows are (the shade where a texel is opaque, a
+ * pixel once), not at all by one that has no sun shadows.
+ * NITRO_GX3D_TAG_STUMP: a tree's stump painted on the ground with a dark
+ * patch round it: drawn without the patch (its green texels), which was
+ * the game's own shadow under the tree. */
 #define NITRO_GX3D_TAG_PROP 0xC0000000u
-#define NITRO_GX3D_TAG_LAND 0x80000000u
+#define NITRO_GX3D_TAG_SHADE 0x40000000u
+#define NITRO_GX3D_TAG_STUMP 0x40000002u
 #define NITRO_GX3D_TAG_IS_PROP(tag) (((tag)&0xC0000001u)==NITRO_GX3D_TAG_PROP)
-#define NITRO_GX3D_TAG_IS_LAND(tag) (((tag)&0xC0000001u)==NITRO_GX3D_TAG_LAND)
-#define NITRO_GX3D_TAG_IS_ROUND(tag) (((tag)&1u) && !((tag)&0x80000000u))
-#define NITRO_GX3D_LAND_REACH_NUM 7
-#define NITRO_GX3D_LAND_REACH_DEN 4
-#define NITRO_GX3D_MAX_LAND_TAGGED 1536u
+#define NITRO_GX3D_TAG_IS_DRAW(tag) (((tag)&0xC0000001u)==0x40000000u)
+#define NITRO_GX3D_TAG_IS_ROUND(tag) (((tag)&1u) && !((tag)&0xC0000000u))
 
 /* PC reference output. Samples from virtual DS texture/palette VRAM banks.
  * Each pixel is RGB555|0x8000 when a 3D polygon covers it, otherwise zero.

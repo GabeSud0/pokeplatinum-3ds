@@ -405,7 +405,6 @@ static void flat_triangle(int x0,int x1,int y0,int y1)
  * of their own, and on the in-between scene's. Nothing else changes. */
 static void quad_at(int x,uint32_t attr);
 static void swap_done(void);
-static void row_at(int y,int z);
 static void tagged_quads(int dx)
 {
     const uint32_t opaque=(3u<<6)|(31u<<16);
@@ -607,76 +606,6 @@ static void test_tagged_whole(void)
     }
     NitroPort_Gx3dSetInterpolation(0);
     NitroPort_SetGroundShadows(0);
-}
-/* The land's trees' mark (NITRO_GX3D_TAG_LAND): a triangle kept whole
- * when any of it is within their nearer reach of the view (7/4 of its
- * half width: a row of trees is one wide polygon), not past it (another
- * mark's is, up to 4 times). An in-between scene's are the scene's own,
- * moved back half the camera's move: not paired with the scene before's
- * by their place in the run (a tree come within reach before the others
- * would pair each with its neighbour). */
-static void test_tagged_land(void)
-{
-    static const uint32_t proj[16]={ONE,0,0,0, 0,ONE,0,0, 0,0,ONE,ONE, 0,0,0,2*ONE};
-    const uint32_t opaque=(3u<<6)|(31u<<16);
-    const NitroGx3dScene *scene,*mid;
-    unsigned k;
-    int r,sc;
-    reset_geometry();
-    NitroPort_SetGroundShadows(1);
-    swap_done();
-    NitroPort_Gx3dTag(NITRO_GX3D_TAG_LAND);
-    quad_at(-1000,opaque);               /* (in the view) */
-    quad_at(6000,opaque);                /* (across the reach's end, 7168) */
-    quad_at(7300,opaque);                /* (past it) */
-    NitroPort_Gx3dTag(0x3000u);
-    quad_at(7300,opaque);                /* (another mark's: within its reach) */
-    NitroPort_Gx3dTag(0);
-    swap_done();
-    scene=NitroPort_Gx3dScene();
-    CHECK(scene && scene->tagged_count==6);
-    if(scene && scene->tagged_count==6){
-        const NitroGx3dTriangle *t=scene->tagged_triangles;
-        for(k=0;k<4;k++)CHECK(t[k].tag==NITRO_GX3D_TAG_LAND);
-        CHECK(t[0].v[0].clip[0]==-1000 && t[2].v[0].clip[0]==6000 && t[2].v[1].clip[0]==8000 && t[3].v[1].clip[0]==8000);
-        CHECK(t[4].tag==0x3000u && t[5].tag==0x3000u && t[4].v[0].clip[0]==7300);
-    }
-    /* the camera coming nearer (w from 2 to 1.8, as
-     * test_interpolation_camera_move): two trees, the first of them only
-     * in the second scene */
-    reset_geometry();
-    NitroPort_GxDirectWrite(0x10,0);
-    for(k=0;k<16;k++)NitroPort_GxDirectWrite(0x16,proj[k]);
-    NitroPort_GxDirectWrite(0x10,2);
-    NitroPort_Gx3dSetInterpolation(1);
-    swap_done();
-    for(sc=0;sc<2;sc++){
-        int z=sc?-820:0;
-        for(r=-12;r<12;r++)row_at(400*r,z);
-        NitroPort_Gx3dTag(NITRO_GX3D_TAG_LAND);
-        if(sc)row_at(400*5,z);
-        row_at(400*2,z);
-        NitroPort_Gx3dTag(0);
-        swap_done();
-    }
-    scene=NitroPort_Gx3dScene();
-    mid=NitroPort_Gx3dMidScene(NULL,NULL);
-    CHECK(scene && scene->tagged_count==4 && mid && mid->tagged_count==4);
-    if(scene && scene->tagged_count==4 && mid && mid->tagged_count==4){
-        const int32_t w=(8192+(8192-820))/2;
-        for(k=0;k<4;k++){
-            const NitroGx3dVertex *n=&scene->tagged_triangles[k].v[0],*m=&mid->tagged_triangles[k].v[0];
-            int32_t y=(int32_t)floor(((double)w-n->clip[1])*192.0/(2.0*w)*256.0+0.5);
-            CHECK(mid->tagged_triangles[k].tag==NITRO_GX3D_TAG_LAND);
-            CHECK(n->clip[1]==(k<2?400*5:400*2) && n->clip[3]==8192-820);
-            /* (its own place, half the move back: further from the camera) */
-            CHECK(m->clip[1]==n->clip[1] && m->clip[0]==n->clip[0] && abs(m->clip[3]-w)<=1);
-            CHECK(abs(m->y-y)<=2 && m->y!=n->y);
-        }
-    }
-    NitroPort_Gx3dSetInterpolation(0);
-    NitroPort_SetGroundShadows(0);
-    reset_geometry();
 }
 /* A quad 2000 wide, its left side at x (attr: POLYGON_ATTR). */
 static void quad_at(int x,uint32_t attr)
@@ -2585,6 +2514,242 @@ static unsigned list_quad(uint32_t *c,int x,int z)
     c[n++]=0x28;c[n++]=(uint32_t)(1u<<20);                  /* (VTX_DIFF: z + 1) */
     return n;
 }
+/* The land's trees (NitroPort_Gx3dTreeLists): a tree shape's list as its
+ * canopies and its stumps apart, drawing what the list draws; each tree's
+ * layers laid on the ground from its own stump for a sun, across the
+ * light's way and along it, facing up as the tree faces the camera; a
+ * row's tops on the stumps of another list, a tree each 32 units. And the
+ * marks that only say how polygons are drawn: on their triangles, nothing
+ * kept whole or reached for. */
+static unsigned tree_quad(uint32_t *c,int x0,int x1,int y0,int y1,int z0,int z1,int s0,int t0)
+{
+    /* (bottom left, bottom right, top right, top left; a texel a 64th) */
+    const int xs[4]={x0,x1,x1,x0},ys[4]={y0,y0,y1,y1},zs[4]={z0,z0,z1,z1};
+    unsigned n=0,k;
+    for(k=0;k<4;k++){
+        int s=s0+(xs[k]-x0)/4,t=t0-(k>=2?(y1!=y0?(y1-y0)/4:(z0-z1)/4):0);
+        c[n++]=0x22;c[n++]=word2((int16_t)s,(int16_t)t);
+        c[n++]=0x23;c[n++]=word2((int16_t)xs[k],(int16_t)ys[k]);c[n++]=(uint16_t)zs[k];
+    }
+    return n;
+}
+typedef struct TreeCorner { int32_t x,y,z; float s,t; } TreeCorner;
+/* (seen from above and behind, as the field's camera sees the land: the
+ * screen's up is the world's up and away; what stands and what lies flat
+ * both seen) */
+static const int32_t sTreeView[16]={ONE,0,0,0, 0,2349,839,0, 0,-3355,587,0, 0,0,0,ONE};
+static void tree_view(void)
+{
+    unsigned k;
+    reset_geometry();
+    NitroPort_GxDirectWrite(0x10,0);
+    for(k=0;k<16;k++)NitroPort_GxDirectWrite(0x16,(uint32_t)sTreeView[k]);
+    NitroPort_GxDirectWrite(0x10,2);
+    swap_done();
+}
+/* (a list's triangles' corners, sent with the polygon attributes given
+ * under that view: back in the list's own coordinates, a few units off
+ * at most) */
+static unsigned tree_scene(const void *list,uint32_t bytes,uint32_t attr,TreeCorner *out,unsigned max)
+{
+    const NitroGx3dScene *scene;
+    const double a=2349.0/4096.0,b=-3355.0/4096.0,c2=839.0/4096.0,d=587.0/4096.0,det=a*d-b*c2;
+    unsigned n=0,i,k;
+    NitroPort_GxDirectWrite(0x29,attr);
+    if(list && bytes)NitroPort_GxFifoWords(list,bytes/4u);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    for(i=0;i<scene->count;i++){
+        for(k=0;k<3 && n<max;k++,n++){
+            const NitroGx3dVertex *v=&scene->triangles[i].v[k];
+            /* (clip y = a y + b z, clip z = c y + d z) */
+            out[n].x=v->clip[0];
+            out[n].y=(int32_t)floor((d*v->clip[1]-b*v->clip[2])/det+0.5);
+            out[n].z=(int32_t)floor((a*v->clip[2]-c2*v->clip[1])/det+0.5);
+            out[n].s=v->s;out[n].t=v->t;
+        }
+    }
+    return n;
+}
+static int tree_has(const TreeCorner *c,unsigned n,int x,int y,int z)
+{
+    unsigned i;
+    for(i=0;i<n;i++)if(abs(c[i].x-x)<=1 && abs(c[i].y-y)<=8 && abs(c[i].z-z)<=8)return 1;
+    return 0;
+}
+static void test_tree_lists(void)
+{
+    static uint32_t cmds[600],trees[600],tops[100],bottoms[100],whole[900];
+    static TreeCorner raw[400],cut[400],sh[400];
+    const void *lists[3];
+    uint32_t bytes[3],nb=0,ns=0,nt=0,nsh=0,nsh2=0;
+    const uint32_t both=(3u<<6)|(31u<<16);
+    const void *canopy,*stumps,*tail,*shadow,*again;
+    NitroGx3dTreeLists *t;
+    unsigned c=0,i,k,nraw,ncut,n,front=0,back=0;
+    /* two trees 32 units apart (a unit 64): three layers leaning back
+     * and a stump flat on the ground (58 up) each */
+    cmds[c++]=0x40;cmds[c++]=1;
+    cmds[c++]=0x20;cmds[c++]=RGB(0,31,0);
+    for(i=0;i<2;i++){
+        int x=-2048+2048*(int)i;
+        c+=tree_quad(&cmds[c],x-704,x+704,1843,2650,128,-1024,0,1024);
+        c+=tree_quad(&cmds[c],x-1056,x+1056,1120,2220,464,-1100,0,480);
+        c+=tree_quad(&cmds[c],x-1280,x+1280,406,1654,630,-1146,352,1024);
+        c+=tree_quad(&cmds[c],x-1024,x+1024,58,58,960,-960,544,448);
+    }
+    cmds[c++]=0x41;
+    bytes[0]=dl_pack(trees,cmds,c)*4u;
+    /* a row's tops (two trees wide), and in another list its bottoms and
+     * their stumps */
+    c=0;
+    cmds[c++]=0x40;cmds[c++]=1;
+    c+=tree_quad(&cmds[c],-2048,2048,1200,2400,400,-800,0,992);
+    cmds[c++]=0x41;
+    bytes[1]=dl_pack(tops,cmds,c)*4u;
+    c=0;
+    cmds[c++]=0x40;cmds[c++]=1;
+    c+=tree_quad(&cmds[c],-2048,2048,300,1500,500,-700,0,576);
+    c+=tree_quad(&cmds[c],-2048,2048,58,58,900,-900,0,992);
+    cmds[c++]=0x41;
+    bytes[2]=dl_pack(bottoms,cmds,c)*4u;
+    lists[0]=trees;lists[1]=tops;lists[2]=bottoms;
+    CHECK(NitroPort_Gx3dTreeLists(lists,bytes,3,0)==NULL && NitroPort_Gx3dTreeLists(NULL,bytes,3,64<<12)==NULL);
+    t=NitroPort_Gx3dTreeLists(lists,bytes,3,64<<12);
+    CHECK(t!=NULL);
+    if(!t)return;
+    CHECK(NitroPort_Gx3dTreeCount(t,0)==2 && NitroPort_Gx3dTreeCount(t,1)==2 && NitroPort_Gx3dTreeCount(t,2)==2 &&
+          NitroPort_Gx3dTreeCount(t,3)==0);
+    /* the trees' list as its canopies, its stumps and what it leaves set:
+     * sent one after another, every triangle the list draws (the stumps'
+     * after the canopies') */
+    canopy=NitroPort_Gx3dTreeCanopies(t,0,&nb);
+    stumps=NitroPort_Gx3dTreeStumps(t,0,&ns);
+    tail=NitroPort_Gx3dTreeTail(t,0,&nt);
+    CHECK(canopy && stumps && tail && nb && ns && nt && !(nb&3u) && !(ns&3u) && !(nt&3u));
+    tree_view();
+    nraw=tree_scene(trees,bytes[0],both,raw,400);
+    CHECK(nraw==48);
+    if(canopy && stumps && tail && nb+ns+nt<=sizeof(whole)){
+        static const unsigned from[8]={0,1,2,4,5,6,3,7};   /* (the list's quads, in the order they come now) */
+        int same=1;
+        memcpy(whole,canopy,nb);
+        memcpy((uint8_t *)whole+nb,stumps,ns);
+        memcpy((uint8_t *)whole+nb+ns,tail,nt);
+        tree_view();
+        ncut=tree_scene(whole,nb+ns+nt,both,cut,400);
+        CHECK(ncut==48);
+        for(i=0;i<8 && ncut==48 && nraw==48;i++)
+            if(memcmp(&cut[i*6u],&raw[from[i]*6u],6u*sizeof(raw[0])))same=0;
+        CHECK(same);
+        /* (the stumps alone: the two flat quads) */
+        tree_view();
+        n=tree_scene(stumps,ns,both,cut,400);
+        CHECK(n==12);
+        for(i=0;i<n;i++)CHECK(abs(cut[i].y-58)<=8);
+    }
+    /* a list with no flat polygon: drawn as it is (no canopies or stumps
+     * of its own), its tail and its shadows all the same */
+    CHECK(!NitroPort_Gx3dTreeCanopies(t,1,&nb) && !nb && !NitroPort_Gx3dTreeStumps(t,1,&ns) && !ns);
+    CHECK(NitroPort_Gx3dTreeTail(t,1,&nt) && nt);
+    CHECK(NitroPort_Gx3dTreeCanopies(t,2,&nb) && NitroPort_Gx3dTreeStumps(t,2,&ns));
+    CHECK(!NitroPort_Gx3dTreeCanopies(t,3,&nb) && !NitroPort_Gx3dTreeShadows(t,3,0,4096,4096,&nb));
+
+    /* the shadows, the light going towards the camera (+z), as long as
+     * what casts them is tall: each layer's corner (x, y) at (x, the
+     * ground + a unit, the stump's middle + its height above the ground);
+     * its texture coordinates its own */
+    shadow=NitroPort_Gx3dTreeShadows(t,0,0,4096,4096,&nsh);
+    CHECK(shadow && nsh && !(nsh&3u));
+    tree_view();
+    n=tree_scene(shadow,nsh,both,sh,400);
+    CHECK(n==36);
+    for(i=0;i<n;i++)CHECK(abs(sh[i].y-(58+64))<=8);
+    for(i=0;i<2;i++){
+        int x=-2048+2048*(int)i;
+        CHECK(tree_has(sh,n,x-704,122,1843-58) && tree_has(sh,n,x+704,122,2650-58));
+        CHECK(tree_has(sh,n,x-1056,122,1120-58) && tree_has(sh,n,x+1056,122,2220-58));
+        CHECK(tree_has(sh,n,x-1280,122,406-58) && tree_has(sh,n,x+1280,122,1654-58));
+    }
+    /* (every corner's texture coordinates one of the layers' own) */
+    for(i=0;i<n && nraw==48;i++){
+        int found=0;
+        for(k=0;k<nraw;k++)if(raw[k].s==sh[i].s && raw[k].t==sh[i].t)found=1;
+        CHECK(found);
+    }
+    /* the same sun: the same list, not made again; another: another */
+    again=NitroPort_Gx3dTreeShadows(t,0,0,4096,4096,&nsh2);
+    CHECK(again==shadow && nsh2==nsh);
+    /* the light going to the right (+x), half as long: across the tree
+     * goes across the light (its right towards the camera's left of the
+     * light: -z... the tree's +x at -z), up it along +x */
+    shadow=NitroPort_Gx3dTreeShadows(t,0,4096,0,2048,&nsh);
+    tree_view();
+    n=tree_scene(shadow,nsh,both,sh,400);
+    CHECK(n==36);
+    CHECK(tree_has(sh,n,-2048+(1843-58)/2,122,704) && tree_has(sh,n,-2048+(2650-58)/2,122,-704));
+    CHECK(tree_has(sh,n,0+(406-58)/2,122,1280) && tree_has(sh,n,0+(1654-58)/2,122,-1280));
+    /* the row's tops: on the stumps of the other list (58 up, their
+     * middle z 0), a tree each 32 units: each half about its own middle */
+    shadow=NitroPort_Gx3dTreeShadows(t,1,4096,0,4096,&nsh);
+    CHECK(shadow && nsh);
+    tree_view();
+    n=tree_scene(shadow,nsh,both,sh,400);
+    CHECK(n==12);
+    CHECK(tree_has(sh,n,-1024+(1200-58),122,1024) && tree_has(sh,n,-1024+(1200-58),122,-1024));
+    CHECK(tree_has(sh,n,1024+(2400-58),122,1024) && tree_has(sh,n,1024+(2400-58),122,-1024));
+    CHECK(!tree_has(sh,n,(1200-58),122,2048));   /* (not the row laid whole about its middle) */
+    /* too long to fit the list's coordinates: left out */
+    CHECK(NitroPort_Gx3dTreeShadows(t,1,4096,0,4096*40,&nsh)==NULL && nsh==0);
+
+    /* facing: seen from above and behind (the field's camera: the
+     * screen's up is the world's up and away), whichever side of the
+     * trees' own layers is drawn, that side of their shadows is */
+    {
+        unsigned side;
+        shadow=NitroPort_Gx3dTreeShadows(t,0,3547,2048,3317,&nsh);
+        canopy=NitroPort_Gx3dTreeCanopies(t,0,&nb);
+        for(side=1;side<=2;side++){
+            unsigned drawn,laid;
+            tree_view();
+            drawn=tree_scene(canopy,nb,(side<<6)|(31u<<16),cut,400);
+            laid=tree_scene(shadow,nsh,(side<<6)|(31u<<16),sh,400);
+            CHECK((drawn==36 && laid==36) || (drawn==0 && laid==0));
+            if(drawn)front++;else back++;
+        }
+        CHECK(front==1 && back==1);
+    }
+    NitroPort_Gx3dFreeTreeLists(t);
+    NitroPort_Gx3dFreeTreeLists(NULL);
+
+    /* the marks that only say how polygons are drawn: carried, the
+     * polygons as any others (one beside the view not kept, nothing kept
+     * whole) */
+    reset_geometry();
+    NitroPort_SetGroundShadows(1);
+    swap_done();
+    CHECK(NITRO_GX3D_TAG_IS_DRAW(NITRO_GX3D_TAG_SHADE) && NITRO_GX3D_TAG_IS_DRAW(NITRO_GX3D_TAG_STUMP) &&
+          !NITRO_GX3D_TAG_IS_DRAW(NITRO_GX3D_TAG_PROP|2u) && !NITRO_GX3D_TAG_IS_DRAW(0x3000u) &&
+          !NITRO_GX3D_TAG_IS_PROP(NITRO_GX3D_TAG_SHADE) && !NITRO_GX3D_TAG_IS_ROUND(NITRO_GX3D_TAG_STUMP));
+    {
+        const NitroGx3dScene *scene;
+        NitroPort_Gx3dTag(NITRO_GX3D_TAG_SHADE);
+        quad_at(-1000,both);
+        quad_at(5000,both);
+        NitroPort_Gx3dTag(NITRO_GX3D_TAG_STUMP);
+        quad_at(-1000,both);
+        NitroPort_Gx3dTag(0);
+        swap_done();
+        scene=NitroPort_Gx3dScene();
+        CHECK(scene && scene->count==4 && scene->tagged_count==0);
+        if(scene && scene->count==4){
+            CHECK(scene->triangles[0].tag==NITRO_GX3D_TAG_SHADE && scene->triangles[1].tag==NITRO_GX3D_TAG_SHADE);
+            CHECK(scene->triangles[2].tag==NITRO_GX3D_TAG_STUMP && scene->triangles[3].tag==NITRO_GX3D_TAG_STUMP);
+        }
+    }
+    NitroPort_SetGroundShadows(0);
+    reset_geometry();
+}
 /* NitroPort_Gx3dTrimListRows: one list cut into rows by where each
  * polygon starts in z: the two lists together are the whole, each polygon
  * in one (rows of a map drawn again two ways, side by side). */
@@ -2847,6 +3012,7 @@ int main(void)
     test_same_scenes_left_out();
     test_list_trimmed();
     test_list_rows();
+    test_tree_lists();
     test_mid_left_out_behind();
     test_earlier_scene_unread();
     test_scene_registers();
@@ -2867,7 +3033,6 @@ static void run_all(void)
     test_tags();
     test_tag_rules();
     test_tagged_whole();
-    test_tagged_land();
     test_sprite_texel_a_pixel();
     test_soft_sprites();
     test_interpolation();

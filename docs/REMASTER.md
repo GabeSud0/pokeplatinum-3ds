@@ -3620,7 +3620,10 @@ then the small props and the land's trees; houses and the scenery later.
   the scene gone through; the whole setup only for a scene with marks and
   no round shadow. Also: one copy's vertices, not nine's; the camera's
   space inverted once a scene, not for every vertex (unback_make); the
-  sprites' foot rows kept between scenes.
+  sprites' foot rows kept between scenes. (On a 3DS, log 355495ce: the
+  frames' building 7 to 9 ms where it was 11 to 12, with the trees'
+  shadows then laid there too, 2.8 to 3.2 ms of it; those are the game's
+  polygons now, below.)
 - The props (trees, signs, lamp posts, boards and other small standing
   things), the second part (2026-11-10). The game marks them as it draws
   them (patch 0138, map_prop.c: NITRO_GX3D_TAG_PROP | the prop's number
@@ -3645,8 +3648,8 @@ then the small props and the land's trees; houses and the scenery later.
   slabs their shadows would fold to strips at midday.) Fading to the tip
   at the top. One copy, as the characters'.
   Drawn (draw_ground_shadows) before the characters', in batches marked
-  NITRO_SHADOW_ONCE, each pixel darkened once: a tree's layers overlap and
-  trees each other, and it's the shade just once (and one multiply). By a
+  NITRO_SHADOW_ONCE, each pixel darkened once: a prop's layers overlap and
+  props each other, and it's the shade just once (and one multiply). By a
   stencil bit: bit 0 of the 0xFF the opaque pass left, cleared where a
   shadow is drawn; with the outlines' copies the stencil holds the
   polygons' IDs (0 to 63), so bit 7 instead, set where a shadow is drawn
@@ -3664,60 +3667,101 @@ then the small props and the land's trees; houses and the scenery later.
   115, the rows along a forest's edge conttree_b/_t and conttree2_b/_t in
   77 and 98, tree04_2, tree3_01, tree3_02, conttree3_2). A tree there is
   three layers leaning back and a fourth polygon flat on the ground with
-  the stump and the dark patch round it (tree2_01: 40 wide, 41 tall, on
-  two tiles by two); a row is one wide polygon a layer, its tops and its
-  bottoms in two materials.
-  The game marks them (patch 0139, land_data.c): every land model the
-  file draws goes through Port_DrawLand, which sets NitroSystem's shape
-  callback for the draw; a shape whose material has a tree texture (by
-  the model's own list of its textures' materials: the materials' names
-  don't always say, "s", "lambert47", "file3Material"; kept a model at a
-  time until a land model is loaded) is sent between NitroPort_Gx3dTag(
-  NITRO_GX3D_TAG_LAND) and its end. Not with the sun shadows off (then
-  nothing changes at all), in the Distortion World (its trees stand on
-  walls), or for the copies drawn with a callback of their own (the
-  mirrored river's). Not the Battle Frontier's trees, a gym's or the
-  snow's yet.
-  The engine keeps their triangles whole as the others' (keep_tagged),
-  but there are many, all still and all with the one mark: kept only
-  within 7/4 of the view's half width and height (a tree's shadow is
-  under two tiles and a half long; any part of the triangle within it: a
-  row is one wide polygon), at most 1536 of the 2048 (the rest is the
-  characters', drawn after the land); the look-ahead that passes over
-  hidden vertices uses that reach for them too. An in-between scene's
-  are the scene's own moved back half the camera's move (sClipMotion, as
-  the land's polygons with no pair), not paired with the scene before's:
-  which trees are within reach changes as the camera moves, and the n-th
-  of the run isn't the same tree.
-  The shadow (NitroPort_ShadowGroundCards): a marked batch's triangles in
-  the order the game sent them, a new tree where a triangle's middle (of
-  its span across and in depth: a rectangle's two triangles have one) is
-  more than 12 units from the tree's first triangle's (a tree's layers
-  stand over one another, the next tree two tiles on: over all 666 land
-  models that splits tree01, tree2_01 and tree04_2 into 6269 trees of 8
-  triangles each and some 90 odd pieces, and the rows into rows). Where it
-  stands: the middle of its own flat triangles (the stump), which aren't
-  laid; with none (a row's tops), the flat triangles of any marked batch
-  its middle is over, under it; else its lowest vertices, as a prop (the
-  palm-like tree3's trunk stands on its own edge). Then as a prop: the
-  picture laid from there, once. One whose shadow can't reach the view
-  (its middle further off it than half its width and its picture's
-  height's stretch) is left out before any of its vertices is laid.
+  the stump and a dark green patch round it, the game's own shadow under
+  the tree (tree2_01: 40 wide, 41 tall, on two tiles by two); a row is
+  one wide polygon a layer, 32 units a tree, its tops and its bottoms in
+  two materials. All quads.
+  First (d538682) the land's tree shapes were marked and their triangles
+  kept whole, as the characters' are, each tree's picture laid on the
+  ground by the renderer every frame. On a 3DS (log 355495ce): 65 to 70
+  trees within reach a scene, 600 marked triangles, 2.8 to 3.2 ms a
+  frame laying them and about 3 ms a scene more for the geometry thread
+  (it leaves scenes out by the Galactic building, 87 to 97% busy: 49 to
+  56 frames a second there); the shadow a thin wedge beside the tree,
+  not its shape (the picture slid sideways along the light: a sprite's
+  shadow that way is the sprite's, a 40-wide tree's slid 25 is a sliver
+  showing past the tree); and the painted patch still under it.
+  Now the shadows are polygons the game sends, made once
+  (NitroPort_Gx3dTreeLists, port_gx3d.c, with the display lists' reader
+  the mirrored maps use): a land model's tree shapes' lists are read the
+  first time the model is drawn, its trees found as before (a list's
+  polygons in order, a new tree where a polygon's middle is more than 12
+  units from the tree's first one's: over all 666 land models that
+  splits tree01, tree2_01 and tree04_2 into 6269 trees of four polygons
+  and some 90 odd pieces; a polygon over 48 units wide is a row, cut
+  into trees of 32), where each stands (its own flat polygons' middle;
+  a row's tops, with none, the flat polygons of another list under
+  them; else its lowest vertices). Each shape then has:
+  - its list without the flat polygons, and the flat ones alone, each
+    drawing what the shape's list draws (NitroPort_Gx3dSurveyRuns' runs:
+    a list of vertices a tree), and what the list leaves set after it
+    (its last COLOR, NORMAL, TEXCOORD and coordinates: the next shape may
+    take them);
+  - its trees' shadows for a sun: each layer's polygon laid on the
+    ground a unit above where its tree stands, as the tree seen from the
+    sun would fall: across the tree goes across the light's way, up it
+    along the light's way, its height above the ground times the sun's
+    cotangent x 1.25; the layer's own texture coordinates, so the
+    layer's cut-out is the shadow's shape; its vertices the other way
+    round (laid down it faces up as the tree faces the camera, whichever
+    side the material draws). A list of vertices a tree, so the engine
+    passes over one out of the view by its box. Made again when the sun
+    the port gives (NitroPort_SunWayNow: the way and length the
+    characters' shadows have, in 1/256ths) isn't the last one's: a few
+    times a minute at most.
+  The game (patch 0139, land_data.c: every land model the file draws
+  goes through Port_DrawLand, which sets NitroSystem's shape callback
+  for the draw) sends a tree material's shape as: the layers; the stumps
+  marked NITRO_GX3D_TAG_STUMP; the shadows marked NITRO_GX3D_TAG_SHADE;
+  the tail. Those two marks only say how polygons are drawn
+  (NITRO_GX3D_TAG_IS_DRAW): the engine keeps nothing whole for them and
+  reaches for nothing beside the view; a shadow polygon is clipped at the
+  view's sides where it is, as the ground under it, and the in-between
+  scenes have it halfway as they have the land. They take none of the
+  DS's 2048 polygons. Not with the sun shadows off or no sun (then the
+  shapes are sent as they are), in the Distortion World (its trees stand
+  on walls), for a model drawn mirrored, or the copies drawn with a
+  callback of their own (the mirrored river's). Not the Battle
+  Frontier's trees, a gym's or the snow's yet.
+  The renderer leaves the SHADE batches out of its other passes (opaque,
+  outlines, the classic path, the PC's rasteriser) and draws them with
+  the props' in draw_ground_shadows: one shade (0.75 of the characters'
+  darkening at their feet, no fade: where trees' shadows overlap there
+  is no seam), where the texel is over half opaque, a pixel once.
+  The stumps (STUMP batches, in the opaque pass): the batch's combiner
+  with another alpha, (1 - the texel's green) x its alpha + its red,
+  and the alpha test above 250: the stump's browns and its dark outline
+  pass (red no less than green), the patch's greens don't (8/255 and
+  25/255 greener in tree2_01), nor the clear texels. So the painted
+  patch is gone under a tree that casts a sun shadow, and only then.
   Not yet: caves and other roofed places drawn in perspective get the
-  characters' shadows too; the game's own painted patch under each tree
-  (tshadow) is still drawn as well.
+  characters' shadows too; the palm-like tree3's trunk has its patch in
+  a standing polygon, kept; the lighter disc painted on the grass under
+  some rows (tshadow) is the ground's own texture, kept.
+- The engine's vertices, one division each (2026-11-10, for the same
+  place): to_screen divided three times in doubles for every vertex
+  drawn (1 / W, then by 2W for x and for y); now by 1 / W once. The
+  same position to the 1/256 pixel but for one vertex in 50 million (a
+  256th off). The geometry thread goes through 6,000 to 9,000 of them a
+  scene.
 - The log, after 5 seconds and then every 30: the scenes with marks, and
   in those the marked sprites, the round shadows and the sun shadows laid
-  a scene, the props marked and the props' shadows laid, the land's trees
-  within reach and their shadows laid, the marked triangles a scene (and
-  the scenes where their room was full, or set up from the whole scene),
-  the ms a scene laying them, and where the sun is. Tests:
+  a scene, the props marked and the props' shadows laid, the marked
+  triangles a scene (and the scenes where their room was full, or set up
+  from the whole scene), the land's trees' shadows' batches and triangles
+  a scene (the game's polygons), the ms a scene laying the others, and
+  where the sun is. Tests:
   test_gx3d (the mark on the triangles after it, in batches of their own,
   on the in-between scene's; the whole triangles of one across the view's
   side and one past it, as vertices, and halfway in the in-between scene;
-  the land's: kept across their reach's end, not past it, and in the
-  in-between scene half the camera's move back with a tree come within
-  reach before the others; with and without the geometry thread);
+  the trees' lists: a shape's layers, stumps and tail together drawing
+  every triangle the shape's list draws, the stumps alone the flat ones;
+  each layer's corners laid from its own stump for a light towards the
+  camera and one to the side, its texture coordinates its own; a row's
+  tops on the stumps of another list, a tree each 32 units; the same sun
+  the same list; what doesn't fit left out; seen from above, the shadows
+  drawn on the side the layers are; the draw-only marks carried and
+  nothing kept whole for them; with and without the geometry thread);
   test_shadow (the character's alone by its mark, 6 units from its round
   shadow, not the nearer unmarked grass, not a marked sign; from the
   round shadow's middle, also when its two triangles are two batches; its
@@ -3728,10 +3772,8 @@ then the small props and the land's trees; houses and the scenery later.
   whichever way round their triangles; a prop of two layers and the same
   mark again: each from its own foot, vertex by vertex, in a batch marked
   once, the colours, none for one lying flat, see-through or untextured,
-  what doesn't fit left out whole; the land's: two trees of one batch
-  each from its own stump and the stump not laid, a row's tops from the
-  stumps of a later batch, a tree far beside the view left out and laid
-  when it's near, a batch a texture, what doesn't fit left out whole).
+  what doesn't fit left out whole; the sun handed to the game: the same
+  way and length, none at dusk or with the shadows off).
   test_gx3d also: no marks with the sun shadows off; a box test beside
   the view passing only with a mark set.
 

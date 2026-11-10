@@ -196,7 +196,12 @@ void NitroPort_Gx3dRasterizeSceneAlpha(const NitroGx3dScene *scene,uint16_t *rgb
         static uint16_t order[NITRO_GX3D_MAX_TRIANGLES],scratch[NITRO_GX3D_MAX_TRIANGLES];
         size_t n=NitroPort_Gx3dDrawOrder(scene,order,scratch);
         NitroPort_Gx3dMapTextureBanks(&sBanks);
-        for(i=0;i<n;i++)raster_triangle(&scene->triangles[order[i]],rgba555);
+        for(i=0;i<n;i++){
+            /* (a sun shadow lying on the ground, NITRO_GX3D_TAG_SHADE: the
+             * 3DS's renderer's; here there are none) */
+            if(scene->triangles[order[i]].tag==NITRO_GX3D_TAG_SHADE)continue;
+            raster_triangle(&scene->triangles[order[i]],rgba555);
+        }
     }
     {
         NitroGx3dEdgeSetup edges;
