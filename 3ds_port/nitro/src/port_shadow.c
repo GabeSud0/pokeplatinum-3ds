@@ -617,13 +617,13 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
                 V3 gp = scale(add(base, tap[t]), 1.0f - NITRO_SHADOW_GROUND_PULL);
                 ok = unback(&b, gp, xyw[t][i]);
             }
-            /* the colour: the shade, fading to TIP of it at the head;
-             * each tap a TAPS-th root of it */
+            /* the colour: the shade (DARK times as dark), fading to TIP of
+             * it at the head; each tap a TAPS-th root of it */
             j = top > 0.0f ? h / top : 0.0f;
             j = j < 0.0f ? 0.0f : j > 1.0f ? 1.0f : j;
             f = 1.0f - (1.0f - NITRO_SHADOW_GROUND_TIP) * j;
             for (c3 = 0; c3 < 3; c3++) {
-                float full = 1.0f - (1.0f - shade[c3]) * f;
+                float full = 1.0f - (1.0f - shade[c3]) * NITRO_SHADOW_GROUND_DARK * f;
                 float each = powf(full > 0.0f ? full : 0.0f, 1.0f / (float)NITRO_SHADOW_GROUND_TAPS);
                 col[i][c3] = (uint8_t)(each * 255.0f + 0.5f);
             }

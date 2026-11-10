@@ -628,10 +628,11 @@ static void test_ground_cards(void)
             CHECK(sqrt(dd) > 0.45 && sqrt(dd) < 2.25 / 0.35 + 0.01);
         }
     }
-    /* the colours: each tap the TAPS-th root of the shade at the feet, of
-     * TIP of it at the head */
+    /* the colours: each tap the TAPS-th root of the shade (DARK times as
+     * dark) at the feet, of TIP of it at the head */
     for (k = 0; k < 3; k++) {
-        double atFeet = pow(shade[k], 1.0 / T), atHead = pow(1.0 - (1.0 - shade[k]) * NITRO_SHADOW_GROUND_TIP, 1.0 / T);
+        double dark = (1.0 - shade[k]) * NITRO_SHADOW_GROUND_DARK;
+        double atFeet = pow(1.0 - dark, 1.0 / T), atHead = pow(1.0 - dark * NITRO_SHADOW_GROUND_TIP, 1.0 / T);
         CHECK(NEAR(out[0].color[k], atFeet * 255.0, 1.0) && NEAR(out[6 * (T - 1)].color[k], atFeet * 255.0, 1.0));
         CHECK(NEAR(out[2].color[k], atHead * 255.0, 1.0));
     }

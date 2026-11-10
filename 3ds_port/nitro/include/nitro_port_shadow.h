@@ -142,7 +142,8 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
  * NITRO_SHADOW_GROUND_TAPS times, each a little apart on the ground and
  * each a TAPS-th root of the shade (where they all meet, the shade; the
  * edges between), and fading to NITRO_SHADOW_GROUND_TIP of it at the
- * head. Pulled towards the camera along its ray (where it is on the
+ * head. The shade: the one given, its darkening NITRO_SHADOW_GROUND_DARK
+ * times as much. Pulled towards the camera along its ray (where it is on the
  * screen unchanged) by NITRO_SHADOW_GROUND_PULL of its distance: in front
  * of the ground, behind the sprite's own feet.
  *
@@ -171,7 +172,8 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
 #define NITRO_SHADOW_GROUND_SIDE 30.0f     /* (degrees, on the ground) */
 #define NITRO_SHADOW_GROUND_LENGTH 1.25f    /* (a little longer than the sun alone makes them) */
 #define NITRO_SHADOW_GROUND_TAPS 5
-#define NITRO_SHADOW_GROUND_BLUR 0.04f     /* (each tap's distance: the sprite's height times it, 0.5-2.25) */
+#define NITRO_SHADOW_GROUND_BLUR 0.025f    /* (each tap's distance: the sprite's height times it, 0.5-2.25) */
+#define NITRO_SHADOW_GROUND_DARK 1.1f      /* (how much darker than the shade given: its darkening times this) */
 #define NITRO_SHADOW_GROUND_TIP 0.35f
 #define NITRO_SHADOW_GROUND_PULL 0.004f
 

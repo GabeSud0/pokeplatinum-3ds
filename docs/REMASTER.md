@@ -3571,11 +3571,12 @@ trees, signs and the scenery later.
   (foot_row, the texture as the DS samples it, kept for the scene); the
   clear rows below them fall behind the start.
 - Soft: drawn 5 times, the middle and 4 copies a little apart on the
-  ground (the sprite's height x 0.04, 0.5 to 2.25 units; down the screen as
+  ground (the sprite's height x 0.025, 0.5 to 2.25 units; down the screen as
   much as across), each with the fifth root of the shade: where all five
   meet, the whole shade; at the edges, less. The sprite's texture sampled
   smoothly (linear). Fading from the feet to 0.35 of the shade at the
-  head.
+  head. The shade is the hour's, 1.1 times as dark. (Length 1.25, blur
+  0.025 and 1.1 were picked on a preview of this in the chat, 2026-11-10.)
 - Depth: NitroShadowSetup.zclip is the DS's clip z from a vertex's x, y, w
   (the projection's z column through the setup's back rows). The GPU
   path's z isn't that clip z: it's the DS's own depth, (z / w + 1) / 2,
