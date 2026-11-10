@@ -405,15 +405,13 @@ size_t NitroPort_ShadowCards(NitroGx3dGpuVertex *verts, const NitroGx3dBatch *ba
     return written;
 }
 
-int NitroPort_ShadowDecal(const float *tri, size_t stride, unsigned polygonAlpha, int translucentFormat,
-                          const uint32_t *texels, size_t count, uint16_t color,
-                          const NitroShadowSetup *setup)
+int NitroPort_ShadowDecalShape(const float *tri, size_t stride, unsigned polygonAlpha, int translucentFormat,
+                               const NitroShadowSetup *setup)
 {
     const unsigned char *base = (const unsigned char *)tri;
     Back b;
     V3 a0, a1, a2, n, up = v3(setup->up[0], setup->up[1], setup->up[2]);
-    float l, luma = 0.0f, weight = 0.0f;
-    size_t i;
+    float l;
     /* see-through: the polygon's alpha, or a format with alpha of its own */
     if (!(polygonAlpha > 0 && polygonAlpha < 31) && !translucentFormat) return 0;
     memcpy(b.m, setup->back, sizeof(b.m));
@@ -422,7 +420,13 @@ int NitroPort_ShadowDecal(const float *tri, size_t stride, unsigned polygonAlpha
     a2 = back(&b, (const float *)(base + 2 * stride));
     n = cross(sub(a1, a0), sub(a2, a0));
     l = length(n);
-    if (!(l > 0.0f) || fabsf(dot(n, up)) / l < 0.9f) return 0;   /* lying flat */
+    return l > 0.0f && fabsf(dot(n, up)) / l >= 0.9f;   /* lying flat */
+}
+
+int NitroPort_ShadowDecalDark(const uint32_t *texels, size_t count, uint16_t color)
+{
+    float luma = 0.0f, weight = 0.0f;
+    size_t i;
     if (texels) {
         for (i = 0; i < count; i++) {
             uint32_t p = texels[i];
@@ -439,6 +443,14 @@ int NitroPort_ShadowDecal(const float *tri, size_t stride, unsigned polygonAlpha
                0.11f * (float)(((color >> 10) & 31u) * 255u / 31u);
     }
     return luma < 72.0f;   /* dark: a shadow, not glass or water */
+}
+
+int NitroPort_ShadowDecal(const float *tri, size_t stride, unsigned polygonAlpha, int translucentFormat,
+                          const uint32_t *texels, size_t count, uint16_t color,
+                          const NitroShadowSetup *setup)
+{
+    return NitroPort_ShadowDecalShape(tri, stride, polygonAlpha, translucentFormat, setup) &&
+           NitroPort_ShadowDecalDark(texels, count, color);
 }
 
 /* ------------------------------------------------- the look over the day */

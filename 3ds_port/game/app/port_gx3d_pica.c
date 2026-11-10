@@ -340,6 +340,8 @@ static NitroShadowSetup sShadow;
 #define SHADOW_STEP_READ    6
 #define SHADOW_STEP_ON      7
 static int shadow_level(void);   /* (the hunt's step: sun shadows, below) */
+static u64 sDecalTicks;          /* (looking for the painted shadows, for the log) */
+static unsigned sDecalDecoded;
 static int sShadowReady,sShadowDrawn;        /* (the prepared scene has a ground; its map is drawn) */
 static C3D_Tex *sRecvTex;                    /* (unit 1's texture, as bound) */
 static int sRecvTexKnown;
@@ -1728,20 +1730,51 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
             sShadowReady=0;
             sShadowOnlyBatches=0;
         }
-        /* the game's own painted shadows (left out in the draw) */
-        NitroPort_Gx3dMapTextureBanks(&sBanks);
-        for(b=0;b<sPreparedBatches;b++){
-            const NitroGx3dBatch *batch=&sBatches[b];
-            uint32_t param=batch->texture_param;
-            unsigned fmt=NitroPort_Gx3dTexFormat(param);
-            size_t texels=fmt?(size_t)NitroPort_Gx3dTexWidth(param)*NitroPort_Gx3dTexHeight(param):0;
-            sDecal[b]=0;
-            if(shadow_level()<SHADOW_STEP_READ||!batch->translucent||!batch->count||texels>4096u)continue;
-            if(fmt)NitroPort_Gx3dDecodeTexture(&sBanks,param,batch->palette_base,sDecalTexels);
-            sDecal[b]=(uint8_t)NitroPort_ShadowDecal(sVertices[slot][batch->first].position,
-                                                     sizeof(NitroGx3dGpuVertex),(batch->polygon_attr>>16)&31u,
-                                                     fmt==1u||fmt==6u,fmt?sDecalTexels:NULL,texels,
-                                                     0x7FFF,&sShadow);
+        /* the game's own painted shadows (left out in the draw): first
+         * whether the triangle is see-through and lying flat (cheap), and
+         * only then whether its texture is dark, each texture and palette
+         * decoded once a scene (it was each translucent batch's, each
+         * scene: ~18 ms a scene on a New 3DS, log d3cc0e3f). The same
+         * verdicts as before. */
+        if(shadow_level()>=SHADOW_STEP_READ){
+            u64 d0=svcGetSystemTick();
+            struct { uint32_t param,palette; uint8_t dark; } seen[16];
+            unsigned nseen=0,k,decoded=0;
+            NitroPort_Gx3dMapTextureBanks(&sBanks);
+            for(b=0;b<sPreparedBatches;b++){
+                const NitroGx3dBatch *batch=&sBatches[b];
+                uint32_t param=batch->texture_param;
+                unsigned fmt=NitroPort_Gx3dTexFormat(param);
+                size_t texels=fmt?(size_t)NitroPort_Gx3dTexWidth(param)*NitroPort_Gx3dTexHeight(param):0;
+                int dark=-1;
+                sDecal[b]=0;
+                if(!batch->translucent||!batch->count||texels>4096u)continue;
+                if(!NitroPort_ShadowDecalShape(sVertices[slot][batch->first].position,sizeof(NitroGx3dGpuVertex),
+                                               (batch->polygon_attr>>16)&31u,fmt==1u||fmt==6u,&sShadow))continue;
+                if(!fmt){
+                    sDecal[b]=(uint8_t)NitroPort_ShadowDecalDark(NULL,0,0x7FFF);
+                    continue;
+                }
+                for(k=0;k<nseen;k++){
+                    if(seen[k].param==param && seen[k].palette==batch->palette_base){dark=seen[k].dark;break;}
+                }
+                if(dark<0){
+                    NitroPort_Gx3dDecodeTexture(&sBanks,param,batch->palette_base,sDecalTexels);
+                    dark=NitroPort_ShadowDecalDark(sDecalTexels,texels,0x7FFF);
+                    decoded++;
+                    if(nseen<sizeof(seen)/sizeof(seen[0])){
+                        seen[nseen].param=param;
+                        seen[nseen].palette=batch->palette_base;
+                        seen[nseen].dark=(uint8_t)dark;
+                        nseen++;
+                    }
+                }
+                sDecal[b]=(uint8_t)dark;
+            }
+            sDecalTicks+=svcGetSystemTick()-d0;
+            sDecalDecoded+=decoded;
+        }else{
+            memset(sDecal,0,sizeof(sDecal));
         }
     }
     setup_fog();
@@ -2748,8 +2781,12 @@ static void draw_scene(const PicaView *view)
             NitroPort_Log("[shadow] the first sun shadow map sent to the GPU (step %d, %u batches, %u of them only casting)",
                           shadow_level(),(unsigned)(sPreparedBatches+sShadowOnlyBatches),(unsigned)sShadowOnlyBatches);
         }
-        if(++sShadowScenes==300)
-            NitroPort_Log("[shadow] 300 scenes drawn with the sun shadows (step %d): the GPU kept up",shadow_level());
+        if(++sShadowScenes==300){
+            NitroPort_Log("[shadow] 300 scenes drawn with the sun shadows (step %d): the GPU kept up; "
+                          "the painted shadows looked for in %.2f ms a scene (%.1f textures decoded a scene)",
+                          shadow_level(),(double)sDecalTicks*1000.0/SYSCLOCK_ARM11/300.0,sDecalDecoded/300.0);
+        }
+        if(sShadowScenes==1){sDecalTicks=0;sDecalDecoded=0;}
     }
     C3D_BindProgram(&sProgram);
     stage("the opaque polygons");

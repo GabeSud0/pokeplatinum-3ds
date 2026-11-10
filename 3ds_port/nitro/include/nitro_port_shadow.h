@@ -125,6 +125,14 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
 int NitroPort_ShadowDecal(const float *tri, size_t stride, unsigned polygonAlpha, int translucentFormat,
                           const uint32_t *texels, size_t count, uint16_t color,
                           const NitroShadowSetup *setup);
+/* Its two halves (NitroPort_ShadowDecal is the one and the other): the
+ * triangle see-through and lying flat, cheap; then its texture (or colour)
+ * dark, which needs the texture decoded. Decode only for a triangle that
+ * passes the first; the second is the texture's alone, the same for every
+ * batch with that texture and palette. */
+int NitroPort_ShadowDecalShape(const float *tri, size_t stride, unsigned polygonAlpha, int translucentFormat,
+                               const NitroShadowSetup *setup);
+int NitroPort_ShadowDecalDark(const uint32_t *texels, size_t count, uint16_t color);
 
 /* The look over the day, after Platinum's own times of day (rtc.c):
  * morning 4:00-9:59, day 10:00-16:59, evening 17:00-19:59, night 20:00-3:59. */

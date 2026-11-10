@@ -376,6 +376,15 @@ static void test_cards_decals(void)
     CHECK(NitroPort_ShadowDecal(v[0].position, sizeof(v[0]), 12, 0, NULL, 0, 0x0421, &s));     /* untextured, dark */
     CHECK(!NitroPort_ShadowDecal(v[0].position, sizeof(v[0]), 12, 0, NULL, 0, 0x7FFF, &s));
     CHECK(!NitroPort_ShadowDecal(v[ground].position, sizeof(v[0]), 9, 0, dark, 16, 0x7FFF, &s)); /* upright */
+    /* its two halves: the shape alone, then the texture alone */
+    CHECK(NitroPort_ShadowDecalShape(v[0].position, sizeof(v[0]), 9, 0, &s));
+    CHECK(!NitroPort_ShadowDecalShape(v[0].position, sizeof(v[0]), 31, 0, &s));          /* opaque */
+    CHECK(NitroPort_ShadowDecalShape(v[0].position, sizeof(v[0]), 31, 1, &s));           /* A3I5 */
+    CHECK(!NitroPort_ShadowDecalShape(v[ground].position, sizeof(v[0]), 9, 0, &s));      /* upright */
+    CHECK(NitroPort_ShadowDecalDark(dark, 16, 0x7FFF));
+    CHECK(!NitroPort_ShadowDecalDark(light, 16, 0x7FFF));
+    CHECK(NitroPort_ShadowDecalDark(NULL, 0, 0x0421));
+    CHECK(!NitroPort_ShadowDecalDark(NULL, 0, 0x7FFF));
 }
 
 int main(void)
