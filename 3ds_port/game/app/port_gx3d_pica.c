@@ -3117,7 +3117,7 @@ static void stump_combiner(void)
     C3D_TexEnv *env=C3D_GetTexEnv(0);
     C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,GPU_TEXTURE0,GPU_TEXTURE0);
     C3D_TexEnvOpAlpha(env,GPU_TEVOP_A_ONE_MINUS_SRC_G,GPU_TEVOP_A_SRC_ALPHA,GPU_TEVOP_A_SRC_R);
-    C3D_TexEnvFunc(env,C3D_Alpha,GPU_MULT_ADD);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_MULTIPLY_ADD);
 }
 static void draw_scene(const PicaView *view);
 /* (the [hitch] lines: the frame's time drawing the 3D scene's batches, of
