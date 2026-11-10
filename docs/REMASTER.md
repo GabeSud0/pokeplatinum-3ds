@@ -3573,12 +3573,12 @@ trees, signs and the scenery later.
 - Soft, as a Gaussian blur near enough (asked for 2026-11-10: five
   copies in a cross, all the same weight, showed as copies): drawn 9
   times, three by three a step apart on the ground (the sprite's height
-  x 0.025, 0.5 to 2.25 units; down the screen as much as across), weighed
+  x 0.015, 0.3 to 2.25 units; down the screen as much as across), weighed
   1 2 1 each way: the middle copy the shade to the power 4/16, the four
   sides 2/16, the four corners 1/16; where all nine meet, the whole
   shade. The sprite's texture sampled smoothly (linear). Fading from the
   feet to 0.35 of the shade at the head. The shade is the hour's, 1.1
-  times as dark. (Length 1.25, blur 0.025 and 1.1 were picked on a
+  times as dark. (Length 1.25, blur 0.015 and 1.1 were picked on a
   preview of this in the chat.)
 - Depth: NitroShadowSetup.zclip is the DS's clip z from a vertex's x, y, w
   (the projection's z column through the setup's back rows). The GPU

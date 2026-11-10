@@ -629,7 +629,7 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
         /* the taps: three by three, a step apart across and along the
          * ground (down the screen by as much as across it) */
         r = NITRO_SHADOW_GROUND_BLUR * top;
-        r = r < 0.5f ? 0.5f : r > 2.25f ? 2.25f : r;
+        r = r < 0.3f ? 0.3f : r > 2.25f ? 2.25f : r;
         for (t = 0; t < NITRO_SHADOW_GROUND_TAPS; t++)
             tap[t] = add(scale(right, r * (float)sTapAcross[t]), scale(toward, r / s * (float)sTapDown[t]));
         for (i = 0; i < gEnd - g; i++) {
@@ -769,7 +769,7 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
             const Prop *pr = &sProps[pi];
             float r = NITRO_SHADOW_GROUND_BLUR * pr->top;
             V3 tapd;
-            r = r < 0.5f ? 0.5f : r > 2.25f ? 2.25f : r;
+            r = r < 0.3f ? 0.3f : r > 2.25f ? 2.25f : r;
             tapd = add(scale(right, r), scale(toward, r / s));
             for (bi = pr->b0; bi < pr->b1; bi++) {
                 const NitroGx3dBatch *batch = &batches[bi];

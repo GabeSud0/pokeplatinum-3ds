@@ -623,13 +623,13 @@ static void test_ground_cards(void)
         CHECK(NEAR(a[0], b2[0], 1e-5) && NEAR(a[1], b2[1], 1e-5));
         CHECK(NEAR(q[2] / p0[2], keep, 1e-4));
         /* the other taps: the same corner, a little apart (the blur's
-         * radius, 0.5 to 2.25), still on the ground */
+         * step, 0.3 to 2.25), still on the ground */
         for (k = 1; k < T; k++) {
             double t[3], dd = 0.0;
             int j;
             back_of(&s, out[6 * k].position, t);
             for (j = 0; j < 3; j++) { t[j] /= keep; dd += (t[j] - p0[j]) * (t[j] - p0[j]); }
-            CHECK(sqrt(dd) > 0.45 && sqrt(dd) < 2.25 * 3.1);
+            CHECK(sqrt(dd) > 0.29 && sqrt(dd) < 2.25 * 3.1);
         }
     }
     /* the colours: each tap the shade (DARK times as dark) to its weight's
@@ -844,7 +844,7 @@ static void test_ground_props(void)
         back_of(&s, out[0].position, a);
         back_of(&s, out[18 * t].position, b2);
         for (k = 0; k < 3; k++) d += (a[k] - b2[k]) * (a[k] - b2[k]) / (keep * keep);
-        CHECK(sqrt(d) > 0.6 && sqrt(d) < 2.25 * 3.2);
+        CHECK(sqrt(d) > 0.4 && sqrt(d) < 2.25 * 3.2);
         CHECK(NEAR(dot3(a, s.up), dot3(b2, s.up), 0.05));
     }
     /* the second tree: from its own foot (its vertices after the first's) */

@@ -174,7 +174,7 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
 #define NITRO_SHADOW_GROUND_SIDE 30.0f     /* (degrees, on the ground) */
 #define NITRO_SHADOW_GROUND_LENGTH 1.25f    /* (a little longer than the sun alone makes them) */
 #define NITRO_SHADOW_GROUND_TAPS 9
-#define NITRO_SHADOW_GROUND_BLUR 0.025f    /* (the taps' step: the sprite's height times it, 0.5-2.25) */
+#define NITRO_SHADOW_GROUND_BLUR 0.015f    /* (the taps' step: the sprite's height times it, 0.3-2.25) */
 #define NITRO_SHADOW_GROUND_DARK 1.1f      /* (how much darker than the shade given: its darkening times this) */
 #define NITRO_SHADOW_GROUND_TIP 0.35f
 #define NITRO_SHADOW_GROUND_PULL 0.004f
