@@ -1053,7 +1053,9 @@ static void set_combiner(uint32_t attr,int textured)
  * the batch's combiner is set. */
 static void canopy_scale(const NitroGx3dBatch *batch)
 {
-    if(batch->tag==NITRO_GX3D_TAG_CANOPY)C3D_TexEnvScale(C3D_GetTexEnv(0),C3D_RGB,GPU_TEVSCALE_2);
+    /* (and a building's walls, NITRO_GX3D_TAG_WALLS: the same) */
+    if(batch->tag==NITRO_GX3D_TAG_CANOPY || NITRO_GX3D_TAG_IS_WALLS(batch->tag))
+        C3D_TexEnvScale(C3D_GetTexEnv(0),C3D_RGB,GPU_TEVSCALE_2);
 }
 
 /* DS 5-bit colour to 8 bits. */
@@ -2897,15 +2899,19 @@ static void bind_batch_shadow(const NitroGx3dBatch *batch)
  * below) */
 static void once_batch(const NitroGx3dBatch *batch,int shade,int pass)
 {
-    C3D_Tex *tex=get_texture(batch->texture_param,batch->palette_base);
+    /* (no texture: a building's shadow, all of the polygon) */
+    C3D_Tex *tex=batch->texture_param?get_texture(batch->texture_param,batch->palette_base):NULL;
+    const int cut=tex?GPU_TEXTURE0:GPU_PRIMARY_COLOR;
     C3D_TexEnv *env;
-    u32 param;
-    if(!tex)return;
+    u32 param=0;
+    if(batch->texture_param && !tex)return;
     /* (sampled smoothly: its own filter back after the draw, which has
      * taken it already) */
-    param=tex->param;
-    C3D_TexSetFilter(tex,GPU_LINEAR,GPU_LINEAR);
-    C3D_TexBind(0,tex);
+    if(tex){
+        param=tex->param;
+        C3D_TexSetFilter(tex,GPU_LINEAR,GPU_LINEAR);
+        C3D_TexBind(0,tex);
+    }
     env=C3D_GetTexEnv(0);
     C3D_TexEnvInit(env);
     if(shade){
@@ -2917,11 +2923,11 @@ static void once_batch(const NitroGx3dBatch *batch,int shade,int pass)
         C3D_TexEnvFunc(env,C3D_RGB,GPU_MODULATE);
         if(pass>=0){
             /* (the texel's alpha x the grey: the darker ones alone pass) */
-            C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,GPU_PRIMARY_COLOR,0);
+            C3D_TexEnvSrc(env,C3D_Alpha,cut,GPU_PRIMARY_COLOR,0);
             C3D_TexEnvOpAlpha(env,GPU_TEVOP_A_SRC_ALPHA,GPU_TEVOP_A_SRC_R,0);
             C3D_TexEnvFunc(env,C3D_Alpha,GPU_MODULATE);
         }else{
-            C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,0,0);
+            C3D_TexEnvSrc(env,C3D_Alpha,cut,0,0);
             C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
         }
         env=C3D_GetTexEnv(1);
@@ -2940,7 +2946,7 @@ static void once_batch(const NitroGx3dBatch *batch,int shade,int pass)
         C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
     }
     draw_arrays((int)batch->first,(int)batch->count);
-    tex->param=param;
+    if(tex)tex->param=param;
 }
 /* The land's trees' shadows (the scene's own polygons marked
  * NITRO_GX3D_TAG_SHADE, left out of its other passes), then the props'.
@@ -2968,8 +2974,9 @@ static void draw_once_batches(void)
         C3D_AlphaTest(true,GPU_GEQUAL,pass==1?TREE_PASS:128);
         for(b=0;b<sPreparedBatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
+            /* (untextured: a building's, with the pools and floors) */
             if(batch->tag!=(pass?NITRO_GX3D_TAG_SHADE:NITRO_GX3D_TAG_GROUND) || batch->translucent ||
-               !batch->texture_param)
+               (pass && !batch->texture_param))
                 continue;
             if(!room_for_draw())break;
             once_batch(batch,1,pass==1?0:-1);

@@ -388,6 +388,36 @@ static uint16_t shade(uint32_t value)
  * most of a big map's polygons are off the screen, and their vertices
  * never need one. The lighting is as it was at the vertex: anything that
  * changes it first works out the colours still owed (settle_lighting). */
+/* (a building's wall's tint for its NORMAL and the light's way in the
+ * mark: nitro_port_gx3d.h. The side the sun is on up to 1.21, 1.18, 1.08
+ * times its colour, the far side down to 0.63, 0.65, 0.70; halved, in
+ * 31sts, bit 15 set.) */
+static uint16_t wall_tint(uint32_t normal,uint32_t tag)
+{
+    static uint32_t lastNormal=0xFFFFFFFFu,lastTag;
+    static uint16_t last;
+    int nx,nz,wx,wz,f,m[3],k;
+    unsigned out=0x8000u;
+    if(normal==lastNormal && tag==lastTag)return last;
+    nx=(int)(normal&1023u);if(nx>511)nx-=1024;
+    nz=(int)((normal>>20)&1023u);if(nz>511)nz-=1024;
+    wx=(int8_t)(tag>>16);wz=(int8_t)(tag>>8);
+    f=-(nx*wx+nz*wz)*256/(511*127);
+    if(f>256)f=256;
+    if(f<-256)f=-256;
+    if(f>=0){
+        m[0]=256+f*(310-256)/256;m[1]=256+f*(302-256)/256;m[2]=256+f*(276-256)/256;
+    }else{
+        const int a=-f*102/256;
+        m[0]=256-a*235/256;m[1]=256-a*225/256;m[2]=256-a*195/256;
+    }
+    for(k=0;k<3;k++){
+        unsigned t=(unsigned)((m[k]*31+256)/512);
+        out|=(t>31u?31u:t)<<(5*k);
+    }
+    lastNormal=normal;lastTag=tag;last=(uint16_t)out;
+    return last;
+}
 static void light_vertex(GeoVertex *v)
 {
     if(!v->lit){
@@ -2107,6 +2137,10 @@ static void submit_vertex(void)
     if(((s.texparam>>30)&3u)==3u)transform_texcoords(src,3,s.resolvedTexcoord);
     vp->s=s.resolvedTexcoord[0];vp->t=s.resolvedTexcoord[1];vp->color=s.rgb;
     vp->lit=(uint8_t)!s.rgbPending;vp->normal=s.normalValue;vp->tint=(uint16_t)s.tint;
+    if(NITRO_GX3D_TAG_IS_WALLS(s.tag)){
+        if(s.rgbPending)vp->tint=wall_tint(s.normalValue,s.tag);
+        else vp->color=(uint16_t)((s.rgb>>1)&0x3DEFu);
+    }
     if(s.primitive==0){
         n++;
         if(n==3){

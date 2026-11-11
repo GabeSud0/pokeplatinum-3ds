@@ -522,6 +522,17 @@ void NitroPort_Gx3dTag(uint32_t tag);
  * floor: drawn before the layers' shadows, once; NitroPort_Gx3dTreeGround) */
 #define NITRO_GX3D_TAG_GROUND 0x40000008u
 #define NITRO_GX3D_TAG_IS_SHADE(tag) (((tag)&~8u)==NITRO_GX3D_TAG_SHADE)
+/* A building's walls lit by the sun (the game marks the big standing props
+ * with it, 2026-11-10): draw-only too. The light's way on the ground in
+ * the mark itself, as signed bytes of 1/127ths: to the right in bits 16
+ * to 23, towards the camera in bits 8 to 15. Under it a vertex lit by a
+ * NORMAL has its colour times a tint from the NORMAL and that way (a wall
+ * facing the way the light comes from brighter, one facing where it goes
+ * darker, a roof as it is), half of it as NITRO_GX3D_TAG_CANOPY's (the
+ * renderer draws both at twice their colour); one with a COLOR, half its
+ * colour. */
+#define NITRO_GX3D_TAG_WALLS 0x60000000u
+#define NITRO_GX3D_TAG_IS_WALLS(tag) (((tag)&0xF00000FFu)==NITRO_GX3D_TAG_WALLS)
 #define NITRO_GX3D_TAG_STUMP 0x40000002u
 /* (a tree's layers with their far side from the sun shaded: under this
  * mark a COLOR command isn't the vertices' colour but what their lit

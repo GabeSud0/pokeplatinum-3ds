@@ -1,0 +1,181 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 23:33:36 -0700
+Subject: [PATCH] The buildings' sun shadows and sunlit walls (SDK_PORT_3DS)
+
+The 3DS remaster's sun shadows: a prop too big for its picture laid on
+the ground (a building), out of doors, not turned, with a sun, is marked
+NITRO_GX3D_TAG_WALLS with the light's way in the mark: the port draws
+its walls brighter on the sun's side and darker on the far one. And its
+shadow is sent before it: the ground its box's front and its side the
+light leaves sweep along the light's way, two untextured quads marked
+NITRO_GX3D_TAG_GROUND, darker at the building than at their far edge.
+---
+ src/overlay005/map_prop.c | 109 ++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 104 insertions(+), 5 deletions(-)
+
+diff --git a/src/overlay005/map_prop.c b/src/overlay005/map_prop.c
+index bfc0644f..7783d63d 100644
+--- a/src/overlay005/map_prop.c
++++ b/src/overlay005/map_prop.c
+@@ -18,6 +18,7 @@
+ 
+ #ifdef SDK_PORT_3DS
+ extern void NitroPort_Gx3dTag(u32 tag);
++extern int NitroPort_SunWayNow(s32 way[3]);
+ 
+ // The 3DS remaster's sun shadows: the small standing props (trees, signs,
+ // lamp posts, boards: by their model's box, up to 50 wide and 45 deep, 6 or
+@@ -34,7 +35,7 @@ static const u16 sPortNoShadowModels[] = {
+     0, 66, 67, 68, 69, 79, 246, 303, 304, 305, 306, 310, 312, 313, 438, 441, 444, 486, 487, 527, 549, 550, 551
+ };
+ 
+-static u32 MapProp_PortShadowMark(const MapProp *prop, int index)
++static u32 MapProp_PortShadowMark(const MapProp *prop, int index, BOOL outdoors)
+ {
+     const NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(prop->model);
+     fx32 width, height, depth;
+@@ -51,7 +52,23 @@ static u32 MapProp_PortShadowMark(const MapProp *prop, int index)
+     depth = FX_Mul((fx32)info->boxD, info->boxPosScale);
+ 
+     if (width > 50 * FX32_ONE || depth > 45 * FX32_ONE || depth < 2 * FX32_ONE || height < 6 * FX32_ONE) {
+-        return 0;
++        s32 way[3];
++
++        // A building: too big for its picture laid on the ground. Out
++        // of doors, standing as it was made (not turned) and with a sun,
++        // marked 0x60000000 (NITRO_GX3D_TAG_WALLS) with the light's way
++        // on the ground in the mark, in 127ths: its walls are drawn
++        // brighter on the sun's side and darker on the far one, and
++        // MapProp_PortBuildingShadow sends its shadow.
++        if (!outdoors || height < 12 * FX32_ONE || depth < 8 * FX32_ONE || width > 420 * FX32_ONE || depth > 420 * FX32_ONE
++            || prop->rotation.x != 0 || prop->rotation.y != 0 || prop->rotation.z != 0 || !NitroPort_SunWayNow(way)) {
++            return 0;
++        }
++
++        way[0] = way[0] * 127 / 4096;
++        way[1] = way[1] * 127 / 4096;
++
++        return 0x60000000 | (((u32)way[0] & 0xFF) << 16) | (((u32)way[1] & 0xFF) << 8);
+     }
+ 
+     return 0xC0000000 | ((u32)index << 1);
+@@ -63,6 +80,88 @@ static void MapProp_PortMark(u32 mark)
+     NNS_G3dGeFlushBuffer();
+     NitroPort_Gx3dTag(mark);
+ }
++
++// A building's sun shadow (2026-11-10): the shadow of its box on the
++// ground it stands on, for the sun as the port has it now. The ground
++// the box's front and its side the light leaves sweep along the light's
++// way, as far as the box is tall (27/32 of it: the roofs slope) times the
++// shadows' length: two quads, darker at the building (26 of 31) than at
++// their far edge (15), with no texture, marked 0x40000008
++// (NITRO_GX3D_TAG_GROUND: drawn with the trees' pools, a pixel darkened
++// once). In the model's own coordinates, a quarter of them (so the far
++// edge fits 16 bits), a unit above where it stands. Sent whether or not
++// the building is in view: its shadow may be.
++static void MapProp_PortBuildingShadow(const MapProp *prop, const VecFx32 *position, const MtxFx33 *rotation, const VecFx32 *scale)
++{
++    const NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(prop->model);
++    VecFx32 quarter;
++    s32 way[3], tall, ex, ez, x0, x1, z0, z1, xs, y;
++
++    if (info->boxPosScale <= 0 || !NitroPort_SunWayNow(way)) {
++        return;
++    }
++
++    tall = (s32)info->boxH * 27 / 32;
++    ex = (s32)(((s64)way[0] * way[2] >> 12) * tall >> 12) / 4;
++    ez = (s32)(((s64)way[1] * way[2] >> 12) * tall >> 12) / 4;
++    x0 = info->boxX / 4;
++    x1 = (info->boxX + info->boxW) / 4;
++    z0 = info->boxZ / 4;
++    z1 = (info->boxZ + info->boxD) / 4;
++    xs = way[0] > 0 ? x1 : x0;
++    y = (s32)(FX_Div(FX32_ONE, info->boxPosScale) / 4);
++
++    if (x0 + ex < -32000 || x1 + ex > 32000 || z1 + ez > 32000 || y > 32000) {
++        return;
++    }
++
++    quarter.x = quarter.y = quarter.z = info->boxPosScale * 4;
++
++    NNS_G3dGlbSetBaseTrans(position);
++    NNS_G3dGlbSetBaseRot(rotation);
++    NNS_G3dGlbSetBaseScale(scale);
++    NNS_G3dGlbFlush();
++    NNS_G3dGePushMtx();
++    NNS_G3dGeScaleVec(&quarter);
++    NNS_G3dGeTexImageParam(GX_TEXFMT_NONE, GX_TEXGEN_NONE, GX_TEXSIZE_S8, GX_TEXSIZE_T8, GX_TEXREPEAT_NONE, GX_TEXFLIP_NONE, GX_TEXPLTTCOLOR0_USE, 0);
++    NNS_G3dGePolygonAttr(GX_LIGHTMASK_NONE, GX_POLYGONMODE_MODULATE, GX_CULL_NONE, 0, 31, 0);
++    MapProp_PortMark(0x40000008);
++    NNS_G3dGeBegin(GX_BEGIN_QUADS);
++    // (the side the light leaves)
++    NNS_G3dGeColor(GX_RGB(26, 26, 26));
++    NNS_G3dGeVtx((fx16)xs, (fx16)y, (fx16)z0);
++    NNS_G3dGeVtx((fx16)xs, (fx16)y, (fx16)z1);
++    NNS_G3dGeColor(GX_RGB(15, 15, 15));
++    NNS_G3dGeVtx((fx16)(xs + ex), (fx16)y, (fx16)(z1 + ez));
++    NNS_G3dGeVtx((fx16)(xs + ex), (fx16)y, (fx16)(z0 + ez));
++    // (the front: the light comes towards the camera)
++    NNS_G3dGeColor(GX_RGB(26, 26, 26));
++    NNS_G3dGeVtx((fx16)x0, (fx16)y, (fx16)z1);
++    NNS_G3dGeVtx((fx16)x1, (fx16)y, (fx16)z1);
++    NNS_G3dGeColor(GX_RGB(15, 15, 15));
++    NNS_G3dGeVtx((fx16)(x1 + ex), (fx16)y, (fx16)(z1 + ez));
++    NNS_G3dGeVtx((fx16)(x0 + ex), (fx16)y, (fx16)(z1 + ez));
++    NNS_G3dGeEnd();
++    NNS_G3dGePopMtx(1);
++    MapProp_PortMark(0);
++}
++
++// (a prop about to be drawn: its mark, and a building's shadow first; not
++// a mirrored one's)
++static void MapProp_PortBegin(const MapProp *prop, int index, const AreaDataManager *areaDataManager, const VecFx32 *position, const MtxFx33 *rotation, const VecFx32 *scale)
++{
++    u32 mark = MapProp_PortShadowMark(prop, index, AreaDataManager_IsOutdoorsLighting(areaDataManager));
++
++    if ((mark & 0xF00000FF) == 0x60000000) {
++        if (scale->x <= 0) {
++            mark = 0;
++        } else {
++            MapProp_PortBuildingShadow(prop, position, rotation, scale);
++        }
++    }
++
++    MapProp_PortMark(mark);
++}
+ #endif
+ 
+ static void MapPropManager_InitRenderObj(const int modelID, AreaDataManager *const areaDataManager, NNSG3dRenderObj *renderObj, NNSG3dResMdl **model);
+@@ -197,7 +296,7 @@ void MapPropManager_Render(const VecFx32 *positionOffset, const AreaDataManager
+             position.z += positionOffset->z;
+ 
+ #ifdef SDK_PORT_3DS
+-            MapProp_PortMark(MapProp_PortShadowMark(loadedProp, i)); // (the sun shadows: above)
++            MapProp_PortBegin(loadedProp, i, areaDataManager, &position, &rotationMatrix, &loadedProp->scale); // (the sun shadows: above)
+ #endif
+             if (GFXBoxTest_IsModelInView(loadedProp->model, &position, &rotationMatrix, &loadedProp->scale)) {
+                 const MapPropMaterialShape *propMatShp = AreaDataManager_GetMapPropMaterialShape(areaDataManager);
+@@ -304,7 +403,7 @@ static void MapPropManager_RenderOver(const VecFx32 *centre, const BOOL mirrored
+         if (!mirrored) {
+             position.x += centre->x;
+ 
+-            MapProp_PortMark(MapProp_PortShadowMark(loadedProp, i)); // (the sun shadows: above)
++            MapProp_PortBegin(loadedProp, i, areaDataManager, &position, &rotationMatrix, &scale); // (the sun shadows: above)
+ 
+             if (!GFXBoxTest_IsModelInView(loadedProp->model, &position, &rotationMatrix, &scale)) {
+                 MapProp_PortMark(0);
+@@ -336,7 +435,7 @@ static void MapPropManager_RenderOver(const VecFx32 *centre, const BOOL mirrored
+         position.x = centre->x - position.x;
+         scale.x = -scale.x;
+ 
+-        MapProp_PortMark(MapProp_PortShadowMark(loadedProp, i)); // (the sun shadows: above)
++        MapProp_PortBegin(loadedProp, i, areaDataManager, &position, &rotationMatrix, &scale); // (the sun shadows: above)
+ 
+         if (!GFXBoxTest_IsModelInView(loadedProp->model, &position, &rotationMatrix, &scale)) {
+             MapProp_PortMark(0);
+-- 
+2.43.0
+

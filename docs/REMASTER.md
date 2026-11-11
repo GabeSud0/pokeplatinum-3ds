@@ -3863,6 +3863,33 @@ then the small props and the land's trees; houses and the scenery later.
   (3 before) and the place has under 4 ms to spare without them: the
   in-between scene alone is 10 to 12 ms of the 30. Holding 60 there is
   the engine's own time to bring down, not the shadows'.
+- The buildings (2026-11-10: "the only thing left is the overworld
+  shading to wrap the overall look"; the first of it). A building is a
+  prop too big for its picture laid on the ground (patch 0138's limits:
+  over 50 units wide or 45 deep); patch 0140 (map_prop.c) takes one
+  that's out of doors (the area's lighting), at least 12 units tall and
+  8 deep, not turned, with a sun:
+  - Its shadow: the shadow of its box on the ground it stands on. The
+    ground the box's front and its side the light leaves sweep along
+    the light's way, as far as the box is tall (27/32 of it: the roofs
+    slope) times the shadows' length: two quads with no texture, 26/31
+    dark at the building and 15 at their far edge, marked
+    NITRO_GX3D_TAG_GROUND, sent before the building whether or not it's
+    in view (its shadow may be). Drawn with the trees' pools, a pixel
+    darkened once (once_batch takes a batch with no texture now); the
+    characters standing in it darken as in a tree's.
+  - Its walls: the building is drawn marked NITRO_GX3D_TAG_WALLS, the
+    light's way on the ground in the mark itself (two signed bytes, in
+    127ths). The engine gives a vertex lit by a NORMAL a tint from the
+    NORMAL and that way (wall_tint): a wall facing where the light
+    comes from up to 1.21, 1.18, 1.08 times its colour, one facing
+    where it goes down to 0.63, 0.65, 0.70, a roof as it is; halved,
+    and the renderer draws those batches at twice their colour, as the
+    trees' layers. A vertex with a COLOR: half its colour.
+  Not yet: a turned or mirrored building; the shadow on anything but
+  flat ground at the building's own height (a lower roof, steps); the
+  game's own painted building shadows, still there under these; cliffs,
+  ledges and fences.
 - The engine's vertices, one division each (2026-11-10, for the same
   place): to_screen divided three times in doubles for every vertex
   drawn (1 / W, then by 2W for x and for y); now by 1 / W once. The

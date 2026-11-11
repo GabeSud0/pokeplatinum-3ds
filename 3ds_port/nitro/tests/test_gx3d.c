@@ -2586,6 +2586,13 @@ static int tree_has(const TreeCorner *c,unsigned n,int x,int y,int z)
     for(i=0;i<n;i++)if(abs(c[i].x-x)<=1 && abs(c[i].y-y)<=8 && abs(c[i].z-z)<=8)return 1;
     return 0;
 }
+/* A building's walls under NITRO_GX3D_TAG_WALLS, the light going to the
+ * right (the mark's bits 16 to 23: 127): a wall whose NORMAL faces where
+ * the light comes from (-x) is 1.21 times its lit colour, one facing
+ * where it goes 0.63, a roof 1; halved (the renderer draws them at twice
+ * their colour). The lit colour here the material's own light, 16 of 31:
+ * 10, 5, 8. A vertex with a COLOR: half of it. Without the mark, as lit. */
+static void test_wall_tint(void);
 static void test_tree_lists(void)
 {
     static uint32_t cmds[600],trees[600],tops[100],bottoms[100],whole[900];
@@ -3209,6 +3216,36 @@ static void test_scene_registers(void)
     write32(0x60,0);
     write32(0x358,0);
 }
+static void test_wall_tint(void)
+{
+    static uint32_t cmds[64],list[64];
+    static TreeCorner out[16];
+    static const uint32_t normals[3]={513u,511u,511u<<10};
+    static const unsigned want[3]={10u,5u,8u};
+    const uint32_t both=(3u<<6)|(31u<<16),emission=(16u|(16u<<5)|(16u<<10))<<16;
+    unsigned c,n,k;
+    uint32_t nb;
+    NitroPort_SetGroundShadows(1);
+    for(k=0;k<5u;k++){
+        c=0;
+        cmds[c++]=0x40;cmds[c++]=1;
+        if(k<3u || k==4u){cmds[c++]=0x21;cmds[c++]=normals[k==4u?0u:k];}
+        else{cmds[c++]=0x20;cmds[c++]=RGB(20,20,20);}
+        c+=tree_quad(&cmds[c],-704,704,1843,2650,128,-1024,0,1024);
+        cmds[c++]=0x41;
+        nb=dl_pack(list,cmds,c)*4u;
+        tree_view();
+        NitroPort_GxDirectWrite(0x31,emission);
+        if(k!=4u)NitroPort_Gx3dTag(NITRO_GX3D_TAG_WALLS|(127u<<16));
+        n=tree_scene(list,nb,both,out,16);
+        NitroPort_Gx3dTag(0);
+        CHECK(n==6 && out[0].r==(k<3u?want[k]:k==3u?10u:16u) && out[5].r==out[0].r);
+    }
+    CHECK(NITRO_GX3D_TAG_IS_WALLS(NITRO_GX3D_TAG_WALLS|(127u<<16)|(64u<<8)) && !NITRO_GX3D_TAG_IS_WALLS(NITRO_GX3D_TAG_CANOPY) &&
+          !NITRO_GX3D_TAG_IS_WALLS(NITRO_GX3D_TAG_GROUND) && !NITRO_GX3D_TAG_IS_SHADE(NITRO_GX3D_TAG_WALLS));
+    NitroPort_SetGroundShadows(0);
+}
+
 int main(void)
 {
     static const NitroGx3dThreadOps ops = {
@@ -3235,6 +3272,7 @@ int main(void)
     test_list_trimmed();
     test_list_rows();
     test_tree_lists();
+    test_wall_tint();
     test_mid_left_out_behind();
     test_earlier_scene_unread();
     test_scene_registers();
