@@ -4059,6 +4059,13 @@ uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *sv,void *dst,uint
  * (clipped at the view's sides as it is, halfway in the in-between scenes
  * with the land: nothing worked out for them a scene). */
 #define TREE_VERTS 8
+/* (a tree's trunk for its shadow, in world units: half as wide at the
+ * ground and at its top, and how tall: the stump is about 14 across where
+ * it's cut and 20 at its roots, the lowest layer starts 6.3 up and is
+ * solid by 12) */
+#define TREE_TRUNK_FOOT 5
+#define TREE_TRUNK_TOP 4
+#define TREE_TRUNK_TALL 12
 typedef struct TreeQuad {          /* (a polygon of a shape's list, as read) */
     int32_t xyz[TREE_VERTS][3], st[TREE_VERTS][2];
     int32_t lo[3], hi[3];
@@ -4330,7 +4337,43 @@ static void tree_sources(TreeShape *sh,const TreeQuad *quads,uint32_t n,TreeQuad
                     tree_add(sh,&cap,base,q->n,xyz,st,sh->npolys==before);
                 }
             }
-            if(sh->npolys>before)sh->trees+=columns;
+            if(sh->npolys>before){
+                sh->trees+=columns;
+                /* Its trunk: the stump is painted flat on the ground and
+                 * the layers start some way up, so their shadows alone
+                 * lie apart from the tree, with nothing joining them to
+                 * its foot (2026-11-10: "do not include the trunk making
+                 * the shadow feel fake"). A strip from where each stump
+                 * is up into the lowest layer, laid with them; its
+                 * texture coordinates all the stump's middle (opaque:
+                 * the shadows are drawn where the texel is). Only with
+                 * the stumps in the shape itself: the texture is theirs. */
+                for(k=first;k<last && flat;k++){
+                    const TreeQuad *q=&quads[k];
+                    int32_t x0,x1,step;
+                    if(!q->n || !q->flat)continue;
+                    if(q->hi[0]-q->lo[0]>wide){x0=q->lo[0];x1=q->hi[0];step=column;}
+                    else{x0=base[0]-column/2;x1=x0+1;step=column;}
+                    for(;x0<x1;x0+=step){
+                        const int32_t bx=x0+column/2,foot=TREE_TRUNK_FOOT*unit,top=TREE_TRUNK_TOP*unit,
+                                      up=TREE_TRUNK_TALL*unit;
+                        int32_t xyz[TREE_VERTS][3],st[TREE_VERTS][2],b2[3];
+                        int64_t ss=0,tt=0;
+                        unsigned m=tree_clip(q,bx-unit,bx+unit,xyz,st),v;
+                        if(m<3)continue;
+                        for(v=0;v<m;v++){ss+=st[v][0];tt+=st[v][1];}
+                        b2[0]=bx;b2[1]=base[1];b2[2]=base[2];
+                        for(v=0;v<4u;v++){
+                            xyz[v][0]=bx+((v==0u||v==3u)?-1:1)*(v<2u?foot:top);
+                            xyz[v][1]=base[1]+(v<2u?0:up);
+                            xyz[v][2]=base[2];
+                            st[v][0]=(int32_t)(ss/(int64_t)m);st[v][1]=(int32_t)(tt/(int64_t)m);
+                        }
+                        tree_add(sh,&cap,b2,4u,xyz,st,0);
+                    }
+                    if(q->hi[0]-q->lo[0]<=wide)break;   /* (a tree: one stump) */
+                }
+            }
         }
     }
 }

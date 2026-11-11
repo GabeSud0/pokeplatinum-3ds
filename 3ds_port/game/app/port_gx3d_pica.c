@@ -3106,18 +3106,22 @@ static void draw_parts(size_t n)
 /* A tree's stump (NITRO_GX3D_TAG_STUMP batches: the land's flat polygons
  * with the stump painted on them, a dark green patch round it: the game's
  * own shadow under the tree), with the sun shadows on: without the patch.
- * The batch's combiner as it is but its alpha: (1 - the texel's green) x
- * its alpha + its red, which is 1 where the texel is opaque and no greener
- * than it's red (the stump's browns, its dark outline), less where it's
- * greener (the patch: 8/255 and 25/255 greener), 0 where it's clear. The
- * alpha test then passes the stump alone. */
+ * The batch's combiner as it is but its alpha: (1 - the texel's green +
+ * its red, 1 at most) x its alpha, which is 1 where the texel is opaque
+ * and no greener than it's red (the stump's browns, its dark outline),
+ * less where it's greener (the patch: 8/255 and 25/255 greener), 0 where
+ * it's clear. The alpha test then passes the stump alone.
+ * (First (1 - green) x alpha + red: a clear texel's alpha was then its
+ * colour's red, and the clear colour of tree2_01 and of the rows is
+ * white: the whole polygon but the patch was drawn, a white box under
+ * every tree, on a 3DS 2026-11-10.) */
 #define STUMP_CUT 250
 static void stump_combiner(void)
 {
     C3D_TexEnv *env=C3D_GetTexEnv(0);
     C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,GPU_TEXTURE0,GPU_TEXTURE0);
-    C3D_TexEnvOpAlpha(env,GPU_TEVOP_A_ONE_MINUS_SRC_G,GPU_TEVOP_A_SRC_ALPHA,GPU_TEVOP_A_SRC_R);
-    C3D_TexEnvFunc(env,C3D_Alpha,GPU_MULTIPLY_ADD);
+    C3D_TexEnvOpAlpha(env,GPU_TEVOP_A_ONE_MINUS_SRC_G,GPU_TEVOP_A_SRC_R,GPU_TEVOP_A_SRC_ALPHA);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_ADD_MULTIPLY);
 }
 static void draw_scene(const PicaView *view);
 /* (the [hitch] lines: the frame's time drawing the 3D scene's batches, of

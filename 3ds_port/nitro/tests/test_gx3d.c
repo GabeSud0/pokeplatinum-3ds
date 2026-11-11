@@ -2663,19 +2663,37 @@ static void test_tree_lists(void)
     CHECK(shadow && nsh && !(nsh&3u));
     tree_view();
     n=tree_scene(shadow,nsh,both,sh,400);
-    CHECK(n==36);
+    /* (three layers and the trunk, a tree) */
+    CHECK(n==48);
     for(i=0;i<n;i++)CHECK(abs(sh[i].y-(58+64))<=8);
     for(i=0;i<2;i++){
         int x=-2048+2048*(int)i;
         CHECK(tree_has(sh,n,x-704,122,1843-58) && tree_has(sh,n,x+704,122,2650-58));
         CHECK(tree_has(sh,n,x-1056,122,1120-58) && tree_has(sh,n,x+1056,122,2220-58));
         CHECK(tree_has(sh,n,x-1280,122,406-58) && tree_has(sh,n,x+1280,122,1654-58));
+        /* (its trunk: from where the stump is, 5 units either side, up
+         * to 12, 4 either side: the shadow starts at the tree's foot) */
+        CHECK(tree_has(sh,n,x-320,122,0) && tree_has(sh,n,x+320,122,0));
+        CHECK(tree_has(sh,n,x-256,122,768) && tree_has(sh,n,x+256,122,768));
     }
-    /* (every corner's texture coordinates one of the layers' own) */
-    for(i=0;i<n && nraw==48;i++){
-        int found=0;
-        for(k=0;k<nraw;k++)if(raw[k].s==sh[i].s && raw[k].t==sh[i].t)found=1;
-        CHECK(found);
+    /* (every corner's texture coordinates one of the layers' own, or the
+     * trunk's: the middle of the stump's polygon, all four the same) */
+    {
+        float s0=0,s1=0,t0=0,t1=0;
+        unsigned trunk=0;
+        for(k=18;k<24 && nraw==48;k++){
+            if(k==18 || raw[k].s<s0)s0=raw[k].s;
+            if(k==18 || raw[k].s>s1)s1=raw[k].s;
+            if(k==18 || raw[k].t<t0)t0=raw[k].t;
+            if(k==18 || raw[k].t>t1)t1=raw[k].t;
+        }
+        for(i=0;i<n && nraw==48;i++){
+            int found=0;
+            for(k=0;k<nraw;k++)if(raw[k].s==sh[i].s && raw[k].t==sh[i].t)found=1;
+            if(!found && fabs(sh[i].s-(s0+s1)/2)<=(s1-s0)/64 && fabs(sh[i].t-(t0+t1)/2)<=(t1-t0)/64){found=1;trunk++;}
+            CHECK(found);
+        }
+        CHECK(trunk==12 && s1>s0 && t1>t0);
     }
     /* the same sun: the same list, not made again; another: another */
     again=NitroPort_Gx3dTreeShadows(t,0,0,4096,4096,&nsh2);
@@ -2686,9 +2704,11 @@ static void test_tree_lists(void)
     shadow=NitroPort_Gx3dTreeShadows(t,0,4096,0,2048,&nsh);
     tree_view();
     n=tree_scene(shadow,nsh,both,sh,400);
-    CHECK(n==36);
+    CHECK(n==48);
     CHECK(tree_has(sh,n,-2048+(1843-58)/2,122,704) && tree_has(sh,n,-2048+(2650-58)/2,122,-704));
     CHECK(tree_has(sh,n,0+(406-58)/2,122,1280) && tree_has(sh,n,0+(1654-58)/2,122,-1280));
+    CHECK(tree_has(sh,n,-2048,122,320) && tree_has(sh,n,-2048,122,-320) &&
+          tree_has(sh,n,-2048+384,122,256) && tree_has(sh,n,-2048+384,122,-256));
     /* the row's tops: on the stumps of the other list (58 up, their
      * middle z 0), a tree each 32 units: each half about its own middle */
     shadow=NitroPort_Gx3dTreeShadows(t,1,4096,0,4096,&nsh);
@@ -2699,6 +2719,17 @@ static void test_tree_lists(void)
     CHECK(tree_has(sh,n,-1024+(1200-58),122,1024) && tree_has(sh,n,-1024+(1200-58),122,-1024));
     CHECK(tree_has(sh,n,1024+(2400-58),122,1024) && tree_has(sh,n,1024+(2400-58),122,-1024));
     CHECK(!tree_has(sh,n,(1200-58),122,2048));   /* (not the row laid whole about its middle) */
+    /* the row's bottoms, with the stumps in their own list: a trunk a
+     * tree too, each from its own stump (the row's two halves and two
+     * trunks) */
+    shadow=NitroPort_Gx3dTreeShadows(t,2,0,4096,4096,&nsh);
+    CHECK(shadow && nsh);
+    tree_view();
+    n=tree_scene(shadow,nsh,both,sh,400);
+    CHECK(n==24);
+    CHECK(tree_has(sh,n,-1024-320,122,0) && tree_has(sh,n,-1024+320,122,0) && tree_has(sh,n,-1024+256,122,768));
+    CHECK(tree_has(sh,n,1024-320,122,0) && tree_has(sh,n,1024+320,122,0) && tree_has(sh,n,1024-256,122,768));
+    CHECK(!tree_has(sh,n,-320,122,0) && !tree_has(sh,n,320,122,0));
     /* too long to fit the list's coordinates: left out */
     CHECK(NitroPort_Gx3dTreeShadows(t,1,4096,0,4096*40,&nsh)==NULL && nsh==0);
 
@@ -2714,7 +2745,7 @@ static void test_tree_lists(void)
             tree_view();
             drawn=tree_scene(canopy,nb,(side<<6)|(31u<<16),cut,400);
             laid=tree_scene(shadow,nsh,(side<<6)|(31u<<16),sh,400);
-            CHECK((drawn==36 && laid==36) || (drawn==0 && laid==0));
+            CHECK((drawn==36 && laid==48) || (drawn==0 && laid==0));
             if(drawn)front++;else back++;
         }
         CHECK(front==1 && back==1);

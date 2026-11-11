@@ -3729,15 +3729,42 @@ then the small props and the land's trees; houses and the scenery later.
   darkening at their feet, no fade: where trees' shadows overlap there
   is no seam), where the texel is over half opaque, a pixel once.
   The stumps (STUMP batches, in the opaque pass): the batch's combiner
-  with another alpha, (1 - the texel's green) x its alpha + its red,
-  and the alpha test above 250: the stump's browns and its dark outline
-  pass (red no less than green), the patch's greens don't (8/255 and
-  25/255 greener in tree2_01), nor the clear texels. So the painted
-  patch is gone under a tree that casts a sun shadow, and only then.
+  with another alpha, (1 - the texel's green + its red, 1 at most) x its
+  alpha (GPU_ADD_MULTIPLY), and the alpha test above 250: the stump's
+  browns and its dark outline pass (red no less than green), the patch's
+  greens don't (8/255 and 25/255 greener in tree2_01), nor the clear
+  texels. So the painted patch is gone under a tree that casts a sun
+  shadow, and only then. (First (1 - green) x alpha + red: a clear
+  texel's alpha was then its colour's red, and the clear colour of
+  tree2_01 and of the rows is white, so the whole polygon but the patch
+  was drawn: "a white box underneath all trees", 2026-11-10. tree01's is
+  orange, red 205: it happened to be right there. Worked out on the
+  textures themselves now: the stump alone, 264 texels of the 508 opaque
+  ones, no clear one.)
+  The trunk (2026-11-10: the shadows "do not include the trunk making
+  the shadow feel fake"): the stump is paint on the ground and the
+  lowest layer starts 6.3 units up, so the layers' shadows lay apart
+  from the tree's foot, more with a low sun. A tree with its stump in
+  its own shape gets a fourth shadow polygon: a strip from the stump's
+  middle (5 units either side) up to 12 units (4 either side), into the
+  lowest layer's shadow, laid as the layers are; its four texture
+  coordinates the middle of the stump's polygon (an opaque texel: on the
+  real lists (49, 14) for the trees, (16, 49) and (48, 49) for a row's
+  two, all opaque with their neighbours). It crosses the stump's far
+  half: the stump's own shaded side.
   Not yet: caves and other roofed places drawn in perspective get the
   characters' shadows too; the palm-like tree3's trunk has its patch in
   a standing polygon, kept; the lighter disc painted on the grass under
   some rows (tshadow) is the ground's own texture, kept.
+  On a 3DS since (log 375a6403, by the Galactic building, mono, the
+  same spot): with the sun shadows 49 to 58 frames a second, the
+  geometry thread 28.9 to 32.6 ms a scene (88 to 98% busy), 1 to 6
+  scenes left out a second, the frames' building 9.4 to 11.5 ms; then
+  off: 60 to 63, 27.9 to 30.9 ms (81 to 92%), none left out, 7.9 to
+  8.6 ms. So the shadows are about 1 ms of the thread's 33 there now
+  (3 before) and the place has under 4 ms to spare without them: the
+  in-between scene alone is 10 to 12 ms of the 30. Holding 60 there is
+  the engine's own time to bring down, not the shadows'.
 - The engine's vertices, one division each (2026-11-10, for the same
   place): to_screen divided three times in doubles for every vertex
   drawn (1 / W, then by 2W for x and for y); now by 1 / W once. The
@@ -3757,8 +3784,11 @@ then the small props and the land's trees; houses and the scenery later.
   the trees' lists: a shape's layers, stumps and tail together drawing
   every triangle the shape's list draws, the stumps alone the flat ones;
   each layer's corners laid from its own stump for a light towards the
-  camera and one to the side, its texture coordinates its own; a row's
-  tops on the stumps of another list, a tree each 32 units; the same sun
+  camera and one to the side, its texture coordinates its own; the trunk
+  from the stump's middle, its texture coordinates the middle of the
+  stump's polygon, a row's a trunk a tree, none where the stumps are in
+  another list; a row's tops on the stumps of another list, a tree each
+  32 units; the same sun
   the same list; what doesn't fit left out; seen from above, the shadows
   drawn on the side the layers are; the draw-only marks carried and
   nothing kept whole for them; with and without the geometry thread);
