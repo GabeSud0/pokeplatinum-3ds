@@ -214,9 +214,6 @@ void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned 
  * more than half opaque.
  * The last call's props and how many got a shadow: */
 #define NITRO_SHADOW_ONCE 1u
-/* (the land's trees' shadows: one shade all over, this much of the
- * characters' darkening at their feet; theirs fades to the head) */
-#define NITRO_SHADOW_TREE_DARK 0.75f
 #define NITRO_SHADOW_PROP_MIN 5.0f
 void NitroPort_ShadowPropStats(unsigned *props, unsigned *laid);
 

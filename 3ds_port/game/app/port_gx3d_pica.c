@@ -353,7 +353,9 @@ static u64 sDecalTicks;          /* (looking for the painted shadows, for the lo
  * the scene's too, before the shadows': not drawn). */
 static int sGroundMode,sGroundReady;
 /* (the scene's batches of the land's trees' shadows, NITRO_GX3D_TAG_SHADE,
- * and their shade: the hour's, NITRO_SHADOW_TREE_DARK of the characters') */
+ * and what a full one takes from each channel: 1 - the hour's shade, times
+ * the characters' darkening at their feet; a vertex's grey is how much of
+ * it there) */
 static unsigned sShadeBatches;
 static u32 sShadeColor=0xFFFFFFFFu;
 static size_t sGroundBatchCount,sGroundVertices;
@@ -1886,8 +1888,9 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
             sGroundShade+=sShadeBatches;
             for(i=0;i<3;i++){
                 float shadeC=(float)((sShadowColor>>(8u*i))&255u)/255.0f;
-                f[i]=1.0f-(1.0f-shadeC)*NITRO_SHADOW_GROUND_DARK*NITRO_SHADOW_TREE_DARK;
+                f[i]=(1.0f-shadeC)*NITRO_SHADOW_GROUND_DARK;
                 if(!(f[i]>0.0f))f[i]=0.0f;
+                if(f[i]>1.0f)f[i]=1.0f;
             }
             sShadeColor=0xFF000000u|((u32)(f[2]*255.0f+0.5f)<<16)|((u32)(f[1]*255.0f+0.5f)<<8)|(u32)(f[0]*255.0f+0.5f);
         }
@@ -2873,7 +2876,9 @@ static void bind_batch_shadow(const NitroGx3dBatch *batch)
  * where it's clear (shade a + 1 - a): the edge as soft as the texture's
  * sampling. Not where the props' or trees' darkened (in a tree's shade a
  * character casts none). */
-static void once_batch(const NitroGx3dBatch *batch,int shade)
+/* (pass: for a tree's, 0 and up the passes before the last, -1 the last;
+ * below) */
+static void once_batch(const NitroGx3dBatch *batch,int shade,int pass)
 {
     C3D_Tex *tex=get_texture(batch->texture_param,batch->palette_base);
     C3D_TexEnv *env;
@@ -2884,38 +2889,78 @@ static void once_batch(const NitroGx3dBatch *batch,int shade)
     param=tex->param;
     C3D_TexSetFilter(tex,GPU_LINEAR,GPU_LINEAR);
     C3D_TexBind(0,tex);
-    /* the shade (a tree's: the one shade; a prop's: its vertices', with
-     * the fade); the texel's alpha for the test */
     env=C3D_GetTexEnv(0);
     C3D_TexEnvInit(env);
     if(shade){
+        /* a tree's: 1 - what a full shadow takes x the vertex's grey (how
+         * much of it there: full at the tree's foot, fading to the tip),
+         * in two stages */
         C3D_TexEnvColor(env,sShadeColor);
-        C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,0,0);
+        C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,GPU_PRIMARY_COLOR,0);
+        C3D_TexEnvFunc(env,C3D_RGB,GPU_MODULATE);
+        if(pass>=0){
+            /* (the texel's alpha x the grey: the darker ones alone pass) */
+            C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,GPU_PRIMARY_COLOR,0);
+            C3D_TexEnvOpAlpha(env,GPU_TEVOP_A_SRC_ALPHA,GPU_TEVOP_A_SRC_R,0);
+            C3D_TexEnvFunc(env,C3D_Alpha,GPU_MODULATE);
+        }else{
+            C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,0,0);
+            C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+        }
+        env=C3D_GetTexEnv(1);
+        C3D_TexEnvInit(env);
+        C3D_TexEnvSrc(env,C3D_RGB,GPU_PREVIOUS,0,0);
+        C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,0,0);
+        C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
+        C3D_TexEnvSrc(env,C3D_Alpha,GPU_PREVIOUS,0,0);
+        C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
     }else{
+        /* a prop's: its vertices' shade, with the fade; the texel's alpha
+         * for the test */
         C3D_TexEnvSrc(env,C3D_RGB,GPU_PRIMARY_COLOR,0,0);
+        C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
+        C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,0,0);
+        C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
     }
-    C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
-    C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,0,0);
-    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
     draw_arrays((int)batch->first,(int)batch->count);
     tex->param=param;
 }
-/* (the land's trees' shadows: the scene's own polygons marked
- * NITRO_GX3D_TAG_SHADE, left out of its other passes; then the props') */
+/* The land's trees' shadows (the scene's own polygons marked
+ * NITRO_GX3D_TAG_SHADE, left out of its other passes), then the props'.
+ * A tree's fades from its foot (2026-11-10, chosen from a preview: one
+ * even shade from foot to tip read as another colour of grass, not a
+ * shadow), and a pixel is still darkened once: where two trees' overlap
+ * the darker is wanted, not whichever is drawn first (a tip over the
+ * next tree's foot). So the darkest first: the passes of TREE_PASSES draw
+ * only where the texel's alpha x the grey is that much, each pixel taken
+ * by the first to draw it; the last, wherever the texel is over half
+ * opaque as before. Between two in the same band the first drawn still
+ * wins: a band is 0.15 to 0.2 of the full shade. */
+static const u8 TREE_PASSES[]={204,158,120};
 static void draw_once_batches(void)
 {
     size_t b;
-    for(b=0;b<sPreparedBatches && sShadeBatches;b++){
-        const NitroGx3dBatch *batch=&sBatches[b];
-        if(batch->tag!=NITRO_GX3D_TAG_SHADE || batch->translucent || !batch->texture_param)continue;
-        if(!room_for_draw())return;
-        once_batch(batch,1);
+    int pass;
+    for(pass=0;pass<=(int)sizeof(TREE_PASSES) && sShadeBatches;pass++){
+        const int last=pass==(int)sizeof(TREE_PASSES);
+        C3D_AlphaTest(true,GPU_GEQUAL,last?128:TREE_PASSES[pass]);
+        for(b=0;b<sPreparedBatches;b++){
+            const NitroGx3dBatch *batch=&sBatches[b];
+            if(batch->tag!=NITRO_GX3D_TAG_SHADE || batch->translucent || !batch->texture_param)continue;
+            if(!room_for_draw())break;
+            once_batch(batch,1,last?-1:pass);
+        }
+    }
+    if(sShadeBatches){
+        /* (the second stage as every other draw has it: passing on) */
+        C3D_TexEnvInit(C3D_GetTexEnv(1));
+        C3D_AlphaTest(true,GPU_GEQUAL,128);
     }
     for(b=0;b<sGroundBatchCount && sGroundReady;b++){
         const NitroGx3dBatch *batch=&sBatches[MAX_BATCHES+b];
         if(batch->tag!=NITRO_SHADOW_ONCE)continue;
         if(!room_for_draw())return;
-        once_batch(batch,0);
+        once_batch(batch,0,0);
     }
 }
 static void draw_ground_shadows(int stencilIds)

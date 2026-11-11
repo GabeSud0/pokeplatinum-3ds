@@ -417,6 +417,12 @@ NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists, const uint
                                             int32_t posScale);
 void NitroPort_Gx3dFreeTreeLists(NitroGx3dTreeLists *trees);
 const void *NitroPort_Gx3dTreeCanopies(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
+/* The shape's layers again, each vertex with a COLOR before it for
+ * NITRO_GX3D_TAG_CANOPY: darker towards the side the light (wayX to the
+ * right, wayZ towards the camera) leaves, and towards a layer's foot. Made
+ * again when the light's way changes. NULL for a shape whose list has
+ * COLOR commands of its own, or a polygon that couldn't be read. */
+const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *trees, uint32_t shape, int32_t wayX, int32_t wayZ, uint32_t *bytes);
 const void *NitroPort_Gx3dTreeStumps(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
 const void *NitroPort_Gx3dTreeTail(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
 const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *trees, uint32_t shape, int32_t wayX, int32_t wayZ,
@@ -508,6 +514,11 @@ void NitroPort_Gx3dTag(uint32_t tag);
 #define NITRO_GX3D_TAG_PROP 0xC0000000u
 #define NITRO_GX3D_TAG_SHADE 0x40000000u
 #define NITRO_GX3D_TAG_STUMP 0x40000002u
+/* (a tree's layers with their far side from the sun shaded: under this
+ * mark a COLOR command isn't the vertices' colour but what their lit
+ * colour, from the NORMAL, is times: NitroPort_Gx3dTreeCanopiesLit's
+ * lists) */
+#define NITRO_GX3D_TAG_CANOPY 0x40000004u
 #define NITRO_GX3D_TAG_IS_PROP(tag) (((tag)&0xC0000001u)==NITRO_GX3D_TAG_PROP)
 #define NITRO_GX3D_TAG_IS_DRAW(tag) (((tag)&0xC0000001u)==0x40000000u)
 #define NITRO_GX3D_TAG_IS_ROUND(tag) (((tag)&1u) && !((tag)&0xC0000000u))

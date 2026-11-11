@@ -32,6 +32,7 @@ typedef struct GeoVertex {
     int32_t clip[4];
     int32_t s,t;
     uint16_t color;
+    uint16_t tint;     /* (a tree's layer's, NITRO_GX3D_TAG_CANOPY: bit 15 and what its lit colour is times; else 0) */
     uint8_t outside;   /* bit p: outside clip plane p (see plane_distance) */
     uint8_t hasScreen; /* screen is filled in (strips share vertices) */
     uint8_t lit;       /* color is worked out; else it's normal's (light_vertex) */
@@ -58,6 +59,7 @@ typedef struct GeoState {
     int32_t resolvedTexcoord[2];
     uint32_t attr, pendingAttr, texparam, plttbase, shininess[32];
     uint32_t tag;            /* (the game's mark on the polygons now: NitroPort_Gx3dTag) */
+    uint32_t tint;           /* (under NITRO_GX3D_TAG_CANOPY: the last COLOR, bit 15 set; else 0) */
     int useShininess;
     unsigned frameVertices, framePolygons;
     int32_t lightDir[4][3];
@@ -388,7 +390,17 @@ static uint16_t shade(uint32_t value)
  * changes it first works out the colours still owed (settle_lighting). */
 static void light_vertex(GeoVertex *v)
 {
-    if(!v->lit){v->color=shade(v->normal);v->lit=1;}
+    if(!v->lit){
+        v->color=shade(v->normal);
+        if(v->tint){
+            /* (a tree's layer, its far side from the sun: the lit colour
+             * times the tint, a channel at a time) */
+            unsigned c=v->color,t=v->tint,k,out=0;
+            for(k=0;k<15u;k+=5u)out|=((((c>>k)&31u)*((t>>k)&31u)+15u)/31u)<<k;
+            v->color=(uint16_t)out;
+        }
+        v->lit=1;
+    }
 }
 static void settle_lighting(void)
 {
@@ -2094,7 +2106,7 @@ static void submit_vertex(void)
     if(vp->clip[3]<=0)sDiag.behind++;
     if(((s.texparam>>30)&3u)==3u)transform_texcoords(src,3,s.resolvedTexcoord);
     vp->s=s.resolvedTexcoord[0];vp->t=s.resolvedTexcoord[1];vp->color=s.rgb;
-    vp->lit=(uint8_t)!s.rgbPending;vp->normal=s.normalValue;
+    vp->lit=(uint8_t)!s.rgbPending;vp->normal=s.normalValue;vp->tint=(uint16_t)s.tint;
     if(s.primitive==0){
         n++;
         if(n==3){
@@ -2339,7 +2351,12 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         return;
     }
     switch(op){
-    case 0x20:s.rgb=p[0]&0x7FFF;s.rgbPending=0;break;
+    case 0x20:
+        /* (under NITRO_GX3D_TAG_CANOPY a COLOR is what the vertices' lit
+         * colour is times, not their colour) */
+        if(s.tag==NITRO_GX3D_TAG_CANOPY)s.tint=(p[0]&0x7FFFu)|0x8000u;
+        else{s.rgb=p[0]&0x7FFF;s.rgbPending=0;}
+        break;
     case 0x21:
         for(i=0;i<3;i++)s.normal[i]=signbits(p[0]>>(i*10),10)*8;
         s.normalValue=p[0];s.rgbPending=1;
@@ -2456,7 +2473,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
     case 0x70:case 0x71:case 0x72:test_command(&s,op,p);break;
     case OP_CLEAR_STACK_ERROR:s.stackError=0;s.pjLevel=0;break;
     case OP_WIDE_VIEW:set_wide_view(&s,(int)(p[0]&0xFFFFu),(int)(p[0]>>16));break;
-    case OP_TAG:s.tag=p[0];break;
+    case OP_TAG:s.tag=p[0];s.tint=0;break;
     case OP_SCENE_REGS:
         sPendingStamp=p[0];
         sPendingDisp3d=p[1];
@@ -3055,7 +3072,11 @@ static uint32_t work_packets(uint32_t r,uint32_t end,uint32_t i,uint32_t word)
             word>>=8;
             switch(o){
             case 0x00:break;
-            case 0x20:s.rgb=p[0]&0x7FFF;s.rgbPending=0;i++;break;
+            case 0x20:
+                if(s.tag==NITRO_GX3D_TAG_CANOPY)s.tint=(p[0]&0x7FFFu)|0x8000u;
+                else{s.rgb=p[0]&0x7FFF;s.rgbPending=0;}
+                i++;
+                break;
             case 0x21:{
                 int j;
                 for(j=0;j<3;j++)s.normal[j]=signbits(p[0]>>(j*10),10)*8;
@@ -3315,7 +3336,7 @@ void NitroPort_Gx3dTag(uint32_t tag)
     if(tag==sTagGame)return;
     sTagGame=tag;
     if(sThreaded)enqueue(OP_TAG,&tag,1,0);
-    else s.tag=tag;
+    else{s.tag=tag;s.tint=0;}
 }
 #define RECORD(type,words,count) do{if(sRecorder)sRecorder((type),(words),(count));}while(0)
 /* A decoded command: done here, or handed to the geometry thread. */
@@ -4059,23 +4080,44 @@ uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *sv,void *dst,uint
  * (clipped at the view's sides as it is, halfway in the in-between scenes
  * with the land: nothing worked out for them a scene). */
 #define TREE_VERTS 8
-/* (a tree's trunk for its shadow, in world units: half as wide at the
- * ground and at its top, and how tall: the stump is about 14 across where
- * it's cut and 20 at its roots, the lowest layer starts 6.3 up and is
- * solid by 12) */
-#define TREE_TRUNK_FOOT 5
-#define TREE_TRUNK_TOP 4
-#define TREE_TRUNK_TALL 12
+/* The shadows' look (2026-11-10, chosen from a preview: "fade + contact,
+ * with the far side of the tree shaded"), in world units:
+ * - the fade: a layer's shadow full at the ground, TREE_FADE_TIP of it
+ *   (in 31sts) TREE_FADE_TALL up and beyond;
+ * - the pool where the tree meets the ground, in place of the game's own
+ *   painted patch and with its shape (the stump's polygon's texture: the
+ *   patch and the stump are its opaque texels): TREE_POOL_HALF either
+ *   side across the light's way, from TREE_POOL_BACK behind the stump's
+ *   middle to TREE_POOL_FRONT along it (the same at any hour: not times
+ *   the shadows' length), full. It reaches into the lowest layer's
+ *   shadow, 6.3 up: nothing lies apart from the tree's foot;
+ * - the layers' far side: TREE_FAR_SHADE (in 256ths) of a cool grey at
+ *   the corner the light leaves, none at the one it comes to. */
+#define TREE_FADE_TALL 42
+#define TREE_FADE_TIP 12
+#define TREE_POOL_HALF 10
+#define TREE_POOL_BACK 6
+#define TREE_POOL_FRONT 16
+#define TREE_FAR_SHADE 87
 typedef struct TreeQuad {          /* (a polygon of a shape's list, as read) */
     int32_t xyz[TREE_VERTS][3], st[TREE_VERTS][2];
     int32_t lo[3], hi[3];
+    uint32_t normal;               /* (the NORMAL before its first vertex) */
     uint8_t n, flat;
 } TreeQuad;
 typedef struct TreePoly {          /* (a polygon to lay: about where its tree stands) */
     int32_t base[3];               /* x, the ground's y, z */
     int32_t u[TREE_VERTS], h[TREE_VERTS], st[TREE_VERTS][2];
+    uint8_t lv[TREE_VERTS];        /* (how dark at each vertex, in 31sts) */
     uint8_t n, first;              /* (first: its tree's, or its row's, first one) */
+    uint8_t fixed;                 /* (h along the light's way as it is, not times the shadows' length) */
 } TreePoly;
+typedef struct TreeLeaf {          /* (a standing polygon, for its far side's shade) */
+    int32_t xyz[TREE_VERTS][3], st[TREE_VERTS][2];
+    uint32_t normal;
+    int8_t nx[TREE_VERTS], ny[TREE_VERTS];   /* (each vertex: left or right of its middle, below or above) */
+    uint8_t n, first;
+} TreeLeaf;
 typedef struct TreeShape {
     uint32_t *canopy, *stumps, *tail, *shadow;
     uint32_t canopyBytes, stumpBytes, tailBytes, shadowBytes, shadowCap;
@@ -4083,6 +4125,10 @@ typedef struct TreeShape {
     uint32_t npolys, trees;
     int32_t sun[3];
     int sunSet;
+    TreeLeaf *leaves;
+    uint32_t nleaves, *lit, litBytes, litCap;
+    int32_t litWay[2];
+    int litSet;
 } TreeShape;
 struct NitroGx3dTreeLists {
     uint32_t count;
@@ -4091,21 +4137,26 @@ struct NitroGx3dTreeLists {
 };
 /* (a shape's polygons, each with its vertices' coordinates and texture
  * coordinates; one of more than TREE_VERTS vertices, a strip, has n 0) */
-static TreeQuad *tree_quads(const DlInfo *info,const uint32_t *w,int32_t flatSpan)
+static TreeQuad *tree_quads(const DlInfo *info,const uint32_t *w,int32_t flatSpan,int *plain)
 {
     TreeQuad *quads=calloc(info->ngroups?info->ngroups:1u,sizeof(*quads));
     int32_t st[2]={0,0};
-    uint32_t o,g=0;
+    uint32_t o,g=0,normal=0;
+    /* (plain: lit by NORMALs alone, every polygon read) */
+    *plain=1;
     if(!quads)return NULL;
     for(o=0;o<info->nops;o++){
         unsigned op=info->ops[o]&255u;
         while(g<info->ngroups && o>=info->groups[g].end)g++;
+        if(op==0x20u)*plain=0;
+        else if(op==0x21u)normal=w[info->ops[o]>>8];
         if(op==0x22u){
             uint32_t v=w[info->ops[o]>>8];
             st[0]=signbits(v,16);st[1]=signbits(v>>16,16);
         }else if(op>=0x23u && op<=0x28u && g<info->ngroups && o>=info->groups[g].begin){
             TreeQuad *q=&quads[g];
-            if(info->groups[g].vertices>TREE_VERTS)continue;
+            if(info->groups[g].vertices>TREE_VERTS){*plain=0;continue;}
+            if(!q->n)q->normal=normal;
             memcpy(q->xyz[q->n],info->xyz[o],sizeof(q->xyz[0]));
             q->st[q->n][0]=st[0];q->st[q->n][1]=st[1];
             q->n++;
@@ -4220,7 +4271,7 @@ static unsigned tree_clip(const TreeQuad *q,int32_t lo,int32_t hi,int32_t xyz[TR
     return n;
 }
 static void tree_add(TreeShape *sh,uint32_t *cap,const int32_t base[3],unsigned n,
-                     int32_t xyz[TREE_VERTS][3],int32_t st[TREE_VERTS][2],int first)
+                     int32_t xyz[TREE_VERTS][3],int32_t st[TREE_VERTS][2],int first,int32_t unit,int fixed)
 {
     TreePoly *p;
     unsigned i;
@@ -4233,10 +4284,16 @@ static void tree_add(TreeShape *sh,uint32_t *cap,const int32_t base[3],unsigned 
     memcpy(p->base,base,sizeof(p->base));
     p->n=(uint8_t)n;
     p->first=(uint8_t)first;
+    p->fixed=(uint8_t)fixed;
     for(i=0;i<n;i++){
+        int64_t up;
         p->u[i]=xyz[i][0]-base[0];
         p->h[i]=xyz[i][1]-base[1];
         p->st[i][0]=st[i][0];p->st[i][1]=st[i][1];
+        /* (the fade: full at the ground, the tip's TREE_FADE_TALL up) */
+        up=fixed || p->h[i]<0?0:p->h[i];
+        if(up>(int64_t)TREE_FADE_TALL*unit)up=(int64_t)TREE_FADE_TALL*unit;
+        p->lv[i]=(uint8_t)(31-(int)(((31-TREE_FADE_TIP)*up+TREE_FADE_TALL*unit/2)/((int64_t)TREE_FADE_TALL*unit)));
     }
 }
 /* (the shape's trees, and each one's polygons to lay; unit: a world unit
@@ -4328,54 +4385,104 @@ static void tree_sources(TreeShape *sh,const TreeQuad *quads,uint32_t n,TreeQuad
                         unsigned m=tree_clip(q,x0,x0+column,xyz,st);
                         if(m<3)continue;
                         b2[0]=x0+column/2;b2[1]=base[1];b2[2]=base[2];
-                        tree_add(sh,&cap,b2,m,xyz,st,sh->npolys==before);
+                        tree_add(sh,&cap,b2,m,xyz,st,sh->npolys==before,unit,0);
                     }
                     if(c>columns)columns=c;
                 }else{
                     memcpy(xyz,q->xyz,sizeof(xyz));
                     memcpy(st,q->st,sizeof(st));
-                    tree_add(sh,&cap,base,q->n,xyz,st,sh->npolys==before);
+                    tree_add(sh,&cap,base,q->n,xyz,st,sh->npolys==before,unit,0);
                 }
             }
             if(sh->npolys>before){
                 sh->trees+=columns;
-                /* Its trunk: the stump is painted flat on the ground and
-                 * the layers start some way up, so their shadows alone
-                 * lie apart from the tree, with nothing joining them to
-                 * its foot (2026-11-10: "do not include the trunk making
-                 * the shadow feel fake"). A strip from where each stump
-                 * is up into the lowest layer, laid with them; its
-                 * texture coordinates all the stump's middle (opaque:
-                 * the shadows are drawn where the texel is). Only with
-                 * the stumps in the shape itself: the texture is theirs. */
+                /* The pool where it meets the ground (above), a tree's
+                 * or each of a row's: the stump's polygon's own texture
+                 * coordinates, corner for corner, so its shape is the
+                 * painted patch's. Only with the stumps in the shape
+                 * itself: the texture is theirs. */
                 for(k=first;k<last && flat;k++){
                     const TreeQuad *q=&quads[k];
-                    int32_t x0,x1,step;
+                    int32_t x0,x1;
                     if(!q->n || !q->flat)continue;
-                    if(q->hi[0]-q->lo[0]>wide){x0=q->lo[0];x1=q->hi[0];step=column;}
-                    else{x0=base[0]-column/2;x1=x0+1;step=column;}
-                    for(;x0<x1;x0+=step){
-                        const int32_t bx=x0+column/2,foot=TREE_TRUNK_FOOT*unit,top=TREE_TRUNK_TOP*unit,
-                                      up=TREE_TRUNK_TALL*unit;
-                        int32_t xyz[TREE_VERTS][3],st[TREE_VERTS][2],b2[3];
-                        int64_t ss=0,tt=0;
-                        unsigned m=tree_clip(q,bx-unit,bx+unit,xyz,st),v;
+                    if(q->hi[0]-q->lo[0]>wide){x0=q->lo[0];x1=q->hi[0];}
+                    else{x0=base[0]-column/2;x1=x0+1;}
+                    for(;x0<x1;x0+=column){
+                        const int32_t bx=x0+column/2;
+                        int32_t cxyz[TREE_VERTS][3],cst[TREE_VERTS][2],xyz[TREE_VERTS][3],st[TREE_VERTS][2],b2[3];
+                        int32_t xlo=0,xhi=0,zlo=0,zhi=0;
+                        unsigned m=tree_clip(q,x0,x0+column,cxyz,cst),v,c,found=0;
                         if(m<3)continue;
-                        for(v=0;v<m;v++){ss+=st[v][0];tt+=st[v][1];}
-                        b2[0]=bx;b2[1]=base[1];b2[2]=base[2];
-                        for(v=0;v<4u;v++){
-                            xyz[v][0]=bx+((v==0u||v==3u)?-1:1)*(v<2u?foot:top);
-                            xyz[v][1]=base[1]+(v<2u?0:up);
-                            xyz[v][2]=base[2];
-                            st[v][0]=(int32_t)(ss/(int64_t)m);st[v][1]=(int32_t)(tt/(int64_t)m);
+                        for(v=0;v<m;v++){
+                            if(!v || cxyz[v][0]<xlo)xlo=cxyz[v][0];
+                            if(!v || cxyz[v][0]>xhi)xhi=cxyz[v][0];
+                            if(!v || cxyz[v][2]<zlo)zlo=cxyz[v][2];
+                            if(!v || cxyz[v][2]>zhi)zhi=cxyz[v][2];
                         }
-                        tree_add(sh,&cap,b2,4u,xyz,st,0);
+                        b2[0]=bx;b2[1]=base[1];b2[2]=base[2];
+                        /* (behind left, behind right, ahead right, ahead
+                         * left: as a layer's foot and top) */
+                        for(c=0;c<4u;c++){
+                            const int right=c==1u||c==2u,ahead=c>=2u;
+                            for(v=0;v<m;v++){
+                                if((cxyz[v][0]*2>xlo+xhi)==right && (cxyz[v][2]*2>zlo+zhi)==ahead){
+                                    st[c][0]=cst[v][0];st[c][1]=cst[v][1];
+                                    found|=1u<<c;
+                                    break;
+                                }
+                            }
+                            xyz[c][0]=bx+(right?1:-1)*TREE_POOL_HALF*unit;
+                            xyz[c][1]=base[1]+(ahead?TREE_POOL_FRONT:-TREE_POOL_BACK)*unit;
+                            xyz[c][2]=base[2];
+                        }
+                        if(found==15u)tree_add(sh,&cap,b2,4u,xyz,st,0,unit,1);
                     }
                     if(q->hi[0]-q->lo[0]<=wide)break;   /* (a tree: one stump) */
                 }
             }
         }
     }
+}
+/* (the shape's standing polygons, for NitroPort_Gx3dTreeCanopiesLit: a
+ * list of vertices a tree, as the shadows') */
+static void tree_leaves(TreeShape *sh,const TreeQuad *quads,uint32_t n,int32_t unit)
+{
+    const int32_t nearBy=12*unit,wide=48*unit;
+    uint32_t g,count=0;
+    int32_t mx=0,mz=0;
+    int any=0;
+    for(g=0;g<n;g++)count+=quads[g].n && !quads[g].flat;
+    if(!count)return;
+    sh->leaves=calloc(count,sizeof(*sh->leaves));
+    if(!sh->leaves)return;
+    for(g=0;g<n;g++){
+        const TreeQuad *q=&quads[g];
+        TreeLeaf *l;
+        int32_t qx,qz;
+        unsigned v;
+        if(!q->n)continue;
+        qx=q->lo[0]/2+q->hi[0]/2;qz=q->lo[2]/2+q->hi[2]/2;
+        if(!any || qx-mx>nearBy || mx-qx>nearBy || qz-mz>nearBy || mz-qz>nearBy){mx=qx;mz=qz;any=1;}
+        else if(q->flat)continue;
+        if(q->flat){any=2;continue;}
+        l=&sh->leaves[sh->nleaves++];
+        memcpy(l->xyz,q->xyz,sizeof(l->xyz));
+        memcpy(l->st,q->st,sizeof(l->st));
+        l->normal=q->normal;
+        l->n=q->n;
+        /* (the first of its tree: none before it since the tree's first
+         * polygon, standing or flat) */
+        l->first=(uint8_t)(sh->nleaves==1u || (mx==qx && mz==qz) || any==2);
+        any=1;
+        for(v=0;v<q->n;v++){
+            /* (a row's polygon is many trees wide: no left or right) */
+            l->nx[v]=(int8_t)(q->hi[0]-q->lo[0]>wide?0:q->xyz[v][0]*2>q->lo[0]+q->hi[0]?1:-1);
+            l->ny[v]=(int8_t)(q->xyz[v][1]*2>q->lo[1]+q->hi[1]?1:-1);
+        }
+    }
+    sh->litCap=sh->nleaves*((TREE_VERTS-2u)*3u*7u+8u)+16u;
+    sh->lit=malloc(sh->litCap*4u);
+    if(!sh->lit){free(sh->leaves);sh->leaves=NULL;sh->nleaves=0;}
 }
 NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists,const uint32_t *bytes,uint32_t count,int32_t posScale)
 {
@@ -4384,6 +4491,7 @@ NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists,const uint3
     TreeQuad **quads;
     uint32_t *counts,i;
     int32_t unit;
+    int plain[32];
     if(!lists || !bytes || !count || count>32u || posScale<=0)return NULL;
     unit=(int32_t)((((int64_t)4096)<<12)/posScale);
     if(unit<=0 || unit>256)return NULL;
@@ -4398,7 +4506,7 @@ NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists,const uint3
         if(!lists[i] || (bytes[i]&3u) || !bytes[i])continue;
         info[i]=dl_survey(lists[i],bytes[i]/4u,1u);
         if(!info[i])continue;
-        quads[i]=tree_quads(info[i],lists[i],unit*3/4);
+        quads[i]=tree_quads(info[i],lists[i],unit*3/4,&plain[i]);
         if(quads[i])counts[i]=info[i]->ngroups;
     }
     for(i=0;i<count;i++){
@@ -4408,10 +4516,12 @@ NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists,const uint3
         /* (no tail: the list isn't one of polygons alone, left as it is) */
         if(!sh->tail)continue;
         tree_sources(sh,quads[i],counts[i],quads,counts,count,unit);
+        if(plain[i])tree_leaves(sh,quads[i],counts[i],unit);
         if(sh->npolys){
-            /* (a vertex: a TEXCOORD and a VTX_16, four commands a word of
-             * their own; a polygon not a quad as triangles) */
-            sh->shadowCap=sh->npolys*((TREE_VERTS-2u)*3u*4u+4u)+16u;
+            /* (a vertex: a COLOR, a TEXCOORD and a VTX_16, their words and
+             * at most a word of commands each; a polygon not a quad as
+             * triangles) */
+            sh->shadowCap=sh->npolys*((TREE_VERTS-2u)*3u*7u+4u)+16u;
             sh->shadow=malloc(sh->shadowCap*4u);
             if(!sh->shadow){free(sh->polys);sh->polys=NULL;sh->npolys=0;sh->trees=0;}
         }
@@ -4427,6 +4537,7 @@ void NitroPort_Gx3dFreeTreeLists(NitroGx3dTreeLists *t)
     for(i=0;i<t->count;i++){
         free(t->shape[i].canopy);free(t->shape[i].stumps);free(t->shape[i].tail);
         free(t->shape[i].shadow);free(t->shape[i].polys);
+        free(t->shape[i].leaves);free(t->shape[i].lit);
     }
     free(t);
 }
@@ -4459,6 +4570,71 @@ static int32_t tree_fx(int64_t v)
 {
     return (int32_t)((v+(v>=0?2048:-2048))/4096);
 }
+const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *t,uint32_t shape,int32_t wayX,int32_t wayZ,uint32_t *bytes)
+{
+    TreeShape *sh;
+    DlWriter wr;
+    uint32_t i,mode=1u,normal=0,tint=0;
+    int begun=0;
+    int64_t span;
+    if(bytes)*bytes=0;
+    if(!t || shape>=t->count)return NULL;
+    sh=&t->shape[shape];
+    if(!sh->nleaves || !sh->lit)return NULL;
+    if(sh->litSet && sh->litWay[0]==wayX && sh->litWay[1]==wayZ){
+        if(bytes)*bytes=sh->litBytes;
+        return sh->litBytes?sh->lit:NULL;
+    }
+    sh->litWay[0]=wayX;sh->litWay[1]=wayZ;
+    sh->litSet=1;
+    sh->litBytes=0;
+    memset(&wr,0,sizeof(wr));
+    wr.out=sh->lit;
+    wr.cap=sh->litCap;
+    span=(int64_t)(wayX<0?-wayX:wayX)+(wayZ<0?-wayZ:wayZ);
+    if(span<=0)span=1;
+    for(i=0;i<sh->nleaves;i++){
+        const TreeLeaf *l=&sh->leaves[i];
+        const uint32_t want=l->n==4u?1u:0u;
+        unsigned count=l->n==4u?4u:(l->n-2u)*3u,k;
+        if(begun && (l->first || want!=mode)){dl_put(&wr,0x41u,NULL);begun=0;}
+        if(!begun){
+            mode=want;
+            dl_put(&wr,0x40u,&mode);
+            begun=1;
+            normal=l->normal;tint=0;
+            dl_put(&wr,0x21u,&normal);
+        }else if(l->normal!=normal){
+            normal=l->normal;
+            dl_put(&wr,0x21u,&normal);
+        }
+        for(k=0;k<count;k++){
+            /* (a polygon that isn't a quad: a fan, the list's own way round) */
+            const unsigned v=l->n==4u?k:(k%3u==0u?0u:k/3u+k%3u);
+            /* how far towards the corner the light leaves, 0 to 256:
+             * right of the middle as the light goes right, below it as
+             * it comes towards the camera (from behind and above) */
+            const int64_t d=((int64_t)wayX*l->nx[v]-(int64_t)wayZ*l->ny[v])*128/span+128;
+            const int64_t a=(d<0?0:d>256?256:d)*TREE_FAR_SHADE/256;   /* (of 256) */
+            const uint32_t r=(uint32_t)(31-(31*a*235/256+128)/256),g=(uint32_t)(31-(31*a*225/256+128)/256),
+                           b=(uint32_t)(31-(31*a*195/256+128)/256);
+            const uint32_t c=r|(g<<5)|(b<<10)|0x8000u;
+            uint32_t tc=((uint32_t)l->st[v][0]&0xFFFFu)|((uint32_t)l->st[v][1]<<16);
+            if(c!=tint){
+                uint32_t rgb=c&0x7FFFu;
+                tint=c;
+                dl_put(&wr,0x20u,&rgb);
+            }
+            dl_put(&wr,0x22u,&tc);
+            dl_vtx16(&wr,l->xyz[v]);
+        }
+    }
+    if(begun)dl_put(&wr,0x41u,NULL);
+    if(wr.full || !wr.n)return NULL;
+    sh->litBytes=wr.n*4u;
+    if(bytes)*bytes=sh->litBytes;
+    return sh->lit;
+}
 const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32_t wayX,int32_t wayZ,int32_t stretch,
                                       uint32_t *bytes)
 {
@@ -4487,31 +4663,39 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
      * Quads; a polygon that isn't one (cut at a slant) as triangles. */
     {
         int begun=0;
-        uint32_t mode=1u;
+        uint32_t mode=1u,level=255u;
         for(i=0;i<sh->npolys;i++){
             const TreePoly *p=&sh->polys[i];
             int32_t xyz[TREE_VERTS][3];
             uint32_t want=p->n==4u?1u:0u;
             unsigned k,ok=1;
+            const int32_t ax=p->fixed?wayX:sx,az=p->fixed?wayZ:sz;
             if(p->first && begun){dl_put(&wr,0x41u,NULL);begun=0;}
             /* across the tree goes across the light's way (z, -x: laid
              * towards the camera, the tree's right stays on the right),
              * up it along the way */
             for(k=0;k<p->n;k++){
-                xyz[k][0]=p->base[0]+tree_fx((int64_t)wayZ*p->u[k]+(int64_t)sx*p->h[k]);
+                xyz[k][0]=p->base[0]+tree_fx((int64_t)wayZ*p->u[k]+(int64_t)ax*p->h[k]);
                 xyz[k][1]=p->base[1]+t->lift;
-                xyz[k][2]=p->base[2]+tree_fx(-(int64_t)wayX*p->u[k]+(int64_t)sz*p->h[k]);
+                xyz[k][2]=p->base[2]+tree_fx(-(int64_t)wayX*p->u[k]+(int64_t)az*p->h[k]);
                 if(!dl_s16(xyz[k]))ok=0;
             }
             if(!ok)continue;
             if(begun && want!=mode){dl_put(&wr,0x41u,NULL);begun=0;}
-            if(!begun){mode=want;dl_put(&wr,0x40u,&mode);begun=1;}
+            if(!begun){mode=want;dl_put(&wr,0x40u,&mode);begun=1;level=255u;}
             /* (laid down, the polygon faces the other way: its vertices
              * the other way round, so it's drawn from above as the tree's
              * own is from the front) */
             if(mode==1u){
                 for(k=p->n;k-->0u;){
                     uint32_t tc=((uint32_t)p->st[k][0]&0xFFFFu)|((uint32_t)p->st[k][1]<<16);
+                    /* (how dark: the vertex's colour, a grey) */
+                    if(p->lv[k]!=level){
+                        uint32_t grey;
+                        level=p->lv[k];
+                        grey=level|(level<<5)|(level<<10);
+                        dl_put(&wr,0x20u,&grey);
+                    }
                     dl_put(&wr,0x22u,&tc);
                     dl_vtx16(&wr,xyz[k]);
                 }
@@ -4522,6 +4706,12 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
                     for(k=0;k<3u;k++){
                         unsigned v=order[k];
                         uint32_t tc=((uint32_t)p->st[v][0]&0xFFFFu)|((uint32_t)p->st[v][1]<<16);
+                        if(p->lv[v]!=level){
+                            uint32_t grey;
+                            level=p->lv[v];
+                            grey=level|(level<<5)|(level<<10);
+                            dl_put(&wr,0x20u,&grey);
+                        }
                         dl_put(&wr,0x22u,&tc);
                         dl_vtx16(&wr,xyz[v]);
                     }

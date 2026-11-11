@@ -3725,9 +3725,8 @@ then the small props and the land's trees; houses and the scenery later.
   Frontier's trees, a gym's or the snow's yet.
   The renderer leaves the SHADE batches out of its other passes (opaque,
   outlines, the classic path, the PC's rasteriser) and draws them with
-  the props' in draw_ground_shadows: one shade (0.75 of the characters'
-  darkening at their feet, no fade: where trees' shadows overlap there
-  is no seam), where the texel is over half opaque, a pixel once.
+  the props' in draw_ground_shadows: where the texel is over half opaque, a pixel once (their shade:
+  the look, below).
   The stumps (STUMP batches, in the opaque pass): the batch's combiner
   with another alpha, (1 - the texel's green + its red, 1 at most) x its
   alpha (GPU_ADD_MULTIPLY), and the alpha test above 250: the stump's
@@ -3741,21 +3740,47 @@ then the small props and the land's trees; houses and the scenery later.
   orange, red 205: it happened to be right there. Worked out on the
   textures themselves now: the stump alone, 264 texels of the 508 opaque
   ones, no clear one.)
-  The trunk (2026-11-10: the shadows "do not include the trunk making
-  the shadow feel fake"): the stump is paint on the ground and the
-  lowest layer starts 6.3 units up, so the layers' shadows lay apart
-  from the tree's foot, more with a low sun. A tree with its stump in
-  its own shape gets a fourth shadow polygon: a strip from the stump's
-  middle (5 units either side) up to 12 units (4 either side), into the
-  lowest layer's shadow, laid as the layers are; its four texture
-  coordinates the middle of the stump's polygon (an opaque texel: on the
-  real lists (49, 14) for the trees, (16, 49) and (48, 49) for a row's
-  two, all opaque with their neighbours). It crosses the stump's far
-  half: the stump's own shaded side.
-  Not yet: caves and other roofed places drawn in perspective get the
-  characters' shadows too; the palm-like tree3's trunk has its patch in
-  a standing polygon, kept; the lighter disc painted on the grass under
-  some rows (tshadow) is the ground's own texture, kept.
+  The look, settled from a preview (2026-11-10; before it the shadows
+  "do not include the trunk making the shadow feel fake", then, with a
+  trunk, "the intensity of the shadow is not natural. closer to the
+  stump it should look darker than it is on the tip": one even shade
+  from foot to tip, hard-edged, read on the two-tone grass as a third
+  colour of grass. Chosen: "fade + contact, with the far side of the
+  tree shaded"):
+  - The fade: a shadow polygon's vertices carry how dark it is there, a
+    grey COLOR (in 31sts): full at the ground, 12/31 at 42 units up (the
+    tree's top) and beyond, as the characters' fade to the head. The
+    renderer draws 1 - (1 - the hour's shade) x 1.1 x that grey, a
+    channel at a time (two combiner stages: a constant x the vertex's
+    colour, then 1 - it).
+  - The pool where the tree meets the ground, in place of the trunk
+    strip and of the game's painted patch, and with the patch's shape:
+    a tree with its stump in its own shape gets a fourth shadow polygon
+    with the stump's polygon's own texture coordinates, corner for
+    corner (the patch and the stump are its opaque texels), 10 units
+    either side across the light's way, from 6 behind the stump's
+    middle to 16 along it (the same at any hour), full. It reaches into
+    the lowest layer's shadow (6.3 units up): nothing lies apart from
+    the tree's foot. A row's: one a tree.
+  - The darker wins: a pixel is still darkened once (one multiply), but
+    with the fade whichever tree's shadow was drawn first is no longer
+    right (a tip over the next tree's foot). The trees' batches are
+    drawn four times: three passes only where the texel's alpha x the
+    grey is at least 0.8, 0.62, 0.47, then wherever the texel is over
+    half opaque as before; each pixel is the first's to draw it. Between
+    two in one band the first still wins (a band is at most 0.2 of the
+    full shade).
+  - The far side: a tree's layers are lit by their NORMALs (no list of
+    the land's trees has a COLOR), a layer one colour all over. The
+    layers are sent again (NitroPort_Gx3dTreeCanopiesLit: the same
+    polygons, vertex for vertex; a list of vertices a tree) marked
+    NITRO_GX3D_TAG_CANOPY, under which a COLOR command is not the
+    vertices' colour but what their lit colour is times
+    (light_vertex): white at the corner the light comes to, a cool grey
+    (0.69, 0.70, 0.74) at the one it leaves (to the side the light
+    goes, and down: the light comes from behind and above), between
+    them across the layer. A row's polygon, many trees wide: down
+    only. Made again when the light's way changes.
   On a 3DS since (log 375a6403, by the Galactic building, mono, the
   same spot): with the sun shadows 49 to 58 frames a second, the
   geometry thread 28.9 to 32.6 ms a scene (88 to 98% busy), 1 to 6
@@ -3784,10 +3809,13 @@ then the small props and the land's trees; houses and the scenery later.
   the trees' lists: a shape's layers, stumps and tail together drawing
   every triangle the shape's list draws, the stumps alone the flat ones;
   each layer's corners laid from its own stump for a light towards the
-  camera and one to the side, its texture coordinates its own; the trunk
-  from the stump's middle, its texture coordinates the middle of the
-  stump's polygon, a row's a trunk a tree, none where the stumps are in
-  another list; a row's tops on the stumps of another list, a tree each
+  camera and one to the side, its texture coordinates its own; the pool
+  about the stump's middle, turned with the light and as long at any
+  hour, its texture coordinates the stump's polygon's, a row's one a
+  tree, none where the stumps are in another list; the fade's greys;
+  the layers again with a COLOR a vertex, vertex for vertex the list's,
+  none for a list with COLORs of its own, and under the canopy mark the
+  lit colour times it; a row's tops on the stumps of another list, a tree each
   32 units; the same sun
   the same list; what doesn't fit left out; seen from above, the shadows
   drawn on the side the layers are; the draw-only marks carried and
