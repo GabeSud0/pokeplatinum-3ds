@@ -4010,6 +4010,32 @@ then the small props and the land's trees; houses and the scenery later.
     those weren't shaded at all). The side the camera sees is its face.
     The sun's side up to 1.30, 1.25, 1.12, the far side down to 0.50,
     0.52, 0.58, a roof as it is. Not yet: darker towards the ground.
+- The buildings' flicker, a lone tree's shadow (2026-11-11, after a 3DS
+  run, log 9cbca14e: "buildings flickering like crazy on the 3ds
+  switching from bright to dark"; "when there is a sole one it looks very
+  bad. like if it was floting"):
+  - The walls' shade was put on as a scene's triangles were laid, not on
+    the polygons recorded for the in-between scenes: those took whatever
+    shade the last wall drawn had (a building's front and roof dark every
+    other frame, or a dark side bright). Now the recorded colours are
+    the shaded ones, and the in-between scenes use them as they are
+    (record_polygon). Shown through the engine, a building over four
+    frames, before and after; test_gx3d checks an in-between scene's
+    walls (failing without it).
+  - A tree's shadow began where it would if the whole tree, foot to tip,
+    stood in the light: a canopy's shadow starts its own height out, so
+    a tree standing alone had a gap of ground between its trunk and its
+    shadow. Now a tree's shadow starts at its trunk: a layer falls
+    (height - the tree's lowest leaves) along the light (TREE_ANCHOR,
+    4ths of the lowest leaves' height taken off, 4), the lowest found
+    over every list standing at the same place (a row's tops and
+    bottoms, one tree), the trunk's strip to match. Forests look as
+    before, a little shorter.
+  - Speed in that log: 60 frames a second most of the way; one place 43
+    to 48 (2,000 to 2,250 triangles; laying them in batches 12 to 17
+    ms), 52 there with the sun shadows off and as slow in the log
+    before: not the shadows'. The few stops of seconds are the
+    screenshots.
 - The engine's vertices, one division each (2026-11-10, for the same
   place): to_screen divided three times in doubles for every vertex
   drawn (1 / W, then by 2W for x and for y); now by 1 / W once. The
