@@ -6,27 +6,31 @@ Subject: [PATCH] The buildings' sun shadows and sunlit walls (SDK_PORT_3DS)
 The 3DS remaster's sun shadows: a prop too big for its picture laid on
 the ground (a building), out of doors, not turned, with a sun, is marked
 NITRO_GX3D_TAG_WALLS with the light's way in the mark: the port draws
-its walls brighter on the sun's side and darker on the far one. And its
-shadow is sent before it: the ground its box's front and its side the
-light leaves sweep along the light's way, two untextured quads marked
-NITRO_GX3D_TAG_GROUND, darker at the building than at their far edge.
+its walls brighter on the sun's side and darker on the far one. Its
+shadow is sent before it: the outline of the building on the ground for
+the sun (NitroPort_Gx3dShadowHull of its model's vertices, kept for the
+model until the sun moves on), a strip of untextured triangles marked
+NITRO_GX3D_TAG_GROUND, and round it a soft edge marked
+NITRO_GX3D_TAG_RIM. And its own painted shadow, the shapes of its
+see-through materials, isn't drawn then.
 ---
- src/overlay005/map_prop.c | 109 ++++++++++++++++++++++++++++++++++++--
- 1 file changed, 104 insertions(+), 5 deletions(-)
+ src/overlay005/map_prop.c | 265 +++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 260 insertions(+), 5 deletions(-)
 
 diff --git a/src/overlay005/map_prop.c b/src/overlay005/map_prop.c
-index bfc0644f..7783d63d 100644
+index bfc0644f..64fca2b6 100644
 --- a/src/overlay005/map_prop.c
 +++ b/src/overlay005/map_prop.c
-@@ -18,6 +18,7 @@
+@@ -18,6 +18,8 @@
  
  #ifdef SDK_PORT_3DS
  extern void NitroPort_Gx3dTag(u32 tag);
 +extern int NitroPort_SunWayNow(s32 way[3]);
++extern u32 NitroPort_Gx3dShadowHull(const void *const *lists, const u32 *bytes, u32 count, s32 shearX, s32 shearZ, s32 flatY, s32 (*out)[3], u32 max);
  
  // The 3DS remaster's sun shadows: the small standing props (trees, signs,
  // lamp posts, boards: by their model's box, up to 50 wide and 45 deep, 6 or
-@@ -34,7 +35,7 @@ static const u16 sPortNoShadowModels[] = {
+@@ -34,7 +36,7 @@ static const u16 sPortNoShadowModels[] = {
      0, 66, 67, 68, 69, 79, 246, 303, 304, 305, 306, 310, 312, 313, 438, 441, 444, 486, 487, 527, 549, 550, 551
  };
  
@@ -35,7 +39,7 @@ index bfc0644f..7783d63d 100644
  {
      const NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(prop->model);
      fx32 width, height, depth;
-@@ -51,7 +52,23 @@ static u32 MapProp_PortShadowMark(const MapProp *prop, int index)
+@@ -51,18 +53,261 @@ static u32 MapProp_PortShadowMark(const MapProp *prop, int index)
      depth = FX_Mul((fx32)info->boxD, info->boxPosScale);
  
      if (width > 50 * FX32_ONE || depth > 45 * FX32_ONE || depth < 2 * FX32_ONE || height < 6 * FX32_ONE) {
@@ -60,46 +64,152 @@ index bfc0644f..7783d63d 100644
      }
  
      return 0xC0000000 | ((u32)index << 1);
-@@ -63,6 +80,88 @@ static void MapProp_PortMark(u32 mark)
+ }
+ 
+ // (in the commands' order: what NitroSystem still holds is sent first)
++// (a building is being drawn: its own painted shadow is left out, below)
++static BOOL sPortBuilding = FALSE;
++
+ static void MapProp_PortMark(u32 mark)
+ {
      NNS_G3dGeFlushBuffer();
      NitroPort_Gx3dTag(mark);
++
++    if (mark == 0) {
++        sPortBuilding = FALSE;
++    }
  }
 +
-+// A building's sun shadow (2026-11-10): the shadow of its box on the
-+// ground it stands on, for the sun as the port has it now. The ground
-+// the box's front and its side the light leaves sweep along the light's
-+// way, as far as the box is tall (27/32 of it: the roofs slope) times the
-+// shadows' length: two quads, darker at the building (26 of 31) than at
-+// their far edge (15), with no texture, marked 0x40000008
++// A building's sun shadow (2026-11-10; first its box's, two quads: "the
++// building shadows do no have the building shape, and they are way to
++// sharp"): the outline of the building itself on the ground it stands
++// on, for the sun as the port has it now: the hull of every vertex of
++// its model moved along the light's way by its height times the shadows'
++// length (NitroPort_Gx3dShadowHull, at most 14 corners; not the shapes
++// lying flat on the ground: its own painted shadow is one), worked out when
++// the sun has moved on and kept for the model. Sent as a strip of
++// triangles with no texture, 22 of 31 dark where it comes from the
++// building's foot and 15 from its top, marked 0x40000008
 +// (NITRO_GX3D_TAG_GROUND: drawn with the trees' pools, a pixel darkened
-+// once). In the model's own coordinates, a quarter of them (so the far
-+// edge fits 16 bits), a unit above where it stands. Sent whether or not
-+// the building is in view: its shadow may be.
++// once); and round it a soft edge, 6 units out from its middle, its
++// grey falling to none, marked 0x40000010 (NITRO_GX3D_TAG_RIM: drawn
++// after every other shadow, where none is). In the model's own
++// coordinates, a quarter of them (so the far edge fits 16 bits), a unit
++// above where it stands. Sent whether or not the building is in view:
++// its shadow may be.
++#define PORT_HULL_CORNERS 14
++#define PORT_HULL_MODELS  24
++
++typedef struct PortHull {
++    const NNSG3dResMdl *model;
++    s32 way[3];
++    s32 corners[PORT_HULL_CORNERS][3];
++    u32 count;
++} PortHull;
++
++static PortHull sPortHulls[PORT_HULL_MODELS];
++static u32 sPortHullNext = 0;
++
++static const PortHull *MapProp_PortHull(const NNSG3dResMdl *model, const s32 way[3])
++{
++    const NNSG3dResShp *shapes = NNS_G3dGetShp(model);
++    const void *lists[48];
++    u32 bytes[48], i, count;
++    PortHull *hull = NULL;
++
++    for (i = 0; i < PORT_HULL_MODELS; i++) {
++        if (sPortHulls[i].model == model) {
++            hull = &sPortHulls[i];
++            break;
++        }
++    }
++
++    if (hull != NULL && hull->way[0] == way[0] && hull->way[1] == way[1] && hull->way[2] == way[2]) {
++        return hull;
++    }
++
++    if (hull == NULL) {
++        hull = &sPortHulls[sPortHullNext];
++        sPortHullNext = (sPortHullNext + 1) % PORT_HULL_MODELS;
++    }
++
++    count = shapes->dict.numEntry;
++
++    if (count > 48) {
++        count = 48;
++    }
++
++    for (i = 0; i < count; i++) {
++        const NNSG3dResShpData *shape = NNS_G3dGetShpDataByIdx(shapes, i);
++
++        lists[i] = NNS_G3dGetShpDLPtr(shape);
++        bytes[i] = NNS_G3dGetShpDLSize(shape);
++    }
++
++    hull->model = model;
++    hull->way[0] = way[0];
++    hull->way[1] = way[1];
++    hull->way[2] = way[2];
++    hull->count = NitroPort_Gx3dShadowHull(lists, bytes, count, (s32)((s64)way[0] * way[2] >> 12), (s32)((s64)way[1] * way[2] >> 12),
++        (s32)FX_Div(3 * FX32_ONE / 2, NNS_G3dGetMdlInfo(model)->posScale), hull->corners, PORT_HULL_CORNERS);
++
++    return hull;
++}
++
 +static void MapProp_PortBuildingShadow(const MapProp *prop, const VecFx32 *position, const MtxFx33 *rotation, const VecFx32 *scale)
 +{
 +    const NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(prop->model);
++    const PortHull *hull;
 +    VecFx32 quarter;
-+    s32 way[3], tall, ex, ez, x0, x1, z0, z1, xs, y;
++    s32 way[3], xs[PORT_HULL_CORNERS], zs[PORT_HULL_CORNERS], ox[PORT_HULL_CORNERS], oz[PORT_HULL_CORNERS];
++    s32 y, rim, cx = 0, cz = 0, tall = 1;
++    u32 i, n;
++    u8 grey[PORT_HULL_CORNERS];
 +
-+    if (info->boxPosScale <= 0 || !NitroPort_SunWayNow(way)) {
++    if (info->posScale <= 0 || !NitroPort_SunWayNow(way)) {
 +        return;
 +    }
 +
-+    tall = (s32)info->boxH * 27 / 32;
-+    ex = (s32)(((s64)way[0] * way[2] >> 12) * tall >> 12) / 4;
-+    ez = (s32)(((s64)way[1] * way[2] >> 12) * tall >> 12) / 4;
-+    x0 = info->boxX / 4;
-+    x1 = (info->boxX + info->boxW) / 4;
-+    z0 = info->boxZ / 4;
-+    z1 = (info->boxZ + info->boxD) / 4;
-+    xs = way[0] > 0 ? x1 : x0;
-+    y = (s32)(FX_Div(FX32_ONE, info->boxPosScale) / 4);
++    hull = MapProp_PortHull(prop->model, way);
++    n = hull->count;
 +
-+    if (x0 + ex < -32000 || x1 + ex > 32000 || z1 + ez > 32000 || y > 32000) {
++    if (n < 3) {
 +        return;
 +    }
 +
-+    quarter.x = quarter.y = quarter.z = info->boxPosScale * 4;
++    y = (s32)(FX_Div(FX32_ONE, info->posScale) / 4);
++    rim = (s32)(FX_Div(6 * FX32_ONE, info->posScale) / 4);
++
++    for (i = 0; i < n; i++) {
++        xs[i] = hull->corners[i][0] / 4;
++        zs[i] = hull->corners[i][1] / 4;
++        cx += xs[i] / (s32)n;
++        cz += zs[i] / (s32)n;
++
++        if (hull->corners[i][2] > tall) {
++            tall = hull->corners[i][2];
++        }
++    }
++
++    for (i = 0; i < n; i++) {
++        // (out from the middle, the soft edge's width)
++        VecFx32 out = { (xs[i] - cx) << 4, 0, (zs[i] - cz) << 4 };
++
++        if (out.x == 0 && out.z == 0) {
++            out.x = FX32_ONE;
++        }
++
++        VEC_Normalize(&out, &out);
++        ox[i] = xs[i] + (s32)(((s64)out.x * rim) >> 12);
++        oz[i] = zs[i] + (s32)(((s64)out.z * rim) >> 12);
++        grey[i] = (u8)(22 - 7 * hull->corners[i][2] / tall);
++
++        if (ox[i] < -32000 || ox[i] > 32000 || oz[i] < -32000 || oz[i] > 32000 || xs[i] < -32000 || xs[i] > 32000 || zs[i] < -32000 || zs[i] > 32000) {
++            return;
++        }
++    }
++
++    quarter.x = quarter.y = quarter.z = info->posScale * 4;
 +
 +    NNS_G3dGlbSetBaseTrans(position);
 +    NNS_G3dGlbSetBaseRot(rotation);
@@ -110,24 +220,64 @@ index bfc0644f..7783d63d 100644
 +    NNS_G3dGeTexImageParam(GX_TEXFMT_NONE, GX_TEXGEN_NONE, GX_TEXSIZE_S8, GX_TEXSIZE_T8, GX_TEXREPEAT_NONE, GX_TEXFLIP_NONE, GX_TEXPLTTCOLOR0_USE, 0);
 +    NNS_G3dGePolygonAttr(GX_LIGHTMASK_NONE, GX_POLYGONMODE_MODULATE, GX_CULL_NONE, 0, 31, 0);
 +    MapProp_PortMark(0x40000008);
-+    NNS_G3dGeBegin(GX_BEGIN_QUADS);
-+    // (the side the light leaves)
-+    NNS_G3dGeColor(GX_RGB(26, 26, 26));
-+    NNS_G3dGeVtx((fx16)xs, (fx16)y, (fx16)z0);
-+    NNS_G3dGeVtx((fx16)xs, (fx16)y, (fx16)z1);
-+    NNS_G3dGeColor(GX_RGB(15, 15, 15));
-+    NNS_G3dGeVtx((fx16)(xs + ex), (fx16)y, (fx16)(z1 + ez));
-+    NNS_G3dGeVtx((fx16)(xs + ex), (fx16)y, (fx16)(z0 + ez));
-+    // (the front: the light comes towards the camera)
-+    NNS_G3dGeColor(GX_RGB(26, 26, 26));
-+    NNS_G3dGeVtx((fx16)x0, (fx16)y, (fx16)z1);
-+    NNS_G3dGeVtx((fx16)x1, (fx16)y, (fx16)z1);
-+    NNS_G3dGeColor(GX_RGB(15, 15, 15));
-+    NNS_G3dGeVtx((fx16)(x1 + ex), (fx16)y, (fx16)(z1 + ez));
-+    NNS_G3dGeVtx((fx16)(x0 + ex), (fx16)y, (fx16)(z1 + ez));
++    // (the outline, a strip from one corner to and fro across it)
++    NNS_G3dGeBegin(GX_BEGIN_TRIANGLE_STRIP);
++
++    for (i = 0; i < n; i++) {
++        u32 k = (i & 1) ? (i + 1) / 2 : (i ? n - i / 2 : 0);
++
++        NNS_G3dGeColor(GX_RGB(grey[k], grey[k], grey[k]));
++        NNS_G3dGeVtx((fx16)xs[k], (fx16)y, (fx16)zs[k]);
++    }
++
++    NNS_G3dGeEnd();
++    MapProp_PortMark(0x40000010);
++    // (its soft edge: a strip of quads round it)
++    NNS_G3dGeBegin(GX_BEGIN_QUAD_STRIP);
++
++    for (i = 0; i <= n; i++) {
++        u32 k = i % n;
++
++        NNS_G3dGeColor(GX_RGB(grey[k], grey[k], grey[k]));
++        NNS_G3dGeVtx((fx16)xs[k], (fx16)y, (fx16)zs[k]);
++        NNS_G3dGeColor(GX_RGB(0, 0, 0));
++        NNS_G3dGeVtx((fx16)ox[k], (fx16)y, (fx16)oz[k]);
++    }
++
 +    NNS_G3dGeEnd();
 +    NNS_G3dGePopMtx(1);
-+    MapProp_PortMark(0);
++    NNS_G3dGeFlushBuffer();
++    NitroPort_Gx3dTag(0);
++}
++
++// A building's own painted shadow (a see-through dark polygon of its
++// model, lying on the ground beside it: it doesn't turn with the sun, and
++// with the sun's there were two, 2026-11-11: "definitely remove the
++// double shadows from the buildings"): the shapes of a see-through
++// material aren't drawn while the building is marked for the sun's.
++static void MapProp_PortSkipPainted(NNSG3dRS *rs)
++{
++    const NNSG3dResMatData *material = NNS_G3dGetMatDataByIdx(rs->pResMat, rs->currentMat);
++    u32 alpha = (material->polyAttr >> 16) & 31;
++
++    if (alpha > 0 && alpha < 31) {
++        NNS_G3dRSSetFlag(rs, NNS_G3D_RSFLAG_SKIP);
++    }
++}
++
++static void MapProp_PortDraw(NNSG3dRenderObj *renderObj, const VecFx32 *position, const MtxFx33 *rotation, const VecFx32 *scale)
++{
++    BOOL skip = sPortBuilding && renderObj->cbFunc == NULL;
++
++    if (skip) {
++        NNS_G3dRenderObjSetCallBack(renderObj, MapProp_PortSkipPainted, NULL, NNS_G3D_SBC_SHP, NNS_G3D_SBC_CALLBACK_TIMING_A);
++    }
++
++    Easy3D_DrawRenderObj(renderObj, position, rotation, scale);
++
++    if (skip) {
++        NNS_G3dRenderObjResetCallBack(renderObj);
++    }
 +}
 +
 +// (a prop about to be drawn: its mark, and a building's shadow first; not
@@ -145,11 +295,14 @@ index bfc0644f..7783d63d 100644
 +    }
 +
 +    MapProp_PortMark(mark);
++    sPortBuilding = (mark & 0xF00000FF) == 0x60000000;
 +}
++
++#define Easy3D_DrawRenderObj MapProp_PortDraw
  #endif
  
  static void MapPropManager_InitRenderObj(const int modelID, AreaDataManager *const areaDataManager, NNSG3dRenderObj *renderObj, NNSG3dResMdl **model);
-@@ -197,7 +296,7 @@ void MapPropManager_Render(const VecFx32 *positionOffset, const AreaDataManager
+@@ -197,7 +442,7 @@ void MapPropManager_Render(const VecFx32 *positionOffset, const AreaDataManager
              position.z += positionOffset->z;
  
  #ifdef SDK_PORT_3DS
@@ -158,7 +311,7 @@ index bfc0644f..7783d63d 100644
  #endif
              if (GFXBoxTest_IsModelInView(loadedProp->model, &position, &rotationMatrix, &loadedProp->scale)) {
                  const MapPropMaterialShape *propMatShp = AreaDataManager_GetMapPropMaterialShape(areaDataManager);
-@@ -304,7 +403,7 @@ static void MapPropManager_RenderOver(const VecFx32 *centre, const BOOL mirrored
+@@ -304,7 +549,7 @@ static void MapPropManager_RenderOver(const VecFx32 *centre, const BOOL mirrored
          if (!mirrored) {
              position.x += centre->x;
  
@@ -167,7 +320,7 @@ index bfc0644f..7783d63d 100644
  
              if (!GFXBoxTest_IsModelInView(loadedProp->model, &position, &rotationMatrix, &scale)) {
                  MapProp_PortMark(0);
-@@ -336,7 +435,7 @@ static void MapPropManager_RenderOver(const VecFx32 *centre, const BOOL mirrored
+@@ -336,7 +581,7 @@ static void MapPropManager_RenderOver(const VecFx32 *centre, const BOOL mirrored
          position.x = centre->x - position.x;
          scale.x = -scale.x;
  
@@ -176,6 +329,23 @@ index bfc0644f..7783d63d 100644
  
          if (!GFXBoxTest_IsModelInView(loadedProp->model, &position, &rotationMatrix, &scale)) {
              MapProp_PortMark(0);
+@@ -474,6 +719,16 @@ static void MapPropManager_RenderUsing1Mat1Shp(const NNSG3dResMdl *model, VecFx3
+             sendMaterial = FALSE;
+         }
+ 
++#ifdef SDK_PORT_3DS
++        // (a building's own painted shadow: MapProp_PortSkipPainted)
++        if (sPortBuilding) {
++            int alpha = NNS_G3dMdlGetMdlAlpha(model, materialID);
++
++            if (alpha > 0 && alpha < 31) {
++                continue;
++            }
++        }
++#endif
+         NNS_G3dDraw1Mat1Shp(model, materialID, propMatShpIDs[i].shapeID, sendMaterial);
+     }
+ }
 -- 
 2.43.0
 

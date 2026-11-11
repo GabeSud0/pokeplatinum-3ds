@@ -3886,6 +3886,37 @@ then the small props and the land's trees; houses and the scenery later.
     where it goes down to 0.63, 0.65, 0.70, a roof as it is; halved,
     and the renderer draws those batches at twice their colour, as the
     trees' layers. A vertex with a COLOR: half its colour.
+  Then on a 3DS (log 863bead3, seven screenshots): "the building
+  shadows do no have the building shape, and they are way to sharp ...
+  and definitely remove the double shadows from the buildings", and of
+  the trees "the first 3 rows have the treatment but the rest do not".
+  - The shadow is the building's own outline now, not its box's: the
+    convex hull of every vertex of its model moved along the light's
+    way by its height times the shadows' length
+    (NitroPort_Gx3dShadowHull, port_gx3d.c: at most 14 corners, the
+    least telling dropped; not the shapes lying flat on the ground),
+    worked out when the sun has moved on and kept for the model (24 of
+    them). A strip of triangles, 22/31 dark where it comes from the
+    building's foot and 15 from its top.
+  - Its soft edge: a strip of quads round the outline, 6 units out, the
+    grey falling to none across it (the vertices' colours: no blur is
+    needed), marked NITRO_GX3D_TAG_RIM and drawn after every other
+    shadow, only where none is yet (a pixel is still darkened once, and
+    a tree's shadow isn't cut by it).
+  - The game's own painted shadow (a see-through dark polygon of the
+    building's model: it doesn't turn with the sun) isn't drawn for a
+    building marked for the sun's: the shapes of its see-through
+    materials are passed over (NitroSystem's shape callback, or in the
+    game's own material-by-material draw). A building's glass, if one
+    has any that's see-through, goes with it.
+  - The forest's rows (the trees' layers, above): a row's polygon is
+    many trees wide and had only "darker towards its foot"; it's sent a
+    tree at a time now, each with its own left and right, and up it by
+    its height above the ground (a row's tops and bottoms are two
+    polygons, one tree), and shaded by the tree before it as any tree.
+  The same log: the forest at 60 frames a second again (58 to 65; the
+  trees' shadows 66 to 194 triangles a scene for 250 to 470), with the
+  sun shadows off the same.
   Not yet: a turned or mirrored building; the shadow on anything but
   flat ground at the building's own height (a lower roof, steps); the
   game's own painted building shadows, still there under these; cliffs,

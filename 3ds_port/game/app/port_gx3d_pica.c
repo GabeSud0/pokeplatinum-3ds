@@ -2970,14 +2970,15 @@ static void draw_once_batches(void)
 {
     size_t b;
     int pass;
-    for(pass=0;pass<3 && sShadeBatches;pass++){
+    /* (and last a building's shadow's soft edge, NITRO_GX3D_TAG_RIM: its
+     * grey falls to none across it; only where no shadow is yet) */
+    for(pass=0;pass<4 && sShadeBatches;pass++){
+        const uint32_t want=pass==0?NITRO_GX3D_TAG_GROUND:pass==3?NITRO_GX3D_TAG_RIM:NITRO_GX3D_TAG_SHADE;
         C3D_AlphaTest(true,GPU_GEQUAL,pass==1?TREE_PASS:128);
         for(b=0;b<sPreparedBatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
             /* (untextured: a building's, with the pools and floors) */
-            if(batch->tag!=(pass?NITRO_GX3D_TAG_SHADE:NITRO_GX3D_TAG_GROUND) || batch->translucent ||
-               (pass && !batch->texture_param))
-                continue;
+            if(batch->tag!=want || batch->translucent || ((pass==1 || pass==2) && !batch->texture_param))continue;
             if(!room_for_draw())break;
             once_batch(batch,1,pass==1?0:-1);
         }

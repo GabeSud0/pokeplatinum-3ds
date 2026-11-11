@@ -521,7 +521,21 @@ void NitroPort_Gx3dTag(uint32_t tag);
 /* (the shadows on the ground where a tree stands, its pool or a forest's
  * floor: drawn before the layers' shadows, once; NitroPort_Gx3dTreeGround) */
 #define NITRO_GX3D_TAG_GROUND 0x40000008u
-#define NITRO_GX3D_TAG_IS_SHADE(tag) (((tag)&~8u)==NITRO_GX3D_TAG_SHADE)
+/* (a building's shadow's soft edge: drawn after every other shadow, only
+ * where none is yet) */
+#define NITRO_GX3D_TAG_RIM 0x40000010u
+#define NITRO_GX3D_TAG_IS_SHADE(tag) (((tag)&~0x18u)==NITRO_GX3D_TAG_SHADE)
+/* A model's shadow's outline on the ground it stands on (y 0), for a light:
+ * the convex hull of every vertex of its shapes' display lists moved
+ * shearX, shearZ (20.12) to the right and towards the camera for each unit
+ * it's above the ground; at most `max` corners (the least telling ones
+ * dropped), in order round it. out[i]: x, z and the height of the vertex
+ * it came from, in the lists' units. A list with no vertex above flatY
+ * (over 0) isn't looked at: a shape lying on the ground (the building's own
+ * painted shadow). Returns the corners, 0 if a list couldn't be read or
+ * there are under three. */
+uint32_t NitroPort_Gx3dShadowHull(const void *const *lists, const uint32_t *bytes, uint32_t count, int32_t shearX,
+                                  int32_t shearZ, int32_t flatY, int32_t (*out)[3], uint32_t max);
 /* A building's walls lit by the sun (the game marks the big standing props
  * with it, 2026-11-10): draw-only too. The light's way on the ground in
  * the mark itself, as signed bytes of 1/127ths: to the right in bits 16

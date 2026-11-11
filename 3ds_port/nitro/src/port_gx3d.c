@@ -4600,7 +4600,11 @@ static void tree_leaves(TreeShape *sh,const TreeQuad *quads,uint32_t n,int32_t u
     uint32_t g,count=0;
     int32_t mx=0,mz=0;
     int any=0;
-    for(g=0;g<n;g++)count+=quads[g].n && !quads[g].flat;
+    const int32_t column=32*unit;
+    for(g=0;g<n;g++){
+        if(!quads[g].n || quads[g].flat)continue;
+        count+=quads[g].hi[0]-quads[g].lo[0]>wide?(uint32_t)((quads[g].hi[0]-quads[g].lo[0])/column)+1u:1u;
+    }
     if(!count)return;
     sh->leaves=calloc(count,sizeof(*sh->leaves));
     if(!sh->leaves)return;
@@ -4614,21 +4618,49 @@ static void tree_leaves(TreeShape *sh,const TreeQuad *quads,uint32_t n,int32_t u
         if(!any || qx-mx>nearBy || mx-qx>nearBy || qz-mz>nearBy || mz-qz>nearBy){mx=qx;mz=qz;any=1;}
         else if(q->flat)continue;
         if(q->flat){any=2;continue;}
+        if(q->hi[0]-q->lo[0]>wide){
+            /* A row's polygon, many trees wide: a tree at a time, each
+             * with its own left and right, and up it by its height above
+             * the ground (its tops and its bottoms are two polygons: one
+             * tree). (First the polygon whole, darker only towards its
+             * foot: on a 3DS "the first 3 rows have the treatment but the
+             * rest do not", 2026-11-11: the rest were the rows.) */
+            int32_t x0;
+            for(x0=q->lo[0];x0<q->hi[0] && sh->nleaves<count;x0+=column){
+                int32_t cxyz[TREE_VERTS][3],cst[TREE_VERTS][2];
+                unsigned m=tree_clip(q,x0,x0+column,cxyz,cst);
+                if(m<3)continue;
+                l=&sh->leaves[sh->nleaves++];
+                memcpy(l->xyz,cxyz,sizeof(l->xyz));
+                memcpy(l->st,cst,sizeof(l->st));
+                l->normal=q->normal;
+                l->n=(uint8_t)m;
+                l->first=1;
+                l->wide=0;
+                l->base[0]=x0+column/2;l->base[1]=qbase[g][1];l->base[2]=qbase[g][2];
+                for(v=0;v<m;v++){
+                    int64_t up=((int64_t)cxyz[v][1]-l->base[1])*128/((int64_t)TREE_FADE_TALL*unit)-64;
+                    l->nx[v]=(int8_t)(cxyz[v][0]>l->base[0]?64:cxyz[v][0]<l->base[0]?-64:0);
+                    l->ny[v]=(int8_t)(up<-64?-64:up>64?64:up);
+                }
+            }
+            any=1;
+            continue;
+        }
         l=&sh->leaves[sh->nleaves++];
         memcpy(l->xyz,q->xyz,sizeof(l->xyz));
         memcpy(l->st,q->st,sizeof(l->st));
         l->normal=q->normal;
         l->n=q->n;
         memcpy(l->base,qbase[g],sizeof(l->base));
-        l->wide=(uint8_t)(q->hi[0]-q->lo[0]>wide);
+        l->wide=0;
         /* (the first of its tree: none before it since the tree's first
          * polygon, standing or flat) */
         l->first=(uint8_t)(sh->nleaves==1u || (mx==qx && mz==qz) || any==2);
         any=1;
         for(v=0;v<q->n;v++){
-            /* (a row's polygon is many trees wide: no left or right) */
-            l->nx[v]=(int8_t)(q->hi[0]-q->lo[0]>wide?0:q->xyz[v][0]*2>q->lo[0]+q->hi[0]?1:-1);
-            l->ny[v]=(int8_t)(q->xyz[v][1]*2>q->lo[1]+q->hi[1]?1:-1);
+            l->nx[v]=(int8_t)(q->xyz[v][0]*2>q->lo[0]+q->hi[0]?64:-64);
+            l->ny[v]=(int8_t)(q->xyz[v][1]*2>q->lo[1]+q->hi[1]?64:-64);
         }
     }
     sh->litCap=sh->nleaves*((TREE_VERTS-2u)*3u*7u+8u)+16u;
@@ -4789,7 +4821,7 @@ const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *t,uint32_t shape,i
             /* how far towards the corner the light leaves, 0 to 256:
              * right of the middle as the light goes right, below it as
              * it comes towards the camera (from behind and above) */
-            const int64_t d=((int64_t)wayX*l->nx[v]-(int64_t)wayZ*l->ny[v])*128/span+128;
+            const int64_t d=((int64_t)wayX*l->nx[v]-(int64_t)wayZ*l->ny[v])*2/span+128;   /* (nx, ny in 64ths) */
             const int64_t up=(int64_t)l->xyz[v][1]-l->base[1];
             const int64_t cross=!hit?0:up<=(int64_t)TREE_CROSS_FULL*unit?TREE_CROSS_SHADE:
                                 up>=(int64_t)TREE_CROSS_NONE*unit?0:
@@ -4964,6 +4996,89 @@ const void *NitroPort_Gx3dTreeGround(const NitroGx3dTreeLists *t,uint32_t shape,
     if(!t || shape>=t->count || !t->shape[shape].sunSet || !t->shape[shape].groundBytes)return NULL;
     if(bytes)*bytes=t->shape[shape].groundBytes;
     return t->shape[shape].ground;
+}
+/* (see the header) */
+typedef struct HullPoint { int64_t x,z; int32_t y; } HullPoint;
+static int hull_order(const void *a,const void *b)
+{
+    const HullPoint *p=a,*q=b;
+    return p->x<q->x?-1:p->x>q->x?1:p->z<q->z?-1:p->z>q->z?1:0;
+}
+static int64_t hull_cross(const HullPoint *o,const HullPoint *a,const HullPoint *b)
+{
+    return (a->x-o->x)*(b->z-o->z)-(a->z-o->z)*(b->x-o->x);
+}
+uint32_t NitroPort_Gx3dShadowHull(const void *const *lists,const uint32_t *bytes,uint32_t count,int32_t shearX,
+                                  int32_t shearZ,int32_t flatY,int32_t (*out)[3],uint32_t max)
+{
+    HullPoint *pts=NULL,*hull=NULL;
+    uint32_t n=0,cap=0,i,k=0,lower;
+    if(!lists || !bytes || !count || !out || max<3u)return 0;
+    for(i=0;i<count;i++){
+        DlInfo *info;
+        uint32_t o;
+        if(!lists[i] || bytes[i]<4u || (bytes[i]&3u)){free(pts);return 0;}
+        info=dl_survey(lists[i],bytes[i]/4u,3u);
+        if(!info){free(pts);return 0;}
+        if(flatY>0){
+            int32_t top=0;
+            for(o=0;o<info->nops;o++){
+                const unsigned op=info->ops[o]&255u;
+                if(op>=0x23u && op<=0x28u && info->xyz[o][1]>top)top=info->xyz[o][1];
+            }
+            if(top<=flatY){dl_free(info);continue;}
+        }
+        for(o=0;o<info->nops;o++){
+            const unsigned op=info->ops[o]&255u;
+            int32_t y;
+            if(op<0x23u || op>0x28u)continue;
+            if(n==cap){
+                HullPoint *more=realloc(pts,(cap=cap?cap*2u:256u)*sizeof(*pts));
+                if(!more){free(pts);dl_free(info);return 0;}
+                pts=more;
+            }
+            y=info->xyz[o][1]<0?0:info->xyz[o][1];
+            pts[n].x=info->xyz[o][0]+(((int64_t)shearX*y)>>12);
+            pts[n].z=info->xyz[o][2]+(((int64_t)shearZ*y)>>12);
+            pts[n].y=y;
+            n++;
+        }
+        dl_free(info);
+    }
+    if(n<3u){free(pts);return 0;}
+    qsort(pts,n,sizeof(*pts),hull_order);
+    hull=malloc((2u*n+2u)*sizeof(*hull));
+    if(!hull){free(pts);return 0;}
+    for(i=0;i<n;i++){
+        while(k>=2u && hull_cross(&hull[k-2u],&hull[k-1u],&pts[i])<=0)k--;
+        hull[k++]=pts[i];
+    }
+    lower=k+1u;
+    for(i=n-1u;i-->0u;){
+        while(k>=lower && hull_cross(&hull[k-2u],&hull[k-1u],&pts[i])<=0)k--;
+        hull[k++]=pts[i];
+    }
+    k--;                                   /* (the first again) */
+    free(pts);
+    /* (too many: the corner that takes the least with it, again and again) */
+    while(k>max){
+        uint32_t least=0;
+        int64_t area=0;
+        for(i=0;i<k;i++){
+            int64_t a=hull_cross(&hull[(i+k-1u)%k],&hull[i],&hull[(i+1u)%k]);
+            if(a<0)a=-a;
+            if(!i || a<area){area=a;least=i;}
+        }
+        memmove(&hull[least],&hull[least+1u],(k-least-1u)*sizeof(*hull));
+        k--;
+    }
+    if(k<3u){free(hull);return 0;}
+    for(i=0;i<k;i++){
+        if(hull[i].x>0x7FFFFFFF || hull[i].x<-0x7FFFFFFF || hull[i].z>0x7FFFFFFF || hull[i].z<-0x7FFFFFFF){free(hull);return 0;}
+        out[i][0]=(int32_t)hull[i].x;out[i][1]=(int32_t)hull[i].z;out[i][2]=hull[i].y;
+    }
+    free(hull);
+    return k;
 }
 uint32_t NitroPort_Gx3dTranslateCommand(void *dst,uint32_t dstBytes,int32_t x,int32_t y,int32_t z)
 {

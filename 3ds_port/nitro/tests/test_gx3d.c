@@ -2593,6 +2593,7 @@ static int tree_has(const TreeCorner *c,unsigned n,int x,int y,int z)
  * their colour). The lit colour here the material's own light, 16 of 31:
  * 10, 5, 8. A vertex with a COLOR: half of it. Without the mark, as lit. */
 static void test_wall_tint(void);
+static void test_shadow_hull(void);
 static void test_tree_lists(void)
 {
     static uint32_t cmds[600],trees[600],tops[100],bottoms[100],whole[900];
@@ -2784,25 +2785,28 @@ static void test_tree_lists(void)
         plainN=tree_scene(tops,bytes[1],both,cut,400);
         tree_view();
         litN=tree_scene(lit,nl,both,sh,400);
-        CHECK(plainN==6 && litN==6);
-        for(i=0;i<litN && plainN==litN;i++)
-            CHECK(sh[i].x==cut[i].x && sh[i].y==cut[i].y && sh[i].z==cut[i].z && sh[i].s==cut[i].s && sh[i].t==cut[i].t);
-        CHECK(tree_red(sh,litN,-2048,1200,400)==6 && tree_red(sh,litN,2048,2400,-800)==21);
+        /* (a row's polygon a tree at a time: two; how dark by the height
+         * above the ground, 17.8 and 36.6 units of 42: 11 and 19 or so) */
+        CHECK(plainN==6 && litN==12);
+        CHECK(tree_has(sh,litN,-2048,1200,400) && tree_has(sh,litN,0,2400,-800) && tree_has(sh,litN,2048,2400,-800));
+        k=(unsigned)tree_red(sh,litN,-2048,1200,400);i=(unsigned)tree_red(sh,litN,2048,2400,-800);
+        CHECK(k>=10u && k<=13u && i>=18u && i<=20u);
         NitroPort_SetGroundShadows(1);
         tree_view();
         NitroPort_GxDirectWrite(0x31,emission);
         NitroPort_Gx3dTag(NITRO_GX3D_TAG_CANOPY);
         litN=tree_scene(lit,nl,both&~15u,sh,400);
         NitroPort_Gx3dTag(0);
-        CHECK(litN==6 && tree_red(sh,litN,-2048,1200,400)==3 && tree_red(sh,litN,2048,2400,-800)==11);
+        k=(unsigned)tree_red(sh,litN,-2048,1200,400);i=(unsigned)tree_red(sh,litN,2048,2400,-800);
+        CHECK(litN==12 && k>=5u && k<=7u && i>=9u && i<=11u);
         NitroPort_SetGroundShadows(0);
         /* (a light to the right: a tree's right corners darker than its
-         * left; a row's, many trees wide, the same either side) */
+         * left; a row's, a tree at a time, the same: its far side darker) */
         lit=NitroPort_Gx3dTreeCanopiesLit(t,2,4096,0,&nl);
         CHECK(lit && nl);
         tree_view();
         litN=tree_scene(lit,nl,both,sh,400);
-        CHECK(litN==6 && tree_red(sh,litN,-2048,300,500)==tree_red(sh,litN,2048,300,500));
+        CHECK(litN==12 && tree_red(sh,litN,-2048,300,500)>tree_red(sh,litN,2048,300,500));
     }
     /* A forest: three trees 32 units apart, lit by NORMALs. The middle
      * one has two beside it: its pool is the ground about its stump; the
@@ -3216,6 +3220,62 @@ static void test_scene_registers(void)
     write32(0x60,0);
     write32(0x358,0);
 }
+/* A model's shadow's outline: a box 16 units wide, 8 deep and 10 tall on
+ * the ground, the light moving a vertex 1 to the right and 0.5 towards the
+ * camera for each unit up: the hull of its floor and its top moved 10 and
+ * 5: six corners, in order round it; a corner inside left out; at most as
+ * many as asked. */
+static void test_shadow_hull(void)
+{
+    static uint32_t cmds[80],list[80];
+    const void *lists[1];
+    uint32_t bytes[1];
+    int32_t out[16][3];
+    unsigned c=0,n,i,top=0;
+    int64_t area=0;
+    cmds[c++]=0x40;cmds[c++]=1;
+    c+=tree_quad(&cmds[c],-512,512,0,0,256,-256,0,0);          /* (the floor) */
+    c+=tree_quad(&cmds[c],-512,512,640,640,256,-256,0,0);      /* (the top) */
+    c+=tree_quad(&cmds[c],-100,100,300,300,50,-50,0,0);        /* (inside) */
+    cmds[c++]=0x41;
+    bytes[0]=dl_pack(list,cmds,c)*4u;
+    lists[0]=list;
+    n=NitroPort_Gx3dShadowHull(lists,bytes,1,4096,2048,0,out,16);
+    CHECK(n==6);
+    for(i=0;i<n;i++){
+        const int32_t *p=out[i],*q=out[(i+1u)%n];
+        area+=(int64_t)p[0]*q[1]-(int64_t)q[0]*p[1];
+        if(p[2]==640)top++;
+        CHECK((p[2]==0 && abs(p[0])==512 && abs(p[1])==256) || (p[2]==640 && abs(p[0]-640)==512 && abs(p[1]-320)==256));
+    }
+    /* (the floor's 1024 x 512, and what its two far sides sweep: 640 x 512 + 320 x 1024) */
+    CHECK(top==3 && (area==2*(1024*512+640*512+320*1024) || area==-2*(1024*512+640*512+320*1024)));
+    CHECK(NitroPort_Gx3dShadowHull(lists,bytes,1,4096,2048,0,out,4)==4);
+    CHECK(NitroPort_Gx3dShadowHull(lists,bytes,1,0,0,0,out,16)==4);
+    /* (a second list lying flat on the ground, far to the side: with it
+     * the hull reaches there; told how high flat is, it isn't looked at) */
+    {
+        static uint32_t flat[40];
+        const void *two[2];
+        uint32_t tb[2];
+        c=0;
+        cmds[c++]=0x40;cmds[c++]=1;
+        c+=tree_quad(&cmds[c],2000,3000,10,10,256,-256,0,0);
+        cmds[c++]=0x41;
+        tb[1]=dl_pack(flat,cmds,c)*4u;tb[0]=bytes[0];
+        two[0]=list;two[1]=flat;
+        n=NitroPort_Gx3dShadowHull(two,tb,2,4096,2048,0,out,16);
+        top=0;
+        for(i=0;i<n;i++)if(out[i][0]>=2900)top++;
+        CHECK(n>=5 && top==2);
+        n=NitroPort_Gx3dShadowHull(two,tb,2,4096,2048,96,out,16);
+        top=0;
+        for(i=0;i<n;i++)if(out[i][0]>=2000 && out[i][2]==10)top++;
+        CHECK(n==6 && top==0);
+    }
+    CHECK(NitroPort_Gx3dShadowHull(NULL,bytes,1,0,0,0,out,16)==0 && NitroPort_Gx3dShadowHull(lists,bytes,1,0,0,0,out,2)==0);
+}
+
 static void test_wall_tint(void)
 {
     static uint32_t cmds[64],list[64];
@@ -3273,6 +3333,7 @@ int main(void)
     test_list_rows();
     test_tree_lists();
     test_wall_tint();
+    test_shadow_hull();
     test_mid_left_out_behind();
     test_earlier_scene_unread();
     test_scene_registers();
