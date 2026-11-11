@@ -883,7 +883,7 @@ static void test_darken_sprites(void)
     for(i=0;i<64;i++){v[i].position[3]=2.0f;v[i].color[0]=v[i].color[1]=v[i].color[2]=200;v[i].color[3]=255;}
     /* (a shadow: a triangle over the screen's left half, its grey 255 at
      * the left, 51 at the right; positions times w) */
-    b[0].first=0;b[0].count=3;b[0].tag=NITRO_GX3D_TAG_SHADE;
+    b[0].first=0;b[0].count=3;b[0].tag=NITRO_GX3D_TAG_GROUND;
     v[0].position[0]=-2.0f;v[0].position[1]=-2.0f;v[0].color[0]=255;
     v[1].position[0]=-2.0f;v[1].position[1]=2.0f;v[1].color[0]=255;
     v[2].position[0]=0.0f;v[2].position[1]=0.0f;v[2].color[0]=51;

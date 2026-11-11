@@ -3917,6 +3917,44 @@ then the small props and the land's trees; houses and the scenery later.
   The same log: the forest at 60 frames a second again (58 to 65; the
   trees' shadows 66 to 194 triangles a scene for 250 to 470), with the
   sun shadows off the same.
+  Then on a 3DS (log 9beb471c, five screenshots; the buildings'
+  shadows: "I love how the building shadows look"): "the bottom part
+  circle needs to be the same color as the rest of the shadow", "the
+  tree shadows need to be longer, the short shadows make the trees feel
+  smaller", "the shape ... shouldnt be so edgy it should be more
+  rounded", "blur it out a little more"; "performance very bad
+  especially when getting close to the forest that still show color
+  difference"; "make the shaded from the lit side more noticeable".
+  The log, the sun shadows on then off over the same ground: on, the
+  game sends 12,000 to 16,700 vertices a scene (off 7,000 to 13,000),
+  its own thread 5 to 6 ms a frame (off 3 to 3.8), the geometry thread
+  28 to 33 ms a scene (off 20 to 27) and by the forest 7 to 12 scenes
+  a second left out: 40 to 49 frames a second (off 60 everywhere).
+  The cost is how much is sent: every loaded block's trees' shadow
+  lists and re-sent layers, most of it out of view and passed over,
+  but read.
+  - A tree's shadow is one quad now, with no texture: a soft-edged oval
+    the renderer draws from the corners' colours alone (blob_batch,
+    port_gx3d_pica.c: the combiner's DOT3 of the colour with itself is
+    the squared distance from the quad's middle; 4 x (1 - it) is flat
+    over the oval and falls to nothing across its outer eighth; red
+    rising towards the tip narrows and lightens it there). No layers'
+    cut-outs, no pool, no forest's floor: one colour from the stump out
+    (0.85 of the characters' darkening at their feet), rounded, its
+    edge soft, softer towards the tip. Half as long again as the sun's
+    shadows (TREE_LONGER), no shorter than the tree is tall, no longer
+    than twice. Two passes, a pixel darkened once: the ovals' flat
+    middles, then their edges. A quarter of the polygons and under a
+    quarter of the words the layers' shadows took.
+  - Every tree's layers lit alike: a vertex's tint by its place in the
+    whole tree (left or right of where it stands, and up it by its
+    height above the ground), whichever polygon it's of; no tree
+    shading another. Before, a tree standing alone had each layer lit
+    by itself (three dark crescents) and a row's tree, one or two
+    polygons with its tiers painted, one slope: the forest's edge and
+    its inside were two looks. Steeper about the middle (TREE_RAMP).
+  - A building's walls: the sun's side up to 1.30, 1.25, 1.12, the far
+    side down to 0.50, 0.52, 0.58 (they were 1.21 and 0.63).
   Not yet: a turned or mirrored building; the shadow on anything but
   flat ground at the building's own height (a lower roof, steps); the
   game's own painted building shadows, still there under these; cliffs,

@@ -358,6 +358,7 @@ static int sGroundMode,sGroundReady;
  * it there) */
 static unsigned sShadeBatches;
 static u32 sShadeColor=0xFFFFFFFFu;
+static u32 sTreeColor;   /* (and a tree's: NITRO_SHADOW_TREE_BLOB of it) */
 static size_t sGroundBatchCount,sGroundVertices;
 static u64 sGroundTicks;
 static unsigned sGroundScenes,sGroundCards,sGroundFound,sGroundSprites,sGroundMarked;
@@ -1906,6 +1907,8 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
                 if(f[i]>1.0f)f[i]=1.0f;
             }
             sShadeColor=0xFF000000u|((u32)(f[2]*255.0f+0.5f)<<16)|((u32)(f[1]*255.0f+0.5f)<<8)|(u32)(f[0]*255.0f+0.5f);
+            sTreeColor=0xFF000000u|((u32)(f[2]*NITRO_SHADOW_TREE_BLOB*255.0f+0.5f)<<16)|
+                       ((u32)(f[1]*NITRO_SHADOW_TREE_BLOB*255.0f+0.5f)<<8)|(u32)(f[0]*NITRO_SHADOW_TREE_BLOB*255.0f+0.5f);
             /* (the characters standing in them: darkened as the ground
              * under them is) */
             if(sShadeBatches)sGroundDarkened+=NitroPort_ShadowDarkenSprites(sVertices[slot],sBatches,sPreparedBatches,f);
@@ -2965,23 +2968,73 @@ static void once_batch(const NitroGx3dBatch *batch,int shade,int pass)
  * second. A fragment the stencil turns away costs nearly what one drawn
  * does. Now three draws of far fewer polygons: the game doesn't send
  * what the trees themselves hide.) */
-#define TREE_PASS 158
+/* A tree's shadow (NITRO_GX3D_TAG_SHADE batches: a quad a tree, the game's):
+ * a soft-edged oval drawn from the vertices' colours alone, no texture.
+ * Green is across the quad and blue along it, 0 to 1 edge to edge, red
+ * about a half and rising towards the tip; the combiner's DOT3 of the
+ * colour with itself is 4 x the squared distance of (red, green, blue)
+ * from the middle, 1 on the oval's edge. Then 4 x (1 - that), 1 at most:
+ * 1 over the oval's middle, falling to 0 across the outer eighth of it
+ * (the soft edge), and sooner and lower towards the tip as red rises (it
+ * narrows and lightens there: a shadow's edge is softer the farther it
+ * falls). That times what a full shadow takes, NITRO_SHADOW_TREE_BLOB of
+ * it; the frame times 1 - it. The same in alpha (DOT3_RGBA puts it
+ * there), for the two passes: where it's 1 (BLOB_CORE: the flat middles,
+ * alike, so no tree's edge cuts into another's middle), then the rest. */
+#define BLOB_CORE 250
+#define BLOB_EDGE 8
+static void blob_batch(const NitroGx3dBatch *batch)
+{
+    C3D_TexEnv *env=C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env,C3D_Both,GPU_PRIMARY_COLOR,GPU_PRIMARY_COLOR,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_DOT3_RGBA);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    env=C3D_GetTexEnv(1);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env,C3D_Both,GPU_PREVIOUS,0,0);
+    C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,0,0);
+    C3D_TexEnvOpAlpha(env,GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA,0,0);
+    C3D_TexEnvFunc(env,C3D_Both,GPU_REPLACE);
+    C3D_TexEnvScale(env,C3D_Both,GPU_TEVSCALE_4);
+    env=C3D_GetTexEnv(2);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvColor(env,sTreeColor);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_MODULATE);
+    C3D_TexEnvSrc(env,C3D_Alpha,GPU_PREVIOUS,0,0);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    env=C3D_GetTexEnv(3);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_PREVIOUS,0,0);
+    C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,0,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
+    C3D_TexEnvSrc(env,C3D_Alpha,GPU_PREVIOUS,0,0);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    draw_arrays((int)batch->first,(int)batch->count);
+}
 static void draw_once_batches(void)
 {
     size_t b;
     int pass;
     /* (and last a building's shadow's soft edge, NITRO_GX3D_TAG_RIM: its
-     * grey falls to none across it; only where no shadow is yet) */
+     * grey falls to none across it; only where no shadow is yet. A tree's
+     * shadow, the two passes between: its oval's flat middle, then its
+     * soft edge; blob_batch) */
     for(pass=0;pass<4 && sShadeBatches;pass++){
         const uint32_t want=pass==0?NITRO_GX3D_TAG_GROUND:pass==3?NITRO_GX3D_TAG_RIM:NITRO_GX3D_TAG_SHADE;
-        C3D_AlphaTest(true,GPU_GEQUAL,pass==1?TREE_PASS:128);
+        C3D_AlphaTest(true,GPU_GEQUAL,pass==1?BLOB_CORE:pass==2?BLOB_EDGE:128);
         for(b=0;b<sPreparedBatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
-            /* (untextured: a building's, with the pools and floors) */
-            if(batch->tag!=want || batch->translucent || ((pass==1 || pass==2) && !batch->texture_param))continue;
+            if(batch->tag!=want || batch->translucent)continue;
             if(!room_for_draw())break;
-            once_batch(batch,1,pass==1?0:-1);
+            if(pass==1 || pass==2)blob_batch(batch);
+            else once_batch(batch,1,-1);
         }
+    }
+    if(sShadeBatches){
+        C3D_TexEnvInit(C3D_GetTexEnv(2));
+        C3D_TexEnvInit(C3D_GetTexEnv(3));
     }
     if(sShadeBatches){
         /* (the second stage as every other draw has it: passing on) */

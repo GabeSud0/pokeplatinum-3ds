@@ -2534,7 +2534,7 @@ static unsigned tree_quad(uint32_t *c,int x0,int x1,int y0,int y1,int z0,int z1,
     return n;
 }
 #define TREE_RED(v) ((unsigned)((v)->color&31u))
-typedef struct TreeCorner { int32_t x,y,z; float s,t; unsigned r; } TreeCorner;
+typedef struct TreeCorner { int32_t x,y,z; float s,t; unsigned r,g,b; } TreeCorner;
 /* (seen from above and behind, as the field's camera sees the land: the
  * screen's up is the world's up and away; what stands and what lies flat
  * both seen) */
@@ -2568,7 +2568,7 @@ static unsigned tree_scene(const void *list,uint32_t bytes,uint32_t attr,TreeCor
             out[n].y=(int32_t)floor((d*v->clip[1]-b*v->clip[2])/det+0.5);
             out[n].z=(int32_t)floor((a*v->clip[2]-c2*v->clip[1])/det+0.5);
             out[n].s=v->s;out[n].t=v->t;
-            out[n].r=TREE_RED(v);
+            out[n].r=TREE_RED(v);out[n].g=(unsigned)((v->color>>5)&31u);out[n].b=(unsigned)((v->color>>10)&31u);
         }
     }
     return n;
@@ -2579,6 +2579,14 @@ static int tree_red(const TreeCorner *c,unsigned n,int x,int y,int z)
     unsigned i;
     for(i=0;i<n;i++)if(abs(c[i].x-x)<=1 && abs(c[i].y-y)<=8 && abs(c[i].z-z)<=8)return (int)c[i].r;
     return -1;
+}
+/* (a corner there with that red, green and blue) */
+static int tree_rgb(const TreeCorner *c,unsigned n,int x,int y,int z,unsigned r,unsigned g,unsigned b)
+{
+    unsigned i;
+    for(i=0;i<n;i++)
+        if(abs(c[i].x-x)<=1 && abs(c[i].y-y)<=8 && abs(c[i].z-z)<=8 && c[i].r==r && c[i].g==g && c[i].b==b)return 1;
+    return 0;
 }
 static int tree_has(const TreeCorner *c,unsigned n,int x,int y,int z)
 {
@@ -2675,97 +2683,52 @@ static void test_tree_lists(void)
     CHECK(NitroPort_Gx3dTreeCanopies(t,2,&nb) && NitroPort_Gx3dTreeStumps(t,2,&ns));
     CHECK(!NitroPort_Gx3dTreeCanopies(t,3,&nb) && !NitroPort_Gx3dTreeShadows(t,3,0,4096,4096,&nb));
 
-    /* the shadows, the light going towards the camera (+z), as long as
-     * what casts them is tall: each layer's corner (x, y) at (x, the
-     * ground + a unit, the stump's middle + its height above the ground);
-     * its texture coordinates its own */
-    shadow=NitroPort_Gx3dTreeShadows(t,0,0,4096,4096,&nsh);
-    CHECK(shadow && nsh && !(nsh&3u));
+    /* The shadows: a quad a tree, the renderer's soft oval in it by its
+     * corners' colours (green across, blue along, red 16 at the tree's
+     * end and 25 at the far one). The light going towards the camera
+     * (+z), the sun's shadows half as long as what casts them is tall: a
+     * tree's as long as it is (no shorter). Across: the tree's 20 units
+     * and 4 either side; along: from 8 behind the stump's middle to the
+     * tree's 40.5 and 6 more; a unit above the ground. No pools, no
+     * floors: no ground list. */
+    shadow=NitroPort_Gx3dTreeShadows(t,0,0,4096,2048,&nsh);
+    CHECK(shadow && nsh && !(nsh&3u) && !NitroPort_Gx3dTreeGround(t,0,&ng) && !ng);
     tree_view();
     n=tree_scene(shadow,nsh,both,sh,400);
-    /* (three layers a tree; the pools in a list of their own, made with
-     * these) */
-    CHECK(n==36);
-    ground=NitroPort_Gx3dTreeGround(t,0,&ng);
-    CHECK(ground && ng && !(ng&3u) && !NitroPort_Gx3dTreeGround(t,3,&ng));
-    ground=NitroPort_Gx3dTreeGround(t,0,&ng);
-    tree_view();
-    gn=tree_scene(ground,ng,both,gr,100);
-    CHECK(gn==12);
-    for(i=0;i<n;i++)CHECK(abs(sh[i].y-(58+64))<=8);
+    CHECK(n==12);
     for(i=0;i<2;i++){
         int x=-2048+2048*(int)i;
-        CHECK(tree_has(sh,n,x-704,122,1843-58) && tree_has(sh,n,x+704,122,2650-58));
-        CHECK(tree_has(sh,n,x-1056,122,1120-58) && tree_has(sh,n,x+1056,122,2220-58));
-        CHECK(tree_has(sh,n,x-1280,122,406-58) && tree_has(sh,n,x+1280,122,1654-58));
-        /* (the pool where it meets the ground: 10 units either side,
-         * from 6 behind the stump's middle to 16 along the light, full;
-         * the layers' fade: full at the ground, 12/31 of it 42 units up) */
-        CHECK(tree_red(gr,gn,x-640,122,-384)==31 && tree_red(gr,gn,x+640,122,-384)==31);
-        CHECK(tree_red(gr,gn,x-640,122,1024)==31 && tree_red(gr,gn,x+640,122,1024)==31);
-        CHECK(tree_red(sh,n,x-1280,122,406-58)==29 && tree_red(sh,n,x+1280,122,1654-58)==20);
-        CHECK(tree_red(sh,n,x-704,122,2650-58)==13);
-    }
-    /* (every corner's texture coordinates one of the layers' own, or of
-     * the stump's polygon: the pool's) */
-    for(i=0;i<n && nraw==48;i++){
-        int found=0;
-        for(k=0;k<nraw;k++)if(raw[k].s==sh[i].s && raw[k].t==sh[i].t)found=1;
-        CHECK(found);
+        CHECK(tree_rgb(sh,n,x-1536,122,-512,16,0,0) && tree_rgb(sh,n,x+1536,122,-512,16,31,0));
+        CHECK(tree_rgb(sh,n,x+1536,122,2592+384,25,31,31) && tree_rgb(sh,n,x-1536,122,2592+384,25,0,31));
     }
     /* the same sun: the same list, not made again; another: another */
-    again=NitroPort_Gx3dTreeShadows(t,0,0,4096,4096,&nsh2);
+    again=NitroPort_Gx3dTreeShadows(t,0,0,4096,2048,&nsh2);
     CHECK(again==shadow && nsh2==nsh);
-    /* the light going to the right (+x), half as long: across the tree
-     * goes across the light (its right towards the camera's left of the
-     * light: -z... the tree's +x at -z), up it along +x */
+    /* (the sun's as long: the tree's half as long again) */
+    shadow=NitroPort_Gx3dTreeShadows(t,0,0,4096,4096,&nsh);
+    tree_view();
+    n=tree_scene(shadow,nsh,both,sh,400);
+    CHECK(tree_has(sh,n,-2048-1536,122,-512) && !tree_has(sh,n,-2048-1536,122,2592+384));
+    /* the light to the right: turned with it */
     shadow=NitroPort_Gx3dTreeShadows(t,0,4096,0,2048,&nsh);
-    tree_view();
-    n=tree_scene(shadow,nsh,both,sh,400);
-    CHECK(n==36);
-    ground=NitroPort_Gx3dTreeGround(t,0,&ng);
-    tree_view();
-    gn=tree_scene(ground,ng,both,gr,100);
-    CHECK(gn==12);
-    CHECK(tree_has(sh,n,-2048+(1843-58)/2,122,704) && tree_has(sh,n,-2048+(2650-58)/2,122,-704));
-    CHECK(tree_has(sh,n,0+(406-58)/2,122,1280) && tree_has(sh,n,0+(1654-58)/2,122,-1280));
-    /* (the pool turned with the light, as long as it was: not times the
-     * shadows' length) */
-    CHECK(tree_has(gr,gn,-2048-384,122,640) && tree_has(gr,gn,-2048-384,122,-640) &&
-          tree_has(gr,gn,-2048+1024,122,640) && tree_has(gr,gn,-2048+1024,122,-640));
-    /* the row's tops: on the stumps of the other list (58 up, their
-     * middle z 0), a tree each 32 units: each half about its own middle */
-    shadow=NitroPort_Gx3dTreeShadows(t,1,0,4096,4096,&nsh);
     CHECK(shadow && nsh);
     tree_view();
     n=tree_scene(shadow,nsh,both,sh,400);
     CHECK(n==12);
-    CHECK(tree_has(sh,n,-2048,122,1200-58) && tree_has(sh,n,0,122,2400-58) && tree_has(sh,n,2048,122,2400-58));
-    /* the row's bottoms, with the stumps in their own list: a trunk a
-     * tree too, each from its own stump (the row's two halves and two
-     * trunks) */
-    shadow=NitroPort_Gx3dTreeShadows(t,2,0,4096,4096,&nsh);
+    CHECK(tree_rgb(sh,n,-2048-512,122,1536,16,0,0) && tree_rgb(sh,n,-2048-512,122,-1536,16,31,0) &&
+          tree_rgb(sh,n,-2048+2592+384,122,-1536,25,31,31));
+
+    /* a row: a tree each 32 units, each from the stump under it (another
+     * list's); the row's tops have the trees' shadows, its bottoms (under
+     * 24 units tall) none */
+    shadow=NitroPort_Gx3dTreeShadows(t,1,0,4096,2048,&nsh);
     CHECK(shadow && nsh);
     tree_view();
     n=tree_scene(shadow,nsh,both,sh,400);
     CHECK(n==12);
-    /* (a row is a forest's edge: in place of the pool the ground about
-     * each stump with the patch's shape, 21 units either side and 15
-     * before and behind, 26/31 dark, whatever the light) */
-    ground=NitroPort_Gx3dTreeGround(t,2,&ng);
-    tree_view();
-    gn=tree_scene(ground,ng,both,gr,100);
-    CHECK(gn==12);
-    CHECK(tree_red(gr,gn,-1024-1344,122,-960)==26 && tree_red(gr,gn,-1024+1344,122,-960)==26 &&
-          tree_red(gr,gn,-1024+1344,122,960)==26);
-    CHECK(tree_red(gr,gn,1024-1344,122,-960)==26 && tree_red(gr,gn,1024+1344,122,960)==26);
-    shadow=NitroPort_Gx3dTreeShadows(t,2,4096,0,4096,&nsh);
-    ground=NitroPort_Gx3dTreeGround(t,2,&ng);
-    tree_view();
-    n=tree_scene(shadow,nsh,both,sh,400);
-    tree_view();
-    gn=tree_scene(ground,ng,both,gr,100);
-    CHECK(n==12 && gn==12 && tree_red(gr,gn,-1024-1344,122,-960)==26 && tree_red(gr,gn,1024+1344,122,960)==26);
+    CHECK(tree_rgb(sh,n,-1024-1280,122,-512,16,0,0) && tree_rgb(sh,n,1024+1280,122,-512,16,31,0) &&
+          tree_rgb(sh,n,1024+1280,122,2342+384,25,31,31) && !tree_has(sh,n,-1536,122,-512));
+    CHECK(!NitroPort_Gx3dTreeShadows(t,2,0,4096,2048,&nsh) && !nsh);
 
     /* the layers with their far side shaded: none for a list with COLOR
      * commands of its own; else the list's standing polygons again, a
@@ -2786,11 +2749,11 @@ static void test_tree_lists(void)
         tree_view();
         litN=tree_scene(lit,nl,both,sh,400);
         /* (a row's polygon a tree at a time: two; how dark by the height
-         * above the ground, 17.8 and 36.6 units of 42: 11 and 19 or so) */
+         * above the ground, 17.8 and 36.6 units of 42: 11 or so, and 21) */
         CHECK(plainN==6 && litN==12);
         CHECK(tree_has(sh,litN,-2048,1200,400) && tree_has(sh,litN,0,2400,-800) && tree_has(sh,litN,2048,2400,-800));
         k=(unsigned)tree_red(sh,litN,-2048,1200,400);i=(unsigned)tree_red(sh,litN,2048,2400,-800);
-        CHECK(k>=10u && k<=13u && i>=18u && i<=20u);
+        CHECK(k>=10u && k<=13u && i>=20u && i<=21u);
         NitroPort_SetGroundShadows(1);
         tree_view();
         NitroPort_GxDirectWrite(0x31,emission);
@@ -2808,93 +2771,21 @@ static void test_tree_lists(void)
         litN=tree_scene(lit,nl,both,sh,400);
         CHECK(litN==12 && tree_red(sh,litN,-2048,300,500)>tree_red(sh,litN,2048,300,500));
     }
-    /* A forest: three trees 32 units apart, lit by NORMALs. The middle
-     * one has two beside it: its pool is the ground about its stump; the
-     * ends', one each, keep theirs. With the light to the right, the
-     * middle and the right one have a tree between them and the sun:
-     * their layers darker low down (a left corner at the foot, the far
-     * side's none: 10 of 31 for the sunlit 21), not the left one's, and not as high
-     * as 30 units. */
+    /* A forest, lit by NORMALs: every tree's layers the same, whichever
+     * stands between it and the sun (a left corner at the foot, the light
+     * to the right: the sunlit 21 of 31). Four trees in a square 32 units
+     * a side, the light to the right and towards the camera: the back
+     * left one's shadow falls behind the front right one, middle and tip:
+     * not sent; the other three's are. The light the other way: the back
+     * right one's. */
     {
-        static uint32_t forest[700];
+        static uint32_t forest[900];
         const void *one[1],*lit;
         uint32_t fb[1],nl=0;
         NitroGx3dTreeLists *f;
         c=0;
         cmds[c++]=0x40;cmds[c++]=1;
         cmds[c++]=0x21;cmds[c++]=0x1FF<<10;
-        for(i=0;i<3;i++){
-            int x=-2048+2048*(int)i;
-            c+=tree_quad(&cmds[c],x-704,x+704,1843,2650,128,-1024,0,1024);
-            c+=tree_quad(&cmds[c],x-1056,x+1056,1120,2220,464,-1100,0,480);
-            c+=tree_quad(&cmds[c],x-1280,x+1280,406,1654,630,-1146,352,1024);
-            c+=tree_quad(&cmds[c],x-1024,x+1024,58,58,960,-960,544,448);
-        }
-        cmds[c++]=0x41;
-        fb[0]=dl_pack(forest,cmds,c)*4u;
-        one[0]=forest;
-        f=NitroPort_Gx3dTreeLists(one,fb,1,64<<12);
-        CHECK(f!=NULL && NitroPort_Gx3dTreeCount(f,0)==3);
-        if(f){
-            shadow=NitroPort_Gx3dTreeShadows(f,0,0,4096,4096,&nsh);
-            CHECK(shadow && nsh);
-            tree_view();
-            n=tree_scene(shadow,nsh,both,sh,400);
-            CHECK(n==54);
-            ground=NitroPort_Gx3dTreeGround(f,0,&ng);
-            tree_view();
-            gn=tree_scene(ground,ng,both,gr,100);
-            CHECK(gn==18);
-            CHECK(tree_red(gr,gn,-1344,122,-960)==26 && tree_red(gr,gn,1344,122,960)==26 && !tree_has(gr,gn,640,122,1024));
-            CHECK(tree_red(gr,gn,-2048-640,122,-384)==31 && tree_red(gr,gn,2048+640,122,1024)==31 &&
-                  !tree_has(gr,gn,-2048-1344,122,-960) && !tree_has(gr,gn,2048+1344,122,960));
-            lit=NitroPort_Gx3dTreeCanopiesLit(f,0,4096,0,&nl);
-            CHECK(lit && nl);
-            tree_view();
-            n=tree_scene(lit,nl,both,sh,400);
-            CHECK(n==54);
-            CHECK(tree_red(sh,n,-2048-1280,406,630)==21 && tree_red(sh,n,0-1280,406,630)==10 &&
-                  tree_red(sh,n,2048-1280,406,630)==10);
-            CHECK(tree_red(sh,n,-2048-704,2650,-1024)==21 && tree_red(sh,n,0-704,2650,-1024)==21);
-            /* (the light the other way: the left and the middle ones) */
-            lit=NitroPort_Gx3dTreeCanopiesLit(f,0,-4096,0,&nl);
-            tree_view();
-            n=tree_scene(lit,nl,both,sh,400);
-            CHECK(n==54 && tree_red(sh,n,-2048+1280,406,630)==10 && tree_red(sh,n,2048+1280,406,630)==21);
-            NitroPort_Gx3dFreeTreeLists(f);
-        }
-        /* (a tree with another standing in front of it, 32 units towards
-         * the camera: its pool is behind that one's layers, not sent) */
-        c=0;
-        cmds[c++]=0x40;cmds[c++]=1;
-        for(i=0;i<2;i++){
-            int dz=2048*(int)i;
-            c+=tree_quad(&cmds[c],-704,704,1843,2650,128+dz,-1024+dz,0,1024);
-            c+=tree_quad(&cmds[c],-1056,1056,1120,2220,464+dz,-1100+dz,0,480);
-            c+=tree_quad(&cmds[c],-1280,1280,406,1654,630+dz,-1146+dz,352,1024);
-            c+=tree_quad(&cmds[c],-1024,1024,58,58,960+dz,-960+dz,544,448);
-        }
-        cmds[c++]=0x41;
-        fb[0]=dl_pack(forest,cmds,c)*4u;
-        f=NitroPort_Gx3dTreeLists(one,fb,1,64<<12);
-        CHECK(f!=NULL && NitroPort_Gx3dTreeCount(f,0)==2);
-        if(f){
-            shadow=NitroPort_Gx3dTreeShadows(f,0,0,4096,4096,&nsh);
-            ground=NitroPort_Gx3dTreeGround(f,0,&ng);
-            tree_view();
-            n=tree_scene(shadow,nsh,both,sh,400);
-            tree_view();
-            gn=tree_scene(ground,ng,both,gr,100);
-            CHECK(n==36 && gn==6 && tree_has(gr,gn,-640,122,2048-384) && !tree_has(gr,gn,-640,122,-384));
-            NitroPort_Gx3dFreeTreeLists(f);
-        }
-        /* (four trees in a square 32 units a side, the light to the right
-         * and towards the camera: the back left one's layers' shadows
-         * fall behind the front right one, middle and tip: not sent; the
-         * other three's are. The two at the back: no floor, behind the
-         * front ones.) */
-        c=0;
-        cmds[c++]=0x40;cmds[c++]=1;
         for(i=0;i<4;i++){
             int dz=2048*(int)(i>>1),x=2048*(int)(i&1);
             c+=tree_quad(&cmds[c],x-704,x+704,1843,2650,128+dz,-1024+dz,0,1024);
@@ -2904,50 +2795,48 @@ static void test_tree_lists(void)
         }
         cmds[c++]=0x41;
         fb[0]=dl_pack(forest,cmds,c)*4u;
+        one[0]=forest;
         f=NitroPort_Gx3dTreeLists(one,fb,1,64<<12);
         CHECK(f!=NULL && NitroPort_Gx3dTreeCount(f,0)==4);
         if(f){
-            shadow=NitroPort_Gx3dTreeShadows(f,0,3547,2048,4096,&nsh);
-            ground=NitroPort_Gx3dTreeGround(f,0,&ng);
-            CHECK(shadow && ground && nsh && ng);
+            lit=NitroPort_Gx3dTreeCanopiesLit(f,0,4096,0,&nl);
+            CHECK(lit && nl);
+            tree_view();
+            n=tree_scene(lit,nl,both,sh,400);
+            CHECK(n==72 && tree_red(sh,n,-1280,406,630)==21 && tree_red(sh,n,2048-1280,406,630)==21 &&
+                  tree_red(sh,n,-1280,406,630+2048)==21 && tree_red(sh,n,1280,406,630)<10);
+            shadow=NitroPort_Gx3dTreeShadows(f,0,3547,2048,2048,&nsh);
+            CHECK(shadow && nsh);
             tree_view();
             n=tree_scene(shadow,nsh,both,sh,400);
-            /* (a lowest layer's left foot: 0.5 x -1280 + 0.866 x 348 to the
-             * right, 0.866 x 1280 + 0.5 x 348 towards the camera) */
-            CHECK(tree_has(sh,n,2048-339,122,1282) || tree_has(sh,n,2048-338,122,1282));
-            CHECK(!tree_has(sh,n,-339,122,1282) && !tree_has(sh,n,-338,122,1282));
-            tree_view();
-            gn=tree_scene(ground,ng,both,gr,100);
-            CHECK(gn==12 && tree_red(gr,gn,-1344,122,2048-960)==26 && !tree_has(gr,gn,-1344,122,-960));
-            /* (the light the other way: the back right one's, not the
-             * back left one's) */
-            shadow=NitroPort_Gx3dTreeShadows(f,0,-3547,2048,4096,&nsh);
+            /* (a foot's left corner: 0.5 x -1536 + 0.866 x -512 to the
+             * right, 0.866 x 1536 + 0.5 x -512 towards the camera) */
+            CHECK(tree_has(sh,n,2048-1211,122,1074) || tree_has(sh,n,2048-1212,122,1074));
+            CHECK(!tree_has(sh,n,-1211,122,1074) && !tree_has(sh,n,-1212,122,1074));
+            shadow=NitroPort_Gx3dTreeShadows(f,0,-3547,2048,2048,&nsh);
             tree_view();
             n=tree_scene(shadow,nsh,both,sh,400);
-            CHECK(tree_has(sh,n,-942,122,-934) || tree_has(sh,n,-941,122,-934));
-            CHECK(!tree_has(sh,n,2048-942,122,-934) && !tree_has(sh,n,2048-941,122,-934));
+            CHECK(tree_has(sh,n,-325,122,-1586) || tree_has(sh,n,-324,122,-1586));
+            CHECK(!tree_has(sh,n,2048-325,122,-1586) && !tree_has(sh,n,2048-324,122,-1586));
             NitroPort_Gx3dFreeTreeLists(f);
         }
     }
-    /* too long to fit the list's coordinates: left out */
-    CHECK(NitroPort_Gx3dTreeShadows(t,1,4096,0,4096*40,&nsh)==NULL && nsh==0);
+    /* (however long the sun's: a tree's no more than twice its height) */
+    CHECK(NitroPort_Gx3dTreeShadows(t,1,0,4096,4096*40,&nsh)!=NULL && nsh);
 
     /* facing: seen from above and behind (the field's camera: the
      * screen's up is the world's up and away), whichever side of the
      * trees' own layers is drawn, that side of their shadows is */
     {
         unsigned side;
-        shadow=NitroPort_Gx3dTreeShadows(t,0,3547,2048,3317,&nsh);
+        shadow=NitroPort_Gx3dTreeShadows(t,0,3547,2048,2048,&nsh);
         canopy=NitroPort_Gx3dTreeCanopies(t,0,&nb);
         for(side=1;side<=2;side++){
             unsigned drawn,laid;
             tree_view();
             drawn=tree_scene(canopy,nb,(side<<6)|(31u<<16),cut,400);
             laid=tree_scene(shadow,nsh,(side<<6)|(31u<<16),sh,400);
-            ground=NitroPort_Gx3dTreeGround(t,0,&ng);
-            tree_view();
-            gn=tree_scene(ground,ng,(side<<6)|(31u<<16),gr,100);
-            CHECK((drawn==36 && laid==36 && gn==12) || (drawn==0 && laid==0 && gn==0));
+            CHECK((drawn==36 && laid==12) || (drawn==0 && laid==0));
             if(drawn)front++;else back++;
         }
         CHECK(front==1 && back==1);
@@ -3281,7 +3170,7 @@ static void test_wall_tint(void)
     static uint32_t cmds[64],list[64];
     static TreeCorner out[16];
     static const uint32_t normals[3]={513u,511u,511u<<10};
-    static const unsigned want[3]={10u,5u,8u};
+    static const unsigned want[3]={10u,4u,8u};
     const uint32_t both=(3u<<6)|(31u<<16),emission=(16u|(16u<<5)|(16u<<10))<<16;
     unsigned c,n,k;
     uint32_t nb;

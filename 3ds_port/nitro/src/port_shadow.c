@@ -1126,7 +1126,8 @@ int NitroPort_ShadowReachOn(void)
 unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3dBatch *batches,size_t count,
                                        const float take[3])
 {
-    static float ndc[DARKEN_VERTS][3];   /* (x, y on the screen and the grey; x > 2: behind the camera) */
+    static float ndc[DARKEN_VERTS][5];   /* (x, y on the screen, and the colour: red the grey, or a tree's oval's three) */
+    static uint8_t oval[DARKEN_VERTS/3u];
     size_t b,nt=0,t;
     unsigned done=0;
     if(!verts || !batches || !take)return 0;
@@ -1144,8 +1145,11 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
                 o[0]=v->position[0]/v->position[3];
                 o[1]=v->position[1]/v->position[3];
                 o[2]=(float)v->color[0]*(1.0f/255.0f);
+                o[3]=(float)v->color[1]*(1.0f/255.0f);
+                o[4]=(float)v->color[2]*(1.0f/255.0f);
             }
-            if(ok)nt++;
+            /* (a tree's shadow is an oval in its quad, by its colours: port_gx3d_pica.c, blob_batch) */
+            if(ok){oval[nt]=(uint8_t)(batch->tag==NITRO_GX3D_TAG_SHADE);nt++;}
         }
     }
     if(!nt)return 0;
@@ -1181,6 +1185,13 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
             w0=1.0f-w1-w2;
             if(w0<0.0f || w1<0.0f || w2<0.0f)continue;
             g=w0*a[2]+w1*c1[2]+w2*c2[2];
+            if(oval[t]){
+                const float gg=w0*a[3]+w1*c1[3]+w2*c2[3]-0.5f,bb=w0*a[4]+w1*c1[4]+w2*c2[4]-0.5f,rr=g-0.5f;
+                g=4.0f*(1.0f-4.0f*(rr*rr+gg*gg+bb*bb));
+                if(g>1.0f)g=1.0f;
+                if(!(g>0.0f))continue;
+                g*=NITRO_SHADOW_TREE_BLOB;
+            }
             if(g>dark)dark=g;
         }
         if(!(dark>0.0f))continue;

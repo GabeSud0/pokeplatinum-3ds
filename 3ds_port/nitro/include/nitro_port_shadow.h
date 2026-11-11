@@ -225,6 +225,8 @@ void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned 
  * darkest of the triangles it's in), no less than NITRO_SHADOW_FOOT_MIN
  * of it. The shadow polygons' own texture isn't looked at: their corners
  * count. Returns how many sprites were darkened. */
+/* (how dark a tree's shadow is, of the characters' darkening at their feet) */
+#define NITRO_SHADOW_TREE_BLOB 0.85f
 #define NITRO_SHADOW_FOOT_UP 0.08f
 #define NITRO_SHADOW_FOOT_MIN 0.5f
 unsigned NitroPort_ShadowDarkenSprites(struct NitroGx3dGpuVertex *verts, const struct NitroGx3dBatch *batches,
