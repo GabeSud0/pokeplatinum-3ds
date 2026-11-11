@@ -214,6 +214,21 @@ void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned 
  * more than half opaque.
  * The last call's props and how many got a shadow: */
 #define NITRO_SHADOW_ONCE 1u
+/* The characters standing in the land's trees' shadows (2026-11-10, from
+ * a preview: "people darken in shade"): a sprite stays as bright as in
+ * the sun on darkened ground otherwise. Each marked sprite's batch (an
+ * even mark that isn't a prop's or a draw-only one) whose foot (the
+ * middle of its lowest edge on the screen, NITRO_SHADOW_FOOT_UP of its
+ * height up) is inside a triangle of a NITRO_GX3D_TAG_SHADE batch has its
+ * vertices' colours darkened: by `take` (what a full shadow takes from
+ * each channel, 0 to 1) times the triangle's grey there (the fade; the
+ * darkest of the triangles it's in), no less than NITRO_SHADOW_FOOT_MIN
+ * of it. The shadow polygons' own texture isn't looked at: their corners
+ * count. Returns how many sprites were darkened. */
+#define NITRO_SHADOW_FOOT_UP 0.08f
+#define NITRO_SHADOW_FOOT_MIN 0.5f
+unsigned NitroPort_ShadowDarkenSprites(struct NitroGx3dGpuVertex *verts, const struct NitroGx3dBatch *batches,
+                                       size_t count, const float take[3]);
 #define NITRO_SHADOW_PROP_MIN 5.0f
 void NitroPort_ShadowPropStats(unsigned *props, unsigned *laid);
 

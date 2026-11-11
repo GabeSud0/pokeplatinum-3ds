@@ -3781,6 +3781,37 @@ then the small props and the land's trees; houses and the scenery later.
     goes, and down: the light comes from behind and above), between
     them across the layer. A row's polygon, many trees wide: down
     only. Made again when the light's way changes.
+  Then, from a second preview after a run by day and one by night ("it
+  look better, but I think something is missing still. I think the far
+  side shade should be more noticeable, and on the forests probably the
+  grass should be shaded fully since there are a lot of trees not a lot
+  of light go through"; chosen: "far side 70%, forest floor shaded,
+  trees shade trees, people darken in shade, building shadows"):
+  - The far side at 70% (it was 34%): 0.36, 0.38, 0.47 of the lit colour
+    at the corner the light leaves.
+  - A forest's floor: a tree with two or more others of its shape
+    standing within 36 units of it either way, and every tree of a row,
+    has in place of its pool the ground about its stump, a square 17
+    units either side (the trees stand 32 apart: the squares meet),
+    26/31 dark, not turned with the light; its texture coordinates all
+    the stump's middle (opaque). On the real lists: 18 of Veilstone's
+    block's 29 tree2_01, 68 of a block's 75 tree01, every one of the
+    rows'. No polygon more than before.
+  - Trees shade trees: a tree with another of its shape between it and
+    the sun (8 to 44 units up the light's way, within 20 across) has its
+    layers' vertices darker by 0.38 up to 18 units above the ground, by
+    none from 30: with the far side's, the one's light less the other's.
+    The forest's sunny edge keeps its light, the trees behind it only
+    their tops'. In the layers' tints (NitroPort_Gx3dTreeCanopiesLit):
+    no polygon, nothing drawn again.
+  - People darken in shade (NitroPort_ShadowDarkenSprites, port_shadow.c,
+    in the renderer's preparing of a scene): a marked sprite whose foot
+    on the screen is inside a triangle of the trees' shadows has its
+    vertices' colours darkened by what a full shadow takes from the
+    ground times the triangle's grey there, no less than half of it. The
+    shadow polygons' own cut-outs aren't looked at (their corners
+    count). The log's [shadow] line: the sprites darkened a scene.
+  - Building shadows: not yet, the next part.
   On a 3DS since (log 375a6403, by the Galactic building, mono, the
   same spot): with the sun shadows 49 to 58 frames a second, the
   geometry thread 28.9 to 32.6 ms a scene (88 to 98% busy), 1 to 6

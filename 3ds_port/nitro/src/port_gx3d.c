@@ -4098,7 +4098,34 @@ uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *sv,void *dst,uint
 #define TREE_POOL_HALF 10
 #define TREE_POOL_BACK 6
 #define TREE_POOL_FRONT 16
-#define TREE_FAR_SHADE 87
+#define TREE_FAR_SHADE 179
+/* Then (2026-11-10, from a second preview: "the far side shade should be
+ * more noticeable, and on the forests probably the grass should be shaded
+ * fully since there are a lot of trees not a lot of light go through";
+ * chosen: far side 70% (it was 34%), forest floor shaded, trees shade
+ * trees):
+ * - a forest's floor: a tree with TREE_FOREST_NEIGHBOURS others of its
+ *   shape standing within TREE_FOREST_NEAR of it either way, and every
+ *   tree of a row, has in place of its pool a square of ground about its
+ *   stump, TREE_FLOOR_HALF either side (the trees stand 32 apart: the
+ *   squares meet), TREE_FLOOR_LEVEL dark (in 31sts), not turned with the
+ *   light;
+ * - trees shade trees: a tree with another of its shape between it and
+ *   the sun (TREE_CROSS_NEAR to TREE_CROSS_FAR up the light's way,
+ *   within TREE_CROSS_SIDE of it across) has its layers darker by
+ *   TREE_CROSS_SHADE (in 256ths) up to TREE_CROSS_FULL above the ground,
+ *   by none from TREE_CROSS_NONE: the forest's sunny edge keeps its
+ *   light, the trees behind it only their tops'. */
+#define TREE_FOREST_NEIGHBOURS 2
+#define TREE_FOREST_NEAR 36
+#define TREE_FLOOR_HALF 17
+#define TREE_FLOOR_LEVEL 26
+#define TREE_CROSS_NEAR 8
+#define TREE_CROSS_FAR 44
+#define TREE_CROSS_SIDE 20
+#define TREE_CROSS_SHADE 97
+#define TREE_CROSS_FULL 18
+#define TREE_CROSS_NONE 30
 typedef struct TreeQuad {          /* (a polygon of a shape's list, as read) */
     int32_t xyz[TREE_VERTS][3], st[TREE_VERTS][2];
     int32_t lo[3], hi[3];
@@ -4110,13 +4137,15 @@ typedef struct TreePoly {          /* (a polygon to lay: about where its tree st
     int32_t u[TREE_VERTS], h[TREE_VERTS], st[TREE_VERTS][2];
     uint8_t lv[TREE_VERTS];        /* (how dark at each vertex, in 31sts) */
     uint8_t n, first;              /* (first: its tree's, or its row's, first one) */
-    uint8_t fixed;                 /* (h along the light's way as it is, not times the shadows' length) */
+    uint8_t fixed;                 /* (1: h along the light's way as it is, not times the shadows' length;
+                                    *  2: u to the right and h towards the camera, whatever the light's way) */
 } TreePoly;
 typedef struct TreeLeaf {          /* (a standing polygon, for its far side's shade) */
     int32_t xyz[TREE_VERTS][3], st[TREE_VERTS][2];
     uint32_t normal;
     int8_t nx[TREE_VERTS], ny[TREE_VERTS];   /* (each vertex: left or right of its middle, below or above) */
-    uint8_t n, first;
+    int32_t base[3];               /* (where its tree stands) */
+    uint8_t n, first, wide;
 } TreeLeaf;
 typedef struct TreeShape {
     uint32_t *canopy, *stumps, *tail, *shadow;
@@ -4127,6 +4156,8 @@ typedef struct TreeShape {
     int sunSet;
     TreeLeaf *leaves;
     uint32_t nleaves, *lit, litBytes, litCap;
+    int32_t (*stand)[2];           /* (where its trees stand, a row's aside: x and z) */
+    uint32_t nstand;
     int32_t litWay[2];
     int litSet;
 } TreeShape;
@@ -4298,11 +4329,27 @@ static void tree_add(TreeShape *sh,uint32_t *cap,const int32_t base[3],unsigned 
 }
 /* (the shape's trees, and each one's polygons to lay; unit: a world unit
  * in the list's) */
+/* (a pool to a forest's floor's square: above) */
+static void tree_floor(TreePoly *p,int32_t unit)
+{
+    const int32_t half=TREE_FLOOR_HALF*unit,s=(p->st[0][0]+p->st[1][0]+p->st[2][0]+p->st[3][0])/4,
+                  t=(p->st[0][1]+p->st[1][1]+p->st[2][1]+p->st[3][1])/4;
+    unsigned c;
+    for(c=0;c<4u;c++){
+        p->u[c]=(c==1u||c==2u)?half:-half;
+        p->h[c]=c>=2u?half:-half;
+        /* (the stump's middle: opaque) */
+        p->st[c][0]=s;p->st[c][1]=t;
+        p->lv[c]=TREE_FLOOR_LEVEL;
+    }
+    p->fixed=2;
+}
 static void tree_sources(TreeShape *sh,const TreeQuad *quads,uint32_t n,TreeQuad *const *all,const uint32_t *counts,
-                         uint32_t shapes,int32_t unit)
+                         uint32_t shapes,int32_t unit,int32_t (*qbase)[3])
 {
     const int32_t nearBy=12*unit,over=8*unit,column=32*unit,wide=48*unit,tall=5*unit,low=unit+unit/2;
-    uint32_t g=0,cap=0;
+    uint32_t g=0,cap=0,i;
+    sh->stand=malloc((n?n:1u)*sizeof(*sh->stand));
     while(g<n){
         uint32_t first=g,last,k;
         int32_t mx,mz,lo[3]={0,0,0},hi[3]={0,0,0},flo=0,fhi=0,fy=0,base[3];
@@ -4370,6 +4417,7 @@ static void tree_sources(TreeShape *sh,const TreeQuad *quads,uint32_t n,TreeQuad
                 base[2]=zlo/2+zhi/2;
             }
         }
+        for(k=first;k<last;k++)memcpy(qbase[k],base,sizeof(base));
         if(hi[1]-base[1]<tall)continue;
         /* its polygons standing up; a row's a tree at a time */
         {
@@ -4396,6 +4444,10 @@ static void tree_sources(TreeShape *sh,const TreeQuad *quads,uint32_t n,TreeQuad
             }
             if(sh->npolys>before){
                 sh->trees+=columns;
+                if(columns==1u && sh->stand){
+                    sh->stand[sh->nstand][0]=base[0];sh->stand[sh->nstand][1]=base[2];
+                    sh->nstand++;
+                }
                 /* The pool where it meets the ground (above), a tree's
                  * or each of a row's: the stump's polygon's own texture
                  * coordinates, corner for corner, so its shape is the
@@ -4435,17 +4487,33 @@ static void tree_sources(TreeShape *sh,const TreeQuad *quads,uint32_t n,TreeQuad
                             xyz[c][1]=base[1]+(ahead?TREE_POOL_FRONT:-TREE_POOL_BACK)*unit;
                             xyz[c][2]=base[2];
                         }
-                        if(found==15u)tree_add(sh,&cap,b2,4u,xyz,st,0,unit,1);
+                        if(found==15u){
+                            tree_add(sh,&cap,b2,4u,xyz,st,0,unit,1);
+                            /* (a row's: a forest's edge) */
+                            if(q->hi[0]-q->lo[0]>wide && sh->npolys)tree_floor(&sh->polys[sh->npolys-1u],unit);
+                        }
                     }
                     if(q->hi[0]-q->lo[0]<=wide)break;   /* (a tree: one stump) */
                 }
             }
         }
     }
+    /* (the trees with others about them: a forest's) */
+    for(i=0;i<sh->npolys;i++){
+        TreePoly *p=&sh->polys[i];
+        const int32_t reach=TREE_FOREST_NEAR*unit;
+        uint32_t j,near2=0;
+        if(p->fixed!=1u)continue;
+        for(j=0;j<sh->nstand;j++){
+            const int32_t dx=sh->stand[j][0]-p->base[0],dz=sh->stand[j][1]-p->base[2];
+            if((dx || dz) && dx<=reach && -dx<=reach && dz<=reach && -dz<=reach)near2++;
+        }
+        if(near2>=TREE_FOREST_NEIGHBOURS)tree_floor(p,unit);
+    }
 }
 /* (the shape's standing polygons, for NitroPort_Gx3dTreeCanopiesLit: a
  * list of vertices a tree, as the shadows') */
-static void tree_leaves(TreeShape *sh,const TreeQuad *quads,uint32_t n,int32_t unit)
+static void tree_leaves(TreeShape *sh,const TreeQuad *quads,uint32_t n,int32_t unit,int32_t (*qbase)[3])
 {
     const int32_t nearBy=12*unit,wide=48*unit;
     uint32_t g,count=0;
@@ -4470,6 +4538,8 @@ static void tree_leaves(TreeShape *sh,const TreeQuad *quads,uint32_t n,int32_t u
         memcpy(l->st,q->st,sizeof(l->st));
         l->normal=q->normal;
         l->n=q->n;
+        memcpy(l->base,qbase[g],sizeof(l->base));
+        l->wide=(uint8_t)(q->hi[0]-q->lo[0]>wide);
         /* (the first of its tree: none before it since the tree's first
          * polygon, standing or flat) */
         l->first=(uint8_t)(sh->nleaves==1u || (mx==qx && mz==qz) || any==2);
@@ -4515,8 +4585,14 @@ NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists,const uint3
         tree_split(sh,info[i],lists[i],bytes[i]/4u,quads[i]);
         /* (no tail: the list isn't one of polygons alone, left as it is) */
         if(!sh->tail)continue;
-        tree_sources(sh,quads[i],counts[i],quads,counts,count,unit);
-        if(plain[i])tree_leaves(sh,quads[i],counts[i],unit);
+        {
+            int32_t (*qbase)[3]=calloc(counts[i]?counts[i]:1u,sizeof(*qbase));
+            if(qbase){
+                tree_sources(sh,quads[i],counts[i],quads,counts,count,unit,qbase);
+                if(plain[i])tree_leaves(sh,quads[i],counts[i],unit,qbase);
+                free(qbase);
+            }
+        }
         if(sh->npolys){
             /* (a vertex: a COLOR, a TEXCOORD and a VTX_16, their words and
              * at most a word of commands each; a polygon not a quad as
@@ -4537,7 +4613,7 @@ void NitroPort_Gx3dFreeTreeLists(NitroGx3dTreeLists *t)
     for(i=0;i<t->count;i++){
         free(t->shape[i].canopy);free(t->shape[i].stumps);free(t->shape[i].tail);
         free(t->shape[i].shadow);free(t->shape[i].polys);
-        free(t->shape[i].leaves);free(t->shape[i].lit);
+        free(t->shape[i].leaves);free(t->shape[i].lit);free(t->shape[i].stand);
     }
     free(t);
 }
@@ -4575,11 +4651,13 @@ const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *t,uint32_t shape,i
     TreeShape *sh;
     DlWriter wr;
     uint32_t i,mode=1u,normal=0,tint=0;
-    int begun=0;
+    int begun=0,hit=0;
     int64_t span;
+    int32_t unit;
     if(bytes)*bytes=0;
     if(!t || shape>=t->count)return NULL;
     sh=&t->shape[shape];
+    unit=t->lift;
     if(!sh->nleaves || !sh->lit)return NULL;
     if(sh->litSet && sh->litWay[0]==wayX && sh->litWay[1]==wayZ){
         if(bytes)*bytes=sh->litBytes;
@@ -4597,6 +4675,17 @@ const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *t,uint32_t shape,i
         const TreeLeaf *l=&sh->leaves[i];
         const uint32_t want=l->n==4u?1u:0u;
         unsigned count=l->n==4u?4u:(l->n-2u)*3u,k;
+        if(l->first || !i){
+            /* (its tree: is another between it and the sun) */
+            uint32_t j;
+            hit=0;
+            for(j=0;j<sh->nstand && !hit && !l->wide;j++){
+                const int64_t dx=l->base[0]-sh->stand[j][0],dz=l->base[2]-sh->stand[j][1];
+                const int64_t along=(dx*wayX+dz*wayZ)/4096,across=(dx*wayZ-dz*wayX)/4096;
+                hit=along>(int64_t)TREE_CROSS_NEAR*unit && along<(int64_t)TREE_CROSS_FAR*unit &&
+                    across<(int64_t)TREE_CROSS_SIDE*unit && -across<(int64_t)TREE_CROSS_SIDE*unit;
+            }
+        }
         if(begun && (l->first || want!=mode)){dl_put(&wr,0x41u,NULL);begun=0;}
         if(!begun){
             mode=want;
@@ -4615,7 +4704,12 @@ const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *t,uint32_t shape,i
              * right of the middle as the light goes right, below it as
              * it comes towards the camera (from behind and above) */
             const int64_t d=((int64_t)wayX*l->nx[v]-(int64_t)wayZ*l->ny[v])*128/span+128;
-            const int64_t a=(d<0?0:d>256?256:d)*TREE_FAR_SHADE/256;   /* (of 256) */
+            const int64_t up=(int64_t)l->xyz[v][1]-l->base[1];
+            const int64_t cross=!hit?0:up<=(int64_t)TREE_CROSS_FULL*unit?TREE_CROSS_SHADE:
+                                up>=(int64_t)TREE_CROSS_NONE*unit?0:
+                                TREE_CROSS_SHADE*((int64_t)TREE_CROSS_NONE*unit-up)/((int64_t)(TREE_CROSS_NONE-TREE_CROSS_FULL)*unit);
+            const int64_t far=(d<0?0:d>256?256:d)*TREE_FAR_SHADE/256;
+            const int64_t a=far+cross-far*cross/256;   /* (of 256: the one's light less the other's) */
             const uint32_t r=(uint32_t)(31-(31*a*235/256+128)/256),g=(uint32_t)(31-(31*a*225/256+128)/256),
                            b=(uint32_t)(31-(31*a*195/256+128)/256);
             const uint32_t c=r|(g<<5)|(b<<10)|0x8000u;
@@ -4669,15 +4763,17 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
             int32_t xyz[TREE_VERTS][3];
             uint32_t want=p->n==4u?1u:0u;
             unsigned k,ok=1;
-            const int32_t ax=p->fixed?wayX:sx,az=p->fixed?wayZ:sz;
+            /* (a forest's floor's: as for a light straight towards the camera) */
+            const int32_t wx=p->fixed==2u?0:wayX,wz=p->fixed==2u?4096:wayZ;
+            const int32_t ax=p->fixed?wx:sx,az=p->fixed?wz:sz;
             if(p->first && begun){dl_put(&wr,0x41u,NULL);begun=0;}
             /* across the tree goes across the light's way (z, -x: laid
              * towards the camera, the tree's right stays on the right),
              * up it along the way */
             for(k=0;k<p->n;k++){
-                xyz[k][0]=p->base[0]+tree_fx((int64_t)wayZ*p->u[k]+(int64_t)ax*p->h[k]);
+                xyz[k][0]=p->base[0]+tree_fx((int64_t)wz*p->u[k]+(int64_t)ax*p->h[k]);
                 xyz[k][1]=p->base[1]+t->lift;
-                xyz[k][2]=p->base[2]+tree_fx(-(int64_t)wayX*p->u[k]+(int64_t)az*p->h[k]);
+                xyz[k][2]=p->base[2]+tree_fx(-(int64_t)wx*p->u[k]+(int64_t)az*p->h[k]);
                 if(!dl_s16(xyz[k]))ok=0;
             }
             if(!ok)continue;

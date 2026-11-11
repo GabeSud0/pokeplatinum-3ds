@@ -1120,3 +1120,82 @@ int NitroPort_ShadowReachOn(void)
 {
     return sShadowReach;
 }
+
+/* (see the header) */
+#define DARKEN_VERTS 1536u
+unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3dBatch *batches,size_t count,
+                                       const float take[3])
+{
+    static float ndc[DARKEN_VERTS][3];   /* (x, y on the screen and the grey; x > 2: behind the camera) */
+    size_t b,nt=0,t;
+    unsigned done=0;
+    if(!verts || !batches || !take)return 0;
+    /* the shadows' triangles, on the screen */
+    for(b=0;b<count;b++){
+        const NitroGx3dBatch *batch=&batches[b];
+        uint32_t i;
+        if(batch->tag!=NITRO_GX3D_TAG_SHADE)continue;
+        for(i=0;i+3u<=batch->count && nt<DARKEN_VERTS/3u;i+=3u){
+            unsigned k,ok=1;
+            for(k=0;k<3u;k++){
+                const NitroGx3dGpuVertex *v=&verts[batch->first+i+k];
+                float *o=ndc[nt*3u+k];
+                if(!(v->position[3]>0.0f)){ok=0;break;}
+                o[0]=v->position[0]/v->position[3];
+                o[1]=v->position[1]/v->position[3];
+                o[2]=(float)v->color[0]*(1.0f/255.0f);
+            }
+            if(ok)nt++;
+        }
+    }
+    if(!nt)return 0;
+    for(b=0;b<count;b++){
+        const NitroGx3dBatch *batch=&batches[b];
+        float lo[2]={0,0},hi[2]={0,0},px,py,dark=0.0f;
+        uint32_t i;
+        int ok=batch->count>=3u;
+        if(!batch->tag || (batch->tag&1u) || (batch->tag&0xC0000000u))continue;
+        for(i=0;i<batch->count && ok;i++){
+            const NitroGx3dGpuVertex *v=&verts[batch->first+i];
+            float x,y;
+            if(!(v->position[3]>0.0f)){ok=0;break;}
+            x=v->position[0]/v->position[3];y=v->position[1]/v->position[3];
+            if(!i || x<lo[0])lo[0]=x;
+            if(!i || x>hi[0])hi[0]=x;
+            if(!i || y<lo[1])lo[1]=y;
+            if(!i || y>hi[1])hi[1]=y;
+        }
+        if(!ok)continue;
+        px=(lo[0]+hi[0])*0.5f;
+        py=lo[1]+(hi[1]-lo[1])*NITRO_SHADOW_FOOT_UP;
+        for(t=0;t<nt;t++){
+            const float *a=ndc[t*3u],*c1=ndc[t*3u+1u],*c2=ndc[t*3u+2u];
+            float area,w0,w1,w2,g;
+            if((px<a[0] && px<c1[0] && px<c2[0]) || (px>a[0] && px>c1[0] && px>c2[0]) ||
+               (py<a[1] && py<c1[1] && py<c2[1]) || (py>a[1] && py>c1[1] && py>c2[1]))
+                continue;
+            area=(c1[0]-a[0])*(c2[1]-a[1])-(c1[1]-a[1])*(c2[0]-a[0]);
+            if(area>-1e-9f && area<1e-9f)continue;
+            w1=((px-a[0])*(c2[1]-a[1])-(py-a[1])*(c2[0]-a[0]))/area;
+            w2=((c1[0]-a[0])*(py-a[1])-(c1[1]-a[1])*(px-a[0]))/area;
+            w0=1.0f-w1-w2;
+            if(w0<0.0f || w1<0.0f || w2<0.0f)continue;
+            g=w0*a[2]+w1*c1[2]+w2*c2[2];
+            if(g>dark)dark=g;
+        }
+        if(!(dark>0.0f))continue;
+        if(dark<NITRO_SHADOW_FOOT_MIN)dark=NITRO_SHADOW_FOOT_MIN;
+        if(dark>1.0f)dark=1.0f;
+        for(i=0;i<batch->count;i++){
+            NitroGx3dGpuVertex *v=&verts[batch->first+i];
+            unsigned k;
+            for(k=0;k<3u;k++){
+                float m=1.0f-take[k]*dark;
+                if(m<0.0f)m=0.0f;
+                v->color[k]=(uint8_t)((float)v->color[k]*m+0.5f);
+            }
+        }
+        done++;
+    }
+    return done;
+}

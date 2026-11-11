@@ -361,7 +361,7 @@ static u32 sShadeColor=0xFFFFFFFFu;
 static size_t sGroundBatchCount,sGroundVertices;
 static u64 sGroundTicks;
 static unsigned sGroundScenes,sGroundCards,sGroundFound,sGroundSprites,sGroundMarked;
-static unsigned sGroundProps,sGroundPropsLaid,sGroundFull,sGroundShade,sGroundShadeTris,sGroundTagged,sGroundWhole;
+static unsigned sGroundProps,sGroundPropsLaid,sGroundFull,sGroundShade,sGroundShadeTris,sGroundTagged,sGroundWhole,sGroundDarkened;
 #define TAG_BATCHES NITRO_GX3D_MAX_TAGGED_TRIANGLES
 static NitroGx3dBatch sTagBatches[TAG_BATCHES];   /* (the marked polygons' whole triangles' batches) */
 static uint8_t sRoundUsed[TAG_BATCHES];
@@ -1893,6 +1893,9 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
                 if(f[i]>1.0f)f[i]=1.0f;
             }
             sShadeColor=0xFF000000u|((u32)(f[2]*255.0f+0.5f)<<16)|((u32)(f[1]*255.0f+0.5f)<<8)|(u32)(f[0]*255.0f+0.5f);
+            /* (the characters standing in them: darkened as the ground
+             * under them is) */
+            if(sShadeBatches)sGroundDarkened+=NitroPort_ShadowDarkenSprites(sVertices[slot],sBatches,sPreparedBatches,f);
         }
         /* (most scenes of a menu or a building have no marks at all: a
          * round shadow's, or a prop's) */
@@ -1975,17 +1978,18 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
                           "%.1f marked sprites a scene, %.1f round shadows, %.1f characters' sun shadows laid; "
                           "%.1f props marked, %.1f props' shadows laid; %.0f marked triangles a scene (%u scenes "
                           "with their room full, %u set up from the whole scene); the land's trees' shadows: "
-                          "%.1f batches and %.0f triangles a scene, the game's; %.2f ms a scene laying the "
+                          "%.1f batches and %.0f triangles a scene, the game's, %.2f sprites a scene darkened "
+                          "in them; %.2f ms a scene laying the "
                           "others; the sun %.0f degrees up, %.0f round from the screen's left",
                           sGroundScenes==300?300u:1800u,sGroundMarked,sGroundSprites*per,
                           sGroundFound*per,sGroundCards*per,sGroundProps*per,sGroundPropsLaid*per,
                           sGroundTagged*per,sGroundFull,sGroundWhole,sGroundShade/all,sGroundShadeTris/all,
-                          (double)sGroundTicks*1000.0/SYSCLOCK_ARM11/all,
+                          sGroundDarkened/all,(double)sGroundTicks*1000.0/SYSCLOCK_ARM11/all,
                           (double)sSun.elevation,(double)sSun.azimuth);
             if(sGroundScenes==2100)sGroundScenes=300;
             sGroundTicks=0;sGroundCards=0;sGroundFound=0;sGroundSprites=0;sGroundMarked=0;
             sGroundProps=0;sGroundPropsLaid=0;sGroundFull=0;
-            sGroundShade=0;sGroundShadeTris=0;sGroundTagged=0;sGroundWhole=0;
+            sGroundShade=0;sGroundShadeTris=0;sGroundTagged=0;sGroundWhole=0;sGroundDarkened=0;
         }
     }
     setup_fog();
@@ -2601,7 +2605,7 @@ void NitroPort_PicaGroundShadows(int on)
         NitroPort_Log("[shadow] the sun shadows %s",on?"on":"off");
         sGroundScenes=0;sGroundTicks=0;sGroundCards=0;sGroundFound=0;
         sGroundSprites=0;sGroundMarked=0;sGroundProps=0;sGroundPropsLaid=0;sGroundFull=0;
-        sGroundShade=0;sGroundShadeTris=0;sGroundTagged=0;sGroundWhole=0;
+        sGroundShade=0;sGroundShadeTris=0;sGroundTagged=0;sGroundWhole=0;sGroundDarkened=0;
     }
     sGroundMode=on;
     sGroundReady=0;
