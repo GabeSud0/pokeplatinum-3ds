@@ -6,11 +6,14 @@
 
 /* A V-blank, in microseconds (59.8 a second). */
 #define FRAME_MICROS 16715u
-/* The core idle that long a V-blank, on average, for a V-blank fewer
- * between composed frames: from 2 to 1 what's busy may double (the idle
- * 55%: 90% busy if it does), from 3 to 2 come to half as much again (40%). */
-#define SLACK_2_TO_1 (FRAME_MICROS * 55u / 100u)
-#define SLACK_3_TO_2 (FRAME_MICROS * 40u / 100u)
+/* Every frame composed that soon after its V-blank, for a V-blank fewer
+ * between composed frames. From 2 to 1 within 65% of a V-blank: at 1 it
+ * must be within one, with a scene of the field's more to send in each
+ * (measured in a town at 4x: 72% at every other V-blank didn't hold at
+ * every one, 49% did). From 3 to 2 within a V-blank and a half of the two
+ * it then has. */
+#define SPAN_2_TO_1 (FRAME_MICROS * 65u / 100u)
+#define SPAN_3_TO_2 (FRAME_MICROS * 150u / 100u)
 #define EVERY_MOST 3
 /* Late frames: each counts LATE_WEIGHT, a halt shown takes 1 off; a V-blank
  * more at LATE_LIMIT (a second one within 32 halts of the first: one alone,
@@ -39,7 +42,7 @@ static int sLeftOutRun;
 static int sEvery = 1;           /* (read by the display thread too) */
 static int sLateLevel;
 static int sWindowHalts;
-static unsigned long sWindowSlack;
+static unsigned sWindowSpan;     /* (the longest in the window; 0: none composed) */
 static int sWindowLate;
 static int sWait;                /* halts shown till a V-blank fewer may be tried */
 static int sWaitNext = WAIT_LEAST;
@@ -55,7 +58,7 @@ static void governor_reset(void)
     set_every(1);
     sLateLevel = 0;
     sWindowHalts = 0;
-    sWindowSlack = 0;
+    sWindowSpan = 0;
     sWindowLate = 0;
     sWait = 0;
     sWaitNext = WAIT_LEAST;
@@ -159,7 +162,7 @@ int NitroPort_SpeedComposeEvery(void)
     return __atomic_load_n(&sEvery, __ATOMIC_ACQUIRE);
 }
 
-void NitroPort_SpeedNote(int late, unsigned slackMicros)
+void NitroPort_SpeedNote(int late, unsigned spanMicros)
 {
     if (sHalves <= 2) {
         return;
@@ -173,7 +176,6 @@ void NitroPort_SpeedNote(int late, unsigned slackMicros)
     if (late) {
         sLateLevel += LATE_WEIGHT;
         sWindowLate++;
-        slackMicros = 0;
     }
     if (sLateLevel >= LATE_LIMIT) {
         /* A V-blank more (at the most already: as it is). After a trial
@@ -188,25 +190,25 @@ void NitroPort_SpeedNote(int late, unsigned slackMicros)
         sWait = sWaitNext;
         sLateLevel = 0;
         sWindowHalts = 0;
-        sWindowSlack = 0;
+        sWindowSpan = 0;
         sWindowLate = 0;
         return;
     }
     if (sTrial > 0 && --sTrial == 0) {
         sWaitNext = WAIT_LEAST;      /* (it held) */
     }
-    sWindowSlack += slackMicros > FRAME_MICROS ? FRAME_MICROS : slackMicros;
+    if (spanMicros > sWindowSpan) {
+        sWindowSpan = spanMicros;
+    }
     if (++sWindowHalts >= WINDOW) {
-        unsigned slack = (unsigned)(sWindowSlack / WINDOW);
-
-        if (sEvery > 1 && sWindowLate == 0 && sLateLevel == 0 && sWait == 0 &&
-            slack >= (sEvery == 2 ? SLACK_2_TO_1 : SLACK_3_TO_2)) {
+        if (sEvery > 1 && sWindowLate == 0 && sLateLevel == 0 && sWait == 0 && sWindowSpan != 0 &&
+            sWindowSpan <= (sEvery == 2 ? SPAN_2_TO_1 : SPAN_3_TO_2)) {
             set_every(sEvery - 1);
             sTrial = TRIAL;
             sWait = WAIT_LEAST;
         }
         sWindowHalts = 0;
-        sWindowSlack = 0;
+        sWindowSpan = 0;
         sWindowLate = 0;
     }
 }

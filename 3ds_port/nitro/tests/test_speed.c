@@ -3,8 +3,8 @@
  * at each speed, the field's frames whose scene is wanted (the ones with a
  * halt the screens are composed for), every scene wanted outside the
  * field, at 1x and without the geometry thread, and the screens' rate:
- * down when frames come late, up again when the core has the time, not
- * back and forth.
+ * down when frames come late, up again when they're composed early enough
+ * for the rate above, not back and forth.
  */
 #include <nitro_port_speed.h>
 #include <stdio.h>
@@ -61,12 +61,12 @@ static void check_wanted_frames_have_the_shown_halt(void)
     }
 }
 
-static void note(int count, int late, unsigned slack)
+static void note(int count, int late, unsigned span)
 {
     int i;
 
     for (i = 0; i < count; i++) {
-        NitroPort_SpeedNote(late, slack);
+        NitroPort_SpeedNote(late, span);
     }
 }
 
@@ -153,13 +153,13 @@ int main(void)
     NitroPort_SpeedReset();
     run_frames(4, 2, 8, 1, 1);
     note(1, 1, 0);
-    note(40, 0, 3000);
+    note(40, 0, 12000);
     note(1, 1, 0);
-    note(40, 0, 3000);
+    note(40, 0, 12000);
     CHECK(NitroPort_SpeedComposeEvery() == 1);
     /* Two close together: every other V-blank, and at 4x one scene in four. */
     note(1, 1, 0);
-    note(5, 0, 3000);
+    note(5, 0, 12000);
     note(1, 1, 0);
     CHECK(NitroPort_SpeedComposeEvery() == 2);
     run_frames(4, 2, 8, 1, 1);
@@ -174,18 +174,24 @@ int main(void)
     note(6, 1, 0);
     CHECK(NitroPort_SpeedComposeEvery() == 3);
 
-    /* On time but little to spare: it stays. */
-    note(2016, 0, 5000);
+    /* On time but not early enough for the rate above, or nothing
+     * composed at all: it stays. */
+    note(2016, 0, 26000);
     CHECK(NitroPort_SpeedComposeEvery() == 3);
-    /* The core idle enough: a V-blank fewer, then (4 seconds on at the
-     * soonest) another. */
-    note(31, 0, 8000);
+    note(320, 0, 0);
     CHECK(NitroPort_SpeedComposeEvery() == 3);
-    note(1, 0, 8000);
+    /* Early enough: a V-blank fewer, then (4 seconds on at the soonest)
+     * another; one frame in the window that isn't keeps it. */
+    note(31, 0, 20000);
+    CHECK(NitroPort_SpeedComposeEvery() == 3);
+    note(1, 0, 20000);
     CHECK(NitroPort_SpeedComposeEvery() == 2);
-    note(200, 0, 12000);
+    note(224, 0, 9000);
     CHECK(NitroPort_SpeedComposeEvery() == 2);
-    note(100, 0, 12000);
+    note(31, 0, 9000);
+    note(1, 0, 12000);
+    CHECK(NitroPort_SpeedComposeEvery() == 2);
+    note(32, 0, 9000);
     CHECK(NitroPort_SpeedComposeEvery() == 1);
 
     /* A V-blank fewer that doesn't hold: back, and longer till the next
@@ -194,20 +200,20 @@ int main(void)
     run_frames(4, 2, 8, 1, 1);
     note(2, 1, 0);
     CHECK(NitroPort_SpeedComposeEvery() == 2);
-    note(240, 0, 12000);
-    note(32, 0, 12000);
+    note(240, 0, 9000);
+    note(32, 0, 9000);
     CHECK(NitroPort_SpeedComposeEvery() == 1);
     note(2, 1, 0);                    /* (late again at once) */
     CHECK(NitroPort_SpeedComposeEvery() == 2);
-    note(448, 0, 12000);              /* (7 seconds: not yet) */
+    note(448, 0, 9000);               /* (7 seconds: not yet) */
     CHECK(NitroPort_SpeedComposeEvery() == 2);
-    note(64, 0, 12000);
+    note(64, 0, 9000);
     CHECK(NitroPort_SpeedComposeEvery() == 1);
     /* One that holds: the next wait is the short one again. */
-    note(200, 0, 3000);
+    note(200, 0, 12000);
     note(2, 1, 0);
     CHECK(NitroPort_SpeedComposeEvery() == 2);
-    note(288, 0, 12000);
+    note(288, 0, 9000);
     CHECK(NitroPort_SpeedComposeEvery() == 1);
 
     /* At 1x: every V-blank again, and nothing noted. */

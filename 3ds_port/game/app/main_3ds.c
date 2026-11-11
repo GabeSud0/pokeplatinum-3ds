@@ -564,13 +564,16 @@ uint32_t NitroPort_Gx3dStamp(void)
 static Thread sVBlankThread;
 static volatile bool sVBlankRunning;
 /* The display thread and the V-blanks, for the pacing faster than 1x
- * (nitro_port_speed.h). sComposeHandled: the V-blank count at the last wake
+ * (nitro_port_speed.h). sVBlankTick: when the last V-blank came (the
+ * clock's low half). sComposeHandled: the V-blank count at the last wake
  * the display thread is done with (composed, or nothing to compose).
- * sComposeLate: V-blanks that came while it wasn't done with the wake of
- * the one before (still composing, or the game's thread, above it on its
- * core, never let it start). sComposeEndTick: when it last finished a
- * frame (the clock's low half). */
-static u32 sComposeHandled, sComposeLate, sComposeEndTick;
+ * sComposeLate: frames that took as many V-blanks as there are from one
+ * composed frame to the next, or more (NoteComposed), and V-blanks that
+ * came with the display thread not done with any wake for longer than
+ * that (the game's thread, above it on its core, never let it).
+ * sComposeSpan: the longest time from a frame's V-blank to the frame
+ * composed, since the game's thread last took it (NoteSpeed). */
+static u32 sVBlankTick, sComposeHandled, sComposeLate, sComposeSpan;
 static void VBlankMain(void *unused)
 {
     (void)unused;
@@ -579,7 +582,9 @@ static void VBlankMain(void *unused)
         /* (stopped while waiting: the buffers may be going) */
         if(!__atomic_load_n(&sVBlankRunning,__ATOMIC_ACQUIRE))break;
         NitroPort_ComposeVBlank();
-        if(__atomic_load_n(&sComposeHandled,__ATOMIC_ACQUIRE)!=NitroPort_ComposeVBlanks()-1u)
+        __atomic_store_n(&sVBlankTick,(u32)svcGetSystemTick(),__ATOMIC_RELEASE);
+        if((int32_t)(NitroPort_ComposeVBlanks()-1u-__atomic_load_n(&sComposeHandled,__ATOMIC_ACQUIRE))>
+           NitroPort_SpeedComposeEvery())
             __atomic_fetch_add(&sComposeLate,1u,__ATOMIC_RELAXED);
         if(__atomic_load_n(&sGpuWakeReady,__ATOMIC_ACQUIRE))
             LightEvent_Signal(&sGpuWake);
@@ -654,14 +659,30 @@ static void GpuClassicLoop(void)
  * mostly the game's own (Sandgem, a log of 2026-11-10). Now the field's
  * frames that aren't shown don't make their scene, so there's less of the
  * game to fit; the rate goes down when frames do come late (sComposeLate)
- * and up again when the core has the time to spare, NitroPort_SpeedNote
- * (the game's thread, at each halt shown). At 1x as before. */
+ * and up again when they're composed early enough for the rate above,
+ * NitroPort_SpeedNote (the game's thread, at each halt shown). At 1x as
+ * before.
+ *
+ * A frame is late when it isn't composed by the V-blank the next one is
+ * due: at every other V-blank it has two. (The first version counted a
+ * frame late that ran over a single V-blank at any rate, and took the next
+ * frame's turn from when the last was finished, not begun: a town's
+ * frame, 8-10 ms of building after the game's own 5-7 and often a wait
+ * for the GPU's frame before, went over at every other V-blank too, so
+ * the rate fell to every third and then swung between the two every few
+ * seconds, a log of 2026-11-10: "very jumpy".) */
 static int SpeedHalves(void);
-static uint32_t sComposedAt;      /* (the V-blank count when the last frame was composed) */
-static void NoteComposed(void)
+static uint32_t sComposedAt;      /* (the V-blank count at the wake the last frame was composed from) */
+/* A frame composed, from the wake at V-blank count wokenAt, that V-blank
+ * at wokenTick. */
+static void NoteComposed(uint32_t wokenAt,u32 wokenTick)
 {
-    sComposedAt=NitroPort_ComposeVBlanks();
-    __atomic_store_n(&sComposeEndTick,(u32)svcGetSystemTick(),__ATOMIC_RELEASE);
+    u32 span=(u32)svcGetSystemTick()-wokenTick;
+    sComposedAt=wokenAt;
+    if((int32_t)(NitroPort_ComposeVBlanks()-wokenAt)>=NitroPort_SpeedComposeEvery())
+        __atomic_fetch_add(&sComposeLate,1u,__ATOMIC_RELAXED);
+    if(span>__atomic_load_n(&sComposeSpan,__ATOMIC_RELAXED))
+        __atomic_store_n(&sComposeSpan,span,__ATOMIC_RELAXED);
 }
 static bool ComposeWaits(void)
 {
@@ -684,6 +705,7 @@ static void GpuComposeLoop(void)
      * undrawn, 2026-10-20). */
     bool sceneDone=true;
     uint32_t wokenAt=NitroPort_ComposeVBlanks();
+    u32 wokenTick=(u32)svcGetSystemTick();
     while(__atomic_load_n(&sGpuRunning,__ATOMIC_ACQUIRE)){
         bool force,aOnTop;
         int bit,noBuf;
@@ -693,6 +715,7 @@ static void GpuComposeLoop(void)
         LightEvent_Wait(&sGpuWake);
         if(!__atomic_load_n(&sGpuRunning,__ATOMIC_ACQUIRE))break;
         wokenAt=NitroPort_ComposeVBlanks();
+        wokenTick=__atomic_load_n(&sVBlankTick,__ATOMIC_ACQUIRE);
         /* (which screen the 3D's is, once for this wake: the game's thread
          * sets it) */
         aOnTop=sAOnTop;
@@ -713,7 +736,7 @@ static void GpuComposeLoop(void)
                     u64 start=svcGetSystemTick();
                     r=NitroPort_ComposeFrame(scene,seen,aOnTop,osGet3DSliderState(),false,1,0);
                     sGpuTicks+=svcGetSystemTick()-start;
-                    if(r&(COMPOSE_DRAWN_UPPER|COMPOSE_DRAWN_LOWER))NoteComposed();
+                    if(r&(COMPOSE_DRAWN_UPPER|COMPOSE_DRAWN_LOWER))NoteComposed(wokenAt,wokenTick);
                 }
                 __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
                 if(!(r&bit) && (r&noBuf) && NitroPort_Gx3dNewerScenes(seen)<2u){
@@ -791,7 +814,7 @@ static void GpuComposeLoop(void)
                 }
                 r=NitroPort_ComposeFrame(scene,seen,aOnTop,osGet3DSliderState(),force,0,0);
                 sceneDone=scene==NULL || (r&bit) || (!(r&noBuf) && !NitroPort_ComposeSceneWaiting(seen));
-                if(r&(COMPOSE_DRAWN_UPPER|COMPOSE_DRAWN_LOWER))NoteComposed();
+                if(r&(COMPOSE_DRAWN_UPPER|COMPOSE_DRAWN_LOWER))NoteComposed(wokenAt,wokenTick);
             }
             __atomic_store_n(&sComposing,false,__ATOMIC_RELEASE);
             sGpuTicks+=svcGetSystemTick()-start;
@@ -3005,32 +3028,25 @@ static void NoteGameStall(u64 enter)
     lastGeoMicros = geoMicros;
 }
 
-/* A halt shown faster than 1x, its V-blank come: whether the display
- * thread was late for one since the halt before, and how long the core had
- * nothing to do before this one (from when the game began to wait for it,
- * or the display thread finished its frame if that was later; none while
- * it's still at one), for the screens' rate (NitroPort_SpeedNote). A step
- * of the rate goes in the log (the first 64). */
-static void NoteSpeed(u64 waitStart, u64 vblank)
+/* A halt shown faster than 1x, its V-blank come: whether a frame was late
+ * since the halt before, and the longest a frame took from its V-blank to
+ * composed since then (none composed: 0), for the screens' rate
+ * (NitroPort_SpeedNote). A step of the rate goes in the log (the first
+ * 64). */
+static void NoteSpeed(void)
 {
     static u32 lastLate;
     static unsigned lines;
     u32 late = __atomic_load_n(&sComposeLate, __ATOMIC_RELAXED);
-    u64 idle = vblank - waitStart;
-    u32 sinceComposed = (u32)vblank - __atomic_load_n(&sComposeEndTick, __ATOMIC_ACQUIRE);
+    u32 span = __atomic_exchange_n(&sComposeSpan, 0u, __ATOMIC_RELAXED);
     int every = NitroPort_SpeedComposeEvery();
 
-    if (__atomic_load_n(&sComposing, __ATOMIC_ACQUIRE)) {
-        idle = 0;
-    } else if (sinceComposed < idle) {
-        idle = sinceComposed;
-    }
-    NitroPort_SpeedNote(late != lastLate, (unsigned)(idle * 1000000u / SYSCLOCK_ARM11));
+    NitroPort_SpeedNote(late != lastLate, (unsigned)((u64)span * 1000000u / SYSCLOCK_ARM11));
     lastLate = late;
     if (NitroPort_SpeedComposeEvery() != every && lines < 64) {
         lines++;
-        NitroPort_Log("[speed] frame %lu: the screens composed every %d V-blanks now (%d before), at %d halts for each one shown",
-                      sFrame, NitroPort_SpeedComposeEvery(), every, SpeedHalves() / 2);
+        NitroPort_Log("[speed] frame %lu: the screens composed every %d V-blanks now (%d before), at %.1fx",
+                      sFrame, NitroPort_SpeedComposeEvery(), every, SpeedHalves() / 2.0);
     }
 }
 
@@ -3202,7 +3218,7 @@ void NitroPort_OnFrame(void)
             sDeadline = svcGetSystemTick() + FRAME_TICKS;
             vblankWait = sDeadline - FRAME_TICKS - waitStart;
             if (SpeedHalves() > 2) {
-                NoteSpeed(waitStart, sDeadline - FRAME_TICKS);
+                NoteSpeed();
             }
         } else if (now - sDeadline > 3 * FRAME_TICKS) {
             sDeadline = now + FRAME_TICKS;

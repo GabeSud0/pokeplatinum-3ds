@@ -2094,19 +2094,27 @@ screens) the lower screen is the DS's, filling the screen as before.
     where that and the game's frames don't fit the core
     (`NitroPort_SpeedComposeEvery`, `ComposeWaits` in main_3ds.c), and
     then that many fewer of the field's scenes are made too. The rate
-    goes down when the display thread isn't done with a V-blank's wake by
-    the next (`sComposeLate`, counted by the V-blank thread; twice within
-    about half a second), and up again after half a second with none late
-    and the core idle enough for the rate above (`NitroPort_SpeedNote`,
-    at each halt shown: 55% of a V-blank idle for every V-blank, 40% for
-    every second), 4 seconds after the last step at the soonest, longer
+    goes down when a frame isn't composed by the V-blank the next one is
+    due (`sComposeLate`: at every other V-blank a frame has two; twice
+    within about half a second), and up again after half a second with
+    none late and every frame composed early enough for the rate above
+    (`NitroPort_SpeedNote`, at each halt shown: within 65% of a V-blank
+    of its own for every V-blank, within a V-blank and a half for every
+    second), 4 seconds after the last step at the soonest, longer
     each time a step up doesn't hold (to 32 seconds). A step is a
     `[speed]` line in the log; the `[perf] geometry` line counts the
     scenes "not shown at this speed". (Before 2026-11-10 the rate came
     from how long the last frame took to compose, over 7 ms every other
     V-blank and over 14 every third: it kept the game's speed, a log of
     2026-11-05's "fast, then slow, then fast", but the time was mostly
-    the game's own, so towns stayed at 20.) At 1x as before.
+    the game's own, so towns stayed at 20. The first version of the new
+    rule counted a frame late that ran over one V-blank at any rate: a
+    town's frame, 8-10 ms of building after the game's 5-7 and a wait
+    for the GPU's frame before, did at every other V-blank too, so the
+    rate fell to every third and swung between the two every few
+    seconds, "very jumpy", a log of 2026-11-10; the game itself held
+    230-240 frames a second at 4x by then, 1.0-1.9 ms a halt.) At 1x as
+    before.
     SPEED above 1x turns 60 FPS off (when it's on), 1x on again
     unless the player has set 60 FPS since (`fps60_held` in
     `options.txt`). Every start is at 1x (since 2026-10-26): SPEED is

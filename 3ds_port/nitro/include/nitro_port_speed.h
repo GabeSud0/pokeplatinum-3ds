@@ -50,18 +50,20 @@ int NitroPort_FieldSceneWanted(void);
  * its core. (1 at 1x.) */
 int NitroPort_SpeedComposeEvery(void);
 
-/* After each halt shown faster than 1x. late: the display thread wasn't
- * done by the V-blank (since the note before); slackMicros: how long the
- * game's core had nothing to do before this V-blank (0 when late).
+/* After each halt shown faster than 1x. late: a frame was late since the
+ * note before (not composed by the V-blank the next one is due: at every
+ * other V-blank a frame has two); spanMicros: the longest a frame took
+ * from its V-blank to composed since then (0: none composed).
  *
  * Two late within about half a second: a V-blank more between composed
  * frames (3 at most), and with that fewer of the field's scenes (one late
- * alone, a file read's, changes nothing). Half a second with none late and the core idle
- * enough for the next rate up, even if all of its work doubled (3 to 2:
- * came to half as much again): a V-blank fewer, 4 seconds after the last
- * step at the soonest; if that turns out late again within a second and a
- * half, the wait doubles (to 32 seconds at most). */
-void NitroPort_SpeedNote(int late, unsigned slackMicros);
+ * alone, a file read's, changes nothing). Half a second with none late
+ * and every frame composed early enough for the rate above (from 2 to 1:
+ * within 65% of a V-blank; from 3 to 2: within a V-blank and a half): a
+ * V-blank fewer, 4 seconds after the last step at the soonest; if that
+ * turns out late again within a second and a half, the wait doubles (to
+ * 32 seconds at most). */
+void NitroPort_SpeedNote(int late, unsigned spanMicros);
 
 /* As at the start (for the tests). */
 void NitroPort_SpeedReset(void);
