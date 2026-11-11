@@ -3656,6 +3656,12 @@ static void dl_put(DlWriter *wr,unsigned op,const uint32_t *p)
     wr->slots++;
     for(k=0;k<np;k++)wr->out[wr->n++]=p[k];
 }
+/* (what's put next starts a command word of its own: the list can be
+ * sent from there, or up to there; the word left unfilled ends in NOPs) */
+static void dl_break(DlWriter *wr)
+{
+    wr->slots=0;
+}
 /* What left-out groups leave behind, still to send. */
 typedef struct DlOwed {
     uint32_t texcoord, normal, color;
@@ -4194,12 +4200,10 @@ uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *sv,void *dst,uint
 #define TREE_FRONT_SIDE 20
 #define TREE_OVER_FAR 40
 #define TREE_LONGER 6
-#define TREE_BLOB_FOOT 16
-#define TREE_BLOB_TIP 25
+#define TREE_BLOB_RED 16u
 #define TREE_BLOB_BEHIND 8
-#define TREE_BLOB_PAST 6
-#define TREE_BLOB_SIDE 4
-#define TREE_BLOB_LOW 24
+#define TREE_BLOB_PAD 3
+#define TREE_BLOB_LOW 12
 #define TREE_OVER_SIDE 16
 #define TREE_SUN_R 346
 #define TREE_SUN_G 333
@@ -4226,7 +4230,23 @@ typedef struct TreeLeaf {          /* (a standing polygon, for its far side's sh
     int32_t base[3];               /* (where its tree stands) */
     uint8_t n, first, wide;
 } TreeLeaf;
+/* A part of a list made here (the lit layers', the shadows'): the trees
+ * of one square of the map, TREE_CELL units a side, in command words of
+ * their own, and the box their vertices are in. The game's thread sends
+ * the parts the view can see (NitroPort_Gx3dTreeSend). */
+typedef struct TreePart {
+    uint32_t at, words;
+    int32_t lo[3], hi[3];
+} TreePart;
+typedef struct TreeRun { uint32_t first, key; } TreeRun;   /* (a tree's first polygon, and its square) */
+typedef struct TreeParts {
+    TreePart *part;
+    uint32_t n, max, key;
+    int open, any;
+} TreeParts;
 typedef struct TreeShape {
+    TreePart *litPart, *shadowPart;
+    uint32_t nlitPart, nshadowPart, litPartMax, shadowPartMax;
     uint32_t *canopy, *stumps, *tail, *shadow;
     uint32_t canopyBytes, stumpBytes, tailBytes, shadowBytes, shadowCap;
     TreePoly *polys;
@@ -4685,6 +4705,11 @@ static void tree_leaves(TreeShape *sh,const TreeQuad *quads,uint32_t n,int32_t u
     sh->litCap=sh->nleaves*((TREE_VERTS-2u)*3u*7u+8u)+16u;
     sh->lit=malloc(sh->litCap*4u);
     if(!sh->lit){free(sh->leaves);sh->leaves=NULL;sh->nleaves=0;}
+    else{
+        /* (its parts: one a tree at most; without them the list is sent whole) */
+        sh->litPart=calloc(sh->nleaves,sizeof(*sh->litPart));
+        sh->litPartMax=sh->litPart?sh->nleaves:0u;
+    }
 }
 NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists,const uint32_t *bytes,uint32_t count,int32_t posScale)
 {
@@ -4734,6 +4759,10 @@ NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists,const uint3
             sh->ground=malloc(sh->groundCap*4u);
             sh->shadow=malloc(sh->shadowCap*4u);
             if(!sh->shadow){free(sh->polys);sh->polys=NULL;sh->npolys=0;sh->trees=0;}
+            else{
+                sh->shadowPart=calloc(sh->npolys,sizeof(*sh->shadowPart));
+                sh->shadowPartMax=sh->shadowPart?sh->npolys:0u;
+            }
         }
     }
     for(i=0;i<count;i++){dl_free(info[i]);free(quads[i]);}
@@ -4748,6 +4777,7 @@ void NitroPort_Gx3dFreeTreeLists(NitroGx3dTreeLists *t)
         free(t->shape[i].canopy);free(t->shape[i].stumps);free(t->shape[i].tail);
         free(t->shape[i].shadow);free(t->shape[i].polys);
         free(t->shape[i].leaves);free(t->shape[i].lit);free(t->shape[i].stand);free(t->shape[i].ground);
+        free(t->shape[i].litPart);free(t->shape[i].shadowPart);
     }
     free(t);
 }
@@ -4780,14 +4810,74 @@ static int32_t tree_fx(int64_t v)
 {
     return (int32_t)((v+(v>=0?2048:-2048))/4096);
 }
+/* The lists made here in parts (2026-11-11: with the sun shadows on the
+ * game sent 12,000 to 16,700 vertices a scene by a forest, 7,000 to
+ * 13,000 with them off, and the geometry thread took 28 to 33 ms a scene
+ * for 20 to 27, log 9beb471c: 40 to 49 frames a second for 60. Every
+ * loaded block's trees' layers, lit, and their shadows were sent, a list
+ * of vertices a tree: three blocks in four are beside the view, and the
+ * geometry thread passed over each of their trees one by one,
+ * skip_hidden_vertices: a block's lists all out of view took 2.6 times
+ * what the game's own took, measured on a PC with block 077's). A tree's
+ * commands go with those of the trees of its square of the map,
+ * TREE_CELL units a side (8 tiles), a square's in command words of
+ * their own with the box they're in; and the game's thread sends only
+ * the squares the view reaches, NitroPort_Gx3dTreeSend. */
+#define TREE_CELL 128
+static uint32_t tree_cell(const int32_t base[3],int32_t unit)
+{
+    const int64_t cell=(int64_t)TREE_CELL*unit;
+    int64_t cx,cz;
+    if(cell<=0)return 0;
+    cx=base[0]>=0?base[0]/cell:-((cell-1-base[0])/cell);
+    cz=base[2]>=0?base[2]/cell:-((cell-1-base[2])/cell);
+    return ((uint32_t)(cz+0x4000)<<16)|((uint32_t)(cx+0x4000)&0xFFFFu);
+}
+static int tree_run_order(const void *a,const void *b)
+{
+    const TreeRun *x=a,*y=b;
+    return x->key<y->key?-1:x->key>y->key?1:x->first<y->first?-1:x->first>y->first;
+}
+/* (the part being written is done: kept if it has a vertex) */
+static void tree_part_close(TreeParts *ps,const DlWriter *wr)
+{
+    if(ps->open && ps->part && ps->n<ps->max){
+        TreePart *c=&ps->part[ps->n];
+        if(ps->any && wr->n>c->at){c->words=wr->n-c->at;ps->n++;}
+    }
+    ps->open=0;
+}
+/* (before a tree's commands: its square's part gone on with, or begun) */
+static void tree_part_begin(TreeParts *ps,DlWriter *wr,uint32_t key)
+{
+    if(ps->open && ps->key==key)return;
+    tree_part_close(ps,wr);
+    dl_break(wr);
+    ps->key=key;ps->open=1;ps->any=0;
+    if(ps->part && ps->n<ps->max)ps->part[ps->n].at=wr->n;
+}
+static void tree_part_vertex(TreeParts *ps,const int32_t xyz[3])
+{
+    TreePart *c;
+    unsigned k;
+    if(!ps->part || ps->n>=ps->max)return;
+    c=&ps->part[ps->n];
+    for(k=0;k<3u;k++){
+        if(!ps->any || xyz[k]<c->lo[k])c->lo[k]=xyz[k];
+        if(!ps->any || xyz[k]>c->hi[k])c->hi[k]=xyz[k];
+    }
+    ps->any=1;
+}
 const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *t,uint32_t shape,int32_t wayX,int32_t wayZ,uint32_t *bytes)
 {
     TreeShape *sh;
     DlWriter wr;
-    uint32_t i,mode=1u,normal=0,tint=0;
+    uint32_t i,mode=1u,normal=0,tint=0,r,nruns=0;
     int begun=0,hit=0;
     int64_t span;
     int32_t unit;
+    TreeRun whole,*runs;
+    TreeParts ps;
     if(bytes)*bytes=0;
     if(!t || shape>=t->count)return NULL;
     sh=&t->shape[shape];
@@ -4800,12 +4890,35 @@ const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *t,uint32_t shape,i
     sh->litWay[0]=wayX;sh->litWay[1]=wayZ;
     sh->litSet=1;
     sh->litBytes=0;
+    sh->nlitPart=0;
     memset(&wr,0,sizeof(wr));
     wr.out=sh->lit;
     wr.cap=sh->litCap;
     span=(int64_t)(wayX<0?-wayX:wayX)+(wayZ<0?-wayZ:wayZ);
     if(span<=0)span=1;
-    for(i=0;i<sh->nleaves;i++){
+    /* The trees (a tree's polygons: from one that's its first), a square
+     * of the map's together: tree_cell. (Without room for that: as they
+     * come, the list whole.) */
+    memset(&ps,0,sizeof(ps));
+    runs=sh->litPart?malloc(sh->nleaves*sizeof(*runs)):NULL;
+    if(runs){
+        for(i=0;i<sh->nleaves;i++){
+            if(i && !sh->leaves[i].first)continue;
+            runs[nruns].first=i;
+            runs[nruns].key=tree_cell(sh->leaves[i].base,unit);
+            nruns++;
+        }
+        qsort(runs,nruns,sizeof(*runs),tree_run_order);
+        ps.part=sh->litPart;ps.max=sh->litPartMax;
+    }else{
+        whole.first=0;whole.key=0;
+        runs=&whole;nruns=1u;
+    }
+    for(r=0;r<nruns;r++){
+      uint32_t end=runs[r].first+1u;
+      while(end<sh->nleaves && (runs==&whole || !sh->leaves[end].first))end++;
+      tree_part_begin(&ps,&wr,runs[r].key);
+      for(i=runs[r].first;i<end;i++){
         const TreeLeaf *l=&sh->leaves[i];
         const uint32_t want=l->n==4u?1u:0u;
         unsigned count=l->n==4u?4u:(l->n-2u)*3u,k;
@@ -4852,10 +4965,16 @@ const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *t,uint32_t shape,i
             }
             dl_put(&wr,0x22u,&tc);
             dl_vtx16(&wr,l->xyz[v]);
+            tree_part_vertex(&ps,l->xyz[v]);
         }
+      }
+      /* (a tree's list of vertices ends with the tree) */
+      if(begun){dl_put(&wr,0x41u,NULL);begun=0;}
     }
-    if(begun)dl_put(&wr,0x41u,NULL);
+    tree_part_close(&ps,&wr);
+    if(runs!=&whole)free(runs);
     if(wr.full || !wr.n)return NULL;
+    sh->nlitPart=ps.n;
     sh->litBytes=wr.n*4u;
     if(bytes)*bytes=sh->litBytes;
     return sh->lit;
@@ -4865,7 +4984,9 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
 {
     TreeShape *sh;
     DlWriter wr;
-    uint32_t i;
+    uint32_t i,r,nruns=0;
+    TreeRun *runs;
+    TreeParts ps;
     if(bytes)*bytes=0;
     if(!t || shape>=t->count)return NULL;
     sh=&t->shape[shape];
@@ -4878,50 +4999,71 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
     sh->sunSet=1;
     sh->shadowBytes=0;
     sh->groundBytes=0;
+    sh->nshadowPart=0;
     /* A tree's shadow (2026-11-11, on a 3DS: "the bottom part circle needs
      * to be the same color as the rest of the shadow", "the tree shadows
      * need to be longer, the short shadows make the trees feel smaller",
      * "the shape ... shouldnt be so edgy it should be more rounded", "blur
      * it out a little more"; and with the sun shadows on the game sent
      * 5,000 vertices a scene more, the geometry thread 5 to 7 ms a scene
-     * longer, log 9beb471c): one quad a tree, with no pool, floor or
-     * layers' cut-outs. The renderer draws a soft-edged oval in it from
-     * its vertices' colours alone (port_gx3d_pica.c, blob_batch): green
-     * is across it and blue along it, 0 to 31 edge to edge, and red from
-     * TREE_BLOB_FOOT at the tree's end to TREE_BLOB_TIP at the far one,
-     * which narrows and lightens it towards its tip. From
-     * TREE_BLOB_BEHIND behind the stump's middle to the shadows' length
-     * times the tree's height and TREE_BLOB_PAST more, the tree's width
-     * and TREE_BLOB_SIDE either side. The shadows' length for a tree:
-     * TREE_LONGER (in 4ths) the sun's, no less than as long as the tree
-     * is tall, no more than twice. */
+     * longer, log 9beb471c): a quad for each of the tree's polygons (its
+     * tiers), with no texture: the renderer draws a soft-edged oval in
+     * each from its vertices' colours alone (port_gx3d_pica.c,
+     * blob_batch: green is across it and blue along it, 0 to 31 edge to
+     * edge, red TREE_BLOB_RED), and the ovals together are the tree's
+     * shape with its leaves' edge rounded off: wide at the foot, a
+     * narrower one, the top's. (First one oval a tree: "is not one big
+     * rounded shadow per tree, it should still look like a tree but with
+     * rounder shapes".) One colour from the stump out: no pool, no
+     * floor. A tier's oval: as wide as the tier (its flat middle), from
+     * where the tier's foot falls to where its top does and
+     * TREE_BLOB_PAD more at either end; the lowest tier's, back to
+     * TREE_BLOB_BEHIND behind the stump's middle. The shadows' length
+     * for a tree: TREE_LONGER (in 4ths) the sun's, no less than as long
+     * as the tree is tall, no more than twice. */
     stretch=stretch*TREE_LONGER/4;
     if(stretch<4096)stretch=4096;
     if(stretch>8192)stretch=8192;
     memset(&wr,0,sizeof(wr));
     wr.out=sh->shadow;
     wr.cap=sh->shadowCap;
+    /* The trees (a tree's polygons: the same foot), a square of the map's
+     * together, as the lit layers' (tree_cell); without room for that, as
+     * they come and the list whole. */
+    memset(&ps,0,sizeof(ps));
+    runs=malloc(sh->npolys*sizeof(*runs));
+    if(!runs)return NULL;
     for(i=0;i<sh->npolys;){
-        const TreePoly *p=&sh->polys[i];
+        uint32_t j=i;
+        while(j<sh->npolys && sh->polys[j].base[0]==sh->polys[i].base[0] && sh->polys[j].base[2]==sh->polys[i].base[2])j++;
+        runs[nruns].first=i;
+        runs[nruns].key=sh->shadowPart?tree_cell(sh->polys[i].base,t->lift):nruns;
+        nruns++;
+        i=j;
+    }
+    if(sh->shadowPart){
+        qsort(runs,nruns,sizeof(*runs),tree_run_order);
+        ps.part=sh->shadowPart;ps.max=sh->shadowPartMax;
+    }
+    for(r=0;r<nruns;r++){
+        const TreePoly *p=&sh->polys[i=runs[r].first];
         const int32_t unit=t->lift;
-        int32_t half=0,tall=0,xyz[4][3];
-        int64_t along[2],mx,mz,ex,ez;
-        uint32_t j=i,s2,k,quads=1u;
-        int overM=0,overE=0,row=0;
+        int32_t tall=0,low=0x7FFFFFFF;
+        int64_t mx,mz,ex,ez;
+        const int64_t pad=(int64_t)TREE_BLOB_PAD*unit*stretch/4096;
+        uint32_t j=i,s2,k,quads=1u,first=i;
+        int overM=0,overE=0,begun=0;
         /* (its polygons: the same foot) */
         for(;j<sh->npolys && sh->polys[j].base[0]==p->base[0] && sh->polys[j].base[2]==p->base[2];j++){
             const TreePoly *q=&sh->polys[j];
             if(q->fixed)continue;
-            row|=q->row;
             for(k=0;k<q->n;k++){
-                if(q->u[k]>half)half=q->u[k];
-                if(-q->u[k]>half)half=-q->u[k];
                 if(q->h[k]>tall)tall=q->h[k];
+                if(q->h[k]<low)low=q->h[k];
             }
         }
         i=j;
-        /* (a row's bottoms: its tops, another list, have the tree's) */
-        if(tall<5*unit || (row && tall<TREE_BLOB_LOW*unit))continue;
+        if(tall<5*unit)continue;
         /* what can't be seen isn't sent: its middle and its tip behind trees */
         mx=p->base[0]+(int64_t)wayX*stretch/4096*(tall/2)/4096;mz=p->base[2]+(int64_t)wayZ*stretch/4096*(tall/2)/4096;
         ex=p->base[0]+(int64_t)wayX*stretch/4096*tall/4096;ez=p->base[2]+(int64_t)wayZ*stretch/4096*tall/4096;
@@ -4939,30 +5081,55 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
             }
         }
         if(overM && overE)continue;
-        half+=TREE_BLOB_SIDE*unit;
-        along[0]=-(int64_t)TREE_BLOB_BEHIND*unit;
-        along[1]=(int64_t)stretch*tall/4096+(int64_t)TREE_BLOB_PAST*unit;
-        /* (left and right at its foot's end, then right and left at its tip's) */
-        for(k=0;k<4u;k++){
-            const int64_t u=(k==1u||k==2u)?half:-half,d=along[k>=2u];
-            xyz[k][0]=p->base[0]+tree_fx((int64_t)wayZ*u+(int64_t)wayX*d);
-            xyz[k][1]=p->base[1]+t->lift;
-            xyz[k][2]=p->base[2]+tree_fx(-(int64_t)wayX*u+(int64_t)wayZ*d);
-            if(!dl_s16(xyz[k]))break;
+        /* an oval for each of its polygons: a tree's tiers (a list of
+         * vertices a tree) */
+        for(j=first;j<i;j++){
+            const TreePoly *q=&sh->polys[j];
+            int32_t half=0,lo=0x7FFFFFFF,hi=0,xyz[4][3];
+            int64_t along[2];
+            if(q->fixed)continue;
+            for(k=0;k<q->n;k++){
+                if(q->u[k]>half)half=q->u[k];
+                if(-q->u[k]>half)half=-q->u[k];
+                if(q->h[k]<lo)lo=q->h[k];
+                if(q->h[k]>hi)hi=q->h[k];
+            }
+            /* (the oval's flat middle is 7/8 of its quad: as wide as the tier) */
+            half=half*9/8+unit;
+            along[0]=(int64_t)stretch*lo/4096-pad;
+            along[1]=(int64_t)stretch*hi/4096+pad;
+            /* (its lowest tier, from the ground: back over the stump) */
+            if(lo==low && lo<TREE_BLOB_LOW*unit && along[0]>-(int64_t)TREE_BLOB_BEHIND*unit)
+                along[0]=-(int64_t)TREE_BLOB_BEHIND*unit;
+            /* (left and right at its foot's end, then right and left at its tip's) */
+            for(k=0;k<4u;k++){
+                const int64_t u=(k==1u||k==2u)?half:-half,d=along[k>=2u];
+                xyz[k][0]=p->base[0]+tree_fx((int64_t)wayZ*u+(int64_t)wayX*d);
+                xyz[k][1]=p->base[1]+t->lift;
+                xyz[k][2]=p->base[2]+tree_fx(-(int64_t)wayX*u+(int64_t)wayZ*d);
+                if(!dl_s16(xyz[k]))break;
+            }
+            if(k<4u)continue;
+            if(!begun){
+                tree_part_begin(&ps,&wr,sh->shadowPart?runs[r].key:0u);
+                dl_put(&wr,0x40u,&quads);
+                begun=1;
+            }
+            /* (the other way round: lying on the ground it faces up as the
+             * tree's layers face the camera) */
+            for(k=4u;k-->0u;){
+                const uint32_t right=(k==1u||k==2u)?31u:0u,far=k>=2u?31u:0u;
+                uint32_t rgb=TREE_BLOB_RED|(right<<5)|(far<<10);
+                dl_put(&wr,0x20u,&rgb);
+                dl_vtx16(&wr,xyz[k]);
+                tree_part_vertex(&ps,xyz[k]);
+            }
         }
-        if(k<4u)continue;
-        dl_put(&wr,0x40u,&quads);
-        /* (the other way round: lying on the ground it faces up as the
-         * tree's layers face the camera) */
-        for(k=4u;k-->0u;){
-            const uint32_t right=(k==1u||k==2u)?31u:0u,far=k>=2u?31u:0u,red=k>=2u?TREE_BLOB_TIP:TREE_BLOB_FOOT;
-            uint32_t rgb=red|(right<<5)|(far<<10);
-            dl_put(&wr,0x20u,&rgb);
-            dl_vtx16(&wr,xyz[k]);
-        }
-        dl_put(&wr,0x41u,NULL);
+        if(begun)dl_put(&wr,0x41u,NULL);
     }
-    if(!wr.full)sh->shadowBytes=wr.n*4u;
+    tree_part_close(&ps,&wr);
+    free(runs);
+    if(!wr.full){sh->shadowBytes=wr.n*4u;sh->nshadowPart=ps.n;}
     if(bytes)*bytes=sh->shadowBytes;
     return sh->shadowBytes?sh->shadow:NULL;
 }
@@ -4972,6 +5139,73 @@ const void *NitroPort_Gx3dTreeGround(const NitroGx3dTreeLists *t,uint32_t shape,
     if(!t || shape>=t->count || !t->shape[shape].sunSet || !t->shape[shape].groundBytes)return NULL;
     if(bytes)*bytes=t->shape[shape].groundBytes;
     return t->shape[shape].ground;
+}
+/* (on the game's thread) Nothing in a box of a list's coordinates can be
+ * drawn: its corners all outside one side of the view the commands sent
+ * so far make, by the sums skip_hidden_vertices passes over a list of
+ * vertices with (so what's left out here, the geometry thread would have
+ * passed over vertex by vertex: the scene is the same). */
+static int box_hidden(GeoState *g,const int32_t lo[3],const int32_t hi[3])
+{
+    int64_t base[4],edge[3][4];
+    unsigned j,k,outside=0x3fu,behind=0,front=0;
+    ensure_clip(g);
+    for(j=0;j<4;j++){
+        base[j]=(int64_t)lo[0]*g->xf.a[j]+(int64_t)lo[1]*g->xf.a[4+j]+
+                (int64_t)lo[2]*g->xf.a[8+j]+g->xfTrans[j];
+        for(k=0;k<3;k++)edge[k][j]=((int64_t)hi[k]-lo[k])*g->xf.a[k*4+j];
+    }
+    for(k=0;k<8;k++){
+        int64_t c[4];
+        for(j=0;j<4;j++){
+            c[j]=base[j]+((k&1)?edge[0][j]:0)+((k&2)?edge[1][j]:0)+((k&4)?edge[2][j]:0);
+            if(c[j]>=((int64_t)1<<42)||c[j]<=-((int64_t)1<<42))return 0;
+        }
+        if(!(c[0]+c[3]<0))outside&=~1u;
+        if(!(c[0]-c[3]>=4096))outside&=~2u;
+        if(!(c[1]+c[3]<0))outside&=~4u;
+        if(!(c[1]-c[3]>=4096))outside&=~8u;
+        if(!(c[2]+c[3]<0))outside&=~16u;
+        if(!(c[2]-c[3]>=4096))outside&=~32u;
+        if(c[3]<4096)behind++;else front++;
+        if(!outside)return 0;
+    }
+    return !(behind && front);
+}
+/* (see the header) */
+uint32_t NitroPort_Gx3dTreeSend(const NitroGx3dTreeLists *t,uint32_t shape,int shadows)
+{
+    const TreeShape *sh;
+    const uint32_t *list;
+    const TreePart *part;
+    uint32_t n,words,i,sent=0,from=0,to=0;
+    if(!t || shape>=t->count)return 0;
+    sh=&t->shape[shape];
+    if(shadows?!sh->sunSet:!sh->litSet)return 0;
+    list=shadows?sh->shadow:sh->lit;
+    words=(shadows?sh->shadowBytes:sh->litBytes)/4u;
+    part=shadows?sh->shadowPart:sh->litPart;
+    n=shadows?sh->nshadowPart:sh->nlitPart;
+    if(!list || !words)return 0;
+    initialize();
+    /* (no parts, a command half sent, or polygons beside the view wanted:
+     * the list whole) */
+    if(!part || !n || sDec.need>0 || NitroPort_ShadowReachOn() || TAG_KEPT(sTagGame)){
+        NitroPort_GxFifoWords(list,words);
+        return words;
+    }
+    /* (the parts seen that follow one another, in one go) */
+    for(i=0;i<n;i++){
+        if(box_hidden(sResults,part[i].lo,part[i].hi))continue;
+        if(to!=part[i].at){
+            if(to>from)NitroPort_GxFifoWords(list+from,to-from);
+            from=part[i].at;
+        }
+        to=part[i].at+part[i].words;
+        sent+=part[i].words;
+    }
+    if(to>from)NitroPort_GxFifoWords(list+from,to-from);
+    return sent;
 }
 /* (see the header) */
 typedef struct HullPoint { int64_t x,z; int32_t y; } HullPoint;

@@ -2968,20 +2968,28 @@ static void once_batch(const NitroGx3dBatch *batch,int shade,int pass)
  * second. A fragment the stencil turns away costs nearly what one drawn
  * does. Now three draws of far fewer polygons: the game doesn't send
  * what the trees themselves hide.) */
-/* A tree's shadow (NITRO_GX3D_TAG_SHADE batches: a quad a tree, the game's):
- * a soft-edged oval drawn from the vertices' colours alone, no texture.
- * Green is across the quad and blue along it, 0 to 1 edge to edge, red
- * about a half and rising towards the tip; the combiner's DOT3 of the
- * colour with itself is 4 x the squared distance of (red, green, blue)
- * from the middle, 1 on the oval's edge. Then 4 x (1 - that), 1 at most:
- * 1 over the oval's middle, falling to 0 across the outer eighth of it
- * (the soft edge), and sooner and lower towards the tip as red rises (it
- * narrows and lightens there: a shadow's edge is softer the farther it
- * falls). That times what a full shadow takes, NITRO_SHADOW_TREE_BLOB of
- * it; the frame times 1 - it. The same in alpha (DOT3_RGBA puts it
- * there), for the two passes: where it's 1 (BLOB_CORE: the flat middles,
- * alike, so no tree's edge cuts into another's middle), then the rest. */
+/* A tree's shadow (NITRO_GX3D_TAG_SHADE batches: a quad for each of a
+ * tree's tiers, the game's): a soft-edged oval drawn in each from the
+ * vertices' colours alone, no texture; a tree's ovals together are its
+ * shape, rounded. Green is across the quad and blue along it, 0 to 1
+ * edge to edge, red a half; the combiner's DOT3 of the colour with
+ * itself is 4 x the squared distance of (red, green, blue) from the
+ * middle, 1 on the oval's edge. Then 4 x (1 - that), 1 at most: 1 over
+ * the oval's middle, falling to 0 across the outer eighth of it (the
+ * soft edge). That times what a full shadow takes,
+ * NITRO_SHADOW_TREE_BLOB of it; the frame times 1 - it. The same in
+ * alpha (DOT3_RGBA puts it there), for the three passes: where it's 1
+ * (BLOB_CORE: the flat middles, alike, so no oval's edge cuts into
+ * another's middle), then the edges' darker half (BLOB_HALF), then the
+ * rest (BLOB_EDGE). A pixel is darkened once, by the first oval to
+ * reach it: where a tree's tiers' edges cross (its waists) the darker
+ * is wanted, and with the edges in one pass a tier's faintest rim took
+ * pixels from the next tier's edge, light specks in the waists (worked
+ * out at the screen's size from the ovals the real lists give,
+ * 2026-11-11: 7 to 28 pixels a tree a quarter of a shadow or more too
+ * light; with the half between, 0 to 10). */
 #define BLOB_CORE 250
+#define BLOB_HALF 128
 #define BLOB_EDGE 8
 static void blob_batch(const NitroGx3dBatch *batch)
 {
@@ -3019,16 +3027,16 @@ static void draw_once_batches(void)
     int pass;
     /* (and last a building's shadow's soft edge, NITRO_GX3D_TAG_RIM: its
      * grey falls to none across it; only where no shadow is yet. A tree's
-     * shadow, the two passes between: its oval's flat middle, then its
-     * soft edge; blob_batch) */
-    for(pass=0;pass<4 && sShadeBatches;pass++){
-        const uint32_t want=pass==0?NITRO_GX3D_TAG_GROUND:pass==3?NITRO_GX3D_TAG_RIM:NITRO_GX3D_TAG_SHADE;
-        C3D_AlphaTest(true,GPU_GEQUAL,pass==1?BLOB_CORE:pass==2?BLOB_EDGE:128);
+     * shadow, the three passes between: its ovals' flat middles, then
+     * their soft edges' darker half, then the rest; blob_batch) */
+    for(pass=0;pass<5 && sShadeBatches;pass++){
+        const uint32_t want=pass==0?NITRO_GX3D_TAG_GROUND:pass==4?NITRO_GX3D_TAG_RIM:NITRO_GX3D_TAG_SHADE;
+        C3D_AlphaTest(true,GPU_GEQUAL,pass==1?BLOB_CORE:pass==2?BLOB_HALF:pass==3?BLOB_EDGE:128);
         for(b=0;b<sPreparedBatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
             if(batch->tag!=want || batch->translucent)continue;
             if(!room_for_draw())break;
-            if(pass==1 || pass==2)blob_batch(batch);
+            if(pass>=1 && pass<=3)blob_batch(batch);
             else once_batch(batch,1,-1);
         }
     }

@@ -433,6 +433,19 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *trees, uint32_t shape,
  * NitroPort_Gx3dTreeShadows of the shape, for its sun (call that first).
  * NULL with none. */
 const void *NitroPort_Gx3dTreeGround(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
+/* The shape's lit layers (shadows 0) or its shadows (1), as last made by
+ * NitroPort_Gx3dTreeCanopiesLit or NitroPort_Gx3dTreeShadows (call that
+ * first), sent to the geometry engine as NitroPort_GxFifoWords would send
+ * the list, but for the trees the view can't see: the lists are made in
+ * parts, the trees of a square of the map (8 tiles a side) together, and
+ * a part whose box is all outside one side of the view, with the matrices
+ * as the commands sent so far leave them, isn't sent. The scene is the
+ * same as with the whole list (the engine passes over such trees itself,
+ * one by one); the game's thread and the geometry thread have less to
+ * read. The whole list while polygons beside the view are kept for
+ * shadows. On the game's thread, between commands (after
+ * NNS_G3dGeFlushBuffer); the words sent. */
+uint32_t NitroPort_Gx3dTreeSend(const NitroGx3dTreeLists *trees, uint32_t shape, int shadows);
 uint32_t NitroPort_Gx3dTreeCount(const NitroGx3dTreeLists *trees, uint32_t shape);
 /* An MTX_TRANS (x, y, z: as its parameters, fx32) packed for a display
  * list, into dst: its bytes (16), 0 if it doesn't fit. */

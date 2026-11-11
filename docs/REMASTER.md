@@ -3933,19 +3933,47 @@ then the small props and the land's trees; houses and the scenery later.
   The cost is how much is sent: every loaded block's trees' shadow
   lists and re-sent layers, most of it out of view and passed over,
   but read.
-  - A tree's shadow is one quad now, with no texture: a soft-edged oval
-    the renderer draws from the corners' colours alone (blob_batch,
-    port_gx3d_pica.c: the combiner's DOT3 of the colour with itself is
-    the squared distance from the quad's middle; 4 x (1 - it) is flat
-    over the oval and falls to nothing across its outer eighth; red
-    rising towards the tip narrows and lightens it there). No layers'
-    cut-outs, no pool, no forest's floor: one colour from the stump out
-    (0.85 of the characters' darkening at their feet), rounded, its
-    edge soft, softer towards the tip. Half as long again as the sun's
-    shadows (TREE_LONGER), no shorter than the tree is tall, no longer
-    than twice. Two passes, a pixel darkened once: the ovals' flat
-    middles, then their edges. A quarter of the polygons and under a
-    quarter of the words the layers' shadows took.
+  - A tree's shadow is a quad for each of its tiers now (three a tree
+    standing alone; a row's tree, its bottom's and its top's), with no
+    texture: a soft-edged oval the renderer draws in each from the
+    corners' colours alone (blob_batch, port_gx3d_pica.c: the
+    combiner's DOT3 of the colour with itself is the squared distance
+    from the quad's middle; 4 x (1 - it) is flat over the oval and
+    falls to nothing across its outer eighth). The ovals together are
+    the tree's shape, rounded: wide at the foot, a narrower one, the
+    top's. (First one oval a tree, shown as a preview: "is not one big
+    rounded shadow per tree, it should still look like a tree but with
+    rounder shapes".) A tier's oval: as wide as the tier, from where
+    its foot falls to where its top does and 3 units more at either end
+    (TREE_BLOB_PAD), the lowest back to 8 units behind the stump's
+    middle. No layers' cut-outs, no pool, no forest's floor: one colour
+    from the stump out (0.85 of the characters' darkening at their
+    feet). Half as long again as the sun's shadows (TREE_LONGER), no
+    shorter than the tree is tall, no longer than twice. Three passes,
+    a pixel darkened once: the ovals' flat middles, their edges' darker
+    half, the rest (with the edges in one pass a tier's faintest rim
+    took pixels from the next tier's edge: light specks in a tree's
+    waists, 7 to 28 pixels a tree worked out at the screen's size from
+    the ovals the real lists give; with the half between, 0 to 10).
+    Three quads a tree, no texture.
+  - The trees' lists sent in parts: the lit layers' and the shadows'
+    lists are made with a tree's commands beside those of the other
+    trees of its square of the map (8 tiles a side), each square's in
+    command words of its own with the box its vertices are in, and the
+    game's thread sends only the squares the view reaches
+    (NitroPort_Gx3dTreeSend; patch 0139, Port_LandTreeParts). Every
+    loaded block's lists were sent whole, a list of vertices a tree, and
+    three blocks in four are beside the view: the geometry thread
+    passed over their trees one at a time (and the game's thread copied
+    them). What's left out is what the engine would have passed over:
+    the scene is the same, triangle for triangle (the host test compares
+    them). Measured on a PC with block 077's three tree shapes, a scene
+    of them alone: all out of view, the game's own lists 19 us, the lit
+    layers, stumps and shadows whole 51, in parts 10; in the middle of
+    the view 35, 101 and 73 (394 triangles for the game's 149: a row's
+    polygon is a tree at a time, and the shadows). Four blocks, one in
+    view: 92 for the game's own lists, 254 whole, 103 in parts. Not yet
+    on a 3DS.
   - Every tree's layers lit alike: a vertex's tint by its place in the
     whole tree (left or right of where it stands, and up it by its
     height above the ground), whichever polygon it's of; no tree
