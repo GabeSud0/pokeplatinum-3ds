@@ -56,6 +56,11 @@ BOOL NitroPort_IsPakOpen(void)
     return sPak != NULL ? TRUE : FALSE;
 }
 
+BOOL NitroPort_IsGerman(void)
+{
+    return (sPak != NULL && pak_is_german(sPak)) ? TRUE : FALSE;
+}
+
 static const char *space(const char *p)
 {
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;

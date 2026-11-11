@@ -17,6 +17,7 @@ from pathlib import Path
 SUPPORTED = {
     "0862ec35b24de5c7e2dcb88c9eea0873110d755c": "Pokémon Platinum (USA) Rev 1",
     "ce81046eda7d232513069519cb2085349896dec7": "Pokémon Platinum (USA) Rev 0",
+    "d40f19ac24d67c721a4ab25e1c013154443d75b4": "Pokémon Platinum (Germany)",
 }
 
 

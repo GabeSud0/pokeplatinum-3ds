@@ -285,7 +285,8 @@ async function loadRelease() {
 function init() {
   lang = pickLanguage(params.get("lang") || storage((s) => s.getItem("lang")), navigator.languages);
   $("lang").addEventListener("click", () => {
-    lang = Object.keys(STRINGS).find((l) => l !== lang);
+    const langs = Object.keys(STRINGS);
+    lang = langs[(langs.indexOf(lang) + 1) % langs.length];
     storage((s) => s.setItem("lang", lang));
     applyLanguage();
   });

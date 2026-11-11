@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from builder.extract_rom import extract, parse_nitrofs
+from builder.extract_rom import GERMAN_PATHS, extract, parse_nitrofs
 
 
 def synthetic_nds():
@@ -74,6 +74,11 @@ class NitroFSTests(unittest.TestCase):
             rom.write_bytes(synthetic_nds())
             with self.assertRaisesRegex(ValueError, "overwrite the ROM"):
                 extract(rom, Path(tmp), verify=False)
+
+    def test_german_paths_remapped(self):
+        self.assertEqual(len(GERMAN_PATHS), 32)
+        self.assertEqual(GERMAN_PATHS["resource/ger/bag/pl_bag_gra.narc"], "graphic/pl_bag_gra.narc")
+        self.assertEqual(GERMAN_PATHS["resource/ger/title/titledemo.narc"], "demo/title/titledemo.narc")
 
 
 if __name__ == "__main__":

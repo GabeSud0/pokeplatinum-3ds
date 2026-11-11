@@ -50,16 +50,20 @@ class Site(unittest.TestCase):
         self.assertEqual(clean_notes(None), "")
 
     def test_every_page_string_in_both_languages(self):
-        # Every data-i18n key in index.html is in i18n.mjs, in English and Spanish.
+        # Every data-i18n key in index.html is in i18n.mjs, in English, Spanish and German.
         import re
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         i18n = (ROOT / "web" / "js" / "i18n.mjs").read_text(encoding="utf-8")
         keys = set(re.findall(r'data-i18n(?:-html)?="([^"]+)"', html))
-        en, es = i18n.split("\n  es: {")
+        en, rest = i18n.split("\n  es: {")
+        es, de = rest.split("\n  de: {")
         for key in keys:
             self.assertIn(f'"{key}":', en, key)
             self.assertIn(f'"{key}":', es, key)
-        self.assertEqual(set(re.findall(r'^    "([\w.]+)":', en, re.M)), set(re.findall(r'^    "([\w.]+)":', es, re.M)))
+            self.assertIn(f'"{key}":', de, key)
+        en_keys = set(re.findall(r'^    "([\w.]+)":', en, re.M))
+        self.assertEqual(en_keys, set(re.findall(r'^    "([\w.]+)":', es, re.M)))
+        self.assertEqual(en_keys, set(re.findall(r'^    "([\w.]+)":', de, re.M)))
 
 
 if __name__ == "__main__":
