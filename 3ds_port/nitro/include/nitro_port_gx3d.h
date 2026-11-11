@@ -291,10 +291,13 @@ uint32_t NitroPort_Gx3dSameScenesLeftOut(void);
  * (off): for the game's frames that won't be shown, faster than 1x
  * (nitro_port_speed.h). As a scene the thread is behind on: its commands
  * leave their state behind, its vertices aren't worked out, nothing is
- * published, and the scene before stays on the screen. Set between two
- * scenes (after one's SWAP_BUFFERS, before the next one's first vertices),
- * on the game's thread. 1 if it's as asked (0: on asked for without the
- * geometry thread, where none is left out). */
+ * published, and the scene before stays on the screen. On the game's
+ * thread, between two scenes (after one's SWAP_BUFFERS, before the next
+ * one's first vertices); off asked for in the middle of a scene with
+ * vertices left out already is off from that scene's SWAP_BUFFERS on (the
+ * whole scene left out, not half of it published). 1 if it's as asked now
+ * (0: on asked for without the geometry thread, where none is left out,
+ * or off still to come). */
 int NitroPort_Gx3dLeaveOut(int on);
 /* Scenes left out that way so far (not those the thread was behind on as
  * well): counted on the game's thread. */

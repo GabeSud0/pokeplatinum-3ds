@@ -6,14 +6,15 @@
 
 /* A V-blank, in microseconds (59.8 a second). */
 #define FRAME_MICROS 16715u
-/* Every frame composed that soon after its V-blank, for a V-blank fewer
- * between composed frames. From 2 to 1 within 65% of a V-blank: at 1 it
- * must be within one, with a scene of the field's more to send in each
- * (a town at 4x, worked out from a log's game and building times, not
- * measured: about 72% at every other V-blank didn't hold at every one,
- * about 49% did). From 3 to 2 within a V-blank and a half of the two
- * it then has. */
-#define SPAN_2_TO_1 (FRAME_MICROS * 65u / 100u)
+/* Faster than 1x the screens are composed every other V-blank at the
+ * soonest: the same rate in a cave as in a town. (Every V-blank where it
+ * fit was tried first, 2026-11-10: light maps at 60 frames a second and
+ * towns at 30 is felt as the game slowing down on the way into a town,
+ * and each step between the two, 28 of them in a quarter of an hour, as a
+ * dip, most of them where a new map came into view with its sign.) Every
+ * third when a frame takes over two V-blanks, and back when every frame
+ * in half a second was composed within a V-blank and a half. */
+#define EVERY_LEAST 2
 #define SPAN_3_TO_2 (FRAME_MICROS * 150u / 100u)
 #define EVERY_MOST 3
 /* Late frames: each counts LATE_WEIGHT, a halt shown takes 1 off; a V-blank
@@ -100,6 +101,9 @@ int NitroPort_SpeedHalt(int halves)
         }
         shown = 1;
     } else {
+        if (sEvery < EVERY_LEAST) {
+            set_every(EVERY_LEAST);
+        }
         sCredit += 2;
         if (sCredit >= halves) {
             sCredit -= halves;
@@ -202,8 +206,8 @@ void NitroPort_SpeedNote(int late, unsigned spanMicros)
         sWindowSpan = spanMicros;
     }
     if (++sWindowHalts >= WINDOW) {
-        if (sEvery > 1 && sWindowLate == 0 && sLateLevel == 0 && sWait == 0 && sWindowSpan != 0 &&
-            sWindowSpan <= (sEvery == 2 ? SPAN_2_TO_1 : SPAN_3_TO_2)) {
+        if (sEvery > EVERY_LEAST && sWindowLate == 0 && sLateLevel == 0 && sWait == 0 && sWindowSpan != 0 &&
+            sWindowSpan <= SPAN_3_TO_2) {
             set_every(sEvery - 1);
             sTrial = TRIAL;
             sWait = WAIT_LEAST;

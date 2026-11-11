@@ -45,9 +45,9 @@ int NitroPort_SpeedSceneWanted(void);
  * field's frames are the ones left out. */
 int NitroPort_FieldSceneWanted(void);
 
-/* V-blanks from one composed frame to the next, faster than 1x: 1, or 2 or
- * 3 where the game's frames and a composed frame every V-blank don't fit
- * its core. (1 at 1x.) */
+/* V-blanks from one composed frame to the next. 1 at 1x. Faster than 1x:
+ * 2 everywhere (30 frames a second, the same in a cave as in a town), or
+ * 3 while frames take over two V-blanks. */
 int NitroPort_SpeedComposeEvery(void);
 
 /* After each halt shown faster than 1x. late: a frame was late since the
@@ -55,14 +55,12 @@ int NitroPort_SpeedComposeEvery(void);
  * other V-blank a frame has two); spanMicros: the longest a frame took
  * from its V-blank to composed since then (0: none composed).
  *
- * Two late within about half a second: a V-blank more between composed
- * frames (3 at most), and with that fewer of the field's scenes (one late
- * alone, a file read's, changes nothing). Half a second with none late
- * and every frame composed early enough for the rate above (from 2 to 1:
- * within 65% of a V-blank; from 3 to 2: within a V-blank and a half): a
- * V-blank fewer, 4 seconds after the last step at the soonest; if that
- * turns out late again within a second and a half, the wait doubles (to
- * 32 seconds at most). */
+ * Two late within about half a second: every third V-blank, and with that
+ * fewer of the field's scenes (one late alone, a file read's, changes
+ * nothing). Half a second with none late and every frame composed within
+ * a V-blank and a half: every other again, 4 seconds after the last step
+ * at the soonest; if that turns out late again within a second and a
+ * half, the wait doubles (to 32 seconds at most). */
 void NitroPort_SpeedNote(int late, unsigned spanMicros);
 
 /* As at the start (for the tests). */

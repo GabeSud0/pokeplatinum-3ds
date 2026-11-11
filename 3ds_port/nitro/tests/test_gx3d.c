@@ -2207,6 +2207,29 @@ static void test_thread_leave_out(void)
     CHECK(skipped-skippedBefore==2);
     CHECK(NitroPort_Gx3dSpeedScenesLeftOut()-speedBefore==2);
     CHECK(NitroPort_Gx3dSameScenesLeftOut()==sameBefore);
+    /* Turned off in the middle of a scene with vertices left out already
+     * (E): off from its SWAP_BUFFERS on, the whole of E left out (not
+     * published with only its second triangle), D still on the screen;
+     * F drawn. Off again before any vertex: at once. */
+    CHECK(NitroPort_Gx3dLeaveOut(1)==1);
+    triangle(0,RGB(0,31,31));
+    CHECK(NitroPort_Gx3dLeaveOut(0)==0);
+    triangle(0,RGB(31,0,31));swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(31,31,0));
+    CHECK(NitroPort_Gx3dLeaveOut(0)==1);
+    triangle(0,RGB(31,31,31));swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(31,31,31));
+    CHECK(NitroPort_Gx3dSpeedScenesLeftOut()-speedBefore==3);
+    CHECK(NitroPort_Gx3dLeaveOut(1)==1);
+    CHECK(NitroPort_Gx3dLeaveOut(0)==1);
+    triangle(0,RGB(0,0,31));swap();
+    scene=NitroPort_Gx3dScene();
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(0,0,31));
+    CHECK(NitroPort_Gx3dSpeedScenesLeftOut()-speedBefore==3);
 }
 /* A battle's start in the field (NitroPort_FieldEffect): a scene the same
  * as the one before, word for word, has the next left out (the field

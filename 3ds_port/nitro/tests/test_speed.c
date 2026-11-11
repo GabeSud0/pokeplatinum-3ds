@@ -3,8 +3,8 @@
  * at each speed, the field's frames whose scene is wanted (the ones with a
  * halt the screens are composed for), every scene wanted outside the
  * field, at 1x and without the geometry thread, and the screens' rate:
- * down when frames come late, up again when they're composed early enough
- * for the rate above, not back and forth.
+ * every other V-blank above 1x, every third while frames come late, back
+ * when they're composed early enough, not back and forth.
  */
 #include <nitro_port_speed.h>
 #include <stdio.h>
@@ -42,11 +42,11 @@ static int run_frames(int frames, int halts, int halves, int field, int leaveOut
     return wanted;
 }
 
-/* A frame left out has no halt the screens are composed for; a wanted one
- * has (the field at 4x, two halts a frame). */
+/* A frame left out has no halt the screens are composed for (every other
+ * one shown); a wanted one has (the field at 4x, two halts a frame). */
 static void check_wanted_frames_have_the_shown_halt(void)
 {
-    int f, h;
+    int f, h, shownSoFar = 0, wanted = 0;
 
     NitroPort_SpeedReset();
     run_frames(4, 2, 8, 1, 1);
@@ -57,8 +57,11 @@ static void check_wanted_frames_have_the_shown_halt(void)
         for (h = 0; h < 2; h++) {
             shown += NitroPort_SpeedHalt(8);
         }
-        CHECK(w == (shown != 0));
+        CHECK(!w || shown != 0);
+        shownSoFar += shown;
+        wanted += w;
     }
+    CHECK(shownSoFar == 20 && wanted == 10);
 }
 
 static void note(int count, int late, unsigned span)
@@ -94,19 +97,23 @@ int main(void)
     run_frames(60, 2, 8, 0, 1);
     CHECK(sShownHalts == 30);
 
-    /* The field (two halts a frame). 1.5x and 2x: a halt shown in every
-     * frame, every scene wanted. 3x: two of three. 4x: every other. */
+    /* The field (two halts a frame), the screens composed for every other
+     * halt shown: a scene for each of those. 1.5x: 40 of 60 frames'
+     * scenes (two in three); 2x: every other; 3x: one in three; 4x: one in
+     * four. */
     NitroPort_SpeedReset();
     run_frames(4, 2, 3, 1, 1);
-    CHECK(run_frames(60, 2, 3, 1, 1) == 60);
+    CHECK(NitroPort_SpeedComposeEvery() == 2);
+    CHECK(run_frames(60, 2, 3, 1, 1) == 40);
     run_frames(4, 2, 4, 1, 1);
-    CHECK(run_frames(60, 2, 4, 1, 1) == 60);
-    run_frames(4, 2, 6, 1, 1);
-    CHECK(run_frames(60, 2, 6, 1, 1) == 40);
+    CHECK(run_frames(60, 2, 4, 1, 1) == 30);
     CHECK(sLongestRun == 1);
+    run_frames(6, 2, 6, 1, 1);
+    CHECK(run_frames(60, 2, 6, 1, 1) == 20);
+    CHECK(sLongestRun == 2);
     run_frames(4, 2, 8, 1, 1);
-    CHECK(run_frames(60, 2, 8, 1, 1) == 30);
-    CHECK(sLongestRun == 1);
+    CHECK(run_frames(60, 2, 8, 1, 1) == 15);
+    CHECK(sLongestRun == 3);
     check_wanted_frames_have_the_shown_halt();
 
     /* Not the field's frames (a battle, a menu: nothing asked), or no
@@ -144,29 +151,37 @@ int main(void)
         CHECK(NitroPort_SpeedSceneWanted() == 1);
     }
 
-    /* Back at 1x in the middle (the battle's menus hold it): wanted. */
+    /* Back at 1x in the middle (the start menu holds it): wanted from the
+     * first halt at 1x on (the frame it falls in may have been left out:
+     * NitroPort_Gx3dLeaveOut leaves that one out whole). */
     NitroPort_SpeedReset();
     run_frames(5, 2, 8, 1, 1);
+    NitroPort_SpeedFrameBegins(1);
+    NitroPort_FieldSceneWanted();
+    NitroPort_SpeedHalt(2);
+    CHECK(NitroPort_SpeedSceneWanted() == 1);
+    NitroPort_SpeedHalt(2);
     CHECK(run_frames(10, 2, 2, 1, 1) == 10);
 
-    /* The screens' rate. One late frame now and then: every V-blank still. */
+    /* The screens' rate: every other V-blank faster than 1x, whatever the
+     * frames take, as long as they're on time. One late frame now and
+     * then changes nothing. */
     NitroPort_SpeedReset();
-    run_frames(4, 2, 8, 1, 1);
-    note(1, 1, 0);
-    note(40, 0, 12000);
-    note(1, 1, 0);
-    note(40, 0, 12000);
     CHECK(NitroPort_SpeedComposeEvery() == 1);
-    /* Two close together: every other V-blank, and at 4x one scene in four. */
+    run_frames(4, 2, 8, 1, 1);
+    CHECK(NitroPort_SpeedComposeEvery() == 2);
+    note(2000, 0, 3000);
+    CHECK(NitroPort_SpeedComposeEvery() == 2);
+    note(1, 1, 0);
+    note(40, 0, 12000);
+    note(1, 1, 0);
+    note(40, 0, 12000);
+    CHECK(NitroPort_SpeedComposeEvery() == 2);
+    /* Two close together: every third (at 4x one scene in six), and no
+     * further. */
     note(1, 1, 0);
     note(5, 0, 12000);
     note(1, 1, 0);
-    CHECK(NitroPort_SpeedComposeEvery() == 2);
-    run_frames(4, 2, 8, 1, 1);
-    CHECK(run_frames(60, 2, 8, 1, 1) == 15);
-    CHECK(sLongestRun == 3);
-    /* Still late at that: every third (one scene in six), and no further. */
-    note(2, 1, 0);
     CHECK(NitroPort_SpeedComposeEvery() == 3);
     run_frames(6, 2, 8, 1, 1);
     CHECK(run_frames(60, 2, 8, 1, 1) == 10);
@@ -174,57 +189,58 @@ int main(void)
     note(6, 1, 0);
     CHECK(NitroPort_SpeedComposeEvery() == 3);
 
-    /* On time but not early enough for the rate above, or nothing
-     * composed at all: it stays. */
+    /* On time but not within a V-blank and a half, or nothing composed at
+     * all: it stays. */
     note(2016, 0, 26000);
     CHECK(NitroPort_SpeedComposeEvery() == 3);
     note(320, 0, 0);
     CHECK(NitroPort_SpeedComposeEvery() == 3);
-    /* Early enough: a V-blank fewer, then (4 seconds on at the soonest)
-     * another; one frame in the window that isn't keeps it. */
+    /* Early enough for half a second (one frame that isn't keeps it):
+     * every other again, and never every one. */
+    note(31, 0, 20000);
+    note(1, 0, 26000);
+    CHECK(NitroPort_SpeedComposeEvery() == 3);
     note(31, 0, 20000);
     CHECK(NitroPort_SpeedComposeEvery() == 3);
     note(1, 0, 20000);
     CHECK(NitroPort_SpeedComposeEvery() == 2);
-    note(224, 0, 9000);
+    note(2000, 0, 2000);
     CHECK(NitroPort_SpeedComposeEvery() == 2);
-    note(31, 0, 9000);
-    note(1, 0, 12000);
-    CHECK(NitroPort_SpeedComposeEvery() == 2);
-    note(32, 0, 9000);
-    CHECK(NitroPort_SpeedComposeEvery() == 1);
 
-    /* A V-blank fewer that doesn't hold: back, and longer till the next
-     * try each time (4 seconds, then 8). */
+    /* Back to every other that doesn't hold: every third again, and longer
+     * till the next try each time (4 seconds, then 8). */
     NitroPort_SpeedReset();
     run_frames(4, 2, 8, 1, 1);
     note(2, 1, 0);
-    CHECK(NitroPort_SpeedComposeEvery() == 2);
+    CHECK(NitroPort_SpeedComposeEvery() == 3);
     note(240, 0, 9000);
     note(32, 0, 9000);
-    CHECK(NitroPort_SpeedComposeEvery() == 1);
+    CHECK(NitroPort_SpeedComposeEvery() == 2);
     note(2, 1, 0);                    /* (late again at once) */
-    CHECK(NitroPort_SpeedComposeEvery() == 2);
+    CHECK(NitroPort_SpeedComposeEvery() == 3);
     note(448, 0, 9000);               /* (7 seconds: not yet) */
-    CHECK(NitroPort_SpeedComposeEvery() == 2);
+    CHECK(NitroPort_SpeedComposeEvery() == 3);
     note(64, 0, 9000);
-    CHECK(NitroPort_SpeedComposeEvery() == 1);
+    CHECK(NitroPort_SpeedComposeEvery() == 2);
     /* One that holds: the next wait is the short one again. */
     note(200, 0, 12000);
     note(2, 1, 0);
-    CHECK(NitroPort_SpeedComposeEvery() == 2);
+    CHECK(NitroPort_SpeedComposeEvery() == 3);
     note(288, 0, 9000);
-    CHECK(NitroPort_SpeedComposeEvery() == 1);
+    CHECK(NitroPort_SpeedComposeEvery() == 2);
 
     /* At 1x: every V-blank again, and nothing noted. */
     NitroPort_SpeedReset();
     run_frames(4, 2, 8, 1, 1);
     note(2, 1, 0);
-    CHECK(NitroPort_SpeedComposeEvery() == 2);
+    CHECK(NitroPort_SpeedComposeEvery() == 3);
     NitroPort_SpeedHalt(2);
     CHECK(NitroPort_SpeedComposeEvery() == 1);
     note(10, 1, 0);
     CHECK(NitroPort_SpeedComposeEvery() == 1);
+    /* (and above 1x again: every other from its first halt) */
+    NitroPort_SpeedHalt(4);
+    CHECK(NitroPort_SpeedComposeEvery() == 2);
 
     printf("speed: %d checks, %d failures\n", sChecks, sFailures);
     return sFailures ? 1 : 0;

@@ -646,8 +646,10 @@ static void GpuClassicLoop(void)
     }
 }
 /* Faster than 1x (the options page's SPEED) the screens are composed every
- * V-blank where that fits the game's core beside the game's own frames,
- * every second or third where it doesn't (NitroPort_SpeedComposeEvery).
+ * other V-blank everywhere, 30 frames a second in a cave as in a town
+ * (every one where it fit was tried first: the steps between 60 and 30
+ * were felt as dips, 2026-11-10), every third while frames take over two
+ * (NitroPort_SpeedComposeEvery).
  * The display thread is on the game's core, below it, and at 4x the game
  * runs four of its frames a V-blank: in the field outdoors the two didn't
  * fit, the game waited for the frame, and its speed went up and down

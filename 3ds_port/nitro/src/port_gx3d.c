@@ -2408,6 +2408,13 @@ static int sSkipSame;           /* (the next scene left out as the same: RING_SA
  * for. sSpeedLeftOut: those, counted at their SWAP_BUFFERS. */
 static int sLeaveOut;
 static uint32_t sSpeedLeftOut;
+/* Turned off in the middle of a scene that has vertices left out already
+ * (the speed back at 1x between two halts: the start menu opened): off
+ * from its SWAP_BUFFERS on, the whole scene left out. Off at once, the
+ * SWAP_BUFFERS would publish a scene with only what came after: for a
+ * frame, the field without its people, or nothing at all. sLeftOutSome:
+ * the scene being sent has vertices left out that way. */
+static int sLeaveOutEnds, sLeftOutSome;
 /* (a command's flags in the ring: its scene left out, by either) */
 static inline uint32_t scene_flags(void)
 {
@@ -2528,6 +2535,8 @@ static void swap_queued(void)
 {
     uint32_t behind;
     if(sLeaveOut && !sSkipScene)sSpeedLeftOut++;
+    if(sLeaveOutEnds){sLeaveOut=0;sLeaveOutEnds=0;}
+    sLeftOutSome=0;
     sSwapsQueued++;
     publish();
     behind=sSwapsQueued-__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE);
@@ -2559,8 +2568,13 @@ static size_t scan_packets(const uint32_t *words,size_t count,int *swapped)
         uint32_t word=words[i];
         unsigned o0=word&255u,o1=(word>>8)&255u,o2=(word>>16)&255u,o3=word>>24;
         size_t total=1u+sParamCount[o0]+sParamCount[o1]+sParamCount[o2]+sParamCount[o3];
+        unsigned any;
         if(i+total>count)break;
-        if(sShadowOps[o0]|sShadowOps[o1]|sShadowOps[o2]|sShadowOps[o3]){
+        any=sShadowOps[o0]|sShadowOps[o1]|sShadowOps[o2]|sShadowOps[o3];
+        /* (vertices, normals or a BEGIN_VTXS: what a scene left out leaves
+         * out, sLeftOutSome) */
+        if((any&16u) && sLeaveOut)sLeftOutSome=1;
+        if(any&15u){
             const uint32_t *p=&words[i+1];
             int k;
             for(k=0;k<4;k++){
@@ -2602,7 +2616,10 @@ static void produce(unsigned op,const uint32_t *p)
     /* A scene the thread can't keep up with is left out (its vertices and
      * normals aren't worked out, and it isn't shown): the game keeps its
      * speed, and the sound its time, whatever the 3D costs. */
-    if((op>=0x21u && op<=0x28u && op!=0x22u) || op==0x50u)flags=scene_flags();
+    if((op>=0x21u && op<=0x28u && op!=0x22u) || op==0x50u){
+        flags=scene_flags();
+        if(sLeaveOut && op!=0x50u)sLeftOutSome=1;
+    }
     if(op==0x50u)swap_noted();
     enqueue(op,p,n,flags);
     if(op==0x50u)swap_queued();
@@ -3114,6 +3131,7 @@ void NitroPort_Gx3dStartThread(const NitroGx3dThreadOps *ops)
         for(op=0x70u;op<=0x72u;op++)sShadowOps[op]=2u;
         sShadowOps[0x60]=8u;   /* the viewport: its width (a wide view) */
         sShadowOps[0x50]=4u;
+        for(op=0x21u;op<=0x28u;op++)if(op!=0x22u)sShadowOps[op]=16u;   /* (not the game's thread's: only noted) */
     }
     sShadow=s;
     sResults=&sShadow;
@@ -3126,7 +3144,7 @@ void NitroPort_Gx3dStopThread(void)
     sThreaded=0;
     sResults=&s;    /* the same matrices as the shadow's */
     sSkipScene=0;
-    sLeaveOut=0;
+    sLeaveOut=0;sLeaveOutEnds=0;sLeftOutSome=0;
     refresh_status(&s);
 }
 void NitroPort_Gx3dFlush(void)
@@ -3165,7 +3183,15 @@ int NitroPort_Gx3dLeaveOut(int on)
 {
     /* (without the thread a scene is worked out as its commands come: none
      * is left out) */
-    sLeaveOut=on && sThreaded && !sOps.keep_every_scene;
+    if(on && sThreaded && !sOps.keep_every_scene){
+        sLeaveOut=1;
+        sLeaveOutEnds=0;
+    }else if(sLeaveOut && sLeftOutSome){
+        sLeaveOutEnds=1;   /* (from this scene's SWAP_BUFFERS on) */
+    }else{
+        sLeaveOut=0;
+        sLeaveOutEnds=0;
+    }
     return sLeaveOut==(on!=0);
 }
 uint32_t NitroPort_Gx3dSpeedScenesLeftOut(void)
