@@ -199,7 +199,7 @@ void NitroPort_Gx3dRasterizeSceneAlpha(const NitroGx3dScene *scene,uint16_t *rgb
         for(i=0;i<n;i++){
             /* (a sun shadow lying on the ground, NITRO_GX3D_TAG_SHADE: the
              * 3DS's renderer's; here there are none) */
-            if(scene->triangles[order[i]].tag==NITRO_GX3D_TAG_SHADE)continue;
+            if(NITRO_GX3D_TAG_IS_SHADE(scene->triangles[order[i]].tag))continue;
             raster_triangle(&scene->triangles[order[i]],rgba555);
         }
     }

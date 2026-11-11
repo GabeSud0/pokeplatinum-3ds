@@ -428,6 +428,11 @@ const void *NitroPort_Gx3dTreeTail(const NitroGx3dTreeLists *trees, uint32_t sha
 const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *trees, uint32_t shape, int32_t wayX, int32_t wayZ,
                                       int32_t stretch, uint32_t *bytes);
 /* (how many trees the shape's shadows are of: rows counted a tree each 32 units) */
+/* The shape's trees' shadows where they stand (a pool, or a forest's
+ * floor), for NITRO_GX3D_TAG_GROUND: made with the last
+ * NitroPort_Gx3dTreeShadows of the shape, for its sun (call that first).
+ * NULL with none. */
+const void *NitroPort_Gx3dTreeGround(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
 uint32_t NitroPort_Gx3dTreeCount(const NitroGx3dTreeLists *trees, uint32_t shape);
 /* An MTX_TRANS (x, y, z: as its parameters, fx32) packed for a display
  * list, into dst: its bytes (16), 0 if it doesn't fit. */
@@ -513,6 +518,10 @@ void NitroPort_Gx3dTag(uint32_t tag);
  * the game's own shadow under the tree. */
 #define NITRO_GX3D_TAG_PROP 0xC0000000u
 #define NITRO_GX3D_TAG_SHADE 0x40000000u
+/* (the shadows on the ground where a tree stands, its pool or a forest's
+ * floor: drawn before the layers' shadows, once; NitroPort_Gx3dTreeGround) */
+#define NITRO_GX3D_TAG_GROUND 0x40000008u
+#define NITRO_GX3D_TAG_IS_SHADE(tag) (((tag)&~8u)==NITRO_GX3D_TAG_SHADE)
 #define NITRO_GX3D_TAG_STUMP 0x40000002u
 /* (a tree's layers with their far side from the sun shaded: under this
  * mark a COLOR command isn't the vertices' colour but what their lit

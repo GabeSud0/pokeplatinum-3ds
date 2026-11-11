@@ -1134,7 +1134,7 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
     for(b=0;b<count;b++){
         const NitroGx3dBatch *batch=&batches[b];
         uint32_t i;
-        if(batch->tag!=NITRO_GX3D_TAG_SHADE)continue;
+        if(!NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
         for(i=0;i+3u<=batch->count && nt<DARKEN_VERTS/3u;i+=3u){
             unsigned k,ok=1;
             for(k=0;k<3u;k++){

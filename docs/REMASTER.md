@@ -3812,6 +3812,41 @@ then the small props and the land's trees; houses and the scenery later.
     shadow polygons' own cut-outs aren't looked at (their corners
     count). The log's [shadow] line: the sprites darkened a scene.
   - Building shadows: not yet, the next part.
+  Then on a 3DS (log ee95424e): "the forest shadows have has a square
+  effect it looks strange, could we perhaps increase the brightness on
+  the unshaded part of the tree so it looks like it was being
+  iilluminated by sunlight", and "performance ... feels quite bad". By
+  a forest 36 to 40 frames a second for 60: the frames' building 12 to
+  14.5 ms for 6 to 7 and the GPU 11 to 12.7 ms for 6, the geometry
+  thread 82 to 85% busy but 10 to 12 scenes a second left out (the
+  screens couldn't take them). Every tree's four shadow polygons were
+  drawn four times (the passes), in a forest most of them where the
+  trees' own layers stand: a fragment the stencil turns away costs the
+  GPU nearly what one drawn does.
+  - A forest's floor is the patch's shape (the stump's polygon's
+    texture again, 21 units either side and 15 before and behind), not
+    a square 17 either side: in front of a tree at the forest's edge
+    the ground shows, and the square did.
+  - What can't be seen isn't sent (NitroPort_Gx3dTreeShadows, for a
+    sun): a tree's pool or floor with another tree standing 8 to 40
+    units in front of it, within 20 to the side (that one's layers
+    stand over it); a forest's tree's layers' shadows with another
+    forest's tree down the light's way (8 to 44 units, within 20
+    across: they fall on its floor, under its layers), unless the
+    shadows are over 60 units long. Any shape's trees count now, a
+    row's each. On the real lists, Veilstone's block: 84 shadow polygons
+    of 352; another block's: 166 of 440.
+  - The pools and floors are a list of their own
+    (NitroPort_Gx3dTreeGround, marked NITRO_GX3D_TAG_GROUND), drawn
+    first and once; the layers' shadows then in two passes (the texel's
+    alpha x the grey at least 0.62, then all): three draws for four,
+    of a quarter to a third of the polygons.
+  - The sunlit side: the layers' tints are half what the colour is
+    times, and the renderer draws NITRO_GX3D_TAG_CANOPY batches at twice
+    their colour (the combiner's scale), so a tint can be over 1: up to
+    1.35, 1.30, 1.10 at the corner the light comes to, where no tree
+    shades it; the far side and a shaded tree's foot as before. (The
+    PC's rasteriser doesn't: there the layers are half as bright.)
   On a 3DS since (log 375a6403, by the Galactic building, mono, the
   same spot): with the sun shadows 49 to 58 frames a second, the
   geometry thread 28.9 to 32.6 ms a scene (88 to 98% busy), 1 to 6

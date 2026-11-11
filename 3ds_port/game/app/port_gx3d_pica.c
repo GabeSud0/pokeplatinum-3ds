@@ -1046,6 +1046,15 @@ static void set_combiner(uint32_t attr,int textured)
 {
     polygon_combiner(C3D_GetTexEnv(0),attr,textured,GPU_TEXTURE0);
 }
+/* A tree's layers lit by the sun (NITRO_GX3D_TAG_CANOPY batches: the game
+ * sends them with a tint a vertex, darker on the side the light leaves,
+ * brighter on the one it comes to): the tints are half what the colour is
+ * times, so one over 1 can be told; drawn at twice their colour. After
+ * the batch's combiner is set. */
+static void canopy_scale(const NitroGx3dBatch *batch)
+{
+    if(batch->tag==NITRO_GX3D_TAG_CANOPY)C3D_TexEnvScale(C3D_GetTexEnv(0),C3D_RGB,GPU_TEVSCALE_2);
+}
 
 /* DS 5-bit colour to 8 bits. */
 static u32 widen5(u32 v)
@@ -1427,7 +1436,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
         int textured=batch->texture_param!=0;
         uint32_t attr=batch->polygon_attr;
         /* (the trees' sun shadows are the compose path's: here, none) */
-        if(batch->tag==NITRO_GX3D_TAG_SHADE)continue;
+        if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
         /* Attribute bit 14: draw where the depth is equal (decals on a
          * surface). The DS allows a small tolerance; LEQUAL is closest. */
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
@@ -1442,6 +1451,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
             }
         }
         set_combiner(attr,textured);
+        canopy_scale(batch);
         batch_fog(attr);
         if(!room_for_draw())break;
         /* The stencil buffer keeps the polygon ID of each pixel's last
@@ -1502,7 +1512,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
             const NitroGx3dBatch *batch=&sBatches[b];
             int textured=batch->texture_param!=0;
             uint32_t attr=batch->polygon_attr;
-            if(batch->tag==NITRO_GX3D_TAG_SHADE)continue;
+            if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
             /* Translucent batches have opaque pixels only at alpha 31:
              * their fully opaque texels. */
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
@@ -1514,6 +1524,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
                 else bind_tex(tex);
             }
             set_combiner(attr,textured);
+            canopy_scale(batch);
             C3D_AlphaTest(true,GPU_GREATER,batch->translucent?254:0);
             C3D_DepthTest(true,GPU_EQUAL,0);
             C3D_StencilTest(true,GPU_ALWAYS,(int)((attr>>24)&63u),0xFF,0xFF);
@@ -1881,7 +1892,7 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
         if(sun){
             float f[3];
             for(b=0;b<sPreparedBatches;b++){
-                if(sBatches[b].tag!=NITRO_GX3D_TAG_SHADE)continue;
+                if(!NITRO_GX3D_TAG_IS_SHADE(sBatches[b].tag))continue;
                 sShadeBatches++;
                 sGroundShadeTris+=sBatches[b].count/3u;
             }
@@ -2085,6 +2096,7 @@ static int bind_batch(const NitroGx3dBatch *batch)
         else bind_tex(tex);
     }
     set_combiner(batch->polygon_attr,textured);
+    canopy_scale(batch);
     return textured;
 }
 
@@ -2104,6 +2116,7 @@ static int bind_batch_shape(const NitroGx3dBatch *batch)
     bind_tex(textured?tex:NULL);
     if(!textured)sBoundCut=0;
     set_combiner(batch->polygon_attr,textured);
+    canopy_scale(batch);
     return textured;
 }
 
@@ -2215,7 +2228,7 @@ static const NitroGx3dPruneResult *prune_for(const PicaView *view,const NitroGx3
     for(b=0;b<sPreparedBatches;b++){
         const NitroGx3dBatch *batch=&sBatches[b];
         uint32_t attr=batch->polygon_attr;
-        if(batch->tag==NITRO_GX3D_TAG_SHADE){
+        if(NITRO_GX3D_TAG_IS_SHADE(batch->tag)){
             sPruneRoles[b]=NITRO_GX3D_PRUNE_OUT;   /* (a shadow on the ground: no outline) */
         }else if(batch->translucent){
             sPruneRoles[b]=((attr>>16)&31u)==31u?NITRO_GX3D_PRUNE_SHAPE:NITRO_GX3D_PRUNE_OUT;
@@ -2506,7 +2519,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             uint32_t attr=batch->polygon_attr;
             int textured;
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
-            if(batch->tag==NITRO_GX3D_TAG_SHADE)continue;
+            if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
             if(pruned && !pruned_any(b,NITRO_GX3D_PRUNE_A,NITRO_GX3D_PRUNE_ZONE_A,scissor))continue;
             if(!room_for_draw())break;
             textured=bind_batch_shape(batch);
@@ -2544,7 +2557,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             int textured;
             unsigned id;
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
-            if(batch->tag==NITRO_GX3D_TAG_SHADE)continue;
+            if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
             if(pruned && !pruned_any(b,NITRO_GX3D_PRUNE_D,NITRO_GX3D_PRUNE_ZONE_B,scissor))continue;
             if(!room_for_draw())break;
             id=(attr>>24)&63u;
@@ -2935,24 +2948,31 @@ static void once_batch(const NitroGx3dBatch *batch,int shade,int pass)
  * even shade from foot to tip read as another colour of grass, not a
  * shadow), and a pixel is still darkened once: where two trees' overlap
  * the darker is wanted, not whichever is drawn first (a tip over the
- * next tree's foot). So the darkest first: the passes of TREE_PASSES draw
- * only where the texel's alpha x the grey is that much, each pixel taken
- * by the first to draw it; the last, wherever the texel is over half
- * opaque as before. Between two in the same band the first drawn still
- * wins: a band is 0.15 to 0.2 of the full shade. */
-static const u8 TREE_PASSES[]={204,158,120};
+ * next tree's foot). So the darkest first:
+ * - the pools and the forests' floors (NITRO_GX3D_TAG_GROUND batches),
+ *   once: they're the darkest there is where they are;
+ * - the layers' shadows where the texel's alpha x the grey is at least
+ *   TREE_PASS (the half nearer the foot), then wherever the texel is
+ *   over half opaque; each pixel taken by the first to draw it.
+ * (First four passes over every shadow polygon, 2026-11-10: in a forest
+ * the GPU's time doubled, 11 to 12.7 ms a frame, 36 to 40 frames a
+ * second. A fragment the stencil turns away costs nearly what one drawn
+ * does. Now three draws of far fewer polygons: the game doesn't send
+ * what the trees themselves hide.) */
+#define TREE_PASS 158
 static void draw_once_batches(void)
 {
     size_t b;
     int pass;
-    for(pass=0;pass<=(int)sizeof(TREE_PASSES) && sShadeBatches;pass++){
-        const int last=pass==(int)sizeof(TREE_PASSES);
-        C3D_AlphaTest(true,GPU_GEQUAL,last?128:TREE_PASSES[pass]);
+    for(pass=0;pass<3 && sShadeBatches;pass++){
+        C3D_AlphaTest(true,GPU_GEQUAL,pass==1?TREE_PASS:128);
         for(b=0;b<sPreparedBatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
-            if(batch->tag!=NITRO_GX3D_TAG_SHADE || batch->translucent || !batch->texture_param)continue;
+            if(batch->tag!=(pass?NITRO_GX3D_TAG_SHADE:NITRO_GX3D_TAG_GROUND) || batch->translucent ||
+               !batch->texture_param)
+                continue;
             if(!room_for_draw())break;
-            once_batch(batch,1,last?-1:pass);
+            once_batch(batch,1,pass==1?0:-1);
         }
     }
     if(sShadeBatches){
@@ -3252,7 +3272,7 @@ static void draw_scene(const PicaView *view)
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(batch->translucent)continue;
         /* (the trees' shadows: after these, draw_ground_shadows) */
-        if(batch->tag==NITRO_GX3D_TAG_SHADE)continue;
+        if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
         if(!room_for_draw())break;
         if(depthOnly){
             /* (as the outlines' moved passes draw them: the shape alone) */
@@ -3296,7 +3316,7 @@ static void draw_scene(const PicaView *view)
         uint32_t attr=batch->polygon_attr;
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(!batch->translucent || ((attr>>16)&31u)!=31u)continue;
-        if(batch->tag==NITRO_GX3D_TAG_SHADE)continue;
+        if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
         if(sShadowReady && shadow_level()>=SHADOW_STEP_READ && sDecal[b])continue;
         if(!room_for_draw())break;
         if(depthOnly){
@@ -3342,7 +3362,7 @@ static void draw_scene(const PicaView *view)
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(!batch->translucent)continue;
         /* (a see-through tree's shadow: none) */
-        if(batch->tag==NITRO_GX3D_TAG_SHADE)continue;
+        if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
         if(sShadowReady && shadow_level()>=SHADOW_STEP_READ && sDecal[b])continue;
         if(!room_for_draw())break;
         parts=batch_parts(batch);
