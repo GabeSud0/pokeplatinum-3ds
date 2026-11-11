@@ -9,8 +9,9 @@
 /* Every frame composed that soon after its V-blank, for a V-blank fewer
  * between composed frames. From 2 to 1 within 65% of a V-blank: at 1 it
  * must be within one, with a scene of the field's more to send in each
- * (measured in a town at 4x: 72% at every other V-blank didn't hold at
- * every one, 49% did). From 3 to 2 within a V-blank and a half of the two
+ * (a town at 4x, worked out from a log's game and building times, not
+ * measured: about 72% at every other V-blank didn't hold at every one,
+ * about 49% did). From 3 to 2 within a V-blank and a half of the two
  * it then has. */
 #define SPAN_2_TO_1 (FRAME_MICROS * 65u / 100u)
 #define SPAN_3_TO_2 (FRAME_MICROS * 150u / 100u)
