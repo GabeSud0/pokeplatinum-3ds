@@ -2733,20 +2733,6 @@ static void test_tree_lists(void)
     n=tree_scene(shadow,nsh,both,sh,400);
     CHECK(n==12);
     CHECK(tree_has(sh,n,-2048,122,1200-58) && tree_has(sh,n,0,122,2400-58) && tree_has(sh,n,2048,122,2400-58));
-    /* (the light to the right: the left tree's shadow falls on the right
-     * one's floor, under its layers: a forest's tree's with another down
-     * the light's way isn't sent; the right one's about its own middle) */
-    shadow=NitroPort_Gx3dTreeShadows(t,1,4096,0,4096,&nsh);
-    tree_view();
-    n=tree_scene(shadow,nsh,both,sh,400);
-    CHECK(n==6);
-    CHECK(tree_has(sh,n,1024+(2400-58),122,1024) && tree_has(sh,n,1024+(2400-58),122,-1024));
-    CHECK(!tree_has(sh,n,-1024+(1200-58),122,1024));
-    /* (unless the shadows are long: past the next tree) */
-    shadow=NitroPort_Gx3dTreeShadows(t,1,4096,0,4096*3/2,&nsh);
-    tree_view();
-    n=tree_scene(shadow,nsh,both,sh,400);
-    CHECK(n>6 && tree_has(sh,n,-1024+(1200-58)*3/2,122,1024));
     /* the row's bottoms, with the stumps in their own list: a trunk a
      * tree too, each from its own stump (the row's two halves and two
      * trunks) */
@@ -2771,7 +2757,7 @@ static void test_tree_lists(void)
     n=tree_scene(shadow,nsh,both,sh,400);
     tree_view();
     gn=tree_scene(ground,ng,both,gr,100);
-    CHECK(n==6 && gn==12 && tree_red(gr,gn,-1024-1344,122,-960)==26 && tree_red(gr,gn,1024+1344,122,960)==26);
+    CHECK(n==12 && gn==12 && tree_red(gr,gn,-1024-1344,122,-960)==26 && tree_red(gr,gn,1024+1344,122,960)==26);
 
     /* the layers with their far side shaded: none for a list with COLOR
      * commands of its own; else the list's standing polygons again, a
@@ -2889,6 +2875,46 @@ static void test_tree_lists(void)
             tree_view();
             gn=tree_scene(ground,ng,both,gr,100);
             CHECK(n==36 && gn==6 && tree_has(gr,gn,-640,122,2048-384) && !tree_has(gr,gn,-640,122,-384));
+            NitroPort_Gx3dFreeTreeLists(f);
+        }
+        /* (four trees in a square 32 units a side, the light to the right
+         * and towards the camera: the back left one's layers' shadows
+         * fall behind the front right one, middle and tip: not sent; the
+         * other three's are. The two at the back: no floor, behind the
+         * front ones.) */
+        c=0;
+        cmds[c++]=0x40;cmds[c++]=1;
+        for(i=0;i<4;i++){
+            int dz=2048*(int)(i>>1),x=2048*(int)(i&1);
+            c+=tree_quad(&cmds[c],x-704,x+704,1843,2650,128+dz,-1024+dz,0,1024);
+            c+=tree_quad(&cmds[c],x-1056,x+1056,1120,2220,464+dz,-1100+dz,0,480);
+            c+=tree_quad(&cmds[c],x-1280,x+1280,406,1654,630+dz,-1146+dz,352,1024);
+            c+=tree_quad(&cmds[c],x-1024,x+1024,58,58,960+dz,-960+dz,544,448);
+        }
+        cmds[c++]=0x41;
+        fb[0]=dl_pack(forest,cmds,c)*4u;
+        f=NitroPort_Gx3dTreeLists(one,fb,1,64<<12);
+        CHECK(f!=NULL && NitroPort_Gx3dTreeCount(f,0)==4);
+        if(f){
+            shadow=NitroPort_Gx3dTreeShadows(f,0,3547,2048,4096,&nsh);
+            ground=NitroPort_Gx3dTreeGround(f,0,&ng);
+            CHECK(shadow && ground && nsh && ng);
+            tree_view();
+            n=tree_scene(shadow,nsh,both,sh,400);
+            /* (a lowest layer's left foot: 0.5 x -1280 + 0.866 x 348 to the
+             * right, 0.866 x 1280 + 0.5 x 348 towards the camera) */
+            CHECK(tree_has(sh,n,2048-339,122,1282) || tree_has(sh,n,2048-338,122,1282));
+            CHECK(!tree_has(sh,n,-339,122,1282) && !tree_has(sh,n,-338,122,1282));
+            tree_view();
+            gn=tree_scene(ground,ng,both,gr,100);
+            CHECK(gn==12 && tree_red(gr,gn,-1344,122,2048-960)==26 && !tree_has(gr,gn,-1344,122,-960));
+            /* (the light the other way: the back right one's, not the
+             * back left one's) */
+            shadow=NitroPort_Gx3dTreeShadows(f,0,-3547,2048,4096,&nsh);
+            tree_view();
+            n=tree_scene(shadow,nsh,both,sh,400);
+            CHECK(tree_has(sh,n,-942,122,-934) || tree_has(sh,n,-941,122,-934));
+            CHECK(!tree_has(sh,n,2048-942,122,-934) && !tree_has(sh,n,2048-941,122,-934));
             NitroPort_Gx3dFreeTreeLists(f);
         }
     }

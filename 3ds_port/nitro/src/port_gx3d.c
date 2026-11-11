@@ -4140,10 +4140,14 @@ uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *sv,void *dst,uint
  * - what can't be seen isn't sent: a tree's pool or floor with another
  *   tree standing in front of it (TREE_FRONT_NEAR to TREE_FRONT_FAR
  *   towards the camera, within TREE_FRONT_SIDE: that one's layers stand
- *   over it); a forest's tree's layers' shadows with another forest's
- *   tree down the light's way (as TREE_CROSS_*: they fall on its floor,
- *   under its layers), unless the shadows are longer than
- *   TREE_SKIP_LONGEST. Any shape's trees count, a row's each;
+ *   over it); a tree's layers' shadows where both their middle and
+ *   their tip, for the sun, are behind a tree (one standing up to
+ *   TREE_OVER_FAR nearer the camera than the point, within
+ *   TREE_OVER_SIDE of it: its layers stand over that ground). Any
+ *   shape's trees count, a row's each. (First "with another forest's
+ *   tree down the light's way": with the light at 45 degrees to a
+ *   square of trees, midday, none was found, and a forest's front row
+ *   lost the shadows it casts on the open ground before it.);
  * - the sunlit side: a layer's tint is up to TREE_SUN_R, _G, _B (in
  *   256ths) at the corner the light comes to, where no tree shades it;
  *   the tints are half what the colour is times (the renderer draws
@@ -4153,7 +4157,8 @@ uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *sv,void *dst,uint
 #define TREE_FRONT_NEAR 8
 #define TREE_FRONT_FAR 40
 #define TREE_FRONT_SIDE 20
-#define TREE_SKIP_LONGEST 60
+#define TREE_OVER_FAR 40
+#define TREE_OVER_SIDE 16
 #define TREE_SUN_R 346
 #define TREE_SUN_G 333
 #define TREE_SUN_B 282
@@ -4830,27 +4835,35 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
             if(!lastSet || p->base[0]!=lastX || p->base[2]!=lastZ){
                 /* (its tree: what of it can't be seen; above) */
                 const int32_t unit=t->lift;
+                /* (the middle and the tip of its layers' shadows) */
+                const int64_t mx=(lastX=p->base[0],lastZ=p->base[2],lastX)+(int64_t)sx*(TREE_FADE_TALL/2)*unit/4096,
+                              mz=lastZ+(int64_t)sz*(TREE_FADE_TALL/2)*unit/4096,
+                              ex=lastX+(int64_t)sx*TREE_FADE_TALL*unit/4096,
+                              ez=lastZ+(int64_t)sz*TREE_FADE_TALL*unit/4096;
                 uint32_t s2,j;
-                int forest=0,down=0;
+                int overM=0,overE=0;
                 lastX=p->base[0];lastZ=p->base[2];lastSet=1;
                 hideGround=0;
                 for(s2=0;s2<t->count;s2++){
                     const TreeShape *o=&t->shape[s2];
                     for(j=0;j<o->nstand;j++){
                         const int64_t dx=o->stand[j][0]-lastX,dz=o->stand[j][1]-lastZ;
-                        int64_t along,across;
-                        if(!dx && !dz){forest|=o->stand[j][2];continue;}
+                        int64_t qx,qz;
+                        if(!dx && !dz)continue;
                         if(dz>(int64_t)TREE_FRONT_NEAR*unit && dz<(int64_t)TREE_FRONT_FAR*unit &&
                            dx<(int64_t)TREE_FRONT_SIDE*unit && -dx<(int64_t)TREE_FRONT_SIDE*unit)
                             hideGround=1;
-                        if(!o->stand[j][2])continue;
-                        along=(dx*wayX+dz*wayZ)/4096;across=(dx*wayZ-dz*wayX)/4096;
-                        if(along>(int64_t)TREE_CROSS_NEAR*unit && along<(int64_t)TREE_CROSS_FAR*unit &&
-                           across<(int64_t)TREE_CROSS_SIDE*unit && -across<(int64_t)TREE_CROSS_SIDE*unit)
-                            down=1;
+                        qx=o->stand[j][0]-mx;qz=o->stand[j][1]-mz;
+                        if(qz>0 && qz<(int64_t)TREE_OVER_FAR*unit && qx<(int64_t)TREE_OVER_SIDE*unit &&
+                           -qx<(int64_t)TREE_OVER_SIDE*unit)
+                            overM=1;
+                        qx=o->stand[j][0]-ex;qz=o->stand[j][1]-ez;
+                        if(qz>0 && qz<(int64_t)TREE_OVER_FAR*unit && qx<(int64_t)TREE_OVER_SIDE*unit &&
+                           -qx<(int64_t)TREE_OVER_SIDE*unit)
+                            overE=1;
                     }
                 }
-                hideLayers=forest && down && (int64_t)TREE_FADE_TALL*stretch/4096<=TREE_SKIP_LONGEST;
+                hideLayers=overM && overE;
             }
             if(pass?hideGround:hideLayers)continue;
             if((p->first || pass) && begun){dl_put(&wr,0x41u,NULL);begun=0;}

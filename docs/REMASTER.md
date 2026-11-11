@@ -3830,12 +3830,19 @@ then the small props and the land's trees; houses and the scenery later.
   - What can't be seen isn't sent (NitroPort_Gx3dTreeShadows, for a
     sun): a tree's pool or floor with another tree standing 8 to 40
     units in front of it, within 20 to the side (that one's layers
-    stand over it); a forest's tree's layers' shadows with another
-    forest's tree down the light's way (8 to 44 units, within 20
-    across: they fall on its floor, under its layers), unless the
-    shadows are over 60 units long. Any shape's trees count now, a
-    row's each. On the real lists, Veilstone's block: 84 shadow polygons
-    of 352; another block's: 166 of 440.
+    stand over it); a tree's layers' shadows where both their middle
+    and their tip, for the sun, are behind a tree (one standing up to
+    40 units nearer the camera than the point, within 16 of it to the
+    side: its layers stand over that ground). Any shape's trees count
+    now, a row's each. On the real lists, Veilstone's block: 96 shadow
+    polygons of 352 at midday, 96 in the afternoon, 90 in the morning;
+    another block's: 142, 139, 142 of 440.
+    (First "a forest's tree's with another forest's tree down the
+    light's way, 8 to 44 units, within 20 across": at midday the light
+    is at 45 degrees to a square of trees and none was found: log
+    ec86e45d, the sun 64 degrees up, still 250 to 470 shadow triangles
+    a scene by a forest and 36 to 45 frames a second. And a forest's
+    front row lost the shadows it casts on the open ground before it.)
   - The pools and floors are a list of their own
     (NitroPort_Gx3dTreeGround, marked NITRO_GX3D_TAG_GROUND), drawn
     first and once; the layers' shadows then in two passes (the texel's
