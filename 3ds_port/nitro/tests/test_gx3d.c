@@ -2590,6 +2590,14 @@ static int tree_red(const TreeCorner *c,unsigned n,int x,int y,int z)
     for(i=0;i<n;i++)if(abs(c[i].x-x)<=1 && abs(c[i].y-y)<=8 && abs(c[i].z-z)<=8)return (int)c[i].r;
     return -1;
 }
+/* (a corner there with those texture coordinates, in texels) */
+static int tree_st(const TreeCorner *c,unsigned n,int x,int y,int z,float s,float t)
+{
+    unsigned i;
+    for(i=0;i<n;i++)
+        if(abs(c[i].x-x)<=1 && abs(c[i].y-y)<=8 && abs(c[i].z-z)<=8 && fabsf(c[i].s-s)<0.1f && fabsf(c[i].t-t)<0.1f)return 1;
+    return 0;
+}
 /* (a corner there with that red, green and blue) */
 static int tree_rgb(const TreeCorner *c,unsigned n,int x,int y,int z,unsigned r,unsigned g,unsigned b)
 {
@@ -2604,12 +2612,7 @@ static int tree_has(const TreeCorner *c,unsigned n,int x,int y,int z)
     for(i=0;i<n;i++)if(abs(c[i].x-x)<=1 && abs(c[i].y-y)<=8 && abs(c[i].z-z)<=8)return 1;
     return 0;
 }
-/* A building's walls under NITRO_GX3D_TAG_WALLS, the light going to the
- * right (the mark's bits 16 to 23: 127): a wall whose NORMAL faces where
- * the light comes from (-x) is 1.21 times its lit colour, one facing
- * where it goes 0.63, a roof 1; halved (the renderer draws them at twice
- * their colour). The lit colour here the material's own light, 16 of 31:
- * 10, 5, 8. A vertex with a COLOR: half of it. Without the mark, as lit. */
+/* (a building's walls' shade: test_wall_tint) */
 static void test_wall_tint(void);
 static void test_shadow_hull(void);
 static void test_tree_lists(void)
@@ -2693,16 +2696,15 @@ static void test_tree_lists(void)
     CHECK(NitroPort_Gx3dTreeCanopies(t,2,&nb) && NitroPort_Gx3dTreeStumps(t,2,&ns));
     CHECK(!NitroPort_Gx3dTreeCanopies(t,3,&nb) && !NitroPort_Gx3dTreeShadows(t,3,0,4096,4096,&nb));
 
-    /* The shadows: a quad for each of a tree's layers, the renderer's
-     * soft oval in it by its corners' colours (green across, blue along,
-     * red 16): together the tree's shape, rounded. The light going
-     * towards the camera (+z), the sun's shadows half as long as what
-     * casts them is tall: a tree's as long as it is (no shorter). A
-     * layer's: 9/8 as wide as the layer and a unit (the oval's flat
-     * middle is the layer's width), from where its foot falls to where
-     * its top does and 3 units more either end; the lowest, back to 8
-     * units behind the stump's middle. A unit above the ground. No
-     * pools, no floors: no ground list. */
+    /* The shadows: each tree's own layers laid on the ground with their
+     * texture coordinates (the renderer draws them with a softened copy
+     * of the texture's outline), red 31, a unit above the ground. The
+     * light going towards the camera (+z), the sun's shadows half as long
+     * as what casts them is tall: a tree's as long as it is (no shorter).
+     * A layer's corner: as far across as it is from the tree's middle,
+     * as far along as it is above the stump (58): the lowest layer, 348
+     * to 1596; texels as the layer's own (22 to 62 across, 64 at its foot
+     * to 44.5 at its top). No pools, no floors: no ground list. */
     shadow=NitroPort_Gx3dTreeShadows(t,0,0,4096,2048,&nsh);
     CHECK(shadow && nsh && !(nsh&3u) && !NitroPort_Gx3dTreeGround(t,0,&ng) && !ng);
     tree_view();
@@ -2710,44 +2712,68 @@ static void test_tree_lists(void)
     CHECK(n==36);
     for(i=0;i<2;i++){
         int x=-2048+2048*(int)i;
-        CHECK(tree_rgb(sh,n,x-1504,122,-512,16,0,0) && tree_rgb(sh,n,x+1504,122,-512,16,31,0));
-        CHECK(tree_rgb(sh,n,x+1504,122,1596+192,16,31,31) && tree_rgb(sh,n,x-1504,122,1596+192,16,0,31));
-        CHECK(tree_rgb(sh,n,x-856,122,1785-192,16,0,0) && tree_rgb(sh,n,x+856,122,2592+192,16,31,31));
+        CHECK(tree_st(sh,n,x-1280,122,348,22.0f,64.0f) && tree_st(sh,n,x+1280,122,348,62.0f,64.0f) &&
+              tree_st(sh,n,x+1280,122,1596,62.0f,44.5f) && tree_st(sh,n,x-1280,122,1596,22.0f,44.5f));
+        CHECK(tree_st(sh,n,x-1056,122,1062,0.0f,30.0f) && tree_st(sh,n,x+704,122,2592,22.0f,51.44f));
+        CHECK(tree_rgb(sh,n,x-1280,122,348,31,0,0));
     }
-    /* the same sun: the same list, not made again; another: another */
+    /* the same sun: the same list, not made again */
     again=NitroPort_Gx3dTreeShadows(t,0,0,4096,2048,&nsh2);
     CHECK(again==shadow && nsh2==nsh);
     /* (the sun's as long: the tree's half as long again) */
     shadow=NitroPort_Gx3dTreeShadows(t,0,0,4096,4096,&nsh);
     tree_view();
     n=tree_scene(shadow,nsh,both,sh,400);
-    CHECK(tree_has(sh,n,-2048-1504,122,-512) && !tree_has(sh,n,-2048-1504,122,1596+192) &&
-          tree_has(sh,n,-2048-1504,122,1596*3/2+288));
-    /* the light to the right: turned with it */
+    CHECK(tree_has(sh,n,-2048-1280,122,522) && !tree_has(sh,n,-2048-1280,122,1596) &&
+          tree_has(sh,n,-2048-1280,122,2394));
+    /* the light to the right: turned with it (the tree's left towards the
+     * camera) */
     shadow=NitroPort_Gx3dTreeShadows(t,0,4096,0,2048,&nsh);
     CHECK(shadow && nsh);
     tree_view();
     n=tree_scene(shadow,nsh,both,sh,400);
     CHECK(n==36);
-    CHECK(tree_rgb(sh,n,-2048-512,122,1504,16,0,0) && tree_rgb(sh,n,-2048-512,122,-1504,16,31,0) &&
-          tree_rgb(sh,n,-2048+1596+192,122,-1504,16,31,31));
+    CHECK(tree_st(sh,n,-2048+348,122,1280,22.0f,64.0f) && tree_st(sh,n,-2048+1596,122,-1280,62.0f,44.5f));
+
+    /* Their trunks' (NitroPort_Gx3dTreeTrunks, after the layers'): a quad
+     * a tree from 2 units behind the trunk's middle to 6 into where its
+     * lowest layer's shadow begins (348 + 384), 3 units either side;
+     * green across, blue 16 at the trunk and 31 at the far end, red 16. */
+    {
+        const void *trunks;
+        uint32_t ntr=0;
+        shadow=NitroPort_Gx3dTreeShadows(t,0,0,4096,2048,&nsh);
+        trunks=NitroPort_Gx3dTreeTrunks(t,0,&ntr);
+        CHECK(trunks && ntr && !(ntr&3u) && (const uint8_t *)trunks>=(const uint8_t *)shadow+nsh);
+        tree_view();
+        n=tree_scene(trunks,ntr,both,sh,400);
+        CHECK(n==12);
+        for(i=0;i<2;i++){
+            int x=-2048+2048*(int)i;
+            CHECK(tree_rgb(sh,n,x-192,122,-128,16,0,16) && tree_rgb(sh,n,x+192,122,-128,16,31,16) &&
+                  tree_rgb(sh,n,x+192,122,732,16,31,31) && tree_rgb(sh,n,x-192,122,732,16,0,31));
+        }
+        CHECK(!NitroPort_Gx3dTreeTrunks(t,3,&ntr) && !ntr && !NitroPort_Gx3dTreeTrunks(NULL,0,&ntr));
+    }
 
     /* a row: a tree each 32 units, each from the stump under it (another
-     * list's): its tops' ovals where they fall, its bottoms' from the
-     * stumps */
+     * list's): its tops' laid where they fall (1142 to 2342), its
+     * bottoms' from the stumps (242 to 1442); the bottoms' trunks, not
+     * the tops' alone (17.8 units up) */
     shadow=NitroPort_Gx3dTreeShadows(t,1,0,4096,2048,&nsh);
     CHECK(shadow && nsh);
     tree_view();
     n=tree_scene(shadow,nsh,both,sh,400);
     CHECK(n==12);
-    CHECK(tree_rgb(sh,n,-1024-1216,122,1142-192,16,0,0) && tree_rgb(sh,n,1024+1216,122,1142-192,16,31,0) &&
-          tree_rgb(sh,n,1024+1216,122,2342+192,16,31,31) && !tree_has(sh,n,-1504,122,1142-192));
+    CHECK(tree_has(sh,n,-2048,122,1142) && tree_has(sh,n,0,122,2342) && tree_has(sh,n,2048,122,1142) &&
+          tree_has(sh,n,2048,122,2342));
+    CHECK(!NitroPort_Gx3dTreeTrunks(t,1,&nb) && !nb);
     shadow=NitroPort_Gx3dTreeShadows(t,2,0,4096,2048,&nsh);
     CHECK(shadow && nsh);
     tree_view();
     n=tree_scene(shadow,nsh,both,sh,400);
-    /* (the bottoms: 242 to 1442 above their floor) */
-    CHECK(n==12 && tree_has(sh,n,-1024-1216,122,-512) && tree_has(sh,n,1024+1216,122,1442+192));
+    CHECK(n==12 && tree_has(sh,n,-2048,122,242) && tree_has(sh,n,2048,122,1442));
+    CHECK(NitroPort_Gx3dTreeTrunks(t,2,&nb) && nb);
 
     /* the layers with their far side shaded: none for a list with COLOR
      * commands of its own; else the list's standing polygons again, a
@@ -2828,15 +2854,16 @@ static void test_tree_lists(void)
             CHECK(shadow && nsh);
             tree_view();
             n=tree_scene(shadow,nsh,both,sh,400);
-            /* (the lowest oval's left corner at the foot: 0.5 x -1504 + 0.866
-             * x -512 to the right, 0.866 x 1504 + 0.5 x -512 towards the camera) */
-            CHECK(tree_has(sh,n,2048-1195,122,1046) || tree_has(sh,n,2048-1196,122,1046));
-            CHECK(!tree_has(sh,n,-1195,122,1046) && !tree_has(sh,n,-1196,122,1046));
+            /* (the lowest layer's left corner at its foot: 0.5 x -1280 +
+             * 0.866 x 348 to the right, 0.866 x 1280 + 0.5 x 348 towards
+             * the camera) */
+            CHECK(tree_has(sh,n,2048-339,122,1282));
+            CHECK(!tree_has(sh,n,-339,122,1282));
             shadow=NitroPort_Gx3dTreeShadows(f,0,-3547,2048,2048,&nsh);
             tree_view();
             n=tree_scene(shadow,nsh,both,sh,400);
-            CHECK(tree_has(sh,n,-309,122,-1558) || tree_has(sh,n,-308,122,-1558));
-            CHECK(!tree_has(sh,n,2048-309,122,-1558) && !tree_has(sh,n,2048-308,122,-1558));
+            CHECK(tree_has(sh,n,-941,122,-934));
+            CHECK(!tree_has(sh,n,2048-941,122,-934));
             NitroPort_Gx3dFreeTreeLists(f);
         }
     }
@@ -2898,6 +2925,26 @@ static void test_tree_lists(void)
                 if(move==1)CHECK(sent && sent<nsh/4u && n);
                 if(move==2)CHECK(!sent && !n);
             }
+        }
+        /* (the trunks' the same: all of them in view, none moved away) */
+        {
+            uint32_t ntr=0;
+            unsigned np;
+            NitroPort_Gx3dTreeShadows(t,0,0,4096,2048,&nsh);
+            CHECK(NitroPort_Gx3dTreeTrunks(t,0,&ntr) && ntr);
+            tree_view_at(0);
+            NitroPort_GxDirectWrite(0x29,both);
+            NitroPort_Gx3dTag(NITRO_GX3D_TAG_TRUNK);
+            CHECK(NitroPort_Gx3dTreeSend(t,0,2)==ntr/4u);
+            np=tree_scene(NULL,0,both,sh,400);
+            CHECK(np==12);
+            tree_view_at(-40000);
+            NitroPort_GxDirectWrite(0x29,both);
+            CHECK(NitroPort_Gx3dTreeSend(t,0,2)==0u);
+            np=tree_scene(NULL,0,both,sh,400);
+            NitroPort_Gx3dTag(0);
+            CHECK(np==0);
+            CHECK(!NitroPort_Gx3dTreeSend(t,0,3));
         }
         /* (none made for that shape: nothing sent) */
         CHECK(!NitroPort_Gx3dTreeSend(t,3,0) && !NitroPort_Gx3dTreeSend(NULL,0,1) && !NitroPort_Gx3dTreeSend(t,9,1));
@@ -3228,31 +3275,63 @@ static void test_shadow_hull(void)
 
 static void test_wall_tint(void)
 {
+    /* A building's walls (NITRO_GX3D_TAG_WALLS: the light's way in bits 16
+     * to 23 and 8 to 15, 127ths, to the right and towards the camera): a
+     * triangle's colour times how it faces the sun, from its own corners,
+     * the same for a painted wall (a COLOR) and one lit by its NORMAL. Its
+     * facing: the side the camera sees (here the camera to the right and
+     * in front: the view's depth falls towards +x and +z), whichever way
+     * round its corners come. The sun's side 1.30, 1.25, 1.12; the far
+     * side 0.50, 0.52, 0.58; a roof as it is; halved (the renderer draws
+     * them at twice their colour). A COLOR of 20: 13, 13, 11 in the sun,
+     * 5, 5, 6 away from it, 10 on the roof; without the mark, 20. Lit by
+     * the material's own light, 16: 4, 4, 5 away from the sun. */
     static uint32_t cmds[64],list[64];
     static TreeCorner out[16];
-    static const uint32_t normals[3]={513u,511u,511u<<10};
-    static const unsigned want[3]={10u,4u,8u};
+    static const int32_t view[16]={ONE,0,0,-512, 0,2349,839,0, 0,-3355,587,-1024, 0,0,0,ONE};
+    static const int16_t faces[4][4][3]={
+        {{256,0,-256},{256,0,256},{256,512,256},{256,512,-256}},      /* right: +x */
+        {{256,512,-256},{256,512,256},{256,0,256},{256,0,-256}},      /* the same, the other way round */
+        {{-256,0,256},{256,0,256},{256,512,256},{-256,512,256}},      /* front: +z */
+        {{-256,512,-256},{256,512,-256},{256,512,256},{-256,512,256}} /* roof: +y */
+    };
+    static const struct { unsigned face; int wx, wz; int normal, mark; unsigned r, g, b; } cases[]={
+        {0,127,0,0,1,5,5,6},{1,127,0,0,1,5,5,6},{0,-127,0,0,1,13,13,11},{1,-127,0,0,1,13,13,11},
+        {2,0,127,0,1,5,5,6},{2,0,-127,0,1,13,13,11},{3,127,0,0,1,10,10,10},{3,0,127,0,1,10,10,10},
+        {0,127,0,0,0,20,20,20},{0,127,0,1,1,4,4,5}
+    };
     const uint32_t both=(3u<<6)|(31u<<16),emission=(16u|(16u<<5)|(16u<<10))<<16;
-    unsigned c,n,k;
+    unsigned c,n,k,j,v;
     uint32_t nb;
     NitroPort_SetGroundShadows(1);
-    for(k=0;k<5u;k++){
+    for(k=0;k<sizeof(cases)/sizeof(cases[0]);k++){
+        int same=1;
         c=0;
         cmds[c++]=0x40;cmds[c++]=1;
-        if(k<3u || k==4u){cmds[c++]=0x21;cmds[c++]=normals[k==4u?0u:k];}
+        if(cases[k].normal){cmds[c++]=0x21;cmds[c++]=511u;}
         else{cmds[c++]=0x20;cmds[c++]=RGB(20,20,20);}
-        c+=tree_quad(&cmds[c],-704,704,1843,2650,128,-1024,0,1024);
+        for(v=0;v<4u;v++){
+            const int16_t *p=faces[cases[k].face][v];
+            cmds[c++]=0x23;cmds[c++]=word2(p[0],p[1]);cmds[c++]=(uint16_t)p[2];
+        }
         cmds[c++]=0x41;
         nb=dl_pack(list,cmds,c)*4u;
-        tree_view();
+        reset_geometry();
+        NitroPort_GxDirectWrite(0x10,0);
+        for(j=0;j<16;j++)NitroPort_GxDirectWrite(0x16,(uint32_t)view[j]);
+        NitroPort_GxDirectWrite(0x10,2);
+        swap_done();
         NitroPort_GxDirectWrite(0x31,emission);
-        if(k!=4u)NitroPort_Gx3dTag(NITRO_GX3D_TAG_WALLS|(127u<<16));
+        if(cases[k].mark)NitroPort_Gx3dTag(NITRO_GX3D_TAG_WALLS|((uint32_t)(uint8_t)cases[k].wx<<16)|((uint32_t)(uint8_t)cases[k].wz<<8));
         n=tree_scene(list,nb,both,out,16);
         NitroPort_Gx3dTag(0);
-        CHECK(n==6 && out[0].r==(k<3u?want[k]:k==3u?10u:16u) && out[5].r==out[0].r);
+        for(j=0;j<n;j++)same&=out[j].r==cases[k].r && out[j].g==cases[k].g && out[j].b==cases[k].b;
+        CHECK(n==6 && same);
+        if(n!=6 || !same)printf("  wall case %u: %u corners, %u %u %u\n",k,n,n?out[0].r:0u,n?out[0].g:0u,n?out[0].b:0u);
     }
     CHECK(NITRO_GX3D_TAG_IS_WALLS(NITRO_GX3D_TAG_WALLS|(127u<<16)|(64u<<8)) && !NITRO_GX3D_TAG_IS_WALLS(NITRO_GX3D_TAG_CANOPY) &&
           !NITRO_GX3D_TAG_IS_WALLS(NITRO_GX3D_TAG_GROUND) && !NITRO_GX3D_TAG_IS_SHADE(NITRO_GX3D_TAG_WALLS));
+    CHECK(NITRO_GX3D_TAG_IS_SHADE(NITRO_GX3D_TAG_TRUNK) && NITRO_GX3D_TAG_IS_DRAW(NITRO_GX3D_TAG_TRUNK));
     NitroPort_SetGroundShadows(0);
 }
 

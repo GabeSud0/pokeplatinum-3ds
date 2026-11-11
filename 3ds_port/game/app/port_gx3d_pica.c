@@ -515,10 +515,29 @@ static void apply_grade(void)
     for(i=0;i<TEX_CACHE_ENTRIES;i++)free_texture(&sTextures[i]);
 }
 
+/* (the land's trees' shadows' outlines: get_mask, below) */
+#define MASK_ENTRIES 16
+typedef struct MaskEntry {
+    int used;
+    uint32_t param, palette, hash, checkedFrame, lastFrame;
+    C3D_Tex tex;
+} MaskEntry;
+static MaskEntry sMasks[MASK_ENTRIES];
+static uint32_t *sMaskOut;
+static size_t sMaskOutWords;
+static unsigned sMasksMade;
+static void free_mask(MaskEntry *m)
+{
+    if(!m->used)return;
+    C3D_TexDelete(&m->tex);
+    memset(m,0,sizeof(*m));
+}
 static void clean_up(void)
 {
     int i;
     for(i=0;i<TEX_CACHE_ENTRIES;i++)free_texture(&sTextures[i]);
+    for(i=0;i<MASK_ENTRIES;i++)free_mask(&sMasks[i]);
+    free(sMaskOut);sMaskOut=NULL;sMaskOutWords=0;
     free(sTexLinear);sTexLinear=NULL;sTexLinearWords=0;
     free(sTexTiled);sTexTiled=NULL;sTexTiledWords=0;
     free(sXbrz.src);free(sXbrz.out);free(sXbrz.info);
@@ -1017,6 +1036,77 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     sBoundCut=e->filtered?127:0;
     sBoundHoles=e->holes;
     return &e->tex;
+}
+
+/* The land's trees' shadows' outlines (NITRO_GX3D_TAG_SHADE batches: a
+ * tree's own layers laid on the ground with their texture coordinates):
+ * for each tree texture, a copy of its texels' alpha blurred and cut at
+ * its middle (NitroPort_ShadowTreeMask: the leaves' clusters and tiers
+ * kept, their pixel steps and thin tips rounded off, the edge soft),
+ * white, the same size and wrap, sampled smoothly. Made once, again only
+ * if the texture's bytes change; MASK_ENTRIES of them, the least recently
+ * drawn let go. NULL if there's no memory for one. */
+static int mask_wrap(uint32_t param,int repeatBit,int flipBit)
+{
+    if(!(param&(1u<<repeatBit)))return NITRO_SHADOW_WRAP_CLAMP;
+    return (param&(1u<<flipBit))?NITRO_SHADOW_WRAP_MIRROR:NITRO_SHADOW_WRAP_REPEAT;
+}
+static C3D_Tex *get_mask(uint32_t param,uint32_t palette)
+{
+    MaskEntry *m=NULL,*slot=NULL;
+    const unsigned width=NitroPort_Gx3dTexWidth(param),height=NitroPort_Gx3dTexHeight(param);
+    const size_t n=(size_t)width*height;
+    uint32_t hash,*tiled,*lin,*out;
+    int i;
+    if(!param)return NULL;
+    for(i=0;i<MASK_ENTRIES;i++){
+        MaskEntry *c=&sMasks[i];
+        if(c->used && c->param==param && c->palette==palette){m=c;break;}
+        if(!c->used && !slot)slot=c;
+    }
+    if(m && m->checkedFrame==sFrame){m->lastFrame=sFrame;return &m->tex;}
+    hash=NitroPort_Gx3dTextureHash(&sBanks,param,palette);
+    if(m && m->hash==hash){m->checkedFrame=m->lastFrame=sFrame;return &m->tex;}
+    if(m){
+        /* (changed: made again, once the GPU is done with it) */
+        if(in_flight(m->lastFrame))settle();
+        free_mask(m);
+        slot=m;
+    }
+    if(!slot){
+        MaskEntry *oldest=NULL;
+        for(i=0;i<MASK_ENTRIES;i++){
+            MaskEntry *c=&sMasks[i];
+            if(c->lastFrame==sFrame)continue;
+            if(!oldest || c->lastFrame<oldest->lastFrame)oldest=c;
+        }
+        if(!oldest)return NULL;
+        if(in_flight(oldest->lastFrame))settle();
+        free_mask(oldest);
+        slot=oldest;
+    }
+    tiled=scratch(&sTexTiled,&sTexTiledWords,n);
+    lin=scratch(&sTexLinear,&sTexLinearWords,n);
+    out=scratch(&sMaskOut,&sMaskOutWords,n);
+    if(!tiled || !lin || !out)return NULL;
+    if(!C3D_TexInit(&slot->tex,(u16)width,(u16)height,GPU_RGBA8))return NULL;
+    NitroPort_Gx3dDecodeTextureTiled(&sBanks,param,palette,tiled);
+    NitroPort_Gx3dUntileRGBA8(tiled,width,height,lin);
+    if(!NitroPort_ShadowTreeMask(lin,width,height,mask_wrap(param,16,18),mask_wrap(param,17,19),out)){
+        C3D_TexDelete(&slot->tex);
+        return NULL;
+    }
+    NitroPort_Gx3dTileRGBA8(out,width,height,(uint32_t *)slot->tex.data);
+    C3D_TexFlush(&slot->tex);
+    C3D_TexSetFilter(&slot->tex,GPU_LINEAR,GPU_LINEAR);
+    C3D_TexSetWrap(&slot->tex,wrap_mode(param,16,18),wrap_mode(param,17,19));
+    slot->used=1;
+    slot->param=param;
+    slot->palette=palette;
+    slot->hash=hash;
+    slot->checkedFrame=slot->lastFrame=sFrame;
+    sMasksMade++;
+    return &slot->tex;
 }
 
 /* Polygon modes (attribute bits 4-5) on the colour combiner. */
@@ -1995,12 +2085,12 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
                           "%.1f props marked, %.1f props' shadows laid; %.0f marked triangles a scene (%u scenes "
                           "with their room full, %u set up from the whole scene); the land's trees' shadows: "
                           "%.1f batches and %.0f triangles a scene, the game's, %.2f sprites a scene darkened "
-                          "in them; %.2f ms a scene laying the "
+                          "in them, %u tree textures' outlines made so far; %.2f ms a scene laying the "
                           "others; the sun %.0f degrees up, %.0f round from the screen's left",
                           sGroundScenes==300?300u:1800u,sGroundMarked,sGroundSprites*per,
                           sGroundFound*per,sGroundCards*per,sGroundProps*per,sGroundPropsLaid*per,
                           sGroundTagged*per,sGroundFull,sGroundWhole,sGroundShade/all,sGroundShadeTris/all,
-                          sGroundDarkened/all,(double)sGroundTicks*1000.0/SYSCLOCK_ARM11/all,
+                          sGroundDarkened/all,sMasksMade,(double)sGroundTicks*1000.0/SYSCLOCK_ARM11/all,
                           (double)sSun.elevation,(double)sSun.azimuth);
             if(sGroundScenes==2100)sGroundScenes=300;
             sGroundTicks=0;sGroundCards=0;sGroundFound=0;sGroundSprites=0;sGroundMarked=0;
@@ -2968,26 +3058,21 @@ static void once_batch(const NitroGx3dBatch *batch,int shade,int pass)
  * second. A fragment the stencil turns away costs nearly what one drawn
  * does. Now three draws of far fewer polygons: the game doesn't send
  * what the trees themselves hide.) */
-/* A tree's shadow (NITRO_GX3D_TAG_SHADE batches: a quad for each of a
- * tree's tiers, the game's): a soft-edged oval drawn in each from the
- * vertices' colours alone, no texture; a tree's ovals together are its
- * shape, rounded. Green is across the quad and blue along it, 0 to 1
- * edge to edge, red a half; the combiner's DOT3 of the colour with
- * itself is 4 x the squared distance of (red, green, blue) from the
- * middle, 1 on the oval's edge. Then 4 x (1 - that), 1 at most: 1 over
- * the oval's middle, falling to 0 across the outer eighth of it (the
- * soft edge). That times what a full shadow takes,
- * NITRO_SHADOW_TREE_BLOB of it; the frame times 1 - it. The same in
- * alpha (DOT3_RGBA puts it there), for the three passes: where it's 1
- * (BLOB_CORE: the flat middles, alike, so no oval's edge cuts into
- * another's middle), then the edges' darker half (BLOB_HALF), then the
- * rest (BLOB_EDGE). A pixel is darkened once, by the first oval to
- * reach it: where a tree's tiers' edges cross (its waists) the darker
- * is wanted, and with the edges in one pass a tier's faintest rim took
- * pixels from the next tier's edge, light specks in the waists (worked
- * out at the screen's size from the ovals the real lists give,
- * 2026-11-11: 7 to 28 pixels a tree a quarter of a shadow or more too
- * light; with the half between, 0 to 10). */
+/* A tree's trunk's shadow (NITRO_GX3D_TAG_TRUNK batches, the game's: a
+ * quad from the trunk to under its layers'): drawn from the vertices'
+ * colours alone, its texture not used. Green is across the quad and blue
+ * along it, red a half; the combiner's DOT3 of the colour with itself is
+ * 4 x the squared distance of (red, green, blue) from the middle. Then
+ * 4 x (1 - that), 1 at most: blue a half at the trunk and 1 at the far
+ * end, a strip with soft sides fading out at its far end, under the
+ * layers'. That times what a full shadow takes, NITRO_SHADOW_TREE_BLOB of
+ * it; the frame times 1 - it. The same in alpha (DOT3_RGBA puts it
+ * there). (First soft ovals for a tree's whole shadow, a quad a tier;
+ * replaced by the tree's own outline, mask_batch.) A tree's shadows, the
+ * layers' and the trunk's, in three passes, a pixel darkened once by the
+ * first to reach it: where the alpha (how much of a shadow) is about all
+ * of it (BLOB_CORE), then over half (BLOB_HALF), then the rest
+ * (BLOB_EDGE): where two overlap the darker is taken, near enough. */
 #define BLOB_CORE 250
 #define BLOB_HALF 128
 #define BLOB_EDGE 8
@@ -3021,23 +3106,68 @@ static void blob_batch(const NitroGx3dBatch *batch)
     C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
     draw_arrays((int)batch->first,(int)batch->count);
 }
+/* A tree's layers' shadow (NITRO_GX3D_TAG_SHADE batches: its standing
+ * polygons laid on the ground, their texture coordinates with them): the
+ * texture's softened outline (get_mask) times what a full shadow takes,
+ * NITRO_SHADOW_TREE_BLOB of it (sTreeColor); the frame times 1 - it; the
+ * outline in alpha for the passes. (Chosen from a preview, 2026-11-11,
+ * "softness medium": "using the design of the tree to create the
+ * shadows".) */
+static void mask_batch(const NitroGx3dBatch *batch)
+{
+    C3D_Tex *tex=get_mask(batch->texture_param,batch->palette_base);
+    C3D_TexEnv *env;
+    if(!tex)return;
+    C3D_TexBind(0,tex);
+    sBoundTexKnown=0;
+    env=C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvColor(env,sTreeColor);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,GPU_TEXTURE0,0);
+    C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_MODULATE);
+    C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,0,0);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    env=C3D_GetTexEnv(1);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_PREVIOUS,0,0);
+    C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,0,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
+    C3D_TexEnvSrc(env,C3D_Alpha,GPU_PREVIOUS,0,0);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    C3D_TexEnvInit(C3D_GetTexEnv(2));
+    C3D_TexEnvInit(C3D_GetTexEnv(3));
+    draw_arrays((int)batch->first,(int)batch->count);
+}
 static void draw_once_batches(void)
 {
     size_t b;
     int pass;
     /* (and last a building's shadow's soft edge, NITRO_GX3D_TAG_RIM: its
-     * grey falls to none across it; only where no shadow is yet. A tree's
-     * shadow, the three passes between: its ovals' flat middles, then
-     * their soft edges' darker half, then the rest; blob_batch) */
+     * grey falls to none across it; only where no shadow is yet. The
+     * trees', the three passes between: where it's about all of a shadow,
+     * over half, the rest; their layers' by their texture's softened
+     * outline, mask_batch, their trunks' by their colours, blob_batch) */
     for(pass=0;pass<5 && sShadeBatches;pass++){
-        const uint32_t want=pass==0?NITRO_GX3D_TAG_GROUND:pass==4?NITRO_GX3D_TAG_RIM:NITRO_GX3D_TAG_SHADE;
+        if(pass==4){
+            /* (the stages the trees' set: as once_batch has them. Left set,
+             * a building's shadow's soft edge was drawn through the trees'
+             * last two stages, 2026-11-11: a hard dark outline where it
+             * fades) */
+            C3D_TexEnvInit(C3D_GetTexEnv(2));
+            C3D_TexEnvInit(C3D_GetTexEnv(3));
+        }
         C3D_AlphaTest(true,GPU_GEQUAL,pass==1?BLOB_CORE:pass==2?BLOB_HALF:pass==3?BLOB_EDGE:128);
         for(b=0;b<sPreparedBatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
-            if(batch->tag!=want || batch->translucent)continue;
+            const uint32_t tag=batch->tag;
+            if(batch->translucent)continue;
+            if(pass==0?tag!=NITRO_GX3D_TAG_GROUND:pass==4?tag!=NITRO_GX3D_TAG_RIM:
+               (tag!=NITRO_GX3D_TAG_SHADE && tag!=NITRO_GX3D_TAG_TRUNK))continue;
             if(!room_for_draw())break;
-            if(pass>=1 && pass<=3)blob_batch(batch);
-            else once_batch(batch,1,-1);
+            if(pass==0 || pass==4)once_batch(batch,1,-1);
+            else if(tag==NITRO_GX3D_TAG_SHADE && batch->texture_param)mask_batch(batch);
+            else blob_batch(batch);
         }
     }
     if(sShadeBatches){

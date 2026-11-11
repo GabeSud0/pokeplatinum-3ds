@@ -944,12 +944,46 @@ static void test_sun_way(void)
     NitroPort_SetGroundShadows(0);
 }
 
+/* A tree's shadow's outline from its texture: an 8x8 opaque square in a
+ * 24x24 texture keeps its middle (all of it) and its sides' middles
+ * (about all), its corners rounded (less), nothing 4 texels out; a spike a
+ * texel wide off it gone, a gap a texel wide in it filled; repeated
+ * across, a square at the left edge reaches round to the right one;
+ * clamped, not; white, the alpha the mask. */
+static void test_tree_mask(void)
+{
+    static uint32_t tex[24*24],out[24*24];
+    unsigned x,y;
+#define TEX(x,y) tex[(y)*24u+(x)]
+#define MASK(x,y) (out[(y)*24u+(x)]&0xFFu)
+    memset(tex,0,sizeof(tex));
+    for(y=8;y<16;y++)for(x=8;x<16;x++)TEX(x,y)=0x336633FFu;
+    for(x=16;x<21;x++)TEX(x,11)=0x336633FFu;   /* a spike */
+    TEX(11,12)=0;                                 /* a hole */
+    CHECK(NitroPort_ShadowTreeMask(tex,24,24,NITRO_SHADOW_WRAP_CLAMP,NITRO_SHADOW_WRAP_CLAMP,out));
+    CHECK(MASK(12,12)==255 && MASK(11,12)>=250 && MASK(8,12)>=200 && MASK(12,8)>=200);
+    CHECK(MASK(8,8)<MASK(8,12) && MASK(8,8)>=60 && MASK(8,8)<=200);
+    CHECK(MASK(3,12)==0 && MASK(12,3)==0 && MASK(20,20)==0);
+    CHECK(MASK(19,11)<30 && MASK(20,11)<10);
+    CHECK((out[0]&0xFFFFFF00u)==0xFFFFFF00u && (out[12*24+12]&0xFFFFFF00u)==0xFFFFFF00u);
+    memset(tex,0,sizeof(tex));
+    for(y=8;y<16;y++)for(x=0;x<4;x++)TEX(x,y)=0xFFFFFFFFu;
+    CHECK(NitroPort_ShadowTreeMask(tex,24,24,NITRO_SHADOW_WRAP_REPEAT,NITRO_SHADOW_WRAP_CLAMP,out));
+    CHECK(MASK(23,12)>=30 && MASK(0,12)>=200 && MASK(1,12)>=250);
+    CHECK(NitroPort_ShadowTreeMask(tex,24,24,NITRO_SHADOW_WRAP_CLAMP,NITRO_SHADOW_WRAP_CLAMP,out));
+    CHECK(MASK(23,12)==0 && MASK(0,12)>=250);
+    CHECK(!NitroPort_ShadowTreeMask(NULL,24,24,0,0,out) && !NitroPort_ShadowTreeMask(tex,0,24,0,0,out));
+#undef TEX
+#undef MASK
+}
+
 int main(void)
 {
     test_ground_cards();
     test_ground_props();
     test_sun_way();
     test_darken_sprites();
+    test_tree_mask();
     test_cards_decals();
     test_roles_reach();
     test_day();

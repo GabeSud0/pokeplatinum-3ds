@@ -5,6 +5,7 @@
 #include <nitro_port_shadow.h>
 #include <nitro_port_gx3d_vertex.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct { float x, y, z; } V3;
@@ -1122,11 +1123,59 @@ int NitroPort_ShadowReachOn(void)
 }
 
 /* (see the header) */
+static int mask_index(int i,int n,int wrap)
+{
+    if(i>=0 && i<n)return i;
+    if(wrap==NITRO_SHADOW_WRAP_REPEAT){i%=n;return i<0?i+n:i;}
+    if(wrap==NITRO_SHADOW_WRAP_MIRROR){
+        const int p=2*n;
+        i%=p;if(i<0)i+=p;
+        return i<n?i:p-1-i;
+    }
+    return i<0?0:n-1;
+}
+int NitroPort_ShadowTreeMask(const uint32_t *rgba8,unsigned width,unsigned height,int wrapS,int wrapT,
+                             uint32_t *out)
+{
+    enum { R=NITRO_SHADOW_TREE_REACH };
+    float kernel[2*R+1],sum=0.0f,*a,*b;
+    const size_t n=(size_t)width*height;
+    unsigned x,y;
+    int k;
+    if(!rgba8 || !out || !width || !height)return 0;
+    a=malloc(n*sizeof(*a));
+    b=malloc(n*sizeof(*b));
+    if(!a || !b){free(a);free(b);return 0;}
+    for(k=-R;k<=R;k++){
+        kernel[k+R]=expf(-(float)(k*k)/(2.0f*NITRO_SHADOW_TREE_SOFT*NITRO_SHADOW_TREE_SOFT));
+        sum+=kernel[k+R];
+    }
+    for(k=0;k<2*R+1;k++)kernel[k]/=sum;
+    for(y=0;y<n/width;y++)for(x=0;x<width;x++)a[y*width+x]=(float)(rgba8[y*width+x]&0xFFu)*(1.0f/255.0f);
+    /* across, then down */
+    for(y=0;y<height;y++)for(x=0;x<width;x++){
+        float v=0.0f;
+        for(k=-R;k<=R;k++)v+=kernel[k+R]*a[y*width+(unsigned)mask_index((int)x+k,(int)width,wrapS)];
+        b[y*width+x]=v;
+    }
+    for(y=0;y<height;y++)for(x=0;x<width;x++){
+        float v=0.0f,t;
+        unsigned m;
+        for(k=-R;k<=R;k++)v+=kernel[k+R]*b[(unsigned)mask_index((int)y+k,(int)height,wrapT)*width+x];
+        t=(v-NITRO_SHADOW_TREE_FROM)/(NITRO_SHADOW_TREE_TO-NITRO_SHADOW_TREE_FROM);
+        t=t<0.0f?0.0f:t>1.0f?1.0f:t;
+        m=(unsigned)(t*t*(3.0f-2.0f*t)*255.0f+0.5f);
+        out[y*width+x]=0xFFFFFF00u|m;
+    }
+    free(a);free(b);
+    return 1;
+}
+/* (see the header) */
 #define DARKEN_VERTS 1536u
 unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3dBatch *batches,size_t count,
                                        const float take[3])
 {
-    static float ndc[DARKEN_VERTS][5];   /* (x, y on the screen, and the colour: red the grey, or a tree's oval's three) */
+    static float ndc[DARKEN_VERTS][5];   /* (x, y on the screen, and the colour: red the grey, or a trunk's strip's three) */
     static uint8_t oval[DARKEN_VERTS/3u];
     size_t b,nt=0,t;
     unsigned done=0;
@@ -1148,8 +1197,10 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
                 o[3]=(float)v->color[1]*(1.0f/255.0f);
                 o[4]=(float)v->color[2]*(1.0f/255.0f);
             }
-            /* (a tree's shadow is an oval in its quad, by its colours: port_gx3d_pica.c, blob_batch) */
-            if(ok){oval[nt]=(uint8_t)(batch->tag==NITRO_GX3D_TAG_SHADE);nt++;}
+            /* (a tree's trunk's shadow is a strip in its quad, by its
+             * colours: port_gx3d_pica.c, blob_batch; its layers', red 31, a
+             * tree's shade: NITRO_SHADOW_TREE_BLOB of a full one) */
+            if(ok){oval[nt]=(uint8_t)(batch->tag==NITRO_GX3D_TAG_TRUNK?1u:batch->tag==NITRO_GX3D_TAG_SHADE?2u:0u);nt++;}
         }
     }
     if(!nt)return 0;
@@ -1185,7 +1236,9 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
             w0=1.0f-w1-w2;
             if(w0<0.0f || w1<0.0f || w2<0.0f)continue;
             g=w0*a[2]+w1*c1[2]+w2*c2[2];
-            if(oval[t]){
+            if(oval[t]==2u){
+                g*=NITRO_SHADOW_TREE_BLOB;
+            }else if(oval[t]){
                 const float gg=w0*a[3]+w1*c1[3]+w2*c2[3]-0.5f,bb=w0*a[4]+w1*c1[4]+w2*c2[4]-0.5f,rr=g-0.5f;
                 g=4.0f*(1.0f-4.0f*(rr*rr+gg*gg+bb*bb));
                 if(g>1.0f)g=1.0f;

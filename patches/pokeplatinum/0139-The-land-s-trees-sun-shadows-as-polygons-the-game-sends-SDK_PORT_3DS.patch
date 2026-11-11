@@ -18,14 +18,14 @@ the sun shadows off or no sun, in the Distortion World, for a model
 drawn mirrored, or where a callback is set already (the mirrored
 river's).
 ---
- src/overlay005/land_data.c | 299 +++++++++++++++++++++++++++++++++++++
- 1 file changed, 299 insertions(+)
+ src/overlay005/land_data.c | 309 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 309 insertions(+)
 
 diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
-index 05ac9838..2839a402 100644
+index 05ac9838..183ffd3f 100644
 --- a/src/overlay005/land_data.c
 +++ b/src/overlay005/land_data.c
-@@ -35,6 +35,294 @@
+@@ -35,6 +35,304 @@
  
  #include "gfx_box_test.h"
  extern int NitroPort_WideScreenExtra(void);
@@ -66,6 +66,7 @@ index 05ac9838..2839a402 100644
 +extern const void *NitroPort_Gx3dTreeTail(const NitroGx3dTreeLists *trees, u32 shape, u32 *bytes);
 +extern const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *trees, u32 shape, s32 wayX, s32 wayZ, s32 stretch, u32 *bytes);
 +extern u32 NitroPort_Gx3dTreeSend(const NitroGx3dTreeLists *trees, u32 shape, int shadows);
++extern const void *NitroPort_Gx3dTreeTrunks(const NitroGx3dTreeLists *trees, u32 shape, u32 *bytes);
 +
 +static const char *const sPortTreeTextures[] = {
 +    "tree01", "tree2_01", "tree04_2", "tree3_01", "tree3_02",
@@ -184,15 +185,17 @@ index 05ac9838..2839a402 100644
 +    NitroPort_Gx3dTag(0);
 +}
 +
-+// The shape's lit layers, or its shadows: lists the port makes in parts,
-+// the trees of a square of the map together, of which only the parts the
-+// view can see are sent (NitroPort_Gx3dTreeSend, straight to the geometry
-+// engine: three of the four blocks loaded are mostly beside the view).
-+static void Port_LandTreeParts(u32 mark, const NitroGx3dTreeLists *made, u32 shape, BOOL shadows)
++// The shape's lit layers (kind 0), its layers' shadows (1) or its trunks'
++// (2): lists the port makes in parts, in their own order the trees one
++// after another in a square of the map together, of which only the parts
++// the view can see are sent (NitroPort_Gx3dTreeSend, straight to the
++// geometry engine: three of the four blocks loaded are mostly beside the
++// view).
++static void Port_LandTreeParts(u32 mark, const NitroGx3dTreeLists *made, u32 shape, int kind)
 +{
 +    NNS_G3dGeFlushBuffer();
 +    NitroPort_Gx3dTag(mark);
-+    NitroPort_Gx3dTreeSend(made, shape, shadows);
++    NitroPort_Gx3dTreeSend(made, shape, kind);
 +    NitroPort_Gx3dTag(0);
 +}
 +
@@ -252,7 +255,7 @@ index 05ac9838..2839a402 100644
 +    list = NitroPort_Gx3dTreeCanopiesLit(slot->made, k, way[0], way[1], &bytes);
 +
 +    if (list != NULL) {
-+        Port_LandTreeParts(0x40000004, slot->made, k, FALSE);
++        Port_LandTreeParts(0x40000004, slot->made, k, 0);
 +        list = NitroPort_Gx3dTreeStumps(slot->made, k, &bytes);
 +        Port_LandTreeList(0x40000002, list, bytes);
 +    } else {
@@ -279,8 +282,15 @@ index 05ac9838..2839a402 100644
 +        ground = NitroPort_Gx3dTreeGround(slot->made, k, &groundBytes);
 +        Port_LandTreeList(0x40000008, ground, groundBytes);
 +
++        // (the layers laid on the ground, marked 0x40000000,
++        // NITRO_GX3D_TAG_SHADE; then the trunks', 0x40000018,
++        // NITRO_GX3D_TAG_TRUNK)
 +        if (list != NULL) {
-+            Port_LandTreeParts(0x40000000, slot->made, k, TRUE);
++            Port_LandTreeParts(0x40000000, slot->made, k, 1);
++        }
++
++        if (NitroPort_Gx3dTreeTrunks(slot->made, k, &bytes) != NULL) {
++            Port_LandTreeParts(0x40000018, slot->made, k, 2);
 +        }
 +    }
 +    list = NitroPort_Gx3dTreeTail(slot->made, k, &bytes);
@@ -320,7 +330,7 @@ index 05ac9838..2839a402 100644
  #endif
  
  #define MAP_LAZY_LOADER_SLOT_COUNT            2
-@@ -5957,6 +6245,7 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
+@@ -5957,6 +6255,7 @@ static PortBesideMap *Port_BesideMapOf(const LandDataManager *landDataMan, int m
      }
  
      NNS_G3dRenderObjInit(&map->renderObj, model);
@@ -328,7 +338,7 @@ index 05ac9838..2839a402 100644
  
      if (AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan) == TRUE) {
          AreaLight_UseGlobalModelAttributes(model);
-@@ -6518,6 +6807,7 @@ static PortForestCopy *Port_ForestCopyOf(const LandDataManager *landDataMan, int
+@@ -6518,6 +6817,7 @@ static PortForestCopy *Port_ForestCopyOf(const LandDataManager *landDataMan, int
      }
  
      NNS_G3dRenderObjInit(&copy->renderObj, model);
@@ -336,7 +346,7 @@ index 05ac9838..2839a402 100644
  
      if (AreaDataManager_IsOutdoorsLighting(landDataMan->areaDataMan) == TRUE) {
          AreaLight_UseGlobalModelAttributes(model);
-@@ -7405,6 +7695,9 @@ static void Port_RenderStandInMaps(const LandDataManager *landDataMan)
+@@ -7405,6 +7705,9 @@ static void Port_RenderStandInMaps(const LandDataManager *landDataMan)
  
  void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
  {
@@ -346,7 +356,7 @@ index 05ac9838..2839a402 100644
      for (u8 i = 0; i < QUADRANT_COUNT; i++) {
          if (landDataMan->loadedMaps[i]->mapMatrixIndex != INVALID_MAP_MATRIX_INDEX) {
  #ifdef SDK_PORT_3DS
-@@ -7757,6 +8050,9 @@ static void LandDataManager_LazyLoadMapModelTask(SysTask *sysTask, void *sysTask
+@@ -7757,6 +8060,9 @@ static void LandDataManager_LazyLoadMapModelTask(SysTask *sysTask, void *sysTask
          GF_ASSERT(mapModel);
  
          NNS_G3dRenderObjInit(ctx->mapRenderObj, mapModel);
@@ -356,7 +366,7 @@ index 05ac9838..2839a402 100644
  
          *ctx->loadedMapValid = TRUE;
          ctx->currentSubTask = MAP_MODEL_LOADER_SUBTASK_END_TASK;
-@@ -7810,6 +8106,9 @@ NNSG3dResMdl *LandDataManager_LoadMapModel(NARC *landDataNARC, const int mapMode
+@@ -7810,6 +8116,9 @@ NNSG3dResMdl *LandDataManager_LoadMapModel(NARC *landDataNARC, const int mapMode
  
      GF_ASSERT(mapModel);
      NNS_G3dRenderObjInit(mapRenderObj, mapModel);

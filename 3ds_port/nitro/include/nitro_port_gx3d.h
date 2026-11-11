@@ -425,20 +425,31 @@ const void *NitroPort_Gx3dTreeCanopies(const NitroGx3dTreeLists *trees, uint32_t
 const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *trees, uint32_t shape, int32_t wayX, int32_t wayZ, uint32_t *bytes);
 const void *NitroPort_Gx3dTreeStumps(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
 const void *NitroPort_Gx3dTreeTail(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
+/* The shape's trees' shadows for a light going wayX to the right and wayZ
+ * towards the camera (4096ths), stretch (4096ths) along it for each unit
+ * up: each tree's standing polygons laid on the ground with their texture
+ * coordinates (NITRO_GX3D_TAG_SHADE: the renderer draws them with a
+ * softened copy of the texture's outline). Made again when the light
+ * changes. NULL with none. */
 const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *trees, uint32_t shape, int32_t wayX, int32_t wayZ,
                                       int32_t stretch, uint32_t *bytes);
+/* Their trunks' shadows, made with them (call that first): a quad a tree
+ * from its trunk to under its layers', for NITRO_GX3D_TAG_TRUNK. NULL with
+ * none. */
+const void *NitroPort_Gx3dTreeTrunks(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
 /* (how many trees the shape's shadows are of: rows counted a tree each 32 units) */
 /* The shape's trees' shadows where they stand (a pool, or a forest's
  * floor), for NITRO_GX3D_TAG_GROUND: made with the last
  * NitroPort_Gx3dTreeShadows of the shape, for its sun (call that first).
  * NULL with none. */
 const void *NitroPort_Gx3dTreeGround(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
-/* The shape's lit layers (shadows 0) or its shadows (1), as last made by
- * NitroPort_Gx3dTreeCanopiesLit or NitroPort_Gx3dTreeShadows (call that
- * first), sent to the geometry engine as NitroPort_GxFifoWords would send
- * the list, but for the trees the view can't see: the lists are made in
- * parts, the trees of a square of the map (8 tiles a side) together, and
- * a part whose box is all outside one side of the view, with the matrices
+/* The shape's lit layers (shadows 0), its layers' shadows (1) or its
+ * trunks' (2), as last made by NitroPort_Gx3dTreeCanopiesLit or
+ * NitroPort_Gx3dTreeShadows (call that first), sent to the geometry engine
+ * as NitroPort_GxFifoWords would send the list, but for the trees the view
+ * can't see: the lists are made in parts, in the list's own order the
+ * trees one after another in the same square of the map (8 tiles a side)
+ * together, and a part whose box is all outside one side of the view, with the matrices
  * as the commands sent so far leave them, isn't sent. The scene is the
  * same as with the whole list (the engine passes over such trees itself,
  * one by one); the game's thread and the geometry thread have less to
@@ -537,6 +548,9 @@ void NitroPort_Gx3dTag(uint32_t tag);
 /* (a building's shadow's soft edge: drawn after every other shadow, only
  * where none is yet) */
 #define NITRO_GX3D_TAG_RIM 0x40000010u
+/* (a tree's trunk's shadow: a strip drawn from its vertices' colours
+ * alone, its texture not used; NitroPort_Gx3dTreeTrunks) */
+#define NITRO_GX3D_TAG_TRUNK 0x40000018u
 #define NITRO_GX3D_TAG_IS_SHADE(tag) (((tag)&~0x18u)==NITRO_GX3D_TAG_SHADE)
 /* A model's shadow's outline on the ground it stands on (y 0), for a light:
  * the convex hull of every vertex of its shapes' display lists moved

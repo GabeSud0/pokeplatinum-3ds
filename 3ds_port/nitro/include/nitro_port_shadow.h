@@ -227,6 +227,27 @@ void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned 
  * count. Returns how many sprites were darkened. */
 /* (how dark a tree's shadow is, of the characters' darkening at their feet) */
 #define NITRO_SHADOW_TREE_BLOB 0.85f
+/* A tree's shadow's outline from its texture (2026-11-11, chosen from a
+ * preview, "softness medium": the tree's own picture laid on the ground,
+ * its leaves' pixel steps and thin tips rounded off, the edge soft): the
+ * texels' alpha (rgba8, rows of `width`, alpha in the low byte) blurred
+ * (a Gaussian of NITRO_SHADOW_TREE_SOFT texels, about a unit of the
+ * trees: NITRO_SHADOW_TREE_REACH either way), then 0 below
+ * NITRO_SHADOW_TREE_FROM, all of it above NITRO_SHADOW_TREE_TO, smoothly
+ * between: a blur cut at its middle rounds the outline (a spike or a gap
+ * a texel wide goes) and the cut's width is the soft edge. Beyond the
+ * texture's edges as the GPU samples it: wrapS, wrapT one of
+ * NITRO_SHADOW_WRAP_*. Out (the same size): white, the alpha the mask.
+ * 0 if there's no memory for it. */
+#define NITRO_SHADOW_TREE_SOFT 1.4f
+#define NITRO_SHADOW_TREE_REACH 4
+#define NITRO_SHADOW_TREE_FROM 0.22f
+#define NITRO_SHADOW_TREE_TO 0.78f
+#define NITRO_SHADOW_WRAP_CLAMP 0
+#define NITRO_SHADOW_WRAP_REPEAT 1
+#define NITRO_SHADOW_WRAP_MIRROR 2
+int NitroPort_ShadowTreeMask(const uint32_t *rgba8, unsigned width, unsigned height, int wrapS, int wrapT,
+                             uint32_t *out);
 #define NITRO_SHADOW_FOOT_UP 0.08f
 #define NITRO_SHADOW_FOOT_MIN 0.5f
 unsigned NitroPort_ShadowDarkenSprites(struct NitroGx3dGpuVertex *verts, const struct NitroGx3dBatch *batches,

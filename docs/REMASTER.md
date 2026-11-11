@@ -3933,29 +3933,9 @@ then the small props and the land's trees; houses and the scenery later.
   The cost is how much is sent: every loaded block's trees' shadow
   lists and re-sent layers, most of it out of view and passed over,
   but read.
-  - A tree's shadow is a quad for each of its tiers now (three a tree
-    standing alone; a row's tree, its bottom's and its top's), with no
-    texture: a soft-edged oval the renderer draws in each from the
-    corners' colours alone (blob_batch, port_gx3d_pica.c: the
-    combiner's DOT3 of the colour with itself is the squared distance
-    from the quad's middle; 4 x (1 - it) is flat over the oval and
-    falls to nothing across its outer eighth). The ovals together are
-    the tree's shape, rounded: wide at the foot, a narrower one, the
-    top's. (First one oval a tree, shown as a preview: "is not one big
-    rounded shadow per tree, it should still look like a tree but with
-    rounder shapes".) A tier's oval: as wide as the tier, from where
-    its foot falls to where its top does and 3 units more at either end
-    (TREE_BLOB_PAD), the lowest back to 8 units behind the stump's
-    middle. No layers' cut-outs, no pool, no forest's floor: one colour
-    from the stump out (0.85 of the characters' darkening at their
-    feet). Half as long again as the sun's shadows (TREE_LONGER), no
-    shorter than the tree is tall, no longer than twice. Three passes,
-    a pixel darkened once: the ovals' flat middles, their edges' darker
-    half, the rest (with the edges in one pass a tier's faintest rim
-    took pixels from the next tier's edge: light specks in a tree's
-    waists, 7 to 28 pixels a tree worked out at the screen's size from
-    the ovals the real lists give; with the half between, 0 to 10).
-    Three quads a tree, no texture.
+  - (Then a quad a tier with a soft oval in each: seen on a 3DS, "you
+    are focusing on shapes instead of actually using the design of the
+    tree to create the shadows". Replaced, below.)
   - The trees' lists sent in parts: the lit layers' and the shadows'
     lists are made with a tree's commands beside those of the other
     trees of its square of the map (8 tiles a side), each square's in
@@ -3972,8 +3952,12 @@ then the small props and the land's trees; houses and the scenery later.
     layers, stumps and shadows whole 51, in parts 10; in the middle of
     the view 35, 101 and 73 (394 triangles for the game's 149: a row's
     polygon is a tree at a time, and the shadows). Four blocks, one in
-    view: 92 for the game's own lists, 254 whole, 103 in parts. Not yet
-    on a 3DS.
+    view: 92 for the game's own lists, 254 whole, 103 in parts. On a 3DS
+    (log 02d3cc68): 60 frames a second nearly all the way with the sun
+    shadows on (the game 59.8; by the forest 40 to 49 before), one dip to
+    46 to 56 for some 8 seconds. The trees were first sorted by square,
+    which changed the order they're drawn in; now the list's own order,
+    a part the trees one after another in the same square.
   - Every tree's layers lit alike: a vertex's tint by its place in the
     whole tree (left or right of where it stands, and up it by its
     height above the ground), whichever polygon it's of; no tree
@@ -3987,6 +3971,45 @@ then the small props and the land's trees; houses and the scenery later.
   flat ground at the building's own height (a lower roof, steps); the
   game's own painted building shadows, still there under these; cliffs,
   ledges and fences.
+- The trees' shadows from the trees themselves, the buildings' shaded side
+  (2026-11-11, after a 3DS run, log 02d3cc68: "what happened to the
+  building shaddows? They were working fine and now they are messed up";
+  "you are focusing on shapes instead of actually using the design of the
+  tree"; "the buildings still feel fully lit"; the look chosen from a
+  preview, "softness medium"):
+  - A tree's shadow is its own picture laid on the ground: each of its
+    standing polygons, its texture coordinates with it, from where the
+    tree stands along the light's way, the shadows' length times its
+    height (NitroPort_Gx3dTreeShadows). The renderer draws it with a
+    softened copy of the texture's outline (port_gx3d_pica.c, get_mask
+    and mask_batch; NitroPort_ShadowTreeMask): the texels' alpha blurred
+    (a Gaussian of 1.4 texels, about a unit of the trees) and cut at its
+    middle with a smooth step from 0.22 to 0.78, made once for each tree
+    texture. The leaves' clusters and tiers are there, their pixel steps
+    and texel-wide tips rounded off, the edge soft. (The first rounds
+    drew the texture's outline as it is: "the shape ... shouldnt be so
+    edgy it should be more rounded".) One colour from the stump out, half
+    as long again as the sun's shadows, no shorter than the tree is tall,
+    no longer than twice.
+  - Its trunk's shadow (painted on the ground under it, with no standing
+    polygon of its own): a strip from 2 units behind the trunk's middle
+    to 6 units into where its lowest layer's shadow begins, 3 either
+    side, soft at the sides and fading at its far end under the layers'
+    (NitroPort_Gx3dTreeTrunks, NITRO_GX3D_TAG_TRUNK, drawn by blob_batch
+    from its colours). Only for a tree whose lowest layer is 2 to 12
+    units up (a row's tops alone have their bottoms' trunks).
+  - Three passes, a pixel darkened once: where a shadow is about all
+    there, over half, the rest.
+  - The buildings' shadows' soft edge drawn as before: since the oval
+    tree shadows it was drawn through the trees' last two combiner
+    stages, left set: a hard, darker outline where it should fade. The
+    stages are reset before it.
+  - A building's walls shaded by how each triangle faces the sun, worked
+    out from its own corners (first by its NORMAL, and most of the
+    game's buildings are painted with fixed colours, not lit by NORMALs:
+    those weren't shaded at all). The side the camera sees is its face.
+    The sun's side up to 1.30, 1.25, 1.12, the far side down to 0.50,
+    0.52, 0.58, a roof as it is. Not yet: darker towards the ground.
 - The engine's vertices, one division each (2026-11-10, for the same
   place): to_screen divided three times in doubles for every vertex
   drawn (1 / W, then by 2W for x and for y); now by 1 / W once. The
