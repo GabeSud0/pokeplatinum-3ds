@@ -3139,16 +3139,53 @@ static void mask_batch(const NitroGx3dBatch *batch)
     C3D_TexEnvInit(C3D_GetTexEnv(3));
     draw_arrays((int)batch->first,(int)batch->count);
 }
-static void draw_once_batches(void)
+/* A character's sun shadow (a ground batch of tag 0, NitroPort_ShadowGroundCards):
+ * its sprite's texture laid on the ground, mix(white, the vertices' shade,
+ * the texel's alpha), sampled smoothly; the alpha for the passes. */
+static void char_batch(const NitroGx3dBatch *batch)
+{
+    C3D_Tex *tex=get_texture(batch->texture_param,batch->palette_base);
+    C3D_TexEnv *env;
+    u32 param;
+    if(!tex)return;
+    /* (sampled smoothly: a soft edge, not the sprite's pixel steps; its
+     * own filter back after the draw, which has taken it already) */
+    param=tex->param;
+    C3D_TexSetFilter(tex,GPU_LINEAR,GPU_LINEAR);
+    C3D_TexBind(0,tex);
+    sBoundTexKnown=0;
+    env=C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvColor(env,0xFFFFFFFFu);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_PRIMARY_COLOR,GPU_CONSTANT,GPU_TEXTURE0);
+    C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_INTERPOLATE);
+    C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,0,0);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    C3D_TexEnvInit(C3D_GetTexEnv(1));
+    C3D_TexEnvInit(C3D_GetTexEnv(2));
+    C3D_TexEnvInit(C3D_GetTexEnv(3));
+    draw_arrays((int)batch->first,(int)batch->count);
+    tex->param=param;
+}
+/* Every shadow laid on the ground, a pixel darkened once, the darkest
+ * first: a building's (GROUND), then where a shadow is about all there
+ * (BLOB_CORE), over half (BLOB_HALF, the props' too: their texels cut at
+ * half), the rest (BLOB_EDGE), a building's soft edge (RIM) last. The
+ * trees' layers by their texture's softened outline (mask_batch), their
+ * trunks' by their colours (blob_batch); the characters' (chars: with
+ * the stencil) in the same three passes as the trees', by their texels'
+ * alpha. (First the characters' and the props' after all the rest, where
+ * none was yet: where a tree's or a building's shadow's faint edge
+ * reached under a character's shadow it was cut off there, a hard line
+ * across it, and the props' the same: on a 3DS, log 855d604a, "Follower
+ * and Player shadow get weirdly cut when moving around other shadows",
+ * "Satelites shadows ... re also getitng cut", 2026-11-11.) */
+static void draw_once_batches(int chars)
 {
     size_t b;
     int pass;
-    /* (and last a building's shadow's soft edge, NITRO_GX3D_TAG_RIM: its
-     * grey falls to none across it; only where no shadow is yet. The
-     * trees', the three passes between: where it's about all of a shadow,
-     * over half, the rest; their layers' by their texture's softened
-     * outline, mask_batch, their trunks' by their colours, blob_batch) */
-    for(pass=0;pass<5 && sShadeBatches;pass++){
+    for(pass=0;pass<5;pass++){
         if(pass==4){
             /* (the stages the trees' set: as once_batch has them. Left set,
              * a building's shadow's soft edge was drawn through the trees'
@@ -3158,7 +3195,7 @@ static void draw_once_batches(void)
             C3D_TexEnvInit(C3D_GetTexEnv(3));
         }
         C3D_AlphaTest(true,GPU_GEQUAL,pass==1?BLOB_CORE:pass==2?BLOB_HALF:pass==3?BLOB_EDGE:128);
-        for(b=0;b<sPreparedBatches;b++){
+        for(b=0;b<sPreparedBatches && sShadeBatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
             const uint32_t tag=batch->tag;
             if(batch->translucent)continue;
@@ -3169,22 +3206,33 @@ static void draw_once_batches(void)
             else if(tag==NITRO_GX3D_TAG_SHADE && batch->texture_param)mask_batch(batch);
             else blob_batch(batch);
         }
+        if(pass==2){
+            /* (the props': their texels over half opaque, in their
+             * vertices' shade) */
+            C3D_TexEnvInit(C3D_GetTexEnv(1));
+            C3D_TexEnvInit(C3D_GetTexEnv(2));
+            C3D_TexEnvInit(C3D_GetTexEnv(3));
+            for(b=0;b<sGroundBatchCount && sGroundReady;b++){
+                const NitroGx3dBatch *batch=&sBatches[MAX_BATCHES+b];
+                if(batch->tag!=NITRO_SHADOW_ONCE)continue;
+                if(!room_for_draw())break;
+                once_batch(batch,0,0);
+            }
+        }
+        if(chars && pass>=1 && pass<=3){
+            for(b=0;b<sGroundBatchCount && sGroundReady;b++){
+                const NitroGx3dBatch *batch=&sBatches[MAX_BATCHES+b];
+                if(batch->tag)continue;
+                if(!room_for_draw())break;
+                char_batch(batch);
+            }
+        }
     }
-    if(sShadeBatches){
-        C3D_TexEnvInit(C3D_GetTexEnv(2));
-        C3D_TexEnvInit(C3D_GetTexEnv(3));
-    }
-    if(sShadeBatches){
-        /* (the second stage as every other draw has it: passing on) */
-        C3D_TexEnvInit(C3D_GetTexEnv(1));
-        C3D_AlphaTest(true,GPU_GEQUAL,128);
-    }
-    for(b=0;b<sGroundBatchCount && sGroundReady;b++){
-        const NitroGx3dBatch *batch=&sBatches[MAX_BATCHES+b];
-        if(batch->tag!=NITRO_SHADOW_ONCE)continue;
-        if(!room_for_draw())return;
-        once_batch(batch,0,0);
-    }
+    /* (every stage as every other draw has it: passing on) */
+    C3D_TexEnvInit(C3D_GetTexEnv(1));
+    C3D_TexEnvInit(C3D_GetTexEnv(2));
+    C3D_TexEnvInit(C3D_GetTexEnv(3));
+    C3D_AlphaTest(true,GPU_GEQUAL,128);
 }
 static void draw_ground_shadows(int stencilIds)
 {
@@ -3200,53 +3248,32 @@ static void draw_ground_shadows(int stencilIds)
     C3D_DepthTest(true,GPU_LEQUAL,GPU_WRITE_COLOR);
     for(b=0;b<sGroundBatchCount && sGroundReady;b++)once|=sBatches[MAX_BATCHES+b].tag==NITRO_SHADOW_ONCE;
     if(once){
-        C3D_AlphaTest(true,GPU_GEQUAL,128);
         /* (drawn where the bit is as it was: then the other way) */
         C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
         C3D_StencilTest(true,GPU_NOTEQUAL,bit^fresh,bit,bit);
-        draw_once_batches();
-    }
-    C3D_AlphaTest(true,GPU_GREATER,0);
-    if(once){
-        C3D_StencilTest(true,GPU_EQUAL,fresh,bit,0x00);
-        C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_KEEP);
+        draw_once_batches(1);
     }else{
+        /* (no other shadow: the characters' as they are, no stencil) */
         C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
-    }
-    for(b=0;b<sGroundBatchCount && sGroundReady;b++){
-        const NitroGx3dBatch *batch=&sBatches[MAX_BATCHES+b];
-        C3D_Tex *tex;
-        C3D_TexEnv *env;
-        u32 param;
-        if(batch->tag)continue;
-        if(!room_for_draw())break;
-        tex=get_texture(batch->texture_param,batch->palette_base);
-        if(!tex)continue;
-        /* (sampled smoothly: a soft edge, not the sprite's pixel steps; its
-         * own filter back after the draw, which has taken it already) */
-        param=tex->param;
-        C3D_TexSetFilter(tex,GPU_LINEAR,GPU_LINEAR);
-        C3D_TexBind(0,tex);
-        /* mix(white, the vertex's shade, the texel's alpha) */
-        env=C3D_GetTexEnv(0);
-        C3D_TexEnvInit(env);
-        C3D_TexEnvColor(env,0xFFFFFFFFu);
-        C3D_TexEnvSrc(env,C3D_RGB,GPU_PRIMARY_COLOR,GPU_CONSTANT,GPU_TEXTURE0);
-        C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);
-        C3D_TexEnvFunc(env,C3D_RGB,GPU_INTERPOLATE);
-        C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,0,0);
-        C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
-        draw_arrays((int)batch->first,(int)batch->count);
-        tex->param=param;
+        C3D_AlphaTest(true,GPU_GREATER,0);
+        for(b=0;b<sGroundBatchCount && sGroundReady;b++){
+            const NitroGx3dBatch *batch=&sBatches[MAX_BATCHES+b];
+            if(batch->tag)continue;
+            if(!room_for_draw())break;
+            char_batch(batch);
+        }
+        C3D_TexEnvInit(C3D_GetTexEnv(1));
+        C3D_TexEnvInit(C3D_GetTexEnv(2));
+        C3D_TexEnvInit(C3D_GetTexEnv(3));
+        C3D_AlphaTest(true,GPU_GEQUAL,128);
     }
     if(once && stencilIds){
         /* the IDs back: the same pixels' bit cleared (no colour, no
          * depth: the depth test as it was, so the same pixels) */
-        C3D_AlphaTest(true,GPU_GEQUAL,128);
         C3D_DepthTest(true,GPU_LEQUAL,0);
         C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
         C3D_StencilTest(true,GPU_ALWAYS,0x00,bit,bit);
-        draw_once_batches();
+        draw_once_batches(1);
     }
     sBoundTexKnown=0;
     C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);

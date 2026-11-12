@@ -4043,6 +4043,39 @@ then the small props and the land's trees; houses and the scenery later.
     trunk and narrowing to the tip, with the same colour, softness,
     start at the trunk and turn with the sun. Which trees get a trunk's
     strip still goes by the layers' real height.
+- After a 3DS run in Veilstone (2026-11-11, log 855d604a: "the trees
+  merging or overlapping when moving around ... on the right side of the
+  city"; "Follower and Player shadow get weirdly cut when moving around
+  other shadows"; "Satelites shadows ... re also getitng cut";
+  "Performance is slightly choppy"):
+  - The in-between scenes, a forest coming into the view: its trees are
+    all of one kind in a grid, and a part of it coming in (or going out)
+    puts trees among the rest, so the order's pairs after it are trees
+    with their neighbours. Turning, the scene before's motion is no help
+    either, and the motion the order's pairs gave, a row of trees off,
+    was taken: the in-between scene had the forest's trees halfway to
+    their neighbours' places. Walked through on a PC with the city's
+    forest's own lists (turning every few steps): 1 to 3 in-between
+    scenes in 200 with 400 to 900 triangles out, by up to 32 pixels; now
+    none. When polygons came or went and neither motion fits most of a
+    sample, the two moves most of the sample's polygons could have made
+    (each to one of its kind nearby) are tried too (motion_votes).
+    test_gx3d: a forest turning (failing without it).
+  - The game stopping 80 ms now and then (14 times in the log, no file
+    read): the trees' shadows made again when the sun moved or a block
+    came into the wider view went through every list's polygons for each
+    tree to find its lowest leaves, and through every tree's foot for the
+    trees in front; by the city's forest's block 13 million instructions
+    a sun. Now worked out once for the lists (tree_prepare: each
+    polygon's tree's lowest leaves; the feet sorted, searched by z): 11
+    times quicker, the lists the same to the byte.
+  - The shadows laid on the ground darkest first, all of them: a
+    building's, then where a shadow is about all there, over half, the
+    rest, a building's soft edge last; the characters' in the same three
+    passes as the trees', the props' with the half. First the
+    characters' and the props' came after all the rest, where none was
+    yet: a tree's or a building's shadow's faint edge cut them off with
+    a hard line.
   - Speed in that log: 60 frames a second most of the way; one place 43
     to 48 (2,000 to 2,250 triangles; laying them in batches 12 to 17
     ms), 52 there with the sun shadows off and as slow in the log

@@ -1318,12 +1318,14 @@ static float sPrevMotionX, sPrevMotionY;
  * pairs them, where the motion (dx, dy) puts it (2 DS pixels, a vertex on
  * average). */
 static unsigned motion_support(const RecTag *P,const RecPos *PP,unsigned m,const RecTag *C,const RecPos *CP,unsigned n,
-                               const int32_t *out,float dx,float dy)
+                               const int32_t *out,float dx,float dy,unsigned *sampled)
 {
     unsigned j,found=0,step=n/64u+1u;
+    *sampled=0;
     for(j=0;j<n;j+=step){
         int center=out[j]>=0?out[j]:(int)j,lo=center-MATCH_WINDOW,hi=center+MATCH_WINDOW,q;
         if(!C[j].onScreen)continue;
+        (*sampled)++;
         if(lo<0)lo=0;
         if(hi>(int)m-1)hi=(int)m-1;
         for(q=lo;q<=hi;q++){
@@ -1333,6 +1335,45 @@ static unsigned motion_support(const RecTag *P,const RecPos *PP,unsigned m,const
         }
     }
     return found;
+}
+/* The moves (to half a DS pixel) that most of a sample of this scene's
+ * polygons (up to 64, as motion_support's) could have made: each to every
+ * one of its kind in the window about where the order pairs it, no
+ * further than MATCH_VOTE_FAR. The two with the most, most first: their
+ * number. */
+#define MATCH_VOTE_FAR 48.0f
+#define MATCH_VOTE_BINS 256u
+static unsigned motion_votes(const RecTag *P,unsigned m,const RecTag *C,unsigned n,const int32_t *out,float vx[2],float vy[2])
+{
+    static float bx[MATCH_VOTE_BINS],by[MATCH_VOTE_BINS];
+    static unsigned bc[MATCH_VOTE_BINS];
+    unsigned j,nb=0,step=n/64u+1u,k,got=0;
+    for(j=0;j<n;j+=step){
+        int center=out[j]>=0?out[j]:(int)j,lo=center-MATCH_WINDOW,hi=center+MATCH_WINDOW,q;
+        if(!C[j].onScreen)continue;
+        if(lo<0)lo=0;
+        if(hi>(int)m-1)hi=(int)m-1;
+        for(q=lo;q<=hi;q++){
+            float ddx,ddy;
+            if(P[q].sig!=C[j].sig || !P[q].onScreen || P[q].count!=C[j].count)continue;
+            ddx=floorf((C[j].px0-P[q].px0)*2.0f+0.5f)*0.5f;
+            ddy=floorf((C[j].py0-P[q].py0)*2.0f+0.5f)*0.5f;
+            if(fabsf(ddx)>MATCH_VOTE_FAR || fabsf(ddy)>MATCH_VOTE_FAR)continue;
+            for(k=0;k<nb && (bx[k]!=ddx || by[k]!=ddy);k++){}
+            if(k==nb){
+                if(nb==MATCH_VOTE_BINS)continue;
+                bx[nb]=ddx;by[nb]=ddy;bc[nb]=0;nb++;
+            }
+            bc[k]++;
+        }
+    }
+    for(got=0;got<2u;got++){
+        unsigned top=0,at=0;
+        for(k=0;k<nb;k++)if(bc[k]>top){top=bc[k];at=k;}
+        if(top<8u)break;
+        vx[got]=bx[at];vy[got]=by[at];bc[at]=0;
+    }
+    return got;
 }
 static NitroGx3dThreadOps sOps;   /* (NitroPort_Gx3dStartThread) */
 /* (the [perf] in-between matching line, NitroPort_Gx3dMatchWork) Its
@@ -1425,15 +1466,41 @@ static unsigned match_records(const RecTag *P,const RecPos *PP,const PolyRecord 
      * neighbour was, and none fitted them all: the floor at 30.) The
      * order's wins a tie. */
     if(n>=16u){
-        float cx[3],cy[3];
-        unsigned c=0,k,best=0,bestSupport=0;
+        float cx[5],cy[5];
+        unsigned c=0,k,best=0,bestSupport=0,sampled=0;
         if(moves>=8u){cx[c]=dx;cy[c]=dy;c++;}
         if(sPrevMotionValid && (sPrevMotionX!=0.0f || sPrevMotionY!=0.0f) &&
            (!c || sPrevMotionX!=dx || sPrevMotionY!=dy)){cx[c]=sPrevMotionX;cy[c]=sPrevMotionY;c++;}
         if(!c){cx[c]=0.0f;cy[c]=0.0f;c++;}
         for(k=0;k<c;k++){
-            unsigned support=motion_support(P,PP,m,C,CP,n,out,cx[k],cy[k]);
+            unsigned support=motion_support(P,PP,m,C,CP,n,out,cx[k],cy[k],&sampled);
             if(support>bestSupport){bestSupport=support;best=k;}
+        }
+        /* Neither fitting most of the sample: the moves the sample's
+         * polygons could have made (each to one of its kind in the
+         * window), the two most of them could have, tried too. Polygons of
+         * one kind in a grid, a forest's trees, put among the rest as a
+         * part of it comes into the view: the order's pairs after it are
+         * trees with their neighbours, and turning, the camera's motion
+         * isn't the scene before's: the in-between scene had a forest's
+         * trees halfway to their neighbours' places, by up to 32 pixels
+         * (log 855d604a, "the trees merging or overlapping when moving
+         * around"; walked through on a PC, 2026-11-11: 1 to 3 in-between
+         * scenes in 200, 400 to 900 triangles each). Only with polygons
+         * come or gone: a floor moving a tile a scene, every tile where its
+         * neighbour was, could have stood still. */
+        if(n!=m && sampled && bestSupport*4u<sampled*3u && c<3u){
+            float vx[2],vy[2];
+            unsigned nv=motion_votes(P,m,C,n,out,vx,vy),v;
+            for(v=0;v<nv;v++){
+                unsigned support;
+                for(k=0;k<c && (cx[k]!=vx[v] || cy[k]!=vy[v]);k++){}
+                if(k<c)continue;
+                cx[c]=vx[v];cy[c]=vy[v];
+                support=motion_support(P,PP,m,C,CP,n,out,cx[c],cy[c],&sampled);
+                if(support>bestSupport){bestSupport=support;best=c;}
+                c++;
+            }
         }
         if(bestSupport>0){
             if(moves<8u || cx[best]!=dx || cy[best]!=dy)moves=8u;   /* (valid: it fits) */
@@ -4260,6 +4327,7 @@ typedef struct TreePoly {          /* (a polygon to lay: about where its tree st
     int32_t base[3];               /* x, the ground's y, z */
     int32_t u[TREE_VERTS], h[TREE_VERTS], st[TREE_VERTS][2];
     int32_t hs[TREE_VERTS];        /* (its height as the camera sees it, for the shadow: TREE_SEEN_*) */
+    int32_t anchor;                /* (its tree's lowest leaves, hs, of every list's polygons standing there: tree_prepare) */
     uint8_t lv[TREE_VERTS];        /* (how dark at each vertex, in 31sts) */
     uint8_t n, first;              /* (first: its tree's, or its row's, first one) */
     uint8_t row;                   /* (one tree of a row's polygon) */
@@ -4308,6 +4376,9 @@ typedef struct TreeShape {
 struct NitroGx3dTreeLists {
     uint32_t count;
     int32_t lift;                  /* (the shadows this far above their ground) */
+    int prepared;                  /* (tree_prepare done: the anchors and stands below) */
+    int32_t (*stands)[2];          /* (every list's trees' feet, x and z, sorted by z then x) */
+    uint32_t nstands;
     TreeShape shape[1];
 };
 /* (a shape's polygons, each with its vertices' coordinates and texture
@@ -4825,6 +4896,7 @@ void NitroPort_Gx3dFreeTreeLists(NitroGx3dTreeLists *t)
         free(t->shape[i].leaves);free(t->shape[i].lit);free(t->shape[i].stand);free(t->shape[i].ground);
         free(t->shape[i].litPart);free(t->shape[i].shadowPart);
     }
+    free(t->stands);
     free(t);
 }
 const void *NitroPort_Gx3dTreeCanopies(const NitroGx3dTreeLists *t,uint32_t shape,uint32_t *bytes)
@@ -5024,6 +5096,86 @@ const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *t,uint32_t shape,i
 /* (a tree of a shape's shadows: its polygons sh->polys[first..end), the
  * lowest and the highest of them, its square, whether it can be seen) */
 typedef struct TreeCast { uint32_t first, end, key; int32_t low, tall, slow, stall, anchor; int hide; } TreeCast;
+/* What doesn't change with the sun, worked out once for the lists (it
+ * was each time the sun moved, for every tree through every list's
+ * polygons and trees: by a forest's block 13 million instructions a sun,
+ * tens of ms on a 3DS, the game stopped 80 ms now and then, log 855d604a):
+ * each polygon's tree's lowest leaves as the camera sees them, the lowest
+ * of every list's polygons standing at its foot (a row's tops and bottoms
+ * are two lists, one tree); and every list's trees' feet sorted by z,
+ * then x, for the trees nearer the camera (tree_over). */
+typedef struct TreeFoot { int32_t x, z, low; uint32_t shape, poly; } TreeFoot;
+static int tree_foot_order(const void *a,const void *b)
+{
+    const TreeFoot *p=a,*q=b;
+    if(p->x!=q->x)return p->x<q->x?-1:1;
+    if(p->z!=q->z)return p->z<q->z?-1:1;
+    return 0;
+}
+static int tree_stand_order(const void *a,const void *b)
+{
+    const int32_t *p=a,*q=b;
+    if(p[1]!=q[1])return p[1]<q[1]?-1:1;
+    if(p[0]!=q[0])return p[0]<q[0]?-1:1;
+    return 0;
+}
+static void tree_prepare(NitroGx3dTreeLists *t)
+{
+    uint32_t s2,k,n=0,ns=0,a,b;
+    TreeFoot *feet;
+    if(t->prepared)return;
+    t->prepared=1;
+    for(s2=0;s2<t->count;s2++){n+=t->shape[s2].npolys;ns+=t->shape[s2].nstand;}
+    feet=malloc((n?n:1u)*sizeof(*feet));
+    for(s2=0,n=0;s2<t->count && feet;s2++){
+        TreeShape *o=&t->shape[s2];
+        for(k=0;k<o->npolys;k++){
+            TreePoly *q=&o->polys[k];
+            unsigned v;
+            int32_t low=0x7FFFFFFF;
+            q->anchor=0;
+            if(q->fixed || !q->n)continue;
+            for(v=0;v<q->n;v++)if(q->hs[v]<low)low=q->hs[v];
+            feet[n].x=q->base[0];feet[n].z=q->base[2];feet[n].low=low;feet[n].shape=s2;feet[n].poly=k;n++;
+        }
+    }
+    if(feet){
+        qsort(feet,n,sizeof(*feet),tree_foot_order);
+        for(a=0;a<n;a=b){
+            int32_t low=feet[a].low;
+            for(b=a;b<n && feet[b].x==feet[a].x && feet[b].z==feet[a].z;b++)if(feet[b].low<low)low=feet[b].low;
+            for(k=a;k<b;k++)t->shape[feet[k].shape].polys[feet[k].poly].anchor=low;
+        }
+        free(feet);
+    }
+    t->stands=malloc((ns?ns:1u)*sizeof(*t->stands));
+    if(!t->stands)return;
+    for(s2=0,ns=0;s2<t->count;s2++){
+        const TreeShape *o=&t->shape[s2];
+        for(k=0;k<o->nstand;k++){t->stands[ns][0]=o->stand[k][0];t->stands[ns][1]=o->stand[k][1];ns++;}
+    }
+    qsort(t->stands,ns,sizeof(*t->stands),tree_stand_order);
+    t->nstands=ns;
+}
+/* (a tree standing in front of the point x, z, nearer the camera: up to
+ * TREE_OVER_FAR towards it and TREE_OVER_SIDE either side; not the one at
+ * foot, the tree itself) */
+static int tree_over(const NitroGx3dTreeLists *t,int64_t x,int64_t z,const int32_t foot[3],int32_t unit)
+{
+    uint32_t lo=0,hi=t->nstands;
+    const int64_t far=z+(int64_t)TREE_OVER_FAR*unit,side=(int64_t)TREE_OVER_SIDE*unit;
+    while(lo<hi){
+        uint32_t mid=lo+(hi-lo)/2u;
+        if((int64_t)t->stands[mid][1]<=z)lo=mid+1u;
+        else hi=mid;
+    }
+    for(;lo<t->nstands && (int64_t)t->stands[lo][1]<far;lo++){
+        const int64_t qx=t->stands[lo][0]-x;
+        if(t->stands[lo][0]==foot[0] && t->stands[lo][1]==foot[2])continue;
+        if(qx<side && -qx<side)return 1;
+    }
+    return 0;
+}
 const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32_t wayX,int32_t wayZ,int32_t stretch,
                                       uint32_t *bytes)
 {
@@ -5044,6 +5196,7 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
     }
     sh->sun[0]=wayX;sh->sun[1]=wayZ;sh->sun[2]=stretch;
     sh->sunSet=1;
+    tree_prepare(t);
     sh->shadowBytes=0;
     sh->groundBytes=0;
     sh->nshadowPart=0;
@@ -5104,15 +5257,8 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
          * model's lists standing there: a row's tops and its bottoms are
          * two, one tree) */
         c->anchor=c->slow;
-        for(s2=0;s2<t->count;s2++){
-            const TreeShape *o=&t->shape[s2];
-            for(k=0;k<o->npolys;k++){
-                const TreePoly *q=&o->polys[k];
-                unsigned v;
-                if(q->fixed || q->base[0]!=p->base[0] || q->base[2]!=p->base[2])continue;
-                for(v=0;v<q->n;v++)if(q->hs[v]<c->anchor)c->anchor=q->hs[v];
-            }
-        }
+        for(j=c->first;j<c->end;j++)
+            if(!sh->polys[j].fixed && sh->polys[j].n && sh->polys[j].anchor<c->anchor)c->anchor=sh->polys[j].anchor;
         c->hide=c->tall<5*unit;
         if(!c->hide){
             /* what can't be seen isn't sent: its shadow's middle and its
@@ -5120,19 +5266,8 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
             const int32_t len=c->stall-c->anchor*TREE_ANCHOR/4;
             mx=p->base[0]+(int64_t)wayX*stretch/4096*(len/2)/4096;mz=p->base[2]+(int64_t)wayZ*stretch/4096*(len/2)/4096;
             ex=p->base[0]+(int64_t)wayX*stretch/4096*len/4096;ez=p->base[2]+(int64_t)wayZ*stretch/4096*len/4096;
-            for(s2=0;s2<t->count;s2++){
-                const TreeShape *o=&t->shape[s2];
-                for(k=0;k<o->nstand;k++){
-                    int64_t qx,qz;
-                    if(o->stand[k][0]==p->base[0] && o->stand[k][1]==p->base[2])continue;
-                    qx=o->stand[k][0]-mx;qz=o->stand[k][1]-mz;
-                    if(qz>0 && qz<(int64_t)TREE_OVER_FAR*unit && qx<(int64_t)TREE_OVER_SIDE*unit && -qx<(int64_t)TREE_OVER_SIDE*unit)
-                        overM=1;
-                    qx=o->stand[k][0]-ex;qz=o->stand[k][1]-ez;
-                    if(qz>0 && qz<(int64_t)TREE_OVER_FAR*unit && qx<(int64_t)TREE_OVER_SIDE*unit && -qx<(int64_t)TREE_OVER_SIDE*unit)
-                        overE=1;
-                }
-            }
+            overM=tree_over(t,mx,mz,p->base,unit);
+            overE=overM && tree_over(t,ex,ez,p->base,unit);
             c->hide=overM && overE;
         }
         ntrees++;

@@ -965,6 +965,73 @@ static void test_interpolation_order_shift(void)
     }else CHECK(0);
     NitroPort_Gx3dSetInterpolation(0);
 }
+/* A forest: trees of one kind (four quads each) in a grid, row by row,
+ * those beside the view not sent, as the trees' parts are; the camera
+ * going down, then turning right, a column coming into the view. The
+ * order's pairs after the first new tree are trees with their
+ * neighbours, and the scene before's motion is down: neither fits. Still
+ * each tree halfway between where it was and where it is, as the view
+ * halfway sees it (log 855d604a, "the trees merging or overlapping when
+ * moving around": walked through on a PC, a forest's trees halfway to
+ * their neighbours' places). */
+static void forest_quad(int x,int y,int w)
+{
+    NitroPort_GxDirectWrite(0x29,(3u<<6)|(31u<<16));
+    NitroPort_GxDirectWrite(0x20,0x7fff);
+    NitroPort_GxDirectWrite(0x40,1);
+    vertex(x,y,0);
+    vertex(x+w,y,0);
+    vertex(x+w,y+w,0);
+    vertex(x,y+w,0);
+    NitroPort_GxDirectWrite(0x41,0);
+}
+static void forest_at(int camx,int camy)
+{
+    int r,i,a,b;
+    for(r=-6;r<=6;r++){
+        for(i=-12;i<=12;i++){
+            int x=i*1000-camx,y=r*1000-camy;
+            if(x<-5096 || x>4096 || y<-5096 || y>4096)continue;
+            for(a=0;a<2;a++)for(b=0;b<2;b++)forest_quad(x+a*333,y+b*333,313);
+        }
+    }
+}
+static void test_interpolation_grid_turn(void)
+{
+    static NitroGx3dVertex want[1400];
+    const NitroGx3dScene *mid;
+    unsigned matched=0,polygons=0,nwant=0,i,k;
+    static const int camx[4]={700,700,700,800},camy[4]={0,30,60,60};
+    int scene,bad=0,inside=0;
+    /* the view halfway, as it is */
+    reset_geometry();
+    swap_done();
+    forest_at(750,60);
+    swap();
+    mid=NitroPort_Gx3dScene();
+    for(i=0;mid && i<mid->count && nwant<1400u;i++)want[nwant++]=mid->triangles[i].v[0];
+    reset_geometry();
+    NitroPort_Gx3dSetInterpolation(1);
+    swap_done();
+    for(scene=0;scene<4;scene++){
+        forest_at(camx[scene],camy[scene]);
+        swap_done();
+    }
+    mid=NitroPort_Gx3dMidScene(&matched,&polygons);
+    CHECK(mid && mid->count>100);
+    for(i=0;mid && i<mid->count;i++){
+        const NitroGx3dVertex *v=&mid->triangles[i].v[0];
+        int near=0;
+        /* (away from the view's sides, where the new ones are: where they are) */
+        if(v->clip[0]<-3000 || v->clip[0]>3000 || v->clip[1]<-3000 || v->clip[1]>3000)continue;
+        inside++;
+        for(k=0;k<nwant && !near;k++)near=abs(want[k].clip[0]-v->clip[0])<=8 && abs(want[k].clip[1]-v->clip[1])<=8;
+        if(!near)bad++;
+    }
+    CHECK(inside>100 && bad==0);
+    if(bad)printf("  forest turning: %d of %d triangles not halfway\n",bad,inside);
+    NitroPort_Gx3dSetInterpolation(0);
+}
 /* A floor moving a tile a scene (the bike's top gear): each tile where
  * its neighbour was, rows of them further apart nearer the camera (the
  * perspective). Still a camera moving: each tile halfway along its own
@@ -3434,6 +3501,7 @@ static void run_all(void)
     test_interpolation_one_each();
     test_interpolation_order_shift();
     test_interpolation_tile_a_scene();
+    test_interpolation_grid_turn();
     test_interpolation_swaying();
     test_interpolation_fast_model();
     test_interpolation_blended();
