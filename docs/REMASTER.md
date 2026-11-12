@@ -4123,7 +4123,10 @@ then the small props and the land's trees; houses and the scenery later.
     - A building's soft edge (RIM) came last, where no shadow was yet: a
       tree's faint edge beside it took those pixels first and a lit
       straight line ran between the two shadows. Now drawn in the
-      trees' three bands by its grey.
+      trees' three bands by its grey, and a pixel is darkened once by a
+      building's shadow and once by the rest's (two stencil bits,
+      once_stencil): two soft edges side by side each take their own;
+      a full shadow, a building's or the rest's core, takes both.
     - The fountains are buildings: their see-through water was left out
       with the building's own painted shadow, and the rest tinted by the
       sun, its far side half as bright, a shadow inside the water. Now

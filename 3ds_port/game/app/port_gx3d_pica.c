@@ -3231,11 +3231,30 @@ static void char_batch(const NitroGx3dBatch *batch)
  * across it, and the props' the same: on a 3DS, log 855d604a, "Follower
  * and Player shadow get weirdly cut when moving around other shadows",
  * "Satelites shadows ... re also getitng cut", 2026-11-11.) */
+/* A pixel darkened once by a building's shadow and once by the rest's
+ * (the trees', the characters', the props'): where two soft edges of
+ * the two lie side by side, each takes its own darkening (one edge alone
+ * left a lighter line between them, 2026-11-12); where a full shadow is,
+ * a building's or the rest's core, nothing more. Two stencil bits,
+ * sOnceA (a building's) and sOnceB (the rest's), as they are before
+ * (sOnceFresh: set, or clear) till a draw flips them; a draw passes where
+ * its bits `test` still are, and flips `set` (once_stencil). Not set:
+ * the stencil as the caller has it (the IDs put back). */
+static int sOnceOn,sOnceA,sOnceB,sOnceFresh;
+static void once_stencil(int test,int set)
+{
+    if(!sOnceOn)return;
+    C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_INVERT);
+    C3D_StencilTest(true,GPU_EQUAL,sOnceFresh?test:0,test,set);
+}
 static void draw_once_batches(int chars)
 {
     size_t b;
     int pass;
+    const int both=sOnceA|sOnceB;
     for(pass=0;pass<4;pass++){
+        /* (the rest's: in the core band both bits, else its own) */
+        const int rest=pass==1?both:sOnceB;
         C3D_AlphaTest(true,GPU_GEQUAL,pass==1?BLOB_CORE:pass==2?BLOB_HALF:pass==3?BLOB_EDGE:128);
         for(b=0;b<sPreparedBatches && sShadeBatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
@@ -3244,16 +3263,21 @@ static void draw_once_batches(int chars)
             if(pass==0?tag!=NITRO_GX3D_TAG_GROUND:
                (tag!=NITRO_GX3D_TAG_SHADE && tag!=NITRO_GX3D_TAG_TRUNK && tag!=NITRO_GX3D_TAG_RIM))continue;
             if(!room_for_draw())break;
-            if(pass==0)once_batch(batch,1,-1);
-            else if(tag==NITRO_GX3D_TAG_RIM){
+            if(pass==0){
+                once_stencil(sOnceA,both);
+                once_batch(batch,1,-1);
+            }else if(tag==NITRO_GX3D_TAG_RIM){
                 /* (a building's soft edge in the bands too, by its grey: the
                  * stages the trees' set as once_batch has them) */
                 C3D_TexEnvInit(C3D_GetTexEnv(2));
                 C3D_TexEnvInit(C3D_GetTexEnv(3));
+                once_stencil(sOnceA,sOnceA);
                 once_batch(batch,1,pass);
+            }else{
+                once_stencil(rest,rest);
+                if(tag==NITRO_GX3D_TAG_SHADE && batch->texture_param)mask_batch(batch);
+                else blob_batch(batch);
             }
-            else if(tag==NITRO_GX3D_TAG_SHADE && batch->texture_param)mask_batch(batch);
-            else blob_batch(batch);
         }
         if(pass==2){
             /* (the props': their texels over half opaque, in their
@@ -3261,6 +3285,7 @@ static void draw_once_batches(int chars)
             C3D_TexEnvInit(C3D_GetTexEnv(1));
             C3D_TexEnvInit(C3D_GetTexEnv(2));
             C3D_TexEnvInit(C3D_GetTexEnv(3));
+            once_stencil(rest,rest);
             for(b=0;b<sGroundBatchCount && sGroundReady;b++){
                 const NitroGx3dBatch *batch=&sBatches[MAX_BATCHES+b];
                 if(batch->tag!=NITRO_SHADOW_ONCE)continue;
@@ -3269,6 +3294,7 @@ static void draw_once_batches(int chars)
             }
         }
         if(chars && pass>=1 && pass<=3){
+            once_stencil(rest,rest);
             for(b=0;b<sGroundBatchCount && sGroundReady;b++){
                 const NitroGx3dBatch *batch=&sBatches[MAX_BATCHES+b];
                 if(batch->tag)continue;
@@ -3287,9 +3313,9 @@ static void draw_ground_shadows(int stencilIds)
 {
     size_t b;
     int once=sShadeBatches!=0;
-    /* (the stencil bit a pixel darkened once is marked with, and what it
-     * is before: set in 0xFF, clear in a polygon's ID) */
-    const int bit=stencilIds?0x80:0x01,fresh=stencilIds?0x00:bit;
+    /* (the stencil bits a pixel darkened is marked with, and what they
+     * are before: set in 0xFF, clear in a polygon's ID, under 64) */
+    const int bits=stencilIds?0xC0:0x03;
     stage("the sun shadows");
     fog_mode(0);
     C3D_CullFace(GPU_CULL_NONE);
@@ -3297,10 +3323,13 @@ static void draw_ground_shadows(int stencilIds)
     C3D_DepthTest(true,GPU_LEQUAL,GPU_WRITE_COLOR);
     for(b=0;b<sGroundBatchCount && sGroundReady;b++)once|=sBatches[MAX_BATCHES+b].tag==NITRO_SHADOW_ONCE;
     if(once){
-        /* (drawn where the bit is as it was: then the other way) */
-        C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
-        C3D_StencilTest(true,GPU_NOTEQUAL,bit^fresh,bit,bit);
+        /* (drawn where the bits are as they were: then the other way) */
+        sOnceA=stencilIds?0x40:0x01;
+        sOnceB=stencilIds?0x80:0x02;
+        sOnceFresh=!stencilIds;
+        sOnceOn=1;
         draw_once_batches(1);
+        sOnceOn=0;
     }else{
         /* (no other shadow: the characters' as they are, no stencil) */
         C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
@@ -3317,11 +3346,11 @@ static void draw_ground_shadows(int stencilIds)
         C3D_AlphaTest(true,GPU_GEQUAL,128);
     }
     if(once && stencilIds){
-        /* the IDs back: the same pixels' bit cleared (no colour, no
+        /* the IDs back: the same pixels' bits cleared (no colour, no
          * depth: the depth test as it was, so the same pixels) */
         C3D_DepthTest(true,GPU_LEQUAL,0);
         C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
-        C3D_StencilTest(true,GPU_ALWAYS,0x00,bit,bit);
+        C3D_StencilTest(true,GPU_ALWAYS,0x00,bits,bits);
         draw_once_batches(1);
     }
     sBoundTexKnown=0;

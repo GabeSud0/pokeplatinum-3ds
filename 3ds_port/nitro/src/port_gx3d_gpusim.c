@@ -365,7 +365,10 @@ static void g_draw(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batch,
             float pr[4], uv[2];
             unsigned idx = (unsigned)y * W + (unsigned)x, a8, c;
             if (l0 < -1e-6f || l1 < -1e-6f || l2 < -1e-6f) continue;
-            if (once && sOnce[idx]) continue;
+            /* (a pixel darkened once by a building's shadow (bit 1) and once
+             * by the rest's (bit 2); a full one (a building's, or the
+             * rest's core) both: port_gx3d_pica.c, once_stencil) */
+            if (once && (sOnce[idx] & (once == 3 ? 3 : once))) continue;
             z = l0 * sz[0] + l1 * sz[1] + l2 * sz[2];
             pw = l0 * iw[0] + l1 * iw[1] + l2 * iw[2];
             if (pw == 0.0f) continue;
@@ -407,7 +410,7 @@ static void g_draw(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batch,
             }
             a8 = (unsigned)(a * 255.0f + 0.5f);
             if (test ? a8 < test : !(a8 > 0)) continue;
-            if (once) sOnce[idx] = 1;
+            if (once) sOnce[idx] |= (uint8_t)(once == 1 && kind == G_GROUND ? 3 : once);
             color[idx].r *= rgb[0] < 0.0f ? 0.0f : rgb[0];
             color[idx].g *= rgb[1] < 0.0f ? 0.0f : rgb[1];
             color[idx].b *= rgb[2] < 0.0f ? 0.0f : rgb[2];
@@ -429,6 +432,8 @@ static void ground_shadows(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch
     }
     memset(sOnce, 0, sizeof(sOnce));
     for (pass = 0; pass < 4; pass++) {
+        /* (the rest's: in the core band both bits, else its own) */
+        const int rest = pass == 1 ? 3 : 2;
         for (b = 0; b < nb && sGShadeBatches; b++) {
             const NitroGx3dBatch *batch = &batches[b];
             uint32_t tag = batch->tag;
@@ -437,16 +442,16 @@ static void ground_shadows(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch
                 (tag != NITRO_GX3D_TAG_SHADE && tag != NITRO_GX3D_TAG_TRUNK && tag != NITRO_GX3D_TAG_RIM)) continue;
             g_draw(verts, batch, pass == 0 ? G_GROUND : tag == NITRO_GX3D_TAG_RIM ? G_RIM :
                    tag == NITRO_GX3D_TAG_SHADE && batch->texture_param ? G_MASK : G_BLOB,
-                   tests[pass], 1, banks, tiled, color, depth, wbuffer);
+                   tests[pass], pass == 0 || tag == NITRO_GX3D_TAG_RIM ? 1 : rest, banks, tiled, color, depth, wbuffer);
         }
         if (pass == 2)
             for (b = 0; b < sGCardCount && sGReady; b++)
                 if (sGCards[b].tag == NITRO_SHADOW_ONCE)
-                    g_draw(verts, &sGCards[b], G_PROP, tests[pass], 1, banks, tiled, color, depth, wbuffer);
+                    g_draw(verts, &sGCards[b], G_PROP, tests[pass], rest, banks, tiled, color, depth, wbuffer);
         if (pass >= 1 && pass <= 3)
             for (b = 0; b < sGCardCount && sGReady; b++)
                 if (!sGCards[b].tag)
-                    g_draw(verts, &sGCards[b], G_CHAR, tests[pass], 1, banks, tiled, color, depth, wbuffer);
+                    g_draw(verts, &sGCards[b], G_CHAR, tests[pass], rest, banks, tiled, color, depth, wbuffer);
     }
 }
 
