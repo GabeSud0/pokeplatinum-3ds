@@ -4249,6 +4249,15 @@ then the small props and the land's trees; houses and the scenery later.
       at its middle and its tip, and at a forest's edge one came out
       onto open ground first: now at a quarter of the way too ("some
       trees are not projecting any shadows").
+    - Every tree texture of the maps' land models looked for (patch
+      0147): three more are trees to the port, Eterna City's and Celestic
+      Town's small firs (g1_treea, g1_treeb) and the Great Marsh's stumps
+      (numa_ki). Left as they are: the Battle Frontier's (bf_tree02 is
+      its palm grove's one sheet of leaves: black specks in it as trees;
+      its cone tree has a shadow painted beside it; bf_tree01 and
+      bf_tree03 showed none of the sun's), the Distortion World's
+      (tree_sbt01: no sun there) and those of rooms. Oreburgh's
+      c3_road_ki is no tree in view.
 - The engine's vertices, one division each (2026-11-10, for the same
   place): to_screen divided three times in doubles for every vertex
   drawn (1 / W, then by 2W for x and for y); now by 1 / W once. The

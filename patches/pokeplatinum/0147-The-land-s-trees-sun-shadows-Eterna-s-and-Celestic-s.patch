@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 16:32:46 -0700
+Subject: [PATCH] The land's trees' sun shadows: Eterna's and Celestic's firs,
+ the Great Marsh's stumps (SDK_PORT_3DS)
+
+Every tree texture of the maps' land models was looked for; three more
+are trees to the port (their layers lit by the sun, their shadows laid):
+g1_treea and g1_treeb, Eterna City's and Celestic Town's small firs, and
+numa_ki, the Great Marsh's stumps. Left as they are: the Battle
+Frontier's (bf_tree02 is its palm grove's sheet of leaves, with black
+specks as trees; its cone tree has a shadow painted beside it), the
+Distortion World's (no sun there) and those of rooms.
+---
+ src/overlay005/land_data.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 6e813f14..03e251da 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -78,6 +78,15 @@ static const char *const sPortTreeTextures[] = {
+     "tree01", "tree2_01", "tree04_2", "tree3_01", "tree3_02",
+     "conttree_b", "conttree_t", "conttree2_b", "conttree2_t", "conttree3_2",
+     "treeeff01",
++    // (2026-11-12, every tree texture of the maps looked for, "trees that
++    // should cast shadows must do so consistently": Eterna City's and
++    // Celestic Town's small firs, and the Great Marsh's stumps. Not the
++    // Battle Frontier's (bf_tree02 is its palm grove's one sheet of
++    // leaves: black specks in it as trees; its cone tree has a shadow
++    // painted beside it, and bf_tree01 and bf_tree03 showed none of the
++    // sun's), not the Distortion World's (tree_sbt01: no sun there), not
++    // those of rooms (a gym's, the League's).)
++    "g1_treea", "g1_treeb", "numa_ki",
+ };
+ 
+ // A land model's trees, kept by its material block's address until that
+-- 
+2.43.0
+
