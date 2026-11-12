@@ -4117,6 +4117,27 @@ then the small props and the land's trees; houses and the scenery later.
     0.3 of it not at all: by the layer's corners, a character a tile
     beside the shadow was darkened. test_shadow: none outside the
     outline, its alpha in it.
+  - Then (2026-11-12, from the same screenshots and "a weird straight
+    line on a blurred shadow that is perfectly separating from the tree
+    shadow"; "on the water the fountain is casting shadows on itself"):
+    - A building's soft edge (RIM) came last, where no shadow was yet: a
+      tree's faint edge beside it took those pixels first and a lit
+      straight line ran between the two shadows. Now drawn in the
+      trees' three bands by its grey.
+    - The fountains are buildings: their see-through water was left out
+      with the building's own painted shadow, and the rest tinted by the
+      sun, its far side half as bright, a shadow inside the water. Now
+      only see-through shapes lying flat are left out
+      (NitroPort_Gx3dListTop), and see-through polygons (by their alpha
+      or their texture's) aren't tinted.
+    - Things in a shadow lit as in the sun: a prop (a bench, a sign, a
+      lamp post) is darkened as the characters are, all its batches by
+      the foot of them all; a building whose middle stands in another's
+      shadow (the Galactic building's dishes in its) has its walls drawn
+      in the shadow's shade (NITRO_GX3D_TAG_WALLS_SHADED, the outlines
+      kept from the frame before).
+    - A building's polygons lying flat on its ground (its yard) are left
+      out of its shadow's groups: they joined what stands on them.
 - The engine's vertices, one division each (2026-11-10, for the same
   place): to_screen divided three times in doubles for every vertex
   drawn (1 / W, then by 2W for x and for y); now by 1 / W once. The

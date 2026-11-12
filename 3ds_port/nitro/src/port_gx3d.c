@@ -413,6 +413,20 @@ static void face_tint(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
     len=sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);
     sFaceMul[0]=sFaceMul[1]=sFaceMul[2]=256;
     if(!(len>0.0))return;
+    /* (see-through, by its alpha or its texture's: water, a fountain's
+     * spout; as it is. Tinted, its far side half as bright showed as a
+     * shadow inside the water, 2026-11-11: "on the water the fountain is
+     * casting shadows on itself") */
+    {
+        const unsigned format=(s.texparam>>26)&7u;
+        if(((s.attr>>16)&31u)<31u || format==1u || format==6u)return;
+    }
+    /* (standing in another building's shadow, NITRO_GX3D_TAG_WALLS_SHADED:
+     * every side as a full shadow takes it at midday, 0.61, 0.63, 0.72) */
+    if(s.tag&NITRO_GX3D_TAG_WALLS_SHADED){
+        sFaceMul[0]=156;sFaceMul[1]=161;sFaceMul[2]=184;
+        return;
+    }
     /* (towards the camera: depth, the clip w, falls that way) */
     if(n[0]*s.xf.a[3]+n[1]*s.xf.a[7]+n[2]*s.xf.a[11]>0.0){n[0]=-n[0];n[1]=-n[1];n[2]=-n[2];}
     wx=(int8_t)(s.tag>>16);wz=(int8_t)(s.tag>>8);
@@ -5572,6 +5586,22 @@ uint32_t NitroPort_Gx3dShadowHull(const void *const *lists,const uint32_t *bytes
 }
 
 /* (see the header) */
+int32_t NitroPort_Gx3dListTop(const void *list,uint32_t bytes)
+{
+    DlInfo *info;
+    int32_t top=INT32_MIN;
+    uint32_t o;
+    if(!list || bytes<4u || (bytes&3u))return INT32_MIN;
+    info=dl_survey(list,bytes/4u,3u);
+    if(!info)return INT32_MIN;
+    for(o=0;o<info->nops;o++){
+        const unsigned op=info->ops[o]&255u;
+        if(op>=0x23u && op<=0x28u && info->xyz[o][1]>top)top=info->xyz[o][1];
+    }
+    dl_free(info);
+    return top;
+}
+/* (see the header) */
 typedef struct HullCell { int64_t key; uint32_t poly; } HullCell;
 static int hull_cell_order(const void *a,const void *b)
 {
@@ -5641,6 +5671,15 @@ uint32_t NitroPort_Gx3dShadowHullParts(const void *const *lists,const uint32_t *
                 const uint32_t per=type==0u?3u:type==1u?4u:type==2u?3u:4u;
                 const uint32_t step=type==0u?3u:type==1u?4u:type==2u?1u:2u;
                 for(k=0;k+per<=m;k+=step){
+                    int32_t top=0;
+                    for(q=0;q<per;q++){
+                        const int32_t y=v[run+k+(type==3u?quadStrip[q]:q)][1];
+                        if(y>top)top=y;
+                    }
+                    /* (one lying flat on the ground the model stands on:
+                     * no shadow, and it would join what stands on it,
+                     * a building's yard its dishes and its walls) */
+                    if(flatY>0 && top<=flatY)continue;
                     HP_GROW(pv0,np+1u,pcap,64u);
                     pv0[np]=npv;
                     for(q=0;q<per;q++){

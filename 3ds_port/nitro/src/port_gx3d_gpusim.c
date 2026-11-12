@@ -244,7 +244,7 @@ static float sGShade[3], sGTree[3];   /* (what a full shadow takes; a tree's) */
 static uint8_t sOnce[MAX_W * MAX_H];
 static struct { int used; uint32_t param, palette; uint32_t *tiled; } sGMasks[G_MASKS];
 
-enum { G_GROUND, G_PROP, G_MASK, G_BLOB, G_CHAR };
+enum { G_GROUND, G_PROP, G_MASK, G_BLOB, G_CHAR, G_RIM };
 
 
 static Color fetch_linear(const uint32_t *tiled, uint32_t param, float u, float v)
@@ -332,7 +332,7 @@ static void g_draw(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batch,
     } else if (kind == G_MASK) {
         tex = g_mask(banks, batch->texture_param, batch->palette_base);
         if (!tex) return;
-    } else if (kind != G_GROUND && kind != G_BLOB) {
+    } else if (kind != G_GROUND && kind != G_RIM && kind != G_BLOB) {
         return;
     }
     for (k = batch->first; k + 2 < batch->first + batch->count; k += 3) {
@@ -377,7 +377,10 @@ static void g_draw(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batch,
                 uv[c] = (l0 * iw[0] * v[0].uv[c] + l1 * iw[1] * v[1].uv[c] + l2 * iw[2] * v[2].uv[c]) / pw;
             switch (kind) {
             case G_GROUND:
+            case G_RIM:
                 a = tex ? fetch_linear(tex, batch->texture_param, uv[0], uv[1]).a : pr[3];
+                /* (a building's soft edge in the bands: how much of it, its grey) */
+                if (kind == G_RIM) a *= pr[0];
                 for (c = 0; c < 3; c++) rgb[c] = 1.0f - sGShade[c] * pr[c];
                 break;
             case G_PROP:
@@ -416,7 +419,7 @@ static void ground_shadows(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch
                            const NitroGx3dTexBanks *banks, uint32_t *tiled, Color *color, const float *depth,
                            int wbuffer)
 {
-    static const unsigned tests[5] = { 128, 250, 128, 8, 128 };
+    static const unsigned tests[4] = { 128, 250, 128, 8 };
     size_t b;
     int pass;
     if (!sGOnce) {
@@ -425,14 +428,14 @@ static void ground_shadows(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch
         return;
     }
     memset(sOnce, 0, sizeof(sOnce));
-    for (pass = 0; pass < 5; pass++) {
+    for (pass = 0; pass < 4; pass++) {
         for (b = 0; b < nb && sGShadeBatches; b++) {
             const NitroGx3dBatch *batch = &batches[b];
             uint32_t tag = batch->tag;
             if (batch->translucent) continue;
-            if (pass == 0 ? tag != NITRO_GX3D_TAG_GROUND : pass == 4 ? tag != NITRO_GX3D_TAG_RIM :
-                (tag != NITRO_GX3D_TAG_SHADE && tag != NITRO_GX3D_TAG_TRUNK)) continue;
-            g_draw(verts, batch, pass == 0 || pass == 4 ? G_GROUND :
+            if (pass == 0 ? tag != NITRO_GX3D_TAG_GROUND :
+                (tag != NITRO_GX3D_TAG_SHADE && tag != NITRO_GX3D_TAG_TRUNK && tag != NITRO_GX3D_TAG_RIM)) continue;
+            g_draw(verts, batch, pass == 0 ? G_GROUND : tag == NITRO_GX3D_TAG_RIM ? G_RIM :
                    tag == NITRO_GX3D_TAG_SHADE && batch->texture_param ? G_MASK : G_BLOB,
                    tests[pass], 1, banks, tiled, color, depth, wbuffer);
         }
@@ -661,7 +664,7 @@ static void simulate(const NitroGx3dScene *scene, uint16_t *out555)
         }
         if (b == nb) break;
         if (shadowed && sDecal[b]) continue;   /* (one of the game's painted shadows) */
-        if (sGround && NITRO_GX3D_TAG_IS_SHADE(batch->tag)) continue;   /* (drawn as shadows, above) */
+        if (NITRO_GX3D_TAG_IS_SHADE(batch->tag)) continue;   /* (drawn as shadows, above, or not at all) */
         {
         unsigned mode = (batch->polygon_attr >> 4) & 3u;
         int textured = batch->texture_param != 0;

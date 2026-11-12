@@ -3217,11 +3217,15 @@ static void char_batch(const NitroGx3dBatch *batch)
 /* Every shadow laid on the ground, a pixel darkened once, the darkest
  * first: a building's (GROUND), then where a shadow is about all there
  * (BLOB_CORE), over half (BLOB_HALF, the props' too: their texels cut at
- * half), the rest (BLOB_EDGE), a building's soft edge (RIM) last. The
- * trees' layers by their texture's softened outline (mask_batch), their
- * trunks' by their colours (blob_batch); the characters' (chars: with
- * the stencil) in the same three passes as the trees', by their texels'
- * alpha. (First the characters' and the props' after all the rest, where
+ * half), the rest (BLOB_EDGE). The trees' layers by their texture's
+ * softened outline (mask_batch), their trunks' by their colours
+ * (blob_batch), a building's soft edge (RIM) by its grey; the
+ * characters' (chars: with the stencil) in the same three passes, by
+ * their texels' alpha. (A building's soft edge first came last, where no
+ * shadow was yet: a tree's faint edge beside it took those pixels, and
+ * a lit straight line ran between the tree's shadow and the building's,
+ * 2026-11-12, "a weird straight line on a blurred shadow that is
+ * perfectly separating from the tree shadow". First the characters' and the props' after all the rest, where
  * none was yet: where a tree's or a building's shadow's faint edge
  * reached under a character's shadow it was cut off there, a hard line
  * across it, and the props' the same: on a 3DS, log 855d604a, "Follower
@@ -3231,24 +3235,23 @@ static void draw_once_batches(int chars)
 {
     size_t b;
     int pass;
-    for(pass=0;pass<5;pass++){
-        if(pass==4){
-            /* (the stages the trees' set: as once_batch has them. Left set,
-             * a building's shadow's soft edge was drawn through the trees'
-             * last two stages, 2026-11-11: a hard dark outline where it
-             * fades) */
-            C3D_TexEnvInit(C3D_GetTexEnv(2));
-            C3D_TexEnvInit(C3D_GetTexEnv(3));
-        }
+    for(pass=0;pass<4;pass++){
         C3D_AlphaTest(true,GPU_GEQUAL,pass==1?BLOB_CORE:pass==2?BLOB_HALF:pass==3?BLOB_EDGE:128);
         for(b=0;b<sPreparedBatches && sShadeBatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
             const uint32_t tag=batch->tag;
             if(batch->translucent)continue;
-            if(pass==0?tag!=NITRO_GX3D_TAG_GROUND:pass==4?tag!=NITRO_GX3D_TAG_RIM:
-               (tag!=NITRO_GX3D_TAG_SHADE && tag!=NITRO_GX3D_TAG_TRUNK))continue;
+            if(pass==0?tag!=NITRO_GX3D_TAG_GROUND:
+               (tag!=NITRO_GX3D_TAG_SHADE && tag!=NITRO_GX3D_TAG_TRUNK && tag!=NITRO_GX3D_TAG_RIM))continue;
             if(!room_for_draw())break;
-            if(pass==0 || pass==4)once_batch(batch,1,-1);
+            if(pass==0)once_batch(batch,1,-1);
+            else if(tag==NITRO_GX3D_TAG_RIM){
+                /* (a building's soft edge in the bands too, by its grey: the
+                 * stages the trees' set as once_batch has them) */
+                C3D_TexEnvInit(C3D_GetTexEnv(2));
+                C3D_TexEnvInit(C3D_GetTexEnv(3));
+                once_batch(batch,1,pass);
+            }
             else if(tag==NITRO_GX3D_TAG_SHADE && batch->texture_param)mask_batch(batch);
             else blob_batch(batch);
         }

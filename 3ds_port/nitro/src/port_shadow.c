@@ -1211,23 +1211,39 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
         }
     }
     if(!nt)return 0;
+    /* each marked sprite's batch alone; each prop's batches (its mark's)
+     * together, from the foot of them all (2026-11-12: the props, a
+     * bench, a sign, a lamp post, stayed as bright as in the sun in a
+     * shadow, "Some shadows dont affect objects which breaks realism") */
     for(b=0;b<count;b++){
         const NitroGx3dBatch *batch=&batches[b];
         float lo[2]={0,0},hi[2]={0,0},px,py,dark=0.0f;
+        size_t c,e;
         uint32_t i;
-        int ok=batch->count>=3u;
-        if(!batch->tag || (batch->tag&1u) || (batch->tag&0xC0000000u))continue;
-        for(i=0;i<batch->count && ok;i++){
-            const NitroGx3dGpuVertex *v=&verts[batch->first+i];
-            float x,y;
-            if(!(v->position[3]>0.0f)){ok=0;break;}
-            x=v->position[0]/v->position[3];y=v->position[1]/v->position[3];
-            if(!i || x<lo[0])lo[0]=x;
-            if(!i || x>hi[0])hi[0]=x;
-            if(!i || y<lo[1])lo[1]=y;
-            if(!i || y>hi[1])hi[1]=y;
+        int ok=batch->count>=3u,prop=NITRO_GX3D_TAG_IS_PROP(batch->tag),first=1;
+        if(!batch->tag || (batch->tag&1u) || ((batch->tag&0xC0000000u) && !prop))continue;
+        if(prop){
+            /* (once a prop: at its first batch) */
+            for(c=0;c<b && batches[c].tag!=batch->tag;c++){}
+            if(c<b)continue;
         }
-        if(!ok)continue;
+        for(e=b;e<count && ok;e++){
+            const NitroGx3dBatch *part=&batches[e];
+            if(e!=b && (!prop || part->tag!=batch->tag))continue;
+            for(i=0;i<part->count;i++){
+                const NitroGx3dGpuVertex *v=&verts[part->first+i];
+                float x,y;
+                if(!(v->position[3]>0.0f)){ok=0;break;}
+                x=v->position[0]/v->position[3];y=v->position[1]/v->position[3];
+                if(first || x<lo[0])lo[0]=x;
+                if(first || x>hi[0])hi[0]=x;
+                if(first || y<lo[1])lo[1]=y;
+                if(first || y>hi[1])hi[1]=y;
+                first=0;
+            }
+            if(!prop)break;
+        }
+        if(!ok || first)continue;
         px=(lo[0]+hi[0])*0.5f;
         py=lo[1]+(hi[1]-lo[1])*NITRO_SHADOW_FOOT_UP;
         for(t=0;t<nt;t++){
@@ -1263,14 +1279,19 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
         if(!(dark>0.0f))continue;
         if(dark<NITRO_SHADOW_FOOT_MIN)dark=NITRO_SHADOW_FOOT_MIN;
         if(dark>1.0f)dark=1.0f;
-        for(i=0;i<batch->count;i++){
-            NitroGx3dGpuVertex *v=&verts[batch->first+i];
-            unsigned k;
-            for(k=0;k<3u;k++){
-                float m=1.0f-take[k]*dark;
-                if(m<0.0f)m=0.0f;
-                v->color[k]=(uint8_t)((float)v->color[k]*m+0.5f);
+        for(e=b;e<count;e++){
+            const NitroGx3dBatch *part=&batches[e];
+            if(e!=b && (!prop || part->tag!=batch->tag))continue;
+            for(i=0;i<part->count;i++){
+                NitroGx3dGpuVertex *v=&verts[part->first+i];
+                unsigned k;
+                for(k=0;k<3u;k++){
+                    float m=1.0f-take[k]*dark;
+                    if(m<0.0f)m=0.0f;
+                    v->color[k]=(uint8_t)((float)v->color[k]*m+0.5f);
+                }
             }
+            if(!prop)break;
         }
         done++;
     }

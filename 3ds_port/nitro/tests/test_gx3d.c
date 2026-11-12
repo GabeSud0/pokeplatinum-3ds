@@ -3402,10 +3402,14 @@ static void test_wall_tint(void)
         {{-256,0,256},{256,0,256},{256,512,256},{-256,512,256}},      /* front: +z */
         {{-256,512,-256},{256,512,-256},{256,512,256},{-256,512,256}} /* roof: +y */
     };
+    /* (mark 2: standing in another building's shadow, every side 0.61,
+     * 0.63, 0.72: 6, 6, 7 of 20; mark 3: see-through (alpha 20), as it is:
+     * 10, halved) */
     static const struct { unsigned face; int wx, wz; int normal, mark; unsigned r, g, b; } cases[]={
         {0,127,0,0,1,5,5,6},{1,127,0,0,1,5,5,6},{0,-127,0,0,1,13,13,11},{1,-127,0,0,1,13,13,11},
         {2,0,127,0,1,5,5,6},{2,0,-127,0,1,13,13,11},{3,127,0,0,1,10,10,10},{3,0,127,0,1,10,10,10},
-        {0,127,0,0,0,20,20,20},{0,127,0,1,1,4,4,5}
+        {0,127,0,0,0,20,20,20},{0,127,0,1,1,4,4,5},
+        {0,-127,0,0,2,6,6,7},{3,127,0,0,2,6,6,7},{0,127,0,0,3,10,10,10}
     };
     const uint32_t both=(3u<<6)|(31u<<16),emission=(16u|(16u<<5)|(16u<<10))<<16;
     unsigned c,n,k,j,v;
@@ -3429,8 +3433,9 @@ static void test_wall_tint(void)
         NitroPort_GxDirectWrite(0x10,2);
         swap_done();
         NitroPort_GxDirectWrite(0x31,emission);
-        if(cases[k].mark)NitroPort_Gx3dTag(NITRO_GX3D_TAG_WALLS|((uint32_t)(uint8_t)cases[k].wx<<16)|((uint32_t)(uint8_t)cases[k].wz<<8));
-        n=tree_scene(list,nb,both,out,16);
+        if(cases[k].mark)NitroPort_Gx3dTag(NITRO_GX3D_TAG_WALLS|((uint32_t)(uint8_t)cases[k].wx<<16)|((uint32_t)(uint8_t)cases[k].wz<<8)|
+                                           (cases[k].mark==2?NITRO_GX3D_TAG_WALLS_SHADED:0u));
+        n=tree_scene(list,nb,cases[k].mark==3?(both&~(31u<<16))|(20u<<16):both,out,16);
         NitroPort_Gx3dTag(0);
         for(j=0;j<n;j++)same&=out[j].r==cases[k].r && out[j].g==cases[k].g && out[j].b==cases[k].b;
         CHECK(n==6 && same);

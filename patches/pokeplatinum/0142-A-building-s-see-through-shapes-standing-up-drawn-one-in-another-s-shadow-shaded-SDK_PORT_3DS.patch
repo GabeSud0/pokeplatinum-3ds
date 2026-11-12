@@ -1,0 +1,211 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 00:23:04 -0700
+Subject: [PATCH] A building's see-through shapes standing up drawn; one in
+ another's shadow shaded (SDK_PORT_3DS)
+
+With the sun shadows on, a building's see-through shapes were all left
+out (its own painted shadow is one): a fountain's water too. Now only
+those lying flat on the ground (none of it over 1.5 units up,
+NitroPort_Gx3dListTop, kept for the list).
+
+The buildings' shadows' outlines on the ground are kept from one frame
+to the next (MapProp_PortGround starts a frame's): a building whose
+middle stands in another's is marked NITRO_GX3D_TAG_WALLS_SHADED
+(0x01000000), its walls drawn in the shadow's shade (the Galactic
+building's dishes in its shadow were lit as in the sun).
+---
+ src/overlay005/map_prop.c | 134 ++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 130 insertions(+), 4 deletions(-)
+
+diff --git a/src/overlay005/map_prop.c b/src/overlay005/map_prop.c
+index 84702afe..e04b59d3 100644
+--- a/src/overlay005/map_prop.c
++++ b/src/overlay005/map_prop.c
+@@ -24,9 +24,69 @@ extern int NitroPort_SunWayNow(s32 way[3]);
+ #include "terrain_collision_manager.h"
+ static const FieldSystem *sPortGroundField = NULL;
+ 
++// The buildings' shadows' outlines on the ground (x, z), the last frame's
++// and this one's: a building standing in another's is drawn in its shade
++// (MapProp_PortInShade). From one frame to the next, the field draws its
++// maps again (MapProp_PortGround).
++#define PORT_SEEN_HULLS 64
++#define PORT_HULL_CORNERS_SEEN 14
++
++typedef struct PortSeenHull {
++    VecFx32 at;
++    fx32 xz[PORT_HULL_CORNERS_SEEN][2];
++    u32 count;
++} PortSeenHull;
++
++static PortSeenHull sPortSeen[2][PORT_SEEN_HULLS];
++static u32 sPortSeenCount[2];
++static u32 sPortSeenNow = 0;
++
+ void MapProp_PortGround(const FieldSystem *fieldSystem)
+ {
+     sPortGroundField = fieldSystem;
++
++    if (fieldSystem != NULL) {
++        sPortSeenNow ^= 1;
++        sPortSeenCount[sPortSeenNow] = 0;
++    }
++}
++
++// (a building at `at` (its place) in another's shadow the frame before:
++// its middle inside that one's outline)
++static BOOL MapProp_PortInShade(const VecFx32 *at)
++{
++    const u32 before = sPortSeenNow ^ 1;
++    u32 i, k;
++
++    for (i = 0; i < sPortSeenCount[before]; i++) {
++        const PortSeenHull *h = &sPortSeen[before][i];
++        int sign = 0;
++        BOOL inside = h->count >= 3;
++
++        if (h->at.x == at->x && h->at.y == at->y && h->at.z == at->z) {
++            continue;
++        }
++
++        for (k = 0; k < h->count && inside; k++) {
++            const fx32 *a = h->xz[k], *b = h->xz[(k + 1) % h->count];
++            s64 cross = (s64)(b[0] - a[0]) * (at->z - a[1]) - (s64)(b[1] - a[1]) * (at->x - a[0]);
++            int s = cross > 0 ? 1 : cross < 0 ? -1 : 0;
++
++            if (s != 0) {
++                if (sign == 0) {
++                    sign = s;
++                } else if (s != sign) {
++                    inside = FALSE;
++                }
++            }
++        }
++
++        if (inside) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
+ }
+ 
+ extern u32 NitroPort_Gx3dShadowHullParts(const void *const *lists, const u32 *bytes, u32 count, s32 shearX, s32 shearZ, s32 flatY, s32 join, s32 (*out)[3], u32 max, u32 *corners, u32 parts);
+@@ -112,7 +172,7 @@ static void MapProp_PortMark(u32 mark)
+ // (NITRO_GX3D_TAG_GROUND: drawn with the trees' pools, a pixel darkened
+ // once); and round it a soft edge, 6 units out from its middle, its
+ // grey falling to none, marked 0x40000010 (NITRO_GX3D_TAG_RIM: drawn
+-// after every other shadow, where none is). In the model's own
++// with the trees' shadows, by its grey, a pixel once). In the model's own
+ // coordinates, a quarter of them (so the far edge fits 16 bits), a unit
+ // above where it stands. Sent whether or not the building is in view:
+ // its shadow may be.
+@@ -363,6 +423,20 @@ static void MapProp_PortBuildingShadow(const MapProp *prop, const VecFx32 *posit
+     NNS_G3dGePolygonAttr(GX_LIGHTMASK_NONE, GX_POLYGONMODE_MODULATE, GX_CULL_NONE, 0, 31, 0);
+ 
+     for (part = 0; part < hull->parts; part++) {
++        // (kept, on the ground, for the buildings standing in it)
++        if (sPortSeenCount[sPortSeenNow] < PORT_SEEN_HULLS && scale->x == FX32_ONE && scale->z == FX32_ONE) {
++            PortSeenHull *seen = &sPortSeen[sPortSeenNow][sPortSeenCount[sPortSeenNow]++];
++            u32 k;
++
++            seen->at = *position;
++            seen->count = hull->count[part];
++
++            for (k = 0; k < hull->count[part]; k++) {
++                seen->xz[k][0] = position->x + FX_Mul(hull->corners[part][k][0], info->posScale);
++                seen->xz[k][1] = position->z + FX_Mul(hull->corners[part][k][1], info->posScale);
++            }
++        }
++
+         MapProp_PortHullShadow(hull->corners[part], hull->count[part], y, rim);
+ 
+         if (ground->top[part] != 0) {
+@@ -379,13 +453,58 @@ static void MapProp_PortBuildingShadow(const MapProp *prop, const VecFx32 *posit
+ // model, lying on the ground beside it: it doesn't turn with the sun, and
+ // with the sun's there were two, 2026-11-11: "definitely remove the
+ // double shadows from the buildings"): the shapes of a see-through
+-// material aren't drawn while the building is marked for the sun's.
++// material lying flat on the ground (none of it over 1.5 units up) aren't
++// drawn while the building is marked for the sun's. (First every
++// see-through shape: a fountain's water wasn't drawn, its spout and pool
++// gone pale, 2026-11-11, "The fountains shadows are broken".) Whether a
++// shape lies flat, kept for its list.
++#define PORT_FLAT_SHAPES 64
++
++static struct {
++    const void *list;
++    BOOL flat;
++} sPortFlatShapes[PORT_FLAT_SHAPES];
++static u32 sPortFlatNext = 0;
++
++extern s32 NitroPort_Gx3dListTop(const void *list, u32 bytes);
++
++static BOOL MapProp_PortFlatShape(const NNSG3dResMdl *model, u32 shapeID)
++{
++    const NNSG3dResShp *shapes = NNS_G3dGetShp(model);
++    const NNSG3dResShpData *shape;
++    const void *list;
++    u32 i;
++    s32 top, flatY;
++
++    if (shapeID >= shapes->dict.numEntry || NNS_G3dGetMdlInfo(model)->posScale <= 0) {
++        return FALSE;
++    }
++
++    shape = NNS_G3dGetShpDataByIdx(shapes, shapeID);
++    list = NNS_G3dGetShpDLPtr(shape);
++
++    for (i = 0; i < PORT_FLAT_SHAPES; i++) {
++        if (sPortFlatShapes[i].list == list) {
++            return sPortFlatShapes[i].flat;
++        }
++    }
++
++    flatY = (s32)FX_Div(3 * FX32_ONE / 2, NNS_G3dGetMdlInfo(model)->posScale);
++    top = NitroPort_Gx3dListTop(list, NNS_G3dGetShpDLSize(shape));
++    i = sPortFlatNext;
++    sPortFlatNext = (sPortFlatNext + 1) % PORT_FLAT_SHAPES;
++    sPortFlatShapes[i].list = list;
++    sPortFlatShapes[i].flat = top != (s32)0x80000000 && top <= flatY;
++
++    return sPortFlatShapes[i].flat;
++}
++
+ static void MapProp_PortSkipPainted(NNSG3dRS *rs)
+ {
+     const NNSG3dResMatData *material = NNS_G3dGetMatDataByIdx(rs->pResMat, rs->currentMat);
+     u32 alpha = (material->polyAttr >> 16) & 31;
+ 
+-    if (alpha > 0 && alpha < 31) {
++    if (alpha > 0 && alpha < 31 && rs->pRenderObj != NULL && MapProp_PortFlatShape(rs->pRenderObj->resMdl, *(rs->c + 1))) {
+         NNS_G3dRSSetFlag(rs, NNS_G3D_RSFLAG_SKIP);
+     }
+ }
+@@ -416,6 +535,13 @@ static void MapProp_PortBegin(const MapProp *prop, int index, const AreaDataMana
+             mark = 0;
+         } else {
+             MapProp_PortBuildingShadow(prop, position, rotation, scale);
++
++            // (standing in another's shadow: drawn in its shade, 0x01000000;
++            // first lit as in the sun there, the Galactic building's dishes in
++            // its shadow, 2026-11-12: "Some shadows dont affect objects")
++            if (MapProp_PortInShade(position)) {
++                mark |= 0x01000000;
++            }
+         }
+     }
+ 
+@@ -840,7 +966,7 @@ static void MapPropManager_RenderUsing1Mat1Shp(const NNSG3dResMdl *model, VecFx3
+         if (sPortBuilding) {
+             int alpha = NNS_G3dMdlGetMdlAlpha(model, materialID);
+ 
+-            if (alpha > 0 && alpha < 31) {
++            if (alpha > 0 && alpha < 31 && MapProp_PortFlatShape(model, propMatShpIDs[i].shapeID)) {
+                 continue;
+             }
+         }
+-- 
+2.43.0
+

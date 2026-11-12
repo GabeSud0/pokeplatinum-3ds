@@ -904,11 +904,15 @@ static void test_darken_sprites(void)
     b[3].first=24;b[3].count=6;b[3].tag=0x1001;SPRITE(24,-0.9f,-0.2f);   /* (the first's round shadow) */
     b[4].first=32;b[4].count=6;b[4].tag=NITRO_GX3D_TAG_PROP|2u;SPRITE(32,-0.9f,-0.2f);
     n=NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL);
-    CHECK(n==1);
-    /* (its foot at x -0.9, y -0.168: the grey there 255 - 204 x 0.1 = 0.92) */
+    CHECK(n==2);
+    /* (its foot at x -0.9, y -0.168: the grey there 255 - 204 x 0.1 = 0.92;
+     * the prop standing there the same) */
     for(i=8;i<14;i++)CHECK(abs((int)v[i].color[0]-(int)(200.0f*(1.0f-0.4f*0.92f)+0.5f))<=1 &&
                            abs((int)v[i].color[2]-(int)(200.0f*(1.0f-0.2f*0.92f)+0.5f))<=1 && v[i].color[3]==255);
-    for(i=16;i<38;i++)CHECK(v[i].color[0]==200 && v[i].color[2]==200);
+    for(i=32;i<38;i++)CHECK(abs((int)v[i].color[0]-(int)(200.0f*(1.0f-0.4f*0.92f)+0.5f))<=1);
+    for(i=16;i<30;i++)CHECK(v[i].color[0]==200 && v[i].color[2]==200);
+    for(i=32;i<38;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
+    b[4].count=0;   /* (the prop left out of the rest) */
     CHECK(v[0].color[0]==255 && v[2].color[0]==51);
     /* (near the tip, the grey under a half: a half) */
     for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;

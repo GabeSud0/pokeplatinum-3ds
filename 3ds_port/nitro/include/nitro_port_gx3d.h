@@ -545,8 +545,8 @@ void NitroPort_Gx3dTag(uint32_t tag);
 /* (the shadows on the ground where a tree stands, its pool or a forest's
  * floor: drawn before the layers' shadows, once; NitroPort_Gx3dTreeGround) */
 #define NITRO_GX3D_TAG_GROUND 0x40000008u
-/* (a building's shadow's soft edge: drawn after every other shadow, only
- * where none is yet) */
+/* (a building's shadow's soft edge: drawn with the trees' shadows, by its
+ * grey, a pixel once) */
 #define NITRO_GX3D_TAG_RIM 0x40000010u
 /* (a tree's trunk's shadow: a strip drawn from its vertices' colours
  * alone, its texture not used; NitroPort_Gx3dTreeTrunks) */
@@ -572,6 +572,12 @@ uint32_t NitroPort_Gx3dShadowHull(const void *const *lists, const uint32_t *byte
  * NITRO_GX3D_HULL_COVER of its own outline on the ground (as it is, not
  * moved: a fence round a yard, posts and rails) casts none. Returns the
  * parts, 0 if none (or a list couldn't be read). */
+/* A list's highest vertex (its y, in its own coordinates as sent);
+ * INT32_MIN if it has none or can't be read. (A building's own painted
+ * shadow is a see-through shape lying flat on the ground: left out with
+ * the sun shadows on, a see-through shape standing up, a fountain's
+ * water, drawn.) */
+int32_t NitroPort_Gx3dListTop(const void *list, uint32_t bytes);
 #define NITRO_GX3D_HULL_COVER 0.3
 uint32_t NitroPort_Gx3dShadowHullParts(const void *const *lists, const uint32_t *bytes, uint32_t count, int32_t shearX,
                                        int32_t shearZ, int32_t flatY, int32_t join, int32_t (*out)[3], uint32_t max,
@@ -587,6 +593,9 @@ uint32_t NitroPort_Gx3dShadowHullParts(const void *const *lists, const uint32_t 
  * colour. */
 #define NITRO_GX3D_TAG_WALLS 0x60000000u
 #define NITRO_GX3D_TAG_IS_WALLS(tag) (((tag)&0xF00000FFu)==NITRO_GX3D_TAG_WALLS)
+/* (a building standing in another's shadow: its walls all in its shade,
+ * whichever way they face) */
+#define NITRO_GX3D_TAG_WALLS_SHADED 0x01000000u
 #define NITRO_GX3D_TAG_STUMP 0x40000002u
 /* (a tree's layers with their far side from the sun shaded: under this
  * mark a COLOR command isn't the vertices' colour but what their lit

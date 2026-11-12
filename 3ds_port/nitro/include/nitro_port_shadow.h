@@ -230,7 +230,9 @@ void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned 
  * that shadow. (First the corners alone: a layer's quad reaches well past
  * its outline, and a character beside a tree's shadow was darkened, on a
  * 3DS 2026-11-11: "Im close to a tree shadow, not under it and I still
- * get darkened".) Returns how many sprites were darkened. */
+ * get darkened".) A prop's batches (NITRO_GX3D_TAG_PROP marks) all
+ * together, by the foot of them all. Returns how many sprites and props
+ * were darkened. */
 #define NITRO_SHADOW_FOOT_IN 0.3f
 typedef float (*NitroShadowMaskAt)(void *ctx, uint32_t textureParam, uint32_t paletteBase, float u, float v);
 /* (how dark a tree's shadow is, of the characters' darkening at their feet) */
