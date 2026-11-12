@@ -3368,6 +3368,22 @@ static void test_shadow_hull_parts(void)
     for(i=0;i<corners[1];i++)CHECK(out[16+i][0]>=4488);
     CHECK(NitroPort_Gx3dShadowHullParts(lists,bytes,1,4096,2048,0,8192,out,16,corners,4)==1 && corners[0]>=6);
     CHECK(NitroPort_Gx3dShadowHullParts(lists,bytes,1,4096,2048,0,256,out,16,corners,1)==1 && out[0][0]<2000);
+    /* on ground 320 up (the box's top 640): moved by its height over that,
+     * half as far (x to 512 + 320); 640 up, as it stands (x to 512) */
+    {
+        int32_t hi=-100000;
+        CHECK(NitroPort_Gx3dShadowHullPartsFrom(lists,bytes,1,4096,2048,0,256,320,out,16,corners,1)==1);
+        for(i=0;i<corners[0];i++)if(out[i][0]>hi)hi=out[i][0];
+        CHECK(hi==832);
+        hi=-100000;
+        CHECK(NitroPort_Gx3dShadowHullPartsFrom(lists,bytes,1,4096,2048,0,256,640,out,16,corners,1)==1);
+        for(i=0;i<corners[0];i++)if(out[i][0]>hi)hi=out[i][0];
+        CHECK(hi==512);
+        hi=-100000;
+        CHECK(NitroPort_Gx3dShadowHullPartsFrom(lists,bytes,1,4096,2048,0,256,0,out,16,corners,1)==1);
+        for(i=0;i<corners[0];i++)if(out[i][0]>hi)hi=out[i][0];
+        CHECK(hi==1152);
+    }
     c=0;
     cmds[c++]=0x40;cmds[c++]=1;
     c+=tree_quad(&cmds[c],-2000,2000,0,200,2000,2000,0,0);     /* (a fence's four sides, standing) */

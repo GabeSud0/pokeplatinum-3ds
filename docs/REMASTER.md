@@ -4152,6 +4152,37 @@ then the small props and the land's trees; houses and the scenery later.
       And a model with more tree shapes than 8 had its lists let go and
       made again at every draw; now the ones past 8 are drawn as they
       are.
+- After a 3DS run (2026-11-12, log bcbd7cb6: "Bench shadows are not
+  working. Honey Tree Shadows are broken. Pokemon Tower shadow seems to
+  have 2 shadows"; "remove the gradient effect on sprite shadows"; the
+  Galactic dish's shadow "gets cut mid way"), each checked on a PC with
+  the sun as it was then (about 9:00, 50 degrees up, from 153):
+  - A small prop's shadow (a bench, a rock, a sign: patch 0144) was its
+    picture laid on the ground as a character's is; with the sun to the
+    side a bench's was a sliver. Now its outline, as a building's (the
+    hull of its model's vertices moved along the light, the light's way
+    turned into the model's own coordinates for one turned about its
+    upright), in a building's shade with a soft edge half as wide; its
+    own painted shadow left out. Its mark gets NITRO_GX3D_TAG_PROP_HULL:
+    its picture isn't laid, and the outline sent just before it isn't
+    one it stands in (NitroPort_ShadowDarkenSprites).
+  - The honey tree is a prop of three layers over a painted patch, as a
+    land tree: now drawn through the land's trees' lists (its texture
+    treeeff01 among the trees'; a unit up to 1024 of a list's: its
+    model's are 512), its shadow the trees' own outline.
+  - A character's and a prop's shadow faded from the feet to 0.35 at the
+    head; beside a tree's, one even shade, it showed lighter. Now one
+    even shade, a tree's (NITRO_SHADOW_TREE_BLOB of the full one).
+  - On higher ground a building's shadow was the one on its own ground
+    moved up: as long and as far out, and the two didn't meet (the
+    Hallowed Tower: one band in its dip, another further out on the
+    grass). Now the shadow of what stands above that ground, laid on it
+    (NitroPort_Gx3dShadowHullPartsFrom: each vertex moved by its height
+    over that ground's), so the two meet at the dip's edge. The higher
+    ground is looked for on a grid of tiles inside the whole outline
+    (first at its corners alone: a dish's pit's rim inside its shadow was
+    missed), the two heights found most often, the same for all its
+    parts (a dish's bowl had a copy and its stand none: a straight cut).
 - The engine's vertices, one division each (2026-11-10, for the same
   place): to_screen divided three times in doubles for every vertex
   drawn (1 / W, then by 2W for x and for y); now by 1 / W once. The

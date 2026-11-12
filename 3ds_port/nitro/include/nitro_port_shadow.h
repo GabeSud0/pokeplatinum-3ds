@@ -157,10 +157,11 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
  * copy, its edge as soft as the texture's own smooth sampling makes it
  * (nine copies a step apart were a blur, but nine multiplies, each
  * rounded to the upper screen's 5-6-5 bits: red and blue by 8/255 a step,
- * green by 4, and the shadow came out purple here and blue there), and
- * fading to NITRO_SHADOW_GROUND_TIP of it at the head. The shade: the one
- * given, its darkening NITRO_SHADOW_GROUND_DARK
- * times as much. Pulled towards the camera along its ray (where it is on the
+ * green by 4, and the shadow came out purple here and blue there), one
+ * even shade from the feet to the head, a tree's (first fading to
+ * NITRO_SHADOW_GROUND_TIP of it at the head: lighter than a tree's shadow
+ * beside it, 2026-11-12). The shade: the one given, its darkening
+ * NITRO_SHADOW_GROUND_DARK x NITRO_SHADOW_TREE_BLOB times as much. Pulled towards the camera along its ray (where it is on the
  * screen unchanged) by NITRO_SHADOW_GROUND_PULL of its distance: in front
  * of the ground, behind the sprite's own feet.
  *
@@ -189,7 +190,7 @@ size_t NitroPort_ShadowCards(struct NitroGx3dGpuVertex *verts, const struct Nitr
 #define NITRO_SHADOW_GROUND_SIDE 30.0f     /* (degrees, on the ground) */
 #define NITRO_SHADOW_GROUND_LENGTH 1.25f    /* (a little longer than the sun alone makes them) */
 #define NITRO_SHADOW_GROUND_DARK 1.1f      /* (how much darker than the shade given: its darkening times this) */
-#define NITRO_SHADOW_GROUND_TIP 0.35f
+#define NITRO_SHADOW_GROUND_TIP 0.35f   /* (no longer used: one even shade) */
 #define NITRO_SHADOW_GROUND_PULL 0.004f
 
 /* The last NitroPort_ShadowGroundCards': the marked sprites' batches, the

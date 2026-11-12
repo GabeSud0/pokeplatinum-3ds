@@ -596,14 +596,17 @@ static void lay_vertex(NitroGx3dGpuVertex *dst, const NitroGx3dGpuVertex *v, con
     dst->color[2] = col[2];
     dst->color[3] = 255;
 }
-/* (the shade at j of the way up a picture, 0-1: DARK times as dark, fading
- * to TIP of it at the top) */
+/* (the shade at j of the way up a picture, 0-1: one even shade, a tree's,
+ * NITRO_SHADOW_TREE_BLOB of DARK times as dark. First DARK times as dark
+ * at the feet, fading to TIP of it at the top: beside a tree's or a
+ * building's, all one shade, a character's showed lighter towards its
+ * head, 2026-11-12, "remove the gradient effect on sprite shadows and also
+ * have the same effect as all other shadows". j is kept: not used.) */
 static void shade_at(const float shade[3], float j, uint8_t col[3])
 {
-    float f;
+    const float f = NITRO_SHADOW_TREE_BLOB;
     int c3;
-    j = j < 0.0f ? 0.0f : j > 1.0f ? 1.0f : j;
-    f = 1.0f - (1.0f - NITRO_SHADOW_GROUND_TIP) * j;
+    (void)j;
     for (c3 = 0; c3 < 3; c3++) {
         float full = 1.0f - (1.0f - shade[c3]) * NITRO_SHADOW_GROUND_DARK * f;
         if (!(full > 0.0f)) full = 0.0f;
@@ -794,6 +797,12 @@ size_t NitroPort_ShadowGroundCards(const NitroGx3dGpuVertex *verts, const NitroG
             g = batches[bi].first;
             gEnd = batches[bj - 1].first + batches[bj - 1].count;
             sLastProps++;
+            /* (its shadow the game's: its outline, as a building's) */
+            if (tag & NITRO_GX3D_TAG_PROP_HULL) {
+                sLastPropsLaid++;
+                bi = bj;
+                continue;
+            }
             for (i = bi; i < bj; i++)
                 if (!batches[i].translucent && batches[i].texture_param) drawn += batches[i].count;
             if (gEnd - g >= 3 && gEnd - g <= PROP_VERTS && drawn) {
@@ -1218,7 +1227,7 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
     for(b=0;b<count;b++){
         const NitroGx3dBatch *batch=&batches[b];
         float lo[2]={0,0},hi[2]={0,0},px,py,dark=0.0f;
-        size_t c,e;
+        size_t c,e,own;
         uint32_t i;
         int ok=batch->count>=3u,prop=NITRO_GX3D_TAG_IS_PROP(batch->tag),first=1;
         if(!batch->tag || (batch->tag&1u) || ((batch->tag&0xC0000000u) && !prop))continue;
@@ -1246,9 +1255,15 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
         if(!ok || first)continue;
         px=(lo[0]+hi[0])*0.5f;
         py=lo[1]+(hi[1]-lo[1])*NITRO_SHADOW_FOOT_UP;
+        /* (a prop whose shadow is its outline: that outline, sent just
+         * before it, round its own feet, isn't one it stands in) */
+        own=b;
+        if(prop && (batch->tag&NITRO_GX3D_TAG_PROP_HULL))
+            while(own>0 && (batches[own-1u].tag==NITRO_GX3D_TAG_GROUND || batches[own-1u].tag==NITRO_GX3D_TAG_RIM))own--;
         for(t=0;t<nt;t++){
             const float *a=ndc[t*3u],*c1=ndc[t*3u+1u],*c2=ndc[t*3u+2u];
             float area,w0,w1,w2,g;
+            if(of[t]>=&batches[own] && of[t]<batch)continue;
             if((px<a[0] && px<c1[0] && px<c2[0]) || (px>a[0] && px>c1[0] && px>c2[0]) ||
                (py<a[1] && py<c1[1] && py<c2[1]) || (py>a[1] && py>c1[1] && py>c2[1]))
                 continue;

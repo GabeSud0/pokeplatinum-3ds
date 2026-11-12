@@ -648,13 +648,13 @@ static void test_ground_cards(void)
         CHECK(NEAR(a[0], b2[0], 1e-5) && NEAR(a[1], b2[1], 1e-5));
         CHECK(NEAR(q[2] / p0[2], keep, 1e-4));
     }
-    /* the colours: the shade (DARK times as dark) at the feet, TIP of it
-     * at the head: the whole of it in the one copy */
+    /* the colours: one even shade, a tree's (DARK x TREE_BLOB times as
+     * dark), at the feet and at the head: the whole of it in the one copy */
     for (k = 0; k < 3; k++) {
-        double dark = (1.0 - shade[k]) * NITRO_SHADOW_GROUND_DARK;
+        double dark = (1.0 - shade[k]) * NITRO_SHADOW_GROUND_DARK * NITRO_SHADOW_TREE_BLOB;
         CHECK(NEAR(out[0].color[k], (1.0 - dark) * 255.0, 1.0));
         CHECK(NEAR(out[1].color[k], (1.0 - dark) * 255.0, 1.0));
-        CHECK(NEAR(out[2].color[k], (1.0 - dark * NITRO_SHADOW_GROUND_TIP) * 255.0, 1.0));
+        CHECK(NEAR(out[2].color[k], (1.0 - dark) * 255.0, 1.0));
         CHECK(out[0].color[3] == 255);
     }
     /* the picture's feet a quarter up the card (its bottom 8 of 32 rows
@@ -843,12 +843,12 @@ static void test_ground_props(void)
         back_of(&s, out[12].position, o);
         for (k = 0; k < 3; k++) CHECK(NEAR(o[k] / keep, q[k], 0.05));
     }
-    /* the colours: the shade (DARK times as dark) at the foot, TIP of it
-     * at the top (the upper layer's top) */
+    /* the colours: one even shade, a tree's, at the foot and at the top
+     * (the upper layer's top) */
     for (k = 0; k < 3; k++) {
-        double dark = (1.0 - shade[k]) * NITRO_SHADOW_GROUND_DARK;
+        double dark = (1.0 - shade[k]) * NITRO_SHADOW_GROUND_DARK * NITRO_SHADOW_TREE_BLOB;
         CHECK(NEAR(out[0].color[k], (1.0 - dark) * 255.0, 1.0));
-        CHECK(NEAR(out[6 + 2].color[k], (1.0 - dark * NITRO_SHADOW_GROUND_TIP) * 255.0, 1.0));
+        CHECK(NEAR(out[6 + 2].color[k], (1.0 - dark) * 255.0, 1.0));
     }
     /* room for one tree but not both: the first alone, whole */
     w = NitroPort_ShadowGroundCards(v, batches, 4, (size_t)n, out, 18 * T - 1, outBatches, 12, &nb, &s, s.zclip, NULL,

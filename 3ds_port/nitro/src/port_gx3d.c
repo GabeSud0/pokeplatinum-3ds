@@ -4852,7 +4852,9 @@ NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists,const uint3
     int plain[32];
     if(!lists || !bytes || !count || count>32u || posScale<=0)return NULL;
     unit=(int32_t)((((int64_t)4096)<<12)/posScale);
-    if(unit<=0 || unit>256)return NULL;
+    /* (a map prop's model too, the honey tree's: a unit is 512 of its
+     * list's; first 256 at most, the land's 16) */
+    if(unit<=0 || unit>1024)return NULL;
     t=calloc(1,sizeof(*t)+(count-1u)*sizeof(TreeShape));
     info=calloc(count,sizeof(*info));
     quads=calloc(count,sizeof(*quads));
@@ -5627,6 +5629,12 @@ uint32_t NitroPort_Gx3dShadowHullParts(const void *const *lists,const uint32_t *
                                        int32_t shearZ,int32_t flatY,int32_t join,int32_t (*out)[3],uint32_t max,
                                        uint32_t *corners,uint32_t parts)
 {
+    return NitroPort_Gx3dShadowHullPartsFrom(lists,bytes,count,shearX,shearZ,flatY,join,0,out,max,corners,parts);
+}
+uint32_t NitroPort_Gx3dShadowHullPartsFrom(const void *const *lists,const uint32_t *bytes,uint32_t count,int32_t shearX,
+                                           int32_t shearZ,int32_t flatY,int32_t join,int32_t fromY,int32_t (*out)[3],
+                                           uint32_t max,uint32_t *corners,uint32_t parts)
+{
     /* the polygons: their vertices (pv, in order, from pv0[p] to pv0[p+1]) */
     int32_t (*v)[3]=NULL;
     uint32_t *pv=NULL,*pv0=NULL,*up=NULL;
@@ -5771,8 +5779,11 @@ uint32_t NitroPort_Gx3dShadowHullParts(const void *const *lists,const uint32_t *
             if(hull_root(up,k)!=part[i].root)continue;
             for(q=pv0[k];q<pv0[k+1u];q++){
                 const int32_t *a=v[pv[q]];
-                pts[n].x=a[0]+(((int64_t)shearX*a[1])>>12);
-                pts[n].z=a[2]+(((int64_t)shearZ*a[1])>>12);
+                /* (on ground fromY up: what's below it casts nothing
+                 * there, it stands where it is) */
+                const int32_t rise=a[1]>fromY?a[1]-fromY:0;
+                pts[n].x=a[0]+(((int64_t)shearX*rise)>>12);
+                pts[n].z=a[2]+(((int64_t)shearZ*rise)>>12);
                 pts[n].y=a[1];
                 n++;
             }
@@ -5793,8 +5804,9 @@ uint32_t NitroPort_Gx3dShadowHullParts(const void *const *lists,const uint32_t *
             if(hull_root(up,k)!=part[i].root)continue;
             for(q=pv0[k];q<pv0[k+1u];q++){
                 const int32_t *a=v[pv[q]];
-                pts[n].x=a[0]+(((int64_t)shearX*a[1])>>12);
-                pts[n].z=a[2]+(((int64_t)shearZ*a[1])>>12);
+                const int32_t rise=a[1]>fromY?a[1]-fromY:0;
+                pts[n].x=a[0]+(((int64_t)shearX*rise)>>12);
+                pts[n].z=a[2]+(((int64_t)shearZ*rise)>>12);
                 pts[n].y=a[1];
                 n++;
             }

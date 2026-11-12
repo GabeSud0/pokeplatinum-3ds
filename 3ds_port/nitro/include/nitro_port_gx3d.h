@@ -541,6 +541,10 @@ void NitroPort_Gx3dTag(uint32_t tag);
  * patch round it: drawn without the patch (its green texels), which was
  * the game's own shadow under the tree. */
 #define NITRO_GX3D_TAG_PROP 0xC0000000u
+/* A small prop whose shadow the game sends as its outline on the ground (a
+ * building's: NITRO_GX3D_TAG_GROUND and NITRO_GX3D_TAG_RIM batches): its
+ * mark has this bit too, and its picture isn't laid (port_shadow.c). */
+#define NITRO_GX3D_TAG_PROP_HULL 0x20000000u
 #define NITRO_GX3D_TAG_SHADE 0x40000000u
 /* (the shadows on the ground where a tree stands, its pool or a forest's
  * floor: drawn before the layers' shadows, once; NitroPort_Gx3dTreeGround) */
@@ -582,6 +586,14 @@ int32_t NitroPort_Gx3dListTop(const void *list, uint32_t bytes);
 uint32_t NitroPort_Gx3dShadowHullParts(const void *const *lists, const uint32_t *bytes, uint32_t count, int32_t shearX,
                                        int32_t shearZ, int32_t flatY, int32_t join, int32_t (*out)[3], uint32_t max,
                                        uint32_t *corners, uint32_t parts);
+/* The same for the shadow on ground fromY above the one the model stands
+ * on (2026-11-12: the Hallowed Tower in its dip, its shadow on the higher
+ * ground round it the one on its own ground moved up, as long and as far
+ * out, and the two didn't meet: "2 shadows"): each vertex moved by its
+ * height over fromY (none below it). */
+uint32_t NitroPort_Gx3dShadowHullPartsFrom(const void *const *lists, const uint32_t *bytes, uint32_t count,
+                                           int32_t shearX, int32_t shearZ, int32_t flatY, int32_t join, int32_t fromY,
+                                           int32_t (*out)[3], uint32_t max, uint32_t *corners, uint32_t parts);
 /* A building's walls lit by the sun (the game marks the big standing props
  * with it, 2026-11-10): draw-only too. The light's way on the ground in
  * the mark itself, as signed bytes of 1/127ths: to the right in bits 16
