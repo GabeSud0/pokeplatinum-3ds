@@ -1173,10 +1173,11 @@ int NitroPort_ShadowTreeMask(const uint32_t *rgba8,unsigned width,unsigned heigh
 /* (see the header) */
 #define DARKEN_VERTS 1536u
 unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3dBatch *batches,size_t count,
-                                       const float take[3])
+                                       const float take[3],NitroShadowMaskAt maskAt,void *maskCtx)
 {
-    static float ndc[DARKEN_VERTS][5];   /* (x, y on the screen, and the colour: red the grey, or a trunk's strip's three) */
+    static float ndc[DARKEN_VERTS][7];   /* (x, y on the screen, the colour: red the grey, or a trunk's strip's three; the texture coordinate) */
     static uint8_t oval[DARKEN_VERTS/3u];
+    static const NitroGx3dBatch *of[DARKEN_VERTS/3u];   /* (a tree's layers': its batch, for its outline) */
     size_t b,nt=0,t;
     unsigned done=0;
     if(!verts || !batches || !take)return 0;
@@ -1196,11 +1197,17 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
                 o[2]=(float)v->color[0]*(1.0f/255.0f);
                 o[3]=(float)v->color[1]*(1.0f/255.0f);
                 o[4]=(float)v->color[2]*(1.0f/255.0f);
+                o[5]=v->uv[0];
+                o[6]=v->uv[1];
             }
             /* (a tree's trunk's shadow is a strip in its quad, by its
              * colours: port_gx3d_pica.c, blob_batch; its layers', red 31, a
              * tree's shade: NITRO_SHADOW_TREE_BLOB of a full one) */
-            if(ok){oval[nt]=(uint8_t)(batch->tag==NITRO_GX3D_TAG_TRUNK?1u:batch->tag==NITRO_GX3D_TAG_SHADE?2u:0u);nt++;}
+            if(ok){
+                oval[nt]=(uint8_t)(batch->tag==NITRO_GX3D_TAG_TRUNK?1u:batch->tag==NITRO_GX3D_TAG_SHADE?2u:0u);
+                of[nt]=batch;
+                nt++;
+            }
         }
     }
     if(!nt)return 0;
@@ -1237,6 +1244,12 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
             if(w0<0.0f || w1<0.0f || w2<0.0f)continue;
             g=w0*a[2]+w1*c1[2]+w2*c2[2];
             if(oval[t]==2u){
+                if(maskAt && of[t]->texture_param){
+                    /* (the outline at the feet) */
+                    const float u=w0*a[5]+w1*c1[5]+w2*c2[5],tv=w0*a[6]+w1*c1[6]+w2*c2[6];
+                    g=maskAt(maskCtx,of[t]->texture_param,of[t]->palette_base,u,tv);
+                    if(!(g>=NITRO_SHADOW_FOOT_IN))continue;
+                }
                 g*=NITRO_SHADOW_TREE_BLOB;
             }else if(oval[t]){
                 const float gg=w0*a[3]+w1*c1[3]+w2*c2[3]-0.5f,bb=w0*a[4]+w1*c1[4]+w2*c2[4]-0.5f,rr=g-0.5f;

@@ -223,8 +223,16 @@ void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned 
  * vertices' colours darkened: by `take` (what a full shadow takes from
  * each channel, 0 to 1) times the triangle's grey there (the fade; the
  * darkest of the triangles it's in), no less than NITRO_SHADOW_FOOT_MIN
- * of it. The shadow polygons' own texture isn't looked at: their corners
- * count. Returns how many sprites were darkened. */
+ * of it. A tree's layers' (NITRO_GX3D_TAG_SHADE with a texture) by
+ * their outline there instead: maskAt (if not NULL) gives the softened
+ * outline's alpha (0 to 1, NitroPort_ShadowTreeMask's) of the batch's
+ * texture at a texture coordinate; under NITRO_SHADOW_FOOT_IN of it, not in
+ * that shadow. (First the corners alone: a layer's quad reaches well past
+ * its outline, and a character beside a tree's shadow was darkened, on a
+ * 3DS 2026-11-11: "Im close to a tree shadow, not under it and I still
+ * get darkened".) Returns how many sprites were darkened. */
+#define NITRO_SHADOW_FOOT_IN 0.3f
+typedef float (*NitroShadowMaskAt)(void *ctx, uint32_t textureParam, uint32_t paletteBase, float u, float v);
 /* (how dark a tree's shadow is, of the characters' darkening at their feet) */
 #define NITRO_SHADOW_TREE_BLOB 0.85f
 /* A tree's shadow's outline from its texture (2026-11-11, chosen from a
@@ -251,7 +259,7 @@ int NitroPort_ShadowTreeMask(const uint32_t *rgba8, unsigned width, unsigned hei
 #define NITRO_SHADOW_FOOT_UP 0.08f
 #define NITRO_SHADOW_FOOT_MIN 0.5f
 unsigned NitroPort_ShadowDarkenSprites(struct NitroGx3dGpuVertex *verts, const struct NitroGx3dBatch *batches,
-                                       size_t count, const float take[3]);
+                                       size_t count, const float take[3], NitroShadowMaskAt maskAt, void *maskCtx);
 #define NITRO_SHADOW_PROP_MIN 5.0f
 void NitroPort_ShadowPropStats(unsigned *props, unsigned *laid);
 

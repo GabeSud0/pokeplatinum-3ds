@@ -521,6 +521,9 @@ typedef struct MaskEntry {
     int used;
     uint32_t param, palette, hash, checkedFrame, lastFrame;
     C3D_Tex tex;
+    uint8_t *alpha;   /* (the outline, rows from the top, for the characters' darkening: mask_at) */
+    unsigned width, height;
+    int wrapS, wrapT;
 } MaskEntry;
 static MaskEntry sMasks[MASK_ENTRIES];
 static uint32_t *sMaskOut;
@@ -530,6 +533,7 @@ static void free_mask(MaskEntry *m)
 {
     if(!m->used)return;
     C3D_TexDelete(&m->tex);
+    free(m->alpha);
     memset(m,0,sizeof(*m));
 }
 static void clean_up(void)
@@ -1097,6 +1101,15 @@ static C3D_Tex *get_mask(uint32_t param,uint32_t palette)
         return NULL;
     }
     NitroPort_Gx3dTileRGBA8(out,width,height,(uint32_t *)slot->tex.data);
+    slot->alpha=malloc(n);
+    if(slot->alpha){
+        size_t i;
+        for(i=0;i<n;i++)slot->alpha[i]=(uint8_t)(out[i]&255u);
+    }
+    slot->width=width;
+    slot->height=height;
+    slot->wrapS=mask_wrap(param,16,18);
+    slot->wrapT=mask_wrap(param,17,19);
     C3D_TexFlush(&slot->tex);
     C3D_TexSetFilter(&slot->tex,GPU_LINEAR,GPU_LINEAR);
     C3D_TexSetWrap(&slot->tex,wrap_mode(param,16,18),wrap_mode(param,17,19));
@@ -1107,6 +1120,39 @@ static C3D_Tex *get_mask(uint32_t param,uint32_t palette)
     slot->checkedFrame=slot->lastFrame=sFrame;
     sMasksMade++;
     return &slot->tex;
+}
+
+/* A tree texture's softened outline (get_mask) at (u, v), sampled
+ * smoothly as the GPU draws it, 0 to 1; 1 if it can't be made (as the
+ * layer's corners: NitroPort_ShadowDarkenSprites). */
+static int mask_texel(int i,int n,int wrap)
+{
+    if(i>=0 && i<n)return i;
+    if(wrap==NITRO_SHADOW_WRAP_REPEAT){i%=n;return i<0?i+n:i;}
+    if(wrap==NITRO_SHADOW_WRAP_MIRROR){
+        const int p=2*n;
+        i%=p;if(i<0)i+=p;
+        return i<n?i:p-1-i;
+    }
+    return i<0?0:n-1;
+}
+static float mask_at(void *ctx,uint32_t param,uint32_t palette,float u,float v)
+{
+    const MaskEntry *m;
+    float x,y,fx,fy,a[4];
+    int x0,y0,k;
+    (void)ctx;
+    if(!get_mask(param,palette))return 1.0f;
+    for(m=sMasks;m<sMasks+MASK_ENTRIES;m++)if(m->used && m->param==param && m->palette==palette)break;
+    if(m==sMasks+MASK_ENTRIES || !m->alpha || !m->width || !m->height)return 1.0f;
+    x=u*(float)m->width-0.5f;
+    y=v*(float)m->height-0.5f;
+    x0=(int)floorf(x);y0=(int)floorf(y);
+    fx=x-(float)x0;fy=y-(float)y0;
+    for(k=0;k<4;k++)
+        a[k]=(float)m->alpha[(unsigned)mask_texel(y0+(k>>1),(int)m->height,m->wrapT)*m->width+
+                             (unsigned)mask_texel(x0+(k&1),(int)m->width,m->wrapS)]*(1.0f/255.0f);
+    return (a[0]*(1.0f-fx)+a[1]*fx)*(1.0f-fy)+(a[2]*(1.0f-fx)+a[3]*fx)*fy;
 }
 
 /* Polygon modes (attribute bits 4-5) on the colour combiner. */
@@ -2001,7 +2047,7 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
                        ((u32)(f[1]*NITRO_SHADOW_TREE_BLOB*255.0f+0.5f)<<8)|(u32)(f[0]*NITRO_SHADOW_TREE_BLOB*255.0f+0.5f);
             /* (the characters standing in them: darkened as the ground
              * under them is) */
-            if(sShadeBatches)sGroundDarkened+=NitroPort_ShadowDarkenSprites(sVertices[slot],sBatches,sPreparedBatches,f);
+            if(sShadeBatches)sGroundDarkened+=NitroPort_ShadowDarkenSprites(sVertices[slot],sBatches,sPreparedBatches,f,mask_at,NULL);
         }
         /* (most scenes of a menu or a building have no marks at all: a
          * round shadow's, or a prop's) */
@@ -3533,7 +3579,6 @@ static void draw_scene(const PicaView *view)
             NitroPort_Log("[shadow] the first sun shadow receivers sent to the GPU (step %d)",shadow_level());
         }
     }
-    if((sGroundReady || sShadeBatches) && !depthOnly)draw_ground_shadows(copying);
     /* Their fully opaque texels of translucent polygons of alpha 31 are
      * opaque too (drawn here so the outlines go over them as well). */
     stage("the opaque texels of translucent polygons");
@@ -3564,6 +3609,11 @@ static void draw_scene(const PicaView *view)
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
         draw_parts(parts);
     }
+    /* The sun shadows, on all of those: after the opaque texels of the
+     * see-through ones too (first before them: a pond's square of grass,
+     * a model with a cut-out texture, stayed lit in the shade round it, on
+     * a 3DS 2026-11-11, "artifacts in textures" at the Day Care). */
+    if((sGroundReady || sShadeBatches) && !depthOnly)draw_ground_shadows(copying);
     if(part==PICA_DRAW_OPAQUE){
         /* (the rest after the caller has scaled it down) */
         fog_mode(0);

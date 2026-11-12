@@ -86,8 +86,14 @@ static float sLit[MAX_W * MAX_H];   /* (the opaque pixels' light, for the mask) 
 static uint8_t sDecal[NITRO_GX3D_MAX_TRIANGLES];
 static uint32_t sGradeTable[32768];
 
+/* The sun shadows as SUN SHADOWS: ON draws them (port_gx3d_pica.c,
+ * NitroPort_PicaGroundShadows): look 2. */
+static int sGround;
 void NitroPort_Gx3dSimulateLook(int shadows, int grade, int fixedSun, float elevation, float azimuth)
 {
+    sGround = shadows == 2;
+    if (sGround) shadows = 0;
+    NitroPort_SetGroundShadows(sGround);
     sShadows = shadows;
     sGrade = grade;
     sSunFixed = fixedSun;
@@ -95,6 +101,17 @@ void NitroPort_Gx3dSimulateLook(int shadows, int grade, int fixedSun, float elev
     sFixedSun.azimuth = azimuth;
     NitroPort_SetSunShadows(shadows);
     NitroPort_SetShadowReach(shadows);
+    if (sGround) {
+        /* (the game makes the land's trees' shadows for this sun from its
+         * next scene on) */
+        NitroShadowSun sun = sFixedSun;
+        float strength = 1.0f;
+        time_t now = time(NULL);
+        struct tm local;
+        if (!fixedSun && now != (time_t)-1 && localtime_r(&now, &local))
+            NitroPort_ShadowSunAt(local.tm_hour, local.tm_min, &sun, &strength);
+        NitroPort_SetSunNow(&sun, strength);
+    }
 }
 
 static float row4(const float r[4], const float *p) { return r[0] * p[0] + r[1] * p[1] + r[2] * p[3] + r[3]; }
@@ -212,6 +229,302 @@ static float shadow_lookup(float u, float v, float d)
     return (s[0] * (1.0f - fx) + s[1] * fx) * (1.0f - fy) + (s[2] * (1.0f - fx) + s[3] * fx) * fy;
 }
 
+/* ---- SUN SHADOWS: ON, as port_gx3d_pica.c draws them (draw_ground_shadows,
+ * draw_once_batches): after the opaque polygons, each shadow multiplying
+ * what's there, a pixel darkened once, in its passes. ---- */
+#define G_CARD_BATCHES (2048u + SHADOW_CARD_BATCHES)
+#define G_MASKS 32
+static NitroGx3dBatch sGTag[NITRO_GX3D_MAX_TAGGED_TRIANGLES];
+static uint8_t sGRoundUsed[NITRO_GX3D_MAX_TAGGED_TRIANGLES];
+static NitroGx3dBatch sGCards[G_CARD_BATCHES];
+static size_t sGCardCount;
+static int sGReady, sGOnce;
+static unsigned sGShadeBatches;
+static float sGShade[3], sGTree[3];   /* (what a full shadow takes; a tree's) */
+static uint8_t sOnce[MAX_W * MAX_H];
+static struct { int used; uint32_t param, palette; uint32_t *tiled; } sGMasks[G_MASKS];
+
+enum { G_GROUND, G_PROP, G_MASK, G_BLOB, G_CHAR };
+
+
+static Color fetch_linear(const uint32_t *tiled, uint32_t param, float u, float v)
+{
+    unsigned w = NitroPort_Gx3dTexWidth(param), h = NitroPort_Gx3dTexHeight(param);
+    float x = u * (float)w - 0.5f, y = v * (float)h - 0.5f, fx, fy;
+    int x0 = (int)floorf(x), y0 = (int)floorf(y), k;
+    Color c[4], out;
+    fx = x - (float)x0;
+    fy = y - (float)y0;
+    for (k = 0; k < 4; k++)
+        c[k] = fetch(tiled, param, ((float)(x0 + (k & 1)) + 0.5f) / (float)w, ((float)(y0 + (k >> 1)) + 0.5f) / (float)h);
+#define LERP2(f) ((c[0].f * (1.0f - fx) + c[1].f * fx) * (1.0f - fy) + (c[2].f * (1.0f - fx) + c[3].f * fx) * fy)
+    out.r = LERP2(r); out.g = LERP2(g); out.b = LERP2(b); out.a = LERP2(a);
+#undef LERP2
+    return out;
+}
+
+/* A tree texture's softened outline (port_gx3d_pica.c, get_mask), tiled. */
+static const uint32_t *g_mask(const NitroGx3dTexBanks *banks, uint32_t param, uint32_t palette)
+{
+    unsigned w = NitroPort_Gx3dTexWidth(param), h = NitroPort_Gx3dTexHeight(param);
+    uint32_t *tiled, *lin, *out;
+    int i, slot = -1;
+    for (i = 0; i < G_MASKS; i++) {
+        if (sGMasks[i].used && sGMasks[i].param == param && sGMasks[i].palette == palette) return sGMasks[i].tiled;
+        if (!sGMasks[i].used && slot < 0) slot = i;
+    }
+    if (slot < 0) return NULL;
+    tiled = malloc((size_t)w * h * 4u);
+    lin = malloc((size_t)w * h * 4u);
+    out = malloc((size_t)w * h * 4u);
+    if (!tiled || !lin || !out) { free(tiled); free(lin); free(out); return NULL; }
+    NitroPort_Gx3dDecodeTextureTiled(banks, param, palette, tiled);
+    NitroPort_Gx3dUntileRGBA8(tiled, w, h, lin);
+    if (!NitroPort_ShadowTreeMask(lin, w, h,
+                                  !(param & (1u << 16)) ? NITRO_SHADOW_WRAP_CLAMP : (param & (1u << 18)) ? NITRO_SHADOW_WRAP_MIRROR : NITRO_SHADOW_WRAP_REPEAT,
+                                  !(param & (1u << 17)) ? NITRO_SHADOW_WRAP_CLAMP : (param & (1u << 19)) ? NITRO_SHADOW_WRAP_MIRROR : NITRO_SHADOW_WRAP_REPEAT,
+                                  out)) {
+        free(tiled); free(lin); free(out);
+        return NULL;
+    }
+    NitroPort_Gx3dTileRGBA8(out, w, h, tiled);
+    free(lin); free(out);
+    sGMasks[slot].used = 1;
+    sGMasks[slot].param = param;
+    sGMasks[slot].palette = palette;
+    sGMasks[slot].tiled = tiled;
+    return tiled;
+}
+static void g_masks_free(void)
+{
+    int i;
+    for (i = 0; i < G_MASKS; i++) { free(sGMasks[i].tiled); sGMasks[i].tiled = NULL; sGMasks[i].used = 0; }
+}
+
+static float g_mask_at(void *ctx, uint32_t param, uint32_t palette, float u, float v)
+{
+    const uint32_t *mask = g_mask(ctx, param, palette);
+    return mask ? fetch_linear(mask, param, u, v).a : 1.0f;
+}
+
+static int g_foot_row(void *ctx, uint32_t param, uint32_t palette, int s0, int s1, int tFrom, int tTo)
+{
+    const NitroGx3dTexBanks *banks = ctx;
+    int t, s, sEnd = s1 - s0 > 128 ? s0 + 128 : s1, step = tTo >= tFrom ? 1 : -1;
+    for (t = tFrom;; t += step) {
+        for (s = s0; s < sEnd; s++)
+            if (NitroPort_Gx3dSampleTexel(banks, param, palette, s, t).alpha) return t;
+        if (t == tTo) break;
+    }
+    return -1;
+}
+
+/* One shadow batch drawn: depth LEQUAL (no writes), the kind's colour and
+ * alpha, alpha >= test, once (or not), the frame times the colour. */
+static void g_draw(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batch, int kind, unsigned test, int once,
+                   const NitroGx3dTexBanks *banks, uint32_t *tiled, Color *color, const float *depth, int wbuffer)
+{
+    const uint32_t *tex = NULL;
+    uint32_t k;
+    if (batch->texture_param && (kind == G_GROUND || kind == G_PROP || kind == G_CHAR)) {
+        NitroPort_Gx3dDecodeTextureTiled(banks, batch->texture_param, batch->palette_base, tiled);
+        tex = tiled;
+    } else if (kind == G_MASK) {
+        tex = g_mask(banks, batch->texture_param, batch->palette_base);
+        if (!tex) return;
+    } else if (kind != G_GROUND && kind != G_BLOB) {
+        return;
+    }
+    for (k = batch->first; k + 2 < batch->first + batch->count; k += 3) {
+        const NitroGx3dGpuVertex *v = &verts[k];
+        float sx[3], sy[3], sz[3], iw[3], area;
+        int j, x0, x1, y0, y1, x, y;
+        for (j = 0; j < 3; j++) {
+            float w = v[j].position[3];
+            iw[j] = w != 0.0f ? 1.0f / w : 0.0f;
+            sx[j] = (v[j].position[0] * iw[j] + 1.0f) * (float)W * 0.5f;
+            sy[j] = (1.0f - v[j].position[1] * iw[j]) * (float)H * 0.5f;
+            sz[j] = -v[j].position[2] * iw[j];
+        }
+        area = edge(sx[0], sy[0], sx[1], sy[1], sx[2], sy[2]);
+        if (fabsf(area) < 1e-6f) continue;
+        x0 = (int)floorf(fminf(sx[0], fminf(sx[1], sx[2])));
+        x1 = (int)ceilf(fmaxf(sx[0], fmaxf(sx[1], sx[2])));
+        y0 = (int)floorf(fminf(sy[0], fminf(sy[1], sy[2])));
+        y1 = (int)ceilf(fmaxf(sy[0], fmaxf(sy[1], sy[2])));
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > W - 1) x1 = W - 1;
+        if (y1 > H - 1) y1 = H - 1;
+        for (y = y0; y <= y1; y++)
+        for (x = x0; x <= x1; x++) {
+            float px = x + 0.5f, py = y + 0.5f;
+            float l0 = edge(sx[1], sy[1], sx[2], sy[2], px, py) / area;
+            float l1 = edge(sx[2], sy[2], sx[0], sy[0], px, py) / area;
+            float l2 = 1.0f - l0 - l1, z, pw, a = 1.0f, rgb[3];
+            float pr[4], uv[2];
+            unsigned idx = (unsigned)y * W + (unsigned)x, a8, c;
+            if (l0 < -1e-6f || l1 < -1e-6f || l2 < -1e-6f) continue;
+            if (once && sOnce[idx]) continue;
+            z = l0 * sz[0] + l1 * sz[1] + l2 * sz[2];
+            pw = l0 * iw[0] + l1 * iw[1] + l2 * iw[2];
+            if (pw == 0.0f) continue;
+            if (wbuffer) z = z / pw;
+            if (!(z <= depth[idx])) continue;
+            for (c = 0; c < 4; c++)
+                pr[c] = (l0 * iw[0] * v[0].color[c] + l1 * iw[1] * v[1].color[c] + l2 * iw[2] * v[2].color[c]) / pw / 255.0f;
+            for (c = 0; c < 2; c++)
+                uv[c] = (l0 * iw[0] * v[0].uv[c] + l1 * iw[1] * v[1].uv[c] + l2 * iw[2] * v[2].uv[c]) / pw;
+            switch (kind) {
+            case G_GROUND:
+                a = tex ? fetch_linear(tex, batch->texture_param, uv[0], uv[1]).a : pr[3];
+                for (c = 0; c < 3; c++) rgb[c] = 1.0f - sGShade[c] * pr[c];
+                break;
+            case G_PROP:
+                a = fetch_linear(tex, batch->texture_param, uv[0], uv[1]).a;
+                for (c = 0; c < 3; c++) rgb[c] = pr[c];
+                break;
+            case G_MASK:
+                a = fetch_linear(tex, batch->texture_param, uv[0], uv[1]).a;
+                for (c = 0; c < 3; c++) rgb[c] = 1.0f - sGTree[c] * a;
+                break;
+            case G_BLOB: {
+                float d = 4.0f * ((pr[0] - 0.5f) * (pr[0] - 0.5f) + (pr[1] - 0.5f) * (pr[1] - 0.5f) +
+                                  (pr[2] - 0.5f) * (pr[2] - 0.5f));
+                d = d > 1.0f ? 1.0f : d;
+                a = 4.0f * (1.0f - d);
+                a = a > 1.0f ? 1.0f : a;
+                for (c = 0; c < 3; c++) rgb[c] = 1.0f - a * sGTree[c];
+                break;
+            }
+            default:
+                a = fetch_linear(tex, batch->texture_param, uv[0], uv[1]).a;
+                for (c = 0; c < 3; c++) rgb[c] = pr[c] * a + (1.0f - a);
+                break;
+            }
+            a8 = (unsigned)(a * 255.0f + 0.5f);
+            if (test ? a8 < test : !(a8 > 0)) continue;
+            if (once) sOnce[idx] = 1;
+            color[idx].r *= rgb[0] < 0.0f ? 0.0f : rgb[0];
+            color[idx].g *= rgb[1] < 0.0f ? 0.0f : rgb[1];
+            color[idx].b *= rgb[2] < 0.0f ? 0.0f : rgb[2];
+        }
+    }
+}
+
+static void ground_shadows(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batches, size_t nb,
+                           const NitroGx3dTexBanks *banks, uint32_t *tiled, Color *color, const float *depth,
+                           int wbuffer)
+{
+    static const unsigned tests[5] = { 128, 250, 128, 8, 128 };
+    size_t b;
+    int pass;
+    if (!sGOnce) {
+        for (b = 0; b < sGCardCount && sGReady; b++)
+            if (!sGCards[b].tag) g_draw(verts, &sGCards[b], G_CHAR, 0, 0, banks, tiled, color, depth, wbuffer);
+        return;
+    }
+    memset(sOnce, 0, sizeof(sOnce));
+    for (pass = 0; pass < 5; pass++) {
+        for (b = 0; b < nb && sGShadeBatches; b++) {
+            const NitroGx3dBatch *batch = &batches[b];
+            uint32_t tag = batch->tag;
+            if (batch->translucent) continue;
+            if (pass == 0 ? tag != NITRO_GX3D_TAG_GROUND : pass == 4 ? tag != NITRO_GX3D_TAG_RIM :
+                (tag != NITRO_GX3D_TAG_SHADE && tag != NITRO_GX3D_TAG_TRUNK)) continue;
+            g_draw(verts, batch, pass == 0 || pass == 4 ? G_GROUND :
+                   tag == NITRO_GX3D_TAG_SHADE && batch->texture_param ? G_MASK : G_BLOB,
+                   tests[pass], 1, banks, tiled, color, depth, wbuffer);
+        }
+        if (pass == 2)
+            for (b = 0; b < sGCardCount && sGReady; b++)
+                if (sGCards[b].tag == NITRO_SHADOW_ONCE)
+                    g_draw(verts, &sGCards[b], G_PROP, tests[pass], 1, banks, tiled, color, depth, wbuffer);
+        if (pass >= 1 && pass <= 3)
+            for (b = 0; b < sGCardCount && sGReady; b++)
+                if (!sGCards[b].tag)
+                    g_draw(verts, &sGCards[b], G_CHAR, tests[pass], 1, banks, tiled, color, depth, wbuffer);
+    }
+}
+
+/* The scene's sun shadows made (port_gx3d_pica.c's prepare): the
+ * characters standing in the trees' darkened, the characters' and props'
+ * laid on the ground after the scene's vertices, the round shadows under
+ * them left out. */
+static void ground_prepare(const NitroGx3dScene *scene, NitroGx3dGpuVertex *verts, size_t nv, size_t room,
+                           NitroGx3dBatch *batches, size_t nb, const NitroGx3dTexBanks *banks,
+                           const NitroShadowSun *sun, float strength, const float shade[3], int wbuffer)
+{
+    size_t b, i, marked = 0;
+    int c;
+    sGReady = 0;
+    sGCardCount = 0;
+    sGShadeBatches = 0;
+    sGOnce = 0;
+    g_masks_free();
+    NitroPort_SetSunNow(sun, strength);
+    if (!(strength >= 0.02f)) return;
+    for (c = 0; c < 3; c++) {
+        /* (as port_gx3d_pica.c: the shade as bytes) */
+        float shadeC = floorf(shade[c] * 255.0f + 0.5f) / 255.0f, f = (1.0f - shadeC) * NITRO_SHADOW_GROUND_DARK;
+        f = f > 0.0f ? (f > 1.0f ? 1.0f : f) : 0.0f;
+        sGShade[c] = floorf(f * 255.0f + 0.5f) / 255.0f;
+        sGTree[c] = floorf(f * NITRO_SHADOW_TREE_BLOB * 255.0f + 0.5f) / 255.0f;
+    }
+    for (b = 0; b < nb; b++)
+        if (NITRO_GX3D_TAG_IS_SHADE(batches[b].tag)) sGShadeBatches++;
+    if (sGShadeBatches) {
+        float f[3];
+        for (c = 0; c < 3; c++) {
+            float shadeC = floorf(shade[c] * 255.0f + 0.5f) / 255.0f;
+            f[c] = (1.0f - shadeC) * NITRO_SHADOW_GROUND_DARK;
+            f[c] = f[c] > 0.0f ? (f[c] > 1.0f ? 1.0f : f[c]) : 0.0f;
+        }
+        NitroPort_ShadowDarkenSprites(verts, batches, nb, f, g_mask_at, (void *)banks);
+    }
+    for (i = 0; i < scene->tagged_count && !marked; i++) {
+        uint32_t tag = scene->tagged_triangles[i].tag;
+        marked = NITRO_GX3D_TAG_IS_ROUND(tag) || NITRO_GX3D_TAG_IS_PROP(tag);
+    }
+    if (marked) {
+        NitroShadowSetup setup;
+        size_t ntb = 0, nt, n = 0, nc = 0;
+        float depthRow[4], cardShade[3];
+        int ready;
+        nt = NitroPort_Gx3dBuildTaggedBatches(scene, nv, verts + nv, room, sGTag, NITRO_GX3D_MAX_TAGGED_TRIANGLES, &ntb);
+        ready = NitroPort_ShadowGroundSetup(verts, sGTag, ntb, scene->projection, scene->screen_width,
+                                            scene->screen_height, sun, &setup);
+        if (!ready)
+            ready = NitroPort_ShadowSetup(verts[0].position, sizeof(verts[0]), nv, scene->projection,
+                                          scene->screen_width, scene->screen_height, sun, SHADOW_SIZE, &setup);
+        if (ready) {
+            /* (the depths as the scene's: no remap here) */
+            NitroPort_ShadowDepthRow(&setup, wbuffer, 0.0f, 1.0f, depthRow);
+            for (c = 0; c < 3; c++) cardShade[c] = floorf(shade[c] * 255.0f + 0.5f) / 255.0f;
+            memset(sGRoundUsed, 0, ntb);
+            n = NitroPort_ShadowGroundCards(verts, sGTag, ntb, nv + nt, verts + nv + nt, room - nt, sGCards,
+                                            G_CARD_BATCHES, &nc, &setup, depthRow, sGRoundUsed, cardShade,
+                                            g_foot_row, (void *)banks);
+        }
+        if (n && nc) {
+            size_t t;
+            for (t = 0; t < ntb; t++) {
+                if (!sGRoundUsed[t]) continue;
+                for (b = 0; b < nb; b++) {
+                    NitroGx3dGpuVertex *rv = verts + batches[b].first;
+                    uint32_t j;
+                    if (batches[b].tag != sGTag[t].tag) continue;
+                    for (j = 1; j < batches[b].count; j++) memcpy(rv[j].position, rv[0].position, sizeof(rv[0].position));
+                }
+            }
+            sGCardCount = nc;
+            sGReady = 1;
+        }
+    }
+    sGOnce = sGShadeBatches != 0;
+    for (b = 0; b < sGCardCount && sGReady; b++) sGOnce |= sGCards[b].tag == NITRO_SHADOW_ONCE;
+}
+
 static void simulate(const NitroGx3dScene *scene, uint16_t *out555);
 
 void NitroPort_Gx3dSimulateGpu(const NitroGx3dScene *scene, uint16_t *out555)
@@ -250,7 +563,7 @@ static void simulate(const NitroGx3dScene *scene, uint16_t *out555)
     NitroShadowSetup shadow;
     NitroShadowSun sun = sFixedSun;
     float strength = 1.0f, shade[3];
-    int idPass, shadowed = 0, masked = 0;
+    int idPass, phase, shadowed = 0, masked = 0;
     size_t nb = 0, b, i, nv;
     unsigned dropped;
     uint32_t clear = (uint32_t)NitroPort_IoReg[0x350] | ((uint32_t)NitroPort_IoReg[0x351] << 8) |
@@ -287,6 +600,11 @@ static void simulate(const NitroGx3dScene *scene, uint16_t *out555)
         shade[1] = 1.0f - (1.0f - NITRO_SHADOW_SHADE_G / 255.0f) * strength;
         shade[2] = 1.0f - (1.0f - NITRO_SHADOW_SHADE_B / 255.0f) * strength;
     }
+    if (sGround && nv)
+        ground_prepare(scene, verts, nv, 3 * NITRO_GX3D_MAX_SHADOW_TRIANGLES + 3 * SHADOW_CARD_TRIANGLES, batches, nb,
+                       &banks, &sun, strength, shade, wbuffer);
+    else
+        sGReady = 0, sGShadeBatches = 0;
     if (sShadows && nv && strength >= 0.02f &&
         NitroPort_ShadowSetup(verts[0].position, sizeof(verts[0]), nv, scene->projection, scene->screen_width, scene->screen_height,
                               &sun, SHADOW_SIZE, &shadow)) {
@@ -326,16 +644,24 @@ static void simulate(const NitroGx3dScene *scene, uint16_t *out555)
     edges.clearDepth = 0xFFFFFFu;   /* the target is cleared to the farthest */
     /* Pass 1 draws; with edge marking, pass 2 writes the opaque pixels'
      * polygon IDs to the stencil where they're in front (port_gx3d_pica.c). */
+    /* (as port_gx3d_pica.c: the opaque polygons, the opaque texels of the
+     * see-through ones; the sun shadows; then the see-through polygons) */
     for (idPass = 0; idPass < (edges.enabled ? 2 : 1); idPass++)
+    for (phase = 0; phase < (idPass ? 1 : 2); phase++)
     for (b = 0; b <= nb; b++) {
         const NitroGx3dBatch *batch = &batches[b < nb ? b : 0];
         /* the sun shadows' light, after the opaque polygons (as the 3DS) */
-        if (!idPass && shadowed && !masked && (b == nb || batch->translucent)) {
+        if (!idPass && phase && shadowed && !masked) {
             apply_mask(color, shade);
+            masked = 1;
+        }
+        if (!idPass && phase && sGround && (sGReady || sGShadeBatches) && !masked) {
+            ground_shadows(verts, batches, nb, &banks, tiled, color, depth, wbuffer);
             masked = 1;
         }
         if (b == nb) break;
         if (shadowed && sDecal[b]) continue;   /* (one of the game's painted shadows) */
+        if (sGround && NITRO_GX3D_TAG_IS_SHADE(batch->tag)) continue;   /* (drawn as shadows, above) */
         {
         unsigned mode = (batch->polygon_attr >> 4) & 3u;
         int textured = batch->texture_param != 0;
@@ -377,6 +703,7 @@ static void simulate(const NitroGx3dScene *scene, uint16_t *out555)
             NitroPort_Gx3dDecodeTextureTiled(&banks, batch->texture_param, batch->palette_base, tiled);
         for (p = 0; p < np; p++)
         for (k = batch->first; k + 2 < batch->first + batch->count; k += 3) {
+            if (!idPass && passes[p].translucent != phase) break;
             const NitroGx3dGpuVertex *v = &verts[k];
             float sx[3], sy[3], sz[3], iw[3], area;
             int j, x0, x1, y0, y1, x, y;
@@ -440,8 +767,19 @@ static void simulate(const NitroGx3dScene *scene, uint16_t *out555)
                             out.a = tex.a * prim.a;
                         }
                     }
+                    /* (a tree's layers and a building's walls lit by the
+                     * sun: their colour twice, port_gx3d_pica.c) */
+                    if (batch->tag == NITRO_GX3D_TAG_CANOPY || NITRO_GX3D_TAG_IS_WALLS(batch->tag)) {
+                        out.r = fminf(out.r * 2.0f, 1.0f);
+                        out.g = fminf(out.g * 2.0f, 1.0f);
+                        out.b = fminf(out.b * 2.0f, 1.0f);
+                    }
                     /* Alpha test, on 8-bit alpha as the PICA does it. */
-                    {
+                    if (sGround && textured && batch->tag == NITRO_GX3D_TAG_STUMP && passes[p].test == 0) {
+                        /* (a tree's stump without its patch: stump_combiner) */
+                        float st = fminf((1.0f - tex.g) + tex.r, 1.0f) * tex.a;
+                        if (!((unsigned)(st * 255.0f + 0.5f) > 250u)) continue;
+                    } else {
                         unsigned a8 = (unsigned)(out.a * 255.0f + 0.5f);
                         if (passes[p].test == 0 ? !(a8 > 0) : passes[p].test == 1 ? !(a8 > 254) : !(a8 < 255))
                             continue;

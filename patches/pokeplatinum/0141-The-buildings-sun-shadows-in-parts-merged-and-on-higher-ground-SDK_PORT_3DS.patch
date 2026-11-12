@@ -1,0 +1,365 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Wed, 11 Nov 2026 23:35:40 -0700
+Subject: [PATCH] The buildings' sun shadows in parts, merged, and on higher
+ ground (SDK_PORT_3DS)
+
+A building's sun shadow is now a hull for each group of its model's
+polygons that touch (NitroPort_Gx3dShadowHullParts, up to 8): one hull
+of the whole model laid the Day Care's house, sheds and yard under one
+shadow. A group that is mostly open (a fence round a yard) casts none.
+
+Each is one even shade, a tree's (26 of 31): where a tree's shadow lies
+in a building's, the two are one shadow, not a darker tree cut out of it.
+
+And where the ground under its corners is higher than the building
+stands (a tower in a dip, the Galactic building's dishes in their pits:
+the shadow was under it), a second copy is laid at that height. The
+field gives the ground (TerrainCollisionManager) while it draws its maps:
+MapProp_PortGround, around LandDataManager_RenderLoadedMaps.
+---
+ include/overlay005/map_prop.h |   7 ++
+ src/overlay005/fieldmap.c     |   7 ++
+ src/overlay005/map_prop.c     | 210 ++++++++++++++++++++++++++--------
+ 3 files changed, 177 insertions(+), 47 deletions(-)
+
+diff --git a/include/overlay005/map_prop.h b/include/overlay005/map_prop.h
+index 3c7ad272..764f862c 100644
+--- a/include/overlay005/map_prop.h
++++ b/include/overlay005/map_prop.h
+@@ -70,4 +70,11 @@ MapProp *MapPropManager_GetLoadedPropSafely(MapPropManager *mapPropManager, cons
+ u8 MapPropManager_LoadOne(MapPropManager *mapPropManager, AreaDataManager *const areaDataManager, const int modelID, const VecFx32 *position, const VecFx32 *rotation, MapPropAnimationManager *mapPropAnimMan);
+ void MapPropManager_Render2(MapPropManager *mapPropManager, AreaDataManager *const areaDataManager);
+ 
++#ifdef SDK_PORT_3DS
++// (the 3DS port) The field drawing its maps, for the ground under the
++// buildings' sun shadows (NULL after).
++#include "field/field_system_decl.h"
++void MapProp_PortGround(const FieldSystem *fieldSystem);
++#endif
++
+ #endif // POKEPLATINUM_OV5_MAP_PROP_H
+diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
+index 0cb6f218..99ab034f 100644
+--- a/src/overlay005/fieldmap.c
++++ b/src/overlay005/fieldmap.c
+@@ -743,7 +743,14 @@ static void ov5_021D15F4(FieldSystem *fieldSystem)
+     }
+ 
+     PokeRadar_ClearIfAllOutOfView(fieldSystem);
++#ifdef SDK_PORT_3DS
++    // (the ground under the buildings' sun shadows, while they're drawn)
++    MapProp_PortGround(fieldSystem);
++#endif
+     LandDataManager_RenderLoadedMaps(fieldSystem->landDataMan, fieldSystem->areaModelAttrs);
++#ifdef SDK_PORT_3DS
++    MapProp_PortGround(NULL);
++#endif
+ 
+     if (FieldMap_InDistortionWorld(fieldSystem) == TRUE) {
+         DistWorld_RenderInactiveFloor(fieldSystem);
+diff --git a/src/overlay005/map_prop.c b/src/overlay005/map_prop.c
+index 64fca2b6..84702afe 100644
+--- a/src/overlay005/map_prop.c
++++ b/src/overlay005/map_prop.c
+@@ -19,7 +19,17 @@
+ #ifdef SDK_PORT_3DS
+ extern void NitroPort_Gx3dTag(u32 tag);
+ extern int NitroPort_SunWayNow(s32 way[3]);
+-extern u32 NitroPort_Gx3dShadowHull(const void *const *lists, const u32 *bytes, u32 count, s32 shearX, s32 shearZ, s32 flatY, s32 (*out)[3], u32 max);
++// (the ground under a building's shadow: TerrainCollisionManager's, while
++// the field draws its maps, MapProp_PortGround)
++#include "terrain_collision_manager.h"
++static const FieldSystem *sPortGroundField = NULL;
++
++void MapProp_PortGround(const FieldSystem *fieldSystem)
++{
++    sPortGroundField = fieldSystem;
++}
++
++extern u32 NitroPort_Gx3dShadowHullParts(const void *const *lists, const u32 *bytes, u32 count, s32 shearX, s32 shearZ, s32 flatY, s32 join, s32 (*out)[3], u32 max, u32 *corners, u32 parts);
+ 
+ // The 3DS remaster's sun shadows: the small standing props (trees, signs,
+ // lamp posts, boards: by their model's box, up to 50 wide and 45 deep, 6 or
+@@ -92,13 +102,13 @@ static void MapProp_PortMark(u32 mark)
+ // A building's sun shadow (2026-11-10; first its box's, two quads: "the
+ // building shadows do no have the building shape, and they are way to
+ // sharp"): the outline of the building itself on the ground it stands
+-// on, for the sun as the port has it now: the hull of every vertex of
+-// its model moved along the light's way by its height times the shadows'
+-// length (NitroPort_Gx3dShadowHull, at most 14 corners; not the shapes
+-// lying flat on the ground: its own painted shadow is one), worked out when
+-// the sun has moved on and kept for the model. Sent as a strip of
+-// triangles with no texture, 22 of 31 dark where it comes from the
+-// building's foot and 15 from its top, marked 0x40000008
++// on, for the sun as the port has it now: for each group of its polygons
++// that touch, the hull of their vertices moved along the light's way by
++// their height times the shadows' length (NitroPort_Gx3dShadowHullParts,
++// at most 14 corners each; not the
++// shapes lying flat on the ground: its own painted shadow is one), worked
++// out when the sun has moved on and kept for the model. Each sent as a
++// strip of triangles with no texture, 26 of 31 dark, marked 0x40000008
+ // (NITRO_GX3D_TAG_GROUND: drawn with the trees' pools, a pixel darkened
+ // once); and round it a soft edge, 6 units out from its middle, its
+ // grey falling to none, marked 0x40000010 (NITRO_GX3D_TAG_RIM: drawn
+@@ -107,13 +117,19 @@ static void MapProp_PortMark(u32 mark)
+ // above where it stands. Sent whether or not the building is in view:
+ // its shadow may be.
+ #define PORT_HULL_CORNERS 14
++#define PORT_HULL_PARTS   8
+ #define PORT_HULL_MODELS  24
+ 
++// (2026-11-11, one hull of the whole model: a model that is a house with
++// its sheds round a yard, the Day Care's, laid one shadow over the whole
++// yard, "shadows that made no sense". Now a hull for each group of its
++// polygons that touch, up to PORT_HULL_PARTS: NitroPort_Gx3dShadowHullParts.)
+ typedef struct PortHull {
+     const NNSG3dResMdl *model;
+     s32 way[3];
+-    s32 corners[PORT_HULL_CORNERS][3];
+-    u32 count;
++    s32 corners[PORT_HULL_PARTS][PORT_HULL_CORNERS][3];
++    u32 count[PORT_HULL_PARTS];
++    u32 parts;
+ } PortHull;
+ 
+ static PortHull sPortHulls[PORT_HULL_MODELS];
+@@ -124,6 +140,7 @@ static const PortHull *MapProp_PortHull(const NNSG3dResMdl *model, const s32 way
+     const NNSG3dResShp *shapes = NNS_G3dGetShp(model);
+     const void *lists[48];
+     u32 bytes[48], i, count;
++    s32 shearX, shearZ, flatY, join;
+     PortHull *hull = NULL;
+ 
+     for (i = 0; i < PORT_HULL_MODELS; i++) {
+@@ -159,45 +176,107 @@ static const PortHull *MapProp_PortHull(const NNSG3dResMdl *model, const s32 way
+     hull->way[0] = way[0];
+     hull->way[1] = way[1];
+     hull->way[2] = way[2];
+-    hull->count = NitroPort_Gx3dShadowHull(lists, bytes, count, (s32)((s64)way[0] * way[2] >> 12), (s32)((s64)way[1] * way[2] >> 12),
+-        (s32)FX_Div(3 * FX32_ONE / 2, NNS_G3dGetMdlInfo(model)->posScale), hull->corners, PORT_HULL_CORNERS);
++    shearX = (s32)((s64)way[0] * way[2] >> 12);
++    shearZ = (s32)((s64)way[1] * way[2] >> 12);
++    flatY = (s32)FX_Div(3 * FX32_ONE / 2, NNS_G3dGetMdlInfo(model)->posScale);
++    join = (s32)FX_Div(8 * FX32_ONE, NNS_G3dGetMdlInfo(model)->posScale);
++    hull->parts = NitroPort_Gx3dShadowHullParts(lists, bytes, count, shearX, shearZ, flatY, join, hull->corners[0], PORT_HULL_CORNERS, hull->count, PORT_HULL_PARTS);
+ 
+     return hull;
+ }
+ 
+-static void MapProp_PortBuildingShadow(const MapProp *prop, const VecFx32 *position, const MtxFx33 *rotation, const VecFx32 *scale)
+-{
+-    const NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(prop->model);
++// The ground higher than a building stands under its shadow's corners
++// (2026-11-11: laid where the building stands, a tower in a dip, the
++// Hallowed Tower, and the Galactic building's dishes in their pits, showed
++// none: the ground round them is higher, over it): the highest there, as a
++// vertex's y in the model's own coordinates (a quarter of them, a unit
++// above it), for a second copy of the shadow laid there; 0 where none is
++// over 4 units higher (or more than 4 tiles: not the same ground). Kept
++// for the building's place until the sun moves on.
++#define PORT_GROUND_PLACES 24
++
++typedef struct PortGround {
+     const PortHull *hull;
+-    VecFx32 quarter;
+-    s32 way[3], xs[PORT_HULL_CORNERS], zs[PORT_HULL_CORNERS], ox[PORT_HULL_CORNERS], oz[PORT_HULL_CORNERS];
+-    s32 y, rim, cx = 0, cz = 0, tall = 1;
+-    u32 i, n;
+-    u8 grey[PORT_HULL_CORNERS];
++    VecFx32 position;
++    s32 way[3];
++    s32 top[PORT_HULL_PARTS];
++} PortGround;
+ 
+-    if (info->posScale <= 0 || !NitroPort_SunWayNow(way)) {
+-        return;
++static PortGround sPortGrounds[PORT_GROUND_PLACES];
++static u32 sPortGroundNext = 0;
++
++static const PortGround *MapProp_PortGroundOf(const PortHull *hull, const NNSG3dResMdlInfo *info, const VecFx32 *position, const VecFx32 *scale, s32 base)
++{
++    PortGround *ground = NULL;
++    u32 i, part;
++
++    for (i = 0; i < PORT_GROUND_PLACES; i++) {
++        PortGround *g = &sPortGrounds[i];
++
++        if (g->hull == hull && g->position.x == position->x && g->position.y == position->y && g->position.z == position->z) {
++            ground = g;
++            break;
++        }
+     }
+ 
+-    hull = MapProp_PortHull(prop->model, way);
+-    n = hull->count;
++    if (ground != NULL && ground->way[0] == hull->way[0] && ground->way[1] == hull->way[1] && ground->way[2] == hull->way[2]) {
++        return ground;
++    }
+ 
+-    if (n < 3) {
+-        return;
++    if (ground == NULL) {
++        ground = &sPortGrounds[sPortGroundNext];
++        sPortGroundNext = (sPortGroundNext + 1) % PORT_GROUND_PLACES;
+     }
+ 
+-    y = (s32)(FX_Div(FX32_ONE, info->posScale) / 4);
+-    rim = (s32)(FX_Div(6 * FX32_ONE, info->posScale) / 4);
++    ground->hull = hull;
++    ground->position = *position;
++    ground->way[0] = hull->way[0];
++    ground->way[1] = hull->way[1];
++    ground->way[2] = hull->way[2];
++
++    for (part = 0; part < hull->parts; part++) {
++        fx32 top = position->y;
++
++        for (i = 0; i < hull->count[part] && sPortGroundField != NULL && scale->y == FX32_ONE; i++) {
++            fx32 x = position->x + FX_Mul(FX_Mul(hull->corners[part][i][0], info->posScale), scale->x);
++            fx32 z = position->z + FX_Mul(FX_Mul(hull->corners[part][i][1], info->posScale), scale->z);
++            fx32 height = position->y;
++            u8 source = CALCULATED_HEIGHT_SOURCE_NONE;
++
++            height = TerrainCollisionManager_GetHeight(sPortGroundField, position->y, x, z, &source);
++
++            if (source == CALCULATED_HEIGHT_SOURCE_NONE && !TerrainCollisionManager_PortBesideHeight(sPortGroundField, position->y, x, z, &height)) {
++                height = position->y;
++            }
++
++            if (height > top && height - position->y <= 64 * FX32_ONE) {
++                top = height;
++            }
++        }
++
++        ground->top[part] = top - position->y > 4 * FX32_ONE ? base + (s32)(FX_Div(top - position->y, info->posScale) / 4) : 0;
++
++        if (ground->top[part] > 32000) {
++            ground->top[part] = 0;
++        }
++    }
++
++    return ground;
++}
++
++// One hull's shadow (MapProp_PortBuildingShadow), in the model's own
++// coordinates, a quarter of them, at height y; rim: the soft edge's width.
++static void MapProp_PortHullShadow(const s32 (*corners)[3], u32 n, s32 y, s32 rim)
++{
++    s32 xs[PORT_HULL_CORNERS], zs[PORT_HULL_CORNERS], ox[PORT_HULL_CORNERS], oz[PORT_HULL_CORNERS];
++    s32 cx = 0, cz = 0;
++    u32 i;
+ 
+     for (i = 0; i < n; i++) {
+-        xs[i] = hull->corners[i][0] / 4;
+-        zs[i] = hull->corners[i][1] / 4;
++        xs[i] = corners[i][0] / 4;
++        zs[i] = corners[i][1] / 4;
+         cx += xs[i] / (s32)n;
+         cz += zs[i] / (s32)n;
+-
+-        if (hull->corners[i][2] > tall) {
+-            tall = hull->corners[i][2];
+-        }
+     }
+ 
+     for (i = 0; i < n; i++) {
+@@ -211,31 +290,25 @@ static void MapProp_PortBuildingShadow(const MapProp *prop, const VecFx32 *posit
+         VEC_Normalize(&out, &out);
+         ox[i] = xs[i] + (s32)(((s64)out.x * rim) >> 12);
+         oz[i] = zs[i] + (s32)(((s64)out.z * rim) >> 12);
+-        grey[i] = (u8)(22 - 7 * hull->corners[i][2] / tall);
+ 
+         if (ox[i] < -32000 || ox[i] > 32000 || oz[i] < -32000 || oz[i] > 32000 || xs[i] < -32000 || xs[i] > 32000 || zs[i] < -32000 || zs[i] > 32000) {
+             return;
+         }
+     }
+ 
+-    quarter.x = quarter.y = quarter.z = info->posScale * 4;
+-
+-    NNS_G3dGlbSetBaseTrans(position);
+-    NNS_G3dGlbSetBaseRot(rotation);
+-    NNS_G3dGlbSetBaseScale(scale);
+-    NNS_G3dGlbFlush();
+-    NNS_G3dGePushMtx();
+-    NNS_G3dGeScaleVec(&quarter);
+-    NNS_G3dGeTexImageParam(GX_TEXFMT_NONE, GX_TEXGEN_NONE, GX_TEXSIZE_S8, GX_TEXSIZE_T8, GX_TEXREPEAT_NONE, GX_TEXFLIP_NONE, GX_TEXPLTTCOLOR0_USE, 0);
+-    NNS_G3dGePolygonAttr(GX_LIGHTMASK_NONE, GX_POLYGONMODE_MODULATE, GX_CULL_NONE, 0, 31, 0);
++    // (one even shade, a tree's own (NITRO_SHADOW_TREE_BLOB of a full
++    // one, 26 of 31): where a tree's shadow lies in a building's, or beside
++    // it, the two are one shadow. First 22 of 31 at the foot to 15 at the
++    // top: a tree's darker shape showed in it, cut out, 2026-11-11, "they
++    // should merge instead they get cut between each other".)
+     MapProp_PortMark(0x40000008);
+     // (the outline, a strip from one corner to and fro across it)
++    NNS_G3dGeColor(GX_RGB(26, 26, 26));
+     NNS_G3dGeBegin(GX_BEGIN_TRIANGLE_STRIP);
+ 
+     for (i = 0; i < n; i++) {
+         u32 k = (i & 1) ? (i + 1) / 2 : (i ? n - i / 2 : 0);
+ 
+-        NNS_G3dGeColor(GX_RGB(grey[k], grey[k], grey[k]));
+         NNS_G3dGeVtx((fx16)xs[k], (fx16)y, (fx16)zs[k]);
+     }
+ 
+@@ -247,13 +320,56 @@ static void MapProp_PortBuildingShadow(const MapProp *prop, const VecFx32 *posit
+     for (i = 0; i <= n; i++) {
+         u32 k = i % n;
+ 
+-        NNS_G3dGeColor(GX_RGB(grey[k], grey[k], grey[k]));
++        NNS_G3dGeColor(GX_RGB(26, 26, 26));
+         NNS_G3dGeVtx((fx16)xs[k], (fx16)y, (fx16)zs[k]);
+         NNS_G3dGeColor(GX_RGB(0, 0, 0));
+         NNS_G3dGeVtx((fx16)ox[k], (fx16)y, (fx16)oz[k]);
+     }
+ 
+     NNS_G3dGeEnd();
++}
++
++static void MapProp_PortBuildingShadow(const MapProp *prop, const VecFx32 *position, const MtxFx33 *rotation, const VecFx32 *scale)
++{
++    const NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(prop->model);
++    const PortHull *hull;
++    const PortGround *ground;
++    VecFx32 quarter;
++    s32 way[3], y, rim;
++    u32 part;
++
++    if (info->posScale <= 0 || !NitroPort_SunWayNow(way)) {
++        return;
++    }
++
++    hull = MapProp_PortHull(prop->model, way);
++
++    if (hull->parts == 0) {
++        return;
++    }
++
++    y = (s32)(FX_Div(FX32_ONE, info->posScale) / 4);
++    rim = (s32)(FX_Div(6 * FX32_ONE, info->posScale) / 4);
++    ground = MapProp_PortGroundOf(hull, info, position, scale, y);
++    quarter.x = quarter.y = quarter.z = info->posScale * 4;
++
++    NNS_G3dGlbSetBaseTrans(position);
++    NNS_G3dGlbSetBaseRot(rotation);
++    NNS_G3dGlbSetBaseScale(scale);
++    NNS_G3dGlbFlush();
++    NNS_G3dGePushMtx();
++    NNS_G3dGeScaleVec(&quarter);
++    NNS_G3dGeTexImageParam(GX_TEXFMT_NONE, GX_TEXGEN_NONE, GX_TEXSIZE_S8, GX_TEXSIZE_T8, GX_TEXREPEAT_NONE, GX_TEXFLIP_NONE, GX_TEXPLTTCOLOR0_USE, 0);
++    NNS_G3dGePolygonAttr(GX_LIGHTMASK_NONE, GX_POLYGONMODE_MODULATE, GX_CULL_NONE, 0, 31, 0);
++
++    for (part = 0; part < hull->parts; part++) {
++        MapProp_PortHullShadow(hull->corners[part], hull->count[part], y, rim);
++
++        if (ground->top[part] != 0) {
++            MapProp_PortHullShadow(hull->corners[part], hull->count[part], ground->top[part], rim);
++        }
++    }
++
+     NNS_G3dGePopMtx(1);
+     NNS_G3dGeFlushBuffer();
+     NitroPort_Gx3dTag(0);
+-- 
+2.43.0
+

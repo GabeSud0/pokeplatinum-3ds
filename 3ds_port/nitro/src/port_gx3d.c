@@ -5488,11 +5488,52 @@ static int64_t hull_cross(const HullPoint *o,const HullPoint *a,const HullPoint 
 {
     return (a->x-o->x)*(b->z-o->z)-(a->z-o->z)*(b->x-o->x);
 }
+/* The convex hull of pts (sorted here) on the ground, at most max corners
+ * (the corner that takes the least with it left out, again and again),
+ * in order round it, into out (x, z, the height of its point); 0 if it
+ * has under three or no memory. */
+static uint32_t hull_points(HullPoint *pts,uint32_t n,int32_t (*out)[3],uint32_t max)
+{
+    HullPoint *hull;
+    uint32_t i,k=0,lower;
+    if(n<3u || max<3u)return 0;
+    qsort(pts,n,sizeof(*pts),hull_order);
+    hull=malloc((2u*n+2u)*sizeof(*hull));
+    if(!hull)return 0;
+    for(i=0;i<n;i++){
+        while(k>=2u && hull_cross(&hull[k-2u],&hull[k-1u],&pts[i])<=0)k--;
+        hull[k++]=pts[i];
+    }
+    lower=k+1u;
+    for(i=n-1u;i-->0u;){
+        while(k>=lower && hull_cross(&hull[k-2u],&hull[k-1u],&pts[i])<=0)k--;
+        hull[k++]=pts[i];
+    }
+    k--;                                   /* (the first again) */
+    while(k>max){
+        uint32_t least=0;
+        int64_t area=0;
+        for(i=0;i<k;i++){
+            int64_t a=hull_cross(&hull[(i+k-1u)%k],&hull[i],&hull[(i+1u)%k]);
+            if(a<0)a=-a;
+            if(!i || a<area){area=a;least=i;}
+        }
+        memmove(&hull[least],&hull[least+1u],(k-least-1u)*sizeof(*hull));
+        k--;
+    }
+    if(k<3u){free(hull);return 0;}
+    for(i=0;i<k;i++){
+        if(hull[i].x>0x7FFFFFFF || hull[i].x<-0x7FFFFFFF || hull[i].z>0x7FFFFFFF || hull[i].z<-0x7FFFFFFF){free(hull);return 0;}
+        out[i][0]=(int32_t)hull[i].x;out[i][1]=(int32_t)hull[i].z;out[i][2]=hull[i].y;
+    }
+    free(hull);
+    return k;
+}
 uint32_t NitroPort_Gx3dShadowHull(const void *const *lists,const uint32_t *bytes,uint32_t count,int32_t shearX,
                                   int32_t shearZ,int32_t flatY,int32_t (*out)[3],uint32_t max)
 {
-    HullPoint *pts=NULL,*hull=NULL;
-    uint32_t n=0,cap=0,i,k=0,lower;
+    HullPoint *pts=NULL;
+    uint32_t n=0,cap=0,i,k;
     if(!lists || !bytes || !count || !out || max<3u)return 0;
     for(i=0;i<count;i++){
         DlInfo *info;
@@ -5525,40 +5566,207 @@ uint32_t NitroPort_Gx3dShadowHull(const void *const *lists,const uint32_t *bytes
         }
         dl_free(info);
     }
-    if(n<3u){free(pts);return 0;}
-    qsort(pts,n,sizeof(*pts),hull_order);
-    hull=malloc((2u*n+2u)*sizeof(*hull));
-    if(!hull){free(pts);return 0;}
-    for(i=0;i<n;i++){
-        while(k>=2u && hull_cross(&hull[k-2u],&hull[k-1u],&pts[i])<=0)k--;
-        hull[k++]=pts[i];
-    }
-    lower=k+1u;
-    for(i=n-1u;i-->0u;){
-        while(k>=lower && hull_cross(&hull[k-2u],&hull[k-1u],&pts[i])<=0)k--;
-        hull[k++]=pts[i];
-    }
-    k--;                                   /* (the first again) */
+    k=hull_points(pts,n,out,max);
     free(pts);
-    /* (too many: the corner that takes the least with it, again and again) */
-    while(k>max){
-        uint32_t least=0;
-        int64_t area=0;
-        for(i=0;i<k;i++){
-            int64_t a=hull_cross(&hull[(i+k-1u)%k],&hull[i],&hull[(i+1u)%k]);
-            if(a<0)a=-a;
-            if(!i || a<area){area=a;least=i;}
-        }
-        memmove(&hull[least],&hull[least+1u],(k-least-1u)*sizeof(*hull));
-        k--;
-    }
-    if(k<3u){free(hull);return 0;}
-    for(i=0;i<k;i++){
-        if(hull[i].x>0x7FFFFFFF || hull[i].x<-0x7FFFFFFF || hull[i].z>0x7FFFFFFF || hull[i].z<-0x7FFFFFFF){free(hull);return 0;}
-        out[i][0]=(int32_t)hull[i].x;out[i][1]=(int32_t)hull[i].z;out[i][2]=hull[i].y;
-    }
-    free(hull);
     return k;
+}
+
+/* (see the header) */
+typedef struct HullCell { int64_t key; uint32_t poly; } HullCell;
+static int hull_cell_order(const void *a,const void *b)
+{
+    const HullCell *p=a,*q=b;
+    return p->key<q->key?-1:p->key>q->key?1:0;
+}
+static uint32_t hull_root(uint32_t *up,uint32_t i)
+{
+    while(up[i]!=i){up[i]=up[up[i]];i=up[i];}
+    return i;
+}
+static int64_t hull_key(int64_t cx,int64_t cz)
+{
+    return (cx<<32)+(cz&0xFFFFFFFFll);
+}
+typedef struct HullPart { uint32_t root, count; int64_t area; } HullPart;
+static int hull_part_order(const void *a,const void *b)
+{
+    const HullPart *p=a,*q=b;
+    return p->area>q->area?-1:p->area<q->area?1:0;
+}
+uint32_t NitroPort_Gx3dShadowHullParts(const void *const *lists,const uint32_t *bytes,uint32_t count,int32_t shearX,
+                                       int32_t shearZ,int32_t flatY,int32_t join,int32_t (*out)[3],uint32_t max,
+                                       uint32_t *corners,uint32_t parts)
+{
+    /* the polygons: their vertices (pv, in order, from pv0[p] to pv0[p+1]) */
+    int32_t (*v)[3]=NULL;
+    uint32_t *pv=NULL,*pv0=NULL,*up=NULL;
+    HullCell *cell=NULL;
+    HullPoint *pts=NULL;
+    HullPart *part=NULL;
+    int32_t (*tmp)[3]=NULL;
+    uint32_t nv=0,vcap=0,npv=0,pvcap=0,np=0,pcap=0,i,j,done=0,nparts=0;
+    if(!lists || !bytes || !count || !out || !corners || !parts || max<3u || join<=0)return 0;
+#define HP_GROW(arr,n,cap,first) do{ if((n)>=(cap)){ void *m_=realloc((arr),((cap)=(cap)?(cap)*2u:(first))*sizeof(*(arr))); if(!m_)goto fail; (arr)=m_; } }while(0)
+    for(i=0;i<count;i++){
+        DlInfo *info;
+        uint32_t o,run=0,type=0,inRun=0;
+        if(!lists[i] || bytes[i]<4u || (bytes[i]&3u))goto fail;
+        info=dl_survey(lists[i],bytes[i]/4u,3u);
+        if(!info)goto fail;
+        if(flatY>0){
+            int32_t top=0;
+            for(o=0;o<info->nops;o++){
+                const unsigned op=info->ops[o]&255u;
+                if(op>=0x23u && op<=0x28u && info->xyz[o][1]>top)top=info->xyz[o][1];
+            }
+            if(top<=flatY){dl_free(info);continue;}
+        }
+        for(o=0;o<=info->nops;o++){
+            const unsigned op=o<info->nops?info->ops[o]&255u:0x41u;
+            if(op>=0x23u && op<=0x28u){
+                if(!inRun)continue;
+                HP_GROW(v,nv,vcap,256u);
+                v[nv][0]=info->xyz[o][0];
+                v[nv][1]=info->xyz[o][1]<0?0:info->xyz[o][1];
+                v[nv][2]=info->xyz[o][2];
+                nv++;
+                continue;
+            }
+            if(op!=0x40u && op!=0x41u)continue;
+            if(inRun){
+                /* (the run's polygons: triangles, quads, their strips) */
+                const uint32_t m=nv-run;
+                uint32_t k,q;
+                static const uint8_t quadStrip[4]={0,1,3,2};
+                const uint32_t per=type==0u?3u:type==1u?4u:type==2u?3u:4u;
+                const uint32_t step=type==0u?3u:type==1u?4u:type==2u?1u:2u;
+                for(k=0;k+per<=m;k+=step){
+                    HP_GROW(pv0,np+1u,pcap,64u);
+                    pv0[np]=npv;
+                    for(q=0;q<per;q++){
+                        HP_GROW(pv,npv,pvcap,256u);
+                        pv[npv++]=run+k+(type==3u?quadStrip[q]:q);
+                    }
+                    np++;
+                }
+            }
+            inRun=op==0x40u;
+            if(inRun){type=info->ops[o]>>8;type=((const uint32_t *)lists[i])[type]&3u;run=nv;}
+        }
+        dl_free(info);
+    }
+    if(!np)goto fail;
+    HP_GROW(pv0,np+1u,pcap,64u);
+    pv0[np]=npv;
+    /* polygons with a vertex in the same square of join, or the next one,
+     * together */
+    up=malloc(np*sizeof(*up));
+    cell=malloc(npv*sizeof(*cell));
+    if(!up || !cell)goto fail;
+    for(i=0;i<np;i++){
+        up[i]=i;
+        for(j=pv0[i];j<pv0[i+1u];j++){
+            const int32_t *w=v[pv[j]];
+            cell[j].key=hull_key((int64_t)floor((double)w[0]/join),(int64_t)floor((double)w[2]/join));
+            cell[j].poly=i;
+        }
+    }
+    qsort(cell,npv,sizeof(*cell),hull_cell_order);
+    for(i=0;i<npv;i++){
+        static const int nx[4]={1,0,1,1},nz[4]={0,1,1,-1};
+        int64_t cx,cz;
+        int d;
+        if(i && cell[i].key==cell[i-1u].key){
+            up[hull_root(up,cell[i].poly)]=hull_root(up,cell[i-1u].poly);
+            continue;
+        }
+        cx=cell[i].key>>32;
+        cz=(int64_t)(int32_t)(uint32_t)(cell[i].key&0xFFFFFFFFll);
+        for(d=0;d<4;d++){
+            const int64_t want=hull_key(cx+nx[d],cz+nz[d]);
+            uint32_t lo=0,hi=npv;
+            while(lo<hi){uint32_t mid=(lo+hi)/2u;if(cell[mid].key<want)lo=mid+1u;else hi=mid;}
+            if(lo<npv && cell[lo].key==want)up[hull_root(up,cell[lo].poly)]=hull_root(up,cell[i].poly);
+        }
+    }
+    /* each group: its outline on the ground (as it is) against what its
+     * polygons cover of it there; one that is mostly open (a fence round
+     * a yard, posts and rails) casts none: its hull would be a shadow
+     * over the whole yard */
+    part=malloc(np*sizeof(*part));
+    pts=malloc(npv*sizeof(*pts));
+    tmp=malloc((npv+3u)*sizeof(*tmp));
+    if(!part || !pts || !tmp)goto fail;
+    for(i=0;i<np;i++){
+        uint32_t r=hull_root(up,i),n=0,k,q;
+        double cover=0.0,area=0.0;
+        if(r!=i)continue;
+        for(k=0;k<np;k++){
+            if(hull_root(up,k)!=r)continue;
+            for(q=pv0[k];q<pv0[k+1u];q++){
+                const int32_t *a=v[pv[q]],*b=v[pv[q+1u<pv0[k+1u]?q+1u:pv0[k]]];
+                cover+=(double)a[0]*b[2]-(double)b[0]*a[2];
+                pts[n].x=a[0];pts[n].z=a[2];pts[n].y=a[1];n++;
+            }
+            /* (each polygon's own area, whichever way round it goes) */
+            area+=fabs(cover);
+            cover=0.0;
+        }
+        k=hull_points(pts,n,tmp,n+3u);
+        if(k<3u)continue;
+        {
+            double hullArea=0.0;
+            for(q=0;q<k;q++)hullArea+=(double)tmp[q][0]*tmp[(q+1u)%k][1]-(double)tmp[(q+1u)%k][0]*tmp[q][1];
+            hullArea=fabs(hullArea);
+            if(!(hullArea>0.0) || area<NITRO_GX3D_HULL_COVER*hullArea)continue;
+        }
+        part[nparts].root=r;
+        part[nparts].count=0;
+        part[nparts].area=0;
+        nparts++;
+    }
+    /* their shadows' hulls, the biggest first */
+    for(i=0;i<nparts;i++){
+        uint32_t n=0,k,q;
+        for(k=0;k<np;k++){
+            if(hull_root(up,k)!=part[i].root)continue;
+            for(q=pv0[k];q<pv0[k+1u];q++){
+                const int32_t *a=v[pv[q]];
+                pts[n].x=a[0]+(((int64_t)shearX*a[1])>>12);
+                pts[n].z=a[2]+(((int64_t)shearZ*a[1])>>12);
+                pts[n].y=a[1];
+                n++;
+            }
+        }
+        part[i].count=hull_points(pts,n,tmp,max);
+        for(q=0;q<part[i].count;q++){
+            const uint32_t q1=(q+1u)%part[i].count;
+            part[i].area+=(int64_t)tmp[q][0]*tmp[q1][1]-(int64_t)tmp[q1][0]*tmp[q][1];
+        }
+        if(part[i].area<0)part[i].area=-part[i].area;
+        if(!part[i].count)part[i].area=-1;
+    }
+    qsort(part,nparts,sizeof(*part),hull_part_order);
+    for(i=0;i<nparts && done<parts;i++){
+        uint32_t n=0,k,q;
+        if(part[i].area<0)continue;
+        for(k=0;k<np;k++){
+            if(hull_root(up,k)!=part[i].root)continue;
+            for(q=pv0[k];q<pv0[k+1u];q++){
+                const int32_t *a=v[pv[q]];
+                pts[n].x=a[0]+(((int64_t)shearX*a[1])>>12);
+                pts[n].z=a[2]+(((int64_t)shearZ*a[1])>>12);
+                pts[n].y=a[1];
+                n++;
+            }
+        }
+        corners[done]=hull_points(pts,n,out+done*max,max);
+        if(corners[done]>=3u)done++;
+    }
+fail:
+#undef HP_GROW
+    free(v);free(pv);free(pv0);free(up);free(cell);free(pts);free(part);free(tmp);
+    return done;
 }
 uint32_t NitroPort_Gx3dTranslateCommand(void *dst,uint32_t dstBytes,int32_t x,int32_t y,int32_t z)
 {

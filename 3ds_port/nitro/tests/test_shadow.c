@@ -873,6 +873,15 @@ static void test_ground_props(void)
  * shadow's triangle darkened by what the shadow takes times its grey
  * there, no less than half; one outside, the round shadow, a prop and
  * the shadows themselves as they were. */
+/* (a tree's outline for the darkening's test: one value everywhere) */
+static float sMaskValue;
+static uint32_t sMaskParam;
+static float mask_value(void *ctx,uint32_t param,uint32_t palette,float u,float v)
+{
+    (void)ctx;(void)palette;(void)u;(void)v;
+    sMaskParam=param;
+    return sMaskValue;
+}
 static void test_darken_sprites(void)
 {
     static NitroGx3dGpuVertex v[64];
@@ -894,7 +903,7 @@ static void test_darken_sprites(void)
     b[2].first=16;b[2].count=6;b[2].tag=0x2000;SPRITE(16,0.5f,-0.2f);    /* (outside) */
     b[3].first=24;b[3].count=6;b[3].tag=0x1001;SPRITE(24,-0.9f,-0.2f);   /* (the first's round shadow) */
     b[4].first=32;b[4].count=6;b[4].tag=NITRO_GX3D_TAG_PROP|2u;SPRITE(32,-0.9f,-0.2f);
-    n=NitroPort_ShadowDarkenSprites(v,b,5,take);
+    n=NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL);
     CHECK(n==1);
     /* (its foot at x -0.9, y -0.168: the grey there 255 - 204 x 0.1 = 0.92) */
     for(i=8;i<14;i++)CHECK(abs((int)v[i].color[0]-(int)(200.0f*(1.0f-0.4f*0.92f)+0.5f))<=1 &&
@@ -904,15 +913,29 @@ static void test_darken_sprites(void)
     /* (near the tip, the grey under a half: a half) */
     for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
     SPRITE(8,-0.15f,-0.03f);
-    n=NitroPort_ShadowDarkenSprites(v,b,5,take);
+    n=NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL);
     CHECK(n==1 && abs((int)v[8].color[0]-(int)(200.0f*(1.0f-0.4f*0.5f)+0.5f))<=1);
     /* (behind the camera, or no shadows: nothing) */
     v[9].position[3]=-1.0f;
     for(i=8;i<14;i++)v[i].color[0]=200;
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take)==0 && v[8].color[0]==200);
+    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==0 && v[8].color[0]==200);
     b[0].tag=0;
     v[9].position[3]=2.0f;
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take)==0 && NitroPort_ShadowDarkenSprites(NULL,b,5,take)==0);
+    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==0 && NitroPort_ShadowDarkenSprites(NULL,b,5,take,NULL,NULL)==0);
+    /* A tree's layer's (textured): by its outline at the feet, not its
+     * corners. Outside the outline: none; in it: its alpha there. */
+    b[0].tag=NITRO_GX3D_TAG_SHADE;b[0].texture_param=0x12345u;
+    v[0].color[0]=v[1].color[0]=v[2].color[0]=255;
+    for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
+    SPRITE(8,-0.9f,-0.2f);
+    sMaskValue=0.1f;
+    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,mask_value,NULL)==0 && v[8].color[0]==200);
+    sMaskValue=1.0f;
+    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,mask_value,NULL)==1 &&
+          abs((int)v[8].color[0]-(int)(200.0f*(1.0f-0.4f*NITRO_SHADOW_TREE_BLOB)+0.5f))<=1 && sMaskParam==0x12345u);
+    for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
+    /* (no outline to look at: the corners, as before) */
+    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==1);
 #undef SPRITE
 }
 static void test_sun_way(void)

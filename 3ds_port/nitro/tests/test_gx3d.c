@@ -3344,6 +3344,42 @@ static void test_shadow_hull(void)
     CHECK(NitroPort_Gx3dShadowHull(NULL,bytes,1,0,0,0,out,16)==0 && NitroPort_Gx3dShadowHull(lists,bytes,1,0,0,0,out,2)==0);
 }
 
+/* The same in parts: two boxes far apart, two hulls (the bigger first);
+ * told they're near enough (a bigger join), one; a fence round a yard
+ * (four standing sides, nothing over it), none. */
+static void test_shadow_hull_parts(void)
+{
+    static uint32_t cmds[200],list[200];
+    const void *lists[1];
+    uint32_t bytes[1],corners[4];
+    int32_t out[4*16][3];
+    unsigned c=0,n,i;
+    cmds[c++]=0x40;cmds[c++]=1;
+    c+=tree_quad(&cmds[c],-512,512,0,0,256,-256,0,0);          /* (a box 16 x 8 x 10) */
+    c+=tree_quad(&cmds[c],-512,512,640,640,256,-256,0,0);
+    c+=tree_quad(&cmds[c],4488,5000,0,0,128,-128,0,0);         /* (another, smaller, 5000 away) */
+    c+=tree_quad(&cmds[c],4488,5000,320,320,128,-128,0,0);
+    cmds[c++]=0x41;
+    bytes[0]=dl_pack(list,cmds,c)*4u;
+    lists[0]=list;
+    n=NitroPort_Gx3dShadowHullParts(lists,bytes,1,4096,2048,0,256,out,16,corners,4);
+    CHECK(n==2 && corners[0]==6 && corners[1]==6);
+    for(i=0;i<corners[0];i++)CHECK(out[i][0]<2000);
+    for(i=0;i<corners[1];i++)CHECK(out[16+i][0]>=4488);
+    CHECK(NitroPort_Gx3dShadowHullParts(lists,bytes,1,4096,2048,0,8192,out,16,corners,4)==1 && corners[0]>=6);
+    CHECK(NitroPort_Gx3dShadowHullParts(lists,bytes,1,4096,2048,0,256,out,16,corners,1)==1 && out[0][0]<2000);
+    c=0;
+    cmds[c++]=0x40;cmds[c++]=1;
+    c+=tree_quad(&cmds[c],-2000,2000,0,200,2000,2000,0,0);     /* (a fence's four sides, standing) */
+    c+=tree_quad(&cmds[c],-2000,2000,0,200,-2000,-2000,0,0);
+    c+=tree_quad(&cmds[c],-2000,-2000,0,200,-2000,2000,0,0);
+    c+=tree_quad(&cmds[c],2000,2000,0,200,-2000,2000,0,0);
+    cmds[c++]=0x41;
+    bytes[0]=dl_pack(list,cmds,c)*4u;
+    CHECK(NitroPort_Gx3dShadowHullParts(lists,bytes,1,4096,2048,0,256,out,16,corners,4)==0);
+    CHECK(NitroPort_Gx3dShadowHullParts(NULL,bytes,1,0,0,0,256,out,16,corners,4)==0);
+}
+
 static void test_wall_tint(void)
 {
     /* A building's walls (NITRO_GX3D_TAG_WALLS: the light's way in bits 16
@@ -3474,6 +3510,7 @@ int main(void)
     test_tree_lists();
     test_wall_tint();
     test_shadow_hull();
+    test_shadow_hull_parts();
     test_mid_left_out_behind();
     test_earlier_scene_unread();
     test_scene_registers();

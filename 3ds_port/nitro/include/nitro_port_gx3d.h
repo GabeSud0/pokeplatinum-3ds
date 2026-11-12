@@ -563,6 +563,19 @@ void NitroPort_Gx3dTag(uint32_t tag);
  * there are under three. */
 uint32_t NitroPort_Gx3dShadowHull(const void *const *lists, const uint32_t *bytes, uint32_t count, int32_t shearX,
                                   int32_t shearZ, int32_t flatY, int32_t (*out)[3], uint32_t max);
+/* The same in parts (2026-11-11: one hull of a whole model, the Day
+ * Care's house with its sheds round a yard, was one shadow over the yard):
+ * the lists' polygons in groups, those with a vertex in the same square of
+ * `join` units on the ground or the next, and a hull for each group, the
+ * biggest `parts` of them; out[p * max ...] the corners of part p,
+ * corners[p] how many. A group whose polygons cover under
+ * NITRO_GX3D_HULL_COVER of its own outline on the ground (as it is, not
+ * moved: a fence round a yard, posts and rails) casts none. Returns the
+ * parts, 0 if none (or a list couldn't be read). */
+#define NITRO_GX3D_HULL_COVER 0.3
+uint32_t NitroPort_Gx3dShadowHullParts(const void *const *lists, const uint32_t *bytes, uint32_t count, int32_t shearX,
+                                       int32_t shearZ, int32_t flatY, int32_t join, int32_t (*out)[3], uint32_t max,
+                                       uint32_t *corners, uint32_t parts);
 /* A building's walls lit by the sun (the game marks the big standing props
  * with it, 2026-11-10): draw-only too. The light's way on the ground in
  * the mark itself, as signed bytes of 1/127ths: to the right in bits 16

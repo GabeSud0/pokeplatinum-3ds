@@ -4081,6 +4081,42 @@ then the small props and the land's trees; houses and the scenery later.
     ms), 52 there with the sun shadows off and as slow in the log
     before: not the shadows'. The few stops of seconds are the
     screenshots.
+- After a 3DS run through Veilstone, Route 210, Solaceon, Route 209,
+  Hearthome and Amity Square (2026-11-11, log 97ed5f36: "tree shadows and
+  building shadows when they should merge instead they get cut"; "The
+  satelites ... are casting no shadows"; "Im close to a tree shadow, not
+  under it and I still get darkened"; "shadows that made no sense and
+  artifacts in textures ... at the daycare"; "The pokemon tower casts no
+  shadow"). Each found and checked on a PC first: gpusim draws the sun
+  shadows as the 3DS does now (`look 2 0 E A`: the passes, a pixel once,
+  the trees' outlines, the characters' and props' shadows, a stump
+  without its patch, the lit walls and layers twice their colour).
+  - A building's shadow was 22 of 31 dark at its foot, 15 at its tip; a
+    tree's 26: a tree's shadow in or beside a building's was a darker
+    shape cut into it. Now a building's is the tree's 26 all over, and
+    the two are one shadow.
+  - A building's shadow was the hull of its whole model: the Day Care's
+    is the house, its sheds and the yard's things, one model, and its
+    hull laid one shadow over the yard from the sheds' corner. Now a hull
+    for each group of its polygons that touch (within half a tile), up to
+    8 (NitroPort_Gx3dShadowHullParts); a group whose polygons cover under
+    0.3 of its outline on the ground (a fence round a yard) casts none.
+  - Where the ground under a building's shadow is higher than it stands
+    (the Hallowed Tower in its dip, the Galactic building's dishes in
+    their pits), its shadow was laid under that ground. The field gives
+    the game the ground's height under each corner while it draws its maps
+    (MapProp_PortGround, TerrainCollisionManager); where it's over 4 units
+    higher, a second copy is laid there. The Hallowed Tower's shadow now
+    falls on the grass; the dishes' mostly falls in their own pits.
+  - The shadows were drawn after the opaque polygons, before the opaque
+    texels of the see-through ones: a pond's square of grass (a model
+    with a cut-out texture) stayed lit in the shade round it. Now after
+    those too.
+  - A character in a tree's shadow is darkened by the tree's outline at
+    its feet (mask_at, the outline's copy kept with its texture), under
+    0.3 of it not at all: by the layer's corners, a character a tile
+    beside the shadow was darkened. test_shadow: none outside the
+    outline, its alpha in it.
 - The engine's vertices, one division each (2026-11-10, for the same
   place): to_screen divided three times in doubles for every vertex
   drawn (1 / W, then by 2W for x and for y); now by 1 / W once. The
