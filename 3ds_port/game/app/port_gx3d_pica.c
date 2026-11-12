@@ -3120,7 +3120,7 @@ static void once_batch(const NitroGx3dBatch *batch,int shade,int pass)
  * of it (BLOB_CORE), then over half (BLOB_HALF), then the rest
  * (BLOB_EDGE): where two overlap the darker is taken, near enough. */
 #define BLOB_CORE 250
-#define BLOB_STRONG 192
+#define BLOB_STRONG 176
 #define BLOB_HALF 128
 #define BLOB_EDGE 8
 static void blob_batch(const NitroGx3dBatch *batch)

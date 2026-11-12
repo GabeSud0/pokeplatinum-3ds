@@ -422,7 +422,7 @@ static void ground_shadows(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch
                            const NitroGx3dTexBanks *banks, uint32_t *tiled, Color *color, const float *depth,
                            int wbuffer)
 {
-    static const unsigned tests[5] = { 128, 250, 192, 128, 8 };
+    static const unsigned tests[5] = { 128, 250, 176, 128, 8 };
     size_t b;
     int pass;
     if (!sGOnce) {
@@ -434,7 +434,7 @@ static void ground_shadows(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch
     for (pass = 0; pass < 5; pass++) {
         /* (over half: both bits, a building's and the rest's; the faint
          * edges' band, its own) */
-        const int rest = pass <= 2 ? 3 : 2;   /* (passes 1, 2: 250 and 192 up, as port_gx3d_pica.c) */
+        const int rest = pass <= 2 ? 3 : 2;   /* (passes 1, 2: 250 and 176 up, as port_gx3d_pica.c) */
         for (b = 0; b < nb && sGShadeBatches; b++) {
             const NitroGx3dBatch *batch = &batches[b];
             uint32_t tag = batch->tag;

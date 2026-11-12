@@ -4125,9 +4125,10 @@ then the small props and the land's trees; houses and the scenery later.
       straight line ran between the two shadows. Now drawn in the
       trees' three bands by its grey, and a pixel is darkened once by a
       building's shadow and once by the rest's (two stencil bits,
-      once_stencil): two faint edges side by side (under three quarters
-      of a shadow) each take their own; three quarters and more takes
-      both (one more band, BLOB_STRONG 192: with every band each its
+      once_stencil): two faint edges side by side (under 0.69
+      of a shadow) each take their own, together never darker than a
+      full one; from there up a pixel takes
+      both (one more band, BLOB_STRONG 176: with every band each its
       own, two strong edges overlapping came out darker than a full
       shadow, dark dots along the seam).
     - The fountains are buildings: their see-through water was left out
