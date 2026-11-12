@@ -4183,6 +4183,26 @@ then the small props and the land's trees; houses and the scenery later.
     (first at its corners alone: a dish's pit's rim inside its shadow was
     missed), the two heights found most often, the same for all its
     parts (a dish's bowl had a copy and its stand none: a straight cut).
+  - The land's trees' layers, lit: their far side's shade (TREE_FAR_SHADE)
+    went left and right with the sun as well as up and down; in the
+    morning and the evening each tree's far half was dark beside its
+    neighbour's lit one, and a row looked like trees one over another
+    ("they appear to be overlapping ... this is happening everywhere").
+    Of three looks shown (as it was, a third of the side shade, none),
+    chosen: up and down only.
+  - A forest's edge rows are one polygon a few trees wide, each tree a
+    column of the texture with its crown cut straight at the column's
+    sides; at a row's open end the cut showed (Route 210's forest by the
+    rock north of Solaceon: "the trees are looking cut"). There a tree
+    of the same model that stands alone is drawn in place of the row's
+    own (tree_row_ends), its crown round. With the sun shadows off the
+    game's own list is drawn, as before.
+  - Ground where the wider view showed the sea or a rock under trees
+    (patch 0145, "shores"): east of Veilstone, a grass strip under the
+    forest's first trees with a rock cliff down to the water, square
+    corners; north of Solaceon, the mountain's rock plain's side down to
+    Route 210's forest in two tiers, as the cliff beside it, and a tile
+    of grass at its foot. Each from a proposal render.
 - The engine's vertices, one division each (2026-11-10, for the same
   place): to_screen divided three times in doubles for every vertex
   drawn (1 / W, then by 2W for x and for y); now by 1 / W once. The

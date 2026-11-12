@@ -4386,6 +4386,7 @@ typedef struct TreeShape {
     uint32_t *ground, groundBytes, groundCap;   /* (the pools' and floors' list, made with the shadows') */
     int32_t litWay[2];
     int litSet;
+    uint32_t *ends, nends;         /* (its rows' trees at an open end: leaves, tree_row_ends) */
 } TreeShape;
 struct NitroGx3dTreeLists {
     uint32_t count;
@@ -4771,6 +4772,135 @@ static void tree_place(TreeLeaf *l,unsigned v,int32_t unit)
     l->nx[v]=(int8_t)(side<-64?-64:side>64?64:side);
     l->ny[v]=(int8_t)(up<-64?-64:up>64?64:up);
 }
+/* A row's trees at its ends (2026-11-12, by Solaceon: "the trees are
+ * looking cut"): a row's polygon is its trees side by side, each a column
+ * of the texture, its crown cut straight at the column's sides; inside the
+ * forest the next row or tree stands over the cut, at an end it's in view
+ * (where the forest's first column stands by open ground). There a tree
+ * of the model's own that stands alone (its crown round, a little wider
+ * than its column) is drawn in place of the row's: tree_row_ends. Not at
+ * an end where another polygon of the shape goes on. */
+static int tree_row_next(const TreeQuad *quads,uint32_t n,uint32_t g,int way)
+{
+    const TreeQuad *q=&quads[g];
+    uint32_t k;
+    for(k=0;k<n;k++){
+        const TreeQuad *o=&quads[k];
+        if(k==g || !o->n || o->flat || o->hi[2]<=q->lo[2] || o->lo[2]>=q->hi[2] || o->hi[1]<=q->lo[1] || o->lo[1]>=q->hi[1])continue;
+        if(way<0?o->lo[0]<q->lo[0] && o->hi[0]>=q->lo[0]-2:o->hi[0]>q->hi[0] && o->lo[0]<=q->hi[0]+2)return 1;
+    }
+    return 0;
+}
+/* (a shape's leaves: room for its list made again) */
+static int tree_leaves_room(TreeShape *sh)
+{
+    uint32_t cap=sh->nleaves*((TREE_VERTS-2u)*3u*7u+8u)+16u;
+    uint32_t *lit=malloc(cap*4u);
+    TreePart *part=calloc(sh->nleaves?sh->nleaves:1u,sizeof(*part));
+    if(!lit || !part){free(lit);free(part);return 0;}
+    free(sh->lit);free(sh->litPart);
+    sh->lit=lit;sh->litCap=cap;
+    sh->litPart=part;sh->litPartMax=sh->nleaves;sh->nlitPart=0;
+    sh->litSet=0;
+    return 1;
+}
+/* (whether one of a tree's layers stands as high as this one, from its
+ * foot to its top, within near) */
+static int tree_leaf_like(const TreeLeaf *l,const TreeLeaf *tree,uint32_t n,int32_t near)
+{
+    int32_t lo=INT32_MAX,hi=INT32_MIN;
+    uint32_t i,v;
+    for(v=0;v<l->n;v++){
+        const int32_t y=l->xyz[v][1]-l->base[1];
+        if(y<lo)lo=y;
+        if(y>hi)hi=y;
+    }
+    for(i=0;i<n;i++){
+        int32_t tlo=INT32_MAX,thi=INT32_MIN;
+        for(v=0;v<tree[i].n;v++){
+            const int32_t y=tree[i].xyz[v][1]-tree[i].base[1];
+            if(y<tlo)tlo=y;
+            if(y>thi)thi=y;
+        }
+        if(tlo-lo<=near && lo-tlo<=near && thi-hi<=near && hi-thi<=near)return 1;
+    }
+    return 0;
+}
+static void tree_row_ends(NitroGx3dTreeLists *t,int32_t unit)
+{
+    const int32_t near=4*unit;
+    uint32_t i,j,k,b=t->count,from=0,to=0,nat=0;
+    int32_t (*at)[3]=NULL;
+    /* (a tree standing alone: a shape's leaves not a row's, the first
+     * tree's with most of them) */
+    for(i=0;i<t->count && b==t->count;i++){
+        const TreeShape *sh=&t->shape[i];
+        if(!sh->leaves || sh->nends)continue;
+        for(j=0;j<sh->nleaves;j=k){
+            for(k=j+1u;k<sh->nleaves && !sh->leaves[k].first;k++){}
+            if(k-j>=3u && k-j<=6u){b=i;from=j;to=k;break;}
+        }
+    }
+    if(b==t->count)return;
+    for(i=0;i<t->count;i++){
+        TreeShape *sh=&t->shape[i];
+        uint32_t w=0;
+        if(!sh->nends)continue;
+        for(j=0;j<sh->nends;j++){
+            const TreeLeaf *l=&sh->leaves[sh->ends[j]];
+            int32_t (*more)[3];
+            /* (only where the lone tree has a layer as high as the row's,
+             * its foot and its top within 2 units: a tree of the same
+             * look; else the row's own is kept) */
+            if(!tree_leaf_like(l,&t->shape[b].leaves[from],to-from,2*unit)){
+                sh->ends[j]=UINT32_MAX;
+                continue;
+            }
+            for(k=0;k<nat;k++)
+                if(at[k][0]-l->base[0]<=near && l->base[0]-at[k][0]<=near && at[k][2]-l->base[2]<=near && l->base[2]-at[k][2]<=near)break;
+            if(k<nat)continue;
+            more=realloc(at,(nat+1u)*sizeof(*at));
+            if(!more){sh->ends[j]=UINT32_MAX;continue;}
+            at=more;
+            memcpy(at[nat++],l->base,sizeof(l->base));
+        }
+        /* (the row's own tree there let go; those kept out of the list) */
+        for(j=0,k=0;j<sh->nends;j++)if(sh->ends[j]!=UINT32_MAX)sh->ends[k++]=sh->ends[j];
+        sh->nends=k;
+        if(!k){free(sh->ends);sh->ends=NULL;continue;}
+        for(j=0,k=0;j<sh->nleaves;j++){
+            if(k<sh->nends && sh->ends[k]==j){k++;continue;}
+            sh->leaves[w++]=sh->leaves[j];
+        }
+        sh->nleaves=w;
+        free(sh->ends);sh->ends=NULL;sh->nends=0;
+        /* (none left: its layers aren't drawn as they were either, its
+         * stumps alone, Port_LandTreeShape) */
+        if(!w)sh->canopyBytes=0;
+        if(!tree_leaves_room(sh)){free(sh->leaves);sh->leaves=NULL;sh->nleaves=0;}
+    }
+    if(nat){
+        TreeShape *sh=&t->shape[b];
+        const TreeLeaf *one=&sh->leaves[from];
+        const int32_t bx=one->base[0],by=one->base[1],bz=one->base[2];
+        TreeLeaf *more=realloc(sh->leaves,(sh->nleaves+nat*(to-from))*sizeof(*more));
+        if(more){
+            sh->leaves=more;
+            for(k=0;k<nat;k++)
+                for(j=from;j<to;j++){
+                    TreeLeaf *l=&sh->leaves[sh->nleaves++];
+                    unsigned v;
+                    *l=sh->leaves[j];
+                    for(v=0;v<l->n;v++){
+                        l->xyz[v][0]+=at[k][0]-bx;l->xyz[v][1]+=at[k][1]-by;l->xyz[v][2]+=at[k][2]-bz;
+                    }
+                    l->base[0]=at[k][0];l->base[1]=at[k][1];l->base[2]=at[k][2];
+                }
+            if(!tree_leaves_room(sh)){free(sh->leaves);sh->leaves=NULL;sh->nleaves=0;}
+        }
+    }
+    free(at);
+}
 static void tree_leaves(TreeShape *sh,const TreeQuad *quads,uint32_t n,int32_t unit,int32_t (*qbase)[3])
 {
     const int32_t nearBy=12*unit,wide=48*unit;
@@ -4816,6 +4946,10 @@ static void tree_leaves(TreeShape *sh,const TreeQuad *quads,uint32_t n,int32_t u
                 l->wide=0;
                 l->base[0]=x0+column/2;l->base[1]=qbase[g][1];l->base[2]=qbase[g][2];
                 for(v=0;v<m;v++)tree_place(l,v,unit);
+                if((x0==q->lo[0] && !tree_row_next(quads,n,g,-1)) || (x0+column>=q->hi[0] && !tree_row_next(quads,n,g,1))){
+                    uint32_t *e=realloc(sh->ends,(sh->nends+1u)*sizeof(*e));
+                    if(e){sh->ends=e;sh->ends[sh->nends++]=sh->nleaves-1u;}
+                }
             }
             any=1;
             continue;
@@ -4898,6 +5032,7 @@ NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists,const uint3
             }
         }
     }
+    tree_row_ends(t,unit);
     for(i=0;i<count;i++){dl_free(info[i]);free(quads[i]);}
     free(info);free(quads);free(counts);
     return t;
@@ -4910,7 +5045,7 @@ void NitroPort_Gx3dFreeTreeLists(NitroGx3dTreeLists *t)
         free(t->shape[i].canopy);free(t->shape[i].stumps);free(t->shape[i].tail);
         free(t->shape[i].shadow);free(t->shape[i].polys);
         free(t->shape[i].leaves);free(t->shape[i].lit);free(t->shape[i].stand);free(t->shape[i].ground);
-        free(t->shape[i].litPart);free(t->shape[i].shadowPart);
+        free(t->shape[i].litPart);free(t->shape[i].shadowPart);free(t->shape[i].ends);
     }
     free(t->stands);
     free(t);
@@ -5070,8 +5205,13 @@ const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *t,uint32_t shape,i
              * right of the middle as the light goes right, below it as
              * it comes towards the camera (from behind and above) */
             /* (nx, ny in 64ths; and steeper about the middle, TREE_RAMP in
-             * 4ths: a tree's far third clearly in shade, its near third in the sun) */
-            const int64_t flat=((int64_t)wayX*l->nx[v]-(int64_t)wayZ*l->ny[v])*2/span,d=flat*TREE_RAMP/4+128;
+             * 4ths: a tree's far third clearly in shade, its near third in the sun)
+             * (2026-11-12: up and down only, not left and right: with the
+             * sun to a side each tree's far half was dark beside its
+             * neighbour's lit one, and the trees looked one over another,
+             * "they appear to be overlapping ... this is happening
+             * everywhere"; chosen from three: top to bottom only) */
+            const int64_t flat=(-(int64_t)wayZ*l->ny[v])*2/span,d=flat*TREE_RAMP/4+128;
             const int64_t up=(int64_t)l->xyz[v][1]-l->base[1];
             const int64_t cross=!hit?0:up<=(int64_t)TREE_CROSS_FULL*unit?TREE_CROSS_SHADE:
                                 up>=(int64_t)TREE_CROSS_NONE*unit?0:
