@@ -3120,6 +3120,7 @@ static void once_batch(const NitroGx3dBatch *batch,int shade,int pass)
  * of it (BLOB_CORE), then over half (BLOB_HALF), then the rest
  * (BLOB_EDGE): where two overlap the darker is taken, near enough. */
 #define BLOB_CORE 250
+#define BLOB_STRONG 192
 #define BLOB_HALF 128
 #define BLOB_EDGE 8
 static void blob_batch(const NitroGx3dBatch *batch)
@@ -3252,10 +3253,14 @@ static void draw_once_batches(int chars)
     size_t b;
     int pass;
     const int both=sOnceA|sOnceB;
-    for(pass=0;pass<4;pass++){
-        /* (the rest's: in the core band both bits, else its own) */
-        const int rest=pass==1?both:sOnceB;
-        C3D_AlphaTest(true,GPU_GEQUAL,pass==1?BLOB_CORE:pass==2?BLOB_HALF:pass==3?BLOB_EDGE:128);
+    for(pass=0;pass<5;pass++){
+        /* (three quarters of a shadow and more: both bits, a building's and
+         * the rest's; the fainter edges, each its own: two of those side by
+         * side no darker together than a full one. Each its own in every
+         * band at first: two strong edges overlapping came out darker than
+         * a full shadow, dark dots along the seam, 2026-11-12) */
+        const int rest=pass<=2?both:sOnceB,rim=pass<=2?both:sOnceA;
+        C3D_AlphaTest(true,GPU_GEQUAL,pass==1?BLOB_CORE:pass==2?BLOB_STRONG:pass==3?BLOB_HALF:pass==4?BLOB_EDGE:128);
         for(b=0;b<sPreparedBatches && sShadeBatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
             const uint32_t tag=batch->tag;
@@ -3271,7 +3276,7 @@ static void draw_once_batches(int chars)
                  * stages the trees' set as once_batch has them) */
                 C3D_TexEnvInit(C3D_GetTexEnv(2));
                 C3D_TexEnvInit(C3D_GetTexEnv(3));
-                once_stencil(sOnceA,sOnceA);
+                once_stencil(rim,rim);
                 once_batch(batch,1,pass);
             }else{
                 once_stencil(rest,rest);
@@ -3279,7 +3284,7 @@ static void draw_once_batches(int chars)
                 else blob_batch(batch);
             }
         }
-        if(pass==2){
+        if(pass==3){
             /* (the props': their texels over half opaque, in their
              * vertices' shade) */
             C3D_TexEnvInit(C3D_GetTexEnv(1));
@@ -3293,7 +3298,7 @@ static void draw_once_batches(int chars)
                 once_batch(batch,0,0);
             }
         }
-        if(chars && pass>=1 && pass<=3){
+        if(chars && pass>=1){
             once_stencil(rest,rest);
             for(b=0;b<sGroundBatchCount && sGroundReady;b++){
                 const NitroGx3dBatch *batch=&sBatches[MAX_BATCHES+b];
