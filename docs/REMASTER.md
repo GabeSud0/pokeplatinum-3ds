@@ -4199,8 +4199,9 @@ then the small props and the land's trees; houses and the scenery later.
     game's own list is drawn, as before.
   - Ground where the wider view showed the sea or a rock under trees
     (patch 0145, "shores"): east of Veilstone, a grass strip under the
-    forest's first trees with a rock cliff down to the water, square
-    corners; north of Solaceon, the mountain's rock plain's side down to
+    forest's first trees and along its north side, square corners, edged
+    all round with Veilstone's own coast (seaside3, the wavy dirt edge),
+    above the second sea Veilstone's model has over that notch at 19; north of Solaceon, the mountain's rock plain's side down to
     Route 210's forest in two tiers, as the cliff beside it, and a tile
     of grass at its foot. Each from a proposal render.
 - The engine's vertices, one division each (2026-11-10, for the same

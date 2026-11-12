@@ -15,19 +15,21 @@ from the edge and a slope of rock down from it (or the rock first and the
 ground at its foot), round or square corners where the line turns, the
 textures by name from the area's set or from a loaded map's material
 (Port_AreaTexture, Port_LoadedTexture). East of Veilstone: a grass strip
-under those trees, a quarter of a tile above the forest's own ground (the
-sea there is drawn at the ground's height, over it), a rock cliff down to
-the water, square corners. North of Solaceon: the rock in two tiers, as
-Route 210's cliff beside it, the upper to 40, a tile of grass at its foot;
-the plain's last column of squares left out (sPortMapCuts) and drawn again
-as a strip of its top behind the edge, only while the shore can be drawn
+under those trees and along the forest's north side, square corners, its
+edge all round Veilstone's own coast's (seaside3, the wavy dirt edge, lit
+as the ground); all of it above 19, where Veilstone's model has a second
+sea over that notch (and its north edge, drawn on north, takes it over the
+sea's filler). North of Solaceon: the rock in two tiers, as Route 210's
+cliff beside it, the upper to 40, a tile of grass at its foot; the plain's
+last column of squares left out (sPortMapCuts) and drawn again as a strip
+of its top behind the edge, only while the shore can be drawn
 (Port_ShoreCutReady).
 ---
- src/overlay005/land_data.c | 430 +++++++++++++++++++++++++++++++++++++
- 1 file changed, 430 insertions(+)
+ src/overlay005/land_data.c | 436 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 436 insertions(+)
 
 diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
-index 9dcbb3bb..a47847d6 100644
+index 9dcbb3bb..fb8eb54b 100644
 --- a/src/overlay005/land_data.c
 +++ b/src/overlay005/land_data.c
 @@ -7404,6 +7404,7 @@ typedef struct PortMapCut {
@@ -58,7 +60,7 @@ index 9dcbb3bb..a47847d6 100644
      for (u8 q = 0; q < QUADRANT_COUNT && cut != NULL && !pieces; q++) {
          pieces = landDataMan->loadedMaps[q]->mapMatrixIndex == cut->piecesBy && landDataMan->loadedMaps[q]->valid == TRUE
              && (!Port_HasMapPieces(matrixID, cut->piecesBy) || Port_PieceCopyOf(landDataMan, q) != NULL);
-@@ -7739,6 +7746,428 @@ static void Port_RenderStandInMaps(const LandDataManager *landDataMan)
+@@ -7739,6 +7746,434 @@ static void Port_RenderStandInMaps(const LandDataManager *landDataMan)
  }
  #endif
  
@@ -98,15 +100,19 @@ index 9dcbb3bb..a47847d6 100644
 +    u8 square;            // (its corners square, not round)
 +    u8 tierRun;           // (the rock in two tiers, as the cliff beside it: the upper one's run, eighths; 0 one)
 +    s16 tierY;            // (the step between them, world units)
++    u8 rimEdge;           // (the rock a coast's edge, as Veilstone's own: lit as the ground, its texture's water side out, 16 texels a tile along)
 +} PortShore;
 +
 +// (the forest's ground starts 3 tiles in from its west side for its first
 +// 8 rows, Veilstone's sea under its first trees there: the strip fills that,
 +// to x 736, 2026-11-12, "move what you did to the right to fill in the gap
-+// in the trees ... make it a straight corner". A quarter of a tile above
-+// the forest's ground, 20: that sea there is drawn at the ground's own
-+// height, over it, and showed through the strip between the trees, "I can
-+// clearly still see the sea")
++// in the trees ... make it a straight corner". Its edge Veilstone's own
++// coast's (seaside3, the wavy dirt edge), on all sides: "add the dirt edge
++// to the top section, and the wavy dirt edge texture is missing". All of
++// it above 19: Veilstone's model has a second sea over that notch at 19,
++// above the forest's ground (16), and its north edge drawn on north over
++// the sea's filler takes it there too; under it the strip and the edge
++// didn't show, "I can clearly still see the sea")
 +static const PortShorePoint sPortShoreVeilstoneForest[] = {
 +    { 770, 576, 16 }, { 739, 576, 28 }, { 739, 584, 28 },
 +};
@@ -121,8 +127,8 @@ index 9dcbb3bb..a47847d6 100644
 +};
 +
 +static const PortShore sPortShores[] = {
-+    { 0, 563, sPortShoreVeilstoneForest, NELEMS(sPortShoreVeilstoneForest), -1, 16, 6, 20, 8, 2, "ngrass", "criffp", "criff", 0, NULL, 0, 0, FALSE, 0, TRUE, 0, 0 },
-+    { 0, 587, sPortShoreSolaceonRock, NELEMS(sPortShoreSolaceonRock), 1, 8, 16, 48, 32, 32, "ngrass", "criffp", "criff", 40, "criff", 1, 0, TRUE, 586, FALSE, 8, 40 },
++    { 0, 563, sPortShoreVeilstoneForest, NELEMS(sPortShoreVeilstoneForest), -1, 16, 4, 21, 8, 20, "ngrass", "seaside3", NULL, 0, NULL, 0, 0, FALSE, 0, TRUE, 0, 0, TRUE },
++    { 0, 587, sPortShoreSolaceonRock, NELEMS(sPortShoreSolaceonRock), 1, 8, 16, 48, 32, 32, "ngrass", "criffp", "criff", 40, "criff", 1, 0, TRUE, 586, FALSE, 8, 40, FALSE },
 +};
 +
 +// (a texture of the area's map set: its image parameter as the maps' are
@@ -464,11 +470,13 @@ index 9dcbb3bb..a47847d6 100644
 +                    x0 = at[i].x + (shore->rockFirst ? 0 : at[i].gx) + FX_Mul(at[i].nx, from); z0 = at[i].z + (shore->rockFirst ? 0 : at[i].gz) + FX_Mul(at[i].nz, from);
 +                    x1 = x0 + FX_Mul(at[i].nx, to - from); z1 = z0 + FX_Mul(at[i].nz, to - from);
 +                    y0 = part == 2 ? tierY : groundY; y1 = shore->tierRun != 0 && part == 1 ? tierY : bottomY;
-+                    s0 = s1 = (s32)(i * tw / 2);
-+                    t0 = 0; t1 = th;
++                    s0 = s1 = (s32)(shore->rimEdge ? i * tw : i * tw / 2);
++                    t0 = shore->rimEdge ? th * 15 / 16 : 0; t1 = shore->rimEdge ? 0 : th; // (its last row under the land's edge, as Veilstone's own)
 +                }
 +
-+                NNS_G3dGeNormal(part <= 0 ? 0 : (fx16)(at[i].nx / 2), part <= 0 ? FX16_ONE - 1 : (fx16)(FX32_ONE * 7 / 8), part <= 0 ? 0 : (fx16)(at[i].nz / 2));
++                const BOOL flat = part <= 0 || shore->rimEdge;
++
++                NNS_G3dGeNormal(flat ? 0 : (fx16)(at[i].nx / 2), flat ? FX16_ONE - 1 : (fx16)(FX32_ONE * 7 / 8), flat ? 0 : (fx16)(at[i].nz / 2));
 +                NNS_G3dGeTexCoord(s0 * FX32_ONE, t0 * FX32_ONE);
 +                NNS_G3dGeVtx((fx16)((x0 - ox) / 8), (fx16)(y0 / 8), (fx16)((z0 - oz) / 8));
 +                NNS_G3dGeTexCoord(s1 * FX32_ONE, t1 * FX32_ONE);
@@ -487,7 +495,7 @@ index 9dcbb3bb..a47847d6 100644
  void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
  {
  #ifdef SDK_PORT_3DS
-@@ -7779,6 +8208,7 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+@@ -7779,6 +8214,7 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
      Port_RenderExtrudedColumns(landDataMan);
      Port_RenderStandInMaps(landDataMan);
      Port_RenderMapPieces(landDataMan);
