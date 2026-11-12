@@ -25,11 +25,11 @@ last column of squares left out (sPortMapCuts) and drawn again as a strip
 of its top behind the edge, only while the shore can be drawn
 (Port_ShoreCutReady).
 ---
- src/overlay005/land_data.c | 436 +++++++++++++++++++++++++++++++++++++
- 1 file changed, 436 insertions(+)
+ src/overlay005/land_data.c | 441 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 441 insertions(+)
 
 diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
-index 9dcbb3bb..de057239 100644
+index 9dcbb3bb..8fc5dfd3 100644
 --- a/src/overlay005/land_data.c
 +++ b/src/overlay005/land_data.c
 @@ -7404,6 +7404,7 @@ typedef struct PortMapCut {
@@ -60,7 +60,7 @@ index 9dcbb3bb..de057239 100644
      for (u8 q = 0; q < QUADRANT_COUNT && cut != NULL && !pieces; q++) {
          pieces = landDataMan->loadedMaps[q]->mapMatrixIndex == cut->piecesBy && landDataMan->loadedMaps[q]->valid == TRUE
              && (!Port_HasMapPieces(matrixID, cut->piecesBy) || Port_PieceCopyOf(landDataMan, q) != NULL);
-@@ -7739,6 +7746,434 @@ static void Port_RenderStandInMaps(const LandDataManager *landDataMan)
+@@ -7739,6 +7746,439 @@ static void Port_RenderStandInMaps(const LandDataManager *landDataMan)
  }
  #endif
  
@@ -100,7 +100,7 @@ index 9dcbb3bb..de057239 100644
 +    u8 square;            // (its corners square, not round)
 +    u8 tierRun;           // (the rock in two tiers, as the cliff beside it: the upper one's run, eighths; 0 one)
 +    s16 tierY;            // (the step between them, world units)
-+    u8 rimEdge;           // (the rock a coast's edge, as Veilstone's own: lit as the ground, 16 texels a tile along)
++    u8 rimEdge;           // (the rock a coast's edge, as Veilstone's own (its texture's edges see-through): its top flat over the ground's edge (tierRun, the ground a unit below it under it), its side down (the rest of the run), lit as the ground, 16 texels a tile along)
 +} PortShore;
 +
 +// (the forest's ground starts 3 tiles in from its west side for its first
@@ -127,7 +127,7 @@ index 9dcbb3bb..de057239 100644
 +};
 +
 +static const PortShore sPortShores[] = {
-+    { 0, 563, sPortShoreVeilstoneForest, NELEMS(sPortShoreVeilstoneForest), -1, 16, 4, 21, 8, 20, "ngrass", "seaside3", NULL, 0, NULL, 0, 0, FALSE, 0, TRUE, 0, 0, TRUE },
++    { 0, 563, sPortShoreVeilstoneForest, NELEMS(sPortShoreVeilstoneForest), -1, 16, 4, 22, 8, 20, "ngrass", "seaside3", NULL, 0, NULL, 0, 0, FALSE, 0, TRUE, 3, 22, TRUE },
 +    { 0, 587, sPortShoreSolaceonRock, NELEMS(sPortShoreSolaceonRock), 1, 8, 16, 48, 32, 32, "ngrass", "criffp", "criff", 40, "criff", 1, 0, TRUE, 586, FALSE, 8, 40, FALSE },
 +};
 +
@@ -454,13 +454,16 @@ index 9dcbb3bb..de057239 100644
 +                    s1 = s0 + (s32)((FX_Mul(at[i].nx, back) * 16) >> FX32_SHIFT); t1 = t0 + (s32)((FX_Mul(at[i].nz, back) * 16) >> FX32_SHIFT);
 +                } else if (part == 0) {
 +                    // (the ground: from the edge out (or from the rock's foot); its texture 16 texels a tile, as the forest's own)
++                    // (under a coast's edge's top too, a unit below it: its wavy side's see-through texels over the grass)
 +                    const fx32 from = shore->rockFirst ? run : 0;
++                    const fx32 under = shore->rimEdge ? shore->tierRun * FX32_ONE / 8 : 0;
++                    const fx32 gx = at[i].gx + FX_Mul(at[i].nx, under), gz = at[i].gz + FX_Mul(at[i].nz, under);
 +
 +                    x0 = at[i].x + FX_Mul(at[i].nx, from); z0 = at[i].z + FX_Mul(at[i].nz, from);
-+                    x1 = x0 + at[i].gx; z1 = z0 + at[i].gz;
-+                    y0 = y1 = shore->rockFirst ? bottomY : groundY;
++                    x1 = x0 + gx; z1 = z0 + gz;
++                    y0 = y1 = (shore->rockFirst ? bottomY : groundY) - (shore->rimEdge ? FX_Div(FX32_ONE, MAP_OBJECT_TILE_SIZE) : 0);
 +                    s0 = (s32)(((x0 - ox) * 16) >> FX32_SHIFT) + (ox >> FX32_SHIFT) % 2 * 16; t0 = (s32)(((z0 - oz) * 16) >> FX32_SHIFT) + (oz >> FX32_SHIFT) % 2 * 16;
-+                    s1 = s0 + (s32)((at[i].gx * 16) >> FX32_SHIFT); t1 = t0 + (s32)((at[i].gz * 16) >> FX32_SHIFT);
++                    s1 = s0 + (s32)((gx * 16) >> FX32_SHIFT); t1 = t0 + (s32)((gz * 16) >> FX32_SHIFT);
 +                } else {
 +                    // (the rock: from the ground's end down and out; its texture along the shore, a tile its width, and down it;
 +                    // in two tiers, the upper (part 1) to tierY and the lower (2) from there)
@@ -471,7 +474,9 @@ index 9dcbb3bb..de057239 100644
 +                    x1 = x0 + FX_Mul(at[i].nx, to - from); z1 = z0 + FX_Mul(at[i].nz, to - from);
 +                    y0 = part == 2 ? tierY : groundY; y1 = shore->tierRun != 0 && part == 1 ? tierY : bottomY;
 +                    s0 = s1 = (s32)(shore->rimEdge ? i * tw : i * tw / 2);
-+                    t0 = shore->rimEdge ? th * 3 / 16 : 0; t1 = th; // (a coast's edge as Veilstone's own: its texture's top by the land (less its first rows, pale, for its stone: blue against the grass), its bottom by the water)
++                    // (a coast's edge as Veilstone's own: its texture's top half its flat top over the land's edge, the wavy
++                    // side by the grass; its bottom half its side down to the water)
++                    t0 = shore->rimEdge && part == 2 ? th / 2 : 0; t1 = shore->rimEdge && part == 1 ? th / 2 : th;
 +                }
 +
 +                const BOOL flat = part <= 0 || shore->rimEdge;
@@ -495,7 +500,7 @@ index 9dcbb3bb..de057239 100644
  void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
  {
  #ifdef SDK_PORT_3DS
-@@ -7779,6 +8214,7 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+@@ -7779,6 +8219,7 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
      Port_RenderExtrudedColumns(landDataMan);
      Port_RenderStandInMaps(landDataMan);
      Port_RenderMapPieces(landDataMan);
