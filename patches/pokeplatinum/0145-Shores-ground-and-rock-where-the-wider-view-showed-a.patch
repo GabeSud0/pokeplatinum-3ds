@@ -10,26 +10,32 @@ view they floated. North of Solaceon the mountain's filler (586) is a rock
 plain a tile above Route 210's forest with no side: the forest's first
 column stood on the rock.
 
+Veilstone's model (562) has a second sea past its east edge, over the
+forest filler's first 3 columns at 19 (the forest's ground 16, its own sea
+8): that was the sea under those trees, and it covered any ground laid
+there with the trees' shadows. Left out of its list where it's loaded
+(Port_DropVeilstoneNotchSea, the list cut in place): the forest's own
+ground there, with the trees' shadows on it.
+
 A shore is drawn along a line of points (in tiles): a strip of ground out
 from the edge and a slope of rock down from it (or the rock first and the
 ground at its foot), round or square corners where the line turns, the
 textures by name from the area's set or from a loaded map's material
 (Port_AreaTexture, Port_LoadedTexture). East of Veilstone: a grass strip
-under those trees and along the forest's north side, square corners, its
-edge all round Veilstone's own coast's (seaside3, the wavy dirt edge, lit
-as the ground); all of it above 19, where Veilstone's model has a second
-sea over that notch (and its north edge, drawn on north, takes it over the
-sea's filler). North of Solaceon: the rock in two tiers, as Route 210's
-cliff beside it, the upper to 40, a tile of grass at its foot; the plain's
-last column of squares left out (sPortMapCuts) and drawn again as a strip
-of its top behind the edge, only while the shore can be drawn
-(Port_ShoreCutReady).
+along the forest's north side and west of those trees, at the forest's
+ground's height, square corners, edged with Veilstone's own coast
+(seaside3, the wavy dirt edge: its flat top over the grass's edge, its
+wavy side by the grass, its side down to the water). North of Solaceon:
+the rock in two tiers, as Route 210's cliff beside it, the upper to 40, a
+tile of grass at its foot; the plain's last column of squares left out
+(sPortMapCuts) and drawn again as a strip of its top behind the edge,
+only while the shore can be drawn (Port_ShoreCutReady).
 ---
- src/overlay005/land_data.c | 441 +++++++++++++++++++++++++++++++++++++
- 1 file changed, 441 insertions(+)
+ src/overlay005/land_data.c | 522 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 522 insertions(+)
 
 diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
-index 9dcbb3bb..8fc5dfd3 100644
+index 9dcbb3bb..6e813f14 100644
 --- a/src/overlay005/land_data.c
 +++ b/src/overlay005/land_data.c
 @@ -7404,6 +7404,7 @@ typedef struct PortMapCut {
@@ -60,7 +66,7 @@ index 9dcbb3bb..8fc5dfd3 100644
      for (u8 q = 0; q < QUADRANT_COUNT && cut != NULL && !pieces; q++) {
          pieces = landDataMan->loadedMaps[q]->mapMatrixIndex == cut->piecesBy && landDataMan->loadedMaps[q]->valid == TRUE
              && (!Port_HasMapPieces(matrixID, cut->piecesBy) || Port_PieceCopyOf(landDataMan, q) != NULL);
-@@ -7739,6 +7746,439 @@ static void Port_RenderStandInMaps(const LandDataManager *landDataMan)
+@@ -7739,10 +7746,524 @@ static void Port_RenderStandInMaps(const LandDataManager *landDataMan)
  }
  #endif
  
@@ -103,18 +109,16 @@ index 9dcbb3bb..8fc5dfd3 100644
 +    u8 rimEdge;           // (the rock a coast's edge, as Veilstone's own (its texture's edges see-through): its top flat over the ground's edge (tierRun, the ground a unit below it under it), its side down (the rest of the run), lit as the ground, 16 texels a tile along)
 +} PortShore;
 +
-+// (the forest's ground starts 3 tiles in from its west side for its first
-+// 8 rows, Veilstone's sea under its first trees there: the strip fills that,
-+// to x 736, 2026-11-12, "move what you did to the right to fill in the gap
-+// in the trees ... make it a straight corner". Its edge Veilstone's own
-+// coast's (seaside3, the wavy dirt edge), on all sides: "add the dirt edge
-+// to the top section, and the wavy dirt edge texture is missing". All of
-+// it above 19: Veilstone's model has a second sea over that notch at 19,
-+// above the forest's ground (16), and its north edge drawn on north over
-+// the sea's filler takes it there too; under it the strip and the edge
-+// didn't show, "I can clearly still see the sea")
++// (its first 8 rows of trees by Veilstone, x 736-738, stood over Veilstone's
++// second sea there, now left out (Port_DropVeilstoneNotchSea): the strip
++// along the forest's north side and west of those rows, at the forest's
++// own ground's height (its trees' shadows on it), square corners
++// (2026-11-12, "make it a straight corner"), edged with Veilstone's own
++// coast (seaside3, the wavy dirt edge, its wavy side by the grass: "add
++// the dirt edge to the top section ... the wavy part should be looking
++// towards the grass"))
 +static const PortShorePoint sPortShoreVeilstoneForest[] = {
-+    { 770, 576, 16 }, { 739, 576, 28 }, { 739, 584, 28 },
++    { 770, 576, 16 }, { 736, 576, 4 }, { 736, 584, 4 },
 +};
 +
 +// (the mountain's filler west of Route 210's forest, north of Solaceon
@@ -127,7 +131,7 @@ index 9dcbb3bb..8fc5dfd3 100644
 +};
 +
 +static const PortShore sPortShores[] = {
-+    { 0, 563, sPortShoreVeilstoneForest, NELEMS(sPortShoreVeilstoneForest), -1, 16, 4, 22, 8, 20, "ngrass", "seaside3", NULL, 0, NULL, 0, 0, FALSE, 0, TRUE, 3, 22, TRUE },
++    { 0, 563, sPortShoreVeilstoneForest, NELEMS(sPortShoreVeilstoneForest), -1, 16, 4, 17, 8, 9, "ngrass", "seaside3", NULL, 0, NULL, 0, 0, FALSE, 0, TRUE, 3, 17, TRUE },
 +    { 0, 587, sPortShoreSolaceonRock, NELEMS(sPortShoreSolaceonRock), 1, 8, 16, 48, 32, 32, "ngrass", "criffp", "criff", 40, "criff", 1, 0, TRUE, 586, FALSE, 8, 40, FALSE },
 +};
 +
@@ -495,12 +499,99 @@ index 9dcbb3bb..8fc5dfd3 100644
 +        NNS_G3dGeFlushBuffer();
 +    }
 +}
++
++// Veilstone's model (matrix 0, 562) has a second sea, past its east edge
++// over the forest filler's first 3 columns, z 575.5-583.5, at 19 (the
++// forest's ground 16, its own sea 8): the sea under the forest's first
++// trees ("sections of the forest floating"), and over the ground and the
++// trees' shadows the shore laid there (2026-11-12, "the shadows from the
++// trees ... are not affecting the ground"). Left out of its list where it's
++// loaded (the list cut in place, shorter: again when it's read again):
++// the forest's own ground there, with the trees' shadows on it.
++#define PORT_NOTCH_GROUPS 512
++
++static struct {
++    const NNSG3dResMdl *model;
++    u16 shape;
++    u32 size;
++} sPortNotchCut[QUADRANT_COUNT];
++
++static void Port_DropVeilstoneNotchSea(const LandDataManager *landDataMan)
++{
++    static s32 box[PORT_NOTCH_GROUPS][6];
++    static u8 keep[PORT_NOTCH_GROUPS];
++
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld || MapMatrix_GetMatrixID(landDataMan->mapMatrix) != 0) {
++        return;
++    }
++
++    for (u8 q = 0; q < QUADRANT_COUNT; q++) {
++        const LoadedMap *loadedMap = landDataMan->loadedMaps[q];
++        NNSG3dResMdl *model = loadedMap->mapRenderObj.resMdl;
++
++        if (loadedMap->mapMatrixIndex != 562 || loadedMap->valid != TRUE || model == NULL) {
++            continue;
++        }
++
++        NNSG3dResShp *shapes = NNS_G3dGetShp(model);
++
++        // (cut already: the shape's list as it was left)
++        if (sPortNotchCut[q].model == model && sPortNotchCut[q].shape < shapes->dict.numEntry
++            && NNS_G3dGetShpDataByIdx(shapes, sPortNotchCut[q].shape)->sizeDL == sPortNotchCut[q].size) {
++            continue;
++        }
++
++        // (nothing to leave out: its first shape's list as it is, to know it by)
++        sPortNotchCut[q].model = model;
++        sPortNotchCut[q].shape = 0;
++        sPortNotchCut[q].size = shapes->dict.numEntry > 0 ? NNS_G3dGetShpDataByIdx(shapes, 0)->sizeDL : 0;
++
++        for (int i = 0; i < shapes->dict.numEntry; i++) {
++            NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, i);
++            u32 bytes = NNS_G3dGetShpDLSize(shp), n, size = 0;
++            NitroGx3dListSurvey *survey = NitroPort_Gx3dSurveyList(NNS_G3dGetShpDLPtr(shp), bytes);
++            BOOL drop = FALSE;
++
++            n = survey != NULL ? NitroPort_Gx3dSurveyGroups(survey, box, NULL, PORT_NOTCH_GROUPS) : 0;
++
++            for (u32 g = 0; g < n && n < PORT_NOTCH_GROUPS; g++) {
++                // (flat at 19 (1216 of the list's, 1024 a tile), wholly past x 735.75)
++                keep[g] = !(box[g][1] == 1216 && box[g][4] == 1216 && box[g][0] >= 16128);
++                drop |= !keep[g];
++            }
++
++            if (drop) {
++                void *cut = malloc(bytes + 64);
++
++                size = cut != NULL ? NitroPort_Gx3dSurveyTrim(survey, cut, bytes + 64, keep, n, NULL) : 0;
++
++                if (size > 0 && size <= bytes) {
++                    memcpy(NNS_G3dGetShpDLPtr(shp), cut, size);
++                    shp->sizeDL = size;
++                    sPortNotchCut[q].shape = (u16)i;
++                    sPortNotchCut[q].size = size;
++                }
++
++                free(cut);
++            }
++
++            if (survey != NULL) {
++                NitroPort_Gx3dFreeSurvey(survey);
++            }
++        }
++    }
++}
 +#endif
 +
  void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
  {
  #ifdef SDK_PORT_3DS
-@@ -7779,6 +8219,7 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+     sPortLandTreesOff = landDataMan->inDistortionWorld;
++    Port_DropVeilstoneNotchSea(landDataMan);
+ #endif
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         if (landDataMan->loadedMaps[i]->mapMatrixIndex != INVALID_MAP_MATRIX_INDEX) {
+@@ -7779,6 +8300,7 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
      Port_RenderExtrudedColumns(landDataMan);
      Port_RenderStandInMaps(landDataMan);
      Port_RenderMapPieces(landDataMan);

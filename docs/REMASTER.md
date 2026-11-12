@@ -4200,8 +4200,12 @@ then the small props and the land's trees; houses and the scenery later.
   - Ground where the wider view showed the sea or a rock under trees
     (patch 0145, "shores"): east of Veilstone, a grass strip under the
     forest's first trees and along its north side, square corners, edged
-    all round with Veilstone's own coast (seaside3, the wavy dirt edge),
-    above the second sea Veilstone's model has over that notch at 19; north of Solaceon, the mountain's rock plain's side down to
+    with Veilstone's own coast (seaside3, the wavy dirt edge, its wavy
+    side by the grass). Veilstone's model has a second sea past its east
+    edge over the forest's first 3 columns, at 19 (the forest's ground 16):
+    that was the sea under those trees, and it covered ground laid there
+    and the trees' shadows on it; now left out of its list where it's
+    loaded, the forest's own ground shows, with the shadows; north of Solaceon, the mountain's rock plain's side down to
     Route 210's forest in two tiers, as the cliff beside it, and a tile
     of grass at its foot. Each from a proposal render.
 - The engine's vertices, one division each (2026-11-10, for the same
