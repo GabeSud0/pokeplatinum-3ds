@@ -4237,6 +4237,15 @@ uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *sv,void *dst,uint
 #ifndef TREE_ANCHOR
 #define TREE_ANCHOR 4
 #endif
+/* A tree's shadow laid out as the tree looks from the field's camera: a
+ * vertex's height there, its height above the ground and its depth (a
+ * unit further back looks TREE_SEEN_BACK / 1024 of a unit higher: the
+ * camera's 0.819 / 0.573), times TREE_SEEN_LENGTH in 4ths. (By its
+ * height alone the layers, stepped back as they go up, fell apart into
+ * lumps: "the shadow doesnt look like the tree", 2026-11-11; half the
+ * length chosen from a preview.) */
+#define TREE_SEEN_BACK 1464
+#define TREE_SEEN_LENGTH 2
 #define TREE_OVER_SIDE 16
 #define TREE_SUN_R 346
 #define TREE_SUN_G 333
@@ -4250,6 +4259,7 @@ typedef struct TreeQuad {          /* (a polygon of a shape's list, as read) */
 typedef struct TreePoly {          /* (a polygon to lay: about where its tree stands) */
     int32_t base[3];               /* x, the ground's y, z */
     int32_t u[TREE_VERTS], h[TREE_VERTS], st[TREE_VERTS][2];
+    int32_t hs[TREE_VERTS];        /* (its height as the camera sees it, for the shadow: TREE_SEEN_*) */
     uint8_t lv[TREE_VERTS];        /* (how dark at each vertex, in 31sts) */
     uint8_t n, first;              /* (first: its tree's, or its row's, first one) */
     uint8_t row;                   /* (one tree of a row's polygon) */
@@ -4454,6 +4464,7 @@ static void tree_add(TreeShape *sh,uint32_t *cap,const int32_t base[3],unsigned 
         int64_t up;
         p->u[i]=xyz[i][0]-base[0];
         p->h[i]=xyz[i][1]-base[1];
+        p->hs[i]=fixed?p->h[i]:(int32_t)(((int64_t)p->h[i]-((int64_t)xyz[i][2]-base[2])*TREE_SEEN_BACK/1024)*TREE_SEEN_LENGTH/4);
         p->st[i][0]=st[i][0];p->st[i][1]=st[i][1];
         /* (the fade: full at the ground, the tip's TREE_FADE_TALL up) */
         up=fixed || p->h[i]<0?0:p->h[i];
@@ -4470,6 +4481,7 @@ static void tree_floor(TreePoly *p,int32_t unit)
     for(c=0;c<4u;c++){
         p->u[c]=((c==1u||c==2u)?1:-1)*TREE_FLOOR_HALF_X*unit;
         p->h[c]=(c>=2u?1:-1)*TREE_FLOOR_HALF_Z*unit;
+        p->hs[c]=p->h[c];
         p->lv[c]=TREE_FLOOR_LEVEL;
     }
     p->fixed=2;
@@ -5011,7 +5023,7 @@ const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *t,uint32_t shape,i
 }
 /* (a tree of a shape's shadows: its polygons sh->polys[first..end), the
  * lowest and the highest of them, its square, whether it can be seen) */
-typedef struct TreeCast { uint32_t first, end, key; int32_t low, tall, anchor; int hide; } TreeCast;
+typedef struct TreeCast { uint32_t first, end, key; int32_t low, tall, slow, stall, anchor; int hide; } TreeCast;
 const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32_t wayX,int32_t wayZ,int32_t stretch,
                                       uint32_t *bytes)
 {
@@ -5075,13 +5087,15 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
         int64_t mx,mz,ex,ez;
         uint32_t j=i,s2,k;
         int overM=0,overE=0;
-        c->first=i;c->low=0x7FFFFFFF;c->tall=0;
+        c->first=i;c->low=c->slow=0x7FFFFFFF;c->tall=0;c->stall=-0x7FFFFFFF;
         for(;j<sh->npolys && sh->polys[j].base[0]==p->base[0] && sh->polys[j].base[2]==p->base[2];j++){
             const TreePoly *q=&sh->polys[j];
             if(q->fixed)continue;
             for(k=0;k<q->n;k++){
                 if(q->h[k]>c->tall)c->tall=q->h[k];
                 if(q->h[k]<c->low)c->low=q->h[k];
+                if(q->hs[k]>c->stall)c->stall=q->hs[k];
+                if(q->hs[k]<c->slow)c->slow=q->hs[k];
             }
         }
         c->end=i=j;
@@ -5089,21 +5103,21 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
         /* (where its shadow begins: its lowest leaves, of any of the
          * model's lists standing there: a row's tops and its bottoms are
          * two, one tree) */
-        c->anchor=c->low;
+        c->anchor=c->slow;
         for(s2=0;s2<t->count;s2++){
             const TreeShape *o=&t->shape[s2];
             for(k=0;k<o->npolys;k++){
                 const TreePoly *q=&o->polys[k];
                 unsigned v;
                 if(q->fixed || q->base[0]!=p->base[0] || q->base[2]!=p->base[2])continue;
-                for(v=0;v<q->n;v++)if(q->h[v]<c->anchor)c->anchor=q->h[v];
+                for(v=0;v<q->n;v++)if(q->hs[v]<c->anchor)c->anchor=q->hs[v];
             }
         }
         c->hide=c->tall<5*unit;
         if(!c->hide){
             /* what can't be seen isn't sent: its shadow's middle and its
              * tip behind trees nearer the camera */
-            const int32_t len=c->tall-c->anchor*TREE_ANCHOR/4;
+            const int32_t len=c->stall-c->anchor*TREE_ANCHOR/4;
             mx=p->base[0]+(int64_t)wayX*stretch/4096*(len/2)/4096;mz=p->base[2]+(int64_t)wayZ*stretch/4096*(len/2)/4096;
             ex=p->base[0]+(int64_t)wayX*stretch/4096*len/4096;ez=p->base[2]+(int64_t)wayZ*stretch/4096*len/4096;
             for(s2=0;s2<t->count;s2++){
@@ -5144,7 +5158,7 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
                 /* its trunk's */
                 const int64_t half=(int64_t)TREE_TRUNK_HALF*unit,
                               along[2]={-(int64_t)TREE_TRUNK_BEHIND*unit,
-                                        (int64_t)stretch*(c->low-c->anchor*TREE_ANCHOR/4)/4096+(int64_t)TREE_TRUNK_INTO*unit};
+                                        (int64_t)stretch*(c->slow-c->anchor*TREE_ANCHOR/4)/4096+(int64_t)TREE_TRUNK_INTO*unit};
                 if(c->low<TREE_TRUNK_LOW*unit || c->low>TREE_TRUNK_TOP*unit)continue;
                 for(k=0;k<4u;k++){
                     const int64_t u=(k==1u||k==2u)?half:-half,d=along[k>=2u];
@@ -5175,7 +5189,7 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
                 unsigned ok=1;
                 if(q->fixed || q->n<3u)continue;
                 for(k=0;k<q->n;k++){
-                    const int64_t d=(int64_t)stretch*(q->h[k]-c->anchor*TREE_ANCHOR/4)/4096;
+                    const int64_t d=(int64_t)stretch*(q->hs[k]-c->anchor*TREE_ANCHOR/4)/4096;
                     xyz[k][0]=p->base[0]+tree_fx((int64_t)wayZ*q->u[k]+(int64_t)wayX*d);
                     xyz[k][1]=p->base[1]+t->lift;
                     xyz[k][2]=p->base[2]+tree_fx(-(int64_t)wayX*q->u[k]+(int64_t)wayZ*d);

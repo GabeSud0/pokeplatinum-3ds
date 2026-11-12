@@ -4031,6 +4031,18 @@ then the small props and the land's trees; houses and the scenery later.
     over every list standing at the same place (a row's tops and
     bottoms, one tree), the trunk's strip to match. Forests look as
     before, a little shorter.
+  - A tree's shadow laid out as the tree looks from the camera (same
+    evening, from a preview: "I like how A looks overall but I feel like
+    the shadow doenst look like the tree"; half the length picked): the
+    trees' layers step back as they go up, which gives the tree its
+    shape on the screen; laid by their height alone they fell apart into
+    lumps, a cloud. Now a vertex's place along the shadow is its height
+    as the camera sees it (its height, and a unit further back a 1.43
+    unit higher: TREE_SEEN_BACK, the field camera's 0.819 / 0.573), half
+    of it (TREE_SEEN_LENGTH): the outline the player sees, wide at the
+    trunk and narrowing to the tip, with the same colour, softness,
+    start at the trunk and turn with the sun. Which trees get a trunk's
+    strip still goes by the layers' real height.
   - Speed in that log: 60 frames a second most of the way; one place 43
     to 48 (2,000 to 2,250 triangles; laying them in batches 12 to 17
     ms), 52 there with the sun shadows off and as slow in the log
