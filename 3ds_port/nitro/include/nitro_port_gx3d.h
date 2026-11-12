@@ -594,6 +594,19 @@ uint32_t NitroPort_Gx3dShadowHullParts(const void *const *lists, const uint32_t 
 uint32_t NitroPort_Gx3dShadowHullPartsFrom(const void *const *lists, const uint32_t *bytes, uint32_t count,
                                            int32_t shearX, int32_t shearZ, int32_t flatY, int32_t join, int32_t fromY,
                                            int32_t (*out)[3], uint32_t max, uint32_t *corners, uint32_t parts);
+/* A building's shadow's outline of one height (corners, n: convex, in the
+ * model's own coordinates) laid on the cells of the ground at that height
+ * alone: cells is nz rows of nx numbers, a cell step a side from x0, z0;
+ * those equal to level, in rectangles, the outline cut to each, and its
+ * soft edge (rim wide outside it, in quarters) the same. Two display
+ * lists, a command a word, added after *coreWords and *edgeWords (words):
+ * core, one grey; edge, 26 of 31 at the outline to 0. Vertices a quarter
+ * of the coordinates, at height y. The pieces laid; -1 if they don't fit. */
+int32_t NitroPort_Gx3dShadowPieces(const int32_t (*corners)[3], uint32_t n, int32_t y, int32_t rim,
+                                   const uint8_t *cells, uint32_t nx, uint32_t nz, uint8_t level,
+                                   int32_t x0, int32_t z0, int32_t step,
+                                   uint32_t *core, uint32_t coreRoom, uint32_t *coreWords,
+                                   uint32_t *edge, uint32_t edgeRoom, uint32_t *edgeWords);
 /* A building's walls lit by the sun (the game marks the big standing props
  * with it, 2026-11-10): draw-only too. The light's way on the ground in
  * the mark itself, as signed bytes of 1/127ths: to the right in bits 16

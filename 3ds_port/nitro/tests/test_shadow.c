@@ -952,6 +952,12 @@ static void test_sun_way(void)
     CHECK(!NitroPort_SunWayNow(way) && way[0] == 7);
     NitroPort_SetSunNow(&side, 1.0f);
     CHECK(NitroPort_SunWayNow(way));
+    /* (under a roof: no sun, the marks no marks; out again, as before) */
+    way[0] = 7;
+    NitroPort_SetSunRoofed(1);
+    CHECK(!NitroPort_SunWayNow(way) && way[0] == 7 && !NitroPort_GroundShadowsOn());
+    NitroPort_SetSunRoofed(0);
+    CHECK(NitroPort_SunWayNow(way) && NitroPort_GroundShadowsOn());
     /* (at the side: kept NITRO_SHADOW_GROUND_SIDE off the sprite's line) */
     CHECK(NEAR(way[0] / 4096.0, cos(limit), 0.003) && NEAR(way[1] / 4096.0, sin(limit), 0.003));
     CHECK(NEAR(way[2] / 4096.0, NITRO_SHADOW_GROUND_LENGTH / tan(40.0 * 3.14159265 / 180.0), 0.003));

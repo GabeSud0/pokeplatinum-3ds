@@ -353,6 +353,14 @@ int NitroPort_ShadowReachOn(void);
  * renderer; read on the game's thread. */
 void NitroPort_SetGroundShadows(int on);
 int NitroPort_GroundShadowsOn(void);
+/* The field is under a roof (a house, a cave: the game's own lighting
+ * there isn't the outdoors', the hour's): no sun, so no sun shadows; the
+ * marks are no marks (NitroPort_GroundShadowsOn 0, NitroPort_SunWayNow 0)
+ * and everything is drawn as the DS has it, the characters' round shadows
+ * and the props' own painted ones. Told by the game each frame it draws
+ * the field (2026-11-12, on a 3DS: a lobby's planters cast the sun's long
+ * wedges across its floor, "broken or fragmented shadows"). */
+void NitroPort_SetSunRoofed(int roofed);
 
 #ifdef __cplusplus
 }

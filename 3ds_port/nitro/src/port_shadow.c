@@ -1024,6 +1024,8 @@ void NitroPort_ShadowSunAt(int hour, int minute, NitroShadowSun *sun, float *str
  * of a degree or less: the shadows made again a few times a minute at
  * most). Set by the renderer's thread, read by the game's: each a word. */
 static volatile int sGroundShadows;
+/* (under a roof: no sun, NitroPort_SetSunRoofed) */
+static volatile int sSunRoofed;
 static volatile int32_t sSunWayNow[3];
 static volatile int sSunWaySet;
 
@@ -1056,7 +1058,7 @@ void NitroPort_SetSunNow(const NitroShadowSun *sun, float strength)
 
 int NitroPort_SunWayNow(int32_t way[3])
 {
-    if (!sSunWaySet || !sGroundShadows) return 0;
+    if (!sSunWaySet || !sGroundShadows || sSunRoofed) return 0;
     way[0] = sSunWayNow[0];
     way[1] = sSunWayNow[1];
     way[2] = sSunWayNow[2];
@@ -1116,7 +1118,12 @@ void NitroPort_SetGroundShadows(int on)
 
 int NitroPort_GroundShadowsOn(void)
 {
-    return sGroundShadows;
+    return sGroundShadows && !sSunRoofed;
+}
+
+void NitroPort_SetSunRoofed(int roofed)
+{
+    sSunRoofed = roofed != 0;
 }
 
 static volatile int sShadowReach;

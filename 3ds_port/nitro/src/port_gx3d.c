@@ -4249,7 +4249,17 @@ uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *sv,void *dst,uint
 #define TREE_POOL_HALF 10
 #define TREE_POOL_BACK 6
 #define TREE_POOL_FRONT 16
-#define TREE_FAR_SHADE 179
+#define TREE_FAR_SHADE 112
+/* (2026-11-12, the layers' shade as one slope: of 256, TREE_LIT_MID at the
+ * tree's middle, TREE_LIT_SIDE more at its far side and less at its near
+ * one (times how far to the side the light goes), TREE_LIT_LOW more at
+ * its foot and less at its top; TREE_FAR_SHADE of a cool grey where that
+ * comes to 256: 44% at the far corner by the ground, with the sun at
+ * 45 degrees to the side 16% in the middle, 5% at the far corner's top
+ * and none at the near one's.) */
+#define TREE_LIT_MID 96
+#define TREE_LIT_SIDE 80
+#define TREE_LIT_LOW 80
 /* Then (2026-11-10, from a second preview: "the far side shade should be
  * more noticeable, and on the forests probably the grass should be shaded
  * fully since there are a lot of trees not a lot of light go through";
@@ -5210,8 +5220,15 @@ const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *t,uint32_t shape,i
              * sun to a side each tree's far half was dark beside its
              * neighbour's lit one, and the trees looked one over another,
              * "they appear to be overlapping ... this is happening
-             * everywhere"; chosen from three: top to bottom only) */
-            const int64_t flat=(-(int64_t)wayZ*l->ny[v])*2/span,d=flat*TREE_RAMP/4+128;
+             * everywhere"; chosen from three: top to bottom only. On a
+             * 3DS that was a dark band across every tree's foot, "the
+             * trees still look strange ... a cohesive volume rather than
+             * a flat sprite with an arbitrary dark overlay": now one even
+             * slope across the whole tree, TREE_LIT_*, no steeper middle
+             * and no flat ends: darkest at its far corner by the ground,
+             * lightest at its near corner at the top, the far side as
+             * dark at the top as the near side is at the foot.) */
+            const int64_t d=TREE_LIT_MID+((int64_t)wayX*l->nx[v]*TREE_LIT_SIDE/span-(int64_t)l->ny[v]*TREE_LIT_LOW)/64;
             const int64_t up=(int64_t)l->xyz[v][1]-l->base[1];
             const int64_t cross=!hit?0:up<=(int64_t)TREE_CROSS_FULL*unit?TREE_CROSS_SHADE:
                                 up>=(int64_t)TREE_CROSS_NONE*unit?0:
@@ -5424,7 +5441,12 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *t,uint32_t shape,int32
             ex=p->base[0]+(int64_t)wayX*stretch/4096*len/4096;ez=p->base[2]+(int64_t)wayZ*stretch/4096*len/4096;
             overM=tree_over(t,mx,mz,p->base,unit);
             overE=overM && tree_over(t,ex,ez,p->base,unit);
-            c->hide=overM && overE;
+            /* (and a quarter of the way along it: at a forest's edge a
+             * tree's shadow came out from under it onto open ground and
+             * ran in under the next trees, its middle and its tip: not
+             * sent, "some trees are not projecting any shadows",
+             * 2026-11-12) */
+            c->hide=overM && overE && tree_over(t,(p->base[0]+mx)/2,(p->base[2]+mz)/2,p->base,unit);
         }
         ntrees++;
     }
@@ -5958,6 +5980,143 @@ fail:
 #undef HP_GROW
     free(v);free(pv);free(pv0);free(up);free(cell);free(pts);free(part);free(tmp);
     return done;
+}
+/* A building's shadow on ground of more than one height (2026-11-12, on a
+ * 3DS: the Galactic dish's "splits into separate, disconnected pieces",
+ * a streak down the stepped wall beside its plaza: the shadow was one
+ * flat polygon a height, each drawn wherever nothing stood in front of
+ * it, over lower ground too, in the air: seen from the camera it lay
+ * somewhere else). The ground under it is a grid of square cells, each
+ * with the number of the height it's at (cells: nz rows of nx, from x0, z0,
+ * step a side, in the outline's own coordinates); this lays the outline
+ * of one height (corners, n: convex, the shadow of what stands above that
+ * height) on its own cells alone: the cells of that number in rectangles
+ * (a row's run, on down while the rows below have it too), the outline
+ * cut to each, and its soft edge (rim wide, outside it) the same. Two
+ * display lists, each one command a word: `core` (one grey, 26 of 31,
+ * a strip a piece) and `edge` (26 at the outline to 0 at rim), added
+ * after *coreWords and *edgeWords; vertices a quarter of the coordinates,
+ * at height y. The pieces laid; -1 if they don't fit. */
+typedef struct PiecePoint { int64_t x,z,c; } PiecePoint;   /* (c: the grey, in 256ths of 31sts) */
+#define PIECE_POINTS 24
+static unsigned piece_clip(PiecePoint *p,unsigned n,int axis,int64_t edge,int keepLess)
+{
+    PiecePoint out[PIECE_POINTS];
+    unsigned i,m=0;
+    for(i=0;i<n;i++){
+        const PiecePoint *a=&p[i],*b=&p[(i+1u)%n];
+        const int64_t av=axis?a->z:a->x,bv=axis?b->z:b->x;
+        const int64_t da=keepLess?edge-av:av-edge,db=keepLess?edge-bv:bv-edge;
+        if(da>=0 && m<PIECE_POINTS)out[m++]=*a;
+        if((da<0)!=(db<0) && m<PIECE_POINTS){
+            const int64_t den=da-db;
+            out[m].x=a->x+(b->x-a->x)*da/den;
+            out[m].z=a->z+(b->z-a->z)*da/den;
+            out[m].c=a->c+(b->c-a->c)*da/den;
+            if(axis)out[m].z=edge;else out[m].x=edge;
+            m++;
+        }
+    }
+    memcpy(p,out,m*sizeof(*p));
+    return m;
+}
+static int64_t piece_area2(const PiecePoint *p,unsigned n)
+{
+    int64_t a=0;
+    unsigned i;
+    for(i=0;i<n;i++)a+=p[i].x*p[(i+1u)%n].z-p[(i+1u)%n].x*p[i].z;
+    return a<0?-a:a;
+}
+/* (a convex polygon as a strip, from one corner to and fro across it) */
+static int piece_put(uint32_t *out,uint32_t room,uint32_t *words,const PiecePoint *p,unsigned n,int32_t y,int shaded)
+{
+    uint32_t w=*words;
+    unsigned i;
+    if(n<3u || piece_area2(p,n)<32)return 1;
+    if(w+2u+n*(shaded?5u:3u)+1u+(shaded?0u:2u)>room)return 0;
+    if(!shaded){out[w++]=0x20u;out[w++]=26u|(26u<<5)|(26u<<10);}
+    out[w++]=0x40u;out[w++]=2u;
+    for(i=0;i<n;i++){
+        const unsigned k=(i&1u)?(i+1u)/2u:(i?n-i/2u:0u);
+        const int32_t x=(int32_t)(p[k].x/4),z=(int32_t)(p[k].z/4);
+        if(x<-32000 || x>32000 || z<-32000 || z>32000)return 0;
+        if(shaded){
+            int64_t c=(p[k].c+128)/256;
+            if(c<0)c=0;
+            if(c>31)c=31;
+            out[w++]=0x20u;out[w++]=(uint32_t)c|((uint32_t)c<<5)|((uint32_t)c<<10);
+        }
+        out[w++]=0x23u;
+        out[w++]=((uint32_t)x&0xFFFFu)|(((uint32_t)y&0xFFFFu)<<16);
+        out[w++]=(uint32_t)z&0xFFFFu;
+    }
+    out[w++]=0x41u;
+    *words=w;
+    return 1;
+}
+int32_t NitroPort_Gx3dShadowPieces(const int32_t (*corners)[3],uint32_t n,int32_t y,int32_t rim,
+                                   const uint8_t *cells,uint32_t nx,uint32_t nz,uint8_t level,
+                                   int32_t x0,int32_t z0,int32_t step,
+                                   uint32_t *core,uint32_t coreRoom,uint32_t *coreWords,
+                                   uint32_t *edge,uint32_t edgeRoom,uint32_t *edgeWords)
+{
+    PiecePoint in[PIECE_POINTS],out[PIECE_POINTS];
+    uint8_t *done;
+    uint32_t i,j,k;
+    int32_t pieces=0;
+    double cx=0.0,cz=0.0;
+    if(!corners || n<3u || n>PIECE_POINTS-8u || !cells || !nx || !nz || step<=0 || !core || !edge || !coreWords || !edgeWords)return -1;
+    done=calloc(nx*nz,1);
+    if(!done)return -1;
+    for(i=0;i<n;i++){
+        in[i].x=corners[i][0];in[i].z=corners[i][1];in[i].c=26*256;
+        cx+=(double)corners[i][0]/(double)n;cz+=(double)corners[i][1]/(double)n;
+    }
+    /* (the soft edge's far side: out from the middle, rim wide) */
+    for(i=0;i<n;i++){
+        double dx=(double)corners[i][0]-cx,dz=(double)corners[i][1]-cz,len=sqrt(dx*dx+dz*dz);
+        if(len<1.0){dx=1.0;dz=0.0;len=1.0;}
+        out[i].x=corners[i][0]+(int64_t)floor(dx/len*(double)rim*4.0+0.5);
+        out[i].z=corners[i][1]+(int64_t)floor(dz/len*(double)rim*4.0+0.5);
+        out[i].c=0;
+    }
+    for(j=0;j<nz;j++){
+        for(i=0;i<nx;i++){
+            uint32_t i1,j1,q;
+            int64_t rx0,rx1,rz0,rz1;
+            PiecePoint p[PIECE_POINTS];
+            unsigned m;
+            if(cells[j*nx+i]!=level || done[j*nx+i])continue;
+            for(i1=i;i1<nx && cells[j*nx+i1]==level && !done[j*nx+i1];i1++){}
+            for(j1=j+1u;j1<nz;j1++){
+                for(q=i;q<i1 && cells[j1*nx+q]==level && !done[j1*nx+q];q++){}
+                if(q<i1)break;
+            }
+            for(k=j;k<j1;k++)memset(&done[k*nx+i],1,i1-i);
+            rx0=(int64_t)x0+(int64_t)i*step;rx1=(int64_t)x0+(int64_t)i1*step;
+            rz0=(int64_t)z0+(int64_t)j*step;rz1=(int64_t)z0+(int64_t)j1*step;
+            memcpy(p,in,n*sizeof(*p));
+            m=piece_clip(p,n,0,rx0,0);
+            if(m>=3u)m=piece_clip(p,m,0,rx1,1);
+            if(m>=3u)m=piece_clip(p,m,1,rz0,0);
+            if(m>=3u)m=piece_clip(p,m,1,rz1,1);
+            if(m>=3u){
+                if(!piece_put(core,coreRoom,coreWords,p,m,y,0)){free(done);return -1;}
+                pieces++;
+            }
+            for(k=0;k<n;k++){
+                const uint32_t k1=(k+1u)%n;
+                p[0]=in[k];p[1]=in[k1];p[2]=out[k1];p[3]=out[k];
+                m=piece_clip(p,4u,0,rx0,0);
+                if(m>=3u)m=piece_clip(p,m,0,rx1,1);
+                if(m>=3u)m=piece_clip(p,m,1,rz0,0);
+                if(m>=3u)m=piece_clip(p,m,1,rz1,1);
+                if(m>=3u && !piece_put(edge,edgeRoom,edgeWords,p,m,y,1)){free(done);return -1;}
+            }
+        }
+    }
+    free(done);
+    return pieces;
 }
 uint32_t NitroPort_Gx3dTranslateCommand(void *dst,uint32_t dstBytes,int32_t x,int32_t y,int32_t z)
 {

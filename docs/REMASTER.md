@@ -4208,6 +4208,43 @@ then the small props and the land's trees; houses and the scenery later.
     loaded, the forest's own ground shows, with the shadows; north of Solaceon, the mountain's rock plain's side down to
     Route 210's forest in two tiers, as the cliff beside it, and a tile
     of grass at its foot. Each from a proposal render.
+  - After a 3DS run at 3 pm (log a6881f5e, the sun 58 degrees up, 34
+    round from the screen's left), each looked at on a PC with that sun:
+    - A building's shadow on ground of more than one height (the dish's
+      "splits into separate, disconnected pieces"; the Galactic
+      building's ran down the stepped wall beside its plaza): one flat
+      outline a height, each drawn wherever nothing stood in front of it,
+      hung in the air over lower ground and showed somewhere else, and
+      lower ground had none of its own. Now the ground under the outline
+      is a grid of the map's tiles with their heights, up to 6 of them
+      (the building's own and those within 64 above or below it), and
+      each height's shadow (what stands above it, longer on lower ground)
+      is cut to the tiles at that height (NitroPort_Gx3dShadowPieces,
+      patch 0146): every piece on its own ground. Two display lists a
+      building, kept till the sun moves on, one made a frame; ground all
+      at one height, the outline whole as before. Nothing of the camera's
+      is in it: the same lists wherever the player stands.
+    - The department store's shadow from two places ("looks displaced or
+      different in the second"): the two screenshots laid over one
+      another by the store's door have the shadow's edge in the same
+      place on the paving; the store itself leans with the perspective
+      near the screen's side, its shadow on the ground doesn't. Not
+      reproduced as a change of the shadow; the heights above are no
+      longer looked up once and kept whatever was read then (a tile not
+      known is looked at again).
+    - Under a roof no sun (NitroPort_SetSunRoofed, patch 0146: the area's
+      lighting not the outdoors'): a lobby's planters cast the sun's long
+      wedges across the floor. Houses and caves are drawn as the DS has
+      them.
+    - The trees' layers' shade ("the trees still look strange"; the
+      up-and-down-only shade was a dark band across every tree's foot):
+      one even slope across the whole tree, darkest at its far corner by
+      the ground (44%), none at its near corner at the top, no steeper
+      middle and no flat ends (TREE_LIT_*).
+    - A tree's shadow isn't sent when it can't be seen; that was judged
+      at its middle and its tip, and at a forest's edge one came out
+      onto open ground first: now at a quarter of the way too ("some
+      trees are not projecting any shadows").
 - The engine's vertices, one division each (2026-11-10, for the same
   place): to_screen divided three times in doubles for every vertex
   drawn (1 / W, then by 2W for x and for y); now by 1 / W once. The
