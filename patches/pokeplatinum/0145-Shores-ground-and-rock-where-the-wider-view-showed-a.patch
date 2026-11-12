@@ -29,7 +29,7 @@ of its top behind the edge, only while the shore can be drawn
  1 file changed, 436 insertions(+)
 
 diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
-index 9dcbb3bb..fb8eb54b 100644
+index 9dcbb3bb..de057239 100644
 --- a/src/overlay005/land_data.c
 +++ b/src/overlay005/land_data.c
 @@ -7404,6 +7404,7 @@ typedef struct PortMapCut {
@@ -100,7 +100,7 @@ index 9dcbb3bb..fb8eb54b 100644
 +    u8 square;            // (its corners square, not round)
 +    u8 tierRun;           // (the rock in two tiers, as the cliff beside it: the upper one's run, eighths; 0 one)
 +    s16 tierY;            // (the step between them, world units)
-+    u8 rimEdge;           // (the rock a coast's edge, as Veilstone's own: lit as the ground, its texture's water side out, 16 texels a tile along)
++    u8 rimEdge;           // (the rock a coast's edge, as Veilstone's own: lit as the ground, 16 texels a tile along)
 +} PortShore;
 +
 +// (the forest's ground starts 3 tiles in from its west side for its first
@@ -471,7 +471,7 @@ index 9dcbb3bb..fb8eb54b 100644
 +                    x1 = x0 + FX_Mul(at[i].nx, to - from); z1 = z0 + FX_Mul(at[i].nz, to - from);
 +                    y0 = part == 2 ? tierY : groundY; y1 = shore->tierRun != 0 && part == 1 ? tierY : bottomY;
 +                    s0 = s1 = (s32)(shore->rimEdge ? i * tw : i * tw / 2);
-+                    t0 = shore->rimEdge ? th * 15 / 16 : 0; t1 = shore->rimEdge ? 0 : th; // (its last row under the land's edge, as Veilstone's own)
++                    t0 = shore->rimEdge ? th * 3 / 16 : 0; t1 = th; // (a coast's edge as Veilstone's own: its texture's top by the land (less its first rows, pale, for its stone: blue against the grass), its bottom by the water)
 +                }
 +
 +                const BOOL flat = part <= 0 || shore->rimEdge;
