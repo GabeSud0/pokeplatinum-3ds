@@ -4141,6 +4141,13 @@ then the small props and the land's trees; houses and the scenery later.
       kept from the frame before).
     - A building's polygons lying flat on its ground (its yard) are left
       out of its shadow's groups: they joined what stands on them.
+    - The land's trees' lists (patch 0143): kept in 16 slots taken in
+      turn, a model being drawn could lose its lists to a map read
+      beside it (its trees drawn as the DS has them for a frame, the
+      lists made again); now the one looked up longest ago is let go.
+      And a model with more tree shapes than 8 had its lists let go and
+      made again at every draw; now the ones past 8 are drawn as they
+      are.
 - The engine's vertices, one division each (2026-11-10, for the same
   place): to_screen divided three times in doubles for every vertex
   drawn (1 / W, then by 2W for x and for y); now by 1 / W once. The

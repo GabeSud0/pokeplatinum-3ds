@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 00:31:42 -0700
+Subject: [PATCH] The land's trees' lists: the one drawn longest ago let go
+ (SDK_PORT_3DS)
+
+A model's trees' lists were kept in 16 slots taken in turn: a model
+being drawn could lose its lists to a map read beside it, and its trees
+were drawn as the DS has them for a frame and their lists made again.
+Now a free slot, else the one looked up longest ago. And a model with
+more than PORT_LAND_TREE_SHAPES tree shapes: the ones past it drawn as
+they are, the lists kept (they were let go and made again at every
+draw).
+---
+ src/overlay005/land_data.c | 42 ++++++++++++++++++++++++++++++--------
+ 1 file changed, 33 insertions(+), 9 deletions(-)
+
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 183ffd3f..64478e3c 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -96,6 +96,7 @@ typedef struct PortLandTrees {
+     u8 count;
+     u8 built;
+     NitroGx3dTreeLists *made;
++    u32 used;   // (when it was last looked up: the one longest ago let go)
+ } PortLandTrees;
+ 
+ static PortLandTrees sPortLandTrees[PORT_LAND_TREE_MODELS];
+@@ -131,8 +132,11 @@ static PortLandTrees *Port_LandTreesOf(const NNSG3dResMat *mat, BOOL make)
+         return NULL;
+     }
+ 
++    sPortLandTreesNext++;
++
+     for (i = 0; i < PORT_LAND_TREE_MODELS; i++) {
+         if (sPortLandTrees[i].mat == mat) {
++            sPortLandTrees[i].used = sPortLandTreesNext;
+             return &sPortLandTrees[i];
+         }
+     }
+@@ -141,11 +145,28 @@ static PortLandTrees *Port_LandTreesOf(const NNSG3dResMat *mat, BOOL make)
+         return NULL;
+     }
+ 
+-    PortLandTrees *slot = &sPortLandTrees[sPortLandTreesNext++ % PORT_LAND_TREE_MODELS];
++    // (a free one, else the one looked up longest ago: first each in turn,
++    // and a model being drawn could lose its lists to a map read beside it,
++    // its trees drawn as the DS has them for a frame and their lists made
++    // again)
++    PortLandTrees *slot = &sPortLandTrees[0];
++
++    for (i = 0; i < PORT_LAND_TREE_MODELS; i++) {
++        if (sPortLandTrees[i].mat == NULL) {
++            slot = &sPortLandTrees[i];
++            break;
++        }
++
++        if ((s32)(sPortLandTrees[i].used - slot->used) < 0) {
++            slot = &sPortLandTrees[i];
++        }
++    }
++
+     const NNSG3dResDict *textures = (const NNSG3dResDict *)((const u8 *)mat + mat->ofsDictTexToMatList);
+ 
+     Port_LandTreesClear(slot);
+     slot->mat = mat;
++    slot->used = sPortLandTreesNext;
+ 
+     for (u32 t = 0; t < textures->numEntry; t++) {
+         const NNSG3dResName *name = NNS_G3dGetResNameByIdx(textures, t);
+@@ -232,20 +253,23 @@ static void Port_LandTreeShape(NNSG3dRS *rs)
+     }
+ 
+     if (k == slot->count) {
+-        // (one not seen before: the lists made again with it, after this draw)
++        // (one not seen before: the lists made again with it, after this
++        // draw; past PORT_LAND_TREE_SHAPES drawn as it is, the lists kept:
++        // first they were let go and made again at every draw)
++        if (slot->count >= PORT_LAND_TREE_SHAPES) {
++            return;
++        }
++
+         if (slot->made != NULL) {
+             NitroPort_Gx3dFreeTreeLists(slot->made);
+             slot->made = NULL;
+         }
+ 
+         slot->built = FALSE;
+-
+-        if (slot->count < PORT_LAND_TREE_SHAPES) {
+-            slot->shapes[k] = (u8)shape;
+-            slot->lists[k] = NNS_G3dGetShpDLPtr(shp);
+-            slot->bytes[k] = NNS_G3dGetShpDLSize(shp);
+-            slot->count++;
+-        }
++        slot->shapes[k] = (u8)shape;
++        slot->lists[k] = NNS_G3dGetShpDLPtr(shp);
++        slot->bytes[k] = NNS_G3dGetShpDLSize(shp);
++        slot->count++;
+ 
+         return;
+     }
+-- 
+2.43.0
+
