@@ -940,6 +940,47 @@ static void test_darken_sprites(void)
     for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
     /* (no outline to look at: the corners, as before) */
     CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==1);
+    /* A shadow lying lower or higher than the sprite's foot isn't one it
+     * stands in (the player on a walkway over a tree's shadow on the grass
+     * under it, 2026-11-12): the same place on the screen, the sprite 5%
+     * nearer the camera than the shadow there, or 5% farther: as it is;
+     * within half a percent: darkened. */
+#define DEPTH(at,w_) do{ unsigned k_; for(k_=0;k_<6;k_++){v[(at)+k_].position[0]*=(w_)/v[(at)+k_].position[3]; \
+    v[(at)+k_].position[1]*=(w_)/v[(at)+k_].position[3];v[(at)+k_].position[3]=(w_);} }while(0)
+    b[0].tag=NITRO_GX3D_TAG_GROUND;b[0].texture_param=0;
+    for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
+    DEPTH(8,1.9f);
+    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==0 && v[8].color[0]==200);
+    DEPTH(8,2.1f);
+    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==0 && v[8].color[0]==200);
+    DEPTH(8,2.0f*(1.0f+NITRO_SHADOW_FOOT_DEEP*0.5f));
+    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==1 && v[8].color[0]<200);
+    DEPTH(8,2.0f*(1.0f-NITRO_SHADOW_FOOT_DEEP*0.5f));
+    for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
+    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==1 && v[8].color[0]<200);
+    DEPTH(8,2.0f);
+    for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
+    b[1].count=0;   /* (the sprite left out of the rest) */
+    /* A prop whose shadow is its outline (NITRO_GX3D_TAG_PROP_HULL) with
+     * its feet in an outline on the ground: as it is, that outline may be
+     * its own, wherever its batch comes in the scene (the Hallowed Tower
+     * as dark as in a building's shade, 2026-11-12); in a building's
+     * shadow by the game's word (NITRO_GX3D_TAG_PROP_SHADED): a full
+     * shade; in a tree's shadow: darkened by it as a sprite is. */
+    b[4].count=6;b[4].tag=NITRO_GX3D_TAG_PROP|NITRO_GX3D_TAG_PROP_HULL|2u;SPRITE(32,-0.9f,-0.2f);
+    for(i=32;i<38;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
+    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==0 && v[32].color[0]==200);
+    b[0].tag=NITRO_GX3D_TAG_RIM;
+    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==0 && v[32].color[0]==200);
+    b[4].tag|=NITRO_GX3D_TAG_PROP_SHADED;
+    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==1);
+    for(i=32;i<38;i++)CHECK(abs((int)v[i].color[0]-(int)(200.0f*(1.0f-0.4f)+0.5f))<=1);
+    for(i=32;i<38;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
+    b[4].tag&=~NITRO_GX3D_TAG_PROP_SHADED;
+    b[0].tag=NITRO_GX3D_TAG_SHADE;
+    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==1 &&
+          abs((int)v[32].color[0]-(int)(200.0f*(1.0f-0.4f*NITRO_SHADOW_TREE_BLOB)+0.5f))<=1);
+#undef DEPTH
 #undef SPRITE
 }
 static void test_sun_way(void)

@@ -545,6 +545,9 @@ void NitroPort_Gx3dTag(uint32_t tag);
  * building's: NITRO_GX3D_TAG_GROUND and NITRO_GX3D_TAG_RIM batches): its
  * mark has this bit too, and its picture isn't laid (port_shadow.c). */
 #define NITRO_GX3D_TAG_PROP_HULL 0x20000000u
+/* (such a prop standing in a building's shadow, the game's to tell: this
+ * bit in its mark too; it's drawn in that shade, port_shadow.c) */
+#define NITRO_GX3D_TAG_PROP_SHADED 0x10000000u
 #define NITRO_GX3D_TAG_SHADE 0x40000000u
 /* (the shadows on the ground where a tree stands, its pool or a forest's
  * floor: drawn before the layers' shadows, once; NitroPort_Gx3dTreeGround) */

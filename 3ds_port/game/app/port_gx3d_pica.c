@@ -63,6 +63,10 @@ static unsigned sDrawsCut;   /* draws left out for want of room ([perf]) */
 static const char *sStage="idle";
 static u32 sLastDrawFirst,sLastDrawCount,sDraws;
 static void stage(const char *s){__atomic_store_n(&sStage,s,__ATOMIC_RELAXED);}
+/* (the draws made so far; and what drawing the sun shadows takes the
+ * thread that draws, for the [shadow] lines: microseconds, frames, draws) */
+static u32 sDrawsMade;
+static u32 sShadowDrawUs,sShadowDrawFrames,sShadowDraws;
 static void draw_arrays(int first,int count)
 {
     static int told;
@@ -70,6 +74,7 @@ static void draw_arrays(int first,int count)
         if(!told){told=1;NitroPort_Log("[gx3d] a draw of %d vertices at %d in %s: left out",count,first,__atomic_load_n(&sStage,__ATOMIC_RELAXED));}
         return;
     }
+    sDrawsMade++;
     __atomic_store_n(&sLastDrawFirst,(u32)first,__ATOMIC_RELAXED);
     __atomic_store_n(&sLastDrawCount,(u32)count,__ATOMIC_RELAXED);
     __atomic_fetch_add(&sDraws,1,__ATOMIC_RELAXED);
@@ -2138,6 +2143,16 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
                           sGroundTagged*per,sGroundFull,sGroundWhole,sGroundShade/all,sGroundShadeTris/all,
                           sGroundDarkened/all,sMasksMade,(double)sGroundTicks*1000.0/SYSCLOCK_ARM11/all,
                           (double)sSun.elevation,(double)sSun.azimuth);
+            {
+                /* (what drawing them takes the thread that draws: the
+                 * commands made, not the GPU's time, which the [gpu] lines
+                 * have as "the sun shadows") */
+                const u32 us=__atomic_exchange_n(&sShadowDrawUs,0u,__ATOMIC_RELAXED),
+                          dr=__atomic_exchange_n(&sShadowDraws,0u,__ATOMIC_RELAXED),
+                          fr=__atomic_exchange_n(&sShadowDrawFrames,0u,__ATOMIC_RELAXED);
+                if(fr)NitroPort_Log("[shadow] drawing them: %.2f ms a frame making the commands, %.1f draws a frame (%u frames)",
+                                    (double)us/1000.0/fr,(double)dr/fr,(unsigned)fr);
+            }
             if(sGroundScenes==2100)sGroundScenes=300;
             sGroundTicks=0;sGroundCards=0;sGroundFound=0;sGroundSprites=0;sGroundMarked=0;
             sGroundProps=0;sGroundPropsLaid=0;sGroundFull=0;
@@ -3522,6 +3537,7 @@ static void draw_scene(const PicaView *view)
 {
     size_t b,parts;
     int blend,edging,copying,part,depthOnly,stump;
+    const char *opaqueName="the opaque polygons";
     NitroGx3dEdgeSetup edges;
     if(sPrepared<0||!view||!view->fb)return;
     part=view->part;
@@ -3650,21 +3666,34 @@ static void draw_scene(const PicaView *view)
      * see-through ones too (first before them: a pond's square of grass,
      * a model with a cut-out texture, stayed lit in the shade round it, on
      * a 3DS 2026-11-11, "artifacts in textures" at the Day Care). */
-    if((sGroundReady || sShadeBatches) && !depthOnly)draw_ground_shadows(copying);
+    /* (in a profiled frame's [gpu] line a part of their own, "the sun
+     * shadows", after "the opaque polygons": with them on a frame took the
+     * GPU 8 to 13 ms where it took 6 with them off, in Veilstone City, log
+     * b6742907 of 2026-11-12, and the line had the two as one) */
+    if((sGroundReady || sShadeBatches) && !depthOnly){
+        const u64 t0=svcGetSystemTick();
+        const u32 draws=sDrawsMade;
+        NitroPort_PicaProfileMark(opaqueName);
+        draw_ground_shadows(copying);
+        opaqueName="the sun shadows";
+        __atomic_fetch_add(&sShadowDrawUs,(u32)((svcGetSystemTick()-t0)*1000000ull/SYSCLOCK_ARM11),__ATOMIC_RELAXED);
+        __atomic_fetch_add(&sShadowDraws,sDrawsMade-draws,__ATOMIC_RELAXED);
+        __atomic_fetch_add(&sShadowDrawFrames,1u,__ATOMIC_RELAXED);
+    }
     if(part==PICA_DRAW_OPAQUE){
         /* (the rest after the caller has scaled it down) */
         fog_mode(0);
         C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
         C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
         C3D_AlphaTest(false,GPU_ALWAYS,0);
-        NitroPort_PicaProfileMark("the opaque polygons");
+        NitroPort_PicaProfileMark(opaqueName);
         stage("the scene's opaque polygons drawn");
         scissor_off();
         return;
     }
     /* (with the copies: cut here, always, for them to come after) */
-    if(copying)NitroPort_PicaCut(depthOnly?"the opaque polygons' depth":"the opaque polygons");
-    else NitroPort_PicaProfileMark(depthOnly?"the opaque polygons' depth":"the opaque polygons");
+    if(copying)NitroPort_PicaCut(depthOnly?"the opaque polygons' depth":opaqueName);
+    else NitroPort_PicaProfileMark(depthOnly?"the opaque polygons' depth":opaqueName);
     if(edging)mark_edges(view,&edges);
     stage("the translucent polygons");
     /* The translucent polygons, over the outlines (but the game's own

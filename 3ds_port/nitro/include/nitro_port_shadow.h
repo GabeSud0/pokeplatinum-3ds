@@ -261,6 +261,11 @@ int NitroPort_ShadowTreeMask(const uint32_t *rgba8, unsigned width, unsigned hei
                              uint32_t *out);
 #define NITRO_SHADOW_FOOT_UP 0.08f
 #define NITRO_SHADOW_FOOT_MIN 0.5f
+/* (a shadow a sprite or a prop stands in lies as far from the camera as
+ * its foot, within this much of that distance: 1%, about 5 units of
+ * height in the field. One on ground lower or higher isn't one it stands
+ * in: under a walkway, at a ledge's foot.) */
+#define NITRO_SHADOW_FOOT_DEEP 0.01f
 unsigned NitroPort_ShadowDarkenSprites(struct NitroGx3dGpuVertex *verts, const struct NitroGx3dBatch *batches,
                                        size_t count, const float take[3], NitroShadowMaskAt maskAt, void *maskCtx);
 #define NITRO_SHADOW_PROP_MIN 5.0f

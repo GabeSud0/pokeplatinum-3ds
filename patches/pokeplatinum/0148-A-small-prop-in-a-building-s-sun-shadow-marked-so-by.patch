@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 17:59:20 -0700
+Subject: [PATCH] A small prop in a building's sun shadow marked so by the
+ game; its own outline no longer taken for one it stands in (SDK_PORT_3DS)
+
+A small prop whose sun shadow is its outline (a bench, a sign, the
+Hallowed Tower) has 0x10000000 (NITRO_GX3D_TAG_PROP_SHADED) in its mark
+while its place is inside a building's outline of the frame before
+(MapProp_PortInShade, as a building's own shade is told): the port draws
+it in that shade. The port no longer looks on the screen for the outlines
+such a prop's feet are in: its own outline was one of them whenever its
+batches didn't come just before the prop's in the scene, and the Hallowed
+Tower on Route 209 was drawn as dark as in a building's shade (on a 3DS,
+2026-11-12: "Spiritomb's tomb is being incorrectly darkened").
+---
+ src/overlay005/map_prop.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/overlay005/map_prop.c b/src/overlay005/map_prop.c
+index 8b27bc6c..0af87fbb 100644
+--- a/src/overlay005/map_prop.c
++++ b/src/overlay005/map_prop.c
+@@ -897,6 +897,15 @@ static void MapProp_PortBegin(const MapProp *prop, int index, const AreaDataMana
+         // sliver, 2026-11-12, "Bench shadows are not working".
+         if (MapProp_PortBuildingShadow(prop, position, rotation, scale, TRUE)) {
+             mark |= 0x20000000;
++
++            // (standing in a building's shadow: 0x10000000,
++            // NITRO_GX3D_TAG_PROP_SHADED, and the port draws it in that
++            // shade. The port no longer looks for the outlines its feet are
++            // in on the screen: its own was one of them, and the Hallowed
++            // Tower was as dark as in a building's shade, 2026-11-12)
++            if (MapProp_PortInShade(position)) {
++                mark |= 0x10000000;
++            }
+         }
+     }
+ 
+-- 
+2.43.0
+

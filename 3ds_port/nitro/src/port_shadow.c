@@ -1191,7 +1191,7 @@ int NitroPort_ShadowTreeMask(const uint32_t *rgba8,unsigned width,unsigned heigh
 unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3dBatch *batches,size_t count,
                                        const float take[3],NitroShadowMaskAt maskAt,void *maskCtx)
 {
-    static float ndc[DARKEN_VERTS][7];   /* (x, y on the screen, the colour: red the grey, or a trunk's strip's three; the texture coordinate) */
+    static float ndc[DARKEN_VERTS][8];   /* (x, y on the screen, the colour: red the grey, or a trunk's strip's three; the texture coordinate; 1 / w) */
     static uint8_t oval[DARKEN_VERTS/3u];
     static const NitroGx3dBatch *of[DARKEN_VERTS/3u];   /* (a tree's layers': its batch, for its outline) */
     size_t b,nt=0,t;
@@ -1215,6 +1215,7 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
                 o[4]=(float)v->color[2]*(1.0f/255.0f);
                 o[5]=v->uv[0];
                 o[6]=v->uv[1];
+                o[7]=1.0f/v->position[3];
             }
             /* (a tree's trunk's shadow is a strip in its quad, by its
              * colours: port_gx3d_pica.c, blob_batch; its layers', red 31, a
@@ -1233,8 +1234,8 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
      * shadow, "Some shadows dont affect objects which breaks realism") */
     for(b=0;b<count;b++){
         const NitroGx3dBatch *batch=&batches[b];
-        float lo[2]={0,0},hi[2]={0,0},px,py,dark=0.0f;
-        size_t c,e,own;
+        float lo[2]={0,0},hi[2]={0,0},px,py,dark=0.0f,wFoot=0.0f;
+        size_t c,e;
         uint32_t i;
         int ok=batch->count>=3u,prop=NITRO_GX3D_TAG_IS_PROP(batch->tag),first=1;
         if(!batch->tag || (batch->tag&1u) || ((batch->tag&0xC0000000u) && !prop))continue;
@@ -1253,7 +1254,8 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
                 x=v->position[0]/v->position[3];y=v->position[1]/v->position[3];
                 if(first || x<lo[0])lo[0]=x;
                 if(first || x>hi[0])hi[0]=x;
-                if(first || y<lo[1])lo[1]=y;
+                /* (its lowest vertex: how far from the camera its foot is) */
+                if(first || y<lo[1]){lo[1]=y;wFoot=v->position[3];}
                 if(first || y>hi[1])hi[1]=y;
                 first=0;
             }
@@ -1262,15 +1264,20 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
         if(!ok || first)continue;
         px=(lo[0]+hi[0])*0.5f;
         py=lo[1]+(hi[1]-lo[1])*NITRO_SHADOW_FOOT_UP;
-        /* (a prop whose shadow is its outline: that outline, sent just
-         * before it, round its own feet, isn't one it stands in) */
-        own=b;
-        if(prop && (batch->tag&NITRO_GX3D_TAG_PROP_HULL))
-            while(own>0 && (batches[own-1u].tag==NITRO_GX3D_TAG_GROUND || batches[own-1u].tag==NITRO_GX3D_TAG_RIM))own--;
+        /* (a prop whose shadow is its outline, round its own feet: the
+         * outlines on the ground aren't looked at for it, its own is one of
+         * them; the game says whether it stands in another's,
+         * NITRO_GX3D_TAG_PROP_SHADED. First its own was told by its batches
+         * coming just before the prop's: they don't, the scene's batches
+         * aren't in the order they were sent, and the Hallowed Tower stood
+         * as dark as in a building's shade in its own shadow, on a 3DS
+         * 2026-11-12, "Spiritomb's tomb is being incorrectly darkened".) */
+        if(prop && (batch->tag&NITRO_GX3D_TAG_PROP_HULL) && (batch->tag&NITRO_GX3D_TAG_PROP_SHADED))dark=1.0f;
         for(t=0;t<nt;t++){
             const float *a=ndc[t*3u],*c1=ndc[t*3u+1u],*c2=ndc[t*3u+2u];
-            float area,w0,w1,w2,g;
-            if(of[t]>=&batches[own] && of[t]<batch)continue;
+            float area,w0,w1,w2,g,far;
+            if(prop && (batch->tag&NITRO_GX3D_TAG_PROP_HULL) &&
+               (of[t]->tag==NITRO_GX3D_TAG_GROUND || of[t]->tag==NITRO_GX3D_TAG_RIM))continue;
             if((px<a[0] && px<c1[0] && px<c2[0]) || (px>a[0] && px>c1[0] && px>c2[0]) ||
                (py<a[1] && py<c1[1] && py<c2[1]) || (py>a[1] && py>c1[1] && py>c2[1]))
                 continue;
@@ -1280,6 +1287,17 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
             w2=((c1[0]-a[0])*(py-a[1])-(c1[1]-a[1])*(px-a[0]))/area;
             w0=1.0f-w1-w2;
             if(w0<0.0f || w1<0.0f || w2<0.0f)continue;
+            /* (the shadow there no nearer or farther than the foot, by
+             * NITRO_SHADOW_FOOT_DEEP of the foot's own distance: one lying
+             * on ground lower or higher than what the sprite stands on
+             * isn't one it stands in. On a 3DS, 2026-11-12, "a shadow
+             * located beneath an elevated path should not darken the
+             * player standing above it": on Route 215's walkways, 32 above
+             * the grass, the player went dark over a tree's shadow on the
+             * grass, 5.6% farther than their feet; a shadow they stand in
+             * is within 0.15%.) */
+            far=1.0f/(w0*a[7]+w1*c1[7]+w2*c2[7]);
+            if(far-wFoot>NITRO_SHADOW_FOOT_DEEP*wFoot || wFoot-far>NITRO_SHADOW_FOOT_DEEP*wFoot)continue;
             g=w0*a[2]+w1*c1[2]+w2*c2[2];
             if(oval[t]==2u){
                 if(maskAt && of[t]->texture_param){

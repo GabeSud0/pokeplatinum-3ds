@@ -4165,7 +4165,8 @@ then the small props and the land's trees; houses and the scenery later.
     upright), in a building's shade with a soft edge half as wide; its
     own painted shadow left out. Its mark gets NITRO_GX3D_TAG_PROP_HULL:
     its picture isn't laid, and the outline sent just before it isn't
-    one it stands in (NitroPort_ShadowDarkenSprites).
+    one it stands in (NitroPort_ShadowDarkenSprites; since patch 0148 no
+    outline is looked at for it: below).
   - The honey tree is a prop of three layers over a painted patch, as a
     land tree: now drawn through the land's trees' lists (its texture
     treeeff01 among the trees'; a unit up to 1024 of a list's: its
@@ -4258,6 +4259,37 @@ then the small props and the land's trees; houses and the scenery later.
       bf_tree03 showed none of the sun's), the Distortion World's
       (tree_sbt01: no sun there) and those of rooms. Oreburgh's
       c3_road_ki is no tree in view.
+  - In shade by height, and a prop's own outline (2026-11-12, patch
+    0148; on a 3DS, log b6742907: "a shadow located beneath an elevated
+    path should not darken the player standing above it", "Spiritomb's
+    tomb is being incorrectly darkened"). A sprite or a prop was in a
+    shadow when its foot was inside one of the shadows' triangles on the
+    screen, at whatever height that shadow lay: on Route 215's walkways,
+    32 above the grass, the player went dark over the shadow of a tree
+    standing on the grass under them. Now the shadow there must also be
+    as far from the camera as the foot, within NITRO_SHADOW_FOOT_DEEP of
+    that distance (1%, about 5 units of height: on the PC a shadow stood
+    in is within 0.15%, the one under the walkway 5.6% farther). And a
+    prop whose shadow is its outline took that outline for one it stood
+    in unless its batches came just before the prop's, which the scene's
+    order doesn't keep: the Hallowed Tower, in its own shadow, was drawn
+    as dark as in a building's shade. Now the outlines on the ground
+    aren't looked at for such a prop at all; the game says whether it
+    stands in a building's (MapProp_PortInShade, as for a building:
+    NITRO_GX3D_TAG_PROP_SHADED in its mark), and it's drawn in a full
+    shade then (Eterna's Cycle Shop's bikes in its shadow, the one in
+    the sun as it is); the trees' shadows still by its foot on the
+    screen. test_shadow: both, either way.
+  - The log (2026-11-12): its first lines have the build's version and
+    commit ("[platinum] build ..."); a profiled frame's [gpu] line has
+    "the sun shadows" as a part after "the opaque polygons" (they were
+    one), and after each [shadow] line another has what drawing them
+    takes the thread that draws (the commands made, and how many draws a
+    frame). For the next round on performance: in log b6742907, Veilstone
+    City, the same streets with the sun shadows off and on, a frame took
+    the GPU 6 ms off and 7 to 13 on, its building 6.5 ms and 7.5 to
+    12.5, the geometry thread 25 ms a scene and 26 to 31, the game 3.7 ms
+    a frame and 5.4.
 - The engine's vertices, one division each (2026-11-10, for the same
   place): to_screen divided three times in doubles for every vertex
   drawn (1 / W, then by 2W for x and for y); now by 1 / W once. The
