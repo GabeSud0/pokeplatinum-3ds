@@ -26,9 +26,10 @@ from, the request to swap. At 1x every scene is wanted, and in the
 Distortion World it's never asked.
 ---
 diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
+index 68ad4d01..e1d3a0e6 100644
 --- a/src/overlay005/fieldmap.c
 +++ b/src/overlay005/fieldmap.c
-@@ -139,6 +139,9 @@
+@@ -139,6 +139,9 @@ static void ov5_021D13B4(FieldSystem *fieldSystem);
  static enum FieldExtensionOverlay FieldMap_GetExtOverlayForActiveDynMapFeatures(FieldSystem *fieldSystem);
  static BOOL FieldMap_InDistortionWorld(FieldSystem *fieldSystem);
  #ifdef SDK_PORT_3DS
@@ -38,12 +39,10 @@ diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
  static void FieldMap_PortNeighbours(FieldSystem *fieldSystem);
  static void FieldMap_PortLogUnseen(FieldSystem *fieldSystem);
  static void FieldMap_PortKeepHiddenInSight(FieldSystem *fieldSystem, enum MapHeaderID mapHeaderID, int objEventCount, const ObjectEvent *objEventList);
-@@ -743,6 +746,20 @@
-     }
+@@ -751,6 +754,17 @@ static void ov5_021D15F4(FieldSystem *fieldSystem)
  
-     PokeRadar_ClearIfAllOutOfView(fieldSystem);
-+
-+#ifdef SDK_PORT_3DS
+         NitroPort_SetSunRoofed(fieldSystem->areaDataManager != NULL && !AreaDataManager_IsOutdoorsLighting(fieldSystem->areaDataManager));
+     }
 +    // Faster than 1x (the options page's SPEED) the game runs several
 +    // frames for each one shown. A frame that won't be shown made its whole
 +    // scene all the same: in a town at 4x the ground and the buildings sent
@@ -55,11 +54,10 @@ diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
 +    // they keep count of, the Poké Radar's check, the tasks drawn from. Not
 +    // in the Distortion World (never asked there: every scene made).
 +    if (FieldMap_InDistortionWorld(fieldSystem) == TRUE || NitroPort_FieldSceneWanted()) {
-+#endif
-     LandDataManager_RenderLoadedMaps(fieldSystem->landDataMan, fieldSystem->areaModelAttrs);
- 
-     if (FieldMap_InDistortionWorld(fieldSystem) == TRUE) {
-@@ -750,6 +767,9 @@
+     // (the ground under the buildings' sun shadows, while they're drawn)
+     MapProp_PortGround(fieldSystem);
+ #endif
+@@ -764,6 +778,9 @@ static void ov5_021D15F4(FieldSystem *fieldSystem)
      }
  
      MapPropManager_Render2(fieldSystem->mapPropManager, fieldSystem->areaDataManager);

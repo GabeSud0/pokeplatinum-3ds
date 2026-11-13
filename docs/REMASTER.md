@@ -2071,7 +2071,7 @@ screens) the lower screen is the DS's, filling the screen as before.
     as they were while the game went on (black rooms, no text boxes, the
     battles' health bars and animations stopped; 2026-10-26).
     Faster than 1x the field's frames that aren't shown don't make their
-    3D scene (since 2026-11-10; `nitro_port_speed.h`, patch 0135). Before,
+    3D scene (since 2026-11-10; `nitro_port_speed.h`, patch 0150). Before,
     every frame made its whole scene, at 4x two a V-blank and one never
     seen: in a town that was most of the game's core (Sandgem: 3 ms a
     halt, 12 of each V-blank's 16.7 ms), the display thread, on that
