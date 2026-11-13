@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 21:57:01 -0700
+Subject: [PATCH] A forest's floor: its trees' painted patch laid as sun
+ shadow, in parts (SDK_PORT_3DS)
+
+With the sun shadows a tree's stump is drawn without the dark patch the
+game paints round it, and since 2026-11-11 nothing took its place: at a
+forest's edge the grass shone through between the trees and the layers'
+lower lobes stood out as loose pieces (on a 3DS, the meteor area by
+Veilstone, reported again and again). The port's forest floor list
+(NitroPort_Gx3dTreeGround: a row's flat polygon, and a tree's with two
+others standing near it) is sent after the stumps marked 0x40000020
+(NITRO_GX3D_TAG_FLOOR), in parts of a square of the map each, only those
+the view can see (NitroPort_Gx3dTreeSend kind 3).
+---
+ src/overlay005/land_data.c | 17 +++++++++++------
+ 1 file changed, 11 insertions(+), 6 deletions(-)
+
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 03e251da..208d747f 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -222,9 +222,10 @@ static void Port_LandTreeList(u32 mark, const void *list, u32 bytes)
+     NitroPort_Gx3dTag(0);
+ }
+ 
+-// The shape's lit layers (kind 0), its layers' shadows (1) or its trunks'
+-// (2): lists the port makes in parts, in their own order the trees one
+-// after another in a square of the map together, of which only the parts
++// The shape's lit layers (kind 0), its layers' shadows (1), its trunks'
++// (2) or its forest's floor (3): lists the port makes in parts, in their
++// own order the trees one after another in a square of the map together,
++// of which only the parts
+ // the view can see are sent (NitroPort_Gx3dTreeSend, straight to the
+ // geometry engine: three of the four blocks loaded are mostly beside the
+ // view).
+@@ -316,15 +317,19 @@ static void Port_LandTreeShape(NNSG3dRS *rs)
+ 
+     // (the model's x is the screen's right and its z towards the camera,
+     // as the field's camera looks at it)
+-    // (the pools and the forests' floors first, marked 0x40000008,
+-    // NITRO_GX3D_TAG_GROUND: made with the shadows' list)
++    // (the forests' floors first, marked 0x40000020, NITRO_GX3D_TAG_FLOOR:
++    // made with the lists)
+     {
+         u32 groundBytes;
+         const void *ground;
+ 
+         list = NitroPort_Gx3dTreeShadows(slot->made, k, way[0], way[1], way[2], &bytes);
+         ground = NitroPort_Gx3dTreeGround(slot->made, k, &groundBytes);
+-        Port_LandTreeList(0x40000008, ground, groundBytes);
++        // (a forest's floor, its patch laid as shadow: 0x40000020,
++        // NITRO_GX3D_TAG_FLOOR; in parts, as the trees' layers)
++        if (ground != NULL && groundBytes != 0) {
++            Port_LandTreeParts(0x40000020, slot->made, k, 3);
++        }
+ 
+         // (the layers laid on the ground, marked 0x40000000,
+         // NITRO_GX3D_TAG_SHADE; then the trunks', 0x40000018,
+-- 
+2.43.0
+

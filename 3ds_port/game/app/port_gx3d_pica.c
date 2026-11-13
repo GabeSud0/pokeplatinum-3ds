@@ -3102,6 +3102,48 @@ static void once_batch(const NitroGx3dBatch *batch,int shade,int pass)
     draw_arrays((int)batch->first,(int)batch->count);
     if(tex)tex->param=param;
 }
+/* A forest's floor (NITRO_GX3D_TAG_FLOOR batches: the stumps' polygons,
+ * their painted patch laid as shadow): once_batch's shade, its alpha the
+ * patch's alone. The stump's texels (stump_combiner: 1 - green + red,
+ * times alpha, is 1 for them and 8/255 to 25/255 less for the patch's) go
+ * to 0: (1 - that) x the texel's alpha, times 4 twice (stage 1, stage 2),
+ * is half and more for the patch, so the ground pass's alpha test (128)
+ * takes the patch alone, and the stump stays as it was drawn. */
+static void floor_batch(const NitroGx3dBatch *batch)
+{
+    C3D_Tex *tex=batch->texture_param?get_texture(batch->texture_param,batch->palette_base):NULL;
+    C3D_TexEnv *env;
+    u32 param;
+    if(!tex)return;
+    param=tex->param;
+    C3D_TexSetFilter(tex,GPU_LINEAR,GPU_LINEAR);
+    C3D_TexBind(0,tex);
+    env=C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvColor(env,sShadeColor);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,GPU_PRIMARY_COLOR,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_MODULATE);
+    C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,GPU_TEXTURE0,GPU_TEXTURE0);
+    C3D_TexEnvOpAlpha(env,GPU_TEVOP_A_ONE_MINUS_SRC_G,GPU_TEVOP_A_SRC_R,GPU_TEVOP_A_SRC_ALPHA);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_ADD_MULTIPLY);
+    env=C3D_GetTexEnv(1);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_PREVIOUS,0,0);
+    C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,0,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
+    C3D_TexEnvSrc(env,C3D_Alpha,GPU_PREVIOUS,GPU_TEXTURE0,0);
+    C3D_TexEnvOpAlpha(env,GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA,GPU_TEVOP_A_SRC_ALPHA,0);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_MODULATE);
+    C3D_TexEnvScale(env,C3D_Alpha,GPU_TEVSCALE_4);
+    env=C3D_GetTexEnv(2);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env,C3D_Both,GPU_PREVIOUS,0,0);
+    C3D_TexEnvFunc(env,C3D_Both,GPU_REPLACE);
+    C3D_TexEnvScale(env,C3D_Alpha,GPU_TEVSCALE_4);
+    draw_arrays((int)batch->first,(int)batch->count);
+    C3D_TexEnvInit(C3D_GetTexEnv(2));
+    tex->param=param;
+}
 /* The land's trees' shadows (the scene's own polygons marked
  * NITRO_GX3D_TAG_SHADE, left out of its other passes), then the props'.
  * A tree's fades from its foot (2026-11-10, chosen from a preview: one
@@ -3109,8 +3151,9 @@ static void once_batch(const NitroGx3dBatch *batch,int shade,int pass)
  * shadow), and a pixel is still darkened once: where two trees' overlap
  * the darker is wanted, not whichever is drawn first (a tip over the
  * next tree's foot). So the darkest first:
- * - the pools and the forests' floors (NITRO_GX3D_TAG_GROUND batches),
- *   once: they're the darkest there is where they are;
+ * - the buildings' shadows (NITRO_GX3D_TAG_GROUND batches) and the
+ *   forests' floors (NITRO_GX3D_TAG_FLOOR: floor_batch), once: they're the
+ *   darkest there is where they are;
  * - the layers' shadows where the texel's alpha x the grey is at least
  *   TREE_PASS (the half nearer the foot), then wherever the texel is
  *   over half opaque; each pixel taken by the first to draw it.
@@ -3280,12 +3323,13 @@ static void draw_once_batches(int chars)
             const NitroGx3dBatch *batch=&sBatches[b];
             const uint32_t tag=batch->tag;
             if(batch->translucent)continue;
-            if(pass==0?tag!=NITRO_GX3D_TAG_GROUND:
+            if(pass==0?(tag!=NITRO_GX3D_TAG_GROUND && tag!=NITRO_GX3D_TAG_FLOOR):
                (tag!=NITRO_GX3D_TAG_SHADE && tag!=NITRO_GX3D_TAG_TRUNK && tag!=NITRO_GX3D_TAG_RIM))continue;
             if(!room_for_draw())break;
             if(pass==0){
                 once_stencil(sOnceA,both);
-                once_batch(batch,1,-1);
+                if(tag==NITRO_GX3D_TAG_FLOOR)floor_batch(batch);
+                else once_batch(batch,1,-1);
             }else if(tag==NITRO_GX3D_TAG_RIM){
                 /* (a building's soft edge in the bands too, by its grey: the
                  * stages the trees' set as once_batch has them) */

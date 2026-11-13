@@ -2843,9 +2843,44 @@ static void test_tree_lists(void)
      * alone), from the trunk ("like if it was floting" where it began
      * where the lowest leaves' falls): the lowest layer, leaning back,
      * 0 to 1893; texels as the layer's own (22 to 62 across, 64 at its
-     * foot to 44.5 at its top). No pools, no floors: no ground list. */
+     * foot to 44.5 at its top). (Its ground list: the row's trees stand
+     * among these two, so they're a forest's: below.) */
     shadow=NitroPort_Gx3dTreeShadows(t,0,0,4096,2048,&nsh);
-    CHECK(shadow && nsh && !(nsh&3u) && !NitroPort_Gx3dTreeGround(t,0,&ng) && !ng);
+    CHECK(shadow && nsh && !(nsh&3u));
+    {
+        /* the two trees' list alone: one other within 36 units each, no
+         * forest, no floor */
+        NitroGx3dTreeLists *alone=NitroPort_Gx3dTreeLists(lists,bytes,1,64<<12);
+        uint32_t na=0;
+        CHECK(alone && NitroPort_Gx3dTreeShadows(alone,0,0,4096,2048,&na) && !NitroPort_Gx3dTreeGround(alone,0,&na) && !na);
+        NitroPort_Gx3dFreeTreeLists(alone);
+        /* with the row among them: their two stumps' polygons */
+        CHECK(NitroPort_Gx3dTreeGround(t,0,&ng) && ng);
+        if(ng){
+            tree_view();
+            n=tree_scene(NitroPort_Gx3dTreeGround(t,0,&ng),ng,both,sh,400);
+            CHECK(n==12);
+        }
+    }
+    /* A row's flat polygon (64 units wide): its forest's floor, the
+     * stump's polygon itself as the list has it (its painted patch laid as
+     * shadow, 2026-11-12: at a forest's edge the grass shone through
+     * between the trees and their layers' lobes stood out as pieces),
+     * white, a unit above it, its texture coordinates with it; the same
+     * for any sun. */
+    if(NitroPort_Gx3dTreeShadows(t,2,0,4096,2048,&nsh2)){
+        const void *floor=NitroPort_Gx3dTreeGround(t,2,&ng);
+        CHECK(floor && ng && !(ng&3u));
+        if(floor){
+            tree_view();
+            n=tree_scene(floor,ng,both,sh,400);
+            CHECK(n==6);
+            for(i=0;i<n;i++)CHECK(abs(sh[i].y-122)<=8);
+            CHECK(tree_rgb(sh,n,-2048,122,900,31,31,31) && tree_rgb(sh,n,2048,122,-900,31,31,31));
+            CHECK(tree_st(sh,n,-2048,122,900,0.0f,62.0f) && tree_st(sh,n,2048,122,900,64.0f,62.0f));
+        }
+        CHECK(NitroPort_Gx3dTreeShadows(t,2,4096,0,2048,&nsh2) && NitroPort_Gx3dTreeGround(t,2,&ng)==floor);
+    }else CHECK(0);
     tree_view();
     n=tree_scene(shadow,nsh,both,sh,400);
     CHECK(n==36);
