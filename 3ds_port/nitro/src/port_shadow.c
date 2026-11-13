@@ -1266,13 +1266,13 @@ unsigned NitroPort_ShadowDarkenSprites(NitroGx3dGpuVertex *verts,const NitroGx3d
         py=lo[1]+(hi[1]-lo[1])*NITRO_SHADOW_FOOT_UP;
         /* (a prop whose shadow is its outline, round its own feet: the
          * outlines on the ground aren't looked at for it, its own is one of
-         * them; the game says whether it stands in another's,
+         * them; the game says whether a small prop stands in a building's,
          * NITRO_GX3D_TAG_PROP_SHADED. First its own was told by its batches
          * coming just before the prop's: they don't, the scene's batches
          * aren't in the order they were sent, and the Hallowed Tower stood
          * as dark as in a building's shade in its own shadow, on a 3DS
          * 2026-11-12, "Spiritomb's tomb is being incorrectly darkened".) */
-        if(prop && (batch->tag&NITRO_GX3D_TAG_PROP_HULL) && (batch->tag&NITRO_GX3D_TAG_PROP_SHADED))dark=1.0f;
+        if(prop && (batch->tag&NITRO_GX3D_TAG_PROP_SHADED))dark=1.0f;
         for(t=0;t<nt;t++){
             const float *a=ndc[t*3u],*c1=ndc[t*3u+1u],*c2=ndc[t*3u+2u];
             float area,w0,w1,w2,g,far;

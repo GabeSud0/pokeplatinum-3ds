@@ -4280,6 +4280,18 @@ then the small props and the land's trees; houses and the scenery later.
     shade then (Eterna's Cycle Shop's bikes in its shadow, the one in
     the sun as it is); the trees' shadows still by its foot on the
     screen. test_shadow: both, either way.
+  - A prop that is a picture standing up (2026-11-12, patch 0149; on a
+    3DS: "the shadow from the tomb is a square"). The Hallowed Tower's
+    model, and Eterna's bikes', is one quad: its outline's shadow was
+    the quad's. A model whose vertices all lie in one plane
+    (NitroPort_Gx3dListsFlat, MapProp_PortFlat) gets no outline; what its
+    picture has painted under it stays, and it has no sun shadow of its
+    own (its picture laid as a character's began a few pixels off its
+    foot, the quad being larger than what's painted on it: not in). Any
+    small prop inside a building's outline is marked shaded, with an
+    outline of its own or not. test_gx3d: one quad is flat, with a
+    painted shadow lying under it too; a box, two quads across each
+    other, or one well off the other's plane aren't.
   - The log (2026-11-12): its first lines have the build's version and
     commit ("[platinum] build ..."); a profiled frame's [gpu] line has
     "the sun shadows" as a part after "the opaque polygons" (they were

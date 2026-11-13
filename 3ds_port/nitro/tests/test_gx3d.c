@@ -3494,6 +3494,57 @@ static void test_shadow_hull_parts(void)
     lists[0]=list;
     n=NitroPort_Gx3dShadowHullParts(lists,bytes,1,4096,2048,0,256,out,16,corners,4);
     CHECK(n==2 && corners[0]==6 && corners[1]==6);
+    /* (a box is no picture standing up: NitroPort_Gx3dListsFlat) */
+    CHECK(NitroPort_Gx3dListsFlat(lists,bytes,1,0,64)==0);
+    {
+        /* A model that is one quad standing up, leaning back (the Hallowed
+         * Tower's, Eterna's bikes'): a picture, no shape for an outline's
+         * shadow (2026-11-12, "the shadow from the tomb is a square"). So
+         * with its painted shadow lying flat under it, left out by its
+         * height; not with a second quad across it; a second one a
+         * little off its plane still is, one well off it isn't; under 3
+         * vertices: no. */
+        static uint32_t fc[200],fl[200];
+        const void *one[1];
+        uint32_t fb[1];
+        unsigned fn=0;
+        fc[fn++]=0x40;fc[fn++]=1;
+        fn+=tree_quad(&fc[fn],-512,512,0,640,0,-320,0,0);
+        fc[fn++]=0x41;
+        fb[0]=dl_pack(fl,fc,fn)*4u;one[0]=fl;
+        CHECK(NitroPort_Gx3dListsFlat(one,fb,1,0,64)==1);
+        fn-=1;
+        fn+=tree_quad(&fc[fn],-600,600,0,0,200,-400,0,0);       /* (flat on the ground) */
+        fc[fn++]=0x41;
+        fb[0]=dl_pack(fl,fc,fn)*4u;
+        CHECK(NitroPort_Gx3dListsFlat(one,fb,1,0,64)==0);
+        fn=0;
+        fc[fn++]=0x40;fc[fn++]=1;
+        fn+=tree_quad(&fc[fn],-512,512,0,640,0,-320,0,0);
+        fn+=tree_quad(&fc[fn],0,0,0,640,512,-512,0,0);          /* (across it) */
+        fc[fn++]=0x41;
+        fb[0]=dl_pack(fl,fc,fn)*4u;
+        CHECK(NitroPort_Gx3dListsFlat(one,fb,1,0,64)==0);
+        fn=0;
+        fc[fn++]=0x40;fc[fn++]=1;
+        fn+=tree_quad(&fc[fn],-512,512,0,640,0,-320,0,0);
+        fn+=tree_quad(&fc[fn],-512,512,0,640,8,-312,0,0);       /* (7 off its plane) */
+        fc[fn++]=0x41;
+        fb[0]=dl_pack(fl,fc,fn)*4u;
+        CHECK(NitroPort_Gx3dListsFlat(one,fb,1,0,64)==1);
+        fn-=21;
+        fn+=tree_quad(&fc[fn],-512,512,0,640,400,80,0,0);       /* (358 off it) */
+        fc[fn++]=0x41;
+        fb[0]=dl_pack(fl,fc,fn)*4u;
+        CHECK(NitroPort_Gx3dListsFlat(one,fb,1,0,64)==0);
+        fn=0;
+        fc[fn++]=0x40;fc[fn++]=0;
+        fc[fn++]=0x23;fc[fn++]=word2(0,0);fc[fn++]=0;
+        fc[fn++]=0x23;fc[fn++]=word2(100,0);fc[fn++]=0;
+        fc[fn++]=0x41;
+        fb[0]=dl_pack(fl,fc,fn)*4u;
+        CHECK(NitroPort_Gx3dListsFlat(one,fb,1,0,64)==0);
+    }
     for(i=0;i<corners[0];i++)CHECK(out[i][0]<2000);
     for(i=0;i<corners[1];i++)CHECK(out[16+i][0]>=4488);
     CHECK(NitroPort_Gx3dShadowHullParts(lists,bytes,1,4096,2048,0,8192,out,16,corners,4)==1 && corners[0]>=6);

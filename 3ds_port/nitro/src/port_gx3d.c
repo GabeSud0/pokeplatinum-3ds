@@ -5793,6 +5793,65 @@ uint32_t NitroPort_Gx3dShadowHullParts(const void *const *lists,const uint32_t *
 {
     return NitroPort_Gx3dShadowHullPartsFrom(lists,bytes,count,shearX,shearZ,flatY,join,0,out,max,corners,parts);
 }
+/* (see the header) */
+int NitroPort_Gx3dListsFlat(const void *const *lists,const uint32_t *bytes,uint32_t count,int32_t flatY,int32_t thick)
+{
+    double o[3]={0,0,0},e[3]={0,0,0},n[3]={0,0,0},len=0.0;
+    uint32_t i,o2,pass,seen=0;
+    int have=0;
+    if(!lists || !bytes || !count)return 0;
+    /* (first a plane: the first vertex, the one farthest from it, and the
+     * one farthest from the line through the two; then every vertex's
+     * distance from it) */
+    for(pass=0;pass<4u;pass++){
+        double best=0.0,pick[3]={0,0,0};
+        for(i=0;i<count;i++){
+            DlInfo *info;
+            int32_t top=0;
+            if(!lists[i] || bytes[i]<4u || (bytes[i]&3u))return 0;
+            info=dl_survey(lists[i],bytes[i]/4u,3u);
+            if(!info)return 0;
+            for(o2=0;o2<info->nops;o2++){
+                const unsigned op=info->ops[o2]&255u;
+                if(op>=0x23u && op<=0x28u && info->xyz[o2][1]>top)top=info->xyz[o2][1];
+            }
+            /* (a shape lying flat on the ground, its painted shadow: not of the picture) */
+            if(flatY>0 && top<=flatY){dl_free(info);continue;}
+            for(o2=0;o2<info->nops;o2++){
+                const unsigned op=info->ops[o2]&255u;
+                double d[3],m;
+                if(op<0x23u || op>0x28u)continue;
+                if(!pass){
+                    if(!have){o[0]=info->xyz[o2][0];o[1]=info->xyz[o2][1];o[2]=info->xyz[o2][2];have=1;}
+                    seen++;
+                    continue;
+                }
+                d[0]=info->xyz[o2][0]-o[0];d[1]=info->xyz[o2][1]-o[1];d[2]=info->xyz[o2][2]-o[2];
+                if(pass==1u)m=d[0]*d[0]+d[1]*d[1]+d[2]*d[2];
+                else if(pass==2u){
+                    const double c[3]={e[1]*d[2]-e[2]*d[1],e[2]*d[0]-e[0]*d[2],e[0]*d[1]-e[1]*d[0]};
+                    m=c[0]*c[0]+c[1]*c[1]+c[2]*c[2];
+                }else{
+                    m=n[0]*d[0]+n[1]*d[1]+n[2]*d[2];
+                    if(m<0.0)m=-m;
+                    if(m>(double)thick*len){dl_free(info);return 0;}
+                    continue;
+                }
+                if(m>best){best=m;pick[0]=d[0];pick[1]=d[1];pick[2]=d[2];}
+            }
+            dl_free(info);
+        }
+        if(!pass){if(seen<3u)return 0;}
+        else if(pass==1u){if(!(best>0.0))return 0;e[0]=pick[0];e[1]=pick[1];e[2]=pick[2];}
+        else if(pass==2u){
+            if(!(best>0.0))return 0;
+            n[0]=e[1]*pick[2]-e[2]*pick[1];n[1]=e[2]*pick[0]-e[0]*pick[2];n[2]=e[0]*pick[1]-e[1]*pick[0];
+            len=sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);
+            if(!(len>0.0))return 0;
+        }
+    }
+    return 1;
+}
 uint32_t NitroPort_Gx3dShadowHullPartsFrom(const void *const *lists,const uint32_t *bytes,uint32_t count,int32_t shearX,
                                            int32_t shearZ,int32_t flatY,int32_t join,int32_t fromY,int32_t (*out)[3],
                                            uint32_t max,uint32_t *corners,uint32_t parts)

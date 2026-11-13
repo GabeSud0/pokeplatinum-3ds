@@ -545,8 +545,8 @@ void NitroPort_Gx3dTag(uint32_t tag);
  * building's: NITRO_GX3D_TAG_GROUND and NITRO_GX3D_TAG_RIM batches): its
  * mark has this bit too, and its picture isn't laid (port_shadow.c). */
 #define NITRO_GX3D_TAG_PROP_HULL 0x20000000u
-/* (such a prop standing in a building's shadow, the game's to tell: this
- * bit in its mark too; it's drawn in that shade, port_shadow.c) */
+/* (a small prop standing in a building's shadow, the game's to tell: this
+ * bit in its mark; it's drawn in that shade, port_shadow.c) */
 #define NITRO_GX3D_TAG_PROP_SHADED 0x10000000u
 #define NITRO_GX3D_TAG_SHADE 0x40000000u
 /* (the shadows on the ground where a tree stands, its pool or a forest's
@@ -585,6 +585,16 @@ uint32_t NitroPort_Gx3dShadowHull(const void *const *lists, const uint32_t *byte
  * the sun shadows on, a see-through shape standing up, a fountain's
  * water, drawn.) */
 int32_t NitroPort_Gx3dListTop(const void *list, uint32_t bytes);
+/* Whether a model is a picture standing up: every vertex of its shapes'
+ * lists (not of those lying flat on the ground, their highest vertex no
+ * higher than flatY: its painted shadow) within thick of one plane. Such
+ * a prop (the Hallowed Tower and Eterna's bikes are one quad each) has no
+ * shape for an outline's shadow: its outline is the quad's, and its
+ * shadow was a square (on a 3DS, 2026-11-12, "the shadow from the tomb is
+ * a square"). The game sends no outline for it. 0 too if a list can't be
+ * read or there are under 3 vertices. */
+int NitroPort_Gx3dListsFlat(const void *const *lists, const uint32_t *bytes, uint32_t count, int32_t flatY,
+                            int32_t thick);
 #define NITRO_GX3D_HULL_COVER 0.3
 uint32_t NitroPort_Gx3dShadowHullParts(const void *const *lists, const uint32_t *bytes, uint32_t count, int32_t shearX,
                                        int32_t shearZ, int32_t flatY, int32_t join, int32_t (*out)[3], uint32_t max,
