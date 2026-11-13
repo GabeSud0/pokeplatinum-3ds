@@ -4394,9 +4394,6 @@ typedef struct TreeShape {
     int32_t (*stand)[3];           /* (where its trees stand, a row's each: x, z, and whether a forest's) */
     uint32_t nstand;
     uint32_t *ground, groundBytes, groundCap;   /* (the pools' and floors' list, made with the shadows') */
-    uint32_t *floor, floorBytes;   /* (its forest's floor: tree_floors) */
-    TreePart *floorPart;           /* (its parts: a square of the map each) */
-    uint32_t nfloorPart;
     int32_t litWay[2];
     int litSet;
     uint32_t *ends, nends;         /* (its rows' trees at an open end: leaves, tree_row_ends) */
@@ -4989,109 +4986,6 @@ static void tree_leaves(TreeShape *sh,const TreeQuad *quads,uint32_t n,int32_t u
         sh->litPartMax=sh->litPart?sh->nleaves:0u;
     }
 }
-/* A forest's trees' painted patches, as the game draws them (2026-11-12,
- * on a 3DS, the meteor area by Veilstone: "strange tree pieces underneath
- * the tree", reported again and again). The game paints a dark patch
- * round each tree's stump on a flat polygon of the tree's (a row's: one
- * along the row). With the sun shadows the stumps are drawn without it
- * (NITRO_GX3D_TAG_STUMP: the trees' shadows are their own pictures laid
- * along the light now), and at a forest's edge that patch was what hid
- * the lowest leaves of the tree behind: without it they showed, a dark
- * lobe of leaves with a hard edge under each tree. (A first fix laid the
- * patch's shape as shade on the ground: the leaves still showed through
- * it, darker.) So for a forest's trees the flat polygon is sent again
- * after its stumps, unmarked, as the list has it (its NORMAL, its
- * texture coordinates, the material the shape has set): drawn as the
- * game draws it, patch and all, over the leaves it hides there. A row's
- * flat polygon (wider than 48), and a tree's with TREE_FOREST_NEIGHBOURS
- * others standing within TREE_FOREST_NEAR of it either way; a tree alone
- * keeps its sun shadow alone. In parts of a square of the map, those the
- * view can see (NitroPort_Gx3dTreeSend kind 3). */
-typedef struct TreeFloorAt { uint32_t quad; int64_t key; } TreeFloorAt;
-static int tree_floor_order(const void *a,const void *b)
-{
-    const TreeFloorAt *p=a,*q=b;
-    return p->key<q->key?-1:p->key>q->key?1:p->quad<q->quad?-1:p->quad>q->quad?1:0;
-}
-static void tree_floors(NitroGx3dTreeLists *t,TreeQuad *const *quads,const uint32_t *counts,int32_t unit)
-{
-    const int64_t near=(int64_t)TREE_FOREST_NEAR*unit,self=(int64_t)4*unit,wide=(int64_t)48*unit,square=(int64_t)128*unit;
-    uint32_t i,j,k,a;
-    for(i=0;i<t->count;i++){
-        TreeShape *sh=&t->shape[i];
-        DlWriter wr;
-        const uint32_t mode=0;
-        TreeFloorAt *at;
-        uint32_t nat=0,cap;
-        if(!quads[i] || !sh->stumps || !sh->stumpBytes || !counts[i])continue;
-        at=malloc(counts[i]*sizeof(*at));
-        if(!at)continue;
-        for(j=0;j<counts[i];j++){
-            const TreeQuad *q=&quads[i][j];
-            const int64_t cx=((int64_t)q->lo[0]+q->hi[0])/2,cz=((int64_t)q->lo[2]+q->hi[2])/2;
-            unsigned v,ok=1,others=0;
-            if(!q->n || !q->flat)continue;
-            if(q->hi[0]-q->lo[0]<=wide && q->hi[2]-q->lo[2]<=wide){
-                for(k=0;k<t->count && others<TREE_FOREST_NEIGHBOURS;k++){
-                    const TreeShape *o=&t->shape[k];
-                    for(a=0;a<o->nstand && others<TREE_FOREST_NEIGHBOURS;a++){
-                        const int64_t dx=o->stand[a][0]-cx,dz=o->stand[a][1]-cz;
-                        if(dx>near || -dx>near || dz>near || -dz>near)continue;
-                        if(dx<=self && -dx<=self && dz<=self && -dz<=self)continue;
-                        others++;
-                    }
-                }
-                if(others<TREE_FOREST_NEIGHBOURS)continue;
-            }
-            for(v=0;v<q->n;v++)if(!dl_s16(q->xyz[v]))ok=0;
-            if(!ok)continue;
-            /* (its square of the map: the parts sent, as the trees' are) */
-            at[nat].quad=j;
-            at[nat].key=((cz>=0?cz/square:(cz-square+1)/square)<<32)+(cx>=0?cx/square:(cx-square+1)/square);
-            nat++;
-        }
-        if(!nat){free(at);continue;}
-        qsort(at,nat,sizeof(*at),tree_floor_order);
-        cap=nat*((TREE_VERTS-2u)*3u*5u+8u)+16u;
-        sh->floor=malloc(cap*4u);
-        sh->floorPart=calloc(nat,sizeof(*sh->floorPart));
-        if(!sh->floor || !sh->floorPart){free(sh->floor);free(sh->floorPart);sh->floor=NULL;sh->floorPart=NULL;free(at);continue;}
-        memset(&wr,0,sizeof(wr));
-        wr.out=sh->floor;
-        wr.cap=cap;
-        for(j=0;j<nat;j=k){
-            TreePart *part=&sh->floorPart[sh->nfloorPart++];
-            /* (a part begins a packed word of its own and ends its polygons) */
-            wr.slots=0;
-            part->at=wr.n;
-            dl_put(&wr,0x40u,&mode);
-            for(k=j;k<nat && at[k].key==at[j].key;k++){
-                const TreeQuad *q=&quads[i][at[k].quad];
-                unsigned v,m;
-                for(m=0;m<3u;m++){
-                    part->lo[m]=k==j || q->lo[m]<part->lo[m]?q->lo[m]:part->lo[m];
-                    part->hi[m]=k==j || q->hi[m]>part->hi[m]?q->hi[m]:part->hi[m];
-                }
-                /* (lit as the game lights it: its own NORMAL) */
-                if(q->normal)dl_put(&wr,0x21u,&q->normal);
-                for(v=1;v+1u<q->n;v++){
-                    const unsigned order[3]={0u,v,v+1u};
-                    for(m=0;m<3u;m++){
-                        const unsigned u=order[m];
-                        uint32_t tc=((uint32_t)q->st[u][0]&0xFFFFu)|((uint32_t)q->st[u][1]<<16);
-                        dl_put(&wr,0x22u,&tc);
-                        dl_vtx16(&wr,q->xyz[u]);
-                    }
-                }
-            }
-            dl_put(&wr,0x41u,NULL);
-            part->words=wr.n-part->at;
-        }
-        free(at);
-        if(wr.full){free(sh->floor);free(sh->floorPart);sh->floor=NULL;sh->floorPart=NULL;sh->nfloorPart=0;continue;}
-        sh->floorBytes=wr.n*4u;
-    }
-}
 NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists,const uint32_t *bytes,uint32_t count,int32_t posScale)
 {
     NitroGx3dTreeLists *t;
@@ -5148,7 +5042,6 @@ NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists,const uint3
             }
         }
     }
-    tree_floors(t,quads,counts,unit);
     tree_row_ends(t,unit);
     for(i=0;i<count;i++){dl_free(info[i]);free(quads[i]);}
     free(info);free(quads);free(counts);
@@ -5159,7 +5052,7 @@ void NitroPort_Gx3dFreeTreeLists(NitroGx3dTreeLists *t)
     uint32_t i;
     if(!t)return;
     for(i=0;i<t->count;i++){
-        free(t->shape[i].canopy);free(t->shape[i].stumps);free(t->shape[i].tail);free(t->shape[i].floor);free(t->shape[i].floorPart);
+        free(t->shape[i].canopy);free(t->shape[i].stumps);free(t->shape[i].tail);
         free(t->shape[i].shadow);free(t->shape[i].polys);
         free(t->shape[i].leaves);free(t->shape[i].lit);free(t->shape[i].stand);free(t->shape[i].ground);
         free(t->shape[i].litPart);free(t->shape[i].shadowPart);free(t->shape[i].ends);
@@ -5682,9 +5575,9 @@ const void *NitroPort_Gx3dTreeTrunks(const NitroGx3dTreeLists *t,uint32_t shape,
 const void *NitroPort_Gx3dTreeGround(const NitroGx3dTreeLists *t,uint32_t shape,uint32_t *bytes)
 {
     if(bytes)*bytes=0;
-    if(!t || shape>=t->count || !t->shape[shape].sunSet || !t->shape[shape].floorBytes)return NULL;
-    if(bytes)*bytes=t->shape[shape].floorBytes;
-    return t->shape[shape].floor;
+    if(!t || shape>=t->count || !t->shape[shape].sunSet || !t->shape[shape].groundBytes)return NULL;
+    if(bytes)*bytes=t->shape[shape].groundBytes;
+    return t->shape[shape].ground;
 }
 /* (on the game's thread) Nothing in a box of a list's coordinates can be
  * drawn: its corners all outside one side of the view the commands sent
@@ -5725,13 +5618,11 @@ uint32_t NitroPort_Gx3dTreeSend(const NitroGx3dTreeLists *t,uint32_t shape,int s
     const uint32_t *list;
     const TreePart *part;
     uint32_t n,words,i,sent=0,from=0,to=0;
-    if(!t || shape>=t->count || shadows<0 || shadows>3)return 0;
+    if(!t || shape>=t->count || shadows<0 || shadows>2)return 0;
     sh=&t->shape[shape];
     if(shadows?!sh->sunSet:!sh->litSet)return 0;
     if(!shadows){
         list=sh->lit;words=sh->litBytes/4u;part=sh->litPart;n=sh->nlitPart;
-    }else if(shadows==3){
-        list=sh->floor;words=sh->floorBytes/4u;part=sh->floorPart;n=sh->nfloorPart;
     }else if(shadows==1){
         list=sh->shadow;words=sh->trunkAt;part=sh->shadowPart;n=sh->nshadowPart;
     }else{

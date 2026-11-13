@@ -438,19 +438,14 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *trees, uint32_t shape,
  * none. */
 const void *NitroPort_Gx3dTreeTrunks(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
 /* (how many trees the shape's shadows are of: rows counted a tree each 32 units) */
-/* A forest's trees' flat polygons, with the game's painted patch round
- * their stumps, as the shape's list has them (their NORMALs and texture
- * coordinates; the material the shape sets): sent unmarked after the
- * stumps, so a forest's patches hide what they hid in the game (the tree
- * behind's lowest leaves). Made once with the lists; NULL with none (a
- * tree alone keeps its sun shadow alone). After a
- * NitroPort_Gx3dTreeShadows of the shape (call that first). */
+/* The shape's trees' shadows where they stand (a pool, or a forest's
+ * floor), for NITRO_GX3D_TAG_GROUND: made with the last
+ * NitroPort_Gx3dTreeShadows of the shape, for its sun (call that first).
+ * NULL with none. */
 const void *NitroPort_Gx3dTreeGround(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
-/* The shape's lit layers (shadows 0), its layers' shadows (1), its
- * trunks' (2) or its forest's trees' patches (3, NitroPort_Gx3dTreeGround's
- * list, in parts of a square of the map each), as last made by
- * NitroPort_Gx3dTreeCanopiesLit or NitroPort_Gx3dTreeShadows (call that
- * first), sent to the geometry engine
+/* The shape's lit layers (shadows 0), its layers' shadows (1) or its
+ * trunks' (2), as last made by NitroPort_Gx3dTreeCanopiesLit or
+ * NitroPort_Gx3dTreeShadows (call that first), sent to the geometry engine
  * as NitroPort_GxFifoWords would send the list, but for the trees the view
  * can't see: the lists are made in parts, in the list's own order the
  * trees one after another in the same square of the map (8 tiles a side)
@@ -536,23 +531,21 @@ void NitroPort_Gx3dTag(uint32_t tag);
  * sprite's | 1; a small standing map prop's (a tree, a sign, a lamp post),
  * NITRO_GX3D_TAG_PROP | (a number << 1).
  *
- * Two more only say how their polygons are drawn (NITRO_GX3D_TAG_IS_DRAW):
+ * Some only say how their polygons are drawn (NITRO_GX3D_TAG_IS_DRAW):
  * they aren't kept whole or reached for beside the view, the engine treats
  * them as any polygon. NITRO_GX3D_TAG_SHADE: not a thing but a shadow lying
  * on the ground (the land's trees': NitroPort_Gx3dTreeLists), drawn by the
  * renderer as the sun shadows are (the shade where a texel is opaque, a
- * pixel once), not at all by one that has no sun shadows.
- * NITRO_GX3D_TAG_STUMP: a tree's stump painted on the ground with a dark
- * patch round it: drawn without the patch (its green texels), which was
- * the game's own shadow under the tree. */
+ * pixel once), not at all by one that has no sun shadows. (A tree's stump
+ * was one too until 2026-11-12, drawn without the dark patch the game
+ * paints round it: at a forest's edge the lowest leaves of the trees
+ * behind showed where the patch had hidden them. The stumps are drawn as
+ * the game draws them now.) */
 #define NITRO_GX3D_TAG_PROP 0xC0000000u
 /* A small prop whose shadow the game sends as its outline on the ground (a
  * building's: NITRO_GX3D_TAG_GROUND and NITRO_GX3D_TAG_RIM batches): its
  * mark has this bit too, and its picture isn't laid (port_shadow.c). */
 #define NITRO_GX3D_TAG_PROP_HULL 0x20000000u
-/* (a small prop standing in a building's shadow, the game's to tell: this
- * bit in its mark; it's drawn in that shade, port_shadow.c) */
-#define NITRO_GX3D_TAG_PROP_SHADED 0x10000000u
 #define NITRO_GX3D_TAG_SHADE 0x40000000u
 /* (the shadows on the ground where a tree stands, its pool or a forest's
  * floor: drawn before the layers' shadows, once; NitroPort_Gx3dTreeGround) */
@@ -639,7 +632,6 @@ int32_t NitroPort_Gx3dShadowPieces(const int32_t (*corners)[3], uint32_t n, int3
 /* (a building standing in another's shadow: its walls all in its shade,
  * whichever way they face) */
 #define NITRO_GX3D_TAG_WALLS_SHADED 0x01000000u
-#define NITRO_GX3D_TAG_STUMP 0x40000002u
 /* (a tree's layers with their far side from the sun shaded: under this
  * mark a COLOR command isn't the vertices' colour but what their lit
  * colour, from the NORMAL, is times: NitroPort_Gx3dTreeCanopiesLit's

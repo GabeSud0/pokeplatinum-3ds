@@ -869,120 +869,6 @@ static void test_ground_props(void)
 /* The sun handed from the renderer to the game (the land's trees' shadows
  * are made there): the same way and length as the characters' shadows are
  * laid along, in 1/256ths; none at dusk or with the sun shadows off. */
-/* The characters in the trees' shadows: a sprite whose foot is inside a
- * shadow's triangle darkened by what the shadow takes times its grey
- * there, no less than half; one outside, the round shadow, a prop and
- * the shadows themselves as they were. */
-/* (a tree's outline for the darkening's test: one value everywhere) */
-static float sMaskValue;
-static uint32_t sMaskParam;
-static float mask_value(void *ctx,uint32_t param,uint32_t palette,float u,float v)
-{
-    (void)ctx;(void)palette;(void)u;(void)v;
-    sMaskParam=param;
-    return sMaskValue;
-}
-static void test_darken_sprites(void)
-{
-    static NitroGx3dGpuVertex v[64];
-    NitroGx3dBatch b[5];
-    const float take[3]={0.4f,0.4f,0.2f};
-    unsigned i,n;
-    memset(v,0,sizeof(v));memset(b,0,sizeof(b));
-    for(i=0;i<64;i++){v[i].position[3]=2.0f;v[i].color[0]=v[i].color[1]=v[i].color[2]=200;v[i].color[3]=255;}
-    /* (a shadow: a triangle over the screen's left half, its grey 255 at
-     * the left, 51 at the right; positions times w) */
-    b[0].first=0;b[0].count=3;b[0].tag=NITRO_GX3D_TAG_GROUND;
-    v[0].position[0]=-2.0f;v[0].position[1]=-2.0f;v[0].color[0]=255;
-    v[1].position[0]=-2.0f;v[1].position[1]=2.0f;v[1].color[0]=255;
-    v[2].position[0]=0.0f;v[2].position[1]=0.0f;v[2].color[0]=51;
-    /* (sprites: quads as two triangles, 0.2 wide and 0.4 tall, their foot's middle at x, y) */
-#define SPRITE(at,x,y) do{ unsigned k_; static const float q_[6][2]={{-0.1f,0},{0.1f,0},{0.1f,0.4f},{-0.1f,0},{0.1f,0.4f},{-0.1f,0.4f}}; \
-    for(k_=0;k_<6;k_++){v[(at)+k_].position[0]=((x)+q_[k_][0])*2.0f;v[(at)+k_].position[1]=((y)+q_[k_][1])*2.0f;} }while(0)
-    b[1].first=8;b[1].count=6;b[1].tag=0x1000;SPRITE(8,-0.9f,-0.2f);     /* (in it, where it's full) */
-    b[2].first=16;b[2].count=6;b[2].tag=0x2000;SPRITE(16,0.5f,-0.2f);    /* (outside) */
-    b[3].first=24;b[3].count=6;b[3].tag=0x1001;SPRITE(24,-0.9f,-0.2f);   /* (the first's round shadow) */
-    b[4].first=32;b[4].count=6;b[4].tag=NITRO_GX3D_TAG_PROP|2u;SPRITE(32,-0.9f,-0.2f);
-    n=NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL);
-    CHECK(n==2);
-    /* (its foot at x -0.9, y -0.168: the grey there 255 - 204 x 0.1 = 0.92;
-     * the prop standing there the same) */
-    for(i=8;i<14;i++)CHECK(abs((int)v[i].color[0]-(int)(200.0f*(1.0f-0.4f*0.92f)+0.5f))<=1 &&
-                           abs((int)v[i].color[2]-(int)(200.0f*(1.0f-0.2f*0.92f)+0.5f))<=1 && v[i].color[3]==255);
-    for(i=32;i<38;i++)CHECK(abs((int)v[i].color[0]-(int)(200.0f*(1.0f-0.4f*0.92f)+0.5f))<=1);
-    for(i=16;i<30;i++)CHECK(v[i].color[0]==200 && v[i].color[2]==200);
-    for(i=32;i<38;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
-    b[4].count=0;   /* (the prop left out of the rest) */
-    CHECK(v[0].color[0]==255 && v[2].color[0]==51);
-    /* (near the tip, the grey under a half: a half) */
-    for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
-    SPRITE(8,-0.15f,-0.03f);
-    n=NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL);
-    CHECK(n==1 && abs((int)v[8].color[0]-(int)(200.0f*(1.0f-0.4f*0.5f)+0.5f))<=1);
-    /* (behind the camera, or no shadows: nothing) */
-    v[9].position[3]=-1.0f;
-    for(i=8;i<14;i++)v[i].color[0]=200;
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==0 && v[8].color[0]==200);
-    b[0].tag=0;
-    v[9].position[3]=2.0f;
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==0 && NitroPort_ShadowDarkenSprites(NULL,b,5,take,NULL,NULL)==0);
-    /* A tree's layer's (textured): by its outline at the feet, not its
-     * corners. Outside the outline: none; in it: its alpha there. */
-    b[0].tag=NITRO_GX3D_TAG_SHADE;b[0].texture_param=0x12345u;
-    v[0].color[0]=v[1].color[0]=v[2].color[0]=255;
-    for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
-    SPRITE(8,-0.9f,-0.2f);
-    sMaskValue=0.1f;
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,mask_value,NULL)==0 && v[8].color[0]==200);
-    sMaskValue=1.0f;
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,mask_value,NULL)==1 &&
-          abs((int)v[8].color[0]-(int)(200.0f*(1.0f-0.4f*NITRO_SHADOW_TREE_BLOB)+0.5f))<=1 && sMaskParam==0x12345u);
-    for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
-    /* (no outline to look at: the corners, as before) */
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==1);
-    /* A shadow lying lower or higher than the sprite's foot isn't one it
-     * stands in (the player on a walkway over a tree's shadow on the grass
-     * under it, 2026-11-12): the same place on the screen, the sprite 5%
-     * nearer the camera than the shadow there, or 5% farther: as it is;
-     * within half a percent: darkened. */
-#define DEPTH(at,w_) do{ unsigned k_; for(k_=0;k_<6;k_++){v[(at)+k_].position[0]*=(w_)/v[(at)+k_].position[3]; \
-    v[(at)+k_].position[1]*=(w_)/v[(at)+k_].position[3];v[(at)+k_].position[3]=(w_);} }while(0)
-    b[0].tag=NITRO_GX3D_TAG_GROUND;b[0].texture_param=0;
-    for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
-    DEPTH(8,1.9f);
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==0 && v[8].color[0]==200);
-    DEPTH(8,2.1f);
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==0 && v[8].color[0]==200);
-    DEPTH(8,2.0f*(1.0f+NITRO_SHADOW_FOOT_DEEP*0.5f));
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==1 && v[8].color[0]<200);
-    DEPTH(8,2.0f*(1.0f-NITRO_SHADOW_FOOT_DEEP*0.5f));
-    for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==1 && v[8].color[0]<200);
-    DEPTH(8,2.0f);
-    for(i=8;i<14;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
-    b[1].count=0;   /* (the sprite left out of the rest) */
-    /* A prop whose shadow is its outline (NITRO_GX3D_TAG_PROP_HULL) with
-     * its feet in an outline on the ground: as it is, that outline may be
-     * its own, wherever its batch comes in the scene (the Hallowed Tower
-     * as dark as in a building's shade, 2026-11-12); in a building's
-     * shadow by the game's word (NITRO_GX3D_TAG_PROP_SHADED): a full
-     * shade; in a tree's shadow: darkened by it as a sprite is. */
-    b[4].count=6;b[4].tag=NITRO_GX3D_TAG_PROP|NITRO_GX3D_TAG_PROP_HULL|2u;SPRITE(32,-0.9f,-0.2f);
-    for(i=32;i<38;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==0 && v[32].color[0]==200);
-    b[0].tag=NITRO_GX3D_TAG_RIM;
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==0 && v[32].color[0]==200);
-    b[4].tag|=NITRO_GX3D_TAG_PROP_SHADED;
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==1);
-    for(i=32;i<38;i++)CHECK(abs((int)v[i].color[0]-(int)(200.0f*(1.0f-0.4f)+0.5f))<=1);
-    for(i=32;i<38;i++)v[i].color[0]=v[i].color[1]=v[i].color[2]=200;
-    b[4].tag&=~NITRO_GX3D_TAG_PROP_SHADED;
-    b[0].tag=NITRO_GX3D_TAG_SHADE;
-    CHECK(NitroPort_ShadowDarkenSprites(v,b,5,take,NULL,NULL)==1 &&
-          abs((int)v[32].color[0]-(int)(200.0f*(1.0f-0.4f*NITRO_SHADOW_TREE_BLOB)+0.5f))<=1);
-#undef DEPTH
-#undef SPRITE
-}
 static void test_sun_way(void)
 {
     static const NitroShadowSun side = { 40.0f, 0.0f }, top = { 60.0f, 90.0f }, morning = { 50.0f, 150.0f };
@@ -1056,7 +942,6 @@ int main(void)
     test_ground_cards();
     test_ground_props();
     test_sun_way();
-    test_darken_sprites();
     test_tree_mask();
     test_cards_decals();
     test_roles_reach();

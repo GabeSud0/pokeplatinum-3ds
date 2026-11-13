@@ -4165,8 +4165,8 @@ then the small props and the land's trees; houses and the scenery later.
     upright), in a building's shade with a soft edge half as wide; its
     own painted shadow left out. Its mark gets NITRO_GX3D_TAG_PROP_HULL:
     its picture isn't laid, and the outline sent just before it isn't
-    one it stands in (NitroPort_ShadowDarkenSprites; since patch 0148 no
-    outline is looked at for it: below).
+    one it stands in (NitroPort_ShadowDarkenSprites; the darkening is
+    taken out since: below).
   - The honey tree is a prop of three layers over a painted patch, as a
     land tree: now drawn through the land's trees' lists (its texture
     treeeff01 among the trees'; a unit up to 1024 of a list's: its
@@ -4259,62 +4259,37 @@ then the small props and the land's trees; houses and the scenery later.
       bf_tree03 showed none of the sun's), the Distortion World's
       (tree_sbt01: no sun there) and those of rooms. Oreburgh's
       c3_road_ki is no tree in view.
-  - In shade by height, and a prop's own outline (2026-11-12, patch
-    0148; on a 3DS, log b6742907: "a shadow located beneath an elevated
-    path should not darken the player standing above it", "Spiritomb's
-    tomb is being incorrectly darkened"). A sprite or a prop was in a
-    shadow when its foot was inside one of the shadows' triangles on the
-    screen, at whatever height that shadow lay: on Route 215's walkways,
-    32 above the grass, the player went dark over the shadow of a tree
-    standing on the grass under them. Now the shadow there must also be
-    as far from the camera as the foot, within NITRO_SHADOW_FOOT_DEEP of
-    that distance (1%, about 5 units of height: on the PC a shadow stood
-    in is within 0.15%, the one under the walkway 5.6% farther). And a
-    prop whose shadow is its outline took that outline for one it stood
-    in unless its batches came just before the prop's, which the scene's
-    order doesn't keep: the Hallowed Tower, in its own shadow, was drawn
-    as dark as in a building's shade. Now the outlines on the ground
-    aren't looked at for such a prop at all; the game says whether it
-    stands in a building's (MapProp_PortInShade, as for a building:
-    NITRO_GX3D_TAG_PROP_SHADED in its mark), and it's drawn in a full
-    shade then (Eterna's Cycle Shop's bikes in its shadow, the one in
-    the sun as it is); the trees' shadows still by its foot on the
-    screen. test_shadow: both, either way.
-  - A prop that is a picture standing up (2026-11-12, patch 0149; on a
+  - A prop that is a picture standing up (2026-11-12, patch 0148; on a
     3DS: "the shadow from the tomb is a square"). The Hallowed Tower's
     model, and Eterna's bikes', is one quad: its outline's shadow was
     the quad's. A model whose vertices all lie in one plane
     (NitroPort_Gx3dListsFlat, MapProp_PortFlat) gets no outline; what its
     picture has painted under it stays, and it has no sun shadow of its
-    own (its picture laid as a character's began a few pixels off its
-    foot, the quad being larger than what's painted on it: not in). Any
-    small prop inside a building's outline is marked shaded, with an
-    outline of its own or not. test_gx3d: one quad is flat, with a
-    painted shadow lying under it too; a box, two quads across each
-    other, or one well off the other's plane aren't.
-  - A forest's trees' patches (2026-11-12, patch 0150; on a 3DS, the
-    meteor area by Veilstone: "strange tree pieces underneath the tree",
-    reported again and again, and in my own render of the spot). With the
-    sun shadows a stump is drawn without the dark patch the game paints
-    round it (its old fixed shadow). At a forest's edge that patch is what
-    hid the lowest leaves of the tree behind: without it they showed under
-    each tree, a dark lobe of leaves with a hard edge. Not the parts'
-    culling, the rows' ends or any shadow pass (each ruled out on the PC,
-    the same frame with and without). A first fix laid the patch's shape
-    as shade on the ground: the leaves still showed through it. Now, for a
-    forest's trees, the flat polygon is sent again after its stumps,
-    unmarked, as the list has it (its NORMAL, its texture coordinates, the
-    shape's material: tree_floors, NitroPort_Gx3dTreeGround): drawn as the
-    game draws it, patch and all, over the leaves it hid. A row's flat
-    polygon (wider than 48), and a tree's with TREE_FOREST_NEIGHBOURS
-    others standing within TREE_FOREST_NEAR of it; a tree alone keeps its
-    sun shadow alone. In parts of a square of the map, those the view can
-    see (NitroPort_Gx3dTreeSend kind 3). On the PC, 120 scenes at the
-    meteor area, Route 209's forest and Eterna: 3 to 5% more vertices and
-    polygons sent, triangles drawn the same within 0.1%. test_gx3d: a
-    row's flat polygon is sent where it lies with its texture
-    coordinates, the same for any sun; two trees alone have none, the same
-    two with the row among them have theirs.
+    own. test_gx3d: one quad is flat, with a painted shadow lying under
+    it too; a box, two quads across each other, or one well off the
+    other's plane aren't.
+  - Taken out again, to be done over (2026-11-12, patch 0149; on a 3DS,
+    log 51c6d5a9: the meteor area's "strange tree pieces underneath the
+    tree", and the tomb and the player on Route 215's walkway darkened):
+    - The stumps are drawn as the game draws them, their painted patch
+      included, under every tree, the sun shadow on top
+      (Port_LandTreeList's stumps unmarked; NITRO_GX3D_TAG_STUMP, its
+      alpha rule and the forest's floor sent again, tree_floors, are
+      gone). The patch is what hid the lowest leaves of the tree behind
+      at a forest's edge; with it back they're hidden as on the DS.
+    - Characters and small props aren't darkened in a shadow any more
+      (NitroPort_ShadowDarkenSprites, mask_at and NITRO_GX3D_TAG_PROP_SHADED
+      are gone; a building standing in another's shadow, the Galactic
+      building's dishes, is still drawn in its shade). Judged on the
+      screen, it
+      darkened the player over a shadow on the ground 32 units below, and
+      the tomb in its own outline's.
+    - Still to do, in this order: where a tree meets the ground with the
+      sun's shadow (without uncovering the leaves behind); being in a
+      shadow judged by the world's positions, not the screen's; the sun
+      shadows in fewer passes of the GPU (log 51c6d5a9: 3.7 to 7.3 ms of
+      the GPU a frame, as much as the rest of the scene's opaque
+      polygons; 38 to 42 fps in Veilstone's busiest streets).
   - The log (2026-11-12): its first lines have the build's version and
     commit ("[platinum] build ..."); a profiled frame's [gpu] line has
     "the sun shadows" as a part after "the opaque polygons" (they were

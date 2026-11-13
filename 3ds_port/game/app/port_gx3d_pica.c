@@ -367,7 +367,7 @@ static u32 sTreeColor;   /* (and a tree's: NITRO_SHADOW_TREE_BLOB of it) */
 static size_t sGroundBatchCount,sGroundVertices;
 static u64 sGroundTicks;
 static unsigned sGroundScenes,sGroundCards,sGroundFound,sGroundSprites,sGroundMarked;
-static unsigned sGroundProps,sGroundPropsLaid,sGroundFull,sGroundShade,sGroundShadeTris,sGroundTagged,sGroundWhole,sGroundDarkened;
+static unsigned sGroundProps,sGroundPropsLaid,sGroundFull,sGroundShade,sGroundShadeTris,sGroundTagged,sGroundWhole;
 #define TAG_BATCHES NITRO_GX3D_MAX_TAGGED_TRIANGLES
 static NitroGx3dBatch sTagBatches[TAG_BATCHES];   /* (the marked polygons' whole triangles' batches) */
 static uint8_t sRoundUsed[TAG_BATCHES];
@@ -526,7 +526,6 @@ typedef struct MaskEntry {
     int used;
     uint32_t param, palette, hash, checkedFrame, lastFrame;
     C3D_Tex tex;
-    uint8_t *alpha;   /* (the outline, rows from the top, for the characters' darkening: mask_at) */
     unsigned width, height;
     int wrapS, wrapT;
 } MaskEntry;
@@ -538,7 +537,6 @@ static void free_mask(MaskEntry *m)
 {
     if(!m->used)return;
     C3D_TexDelete(&m->tex);
-    free(m->alpha);
     memset(m,0,sizeof(*m));
 }
 static void clean_up(void)
@@ -1106,11 +1104,6 @@ static C3D_Tex *get_mask(uint32_t param,uint32_t palette)
         return NULL;
     }
     NitroPort_Gx3dTileRGBA8(out,width,height,(uint32_t *)slot->tex.data);
-    slot->alpha=malloc(n);
-    if(slot->alpha){
-        size_t i;
-        for(i=0;i<n;i++)slot->alpha[i]=(uint8_t)(out[i]&255u);
-    }
     slot->width=width;
     slot->height=height;
     slot->wrapS=mask_wrap(param,16,18);
@@ -1127,38 +1120,6 @@ static C3D_Tex *get_mask(uint32_t param,uint32_t palette)
     return &slot->tex;
 }
 
-/* A tree texture's softened outline (get_mask) at (u, v), sampled
- * smoothly as the GPU draws it, 0 to 1; 1 if it can't be made (as the
- * layer's corners: NitroPort_ShadowDarkenSprites). */
-static int mask_texel(int i,int n,int wrap)
-{
-    if(i>=0 && i<n)return i;
-    if(wrap==NITRO_SHADOW_WRAP_REPEAT){i%=n;return i<0?i+n:i;}
-    if(wrap==NITRO_SHADOW_WRAP_MIRROR){
-        const int p=2*n;
-        i%=p;if(i<0)i+=p;
-        return i<n?i:p-1-i;
-    }
-    return i<0?0:n-1;
-}
-static float mask_at(void *ctx,uint32_t param,uint32_t palette,float u,float v)
-{
-    const MaskEntry *m;
-    float x,y,fx,fy,a[4];
-    int x0,y0,k;
-    (void)ctx;
-    if(!get_mask(param,palette))return 1.0f;
-    for(m=sMasks;m<sMasks+MASK_ENTRIES;m++)if(m->used && m->param==param && m->palette==palette)break;
-    if(m==sMasks+MASK_ENTRIES || !m->alpha || !m->width || !m->height)return 1.0f;
-    x=u*(float)m->width-0.5f;
-    y=v*(float)m->height-0.5f;
-    x0=(int)floorf(x);y0=(int)floorf(y);
-    fx=x-(float)x0;fy=y-(float)y0;
-    for(k=0;k<4;k++)
-        a[k]=(float)m->alpha[(unsigned)mask_texel(y0+(k>>1),(int)m->height,m->wrapT)*m->width+
-                             (unsigned)mask_texel(x0+(k&1),(int)m->width,m->wrapS)]*(1.0f/255.0f);
-    return (a[0]*(1.0f-fx)+a[1]*fx)*(1.0f-fy)+(a[2]*(1.0f-fx)+a[3]*fx)*fy;
-}
 
 /* Polygon modes (attribute bits 4-5) on the colour combiner. */
 static void polygon_combiner(C3D_TexEnv *env,uint32_t attr,int textured,GPU_TEVSRC tex)
@@ -2050,9 +2011,6 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
             sShadeColor=0xFF000000u|((u32)(f[2]*255.0f+0.5f)<<16)|((u32)(f[1]*255.0f+0.5f)<<8)|(u32)(f[0]*255.0f+0.5f);
             sTreeColor=0xFF000000u|((u32)(f[2]*NITRO_SHADOW_TREE_BLOB*255.0f+0.5f)<<16)|
                        ((u32)(f[1]*NITRO_SHADOW_TREE_BLOB*255.0f+0.5f)<<8)|(u32)(f[0]*NITRO_SHADOW_TREE_BLOB*255.0f+0.5f);
-            /* (the characters standing in them: darkened as the ground
-             * under them is) */
-            if(sShadeBatches)sGroundDarkened+=NitroPort_ShadowDarkenSprites(sVertices[slot],sBatches,sPreparedBatches,f,mask_at,NULL);
         }
         /* (most scenes of a menu or a building have no marks at all: a
          * round shadow's, or a prop's) */
@@ -2135,13 +2093,13 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
                           "%.1f marked sprites a scene, %.1f round shadows, %.1f characters' sun shadows laid; "
                           "%.1f props marked, %.1f props' shadows laid; %.0f marked triangles a scene (%u scenes "
                           "with their room full, %u set up from the whole scene); the land's trees' shadows: "
-                          "%.1f batches and %.0f triangles a scene, the game's, %.2f sprites a scene darkened "
-                          "in them, %u tree textures' outlines made so far; %.2f ms a scene laying the "
+                          "%.1f batches and %.0f triangles a scene, the game's, %u tree textures' outlines made "
+                          "so far; %.2f ms a scene laying the "
                           "others; the sun %.0f degrees up, %.0f round from the screen's left",
                           sGroundScenes==300?300u:1800u,sGroundMarked,sGroundSprites*per,
                           sGroundFound*per,sGroundCards*per,sGroundProps*per,sGroundPropsLaid*per,
                           sGroundTagged*per,sGroundFull,sGroundWhole,sGroundShade/all,sGroundShadeTris/all,
-                          sGroundDarkened/all,sMasksMade,(double)sGroundTicks*1000.0/SYSCLOCK_ARM11/all,
+                          sMasksMade,(double)sGroundTicks*1000.0/SYSCLOCK_ARM11/all,
                           (double)sSun.elevation,(double)sSun.azimuth);
             {
                 /* (what drawing them takes the thread that draws: the
@@ -2156,7 +2114,7 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
             if(sGroundScenes==2100)sGroundScenes=300;
             sGroundTicks=0;sGroundCards=0;sGroundFound=0;sGroundSprites=0;sGroundMarked=0;
             sGroundProps=0;sGroundPropsLaid=0;sGroundFull=0;
-            sGroundShade=0;sGroundShadeTris=0;sGroundTagged=0;sGroundWhole=0;sGroundDarkened=0;
+            sGroundShade=0;sGroundShadeTris=0;sGroundTagged=0;sGroundWhole=0;
         }
     }
     setup_fog();
@@ -2774,7 +2732,7 @@ void NitroPort_PicaGroundShadows(int on)
         NitroPort_Log("[shadow] the sun shadows %s",on?"on":"off");
         sGroundScenes=0;sGroundTicks=0;sGroundCards=0;sGroundFound=0;
         sGroundSprites=0;sGroundMarked=0;sGroundProps=0;sGroundPropsLaid=0;sGroundFull=0;
-        sGroundShade=0;sGroundShadeTris=0;sGroundTagged=0;sGroundWhole=0;sGroundDarkened=0;
+        sGroundShade=0;sGroundShadeTris=0;sGroundTagged=0;sGroundWhole=0;
     }
     sGroundMode=on;
     sGroundReady=0;
@@ -3496,26 +3454,6 @@ static void draw_parts(size_t n)
     }
 }
 
-/* A tree's stump (NITRO_GX3D_TAG_STUMP batches: the land's flat polygons
- * with the stump painted on them, a dark green patch round it: the game's
- * own shadow under the tree), with the sun shadows on: without the patch.
- * The batch's combiner as it is but its alpha: (1 - the texel's green +
- * its red, 1 at most) x its alpha, which is 1 where the texel is opaque
- * and no greener than it's red (the stump's browns, its dark outline),
- * less where it's greener (the patch: 8/255 and 25/255 greener), 0 where
- * it's clear. The alpha test then passes the stump alone.
- * (First (1 - green) x alpha + red: a clear texel's alpha was then its
- * colour's red, and the clear colour of tree2_01 and of the rows is
- * white: the whole polygon but the patch was drawn, a white box under
- * every tree, on a 3DS 2026-11-10.) */
-#define STUMP_CUT 250
-static void stump_combiner(void)
-{
-    C3D_TexEnv *env=C3D_GetTexEnv(0);
-    C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,GPU_TEXTURE0,GPU_TEXTURE0);
-    C3D_TexEnvOpAlpha(env,GPU_TEVOP_A_ONE_MINUS_SRC_G,GPU_TEVOP_A_SRC_R,GPU_TEVOP_A_SRC_ALPHA);
-    C3D_TexEnvFunc(env,C3D_Alpha,GPU_ADD_MULTIPLY);
-}
 static void draw_scene(const PicaView *view);
 /* (the [hitch] lines: the frame's time drawing the 3D scene's batches, of
  * its building, and how many times it was) */
@@ -3536,7 +3474,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
 static void draw_scene(const PicaView *view)
 {
     size_t b,parts;
-    int blend,edging,copying,part,depthOnly,stump;
+    int blend,edging,copying,part,depthOnly;
     const char *opaqueName="the opaque polygons";
     NitroGx3dEdgeSetup edges;
     if(sPrepared<0||!view||!view->fb)return;
@@ -3602,10 +3540,8 @@ static void draw_scene(const PicaView *view)
         if(depthOnly){
             /* (as the outlines' moved passes draw them: the shape alone) */
             int textured=bind_batch_shape(batch);
-            stump=textured && batch->tag==NITRO_GX3D_TAG_STUMP && sGroundMode;
-            if(stump)stump_combiner();
             C3D_StencilTest(true,GPU_ALWAYS,copying?(int)((attr>>24)&63u):0xFF,0xFF,0xFF);
-            C3D_AlphaTest(true,GPU_GREATER,stump?STUMP_CUT:textured?sBoundCut:0);
+            C3D_AlphaTest(true,GPU_GREATER,textured?sBoundCut:0);
             C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
             C3D_DepthTest(true,depthFunc,GPU_WRITE_DEPTH);
             draw_arrays((int)batch->first,(int)batch->count);
@@ -3613,13 +3549,11 @@ static void draw_scene(const PicaView *view)
         }
         parts=batch_parts(batch);
         if(!parts)continue;
-        stump=bind_batch(batch) && batch->tag==NITRO_GX3D_TAG_STUMP && sGroundMode;
+        bind_batch(batch);
         batch_fog(attr);
         C3D_StencilTest(true,GPU_ALWAYS,copying?(int)((attr>>24)&63u):0xFF,0xFF,0xFF);
-        /* (a filtered texture: its texels' edges at half alpha; a tree's
-         * stump: without the dark patch painted round it) */
-        if(stump)stump_combiner();
-        C3D_AlphaTest(true,GPU_GREATER,stump?STUMP_CUT:sBoundCut);
+        /* (a filtered texture: its texels' edges at half alpha) */
+        C3D_AlphaTest(true,GPU_GREATER,sBoundCut);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
         draw_parts(parts);

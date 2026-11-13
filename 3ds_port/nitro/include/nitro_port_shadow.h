@@ -215,28 +215,7 @@ void NitroPort_ShadowGroundStats(unsigned *sprites, unsigned *shadows, unsigned 
  * more than half opaque.
  * The last call's props and how many got a shadow: */
 #define NITRO_SHADOW_ONCE 1u
-/* The characters standing in the land's trees' shadows (2026-11-10, from
- * a preview: "people darken in shade"): a sprite stays as bright as in
- * the sun on darkened ground otherwise. Each marked sprite's batch (an
- * even mark that isn't a prop's or a draw-only one) whose foot (the
- * middle of its lowest edge on the screen, NITRO_SHADOW_FOOT_UP of its
- * height up) is inside a triangle of a NITRO_GX3D_TAG_SHADE batch has its
- * vertices' colours darkened: by `take` (what a full shadow takes from
- * each channel, 0 to 1) times the triangle's grey there (the fade; the
- * darkest of the triangles it's in), no less than NITRO_SHADOW_FOOT_MIN
- * of it. A tree's layers' (NITRO_GX3D_TAG_SHADE with a texture) by
- * their outline there instead: maskAt (if not NULL) gives the softened
- * outline's alpha (0 to 1, NitroPort_ShadowTreeMask's) of the batch's
- * texture at a texture coordinate; under NITRO_SHADOW_FOOT_IN of it, not in
- * that shadow. (First the corners alone: a layer's quad reaches well past
- * its outline, and a character beside a tree's shadow was darkened, on a
- * 3DS 2026-11-11: "Im close to a tree shadow, not under it and I still
- * get darkened".) A prop's batches (NITRO_GX3D_TAG_PROP marks) all
- * together, by the foot of them all. Returns how many sprites and props
- * were darkened. */
-#define NITRO_SHADOW_FOOT_IN 0.3f
-typedef float (*NitroShadowMaskAt)(void *ctx, uint32_t textureParam, uint32_t paletteBase, float u, float v);
-/* (how dark a tree's shadow is, of the characters' darkening at their feet) */
+/* (how dark a tree's shadow is, of a full one) */
 #define NITRO_SHADOW_TREE_BLOB 0.85f
 /* A tree's shadow's outline from its texture (2026-11-11, chosen from a
  * preview, "softness medium": the tree's own picture laid on the ground,
@@ -259,15 +238,6 @@ typedef float (*NitroShadowMaskAt)(void *ctx, uint32_t textureParam, uint32_t pa
 #define NITRO_SHADOW_WRAP_MIRROR 2
 int NitroPort_ShadowTreeMask(const uint32_t *rgba8, unsigned width, unsigned height, int wrapS, int wrapT,
                              uint32_t *out);
-#define NITRO_SHADOW_FOOT_UP 0.08f
-#define NITRO_SHADOW_FOOT_MIN 0.5f
-/* (a shadow a sprite or a prop stands in lies as far from the camera as
- * its foot, within this much of that distance: 1%, about 5 units of
- * height in the field. One on ground lower or higher isn't one it stands
- * in: under a walkway, at a ledge's foot.) */
-#define NITRO_SHADOW_FOOT_DEEP 0.01f
-unsigned NitroPort_ShadowDarkenSprites(struct NitroGx3dGpuVertex *verts, const struct NitroGx3dBatch *batches,
-                                       size_t count, const float take[3], NitroShadowMaskAt maskAt, void *maskCtx);
 #define NITRO_SHADOW_PROP_MIN 5.0f
 void NitroPort_ShadowPropStats(unsigned *props, unsigned *laid);
 

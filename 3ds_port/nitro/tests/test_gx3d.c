@@ -2843,42 +2843,9 @@ static void test_tree_lists(void)
      * alone), from the trunk ("like if it was floting" where it began
      * where the lowest leaves' falls): the lowest layer, leaning back,
      * 0 to 1893; texels as the layer's own (22 to 62 across, 64 at its
-     * foot to 44.5 at its top). (Its ground list: the row's trees stand
-     * among these two, so they're a forest's: below.) */
+     * foot to 44.5 at its top). No pools, no floors: no ground list. */
     shadow=NitroPort_Gx3dTreeShadows(t,0,0,4096,2048,&nsh);
-    CHECK(shadow && nsh && !(nsh&3u));
-    {
-        /* the two trees' list alone: one other within 36 units each, no
-         * forest, no floor */
-        NitroGx3dTreeLists *alone=NitroPort_Gx3dTreeLists(lists,bytes,1,64<<12);
-        uint32_t na=0;
-        CHECK(alone && NitroPort_Gx3dTreeShadows(alone,0,0,4096,2048,&na) && !NitroPort_Gx3dTreeGround(alone,0,&na) && !na);
-        NitroPort_Gx3dFreeTreeLists(alone);
-        /* with the row among them: their two stumps' polygons */
-        CHECK(NitroPort_Gx3dTreeGround(t,0,&ng) && ng);
-        if(ng){
-            tree_view();
-            n=tree_scene(NitroPort_Gx3dTreeGround(t,0,&ng),ng,both,sh,400);
-            CHECK(n==12);
-        }
-    }
-    /* A row's flat polygon (64 units wide): sent again as the list has it,
-     * where it is, its texture coordinates with it (its painted patch
-     * drawn as the game draws it, 2026-11-12: at a forest's edge, without
-     * it, the lowest leaves of the trees behind showed as loose pieces);
-     * the same for any sun. */
-    if(NitroPort_Gx3dTreeShadows(t,2,0,4096,2048,&nsh2)){
-        const void *floor=NitroPort_Gx3dTreeGround(t,2,&ng);
-        CHECK(floor && ng && !(ng&3u));
-        if(floor){
-            tree_view();
-            n=tree_scene(floor,ng,both,sh,400);
-            CHECK(n==6);
-            for(i=0;i<n;i++)CHECK(abs(sh[i].y-58)<=8);
-            CHECK(tree_st(sh,n,-2048,58,900,0.0f,62.0f) && tree_st(sh,n,2048,58,900,64.0f,62.0f));
-        }
-        CHECK(NitroPort_Gx3dTreeShadows(t,2,4096,0,2048,&nsh2) && NitroPort_Gx3dTreeGround(t,2,&ng)==floor);
-    }else CHECK(0);
+    CHECK(shadow && nsh && !(nsh&3u) && !NitroPort_Gx3dTreeGround(t,0,&ng) && !ng);
     tree_view();
     n=tree_scene(shadow,nsh,both,sh,400);
     CHECK(n==36);
@@ -3192,15 +3159,15 @@ static void test_tree_lists(void)
     reset_geometry();
     NitroPort_SetGroundShadows(1);
     swap_done();
-    CHECK(NITRO_GX3D_TAG_IS_DRAW(NITRO_GX3D_TAG_SHADE) && NITRO_GX3D_TAG_IS_DRAW(NITRO_GX3D_TAG_STUMP) &&
+    CHECK(NITRO_GX3D_TAG_IS_DRAW(NITRO_GX3D_TAG_SHADE) && NITRO_GX3D_TAG_IS_DRAW(NITRO_GX3D_TAG_CANOPY) &&
           !NITRO_GX3D_TAG_IS_DRAW(NITRO_GX3D_TAG_PROP|2u) && !NITRO_GX3D_TAG_IS_DRAW(0x3000u) &&
-          !NITRO_GX3D_TAG_IS_PROP(NITRO_GX3D_TAG_SHADE) && !NITRO_GX3D_TAG_IS_ROUND(NITRO_GX3D_TAG_STUMP));
+          !NITRO_GX3D_TAG_IS_PROP(NITRO_GX3D_TAG_SHADE) && !NITRO_GX3D_TAG_IS_ROUND(NITRO_GX3D_TAG_CANOPY));
     {
         const NitroGx3dScene *scene;
         NitroPort_Gx3dTag(NITRO_GX3D_TAG_SHADE);
         quad_at(-1000,both);
         quad_at(5000,both);
-        NitroPort_Gx3dTag(NITRO_GX3D_TAG_STUMP);
+        NitroPort_Gx3dTag(NITRO_GX3D_TAG_CANOPY);
         quad_at(-1000,both);
         NitroPort_Gx3dTag(0);
         swap_done();
@@ -3208,7 +3175,7 @@ static void test_tree_lists(void)
         CHECK(scene && scene->count==4 && scene->tagged_count==0);
         if(scene && scene->count==4){
             CHECK(scene->triangles[0].tag==NITRO_GX3D_TAG_SHADE && scene->triangles[1].tag==NITRO_GX3D_TAG_SHADE);
-            CHECK(scene->triangles[2].tag==NITRO_GX3D_TAG_STUMP && scene->triangles[3].tag==NITRO_GX3D_TAG_STUMP);
+            CHECK(scene->triangles[2].tag==NITRO_GX3D_TAG_CANOPY && scene->triangles[3].tag==NITRO_GX3D_TAG_CANOPY);
         }
     }
     NitroPort_SetGroundShadows(0);

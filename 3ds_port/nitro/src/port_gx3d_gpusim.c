@@ -301,12 +301,6 @@ static void g_masks_free(void)
     for (i = 0; i < G_MASKS; i++) { free(sGMasks[i].tiled); sGMasks[i].tiled = NULL; sGMasks[i].used = 0; }
 }
 
-static float g_mask_at(void *ctx, uint32_t param, uint32_t palette, float u, float v)
-{
-    const uint32_t *mask = g_mask(ctx, param, palette);
-    return mask ? fetch_linear(mask, param, u, v).a : 1.0f;
-}
-
 static int g_foot_row(void *ctx, uint32_t param, uint32_t palette, int s0, int s1, int tFrom, int tTo)
 {
     const NitroGx3dTexBanks *banks = ctx;
@@ -483,15 +477,6 @@ static void ground_prepare(const NitroGx3dScene *scene, NitroGx3dGpuVertex *vert
     }
     for (b = 0; b < nb; b++)
         if (NITRO_GX3D_TAG_IS_SHADE(batches[b].tag)) sGShadeBatches++;
-    if (sGShadeBatches) {
-        float f[3];
-        for (c = 0; c < 3; c++) {
-            float shadeC = floorf(shade[c] * 255.0f + 0.5f) / 255.0f;
-            f[c] = (1.0f - shadeC) * NITRO_SHADOW_GROUND_DARK;
-            f[c] = f[c] > 0.0f ? (f[c] > 1.0f ? 1.0f : f[c]) : 0.0f;
-        }
-        NitroPort_ShadowDarkenSprites(verts, batches, nb, f, g_mask_at, (void *)banks);
-    }
     for (i = 0; i < scene->tagged_count && !marked; i++) {
         uint32_t tag = scene->tagged_triangles[i].tag;
         marked = NITRO_GX3D_TAG_IS_ROUND(tag) || NITRO_GX3D_TAG_IS_PROP(tag);
@@ -785,11 +770,7 @@ static void simulate(const NitroGx3dScene *scene, uint16_t *out555)
                         out.b = fminf(out.b * 2.0f, 1.0f);
                     }
                     /* Alpha test, on 8-bit alpha as the PICA does it. */
-                    if (sGround && textured && batch->tag == NITRO_GX3D_TAG_STUMP && passes[p].test == 0) {
-                        /* (a tree's stump without its patch: stump_combiner) */
-                        float st = fminf((1.0f - tex.g) + tex.r, 1.0f) * tex.a;
-                        if (!((unsigned)(st * 255.0f + 0.5f) > 250u)) continue;
-                    } else {
+                    {
                         unsigned a8 = (unsigned)(out.a * 255.0f + 0.5f);
                         if (passes[p].test == 0 ? !(a8 > 0) : passes[p].test == 1 ? !(a8 > 254) : !(a8 < 255))
                             continue;
