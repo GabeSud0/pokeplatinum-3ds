@@ -2070,15 +2070,58 @@ screens) the lower screen is the DS's, filling the screen as before.
     without V-blank work, so nothing was drawn at all, the screens left
     as they were while the game went on (black rooms, no text boxes, the
     battles' health bars and animations stopped; 2026-10-26).
-    Faster than 1x a frame composed after one that took long (7 ms, 14)
-    is composed 2 (3) V-blanks after it, not the next one
-    (`ComposeWaits`, main_3ds.c): the display thread is on the game's
-    core, below it, and at 4x the game makes a 3D scene for every
-    V-blank; outdoors each frame composed was 9-10 ms of building there,
-    which with the game's 4 frames a V-blank was more than a V-blank, so
-    the game waited for it and went between 4x and about 2x as the scenes
-    did (82 to 240 frames a second in a log of 2026-11-05). Indoors,
-    quick, still every V-blank; at 1x as before.
+    Faster than 1x the field's frames that aren't shown don't make their
+    3D scene (since 2026-11-10; `nitro_port_speed.h`, patch 0135). Before,
+    every frame made its whole scene, at 4x two a V-blank and one never
+    seen: in a town that was most of the game's core (Sandgem: 3 ms a
+    halt, 12 of each V-blank's 16.7 ms), the display thread, on that
+    core below the game, composed the screens 20 times a second from
+    whichever scenes the geometry thread had had time for, and the game
+    went between 150 and 240 frames a second (a tester's "sluggish",
+    "skipping frames"; routes, lighter, were fine). Now a frame's scene
+    is wanted when one of its halts is one the screens are composed for
+    (`NitroPort_SpeedFrameBegins`, when the game's V-blank work is done):
+    with every other V-blank composed, at 4x one frame of the field in
+    four, at 3x one in three, at 2x every other, at 1.5x two in three. A
+    frame not wanted has its scene left out by the
+    port (`NitroPort_Gx3dLeaveOut`: as a scene the geometry thread is
+    behind on, state kept, nothing published; turned off in the middle of
+    a scene, the start menu opened at 4x, it's off from that scene's
+    SWAP_BUFFERS on, so no scene is published with half its vertices) and
+    the field doesn't send
+    its ground or buildings in it; the people, the field effects, the
+    Poké Radar's check and the tasks the field draws from run in every
+    frame as before, and so does everything at 1x, outside the field
+    (battles, menus: nothing asks), in the Distortion World and without
+    the geometry thread.
+    The screens are composed every other V-blank faster than 1x, 30
+    frames a second everywhere (every V-blank where it fit, tried first,
+    made light maps 60 and towns 30: the way into a town felt like the
+    game slowing down and each step between the two like a dip, most of
+    them where a new map and its sign came into view on the bike, a log
+    of 2026-11-10), or every third while frames take over two V-blanks
+    (`NitroPort_SpeedComposeEvery`, `ComposeWaits` in main_3ds.c), and
+    then that many fewer of the field's scenes are made too. The rate
+    goes down when a frame isn't composed by the V-blank the next one is
+    due (`sComposeLate`: at every other V-blank a frame has two; twice
+    within about half a second), and up again after half a second with
+    none late and every frame composed early enough for the rate above
+    (`NitroPort_SpeedNote`, at each halt shown: within a V-blank and a
+    half, back to every other), 4 seconds after the last step at the soonest, longer
+    each time a step up doesn't hold (to 32 seconds). A step is a
+    `[speed]` line in the log; the `[perf] geometry` line counts the
+    scenes "not shown at this speed". (Before 2026-11-10 the rate came
+    from how long the last frame took to compose, over 7 ms every other
+    V-blank and over 14 every third: it kept the game's speed, a log of
+    2026-11-05's "fast, then slow, then fast", but the time was mostly
+    the game's own, so towns stayed at 20. The first version of the new
+    rule counted a frame late that ran over one V-blank at any rate: a
+    town's frame, 8-10 ms of building after the game's 5-7 and a wait
+    for the GPU's frame before, did at every other V-blank too, so the
+    rate fell to every third and swung between the two every few
+    seconds, "very jumpy", a log of 2026-11-10; the game itself held
+    230-240 frames a second at 4x by then, 1.0-1.9 ms a halt.) At 1x as
+    before.
     SPEED above 1x turns 60 FPS off (when it's on), 1x on again
     unless the player has set 60 FPS since (`fps60_held` in
     `options.txt`). Every start is at 1x (since 2026-10-26): SPEED is

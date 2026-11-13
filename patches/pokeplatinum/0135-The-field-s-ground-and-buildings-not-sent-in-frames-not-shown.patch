@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 17:30:00 -0700
+Subject: [PATCH] The field's ground and buildings not sent in frames not shown (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Faster than 1x (the 3DS remaster's SPEED option) the game runs several
+frames for each one shown, and every frame of the field made its whole
+3D scene: at 4x two a V-blank, one of them never seen. In a town that
+was most of the game's core (Sandgem: 3 ms a halt against 0.5 indoors,
+12 ms of each V-blank's 16.7), the display thread below it there got to
+compose the screens 20 times a second, and the game itself ran between
+150 and 240 frames a second ("sluggish", "skipping frames", a tester's
+log of 2026-11-10).
+
+The port now says which frames' scenes will be shown
+(NitroPort_FieldSceneWanted) and leaves the others' out. In a frame
+whose scene is left out the field doesn't send its ground or its
+buildings (LandDataManager_RenderLoadedMaps, MapPropManager_Render2:
+most of the work, and nothing but drawing). Everything else in the frame
+runs as before: the people's and the field effects' drawing and what
+they keep count of, the Poké Radar's check, the tasks the field draws
+from, the request to swap. At 1x every scene is wanted, and in the
+Distortion World it's never asked.
+---
+diff --git a/src/overlay005/fieldmap.c b/src/overlay005/fieldmap.c
+--- a/src/overlay005/fieldmap.c
++++ b/src/overlay005/fieldmap.c
+@@ -139,6 +139,9 @@
+ static enum FieldExtensionOverlay FieldMap_GetExtOverlayForActiveDynMapFeatures(FieldSystem *fieldSystem);
+ static BOOL FieldMap_InDistortionWorld(FieldSystem *fieldSystem);
+ #ifdef SDK_PORT_3DS
++// 1: this frame's 3D scene will be shown; 0, faster than 1x: it won't
++// (3ds_port/nitro/include/nitro_port_speed.h).
++extern int NitroPort_FieldSceneWanted(void);
+ static void FieldMap_PortNeighbours(FieldSystem *fieldSystem);
+ static void FieldMap_PortLogUnseen(FieldSystem *fieldSystem);
+ static void FieldMap_PortKeepHiddenInSight(FieldSystem *fieldSystem, enum MapHeaderID mapHeaderID, int objEventCount, const ObjectEvent *objEventList);
+@@ -743,6 +746,20 @@
+     }
+ 
+     PokeRadar_ClearIfAllOutOfView(fieldSystem);
++
++#ifdef SDK_PORT_3DS
++    // Faster than 1x (the options page's SPEED) the game runs several
++    // frames for each one shown. A frame that won't be shown made its whole
++    // scene all the same: in a town at 4x the ground and the buildings sent
++    // twice a V-blank took most of the game's core, and the screens came
++    // 20 times a second for it. Such a frame's scene is left out by the
++    // port (NitroPort_Gx3dLeaveOut), so its ground and buildings, most of
++    // the work and nothing but drawing, aren't sent at all. The rest of the
++    // frame is as ever: the people's and the effects' drawing with what
++    // they keep count of, the Poké Radar's check, the tasks drawn from. Not
++    // in the Distortion World (never asked there: every scene made).
++    if (FieldMap_InDistortionWorld(fieldSystem) == TRUE || NitroPort_FieldSceneWanted()) {
++#endif
+     LandDataManager_RenderLoadedMaps(fieldSystem->landDataMan, fieldSystem->areaModelAttrs);
+ 
+     if (FieldMap_InDistortionWorld(fieldSystem) == TRUE) {
+@@ -750,6 +767,9 @@
+     }
+ 
+     MapPropManager_Render2(fieldSystem->mapPropManager, fieldSystem->areaDataManager);
++#ifdef SDK_PORT_3DS
++    }
++#endif
+ 
+     {
+         const MtxFx44 *v2;
+-- 
+2.43.0
+

@@ -2456,6 +2456,75 @@ static void test_thread_behind(void)
     NitroPort_Gx3dThreadStats(NULL,NULL,&skipped);
     CHECK(skipped-skippedBefore==3);
 }
+/* A frame that won't be shown, faster than 1x (NitroPort_Gx3dLeaveOut): its
+ * scene is left out with the thread caught up (nothing drawn, the last
+ * scene stays), what it sets still holds after it, and the next one, wanted
+ * again, is drawn. Not counted with the scenes the same as the one before. */
+static void test_thread_leave_out(void)
+{
+    const NitroGx3dScene *scene;
+    uint32_t skippedBefore, skipped, speedBefore=NitroPort_Gx3dSpeedScenesLeftOut(), sameBefore=NitroPort_Gx3dSameScenesLeftOut();
+    reset_geometry();
+    triangle(0,RGB(31,0,0));swap();        /* A */
+    scene=NitroPort_Gx3dScene();           /* the thread has caught up */
+    CHECK(scene->count==1);
+    NitroPort_Gx3dThreadStats(NULL,NULL,&skippedBefore);
+    CHECK(NitroPort_Gx3dLeaveOut(1)==1);
+    /* B and C: left out (the thread caught up after each: not for being
+     * behind). C's vertices' Z stays. */
+    triangle(0,RGB(0,31,0));swap();
+    NitroPort_Gx3dScene();
+    NitroPort_GxDirectWrite(0x20,RGB(0,0,31));
+    NitroPort_GxDirectWrite(0x40,0);
+    vertex(-3000,-3000,2000);vertex(3000,-3000,2000);vertex(0,3000,2000);
+    NitroPort_GxDirectWrite(0x41,0);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(31,0,0));
+    CHECK(NitroPort_Gx3dLeaveOut(0)==1);
+    /* D: drawn, with C's Z under its X/Y-only vertices. */
+    NitroPort_GxDirectWrite(0x20,RGB(31,31,0));
+    NitroPort_GxDirectWrite(0x40,0);
+    NitroPort_GxDirectWrite(0x25,word2(-3000,-3000));
+    NitroPort_GxDirectWrite(0x25,word2(3000,-3000));
+    NitroPort_GxDirectWrite(0x25,word2(0,3000));
+    NitroPort_GxDirectWrite(0x41,0);
+    swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1){
+        CHECK(scene->triangles[0].v[0].color==RGB(31,31,0));
+        CHECK(scene->triangles[0].v[0].clip[2]==2000);
+    }
+    NitroPort_Gx3dThreadStats(NULL,NULL,&skipped);
+    CHECK(skipped-skippedBefore==2);
+    CHECK(NitroPort_Gx3dSpeedScenesLeftOut()-speedBefore==2);
+    CHECK(NitroPort_Gx3dSameScenesLeftOut()==sameBefore);
+    /* Turned off in the middle of a scene with vertices left out already
+     * (E): off from its SWAP_BUFFERS on, the whole of E left out (not
+     * published with only its second triangle), D still on the screen;
+     * F drawn. Off again before any vertex: at once. */
+    CHECK(NitroPort_Gx3dLeaveOut(1)==1);
+    triangle(0,RGB(0,31,31));
+    CHECK(NitroPort_Gx3dLeaveOut(0)==0);
+    triangle(0,RGB(31,0,31));swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(31,31,0));
+    CHECK(NitroPort_Gx3dLeaveOut(0)==1);
+    triangle(0,RGB(31,31,31));swap();
+    scene=NitroPort_Gx3dScene();
+    CHECK(scene->count==1);
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(31,31,31));
+    CHECK(NitroPort_Gx3dSpeedScenesLeftOut()-speedBefore==3);
+    CHECK(NitroPort_Gx3dLeaveOut(1)==1);
+    CHECK(NitroPort_Gx3dLeaveOut(0)==1);
+    triangle(0,RGB(0,0,31));swap();
+    scene=NitroPort_Gx3dScene();
+    if(scene->count==1)CHECK(scene->triangles[0].v[0].color==RGB(0,0,31));
+    CHECK(NitroPort_Gx3dSpeedScenesLeftOut()-speedBefore==3);
+}
 /* A battle's start in the field (NitroPort_FieldEffect): a scene the same
  * as the one before, word for word, has the next left out (the field
  * stands still: its 3D made again and again on the core that draws the
@@ -3697,6 +3766,8 @@ int main(void)
     test_band_ranges();
     swap();
     CHECK(!NitroPort_Gx3dEarlierSceneUnread()); /* without the thread: never */
+    CHECK(NitroPort_Gx3dLeaveOut(1)==0);        /* (nor a scene left out) */
+    CHECK(NitroPort_Gx3dLeaveOut(0)==1);
     synchronous = checks;
     printf("GX3D synthetic scene and raster: %d checks, %d failures\n",checks,failures);
     sem_init(&sWorkerSem, 0, 0);
@@ -3706,6 +3777,7 @@ int main(void)
     pthread_create(&thread, NULL, geometry_thread, NULL);
     run_all();
     test_thread_behind();
+    test_thread_leave_out();
     test_same_scenes_left_out();
     test_list_trimmed();
     test_list_rows();
