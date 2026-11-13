@@ -4989,25 +4989,24 @@ static void tree_leaves(TreeShape *sh,const TreeQuad *quads,uint32_t n,int32_t u
         sh->litPartMax=sh->litPart?sh->nleaves:0u;
     }
 }
-/* A forest's floor (2026-11-12, on a 3DS, the meteor area by Veilstone:
- * "there are strange, disconnected pieces of tree geometry", reported
- * again and again). The game paints a dark patch round each tree's stump
- * on a flat polygon of the tree's (a row's: one along the row), and at a
- * forest's edge that patch is what fills the ground between the trees'
- * layers. With the sun shadows the stumps are drawn without it (their
- * shadows are the trees' own pictures laid along the light now), and
- * since 2026-11-11 nothing took its place: between the edge's trees the
- * grass shone through, and the layers' lower lobes and the ground's own
- * darker wedges stood out as pieces. As chosen on 2026-11-10 ("on the
- * forests probably the grass should be shaded fully since there are a lot
- * of trees not a lot of light go through"): the patch is laid again as a
- * shadow, in the shadows' one shade, a pixel darkened once with them
- * (NITRO_GX3D_TAG_GROUND), for a row's flat polygon and for a tree's with
- * TREE_FOREST_NEIGHBOURS others standing within TREE_FOREST_NEAR of it
- * either way; a tree alone keeps its own shadow alone. Each such polygon
- * as the list has it, its texture coordinates with it (the stump's
- * texture: its opaque texels are the patch and the stump), the shadows'
- * lift above it. Made once with the lists, the same for any sun. */
+/* A forest's trees' painted patches, as the game draws them (2026-11-12,
+ * on a 3DS, the meteor area by Veilstone: "strange tree pieces underneath
+ * the tree", reported again and again). The game paints a dark patch
+ * round each tree's stump on a flat polygon of the tree's (a row's: one
+ * along the row). With the sun shadows the stumps are drawn without it
+ * (NITRO_GX3D_TAG_STUMP: the trees' shadows are their own pictures laid
+ * along the light now), and at a forest's edge that patch was what hid
+ * the lowest leaves of the tree behind: without it they showed, a dark
+ * lobe of leaves with a hard edge under each tree. (A first fix laid the
+ * patch's shape as shade on the ground: the leaves still showed through
+ * it, darker.) So for a forest's trees the flat polygon is sent again
+ * after its stumps, unmarked, as the list has it (its NORMAL, its
+ * texture coordinates, the material the shape has set): drawn as the
+ * game draws it, patch and all, over the leaves it hides there. A row's
+ * flat polygon (wider than 48), and a tree's with TREE_FOREST_NEIGHBOURS
+ * others standing within TREE_FOREST_NEAR of it either way; a tree alone
+ * keeps its sun shadow alone. In parts of a square of the map, those the
+ * view can see (NitroPort_Gx3dTreeSend kind 3). */
 typedef struct TreeFloorAt { uint32_t quad; int64_t key; } TreeFloorAt;
 static int tree_floor_order(const void *a,const void *b)
 {
@@ -5021,7 +5020,7 @@ static void tree_floors(NitroGx3dTreeLists *t,TreeQuad *const *quads,const uint3
     for(i=0;i<t->count;i++){
         TreeShape *sh=&t->shape[i];
         DlWriter wr;
-        const uint32_t mode=0,white=0x7FFFu;
+        const uint32_t mode=0;
         TreeFloorAt *at;
         uint32_t nat=0,cap;
         if(!quads[i] || !sh->stumps || !sh->stumpBytes || !counts[i])continue;
@@ -5044,10 +5043,7 @@ static void tree_floors(NitroGx3dTreeLists *t,TreeQuad *const *quads,const uint3
                 }
                 if(others<TREE_FOREST_NEIGHBOURS)continue;
             }
-            for(v=0;v<q->n;v++){
-                const int32_t xyz[3]={q->xyz[v][0],q->xyz[v][1]+t->lift,q->xyz[v][2]};
-                if(!dl_s16(xyz))ok=0;
-            }
+            for(v=0;v<q->n;v++)if(!dl_s16(q->xyz[v]))ok=0;
             if(!ok)continue;
             /* (its square of the map: the parts sent, as the trees' are) */
             at[nat].quad=j;
@@ -5069,23 +5065,22 @@ static void tree_floors(NitroGx3dTreeLists *t,TreeQuad *const *quads,const uint3
             wr.slots=0;
             part->at=wr.n;
             dl_put(&wr,0x40u,&mode);
-            dl_put(&wr,0x20u,&white);
             for(k=j;k<nat && at[k].key==at[j].key;k++){
                 const TreeQuad *q=&quads[i][at[k].quad];
-                int32_t xyz[TREE_VERTS][3];
                 unsigned v,m;
-                for(v=0;v<q->n;v++){xyz[v][0]=q->xyz[v][0];xyz[v][1]=q->xyz[v][1]+t->lift;xyz[v][2]=q->xyz[v][2];}
                 for(m=0;m<3u;m++){
-                    part->lo[m]=k==j || q->lo[m]+(m==1u?t->lift:0)<part->lo[m]?q->lo[m]+(m==1u?t->lift:0):part->lo[m];
-                    part->hi[m]=k==j || q->hi[m]+(m==1u?t->lift:0)>part->hi[m]?q->hi[m]+(m==1u?t->lift:0):part->hi[m];
+                    part->lo[m]=k==j || q->lo[m]<part->lo[m]?q->lo[m]:part->lo[m];
+                    part->hi[m]=k==j || q->hi[m]>part->hi[m]?q->hi[m]:part->hi[m];
                 }
+                /* (lit as the game lights it: its own NORMAL) */
+                if(q->normal)dl_put(&wr,0x21u,&q->normal);
                 for(v=1;v+1u<q->n;v++){
                     const unsigned order[3]={0u,v,v+1u};
                     for(m=0;m<3u;m++){
                         const unsigned u=order[m];
                         uint32_t tc=((uint32_t)q->st[u][0]&0xFFFFu)|((uint32_t)q->st[u][1]<<16);
                         dl_put(&wr,0x22u,&tc);
-                        dl_vtx16(&wr,xyz[u]);
+                        dl_vtx16(&wr,q->xyz[u]);
                     }
                 }
             }

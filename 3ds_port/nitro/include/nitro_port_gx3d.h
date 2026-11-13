@@ -438,14 +438,17 @@ const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *trees, uint32_t shape,
  * none. */
 const void *NitroPort_Gx3dTreeTrunks(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
 /* (how many trees the shape's shadows are of: rows counted a tree each 32 units) */
-/* The shape's trees' shadows where they stand (a pool, or a forest's
- * floor), for NITRO_GX3D_TAG_GROUND: made with the last
- * NitroPort_Gx3dTreeShadows of the shape, for its sun (call that first).
- * NULL with none. */
+/* A forest's trees' flat polygons, with the game's painted patch round
+ * their stumps, as the shape's list has them (their NORMALs and texture
+ * coordinates; the material the shape sets): sent unmarked after the
+ * stumps, so a forest's patches hide what they hid in the game (the tree
+ * behind's lowest leaves). Made once with the lists; NULL with none (a
+ * tree alone keeps its sun shadow alone). After a
+ * NitroPort_Gx3dTreeShadows of the shape (call that first). */
 const void *NitroPort_Gx3dTreeGround(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
 /* The shape's lit layers (shadows 0), its layers' shadows (1), its
- * trunks' (2) or its forest's floor (3, NitroPort_Gx3dTreeGround's list,
- * in parts of a square of the map each), as last made by
+ * trunks' (2) or its forest's trees' patches (3, NitroPort_Gx3dTreeGround's
+ * list, in parts of a square of the map each), as last made by
  * NitroPort_Gx3dTreeCanopiesLit or NitroPort_Gx3dTreeShadows (call that
  * first), sent to the geometry engine
  * as NitroPort_GxFifoWords would send the list, but for the trees the view
@@ -560,12 +563,7 @@ void NitroPort_Gx3dTag(uint32_t tag);
 /* (a tree's trunk's shadow: a strip drawn from its vertices' colours
  * alone, its texture not used; NitroPort_Gx3dTreeTrunks) */
 #define NITRO_GX3D_TAG_TRUNK 0x40000018u
-/* (a forest's floor: the game's painted patch round its trees' stumps laid
- * as shadow, drawn with the pools, once, but where the texel isn't the
- * stump's (as NITRO_GX3D_TAG_STUMP tells them apart): the stump stays as
- * it is; NitroPort_Gx3dTreeGround) */
-#define NITRO_GX3D_TAG_FLOOR 0x40000020u
-#define NITRO_GX3D_TAG_IS_SHADE(tag) (((tag)&~0x38u)==NITRO_GX3D_TAG_SHADE)
+#define NITRO_GX3D_TAG_IS_SHADE(tag) (((tag)&~0x18u)==NITRO_GX3D_TAG_SHADE)
 /* A model's shadow's outline on the ground it stands on (y 0), for a light:
  * the convex hull of every vertex of its shapes' display lists moved
  * shearX, shearZ (20.12) to the right and towards the camera for each unit

@@ -2862,12 +2862,11 @@ static void test_tree_lists(void)
             CHECK(n==12);
         }
     }
-    /* A row's flat polygon (64 units wide): its forest's floor, the
-     * stump's polygon itself as the list has it (its painted patch laid as
-     * shadow, 2026-11-12: at a forest's edge the grass shone through
-     * between the trees and their layers' lobes stood out as pieces),
-     * white, a unit above it, its texture coordinates with it; the same
-     * for any sun. */
+    /* A row's flat polygon (64 units wide): sent again as the list has it,
+     * where it is, its texture coordinates with it (its painted patch
+     * drawn as the game draws it, 2026-11-12: at a forest's edge, without
+     * it, the lowest leaves of the trees behind showed as loose pieces);
+     * the same for any sun. */
     if(NitroPort_Gx3dTreeShadows(t,2,0,4096,2048,&nsh2)){
         const void *floor=NitroPort_Gx3dTreeGround(t,2,&ng);
         CHECK(floor && ng && !(ng&3u));
@@ -2875,9 +2874,8 @@ static void test_tree_lists(void)
             tree_view();
             n=tree_scene(floor,ng,both,sh,400);
             CHECK(n==6);
-            for(i=0;i<n;i++)CHECK(abs(sh[i].y-122)<=8);
-            CHECK(tree_rgb(sh,n,-2048,122,900,31,31,31) && tree_rgb(sh,n,2048,122,-900,31,31,31));
-            CHECK(tree_st(sh,n,-2048,122,900,0.0f,62.0f) && tree_st(sh,n,2048,122,900,64.0f,62.0f));
+            for(i=0;i<n;i++)CHECK(abs(sh[i].y-58)<=8);
+            CHECK(tree_st(sh,n,-2048,58,900,0.0f,62.0f) && tree_st(sh,n,2048,58,900,64.0f,62.0f));
         }
         CHECK(NitroPort_Gx3dTreeShadows(t,2,4096,0,2048,&nsh2) && NitroPort_Gx3dTreeGround(t,2,&ng)==floor);
     }else CHECK(0);

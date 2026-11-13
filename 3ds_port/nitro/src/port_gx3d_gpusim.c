@@ -244,7 +244,7 @@ static float sGShade[3], sGTree[3];   /* (what a full shadow takes; a tree's) */
 static uint8_t sOnce[MAX_W * MAX_H];
 static struct { int used; uint32_t param, palette; uint32_t *tiled; } sGMasks[G_MASKS];
 
-enum { G_GROUND, G_PROP, G_MASK, G_BLOB, G_CHAR, G_RIM, G_FLOOR };
+enum { G_GROUND, G_PROP, G_MASK, G_BLOB, G_CHAR, G_RIM };
 
 
 static Color fetch_linear(const uint32_t *tiled, uint32_t param, float u, float v)
@@ -326,13 +326,13 @@ static void g_draw(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batch,
 {
     const uint32_t *tex = NULL;
     uint32_t k;
-    if (batch->texture_param && (kind == G_GROUND || kind == G_FLOOR || kind == G_PROP || kind == G_CHAR)) {
+    if (batch->texture_param && (kind == G_GROUND || kind == G_PROP || kind == G_CHAR)) {
         NitroPort_Gx3dDecodeTextureTiled(banks, batch->texture_param, batch->palette_base, tiled);
         tex = tiled;
     } else if (kind == G_MASK) {
         tex = g_mask(banks, batch->texture_param, batch->palette_base);
         if (!tex) return;
-    } else if (kind != G_GROUND && kind != G_FLOOR && kind != G_RIM && kind != G_BLOB) {
+    } else if (kind != G_GROUND && kind != G_RIM && kind != G_BLOB) {
         return;
     }
     for (k = batch->first; k + 2 < batch->first + batch->count; k += 3) {
@@ -379,14 +379,6 @@ static void g_draw(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batch,
             for (c = 0; c < 2; c++)
                 uv[c] = (l0 * iw[0] * v[0].uv[c] + l1 * iw[1] * v[1].uv[c] + l2 * iw[2] * v[2].uv[c]) / pw;
             switch (kind) {
-            case G_FLOOR: {
-                /* (the patch, not the stump: port_gx3d_pica.c, floor_batch) */
-                const Color t = tex ? fetch_linear(tex, batch->texture_param, uv[0], uv[1]) : (Color){1, 1, 1, pr[3]};
-                const float st = fminf((1.0f - t.g) + t.r, 1.0f) * t.a;
-                a = fminf((1.0f - st) * 16.0f, 1.0f) * t.a;
-                for (c = 0; c < 3; c++) rgb[c] = 1.0f - sGShade[c] * pr[c];
-                break;
-            }
             case G_GROUND:
             case G_RIM:
                 a = tex ? fetch_linear(tex, batch->texture_param, uv[0], uv[1]).a : pr[3];
@@ -418,7 +410,7 @@ static void g_draw(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch *batch,
             }
             a8 = (unsigned)(a * 255.0f + 0.5f);
             if (test ? a8 < test : !(a8 > 0)) continue;
-            if (once) sOnce[idx] |= (uint8_t)(once == 1 && (kind == G_GROUND || kind == G_FLOOR) ? 3 : once);   /* (a building's core: both) */
+            if (once) sOnce[idx] |= (uint8_t)(once == 1 && kind == G_GROUND ? 3 : once);   /* (a building's core: both) */
             color[idx].r *= rgb[0] < 0.0f ? 0.0f : rgb[0];
             color[idx].g *= rgb[1] < 0.0f ? 0.0f : rgb[1];
             color[idx].b *= rgb[2] < 0.0f ? 0.0f : rgb[2];
@@ -447,9 +439,9 @@ static void ground_shadows(const NitroGx3dGpuVertex *verts, const NitroGx3dBatch
             const NitroGx3dBatch *batch = &batches[b];
             uint32_t tag = batch->tag;
             if (batch->translucent) continue;
-            if (pass == 0 ? (tag != NITRO_GX3D_TAG_GROUND && tag != NITRO_GX3D_TAG_FLOOR) :
+            if (pass == 0 ? tag != NITRO_GX3D_TAG_GROUND :
                 (tag != NITRO_GX3D_TAG_SHADE && tag != NITRO_GX3D_TAG_TRUNK && tag != NITRO_GX3D_TAG_RIM)) continue;
-            g_draw(verts, batch, pass == 0 ? (tag == NITRO_GX3D_TAG_FLOOR ? G_FLOOR : G_GROUND) : tag == NITRO_GX3D_TAG_RIM ? G_RIM :
+            g_draw(verts, batch, pass == 0 ? G_GROUND : tag == NITRO_GX3D_TAG_RIM ? G_RIM :
                    tag == NITRO_GX3D_TAG_SHADE && batch->texture_param ? G_MASK : G_BLOB,
                    tests[pass], pass == 0 ? 1 : tag == NITRO_GX3D_TAG_RIM ? (pass <= 2 ? 3 : 1) : rest, banks, tiled, color,
                    depth, wbuffer);

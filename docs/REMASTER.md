@@ -4292,32 +4292,29 @@ then the small props and the land's trees; houses and the scenery later.
     outline of its own or not. test_gx3d: one quad is flat, with a
     painted shadow lying under it too; a box, two quads across each
     other, or one well off the other's plane aren't.
-  - A forest's floor (2026-11-12, patch 0150; on a 3DS, the meteor area by
-    Veilstone: "there are strange, disconnected pieces of tree geometry",
-    reported again and again, and my render of the spot showed them too).
-    With the sun shadows a stump is drawn without the dark patch the game
-    paints round it (its old fixed shadow), and since 2026-11-11 (the
-    trees' shadows from their own pictures) nothing took its place: at a
-    forest's edge the grass, and the ground's own darker wedges with their
-    straight edges, shone through between the trees, and the layers' lower
-    lobes stood out as loose pieces. Not the parts' culling, not the rows'
-    ends (both ruled out on the PC). Now the patch is laid again as shadow
-    (tree_floors, NitroPort_Gx3dTreeGround): a row's flat polygon (wider
-    than 48), and a tree's with TREE_FOREST_NEIGHBOURS others standing
-    within TREE_FOREST_NEAR of it, as on 2026-11-10 ("on the forests
-    probably the grass should be shaded fully"); a tree alone keeps its
-    own shadow alone. Drawn with the buildings' shadows, a pixel darkened
-    once, in the shadows' one shade, the stump's texels left as they are
-    (NITRO_GX3D_TAG_FLOOR: floor_batch on the 3DS, G_FLOOR on the PC; the
-    stump told apart as NITRO_GX3D_TAG_STUMP tells it). Sent in parts of
-    a square of the map, those the view can see (NitroPort_Gx3dTreeSend
-    kind 3). On the PC, 120 scenes at the meteor area, Route 209's forest
-    and Eterna: 3 to 5% more vertices and polygons sent, 5 to 8% more
-    triangles drawn (whole, without parts, it was 11 to 19% more sent).
-    Sprites aren't darkened by it (its polygon is wider than its patch).
-    test_gx3d: a row's flat polygon is its floor, white, a unit up, its
-    texture coordinates with it, the same for any sun; two trees alone
-    have none, the same two with the row among them have theirs.
+  - A forest's trees' patches (2026-11-12, patch 0150; on a 3DS, the
+    meteor area by Veilstone: "strange tree pieces underneath the tree",
+    reported again and again, and in my own render of the spot). With the
+    sun shadows a stump is drawn without the dark patch the game paints
+    round it (its old fixed shadow). At a forest's edge that patch is what
+    hid the lowest leaves of the tree behind: without it they showed under
+    each tree, a dark lobe of leaves with a hard edge. Not the parts'
+    culling, the rows' ends or any shadow pass (each ruled out on the PC,
+    the same frame with and without). A first fix laid the patch's shape
+    as shade on the ground: the leaves still showed through it. Now, for a
+    forest's trees, the flat polygon is sent again after its stumps,
+    unmarked, as the list has it (its NORMAL, its texture coordinates, the
+    shape's material: tree_floors, NitroPort_Gx3dTreeGround): drawn as the
+    game draws it, patch and all, over the leaves it hid. A row's flat
+    polygon (wider than 48), and a tree's with TREE_FOREST_NEIGHBOURS
+    others standing within TREE_FOREST_NEAR of it; a tree alone keeps its
+    sun shadow alone. In parts of a square of the map, those the view can
+    see (NitroPort_Gx3dTreeSend kind 3). On the PC, 120 scenes at the
+    meteor area, Route 209's forest and Eterna: 3 to 5% more vertices and
+    polygons sent, triangles drawn the same within 0.1%. test_gx3d: a
+    row's flat polygon is sent where it lies with its texture
+    coordinates, the same for any sun; two trees alone have none, the same
+    two with the row among them have theirs.
   - The log (2026-11-12): its first lines have the build's version and
     commit ("[platinum] build ..."); a profiled frame's [gpu] line has
     "the sun shadows" as a part after "the opaque polygons" (they were
