@@ -12,6 +12,7 @@
 static char path[512];
 static const char *rev1 = "0862ec35b24de5c7e2dcb88c9eea0873110d755c";
 static const char *rev0 = "ce81046eda7d232513069519cb2085349896dec7";
+static const char *ger  = "d40f19ac24d67c721a4ab25e1c013154443d75b4";
 static const char *build = "test-build";
 
 static void u32(unsigned char *p, uint32_t n)
@@ -137,6 +138,10 @@ static int test_c_fixtures(void)
     CHECK(patch(44, hash, 20) && open_is(PAK_ERR_ROM_SHA1));
     sha(hash, rev0);
     CHECK(patch(44, hash, 20) && open_is(PAK_OK));
+    sha(hash, ger);
+    CHECK(patch(44, hash, 20));
+    CHECK(pak_open(path, build, &pak) == PAK_OK && pak_is_german(pak));
+    pak_close(pak);
 
     CHECK(fixture());
     f = fopen(path, "rb");

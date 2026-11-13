@@ -48,7 +48,8 @@ class Payload(unittest.TestCase):
         self.assertTrue(m["synthetic"])
         self.assertEqual(m["dataPack"], {"format": 1, "buildId": "platinum-nitrofs-1"})
         self.assertEqual({r["sha1"] for r in m["supportedRoms"]},
-                         {"0862ec35b24de5c7e2dcb88c9eea0873110d755c", "ce81046eda7d232513069519cb2085349896dec7"})
+                         {"0862ec35b24de5c7e2dcb88c9eea0873110d755c", "ce81046eda7d232513069519cb2085349896dec7",
+                          "d40f19ac24d67c721a4ab25e1c013154443d75b4"})
         self.assertTrue(m["pycgfx"]["rawBase"].endswith(m["pycgfx"]["commit"] + "/"))
         # The manifest in the ZIP is the release's, and lists every other file with its hash.
         self.assertEqual(json.loads(self.zip.read("web-manifest.json")), m)

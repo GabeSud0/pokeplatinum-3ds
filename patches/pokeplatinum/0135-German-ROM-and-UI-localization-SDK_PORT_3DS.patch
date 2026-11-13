@@ -1,0 +1,563 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sheldor <sh3ld0r@users.noreply.github.com>
+Date: Wed, 11 Nov 2026 21:00:00 +0100
+Subject: [PATCH] German (CPUD) ROM support and 3DS UI localization under SDK_PORT_3DS
+
+- Add dynamic German (CPUD) UI string selection via NitroPort_IsGerman() and UTF-8 umlaut/Eszett decoding in trainer_case/main.c, overlay005/options_panel.c, battle/battle_script.c, and port_follower.c.
+- Skip loading US-only op_demo.narc members 113..115 in ov77_021D25B0.c when running with German op_demo.narc (113 members).
+- Return message ID 223 ("Ende") in EndCreditsStrings_GetLastMessageID() when running with German credits bank (224 entries).
+---
+diff --git a/src/applications/trainer_case/main.c b/src/applications/trainer_case/main.c
+index 16187df..ced4ec4 100644
+--- a/src/applications/trainer_case/main.c
++++ b/src/applications/trainer_case/main.c
+@@ -176,10 +176,13 @@ static const TrainerCasePortRun sTrainerCasePortBadgesOpen[] = {
+     { 231, 16, PORT_FROM_LOWER, 176, 1, 0, 0 },
+ };
+ 
++extern BOOL NitroPort_IsGerman(void);
++
+ // The panel as the tab shown has it.
+ static void TrainerCasePort_Show(void)
+ {
+     static const char *const labels[2] = { "TRAINER CARD", "BADGES" };
++    static const char *const labelsDe[2] = { "TRAINERPASS", "ORDEN" };
+     static const TrainerCasePortTabStyle style = {
+         .back = 0x737373,
+         .fill = 0xEFE79C,
+@@ -198,7 +201,7 @@ static void TrainerCasePort_Show(void)
+         NitroPort_LowerMenuSetPanelRuns(sTrainerCasePortBadgesOpen, NELEMS(sTrainerCasePortBadgesOpen));
+     }
+ 
+-    NitroPort_LowerMenuSetTabs(2, labels, sTrainerCasePortTab, &style);
++    NitroPort_LowerMenuSetTabs(2, NitroPort_IsGerman() ? labelsDe : labels, sTrainerCasePortTab, &style);
+ }
+ 
+ static void TrainerCasePort_ChooseTab(int tab, BOOL sound)
+diff --git a/src/battle/battle_script.c b/src/battle/battle_script.c
+index ae97c7d..860d838 100644
+--- a/src/battle/battle_script.c
++++ b/src/battle/battle_script.c
+@@ -9781,12 +9781,27 @@ static int BattleScript_PortPartyExpSlot(BattleScriptTaskData *data, int battler
+     }
+ }
+ 
++extern BOOL NitroPort_IsGerman(void);
++
+ static void BattleScript_PortAppendLetters(String *string, const char *letters)
+ {
+     for (; *letters; letters++) {
+         int c = (unsigned char)*letters;
+ 
+-        if (c >= 'A' && c <= 'Z') {
++        if (c == 0xC3 && letters[1]) {
++            int n = (unsigned char)*++letters;
++
++            switch (n) {
++            case 0x84: String_AppendChar(string, 0x0163); break; // Ä
++            case 0x96: String_AppendChar(string, 0x0175); break; // Ö
++            case 0x9C: String_AppendChar(string, 0x017B); break; // Ü
++            case 0x9F: String_AppendChar(string, 0x017E); break; // ß
++            case 0xA4: String_AppendChar(string, 0x0183); break; // ä
++            case 0xA9: String_AppendChar(string, 0x0188); break; // é
++            case 0xB6: String_AppendChar(string, 0x0195); break; // ö
++            case 0xBC: String_AppendChar(string, 0x019B); break; // ü
++            }
++        } else if (c >= 'A' && c <= 'Z') {
+             String_AppendChar(string, 0x12B + (c - 'A'));
+         } else if (c >= 'a' && c <= 'z') {
+             String_AppendChar(string, 0x145 + (c - 'a'));
+@@ -9794,6 +9809,10 @@ static void BattleScript_PortAppendLetters(String *string, const char *letters)
+             String_AppendChar(string, 0x1DE);
+         } else if (c == '.') {
+             String_AppendChar(string, 0x1AE);
++        } else if (c == ',') {
++            String_AppendChar(string, 0x1AD);
++        } else if (c == '-') {
++            String_AppendChar(string, 0x1BE);
+         } else if (c == '!') {
+             String_AppendChar(string, 0x1AB);
+         } else if (c == '?') {
+@@ -9812,12 +9831,13 @@ static u8 BattleScript_PortPartyExpMessage(BattleSystem *battleSys, u32 exp)
+ {
+     String *string = String_Init(64, HEAP_ID_BATTLE);
+     String *number = String_Init(16, HEAP_ID_BATTLE);
++    BOOL de = NitroPort_IsGerman();
+     u8 printerID;
+ 
+-    BattleScript_PortAppendLetters(string, "Your party gained\n");
++    BattleScript_PortAppendLetters(string, de ? "Dein Team erhält\n" : "Your party gained\n");
+     String_FormatInt(number, exp, 10, PADDING_MODE_NONE, CHARSET_MODE_EN);
+     String_Concat(string, number);
+-    BattleScript_PortAppendLetters(string, " Exp. Points!");
++    BattleScript_PortAppendLetters(string, de ? " EP!" : " Exp. Points!");
+     String_AppendChar(string, 0x25BC); // (the end of a page, as the game's: \r)
+ 
+     printerID = BattleMessage_PrintString(battleSys, string, BattleSystem_GetTextSpeed(battleSys));
+@@ -10550,31 +10570,32 @@ static u8 BattleScript_PortPrintTake(BattleSystem *battleSys, Pokemon *caught, P
+ {
+     String *string = String_Init(160, HEAP_ID_BATTLE);
+     String *name = String_Init(32, HEAP_ID_BATTLE);
++    BOOL de = NitroPort_IsGerman();
+     u8 printerID;
+ 
+     switch (what) {
+     case 0: // the question
+-        BattleScript_PortAppendLetters(string, "Your party is full.\nAdd ");
++        BattleScript_PortAppendLetters(string, de ? "Dein Team ist voll.\n" : "Your party is full.\nAdd ");
+         Pokemon_GetValue(caught, MON_DATA_NICKNAME_STRING, name);
+         String_Concat(string, name);
+-        BattleScript_PortAppendLetters(string, " to your party?");
++        BattleScript_PortAppendLetters(string, de ? " ins Team aufnehmen?" : " to your party?");
+         break;
+     case 1: // the one picked can't go to the PC
+         Pokemon_GetValue(picked, MON_DATA_NICKNAME_STRING, name);
+         String_Concat(string, name);
+         if (Item_IsMail(Pokemon_GetValue(picked, MON_DATA_HELD_ITEM, NULL))) {
+-            BattleScript_PortAppendLetters(string, " is holding Mail.\nIt can't be sent to the PC.");
++            BattleScript_PortAppendLetters(string, de ? " trägt einen Brief.\nPC-Transfer nicht möglich." : " is holding Mail.\nIt can't be sent to the PC.");
+         } else {
+-            BattleScript_PortAppendLetters(string, " has a Ball Capsule.\nIt can't be sent to the PC.");
++            BattleScript_PortAppendLetters(string, de ? " hat eine Ballkapsel.\nPC-Transfer nicht möglich." : " has a Ball Capsule.\nIt can't be sent to the PC.");
+         }
+         break;
+     default: // done
+         Pokemon_GetValue(caught, MON_DATA_NICKNAME_STRING, name);
+         String_Concat(string, name);
+-        BattleScript_PortAppendLetters(string, " was added to the party\nand ");
++        BattleScript_PortAppendLetters(string, de ? " wurde ins Team aufgenommen\nund " : " was added to the party\nand ");
+         Pokemon_GetValue(picked, MON_DATA_NICKNAME_STRING, name);
+         String_Concat(string, name);
+-        BattleScript_PortAppendLetters(string, " was sent to the PC.");
++        BattleScript_PortAppendLetters(string, de ? " auf den PC übertragen." : " was sent to the PC.");
+         break;
+     }
+ 
+diff --git a/src/cutscenes/end_credits/strings.c b/src/cutscenes/end_credits/strings.c
+index 7412f70..b3b79a0 100644
+--- a/src/cutscenes/end_credits/strings.c
++++ b/src/cutscenes/end_credits/strings.c
+@@ -313,6 +313,10 @@ void EndCreditsStrings_FreeManager(EndCreditsStringsManager *manager)
+     Heap_Free(manager);
+ }
+ 
++#ifdef SDK_PORT_3DS
++extern BOOL NitroPort_IsGerman(void);
++#endif
++
+ BOOL EndCreditsStrings_ScrollCredits(EndCreditsStringsManager *manager, int scrollSpeed)
+ {
+     if (manager->state == END_CREDITS_STRINGS_STATE_ALL_ERASED) {
+@@ -324,7 +328,14 @@ BOOL EndCreditsStrings_ScrollCredits(EndCreditsStringsManager *manager, int scro
+             if (nextBottomY >= sEndCreditStringProps[manager->entryToDraw].yOffset) {
+                 int xOffset, yOffset;
+ 
+-                MessageLoader_GetString(manager->messageLoader, sEndCreditStringProps[manager->entryToDraw].messageID, manager->string);
++#ifdef SDK_PORT_3DS
++                if (NitroPort_IsGerman() && manager->entryToDraw >= pl_msg_00000548_00223) {
++                    String_Clear(manager->string);
++                } else
++#endif
++                {
++                    MessageLoader_GetString(manager->messageLoader, sEndCreditStringProps[manager->entryToDraw].messageID, manager->string);
++                }
+ 
+                 if (sEndCreditStringProps[manager->entryToDraw].centered) {
+                     xOffset = (256 - Font_CalcStringWidth(FONT_SYSTEM, manager->string, 0)) / 2;
+@@ -396,5 +407,10 @@ static void EndCreditsStrings_VBlankCallback(SysTask *sysTask, void *pManager)
+ 
+ int EndCreditsStrings_GetLastMessageID(void)
+ {
++#ifdef SDK_PORT_3DS
++    if (NitroPort_IsGerman()) {
++        return pl_msg_00000548_00223;
++    }
++#endif
+     return sEndCreditStringProps[NELEMS(sEndCreditStringProps) - 1].messageID;
+ }
+diff --git a/src/game_opening/ov77_021D25B0.c b/src/game_opening/ov77_021D25B0.c
+index b8e3a8f..4760bdf 100644
+--- a/src/game_opening/ov77_021D25B0.c
++++ b/src/game_opening/ov77_021D25B0.c
+@@ -1037,6 +1037,10 @@ static void ov77_021D2F0C(UnkStruct_ov77_021D2E9C *param0)
+     param0->unk_18.unk_02 = 1;
+ }
+ 
++#ifdef SDK_PORT_3DS
++extern BOOL NitroPort_IsGerman(void);
++#endif
++
+ static void ov77_021D2F38(UnkStruct_ov77_021D2F38 *param0)
+ {
+     Graphics_LoadTilesToBgLayer(NARC_INDEX_DEMO__TITLE__OP_DEMO, 16, param0->unk_0C, 2, 0, 0, 0, HEAP_ID_76);
+@@ -1054,10 +1058,15 @@ static void ov77_021D2F38(UnkStruct_ov77_021D2F38 *param0)
+ 
+     Graphics_LoadTilemapToBgLayer(NARC_INDEX_DEMO__TITLE__OP_DEMO, 19, param0->unk_0C, 3, 0, 0, 0, HEAP_ID_76);
+     Graphics_LoadTilemapToBgLayer(NARC_INDEX_DEMO__TITLE__OP_DEMO, 19, param0->unk_0C, 7, 0, 0, 0, HEAP_ID_76);
+-    Graphics_LoadTilesToBgLayer(NARC_INDEX_DEMO__TITLE__OP_DEMO, 114, param0->unk_0C, 5, 0, 0, 0, HEAP_ID_76);
+-    Graphics_LoadTilemapToBgLayer(NARC_INDEX_DEMO__TITLE__OP_DEMO, 113, param0->unk_0C, 5, 0, 0, 0, HEAP_ID_76);
++#ifdef SDK_PORT_3DS
++    if (!NitroPort_IsGerman())
++#endif
++    {
++        Graphics_LoadTilesToBgLayer(NARC_INDEX_DEMO__TITLE__OP_DEMO, 114, param0->unk_0C, 5, 0, 0, 0, HEAP_ID_76);
++        Graphics_LoadTilemapToBgLayer(NARC_INDEX_DEMO__TITLE__OP_DEMO, 113, param0->unk_0C, 5, 0, 0, 0, HEAP_ID_76);
+ 
+-    Graphics_LoadPalette(NARC_INDEX_DEMO__TITLE__OP_DEMO, 115, 4, 0, 2 * 16 * 1, HEAP_ID_76);
++        Graphics_LoadPalette(NARC_INDEX_DEMO__TITLE__OP_DEMO, 115, 4, 0, 2 * 16 * 1, HEAP_ID_76);
++    }
+ 
+     GXLayers_EngineAToggleLayers(GX_PLANEMASK_BG2, 0);
+     GXLayers_EngineBToggleLayers(GX_PLANEMASK_BG2, 0);
+diff --git a/src/overlay005/options_panel.c b/src/overlay005/options_panel.c
+index a7f7ab2..fb50cb9 100644
+--- a/src/overlay005/options_panel.c
++++ b/src/overlay005/options_panel.c
+@@ -147,8 +147,11 @@ enum {
+     OPG_COUNT,
+ };
+ 
++extern BOOL NitroPort_IsGerman(void);
++
+ typedef struct OptionsCard {
+     const char *name; // (the port's: in its letters; NULL: the options screen's `entry`)
++    const char *nameDe;
+     u16 entry;
+     u8 kind;
+     u8 id;
+@@ -158,57 +161,58 @@ typedef struct OptionsCard {
+ 
+ typedef struct OptionsPageDef {
+     const char *tab;
++    const char *tabDe;
+     const OptionsCard *cards;
+     u8 left; // (the first `left` in the left column, top to bottom; the rest in the right)
+     u8 count;
+ } OptionsPageDef;
+ 
+ static const OptionsCard sSettingsCards[] = {
+-    { NULL, OptionsMenu_Text_TextSpeedLabel, OPK_GAME, 0 },
+-    { NULL, OptionsMenu_Text_SoundModeLabel, OPK_GAME, 1 },
+-    { NULL, OptionsMenu_Text_BattleSceneLabel, OPK_GAME, 2 },
+-    { NULL, OptionsMenu_Text_BattleStyleLabel, OPK_GAME, 3 },
+-    { NULL, OptionsMenu_Text_ButtonModeLabel, OPK_GAME, 4 },
+-    { NULL, OptionsMenu_Text_MessageBoxStyleLabel, OPK_GAME, 5 },
+-    { "60 FPS", 0, OPK_PORT, PORT_OPT_FPS60 },
+-    { "SMOOTH 3D", 0, OPK_PORT, PORT_OPT_SMOOTH3D },
+-    { "START WITH", 0, OPK_PORT, PORT_OPT_START_TAB },
+-    { "PIXEL PERFECT", 0, OPK_PORT, PORT_OPT_PIXEL_FIELD },
++    { NULL, NULL, OptionsMenu_Text_TextSpeedLabel, OPK_GAME, 0 },
++    { NULL, NULL, OptionsMenu_Text_SoundModeLabel, OPK_GAME, 1 },
++    { NULL, NULL, OptionsMenu_Text_BattleSceneLabel, OPK_GAME, 2 },
++    { NULL, NULL, OptionsMenu_Text_BattleStyleLabel, OPK_GAME, 3 },
++    { NULL, NULL, OptionsMenu_Text_ButtonModeLabel, OPK_GAME, 4 },
++    { NULL, NULL, OptionsMenu_Text_MessageBoxStyleLabel, OPK_GAME, 5 },
++    { "60 FPS", "60 FPS", 0, OPK_PORT, PORT_OPT_FPS60 },
++    { "SMOOTH 3D", "GLATTES 3D", 0, OPK_PORT, PORT_OPT_SMOOTH3D },
++    { "START WITH", "STARTANSICHT", 0, OPK_PORT, PORT_OPT_START_TAB },
++    { "PIXEL PERFECT", "PIXELGENAU", 0, OPK_PORT, PORT_OPT_PIXEL_FIELD },
+ };
+ 
+ static const OptionsCard sEnhancementCards[] = {
+-    { "SPEED", 0, OPK_PORT, PORT_OPT_SPEED },
+-    { "EXP ON CATCH", 0, OPK_PORT, PORT_OPT_EXP_ON_CATCH },
+-    { "PARTY EXP SHARE", 0, OPK_PORT, PORT_OPT_EXP_SHARE },
+-    { "TRADE EVO AT 40", 0, OPK_PORT, PORT_OPT_TRADE_EVO },
+-    { "HMs WITHOUT MOVES", 0, OPK_PORT, PORT_OPT_HM_FREE },
+-    { "AUTO-RUN", 0, OPK_PORT, PORT_OPT_AUTO_RUN },
+-    { "FOLLOWER", 0, OPK_PORT, PORT_OPT_FOLLOWER },
++    { "SPEED", "TEMPO", 0, OPK_PORT, PORT_OPT_SPEED },
++    { "EXP ON CATCH", "FANG-EP", 0, OPK_PORT, PORT_OPT_EXP_ON_CATCH },
++    { "PARTY EXP SHARE", "TEAM-EP-TEILER", 0, OPK_PORT, PORT_OPT_EXP_SHARE },
++    { "TRADE EVO AT 40", "TAUSCH-ENTW. LV40", 0, OPK_PORT, PORT_OPT_TRADE_EVO },
++    { "HMs WITHOUT MOVES", "VMs OHNE ATTACKE", 0, OPK_PORT, PORT_OPT_HM_FREE },
++    { "AUTO-RUN", "AUTO-LAUFEN", 0, OPK_PORT, PORT_OPT_AUTO_RUN },
++    { "FOLLOWER", "BEGLEITER", 0, OPK_PORT, PORT_OPT_FOLLOWER },
+ };
+ 
+ static const OptionsCard sCheatCards[] = {
+-    { "ALWAYS CATCH", 0, OPK_PORT, PORT_OPT_ALWAYS_CATCH },
+-    { "INSTANT VICTORY", 0, OPK_PORT, PORT_OPT_INSTANT_VICTORY },
+-    { "FAST EGGS", 0, OPK_PORT, PORT_OPT_FAST_EGGS },
+-    { "INFINITE MONEY", 0, OPK_PORT, PORT_OPT_INFINITE_MONEY },
+-    { "GIVE ITEMS", 0, OPK_ACTION, OPA_OPEN_GIVE },
+-    { "WILD ENCOUNTERS", 0, OPK_PORT, PORT_OPT_ENCOUNTERS },
+-    { "SHINY ODDS", 0, OPK_PORT, PORT_OPT_SHINY },
++    { "ALWAYS CATCH", "IMMER FANGEN", 0, OPK_PORT, PORT_OPT_ALWAYS_CATCH },
++    { "INSTANT VICTORY", "SOFORT-SIEG", 0, OPK_PORT, PORT_OPT_INSTANT_VICTORY },
++    { "FAST EGGS", "SCHNELLE EIER", 0, OPK_PORT, PORT_OPT_FAST_EGGS },
++    { "INFINITE MONEY", "UNENDLICH GELD", 0, OPK_PORT, PORT_OPT_INFINITE_MONEY },
++    { "GIVE ITEMS", "ITEMS GEBEN", 0, OPK_ACTION, OPA_OPEN_GIVE },
++    { "WILD ENCOUNTERS", "WILDE POK`MON", 0, OPK_PORT, PORT_OPT_ENCOUNTERS },
++    { "SHINY ODDS", "SHINY-CHANCE", 0, OPK_PORT, PORT_OPT_SHINY },
+ };
+ 
+ static const OptionsCard sGiveCards[] = {
+-    { "GIVE ITEMS", 0, OPK_ACTION, OPA_BACK },
+-    { "POCKET", 0, OPK_GIVE, OPG_POCKET },
+-    { "ITEM", 0, OPK_GIVE, OPG_ITEM },
+-    { "HOW MANY", 0, OPK_GIVE, OPG_COUNT },
+-    { "GIVE", 0, OPK_ACTION, OPA_GIVE },
++    { "GIVE ITEMS", "ITEMS GEBEN", 0, OPK_ACTION, OPA_BACK },
++    { "POCKET", "TASCHE", 0, OPK_GIVE, OPG_POCKET },
++    { "ITEM", "ITEM", 0, OPK_GIVE, OPG_ITEM },
++    { "HOW MANY", "ANZAHL", 0, OPK_GIVE, OPG_COUNT },
++    { "GIVE", "GEBEN", 0, OPK_ACTION, OPA_GIVE },
+ };
+ 
+ static const OptionsPageDef sOptionsPages[OP_PAGE_COUNT] = {
+-    [OP_PAGE_SETTINGS] = { "SETTINGS", sSettingsCards, 6, NELEMS(sSettingsCards) },
+-    [OP_PAGE_ENHANCEMENTS] = { "ENHANCEMENTS", sEnhancementCards, 4, NELEMS(sEnhancementCards) },
+-    [OP_PAGE_CHEATS] = { "CHEATS 1/2", sCheatCards, 4, NELEMS(sCheatCards) },
+-    [OP_PAGE_GIVE] = { "CHEATS 2/2", sGiveCards, 5, NELEMS(sGiveCards) },
++    [OP_PAGE_SETTINGS] = { "SETTINGS", "OPTIONEN", sSettingsCards, 6, NELEMS(sSettingsCards) },
++    [OP_PAGE_ENHANCEMENTS] = { "ENHANCEMENTS", "EXTRAS", sEnhancementCards, 4, NELEMS(sEnhancementCards) },
++    [OP_PAGE_CHEATS] = { "CHEATS 1/2", "CHEATS 1/2", sCheatCards, 4, NELEMS(sCheatCards) },
++    [OP_PAGE_GIVE] = { "CHEATS 2/2", "CHEATS 2/2", sGiveCards, 5, NELEMS(sGiveCards) },
+ };
+ 
+ // The tabs: x0, x1 (rows 2-21).
+@@ -222,11 +226,16 @@ static const u8 sOptionsColumns[2][2] = { { 2, 126 }, { 129, 253 } };
+ 
+ // The port's settings' values, in its letters (` is é; < and > the arrows).
+ static const char *const sFpsValues[] = { "OFF", "ON" };
++static const char *const sFpsValuesDe[] = { "AUS", "EIN" };
+ static const char *const sSmoothValues[] = { "OFF", "3D ONLY", "ON" };
++static const char *const sSmoothValuesDe[] = { "AUS", "NUR 3D", "EIN" };
+ static const char *const sStartTabValues[] = { "MAP", "POK`TCH" };
++static const char *const sStartTabValuesDe[] = { "KARTE", "POK`TCH" };
+ static const char *const sSpeedValues[] = { "1x", "1.5x", "2x", "3x", "4x" };
+ static const char *const sEncounterValues[] = { "NORMAL", "OFF", "1/4", "1/2", "2x" };
++static const char *const sEncounterValuesDe[] = { "NORMAL", "AUS", "1/4", "1/2", "2x" };
+ static const char *const sShinyValues[] = { "1/8192", "1/4096", "1/1024", "1/256", "1/64", "ALWAYS" };
++static const char *const sShinyValuesDe[] = { "1/8192", "1/4096", "1/1024", "1/256", "1/64", "IMMER" };
+ 
+ // The game's six: their values' first entry and how many.
+ static const u16 sGameValueEntry[6] = {
+@@ -243,6 +252,7 @@ static const u8 sGameValueCount[6] = { 3, 2, 2, 2, 3, 20 };
+ // event's way).
+ static const u8 sGivePockets[] = { POCKET_ITEMS, POCKET_MEDICINE, POCKET_BALLS, POCKET_TMHMS, POCKET_BERRIES, POCKET_MAIL, POCKET_BATTLE_ITEMS };
+ static const char *const sGivePocketNames[] = { "ITEMS", "MEDICINE", "POK` BALLS", "TMs & HMs", "BERRIES", "MAIL", "BATTLE ITEMS" };
++static const char *const sGivePocketNamesDe[] = { "ITEMS", "MEDIZIN", "POK`BÄLLE", "TMs & VMs", "BEEREN", "BRIEFE", "KAMPFITEMS" };
+ #define OP_GIVE_POCKETS NELEMS(sGivePockets)
+ #define OP_GIVE_MAX     99
+ 
+@@ -289,7 +299,21 @@ static void OptionsPanel_SetLetters(String *string, const char *letters)
+         int c = (unsigned char)*letters;
+         charcode_t code;
+ 
+-        if (c >= 'A' && c <= 'Z') {
++        if (c == 0xC3 && letters[1]) {
++            int n = (unsigned char)*++letters;
++
++            switch (n) {
++            case 0x84: code = 0x0163; break; // Ä
++            case 0x96: code = 0x0175; break; // Ö
++            case 0x9C: code = 0x017B; break; // Ü
++            case 0x9F: code = 0x017E; break; // ß
++            case 0xA4: code = 0x0183; break; // ä
++            case 0xA9: code = 0x0188; break; // é
++            case 0xB6: code = 0x0195; break; // ö
++            case 0xBC: code = 0x019B; break; // ü
++            default: continue;
++            }
++        } else if (c >= 'A' && c <= 'Z') {
+             code = 0x12B + (c - 'A');
+         } else if (c >= 'a' && c <= 'z') {
+             code = 0x145 + (c - 'a');
+@@ -462,21 +486,23 @@ static void OptionsPanel_SetGameValue(OptionsPanel *panel, int k, int value)
+ 
+ static const char *OptionsPanel_PortValueName(int id, int value)
+ {
++    BOOL de = NitroPort_IsGerman();
++
+     switch (id) {
+     case PORT_OPT_FPS60:
+-        return sFpsValues[value];
++        return (de ? sFpsValuesDe : sFpsValues)[value];
+     case PORT_OPT_SMOOTH3D:
+-        return sSmoothValues[value];
++        return (de ? sSmoothValuesDe : sSmoothValues)[value];
+     case PORT_OPT_START_TAB:
+-        return sStartTabValues[value];
++        return (de ? sStartTabValuesDe : sStartTabValues)[value];
+     case PORT_OPT_SPEED:
+         return sSpeedValues[value];
+     case PORT_OPT_ENCOUNTERS:
+-        return sEncounterValues[value];
++        return (de ? sEncounterValuesDe : sEncounterValues)[value];
+     case PORT_OPT_SHINY:
+-        return sShinyValues[value];
++        return (de ? sShinyValuesDe : sShinyValues)[value];
+     default:
+-        return sFpsValues[value != 0]; // (OFF, ON)
++        return (de ? sFpsValuesDe : sFpsValues)[value != 0];
+     }
+ }
+ 
+@@ -536,7 +562,7 @@ static BOOL OptionsPanel_CardValue(OptionsPanel *panel, const OptionsCard *card)
+         return TRUE;
+     case OPK_GIVE:
+         if (card->id == OPG_POCKET) {
+-            OptionsPanel_SetLetters(panel->text, sGivePocketNames[panel->givePocket]);
++            OptionsPanel_SetLetters(panel->text, (NitroPort_IsGerman() ? sGivePocketNamesDe : sGivePocketNames)[panel->givePocket]);
+         } else if (card->id == OPG_ITEM) {
+             int item = OptionsPanel_GiveItem(panel);
+ 
+@@ -549,15 +575,17 @@ static BOOL OptionsPanel_CardValue(OptionsPanel *panel, const OptionsCard *card)
+             String_FormatInt(panel->text, panel->giveHowMany, 2, PADDING_MODE_NONE, CHARSET_MODE_EN);
+         }
+         return TRUE;
+-    default:
++    default: {
++        BOOL de = NitroPort_IsGerman();
+         OptionsPanel_SetLetters(panel->text,
+-            card->id == OPA_OPEN_GIVE ? "TAP TO OPEN"
+-                : card->id == OPA_BACK ? "BACK TO CHEATS"
+-                : panel->giveDone > 0 ? "GIVEN"
+-                : panel->giveDone < 0 ? "NO ROOM"
+-                                      : "TAP TO GIVE");
++            card->id == OPA_OPEN_GIVE ? (de ? "TIPPEN ZUM ÖFFNEN" : "TAP TO OPEN")
++                : card->id == OPA_BACK ? (de ? "ZURÜCK ZU CHEATS" : "BACK TO CHEATS")
++                : panel->giveDone > 0 ? (de ? "ERHALTEN" : "GIVEN")
++                : panel->giveDone < 0 ? (de ? "KEIN PLATZ" : "NO ROOM")
++                                      : (de ? "TIPPEN ZUM GEBEN" : "TAP TO GIVE"));
+         return FALSE;
+     }
++    }
+ }
+ 
+ static void OptionsPanel_AddRect(OptionsPanel *panel, int x0, int y0, int x1, int y1, int tab, int card, int step)
+@@ -689,7 +717,8 @@ static void OptionsPanel_Draw(OptionsPanel *panel)
+     for (k = 0; k < 3; k++) {
+         int x0 = sOptionsTabs[k][0], x1 = sOptionsTabs[k][1];
+         int shown = panel->page == OP_PAGE_GIVE ? OP_PAGE_CHEATS : panel->page;
+-        const char *name = k == OP_PAGE_CHEATS && panel->page == OP_PAGE_GIVE ? sOptionsPages[OP_PAGE_GIVE].tab : sOptionsPages[k].tab;
++        const OptionsPageDef *tabDef = &sOptionsPages[k == OP_PAGE_CHEATS && panel->page == OP_PAGE_GIVE ? OP_PAGE_GIVE : k];
++        const char *name = NitroPort_IsGerman() ? tabDef->tabDe : tabDef->tab;
+ 
+         OptionsPanel_SetLetters(panel->text, name);
+ 
+@@ -716,7 +745,7 @@ static void OptionsPanel_Draw(OptionsPanel *panel)
+         OptionsPanel_CardFill(panel, x0, y0, x1, y1, OPC_WHITE);
+ 
+         if (card->name != NULL) {
+-            OptionsPanel_SetLetters(panel->text, card->name);
++            OptionsPanel_SetLetters(panel->text, NitroPort_IsGerman() ? card->nameDe : card->name);
+         } else {
+             MessageLoader_GetString(panel->loader, card->entry, panel->text);
+         }
+diff --git a/src/port_follower.c b/src/port_follower.c
+index 7384055..96addc4 100644
+--- a/src/port_follower.c
++++ b/src/port_follower.c
+@@ -1644,12 +1644,27 @@ static void PortFollower_UpdateEmote(FieldSystem *fieldSystem)
+     sEmoteLeft--;
+ }
+ 
++extern BOOL NitroPort_IsGerman(void);
++
+ static void PortFollower_AppendLetters(String *string, const char *letters)
+ {
+     for (; *letters; letters++) {
+         int c = (unsigned char)*letters;
+ 
+-        if (c >= 'A' && c <= 'Z') {
++        if (c == 0xC3 && letters[1]) {
++            int n = (unsigned char)*++letters;
++
++            switch (n) {
++            case 0x84: String_AppendChar(string, 0x0163); break; // Ä
++            case 0x96: String_AppendChar(string, 0x0175); break; // Ö
++            case 0x9C: String_AppendChar(string, 0x017B); break; // Ü
++            case 0x9F: String_AppendChar(string, 0x017E); break; // ß
++            case 0xA4: String_AppendChar(string, 0x0183); break; // ä
++            case 0xA9: String_AppendChar(string, 0x0188); break; // é
++            case 0xB6: String_AppendChar(string, 0x0195); break; // ö
++            case 0xBC: String_AppendChar(string, 0x019B); break; // ü
++            }
++        } else if (c >= 'A' && c <= 'Z') {
+             String_AppendChar(string, 0x12B + (c - 'A'));
+         } else if (c >= 'a' && c <= 'z') {
+             String_AppendChar(string, 0x145 + (c - 'a'));
+@@ -1657,6 +1672,10 @@ static void PortFollower_AppendLetters(String *string, const char *letters)
+             String_AppendChar(string, 0x1DE);
+         } else if (c == '.') {
+             String_AppendChar(string, 0x1AE);
++        } else if (c == ',') {
++            String_AppendChar(string, 0x1AD);
++        } else if (c == '-') {
++            String_AppendChar(string, 0x1BE);
+         } else if (c == '!') {
+             String_AppendChar(string, 0x1AB);
+         } else if (c == '?') {
+@@ -1674,28 +1693,29 @@ typedef struct PortFollowerLine {
+     u8 emote;
+     u8 hop;
+     const char *words;
++    const char *wordsDe;
+ } PortFollowerLine;
+ 
+-static const PortFollowerLine sUnwell = { EMOTE_DOTS, FALSE, " doesn't seem\nto be feeling well." };
+-static const PortFollowerLine sFound = { EMOTE_EXCLAIM, TRUE, " seems to have\nfound something!" };
++static const PortFollowerLine sUnwell = { EMOTE_DOTS, FALSE, " doesn't seem\nto be feeling well.", " fühlt sich wohl\nnicht so gut." };
++static const PortFollowerLine sFound = { EMOTE_EXCLAIM, TRUE, " seems to have\nfound something!", " scheint etwas\ngefunden zu haben!" };
+ static const PortFollowerLine sFriendship[] = {
+-    { EMOTE_HEART, TRUE, " is overjoyed\nto be walking with you!" },
+-    { EMOTE_NOTE, TRUE, " looks very happy." },
+-    { EMOTE_EXCLAIM, FALSE, " is happy\nto see you." },
+-    { EMOTE_DOTS, FALSE, " is keeping\nan eye on you." },
++    { EMOTE_HEART, TRUE, " is overjoyed\nto be walking with you!", " freut sich riesig,\nmit dir zu reisen!" },
++    { EMOTE_NOTE, TRUE, " looks very happy.", " sieht sehr glücklich aus." },
++    { EMOTE_EXCLAIM, FALSE, " is happy\nto see you.", " freut sich,\ndich zu sehen." },
++    { EMOTE_DOTS, FALSE, " is keeping\nan eye on you.", " behält dich\nim Auge." },
+ };
+-static const PortFollowerLine sRainLover = { EMOTE_NOTE, TRUE, " is splashing\nhappily in the rain!" };
+-static const PortFollowerLine sRain = { EMOTE_DOTS, FALSE, " is shaking off\nthe rain." };
+-static const PortFollowerLine sSnowLover = { EMOTE_NOTE, TRUE, " is happily\nplaying in the snow!" };
+-static const PortFollowerLine sSnow = { EMOTE_DOTS, FALSE, " looks a little cold." };
+-static const PortFollowerLine sDust = { EMOTE_DOTS, FALSE, " is squinting\nthrough the dust." };
+-static const PortFollowerLine sFog = { EMOTE_QUESTION, FALSE, " is peering\nthrough the fog." };
+-static const PortFollowerLine sCave = { EMOTE_QUESTION, FALSE, " is listening\nto the echoes." };
+-static const PortFollowerLine sCenter = { EMOTE_NOTE, FALSE, " looks relaxed\nin here." };
+-static const PortFollowerLine sNightOwl = { EMOTE_EXCLAIM, TRUE, " seems livelier\nat night!" };
+-static const PortFollowerLine sSleepy = { EMOTE_DOTS, FALSE, " looks sleepy." };
+-static const PortFollowerLine sMorning = { EMOTE_EXCLAIM, TRUE, " seems full of\nenergy this morning!" };
+-static const PortFollowerLine sOutdoors = { EMOTE_NOTE, FALSE, " is enjoying\nthe fresh air." };
++static const PortFollowerLine sRainLover = { EMOTE_NOTE, TRUE, " is splashing\nhappily in the rain!", " planscht fröhlich\nim Regen!" };
++static const PortFollowerLine sRain = { EMOTE_DOTS, FALSE, " is shaking off\nthe rain.", " schüttelt den\nRegen ab." };
++static const PortFollowerLine sSnowLover = { EMOTE_NOTE, TRUE, " is happily\nplaying in the snow!", " tollt fröhlich\nim Schnee herum!" };
++static const PortFollowerLine sSnow = { EMOTE_DOTS, FALSE, " looks a little cold.", " scheint etwas\nzu frieren." };
++static const PortFollowerLine sDust = { EMOTE_DOTS, FALSE, " is squinting\nthrough the dust.", " blinzelt durch\nden Staub." };
++static const PortFollowerLine sFog = { EMOTE_QUESTION, FALSE, " is peering\nthrough the fog.", " späht durch\nden Nebel." };
++static const PortFollowerLine sCave = { EMOTE_QUESTION, FALSE, " is listening\nto the echoes.", " lauscht dem Echo." };
++static const PortFollowerLine sCenter = { EMOTE_NOTE, FALSE, " looks relaxed\nin here.", " wirkt hier drin\nganz entspannt." };
++static const PortFollowerLine sNightOwl = { EMOTE_EXCLAIM, TRUE, " seems livelier\nat night!", " wirkt nachts\nbesonders munter!" };
++static const PortFollowerLine sSleepy = { EMOTE_DOTS, FALSE, " looks sleepy.", " sieht müde aus." };
++static const PortFollowerLine sMorning = { EMOTE_EXCLAIM, TRUE, " seems full of\nenergy this morning!", " ist heute Morgen\nvoller Energie!" };
++static const PortFollowerLine sOutdoors = { EMOTE_NOTE, FALSE, " is enjoying\nthe fresh air.", " genießt die\nfrische Luft." };
+ 
+ static BOOL PortFollower_HasType(Pokemon *mon, int type)
+ {
+@@ -1838,10 +1858,10 @@ static BOOL PortFollower_TalkTask(FieldTask *task)
+ 
+                 Bag_TryAddItem(SaveData_GetBag(fieldSystem->saveData), talk->item, 1, HEAP_ID_FIELD2);
+                 String_Clear(talk->string);
+-                PortFollower_AppendLetters(talk->string, "You found\n");
++                PortFollower_AppendLetters(talk->string, NitroPort_IsGerman() ? "Du hast " : "You found\n");
+                 Item_LoadName(name, talk->item, HEAP_ID_FIELD2);
+                 String_Concat(talk->string, name);
+-                PortFollower_AppendLetters(talk->string, "!");
++                PortFollower_AppendLetters(talk->string, NitroPort_IsGerman() ? "\ngefunden!" : "!");
+                 String_Free(name);
+                 talk->item = ITEM_NONE;
+                 FieldMessage_ClearWindow(&talk->window);
+@@ -1921,7 +1941,7 @@ BOOL PortFollower_TryTalk(FieldSystem *fieldSystem)
+     Pokemon_GetValue(mon, MON_DATA_NICKNAME_STRING, name);
+     String_Concat(talk->string, name);
+     String_Free(name);
+-    PortFollower_AppendLetters(talk->string, line->words);
++    PortFollower_AppendLetters(talk->string, NitroPort_IsGerman() ? line->wordsDe : line->words);
+ 
+     // (it turns to the player, its cry, its bubble, a hop when it's happy)
+     MapObject_Face(mapObj, back);

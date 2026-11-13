@@ -52,6 +52,9 @@ void pak_set_cache_blocks(Pak *pak, uint32_t blocks);
  * been, and their bytes. */
 void pak_stats(const Pak *pak, uint32_t *disk_reads, uint64_t *disk_bytes);
 
+/* Non-zero if the pack was built from the German (CPUD) ROM. */
+int pak_is_german(const Pak *pak);
+
 /* Accepts NULL. */
 void pak_close(Pak *pak);
 

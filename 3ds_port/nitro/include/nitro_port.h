@@ -33,6 +33,9 @@ int NitroPort_Unimplemented(const char *what);
 /* Has `what` been reported? (For tests.) */
 BOOL NitroPort_WasReported(const char *what);
 
+/* TRUE when the mounted data pack was built from the German (CPUD) ROM. */
+BOOL NitroPort_IsGerman(void);
+
 /* ---------------------------------------------------------------- the CPU */
 
 /* The DS CPU's status register, as far as the SDK cares: the mode bits and

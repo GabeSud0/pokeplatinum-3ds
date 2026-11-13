@@ -56,7 +56,7 @@ def check_rom(rom, *, verify: bool = True) -> dict:
     sha1 = hashlib.sha1(rom).hexdigest()
     name = verify_rom.SUPPORTED.get(sha1)
     if name is None and verify:
-        raise ValueError(f"Unsupported ROM (SHA-1 {sha1}): only clean Pokémon Platinum (USA) dumps work")
+        raise ValueError(f"Unsupported ROM (SHA-1 {sha1}): only clean Pokémon Platinum (USA or Germany) dumps work")
     return {"sha1": sha1, "name": name or "(not checked)"}
 
 

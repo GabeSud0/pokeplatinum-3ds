@@ -62,6 +62,7 @@ struct Pak {
     uint32_t slots;        /* the slots in use: PAK_BLOCKS, fewer if memory ran out */
     unsigned char *scratch; /* (for reading several blocks at once) */
     size_t scratch_size;
+    int is_german;
 };
 
 static uint32_t read_u32(const unsigned char *bytes)
@@ -95,9 +96,10 @@ static int matches_sha1(const unsigned char *digest, const char *hex)
 
 static int supported_sha1(const unsigned char *digest)
 {
-    /* Keep these in sync with builder/verify_rom.py (USA Rev 1 and Rev 0). */
+    /* Keep these in sync with builder/verify_rom.py (USA Rev 1/Rev 0 and Germany). */
     return matches_sha1(digest, "0862ec35b24de5c7e2dcb88c9eea0873110d755c") ||
-           matches_sha1(digest, "ce81046eda7d232513069519cb2085349896dec7");
+           matches_sha1(digest, "ce81046eda7d232513069519cb2085349896dec7") ||
+           matches_sha1(digest, "d40f19ac24d67c721a4ab25e1c013154443d75b4");
 }
 
 static int read_exact(FILE *file, void *data, size_t length)
@@ -234,6 +236,7 @@ PakResult pak_open(const char *path, const char *expected_build_id, Pak **out_pa
     pak->slots = PAK_BLOCKS;
     pak->file = file;
     pak->size = file_size;
+    pak->is_german = matches_sha1(header + 44, "d40f19ac24d67c721a4ab25e1c013154443d75b4");
     *out_pak = pak;
     return PAK_OK;
 
@@ -431,6 +434,11 @@ void pak_stats(const Pak *pak, uint32_t *disk_reads, uint64_t *disk_bytes)
 {
     if (disk_reads) *disk_reads = pak != NULL ? pak->disk_reads : 0;
     if (disk_bytes) *disk_bytes = pak != NULL ? pak->disk_bytes : 0;
+}
+
+int pak_is_german(const Pak *pak)
+{
+    return pak != NULL && pak->is_german;
 }
 
 void pak_close(Pak *pak)

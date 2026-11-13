@@ -25,6 +25,44 @@ def u32(data: bytes, offset: int) -> int:
     return struct.unpack_from("<I", data, offset)[0]
 
 
+# The German (CPUD) ROM stores 32 localized NARC archives under resource/ger/...
+# instead of the USA (CPUE) paths expected by src/narc.c and the banner tools.
+GERMAN_PATHS = {
+    "resource/ger/b_plist/b_plist_gra.narc": "battle/graphic/b_plist_gra.narc",
+    "resource/ger/b_plist/pl_b_plist_gra.narc": "battle/graphic/pl_b_plist_gra.narc",
+    "resource/ger/bag/bag_gra.narc": "graphic/bag_gra.narc",
+    "resource/ger/bag/pl_bag_gra.narc": "graphic/pl_bag_gra.narc",
+    "resource/ger/batt_rec/batt_rec_gra.narc": "resource/eng/batt_rec/batt_rec_gra.narc",
+    "resource/ger/battle_graphic/batt_obj.narc": "battle/graphic/batt_obj.narc",
+    "resource/ger/battle_graphic/pl_batt_obj.narc": "battle/graphic/pl_batt_obj.narc",
+    "resource/ger/box/box.narc": "graphic/box.narc",
+    "resource/ger/contest_graphic/contest_bg.narc": "contest/graphic/contest_bg.narc",
+    "resource/ger/contest_graphic/contest_obj.narc": "contest/graphic/contest_obj.narc",
+    "resource/ger/dress_up_graphic/imageclip.narc": "graphic/imageclip.narc",
+    "resource/ger/frontier_graphic/frontier_bg.narc": "resource/eng/frontier_graphic/frontier_bg.narc",
+    "resource/ger/frontier_graphic/frontier_obj.narc": "resource/eng/frontier_graphic/frontier_obj.narc",
+    "resource/ger/mysterycard/mystery.narc": "graphic/mystery.narc",
+    "resource/ger/nameinput/namein.narc": "data/namein.narc",
+    "resource/ger/nutmixer/nutmixer.narc": "graphic/nutmixer.narc",
+    "resource/ger/opening_demo/op_demo.narc": "demo/title/op_demo.narc",
+    "resource/ger/p_status/pl_pst_gra.narc": "graphic/pl_pst_gra.narc",
+    "resource/ger/p_status/pst_gra.narc": "graphic/pst_gra.narc",
+    "resource/ger/pms_aikotoba/pms_aikotoba.narc": "resource/eng/pms_aikotoba/pms_aikotoba.narc",
+    "resource/ger/pokelist/pl_plist_gra.narc": "graphic/pl_plist_gra.narc",
+    "resource/ger/pokelist/plist_gra.narc": "graphic/plist_gra.narc",
+    "resource/ger/pokemon_trade/fld_trade.narc": "fielddata/pokemon_trade/fld_trade.narc",
+    "resource/ger/poketch/poketch.narc": "graphic/poketch.narc",
+    "resource/ger/scratch/scratch.narc": "resource/eng/scratch/scratch.narc",
+    "resource/ger/slot/slot.narc": "data/slot.narc",
+    "resource/ger/title/titledemo.narc": "demo/title/titledemo.narc",
+    "resource/ger/touch_subwindow/touch_subwindow.narc": "graphic/touch_subwindow.narc",
+    "resource/ger/trainer_case/trainer_case.narc": "graphic/trainer_case.narc",
+    "resource/ger/vs_demo/vs_demo_gra.narc": "battle/graphic/vs_demo_gra.narc",
+    "resource/ger/wifi_lobby_minigame/wlmngm_tool.narc": "resource/eng/wifi_lobby_minigame/wlmngm_tool.narc",
+    "resource/ger/zukan/zukan.narc": "resource/eng/zukan/zukan.narc",
+}
+
+
 def parse_nitrofs(data: bytes) -> list[dict]:
     """Return FAT file IDs and safe relative paths from a NitroFS image."""
     if len(data) < 0x200:
@@ -87,7 +125,8 @@ def parse_nitrofs(data: bytes) -> list[dict]:
         start, end = struct.unpack_from("<II", data, fat_off + file_id * 8)
         if end < start or end > len(data):
             raise ValueError("Invalid FAT file extent")
-        result.append({"id": file_id, "path": files[file_id], "size": end - start,
+        path = GERMAN_PATHS.get(files[file_id], files[file_id])
+        result.append({"id": file_id, "path": path, "size": end - start,
                        "offset": start})
     return result
 
