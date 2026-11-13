@@ -1,0 +1,500 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 10:52:53 -0700
+Subject: [PATCH] Small props' and the honey tree's sun shadows; a building's
+ on higher ground re-laid (SDK_PORT_3DS)
+
+A small prop's shadow (a bench, a rock, a sign) is now its outline, as a
+building's: the hull of its model's vertices moved along the light (the
+light's way turned into the model's own coordinates for a prop turned
+about its upright), with a soft edge half as wide, and its own painted
+shadow left out. Its mark gets 0x20000000: the port doesn't lay its
+picture (with the sun to the side a bench's was a sliver).
+
+The honey tree (honey_tree.nsbmd) is three layers over a painted patch,
+as a land tree is: it's drawn through the land's trees' lists
+(LandData_PortDrawTreeProp; its texture treeeff01 among the trees'),
+its shadow the trees' outline. A tree shape with nothing but its stumps
+sends no empty list.
+
+A building's shadow on higher ground was the one on its own ground moved
+up, as long and as far out: the Hallowed Tower's showed as two. Now the
+shadow of what stands above that ground (NitroPort_Gx3dShadowHullPartsFrom),
+for up to two heights found most often on a grid of tiles inside its
+whole outline (first at its corners alone), the same for all its parts.
+---
+ src/overlay005/land_data.c |  14 +-
+ src/overlay005/map_prop.c  | 287 ++++++++++++++++++++++++++++++-------
+ 2 files changed, 250 insertions(+), 51 deletions(-)
+
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 64478e3c..9dcbb3bb 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -77,6 +77,7 @@ extern const void *NitroPort_Gx3dTreeTrunks(const NitroGx3dTreeLists *trees, u32
+ static const char *const sPortTreeTextures[] = {
+     "tree01", "tree2_01", "tree04_2", "tree3_01", "tree3_02",
+     "conttree_b", "conttree_t", "conttree2_b", "conttree2_t", "conttree3_2",
++    "treeeff01",
+ };
+ 
+ // A land model's trees, kept by its material block's address until that
+@@ -292,7 +293,11 @@ static void Port_LandTreeShape(NNSG3dRS *rs)
+         list = NitroPort_Gx3dTreeCanopies(slot->made, k, &bytes);
+ 
+         if (list != NULL) {
+-            NNS_G3dGeSendDL(list, bytes);
++            // (none but its stumps: the honey tree's patch, a shape alone)
++            if (bytes != 0) {
++                NNS_G3dGeSendDL(list, bytes);
++            }
++
+             list = NitroPort_Gx3dTreeStumps(slot->made, k, &bytes);
+             Port_LandTreeList(0x40000002, list, bytes);
+         } else {
+@@ -356,6 +361,13 @@ static void Port_DrawLand(NNSG3dRenderObj *renderObj, const VecFx32 *pos, const
+     }
+ }
+ 
++// A map prop drawn as the land's trees are (map_prop.c: the honey tree,
++// three layers over a painted patch as a land tree is)
++void LandData_PortDrawTreeProp(NNSG3dRenderObj *renderObj, const VecFx32 *pos, const MtxFx33 *rot, const VecFx32 *scale)
++{
++    Port_DrawLand(renderObj, pos, rot, scale);
++}
++
+ #define Easy3D_DrawRenderObj Port_DrawLand
+ #endif
+ 
+diff --git a/src/overlay005/map_prop.c b/src/overlay005/map_prop.c
+index e04b59d3..095f6590 100644
+--- a/src/overlay005/map_prop.c
++++ b/src/overlay005/map_prop.c
+@@ -148,6 +148,8 @@ static u32 MapProp_PortShadowMark(const MapProp *prop, int index, BOOL outdoors)
+ // (in the commands' order: what NitroSystem still holds is sent first)
+ // (a building is being drawn: its own painted shadow is left out, below)
+ static BOOL sPortBuilding = FALSE;
++// (the honey tree is being drawn: as a land tree, MapProp_PortDraw)
++static BOOL sPortTreeProp = FALSE;
+ 
+ static void MapProp_PortMark(u32 mark)
+ {
+@@ -156,6 +158,7 @@ static void MapProp_PortMark(u32 mark)
+ 
+     if (mark == 0) {
+         sPortBuilding = FALSE;
++        sPortTreeProp = FALSE;
+     }
+ }
+ 
+@@ -195,9 +198,28 @@ typedef struct PortHull {
+ static PortHull sPortHulls[PORT_HULL_MODELS];
+ static u32 sPortHullNext = 0;
+ 
+-static const PortHull *MapProp_PortHull(const NNSG3dResMdl *model, const s32 way[3])
++// (a model's shapes' lists, at most 48)
++static u32 MapProp_PortLists(const NNSG3dResMdl *model, const void **lists, u32 *bytes)
+ {
+     const NNSG3dResShp *shapes = NNS_G3dGetShp(model);
++    u32 i, count = shapes->dict.numEntry;
++
++    if (count > 48) {
++        count = 48;
++    }
++
++    for (i = 0; i < count; i++) {
++        const NNSG3dResShpData *shape = NNS_G3dGetShpDataByIdx(shapes, i);
++
++        lists[i] = NNS_G3dGetShpDLPtr(shape);
++        bytes[i] = NNS_G3dGetShpDLSize(shape);
++    }
++
++    return count;
++}
++
++static const PortHull *MapProp_PortHull(const NNSG3dResMdl *model, const s32 way[3])
++{
+     const void *lists[48];
+     u32 bytes[48], i, count;
+     s32 shearX, shearZ, flatY, join;
+@@ -219,19 +241,7 @@ static const PortHull *MapProp_PortHull(const NNSG3dResMdl *model, const s32 way
+         sPortHullNext = (sPortHullNext + 1) % PORT_HULL_MODELS;
+     }
+ 
+-    count = shapes->dict.numEntry;
+-
+-    if (count > 48) {
+-        count = 48;
+-    }
+-
+-    for (i = 0; i < count; i++) {
+-        const NNSG3dResShpData *shape = NNS_G3dGetShpDataByIdx(shapes, i);
+-
+-        lists[i] = NNS_G3dGetShpDLPtr(shape);
+-        bytes[i] = NNS_G3dGetShpDLSize(shape);
+-    }
+-
++    count = MapProp_PortLists(model, lists, bytes);
+     hull->model = model;
+     hull->way[0] = way[0];
+     hull->way[1] = way[1];
+@@ -245,30 +255,82 @@ static const PortHull *MapProp_PortHull(const NNSG3dResMdl *model, const s32 way
+     return hull;
+ }
+ 
+-// The ground higher than a building stands under its shadow's corners
+-// (2026-11-11: laid where the building stands, a tower in a dip, the
+-// Hallowed Tower, and the Galactic building's dishes in their pits, showed
+-// none: the ground round them is higher, over it): the highest there, as a
+-// vertex's y in the model's own coordinates (a quarter of them, a unit
+-// above it), for a second copy of the shadow laid there; 0 where none is
+-// over 4 units higher (or more than 4 tiles: not the same ground). Kept
+-// for the building's place until the sun moves on.
++// The ground higher than a building stands under its shadow (2026-11-11:
++// laid where the building stands, a tower in a dip, the Hallowed Tower,
++// and the Galactic building's dishes in their pits, showed none: the
++// ground round them is higher, over it): up to PORT_GROUND_LEVELS heights
++// of it, over 4 units above where it stands and no more than 64 (the
++// same ground), those found most often on a grid of tiles inside its
++// outline (first at its outline's corners alone: higher ground inside it
++// was missed); for each a copy of the shadow laid there, as a vertex's y
++// in the model's own coordinates (a quarter of them, a unit above it).
++// That copy is the shadow of what stands above that ground, laid on it
++// (NitroPort_Gx3dShadowHullPartsFrom): first the one on the building's
++// own ground moved up, as long and as far out, and the two didn't meet,
++// "Pokemon Tower shadow seems to have 2 shadows", 2026-11-12. Kept for the
++// building's place until the sun moves on.
+ #define PORT_GROUND_PLACES 24
++#define PORT_GROUND_LEVELS 2
++#define PORT_GROUND_SAMPLES 64
++
++typedef struct PortGroundLevel {
++    s32 top;
++    s32 corners[PORT_HULL_PARTS][PORT_HULL_CORNERS][3];
++    u32 count[PORT_HULL_PARTS];
++    u32 parts;
++} PortGroundLevel;
+ 
+ typedef struct PortGround {
+     const PortHull *hull;
+     VecFx32 position;
+     s32 way[3];
+-    s32 top[PORT_HULL_PARTS];
++    PortGroundLevel level[PORT_GROUND_LEVELS];
++    u32 levels;
+ } PortGround;
+ 
+ static PortGround sPortGrounds[PORT_GROUND_PLACES];
+ static u32 sPortGroundNext = 0;
+ 
+-static const PortGround *MapProp_PortGroundOf(const PortHull *hull, const NNSG3dResMdlInfo *info, const VecFx32 *position, const VecFx32 *scale, s32 base)
++extern u32 NitroPort_Gx3dShadowHullPartsFrom(const void *const *lists, const u32 *bytes, u32 count, s32 shearX, s32 shearZ, s32 flatY, s32 join, s32 fromY, s32 (*out)[3], u32 max, u32 *corners, u32 parts);
++
++// (x, z inside one of the hull's parts, in the model's own coordinates)
++static BOOL MapProp_PortInHull(const PortHull *hull, s64 x, s64 z)
++{
++    u32 part, k;
++
++    for (part = 0; part < hull->parts; part++) {
++        int sign = 0;
++        BOOL inside = hull->count[part] >= 3;
++
++        for (k = 0; k < hull->count[part] && inside; k++) {
++            const s32 *a = hull->corners[part][k], *b = hull->corners[part][(k + 1) % hull->count[part]];
++            s64 cross = (s64)(b[0] - a[0]) * (z - a[1]) - (s64)(b[1] - a[1]) * (x - a[0]);
++            int sgn = cross > 0 ? 1 : cross < 0 ? -1 : 0;
++
++            if (sgn != 0) {
++                if (sign == 0) {
++                    sign = sgn;
++                } else if (sgn != sign) {
++                    inside = FALSE;
++                }
++            }
++        }
++
++        if (inside) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++static const PortGround *MapProp_PortGroundOf(const NNSG3dResMdl *model, const PortHull *hull, const NNSG3dResMdlInfo *info, const VecFx32 *position, const VecFx32 *scale, s32 base)
+ {
+     PortGround *ground = NULL;
+-    u32 i, part;
++    fx32 heights[PORT_GROUND_SAMPLES];
++    u32 counts[PORT_GROUND_SAMPLES];
++    u32 i, k, part, found = 0;
++    s64 lo[2], hi[2], step, x, z;
+ 
+     for (i = 0; i < PORT_GROUND_PLACES; i++) {
+         PortGround *g = &sPortGrounds[i];
+@@ -293,31 +355,113 @@ static const PortGround *MapProp_PortGroundOf(const PortHull *hull, const NNSG3d
+     ground->way[0] = hull->way[0];
+     ground->way[1] = hull->way[1];
+     ground->way[2] = hull->way[2];
++    ground->levels = 0;
++
++    if (sPortGroundField == NULL || scale->x != FX32_ONE || scale->y != FX32_ONE || scale->z != FX32_ONE || hull->parts == 0) {
++        return ground;
++    }
++
++    // (the outline's box, in the model's own coordinates; a grid of tiles
++    // over it, at most 24 across and along: made again as the sun moves on,
++    // for every building in view at once)
++    lo[0] = hi[0] = hull->corners[0][0][0];
++    lo[1] = hi[1] = hull->corners[0][0][1];
+ 
+     for (part = 0; part < hull->parts; part++) {
+-        fx32 top = position->y;
++        for (k = 0; k < hull->count[part]; k++) {
++            for (i = 0; i < 2; i++) {
++                if (hull->corners[part][k][i] < lo[i]) {
++                    lo[i] = hull->corners[part][k][i];
++                }
++
++                if (hull->corners[part][k][i] > hi[i]) {
++                    hi[i] = hull->corners[part][k][i];
++                }
++            }
++        }
++    }
+ 
+-        for (i = 0; i < hull->count[part] && sPortGroundField != NULL && scale->y == FX32_ONE; i++) {
+-            fx32 x = position->x + FX_Mul(FX_Mul(hull->corners[part][i][0], info->posScale), scale->x);
+-            fx32 z = position->z + FX_Mul(FX_Mul(hull->corners[part][i][1], info->posScale), scale->z);
+-            fx32 height = position->y;
++    step = FX_Div(16 * FX32_ONE, info->posScale);
++
++    if (step <= 0) {
++        return ground;
++    }
++
++    while ((hi[0] - lo[0]) / step > 24 || (hi[1] - lo[1]) / step > 24) {
++        step *= 2;
++    }
++
++    for (z = lo[1] + step / 2; z < hi[1]; z += step) {
++        for (x = lo[0] + step / 2; x < hi[0]; x += step) {
++            fx32 wx, wz, height;
+             u8 source = CALCULATED_HEIGHT_SOURCE_NONE;
+ 
+-            height = TerrainCollisionManager_GetHeight(sPortGroundField, position->y, x, z, &source);
++            if (!MapProp_PortInHull(hull, x, z)) {
++                continue;
++            }
++
++            wx = position->x + (fx32)(((s64)x * info->posScale) >> FX32_SHIFT);
++            wz = position->z + (fx32)(((s64)z * info->posScale) >> FX32_SHIFT);
++            height = TerrainCollisionManager_GetHeight(sPortGroundField, position->y, wx, wz, &source);
++
++            if (source == CALCULATED_HEIGHT_SOURCE_NONE && !TerrainCollisionManager_PortBesideHeight(sPortGroundField, position->y, wx, wz, &height)) {
++                continue;
++            }
++
++            if (height - position->y <= 4 * FX32_ONE || height - position->y > 64 * FX32_ONE) {
++                continue;
++            }
++
++            // (heights within 2 units of one another: the same ground)
++            for (i = 0; i < found; i++) {
++                if (height - heights[i] <= 2 * FX32_ONE && heights[i] - height <= 2 * FX32_ONE) {
++                    counts[i]++;
++                    break;
++                }
++            }
+ 
+-            if (source == CALCULATED_HEIGHT_SOURCE_NONE && !TerrainCollisionManager_PortBesideHeight(sPortGroundField, position->y, x, z, &height)) {
+-                height = position->y;
++            if (i == found && found < PORT_GROUND_SAMPLES) {
++                heights[found] = height;
++                counts[found] = 1;
++                found++;
+             }
++        }
++    }
+ 
+-            if (height > top && height - position->y <= 64 * FX32_ONE) {
+-                top = height;
++    // (the heights found most often, at least twice)
++    while (ground->levels < PORT_GROUND_LEVELS) {
++        const void *lists[48];
++        u32 bytes[48], count, best = found;
++        PortGroundLevel *level = &ground->level[ground->levels];
++        s32 fromY, shearX, shearZ, flatY, join;
++
++        for (i = 0; i < found; i++) {
++            if (counts[i] >= 2 && (best == found || counts[i] > counts[best])) {
++                best = i;
+             }
+         }
+ 
+-        ground->top[part] = top - position->y > 4 * FX32_ONE ? base + (s32)(FX_Div(top - position->y, info->posScale) / 4) : 0;
++        if (best == found) {
++            break;
++        }
++
++        counts[best] = 0;
++        fromY = (s32)FX_Div(heights[best] - position->y, info->posScale);
++        level->top = base + fromY / 4;
++
++        if (level->top > 32000) {
++            continue;
++        }
++
++        count = MapProp_PortLists(model, lists, bytes);
++        shearX = (s32)((s64)hull->way[0] * hull->way[2] >> 12);
++        shearZ = (s32)((s64)hull->way[1] * hull->way[2] >> 12);
++        flatY = (s32)FX_Div(3 * FX32_ONE / 2, info->posScale);
++        join = (s32)FX_Div(8 * FX32_ONE, info->posScale);
++        level->parts = NitroPort_Gx3dShadowHullPartsFrom(lists, bytes, count, shearX, shearZ, flatY, join, fromY, level->corners[0], PORT_HULL_CORNERS, level->count, PORT_HULL_PARTS);
+ 
+-        if (ground->top[part] > 32000) {
+-            ground->top[part] = 0;
++        if (level->parts > 0) {
++            ground->levels++;
+         }
+     }
+ 
+@@ -389,28 +533,40 @@ static void MapProp_PortHullShadow(const s32 (*corners)[3], u32 n, s32 y, s32 ri
+     NNS_G3dGeEnd();
+ }
+ 
+-static void MapProp_PortBuildingShadow(const MapProp *prop, const VecFx32 *position, const MtxFx33 *rotation, const VecFx32 *scale)
++static BOOL MapProp_PortBuildingShadow(const MapProp *prop, const VecFx32 *position, const MtxFx33 *rotation, const VecFx32 *scale, BOOL small)
+ {
+     const NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(prop->model);
+     const PortHull *hull;
+-    const PortGround *ground;
++    const PortGround *ground = NULL;
+     VecFx32 quarter;
+     s32 way[3], y, rim;
+-    u32 part;
++    u32 part, k;
+ 
+     if (info->posScale <= 0 || !NitroPort_SunWayNow(way)) {
+-        return;
++        return FALSE;
++    }
++
++    if (small) {
++        // (a small prop may stand turned, about its upright: the light's
++        // way turned back into the model's own coordinates)
++        s32 x = way[0], z = way[1];
++
++        way[0] = (s32)(((s64)x * rotation->_00 + (s64)z * rotation->_02) >> FX32_SHIFT);
++        way[1] = (s32)(((s64)x * rotation->_20 + (s64)z * rotation->_22) >> FX32_SHIFT);
+     }
+ 
+     hull = MapProp_PortHull(prop->model, way);
+ 
+     if (hull->parts == 0) {
+-        return;
++        return FALSE;
+     }
+ 
+     y = (s32)(FX_Div(FX32_ONE, info->posScale) / 4);
+-    rim = (s32)(FX_Div(6 * FX32_ONE, info->posScale) / 4);
+-    ground = MapProp_PortGroundOf(hull, info, position, scale, y);
++    rim = (s32)(FX_Div((small ? 3 : 6) * FX32_ONE, info->posScale) / 4);
++
++    if (!small) {
++        ground = MapProp_PortGroundOf(prop->model, hull, info, position, scale, y);
++    }
+     quarter.x = quarter.y = quarter.z = info->posScale * 4;
+ 
+     NNS_G3dGlbSetBaseTrans(position);
+@@ -424,7 +580,7 @@ static void MapProp_PortBuildingShadow(const MapProp *prop, const VecFx32 *posit
+ 
+     for (part = 0; part < hull->parts; part++) {
+         // (kept, on the ground, for the buildings standing in it)
+-        if (sPortSeenCount[sPortSeenNow] < PORT_SEEN_HULLS && scale->x == FX32_ONE && scale->z == FX32_ONE) {
++        if (!small && sPortSeenCount[sPortSeenNow] < PORT_SEEN_HULLS && scale->x == FX32_ONE && scale->z == FX32_ONE) {
+             PortSeenHull *seen = &sPortSeen[sPortSeenNow][sPortSeenCount[sPortSeenNow]++];
+             u32 k;
+ 
+@@ -438,15 +594,20 @@ static void MapProp_PortBuildingShadow(const MapProp *prop, const VecFx32 *posit
+         }
+ 
+         MapProp_PortHullShadow(hull->corners[part], hull->count[part], y, rim);
++    }
+ 
+-        if (ground->top[part] != 0) {
+-            MapProp_PortHullShadow(hull->corners[part], hull->count[part], ground->top[part], rim);
++    // (on the higher ground: what stands above it)
++    for (k = 0; ground != NULL && k < ground->levels; k++) {
++        for (part = 0; part < ground->level[k].parts; part++) {
++            MapProp_PortHullShadow(ground->level[k].corners[part], ground->level[k].count[part], ground->level[k].top, rim);
+         }
+     }
+ 
+     NNS_G3dGePopMtx(1);
+     NNS_G3dGeFlushBuffer();
+     NitroPort_Gx3dTag(0);
++
++    return TRUE;
+ }
+ 
+ // A building's own painted shadow (a see-through dark polygon of its
+@@ -509,10 +670,16 @@ static void MapProp_PortSkipPainted(NNSG3dRS *rs)
+     }
+ }
+ 
++extern void LandData_PortDrawTreeProp(NNSG3dRenderObj *renderObj, const VecFx32 *pos, const MtxFx33 *rot, const VecFx32 *scale);
+ static void MapProp_PortDraw(NNSG3dRenderObj *renderObj, const VecFx32 *position, const MtxFx33 *rotation, const VecFx32 *scale)
+ {
+     BOOL skip = sPortBuilding && renderObj->cbFunc == NULL;
+ 
++    if (sPortTreeProp) {
++        LandData_PortDrawTreeProp(renderObj, position, rotation, scale);
++        return;
++    }
++
+     if (skip) {
+         NNS_G3dRenderObjSetCallBack(renderObj, MapProp_PortSkipPainted, NULL, NNS_G3D_SBC_SHP, NNS_G3D_SBC_CALLBACK_TIMING_A);
+     }
+@@ -534,7 +701,7 @@ static void MapProp_PortBegin(const MapProp *prop, int index, const AreaDataMana
+         if (scale->x <= 0) {
+             mark = 0;
+         } else {
+-            MapProp_PortBuildingShadow(prop, position, rotation, scale);
++            MapProp_PortBuildingShadow(prop, position, rotation, scale, FALSE);
+ 
+             // (standing in another's shadow: drawn in its shade, 0x01000000;
+             // first lit as in the sun there, the Galactic building's dishes in
+@@ -545,8 +712,28 @@ static void MapProp_PortBegin(const MapProp *prop, int index, const AreaDataMana
+         }
+     }
+ 
++    // (the honey tree, honey_tree.nsbmd (26 in map_prop_models.order): its
++    // layers and its shadow as a land tree's; first as a small prop's,
++    // its picture laid on the ground, and with the sun to the side that
++    // was a sliver, 2026-11-12, "Honey Tree Shadows are broken")
++    if (prop->modelID == 26) {
++        mark = 0;
++    } else if ((mark & 0xC0000001) == 0xC0000000 && scale->x > 0 && prop->rotation.x == 0 && prop->rotation.z == 0) {
++        // A small prop's shadow: its outline, as a building's
++        // (MapProp_PortBuildingShadow), its own picture not laid
++        // (0x20000000 in its mark). First its picture laid on the ground,
++        // as a character's: with the sun to the side a bench's was a
++        // sliver, 2026-11-12, "Bench shadows are not working".
++        if (MapProp_PortBuildingShadow(prop, position, rotation, scale, TRUE)) {
++            mark |= 0x20000000;
++        }
++    }
++
+     MapProp_PortMark(mark);
+-    sPortBuilding = (mark & 0xF00000FF) == 0x60000000;
++    // (a building's own painted shadow left out, and a small prop's whose
++    // shadow is its outline)
++    sPortBuilding = (mark & 0xF00000FF) == 0x60000000 || (mark & 0xE0000001) == 0xE0000000;
++    sPortTreeProp = prop->modelID == 26;
+ }
+ 
+ #define Easy3D_DrawRenderObj MapProp_PortDraw
+-- 
+2.43.0
+

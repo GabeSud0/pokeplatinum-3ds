@@ -41,6 +41,7 @@ typedef struct NitroGx3dBatch {
     uint32_t texture_param;       /* 0 when untextured */
     uint32_t palette_base;        /* 0 when untextured or direct colour */
     uint32_t polygon_attr;        /* mode (bits 4-5), depth bits 11/14, fog (15), alpha, ID (24-29) */
+    uint32_t tag;                 /* the game's mark on its triangles (NitroPort_Gx3dTag), 0 none */
     uint8_t translucent;
 } NitroGx3dBatch;
 
@@ -75,6 +76,15 @@ size_t NitroPort_Gx3dBuildBatchesDepths(const NitroGx3dScene *scene,
  * counting from first (where out is in the vertex buffer). Their vertices
  * aren't to be drawn on the screen. Returns the vertices written. */
 size_t NitroPort_Gx3dBuildShadowBatches(const NitroGx3dScene *scene, size_t first,
+                                        NitroGx3dGpuVertex *out, size_t capacity,
+                                        NitroGx3dBatch *batches, size_t max_batches,
+                                        size_t *batch_count);
+/* The scene's marked polygons' whole triangles (tagged_triangles), the
+ * same way: a batch for each run of one mark and state (its tag; whether
+ * it's translucent). Their x and y as to_screen has them (no sprite placed
+ * on pixels, no edge moved out); z as the scene's before its depths'
+ * remap. Not to be drawn: the sun shadows work from them. */
+size_t NitroPort_Gx3dBuildTaggedBatches(const NitroGx3dScene *scene, size_t first,
                                         NitroGx3dGpuVertex *out, size_t capacity,
                                         NitroGx3dBatch *batches, size_t max_batches,
                                         size_t *batch_count);

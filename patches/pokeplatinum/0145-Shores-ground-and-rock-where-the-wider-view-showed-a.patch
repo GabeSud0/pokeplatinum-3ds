@@ -1,0 +1,604 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 13:02:05 -0700
+Subject: [PATCH] Shores: ground and rock where the wider view showed a forest
+ over the sea and a forest on a rock (SDK_PORT_3DS)
+
+East of Veilstone the forest's filler (matrix 563) has its first 8 rows of
+trees standing over the sea, 3 tiles in from its west side: in the wider
+view they floated. North of Solaceon the mountain's filler (586) is a rock
+plain a tile above Route 210's forest with no side: the forest's first
+column stood on the rock.
+
+Veilstone's model (562) has a second sea past its east edge, over the
+forest filler's first 3 columns at 19 (the forest's ground 16, its own sea
+8): that was the sea under those trees, and it covered any ground laid
+there with the trees' shadows. Left out of its list where it's loaded
+(Port_DropVeilstoneNotchSea, the list cut in place): the forest's own
+ground there, with the trees' shadows on it.
+
+A shore is drawn along a line of points (in tiles): a strip of ground out
+from the edge and a slope of rock down from it (or the rock first and the
+ground at its foot), round or square corners where the line turns, the
+textures by name from the area's set or from a loaded map's material
+(Port_AreaTexture, Port_LoadedTexture). East of Veilstone: a grass strip
+along the forest's north side and west of those trees, at the forest's
+ground's height, square corners, edged with Veilstone's own coast
+(seaside3, the wavy dirt edge: its flat top over the grass's edge, its
+wavy side by the grass, its side down to the water). North of Solaceon:
+the rock in two tiers, as Route 210's cliff beside it, the upper to 40, a
+tile of grass at its foot; the plain's last column of squares left out
+(sPortMapCuts) and drawn again as a strip of its top behind the edge,
+only while the shore can be drawn (Port_ShoreCutReady).
+---
+ src/overlay005/land_data.c | 522 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 522 insertions(+)
+
+diff --git a/src/overlay005/land_data.c b/src/overlay005/land_data.c
+index 9dcbb3bb..6e813f14 100644
+--- a/src/overlay005/land_data.c
++++ b/src/overlay005/land_data.c
+@@ -7404,6 +7404,7 @@ typedef struct PortMapCut {
+ } PortMapCut;
+ 
+ static const PortMapCut sPortMapCuts[] = {
++    { 0, 586, 16, 32, 587, TRUE, 24, 32 }, // (the mountain's filler north of Solaceon: its rock plain's last column of squares by Route 210's forest, z 624-639, x 536-543: drawn again with a side down to the forest (sPortShores))
+     { 0, 668, 24, 32, 669 }, // (Route 207's west filler: its last row of ground, z 728-735)
+     { 0, 521, 0, 16, 491, TRUE }, // (Route 211's south filler: its first two rows, z 544-559; its copies under it over the canyon)
+     { 0, 461, 16, 32, 491, TRUE, 8, 32 }, // (and its north filler's last two, z 496-511, over the canyon: x 360-383)
+@@ -7430,6 +7431,8 @@ static void Port_FreeCutCopies(void)
+ 
+ // The loaded map's copy with its rows left out: found, or made now; NULL if
+ // it has none, its pieces' map isn't loaded with them, or it can't be.
++static BOOL Port_ShoreCutReady(const LandDataManager *landDataMan, int mapMatrixIndex);
++
+ static PortPieceCopy *Port_CutCopyOf(const LandDataManager *landDataMan, u8 index)
+ {
+     extern void NitroPort_Log(const char *fmt, ...);
+@@ -7447,6 +7450,10 @@ static PortPieceCopy *Port_CutCopyOf(const LandDataManager *landDataMan, u8 inde
+ 
+     BOOL pieces = FALSE;
+ 
++    if (cut != NULL && !Port_ShoreCutReady(landDataMan, mapMatrixIndex)) {
++        return NULL;
++    }
++
+     for (u8 q = 0; q < QUADRANT_COUNT && cut != NULL && !pieces; q++) {
+         pieces = landDataMan->loadedMaps[q]->mapMatrixIndex == cut->piecesBy && landDataMan->loadedMaps[q]->valid == TRUE
+             && (!Port_HasMapPieces(matrixID, cut->piecesBy) || Port_PieceCopyOf(landDataMan, q) != NULL);
+@@ -7739,10 +7746,524 @@ static void Port_RenderStandInMaps(const LandDataManager *landDataMan)
+ }
+ #endif
+ 
++#ifdef SDK_PORT_3DS
++// Shores (2026-11-12): the forest's filler east of Veilstone (matrix 563)
++// stands on its square right to its north edge, the sea's filler's water
++// lower beside it (and Veilstone's own sea in the notch west of it): in the
++// wider view its first rows of trees stood over the water ("sections of
++// the forest floating, we need to add ground"; asked: a grass strip with a
++// rock cliff down to the water). Drawn here: from the forest's edge (a
++// line of points, in tiles), a strip of its own ground (its texture) out
++// over the water, and from there a slope of rock down under the water,
++// round a corner where the edge turns. Textures by name from the area's
++// set (as its maps are bound to them).
++typedef struct PortShorePoint {
++    s16 x, z;      // (tiles)
++    u8 grass;      // (the ground strip's width from here to the next point, eighths of a tile; 0: the shore's)
++} PortShorePoint;
++
++typedef struct PortShore {
++    u8 matrixID;
++    u16 nearMap;   // (drawn while the player's map is it or next to it)
++    const PortShorePoint *points;
++    u8 count;
++    s8 waterSide;  // (+1: the water left of the way along the points, as seen from above with north up; -1 right)
++    u8 grass;      // (the ground strip's width, in eighths of a tile)
++    u8 slope;      // (the rock slope's run, eighths)
++    s16 groundY, seaY, bottomY; // (world units)
++    const char *groundTex;
++    const char *rockTex;
++    const char *rockPltt; // (its palette's name: NULL, the texture's own)
++    u8 back;              // (and a strip of the land's own top behind the edge, eighths: where its own is left out, sPortMapCuts)
++    const char *backTex;
++    s8 backX, backZ;      // (where the way out is this, unit: the strip behind drawn there only)
++    u8 rockFirst;         // (the rock down from the edge first, the ground strip after it, at the rock's foot)
++    u16 cutMap;           // (the map left out under the strip behind, sPortMapCuts: left whole if the shore can't be drawn; 0 none)
++    u8 square;            // (its corners square, not round)
++    u8 tierRun;           // (the rock in two tiers, as the cliff beside it: the upper one's run, eighths; 0 one)
++    s16 tierY;            // (the step between them, world units)
++    u8 rimEdge;           // (the rock a coast's edge, as Veilstone's own (its texture's edges see-through): its top flat over the ground's edge (tierRun, the ground a unit below it under it), its side down (the rest of the run), lit as the ground, 16 texels a tile along)
++} PortShore;
++
++// (its first 8 rows of trees by Veilstone, x 736-738, stood over Veilstone's
++// second sea there, now left out (Port_DropVeilstoneNotchSea): the strip
++// along the forest's north side and west of those rows, at the forest's
++// own ground's height (its trees' shadows on it), square corners
++// (2026-11-12, "make it a straight corner"), edged with Veilstone's own
++// coast (seaside3, the wavy dirt edge, its wavy side by the grass: "add
++// the dirt edge to the top section ... the wavy part should be looking
++// towards the grass"))
++static const PortShorePoint sPortShoreVeilstoneForest[] = {
++    { 770, 576, 16 }, { 736, 576, 4 }, { 736, 584, 4 },
++};
++
++// (the mountain's filler west of Route 210's forest, north of Solaceon
++// (matrix 586): its rock plain a tile above the forest's floor, no side to
++// it: the trees' first column stood on the rock, 2026-11-12, "the rock
++// looks strange ... it is clashing with the trees". Its side, of rock,
++// down to the forest's floor.)
++static const PortShorePoint sPortShoreSolaceonRock[] = {
++    { 544, 624, 0 }, { 541, 624, 0 }, { 541, 640, 0 },
++};
++
++static const PortShore sPortShores[] = {
++    { 0, 563, sPortShoreVeilstoneForest, NELEMS(sPortShoreVeilstoneForest), -1, 16, 4, 17, 8, 9, "ngrass", "seaside3", NULL, 0, NULL, 0, 0, FALSE, 0, TRUE, 3, 17, TRUE },
++    { 0, 587, sPortShoreSolaceonRock, NELEMS(sPortShoreSolaceonRock), 1, 8, 16, 48, 32, 32, "ngrass", "criffp", "criff", 40, "criff", 1, 0, TRUE, 586, FALSE, 8, 40, FALSE },
++};
++
++// (a texture of the area's map set: its image parameter as the maps' are
++// bound to it, and its palette's base; FALSE if it isn't there)
++static BOOL Port_AreaTexture(const AreaDataManager *area, const char *texName, const char *plttName, u32 *imageParam, u32 *plttBase, int *width, int *height)
++{
++    const NNSG3dResTex *tex = AreaDataManager_GetMapTexture(area);
++    NNSG3dResName name;
++    const NNSG3dResDictTexData *texData;
++    const NNSG3dResDict *dict;
++    u32 vramOffset, i, n = (u32)strlen(texName);
++
++    if (tex == NULL || n > NNS_G3D_RESNAME_SIZE) {
++        return FALSE;
++    }
++
++    memset(&name, 0, sizeof(name));
++    memcpy(name.name, texName, n);
++    texData = NNS_G3dGetTexDataByName(tex, &name);
++
++    if (texData == NULL) {
++        return FALSE;
++    }
++
++    if ((texData->texImageParam & REG_G3_TEXIMAGE_PARAM_TEXFMT_MASK) != (GX_TEXFMT_COMP4x4 << REG_G3_TEXIMAGE_PARAM_TEXFMT_SHIFT)) {
++        vramOffset = NNS_GfdGetTexKeyAddr(tex->texInfo.vramKey) >> NNS_GFD_TEXKEY_ADDR_SHIFT;
++    } else {
++        vramOffset = NNS_GfdGetTexKeyAddr(tex->tex4x4Info.vramKey) >> NNS_GFD_TEXKEY_ADDR_SHIFT;
++    }
++
++    // (repeated both ways)
++    *imageParam = (texData->texImageParam + vramOffset) | (1u << 16) | (1u << 17);
++    *width = 8 << ((texData->texImageParam >> 20) & 7);
++    *height = 8 << ((texData->texImageParam >> 23) & 7);
++    *plttBase = 0;
++
++    // (its palette: the one named as it is with "_pl", else as it is, else
++    // the first whose name starts with its)
++    dict = (const NNSG3dResDict *)((const u8 *)tex + tex->plttInfo.ofsDict);
++
++    for (int pass = 0; pass < 3; pass++) {
++        for (i = 0; i < dict->numEntry; i++) {
++            const NNSG3dResName *pn = NNS_G3dGetResNameByIdx(dict, i);
++            char pl[NNS_G3D_RESNAME_SIZE + 1];
++
++            memcpy(pl, pn->name, NNS_G3D_RESNAME_SIZE);
++            pl[NNS_G3D_RESNAME_SIZE] = 0;
++
++            if (plttName != NULL ? pass == 0 && strcmp(pl, plttName) == 0 : (pass == 0 && strncmp(pl, texName, n) == 0 && strcmp(pl + n, "_pl") == 0)
++                || (pass == 1 && strcmp(pl, texName) == 0)
++                || (pass == 2 && strncmp(pl, texName, n) == 0)) {
++                const NNSG3dResDictPlttData *pd = (const NNSG3dResDictPlttData *)NNS_G3dGetResDataByIdx(dict, i);
++                u16 base = pd->offset, off = (u16)(NNS_GfdGetPlttKeyAddr(tex->plttInfo.vramKey) >> NNS_GFD_PLTTKEY_ADDR_SHIFT);
++
++                if (!(pd->flag & 1)) {
++                    base >>= 1;
++                    off >>= 1;
++                }
++
++                *plttBase = (u16)(base + off);
++                return TRUE;
++            }
++        }
++    }
++
++    return FALSE;
++}
++
++// (the same from a loaded map's material with that texture, as it's bound:
++// its palette as the map has it)
++static BOOL Port_LoadedTexture(const LandDataManager *landDataMan, const char *texName, u32 *imageParam, u32 *plttBase, int *width, int *height)
++{
++    u32 n = (u32)strlen(texName);
++
++    for (u8 q = 0; q < QUADRANT_COUNT && n <= NNS_G3D_RESNAME_SIZE; q++) {
++        const LoadedMap *loadedMap = landDataMan->loadedMaps[q];
++        const NNSG3dResMdl *model = loadedMap->mapRenderObj.resMdl;
++
++        if (loadedMap->mapMatrixIndex == INVALID_MAP_MATRIX_INDEX || loadedMap->valid != TRUE || model == NULL) {
++            continue;
++        }
++
++        const NNSG3dResMat *mat = NNS_G3dGetMat((NNSG3dResMdl *)model);
++        const NNSG3dResDict *textures = (const NNSG3dResDict *)((const u8 *)mat + mat->ofsDictTexToMatList);
++
++        for (u32 t = 0; t < textures->numEntry; t++) {
++            const NNSG3dResName *name = NNS_G3dGetResNameByIdx(textures, t);
++            const NNSG3dResDictTexToMatIdxData *data = (const NNSG3dResDictTexToMatIdxData *)NNS_G3dGetResDataByIdx(textures, t);
++            char nm[NNS_G3D_RESNAME_SIZE + 1];
++
++            memcpy(nm, name->name, NNS_G3D_RESNAME_SIZE);
++            nm[NNS_G3D_RESNAME_SIZE] = 0;
++
++            if (strcmp(nm, texName) != 0 || data->numIdx == 0 || !(data->flag & 1)) {
++                continue;
++            }
++
++            const NNSG3dResMatData *md = NNS_G3dGetMatDataByIdx((NNSG3dResMat *)mat, *((const u8 *)mat + data->offset));
++
++            *imageParam = md->texImageParam | (1u << 16) | (1u << 17);
++            *plttBase = md->texPlttBase;
++            *width = 8 << ((md->texImageParam >> 20) & 7);
++            *height = 8 << ((md->texImageParam >> 23) & 7);
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++// (a point along the shore: the edge's (in tiles, x and z) and the way out
++// over the water, unit length)
++typedef struct PortShoreAt {
++    fx32 x, z, nx, nz; // (the way out: unit; at a square corner the two ways' sum)
++    fx32 gx, gz;       // (the ground strip's far side from it)
++} PortShoreAt;
++
++#define PORT_SHORE_AT 64
++
++static u32 Port_ShoreLine(const PortShore *shore, PortShoreAt *at)
++{
++    u32 n = 0;
++    fx32 lastNx = 0, lastNz = 0, lastW = 0;
++
++    for (u32 k = 0; k + 1 < shore->count; k++) {
++        fx32 dx = (shore->points[k + 1].x - shore->points[k].x) * FX32_ONE, dz = (shore->points[k + 1].z - shore->points[k].z) * FX32_ONE;
++        fx32 len = FX_Sqrt(FX_Mul(dx, dx) + FX_Mul(dz, dz));
++        fx32 ux = FX_Div(dx, len), uz = FX_Div(dz, len);
++        // (out over the water: left of the way is (uz, -ux) with north up and z south)
++        fx32 nx = shore->waterSide > 0 ? uz : -uz, nz = shore->waterSide > 0 ? -ux : ux;
++        fx32 w = (shore->points[k].grass != 0 ? shore->points[k].grass : shore->grass) * FX32_ONE / 8;
++        int steps = (int)(len >> FX32_SHIFT);
++
++        if (k > 0 && n > 0 && n + 4 < PORT_SHORE_AT) {
++            const fx32 cx = shore->points[k].x * FX32_ONE, cz = shore->points[k].z * FX32_ONE;
++
++            if (shore->square) {
++                // (a corner: square, the two strips' far sides meeting)
++                at[n].x = cx;
++                at[n].z = cz;
++                at[n].nx = lastNx + nx;
++                at[n].nz = lastNz + nz;
++                at[n].gx = FX_Mul(lastNx, lastW) + FX_Mul(nx, w);
++                at[n].gz = FX_Mul(lastNz, lastW) + FX_Mul(nz, w);
++                n++;
++            } else {
++                // (a corner: round, from the last way out to this one)
++                s32 a0 = FX_Atan2Idx(lastNz, lastNx), a1 = FX_Atan2Idx(nz, nx);
++                s32 d = (s32)(s16)(u16)(a1 - a0);
++
++                for (int j = 1; j < 4; j++) {
++                    u16 a = (u16)(a0 + d * j / 4);
++
++                    at[n].x = cx;
++                    at[n].z = cz;
++                    at[n].nx = FX_CosIdx(a);
++                    at[n].nz = FX_SinIdx(a);
++                    at[n].gx = FX_Mul(at[n].nx, w);
++                    at[n].gz = FX_Mul(at[n].nz, w);
++                    n++;
++                }
++            }
++        }
++
++        // (along it, a point a tile; a square corner's own point taken)
++        for (int j = k > 0 && shore->square ? 1 : 0; j <= steps && n < PORT_SHORE_AT; j++) {
++            if (j == steps && k + 2 < shore->count && shore->square) {
++                break;
++            }
++
++            at[n].x = shore->points[k].x * FX32_ONE + ux * j;
++            at[n].z = shore->points[k].z * FX32_ONE + uz * j;
++            at[n].nx = nx;
++            at[n].nz = nz;
++            at[n].gx = FX_Mul(nx, w);
++            at[n].gz = FX_Mul(nz, w);
++            n++;
++        }
++
++        lastNx = nx;
++        lastNz = nz;
++        lastW = w;
++    }
++
++    return n;
++}
++
++// (the shores' textures that need them: there, for the map left out under one)
++static BOOL Port_ShoreTextures(const LandDataManager *landDataMan, const PortShore *shore, u32 image[3], u32 pltt[3], int w[3], int h[3])
++{
++    const char *names[3] = { shore->groundTex, shore->rockTex, shore->back != 0 ? shore->backTex : NULL };
++    const char *pltts[3] = { NULL, shore->rockPltt, NULL };
++
++    for (int k = 0; k < 3; k++) {
++        if (names[k] != NULL && !Port_LoadedTexture(landDataMan, names[k], &image[k], &pltt[k], &w[k], &h[k])
++            && !Port_AreaTexture(landDataMan->areaDataMan, names[k], pltts[k], &image[k], &pltt[k], &w[k], &h[k])) {
++            return FALSE;
++        }
++    }
++
++    return TRUE;
++}
++
++static BOOL Port_ShoreCutReady(const LandDataManager *landDataMan, int mapMatrixIndex)
++{
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix);
++
++    for (int k = 0; k < (int)NELEMS(sPortShores); k++) {
++        u32 image[3], pltt[3];
++        int w[3], h[3];
++
++        if (sPortShores[k].matrixID == matrixID && sPortShores[k].cutMap == mapMatrixIndex && !Port_ShoreTextures(landDataMan, &sPortShores[k], image, pltt, w, h)) {
++            return FALSE;
++        }
++    }
++
++    return TRUE;
++}
++
++static void Port_RenderShores(const LandDataManager *landDataMan)
++{
++    int matrixID = MapMatrix_GetMatrixID(landDataMan->mapMatrix), width = landDataMan->mapMatrixWidth;
++
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld) {
++        return;
++    }
++
++    for (int k = 0; k < (int)NELEMS(sPortShores); k++) {
++        const PortShore *shore = &sPortShores[k];
++        int here = (int)landDataMan->trackedTargetMapMatrixIndex;
++        PortShoreAt at[PORT_SHORE_AT];
++        u32 groundImage, groundPltt, rockImage, rockPltt, n;
++        int gw, gh, rw, rh;
++
++        if (shore->matrixID != matrixID || here < 0 || here / width - shore->nearMap / width > 1 || shore->nearMap / width - here / width > 1
++            || here % width - shore->nearMap % width > 1 || shore->nearMap % width - here % width > 1) {
++            continue;
++        }
++
++        u32 image[3] = { 0, 0, 0 }, pltt[3] = { 0, 0, 0 }, backImage, backPltt;
++        int w[3], h[3];
++
++        if (!Port_ShoreTextures(landDataMan, shore, image, pltt, w, h)) {
++            continue;
++        }
++
++        // (with a map left out under it: only while it's drawn so, loaded)
++        if (shore->cutMap != 0) {
++            BOOL cut = FALSE;
++
++            for (u8 q = 0; q < QUADRANT_COUNT; q++) {
++                cut |= landDataMan->loadedMaps[q]->mapMatrixIndex == shore->cutMap && Port_CutCopyOf(landDataMan, q) != NULL;
++            }
++
++            if (!cut) {
++                continue;
++            }
++        }
++
++        groundImage = image[0]; groundPltt = pltt[0]; gw = w[0]; gh = h[0];
++        rockImage = image[1]; rockPltt = pltt[1]; rw = w[1]; rh = h[1];
++        backImage = image[2]; backPltt = pltt[2];
++
++        n = Port_ShoreLine(shore, at);
++
++        if (n < 2) {
++            continue;
++        }
++
++        // (a tile a unit, from the first point, the world's offset added)
++        VecFx32 origin = { landDataMan->offset.x + shore->points[0].x * MAP_OBJECT_TILE_SIZE, landDataMan->offset.y, landDataMan->offset.z + shore->points[0].z * MAP_OBJECT_TILE_SIZE };
++        // (8 tiles a unit: a vertex's coordinates in 16 bits reach 64 tiles)
++        VecFx32 tileScale = { MAP_OBJECT_TILE_SIZE * 8, MAP_OBJECT_TILE_SIZE * 8, MAP_OBJECT_TILE_SIZE * 8 };
++        MtxFx33 identity = { FX32_ONE, 0, 0, 0, FX32_ONE, 0, 0, 0, FX32_ONE };
++        VecFx32 one = { FX32_ONE, FX32_ONE, FX32_ONE };
++        fx32 ox = shore->points[0].x * FX32_ONE, oz = shore->points[0].z * FX32_ONE;
++        fx32 groundY = FX_Div(shore->groundY * FX32_ONE, MAP_OBJECT_TILE_SIZE), bottomY = FX_Div(shore->bottomY * FX32_ONE, MAP_OBJECT_TILE_SIZE);
++        fx32 run = shore->slope * FX32_ONE / 8;
++
++        NNS_G3dGlbSetBaseTrans(&origin);
++        NNS_G3dGlbSetBaseRot(&identity);
++        NNS_G3dGlbSetBaseScale(&one);
++        NNS_G3dGlbFlush();
++        NNS_G3dGePushMtx();
++        NNS_G3dGeScaleVec(&tileScale);
++        // (either way round: the side the water is on turns the strips)
++        NNS_G3dGePolygonAttr(GX_LIGHTMASK_0, GX_POLYGONMODE_MODULATE, GX_CULL_NONE, 0, 31, 0);
++        // (as the land models' materials: 25 diffuse, the vertex colour too, 31 ambient)
++        NNS_G3dGeMaterialColorDiffAmb(GX_RGB(25, 25, 25), GX_RGB(31, 31, 31), TRUE);
++        NNS_G3dGeMaterialColorSpecEmi(GX_RGB(0, 0, 0), GX_RGB(0, 0, 0), FALSE);
++
++        for (int part = shore->back != 0 ? -1 : 0; part < (shore->tierRun != 0 ? 3 : 2); part++) {
++            const u32 image = part < 0 ? backImage : part == 0 ? groundImage : rockImage;
++            const int tw = part == 0 ? gw : rw, th = part == 0 ? gh : rh;
++
++            if (part == 0 && shore->grass == 0) {
++                continue;
++            }
++
++            NNS_G3dGeTexImageParam((GXTexFmt)((image >> 26) & 7), GX_TEXGEN_TEXCOORD, (GXTexSizeS)((image >> 20) & 7), (GXTexSizeT)((image >> 23) & 7),
++                GX_TEXREPEAT_ST, GX_TEXFLIP_NONE, (GXTexPlttColor0)((image >> 29) & 1), (image & 0xFFFF) << 3);
++            // (the base as a material keeps it: 8-byte units for a 4-colour palette, 16 else)
++            NNS_G3dGeTexPlttBase((part < 0 ? backPltt : part == 0 ? groundPltt : rockPltt) << (((image >> 26) & 7) == GX_TEXFMT_PLTT4 ? 3 : 4), (GXTexFmt)((image >> 26) & 7));
++            NNS_G3dGeBegin(GX_BEGIN_QUAD_STRIP);
++
++            for (u32 i = 0; i < n; i++) {
++                fx32 x0, z0, y0, x1, z1, y1;
++                s32 s0, t0, s1, t1;
++
++                if (part < 0 && (FX_Mul(at[i].nx, shore->backX * FX32_ONE) + FX_Mul(at[i].nz, shore->backZ * FX32_ONE)) < FX32_ONE * 15 / 16) {
++                    // (the land's top only where its own is left out: the way out there backX, backZ)
++                    continue;
++                }
++
++                if (part < 0) {
++                    // (the land's own top behind the edge, from back there to it; its texture as the ground's)
++                    fx32 back = shore->back * FX32_ONE / 8;
++
++                    x0 = at[i].x - FX_Mul(at[i].nx, back); z0 = at[i].z - FX_Mul(at[i].nz, back);
++                    x1 = at[i].x; z1 = at[i].z;
++                    y0 = y1 = groundY;
++                    s0 = (s32)(((x0 - ox) * 16) >> FX32_SHIFT) + (ox >> FX32_SHIFT) % 2 * 16; t0 = (s32)(((z0 - oz) * 16) >> FX32_SHIFT) + (oz >> FX32_SHIFT) % 2 * 16;
++                    s1 = s0 + (s32)((FX_Mul(at[i].nx, back) * 16) >> FX32_SHIFT); t1 = t0 + (s32)((FX_Mul(at[i].nz, back) * 16) >> FX32_SHIFT);
++                } else if (part == 0) {
++                    // (the ground: from the edge out (or from the rock's foot); its texture 16 texels a tile, as the forest's own)
++                    // (under a coast's edge's top too, a unit below it: its wavy side's see-through texels over the grass)
++                    const fx32 from = shore->rockFirst ? run : 0;
++                    const fx32 under = shore->rimEdge ? shore->tierRun * FX32_ONE / 8 : 0;
++                    const fx32 gx = at[i].gx + FX_Mul(at[i].nx, under), gz = at[i].gz + FX_Mul(at[i].nz, under);
++
++                    x0 = at[i].x + FX_Mul(at[i].nx, from); z0 = at[i].z + FX_Mul(at[i].nz, from);
++                    x1 = x0 + gx; z1 = z0 + gz;
++                    y0 = y1 = (shore->rockFirst ? bottomY : groundY) - (shore->rimEdge ? FX_Div(FX32_ONE, MAP_OBJECT_TILE_SIZE) : 0);
++                    s0 = (s32)(((x0 - ox) * 16) >> FX32_SHIFT) + (ox >> FX32_SHIFT) % 2 * 16; t0 = (s32)(((z0 - oz) * 16) >> FX32_SHIFT) + (oz >> FX32_SHIFT) % 2 * 16;
++                    s1 = s0 + (s32)((gx * 16) >> FX32_SHIFT); t1 = t0 + (s32)((gz * 16) >> FX32_SHIFT);
++                } else {
++                    // (the rock: from the ground's end down and out; its texture along the shore, a tile its width, and down it;
++                    // in two tiers, the upper (part 1) to tierY and the lower (2) from there)
++                    const fx32 tier = shore->tierRun * FX32_ONE / 8, tierY = FX_Div(shore->tierY * FX32_ONE, MAP_OBJECT_TILE_SIZE);
++                    const fx32 from = part == 2 ? tier : 0, to = shore->tierRun != 0 && part == 1 ? tier : run;
++
++                    x0 = at[i].x + (shore->rockFirst ? 0 : at[i].gx) + FX_Mul(at[i].nx, from); z0 = at[i].z + (shore->rockFirst ? 0 : at[i].gz) + FX_Mul(at[i].nz, from);
++                    x1 = x0 + FX_Mul(at[i].nx, to - from); z1 = z0 + FX_Mul(at[i].nz, to - from);
++                    y0 = part == 2 ? tierY : groundY; y1 = shore->tierRun != 0 && part == 1 ? tierY : bottomY;
++                    s0 = s1 = (s32)(shore->rimEdge ? i * tw : i * tw / 2);
++                    // (a coast's edge as Veilstone's own: its texture's top half its flat top over the land's edge, the wavy
++                    // side by the grass; its bottom half its side down to the water)
++                    t0 = shore->rimEdge && part == 2 ? th / 2 : 0; t1 = shore->rimEdge && part == 1 ? th / 2 : th;
++                }
++
++                const BOOL flat = part <= 0 || shore->rimEdge;
++
++                NNS_G3dGeNormal(flat ? 0 : (fx16)(at[i].nx / 2), flat ? FX16_ONE - 1 : (fx16)(FX32_ONE * 7 / 8), flat ? 0 : (fx16)(at[i].nz / 2));
++                NNS_G3dGeTexCoord(s0 * FX32_ONE, t0 * FX32_ONE);
++                NNS_G3dGeVtx((fx16)((x0 - ox) / 8), (fx16)(y0 / 8), (fx16)((z0 - oz) / 8));
++                NNS_G3dGeTexCoord(s1 * FX32_ONE, t1 * FX32_ONE);
++                NNS_G3dGeVtx((fx16)((x1 - ox) / 8), (fx16)(y1 / 8), (fx16)((z1 - oz) / 8));
++            }
++
++            NNS_G3dGeEnd();
++        }
++
++        NNS_G3dGePopMtx(1);
++        NNS_G3dGeFlushBuffer();
++    }
++}
++
++// Veilstone's model (matrix 0, 562) has a second sea, past its east edge
++// over the forest filler's first 3 columns, z 575.5-583.5, at 19 (the
++// forest's ground 16, its own sea 8): the sea under the forest's first
++// trees ("sections of the forest floating"), and over the ground and the
++// trees' shadows the shore laid there (2026-11-12, "the shadows from the
++// trees ... are not affecting the ground"). Left out of its list where it's
++// loaded (the list cut in place, shorter: again when it's read again):
++// the forest's own ground there, with the trees' shadows on it.
++#define PORT_NOTCH_GROUPS 512
++
++static struct {
++    const NNSG3dResMdl *model;
++    u16 shape;
++    u32 size;
++} sPortNotchCut[QUADRANT_COUNT];
++
++static void Port_DropVeilstoneNotchSea(const LandDataManager *landDataMan)
++{
++    static s32 box[PORT_NOTCH_GROUPS][6];
++    static u8 keep[PORT_NOTCH_GROUPS];
++
++    if (NitroPort_WideScreenExtra() == 0 || landDataMan->inDistortionWorld || MapMatrix_GetMatrixID(landDataMan->mapMatrix) != 0) {
++        return;
++    }
++
++    for (u8 q = 0; q < QUADRANT_COUNT; q++) {
++        const LoadedMap *loadedMap = landDataMan->loadedMaps[q];
++        NNSG3dResMdl *model = loadedMap->mapRenderObj.resMdl;
++
++        if (loadedMap->mapMatrixIndex != 562 || loadedMap->valid != TRUE || model == NULL) {
++            continue;
++        }
++
++        NNSG3dResShp *shapes = NNS_G3dGetShp(model);
++
++        // (cut already: the shape's list as it was left)
++        if (sPortNotchCut[q].model == model && sPortNotchCut[q].shape < shapes->dict.numEntry
++            && NNS_G3dGetShpDataByIdx(shapes, sPortNotchCut[q].shape)->sizeDL == sPortNotchCut[q].size) {
++            continue;
++        }
++
++        // (nothing to leave out: its first shape's list as it is, to know it by)
++        sPortNotchCut[q].model = model;
++        sPortNotchCut[q].shape = 0;
++        sPortNotchCut[q].size = shapes->dict.numEntry > 0 ? NNS_G3dGetShpDataByIdx(shapes, 0)->sizeDL : 0;
++
++        for (int i = 0; i < shapes->dict.numEntry; i++) {
++            NNSG3dResShpData *shp = NNS_G3dGetShpDataByIdx(shapes, i);
++            u32 bytes = NNS_G3dGetShpDLSize(shp), n, size = 0;
++            NitroGx3dListSurvey *survey = NitroPort_Gx3dSurveyList(NNS_G3dGetShpDLPtr(shp), bytes);
++            BOOL drop = FALSE;
++
++            n = survey != NULL ? NitroPort_Gx3dSurveyGroups(survey, box, NULL, PORT_NOTCH_GROUPS) : 0;
++
++            for (u32 g = 0; g < n && n < PORT_NOTCH_GROUPS; g++) {
++                // (flat at 19 (1216 of the list's, 1024 a tile), wholly past x 735.75)
++                keep[g] = !(box[g][1] == 1216 && box[g][4] == 1216 && box[g][0] >= 16128);
++                drop |= !keep[g];
++            }
++
++            if (drop) {
++                void *cut = malloc(bytes + 64);
++
++                size = cut != NULL ? NitroPort_Gx3dSurveyTrim(survey, cut, bytes + 64, keep, n, NULL) : 0;
++
++                if (size > 0 && size <= bytes) {
++                    memcpy(NNS_G3dGetShpDLPtr(shp), cut, size);
++                    shp->sizeDL = size;
++                    sPortNotchCut[q].shape = (u16)i;
++                    sPortNotchCut[q].size = size;
++                }
++
++                free(cut);
++            }
++
++            if (survey != NULL) {
++                NitroPort_Gx3dFreeSurvey(survey);
++            }
++        }
++    }
++}
++#endif
++
+ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelAttributes *const modelAttrs)
+ {
+ #ifdef SDK_PORT_3DS
+     sPortLandTreesOff = landDataMan->inDistortionWorld;
++    Port_DropVeilstoneNotchSea(landDataMan);
+ #endif
+     for (u8 i = 0; i < QUADRANT_COUNT; i++) {
+         if (landDataMan->loadedMaps[i]->mapMatrixIndex != INVALID_MAP_MATRIX_INDEX) {
+@@ -7779,6 +8300,7 @@ void LandDataManager_RenderLoadedMaps(const LandDataManager *landDataMan, ModelA
+     Port_RenderExtrudedColumns(landDataMan);
+     Port_RenderStandInMaps(landDataMan);
+     Port_RenderMapPieces(landDataMan);
++    Port_RenderShores(landDataMan);
+     Port_RenderMirroredBesideScenery(landDataMan, modelAttrs);
+     Port_ExtrudeAhead(landDataMan);
+     Port_RenderSceneryMapsLowered(landDataMan);
+-- 
+2.43.0
+

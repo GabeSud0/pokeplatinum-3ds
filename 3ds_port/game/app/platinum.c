@@ -115,6 +115,10 @@ void Platinum_Run(const PlatinumSettings *settings)
     NitroPort_Log("[platinum] save file: %s",
                   settings->savePath != NULL ? settings->savePath : "(none)");
 
+#ifdef PORT_VERSION
+    /* (which build a log is of: the tag and the commit it was made from) */
+    NitroPort_Log("[platinum] build %s", PORT_VERSION);
+#endif
     NitroPort_Log("[platinum] starting the game");
     NitroMain();
     NitroPort_Log("[platinum] NitroMain returned");

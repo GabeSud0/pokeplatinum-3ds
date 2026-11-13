@@ -109,6 +109,18 @@ int main(void)
     CHECK(NitroPort_Option(NITRO_OPT_SPEED) == 0);
     CHECK(NitroPort_Option(NITRO_OPT_ENCOUNTERS) == 4);
 
+    /* SUN SHADOWS: OFF or ON (the FULL of before, 2, is ON), kept in the
+     * file as any setting */
+    NitroPort_OptionSet(NITRO_OPT_SUN_SHADOWS, 9);
+    CHECK(NitroPort_Option(NITRO_OPT_SUN_SHADOWS) == 1);
+    CHECK(NitroPort_OptionsSave() == 1);
+    CHECK(NitroPort_OptionsLoad(path) == 1);
+    CHECK(NitroPort_Option(NITRO_OPT_SUN_SHADOWS) == 1);
+    NitroPort_OptionSet(NITRO_OPT_SUN_SHADOWS, 0);
+    CHECK(NitroPort_OptionsSave() == 1);
+    CHECK(NitroPort_OptionsLoad(path) == 1);
+    CHECK(NitroPort_Option(NITRO_OPT_SUN_SHADOWS) == 0);
+
     /* SPEED above 1x turns 60 FPS off, 1x on again; set by the player in
      * between, it stays as set (and with 60 FPS off to begin with, SPEED
      * leaves it). Kept in the file. */

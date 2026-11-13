@@ -63,6 +63,10 @@ static unsigned sDrawsCut;   /* draws left out for want of room ([perf]) */
 static const char *sStage="idle";
 static u32 sLastDrawFirst,sLastDrawCount,sDraws;
 static void stage(const char *s){__atomic_store_n(&sStage,s,__ATOMIC_RELAXED);}
+/* (the draws made so far; and what drawing the sun shadows takes the
+ * thread that draws, for the [shadow] lines: microseconds, frames, draws) */
+static u32 sDrawsMade;
+static u32 sShadowDrawUs,sShadowDrawFrames,sShadowDraws;
 static void draw_arrays(int first,int count)
 {
     static int told;
@@ -70,6 +74,7 @@ static void draw_arrays(int first,int count)
         if(!told){told=1;NitroPort_Log("[gx3d] a draw of %d vertices at %d in %s: left out",count,first,__atomic_load_n(&sStage,__ATOMIC_RELAXED));}
         return;
     }
+    sDrawsMade++;
     __atomic_store_n(&sLastDrawFirst,(u32)first,__ATOMIC_RELAXED);
     __atomic_store_n(&sLastDrawCount,(u32)count,__ATOMIC_RELAXED);
     __atomic_fetch_add(&sDraws,1,__ATOMIC_RELAXED);
@@ -325,6 +330,48 @@ static void free_edge_copies(void);
 static int make_shadow_spare(void);
 static void free_shadow_spare(void);
 static NitroShadowSetup sShadow;
+/* The steps. 2026-11-09 on a New 3DS: 1 and 2 ran; the receivers hung
+ * its GPU on their first frame, even with no texture on unit 0 (logs
+ * 7ec47860, c79a35be). Now: 1 the map from the scene's own triangles; 2
+ * the whole map; 3 the receivers' pass (depth EQUAL, stencil, blend, fog)
+ * drawn with the scene's own program, no texture, a constant shade; 4 the
+ * same with the receivers' program (its outputs now written once and
+ * whole); 5 the shadow map bound on unit 0 (sampled, shadow parameters
+ * set), its result not used; 6 its result used: the shadows (the painted
+ * and round ones left out); 7 (ON) the cut-outs too, on texture unit 1. */
+#define SHADOW_STEP_PASS    3
+#define SHADOW_STEP_PROGRAM 4
+#define SHADOW_STEP_BOUND   5
+#define SHADOW_STEP_READ    6
+#define SHADOW_STEP_ON      7
+static int shadow_level(void);   /* (the hunt's step: sun shadows, below) */
+static u64 sDecalTicks;          /* (looking for the painted shadows, for the log) */
+/* The sun shadows (SUN SHADOWS: ON, NitroPort_PicaGroundShadows): each
+ * character's sprite (the game's mark on its batch, NitroGx3dBatch.tag)
+ * laid on the ground from the round shadow marked as its own
+ * (NitroPort_ShadowGroundCards), after the scene's vertices, its batches at
+ * sBatches[MAX_BATCHES]; drawn after the opaque polygons, darkening by the
+ * sprite's texture's alpha, once (draw_ground_shadows); the props' and
+ * the land's trees' the same way, a pixel once. A character's
+ * round shadow then left out (sRoundUsed). No shadow map. Worked out from
+ * the marked polygons' whole triangles (sTagBatches, their vertices after
+ * the scene's too, before the shadows': not drawn). */
+static int sGroundMode,sGroundReady;
+/* (the scene's batches of the land's trees' shadows, NITRO_GX3D_TAG_SHADE,
+ * and what a full one takes from each channel: 1 - the hour's shade, times
+ * the characters' darkening at their feet; a vertex's grey is how much of
+ * it there) */
+static unsigned sShadeBatches;
+static u32 sShadeColor=0xFFFFFFFFu;
+static u32 sTreeColor;   /* (and a tree's: NITRO_SHADOW_TREE_BLOB of it) */
+static size_t sGroundBatchCount,sGroundVertices;
+static u64 sGroundTicks;
+static unsigned sGroundScenes,sGroundCards,sGroundFound,sGroundSprites,sGroundMarked;
+static unsigned sGroundProps,sGroundPropsLaid,sGroundFull,sGroundShade,sGroundShadeTris,sGroundTagged,sGroundWhole;
+#define TAG_BATCHES NITRO_GX3D_MAX_TAGGED_TRIANGLES
+static NitroGx3dBatch sTagBatches[TAG_BATCHES];   /* (the marked polygons' whole triangles' batches) */
+static uint8_t sRoundUsed[TAG_BATCHES];
+static unsigned sDecalDecoded;
 static int sShadowReady,sShadowDrawn;        /* (the prepared scene has a ground; its map is drawn) */
 static C3D_Tex *sRecvTex;                    /* (unit 1's texture, as bound) */
 static int sRecvTexKnown;
@@ -386,6 +433,51 @@ static TexEntry sTextures[TEX_CACHE_ENTRIES];
 static size_t sTextureBytes;
 static uint32_t sFrame;
 static NitroGx3dTexBanks sBanks;
+/* (NitroShadowFootRow: a sprite's first row with an opaque texel from its
+ * foot's side, from the texture as the DS samples it. Kept from scene to
+ * scene, with the texture's hash as the cache has it (get_texture: its
+ * bytes', looked at each frame it's drawn): asked again only when the
+ * sprite's picture changes, not sixty times a second for every character;
+ * a texture not in the cache yet is looked at each time) */
+#define FOOT_ROWS_KEPT 64
+static struct { uint32_t param,palette,hash; int s0,s1,t0,t1,row; } sFootRows[FOOT_ROWS_KEPT];
+static unsigned sFootRowsKept,sFootRowsNext;
+static int foot_row(void *ctx,uint32_t param,uint32_t palette,int s0,int s1,int tFrom,int tTo)
+{
+    unsigned i,at=FOOT_ROWS_KEPT;
+    int t,s,sEnd,step=tTo>=tFrom?1:-1,row=-1,known=0;
+    uint32_t hash=0;
+    (void)ctx;
+    for(i=0;i<TEX_CACHE_ENTRIES;i++){
+        const TexEntry *c=&sTextures[i];
+        if(c->used && c->param==param && c->palette==palette){hash=c->hash;known=1;break;}
+    }
+    for(i=0;i<sFootRowsKept;i++){
+        if(sFootRows[i].param==param && sFootRows[i].palette==palette && sFootRows[i].s0==s0 &&
+           sFootRows[i].s1==s1 && sFootRows[i].t0==tFrom && sFootRows[i].t1==tTo){
+            if(known && sFootRows[i].hash==hash)return sFootRows[i].row;
+            at=i;   /* (its picture changed: this one again) */
+            break;
+        }
+    }
+    sEnd=s1-s0>128?s0+128:s1;
+    for(t=tFrom;row<0;t+=step){
+        for(s=s0;s<sEnd;s++){
+            if(NitroPort_Gx3dSampleTexel(&sBanks,param,palette,s,t).alpha){row=t;break;}
+        }
+        if(t==tTo)break;
+    }
+    if(!known)return row;
+    if(at==FOOT_ROWS_KEPT){
+        if(sFootRowsKept<FOOT_ROWS_KEPT)at=sFootRowsKept++;
+        else{at=sFootRowsNext;sFootRowsNext=(sFootRowsNext+1u)%FOOT_ROWS_KEPT;}
+    }
+    sFootRows[at].param=param;sFootRows[at].palette=palette;sFootRows[at].hash=hash;
+    sFootRows[at].s0=s0;sFootRows[at].s1=s1;
+    sFootRows[at].t0=tFrom;sFootRows[at].t1=tTo;
+    sFootRows[at].row=row;
+    return row;
+}
 /* Textures converted (new, or their bytes changed), their texels, and the
  * time it took, for the [perf] line. */
 static volatile u32 sTexConverted;
@@ -428,10 +520,31 @@ static void apply_grade(void)
     for(i=0;i<TEX_CACHE_ENTRIES;i++)free_texture(&sTextures[i]);
 }
 
+/* (the land's trees' shadows' outlines: get_mask, below) */
+#define MASK_ENTRIES 16
+typedef struct MaskEntry {
+    int used;
+    uint32_t param, palette, hash, checkedFrame, lastFrame;
+    C3D_Tex tex;
+    unsigned width, height;
+    int wrapS, wrapT;
+} MaskEntry;
+static MaskEntry sMasks[MASK_ENTRIES];
+static uint32_t *sMaskOut;
+static size_t sMaskOutWords;
+static unsigned sMasksMade;
+static void free_mask(MaskEntry *m)
+{
+    if(!m->used)return;
+    C3D_TexDelete(&m->tex);
+    memset(m,0,sizeof(*m));
+}
 static void clean_up(void)
 {
     int i;
     for(i=0;i<TEX_CACHE_ENTRIES;i++)free_texture(&sTextures[i]);
+    for(i=0;i<MASK_ENTRIES;i++)free_mask(&sMasks[i]);
+    free(sMaskOut);sMaskOut=NULL;sMaskOutWords=0;
     free(sTexLinear);sTexLinear=NULL;sTexLinearWords=0;
     free(sTexTiled);sTexTiled=NULL;sTexTiledWords=0;
     free(sXbrz.src);free(sXbrz.out);free(sXbrz.info);
@@ -459,6 +572,7 @@ static void clean_up(void)
     free_shadow_spare();
     sShadowMode=0;
     NitroPort_SetSunShadows(0);
+    NitroPort_SetShadowReach(0);
     NitroPort_Gx3dSetGrade(NULL);
     free(sGradeTable);sGradeTable=NULL;
     sGradeMode=0;sGradePeriod=sGradeWanted=-1;
@@ -931,6 +1045,82 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     return &e->tex;
 }
 
+/* The land's trees' shadows' outlines (NITRO_GX3D_TAG_SHADE batches: a
+ * tree's own layers laid on the ground with their texture coordinates):
+ * for each tree texture, a copy of its texels' alpha blurred and cut at
+ * its middle (NitroPort_ShadowTreeMask: the leaves' clusters and tiers
+ * kept, their pixel steps and thin tips rounded off, the edge soft),
+ * white, the same size and wrap, sampled smoothly. Made once, again only
+ * if the texture's bytes change; MASK_ENTRIES of them, the least recently
+ * drawn let go. NULL if there's no memory for one. */
+static int mask_wrap(uint32_t param,int repeatBit,int flipBit)
+{
+    if(!(param&(1u<<repeatBit)))return NITRO_SHADOW_WRAP_CLAMP;
+    return (param&(1u<<flipBit))?NITRO_SHADOW_WRAP_MIRROR:NITRO_SHADOW_WRAP_REPEAT;
+}
+static C3D_Tex *get_mask(uint32_t param,uint32_t palette)
+{
+    MaskEntry *m=NULL,*slot=NULL;
+    const unsigned width=NitroPort_Gx3dTexWidth(param),height=NitroPort_Gx3dTexHeight(param);
+    const size_t n=(size_t)width*height;
+    uint32_t hash,*tiled,*lin,*out;
+    int i;
+    if(!param)return NULL;
+    for(i=0;i<MASK_ENTRIES;i++){
+        MaskEntry *c=&sMasks[i];
+        if(c->used && c->param==param && c->palette==palette){m=c;break;}
+        if(!c->used && !slot)slot=c;
+    }
+    if(m && m->checkedFrame==sFrame){m->lastFrame=sFrame;return &m->tex;}
+    hash=NitroPort_Gx3dTextureHash(&sBanks,param,palette);
+    if(m && m->hash==hash){m->checkedFrame=m->lastFrame=sFrame;return &m->tex;}
+    if(m){
+        /* (changed: made again, once the GPU is done with it) */
+        if(in_flight(m->lastFrame))settle();
+        free_mask(m);
+        slot=m;
+    }
+    if(!slot){
+        MaskEntry *oldest=NULL;
+        for(i=0;i<MASK_ENTRIES;i++){
+            MaskEntry *c=&sMasks[i];
+            if(c->lastFrame==sFrame)continue;
+            if(!oldest || c->lastFrame<oldest->lastFrame)oldest=c;
+        }
+        if(!oldest)return NULL;
+        if(in_flight(oldest->lastFrame))settle();
+        free_mask(oldest);
+        slot=oldest;
+    }
+    tiled=scratch(&sTexTiled,&sTexTiledWords,n);
+    lin=scratch(&sTexLinear,&sTexLinearWords,n);
+    out=scratch(&sMaskOut,&sMaskOutWords,n);
+    if(!tiled || !lin || !out)return NULL;
+    if(!C3D_TexInit(&slot->tex,(u16)width,(u16)height,GPU_RGBA8))return NULL;
+    NitroPort_Gx3dDecodeTextureTiled(&sBanks,param,palette,tiled);
+    NitroPort_Gx3dUntileRGBA8(tiled,width,height,lin);
+    if(!NitroPort_ShadowTreeMask(lin,width,height,mask_wrap(param,16,18),mask_wrap(param,17,19),out)){
+        C3D_TexDelete(&slot->tex);
+        return NULL;
+    }
+    NitroPort_Gx3dTileRGBA8(out,width,height,(uint32_t *)slot->tex.data);
+    slot->width=width;
+    slot->height=height;
+    slot->wrapS=mask_wrap(param,16,18);
+    slot->wrapT=mask_wrap(param,17,19);
+    C3D_TexFlush(&slot->tex);
+    C3D_TexSetFilter(&slot->tex,GPU_LINEAR,GPU_LINEAR);
+    C3D_TexSetWrap(&slot->tex,wrap_mode(param,16,18),wrap_mode(param,17,19));
+    slot->used=1;
+    slot->param=param;
+    slot->palette=palette;
+    slot->hash=hash;
+    slot->checkedFrame=slot->lastFrame=sFrame;
+    sMasksMade++;
+    return &slot->tex;
+}
+
+
 /* Polygon modes (attribute bits 4-5) on the colour combiner. */
 static void polygon_combiner(C3D_TexEnv *env,uint32_t attr,int textured,GPU_TEVSRC tex)
 {
@@ -958,6 +1148,17 @@ static void polygon_combiner(C3D_TexEnv *env,uint32_t attr,int textured,GPU_TEVS
 static void set_combiner(uint32_t attr,int textured)
 {
     polygon_combiner(C3D_GetTexEnv(0),attr,textured,GPU_TEXTURE0);
+}
+/* A tree's layers lit by the sun (NITRO_GX3D_TAG_CANOPY batches: the game
+ * sends them with a tint a vertex, darker on the side the light leaves,
+ * brighter on the one it comes to): the tints are half what the colour is
+ * times, so one over 1 can be told; drawn at twice their colour. After
+ * the batch's combiner is set. */
+static void canopy_scale(const NitroGx3dBatch *batch)
+{
+    /* (and a building's walls, NITRO_GX3D_TAG_WALLS: the same) */
+    if(batch->tag==NITRO_GX3D_TAG_CANOPY || NITRO_GX3D_TAG_IS_WALLS(batch->tag))
+        C3D_TexEnvScale(C3D_GetTexEnv(0),C3D_RGB,GPU_TEVSCALE_2);
 }
 
 /* DS 5-bit colour to 8 bits. */
@@ -1339,6 +1540,8 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
         const NitroGx3dBatch *batch=&sBatches[b];
         int textured=batch->texture_param!=0;
         uint32_t attr=batch->polygon_attr;
+        /* (the trees' sun shadows are the compose path's: here, none) */
+        if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
         /* Attribute bit 14: draw where the depth is equal (decals on a
          * surface). The DS allows a small tolerance; LEQUAL is closest. */
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
@@ -1353,6 +1556,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
             }
         }
         set_combiner(attr,textured);
+        canopy_scale(batch);
         batch_fog(attr);
         if(!room_for_draw())break;
         /* The stencil buffer keeps the polygon ID of each pixel's last
@@ -1413,6 +1617,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
             const NitroGx3dBatch *batch=&sBatches[b];
             int textured=batch->texture_param!=0;
             uint32_t attr=batch->polygon_attr;
+            if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
             /* Translucent batches have opaque pixels only at alpha 31:
              * their fully opaque texels. */
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
@@ -1424,6 +1629,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
                 else bind_tex(tex);
             }
             set_combiner(attr,textured);
+            canopy_scale(batch);
             C3D_AlphaTest(true,GPU_GREATER,batch->translucent?254:0);
             C3D_DepthTest(true,GPU_EQUAL,0);
             C3D_StencilTest(true,GPU_ALWAYS,(int)((attr>>24)&63u),0xFF,0xFF);
@@ -1647,6 +1853,57 @@ void NitroPort_PicaProfilePrepare(const NitroGx3dScene *scene)
                   best[10]*ms,best[6]*ms,best[7]*ms,best[11]*ms);
 }
 
+/* The game's own painted shadows in the prepared scene (sDecal[b]: the
+ * batch is; sShadow set up for the scene): first whether the triangle is
+ * see-through and lying flat (cheap), and only then whether its texture is
+ * dark, each texture and palette decoded once a scene (it was each
+ * translucent batch's, each scene: ~18 ms a scene on a New 3DS, log
+ * d3cc0e3f). The sun shadow map leaves them out; the sun shadows find the
+ * characters' round shadows among them. Returns the batches found. */
+static unsigned find_decals(int slot)
+{
+    u64 d0=svcGetSystemTick();
+    struct { uint32_t param,palette; uint8_t dark; } seen[16];
+    unsigned nseen=0,k,decoded=0,found=0;
+    size_t b;
+    NitroPort_Gx3dMapTextureBanks(&sBanks);
+    for(b=0;b<sPreparedBatches;b++){
+        const NitroGx3dBatch *batch=&sBatches[b];
+        uint32_t param=batch->texture_param;
+        unsigned fmt=NitroPort_Gx3dTexFormat(param);
+        size_t texels=fmt?(size_t)NitroPort_Gx3dTexWidth(param)*NitroPort_Gx3dTexHeight(param):0;
+        int dark=-1;
+        sDecal[b]=0;
+        if(!batch->translucent||!batch->count||texels>4096u)continue;
+        if(!NitroPort_ShadowDecalShape(sVertices[slot][batch->first].position,sizeof(NitroGx3dGpuVertex),
+                                       (batch->polygon_attr>>16)&31u,fmt==1u||fmt==6u,&sShadow))continue;
+        if(!fmt){
+            sDecal[b]=(uint8_t)NitroPort_ShadowDecalDark(NULL,0,0x7FFF);
+            found+=sDecal[b];
+            continue;
+        }
+        for(k=0;k<nseen;k++){
+            if(seen[k].param==param && seen[k].palette==batch->palette_base){dark=seen[k].dark;break;}
+        }
+        if(dark<0){
+            NitroPort_Gx3dDecodeTexture(&sBanks,param,batch->palette_base,sDecalTexels);
+            dark=NitroPort_ShadowDecalDark(sDecalTexels,texels,0x7FFF);
+            decoded++;
+            if(nseen<sizeof(seen)/sizeof(seen[0])){
+                seen[nseen].param=param;
+                seen[nseen].palette=batch->palette_base;
+                seen[nseen].dark=(uint8_t)dark;
+                nseen++;
+            }
+        }
+        sDecal[b]=(uint8_t)dark;
+        found+=sDecal[b];
+    }
+    sDecalTicks+=svcGetSystemTick()-d0;
+    sDecalDecoded+=decoded;
+    return found;
+}
+
 int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
 {
     u64 t0=svcGetSystemTick(),tb,td;
@@ -1690,14 +1947,15 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
         /* what only casts (outside the view, or facing away), after the
          * scene's vertices */
         NitroGx3dGpuVertex *extra=sVertices[slot]+sPreparedCount;
-        size_t n=NitroPort_Gx3dBuildShadowBatches(scene,sPreparedCount,extra,sShadowRoom,
+        size_t n=shadow_level()<2?0:
+                 NitroPort_Gx3dBuildShadowBatches(scene,sPreparedCount,extra,sShadowRoom,
                                                   sBatches+MAX_BATCHES,SHADOW_BATCHES,&sShadowOnlyBatches);
-        size_t cards=0,b;
+        size_t cards=0;
         /* what casts and what receives (the vertex programs read it) */
         NitroPort_ShadowRoles(sVertices[slot][0].position,&sVertices[slot][0].color[3],
                               sizeof(NitroGx3dGpuVertex),sPreparedCount+n,&sShadow);
         /* characters' and trees' cards: their copies turned to the sun */
-        if(sShadowRoom>n){
+        if(shadow_level()>=2 && sShadowRoom>n){
             n+=NitroPort_ShadowCards(sVertices[slot],sBatches,sPreparedBatches,sPreparedCount+n,extra+n,
                                      sShadowRoom-n,sBatches+MAX_BATCHES+sShadowOnlyBatches,
                                      SHADOW_BATCHES-sShadowOnlyBatches,&cards,&sShadow);
@@ -1713,19 +1971,150 @@ int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
             sShadowOnlyBatches=0;
         }
         /* the game's own painted shadows (left out in the draw) */
-        NitroPort_Gx3dMapTextureBanks(&sBanks);
-        for(b=0;b<sPreparedBatches;b++){
-            const NitroGx3dBatch *batch=&sBatches[b];
-            uint32_t param=batch->texture_param;
-            unsigned fmt=NitroPort_Gx3dTexFormat(param);
-            size_t texels=fmt?(size_t)NitroPort_Gx3dTexWidth(param)*NitroPort_Gx3dTexHeight(param):0;
-            sDecal[b]=0;
-            if(!batch->translucent||!batch->count||texels>4096u)continue;
-            if(fmt)NitroPort_Gx3dDecodeTexture(&sBanks,param,batch->palette_base,sDecalTexels);
-            sDecal[b]=(uint8_t)NitroPort_ShadowDecal(sVertices[slot][batch->first].position,
-                                                     sizeof(NitroGx3dGpuVertex),(batch->polygon_attr>>16)&31u,
-                                                     fmt==1u||fmt==6u,fmt?sDecalTexels:NULL,texels,
-                                                     0x7FFF,&sShadow);
+        if(shadow_level()>=SHADOW_STEP_READ)find_decals(slot);
+        else memset(sDecal,0,sizeof(sDecal));
+    }
+    /* The sun shadows (SUN SHADOWS: ON; not with the shadow map: it has its
+     * own): the characters', each sprite the game marked (NitroPort_Gx3dTag)
+     * from the round shadow marked as its own. From the marked polygons'
+     * whole triangles (the scene's tagged_triangles: not clipped at the
+     * view's sides, kept beside it), so a character at the screen's edge
+     * or just off it casts the same shadow. */
+    sGroundReady=0;
+    sGroundBatchCount=0;
+    sShadeBatches=0;
+    if(sGroundMode && !sShadowMode && sPreparedCount && sShadowRoom){
+        u64 g0=svcGetSystemTick();
+        size_t b,marked=0;
+        uint32_t i;
+        /* (the sun, every scene: the game makes the land's trees' shadows
+         * for it, NitroPort_SunWayNow) */
+        int sun=look_now();
+        /* The land's trees' shadows: the scene's own polygons (the game
+         * sends them lying on the ground, marked NITRO_GX3D_TAG_SHADE:
+         * nothing to work out here), drawn with the sun shadows in the
+         * one shade. */
+        if(sun){
+            float f[3];
+            for(b=0;b<sPreparedBatches;b++){
+                if(!NITRO_GX3D_TAG_IS_SHADE(sBatches[b].tag))continue;
+                sShadeBatches++;
+                sGroundShadeTris+=sBatches[b].count/3u;
+            }
+            sGroundShade+=sShadeBatches;
+            for(i=0;i<3;i++){
+                float shadeC=(float)((sShadowColor>>(8u*i))&255u)/255.0f;
+                f[i]=(1.0f-shadeC)*NITRO_SHADOW_GROUND_DARK;
+                if(!(f[i]>0.0f))f[i]=0.0f;
+                if(f[i]>1.0f)f[i]=1.0f;
+            }
+            sShadeColor=0xFF000000u|((u32)(f[2]*255.0f+0.5f)<<16)|((u32)(f[1]*255.0f+0.5f)<<8)|(u32)(f[0]*255.0f+0.5f);
+            sTreeColor=0xFF000000u|((u32)(f[2]*NITRO_SHADOW_TREE_BLOB*255.0f+0.5f)<<16)|
+                       ((u32)(f[1]*NITRO_SHADOW_TREE_BLOB*255.0f+0.5f)<<8)|(u32)(f[0]*NITRO_SHADOW_TREE_BLOB*255.0f+0.5f);
+        }
+        /* (most scenes of a menu or a building have no marks at all: a
+         * round shadow's, or a prop's) */
+        for(i=0;i<scene->tagged_count && !marked;i++){
+            uint32_t tag=scene->tagged_triangles[i].tag;
+            marked=NITRO_GX3D_TAG_IS_ROUND(tag) || NITRO_GX3D_TAG_IS_PROP(tag);
+        }
+        if(marked && sun){
+            /* the whole triangles as vertices (not drawn), then the
+             * shadows' after them */
+            float depth[4],shade[3];
+            size_t nb=0,n=0,nt,ntb=0;
+            NitroGx3dGpuVertex *extra=sVertices[slot]+sPreparedCount;
+            int ready;
+            nt=NitroPort_Gx3dBuildTaggedBatches(scene,sPreparedCount,extra,sShadowRoom,sTagBatches,TAG_BATCHES,&ntb);
+            /* The camera's space and the ground from the round shadows
+             * alone (they lie on it): the whole scene's setup went through
+             * every vertex of the scene twice, most of the shadows' cost.
+             * That one only for a scene with none (props or trees and no
+             * character). */
+            ready=NitroPort_ShadowGroundSetup(sVertices[slot],sTagBatches,ntb,scene->projection,scene->screen_width,
+                                              scene->screen_height,&sSun,&sShadow);
+            if(!ready){
+                ready=NitroPort_ShadowSetup(sVertices[slot][0].position,sizeof(NitroGx3dGpuVertex),sPreparedCount,
+                                            scene->projection,scene->screen_width,scene->screen_height,&sSun,
+                                            SHADOW_SIZE,&sShadow);
+                sGroundWhole+=ready!=0;
+            }
+            if(ready){
+                /* a new vertex's z as the scene's have theirs: the DS's depth
+                 * through normalize_depth (NitroPort_ShadowDepthRow) */
+                NitroPort_ShadowDepthRow(&sShadow,(scene->swap_param&2u)!=0,sDepthA,sDepthK,depth);
+                /* (the shade as the time of day has it: look_now) */
+                shade[0]=(float)(sShadowColor&255u)/255.0f;
+                shade[1]=(float)((sShadowColor>>8)&255u)/255.0f;
+                shade[2]=(float)((sShadowColor>>16)&255u)/255.0f;
+                memset(sRoundUsed,0,ntb);
+                NitroPort_Gx3dMapTextureBanks(&sBanks);
+                n=NitroPort_ShadowGroundCards(sVertices[slot],sTagBatches,ntb,sPreparedCount+nt,extra+nt,sShadowRoom-nt,
+                                              sBatches+MAX_BATCHES,SHADOW_BATCHES,&nb,&sShadow,depth,sRoundUsed,shade,
+                                              foot_row,NULL);
+                {
+                    unsigned sprites,rounds,laid,props,propsLaid;
+                    NitroPort_ShadowGroundStats(&sprites,&rounds,&laid);
+                    NitroPort_ShadowPropStats(&props,&propsLaid);
+                    sGroundSprites+=sprites;sGroundFound+=rounds;sGroundCards+=laid;
+                    sGroundProps+=props;sGroundPropsLaid+=propsLaid;
+                    sGroundTagged+=scene->tagged_count;
+                    if(scene->tagged_count>=NITRO_GX3D_MAX_TAGGED_TRIANGLES)sGroundFull++;
+                }
+            }
+            if(n && nb){
+                size_t t;
+                GSPGPU_FlushDataCache(extra+nt,(u32)(n*sizeof(NitroGx3dGpuVertex)));
+                /* the round shadows under them left out: the scene's own
+                 * batches with their marks, their triangles to a point
+                 * (the others drawn as ever: someone with no sun shadow
+                 * keeps the round one) */
+                for(t=0;t<ntb;t++){
+                    if(!sRoundUsed[t])continue;
+                    for(b=0;b<sPreparedBatches;b++){
+                        NitroGx3dGpuVertex *rv=sVertices[slot]+sBatches[b].first;
+                        uint32_t j;
+                        if(sBatches[b].tag!=sTagBatches[t].tag)continue;
+                        for(j=1;j<sBatches[b].count;j++)memcpy(rv[j].position,rv[0].position,sizeof(rv[0].position));
+                        GSPGPU_FlushDataCache(rv,(u32)(sBatches[b].count*sizeof(NitroGx3dGpuVertex)));
+                    }
+                }
+                sGroundBatchCount=nb;
+                sGroundVertices=n;
+                sGroundReady=1;
+            }
+        }
+        sGroundTicks+=svcGetSystemTick()-g0;
+        sGroundMarked+=marked!=0;
+        /* (after 5 seconds, then every 30) */
+        if(++sGroundScenes==300 || sGroundScenes==2100){
+            double per=sGroundMarked?1.0/sGroundMarked:0.0,all=sGroundScenes==300?300.0:1800.0;
+            NitroPort_Log("[shadow] %u scenes with the sun shadows, %u of them with marks: in those, "
+                          "%.1f marked sprites a scene, %.1f round shadows, %.1f characters' sun shadows laid; "
+                          "%.1f props marked, %.1f props' shadows laid; %.0f marked triangles a scene (%u scenes "
+                          "with their room full, %u set up from the whole scene); the land's trees' shadows: "
+                          "%.1f batches and %.0f triangles a scene, the game's, %u tree textures' outlines made "
+                          "so far; %.2f ms a scene laying the "
+                          "others; the sun %.0f degrees up, %.0f round from the screen's left",
+                          sGroundScenes==300?300u:1800u,sGroundMarked,sGroundSprites*per,
+                          sGroundFound*per,sGroundCards*per,sGroundProps*per,sGroundPropsLaid*per,
+                          sGroundTagged*per,sGroundFull,sGroundWhole,sGroundShade/all,sGroundShadeTris/all,
+                          sMasksMade,(double)sGroundTicks*1000.0/SYSCLOCK_ARM11/all,
+                          (double)sSun.elevation,(double)sSun.azimuth);
+            {
+                /* (what drawing them takes the thread that draws: the
+                 * commands made, not the GPU's time, which the [gpu] lines
+                 * have as "the sun shadows") */
+                const u32 us=__atomic_exchange_n(&sShadowDrawUs,0u,__ATOMIC_RELAXED),
+                          dr=__atomic_exchange_n(&sShadowDraws,0u,__ATOMIC_RELAXED),
+                          fr=__atomic_exchange_n(&sShadowDrawFrames,0u,__ATOMIC_RELAXED);
+                if(fr)NitroPort_Log("[shadow] drawing them: %.2f ms a frame making the commands, %.1f draws a frame (%u frames)",
+                                    (double)us/1000.0/fr,(double)dr/fr,(unsigned)fr);
+            }
+            if(sGroundScenes==2100)sGroundScenes=300;
+            sGroundTicks=0;sGroundCards=0;sGroundFound=0;sGroundSprites=0;sGroundMarked=0;
+            sGroundProps=0;sGroundPropsLaid=0;sGroundFull=0;
+            sGroundShade=0;sGroundShadeTris=0;sGroundTagged=0;sGroundWhole=0;
         }
     }
     setup_fog();
@@ -1821,6 +2210,7 @@ static int bind_batch(const NitroGx3dBatch *batch)
         else bind_tex(tex);
     }
     set_combiner(batch->polygon_attr,textured);
+    canopy_scale(batch);
     return textured;
 }
 
@@ -1840,6 +2230,7 @@ static int bind_batch_shape(const NitroGx3dBatch *batch)
     bind_tex(textured?tex:NULL);
     if(!textured)sBoundCut=0;
     set_combiner(batch->polygon_attr,textured);
+    canopy_scale(batch);
     return textured;
 }
 
@@ -1951,7 +2342,9 @@ static const NitroGx3dPruneResult *prune_for(const PicaView *view,const NitroGx3
     for(b=0;b<sPreparedBatches;b++){
         const NitroGx3dBatch *batch=&sBatches[b];
         uint32_t attr=batch->polygon_attr;
-        if(batch->translucent){
+        if(NITRO_GX3D_TAG_IS_SHADE(batch->tag)){
+            sPruneRoles[b]=NITRO_GX3D_PRUNE_OUT;   /* (a shadow on the ground: no outline) */
+        }else if(batch->translucent){
             sPruneRoles[b]=((attr>>16)&31u)==31u?NITRO_GX3D_PRUNE_SHAPE:NITRO_GX3D_PRUNE_OUT;
         }else if(batch->texture_param){
             C3D_Tex *tex=get_texture(batch->texture_param,batch->palette_base);
@@ -2240,6 +2633,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             uint32_t attr=batch->polygon_attr;
             int textured;
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
+            if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
             if(pruned && !pruned_any(b,NITRO_GX3D_PRUNE_A,NITRO_GX3D_PRUNE_ZONE_A,scissor))continue;
             if(!room_for_draw())break;
             textured=bind_batch_shape(batch);
@@ -2277,6 +2671,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
             int textured;
             unsigned id;
             if(batch->translucent && ((attr>>16)&31u)!=31u)continue;
+            if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
             if(pruned && !pruned_any(b,NITRO_GX3D_PRUNE_D,NITRO_GX3D_PRUNE_ZONE_B,scissor))continue;
             if(!room_for_draw())break;
             id=(attr>>24)&63u;
@@ -2312,6 +2707,45 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
 #define SUN_SHADOWS_PARKED 1
 #endif
 
+/* The hunt for the hang (the options page's SUN SHADOWS: TEST 1-3, ON):
+ * the shadows a step at a time, each step one test on a 3DS. 0 (OFF)
+ * keeps them parked, as remaster.txt's `shadows on` and the look toggle
+ * do. */
+static int sShadowTest;
+static unsigned sShadowScenes;   /* (scenes drawn with them, for the log) */
+static int sShadowToldMap,sShadowToldRecv;
+void NitroPort_PicaShadowTest(int level)
+{
+    level=level<0?0:level>SHADOW_STEP_ON?SHADOW_STEP_ON:level;
+    if(level!=sShadowTest){
+        /* (each step's first map and receivers logged afresh) */
+        sShadowToldMap=sShadowToldRecv=0;
+        sShadowScenes=0;
+        if(!level && sShadowTest)NitroPort_Log("[shadow] test step %d: off again",sShadowTest);
+    }
+    sShadowTest=level;
+}
+void NitroPort_PicaGroundShadows(int on)
+{
+    on=on!=0;
+    if(on!=sGroundMode){
+        NitroPort_Log("[shadow] the sun shadows %s",on?"on":"off");
+        sGroundScenes=0;sGroundTicks=0;sGroundCards=0;sGroundFound=0;
+        sGroundSprites=0;sGroundMarked=0;sGroundProps=0;sGroundPropsLaid=0;sGroundFull=0;
+        sGroundShade=0;sGroundShadeTris=0;sGroundTagged=0;sGroundWhole=0;
+    }
+    sGroundMode=on;
+    sGroundReady=0;
+    if(!on)NitroPort_SetSunShadows(0);
+    /* (the game marks its sprites, round shadows and props only then) */
+    NitroPort_SetGroundShadows(on);
+}
+/* The step drawn: SHADOW_STEP_ON (all) when not parked at all. */
+static int shadow_level(void)
+{
+    return SUN_SHADOWS_PARKED?sShadowTest:SHADOW_STEP_ON;
+}
+
 /* (the 3D thread, between frames) The look: sun shadows, the colour
  * grade, the sun by the clock or fixed. The shadow map (512x512, in VRAM)
  * is made the first time the shadows are on. */
@@ -2325,7 +2759,8 @@ void NitroPort_PicaLook(int shadows,int grade,int fixedSun,float elevation,float
     sShadowMode=0;
     sShadowReady=0;
     NitroPort_SetSunShadows(0);
-    if(SUN_SHADOWS_PARKED && shadows){
+    NitroPort_SetShadowReach(0);
+    if(SUN_SHADOWS_PARKED && shadows && !sShadowTest){
         static int told;
         if(!told){
             told=1;
@@ -2358,21 +2793,44 @@ void NitroPort_PicaLook(int shadows,int grade,int fixedSun,float elevation,float
         return;
     }
     sShadowMode=1;
-    NitroPort_SetSunShadows(1);
+    /* (the game's round shadows go only once the sun's are drawn) */
+    NitroPort_SetSunShadows(shadow_level()>=SHADOW_STEP_READ);
+    NitroPort_SetShadowReach(shadow_level()>=SHADOW_STEP_READ);
+    if(SUN_SHADOWS_PARKED){
+        static const char *const what[SHADOW_STEP_ON+1]={"",
+            "the map from the scene's own triangles, nothing received",
+            "the whole map (what only casts, the cards), nothing received",
+            "the whole map; the receivers' pass with the scene's own program, no shadow map (a constant shade)",
+            "the whole map; the receivers' pass with its own program, no shadow map (a constant shade)",
+            "the whole map; the receivers' pass with the shadow map bound, not used",
+            "the whole map, received without texture unit 1 (no cut-outs)",
+            "all of it, as designed"};
+        NitroPort_Log("[shadow] test step %d: %s",sShadowTest,what[sShadowTest]);
+    }
 }
 
 /* For a scene: the time of day's sun (or the fixed one) and grade. 0 if
  * there are no shadows now (the sun's strength nothing: at dusk). */
 static int look_now(void)
 {
+    /* (the clock read once a second: this is asked every scene) */
+    static time_t last=(time_t)-1;
+    static int lastHour=12,lastMinute=0;
     time_t now=time(NULL);
     struct tm local;
     float strength=1.0f;
-    int hour=12,minute=0;
-    if(now!=(time_t)-1 && localtime_r(&now,&local)){hour=local.tm_hour;minute=local.tm_min;}
+    int hour=lastHour,minute=lastMinute;
+    if(now!=(time_t)-1 && now!=last && localtime_r(&now,&local)){
+        hour=lastHour=local.tm_hour;
+        minute=lastMinute=local.tm_min;
+        last=now;
+    }
     if(sGradeMode)sGradeWanted=NitroPort_LookPeriod(hour);
     if(sSunFixed)sSun=sFixedSun;
     else NitroPort_ShadowSunAt(hour,minute,&sSun,&strength);
+    /* (for the game's side too: the land's trees' shadows are polygons it
+     * sends, made for this sun) */
+    NitroPort_SetSunNow(&sSun,strength);
     if(strength<0.02f)return 0;
     sShadowColor=((u32)(255.0f-(255.0f-NITRO_SHADOW_SHADE_B)*strength+0.5f)<<16)|
                  ((u32)(255.0f-(255.0f-NITRO_SHADOW_SHADE_G)*strength+0.5f)<<8)|
@@ -2487,7 +2945,8 @@ static void free_shadow_spare(void)
  * Alpha retains the cut-out test; destination alpha is never changed. */
 static void bind_batch_shadow(const NitroGx3dBatch *batch)
 {
-    int textured=batch->texture_param!=0;
+    /* (before ON: unit 1 left alone, the shade over the whole polygon) */
+    int textured=batch->texture_param!=0 && shadow_level()>=SHADOW_STEP_ON;
     unsigned mode=(batch->polygon_attr>>4)&3u;
     C3D_Tex *tex=NULL;
     C3D_TexEnv *env;
@@ -2504,10 +2963,17 @@ static void bind_batch_shadow(const NitroGx3dBatch *batch)
     env=C3D_GetTexEnv(0);
     C3D_TexEnvInit(env);
     C3D_TexEnvColor(env,sShadowColor);
-    C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,GPU_CONSTANT,GPU_TEXTURE0);
-    C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_ALPHA,
-                    GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
-    C3D_TexEnvFunc(env,C3D_RGB,GPU_INTERPOLATE);
+    if(shadow_level()>=SHADOW_STEP_READ){
+        C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,GPU_CONSTANT,GPU_TEXTURE0);
+        C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_ALPHA,
+                        GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
+        C3D_TexEnvFunc(env,C3D_RGB,GPU_INTERPOLATE);
+    }else{
+        /* (steps 3 to 5: the shade itself, the shadow map's result not
+         * read: what receives drawn darker all over) */
+        C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,0,0);
+        C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
+    }
     if(textured && mode!=1){
         C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE1,GPU_PRIMARY_COLOR,0);
         C3D_TexEnvFunc(env,C3D_Alpha,GPU_MODULATE);
@@ -2515,6 +2981,359 @@ static void bind_batch_shadow(const NitroGx3dBatch *batch)
         C3D_TexEnvSrc(env,C3D_Alpha,GPU_PRIMARY_COLOR,0,0);
         C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
     }
+}
+
+/* The sun shadows laid on the ground (NitroPort_ShadowGroundCards), over
+ * the opaque polygons: each multiplies what's there by its shade, once.
+ * (Once matters: the upper screen's picture is 5-6-5 bits, and each
+ * multiply rounds red and blue to 8/255 and green to 4/255. A shadow of
+ * nine soft copies, nine multiplies a pixel, came out purple in places
+ * and blue in others, 2026-11-10.)
+ *
+ * The land's trees' and the props' first (the scene's own polygons marked
+ * NITRO_GX3D_TAG_SHADE, which the game sends lying on the ground:
+ * NitroPort_Gx3dTreeLists; and the batches marked NITRO_SHADOW_ONCE):
+ * where a texel is more than half opaque, the shade (the trees': one
+ * shade, sShadeColor; a prop's: its vertices'), each pixel once by a stencil bit: a tree's layers
+ * overlap, and trees each other, and it's the shade just once. The bit:
+ * bit 0 of the 0xFF the opaque pass left (cleared where a shadow is
+ * drawn); with the outlines' copies the stencil holds the polygons' IDs
+ * (0-63: stencilIds), so bit 7, set where a shadow is drawn and cleared
+ * again after the characters' (the same batches once more, no colour):
+ * the IDs as they were for the copies.
+ *
+ * Then the characters' (tag 0): each sprite's texture once; colour = the
+ * vertex's shade (fading to the head) where the texel is opaque, white
+ * where it's clear (shade a + 1 - a): the edge as soft as the texture's
+ * sampling. Not where the props' or trees' darkened (in a tree's shade a
+ * character casts none). */
+/* (pass: for a tree's, 0 and up the passes before the last, -1 the last;
+ * below) */
+static void once_batch(const NitroGx3dBatch *batch,int shade,int pass)
+{
+    /* (no texture: a building's shadow, all of the polygon) */
+    C3D_Tex *tex=batch->texture_param?get_texture(batch->texture_param,batch->palette_base):NULL;
+    const int cut=tex?GPU_TEXTURE0:GPU_PRIMARY_COLOR;
+    C3D_TexEnv *env;
+    u32 param=0;
+    if(batch->texture_param && !tex)return;
+    /* (sampled smoothly: its own filter back after the draw, which has
+     * taken it already) */
+    if(tex){
+        param=tex->param;
+        C3D_TexSetFilter(tex,GPU_LINEAR,GPU_LINEAR);
+        C3D_TexBind(0,tex);
+    }
+    env=C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    if(shade){
+        /* a tree's: 1 - what a full shadow takes x the vertex's grey (how
+         * much of it there: full at the tree's foot, fading to the tip),
+         * in two stages */
+        C3D_TexEnvColor(env,sShadeColor);
+        C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,GPU_PRIMARY_COLOR,0);
+        C3D_TexEnvFunc(env,C3D_RGB,GPU_MODULATE);
+        if(pass>=0){
+            /* (the texel's alpha x the grey: the darker ones alone pass) */
+            C3D_TexEnvSrc(env,C3D_Alpha,cut,GPU_PRIMARY_COLOR,0);
+            C3D_TexEnvOpAlpha(env,GPU_TEVOP_A_SRC_ALPHA,GPU_TEVOP_A_SRC_R,0);
+            C3D_TexEnvFunc(env,C3D_Alpha,GPU_MODULATE);
+        }else{
+            C3D_TexEnvSrc(env,C3D_Alpha,cut,0,0);
+            C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+        }
+        env=C3D_GetTexEnv(1);
+        C3D_TexEnvInit(env);
+        C3D_TexEnvSrc(env,C3D_RGB,GPU_PREVIOUS,0,0);
+        C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,0,0);
+        C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
+        C3D_TexEnvSrc(env,C3D_Alpha,GPU_PREVIOUS,0,0);
+        C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    }else{
+        /* a prop's: its vertices' shade, with the fade; the texel's alpha
+         * for the test */
+        C3D_TexEnvSrc(env,C3D_RGB,GPU_PRIMARY_COLOR,0,0);
+        C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
+        C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,0,0);
+        C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    }
+    draw_arrays((int)batch->first,(int)batch->count);
+    if(tex)tex->param=param;
+}
+/* The land's trees' shadows (the scene's own polygons marked
+ * NITRO_GX3D_TAG_SHADE, left out of its other passes), then the props'.
+ * A tree's fades from its foot (2026-11-10, chosen from a preview: one
+ * even shade from foot to tip read as another colour of grass, not a
+ * shadow), and a pixel is still darkened once: where two trees' overlap
+ * the darker is wanted, not whichever is drawn first (a tip over the
+ * next tree's foot). So the darkest first:
+ * - the pools and the forests' floors (NITRO_GX3D_TAG_GROUND batches),
+ *   once: they're the darkest there is where they are;
+ * - the layers' shadows where the texel's alpha x the grey is at least
+ *   TREE_PASS (the half nearer the foot), then wherever the texel is
+ *   over half opaque; each pixel taken by the first to draw it.
+ * (First four passes over every shadow polygon, 2026-11-10: in a forest
+ * the GPU's time doubled, 11 to 12.7 ms a frame, 36 to 40 frames a
+ * second. A fragment the stencil turns away costs nearly what one drawn
+ * does. Now three draws of far fewer polygons: the game doesn't send
+ * what the trees themselves hide.) */
+/* A tree's trunk's shadow (NITRO_GX3D_TAG_TRUNK batches, the game's: a
+ * quad from the trunk to under its layers'): drawn from the vertices'
+ * colours alone, its texture not used. Green is across the quad and blue
+ * along it, red a half; the combiner's DOT3 of the colour with itself is
+ * 4 x the squared distance of (red, green, blue) from the middle. Then
+ * 4 x (1 - that), 1 at most: blue a half at the trunk and 1 at the far
+ * end, a strip with soft sides fading out at its far end, under the
+ * layers'. That times what a full shadow takes, NITRO_SHADOW_TREE_BLOB of
+ * it; the frame times 1 - it. The same in alpha (DOT3_RGBA puts it
+ * there). (First soft ovals for a tree's whole shadow, a quad a tier;
+ * replaced by the tree's own outline, mask_batch.) A tree's shadows, the
+ * layers' and the trunk's, in three passes, a pixel darkened once by the
+ * first to reach it: where the alpha (how much of a shadow) is about all
+ * of it (BLOB_CORE), then over half (BLOB_HALF), then the rest
+ * (BLOB_EDGE): where two overlap the darker is taken, near enough. */
+#define BLOB_CORE 250
+#define BLOB_STRONG 176
+#define BLOB_HALF 128
+#define BLOB_EDGE 8
+static void blob_batch(const NitroGx3dBatch *batch)
+{
+    C3D_TexEnv *env=C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env,C3D_Both,GPU_PRIMARY_COLOR,GPU_PRIMARY_COLOR,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_DOT3_RGBA);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    env=C3D_GetTexEnv(1);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env,C3D_Both,GPU_PREVIOUS,0,0);
+    C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,0,0);
+    C3D_TexEnvOpAlpha(env,GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA,0,0);
+    C3D_TexEnvFunc(env,C3D_Both,GPU_REPLACE);
+    C3D_TexEnvScale(env,C3D_Both,GPU_TEVSCALE_4);
+    env=C3D_GetTexEnv(2);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvColor(env,sTreeColor);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_MODULATE);
+    C3D_TexEnvSrc(env,C3D_Alpha,GPU_PREVIOUS,0,0);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    env=C3D_GetTexEnv(3);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_PREVIOUS,0,0);
+    C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,0,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
+    C3D_TexEnvSrc(env,C3D_Alpha,GPU_PREVIOUS,0,0);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    draw_arrays((int)batch->first,(int)batch->count);
+}
+/* A tree's layers' shadow (NITRO_GX3D_TAG_SHADE batches: its standing
+ * polygons laid on the ground, their texture coordinates with them): the
+ * texture's softened outline (get_mask) times what a full shadow takes,
+ * NITRO_SHADOW_TREE_BLOB of it (sTreeColor); the frame times 1 - it; the
+ * outline in alpha for the passes. (Chosen from a preview, 2026-11-11,
+ * "softness medium": "using the design of the tree to create the
+ * shadows".) */
+static void mask_batch(const NitroGx3dBatch *batch)
+{
+    C3D_Tex *tex=get_mask(batch->texture_param,batch->palette_base);
+    C3D_TexEnv *env;
+    if(!tex)return;
+    C3D_TexBind(0,tex);
+    sBoundTexKnown=0;
+    env=C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvColor(env,sTreeColor);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_CONSTANT,GPU_TEXTURE0,0);
+    C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_MODULATE);
+    C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,0,0);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    env=C3D_GetTexEnv(1);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_PREVIOUS,0,0);
+    C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,0,0);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_REPLACE);
+    C3D_TexEnvSrc(env,C3D_Alpha,GPU_PREVIOUS,0,0);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    C3D_TexEnvInit(C3D_GetTexEnv(2));
+    C3D_TexEnvInit(C3D_GetTexEnv(3));
+    draw_arrays((int)batch->first,(int)batch->count);
+}
+/* A character's sun shadow (a ground batch of tag 0, NitroPort_ShadowGroundCards):
+ * its sprite's texture laid on the ground, mix(white, the vertices' shade,
+ * the texel's alpha), sampled smoothly; the alpha for the passes. */
+static void char_batch(const NitroGx3dBatch *batch)
+{
+    C3D_Tex *tex=get_texture(batch->texture_param,batch->palette_base);
+    C3D_TexEnv *env;
+    u32 param;
+    if(!tex)return;
+    /* (sampled smoothly: a soft edge, not the sprite's pixel steps; its
+     * own filter back after the draw, which has taken it already) */
+    param=tex->param;
+    C3D_TexSetFilter(tex,GPU_LINEAR,GPU_LINEAR);
+    C3D_TexBind(0,tex);
+    sBoundTexKnown=0;
+    env=C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvColor(env,0xFFFFFFFFu);
+    C3D_TexEnvSrc(env,C3D_RGB,GPU_PRIMARY_COLOR,GPU_CONSTANT,GPU_TEXTURE0);
+    C3D_TexEnvOpRgb(env,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);
+    C3D_TexEnvFunc(env,C3D_RGB,GPU_INTERPOLATE);
+    C3D_TexEnvSrc(env,C3D_Alpha,GPU_TEXTURE0,0,0);
+    C3D_TexEnvFunc(env,C3D_Alpha,GPU_REPLACE);
+    C3D_TexEnvInit(C3D_GetTexEnv(1));
+    C3D_TexEnvInit(C3D_GetTexEnv(2));
+    C3D_TexEnvInit(C3D_GetTexEnv(3));
+    draw_arrays((int)batch->first,(int)batch->count);
+    tex->param=param;
+}
+/* Every shadow laid on the ground, a pixel darkened once, the darkest
+ * first: a building's (GROUND), then where a shadow is about all there
+ * (BLOB_CORE), over half (BLOB_HALF, the props' too: their texels cut at
+ * half), the rest (BLOB_EDGE). The trees' layers by their texture's
+ * softened outline (mask_batch), their trunks' by their colours
+ * (blob_batch), a building's soft edge (RIM) by its grey; the
+ * characters' (chars: with the stencil) in the same three passes, by
+ * their texels' alpha. (A building's soft edge first came last, where no
+ * shadow was yet: a tree's faint edge beside it took those pixels, and
+ * a lit straight line ran between the tree's shadow and the building's,
+ * 2026-11-12, "a weird straight line on a blurred shadow that is
+ * perfectly separating from the tree shadow". First the characters' and the props' after all the rest, where
+ * none was yet: where a tree's or a building's shadow's faint edge
+ * reached under a character's shadow it was cut off there, a hard line
+ * across it, and the props' the same: on a 3DS, log 855d604a, "Follower
+ * and Player shadow get weirdly cut when moving around other shadows",
+ * "Satelites shadows ... re also getitng cut", 2026-11-11.) */
+/* A pixel darkened once by a building's shadow and once by the rest's
+ * (the trees', the characters', the props'): where two soft edges of
+ * the two lie side by side, each takes its own darkening (one edge alone
+ * left a lighter line between them, 2026-11-12); where a full shadow is,
+ * a building's or the rest's core, nothing more. Two stencil bits,
+ * sOnceA (a building's) and sOnceB (the rest's), as they are before
+ * (sOnceFresh: set, or clear) till a draw flips them; a draw passes where
+ * its bits `test` still are, and flips `set` (once_stencil). Not set:
+ * the stencil as the caller has it (the IDs put back). */
+static int sOnceOn,sOnceA,sOnceB,sOnceFresh;
+static void once_stencil(int test,int set)
+{
+    if(!sOnceOn)return;
+    C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_INVERT);
+    C3D_StencilTest(true,GPU_EQUAL,sOnceFresh?test:0,test,set);
+}
+static void draw_once_batches(int chars)
+{
+    size_t b;
+    int pass;
+    const int both=sOnceA|sOnceB;
+    for(pass=0;pass<5;pass++){
+        /* (three quarters of a shadow and more: both bits, a building's and
+         * the rest's; the fainter edges, each its own: two of those side by
+         * side no darker together than a full one. Each its own in every
+         * band at first: two strong edges overlapping came out darker than
+         * a full shadow, dark dots along the seam, 2026-11-12) */
+        const int rest=pass<=2?both:sOnceB,rim=pass<=2?both:sOnceA;
+        C3D_AlphaTest(true,GPU_GEQUAL,pass==1?BLOB_CORE:pass==2?BLOB_STRONG:pass==3?BLOB_HALF:pass==4?BLOB_EDGE:128);
+        for(b=0;b<sPreparedBatches && sShadeBatches;b++){
+            const NitroGx3dBatch *batch=&sBatches[b];
+            const uint32_t tag=batch->tag;
+            if(batch->translucent)continue;
+            if(pass==0?tag!=NITRO_GX3D_TAG_GROUND:
+               (tag!=NITRO_GX3D_TAG_SHADE && tag!=NITRO_GX3D_TAG_TRUNK && tag!=NITRO_GX3D_TAG_RIM))continue;
+            if(!room_for_draw())break;
+            if(pass==0){
+                once_stencil(sOnceA,both);
+                once_batch(batch,1,-1);
+            }else if(tag==NITRO_GX3D_TAG_RIM){
+                /* (a building's soft edge in the bands too, by its grey: the
+                 * stages the trees' set as once_batch has them) */
+                C3D_TexEnvInit(C3D_GetTexEnv(2));
+                C3D_TexEnvInit(C3D_GetTexEnv(3));
+                once_stencil(rim,rim);
+                once_batch(batch,1,pass);
+            }else{
+                once_stencil(rest,rest);
+                if(tag==NITRO_GX3D_TAG_SHADE && batch->texture_param)mask_batch(batch);
+                else blob_batch(batch);
+            }
+        }
+        if(pass==3){
+            /* (the props': their texels over half opaque, in their
+             * vertices' shade) */
+            C3D_TexEnvInit(C3D_GetTexEnv(1));
+            C3D_TexEnvInit(C3D_GetTexEnv(2));
+            C3D_TexEnvInit(C3D_GetTexEnv(3));
+            once_stencil(rest,rest);
+            for(b=0;b<sGroundBatchCount && sGroundReady;b++){
+                const NitroGx3dBatch *batch=&sBatches[MAX_BATCHES+b];
+                if(batch->tag!=NITRO_SHADOW_ONCE)continue;
+                if(!room_for_draw())break;
+                once_batch(batch,0,0);
+            }
+        }
+        if(chars && pass>=1){
+            once_stencil(rest,rest);
+            for(b=0;b<sGroundBatchCount && sGroundReady;b++){
+                const NitroGx3dBatch *batch=&sBatches[MAX_BATCHES+b];
+                if(batch->tag)continue;
+                if(!room_for_draw())break;
+                char_batch(batch);
+            }
+        }
+    }
+    /* (every stage as every other draw has it: passing on) */
+    C3D_TexEnvInit(C3D_GetTexEnv(1));
+    C3D_TexEnvInit(C3D_GetTexEnv(2));
+    C3D_TexEnvInit(C3D_GetTexEnv(3));
+    C3D_AlphaTest(true,GPU_GEQUAL,128);
+}
+static void draw_ground_shadows(int stencilIds)
+{
+    size_t b;
+    int once=sShadeBatches!=0;
+    /* (the stencil bits a pixel darkened is marked with, and what they
+     * are before: set in 0xFF, clear in a polygon's ID, under 64) */
+    const int bits=stencilIds?0xC0:0x03;
+    stage("the sun shadows");
+    fog_mode(0);
+    C3D_CullFace(GPU_CULL_NONE);
+    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_DST_COLOR,GPU_ZERO,GPU_ZERO,GPU_ONE);
+    C3D_DepthTest(true,GPU_LEQUAL,GPU_WRITE_COLOR);
+    for(b=0;b<sGroundBatchCount && sGroundReady;b++)once|=sBatches[MAX_BATCHES+b].tag==NITRO_SHADOW_ONCE;
+    if(once){
+        /* (drawn where the bits are as they were: then the other way) */
+        sOnceA=stencilIds?0x40:0x01;
+        sOnceB=stencilIds?0x80:0x02;
+        sOnceFresh=!stencilIds;
+        sOnceOn=1;
+        draw_once_batches(1);
+        sOnceOn=0;
+    }else{
+        /* (no other shadow: the characters' as they are, no stencil) */
+        C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
+        C3D_AlphaTest(true,GPU_GREATER,0);
+        for(b=0;b<sGroundBatchCount && sGroundReady;b++){
+            const NitroGx3dBatch *batch=&sBatches[MAX_BATCHES+b];
+            if(batch->tag)continue;
+            if(!room_for_draw())break;
+            char_batch(batch);
+        }
+        C3D_TexEnvInit(C3D_GetTexEnv(1));
+        C3D_TexEnvInit(C3D_GetTexEnv(2));
+        C3D_TexEnvInit(C3D_GetTexEnv(3));
+        C3D_AlphaTest(true,GPU_GEQUAL,128);
+    }
+    if(once && stencilIds){
+        /* the IDs back: the same pixels' bits cleared (no colour, no
+         * depth: the depth test as it was, so the same pixels) */
+        C3D_DepthTest(true,GPU_LEQUAL,0);
+        C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
+        C3D_StencilTest(true,GPU_ALWAYS,0x00,bits,bits);
+        draw_once_batches(1);
+    }
+    sBoundTexKnown=0;
+    C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
+    C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
 }
 
 /* Hardware baseline: draw the receivers directly over the opaque scene,
@@ -2534,19 +3353,25 @@ static void draw_shadow_receivers(const PicaView *view)
     view_viewport(view);
     C3D_BindProgram(&sProgram);
     begin_pass(view,&view->rect);
-    C3D_BindProgram(&sRecvProgram);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,sUnifRecvMtx,&sViewMtx);
-    C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvStereo,sViewStereo,sViewConvergence,0.0f,0.0f);
-    for(q=0;q<4;q++){
-        C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvShadow+q,sShadow.receiver[q][0],sShadow.receiver[q][1],
-                      sShadow.receiver[q][2],sShadow.receiver[q][3]);
-    }
+    if(shadow_level()>=SHADOW_STEP_PROGRAM){
+        C3D_BindProgram(&sRecvProgram);
+        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,sUnifRecvMtx,&sViewMtx);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvStereo,sViewStereo,sViewConvergence,0.0f,0.0f);
+        for(q=0;q<4;q++){
+            C3D_FVUnifSet(GPU_VERTEX_SHADER,sUnifRecvShadow+q,sShadow.receiver[q][0],sShadow.receiver[q][1],
+                          sShadow.receiver[q][2],sShadow.receiver[q][3]);
+        }
+    }   /* (step 3: the scene's own program, as begin_pass set it up) */
     NitroPort_PicaBindVertices(sVertices[sPrepared]);
     /* This is a different target from the map; binding flushes citro3d's
      * texture cache after the map's framebuffer writes. */
-    C3D_TexBind(0,&sShadowTex);
-    C3D_TexBind(1,&sSpareTex);
-    C3D_TexShadowParams(false,sShadow.bias*NITRO_SHADOW_BIAS_SCALE);
+    if(shadow_level()>=SHADOW_STEP_BOUND){
+        C3D_TexBind(0,&sShadowTex);
+        C3D_TexShadowParams(false,sShadow.bias*NITRO_SHADOW_BIAS_SCALE);
+    }else{
+        C3D_TexBind(0,NULL);   /* (steps 3 and 4: no texture at all on unit 0) */
+    }
+    if(shadow_level()>=SHADOW_STEP_ON)C3D_TexBind(1,&sSpareTex);
     sBoundTexKnown=0;
     sRecvTexKnown=0;
     fog_begin();
@@ -2566,7 +3391,7 @@ static void draw_shadow_receivers(const PicaView *view)
         C3D_AlphaTest(true,GPU_GREATER,sBoundCut);
         draw_arrays((int)batch->first,(int)batch->count);
     }
-    C3D_TexBind(1,&sSpareTex);
+    if(shadow_level()>=SHADOW_STEP_ON)C3D_TexBind(1,&sSpareTex);
     sRecvTexKnown=0;
     C3D_TexBind(0,NULL);
     sBoundTexKnown=0;
@@ -2650,6 +3475,7 @@ static void draw_scene(const PicaView *view)
 {
     size_t b,parts;
     int blend,edging,copying,part,depthOnly;
+    const char *opaqueName="the opaque polygons";
     NitroGx3dEdgeSetup edges;
     if(sPrepared<0||!view||!view->fb)return;
     part=view->part;
@@ -2677,6 +3503,17 @@ static void draw_scene(const PicaView *view)
         shadow_checkpoint("waiting before the sun shadow map");
         draw_shadow_map();
         shadow_checkpoint("waiting for the sun shadow map");
+        if(!sShadowToldMap){
+            sShadowToldMap=1;
+            NitroPort_Log("[shadow] the first sun shadow map sent to the GPU (step %d, %u batches, %u of them only casting)",
+                          shadow_level(),(unsigned)(sPreparedBatches+sShadowOnlyBatches),(unsigned)sShadowOnlyBatches);
+        }
+        if(++sShadowScenes==300){
+            NitroPort_Log("[shadow] 300 scenes drawn with the sun shadows (step %d): the GPU kept up; "
+                          "the painted shadows looked for in %.2f ms a scene (%.1f textures decoded a scene)",
+                          shadow_level(),(double)sDecalTicks*1000.0/SYSCLOCK_ARM11/300.0,sDecalDecoded/300.0);
+        }
+        if(sShadowScenes==1){sDecalTicks=0;sDecalDecoded=0;}
     }
     C3D_BindProgram(&sProgram);
     stage("the opaque polygons");
@@ -2697,6 +3534,8 @@ static void draw_scene(const PicaView *view)
         uint32_t attr=batch->polygon_attr;
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(batch->translucent)continue;
+        /* (the trees' shadows: after these, draw_ground_shadows) */
+        if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
         if(!room_for_draw())break;
         if(depthOnly){
             /* (as the outlines' moved passes draw them: the shape alone) */
@@ -2719,9 +3558,13 @@ static void draw_scene(const PicaView *view)
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
         draw_parts(parts);
     }
-    if(sShadowReady && !depthOnly){
+    if(sShadowReady && !depthOnly && shadow_level()>=SHADOW_STEP_PASS){
         shadow_checkpoint("waiting for the opaque scene before sun shadows");
         draw_shadow_receivers(view);
+        if(!sShadowToldRecv){
+            sShadowToldRecv=1;
+            NitroPort_Log("[shadow] the first sun shadow receivers sent to the GPU (step %d)",shadow_level());
+        }
     }
     /* Their fully opaque texels of translucent polygons of alpha 31 are
      * opaque too (drawn here so the outlines go over them as well). */
@@ -2731,7 +3574,8 @@ static void draw_scene(const PicaView *view)
         uint32_t attr=batch->polygon_attr;
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(!batch->translucent || ((attr>>16)&31u)!=31u)continue;
-        if(sShadowReady && sDecal[b])continue;
+        if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
+        if(sShadowReady && shadow_level()>=SHADOW_STEP_READ && sDecal[b])continue;
         if(!room_for_draw())break;
         if(depthOnly){
             int textured=bind_batch_shape(batch);
@@ -2752,20 +3596,38 @@ static void draw_scene(const PicaView *view)
         C3D_DepthTest(true,depthFunc,GPU_WRITE_ALL);
         draw_parts(parts);
     }
+    /* The sun shadows, on all of those: after the opaque texels of the
+     * see-through ones too (first before them: a pond's square of grass,
+     * a model with a cut-out texture, stayed lit in the shade round it, on
+     * a 3DS 2026-11-11, "artifacts in textures" at the Day Care). */
+    /* (in a profiled frame's [gpu] line a part of their own, "the sun
+     * shadows", after "the opaque polygons": with them on a frame took the
+     * GPU 8 to 13 ms where it took 6 with them off, in Veilstone City, log
+     * b6742907 of 2026-11-12, and the line had the two as one) */
+    if((sGroundReady || sShadeBatches) && !depthOnly){
+        const u64 t0=svcGetSystemTick();
+        const u32 draws=sDrawsMade;
+        NitroPort_PicaProfileMark(opaqueName);
+        draw_ground_shadows(copying);
+        opaqueName="the sun shadows";
+        __atomic_fetch_add(&sShadowDrawUs,(u32)((svcGetSystemTick()-t0)*1000000ull/SYSCLOCK_ARM11),__ATOMIC_RELAXED);
+        __atomic_fetch_add(&sShadowDraws,sDrawsMade-draws,__ATOMIC_RELAXED);
+        __atomic_fetch_add(&sShadowDrawFrames,1u,__ATOMIC_RELAXED);
+    }
     if(part==PICA_DRAW_OPAQUE){
         /* (the rest after the caller has scaled it down) */
         fog_mode(0);
         C3D_StencilTest(false,GPU_ALWAYS,0,0xFF,0xFF);
         C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
         C3D_AlphaTest(false,GPU_ALWAYS,0);
-        NitroPort_PicaProfileMark("the opaque polygons");
+        NitroPort_PicaProfileMark(opaqueName);
         stage("the scene's opaque polygons drawn");
         scissor_off();
         return;
     }
     /* (with the copies: cut here, always, for them to come after) */
-    if(copying)NitroPort_PicaCut(depthOnly?"the opaque polygons' depth":"the opaque polygons");
-    else NitroPort_PicaProfileMark(depthOnly?"the opaque polygons' depth":"the opaque polygons");
+    if(copying)NitroPort_PicaCut(depthOnly?"the opaque polygons' depth":opaqueName);
+    else NitroPort_PicaProfileMark(depthOnly?"the opaque polygons' depth":opaqueName);
     if(edging)mark_edges(view,&edges);
     stage("the translucent polygons");
     /* The translucent polygons, over the outlines (but the game's own
@@ -2775,7 +3637,9 @@ static void draw_scene(const PicaView *view)
         uint32_t attr=batch->polygon_attr;
         GPU_TESTFUNC depthFunc=(attr&(1u<<14))?GPU_LEQUAL:GPU_LESS;
         if(!batch->translucent)continue;
-        if(sShadowReady && sDecal[b])continue;
+        /* (a see-through tree's shadow: none) */
+        if(NITRO_GX3D_TAG_IS_SHADE(batch->tag))continue;
+        if(sShadowReady && shadow_level()>=SHADOW_STEP_READ && sDecal[b])continue;
         if(!room_for_draw())break;
         parts=batch_parts(batch);
         if(!parts)continue;

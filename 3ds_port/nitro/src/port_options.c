@@ -36,6 +36,7 @@ static const struct {
     [NITRO_OPT_ITEM2] = { "item2", 1024, 0 },
     [NITRO_OPT_PIXEL_FIELD] = { "pixel_field", 2, 1 },
     [NITRO_OPT_FOLLOWER] = { "follower", 2, 0 },
+    [NITRO_OPT_SUN_SHADOWS] = { "sun_shadows", 2, 0 },
 };
 
 static int sValue[NITRO_OPT_COUNT];

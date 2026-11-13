@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 21:32:59 -0700
+Subject: [PATCH] The options page's SUN SHADOWS (SDK_PORT_3DS)
+
+ENHANCEMENTS gets a SUN SHADOWS card: OFF, ON. ON: the port lays each
+character's shadow (the player, the follower, the people) on the ground
+from the sun, in place of its round one (the port's port_shadow.c).
+---
+ include/port_options.h         | 1 +
+ src/overlay005/options_panel.c | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/include/port_options.h b/include/port_options.h
+index e74732cb..52506a39 100644
+--- a/include/port_options.h
++++ b/include/port_options.h
+@@ -22,6 +22,7 @@
+ #define PORT_OPT_ITEM2           16 // (not on the page) the lower menu's second square's item
+ #define PORT_OPT_PIXEL_FIELD     17 // 0 off, 1 on: the field at the DS's pixel size (the whole 400 x 240)
+ #define PORT_OPT_FOLLOWER        18 // 0 off, 1 on: the party's first Pokémon walks behind the player (port_follower.h)
++#define PORT_OPT_SUN_SHADOWS     19 // 0 off, 1 on: the characters' shadows from the sun
+ 
+ int NitroPort_Option(int id);
+ void NitroPort_OptionSet(int id, int value);
+diff --git a/src/overlay005/options_panel.c b/src/overlay005/options_panel.c
+index a7f7ab29..5c65df06 100644
+--- a/src/overlay005/options_panel.c
++++ b/src/overlay005/options_panel.c
+@@ -184,6 +184,7 @@ static const OptionsCard sEnhancementCards[] = {
+     { "HMs WITHOUT MOVES", 0, OPK_PORT, PORT_OPT_HM_FREE },
+     { "AUTO-RUN", 0, OPK_PORT, PORT_OPT_AUTO_RUN },
+     { "FOLLOWER", 0, OPK_PORT, PORT_OPT_FOLLOWER },
++    { "SUN SHADOWS", 0, OPK_PORT, PORT_OPT_SUN_SHADOWS },
+ };
+ 
+ static const OptionsCard sCheatCards[] = {
+-- 
+2.43.0
+

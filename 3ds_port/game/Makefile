@@ -437,10 +437,11 @@ PROGRAM_LINK = $(write_game_objs_rsp)$(CC) $(PROGRAM_LDFLAGS) -Wl,--gc-sections 
     $(APP_OBJS) @$(GAME_OBJS_RSP) $(OVERLAY_TABLE_O) \
     -Wl,--start-group $(LIBNNS) $(LIBNITRO) -Wl,--end-group $(PROGRAM_LIBS) $(OVERLAY_IDS) -o $(PROGRAM_ELF)
 
-$(OUT)/app/platinum.o: app/platinum.c app/platinum.h | libnitrosystem
+# (the port's version in the log's first lines too: which build a log is of)
+$(OUT)/app/platinum.o: app/platinum.c app/platinum.h $(PORT_VERSION_H) | libnitrosystem
 	@mkdir -p $(dir $@)
 	@echo "  APP CC platinum.c"
-	@$(CC) $(PORT_CFLAGS) $(SDK_INCLUDES) -I$(ROOT)/3ds_port/pak/include -I$(GAME)/include -MMD -MP -c $< -o $@
+	@$(CC) $(PORT_CFLAGS) $(SDK_INCLUDES) -I$(ROOT)/3ds_port/pak/include -I$(GAME)/include -include $(PORT_VERSION_H) -MMD -MP -c $< -o $@
 
 $(OUT)/app/main_pc.o: app/main_pc.c app/platinum.h | libnitrosystem
 	@mkdir -p $(dir $@)

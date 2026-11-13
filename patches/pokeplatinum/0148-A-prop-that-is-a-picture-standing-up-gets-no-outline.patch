@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 23:03:39 -0700
+Subject: [PATCH 1/2] A prop that is a picture standing up gets no outline for
+ a sun shadow (SDK_PORT_3DS)
+
+A small prop's sun shadow is its model's outline on the ground. The
+Hallowed Tower's model and Eterna's bikes' are one quad each, a picture
+standing up: the outline was the quad's, a square (on a 3DS, 2026-11-12:
+"the shadow from the tomb is a square"). A model whose vertices all lie
+in one plane (MapProp_PortFlat, NitroPort_Gx3dListsFlat; found once a
+model) gets none: what its picture has painted under it stays.
+---
+ src/overlay005/map_prop.c | 37 ++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 36 insertions(+), 1 deletion(-)
+
+diff --git a/src/overlay005/map_prop.c b/src/overlay005/map_prop.c
+index 8b27bc6c..b9314e16 100644
+--- a/src/overlay005/map_prop.c
++++ b/src/overlay005/map_prop.c
+@@ -220,6 +220,40 @@ static u32 MapProp_PortLists(const NNSG3dResMdl *model, const void **lists, u32
+     return count;
+ }
+ 
++// Whether a prop's model is a picture standing up (the Hallowed Tower,
++// Eterna's bikes: one quad): NitroPort_Gx3dListsFlat, within a unit of one
++// plane; found once for a model and kept. It gets no outline for a sun
++// shadow: that would be the quad's, a square ("the shadow from the tomb is
++// a square", on a 3DS 2026-11-12); what its picture has painted under it
++// stays.
++extern int NitroPort_Gx3dListsFlat(const void *const *lists, const u32 *bytes, u32 count, s32 flatY, s32 thick);
++
++#define PORT_FLAT_MODELS 32
++
++static BOOL MapProp_PortFlat(const NNSG3dResMdl *model)
++{
++    static const NNSG3dResMdl *models[PORT_FLAT_MODELS];
++    static u8 flat[PORT_FLAT_MODELS];
++    static u32 next = 0;
++    const void *lists[48];
++    u32 bytes[48], i, count;
++    fx32 posScale = NNS_G3dGetMdlInfo(model)->posScale;
++
++    for (i = 0; i < PORT_FLAT_MODELS; i++) {
++        if (models[i] == model) {
++            return flat[i];
++        }
++    }
++
++    count = MapProp_PortLists(model, lists, bytes);
++    i = next;
++    next = (next + 1) % PORT_FLAT_MODELS;
++    models[i] = model;
++    flat[i] = posScale > 0 && NitroPort_Gx3dListsFlat(lists, bytes, count, (s32)FX_Div(3 * FX32_ONE / 2, posScale), (s32)FX_Div(FX32_ONE, posScale)) != 0;
++
++    return flat[i];
++}
++
+ static const PortHull *MapProp_PortHull(const NNSG3dResMdl *model, const s32 way[3])
+ {
+     const void *lists[48];
+@@ -895,7 +929,8 @@ static void MapProp_PortBegin(const MapProp *prop, int index, const AreaDataMana
+         // (0x20000000 in its mark). First its picture laid on the ground,
+         // as a character's: with the sun to the side a bench's was a
+         // sliver, 2026-11-12, "Bench shadows are not working".
+-        if (MapProp_PortBuildingShadow(prop, position, rotation, scale, TRUE)) {
++        // (not one that is a picture standing up: MapProp_PortFlat)
++        if (!MapProp_PortFlat(prop->renderObj.resMdl) && MapProp_PortBuildingShadow(prop, position, rotation, scale, TRUE)) {
+             mark |= 0x20000000;
+         }
+     }
+-- 
+2.43.0
+

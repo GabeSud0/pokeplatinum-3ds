@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 13:30:00 -0700
+Subject: [PATCH] The follower drawn a little further behind the player
+ (SDK_PORT_3DS)
+
+A tile behind the player, the follower's picture (a tile and more wide)
+sat right on the player's back. It's drawn 3/16 of a tile further from
+the player than its tile, along the line from the player to it (round a
+corner with it), and its round shadow with it; less when it's nearer
+than a tile (coming out of its ball), none within half a tile. Only
+where it's drawn: its tile, and what it bumps into, are as ever.
+---
+ include/port_follower.h       |  4 ++
+ src/overlay005/ov5_021ECC20.c |  3 ++
+ src/overlay005/ov5_021F134C.c |  5 +++
+ src/port_follower.c           | 77 +++++++++++++++++++++++++++++++++++
+ 4 files changed, 89 insertions(+)
+
+diff --git a/include/port_follower.h b/include/port_follower.h
+index cd03bec3..def8fa5f 100644
+--- a/include/port_follower.h
++++ b/include/port_follower.h
+@@ -63,6 +63,10 @@ void PortFollower_BattleStarts(void);
+ // Every frame of the field (fieldmap.c): out, in its ball or swapped as the
+ // party, the option and the field are.
+ void PortFollower_Update(FieldSystem *fieldSystem);
++// Where it's drawn: a little further behind the player than its tile (added
++// to pos, for the follower's map object only; its picture and its round
++// shadow).
++void PortFollower_AddBack(const MapObject *mapObj, VecFx32 *pos);
+ // Its next step after the player (unk_02069BE0.c, the follow code, as the
+ // player moves): FALSE if it's where it should be, else the movement action
+ // for it (the player's own step's, `playerAction`, the run as a fast walk;
+diff --git a/src/overlay005/ov5_021ECC20.c b/src/overlay005/ov5_021ECC20.c
+index 9f907c55..34eca1b2 100644
+--- a/src/overlay005/ov5_021ECC20.c
++++ b/src/overlay005/ov5_021ECC20.c
+@@ -150,6 +150,9 @@ void ov5_021ECDA0(const MapObject *param0, VecFx32 *adjustedObjectPos)
+     adjustedObjectPos->x = objectPosition.x + jumpOffset.x + posOffset.x + terrainSpriteOffset.x;
+     adjustedObjectPos->y = objectPosition.y + jumpOffset.y + posOffset.y + terrainSpriteOffset.y;
+     adjustedObjectPos->z = objectPosition.z + jumpOffset.z + posOffset.z + terrainSpriteOffset.z;
++#ifdef SDK_PORT_3DS
++    PortFollower_AddBack(param0, adjustedObjectPos); // (the follower: a little further behind the player)
++#endif
+ }
+ 
+ void ov5_021ECDFC(MapObject *mapObj, int dir)
+diff --git a/src/overlay005/ov5_021F134C.c b/src/overlay005/ov5_021F134C.c
+index 1e8c24ab..cae068c3 100644
+--- a/src/overlay005/ov5_021F134C.c
++++ b/src/overlay005/ov5_021F134C.c
+@@ -9,6 +9,8 @@
+ #include "overlay005/field_effect_manager.h"
+ #ifdef SDK_PORT_3DS
+ #include "overlay005/ov5_021EB1A0.h"
++
++#include "port_follower.h"
+ #endif
+ 
+ #include "map_object.h"
+@@ -301,6 +303,9 @@ static void ov5_021F1670(OverworldAnimManager *param0, void *param1)
+         v1.y += (FX32_ONE * -4);
+         v1.z += (FX32_ONE * 1);
+ 
++#ifdef SDK_PORT_3DS
++        PortFollower_AddBack(v0->unk_14.unk_08, &v1); // (the follower's: with its picture)
++#endif
+ #ifdef SDK_PORT_3DS
+         // The 3DS remaster's sun shadows: this round shadow's polygons
+         // marked as its object's sprite's own (the sprite's mark, its
+diff --git a/src/port_follower.c b/src/port_follower.c
+index 7384055c..b0623c16 100644
+--- a/src/port_follower.c
++++ b/src/port_follower.c
+@@ -1233,6 +1233,81 @@ static void PortFollower_TakeBallKind(FieldSystem *fieldSystem)
+ // step goes on: at most a running or walking step's.
+ #define PORT_OWN_STEP_FRAMES 16
+ 
++// ----- A little further behind: a tile behind the player its picture (a
++// tile and more wide) sat right on the player's back. It's drawn
++// PORT_FOLLOWER_BACK further from the player than its tile, along the line
++// from the player to it (round a corner with it), its round shadow with it
++// (PortFollower_AddBack: ov5_021ECC20.c, ov5_021F134C.c); less when it's
++// nearer than a tile (coming out of its ball, on the player's tile: none
++// within half a tile). Only where it's drawn: its tile is as ever.
++#define PORT_FOLLOWER_BACK 3 // (sixteenths of a tile)
++static VecFx32 sBack;
++static const MapObject *sBackOf;
++
++static s32 PortFollower_Root(s32 v)
++{
++    s32 r, next;
++
++    if (v <= 0) {
++        return 0;
++    }
++
++    r = v;
++    next = (r + 1) / 2;
++
++    while (next < r) {
++        r = next;
++        next = (r + v / r) / 2;
++    }
++
++    return r;
++}
++
++static void PortFollower_NoteBack(MapObject *mapObj, MapObject *player)
++{
++    VecFx32 at, by;
++    s32 dx, dz, len, k;
++
++    sBack.x = sBack.y = sBack.z = 0;
++    sBackOf = mapObj;
++
++    if (mapObj == NULL || player == NULL) {
++        return;
++    }
++
++    MapObject_GetPosPtr(mapObj, &at);
++    MapObject_GetPosPtr(player, &by);
++    dx = (at.x - by.x) >> 4; // (1/256 of a unit: a tile is 16 units)
++    dz = (at.z - by.z) >> 4;
++
++    if (dx > 64 * 256 || dx < -64 * 256 || dz > 64 * 256 || dz < -64 * 256) {
++        return; // (not by the player at all)
++    }
++
++    len = PortFollower_Root(dx * dx + dz * dz);
++    k = len - 8 * 256;
++
++    if (k <= 0) {
++        return;
++    }
++
++    if (k > 8 * 256) {
++        k = 8 * 256;
++    }
++
++    // (dx / len) * BACK units * k / (8 * 256), in 20.12
++    sBack.x = (fx32)((s64)dx * (PORT_FOLLOWER_BACK * 2) * k / len);
++    sBack.z = (fx32)((s64)dz * (PORT_FOLLOWER_BACK * 2) * k / len);
++}
++
++void PortFollower_AddBack(const MapObject *mapObj, VecFx32 *pos)
++{
++    if (mapObj != NULL && mapObj == sBackOf) {
++        pos->x += sBack.x;
++        pos->z += sBack.z;
++    }
++}
++
+ void PortFollower_Update(FieldSystem *fieldSystem)
+ {
+     static int sWait, sPlayerX, sPlayerZ, sNoRoom, sOwnStep;
+@@ -1255,6 +1330,8 @@ void PortFollower_Update(FieldSystem *fieldSystem)
+         return;
+     }
+ 
++    PortFollower_NoteBack(mapObj, player);
++
+     PortFollower_NoteTrail(fieldSystem);
+     PortFollower_UpdateBall(fieldSystem, sDropIn);
+     PortFollower_UpdateBurst();
+-- 
+2.43.0
+

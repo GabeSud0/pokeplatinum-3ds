@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pokeplatinum-3ds <noreply@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 14:10:00 -0700
+Subject: [PATCH] The small standing props marked for the sun shadows
+ (SDK_PORT_3DS)
+
+Trees, signs, lamp posts, boards and the like (by their model's box: up
+to 50 wide and 45 deep, 6 or more tall, not flat against a wall as a
+door is; not the dummy box, doors, the Cycling Road's slopes,
+waterfalls or warp panels, by their models' numbers) are marked as
+they're drawn (NitroPort_Gx3dTag, 0xC0000000 | the prop's number << 1):
+the 3DS remaster lays each one's picture on the ground as its shadow.
+The mark is set before the prop's box test, which passes a little
+beside the view then (the port's): the shadow doesn't go as the prop
+leaves the screen. Houses and buildings aren't marked, yet. With the
+sun shadows off the port takes no marks: nothing changes.
+---
+ src/overlay005/map_prop.c | 63 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 63 insertions(+)
+
+diff --git a/src/overlay005/map_prop.c b/src/overlay005/map_prop.c
+index f0fe6948..bfc0644f 100644
+--- a/src/overlay005/map_prop.c
++++ b/src/overlay005/map_prop.c
+@@ -16,6 +16,55 @@
+ #include "heap.h"
+ #include "narc.h"
+ 
++#ifdef SDK_PORT_3DS
++extern void NitroPort_Gx3dTag(u32 tag);
++
++// The 3DS remaster's sun shadows: the small standing props (trees, signs,
++// lamp posts, boards: by their model's box, up to 50 wide and 45 deep, 6 or
++// more tall, and not flat against a wall as a door is) are marked as
++// they're drawn (NitroPort_Gx3dTag): the port lays each one's picture on
++// the ground as its shadow, and its box test passes a little beside the
++// view while the mark is set, so the shadow doesn't go as the prop leaves
++// the screen. Houses and buildings aren't marked, yet. index: the prop's
++// place among the loaded ones (its mark's number). 0: no mark.
++// Small standing models that cast none all the same (their numbers in
++// map_prop_models.order): the dummy box, doors, a window, the Cycling
++// Road's slopes, waterfalls, warp panels.
++static const u16 sPortNoShadowModels[] = {
++    0, 66, 67, 68, 69, 79, 246, 303, 304, 305, 306, 310, 312, 313, 438, 441, 444, 486, 487, 527, 549, 550, 551
++};
++
++static u32 MapProp_PortShadowMark(const MapProp *prop, int index)
++{
++    const NNSG3dResMdlInfo *info = NNS_G3dGetMdlInfo(prop->model);
++    fx32 width, height, depth;
++    u32 i;
++
++    for (i = 0; i < NELEMS(sPortNoShadowModels); i++) {
++        if (prop->modelID == sPortNoShadowModels[i]) {
++            return 0;
++        }
++    }
++
++    width = FX_Mul((fx32)info->boxW, info->boxPosScale);
++    height = FX_Mul((fx32)info->boxH, info->boxPosScale);
++    depth = FX_Mul((fx32)info->boxD, info->boxPosScale);
++
++    if (width > 50 * FX32_ONE || depth > 45 * FX32_ONE || depth < 2 * FX32_ONE || height < 6 * FX32_ONE) {
++        return 0;
++    }
++
++    return 0xC0000000 | ((u32)index << 1);
++}
++
++// (in the commands' order: what NitroSystem still holds is sent first)
++static void MapProp_PortMark(u32 mark)
++{
++    NNS_G3dGeFlushBuffer();
++    NitroPort_Gx3dTag(mark);
++}
++#endif
++
+ static void MapPropManager_InitRenderObj(const int modelID, AreaDataManager *const areaDataManager, NNSG3dRenderObj *renderObj, NNSG3dResMdl **model);
+ static void MapPropManager_RenderUsing1Mat1Shp(const NNSG3dResMdl *model, VecFx32 *position, MtxFx33 *rotation, VecFx32 *scale, const MapPropMaterialShape *propMatShp, const int modelID);
+ 
+@@ -147,6 +196,9 @@ void MapPropManager_Render(const VecFx32 *positionOffset, const AreaDataManager
+             position.x += positionOffset->x;
+             position.z += positionOffset->z;
+ 
++#ifdef SDK_PORT_3DS
++            MapProp_PortMark(MapProp_PortShadowMark(loadedProp, i)); // (the sun shadows: above)
++#endif
+             if (GFXBoxTest_IsModelInView(loadedProp->model, &position, &rotationMatrix, &loadedProp->scale)) {
+                 const MapPropMaterialShape *propMatShp = AreaDataManager_GetMapPropMaterialShape(areaDataManager);
+                 u16 propMatShpIDsCount;
+@@ -166,6 +218,9 @@ void MapPropManager_Render(const VecFx32 *positionOffset, const AreaDataManager
+                     MapPropManager_RenderUsing1Mat1Shp(loadedProp->model, &position, &rotationMatrix, &loadedProp->scale, propMatShp, loadedProp->modelID);
+                 }
+             }
++#ifdef SDK_PORT_3DS
++            MapProp_PortMark(0);
++#endif
+         }
+     }
+ }
+@@ -249,7 +304,10 @@ static void MapPropManager_RenderOver(const VecFx32 *centre, const BOOL mirrored
+         if (!mirrored) {
+             position.x += centre->x;
+ 
++            MapProp_PortMark(MapProp_PortShadowMark(loadedProp, i)); // (the sun shadows: above)
++
+             if (!GFXBoxTest_IsModelInView(loadedProp->model, &position, &rotationMatrix, &scale)) {
++                MapProp_PortMark(0);
+                 continue;
+             }
+ 
+@@ -271,13 +329,17 @@ static void MapPropManager_RenderOver(const VecFx32 *centre, const BOOL mirrored
+                 MapPropManager_RenderUsing1Mat1Shp(loadedProp->model, &position, &rotationMatrix, &scale, propMatShp, loadedProp->modelID);
+             }
+ 
++            MapProp_PortMark(0);
+             continue;
+         }
+ 
+         position.x = centre->x - position.x;
+         scale.x = -scale.x;
+ 
++        MapProp_PortMark(MapProp_PortShadowMark(loadedProp, i)); // (the sun shadows: above)
++
+         if (!GFXBoxTest_IsModelInView(loadedProp->model, &position, &rotationMatrix, &scale)) {
++            MapProp_PortMark(0);
+             continue;
+         }
+ 
+@@ -302,6 +364,7 @@ static void MapPropManager_RenderOver(const VecFx32 *centre, const BOOL mirrored
+ 
+         NNS_G3dGeFlushBuffer();
+         Port_SwapModelCulling(loadedProp->model);
++        MapProp_PortMark(0);
+     }
+ }
+ 
+-- 
+2.43.0
+

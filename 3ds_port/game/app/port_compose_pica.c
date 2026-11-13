@@ -278,6 +278,13 @@ void NitroPort_ComposeLook(int on)
 {
     __atomic_store_n(&sLookRequest, on ? 1 : 0, __ATOMIC_RELEASE);
 }
+
+static int sShadowRequest = -1;   /* (NitroPort_ComposeSunShadows: 0 or 1, for the next frame) */
+
+void NitroPort_ComposeSunShadows(int level)
+{
+    __atomic_store_n(&sShadowRequest, level > 0 ? 1 : 0, __ATOMIC_RELEASE);
+}
 static Screen sScreens[2];        /* 0: upper, 1: lower */
 
 /* The lower screen as the menu (nitro_port_lowermenu.h): its picture in a
@@ -5108,11 +5115,17 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     {
         int look = __atomic_exchange_n(&sLookRequest, -1, __ATOMIC_ACQ_REL);
 
+        int shadows = __atomic_exchange_n(&sShadowRequest, -1, __ATOMIC_ACQ_REL);
+
         if (look >= 0) {
             sConfig.shadows = look;
             sConfig.grade = look;
             NitroPort_PicaLook(sConfig.shadows, sConfig.grade, sConfig.sunFixed, sConfig.sunElevation,
                                sConfig.sunAzimuth);
+        }
+        if (shadows >= 0) {
+            /* (the options page's SUN SHADOWS: OFF or ON) */
+            NitroPort_PicaGroundShadows(shadows);
         }
     }
     keptShown = NitroPort_LowerMenuKeptShown();

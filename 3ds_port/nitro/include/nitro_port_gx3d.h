@@ -49,12 +49,16 @@ typedef struct NitroGx3dTriangle {
      * whole ones (where it fell behind the ground and caught up a pixel at
      * a time, a jiggle). */
     uint32_t soft;
+    /* The game's mark on it (NitroPort_Gx3dTag: 0 none): whose polygon it
+     * is, for the sun shadows (a character's sprite, its round shadow). */
+    uint32_t tag;
 } NitroGx3dTriangle;
 #define NITRO_GX3D_SOFT_X 1u
 #define NITRO_GX3D_SOFT_Y 2u
 
 #define NITRO_GX3D_REGS_AT 0x320u
 #define NITRO_GX3D_REGS_SIZE 0xA0u
+#define NITRO_GX3D_MAX_TAGGED_TRIANGLES 2048u
 typedef struct NitroGx3dScene {
     uint32_t count, dropped, serial;
     /* W-buffer/Z-buffer mode belongs to the completed frame (SWAP_BUFFERS),
@@ -114,6 +118,17 @@ typedef struct NitroGx3dScene {
      * memory is tight). */
     uint32_t shadow_count;
     NitroGx3dTriangle *shadow_triangles;
+    /* The marked polygons' triangles (NitroPort_Gx3dTag), whole: as the
+     * game sent them, not clipped at the view's sides, and kept when they
+     * are beyond them or face away (up to one and a half views beyond, in
+     * front of the camera, inside the near and far planes). Their
+     * vertices' screen x and y are as to_screen gives them (off the screen
+     * for some); sort_key 0. A visible one is among triangles too, clipped.
+     * An in-between scene's: halfway between the two scenes', mark by mark.
+     * For the sun shadows: a character at the screen's edge, or just past
+     * it, casts its whole shadow. */
+    uint32_t tagged_count;
+    NitroGx3dTriangle tagged_triangles[NITRO_GX3D_MAX_TAGGED_TRIANGLES];
 } NitroGx3dScene;
 
 /* In-between scenes (60 frames a second in the field; port_gx3d.c): with
@@ -367,6 +382,82 @@ uint32_t NitroPort_Gx3dSurveyMoved(const NitroGx3dListSurvey *survey, void *dst,
  * there. */
 uint32_t NitroPort_Gx3dSurveyTurned(const NitroGx3dListSurvey *survey, void *dst, uint32_t dstBytes, const uint8_t *keep, uint32_t nkeep,
                                     unsigned turn, int32_t pivotX, int32_t pivotZ, int32_t dx, int32_t dy, int32_t dz);
+/* The land's trees, for the sun shadows: a land model's tree shapes'
+ * display lists (lists, bytes, count of them: the materials with a tree's
+ * texture; posScale: the model's, fx32: a world unit is 4096 * 4096 /
+ * posScale of a list's) read once, when the model is first drawn.
+ *
+ * A tree: a list's polygons in order, a new tree where a polygon's middle
+ * (across, x, and in depth, z) is more than 12 units from the tree's first
+ * one's (a tree is three layers leaning back over a polygon flat on the
+ * ground, the stump painted on it; the next tree stands two tiles on). It
+ * stands on its flat polygons' middle; with none (a row's tops, their
+ * stumps another material's), on the flat polygons of any of the lists its
+ * middle is over, under it; else on its lowest vertices. A polygon over 48
+ * units wide is a row of trees, 32 units each: cut into them.
+ *
+ * Each shape then has four lists (NULL, 0 bytes, for one that couldn't be
+ * read that way: draw the shape as it is):
+ * - its own without the flat polygons (Canopies) and the flat ones alone
+ *   (Stumps), each drawing its polygons as the shape's list does, the
+ *   canopies' sent first; and what the whole list leaves set after it
+ *   (Tail: its last COLOR, NORMAL and TEXCOORD), to send after all;
+ * - the trees' shadows for a sun (Shadows), made again when the sun given
+ *   isn't the last one's: each layer's polygon laid on the ground from
+ *   where its tree stands (a unit above it), as the tree seen from the sun
+ *   would fall: across the tree goes across the light's way (the tree's
+ *   right stays on the right), up it goes along the light's way, its
+ *   height above the ground times stretch; the same texture coordinates.
+ *   wayX, wayZ: the way the light goes along the ground (the model's x and
+ *   z; fx32, a unit long), stretch fx32. To send between the Stumps and
+ *   the Tail, marked NITRO_GX3D_TAG_SHADE, with the shape's material still
+ *   set (its texture is the shadow's shape). */
+typedef struct NitroGx3dTreeLists NitroGx3dTreeLists;
+NitroGx3dTreeLists *NitroPort_Gx3dTreeLists(const void *const *lists, const uint32_t *bytes, uint32_t count,
+                                            int32_t posScale);
+void NitroPort_Gx3dFreeTreeLists(NitroGx3dTreeLists *trees);
+const void *NitroPort_Gx3dTreeCanopies(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
+/* The shape's layers again, each vertex with a COLOR before it for
+ * NITRO_GX3D_TAG_CANOPY: darker towards the side the light (wayX to the
+ * right, wayZ towards the camera) leaves, and towards a layer's foot. Made
+ * again when the light's way changes. NULL for a shape whose list has
+ * COLOR commands of its own, or a polygon that couldn't be read. */
+const void *NitroPort_Gx3dTreeCanopiesLit(NitroGx3dTreeLists *trees, uint32_t shape, int32_t wayX, int32_t wayZ, uint32_t *bytes);
+const void *NitroPort_Gx3dTreeStumps(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
+const void *NitroPort_Gx3dTreeTail(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
+/* The shape's trees' shadows for a light going wayX to the right and wayZ
+ * towards the camera (4096ths), stretch (4096ths) along it for each unit
+ * up: each tree's standing polygons laid on the ground with their texture
+ * coordinates (NITRO_GX3D_TAG_SHADE: the renderer draws them with a
+ * softened copy of the texture's outline). Made again when the light
+ * changes. NULL with none. */
+const void *NitroPort_Gx3dTreeShadows(NitroGx3dTreeLists *trees, uint32_t shape, int32_t wayX, int32_t wayZ,
+                                      int32_t stretch, uint32_t *bytes);
+/* Their trunks' shadows, made with them (call that first): a quad a tree
+ * from its trunk to under its layers', for NITRO_GX3D_TAG_TRUNK. NULL with
+ * none. */
+const void *NitroPort_Gx3dTreeTrunks(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
+/* (how many trees the shape's shadows are of: rows counted a tree each 32 units) */
+/* The shape's trees' shadows where they stand (a pool, or a forest's
+ * floor), for NITRO_GX3D_TAG_GROUND: made with the last
+ * NitroPort_Gx3dTreeShadows of the shape, for its sun (call that first).
+ * NULL with none. */
+const void *NitroPort_Gx3dTreeGround(const NitroGx3dTreeLists *trees, uint32_t shape, uint32_t *bytes);
+/* The shape's lit layers (shadows 0), its layers' shadows (1) or its
+ * trunks' (2), as last made by NitroPort_Gx3dTreeCanopiesLit or
+ * NitroPort_Gx3dTreeShadows (call that first), sent to the geometry engine
+ * as NitroPort_GxFifoWords would send the list, but for the trees the view
+ * can't see: the lists are made in parts, in the list's own order the
+ * trees one after another in the same square of the map (8 tiles a side)
+ * together, and a part whose box is all outside one side of the view, with the matrices
+ * as the commands sent so far leave them, isn't sent. The scene is the
+ * same as with the whole list (the engine passes over such trees itself,
+ * one by one); the game's thread and the geometry thread have less to
+ * read. The whole list while polygons beside the view are kept for
+ * shadows. On the game's thread, between commands (after
+ * NNS_G3dGeFlushBuffer); the words sent. */
+uint32_t NitroPort_Gx3dTreeSend(const NitroGx3dTreeLists *trees, uint32_t shape, int shadows);
+uint32_t NitroPort_Gx3dTreeCount(const NitroGx3dTreeLists *trees, uint32_t shape);
 /* An MTX_TRANS (x, y, z: as its parameters, fx32) packed for a display
  * list, into dst: its bytes (16), 0 if it doesn't fit. */
 uint32_t NitroPort_Gx3dTranslateCommand(void *dst, uint32_t dstBytes, int32_t x, int32_t y, int32_t z);
@@ -421,6 +512,134 @@ void NitroPort_Gx3dSetView(int screenWidth, int screenHeight);
 /* GXSTAT's bit 15 is write-one-to-clear on the DS, and resetting it
  * also clears the single-entry projection stack pointer. */
 void NitroPort_Gx3dClearStackError(void);
+/* A mark on the polygons the game sends from here on (0: none again), in
+ * the command stream's order: each triangle of them carries it
+ * (NitroGx3dTriangle.tag, the in-between scenes' too), and they're drawn
+ * in batches of their own (NitroGx3dBatch.tag). Nothing else changes: the
+ * same picture. Their triangles are also kept whole, on the screen or
+ * beside it (NitroGx3dScene.tagged_triangles), and the game's box tests
+ * made while a mark is set pass what's up to half a view beside the view
+ * (what's drawn there is then kept whole for its shadow). Only with the
+ * sun shadows on (NitroPort_GroundShadowsOn): off, a mark is no mark.
+ * A map prop's mark is NITRO_GX3D_TAG_PROP | (its number << 1). The field's sprites are marked with their Billboard's
+ * address, and a character's round shadow with its sprite's | 1 (the
+ * game's patch; port_shadow.c pairs them). Not recorded
+ * (NitroPort_Gx3dSetRecorder). */
+void NitroPort_Gx3dTag(uint32_t tag);
+/* The marks' kinds: a field sprite's is its Billboard's address (even,
+ * below NITRO_GX3D_TAG_PROP on a 3DS); a character's round shadow's, its
+ * sprite's | 1; a small standing map prop's (a tree, a sign, a lamp post),
+ * NITRO_GX3D_TAG_PROP | (a number << 1).
+ *
+ * Some only say how their polygons are drawn (NITRO_GX3D_TAG_IS_DRAW):
+ * they aren't kept whole or reached for beside the view, the engine treats
+ * them as any polygon. NITRO_GX3D_TAG_SHADE: not a thing but a shadow lying
+ * on the ground (the land's trees': NitroPort_Gx3dTreeLists), drawn by the
+ * renderer as the sun shadows are (the shade where a texel is opaque, a
+ * pixel once), not at all by one that has no sun shadows. (A tree's stump
+ * was one too until 2026-11-12, drawn without the dark patch the game
+ * paints round it: at a forest's edge the lowest leaves of the trees
+ * behind showed where the patch had hidden them. The stumps are drawn as
+ * the game draws them now.) */
+#define NITRO_GX3D_TAG_PROP 0xC0000000u
+/* A small prop whose shadow the game sends as its outline on the ground (a
+ * building's: NITRO_GX3D_TAG_GROUND and NITRO_GX3D_TAG_RIM batches): its
+ * mark has this bit too, and its picture isn't laid (port_shadow.c). */
+#define NITRO_GX3D_TAG_PROP_HULL 0x20000000u
+#define NITRO_GX3D_TAG_SHADE 0x40000000u
+/* (the shadows on the ground where a tree stands, its pool or a forest's
+ * floor: drawn before the layers' shadows, once; NitroPort_Gx3dTreeGround) */
+#define NITRO_GX3D_TAG_GROUND 0x40000008u
+/* (a building's shadow's soft edge: drawn with the trees' shadows, by its
+ * grey, a pixel once) */
+#define NITRO_GX3D_TAG_RIM 0x40000010u
+/* (a tree's trunk's shadow: a strip drawn from its vertices' colours
+ * alone, its texture not used; NitroPort_Gx3dTreeTrunks) */
+#define NITRO_GX3D_TAG_TRUNK 0x40000018u
+#define NITRO_GX3D_TAG_IS_SHADE(tag) (((tag)&~0x18u)==NITRO_GX3D_TAG_SHADE)
+/* A model's shadow's outline on the ground it stands on (y 0), for a light:
+ * the convex hull of every vertex of its shapes' display lists moved
+ * shearX, shearZ (20.12) to the right and towards the camera for each unit
+ * it's above the ground; at most `max` corners (the least telling ones
+ * dropped), in order round it. out[i]: x, z and the height of the vertex
+ * it came from, in the lists' units. A list with no vertex above flatY
+ * (over 0) isn't looked at: a shape lying on the ground (the building's own
+ * painted shadow). Returns the corners, 0 if a list couldn't be read or
+ * there are under three. */
+uint32_t NitroPort_Gx3dShadowHull(const void *const *lists, const uint32_t *bytes, uint32_t count, int32_t shearX,
+                                  int32_t shearZ, int32_t flatY, int32_t (*out)[3], uint32_t max);
+/* The same in parts (2026-11-11: one hull of a whole model, the Day
+ * Care's house with its sheds round a yard, was one shadow over the yard):
+ * the lists' polygons in groups, those with a vertex in the same square of
+ * `join` units on the ground or the next, and a hull for each group, the
+ * biggest `parts` of them; out[p * max ...] the corners of part p,
+ * corners[p] how many. A group whose polygons cover under
+ * NITRO_GX3D_HULL_COVER of its own outline on the ground (as it is, not
+ * moved: a fence round a yard, posts and rails) casts none. Returns the
+ * parts, 0 if none (or a list couldn't be read). */
+/* A list's highest vertex (its y, in its own coordinates as sent);
+ * INT32_MIN if it has none or can't be read. (A building's own painted
+ * shadow is a see-through shape lying flat on the ground: left out with
+ * the sun shadows on, a see-through shape standing up, a fountain's
+ * water, drawn.) */
+int32_t NitroPort_Gx3dListTop(const void *list, uint32_t bytes);
+/* Whether a model is a picture standing up: every vertex of its shapes'
+ * lists (not of those lying flat on the ground, their highest vertex no
+ * higher than flatY: its painted shadow) within thick of one plane. Such
+ * a prop (the Hallowed Tower and Eterna's bikes are one quad each) has no
+ * shape for an outline's shadow: its outline is the quad's, and its
+ * shadow was a square (on a 3DS, 2026-11-12, "the shadow from the tomb is
+ * a square"). The game sends no outline for it. 0 too if a list can't be
+ * read or there are under 3 vertices. */
+int NitroPort_Gx3dListsFlat(const void *const *lists, const uint32_t *bytes, uint32_t count, int32_t flatY,
+                            int32_t thick);
+#define NITRO_GX3D_HULL_COVER 0.3
+uint32_t NitroPort_Gx3dShadowHullParts(const void *const *lists, const uint32_t *bytes, uint32_t count, int32_t shearX,
+                                       int32_t shearZ, int32_t flatY, int32_t join, int32_t (*out)[3], uint32_t max,
+                                       uint32_t *corners, uint32_t parts);
+/* The same for the shadow on ground fromY above the one the model stands
+ * on (2026-11-12: the Hallowed Tower in its dip, its shadow on the higher
+ * ground round it the one on its own ground moved up, as long and as far
+ * out, and the two didn't meet: "2 shadows"): each vertex moved by its
+ * height over fromY (none below it). */
+uint32_t NitroPort_Gx3dShadowHullPartsFrom(const void *const *lists, const uint32_t *bytes, uint32_t count,
+                                           int32_t shearX, int32_t shearZ, int32_t flatY, int32_t join, int32_t fromY,
+                                           int32_t (*out)[3], uint32_t max, uint32_t *corners, uint32_t parts);
+/* A building's shadow's outline of one height (corners, n: convex, in the
+ * model's own coordinates) laid on the cells of the ground at that height
+ * alone: cells is nz rows of nx numbers, a cell step a side from x0, z0;
+ * those equal to level, in rectangles, the outline cut to each, and its
+ * soft edge (rim wide outside it, in quarters) the same. Two display
+ * lists, a command a word, added after *coreWords and *edgeWords (words):
+ * core, one grey; edge, 26 of 31 at the outline to 0. Vertices a quarter
+ * of the coordinates, at height y. The pieces laid; -1 if they don't fit. */
+int32_t NitroPort_Gx3dShadowPieces(const int32_t (*corners)[3], uint32_t n, int32_t y, int32_t rim,
+                                   const uint8_t *cells, uint32_t nx, uint32_t nz, uint8_t level,
+                                   int32_t x0, int32_t z0, int32_t step,
+                                   uint32_t *core, uint32_t coreRoom, uint32_t *coreWords,
+                                   uint32_t *edge, uint32_t edgeRoom, uint32_t *edgeWords);
+/* A building's walls lit by the sun (the game marks the big standing props
+ * with it, 2026-11-10): draw-only too. The light's way on the ground in
+ * the mark itself, as signed bytes of 1/127ths: to the right in bits 16
+ * to 23, towards the camera in bits 8 to 15. Under it a vertex lit by a
+ * NORMAL has its colour times a tint from the NORMAL and that way (a wall
+ * facing the way the light comes from brighter, one facing where it goes
+ * darker, a roof as it is), half of it as NITRO_GX3D_TAG_CANOPY's (the
+ * renderer draws both at twice their colour); one with a COLOR, half its
+ * colour. */
+#define NITRO_GX3D_TAG_WALLS 0x60000000u
+#define NITRO_GX3D_TAG_IS_WALLS(tag) (((tag)&0xF00000FFu)==NITRO_GX3D_TAG_WALLS)
+/* (a building standing in another's shadow: its walls all in its shade,
+ * whichever way they face) */
+#define NITRO_GX3D_TAG_WALLS_SHADED 0x01000000u
+/* (a tree's layers with their far side from the sun shaded: under this
+ * mark a COLOR command isn't the vertices' colour but what their lit
+ * colour, from the NORMAL, is times: NitroPort_Gx3dTreeCanopiesLit's
+ * lists) */
+#define NITRO_GX3D_TAG_CANOPY 0x40000004u
+#define NITRO_GX3D_TAG_IS_PROP(tag) (((tag)&0xC0000001u)==NITRO_GX3D_TAG_PROP)
+#define NITRO_GX3D_TAG_IS_DRAW(tag) (((tag)&0xC0000001u)==0x40000000u)
+#define NITRO_GX3D_TAG_IS_ROUND(tag) (((tag)&1u) && !((tag)&0xC0000000u))
 
 /* PC reference output. Samples from virtual DS texture/palette VRAM banks.
  * Each pixel is RGB555|0x8000 when a 3D polygon covers it, otherwise zero.

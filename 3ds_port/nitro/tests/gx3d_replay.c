@@ -288,6 +288,7 @@ int main(int argc, char **argv)
             NitroPort_Gx3dSetInterpolation(1);
         } else if (strcmp(argv[a], "--shadows") == 0) {
             NitroPort_SetSunShadows(1);
+            NitroPort_SetShadowReach(1);
         } else {
             argc = 0;
             break;
